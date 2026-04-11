@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "playwright": "^1.59.1",
     "telegram": "^2.26.22"
   },
   "engines": {

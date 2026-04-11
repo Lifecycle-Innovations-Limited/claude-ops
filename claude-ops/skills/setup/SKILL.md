@@ -177,28 +177,71 @@ Rules for the prompt:
 
 ---
 
-### 3a — Telegram
+### 3a — Telegram (user-auth via ops-telegram-autolink)
 
-Telegram's Bot API is token-only — **no OAuth path exists**. Auto-scan first, then fall back to manual entry.
+**Bots cannot read user DMs**, so `/ops-inbox telegram` requires a personal-account MCP. The plugin ships `bin/ops-telegram-autolink` which:
+1. Scans scout sources (keychain → ~/.claude.json → shell profiles → Doppler) for previously-extracted `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` / `TELEGRAM_SESSION`.
+2. If none found, makes plain HTTP requests to `my.telegram.org` (no browser — `my.telegram.org` uses server-side HTML, no JS required), logs in with a phone code from the bridge file, creates an app if needed, and extracts api_id + api_hash.
+3. Runs gram.js `client.start()` to generate a session string, bridging the second code via the same file.
+4. Emits final JSON on stdout: `{api_id, api_hash, phone, session}`.
 
-1. **Auto-scan** for `TELEGRAM_BOT_TOKEN` and `TELEGRAM_OWNER_ID` using the shared credential scan flow above. Valid Telegram bot tokens match the regex `^[0-9]{6,12}:[A-Za-z0-9_-]{30,}$` — use this to filter out placeholder values during the scan.
-2. **Present findings** via `AskUserQuestion`:
-   - If found: list sources (shell env, `~/.zshrc`, Doppler, existing `.mcp.json`) with last-4 preview and an `[Enter manually]` option.
-   - If not found: ask `[I have a bot token — enter it now]`, `[Walk me through creating a bot]`, `[Skip Telegram]`.
-3. **On "Walk me through"** print:
+Sub-flow:
+
+1. **Scout first.** Run `${CLAUDE_PLUGIN_ROOT}/bin/ops-slack-autolink --scout-only` equivalent check for Telegram:
+   ```bash
+   for svc in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
+     security find-generic-password -s "$svc" -w 2>/dev/null
+   done
    ```
-   1. Open https://t.me/BotFather in Telegram
-   2. Send /newbot and follow the prompts
-   3. Copy the HTTP API token it gives you
-   4. Open https://t.me/userinfobot and send /start to get your numeric user ID
+   Also check `~/.claude.json mcpServers.telegram.env.TELEGRAM_API_ID`. If all 4 are found and the stored `TELEGRAM_SESSION` decodes as a StringSession, tell the user `"✓ Telegram already configured (api_id=XXXXXXX, phone=+XX...)"` and skip to step 8.
+
+2. **Ask the user for their phone number** via `AskUserQuestion` (free-text). Validate it matches `^\+\d{7,15}$`. Explain that the phone is only used once during the first-run extraction and is stored locally only.
+
+3. **Warn about 2 codes.** Inform the user via `AskUserQuestion`: `"Telegram will send TWO codes to your Telegram app — one for my.telegram.org web login, then a second one for gram.js auth. Have your Telegram app ready."` Options: `[I'm ready]`, `[Cancel]`.
+
+4. **Spawn the autolink script in the background:**
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/bin/ops-telegram-autolink" --phone "$PHONE" 2>/tmp/ops-telegram-autolink.log 1>/tmp/ops-telegram-autolink.out &
+   echo $! > /tmp/ops-telegram-autolink.pid
    ```
-   Then loop back to step 2.
-4. **Validate** the token before saving — hit `https://api.telegram.org/bot<TOKEN>/getMe` with a 5s timeout. If it returns `{"ok":true,...}`, continue. If not, show the error and re-ask.
-5. **Persist**:
-   - Write to `${PLUGIN_ROOT}/.mcp.json` — **preserve existing keys**. Read with `jq`, add/update the `telegram` entry with env vars wired to `${user_config.telegram_bot_token}` and `${user_config.telegram_owner_id}`, write back atomically (`jq ... > tmp && mv tmp .mcp.json`).
-   - Store the raw values in `$PREFS_PATH` under `channels.telegram`.
-6. **Offer to propagate** (default `[No]`): `"Also export TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID in ~/.zshrc so other tools see them?"` — only on explicit yes, append to the profile file.
-7. **Smoke test**: run `node ${PLUGIN_ROOT}/telegram-server/index.js` with the env vars set, capture 3 seconds of output, verify it doesn't exit with ERROR. Report ✓/✗.
+   Use the Bash tool's `run_in_background: true`.
+
+5. **Poll the stderr log for `need_code` events.** Every 3 seconds, read `/tmp/ops-telegram-autolink.log` and look for the most recent `{"type":"need_code", ...}` line that hasn't been answered yet. When you see one:
+   - Determine which code: `channel: "web_login"` (first) or `channel: "gram_auth"` (second).
+   - Use `AskUserQuestion` with a free-text input: `"Enter the code Telegram just sent to your Telegram app (digits only):"`.
+   - Write the digits to `/tmp/telegram-code.txt` via `Bash: echo "$CODE" > /tmp/telegram-code.txt`.
+   - Wait for the next event.
+   - If you see `{"type":"need_password"}`, handle 2FA: ask the user via `AskUserQuestion` and write to `/tmp/telegram-password.txt`.
+
+6. **Wait for the script to exit.** Poll until the process is no longer running (`ps -p "$(cat /tmp/ops-telegram-autolink.pid)"`). Read `/tmp/ops-telegram-autolink.out` — it should contain a single JSON line with `api_id`, `api_hash`, `phone`, and `session`.
+
+7. **Persist to keychain + preferences.** macOS only:
+   ```bash
+   security add-generic-password -U -s telegram-api-id -a "$USER" -w "$API_ID"
+   security add-generic-password -U -s telegram-api-hash -a "$USER" -w "$API_HASH"
+   security add-generic-password -U -s telegram-phone -a "$USER" -w "$PHONE"
+   security add-generic-password -U -s telegram-session -a "$USER" -w "$SESSION"
+   ```
+   Then update `$PREFS_PATH` with `channels.telegram = {backend: "gram.js", api_id: "...", phone: "...", status: "configured"}`. **Never write the api_hash or session to preferences.json** — those stay in keychain only. preferences.json gets only the non-sensitive metadata.
+
+8. **Instruct the user to wire it into Claude Code plugin settings.** Print:
+   ```
+   Your Telegram credentials are saved. To activate the MCP, open:
+     /plugin
+   Select ops@ops-marketplace → Settings. Paste these values:
+     telegram_api_id:   <api_id>
+     telegram_api_hash: (from keychain: `security find-generic-password -s telegram-api-hash -w`)
+     telegram_phone:    <phone>
+     telegram_session:  (from keychain: `security find-generic-password -s telegram-session -w`)
+   Restart Claude Code to pick up the new env vars.
+   ```
+
+9. **Smoke test (optional).** Spawn `node ${CLAUDE_PLUGIN_ROOT}/telegram-server/index.js` with the env vars set inline for 3 seconds. If it doesn't print an auth error, the session works.
+
+**Privacy notes for the user** (show once at start):
+- The phone number and all credentials stay on your machine. The wizard never transmits them anywhere except to Telegram's own servers during the HTTP login flow.
+- If you already have a gram.js / Telethon session for another project, you can skip this and paste those values manually into `/plugin settings`.
+- If Telegram replies "Sorry, too many tries. Please try again later." your account is rate-limited for ~8 hours — the wizard cannot bypass this. Wait and retry.
 
 ### 3b — WhatsApp (doctor + self-heal + backfill)
 
@@ -360,27 +403,70 @@ If `gog` is not on PATH, look at the detector's `mcp_configured` array for any e
    - `[Skip email for now]`
 7. Whatever the user picks, record the resulting state in `$PREFS_PATH` (either `channels.email = "gog"`, `channels.email = "mcp:<name>"`, or omit the key entirely).
 
-### 3d — Slack
+### 3d — Slack (scout + ops-slack-autolink)
 
-Slack has a real OAuth flow via Claude Code's MCP installer. That's the recommended path. Manual bot tokens are supported as a fallback for users who already have an app registered.
+Slack's official API requires workspace admin approval for most useful scopes. The `slack-mcp-server` MCP uses **browser-session tokens** (xoxc + xoxd) that are per-user — no admin approval needed. The plugin ships `bin/ops-slack-autolink` which:
 
-1. **Check if a Slack MCP is already configured** — look in the detector's `mcp_configured` array for `slack` or `claude_ai_Slack`. If yes, probe it (best-effort): note "Slack MCP already installed, skipping." Record `channels.slack = "mcp:<name>"` and stop.
-2. **Offer OAuth first** via `AskUserQuestion`:
-   - `[Connect via Claude Code OAuth (recommended)]`
-   - `[I already have a bot token — enter manually]`
+1. **Phase 1 — scout** — checks for already-extracted tokens in:
+   - `~/.claude.json mcpServers.slack.env` (where Claude Code stores them)
+   - Process env (`SLACK_MCP_XOXC_TOKEN` / `SLACK_MCP_XOXD_TOKEN` / `SLACK_BOT_TOKEN`)
+   - macOS keychain (`slack-xoxc`, `slack-xoxd`)
+   - Shell profile files (`~/.zshrc`, `~/.bashrc`, `~/.zprofile`, `~/.envrc`)
+   - Doppler (`doppler secrets --json`)
+2. **Phase 2 — Playwright extraction** — only if nothing is found, launches a persistent-profile Chromium, opens `https://app.slack.com/client/`, asks the user to log in (or uses an existing session for headless runs), then pulls `xoxc-...` from `localStorage.localConfig_v2.teams[teamId].token` and the `d=...` cookie (`xoxd-...`) from the cookie jar.
+
+Ported from [maorfr/slack-token-extractor](https://github.com/maorfr/slack-token-extractor) (Python → Node).
+
+Sub-flow:
+
+1. **Scout first.** Run:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/bin/ops-slack-autolink" --scout-only 2>/tmp/ops-slack.log
+   ```
+   Parse the stdout JSON. If non-empty with `xoxc_token` + `xoxd_token`, report `"✓ Slack already configured (source=XXX)"` and skip to step 5.
+
+2. **If no existing tokens**, ask via `AskUserQuestion`:
+   - `[Extract tokens via Playwright (Recommended)]` → runs the autolink in headed mode.
+   - `[I'll paste tokens manually]` → collect `xoxc-...` and `xoxd-...` via two free-text `AskUserQuestion`s.
    - `[Skip Slack]`
-3. **On OAuth**: print:
+
+3. **On Playwright path**: spawn the autolink in the background:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/bin/ops-slack-autolink" \
+     --workspace "https://app.slack.com/client/" \
+     2>/tmp/ops-slack-autolink.log 1>/tmp/ops-slack-autolink.out &
+   echo $! > /tmp/ops-slack-autolink.pid
    ```
-   Run this in a separate terminal (it opens a browser OAuth window):
-     claude mcp add slack
-   When the MCP is registered, come back and type "done".
+   Poll the log for `{"type":"need_login"}`. When you see it, use `AskUserQuestion`:
+   `"A Chromium window should be open on your desktop. Log in to Slack there, then pick [Done]."`. On Done, `touch /tmp/slack-login-done`. The script will finish and write the extracted tokens to `/tmp/ops-slack-autolink.out`.
+
+4. **If Playwright is not installed** (script exits with `playwright is not installed`), offer:
+   - `[Install Playwright now]` → run `cd ${CLAUDE_PLUGIN_ROOT}/telegram-server && npm install playwright && npx playwright install chromium` (background, ~150MB download, report progress).
+   - `[Fall back to manual paste]` → go to step 2 manual path.
+
+5. **Validate tokens.** Call `https://slack.com/api/auth.test` with header `Authorization: Bearer <xoxc>` and cookie `d=<xoxd>`. Expect `{"ok":true, "team_id":"T...", "user_id":"U...", "url":"https://<workspace>.slack.com/"}`. If `ok:false`, show the error and re-ask.
+
+6. **Persist.**
+   - Keychain: `security add-generic-password -U -s slack-xoxc -a "$USER" -w "$XOXC"; security add-generic-password -U -s slack-xoxd -a "$USER" -w "$XOXD"`.
+   - `$PREFS_PATH` → `channels.slack = {backend: "mcp:slack", team_id: "...", source: "...", status: "configured"}`. **Do not** store the raw tokens in preferences.json — keychain only.
+
+7. **Wire into Claude Code plugin settings.** Print instructions:
    ```
-   Wait for the user via `AskUserQuestion`: `[Done]`, `[Cancel]`. On Done, re-run `ops-setup-detect` and verify `slack` appears in `mcp_configured`. Record `channels.slack = "mcp:slack"` on success.
-4. **On manual token**: run the shared credential auto-scan for `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`. Slack bot tokens start with `xoxb-`, user tokens with `xoxp-`, app-level tokens with `xapp-` — use these prefixes to filter placeholder scans.
-   - If found, present with last-4 preview and source list.
-   - Validate by calling `https://slack.com/api/auth.test` with the token in the `Authorization: Bearer <token>` header. On `{"ok":true}`, record `channels.slack = "token"` and store in `$PREFS_PATH` under `channels.slack_config` (NOT in registry.json).
-   - On failure, show the error from the Slack API and re-ask.
-5. **Never touch `~/.claude.json` directly.** MCP registration is Claude Code's job — this skill only invokes `claude mcp add` through the user's terminal.
+   Slack tokens saved to keychain. To activate the MCP, Claude Code needs them
+   in ~/.claude.json. Since this skill can't write to ~/.claude.json directly,
+   either:
+     a) Run: claude mcp add slack --transport stdio -- npx -y slack-mcp-server@latest --transport stdio
+        and Claude Code will prompt for the env vars.
+     b) Manually paste the xoxc + xoxd into /plugin settings for the Slack MCP.
+   ```
+   (The reason we don't auto-write: per user-level feedback, ~/.claude.json is a Claude Code internal file and the plugin must not touch it. MCP registration is Claude Code's responsibility.)
+
+8. **Smoke test**: call `https://slack.com/api/conversations.list?limit=1` with the tokens. Expect `ok:true` with at least one channel in the response.
+
+**Privacy notes**:
+- Tokens work as long as your browser session stays active — typically weeks to months with regular Slack usage. If the MCP starts returning 401s, re-run `/ops:setup slack`.
+- Logging out of Slack invalidates the `d` cookie and breaks the MCP. Use `/ops:setup slack` to re-extract.
+- Slack's Terms of Service allow personal-session-token use for your own account. Do not use this flow to access accounts you don't own.
 
 ### 3e — Calendar
 

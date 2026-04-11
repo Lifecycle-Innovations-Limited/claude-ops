@@ -111,18 +111,19 @@ Copy `scripts/registry.example.json` to `scripts/registry.json` (which is gitign
 
 The plugin uses **your personal Telegram account** via gram.js MTProto — not a bot — because bots can't read user DMs, which is the main use case for `/ops-inbox telegram`.
 
-1. Create a personal app at [my.telegram.org/apps](https://my.telegram.org/apps). Note the `api_id` and `api_hash`. **Do not create a bot** — you need a user-auth app.
-2. In Claude Code, open plugin settings for `ops@ops-marketplace` and fill in:
-   - `telegram_api_id`
-   - `telegram_api_hash`
-   - `telegram_phone` (E.164 format, e.g. `+15551234567`)
-3. Generate a session string by running the auth flow in a terminal:
-   ```bash
-   node ~/.claude/plugins/cache/ops-marketplace/ops/<latest>/telegram-server/index.js --auth
-   ```
-   It will prompt for your SMS code and 2FA password, then print a `TELEGRAM_SESSION` string.
-4. Paste the session string into `telegram_session` in plugin settings.
-5. Restart Claude Code so the MCP server picks up the new env vars.
+**Recommended path — let the wizard do it:**
+```
+/ops:setup telegram
+```
+This invokes `bin/ops-telegram-autolink`, which takes your phone number, performs the `my.telegram.org` HTTP login flow, extracts `api_id` + `api_hash` (creating a Telegram app for you if none exists), runs the gram.js auth flow to generate a session string, and stores everything in macOS keychain. Zero browser automation — `my.telegram.org` is server-rendered HTML, so the wizard uses plain HTTP requests. You just enter the two codes Telegram sends to your Telegram app.
+
+After the wizard finishes, it prints the values you need to paste into `/plugin settings` for `ops@ops-marketplace` (the plugin cannot write to `~/.claude.json` on its own — that's Claude Code's job via the `/plugin` UI).
+
+**Manual path (if you already have an app):**
+1. Get your `api_id` + `api_hash` from [my.telegram.org/apps](https://my.telegram.org/apps). Create a personal app (NOT a bot).
+2. Open `/plugin` in Claude Code → `ops@ops-marketplace` → Settings. Fill in `telegram_api_id`, `telegram_api_hash`, `telegram_phone` (E.164).
+3. Generate a session string: `node ~/.claude/plugins/cache/ops-marketplace/ops/<latest>/telegram-server/index.js --auth`. Prompts for code + 2FA, prints a `TELEGRAM_SESSION` string.
+4. Paste into `telegram_session` in plugin settings. Restart Claude Code.
 
 After that, `/ops-inbox telegram`, `/ops-comms send "..." to John Smith`, and the YOLO autonomous loop can read and reply to your DMs directly.
 
