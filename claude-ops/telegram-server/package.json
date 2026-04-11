@@ -1,14 +1,19 @@
 {
   "name": "claude-ops-telegram-server",
-  "version": "0.1.0",
-  "description": "Telegram MCP server for claude-ops plugin",
+  "version": "0.2.0",
+  "description": "Telegram user-auth MCP server for claude-ops plugin (personal account via MTProto, not bots)",
   "type": "module",
   "main": "index.js",
+  "bin": {
+    "claude-ops-telegram": "./index.js"
+  },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "auth": "node index.js --auth"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "telegram": "^2.26.22"
   },
   "engines": {
     "node": ">=18.0.0"

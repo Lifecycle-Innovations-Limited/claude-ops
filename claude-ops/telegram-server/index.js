@@ -1,7 +1,25 @@
 #!/usr/bin/env node
 /**
- * Telegram MCP Server for claude-ops
- * Provides tools: send_message, get_updates, list_chats
+ * Telegram MCP Server for claude-ops (USER-AUTH, not bot)
+ *
+ * Uses gram.js MTProto to authenticate as a personal Telegram account,
+ * allowing access to real DM conversations — not just bot interactions.
+ *
+ * Required env vars:
+ *   TELEGRAM_API_ID       — from https://my.telegram.org/apps
+ *   TELEGRAM_API_HASH     — from https://my.telegram.org/apps
+ *   TELEGRAM_SESSION      — persisted string session (populated after first auth)
+ *   TELEGRAM_PHONE        — phone number (E.164 format, e.g. +15551234567)
+ *
+ * First-run auth:
+ *   Run `node index.js --auth` in a terminal. It will prompt for the SMS code
+ *   and 2FA password, then print a TELEGRAM_SESSION string to save to env.
+ *
+ * Tools exposed:
+ *   list_dialogs     — list recent conversations (DMs, groups, channels)
+ *   get_messages     — fetch messages from a specific chat
+ *   send_message     — send a message to a chat
+ *   search_messages  — full-text search across all chats
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -10,265 +28,275 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { TelegramClient } from "telegram";
+import { StringSession } from "telegram/sessions/index.js";
+import readline from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const OWNER_ID = process.env.TELEGRAM_OWNER_ID;
-const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const API_ID = parseInt(process.env.TELEGRAM_API_ID || "0", 10);
+const API_HASH = process.env.TELEGRAM_API_HASH || "";
+const SESSION_STRING = process.env.TELEGRAM_SESSION || "";
+const PHONE = process.env.TELEGRAM_PHONE || "";
 
-if (!BOT_TOKEN) {
-  process.stderr.write("ERROR: TELEGRAM_BOT_TOKEN is not set\n");
+if (!API_ID || !API_HASH) {
+  process.stderr.write(
+    "ERROR: TELEGRAM_API_ID and TELEGRAM_API_HASH are required.\n" +
+      "Get them from https://my.telegram.org/apps (create a personal app, NOT a bot).\n",
+  );
   process.exit(1);
 }
 
-// Known chats cache (populated from get_updates)
-const knownChats = new Map();
+const stringSession = new StringSession(SESSION_STRING);
+const client = new TelegramClient(stringSession, API_ID, API_HASH, {
+  connectionRetries: 5,
+  baseLogger: { log: () => {}, warn: () => {}, error: (...args) => process.stderr.write(args.join(" ") + "\n"), info: () => {}, debug: () => {} },
+});
 
-async function telegramRequest(method, params = {}) {
-  const url = `${API_BASE}/${method}`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
+// First-run interactive auth mode
+if (process.argv.includes("--auth")) {
+  const rl = readline.createInterface({ input, output });
+  await client.start({
+    phoneNumber: async () => PHONE || (await rl.question("Phone number (E.164): ")),
+    password: async () => await rl.question("2FA password (blank if none): "),
+    phoneCode: async () => await rl.question("SMS code: "),
+    onError: (err) => process.stderr.write(`Auth error: ${err.message}\n`),
   });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Telegram API error ${response.status}: ${text}`);
-  }
-
-  const data = await response.json();
-  if (!data.ok) {
-    throw new Error(`Telegram API returned error: ${JSON.stringify(data)}`);
-  }
-
-  return data.result;
+  rl.close();
+  const saved = client.session.save();
+  process.stdout.write("\n=== AUTH SUCCESSFUL ===\n");
+  process.stdout.write("Save this to TELEGRAM_SESSION env var:\n\n");
+  process.stdout.write(saved + "\n");
+  await client.disconnect();
+  process.exit(0);
 }
 
-const server = new Server(
-  {
-    name: "claude-ops-telegram",
-    version: "0.1.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
+// Non-interactive mode — requires saved session
+if (!SESSION_STRING) {
+  process.stderr.write(
+    "ERROR: TELEGRAM_SESSION is not set. Run `node index.js --auth` first to generate it.\n",
+  );
+  process.exit(1);
+}
+
+// Connect using saved session
+try {
+  await client.connect();
+  if (!(await client.checkAuthorization())) {
+    throw new Error("Session is no longer valid — re-run `node index.js --auth`");
   }
+} catch (err) {
+  process.stderr.write(`Failed to connect: ${err.message}\n`);
+  process.exit(1);
+}
+
+// ── MCP server setup ──
+const server = new Server(
+  { name: "claude-ops-telegram", version: "0.2.0" },
+  { capabilities: { tools: {} } },
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
-      {
-        name: "send_message",
-        description: "Send a message to a Telegram chat or user",
-        inputSchema: {
-          type: "object",
-          properties: {
-            chat_id: {
-              type: "string",
-              description:
-                "The chat ID or username to send the message to. Use OWNER for the bot owner.",
-            },
-            text: {
-              type: "string",
-              description: "The message text to send (supports Markdown)",
-            },
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: "list_dialogs",
+      description:
+        "List recent Telegram conversations (DMs, groups, channels). Returns last-message preview, sender, timestamp, and unread count.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          limit: {
+            type: "number",
+            description: "Max dialogs to return (default 30, max 100)",
           },
-          required: ["chat_id", "text"],
-        },
-      },
-      {
-        name: "get_updates",
-        description:
-          "Fetch recent messages and updates from the Telegram bot. Returns the last 20 messages.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            limit: {
-              type: "number",
-              description: "Number of updates to fetch (max 100, default 20)",
-            },
+          archived: {
+            type: "boolean",
+            description: "Include archived dialogs (default false)",
           },
-          required: [],
         },
+        required: [],
       },
-      {
-        name: "list_chats",
-        description:
-          "List known chats that have interacted with the bot. Populated from recent updates.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-          required: [],
+    },
+    {
+      name: "get_messages",
+      description:
+        "Fetch recent messages from a specific chat. Use chat_id from list_dialogs or a username like @example.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          chat: {
+            type: "string",
+            description: "Chat ID (numeric) or @username",
+          },
+          limit: {
+            type: "number",
+            description: "Number of messages to fetch (default 20, max 100)",
+          },
         },
+        required: ["chat"],
       },
-    ],
-  };
-});
+    },
+    {
+      name: "send_message",
+      description: "Send a message to a Telegram chat or user (personal account, not bot).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          chat: {
+            type: "string",
+            description: "Chat ID (numeric) or @username",
+          },
+          text: {
+            type: "string",
+            description: "Message text (supports Markdown)",
+          },
+        },
+        required: ["chat", "text"],
+      },
+    },
+    {
+      name: "search_messages",
+      description: "Full-text search across all Telegram conversations.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Search query text",
+          },
+          limit: {
+            type: "number",
+            description: "Max results (default 20)",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  ],
+}));
+
+function formatPeer(entity) {
+  if (!entity) return "Unknown";
+  if (entity.title) return entity.title;
+  const first = entity.firstName || "";
+  const last = entity.lastName || "";
+  const name = `${first} ${last}`.trim();
+  if (name) return name;
+  if (entity.username) return `@${entity.username}`;
+  return String(entity.id || "Unknown");
+}
+
+function resolveChatArg(chat) {
+  // Accept numeric ID or @username
+  if (/^-?\d+$/.test(chat)) return parseInt(chat, 10);
+  return chat.startsWith("@") ? chat : `@${chat}`;
+}
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
-    if (name === "send_message") {
-      const { chat_id, text } = args;
+    if (name === "list_dialogs") {
+      const limit = Math.min(args?.limit || 30, 100);
+      const includeArchived = args?.archived || false;
 
-      // Resolve OWNER alias
-      const resolvedChatId =
-        chat_id === "OWNER" && OWNER_ID ? OWNER_ID : chat_id;
+      const dialogs = await client.getDialogs({ limit, archived: includeArchived });
 
-      if (!resolvedChatId) {
-        throw new Error(
-          "chat_id is required. Set TELEGRAM_OWNER_ID to use 'OWNER' alias."
-        );
-      }
-
-      const result = await telegramRequest("sendMessage", {
-        chat_id: resolvedChatId,
-        text,
-        parse_mode: "Markdown",
+      const formatted = dialogs.map((d) => {
+        const peer = formatPeer(d.entity);
+        const lastMsg = d.message;
+        const fromMe = lastMsg?.out || false;
+        const text = lastMsg?.message || "[non-text message]";
+        const ts = lastMsg?.date ? new Date(lastMsg.date * 1000).toISOString() : "";
+        return {
+          chat_id: String(d.id),
+          name: peer,
+          type: d.isChannel ? "channel" : d.isGroup ? "group" : "dm",
+          unread: d.unreadCount || 0,
+          last_message: {
+            from_me: fromMe,
+            text: text.slice(0, 200),
+            timestamp: ts,
+          },
+        };
       });
 
       return {
         content: [
           {
             type: "text",
-            text: `Message sent successfully to chat ${result.chat.id}. Message ID: ${result.message_id}`,
+            text: JSON.stringify({ dialogs: formatted, count: formatted.length }, null, 2),
           },
         ],
       };
     }
 
-    if (name === "get_updates") {
+    if (name === "get_messages") {
+      const chat = resolveChatArg(args.chat);
       const limit = Math.min(args?.limit || 20, 100);
 
-      const updates = await telegramRequest("getUpdates", {
-        limit,
-        allowed_updates: ["message", "edited_message"],
-      });
+      const messages = await client.getMessages(chat, { limit });
 
-      // Cache chats from updates
-      for (const update of updates) {
-        const msg = update.message || update.edited_message;
-        if (msg?.chat) {
-          const chat = msg.chat;
-          const key = String(chat.id);
-          knownChats.set(key, {
-            id: chat.id,
-            type: chat.type,
-            title: chat.title || null,
-            username: chat.username || null,
-            first_name: chat.first_name || null,
-            last_name: chat.last_name || null,
-            display:
-              chat.title ||
-              [chat.first_name, chat.last_name].filter(Boolean).join(" ") ||
-              chat.username ||
-              key,
-          });
-        }
-      }
-
-      if (updates.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "No recent updates found.",
-            },
-          ],
-        };
-      }
-
-      const formatted = updates
-        .map((update) => {
-          const msg = update.message || update.edited_message;
-          if (!msg) return null;
-          const sender =
-            [msg.from?.first_name, msg.from?.last_name]
-              .filter(Boolean)
-              .join(" ") ||
-            msg.from?.username ||
-            "Unknown";
-          const chatName =
-            msg.chat.title ||
-            [msg.chat.first_name, msg.chat.last_name]
-              .filter(Boolean)
-              .join(" ") ||
-            msg.chat.username ||
-            String(msg.chat.id);
-          const date = new Date(msg.date * 1000).toISOString();
-          const edited = update.edited_message ? " [edited]" : "";
-          return `[${date}]${edited} ${sender} in ${chatName} (${msg.chat.id}): ${msg.text || "[non-text message]"}`;
-        })
-        .filter(Boolean)
-        .join("\n");
+      const formatted = messages.map((m) => ({
+        id: m.id,
+        from_me: m.out,
+        sender: formatPeer(m.sender),
+        text: m.message || "[non-text message]",
+        timestamp: m.date ? new Date(m.date * 1000).toISOString() : "",
+      }));
 
       return {
         content: [
           {
             type: "text",
-            text: `Recent updates (${updates.length}):\n\n${formatted}`,
+            text: JSON.stringify({ messages: formatted, count: formatted.length }, null, 2),
           },
         ],
       };
     }
 
-    if (name === "list_chats") {
-      // Also fetch recent updates to populate the cache
-      try {
-        const updates = await telegramRequest("getUpdates", {
-          limit: 100,
-          allowed_updates: ["message"],
-        });
-        for (const update of updates) {
-          const msg = update.message;
-          if (msg?.chat) {
-            const chat = msg.chat;
-            const key = String(chat.id);
-            knownChats.set(key, {
-              id: chat.id,
-              type: chat.type,
-              title: chat.title || null,
-              username: chat.username || null,
-              first_name: chat.first_name || null,
-              last_name: chat.last_name || null,
-              display:
-                chat.title ||
-                [chat.first_name, chat.last_name].filter(Boolean).join(" ") ||
-                chat.username ||
-                key,
-            });
-          }
-        }
-      } catch (e) {
-        // Non-fatal: use whatever is already in cache
-      }
-
-      if (knownChats.size === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: 'No known chats yet. Send a message to the bot first, or run get_updates to populate the chat list.',
-            },
-          ],
-        };
-      }
-
-      const chatList = Array.from(knownChats.values())
-        .map(
-          (c) =>
-            `• ${c.display} (ID: ${c.id}, type: ${c.type}${c.username ? ", @" + c.username : ""})`
-        )
-        .join("\n");
+    if (name === "send_message") {
+      const chat = resolveChatArg(args.chat);
+      const result = await client.sendMessage(chat, { message: args.text });
 
       return {
         content: [
           {
             type: "text",
-            text: `Known chats (${knownChats.size}):\n\n${chatList}`,
+            text: `Message sent. ID: ${result.id}, to: ${chat}`,
+          },
+        ],
+      };
+    }
+
+    if (name === "search_messages") {
+      const limit = Math.min(args?.limit || 20, 100);
+      // gram.js messages.search on global scope
+      const { Api } = await import("telegram");
+      const results = await client.invoke(
+        new Api.messages.SearchGlobal({
+          q: args.query,
+          filter: new Api.InputMessagesFilterEmpty(),
+          minDate: 0,
+          maxDate: 0,
+          offsetRate: 0,
+          offsetPeer: new Api.InputPeerEmpty(),
+          offsetId: 0,
+          limit,
+        }),
+      );
+
+      const msgs = (results.messages || []).map((m) => ({
+        id: m.id,
+        text: m.message || "[non-text]",
+        timestamp: m.date ? new Date(m.date * 1000).toISOString() : "",
+        from_me: m.out || false,
+      }));
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ results: msgs, count: msgs.length }, null, 2),
           },
         ],
       };
@@ -277,12 +305,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     throw new Error(`Unknown tool: ${name}`);
   } catch (error) {
     return {
-      content: [
-        {
-          type: "text",
-          text: `Error: ${error.message}`,
-        },
-      ],
+      content: [{ type: "text", text: `Error: ${error.message}` }],
       isError: true,
     };
   }
@@ -290,4 +313,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-process.stderr.write("Telegram MCP server running\n");
+process.stderr.write("Telegram MCP server running (user-auth mode)\n");
+
+// Graceful shutdown
+process.on("SIGINT", async () => {
+  await client.disconnect();
+  process.exit(0);
+});
+process.on("SIGTERM", async () => {
+  await client.disconnect();
+  process.exit(0);
+});
