@@ -1,16 +1,18 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "ops-marketplace",
   "description": "Local marketplace for claude-ops plugin",
   "owner": {
     "name": "Sam Renders",
-    "url": "https://github.com/auroracapital"
+    "email": "info@auroracapital.nl"
   },
   "plugins": [
     {
       "name": "ops",
       "description": "Business operations command center for Claude Code",
-      "path": "claude-ops",
-      "version": "0.1.0"
+      "source": "./claude-ops",
+      "version": "0.1.0",
+      "category": "productivity"
     }
   ]
 }
