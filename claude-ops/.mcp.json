@@ -4,8 +4,10 @@
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/telegram-server/index.js"],
       "env": {
-        "TELEGRAM_BOT_TOKEN": "${user_config.telegram_bot_token}",
-        "TELEGRAM_OWNER_ID": "${user_config.telegram_owner_id}"
+        "TELEGRAM_API_ID": "${user_config.telegram_api_id}",
+        "TELEGRAM_API_HASH": "${user_config.telegram_api_hash}",
+        "TELEGRAM_PHONE": "${user_config.telegram_phone}",
+        "TELEGRAM_SESSION": "${user_config.telegram_session}"
       }
     }
   }

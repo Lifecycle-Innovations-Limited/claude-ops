@@ -1,6 +1,6 @@
 {
   "name": "ops",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Business operations command center for Claude Code. Manage communications, projects, infrastructure, and revenue. Includes YOLO mode for autonomous business operation.",
   "author": {
     "name": "Sam Renders",
@@ -11,17 +11,29 @@
   "license": "MIT",
   "keywords": ["business", "operations", "communications", "yolo"],
   "userConfig": {
-    "telegram_bot_token": {
-      "title": "Telegram Bot Token",
-      "description": "Telegram Bot API token from @BotFather (optional)",
+    "telegram_api_id": {
+      "title": "Telegram API ID",
+      "description": "Numeric API ID from https://my.telegram.org/apps — create a personal app, NOT a bot. Required for /ops-inbox telegram.",
       "type": "string",
       "sensitive": true
     },
-    "telegram_owner_id": {
-      "title": "Telegram Owner ID",
-      "description": "Your Telegram user ID (optional)",
+    "telegram_api_hash": {
+      "title": "Telegram API Hash",
+      "description": "API hash from https://my.telegram.org/apps. Required for /ops-inbox telegram.",
       "type": "string",
-      "sensitive": false
+      "sensitive": true
+    },
+    "telegram_phone": {
+      "title": "Telegram Phone Number",
+      "description": "Your phone number in E.164 format e.g. '+15551234567'. Used once during first-run --auth. Required for /ops-inbox telegram.",
+      "type": "string",
+      "sensitive": true
+    },
+    "telegram_session": {
+      "title": "Telegram Session String",
+      "description": "Persisted gram.js StringSession. Generate once via `node telegram-server/index.js --auth` in a terminal after filling the 3 fields above. Required for /ops-inbox telegram.",
+      "type": "string",
+      "sensitive": true
     },
     "sentry_org": {
       "title": "Sentry Organization",
