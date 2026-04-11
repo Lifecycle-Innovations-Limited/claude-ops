@@ -179,7 +179,7 @@ Rules for the prompt:
 
 ### 3a — Telegram (user-auth via ops-telegram-autolink)
 
-**Bots cannot read user DMs**, so `/ops-inbox telegram` requires a personal-account MCP. The plugin ships `bin/ops-telegram-autolink` which:
+**Bots cannot read user DMs**, so `/ops-inbox telegram` requires a personal-account MCP. The plugin ships `bin/ops-telegram-autolink.mjs` which:
 1. Scans scout sources (keychain → ~/.claude.json → shell profiles → Doppler) for previously-extracted `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` / `TELEGRAM_SESSION`.
 2. If none found, makes plain HTTP requests to `my.telegram.org` (no browser — `my.telegram.org` uses server-side HTML, no JS required), logs in with a phone code from the bridge file, creates an app if needed, and extracts api_id + api_hash.
 3. Runs gram.js `client.start()` to generate a session string, bridging the second code via the same file.
@@ -201,7 +201,7 @@ Sub-flow:
 
 4. **Spawn the autolink script in the background:**
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/bin/ops-telegram-autolink" --phone "$PHONE" 2>/tmp/ops-telegram-autolink.log 1>/tmp/ops-telegram-autolink.out &
+   node "${CLAUDE_PLUGIN_ROOT}/bin/ops-telegram-autolink.mjs" --phone "$PHONE" 2>/tmp/ops-telegram-autolink.log 1>/tmp/ops-telegram-autolink.out &
    echo $! > /tmp/ops-telegram-autolink.pid
    ```
    Use the Bash tool's `run_in_background: true`.
@@ -405,7 +405,7 @@ If `gog` is not on PATH, look at the detector's `mcp_configured` array for any e
 
 ### 3d — Slack (scout + ops-slack-autolink)
 
-Slack's official API requires workspace admin approval for most useful scopes. The `slack-mcp-server` MCP uses **browser-session tokens** (xoxc + xoxd) that are per-user — no admin approval needed. The plugin ships `bin/ops-slack-autolink` which:
+Slack's official API requires workspace admin approval for most useful scopes. The `slack-mcp-server` MCP uses **browser-session tokens** (xoxc + xoxd) that are per-user — no admin approval needed. The plugin ships `bin/ops-slack-autolink.mjs` which:
 
 1. **Phase 1 — scout** — checks for already-extracted tokens in:
    - `~/.claude.json mcpServers.slack.env` (where Claude Code stores them)
@@ -421,7 +421,7 @@ Sub-flow:
 
 1. **Scout first.** Run:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/bin/ops-slack-autolink" --scout-only 2>/tmp/ops-slack.log
+   node "${CLAUDE_PLUGIN_ROOT}/bin/ops-slack-autolink.mjs" --scout-only 2>/tmp/ops-slack.log
    ```
    Parse the stdout JSON. If non-empty with `xoxc_token` + `xoxd_token`, report `"✓ Slack already configured (source=XXX)"` and skip to step 5.
 
@@ -432,7 +432,7 @@ Sub-flow:
 
 3. **On Playwright path**: spawn the autolink in the background:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/bin/ops-slack-autolink" \
+   node "${CLAUDE_PLUGIN_ROOT}/bin/ops-slack-autolink.mjs" \
      --workspace "https://app.slack.com/client/" \
      2>/tmp/ops-slack-autolink.log 1>/tmp/ops-slack-autolink.out &
    echo $! > /tmp/ops-slack-autolink.pid

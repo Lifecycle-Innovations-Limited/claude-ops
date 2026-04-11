@@ -115,7 +115,7 @@ The plugin uses **your personal Telegram account** via gram.js MTProto — not a
 ```
 /ops:setup telegram
 ```
-This invokes `bin/ops-telegram-autolink`, which takes your phone number, performs the `my.telegram.org` HTTP login flow, extracts `api_id` + `api_hash` (creating a Telegram app for you if none exists), runs the gram.js auth flow to generate a session string, and stores everything in macOS keychain. Zero browser automation — `my.telegram.org` is server-rendered HTML, so the wizard uses plain HTTP requests. You just enter the two codes Telegram sends to your Telegram app.
+This invokes `bin/ops-telegram-autolink.mjs`, which takes your phone number, performs the `my.telegram.org` HTTP login flow, extracts `api_id` + `api_hash` (creating a Telegram app for you if none exists), runs the gram.js auth flow to generate a session string, and stores everything in macOS keychain. Zero browser automation — `my.telegram.org` is server-rendered HTML, so the wizard uses plain HTTP requests. You just enter the two codes Telegram sends to your Telegram app.
 
 After the wizard finishes, it prints the values you need to paste into `/plugin settings` for `ops@ops-marketplace` (the plugin cannot write to `~/.claude.json` on its own — that's Claude Code's job via the `/plugin` UI).
 
