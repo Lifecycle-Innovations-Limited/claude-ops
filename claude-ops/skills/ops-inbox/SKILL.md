@@ -1,6 +1,6 @@
 ---
 name: ops-inbox
-description: Inbox zero across all channels — WhatsApp (wacli), Email (Gmail MCP), Slack (MCP), Telegram (MCP). Shows unread counts, lets user process messages channel by channel or all at once.
+description: Full inbox management across all channels — WhatsApp (wacli), Email (Gmail MCP), Slack (MCP), Telegram (user-auth MCP). Scans FULL inbox (not just unread), identifies messages needing replies, archives handled conversations.
 argument-hint: "[channel: whatsapp|email|slack|telegram|all]"
 allowed-tools:
   - Bash
@@ -18,36 +18,48 @@ allowed-tools:
   - mcp__claude_ai_Slack__slack_read_channel
   - mcp__claude_ai_Slack__slack_read_thread
   - mcp__claude_ai_Slack__slack_send_message
-  - mcp__claude_ops_telegram__send_message
-  - mcp__claude_ops_telegram__get_updates
-  - mcp__claude_ops_telegram__list_chats
+  # Telegram: user-auth MCP tools will be added when available
+  # Do NOT use bot-based MCP tools — inbox requires user account access
 ---
 
 # OPS ► INBOX ZERO
 
-## Pre-gathered unread counts
+## Pre-gathered data
 
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-unread 2>/dev/null || echo '{}'
 ```
 
+## Core principle: FULL INBOX SCAN
+
+Do NOT just check unread. Scan the FULL recent inbox for each channel and classify every conversation:
+- **NEEDS REPLY** — other party sent last message, awaiting your response
+- **WAITING** — you sent last message, waiting for them (no action needed)
+- **HANDLED** — conversation concluded, can be archived
+- **FYI** — newsletters, notifications, automated messages (bulk archive)
+
 ## Your task
 
-1. **Parse the pre-gathered data** to get unread counts per channel.
+1. **Parse pre-gathered data** for initial counts (unread is just a starting signal).
 
-2. **Fetch live Slack unreads** in parallel: call `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "is:unread"`. If pre-gathered count is -1, this is the source of truth.
+2. **For each channel, run a FULL scan** (not just unread):
 
-3. **Display the inbox summary:**
+   - **Email**: Search `in:inbox` (not `is:unread`) via Gmail MCP. For each thread, read the last message to determine who sent it last (you or them). Classify as NEEDS REPLY / WAITING / FYI.
+   - **WhatsApp**: Run `wacli chats list --json` to get ALL non-archived chats. For each with recent activity (last 7 days), fetch last 3 messages via `wacli messages list --chat <JID> --limit 3 --json`. If last message is NOT from you → NEEDS REPLY. If last message IS from you → WAITING. Archive handled ones.
+   - **Slack**: Search `in:inbox` or recent DMs via Slack MCP. Check who sent last message in each thread.
+   - **Telegram**: Use user-auth MCP (NOT bot API) to read recent conversations.
+
+3. **Display the full inbox:**
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- OPS ► INBOX ZERO
+ OPS ► INBOX MANAGER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
- 📱 WhatsApp    [N unread from X chats]
- 📧 Email       [N unread threads]
- 💬 Slack       [N mentions / N DMs]
- ✈️  Telegram   [N unread]
+ 📱 WhatsApp    [N need reply] | [N waiting] | [N archive]
+ 📧 Email       [N need reply] | [N waiting] | [N FYI]
+ 💬 Slack       [N need reply] | [N waiting]
+ ✈️  Telegram   [N need reply] | [N waiting]
 
 ──────────────────────────────────────────────────────
  Process:
@@ -68,26 +80,64 @@ Use AskUserQuestion. Then process the selected channel(s).
 
 ## Processing each channel
 
-### WhatsApp
-Run: `wacli chats --unread --json 2>/dev/null` to list unread chats.
-For each chat, show:
+### WhatsApp (FULL SCAN)
+
+1. Get all non-archived chats: `wacli chats list --json`
+2. For each chat with `LastMessageTS` in the last 7 days, fetch recent messages:
+   `wacli messages list --chat "<JID>" --limit 5 --json`
+3. Parse the response structure: `data.messages[]` with fields `FromMe`, `Text`, `Timestamp`, `ChatName`
+4. Classify each chat:
+   - **NEEDS REPLY**: Last message has `FromMe: false` (they sent last)
+   - **WAITING**: Last message has `FromMe: true` (you sent last)
+   - **ARCHIVE**: Old conversation, no recent activity, or concluded
+
+Display NEEDS REPLY chats first:
 ```
-[Contact/Group] — [N messages] — [preview of latest]
-  a) Reply
-  b) Mark read
+📱 WHATSAPP — NEEDS REPLY
+ 1. [Contact] — [last msg preview] — [time ago]
+ 2. [Contact] — [last msg preview] — [time ago]
+
+📱 WHATSAPP — WAITING (no action needed)
+ 3. [Contact] — you said: "[preview]" — [time ago]
+
+  For each NEEDS REPLY:
+  a) Read full thread + reply
+  b) Archive (no reply needed)
   c) Skip
 ```
-Use `wacli send --to "[contact]" --message "[msg]"` to reply.
 
-### Email
-Use `mcp__claude_ai_Gmail__gmail_search_messages` with `query: "is:unread"`, `maxResults: 20`.
-For each thread, show sender, subject, preview. Options:
+Reply via: `wacli send --to "<JID>" --message "<msg>"`
+Archive/mark handled: note in response, move to WAITING/HANDLED.
+
+### Email (FULL SCAN)
+
+1. Search `in:inbox` (NOT `is:unread`) via `mcp__claude_ai_Gmail__gmail_search_messages` or `gog gmail search -a sam.renders@gmail.com -j --results-only --no-input --max 30 "in:inbox"`
+2. For each thread, read the last message to check sender
+3. Classify:
+   - **NEEDS REPLY**: Last sender is NOT you → action needed
+   - **WAITING**: Last sender IS you → waiting for response
+   - **FYI**: Newsletters, automated notifications, receipts → bulk archive
+
+Display NEEDS REPLY threads first:
 ```
-  a) Read full thread
-  b) Reply (draft via gmail_create_draft)
-  c) Archive (mark read)
-  d) Skip
+📧 EMAIL — NEEDS REPLY
+ 1. [Sender] — [Subject] — [time ago]
+    Preview: [first 100 chars]
+ 2. ...
+
+📧 EMAIL — FYI / ARCHIVE
+ N. [Sender] — [Subject] (newsletter/notification)
+
+  For each NEEDS REPLY:
+  a) Read full thread + draft reply
+  b) Archive (no reply needed)
+  c) Skip
+
+  For FYI section:
+  x) Archive all FYI at once
 ```
+
+Draft replies via `mcp__claude_ai_Gmail__gmail_create_draft` or `gog gmail compose`.
 
 ### Slack
 Use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "is:unread"` for mentions.
@@ -99,17 +149,26 @@ Options:
   c) Mark read / skip
 ```
 
-### Telegram
-Use `mcp__claude_ops_telegram__get_updates` (limit: 50) to fetch recent messages.
-Use `mcp__claude_ops_telegram__list_chats` to see known chats.
-For each unread message, show sender, chat, preview:
+### Telegram (FULL SCAN — User Account, NOT Bot)
+
+Telegram integration must authenticate as Sam's personal account (user-auth via tdlib/MTProto), NOT a BotFather bot. The goal is to manage real conversations just like WhatsApp via wacli.
+
+Use the Telegram user-auth MCP server if available. Fall back to `telegram-cli` or `tg` CLI tools that authenticate as user.
+
+1. List recent dialogs/conversations (last 7 days)
+2. For each, check who sent the last message
+3. Classify: NEEDS REPLY / WAITING / HANDLED
+
 ```
-[Contact/Chat] — [preview]
-  a) Reply (send_message)
-  b) Skip
+✈️  TELEGRAM — NEEDS REPLY
+ 1. [Contact] — [preview] — [time ago]
+
+  a) Read thread + reply
+  b) Archive
+  c) Skip
 ```
-Use `mcp__claude_ops_telegram__send_message` with chat_id and text to reply.
-If Telegram MCP is unavailable, fall back to: `telegram-cli --exec "dialog_list" 2>/dev/null || echo "Telegram not configured"`.
+
+If no Telegram user-auth tool is available, report: "Telegram not configured — needs user-auth MCP server (tdlib/MTProto)".
 
 ---
 

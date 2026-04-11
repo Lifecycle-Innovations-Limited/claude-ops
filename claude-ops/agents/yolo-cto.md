@@ -1,7 +1,7 @@
 ---
 name: yolo-cto
 description: Technical health agent. Analyzes architecture, tech debt, production risks, scalability limits, and cut corners. Brutally honest about what will break.
-model: claude-sonnet-4-5
+model: claude-opus-4-6
 effort: high
 maxTurns: 25
 tools:
@@ -42,6 +42,39 @@ Check test:unit coverage results, check if CI runs tests. What's actually untest
 
 ### 6. Security red flags
 Any hardcoded secrets? Missing auth middleware? Unvalidated inputs hitting the database? Check the code.
+
+### 7. AWS Infrastructure Audit (if credentials available)
+
+Check if AWS CLI is authenticated: `aws sts get-caller-identity 2>/dev/null`
+
+If available, run a FULL technical infrastructure audit:
+
+```bash
+# All ECS services across all clusters
+for cluster in $(aws ecs list-clusters --query 'clusterArns[*]' --output text 2>/dev/null); do
+  echo "=== $cluster ==="
+  aws ecs list-services --cluster "$cluster" --query 'serviceArns[*]' --output text | tr '\t' '\n' | while read svc; do
+    aws ecs describe-services --cluster "$cluster" --services "$svc" --query 'services[0].{name:serviceName,desired:desiredCount,running:runningCount,pending:pendingCount,status:status,taskDef:taskDefinition}' --output json
+  done
+done
+
+# EC2 instances (should be none — all ECS Fargate)
+aws ec2 describe-instances --query 'Reservations[*].Instances[*].{id:InstanceId,type:InstanceType,state:State.Name}' --output json
+
+# RDS instances and their sizes
+aws rds describe-db-instances --query 'DBInstances[*].{id:DBInstanceIdentifier,class:DBInstanceClass,engine:Engine,status:DBInstanceStatus,storage:AllocatedStorage}' --output json
+
+# Lambda functions and their runtimes
+aws lambda list-functions --query 'Functions[*].{name:FunctionName,runtime:Runtime,memory:MemorySize,timeout:Timeout,lastModified:LastModified}' --output json
+
+# S3 buckets
+aws s3api list-buckets --query 'Buckets[*].Name' --output json
+
+# CloudWatch alarms in ALARM state
+aws cloudwatch describe-alarms --state-value ALARM --query 'MetricAlarms[*].{name:AlarmName,metric:MetricName,state:StateValue}' --output json
+```
+
+Report: services at risk (desired != running), oversized instances, unused resources, missing alarms, runtime deprecations.
 
 ## Investigation steps
 

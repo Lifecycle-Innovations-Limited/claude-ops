@@ -1,7 +1,7 @@
 ---
 name: yolo-coo
 description: Operations execution agent. Finds what's falling through the cracks — stale work, broken processes, missing automation, communication failures. What the CEO doesn't see.
-model: claude-sonnet-4-5
+model: claude-opus-4-6
 effort: high
 maxTurns: 25
 tools:
@@ -92,7 +92,48 @@ for f in ops-unread ops-infra ops-git ops-prs ops-ci; do
 done
 ```
 
-### 5. Communication breakdown check
+### 5. AWS Operations Audit (if credentials available)
+
+Check if AWS CLI is authenticated: `aws sts get-caller-identity 2>/dev/null`
+
+If available, audit all running services from an ops perspective:
+
+```bash
+# All ECS clusters and their services
+for cluster in $(aws ecs list-clusters --query 'clusterArns[*]' --output text 2>/dev/null); do
+  cluster_name=$(echo "$cluster" | rev | cut -d/ -f1 | rev)
+  echo "=== $cluster_name ==="
+  aws ecs describe-services --cluster "$cluster" \
+    --services $(aws ecs list-services --cluster "$cluster" --query 'serviceArns[*]' --output text) \
+    --query 'services[*].{name:serviceName,desired:desiredCount,running:runningCount,pending:pendingCount,deployments:deployments[0].{status:status,rollout:rolloutState},events:events[0:3]}' \
+    --output json 2>/dev/null
+done
+
+# Recent CloudWatch alarms (any firing?)
+aws cloudwatch describe-alarms --state-value ALARM --output json 2>/dev/null | jq '.MetricAlarms[*].{name:AlarmName,state:StateValue,reason:StateReason}'
+
+# ECS task failures (last 24h)
+for cluster in $(aws ecs list-clusters --query 'clusterArns[*]' --output text 2>/dev/null); do
+  cluster_name=$(echo "$cluster" | rev | cut -d/ -f1 | rev)
+  aws ecs list-tasks --cluster "$cluster" --desired-status STOPPED --output json 2>/dev/null | jq --arg c "$cluster_name" '{cluster: $c, stopped_tasks: (.taskArns | length)}'
+done
+
+# Lambda errors (last 24h)
+aws lambda list-functions --query 'Functions[*].FunctionName' --output text 2>/dev/null | tr '\t' '\n' | while read fn; do
+  errors=$(aws cloudwatch get-metric-statistics --namespace AWS/Lambda --metric-name Errors --dimensions Name=FunctionName,Value="$fn" --start-time $(date -v-24H +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d '24 hours ago' +%Y-%m-%dT%H:%M:%S) --end-time $(date +%Y-%m-%dT%H:%M:%S) --period 86400 --statistics Sum --output text 2>/dev/null | awk '{print $2}')
+  [ -n "$errors" ] && [ "$errors" != "0.0" ] && echo "$fn: $errors errors in 24h"
+done
+
+# Health check endpoints
+for url in "https://api.healify.ai/health" "https://api.fiberwifi.link/api/health"; do
+  status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$url" 2>/dev/null)
+  echo "$url: HTTP $status"
+done
+```
+
+Report: services with deployment issues, task failures, alarm states, health check results. Flag anything that's running but shouldn't be (zombie services).
+
+### 6. Communication breakdown check
 
 - Are there unresponded Slack threads from teammates?
 - Are there GitHub review requests that are weeks old?

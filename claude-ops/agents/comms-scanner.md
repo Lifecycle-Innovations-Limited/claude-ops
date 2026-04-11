@@ -1,6 +1,6 @@
 ---
 name: comms-scanner
-description: Scans all communication channels for unread and urgent messages. Returns structured JSON with counts, previews, and urgency scores. Used by ops-inbox and ops-go for pre-gathering.
+description: Scans all communication channels for FULL inbox state (not just unread). Classifies each conversation as NEEDS_REPLY, WAITING, or HANDLED. Returns structured JSON. Used by ops-inbox and ops-go.
 model: claude-sonnet-4-5
 effort: low
 maxTurns: 10
@@ -15,26 +15,30 @@ disallowedTools:
 
 # COMMS SCANNER AGENT
 
-Scan all channels for unread messages and return structured data. This agent is fast and read-only.
+Scan all channels for FULL inbox state — not just unread, but all recent conversations classified by action needed.
 
 ## Task
 
-Run all channel scans in parallel and output a single JSON object:
+Run all channel scans in parallel:
 
 ```bash
-# WhatsApp
-wacli chats --unread --json 2>/dev/null || echo '{"error": "wacli not available"}'
+# WhatsApp — ALL non-archived chats (not just unread)
+wacli chats list --json 2>/dev/null || echo '{"error": "wacli not available"}'
+# Then for each chat with recent activity (last 7 days):
+# wacli messages list --chat "<JID>" --limit 5 --json
+# Check FromMe on last message to classify NEEDS_REPLY vs WAITING
 ```
 
 ```bash
-# Email (unread count)
-# Use Gmail CLI or gog
-gog gmail list --unread --limit 50 --json 2>/dev/null || echo '{"error": "gog not available"}'
+# Email — FULL inbox (not just unread)
+gog gmail search -a sam.renders@gmail.com -j --results-only --no-input --max 30 "in:inbox" 2>/dev/null || echo '{"error": "gog not available"}'
+# For each thread, read last message to check if sender is you (WAITING) or them (NEEDS_REPLY)
 ```
 
 ```bash
-# Telegram
-telegram-cli --exec "dialog_list" --json 2>/dev/null || echo '{"error": "telegram-cli not available"}'
+# Telegram — user-auth API (NOT bot), list recent dialogs
+# Use telegram user-auth MCP or tg-cli if available
+echo '{"error": "telegram user-auth not configured"}'
 ```
 
 Combine results into:
@@ -43,39 +47,31 @@ Combine results into:
 {
   "timestamp": "[ISO8601]",
   "whatsapp": {
-    "count": 0,
-    "chats": [
-      {
-        "contact": "[name]",
-        "messages": 0,
-        "preview": "[text]",
-        "timestamp": "[ISO8601]",
-        "urgency": "high|medium|low"
-      }
-    ]
+    "needs_reply": [{"contact": "[name]", "preview": "[text]", "timestamp": "[ISO8601]", "jid": "[JID]", "urgency": "high|medium|low"}],
+    "waiting": [{"contact": "[name]", "preview": "[your last msg]", "timestamp": "[ISO8601]"}],
+    "handled": []
   },
   "email": {
-    "count": 0,
-    "threads": [
-      {
-        "from": "[sender]",
-        "subject": "[subject]",
-        "preview": "[text]",
-        "timestamp": "[ISO8601]",
-        "urgency": "high|medium|low"
-      }
-    ]
+    "needs_reply": [{"from": "[sender]", "subject": "[subject]", "preview": "[text]", "timestamp": "[ISO8601]", "urgency": "high|medium|low"}],
+    "waiting": [{"from": "[recipient]", "subject": "[subject]", "timestamp": "[ISO8601]"}],
+    "fyi": [{"from": "[sender]", "subject": "[subject]", "type": "newsletter|notification|receipt"}]
   },
   "slack": {
-    "count": -1,
-    "note": "fetch live via MCP"
+    "needs_reply": [],
+    "waiting": [],
+    "note": "fetch live via Slack MCP"
   },
   "telegram": {
-    "count": 0,
-    "chats": []
+    "needs_reply": [],
+    "waiting": [],
+    "note": "user-auth not configured"
   },
-  "total_unread": 0,
-  "urgent": []
+  "summary": {
+    "total_needs_reply": 0,
+    "total_waiting": 0,
+    "total_fyi": 0,
+    "urgent": []
+  }
 }
 ```
 

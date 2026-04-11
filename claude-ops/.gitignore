@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+telegram-server/node_modules/
+.planning/
+.claude/worktrees/
