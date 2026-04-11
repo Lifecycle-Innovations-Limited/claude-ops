@@ -1,0 +1,12 @@
+{
+  "name": "ops-marketplace",
+  "description": "Local marketplace for claude-ops plugin",
+  "plugins": [
+    {
+      "name": "ops",
+      "description": "Business operations command center for Claude Code",
+      "source": "../claude-ops",
+      "version": "0.1.0"
+    }
+  ]
+}
