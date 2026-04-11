@@ -1,11 +1,15 @@
 {
   "name": "ops-marketplace",
   "description": "Local marketplace for claude-ops plugin",
+  "owner": {
+    "name": "Sam Renders",
+    "url": "https://github.com/auroracapital"
+  },
   "plugins": [
     {
       "name": "ops",
       "description": "Business operations command center for Claude Code",
-      "source": "../claude-ops",
+      "path": "claude-ops",
       "version": "0.1.0"
     }
   ]
