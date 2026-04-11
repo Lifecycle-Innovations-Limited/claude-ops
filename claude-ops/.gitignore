@@ -10,5 +10,10 @@ node_modules/
 telegram-server/node_modules/
 .planning/
 .claude/worktrees/
-scripts/preferences.json
 *.log
+
+# Per-user config — never commit. Copy registry.example.json to registry.json
+# and fill in your own project list. preferences.json holds secrets (tokens,
+# owner identity) and is managed by /ops:setup.
+scripts/registry.json
+scripts/preferences.json

@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 - `skills/setup/SKILL.md` — end-to-end config wizard with `AskUserQuestion` selectors
 - `bin/ops-setup-detect` — JSON state probe (tools, env vars, MCPs, registry, prefs)
 - `bin/ops-setup-install` — idempotent Homebrew/apt installer for CLI dependencies
-- `scripts/preferences.json` (gitignored) — owner, timezone, verbosity, default channels
+- `~/.claude/plugins/data/ops-ops-marketplace/preferences.json` — owner, timezone, verbosity, default channels, channel secrets. Lives in Claude Code's per-plugin data dir so it survives reinstalls and version bumps; never stored in the plugin source tree.
 - Routes `setup|configure|init|install` in the `/ops` command router
 
 #### WhatsApp auto-heal (Step 3b of wizard)
@@ -22,14 +22,14 @@ All notable changes to this project will be documented in this file.
 #### Email + Calendar with MCP fallback
 - **Email**: primary `gog` CLI (full read + send); fallback Claude Gmail MCP connector (read-only until user grants send perms in Claude Desktop → Connectors)
 - **Calendar**: primary `gog cal` (shared gog OAuth token); fallback Google Calendar MCP connector (read-only until user grants write perms in Claude Desktop)
-- Both record the chosen backend in `preferences.json` (`channels.email`, `channels.calendar`) so downstream skills (`/ops-go`, `/ops-next`, `/ops-fires`) can cross-correlate with today's schedule
+- Both record the chosen backend in the plugin-data `preferences.json` (`channels.email`, `channels.calendar`) so downstream skills (`/ops-go`, `/ops-next`, `/ops-fires`) can cross-correlate with today's schedule
 
 ## [0.1.0] — 2026-04-11
 
 ### Added
 
 #### Phase 1: Plugin Scaffold + Registry
-- `scripts/registry.json` — 19-project registry with aliases, paths, repos, infra, revenue stage, GSD flag
+- `scripts/registry.example.json` — template for the per-user project registry (aliases, paths, repos, infra, revenue stage, GSD flag). Real `scripts/registry.json` is gitignored.
 - `bin/ops-unread` — parallel unread counts for WhatsApp, Email, Slack, Telegram
 - `bin/ops-git` — git status across all registry projects
 - `bin/ops-prs` — open PRs across all registered GitHub repos

@@ -73,14 +73,14 @@ Walks you through every configuration step inside Claude Code with structured se
 - Collects tokens for each channel you enable (Telegram, WhatsApp, Email, Slack)
 - Configures calendar (gog calendar → Google Calendar MCP fallback)
 - Builds `scripts/registry.json` project-by-project
-- Saves preferences (owner name, timezone, briefing verbosity, default channels) to `scripts/preferences.json`
+- Saves preferences (owner name, timezone, briefing verbosity, default channels, channel secrets) to `~/.claude/plugins/data/ops-ops-marketplace/preferences.json` — outside the plugin source tree so they survive plugin reinstalls and version bumps
 - Exports `CLAUDE_PLUGIN_ROOT` in your shell profile
 
 Jump straight to a section with e.g. `/ops:setup telegram`, `/ops:setup calendar`, `/ops:setup registry`, `/ops:setup cli`.
 
 ### Project Registry
 
-Edit `scripts/registry.json` to register your projects:
+Copy `scripts/registry.example.json` to `scripts/registry.json` (which is gitignored) and fill in your projects:
 
 ```json
 {

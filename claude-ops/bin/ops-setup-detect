@@ -8,7 +8,16 @@ has_env() { [ -n "${!1:-}" ] && echo true || echo false; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REGISTRY="$SCRIPT_DIR/scripts/registry.json"
-PREFS="$SCRIPT_DIR/scripts/preferences.json"
+
+# Preferences live in Claude Code's per-plugin data dir so they survive plugin
+# reinstalls/version bumps. Falls back to the plugin source dir for users who
+# run bin/ops-setup-detect directly outside a Claude Code plugin context.
+PREFS_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PREFS="$PREFS_DIR/preferences.json"
+if [ ! -f "$PREFS" ] && [ -f "$SCRIPT_DIR/scripts/preferences.json" ]; then
+  # Legacy location — still honor it so old installs keep working until migrated.
+  PREFS="$SCRIPT_DIR/scripts/preferences.json"
+fi
 
 PROJECT_COUNT=0
 if [ -f "$REGISTRY" ] && command -v jq >/dev/null 2>&1; then

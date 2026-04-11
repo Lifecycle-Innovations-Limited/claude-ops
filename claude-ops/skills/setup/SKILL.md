@@ -19,7 +19,12 @@ You are running an **interactive configuration wizard** for the `claude-ops` plu
 - Never install anything or write any file without explicit user confirmation via `AskUserQuestion`.
 - Skip sections the user declines. Don't nag.
 - Show what's already configured first, so the user only fills gaps.
-- All writes go to `${CLAUDE_PLUGIN_ROOT}/scripts/preferences.json`, `${CLAUDE_PLUGIN_ROOT}/scripts/registry.json`, `${CLAUDE_PLUGIN_ROOT}/.mcp.json`, or the user's shell profile. Never edit anything else.
+- All writes go to one of these paths — and nothing else:
+  - **`$PREFS_PATH`** — per-user preferences + secrets. Resolves to `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`. Lives in Claude Code's plugin data dir so it survives plugin reinstalls and version bumps. Never committed to git.
+  - **`${CLAUDE_PLUGIN_ROOT}/scripts/registry.json`** — per-user project registry (gitignored in the source repo). `mkdir -p` its parent if missing.
+  - **`${CLAUDE_PLUGIN_ROOT}/.mcp.json`** — only to add `${user_config.*}` placeholders, never hardcoded tokens.
+  - The user's shell profile (`~/.zshrc` etc.) — append-only, never rewrite.
+- At the top of every wizard step, make sure `$PREFS_PATH`'s parent directory exists: `mkdir -p "$(dirname "$PREFS_PATH")"`. Claude Code creates `~/.claude/plugins/data/ops-ops-marketplace/` on plugin install but don't assume.
 
 ---
 
@@ -31,7 +36,13 @@ Run the detector and parse its JSON output:
 ${CLAUDE_PLUGIN_ROOT:-/Users/samrenders/Projects/claude-ops}/bin/ops-setup-detect 2>/dev/null
 ```
 
-If `CLAUDE_PLUGIN_ROOT` is unset, fall back to `~/.claude/plugins/claude-ops` or `~/Projects/claude-ops` — whichever exists. Store the resolved path as `PLUGIN_ROOT` for the rest of the session.
+If `CLAUDE_PLUGIN_ROOT` is unset, fall back to `~/.claude/plugins/cache/ops-marketplace/ops/<latest-version>/` or the marketplace source at `~/Projects/claude-ops` — whichever exists. Store the resolved path as `PLUGIN_ROOT` for the rest of the session.
+
+Also resolve `PREFS_PATH` once and reuse it everywhere:
+```bash
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+mkdir -p "$(dirname "$PREFS_PATH")"
+```
 
 Print a compact status header to the user, one line per category:
 
@@ -185,7 +196,7 @@ Telegram's Bot API is token-only — **no OAuth path exists**. Auto-scan first, 
 4. **Validate** the token before saving — hit `https://api.telegram.org/bot<TOKEN>/getMe` with a 5s timeout. If it returns `{"ok":true,...}`, continue. If not, show the error and re-ask.
 5. **Persist**:
    - Write to `${PLUGIN_ROOT}/.mcp.json` — **preserve existing keys**. Read with `jq`, add/update the `telegram` entry with env vars wired to `${user_config.telegram_bot_token}` and `${user_config.telegram_owner_id}`, write back atomically (`jq ... > tmp && mv tmp .mcp.json`).
-   - Store the raw values in `${PLUGIN_ROOT}/scripts/preferences.json` under `channels.telegram`.
+   - Store the raw values in `$PREFS_PATH` under `channels.telegram`.
 6. **Offer to propagate** (default `[No]`): `"Also export TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID in ~/.zshrc so other tools see them?"` — only on explicit yes, append to the profile file.
 7. **Smoke test**: run `node ${PLUGIN_ROOT}/telegram-server/index.js` with the env vars set, capture 3 seconds of output, verify it doesn't exit with ERROR. Report ✓/✗.
 
@@ -291,7 +302,7 @@ Don't block on this.
 
 #### Step 3b.6 — Record state
 
-Write `channels.whatsapp = "wacli"` to `scripts/preferences.json` and print the final ✓ summary:
+Write `channels.whatsapp = "wacli"` to `$PREFS_PATH` and print the final ✓ summary:
 ```
 ✓ WhatsApp — wacli authenticated, N chats, M recent messages
 ```
@@ -313,7 +324,7 @@ Email has two possible backends, tried in this order:
      ```
      Do **not** try to automate the OAuth flow — it needs an interactive browser.
    - If auth is green, probe with `gog inbox list --limit 1 --json 2>&1 || true` to confirm the token actually works against Gmail. Report ✓/✗.
-   - Record `channels.email = "gog"` in `scripts/preferences.json` and stop here.
+   - Record `channels.email = "gog"` in `$PREFS_PATH` and stop here.
 
 #### Fallback: Claude Gmail MCP connector
 
@@ -323,7 +334,7 @@ If `gog` is not on PATH, look at the detector's `mcp_configured` array for any e
    - `[Use Gmail MCP (read-only fallback)]`
    - `[Install gog instead — show docs]`
    - `[Skip email]`
-4. On "Use Gmail MCP", record `channels.email = "mcp:<name>"` in `scripts/preferences.json` (where `<name>` is the actual MCP server name you found) and **print this warning verbatim**:
+4. On "Use Gmail MCP", record `channels.email = "mcp:<name>"` in `$PREFS_PATH` (where `<name>` is the actual MCP server name you found) and **print this warning verbatim**:
    ```
    ⚠  Using the Gmail MCP connector as a fallback.
       Read operations (list inbox, search, fetch) will work.
@@ -347,7 +358,7 @@ If `gog` is not on PATH, look at the detector's `mcp_configured` array for any e
    - `[Install gog — show docs]`
    - `[Add a Gmail MCP — show docs]` → print `claude mcp add gmail` and tell the user to re-run `/ops:setup email` after
    - `[Skip email for now]`
-7. Whatever the user picks, record the resulting state in `scripts/preferences.json` (either `channels.email = "gog"`, `channels.email = "mcp:<name>"`, or omit the key entirely).
+7. Whatever the user picks, record the resulting state in `$PREFS_PATH` (either `channels.email = "gog"`, `channels.email = "mcp:<name>"`, or omit the key entirely).
 
 ### 3d — Slack
 
@@ -367,7 +378,7 @@ Slack has a real OAuth flow via Claude Code's MCP installer. That's the recommen
    Wait for the user via `AskUserQuestion`: `[Done]`, `[Cancel]`. On Done, re-run `ops-setup-detect` and verify `slack` appears in `mcp_configured`. Record `channels.slack = "mcp:slack"` on success.
 4. **On manual token**: run the shared credential auto-scan for `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`. Slack bot tokens start with `xoxb-`, user tokens with `xoxp-`, app-level tokens with `xapp-` — use these prefixes to filter placeholder scans.
    - If found, present with last-4 preview and source list.
-   - Validate by calling `https://slack.com/api/auth.test` with the token in the `Authorization: Bearer <token>` header. On `{"ok":true}`, record `channels.slack = "token"` and store in `preferences.json` under `channels.slack_config` (NOT in registry.json).
+   - Validate by calling `https://slack.com/api/auth.test` with the token in the `Authorization: Bearer <token>` header. On `{"ok":true}`, record `channels.slack = "token"` and store in `$PREFS_PATH` under `channels.slack_config` (NOT in registry.json).
    - On failure, show the error from the Slack API and re-ask.
 5. **Never touch `~/.claude.json` directly.** MCP registration is Claude Code's job — this skill only invokes `claude mcp add` through the user's terminal.
 
@@ -385,7 +396,7 @@ Calendar isn't a messaging channel, but every other ops skill (briefings, `/ops-
    gog cal list --max 1 --json 2>&1 || true
    gog cal events --time-min="$(date -u +%Y-%m-%dT00:00:00Z)" --max 5 --json 2>&1 || true
    ```
-   If either returns events, print `✓ Calendar — gog cal, N calendars, M upcoming events today` and record `channels.calendar = "gog"` in `scripts/preferences.json`. Stop here.
+   If either returns events, print `✓ Calendar — gog cal, N calendars, M upcoming events today` and record `channels.calendar = "gog"` in `$PREFS_PATH`. Stop here.
 3. **If gog is installed but calendar scope is missing** (typical error: `insufficient scope` or `403 insufficient_permissions`), print:
    ```
    Your gog OAuth token doesn't include the calendar scope.
@@ -401,7 +412,7 @@ Calendar isn't a messaging channel, but every other ops skill (briefings, `/ops-
    - `[Use Google Calendar MCP (read-only fallback)]`
    - `[Install gog instead — show docs]`
    - `[Skip calendar]`
-6. On "Use Google Calendar MCP", record `channels.calendar = "mcp:<name>"` in `scripts/preferences.json` and **print this warning verbatim**:
+6. On "Use Google Calendar MCP", record `channels.calendar = "mcp:<name>"` in `$PREFS_PATH` and **print this warning verbatim**:
    ```
    ⚠  Using the Google Calendar MCP connector as a fallback.
       Read operations (list calendars, fetch events, check free/busy) will work.
@@ -423,7 +434,7 @@ Calendar isn't a messaging channel, but every other ops skill (briefings, `/ops-
 
 #### Why this matters (for context in the skill)
 
-Downstream skills (`/ops-go`, `/ops-next`, `/ops-fires`) read `channels.calendar` from `preferences.json` to decide whether to cross-correlate today's schedule with their output:
+Downstream skills (`/ops-go`, `/ops-next`, `/ops-fires`) read `channels.calendar` from `$PREFS_PATH` to decide whether to cross-correlate today's schedule with their output:
 - Briefings note "you have a 2pm standup, so don't start that refactor now"
 - `/ops-next` deprioritizes deep work when a meeting is <30min away
 - `/ops-fires` warns if a production incident falls during a scheduled call
@@ -481,7 +492,7 @@ Collect (one `AskUserQuestion` each, skip any the user leaves blank):
 - `yolo_enabled` → select `[Yes]`, `[No]`
 - `default_channels` → multiSelect over configured channels
 
-Write to `${PLUGIN_ROOT}/scripts/preferences.json`:
+Write to `$PREFS_PATH`:
 
 ```json
 {
@@ -523,7 +534,7 @@ Re-run the detector and present a final status dashboard:
  ✓ Channels:   telegram, whatsapp, email
  ✓ MCPs:       linear, sentry, vercel
  ✓ Registry:   20 projects
- ✓ Prefs:      saved to scripts/preferences.json
+ ✓ Prefs:      saved to ~/.claude/plugins/data/ops-ops-marketplace/preferences.json
 
  Next: /ops-go for your first briefing
 ──────────────────────────────────────────────────────
@@ -559,5 +570,5 @@ Empty argument → full wizard from Step 0.
 
 - **Never** run `brew install` or write files without an explicit `AskUserQuestion` confirmation.
 - **Never** overwrite an existing file without showing the diff and asking.
-- **Never** put secrets in `registry.json` or commit them. Secrets only go in `preferences.json` (which is gitignored) or the user's shell profile.
+- **Never** put secrets in `registry.json` or commit them. Secrets only go in `$PREFS_PATH` (outside the plugin source tree entirely — Claude Code's per-plugin data dir) or the user's shell profile.
 - **Never** touch `~/.claude.json` or `~/.claude/settings.json` — MCP registration is Claude Code's job, not yours.
