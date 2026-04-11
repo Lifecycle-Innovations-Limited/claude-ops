@@ -37,27 +37,32 @@ A Claude Code plugin that turns Claude into a business operating system. One com
 
 ## Installation
 
+`claude-ops` is distributed as a Claude Code marketplace plugin. Install it directly from inside Claude Code — you don't need to clone anything manually or edit any settings files.
+
+```text
+# 1. Inside Claude Code, register the marketplace (one-time)
+/plugin marketplace add auroracapital/claude-ops
+
+# 2. Open the plugin manager and install the "ops" plugin
+/plugin
+#   → select "ops-marketplace"
+#   → install "ops"
+
+# 3. Fill in plugin user_config when prompted, or later via /plugin settings
+#    (Telegram API creds, Sentry org, Linear team, AWS region — all optional)
+
+# 4. Run the interactive setup wizard to auto-detect tools and configure channels
+/ops:setup
+```
+
+The plugin's Telegram MCP server auto-installs its Node dependencies on first run via `npm install` inside the installed cache dir. You don't need to run it yourself.
+
+If you prefer a local directory marketplace (useful for plugin development), clone the repo anywhere and register it:
+
 ```bash
-# 1. Clone the plugin
-git clone https://github.com/auroracapital/claude-ops ~/.claude/plugins/claude-ops
-
-# 2. Set CLAUDE_PLUGIN_ROOT in your shell profile
-echo 'export CLAUDE_PLUGIN_ROOT="$HOME/.claude/plugins/claude-ops"' >> ~/.zshrc
-source ~/.zshrc
-
-# 3. Make bin scripts executable
-chmod +x $CLAUDE_PLUGIN_ROOT/bin/*
-
-# 4. Register skills with Claude Code
-# Add to ~/.claude/settings.json:
-{
-  "skills": {
-    "paths": ["$HOME/.claude/plugins/claude-ops/skills"]
-  }
-}
-
-# 5. Install Telegram MCP server (optional)
-cd $CLAUDE_PLUGIN_ROOT/telegram-server && npm install
+git clone https://github.com/auroracapital/claude-ops ~/Projects/claude-ops-marketplace
+# then inside Claude Code:
+/plugin marketplace add ~/Projects/claude-ops-marketplace
 ```
 
 ## Setup
@@ -102,18 +107,24 @@ Copy `scripts/registry.example.json` to `scripts/registry.json` (which is gitign
 }
 ```
 
-### Telegram Bot (optional)
+### Telegram (optional — user-auth, not bot)
 
-1. Create a bot via [@BotFather](https://t.me/BotFather) and get your `TELEGRAM_BOT_TOKEN`
-2. Get your Telegram user ID from [@userinfobot](https://t.me/userinfobot)
-3. Add to your Claude Code user config:
-   ```json
-   {
-     "telegram_bot_token": "123456:ABC-DEF...",
-     "telegram_owner_id": "987654321"
-   }
+The plugin uses **your personal Telegram account** via gram.js MTProto — not a bot — because bots can't read user DMs, which is the main use case for `/ops-inbox telegram`.
+
+1. Create a personal app at [my.telegram.org/apps](https://my.telegram.org/apps). Note the `api_id` and `api_hash`. **Do not create a bot** — you need a user-auth app.
+2. In Claude Code, open plugin settings for `ops@ops-marketplace` and fill in:
+   - `telegram_api_id`
+   - `telegram_api_hash`
+   - `telegram_phone` (E.164 format, e.g. `+15551234567`)
+3. Generate a session string by running the auth flow in a terminal:
+   ```bash
+   node ~/.claude/plugins/cache/ops-marketplace/ops/<latest>/telegram-server/index.js --auth
    ```
-4. Claude Code will auto-start the Telegram MCP server via `.mcp.json`
+   It will prompt for your SMS code and 2FA password, then print a `TELEGRAM_SESSION` string.
+4. Paste the session string into `telegram_session` in plugin settings.
+5. Restart Claude Code so the MCP server picks up the new env vars.
+
+After that, `/ops-inbox telegram`, `/ops-comms send "..." to John Smith`, and the YOLO autonomous loop can read and reply to your DMs directly.
 
 ## Usage
 
@@ -129,7 +140,7 @@ Pre-gathers all data in parallel via shell scripts, then presents a unified dash
 
 ```
 /ops-next
-/ops-next focus on healify
+/ops-next focus on <project-alias>
 ```
 
 Applies the priority stack: fires > urgent comms > ready-to-merge PRs > Linear sprint > GSD work.
@@ -153,7 +164,7 @@ Applies the priority stack: fires > urgent comms > ready-to-merge PRs > Linear s
 
 ```
 /ops-fires
-/ops-fires healify
+/ops-fires <project-alias>
 ```
 
 Shows production incidents, ECS health, Sentry errors. Dispatches fix agents.
@@ -191,19 +202,22 @@ This runs shell scripts *before* the model context is loaded, so data is pre-gat
 | `agents/project-scanner.md` | Project state analysis |
 | `agents/revenue-tracker.md` | Revenue and cost monitoring |
 | `agents/triage-agent.md` | Issue triage and fix dispatch |
-| `agents/yolo-ceo.md` | CEO perspective (claude-opus-4-5) |
+| `agents/yolo-ceo.md` | CEO perspective (Opus, high effort) |
 | `agents/yolo-cto.md` | CTO perspective |
 | `agents/yolo-cfo.md` | CFO perspective |
 | `agents/yolo-coo.md` | COO perspective |
 
 ### Telegram MCP Server
 
-The `telegram-server/` directory contains a minimal MCP server that exposes the Telegram Bot API as Claude tools. It uses Node's native `fetch()` (no heavy dependencies) and runs via stdio transport for Claude Code integration.
+The `telegram-server/` directory contains an MCP server built on [gram.js](https://gram.js.org) (MTProto) that authenticates as your personal Telegram account — **not** as a bot. This is a hard requirement for `/ops-inbox telegram` because the Bot API cannot read user DMs.
 
 Tools:
-- `mcp__claude_ops_telegram__send_message(chat_id, text)` — send a message (supports `OWNER` alias)
-- `mcp__claude_ops_telegram__get_updates(limit?)` — fetch recent messages
-- `mcp__claude_ops_telegram__list_chats()` — list known chats
+- `list_dialogs` — list recent conversations (DMs, groups, channels)
+- `get_messages` — fetch messages from a specific chat
+- `send_message` — send a message to a chat
+- `search_messages` — full-text search across all your chats
+
+See [telegram-server/README.md](telegram-server/README.md) for first-run auth flow and troubleshooting. The plugin's `.mcp.json` wires all four env vars (`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_PHONE`, `TELEGRAM_SESSION`) from your `user_config` in Claude Code plugin settings — you never paste tokens into files directly.
 
 ## License
 

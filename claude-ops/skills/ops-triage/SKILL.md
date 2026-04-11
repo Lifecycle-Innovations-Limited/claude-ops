@@ -28,9 +28,11 @@ Run all of these simultaneously:
 gh issue list --state open --json number,title,body,labels,assignees,createdAt,url --limit 50 2>/dev/null
 ```
 
-### GitHub Issues (all repos)
+### GitHub Issues (registry-driven)
 ```bash
-for repo in Lifecycle-Innovations-Limited/healify Lifecycle-Innovations-Limited/healify-api Lifecycle-Innovations-Limited/healify-langgraphs; do
+REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"
+[ -f "$REGISTRY" ] || REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.example.json"
+for repo in $(jq -r '.projects[] | select(.gsd == true) | .repos[]' "$REGISTRY" 2>/dev/null); do
   echo "=== $repo ==="
   gh issue list --repo "$repo" --state open --json number,title,labels,createdAt --limit 20 2>/dev/null
 done

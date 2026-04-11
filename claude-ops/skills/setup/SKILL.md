@@ -33,10 +33,10 @@ You are running an **interactive configuration wizard** for the `claude-ops` plu
 Run the detector and parse its JSON output:
 
 ```!
-${CLAUDE_PLUGIN_ROOT:-/Users/samrenders/Projects/claude-ops}/bin/ops-setup-detect 2>/dev/null
+${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-detect 2>/dev/null
 ```
 
-If `CLAUDE_PLUGIN_ROOT` is unset, fall back to `~/.claude/plugins/cache/ops-marketplace/ops/<latest-version>/` or the marketplace source at `~/Projects/claude-ops` — whichever exists. Store the resolved path as `PLUGIN_ROOT` for the rest of the session.
+If `CLAUDE_PLUGIN_ROOT` is unset, fall back to the latest installed cache dir at `~/.claude/plugins/cache/ops-marketplace/ops/<latest-version>/`. Store the resolved path as `PLUGIN_ROOT` for the rest of the session.
 
 Also resolve `PREFS_PATH` once and reuse it everywhere:
 ```bash

@@ -79,21 +79,27 @@ Report: services at risk (desired != running), oversized instances, unused resou
 ## Investigation steps
 
 ```bash
-# Find TODOs and hacks
-grep -r "TODO\|FIXME\|HACK\|temp\|hardcoded" \
-  ~/healify ~/healify-api ~/healify-langgraphs \
-  --include="*.ts" --include="*.py" \
+# Load registry paths (iterates all user projects with gsd=true)
+REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"
+[ -f "$REGISTRY" ] || REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.example.json"
+PROJECT_PATHS=$(jq -r '.projects[] | select(.gsd == true) | .paths[]' "$REGISTRY" 2>/dev/null | while read p; do eval echo "$p"; done)
+
+# Find TODOs and hacks across all registered projects
+echo "$PROJECT_PATHS" | xargs -I{} grep -r "TODO\|FIXME\|HACK\|temp\|hardcoded" {} \
+  --include="*.ts" --include="*.py" --include="*.js" --include="*.tsx" \
   -l 2>/dev/null | head -20
 
 # Find hardcoded secrets patterns
-grep -r "password\s*=\s*['\"][^'\"]\|secret\s*=\s*['\"][^'\"]\|api_key\s*=\s*['\"][^'\"]" \
-  ~/healify ~/healify-api ~/healify-langgraphs \
-  --include="*.ts" --include="*.py" \
+echo "$PROJECT_PATHS" | xargs -I{} grep -r "password\s*=\s*['\"][^'\"]\|secret\s*=\s*['\"][^'\"]\|api_key\s*=\s*['\"][^'\"]" {} \
+  --include="*.ts" --include="*.py" --include="*.js" --include="*.tsx" \
   -l 2>/dev/null | head -20
 
-# Check package vulnerabilities
-cd ~/healify-api && npm audit --json 2>/dev/null | jq '{critical: .metadata.vulnerabilities.critical, high: .metadata.vulnerabilities.high}' || echo '{}'
-cd ~/healify && npm audit --json 2>/dev/null | jq '{critical: .metadata.vulnerabilities.critical, high: .metadata.vulnerabilities.high}' || echo '{}'
+# Check package vulnerabilities across all registered JS/TS projects
+echo "$PROJECT_PATHS" | while read path; do
+  [ -f "$path/package.json" ] || continue
+  echo "=== $(basename "$path") ==="
+  (cd "$path" && npm audit --json 2>/dev/null | jq '{critical: .metadata.vulnerabilities.critical, high: .metadata.vulnerabilities.high}') || echo '{}'
+done
 ```
 
 ## Output

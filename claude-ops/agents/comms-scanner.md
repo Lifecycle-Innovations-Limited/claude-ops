@@ -31,7 +31,13 @@ wacli chats list --json 2>/dev/null || echo '{"error": "wacli not available"}'
 
 ```bash
 # Email — FULL inbox (not just unread)
-gog gmail search -a sam.renders@gmail.com -j --results-only --no-input --max 30 "in:inbox" 2>/dev/null || echo '{"error": "gog not available"}'
+# Read account from preferences.json (channels.email.account) or use gog's default
+EMAIL_ACCOUNT=$(jq -r '.channels.email.account // empty' "${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json" 2>/dev/null)
+if [ -n "$EMAIL_ACCOUNT" ]; then
+  gog gmail search -a "$EMAIL_ACCOUNT" -j --results-only --no-input --max 30 "in:inbox" 2>/dev/null || echo '{"error": "gog not available"}'
+else
+  gog gmail search -j --results-only --no-input --max 30 "in:inbox" 2>/dev/null || echo '{"error": "gog not available or no default account"}'
+fi
 # For each thread, read last message to check if sender is you (WAITING) or them (NEEDS_REPLY)
 ```
 

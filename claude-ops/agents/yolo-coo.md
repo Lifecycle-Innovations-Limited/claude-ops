@@ -30,9 +30,11 @@ The calling skill has pre-gathered git status, PR state, CI status, Linear data,
 ### 1. What's actually falling through the cracks?
 
 Check for:
-- PRs open for more than 7 days:
+- PRs open for more than 7 days (registry-driven):
 ```bash
-for repo in Lifecycle-Innovations-Limited/healify Lifecycle-Innovations-Limited/healify-api Lifecycle-Innovations-Limited/healify-langgraphs; do
+REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"
+[ -f "$REGISTRY" ] || REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.example.json"
+for repo in $(jq -r '.projects[] | select(.gsd == true) | .repos[]' "$REGISTRY" 2>/dev/null); do
   gh pr list --repo "$repo" --state open \
     --json number,title,createdAt,headRefName,isDraft \
     2>/dev/null | \
@@ -57,7 +59,7 @@ Use `mcp__claude_ai_Linear__list_issues` with filter for started state, check `u
 
 Look at CI failure patterns:
 ```bash
-for repo in Lifecycle-Innovations-Limited/healify Lifecycle-Innovations-Limited/healify-api; do
+for repo in $(jq -r '.projects[] | select(.gsd == true) | .repos[]' "$REGISTRY" 2>/dev/null); do
   echo "=== $repo ==="
   gh run list --repo "$repo" --limit 20 \
     --json conclusion,name,createdAt \
@@ -124,8 +126,8 @@ aws lambda list-functions --query 'Functions[*].FunctionName' --output text 2>/d
   [ -n "$errors" ] && [ "$errors" != "0.0" ] && echo "$fn: $errors errors in 24h"
 done
 
-# Health check endpoints
-for url in "https://api.healify.ai/health" "https://api.fiberwifi.link/api/health"; do
+# Health check endpoints (from registry infra.health_endpoints)
+for url in $(jq -r '.projects[] | .infra.health_endpoints // [] | .[]' "$REGISTRY" 2>/dev/null); do
   status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$url" 2>/dev/null)
   echo "$url: HTTP $status"
 done

@@ -78,7 +78,7 @@ Find highest-priority issue that is in progress or unstarted.
 
 ### Priority 5 — GSD WORK
 From GSD state, find the highest revenue-impact active phase across all projects.
-Revenue weighting: healify > other projects (subscriber revenue). Prioritize closest-to-done phases.
+Revenue weighting: read `revenue.stage` and `priority` from `scripts/registry.json` — projects with lower priority numbers (higher priority) and revenue stage of `growth` or `active` outrank `pre-launch` or `development`. Within the same tier, prioritize closest-to-done phases.
 
 ---
 
@@ -114,4 +114,4 @@ Revenue weighting: healify > other projects (subscriber revenue). Prioritize clo
 
 Use AskUserQuestion. When user selects an option, invoke the corresponding skill directly — don't describe it, do it.
 
-If `$ARGUMENTS` contains context (e.g., "focus on healify"), constrain the analysis to that context.
+If `$ARGUMENTS` contains context (e.g., "focus on <project-alias>"), constrain the analysis to that context.

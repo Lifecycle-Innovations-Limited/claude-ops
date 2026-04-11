@@ -66,19 +66,19 @@ Parse all pre-gathered data and render the portfolio dashboard.
 
  ALIAS         PHASE      BRANCH          DIRTY  CI    NEXT ACTION
  ────────────────────────────────────────────────────────────────
- healify       7.2        feature/auth    3      ✓     finish auth tests
- healify-api   5.0        dev             0      ✗     fix CI (unit tests)
+ example-app   7.2        feature/auth    3      ✓     finish auth tests
+ example-api   5.0        dev             0      ✗     fix CI (unit tests)
  ...
 
 OPEN PRs
- #123  healify-api  fix: auth middleware  ✓ CI  ready to merge
- #456  healify      feat: onboarding      ✗ CI  needs fix
+ #123  example-api  fix: auth middleware  ✓ CI  ready to merge
+ #456  example-app  feat: onboarding      ✗ CI  needs fix
 
 ──────────────────────────────────────────────────────
  Jump to project:
- a) healify
- b) healify-api
- c) healify-langgraphs
+ a) example-app
+ b) example-api
+ c) example-worker
  d) ...
 
  Or type a project alias directly

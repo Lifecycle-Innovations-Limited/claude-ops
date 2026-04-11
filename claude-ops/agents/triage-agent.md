@@ -82,16 +82,22 @@ git checkout -b fix/[issue-id]-[short-slug] 2>/dev/null
 
 2. Implement the fix. Be surgical — only change what's needed to resolve the issue.
 
-3. Run the project's tests:
+3. Run the project's quality gate. Examples by stack — look for the matching patterns in the target repo's `package.json`, `Makefile`, or `CLAUDE.md`:
 ```bash
-# healify-api
+# Node/TS backend (NestJS, Express, Fastify)
 npm run type-check && npm run lint && npm run test:unit
 
-# healify
-npm run type-check
+# Node/TS frontend (Next, Vite, Expo)
+npm run type-check && npm run lint
 
-# langgraphs
+# Python (Django, FastAPI, Flask, LangGraph)
 source .venv/bin/activate && pytest tests/ -x --ignore=tests/e2e
+
+# Go
+go vet ./... && go test ./...
+
+# Rust
+cargo check && cargo test
 ```
 
 4. Commit with `--no-verify` (hooks are bugged per project rules):

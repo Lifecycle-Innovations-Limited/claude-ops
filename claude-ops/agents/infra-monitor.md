@@ -43,21 +43,25 @@ for cluster in $(aws ecs list-clusters --output json 2>/dev/null | jq -r '.clust
 done
 ```
 
-### Recent ECS events (anomalies)
+### Recent ECS events (anomalies, registry-driven)
 ```bash
-aws ecs describe-services \
-  --cluster healify-prod \
-  --services healify-api \
-  --output json 2>/dev/null | \
-  jq '.services[].events[:5]' 2>/dev/null || echo '[]'
+REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"
+[ -f "$REGISTRY" ] || REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.example.json"
+jq -r '.projects[] | select(.infra.ecs_clusters) | .infra.ecs_clusters[]' "$REGISTRY" 2>/dev/null | while read cluster; do
+  aws ecs list-services --cluster "$cluster" --output text --query 'serviceArns[*]' 2>/dev/null | tr '\t' '\n' | while read svc_arn; do
+    svc=$(basename "$svc_arn")
+    aws ecs describe-services --cluster "$cluster" --services "$svc" --output json 2>/dev/null | \
+      jq --arg c "$cluster" --arg s "$svc" '{cluster: $c, service: $s, events: .services[0].events[:5]}'
+  done
+done
 ```
 
 ### Vercel deployments
 Fetch via `mcp__claude_ai_Vercel__list_projects`, then for each project call `mcp__claude_ai_Vercel__list_deployments` with limit 3.
 
-### GitHub Actions (recent runs)
+### GitHub Actions (recent runs, registry-driven)
 ```bash
-for repo in Lifecycle-Innovations-Limited/healify Lifecycle-Innovations-Limited/healify-api Lifecycle-Innovations-Limited/healify-langgraphs; do
+for repo in $(jq -r '.projects[] | select(.gsd == true) | .repos[]' "$REGISTRY" 2>/dev/null); do
   gh run list --repo "$repo" --limit 3 \
     --json status,conclusion,name,headBranch,createdAt 2>/dev/null | \
     jq --arg r "$repo" 'map(. + {repo: $r})'

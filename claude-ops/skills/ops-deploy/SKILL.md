@@ -38,9 +38,11 @@ for cluster in $(aws ecs list-clusters --output json 2>/dev/null | jq -r '.clust
 done
 ```
 
-### Recent GitHub Actions runs
+### Recent GitHub Actions runs (registry-driven)
 ```bash
-for repo in Lifecycle-Innovations-Limited/healify Lifecycle-Innovations-Limited/healify-api Lifecycle-Innovations-Limited/healify-langgraphs; do
+REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"
+[ -f "$REGISTRY" ] || REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.example.json"
+for repo in $(jq -r '.projects[] | select(.gsd == true) | .repos[]' "$REGISTRY" 2>/dev/null); do
   echo "=== $repo ==="
   gh run list --repo "$repo" --limit 5 --json status,conclusion,name,headBranch,createdAt,databaseId 2>/dev/null
 done
@@ -73,8 +75,8 @@ VERCEL DEPLOYMENTS
 CI/CD PIPELINE
  REPO              BRANCH   WORKFLOW        STATUS    AGE
  ─────────────────────────────────────────────────────
- healify-api       main     Deploy API      ✓ success  2h
- healify           dev      Build iOS       ✗ failure  1h
+ example-api       main     Deploy API      ✓ success  2h
+ example-web       dev      Build            ✗ failure  1h
  ...
 
 PENDING DEPLOYS (branch ready, not yet deployed)
