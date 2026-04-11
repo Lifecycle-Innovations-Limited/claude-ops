@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# ops-infra — Infrastructure health across all ECS clusters → JSON
+# Reads clusters from registry.json, checks ECS service health
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REGISTRY="${SCRIPT_DIR}/../scripts/registry.json"
+
+if [ ! -f "$REGISTRY" ]; then
+  echo '{"error":"registry.json not found"}' && exit 1
+fi
+
+# Check if AWS CLI is available
+if ! command -v aws &>/dev/null; then
+  echo '{"error":"aws CLI not found","clusters":[]}' && exit 0
+fi
+
+# Collect unique ECS clusters from registry
+CLUSTERS=$(jq -r '[.projects[].infra.ecs_clusters // [] | .[]] | unique | .[]' "$REGISTRY" 2>/dev/null)
+
+if [ -z "$CLUSTERS" ]; then
+  echo '{"clusters":[],"summary":"No ECS clusters configured"}' && exit 0
+fi
+
+TMPDIR_OPS=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_OPS"' EXIT
+
+# Check each cluster in parallel
+for cluster in $CLUSTERS; do
+  (
+    # List services
+    SERVICES=$(aws ecs list-services --cluster "$cluster" --query 'serviceArns[*]' --output text 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ')
+
+    if [ -z "$SERVICES" ]; then
+      echo "{\"cluster\":\"$cluster\",\"status\":\"empty\",\"services\":[]}" > "$TMPDIR_OPS/$cluster.json"
+    else
+      RESULT=$(aws ecs describe-services --cluster "$cluster" --services $SERVICES \
+        --query 'services[*].{name:serviceName,running:runningCount,desired:desiredCount,status:status}' \
+        --output json 2>/dev/null || echo '[]')
+
+      # Calculate health
+      TOTAL=$(echo "$RESULT" | jq 'length')
+      HEALTHY=$(echo "$RESULT" | jq '[.[] | select(.running == .desired)] | length')
+
+      if [ "$TOTAL" -eq "$HEALTHY" ]; then
+        STATUS="healthy"
+      elif [ "$HEALTHY" -eq 0 ]; then
+        STATUS="down"
+      else
+        STATUS="degraded"
+      fi
+
+      echo "{\"cluster\":\"$cluster\",\"status\":\"$STATUS\",\"services\":$RESULT}" > "$TMPDIR_OPS/$cluster.json"
+    fi
+  ) &
+done
+wait
+
+# Assemble
+echo -n '{"clusters":['
+first=true
+for f in "$TMPDIR_OPS"/*.json; do
+  [ ! -f "$f" ] && continue
+  [ "$first" = true ] && first=false || echo -n ','
+  cat "$f"
+done
+echo ']}'

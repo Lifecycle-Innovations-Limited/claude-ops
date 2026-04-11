@@ -1,0 +1,48 @@
+{
+  "name": "ops",
+  "version": "0.1.0",
+  "description": "Business operations command center for Claude Code. Manage communications, projects, infrastructure, and revenue from your terminal. Includes YOLO mode for autonomous business operation.",
+  "author": {
+    "name": "Sam Renders",
+    "url": "https://github.com/auroracapital"
+  },
+  "homepage": "https://github.com/auroracapital/claude-ops",
+  "repository": "https://github.com/auroracapital/claude-ops",
+  "license": "MIT",
+  "keywords": [
+    "business",
+    "operations",
+    "communications",
+    "whatsapp",
+    "email",
+    "slack",
+    "telegram",
+    "linear",
+    "sentry",
+    "infrastructure",
+    "revenue",
+    "yolo"
+  ],
+  "userConfig": {
+    "telegram_bot_token": {
+      "description": "Telegram Bot API token (from @BotFather). Optional — needed for /ops-comms telegram.",
+      "sensitive": true
+    },
+    "telegram_owner_id": {
+      "description": "Your Telegram user ID. Optional — needed for /ops-comms telegram.",
+      "sensitive": false
+    },
+    "sentry_org": {
+      "description": "Sentry organization slug (e.g. 'healify'). Optional — needed for /ops-triage.",
+      "sensitive": false
+    },
+    "linear_team": {
+      "description": "Default Linear team key (e.g. 'HEA'). Optional — needed for /ops-linear.",
+      "sensitive": false
+    },
+    "aws_region": {
+      "description": "Default AWS region for infrastructure checks (e.g. 'us-east-1'). Optional.",
+      "sensitive": false
+    }
+  }
+}

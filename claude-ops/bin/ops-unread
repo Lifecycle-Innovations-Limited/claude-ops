@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# ops-unread — Unread message counts across all channels → JSON
+# Checks WhatsApp (wacli), Email (gog), and reports counts
+
+set -euo pipefail
+
+RESULT='{"channels":{}}'
+
+# WhatsApp via wacli
+if command -v wacli &>/dev/null; then
+  WA_COUNT=$(wacli messages --unread --count 2>/dev/null | tr -d '[:space:]' || echo "0")
+  # Fallback: if --count not supported or non-numeric, try listing and counting
+  if [ -z "$WA_COUNT" ] || ! [[ "$WA_COUNT" =~ ^[0-9]+$ ]]; then
+    WA_COUNT=$(wacli chats 2>/dev/null | grep -c "unread" 2>/dev/null || echo "0")
+  fi
+  [[ "$WA_COUNT" =~ ^[0-9]+$ ]] || WA_COUNT="0"
+  RESULT=$(echo "$RESULT" | jq --argjson c "$WA_COUNT" '.channels.whatsapp = {"unread": $c, "available": true}')
+else
+  RESULT=$(echo "$RESULT" | jq '.channels.whatsapp = {"unread": 0, "available": false, "reason": "wacli not found"}')
+fi
+
+# Email via gog
+if command -v gog &>/dev/null; then
+  EMAIL_COUNT=$(gog gmail search "is:unread" --count 2>/dev/null || echo "0")
+  if [ -z "$EMAIL_COUNT" ] || ! [[ "$EMAIL_COUNT" =~ ^[0-9]+$ ]]; then
+    # Fallback: list unread and count lines
+    EMAIL_COUNT=$(gog gmail search "is:unread" --limit 50 2>/dev/null | wc -l | tr -d ' ' 2>/dev/null || echo "0")
+  fi
+  EMAIL_COUNT=$(echo "$EMAIL_COUNT" | tr -d '[:space:]')
+  [[ "$EMAIL_COUNT" =~ ^[0-9]+$ ]] || EMAIL_COUNT="0"
+  RESULT=$(echo "$RESULT" | jq --argjson c "$EMAIL_COUNT" '.channels.email = {"unread": $c, "available": true}')
+else
+  RESULT=$(echo "$RESULT" | jq '.channels.email = {"unread": 0, "available": false, "reason": "gog not found"}')
+fi
+
+# Slack — MCP only, can't check from shell. Report as available but deferred.
+RESULT=$(echo "$RESULT" | jq '.channels.slack = {"unread": null, "available": true, "note": "Check via MCP tools in Claude Code"}')
+
+# Telegram — MCP only when server is running
+RESULT=$(echo "$RESULT" | jq '.channels.telegram = {"unread": null, "available": false, "note": "Needs Telegram MCP server (Phase 7)"}')
+
+echo "$RESULT"

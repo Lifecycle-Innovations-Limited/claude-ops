@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# ops-git — Git status across all registered projects → JSON
+# Reads from registry.json, outputs compact JSON for skill injection
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REGISTRY="${SCRIPT_DIR}/../scripts/registry.json"
+
+if [ ! -f "$REGISTRY" ]; then
+  echo '{"error":"registry.json not found"}' && exit 1
+fi
+
+# Expand ~ in paths
+expand_path() { echo "${1/#\~/$HOME}"; }
+
+# Collect results in temp file for parallel execution
+TMPDIR_OPS=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_OPS"' EXIT
+
+# Extract project count
+PROJECT_COUNT=$(jq '.projects | length' "$REGISTRY")
+
+# Process each project in parallel
+for i in $(seq 0 $((PROJECT_COUNT - 1))); do
+  ALIAS=$(jq -r ".projects[$i].alias" "$REGISTRY")
+  PATHS_JSON=$(jq -c ".projects[$i].paths" "$REGISTRY")
+
+  (
+    RESULTS="[]"
+    for path_raw in $(echo "$PATHS_JSON" | jq -r '.[]'); do
+      path=$(expand_path "$path_raw")
+      [ ! -d "$path/.git" ] && continue
+
+      branch=$(git -C "$path" branch --show-current 2>/dev/null || echo "detached")
+      last_commit=$(git -C "$path" log --oneline -1 --format='%s' 2>/dev/null || echo "no commits")
+      last_date=$(git -C "$path" log -1 --format='%cr' 2>/dev/null || echo "unknown")
+      uncommitted=$(git -C "$path" status --short 2>/dev/null | wc -l | tr -d ' ')
+      ahead=$(git -C "$path" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo "0")
+
+      RESULTS=$(echo "$RESULTS" | jq --arg p "$(basename "$path")" \
+        --arg b "$branch" --arg lc "$last_commit" --arg ld "$last_date" \
+        --arg u "$uncommitted" --arg a "$ahead" \
+        '. + [{"repo":$p,"branch":$b,"last_commit":$lc,"last_date":$ld,"uncommitted":($u|tonumber),"ahead":($a|tonumber)}]')
+    done
+
+    echo "$RESULTS" > "$TMPDIR_OPS/$ALIAS.json"
+  ) &
+done
+wait
+
+# Assemble final JSON
+echo -n '{'
+first=true
+for f in "$TMPDIR_OPS"/*.json; do
+  [ ! -f "$f" ] && continue
+  alias=$(basename "$f" .json)
+  [ "$first" = true ] && first=false || echo -n ','
+  echo -n "\"$alias\":"
+  cat "$f"
+done
+echo '}'

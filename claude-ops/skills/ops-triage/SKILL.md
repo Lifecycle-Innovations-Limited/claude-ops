@@ -1,0 +1,111 @@
+---
+name: ops-triage
+description: Cross-platform issue triage. Pulls from Sentry (MCP), Linear (MCP), GitHub Issues (gh). Cross-references against code to find already-fixed issues. Auto-resolves fixed ones. Dispatches agents for active issues.
+argument-hint: "[project-alias|sentry|linear|github|all]"
+allowed-tools:
+  - Bash
+  - Read
+  - Grep
+  - Glob
+  - Skill
+  - Agent
+  - AskUserQuestion
+  - mcp__sentry__authenticate
+  - mcp__claude_ai_Linear__list_issues
+  - mcp__claude_ai_Linear__save_issue
+  - mcp__claude_ai_Linear__get_issue
+  - mcp__claude_ai_Linear__list_teams
+---
+
+# OPS ► CROSS-PLATFORM TRIAGE
+
+## Phase 1 — Gather issues in parallel
+
+Run all of these simultaneously:
+
+### GitHub Issues
+```bash
+gh issue list --state open --json number,title,body,labels,assignees,createdAt,url --limit 50 2>/dev/null
+```
+
+### GitHub Issues (all repos)
+```bash
+for repo in Lifecycle-Innovations-Limited/healify Lifecycle-Innovations-Limited/healify-api Lifecycle-Innovations-Limited/healify-langgraphs; do
+  echo "=== $repo ==="
+  gh issue list --repo "$repo" --state open --json number,title,labels,createdAt --limit 20 2>/dev/null
+done
+```
+
+### Sentry
+If Sentry MCP is connected, fetch unresolved issues for all projects.
+Otherwise run: `echo "Sentry MCP not available"`
+
+### Linear
+Use `mcp__claude_ai_Linear__list_teams` to get team IDs, then `mcp__claude_ai_Linear__list_issues` with `filter: {state: {type: {in: ["unstarted", "started"]}}}` for each team.
+
+---
+
+## Phase 2 — Cross-reference against code
+
+For each Sentry issue, check if it's already fixed:
+1. Extract the error message, file path, and line number from the Sentry event.
+2. `grep` for the relevant code in the affected repo.
+3. Check git log: `git log --oneline --all -- [file] 2>/dev/null | head -20`
+4. If the fix is merged and deployed (check ECS deploy timestamps), mark as resolved.
+
+For each GitHub Issue:
+- Check if any merged PR references the issue number (`gh pr list --state merged --search "#[N]"`)
+- If referenced and merged, mark as potentially resolved
+
+---
+
+## Phase 3 — Auto-resolve confirmed fixed issues
+
+For issues confirmed fixed in code AND deployed:
+- **Sentry**: use Sentry MCP to resolve the issue
+- **Linear**: use `mcp__claude_ai_Linear__save_issue` with `state: "Done"`
+- **GitHub**: `gh issue close [N] --comment "Auto-closed: fix confirmed deployed"`
+
+Log all auto-resolutions.
+
+---
+
+## Phase 4 — Present triage board
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ OPS ► TRIAGE — [date]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+AUTO-RESOLVED (already fixed)
+ ✓ [Sentry] [title] — fix in [commit]
+ ✓ [Linear] [title] — closed
+ ✓ [GitHub] #[N] [title] — closed
+
+ACTIVE ISSUES (needs work)
+ CRITICAL  [source] [title] [age] [assigned?]
+ HIGH      [source] [title] [age] [assigned?]
+ MEDIUM    [source] [title] [age] [assigned?]
+
+──────────────────────────────────────────────────────
+ Actions:
+ a) Dispatch agent for [top critical issue]
+ b) Dispatch agent for [second issue]
+ c) Assign issue to sprint (Linear)
+ d) Bulk-assign all HIGH to current sprint
+ e) Done
+
+ → Type a letter or issue number
+──────────────────────────────────────────────────────
+```
+
+---
+
+## Dispatch fix agent
+
+When dispatching for an issue, spawn an Agent using `agents/triage-agent.md` with:
+- Full issue context (error, stack trace, affected code)
+- Instruction to create feature branch, fix, and open PR
+- Report back on completion or if blocked
+
+Filter to `$ARGUMENTS` project/source if specified.
