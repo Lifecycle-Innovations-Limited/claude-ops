@@ -1,42 +1,110 @@
 #!/usr/bin/env bash
-# ops-unread — Unread message counts across all channels → JSON
-# Checks WhatsApp (wacli), Email (gog), and reports counts
+# ops-unread — Channel availability + unread counts → JSON
+# Checks WhatsApp (wacli), Email (gog), Slack (env), Telegram (env)
+# All secrets via env vars or CLI auth — no hardcoded credentials.
+#
+# ENV VARS (optional — tools auto-detect if installed):
+#   GMAIL_ACCOUNT     — Gmail account for gog (default: auto-detect)
+#   SLACK_MCP_ENABLED — "true" if Slack MCP server is configured
+#   TELEGRAM_ENABLED  — "true" if Telegram user-auth MCP is configured
+#   WACLI_STORE       — wacli store path (default: ~/.wacli)
 
 set -euo pipefail
 
 RESULT='{"channels":{}}'
 
-# WhatsApp via wacli
+# ── WhatsApp via wacli ──
 if command -v wacli &>/dev/null; then
-  WA_COUNT=$(wacli messages --unread --count 2>/dev/null | tr -d '[:space:]' || echo "0")
-  # Fallback: if --count not supported or non-numeric, try listing and counting
-  if [ -z "$WA_COUNT" ] || ! [[ "$WA_COUNT" =~ ^[0-9]+$ ]]; then
-    WA_COUNT=$(wacli chats 2>/dev/null | grep -c "unread" 2>/dev/null || echo "0")
+  # Check connection status
+  WA_STATUS=$(wacli doctor 2>/dev/null | grep -i "CONNECTED" | awk '{print $2}' || echo "unknown")
+  WA_AUTH=$(wacli doctor 2>/dev/null | grep -i "AUTHENTICATED" | awk '{print $2}' || echo "unknown")
+
+  if [ "$WA_AUTH" = "true" ]; then
+    # Count non-archived chats with recent activity (7 days)
+    WA_RECENT=$(wacli chats list --json 2>/dev/null | python3 -c "
+import json, sys
+from datetime import datetime, timezone, timedelta
+try:
+    raw = json.loads(sys.stdin.read())
+    data = raw.get('data', raw)
+    chats = data if isinstance(data, list) else data.get('chats', [])
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    count = 0
+    for c in chats:
+        ts = c.get('LastMessageTS', '')
+        try:
+            t = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+            if t > cutoff:
+                count += 1
+        except: pass
+    print(count)
+except:
+    print(0)
+" 2>/dev/null || echo "0")
+
+    [[ "$WA_RECENT" =~ ^[0-9]+$ ]] || WA_RECENT="0"
+    RESULT=$(echo "$RESULT" | jq \
+      --argjson c "$WA_RECENT" \
+      --arg status "$WA_STATUS" \
+      '.channels.whatsapp = {"recent_chats": $c, "connected": ($status == "true"), "available": true}')
+  else
+    RESULT=$(echo "$RESULT" | jq '.channels.whatsapp = {"unread": 0, "available": false, "note": "wacli not authenticated — run: wacli auth"}')
   fi
-  [[ "$WA_COUNT" =~ ^[0-9]+$ ]] || WA_COUNT="0"
-  RESULT=$(echo "$RESULT" | jq --argjson c "$WA_COUNT" '.channels.whatsapp = {"unread": $c, "available": true}')
 else
-  RESULT=$(echo "$RESULT" | jq '.channels.whatsapp = {"unread": 0, "available": false, "reason": "wacli not found"}')
+  RESULT=$(echo "$RESULT" | jq '.channels.whatsapp = {"unread": 0, "available": false, "note": "wacli not installed"}')
 fi
 
-# Email via gog
+# ── Email via gog ──
+GMAIL_ACCT="${GMAIL_ACCOUNT:-}"
 if command -v gog &>/dev/null; then
-  EMAIL_COUNT=$(gog gmail search "is:unread" --count 2>/dev/null || echo "0")
-  if [ -z "$EMAIL_COUNT" ] || ! [[ "$EMAIL_COUNT" =~ ^[0-9]+$ ]]; then
-    # Fallback: list unread and count lines
-    EMAIL_COUNT=$(gog gmail search "is:unread" --limit 50 2>/dev/null | wc -l | tr -d ' ' 2>/dev/null || echo "0")
+  # Auto-detect account if not set
+  if [ -z "$GMAIL_ACCT" ]; then
+    GMAIL_ACCT=$(gog gmail search -j --results-only --no-input --max 1 "in:inbox" 2>/dev/null | python3 -c "
+import json, sys
+try:
+    data = json.loads(sys.stdin.read())
+    # gog worked without -a, so default account is fine
+    print('auto')
+except:
+    print('')
+" 2>/dev/null || echo "")
   fi
-  EMAIL_COUNT=$(echo "$EMAIL_COUNT" | tr -d '[:space:]')
-  [[ "$EMAIL_COUNT" =~ ^[0-9]+$ ]] || EMAIL_COUNT="0"
-  RESULT=$(echo "$RESULT" | jq --argjson c "$EMAIL_COUNT" '.channels.email = {"unread": $c, "available": true}')
+
+  if [ -n "$GMAIL_ACCT" ]; then
+    ACCT_FLAG=""
+    [ "$GMAIL_ACCT" != "auto" ] && ACCT_FLAG="-a $GMAIL_ACCT"
+    EMAIL_COUNT=$(gog gmail search $ACCT_FLAG -j --results-only --no-input --max 50 "in:inbox" 2>/dev/null | python3 -c "
+import json, sys
+try:
+    data = json.loads(sys.stdin.read())
+    items = data if isinstance(data, list) else data.get('threads', data.get('messages', []))
+    print(len(items))
+except:
+    print(0)
+" 2>/dev/null || echo "0")
+    [[ "$EMAIL_COUNT" =~ ^[0-9]+$ ]] || EMAIL_COUNT="0"
+    RESULT=$(echo "$RESULT" | jq --argjson c "$EMAIL_COUNT" '.channels.email = {"unread": $c, "available": true}')
+  else
+    RESULT=$(echo "$RESULT" | jq '.channels.email = {"unread": 0, "available": false, "note": "gog not authenticated — run: gog gmail auth"}')
+  fi
 else
-  RESULT=$(echo "$RESULT" | jq '.channels.email = {"unread": 0, "available": false, "reason": "gog not found"}')
+  RESULT=$(echo "$RESULT" | jq '.channels.email = {"unread": 0, "available": false, "note": "gog not installed — see github.com/AuroraToolkit/gog"}')
 fi
 
-# Slack — MCP only, can't check from shell. Report as available but deferred.
-RESULT=$(echo "$RESULT" | jq '.channels.slack = {"unread": null, "available": true, "note": "Check via MCP tools in Claude Code"}')
+# ── Slack — MCP-based, check env ──
+SLACK_ENABLED="${SLACK_MCP_ENABLED:-false}"
+if [ "$SLACK_ENABLED" = "true" ]; then
+  RESULT=$(echo "$RESULT" | jq '.channels.slack = {"unread": null, "available": true, "note": "Scan via Slack MCP tools"}')
+else
+  RESULT=$(echo "$RESULT" | jq '.channels.slack = {"unread": null, "available": false, "note": "Set SLACK_MCP_ENABLED=true when Slack MCP server is configured"}')
+fi
 
-# Telegram — MCP only when server is running
-RESULT=$(echo "$RESULT" | jq '.channels.telegram = {"unread": null, "available": false, "note": "Needs Telegram MCP server (Phase 7)"}')
+# ── Telegram — user-auth MCP, check env ──
+TG_ENABLED="${TELEGRAM_ENABLED:-false}"
+if [ "$TG_ENABLED" = "true" ]; then
+  RESULT=$(echo "$RESULT" | jq '.channels.telegram = {"unread": null, "available": true, "note": "Scan via Telegram user-auth MCP tools"}')
+else
+  RESULT=$(echo "$RESULT" | jq '.channels.telegram = {"unread": null, "available": false, "note": "Set TELEGRAM_ENABLED=true when user-auth MCP (tdlib/MTProto) is configured"}')
+fi
 
 echo "$RESULT"
