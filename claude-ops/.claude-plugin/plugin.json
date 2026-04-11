@@ -1,6 +1,6 @@
 {
   "name": "ops",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Business operations command center for Claude Code. Manage communications, projects, infrastructure, and revenue. Includes YOLO mode for autonomous business operation.",
   "author": {
     "name": "Sam Renders",
