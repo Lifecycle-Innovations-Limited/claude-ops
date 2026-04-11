@@ -10,3 +10,5 @@ node_modules/
 telegram-server/node_modules/
 .planning/
 .claude/worktrees/
+scripts/preferences.json
+*.log

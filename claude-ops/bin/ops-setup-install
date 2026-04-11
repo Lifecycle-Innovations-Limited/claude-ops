@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# ops-setup-install — Idempotent installer for ops CLI dependencies
+# Usage: ops-setup-install <tool> [<tool>...]
+# Tools: jq git gh aws node doppler wacli gog sentry-cli
+set -euo pipefail
+
+PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')"
+
+install_mac() {
+  local tool="$1"
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "✗ Homebrew not found. Install from https://brew.sh first." >&2
+    return 1
+  fi
+  case "$tool" in
+    jq)         brew install jq ;;
+    git)        brew install git ;;
+    gh)         brew install gh ;;
+    aws)        brew install awscli ;;
+    node)       brew install node ;;
+    doppler)    brew install dopplerhq/cli/doppler ;;
+    sentry-cli) brew install getsentry/tools/sentry-cli ;;
+    wacli)      echo "○ wacli is not on Homebrew — install manually: https://github.com/wacli/wacli" >&2; return 2 ;;
+    gog)        echo "○ gog is not on Homebrew — install manually or skip email integration." >&2; return 2 ;;
+    *) echo "✗ Unknown tool: $tool" >&2; return 1 ;;
+  esac
+}
+
+install_linux() {
+  local tool="$1"
+  if command -v apt-get >/dev/null 2>&1; then
+    case "$tool" in
+      jq|git|gh|awscli) sudo apt-get install -y "$tool" ;;
+      aws)              sudo apt-get install -y awscli ;;
+      node)             sudo apt-get install -y nodejs npm ;;
+      *) echo "○ $tool not handled by apt — install manually." >&2; return 2 ;;
+    esac
+  else
+    echo "✗ No supported package manager found (apt-get)." >&2
+    return 1
+  fi
+}
+
+for tool in "$@"; do
+  if command -v "$tool" >/dev/null 2>&1; then
+    echo "✓ $tool already installed"
+    continue
+  fi
+  echo "⏳ Installing $tool..."
+  case "$PLATFORM" in
+    darwin) install_mac "$tool" ;;
+    linux)  install_linux "$tool" ;;
+    *) echo "✗ Unsupported platform: $PLATFORM" >&2; exit 1 ;;
+  esac
+done

@@ -6,6 +6,7 @@ A Claude Code plugin that turns Claude into a business operating system. One com
 
 | Skill | Description |
 |-------|-------------|
+| `/ops:setup` | Interactive setup wizard — installs CLIs, configures channels, builds registry |
 | `/ops-go` | Morning briefing — all systems in one dashboard |
 | `/ops-next` | Priority-ordered next action (fires → comms → PRs → sprint → GSD) |
 | `/ops-inbox` | Inbox zero across WhatsApp, Email, Slack, Telegram |
@@ -60,6 +61,22 @@ cd $CLAUDE_PLUGIN_ROOT/telegram-server && npm install
 ```
 
 ## Setup
+
+### Interactive wizard (recommended)
+
+```
+/ops:setup
+```
+
+Walks you through every configuration step inside Claude Code with structured selectors:
+- Installs missing CLIs (`jq`, `gh`, `aws`, `doppler`, `sentry-cli`…) via Homebrew
+- Collects tokens for each channel you enable (Telegram, WhatsApp, Email, Slack)
+- Configures calendar (gog calendar → Google Calendar MCP fallback)
+- Builds `scripts/registry.json` project-by-project
+- Saves preferences (owner name, timezone, briefing verbosity, default channels) to `scripts/preferences.json`
+- Exports `CLAUDE_PLUGIN_ROOT` in your shell profile
+
+Jump straight to a section with e.g. `/ops:setup telegram`, `/ops:setup calendar`, `/ops:setup registry`, `/ops:setup cli`.
 
 ### Project Registry
 

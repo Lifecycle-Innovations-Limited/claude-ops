@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+#### Interactive setup wizard (`/ops:setup`)
+- `skills/setup/SKILL.md` — end-to-end config wizard with `AskUserQuestion` selectors
+- `bin/ops-setup-detect` — JSON state probe (tools, env vars, MCPs, registry, prefs)
+- `bin/ops-setup-install` — idempotent Homebrew/apt installer for CLI dependencies
+- `scripts/preferences.json` (gitignored) — owner, timezone, verbosity, default channels
+- Routes `setup|configure|init|install` in the `/ops` command router
+
+#### WhatsApp auto-heal (Step 3b of wizard)
+- Detects stuck `wacli sync` processes via stale store lock + age check
+- Detects app-state key desync via `wacli sync` stderr probe (the `didn't find app state key` error class)
+- Offers to kill stale sync / logout + re-pair interactively
+- Automatic historical backfill via `wacli history backfill` on top 10 most-recent chats after a successful heal
+
+#### Email + Calendar with MCP fallback
+- **Email**: primary `gog` CLI (full read + send); fallback Claude Gmail MCP connector (read-only until user grants send perms in Claude Desktop → Connectors)
+- **Calendar**: primary `gog cal` (shared gog OAuth token); fallback Google Calendar MCP connector (read-only until user grants write perms in Claude Desktop)
+- Both record the chosen backend in `preferences.json` (`channels.email`, `channels.calendar`) so downstream skills (`/ops-go`, `/ops-next`, `/ops-fires`) can cross-correlate with today's schedule
+
 ## [0.1.0] — 2026-04-11
 
 ### Added

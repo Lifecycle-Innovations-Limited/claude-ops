@@ -18,6 +18,7 @@ Route `$ARGUMENTS` to the correct ops skill:
 | Input | Route to |
 |-------|----------|
 | (empty), go, morning, briefing | `/ops-go` |
+| setup, configure, init, install | `/ops:setup $ARGUMENTS` |
 | inbox, unread, messages | `/ops-inbox` |
 | comms, send, whatsapp, email, slack, telegram | `/ops-comms $ARGUMENTS` |
 | fires, incidents, down, sentry | `/ops-fires` |
@@ -37,6 +38,7 @@ If `$ARGUMENTS` is empty, show a quick menu:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
  a) /ops-go        — Morning briefing
+ s) /ops:setup     — Interactive configuration wizard
  b) /ops-inbox     — Inbox zero (all channels)
  c) /ops-fires     — Production incidents
  d) /ops-projects  — Project dashboard
