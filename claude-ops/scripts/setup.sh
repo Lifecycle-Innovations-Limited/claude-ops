@@ -1,67 +1,61 @@
 #!/usr/bin/env bash
-# ops setup — Validate CLI tools and report readiness
-# Run this after installing the ops plugin to check what's available
-
+# ops setup — Auto-install missing tools + validate readiness
+# Called by SessionStart hook and /ops:setup
 set -euo pipefail
 
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo " OPS ► SETUP CHECK"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(dirname "$SCRIPT_DIR")"
+MISSING=()
+INSTALLED=()
 
-check_tool() {
-  local name="$1"
-  local cmd="$2"
-  local purpose="$3"
-  local required="$4"
-
-  if command -v "$cmd" &>/dev/null; then
-    version=$($cmd --version 2>/dev/null | head -1 || echo "installed")
-    echo "  ✓ $name — $version"
-  else
-    if [ "$required" = "required" ]; then
-      echo "  ✗ $name — NOT FOUND (required for $purpose)"
-    else
-      echo "  ○ $name — not found (optional, needed for $purpose)"
+# ─── Auto-install core tools ────────────────────────────────────────
+auto_install() {
+  local tool="$1"
+  local brew_pkg="$2"
+  if ! command -v "$tool" &>/dev/null; then
+    if command -v brew &>/dev/null; then
+      brew install "$brew_pkg" 2>/dev/null && INSTALLED+=("$tool") && return 0
     fi
+    MISSING+=("$tool")
+    return 1
   fi
+  return 0
 }
 
-echo "## Core Tools (required)"
-check_tool "jq" "jq" "JSON processing" "required"
-check_tool "git" "git" "repository management" "required"
-check_tool "gh" "gh" "GitHub PRs and CI" "required"
+# Core (auto-installed silently)
+auto_install jq jq
+auto_install gh gh
+auto_install git git
 
-echo ""
-echo "## Communication Tools"
-check_tool "wacli" "wacli" "/ops-comms whatsapp" "optional"
-check_tool "gog" "gog" "/ops-comms email + calendar" "optional"
+# Infrastructure (auto-installed if brew available)
+auto_install aws awscli
+auto_install node node
 
-echo ""
-echo "## Infrastructure Tools"
-check_tool "aws" "aws" "/ops-infra ECS health" "optional"
-check_tool "sentry-cli" "sentry-cli" "/ops-triage Sentry issues" "optional"
-
-echo ""
-echo "## Other Tools"
-check_tool "doppler" "doppler" "secrets management" "optional"
-check_tool "node" "node" "Telegram MCP server" "optional"
-
-echo ""
-
-# Check registry
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REGISTRY="$SCRIPT_DIR/registry.json"
-if [ -f "$REGISTRY" ]; then
-  PROJECT_COUNT=$(jq '.projects | length' "$REGISTRY")
-  echo "## Registry"
-  echo "  ✓ registry.json — $PROJECT_COUNT projects configured"
-else
-  echo "## Registry"
-  echo "  ✗ registry.json — NOT FOUND (copy from template and configure)"
+# Telegram MCP server deps
+if [ -f "$PLUGIN_ROOT/telegram-server/package.json" ] && command -v node &>/dev/null; then
+  if [ ! -d "$PLUGIN_ROOT/telegram-server/node_modules" ]; then
+    (cd "$PLUGIN_ROOT/telegram-server" && npm install --silent 2>/dev/null) && INSTALLED+=("telegram-deps")
+  fi
 fi
 
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo " Setup complete. Run /ops-go for your first briefing."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# Plugin bin deps
+if [ -f "$PLUGIN_ROOT/package.json" ] && command -v node &>/dev/null; then
+  if [ ! -d "$PLUGIN_ROOT/node_modules" ]; then
+    (cd "$PLUGIN_ROOT" && npm install --silent 2>/dev/null) && INSTALLED+=("plugin-deps")
+  fi
+fi
+
+# ─── Report only problems ───────────────────────────────────────────
+if [ ${#INSTALLED[@]} -gt 0 ]; then
+  echo "  ops: auto-installed ${INSTALLED[*]}"
+fi
+
+for tool in "${MISSING[@]}"; do
+  echo "  ✗ ops: $tool not found — run /ops:setup to configure"
+done
+
+# Check registry
+REGISTRY="$SCRIPT_DIR/registry.json"
+if [ ! -f "$REGISTRY" ]; then
+  echo "  ✗ ops: no project registry — run /ops:setup to create one"
+fi

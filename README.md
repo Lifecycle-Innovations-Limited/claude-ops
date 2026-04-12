@@ -1,140 +1,153 @@
 # claude-ops — Business Operating System for Claude Code
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./claude-ops/LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/auroracapital/claude-ops/releases)
-[![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blueviolet.svg)](https://github.com/anthropics/claude-plugins-official)
-[![Stars](https://img.shields.io/github/stars/auroracapital/claude-ops?style=social)](https://github.com/auroracapital/claude-ops/stargazers)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/Lifecycle-Innovations-Limited/claude-ops/releases)
+[![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blueviolet.svg)](https://claude.ai/settings/plugins)
 
-A **claude code plugin** that turns Claude into a complete business operating system. One command — `/ops:go` — delivers a morning briefing covering every dimension of your business: infrastructure health, CI/CD status, unread messages, open PRs, sprint state, and revenue snapshot.
+Turn Claude Code into a complete business operating system. One command — `/ops:go` — delivers a morning briefing covering infrastructure health, CI/CD status, unread messages, open PRs, sprint state, and revenue snapshot.
+
+## Quick Start
 
 ```bash
-# Install — add to Claude Code settings.json
-{
-  "plugins": [{ "source": "https://github.com/auroracapital/claude-ops" }]
-}
-# Then run:
+# 1. Add the marketplace
+/plugin marketplace add Lifecycle-Innovations-Limited/claude-ops
+
+# 2. Install the plugin
+/plugin install ops@lifecycle-innovations-limited-claude-ops
+
+# 3. Configure your integrations
 /ops:setup
 ```
 
-> Also installable via: `/plugin install claude-ops@claude-plugins-official`
+The setup wizard walks through each integration interactively — install CLIs, connect channels, build your project registry. All credentials stored locally, never transmitted.
+
+### Local Development
+
+```bash
+git clone https://github.com/Lifecycle-Innovations-Limited/claude-ops.git
+claude --plugin-dir ./claude-ops
+```
 
 ---
 
-## What claude-ops does
+## What It Does
 
-| Area | Skills | Integrations |
-|------|--------|--------------|
-| Morning briefing | `/ops:go` — full cross-platform snapshot | GitHub, Linear, Sentry, AWS |
-| Inbox zero | `/ops:inbox` — read + triage all channels | Slack, Telegram, WhatsApp, email |
-| PR automation | `/ops:merge` — autonomous PR review + merge pipeline | GitHub |
-| Slack integration | `/ops:comms slack` — send/read messages | Slack API |
-| Telegram bot | `/ops:comms telegram` — full message history | Telegram MTProto |
-| WhatsApp automation | `/ops:comms whatsapp` — WhatsApp Web bridge | WhatsApp |
-| DevOps dashboard | `/ops:fires` — production incidents + ECS health | AWS ECS, Sentry |
-| Revenue tracker | `/ops:revenue` — AWS spend + billing snapshot | AWS Cost Explorer |
-| Project status | `/ops:projects` — all active projects at a glance | Linear, GitHub |
-| YOLO mode | `/ops:yolo` — 4 parallel C-suite agents, fully autonomous | Everything |
+| Command | What it does | Integrations |
+|---------|-------------|--------------|
+| `/ops:go` | Full morning briefing — one command, 60 seconds | GitHub, Linear, Sentry, AWS |
+| `/ops:inbox` | Unified inbox — read + triage all channels | Slack, Telegram, WhatsApp, Gmail |
+| `/ops:merge` | Autonomous PR review + merge pipeline | GitHub Actions, GitHub CLI |
+| `/ops:comms` | Send/read messages across any channel | Slack, Telegram, WhatsApp, Gmail |
+| `/ops:fires` | Production incidents + ECS health dashboard | AWS ECS, Sentry |
+| `/ops:revenue` | AWS spend, credits, runway estimate | AWS Cost Explorer |
+| `/ops:projects` | Portfolio dashboard — all projects at a glance | GitHub, Linear |
+| `/ops:linear` | Sprint board, issue management | Linear |
+| `/ops:deploy` | Deploy status across all projects | AWS ECS, Vercel, GitHub Actions |
+| `/ops:triage` | Cross-platform issue triage | Sentry, Linear, GitHub Issues |
+| `/ops:next` | Priority-ranked "what should I do next" | Everything |
+| `/ops:yolo` | 4 parallel C-suite AI agents — fully autonomous | Everything |
 
 ---
 
-## Why claude-ops vs manual
+## Before vs After
 
 | Without claude-ops | With claude-ops |
 |--------------------|-----------------|
-| Open 6 tabs every morning | `/ops:go` — one command, 60 seconds |
-| Manually check Slack + Telegram + email | `/ops:inbox` — unified inbox, zero switching |
-| Copy-paste PR descriptions | `/ops:merge` — full PR automation pipeline |
-| SSH into servers to check health | `/ops:fires` — production dashboard in Claude |
+| Open 6+ tabs every morning | `/ops:go` — one command |
+| Context-switch between Slack, Telegram, email | `/ops:inbox` — unified inbox |
+| Manually review and merge PRs | `/ops:merge` — autonomous pipeline |
+| SSH into servers to check health | `/ops:fires` — terminal dashboard |
 | Forget to track AWS spend | `/ops:revenue` — automatic cost snapshot |
-| Context-switch between Linear + GitHub | `/ops:linear` + `/ops:projects` — unified view |
+| Switch between Linear and GitHub | `/ops:linear` + `/ops:projects` — unified view |
 
 ---
 
-## Features
+## Requirements
 
-- **Morning briefing** — infra health, CI status, unread messages, open PRs, sprint velocity, revenue in one shot
-- **Inbox zero** — unified read/triage across Slack, Telegram, WhatsApp, and email
-- **PR automation** — autonomous review, approval, and merge pipeline with `/ops:merge`
-- **Slack integration** — full send/read/search via Slack API
-- **Telegram bot** — MTProto client, full message history and send
-- **WhatsApp automation** — WhatsApp Web bridge for automated messaging
-- **DevOps dashboard** — ECS health, Sentry incidents, CloudWatch alerts
-- **Revenue tracker** — AWS Cost Explorer snapshot, spend anomaly detection
-- **YOLO mode** — 4 parallel autonomous agents handling all ops simultaneously
-- **Business operations** — `/ops:linear`, `/ops:deploy`, `/ops:next`, and 15+ more skills
+Just [Claude Code](https://claude.ai/code) 1.0+. Everything else is installed automatically.
 
----
+The setup wizard (`/ops:setup`) walks you through each integration interactively — "Do you want AWS CLI? [Yes/No]", "Connect Slack? [OAuth/Skip]", etc. Missing CLIs are auto-installed via Homebrew. MCP servers connect via OAuth. No config files to edit manually.
 
-## Installation
+### Integrations: MCP vs CLI
 
-Add to `~/.claude/settings.json`:
+Most integrations offer two paths. The setup wizard lets you choose per-integration.
 
-```json
-{
-  "plugins": [
-    {
-      "source": "https://github.com/auroracapital/claude-ops"
-    }
-  ]
-}
-```
+| Integration | MCP-only (zero-config OAuth) | + CLI tool | What you lose without the CLI |
+|-------------|------------------------------|------------|-------------------------------|
+| **GitHub** | -- | `gh` (auto-installed) | **Everything** — GitHub is CLI-only. CI logs, PR merge, issue triage all require `gh` |
+| **AWS** | -- | `aws` (auto-installed) | **Everything** — ECS health, cost tracking, revenue dashboard are CLI-only |
+| **Linear** | OAuth via Claude.ai | -- | Nothing — fully covered by MCP. 12 tools used across 6 skills |
+| **Vercel** | OAuth via Claude.ai | -- | Nothing — deploy status, build logs, runtime logs all via MCP |
+| **Slack** | OAuth via Claude.ai | local bot token | MCP works for most users. Local token adds: unlimited search (no quota), private channel access without bot membership |
+| **Gmail** | OAuth via Claude.ai | `gog` CLI | MCP can only **create drafts** — cannot send or archive. `gog` enables autonomous send + archive in `/ops:inbox` |
+| **Calendar** | OAuth via Claude.ai | `gog` CLI | MCP actually has *more* features (create events, RSVP, find free time). `gog` only reads. Either works for briefings |
+| **Sentry** | OAuth via Claude.ai | `sentry-cli` | MCP covers issue search + triage. CLI adds: source map upload, release tracking (not used by current skills) |
+| **WhatsApp** | -- | `wacli` | **Everything** — no MCP exists. `wacli` is the only path for WhatsApp inbox |
+| **Telegram** | -- | bundled MCP server | **Everything** — no Claude.ai connector exists. Plugin ships its own MTProto MCP server |
+| **GSD** | -- | auto-detected | Project roadmap state in dashboards. Fully optional — skills degrade gracefully |
 
-Then configure integrations:
-
-```
-/ops:setup
-```
-
-The setup wizard walks through Slack, Telegram, Linear, Sentry, and AWS configuration. All credentials stored locally — never transmitted.
+**TL;DR**: Linear and Vercel are MCP-only (and that's fine). GitHub and AWS are CLI-only (auto-installed). Gmail is where the choice matters most — MCP gives you read-only, CLI gives you full autonomous inbox management.
 
 ---
 
-## Skill Reference
+## Architecture
 
-| Skill | Description |
-|-------|-------------|
-| `/ops:go` | Token-efficient morning briefing across all platforms |
-| `/ops:inbox` | Full inbox management — read, triage, reply |
-| `/ops:comms` | Send and read messages across Slack, Telegram, WhatsApp |
-| `/ops:merge` | Autonomous PR merge pipeline |
-| `/ops:fires` | Production incidents dashboard |
-| `/ops:deploy` | Deploy status across all projects |
-| `/ops:revenue` | Revenue and AWS cost tracker |
-| `/ops:projects` | Portfolio dashboard |
-| `/ops:linear` | Linear command center |
-| `/ops:next` | Business-level "what should I do next" |
-| `/ops:yolo` | Spawns 4 parallel C-suite agents for autonomous ops |
-| `/ops:triage` | Cross-platform issue triage (Sentry + Linear + GitHub) |
-| `/ops:setup` | Interactive setup wizard |
+### Token Efficiency
 
----
+All skills use pre-execution shell blocks (`!` fences) that gather data *before* the model context loads — zero extra latency, minimal token overhead.
 
-## Screenshots / Demo
-
-> Screenshots and GIF demo coming soon. Star the repo to get notified.
-
----
-
-## Repository Structure
+### Plugin Structure
 
 ```
-claude-ops-marketplace/
+claude-ops/
 ├── .claude-plugin/
-│   └── marketplace.json   # Marketplace registry
-└── claude-ops/            # Plugin source
-    ├── README.md          # Full plugin documentation
-    ├── skills/            # All /ops:* skill implementations
-    ├── agents/            # Autonomous agent definitions
-    ├── bin/               # CLI entry points
-    └── hooks/             # Claude Code lifecycle hooks
+│   └── plugin.json        # Plugin manifest + userConfig schema
+├── skills/                # 14 slash command skills
+│   ├── ops/               # Router — dispatches to sub-skills
+│   ├── ops-go/            # Morning briefing
+│   ├── ops-inbox/         # Unified inbox
+│   ├── ops-comms/         # Cross-channel messaging
+│   ├── ops-merge/         # Autonomous PR pipeline
+│   ├── ops-fires/         # Production incidents
+│   ├── ops-deploy/        # Deploy status
+│   ├── ops-revenue/       # Cost tracking
+│   ├── ops-projects/      # Portfolio dashboard
+│   ├── ops-linear/        # Sprint management
+│   ├── ops-triage/        # Issue triage
+│   ├── ops-next/          # Next action advisor
+│   ├── ops-yolo/          # YOLO autonomous mode
+│   └── setup/             # Interactive setup wizard
+├── agents/                # 9 autonomous agents
+│   ├── yolo-ceo.md        # CEO synthesizer (Opus)
+│   ├── yolo-cto.md        # CTO technical analysis
+│   ├── yolo-cfo.md        # CFO financial analysis
+│   ├── yolo-coo.md        # COO operations analysis
+│   ├── triage-agent.md    # Issue investigation + fix
+│   ├── comms-scanner.md   # Inbox state scanner
+│   ├── infra-monitor.md   # Infrastructure health
+│   ├── project-scanner.md # Project portfolio scanner
+│   └── revenue-tracker.md # Revenue/cost monitor
+├── bin/                   # Shell scripts for data gathering
+├── hooks/                 # SessionStart health check
+├── telegram-server/       # Bundled MCP server (gram.js)
+├── scripts/               # Setup scripts + project registry
+└── .mcp.json              # MCP server declarations
 ```
 
 ---
 
 ## Contributing
 
-PRs welcome. See [`claude-ops/README.md`](./claude-ops/README.md) for full documentation.
+PRs welcome. See [`claude-ops/README.md`](./claude-ops/README.md) for detailed documentation on each skill, agent, and integration.
+
+```bash
+# Development mode — load plugin from local directory
+claude --plugin-dir ./claude-ops
+
+# Reload after changes
+/reload-plugins
+```
 
 ## License
 
-[MIT](./claude-ops/LICENSE) — built by [auroracapital](https://github.com/auroracapital)
+[MIT](./claude-ops/LICENSE) — built by [Lifecycle Innovations Limited](https://github.com/Lifecycle-Innovations-Limited)
