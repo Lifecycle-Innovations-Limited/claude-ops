@@ -793,6 +793,14 @@ Re-run the detector and present a final status dashboard:
 
 If any required tool is still missing, list it with the exact command to install it and stop short of claiming success.
 
+After displaying the summary, run the completion banner to celebrate the successful setup. Pass the actual counts from the setup session:
+
+```!
+bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-complete --channels <N> --projects <N> --agents 9 --skills 15
+```
+
+Where `<N>` is replaced with the actual number of channels configured and projects registered during this session.
+
 ---
 
 ## Invocation shortcuts
