@@ -55,6 +55,25 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-preflight &>/dev/null &
 
 Wait for `/tmp/ops-preflight/.complete` to exist before reading (it should be ready within 2-3 seconds). NEVER re-run a probe that already has cached results — read the cache file instead.
 
+**CRITICAL: Read ALL preflight data in a SINGLE Bash call.** Do NOT make separate tool calls for each file. Use one command:
+
+```bash
+echo "=== CLIS ===" && cat /tmp/ops-preflight/clis.txt 2>/dev/null
+echo "=== SLACK ===" && cat /tmp/ops-preflight/slack.json 2>/dev/null
+echo "=== TELEGRAM ===" && cat /tmp/ops-preflight/telegram.txt 2>/dev/null
+echo "=== GOG ===" && cat /tmp/ops-preflight/gog-gmail.json 2>/dev/null | head -3
+echo "=== CAL ===" && cat /tmp/ops-preflight/gog-cal.json 2>/dev/null | head -3
+echo "=== WACLI ===" && cat /tmp/ops-preflight/wacli-doctor.json 2>/dev/null | jq -r '.data.authenticated' 2>/dev/null
+echo "=== MCP ===" && cat /tmp/ops-preflight/mcp-servers.txt 2>/dev/null | tr '\n' ','
+echo "=== GH ===" && grep "Logged in" /tmp/ops-preflight/gh-auth.txt 2>/dev/null | head -1
+echo "=== AWS ===" && cat /tmp/ops-preflight/aws-identity.json 2>/dev/null | jq -r '.Account' 2>/dev/null
+echo "=== PROJECTS ===" && wc -l < /tmp/ops-preflight/projects.txt 2>/dev/null
+echo "=== REGISTRY ===" && cat /tmp/ops-preflight/existing-registry.json 2>/dev/null | jq '.projects | length' 2>/dev/null || echo "0"
+echo "=== PREFS ===" && cat /tmp/ops-preflight/existing-prefs.json 2>/dev/null | head -1 || echo "none"
+```
+
+Parse this output to build the status header. Do NOT show raw JSON to the user — only show the formatted status dashboard.
+
 ---
 
 ## Step 0b — Detect current state
@@ -156,23 +175,36 @@ GSD adds project roadmap tracking to your ops dashboards.
   [Install GSD (latest)] [Skip — I don't need roadmap tracking]
 ```
 
-On install, tell the user:
+On install, **attempt fully automated installation — the user must never have to leave the setup flow**:
 
-```
-To install GSD, run these commands in Claude Code:
-  /plugin marketplace add auroracapital/get-shit-done
-  /plugin install gsd@auroracapital-get-shit-done
+```bash
+# Attempt 1: claude plugin CLI (may not exist in all Claude Code versions)
+if command -v claude &>/dev/null; then
+  claude plugin marketplace add auroracapital/get-shit-done 2>/dev/null
+  claude plugin install gsd@auroracapital-get-shit-done 2>/dev/null
+  echo "GSD installed — will activate on next session reload"
+fi
 ```
 
-These are slash commands — run them in the Claude Code interface, not in a terminal. After running them, come back and re-run `/ops:setup` to continue.
+If `claude plugin` CLI is not available (exits non-zero or produces "unknown command"), fall back to invoking it within the session:
 
-Report success/failure. If the user confirms they've installed it, record `plugins.gsd = "installed"` in `$PREFS_PATH`. If they skip:
+```bash
+# Attempt 2: invoke via claude -p (non-interactive single-prompt mode)
+claude -p "/plugin marketplace add auroracapital/get-shit-done" 2>/dev/null
+```
 
+If that also fails, do NOT ask the user to run anything manually. Instead:
+
+1. Tell the user: `"I'll install GSD right after setup completes — just confirm 'yes' when I ask."`
+2. After Step 8 (final summary), run `/plugin marketplace add auroracapital/get-shit-done` as a follow-up Skill tool call within this session.
+3. Then run `/plugin install gsd@auroracapital-get-shit-done` as a second follow-up.
+
+After any successful installation path, re-verify with:
+```bash
+ls ~/.claude/plugins/cache/*/gsd*/skills/gsd-progress/SKILL.md 2>/dev/null && echo "installed" || echo "not_installed"
 ```
-Skipped GSD install. You can install it later:
-  /plugin marketplace add auroracapital/get-shit-done
-  /plugin install gsd@auroracapital-get-shit-done
-```
+
+Report `✓ GSD installed` on success. Record `plugins.gsd = "installed"` in `$PREFS_PATH`. If the install failed after all attempts, record `plugins.gsd = "pending"` and add it to the final summary as a follow-up action — but never block the wizard or ask the user to do it themselves.
 
 ---
 
@@ -286,7 +318,11 @@ Sub-flow (only runs if user selected Yes above):
 
    Also check `~/.claude.json mcpServers.telegram.env.TELEGRAM_API_ID`. If all 4 are found and the stored `TELEGRAM_SESSION` decodes as a StringSession, tell the user `"✓ Telegram already configured (api_id=XXXXXXX, phone=+XX...)"` and skip to step 8.
 
-2. **Ask the user for their phone number** via `AskUserQuestion` (free-text). Validate it matches `^\+\d{7,15}$`. Explain that the phone is only used once during the first-run extraction and is stored locally only.
+2. **Ask the user for their phone number** via a single `AskUserQuestion` with two options:
+   - `[Enter phone number]` — description: "International format, e.g. +31612345678. Only used once during first-run extraction and stored locally."
+   - `[Skip Telegram]`
+
+   If the user picks "Enter phone number", they type it in the free-text "Other" field. Validate the entered value matches `^\+\d{7,15}$`. If invalid, ask **one more time** with the same two options and the error: `"Invalid format — must start with + and contain 7-15 digits (e.g. +31612345678)."` If still invalid after the second attempt, skip Telegram and record `channels.telegram = "skipped"` in `$PREFS_PATH`. Never ask more than twice.
 
 3. **Warn about 2 codes.** Inform the user via `AskUserQuestion`: `"Telegram will send TWO codes to your Telegram app — one for my.telegram.org web login, then a second one for gram.js auth. Have your Telegram app ready."` Options: `[I'm ready]`, `[Cancel]`.
 
@@ -319,20 +355,76 @@ Sub-flow (only runs if user selected Yes above):
 
    Then update `$PREFS_PATH` with `channels.telegram = {backend: "gram.js", api_id: "...", phone: "...", status: "configured"}`. **Never write the api_hash or session to preferences.json** — those stay in keychain only. preferences.json gets only the non-sensitive metadata.
 
-8. **Instruct the user to wire it into Claude Code plugin settings.** Print:
+8. **Automatically wire credentials into Claude Code plugin config.** Do NOT ask the user to paste anything manually. After keychain storage, write them directly to the plugin userConfig:
 
+   ```bash
+   # Read from keychain
+   API_ID=$(security find-generic-password -s telegram-api-id -w 2>/dev/null)
+   API_HASH=$(security find-generic-password -s telegram-api-hash -w 2>/dev/null)
+   PHONE=$(security find-generic-password -s telegram-phone -w 2>/dev/null)
+   SESSION=$(security find-generic-password -s telegram-session -w 2>/dev/null)
+
+   # Inject into ~/.claude.json plugin settings
+   jq --arg id "$API_ID" --arg hash "$API_HASH" --arg phone "$PHONE" --arg session "$SESSION" \
+     '.pluginSettings["ops@ops-marketplace"].telegram_api_id = $id
+     | .pluginSettings["ops@ops-marketplace"].telegram_api_hash = $hash
+     | .pluginSettings["ops@ops-marketplace"].telegram_phone = $phone
+     | .pluginSettings["ops@ops-marketplace"].telegram_session = $session' \
+     ~/.claude.json > /tmp/claude-json-tmp && mv /tmp/claude-json-tmp ~/.claude.json
    ```
-   Your Telegram credentials are saved. To activate the MCP, open:
-     /plugin
-   Select ops@ops-marketplace → Settings. Paste these values:
-     telegram_api_id:   <api_id>
-     telegram_api_hash: (from keychain: `security find-generic-password -s telegram-api-hash -w`)
-     telegram_phone:    <phone>
-     telegram_session:  (from keychain: `security find-generic-password -s telegram-session -w`)
-   Restart Claude Code to pick up the new env vars.
-   ```
+
+   Print: `✓ Telegram — credentials stored in keychain and plugin config`
+
+   **Note on the ~/.claude.json write exception:** the general rule says never touch ~/.claude.json. The Telegram credential injection is the one permitted exception — it writes only to the `pluginSettings["ops@ops-marketplace"]` namespace and does a `jq . | mv` atomic swap (never a destructive overwrite). If the `pluginSettings` key doesn't exist yet, `jq` will create it. Verify the write succeeded before continuing: `jq -e '.pluginSettings["ops@ops-marketplace"].telegram_api_id' ~/.claude.json >/dev/null && echo "verified" || echo "WRITE FAILED"`. If it fails, fall back to printing the manual paste instructions.
 
 9. **Smoke test (optional).** Spawn `node ${CLAUDE_PLUGIN_ROOT}/telegram-server/index.js` with the env vars set inline for 3 seconds. If it doesn't print an auth error, the session works.
+
+**Autolink fallback — manual HTTP extraction via curl:**
+
+If the autolink script exits non-zero or produces an error containing `selectors may have changed`, `could not extract api_id`, or `could not extract api_hash`, automatically fall back to this curl sequence (no user action required to switch — just proceed):
+
+1. **URL-encode the phone number:**
+   ```bash
+   ENCODED_PHONE=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$PHONE'))")
+   ```
+
+2. **Send login request and capture random_hash:**
+   ```bash
+   SEND_RESP=$(curl -s -c /tmp/tg-cookies.txt \
+     -d "phone=$ENCODED_PHONE" \
+     "https://my.telegram.org/auth/send_password")
+   RANDOM_HASH=$(echo "$SEND_RESP" | jq -r '.random_hash // empty' 2>/dev/null)
+   # Fallback: grep if not JSON
+   [ -z "$RANDOM_HASH" ] && RANDOM_HASH=$(echo "$SEND_RESP" | grep -o '"random_hash":"[^"]*"' | cut -d'"' -f4)
+   ```
+
+3. **Ask the user for the login code** via `AskUserQuestion` (free-text):
+   `"Telegram sent a code to your Telegram app for my.telegram.org login. Enter it here:"`
+
+4. **Submit the code to login:**
+   ```bash
+   curl -s -c /tmp/tg-cookies.txt -b /tmp/tg-cookies.txt \
+     -d "phone=$ENCODED_PHONE&random_hash=$RANDOM_HASH&password=$CODE" \
+     "https://my.telegram.org/auth/login"
+   ```
+
+5. **Fetch the apps page and extract credentials:**
+   ```bash
+   APPS_HTML=$(curl -s -b /tmp/tg-cookies.txt "https://my.telegram.org/apps")
+   # api_id: the number inside <strong> following the app_id label
+   API_ID=$(echo "$APPS_HTML" | grep -A2 'app_id' | grep -o '<strong>[0-9]*</strong>' | grep -o '[0-9]*' | head -1)
+   # api_hash: 32-char hex string in the app_hash span
+   API_HASH=$(echo "$APPS_HTML" | grep -o 'api_hash.*' | grep -o '[0-9a-f]\{32\}' | head -1)
+   ```
+
+   If `API_ID` or `API_HASH` is empty after extraction, print the error verbatim and tell the user their Telegram account may be rate-limited or the page structure changed. Record `channels.telegram = "failed"` in `$PREFS_PATH` and skip to the next channel.
+
+6. **Continue with gram.js session generation** using the extracted `API_ID` and `API_HASH` — spawn `ops-telegram-autolink.mjs --phone "$PHONE" --api-id "$API_ID" --api-hash "$API_HASH" --skip-web-auth` to handle only the gram.js portion (since web auth is already done).
+
+7. **Clean up cookie jar:**
+   ```bash
+   rm -f /tmp/tg-cookies.txt
+   ```
 
 **Privacy notes for the user** (show once at start):
 
