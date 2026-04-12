@@ -262,6 +262,9 @@ function detectBrowserProfiles() {
     { name: "Microsoft Edge", dir: join(appSupport, "Microsoft Edge") },
     { name: "Chromium", dir: join(appSupport, "Chromium") },
     { name: "Opera", dir: join(appSupport, "com.operasoftware.Opera") },
+    { name: "Comet", dir: join(appSupport, "Comet") },
+    { name: "Vivaldi", dir: join(appSupport, "Vivaldi") },
+    { name: "Orion", dir: join(appSupport, "Orion") },
   ];
 
   const found = [];
@@ -426,72 +429,263 @@ for (const bp of browserProfiles) {
   }
 }
 
+// --- Direct cookie decryption (no Playwright needed for extraction) ---
+import { createHash, pbkdf2Sync, createDecipheriv } from "node:crypto";
+
+/**
+ * Decrypt a Chromium encrypted cookie value on macOS.
+ * Each Chromium app stores its key in the keychain as "<AppName> Safe Storage".
+ * Encryption: PBKDF2(key, "saltysalt", 1003, 16) → AES-128-CBC with IV=16 spaces.
+ * Encrypted values start with "v10" (3-byte prefix).
+ */
+function decryptChromiumCookie(encryptedHex, keychainService) {
+  try {
+    const masterKey = execSync(
+      `security find-generic-password -w -s "${keychainService}" 2>/dev/null`,
+      { encoding: "utf8" },
+    ).trim();
+    if (!masterKey) return null;
+
+    const derivedKey = pbkdf2Sync(masterKey, "saltysalt", 1003, 16, "sha1");
+    const encrypted = Buffer.from(encryptedHex, "hex");
+
+    // Strip "v10" prefix (3 bytes)
+    if (encrypted.length < 4) return null;
+    const prefix = encrypted.slice(0, 3).toString("ascii");
+    if (prefix !== "v10") return null;
+    const ciphertext = encrypted.slice(3);
+
+    const iv = Buffer.alloc(16, " ");
+    const decipher = createDecipheriv("aes-128-cbc", derivedKey, iv);
+    decipher.setAutoPadding(false);
+    let decrypted = decipher.update(ciphertext);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+    // Remove PKCS7 padding manually
+    const padLen = decrypted[decrypted.length - 1];
+    if (padLen > 0 && padLen <= 16) {
+      decrypted = decrypted.slice(0, decrypted.length - padLen);
+    }
+
+    // Chrome v130+ prepends a 32-byte SHA256 domain hash before the value.
+    // The real cookie value is URL-encoded ASCII text.
+    const raw = decrypted.toString("latin1");
+    // The 'd' cookie value is URL-encoded (contains %2B, %2F, %3D etc.)
+    // Find the longest URL-encoded chunk — that's the real value.
+    const allMatches = [...raw.matchAll(/[A-Za-z0-9%+/=_-]{30,}/g)];
+    if (allMatches.length > 0) {
+      // Pick the longest match (the domain hash is 32 bytes of binary, not ASCII)
+      return allMatches.sort((a, b) => b[0].length - a[0].length)[0][0];
+    }
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Map browser name to its keychain Safe Storage service name.
+ */
+function keychainServiceFor(browserName) {
+  const name = browserName.split("/")[0]; // strip "/Default" etc.
+  const map = {
+    "Google Chrome": "Chrome Safe Storage",
+    "Google Chrome Beta": "Chrome Beta Safe Storage",
+    Comet: "Comet Safe Storage",
+    Arc: "Arc Safe Storage",
+    Brave: "Brave Safe Storage",
+    "Microsoft Edge": "Microsoft Edge Safe Storage",
+    Chromium: "Chromium Safe Storage",
+    Opera: "Opera Safe Storage",
+    Vivaldi: "Vivaldi Safe Storage",
+    Orion: "Orion Safe Storage",
+    "Slack Desktop": "Slack Safe Storage",
+  };
+  return map[name] || `${name} Safe Storage`;
+}
+
+/**
+ * Extract the xoxc token from a Chromium localStorage leveldb.
+ * Uses classic-level for proper LevelDB reading (raw file scanning
+ * breaks on LevelDB's internal binary framing).
+ * Falls back to raw file scanning if classic-level is unavailable.
+ */
+async function extractXoxcFromLocalStorage(localStorageDir) {
+  if (!localStorageDir || !existsSync(localStorageDir)) return null;
+
+  // Try proper LevelDB reading first
+  try {
+    const { ClassicLevel } = await import("classic-level");
+    // Copy to temp to avoid lock conflicts with running browser
+    const tmpCopy = join(tmpdir(), `ops-slack-ls-${Date.now()}`);
+    cpSync(localStorageDir, tmpCopy, { recursive: true });
+    // Remove LOCK file so we can open read-only
+    try {
+      unlinkSync(join(tmpCopy, "LOCK"));
+    } catch {}
+
+    const db = new ClassicLevel(tmpCopy, {
+      createIfMissing: false,
+      valueEncoding: "utf8",
+      keyEncoding: "utf8",
+    });
+    await db.open({ readOnly: true });
+
+    let token = null;
+    for await (const [, value] of db.iterator()) {
+      if (value && value.includes("xoxc-")) {
+        const m = value.match(/xoxc-[0-9a-zA-Z._-]+/);
+        if (m && m[0].length > 20) {
+          token = m[0];
+          break;
+        }
+      }
+    }
+    await db.close();
+    // Clean up temp copy
+    try {
+      execSync(`rm -rf "${tmpCopy}"`, { timeout: 5000 });
+    } catch {}
+    if (token) return token;
+  } catch {}
+
+  // Fallback: raw file scanning (less reliable due to LevelDB binary framing)
+  try {
+    const files = readdirSync(localStorageDir).filter(
+      (f) => f.endsWith(".ldb") || f.endsWith(".log"),
+    );
+    for (const f of files) {
+      try {
+        const data = readFileSync(join(localStorageDir, f));
+        const text = data.toString("latin1");
+        const match = text.match(/xoxc-[0-9A-Za-z._-]+/);
+        if (match && match[0].length > 20) return match[0];
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
+// --- Try direct extraction if we found a browser with cookies ---
+if (selectedBrowser && !selectedBrowser.isSafari) {
+  emit({
+    type: "step",
+    message: `Attempting direct cookie decryption from ${selectedBrowser.name}`,
+  });
+
+  const keychainSvc = keychainServiceFor(selectedBrowser.name);
+
+  // Extract and decrypt the 'd' cookie
+  let xoxdToken = null;
+  if (selectedBrowser.isFirefox) {
+    // Firefox cookies are plaintext
+    try {
+      xoxdToken = execSync(
+        `sqlite3 "${selectedBrowser.cookieDb}" "SELECT value FROM moz_cookies WHERE host LIKE '%.slack.com' AND name = 'd' LIMIT 1;" 2>/dev/null`,
+        { encoding: "utf8", timeout: 5000 },
+      ).trim();
+    } catch {}
+  } else {
+    // Chromium — read encrypted value as hex, decrypt
+    try {
+      const hexValue = execSync(
+        `sqlite3 "${selectedBrowser.cookieDb}" "SELECT hex(encrypted_value) FROM cookies WHERE host_key LIKE '%.slack.com' AND name = 'd' LIMIT 1;" 2>/dev/null`,
+        { encoding: "utf8", timeout: 5000 },
+      ).trim();
+      if (hexValue) {
+        xoxdToken = decryptChromiumCookie(hexValue, keychainSvc);
+      }
+    } catch {}
+  }
+
+  if (xoxdToken) {
+    // Clean up: if decrypted value contains an embedded xoxd-, extract from there
+    const xoxdIdx = xoxdToken.lastIndexOf("xoxd-");
+    if (xoxdIdx > 0) {
+      xoxdToken = xoxdToken.slice(xoxdIdx);
+    } else if (!xoxdToken.startsWith("xoxd-")) {
+      xoxdToken = `xoxd-${xoxdToken}`;
+    }
+    emit({
+      type: "step",
+      message: `✓ Decrypted 'd' cookie (${xoxdToken.slice(0, 10)}...${xoxdToken.slice(-4)})`,
+    });
+
+    // Extract xoxc from localStorage
+    const xoxcToken = await extractXoxcFromLocalStorage(
+      selectedBrowser.localStorageDir,
+    );
+    if (xoxcToken) {
+      emit({
+        type: "step",
+        message: `✓ Found xoxc token from localStorage (${xoxcToken.slice(0, 10)}...${xoxcToken.slice(-4)})`,
+      });
+
+      // Extract team ID from localStorage or xoxc pattern
+      let teamId = null;
+      if (selectedBrowser.localStorageDir) {
+        try {
+          const files = readdirSync(selectedBrowser.localStorageDir).filter(
+            (f) => f.endsWith(".ldb") || f.endsWith(".log"),
+          );
+          for (const f of files) {
+            try {
+              const data = readFileSync(
+                join(selectedBrowser.localStorageDir, f),
+                "latin1",
+              );
+              const m = data.match(/"team_id"\s*:\s*"(T[A-Z0-9]+)"/);
+              if (m) {
+                teamId = m[1];
+                break;
+              }
+            } catch {}
+          }
+        } catch {}
+      }
+
+      // Success — emit result directly, no Playwright needed
+      process.stdout.write(
+        JSON.stringify({
+          xoxc_token: xoxcToken,
+          xoxd_token: xoxdToken,
+          team_id: teamId,
+          source: `direct:${selectedBrowser.name}`,
+        }) + "\n",
+      );
+      process.exit(0);
+    } else {
+      emit({
+        type: "step",
+        message: `○ Could not find xoxc in localStorage — falling back to Playwright`,
+      });
+    }
+  } else {
+    emit({
+      type: "step",
+      message: `○ Could not decrypt cookie from ${selectedBrowser.name} — falling back to Playwright`,
+    });
+  }
+}
+
+// --- Playwright fallback (only if direct extraction failed) ---
 let chromium;
 try {
   ({ chromium } = await import("playwright"));
 } catch {
   die(
-    "playwright is not installed. Run `npm install playwright` in the plugin root and `npx playwright install chromium`.",
+    "playwright is not installed and direct cookie extraction failed. Run `npm install playwright` in the plugin root and `npx playwright install chromium`.",
   );
 }
 
-// If we found a browser with Slack cookies, copy its profile to a temp dir
-// so Playwright can launch with the existing session without locking the real profile.
-let launchProfileDir = PROFILE_DIR;
-if (selectedBrowser) {
-  emit({
-    type: "step",
-    message: `Copying ${selectedBrowser.name} profile for Playwright session reuse`,
-  });
-  const tmpProfile = join(tmpdir(), `ops-slack-profile-${Date.now()}`);
-  mkdirSync(join(tmpProfile, selectedBrowser.profile), { recursive: true });
-
-  // Copy only the files needed for session: Cookies, Local Storage, Login Data, Preferences
-  const profileSrc = join(selectedBrowser.userDataDir, selectedBrowser.profile);
-  const profileDst = join(tmpProfile, selectedBrowser.profile);
-  const filesToCopy = [
-    "Cookies",
-    "Cookies-journal",
-    "Preferences",
-    "Secure Preferences",
-    "Login Data",
-  ];
-  for (const f of filesToCopy) {
-    const src = join(profileSrc, f);
-    if (existsSync(src)) {
-      try {
-        cpSync(src, join(profileDst, f));
-      } catch {}
-    }
-  }
-  // Copy Local Storage dir (contains xoxc token in leveldb)
-  const lsSrc = join(profileSrc, "Local Storage");
-  const lsDst = join(profileDst, "Local Storage");
-  if (existsSync(lsSrc)) {
-    try {
-      cpSync(lsSrc, lsDst, { recursive: true });
-    } catch {}
-  }
-  // Copy the top-level "Local State" file (contains OS crypt key reference)
-  const localStateSrc = join(selectedBrowser.userDataDir, "Local State");
-  if (existsSync(localStateSrc)) {
-    try {
-      cpSync(localStateSrc, join(tmpProfile, "Local State"));
-    } catch {}
-  }
-
-  launchProfileDir = tmpProfile;
-  emit({ type: "step", message: `Temp profile created at ${tmpProfile}` });
-}
-
-mkdirSync(launchProfileDir, { recursive: true });
+mkdirSync(PROFILE_DIR, { recursive: true });
 emit({
   type: "step",
-  message: `Launching Chromium (headless=${HEADLESS}, profile=${launchProfileDir})`,
+  message: `Launching Chromium (headless=${HEADLESS}, profile=${PROFILE_DIR})`,
 });
 
-const context = await chromium.launchPersistentContext(launchProfileDir, {
-  headless: selectedBrowser ? true : HEADLESS, // headless if we have cookies, headed if login needed
+const context = await chromium.launchPersistentContext(PROFILE_DIR, {
+  headless: HEADLESS,
   args: [
     "--disable-blink-features=AutomationControlled",
     "--no-first-run",
