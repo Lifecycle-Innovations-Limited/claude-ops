@@ -74,6 +74,7 @@ Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need 
 | Install CLIs       | cli      | Install missing command-line tools via Homebrew  |
 | Configure channels | channels | Set tokens for Telegram, WhatsApp, Email, Slack  |
 | Configure MCPs     | mcp      | Enable Linear, Sentry, Vercel, Gmail MCP servers |
+| Companion plugins  | plugins  | Install GSD for project roadmap tracking         |
 | Build registry     | registry | Register projects Claude should manage           |
 | Save preferences   | prefs    | Owner name, timezone, default priorities         |
 | Shell env          | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile     |
@@ -101,6 +102,45 @@ ${PLUGIN_ROOT}/bin/ops-setup-install <tool>
 Report success/failure. If Homebrew is missing on macOS, stop and tell the user to install it from https://brew.sh first — do not attempt to install brew automatically.
 
 After installation, re-run `ops-setup-detect` to refresh status before continuing.
+
+---
+
+## Step 2b — Companion plugins (if selected)
+
+### GSD (Get Shit Done)
+
+GSD is a third-party Claude Code plugin that adds project roadmap tracking. When installed, claude-ops dashboards (`/ops:go`, `/ops:projects`, `/ops:next`, `/ops:yolo`) automatically show active phases, progress, and next actions per project. Without it, those sections are simply omitted.
+
+Check if GSD is already installed:
+
+```bash
+ls ~/.claude/plugins/cache/*/gsd*/skills/gsd-progress/SKILL.md 2>/dev/null && echo "installed" || echo "not_installed"
+```
+
+If not installed, ask via `AskUserQuestion`:
+
+```
+GSD adds project roadmap tracking to your ops dashboards.
+  /ops:go shows active phases and progress per project
+  /ops:projects shows GSD state alongside CI/PR status
+  /ops:next factors in GSD work priority
+
+  [Install GSD (latest)] [Skip — I don't need roadmap tracking]
+```
+
+On install, run:
+
+```bash
+claude plugin marketplace add auroracapital/get-shit-done && claude plugin install gsd@auroracapital-get-shit-done
+```
+
+Report success/failure. If it fails (e.g. marketplace not reachable), print:
+
+```
+Could not auto-install GSD. You can install it manually later:
+  /plugin marketplace add auroracapital/get-shit-done
+  /plugin install gsd@auroracapital-get-shit-done
+```
 
 ---
 
