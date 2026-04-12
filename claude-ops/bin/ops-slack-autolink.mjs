@@ -249,7 +249,9 @@ import { cpSync, readdirSync } from "node:fs";
 function detectBrowserProfiles() {
   const home = homedir();
   const appSupport = join(home, "Library", "Application Support");
-  const candidates = [
+
+  // --- Chromium-based browsers (standard profile layout) ---
+  const chromiumCandidates = [
     { name: "Google Chrome", dir: join(appSupport, "Google", "Chrome") },
     {
       name: "Google Chrome Beta",
@@ -263,8 +265,7 @@ function detectBrowserProfiles() {
   ];
 
   const found = [];
-  for (const { name, dir } of candidates) {
-    // Check Default profile first, then Profile 1, 2, etc.
+  for (const { name, dir } of chromiumCandidates) {
     const profiles = ["Default"];
     try {
       const entries = readdirSync(dir);
@@ -289,18 +290,111 @@ function detectBrowserProfiles() {
       }
     }
   }
+
+  // --- Slack desktop app (Electron, macOS sandboxed container) ---
+  const slackDesktopPaths = [
+    // Mac App Store version (sandboxed)
+    join(
+      home,
+      "Library",
+      "Containers",
+      "com.tinyspeck.slackmacgap",
+      "Data",
+      "Library",
+      "Application Support",
+      "Slack",
+    ),
+    // Direct download version (non-sandboxed)
+    join(appSupport, "Slack"),
+  ];
+  for (const slackDir of slackDesktopPaths) {
+    const cookieDb = join(slackDir, "Cookies");
+    const localStorageDir = join(slackDir, "Local Storage", "leveldb");
+    if (existsSync(cookieDb)) {
+      found.unshift({
+        name: "Slack Desktop",
+        cookieDb,
+        localStorageDir,
+        userDataDir: slackDir,
+        profile: ".",
+      });
+    }
+  }
+
+  // --- Firefox (SQLite cookies.sqlite, different schema) ---
+  const firefoxDir = join(
+    home,
+    "Library",
+    "Application Support",
+    "Firefox",
+    "Profiles",
+  );
+  try {
+    const profiles = readdirSync(firefoxDir);
+    for (const p of profiles) {
+      const cookieDb = join(firefoxDir, p, "cookies.sqlite");
+      if (existsSync(cookieDb)) {
+        found.push({
+          name: `Firefox/${p}`,
+          cookieDb,
+          localStorageDir: null,
+          userDataDir: join(firefoxDir, p),
+          profile: p,
+          isFirefox: true,
+        });
+      }
+    }
+  } catch {}
+
+  // --- Safari (Cookies.binarycookies — binary format, check presence only) ---
+  const safariCookies = join(
+    home,
+    "Library",
+    "Cookies",
+    "Cookies.binarycookies",
+  );
+  if (existsSync(safariCookies)) {
+    found.push({
+      name: "Safari",
+      cookieDb: safariCookies,
+      localStorageDir: null,
+      userDataDir: null,
+      profile: ".",
+      isSafari: true,
+    });
+  }
+
   return found;
 }
 
 /**
- * Query a Chromium Cookies SQLite DB for the Slack 'd' cookie.
- * On macOS, cookies are encrypted with the "Chrome Safe Storage" keychain key.
- * We use a small inline script to decrypt via the keychain + openssl.
- * Returns the raw 'd' cookie value or null.
+ * Query a cookie DB for the Slack 'd' cookie. Handles:
+ * - Chromium/Electron SQLite (encrypted_value in 'cookies' table)
+ * - Firefox SQLite (value in 'moz_cookies' table, unencrypted)
+ * - Safari binary cookies (presence check only via file scan)
+ * Returns the browser name if found, null otherwise.
  */
-function querySlackCookieFromDb(cookieDb, browserName) {
+function querySlackCookieFromDb(cookieDb, browserName, opts = {}) {
   try {
-    // First check if the cookie exists at all (even encrypted)
+    if (opts.isSafari) {
+      // Safari uses Cookies.binarycookies — binary format. Check with strings.
+      const result = execSync(
+        `strings "${cookieDb}" 2>/dev/null | grep -c "slack.com"`,
+        { encoding: "utf8", timeout: 5000 },
+      ).trim();
+      return parseInt(result, 10) > 0 ? browserName : null;
+    }
+
+    if (opts.isFirefox) {
+      // Firefox uses moz_cookies table with plaintext values
+      const checkResult = execSync(
+        `sqlite3 "${cookieDb}" "SELECT length(value) FROM moz_cookies WHERE host LIKE '%.slack.com' AND name = 'd' LIMIT 1;" 2>/dev/null`,
+        { encoding: "utf8", timeout: 5000 },
+      ).trim();
+      return checkResult && parseInt(checkResult, 10) > 0 ? browserName : null;
+    }
+
+    // Chromium / Electron — encrypted_value in 'cookies' table
     const checkResult = execSync(
       `sqlite3 "${cookieDb}" "SELECT length(encrypted_value) FROM cookies WHERE host_key LIKE '%.slack.com' AND name = 'd' LIMIT 1;" 2>/dev/null`,
       { encoding: "utf8", timeout: 5000 },
@@ -314,12 +408,15 @@ function querySlackCookieFromDb(cookieDb, browserName) {
 const browserProfiles = detectBrowserProfiles();
 emit({
   type: "step",
-  message: `Found ${browserProfiles.length} Chromium-based browser profile(s)`,
+  message: `Found ${browserProfiles.length} browser profile(s) to scan`,
 });
 
 let selectedBrowser = null;
 for (const bp of browserProfiles) {
-  const hasSlack = querySlackCookieFromDb(bp.cookieDb, bp.name);
+  const hasSlack = querySlackCookieFromDb(bp.cookieDb, bp.name, {
+    isFirefox: bp.isFirefox,
+    isSafari: bp.isSafari,
+  });
   if (hasSlack) {
     emit({ type: "step", message: `✓ ${bp.name} has Slack cookies` });
     selectedBrowser = bp;
