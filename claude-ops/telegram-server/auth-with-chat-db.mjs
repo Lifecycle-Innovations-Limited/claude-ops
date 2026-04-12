@@ -34,10 +34,12 @@ async function waitForCode(maxSec = 180) {
       return code;
     }
     if (Date.now() - lastLog > 10000) {
-      console.error(`waiting for code — write to ${CODE_FILE} (${Math.floor((Date.now() - start) / 1000)}s)`);
+      console.error(
+        `waiting for code — write to ${CODE_FILE} (${Math.floor((Date.now() - start) / 1000)}s)`,
+      );
       lastLog = Date.now();
     }
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 2000));
   }
   throw new Error("timeout");
 }
@@ -45,7 +47,13 @@ async function waitForCode(maxSec = 180) {
 const stringSession = new StringSession("");
 const client = new TelegramClient(stringSession, API_ID, API_HASH, {
   connectionRetries: 5,
-  baseLogger: { log: () => {}, warn: () => {}, error: (...a) => console.error(...a), info: () => {}, debug: () => {} },
+  baseLogger: {
+    log: () => {},
+    warn: () => {},
+    error: (...a) => console.error(...a),
+    info: () => {},
+    debug: () => {},
+  },
 });
 
 await client.start({
@@ -71,7 +79,9 @@ console.log("=== END ===");
 writeFileSync("/tmp/telegram-session.txt", saved, { mode: 0o600 });
 // writeFileSync mode only applies to NEW files; if it already existed,
 // chmod explicitly.
-try { (await import("node:fs")).chmodSync("/tmp/telegram-session.txt", 0o600); } catch {}
+try {
+  (await import("node:fs")).chmodSync("/tmp/telegram-session.txt", 0o600);
+} catch {}
 console.error("session saved to /tmp/telegram-session.txt (0600)");
 await client.disconnect();
 process.exit(0);

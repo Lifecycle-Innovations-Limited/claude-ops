@@ -65,28 +65,36 @@ done
 Spawn these 4 agents simultaneously using all pre-gathered data as context. Each writes their analysis to a file in `/tmp/yolo-[session]/`:
 
 ### Agent 1 — CEO (Strategic)
+
 Uses `agents/yolo-ceo.md`. Writes `/tmp/yolo-[session]/ceo-analysis.md`.
+
 - What's the #1 thing blocking growth right now?
 - Are we building the right things?
 - Where are we wasting time vs. creating value?
 - What would you tell an investor today, unfiltered?
 
 ### Agent 2 — CTO (Technical)
+
 Uses `agents/yolo-cto.md`. Writes `/tmp/yolo-[session]/cto-analysis.md`.
+
 - What's the worst technical debt that will bite us?
 - Which services are time-bombs?
 - Is the team/architecture set up to scale?
 - What corners were cut that need fixing now?
 
 ### Agent 3 — CFO (Financial)
+
 Uses `agents/yolo-cfo.md`. Writes `/tmp/yolo-[session]/cfo-analysis.md`.
+
 - Actual burn rate vs. runway
 - Which AWS services are waste?
 - When do we hit zero if nothing changes?
 - What's the ROI on current work?
 
 ### Agent 4 — COO (Operations)
+
 Uses `agents/yolo-coo.md`. Writes `/tmp/yolo-[session]/coo-analysis.md`.
+
 - What's falling through the cracks right now?
 - Which processes are broken?
 - What's the top execution risk this week?

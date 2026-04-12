@@ -16,6 +16,7 @@ allowed-tools:
 ## Phase 1 — Gather financial data in parallel
 
 ### AWS costs (current month)
+
 ```bash
 aws ce get-cost-and-usage \
   --time-period "Start=$(date +%Y-%m-01),End=$(date +%Y-%m-%d)" \
@@ -26,6 +27,7 @@ aws ce get-cost-and-usage \
 ```
 
 ### AWS costs (last 3 months trend)
+
 ```bash
 aws ce get-cost-and-usage \
   --time-period "Start=$(date -v-3m +%Y-%m-01),End=$(date +%Y-%m-%d)" \
@@ -35,12 +37,14 @@ aws ce get-cost-and-usage \
 ```
 
 ### AWS credits remaining
+
 ```bash
 aws ce list-savings-plans-purchase-recommendation --output json 2>/dev/null || echo '{}'
 aws ce get-credits --output json 2>/dev/null || echo "credits API unavailable"
 ```
 
 ### AWS cost forecast (end of month)
+
 ```bash
 aws ce get-cost-forecast \
   --time-period "Start=$(date +%Y-%m-%d),End=$(date +%Y-%m-28)" \
@@ -50,6 +54,7 @@ aws ce get-cost-forecast \
 ```
 
 ### Project registry (revenue stage)
+
 ```bash
 cat "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null | jq '[.projects[] | {alias, name, stage: (.revenue_stage // "pre-revenue"), mrr: (.mrr // 0)}]'
 ```
@@ -110,12 +115,12 @@ RUNWAY ESTIMATE
 
 ## Route by `$ARGUMENTS`
 
-| Argument | Action |
-|----------|--------|
-| costs | Show only AWS cost breakdown |
-| credits | Show only credits and expiry |
-| revenue | Show only revenue pipeline |
-| runway | Calculate and show runway |
-| (empty) | Show full dashboard |
+| Argument | Action                       |
+| -------- | ---------------------------- |
+| costs    | Show only AWS cost breakdown |
+| credits  | Show only credits and expiry |
+| revenue  | Show only revenue pipeline   |
+| runway   | Calculate and show runway    |
+| (empty)  | Show full dashboard          |
 
 Use AskUserQuestion after the dashboard for next action.

@@ -20,26 +20,31 @@ allowed-tools:
 ## Pre-gathered data
 
 ### Infrastructure & fires
+
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-infra 2>/dev/null || echo '{"clusters":[]}'
 ```
 
 ### Git & PRs
+
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-prs 2>/dev/null || echo '[]'
 ```
 
 ### CI status
+
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-ci 2>/dev/null || echo '[]'
 ```
 
 ### Unread messages
+
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-unread 2>/dev/null || echo '{}'
 ```
 
 ### GSD active phases
+
 ```!
 for d in $(jq -r '.projects[] | select(.gsd == true) | .paths[]' "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null); do
   expanded="${d/#\~/$HOME}"
@@ -58,25 +63,31 @@ done
 Apply the priority stack to all pre-gathered data:
 
 ### Priority 1 — FIRES
+
 Check infra data for: unhealthy ECS tasks, stopped services, failed deployments.
 Check CI for: broken `main` or `dev` branches.
 If any fires exist → **recommend `/ops-fires` immediately**.
 
 ### Priority 2 — URGENT COMMS
+
 Check unread counts. If WhatsApp or email has unread messages from humans (not automated):
+
 - Estimate urgency from sender/preview if available
 - If urgent comms → **recommend `/ops-inbox [channel]`**
 
 ### Priority 3 — READY-TO-MERGE PRs
+
 Check PRs for: CI green + no unresolved review comments + not draft.
 If any ready → **recommend reviewing that PR now**.
 Check: `gh pr list --state open --json number,title,statusCheckRollup,reviewDecision 2>/dev/null`
 
 ### Priority 4 — LINEAR SPRINT
+
 Fetch current sprint issues: use `mcp__claude_ai_Linear__list_cycles` then `mcp__claude_ai_Linear__list_issues` filtered to current cycle.
 Find highest-priority issue that is in progress or unstarted.
 
 ### Priority 5 — GSD WORK
+
 From GSD state, find the highest revenue-impact active phase across all projects.
 Revenue weighting: read `revenue.stage` and `priority` from `scripts/registry.json` — projects with lower priority numbers (higher priority) and revenue stage of `growth` or `active` outrank `pre-launch` or `development`. Within the same tier, prioritize closest-to-done phases.
 

@@ -30,16 +30,17 @@ ${CLAUDE_PLUGIN_ROOT}/../../bin/ops-unread 2>/dev/null || echo '{}'
 
 All channel credentials come from env vars or CLI auth — no hardcoded secrets.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `GMAIL_ACCOUNT` | auto-detect | Gmail account for `gog` CLI |
-| `SLACK_MCP_ENABLED` | `false` | Set `true` when Slack MCP server is configured |
-| `TELEGRAM_ENABLED` | `false` | Set `true` when Telegram user-auth MCP is configured |
-| `WACLI_STORE` | `~/.wacli` | wacli store directory |
+| Variable            | Default     | Purpose                                              |
+| ------------------- | ----------- | ---------------------------------------------------- |
+| `GMAIL_ACCOUNT`     | auto-detect | Gmail account for `gog` CLI                          |
+| `SLACK_MCP_ENABLED` | `false`     | Set `true` when Slack MCP server is configured       |
+| `TELEGRAM_ENABLED`  | `false`     | Set `true` when Telegram user-auth MCP is configured |
+| `WACLI_STORE`       | `~/.wacli`  | wacli store directory                                |
 
 ## Core principle: FULL INBOX SCAN
 
 Do NOT just check unread. Scan the FULL recent inbox for each channel and classify every conversation:
+
 - **NEEDS REPLY** — other party sent last message, awaiting your response
 - **WAITING** — you sent last message, waiting for them (no action needed)
 - **HANDLED** — conversation concluded, can be archived
@@ -59,7 +60,6 @@ For each channel, detect availability at runtime:
 1. **Parse pre-gathered data** for initial counts (unread is just a starting signal).
 
 2. **For each channel, run a FULL scan** (not just unread):
-
    - **Email**: Search `in:inbox` (not `is:unread`) via `gog gmail search -a $GMAIL_ACCOUNT -j --results-only --no-input --max 30 "in:inbox"`. For each thread, read the last message to determine who sent it last. Check for DRAFT or SENT labels. **Before suggesting to send a draft, verify no reply was already sent in the thread.**
    - **WhatsApp**: Run `wacli chats list --json` to get all chats. Filter to non-archived chats with `LastMessageTS` in the last 7 days. For each, fetch last 3-5 messages via `wacli messages list --chat <JID> --limit 5 --json`. Parse `data.messages[]` with fields `FromMe`, `Text`, `Timestamp`, `ChatName`. Classify by last message `FromMe` field.
    - **Slack**: Search via Slack MCP tools. Check who sent last message in each thread.
@@ -108,6 +108,7 @@ Use AskUserQuestion. Then process the selected channel(s).
    - **ARCHIVE**: Old conversation, no recent activity, or concluded
 
 Display NEEDS REPLY chats first:
+
 ```
 📱 WHATSAPP — NEEDS REPLY
  1. [Contact] — [last msg preview] — [time ago]
@@ -125,6 +126,7 @@ Display NEEDS REPLY chats first:
 Reply via: `wacli send --to "<JID>" --message "<msg>"`
 
 **wacli troubleshooting:**
+
 - `@lid` JIDs (linked device format) may return empty messages — run `wacli sync` to backfill
 - "Client outdated (405)" → rebuild from source: `cd /tmp && git clone https://github.com/steipete/wacli.git && cd wacli && go build -o wacli ./cmd/wacli/ && cp wacli /usr/local/bin/`
 - "store is locked" → kill stale process: `kill $(pgrep wacli)`
@@ -142,6 +144,7 @@ Reply via: `wacli send --to "<JID>" --message "<msg>"`
    - **FYI**: Newsletters, automated notifications, receipts → bulk archive
 
 Display NEEDS REPLY threads first:
+
 ```
 📧 EMAIL — NEEDS REPLY
  1. [Sender] — [Subject] — [time ago]
@@ -168,6 +171,7 @@ Draft replies via `gog gmail send`. Archive via `gog gmail labels modify --remov
 
 Use Slack MCP tools with `query: "is:unread"` for mentions.
 For each result, show channel, sender, preview. Read thread for context.
+
 ```
   a) Read thread
   b) Reply
@@ -200,6 +204,7 @@ If no Telegram user-auth tool is available, report: "Telegram not configured —
 ## Completion
 
 After all selected channels are processed, print:
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  INBOX ZERO ✓ — [timestamp]

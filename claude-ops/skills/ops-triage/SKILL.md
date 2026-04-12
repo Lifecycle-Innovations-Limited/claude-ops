@@ -24,11 +24,13 @@ allowed-tools:
 Run all of these simultaneously:
 
 ### GitHub Issues
+
 ```bash
 gh issue list --state open --json number,title,body,labels,assignees,createdAt,url --limit 50 2>/dev/null
 ```
 
 ### GitHub Issues (registry-driven)
+
 ```bash
 REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"
 [ -f "$REGISTRY" ] || REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.example.json"
@@ -39,10 +41,12 @@ done
 ```
 
 ### Sentry
+
 If Sentry MCP is connected, fetch unresolved issues for all projects.
 Otherwise run: `echo "Sentry MCP not available"`
 
 ### Linear
+
 Use `mcp__claude_ai_Linear__list_teams` to get team IDs, then `mcp__claude_ai_Linear__list_issues` with `filter: {state: {type: {in: ["unstarted", "started"]}}}` for each team.
 
 ---
@@ -50,12 +54,14 @@ Use `mcp__claude_ai_Linear__list_teams` to get team IDs, then `mcp__claude_ai_Li
 ## Phase 2 — Cross-reference against code
 
 For each Sentry issue, check if it's already fixed:
+
 1. Extract the error message, file path, and line number from the Sentry event.
 2. `grep` for the relevant code in the affected repo.
 3. Check git log: `git log --oneline --all -- [file] 2>/dev/null | head -20`
 4. If the fix is merged and deployed (check ECS deploy timestamps), mark as resolved.
 
 For each GitHub Issue:
+
 - Check if any merged PR references the issue number (`gh pr list --state merged --search "#[N]"`)
 - If referenced and merged, mark as potentially resolved
 
@@ -64,6 +70,7 @@ For each GitHub Issue:
 ## Phase 3 — Auto-resolve confirmed fixed issues
 
 For issues confirmed fixed in code AND deployed:
+
 - **Sentry**: use Sentry MCP to resolve the issue
 - **Linear**: use `mcp__claude_ai_Linear__save_issue` with `state: "Done"`
 - **GitHub**: `gh issue close [N] --comment "Auto-closed: fix confirmed deployed"`
@@ -106,6 +113,7 @@ ACTIVE ISSUES (needs work)
 ## Dispatch fix agent
 
 When dispatching for an issue, spawn an Agent using `agents/triage-agent.md` with:
+
 - Full issue context (error, stack trace, affected code)
 - Instruction to create feature branch, fix, and open PR
 - Report back on completion or if blocked

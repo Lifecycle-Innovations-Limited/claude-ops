@@ -15,20 +15,20 @@ allowed-tools:
 
 Route `$ARGUMENTS` to the correct ops skill:
 
-| Input | Route to |
-|-------|----------|
-| (empty), go, morning, briefing | `/ops-go` |
-| setup, configure, init, install | `/ops:setup $ARGUMENTS` |
-| inbox, unread, messages | `/ops-inbox` |
+| Input                                         | Route to                |
+| --------------------------------------------- | ----------------------- |
+| (empty), go, morning, briefing                | `/ops-go`               |
+| setup, configure, init, install               | `/ops:setup $ARGUMENTS` |
+| inbox, unread, messages                       | `/ops-inbox`            |
 | comms, send, whatsapp, email, slack, telegram | `/ops-comms $ARGUMENTS` |
-| fires, incidents, down, sentry | `/ops-fires` |
-| projects, dashboard, status | `/ops-projects` |
-| next, priority, what | `/ops-next` |
-| triage, issues | `/ops-triage` |
-| linear, sprint, board | `/ops-linear` |
-| revenue, money, mrr, costs | `/ops-revenue` |
-| deploy, ship | `/ops-deploy` |
-| yolo | `/ops-yolo` |
+| fires, incidents, down, sentry                | `/ops-fires`            |
+| projects, dashboard, status                   | `/ops-projects`         |
+| next, priority, what                          | `/ops-next`             |
+| triage, issues                                | `/ops-triage`           |
+| linear, sprint, board                         | `/ops-linear`           |
+| revenue, money, mrr, costs                    | `/ops-revenue`          |
+| deploy, ship                                  | `/ops-deploy`           |
+| yolo                                          | `/ops-yolo`             |
 
 If `$ARGUMENTS` is empty, show a quick menu:
 

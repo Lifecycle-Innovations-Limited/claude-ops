@@ -15,7 +15,8 @@ allowed-tools:
 You are running an **interactive configuration wizard** for the `claude-ops` plugin. The user wants you to walk them through every step needed to get the plugin working: installing CLIs, setting env vars, configuring channels, populating the project registry, and saving preferences.
 
 **Hard rules:**
-- This is a *conversation*, not a script dump. Use `AskUserQuestion` for every decision — never ask in prose when a structured selector will do.
+
+- This is a _conversation_, not a script dump. Use `AskUserQuestion` for every decision — never ask in prose when a structured selector will do.
 - Never install anything or write any file without explicit user confirmation via `AskUserQuestion`.
 - Skip sections the user declines. Don't nag.
 - Show what's already configured first, so the user only fills gaps.
@@ -39,6 +40,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-detect 2>/dev/null
 If `CLAUDE_PLUGIN_ROOT` is unset, fall back to the latest installed cache dir at `~/.claude/plugins/cache/ops-marketplace/ops/<latest-version>/`. Store the resolved path as `PLUGIN_ROOT` for the rest of the session.
 
 Also resolve `PREFS_PATH` once and reuse it everywhere:
+
 ```bash
 PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
 mkdir -p "$(dirname "$PREFS_PATH")"
@@ -67,14 +69,14 @@ Use `✓` for present/set, `○` for missing/unset, `✗` for broken.
 
 Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need attention** (skip ones already green):
 
-| Option | Header | Description |
-|---|---|---|
-| Install CLIs | cli | Install missing command-line tools via Homebrew |
-| Configure channels | channels | Set tokens for Telegram, WhatsApp, Email, Slack |
-| Configure MCPs | mcp | Enable Linear, Sentry, Vercel, Gmail MCP servers |
-| Build registry | registry | Register projects Claude should manage |
-| Save preferences | prefs | Owner name, timezone, default priorities |
-| Shell env | env | Export `CLAUDE_PLUGIN_ROOT` in shell profile |
+| Option             | Header   | Description                                      |
+| ------------------ | -------- | ------------------------------------------------ |
+| Install CLIs       | cli      | Install missing command-line tools via Homebrew  |
+| Configure channels | channels | Set tokens for Telegram, WhatsApp, Email, Slack  |
+| Configure MCPs     | mcp      | Enable Linear, Sentry, Vercel, Gmail MCP servers |
+| Build registry     | registry | Register projects Claude should manage           |
+| Save preferences   | prefs    | Owner name, timezone, default priorities         |
+| Shell env          | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile     |
 
 Store the user's selections and run each selected section in order.
 
@@ -106,12 +108,12 @@ After installation, re-run `ops-setup-detect` to refresh status before continuin
 
 Ask which channels the user wants to configure using `AskUserQuestion` with `multiSelect: true`:
 
-| Option | Header | Description |
-|---|---|---|
-| Telegram | telegram | Bot token + owner ID for `/ops-comms telegram` |
-| WhatsApp | whatsapp | wacli doctor + auto-heal + backfill |
-| Email | email | gog CLI → Gmail MCP fallback for `/ops-inbox email` |
-| Slack | slack | Slack MCP server (managed by Claude Code) |
+| Option   | Header   | Description                                                             |
+| -------- | -------- | ----------------------------------------------------------------------- |
+| Telegram | telegram | Bot token + owner ID for `/ops-comms telegram`                          |
+| WhatsApp | whatsapp | wacli doctor + auto-heal + backfill                                     |
+| Email    | email    | gog CLI → Gmail MCP fallback for `/ops-inbox email`                     |
+| Slack    | slack    | Slack MCP server (managed by Claude Code)                               |
 | Calendar | calendar | gog cal → Google Calendar MCP fallback — schedule context for briefings |
 
 For each selected channel, run the matching sub-flow below.
@@ -122,21 +124,23 @@ For each selected channel, run the matching sub-flow below.
 
 Whenever a channel has a **browser-based OAuth flow** available, offer that first and put manual-token entry behind it as a fallback. OAuth is safer (scoped, revocable, no secrets in dotfiles), and usually faster for the user.
 
-| Channel | OAuth path | Manual fallback |
-|---|---|---|
-| Email (gog) | `gog auth login` (browser) | n/a — gog is OAuth-only |
-| Calendar (gog) | same `gog auth login` with `--scopes=calendar` | n/a |
-| Slack | `claude mcp add slack` (handles OAuth through Claude Code) | bot token via auto-scan + manual paste |
-| Linear | `claude mcp add linear` | API key |
-| Sentry | `claude mcp add sentry` | DSN / auth token |
-| Vercel | `claude mcp add vercel` | personal access token |
-| Telegram | ❌ no OAuth (Bot API is token-only by design) | auto-scan + manual paste (only option) |
-| WhatsApp | QR pairing via `wacli auth` (similar UX to OAuth) | n/a — paired sessions only |
+| Channel        | OAuth path                                                 | Manual fallback                        |
+| -------------- | ---------------------------------------------------------- | -------------------------------------- |
+| Email (gog)    | `gog auth login` (browser)                                 | n/a — gog is OAuth-only                |
+| Calendar (gog) | same `gog auth login` with `--scopes=calendar`             | n/a                                    |
+| Slack          | `claude mcp add slack` (handles OAuth through Claude Code) | bot token via auto-scan + manual paste |
+| Linear         | `claude mcp add linear`                                    | API key                                |
+| Sentry         | `claude mcp add sentry`                                    | DSN / auth token                       |
+| Vercel         | `claude mcp add vercel`                                    | personal access token                  |
+| Telegram       | ❌ no OAuth (Bot API is token-only by design)              | auto-scan + manual paste (only option) |
+| WhatsApp       | QR pairing via `wacli auth` (similar UX to OAuth)          | n/a — paired sessions only             |
 
 When a channel supports OAuth, the default `AskUserQuestion` should lead with it:
+
 ```
 [Connect via OAuth (recommended)]  [Enter a token manually]  [Skip]
 ```
+
 Only go into the credential auto-scan flow below when the user picks "manually" or when the channel (Telegram, local tools) has no OAuth path.
 
 ---
@@ -157,6 +161,7 @@ For each variable name (e.g. `TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN`):
 5. **System keychain** — do NOT scan. Keychain access requires user approval and leaks cross-app secrets. Skip.
 
 **Present the findings** with `AskUserQuestion`:
+
 ```
 Found credential for TELEGRAM_BOT_TOKEN:
   [A] shell env ($TELEGRAM_BOT_TOKEN) — 12345...xyz  (last 4 chars shown, never full)
@@ -167,6 +172,7 @@ Found credential for TELEGRAM_BOT_TOKEN:
 ```
 
 Rules for the prompt:
+
 - Only show the **last 4 characters** of any token, never the whole thing.
 - If multiple sources have the **same** value, collapse them into one option with `(matched in env + ~/.zshrc)` appended.
 - If sources **disagree**, show them all and flag the mismatch prominently — the user needs to pick which one is authoritative and the wizard should offer to sync the others.
@@ -180,6 +186,7 @@ Rules for the prompt:
 ### 3a — Telegram (user-auth via ops-telegram-autolink)
 
 **Bots cannot read user DMs**, so `/ops-inbox telegram` requires a personal-account MCP. The plugin ships `bin/ops-telegram-autolink.mjs` which:
+
 1. Scans scout sources (keychain → ~/.claude.json → shell profiles → Doppler) for previously-extracted `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` / `TELEGRAM_SESSION`.
 2. If none found, makes plain HTTP requests to `my.telegram.org` (no browser — `my.telegram.org` uses server-side HTML, no JS required), logs in with a phone code from the bridge file, creates an app if needed, and extracts api_id + api_hash.
 3. Runs gram.js `client.start()` to generate a session string, bridging the second code via the same file.
@@ -188,11 +195,13 @@ Rules for the prompt:
 Sub-flow:
 
 1. **Scout first.** Run `${CLAUDE_PLUGIN_ROOT}/bin/ops-slack-autolink --scout-only` equivalent check for Telegram:
+
    ```bash
    for svc in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
      security find-generic-password -s "$svc" -w 2>/dev/null
    done
    ```
+
    Also check `~/.claude.json mcpServers.telegram.env.TELEGRAM_API_ID`. If all 4 are found and the stored `TELEGRAM_SESSION` decodes as a StringSession, tell the user `"✓ Telegram already configured (api_id=XXXXXXX, phone=+XX...)"` and skip to step 8.
 
 2. **Ask the user for their phone number** via `AskUserQuestion` (free-text). Validate it matches `^\+\d{7,15}$`. Explain that the phone is only used once during the first-run extraction and is stored locally only.
@@ -200,10 +209,12 @@ Sub-flow:
 3. **Warn about 2 codes.** Inform the user via `AskUserQuestion`: `"Telegram will send TWO codes to your Telegram app — one for my.telegram.org web login, then a second one for gram.js auth. Have your Telegram app ready."` Options: `[I'm ready]`, `[Cancel]`.
 
 4. **Spawn the autolink script in the background with restrictive file perms:**
+
    ```bash
    (umask 077 && node "${CLAUDE_PLUGIN_ROOT}/bin/ops-telegram-autolink.mjs" --phone "$PHONE" 2>/tmp/ops-telegram-autolink.log 1>/tmp/ops-telegram-autolink.out &)
    echo $! > /tmp/ops-telegram-autolink.pid
    ```
+
    Use the Bash tool's `run_in_background: true`. The `umask 077` creates all bridge files (log, out) with mode 0600. The .out file contains the full credential JSON including the gram.js session string — if it's world-readable, any local process can exfiltrate long-lived Telegram account access.
 
 5. **Poll the stderr log for `need_code` events.** Every 3 seconds, read `/tmp/ops-telegram-autolink.log` and look for the most recent `{"type":"need_code", ...}` line that hasn't been answered yet. When you see one:
@@ -216,15 +227,18 @@ Sub-flow:
 6. **Wait for the script to exit.** Poll until the process is no longer running (`ps -p "$(cat /tmp/ops-telegram-autolink.pid)"`). Read `/tmp/ops-telegram-autolink.out` — it should contain a single JSON line with `api_id`, `api_hash`, `phone`, and `session`. **Security note**: the setup skill should have dispatched the autolink with `(umask 077 && node "${CLAUDE_PLUGIN_ROOT}/bin/ops-telegram-autolink.mjs" --phone "$PHONE" 2>/tmp/ops-telegram-autolink.log 1>/tmp/ops-telegram-autolink.out &)` so the .log and .out files get 0600 mode. Verify with `stat -f '%Lp' /tmp/ops-telegram-autolink.out` → must print `600`. Immediately `shred -u` (Linux) or `rm -P` (macOS) the .out file after reading the credentials into memory.
 
 7. **Persist to keychain + preferences.** macOS only:
+
    ```bash
    security add-generic-password -U -s telegram-api-id -a "$USER" -w "$API_ID"
    security add-generic-password -U -s telegram-api-hash -a "$USER" -w "$API_HASH"
    security add-generic-password -U -s telegram-phone -a "$USER" -w "$PHONE"
    security add-generic-password -U -s telegram-session -a "$USER" -w "$SESSION"
    ```
+
    Then update `$PREFS_PATH` with `channels.telegram = {backend: "gram.js", api_id: "...", phone: "...", status: "configured"}`. **Never write the api_hash or session to preferences.json** — those stay in keychain only. preferences.json gets only the non-sensitive metadata.
 
 8. **Instruct the user to wire it into Claude Code plugin settings.** Print:
+
    ```
    Your Telegram credentials are saved. To activate the MCP, open:
      /plugin
@@ -239,6 +253,7 @@ Sub-flow:
 9. **Smoke test (optional).** Spawn `node ${CLAUDE_PLUGIN_ROOT}/telegram-server/index.js` with the env vars set inline for 3 seconds. If it doesn't print an auth error, the session works.
 
 **Privacy notes for the user** (show once at start):
+
 - The phone number and all credentials stay on your machine. The wizard never transmits them anywhere except to Telegram's own servers during the HTTP login flow.
 - If you already have a gram.js / Telethon session for another project, you can skip this and paste those values manually into `/plugin settings`.
 - If Telegram replies "Sorry, too many tries. Please try again later." your account is rate-limited for ~8 hours — the wizard cannot bypass this. Wait and retry.
@@ -250,23 +265,28 @@ WhatsApp is the channel that most often breaks silently. The wizard must **auto-
 #### Step 3b.1 — Presence
 
 Run `command -v wacli`. If missing, ask `AskUserQuestion`: `[Show install docs]`, `[Skip WhatsApp]`. On install docs, print:
+
 ```
 wacli is not on Homebrew. Install:
   git clone https://github.com/auroracapital/wacli ~/src/wacli
   cd ~/src/wacli && go build -o /usr/local/bin/wacli ./cmd/wacli
 ```
+
 and stop this sub-flow.
 
 #### Step 3b.2 — Collect state
 
 Run these in parallel:
+
 ```bash
 wacli doctor --json 2>&1
 wacli auth status --json 2>&1
 wacli messages list --after="$(date -v-1d +%Y-%m-%d)" --limit=5 --json 2>&1
 wacli chats --json 2>&1 | head -c 4000
 ```
+
 Parse:
+
 - `doctor.data.authenticated` (bool)
 - `doctor.data.lock_held` + `doctor.data.lock_info` (PID + acquired_at timestamp)
 - `doctor.data.fts_enabled` (bool — if false, search is degraded, not fatal)
@@ -282,6 +302,7 @@ If `doctor.authenticated: false` → print "Run `wacli auth` in a separate termi
 
 **B. Stuck sync (stale lock)**
 If `lock_held: true` AND the `lock_info.acquired_at` is older than 2 minutes AND the lock-holder PID is still alive (`ps -p <pid>`):
+
 1. Run `wacli sync` in the background (`timeout 15 wacli sync 2>&1`) via the existing process's stderr tail — OR if we can't tee into it, fall back to:
 2. Ask `AskUserQuestion`: `"A wacli sync process (pid=N) has been holding the store lock for Xm. Most likely stuck. Kill it?"` → `[Kill pid N and restart sync]`, `[Leave it running]`.
 3. On kill: `kill <pid>` (not -9 first). Wait 3s. If still alive, `kill -9 <pid>`. Verify with `ps -p <pid>`.
@@ -289,11 +310,13 @@ If `lock_held: true` AND the `lock_info.acquired_at` is older than 2 minutes AND
 
 **C. App-state key desync (the big one)**
 Run `timeout 15 wacli sync 2>&1 | tee /tmp/wacli-sync-probe.log` (must be done after B so the lock is free). Grep the output for:
+
 - `didn't find app state key` → **session keys are desynced**, needs re-pair
 - `failed to decode app state` → same class of error
 - `Failed to do initial fetch of app state` → same class of error
 
 If any match:
+
 1. Print the diagnosis verbatim:
    ```
    ⚠  WhatsApp session is authenticated but the app-state decryption keys
@@ -337,15 +360,18 @@ Always run this after a fresh re-pair, AND run it when rule D matches. Never ski
 #### Step 3b.5 — FTS index check (optional)
 
 If `doctor.fts_enabled: false`, print:
+
 ```
 ℹ  Full-text search is disabled — `wacli messages search` will use SQL LIKE (slower).
    This is a non-fatal known-limitation. See wacli docs to enable FTS5.
 ```
+
 Don't block on this.
 
 #### Step 3b.6 — Record state
 
 Write `channels.whatsapp = "wacli"` to `$PREFS_PATH` and print the final ✓ summary:
+
 ```
 ✓ WhatsApp — wacli authenticated, N chats, M recent messages
 ```
@@ -420,9 +446,11 @@ Ported from [maorfr/slack-token-extractor](https://github.com/maorfr/slack-token
 Sub-flow:
 
 1. **Scout first.** Run:
+
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/bin/ops-slack-autolink.mjs" --scout-only 2>/tmp/ops-slack.log
    ```
+
    Parse the stdout JSON. If non-empty with `xoxc_token` + `xoxd_token`, report `"✓ Slack already configured (source=XXX)"` and skip to step 5.
 
 2. **If no existing tokens**, ask via `AskUserQuestion`:
@@ -431,12 +459,14 @@ Sub-flow:
    - `[Skip Slack]`
 
 3. **On Playwright path**: spawn the autolink in the background:
+
    ```bash
    (umask 077 && node "${CLAUDE_PLUGIN_ROOT}/bin/ops-slack-autolink.mjs" \
      --workspace "https://app.slack.com/client/" \
      2>/tmp/ops-slack-autolink.log 1>/tmp/ops-slack-autolink.out &)
    echo $! > /tmp/ops-slack-autolink.pid
    ```
+
    Poll the log for `{"type":"need_login"}`. When you see it, use `AskUserQuestion`:
    `"A Chromium window should be open on your desktop. Log in to Slack there, then pick [Done]."`. On Done, `touch /tmp/slack-login-done`. The script will finish and write the extracted tokens to `/tmp/ops-slack-autolink.out`.
 
@@ -451,6 +481,7 @@ Sub-flow:
    - `$PREFS_PATH` → `channels.slack = {backend: "mcp:slack", team_id: "...", source: "...", status: "configured"}`. **Do not** store the raw tokens in preferences.json — keychain only.
 
 7. **Wire into Claude Code plugin settings.** Print instructions:
+
    ```
    Slack tokens saved to keychain. To activate the MCP, Claude Code needs them
    in ~/.claude.json. Since this skill can't write to ~/.claude.json directly,
@@ -459,11 +490,13 @@ Sub-flow:
         and Claude Code will prompt for the env vars.
      b) Manually paste the xoxc + xoxd into /plugin settings for the Slack MCP.
    ```
+
    (The reason we don't auto-write: per user-level feedback, ~/.claude.json is a Claude Code internal file and the plugin must not touch it. MCP registration is Claude Code's responsibility.)
 
 8. **Smoke test**: call `https://slack.com/api/conversations.list?limit=1` with the tokens. Expect `ok:true` with at least one channel in the response.
 
 **Privacy notes**:
+
 - Tokens work as long as your browser session stays active — typically weeks to months with regular Slack usage. If the MCP starts returning 401s, re-run `/ops:setup slack`.
 - Logging out of Slack invalidates the `d` cookie and breaks the MCP. Use `/ops:setup slack` to re-extract.
 - Slack's Terms of Service allow personal-session-token use for your own account. Do not use this flow to access accounts you don't own.
@@ -521,10 +554,11 @@ Calendar isn't a messaging channel, but every other ops skill (briefings, `/ops-
 #### Why this matters (for context in the skill)
 
 Downstream skills (`/ops-go`, `/ops-next`, `/ops-fires`) read `channels.calendar` from `$PREFS_PATH` to decide whether to cross-correlate today's schedule with their output:
+
 - Briefings note "you have a 2pm standup, so don't start that refactor now"
 - `/ops-next` deprioritizes deep work when a meeting is <30min away
 - `/ops-fires` warns if a production incident falls during a scheduled call
-So this section is not optional for users who want context-aware briefings.
+  So this section is not optional for users who want context-aware briefings.
 
 ---
 
@@ -634,19 +668,19 @@ If any required tool is still missing, list it with the exact command to install
 
 If `$ARGUMENTS` contains a specific section name, jump straight to that section:
 
-| Argument | Go to |
-|---|---|
-| `cli`, `install` | Step 2 |
-| `channels` | Step 3 |
-| `telegram` | Step 3a |
+| Argument                               | Go to   |
+| -------------------------------------- | ------- |
+| `cli`, `install`                       | Step 2  |
+| `channels`                             | Step 3  |
+| `telegram`                             | Step 3a |
 | `whatsapp`, `wacli`, `whatsapp-doctor` | Step 3b |
-| `email` | Step 3c |
-| `slack` | Step 3d |
-| `calendar`, `cal` | Step 3e |
-| `mcp` | Step 4 |
-| `registry`, `projects` | Step 5 |
-| `prefs`, `preferences` | Step 6 |
-| `env`, `shell` | Step 7 |
+| `email`                                | Step 3c |
+| `slack`                                | Step 3d |
+| `calendar`, `cal`                      | Step 3e |
+| `mcp`                                  | Step 4  |
+| `registry`, `projects`                 | Step 5  |
+| `prefs`, `preferences`                 | Step 6  |
+| `env`, `shell`                         | Step 7  |
 
 Empty argument → full wizard from Step 0.
 

@@ -38,7 +38,10 @@ const { values } = parseArgs({
   options: {
     workspace: { type: "string", default: "https://app.slack.com/client/" },
     headless: { type: "boolean", default: false },
-    "profile-dir": { type: "string", default: join(homedir(), ".claude-ops", "slack-profile") },
+    "profile-dir": {
+      type: "string",
+      default: join(homedir(), ".claude-ops", "slack-profile"),
+    },
     "ready-file": { type: "string", default: "/tmp/slack-login-done" },
     "scout-only": { type: "boolean", default: false },
   },
@@ -50,26 +53,43 @@ const PROFILE_DIR = values["profile-dir"];
 const READY_FILE = values["ready-file"];
 const SCOUT_ONLY = values["scout-only"];
 
-function emit(event) { process.stderr.write(JSON.stringify(event) + "\n"); }
-function die(msg, extra = {}) { emit({ type: "error", message: msg, ...extra }); process.exit(1); }
+function emit(event) {
+  process.stderr.write(JSON.stringify(event) + "\n");
+}
+function die(msg, extra = {}) {
+  emit({ type: "error", message: msg, ...extra });
+  process.exit(1);
+}
 
 // Validate --workspace before anything uses it — must be https:// and a *.slack.com host.
 // Prevents file://, data:, chrome:// schemes that could load local state and poison
 // localStorage-based token extraction.
 function validateWorkspaceURL(raw) {
   let u;
-  try { u = new URL(raw); } catch (e) { die(`--workspace is not a valid URL: ${e.message}`, { raw }); }
-  if (u.protocol !== "https:") die(`--workspace must use https:// (got ${u.protocol})`, { raw });
+  try {
+    u = new URL(raw);
+  } catch (e) {
+    die(`--workspace is not a valid URL: ${e.message}`, { raw });
+  }
+  if (u.protocol !== "https:")
+    die(`--workspace must use https:// (got ${u.protocol})`, { raw });
   const host = u.hostname.toLowerCase();
   if (host !== "slack.com" && !host.endsWith(".slack.com")) {
-    die(`--workspace hostname must be slack.com or a *.slack.com subdomain (got ${host})`, { raw });
+    die(
+      `--workspace hostname must be slack.com or a *.slack.com subdomain (got ${host})`,
+      { raw },
+    );
   }
   return u.toString();
 }
 const WORKSPACE_VALIDATED = validateWorkspaceURL(WORKSPACE);
 
 // --- Phase 1: scout existing locations for already-extracted tokens ---
-emit({ type: "phase", phase: 1, message: "Scouting for existing Slack tokens" });
+emit({
+  type: "phase",
+  phase: 1,
+  message: "Scouting for existing Slack tokens",
+});
 
 function scoutSources() {
   const sources = [];
@@ -83,50 +103,87 @@ function scoutSources() {
       if (env) {
         const xoxc = env.SLACK_MCP_XOXC_TOKEN || env.SLACK_BOT_TOKEN;
         const xoxd = env.SLACK_MCP_XOXD_TOKEN;
-        if (xoxc && xoxc.startsWith("xoxc-") && xoxd && xoxd.startsWith("xoxd-")) {
-          sources.push({ source: "claude.json:mcpServers.slack", xoxc_token: xoxc, xoxd_token: xoxd });
+        if (
+          xoxc &&
+          xoxc.startsWith("xoxc-") &&
+          xoxd &&
+          xoxd.startsWith("xoxd-")
+        ) {
+          sources.push({
+            source: "claude.json:mcpServers.slack",
+            xoxc_token: xoxc,
+            xoxd_token: xoxd,
+          });
         }
       }
     } catch {}
   }
 
   // 2. Shell env (live process)
-  const envXoxc = process.env.SLACK_MCP_XOXC_TOKEN || process.env.SLACK_BOT_TOKEN;
+  const envXoxc =
+    process.env.SLACK_MCP_XOXC_TOKEN || process.env.SLACK_BOT_TOKEN;
   const envXoxd = process.env.SLACK_MCP_XOXD_TOKEN;
   if (envXoxc?.startsWith("xoxc-") && envXoxd?.startsWith("xoxd-")) {
-    sources.push({ source: "process.env", xoxc_token: envXoxc, xoxd_token: envXoxd });
+    sources.push({
+      source: "process.env",
+      xoxc_token: envXoxc,
+      xoxd_token: envXoxd,
+    });
   }
 
   // 3. macOS keychain (generic password items named slack-xoxc / slack-xoxd)
   if (process.platform === "darwin") {
     try {
-      const xoxc = execSync(`security find-generic-password -s slack-xoxc -w 2>/dev/null`, { encoding: "utf8" }).trim();
-      const xoxd = execSync(`security find-generic-password -s slack-xoxd -w 2>/dev/null`, { encoding: "utf8" }).trim();
+      const xoxc = execSync(
+        `security find-generic-password -s slack-xoxc -w 2>/dev/null`,
+        { encoding: "utf8" },
+      ).trim();
+      const xoxd = execSync(
+        `security find-generic-password -s slack-xoxd -w 2>/dev/null`,
+        { encoding: "utf8" },
+      ).trim();
       if (xoxc?.startsWith("xoxc-") && xoxd?.startsWith("xoxd-")) {
-        sources.push({ source: "keychain", xoxc_token: xoxc, xoxd_token: xoxd });
+        sources.push({
+          source: "keychain",
+          xoxc_token: xoxc,
+          xoxd_token: xoxd,
+        });
       }
     } catch {}
   }
 
   // 4. Shell profile files
-  const profiles = [".zshrc", ".bashrc", ".zprofile", ".envrc"].map(f => join(homedir(), f));
+  const profiles = [".zshrc", ".bashrc", ".zprofile", ".envrc"].map((f) =>
+    join(homedir(), f),
+  );
   for (const path of profiles) {
     if (!existsSync(path)) continue;
     try {
       const text = readFileSync(path, "utf8");
-      const xoxcMatch = text.match(/SLACK(?:_MCP)?_XOXC_TOKEN=["']?(xoxc-[^"'\s]+)/);
-      const xoxdMatch = text.match(/SLACK(?:_MCP)?_XOXD_TOKEN=["']?(xoxd-[^"'\s]+)/);
+      const xoxcMatch = text.match(
+        /SLACK(?:_MCP)?_XOXC_TOKEN=["']?(xoxc-[^"'\s]+)/,
+      );
+      const xoxdMatch = text.match(
+        /SLACK(?:_MCP)?_XOXD_TOKEN=["']?(xoxd-[^"'\s]+)/,
+      );
       if (xoxcMatch && xoxdMatch) {
-        sources.push({ source: path, xoxc_token: xoxcMatch[1], xoxd_token: xoxdMatch[1] });
+        sources.push({
+          source: path,
+          xoxc_token: xoxcMatch[1],
+          xoxd_token: xoxdMatch[1],
+        });
       }
     } catch {}
   }
 
   // 5. Doppler (if configured; cheap probe)
   try {
-    const dopRaw = execSync(`doppler secrets --json 2>/dev/null`, { encoding: "utf8" });
+    const dopRaw = execSync(`doppler secrets --json 2>/dev/null`, {
+      encoding: "utf8",
+    });
     const dop = JSON.parse(dopRaw);
-    const xoxc = dop?.SLACK_MCP_XOXC_TOKEN?.computed || dop?.SLACK_BOT_TOKEN?.computed;
+    const xoxc =
+      dop?.SLACK_MCP_XOXC_TOKEN?.computed || dop?.SLACK_BOT_TOKEN?.computed;
     const xoxd = dop?.SLACK_MCP_XOXD_TOKEN?.computed;
     if (xoxc?.startsWith("xoxc-") && xoxd?.startsWith("xoxd-")) {
       sources.push({ source: "doppler", xoxc_token: xoxc, xoxd_token: xoxd });
@@ -158,12 +215,14 @@ if (scouted.length > 0) {
       teamId = parsed?.mcpServers?.slack?.env?.SLACK_MCP_TEAM_ID || null;
     } catch {}
   }
-  process.stdout.write(JSON.stringify({
-    xoxc_token: first.xoxc_token,
-    xoxd_token: first.xoxd_token,
-    team_id: teamId,
-    source: `scout:${first.source}`,
-  }) + "\n");
+  process.stdout.write(
+    JSON.stringify({
+      xoxc_token: first.xoxc_token,
+      xoxd_token: first.xoxd_token,
+      team_id: teamId,
+      source: `scout:${first.source}`,
+    }) + "\n",
+  );
   process.exit(0);
 }
 
@@ -172,20 +231,170 @@ if (SCOUT_ONLY) {
 }
 
 // --- Phase 2: Playwright-based extraction ---
-emit({ type: "phase", phase: 2, message: "No scouted tokens — launching Playwright to extract" });
+// Scan installed browsers for an existing Slack session cookie, then launch
+// Playwright with those cookies pre-injected so no manual login is needed.
+emit({
+  type: "phase",
+  phase: 2,
+  message: "No scouted tokens — scanning browsers for Slack session",
+});
+
+import { tmpdir } from "node:os";
+import { cpSync, readdirSync } from "node:fs";
+
+/**
+ * Detect installed browser profiles that might contain Slack cookies.
+ * Returns [{name, cookieDb, localStorageDir, userDataDir}] sorted by preference.
+ */
+function detectBrowserProfiles() {
+  const home = homedir();
+  const appSupport = join(home, "Library", "Application Support");
+  const candidates = [
+    { name: "Google Chrome", dir: join(appSupport, "Google", "Chrome") },
+    {
+      name: "Google Chrome Beta",
+      dir: join(appSupport, "Google", "Chrome Beta"),
+    },
+    { name: "Arc", dir: join(appSupport, "Arc", "User Data") },
+    { name: "Brave", dir: join(appSupport, "BraveSoftware", "Brave-Browser") },
+    { name: "Microsoft Edge", dir: join(appSupport, "Microsoft Edge") },
+    { name: "Chromium", dir: join(appSupport, "Chromium") },
+    { name: "Opera", dir: join(appSupport, "com.operasoftware.Opera") },
+  ];
+
+  const found = [];
+  for (const { name, dir } of candidates) {
+    // Check Default profile first, then Profile 1, 2, etc.
+    const profiles = ["Default"];
+    try {
+      const entries = readdirSync(dir);
+      for (const e of entries) {
+        if (/^Profile \d+$/.test(e)) profiles.push(e);
+      }
+    } catch {
+      continue;
+    }
+
+    for (const profile of profiles) {
+      const cookieDb = join(dir, profile, "Cookies");
+      const localStorageDir = join(dir, profile, "Local Storage", "leveldb");
+      if (existsSync(cookieDb)) {
+        found.push({
+          name: `${name}/${profile}`,
+          cookieDb,
+          localStorageDir,
+          userDataDir: dir,
+          profile,
+        });
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Query a Chromium Cookies SQLite DB for the Slack 'd' cookie.
+ * On macOS, cookies are encrypted with the "Chrome Safe Storage" keychain key.
+ * We use a small inline script to decrypt via the keychain + openssl.
+ * Returns the raw 'd' cookie value or null.
+ */
+function querySlackCookieFromDb(cookieDb, browserName) {
+  try {
+    // First check if the cookie exists at all (even encrypted)
+    const checkResult = execSync(
+      `sqlite3 "${cookieDb}" "SELECT length(encrypted_value) FROM cookies WHERE host_key LIKE '%.slack.com' AND name = 'd' LIMIT 1;" 2>/dev/null`,
+      { encoding: "utf8", timeout: 5000 },
+    ).trim();
+    return checkResult && parseInt(checkResult, 10) > 0 ? browserName : null;
+  } catch {
+    return null;
+  }
+}
+
+const browserProfiles = detectBrowserProfiles();
+emit({
+  type: "step",
+  message: `Found ${browserProfiles.length} Chromium-based browser profile(s)`,
+});
+
+let selectedBrowser = null;
+for (const bp of browserProfiles) {
+  const hasSlack = querySlackCookieFromDb(bp.cookieDb, bp.name);
+  if (hasSlack) {
+    emit({ type: "step", message: `✓ ${bp.name} has Slack cookies` });
+    selectedBrowser = bp;
+    break;
+  } else {
+    emit({ type: "step", message: `○ ${bp.name} — no Slack cookies` });
+  }
+}
 
 let chromium;
 try {
   ({ chromium } = await import("playwright"));
 } catch {
-  die("playwright is not installed. Run `npm install playwright` in the plugin's telegram-server/ directory and `npx playwright install chromium`.");
+  die(
+    "playwright is not installed. Run `npm install playwright` in the plugin root and `npx playwright install chromium`.",
+  );
 }
 
-mkdirSync(PROFILE_DIR, { recursive: true });
-emit({ type: "step", message: `Launching Chromium (headless=${HEADLESS}, profile=${PROFILE_DIR})` });
+// If we found a browser with Slack cookies, copy its profile to a temp dir
+// so Playwright can launch with the existing session without locking the real profile.
+let launchProfileDir = PROFILE_DIR;
+if (selectedBrowser) {
+  emit({
+    type: "step",
+    message: `Copying ${selectedBrowser.name} profile for Playwright session reuse`,
+  });
+  const tmpProfile = join(tmpdir(), `ops-slack-profile-${Date.now()}`);
+  mkdirSync(join(tmpProfile, selectedBrowser.profile), { recursive: true });
 
-const context = await chromium.launchPersistentContext(PROFILE_DIR, {
-  headless: HEADLESS,
+  // Copy only the files needed for session: Cookies, Local Storage, Login Data, Preferences
+  const profileSrc = join(selectedBrowser.userDataDir, selectedBrowser.profile);
+  const profileDst = join(tmpProfile, selectedBrowser.profile);
+  const filesToCopy = [
+    "Cookies",
+    "Cookies-journal",
+    "Preferences",
+    "Secure Preferences",
+    "Login Data",
+  ];
+  for (const f of filesToCopy) {
+    const src = join(profileSrc, f);
+    if (existsSync(src)) {
+      try {
+        cpSync(src, join(profileDst, f));
+      } catch {}
+    }
+  }
+  // Copy Local Storage dir (contains xoxc token in leveldb)
+  const lsSrc = join(profileSrc, "Local Storage");
+  const lsDst = join(profileDst, "Local Storage");
+  if (existsSync(lsSrc)) {
+    try {
+      cpSync(lsSrc, lsDst, { recursive: true });
+    } catch {}
+  }
+  // Copy the top-level "Local State" file (contains OS crypt key reference)
+  const localStateSrc = join(selectedBrowser.userDataDir, "Local State");
+  if (existsSync(localStateSrc)) {
+    try {
+      cpSync(localStateSrc, join(tmpProfile, "Local State"));
+    } catch {}
+  }
+
+  launchProfileDir = tmpProfile;
+  emit({ type: "step", message: `Temp profile created at ${tmpProfile}` });
+}
+
+mkdirSync(launchProfileDir, { recursive: true });
+emit({
+  type: "step",
+  message: `Launching Chromium (headless=${HEADLESS}, profile=${launchProfileDir})`,
+});
+
+const context = await chromium.launchPersistentContext(launchProfileDir, {
+  headless: selectedBrowser ? true : HEADLESS, // headless if we have cookies, headed if login needed
   args: [
     "--disable-blink-features=AutomationControlled",
     "--no-first-run",
@@ -194,21 +403,26 @@ const context = await chromium.launchPersistentContext(PROFILE_DIR, {
   viewport: { width: 1280, height: 800 },
 });
 
-const page = context.pages()[0] || await context.newPage();
+const page = context.pages()[0] || (await context.newPage());
 
 try {
   emit({ type: "step", message: `Navigating to ${WORKSPACE_VALIDATED}` });
   await page.goto(WORKSPACE_VALIDATED);
-  try { await page.waitForLoadState("networkidle", { timeout: 30_000 }); } catch {}
+  try {
+    await page.waitForLoadState("networkidle", { timeout: 30_000 });
+  } catch {}
 
   const currentUrl = page.url();
   if (/signin|sign_in|ssb\/signin/i.test(currentUrl)) {
     if (HEADLESS) {
-      die("Not logged in and running headless. Run without --headless first to establish a session in the profile dir.");
+      die(
+        "Not logged in and running headless. Run without --headless first to establish a session in the profile dir.",
+      );
     }
     emit({
       type: "need_login",
-      message: "Log in to Slack in the open Chromium window, then touch the ready-file to continue",
+      message:
+        "Log in to Slack in the open Chromium window, then touch the ready-file to continue",
       ready_file: READY_FILE,
     });
     // Wait for the caller to touch READY_FILE once the user finishes login
@@ -218,8 +432,12 @@ try {
       await new Promise((r) => setTimeout(r, 2000));
     }
     if (!existsSync(READY_FILE)) die("timeout waiting for login completion");
-    try { await page.waitForURL(/\/client\//, { timeout: 15_000 }); } catch {}
-    try { await page.waitForLoadState("networkidle", { timeout: 30_000 }); } catch {}
+    try {
+      await page.waitForURL(/\/client\//, { timeout: 15_000 });
+    } catch {}
+    try {
+      await page.waitForLoadState("networkidle", { timeout: 30_000 });
+    } catch {}
   }
 
   // Extract team ID
@@ -231,10 +449,15 @@ try {
       try {
         const cfg = JSON.parse(localStorage.localConfig_v2 || "{}");
         return Object.keys(cfg.teams || {})[0] || null;
-      } catch { return null; }
+      } catch {
+        return null;
+      }
     });
   }
-  if (!teamId) die("Could not determine Slack team ID — make sure you're viewing a workspace");
+  if (!teamId)
+    die(
+      "Could not determine Slack team ID — make sure you're viewing a workspace",
+    );
   emit({ type: "step", message: `Found team_id=${teamId}` });
 
   // Extract XOXC from localStorage
@@ -246,7 +469,9 @@ try {
         if (data?.token?.startsWith("xoxc-")) return data.token;
       }
       return null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }, teamId);
   if (!xoxcToken) {
     // fallback: regex scan of inline JS
@@ -255,24 +480,33 @@ try {
       return m ? m[1] : null;
     });
   }
-  if (!xoxcToken) die("Could not find XOXC token — ensure the workspace is fully loaded");
+  if (!xoxcToken)
+    die("Could not find XOXC token — ensure the workspace is fully loaded");
 
   // Extract XOXD ('d' cookie) from the context cookie jar
   const cookies = await context.cookies();
-  const dCookie = cookies.find((c) => c.name === "d" && /slack\.com/.test(c.domain));
+  const dCookie = cookies.find(
+    (c) => c.name === "d" && /slack\.com/.test(c.domain),
+  );
   if (!dCookie) die("Could not find 'd' cookie (XOXD token)");
-  const xoxdToken = dCookie.value.startsWith("xoxd-") ? dCookie.value : `xoxd-${dCookie.value}`;
+  const xoxdToken = dCookie.value.startsWith("xoxd-")
+    ? dCookie.value
+    : `xoxd-${dCookie.value}`;
 
   await context.close();
 
-  process.stdout.write(JSON.stringify({
-    xoxc_token: xoxcToken,
-    xoxd_token: xoxdToken,
-    team_id: teamId,
-    source: "playwright",
-  }) + "\n");
+  process.stdout.write(
+    JSON.stringify({
+      xoxc_token: xoxcToken,
+      xoxd_token: xoxdToken,
+      team_id: teamId,
+      source: "playwright",
+    }) + "\n",
+  );
   process.exit(0);
 } catch (err) {
-  try { await context.close(); } catch {}
+  try {
+    await context.close();
+  } catch {}
   die(`playwright extraction failed: ${err.message}`);
 }

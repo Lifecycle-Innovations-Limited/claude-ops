@@ -30,7 +30,9 @@ The calling skill has pre-gathered git status, PR state, CI status, Linear data,
 ### 1. What's actually falling through the cracks?
 
 Check for:
+
 - PRs open for more than 7 days (registry-driven):
+
 ```bash
 REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"
 [ -f "$REGISTRY" ] || REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.example.json"
@@ -43,6 +45,7 @@ done | jq -s 'add // []'
 ```
 
 - GSD phases with no recent commits (stale):
+
 ```bash
 for d in $(jq -r '.projects[] | select(.gsd == true) | .paths[]' "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null); do
   expanded="${d/#\~/$HOME}"
@@ -53,11 +56,12 @@ done
 ```
 
 - Linear issues assigned but untouched for 5+ days:
-Use `mcp__claude_ai_Linear__list_issues` with filter for started state, check `updatedAt`.
+  Use `mcp__claude_ai_Linear__list_issues` with filter for started state, check `updatedAt`.
 
 ### 2. Which processes are broken?
 
 Look at CI failure patterns:
+
 ```bash
 for repo in $(jq -r '.projects[] | select(.gsd == true) | .repos[]' "$REGISTRY" 2>/dev/null); do
   echo "=== $repo ==="
@@ -73,6 +77,7 @@ done
 ### 3. What's the top execution risk this week?
 
 Based on:
+
 - What's in the current sprint that's at risk of not completing?
 - What has blockers that no one has addressed?
 - What's the longest-standing open PR?
@@ -81,6 +86,7 @@ Based on:
 ### 4. What should be automated that isn't?
 
 Look for patterns:
+
 - Manual steps in SKILL.md files (anything that says "manually do X")
 - Recurring issues in Linear that could be prevented
 - Deployment steps that aren't in CI/CD
@@ -149,31 +155,40 @@ Write to `/tmp/yolo-[session]/coo-analysis.md`:
 # COO Analysis — [date]
 
 ## Things Falling Through the Cracks
+
 | Item | Age | Status | Risk |
-|------|-----|--------|------|
+| ---- | --- | ------ | ---- |
+
 ...
 
 ## Stale PRs (7+ days)
+
 | Repo | PR# | Title | Age | Blocker |
-|------|-----|-------|-----|---------|
+| ---- | --- | ----- | --- | ------- |
+
 ...
 
 ## Broken Processes
+
 1. [workflow] — failure rate [X%] — fix: [action]
 2. ...
 
 ## Execution Risks This Week
+
 1. [risk] — [mitigation]
 2. ...
 
 ## Missing Automations
+
 1. [manual process] — automation cost: [hours] — time saved: [hours/week]
 2. ...
 
 ## Communication Backlog
+
 [anything waiting on a response, by channel]
 
 ## Top 3 COO Actions (ranked by execution impact)
+
 1. [action] — [what it unblocks]
 2. [action] — [what it unblocks]
 3. [action] — [what it unblocks]

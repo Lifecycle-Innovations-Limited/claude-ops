@@ -1,0 +1,74 @@
+# gitleaks configuration for claude-ops (public repo)
+# Run: gitleaks detect --source . --config .gitleaks.toml
+
+title = "claude-ops secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "telegram-bot-token"
+description = "Telegram Bot Token"
+regex = '''\d{8,10}:[A-Za-z0-9_-]{35}'''
+keywords = ["telegram"]
+
+[[rules]]
+id = "telegram-api-hash"
+description = "Telegram API Hash"
+regex = '''[a-f0-9]{32}'''
+keywords = ["api_hash", "apiHash", "TELEGRAM_API_HASH"]
+
+[[rules]]
+id = "telegram-session-string"
+description = "Telegram Session String (gram.js)"
+regex = '''[A-Za-z0-9+/=]{100,}'''
+keywords = ["session", "StringSession", "TELEGRAM_SESSION"]
+
+[[rules]]
+id = "slack-xoxc-token"
+description = "Slack XOXC Token"
+regex = '''xoxc-[0-9]+-[0-9]+-[0-9]+-[a-f0-9]+'''
+
+[[rules]]
+id = "slack-xoxd-token"
+description = "Slack XOXD Token"
+regex = '''xoxd-[A-Za-z0-9%+/=]+'''
+
+[[rules]]
+id = "slack-xoxb-token"
+description = "Slack Bot Token"
+regex = '''xoxb-[0-9]+-[0-9]+-[A-Za-z0-9]+'''
+
+[[rules]]
+id = "slack-xoxp-token"
+description = "Slack User Token"
+regex = '''xoxp-[0-9]+-[0-9]+-[0-9]+-[a-f0-9]+'''
+
+[[rules]]
+id = "phone-number-international"
+description = "International Phone Number"
+regex = '''\+\d{10,15}'''
+allowlist.paths = [
+  '''SKILL\.md$''',
+  '''CHANNELS\.md$''',
+  '''README\.md$''',
+  '''\.example\.''',
+  '''test''',
+]
+
+[[rules]]
+id = "email-address-personal"
+description = "Personal Email Address"
+regex = '''[a-zA-Z0-9._%+-]+@(gmail|outlook|hotmail|yahoo|protonmail|icloud)\.[a-z]{2,}'''
+allowlist.paths = [
+  '''SKILL\.md$''',
+  '''README\.md$''',
+  '''\.example\.''',
+]
+
+[allowlist]
+paths = [
+  '''node_modules''',
+  '''package-lock\.json''',
+  '''\.gitleaks\.toml$''',
+]

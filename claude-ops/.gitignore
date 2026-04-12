@@ -17,3 +17,17 @@ telegram-server/node_modules/
 # owner identity) and is managed by /ops:setup.
 scripts/registry.json
 scripts/preferences.json
+
+# Temp files from autolink scripts
+/tmp/
+ops-*.out
+ops-*.log
+telegram-code.txt
+telegram-password.txt
+slack-login-done
+
+# Playwright
+.claude-ops/
+
+# Package locks from sub-dirs (root only committed)
+telegram-server/package-lock.json

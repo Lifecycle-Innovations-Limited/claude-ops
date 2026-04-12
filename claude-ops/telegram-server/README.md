@@ -11,6 +11,7 @@ Bots cannot read messages sent in private chats between two users — only messa
 ### 1. Get API credentials
 
 Go to https://my.telegram.org/apps and create a **personal** application (not a bot). You'll get:
+
 - `api_id` (integer)
 - `api_hash` (32-char string)
 
@@ -67,12 +68,12 @@ Restart Claude Code to load the MCP server.
 
 ## Tools
 
-| Tool | Description |
-|---|---|
-| `list_dialogs` | List recent conversations (DMs, groups, channels) with unread counts |
-| `get_messages` | Fetch messages from a specific chat |
-| `send_message` | Send a message to a chat or user |
-| `search_messages` | Full-text search across all conversations |
+| Tool              | Description                                                          |
+| ----------------- | -------------------------------------------------------------------- |
+| `list_dialogs`    | List recent conversations (DMs, groups, channels) with unread counts |
+| `get_messages`    | Fetch messages from a specific chat                                  |
+| `send_message`    | Send a message to a chat or user                                     |
+| `search_messages` | Full-text search across all conversations                            |
 
 ## Security
 

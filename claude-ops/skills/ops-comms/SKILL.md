@@ -27,15 +27,15 @@ Parse `$ARGUMENTS` and route immediately:
 
 ## Routing table
 
-| Pattern | Action |
-|---------|--------|
-| `whatsapp` | Show WhatsApp recent chats — offer to read or send |
-| `email` | Show recent email threads via Gmail MCP |
-| `slack` | Show recent Slack activity |
-| `telegram` | Show Telegram recent chats |
+| Pattern       | Action                                                  |
+| ------------- | ------------------------------------------------------- |
+| `whatsapp`    | Show WhatsApp recent chats — offer to read or send      |
+| `email`       | Show recent email threads via Gmail MCP                 |
+| `slack`       | Show recent Slack activity                              |
+| `telegram`    | Show Telegram recent chats                              |
 | `send * to *` | Parse message and contact, determine best channel, send |
-| `read *` | Read the specified channel or contact's messages |
-| (empty) | Show channel picker menu |
+| `read *`      | Read the specified channel or contact's messages        |
+| (empty)       | Show channel picker menu                                |
 
 ---
 
@@ -50,14 +50,17 @@ Parse `$ARGUMENTS` and route immediately:
 4. Send via the chosen channel. Confirm with: `Sent to [contact] via [channel] ✓`
 
 ### WhatsApp send
+
 ```bash
 wacli send --to "[contact]" --message "[message]"
 ```
 
 ### Slack send
+
 Use `mcp__claude_ai_Slack__slack_send_message` with resolved channel/user ID.
 
 ### Email send (draft)
+
 Use `mcp__claude_ai_Gmail__gmail_create_draft` — always create draft first, confirm before sending.
 
 ---
@@ -65,9 +68,11 @@ Use `mcp__claude_ai_Gmail__gmail_create_draft` — always create draft first, co
 ## Read flow: `read [channel]`
 
 **WhatsApp:**
+
 ```bash
 wacli chats --limit 10 --json 2>/dev/null
 ```
+
 Show last 10 chats with sender, preview, timestamp.
 
 **Email:**
@@ -81,6 +86,7 @@ Use `mcp__claude_ops_telegram__get_updates` (limit: 20) and `mcp__claude_ops_tel
 Fall back to: `telegram-cli --exec "dialog_list" 2>/dev/null || echo "Telegram MCP not configured"`
 
 ### Telegram send
+
 Use `mcp__claude_ops_telegram__send_message` with `chat_id` (from list_chats) and `text`.
 
 ---

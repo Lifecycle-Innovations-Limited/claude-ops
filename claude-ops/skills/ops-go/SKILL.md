@@ -19,31 +19,37 @@ allowed-tools:
 All data below was collected by shell scripts in <10 seconds:
 
 ### Infrastructure
+
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-infra 2>/dev/null || echo '{"clusters":[],"error":"infra check failed"}'
 ```
 
 ### Git Status (all projects)
+
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-git 2>/dev/null || echo '[]'
 ```
 
 ### Open PRs
+
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-prs 2>/dev/null || echo '[]'
 ```
 
 ### CI Failures (last 24h)
+
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-ci 2>/dev/null || echo '[]'
 ```
 
 ### Unread Messages
+
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-unread 2>/dev/null || echo '{}'
 ```
 
 ### GSD State (active roadmaps)
+
 ```!
 for d in $(jq -r '.projects[] | select(.gsd == true) | .paths[]' "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null); do
   expanded="${d/#\~/$HOME}"
@@ -57,6 +63,7 @@ done
 ```
 
 ### Calendar (today)
+
 ```!
 gog calendar list --date "$(date +%Y-%m-%d)" 2>/dev/null | head -20 || echo "calendar unavailable"
 ```
