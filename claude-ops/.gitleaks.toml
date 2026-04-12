@@ -78,3 +78,7 @@ paths = [
   '''package-lock\.json''',
   '''\.gitleaks\.toml$''',
 ]
+stopwords = [
+  "XOXC_TOKEN",
+  "XOXD_TOKEN",
+]
