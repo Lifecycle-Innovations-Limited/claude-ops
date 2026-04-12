@@ -644,7 +644,72 @@ if (selectedBrowser && !selectedBrowser.isSafari) {
         } catch {}
       }
 
-      // Success — emit result directly, no Playwright needed
+      // Validate tokens against Slack API
+      emit({ type: "step", message: "Validating tokens against Slack API..." });
+      let authResult = null;
+      try {
+        const res = await fetch("https://slack.com/api/auth.test", {
+          headers: {
+            Authorization: `Bearer ${xoxcToken}`,
+            Cookie: `d=${xoxdToken}`,
+          },
+        });
+        authResult = await res.json();
+      } catch {}
+
+      if (authResult?.ok) {
+        teamId = authResult.team_id || teamId;
+        emit({
+          type: "step",
+          message: `✓ Validated — ${authResult.url} (${authResult.team_id})`,
+        });
+      } else {
+        emit({
+          type: "step",
+          message: `⚠ Validation failed: ${authResult?.error || "unknown"} — tokens may be stale`,
+        });
+      }
+
+      // Persist to keychain
+      if (process.platform === "darwin") {
+        try {
+          execSync(
+            `security add-generic-password -U -s slack-xoxc -a "$USER" -w '${xoxcToken.replace(/'/g, "'\\''")}'`,
+            { timeout: 5000 },
+          );
+          execSync(
+            `security add-generic-password -U -s slack-xoxd -a "$USER" -w '${xoxdToken.replace(/'/g, "'\\''")}'`,
+            { timeout: 5000 },
+          );
+          emit({ type: "step", message: "✓ Saved tokens to macOS keychain" });
+        } catch (e) {
+          emit({
+            type: "step",
+            message: `○ Keychain save failed: ${e.message}`,
+          });
+        }
+      }
+
+      // Register Slack MCP server in Claude Code (fully automated)
+      try {
+        execSync(
+          `claude mcp add slack -s user -e SLACK_XOXC_TOKEN='${xoxcToken.replace(/'/g, "'\\''")}'` +
+            ` -e SLACK_XOXD_TOKEN='${xoxdToken.replace(/'/g, "'\\''")}'` +
+            ` -- npx -y @anthropic-ai/slack-mcp@latest`,
+          { timeout: 15000, stdio: "pipe" },
+        );
+        emit({
+          type: "step",
+          message: "✓ Registered Slack MCP server in Claude Code",
+        });
+      } catch {
+        emit({
+          type: "step",
+          message: "○ Could not auto-register MCP — run: claude mcp add slack",
+        });
+      }
+
+      // Success — emit result
       process.stdout.write(
         JSON.stringify({
           xoxc_token: xoxcToken,
