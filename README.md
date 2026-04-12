@@ -83,7 +83,7 @@ Most integrations offer two paths. The setup wizard lets you choose per-integrat
 | **Calendar** | OAuth via Claude.ai | `gog` CLI | MCP actually has *more* features (create events, RSVP, find free time). `gog` only reads. Either works for briefings |
 | **Sentry** | OAuth via Claude.ai | `sentry-cli` | MCP covers issue search + triage. CLI adds: source map upload, release tracking (not used by current skills) |
 | **WhatsApp** | -- | `wacli` | **Everything** — no MCP exists. `wacli` is the only path for WhatsApp inbox |
-| **Telegram** | -- | bundled MCP server | **Everything** — no Claude.ai connector exists. Plugin ships its own MTProto MCP server |
+| **Telegram** | -- | bundled MCP server | **Everything** — no Claude.ai connector exists. Plugin ships its own MTProto MCP server. Setup is fully automated: enter phone + 2 codes, done |
 | **GSD** | -- | auto-detected | Project roadmap state in dashboards. Fully optional — skills degrade gracefully |
 
 **TL;DR**: Linear and Vercel are MCP-only (and that's fine). GitHub and AWS are CLI-only (auto-installed). Gmail is where the choice matters most — MCP gives you read-only, CLI gives you full autonomous inbox management.
