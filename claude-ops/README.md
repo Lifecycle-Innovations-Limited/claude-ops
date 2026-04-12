@@ -59,7 +59,7 @@ The setup wizard (`/ops:setup`) walks through each one interactively. You choose
 
 | Integration | What it is | Setup |
 |-------------|-----------|-------|
-| Telegram MCP server | gram.js MTProto user-auth — reads your DMs (not a bot) | `/ops:setup telegram` guides you through my.telegram.org app creation + session auth |
+| Telegram MCP server | gram.js MTProto user-auth — reads your DMs (not a bot) | `/ops:setup telegram` — enter phone number + 2 verification codes, everything else is fully automated (app creation, session generation, keychain storage) |
 | [GSD](https://github.com/Lifecycle-Innovations-Limited/get-shit-done) | Project roadmap state in dashboards | Auto-detected. Skills degrade gracefully without it |
 
 ## Installation
