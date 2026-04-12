@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# ops-setup-preflight — gather all setup data in parallel (runs in background)
+# Results written to /tmp/ops-preflight/ for the setup wizard to read
+set -euo pipefail
+
+OUT="/tmp/ops-preflight"
+rm -rf "$OUT" && mkdir -p "$OUT"
+
+# All probes run in parallel as background jobs
+{
+  # CLI detection
+  for tool in jq git gh aws node brew doppler wacli gog sentry-cli; do
+    if command -v "$tool" &>/dev/null; then
+      ver=$("$tool" --version 2>/dev/null | head -1 || echo "installed")
+      echo "$tool=$ver" >> "$OUT/clis.txt"
+    else
+      echo "$tool=missing" >> "$OUT/clis.txt"
+    fi
+  done
+} &
+
+{
+  # Slack keychain scout
+  xoxc=$(security find-generic-password -s slack-xoxc -w 2>/dev/null || echo "")
+  xoxd=$(security find-generic-password -s slack-xoxd -w 2>/dev/null || echo "")
+  if [ -n "$xoxc" ] && [ -n "$xoxd" ]; then
+    # Validate
+    result=$(curl -s -H "Authorization: Bearer $xoxc" -b "d=$xoxd" "https://slack.com/api/auth.test" 2>/dev/null || echo '{"ok":false}')
+    echo "$result" > "$OUT/slack.json"
+  else
+    echo '{"ok":false,"reason":"no_keychain_tokens"}' > "$OUT/slack.json"
+  fi
+} &
+
+{
+  # Telegram keychain scout
+  for key in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
+    val=$(security find-generic-password -s "$key" -w 2>/dev/null || echo "")
+    echo "$key=$( [ -n "$val" ] && echo "found" || echo "missing" )" >> "$OUT/telegram.txt"
+  done
+} &
+
+{
+  # gog/Gmail probe
+  if command -v gog &>/dev/null; then
+    gog auth status 2>&1 > "$OUT/gog-auth.txt"
+    gog gmail labels list --json 2>/dev/null | head -5 > "$OUT/gog-gmail.json" || echo '{"error":"failed"}' > "$OUT/gog-gmail.json"
+    gog cal list --json --max 3 2>/dev/null | head -30 > "$OUT/gog-cal.json" || echo '{"error":"failed"}' > "$OUT/gog-cal.json"
+  else
+    echo "gog=missing" > "$OUT/gog-auth.txt"
+  fi
+} &
+
+{
+  # WhatsApp probe
+  if command -v wacli &>/dev/null; then
+    wacli doctor --json 2>/dev/null > "$OUT/wacli-doctor.json" || echo '{"success":false}' > "$OUT/wacli-doctor.json"
+    wacli chats list --json 2>/dev/null > "$OUT/wacli-chats.json" || echo '{"success":false,"data":[]}' > "$OUT/wacli-chats.json"
+  else
+    echo '{"success":false,"reason":"not_installed"}' > "$OUT/wacli-doctor.json"
+  fi
+} &
+
+{
+  # MCP detection (scan ~/.claude.json)
+  if [ -f "$HOME/.claude.json" ]; then
+    jq -r '.mcpServers // {} | keys[]' "$HOME/.claude.json" 2>/dev/null > "$OUT/mcp-servers.txt" || true
+  fi
+} &
+
+{
+  # GitHub auth check
+  gh auth status 2>&1 > "$OUT/gh-auth.txt" || true
+} &
+
+{
+  # AWS identity check
+  aws sts get-caller-identity --output json 2>/dev/null > "$OUT/aws-identity.json" || echo '{"error":"not_configured"}' > "$OUT/aws-identity.json"
+} &
+
+{
+  # Project discovery (fast — maxdepth 2, exclude heavy dirs)
+  find ~/Projects -maxdepth 2 -name ".git" -type d 2>/dev/null | sed 's|/.git$||' | sort > "$OUT/projects.txt"
+} &
+
+{
+  # Existing registry
+  PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
+  if [ -z "$PLUGIN_ROOT" ]; then
+    PLUGIN_ROOT=$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1)
+  fi
+  if [ -n "$PLUGIN_ROOT" ] && [ -f "$PLUGIN_ROOT/scripts/registry.json" ]; then
+    cp "$PLUGIN_ROOT/scripts/registry.json" "$OUT/existing-registry.json"
+  fi
+} &
+
+{
+  # Existing preferences
+  PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+  if [ -f "$PREFS" ]; then
+    cp "$PREFS" "$OUT/existing-prefs.json"
+  fi
+} &
+
+# Wait for all background jobs
+wait
+
+# Write completion marker
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OUT/.complete"

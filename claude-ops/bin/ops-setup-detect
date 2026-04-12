@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # ops-setup-detect — Emit current configuration state as JSON
 # Used by /ops:setup wizard to decide what still needs configuring.
+# Reads from /tmp/ops-preflight/ cache when available (populated by ops-setup-preflight).
 set -euo pipefail
 
 has() { command -v "$1" >/dev/null 2>&1 && echo true || echo false; }
 has_env() { [ -n "${!1:-}" ] && echo true || echo false; }
+
+PREFLIGHT="/tmp/ops-preflight"
+USE_CACHE=false
+if [ -f "$PREFLIGHT/.complete" ]; then
+  USE_CACHE=true
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REGISTRY="$SCRIPT_DIR/scripts/registry.json"
@@ -20,7 +27,11 @@ if [ ! -f "$PREFS" ] && [ -f "$SCRIPT_DIR/scripts/preferences.json" ]; then
 fi
 
 PROJECT_COUNT=0
-if [ -f "$REGISTRY" ] && command -v jq >/dev/null 2>&1; then
+# Prefer cached registry from preflight
+CACHED_REGISTRY="$PREFLIGHT/existing-registry.json"
+if [ "$USE_CACHE" = true ] && [ -f "$CACHED_REGISTRY" ] && command -v jq >/dev/null 2>&1; then
+  PROJECT_COUNT=$(jq '.projects | length' "$CACHED_REGISTRY" 2>/dev/null || echo 0)
+elif [ -f "$REGISTRY" ] && command -v jq >/dev/null 2>&1; then
   PROJECT_COUNT=$(jq '.projects | length' "$REGISTRY" 2>/dev/null || echo 0)
 fi
 
@@ -34,16 +45,22 @@ esac
 
 PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')"
 
-# Detect configured MCP servers by inspecting .mcp.json files in common locations
+# Detect configured MCP servers — use preflight cache if available
 MCP_CONFIGURED=()
-for f in "$SCRIPT_DIR/.mcp.json" "$HOME/.claude/.mcp.json" "$HOME/.claude.json"; do
-  [ -f "$f" ] || continue
-  if command -v jq >/dev/null 2>&1; then
-    while IFS= read -r name; do
-      [ -n "$name" ] && MCP_CONFIGURED+=("$name")
-    done < <(jq -r '(.mcpServers // {}) | keys[]' "$f" 2>/dev/null || true)
-  fi
-done
+if [ "$USE_CACHE" = true ] && [ -f "$PREFLIGHT/mcp-servers.txt" ]; then
+  while IFS= read -r name; do
+    [ -n "$name" ] && MCP_CONFIGURED+=("$name")
+  done < "$PREFLIGHT/mcp-servers.txt"
+else
+  for f in "$SCRIPT_DIR/.mcp.json" "$HOME/.claude/.mcp.json" "$HOME/.claude.json"; do
+    [ -f "$f" ] || continue
+    if command -v jq >/dev/null 2>&1; then
+      while IFS= read -r name; do
+        [ -n "$name" ] && MCP_CONFIGURED+=("$name")
+      done < <(jq -r '(.mcpServers // {}) | keys[]' "$f" 2>/dev/null || true)
+    fi
+  done
+fi
 
 # Deduplicate
 MCP_JSON="[]"
@@ -51,23 +68,38 @@ if [ ${#MCP_CONFIGURED[@]} -gt 0 ] && command -v jq >/dev/null 2>&1; then
   MCP_JSON=$(printf '%s\n' "${MCP_CONFIGURED[@]}" | sort -u | jq -R . | jq -s .)
 fi
 
+# Helper: check cache or live for a tool
+tool_status() {
+  local tool="$1"
+  if [ "$USE_CACHE" = true ] && [ -f "$PREFLIGHT/clis.txt" ]; then
+    local cached
+    cached=$(grep "^${tool}=" "$PREFLIGHT/clis.txt" 2>/dev/null | head -1 || echo "")
+    if [ -n "$cached" ]; then
+      if echo "$cached" | grep -q "=missing$"; then echo false; else echo true; fi
+      return
+    fi
+  fi
+  has "$tool"
+}
+
 cat <<EOF
 {
   "platform": "$PLATFORM",
   "shell": "$SHELL_NAME",
   "profile_file": "$PROFILE_FILE",
   "plugin_root": "$SCRIPT_DIR",
+  "preflight_cache": $USE_CACHE,
   "tools": {
-    "jq": $(has jq),
-    "git": $(has git),
-    "gh": $(has gh),
-    "aws": $(has aws),
-    "node": $(has node),
-    "brew": $(has brew),
-    "doppler": $(has doppler),
-    "wacli": $(has wacli),
-    "gog": $(has gog),
-    "sentry-cli": $(has sentry-cli)
+    "jq": $(tool_status jq),
+    "git": $(tool_status git),
+    "gh": $(tool_status gh),
+    "aws": $(tool_status aws),
+    "node": $(tool_status node),
+    "brew": $(tool_status brew),
+    "doppler": $(tool_status doppler),
+    "wacli": $(tool_status wacli),
+    "gog": $(tool_status gog),
+    "sentry-cli": $(tool_status sentry-cli)
   },
   "env_vars": {
     "CLAUDE_PLUGIN_ROOT": $(has_env CLAUDE_PLUGIN_ROOT),

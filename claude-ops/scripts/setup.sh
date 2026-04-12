@@ -14,7 +14,7 @@ auto_install() {
   local brew_pkg="$2"
   if ! command -v "$tool" &>/dev/null; then
     if command -v brew &>/dev/null; then
-      brew install "$brew_pkg" 2>/dev/null && INSTALLED+=("$tool") && return 0
+      timeout 30 brew install "$brew_pkg" &>/dev/null && INSTALLED+=("$tool") && return 0
     fi
     MISSING+=("$tool")
     return 1
@@ -34,14 +34,14 @@ auto_install node node
 # Telegram MCP server deps
 if [ -f "$PLUGIN_ROOT/telegram-server/package.json" ] && command -v node &>/dev/null; then
   if [ ! -d "$PLUGIN_ROOT/telegram-server/node_modules" ]; then
-    (cd "$PLUGIN_ROOT/telegram-server" && npm install --silent 2>/dev/null) && INSTALLED+=("telegram-deps")
+    (cd "$PLUGIN_ROOT/telegram-server" && npm install --silent &>/dev/null) && INSTALLED+=("telegram-deps")
   fi
 fi
 
 # Plugin bin deps
 if [ -f "$PLUGIN_ROOT/package.json" ] && command -v node &>/dev/null; then
   if [ ! -d "$PLUGIN_ROOT/node_modules" ]; then
-    (cd "$PLUGIN_ROOT" && npm install --silent 2>/dev/null) && INSTALLED+=("plugin-deps")
+    (cd "$PLUGIN_ROOT" && npm install --silent &>/dev/null) && INSTALLED+=("plugin-deps")
   fi
 fi
 
