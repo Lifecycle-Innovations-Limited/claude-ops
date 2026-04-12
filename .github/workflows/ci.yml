@@ -38,10 +38,9 @@ jobs:
       - name: Prettier check
         run: cd claude-ops && npx prettier --check "**/*.{js,mjs,json}" --ignore-path .gitignore
 
-      - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        with:
-          config-path: claude-ops/.gitleaks.toml
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_8.24.3_linux_amd64.tar.gz | tar xz
+          chmod +x gitleaks
+      - name: Run gitleaks
+        run: ./gitleaks detect --source . --config claude-ops/.gitleaks.toml --verbose
