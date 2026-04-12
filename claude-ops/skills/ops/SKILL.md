@@ -28,6 +28,7 @@ Route `$ARGUMENTS` to the correct ops skill:
 | linear, sprint, board                         | `/ops-linear`           |
 | revenue, money, mrr, costs                    | `/ops-revenue`          |
 | deploy, ship                                  | `/ops-deploy`           |
+| merge, prs, ship-prs                          | `/ops-merge $ARGUMENTS` |
 | yolo                                          | `/ops-yolo`             |
 
 If `$ARGUMENTS` is empty, show a quick menu:
@@ -47,7 +48,8 @@ If `$ARGUMENTS` is empty, show a quick menu:
  g) /ops-linear    — Linear sprint board
  h) /ops-revenue   — Revenue & costs
  i) /ops-deploy    — Deploy status
- j) /ops-yolo      — Run my business for a day
+ j) /ops-merge     — Auto-fix + merge all open PRs
+ k) /ops-yolo      — Run my business for a day
 
  → Type a letter or command name
 ──────────────────────────────────────────────────────
