@@ -5,7 +5,7 @@
 If you discover a security vulnerability, please report it responsibly:
 
 1. **Do NOT** open a public issue
-2. Email: info@auroracapital.nl
+2. Email: info@lifecycleinnovations.limited
 3. Include: description, reproduction steps, impact assessment
 
 We'll respond within 48 hours and work with you on a fix before public disclosure.
