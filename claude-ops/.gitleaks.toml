@@ -54,6 +54,11 @@ allowlist.paths = [
   '''README\.md$''',
   '''\.example\.''',
   '''test''',
+  '''plugin\.json$''',
+  '''CHANGELOG\.md$''',
+]
+allowlist.regexes = [
+  '''\+15551234567''',
 ]
 
 [[rules]]
@@ -64,6 +69,7 @@ allowlist.paths = [
   '''SKILL\.md$''',
   '''README\.md$''',
   '''\.example\.''',
+  '''CHANGELOG\.md$''',
 ]
 
 [allowlist]

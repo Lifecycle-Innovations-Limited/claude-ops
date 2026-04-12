@@ -5,6 +5,7 @@
   "description": "Runtime dependencies for claude-ops bin scripts (ops-telegram-autolink.mjs, ops-slack-autolink.mjs). Installed separately from telegram-server/ so the .mjs scripts resolve modules from claude-ops/node_modules regardless of invocation cwd.",
   "type": "module",
   "dependencies": {
+    "classic-level": "^3.0.0",
     "input": "^1.0.1",
     "playwright": "^1.59.1",
     "telegram": "^2.26.22"
