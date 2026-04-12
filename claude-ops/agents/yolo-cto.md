@@ -82,7 +82,7 @@ Report: services at risk (desired != running), oversized instances, unused resou
 # Load registry paths (iterates all user projects with gsd=true)
 REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"
 [ -f "$REGISTRY" ] || REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.example.json"
-PROJECT_PATHS=$(jq -r '.projects[] | select(.gsd == true) | .paths[]' "$REGISTRY" 2>/dev/null | while read p; do eval echo "$p"; done)
+PROJECT_PATHS=$(jq -r '.projects[] | select(.gsd == true) | .paths[]' "$REGISTRY" 2>/dev/null | while read p; do printf '%s\n' "${p/#\~/$HOME}"; done)
 
 # Find TODOs and hacks across all registered projects
 echo "$PROJECT_PATHS" | xargs -I{} grep -r "TODO\|FIXME\|HACK\|temp\|hardcoded" {} \

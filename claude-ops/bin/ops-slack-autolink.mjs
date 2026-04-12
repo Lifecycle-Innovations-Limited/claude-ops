@@ -53,6 +53,21 @@ const SCOUT_ONLY = values["scout-only"];
 function emit(event) { process.stderr.write(JSON.stringify(event) + "\n"); }
 function die(msg, extra = {}) { emit({ type: "error", message: msg, ...extra }); process.exit(1); }
 
+// Validate --workspace before anything uses it — must be https:// and a *.slack.com host.
+// Prevents file://, data:, chrome:// schemes that could load local state and poison
+// localStorage-based token extraction.
+function validateWorkspaceURL(raw) {
+  let u;
+  try { u = new URL(raw); } catch (e) { die(`--workspace is not a valid URL: ${e.message}`, { raw }); }
+  if (u.protocol !== "https:") die(`--workspace must use https:// (got ${u.protocol})`, { raw });
+  const host = u.hostname.toLowerCase();
+  if (host !== "slack.com" && !host.endsWith(".slack.com")) {
+    die(`--workspace hostname must be slack.com or a *.slack.com subdomain (got ${host})`, { raw });
+  }
+  return u.toString();
+}
+const WORKSPACE_VALIDATED = validateWorkspaceURL(WORKSPACE);
+
 // --- Phase 1: scout existing locations for already-extracted tokens ---
 emit({ type: "phase", phase: 1, message: "Scouting for existing Slack tokens" });
 
@@ -182,8 +197,8 @@ const context = await chromium.launchPersistentContext(PROFILE_DIR, {
 const page = context.pages()[0] || await context.newPage();
 
 try {
-  emit({ type: "step", message: `Navigating to ${WORKSPACE}` });
-  await page.goto(WORKSPACE);
+  emit({ type: "step", message: `Navigating to ${WORKSPACE_VALIDATED}` });
+  await page.goto(WORKSPACE_VALIDATED);
   try { await page.waitForLoadState("networkidle", { timeout: 30_000 }); } catch {}
 
   const currentUrl = page.url();
