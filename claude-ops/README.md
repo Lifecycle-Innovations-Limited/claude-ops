@@ -8,7 +8,7 @@ A Claude Code plugin that turns Claude into a business operating system. One com
 | --------------- | ------------------------------------------------------------------------------ |
 | `/ops:setup`    | Interactive setup wizard — installs CLIs, configures channels, builds registry |
 | `/ops:go`       | Morning briefing — all systems in one dashboard                                |
-| `/ops:next`     | Priority-ordered next action (fires → comms → PRs → sprint → GSD)             |
+| `/ops:next`     | Priority-ordered next action (fires → comms → PRs → sprint → GSD)              |
 | `/ops:inbox`    | Inbox zero across WhatsApp, Email, Slack, Telegram                             |
 | `/ops:comms`    | Send/read messages across all channels                                         |
 | `/ops:projects` | Portfolio dashboard — GSD phase, CI, PRs, dirty files                          |
@@ -32,35 +32,35 @@ The setup wizard (`/ops:setup`) walks through each one interactively. You choose
 
 #### CLI-only (no MCP alternative)
 
-| Tool | Auto-installed | What it does |
-|------|---------------|--------------|
-| `gh` (GitHub CLI) | Yes (Homebrew) | PRs, CI logs, issue triage, merge pipeline — used by 8+ skills |
-| `aws` (AWS CLI) | Yes (Homebrew) | ECS health, Cost Explorer, CloudWatch — used by ops-fires, ops-revenue, ops-deploy |
-| `wacli` (WhatsApp) | Manual ([source](https://github.com/auroracapital/wacli)) | WhatsApp inbox, send/read, contact lookup — no MCP equivalent exists |
-| Node.js 18+ | Yes (Homebrew) | Runs the bundled Telegram MCP server |
+| Tool               | Auto-installed                                            | What it does                                                                       |
+| ------------------ | --------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `gh` (GitHub CLI)  | Yes (Homebrew)                                            | PRs, CI logs, issue triage, merge pipeline — used by 8+ skills                     |
+| `aws` (AWS CLI)    | Yes (Homebrew)                                            | ECS health, Cost Explorer, CloudWatch — used by ops-fires, ops-revenue, ops-deploy |
+| `wacli` (WhatsApp) | Manual ([source](https://github.com/auroracapital/wacli)) | WhatsApp inbox, send/read, contact lookup — no MCP equivalent exists               |
+| Node.js 18+        | Yes (Homebrew)                                            | Runs the bundled Telegram MCP server                                               |
 
 #### MCP-only (no CLI needed)
 
-| MCP | Connected via | What it does |
-|-----|--------------|--------------|
+| MCP    | Connected via     | What it does                                                                                      |
+| ------ | ----------------- | ------------------------------------------------------------------------------------------------- |
 | Linear | OAuth (Claude.ai) | Sprint cycles, issues, projects — 12 tools across 6 skills. Fully covers all Linear functionality |
-| Vercel | OAuth (Claude.ai) | Deploy status, build logs, runtime logs. Read-only (deploys triggered via CI) |
+| Vercel | OAuth (Claude.ai) | Deploy status, build logs, runtime logs. Read-only (deploys triggered via CI)                     |
 
 #### Choose: MCP, CLI, or both
 
-| Integration | MCP path | CLI path | What you lose with MCP only |
-|-------------|----------|----------|----------------------------|
-| **Gmail** | Claude.ai OAuth — read threads, create drafts | `gog` CLI — full send, archive, label management | MCP **cannot send emails** (drafts only) and **cannot archive**. `/ops:inbox` autonomous mode requires `gog` |
-| **Google Calendar** | Claude.ai OAuth — list, create, RSVP, find free time | `gog cal` — read today's events | MCP has *more* features. `gog` is simpler for read-only briefing context. Either works |
-| **Slack** | Claude.ai OAuth — read, send, search | Local bot token via `ops-slack-autolink` | MCP has **quota limits**. Local token gives unlimited search + private channel access without bot membership |
-| **Sentry** | Claude.ai OAuth — issue search, triage, resolve | `sentry-cli` — releases, source maps, deploy tracking | Current skills only use search/triage (MCP is fine). CLI adds release management (not used yet) |
+| Integration         | MCP path                                             | CLI path                                              | What you lose with MCP only                                                                                  |
+| ------------------- | ---------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Gmail**           | Claude.ai OAuth — read threads, create drafts        | `gog` CLI — full send, archive, label management      | MCP **cannot send emails** (drafts only) and **cannot archive**. `/ops:inbox` autonomous mode requires `gog` |
+| **Google Calendar** | Claude.ai OAuth — list, create, RSVP, find free time | `gog cal` — read today's events                       | MCP has _more_ features. `gog` is simpler for read-only briefing context. Either works                       |
+| **Slack**           | Claude.ai OAuth — read, send, search                 | Local bot token via `ops-slack-autolink`              | MCP has **quota limits**. Local token gives unlimited search + private channel access without bot membership |
+| **Sentry**          | Claude.ai OAuth — issue search, triage, resolve      | `sentry-cli` — releases, source maps, deploy tracking | Current skills only use search/triage (MCP is fine). CLI adds release management (not used yet)              |
 
 #### Plugin-bundled
 
-| Integration | What it is | Setup |
-|-------------|-----------|-------|
-| Telegram MCP server | gram.js MTProto user-auth — reads your DMs (not a bot) | `/ops:setup telegram` — enter phone number + 2 verification codes, everything else is fully automated (app creation, session generation, keychain storage) |
-| [GSD](https://github.com/Lifecycle-Innovations-Limited/get-shit-done) | Project roadmap state in dashboards | Auto-detected. Skills degrade gracefully without it |
+| Integration                                                           | What it is                                             | Setup                                                                                                                                                      |
+| --------------------------------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Telegram MCP server                                                   | gram.js MTProto user-auth — reads your DMs (not a bot) | `/ops:setup telegram` — enter phone number + 2 verification codes, everything else is fully automated (app creation, session generation, keychain storage) |
+| [GSD](https://github.com/Lifecycle-Innovations-Limited/get-shit-done) | Project roadmap state in dashboards                    | Auto-detected. Skills degrade gracefully without it                                                                                                        |
 
 ## Installation
 

@@ -39,6 +39,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-preflight &>/dev/null &
 ```
 
 **Preflight data**: All probe results are cached at `/tmp/ops-preflight/`. Before running ANY diagnostic command, check if the result already exists there:
+
 - CLI status: `cat /tmp/ops-preflight/clis.txt`
 - Slack: `cat /tmp/ops-preflight/slack.json`
 - Telegram: `cat /tmp/ops-preflight/telegram.txt`
@@ -564,9 +565,11 @@ Sub-flow:
    - `[Fall back to manual paste]` → go to step 2 manual path.
 
 5. **Validate tokens.** Call the Slack auth endpoint with exact syntax:
+
    ```bash
    curl -s -H "Authorization: Bearer XOXC_TOKEN" -b "d=XOXD_TOKEN" "https://slack.com/api/auth.test"
    ```
+
    Expect `{"ok":true, "team_id":"T...", "user_id":"U...", "url":"https://<workspace>.slack.com/"}`. If `ok:false`, show the error and re-ask.
 
 6. **Persist.**
@@ -737,6 +740,7 @@ Collect these via `AskUserQuestion` — one question each. **Never auto-fill fro
 1. **Owner name** (free text): "What should Claude call you in briefings?" — no default, no suggestions from memory.
 
 2. **Timezone** (single select with common options):
+
    ```
    Select your timezone:
      [UTC]
@@ -751,6 +755,7 @@ Collect these via `AskUserQuestion` — one question each. **Never auto-fill fro
    ```
 
 3. **Briefing verbosity** (single select):
+
    ```
    How much detail do you want in briefings?
      [full]     — complete rundown of all channels, projects, and incidents
