@@ -1,0 +1,47 @@
+name: CI
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev]
+
+jobs:
+  lint-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: cd claude-ops && npm ci
+
+      - name: Syntax check (Node scripts)
+        run: |
+          node --check claude-ops/bin/ops-slack-autolink.mjs
+          node --check claude-ops/bin/ops-telegram-autolink.mjs
+          node --check claude-ops/telegram-server/index.js
+
+      - name: Syntax check (Shell scripts)
+        run: |
+          bash -n claude-ops/bin/ops-merge-scan
+          bash -n claude-ops/bin/ops-prs
+          bash -n claude-ops/bin/ops-ci
+          bash -n claude-ops/bin/ops-git
+          bash -n claude-ops/bin/ops-infra
+          bash -n claude-ops/bin/ops-unread
+          bash -n claude-ops/bin/ops-gather
+          bash -n claude-ops/bin/ops-setup-detect
+          bash -n claude-ops/bin/ops-setup-install
+
+      - name: Prettier check
+        run: cd claude-ops && npx prettier --check "**/*.{js,mjs,json}" --ignore-path .gitignore
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          config-path: claude-ops/.gitleaks.toml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
