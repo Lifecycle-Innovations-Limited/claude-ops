@@ -36,6 +36,7 @@
  */
 
 import { readFileSync, existsSync, unlinkSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
@@ -354,14 +355,78 @@ try {
   die(`gram.js auth failed: ${err.message}`);
 }
 
-const session = client.session.save();
-await client.disconnect();
+const sessionStr = client.session.save();
+
+// Step 2.1: Validate session
+emit({ type: "step", message: "Validating session..." });
+try {
+  await client.connect();
+  const me = await client.getMe();
+  emit({
+    type: "step",
+    message: `✓ Validated — ${me.firstName} (@${me.username || "no-username"})`,
+  });
+  await client.disconnect();
+} catch (e) {
+  emit({ type: "step", message: `⚠ Session validation failed: ${e.message}` });
+  await client.disconnect().catch(() => {});
+}
+
+// Step 2.2: Save to macOS keychain
+if (process.platform === "darwin") {
+  try {
+    for (const [svc, val] of [
+      ["telegram-api-id", apiId],
+      ["telegram-api-hash", apiHash],
+      ["telegram-phone", PHONE],
+      ["telegram-session", sessionStr],
+    ]) {
+      execSync(
+        `security add-generic-password -U -s "${svc}" -a "$USER" -w '${val.replace(/'/g, "'\\''")}'`,
+        { timeout: 5000 },
+      );
+    }
+    emit({ type: "step", message: "✓ Saved credentials to macOS keychain" });
+  } catch (e) {
+    emit({ type: "step", message: `○ Keychain save failed: ${e.message}` });
+  }
+}
+
+// Step 2.3: Register MCP server
+try {
+  const pluginRoot =
+    process.env.CLAUDE_PLUGIN_ROOT ||
+    execSync("echo $CLAUDE_PLUGIN_ROOT", { encoding: "utf8" }).trim();
+  const telegramServerPath = pluginRoot
+    ? `${pluginRoot}/telegram-server/index.js`
+    : null;
+  if (telegramServerPath) {
+    execSync(
+      `claude mcp add telegram -s user` +
+        ` -e TELEGRAM_API_ID='${apiId}'` +
+        ` -e TELEGRAM_API_HASH='${apiHash}'` +
+        ` -e TELEGRAM_PHONE='${PHONE}'` +
+        ` -e TELEGRAM_SESSION='${sessionStr.replace(/'/g, "'\\''")}'` +
+        ` -- node "${telegramServerPath}"`,
+      { timeout: 15000, stdio: "pipe" },
+    );
+    emit({
+      type: "step",
+      message: "✓ Registered Telegram MCP server in Claude Code",
+    });
+  }
+} catch {
+  emit({
+    type: "step",
+    message: "○ Could not auto-register MCP — run: claude mcp add telegram",
+  });
+}
 
 const result = {
   api_id: apiId,
   api_hash: apiHash,
   phone: PHONE,
-  session,
+  session: sessionStr,
 };
 process.stdout.write(JSON.stringify(result) + "\n");
 process.exit(0);
