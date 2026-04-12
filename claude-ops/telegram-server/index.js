@@ -38,64 +38,76 @@ const API_HASH = process.env.TELEGRAM_API_HASH || "";
 const SESSION_STRING = process.env.TELEGRAM_SESSION || "";
 const PHONE = process.env.TELEGRAM_PHONE || "";
 
-if (!API_ID || !API_HASH) {
-  process.stderr.write(
-    "ERROR: TELEGRAM_API_ID and TELEGRAM_API_HASH are required.\n" +
-      "Get them from https://my.telegram.org/apps (create a personal app, NOT a bot).\n",
-  );
-  process.exit(1);
-}
+// Detect whether credentials are present — server always starts regardless
+const CONFIGURED = !!(API_ID && API_HASH && SESSION_STRING);
+const NOT_CONFIGURED_MSG =
+  "Telegram not configured. Run /ops:setup telegram to set up your credentials.";
 
-const stringSession = new StringSession(SESSION_STRING);
-const client = new TelegramClient(stringSession, API_ID, API_HASH, {
-  connectionRetries: 5,
-  baseLogger: {
-    log: () => {},
-    warn: () => {},
-    error: (...args) => process.stderr.write(args.join(" ") + "\n"),
-    info: () => {},
-    debug: () => {},
-  },
-});
+let client = null;
 
-// First-run interactive auth mode
-if (process.argv.includes("--auth")) {
-  const rl = readline.createInterface({ input, output });
-  await client.start({
-    phoneNumber: async () =>
-      PHONE || (await rl.question("Phone number (E.164): ")),
-    password: async () => await rl.question("2FA password (blank if none): "),
-    phoneCode: async () => await rl.question("SMS code: "),
-    onError: (err) => process.stderr.write(`Auth error: ${err.message}\n`),
-  });
-  rl.close();
-  const saved = client.session.save();
-  process.stdout.write("\n=== AUTH SUCCESSFUL ===\n");
-  process.stdout.write("Save this to TELEGRAM_SESSION env var:\n\n");
-  process.stdout.write(saved + "\n");
-  await client.disconnect();
-  process.exit(0);
-}
-
-// Non-interactive mode — requires saved session
-if (!SESSION_STRING) {
-  process.stderr.write(
-    "ERROR: TELEGRAM_SESSION is not set. Run `node index.js --auth` first to generate it.\n",
-  );
-  process.exit(1);
-}
-
-// Connect using saved session
-try {
-  await client.connect();
-  if (!(await client.checkAuthorization())) {
-    throw new Error(
-      "Session is no longer valid — re-run `node index.js --auth`",
-    );
+if (CONFIGURED) {
+  // First-run interactive auth mode (only when creds are available)
+  if (process.argv.includes("--auth")) {
+    const stringSession = new StringSession(SESSION_STRING);
+    const authClient = new TelegramClient(stringSession, API_ID, API_HASH, {
+      connectionRetries: 5,
+      baseLogger: {
+        log: () => {},
+        warn: () => {},
+        error: (...args) => process.stderr.write(args.join(" ") + "\n"),
+        info: () => {},
+        debug: () => {},
+      },
+    });
+    const rl = readline.createInterface({ input, output });
+    await authClient.start({
+      phoneNumber: async () =>
+        PHONE || (await rl.question("Phone number (E.164): ")),
+      password: async () =>
+        await rl.question("2FA password (blank if none): "),
+      phoneCode: async () => await rl.question("SMS code: "),
+      onError: (err) => process.stderr.write(`Auth error: ${err.message}\n`),
+    });
+    rl.close();
+    const saved = authClient.session.save();
+    process.stdout.write("\n=== AUTH SUCCESSFUL ===\n");
+    process.stdout.write("Save this to TELEGRAM_SESSION env var:\n\n");
+    process.stdout.write(saved + "\n");
+    await authClient.disconnect();
+    process.exit(0);
   }
-} catch (err) {
-  process.stderr.write(`Failed to connect: ${err.message}\n`);
-  process.exit(1);
+
+  // Connect using saved session
+  const stringSession = new StringSession(SESSION_STRING);
+  client = new TelegramClient(stringSession, API_ID, API_HASH, {
+    connectionRetries: 5,
+    baseLogger: {
+      log: () => {},
+      warn: () => {},
+      error: (...args) => process.stderr.write(args.join(" ") + "\n"),
+      info: () => {},
+      debug: () => {},
+    },
+  });
+
+  try {
+    await client.connect();
+    if (!(await client.checkAuthorization())) {
+      process.stderr.write(
+        "Warning: Telegram session is no longer valid. Re-run `node index.js --auth`.\n",
+      );
+      client = null;
+    }
+  } catch (err) {
+    process.stderr.write(
+      `Warning: Failed to connect to Telegram: ${err.message}\n`,
+    );
+    client = null;
+  }
+} else {
+  process.stderr.write(
+    "Telegram credentials not set — server starting in unconfigured mode.\n",
+  );
 }
 
 // ── MCP server setup ──
@@ -203,6 +215,13 @@ function resolveChatArg(chat) {
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+
+  if (!client) {
+    return {
+      content: [{ type: "text", text: NOT_CONFIGURED_MSG }],
+      isError: true,
+    };
+  }
 
   try {
     if (name === "list_dialogs") {
@@ -344,10 +363,10 @@ process.stderr.write("Telegram MCP server running (user-auth mode)\n");
 
 // Graceful shutdown
 process.on("SIGINT", async () => {
-  await client.disconnect();
+  if (client) await client.disconnect();
   process.exit(0);
 });
 process.on("SIGTERM", async () => {
-  await client.disconnect();
+  if (client) await client.disconnect();
   process.exit(0);
 });
