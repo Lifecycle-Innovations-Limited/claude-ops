@@ -26,45 +26,52 @@
   "userConfig": {
     "telegram_api_id": {
       "title": "Telegram API ID",
-      "description": "Numeric API ID from https://my.telegram.org/apps — create a personal app, NOT a bot. Required for /ops-inbox telegram.",
+      "description": "Numeric API ID from https://my.telegram.org/apps. Optional — run /ops:setup telegram to auto-configure.",
       "type": "string",
-      "sensitive": true
+      "sensitive": true,
+      "default": ""
     },
     "telegram_api_hash": {
       "title": "Telegram API Hash",
-      "description": "API hash from https://my.telegram.org/apps. Required for /ops-inbox telegram.",
+      "description": "API hash from https://my.telegram.org/apps. Optional — run /ops:setup telegram to auto-configure.",
       "type": "string",
-      "sensitive": true
+      "sensitive": true,
+      "default": ""
     },
     "telegram_phone": {
       "title": "Telegram Phone Number",
-      "description": "Your phone number in E.164 format e.g. '+15551234567'. Used once during first-run --auth. Required for /ops-inbox telegram.",
+      "description": "Your phone number in E.164 format. Optional — run /ops:setup telegram to auto-configure.",
       "type": "string",
-      "sensitive": true
+      "sensitive": true,
+      "default": ""
     },
     "telegram_session": {
       "title": "Telegram Session String",
-      "description": "Persisted gram.js StringSession. Generate once via `node telegram-server/index.js --auth` in a terminal after filling the 3 fields above. Required for /ops-inbox telegram.",
+      "description": "gram.js StringSession. Optional — run /ops:setup telegram to auto-configure.",
       "type": "string",
-      "sensitive": true
+      "sensitive": true,
+      "default": ""
     },
     "sentry_org": {
       "title": "Sentry Organization",
       "description": "Sentry organization slug e.g. 'healify' (optional)",
       "type": "string",
-      "sensitive": false
+      "sensitive": false,
+      "default": ""
     },
     "linear_team": {
       "title": "Linear Team Key",
       "description": "Default Linear team key e.g. 'HEA' (optional)",
       "type": "string",
-      "sensitive": false
+      "sensitive": false,
+      "default": ""
     },
     "aws_region": {
       "title": "AWS Region",
       "description": "Default AWS region for infra checks e.g. 'us-east-1' (optional)",
       "type": "string",
-      "sensitive": false
+      "sensitive": false,
+      "default": "us-east-1"
     }
   }
 }
