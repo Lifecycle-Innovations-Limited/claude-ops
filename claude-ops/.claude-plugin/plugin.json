@@ -1,7 +1,7 @@
 {
   "name": "ops",
   "version": "0.2.2",
-  "description": "Business operations command center for Claude Code. Manage communications, projects, infrastructure, and revenue. Includes YOLO mode for autonomous business operation.",
+  "description": "Business operations command center for Claude Code. Manage communications, projects, infrastructure, and revenue from your terminal. Includes YOLO mode for autonomous business operation.",
   "author": {
     "name": "Sam Renders",
     "url": "https://github.com/auroracapital"
@@ -9,7 +9,20 @@
   "homepage": "https://github.com/auroracapital/claude-ops",
   "repository": "https://github.com/auroracapital/claude-ops",
   "license": "MIT",
-  "keywords": ["business", "operations", "communications", "yolo"],
+  "keywords": [
+    "business",
+    "operations",
+    "communications",
+    "whatsapp",
+    "email",
+    "slack",
+    "telegram",
+    "linear",
+    "sentry",
+    "infrastructure",
+    "revenue",
+    "yolo"
+  ],
   "userConfig": {
     "telegram_api_id": {
       "title": "Telegram API ID",
