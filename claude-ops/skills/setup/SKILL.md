@@ -32,9 +32,33 @@ You are running an **interactive configuration wizard** for the `claude-ops` plu
 
 ---
 
-## Step 0 — Detect current state
+## Step 0 — Preflight (runs in background while you read)
 
-Run the detector and parse its JSON output:
+```!
+${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-preflight &>/dev/null &
+```
+
+**Preflight data**: All probe results are cached at `/tmp/ops-preflight/`. Before running ANY diagnostic command, check if the result already exists there:
+- CLI status: `cat /tmp/ops-preflight/clis.txt`
+- Slack: `cat /tmp/ops-preflight/slack.json`
+- Telegram: `cat /tmp/ops-preflight/telegram.txt`
+- gog/Gmail: `cat /tmp/ops-preflight/gog-gmail.json`
+- gog/Calendar: `cat /tmp/ops-preflight/gog-cal.json`
+- WhatsApp: `cat /tmp/ops-preflight/wacli-doctor.json` and `wacli-chats.json`
+- MCP servers: `cat /tmp/ops-preflight/mcp-servers.txt`
+- GitHub: `cat /tmp/ops-preflight/gh-auth.txt`
+- AWS: `cat /tmp/ops-preflight/aws-identity.json`
+- Projects: `cat /tmp/ops-preflight/projects.txt`
+- Existing registry: `cat /tmp/ops-preflight/existing-registry.json`
+- Existing prefs: `cat /tmp/ops-preflight/existing-prefs.json`
+
+Wait for `/tmp/ops-preflight/.complete` to exist before reading (it should be ready within 2-3 seconds). NEVER re-run a probe that already has cached results — read the cache file instead.
+
+---
+
+## Step 0b — Detect current state
+
+Run the detector and parse its JSON output (or read from preflight cache if available):
 
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-detect 2>/dev/null
@@ -131,16 +155,20 @@ GSD adds project roadmap tracking to your ops dashboards.
   [Install GSD (latest)] [Skip — I don't need roadmap tracking]
 ```
 
-On install, run:
-
-```bash
-claude plugin marketplace add auroracapital/get-shit-done && claude plugin install gsd@auroracapital-get-shit-done
-```
-
-Report success/failure. If it fails (e.g. marketplace not reachable), print:
+On install, tell the user:
 
 ```
-Could not auto-install GSD. You can install it manually later:
+To install GSD, run these commands in Claude Code:
+  /plugin marketplace add auroracapital/get-shit-done
+  /plugin install gsd@auroracapital-get-shit-done
+```
+
+These are slash commands — run them in the Claude Code interface, not in a terminal. After running them, come back and re-run `/ops:setup` to continue.
+
+Report success/failure. If the user confirms they've installed it, record `plugins.gsd = "installed"` in `$PREFS_PATH`. If they skip:
+
+```
+Skipped GSD install. You can install it later:
   /plugin marketplace add auroracapital/get-shit-done
   /plugin install gsd@auroracapital-get-shit-done
 ```
@@ -247,11 +275,11 @@ If the user skips, record `channels.telegram = "skipped"` in `$PREFS_PATH` and m
 
 Sub-flow (only runs if user selected Yes above):
 
-1. **Scout first.** Run `${CLAUDE_PLUGIN_ROOT}/bin/ops-slack-autolink --scout-only` equivalent check for Telegram:
+1. **Scout first.** Check keychain for previously-extracted Telegram credentials:
 
    ```bash
    for svc in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
-     security find-generic-password -s "$svc" -w 2>/dev/null
+     security find-generic-password -s "$svc" -w 2>/dev/null && echo "FOUND: $svc"
    done
    ```
 
@@ -334,7 +362,7 @@ Run these in parallel:
 ```bash
 wacli doctor --json 2>&1
 wacli auth status --json 2>&1
-wacli messages list --after="$(date -v-1d +%Y-%m-%d)" --limit=5 --json 2>&1
+wacli messages list --after="$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d '1 day ago' +%Y-%m-%d)" --limit=5 --json 2>&1
 wacli chats list --json 2>&1 | head -c 4000
 ```
 
@@ -795,7 +823,7 @@ If any required tool is still missing, list it with the exact command to install
 
 After displaying the summary, run the completion banner to celebrate the successful setup. Pass the actual counts from the setup session:
 
-```!
+```bash
 bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-complete --channels <N> --projects <N> --agents 9 --skills 15
 ```
 
@@ -878,7 +906,10 @@ wacli auth status --json
 wacli chats list --json
 
 # List messages (--after flag uses YYYY-MM-DD)
+# macOS
 wacli messages list --after="$(date -v-1d +%Y-%m-%d)" --limit=5 --json
+# Linux
+wacli messages list --after="$(date -d '1 day ago' +%Y-%m-%d)" --limit=5 --json
 
 # Send message
 wacli send --to "JID" --message "text"

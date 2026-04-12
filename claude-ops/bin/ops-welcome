@@ -76,9 +76,14 @@ progress_step "${BGRN}Ready${RST}" 16
 
 sleep 0.1
 
+# --- Dynamic counts ---
+PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SKILL_COUNT=$(ls -d "${PLUGIN_ROOT}/skills"/*/ 2>/dev/null | wc -l | tr -d ' ')
+AGENT_COUNT=$(ls "${PLUGIN_ROOT}/agents"/*.md 2>/dev/null | wc -l | tr -d ' ')
+
 # --- Summary line ---
 p ""
-p "  ${BWHT}15${RST} skills loaded  ${DIM}|${RST}  ${BWHT}9${RST} agents standing by"
+p "  ${BWHT}${SKILL_COUNT}${RST} skills loaded  ${DIM}|${RST}  ${BWHT}${AGENT_COUNT}${RST} agents standing by"
 p ""
 
 # --- Separator ---
