@@ -26,6 +26,7 @@ Scan all infrastructure and return structured health data. Read-only.
 Run all checks in parallel:
 
 ### ECS health
+
 ```bash
 for cluster in $(aws ecs list-clusters --output json 2>/dev/null | jq -r '.clusterArns[]'); do
   name=$(basename "$cluster")
@@ -33,7 +34,7 @@ for cluster in $(aws ecs list-clusters --output json 2>/dev/null | jq -r '.clust
     --include STATISTICS \
     --output json 2>/dev/null | \
     jq --arg c "$name" '{cluster: $c, services: .clusters[0].statistics, status: .clusters[0].status}'
-  
+
   aws ecs list-services --cluster "$name" --output json 2>/dev/null | \
     jq -r '.serviceArns[]' | while read svc; do
     aws ecs describe-services --cluster "$name" --services "$(basename $svc)" \
@@ -44,6 +45,7 @@ done
 ```
 
 ### Recent ECS events (anomalies, registry-driven)
+
 ```bash
 REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"
 [ -f "$REGISTRY" ] || REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.example.json"
@@ -57,9 +59,11 @@ done
 ```
 
 ### Vercel deployments
+
 Fetch via `mcp__claude_ai_Vercel__list_projects`, then for each project call `mcp__claude_ai_Vercel__list_deployments` with limit 3.
 
 ### GitHub Actions (recent runs, registry-driven)
+
 ```bash
 for repo in $(jq -r '.projects[] | select(.gsd == true) | .repos[]' "$REGISTRY" 2>/dev/null); do
   gh run list --repo "$repo" --limit 3 \
@@ -122,11 +126,13 @@ done | jq -s 'add // []'
 ## Fire detection rules
 
 Flag as `critical` if:
+
 - ECS service running < desired AND running == 0
 - Vercel deployment state == "ERROR" on production
 - CI conclusion == "failure" on `main` or `dev` branch
 
 Flag as `high` if:
+
 - ECS service running < desired (partial)
 - Vercel deployment state == "ERROR" on preview
 - CI failure on feature branch with open PR

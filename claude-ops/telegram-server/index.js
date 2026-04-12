@@ -49,14 +49,21 @@ if (!API_ID || !API_HASH) {
 const stringSession = new StringSession(SESSION_STRING);
 const client = new TelegramClient(stringSession, API_ID, API_HASH, {
   connectionRetries: 5,
-  baseLogger: { log: () => {}, warn: () => {}, error: (...args) => process.stderr.write(args.join(" ") + "\n"), info: () => {}, debug: () => {} },
+  baseLogger: {
+    log: () => {},
+    warn: () => {},
+    error: (...args) => process.stderr.write(args.join(" ") + "\n"),
+    info: () => {},
+    debug: () => {},
+  },
 });
 
 // First-run interactive auth mode
 if (process.argv.includes("--auth")) {
   const rl = readline.createInterface({ input, output });
   await client.start({
-    phoneNumber: async () => PHONE || (await rl.question("Phone number (E.164): ")),
+    phoneNumber: async () =>
+      PHONE || (await rl.question("Phone number (E.164): ")),
     password: async () => await rl.question("2FA password (blank if none): "),
     phoneCode: async () => await rl.question("SMS code: "),
     onError: (err) => process.stderr.write(`Auth error: ${err.message}\n`),
@@ -82,7 +89,9 @@ if (!SESSION_STRING) {
 try {
   await client.connect();
   if (!(await client.checkAuthorization())) {
-    throw new Error("Session is no longer valid — re-run `node index.js --auth`");
+    throw new Error(
+      "Session is no longer valid — re-run `node index.js --auth`",
+    );
   }
 } catch (err) {
   process.stderr.write(`Failed to connect: ${err.message}\n`);
@@ -137,7 +146,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "send_message",
-      description: "Send a message to a Telegram chat or user (personal account, not bot).",
+      description:
+        "Send a message to a Telegram chat or user (personal account, not bot).",
       inputSchema: {
         type: "object",
         properties: {
@@ -199,14 +209,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const limit = Math.min(args?.limit || 30, 100);
       const includeArchived = args?.archived || false;
 
-      const dialogs = await client.getDialogs({ limit, archived: includeArchived });
+      const dialogs = await client.getDialogs({
+        limit,
+        archived: includeArchived,
+      });
 
       const formatted = dialogs.map((d) => {
         const peer = formatPeer(d.entity);
         const lastMsg = d.message;
         const fromMe = lastMsg?.out || false;
         const text = lastMsg?.message || "[non-text message]";
-        const ts = lastMsg?.date ? new Date(lastMsg.date * 1000).toISOString() : "";
+        const ts = lastMsg?.date
+          ? new Date(lastMsg.date * 1000).toISOString()
+          : "";
         return {
           chat_id: String(d.id),
           name: peer,
@@ -224,7 +239,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ dialogs: formatted, count: formatted.length }, null, 2),
+            text: JSON.stringify(
+              { dialogs: formatted, count: formatted.length },
+              null,
+              2,
+            ),
           },
         ],
       };
@@ -248,7 +267,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ messages: formatted, count: formatted.length }, null, 2),
+            text: JSON.stringify(
+              { messages: formatted, count: formatted.length },
+              null,
+              2,
+            ),
           },
         ],
       };
@@ -296,7 +319,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ results: msgs, count: msgs.length }, null, 2),
+            text: JSON.stringify(
+              { results: msgs, count: msgs.length },
+              null,
+              2,
+            ),
           },
         ],
       };

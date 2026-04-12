@@ -7,6 +7,7 @@ This document explains how to configure each communication channel for the `/ops
 **Status:** CLI-based (wacli), no MCP needed.
 
 **Setup:**
+
 ```bash
 # Install latest version from source (brew version may be outdated)
 git clone https://github.com/steipete/wacli.git /tmp/wacli-src
@@ -26,20 +27,24 @@ wacli sync
 ```
 
 **Troubleshooting:**
+
 - `Client outdated (405)`: Rebuild from source above
 - `store is locked`: Kill stale process: `kill $(pgrep wacli)`
 - After version upgrade: `wacli auth logout && wacli auth`
 
 **History limitations:**
 wacli only captures messages **received while connected**. It cannot reliably backfill historical messages after the fact:
+
 - `wacli history backfill --chat <jid>` requires ≥1 existing local message per chat and often times out on the WhatsApp on-demand sync response.
 - Chats in the new `@lid` (Linked Device) format frequently return empty message queries because their history was never captured during an active sync session.
 - For ongoing inbox management, run `wacli sync --follow` in a persistent terminal (outside Claude Code) so new messages land in the local DB in real-time.
 
 **Env vars (optional):**
+
 - `WACLI_STORE` — default `~/.wacli`
 
 **Run sync persistently (recommended):**
+
 ```bash
 # In a dedicated terminal tab — keeps wacli connected so new messages are captured
 wacli sync --follow
@@ -52,6 +57,7 @@ wacli sync --follow
 **Status:** CLI-based (gog), optional MCP fallback.
 
 **Setup:**
+
 ```bash
 # Install gog
 brew install AuroraToolkit/tap/gog
@@ -61,6 +67,7 @@ gog gmail auth
 ```
 
 **Env vars (optional):**
+
 - `GMAIL_ACCOUNT` — Gmail account (auto-detected if unset)
 
 ---
@@ -70,10 +77,12 @@ gog gmail auth
 **Status:** ⚠️ Not configured. Requires Slack MCP server.
 
 **Requirements:**
+
 - Slack MCP server installed and configured in `~/.claude/settings.json` under `mcpServers`
 - Bot token with `channels:history`, `im:history`, `chat:write`, `search:read` scopes
 
 **Setup:**
+
 1. Install a Slack MCP server:
    ```bash
    # Option A: Official reference
@@ -103,6 +112,7 @@ gog gmail auth
 4. Restart Claude Code to load the MCP server
 
 **Env vars:**
+
 - `SLACK_BOT_TOKEN` — Bot token (starts with `xoxb-`)
 - `SLACK_TEAM_ID` — Workspace ID
 - `SLACK_MCP_ENABLED` — Set `true` to enable in ops-unread
@@ -116,10 +126,12 @@ gog gmail auth
 **CRITICAL:** Do NOT use BotFather bots. The inbox skill must read Sam's **personal** conversations, which bots cannot access. Required: tdlib or MTProto user-auth integration.
 
 **Requirements:**
+
 - Telegram API ID and hash from https://my.telegram.org/apps
 - User-auth MCP server (e.g., `mcp-telegram-user` or custom tdlib wrapper)
 
 **Setup:**
+
 1. Get API credentials from https://my.telegram.org/apps (for personal app, not bot)
 2. Install a user-auth Telegram MCP server (tdlib-based):
    ```bash
@@ -152,6 +164,7 @@ gog gmail auth
    ```
 
 **Env vars:**
+
 - `TELEGRAM_API_ID` — from my.telegram.org/apps
 - `TELEGRAM_API_HASH` — from my.telegram.org/apps
 - `TELEGRAM_PHONE` — phone number for auth
@@ -164,6 +177,7 @@ gog gmail auth
 ## Verification
 
 After configuring any channel, verify with:
+
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-unread
 ```

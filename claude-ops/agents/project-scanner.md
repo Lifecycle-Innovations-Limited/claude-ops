@@ -21,6 +21,7 @@ Scan all registered projects for git/PR/CI status. Read-only.
 ## Task
 
 Load the project registry:
+
 ```bash
 cat "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null || echo '{}'
 ```
@@ -28,6 +29,7 @@ cat "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null || echo '{}'
 For each project in the registry, run these checks in parallel:
 
 ### Per-project git checks
+
 ```bash
 PROJECT_PATH="[expanded path]"
 
@@ -42,6 +44,7 @@ echo "{\"branch\":\"$branch\",\"dirty\":$dirty,\"ahead\":$ahead,\"behind\":$behi
 ```
 
 ### GSD state
+
 ```bash
 if [ -f "$PROJECT_PATH/.planning/STATE.md" ]; then
   cat "$PROJECT_PATH/.planning/STATE.md" | head -20
@@ -49,6 +52,7 @@ fi
 ```
 
 ### Open PRs (if GitHub repo)
+
 ```bash
 REPO=$(git -C "$PROJECT_PATH" remote get-url origin 2>/dev/null | sed 's/.*github.com[:/]//' | sed 's/\.git$//')
 gh pr list --repo "$REPO" --state open \

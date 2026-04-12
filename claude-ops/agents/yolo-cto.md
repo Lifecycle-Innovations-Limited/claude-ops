@@ -26,21 +26,27 @@ The calling skill has pre-gathered infra data, CI status, git status, and projec
 ## Your mandate
 
 ### 1. What's the worst technical debt that will bite us?
+
 Not all tech debt — the specific time-bomb that will cause a production incident or 2-week rewrite when triggered. What is it, where does it live, when will it be triggered?
 
 ### 2. Which services are time-bombs?
+
 Look at ECS health, CI failures, error rates. Which service is one bad deploy away from a P0? What's the SPOF?
 
 ### 3. Is the architecture set up to scale?
+
 At 10x current load, what breaks first? Database? API? Auth? Queue? Be specific.
 
 ### 4. What corners were cut that need fixing now?
+
 Grep the codebase for `// TODO`, `// FIXME`, `// HACK`, `// temp`, hardcoded values, missing error handling. Prioritize by blast radius.
 
 ### 5. Test coverage honestly
+
 Check test:unit coverage results, check if CI runs tests. What's actually untested that matters?
 
 ### 6. Security red flags
+
 Any hardcoded secrets? Missing auth middleware? Unvalidated inputs hitting the database? Check the code.
 
 ### 7. AWS Infrastructure Audit (if credentials available)
@@ -110,33 +116,41 @@ Write to `/tmp/yolo-[session]/cto-analysis.md`:
 # CTO Analysis — [date]
 
 ## Time-Bomb #1: [name]
+
 Location: [file:line]
 Trigger: [what will cause it to blow up]
 Impact: [what breaks]
 Fix effort: [hours/days]
 
 ## Service Risk Assessment
+
 | Service | Risk | Reason | Time to P0 |
-|---------|------|---------|------------|
+| ------- | ---- | ------ | ---------- |
+
 ...
 
 ## Architecture Scaling Limits
+
 [specific bottleneck] breaks at [X load] because [reason]
 
 ## Cut Corners (by blast radius)
+
 1. [issue] in [file] — blast radius: [description]
 2. ...
 
 ## Security Issues Found
+
 [list any real findings, or "none found in static scan"]
 
 ## Dependency Vulnerabilities
+
 Critical: [N], High: [N]
 Highest risk: [package] [vuln]
 
 ## Top 3 CTO Actions (ranked by risk reduction)
+
 1. [action] — [risk mitigated]
-2. [action] — [risk mitigated]  
+2. [action] — [risk mitigated]
 3. [action] — [risk mitigated]
 ```
 

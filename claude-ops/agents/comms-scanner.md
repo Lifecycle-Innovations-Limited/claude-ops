@@ -53,14 +53,48 @@ Combine results into:
 {
   "timestamp": "[ISO8601]",
   "whatsapp": {
-    "needs_reply": [{"contact": "[name]", "preview": "[text]", "timestamp": "[ISO8601]", "jid": "[JID]", "urgency": "high|medium|low"}],
-    "waiting": [{"contact": "[name]", "preview": "[your last msg]", "timestamp": "[ISO8601]"}],
+    "needs_reply": [
+      {
+        "contact": "[name]",
+        "preview": "[text]",
+        "timestamp": "[ISO8601]",
+        "jid": "[JID]",
+        "urgency": "high|medium|low"
+      }
+    ],
+    "waiting": [
+      {
+        "contact": "[name]",
+        "preview": "[your last msg]",
+        "timestamp": "[ISO8601]"
+      }
+    ],
     "handled": []
   },
   "email": {
-    "needs_reply": [{"from": "[sender]", "subject": "[subject]", "preview": "[text]", "timestamp": "[ISO8601]", "urgency": "high|medium|low"}],
-    "waiting": [{"from": "[recipient]", "subject": "[subject]", "timestamp": "[ISO8601]"}],
-    "fyi": [{"from": "[sender]", "subject": "[subject]", "type": "newsletter|notification|receipt"}]
+    "needs_reply": [
+      {
+        "from": "[sender]",
+        "subject": "[subject]",
+        "preview": "[text]",
+        "timestamp": "[ISO8601]",
+        "urgency": "high|medium|low"
+      }
+    ],
+    "waiting": [
+      {
+        "from": "[recipient]",
+        "subject": "[subject]",
+        "timestamp": "[ISO8601]"
+      }
+    ],
+    "fyi": [
+      {
+        "from": "[sender]",
+        "subject": "[subject]",
+        "type": "newsletter|notification|receipt"
+      }
+    ]
   },
   "slack": {
     "needs_reply": [],
@@ -84,6 +118,7 @@ Combine results into:
 ## Urgency scoring
 
 Mark a message `high` if:
+
 - Sender is in contacts list with `vip: true`
 - Message contains: "urgent", "ASAP", "down", "broken", "help", "emergency", "critical"
 - Email subject starts with "Re: Re: Re:" (long chain needing response)

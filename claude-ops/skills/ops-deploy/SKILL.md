@@ -21,12 +21,14 @@ allowed-tools:
 ## Phase 1 — Gather deploy data in parallel
 
 ### ECS services (all clusters)
+
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-infra 2>/dev/null || \
 aws ecs list-clusters --output json 2>/dev/null
 ```
 
 ### ECS service details
+
 ```bash
 for cluster in $(aws ecs list-clusters --output json 2>/dev/null | jq -r '.clusterArns[]'); do
   cluster_name=$(basename "$cluster")
@@ -39,6 +41,7 @@ done
 ```
 
 ### Recent GitHub Actions runs (registry-driven)
+
 ```bash
 REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"
 [ -f "$REGISTRY" ] || REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.example.json"
@@ -49,6 +52,7 @@ done
 ```
 
 ### Vercel deployments
+
 Use `mcp__claude_ai_Vercel__list_projects` then `mcp__claude_ai_Vercel__list_deployments` for each project (limit 5 per project).
 
 ---

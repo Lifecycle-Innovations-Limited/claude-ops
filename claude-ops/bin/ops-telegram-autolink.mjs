@@ -80,13 +80,18 @@ async function waitForCode(maxSec = 300) {
   while (Date.now() - start < maxSec * 1000) {
     if (existsSync(CODE_FILE)) {
       const raw = readFileSync(CODE_FILE, "utf8").trim();
-      if (/^\d{4,8}$/.test(raw)) {
-        try { unlinkSync(CODE_FILE); } catch {}
+      if (/^[\w]{3,20}$/.test(raw)) {
+        try {
+          unlinkSync(CODE_FILE);
+        } catch {}
         return raw;
       }
     }
     if (Date.now() - lastLog > 15000) {
-      emit({ type: "heartbeat", waited_s: Math.floor((Date.now() - start) / 1000) });
+      emit({
+        type: "heartbeat",
+        waited_s: Math.floor((Date.now() - start) / 1000),
+      });
       lastLog = Date.now();
     }
     await new Promise((r) => setTimeout(r, 2000));
@@ -98,7 +103,9 @@ async function waitForCode(maxSec = 300) {
  * Simple cookie jar — just enough to keep the my.telegram.org session.
  */
 class CookieJar {
-  constructor() { this.cookies = new Map(); }
+  constructor() {
+    this.cookies = new Map();
+  }
   update(response) {
     const raw = response.headers.getSetCookie
       ? response.headers.getSetCookie()
@@ -106,20 +113,28 @@ class CookieJar {
     for (const c of raw || []) {
       const [kv] = c.split(";");
       const eq = kv.indexOf("=");
-      if (eq > 0) this.cookies.set(kv.slice(0, eq).trim(), kv.slice(eq + 1).trim());
+      if (eq > 0)
+        this.cookies.set(kv.slice(0, eq).trim(), kv.slice(eq + 1).trim());
     }
   }
   header() {
-    return Array.from(this.cookies.entries()).map(([k, v]) => `${k}=${v}`).join("; ");
+    return Array.from(this.cookies.entries())
+      .map(([k, v]) => `${k}=${v}`)
+      .join("; ");
   }
 }
 
 // --- Phase 1: my.telegram.org HTTP flow ---
-emit({ type: "phase", phase: 1, message: "Extracting api_id / api_hash from my.telegram.org" });
+emit({
+  type: "phase",
+  phase: 1,
+  message: "Extracting api_id / api_hash from my.telegram.org",
+});
 
 const jar = new CookieJar();
 const COMMON_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
   "Accept-Language": "en-US,en;q=0.9",
 };
 
@@ -152,7 +167,9 @@ async function httpGet(url) {
 
 // Step 1.1: request a login code for PHONE
 emit({ type: "step", message: `POST /auth/send_password for ${PHONE}` });
-const sendRes = await httpPost("https://my.telegram.org/auth/send_password", { phone: PHONE });
+const sendRes = await httpPost("https://my.telegram.org/auth/send_password", {
+  phone: PHONE,
+});
 const sendText = await sendRes.text();
 if (sendText.includes("Sorry, too many tries")) {
   die("my.telegram.org rate-limited your account. Wait ~8 hours and retry.");
@@ -163,15 +180,20 @@ try {
   randomHash = parsed.random_hash;
   if (!randomHash) throw new Error("no random_hash in response");
 } catch (e) {
-  die("send_password response was not valid JSON", { body: sendText.slice(0, 200) });
+  die("send_password response was not valid JSON", {
+    body: sendText.slice(0, 200),
+  });
 }
-emit({ type: "step", message: "Telegram has sent a code to your Telegram account" });
+emit({
+  type: "step",
+  message: "Telegram has sent a code to your Telegram account",
+});
 
 // Step 1.2: wait for code from the bridge
 emit({
   type: "need_code",
   channel: "web_login",
-  message: `Enter the code from Telegram → write digits-only to ${CODE_FILE}`,
+  message: `Enter the code from Telegram → write it to ${CODE_FILE}`,
   code_file: CODE_FILE,
 });
 const webCode = await waitForCode(300);
@@ -197,13 +219,17 @@ let appsHtml = await appsRes.text();
 //   <label>App api_id:</label> ... <div>...<span>12345678</span>...
 // Works as long as my.telegram.org keeps its server-side HTML shape.
 function extract(html) {
-  const idMatch = html.match(/App api_id[^<]*<\/label>[\s\S]*?<span[^>]*>\s*(\d{5,12})\s*<\/span>/i);
-  const hashMatch = html.match(/App api_hash[^<]*<\/label>[\s\S]*?<span[^>]*>\s*([a-f0-9]{32})\s*<\/span>/i);
+  const idMatch = html.match(
+    /App api_id[^<]*<\/label>[\s\S]*?<span[^>]*>\s*(\d{5,12})\s*<\/span>/i,
+  );
+  const hashMatch = html.match(
+    /App api_hash[^<]*<\/label>[\s\S]*?<span[^>]*>\s*([a-f0-9]{32})\s*<\/span>/i,
+  );
   // Fallback: plain code tags sometimes used
   const altHash = html.match(/api_hash[^<]*<[^>]+>\s*([a-f0-9]{32})/i);
   return {
     apiId: idMatch ? idMatch[1] : null,
-    apiHash: hashMatch ? hashMatch[1] : (altHash ? altHash[1] : null),
+    apiHash: hashMatch ? hashMatch[1] : altHash ? altHash[1] : null,
   };
 }
 
@@ -213,7 +239,9 @@ if (!apiId || !apiHash) {
   // Step 1.5: no app exists → create one
   emit({ type: "step", message: "No existing app — creating one" });
   // Extract CSRF token / hash value from the create-app form if present
-  const hashInput = appsHtml.match(/name=['"]hash['"]\s+value=['"]([a-z0-9]+)['"]/i);
+  const hashInput = appsHtml.match(
+    /name=['"]hash['"]\s+value=['"]([a-z0-9]+)['"]/i,
+  );
   const createParams = {
     hash: hashInput ? hashInput[1] : "",
     app_title: APP_TITLE,
@@ -222,10 +250,15 @@ if (!apiId || !apiHash) {
     app_platform: "desktop",
     app_desc: "claude-ops — automated operations for Claude Code",
   };
-  const createRes = await httpPost("https://my.telegram.org/apps/create", createParams);
+  const createRes = await httpPost(
+    "https://my.telegram.org/apps/create",
+    createParams,
+  );
   const createBody = await createRes.text();
   if (createRes.status >= 400 || /error/i.test(createBody.slice(0, 200))) {
-    die(`/apps/create failed (HTTP ${createRes.status})`, { body: createBody.slice(0, 200) });
+    die(`/apps/create failed (HTTP ${createRes.status})`, {
+      body: createBody.slice(0, 200),
+    });
   }
   // Re-fetch the apps page now that an app exists
   appsRes = await httpGet("https://my.telegram.org/apps");
@@ -234,14 +267,28 @@ if (!apiId || !apiHash) {
 }
 
 if (!apiId || !apiHash) {
-  die("could not extract api_id/api_hash from /apps HTML — selectors may have changed");
+  die(
+    "could not extract api_id/api_hash from /apps HTML — selectors may have changed",
+  );
 }
 
-emit({ type: "phase", phase: 1, message: "Extracted credentials", api_id: apiId });
+emit({
+  type: "phase",
+  phase: 1,
+  message: "Extracted credentials",
+  api_id: apiId,
+});
 
 // --- Phase 2: gram.js session generation ---
 if (SKIP_SESSION) {
-  process.stdout.write(JSON.stringify({ api_id: apiId, api_hash: apiHash, phone: PHONE, session: null }) + "\n");
+  process.stdout.write(
+    JSON.stringify({
+      api_id: apiId,
+      api_hash: apiHash,
+      phone: PHONE,
+      session: null,
+    }) + "\n",
+  );
   process.exit(0);
 }
 
@@ -260,7 +307,11 @@ const client = new TelegramClient(stringSession, parseInt(apiId, 10), apiHash, {
 });
 
 // Remove any leftover code file from the web-login step so we don't reuse it
-if (existsSync(CODE_FILE)) { try { unlinkSync(CODE_FILE); } catch {} }
+if (existsSync(CODE_FILE)) {
+  try {
+    unlinkSync(CODE_FILE);
+  } catch {}
+}
 
 try {
   await client.start({
@@ -271,14 +322,17 @@ try {
       // and let gram.js error loudly if 2FA is required.
       emit({
         type: "need_password",
-        message: "Telegram 2FA password required. Write to /tmp/telegram-password.txt or leave unset for no-2FA accounts",
+        message:
+          "Telegram 2FA password required. Write to /tmp/telegram-password.txt or leave unset for no-2FA accounts",
         password_file: "/tmp/telegram-password.txt",
       });
       const start = Date.now();
       while (Date.now() - start < 60_000) {
         if (existsSync("/tmp/telegram-password.txt")) {
           const pw = readFileSync("/tmp/telegram-password.txt", "utf8").trim();
-          try { unlinkSync("/tmp/telegram-password.txt"); } catch {}
+          try {
+            unlinkSync("/tmp/telegram-password.txt");
+          } catch {}
           return pw;
         }
         await new Promise((r) => setTimeout(r, 2000));

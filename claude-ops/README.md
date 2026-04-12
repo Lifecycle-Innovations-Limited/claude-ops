@@ -4,20 +4,20 @@ A Claude Code plugin that turns Claude into a business operating system. One com
 
 ## Features
 
-| Skill | Description |
-|-------|-------------|
-| `/ops:setup` | Interactive setup wizard — installs CLIs, configures channels, builds registry |
-| `/ops-go` | Morning briefing — all systems in one dashboard |
-| `/ops-next` | Priority-ordered next action (fires → comms → PRs → sprint → GSD) |
-| `/ops-inbox` | Inbox zero across WhatsApp, Email, Slack, Telegram |
-| `/ops-comms` | Send/read messages across all channels |
-| `/ops-projects` | Portfolio dashboard — GSD phase, CI, PRs, dirty files |
-| `/ops-linear` | Linear sprint board, issue management, GSD sync |
-| `/ops-triage` | Cross-platform issue triage (Sentry + Linear + GitHub) |
-| `/ops-fires` | Production incidents dashboard with agent dispatch |
-| `/ops-deploy` | ECS + Vercel + GitHub Actions deploy status |
-| `/ops-revenue` | AWS costs, credits, revenue pipeline, runway |
-| `/ops-yolo` | 4-agent C-suite analysis + autonomous mode |
+| Skill           | Description                                                                    |
+| --------------- | ------------------------------------------------------------------------------ |
+| `/ops:setup`    | Interactive setup wizard — installs CLIs, configures channels, builds registry |
+| `/ops-go`       | Morning briefing — all systems in one dashboard                                |
+| `/ops-next`     | Priority-ordered next action (fires → comms → PRs → sprint → GSD)              |
+| `/ops-inbox`    | Inbox zero across WhatsApp, Email, Slack, Telegram                             |
+| `/ops-comms`    | Send/read messages across all channels                                         |
+| `/ops-projects` | Portfolio dashboard — GSD phase, CI, PRs, dirty files                          |
+| `/ops-linear`   | Linear sprint board, issue management, GSD sync                                |
+| `/ops-triage`   | Cross-platform issue triage (Sentry + Linear + GitHub)                         |
+| `/ops-fires`    | Production incidents dashboard with agent dispatch                             |
+| `/ops-deploy`   | ECS + Vercel + GitHub Actions deploy status                                    |
+| `/ops-revenue`  | AWS costs, credits, revenue pipeline, runway                                   |
+| `/ops-yolo`     | 4-agent C-suite analysis + autonomous mode                                     |
 
 ## Requirements
 
@@ -28,12 +28,13 @@ A Claude Code plugin that turns Claude into a business operating system. One com
 - GitHub CLI (`gh`, for PRs and CI)
 
 ### Optional integrations
+
 - `wacli` — WhatsApp CLI (for WhatsApp inbox)
-- Gmail MCP — mcp__claude_ai_Gmail__* (for email)
-- Slack MCP — mcp__claude_ai_Slack__* (for Slack)
-- Linear MCP — mcp__claude_ai_Linear__* (for sprint management)
-- Sentry MCP — mcp__sentry__* (for error triage)
-- Vercel MCP — mcp__claude_ai_Vercel__* (for deploy status)
+- Gmail MCP — mcp**claude_ai_Gmail**\* (for email)
+- Slack MCP — mcp**claude_ai_Slack**\* (for Slack)
+- Linear MCP — mcp**claude_ai_Linear**\* (for sprint management)
+- Sentry MCP — mcp**sentry**\* (for error triage)
+- Vercel MCP — mcp**claude_ai_Vercel**\* (for deploy status)
 
 ## Installation
 
@@ -74,6 +75,7 @@ git clone https://github.com/auroracapital/claude-ops ~/Projects/claude-ops-mark
 ```
 
 Walks you through every configuration step inside Claude Code with structured selectors:
+
 - Installs missing CLIs (`jq`, `gh`, `aws`, `doppler`, `sentry-cli`…) via Homebrew
 - Collects tokens for each channel you enable (Telegram, WhatsApp, Email, Slack)
 - Configures calendar (gog calendar → Google Calendar MCP fallback)
@@ -112,14 +114,17 @@ Copy `scripts/registry.example.json` to `scripts/registry.json` (which is gitign
 The plugin uses **your personal Telegram account** via gram.js MTProto — not a bot — because bots can't read user DMs, which is the main use case for `/ops-inbox telegram`.
 
 **Recommended path — let the wizard do it:**
+
 ```
 /ops:setup telegram
 ```
+
 This invokes `bin/ops-telegram-autolink.mjs`, which takes your phone number, performs the `my.telegram.org` HTTP login flow, extracts `api_id` + `api_hash` (creating a Telegram app for you if none exists), runs the gram.js auth flow to generate a session string, and stores everything in macOS keychain. Zero browser automation — `my.telegram.org` is server-rendered HTML, so the wizard uses plain HTTP requests. You just enter the two codes Telegram sends to your Telegram app.
 
 After the wizard finishes, it prints the values you need to paste into `/plugin settings` for `ops@ops-marketplace` (the plugin cannot write to `~/.claude.json` on its own — that's Claude Code's job via the `/plugin` UI).
 
 **Manual path (if you already have an app):**
+
 1. Get your `api_id` + `api_hash` from [my.telegram.org/apps](https://my.telegram.org/apps). Create a personal app (NOT a bot).
 2. Open `/plugin` in Claude Code → `ops@ops-marketplace` → Settings. Fill in `telegram_api_id`, `telegram_api_hash`, `telegram_phone` (E.164).
 3. Generate a session string: `node ~/.claude/plugins/cache/ops-marketplace/ops/<latest>/telegram-server/index.js --auth`. Prompts for code + 2FA, prints a `TELEGRAM_SESSION` string.
@@ -186,10 +191,12 @@ After the report, type `YOLO` to hand over the controls — Claude will autonomo
 
 All `ops-*` skills use the `!` shell injection pattern:
 
-```markdown
+````markdown
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-infra 2>/dev/null || echo '{}'
 ```
+````
+
 ```
 
 This runs shell scripts *before* the model context is loaded, so data is pre-gathered with zero extra latency.

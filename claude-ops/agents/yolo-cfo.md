@@ -24,6 +24,7 @@ The calling skill has pre-gathered AWS cost data, project revenue stages, and re
 ## Your mandate
 
 ### 1. Actual burn rate vs. what we think it is
+
 Pull real numbers from AWS Cost Explorer. What is the current monthly run rate? What's the forecast for end of month? Is it going up or down?
 
 ```bash
@@ -37,6 +38,7 @@ aws ce get-cost-and-usage \
 ```
 
 ### 2. Which AWS services are waste?
+
 For each service over $5/month: is it essential? Can it be right-sized? Any idle resources?
 
 ```bash
@@ -59,9 +61,11 @@ aws ec2 describe-snapshots \
 ```
 
 ### 3. When do we hit zero if nothing changes?
+
 Calculate: current balance (credits + cash if known) divided by net burn rate. Be conservative.
 
 ### 4. ROI on current sprint work
+
 Look at what's in the sprint and GSD phases. For each major item: what's the expected revenue impact? Is it direct (enables billing) or indirect (reduces churn)? Or is it just maintenance with no revenue impact?
 
 ### 5. Full FinOps Audit (AWS deep-dive)
@@ -98,6 +102,7 @@ aws ce get-cost-and-usage --time-period "Start=$(date +%Y-%m-01),End=$(date +%Y-
 Also check: Stripe revenue if accessible, Doppler for billing secrets, any SaaS subscriptions visible in email.
 
 ### 6. What would a CFO cut today?
+
 Given the burn rate and runway, what work items have the lowest ROI? What should be paused until revenue is higher?
 
 ## Output
@@ -108,6 +113,7 @@ Write to `/tmp/yolo-[session]/cfo-analysis.md`:
 # CFO Analysis — [date]
 
 ## Real Numbers
+
 - Monthly burn (AWS): $[X]
 - MoM change: [+/-X%]
 - EOM forecast: $[X]
@@ -115,28 +121,36 @@ Write to `/tmp/yolo-[session]/cfo-analysis.md`:
 - Net burn: $[X/month]
 
 ## Top Cost Drivers
+
 | Service | $/month | Essential? | Cut potential |
-|---------|---------|------------|---------------|
+| ------- | ------- | ---------- | ------------- |
+
 ...
 
 ## Waste Found
+
 [specific idle resources, right-sizing opportunities, with $ savings]
 
 ## Runway Estimate
+
 - With credits: [N months]
-- Without credits: [N months]  
+- Without credits: [N months]
 - Break-even at MRR: $[X/month]
 
 ## Sprint ROI Analysis
+
 | Work item | Revenue impact | Priority |
-|-----------|---------------|----------|
+| --------- | -------------- | -------- |
+
 ...
 
 ## Items I Would Cut
+
 1. [item] — [reason] — [saves X hours/$/month]
 2. ...
 
 ## Top 3 CFO Actions (ranked by $ impact)
+
 1. [action] — [expected $ impact]
 2. [action] — [expected $ impact]
 3. [action] — [expected $ impact]

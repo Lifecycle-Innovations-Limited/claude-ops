@@ -38,12 +38,12 @@ Analyze the pre-gathered data. Then run parallel checks:
 
 Classify each issue by severity:
 
-| Severity | Criteria |
-|----------|----------|
-| CRITICAL | Service down, DB unreachable, auth broken |
-| HIGH | Elevated error rate, deploy stuck, CI main broken |
-| MEDIUM | Non-critical service degraded, flaky tests |
-| LOW | Warning-level, non-urgent |
+| Severity | Criteria                                          |
+| -------- | ------------------------------------------------- |
+| CRITICAL | Service down, DB unreachable, auth broken         |
+| HIGH     | Elevated error rate, deploy stuck, CI main broken |
+| MEDIUM   | Non-critical service degraded, flaky tests        |
+| LOW      | Warning-level, non-urgent                         |
 
 ---
 
@@ -92,6 +92,7 @@ If no fires: show "ALL SYSTEMS OPERATIONAL" with last-checked timestamps.
 ## Dispatch fix agent
 
 When user selects to fix an issue, spawn an Agent with:
+
 - The error details and logs
 - Access to the relevant repo
 - Instruction to create a feature branch, fix, and open a PR

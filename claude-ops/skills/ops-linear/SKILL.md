@@ -28,6 +28,7 @@ allowed-tools:
 ## Phase 1 — Load data
 
 Run in parallel:
+
 1. `mcp__claude_ai_Linear__list_teams` — get all team IDs
 2. `mcp__claude_ai_Linear__list_cycles` — get current and upcoming cycles per team
 3. `mcp__claude_ai_Linear__list_users` — get team members
@@ -38,14 +39,14 @@ Then fetch issues for the current cycle: `mcp__claude_ai_Linear__list_issues` fi
 
 ## Route by `$ARGUMENTS`
 
-| Argument | Action |
-|----------|--------|
-| (empty), sprint | Show current sprint board |
-| backlog | Show unassigned/unscheduled issues |
-| create [title] | Create a new issue (prompt for details) |
-| update [id] | Update issue by ID |
-| sync | Sync GSD phases to Linear issues |
-| [issue-id] | Show and edit that specific issue |
+| Argument        | Action                                  |
+| --------------- | --------------------------------------- |
+| (empty), sprint | Show current sprint board               |
+| backlog         | Show unassigned/unscheduled issues      |
+| create [title]  | Create a new issue (prompt for details) |
+| update [id]     | Update issue by ID                      |
+| sync            | Sync GSD phases to Linear issues        |
+| [issue-id]      | Show and edit that specific issue       |
 
 ---
 
@@ -87,6 +88,7 @@ BLOCKED / CANCELLED
 ## Create issue flow
 
 Collect from user (or parse from `$ARGUMENTS`):
+
 - Title
 - Team (list choices if ambiguous)
 - Priority (urgent/high/medium/low)
@@ -101,6 +103,7 @@ Use `mcp__claude_ai_Linear__save_issue` to create. Confirm: `Created [id]: [titl
 ## GSD sync flow
 
 Read all active GSD STATE.md files across projects. For each active phase:
+
 1. Check if a Linear issue exists with matching phase reference.
 2. If not, offer to create one.
 3. If status differs (GSD says done, Linear says in-progress), offer to sync.
