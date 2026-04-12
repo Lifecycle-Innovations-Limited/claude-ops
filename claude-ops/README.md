@@ -36,7 +36,7 @@ The setup wizard (`/ops:setup`) walks through each one interactively. You choose
 | ------------------ | --------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `gh` (GitHub CLI)  | Yes (Homebrew)                                            | PRs, CI logs, issue triage, merge pipeline — used by 8+ skills                     |
 | `aws` (AWS CLI)    | Yes (Homebrew)                                            | ECS health, Cost Explorer, CloudWatch — used by ops-fires, ops-revenue, ops-deploy |
-| `wacli` (WhatsApp) | Manual ([source](https://github.com/auroracapital/wacli)) | WhatsApp inbox, send/read, contact lookup — no MCP equivalent exists               |
+| `wacli` (WhatsApp) | Manual (see wacli README)                                 | WhatsApp inbox, send/read, contact lookup — no MCP equivalent exists               |
 | Node.js 18+        | Yes (Homebrew)                                            | Runs the bundled Telegram MCP server                                               |
 
 #### MCP-only (no CLI needed)

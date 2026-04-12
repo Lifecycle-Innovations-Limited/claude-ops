@@ -156,12 +156,12 @@ After installation, re-run `ops-setup-detect` to refresh status before continuin
 
 ### GSD (Get Shit Done)
 
-GSD is a third-party Claude Code plugin that adds project roadmap tracking. When installed, claude-ops dashboards (`/ops:go`, `/ops:projects`, `/ops:next`, `/ops:yolo`) automatically show active phases, progress, and next actions per project. Without it, those sections are simply omitted.
+GSD is a Claude Code skill package that adds project roadmap tracking. When installed, claude-ops dashboards (`/ops:go`, `/ops:projects`, `/ops:next`, `/ops:yolo`) automatically show active phases, progress, and next actions per project. Without it, those sections are simply omitted.
 
 Check if GSD is already installed:
 
 ```bash
-ls ~/.claude/plugins/cache/*/gsd*/skills/gsd-progress/SKILL.md 2>/dev/null && echo "installed" || echo "not_installed"
+ls ~/.claude/skills/gsd-progress/SKILL.md 2>/dev/null && echo "installed" || echo "not_installed"
 ```
 
 If not installed, ask via `AskUserQuestion`:
@@ -172,39 +172,22 @@ GSD adds project roadmap tracking to your ops dashboards.
   /ops:projects shows GSD state alongside CI/PR status
   /ops:next factors in GSD work priority
 
-  [Install GSD (latest)] [Skip — I don't need roadmap tracking]
+  [Install GSD (recommended)] [Skip — I don't need roadmap tracking]
 ```
 
-On install, **attempt fully automated installation — the user must never have to leave the setup flow**:
+On `[Install GSD (recommended)]`, run:
 
 ```bash
-# Attempt 1: claude plugin CLI (may not exist in all Claude Code versions)
-if command -v claude &>/dev/null; then
-  claude plugin marketplace add auroracapital/get-shit-done 2>/dev/null
-  claude plugin install gsd@auroracapital-get-shit-done 2>/dev/null
-  echo "GSD installed — will activate on next session reload"
-fi
+npx get-shit-done install
 ```
 
-If `claude plugin` CLI is not available (exits non-zero or produces "unknown command"), fall back to invoking it within the session:
+This installs GSD skills and agents directly into `~/.claude/skills/` and `~/.claude/agents/`. After install, re-verify:
 
 ```bash
-# Attempt 2: invoke via claude -p (non-interactive single-prompt mode)
-claude -p "/plugin marketplace add auroracapital/get-shit-done" 2>/dev/null
+ls ~/.claude/skills/gsd-progress/SKILL.md 2>/dev/null && echo "installed" || echo "not_installed"
 ```
 
-If that also fails, do NOT ask the user to run anything manually. Instead:
-
-1. Tell the user: `"I'll install GSD right after setup completes — just confirm 'yes' when I ask."`
-2. After Step 8 (final summary), run `/plugin marketplace add auroracapital/get-shit-done` as a follow-up Skill tool call within this session.
-3. Then run `/plugin install gsd@auroracapital-get-shit-done` as a second follow-up.
-
-After any successful installation path, re-verify with:
-```bash
-ls ~/.claude/plugins/cache/*/gsd*/skills/gsd-progress/SKILL.md 2>/dev/null && echo "installed" || echo "not_installed"
-```
-
-Report `✓ GSD installed` on success. Record `plugins.gsd = "installed"` in `$PREFS_PATH`. If the install failed after all attempts, record `plugins.gsd = "pending"` and add it to the final summary as a follow-up action — but never block the wizard or ask the user to do it themselves.
+Report `✓ GSD installed` on success. Record `plugins.gsd = "installed"` in `$PREFS_PATH`. If install fails, record `plugins.gsd = "failed"` and note the error — but never block the wizard or ask the user to do it themselves.
 
 ---
 
@@ -429,7 +412,7 @@ If the autolink script exits non-zero or produces an error containing `selectors
 **Privacy notes for the user** (show once at start):
 
 - The phone number and all credentials stay on your machine. The wizard never transmits them anywhere except to Telegram's own servers during the HTTP login flow.
-- If you already have a gram.js / Telethon session for another project, you can skip this and paste those values manually into `/plugin settings`.
+- If you already have a gram.js / Telethon session for another project, you can skip this and re-run `/ops:setup telegram` to wire it in.
 - If Telegram replies "Sorry, too many tries. Please try again later." your account is rate-limited for ~8 hours — the wizard cannot bypass this. Wait and retry.
 
 ### 3b — WhatsApp (doctor + self-heal + backfill)
@@ -441,9 +424,7 @@ WhatsApp is the channel that most often breaks silently. The wizard must **auto-
 Run `command -v wacli`. If missing, ask `AskUserQuestion`: `[Show install docs]`, `[Skip WhatsApp]`. On install docs, print:
 
 ```
-wacli is not on Homebrew. Install:
-  git clone https://github.com/auroracapital/wacli ~/src/wacli
-  cd ~/src/wacli && go build -o /usr/local/bin/wacli ./cmd/wacli
+wacli is not on Homebrew — see the wacli README for install instructions.
 ```
 
 and stop this sub-flow.
@@ -597,9 +578,7 @@ If `gog` is not on PATH, look at the detector's `mcp_configured` array for any e
    ```
 5. On "Install gog instead", print:
    ```
-   gog is a private CLI — install from source:
-     git clone https://github.com/auroracapital/gog ~/.gog && cd ~/.gog && ./install.sh
-   Or ask Sam for the latest release binary.
+   gog is not on Homebrew — see the gog README for install instructions.
    ```
    Then stop this sub-flow (don't attempt to `brew install` — gog isn't on Homebrew).
 
@@ -671,15 +650,10 @@ Sub-flow:
 7. **Wire into Claude Code plugin settings.** Print instructions:
 
    ```
-   Slack tokens saved to keychain. To activate the MCP, Claude Code needs them
-   in ~/.claude.json. Since this skill can't write to ~/.claude.json directly,
-   either:
-     a) Run: claude mcp add slack --transport stdio -- npx -y slack-mcp-server@latest --transport stdio
-        and Claude Code will prompt for the env vars.
-     b) Manually paste the xoxc + xoxd into /plugin settings for the Slack MCP.
+   Slack tokens saved to keychain. To activate the MCP, run:
+     claude mcp add slack --transport stdio -- npx -y slack-mcp-server@latest --transport stdio
+   Claude Code will prompt for the env vars.
    ```
-
-   (The reason we don't auto-write: per user-level feedback, ~/.claude.json is a Claude Code internal file and the plugin must not touch it. MCP registration is Claude Code's responsibility.)
 
 8. **Smoke test**: call `https://slack.com/api/conversations.list?limit=1` with the tokens. Expect `ok:true` with at least one channel in the response.
 
@@ -729,7 +703,7 @@ Calendar isn't a messaging channel, but every other ops skill (briefings, `/ops-
       If you want ops-next to auto-block focus time or ops-comms to confirm
       meetings, install `gog` instead.
    ```
-7. On "Install gog instead", print the same gog install snippet as Step 3c.
+7. On "Install gog instead", print the same gog install message as Step 3c.
 
 #### Neither available
 
@@ -792,7 +766,7 @@ Found these git repositories on your filesystem. Select the ones to add to your 
 For each selected project, collect these fields one `AskUserQuestion` at a time:
 
 - `alias` (short name, required — suggest the directory name as default)
-- `org` (GitHub org or owner, e.g. `auroracapital` or `Lifecycle-Innovations-Limited`)
+- `org` (GitHub org or owner, e.g. `my-org` or `Lifecycle-Innovations-Limited`)
 - `infra.platform` → select `[aws]`, `[vercel]`, `[cloudflare]`, `[other]`
 - `revenue.model` → select `[saas]`, `[subscription]`, `[marketplace]`, `[internal]`, `[portfolio]`, `[other]`
 
@@ -912,7 +886,7 @@ Re-run the detector and present a final status dashboard:
  ✓ Registry:   20 projects
  ✓ Prefs:      saved to ~/.claude/plugins/data/ops-ops-marketplace/preferences.json
 
- Next: /ops-go for your first briefing
+ You're ready. Type /ops:go for your first briefing.
 ──────────────────────────────────────────────────────
 ```
 

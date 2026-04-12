@@ -247,7 +247,7 @@ if (!apiId || !apiHash) {
     hash: hashInput ? hashInput[1] : "",
     app_title: APP_TITLE,
     app_shortname: APP_SHORT,
-    app_url: "https://github.com/auroracapital/claude-ops",
+    app_url: "https://github.com/claude-ops-marketplace/claude-ops",
     app_platform: "desktop",
     app_desc: "claude-ops — automated operations for Claude Code",
   };
