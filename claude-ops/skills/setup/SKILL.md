@@ -20,6 +20,9 @@ You are running an **interactive configuration wizard** for the `claude-ops` plu
 - Never install anything or write any file without explicit user confirmation via `AskUserQuestion`.
 - Skip sections the user declines. Don't nag.
 - Show what's already configured first, so the user only fills gaps.
+- **Never show the user's real name or email in output unless the user explicitly provided it in THIS session.** Do not read from memory, existing configs, or environment variables to populate display names.
+- Run ALL diagnostic/probe commands in parallel when possible. Use multiple Bash tool calls in a single message. Never run sequential probes when they're independent (e.g., `gog auth status` AND `wacli doctor` AND keychain scouts should all run simultaneously).
+- Background any command that might take >2 seconds (sync, backfill, npm install, brew install).
 - All writes go to one of these paths — and nothing else:
   - **`$PREFS_PATH`** — per-user preferences + secrets. Resolves to `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`. Lives in Claude Code's plugin data dir so it survives plugin reinstalls and version bumps. Never committed to git.
   - **`${CLAUDE_PLUGIN_ROOT}/scripts/registry.json`** — per-user project registry (gitignored in the source repo). `mkdir -p` its parent if missing.
@@ -225,6 +228,16 @@ Rules for the prompt:
 
 ### 3a — Telegram (user-auth via ops-telegram-autolink)
 
+**Always ask before starting the Telegram flow** — even when the user selected "all channels". Use `AskUserQuestion`:
+
+```
+Set up Telegram personal account access?
+  [Yes — enter my phone number and authenticate]
+  [Skip Telegram]
+```
+
+If the user skips, record `channels.telegram = "skipped"` in `$PREFS_PATH` and move on. Do NOT silently mark Telegram as unconfigured — the explicit skip prevents the status header from showing `○ telegram (no token)` as an action item on subsequent runs.
+
 **Bots cannot read user DMs**, so `/ops-inbox telegram` requires a personal-account MCP. The plugin ships `bin/ops-telegram-autolink.mjs` which:
 
 1. Scans scout sources (keychain → ~/.claude.json → shell profiles → Doppler) for previously-extracted `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` / `TELEGRAM_SESSION`.
@@ -232,7 +245,7 @@ Rules for the prompt:
 3. Runs gram.js `client.start()` to generate a session string, bridging the second code via the same file.
 4. Emits final JSON on stdout: `{api_id, api_hash, phone, session}`.
 
-Sub-flow:
+Sub-flow (only runs if user selected Yes above):
 
 1. **Scout first.** Run `${CLAUDE_PLUGIN_ROOT}/bin/ops-slack-autolink --scout-only` equivalent check for Telegram:
 
@@ -322,7 +335,7 @@ Run these in parallel:
 wacli doctor --json 2>&1
 wacli auth status --json 2>&1
 wacli messages list --after="$(date -v-1d +%Y-%m-%d)" --limit=5 --json 2>&1
-wacli chats --json 2>&1 | head -c 4000
+wacli chats list --json 2>&1 | head -c 4000
 ```
 
 Parse:
@@ -381,21 +394,23 @@ This is usually a cold cache. Go to Step 3b.4 (backfill).
 **E. Healthy (messages flowing)**
 If `messages.data.messages` has ≥1 entry from the last 24h, print a ✓ summary and skip to Step 3b.5.
 
-#### Step 3b.4 — Historical backfill (automatic)
+#### Step 3b.4 — Historical backfill (background, silent)
 
 Always run this after a fresh re-pair, AND run it when rule D matches. Never skip unless the user explicitly declines.
 
+Backfill is a background optimization — it should not produce verbose output or alarming status messages. Run it silently and swallow non-fatal errors.
+
 1. Load the top 10 chats by recency:
    ```bash
-   wacli chats --json 2>&1 | jq -r '[.data[] | select(.jid) | {jid, name, last_msg: .last_message_ts}] | sort_by(.last_msg) | reverse | .[0:10]'
+   wacli chats list --json 2>&1 | jq -r '[.data[] | select(.jid) | {jid, name, last_msg: .last_message_ts}] | sort_by(.last_msg) | reverse | .[0:10]'
    ```
-2. Tell the user: `"Running historical backfill on your 10 most-recent chats (up to 50 messages each). This may take 1–2 minutes."`
+2. Tell the user: `"Running historical backfill on your 10 most-recent chats. This runs in the background."` Do not print per-chat progress or 0-message results.
 3. For each chat JID, run **sequentially** (backfill shares the store lock, can't parallelize):
    ```bash
    wacli history backfill --chat="<jid>" --count=50 --requests=2 --wait=30s --idle-exit=5s --json 2>&1
    ```
-4. After each, print a one-line progress: `✓ <name> — N messages backfilled` or `○ <name> — 0 (likely already synced)`.
-5. Re-probe after the loop: `wacli messages list --after="$(date -v-1d +%Y-%m-%d)" --limit=5 --json`. If still empty, tell the user: "Backfill completed but no new messages appeared. This usually means your primary device is offline or the chats haven't had activity. Try again later or check your phone."
+4. **Suppress all per-chat output.** If the command exits non-zero, swallow the error silently — backfill failures are not user-visible events. Do NOT print "0 messages synced", error tracebacks, or explanations about device connectivity.
+5. After the loop completes, print only the final health summary (Step 3b.6).
 
 #### Step 3b.5 — FTS index check (optional)
 
@@ -413,8 +428,10 @@ Don't block on this.
 Write `channels.whatsapp = "wacli"` to `$PREFS_PATH` and print the final ✓ summary:
 
 ```
-✓ WhatsApp — wacli authenticated, N chats, M recent messages
+✓ WhatsApp — wacli authenticated, N chats
 ```
+
+Never include message counts or backfill results in this summary line.
 
 ### 3c — Email
 
@@ -432,7 +449,11 @@ Email has two possible backends, tried in this order:
      then come back and re-run /ops:setup email.
      ```
      Do **not** try to automate the OAuth flow — it needs an interactive browser.
-   - If auth is green, probe with `gog inbox list --limit 1 --json 2>&1 || true` to confirm the token actually works against Gmail. Report ✓/✗.
+   - If auth is green, probe with:
+     ```bash
+     gog gmail labels list --json 2>&1 | head -5
+     ```
+     If this returns JSON containing a `labels` array, gog is authenticated and the Gmail API is working. Report ✓. If the output is an error or empty, treat as broken and instruct the user to re-run `gog auth login`.
    - Record `channels.email = "gog"` in `$PREFS_PATH` and stop here.
 
 #### Fallback: Claude Gmail MCP connector
@@ -514,7 +535,11 @@ Sub-flow:
    - `[Install Playwright now]` → run `cd ${CLAUDE_PLUGIN_ROOT}/telegram-server && npm install playwright && npx playwright install chromium` (background, ~150MB download, report progress).
    - `[Fall back to manual paste]` → go to step 2 manual path.
 
-5. **Validate tokens.** Call `https://slack.com/api/auth.test` with header `Authorization: Bearer <xoxc>` and cookie `d=<xoxd>`. Expect `{"ok":true, "team_id":"T...", "user_id":"U...", "url":"https://<workspace>.slack.com/"}`. If `ok:false`, show the error and re-ask.
+5. **Validate tokens.** Call the Slack auth endpoint with exact syntax:
+   ```bash
+   curl -s -H "Authorization: Bearer XOXC_TOKEN" -b "d=XOXD_TOKEN" "https://slack.com/api/auth.test"
+   ```
+   Expect `{"ok":true, "team_id":"T...", "user_id":"U...", "url":"https://<workspace>.slack.com/"}`. If `ok:false`, show the error and re-ask.
 
 6. **Persist.**
    - Keychain: `security add-generic-password -U -s slack-xoxc -a "$USER" -w "$XOXC"; security add-generic-password -U -s slack-xoxd -a "$USER" -w "$XOXD"`.
@@ -552,10 +577,9 @@ Calendar isn't a messaging channel, but every other ops skill (briefings, `/ops-
 1. Check `gog` on PATH with `command -v gog`.
 2. **If installed and already authed from Step 3c**, probe:
    ```bash
-   gog cal list --max 1 --json 2>&1 || true
-   gog cal events --time-min="$(date -u +%Y-%m-%dT00:00:00Z)" --max 5 --json 2>&1 || true
+   gog cal list --json --max 3 2>&1 | head -20
    ```
-   If either returns events, print `✓ Calendar — gog cal, N calendars, M upcoming events today` and record `channels.calendar = "gog"` in `$PREFS_PATH`. Stop here.
+   If this returns JSON with calendar data, record `channels.calendar = "gog"` in `$PREFS_PATH` and print `✓ Calendar — gog cal`. Stop here.
 3. **If gog is installed but calendar scope is missing** (typical error: `insufficient scope` or `403 insufficient_permissions`), print:
    ```
    Your gog OAuth token doesn't include the calendar scope.
@@ -622,35 +646,102 @@ Offer `[Open Claude Code docs]`, `[Skip]`. Do **not** try to register MCPs from 
 
 ## Step 5 — Build the project registry (if selected)
 
-1. If `registry.json` already has projects, ask: `[Keep existing 19 projects]`, `[Add more projects]`, `[Start from scratch]`.
-2. If "Start from scratch", write an empty skeleton first (`{"version":"1.0","owner":"","projects":[]}`) — **prompt to confirm before overwriting**.
-3. For "Add more", loop:
-   - Ask `AskUserQuestion`: "Add another project?" → `[Yes]`, `[Done]`.
-   - If Yes, collect these fields **one `AskUserQuestion` at a time** (plain text inputs):
-     - `alias` (short name, required)
-     - `paths` (comma-separated absolute paths, required)
-     - `repos` (comma-separated `org/repo`, required)
-     - `type` → select `[monorepo]`, `[multi-repo]`
-     - `infra.platform` → select `[aws]`, `[vercel]`, `[cloudflare]`, `[other]`
-     - `revenue.model` → select `[saas]`, `[subscription]`, `[marketplace]`, `[internal]`, `[portfolio]`, `[other]`
-     - `revenue.stage` → select `[pre-launch]`, `[development]`, `[growth]`, `[active]`
-     - `gsd` → select `[Yes]`, `[No]`
-     - `priority` (1-99, defaults to max+1)
-   - Read the current registry with `jq`, append the new project, write back atomically (`jq ... > tmp && mv tmp registry.json`).
-4. After each addition, print the running count and offer `[Add another]` / `[Done]`.
+### Auto-discover from filesystem
+
+Before asking the user to manually enter projects, scan for existing git repositories:
+
+```bash
+find ~ ~/Projects -maxdepth 2 -name ".git" -type d 2>/dev/null | sed 's|/.git||' | sort
+```
+
+Present the discovered paths to the user via `AskUserQuestion` with `multiSelect: true`:
+
+```
+Found these git repositories on your filesystem. Select the ones to add to your registry:
+  [ ] ~/Projects/healify
+  [ ] ~/Projects/healify-api
+  [ ] ~/Projects/healify-langgraphs
+  [ ] ~/src/sam-manager
+  ...
+  [ ] None — I'll enter projects manually
+```
+
+For each selected project, collect these fields one `AskUserQuestion` at a time:
+
+- `alias` (short name, required — suggest the directory name as default)
+- `org` (GitHub org or owner, e.g. `auroracapital` or `Lifecycle-Innovations-Limited`)
+- `infra.platform` → select `[aws]`, `[vercel]`, `[cloudflare]`, `[other]`
+- `revenue.model` → select `[saas]`, `[subscription]`, `[marketplace]`, `[internal]`, `[portfolio]`, `[other]`
+
+### Existing registry
+
+If `registry.json` already has projects, ask first: `[Keep existing N projects]`, `[Add more projects]`, `[Auto-detect from existing registry]`, `[Start from scratch]`.
+
+- "Keep existing" → skip this step.
+- "Auto-detect from existing registry" → re-read the registry, show a summary of what's already there, and offer to add missing fields or newly-discovered repos.
+- "Start from scratch" → write an empty skeleton first (`{"version":"1.0","owner":"","projects":[]}`) — **prompt to confirm before overwriting**.
+- "Add more" → run the auto-discover scan above, then offer manual entry as a fallback.
+
+### Manual add loop
+
+After auto-discovery (or if the user selects "I'll enter projects manually"):
+
+- Ask `AskUserQuestion`: "Add another project?" → `[Yes]`, `[Done]`.
+- If Yes, collect these fields **one `AskUserQuestion` at a time**:
+  - `alias` (short name, required)
+  - `paths` (comma-separated absolute paths, required)
+  - `repos` (comma-separated `org/repo`, required)
+  - `type` → select `[monorepo]`, `[multi-repo]`
+  - `infra.platform` → select `[aws]`, `[vercel]`, `[cloudflare]`, `[other]`
+  - `revenue.model` → select `[saas]`, `[subscription]`, `[marketplace]`, `[internal]`, `[portfolio]`, `[other]`
+  - `revenue.stage` → select `[pre-launch]`, `[development]`, `[growth]`, `[active]`
+  - `gsd` → select `[Yes]`, `[No]`
+  - `priority` (1-99, defaults to max+1)
+- Read the current registry with `jq`, append the new project, write back atomically (`jq ... > tmp && mv tmp registry.json`).
+- After each addition, print the running count and offer `[Add another]` / `[Done]`.
 
 ---
 
 ## Step 6 — Save preferences (if selected)
 
-Collect (one `AskUserQuestion` each, skip any the user leaves blank):
+Collect these via `AskUserQuestion` — one question each. **Never auto-fill from memory, existing configs, or previous sessions. Always ask explicitly.**
 
-- `owner` (display name for briefings)
-- `primary_project` → select from registry aliases
-- `timezone` → select `[Europe/Amsterdam]`, `[UTC]`, `[America/New_York]`, `[Other — type it]`
-- `briefing_verbosity` → select `[compact]`, `[full]`
-- `yolo_enabled` → select `[Yes]`, `[No]`
-- `default_channels` → multiSelect over configured channels
+1. **Owner name** (free text): "What should Claude call you in briefings?" — no default, no suggestions from memory.
+
+2. **Timezone** (single select with common options):
+   ```
+   Select your timezone:
+     [UTC]
+     [America/New_York]
+     [America/Los_Angeles]
+     [Europe/London]
+     [Europe/Amsterdam]
+     [Asia/Bangkok]
+     [Asia/Tokyo]
+     [Australia/Sydney]
+     [Other — type it]
+   ```
+
+3. **Briefing verbosity** (single select):
+   ```
+   How much detail do you want in briefings?
+     [full]     — complete rundown of all channels, projects, and incidents
+     [compact]  — key signals only, one line per item
+     [minimal]  — just the fires and urgent items
+   ```
+
+4. **Primary project** → select from registry aliases (skip if registry is empty).
+
+5. **YOLO mode** → select `[Yes — auto-approve low-risk actions]`, `[No — always confirm]`.
+
+6. **Default channels** (multiSelect over configured channels only — never show channels that weren't configured in Step 3):
+   ```
+   Which channels should ops skills use by default?
+     [ ] whatsapp
+     [ ] email
+     [ ] telegram
+     [ ] slack
+   ```
 
 Write to `$PREFS_PATH`:
 
@@ -702,6 +793,14 @@ Re-run the detector and present a final status dashboard:
 
 If any required tool is still missing, list it with the exact command to install it and stop short of claiming success.
 
+After displaying the summary, run the completion banner to celebrate the successful setup. Pass the actual counts from the setup session:
+
+```!
+bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-complete --channels <N> --projects <N> --agents 9 --skills 15
+```
+
+Where `<N>` is replaced with the actual number of channels configured and projects registered during this session.
+
 ---
 
 ## Invocation shortcuts
@@ -732,3 +831,78 @@ Empty argument → full wizard from Step 0.
 - **Never** overwrite an existing file without showing the diff and asking.
 - **Never** put secrets in `registry.json` or commit them. Secrets only go in `$PREFS_PATH` (outside the plugin source tree entirely — Claude Code's per-plugin data dir) or the user's shell profile.
 - **Never** touch `~/.claude.json` or `~/.claude/settings.json` — MCP registration is Claude Code's job, not yours.
+- **Never** show the user's real name or email in output unless they explicitly provided it in the current session. Do not read from memory files, existing preferences, or environment variables to populate display names.
+
+---
+
+## Appendix: CLI Reference (EXACT SYNTAX — never guess)
+
+### gog (v0.12.0+)
+
+```bash
+# Auth check
+gog auth status
+
+# Gmail — probe if API works
+gog gmail labels list --json
+
+# Gmail — search (query is positional, NOT --query flag)
+gog gmail search "newer_than:1d" --max 5 --json --results-only
+
+# Gmail — read thread
+gog gmail read THREAD_ID --json
+
+# Gmail — send
+gog gmail send --to "user@example.com" --subject "test" --body "hello"
+
+# Gmail — archive (remove INBOX label)
+gog gmail labels modify MESSAGE_ID --remove INBOX
+
+# Calendar — list today's events (NOT --time-min, use `gog cal list`)
+gog cal list --json --max 10
+
+# Calendar — auth with calendar scope
+gog auth login --scopes=gmail,calendar
+```
+
+### wacli
+
+```bash
+# Health check
+wacli doctor --json
+
+# Auth status
+wacli auth status --json
+
+# List chats (MUST use subcommand `list`)
+wacli chats list --json
+
+# List messages (--after flag uses YYYY-MM-DD)
+wacli messages list --after="$(date -v-1d +%Y-%m-%d)" --limit=5 --json
+
+# Send message
+wacli send --to "JID" --message "text"
+
+# Sync (connect and pull)
+wacli sync
+
+# Backfill history
+wacli history backfill --chat="JID" --count=50 --requests=2 --wait=30s --idle-exit=5s --json
+
+# Contact lookup
+wacli contacts --search "name" --json
+```
+
+### Slack token validation
+
+```bash
+curl -s -H "Authorization: Bearer XOXC_TOKEN" -b "d=XOXD_TOKEN" "https://slack.com/api/auth.test"
+```
+
+### macOS Keychain
+
+```bash
+security find-generic-password -s "KEY_NAME" -w 2>/dev/null
+security add-generic-password -U -s "KEY_NAME" -a "$USER" -w "VALUE"
+security delete-generic-password -s "KEY_NAME" 2>/dev/null
+```
