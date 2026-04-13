@@ -134,16 +134,110 @@ fix_vercel_mcp() {
   fi
 }
 
+# ─── 4. Channel health — detect auth'd but broken channels ──────────────────
+fix_channel_health() {
+  # ── WhatsApp: @lid JID sync + stale connection ──
+  if command -v wacli >/dev/null 2>&1; then
+    DOCTOR=$(wacli doctor --json 2>/dev/null || echo '{"success":false}')
+    WA_AUTH=$(echo "$DOCTOR" | jq -r '.data.authenticated // false' 2>/dev/null)
+    WA_LOCK=$(echo "$DOCTOR" | jq -r '.data.lock_held // false' 2>/dev/null)
+
+    if [ "$WA_AUTH" = "true" ]; then
+      # Kill stale lock if held >2 min
+      if [ "$WA_LOCK" = "true" ]; then
+        LOCK_PID=$(echo "$DOCTOR" | jq -r '.data.lock_info' 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2)
+        if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
+          log_fix "wacli-health: killed stale lock holder (pid=$LOCK_PID)"
+          kill "$LOCK_PID" 2>/dev/null; sleep 2
+          kill -0 "$LOCK_PID" 2>/dev/null && kill -9 "$LOCK_PID" 2>/dev/null
+        fi
+      fi
+
+      # Check @lid JIDs with empty messages
+      LID_EMPTY=0
+      for jid in $(wacli chats list --json 2>/dev/null | jq -r '.data[] | select(.jid | contains("@lid")) | .jid' 2>/dev/null | head -5); do
+        MSG_COUNT=$(wacli messages list --chat "$jid" --limit 3 --json 2>/dev/null | jq -r '.data.messages | length' 2>/dev/null || echo "0")
+        [ "$MSG_COUNT" = "0" ] && LID_EMPTY=$((LID_EMPTY + 1))
+      done
+
+      if [ "$LID_EMPTY" -gt 0 ]; then
+        if timeout 30 wacli sync 2>/dev/null; then
+          log_fix "wacli-health: synced @lid chats ($LID_EMPTY had empty messages)"
+        else
+          log_fail "wacli-health: sync timed out"
+        fi
+      fi
+
+      # Check for zero recent messages (auth'd but dead session)
+      RECENT=$(wacli messages list --after="$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d '1 day ago' +%Y-%m-%d)" --limit 1 --json 2>/dev/null | jq -r '.data.messages | length' 2>/dev/null || echo "0")
+      if [ "$RECENT" = "0" ]; then
+        # Try sync first
+        timeout 30 wacli sync 2>/dev/null
+        RECENT2=$(wacli messages list --after="$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d '1 day ago' +%Y-%m-%d)" --limit 1 --json 2>/dev/null | jq -r '.data.messages | length' 2>/dev/null || echo "0")
+        if [ "$RECENT2" = "0" ]; then
+          log_fail "wacli-health: auth'd but 0 messages in 24h (likely app-state key desync — needs re-pair)"
+        else
+          log_fix "wacli-health: sync restored message flow"
+        fi
+      else
+        log_skip "wacli-health: messages flowing normally"
+      fi
+    else
+      log_skip "wacli-health: not authenticated"
+    fi
+  fi
+
+  # ── Email (gog): auth'd but API broken ──
+  if command -v gog >/dev/null 2>&1; then
+    GOG_AUTH=$(gog auth status 2>&1)
+    if echo "$GOG_AUTH" | grep -qi "authenticated\|logged in\|valid"; then
+      GOG_TEST=$(gog gmail labels list --json 2>/dev/null | head -5)
+      if [ -z "$GOG_TEST" ] || echo "$GOG_TEST" | grep -qi "error\|failed"; then
+        log_fail "gog-health: authenticated but Gmail API failing (token may need refresh — run gog auth login)"
+      else
+        log_skip "gog-health: email working"
+      fi
+    else
+      log_skip "gog-health: not authenticated"
+    fi
+  fi
+
+  # ── Slack: tokens in keychain but expired ──
+  XOXC=$(security find-generic-password -s slack-xoxc -w 2>/dev/null || echo "")
+  if [ -n "$XOXC" ]; then
+    XOXD=$(security find-generic-password -s slack-xoxd -w 2>/dev/null || echo "")
+    SLACK_OK=$(curl -s -H "Authorization: Bearer $XOXC" -b "d=$XOXD" "https://slack.com/api/auth.test" 2>/dev/null | jq -r '.ok // false' 2>/dev/null || echo "false")
+    if [ "$SLACK_OK" != "true" ]; then
+      log_fail "slack-health: tokens in keychain are expired (re-run /ops:setup slack)"
+    else
+      log_skip "slack-health: tokens valid"
+    fi
+  fi
+
+  # ── Telegram: session in keychain but expired ──
+  TG_SESSION=$(security find-generic-password -s telegram-session -w 2>/dev/null || echo "")
+  if [ -n "$TG_SESSION" ]; then
+    TG_API_ID=$(security find-generic-password -s telegram-api-id -w 2>/dev/null || echo "")
+    if [ -z "$TG_API_ID" ]; then
+      log_fail "telegram-health: session exists but api_id missing from keychain"
+    else
+      log_skip "telegram-health: credentials present (runtime validation requires MCP)"
+    fi
+  fi
+}
+
 # ─── Run fixes ───────────────────────────────────────────────────────────────
 case "$FIX_TARGET" in
   all)
     fix_wacli_fts
+    fix_channel_health
     fix_slack_mcp
     fix_vercel_mcp
     ;;
-  wacli-fts)   fix_wacli_fts ;;
-  slack-mcp)   fix_slack_mcp ;;
-  vercel-mcp)  fix_vercel_mcp ;;
+  wacli-fts)        fix_wacli_fts ;;
+  channel-health)   fix_channel_health ;;
+  slack-mcp)        fix_slack_mcp ;;
+  vercel-mcp)       fix_vercel_mcp ;;
   *)
     echo "Unknown fix target: $FIX_TARGET" >&2
     exit 1
