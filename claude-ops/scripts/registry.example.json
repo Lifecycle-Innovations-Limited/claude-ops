@@ -1,0 +1,48 @@
+{
+  "version": "1.0",
+  "owner": "Your Name",
+  "projects": [
+    {
+      "alias": "example-project",
+      "paths": ["~/Projects/example-project"],
+      "repos": ["your-github-org/example-project"],
+      "org": "your-github-org",
+      "type": "monorepo",
+      "infra": {
+        "platform": "vercel"
+      },
+      "revenue": {
+        "model": "saas",
+        "stage": "pre-launch",
+        "target_date": "2026-12-31"
+      },
+      "gsd": true,
+      "priority": 1
+    },
+    {
+      "alias": "example-multi-repo",
+      "paths": [
+        "~/Projects/example-api",
+        "~/Projects/example-web",
+        "~/Projects/example-mobile"
+      ],
+      "repos": [
+        "your-github-org/example-api",
+        "your-github-org/example-web",
+        "your-github-org/example-mobile"
+      ],
+      "org": "your-github-org",
+      "type": "multi-repo",
+      "infra": {
+        "ecs_clusters": ["example-production", "example-staging"],
+        "platform": "aws"
+      },
+      "revenue": {
+        "model": "subscription",
+        "stage": "growth"
+      },
+      "gsd": true,
+      "priority": 2
+    }
+  ]
+}

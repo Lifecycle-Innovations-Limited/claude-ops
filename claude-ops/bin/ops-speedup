@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# ops-speedup — Cross-platform system scan & cleanup report
+# Auto-detects OS (macOS/Linux/WSL) and outputs JSON diagnostic data
+set -euo pipefail
+
+# --- Color setup ---
+if [[ -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
+  RST=$'\033[0m'; DIM=$'\033[2m'; CYN=$'\033[36m'; BCYN=$'\033[1;36m'; BWHT=$'\033[1;37m'
+  GRN=$'\033[32m'; BGRN=$'\033[1;32m'; RED=$'\033[31m'; BRED=$'\033[1;31m'; YLW=$'\033[33m'
+else
+  RST="" DIM="" CYN="" BCYN="" BWHT="" GRN="" BGRN="" RED="" BRED="" YLW=""
+fi
+
+# --- OS Detection ---
+OS="unknown"
+DISTRO=""
+case "$(uname -s)" in
+  Darwin)  OS="macos" ;;
+  Linux)
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+      OS="wsl"
+    else
+      OS="linux"
+    fi
+    if [ -f /etc/os-release ]; then
+      DISTRO=$(. /etc/os-release && echo "${ID:-unknown}")
+    fi
+    ;;
+  MINGW*|MSYS*|CYGWIN*) OS="windows" ;;
+esac
+
+# --- Hardware ---
+if [ "$OS" = "macos" ]; then
+  CPU=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "unknown")
+  RAM_BYTES=$(sysctl -n hw.memsize 2>/dev/null || echo "0")
+  RAM_GB=$(( RAM_BYTES / 1073741824 ))
+  CHIP=$(sysctl -n machdep.cpu.brand_string 2>/dev/null | grep -qi "apple" && echo "apple_silicon" || echo "intel")
+  DISK_TOTAL=$(df -g / 2>/dev/null | awk 'NR==2{print $2}' || echo "?")
+  DISK_AVAIL=$(df -g / 2>/dev/null | awk 'NR==2{print $4}' || echo "?")
+  DISK_USED_PCT=$(df -g / 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5}' || echo "?")
+  MACOS_VER=$(sw_vers -productVersion 2>/dev/null || echo "?")
+else
+  CPU=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | xargs || echo "unknown")
+  RAM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+  RAM_GB=$(( RAM_KB / 1048576 ))
+  CHIP="x86_64"
+  [ "$(uname -m)" = "aarch64" ] && CHIP="arm64"
+  DISK_TOTAL=$(df -BG / 2>/dev/null | awk 'NR==2{gsub(/G/,"",$2); print $2}' || echo "?")
+  DISK_AVAIL=$(df -BG / 2>/dev/null | awk 'NR==2{gsub(/G/,"",$4); print $4}' || echo "?")
+  DISK_USED_PCT=$(df / 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5}' || echo "?")
+  MACOS_VER=""
+fi
+
+# --- Render header ---
+printf '\n'
+printf '  %s%s╔══════════════════════════════════════════════════════════════╗%s\n' "$DIM" "$CYN" "$RST"
+printf '  %s%s║%s                                                              %s%s║%s\n' "$DIM" "$CYN" "$RST" "$DIM" "$CYN" "$RST"
+printf '  %s%s║%s   %sSYSTEM SPEEDUP%s  %s%-47s%s%s║%s\n' "$DIM" "$CYN" "$RST" "$BWHT" "$RST" "$DIM" "$OS | $(uname -m)" "$RST" "$DIM$CYN" "$RST"
+printf '  %s%s║%s                                                              %s%s║%s\n' "$DIM" "$CYN" "$RST" "$DIM" "$CYN" "$RST"
+printf '  %s%s╠══════════════════════════════════════════════════════════════╣%s\n' "$DIM" "$CYN" "$RST"
+printf '  %s%s║%s                                                              %s%s║%s\n' "$DIM" "$CYN" "$RST" "$DIM" "$CYN" "$RST"
+
+# --- System info ---
+if [ "$OS" = "macos" ]; then
+  printf '  %s%s║%s   %sCPU%s  %-55s %s%s║%s\n' "$DIM" "$CYN" "$RST" "$BCYN" "$RST" "$CPU" "$DIM" "$CYN" "$RST"
+  printf '  %s%s║%s   %sRAM%s  %sGB  %sDisk%s  %sGB / %sGB (%s%%%s used)%s                   %s%s║%s\n' \
+    "$DIM" "$CYN" "$RST" "$BCYN" "$RST" "$RAM_GB" "$BCYN" "$RST" "$DISK_AVAIL" "$DISK_TOTAL" "$DISK_USED_PCT" "" "$RST" "$DIM" "$CYN" "$RST"
+  printf '  %s%s║%s   %smacOS%s %-53s %s%s║%s\n' "$DIM" "$CYN" "$RST" "$BCYN" "$RST" "$MACOS_VER" "$DIM" "$CYN" "$RST"
+else
+  printf '  %s%s║%s   %sCPU%s  %-55s %s%s║%s\n' "$DIM" "$CYN" "$RST" "$BCYN" "$RST" "$CPU" "$DIM" "$CYN" "$RST"
+  printf '  %s%s║%s   %sRAM%s  %sGB  %sDisk%s  %sGB / %sGB (%s%%%s used)%s                   %s%s║%s\n' \
+    "$DIM" "$CYN" "$RST" "$BCYN" "$RST" "$RAM_GB" "$BCYN" "$RST" "$DISK_AVAIL" "$DISK_TOTAL" "$DISK_USED_PCT" "" "$RST" "$DIM" "$CYN" "$RST"
+fi
+
+printf '  %s%s║%s                                                              %s%s║%s\n' "$DIM" "$CYN" "$RST" "$DIM" "$CYN" "$RST"
+printf '  %s%s╠══════════════════════════════════════════════════════════════╣%s\n' "$DIM" "$CYN" "$RST"
+printf '  %s%s║%s   %sSCANNING...%s                                                %s%s║%s\n' "$DIM" "$CYN" "$RST" "$YLW" "$RST" "$DIM" "$CYN" "$RST"
+printf '  %s%s╚══════════════════════════════════════════════════════════════╝%s\n' "$DIM" "$CYN" "$RST"
+printf '\n'
+
+# --- Output JSON diagnostic data for the skill to consume ---
+# This goes to a separate fd so the visual banner and JSON don't mix
+# The skill reads this via a second invocation with --json flag
+if [ "${1:-}" = "--json" ]; then
+  # Collect reclaimable data
+  BREW_CACHE="0"
+  NPM_CACHE="0"
+  DOCKER_RECLAIMABLE="0"
+  XCODE_DERIVED="0"
+  TRASH_SIZE="0"
+  LOG_SIZE="0"
+  DOWNLOADS_SIZE="0"
+  TMP_SIZE="0"
+
+  if [ "$OS" = "macos" ]; then
+    BREW_CACHE=$(du -sm "$(brew --cache 2>/dev/null)" 2>/dev/null | awk '{print $1}' || echo "0")
+    NPM_CACHE=$(du -sm "$HOME/.npm/_cacache" 2>/dev/null | awk '{print $1}' || echo "0")
+    XCODE_DERIVED=$(du -sm "$HOME/Library/Developer/Xcode/DerivedData" 2>/dev/null | awk '{print $1}' || echo "0")
+    TRASH_SIZE=$(du -sm "$HOME/.Trash" 2>/dev/null | awk '{print $1}' || echo "0")
+    LOG_SIZE=$(du -sm "$HOME/Library/Logs" 2>/dev/null | awk '{print $1}' || echo "0")
+    DOWNLOADS_SIZE=$(du -sm "$HOME/Downloads" 2>/dev/null | awk '{print $1}' || echo "0")
+    TMP_SIZE=$(du -sm /tmp 2>/dev/null | awk '{print $1}' || echo "0")
+    DOCKER_RECLAIMABLE=$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1 | grep -oE '[0-9]+' || echo "0")
+  else
+    NPM_CACHE=$(du -sm "$HOME/.npm/_cacache" 2>/dev/null | awk '{print $1}' || echo "0")
+    TRASH_SIZE=$(du -sm "$HOME/.local/share/Trash" 2>/dev/null | awk '{print $1}' || echo "0")
+    LOG_SIZE=$(du -sm /var/log 2>/dev/null | awk '{print $1}' || echo "0")
+    TMP_SIZE=$(du -sm /tmp 2>/dev/null | awk '{print $1}' || echo "0")
+    DOCKER_RECLAIMABLE=$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1 | grep -oE '[0-9]+' || echo "0")
+  fi
+
+  # Memory pressure
+  if [ "$OS" = "macos" ]; then
+    MEM_PRESSURE=$(memory_pressure 2>/dev/null | grep "System-wide memory free percentage" | grep -oE '[0-9]+' || echo "?")
+    SWAP_USED=$(sysctl -n vm.swapusage 2>/dev/null | grep -oE 'used = [0-9.]+' | grep -oE '[0-9.]+' || echo "0")
+  else
+    MEM_AVAIL=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+    MEM_TOTAL=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "1")
+    MEM_PRESSURE=$(( (MEM_TOTAL - MEM_AVAIL) * 100 / MEM_TOTAL ))
+    SWAP_USED=$(grep SwapTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+  fi
+
+  # Process count & top consumers
+  PROC_COUNT=$(ps aux 2>/dev/null | wc -l | tr -d ' ')
+  TOP_CPU=$(ps aux --sort=-%cpu 2>/dev/null | head -6 | tail -5 || ps aux -r 2>/dev/null | head -6 | tail -5 || echo "unavailable")
+  TOP_MEM=$(ps aux --sort=-%mem 2>/dev/null | head -6 | tail -5 || ps aux -m 2>/dev/null | head -6 | tail -5 || echo "unavailable")
+
+  # DNS response time
+  DNS_TIME=$(dig google.com +time=3 +tries=1 2>/dev/null | grep "Query time" | grep -oE '[0-9]+' || echo "?")
+
+  # Startup items (macOS)
+  LOGIN_ITEMS="0"
+  LAUNCH_AGENTS="0"
+  if [ "$OS" = "macos" ]; then
+    LOGIN_ITEMS=$(osascript -e 'tell application "System Events" to count of login items' 2>/dev/null || echo "?")
+    LAUNCH_AGENTS=$(ls ~/Library/LaunchAgents/ 2>/dev/null | wc -l | tr -d ' ')
+  fi
+
+  cat <<ENDJSON
+{
+  "os": "$OS",
+  "distro": "$DISTRO",
+  "chip": "$CHIP",
+  "cpu": "$CPU",
+  "ram_gb": $RAM_GB,
+  "disk_total_gb": "${DISK_TOTAL}",
+  "disk_avail_gb": "${DISK_AVAIL}",
+  "disk_used_pct": "${DISK_USED_PCT}",
+  "macos_version": "$MACOS_VER",
+  "reclaimable_mb": {
+    "brew_cache": $BREW_CACHE,
+    "npm_cache": $NPM_CACHE,
+    "xcode_derived": $XCODE_DERIVED,
+    "docker": $DOCKER_RECLAIMABLE,
+    "trash": $TRASH_SIZE,
+    "logs": $LOG_SIZE,
+    "downloads": $DOWNLOADS_SIZE,
+    "tmp": $TMP_SIZE
+  },
+  "memory": {
+    "pressure_pct": "$MEM_PRESSURE",
+    "swap_used_mb": "$SWAP_USED"
+  },
+  "processes": {
+    "count": $PROC_COUNT
+  },
+  "network": {
+    "dns_ms": "$DNS_TIME"
+  },
+  "startup": {
+    "login_items": "$LOGIN_ITEMS",
+    "launch_agents": $LAUNCH_AGENTS
+  }
+}
+ENDJSON
+fi

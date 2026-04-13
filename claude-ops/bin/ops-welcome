@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# ops-welcome — First-run animated welcome banner for claude-ops
+# Called by SessionStart hook. Prints nothing if preferences.json already exists.
+set -euo pipefail
+
+# --- First-run gate ---
+PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+[ ! -f "$PREFS" ] || exit 0
+
+# --- Color setup (degrade gracefully) ---
+if [[ -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
+  RST=$'\033[0m'
+  BOLD=$'\033[1m'
+  DIM=$'\033[2m'
+  CYN=$'\033[36m'
+  GRN=$'\033[32m'
+  YLW=$'\033[33m'
+  WHT=$'\033[37m'
+  BCYN=$'\033[1;36m'
+  BGRN=$'\033[1;32m'
+  BWHT=$'\033[1;37m'
+else
+  RST="" BOLD="" DIM="" CYN="" GRN="" YLW="" WHT="" BCYN="" BGRN="" BWHT=""
+fi
+
+# --- Helpers ---
+D=0.025  # delay between lines
+p() { printf '%s\n' "$1"; sleep "$D"; }
+dp() { sleep "${2:-0.08}"; printf '%s\n' "$1"; }
+
+# --- Blank line spacer ---
+p ""
+
+# --- Logo reveal ---
+p "${DIM}${CYN}  ╔══════════════════════════════════════════════════╗${RST}"
+p "${DIM}${CYN}  ║${RST}                                                  ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}   ${BCYN}░█████╗░██╗░░░░░░█████╗░██╗░░░██╗██████╗░${RST}   ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}   ${BCYN}██╔══██╗██║░░░░░██╔══██╗██║░░░██║██╔══██╗${RST}   ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}   ${BCYN}██║░░╚═╝██║░░░░░███████║██║░░░██║██║░░██║${RST}   ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}   ${BCYN}██║░░██╗██║░░░░░██╔══██║██║░░░██║██║░░██║${RST}   ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}   ${BCYN}╚█████╔╝███████╗██║░░██║╚██████╔╝██████╔╝${RST}   ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}   ${BCYN}░╚════╝░╚══════╝╚═╝░░╚═╝░╚═════╝░╚═════╝░${RST}  ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}                                                  ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}   ${BWHT}░█████╗░██████╗░░██████╗${RST}   ${DIM}v0.3.0${RST}            ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}   ${BWHT}██╔══██╗██╔══██╗██╔════╝${RST}                      ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}   ${BWHT}██║░░██║██████╔╝╚█████╗░${RST}   ${DIM}Business OS${RST}      ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}   ${BWHT}██║░░██║██╔═══╝░░╚═══██╗${RST}   ${DIM}for Claude Code${RST}  ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}   ${BWHT}╚█████╔╝██║░░░░░██████╔╝${RST}                      ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}   ${BWHT}░╚════╝░╚═╝░░░░░╚═════╝░${RST}                     ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ║${RST}                                                  ${DIM}${CYN}║${RST}"
+p "${DIM}${CYN}  ╚══════════════════════════════════════════════════╝${RST}"
+
+sleep 0.15
+
+# --- Boot sequence ---
+p ""
+p "  ${DIM}Initializing systems...${RST}"
+p ""
+
+# Animated progress bars
+progress_step() {
+  local label="$1" fill="$2"
+  local bar=""
+  local empty=""
+  for ((i=0; i<fill; i++)); do bar+="#"; done
+  for ((i=fill; i<16; i++)); do empty+="."; done
+  printf '    %s[%s%s%s%s]%s  %s\n' \
+    "$DIM" "$GRN" "$bar" "$DIM" "$empty" "$RST" "$label"
+  sleep 0.12
+}
+
+progress_step "${WHT}Scanning CLIs${RST}" 4
+progress_step "${WHT}Detecting channels${RST}" 8
+progress_step "${WHT}Loading integrations${RST}" 12
+progress_step "${BGRN}Ready${RST}" 16
+
+sleep 0.1
+
+# --- Dynamic counts ---
+PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SKILL_COUNT=$(ls -d "${PLUGIN_ROOT}/skills"/*/ 2>/dev/null | wc -l | tr -d ' ')
+AGENT_COUNT=$(ls "${PLUGIN_ROOT}/agents"/*.md 2>/dev/null | wc -l | tr -d ' ')
+
+# --- Summary line ---
+p ""
+p "  ${BWHT}${SKILL_COUNT}${RST} skills loaded  ${DIM}|${RST}  ${BWHT}${AGENT_COUNT}${RST} agents standing by"
+p ""
+
+# --- Separator ---
+p "  ${DIM}${CYN}────────────────────────────────────────────────────${RST}"
+p ""
+p "  Run ${BCYN}/ops:setup${RST} to configure your integrations"
+p "  or  ${BCYN}/ops:go${RST}    for your first morning briefing"
+p ""

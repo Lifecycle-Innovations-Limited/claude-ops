@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# ops-dash — Instant pixel-art command center dashboard
+# Renders the visual dashboard shell with live data indicators
+set -euo pipefail
+
+PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REGISTRY="${PLUGIN_ROOT}/scripts/registry.json"
+PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+
+# --- Color setup ---
+if [[ -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
+  RST=$'\033[0m'; BOLD=$'\033[1m'; DIM=$'\033[2m'
+  CYN=$'\033[36m'; GRN=$'\033[32m'; RED=$'\033[31m'; YLW=$'\033[33m'; WHT=$'\033[37m'; MAG=$'\033[35m'; BLU=$'\033[34m'
+  BCYN=$'\033[1;36m'; BGRN=$'\033[1;32m'; BRED=$'\033[1;31m'; BYLW=$'\033[1;33m'; BWHT=$'\033[1;37m'; BMAG=$'\033[1;35m'; BBLU=$'\033[1;34m'
+  BGDIM=$'\033[48;5;236m'; BGDARK=$'\033[48;5;233m'
+else
+  RST="" BOLD="" DIM="" CYN="" GRN="" RED="" YLW="" WHT="" MAG="" BLU=""
+  BCYN="" BGRN="" BRED="" BYLW="" BWHT="" BMAG="" BBLU="" BGDIM="" BGDARK=""
+fi
+
+# --- Helpers ---
+p() { printf '%s\n' "$1"; }
+sp() { printf '%s\n' "$1"; sleep 0.015; }
+
+# --- Check setup ---
+SETUP_OK="true"
+[ -f "$PREFS" ] || SETUP_OK="false"
+
+# --- Quick data probes (parallel, non-blocking) ---
+TMPDIR_DASH=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_DASH"' EXIT
+
+# Fire probes in background
+(
+  if [ -f "$REGISTRY" ]; then
+    PROJECT_COUNT=$(jq '.projects | length' "$REGISTRY" 2>/dev/null || echo "0")
+    FIRE_PROJECTS=$(jq -r '.projects[].infra.ecs_clusters // [] | .[]' "$REGISTRY" 2>/dev/null | wc -l | tr -d ' ')
+  else
+    PROJECT_COUNT="0"
+    FIRE_PROJECTS="0"
+  fi
+  echo "$PROJECT_COUNT" > "$TMPDIR_DASH/projects"
+  echo "$FIRE_PROJECTS" > "$TMPDIR_DASH/clusters"
+) &
+
+(
+  # PR count
+  PR_COUNT=$(gh pr list --state open --json number 2>/dev/null | jq 'length' 2>/dev/null || echo "?")
+  echo "$PR_COUNT" > "$TMPDIR_DASH/prs"
+) &
+
+(
+  # CI failures (last 24h across repos)
+  FAIL_COUNT=$(gh run list --limit 30 --json conclusion 2>/dev/null | jq '[.[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo "?")
+  echo "$FAIL_COUNT" > "$TMPDIR_DASH/ci_fails"
+) &
+
+(
+  # Unread counts
+  "$PLUGIN_ROOT/bin/ops-unread" 2>/dev/null > "$TMPDIR_DASH/unread.json" || echo '{}' > "$TMPDIR_DASH/unread.json"
+) &
+
+(
+  # GSD active phases
+  GSD_ACTIVE=0
+  if [ -f "$REGISTRY" ]; then
+    for d in $(jq -r '.projects[] | select(.gsd == true) | .paths[]' "$REGISTRY" 2>/dev/null); do
+      expanded="${d/#\~/$HOME}"
+      [ -f "$expanded/.planning/STATE.md" ] && GSD_ACTIVE=$((GSD_ACTIVE + 1))
+    done
+  fi
+  echo "$GSD_ACTIVE" > "$TMPDIR_DASH/gsd"
+) &
+
+(
+  # YOLO reports
+  LATEST_YOLO=""
+  for dir in /tmp/yolo-*/; do
+    [ -f "${dir}ceo-analysis.md" ] && LATEST_YOLO="$dir"
+  done
+  echo "${LATEST_YOLO:-none}" > "$TMPDIR_DASH/yolo"
+) &
+
+wait
+
+# --- Read results ---
+PROJECTS=$(cat "$TMPDIR_DASH/projects" 2>/dev/null || echo "?")
+CLUSTERS=$(cat "$TMPDIR_DASH/clusters" 2>/dev/null || echo "?")
+PRS=$(cat "$TMPDIR_DASH/prs" 2>/dev/null || echo "?")
+CI_FAILS=$(cat "$TMPDIR_DASH/ci_fails" 2>/dev/null || echo "?")
+GSD_ACTIVE=$(cat "$TMPDIR_DASH/gsd" 2>/dev/null || echo "?")
+LATEST_YOLO=$(cat "$TMPDIR_DASH/yolo" 2>/dev/null || echo "none")
+
+# Unread parsing
+UNREAD_JSON=$(cat "$TMPDIR_DASH/unread.json" 2>/dev/null || echo '{}')
+WA_UNREAD=$(echo "$UNREAD_JSON" | jq -r '.whatsapp.count // 0' 2>/dev/null || echo "0")
+EMAIL_UNREAD=$(echo "$UNREAD_JSON" | jq -r '.email.count // 0' 2>/dev/null || echo "0")
+SLACK_UNREAD=$(echo "$UNREAD_JSON" | jq -r '.slack.count // 0' 2>/dev/null || echo "0")
+TOTAL_UNREAD=$((${WA_UNREAD:-0} + ${EMAIL_UNREAD:-0} + ${SLACK_UNREAD:-0}))
+
+# --- Fire indicator ---
+if [ "${CI_FAILS:-0}" != "?" ] && [ "${CI_FAILS:-0}" -gt 0 ] 2>/dev/null; then
+  FIRE_STATUS="${BRED}FIRES DETECTED${RST}"
+  FIRE_ICON="${RED}~${RST}"
+else
+  FIRE_STATUS="${BGRN}ALL CLEAR${RST}"
+  FIRE_ICON="${GRN}~${RST}"
+fi
+
+# --- YOLO indicator ---
+if [ "$LATEST_YOLO" != "none" ]; then
+  YOLO_STATUS="${BCYN}REPORT READY${RST}"
+else
+  YOLO_STATUS="${DIM}no reports${RST}"
+fi
+
+# --- Date ---
+NOW=$(date "+%Y-%m-%d %H:%M")
+DAY=$(date "+%A")
+
+# --- Render dashboard ---
+p ""
+sp "${DIM}${CYN}  ╔══════════════════════════════════════════════════════════════╗${RST}"
+sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BCYN}  ██████╗ ██████╗ ███████╗    ██████╗  █████╗ ███████╗${RST} ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BCYN} ██╔═══██╗██╔══██╗██╔════╝    ██╔══██╗██╔══██╗██╔════╝${RST}${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BCYN} ██║   ██║██████╔╝███████╗    ██║  ██║███████║███████╗${RST} ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BCYN} ██║   ██║██╔═══╝ ╚════██║    ██║  ██║██╔══██║╚════██║${RST} ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BCYN} ╚██████╔╝██║     ███████║    ██████╔╝██║  ██║███████║${RST} ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BCYN}  ╚═════╝ ╚═╝     ╚══════╝    ╚═════╝ ╚═╝  ╚═╝╚══════╝${RST}${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BWHT}COMMAND CENTER${RST}  ${DIM}v0.3.1${RST}        ${DIM}${NOW} ${DAY}${RST}   ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ╠══════════════════════════════════════════════════════════════╣${RST}"
+sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${FIRE_ICON} ${BWHT}STATUS${RST}  ${FIRE_STATUS}    ${DIM}|${RST}  ${BWHT}${TOTAL_UNREAD}${RST} unread  ${DIM}|${RST}  ${BWHT}${PRS}${RST} PRs    ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${DIM}  ${PROJECTS} projects${RST}  ${DIM}|${RST}  ${DIM}${GSD_ACTIVE} GSD active${RST}  ${DIM}|${RST}  ${DIM}${CLUSTERS} clusters${RST}   ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ╠══════════════════════════════════════════════════════════════╣${RST}"
+sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BWHT}QUICK ACTIONS${RST}                    ${BWHT}INTEL${RST}                 ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BCYN}1${RST} ${WHT}Morning briefing${RST}             ${BCYN}6${RST} ${WHT}Revenue & costs${RST}       ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BCYN}2${RST} ${WHT}Inbox zero${RST}                   ${BCYN}7${RST} ${WHT}Linear sprint${RST}         ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BCYN}3${RST} ${WHT}Fire check${RST}                   ${BCYN}8${RST} ${WHT}Deploy status${RST}         ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BCYN}4${RST} ${WHT}Project dashboard${RST}            ${BCYN}9${RST} ${WHT}Triage issues${RST}         ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BCYN}5${RST} ${WHT}What's next?${RST}                 ${BCYN}0${RST} ${WHT}System speedup${RST}        ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BWHT}POWER${RST}                           ${BWHT}COMMS${RST}                ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BMAG}a${RST} ${WHT}YOLO mode${RST}  ${YOLO_STATUS}    ${BCYN}d${RST} ${WHT}Send message${RST}          ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BMAG}b${RST} ${WHT}Auto-merge PRs${RST}               ${BCYN}e${RST} ${WHT}C-suite reports${RST}       ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BMAG}c${RST} ${WHT}Setup wizard${RST}                                       ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ╠══════════════════════════════════════════════════════════════╣${RST}"
+sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BWHT}META${RST}                                                      ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BYLW}f${RST} ${WHT}Settings & config${RST}            ${BYLW}h${RST} ${WHT}Help / FAQ / Wiki${RST}     ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${BYLW}g${RST} ${WHT}Share your setup${RST}             ${DIM}q  Exit${RST}                ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ╚══════════════════════════════════════════════════════════════╝${RST}"
+p ""

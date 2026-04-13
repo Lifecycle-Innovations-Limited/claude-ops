@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# ops-merge-scan — Scan all repos for open PRs with merge readiness data
+# Extended version of ops-prs with CI status, mergeable state, and reviews
+# Used by /ops:merge skill for pre-gathering PR queue
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_DIR="${CLAUDE_PLUGIN_ROOT:-${SCRIPT_DIR}/..}"
+REGISTRY="${PLUGIN_DIR}/scripts/registry.json"
+
+# Optional: scope to a single repo
+FILTER_REPO="${1:-}"
+
+if [ ! -f "$REGISTRY" ]; then
+  echo '{"error":"registry.json not found","prs":[]}' && exit 1
+fi
+
+if ! command -v gh &>/dev/null; then
+  echo '{"error":"gh CLI not found","prs":[]}' && exit 0
+fi
+
+# Collect unique repos (or filter to one)
+if [ -n "$FILTER_REPO" ]; then
+  REPOS="$FILTER_REPO"
+else
+  REPOS=$(jq -r '[.projects[].repos[]] | unique | .[]' "$REGISTRY")
+fi
+
+TMPDIR_OPS=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_OPS"' EXIT
+
+for repo in $REPOS; do
+  (
+    SAFE_NAME=$(echo "$repo" | tr '/' '_')
+    PRS=$(gh pr list --repo "$repo" --state open --limit 15 \
+      --json number,title,headRefName,isDraft,reviewDecision,mergeable,mergeStateStatus,createdAt,author \
+      2>/dev/null || echo '[]')
+
+    if [ "$PRS" != "[]" ] && [ -n "$PRS" ]; then
+      # Enrich each PR with CI status via gh pr view (statusCheckRollup only works there)
+      ENRICHED=$(echo "$PRS" | jq -c '.[]' | while read -r pr; do
+        NUM=$(echo "$pr" | jq -r '.number')
+        # Get CI status for this specific PR
+        CI_JSON=$(gh pr view "$NUM" --repo "$repo" --json statusCheckRollup 2>/dev/null || echo '{"statusCheckRollup":[]}')
+        echo "$pr" | jq --argjson ci "$CI_JSON" '. + {statusCheckRollup: $ci.statusCheckRollup}'
+      done | jq -s '.')
+
+      # Classify each PR
+      CLASSIFIED=$(echo "$ENRICHED" | jq --arg repo "$repo" '[.[] | {
+        repo: $repo,
+        number,
+        title,
+        branch: .headRefName,
+        draft: .isDraft,
+        review: .reviewDecision,
+        mergeable: .mergeable,
+        merge_state: .mergeStateStatus,
+        ci_status: (if (.statusCheckRollup | length) > 0 then
+          (if (.statusCheckRollup | map(select(.conclusion == "FAILURE")) | length) > 0 then "failing"
+           elif (.statusCheckRollup | map(select(.status != "COMPLETED")) | length) > 0 then "pending"
+           else "passing" end)
+        else "unknown" end),
+        ci_failures: [(.statusCheckRollup // [])[] | select(.conclusion == "FAILURE") | .name],
+        created: .createdAt,
+        author: .author.login,
+        classification: (
+          if .isDraft then "draft"
+          elif .mergeable == "CONFLICTING" then "needs-rebase"
+          elif (.statusCheckRollup // [] | map(select(.conclusion == "FAILURE")) | length) > 0 then "needs-ci-fix"
+          elif .reviewDecision == "CHANGES_REQUESTED" then "needs-review-response"
+          elif .mergeStateStatus == "BLOCKED" then "blocked"
+          elif .mergeable == "MERGEABLE" and .reviewDecision == "APPROVED" then "ready"
+          else "unknown" end
+        )
+      }]')
+      echo "$CLASSIFIED" > "$TMPDIR_OPS/$SAFE_NAME.json"
+    fi
+  ) &
+done
+wait
+
+# Assemble flat array of all PRs
+echo -n '{"prs":['
+first=true
+for f in "$TMPDIR_OPS"/*.json; do
+  [ ! -f "$f" ] && continue
+  ITEMS=$(cat "$f")
+  COUNT=$(echo "$ITEMS" | jq 'length')
+  for i in $(seq 0 $((COUNT - 1))); do
+    [ "$first" = true ] && first=false || echo -n ','
+    echo "$ITEMS" | jq ".[$i]"
+  done
+done
+echo '],"scanned_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'

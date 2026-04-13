@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# ops-gather — Master parallel data gatherer
+# Runs all ops-* scripts in parallel, assembles into single JSON
+# This is the primary token-saving mechanism for /ops-go
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TMPDIR_OPS=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_OPS"' EXIT
+
+START_TIME=$(date +%s)
+
+# Run all gatherers in parallel
+"$SCRIPT_DIR/ops-git" > "$TMPDIR_OPS/git.json" 2>/dev/null &
+"$SCRIPT_DIR/ops-infra" > "$TMPDIR_OPS/infra.json" 2>/dev/null &
+"$SCRIPT_DIR/ops-prs" > "$TMPDIR_OPS/prs.json" 2>/dev/null &
+"$SCRIPT_DIR/ops-ci" > "$TMPDIR_OPS/ci.json" 2>/dev/null &
+"$SCRIPT_DIR/ops-unread" > "$TMPDIR_OPS/unread.json" 2>/dev/null &
+wait
+
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+
+# Assemble into single JSON
+jq -n \
+  --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg dur "${DURATION}s" \
+  --slurpfile git "$TMPDIR_OPS/git.json" \
+  --slurpfile infra "$TMPDIR_OPS/infra.json" \
+  --slurpfile prs "$TMPDIR_OPS/prs.json" \
+  --slurpfile ci "$TMPDIR_OPS/ci.json" \
+  --slurpfile unread "$TMPDIR_OPS/unread.json" \
+  '{
+    "timestamp": $ts,
+    "gather_duration": $dur,
+    "git": $git[0],
+    "infrastructure": $infra[0],
+    "pull_requests": $prs[0],
+    "ci_failures": $ci[0],
+    "unread_messages": $unread[0]
+  }'

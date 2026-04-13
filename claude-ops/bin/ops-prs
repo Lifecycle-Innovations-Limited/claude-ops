@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# ops-prs — Open PRs across all registered repos → JSON
+# Reads from registry.json, queries GitHub via gh CLI
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REGISTRY="${SCRIPT_DIR}/../scripts/registry.json"
+
+if [ ! -f "$REGISTRY" ]; then
+  echo '{"error":"registry.json not found"}' && exit 1
+fi
+
+if ! command -v gh &>/dev/null; then
+  echo '{"error":"gh CLI not found","prs":[]}' && exit 0
+fi
+
+# Collect unique repos
+REPOS=$(jq -r '[.projects[].repos[]] | unique | .[]' "$REGISTRY")
+
+TMPDIR_OPS=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_OPS"' EXIT
+
+for repo in $REPOS; do
+  (
+    SAFE_NAME=$(echo "$repo" | tr '/' '_')
+    PRS=$(gh pr list --repo "$repo" --state open --limit 10 \
+      --json number,title,headRefName,isDraft,reviewDecision,createdAt,author 2>/dev/null || echo '[]')
+
+    if [ "$PRS" != "[]" ] && [ -n "$PRS" ]; then
+      echo "{\"repo\":\"$repo\",\"prs\":$PRS}" > "$TMPDIR_OPS/$SAFE_NAME.json"
+    fi
+  ) &
+done
+wait
+
+# Assemble — only repos with PRs
+echo -n '{"repos_with_prs":['
+first=true
+for f in "$TMPDIR_OPS"/*.json; do
+  [ ! -f "$f" ] && continue
+  [ "$first" = true ] && first=false || echo -n ','
+  cat "$f"
+done
+echo ']}'

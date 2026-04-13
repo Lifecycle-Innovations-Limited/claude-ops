@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# ops-setup-complete — Post-setup celebration banner
+# Usage: ops-setup-complete --channels N --projects N --agents N --skills N
+set -euo pipefail
+
+# --- Parse arguments ---
+CHANNELS=0 PROJECTS=0 AGENTS=9 SKILLS=15
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --channels) CHANNELS="$2"; shift 2 ;;
+    --projects) PROJECTS="$2"; shift 2 ;;
+    --agents)   AGENTS="$2";   shift 2 ;;
+    --skills)   SKILLS="$2";   shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+# --- Color setup ---
+if [[ -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
+  RST=$'\033[0m'
+  BOLD=$'\033[1m'
+  DIM=$'\033[2m'
+  CYN=$'\033[36m'
+  GRN=$'\033[32m'
+  YLW=$'\033[33m'
+  BCYN=$'\033[1;36m'
+  BGRN=$'\033[1;32m'
+  BWHT=$'\033[1;37m'
+else
+  RST="" BOLD="" DIM="" CYN="" GRN="" YLW="" BCYN="" BGRN="" BWHT=""
+fi
+
+D=0.025
+p() { printf '%s\n' "$1"; sleep "$D"; }
+
+# --- Header ---
+p ""
+p "  ${DIM}${CYN}╔══════════════════════════════════════════════════╗${RST}"
+p "  ${DIM}${CYN}║${RST}                                                  ${DIM}${CYN}║${RST}"
+p "  ${DIM}${CYN}║${RST}    ${BGRN}SYSTEM ONLINE${RST}                                  ${DIM}${CYN}║${RST}"
+p "  ${DIM}${CYN}║${RST}    ${DIM}claude-ops v0.3.0 configured successfully${RST}       ${DIM}${CYN}║${RST}"
+p "  ${DIM}${CYN}║${RST}                                                  ${DIM}${CYN}║${RST}"
+p "  ${DIM}${CYN}╚══════════════════════════════════════════════════╝${RST}"
+
+sleep 0.1
+p ""
+
+# --- Dashboard ---
+p "  ${DIM}${CYN}┌──────────────────────────────────────────────────┐${RST}"
+p "  ${DIM}${CYN}│${RST}  ${BWHT}OPERATIONAL DASHBOARD${RST}                            ${DIM}${CYN}│${RST}"
+p "  ${DIM}${CYN}├──────────────────────────────────────────────────┤${RST}"
+
+# Channels row
+if [[ "$CHANNELS" -gt 0 ]]; then
+  printf '  %s%s│%s  %s[*]%s Channels     %s%-33s%s%s│%s\n' \
+    "$DIM" "$CYN" "$RST" "$GRN" "$RST" "$BWHT" "$CHANNELS active" "$RST" "$DIM$CYN" "$RST"
+  sleep "$D"
+else
+  printf '  %s%s│%s  %s[ ]%s Channels     %s%-33s%s%s│%s\n' \
+    "$DIM" "$CYN" "$RST" "$YLW" "$RST" "$DIM" "none configured" "$RST" "$DIM$CYN" "$RST"
+  sleep "$D"
+fi
+
+# Projects row
+if [[ "$PROJECTS" -gt 0 ]]; then
+  printf '  %s%s│%s  %s[*]%s Projects     %s%-33s%s%s│%s\n' \
+    "$DIM" "$CYN" "$RST" "$GRN" "$RST" "$BWHT" "$PROJECTS registered" "$RST" "$DIM$CYN" "$RST"
+  sleep "$D"
+else
+  printf '  %s%s│%s  %s[ ]%s Projects     %s%-33s%s%s│%s\n' \
+    "$DIM" "$CYN" "$RST" "$YLW" "$RST" "$DIM" "none registered" "$RST" "$DIM$CYN" "$RST"
+  sleep "$D"
+fi
+
+# Agents row
+printf '  %s%s│%s  %s[*]%s Agents       %s%-33s%s%s│%s\n' \
+  "$DIM" "$CYN" "$RST" "$GRN" "$RST" "$BWHT" "$AGENTS standing by" "$RST" "$DIM$CYN" "$RST"
+sleep "$D"
+
+# Skills row
+printf '  %s%s│%s  %s[*]%s Skills       %s%-33s%s%s│%s\n' \
+  "$DIM" "$CYN" "$RST" "$GRN" "$RST" "$BWHT" "$SKILLS loaded" "$RST" "$DIM$CYN" "$RST"
+sleep "$D"
+
+p "  ${DIM}${CYN}└──────────────────────────────────────────────────┘${RST}"
+
+sleep 0.1
+p ""
+p "  ${DIM}${CYN}────────────────────────────────────────────────────${RST}"
+p ""
+p "  ${BWHT}You're ready.${RST} Type ${BCYN}/ops:go${RST} for your first briefing."
+p ""
