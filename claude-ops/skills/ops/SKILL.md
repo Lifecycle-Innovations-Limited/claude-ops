@@ -31,6 +31,7 @@ Route `$ARGUMENTS` to the correct ops skill:
 | deploy, ship                                  | `/ops-deploy`           |
 | merge, prs, ship-prs                          | `/ops-merge $ARGUMENTS` |
 | marketing, email, klaviyo, ads, meta, seo, campaigns | `/ops:ops-marketing $ARGUMENTS` |
+| ecom, shop, shopify, store, orders, inventory | `/ops:ops-ecom $ARGUMENTS` |
 | yolo                                          | `/ops-yolo`             |
 | doctor, health, fix, diagnose                 | `/ops:ops-doctor`       |
 | speedup, clean, optimize, cleanup             | `/ops:ops-speedup`      |

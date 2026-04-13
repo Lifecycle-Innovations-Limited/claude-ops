@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# ops-ecom-health — Shopify store health check, outputs JSON
+
+set -euo pipefail
+
+# Resolve credentials
+SHOPIFY_STORE="${SHOPIFY_STORE_URL:-}"
+SHOPIFY_TOKEN="${SHOPIFY_ACCESS_TOKEN:-}"
+
+# Doppler fallback
+if [ -z "$SHOPIFY_TOKEN" ] && command -v doppler &>/dev/null; then
+  SHOPIFY_TOKEN=$(doppler secrets get SHOPIFY_ACCESS_TOKEN --plain 2>/dev/null || echo "")
+fi
+if [ -z "$SHOPIFY_STORE" ] && command -v doppler &>/dev/null; then
+  SHOPIFY_STORE=$(doppler secrets get SHOPIFY_STORE_URL --plain 2>/dev/null || echo "")
+fi
+
+if [ -z "$SHOPIFY_STORE" ] || [ -z "$SHOPIFY_TOKEN" ]; then
+  echo '{"error":"missing_credentials","message":"Set SHOPIFY_STORE_URL and SHOPIFY_ACCESS_TOKEN"}'
+  exit 1
+fi
+
+BASE="https://${SHOPIFY_STORE}/admin/api/2024-10"
+AUTH="X-Shopify-Access-Token: ${SHOPIFY_TOKEN}"
+
+# Check API connectivity
+SHOP_RESPONSE=$(curl -s -w "\n%{http_code}" -H "$AUTH" "${BASE}/shop.json" 2>/dev/null || echo -e "\n000")
+SHOP_BODY=$(echo "$SHOP_RESPONSE" | head -1)
+HTTP_CODE=$(echo "$SHOP_RESPONSE" | tail -1)
+
+if [ "$HTTP_CODE" != "200" ]; then
+  echo "{\"error\":\"api_unreachable\",\"http_code\":${HTTP_CODE},\"message\":\"Shopify Admin API returned HTTP ${HTTP_CODE}\"}"
+  exit 1
+fi
+
+SHOP_NAME=$(echo "$SHOP_BODY" | jq -r '.shop.name // "unknown"' 2>/dev/null || echo "unknown")
+SHOP_PLAN=$(echo "$SHOP_BODY" | jq -r '.shop.plan_display_name // "unknown"' 2>/dev/null || echo "unknown")
+SHOP_CURRENCY=$(echo "$SHOP_BODY" | jq -r '.shop.currency // "unknown"' 2>/dev/null || echo "unknown")
+SHOP_DOMAIN=$(echo "$SHOP_BODY" | jq -r '.shop.domain // "unknown"' 2>/dev/null || echo "unknown")
+
+# Active theme
+THEME_RESPONSE=$(curl -s -H "$AUTH" "${BASE}/themes.json" 2>/dev/null || echo '{}')
+ACTIVE_THEME=$(echo "$THEME_RESPONSE" | jq -r '[.themes[] | select(.role == "main")] | .[0] | {id: .id, name: .name, updated: .updated_at}' 2>/dev/null || echo 'null')
+
+# Product count
+PRODUCT_COUNT=$(curl -s -H "$AUTH" "${BASE}/products/count.json" 2>/dev/null | jq '.count // 0' 2>/dev/null || echo 0)
+
+# Order count (last 24h)
+SINCE=$(date -u -v-1d +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "1 day ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u +"%Y-%m-%dT00:00:00Z")
+ORDER_COUNT=$(curl -s -H "$AUTH" "${BASE}/orders/count.json?status=any&created_at_min=${SINCE}" 2>/dev/null | jq '.count // 0' 2>/dev/null || echo 0)
+
+# Unfulfilled orders
+UNFULFILLED_COUNT=$(curl -s -H "$AUTH" "${BASE}/orders/count.json?fulfillment_status=unfulfilled&status=open" 2>/dev/null | jq '.count // 0' 2>/dev/null || echo 0)
+
+# Low stock products (inventory < 10)
+INVENTORY_RESPONSE=$(curl -s -H "$AUTH" "${BASE}/products.json?limit=250&fields=id,title,variants" 2>/dev/null || echo '{"products":[]}')
+LOW_STOCK=$(echo "$INVENTORY_RESPONSE" | jq '[.products[] | .variants[] | select(.inventory_quantity != null and .inventory_quantity < 10 and .inventory_quantity > 0) | {product_id: .product_id, sku: .sku, qty: .inventory_quantity}] | length' 2>/dev/null || echo 0)
+OUT_OF_STOCK=$(echo "$INVENTORY_RESPONSE" | jq '[.products[] | .variants[] | select(.inventory_quantity != null and .inventory_quantity <= 0) | {product_id: .product_id, sku: .sku}] | length' 2>/dev/null || echo 0)
+
+# Build output JSON
+jq -n \
+  --arg store "$SHOPIFY_STORE" \
+  --arg name "$SHOP_NAME" \
+  --arg plan "$SHOP_PLAN" \
+  --arg currency "$SHOP_CURRENCY" \
+  --arg domain "$SHOP_DOMAIN" \
+  --argjson theme "$ACTIVE_THEME" \
+  --argjson products "$PRODUCT_COUNT" \
+  --argjson orders_24h "$ORDER_COUNT" \
+  --argjson unfulfilled "$UNFULFILLED_COUNT" \
+  --argjson low_stock "$LOW_STOCK" \
+  --argjson out_of_stock "$OUT_OF_STOCK" \
+  --arg checked_at "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+  '{
+    ok: true,
+    store: $store,
+    shop: {
+      name: $name,
+      plan: $plan,
+      currency: $currency,
+      domain: $domain
+    },
+    api_connectivity: "ok",
+    active_theme: $theme,
+    product_count: $products,
+    orders_24h: $orders_24h,
+    fulfillment: {
+      unfulfilled: $unfulfilled
+    },
+    inventory: {
+      low_stock: $low_stock,
+      out_of_stock: $out_of_stock
+    },
+    checked_at: $checked_at
+  }'

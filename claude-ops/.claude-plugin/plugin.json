@@ -107,6 +107,27 @@
       "type": "string",
       "sensitive": false,
       "default": ""
+    },
+    "shopify_store_url": {
+      "title": "Shopify Store URL",
+      "description": "Your Shopify store URL (e.g., mystore.myshopify.com)",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "shopify_admin_token": {
+      "title": "Shopify Admin API Token",
+      "description": "Admin API access token from Shopify Partners or custom app",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "shipbob_access_token": {
+      "title": "ShipBob Access Token",
+      "description": "ShipBob Personal Access Token for fulfillment tracking (optional)",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
     }
   }
 }
