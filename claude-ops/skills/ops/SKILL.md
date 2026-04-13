@@ -33,5 +33,6 @@ Route `$ARGUMENTS` to the correct ops skill:
 | yolo                                          | `/ops-yolo`             |
 | doctor, health, fix, diagnose                 | `/ops:ops-doctor`       |
 | speedup, clean, optimize, cleanup             | `/ops:ops-speedup`      |
+| orchestrate, subagents, agents, dispatch, run | `/ops:ops-orchestrate $ARGUMENTS` |
 
 If `$ARGUMENTS` is empty, launch the interactive dashboard: invoke `/ops:ops-dash` directly.
