@@ -31,6 +31,7 @@ Route `$ARGUMENTS` to the correct ops skill:
 | deploy, ship                                  | `/ops-deploy`           |
 | merge, prs, ship-prs                          | `/ops-merge $ARGUMENTS` |
 | yolo                                          | `/ops-yolo`             |
+| doctor, health, fix, diagnose                 | `/ops:ops-doctor`       |
 | speedup, clean, optimize, cleanup             | `/ops:ops-speedup`      |
 
 If `$ARGUMENTS` is empty, launch the interactive dashboard: invoke `/ops:ops-dash` directly.
