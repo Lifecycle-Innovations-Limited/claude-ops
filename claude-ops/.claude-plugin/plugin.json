@@ -1,0 +1,154 @@
+{
+  "name": "ops",
+  "version": "0.6.0",
+  "description": "Business operations command center for Claude Code. Manage communications, projects, infrastructure, and revenue from your terminal. Includes YOLO mode for autonomous business operation.",
+  "author": {
+    "name": "Lifecycle Innovations Limited",
+    "url": "https://github.com/Lifecycle-Innovations-Limited"
+  },
+  "homepage": "https://github.com/Lifecycle-Innovations-Limited/claude-ops",
+  "repository": "https://github.com/Lifecycle-Innovations-Limited/claude-ops",
+  "license": "MIT",
+  "keywords": [
+    "business",
+    "operations",
+    "communications",
+    "whatsapp",
+    "email",
+    "slack",
+    "telegram",
+    "linear",
+    "sentry",
+    "infrastructure",
+    "revenue",
+    "yolo"
+  ],
+  "userConfig": {
+    "telegram_api_id": {
+      "title": "Telegram API ID",
+      "description": "Numeric API ID from https://my.telegram.org/apps. Optional — run /ops:setup telegram to auto-configure.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "telegram_api_hash": {
+      "title": "Telegram API Hash",
+      "description": "API hash from https://my.telegram.org/apps. Optional — run /ops:setup telegram to auto-configure.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "telegram_phone": {
+      "title": "Telegram Phone Number",
+      "description": "Your phone number in E.164 format. Optional — run /ops:setup telegram to auto-configure.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "telegram_session": {
+      "title": "Telegram Session String",
+      "description": "gram.js StringSession. Optional — run /ops:setup telegram to auto-configure.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "sentry_org": {
+      "title": "Sentry Organization",
+      "description": "Sentry organization slug e.g. 'my-org' (optional)",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "linear_team": {
+      "title": "Linear Team Key",
+      "description": "Default Linear team key e.g. 'HEA' (optional)",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "aws_region": {
+      "title": "AWS Region",
+      "description": "Default AWS region for infra checks e.g. 'us-east-1' (optional)",
+      "type": "string",
+      "sensitive": false,
+      "default": "us-east-1"
+    },
+    "klaviyo_private_key": {
+      "title": "Klaviyo Private API Key",
+      "description": "Private API key from Klaviyo Settings > API Keys (starts with pk_ or ck_)",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "meta_ads_token": {
+      "title": "Meta Ads Access Token",
+      "description": "Meta Marketing API access token from Facebook Business",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "meta_ad_account_id": {
+      "title": "Meta Ad Account ID",
+      "description": "Ad account ID (format: act_XXXXXXXXX)",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "ga4_property_id": {
+      "title": "Google Analytics 4 Property ID",
+      "description": "GA4 property ID (numeric, from Admin > Property Settings)",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "google_search_console_site": {
+      "title": "Google Search Console Site URL",
+      "description": "Site URL as registered in Search Console (e.g., https://example.com)",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "shopify_store_url": {
+      "title": "Shopify Store URL",
+      "description": "Your Shopify store URL (e.g., mystore.myshopify.com)",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "shopify_admin_token": {
+      "title": "Shopify Admin API Token",
+      "description": "Admin API access token from Shopify Partners or custom app",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "shipbob_access_token": {
+      "title": "ShipBob Access Token",
+      "description": "ShipBob Personal Access Token for fulfillment tracking (optional)",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "bland_ai_api_key": {
+      "title": "Bland AI API Key",
+      "description": "API key from https://app.bland.ai — used for /ops:ops-voice call",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "elevenlabs_api_key": {
+      "title": "ElevenLabs API Key",
+      "description": "API key from https://elevenlabs.io — used for /ops:ops-voice tts",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "groq_api_key": {
+      "title": "Groq API Key",
+      "description": "API key from https://console.groq.com — used for /ops:ops-voice transcribe (Whisper)",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    }
+  }
+}

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# ops-ci — Recent CI failures across all repos → JSON
+# Checks last 24h of GitHub Actions failures
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REGISTRY="${SCRIPT_DIR}/../scripts/registry.json"
+
+if [ ! -f "$REGISTRY" ]; then
+  echo '{"error":"registry.json not found"}' && exit 1
+fi
+
+if ! command -v gh &>/dev/null; then
+  echo '{"error":"gh CLI not found","failures":[]}' && exit 0
+fi
+
+REPOS=$(jq -r '[.projects[].repos[]] | unique | .[]' "$REGISTRY")
+SINCE=$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d '1 day ago' +%Y-%m-%d 2>/dev/null || date +%Y-%m-%d)
+
+TMPDIR_OPS=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_OPS"' EXIT
+
+for repo in $REPOS; do
+  (
+    SAFE_NAME=$(echo "$repo" | tr '/' '_')
+    FAILURES=$(gh run list --repo "$repo" --status failure --limit 3 \
+      --json name,headBranch,createdAt,conclusion,event 2>/dev/null || echo '[]')
+
+    if [ "$FAILURES" != "[]" ] && [ -n "$FAILURES" ]; then
+      echo "{\"repo\":\"$repo\",\"failures\":$FAILURES}" > "$TMPDIR_OPS/$SAFE_NAME.json"
+    fi
+  ) &
+done
+wait
+
+echo -n '{"repos_with_failures":['
+first=true
+for f in "$TMPDIR_OPS"/*.json; do
+  [ ! -f "$f" ] && continue
+  [ "$first" = true ] && first=false || echo -n ','
+  cat "$f"
+done
+echo ']}'

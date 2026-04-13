@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ops-marketplace",
+  "description": "Local marketplace for claude-ops plugin",
+  "owner": {
+    "name": "Lifecycle Innovations Limited",
+    "email": "security@example.com"
+  },
+  "plugins": [
+    {
+      "name": "ops",
+      "description": "Business operations command center for Claude Code",
+      "source": "./claude-ops",
+      "version": "0.8.0",
+      "category": "productivity"
+    }
+  ]
+}

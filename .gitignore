@@ -1,0 +1,6 @@
+# Root-level gitignore for the marketplace wrapper repo
+.claude/
+.planning/
+.DS_Store
+node_modules/
+*.log

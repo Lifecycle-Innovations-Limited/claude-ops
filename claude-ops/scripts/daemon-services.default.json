@@ -1,0 +1,18 @@
+{
+  "services": {
+    "wacli-sync": {
+      "enabled": true,
+      "command": "__SCRIPTS_DIR__/wacli-keepalive.sh",
+      "health_file": "~/.wacli/.health",
+      "restart_delay": 60,
+      "max_restarts": 10
+    },
+    "memory-extractor": {
+      "enabled": true,
+      "command": "__SCRIPTS_DIR__/ops-memory-extractor.sh",
+      "health_file": "~/.claude/plugins/data/ops-ops-marketplace/memories/.health",
+      "restart_delay": 3600,
+      "cron": "*/30 * * * *"
+    }
+  }
+}

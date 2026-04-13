@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Pre-commit hook: block commits containing personal data or secrets
+# This is a PUBLIC open-source plugin — no user-specific data allowed
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+FAILED=0
+
+echo "Running pre-commit security checks..."
+
+# Only check added/modified lines in the staged diff (not removals)
+DIFF_ADDED=$(git diff --cached -U0 | grep '^+' | grep -v '^+++' || true)
+
+if [[ -z "$DIFF_ADDED" ]]; then
+  exit 0
+fi
+
+check() {
+  local desc="$1" pattern="$2"
+  local hits
+  hits=$(echo "$DIFF_ADDED" | grep -iE "$pattern" 2>/dev/null | head -3 || true)
+  if [[ -n "$hits" ]]; then
+    echo -e "${RED}BLOCKED: $desc${NC}"
+    echo "$hits" | head -3
+    FAILED=1
+  fi
+}
+
+# === Secrets & tokens (pattern-based, no hardcoded values) ===
+check "Shopify admin/app tokens"    'shp(at|ss|pa|ca)_[a-f0-9]{10,}'
+check "Slack tokens"                'xox[bpca]-[a-zA-Z0-9]+'
+check "GitHub tokens"               'gh[pso]_[A-Za-z0-9]{20,}'
+check "AWS access keys"             'AKIA[A-Z0-9]{16}'
+check "Generic sk_ secret keys"     '\bsk_[a-zA-Z0-9]{20,}'
+check "Generic gsk_ keys"           '\bgsk_[A-Za-z0-9]{20,}'
+check "Stripe live keys"            '(sk_live_|pk_live_|rk_live_)[a-zA-Z0-9]+'
+check "Google API keys"             'AIza[A-Za-z0-9_-]{35}'
+check "Org-prefixed keys (40+ hex)" '\borg_[a-f0-9]{40,}'
+check "Bearer tokens in strings"    'Bearer [a-zA-Z0-9_-]{20,}'
+check "Base64 JWT-like tokens"      'eyJ[a-zA-Z0-9_-]{50,}'
+
+# === Personal email patterns ===
+check "Personal email (webmail)"    '[a-zA-Z0-9._%+-]+@(gmail|yahoo|hotmail|outlook|icloud|proton|hey)\.(com|net|org)'
+check "Non-example work emails"     '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|io|ai|dev|co|ltd|limited)'
+
+# Allow @example.com, @test.com, @localhost — filter those out
+if [[ $FAILED -eq 1 ]]; then
+  # Re-check: if ALL email hits are example/test domains, clear the flag
+  real_emails=$(echo "$DIFF_ADDED" | grep -iE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|io|ai|dev|co|ltd|limited)' | grep -ivE '@(example|test|localhost|noreply|anthropic)\.' || true)
+  if [[ -z "$real_emails" ]]; then
+    FAILED=0
+  fi
+fi
+
+# === Hardcoded paths ===
+check "macOS home directory"        '/Users/[a-z][a-zA-Z0-9_-]+'
+check "Linux home directory"        '/home/[a-z][a-zA-Z0-9_-]+/'
+
+# === Phone numbers (international format) ===
+check "Phone numbers"               '\+[0-9]{1,3}[- ]?[0-9]{6,14}'
+
+# === IP addresses (non-localhost, non-example) ===
+check "Private/real IP addresses"   '\b(10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+)\b'
+
+# === Generic sensitive patterns ===
+check "password= or secret= values" '(password|secret|api_key|access_token)\s*[=:]\s*["\x27][^"\x27]{8,}'
+
+if [[ $FAILED -eq 1 ]]; then
+  echo ""
+  echo -e "${RED}Commit blocked — personal or sensitive data detected in a PUBLIC repo.${NC}"
+  echo "Use generic placeholders: user@example.com, yourstore.myshopify.com, <YOUR_TOKEN>"
+  echo "Bypass with --no-verify (emergency only)."
+  exit 1
+fi
+
+# Run test suite secrets scanner if available
+if [[ -f "claude-ops/tests/test-no-secrets.sh" ]]; then
+  (cd claude-ops && bash tests/test-no-secrets.sh > /dev/null 2>&1) || {
+    echo -e "${RED}BLOCKED: test-no-secrets.sh failed${NC}"
+    exit 1
+  }
+fi
+
+echo -e "${GREEN}Pre-commit security checks passed${NC}"

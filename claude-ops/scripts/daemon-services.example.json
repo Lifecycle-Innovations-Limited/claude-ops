@@ -1,0 +1,49 @@
+{
+  "_comment": "Copy this file to ~/.claude/plugins/data/ops-ops-marketplace/daemon-services.json and customize.",
+  "_variables": {
+    "CLAUDE_PLUGIN_ROOT": "Resolved at runtime to the claude-ops plugin install directory",
+    "OPS_DATA_DIR": "Override default data dir (~/.claude/plugins/data/ops-ops-marketplace)"
+  },
+  "services": {
+    "wacli-sync": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/wacli-keepalive.sh",
+      "health_file": "~/.wacli/health.txt",
+      "restart_delay": 60,
+      "max_restarts": 10
+    },
+    "inbox-digest": {
+      "enabled": false,
+      "cron": "0 */4 * * *",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-inbox-digest.sh",
+      "_note": "Requires: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID env vars. Uses gog for email."
+    },
+    "store-health": {
+      "enabled": false,
+      "cron": "0 9 * * *",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-store-health.sh",
+      "_note": "Requires: SHOPIFY_STOREFRONT_TOKEN, SHOPIFY_STORE_DOMAIN, TELEGRAM_BOT_TOKEN"
+    },
+    "competitor-intel": {
+      "enabled": false,
+      "cron": "0 10 * * 1",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-competitor-intel.sh",
+      "_note": "Requires: TELEGRAM_BOT_TOKEN. Optional: TAVILY_API_KEY for better search results."
+    },
+    "message-listener": {
+      "enabled": false,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-message-listener.sh",
+      "health_file": "~/.claude/plugins/data/ops-ops-marketplace/listener-health.txt",
+      "restart_delay": 30,
+      "max_restarts": 20,
+      "_note": "Requires: wacli installed. Optional: TELEGRAM_BOT_TOKEN, TELEGRAM_OWNER_ID."
+    },
+    "memory-extractor": {
+      "enabled": false,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-memory-extractor.sh",
+      "health_file": "~/.claude/plugins/data/ops-ops-marketplace/memories/.health",
+      "restart_delay": 3600,
+      "cron": "*/30 * * * *"
+    }
+  }
+}
