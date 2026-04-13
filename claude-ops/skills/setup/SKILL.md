@@ -260,6 +260,8 @@ Only go into the credential auto-scan flow below when the user picks "manually" 
 
 **BEFORE asking the user for ANY credential**, run this scan sequence. This applies to ALL steps — channels, ecommerce, marketing, voice, and MCPs. The user should never be asked to find a key that's already on their system.
 
+**CRITICAL — exhaust ALL sources before reporting.** Run every scan source (1-8 below) in a single batch, THEN analyze the combined results. Do NOT report "no credentials found" after checking only env vars and Dashlane — Chrome history, .env files, Doppler, and keychain may have the answer. If API tokens are missing but the store/service identity was found (e.g. store URL in Chrome history, login entry in Dashlane), report what you found and skip to the token step with the identity pre-filled. The user saying "find it" or "check all available sources" means you did not search thoroughly enough — never ask the user to look for something you can find programmatically.
+
 For each variable name (e.g. `TELEGRAM_BOT_TOKEN`, `SHOPIFY_ACCESS_TOKEN`, `KLAVIYO_API_KEY`):
 
 1. **Current shell environment** — `printenv <VAR>`. Running shell inherits exports, Doppler injections, dotenv-loaded files. Most likely to be correct.
@@ -289,6 +291,13 @@ For each variable name (e.g. `TELEGRAM_BOT_TOKEN`, `SHOPIFY_ACCESS_TOKEN`, `KLAV
    ```
 7. **Installed MCP configs** — read each `.mcp.json` the detector found. For each server entry, look at `.env` and `.args` for the variable name or for literal values that look like the target. Show the MCP server name as the source.
 8. **Plugin preferences** — check existing `$PREFS_PATH` for the key under the relevant section (e.g. `.ecom.shopify.admin_token`, `.marketing.klaviyo.api_key`). If found and not a `doppler:` reference, show it as a source.
+9. **Chrome history** — for services with web admin UIs (Shopify, Klaviyo, etc.), query Chrome's History SQLite DB for admin URLs that reveal the account/store identity:
+   ```bash
+   sqlite3 ~/Library/Application\ Support/Google/Chrome/Default/History \
+     "SELECT DISTINCT url FROM urls WHERE url LIKE '%<service_domain>%' ORDER BY last_visit_time DESC LIMIT 10" 2>/dev/null
+   ```
+   Extract identifiers (e.g. `*.myshopify.com` store slugs, account IDs) from the URLs.
+10. **Project .env files** — scan `~/Projects/*/.env*` for the variable name or service domain patterns. These often contain credentials from other projects that can be reused.
 
 **Env var → service keyword mapping for auto-scan:**
 
@@ -1161,6 +1170,8 @@ Add to the shortcuts table: `vault`, `password-manager`, `pm` → Step 3g
 **Before asking for anything**, run the Universal Credential Auto-Scan for all Shopify-related vars simultaneously:
 
 ```bash
+# --- Token scan (API credentials) ---
+
 # Scan shell env
 printenv SHOPIFY_ACCESS_TOKEN SHOPIFY_ADMIN_TOKEN SHOPIFY_STORE_URL SHOPIFY_ADMIN_API_ACCESS_TOKEN 2>/dev/null
 
@@ -1173,8 +1184,8 @@ for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
     jq -r --arg proj "$proj" 'to_entries[] | select(.key | test("SHOPIFY|STORE")) | "\(.key)=\(.value.computed) (doppler:\($proj)/prd)"'
 done
 
-# Scan Dashlane
-dcli password shopify --output json 2>/dev/null
+# Scan Dashlane for API tokens
+dcli password shopify --output json 2>/dev/null | jq -r '.[] | select(.password != null and .password != "") | "\(.title): \(.url) → token found"'
 
 # Scan macOS Keychain
 security find-generic-password -s "shopify-admin-token" -w 2>/dev/null
@@ -1185,7 +1196,21 @@ jq -r '.agents.defaults.env | to_entries[] | select(.key | test("SHOPIFY")) | "\
 
 # Check existing prefs
 jq -r '.ecom.shopify // empty' "$PREFS_PATH" 2>/dev/null
+
+# --- Store URL discovery (even if no tokens found) ---
+# Scan Chrome history for myshopify.com admin URLs
+sqlite3 ~/Library/Application\ Support/Google/Chrome/Default/History \
+  "SELECT DISTINCT replace(replace(url, 'https://', ''), 'http://', '') FROM urls WHERE url LIKE '%myshopify.com/admin%' OR url LIKE '%admin.shopify.com/store/%' ORDER BY last_visit_time DESC LIMIT 10" 2>/dev/null | \
+  grep -oE '[a-z0-9-]+\.myshopify\.com|admin\.shopify\.com/store/[a-z0-9-]+' | sort -u
+
+# Scan Dashlane URLs for myshopify.com store references
+dcli password shopify --output json 2>/dev/null | jq -r '.[].url // empty' | grep -oE '[a-z0-9-]+\.myshopify\.com' | sort -u
+
+# Scan project .env files for store URLs
+grep -rhE 'myshopify\.com|SHOPIFY_STORE' ~/Projects/*/.env* 2>/dev/null | grep -v '^#' | head -5
 ```
+
+**Important**: Do NOT report "No Shopify credentials found" until ALL scan sources have been checked. If tokens are missing but store URLs are found (e.g. from Chrome history or Dashlane), report: `"Found Shopify store(s): <stores>. No API token found — you'll need to create one."` and skip straight to Step 3h.3 (token) with the store URL pre-filled.
 
 If both `store_url` and `admin_token` are already found, show:
 ```
