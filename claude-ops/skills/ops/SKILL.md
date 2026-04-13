@@ -17,7 +17,8 @@ Route `$ARGUMENTS` to the correct ops skill:
 
 | Input                                         | Route to                |
 | --------------------------------------------- | ----------------------- |
-| (empty), go, morning, briefing                | `/ops-go`               |
+| (empty), dash, home, hq                       | `/ops:ops-dash`         |
+| go, morning, briefing                         | `/ops-go`               |
 | setup, configure, init, install               | `/ops:setup $ARGUMENTS` |
 | inbox, unread, messages                       | `/ops-inbox`            |
 | comms, send, whatsapp, email, slack, telegram | `/ops-comms $ARGUMENTS` |
@@ -30,29 +31,6 @@ Route `$ARGUMENTS` to the correct ops skill:
 | deploy, ship                                  | `/ops-deploy`           |
 | merge, prs, ship-prs                          | `/ops-merge $ARGUMENTS` |
 | yolo                                          | `/ops-yolo`             |
+| speedup, clean, optimize, cleanup             | `/ops:ops-speedup`      |
 
-If `$ARGUMENTS` is empty, show a quick menu:
-
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- OPS ► COMMAND CENTER
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
- a) /ops-go        — Morning briefing
- s) /ops:setup     — Interactive configuration wizard
- b) /ops-inbox     — Inbox zero (all channels)
- c) /ops-fires     — Production incidents
- d) /ops-projects  — Project dashboard
- e) /ops-next      — What should I do next
- f) /ops-triage    — Cross-platform issue triage
- g) /ops-linear    — Linear sprint board
- h) /ops-revenue   — Revenue & costs
- i) /ops-deploy    — Deploy status
- j) /ops-merge     — Auto-fix + merge all open PRs
- k) /ops-yolo      — Run my business for a day
-
- → Type a letter or command name
-──────────────────────────────────────────────────────
-```
-
-Use AskUserQuestion to get their choice, then invoke the corresponding skill.
+If `$ARGUMENTS` is empty, launch the interactive dashboard: invoke `/ops:ops-dash` directly.
