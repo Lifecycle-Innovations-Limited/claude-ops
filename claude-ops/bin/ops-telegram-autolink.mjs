@@ -81,7 +81,7 @@ async function waitForCode(maxSec = 300) {
   while (Date.now() - start < maxSec * 1000) {
     if (existsSync(CODE_FILE)) {
       const raw = readFileSync(CODE_FILE, "utf8").trim();
-      if (/^[\w]{3,20}$/.test(raw)) {
+      if (/^[\w\-]{3,20}$/.test(raw)) {
         try {
           unlinkSync(CODE_FILE);
         } catch {}
@@ -216,22 +216,85 @@ emit({ type: "step", message: "GET /apps" });
 let appsRes = await httpGet("https://my.telegram.org/apps");
 let appsHtml = await appsRes.text();
 
-// Parse selectors based on esfelurm/Apis-Telegram reference:
-//   <label>App api_id:</label> ... <div>...<span>12345678</span>...
-// Works as long as my.telegram.org keeps its server-side HTML shape.
+/**
+ * Extract api_id and api_hash from my.telegram.org /apps HTML.
+ * Uses a cascade of increasingly broad strategies so HTML layout
+ * changes don't break extraction. The values have known formats:
+ *   api_id  = 5-12 digit number
+ *   api_hash = 32-char lowercase hex string
+ * These formats are stable (Telegram API contract), only the HTML
+ * wrapping changes.
+ */
 function extract(html) {
-  const idMatch = html.match(
-    /App api_id[^<]*<\/label>[\s\S]*?<span[^>]*>\s*(\d{5,12})\s*<\/span>/i,
+  let apiId = null;
+  let apiHash = null;
+
+  // Strategy 1: label + nearby span (original layout)
+  const idS1 = html.match(
+    /api_id[^<]*<\/label>[\s\S]*?<span[^>]*>\s*(\d{5,12})\s*<\/span>/i,
   );
-  const hashMatch = html.match(
-    /App api_hash[^<]*<\/label>[\s\S]*?<span[^>]*>\s*([a-f0-9]{32})\s*<\/span>/i,
+  const hashS1 = html.match(
+    /api_hash[^<]*<\/label>[\s\S]*?<span[^>]*>\s*([a-f0-9]{32})\s*<\/span>/i,
   );
-  // Fallback: plain code tags sometimes used
-  const altHash = html.match(/api_hash[^<]*<[^>]+>\s*([a-f0-9]{32})/i);
-  return {
-    apiId: idMatch ? idMatch[1] : null,
-    apiHash: hashMatch ? hashMatch[1] : altHash ? altHash[1] : null,
-  };
+  if (idS1) apiId = idS1[1];
+  if (hashS1) apiHash = hashS1[1];
+
+  // Strategy 2: api_id/api_hash near any tag containing the value
+  if (!apiId) {
+    const idS2 = html.match(/api_id[^<]*<[^>]+>\s*(\d{5,12})\s*</i);
+    if (idS2) apiId = idS2[1];
+  }
+  if (!apiHash) {
+    const hashS2 = html.match(/api_hash[^<]*<[^>]+>\s*([a-f0-9]{32})\s*</i);
+    if (hashS2) apiHash = hashS2[1];
+  }
+
+  // Strategy 3: value in any tag on same line or nearby text as keyword
+  if (!apiId) {
+    const idS3 = html.match(/api_id[\s\S]{0,200}?(\d{5,12})/i);
+    if (idS3) apiId = idS3[1];
+  }
+  if (!apiHash) {
+    const hashS3 = html.match(/api_hash[\s\S]{0,200}?([a-f0-9]{32})/i);
+    if (hashS3) apiHash = hashS3[1];
+  }
+
+  // Strategy 4: input/hidden fields with api_id/api_hash as name or id
+  if (!apiId) {
+    const idS4 = html.match(
+      /(?:name|id)=['"]?api_id['"]?[^>]*value=['"]?(\d{5,12})['"]?/i,
+    );
+    if (idS4) apiId = idS4[1];
+  }
+  if (!apiHash) {
+    const hashS4 = html.match(
+      /(?:name|id)=['"]?api_hash['"]?[^>]*value=['"]?([a-f0-9]{32})['"]?/i,
+    );
+    if (hashS4) apiHash = hashS4[1];
+  }
+
+  // Strategy 5: brute-force — strip all HTML tags and look for the
+  // characteristic patterns near their keywords in plain text
+  if (!apiId || !apiHash) {
+    const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    if (!apiId) {
+      const idS5 = text.match(/api_id\s*:?\s*(\d{5,12})/i);
+      if (idS5) apiId = idS5[1];
+    }
+    if (!apiHash) {
+      const hashS5 = text.match(/api_hash\s*:?\s*([a-f0-9]{32})/i);
+      if (hashS5) apiHash = hashS5[1];
+    }
+  }
+
+  // Strategy 6: last resort — find ANY 32-char hex string on the page
+  // (api_hash is the only value with that exact shape on /apps)
+  if (!apiHash) {
+    const hexes = html.match(/\b[a-f0-9]{32}\b/g);
+    if (hexes && hexes.length === 1) apiHash = hexes[0];
+  }
+
+  return { apiId, apiHash };
 }
 
 let { apiId, apiHash } = extract(appsHtml);
@@ -268,8 +331,17 @@ if (!apiId || !apiHash) {
 }
 
 if (!apiId || !apiHash) {
+  // Dump a snippet of the HTML so the caller can diagnose what changed
+  const snippet = appsHtml
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
   die(
-    "could not extract api_id/api_hash from /apps HTML — selectors may have changed",
+    `could not extract ${!apiId ? "api_id" : ""}${!apiId && !apiHash ? " or " : ""}${!apiHash ? "api_hash" : ""} from /apps HTML after 6 extraction strategies`,
+    { html_snippet: snippet },
   );
 }
 
