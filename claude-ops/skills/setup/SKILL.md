@@ -162,7 +162,7 @@ GSD is a third-party Claude Code plugin that adds project roadmap tracking. When
 Check if GSD is already installed:
 
 ```bash
-ls ~/.claude/plugins/cache/*/gsd*/skills/gsd-progress/SKILL.md 2>/dev/null && echo "installed" || echo "not_installed"
+ls ~/.claude/skills/gsd-progress/SKILL.md 2>/dev/null && echo "installed" || echo "not_installed"
 ```
 
 If not installed, ask via `AskUserQuestion`:
@@ -180,17 +180,17 @@ On install, run the commands directly — do NOT tell the user to run them manua
 
 ```bash
 # Install GSD in one shot — no user intervention needed
-claude plugin marketplace add Lifecycle-Innovations-Limited/get-shit-done 2>/dev/null && \
-claude plugin install gsd@Lifecycle-Innovations-Limited-get-shit-done 2>/dev/null
+claude plugin marketplace add gsd-build/get-shit-done 2>/dev/null && \
+claude plugin install gsd@gsd-build-get-shit-done 2>/dev/null
 ```
 
 If `claude` CLI is not available in the path, fall back to the plugin cache mechanism:
 
 ```bash
 # Direct marketplace clone fallback
-GSD_MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/Lifecycle-Innovations-Limited-get-shit-done"
+GSD_MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/gsd-build-get-shit-done"
 if [ ! -d "$GSD_MARKETPLACE_DIR" ]; then
-  git clone https://github.com/Lifecycle-Innovations-Limited/get-shit-done.git "$GSD_MARKETPLACE_DIR" 2>/dev/null
+  git clone https://github.com/gsd-build/get-shit-done.git "$GSD_MARKETPLACE_DIR" 2>/dev/null
 fi
 ```
 
@@ -199,7 +199,7 @@ Report success/failure. Record `plugins.gsd = "installed"` in `$PREFS_PATH`.
 If they skip:
 
 ```
-Skipped GSD. Install later with: /plugin marketplace add Lifecycle-Innovations-Limited/get-shit-done
+Skipped GSD. Install later with: /plugin marketplace add gsd-build/get-shit-done
 ```
 
 ---

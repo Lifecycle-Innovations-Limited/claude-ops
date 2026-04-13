@@ -157,47 +157,43 @@ All skills use pre-execution shell blocks (`!` fences) that gather data *before*
 
 **Plugin Structure**
 
+> **Why the nested `claude-ops/claude-ops/` directory?** Claude Code's plugin marketplace system requires a two-level layout: the **repo root** acts as a marketplace container (with `.claude-plugin/marketplace.json` pointing `"source": "./claude-ops"`), while the **inner directory** is the actual plugin root (with `.claude-plugin/plugin.json`, skills, agents, etc.). This is how Claude Code resolves and caches plugins — it cannot be flattened.
+
 ```
-claude-ops/
+claude-ops/                        ← marketplace root (repo)
 ├── .claude-plugin/
-│   └── plugin.json            # Plugin manifest + userConfig schema
+│   └── marketplace.json           # Points to ./claude-ops as the plugin source
+├── README.md                      # This file
 │
-├── skills/                    # 14 slash command skills
-│   ├── ops/                   # Router — dispatches to sub-skills
-│   ├── ops-go/                # Morning briefing
-│   ├── ops-inbox/             # Unified inbox
-│   ├── ops-comms/             # Cross-channel messaging
-│   ├── ops-merge/             # Autonomous PR pipeline
-│   ├── ops-fires/             # Production incidents
-│   ├── ops-deploy/            # Deploy status
-│   ├── ops-revenue/           # Cost tracking
-│   ├── ops-projects/          # Portfolio dashboard
-│   ├── ops-linear/            # Sprint management
-│   ├── ops-triage/            # Issue triage
-│   ├── ops-next/              # Next action advisor
-│   ├── ops-yolo/              # YOLO autonomous mode
-│   └── setup/                 # Interactive setup wizard
-│
-├── agents/                    # 9 autonomous agents
-│   ├── yolo-ceo.md            # CEO synthesizer (Opus)
-│   ├── yolo-cto.md            # CTO technical analysis
-│   ├── yolo-cfo.md            # CFO financial analysis
-│   ├── yolo-coo.md            # COO operations analysis
-│   ├── triage-agent.md        # Issue investigation + fix
-│   ├── comms-scanner.md       # Inbox state scanner
-│   ├── infra-monitor.md       # Infrastructure health
-│   ├── project-scanner.md     # Project portfolio scanner
-│   └── revenue-tracker.md     # Revenue/cost monitor
-│
-├── bin/                       # Shell scripts + ops-shopify-create
-├── hooks/                     # SessionStart health check
-├── telegram-server/           # Bundled MCP server (gram.js)
-├── templates/                 # App scaffolding templates
-│   └── shopify-admin-app/     # Shopify Admin Remix template
-├── tests/                     # Bash-based validation suite
-├── scripts/                   # Setup scripts + project registry
-├── CLAUDE.md                  # Plugin-root rules (AskUserQuestion <=4, no delegation)
-└── .mcp.json                  # MCP server declarations
+└── claude-ops/                    ← plugin root (where Claude Code loads from)
+    ├── .claude-plugin/
+    │   └── plugin.json            # Plugin manifest + userConfig schema
+    │
+    ├── skills/                    # 14 slash command skills
+    │   ├── ops/                   # Router — dispatches to sub-skills
+    │   ├── ops-go/                # Morning briefing
+    │   ├── ops-inbox/             # Unified inbox
+    │   ├── ops-comms/             # Cross-channel messaging
+    │   ├── ops-merge/             # Autonomous PR pipeline
+    │   ├── ops-fires/             # Production incidents
+    │   ├── ops-deploy/            # Deploy status
+    │   ├── ops-revenue/           # Cost tracking
+    │   ├── ops-projects/          # Portfolio dashboard
+    │   ├── ops-linear/            # Sprint management
+    │   ├── ops-triage/            # Issue triage
+    │   ├── ops-next/              # Next action advisor
+    │   ├── ops-yolo/              # YOLO autonomous mode
+    │   └── setup/                 # Interactive setup wizard
+    │
+    ├── agents/                    # 9 autonomous agents
+    ├── bin/                       # Shell scripts + ops-shopify-create
+    ├── hooks/                     # SessionStart health check
+    ├── telegram-server/           # Bundled MCP server (gram.js)
+    ├── templates/                 # App scaffolding templates
+    ├── tests/                     # Bash-based validation suite
+    ├── scripts/                   # Setup scripts + project registry
+    ├── CLAUDE.md                  # Plugin-root rules
+    └── .mcp.json                  # MCP server declarations
 ```
 
 ```
