@@ -155,22 +155,30 @@ GSD adds project roadmap tracking to your ops dashboards.
   [Install GSD (latest)] [Skip — I don't need roadmap tracking]
 ```
 
-On install, tell the user:
+On install, run the commands directly — do NOT tell the user to run them manually:
+
+```bash
+# Install GSD in one shot — no user intervention needed
+claude plugin marketplace add auroracapital/get-shit-done 2>/dev/null && \
+claude plugin install gsd@auroracapital-get-shit-done 2>/dev/null
+```
+
+If `claude` CLI is not available in the path, fall back to the plugin cache mechanism:
+
+```bash
+# Direct marketplace clone fallback
+GSD_MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/auroracapital-get-shit-done"
+if [ ! -d "$GSD_MARKETPLACE_DIR" ]; then
+  git clone https://github.com/auroracapital/get-shit-done.git "$GSD_MARKETPLACE_DIR" 2>/dev/null
+fi
+```
+
+Report success/failure. Record `plugins.gsd = "installed"` in `$PREFS_PATH`.
+
+If they skip:
 
 ```
-To install GSD, run these commands in Claude Code:
-  /plugin marketplace add auroracapital/get-shit-done
-  /plugin install gsd@auroracapital-get-shit-done
-```
-
-These are slash commands — run them in the Claude Code interface, not in a terminal. After running them, come back and re-run `/ops:setup` to continue.
-
-Report success/failure. If the user confirms they've installed it, record `plugins.gsd = "installed"` in `$PREFS_PATH`. If they skip:
-
-```
-Skipped GSD install. You can install it later:
-  /plugin marketplace add auroracapital/get-shit-done
-  /plugin install gsd@auroracapital-get-shit-done
+Skipped GSD. Install later with: /plugin marketplace add auroracapital/get-shit-done
 ```
 
 ---
@@ -318,17 +326,51 @@ Sub-flow (only runs if user selected Yes above):
 
    Then update `$PREFS_PATH` with `channels.telegram = {backend: "gram.js", api_id: "...", phone: "...", status: "configured"}`. **Never write the api_hash or session to preferences.json** — those stay in keychain only. preferences.json gets only the non-sensitive metadata.
 
-8. **Instruct the user to wire it into Claude Code plugin settings.** Print:
+8. **Auto-configure the MCP server.** Write the credentials directly into the plugin's user config so the user doesn't have to manually paste anything:
 
+   ```bash
+   # Read existing user config or create empty
+   USER_CONFIG="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/user-config.json"
+   mkdir -p "$(dirname "$USER_CONFIG")"
+
+   # Write Telegram credentials to user config
+   jq -n \
+     --arg api_id "$API_ID" \
+     --arg api_hash "$API_HASH" \
+     --arg phone "$PHONE" \
+     --arg session "$SESSION" \
+     '{telegram_api_id: $api_id, telegram_api_hash: $api_hash, telegram_phone: $phone, telegram_session: $session}' \
+     > "${USER_CONFIG}.tmp"
+
+   # Merge with existing config if present
+   if [ -f "$USER_CONFIG" ]; then
+     jq -s '.[0] * .[1]' "$USER_CONFIG" "${USER_CONFIG}.tmp" > "${USER_CONFIG}.new" && mv "${USER_CONFIG}.new" "$USER_CONFIG"
+     rm -f "${USER_CONFIG}.tmp"
+   else
+     mv "${USER_CONFIG}.tmp" "$USER_CONFIG"
+   fi
+   chmod 600 "$USER_CONFIG"
    ```
-   Your Telegram credentials are saved. To activate the MCP, open:
-     /plugin
-   Select ops@ops-marketplace → Settings. Paste these values:
-     telegram_api_id:   <api_id>
-     telegram_api_hash: (from keychain: `security find-generic-password -s telegram-api-hash -w`)
-     telegram_phone:    <phone>
-     telegram_session:  (from keychain: `security find-generic-password -s telegram-session -w`)
-   Restart Claude Code to pick up the new env vars.
+
+   Also update `~/.claude.json` MCP server config if the telegram server entry exists — inject the credentials as env vars:
+
+   ```bash
+   # Update .claude.json mcpServers.telegram.env with actual values
+   CLAUDE_JSON="$HOME/.claude.json"
+   if [ -f "$CLAUDE_JSON" ] && jq -e '.mcpServers.telegram' "$CLAUDE_JSON" >/dev/null 2>&1; then
+     jq --arg id "$API_ID" --arg hash "$API_HASH" --arg phone "$PHONE" --arg session "$SESSION" \
+       '.mcpServers.telegram.env.TELEGRAM_API_ID = $id | .mcpServers.telegram.env.TELEGRAM_API_HASH = $hash | .mcpServers.telegram.env.TELEGRAM_PHONE = $phone | .mcpServers.telegram.env.TELEGRAM_SESSION = $session' \
+       "$CLAUDE_JSON" > "${CLAUDE_JSON}.tmp" && mv "${CLAUDE_JSON}.tmp" "$CLAUDE_JSON"
+   fi
+   ```
+
+   Print:
+   ```
+   ✓ Telegram configured automatically.
+     API ID:  [api_id]
+     Phone:   [phone]
+     Session: stored in keychain + MCP config
+     Restart Claude Code to activate the Telegram MCP server.
    ```
 
 9. **Smoke test (optional).** Spawn `node ${CLAUDE_PLUGIN_ROOT}/telegram-server/index.js` with the env vars set inline for 3 seconds. If it doesn't print an auth error, the session works.
