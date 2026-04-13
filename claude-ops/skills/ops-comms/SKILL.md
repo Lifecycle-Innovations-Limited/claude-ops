@@ -150,10 +150,10 @@ wacli chats --limit 10 --json 2>/dev/null
 Show last 10 chats with sender, preview, timestamp.
 
 **Email:**
-Use `mcp__claude_ai_Gmail__search_threads` with `query: "is:unread"`, show thread list.
+Use `mcp__claude_ai_Gmail__search_threads` with `query: "in:inbox"` (NOT `is:unread` — scan full inbox including read messages), show thread list.
 
 **Slack:**
-Use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "is:unread"`.
+Use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` (NOT `is:unread` — scan full recent activity).
 
 **Telegram:**
 Use `mcp__claude_ops_telegram__get_updates` (limit: 20) and `mcp__claude_ops_telegram__list_chats`.

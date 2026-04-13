@@ -339,7 +339,7 @@ print(json.dumps({'total_chats':len(recent),'count':len(data)}))
 " > "$tmpdir/wa.json" 2>/dev/null) &
 
   # Email count
-  (command -v gog &>/dev/null && gog gmail search -j --results-only --no-input --max 10 "in:inbox is:unread" 2>/dev/null | python3 -c "
+  (command -v gog &>/dev/null && gog gmail search -j --results-only --no-input --max 10 "in:inbox" 2>/dev/null | python3 -c "
 import json,sys
 data=json.load(sys.stdin)
 print(json.dumps({'unread_count':len(data)}))
