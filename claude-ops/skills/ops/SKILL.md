@@ -30,6 +30,7 @@ Route `$ARGUMENTS` to the correct ops skill:
 | revenue, money, mrr, costs                    | `/ops-revenue`          |
 | deploy, ship                                  | `/ops-deploy`           |
 | merge, prs, ship-prs                          | `/ops-merge $ARGUMENTS` |
+| marketing, email, klaviyo, ads, meta, seo, campaigns | `/ops:ops-marketing $ARGUMENTS` |
 | yolo                                          | `/ops-yolo`             |
 | doctor, health, fix, diagnose                 | `/ops:ops-doctor`       |
 | speedup, clean, optimize, cleanup             | `/ops:ops-speedup`      |

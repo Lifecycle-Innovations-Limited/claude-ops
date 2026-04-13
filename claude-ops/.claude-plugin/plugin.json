@@ -72,6 +72,41 @@
       "type": "string",
       "sensitive": false,
       "default": "us-east-1"
+    },
+    "klaviyo_private_key": {
+      "title": "Klaviyo Private API Key",
+      "description": "Private API key from Klaviyo Settings > API Keys (starts with pk_ or ck_)",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "meta_ads_token": {
+      "title": "Meta Ads Access Token",
+      "description": "Meta Marketing API access token from Facebook Business",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "meta_ad_account_id": {
+      "title": "Meta Ad Account ID",
+      "description": "Ad account ID (format: act_XXXXXXXXX)",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "ga4_property_id": {
+      "title": "Google Analytics 4 Property ID",
+      "description": "GA4 property ID (numeric, from Admin > Property Settings)",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "google_search_console_site": {
+      "title": "Google Search Console Site URL",
+      "description": "Site URL as registered in Search Console (e.g., https://example.com)",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
     }
   }
 }
