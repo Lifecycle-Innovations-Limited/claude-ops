@@ -156,6 +156,23 @@ done
 
 # Check plugin data dir for user_config values that are required but missing
 if [ -f "$PLUGIN_JSON" ] && command -v jq >/dev/null 2>&1; then
+  # Map from user_config keys to preferences.json channels paths
+  # e.g. telegram_api_id -> channels.telegram.api_id
+  _prefs_channel_lookup() {
+    local key="$1"
+    local channel="" field=""
+    case "$key" in
+      telegram_api_id)    channel="telegram"; field="api_id" ;;
+      telegram_api_hash)  channel="telegram"; field="api_hash" ;;
+      telegram_phone)     channel="telegram"; field="phone" ;;
+      telegram_session)   channel="telegram"; field="session" ;;
+      *)                  echo ""; return ;;
+    esac
+    if [ -f "$PREFS" ]; then
+      jq -r ".channels.${channel}.${field} // empty" "$PREFS" 2>/dev/null || true
+    fi
+  }
+
   # Get all userConfig keys that have sensitive=true (likely required credentials)
   SENSITIVE_KEYS=$(jq -r '.userConfig // {} | to_entries[] | select(.value.sensitive == true) | .key' "$PLUGIN_JSON" 2>/dev/null || true)
   UNCONFIGURED_SENSITIVE=()
@@ -165,12 +182,54 @@ if [ -f "$PLUGIN_JSON" ] && command -v jq >/dev/null 2>&1; then
       SVAL=$(jq -r ".user_config.\"$skey\" // empty" "$PREFS" 2>/dev/null || true)
       [ -n "$SVAL" ] && IS_SET=true
     fi
+    # Fallback: check preferences.json channels.* section for matching values
+    if [ "$IS_SET" = false ]; then
+      CHAN_VAL=$(_prefs_channel_lookup "$skey")
+      if [ -n "$CHAN_VAL" ]; then
+        IS_SET=true
+      fi
+    fi
     if [ "$IS_SET" = false ]; then
       UNCONFIGURED_SENSITIVE+=("$skey")
     fi
   done
   if [ ${#UNCONFIGURED_SENSITIVE[@]} -gt 0 ]; then
-    WARNINGS+=("unconfigured_sensitive_keys: Sensitive user config values not set: $(IFS=,; echo "${UNCONFIGURED_SENSITIVE[*]}"). MCP servers depending on these will fail. Run /ops:setup to configure.")
+    # Check if a separate working MCP server already provides the same functionality
+    # by scanning global MCP configs for a matching server name
+    _has_global_mcp_server() {
+      local server_name="$1"
+      for global_cfg in "$HOME/.claude/.mcp.json" "$HOME/.claude.json"; do
+        [ -f "$global_cfg" ] || continue
+        if jq -e ".mcpServers.\"$server_name\"" "$global_cfg" >/dev/null 2>&1; then
+          echo true; return
+        fi
+      done
+      # Also check if plugin cache copies provide a working server
+      for cache_mcp in "$HOME/.claude/plugins/cache"/*/ops/*/.mcp.json; do
+        [ -f "$cache_mcp" ] || continue
+        if jq -e ".mcpServers.\"$server_name\"" "$cache_mcp" >/dev/null 2>&1; then
+          echo true; return
+        fi
+      done
+      echo false
+    }
+
+    # Determine which MCP servers the unconfigured keys belong to
+    ALL_COVERED_BY_GLOBAL=true
+    for ukey in "${UNCONFIGURED_SENSITIVE[@]}"; do
+      # Extract server name from the key prefix (e.g. telegram_api_id -> telegram)
+      SERVER_PREFIX="${ukey%%_*}"
+      if [ "$(_has_global_mcp_server "$SERVER_PREFIX")" = false ]; then
+        ALL_COVERED_BY_GLOBAL=false
+        break
+      fi
+    done
+
+    if [ "$ALL_COVERED_BY_GLOBAL" = true ]; then
+      INFO+=("unconfigured_sensitive_keys: Sensitive user config values not set in plugin: $(IFS=,; echo "${UNCONFIGURED_SENSITIVE[*]}"), but a separate working MCP server provides equivalent functionality.")
+    else
+      WARNINGS+=("unconfigured_sensitive_keys: Sensitive user config values not set: $(IFS=,; echo "${UNCONFIGURED_SENSITIVE[*]}"). MCP servers depending on these will fail. Run /ops:setup to configure.")
+    fi
   fi
 fi
 
@@ -240,9 +299,10 @@ if [ -d "$CACHE_DIR" ]; then
   done
 fi
 
-# Build errors/warnings JSON arrays
+# Build errors/warnings/info JSON arrays
 err_json="[]"
 warn_json="[]"
+info_json="[]"
 cache_json="[]"
 if command -v jq >/dev/null 2>&1; then
   if [ ${#ERRORS[@]} -gt 0 ]; then
@@ -250,6 +310,9 @@ if command -v jq >/dev/null 2>&1; then
   fi
   if [ ${#WARNINGS[@]} -gt 0 ]; then
     warn_json=$(printf '%s\n' "${WARNINGS[@]}" | jq -R . | jq -s . 2>/dev/null || echo "[]")
+  fi
+  if [ ${#INFO[@]} -gt 0 ]; then
+    info_json=$(printf '%s\n' "${INFO[@]}" | jq -R . | jq -s . 2>/dev/null || echo "[]")
   fi
   if [ ${#CACHE_VERSIONS[@]} -gt 0 ]; then
     cache_json=$(printf '%s\n' "${CACHE_VERSIONS[@]}" | jq -R . | jq -s . 2>/dev/null || echo "[]")
@@ -262,6 +325,7 @@ cat <<EOF
   "version": "${VERSION:-unknown}",
   "errors": $err_json,
   "warnings": $warn_json,
+  "info": $info_json,
   "tools": $TOOLS_JSON,
   "env_vars": $ENV_JSON,
   "registry": {

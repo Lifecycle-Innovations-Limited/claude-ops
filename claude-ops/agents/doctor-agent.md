@@ -56,14 +56,27 @@ The `repository` field in `.claude-plugin/plugin.json` is an object but must be 
 ### mcp_missing_user_config_*
 An MCP server references `${user_config.*}` variables that have no value configured.
 - Read the plugin's preferences.json (at `$CLAUDE_PLUGIN_DATA_DIR/preferences.json` or `~/.claude/plugins/data/ops-ops-marketplace/preferences.json`)
-- Check if the missing keys can be populated from environment variables, existing config files, or keychain
+- **First check `channels.*` section** for matching values using the key mapping (e.g. `telegram_api_id` ← `channels.telegram.api_id`). Auto-populate `user_config` from these if found.
+- Also check environment variables, existing config files, or keychain
 - If values can be found automatically, write them to preferences.json under `user_config.<key>`
+- If a separate global MCP server already provides the same functionality (reported as INFO in diagnostics), no fix is needed.
 - If values cannot be found (e.g., API keys that need manual entry), report them as "needs manual configuration via /ops:setup"
 - This is the same issue Claude Code's native `/doctor` flags as "Missing required user configuration value"
 
 ### unconfigured_sensitive_keys
 Sensitive userConfig values (API keys, tokens) declared in plugin.json are not set.
-- Same resolution as mcp_missing_user_config — try to auto-populate from env/keychain, otherwise report for manual setup
+- **First**: Read preferences.json and check `channels.*` for matching values. Key mapping:
+  - `telegram_api_id` ← `channels.telegram.api_id`
+  - `telegram_api_hash` ← `channels.telegram.api_hash`
+  - `telegram_phone` ← `channels.telegram.phone`
+  - `telegram_session` ← `channels.telegram.session`
+- If a value exists in `channels.*`, auto-populate it into `user_config.<key>` in preferences.json:
+  ```bash
+  jq --arg key "$SKEY" --arg val "$CHAN_VAL" '.user_config[$key] = $val' "$PREFS" > "$PREFS.tmp" && mv "$PREFS.tmp" "$PREFS"
+  ```
+- Also check environment variables and keychain as fallbacks.
+- If the diagnostic reports this as INFO (not a warning), it means a separate global MCP server already provides the same functionality — no action needed, just acknowledge.
+- Only report "needs manual configuration via /ops:setup" if the value cannot be found anywhere.
 
 ### claude_mcp_unresolved_vars_*
 An MCP server in Claude Code's global config has unresolved `${...}` variable references.
