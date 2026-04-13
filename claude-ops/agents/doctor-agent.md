@@ -14,6 +14,7 @@ tools:
 disallowedTools:
   - Agent
 memory: project
+isolation: worktree
 ---
 
 # DOCTOR AGENT

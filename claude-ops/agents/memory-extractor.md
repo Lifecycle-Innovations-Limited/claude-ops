@@ -1,6 +1,7 @@
 ---
 name: memory-extractor
 description: Background agent that extracts user profiles, contact cards, and behavioral patterns from chat history. Runs as a daemon service every 30 min.
+memory: project
 ---
 
 ## Purpose

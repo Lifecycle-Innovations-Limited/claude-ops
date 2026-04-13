@@ -1,6 +1,7 @@
 ---
 name: ops-daemon-manager
 description: Manages the ops background daemon — start, stop, restart services, check health
+memory: project
 ---
 
 ## Overview
