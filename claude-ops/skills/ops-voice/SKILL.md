@@ -127,13 +127,41 @@ echo "$TRANSCRIPT"
 
 ### `setup` — Configure voice API keys
 
-Walk through credential setup interactively. Check which keys are missing, then prompt for each:
+**Before asking for anything**, auto-scan ALL sources in a single background batch:
 
-1. Check `BLAND_AI_API_KEY` → if missing, prompt and add to Doppler or shell profile
-2. Check `ELEVENLABS_API_KEY` → if missing, prompt
-3. Check `GROQ_API_KEY` → if missing, prompt
-4. Verify each key with a lightweight API call (list voices for ElevenLabs, check balance for Bland AI, list models for Groq)
-5. Report status for all three services
+```bash
+# Env vars
+printenv BLAND_AI_API_KEY BLAND_API_KEY ELEVENLABS_API_KEY GROQ_API_KEY 2>/dev/null
+
+# Shell profiles
+grep -h 'BLAND\|ELEVENLABS\|GROQ' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
+
+# Doppler — ALL projects
+for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
+  for cfg in dev stg prd; do
+    doppler secrets --project "$proj" --config "$cfg" --json 2>/dev/null | \
+      jq -r --arg proj "$proj" --arg cfg "$cfg" 'to_entries[] | select(.key | test("BLAND|ELEVENLABS|GROQ"; "i")) | "\(.key)=\(.value.computed | .[0:12])... (doppler:\($proj)/\($cfg))"'
+  done
+done
+
+# Dashlane
+dcli password bland --output json 2>/dev/null | jq -r '.[] | select(.password != null) | "\(.title): key found"'
+dcli password elevenlabs --output json 2>/dev/null | jq -r '.[] | select(.password != null) | "\(.title): key found"'
+dcli password groq --output json 2>/dev/null | jq -r '.[] | select(.password != null) | "\(.title): key found"'
+
+# Keychain
+security find-generic-password -s "bland-ai-api-key" -w 2>/dev/null
+security find-generic-password -s "elevenlabs-api-key" -w 2>/dev/null
+security find-generic-password -s "groq-api-key" -w 2>/dev/null
+```
+
+Present all findings. Only prompt for keys NOT found in any source. Then validate each found key in background:
+
+1. **Bland AI**: `curl -s -H "authorization: $KEY" https://api.bland.ai/v1/me` — check balance
+2. **ElevenLabs**: `curl -s -H "xi-api-key: $KEY" https://api.elevenlabs.io/v1/voices?page_size=1` — list voices
+3. **Groq**: `curl -s -H "Authorization: Bearer $KEY" https://api.groq.com/openai/v1/models` — list models
+
+Report: `[service] ✓ connected` or `[service] ✗ invalid key — [error]`
 
 ---
 
