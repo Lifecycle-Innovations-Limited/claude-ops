@@ -46,8 +46,20 @@ Parse `$ARGUMENTS` and route immediately:
    - Check WhatsApp: `wacli contacts --search "[contact]" --json 2>/dev/null`
    - Check Slack: `mcp__claude_ai_Slack__slack_search_users` with `query: "[contact]"`
    - Check email: known from context or ask
-3. If multiple channels found, ask: "Send via (a) WhatsApp (b) Slack (c) Email?"
-4. Send via the chosen channel. Confirm with: `Sent to [contact] via [channel] ✓`
+3. If multiple channels found, use `AskUserQuestion`: `[WhatsApp]` / `[Slack]` / `[Email]`
+4. **Always preview before sending.** Use `AskUserQuestion` to confirm:
+
+```
+Ready to send via [channel]:
+  To: [contact name] ([identifier])
+  Message: "[full message text]"
+
+  [Send now]  [Edit message]  [Cancel]
+```
+
+If user picks "Edit message", use `AskUserQuestion` with free-text to get the revised message, then re-preview.
+
+5. Send via the chosen channel. Confirm with: `Sent to [contact] via [channel] ✓`
 
 ### WhatsApp send
 
@@ -61,7 +73,14 @@ Use `mcp__claude_ai_Slack__slack_send_message` with resolved channel/user ID.
 
 ### Email send (draft)
 
-Use `mcp__claude_ai_Gmail__gmail_create_draft` — always create draft first, confirm before sending.
+Use `mcp__claude_ai_Gmail__gmail_create_draft` — always create draft first. Then use `AskUserQuestion`:
+```
+Draft created for [recipient]:
+  Subject: [subject]
+  Body: [preview]
+
+  [Send now]  [Keep as draft]  [Edit]
+```
 
 ---
 

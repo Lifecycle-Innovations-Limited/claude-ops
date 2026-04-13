@@ -10,6 +10,8 @@ allowed-tools:
   - Skill
   - Agent
   - AskUserQuestion
+  - TeamCreate
+  - SendMessage
   - mcp__sentry__authenticate
   - mcp__claude_ai_Linear__list_issues
   - mcp__claude_ai_Linear__save_issue
@@ -18,6 +20,23 @@ allowed-tools:
 ---
 
 # OPS ► CROSS-PLATFORM TRIAGE
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when dispatching fix agents for multiple issues. This enables:
+- Fix agents can share findings (e.g., agent fixing Sentry error discovers the same root cause as a Linear issue)
+- You can redirect agents if cross-referencing reveals duplicate issues
+- Agents report progress and you can prioritize which fix to merge first
+
+**Team setup** (only when flag is enabled, Phase 4 dispatch):
+```
+TeamCreate("triage-fixers")
+Agent(team_name="triage-fixers", name="fix-[issue-id]", subagent_type="ops:triage-agent", ...)
+```
+
+Use `broadcast(content="Root cause found: missing index on users.email — check if your issue is related")` to share discoveries.
+
+If the flag is NOT set, fall back to standard parallel subagents.
 
 ## Phase 1 — Gather issues in parallel
 
@@ -67,15 +86,29 @@ For each GitHub Issue:
 
 ---
 
-## Phase 3 — Auto-resolve confirmed fixed issues
+## Phase 3 — Confirm and resolve fixed issues
 
-For issues confirmed fixed in code AND deployed:
+For issues confirmed fixed in code AND deployed, show the full list and use `AskUserQuestion`:
+
+```
+Found N issues confirmed fixed and deployed:
+
+  [Sentry] [title] — fix in [commit], deployed [time ago]
+  [Linear] [title] — fix in [commit], deployed [time ago]
+  [GitHub] #[N] [title] — referenced in merged PR #[M]
+
+  [Resolve all N]  [Review each one]  [Skip — don't auto-resolve]
+```
+
+If user picks "Review each one", show each issue individually with `[Resolve]` / `[Skip]` via `AskUserQuestion`.
+
+For confirmed issues:
 
 - **Sentry**: use Sentry MCP to resolve the issue
 - **Linear**: use `mcp__claude_ai_Linear__save_issue` with `state: "Done"`
 - **GitHub**: `gh issue close [N] --comment "Auto-closed: fix confirmed deployed"`
 
-Log all auto-resolutions.
+Log all resolutions.
 
 ---
 

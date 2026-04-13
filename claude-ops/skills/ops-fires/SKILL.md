@@ -10,10 +10,27 @@ allowed-tools:
   - Skill
   - Agent
   - AskUserQuestion
+  - TeamCreate
+  - SendMessage
   - mcp__sentry__authenticate
 ---
 
 # OPS ► FIRES
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when dispatching multiple fix agents simultaneously. This enables:
+- Fix agents share findings (e.g., API agent discovers DB is the root cause → infra agent pivots to DB fix)
+- You can prioritize: "CRITICAL ECS issue first, then CI failures"
+- Real-time progress: agents report as they find root causes, you can merge fixes in optimal order
+
+**Team setup** (only when flag is enabled, dispatch phase):
+```
+TeamCreate("fire-fixers")
+Agent(team_name="fire-fixers", name="fix-[service]", ...)
+```
+
+If the flag is NOT set, use standard parallel subagents.
 
 ## Pre-gathered infrastructure data
 
@@ -91,7 +108,23 @@ If no fires: show "ALL SYSTEMS OPERATIONAL" with last-checked timestamps.
 
 ## Dispatch fix agent
 
-When user selects to fix an issue, spawn an Agent with:
+When user selects to fix an issue, use `AskUserQuestion` to confirm the scope before dispatching:
+
+```
+Dispatch fix agent for: [issue title]
+  Severity: [CRITICAL/HIGH/MEDIUM]
+  Repo: [repo]
+  Error: [brief description]
+  
+  The agent will:
+  - Investigate root cause in [repo]
+  - Create feature branch with fix
+  - Open PR for review
+
+  [Dispatch agent]  [Show me the logs first]  [Skip — I'll fix manually]
+```
+
+On confirmation, spawn an Agent with:
 
 - The error details and logs
 - Access to the relevant repo
