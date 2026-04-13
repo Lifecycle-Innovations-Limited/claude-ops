@@ -83,7 +83,7 @@ except:
     print(0)
 " 2>/dev/null || echo "0")
     [[ "$EMAIL_COUNT" =~ ^[0-9]+$ ]] || EMAIL_COUNT="0"
-    RESULT=$(echo "$RESULT" | jq --argjson c "$EMAIL_COUNT" '.channels.email = {"unread": $c, "available": true}')
+    RESULT=$(echo "$RESULT" | jq --argjson c "$EMAIL_COUNT" '.channels.email = {"inbox_count": $c, "available": true}')
   else
     RESULT=$(echo "$RESULT" | jq '.channels.email = {"unread": 0, "available": false, "note": "gog not authenticated — run: gog gmail auth"}')
   fi

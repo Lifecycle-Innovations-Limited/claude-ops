@@ -48,7 +48,7 @@ fi
 
 # ── Gather email unread count via gog ────────────────────────────────────
 EMAIL_SUMMARY="Email: unavailable"
-GOG_RAW=$(command -v gog &>/dev/null && gog gmail search "is:unread after:$(date -u -v-4H +%Y/%m/%d 2>/dev/null || date -u -d '4 hours ago' +%Y/%m/%d 2>/dev/null || date -u +%Y/%m/%d)" --json 2>/dev/null || echo "[]")
+GOG_RAW=$(command -v gog &>/dev/null && gog gmail search "in:inbox after:$(date -u -v-4H +%Y/%m/%d 2>/dev/null || date -u -d '4 hours ago' +%Y/%m/%d 2>/dev/null || date -u +%Y/%m/%d)" --json 2>/dev/null || echo "[]")
 EMAIL_COUNT=$(echo "$GOG_RAW" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)

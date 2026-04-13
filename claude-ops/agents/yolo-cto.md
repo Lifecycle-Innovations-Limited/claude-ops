@@ -156,3 +156,12 @@ Highest risk: [package] [vuln]
 ```
 
 Be specific. Reference actual file paths and line numbers where possible. No generic "improve code quality" advice.
+
+## DESTRUCTIVE ACTION GUARDRAIL
+
+Before recommending deletion, shutdown, or removal of ANY infrastructure:
+1. **Verify project status** — check git log recency, active branches, .planning/ directory, and registry entry
+2. **"Idle" ≠ "dead"** — a service with desiredCount=0 may be an active project between deployments. Only label as DEAD if: no commits in 30+ days AND no active planning AND confirmed abandoned by user
+3. **Flag all destructive recommendations** with `⚠️ REQUIRES CONFIRMATION` — the orchestrator will present these to the user individually via AskUserQuestion before execution
+4. **git filter-repo** — always note that this rewrites ALL history, breaks open PRs/forks, and may not be worth the tradeoff. Suggest credential rotation + .gitignore as the safer default
+5. **Never recommend deleting RDS instances** for active projects — suggest disabling Multi-AZ or stopping (with restart management) instead
