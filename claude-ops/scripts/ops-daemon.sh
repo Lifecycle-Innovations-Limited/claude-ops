@@ -451,6 +451,157 @@ print(len(msgs))
   date +%s > "$MEMORY_TRIGGER"
 }
 
+# Cross-channel contact activity — track who's active across WA + email + Slack
+build_contact_activity_index() {
+  local CONTACT_INDEX="$DATA_DIR/cache/contacts_active.json"
+  local LAST_BUILD="$DATA_DIR/cache/.contacts_ts"
+
+  # Every 15 min
+  if [[ -f "$LAST_BUILD" ]]; then
+    local last; last=$(cat "$LAST_BUILD")
+    if (( $(date +%s) - last < 900 )); then return 0; fi
+  fi
+
+  log "BRAIN: building cross-channel contact activity index"
+
+  python3 - "$DATA_DIR" <<'PYEOF' 2>/dev/null || true
+import json, subprocess, sys, datetime, os, collections
+
+data_dir = sys.argv[1]
+contacts = collections.defaultdict(lambda: {"channels": [], "last_seen": "", "msg_count": 0, "needs_reply": False})
+
+# WhatsApp contacts
+try:
+    wa = json.loads(subprocess.check_output(["wacli", "chats", "list", "--json"], timeout=10, stderr=subprocess.DEVNULL))
+    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)).isoformat()
+    for chat in (wa.get("data") or []):
+        if chat.get("LastMessageTS", "") < cutoff: continue
+        name = chat.get("Name", "Unknown")
+        contacts[name]["channels"].append("whatsapp")
+        contacts[name]["last_seen"] = max(contacts[name]["last_seen"], chat.get("LastMessageTS", ""))
+        contacts[name]["jid"] = chat.get("JID", "")
+except: pass
+
+# Email contacts (recent senders)
+try:
+    em = json.loads(subprocess.check_output(
+        ["gog", "gmail", "search", "-j", "--results-only", "--no-input", "--max", "20", "in:inbox newer_than:3d"],
+        timeout=15, stderr=subprocess.DEVNULL
+    ))
+    for thread in (em or []):
+        sender = thread.get("from", "")
+        name = sender.split("<")[0].strip().strip('"')
+        if name:
+            contacts[name]["channels"].append("email")
+            contacts[name]["email"] = sender
+            contacts[name]["last_seen"] = max(contacts[name]["last_seen"], thread.get("date", ""))
+except: pass
+
+# Merge with existing memories
+mem_dir = os.path.join(data_dir, "memories")
+if os.path.isdir(mem_dir):
+    for f in os.listdir(mem_dir):
+        if f.startswith("contact_") and f.endswith(".md"):
+            name = f.replace("contact_", "").replace(".md", "").replace("_", " ").title()
+            if name in contacts:
+                contacts[name]["has_memory"] = True
+
+# Score: multi-channel contacts rank higher
+scored = []
+for name, info in contacts.items():
+    info["name"] = name
+    info["channels"] = list(set(info["channels"]))
+    info["score"] = len(info["channels"]) * 2 + info["msg_count"]
+    scored.append(info)
+
+scored.sort(key=lambda x: (len(x["channels"]), x["last_seen"]), reverse=True)
+
+with open(os.path.join(data_dir, "cache", "contacts_active.json"), "w") as f:
+    json.dump({"updated": datetime.datetime.now(datetime.timezone.utc).isoformat(), "contacts": scored[:50]}, f, indent=2)
+PYEOF
+
+  date +%s > "$LAST_BUILD"
+  log "BRAIN: contact activity index built"
+}
+
+# Calendar context — pre-fetch today's meetings so skills know what's coming
+prefetch_calendar() {
+  local CAL_CACHE="$DATA_DIR/cache/calendar_today.json"
+  local LAST_FETCH="$DATA_DIR/cache/.calendar_ts"
+
+  # Every 15 min
+  if [[ -f "$LAST_FETCH" ]]; then
+    local last; last=$(cat "$LAST_FETCH")
+    if (( $(date +%s) - last < 900 )); then return 0; fi
+  fi
+
+  if command -v gog &>/dev/null; then
+    log "BRAIN: refreshing calendar cache"
+    gog cal list -j --no-input --days 1 > "$CAL_CACHE" 2>/dev/null || echo '[]' > "$CAL_CACHE"
+    date +%s > "$LAST_FETCH"
+  fi
+}
+
+# Project health snapshot — git status + CI for registered repos
+prefetch_project_health() {
+  local PROJ_CACHE="$DATA_DIR/cache/projects_health.json"
+  local LAST_FETCH="$DATA_DIR/cache/.projects_ts"
+  local REGISTRY="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")/../}/scripts/registry.json"
+
+  # Every 10 min
+  if [[ -f "$LAST_FETCH" ]]; then
+    local last; last=$(cat "$LAST_FETCH")
+    if (( $(date +%s) - last < 600 )); then return 0; fi
+  fi
+
+  if [[ ! -f "$REGISTRY" ]]; then return 0; fi
+
+  log "BRAIN: refreshing project health cache"
+
+  python3 - "$REGISTRY" "$PROJ_CACHE" <<'PYEOF' 2>/dev/null || true
+import json, subprocess, sys, os
+
+registry_path, output_path = sys.argv[1], sys.argv[2]
+try:
+    registry = json.load(open(registry_path))
+except: registry = {"projects": []}
+
+results = []
+for proj in (registry.get("projects") or [])[:10]:
+    path = os.path.expanduser(proj.get("path", ""))
+    name = proj.get("alias", proj.get("name", "unknown"))
+    if not os.path.isdir(path): continue
+
+    info = {"name": name, "path": path}
+
+    # Git status
+    try:
+        status = subprocess.check_output(["git", "-C", path, "status", "--porcelain"], timeout=5, stderr=subprocess.DEVNULL).decode()
+        info["uncommitted"] = len([l for l in status.strip().split("\n") if l.strip()])
+    except: info["uncommitted"] = -1
+
+    # Branch
+    try:
+        info["branch"] = subprocess.check_output(["git", "-C", path, "branch", "--show-current"], timeout=5, stderr=subprocess.DEVNULL).decode().strip()
+    except: info["branch"] = "unknown"
+
+    # Commits ahead of remote
+    try:
+        ahead = subprocess.check_output(["git", "-C", path, "rev-list", "--count", "@{u}..HEAD"], timeout=5, stderr=subprocess.DEVNULL).decode().strip()
+        info["commits_ahead"] = int(ahead)
+    except: info["commits_ahead"] = 0
+
+    results.append(info)
+
+import datetime
+with open(output_path, "w") as f:
+    json.dump({"updated": datetime.datetime.now(datetime.timezone.utc).isoformat(), "projects": results}, f, indent=2)
+PYEOF
+
+  date +%s > "$LAST_FETCH"
+  log "BRAIN: project health cache updated"
+}
+
 # ── Graceful shutdown ─────────────────────────────────────────────────────
 cleanup() {
   log "SHUTDOWN: SIGTERM received — stopping all services"
@@ -523,9 +674,13 @@ while true; do
   done < <(get_enabled_services)
 
   # ── Intelligence pass (smart brain) ──────────────────────────────────────
-  prefetch_briefing_cache
-  detect_urgent_messages
-  trigger_smart_memory_extraction
+  # These run with their own internal throttles — safe to call every loop
+  prefetch_briefing_cache          # Every 5 min: WA/email/PR counts for ops-go
+  detect_urgent_messages           # Every 5 min: keyword scan for time-sensitive msgs
+  trigger_smart_memory_extraction  # Every 10 min: haiku extraction if new msgs arrived
+  build_contact_activity_index     # Every 15 min: cross-channel contact scoring
+  prefetch_calendar                # Every 15 min: today's meetings for context
+  prefetch_project_health          # Every 10 min: git/branch status per registered repo
 
   write_daemon_health
   sleep 30

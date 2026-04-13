@@ -34,6 +34,19 @@ Before rendering, load available context:
 2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
    - If `action_needed` is not null → show a warning banner at the top of the dashboard before the menu
 
+## CLI/API Reference
+
+### bin/ops-dash
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `${CLAUDE_PLUGIN_ROOT}/bin/ops-dash` | Render full pixel-art dashboard | Formatted ASCII dashboard |
+| `${CLAUDE_PLUGIN_ROOT}/bin/ops-dash 2>/dev/null \|\| echo "DASH_RENDER_FAILED"` | Render with failure detection | Dashboard or `DASH_RENDER_FAILED` sentinel |
+
+The bin script reads `preferences.json` and `daemon-health.json` internally. The skill reads these files separately to check for warnings before invoking the script.
+
+---
+
 ## Render dashboard instantly
 
 ```!

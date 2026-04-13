@@ -20,6 +20,33 @@ Before scanning, load:
 
 # OPS > SPEEDUP — System Optimizer
 
+## CLI/API Reference
+
+### ops-speedup bin script
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `${CLAUDE_PLUGIN_ROOT}/bin/ops-speedup` | Visual header + quick scan | Formatted ASCII output |
+| `${CLAUDE_PLUGIN_ROOT}/bin/ops-speedup --json` | Machine-readable diagnostics | JSON with disk, memory, process data |
+| `zsh ~/.claude/scripts/speedup.sh` | macOS comprehensive cleanup script | Autonomous cleanup with progress |
+
+### System commands used
+
+| Command | Purpose |
+|---------|---------|
+| `diskutil apfs list` | Purgeable space on APFS volumes |
+| `vm_stat` | macOS memory pressure and page stats |
+| `ps aux -m` / `ps aux --sort=-%mem` | Top processes by CPU/RAM |
+| `brew outdated --json` / `brew cleanup --dry-run` | Homebrew cache analysis |
+| `xcrun simctl list runtimes` / `xcrun simctl delete unavailable` | Xcode simulator management |
+| `tmutil listlocalsnapshots /` | Time Machine local snapshots |
+| `launchctl list` / `launchctl bootout` | Launch agent management |
+| `sudo dscacheutil -flushcache` + `sudo killall -HUP mDNSResponder` | macOS DNS flush |
+| `sudo systemd-resolve --flush-caches` | Linux DNS flush |
+| `journalctl --vacuum-time=7d` | Linux journal log cleanup |
+
+---
+
 ## Phase 1 — Visual header + system scan
 
 ```!

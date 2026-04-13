@@ -15,7 +15,6 @@ effort: low
 maxTurns: 20
 disallowedTools:
   - Edit
-  - Write
   - NotebookEdit
 ---
 

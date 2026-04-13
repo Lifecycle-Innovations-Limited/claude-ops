@@ -47,3 +47,7 @@ Route `$ARGUMENTS` to the correct ops skill:
 | orchestrate, subagents, agents, dispatch, run | `/ops:ops-orchestrate $ARGUMENTS` |
 
 If `$ARGUMENTS` is empty, launch the interactive dashboard: invoke `/ops:ops-dash` directly.
+
+## CLI/API Reference
+
+This skill is a router only — it does not call CLI tools directly. All tool usage is delegated to the target skill after routing. See the referenced skill's `## CLI/API Reference` section for details.

@@ -18,9 +18,9 @@ allowed-tools:
   - mcp__claude_ai_Slack__slack_search_public_and_private
   - mcp__claude_ops_telegram__send_message
   - mcp__claude_ops_telegram__get_updates
+  - mcp__claude_ops_telegram__list_chats
 effort: medium
 maxTurns: 40
-  - mcp__claude_ops_telegram__list_chats
 ---
 
 # OPS ► COMMS

@@ -25,6 +25,26 @@ Before diagnosing, load:
 
 # OPS ► DOCTOR
 
+## CLI/API Reference
+
+### ops-doctor bin script
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `${CLAUDE_PLUGIN_ROOT}/bin/ops-doctor` | Run full health diagnostics | JSON with `errors`, `warnings`, `tools`, `env_vars`, `registry` |
+| `${CLAUDE_PLUGIN_ROOT}/bin/ops-doctor 2>/dev/null \|\| echo '{"errors":["diagnostic_script_failed"]}'` | Run with fallback | JSON or error sentinel |
+
+### Key files read by diagnostics
+
+| File | Purpose |
+|------|---------|
+| `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` | Primary daemon health input |
+| `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` | Configured channels and services |
+| `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` | Plugin manifest validation |
+| `${CLAUDE_PLUGIN_ROOT}/scripts/registry.json` | Project registry validation |
+
+---
+
 ## Phase 1 — Run diagnostics
 
 Run the diagnostic script to get a full health report:

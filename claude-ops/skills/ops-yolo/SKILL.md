@@ -18,9 +18,6 @@ allowed-tools:
   - EnterPlanMode
   - ExitPlanMode
   - CronCreate
-effort: high
-model: claude-opus-4-6
-maxTurns: 50
   - CronList
   - CronDelete
   - Monitor
@@ -31,6 +28,9 @@ maxTurns: 50
   - mcp__claude_ai_Vercel__list_deployments
   - mcp__claude_ai_Slack__slack_search_public_and_private
   - mcp__claude_ai_Gmail__gmail_search_messages
+effort: high
+model: claude-opus-4-6
+maxTurns: 50
 ---
 
 ## Runtime Context
@@ -38,8 +38,8 @@ maxTurns: 50
 Before YOLO analysis, load:
 1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `timezone`, `yolo_enabled`, all channel configs
 2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — all services must be healthy for comprehensive analysis
-3. **Secrets**: Resolve ALL API keys via env → Doppler → password manager
-4. **Ops memories**: Load ALL memory files — contact profiles, preferences, topics, donts — YOLO agents need maximum context
+3. **Secrets**: Resolve ALL keys via env → Doppler → password manager: GITHUB_TOKEN, SENTRY_AUTH_TOKEN, LINEAR_API_KEY, AWS_ACCESS_KEY_ID
+4. **Ops memories**: Load ALL files from `${CLAUDE_PLUGIN_DATA_DIR}/memories/` — contact profiles, preferences, topics, donts. YOLO agents need maximum context.
 
 
 # OPS ► YOLO MODE

@@ -12,9 +12,63 @@ allowed-tools:
   - AskUserQuestion
   - WebFetch
   - WebSearch
+effort: medium
+maxTurns: 40
 ---
 
 # OPS ► MARKETING COMMAND CENTER
+
+## Runtime Context
+
+Before executing, load available context:
+
+1. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`
+   - `timezone` — display all timestamps correctly
+   - `klaviyo_private_key`, `meta_ads_token`, `meta_ad_account_id`, `ga4_property_id`, `google_search_console_site` — check userConfig keys before env vars
+
+2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
+   - If `action_needed` is not null → surface it before running any channel queries
+
+3. **Secrets**: Resolve API keys via userConfig → env vars → Doppler (see Credential Resolution section below)
+
+## CLI/API Reference
+
+### Klaviyo REST API
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `https://a.klaviyo.com/api/lists/?fields[list]=name,id,profile_count` | GET | All lists + subscriber counts |
+| `https://a.klaviyo.com/api/campaigns/?filter=equals(messages.channel,'email')&sort=-created_at` | GET | Recent campaigns |
+| `https://a.klaviyo.com/api/flows/?filter=equals(status,'live')` | GET | Active flows |
+| `https://a.klaviyo.com/api/metrics/` | GET | Available metrics |
+
+**Auth header**: `Authorization: Klaviyo-API-Key ${KLAVIYO_KEY}` | **Revision header**: `revision: 2024-10-15`
+
+### Meta Graph API
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `https://graph.facebook.com/v18.0/${META_ACCOUNT}/insights?fields=spend,...&date_preset=last_7d` | GET | Account-level ad spend |
+| `https://graph.facebook.com/v18.0/${META_ACCOUNT}/campaigns?fields=name,status,insights{...}` | GET | Campaign breakdown |
+| `https://graph.facebook.com/v18.0/me/accounts?fields=instagram_business_account` | GET | Linked Instagram account |
+
+**Auth header**: `Authorization: Bearer ${META_TOKEN}`
+
+### Google Analytics 4 (Data API)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport` | POST | Run custom report |
+
+**Auth**: gcloud ADC — `GA4_TOKEN=$(gcloud auth application-default print-access-token)`
+
+### Google Search Console
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `https://searchconsole.googleapis.com/webmasters/v3/sites/${GSC_SITE_ENCODED}/searchAnalytics/query` | POST | Search performance data |
+
+**Auth**: Same gcloud ADC token as GA4
 
 ## Credential Resolution
 
