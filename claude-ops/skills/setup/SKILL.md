@@ -103,13 +103,16 @@ Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need 
 | Option             | Header   | Description                                                   |
 | ------------------ | -------- | ------------------------------------------------------------- |
 | Install CLIs       | cli      | Install missing command-line tools via Homebrew               |
-| Configure channels | channels | Set tokens for Telegram, WhatsApp, Email, Slack               |
-| Configure MCPs     | mcp      | Enable Linear, Sentry, Vercel, Gmail MCP servers              |
-| Companion plugins  | plugins  | Install GSD for project roadmap tracking                      |
-| Build registry     | registry | Register projects Claude should manage                        |
-| Background daemon  | daemon   | Install ops-daemon for persistent wacli-sync + memory extract |
-| Save preferences   | prefs    | Owner name, timezone, default priorities                      |
-| Shell env          | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile                  |
+| Configure channels  | channels | Set tokens for Telegram, WhatsApp, Email, Slack               |
+| Configure ecommerce | ecom     | Set Shopify store URL + admin token, ShipBob                  |
+| Configure marketing | mktg     | Set Klaviyo, Meta Ads, GA4, Search Console keys               |
+| Configure voice     | voice    | Set Bland AI, ElevenLabs, Groq API keys                       |
+| Configure MCPs      | mcp      | Enable Linear, Sentry, Vercel, Gmail MCP servers              |
+| Companion plugins   | plugins  | Install GSD for project roadmap tracking                      |
+| Build registry      | registry | Register projects Claude should manage                        |
+| Background daemon   | daemon   | Install ops-daemon for persistent wacli-sync + memory extract |
+| Save preferences    | prefs    | Owner name, timezone, default priorities                      |
+| Shell env           | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile                  |
 
 Store the user's selections and run each selected section in order.
 
@@ -1077,6 +1080,256 @@ Add to the shortcuts table: `vault`, `password-manager`, `pm` → Step 3g
 
 ---
 
+### 3h — Ecommerce (Shopify + ShipBob)
+
+#### Step 3h.1 — Check existing config
+
+Check for existing credentials in this order:
+
+1. `$PREFS_PATH` — look for `ecom.shopify.store_url` and `ecom.shopify.admin_token`
+2. Shell env — `printenv SHOPIFY_STORE_URL`, `printenv SHOPIFY_ADMIN_TOKEN`
+3. Doppler — `doppler secrets get SHOPIFY_ADMIN_TOKEN --plain 2>/dev/null`
+
+If both `store_url` and `admin_token` are already set, show:
+```
+✓ Shopify — already configured (<store_url>)
+  [Keep existing]  [Reconfigure]
+```
+If the user keeps existing, skip to the ShipBob check. If reconfiguring or not set, continue.
+
+#### Step 3h.2 — Shopify store URL
+
+Ask via `AskUserQuestion` (free text):
+```
+Enter your Shopify store URL:
+  Format: yourstore.myshopify.com
+  (Do not include https://)
+```
+
+Validate the input: strip `https://`, strip trailing slash, check that the result ends with `.myshopify.com`. If invalid, ask again with a correction note.
+
+#### Step 3h.3 — Shopify Admin API token
+
+Ask via `AskUserQuestion` (free text):
+```
+Enter your Shopify Admin API access token:
+  To generate one:
+  1. Go to your Shopify admin → Settings → Apps → Develop apps
+  2. Create an app (or select an existing one)
+  3. Under "Configuration", grant the scopes you need (read_orders, read_products, etc.)
+  4. Install the app, then copy the "Admin API access token"
+  Token starts with "shpat_"
+```
+
+#### Step 3h.4 — ShipBob (optional)
+
+Ask via `AskUserQuestion`:
+```
+Do you use ShipBob for fulfillment?
+  [Yes — enter ShipBob API token]  [Skip ShipBob]
+```
+
+If Yes, ask for the ShipBob personal access token (explain: ShipBob dashboard → Integrations → API Tokens).
+
+#### Step 3h.5 — Save to preferences
+
+Write to `$PREFS_PATH` (merge):
+```json
+{
+  "ecom": {
+    "shopify": {
+      "store_url": "<yourstore.myshopify.com>",
+      "admin_token": "<shpat_...>"
+    },
+    "shipbob": {
+      "api_token": "<token_or_null>"
+    }
+  }
+}
+```
+
+Do NOT store the admin token in plaintext preferences if Doppler is configured — instead write the Doppler reference and save the actual token to Doppler:
+```bash
+doppler secrets set SHOPIFY_ADMIN_TOKEN="<token>" --project <project> --config <config>
+```
+Then store `"admin_token": "doppler:SHOPIFY_ADMIN_TOKEN"` in preferences.
+
+#### Step 3h.6 — Smoke test
+
+```bash
+STORE=$(jq -r '.ecom.shopify.store_url' "$PREFS_PATH")
+TOKEN=$(jq -r '.ecom.shopify.admin_token' "$PREFS_PATH")
+# Resolve Doppler reference if needed
+if [[ "$TOKEN" == doppler:* ]]; then
+  KEY="${TOKEN#doppler:}"
+  TOKEN=$(doppler secrets get "$KEY" --plain 2>/dev/null)
+fi
+curl -s -H "X-Shopify-Access-Token: $TOKEN" \
+  "https://$STORE/admin/api/2024-10/shop.json" | jq '.shop.name'
+```
+
+Expect a shop name string. If the response contains `errors` or `{"shop":null}`, show the error and ask the user to check the token scopes.
+
+Print:
+```
+✓ Shopify — connected (<shop name>)
+```
+
+---
+
+### 3i — Marketing (Klaviyo, Meta Ads, GA4, Search Console)
+
+For each service below, check if already configured (check `$PREFS_PATH` under `marketing.*`, then shell env, then Doppler) before prompting. If already set, show `✓ <service> — already configured` and offer `[Keep]` / `[Reconfigure]`.
+
+Ask which marketing integrations to configure via `AskUserQuestion` with `multiSelect: true`:
+
+| Option                  | Header   | Description                                   |
+| ----------------------- | -------- | --------------------------------------------- |
+| Klaviyo                 | klaviyo  | Email/SMS marketing — private API key         |
+| Meta Ads                | meta     | Facebook/Instagram ads — access token + ad account ID |
+| Google Analytics 4      | ga4      | Web analytics — GA4 property ID               |
+| Google Search Console   | gsc      | SEO data — site URL (uses gcloud auth)         |
+
+#### Klaviyo
+
+Ask for the private API key:
+```
+Enter your Klaviyo Private API Key:
+  To generate one: Klaviyo dashboard → Settings → API Keys → Create Private Key
+  Key starts with "pk_"
+```
+
+Smoke test:
+```bash
+curl -s -H "Authorization: Klaviyo-API-Key $KEY" \
+  -H "revision: 2024-10-15" \
+  "https://a.klaviyo.com/api/lists" | jq '.data | length'
+```
+Expect a number ≥ 0. If the response contains `"detail"` with an auth error, show it and re-ask.
+
+#### Meta Ads
+
+Ask for:
+1. Access token (explain: Meta Business Suite → Settings → System Users or your personal account → Generate token with `ads_read` permission)
+2. Ad account ID (format: `act_XXXXXXXXXX` — found in Business Manager → Ad Accounts)
+
+Smoke test:
+```bash
+curl -s "https://graph.facebook.com/v20.0/$AD_ACCOUNT_ID/campaigns?access_token=$TOKEN&limit=1" | jq '.data | length'
+```
+
+#### Google Analytics 4
+
+Ask for the GA4 Property ID (explain: GA4 dashboard → Admin → Property Settings → Property ID, format: numeric, e.g. `123456789`).
+
+No API key needed if `gcloud` is authenticated — the GA4 Data API uses Application Default Credentials. Check:
+```bash
+gcloud auth application-default print-access-token 2>/dev/null | head -c 10
+```
+If gcloud ADC is not set up, note that GA4 queries will require manual auth: `gcloud auth application-default login`.
+
+#### Google Search Console
+
+Ask for the site URL (format: `https://example.com/` or `sc-domain:example.com`). No API key needed if gcloud is authed.
+
+Smoke test:
+```bash
+ACCESS_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
+curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+  "https://searchconsole.googleapis.com/webmasters/v3/sites" | jq '.siteEntry | length'
+```
+
+#### Save to preferences
+
+Write to `$PREFS_PATH` (merge):
+```json
+{
+  "marketing": {
+    "klaviyo": { "api_key": "<pk_...>" },
+    "meta": { "access_token": "<token>", "ad_account_id": "act_XXXXXXXXXX" },
+    "ga4": { "property_id": "123456789" },
+    "gsc": { "site_url": "https://example.com/" }
+  }
+}
+```
+
+Same Doppler-reference pattern as Step 3h — prefer `doppler:KEY_NAME` over raw tokens when Doppler is configured.
+
+---
+
+### 3j — Voice (Bland AI, ElevenLabs, Groq)
+
+Check existing config in `$PREFS_PATH` under `voice.*`, shell env, and Doppler before prompting each one.
+
+Ask which voice services to configure via `AskUserQuestion` with `multiSelect: true`:
+
+| Option      | Header      | Description                                    |
+| ----------- | ----------- | ---------------------------------------------- |
+| Bland AI    | bland       | Outbound AI phone calls — API key              |
+| ElevenLabs  | elevenlabs  | Text-to-speech and voice cloning — API key     |
+| Groq        | groq        | Fast LLM inference (Whisper, LLaMA) — API key  |
+
+#### Bland AI
+
+Ask for the API key:
+```
+Enter your Bland AI API Key:
+  To find it: https://app.bland.ai → Settings → API Key
+```
+
+Smoke test:
+```bash
+curl -s -H "Authorization: $KEY" "https://api.bland.ai/v1/me" | jq '.user.id'
+```
+Expect a non-null user ID.
+
+#### ElevenLabs
+
+Ask for the API key:
+```
+Enter your ElevenLabs API Key:
+  To find it: https://elevenlabs.io → Profile (top-right) → API Key
+```
+
+Smoke test:
+```bash
+curl -s -H "xi-api-key: $KEY" "https://api.elevenlabs.io/v1/user" | jq '.subscription.tier'
+```
+Expect a subscription tier string (e.g. `"free"`, `"starter"`).
+
+#### Groq
+
+Ask for the API key:
+```
+Enter your Groq API Key:
+  To generate one: https://console.groq.com → API Keys → Create API Key
+  Key starts with "gsk_"
+```
+
+Smoke test:
+```bash
+curl -s -H "Authorization: Bearer $KEY" \
+  "https://api.groq.com/openai/v1/models" | jq '.data | length'
+```
+Expect a positive integer (number of available models).
+
+#### Save to preferences
+
+Write to `$PREFS_PATH` (merge):
+```json
+{
+  "voice": {
+    "bland": { "api_key": "<key>" },
+    "elevenlabs": { "api_key": "<key>" },
+    "groq": { "api_key": "gsk_..." }
+  }
+}
+```
+
+Same Doppler-reference pattern — prefer `doppler:KEY_NAME` over raw tokens when Doppler is configured.
+
+---
+
 ## Step 4 — Configure MCPs (if selected)
 
 For each MCP that isn't in `mcp_configured`, print the one-line command the user should run:
@@ -1163,7 +1416,8 @@ Ask the user via `AskUserQuestion`:
 
 ```
 Install the ops background daemon?
-  Manages wacli-sync and memory-extractor persistently — recommended for reliable briefings.
+  Manages background services persistently — recommended for reliable briefings and monitoring.
+  Services enabled depend on what was configured earlier in setup.
   [Yes — install daemon]  [Skip — use standalone keepalive instead]
 ```
 
@@ -1224,9 +1478,45 @@ If the health file is missing (daemon may still be initializing), wait 5 more se
   tail -20 ~/.claude/plugins/data/ops-ops-marketplace/logs/ops-daemon.log
 ```
 
-**3. Record in preferences:**
+**3. Build the services list and record in preferences:**
 
-Write `daemon.enabled = true` and `daemon.services = ["wacli-sync", "memory-extractor"]` to `$PREFS_PATH`.
+Determine which services to enable based on what was configured in earlier steps:
+
+- `wacli-sync` — always include if WhatsApp is configured (`channels.whatsapp` is set)
+- `memory-extractor` — always include
+- `inbox-digest` — always include (runs every 4h, aggregates all configured channels)
+- `store-health` — include ONLY if ecommerce was configured (`ecom.shopify.store_url` is set in `$PREFS_PATH`)
+- `competitor-intel` — always include (runs weekly Monday 10am)
+- `message-listener` — include if WhatsApp or Telegram is configured (persistent poller)
+
+Build the services array programmatically:
+```bash
+SERVICES='["memory-extractor","inbox-digest","competitor-intel"]'
+PREFS=$(cat "$PREFS_PATH" 2>/dev/null || echo '{}')
+# Add wacli-sync + message-listener if WhatsApp is configured
+if echo "$PREFS" | jq -e '.channels.whatsapp' > /dev/null 2>&1; then
+  SERVICES=$(echo "$SERVICES" | jq '. + ["wacli-sync","message-listener"]')
+fi
+# Add message-listener for Telegram too (deduplicate)
+if echo "$PREFS" | jq -e '.channels.telegram' > /dev/null 2>&1; then
+  SERVICES=$(echo "$SERVICES" | jq '. + ["message-listener"] | unique')
+fi
+# Add store-health only if Shopify is configured
+if echo "$PREFS" | jq -e '.ecom.shopify.store_url' > /dev/null 2>&1; then
+  SERVICES=$(echo "$SERVICES" | jq '. + ["store-health"]')
+fi
+echo "Services to enable: $SERVICES"
+```
+
+Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with or replace the default, enabling only the services determined above. Each service entry should include:
+- `wacli-sync`: `{ "enabled": true, "interval": "continuous" }`
+- `memory-extractor`: `{ "enabled": true, "interval": "300" }` (every 5 min)
+- `inbox-digest`: `{ "enabled": true, "schedule": "0 */4 * * *" }` (every 4h)
+- `store-health`: `{ "enabled": true, "schedule": "0 9 * * *" }` (daily 9am) — only if ecom configured
+- `competitor-intel`: `{ "enabled": true, "schedule": "0 10 * * 1" }` (weekly Monday 10am)
+- `message-listener`: `{ "enabled": true, "interval": "continuous" }`
+
+Write `daemon.enabled = true` and `daemon.services` (the computed array) to `$PREFS_PATH`.
 
 ---
 
@@ -1316,15 +1606,22 @@ Re-run the detector and present a final status dashboard:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  ✓ Core CLIs:  jq, git, gh, aws, node
  ✓ Channels:   telegram, whatsapp, email
+ ✓ Ecommerce:  shopify (<store_url>)             ← omit line if not configured
+ ✓ Marketing:  klaviyo, meta, ga4, gsc           ← omit line if not configured
+ ✓ Voice:      bland, elevenlabs, groq           ← omit line if not configured
  ✓ Secrets:    doppler → healify/dev
  ✓ MCPs:       linear, sentry, vercel
  ✓ Registry:   20 projects
  ✓ Prefs:      saved to ~/.claude/plugins/data/ops-ops-marketplace/preferences.json
- ✓ Daemon:     ops-daemon → wacli-sync, memory-extractor
+ ✓ Daemon:     ops-daemon → wacli-sync, memory-extractor, inbox-digest
 
  Next: /ops-go for your first briefing
 ──────────────────────────────────────────────────────
 ```
+
+For each of ecommerce, marketing, and voice: only show the status line if at least one service was configured in that category. Use `✓` if configured, `○` if skipped. Omit the line entirely if the section was never visited.
+
+For the daemon line, list only the services that were actually enabled (from the computed services array in Step 5b).
 
 If any required tool is still missing, list it with the exact command to install it and stop short of claiming success.
 
@@ -1366,6 +1663,9 @@ If `$ARGUMENTS` contains a specific section name, jump straight to that section:
 | `calendar`, `cal`                      | Step 3e |
 | `doppler`, `secrets`                   | Step 3f |
 | `vault`, `password-manager`, `pm`      | Step 3g |
+| `ecom`, `shopify`, `store`             | Step 3h |
+| `marketing`, `klaviyo`, `ads`, `meta`, `ga4` | Step 3i |
+| `voice`, `bland`, `elevenlabs`, `tts`  | Step 3j |
 | `mcp`                                  | Step 4  |
 | `registry`, `projects`                 | Step 5  |
 | `daemon`, `background`                 | Step 5b |
