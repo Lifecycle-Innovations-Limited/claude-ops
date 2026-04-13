@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# ops-doctor — Diagnose ops plugin health and emit JSON report
+# Checks: plugin manifest, bin permissions, skill files, MCP config,
+# registry, preferences, env vars, CLI tools, and agent definitions.
+set -euo pipefail
+
+has() { command -v "$1" >/dev/null 2>&1 && echo true || echo false; }
+has_env() { [ -n "${!1:-}" ] && echo true || echo false; }
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PLUGIN_JSON="$SCRIPT_DIR/.claude-plugin/plugin.json"
+REGISTRY="$SCRIPT_DIR/scripts/registry.json"
+MCP_JSON_FILE="$SCRIPT_DIR/.mcp.json"
+PREFS_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PREFS="$PREFS_DIR/preferences.json"
+if [ ! -f "$PREFS" ] && [ -f "$SCRIPT_DIR/scripts/preferences.json" ]; then
+  PREFS="$SCRIPT_DIR/scripts/preferences.json"
+fi
+
+ERRORS=()
+WARNINGS=()
+INFO=()
+
+# --- 1. Plugin manifest ---
+if [ ! -f "$PLUGIN_JSON" ]; then
+  ERRORS+=("plugin_manifest_missing: .claude-plugin/plugin.json not found")
+else
+  if command -v jq >/dev/null 2>&1; then
+    if ! jq empty "$PLUGIN_JSON" 2>/dev/null; then
+      ERRORS+=("plugin_manifest_invalid_json: plugin.json is not valid JSON")
+    else
+      # Check repository field type
+      REPO_TYPE=$(jq -r 'type_of(.repository) // "null"' "$PLUGIN_JSON" 2>/dev/null || echo "unknown")
+      if [ "$REPO_TYPE" = "unknown" ]; then
+        REPO_TYPE=$(jq -r '.repository | type' "$PLUGIN_JSON" 2>/dev/null || echo "unknown")
+      fi
+      if [ "$REPO_TYPE" = "object" ]; then
+        ERRORS+=("plugin_manifest_repository_type: repository field is an object, must be a string")
+      fi
+      # Check required fields
+      for field in name version description; do
+        VAL=$(jq -r ".$field // empty" "$PLUGIN_JSON" 2>/dev/null)
+        if [ -z "$VAL" ]; then
+          ERRORS+=("plugin_manifest_missing_field_$field: required field '$field' is missing or empty")
+        fi
+      done
+      VERSION=$(jq -r '.version // "unknown"' "$PLUGIN_JSON" 2>/dev/null)
+    fi
+  else
+    WARNINGS+=("jq_missing: cannot validate plugin.json without jq")
+  fi
+fi
+
+# --- 2. Bin script permissions ---
+BIN_ISSUES=()
+for script in "$SCRIPT_DIR"/bin/ops-*; do
+  [ -f "$script" ] || continue
+  if [ ! -x "$script" ]; then
+    BIN_ISSUES+=("$(basename "$script")")
+  fi
+done
+if [ ${#BIN_ISSUES[@]} -gt 0 ]; then
+  WARNINGS+=("bin_not_executable: $(IFS=,; echo "${BIN_ISSUES[*]}")")
+fi
+
+# --- 3. Skill directories ---
+SKILL_ISSUES=()
+for skill_dir in "$SCRIPT_DIR"/skills/*/; do
+  [ -d "$skill_dir" ] || continue
+  if [ ! -f "${skill_dir}SKILL.md" ]; then
+    SKILL_ISSUES+=("$(basename "$skill_dir")")
+  fi
+done
+if [ ${#SKILL_ISSUES[@]} -gt 0 ]; then
+  ERRORS+=("skill_missing_definition: skills without SKILL.md: $(IFS=,; echo "${SKILL_ISSUES[*]}")")
+fi
+
+# --- 4. Agent definitions ---
+AGENT_ISSUES=()
+for agent_file in "$SCRIPT_DIR"/agents/*.md; do
+  [ -f "$agent_file" ] || continue
+  if ! head -1 "$agent_file" | grep -q "^---"; then
+    AGENT_ISSUES+=("$(basename "$agent_file")")
+  fi
+done
+if [ ${#AGENT_ISSUES[@]} -gt 0 ]; then
+  WARNINGS+=("agent_missing_frontmatter: $(IFS=,; echo "${AGENT_ISSUES[*]}")")
+fi
+
+# --- 5. MCP config ---
+if [ ! -f "$MCP_JSON_FILE" ]; then
+  WARNINGS+=("mcp_config_missing: .mcp.json not found")
+elif command -v jq >/dev/null 2>&1; then
+  if ! jq empty "$MCP_JSON_FILE" 2>/dev/null; then
+    ERRORS+=("mcp_config_invalid_json: .mcp.json is not valid JSON")
+  fi
+fi
+
+# --- 6. Registry ---
+REGISTRY_STATUS="missing"
+REGISTRY_COUNT=0
+if [ -f "$REGISTRY" ]; then
+  REGISTRY_STATUS="present"
+  if command -v jq >/dev/null 2>&1; then
+    if ! jq empty "$REGISTRY" 2>/dev/null; then
+      ERRORS+=("registry_invalid_json: registry.json is not valid JSON")
+      REGISTRY_STATUS="invalid"
+    else
+      REGISTRY_COUNT=$(jq '.projects | length' "$REGISTRY" 2>/dev/null || echo 0)
+    fi
+  fi
+else
+  WARNINGS+=("registry_missing: scripts/registry.json not found — run /ops:setup to create")
+fi
+
+# --- 7. Preferences ---
+PREFS_STATUS="missing"
+if [ -f "$PREFS" ]; then
+  PREFS_STATUS="present"
+  if command -v jq >/dev/null 2>&1 && ! jq empty "$PREFS" 2>/dev/null; then
+    ERRORS+=("preferences_invalid_json: preferences.json is not valid JSON")
+    PREFS_STATUS="invalid"
+  fi
+fi
+
+# --- 8. CLI tools ---
+TOOLS_JSON=$(cat <<TOOLS
+{
+  "jq": $(has jq),
+  "git": $(has git),
+  "gh": $(has gh),
+  "aws": $(has aws),
+  "node": $(has node),
+  "wacli": $(has wacli),
+  "gog": $(has gog),
+  "sentry-cli": $(has sentry-cli),
+  "doppler": $(has doppler)
+}
+TOOLS
+)
+
+# --- 9. Env vars ---
+ENV_JSON=$(cat <<ENV
+{
+  "CLAUDE_PLUGIN_ROOT": $(has_env CLAUDE_PLUGIN_ROOT),
+  "CLAUDE_PLUGIN_DATA_DIR": $(has_env CLAUDE_PLUGIN_DATA_DIR),
+  "TELEGRAM_BOT_TOKEN": $(has_env TELEGRAM_BOT_TOKEN),
+  "TELEGRAM_OWNER_ID": $(has_env TELEGRAM_OWNER_ID),
+  "AWS_PROFILE": $(has_env AWS_PROFILE),
+  "GH_TOKEN": $(has_env GH_TOKEN)
+}
+ENV
+)
+
+# --- 10. Cache copies vs source ---
+CACHE_DIR="$HOME/.claude/plugins/cache/ops-marketplace/ops"
+CACHE_VERSIONS=()
+if [ -d "$CACHE_DIR" ]; then
+  for ver_dir in "$CACHE_DIR"/*/; do
+    [ -d "$ver_dir" ] || continue
+    CACHE_VERSIONS+=("$(basename "$ver_dir")")
+  done
+fi
+
+# Build errors/warnings JSON arrays
+err_json="[]"
+warn_json="[]"
+info_json="[]"
+if command -v jq >/dev/null 2>&1; then
+  err_json=$(printf '%s\n' "${ERRORS[@]+"${ERRORS[@]}"}" | grep -v '^$' | jq -R . | jq -s . 2>/dev/null || echo "[]")
+  warn_json=$(printf '%s\n' "${WARNINGS[@]+"${WARNINGS[@]}"}" | grep -v '^$' | jq -R . | jq -s . 2>/dev/null || echo "[]")
+  cache_json=$(printf '%s\n' "${CACHE_VERSIONS[@]+"${CACHE_VERSIONS[@]}"}" | grep -v '^$' | jq -R . | jq -s . 2>/dev/null || echo "[]")
+else
+  cache_json="[]"
+fi
+
+cat <<EOF
+{
+  "plugin_root": "$SCRIPT_DIR",
+  "version": "${VERSION:-unknown}",
+  "errors": $err_json,
+  "warnings": $warn_json,
+  "tools": $TOOLS_JSON,
+  "env_vars": $ENV_JSON,
+  "registry": {
+    "status": "$REGISTRY_STATUS",
+    "project_count": $REGISTRY_COUNT,
+    "path": "$REGISTRY"
+  },
+  "preferences": {
+    "status": "$PREFS_STATUS",
+    "path": "$PREFS"
+  },
+  "cache_versions": $cache_json,
+  "skill_count": $(find "$SCRIPT_DIR/skills" -name "SKILL.md" 2>/dev/null | wc -l | tr -d ' '),
+  "agent_count": $(find "$SCRIPT_DIR/agents" -name "*.md" 2>/dev/null | wc -l | tr -d ' '),
+  "bin_count": $(find "$SCRIPT_DIR/bin" -name "ops-*" 2>/dev/null | wc -l | tr -d ' ')
+}
+EOF
