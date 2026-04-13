@@ -10,6 +10,8 @@ allowed-tools:
   - Skill
   - Agent
   - AskUserQuestion
+  - TeamCreate
+  - SendMessage
   - mcp__gog__gmail_search
   - mcp__gog__gmail_read_thread
   - mcp__gog__gmail_send
@@ -19,6 +21,26 @@ allowed-tools:
 ---
 
 # OPS ► INBOX ZERO
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when processing "all channels" mode. This enables:
+- Channel agents run in parallel but can share context (e.g., WhatsApp agent finds a message referencing an email thread → email agent can prioritize it)
+- You can steer agents: "skip WhatsApp for now, focus on email first"
+- Agents report completion per-channel so you can process replies as they come in
+
+**Team setup** (only when flag is enabled, "all channels" mode):
+```
+TeamCreate("inbox-channels")
+Agent(team_name="inbox-channels", name="whatsapp-scanner", ...)
+Agent(team_name="inbox-channels", name="email-scanner", ...)
+Agent(team_name="inbox-channels", name="slack-scanner", ...)
+Agent(team_name="inbox-channels", name="telegram-scanner", ...)
+```
+
+Each agent scans its channel and reports back classified results. You then process NEEDS_REPLY items across all channels in priority order.
+
+If the flag is NOT set, process channels sequentially or use fire-and-forget subagents.
 
 ## Pre-gathered data
 
@@ -123,6 +145,16 @@ Display NEEDS REPLY chats first:
   c) Skip
 ```
 
+Use `AskUserQuestion` for each NEEDS REPLY chat with options `[Read + Reply]` / `[Archive]` / `[Skip]`.
+
+When replying, draft the message and use `AskUserQuestion` to confirm before sending:
+```
+Reply to [Contact] via WhatsApp:
+  "[drafted reply]"
+
+  [Send]  [Edit]  [Skip]
+```
+
 Reply via: `wacli send --to "<JID>" --message "<msg>"`
 
 **wacli troubleshooting:**
@@ -163,6 +195,24 @@ Display NEEDS REPLY threads first:
 
   For FYI section:
   x) Archive all FYI at once
+```
+
+Use `AskUserQuestion` for each NEEDS REPLY email with options `[Read + Reply]` / `[Archive]` / `[Skip]`.
+
+When replying, draft the reply and use `AskUserQuestion` to confirm:
+```
+Reply to [Sender] — [Subject]:
+  "[drafted reply]"
+
+  [Send]  [Edit]  [Skip]
+```
+
+For FYI bulk archive, use `AskUserQuestion`:
+```
+Archive N FYI/newsletter emails?
+  [list of subjects]
+
+  [Archive all N]  [Review each]  [Skip]
 ```
 
 Draft replies via `gog gmail send`. Archive via `gog gmail labels modify --remove INBOX <thread_ids>`.

@@ -14,9 +14,28 @@ allowed-tools:
   - TaskUpdate
   - TaskList
   - AskUserQuestion
+  - TeamCreate
+  - SendMessage
 ---
 
 # OPS ► MERGE
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** for fixer agents (Phase 3). This enables:
+- Steering fixers mid-flight if priorities change (e.g., a critical PR should be merged first)
+- Fixers can report blockers and you can redirect them without waiting for completion
+- Shared context: if fixer-A discovers a breaking change that affects fixer-B's PR, you can notify B
+
+**Team setup** (only when flag is enabled, Phase 3):
+```
+TeamCreate("merge-fixers")
+Agent(team_name="merge-fixers", name="fixer-[repo]", ...)
+```
+
+Use `SendMessage(to="fixer-healify-api", content="PR #2958 was just merged — rebase your branch")` to coordinate.
+
+If the flag is NOT set, fall back to standard parallel subagents with `isolation: "worktree"`.
 
 ## Pre-gathered PR data
 
@@ -70,9 +89,21 @@ Ready: N  |  Fix needed: N  |  Blocked: N  |  Draft: N
 
 If `--dry-run`, stop here. Print the queue and exit.
 
-### Phase 2 — Merge ready PRs immediately
+### Phase 2 — Confirm and merge ready PRs
 
-For each `ready` PR:
+Unless `--force` was passed, use `AskUserQuestion` to confirm before merging:
+
+```
+Ready to merge N PRs:
+  [repo]#[number] — [title] → [base]
+  [repo]#[number] — [title] → [base]
+
+  [Merge all N now]  [Let me pick which ones]  [Dry run — don't merge]
+```
+
+If user picks "Let me pick", show each PR with `[Merge]` / `[Skip]` options via `AskUserQuestion`.
+
+For each confirmed PR:
 
 1. Verify CI is still green: `gh pr checks <number> --repo <repo>`
 2. If green: `gh pr merge <number> --repo <repo> --squash --admin`
@@ -116,28 +147,39 @@ For needs-review-response:
 
 After fixing:
   - Report back: what was wrong, what was fixed, is CI green now?
-  - If CI is green and no more blockers: merge with `gh pr merge <number> --repo <repo> --squash --admin`
+  - Do NOT auto-merge after fixing. Report the fix and let Phase 4 handle confirmation.
 ```
 
 Use `model: "sonnet"` for all fixer agents.
 
-### Phase 4 — Collect results and merge
+### Phase 4 — Collect results and confirm merges
 
 As fixers complete:
 
 1. Verify the PR is now green: `gh pr checks <number> --repo <repo>`
-2. If green: merge immediately
-3. If still red: report what's still broken
+2. If green, use `AskUserQuestion` to confirm (unless `--force`):
+   ```
+   Fixer resolved [repo]#[number] — [what was fixed]. CI is now green.
+     [Merge now]  [Skip — I'll review manually]
+   ```
+3. If still red: report what's still broken, do not merge
 
 ### Phase 5 — `--main` sync (only if flag is set)
 
 For each repo that has separate `dev` and `main` branches:
 
 1. Check if dev is ahead of main: `git -C <path> log main..dev --oneline | head -5`
-2. If ahead, create sync PR: `gh pr create --repo <repo> --base main --head dev --title "chore: sync dev → main"`
-3. Wait for CI: `gh pr checks <sync-pr-number> --repo <repo> --watch` (background, max 10 min)
-4. If CI green: `gh pr merge <sync-pr-number> --repo <repo> --merge --admin` (merge commit, not squash)
-5. Pull main back into dev: `git -C <path> fetch origin && git -C <path> checkout dev && git -C <path> merge origin/main --no-edit`
+2. If ahead, show the commits and use `AskUserQuestion`:
+   ```
+   [repo]: dev is N commits ahead of main:
+     [commit list]
+
+     [Create sync PR and merge]  [Create PR only — I'll review]  [Skip this repo]
+   ```
+3. If confirmed: create sync PR: `gh pr create --repo <repo> --base main --head dev --title "chore: sync dev → main"`
+4. Wait for CI: `gh pr checks <sync-pr-number> --repo <repo> --watch` (background, max 10 min)
+5. If CI green: `gh pr merge <sync-pr-number> --repo <repo> --merge --admin` (merge commit, not squash)
+6. Pull main back into dev: `git -C <path> fetch origin && git -C <path> checkout dev && git -C <path> merge origin/main --no-edit`
 
 ### Phase 6 — Final report
 

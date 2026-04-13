@@ -106,4 +106,20 @@ If `$ARGUMENTS` has a project alias, show only that project's deploy info + last
 
 For failing deploys: offer to view logs via `mcp__claude_ai_Vercel__get_deployment_build_logs` or ECS CloudWatch logs.
 
-Use AskUserQuestion after the dashboard.
+Use `AskUserQuestion` after the dashboard for action selection.
+
+**If user selects manual deploy (option b)**, confirm with `AskUserQuestion` before triggering:
+
+```
+Trigger deploy for [project]:
+  Environment: [production/staging]
+  Branch: [branch]
+  Last commit: [sha] — [message]
+
+  [Deploy now]  [View diff since last deploy first]  [Cancel]
+```
+
+**If user selects to view logs**, show the logs and use `AskUserQuestion`:
+```
+  [Dispatch fix agent for this failure]  [Redeploy]  [Back to dashboard]
+```

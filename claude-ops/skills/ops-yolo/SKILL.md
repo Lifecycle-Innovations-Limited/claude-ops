@@ -10,6 +10,8 @@ allowed-tools:
   - Skill
   - Agent
   - AskUserQuestion
+  - TeamCreate
+  - SendMessage
   - mcp__claude_ai_Linear__list_issues
   - mcp__claude_ai_Linear__list_cycles
   - mcp__claude_ai_Vercel__list_deployments
@@ -18,6 +20,26 @@ allowed-tools:
 ---
 
 # OPS ► YOLO MODE
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** instead of fire-and-forget subagents for the C-suite analysis (Phase 2). This enables:
+- Agents can share findings mid-analysis (CEO discovers a revenue blocker → CFO factors it into ROI)
+- You can steer agents if early findings change priorities
+- Agents coordinate on the consensus recommendation
+
+**Team setup** (only when flag is enabled):
+```
+TeamCreate("yolo-csuite")
+Agent(team_name="yolo-csuite", name="ceo", subagent_type="ops:yolo-ceo", ...)
+Agent(team_name="yolo-csuite", name="cto", subagent_type="ops:yolo-cto", ...)
+Agent(team_name="yolo-csuite", name="cfo", subagent_type="ops:yolo-cfo", ...)
+Agent(team_name="yolo-csuite", name="coo", subagent_type="ops:yolo-coo", ...)
+```
+
+After initial analysis, use `SendMessage(to="ceo", content="CTO found critical tech debt in auth service — does this change your strategic recommendation?")` to cross-pollinate findings before synthesizing the Hard Truths report.
+
+If the flag is NOT set, fall back to standard parallel subagents (fire-and-forget, no mid-task steering).
 
 ## Phase 1 — Pre-gather ALL data
 
@@ -149,18 +171,35 @@ After all 4 agents complete, synthesize into a unified report:
 
 ## Phase 4 — YOLO Autonomous Mode
 
-If user types `YOLO` (all caps), enter autonomous mode via `/loop`:
+If user types `YOLO` (all caps), enter autonomous mode via `/loop`.
 
-Run the following in sequence, reporting after each step:
+**Before starting**, use `AskUserQuestion` to confirm scope:
 
-1. **Inbox** — Process all unread messages. Reply to humans, archive automated.
-2. **Fires** — Fix any CRITICAL or HIGH production issues (dispatch agents).
-3. **PRs** — Merge all ready-to-merge PRs (CI green, no unresolved comments).
-4. **Triage** — Auto-resolve confirmed-fixed issues across Sentry/Linear/GitHub.
-5. **GSD** — Advance the highest-priority active phase across all projects.
-6. **Linear** — Update sprint board to reflect actual state.
-7. **Deploy** — Trigger any pending deploys that are ready.
-8. **Report** — Summary of everything done, what's left, and blockers.
+```
+YOLO mode will autonomously execute these steps:
+  1. Inbox — reply to humans, archive automated
+  2. Fires — fix CRITICAL/HIGH production issues
+  3. PRs — merge ready PRs (CI green, approved)
+  4. Triage — auto-resolve confirmed-fixed issues
+  5. GSD — advance highest-priority phase
+  6. Linear — sync sprint board
+  7. Deploy — trigger pending deploys
+  8. Report — summary
+
+  [Run all 8 steps]  [Pick which steps to run]  [Cancel]
+```
+
+If user picks "Pick which steps", show each step as a `multiSelect` via `AskUserQuestion`.
+
+Run the selected steps in sequence, reporting after each step.
+
+**Per-step confirmations** (use `AskUserQuestion` before each destructive action):
+
+- **Inbox**: Show drafted replies and ask `[Send all N replies]` / `[Review each one]` / `[Skip inbox]` before sending any messages
+- **Fires**: Show proposed fix and ask `[Dispatch fix agent]` / `[Skip]` before each agent dispatch
+- **PRs**: Show PR list and ask `[Merge all N ready PRs]` / `[Pick which ones]` / `[Skip]` before merging
+- **Triage**: Show issues to close and ask `[Auto-resolve all N confirmed-fixed]` / `[Review each]` / `[Skip]` before closing
+- **Deploy**: Show pending deploys and ask `[Deploy all]` / `[Pick which]` / `[Skip]` before triggering
 
 After each step, check if new fires have appeared before proceeding.
 Report final summary when done.

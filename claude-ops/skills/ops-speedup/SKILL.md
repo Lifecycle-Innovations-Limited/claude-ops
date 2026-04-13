@@ -178,6 +178,24 @@ Use AskUserQuestion for the user's choice.
 
 ## Phase 4 — Execute cleanup
 
+**Before executing any cleanup**, use `AskUserQuestion` to confirm the scope and estimated impact:
+
+```
+About to run [quick/full/deep] clean:
+  Brew cache:        [N] MB  ✓
+  npm cache:         [N] MB  ✓
+  Logs:              [N] MB  ✓
+  Tmp files:         [N] MB  ✓
+  [Full: Trash:      [N] MB  ✓]
+  [Full: Docker:     [N] MB  ✓]
+  [Deep: DerivedData [N] MB  ✓]
+  [Deep: Simulators  [N] count ✓]
+  ────────────────────────────
+  Total:             ~[N] GB
+
+  [Proceed]  [Switch to custom — pick categories]  [Cancel]
+```
+
 ### Quick clean (option 1)
 
 ```bash
@@ -225,7 +243,16 @@ Show each category with size and let user toggle on/off.
 
 ### Memory (option 5)
 
-Show top 10 processes by RAM, let user pick which to kill:
+Show top 10 processes by RAM. Use `AskUserQuestion` with `multiSelect` to let user pick which to kill:
+
+```
+Top processes by RAM:
+  [ ] [process] — [N] MB (PID [N])
+  [ ] [process] — [N] MB (PID [N])
+  ...
+
+  [Kill selected]  [Skip]
+```
 
 ```bash
 # macOS
