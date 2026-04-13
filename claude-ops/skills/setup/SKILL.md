@@ -21,6 +21,7 @@ You are running an **interactive configuration wizard** for the `claude-ops` plu
 - This is a _conversation_, not a script dump. Use `AskUserQuestion` for every decision — never ask in prose when a structured selector will do.
 - Never install anything or write any file without explicit user confirmation via `AskUserQuestion`.
 - Skip sections the user declines. Don't nag.
+- **NEVER auto-skip a channel or integration.** Every channel/service the user selected must get an explicit `AskUserQuestion` with skip as one of the options. If a credential isn't found, present the [Paste manually] / [Deep hunt] / [Skip] options. If a smoke test fails, ask the user whether to retry, reconfigure, or skip. The ONLY acceptable way to skip is the user choosing a "Skip" option. Do not silently move past a service because scanning found nothing — that's when the user needs to be asked the most.
 - Show what's already configured first, so the user only fills gaps.
 - **Never show the user's real name or email in output unless the user explicitly provided it in THIS session.** Do not read from memory, existing configs, or environment variables to populate display names.
 - **Max 4 options per `AskUserQuestion` call.** The tool schema enforces `<=4` items in the `options` array. When a step lists >4 choices, filter already-configured items first, then batch the rest into multiple sequential calls of <=4 options each, grouped logically. Use `[More options...]` as the last option to bridge between batches.
@@ -1836,14 +1837,13 @@ Collect these via `AskUserQuestion` — one question each. **Never auto-fill fro
 
 5. **YOLO mode** → select `[Yes — auto-approve low-risk actions]`, `[No — always confirm]`.
 
-6. **Default channels** (multiSelect over configured channels only — never show channels that weren't configured in Step 3):
+6. **Default channels** (multiSelect over configured channels only — never show channels that weren't configured in Step 3). **"All configured" should be the first option and pre-selected by default** — most users want all their channels active:
    ```
    Which channels should ops skills use by default?
-     [ ] whatsapp
-     [ ] email
-     [ ] telegram
-     [ ] slack
+     [x] All configured channels
+     [ ] Pick specific channels...
    ```
+   If the user picks "specific channels", show a follow-up multiSelect with individual channel checkboxes. If they accept "All configured", set `default_channels` to the full list of configured channel names.
 
 Write to `$PREFS_PATH`:
 
