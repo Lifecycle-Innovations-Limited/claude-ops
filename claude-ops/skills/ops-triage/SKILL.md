@@ -10,6 +10,14 @@ allowed-tools:
   - Skill
   - Agent
   - AskUserQuestion
+  - TeamCreate
+  - SendMessage
+  - TaskCreate
+  - TaskUpdate
+  - TaskList
+  - WebFetch
+  - WebSearch
+  - LSP
   - mcp__sentry__authenticate
   - mcp__claude_ai_Linear__list_issues
   - mcp__claude_ai_Linear__save_issue
@@ -18,6 +26,49 @@ allowed-tools:
 ---
 
 # OPS ► CROSS-PLATFORM TRIAGE
+
+## CLI/API Reference
+
+### gh CLI (GitHub)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `gh issue list --state open --json number,title,body,labels,assignees,createdAt,url --limit 50` | Open issues | JSON array |
+| `gh issue list --repo <owner/repo> --state open --json number,title,labels,createdAt --limit 20` | Repo issues | JSON array |
+| `gh pr list --state merged --search "#<N>"` | PRs referencing issue | JSON array |
+| `gh issue close <N> --comment "<msg>"` | Close issue | Confirmation |
+
+### sentry-cli / Sentry API
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `sentry-cli issues list --project <slug> --status unresolved` | Unresolved issues | Issue list |
+| `curl -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://sentry.io/api/0/projects/<org>/<proj>/issues/?query=is:unresolved"` | API fallback when MCP unavailable | JSON array |
+
+### Linear GraphQL (fallback when MCP unavailable)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ issues(filter: {state: {type: {in: [\"started\",\"unstarted\"]}}}) { nodes { id title state { name } priority assignee { name } } } }"}'` | Active issues | JSON |
+
+---
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when dispatching fix agents for multiple issues. This enables:
+- Fix agents can share findings (e.g., agent fixing Sentry error discovers the same root cause as a Linear issue)
+- You can redirect agents if cross-referencing reveals duplicate issues
+- Agents report progress and you can prioritize which fix to merge first
+
+**Team setup** (only when flag is enabled, Phase 4 dispatch):
+```
+TeamCreate("triage-fixers")
+Agent(team_name="triage-fixers", name="fix-[issue-id]", subagent_type="ops:triage-agent", ...)
+```
+
+Use `broadcast(content="Root cause found: missing index on users.email — check if your issue is related")` to share discoveries.
+
+If the flag is NOT set, fall back to standard parallel subagents.
 
 ## Phase 1 — Gather issues in parallel
 
@@ -67,15 +118,29 @@ For each GitHub Issue:
 
 ---
 
-## Phase 3 — Auto-resolve confirmed fixed issues
+## Phase 3 — Confirm and resolve fixed issues
 
-For issues confirmed fixed in code AND deployed:
+For issues confirmed fixed in code AND deployed, show the full list and use `AskUserQuestion`:
+
+```
+Found N issues confirmed fixed and deployed:
+
+  [Sentry] [title] — fix in [commit], deployed [time ago]
+  [Linear] [title] — fix in [commit], deployed [time ago]
+  [GitHub] #[N] [title] — referenced in merged PR #[M]
+
+  [Resolve all N]  [Review each one]  [Skip — don't auto-resolve]
+```
+
+If user picks "Review each one", show each issue individually with `[Resolve]` / `[Skip]` via `AskUserQuestion`.
+
+For confirmed issues:
 
 - **Sentry**: use Sentry MCP to resolve the issue
 - **Linear**: use `mcp__claude_ai_Linear__save_issue` with `state: "Done"`
 - **GitHub**: `gh issue close [N] --comment "Auto-closed: fix confirmed deployed"`
 
-Log all auto-resolutions.
+Log all resolutions.
 
 ---
 
@@ -119,3 +184,23 @@ When dispatching for an issue, spawn an Agent using `agents/triage-agent.md` wit
 - Report back on completion or if blocked
 
 Filter to `$ARGUMENTS` project/source if specified.
+
+---
+
+## Native tool usage
+
+### Tasks — triage progress
+
+Use `TaskCreate` for each issue being investigated. Update with `TaskUpdate` as issues are resolved/dispatched/skipped. Gives the user a live triage checklist.
+
+### WebFetch — Sentry/GitHub enrichment
+
+When Sentry MCP hits quota limits, fall back to `WebFetch` with `https://sentry.io/api/0/projects/<org>/<project>/issues/?query=is:unresolved` (using `SENTRY_AUTH_TOKEN` header). Same for GitHub issue details when `gh` is slow.
+
+### WebSearch — error context
+
+Use `WebSearch` to find known solutions for recurring errors (e.g., "AWS RDS connection reset", "ECS task stopped reason"). Include findings in the triage board as context.
+
+### LSP — code navigation for fix agents
+
+When dispatching fix agents, use `LSP` to find symbol definitions, references, and call hierarchies. This helps agents navigate unfamiliar codebases faster than grep.

@@ -39,7 +39,6 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-preflight &>/dev/null &
 ```
 
 **Preflight data**: All probe results are cached at `/tmp/ops-preflight/`. Before running ANY diagnostic command, check if the result already exists there:
-
 - CLI status: `cat /tmp/ops-preflight/clis.txt`
 - Slack: `cat /tmp/ops-preflight/slack.json`
 - Telegram: `cat /tmp/ops-preflight/telegram.txt`
@@ -52,27 +51,9 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-preflight &>/dev/null &
 - Projects: `cat /tmp/ops-preflight/projects.txt`
 - Existing registry: `cat /tmp/ops-preflight/existing-registry.json`
 - Existing prefs: `cat /tmp/ops-preflight/existing-prefs.json`
+- Doppler: `cat /tmp/ops-preflight/doppler.json`
 
 Wait for `/tmp/ops-preflight/.complete` to exist before reading (it should be ready within 2-3 seconds). NEVER re-run a probe that already has cached results — read the cache file instead.
-
-**CRITICAL: Read ALL preflight data in a SINGLE Bash call.** Do NOT make separate tool calls for each file. Use one command:
-
-```bash
-echo "=== CLIS ===" && cat /tmp/ops-preflight/clis.txt 2>/dev/null
-echo "=== SLACK ===" && cat /tmp/ops-preflight/slack.json 2>/dev/null
-echo "=== TELEGRAM ===" && cat /tmp/ops-preflight/telegram.txt 2>/dev/null
-echo "=== GOG ===" && cat /tmp/ops-preflight/gog-gmail.json 2>/dev/null | head -3
-echo "=== CAL ===" && cat /tmp/ops-preflight/gog-cal.json 2>/dev/null | head -3
-echo "=== WACLI ===" && cat /tmp/ops-preflight/wacli-doctor.json 2>/dev/null | jq -r '.data.authenticated' 2>/dev/null
-echo "=== MCP ===" && cat /tmp/ops-preflight/mcp-servers.txt 2>/dev/null | tr '\n' ','
-echo "=== GH ===" && grep "Logged in" /tmp/ops-preflight/gh-auth.txt 2>/dev/null | head -1
-echo "=== AWS ===" && cat /tmp/ops-preflight/aws-identity.json 2>/dev/null | jq -r '.Account' 2>/dev/null
-echo "=== PROJECTS ===" && wc -l < /tmp/ops-preflight/projects.txt 2>/dev/null
-echo "=== REGISTRY ===" && cat /tmp/ops-preflight/existing-registry.json 2>/dev/null | jq '.projects | length' 2>/dev/null || echo "0"
-echo "=== PREFS ===" && cat /tmp/ops-preflight/existing-prefs.json 2>/dev/null | head -1 || echo "none"
-```
-
-Parse this output to build the status header. Do NOT show raw JSON to the user — only show the formatted status dashboard.
 
 ---
 
@@ -102,6 +83,7 @@ Print a compact status header to the user, one line per category:
  Shell:       zsh → ~/.zshrc
  Core CLIs:   ✓ jq  ✓ git  ✓ gh  ✓ aws  ✓ node
  Channels:    ✓ wacli  ✓ gog  ○ telegram (no token)
+ Secrets:     ✓ doppler (project: healify, config: dev)
  MCPs:        ✓ linear  ✓ sentry  ○ slack  ○ vercel
  Registry:    19 projects
  Preferences: not set
@@ -116,15 +98,16 @@ Use `✓` for present/set, `○` for missing/unset, `✗` for broken.
 
 Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need attention** (skip ones already green):
 
-| Option             | Header   | Description                                      |
-| ------------------ | -------- | ------------------------------------------------ |
-| Install CLIs       | cli      | Install missing command-line tools via Homebrew  |
-| Configure channels | channels | Set tokens for Telegram, WhatsApp, Email, Slack  |
-| Configure MCPs     | mcp      | Enable Linear, Sentry, Vercel, Gmail MCP servers |
-| Companion plugins  | plugins  | Install GSD for project roadmap tracking         |
-| Build registry     | registry | Register projects Claude should manage           |
-| Save preferences   | prefs    | Owner name, timezone, default priorities         |
-| Shell env          | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile     |
+| Option             | Header   | Description                                                   |
+| ------------------ | -------- | ------------------------------------------------------------- |
+| Install CLIs       | cli      | Install missing command-line tools via Homebrew               |
+| Configure channels | channels | Set tokens for Telegram, WhatsApp, Email, Slack               |
+| Configure MCPs     | mcp      | Enable Linear, Sentry, Vercel, Gmail MCP servers              |
+| Companion plugins  | plugins  | Install GSD for project roadmap tracking                      |
+| Build registry     | registry | Register projects Claude should manage                        |
+| Background daemon  | daemon   | Install ops-daemon for persistent wacli-sync + memory extract |
+| Save preferences   | prefs    | Owner name, timezone, default priorities                      |
+| Shell env          | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile                  |
 
 Store the user's selections and run each selected section in order.
 
@@ -156,12 +139,12 @@ After installation, re-run `ops-setup-detect` to refresh status before continuin
 
 ### GSD (Get Shit Done)
 
-GSD is a Claude Code skill package that adds project roadmap tracking. When installed, claude-ops dashboards (`/ops:go`, `/ops:projects`, `/ops:next`, `/ops:yolo`) automatically show active phases, progress, and next actions per project. Without it, those sections are simply omitted.
+GSD is a third-party Claude Code plugin that adds project roadmap tracking. When installed, claude-ops dashboards (`/ops:go`, `/ops:projects`, `/ops:next`, `/ops:yolo`) automatically show active phases, progress, and next actions per project. Without it, those sections are simply omitted.
 
 Check if GSD is already installed:
 
 ```bash
-ls ~/.claude/skills/gsd-progress/SKILL.md 2>/dev/null && echo "installed" || echo "not_installed"
+ls ~/.claude/plugins/cache/*/gsd*/skills/gsd-progress/SKILL.md 2>/dev/null && echo "installed" || echo "not_installed"
 ```
 
 If not installed, ask via `AskUserQuestion`:
@@ -172,22 +155,34 @@ GSD adds project roadmap tracking to your ops dashboards.
   /ops:projects shows GSD state alongside CI/PR status
   /ops:next factors in GSD work priority
 
-  [Install GSD (recommended)] [Skip — I don't need roadmap tracking]
+  [Install GSD (latest)] [Skip — I don't need roadmap tracking]
 ```
 
-On `[Install GSD (recommended)]`, run:
+On install, run the commands directly — do NOT tell the user to run them manually:
 
 ```bash
-npx get-shit-done install
+# Install GSD in one shot — no user intervention needed
+claude plugin marketplace add auroracapital/get-shit-done 2>/dev/null && \
+claude plugin install gsd@auroracapital-get-shit-done 2>/dev/null
 ```
 
-This installs GSD skills and agents directly into `~/.claude/skills/` and `~/.claude/agents/`. After install, re-verify:
+If `claude` CLI is not available in the path, fall back to the plugin cache mechanism:
 
 ```bash
-ls ~/.claude/skills/gsd-progress/SKILL.md 2>/dev/null && echo "installed" || echo "not_installed"
+# Direct marketplace clone fallback
+GSD_MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/auroracapital-get-shit-done"
+if [ ! -d "$GSD_MARKETPLACE_DIR" ]; then
+  git clone https://github.com/auroracapital/get-shit-done.git "$GSD_MARKETPLACE_DIR" 2>/dev/null
+fi
 ```
 
-Report `✓ GSD installed` on success. Record `plugins.gsd = "installed"` in `$PREFS_PATH`. If install fails, record `plugins.gsd = "failed"` and note the error — but never block the wizard or ask the user to do it themselves.
+Report success/failure. Record `plugins.gsd = "installed"` in `$PREFS_PATH`.
+
+If they skip:
+
+```
+Skipped GSD. Install later with: /plugin marketplace add auroracapital/get-shit-done
+```
 
 ---
 
@@ -202,6 +197,8 @@ Ask which channels the user wants to configure using `AskUserQuestion` with `mul
 | Email    | email    | gog CLI → Gmail MCP fallback for `/ops-inbox email`                     |
 | Slack    | slack    | Slack MCP server (managed by Claude Code)                               |
 | Calendar | calendar | gog cal → Google Calendar MCP fallback — schedule context for briefings |
+| Doppler  | doppler  | Secrets manager — set default project + config for all ops skills       |
+| Vault    | vault    | Password manager — 1Password, Dashlane, Bitwarden, or macOS Keychain    |
 
 For each selected channel, run the matching sub-flow below.
 
@@ -301,11 +298,7 @@ Sub-flow (only runs if user selected Yes above):
 
    Also check `~/.claude.json mcpServers.telegram.env.TELEGRAM_API_ID`. If all 4 are found and the stored `TELEGRAM_SESSION` decodes as a StringSession, tell the user `"✓ Telegram already configured (api_id=XXXXXXX, phone=+XX...)"` and skip to step 8.
 
-2. **Ask the user for their phone number** via a single `AskUserQuestion` with two options:
-   - `[Enter phone number]` — description: "International format, e.g. +31612345678. Only used once during first-run extraction and stored locally."
-   - `[Skip Telegram]`
-
-   If the user picks "Enter phone number", they type it in the free-text "Other" field. Validate the entered value matches `^\+\d{7,15}$`. If invalid, ask **one more time** with the same two options and the error: `"Invalid format — must start with + and contain 7-15 digits (e.g. +31612345678)."` If still invalid after the second attempt, skip Telegram and record `channels.telegram = "skipped"` in `$PREFS_PATH`. Never ask more than twice.
+2. **Ask the user for their phone number** via `AskUserQuestion` (free-text). Validate it matches `^\+\d{7,15}$`. Explain that the phone is only used once during the first-run extraction and is stored locally only.
 
 3. **Warn about 2 codes.** Inform the user via `AskUserQuestion`: `"Telegram will send TWO codes to your Telegram app — one for my.telegram.org web login, then a second one for gram.js auth. Have your Telegram app ready."` Options: `[I'm ready]`, `[Cancel]`.
 
@@ -338,81 +331,59 @@ Sub-flow (only runs if user selected Yes above):
 
    Then update `$PREFS_PATH` with `channels.telegram = {backend: "gram.js", api_id: "...", phone: "...", status: "configured"}`. **Never write the api_hash or session to preferences.json** — those stay in keychain only. preferences.json gets only the non-sensitive metadata.
 
-8. **Automatically wire credentials into Claude Code plugin config.** Do NOT ask the user to paste anything manually. After keychain storage, write them directly to the plugin userConfig:
+8. **Auto-configure the MCP server.** Write the credentials directly into the plugin's user config so the user doesn't have to manually paste anything:
 
    ```bash
-   # Read from keychain
-   API_ID=$(security find-generic-password -s telegram-api-id -w 2>/dev/null)
-   API_HASH=$(security find-generic-password -s telegram-api-hash -w 2>/dev/null)
-   PHONE=$(security find-generic-password -s telegram-phone -w 2>/dev/null)
-   SESSION=$(security find-generic-password -s telegram-session -w 2>/dev/null)
+   # Read existing user config or create empty
+   USER_CONFIG="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/user-config.json"
+   mkdir -p "$(dirname "$USER_CONFIG")"
 
-   # Inject into ~/.claude.json plugin settings
-   jq --arg id "$API_ID" --arg hash "$API_HASH" --arg phone "$PHONE" --arg session "$SESSION" \
-     '.pluginSettings["ops@ops-marketplace"].telegram_api_id = $id
-     | .pluginSettings["ops@ops-marketplace"].telegram_api_hash = $hash
-     | .pluginSettings["ops@ops-marketplace"].telegram_phone = $phone
-     | .pluginSettings["ops@ops-marketplace"].telegram_session = $session' \
-     ~/.claude.json > /tmp/claude-json-tmp && mv /tmp/claude-json-tmp ~/.claude.json
+   # Write Telegram credentials to user config
+   jq -n \
+     --arg api_id "$API_ID" \
+     --arg api_hash "$API_HASH" \
+     --arg phone "$PHONE" \
+     --arg session "$SESSION" \
+     '{telegram_api_id: $api_id, telegram_api_hash: $api_hash, telegram_phone: $phone, telegram_session: $session}' \
+     > "${USER_CONFIG}.tmp"
+
+   # Merge with existing config if present
+   if [ -f "$USER_CONFIG" ]; then
+     jq -s '.[0] * .[1]' "$USER_CONFIG" "${USER_CONFIG}.tmp" > "${USER_CONFIG}.new" && mv "${USER_CONFIG}.new" "$USER_CONFIG"
+     rm -f "${USER_CONFIG}.tmp"
+   else
+     mv "${USER_CONFIG}.tmp" "$USER_CONFIG"
+   fi
+   chmod 600 "$USER_CONFIG"
    ```
 
-   Print: `✓ Telegram — credentials stored in keychain and plugin config`
+   Also update `~/.claude.json` MCP server config if the telegram server entry exists — inject the credentials as env vars:
 
-   **Note on the ~/.claude.json write exception:** the general rule says never touch ~/.claude.json. The Telegram credential injection is the one permitted exception — it writes only to the `pluginSettings["ops@ops-marketplace"]` namespace and does a `jq . | mv` atomic swap (never a destructive overwrite). If the `pluginSettings` key doesn't exist yet, `jq` will create it. Verify the write succeeded before continuing: `jq -e '.pluginSettings["ops@ops-marketplace"].telegram_api_id' ~/.claude.json >/dev/null && echo "verified" || echo "WRITE FAILED"`. If it fails, fall back to printing the manual paste instructions.
+   ```bash
+   # Update .claude.json mcpServers.telegram.env with actual values
+   CLAUDE_JSON="$HOME/.claude.json"
+   if [ -f "$CLAUDE_JSON" ] && jq -e '.mcpServers.telegram' "$CLAUDE_JSON" >/dev/null 2>&1; then
+     jq --arg id "$API_ID" --arg hash "$API_HASH" --arg phone "$PHONE" --arg session "$SESSION" \
+       '.mcpServers.telegram.env.TELEGRAM_API_ID = $id | .mcpServers.telegram.env.TELEGRAM_API_HASH = $hash | .mcpServers.telegram.env.TELEGRAM_PHONE = $phone | .mcpServers.telegram.env.TELEGRAM_SESSION = $session' \
+       "$CLAUDE_JSON" > "${CLAUDE_JSON}.tmp" && mv "${CLAUDE_JSON}.tmp" "$CLAUDE_JSON"
+   fi
+   ```
+
+   Print:
+   ```
+   ✓ Telegram configured automatically.
+     API ID:  [api_id]
+     Phone:   [phone]
+     Session: stored in keychain + MCP config
+     Restart Claude Code to activate the Telegram MCP server.
+   ```
 
 9. **Smoke test (optional).** Spawn `node ${CLAUDE_PLUGIN_ROOT}/telegram-server/index.js` with the env vars set inline for 3 seconds. If it doesn't print an auth error, the session works.
-
-**Autolink fallback — manual HTTP extraction via curl:**
-
-If the autolink script exits non-zero or produces an error containing `selectors may have changed`, `could not extract api_id`, or `could not extract api_hash`, automatically fall back to this curl sequence (no user action required to switch — just proceed):
-
-1. **URL-encode the phone number:**
-   ```bash
-   ENCODED_PHONE=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$PHONE'))")
-   ```
-
-2. **Send login request and capture random_hash:**
-   ```bash
-   SEND_RESP=$(curl -s -c /tmp/tg-cookies.txt \
-     -d "phone=$ENCODED_PHONE" \
-     "https://my.telegram.org/auth/send_password")
-   RANDOM_HASH=$(echo "$SEND_RESP" | jq -r '.random_hash // empty' 2>/dev/null)
-   # Fallback: grep if not JSON
-   [ -z "$RANDOM_HASH" ] && RANDOM_HASH=$(echo "$SEND_RESP" | grep -o '"random_hash":"[^"]*"' | cut -d'"' -f4)
-   ```
-
-3. **Ask the user for the login code** via `AskUserQuestion` (free-text):
-   `"Telegram sent a code to your Telegram app for my.telegram.org login. Enter it here:"`
-
-4. **Submit the code to login:**
-   ```bash
-   curl -s -c /tmp/tg-cookies.txt -b /tmp/tg-cookies.txt \
-     -d "phone=$ENCODED_PHONE&random_hash=$RANDOM_HASH&password=$CODE" \
-     "https://my.telegram.org/auth/login"
-   ```
-
-5. **Fetch the apps page and extract credentials:**
-   ```bash
-   APPS_HTML=$(curl -s -b /tmp/tg-cookies.txt "https://my.telegram.org/apps")
-   # api_id: the number inside <strong> following the app_id label
-   API_ID=$(echo "$APPS_HTML" | grep -A2 'app_id' | grep -o '<strong>[0-9]*</strong>' | grep -o '[0-9]*' | head -1)
-   # api_hash: 32-char hex string in the app_hash span
-   API_HASH=$(echo "$APPS_HTML" | grep -o 'api_hash.*' | grep -o '[0-9a-f]\{32\}' | head -1)
-   ```
-
-   If `API_ID` or `API_HASH` is empty after extraction, print the error verbatim and tell the user their Telegram account may be rate-limited or the page structure changed. Record `channels.telegram = "failed"` in `$PREFS_PATH` and skip to the next channel.
-
-6. **Continue with gram.js session generation** using the extracted `API_ID` and `API_HASH` — spawn `ops-telegram-autolink.mjs --phone "$PHONE" --api-id "$API_ID" --api-hash "$API_HASH" --skip-web-auth` to handle only the gram.js portion (since web auth is already done).
-
-7. **Clean up cookie jar:**
-   ```bash
-   rm -f /tmp/tg-cookies.txt
-   ```
 
 **Privacy notes for the user** (show once at start):
 
 - The phone number and all credentials stay on your machine. The wizard never transmits them anywhere except to Telegram's own servers during the HTTP login flow.
-- If you already have a gram.js / Telethon session for another project, you can skip this and re-run `/ops:setup telegram` to wire it in.
+- If you already have a gram.js / Telethon session for another project, you can skip this and paste those values manually into `/plugin settings`.
 - If Telegram replies "Sorry, too many tries. Please try again later." your account is rate-limited for ~8 hours — the wizard cannot bypass this. Wait and retry.
 
 ### 3b — WhatsApp (doctor + self-heal + backfill)
@@ -424,7 +395,9 @@ WhatsApp is the channel that most often breaks silently. The wizard must **auto-
 Run `command -v wacli`. If missing, ask `AskUserQuestion`: `[Show install docs]`, `[Skip WhatsApp]`. On install docs, print:
 
 ```
-wacli is not on Homebrew — see the wacli README for install instructions.
+wacli is not on Homebrew. Install:
+  git clone https://github.com/auroracapital/wacli ~/src/wacli
+  cd ~/src/wacli && go build -o /usr/local/bin/wacli ./cmd/wacli
 ```
 
 and stop this sub-flow.
@@ -535,6 +508,88 @@ Write `channels.whatsapp = "wacli"` to `$PREFS_PATH` and print the final ✓ sum
 
 Never include message counts or backfill results in this summary line.
 
+#### Step 3b.7 — Persistent connection (keepalive)
+
+After successful auth and backfill, set up a persistent connection that keeps wacli connected and auto-syncing. This is what makes WhatsApp reliable across sessions — without it, the linked device disconnects after ~14 days of inactivity and @lid JIDs return empty messages.
+
+**If the ops-daemon is configured (Step 5b), wacli runs as a daemon service** — skip the standalone launchd path below and note to the user that wacli sync is managed by the daemon. The daemon handles bootstrap, auto-backfill, and health reporting centrally.
+
+**Standalone launchd fallback** (only if the ops-daemon is NOT being set up):
+
+**1. Install the keepalive script:**
+
+```bash
+KEEPALIVE_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/wacli-keepalive.sh"
+chmod +x "$KEEPALIVE_SCRIPT"
+```
+
+**2. Generate the launchd plist from template:**
+
+```bash
+PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/scripts/com.claude-ops.wacli-keepalive.plist"
+PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist"
+LOG_DIR="$HOME/.claude/plugins/data/ops-ops-marketplace/logs"
+mkdir -p "$LOG_DIR" "$HOME/Library/LaunchAgents"
+
+sed -e "s|__KEEPALIVE_SCRIPT_PATH__|$KEEPALIVE_SCRIPT|g" \
+    -e "s|__LOG_DIR__|$LOG_DIR|g" \
+    -e "s|__HOME__|$HOME|g" \
+    "$PLIST_TEMPLATE" > "$PLIST_DEST"
+```
+
+**3. Load the agent:**
+
+```bash
+# Unload if already loaded (idempotent)
+launchctl bootout gui/$(id -u) "$PLIST_DEST" 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) "$PLIST_DEST"
+```
+
+**4. Verify it's running:**
+
+Wait 3 seconds, then check:
+```bash
+launchctl print gui/$(id -u)/com.claude-ops.wacli-keepalive 2>&1 | head -5
+cat "$HOME/.wacli/.health" 2>/dev/null
+```
+
+If the health file shows `status=connected` or `status=needs_reauth`, the daemon is working. Print:
+
+```
+✓ WhatsApp keepalive — launchd agent installed and running
+  Persistent sync active. Auto-restarts on disconnect.
+  Health: ~/.wacli/.health | Logs: ~/.claude/plugins/data/ops-ops-marketplace/logs/
+```
+
+If `status=needs_reauth`, immediately trigger the re-pair flow from Step 3b.3 Rule C.
+
+**5. How the keepalive self-heals:**
+
+The keepalive script (`wacli-keepalive.sh`) handles these failure modes automatically:
+
+| Failure | Auto-fix |
+|---------|----------|
+| Orphaned wacli process holding lock | Kills stale PIDs, clears lock |
+| Connection drop (WhatsApp server restart) | launchd restarts within 60s |
+| App-state key desync | Writes `needs_reauth` to health file — ops skills detect this and prompt QR |
+| Auth expired | Writes `needs_auth` — same prompt flow |
+| Script crash | launchd KeepAlive=true restarts immediately (throttled 60s) |
+
+**6. Health file contract for other ops skills:**
+
+All ops skills that use WhatsApp (`ops-inbox`, `ops-comms`, `ops-go`) MUST check `~/.wacli/.health` before attempting wacli commands. If `status=needs_auth` or `status=needs_reauth`:
+
+1. Print the diagnosis to the user:
+   ```
+   ⚠ WhatsApp needs re-authentication.
+   Run `wacli auth` in a separate terminal and scan the QR code.
+   Then type "done" to continue.
+   ```
+2. Use `AskUserQuestion`: `[Done — re-paired]`, `[Skip WhatsApp]`.
+3. On Done: restart the keepalive daemon via `launchctl kickstart -k gui/$(id -u)/com.claude-ops.wacli-keepalive` and wait 5s for health file update.
+
+This ensures the user is never silently left with a broken WhatsApp connection — every ops skill surfaces the problem and walks them through the fix.
+
 ### 3c — Email
 
 Email has two possible backends, tried in this order:
@@ -578,7 +633,9 @@ If `gog` is not on PATH, look at the detector's `mcp_configured` array for any e
    ```
 5. On "Install gog instead", print:
    ```
-   gog is not on Homebrew — see the gog README for install instructions.
+   gog is a private CLI — install from source:
+     git clone https://github.com/auroracapital/gog ~/.gog && cd ~/.gog && ./install.sh
+   Or ask Sam for the latest release binary.
    ```
    Then stop this sub-flow (don't attempt to `brew install` — gog isn't on Homebrew).
 
@@ -636,11 +693,9 @@ Sub-flow:
    - `[Fall back to manual paste]` → go to step 2 manual path.
 
 5. **Validate tokens.** Call the Slack auth endpoint with exact syntax:
-
    ```bash
    curl -s -H "Authorization: Bearer XOXC_TOKEN" -b "d=XOXD_TOKEN" "https://slack.com/api/auth.test"
    ```
-
    Expect `{"ok":true, "team_id":"T...", "user_id":"U...", "url":"https://<workspace>.slack.com/"}`. If `ok:false`, show the error and re-ask.
 
 6. **Persist.**
@@ -650,10 +705,15 @@ Sub-flow:
 7. **Wire into Claude Code plugin settings.** Print instructions:
 
    ```
-   Slack tokens saved to keychain. To activate the MCP, run:
-     claude mcp add slack --transport stdio -- npx -y slack-mcp-server@latest --transport stdio
-   Claude Code will prompt for the env vars.
+   Slack tokens saved to keychain. To activate the MCP, Claude Code needs them
+   in ~/.claude.json. Since this skill can't write to ~/.claude.json directly,
+   either:
+     a) Run: claude mcp add slack --transport stdio -- npx -y slack-mcp-server@latest --transport stdio
+        and Claude Code will prompt for the env vars.
+     b) Manually paste the xoxc + xoxd into /plugin settings for the Slack MCP.
    ```
+
+   (The reason we don't auto-write: per user-level feedback, ~/.claude.json is a Claude Code internal file and the plugin must not touch it. MCP registration is Claude Code's responsibility.)
 
 8. **Smoke test**: call `https://slack.com/api/conversations.list?limit=1` with the tokens. Expect `ok:true` with at least one channel in the response.
 
@@ -703,7 +763,7 @@ Calendar isn't a messaging channel, but every other ops skill (briefings, `/ops-
       If you want ops-next to auto-block focus time or ops-comms to confirm
       meetings, install `gog` instead.
    ```
-7. On "Install gog instead", print the same gog install message as Step 3c.
+7. On "Install gog instead", print the same gog install snippet as Step 3c.
 
 #### Neither available
 
@@ -720,6 +780,298 @@ Downstream skills (`/ops-go`, `/ops-next`, `/ops-fires`) read `channels.calendar
 - `/ops-next` deprioritizes deep work when a meeting is <30min away
 - `/ops-fires` warns if a production incident falls during a scheduled call
   So this section is not optional for users who want context-aware briefings.
+
+### 3f — Doppler (secrets management)
+
+Doppler is a secrets manager that injects environment variables at runtime. When configured, all ops skills can query secrets via `doppler secrets get` instead of reading from dotfiles or keychain. The wizard checks presence, auth status, and default project context.
+
+#### Step 3f.1 — Presence
+
+```bash
+command -v doppler
+```
+
+If missing, ask via `AskUserQuestion`:
+
+```
+Doppler CLI is not installed.
+  [Install now — brew install dopplerhq/cli/doppler]
+  [Skip Doppler]
+```
+
+On install, run in the background:
+
+```bash
+brew install dopplerhq/cli/doppler
+```
+
+Report success/failure. If the user skips, record `secrets_manager: "none"` in `$PREFS_PATH` and end this sub-flow.
+
+#### Step 3f.2 — Auth status
+
+Run:
+
+```bash
+doppler me --json 2>&1
+```
+
+Parse the JSON. If the output contains `"error"` or a non-zero exit code, the user is not authenticated. Print:
+
+```
+Doppler is not authenticated.
+Run this command in your terminal:
+
+  doppler login
+
+This opens a browser for the OAuth flow. Once complete, re-run /ops:setup doppler.
+```
+
+Do **not** try to automate the browser OAuth flow. End this sub-flow after printing the instruction. If authenticated, `doppler me` will return JSON with `name` and `email` — confirm:
+
+```
+✓ Doppler authenticated as <name> (<email>)
+```
+
+Never display the name or email unless they came from `doppler me` output in this session.
+
+#### Step 3f.3 — Project context
+
+If authenticated, list available projects:
+
+```bash
+doppler projects --json 2>&1
+```
+
+Parse the array of project objects. Present them via `AskUserQuestion` with `singleSelect`:
+
+```
+Select your default Doppler project:
+  [ ] healify
+  [ ] sam-manager
+  [ ] inboxassist
+  ...
+  [ ] Skip — don't set a default project
+```
+
+If the user selects a project, fetch its configs:
+
+```bash
+doppler configs --project <selected_project> --json 2>&1
+```
+
+Present available configs via `AskUserQuestion` with `singleSelect`:
+
+```
+Select the default config for <project>:
+  [ ] dev
+  [ ] staging
+  [ ] production
+```
+
+Write the selection to `$PREFS_PATH` (merge, don't overwrite):
+
+```json
+{
+  "secrets_manager": "doppler",
+  "doppler": {
+    "project": "<selected>",
+    "config": "<selected>"
+  }
+}
+```
+
+Print confirmation:
+
+```
+✓ Doppler default context set: <project>/<config>
+```
+
+#### Step 3f.4 — Document for agents
+
+Print this note so it's visible in the session:
+
+```
+All ops skills can now query secrets via:
+
+  doppler secrets get <KEY> --plain --project <project> --config <config>
+
+For example:
+  doppler secrets get TELEGRAM_BOT_TOKEN --plain --project healify --config dev
+
+The project and config above are the defaults saved to preferences.
+Individual skills can override with --project / --config flags.
+```
+
+### 3g — Password Manager (credential vault)
+
+Ops agents frequently need to look up credentials (API keys, database passwords, service tokens) on your behalf. This step wires up a password manager so those queries can be automated via a standard command template stored in `$PREFS_PATH`.
+
+#### Step 3g.1 — Auto-detect installed managers
+
+Run these in parallel:
+
+```bash
+command -v op 2>/dev/null && op account list --format=json 2>&1    # 1Password CLI
+command -v dcli 2>/dev/null && dcli sync 2>&1                       # Dashlane CLI
+command -v bw 2>/dev/null && bw status --raw 2>&1                   # Bitwarden CLI
+security find-generic-password -s "test" 2>&1 | head -1             # macOS Keychain (always available)
+```
+
+Parse each result to classify as `authenticated`, `needs_unlock`, `not_installed`, or `available` (Keychain is always `available`).
+
+#### Step 3g.2 — Present findings
+
+Show only what was detected via `AskUserQuestion`:
+
+```
+Password managers found:
+  [1Password — authenticated as <account>]    (only if op is installed + authed)
+  [Dashlane — needs unlock]                   (only if dcli is installed)
+  [Bitwarden — <locked|unlocked|unauthenticated>]    (only if bw is installed)
+  [macOS Keychain — always available]
+  [Skip — don't connect a password manager]
+```
+
+Never show managers that aren't installed. Always show macOS Keychain and Skip. If none of the CLIs are installed, skip straight to showing just `[macOS Keychain — always available]` and `[Skip]`.
+
+#### Step 3g.3 — Configure selected manager
+
+**1Password (`op`):**
+
+1. Check auth: `op account list --format=json`
+2. If the output is empty or exits non-zero (not signed in), print:
+   ```
+   1Password CLI is installed but not signed in.
+   Run `eval $(op signin)` in your terminal, then re-run /ops:setup vault.
+   ```
+   Stop this sub-flow.
+3. If authed, list vaults for the user to pick a default:
+   ```bash
+   op vault list --format=json
+   ```
+   Use `AskUserQuestion` (single select) to present the vault names. The selected vault becomes `password_manager_config.vault`.
+4. Record query syntax:
+   ```
+   op item get "{{name}}" --fields label=password --format=json
+   ```
+
+**Dashlane (`dcli`):**
+
+1. Check auth: `dcli sync`
+2. If `dcli sync` fails or returns a not-configured error, print:
+   ```
+   Dashlane CLI is installed but not configured.
+   Run `dcli configure` in your terminal, then re-run /ops:setup vault.
+   ```
+   Stop this sub-flow.
+3. Record query syntax:
+   ```
+   dcli password --filter "{{name}}" --output json
+   ```
+4. No vault selection needed — Dashlane has a flat namespace.
+
+**Bitwarden (`bw`):**
+
+1. Check auth: `bw status --raw` and parse the JSON `status` field.
+   - `"unauthenticated"` → print:
+     ```
+     Bitwarden CLI is installed but not logged in.
+     Run `bw login` in your terminal, then re-run /ops:setup vault.
+     ```
+     Stop this sub-flow.
+   - `"locked"` → print:
+     ```
+     Bitwarden vault is locked.
+     Run `export BW_SESSION=$(bw unlock --raw)` in your terminal (keep this terminal open),
+     then re-run /ops:setup vault with that session active.
+     ```
+     Stop this sub-flow.
+   - `"unlocked"` → continue.
+2. Record query syntax:
+   ```
+   bw get item "{{name}}" --pretty
+   ```
+3. No vault selection — Bitwarden uses a single unlocked vault per session.
+
+**macOS Keychain:**
+
+1. No auth check needed — always available.
+2. Note for the user:
+   ```
+   macOS Keychain is always available but is limited to items stored locally.
+   No cross-device sync. Best for machine-specific secrets (API keys added via
+   `security add-generic-password`).
+   ```
+3. Record query syntax:
+   ```
+   security find-generic-password -s "{{name}}" -w
+   ```
+
+#### Step 3g.4 — Write to preferences
+
+After the user selects and configures a manager, write to `$PREFS_PATH`:
+
+```json
+{
+  "password_manager": "<1password|dashlane|bitwarden|keychain>",
+  "password_manager_config": {
+    "vault": "<vault name, or omit if not applicable>",
+    "query_cmd": "<template with {{name}} placeholder>"
+  }
+}
+```
+
+Merge with the existing file (`jq '. + { ... }'`) — never overwrite. Example for 1Password:
+
+```json
+{
+  "password_manager": "1password",
+  "password_manager_config": {
+    "vault": "Private",
+    "query_cmd": "op item get \"{{name}}\" --fields label=password --format=json"
+  }
+}
+```
+
+If the user picks Skip, write `"password_manager": "none"` so subsequent runs don't re-prompt unless the user explicitly runs `/ops:setup vault`.
+
+#### Step 3g.5 — Document for agents
+
+After saving, print this note once:
+
+```
+All ops skills can now query credentials via your configured password manager.
+The query command template is in preferences.json under password_manager_config.query_cmd.
+Replace {{name}} with the item name — e.g. "GitHub PAT", "AWS root key", "healify-db".
+
+To query manually:
+  op item get "GitHub PAT" --fields label=password --format=json   (1Password example)
+  security find-generic-password -s "healify-db" -w               (Keychain example)
+```
+
+#### Dashboard display
+
+Update the Step 0b status header to include vault status:
+
+```
+ Vault:       ✓ 1password (vault: Private)
+```
+
+Use `○ none` if skipped, `✗ locked` if the manager is installed but inaccessible.
+
+#### Completion summary (Step 8)
+
+Include in the final summary block:
+
+```
+ ✓ Vault:      1password → Private vault
+```
+
+Omit this line entirely if `password_manager` is `"none"` or unset.
+
+#### Invocation shortcut
+
+Add to the shortcuts table: `vault`, `password-manager`, `pm` → Step 3g
 
 ---
 
@@ -766,7 +1118,7 @@ Found these git repositories on your filesystem. Select the ones to add to your 
 For each selected project, collect these fields one `AskUserQuestion` at a time:
 
 - `alias` (short name, required — suggest the directory name as default)
-- `org` (GitHub org or owner, e.g. `my-org` or `Lifecycle-Innovations-Limited`)
+- `org` (GitHub org or owner, e.g. `auroracapital` or `Lifecycle-Innovations-Limited`)
 - `infra.platform` → select `[aws]`, `[vercel]`, `[cloudflare]`, `[other]`
 - `revenue.model` → select `[saas]`, `[subscription]`, `[marketplace]`, `[internal]`, `[portfolio]`, `[other]`
 
@@ -799,6 +1151,83 @@ After auto-discovery (or if the user selects "I'll enter projects manually"):
 
 ---
 
+## Step 5b — Background Daemon (if selected)
+
+The ops-daemon manages persistent background services — WhatsApp sync, memory extraction, and future integrations — under a single launchd agent. It auto-heals on failure and writes a shared health file that all ops skills can read.
+
+**What the daemon does:** Manages persistent connections (WhatsApp sync, memory extraction) and auto-heals on failure. All services run under a single launchd agent (`com.claude-ops.daemon`) that restarts itself if it crashes, with per-service health tracking written to `daemon-health.json`.
+
+Ask the user via `AskUserQuestion`:
+
+```
+Install the ops background daemon?
+  Manages wacli-sync and memory-extractor persistently — recommended for reliable briefings.
+  [Yes — install daemon]  [Skip — use standalone keepalive instead]
+```
+
+If the user skips, fall back to the standalone keepalive path in Step 3b.7.
+
+On `Yes`:
+
+**1. Install and configure the daemon:**
+
+```bash
+DAEMON_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh"
+chmod +x "$DAEMON_SCRIPT"
+PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/scripts/com.claude-ops.daemon.plist"
+PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.daemon.plist"
+DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+LOG_DIR="$DATA_DIR/logs"
+mkdir -p "$LOG_DIR"
+
+# Generate plist
+sed -e "s|__DAEMON_SCRIPT_PATH__|$DAEMON_SCRIPT|g" \
+    -e "s|__LOG_DIR__|$LOG_DIR|g" \
+    -e "s|__HOME__|$HOME|g" \
+    "$PLIST_TEMPLATE" > "$PLIST_DEST"
+
+# Copy default services config if none exists
+SERVICES_CONFIG="$DATA_DIR/daemon-services.json"
+if [[ ! -f "$SERVICES_CONFIG" ]]; then
+  sed "s|__SCRIPTS_DIR__|${CLAUDE_PLUGIN_ROOT}/scripts|g" \
+    "${CLAUDE_PLUGIN_ROOT}/scripts/daemon-services.default.json" > "$SERVICES_CONFIG"
+fi
+
+# Remove the old standalone wacli keepalive if present
+launchctl bootout gui/$(id -u)/com.claude-ops.wacli-keepalive 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist"
+
+# Load daemon
+launchctl bootout gui/$(id -u) "$PLIST_DEST" 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) "$PLIST_DEST"
+```
+
+**2. Verify health after 5 seconds:**
+
+```bash
+cat "$DATA_DIR/daemon-health.json" 2>/dev/null
+```
+
+Parse the JSON. If `action_needed` is not null, surface the required action to the user. If the daemon wrote a health file, print:
+
+```
+✓ Background daemon — running (wacli-sync: connected, memory-extractor: scheduled)
+```
+
+If the health file is missing (daemon may still be initializing), wait 5 more seconds and retry once. If still missing, print:
+
+```
+⚠ Daemon started but health file not yet written. Check:
+  launchctl print gui/$(id -u)/com.claude-ops.daemon
+  tail -20 ~/.claude/plugins/data/ops-ops-marketplace/logs/ops-daemon.log
+```
+
+**3. Record in preferences:**
+
+Write `daemon.enabled = true` and `daemon.services = ["wacli-sync", "memory-extractor"]` to `$PREFS_PATH`.
+
+---
+
 ## Step 6 — Save preferences (if selected)
 
 Collect these via `AskUserQuestion` — one question each. **Never auto-fill from memory, existing configs, or previous sessions. Always ask explicitly.**
@@ -806,7 +1235,6 @@ Collect these via `AskUserQuestion` — one question each. **Never auto-fill fro
 1. **Owner name** (free text): "What should Claude call you in briefings?" — no default, no suggestions from memory.
 
 2. **Timezone** (single select with common options):
-
    ```
    Select your timezone:
      [UTC]
@@ -821,7 +1249,6 @@ Collect these via `AskUserQuestion` — one question each. **Never auto-fill fro
    ```
 
 3. **Briefing verbosity** (single select):
-
    ```
    How much detail do you want in briefings?
      [full]     — complete rundown of all channels, projects, and incidents
@@ -853,6 +1280,11 @@ Write to `$PREFS_PATH`:
   "briefing_verbosity": "...",
   "yolo_enabled": false,
   "default_channels": ["whatsapp", "email"],
+  "secrets_manager": "doppler",
+  "doppler": {
+    "project": "...",
+    "config": "..."
+  },
   "channels": {
     "telegram": { "bot_token": "...", "owner_id": "..." }
   }
@@ -882,11 +1314,13 @@ Re-run the detector and present a final status dashboard:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  ✓ Core CLIs:  jq, git, gh, aws, node
  ✓ Channels:   telegram, whatsapp, email
+ ✓ Secrets:    doppler → healify/dev
  ✓ MCPs:       linear, sentry, vercel
  ✓ Registry:   20 projects
  ✓ Prefs:      saved to ~/.claude/plugins/data/ops-ops-marketplace/preferences.json
+ ✓ Daemon:     ops-daemon → wacli-sync, memory-extractor
 
- You're ready. Type /ops:go for your first briefing.
+ Next: /ops-go for your first briefing
 ──────────────────────────────────────────────────────
 ```
 
@@ -899,6 +1333,19 @@ bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-complete --channels <N> --projects <N> 
 ```
 
 Where `<N>` is replaced with the actual number of channels configured and projects registered during this session.
+
+---
+
+## Daemon Health Contract
+
+All ops skills should check daemon health before relying on background services:
+
+```bash
+cat ~/.claude/plugins/data/ops-ops-marketplace/daemon-health.json
+```
+
+If `action_needed` is not null, surface the required action to the user before proceeding.
+If the daemon is not running, offer to start it: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-ops.daemon.plist`
 
 ---
 
@@ -915,8 +1362,11 @@ If `$ARGUMENTS` contains a specific section name, jump straight to that section:
 | `email`                                | Step 3c |
 | `slack`                                | Step 3d |
 | `calendar`, `cal`                      | Step 3e |
+| `doppler`, `secrets`                   | Step 3f |
+| `vault`, `password-manager`, `pm`      | Step 3g |
 | `mcp`                                  | Step 4  |
 | `registry`, `projects`                 | Step 5  |
+| `daemon`, `background`                 | Step 5b |
 | `prefs`, `preferences`                 | Step 6  |
 | `env`, `shell`                         | Step 7  |
 

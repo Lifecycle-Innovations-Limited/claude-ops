@@ -1,23 +1,49 @@
 # claude-ops
 
-A Claude Code plugin that turns Claude into a business operating system. One command — `/ops:go` — gives you a complete morning briefing: infra health, CI status, unread messages, open PRs, sprint state, and revenue snapshot. Then route to any sub-skill for deep work.
+A Claude Code plugin that turns Claude into a business operating system. Run `/ops` to launch the interactive command center — a pixel-art dashboard with instant hotkey access to morning briefings, inbox management, fire alerts, deploy status, revenue tracking, and autonomous YOLO mode.
 
 ## Features
 
-| Skill           | Description                                                                    |
-| --------------- | ------------------------------------------------------------------------------ |
-| `/ops:setup`    | Interactive setup wizard — installs CLIs, configures channels, builds registry |
-| `/ops:go`       | Morning briefing — all systems in one dashboard                                |
-| `/ops:next`     | Priority-ordered next action (fires → comms → PRs → sprint → GSD)              |
-| `/ops:inbox`    | Inbox zero across WhatsApp, Email, Slack, Telegram                             |
-| `/ops:comms`    | Send/read messages across all channels                                         |
-| `/ops:projects` | Portfolio dashboard — GSD phase, CI, PRs, dirty files                          |
-| `/ops:linear`   | Linear sprint board, issue management, GSD sync                                |
-| `/ops:triage`   | Cross-platform issue triage (Sentry + Linear + GitHub)                         |
-| `/ops:fires`    | Production incidents dashboard with agent dispatch                             |
-| `/ops:deploy`   | ECS + Vercel + GitHub Actions deploy status                                    |
-| `/ops:revenue`  | AWS costs, credits, revenue pipeline, runway                                   |
-| `/ops:yolo`     | 4-agent C-suite analysis + autonomous mode                                     |
+| Skill             | Description                                                                    |
+| ----------------- | ------------------------------------------------------------------------------ |
+| `/ops`            | Interactive command center dashboard (visual HQ)                               |
+| `/ops:dash`       | Same as `/ops` — pixel-art dashboard with hotkey navigation                    |
+| `/ops:setup`      | Interactive setup wizard — installs CLIs, configures channels, builds registry |
+| `/ops:go`         | Morning briefing — all systems in one dashboard                                |
+| `/ops:next`       | Priority-ordered next action (fires > comms > PRs > sprint > GSD)              |
+| `/ops:inbox`      | Inbox zero across WhatsApp, Email, Slack, Telegram                             |
+| `/ops:comms`      | Send/read messages across all channels                                         |
+| `/ops:projects`   | Portfolio dashboard — GSD phase, CI, PRs, dirty files                          |
+| `/ops:linear`     | Linear sprint board, issue management, GSD sync                                |
+| `/ops:triage`     | Cross-platform issue triage (Sentry + Linear + GitHub)                         |
+| `/ops:fires`      | Production incidents dashboard with agent dispatch                             |
+| `/ops:deploy`     | ECS + Vercel + GitHub Actions deploy status                                    |
+| `/ops:revenue`    | AWS costs, credits, revenue pipeline, runway                                   |
+| `/ops:merge`      | Auto-fix CI + merge all ready PRs                                              |
+| `/ops:speedup`    | Cross-platform system optimizer (macOS/Linux/WSL)                              |
+| `/ops:yolo`       | 4-agent C-suite analysis + autonomous mode                                     |
+
+### Dashboard hotkeys
+
+The `/ops:dash` command center provides instant navigation:
+
+```
+ QUICK ACTIONS                    INTEL
+ 1 Morning briefing              6 Revenue & costs
+ 2 Inbox zero                    7 Linear sprint
+ 3 Fire check                    8 Deploy status
+ 4 Project dashboard             9 Triage issues
+ 5 What's next?                  0 System speedup
+
+ POWER                           COMMS
+ a YOLO mode                     d Send message
+ b Auto-merge PRs                e C-suite reports
+ c Setup wizard
+
+ META
+ f Settings & config             h Help / FAQ / Wiki
+ g Share your setup              q Exit
+```
 
 ## Requirements
 
@@ -32,35 +58,35 @@ The setup wizard (`/ops:setup`) walks through each one interactively. You choose
 
 #### CLI-only (no MCP alternative)
 
-| Tool               | Auto-installed                                            | What it does                                                                       |
-| ------------------ | --------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `gh` (GitHub CLI)  | Yes (Homebrew)                                            | PRs, CI logs, issue triage, merge pipeline — used by 8+ skills                     |
-| `aws` (AWS CLI)    | Yes (Homebrew)                                            | ECS health, Cost Explorer, CloudWatch — used by ops-fires, ops-revenue, ops-deploy |
-| `wacli` (WhatsApp) | Manual (see wacli README)                                 | WhatsApp inbox, send/read, contact lookup — no MCP equivalent exists               |
-| Node.js 18+        | Yes (Homebrew)                                            | Runs the bundled Telegram MCP server                                               |
+| Tool | Auto-installed | What it does |
+|------|---------------|--------------|
+| `gh` (GitHub CLI) | Yes (Homebrew) | PRs, CI logs, issue triage, merge pipeline — used by 8+ skills |
+| `aws` (AWS CLI) | Yes (Homebrew) | ECS health, Cost Explorer, CloudWatch — used by ops-fires, ops-revenue, ops-deploy |
+| `wacli` (WhatsApp) | Manual ([source](https://github.com/auroracapital/wacli)) | WhatsApp inbox, send/read, contact lookup — no MCP equivalent exists |
+| Node.js 18+ | Yes (Homebrew) | Runs the bundled Telegram MCP server |
 
 #### MCP-only (no CLI needed)
 
-| MCP    | Connected via     | What it does                                                                                      |
-| ------ | ----------------- | ------------------------------------------------------------------------------------------------- |
+| MCP | Connected via | What it does |
+|-----|--------------|--------------|
 | Linear | OAuth (Claude.ai) | Sprint cycles, issues, projects — 12 tools across 6 skills. Fully covers all Linear functionality |
-| Vercel | OAuth (Claude.ai) | Deploy status, build logs, runtime logs. Read-only (deploys triggered via CI)                     |
+| Vercel | OAuth (Claude.ai) | Deploy status, build logs, runtime logs. Read-only (deploys triggered via CI) |
 
 #### Choose: MCP, CLI, or both
 
-| Integration         | MCP path                                             | CLI path                                              | What you lose with MCP only                                                                                  |
-| ------------------- | ---------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| **Gmail**           | Claude.ai OAuth — read threads, create drafts        | `gog` CLI — full send, archive, label management      | MCP **cannot send emails** (drafts only) and **cannot archive**. `/ops:inbox` autonomous mode requires `gog` |
-| **Google Calendar** | Claude.ai OAuth — list, create, RSVP, find free time | `gog cal` — read today's events                       | MCP has _more_ features. `gog` is simpler for read-only briefing context. Either works                       |
-| **Slack**           | Claude.ai OAuth — read, send, search                 | Local bot token via `ops-slack-autolink`              | MCP has **quota limits**. Local token gives unlimited search + private channel access without bot membership |
-| **Sentry**          | Claude.ai OAuth — issue search, triage, resolve      | `sentry-cli` — releases, source maps, deploy tracking | Current skills only use search/triage (MCP is fine). CLI adds release management (not used yet)              |
+| Integration | MCP path | CLI path | What you lose with MCP only |
+|-------------|----------|----------|----------------------------|
+| **Gmail** | Claude.ai OAuth — read threads, create drafts | `gog` CLI — full send, archive, label management | MCP **cannot send emails** (drafts only) and **cannot archive**. `/ops:inbox` autonomous mode requires `gog` |
+| **Google Calendar** | Claude.ai OAuth — list, create, RSVP, find free time | `gog cal` — read today's events | MCP has *more* features. `gog` is simpler for read-only briefing context. Either works |
+| **Slack** | Claude.ai OAuth — read, send, search | Local bot token via `ops-slack-autolink` | MCP has **quota limits**. Local token gives unlimited search + private channel access without bot membership |
+| **Sentry** | Claude.ai OAuth — issue search, triage, resolve | `sentry-cli` — releases, source maps, deploy tracking | Current skills only use search/triage (MCP is fine). CLI adds release management (not used yet) |
 
 #### Plugin-bundled
 
-| Integration                                                           | What it is                                             | Setup                                                                                                                                                      |
-| --------------------------------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Telegram MCP server                                                   | gram.js MTProto user-auth — reads your DMs (not a bot) | `/ops:setup telegram` — enter phone number + 2 verification codes, everything else is fully automated (app creation, session generation, keychain storage) |
-| [GSD](https://github.com/Lifecycle-Innovations-Limited/get-shit-done) | Project roadmap state in dashboards                    | Auto-detected. Skills degrade gracefully without it                                                                                                        |
+| Integration | What it is | Setup |
+|-------------|-----------|-------|
+| Telegram MCP server | gram.js MTProto user-auth — reads your DMs (not a bot) | `/ops:setup telegram` — enter phone number + 2 verification codes, everything else is fully automated (app creation, session generation, keychain storage) |
+| [GSD](https://github.com/Lifecycle-Innovations-Limited/get-shit-done) | Project roadmap state in dashboards | Auto-detected. Skills degrade gracefully without it |
 
 ## Installation
 
@@ -142,7 +168,7 @@ The plugin uses **your personal Telegram account** via gram.js MTProto — not a
 
 This invokes `bin/ops-telegram-autolink.mjs`, which takes your phone number, performs the `my.telegram.org` HTTP login flow, extracts `api_id` + `api_hash` (creating a Telegram app for you if none exists), runs the gram.js auth flow to generate a session string, and stores everything in macOS keychain. Zero browser automation — `my.telegram.org` is server-rendered HTML, so the wizard uses plain HTTP requests. You just enter the two codes Telegram sends to your Telegram app.
 
-After the wizard finishes, it prints the values you need to paste into `/plugin settings` for `ops@ops-marketplace` (the plugin cannot write to `~/.claude.json` on its own — that's Claude Code's job via the `/plugin` UI).
+After the wizard finishes, it automatically writes the credentials to the MCP config — no manual pasting required. Just restart Claude Code to activate the Telegram MCP server.
 
 **Manual path (if you already have an app):**
 

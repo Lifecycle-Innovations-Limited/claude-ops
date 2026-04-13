@@ -9,9 +9,24 @@ allowed-tools:
   - Glob
   - Skill
   - AskUserQuestion
+  - WebFetch
+  - Write
 ---
 
 # OPS ► REVENUE & COSTS
+
+## CLI/API Reference
+
+### aws CLI (Cost Explorer)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `aws ce get-cost-and-usage --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --granularity MONTHLY --metrics "UnblendedCost" --group-by "Type=DIMENSION,Key=SERVICE" --output json` | Cost by service | Cost JSON |
+| `aws ce get-cost-and-usage --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --granularity MONTHLY --metrics "UnblendedCost" --output json` | Total cost | Cost JSON |
+| `aws ce get-cost-forecast --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --metric "UNBLENDED_COST" --granularity MONTHLY --output json` | End-of-month forecast | Forecast JSON |
+| `aws ce list-savings-plans-purchase-recommendation --output json` | Savings plan recommendations | JSON |
+
+---
 
 ## Phase 1 — Gather financial data in parallel
 
@@ -124,3 +139,18 @@ RUNWAY ESTIMATE
 | (empty)  | Show full dashboard          |
 
 Use AskUserQuestion after the dashboard for next action.
+
+---
+
+## Native tool usage
+
+### WebFetch — billing API fallback
+
+When `aws ce` commands fail or return incomplete data, use `WebFetch` to query the AWS Cost Explorer API directly. Also useful for fetching Stripe/billing provider data if configured.
+
+### Write — export reports
+
+When user selects "Export cost report" (option c), use `Write` to save the report as a dated file:
+```
+Write(file_path: "/tmp/ops-revenue-[date].md", content: "[formatted report]")
+```

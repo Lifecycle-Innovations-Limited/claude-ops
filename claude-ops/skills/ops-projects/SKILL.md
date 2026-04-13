@@ -10,9 +10,24 @@ allowed-tools:
   - Skill
   - Agent
   - AskUserQuestion
+  - TaskCreate
+  - TaskUpdate
+  - WebFetch
 ---
 
 # OPS ► PROJECTS DASHBOARD
+
+## CLI/API Reference
+
+### gh CLI (GitHub)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `gh pr list --repo <owner/repo> --json number,title,statusCheckRollup,reviewDecision,mergeable` | Open PRs with CI | JSON array |
+| `gh run list --repo <repo> --limit 5 --json status,conclusion,name,headBranch` | CI runs | JSON array |
+| `gh issue list --repo <repo> --json number,title,labels,state` | Issues | JSON array |
+
+---
 
 ## Pre-gathered git status
 
@@ -114,3 +129,15 @@ If `$ARGUMENTS` contains a project alias, show a deep-dive for that project:
 ```
 
 Use AskUserQuestion after displaying either view.
+
+---
+
+## Native tool usage
+
+### Tasks — project action tracking
+
+When the user jumps to a project, use `TaskCreate` to track the action they take. This carries context forward if they switch between projects.
+
+### WebFetch — CI enrichment
+
+When `gh` is slow or rate-limited, use `WebFetch` to query GitHub Actions API directly for run status.

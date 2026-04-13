@@ -102,6 +102,14 @@ rm -rf "$OUT" && mkdir -p "$OUT"
   fi
 } &
 
+{
+  # Auto-fix pass: silently repair wacli FTS, missing MCPs, etc.
+  SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+  if [ -x "$SCRIPT_DIR/bin/ops-autofix" ]; then
+    "$SCRIPT_DIR/bin/ops-autofix" --json > "$OUT/autofix.json" 2>/dev/null || true
+  fi
+} &
+
 # Wait for all background jobs
 wait
 

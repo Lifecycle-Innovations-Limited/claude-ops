@@ -8,7 +8,12 @@ allowed-tools:
   - Grep
   - Glob
   - Skill
+  - Agent
   - AskUserQuestion
+  - TaskCreate
+  - TaskUpdate
+  - Monitor
+  - WebFetch
   - mcp__claude_ai_Vercel__list_deployments
   - mcp__claude_ai_Vercel__list_projects
   - mcp__claude_ai_Vercel__get_deployment
@@ -17,6 +22,27 @@ allowed-tools:
 ---
 
 # OPS ► DEPLOY STATUS
+
+## CLI/API Reference
+
+### aws CLI
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `aws ecs list-clusters --output json` | All ECS clusters | `{clusterArns: [...]}` |
+| `aws ecs list-services --cluster <name> --output json` | Services in cluster | `{serviceArns: [...]}` |
+| `aws ecs describe-services --cluster <name> --services <arn> --output json` | Service health | `{services: [{serviceName, status, runningCount, desiredCount, pendingCount}]}` |
+| `aws logs tail /ecs/<service> --since 1h --format short` | ECS logs | Log lines |
+
+### gh CLI (GitHub)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `gh run list --repo <owner/repo> --limit 5 --json status,conclusion,name,headBranch,createdAt,databaseId` | CI runs | JSON array |
+| `gh run view <id> --repo <repo> --log-failed` | Failed CI logs | Log output |
+| `gh run watch <run-id> --repo <repo>` | Stream CI run | Live output (use with Monitor) |
+
+---
 
 ## Phase 1 — Gather deploy data in parallel
 
@@ -106,4 +132,43 @@ If `$ARGUMENTS` has a project alias, show only that project's deploy info + last
 
 For failing deploys: offer to view logs via `mcp__claude_ai_Vercel__get_deployment_build_logs` or ECS CloudWatch logs.
 
-Use AskUserQuestion after the dashboard.
+Use `AskUserQuestion` after the dashboard for action selection.
+
+**If user selects manual deploy (option b)**, confirm with `AskUserQuestion` before triggering:
+
+```
+Trigger deploy for [project]:
+  Environment: [production/staging]
+  Branch: [branch]
+  Last commit: [sha] — [message]
+
+  [Deploy now]  [View diff since last deploy first]  [Cancel]
+```
+
+**If user selects to view logs**, show the logs and use `AskUserQuestion`:
+```
+  [Dispatch fix agent for this failure]  [Redeploy]  [Back to dashboard]
+```
+
+---
+
+## Native tool usage
+
+### Monitor — live deploy streaming
+
+When watching a deploy in progress, use `Monitor` to stream logs:
+```
+Monitor(command: "gh run watch <run-id> --repo <repo>")
+```
+For ECS deploys: `Monitor(command: "aws ecs wait services-stable --cluster <cluster> --services <service>")`
+
+### Tasks — deploy tracking
+
+Use `TaskCreate` per project being deployed. Update with `TaskUpdate` as deploys succeed/fail.
+
+### WebFetch — Vercel fallback
+
+When Vercel MCP tools are unavailable, use `WebFetch` with the Vercel API directly:
+```
+WebFetch(url: "https://api.vercel.com/v6/deployments?projectId=<id>&limit=5", headers: {"Authorization": "Bearer $VERCEL_TOKEN"})
+```

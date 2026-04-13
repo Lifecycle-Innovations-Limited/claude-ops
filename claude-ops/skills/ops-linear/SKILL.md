@@ -9,6 +9,9 @@ allowed-tools:
   - Glob
   - Skill
   - AskUserQuestion
+  - TaskCreate
+  - TaskUpdate
+  - WebFetch
   - mcp__claude_ai_Linear__list_issues
   - mcp__claude_ai_Linear__list_cycles
   - mcp__claude_ai_Linear__list_teams
@@ -24,6 +27,17 @@ allowed-tools:
 ---
 
 # OPS ► LINEAR COMMAND CENTER
+
+## CLI/API Reference
+
+### Linear GraphQL (fallback when MCP unavailable)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ issues(filter: {state: {type: {in: [\"started\",\"unstarted\"]}}}) { nodes { id title state { name } priority assignee { name } } } }"}'` | Active issues | JSON |
+| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ cycles(filter: {isActive: {eq: true}}) { nodes { id number startsAt endsAt } } }"}'` | Current cycles | JSON |
+
+---
 
 ## Phase 1 — Load data
 
@@ -111,3 +125,18 @@ Read all active GSD STATE.md files across projects. For each active phase:
 Update Linear issues to match GSD phase completion status.
 
 Use AskUserQuestion after displaying any view to get the next action.
+
+---
+
+## Native tool usage
+
+### Tasks — sprint work tracking
+
+When the user starts working on a Linear issue, use `TaskCreate` to track it locally. Update with `TaskUpdate` as the issue progresses. This bridges Linear state with local session state.
+
+### WebFetch — Linear API fallback
+
+When Linear MCP tools hit quota limits or fail, fall back to `WebFetch` with the Linear GraphQL API:
+```
+WebFetch(url: "https://api.linear.app/graphql", method: "POST", headers: {"Authorization": "$LINEAR_API_KEY"}, body: '{"query":"{ issues(filter: {cycle: {id: {eq: \"<id>\"}}}}) { nodes { id title state { name } } } }"}')
+```

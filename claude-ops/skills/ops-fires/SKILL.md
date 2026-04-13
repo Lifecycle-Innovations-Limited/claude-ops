@@ -10,10 +10,58 @@ allowed-tools:
   - Skill
   - Agent
   - AskUserQuestion
+  - TeamCreate
+  - SendMessage
+  - TaskCreate
+  - TaskUpdate
+  - Monitor
+  - WebFetch
+  - WebSearch
   - mcp__sentry__authenticate
 ---
 
 # OPS ► FIRES
+
+## CLI/API Reference
+
+### aws CLI
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `aws ecs list-services --cluster <name> --query 'serviceArns'` | ECS services | ARN list |
+| `aws ecs describe-services --cluster <name> --services <arn> --query 'services[0].{status:status,running:runningCount,desired:desiredCount}'` | Service health | JSON |
+| `aws logs tail /ecs/<service> --since 1h --format short` | ECS logs | Log lines (use with Monitor for live) |
+
+### gh CLI (GitHub)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `gh run list --limit 20 --json status,conclusion,name,headBranch,createdAt` | Recent CI runs | JSON array |
+| `gh run view <id> --repo <repo> --log-failed` | Failed CI logs | Log output |
+
+### sentry-cli / Sentry API
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `sentry-cli issues list --project <slug> --status unresolved` | Unresolved issues | Issue list |
+| `curl -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://sentry.io/api/0/projects/<org>/<proj>/issues/?query=is:unresolved"` | API fallback when MCP unavailable | JSON array |
+
+---
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when dispatching multiple fix agents simultaneously. This enables:
+- Fix agents share findings (e.g., API agent discovers DB is the root cause → infra agent pivots to DB fix)
+- You can prioritize: "CRITICAL ECS issue first, then CI failures"
+- Real-time progress: agents report as they find root causes, you can merge fixes in optimal order
+
+**Team setup** (only when flag is enabled, dispatch phase):
+```
+TeamCreate("fire-fixers")
+Agent(team_name="fire-fixers", name="fix-[service]", ...)
+```
+
+If the flag is NOT set, use standard parallel subagents.
 
 ## Pre-gathered infrastructure data
 
@@ -91,7 +139,23 @@ If no fires: show "ALL SYSTEMS OPERATIONAL" with last-checked timestamps.
 
 ## Dispatch fix agent
 
-When user selects to fix an issue, spawn an Agent with:
+When user selects to fix an issue, use `AskUserQuestion` to confirm the scope before dispatching:
+
+```
+Dispatch fix agent for: [issue title]
+  Severity: [CRITICAL/HIGH/MEDIUM]
+  Repo: [repo]
+  Error: [brief description]
+  
+  The agent will:
+  - Investigate root cause in [repo]
+  - Create feature branch with fix
+  - Open PR for review
+
+  [Dispatch agent]  [Show me the logs first]  [Skip — I'll fix manually]
+```
+
+On confirmation, spawn an Agent with:
 
 - The error details and logs
 - Access to the relevant repo
@@ -101,3 +165,26 @@ When user selects to fix an issue, spawn an Agent with:
 Use the `agents/infra-monitor.md` agent definition for infra issues.
 
 If `$ARGUMENTS` contains a project alias, filter to that project's services only.
+
+---
+
+## Native tool usage
+
+### Monitor — live service health
+
+Use `Monitor` to stream ECS task logs or GitHub Actions runs when investigating fires:
+```
+Monitor(command: "aws logs tail /ecs/<service> --follow --since 5m")
+```
+
+### Tasks — incident tracking
+
+Use `TaskCreate` for each active fire. Update with `TaskUpdate` as fires are investigated/fixed/escalated.
+
+### WebFetch — status pages
+
+When diagnosing fires, use `WebFetch` to check AWS status page (`https://health.aws.amazon.com/health/status`), Vercel status, or third-party API status pages.
+
+### WebSearch — known outage patterns
+
+Use `WebSearch` to find if the error pattern matches a known AWS/infrastructure issue (e.g., "ECS task stopped CannotPullContainerError" → known ECR throttling).
