@@ -343,3 +343,17 @@ cat <<EOF
   "bin_count": $(find "$SCRIPT_DIR/bin" -name "ops-*" 2>/dev/null | wc -l | tr -d ' ')
 }
 EOF
+
+# --- 11. Auto-fix pass (silent, best-effort) ---
+# Run autofix for known issues. This is non-interactive and safe to run every time.
+if [ -x "$SCRIPT_DIR/bin/ops-autofix" ]; then
+  AUTOFIX_RESULT=$("$SCRIPT_DIR/bin/ops-autofix" --json 2>/dev/null || echo '{"applied":[],"failed":[],"skipped":[]}')
+  AUTOFIX_APPLIED=$(echo "$AUTOFIX_RESULT" | jq -r '.applied | length' 2>/dev/null || echo "0")
+  if [ "$AUTOFIX_APPLIED" -gt 0 ]; then
+    echo ""
+    echo "── Auto-fixes applied ──"
+    echo "$AUTOFIX_RESULT" | jq -r '.applied[]' 2>/dev/null | while read -r fix; do
+      echo "  ✓ $fix"
+    done
+  fi
+fi
