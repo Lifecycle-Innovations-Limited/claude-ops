@@ -19,6 +19,12 @@ allowed-tools:
   - mcp__claude_ai_Vercel__get_deployment
   - mcp__claude_ai_Vercel__get_runtime_logs
   - mcp__claude_ai_Vercel__get_deployment_build_logs
+effort: low
+maxTurns: 20
+disallowedTools:
+  - Edit
+  - Write
+  - NotebookEdit
 ---
 
 # OPS ► DEPLOY STATUS

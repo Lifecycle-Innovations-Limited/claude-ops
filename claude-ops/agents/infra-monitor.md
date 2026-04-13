@@ -15,6 +15,8 @@ disallowedTools:
   - Write
   - Edit
   - Agent
+memory: project
+initialPrompt: "Check ECS, Vercel, and AWS health. Return structured JSON with service status."
 ---
 
 # INFRA MONITOR AGENT

@@ -18,6 +18,8 @@ allowed-tools:
   - WebFetch
   - WebSearch
   - mcp__sentry__authenticate
+effort: medium
+maxTurns: 30
 ---
 
 # OPS ► FIRES

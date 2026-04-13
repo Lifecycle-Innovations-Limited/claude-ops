@@ -11,6 +11,8 @@ disallowedTools:
   - Write
   - Edit
   - Agent
+memory: project
+initialPrompt: "Query AWS costs, check credit balances, and cross-reference project revenue. Return financial snapshot."
 ---
 
 # REVENUE TRACKER AGENT

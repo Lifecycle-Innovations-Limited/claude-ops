@@ -18,6 +18,9 @@ allowed-tools:
   - EnterPlanMode
   - ExitPlanMode
   - CronCreate
+effort: high
+model: claude-opus-4-6
+maxTurns: 50
   - CronList
   - CronDelete
   - Monitor

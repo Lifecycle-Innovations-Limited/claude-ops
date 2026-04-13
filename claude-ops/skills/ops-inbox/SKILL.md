@@ -23,6 +23,8 @@ allowed-tools:
   - mcp__gog__gmail_labels
   # Slack: MCP tools added when configured
   # Telegram: user-auth MCP tools added when configured
+effort: high
+maxTurns: 60
 ---
 
 # OPS ► INBOX ZERO

@@ -16,6 +16,7 @@ tools:
 disallowedTools:
   - Edit
   - Agent
+memory: project
 ---
 
 # YOLO CEO AGENT

@@ -13,6 +13,7 @@ tools:
   - Glob
 disallowedTools:
   - Agent
+memory: project
 ---
 
 # DOCTOR AGENT

@@ -24,6 +24,8 @@ allowed-tools:
   - mcp__claude_ai_Linear__list_issue_statuses
   - mcp__claude_ai_Linear__get_milestone
   - mcp__claude_ai_Linear__list_milestones
+effort: medium
+maxTurns: 30
 ---
 
 # OPS ► LINEAR COMMAND CENTER

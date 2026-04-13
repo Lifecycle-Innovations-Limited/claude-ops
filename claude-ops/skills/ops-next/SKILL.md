@@ -16,6 +16,8 @@ allowed-tools:
   - mcp__claude_ai_Linear__list_issues
   - mcp__claude_ai_Linear__list_cycles
   - mcp__claude_ai_Slack__slack_search_public_and_private
+effort: low
+maxTurns: 15
 ---
 
 # OPS ► NEXT ACTION

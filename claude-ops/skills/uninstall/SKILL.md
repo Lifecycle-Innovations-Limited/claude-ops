@@ -5,6 +5,8 @@ allowed-tools:
   - Bash
   - Read
   - AskUserQuestion
+effort: low
+maxTurns: 15
 ---
 
 # OPS > UNINSTALL

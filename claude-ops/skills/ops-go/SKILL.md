@@ -16,6 +16,8 @@ allowed-tools:
   - CronCreate
   - CronList
   - WebFetch
+effort: medium
+maxTurns: 40
 ---
 
 # OPS ► MORNING BRIEFING

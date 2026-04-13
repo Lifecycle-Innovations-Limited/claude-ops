@@ -11,6 +11,12 @@ allowed-tools:
   - AskUserQuestion
   - WebFetch
   - Write
+effort: low
+maxTurns: 20
+disallowedTools:
+  - Edit
+  - Write
+  - NotebookEdit
 ---
 
 # OPS ► REVENUE & COSTS

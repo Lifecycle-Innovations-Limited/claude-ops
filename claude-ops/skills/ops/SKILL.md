@@ -9,6 +9,8 @@ allowed-tools:
   - Glob
   - Skill
   - Agent
+effort: medium
+maxTurns: 20
 ---
 
 # OPS — Business Command Center

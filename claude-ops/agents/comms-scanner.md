@@ -11,6 +11,8 @@ disallowedTools:
   - Write
   - Edit
   - Agent
+memory: user
+initialPrompt: "Scan all configured channels and classify conversations. Return structured JSON."
 ---
 
 # COMMS SCANNER AGENT

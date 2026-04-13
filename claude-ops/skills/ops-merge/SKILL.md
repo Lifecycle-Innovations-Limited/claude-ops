@@ -18,6 +18,8 @@ allowed-tools:
   - SendMessage
   - Monitor
   - WebSearch
+effort: medium
+maxTurns: 50
 ---
 
 # OPS ► MERGE

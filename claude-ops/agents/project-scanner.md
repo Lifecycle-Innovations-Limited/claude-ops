@@ -12,6 +12,8 @@ disallowedTools:
   - Write
   - Edit
   - Agent
+memory: project
+initialPrompt: "Scan all registered repos for git state, PRs, and CI status. Return structured JSON."
 ---
 
 # PROJECT SCANNER AGENT

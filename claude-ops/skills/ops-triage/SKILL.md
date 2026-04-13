@@ -18,6 +18,9 @@ allowed-tools:
   - WebFetch
   - WebSearch
   - LSP
+effort: high
+model: claude-opus-4-6
+maxTurns: 40
   - mcp__sentry__authenticate
   - mcp__claude_ai_Linear__list_issues
   - mcp__claude_ai_Linear__save_issue

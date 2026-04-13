@@ -8,6 +8,8 @@ allowed-tools:
   - Write
   - Edit
   - AskUserQuestion
+effort: high
+maxTurns: 80
 ---
 
 # OPS ► SETUP WIZARD

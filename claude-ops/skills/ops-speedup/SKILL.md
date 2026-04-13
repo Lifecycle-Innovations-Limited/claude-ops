@@ -8,6 +8,8 @@ allowed-tools:
   - Grep
   - Glob
   - AskUserQuestion
+effort: low
+maxTurns: 30
 ---
 
 # OPS > SPEEDUP — System Optimizer

@@ -11,6 +11,8 @@ allowed-tools:
   - AskUserQuestion
   - WebSearch
   - WebFetch
+effort: medium
+maxTurns: 30
 ---
 
 # OPS ► DOCTOR

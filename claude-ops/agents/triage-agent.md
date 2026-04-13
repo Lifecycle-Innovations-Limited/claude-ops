@@ -16,6 +16,8 @@ tools:
   - mcp__claude_ai_Linear__save_comment
 disallowedTools:
   - Agent
+memory: project
+isolation: worktree
 ---
 
 # TRIAGE AGENT

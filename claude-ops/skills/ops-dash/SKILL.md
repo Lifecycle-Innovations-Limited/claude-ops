@@ -13,6 +13,12 @@ allowed-tools:
   - CronCreate
   - CronList
   - CronDelete
+effort: low
+maxTurns: 15
+disallowedTools:
+  - Edit
+  - Write
+  - NotebookEdit
 ---
 
 # OPS > DASH — Interactive Command Center
