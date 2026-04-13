@@ -40,3 +40,7 @@ When a skill says "tell the user to run X in a separate terminal" or "Run `comma
 - **OAuth flows** (`gog auth login`, `doppler login`, `op signin`): run via Bash with `run_in_background: true` — the browser will open automatically.
 - **Password manager unlock** (`bw unlock`, `dcli configure`): run via Bash tool directly.
 - **Exception — QR-based auth** (`wacli auth`): this genuinely requires the user's phone camera pointed at the terminal. This is the ONLY case where you should tell the user to act in a separate terminal.
+
+## Rule 3 — Background by default during setup and configuration flows
+
+During `/ops:setup` and any skill's setup/configure flow, use `run_in_background: true` on **every** Bash call unless you need the result immediately for the very next decision. This includes: credential scans, CLI installs, OAuth flows, npm installs, brew installs, autolink scripts, smoke tests, keychain writes, Doppler queries, Chrome history queries. While background commands run, continue to the next independent step or ask the user the next question. Never block the conversation waiting for a command the user isn't actively waiting for.
