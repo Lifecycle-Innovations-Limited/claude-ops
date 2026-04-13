@@ -151,7 +151,7 @@ If `$ARGUMENTS` contains a project alias, focus the briefing on that project onl
 
 After the briefing, use **batched AskUserQuestion calls** (max 4 options each) for the "What's next?" prompt. Show the top 3 priority actions + `[More...]` in the first call, then remaining actions + `[/ops-yolo — let me run your business today]` in the second call. Route to the appropriate ops skill or project.
 
-For Slack unread counts: if the pre-gathered data shows `"count": -1`, use `mcp__claude_ai_Slack__slack_search_public_and_private` with query `is:unread` to get actual counts. Do this as a parallel tool call while analyzing other data.
+For Slack counts: if the pre-gathered data shows `"count": -1`, use `mcp__claude_ai_Slack__slack_search_public_and_private` with query `in:channel` (NOT `is:unread` — scan full recent activity) to get actual message counts. Do this as a parallel tool call while analyzing other data.
 
 ---
 
