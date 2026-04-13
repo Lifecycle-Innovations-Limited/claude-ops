@@ -24,6 +24,23 @@ maxTurns: 30
 
 # OPS ► FIRES
 
+## Runtime Context
+
+Before executing, load available context:
+
+1. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/daemon-health.json`
+   - Check `infra-monitor` service status — if not running, pre-gathered infra data may be stale
+   - If `action_needed` is not null → surface it immediately as a potential fire
+
+2. **Secrets**: AWS credentials are required for ECS/CloudWatch queries.
+   ### Secret Resolution
+   - First: check `$AWS_ACCESS_KEY_ID` / `$AWS_PROFILE` env vars
+   - Then: `doppler secrets get AWS_ACCESS_KEY_ID --plain` (if `doppler` configured in prefs)
+   - Then: use `password_manager_config.query_cmd` from preferences
+   - Sentry token: `$SENTRY_AUTH_TOKEN` → Doppler `SENTRY_AUTH_TOKEN` → vault
+
+3. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` for `secrets_manager` config to know which vault to query.
+
 ## CLI/API Reference
 
 ### aws CLI

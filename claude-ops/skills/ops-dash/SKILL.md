@@ -23,6 +23,17 @@ disallowedTools:
 
 # OPS > DASH — Interactive Command Center
 
+## Runtime Context
+
+Before rendering, load available context:
+
+1. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`
+   - `owner` — personalize the dashboard header greeting
+   - `timezone` — display timestamps correctly in status indicators
+
+2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
+   - If `action_needed` is not null → show a warning banner at the top of the dashboard before the menu
+
 ## Render dashboard instantly
 
 ```!

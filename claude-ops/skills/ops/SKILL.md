@@ -13,6 +13,13 @@ effort: medium
 maxTurns: 20
 ---
 
+## Runtime Context
+
+Before routing, load:
+1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read configured channels to determine available commands
+2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — if `action_needed`, surface before routing
+
+
 # OPS — Business Command Center
 
 Route `$ARGUMENTS` to the correct ops skill:

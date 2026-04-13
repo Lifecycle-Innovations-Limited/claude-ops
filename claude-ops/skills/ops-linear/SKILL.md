@@ -30,6 +30,19 @@ maxTurns: 30
 
 # OPS ► LINEAR COMMAND CENTER
 
+## Runtime Context
+
+Before executing, load available context:
+
+1. **Secrets**: Linear API key required for MCP fallback queries.
+   ### Secret Resolution
+   - Check `$LINEAR_API_KEY` env var
+   - Then: `doppler secrets get LINEAR_API_KEY --plain` (if doppler configured in prefs)
+   - Then: use `password_manager_config.query_cmd` from `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`
+   - If unavailable, use Linear MCP tools exclusively (no curl fallback possible)
+
+2. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` for `secrets_manager` / `doppler` config.
+
 ## CLI/API Reference
 
 ### Linear GraphQL (fallback when MCP unavailable)

@@ -15,6 +15,14 @@ effort: medium
 maxTurns: 30
 ---
 
+## Runtime Context
+
+Before diagnosing, load:
+1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — check all configured channels and services
+2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — primary diagnostic input
+3. **Secrets**: Verify secret resolution chain works: env → Doppler → password manager
+
+
 # OPS ► DOCTOR
 
 ## Phase 1 — Run diagnostics

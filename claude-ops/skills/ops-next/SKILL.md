@@ -20,6 +20,14 @@ effort: low
 maxTurns: 15
 ---
 
+## Runtime Context
+
+Before advising, load:
+1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `primary_project`, `default_channels`
+2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — flag any action_needed as priority
+3. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/topics_active.md` for ongoing work context
+
+
 # OPS ► NEXT ACTION
 
 ## CLI/API Reference

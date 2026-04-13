@@ -22,6 +22,14 @@ effort: medium
 maxTurns: 50
 ---
 
+## Runtime Context
+
+Before executing, load:
+1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `timezone`, project registry
+2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — if `action_needed` set, surface to user
+3. **Secrets**: For GitHub tokens: env `$GITHUB_TOKEN` → Doppler `doppler secrets get GITHUB_TOKEN --plain` → password manager
+
+
 # OPS ► MERGE
 
 ## CLI/API Reference

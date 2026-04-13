@@ -36,6 +36,15 @@ model: claude-opus-4-6
 maxTurns: 100
 ---
 
+## Runtime Context
+
+Before orchestrating, load:
+1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `timezone`, `yolo_enabled`, registry path
+2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — ensure all services healthy before dispatching
+3. **Secrets**: Resolve via env → Doppler → password manager: `GITHUB_TOKEN`, `SENTRY_AUTH_TOKEN`, `LINEAR_API_KEY`, `ANTHROPIC_API_KEY`
+4. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/topics_active.md` for priority context
+
+
 # OPS ► ORCHESTRATE — Autonomous Work Engine
 
 ## CLI/API Reference

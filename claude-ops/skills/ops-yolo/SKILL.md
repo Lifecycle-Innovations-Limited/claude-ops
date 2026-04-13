@@ -33,6 +33,15 @@ maxTurns: 50
   - mcp__claude_ai_Gmail__gmail_search_messages
 ---
 
+## Runtime Context
+
+Before YOLO analysis, load:
+1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `timezone`, `yolo_enabled`, all channel configs
+2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — all services must be healthy for comprehensive analysis
+3. **Secrets**: Resolve ALL API keys via env → Doppler → password manager
+4. **Ops memories**: Load ALL memory files — contact profiles, preferences, topics, donts — YOLO agents need maximum context
+
+
 # OPS ► YOLO MODE
 
 ## CLI/API Reference

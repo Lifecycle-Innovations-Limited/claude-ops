@@ -25,6 +25,21 @@ maxTurns: 40
 
 # OPS ► COMMS
 
+## Runtime Context
+
+Before executing, load available context:
+
+1. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/daemon-health.json`
+   - Check `wacli-sync` status before any WhatsApp operation
+   - Also check `~/.wacli/.health` — if not `status=connected`, surface auth issue before proceeding
+
+2. **Ops memories**: Before drafting any message, check `${CLAUDE_PLUGIN_DATA_DIR}/memories/`:
+   - `contact_*.md` — load profile for the recipient
+   - `preferences.md` — match user's communication style, language, and tone
+   - `donts.md` — restrictions that must not appear in any draft
+
+3. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` for `default_channels` to determine which channel to prefer when multiple are available for a contact.
+
 ## CLI/API Reference
 
 ### wacli (WhatsApp)

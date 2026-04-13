@@ -28,6 +28,15 @@ maxTurns: 40
   - mcp__claude_ai_Linear__list_teams
 ---
 
+## Runtime Context
+
+Before triaging, load:
+1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read project registry for repo paths
+2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — ensure services healthy
+3. **Secrets**: Resolve via env → Doppler → password manager: `SENTRY_AUTH_TOKEN`, `LINEAR_API_KEY`, `GITHUB_TOKEN`
+4. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/topics_active.md` for issue context
+
+
 # OPS ► CROSS-PLATFORM TRIAGE
 
 ## CLI/API Reference

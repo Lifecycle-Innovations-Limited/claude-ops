@@ -29,6 +29,21 @@ disallowedTools:
 
 # OPS ► DEPLOY STATUS
 
+## Runtime Context
+
+Before executing, load available context:
+
+1. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`
+   - `timezone` — display all deploy timestamps in the correct timezone
+
+2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
+   - Check `infra-monitor` status — if not running, note that ECS data may be stale
+
+3. **Secrets**: AWS and Vercel credentials required.
+   ### Secret Resolution
+   - AWS: check `$AWS_PROFILE` / `$AWS_ACCESS_KEY_ID` → `doppler secrets get AWS_ACCESS_KEY_ID --plain` → vault query cmd from prefs
+   - Vercel token: check `$VERCEL_TOKEN` → `doppler secrets get VERCEL_TOKEN --plain` → vault
+
 ## CLI/API Reference
 
 ### aws CLI

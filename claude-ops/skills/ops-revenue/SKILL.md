@@ -21,6 +21,21 @@ disallowedTools:
 
 # OPS ► REVENUE & COSTS
 
+## Runtime Context
+
+Before executing, load available context:
+
+1. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`
+   - `timezone` — display all timestamps correctly
+
+2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
+   - If `action_needed` is not null → surface it before the cost report
+
+3. **Secrets**: AWS Cost Explorer requires credentials.
+   ### Secret Resolution
+   - AWS: check `$AWS_PROFILE` / `$AWS_ACCESS_KEY_ID` → `doppler secrets get AWS_ACCESS_KEY_ID --plain` → vault query cmd from prefs
+   - If no credentials available, report "AWS costs unavailable — credentials not configured" and show only the revenue pipeline from registry
+
 ## CLI/API Reference
 
 ### aws CLI (Cost Explorer)

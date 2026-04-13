@@ -29,6 +29,24 @@ maxTurns: 60
 
 # OPS ► INBOX ZERO
 
+## Runtime Context
+
+Before executing, load available context:
+
+1. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`
+   - `default_channels` — which channels to scan by default
+   - `secrets_manager` / `doppler` — how to resolve channel credentials if not in env
+
+2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
+   - Check `wacli-sync` status — if not running or auth needed, skip WhatsApp and surface the issue
+   - Also check `~/.wacli/.health` for live auth status before any wacli command
+
+3. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/` before drafting any reply:
+   - `contact_*.md` — load profile for the contact you're about to reply to
+   - `preferences.md` — apply user's communication style and language preferences
+   - `topics_active.md` — check for active threads or deadlines related to this contact
+   - `donts.md` — never violate these restrictions in drafts
+
 ## CLI/API Reference
 
 ### wacli (WhatsApp)

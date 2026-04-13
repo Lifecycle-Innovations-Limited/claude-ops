@@ -22,6 +22,22 @@ maxTurns: 40
 
 # OPS ► MORNING BRIEFING
 
+## Runtime Context
+
+Before executing, load available context:
+
+1. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`
+   - `owner` — use in the greeting header ("Good morning, [owner]")
+   - `timezone` — display all timestamps in this timezone
+   - `default_channels` — which channels to include in unread summary
+
+2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
+   - If `action_needed` is not null → surface it before the briefing
+   - Check `wacli-sync` status before including WhatsApp unread counts
+   - Also check `~/.wacli/.health` for live auth status
+
+3. **WhatsApp pre-check**: Only include WhatsApp data if `~/.wacli/.health` shows `status=connected`.
+
 ## CLI/API Reference
 
 ### wacli (WhatsApp)

@@ -12,6 +12,12 @@ effort: low
 maxTurns: 30
 ---
 
+## Runtime Context
+
+Before scanning, load:
+1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `timezone` for timestamps
+
+
 # OPS > SPEEDUP — System Optimizer
 
 ## Phase 1 — Visual header + system scan
