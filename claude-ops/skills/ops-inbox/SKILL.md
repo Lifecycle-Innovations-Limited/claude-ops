@@ -417,7 +417,7 @@ Draft replies via `gog gmail send`. Archive via `gog gmail labels modify --remov
 
 ### Slack
 
-Use Slack MCP tools with `query: "is:unread"` for mentions.
+Use Slack MCP tools with `query: "in:channel"` (NOT `is:unread` — scan full recent activity, not just unread) for mentions.
 For each result, show channel, sender, preview. Read thread for context.
 
 ```

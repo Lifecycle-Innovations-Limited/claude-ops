@@ -249,13 +249,21 @@ Call 3 (if "More steps..."): `[Deploy]`, `[Report]`, `[Done selecting]`
 
 Run the selected steps in sequence, reporting after each step.
 
-**Per-step confirmations** (use `AskUserQuestion` before each destructive action):
+**Per-step confirmations** (use `AskUserQuestion` before EACH destructive action):
 
 - **Inbox**: Show drafted replies and ask `[Send all N replies]` / `[Review each one]` / `[Skip inbox]` before sending any messages
 - **Fires**: Show proposed fix and ask `[Dispatch fix agent]` / `[Skip]` before each agent dispatch
 - **PRs**: Show PR list and ask `[Merge all N ready PRs]` / `[Pick which ones]` / `[Skip]` before merging
 - **Triage**: Show issues to close and ask `[Auto-resolve all N confirmed-fixed]` / `[Review each]` / `[Skip]` before closing
 - **Deploy**: Show pending deploys and ask `[Deploy all]` / `[Pick which]` / `[Skip]` before triggering
+- **Infrastructure changes**: For EVERY destructive infra action (delete ALB, stop RDS, disable Multi-AZ, purge images, etc.), present the specific action with context from the C-suite reports and ask `[Execute]` / `[Skip]` individually. NEVER batch destructive infra actions.
+
+**Report-driven execution**: When the user approves executing recommendations from the Hard Truths report:
+1. Read ALL C-suite analysis files (`/tmp/yolo-[session]/*.md`)
+2. Extract specific actionable items marked with `⚠️ REQUIRES CONFIRMATION`
+3. Present each action individually via `AskUserQuestion` with the exact command that will run, the expected outcome, and the source report (CTO/CFO/COO)
+4. Only execute after explicit per-action approval
+5. After each action, verify the result and report back before proceeding to the next
 
 After each step, check if new fires have appeared before proceeding.
 Report final summary when done.

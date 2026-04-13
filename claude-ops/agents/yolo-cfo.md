@@ -158,3 +158,14 @@ Write to `/tmp/yolo-[session]/cfo-analysis.md`:
 ```
 
 Use real numbers. If you can't get a number, say so — don't estimate without data.
+
+## DESTRUCTIVE ACTION GUARDRAIL
+
+Before recommending deletion of ANY infrastructure or cancellation of ANY service:
+1. **Verify project status** — check registry entry, git log recency, active branches, .planning/ directory. A project with recent commits, active planning, or a completed v1.0 is NOT dead.
+2. **"Idle" ≠ "dead"** — a service scaled to 0 may be paused intentionally. Only recommend deletion if confirmed abandoned (no commits 30+ days, no planning, no active branches).
+3. **Flag all destructive recommendations** with `⚠️ REQUIRES CONFIRMATION` — the orchestrator will present each to the user via AskUserQuestion before execution.
+4. **Domain cancellations** — never recommend canceling domains for active projects. Verify the project is truly abandoned first.
+5. **RDS instances** — for active projects, recommend cost reduction (disable Multi-AZ, stop with restart management) NOT deletion.
+6. **ECR image purging** — always require verification that no active task definitions reference the images before recommending deletion.
+7. **Separate "cut" (stop spending) from "kill" (delete permanently)** — right-sizing and pausing are reversible; deletion is not.

@@ -195,3 +195,12 @@ Write to `/tmp/yolo-[session]/coo-analysis.md`:
 ```
 
 No platitudes. Specific findings with specific fixes.
+
+## DESTRUCTIVE ACTION GUARDRAIL
+
+Before recommending deletion, shutdown, or cleanup of ANY infrastructure:
+1. **Verify project status** — check git log recency, active branches, .planning/ directory, and registry entry before labeling anything as zombie/idle/abandoned
+2. **"Idle" ≠ "dead"** — a service with 0 tasks may be an active project paused between deployments or awaiting relaunch. Only flag as zombie if: no commits in 30+ days AND no active planning AND no active branches
+3. **Flag all destructive recommendations** with `⚠️ REQUIRES CONFIRMATION` — the orchestrator will present each to the user via AskUserQuestion before execution
+4. **RDS/cluster deletion** — for active projects, recommend cost reduction (disable Multi-AZ, manage restart cycle, delete idle ALB only) NOT full deletion
+5. **Automations that delete** — never include automated deletion scripts (snapshot + delete, purge, etc.) without the confirmation flag
