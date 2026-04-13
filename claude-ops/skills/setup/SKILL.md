@@ -1080,7 +1080,7 @@ Add to the shortcuts table: `vault`, `password-manager`, `pm` → Step 3g
 
 ---
 
-### 3h — Ecommerce (Shopify + ShipBob)
+### 3h — Ecommerce (Shopify + dynamic partners)
 
 #### Step 3h.1 — Check existing config
 
@@ -1095,7 +1095,7 @@ If both `store_url` and `admin_token` are already set, show:
 ✓ Shopify — already configured (<store_url>)
   [Keep existing]  [Reconfigure]
 ```
-If the user keeps existing, skip to the ShipBob check. If reconfiguring or not set, continue.
+If the user keeps existing, skip to Step 3h.4. If reconfiguring or not set, continue.
 
 #### Step 3h.2 — Shopify store URL
 
@@ -1121,45 +1121,16 @@ Enter your Shopify Admin API access token:
   Token starts with "shpat_"
 ```
 
-#### Step 3h.4 — ShipBob (optional)
-
-Ask via `AskUserQuestion`:
-```
-Do you use ShipBob for fulfillment?
-  [Yes — enter ShipBob API token]  [Skip ShipBob]
-```
-
-If Yes, ask for the ShipBob personal access token (explain: ShipBob dashboard → Integrations → API Tokens).
-
-#### Step 3h.5 — Save to preferences
-
-Write to `$PREFS_PATH` (merge):
-```json
-{
-  "ecom": {
-    "shopify": {
-      "store_url": "<yourstore.myshopify.com>",
-      "admin_token": "<shpat_...>"
-    },
-    "shipbob": {
-      "api_token": "<token_or_null>"
-    }
-  }
-}
-```
-
-Do NOT store the admin token in plaintext preferences if Doppler is configured — instead write the Doppler reference and save the actual token to Doppler:
+Save to `$PREFS_PATH` under `ecom.shopify`. Apply the Doppler-reference pattern — if Doppler is configured, run:
 ```bash
 doppler secrets set SHOPIFY_ADMIN_TOKEN="<token>" --project <project> --config <config>
 ```
-Then store `"admin_token": "doppler:SHOPIFY_ADMIN_TOKEN"` in preferences.
+and store `"admin_token": "doppler:SHOPIFY_ADMIN_TOKEN"` in preferences instead of the raw token.
 
-#### Step 3h.6 — Smoke test
-
+Smoke test:
 ```bash
 STORE=$(jq -r '.ecom.shopify.store_url' "$PREFS_PATH")
 TOKEN=$(jq -r '.ecom.shopify.admin_token' "$PREFS_PATH")
-# Resolve Doppler reference if needed
 if [[ "$TOKEN" == doppler:* ]]; then
   KEY="${TOKEN#doppler:}"
   TOKEN=$(doppler secrets get "$KEY" --plain 2>/dev/null)
@@ -1167,13 +1138,78 @@ fi
 curl -s -H "X-Shopify-Access-Token: $TOKEN" \
   "https://$STORE/admin/api/2024-10/shop.json" | jq '.shop.name'
 ```
+Expect a shop name string. If the response contains `errors` or `{"shop":null}`, show the error and ask the user to check the token scopes. Print `✓ Shopify — connected (<shop name>)`.
 
-Expect a shop name string. If the response contains `errors` or `{"shop":null}`, show the error and ask the user to check the token scopes.
+#### Step 3h.4 — Dynamic ecommerce partners
 
-Print:
+After Shopify is configured, ask via `AskUserQuestion` (free text):
 ```
-✓ Shopify — connected (<shop name>)
+Do you use any other ecommerce tools you'd like to connect?
+  Examples: ShipBob (fulfillment), Recharge (subscriptions), Yotpo (reviews),
+            Shippo (shipping rates), Gorgias (support), Attentive (SMS), Loop (returns)
+  Type the names separated by commas, or leave blank to skip.
 ```
+
+If the user provides partner names, process each one in a loop:
+
+**For each partner:**
+
+1. **Research credentials** — web search: `"<partner name> API authentication developer docs 2025"`. Determine:
+   - What credentials are needed (API key, OAuth token, webhook secret, base URL, account ID, etc.)
+   - The API base URL
+   - A suitable health/auth endpoint to smoke test (e.g. `/me`, `/account`, `/v1/ping`, list endpoint with limit=1)
+   - The auth header pattern (`Authorization: Bearer`, `X-Api-Key`, custom header, etc.)
+
+2. **Ask for each credential** via `AskUserQuestion` (one question per credential field), citing where to find it based on what the docs say. Example for ShipBob:
+   ```
+   Enter your ShipBob Personal Access Token:
+     To generate: ShipBob dashboard → Integrations → API → Personal Access Tokens → Create Token
+   ```
+
+3. **Smoke test** using the auth endpoint discovered in step 1:
+   ```bash
+   curl -s -H "<auth_header>: $TOKEN" "<base_url>/<health_endpoint>" | jq '.<identity_field>'
+   ```
+   Show the result. If it fails, show the raw response and offer `[Re-enter credentials]` / `[Skip this partner]`.
+
+4. **Save to preferences** under `ecom.partners.<partner_slug>` where `partner_slug` is the lowercased, hyphenated partner name:
+   ```json
+   {
+     "ecom": {
+       "partners": {
+         "shipbob": {
+           "api_base_url": "https://developer.shipbob.com/v1",
+           "auth_pattern": "Authorization: Bearer <token>",
+           "credentials": { "api_token": "doppler:SHIPBOB_API_TOKEN" },
+           "health_endpoint": "/user",
+           "configured_at": "<ISO timestamp>"
+         }
+       }
+     }
+   }
+   ```
+   Store actual secrets via Doppler (key: `<PARTNER_SLUG_UPPER>_API_TOKEN`) when Doppler is configured, else store inline. The `auth_pattern` and `api_base_url` fields are the memory that future `/ops:ecom` calls use to reach the partner — always populate them from the researched docs.
+
+5. **Print confirmation**:
+   ```
+   ✓ <Partner Name> — connected
+   ```
+
+6. **Loop**: After each partner, ask `AskUserQuestion`: "Any other ecommerce tools to connect?" → `[Yes — add another]` / `[Done]`. This lets users add partners one at a time if they prefer over the initial comma-separated list.
+
+**Partners with known credential patterns** (use these directly without searching, but still verify with a smoke test):
+
+| Partner    | Auth header                              | Base URL                               | Health endpoint        |
+| ---------- | ---------------------------------------- | -------------------------------------- | ---------------------- |
+| ShipBob    | `Authorization: Bearer <token>`          | `https://developer.shipbob.com/v1`     | `/user`                |
+| Recharge   | `X-Recharge-Access-Token: <token>`       | `https://api.rechargeapayments.com/v1` | `/shop`                |
+| Yotpo      | `X-Api-Key: <app_key>`                   | `https://api.yotpo.com`                | `/core/v3/stores/<id>` |
+| Shippo     | `Authorization: ShippoToken <token>`     | `https://api.goshippo.com`             | `/carrier_accounts`    |
+| Gorgias    | `Authorization: Basic <base64>`          | `https://<domain>.gorgias.com/api`     | `/account`             |
+| Loop       | `x-loop-signature: <secret>`             | `https://api.loopreturns.com/api/v1`   | `/warehouse`           |
+| Attentive  | `Authorization: Bearer <token>`          | `https://api.attentivemobile.com/v1`   | `/me`                  |
+
+For any partner not in this table, always web search for current auth docs before asking for credentials.
 
 ---
 
@@ -1254,6 +1290,52 @@ Write to `$PREFS_PATH` (merge):
 ```
 
 Same Doppler-reference pattern as Step 3h — prefer `doppler:KEY_NAME` over raw tokens when Doppler is configured.
+
+#### Dynamic marketing partners
+
+After the known services, ask via `AskUserQuestion` (free text):
+```
+Any other marketing tools you'd like to connect?
+  Examples: Postscript (SMS), Privy (popups), Triple Whale (attribution), Northbeam,
+            Hotjar, Heap, Segment, Mixpanel, Mailchimp, ActiveCampaign, HubSpot
+  Type names separated by commas, or leave blank to skip.
+```
+
+If the user provides partner names, apply the same dynamic partner loop as Step 3h.4 — for each partner:
+
+1. **Research credentials** via web search: `"<partner name> API authentication developer docs 2025"`
+2. **Ask for credentials** via `AskUserQuestion` with instructions sourced from the docs
+3. **Smoke test** against the auth/health endpoint
+4. **Save to preferences** under `marketing.partners.<partner_slug>`:
+   ```json
+   {
+     "marketing": {
+       "partners": {
+         "triple-whale": {
+           "api_base_url": "https://api.triplewhale.com/api/v2",
+           "auth_pattern": "Authorization: Bearer <token>",
+           "credentials": { "api_key": "doppler:TRIPLE_WHALE_API_KEY" },
+           "health_endpoint": "/attribution/get-attribution-data",
+           "configured_at": "<ISO timestamp>"
+         }
+       }
+     }
+   }
+   ```
+5. **Loop** — offer `[Add another]` / `[Done]` after each partner.
+
+**Partners with known credential patterns** (use directly, still smoke test):
+
+| Partner       | Auth header                            | Base URL                                       | Health endpoint     |
+| ------------- | -------------------------------------- | ---------------------------------------------- | ------------------- |
+| HubSpot       | `Authorization: Bearer <token>`        | `https://api.hubapi.com`                       | `/crm/v3/objects/contacts?limit=1` |
+| Mailchimp     | `Authorization: Bearer <api_key>`      | `https://<dc>.api.mailchimp.com/3.0`           | `/ping`             |
+| Segment       | `Authorization: Basic <base64_key:>`   | `https://api.segment.io/v1`                    | n/a — use write key |
+| Mixpanel      | `Authorization: Basic <base64_secret:>` | `https://data.mixpanel.com/api/2.0`           | `/engage?limit=1`   |
+| Postscript    | `Authorization: ApiKey <key>`          | `https://api.postscript.io/api/v2`             | `/shops`            |
+| Triple Whale  | `Authorization: Bearer <token>`        | `https://api.triplewhale.com/api/v2`           | `/attribution/get-attribution-data` |
+
+For any partner not in this table, always web search for current auth docs before asking for credentials.
 
 ---
 
