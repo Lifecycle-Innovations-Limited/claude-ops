@@ -59,6 +59,7 @@ allowlist.paths = [
 ]
 allowlist.regexes = [
   '''\+15551234567''',
+  '''\+1234567890''',
 ]
 
 [[rules]]
