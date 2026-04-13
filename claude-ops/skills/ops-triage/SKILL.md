@@ -12,6 +12,12 @@ allowed-tools:
   - AskUserQuestion
   - TeamCreate
   - SendMessage
+  - TaskCreate
+  - TaskUpdate
+  - TaskList
+  - WebFetch
+  - WebSearch
+  - LSP
   - mcp__sentry__authenticate
   - mcp__claude_ai_Linear__list_issues
   - mcp__claude_ai_Linear__save_issue
@@ -152,3 +158,23 @@ When dispatching for an issue, spawn an Agent using `agents/triage-agent.md` wit
 - Report back on completion or if blocked
 
 Filter to `$ARGUMENTS` project/source if specified.
+
+---
+
+## Native tool usage
+
+### Tasks — triage progress
+
+Use `TaskCreate` for each issue being investigated. Update with `TaskUpdate` as issues are resolved/dispatched/skipped. Gives the user a live triage checklist.
+
+### WebFetch — Sentry/GitHub enrichment
+
+When Sentry MCP hits quota limits, fall back to `WebFetch` with `https://sentry.io/api/0/projects/<org>/<project>/issues/?query=is:unresolved` (using `SENTRY_AUTH_TOKEN` header). Same for GitHub issue details when `gh` is slow.
+
+### WebSearch — error context
+
+Use `WebSearch` to find known solutions for recurring errors (e.g., "AWS RDS connection reset", "ECS task stopped reason"). Include findings in the triage board as context.
+
+### LSP — code navigation for fix agents
+
+When dispatching fix agents, use `LSP` to find symbol definitions, references, and call hierarchies. This helps agents navigate unfamiliar codebases faster than grep.

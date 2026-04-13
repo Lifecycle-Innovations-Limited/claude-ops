@@ -16,6 +16,8 @@ allowed-tools:
   - AskUserQuestion
   - TeamCreate
   - SendMessage
+  - Monitor
+  - WebSearch
 ---
 
 # OPS ► MERGE
@@ -214,3 +216,23 @@ Main sync: N repos synced (dev → main → dev)
 - **ALWAYS use `--admin` only for squash merges to dev** (not main, unless `--main` flag)
 - **Max 10 PRs per invocation** to avoid GitHub API throttling
 - **If a PR has > 50 files changed**, flag it for manual review instead of auto-merging
+
+---
+
+## Native tool usage
+
+### Monitor — live CI watching
+
+When waiting for CI after a fixer pushes (Phase 3-4), use `Monitor` to stream the GitHub Actions run output instead of polling:
+```
+Monitor(command: "gh run watch <run-id> --repo <repo>")
+```
+This avoids sleep loops and gives real-time feedback on CI progress.
+
+### Tasks — progress tracking
+
+Create a `TaskCreate` for the overall merge pipeline and individual tasks per PR. Update with `TaskUpdate` as each PR is fixed/merged/skipped. This gives the user a live checklist view.
+
+### WebSearch — CI failure context
+
+When a fixer agent encounters an obscure CI failure, use `WebSearch` to find known issues (e.g., npm registry outages, GitHub Actions incidents, flaky test patterns).

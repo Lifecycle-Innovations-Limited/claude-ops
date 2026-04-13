@@ -8,7 +8,12 @@ allowed-tools:
   - Grep
   - Glob
   - Skill
+  - Agent
   - AskUserQuestion
+  - TaskCreate
+  - TaskUpdate
+  - Monitor
+  - WebFetch
   - mcp__claude_ai_Vercel__list_deployments
   - mcp__claude_ai_Vercel__list_projects
   - mcp__claude_ai_Vercel__get_deployment
@@ -122,4 +127,27 @@ Trigger deploy for [project]:
 **If user selects to view logs**, show the logs and use `AskUserQuestion`:
 ```
   [Dispatch fix agent for this failure]  [Redeploy]  [Back to dashboard]
+```
+
+---
+
+## Native tool usage
+
+### Monitor — live deploy streaming
+
+When watching a deploy in progress, use `Monitor` to stream logs:
+```
+Monitor(command: "gh run watch <run-id> --repo <repo>")
+```
+For ECS deploys: `Monitor(command: "aws ecs wait services-stable --cluster <cluster> --services <service>")`
+
+### Tasks — deploy tracking
+
+Use `TaskCreate` per project being deployed. Update with `TaskUpdate` as deploys succeed/fail.
+
+### WebFetch — Vercel fallback
+
+When Vercel MCP tools are unavailable, use `WebFetch` with the Vercel API directly:
+```
+WebFetch(url: "https://api.vercel.com/v6/deployments?projectId=<id>&limit=5", headers: {"Authorization": "Bearer $VERCEL_TOKEN"})
 ```

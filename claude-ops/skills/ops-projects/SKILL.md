@@ -10,6 +10,9 @@ allowed-tools:
   - Skill
   - Agent
   - AskUserQuestion
+  - TaskCreate
+  - TaskUpdate
+  - WebFetch
 ---
 
 # OPS ► PROJECTS DASHBOARD
@@ -114,3 +117,15 @@ If `$ARGUMENTS` contains a project alias, show a deep-dive for that project:
 ```
 
 Use AskUserQuestion after displaying either view.
+
+---
+
+## Native tool usage
+
+### Tasks — project action tracking
+
+When the user jumps to a project, use `TaskCreate` to track the action they take. This carries context forward if they switch between projects.
+
+### WebFetch — CI enrichment
+
+When `gh` is slow or rate-limited, use `WebFetch` to query GitHub Actions API directly for run status.

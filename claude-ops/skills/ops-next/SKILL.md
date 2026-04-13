@@ -10,6 +10,9 @@ allowed-tools:
   - Skill
   - Agent
   - AskUserQuestion
+  - TaskCreate
+  - TaskUpdate
+  - WebFetch
   - mcp__claude_ai_Linear__list_issues
   - mcp__claude_ai_Linear__list_cycles
   - mcp__claude_ai_Slack__slack_search_public_and_private
@@ -126,3 +129,15 @@ Revenue weighting: read `revenue.stage` and `priority` from `scripts/registry.js
 Use AskUserQuestion. When user selects an option, invoke the corresponding skill directly — don't describe it, do it.
 
 If `$ARGUMENTS` contains context (e.g., "focus on <project-alias>"), constrain the analysis to that context.
+
+---
+
+## Native tool usage
+
+### Tasks — action tracking
+
+After the user selects an action, use `TaskCreate` to track it. When routing to the corresponding skill, the task persists as a reminder of what the user chose to focus on.
+
+### WebFetch — enrichment fallback
+
+When pre-gathered data is stale or incomplete, use `WebFetch` to pull fresh data from APIs (Linear GraphQL, Sentry, GitHub) directly.

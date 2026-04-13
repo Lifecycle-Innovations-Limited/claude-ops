@@ -10,6 +10,12 @@ allowed-tools:
   - Skill
   - Agent
   - AskUserQuestion
+  - TaskCreate
+  - TaskUpdate
+  - TaskList
+  - CronCreate
+  - CronList
+  - WebFetch
 ---
 
 # OPS ► MORNING BRIEFING
@@ -116,3 +122,26 @@ If `$ARGUMENTS` contains a project alias, focus the briefing on that project onl
 After presenting, use AskUserQuestion for the user's choice and route to the appropriate ops skill or project.
 
 For Slack unread counts: if the pre-gathered data shows `"count": -1`, use `mcp__claude_ai_Slack__slack_search_public_and_private` with query `is:unread` to get actual counts. Do this as a parallel tool call while analyzing other data.
+
+---
+
+## Native tool usage
+
+### Tasks — briefing action tracking
+
+After presenting the briefing, create a `TaskCreate` for each recommended priority action. As the user works through them (or delegates via skill routing), update with `TaskUpdate`. This gives continuity across the session.
+
+### Cron — scheduled briefings
+
+After the first briefing, offer to schedule recurring briefings via `AskUserQuestion`:
+```
+  [Schedule daily at 9am]  [Schedule weekday mornings]  [No schedule]
+```
+Use `CronCreate` to set up the schedule. Show existing schedules with `CronList`.
+
+### WebFetch — calendar enrichment
+
+When `gog cal` fails, use `WebFetch` with the Google Calendar API as fallback:
+```
+WebFetch(url: "https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=<today>T00:00:00Z&timeMax=<today>T23:59:59Z")
+```
