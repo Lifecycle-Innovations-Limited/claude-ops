@@ -330,7 +330,37 @@ Rules for the prompt:
 - If sources **disagree**, show each distinct value as a separate option. If there are more than 3 distinct values (rare), batch into multiple calls with `[More sources...]`.
 - Placeholder values like `${user_config.*}`, `<your-token>`, `CHANGE_ME`, or empty strings count as NOT FOUND.
 - Always include an `[Enter a different one]` option as the last option.
-- If NO source has a value, then and only then ask the user to provide it — show instructions for where to find it in the service's dashboard.
+- If NO source has a value, present the user with options via `AskUserQuestion`:
+
+```
+<SERVICE_NAME> — no credential found after scanning all sources.
+
+  [I have it — let me paste it]
+  [Deep hunt — spawn an agent to find it]
+  [Skip this service]
+```
+
+  - **"I have it"** → show instructions for where to find the credential in the service's dashboard, then accept free-text input.
+  - **"Deep hunt"** → spawn a Haiku subagent in the background with this mandate:
+
+    ```
+    Find the <CREDENTIAL_NAME> for <SERVICE_NAME>. Search exhaustively:
+    1. All Doppler projects and configs (dev/stg/prd/ci)
+    2. All .env* files across ~/Projects/ recursively
+    3. macOS Keychain (security find-generic-password with various service name patterns)
+    4. Dashlane CLI (dcli password <service> + related keywords)
+    5. Chrome browser — navigate to <service_admin_url> via Kapture/Playwright MCP, log in if needed, and extract the credential from the settings page
+    6. ~/.claude.json MCP server env vars
+    7. All shell profile files (~/.zshrc, ~/.bashrc, ~/.zprofile, ~/.envrc, ~/.config/fish/*)
+    8. 1Password CLI (op item list --tags <service>) if available
+    9. AWS Secrets Manager / SSM Parameter Store if aws cli authenticated
+
+    Return the credential value if found, or a detailed report of everywhere you checked and what you found (partial matches, expired tokens, wrong-format values).
+    ```
+
+    Use `Agent(subagent_type: "general-purpose", model: "haiku")` with `run_in_background: true`. Continue to the next service while the hunt runs. When the agent returns, present findings to the user for confirmation.
+
+  - **"Skip"** → record as skipped in `$PREFS_PATH`, move on.
 
 **On selection**, use the chosen value as the source of truth and — with the user's consent — optionally propagate it back to the other sources (e.g. "Also update ~/.zshrc and Doppler to match?"). Default to NO for propagation unless the user opts in.
 
