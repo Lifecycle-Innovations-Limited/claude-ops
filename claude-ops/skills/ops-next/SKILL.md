@@ -20,6 +20,16 @@ allowed-tools:
 
 # OPS ► NEXT ACTION
 
+## CLI/API Reference
+
+### gh CLI (GitHub)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `gh pr list --state open --json number,title,statusCheckRollup,reviewDecision` | Open PRs with CI/review status | JSON array |
+
+---
+
 ## Pre-gathered data
 
 ### Infrastructure & fires

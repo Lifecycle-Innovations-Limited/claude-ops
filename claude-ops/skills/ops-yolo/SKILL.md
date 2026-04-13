@@ -32,6 +32,24 @@ allowed-tools:
 
 # OPS ► YOLO MODE
 
+## CLI/API Reference
+
+### aws CLI (Cost Explorer)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `aws ce get-cost-and-usage --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --granularity MONTHLY --metrics "UnblendedCost" --output json` | Current month spend | Cost JSON |
+
+### gh CLI (GitHub)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `gh pr list --repo <owner/repo> --json number,title,statusCheckRollup,reviewDecision,mergeable,isDraft` | Open PRs with status | JSON array |
+| `gh pr merge <n> --repo <repo> --squash --admin` | Squash merge PR | Merge result |
+| `gh run list --limit 20 --json status,conclusion,name,headBranch,createdAt` | Recent CI runs | JSON array |
+
+---
+
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** instead of fire-and-forget subagents for the C-suite analysis (Phase 2). This enables:

@@ -28,6 +28,17 @@ allowed-tools:
 
 # OPS ► LINEAR COMMAND CENTER
 
+## CLI/API Reference
+
+### Linear GraphQL (fallback when MCP unavailable)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ issues(filter: {state: {type: {in: [\"started\",\"unstarted\"]}}}) { nodes { id title state { name } priority assignee { name } } } }"}'` | Active issues | JSON |
+| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ cycles(filter: {isActive: {eq: true}}) { nodes { id number startsAt endsAt } } }"}'` | Current cycles | JSON |
+
+---
+
 ## Phase 1 — Load data
 
 Run in parallel:

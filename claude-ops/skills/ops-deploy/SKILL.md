@@ -23,6 +23,27 @@ allowed-tools:
 
 # OPS ► DEPLOY STATUS
 
+## CLI/API Reference
+
+### aws CLI
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `aws ecs list-clusters --output json` | All ECS clusters | `{clusterArns: [...]}` |
+| `aws ecs list-services --cluster <name> --output json` | Services in cluster | `{serviceArns: [...]}` |
+| `aws ecs describe-services --cluster <name> --services <arn> --output json` | Service health | `{services: [{serviceName, status, runningCount, desiredCount, pendingCount}]}` |
+| `aws logs tail /ecs/<service> --since 1h --format short` | ECS logs | Log lines |
+
+### gh CLI (GitHub)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `gh run list --repo <owner/repo> --limit 5 --json status,conclusion,name,headBranch,createdAt,databaseId` | CI runs | JSON array |
+| `gh run view <id> --repo <repo> --log-failed` | Failed CI logs | Log output |
+| `gh run watch <run-id> --repo <repo>` | Stream CI run | Live output (use with Monitor) |
+
+---
+
 ## Phase 1 — Gather deploy data in parallel
 
 ### ECS services (all clusters)

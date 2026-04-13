@@ -20,6 +20,28 @@ allowed-tools:
 
 # OPS ► MORNING BRIEFING
 
+## CLI/API Reference
+
+### wacli (WhatsApp)
+
+**Health file** — check `~/.wacli/.health` BEFORE any wacli command:
+- `status=connected` → proceed
+- `status=needs_auth` or `status=needs_reauth` → prompt user for QR scan
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `wacli doctor --json` | Check auth/connected/lock/FTS | `{data: {authenticated, connected, lock_held, fts_enabled}}` |
+| `wacli chats list --json` | All chats | `{data: [{JID, Name, Kind, LastMessageTS}]}` |
+
+### gog CLI (Gmail/Calendar)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `gog calendar list --date "$(date +%Y-%m-%d)"` | Today's calendar events | Calendar events |
+| `gog gmail search -j --results-only --no-input --max 30 "in:inbox"` | Search inbox | JSON array of threads |
+
+---
+
 ## Pre-gathered data
 
 All data below was collected by shell scripts in <10 seconds:

@@ -23,6 +23,34 @@ allowed-tools:
 
 # OPS ► COMMS
 
+## CLI/API Reference
+
+### wacli (WhatsApp)
+
+**Health file** — check `~/.wacli/.health` BEFORE any wacli command:
+- `status=connected` → proceed
+- `status=needs_auth` or `status=needs_reauth` → prompt user for QR scan, do NOT run wacli commands
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `wacli doctor --json` | Check auth/connected/lock/FTS | `{data: {authenticated, connected, lock_held, fts_enabled}}` |
+| `wacli chats list --json` | All chats | `{data: [{JID, Name, Kind, LastMessageTS}]}` |
+| `wacli messages list --chat "<JID>" --limit N --json` | Messages for chat | `{data: {messages: [{FromMe, Text, Timestamp, SenderName, ChatName}]}}` |
+| `wacli messages search --query "<text>" --json` | FTS search | Same as above |
+| `wacli contacts --search "<name>" --json` | Contact lookup | Contact objects |
+| `wacli send --to "<JID>" --message "<msg>"` | Send text | Success/error |
+
+### gog CLI (Gmail/Calendar)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `gog gmail search -j --results-only --no-input --max 30 "in:inbox"` | Search inbox | JSON array of threads |
+| `gog gmail read -j --no-input "<thread_id>"` | Read thread | Full message JSON |
+| `gog gmail send -j --to "<email>" --subject "<subj>" --body "<body>"` | Send email | Send result |
+| `gog gmail labels modify --remove INBOX <thread_ids>` | Archive | Label change |
+
+---
+
 Parse `$ARGUMENTS` and route immediately:
 
 ## Routing table
@@ -62,6 +90,16 @@ If user picks "Edit message", use `AskUserQuestion` with free-text to get the re
 5. Send via the chosen channel. Confirm with: `Sent to [contact] via [channel] ✓`
 
 ### WhatsApp send
+
+**CRITICAL — READ BEFORE SENDING:** Before drafting ANY WhatsApp reply, you MUST:
+1. Read the full conversation: `wacli messages list --chat "<JID>" --limit 20 --json`
+2. Understand which messages are from the user (`FromMe: true`) vs the contact
+3. Summarize what the conversation is about and what the contact is asking
+4. Only THEN draft a reply that addresses what the contact actually said
+
+**Never send a reply based on a single message.** A message like "can you pull it from Klaviyo?" means nothing without knowing what "it" refers to from prior messages.
+
+**Pre-flight:** Before any wacli command, check `~/.wacli/.health`. If `status=needs_auth` or `status=needs_reauth`, prompt the user: "WhatsApp needs re-authentication. Run `wacli auth` in a separate terminal and scan the QR code, then type 'done'." Use `AskUserQuestion`: `[Done — re-paired]`, `[Skip WhatsApp]`. On Done, restart daemon: `launchctl kickstart -k gui/$(id -u)/com.claude-ops.wacli-keepalive`, wait 5s.
 
 ```bash
 wacli send --to "[contact]" --message "[message]"

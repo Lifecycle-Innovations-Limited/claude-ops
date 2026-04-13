@@ -15,6 +15,19 @@ allowed-tools:
 
 # OPS ► REVENUE & COSTS
 
+## CLI/API Reference
+
+### aws CLI (Cost Explorer)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `aws ce get-cost-and-usage --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --granularity MONTHLY --metrics "UnblendedCost" --group-by "Type=DIMENSION,Key=SERVICE" --output json` | Cost by service | Cost JSON |
+| `aws ce get-cost-and-usage --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --granularity MONTHLY --metrics "UnblendedCost" --output json` | Total cost | Cost JSON |
+| `aws ce get-cost-forecast --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --metric "UNBLENDED_COST" --granularity MONTHLY --output json` | End-of-month forecast | Forecast JSON |
+| `aws ce list-savings-plans-purchase-recommendation --output json` | Savings plan recommendations | JSON |
+
+---
+
 ## Phase 1 — Gather financial data in parallel
 
 ### AWS costs (current month)

@@ -22,6 +22,32 @@ allowed-tools:
 
 # OPS ► FIRES
 
+## CLI/API Reference
+
+### aws CLI
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `aws ecs list-services --cluster <name> --query 'serviceArns'` | ECS services | ARN list |
+| `aws ecs describe-services --cluster <name> --services <arn> --query 'services[0].{status:status,running:runningCount,desired:desiredCount}'` | Service health | JSON |
+| `aws logs tail /ecs/<service> --since 1h --format short` | ECS logs | Log lines (use with Monitor for live) |
+
+### gh CLI (GitHub)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `gh run list --limit 20 --json status,conclusion,name,headBranch,createdAt` | Recent CI runs | JSON array |
+| `gh run view <id> --repo <repo> --log-failed` | Failed CI logs | Log output |
+
+### sentry-cli / Sentry API
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `sentry-cli issues list --project <slug> --status unresolved` | Unresolved issues | Issue list |
+| `curl -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://sentry.io/api/0/projects/<org>/<proj>/issues/?query=is:unresolved"` | API fallback when MCP unavailable | JSON array |
+
+---
+
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when dispatching multiple fix agents simultaneously. This enables:

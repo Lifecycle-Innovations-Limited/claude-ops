@@ -17,6 +17,18 @@ allowed-tools:
 
 # OPS ► PROJECTS DASHBOARD
 
+## CLI/API Reference
+
+### gh CLI (GitHub)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `gh pr list --repo <owner/repo> --json number,title,statusCheckRollup,reviewDecision,mergeable` | Open PRs with CI | JSON array |
+| `gh run list --repo <repo> --limit 5 --json status,conclusion,name,headBranch` | CI runs | JSON array |
+| `gh issue list --repo <repo> --json number,title,labels,state` | Issues | JSON array |
+
+---
+
 ## Pre-gathered git status
 
 ```!

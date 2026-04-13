@@ -27,6 +27,32 @@ allowed-tools:
 
 # OPS ► CROSS-PLATFORM TRIAGE
 
+## CLI/API Reference
+
+### gh CLI (GitHub)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `gh issue list --state open --json number,title,body,labels,assignees,createdAt,url --limit 50` | Open issues | JSON array |
+| `gh issue list --repo <owner/repo> --state open --json number,title,labels,createdAt --limit 20` | Repo issues | JSON array |
+| `gh pr list --state merged --search "#<N>"` | PRs referencing issue | JSON array |
+| `gh issue close <N> --comment "<msg>"` | Close issue | Confirmation |
+
+### sentry-cli / Sentry API
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `sentry-cli issues list --project <slug> --status unresolved` | Unresolved issues | Issue list |
+| `curl -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://sentry.io/api/0/projects/<org>/<proj>/issues/?query=is:unresolved"` | API fallback when MCP unavailable | JSON array |
+
+### Linear GraphQL (fallback when MCP unavailable)
+
+| Command | Usage | Output |
+|---------|-------|--------|
+| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ issues(filter: {state: {type: {in: [\"started\",\"unstarted\"]}}}) { nodes { id title state { name } priority assignee { name } } } }"}'` | Active issues | JSON |
+
+---
+
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when dispatching fix agents for multiple issues. This enables:
