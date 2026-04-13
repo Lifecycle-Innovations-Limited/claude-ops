@@ -1833,7 +1833,13 @@ Collect these via `AskUserQuestion` — one question each. **Never auto-fill fro
      [minimal]  — just the fires and urgent items
    ```
 
-4. **Primary project** → select from registry aliases (skip if registry is empty).
+4. **Primary project** → **"All projects active in last 7 days" should be the first/default option.** Most users working across multiple projects want a unified briefing, not a single-project focus:
+   ```
+   Primary project for briefings?
+     [All projects active in last 7 days]  ← default
+     [Pick a specific project...]
+   ```
+   If "specific project", show registry aliases paginated at 3 per page + `[More...]`. Store `"primary_project": "all_active_7d"` for the default, or the specific alias.
 
 5. **YOLO mode** → select `[Yes — auto-approve low-risk actions]`, `[No — always confirm]`.
 
