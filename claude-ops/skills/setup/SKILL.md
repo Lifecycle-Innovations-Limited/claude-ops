@@ -21,11 +21,12 @@ You are running an **interactive configuration wizard** for the `claude-ops` plu
 - This is a _conversation_, not a script dump. Use `AskUserQuestion` for every decision — never ask in prose when a structured selector will do.
 - Never install anything or write any file without explicit user confirmation via `AskUserQuestion`.
 - Skip sections the user declines. Don't nag.
+- **NEVER auto-skip a channel or integration.** Every channel/service the user selected must get an explicit `AskUserQuestion` with skip as one of the options. If a credential isn't found, present the [Paste manually] / [Deep hunt] / [Skip] options. If a smoke test fails, ask the user whether to retry, reconfigure, or skip. The ONLY acceptable way to skip is the user choosing a "Skip" option. Do not silently move past a service because scanning found nothing — that's when the user needs to be asked the most.
 - Show what's already configured first, so the user only fills gaps.
 - **Never show the user's real name or email in output unless the user explicitly provided it in THIS session.** Do not read from memory, existing configs, or environment variables to populate display names.
 - **Max 4 options per `AskUserQuestion` call.** The tool schema enforces `<=4` items in the `options` array. When a step lists >4 choices, filter already-configured items first, then batch the rest into multiple sequential calls of <=4 options each, grouped logically. Use `[More options...]` as the last option to bridge between batches.
 - Run ALL diagnostic/probe commands in parallel when possible. Use multiple Bash tool calls in a single message. Never run sequential probes when they're independent (e.g., `gog auth status` AND `wacli doctor` AND keychain scouts should all run simultaneously).
-- Background any command that might take >2 seconds (sync, backfill, npm install, brew install).
+- **Auto-background ALL Bash commands during setup.** Use `run_in_background: true` on every Bash call unless you need the result immediately to make the next decision. This includes: credential scans, CLI installs, OAuth flows, npm installs, brew installs, sync/backfill, smoke tests, keychain writes, Doppler queries, Chrome history queries, autolink scripts. While commands run in background, continue to the next independent step or ask the user the next question. Check results when the notification arrives. The setup wizard should never block on a command the user isn't waiting for.
 - All writes go to one of these paths — and nothing else:
   - **`$PREFS_PATH`** — per-user preferences + secrets. Resolves to `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`. Lives in Claude Code's plugin data dir so it survives plugin reinstalls and version bumps. Never committed to git.
   - **`${CLAUDE_PLUGIN_ROOT}/scripts/registry.json`** — per-user project registry (gitignored in the source repo). `mkdir -p` its parent if missing.
@@ -260,6 +261,8 @@ Only go into the credential auto-scan flow below when the user picks "manually" 
 
 **BEFORE asking the user for ANY credential**, run this scan sequence. This applies to ALL steps — channels, ecommerce, marketing, voice, and MCPs. The user should never be asked to find a key that's already on their system.
 
+**CRITICAL — exhaust ALL sources before reporting.** Run every scan source (1-8 below) in a single batch, THEN analyze the combined results. Do NOT report "no credentials found" after checking only env vars and Dashlane — Chrome history, .env files, Doppler, and keychain may have the answer. If API tokens are missing but the store/service identity was found (e.g. store URL in Chrome history, login entry in Dashlane), report what you found and skip to the token step with the identity pre-filled. The user saying "find it" or "check all available sources" means you did not search thoroughly enough — never ask the user to look for something you can find programmatically.
+
 For each variable name (e.g. `TELEGRAM_BOT_TOKEN`, `SHOPIFY_ACCESS_TOKEN`, `KLAVIYO_API_KEY`):
 
 1. **Current shell environment** — `printenv <VAR>`. Running shell inherits exports, Doppler injections, dotenv-loaded files. Most likely to be correct.
@@ -289,6 +292,13 @@ For each variable name (e.g. `TELEGRAM_BOT_TOKEN`, `SHOPIFY_ACCESS_TOKEN`, `KLAV
    ```
 7. **Installed MCP configs** — read each `.mcp.json` the detector found. For each server entry, look at `.env` and `.args` for the variable name or for literal values that look like the target. Show the MCP server name as the source.
 8. **Plugin preferences** — check existing `$PREFS_PATH` for the key under the relevant section (e.g. `.ecom.shopify.admin_token`, `.marketing.klaviyo.api_key`). If found and not a `doppler:` reference, show it as a source.
+9. **Chrome history** — for services with web admin UIs (Shopify, Klaviyo, etc.), query Chrome's History SQLite DB for admin URLs that reveal the account/store identity:
+   ```bash
+   sqlite3 ~/Library/Application\ Support/Google/Chrome/Default/History \
+     "SELECT DISTINCT url FROM urls WHERE url LIKE '%<service_domain>%' ORDER BY last_visit_time DESC LIMIT 10" 2>/dev/null
+   ```
+   Extract identifiers (e.g. `*.myshopify.com` store slugs, account IDs) from the URLs.
+10. **Project .env files** — scan `~/Projects/*/.env*` for the variable name or service domain patterns. These often contain credentials from other projects that can be reused.
 
 **Env var → service keyword mapping for auto-scan:**
 
@@ -321,7 +331,37 @@ Rules for the prompt:
 - If sources **disagree**, show each distinct value as a separate option. If there are more than 3 distinct values (rare), batch into multiple calls with `[More sources...]`.
 - Placeholder values like `${user_config.*}`, `<your-token>`, `CHANGE_ME`, or empty strings count as NOT FOUND.
 - Always include an `[Enter a different one]` option as the last option.
-- If NO source has a value, then and only then ask the user to provide it — show instructions for where to find it in the service's dashboard.
+- If NO source has a value, present the user with options via `AskUserQuestion`:
+
+```
+<SERVICE_NAME> — no credential found after scanning all sources.
+
+  [I have it — let me paste it]
+  [Deep hunt — spawn an agent to find it]
+  [Skip this service]
+```
+
+  - **"I have it"** → show instructions for where to find the credential in the service's dashboard, then accept free-text input.
+  - **"Deep hunt"** → spawn a Haiku subagent in the background with this mandate:
+
+    ```
+    Find the <CREDENTIAL_NAME> for <SERVICE_NAME>. Search exhaustively:
+    1. All Doppler projects and configs (dev/stg/prd/ci)
+    2. All .env* files across ~/Projects/ recursively
+    3. macOS Keychain (security find-generic-password with various service name patterns)
+    4. Dashlane CLI (dcli password <service> + related keywords)
+    5. Chrome browser — navigate to <service_admin_url> via Kapture/Playwright MCP, log in if needed, and extract the credential from the settings page
+    6. ~/.claude.json MCP server env vars
+    7. All shell profile files (~/.zshrc, ~/.bashrc, ~/.zprofile, ~/.envrc, ~/.config/fish/*)
+    8. 1Password CLI (op item list --tags <service>) if available
+    9. AWS Secrets Manager / SSM Parameter Store if aws cli authenticated
+
+    Return the credential value if found, or a detailed report of everywhere you checked and what you found (partial matches, expired tokens, wrong-format values).
+    ```
+
+    Use `Agent(subagent_type: "general-purpose", model: "haiku")` with `run_in_background: true`. Continue to the next service while the hunt runs. When the agent returns, present findings to the user for confirmation.
+
+  - **"Skip"** → record as skipped in `$PREFS_PATH`, move on.
 
 **On selection**, use the chosen value as the source of truth and — with the user's consent — optionally propagate it back to the other sources (e.g. "Also update ~/.zshrc and Doppler to match?"). Default to NO for propagation unless the user opts in.
 
@@ -1161,6 +1201,8 @@ Add to the shortcuts table: `vault`, `password-manager`, `pm` → Step 3g
 **Before asking for anything**, run the Universal Credential Auto-Scan for all Shopify-related vars simultaneously:
 
 ```bash
+# --- Token scan (API credentials) ---
+
 # Scan shell env
 printenv SHOPIFY_ACCESS_TOKEN SHOPIFY_ADMIN_TOKEN SHOPIFY_STORE_URL SHOPIFY_ADMIN_API_ACCESS_TOKEN 2>/dev/null
 
@@ -1173,8 +1215,8 @@ for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
     jq -r --arg proj "$proj" 'to_entries[] | select(.key | test("SHOPIFY|STORE")) | "\(.key)=\(.value.computed) (doppler:\($proj)/prd)"'
 done
 
-# Scan Dashlane
-dcli password shopify --output json 2>/dev/null
+# Scan Dashlane for API tokens
+dcli password shopify --output json 2>/dev/null | jq -r '.[] | select(.password != null and .password != "") | "\(.title): \(.url) → token found"'
 
 # Scan macOS Keychain
 security find-generic-password -s "shopify-admin-token" -w 2>/dev/null
@@ -1185,7 +1227,21 @@ jq -r '.agents.defaults.env | to_entries[] | select(.key | test("SHOPIFY")) | "\
 
 # Check existing prefs
 jq -r '.ecom.shopify // empty' "$PREFS_PATH" 2>/dev/null
+
+# --- Store URL discovery (even if no tokens found) ---
+# Scan Chrome history for myshopify.com admin URLs
+sqlite3 ~/Library/Application\ Support/Google/Chrome/Default/History \
+  "SELECT DISTINCT replace(replace(url, 'https://', ''), 'http://', '') FROM urls WHERE url LIKE '%myshopify.com/admin%' OR url LIKE '%admin.shopify.com/store/%' ORDER BY last_visit_time DESC LIMIT 10" 2>/dev/null | \
+  grep -oE '[a-z0-9-]+\.myshopify\.com|admin\.shopify\.com/store/[a-z0-9-]+' | sort -u
+
+# Scan Dashlane URLs for myshopify.com store references
+dcli password shopify --output json 2>/dev/null | jq -r '.[].url // empty' | grep -oE '[a-z0-9-]+\.myshopify\.com' | sort -u
+
+# Scan project .env files for store URLs
+grep -rhE 'myshopify\.com|SHOPIFY_STORE' ~/Projects/*/.env* 2>/dev/null | grep -v '^#' | head -5
 ```
+
+**Important**: Do NOT report "No Shopify credentials found" until ALL scan sources have been checked. If tokens are missing but store URLs are found (e.g. from Chrome history or Dashlane), report: `"Found Shopify store(s): <stores>. No API token found — you'll need to create one."` and skip straight to Step 3h.3 (token) with the store URL pre-filled.
 
 If both `store_url` and `admin_token` are already found, show:
 ```
@@ -1777,18 +1833,23 @@ Collect these via `AskUserQuestion` — one question each. **Never auto-fill fro
      [minimal]  — just the fires and urgent items
    ```
 
-4. **Primary project** → select from registry aliases (skip if registry is empty).
+4. **Primary project** → **"All projects active in last 7 days" should be the first/default option.** Most users working across multiple projects want a unified briefing, not a single-project focus:
+   ```
+   Primary project for briefings?
+     [All projects active in last 7 days]  ← default
+     [Pick a specific project...]
+   ```
+   If "specific project", show registry aliases paginated at 3 per page + `[More...]`. Store `"primary_project": "all_active_7d"` for the default, or the specific alias.
 
 5. **YOLO mode** → select `[Yes — auto-approve low-risk actions]`, `[No — always confirm]`.
 
-6. **Default channels** (multiSelect over configured channels only — never show channels that weren't configured in Step 3):
+6. **Default channels** (multiSelect over configured channels only — never show channels that weren't configured in Step 3). **"All configured" should be the first option and pre-selected by default** — most users want all their channels active:
    ```
    Which channels should ops skills use by default?
-     [ ] whatsapp
-     [ ] email
-     [ ] telegram
-     [ ] slack
+     [x] All configured channels
+     [ ] Pick specific channels...
    ```
+   If the user picks "specific channels", show a follow-up multiSelect with individual channel checkboxes. If they accept "All configured", set `default_channels` to the full list of configured channel names.
 
 Write to `$PREFS_PATH`:
 
