@@ -53,6 +53,23 @@ The `repository` field in `.claude-plugin/plugin.json` is an object but must be 
 ### mcp_config_invalid_json
 - Read .mcp.json, fix JSON syntax. If unfixable, restore from git.
 
+### mcp_missing_user_config_*
+An MCP server references `${user_config.*}` variables that have no value configured.
+- Read the plugin's preferences.json (at `$CLAUDE_PLUGIN_DATA_DIR/preferences.json` or `~/.claude/plugins/data/ops-ops-marketplace/preferences.json`)
+- Check if the missing keys can be populated from environment variables, existing config files, or keychain
+- If values can be found automatically, write them to preferences.json under `user_config.<key>`
+- If values cannot be found (e.g., API keys that need manual entry), report them as "needs manual configuration via /ops:setup"
+- This is the same issue Claude Code's native `/doctor` flags as "Missing required user configuration value"
+
+### unconfigured_sensitive_keys
+Sensitive userConfig values (API keys, tokens) declared in plugin.json are not set.
+- Same resolution as mcp_missing_user_config — try to auto-populate from env/keychain, otherwise report for manual setup
+
+### claude_mcp_unresolved_vars_*
+An MCP server in Claude Code's global config has unresolved `${...}` variable references.
+- Read the referenced config file and check if the variables should be replaced with actual values
+- If the server belongs to this plugin, ensure the plugin's userConfig is properly set
+
 ### registry_invalid_json
 - Backup the broken file, then restore from git or create a minimal `{"projects":[]}`.
 
