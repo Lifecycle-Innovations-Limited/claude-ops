@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# ops-autofix — Automatically fix common ops plugin issues without user interaction
+# Called by /ops:setup and /ops:doctor to silently repair what can be repaired.
+# Usage: ops-autofix [--json] [--fix=all|wacli-fts|slack-mcp|vercel-mcp]
+set -euo pipefail
+
+JSON_OUTPUT=false
+FIX_TARGET="all"
+
+for arg in "$@"; do
+  case "$arg" in
+    --json)       JSON_OUTPUT=true ;;
+    --fix=*)      FIX_TARGET="${arg#--fix=}" ;;
+  esac
+done
+
+FIXES_APPLIED=()
+FIXES_FAILED=()
+FIXES_SKIPPED=()
+
+log_fix() { FIXES_APPLIED+=("$1"); }
+log_fail() { FIXES_FAILED+=("$1"); }
+log_skip() { FIXES_SKIPPED+=("$1"); }
+
+# ─── 1. WhatsApp FTS5 ───────────────────────────────────────────────────────
+fix_wacli_fts() {
+  if ! command -v wacli >/dev/null 2>&1; then
+    log_skip "wacli-fts: wacli not installed"
+    return
+  fi
+
+  # Check if FTS is already enabled
+  FTS_STATUS=$(wacli doctor --json 2>/dev/null | jq -r '.data.fts_enabled // false' 2>/dev/null || echo "false")
+  if [ "$FTS_STATUS" = "true" ]; then
+    log_skip "wacli-fts: already enabled"
+    return
+  fi
+
+  # Check if Go is available for rebuild
+  if ! command -v go >/dev/null 2>&1; then
+    log_fail "wacli-fts: Go toolchain not installed (needed to rebuild wacli with FTS5)"
+    return
+  fi
+
+  # Check if wacli was built without sqlite_fts5 tag
+  WACLI_PATH=$(which wacli)
+  HAS_FTS5_TAG=$(strings "$WACLI_PATH" 2>/dev/null | grep -c "sqlite_fts5" || echo "0")
+
+  # Find or clone wacli source
+  WACLI_SRC=""
+  for candidate in ~/src/wacli /tmp/wacli-rebuild; do
+    if [ -f "$candidate/go.mod" ] && grep -q "wacli" "$candidate/go.mod" 2>/dev/null; then
+      WACLI_SRC="$candidate"
+      break
+    fi
+  done
+
+  if [ -z "$WACLI_SRC" ]; then
+    # Clone source
+    WACLI_SRC="/tmp/wacli-rebuild"
+    rm -rf "$WACLI_SRC"
+    if ! git clone --depth 1 https://github.com/steipete/wacli.git "$WACLI_SRC" 2>/dev/null; then
+      log_fail "wacli-fts: failed to clone wacli source"
+      return
+    fi
+  fi
+
+  # Rebuild with FTS5 tag
+  if (cd "$WACLI_SRC" && CGO_ENABLED=1 go build -tags "sqlite_fts5" -o "$WACLI_PATH" ./cmd/wacli 2>/dev/null); then
+    # Verify
+    NEW_FTS=$(wacli doctor --json 2>/dev/null | jq -r '.data.fts_enabled // false' 2>/dev/null || echo "false")
+    if [ "$NEW_FTS" = "true" ]; then
+      log_fix "wacli-fts: rebuilt with FTS5 support"
+    else
+      log_fail "wacli-fts: rebuilt binary but FTS still reports disabled"
+    fi
+  else
+    log_fail "wacli-fts: go build failed"
+  fi
+}
+
+# ─── 2. Slack MCP ───────────────────────────────────────────────────────────
+fix_slack_mcp() {
+  # Check if already registered
+  if [ -f "$HOME/.claude.json" ] && jq -e '.mcpServers.slack' "$HOME/.claude.json" >/dev/null 2>&1; then
+    log_skip "slack-mcp: already registered"
+    return
+  fi
+
+  # Check for tokens in keychain
+  XOXC=$(security find-generic-password -s slack-xoxc -w 2>/dev/null || echo "")
+  XOXD=$(security find-generic-password -s slack-xoxd -w 2>/dev/null || echo "")
+
+  if [ -z "$XOXC" ] || [ -z "$XOXD" ]; then
+    log_skip "slack-mcp: no tokens in keychain (run /ops:setup slack to extract)"
+    return
+  fi
+
+  # Validate tokens
+  AUTH_OK=$(curl -s -H "Authorization: Bearer $XOXC" -b "d=$XOXD" "https://slack.com/api/auth.test" 2>/dev/null | jq -r '.ok // false' 2>/dev/null || echo "false")
+  if [ "$AUTH_OK" != "true" ]; then
+    log_fail "slack-mcp: tokens in keychain are expired/invalid"
+    return
+  fi
+
+  # Register MCP
+  if command -v claude >/dev/null 2>&1; then
+    if claude mcp add slack -e SLACK_XOXC_TOKEN="$XOXC" -e SLACK_XOXD_TOKEN="$XOXD" -s user -- npx -y @anthropic-ai/slack-mcp-server 2>/dev/null; then
+      log_fix "slack-mcp: registered with valid tokens from keychain"
+    else
+      log_fail "slack-mcp: claude mcp add failed"
+    fi
+  else
+    log_fail "slack-mcp: claude CLI not found"
+  fi
+}
+
+# ─── 3. Vercel MCP ──────────────────────────────────────────────────────────
+fix_vercel_mcp() {
+  # Check if already registered
+  if [ -f "$HOME/.claude.json" ] && jq -e '.mcpServers.vercel' "$HOME/.claude.json" >/dev/null 2>&1; then
+    log_skip "vercel-mcp: already registered"
+    return
+  fi
+
+  if command -v claude >/dev/null 2>&1; then
+    if claude mcp add vercel -s user -- npx -y vercel-mcp-server@latest 2>/dev/null; then
+      log_fix "vercel-mcp: registered"
+    else
+      log_fail "vercel-mcp: claude mcp add failed"
+    fi
+  else
+    log_fail "vercel-mcp: claude CLI not found"
+  fi
+}
+
+# ─── Run fixes ───────────────────────────────────────────────────────────────
+case "$FIX_TARGET" in
+  all)
+    fix_wacli_fts
+    fix_slack_mcp
+    fix_vercel_mcp
+    ;;
+  wacli-fts)   fix_wacli_fts ;;
+  slack-mcp)   fix_slack_mcp ;;
+  vercel-mcp)  fix_vercel_mcp ;;
+  *)
+    echo "Unknown fix target: $FIX_TARGET" >&2
+    exit 1
+    ;;
+esac
+
+# ─── Output ──────────────────────────────────────────────────────────────────
+if [ "$JSON_OUTPUT" = true ]; then
+  applied_json="[]"
+  failed_json="[]"
+  skipped_json="[]"
+  if command -v jq >/dev/null 2>&1; then
+    [ ${#FIXES_APPLIED[@]} -gt 0 ] && applied_json=$(printf '%s\n' "${FIXES_APPLIED[@]}" | jq -R . | jq -s .)
+    [ ${#FIXES_FAILED[@]} -gt 0 ] && failed_json=$(printf '%s\n' "${FIXES_FAILED[@]}" | jq -R . | jq -s .)
+    [ ${#FIXES_SKIPPED[@]} -gt 0 ] && skipped_json=$(printf '%s\n' "${FIXES_SKIPPED[@]}" | jq -R . | jq -s .)
+  fi
+  cat <<EOF
+{
+  "applied": $applied_json,
+  "failed": $failed_json,
+  "skipped": $skipped_json
+}
+EOF
+else
+  for fix in "${FIXES_APPLIED[@]}"; do echo "✓ $fix"; done
+  for fix in "${FIXES_FAILED[@]}"; do echo "✗ $fix"; done
+  for fix in "${FIXES_SKIPPED[@]}"; do echo "○ $fix"; done
+  echo ""
+  echo "Applied: ${#FIXES_APPLIED[@]}, Failed: ${#FIXES_FAILED[@]}, Skipped: ${#FIXES_SKIPPED[@]}"
+fi
