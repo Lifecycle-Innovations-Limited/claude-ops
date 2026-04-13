@@ -13,6 +13,7 @@ MAX_LOG_SIZE=2097152  # 2MB
 DAEMON_START=$(date +%s)
 
 mkdir -p "$LOG_DIR"
+mkdir -p "$DATA_DIR/cache"
 
 # ── Logging ──────────────────────────────────────────────────────────────
 log() { printf '%s [ops-daemon] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$LOG"; }
@@ -236,13 +237,47 @@ write_daemon_health() {
   done
   services_json+="}"
 
+  # Read brain cache metadata
+  local brain_briefing_cached_at=""
+  local brain_urgent_count=0
+  local brain_last_memory_extraction=""
+
+  if [[ -f "$DATA_DIR/cache/briefing.json" ]]; then
+    brain_briefing_cached_at=$(python3 -c "
+import json
+try: print(json.load(open('$DATA_DIR/cache/briefing.json')).get('cached_at',''))
+except: print('')
+" 2>/dev/null || true)
+  fi
+
+  if [[ -f "$DATA_DIR/cache/urgent.json" ]]; then
+    brain_urgent_count=$(python3 -c "
+import json
+try: print(json.load(open('$DATA_DIR/cache/urgent.json')).get('urgent_count',0))
+except: print(0)
+" 2>/dev/null || echo 0)
+  fi
+
+  if [[ -f "$DATA_DIR/memories/.health" ]]; then
+    brain_last_memory_extraction=$(python3 -c "
+import json
+try: print(json.load(open('$DATA_DIR/memories/.health')).get('timestamp',''))
+except: print('')
+" 2>/dev/null || true)
+  fi
+
   cat > "$HEALTH_FILE" <<EOF
 {
   "timestamp": "$now",
   "pid": $$,
   "uptime_seconds": $uptime,
   "services": $services_json,
-  "action_needed": $ACTION_NEEDED
+  "action_needed": $ACTION_NEEDED,
+  "brain": {
+    "briefing_cached_at": "$brain_briefing_cached_at",
+    "urgent_count": $brain_urgent_count,
+    "last_memory_extraction": "$brain_last_memory_extraction"
+  }
 }
 EOF
 }
@@ -269,6 +304,151 @@ run_cron_service() {
   cron=$(get_service_field "$name" "cron")
   SERVICE_NEXT_RUN["$name"]=$(calc_next_run "$cron")
   log "CRON: $name completed — next run in $(( SERVICE_NEXT_RUN[$name] - $(date +%s) ))s"
+}
+
+# ── Intelligence functions (smart brain) ─────────────────────────────────
+
+# Pre-compute morning briefing data so ops-go loads instantly.
+prefetch_briefing_cache() {
+  local CACHE_DIR="$DATA_DIR/cache"
+  mkdir -p "$CACHE_DIR"
+  local CACHE="$CACHE_DIR/briefing.json"
+  local LAST_FETCH="$CACHE_DIR/.briefing_ts"
+
+  # Throttle: only run every 5 min
+  if [[ -f "$LAST_FETCH" ]]; then
+    local last
+    last=$(cat "$LAST_FETCH")
+    local now
+    now=$(date +%s)
+    if (( now - last < 300 )); then return 0; fi
+  fi
+
+  log "BRAIN: refreshing briefing cache"
+
+  local tmpdir
+  tmpdir=$(mktemp -d)
+
+  # Unread counts
+  (command -v wacli &>/dev/null && wacli chats list --json 2>/dev/null | python3 -c "
+import json,sys,datetime
+data=json.load(sys.stdin).get('data',[]) or []
+cutoff=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=7)).isoformat()
+recent=[c for c in data if c.get('LastMessageTS','')>cutoff]
+print(json.dumps({'total_chats':len(recent),'count':len(data)}))
+" > "$tmpdir/wa.json" 2>/dev/null) &
+
+  # Email count
+  (command -v gog &>/dev/null && gog gmail search -j --results-only --no-input --max 10 "in:inbox is:unread" 2>/dev/null | python3 -c "
+import json,sys
+data=json.load(sys.stdin)
+print(json.dumps({'unread_count':len(data)}))
+" > "$tmpdir/email.json" 2>/dev/null) &
+
+  # Open PRs
+  (command -v gh &>/dev/null && gh pr list --json number,title,headRefName,createdAt --limit 20 2>/dev/null > "$tmpdir/prs.json") &
+
+  # Projects placeholder with timestamp
+  (python3 -c "
+import json
+print(json.dumps({'cached_at':'$(date -u +%Y-%m-%dT%H:%M:%SZ)'}))
+" > "$tmpdir/projects.json" 2>/dev/null) &
+
+  wait
+
+  # Merge all into briefing cache
+  python3 -c "
+import json, os, glob
+result = {}
+for f in glob.glob('$tmpdir/*.json'):
+    try:
+        with open(f) as fh:
+            result[os.path.basename(f).replace('.json','')] = json.load(fh)
+    except: pass
+result['cached_at'] = '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
+with open('$CACHE', 'w') as fh:
+    json.dump(result, fh, indent=2)
+" 2>/dev/null || true
+
+  rm -rf "$tmpdir"
+  date +%s > "$LAST_FETCH"
+  log "BRAIN: briefing cache updated"
+}
+
+# Check for messages that might need immediate attention.
+detect_urgent_messages() {
+  local URGENT_FILE="$DATA_DIR/cache/urgent.json"
+  local LAST_CHECK="$DATA_DIR/cache/.urgent_ts"
+
+  # Throttle: every 5 min
+  if [[ -f "$LAST_CHECK" ]]; then
+    local last
+    last=$(cat "$LAST_CHECK")
+    local now
+    now=$(date +%s)
+    if (( now - last < 300 )); then return 0; fi
+  fi
+
+  # Check WhatsApp for messages with urgent keywords (skip if wacli unavailable)
+  if command -v wacli &>/dev/null; then
+    wacli messages search --query "urgent OR asap OR deadline OR emergency OR ASAP" --json 2>/dev/null | python3 -c "
+import json,sys,datetime
+data=json.load(sys.stdin)
+msgs=data.get('data',{}).get('messages',[]) or []
+cutoff=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=4)).isoformat()
+urgent=[m for m in msgs if m.get('Timestamp','')>cutoff and not m.get('FromMe',True)]
+if urgent:
+    with open('$URGENT_FILE','w') as f:
+        json.dump({'urgent_count':len(urgent),'messages':[{'from':m.get('ChatName',''),'text':m.get('Text','')[:100],'ts':m.get('Timestamp','')} for m in urgent[:5]]},f,indent=2)
+" 2>/dev/null || true
+  fi
+
+  date +%s > "$LAST_CHECK"
+}
+
+# Trigger memory extraction early when new high-value messages arrive.
+trigger_smart_memory_extraction() {
+  local MEMORY_TRIGGER="$DATA_DIR/cache/.memory_trigger_ts"
+  local MEM_SCRIPT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")}/scripts/ops-memory-extractor.sh"
+
+  # Only check every 10 min
+  if [[ -f "$MEMORY_TRIGGER" ]]; then
+    local last
+    last=$(cat "$MEMORY_TRIGGER")
+    local now
+    now=$(date +%s)
+    if (( now - last < 600 )); then return 0; fi
+  fi
+
+  # Check if new messages arrived since last extraction
+  local last_extraction="$DATA_DIR/memories/.health"
+  if [[ -f "$last_extraction" ]]; then
+    local last_ts
+    last_ts=$(python3 -c "
+import json
+try:
+    d=json.load(open('$last_extraction'))
+    print(d.get('timestamp',''))
+except: print('')
+" 2>/dev/null)
+
+    if command -v wacli &>/dev/null; then
+      local new_count
+      new_count=$(wacli messages list --after="${last_ts:-$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d 'yesterday' +%Y-%m-%d 2>/dev/null || echo '')}" --limit=5 --json 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+msgs=d.get('data',{}).get('messages',[]) or []
+print(len(msgs))
+" 2>/dev/null || echo 0)
+
+      if [[ "$new_count" -gt 3 ]] && [[ -f "$MEM_SCRIPT" ]]; then
+        log "BRAIN: $new_count new messages since last extraction — triggering memory update"
+        bash "$MEM_SCRIPT" >> "$LOG_DIR/memory-extractor.log" 2>&1 &
+      fi
+    fi
+  fi
+
+  date +%s > "$MEMORY_TRIGGER"
 }
 
 # ── Graceful shutdown ─────────────────────────────────────────────────────
@@ -341,6 +521,11 @@ while true; do
       fi
     fi
   done < <(get_enabled_services)
+
+  # ── Intelligence pass (smart brain) ──────────────────────────────────────
+  prefetch_briefing_cache
+  detect_urgent_messages
+  trigger_smart_memory_extraction
 
   write_daemon_health
   sleep 30
