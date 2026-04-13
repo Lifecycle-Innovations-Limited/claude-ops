@@ -45,6 +45,28 @@ When a skill says "tell the user to run X in a separate terminal" or "Run `comma
 
 During setup and configuration flows, NEVER silently skip a channel, service, or integration. If a credential isn't found or a step fails, the user MUST be given an explicit choice via `AskUserQuestion` with options like `[Paste manually]`, `[Deep hunt — spawn agent]`, `[Skip]`. The only acceptable way to skip is the user selecting "Skip". Do not move past a service just because auto-scan returned empty — that is precisely when the user needs to be asked.
 
+## Rule 5 — Destructive actions require explicit per-action confirmation
+
+**NEVER** execute or recommend executing any of the following without first confirming with the user via `AskUserQuestion` for EACH individual action:
+
+- Deleting infrastructure (ECS clusters, RDS instances, ALBs, NAT Gateways, S3 buckets, Lambda functions)
+- Stopping or scaling down running services
+- Canceling domain auto-renewals
+- Rewriting git history (`git filter-repo`, `git rebase`, force-push)
+- Archiving or deleting repositories
+- Disabling CI/CD pipelines or workflows
+- Purging container images (ECR, Docker)
+- Deleting CloudWatch alarms or log groups
+- Any `aws ... delete-*`, `aws ... stop-*`, `aws ... terminate-*` command
+
+**For analysis/report agents** (CTO, CFO, COO, CEO): When recommending infrastructure changes, always:
+1. Verify project status first — check for recent commits, active branches, planning directories, and registry status before labeling anything as "dead" or "archived"
+2. Distinguish "idle" (0 tasks but project is active) from "dead" (project abandoned, no commits in months, no planning)
+3. Flag all destructive recommendations with `⚠️ REQUIRES CONFIRMATION` so the orchestrator knows to ask
+4. Never assume a service scaled to 0 means the project is dead — it may be between deployments or paused intentionally
+
+**For orchestration skills** (ops-yolo, ops-orchestrate, ops-go): Before executing ANY destructive recommendation from a C-suite agent, present it to the user via `AskUserQuestion` with `[Execute]` / `[Skip]` options. Batch confirmations are acceptable (e.g., "Delete these 3 idle ALBs?") but never silently execute.
+
 ## Rule 4 — Background by default during setup and configuration flows
 
 During `/ops:setup` and any skill's setup/configure flow, use `run_in_background: true` on **every** Bash call unless you need the result immediately for the very next decision. This includes: credential scans, CLI installs, OAuth flows, npm installs, brew installs, autolink scripts, smoke tests, keychain writes, Doppler queries, Chrome history queries. While background commands run, continue to the next independent step or ask the user the next question. Never block the conversation waiting for a command the user isn't actively waiting for.
