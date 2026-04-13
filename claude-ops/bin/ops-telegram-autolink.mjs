@@ -81,7 +81,7 @@ async function waitForCode(maxSec = 300) {
   while (Date.now() - start < maxSec * 1000) {
     if (existsSync(CODE_FILE)) {
       const raw = readFileSync(CODE_FILE, "utf8").trim();
-      if (/^[\w]{3,20}$/.test(raw)) {
+      if (/^[\w\-]{3,20}$/.test(raw)) {
         try {
           unlinkSync(CODE_FILE);
         } catch {}
