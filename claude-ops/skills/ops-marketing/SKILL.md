@@ -458,28 +458,51 @@ For any channel with missing credentials, show `[not configured — /ops:marketi
 
 ## setup
 
-Guide user through configuring each marketing service:
+**Before asking for anything**, auto-scan ALL sources for existing credentials. Run in a single background batch:
 
+```bash
+# Env vars
+printenv KLAVIYO_API_KEY KLAVIYO_PRIVATE_KEY META_ACCESS_TOKEN FACEBOOK_ACCESS_TOKEN META_AD_ACCOUNT_ID GA4_PROPERTY_ID GA_MEASUREMENT_ID 2>/dev/null
+
+# Shell profiles
+grep -h 'KLAVIYO\|META_\|FACEBOOK\|GA4\|GA_MEASUREMENT' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
+
+# Doppler — ALL projects, ALL configs
+for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
+  for cfg in dev stg prd; do
+    doppler secrets --project "$proj" --config "$cfg" --json 2>/dev/null | \
+      jq -r --arg proj "$proj" --arg cfg "$cfg" 'to_entries[] | select(.key | test("KLAVIYO|META|FACEBOOK|GA4|GOOGLE"; "i")) | "\(.key)=\(.value.computed) (doppler:\($proj)/\($cfg))"'
+  done
+done
+
+# Dashlane — check for tokens in password entries
+dcli password klaviyo --output json 2>/dev/null | jq -r '.[] | select(.password != null and .password != "") | "\(.title): token found"'
+dcli password facebook --output json 2>/dev/null | jq -r '.[] | select(.password != null and .password != "") | "\(.title): token found"'
+dcli password meta --output json 2>/dev/null | jq -r '.[] | select(.password != null and .password != "") | "\(.title): token found"'
+
+# Keychain
+security find-generic-password -s "klaviyo-api-key" -w 2>/dev/null
+security find-generic-password -s "meta-ads-token" -w 2>/dev/null
+
+# gcloud ADC (for GA4 + Search Console)
+gcloud auth application-default print-access-token 2>/dev/null | head -c 10 && echo "...gcloud-ok"
+
+# Chrome history — reveals account identity
+sqlite3 ~/Library/Application\ Support/Google/Chrome/Default/History \
+  "SELECT DISTINCT url FROM urls WHERE url LIKE '%klaviyo.com%' OR url LIKE '%analytics.google.com%' OR url LIKE '%business.facebook.com%' OR url LIKE '%search.google.com/search-console%' ORDER BY last_visit_time DESC LIMIT 15" 2>/dev/null
+
+# Existing prefs + userConfig
+jq -r '.marketing // empty' "$PREFS_PATH" 2>/dev/null
 ```
-MARKETING SETUP
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Which service do you want to configure?
-  1. Klaviyo (email)
-  2. Meta Ads (paid social)
-  3. Google Analytics 4
-  4. Google Search Console
-  5. All of the above
-```
+Present ALL findings before asking for anything. Only prompt for values NOT found in any source. Run all smoke tests with `run_in_background: true`.
 
-For each selected service, prompt for required credentials and save via `claude plugin config set <key> <value>`.
+**Klaviyo:** If `KLAVIYO_PRIVATE_KEY` or Dashlane entry with `ck_*` key found, use it directly. Note: Klaviyo private keys start with `ck_` (older) or `pk_` (newer). Smoke test: `curl -s -H "Authorization: Klaviyo-API-Key $KEY" -H "revision: 2024-10-15" "https://a.klaviyo.com/api/lists?page[size]=1"`.
 
-**Klaviyo:** Ask for Private API Key (from Klaviyo → Settings → API Keys). Save as `klaviyo_private_key`.
+**Meta Ads:** If found in Doppler, use directly. Need both `META_ACCESS_TOKEN` and `META_AD_ACCOUNT_ID`. Smoke test: `graph.facebook.com/v20.0/$AD_ACCOUNT_ID/campaigns?limit=1`.
 
-**Meta Ads:** Ask for Access Token (from Meta Business → System Users → Generate Token with `ads_read` + `ads_management`). Ask for Ad Account ID (format: `act_XXXXXXXXX`). Save as `meta_ads_token` and `meta_ad_account_id`.
+**GA4:** Only needs Property ID + gcloud ADC. If gcloud ADC not set up, run `gcloud auth application-default login` in background (opens browser). Check Chrome history for GA4 property URLs to auto-detect the property ID.
 
-**GA4:** Prompt user to run `gcloud auth application-default login` and provide their GA4 Property ID (numeric, from Admin → Property Settings). Save as `ga4_property_id`.
+**Search Console:** Only needs site URL + gcloud ADC. Check Chrome history for `search.google.com/search-console` URLs to auto-detect the site.
 
-**Search Console:** Prompt for site URL as registered (e.g. `https://example.com`). Save as `google_search_console_site`. Uses same gcloud ADC as GA4.
-
-After saving, validate each credential with a test API call and report: `[service] ✓ connected` or `[service] ✗ invalid key`.
+Save via userConfig (preferred) or Doppler. Report: `[service] ✓ connected` or `[service] ✗ invalid key — [error]`.
