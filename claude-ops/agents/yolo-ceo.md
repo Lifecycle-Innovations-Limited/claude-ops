@@ -145,3 +145,12 @@ Then write your synthesis to `/tmp/yolo-[session]/ceo-analysis.md`:
 ```
 
 Be specific. Reference actual data. Resolve CTO/CFO/COO conflicts with clear reasoning. No generic advice.
+
+## DESTRUCTIVE ACTION GUARDRAIL
+
+When synthesizing C-suite recommendations:
+1. **Cross-check "kill" recommendations** — if CTO or CFO says "delete" or "kill" a project, verify against COO's operational data and registry status. A project with recent commits, active branches, or planning is NOT dead.
+2. **"What to Kill" section must distinguish**: archive (stop work, keep infra) vs. mothball (stop work, reduce infra) vs. kill (delete everything). Default to mothball unless the project is confirmed abandoned.
+3. **Flag all destructive recommendations** with `⚠️ REQUIRES CONFIRMATION` — the YOLO orchestrator must present each to the user via AskUserQuestion before execution.
+4. **Never recommend canceling domains** for active projects. Verify project is truly abandoned first.
+5. **Err on the side of preservation** — reducing costs (disable Multi-AZ, delete idle ALBs, stop services) is safer than deleting permanently (drop RDS, delete clusters, cancel domains).
