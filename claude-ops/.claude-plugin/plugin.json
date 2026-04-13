@@ -128,6 +128,27 @@
       "type": "string",
       "sensitive": true,
       "default": ""
+    },
+    "bland_ai_api_key": {
+      "title": "Bland AI API Key",
+      "description": "API key from https://app.bland.ai — used for /ops:ops-voice call",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "elevenlabs_api_key": {
+      "title": "ElevenLabs API Key",
+      "description": "API key from https://elevenlabs.io — used for /ops:ops-voice tts",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "groq_api_key": {
+      "title": "Groq API Key",
+      "description": "API key from https://console.groq.com — used for /ops:ops-voice transcribe (Whisper)",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
     }
   }
 }
