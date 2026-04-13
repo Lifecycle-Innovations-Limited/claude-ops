@@ -10,6 +10,9 @@ allowed-tools:
   - Skill
   - Agent
   - AskUserQuestion
+  - CronCreate
+  - CronList
+  - CronDelete
 ---
 
 # OPS > DASH — Interactive Command Center

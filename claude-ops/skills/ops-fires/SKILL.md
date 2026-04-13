@@ -12,6 +12,11 @@ allowed-tools:
   - AskUserQuestion
   - TeamCreate
   - SendMessage
+  - TaskCreate
+  - TaskUpdate
+  - Monitor
+  - WebFetch
+  - WebSearch
   - mcp__sentry__authenticate
 ---
 
@@ -134,3 +139,26 @@ On confirmation, spawn an Agent with:
 Use the `agents/infra-monitor.md` agent definition for infra issues.
 
 If `$ARGUMENTS` contains a project alias, filter to that project's services only.
+
+---
+
+## Native tool usage
+
+### Monitor — live service health
+
+Use `Monitor` to stream ECS task logs or GitHub Actions runs when investigating fires:
+```
+Monitor(command: "aws logs tail /ecs/<service> --follow --since 5m")
+```
+
+### Tasks — incident tracking
+
+Use `TaskCreate` for each active fire. Update with `TaskUpdate` as fires are investigated/fixed/escalated.
+
+### WebFetch — status pages
+
+When diagnosing fires, use `WebFetch` to check AWS status page (`https://health.aws.amazon.com/health/status`), Vercel status, or third-party API status pages.
+
+### WebSearch — known outage patterns
+
+Use `WebSearch` to find if the error pattern matches a known AWS/infrastructure issue (e.g., "ECS task stopped CannotPullContainerError" → known ECR throttling).

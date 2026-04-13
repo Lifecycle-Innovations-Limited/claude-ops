@@ -12,6 +12,11 @@ allowed-tools:
   - AskUserQuestion
   - TeamCreate
   - SendMessage
+  - TaskCreate
+  - TaskUpdate
+  - TaskList
+  - CronCreate
+  - CronList
   - mcp__gog__gmail_search
   - mcp__gog__gmail_read_thread
   - mcp__gog__gmail_send
@@ -263,3 +268,19 @@ After all selected channels are processed, print:
 ```
 
 If `$ARGUMENTS` specifies a channel (e.g. `whatsapp`), skip the menu and go directly to that channel.
+
+---
+
+## Native tool usage
+
+### Tasks — inbox progress
+
+Use `TaskCreate` for each channel being processed. Update with `TaskUpdate` as messages are replied/archived/skipped. Gives the user a live inbox-zero progress bar.
+
+### Cron — scheduled inbox checks
+
+After processing, offer to schedule recurring inbox checks via `AskUserQuestion`:
+```
+  [Schedule inbox check every 2 hours]  [Schedule morning + evening]  [No schedule]
+```
+Use `CronCreate` if selected. Show existing schedules with `CronList`.

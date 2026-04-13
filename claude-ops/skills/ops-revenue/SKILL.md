@@ -9,6 +9,8 @@ allowed-tools:
   - Glob
   - Skill
   - AskUserQuestion
+  - WebFetch
+  - Write
 ---
 
 # OPS ► REVENUE & COSTS
@@ -124,3 +126,18 @@ RUNWAY ESTIMATE
 | (empty)  | Show full dashboard          |
 
 Use AskUserQuestion after the dashboard for next action.
+
+---
+
+## Native tool usage
+
+### WebFetch — billing API fallback
+
+When `aws ce` commands fail or return incomplete data, use `WebFetch` to query the AWS Cost Explorer API directly. Also useful for fetching Stripe/billing provider data if configured.
+
+### Write — export reports
+
+When user selects "Export cost report" (option c), use `Write` to save the report as a dated file:
+```
+Write(file_path: "/tmp/ops-revenue-[date].md", content: "[formatted report]")
+```

@@ -12,6 +12,17 @@ allowed-tools:
   - AskUserQuestion
   - TeamCreate
   - SendMessage
+  - TaskCreate
+  - TaskUpdate
+  - TaskList
+  - EnterPlanMode
+  - ExitPlanMode
+  - CronCreate
+  - CronList
+  - CronDelete
+  - Monitor
+  - WebFetch
+  - WebSearch
   - mcp__claude_ai_Linear__list_issues
   - mcp__claude_ai_Linear__list_cycles
   - mcp__claude_ai_Vercel__list_deployments
@@ -207,3 +218,31 @@ Report final summary when done.
 If `$ARGUMENTS` is `analyze` or empty, go straight to Phase 1.
 If `$ARGUMENTS` is `YOLO`, skip to Phase 4.
 If `$ARGUMENTS` is `report`, skip to Phase 3 (reads existing analysis files if present).
+
+---
+
+## Native tool usage
+
+### Tasks — progress tracking
+
+Use `TaskCreate` at the start of Phase 4 to create a task for each YOLO step. Update with `TaskUpdate` as each completes. This gives the user a live progress view across the autonomous run.
+
+### PlanMode — review before autonomous
+
+Before Phase 4 execution, use `EnterPlanMode` to present the full execution plan. The user reviews what YOLO will do, approves or modifies, then `ExitPlanMode` to begin execution.
+
+### Cron — schedule daily YOLO
+
+After Phase 4 completes, offer to schedule recurring YOLO via `AskUserQuestion`:
+```
+  [Schedule daily YOLO at 9am]  [Schedule weekly Monday briefing]  [No schedule]
+```
+Use `CronCreate` if selected. Use `CronList`/`CronDelete` to manage existing schedules.
+
+### Monitor — live CI/deploy watching
+
+When YOLO dispatches fix agents or triggers deploys, use `Monitor` to stream CI output in real-time instead of polling with sleep loops.
+
+### WebFetch/WebSearch — enrichment
+
+Use `WebFetch` to pull Grafana dashboards, Sentry event details, or AWS status pages when MCPs are unavailable. Use `WebSearch` to find context on production errors (e.g., known AWS outages).

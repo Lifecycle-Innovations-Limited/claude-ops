@@ -9,6 +9,8 @@ allowed-tools:
   - Glob
   - Agent
   - AskUserQuestion
+  - WebSearch
+  - WebFetch
 ---
 
 # OPS ► DOCTOR
@@ -82,3 +84,15 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-doctor 2>/dev/null
 ```
 
 Display updated results. If errors remain, report them to the user with manual fix instructions.
+
+---
+
+## Native tool usage
+
+### WebSearch — known issue lookup
+
+When diagnostics find errors, use `WebSearch` to check if the issue is a known Claude Code plugin bug, MCP server issue, or configuration problem. Include links to relevant GitHub issues or docs.
+
+### WebFetch — MCP health check
+
+For MCP servers that appear disconnected, use `WebFetch` to test their underlying APIs directly (e.g., `https://api.linear.app/graphql` with a simple query) to distinguish between "MCP broken" and "API down".
