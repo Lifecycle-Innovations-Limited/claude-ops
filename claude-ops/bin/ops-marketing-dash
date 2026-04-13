@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# ops-marketing-dash — pre-gathers data from all configured marketing channels
+# Output: JSON object with data from each channel (null for unconfigured)
+
+set -euo pipefail
+
+# Credential resolution
+KLAVIYO_KEY="${KLAVIYO_PRIVATE_KEY:-$(claude plugin config get klaviyo_private_key 2>/dev/null || echo "")}"
+META_TOKEN="${META_ADS_TOKEN:-$(claude plugin config get meta_ads_token 2>/dev/null || echo "")}"
+META_ACCOUNT="${META_AD_ACCOUNT_ID:-$(claude plugin config get meta_ad_account_id 2>/dev/null || echo "")}"
+GA4_PROPERTY="${GA4_PROPERTY_ID:-$(claude plugin config get ga4_property_id 2>/dev/null || echo "")}"
+GSC_SITE="${GOOGLE_SEARCH_CONSOLE_SITE:-$(claude plugin config get google_search_console_site 2>/dev/null || echo "")}"
+
+# Doppler fallback
+if [ -z "$KLAVIYO_KEY" ]; then
+  KLAVIYO_KEY="$(doppler secrets get KLAVIYO_PRIVATE_KEY --plain 2>/dev/null || echo "")"
+fi
+if [ -z "$META_TOKEN" ]; then
+  META_TOKEN="$(doppler secrets get META_ADS_TOKEN --plain 2>/dev/null || echo "")"
+  META_ACCOUNT="$(doppler secrets get META_AD_ACCOUNT_ID --plain 2>/dev/null || echo "")"
+fi
+
+TODAY=$(date +%Y-%m-%d)
+
+# --- Klaviyo ---
+gather_klaviyo() {
+  if [ -z "$KLAVIYO_KEY" ]; then
+    echo "null"
+    return
+  fi
+
+  # Get total subscriber count across all lists
+  LISTS=$(curl -s "https://a.klaviyo.com/api/lists/?fields[list]=name,id,profile_count" \
+    -H "Authorization: Klaviyo-API-Key ${KLAVIYO_KEY}" \
+    -H "revision: 2024-10-15" 2>/dev/null)
+
+  TOTAL_SUBS=$(echo "$LISTS" | jq '[.data[].attributes.profile_count // 0] | add // 0' 2>/dev/null || echo "0")
+
+  # Get last campaign stats
+  CAMPAIGNS=$(curl -s "https://a.klaviyo.com/api/campaigns/?filter=equals(messages.channel,'email')&sort=-created_at&page[size]=1&fields[campaign]=name,status,send_time" \
+    -H "Authorization: Klaviyo-API-Key ${KLAVIYO_KEY}" \
+    -H "revision: 2024-10-15" 2>/dev/null)
+
+  LAST_CAMPAIGN_NAME=$(echo "$CAMPAIGNS" | jq -r '.data[0].attributes.name // "none"' 2>/dev/null || echo "none")
+  LAST_CAMPAIGN_STATUS=$(echo "$CAMPAIGNS" | jq -r '.data[0].attributes.status // "none"' 2>/dev/null || echo "none")
+
+  jq -n \
+    --argjson subs "$TOTAL_SUBS" \
+    --arg last_campaign "$LAST_CAMPAIGN_NAME" \
+    --arg last_status "$LAST_CAMPAIGN_STATUS" \
+    '{subscribers: $subs, last_campaign: $last_campaign, last_campaign_status: $last_status}'
+}
+
+# --- Meta Ads ---
+gather_meta() {
+  if [ -z "$META_TOKEN" ] || [ -z "$META_ACCOUNT" ]; then
+    echo "null"
+    return
+  fi
+
+  INSIGHTS=$(curl -s "https://graph.facebook.com/v18.0/${META_ACCOUNT}/insights?fields=spend,impressions,clicks,ctr,cpc,actions,action_values&date_preset=last_7d&level=account" \
+    -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null)
+
+  SPEND=$(echo "$INSIGHTS" | jq -r '.data[0].spend // "0"' 2>/dev/null || echo "0")
+  IMPRESSIONS=$(echo "$INSIGHTS" | jq -r '.data[0].impressions // "0"' 2>/dev/null || echo "0")
+  CLICKS=$(echo "$INSIGHTS" | jq -r '.data[0].clicks // "0"' 2>/dev/null || echo "0")
+  CTR=$(echo "$INSIGHTS" | jq -r '.data[0].ctr // "0"' 2>/dev/null || echo "0")
+
+  # Extract purchase count and revenue from actions/action_values
+  PURCHASES=$(echo "$INSIGHTS" | jq -r '[.data[0].actions[]? | select(.action_type == "purchase") | .value] | first // "0"' 2>/dev/null || echo "0")
+  PURCHASE_VALUE=$(echo "$INSIGHTS" | jq -r '[.data[0].action_values[]? | select(.action_type == "purchase") | .value] | first // "0"' 2>/dev/null || echo "0")
+
+  # ROAS = purchase_value / spend
+  ROAS=$(awk "BEGIN {s=$SPEND+0; v=$PURCHASE_VALUE+0; if (s>0) printf \"%.2f\", v/s; else print \"0\"}")
+
+  jq -n \
+    --arg spend "$SPEND" \
+    --arg impressions "$IMPRESSIONS" \
+    --arg clicks "$CLICKS" \
+    --arg ctr "$CTR" \
+    --arg purchases "$PURCHASES" \
+    --arg purchase_value "$PURCHASE_VALUE" \
+    --arg roas "$ROAS" \
+    '{spend: $spend, impressions: $impressions, clicks: $clicks, ctr: $ctr, purchases: $purchases, purchase_value: $purchase_value, roas: $roas}'
+}
+
+# --- GA4 ---
+gather_ga4() {
+  if [ -z "$GA4_PROPERTY" ]; then
+    echo "null"
+    return
+  fi
+
+  GA4_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
+  if [ -z "$GA4_TOKEN" ]; then
+    echo "null"
+    return
+  fi
+
+  REPORT=$(curl -s -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport" \
+    -H "Authorization: Bearer ${GA4_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "dateRanges": [{"startDate": "7daysAgo", "endDate": "today"}],
+      "metrics": [
+        {"name": "sessions"},
+        {"name": "totalUsers"},
+        {"name": "conversions"},
+        {"name": "totalRevenue"},
+        {"name": "bounceRate"}
+      ]
+    }' 2>/dev/null)
+
+  SESSIONS=$(echo "$REPORT" | jq -r '.rows[0].metricValues[0].value // "0"' 2>/dev/null || echo "0")
+  USERS=$(echo "$REPORT" | jq -r '.rows[0].metricValues[1].value // "0"' 2>/dev/null || echo "0")
+  CONVERSIONS=$(echo "$REPORT" | jq -r '.rows[0].metricValues[2].value // "0"' 2>/dev/null || echo "0")
+  REVENUE=$(echo "$REPORT" | jq -r '.rows[0].metricValues[3].value // "0"' 2>/dev/null || echo "0")
+
+  CVR=$(awk "BEGIN {s=$SESSIONS+0; c=$CONVERSIONS+0; if (s>0) printf \"%.2f\", (c/s)*100; else print \"0\"}")
+
+  jq -n \
+    --arg sessions "$SESSIONS" \
+    --arg users "$USERS" \
+    --arg conversions "$CONVERSIONS" \
+    --arg revenue "$REVENUE" \
+    --arg cvr "$CVR" \
+    '{sessions: $sessions, users: $users, conversions: $conversions, revenue: $revenue, cvr: $cvr}'
+}
+
+# --- Google Search Console ---
+gather_gsc() {
+  if [ -z "$GSC_SITE" ]; then
+    echo "null"
+    return
+  fi
+
+  GSC_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
+  if [ -z "$GSC_TOKEN" ]; then
+    echo "null"
+    return
+  fi
+
+  GSC_SITE_ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${GSC_SITE}', safe=''))" 2>/dev/null \
+    || echo "${GSC_SITE}" | sed 's|:|%3A|g; s|/|%2F|g')
+
+  START_DATE=$(date -v-28d +%Y-%m-%d 2>/dev/null || date -d '28 days ago' +%Y-%m-%d 2>/dev/null || echo "")
+  if [ -z "$START_DATE" ]; then
+    echo "null"
+    return
+  fi
+
+  REPORT=$(curl -s -X POST "https://searchconsole.googleapis.com/webmasters/v3/sites/${GSC_SITE_ENCODED}/searchAnalytics/query" \
+    -H "Authorization: Bearer ${GSC_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "{\"startDate\": \"${START_DATE}\", \"endDate\": \"${TODAY}\", \"dimensions\": [], \"rowLimit\": 1}" 2>/dev/null)
+
+  CLICKS=$(echo "$REPORT" | jq -r '.rows[0].clicks // 0' 2>/dev/null || echo "0")
+  IMPRESSIONS=$(echo "$REPORT" | jq -r '.rows[0].impressions // 0' 2>/dev/null || echo "0")
+  CTR=$(echo "$REPORT" | jq -r '.rows[0].ctr // 0' 2>/dev/null || echo "0")
+  POSITION=$(echo "$REPORT" | jq -r '.rows[0].position // 0' 2>/dev/null || echo "0")
+
+  jq -n \
+    --argjson clicks "$CLICKS" \
+    --argjson impressions "$IMPRESSIONS" \
+    --argjson ctr "$CTR" \
+    --argjson position "$POSITION" \
+    '{clicks: $clicks, impressions: $impressions, ctr: $ctr, avg_position: $position}'
+}
+
+# Run all in parallel (subshells)
+KLAVIYO_DATA=$(gather_klaviyo) &
+META_DATA=$(gather_meta) &
+GA4_DATA=$(gather_ga4) &
+GSC_DATA=$(gather_gsc) &
+wait
+
+# Emit unified JSON
+jq -n \
+  --argjson klaviyo "$KLAVIYO_DATA" \
+  --argjson meta "$META_DATA" \
+  --argjson ga4 "$GA4_DATA" \
+  --argjson gsc "$GSC_DATA" \
+  --arg date "$TODAY" \
+  '{date: $date, klaviyo: $klaviyo, meta: $meta, ga4: $ga4, gsc: $gsc}'

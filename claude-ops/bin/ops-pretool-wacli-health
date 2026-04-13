@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# PreToolUse hook: check wacli health before WhatsApp commands
+# Receives tool input as $1, checks if it contains wacli commands
+set -euo pipefail
+
+INPUT="${1:-}"
+
+# Only check if the command involves wacli
+if ! echo "$INPUT" | grep -q "wacli"; then
+  exit 0
+fi
+
+# Check health file
+HEALTH_FILE="$HOME/.wacli/.health"
+if [[ -f "$HEALTH_FILE" ]]; then
+  STATUS=$(grep "^status=" "$HEALTH_FILE" | cut -d= -f2)
+  if [[ "$STATUS" == "needs_auth" ]] || [[ "$STATUS" == "needs_reauth" ]]; then
+    echo "⚠ WhatsApp needs re-authentication. Run 'wacli auth' in a separate terminal."
+    # Don't block — just warn. The skill's own health check will handle it.
+  fi
+fi
+
+# Check daemon health
+DAEMON_HEALTH="$HOME/.claude/plugins/data/ops-ops-marketplace/daemon-health.json"
+if [[ -f "$DAEMON_HEALTH" ]]; then
+  ACTION=$(python3 -c "import json; d=json.load(open('$DAEMON_HEALTH')); print(d.get('action_needed') or '')" 2>/dev/null || true)
+  if [[ -n "$ACTION" ]] && [[ "$ACTION" != "None" ]]; then
+    echo "⚠ Daemon action needed: $ACTION"
+  fi
+fi
+
+exit 0

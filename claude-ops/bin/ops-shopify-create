@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+# ops-shopify-create — Create a Shopify admin app from the claude-ops template
+# Usage: ops-shopify-create <app-name> <path> [--client-id <id>] [--org-id <id>]
+#
+# Fully automated flow:
+# 1. Auth via device-code OAuth (auto-opens browser)
+# 2. Fetch org ID from Shopify Partners API
+# 3. Scaffold app from ops template with ALL flags (zero interactive prompts)
+# 4. Inject client_id into shopify.app.toml
+set -euo pipefail
+
+APP_NAME="${1:?Usage: ops-shopify-create <app-name> <path> [--client-id <id>] [--org-id <id>]}"
+APP_PATH="${2:?Usage: ops-shopify-create <app-name> <path> [--client-id <id>] [--org-id <id>]}"
+CLIENT_ID=""
+ORG_ID=""
+
+shift 2
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --client-id) CLIENT_ID="$2"; shift 2 ;;
+    --org-id) ORG_ID="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$(dirname "$(realpath "$0")")")}"
+TEMPLATE_DIR="$PLUGIN_ROOT/templates/shopify-admin-app"
+
+# Ensure expect is available
+if ! command -v expect &>/dev/null; then
+  echo "Installing expect via Homebrew..."
+  brew install expect 2>/dev/null || { echo "ERROR: expect is required. Install with: brew install expect"; exit 1; }
+fi
+
+# ── Step 1: Authenticate ──────────────────────────────────────────────────────
+# Check Shopify CLI session cache for a valid token
+SHOPIFY_PREFS="$HOME/Library/Preferences/shopify-cli-kit-nodejs/config.json"
+NEEDS_AUTH=true
+
+if [[ -f "$SHOPIFY_PREFS" ]]; then
+  # Check if session has a non-expired token
+  HAS_TOKEN=$(python3 -c "
+import json, sys
+from datetime import datetime, timezone
+d = json.load(open('$SHOPIFY_PREFS'))
+ss = json.loads(d.get('sessionStore', '{}'))
+for domain, accounts in ss.items():
+    for uid, data in accounts.items():
+        identity = data.get('identity', {})
+        expires = identity.get('expiresAt', '')
+        if expires:
+            exp = datetime.fromisoformat(expires.replace('Z', '+00:00'))
+            if exp > datetime.now(timezone.utc):
+                print('valid')
+                sys.exit(0)
+print('expired')
+" 2>/dev/null || echo "expired")
+
+  if [[ "$HAS_TOKEN" == "valid" ]]; then
+    echo "✓ Shopify CLI session is valid"
+    NEEDS_AUTH=false
+  fi
+fi
+
+if $NEEDS_AUTH; then
+  echo "Authenticating with Shopify CLI..."
+  expect -c '
+    set timeout 120
+    spawn npx shopify auth login
+    expect {
+      -re {Open this link.*: (https://\S+)} {
+        set url $expect_out(1,string)
+        exec open $url &
+        puts "\n>>> Opened auth URL in browser — approve in your browser"
+        exp_continue
+      }
+      -re {Logged in} {
+        puts "\n>>> Auth complete"
+      }
+      eof {}
+      timeout { puts "AUTH TIMEOUT — approve the device code in your browser"; exit 1 }
+    }
+    catch wait result
+  '
+fi
+
+# ── Step 2: Fetch org ID from Shopify Partners API ───────────────────────────
+if [[ -z "$ORG_ID" ]]; then
+  echo "Fetching organization ID from Shopify..."
+
+  # Extract access token from Shopify CLI session cache
+  ACCESS_TOKEN=$(python3 -c "
+import json, sys
+d = json.load(open('$SHOPIFY_PREFS'))
+ss = json.loads(d.get('sessionStore', '{}'))
+for domain, accounts in ss.items():
+    for uid, data in accounts.items():
+        identity = data.get('identity', {})
+        token = identity.get('accessToken', '')
+        if token:
+            print(token)
+            sys.exit(0)
+" 2>/dev/null || echo "")
+
+  if [[ -n "$ACCESS_TOKEN" ]]; then
+    # Query Partners API for organizations
+    ORG_RESULT=$(curl -s -X POST "https://partners.shopify.com/api/2024-01/graphql.json" \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"query":"{ currentUserAccount { organizations(first: 10) { nodes { id name } } } }"}' 2>/dev/null || echo "{}")
+
+    # Also try the CLI's internal API
+    if echo "$ORG_RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); orgs=d.get('data',{}).get('currentUserAccount',{}).get('organizations',{}).get('nodes',[]); print(len(orgs))" 2>/dev/null | grep -q "^0$"; then
+      # Try alternate endpoint — Shopify CLI uses this internally
+      ORG_RESULT=$(python3 -c "
+import json
+d = json.load(open('$SHOPIFY_PREFS'))
+for key, val in d.get('cache', {}).items():
+    v = val.get('value', '')
+    if isinstance(v, str) and 'organization' in v.lower():
+        parsed = json.loads(v)
+        orgs = parsed.get('currentUserAccount', {}).get('organizations', {}).get('nodes', [])
+        if orgs:
+            # Print first org ID
+            print(orgs[0].get('id', ''))
+            break
+" 2>/dev/null || echo "")
+
+      if [[ -n "$ORG_RESULT" ]]; then
+        ORG_ID="$ORG_RESULT"
+      fi
+    else
+      # Parse first org from GraphQL response
+      ORG_ID=$(echo "$ORG_RESULT" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+orgs = d.get('data',{}).get('currentUserAccount',{}).get('organizations',{}).get('nodes',[])
+if orgs:
+    # org ID is a GID like 'gid://partners/Organization/12345' — extract numeric part
+    gid = orgs[0].get('id', '')
+    print(gid.split('/')[-1] if '/' in gid else gid)
+" 2>/dev/null || echo "")
+    fi
+  fi
+
+  if [[ -n "$ORG_ID" ]]; then
+    echo "✓ Using organization: $ORG_ID"
+  else
+    echo "⚠ No organization found. You may need to create one at partners.shopify.com"
+    echo "  The CLI will prompt for org selection (expect will auto-select the first one)"
+  fi
+fi
+
+# ── Step 3: Scaffold app ─────────────────────────────────────────────────────
+echo ""
+echo "Creating Shopify app: $APP_NAME"
+echo "Template: $TEMPLATE_DIR"
+echo "Path: $APP_PATH"
+
+# Build CLI args — pass ALL flags to avoid interactive prompts
+CLI_ARGS=(
+  --name "$APP_NAME"
+  --template "$TEMPLATE_DIR"
+  --package-manager npm
+  --path "$APP_PATH"
+  --flavor typescript
+)
+
+[[ -n "$CLIENT_ID" ]] && CLI_ARGS+=(--client-id "$CLIENT_ID")
+[[ -n "$ORG_ID" ]] && CLI_ARGS+=(--organization-id "$ORG_ID")
+
+# Try non-interactive first
+echo "Running: npx @shopify/create-app@latest ${CLI_ARGS[*]}"
+CREATE_OUTPUT=$(npx @shopify/create-app@latest "${CLI_ARGS[@]}" 2>&1) && {
+  echo "$CREATE_OUTPUT" | tail -5
+  echo "✓ App created successfully (non-interactive)"
+} || {
+  EXIT_CODE=$?
+  if echo "$CREATE_OUTPUT" | grep -q "Failed to prompt"; then
+    echo "CLI requires interactive input — falling back to expect..."
+
+    # Fall back to expect for any remaining prompts
+    expect -c "
+      set timeout 300
+      spawn npx @shopify/create-app@latest ${CLI_ARGS[*]}
+
+      expect {
+        -re {Open this link.*: (https://\\S+)} {
+          set url \$expect_out(1,string)
+          exec open \$url &
+          exp_continue
+        }
+        -re {Logged in} { exp_continue }
+        -re {language|flavor} {
+          send \"\033\[B\r\"
+          exp_continue
+        }
+        -re {organization|Which org} {
+          send \"\r\"
+          exp_continue
+        }
+        -re {\\(Y/n\\)} { send \"Y\r\"; exp_continue }
+        -re {\\(y/N\\)} { send \"y\r\"; exp_continue }
+        -re {\\? } { send \"\r\"; exp_continue }
+        eof {}
+        timeout { puts \"TIMEOUT creating app\"; exit 1 }
+      }
+      catch wait result
+      exit [lindex \$result 3]
+    "
+  else
+    echo "$CREATE_OUTPUT" | tail -10
+    exit $EXIT_CODE
+  fi
+}
+
+# ── Step 4: Post-setup ───────────────────────────────────────────────────────
+# Inject client_id if provided
+if [[ -n "$CLIENT_ID" ]] && [[ -f "$APP_PATH/shopify.app.toml" ]]; then
+  sed -i '' "s/client_id = \"\"/client_id = \"$CLIENT_ID\"/" "$APP_PATH/shopify.app.toml"
+  echo "✓ Injected client_id into shopify.app.toml"
+fi
+
+# Verify the app was created
+if [[ -f "$APP_PATH/package.json" ]]; then
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo " ✓ Shopify app created: $APP_NAME"
+  echo "   Path: $APP_PATH"
+  echo "   Template: claude-ops admin (full scopes)"
+  echo "   Next: cd $APP_PATH && npx shopify app dev"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+else
+  echo "✗ App creation may have failed — check $APP_PATH"
+  exit 1
+fi
