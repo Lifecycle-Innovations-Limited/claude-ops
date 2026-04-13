@@ -7,7 +7,10 @@
     "url": "https://github.com/Lifecycle-Innovations-Limited"
   },
   "homepage": "https://github.com/Lifecycle-Innovations-Limited/claude-ops",
-  "repository": "https://github.com/Lifecycle-Innovations-Limited/claude-ops",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Lifecycle-Innovations-Limited/claude-ops"
+  },
   "license": "MIT",
   "keywords": [
     "business",

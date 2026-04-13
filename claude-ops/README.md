@@ -1,23 +1,49 @@
 # claude-ops
 
-A Claude Code plugin that turns Claude into a business operating system. One command — `/ops:go` — gives you a complete morning briefing: infra health, CI status, unread messages, open PRs, sprint state, and revenue snapshot. Then route to any sub-skill for deep work.
+A Claude Code plugin that turns Claude into a business operating system. Run `/ops` to launch the interactive command center — a pixel-art dashboard with instant hotkey access to morning briefings, inbox management, fire alerts, deploy status, revenue tracking, and autonomous YOLO mode.
 
 ## Features
 
-| Skill           | Description                                                                    |
-| --------------- | ------------------------------------------------------------------------------ |
-| `/ops:setup`    | Interactive setup wizard — installs CLIs, configures channels, builds registry |
-| `/ops:go`       | Morning briefing — all systems in one dashboard                                |
-| `/ops:next`     | Priority-ordered next action (fires → comms → PRs → sprint → GSD)             |
-| `/ops:inbox`    | Inbox zero across WhatsApp, Email, Slack, Telegram                             |
-| `/ops:comms`    | Send/read messages across all channels                                         |
-| `/ops:projects` | Portfolio dashboard — GSD phase, CI, PRs, dirty files                          |
-| `/ops:linear`   | Linear sprint board, issue management, GSD sync                                |
-| `/ops:triage`   | Cross-platform issue triage (Sentry + Linear + GitHub)                         |
-| `/ops:fires`    | Production incidents dashboard with agent dispatch                             |
-| `/ops:deploy`   | ECS + Vercel + GitHub Actions deploy status                                    |
-| `/ops:revenue`  | AWS costs, credits, revenue pipeline, runway                                   |
-| `/ops:yolo`     | 4-agent C-suite analysis + autonomous mode                                     |
+| Skill             | Description                                                                    |
+| ----------------- | ------------------------------------------------------------------------------ |
+| `/ops`            | Interactive command center dashboard (visual HQ)                               |
+| `/ops:dash`       | Same as `/ops` — pixel-art dashboard with hotkey navigation                    |
+| `/ops:setup`      | Interactive setup wizard — installs CLIs, configures channels, builds registry |
+| `/ops:go`         | Morning briefing — all systems in one dashboard                                |
+| `/ops:next`       | Priority-ordered next action (fires > comms > PRs > sprint > GSD)              |
+| `/ops:inbox`      | Inbox zero across WhatsApp, Email, Slack, Telegram                             |
+| `/ops:comms`      | Send/read messages across all channels                                         |
+| `/ops:projects`   | Portfolio dashboard — GSD phase, CI, PRs, dirty files                          |
+| `/ops:linear`     | Linear sprint board, issue management, GSD sync                                |
+| `/ops:triage`     | Cross-platform issue triage (Sentry + Linear + GitHub)                         |
+| `/ops:fires`      | Production incidents dashboard with agent dispatch                             |
+| `/ops:deploy`     | ECS + Vercel + GitHub Actions deploy status                                    |
+| `/ops:revenue`    | AWS costs, credits, revenue pipeline, runway                                   |
+| `/ops:merge`      | Auto-fix CI + merge all ready PRs                                              |
+| `/ops:speedup`    | Cross-platform system optimizer (macOS/Linux/WSL)                              |
+| `/ops:yolo`       | 4-agent C-suite analysis + autonomous mode                                     |
+
+### Dashboard hotkeys
+
+The `/ops:dash` command center provides instant navigation:
+
+```
+ QUICK ACTIONS                    INTEL
+ 1 Morning briefing              6 Revenue & costs
+ 2 Inbox zero                    7 Linear sprint
+ 3 Fire check                    8 Deploy status
+ 4 Project dashboard             9 Triage issues
+ 5 What's next?                  0 System speedup
+
+ POWER                           COMMS
+ a YOLO mode                     d Send message
+ b Auto-merge PRs                e C-suite reports
+ c Setup wizard
+
+ META
+ f Settings & config             h Help / FAQ / Wiki
+ g Share your setup              q Exit
+```
 
 ## Requirements
 
@@ -142,7 +168,7 @@ The plugin uses **your personal Telegram account** via gram.js MTProto — not a
 
 This invokes `bin/ops-telegram-autolink.mjs`, which takes your phone number, performs the `my.telegram.org` HTTP login flow, extracts `api_id` + `api_hash` (creating a Telegram app for you if none exists), runs the gram.js auth flow to generate a session string, and stores everything in macOS keychain. Zero browser automation — `my.telegram.org` is server-rendered HTML, so the wizard uses plain HTTP requests. You just enter the two codes Telegram sends to your Telegram app.
 
-After the wizard finishes, it prints the values you need to paste into `/plugin settings` for `ops@ops-marketplace` (the plugin cannot write to `~/.claude.json` on its own — that's Claude Code's job via the `/plugin` UI).
+After the wizard finishes, it automatically writes the credentials to the MCP config — no manual pasting required. Just restart Claude Code to activate the Telegram MCP server.
 
 **Manual path (if you already have an app):**
 
