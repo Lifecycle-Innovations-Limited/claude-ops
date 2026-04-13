@@ -93,6 +93,84 @@ if [ ! -f "$MCP_JSON_FILE" ]; then
 elif command -v jq >/dev/null 2>&1; then
   if ! jq empty "$MCP_JSON_FILE" 2>/dev/null; then
     ERRORS+=("mcp_config_invalid_json: .mcp.json is not valid JSON")
+  else
+    # Check each MCP server for user_config references and validate they're configured
+    MCP_SERVERS=$(jq -r '.mcpServers // {} | keys[]' "$MCP_JSON_FILE" 2>/dev/null || true)
+    for server in $MCP_SERVERS; do
+      # Extract all ${user_config.*} references from this server's config
+      USER_CONFIG_REFS=$(jq -r "
+        .mcpServers[\"$server\"] | .. | strings | select(test(\"\\\\$\\{user_config\\.\")) |
+        [scan(\"\\\\$\\{user_config\\.([^}]+)\\}\")] | .[][]
+      " "$MCP_JSON_FILE" 2>/dev/null | sort -u || true)
+
+      if [ -n "$USER_CONFIG_REFS" ]; then
+        MISSING_CONFIGS=()
+        for config_key in $USER_CONFIG_REFS; do
+          # Check if this userConfig key has a non-empty value set
+          # Look in preferences.json for saved values
+          HAS_VALUE=false
+          if [ -f "$PREFS" ]; then
+            SAVED_VAL=$(jq -r ".user_config.\"$config_key\" // empty" "$PREFS" 2>/dev/null || true)
+            if [ -n "$SAVED_VAL" ]; then
+              HAS_VALUE=true
+            fi
+          fi
+          # Also check if plugin.json userConfig declares it with a non-empty default
+          if [ "$HAS_VALUE" = false ] && [ -f "$PLUGIN_JSON" ]; then
+            DEFAULT_VAL=$(jq -r ".userConfig.\"$config_key\".default // empty" "$PLUGIN_JSON" 2>/dev/null || true)
+            if [ -n "$DEFAULT_VAL" ]; then
+              HAS_VALUE=true
+            fi
+          fi
+          if [ "$HAS_VALUE" = false ]; then
+            MISSING_CONFIGS+=("$config_key")
+          fi
+        done
+        if [ ${#MISSING_CONFIGS[@]} -gt 0 ]; then
+          ERRORS+=("mcp_missing_user_config_${server}: MCP server '$server' references unconfigured user_config values: $(IFS=,; echo "${MISSING_CONFIGS[*]}"). Run /ops:setup to configure.")
+        fi
+      fi
+    done
+  fi
+fi
+
+# --- 5b. Claude Code native diagnostics ---
+# Check for issues that Claude Code's /doctor would flag
+# Scan all MCP configs Claude Code reads for env var issues
+CLAUDE_MCP_CONFIGS=("$HOME/.claude/.mcp.json" "$HOME/.claude.json")
+for mcp_cfg in "${CLAUDE_MCP_CONFIGS[@]}"; do
+  [ -f "$mcp_cfg" ] || continue
+  if command -v jq >/dev/null 2>&1 && jq empty "$mcp_cfg" 2>/dev/null; then
+    # Check for servers with empty/placeholder env values
+    BROKEN_SERVERS=$(jq -r '
+      .mcpServers // {} | to_entries[] |
+      select(.value.env != null) |
+      select(.value.env | to_entries[] | .value | test("^\\$\\{") ) |
+      .key
+    ' "$mcp_cfg" 2>/dev/null | sort -u || true)
+    for srv in $BROKEN_SERVERS; do
+      WARNINGS+=("claude_mcp_unresolved_vars_${srv}: MCP server '$srv' in $(basename "$mcp_cfg") has unresolved variable references")
+    done
+  fi
+done
+
+# Check plugin data dir for user_config values that are required but missing
+if [ -f "$PLUGIN_JSON" ] && command -v jq >/dev/null 2>&1; then
+  # Get all userConfig keys that have sensitive=true (likely required credentials)
+  SENSITIVE_KEYS=$(jq -r '.userConfig // {} | to_entries[] | select(.value.sensitive == true) | .key' "$PLUGIN_JSON" 2>/dev/null || true)
+  UNCONFIGURED_SENSITIVE=()
+  for skey in $SENSITIVE_KEYS; do
+    IS_SET=false
+    if [ -f "$PREFS" ]; then
+      SVAL=$(jq -r ".user_config.\"$skey\" // empty" "$PREFS" 2>/dev/null || true)
+      [ -n "$SVAL" ] && IS_SET=true
+    fi
+    if [ "$IS_SET" = false ]; then
+      UNCONFIGURED_SENSITIVE+=("$skey")
+    fi
+  done
+  if [ ${#UNCONFIGURED_SENSITIVE[@]} -gt 0 ]; then
+    WARNINGS+=("unconfigured_sensitive_keys: Sensitive user config values not set: $(IFS=,; echo "${UNCONFIGURED_SENSITIVE[*]}"). MCP servers depending on these will fail. Run /ops:setup to configure.")
   fi
 fi
 
@@ -165,13 +243,17 @@ fi
 # Build errors/warnings JSON arrays
 err_json="[]"
 warn_json="[]"
-info_json="[]"
+cache_json="[]"
 if command -v jq >/dev/null 2>&1; then
-  err_json=$(printf '%s\n' "${ERRORS[@]+"${ERRORS[@]}"}" | grep -v '^$' | jq -R . | jq -s . 2>/dev/null || echo "[]")
-  warn_json=$(printf '%s\n' "${WARNINGS[@]+"${WARNINGS[@]}"}" | grep -v '^$' | jq -R . | jq -s . 2>/dev/null || echo "[]")
-  cache_json=$(printf '%s\n' "${CACHE_VERSIONS[@]+"${CACHE_VERSIONS[@]}"}" | grep -v '^$' | jq -R . | jq -s . 2>/dev/null || echo "[]")
-else
-  cache_json="[]"
+  if [ ${#ERRORS[@]} -gt 0 ]; then
+    err_json=$(printf '%s\n' "${ERRORS[@]}" | jq -R . | jq -s . 2>/dev/null || echo "[]")
+  fi
+  if [ ${#WARNINGS[@]} -gt 0 ]; then
+    warn_json=$(printf '%s\n' "${WARNINGS[@]}" | jq -R . | jq -s . 2>/dev/null || echo "[]")
+  fi
+  if [ ${#CACHE_VERSIONS[@]} -gt 0 ]; then
+    cache_json=$(printf '%s\n' "${CACHE_VERSIONS[@]}" | jq -R . | jq -s . 2>/dev/null || echo "[]")
+  fi
 fi
 
 cat <<EOF
