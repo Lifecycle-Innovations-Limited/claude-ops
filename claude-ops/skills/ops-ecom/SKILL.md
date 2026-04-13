@@ -449,39 +449,59 @@ Use `AskUserQuestion` for action selection.
 
 ## SETUP FLOW
 
-Guide the user through configuring Shopify credentials:
+**Before asking the user for anything**, auto-discover store URLs and tokens. Run ALL of these scans in a single batch:
+
+```bash
+# 1. Env vars
+printenv SHOPIFY_ACCESS_TOKEN SHOPIFY_ADMIN_TOKEN SHOPIFY_STORE_URL SHOPIFY_ADMIN_API_ACCESS_TOKEN 2>/dev/null
+
+# 2. Shell profiles
+grep -h 'SHOPIFY\|myshopify' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
+
+# 3. Doppler — ALL projects, not just default
+for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
+  doppler secrets --project "$proj" --config prd --json 2>/dev/null | \
+    jq -r --arg proj "$proj" 'to_entries[] | select(.key | test("SHOPIFY|STORE"; "i")) | "\(.key)=\(.value.computed) (doppler:\($proj)/prd)"'
+done
+
+# 4. Dashlane — URLs reveal store identity
+dcli password shopify --output json 2>/dev/null | jq -r '.[].url // empty' | grep -oE '[a-z0-9-]+\.myshopify\.com' | sort -u
+
+# 5. Keychain
+security find-generic-password -s "shopify-admin-token" -w 2>/dev/null
+security find-generic-password -s "shopify-access-token" -w 2>/dev/null
+
+# 6. Chrome history — reveals store URLs from admin sessions
+sqlite3 ~/Library/Application\ Support/Google/Chrome/Default/History \
+  "SELECT DISTINCT url FROM urls WHERE url LIKE '%myshopify.com/admin%' OR url LIKE '%admin.shopify.com/store/%' ORDER BY last_visit_time DESC LIMIT 10" 2>/dev/null | \
+  grep -oE '[a-z0-9-]+\.myshopify\.com|admin\.shopify\.com/store/[a-z0-9-]+' | sort -u
+
+# 7. Project .env files
+grep -rhE 'myshopify\.com|SHOPIFY_STORE|SHOPIFY.*TOKEN' ~/Projects/*/.env* 2>/dev/null | grep -v '^#' | head -5
+
+# 8. Existing prefs + userConfig
+jq -r '.ecom.shopify // empty' "$PREFS_PATH" 2>/dev/null
+```
+
+**Token acquisition — automate before asking.** If store URL found but no token:
+
+1. **Doppler deep scan** — check ALL projects/configs (dev, staging, prd)
+2. **Shopify CLI** — if `command -v shopify` succeeds: `shopify auth login --store <store>.myshopify.com` (opens browser OAuth), then generate token
+3. **Browser automation** — if Kapture/Playwright available, navigate to `admin.shopify.com/store/<slug>/settings/apps/development` and automate app creation with scopes: `read_orders,write_orders,read_products,write_products,read_customers,read_inventory,write_inventory,read_fulfillments,write_fulfillments,read_analytics`
+4. **Manual fallback** — only if all automated approaches fail:
 
 ```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- OPS ► ECOM ► SETUP
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-To connect your Shopify store, you need:
-
-1. Store URL (e.g., mystore.myshopify.com)
-2. Admin API access token (shpat_...)
-
-To get your Admin API token:
-  1. Go to your Shopify Admin > Settings > Apps and sales channels
-  2. Click "Develop apps" > "Create an app"
-  3. Under "Configuration", enable Admin API scopes:
-     read_orders, write_orders, read_products, write_products,
-     read_customers, read_inventory, write_inventory,
-     read_fulfillments, write_fulfillments, read_analytics
-  4. Click "Install app" to generate the access token
-  5. Copy the token (starts with shpat_)
-
-Store the credentials via one of:
-  a) Plugin userConfig: set shopify_store_url + shopify_admin_token
-  b) Environment: export SHOPIFY_STORE_URL=... SHOPIFY_ACCESS_TOKEN=...
-  c) Doppler: doppler secrets set SHOPIFY_STORE_URL SHOPIFY_ACCESS_TOKEN
-
-ShipBob (optional):
-  Get your Personal Access Token from app.shipbob.com > Developer > API
-  Store as shipbob_access_token in userConfig or $SHIPBOB_ACCESS_TOKEN
+No automated path for <store>.myshopify.com.
+  1. Go to https://admin.shopify.com/store/<slug>/settings/apps/development
+  2. Create an app → Configure → grant scopes → Install → copy token
+  Token starts with "shpat_"
 ```
 
-Use `AskUserQuestion` to collect store URL, then verify connectivity:
+**Multi-store**: If multiple stores discovered, process each independently. Present all found stores with their token status before asking for input.
+
+Store credentials via: userConfig (preferred) → Doppler → env vars. ShipBob optional — check `SHIPBOB_ACCESS_TOKEN` in same scan.
+
+Verify connectivity after acquisition:
 
 ```bash
 curl -s -H "X-Shopify-Access-Token: ${PROVIDED_TOKEN}" \
