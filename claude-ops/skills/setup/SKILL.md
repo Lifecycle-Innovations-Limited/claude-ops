@@ -1232,16 +1232,34 @@ Validate the input: strip `https://`, strip trailing slash, check that the resul
 
 #### Step 3h.3 — Shopify Admin API token
 
-If `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_ADMIN_TOKEN`, or `SHOPIFY_ADMIN_API_ACCESS_TOKEN` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format with truncated display (`shpat_508b...682e`). Only ask via free text if no value was found:
-```
-Enter your Shopify Admin API access token:
-  To generate one:
-  1. Go to your Shopify admin → Settings → Apps → Develop apps
-  2. Create an app (or select an existing one)
-  3. Under "Configuration", grant the scopes you need (read_orders, read_products, etc.)
-  4. Install the app, then copy the "Admin API access token"
-  Token starts with "shpat_"
-```
+If `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_ADMIN_TOKEN`, or `SHOPIFY_ADMIN_API_ACCESS_TOKEN` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format with truncated display (`shpat_508b...682e`). Only ask via free text if no value was found.
+
+**Multi-store handling**: When multiple stores are discovered, process each one independently. For stores without tokens, try automated approaches first:
+
+1. **Check Doppler across all projects** for store-specific Shopify tokens:
+   ```bash
+   for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
+     doppler secrets --project "$proj" --config prd --json 2>/dev/null | \
+       jq -r 'to_entries[] | select(.key | test("SHOPIFY.*TOKEN|SHOPIFY.*ACCESS"; "i")) | "\(.key)=\(.value.computed | .[0:12])... (doppler:\($ENV.proj)/prd)"'
+   done
+   ```
+2. **Try Shopify CLI** if installed (`command -v shopify`):
+   ```bash
+   shopify auth logout 2>/dev/null  # Clear stale session
+   shopify auth login --store <store>.myshopify.com 2>&1  # Opens browser OAuth
+   ```
+   After successful auth, generate a custom app token via the CLI. This avoids manual admin navigation.
+3. **Browser automation** — if Kapture/Playwright MCP is available, navigate to `https://admin.shopify.com/store/<slug>/settings/apps/development` and automate the "Create an app" → "Configure scopes" → "Install" → "Reveal token" flow. Use scopes: `read_orders,read_products,read_customers,read_inventory,read_fulfillments,read_analytics`.
+4. **Manual fallback** — only if all automated approaches fail:
+   ```
+   No automated path available for <store>.myshopify.com.
+   To generate a token manually:
+     1. Go to https://admin.shopify.com/store/<slug>/settings/apps/development
+     2. Create an app → Configure → grant scopes → Install → copy token
+     Token starts with "shpat_"
+   ```
+
+**Do NOT skip a store** just because no token was found — always attempt automation first. The user expects the wizard to handle credential generation, not just credential lookup.
 
 Save to `$PREFS_PATH` under `ecom.shopify`. Apply the Doppler-reference pattern — if Doppler is configured, run:
 ```bash
