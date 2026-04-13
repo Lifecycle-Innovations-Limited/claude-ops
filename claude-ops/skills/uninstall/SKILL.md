@@ -141,21 +141,89 @@ jq 'del(.mcpServers["<server-name>"])' ~/.claude.json > /tmp/claude-json-tmp && 
 
 ---
 
-## Step 7 — Uninstall plugin and marketplace
+## Step 7 — Remove plugin from Claude Code settings
 
-Run the Claude Code uninstall commands:
+The `/plugin uninstall` UI does not always clean up settings files. Directly remove all ops references from the JSON config files that Claude Code reads on startup.
+
+### 7a — Remove from installed_plugins.json
 
 ```bash
-claude plugin uninstall ops@lifecycle-innovations-limited-claude-ops 2>/dev/null || true
-claude plugin marketplace remove lifecycle-innovations-limited-claude-ops 2>/dev/null || true
+INSTALLED="$HOME/.claude/plugins/installed_plugins.json"
+if [ -f "$INSTALLED" ] && grep -q 'ops.*marketplace' "$INSTALLED"; then
+  python3 -c "
+import json, sys
+with open('$INSTALLED') as f: data = json.load(f)
+keys_to_remove = [k for k in data.get('plugins', {}) if 'ops-marketplace' in k or 'ops@ops' in k]
+for k in keys_to_remove: del data['plugins'][k]
+with open('$INSTALLED', 'w') as f: json.dump(data, f, indent=2)
+print(f'Removed {len(keys_to_remove)} entries from installed_plugins.json')
+"
+else
+  echo "No ops entries in installed_plugins.json"
+fi
 ```
 
-If these commands fail (e.g. not in an interactive Claude Code session), print:
+### 7b — Remove from known_marketplaces.json
 
+```bash
+KNOWN="$HOME/.claude/plugins/known_marketplaces.json"
+if [ -f "$KNOWN" ] && grep -q 'ops-marketplace' "$KNOWN"; then
+  python3 -c "
+import json
+with open('$KNOWN') as f: data = json.load(f)
+keys_to_remove = [k for k in data if 'ops-marketplace' in k or 'ops' in k.lower()]
+for k in keys_to_remove: del data[k]
+with open('$KNOWN', 'w') as f: json.dump(data, f, indent=2)
+print(f'Removed {len(keys_to_remove)} marketplace entries from known_marketplaces.json')
+"
+else
+  echo "No ops marketplace in known_marketplaces.json"
+fi
 ```
-Run these manually in Claude Code:
-  /plugin uninstall ops@lifecycle-innovations-limited-claude-ops
-  /plugin marketplace remove lifecycle-innovations-limited-claude-ops
+
+### 7c — Remove from settings.json and settings.local.json
+
+Both `~/.claude/settings.json` and `~/.claude/settings.local.json` may contain `enabledPlugins` entries and stale `permissions.allow` entries referencing ops-marketplace paths.
+
+```bash
+for SETTINGS_FILE in "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json"; do
+  [ -f "$SETTINGS_FILE" ] || continue
+  if grep -q 'ops' "$SETTINGS_FILE"; then
+    python3 -c "
+import json, re
+with open('$SETTINGS_FILE') as f: data = json.load(f)
+# Remove ops from enabledPlugins
+ep = data.get('enabledPlugins', {})
+ops_keys = [k for k in ep if 'ops' in k.lower()]
+for k in ops_keys: del ep[k]
+# Remove ops-marketplace permission entries
+perms = data.get('permissions', {})
+if 'allow' in perms:
+  before = len(perms['allow'])
+  perms['allow'] = [p for p in perms['allow'] if 'ops-marketplace' not in p and 'claude-ops' not in p]
+  removed = before - len(perms['allow'])
+else:
+  removed = 0
+# Remove ops from extraKnownMarketplaces
+ekm = data.get('extraKnownMarketplaces', {})
+ekm_keys = [k for k in ekm if 'ops' in k.lower()]
+for k in ekm_keys: del ekm[k]
+with open('$SETTINGS_FILE', 'w') as f: json.dump(data, f, indent=2)
+print(f'Cleaned $SETTINGS_FILE: {len(ops_keys)} plugin entries, {removed} permissions, {len(ekm_keys)} extra marketplaces')
+"
+  else
+    echo "No ops references in $SETTINGS_FILE"
+  fi
+done
+```
+
+### 7d — Remove marketplace and cache directories
+
+```bash
+rm -rf "$HOME/.claude/plugins/marketplaces/ops-marketplace" 2>/dev/null
+rm -rf "$HOME/.claude/plugins/cache/ops-marketplace" 2>/dev/null
+rm -rf "$HOME/.claude/plugins/data/ops-inline" 2>/dev/null
+echo "Removed marketplace, cache, and data directories"
 ```
 
 ---
@@ -172,7 +240,10 @@ claude-ops has been completely removed.
   Cache:       deleted
   Shell:       <N> exports removed
   MCP:         <N> servers removed
-  Plugin:      uninstalled
+  Settings:    cleaned (installed_plugins, known_marketplaces, settings)
+  Directories: removed (marketplace, cache, data)
+
+Run `/plugin` in Claude Code to verify ops no longer appears.
 
 To reinstall later:
   /plugin marketplace add Lifecycle-Innovations-Limited/claude-ops
