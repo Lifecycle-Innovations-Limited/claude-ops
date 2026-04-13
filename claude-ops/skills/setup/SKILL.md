@@ -234,41 +234,86 @@ Only go into the credential auto-scan flow below when the user picks "manually" 
 
 ---
 
-#### Shared: credential auto-scan
+---
 
-**Before prompting the user to paste any token**, scan for it in these sources (in order). Show the user what was found and ask them to confirm or override. Never silently use a token without confirmation.
+## Universal Credential Auto-Scan
 
-For each variable name (e.g. `TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN`):
+**BEFORE asking the user for ANY credential**, run this scan sequence. This applies to ALL steps — channels, ecommerce, marketing, voice, and MCPs. The user should never be asked to find a key that's already on their system.
+
+For each variable name (e.g. `TELEGRAM_BOT_TOKEN`, `SHOPIFY_ACCESS_TOKEN`, `KLAVIYO_API_KEY`):
 
 1. **Current shell environment** — `printenv <VAR>`. Running shell inherits exports, Doppler injections, dotenv-loaded files. Most likely to be correct.
 2. **Shell profile files** — grep `~/.zshrc`, `~/.bashrc`, `~/.zprofile`, `~/.config/fish/config.fish`, `~/.envrc` (direnv) for `<VAR>=` or `export <VAR>=`. Show the file path next to the value so the user knows where it's from.
-3. **Doppler** — if `command -v doppler` succeeds:
-   - Run `doppler secrets --json 2>/dev/null` on the current Doppler project (if one is configured). Parse the output.
-   - Also try `doppler secrets get <VAR> --plain 2>/dev/null` for an exact-name match across the default project.
-   - If multiple Doppler projects exist, don't iterate all of them — ask the user which project to scan.
-4. **Installed MCP configs** — read each `.mcp.json` the detector found (`mcp_configured` provides the server names, but we also need the raw files). For each server entry, look at `.env` and `.args` for the variable name or for literal values that look like the target (e.g. `123456:ABC-...` for Telegram tokens, `xoxb-...` / `xoxp-...` for Slack tokens). Show the MCP server name as the source.
-5. **System keychain** — do NOT scan. Keychain access requires user approval and leaks cross-app secrets. Skip.
+3. **Doppler (all projects)** — if `command -v doppler` succeeds:
+   ```bash
+   for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
+     doppler secrets --project "$proj" --config prd --json 2>/dev/null | \
+       jq -r --arg var "$VAR" --arg proj "$proj" \
+       'to_entries[] | select(.key == $var) | "\(.value.computed) (doppler:\($proj)/prd)"'
+   done
+   ```
+   Also try the default project config (dev/staging) if prd fails. Show source attribution `(project: <slug>, config: <config>)`.
+4. **Dashlane CLI** — if `command -v dcli` succeeds:
+   ```bash
+   dcli password "$SERVICE_KEYWORD" --output json 2>/dev/null
+   ```
+   Map service keywords: `shopify` → SHOPIFY vars, `klaviyo` → KLAVIYO vars, `bland` / `bland-ai` → BLAND vars, etc.
+5. **macOS Keychain** — for specific services:
+   ```bash
+   security find-generic-password -s "$SERVICE" -w 2>/dev/null
+   ```
+   Use service names matching common patterns (e.g. `shopify-admin-token`, `klaviyo-api-key`, `bland-ai-api-key`).
+6. **OpenClaw config** — if `~/.openclaw/openclaw.json` exists:
+   ```bash
+   jq -r --arg var "$VAR" '.agents.defaults.env[$var] // empty' ~/.openclaw/openclaw.json 2>/dev/null
+   ```
+7. **Installed MCP configs** — read each `.mcp.json` the detector found. For each server entry, look at `.env` and `.args` for the variable name or for literal values that look like the target. Show the MCP server name as the source.
+8. **Plugin preferences** — check existing `$PREFS_PATH` for the key under the relevant section (e.g. `.ecom.shopify.admin_token`, `.marketing.klaviyo.api_key`). If found and not a `doppler:` reference, show it as a source.
+
+**Env var → service keyword mapping for auto-scan:**
+
+| Variable names | Service keyword (Dashlane/Keychain) |
+| --- | --- |
+| `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_ADMIN_TOKEN`, `SHOPIFY_STORE_URL` | `shopify` |
+| `KLAVIYO_API_KEY`, `KLAVIYO_PRIVATE_KEY` | `klaviyo` |
+| `META_ACCESS_TOKEN`, `FACEBOOK_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID` | `meta`, `facebook` |
+| `GA4_PROPERTY_ID`, `GA_MEASUREMENT_ID` | `google-analytics`, `ga4` |
+| `BLAND_AI_API_KEY`, `BLAND_API_KEY` | `bland-ai`, `bland` |
+| `ELEVENLABS_API_KEY` | `elevenlabs` |
+| `GROQ_API_KEY` | `groq` |
+| `SHIPBOB_ACCESS_TOKEN` | `shipbob` |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | `telegram` |
+| `SLACK_BOT_TOKEN`, `SLACK_MCP_XOXC_TOKEN` | `slack` |
 
 **Present the findings** with `AskUserQuestion`:
 
 ```
-Found credential for TELEGRAM_BOT_TOKEN:
-  [A] shell env ($TELEGRAM_BOT_TOKEN) — 12345...xyz  (last 4 chars shown, never full)
-  [B] ~/.zshrc line 42 — 12345...xyz  (same value — match)
-  [C] Doppler (project: claude-ops, config: dev) — 67890...abc  (different!)
-  [D] .mcp.json / telegram server — ${user_config.telegram_bot_token} (placeholder, not a value)
-  [E] Enter manually
+Found credential for SHOPIFY_ACCESS_TOKEN:
+  [A] shell env ($SHOPIFY_ACCESS_TOKEN) — shpat_508b...682e  (first 8 + last 4 chars)
+  [B] ~/.zshrc line 42 — shpat_508b...682e  (same value — match)
+  [C] Doppler (project: alwaysbright, config: prd) — shpat_9f2c...a17b  (different!)
+  [D] Dashlane (shopify) — shpat_508b...682e  (matches env)
+  [E] Enter a different one
 ```
 
 Rules for the prompt:
 
-- Only show the **last 4 characters** of any token, never the whole thing.
-- If multiple sources have the **same** value, collapse them into one option with `(matched in env + ~/.zshrc)` appended.
-- If sources **disagree**, show them all and flag the mismatch prominently — the user needs to pick which one is authoritative and the wizard should offer to sync the others.
+- Show the **first 8 and last 4 characters** of any token, never the full value.
+- If multiple sources have the **same** value, collapse them into one option with `(matched in env + ~/.zshrc + Dashlane)` appended.
+- If sources **disagree**, show them all and flag the mismatch prominently — the user needs to pick which one is authoritative.
 - Placeholder values like `${user_config.*}`, `<your-token>`, `CHANGE_ME`, or empty strings count as NOT FOUND.
-- Always include an `[Enter manually]` option.
+- Always include an `[Enter a different one]` option.
+- If NO source has a value, then and only then ask the user to provide it — show instructions for where to find it in the service's dashboard.
 
 **On selection**, use the chosen value as the source of truth and — with the user's consent — optionally propagate it back to the other sources (e.g. "Also update ~/.zshrc and Doppler to match?"). Default to NO for propagation unless the user opts in.
+
+---
+
+#### Shared: credential auto-scan
+
+**This section applies specifically to channel tokens (Telegram, Slack).** For all other steps, see the [Universal Credential Auto-Scan](#universal-credential-auto-scan) section above — the same pattern applies everywhere.
+
+**Before prompting the user to paste any token**, scan for it using the Universal Credential Auto-Scan sequence above. Show the user what was found and ask them to confirm or override. Never silently use a token without confirmation.
 
 ---
 
@@ -1082,24 +1127,47 @@ Add to the shortcuts table: `vault`, `password-manager`, `pm` → Step 3g
 
 ### 3h — Ecommerce (Shopify + dynamic partners)
 
-#### Step 3h.1 — Check existing config
+#### Step 3h.1 — Auto-scan for existing Shopify credentials
 
-Check for existing credentials in this order:
+**Before asking for anything**, run the Universal Credential Auto-Scan for all Shopify-related vars simultaneously:
 
-1. `$PREFS_PATH` — look for `ecom.shopify.store_url` and `ecom.shopify.admin_token`
-2. Shell env — `printenv SHOPIFY_STORE_URL`, `printenv SHOPIFY_ADMIN_TOKEN`
-3. Doppler — `doppler secrets get SHOPIFY_ADMIN_TOKEN --plain 2>/dev/null`
+```bash
+# Scan shell env
+printenv SHOPIFY_ACCESS_TOKEN SHOPIFY_ADMIN_TOKEN SHOPIFY_STORE_URL SHOPIFY_ADMIN_API_ACCESS_TOKEN 2>/dev/null
 
-If both `store_url` and `admin_token` are already set, show:
+# Scan shell profiles
+grep -h 'SHOPIFY\|myshopify' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
+
+# Scan Doppler across all projects
+for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
+  doppler secrets --project "$proj" --config prd --json 2>/dev/null | \
+    jq -r --arg proj "$proj" 'to_entries[] | select(.key | test("SHOPIFY|STORE")) | "\(.key)=\(.value.computed) (doppler:\($proj)/prd)"'
+done
+
+# Scan Dashlane
+dcli password shopify --output json 2>/dev/null
+
+# Scan macOS Keychain
+security find-generic-password -s "shopify-admin-token" -w 2>/dev/null
+security find-generic-password -s "shopify-access-token" -w 2>/dev/null
+
+# Scan OpenClaw
+jq -r '.agents.defaults.env | to_entries[] | select(.key | test("SHOPIFY")) | "\(.key)=\(.value)"' ~/.openclaw/openclaw.json 2>/dev/null
+
+# Check existing prefs
+jq -r '.ecom.shopify // empty' "$PREFS_PATH" 2>/dev/null
+```
+
+If both `store_url` and `admin_token` are already found, show:
 ```
 ✓ Shopify — already configured (<store_url>)
   [Keep existing]  [Reconfigure]
 ```
-If the user keeps existing, skip to Step 3h.4. If reconfiguring or not set, continue.
+If the user keeps existing, skip to Step 3h.4. If reconfiguring or no values found, continue.
 
 #### Step 3h.2 — Shopify store URL
 
-Ask via `AskUserQuestion` (free text):
+If `SHOPIFY_STORE_URL` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format. Only ask via free text if no value was found:
 ```
 Enter your Shopify store URL:
   Format: yourstore.myshopify.com
@@ -1110,7 +1178,7 @@ Validate the input: strip `https://`, strip trailing slash, check that the resul
 
 #### Step 3h.3 — Shopify Admin API token
 
-Ask via `AskUserQuestion` (free text):
+If `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_ADMIN_TOKEN`, or `SHOPIFY_ADMIN_API_ACCESS_TOKEN` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format with truncated display (`shpat_508b...682e`). Only ask via free text if no value was found:
 ```
 Enter your Shopify Admin API access token:
   To generate one:
@@ -1161,6 +1229,7 @@ If the user provides partner names, process each one in a loop:
    - The auth header pattern (`Authorization: Bearer`, `X-Api-Key`, custom header, etc.)
 
 2. **Ask for each credential** via `AskUserQuestion` (one question per credential field), citing where to find it based on what the docs say. Example for ShipBob:
+   Run the Universal Credential Auto-Scan for `SHIPBOB_ACCESS_TOKEN`, `SHIPBOB_API_TOKEN` before asking. If found, present with source attribution. Only prompt manually if not found:
    ```
    Enter your ShipBob Personal Access Token:
      To generate: ShipBob dashboard → Integrations → API → Personal Access Tokens → Create Token
@@ -1215,7 +1284,31 @@ For any partner not in this table, always web search for current auth docs befor
 
 ### 3i — Marketing (Klaviyo, Meta Ads, GA4, Search Console)
 
-For each service below, check if already configured (check `$PREFS_PATH` under `marketing.*`, then shell env, then Doppler) before prompting. If already set, show `✓ <service> — already configured` and offer `[Keep]` / `[Reconfigure]`.
+**Before showing the service selector**, run the Universal Credential Auto-Scan for all marketing vars simultaneously:
+
+```bash
+# Shell env
+printenv KLAVIYO_API_KEY KLAVIYO_PRIVATE_KEY META_ACCESS_TOKEN FACEBOOK_ACCESS_TOKEN META_AD_ACCOUNT_ID GA4_PROPERTY_ID GA_MEASUREMENT_ID 2>/dev/null
+
+# Shell profiles
+grep -h 'KLAVIYO\|META_\|FACEBOOK\|GA4\|GA_MEASUREMENT' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
+
+# Doppler across all projects
+for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
+  doppler secrets --project "$proj" --config prd --json 2>/dev/null | \
+    jq -r --arg proj "$proj" 'to_entries[] | select(.key | test("KLAVIYO|META|FACEBOOK|GA4|GOOGLE")) | "\(.key)=\(.value.computed) (doppler:\($proj)/prd)"'
+done
+
+# Dashlane
+dcli password klaviyo --output json 2>/dev/null
+dcli password facebook --output json 2>/dev/null
+dcli password meta --output json 2>/dev/null
+
+# OpenClaw
+jq -r '.agents.defaults.env | to_entries[] | select(.key | test("KLAVIYO|META_|FACEBOOK|GA4")) | "\(.key)=\(.value)"' ~/.openclaw/openclaw.json 2>/dev/null
+```
+
+Cache these results — use them to pre-fill answers for each sub-step below. For each service below, check if already configured (check `$PREFS_PATH` under `marketing.*`, then the auto-scan results above) before prompting. If already set, show `✓ <service> — already configured` and offer `[Keep]` / `[Reconfigure]`.
 
 Ask which marketing integrations to configure via `AskUserQuestion` with `multiSelect: true`:
 
@@ -1228,7 +1321,7 @@ Ask which marketing integrations to configure via `AskUserQuestion` with `multiS
 
 #### Klaviyo
 
-Ask for the private API key:
+If `KLAVIYO_API_KEY` or `KLAVIYO_PRIVATE_KEY` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format. Only ask via free text if not found:
 ```
 Enter your Klaviyo Private API Key:
   To generate one: Klaviyo dashboard → Settings → API Keys → Create Private Key
@@ -1245,6 +1338,8 @@ Expect a number ≥ 0. If the response contains `"detail"` with an auth error, s
 
 #### Meta Ads
 
+If `META_ACCESS_TOKEN` or `FACEBOOK_ACCESS_TOKEN` was found in the auto-scan, present it. If `META_AD_ACCOUNT_ID` was found, present that too. Only ask via free text for values not found.
+
 Ask for:
 1. Access token (explain: Meta Business Suite → Settings → System Users or your personal account → Generate token with `ads_read` permission)
 2. Ad account ID (format: `act_XXXXXXXXXX` — found in Business Manager → Ad Accounts)
@@ -1256,7 +1351,7 @@ curl -s "https://graph.facebook.com/v20.0/$AD_ACCOUNT_ID/campaigns?access_token=
 
 #### Google Analytics 4
 
-Ask for the GA4 Property ID (explain: GA4 dashboard → Admin → Property Settings → Property ID, format: numeric, e.g. `123456789`).
+If `GA4_PROPERTY_ID` or `GA_MEASUREMENT_ID` was found in the auto-scan, present it. Only ask via free text if not found. Ask for the GA4 Property ID (explain: GA4 dashboard → Admin → Property Settings → Property ID, format: numeric, e.g. `123456789`).
 
 No API key needed if `gcloud` is authenticated — the GA4 Data API uses Application Default Credentials. Check:
 ```bash
@@ -1341,7 +1436,31 @@ For any partner not in this table, always web search for current auth docs befor
 
 ### 3j — Voice (Bland AI, ElevenLabs, Groq)
 
-Check existing config in `$PREFS_PATH` under `voice.*`, shell env, and Doppler before prompting each one.
+**Before showing the service selector**, run the Universal Credential Auto-Scan for all voice vars simultaneously:
+
+```bash
+# Shell env
+printenv BLAND_AI_API_KEY BLAND_API_KEY ELEVENLABS_API_KEY GROQ_API_KEY 2>/dev/null
+
+# Shell profiles
+grep -h 'BLAND\|ELEVENLABS\|GROQ' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
+
+# Doppler across all projects
+for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
+  doppler secrets --project "$proj" --config prd --json 2>/dev/null | \
+    jq -r --arg proj "$proj" 'to_entries[] | select(.key | test("BLAND|ELEVENLABS|GROQ")) | "\(.key)=\(.value.computed) (doppler:\($proj)/prd)"'
+done
+
+# Dashlane
+dcli password "bland-ai" --output json 2>/dev/null
+dcli password elevenlabs --output json 2>/dev/null
+dcli password groq --output json 2>/dev/null
+
+# OpenClaw (common location for AI service keys)
+jq -r '.agents.defaults.env | to_entries[] | select(.key | test("BLAND|ELEVENLABS|GROQ")) | "\(.key)=\(.value)"' ~/.openclaw/openclaw.json 2>/dev/null
+```
+
+Cache these results — use them to pre-fill answers for each sub-step below. Check existing config in `$PREFS_PATH` under `voice.*` too. If a key is already set, show `✓ <service> — already configured` and offer `[Keep]` / `[Reconfigure]`.
 
 Ask which voice services to configure via `AskUserQuestion` with `multiSelect: true`:
 
@@ -1353,7 +1472,7 @@ Ask which voice services to configure via `AskUserQuestion` with `multiSelect: t
 
 #### Bland AI
 
-Ask for the API key:
+If `BLAND_AI_API_KEY` or `BLAND_API_KEY` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format. Only ask via free text if not found:
 ```
 Enter your Bland AI API Key:
   To find it: https://app.bland.ai → Settings → API Key
@@ -1367,7 +1486,7 @@ Expect a non-null user ID.
 
 #### ElevenLabs
 
-Ask for the API key:
+If `ELEVENLABS_API_KEY` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format. Only ask via free text if not found:
 ```
 Enter your ElevenLabs API Key:
   To find it: https://elevenlabs.io → Profile (top-right) → API Key
@@ -1381,7 +1500,7 @@ Expect a subscription tier string (e.g. `"free"`, `"starter"`).
 
 #### Groq
 
-Ask for the API key:
+If `GROQ_API_KEY` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format. Only ask via free text if not found:
 ```
 Enter your Groq API Key:
   To generate one: https://console.groq.com → API Keys → Create API Key
