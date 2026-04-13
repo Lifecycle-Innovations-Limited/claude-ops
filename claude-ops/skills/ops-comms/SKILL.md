@@ -9,9 +9,9 @@ allowed-tools:
   - Glob
   - Skill
   - AskUserQuestion
-  - mcp__claude_ai_Gmail__gmail_search_messages
-  - mcp__claude_ai_Gmail__gmail_read_thread
-  - mcp__claude_ai_Gmail__gmail_create_draft
+  - mcp__claude_ai_Gmail__search_threads
+  - mcp__claude_ai_Gmail__get_thread
+  - mcp__claude_ai_Gmail__create_draft
   - mcp__claude_ai_Slack__slack_send_message
   - mcp__claude_ai_Slack__slack_read_channel
   - mcp__claude_ai_Slack__slack_search_users
@@ -128,7 +128,7 @@ Use `mcp__claude_ai_Slack__slack_send_message` with resolved channel/user ID.
 
 ### Email send (draft)
 
-Use `mcp__claude_ai_Gmail__gmail_create_draft` — always create draft first. Then use `AskUserQuestion`:
+Use `mcp__claude_ai_Gmail__create_draft` — always create draft first. Then use `AskUserQuestion`:
 ```
 Draft created for [recipient]:
   Subject: [subject]
@@ -150,7 +150,7 @@ wacli chats --limit 10 --json 2>/dev/null
 Show last 10 chats with sender, preview, timestamp.
 
 **Email:**
-Use `mcp__claude_ai_Gmail__gmail_search_messages` with `query: "is:unread"`, show thread list.
+Use `mcp__claude_ai_Gmail__search_threads` with `query: "is:unread"`, show thread list.
 
 **Slack:**
 Use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "is:unread"`.

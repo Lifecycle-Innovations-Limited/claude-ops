@@ -1747,6 +1747,8 @@ wacli history backfill --chat="JID" --count=50 --requests=2 --wait=30s --idle-ex
 wacli contacts --search "name" --json
 ```
 
+> After setup, the memory-extractor daemon service will populate `memories/contact_*.md` from this contact data.
+
 ### Slack token validation
 
 ```bash

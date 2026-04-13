@@ -1,6 +1,9 @@
 ---
 name: ops-daemon-manager
 description: Manages the ops background daemon — start, stop, restart services, check health
+model: claude-sonnet-4-6
+effort: low
+maxTurns: 10
 memory: project
 ---
 

@@ -1,6 +1,9 @@
 ---
 name: memory-extractor
 description: Background agent that extracts user profiles, contact cards, and behavioral patterns from chat history. Runs as a daemon service every 30 min.
+model: claude-haiku-4-5-20251001
+effort: low
+maxTurns: 10
 memory: project
 ---
 

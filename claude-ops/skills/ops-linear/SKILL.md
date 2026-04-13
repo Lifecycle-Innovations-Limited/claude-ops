@@ -12,18 +12,14 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
   - WebFetch
-  - mcp__claude_ai_Linear__list_issues
-  - mcp__claude_ai_Linear__list_cycles
-  - mcp__claude_ai_Linear__list_teams
-  - mcp__claude_ai_Linear__list_projects
-  - mcp__claude_ai_Linear__get_issue
-  - mcp__claude_ai_Linear__save_issue
-  - mcp__claude_ai_Linear__get_team
-  - mcp__claude_ai_Linear__list_users
-  - mcp__claude_ai_Linear__save_comment
-  - mcp__claude_ai_Linear__list_issue_statuses
-  - mcp__claude_ai_Linear__get_milestone
-  - mcp__claude_ai_Linear__list_milestones
+  - mcp__linear__list_issues
+  - mcp__linear__list_teams
+  - mcp__linear__list_projects
+  - mcp__linear__get_issue
+  - mcp__linear__update_issue
+  - mcp__linear__create_issue
+  - mcp__linear__create_comment
+  - mcp__linear__search_issues
 effort: medium
 maxTurns: 30
 ---
@@ -58,11 +54,10 @@ Before executing, load available context:
 
 Run in parallel:
 
-1. `mcp__claude_ai_Linear__list_teams` — get all team IDs
-2. `mcp__claude_ai_Linear__list_cycles` — get current and upcoming cycles per team
-3. `mcp__claude_ai_Linear__list_users` — get team members
+1. `mcp__linear__list_teams` — get all team IDs
+2. `mcp__linear__list_issues` — get issues with cycle filter (use GraphQL fallback for cycle queries if needed)
 
-Then fetch issues for the current cycle: `mcp__claude_ai_Linear__list_issues` filtered to current cycle ID.
+Then fetch issues for the current cycle: `mcp__linear__list_issues` filtered to current cycle ID.
 
 ---
 
@@ -125,7 +120,7 @@ Collect from user (or parse from `$ARGUMENTS`):
 - Assignee (optional)
 - Estimate (optional)
 
-Use `mcp__claude_ai_Linear__save_issue` to create. Confirm: `Created [id]: [title]`
+Use `mcp__linear__create_issue` to create. Confirm: `Created [id]: [title]`
 
 ---
 

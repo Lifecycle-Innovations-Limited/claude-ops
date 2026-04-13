@@ -11,9 +11,9 @@ tools:
   - Glob
   - Edit
   - Write
-  - mcp__claude_ai_Linear__get_issue
-  - mcp__claude_ai_Linear__save_issue
-  - mcp__claude_ai_Linear__save_comment
+  - mcp__linear__get_issue
+  - mcp__linear__update_issue
+  - mcp__linear__create_comment
 disallowedTools:
   - Agent
 memory: project

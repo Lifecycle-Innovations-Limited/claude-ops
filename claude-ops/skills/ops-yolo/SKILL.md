@@ -23,11 +23,10 @@ allowed-tools:
   - Monitor
   - WebFetch
   - WebSearch
-  - mcp__claude_ai_Linear__list_issues
-  - mcp__claude_ai_Linear__list_cycles
+  - mcp__linear__list_issues
   - mcp__claude_ai_Vercel__list_deployments
   - mcp__claude_ai_Slack__slack_search_public_and_private
-  - mcp__claude_ai_Gmail__gmail_search_messages
+  - mcp__claude_ai_Gmail__search_threads
 effort: high
 model: claude-opus-4-6
 maxTurns: 50

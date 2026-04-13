@@ -10,8 +10,7 @@ tools:
   - Write
   - Grep
   - Glob
-  - mcp__claude_ai_Linear__list_issues
-  - mcp__claude_ai_Linear__list_cycles
+  - mcp__linear__list_issues
 disallowedTools:
   - Edit
   - Agent

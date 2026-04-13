@@ -18,11 +18,12 @@ allowed-tools:
   - WebFetch
   - WebSearch
   - LSP
-  - mcp__sentry__authenticate
-  - mcp__claude_ai_Linear__list_issues
-  - mcp__claude_ai_Linear__save_issue
-  - mcp__claude_ai_Linear__get_issue
-  - mcp__claude_ai_Linear__list_teams
+  - mcp__sentry__search_issues
+  - mcp__sentry__get_issue_details
+  - mcp__linear__list_issues
+  - mcp__linear__update_issue
+  - mcp__linear__get_issue
+  - mcp__linear__list_teams
 effort: high
 model: claude-opus-4-6
 maxTurns: 40
@@ -110,7 +111,7 @@ Otherwise run: `echo "Sentry MCP not available"`
 
 ### Linear
 
-Use `mcp__claude_ai_Linear__list_teams` to get team IDs, then `mcp__claude_ai_Linear__list_issues` with `filter: {state: {type: {in: ["unstarted", "started"]}}}` for each team.
+Use `mcp__linear__list_teams` to get team IDs, then `mcp__linear__list_issues` with `filter: {state: {type: {in: ["unstarted", "started"]}}}` for each team.
 
 ---
 
@@ -149,7 +150,7 @@ If user picks "Review each one", show each issue individually with `[Resolve]` /
 For confirmed issues:
 
 - **Sentry**: use Sentry MCP to resolve the issue
-- **Linear**: use `mcp__claude_ai_Linear__save_issue` with `state: "Done"`
+- **Linear**: use `mcp__linear__update_issue` with `state: "Done"`
 - **GitHub**: `gh issue close [N] --comment "Auto-closed: fix confirmed deployed"`
 
 Log all resolutions.

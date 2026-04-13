@@ -17,7 +17,8 @@ allowed-tools:
   - Monitor
   - WebFetch
   - WebSearch
-  - mcp__sentry__authenticate
+  - mcp__sentry__search_issues
+  - mcp__sentry__get_issue_details
 effort: medium
 maxTurns: 30
 ---

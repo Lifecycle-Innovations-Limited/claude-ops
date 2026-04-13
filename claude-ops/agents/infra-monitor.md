@@ -64,6 +64,8 @@ done
 
 Fetch via `mcp__claude_ai_Vercel__list_projects`, then for each project call `mcp__claude_ai_Vercel__list_deployments` with limit 3.
 
+> If Vercel MCP tools are unavailable, fall back to `vercel` CLI via Bash: `vercel list --json 2>/dev/null` for projects and `vercel inspect <url> --json 2>/dev/null` for deployment details.
+
 ### GitHub Actions (recent runs, registry-driven)
 
 ```bash

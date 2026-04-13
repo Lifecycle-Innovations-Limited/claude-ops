@@ -13,8 +13,7 @@ allowed-tools:
   - TaskCreate
   - TaskUpdate
   - WebFetch
-  - mcp__claude_ai_Linear__list_issues
-  - mcp__claude_ai_Linear__list_cycles
+  - mcp__linear__list_issues
   - mcp__claude_ai_Slack__slack_search_public_and_private
 effort: low
 maxTurns: 15
@@ -106,7 +105,7 @@ Check: `gh pr list --state open --json number,title,statusCheckRollup,reviewDeci
 
 ### Priority 4 — LINEAR SPRINT
 
-Fetch current sprint issues: use `mcp__claude_ai_Linear__list_cycles` then `mcp__claude_ai_Linear__list_issues` filtered to current cycle.
+Fetch current sprint issues: use `mcp__linear__list_issues` filtered to current cycle (use Linear GraphQL fallback for cycle queries if needed).
 Find highest-priority issue that is in progress or unstarted.
 
 ### Priority 5 — GSD WORK
