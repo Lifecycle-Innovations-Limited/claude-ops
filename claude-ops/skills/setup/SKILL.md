@@ -17,17 +17,36 @@ maxTurns: 80
 
 You are running an **interactive configuration wizard** for the `claude-ops` plugin. The user wants you to walk them through every step needed to get the plugin working: installing CLIs, setting env vars, configuring channels, populating the project registry, and saving preferences.
 
-**Hard rules:**
+---
+
+**RULE ZERO — EVERY BASH CALL USES `run_in_background: true`**
+
+This is non-negotiable. EVERY SINGLE Bash tool call in this entire setup wizard MUST set `run_in_background: true`. There are ZERO exceptions. This applies to:
+- Credential scans, CLI installs, OAuth flows, npm/brew installs
+- Daemon starts, daemon reloads, launchctl commands
+- Keychain writes, Doppler queries, Chrome history queries
+- Autolink scripts, sync/backfill, smoke tests
+- File writes, config writes, env appends
+- ANY command, no matter how fast you think it will be
+
+While background commands run, immediately continue to the next independent step or ask the user the next question. Handle results when the `<task-notification>` arrives. The setup wizard must NEVER show `(ctrl+b to run in background)` — if the user sees that prompt, you violated this rule.
+
+**RULE ONE — SILENT BASH CALLS**
+
+Every Bash tool call MUST include a short `description` parameter (5-10 words, e.g. "Install missing CLIs", "Scout keychain for Telegram creds", "Reload daemon"). This is what the user sees instead of the raw command. Keep setup clean and quiet — the user should see progress titles, not shell scripts.
+
+---
+
+**Other hard rules:**
 
 - This is a _conversation_, not a script dump. Use `AskUserQuestion` for every decision — never ask in prose when a structured selector will do.
-- Never install anything or write any file without explicit user confirmation via `AskUserQuestion`.
+- Confirm actions via `AskUserQuestion` where the user hasn't already opted in (e.g., "Configure all" covers everything — no per-action confirmation needed after that).
 - Skip sections the user declines. Don't nag.
 - **NEVER auto-skip a channel or integration.** Every channel/service the user selected must get an explicit `AskUserQuestion` with skip as one of the options. If a credential isn't found, present the [Paste manually] / [Deep hunt] / [Skip] options. If a smoke test fails, ask the user whether to retry, reconfigure, or skip. The ONLY acceptable way to skip is the user choosing a "Skip" option. Do not silently move past a service because scanning found nothing — that's when the user needs to be asked the most.
 - Show what's already configured first, so the user only fills gaps.
 - **Never show the user's real name or email in output unless the user explicitly provided it in THIS session.** Do not read from memory, existing configs, or environment variables to populate display names.
 - **Max 4 options per `AskUserQuestion` call.** The tool schema enforces `<=4` items in the `options` array. When a step lists >4 choices, filter already-configured items first, then batch the rest into multiple sequential calls of <=4 options each, grouped logically. Use `[More options...]` as the last option to bridge between batches.
 - Run ALL diagnostic/probe commands in parallel when possible. Use multiple Bash tool calls in a single message. Never run sequential probes when they're independent (e.g., `gog auth status` AND `wacli doctor` AND keychain scouts should all run simultaneously).
-- **Auto-background ALL Bash commands during setup.** Use `run_in_background: true` on every Bash call unless you need the result immediately to make the next decision. This includes: credential scans, CLI installs, OAuth flows, npm installs, brew installs, sync/backfill, smoke tests, keychain writes, Doppler queries, Chrome history queries, autolink scripts. While commands run in background, continue to the next independent step or ask the user the next question. Check results when the notification arrives. The setup wizard should never block on a command the user isn't waiting for.
 - All writes go to one of these paths — and nothing else:
   - **`$PREFS_PATH`** — per-user preferences + secrets. Resolves to `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`. Lives in Claude Code's plugin data dir so it survives plugin reinstalls and version bumps. Never committed to git.
   - **`${CLAUDE_PLUGIN_ROOT}/scripts/registry.json`** — per-user project registry (gitignored in the source repo). `mkdir -p` its parent if missing.
@@ -289,12 +308,15 @@ Install the ops background daemon now?
   [Yes — install now]  [Skip — I'll run it manually later]
 ```
 
-On `Yes`, run the install (use `run_in_background: true` per Rule 4 — this runs in parallel with the next wizard steps):
+On `Yes`, run the install (use `run_in_background: true` — RULE ZERO):
 
 ```bash
-DAEMON_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh"
+# Always resolve CLAUDE_PLUGIN_ROOT to the CURRENT installed version — never hardcode a version number.
+# If CLAUDE_PLUGIN_ROOT is not set, detect it from the plugin cache:
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1)}"
+DAEMON_SCRIPT="${PLUGIN_ROOT}/scripts/ops-daemon.sh"
 chmod +x "$DAEMON_SCRIPT"
-PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/scripts/com.claude-ops.daemon.plist"
+PLIST_TEMPLATE="${PLUGIN_ROOT}/scripts/com.claude-ops.daemon.plist"
 PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.daemon.plist"
 DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 LOG_DIR="$DATA_DIR/logs"
@@ -2115,8 +2137,10 @@ After auto-discovery (or if the user selects "I'll enter projects manually"):
   - `revenue.stage` → select `[pre-launch]`, `[development]`, `[growth]`, `[active]`
   - `gsd` → select `[Yes]`, `[No]`
   - `priority` (1-99, defaults to max+1)
+- Ensure the registry directory exists: `mkdir -p "${CLAUDE_PLUGIN_ROOT}/scripts"`. If the write fails due to permissions (plugin cache dirs can be read-only), fall back to writing at `$DATA_DIR/registry.json` and symlink it.
 - Read the current registry with `jq`, append the new project, write back atomically (`jq ... > tmp && mv tmp registry.json`).
 - After each addition, print the running count and offer `[Add another]` / `[Done]`.
+- The registry agent (if spawned) MUST have write access to the target path. If it can't write, the setup wizard should write the file itself from the agent's returned JSON — do not ask the user to intervene.
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-projects/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for the project registry (auto-discovery, registry schema, GSD filters, priority ordering). The setup agent can load that file directly when it needs more depth than this wizard provides.
 
@@ -2202,16 +2226,27 @@ Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with 
 - `competitor-intel`: `{ "enabled": true, "cron": "0 10 * * 1" }` — weekly Monday 10am
 - `message-listener`: `{ "enabled": true, "interval": "continuous" }` — only if WhatsApp or Telegram configured
 
-After rewriting the services config, reload the daemon so it picks up the new services:
+After rewriting the services config, do a quick health check (foreground, <2s), then background the reload:
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.claude-ops.daemon
+# Quick health check — foreground (fast)
+test -f "$DATA_DIR/daemon-services.json" && echo "✓ Daemon services config written — N services enabled"
 ```
 
-Write `daemon.enabled = true` and `daemon.services` (the reconciled array) to `$PREFS_PATH`. Print a summary:
+Then **background** the actual daemon reload — it can be slow:
+
+```bash
+# Background — daemon reload is slow, don't block setup
+launchctl kickstart -k gui/$(id -u)/com.claude-ops.daemon 2>&1 && echo "✓ Daemon reloaded" || echo "⚠ Daemon kick failed (may still be running)"
+```
+
+Use `run_in_background: true` on the reload command. Do NOT wait for it — continue immediately to the next step. The daemon will pick up the new config on its own cycle even if kickstart is slow.
+
+Write `daemon.enabled = true` and `daemon.services` (the reconciled array) to `$PREFS_PATH`. Print:
 
 ```
 ✓ Daemon services reconciled — N services enabled (briefing-pre-warm, memory-extractor, wacli-sync, ...)
+  Daemon reloading in background.
 ```
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/docs/daemon-guide.md` for full operational instructions, CLI reference, and troubleshooting for the background daemon (service lifecycle, launchctl/systemd integration, health reporting, reconciliation semantics). The setup agent can load that file directly when it needs more depth than this wizard provides.
