@@ -1,6 +1,6 @@
 ---
 name: ops-speedup
-description: Cross-platform system speedup and cleanup. Auto-detects macOS/Linux/WSL, scans for reclaimable disk space, memory pressure, runaway processes, startup bloat, network issues. CleanMyMac built into Claude Code.
+description: Cross-platform, hardware-adaptive system optimizer. Auto-detects macOS / Linux / WSL / Windows (MINGW/Cygwin/MSYS2) and CPU/RAM/disk/GPU profile, then picks the right cleanup strategy. Scans reclaimable disk space, memory pressure, runaway processes, startup bloat, network issues. CleanMyMac built into Claude Code.
 argument-hint: "[scan|clean|deep|auto]"
 allowed-tools:
   - Bash
