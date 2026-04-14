@@ -9,6 +9,8 @@ allowed-tools:
   - Grep
   - Glob
   - Agent
+  - TeamCreate
+  - SendMessage
   - AskUserQuestion
   - WebFetch
   - WebSearch
@@ -69,6 +71,24 @@ Before executing, load available context:
 | `https://searchconsole.googleapis.com/webmasters/v3/sites/${GSC_SITE_ENCODED}/searchAnalytics/query` | POST | Search performance data |
 
 **Auth**: Same gcloud ADC token as GA4
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when gathering channel data in parallel. This enables:
+- Agents share context and can coordinate mid-flight
+- You can steer priorities in real-time
+- Agents report progress as they complete
+
+**Team setup** (only when flag is enabled):
+```
+TeamCreate("marketing-team")
+Agent(team_name="marketing-team", name="email-metrics", prompt="Pull Klaviyo subscriber counts, campaign stats, and flow metrics")
+Agent(team_name="marketing-team", name="ads-metrics", prompt="Pull Meta Ads spend, ROAS, and campaign breakdown")
+Agent(team_name="marketing-team", name="analytics-metrics", prompt="Pull GA4 sessions, conversions, and traffic sources")
+Agent(team_name="marketing-team", name="seo-metrics", prompt="Pull Search Console clicks, impressions, and top queries")
+```
+
+If the flag is NOT set, use standard fire-and-forget subagents.
 
 ## Credential Resolution
 
