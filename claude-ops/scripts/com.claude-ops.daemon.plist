@@ -7,7 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
+        <string>__BASH_PATH__</string>
         <string>__DAEMON_SCRIPT_PATH__</string>
     </array>
 
@@ -32,6 +32,8 @@
         <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
+        <key>CLAUDE_PLUGIN_ROOT</key>
+        <string>__PLUGIN_ROOT__</string>
     </dict>
 </dict>
 </plist>
