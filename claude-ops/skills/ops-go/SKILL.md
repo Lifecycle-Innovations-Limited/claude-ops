@@ -171,7 +171,7 @@ Use `CronCreate` to set up the schedule. Show existing schedules with `CronList`
 
 ### WebFetch — calendar enrichment
 
-When `gog cal` fails, use `WebFetch` with the Google Calendar API as fallback:
+When `gog calendar` fails, use `WebFetch` with the Google Calendar API as fallback:
 ```
 WebFetch(url: "https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=<today>T00:00:00Z&timeMax=<today>T23:59:59Z")
 ```
