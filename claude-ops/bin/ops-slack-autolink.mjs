@@ -33,11 +33,7 @@ import { homedir, userInfo } from "node:os";
 import { join, basename } from "node:path";
 import { parseArgs } from "node:util";
 import { execSync } from "node:child_process";
-import {
-  osId,
-  isWsl,
-  browserProfileDirs,
-} from "../lib/os-detect.mjs";
+import { osId, isWsl, browserProfileDirs } from "../lib/os-detect.mjs";
 import {
   setCredential,
   getCredential,
@@ -343,7 +339,10 @@ async function detectBrowserProfiles() {
   if (OS_ID === "macos") {
     const appSupport = join(home, "Library", "Application Support");
     const extras = [
-      { name: "Google Chrome Beta", dir: join(appSupport, "Google", "Chrome Beta") },
+      {
+        name: "Google Chrome Beta",
+        dir: join(appSupport, "Google", "Chrome Beta"),
+      },
       { name: "Microsoft Edge", dir: join(appSupport, "Microsoft Edge") },
       { name: "Opera", dir: join(appSupport, "com.operasoftware.Opera") },
       { name: "Comet", dir: join(appSupport, "Comet") },
@@ -897,8 +896,7 @@ async function resolvePlaywrightProfileDir() {
 
   // Nothing pre-existing — use an XDG-compliant fresh profile.
   const xdgData =
-    process.env.XDG_DATA_HOME ||
-    join(homedir(), ".local", "share");
+    process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
   return join(xdgData, "claude-ops", "chromium-profile");
 }
 
