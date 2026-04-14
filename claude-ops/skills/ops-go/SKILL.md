@@ -73,7 +73,7 @@ If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when gat
 ```
 TeamCreate("go-team")
 Agent(team_name="go-team", name="infra-scanner", prompt="Check ECS health, Vercel status, and CI failures across all clusters")
-Agent(team_name="go-team", name="inbox-scanner", prompt="Scan unread messages across WhatsApp, Email, Slack, Telegram")
+Agent(team_name="go-team", name="inbox-scanner", prompt="Scan unread messages across WhatsApp, Email, Slack, Telegram, Notion")
 Agent(team_name="go-team", name="pr-scanner", prompt="Find open PRs needing action — reviews, CI fixes, merge-ready")
 Agent(team_name="go-team", name="sprint-scanner", prompt="Check Linear sprint progress and GSD phase state across projects")
 ```
@@ -155,7 +155,7 @@ PORTFOLIO DASHBOARD
 [table: project, phase, branch, uncommitted, CI, next action]
 
 UNREAD
-[WhatsApp: N, Email: N, Slack: check MCP, Calendar: N events today]
+[WhatsApp: N, Email: N, Slack: check MCP, Notion: N items, Calendar: N events today]
 
 TODAY'S PRIORITIES (ranked by revenue impact + urgency)
 1. [action] — [project] — [why]
@@ -172,6 +172,8 @@ If `$ARGUMENTS` contains a project alias, focus the briefing on that project onl
 After the briefing, use **batched AskUserQuestion calls** (max 4 options each) for the "What's next?" prompt. Show the top 3 priority actions + `[More...]` in the first call, then remaining actions + `[/ops-yolo — let me run your business today]` in the second call. Route to the appropriate ops skill or project.
 
 For Slack counts: if the pre-gathered data shows `"count": -1`, use `mcp__claude_ai_Slack__slack_search_public_and_private` with query `in:channel` (NOT `is:unread` — scan full recent activity) to get actual message counts. Do this as a parallel tool call while analyzing other data.
+
+For Notion counts: if `NOTION_MCP_ENABLED=true` and pre-gathered data shows Notion as available, use `mcp__claude_ai_Notion__notion-search` with `query: "comment"` filtered to the last 7 days to surface recent comments and mentions. Count items needing response.
 
 ---
 

@@ -107,4 +107,12 @@ else
   RESULT=$(echo "$RESULT" | jq '.channels.telegram = {"unread": null, "available": false, "note": "Set TELEGRAM_ENABLED=true when user-auth MCP (tdlib/MTProto) is configured"}')
 fi
 
+# ── Notion — MCP-based, check env ──
+NOTION_ENABLED="${NOTION_MCP_ENABLED:-false}"
+if [ "$NOTION_ENABLED" = "true" ]; then
+  RESULT=$(echo "$RESULT" | jq '.channels.notion = {"unread": null, "available": true, "note": "Scan via Notion MCP tools (search, fetch, comments)"}')
+else
+  RESULT=$(echo "$RESULT" | jq '.channels.notion = {"unread": null, "available": false, "note": "Set NOTION_MCP_ENABLED=true when Notion MCP integration is configured"}')
+fi
+
 echo "$RESULT"
