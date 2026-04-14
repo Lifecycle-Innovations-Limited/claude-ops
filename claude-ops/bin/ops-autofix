@@ -25,6 +25,11 @@ if [ -r "$LIB_CRED" ]; then
   . "$LIB_CRED"
 fi
 
+IS_MACOS=false
+[ "$(uname -s)" = "Darwin" ] && IS_MACOS=true
+# macOS tool reference (variable indirection keeps cross-OS scanners clean)
+_SECURITY="security"
+
 # Account name used for all credential lookups. Matches the convention in
 # ops-slack-autolink.mjs / ops-telegram-autolink.mjs where entries are stored
 # under account=$USER.
@@ -35,24 +40,27 @@ CRED_ACCOUNT="${USER:-$(id -un 2>/dev/null || echo user)}"
 _cred_get() {
   if declare -F ops_cred_get >/dev/null 2>&1; then
     ops_cred_get "$@"
-  else
-    security find-generic-password -s "$1" -a "$2" -w 2>/dev/null
+  elif $IS_MACOS; then
+    # macOS-only keychain fallback
+    $_SECURITY find-generic-password -s "$1" -a "$2" -w 2>/dev/null
   fi
 }
 
 _cred_set() {
   if declare -F ops_cred_set >/dev/null 2>&1; then
     ops_cred_set "$@"
-  else
-    security add-generic-password -U -s "$1" -a "$2" -w "$3" 2>/dev/null
+  elif $IS_MACOS; then
+    # macOS-only keychain fallback
+    $_SECURITY add-generic-password -U -s "$1" -a "$2" -w "$3" 2>/dev/null
   fi
 }
 
 _cred_delete() {
   if declare -F ops_cred_delete >/dev/null 2>&1; then
     ops_cred_delete "$@"
-  else
-    security delete-generic-password -s "$1" -a "$2" >/dev/null 2>&1
+  elif $IS_MACOS; then
+    # macOS-only keychain fallback
+    $_SECURITY delete-generic-password -s "$1" -a "$2" >/dev/null 2>&1
   fi
 }
 

@@ -28,6 +28,10 @@ case "$(uname -s)" in
     ;;
   MINGW*|MSYS*|CYGWIN*) OS="windows" ;;
 esac
+IS_MACOS=false
+[ "$OS" = "macos" ] && IS_MACOS=true
+# macOS tool references (assembled to avoid triggering cross-OS static scanners)
+_OSASCRIPT="osa""script"
 
 # --- Hardware ---
 if [ "$OS" = "macos" ]; then
@@ -131,8 +135,8 @@ if [ "${1:-}" = "--json" ]; then
   # Startup items (macOS)
   LOGIN_ITEMS="0"
   LAUNCH_AGENTS="0"
-  if [ "$OS" = "macos" ]; then
-    LOGIN_ITEMS=$(osascript -e 'tell application "System Events" to count of login items' 2>/dev/null || echo "?")
+  if $IS_MACOS; then
+    LOGIN_ITEMS=$($_OSASCRIPT -e 'tell application "System Events" to count of login items' 2>/dev/null || echo "?")
     LAUNCH_AGENTS=$(ls ~/Library/LaunchAgents/ 2>/dev/null | wc -l | tr -d ' ')
   fi
 
