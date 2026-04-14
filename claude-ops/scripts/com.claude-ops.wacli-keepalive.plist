@@ -7,7 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
+        <string>__BASH_PATH__</string>
         <string>__KEEPALIVE_SCRIPT_PATH__</string>
     </array>
 
