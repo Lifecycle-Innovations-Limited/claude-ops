@@ -155,11 +155,29 @@ Branch: <headRefName>
 <classification-specific instructions>
 
 For needs-rebase:
-  1. Create worktree from the PR branch
-  2. Rebase on <baseBranchRef>: `git rebase <base>`
-  3. Resolve any conflicts (prefer incoming for .planning/, prefer HEAD for code)
-  4. Push with --force-with-lease --no-verify
-  5. Verify PR is now MERGEABLE
+  1. Create worktree: `git worktree add /tmp/ops-rebase-<pr-number> <headRefName>`
+  2. cd into worktree: `cd /tmp/ops-rebase-<pr-number>`
+  3. Fetch latest: `git fetch origin`
+  4. Attempt rebase: `git rebase origin/<baseBranchRef> 2>&1`
+  5. If rebase SUCCEEDS (exit 0):
+     - Push force-with-lease: `git push --force-with-lease origin <headRefName>`
+     - Clean up worktree: `git worktree remove /tmp/ops-rebase-<pr-number> --force`
+     - Report: `✓ Rebased <repo>#<number> — conflict resolved`
+  6. If rebase FAILS (exit non-zero):
+     - Capture the conflicting files: `git diff --name-only --diff-filter=U`
+     - Show the diff: `git diff HEAD`
+     - Abort the rebase: `git rebase --abort`
+     - Clean up worktree: `git worktree remove /tmp/ops-rebase-<pr-number> --force`
+     - Surface to orchestrator with the diff output and a structured conflict report:
+       ```json
+       {
+         "pr": <number>,
+         "repo": "<repo>",
+         "status": "conflict",
+         "conflicting_files": ["<file1>", "<file2>"],
+         "diff_summary": "<first 500 chars of diff>"
+       }
+       ```
 
 For needs-ci-fix:
   1. Get failed check logs: `gh run view <id> --repo <repo> --log-failed | tail -80`
@@ -182,7 +200,37 @@ After fixing:
 
 Use `model: "sonnet"` for all fixer agents.
 
-### Phase 4 — Collect results and confirm merges
+### Phase 4 — Resolve surfaced conflicts
+
+For each PR returned with `status: "conflict"` from a fixer agent:
+
+1. Display the conflict summary:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ OPS ► MERGE — Conflict in <repo>#<number>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ Branch: <headRefName> → <baseBranchRef>
+ Conflicting files:
+   - <file1>
+   - <file2>
+
+<diff_summary>
+──────────────────────────────────────────────────────
+```
+
+2. Use AskUserQuestion (max 4 options — CLAUDE.md Rule 1):
+
+```
+[Accept incoming (theirs)]  [Keep current branch (ours)]  [Open manual resolution]  [Skip this PR]
+```
+
+3. Based on response:
+   - **Accept incoming (theirs)**: Create worktree, rebase with `git checkout --theirs .` on each conflicting file, `git add .`, `git rebase --continue`, push force-with-lease
+   - **Keep current branch (ours)**: Create worktree, rebase with `git checkout --ours .` on each conflicting file, `git add .`, `git rebase --continue`, push force-with-lease
+   - **Open manual resolution**: Print step-by-step instructions for the operator to resolve manually, then check in with `git push` confirmation before continuing the merge pipeline
+   - **Skip this PR**: Note as `unresolved-conflict`, include in final report
+
+### Phase 5 — Collect results and confirm merges
 
 As fixers complete:
 
@@ -194,7 +242,7 @@ As fixers complete:
    ```
 3. If still red: report what's still broken, do not merge
 
-### Phase 5 — `--main` sync (only if flag is set)
+### Phase 6 — `--main` sync (only if flag is set)
 
 For each repo that has separate `dev` and `main` branches:
 
@@ -211,7 +259,7 @@ For each repo that has separate `dev` and `main` branches:
 5. If CI green: `gh pr merge <sync-pr-number> --repo <repo> --merge --admin` (merge commit, not squash)
 6. Pull main back into dev: `git -C <path> fetch origin && git -C <path> checkout dev && git -C <path> merge origin/main --no-edit`
 
-### Phase 6 — Final report
+### Phase 7 — Final report
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
