@@ -6,6 +6,10 @@ set -euo pipefail
 OUT="/tmp/ops-preflight"
 rm -rf "$OUT" && mkdir -p "$OUT"
 
+# Platform detection — Keychain-based probes only run on macOS
+IS_MAC=0
+[ "$(uname -s)" = "Darwin" ] && IS_MAC=1
+
 # All probes run in parallel as background jobs
 {
   # CLI detection
@@ -20,9 +24,14 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 } &
 
 {
-  # Slack keychain scout
-  xoxc=$(security find-generic-password -s slack-xoxc -w 2>/dev/null || echo "")
-  xoxd=$(security find-generic-password -s slack-xoxd -w 2>/dev/null || echo "")
+  # Slack keychain scout (macOS only — Keychain is macOS-specific)
+  if [ "$IS_MAC" = "1" ]; then
+    xoxc=$(security find-generic-password -s slack-xoxc -w 2>/dev/null || echo "")
+    xoxd=$(security find-generic-password -s slack-xoxd -w 2>/dev/null || echo "")
+  else
+    xoxc=""
+    xoxd=""
+  fi
   if [ -n "$xoxc" ] && [ -n "$xoxd" ]; then
     # Validate
     result=$(curl -s -H "Authorization: Bearer $xoxc" -b "d=$xoxd" "https://slack.com/api/auth.test" 2>/dev/null || echo '{"ok":false}')
@@ -33,11 +42,17 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 } &
 
 {
-  # Telegram keychain scout
-  for key in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
-    val=$(security find-generic-password -s "$key" -w 2>/dev/null || echo "")
-    echo "$key=$( [ -n "$val" ] && echo "found" || echo "missing" )" >> "$OUT/telegram.txt"
-  done
+  # Telegram keychain scout (macOS only — Keychain is macOS-specific)
+  if [ "$IS_MAC" = "1" ]; then
+    for key in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
+      val=$(security find-generic-password -s "$key" -w 2>/dev/null || echo "")
+      echo "$key=$( [ -n "$val" ] && echo "found" || echo "missing" )" >> "$OUT/telegram.txt"
+    done
+  else
+    for key in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
+      echo "$key=missing" >> "$OUT/telegram.txt"
+    done
+  fi
 } &
 
 {
