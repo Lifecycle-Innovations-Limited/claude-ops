@@ -2746,7 +2746,7 @@ gog gmail drafts create --to "user@example.com" --subject "subj" --body "text"
 gog calendar calendars -j                                           # List calendars
 gog calendar events primary --today -j                              # Today's events
 gog calendar events primary --from "2026-04-14" --to "2026-04-15" -j  # Date range
-gog calendar create primary --summary "Meeting" --start "2026-04-15T10:00:00" --end "2026-04-15T11:00:00"
+gog calendar create primary --summary "Meeting" --from "2026-04-15T10:00:00" --to "2026-04-15T11:00:00"
 gog calendar freebusy --from "2026-04-14T00:00:00Z" --to "2026-04-14T23:59:59Z" -j
 ```
 
@@ -2765,7 +2765,7 @@ gog drive download <fileId>                                         # Download f
 
 #### Tasks
 ```bash
-gog tasks lists list -j                                             # List task lists
+gog tasks lists                                                     # List task lists
 gog tasks list <tasklistId> -j                                      # List tasks
 ```
 
