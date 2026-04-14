@@ -44,6 +44,85 @@ id = "slack-xoxp-token"
 description = "Slack User Token"
 regex = '''xoxp-[0-9]+-[0-9]+-[0-9]+-[a-f0-9]+'''
 
+# ── Shopify ──
+[[rules]]
+id = "shopify-access-token"
+description = "Shopify Admin API Access Token"
+regex = '''shpat_[a-fA-F0-9]{32}'''
+
+[[rules]]
+id = "shopify-custom-app-token"
+description = "Shopify Custom App Token"
+regex = '''shpca_[a-fA-F0-9]{32}'''
+
+[[rules]]
+id = "shopify-private-app-token"
+description = "Shopify Private App Token"
+regex = '''shppa_[a-fA-F0-9]{32}'''
+
+[[rules]]
+id = "shopify-shared-secret"
+description = "Shopify Shared Secret"
+regex = '''shpss_[a-fA-F0-9]{32}'''
+
+# ── RevenueCat ──
+[[rules]]
+id = "revenuecat-api-key"
+description = "RevenueCat API Key"
+regex = '''(appl|goog)_[A-Za-z0-9]{20,}'''
+keywords = ["revenuecat", "REVENUECAT", "appl_", "goog_"]
+
+# ── Sentry ──
+[[rules]]
+id = "sentry-auth-token"
+description = "Sentry Auth Token"
+regex = '''sntrys_[A-Za-z0-9_]+'''
+
+[[rules]]
+id = "sentry-dsn"
+description = "Sentry DSN"
+regex = '''https://[a-f0-9]+@[a-z0-9]+\.ingest\.sentry\.io/\d+'''
+
+# ── Doppler ──
+[[rules]]
+id = "doppler-token"
+description = "Doppler Service/Config/Personal Token"
+regex = '''dp\.(st|ct|pt)\.[A-Za-z0-9]{40,}'''
+
+# ── Linear ──
+[[rules]]
+id = "linear-api-key"
+description = "Linear API Key"
+regex = '''lin_api_[A-Za-z0-9]{40,}'''
+
+# ── Klaviyo ──
+[[rules]]
+id = "klaviyo-api-key"
+description = "Klaviyo Private API Key"
+regex = '''pk_[a-f0-9]{34}'''
+keywords = ["klaviyo", "KLAVIYO"]
+
+# ── ElevenLabs ──
+[[rules]]
+id = "elevenlabs-api-key"
+description = "ElevenLabs API Key"
+regex = '''[a-f0-9]{32}'''
+keywords = ["elevenlabs", "ELEVENLABS_API_KEY", "xi-api-key"]
+
+# ── Bland AI ──
+[[rules]]
+id = "bland-ai-api-key"
+description = "Bland AI API Key"
+regex = '''sk-[a-z0-9]{32,}'''
+keywords = ["bland", "BLAND_API_KEY"]
+
+# ── Cloudflare ──
+[[rules]]
+id = "cloudflare-api-key"
+description = "Cloudflare Global API Key"
+regex = '''[a-f0-9]{37}'''
+keywords = ["cloudflare", "CF_API_KEY", "CLOUDFLARE"]
+
 [[rules]]
 id = "phone-number-international"
 description = "International Phone Number"
@@ -56,10 +135,13 @@ allowlist.paths = [
   '''test''',
   '''plugin\.json$''',
   '''CHANGELOG\.md$''',
+  '''CONFIGURATION\.md$''',
+  '''docs/''',
 ]
 allowlist.regexes = [
   '''\+15551234567''',
   '''\+1234567890''',
+  '''\+14155550100''',
 ]
 
 [[rules]]
@@ -82,4 +164,5 @@ paths = [
 stopwords = [
   "XOXC_TOKEN",
   "XOXD_TOKEN",
+  "STRIPE_SECRET_KEY",
 ]
