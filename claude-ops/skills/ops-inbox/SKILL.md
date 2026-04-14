@@ -71,10 +71,15 @@ Before executing, load available context:
 
 | Command | Usage | Output |
 |---------|-------|--------|
-| `gog gmail search -j --results-only --no-input --max 30 "in:inbox"` | Full inbox scan | JSON array of threads |
-| `gog gmail read -j --no-input "<thread_id>"` | Read thread | Full message JSON |
-| `gog gmail send -j --to "<email>" --subject "<subj>" --body "<body>"` | Send email | Send result |
-| `gog gmail labels modify --remove INBOX <thread_ids>` | Archive threads | Label change |
+| `gog gmail search "in:inbox" --max 50 -j --results-only --no-input` | Full inbox scan | JSON array of threads |
+| `gog gmail thread get <threadId> -j` | Get full thread with all messages | Full message JSON |
+| `gog gmail get <messageId> -j` | Get single message | Message JSON |
+| `gog gmail archive <messageId> ... --no-input --force` | Archive messages (remove from inbox) | Archive result |
+| `gog gmail archive --query "<gmail-query>" --max N --force` | Archive by query | Archive result |
+| `gog gmail send --to "<email>" --subject "<subj>" --body "<body>"` | Send email | Send result |
+| `gog gmail send --reply-to-message-id <msgId> --reply-all --body "text"` | Reply all | Send result |
+| `gog gmail mark-read <messageId> ... --no-input` | Mark as read | Result |
+| `gog gmail labels list -j` | List all labels | Labels JSON |
 
 ---
 
@@ -137,7 +142,7 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
 
 **For every NEEDS REPLY item, gather this context automatically:**
 
-1. **Full thread body** — read the ENTIRE thread (`gog gmail read` / `wacli messages list --limit 20`), not just the last message. Summarize the full conversation arc.
+1. **Full thread body** — read the ENTIRE thread (`gog gmail thread get` / `wacli messages list --limit 20`), not just the last message. Summarize the full conversation arc.
 2. **Contact profile** — search across channels to build a card:
    - `gog gmail search "from:<contact_email>" --max 10` — recent email history
    - `wacli contacts --search "<name>" --json` — WhatsApp presence
@@ -342,7 +347,7 @@ The keepalive daemon holds the store lock, so you can't run backfill directly. I
 
 **Phase 1 — Classify:**
 1. Search `in:inbox` (NOT `is:unread`) via `gog gmail search -a $GMAIL_ACCOUNT -j --results-only --no-input --max 30 "in:inbox"`
-2. For each thread, read the FULL thread via `gog gmail read -a $GMAIL_ACCOUNT -j --no-input "<thread_id>"` — read ALL messages, not just the last one
+2. For each thread, read the FULL thread via `gog gmail thread get <threadId> -j` — read ALL messages, not just the last one
 3. Check the last message's `From` header and `labelIds` (SENT, DRAFT)
 4. Classify:
    - **NEEDS REPLY**: Last sender is NOT you AND no unsent draft exists → action needed
@@ -414,7 +419,7 @@ Archive N FYI/newsletter emails?
   [Archive all N]  [Review each]  [Skip]
 ```
 
-Draft replies via `gog gmail send`. Archive via `gog gmail labels modify --remove INBOX <thread_ids>`.
+Draft replies via `gog gmail send`. Archive via `gog gmail archive <messageId> ... --no-input --force`.
 
 ### Slack
 
