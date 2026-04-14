@@ -1,0 +1,57 @@
+{
+  "version": "1.0",
+  "owner": "owner",
+  "projects": [
+    {
+      "alias": "auth-service",
+      "paths": ["~/Projects/auth-service"],
+      "repos": ["your-org/auth-service"],
+      "org": "your-org",
+      "type": "multi-repo",
+      "infra": {
+        "ecs_clusters": ["shared-production"],
+        "platform": "aws"
+      },
+      "revenue": {
+        "model": "internal",
+        "stage": "production"
+      },
+      "gsd": true,
+      "priority": 1
+    },
+    {
+      "alias": "api-gateway",
+      "paths": ["~/Projects/api-gateway"],
+      "repos": ["your-org/api-gateway"],
+      "org": "your-org",
+      "type": "multi-repo",
+      "infra": {
+        "ecs_clusters": ["shared-production"],
+        "platform": "aws"
+      },
+      "revenue": {
+        "model": "saas",
+        "stage": "growth"
+      },
+      "gsd": true,
+      "priority": 1
+    },
+    {
+      "alias": "worker-queue",
+      "paths": ["~/Projects/worker-queue"],
+      "repos": ["your-org/worker-queue"],
+      "org": "your-org",
+      "type": "multi-repo",
+      "infra": {
+        "ecs_clusters": ["shared-production"],
+        "platform": "aws"
+      },
+      "revenue": {
+        "model": "internal",
+        "stage": "pre-launch"
+      },
+      "gsd": true,
+      "priority": 2
+    }
+  ]
+}
