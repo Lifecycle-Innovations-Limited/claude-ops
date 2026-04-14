@@ -252,6 +252,27 @@
       "type": "string",
       "sensitive": true,
       "default": ""
+    },
+    "discord_bot_token": {
+      "title": "Discord Bot Token",
+      "description": "Bot token from Discord Developer Portal — used for channel reads and DMs. Prefer Doppler reference.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "discord_guild_id": {
+      "title": "Discord Guild ID",
+      "description": "Server/guild ID (right-click server in Discord → Copy ID with Developer Mode enabled)",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "discord_default_webhook_url": {
+      "title": "Discord Default Webhook URL",
+      "description": "Optional default webhook URL (https://discord.com/api/webhooks/…) for /ops:comms discord send. Shared with the ops-fires notification sink (which also reads discord_webhook_url).",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
     }
   }
 }

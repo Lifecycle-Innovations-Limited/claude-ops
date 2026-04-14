@@ -1,6 +1,6 @@
 ---
 name: ops-comms
-description: Send and read messages across all channels. Routes based on arguments — whatsapp, email, slack, telegram, or natural language like "send [msg] to [contact]".
+description: Send and read messages across all channels. Routes based on arguments — whatsapp, email, slack, telegram, discord, or natural language like "send [msg] to [contact]".
 argument-hint: "[channel] | send [message] to [contact] | read [channel]"
 allowed-tools:
   - Bash
@@ -78,9 +78,12 @@ Parse `$ARGUMENTS` and route immediately:
 | `email`       | Show recent email threads via Gmail MCP                 |
 | `slack`       | Show recent Slack activity                              |
 | `telegram`    | Show Telegram recent chats                              |
+| `discord`     | Show recent Discord channel activity (via bin/ops-discord) |
 | `send * to *` | Parse message and contact, determine best channel, send |
 | `read *`      | Read the specified channel or contact's messages        |
 | (empty)       | Show channel picker menu                                |
+
+Natural-language parsing: phrases like `send "deploy done" to #general on discord` or `to #ops-alerts on Discord` should resolve to the `discord` branch below. Extract the channel token (the word after `#`, case-insensitive) and pass it as the first arg to `bin/ops-discord send`.
 
 ---
 
@@ -159,9 +162,31 @@ Use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:cha
 Use `mcp__claude_ops_telegram__get_updates` (limit: 20) and `mcp__claude_ops_telegram__list_chats`.
 Fall back to: `telegram-cli --exec "dialog_list" 2>/dev/null || echo "Telegram MCP not configured"`
 
+**Discord:**
+`${CLAUDE_PLUGIN_ROOT}/bin/ops-discord read "<CHANNEL_ID>" --limit 20 --json` — requires `DISCORD_BOT_TOKEN` (or credential-store `discord/bot-token`). Fall back to `bin/ops-discord channels --json` if the user doesn't know the channel ID and `DISCORD_GUILD_ID` is set.
+
 ### Telegram send
 
 Use `mcp__claude_ops_telegram__send_message` with `chat_id` (from list_chats) and `text`.
+
+### Discord send
+
+Shell out to `bin/ops-discord send`. Three invocation shapes:
+
+```bash
+# By channel alias (resolves DISCORD_WEBHOOK_<UPPER> or DISCORD_WEBHOOK_URL)
+${CLAUDE_PLUGIN_ROOT}/bin/ops-discord send "<channel-alias>" "<message>" --json
+
+# By channel snowflake (17-20 digit ID, routed through bot token)
+${CLAUDE_PLUGIN_ROOT}/bin/ops-discord send "<CHANNEL_ID>" "<message>" --json
+
+# By full webhook URL (useful when the URL is stored per-project)
+${CLAUDE_PLUGIN_ROOT}/bin/ops-discord send "https://discord.com/api/webhooks/<ID>/<TOKEN>" "<message>" --json
+```
+
+If the script exits 1 with `{"error":"no discord credential configured — run /ops:setup discord"}`, prompt the user via `AskUserQuestion` (≤4 options per Rule 1): `[Run /ops:setup discord]` / `[Paste webhook URL now]` / `[Skip]`. Do NOT silently skip — that violates Rule 3.
+
+Note: `DISCORD_WEBHOOK_URL` is shared with the ops-fires notification sink (`scripts/ops-notify.sh`). When pre-existing, prefer it as the default for `/ops:comms discord send` rather than asking the user to set a separate value.
 
 ---
 
