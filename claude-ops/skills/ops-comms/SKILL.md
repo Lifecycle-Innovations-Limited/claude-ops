@@ -1,7 +1,7 @@
 ---
 name: ops-comms
-description: Send and read messages across all channels. Routes based on arguments — whatsapp, email, slack, telegram, discord, or natural language like "send [msg] to [contact]".
-argument-hint: "[channel] | send [message] to [contact] | read [channel]"
+description: Send and read messages across all channels. Routes based on arguments — whatsapp, email, slack, telegram, discord, notion, or natural language like "send [msg] to [contact]".
+argument-hint: "[channel] | send [message] to [contact] | read [channel] | notion [search query]"
 allowed-tools:
   - Bash
   - Read
@@ -19,6 +19,12 @@ allowed-tools:
   - mcp__claude_ops_telegram__send_message
   - mcp__claude_ops_telegram__get_updates
   - mcp__claude_ops_telegram__list_chats
+  - mcp__claude_ai_Notion__notion-search
+  - mcp__claude_ai_Notion__notion-fetch
+  - mcp__claude_ai_Notion__notion-get-comments
+  - mcp__claude_ai_Notion__notion-create-comment
+  - mcp__claude_ai_Notion__notion-update-page
+  - mcp__claude_ai_Notion__notion-create-pages
 effort: medium
 maxTurns: 40
 ---
@@ -79,6 +85,7 @@ Parse `$ARGUMENTS` and route immediately:
 | `slack`       | Show recent Slack activity                              |
 | `telegram`    | Show Telegram recent chats                              |
 | `discord`     | Show recent Discord channel activity (via bin/ops-discord) |
+| `notion`      | Search Notion workspace — pages, comments, tasks          |
 | `send * to *` | Parse message and contact, determine best channel, send |
 | `read *`      | Read the specified channel or contact's messages        |
 | (empty)       | Show channel picker menu                                |
@@ -164,6 +171,25 @@ Fall back to: `telegram-cli --exec "dialog_list" 2>/dev/null || echo "Telegram M
 
 **Discord:**
 `${CLAUDE_PLUGIN_ROOT}/bin/ops-discord read "<CHANNEL_ID>" --limit 20 --json` — requires `DISCORD_BOT_TOKEN` (or credential-store `discord/bot-token`). Fall back to `bin/ops-discord channels --json` if the user doesn't know the channel ID and `DISCORD_GUILD_ID` is set.
+
+**Notion:**
+Use `mcp__claude_ai_Notion__notion-search` with the user's query (or `query: "recent"` for general browsing). For each result:
+- Fetch full page content with `mcp__claude_ai_Notion__notion-fetch` using the page URL/ID from search results
+- Get comments with `mcp__claude_ai_Notion__notion-get-comments`
+- Show page title, database name, last editor, and recent comments
+
+### Notion comment/reply
+
+Use `mcp__claude_ai_Notion__notion-create-comment` with the page ID to reply to a comment thread. For creating new pages in a database, use `mcp__claude_ai_Notion__notion-create-pages`.
+
+Always preview before commenting:
+```
+Ready to comment on Notion page:
+  Page: [page title]
+  Comment: "[comment text]"
+
+  [Post comment]  [Edit]  [Cancel]
+```
 
 ### Telegram send
 
