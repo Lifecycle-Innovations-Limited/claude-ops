@@ -83,7 +83,7 @@ cred_get() {
   if command -v gog &>/dev/null; then
     gog auth status 2>&1 > "$OUT/gog-auth.txt"
     gog gmail labels list --json 2>/dev/null | head -5 > "$OUT/gog-gmail.json" || echo '{"error":"failed"}' > "$OUT/gog-gmail.json"
-    gog cal list --json --max 3 2>/dev/null | head -30 > "$OUT/gog-cal.json" || echo '{"error":"failed"}' > "$OUT/gog-cal.json"
+    gog calendar calendars --json 2>/dev/null | head -30 > "$OUT/gog-cal.json" || echo '{"error":"failed"}' > "$OUT/gog-cal.json"
   else
     echo "gog=missing" > "$OUT/gog-auth.txt"
   fi
