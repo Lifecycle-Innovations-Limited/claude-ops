@@ -13,7 +13,7 @@ A Claude Code plugin that turns Claude into a business operating system. Run `/o
 | `/ops:setup`      | Interactive setup wizard — installs CLIs, configures channels, builds registry |
 | `/ops:go`         | Morning briefing — all systems in one dashboard                                |
 | `/ops:next`       | Priority-ordered next action (fires > comms > PRs > sprint > GSD)              |
-| `/ops:inbox`      | Inbox zero across WhatsApp, Email, Slack, Telegram                             |
+| `/ops:inbox`      | Inbox zero across WhatsApp, Email, Slack, Telegram, Notion                     |
 | `/ops:comms`      | Send/read messages across all channels                                         |
 | `/ops:projects`   | Portfolio dashboard — GSD phase, CI, PRs, dirty files                          |
 | `/ops:linear`     | Linear sprint board, issue management, GSD sync                                |
