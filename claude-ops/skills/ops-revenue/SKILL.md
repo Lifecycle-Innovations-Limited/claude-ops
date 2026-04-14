@@ -65,7 +65,7 @@ aws ce get-cost-and-usage \
 
 ```bash
 aws ce get-cost-and-usage \
-  --time-period "Start=$(date -v-3m +%Y-%m-01),End=$(date +%Y-%m-%d)" \
+  --time-period "Start=$(date -v-3m +%Y-%m-01 2>/dev/null || date -d '3 months ago' +%Y-%m-01),End=$(date +%Y-%m-%d)" \
   --granularity MONTHLY \
   --metrics "UnblendedCost" \
   --output json 2>/dev/null

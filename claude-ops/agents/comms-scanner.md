@@ -1,7 +1,7 @@
 ---
 name: comms-scanner
 description: Scans all communication channels for FULL inbox state (not just unread). Classifies each conversation as NEEDS_REPLY, WAITING, or HANDLED. Returns structured JSON. Used by ops-inbox and ops-go.
-model: claude-sonnet-4-5
+model: claude-sonnet-4-6
 effort: low
 maxTurns: 10
 tools:

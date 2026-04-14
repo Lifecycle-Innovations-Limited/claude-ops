@@ -1,7 +1,7 @@
 ---
 name: triage-agent
 description: Investigates a specific issue from Sentry, Linear, or GitHub. Finds the root cause in code, checks if it's already fixed, and either confirms resolution or creates a fix branch with a PR.
-model: claude-sonnet-4-5
+model: claude-sonnet-4-6
 effort: high
 maxTurns: 40
 tools:

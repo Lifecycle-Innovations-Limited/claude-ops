@@ -36,6 +36,18 @@ You are running an **interactive configuration wizard** for the `claude-ops` plu
 
 ---
 
+## Setup agent delegation pattern
+
+When the user asks a complex integration-specific question during setup (e.g., "how does /ops:ecom handle multi-store setups?"), the setup agent can load the related skill's SKILL.md for deeper context:
+
+```bash
+cat "${CLAUDE_PLUGIN_ROOT}/skills/ops-ecom/SKILL.md"
+```
+
+Each sub-step below includes a `> **Deep-dive:**` pointer to the related skill file. Follow these pointers instead of duplicating operational details in this wizard.
+
+---
+
 ## Step 0 — Preflight (runs in background while you read)
 
 ```!
@@ -102,14 +114,14 @@ Use `✓` for present/set, `○` for missing/unset, `✗` for broken.
 
 Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need attention** (skip ones already green). Because AskUserQuestion allows max 4 options, batch into logical groups:
 
-**Batch 1 — Core setup:**
+**Batch 1 — Core setup (run early so the daemon can pre-warm caches while you finish):**
 
-| Option             | Header   | Description                                                   |
-| ------------------ | -------- | ------------------------------------------------------------- |
-| Install CLIs       | cli      | Install missing command-line tools via Homebrew               |
-| Configure MCPs      | mcp      | Enable Linear, Sentry, Vercel, Gmail MCP servers              |
-| Build registry      | registry | Register projects Claude should manage                        |
-| Shell env           | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile                  |
+| Option             | Header   | Description                                                                   |
+| ------------------ | -------- | ----------------------------------------------------------------------------- |
+| Install CLIs       | cli      | Install missing command-line tools via Homebrew                               |
+| Background daemon  | daemon   | Install ops-daemon early — pre-warms briefing cache while remaining setup runs |
+| Configure MCPs      | mcp      | Enable Linear, Sentry, Vercel, Gmail MCP servers                              |
+| Build registry      | registry | Register projects Claude should manage                                        |
 
 **Batch 2 — Channels & plugins:**
 
@@ -118,7 +130,7 @@ Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need 
 | Configure channels  | channels | Set tokens for Telegram, WhatsApp, Email, Slack               |
 | Companion plugins   | plugins  | Install GSD for project roadmap tracking                      |
 | Save preferences    | prefs    | Owner name, timezone, default priorities                      |
-| Background daemon   | daemon   | Install ops-daemon for persistent wacli-sync + memory extract |
+| Shell env           | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile                  |
 
 **Batch 3 — Extras (only show if not already configured):**
 
@@ -127,6 +139,7 @@ Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need 
 | Configure ecommerce | ecom     | Set Shopify store URL + admin token, ShipBob                  |
 | Configure marketing | mktg     | Set Klaviyo, Meta Ads, GA4, Search Console keys               |
 | Configure voice     | voice    | Set Bland AI, ElevenLabs, Groq API keys                       |
+| Configure revenue   | revenue  | Set Stripe + RevenueCat keys for live MRR tracking            |
 
 Present each batch as a separate `AskUserQuestion` call. Skip batches where all items are already green. Collect all selections across batches and run each selected section in order.
 
@@ -202,6 +215,117 @@ If they skip:
 ```
 Skipped GSD. Install later with: /plugin marketplace add gsd-build/get-shit-done
 ```
+
+---
+
+## Step 2c — Background Daemon (early install, pre-warm caches)
+
+**Why install the daemon this early?** Running the daemon in parallel with the rest of setup lets it start pre-warming the briefing cache (`ops-gather` results for infra/git/PRs/CI), so by the time the user reaches Step 7 and runs `/ops:go`, the briefing is already cached and loads in under 3 seconds instead of 10. Channel-dependent services (wacli-sync, message-listener, inbox-digest, store-health) are added later in Step 5b once their channels are configured.
+
+### Platform support
+
+The background daemon ships with a `launchd` integration (macOS only). Detect the platform before attempting install:
+
+```bash
+case "$(uname -s)" in
+  Darwin)                OS=macos ;;
+  Linux)                 grep -qi microsoft /proc/version 2>/dev/null && OS=wsl || OS=linux ;;
+  MINGW*|MSYS*|CYGWIN*)  OS=windows ;;
+  *)                     OS=unknown ;;
+esac
+```
+
+- **macOS** (`OS=macos`): proceed with the full `launchctl bootstrap` flow below.
+- **Linux / WSL** (`OS=linux|wsl`): `launchctl` is not available. The daemon script (`${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh`) runs fine under `bash`, but installing it as a user service requires `systemd --user` (Linux) or a custom cron/at wrapper (WSL). That work is **out of scope for this patch** — track as future work. For now, print:
+
+  ```
+  ○ Background daemon — skipped (Linux/WSL install via systemd --user is pending; see docs/daemon-guide.md).
+    You can still launch it manually with:  nohup ${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh &
+  ```
+
+  Write `daemon.enabled = false` and `daemon.skip_reason = "platform:<os>"` to `$PREFS_PATH` and continue to Step 3.
+- **Windows** (native, `OS=windows`): the daemon is **not installed**. Print `○ Background daemon — not supported on native Windows. Use WSL or run ops-daemon.sh manually.` and continue.
+
+If `OS=macos`, check whether the daemon is already installed:
+
+```bash
+launchctl print gui/$(id -u)/com.claude-ops.daemon 2>/dev/null | head -1
+```
+
+If already loaded, print `✓ Background daemon already running — will reconcile services in Step 5b.` and skip to Step 3.
+
+Otherwise ask via `AskUserQuestion`:
+
+```
+Install the ops background daemon now?
+  Starts pre-warming briefing cache while you finish the rest of setup.
+  Auto-heals on failure. Single launchd agent (com.claude-ops.daemon).
+  Channel services (wacli-sync, message-listener) added after channels are set up.
+  [Yes — install now]  [Skip — I'll run it manually later]
+```
+
+On `Yes`, run the install (use `run_in_background: true` per Rule 4 — this runs in parallel with the next wizard steps):
+
+```bash
+DAEMON_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh"
+chmod +x "$DAEMON_SCRIPT"
+PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/scripts/com.claude-ops.daemon.plist"
+PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.daemon.plist"
+DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+LOG_DIR="$DATA_DIR/logs"
+mkdir -p "$LOG_DIR"
+
+# Generate plist
+sed -e "s|__DAEMON_SCRIPT_PATH__|$DAEMON_SCRIPT|g" \
+    -e "s|__LOG_DIR__|$LOG_DIR|g" \
+    -e "s|__HOME__|$HOME|g" \
+    "$PLIST_TEMPLATE" > "$PLIST_DEST"
+
+# Write a minimal initial services config — only the services that don't depend on
+# channels yet. `briefing-pre-warm` runs ops-gather every 2 minutes so the next
+# /ops:go is instant. `memory-extractor` runs but stays idle until channels exist.
+SERVICES_CONFIG="$DATA_DIR/daemon-services.json"
+cat > "$SERVICES_CONFIG" <<JSON
+{
+  "services": {
+    "briefing-pre-warm": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/ops-gather",
+      "cron": "*/2 * * * *",
+      "_note": "Pre-warms /ops:go cache. Runs every 2 minutes."
+    },
+    "memory-extractor": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-memory-extractor.sh",
+      "cron": "*/30 * * * *",
+      "health_file": "~/.claude/plugins/data/ops-ops-marketplace/memories/.health",
+      "_note": "Idle until channels are configured; will extract profiles once wacli/gog are live."
+    }
+  }
+}
+JSON
+
+# Remove the old standalone wacli keepalive if present
+launchctl bootout gui/$(id -u)/com.claude-ops.wacli-keepalive 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist"
+
+# Load daemon in background — does NOT block the wizard
+launchctl bootout gui/$(id -u) "$PLIST_DEST" 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) "$PLIST_DEST"
+```
+
+Write `daemon.enabled = true` and `daemon.installed_at_step = "2c"` to `$PREFS_PATH` so Step 5b knows to reconcile services instead of re-installing.
+
+Print:
+
+```
+✓ Background daemon — installed. Pre-warming briefing cache in parallel while you finish setup.
+  Channel-dependent services will be added after channels are configured (Step 5b).
+```
+
+Continue immediately to Step 3 — do NOT wait for the daemon to confirm startup. The health file check is deferred to Step 5b.
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/docs/daemon-guide.md` for full operational instructions, CLI reference, and troubleshooting for the background daemon. The setup agent can load that file directly when it needs more depth than this wizard provides.
 
 ---
 
@@ -542,6 +666,8 @@ Sub-flow (only runs if user selected Yes above):
 - If you already have a gram.js / Telethon session for another project, you can skip this and paste those values manually into `/plugin settings`.
 - If Telegram replies "Sorry, too many tries. Please try again later." your account is rate-limited for ~8 hours — the wizard cannot bypass this. Wait and retry.
 
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration. The setup agent can load that file directly when it needs more depth than this wizard provides.
+
 ### 3b — WhatsApp (doctor + self-heal + backfill)
 
 WhatsApp is the channel that most often breaks silently. The wizard must **auto-diagnose, doctor, and fix** — not just report status and give up. Run this whole sub-flow top-to-bottom, stopping only when the system is healthy or the user declines a remediation.
@@ -746,6 +872,8 @@ All ops skills that use WhatsApp (`ops-inbox`, `ops-comms`, `ops-go`) MUST check
 
 This ensures the user is never silently left with a broken WhatsApp connection — every ops skill surfaces the problem and walks them through the fix.
 
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` and `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration. The setup agent can load those files directly when it needs more depth than this wizard provides.
+
 ### 3c — Email
 
 Email has two possible backends, tried in this order:
@@ -807,6 +935,8 @@ If `gog` is not on PATH, look at the detector's `mcp_configured` array for any e
    - `[Add a Gmail MCP — show docs]` → print `claude mcp add gmail` and tell the user to re-run `/ops:setup email` after
    - `[Skip email for now]`
 7. Whatever the user picks, record the resulting state in `$PREFS_PATH` (either `channels.email = "gog"`, `channels.email = "mcp:<name>"`, or omit the key entirely).
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/SKILL.md` and `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration. The setup agent can load those files directly when it needs more depth than this wizard provides.
 
 ### 3d — Slack (scout + ops-slack-autolink)
 
@@ -884,6 +1014,8 @@ Sub-flow:
 - Logging out of Slack invalidates the `d` cookie and breaks the MCP. Use `/ops:setup slack` to re-extract.
 - Slack's Terms of Service allow personal-session-token use for your own account. Do not use this flow to access accounts you don't own.
 
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` and `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration. The setup agent can load those files directly when it needs more depth than this wizard provides.
+
 ### 3e — Calendar
 
 Calendar isn't a messaging channel, but every other ops skill (briefings, `/ops-next`, `/ops-go`) benefits massively from knowing the user's schedule — meetings blocking deep work, deploy windows, travel days. The wizard wires it up the same way as email: `gog calendar` primary, Google Calendar MCP connector fallback.
@@ -925,7 +1057,7 @@ Calendar isn't a messaging channel, but every other ops skill (briefings, `/ops-
       If you want ops-next to auto-block focus time or ops-comms to confirm
       meetings, install `gog` instead.
    ```
-7. On "Install gog instead", print the same gog install snippet as Step 3c.
+7. On "Install gog instead", **run the install via Bash** (Rule 2) using the same npm → bun → source-clone chain as Step 3c — either inline the snippet or call `${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-install gog` (background per Rule 4). Only fall back to printing manual instructions if all four attempts fail.
 
 #### Neither available
 
@@ -942,6 +1074,8 @@ Downstream skills (`/ops-go`, `/ops-next`, `/ops-fires`) read `channels.calendar
 - `/ops-next` deprioritizes deep work when a meeting is <30min away
 - `/ops-fires` warns if a production incident falls during a scheduled call
   So this section is not optional for users who want context-aware briefings.
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-go/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration (calendar context feeds `/ops:go` briefings). The setup agent can load that file directly when it needs more depth than this wizard provides.
 
 ### 3f — Doppler (secrets management)
 
@@ -1063,6 +1197,8 @@ For example:
 The project and config above are the defaults saved to preferences.
 Individual skills can override with --project / --config flags.
 ```
+
+> **Deep-dive:** no dedicated skill ships with Doppler — see `${CLAUDE_PLUGIN_ROOT}/docs/memories-system.md` (Runtime Context section) for how downstream skills consume the `secrets_manager` / `doppler.*` values from `$PREFS_PATH` and resolve `doppler:KEY_NAME` references at runtime. The setup agent can load that file directly when it needs more depth than this wizard provides.
 
 ### 3g — Password Manager (credential vault)
 
@@ -1248,6 +1384,8 @@ Omit this line entirely if `password_manager` is `"none"` or unset.
 
 Add to the shortcuts table: `vault`, `password-manager`, `pm` → Step 3g
 
+> **Deep-dive:** no dedicated skill ships with the password manager integration — see `${CLAUDE_PLUGIN_ROOT}/docs/memories-system.md` (Runtime Context section) for how downstream skills resolve `password_manager` + related vault references from `$PREFS_PATH`. Privacy-and-security guidance lives in this SKILL.md (keychain-only storage of API hashes/session strings, `umask 077` for bridge files). The setup agent can load that file directly when it needs more depth than this wizard provides.
+
 ---
 
 ### 3h — Ecommerce (Shopify + dynamic partners)
@@ -1421,6 +1559,8 @@ If the user provides partner names, process each one in a loop:
 
 For any partner not in this table, always web search for current auth docs before asking for credentials.
 
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-ecom/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for the ecommerce integration (multi-store Shopify, partner dispatching, store-health daemon). The setup agent can load that file directly when it needs more depth than this wizard provides.
+
 ---
 
 ### 3i — Marketing (Klaviyo, Meta Ads, GA4, Search Console)
@@ -1573,6 +1713,8 @@ If the user provides partner names, apply the same dynamic partner loop as Step 
 
 For any partner not in this table, always web search for current auth docs before asking for credentials.
 
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-marketing/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for marketing integrations (Klaviyo flows, Meta Ads, GA4, Search Console). The setup agent can load that file directly when it needs more depth than this wizard provides.
+
 ---
 
 ### 3j — Voice (Bland AI, ElevenLabs, Groq)
@@ -1670,6 +1812,159 @@ Write to `$PREFS_PATH` (merge):
 
 Same Doppler-reference pattern — prefer `doppler:KEY_NAME` over raw tokens when Doppler is configured.
 
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-voice/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for voice integrations (Bland AI call flows, ElevenLabs TTS, Groq transcription). The setup agent can load that file directly when it needs more depth than this wizard provides.
+
+---
+
+### 3k — Revenue (Stripe + RevenueCat)
+
+**Before showing the service selector**, run the Universal Credential Auto-Scan for all revenue vars simultaneously (Rule 4 — background these):
+
+```bash
+# Shell env
+printenv STRIPE_SECRET_KEY STRIPE_API_KEY REVENUECAT_API_KEY REVENUECAT_SECRET_KEY REVENUECAT_PROJECT_ID 2>/dev/null
+
+# Shell profiles + .envrc files
+grep -h 'STRIPE\|REVENUECAT\|RC_API' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
+
+# Doppler across all projects
+for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
+  doppler secrets --project "$proj" --config prd --json 2>/dev/null | \
+    jq -r --arg proj "$proj" 'to_entries[] | select(.key | test("STRIPE|REVENUECAT|RC_API")) | "\(.key)=\(.value.computed) (doppler:\($proj)/prd)"'
+done
+
+# 1Password
+op item list --categories "API Credential" --format json 2>/dev/null | \
+  jq -r '.[] | select(.title | test("stripe|revenuecat"; "i")) | .id' | \
+  while read id; do op item get "$id" --format json 2>/dev/null; done
+
+# Dashlane
+dcli password stripe --output json 2>/dev/null
+dcli password revenuecat --output json 2>/dev/null
+
+# Bitwarden
+bw list items --search stripe 2>/dev/null | jq -r '.[] | select(.login.password) | .login.password' | head -1
+bw list items --search revenuecat 2>/dev/null | jq -r '.[] | select(.login.password) | .login.password' | head -1
+
+# macOS Keychain
+security find-generic-password -s "stripe" -w 2>/dev/null
+security find-generic-password -s "revenuecat" -w 2>/dev/null
+
+# OpenClaw
+jq -r '.agents.defaults.env | to_entries[] | select(.key | test("STRIPE|REVENUECAT")) | "\(.key)=\(.value)"' ~/.openclaw/openclaw.json 2>/dev/null
+```
+
+Cache these results. Also check `$PREFS_PATH` under `revenue.stripe.*` and `revenue.revenuecat.*` — if already set, show `✓ <service> — already configured` and offer `[Keep]` / `[Reconfigure]`.
+
+Ask which revenue integrations to configure via `AskUserQuestion` with `multiSelect: true`:
+
+| Option       | Header       | Description                                                    |
+| ------------ | ------------ | -------------------------------------------------------------- |
+| Stripe       | stripe       | SaaS revenue — secret key for MRR, charges, disputes           |
+| RevenueCat   | revenuecat   | Mobile subs — API key + project ID for mobile MRR              |
+
+#### Stripe
+
+If `STRIPE_SECRET_KEY` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format with `[Use this value]` / `[Paste a different one]` / `[Skip]`.
+
+Per Rule 3 — if nothing was found, offer (≤4 options):
+```
+No Stripe secret key found. How do you want to provide one?
+  [Paste Stripe secret key manually]
+  [Deep hunt — spawn agent]
+  [Skip — use registry.json values]
+```
+
+On `[Deep hunt — spawn agent]`, spawn a background research agent per Rule 3:
+
+```
+Agent(
+  subagent_type: "general-purpose",
+  model: "haiku",
+  run_in_background: true,
+  prompt: "Grep the filesystem under $HOME (excluding node_modules, .git, Library/Caches) for Stripe secret key patterns: sk_live_[A-Za-z0-9]+ and sk_test_[A-Za-z0-9]+. Also scan ~/.config, ~/.aws, ~/.docker, any .env files, and known secrets directories. Return every hit with file path + line number + 6 chars of redacted prefix (e.g. sk_live_abc***). Do not print full keys."
+)
+```
+
+While it runs, continue to the RevenueCat block. Return to Stripe when the agent reports results; present findings via `AskUserQuestion` (paginate to ≤4 per Rule 1).
+
+On `[Paste Stripe secret key manually]`:
+```
+Enter your Stripe Secret Key:
+  Format: sk_live_XXX  (production)  or  sk_test_XXX  (test mode)
+  Find it: Stripe Dashboard → Developers → API keys → Secret key → Reveal
+  Prefer a Doppler reference (e.g. doppler:STRIPE_SECRET_KEY) over the raw value.
+```
+
+Smoke test:
+```bash
+curl -s -u "$STRIPE_SECRET_KEY:" "https://api.stripe.com/v1/balance" | jq '.available | length'
+```
+Expect a non-zero integer. If `{"error": ...}`, show the message and re-ask.
+
+#### RevenueCat
+
+If `REVENUECAT_API_KEY` and `REVENUECAT_PROJECT_ID` were both found in the auto-scan, present them together with `[Use these values]` / `[Paste different ones]` / `[Skip]`.
+
+Per Rule 3 — if not found, offer:
+```
+No RevenueCat credentials found. How do you want to provide them?
+  [Paste RevenueCat API key manually]
+  [Deep hunt — spawn agent]
+  [Skip — mobile MRR will be omitted]
+```
+
+On `[Deep hunt — spawn agent]`, spawn (background, Rule 4):
+
+```
+Agent(
+  subagent_type: "general-purpose",
+  model: "haiku",
+  run_in_background: true,
+  prompt: "Grep the filesystem under $HOME (excluding node_modules, .git, Library/Caches) for RevenueCat credential patterns: rcb_[A-Za-z0-9]+ (V2 secret), sk_[A-Za-z0-9]+ near the literal string 'revenuecat', and any env vars matching REVENUECAT_* or RC_API_*. Also look for project IDs (32-char alphanum strings) adjacent to any revenuecat match. Return each hit with file path + line number + 6-char redacted prefix. Do not print full keys."
+)
+```
+
+On `[Paste RevenueCat API key manually]`:
+```
+Enter your RevenueCat V1 API Key:
+  Find it: app.revenuecat.com → Project settings → API keys → V1 secret key
+  Format: rcb_XXX (V2)  or  legacy secret (starts with sk_)
+
+Enter your RevenueCat Project ID:
+  Find it in the URL: app.revenuecat.com/projects/<project_id>/...
+```
+
+Smoke test:
+```bash
+curl -s -H "Authorization: Bearer $REVENUECAT_API_KEY" \
+  "https://api.revenuecat.com/v1/projects/$REVENUECAT_PROJECT_ID/metrics/overview" | jq '.mrr // .object'
+```
+Expect a numeric `mrr` or an object descriptor. If the response is `{"code": 7243, ...}` (auth error), re-ask.
+
+#### Save to preferences
+
+Write to `$PREFS_PATH` (merge):
+```json
+{
+  "revenue": {
+    "stripe": {
+      "secret_key": "doppler:STRIPE_SECRET_KEY",
+      "configured_at": "<ISO timestamp>"
+    },
+    "revenuecat": {
+      "api_key": "doppler:REVENUECAT_API_KEY",
+      "project_id": "<project_id>",
+      "configured_at": "<ISO timestamp>"
+    }
+  }
+}
+```
+
+Prefer a Doppler reference (`doppler:STRIPE_SECRET_KEY`, `doppler:REVENUECAT_API_KEY`) over raw tokens when Doppler is configured. For either service, if the user picked `[Skip]`, save `{"revenue": {"<service>": "skipped"}}` so the wizard doesn't re-prompt on the next run — but `/ops:revenue` will fall back to `scripts/registry.json` `revenue.mrr` values as documented in the `revenue-tracker` agent.
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-revenue/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for revenue integrations (Stripe MRR/ARR queries, RevenueCat subscription metrics, registry fallbacks). The setup agent can load that file directly when it needs more depth than this wizard provides.
+
 ---
 
 ## Step 4 — Configure MCPs (if selected)
@@ -1687,6 +1982,8 @@ Gmail:   claude mcp add gmail   (fallback only — prefer `gog` CLI, see Step 3c
 Offer `[Open Claude Code docs]`, `[Skip]`. Do **not** try to register MCPs from the skill — the plugin can't do that safely.
 
 **Email note:** the ops plugin's primary email path is the `gog` CLI (full read + send, own OAuth). The Gmail MCP connector works as a fallback but **cannot send** without extra permission config in Claude Desktop → Settings → Connectors. The wizard handles that detection in Step 3c; this step only lists it so users who deliberately prefer MCP can install it here.
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-linear/SKILL.md`, `${CLAUDE_PLUGIN_ROOT}/skills/ops-triage/SKILL.md`, and `${CLAUDE_PLUGIN_ROOT}/skills/ops-fires/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for the MCP-backed integrations (Linear issue flows, triage routing, Sentry/Vercel fires). The setup agent can load those files directly when it needs more depth than this wizard provides.
 
 ---
 
@@ -1746,58 +2043,29 @@ After auto-discovery (or if the user selects "I'll enter projects manually"):
 - Read the current registry with `jq`, append the new project, write back atomically (`jq ... > tmp && mv tmp registry.json`).
 - After each addition, print the running count and offer `[Add another]` / `[Done]`.
 
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-projects/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for the project registry (auto-discovery, registry schema, GSD filters, priority ordering). The setup agent can load that file directly when it needs more depth than this wizard provides.
+
 ---
 
-## Step 5b — Background Daemon (if selected)
+## Step 5b — Daemon Service Reconciliation
 
-The ops-daemon manages persistent background services — WhatsApp sync, memory extraction, and future integrations — under a single launchd agent. It auto-heals on failure and writes a shared health file that all ops skills can read.
+By now, the daemon was already installed in Step 2c and has been pre-warming the briefing cache in the background while the user configured channels. This step adds **channel-dependent services** (`wacli-sync`, `message-listener`, `inbox-digest`, `store-health`, `competitor-intel`) now that we know which channels and integrations are configured.
 
-**What the daemon does:** Manages persistent connections (WhatsApp sync, memory extraction) and auto-heals on failure. All services run under a single launchd agent (`com.claude-ops.daemon`) that restarts itself if it crashes, with per-service health tracking written to `daemon-health.json`.
+**Skip conditions:**
+- If the user declined daemon install in Step 2c, skip this step entirely.
+- If `daemon.enabled != true` in `$PREFS_PATH`, skip.
 
-Ask the user via `AskUserQuestion`:
+Otherwise continue — reconcile the services list:
 
-```
-Install the ops background daemon?
-  Manages background services persistently — recommended for reliable briefings and monitoring.
-  Services enabled depend on what was configured earlier in setup.
-  [Yes — install daemon]  [Skip — use standalone keepalive instead]
-```
-
-If the user skips, fall back to the standalone keepalive path in Step 3b.7.
-
-On `Yes`:
-
-**1. Install and configure the daemon:**
+**1. Verify the daemon is running:**
 
 ```bash
-DAEMON_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh"
-chmod +x "$DAEMON_SCRIPT"
-PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/scripts/com.claude-ops.daemon.plist"
-PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.daemon.plist"
 DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
-LOG_DIR="$DATA_DIR/logs"
-mkdir -p "$LOG_DIR"
-
-# Generate plist
-sed -e "s|__DAEMON_SCRIPT_PATH__|$DAEMON_SCRIPT|g" \
-    -e "s|__LOG_DIR__|$LOG_DIR|g" \
-    -e "s|__HOME__|$HOME|g" \
-    "$PLIST_TEMPLATE" > "$PLIST_DEST"
-
-# Copy default services config if none exists
-SERVICES_CONFIG="$DATA_DIR/daemon-services.json"
-if [[ ! -f "$SERVICES_CONFIG" ]]; then
-  sed "s|__SCRIPTS_DIR__|${CLAUDE_PLUGIN_ROOT}/scripts|g" \
-    "${CLAUDE_PLUGIN_ROOT}/scripts/daemon-services.default.json" > "$SERVICES_CONFIG"
-fi
-
-# Remove the old standalone wacli keepalive if present
-launchctl bootout gui/$(id -u)/com.claude-ops.wacli-keepalive 2>/dev/null || true
-rm -f "$HOME/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist"
-
-# Load daemon
-launchctl bootout gui/$(id -u) "$PLIST_DEST" 2>/dev/null || true
-launchctl bootstrap gui/$(id -u) "$PLIST_DEST"
+PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.daemon.plist"
+launchctl print gui/$(id -u)/com.claude-ops.daemon >/dev/null 2>&1 || {
+  # Daemon not running — install it now as a fallback
+  launchctl bootstrap gui/$(id -u) "$PLIST_DEST" 2>/dev/null
+}
 ```
 
 **2. Verify health after 5 seconds:**
@@ -1820,9 +2088,9 @@ If the health file is missing (daemon may still be initializing), wait 5 more se
   tail -20 ~/.claude/plugins/data/ops-ops-marketplace/logs/ops-daemon.log
 ```
 
-**3. Build the services list and record in preferences:**
+**3. Build the full services list and reconcile with the config written in Step 2c:**
 
-Determine which services to enable based on what was configured in earlier steps:
+Determine which services to enable based on what was configured in earlier steps. The `briefing-pre-warm` and `memory-extractor` services were already enabled at Step 2c — preserve them. Add channel-dependent services based on what's now configured:
 
 - `wacli-sync` — always include if WhatsApp is configured (`channels.whatsapp` is set)
 - `memory-extractor` — always include
@@ -1831,9 +2099,9 @@ Determine which services to enable based on what was configured in earlier steps
 - `competitor-intel` — always include (runs weekly Monday 10am)
 - `message-listener` — include if WhatsApp or Telegram is configured (persistent poller)
 
-Build the services array programmatically:
+Build the services array programmatically (starting from the 2c baseline):
 ```bash
-SERVICES='["memory-extractor","inbox-digest","competitor-intel"]'
+SERVICES='["briefing-pre-warm","memory-extractor","inbox-digest","competitor-intel"]'
 PREFS=$(cat "$PREFS_PATH" 2>/dev/null || echo '{}')
 # Add wacli-sync + message-listener if WhatsApp is configured
 if echo "$PREFS" | jq -e '.channels.whatsapp' > /dev/null 2>&1; then
@@ -1850,15 +2118,28 @@ fi
 echo "Services to enable: $SERVICES"
 ```
 
-Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with or replace the default, enabling only the services determined above. Each service entry should include:
-- `wacli-sync`: `{ "enabled": true, "interval": "continuous" }`
-- `memory-extractor`: `{ "enabled": true, "interval": "300" }` (every 5 min)
-- `inbox-digest`: `{ "enabled": true, "schedule": "0 */4 * * *" }` (every 4h)
-- `store-health`: `{ "enabled": true, "schedule": "0 9 * * *" }` (daily 9am) — only if ecom configured
-- `competitor-intel`: `{ "enabled": true, "schedule": "0 10 * * 1" }` (weekly Monday 10am)
-- `message-listener`: `{ "enabled": true, "interval": "continuous" }`
+Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with the existing config from Step 2c, preserving `briefing-pre-warm` and `memory-extractor`, and enabling the new channel-dependent services. Each service entry should include:
+- `briefing-pre-warm`: `{ "enabled": true, "cron": "*/2 * * * *" }` — pre-warms /ops:go cache (installed in 2c)
+- `wacli-sync`: `{ "enabled": true, "interval": "continuous" }` — only if WhatsApp configured
+- `memory-extractor`: `{ "enabled": true, "cron": "*/30 * * * *" }` — every 30 min (installed in 2c)
+- `inbox-digest`: `{ "enabled": true, "cron": "0 */4 * * *" }` — every 4h
+- `store-health`: `{ "enabled": true, "cron": "0 9 * * *" }` — daily 9am, only if ecom configured
+- `competitor-intel`: `{ "enabled": true, "cron": "0 10 * * 1" }` — weekly Monday 10am
+- `message-listener`: `{ "enabled": true, "interval": "continuous" }` — only if WhatsApp or Telegram configured
 
-Write `daemon.enabled = true` and `daemon.services` (the computed array) to `$PREFS_PATH`.
+After rewriting the services config, reload the daemon so it picks up the new services:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.claude-ops.daemon
+```
+
+Write `daemon.enabled = true` and `daemon.services` (the reconciled array) to `$PREFS_PATH`. Print a summary:
+
+```
+✓ Daemon services reconciled — N services enabled (briefing-pre-warm, memory-extractor, wacli-sync, ...)
+```
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/docs/daemon-guide.md` for full operational instructions, CLI reference, and troubleshooting for the background daemon (service lifecycle, launchctl/systemd integration, health reporting, reconciliation semantics). The setup agent can load that file directly when it needs more depth than this wizard provides.
 
 ---
 
