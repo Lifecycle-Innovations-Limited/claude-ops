@@ -287,11 +287,11 @@ function extract(html) {
     }
   }
 
-  // Strategy 6: last resort — find ANY 32-char hex string on the page
-  // (api_hash is the only value with that exact shape on /apps)
+  // Strategy 6: last resort — find a 32-char hex string near "api_hash" text
+  // Proximity check prevents CSRF tokens in form fields from being captured.
   if (!apiHash) {
-    const hexes = html.match(/\b[a-f0-9]{32}\b/g);
-    if (hexes && hexes.length === 1) apiHash = hexes[0];
+    const hashProximity = html.match(/api_hash[\s\S]{0,500}?([a-f0-9]{32})/i);
+    if (hashProximity) apiHash = hashProximity[1];
   }
 
   return { apiId, apiHash };
