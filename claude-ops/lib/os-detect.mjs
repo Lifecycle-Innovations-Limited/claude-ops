@@ -13,12 +13,12 @@
 //   - Never throw on missing files — degrade to null/false/[]
 //   - Runnable directly (`node lib/os-detect.mjs`) for debugging
 
-import { readFileSync, promises as fsp } from "node:fs";
-import { spawnSync } from "node:child_process";
-import { homedir } from "node:os";
-import path from "node:path";
-import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { readFileSync, promises as fsp } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -32,9 +32,9 @@ import { fileURLToPath } from "node:url";
  */
 function safeRead(p) {
   try {
-    return readFileSync(p, "utf8");
+    return readFileSync(p, 'utf8');
   } catch {
-    return "";
+    return '';
   }
 }
 
@@ -47,17 +47,14 @@ function safeRead(p) {
 function parseEnvFile(contents) {
   /** @type {Record<string, string>} */
   const out = {};
-  for (const rawLine of contents.split("\n")) {
+  for (const rawLine of contents.split('\n')) {
     const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const eq = line.indexOf("=");
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
     if (eq < 0) continue;
     const key = line.slice(0, eq).trim();
     let value = line.slice(eq + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     }
     out[key] = value;
@@ -74,12 +71,12 @@ function parseEnvFile(contents) {
  */
 function hasBin(name) {
   try {
-    if (process.platform === "win32") {
-      const r = spawnSync("where.exe", [name], { stdio: "ignore" });
+    if (process.platform === 'win32') {
+      const r = spawnSync('where.exe', [name], { stdio: 'ignore' });
       return r.status === 0;
     }
-    const r = spawnSync("/bin/sh", ["-c", `command -v ${name}`], {
-      stdio: "ignore",
+    const r = spawnSync('/bin/sh', ['-c', `command -v ${name}`], {
+      stdio: 'ignore',
     });
     return r.status === 0;
   } catch {
@@ -97,9 +94,9 @@ function hasBin(name) {
  * @returns {boolean}
  */
 export function isWsl() {
-  if (process.platform !== "linux") return false;
-  const procVersion = safeRead("/proc/version").toLowerCase();
-  return procVersion.includes("microsoft");
+  if (process.platform !== 'linux') return false;
+  const procVersion = safeRead('/proc/version').toLowerCase();
+  return procVersion.includes('microsoft');
 }
 
 /**
@@ -107,33 +104,27 @@ export function isWsl() {
  * @returns {"macos"|"debian"|"fedora"|"arch"|"suse"|"alpine"|"linux"|"wsl"|"windows"|"unknown"}
  */
 export function osId() {
-  if (process.platform === "darwin") return "macos";
-  if (process.platform === "win32") return "windows";
-  if (process.platform !== "linux") return "unknown";
+  if (process.platform === 'darwin') return 'macos';
+  if (process.platform === 'win32') return 'windows';
+  if (process.platform !== 'linux') return 'unknown';
 
-  if (isWsl()) return "wsl";
+  if (isWsl()) return 'wsl';
 
-  const release = parseEnvFile(safeRead("/etc/os-release"));
-  const candidates = [release.ID, ...(release.ID_LIKE || "").split(/\s+/)]
-    .map((s) => (s || "").toLowerCase())
+  const release = parseEnvFile(safeRead('/etc/os-release'));
+  const candidates = [release.ID, ...(release.ID_LIKE || '').split(/\s+/)]
+    .map((s) => (s || '').toLowerCase())
     .filter(Boolean);
 
   for (const id of candidates) {
-    if (id === "debian" || id === "ubuntu") return "debian";
-    if (
-      id === "fedora" ||
-      id === "rhel" ||
-      id === "centos" ||
-      id === "rocky" ||
-      id === "almalinux"
-    ) {
-      return "fedora";
+    if (id === 'debian' || id === 'ubuntu') return 'debian';
+    if (id === 'fedora' || id === 'rhel' || id === 'centos' || id === 'rocky' || id === 'almalinux') {
+      return 'fedora';
     }
-    if (id === "arch" || id === "manjaro") return "arch";
-    if (id.startsWith("opensuse") || id === "sles") return "suse";
-    if (id === "alpine") return "alpine";
+    if (id === 'arch' || id === 'manjaro') return 'arch';
+    if (id.startsWith('opensuse') || id === 'sles') return 'suse';
+    if (id === 'alpine') return 'alpine';
   }
-  return "linux";
+  return 'linux';
 }
 
 /**
@@ -142,16 +133,16 @@ export function osId() {
  */
 export function arch() {
   switch (process.arch) {
-    case "x64":
-      return "x86_64";
-    case "arm64":
-      return "arm64";
-    case "arm":
-      return "armv7";
-    case "ia32":
-      return "i686";
+    case 'x64':
+      return 'x86_64';
+    case 'arm64':
+      return 'arm64';
+    case 'arm':
+      return 'armv7';
+    case 'ia32':
+      return 'i686';
     default:
-      return "unknown";
+      return 'unknown';
   }
 }
 
@@ -163,16 +154,16 @@ export function arch() {
  */
 export function pkgMgr() {
   // Homebrew wins everywhere it's installed (macOS and Linuxbrew).
-  if (hasBin("brew")) return "brew";
+  if (hasBin('brew')) return 'brew';
 
-  if (process.platform === "linux") {
-    for (const m of ["apt-get", "dnf", "pacman", "zypper", "apk"]) {
+  if (process.platform === 'linux') {
+    for (const m of ['apt-get', 'dnf', 'pacman', 'zypper', 'apk']) {
       if (hasBin(m)) return m;
     }
   }
 
-  if (process.platform === "win32") {
-    for (const m of ["winget", "scoop", "choco"]) {
+  if (process.platform === 'win32') {
+    for (const m of ['winget', 'scoop', 'choco']) {
       if (hasBin(m)) return m;
     }
   }
@@ -189,23 +180,23 @@ export function pkgMgr() {
 export function pkgInstallCmd(pkg) {
   const mgr = pkgMgr();
   switch (mgr) {
-    case "brew":
+    case 'brew':
       return `brew install ${pkg}`;
-    case "apt-get":
+    case 'apt-get':
       return `sudo apt-get install -y ${pkg}`;
-    case "dnf":
+    case 'dnf':
       return `sudo dnf install -y ${pkg}`;
-    case "pacman":
+    case 'pacman':
       return `sudo pacman -S --noconfirm ${pkg}`;
-    case "zypper":
+    case 'zypper':
       return `sudo zypper install -y ${pkg}`;
-    case "apk":
+    case 'apk':
       return `sudo apk add ${pkg}`;
-    case "winget":
+    case 'winget':
       return `winget install -e --id ${pkg}`;
-    case "scoop":
+    case 'scoop':
       return `scoop install ${pkg}`;
-    case "choco":
+    case 'choco':
       return `choco install -y ${pkg}`;
     default:
       return null;
@@ -220,11 +211,10 @@ export function pkgInstallCmd(pkg) {
  * @returns {"security"|"secret-tool"|"wincred"|null}
  */
 export function keyringBackend() {
-  if (process.platform === "darwin") return "security";
-  if (process.platform === "win32") return "wincred";
-  if (isWsl() && hasBin("cmd.exe")) return "wincred";
-  if (process.platform === "linux" && hasBin("secret-tool"))
-    return "secret-tool";
+  if (process.platform === 'darwin') return 'security';
+  if (process.platform === 'win32') return 'wincred';
+  if (isWsl() && hasBin('cmd.exe')) return 'wincred';
+  if (process.platform === 'linux' && hasBin('secret-tool')) return 'secret-tool';
   return null;
 }
 
@@ -233,13 +223,13 @@ export function keyringBackend() {
  * @returns {"open"|"xdg-open"|"wslview"|"cmd.exe /c start"|null}
  */
 export function opener() {
-  if (process.platform === "darwin") return "open";
-  if (process.platform === "win32") return "cmd.exe /c start";
+  if (process.platform === 'darwin') return 'open';
+  if (process.platform === 'win32') return 'cmd.exe /c start';
   if (isWsl()) {
-    if (hasBin("wslview")) return "wslview";
-    if (hasBin("cmd.exe")) return "cmd.exe /c start";
+    if (hasBin('wslview')) return 'wslview';
+    if (hasBin('cmd.exe')) return 'cmd.exe /c start';
   }
-  if (hasBin("xdg-open")) return "xdg-open";
+  if (hasBin('xdg-open')) return 'xdg-open';
   return null;
 }
 
@@ -250,8 +240,8 @@ export function opener() {
 export function shell() {
   const s = process.env.SHELL;
   if (s) return path.basename(s);
-  if (process.platform === "win32") return "pwsh";
-  return "bash";
+  if (process.platform === 'win32') return 'pwsh';
+  return 'bash';
 }
 
 // ---------------------------------------------------------------------------
@@ -268,44 +258,42 @@ export async function browserProfileDirs() {
   /** @type {string[]} */
   const candidates = [];
 
-  if (process.platform === "darwin") {
-    const sup = path.join(home, "Library", "Application Support");
+  if (process.platform === 'darwin') {
+    const sup = path.join(home, 'Library', 'Application Support');
     candidates.push(
-      path.join(sup, "Google", "Chrome"),
-      path.join(sup, "Chromium"),
-      path.join(sup, "BraveSoftware", "Brave-Browser"),
-      path.join(sup, "Arc", "User Data"),
+      path.join(sup, 'Google', 'Chrome'),
+      path.join(sup, 'Chromium'),
+      path.join(sup, 'BraveSoftware', 'Brave-Browser'),
+      path.join(sup, 'Arc', 'User Data'),
     );
-  } else if (process.platform === "linux") {
-    const config = path.join(home, ".config");
+  } else if (process.platform === 'linux') {
+    const config = path.join(home, '.config');
     candidates.push(
-      path.join(config, "google-chrome"),
-      path.join(config, "chromium"),
-      path.join(config, "BraveSoftware", "Brave-Browser"),
+      path.join(config, 'google-chrome'),
+      path.join(config, 'chromium'),
+      path.join(config, 'BraveSoftware', 'Brave-Browser'),
     );
     // On WSL, also probe the Windows-side profile under /mnt/c.
     if (isWsl()) {
-      const winUser = process.env.USER || process.env.USERNAME || "";
+      const winUser = process.env.USER || process.env.USERNAME || '';
       if (winUser) {
         const winLocal = `/mnt/c/Users/${winUser}/AppData/Local`;
         candidates.push(
-          path.join(winLocal, "Google", "Chrome", "User Data"),
-          path.join(winLocal, "Chromium", "User Data"),
-          path.join(winLocal, "BraveSoftware", "Brave-Browser", "User Data"),
+          path.join(winLocal, 'Google', 'Chrome', 'User Data'),
+          path.join(winLocal, 'Chromium', 'User Data'),
+          path.join(winLocal, 'BraveSoftware', 'Brave-Browser', 'User Data'),
         );
       }
     }
-  } else if (process.platform === "win32") {
+  } else if (process.platform === 'win32') {
     const localAppData =
       process.env.LOCALAPPDATA ||
-      (process.env.USERPROFILE
-        ? path.join(process.env.USERPROFILE, "AppData", "Local")
-        : "");
+      (process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData', 'Local') : '');
     if (localAppData) {
       candidates.push(
-        path.join(localAppData, "Google", "Chrome", "User Data"),
-        path.join(localAppData, "Chromium", "User Data"),
-        path.join(localAppData, "BraveSoftware", "Brave-Browser", "User Data"),
+        path.join(localAppData, 'Google', 'Chrome', 'User Data'),
+        path.join(localAppData, 'Chromium', 'User Data'),
+        path.join(localAppData, 'BraveSoftware', 'Brave-Browser', 'User Data'),
       );
     }
   }
@@ -338,10 +326,10 @@ export async function browserProfileDirs() {
  * }>}
  */
 export async function osJson() {
-  const release = parseEnvFile(safeRead("/etc/os-release"));
+  const release = parseEnvFile(safeRead('/etc/os-release'));
   return {
     os: osId(),
-    distro_id: release.ID || "",
+    distro_id: release.ID || '',
     arch: arch(),
     pkg_mgr: pkgMgr(),
     keyring_backend: keyringBackend(),
@@ -356,19 +344,14 @@ export async function osJson() {
 // CLI entrypoint: `node lib/os-detect.mjs` prints the full JSON report.
 // ---------------------------------------------------------------------------
 
-const invokedDirectly =
-  process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const invokedDirectly = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 // Also handle symlinks and realpath differences that can trip the naive check.
 const invokedViaRealpath =
   process.argv[1] &&
-  import.meta.url ===
-    `file://${fileURLToPath(import.meta.url)}`.replace(
-      /^file:\/\//,
-      "file://",
-    ) &&
-  process.argv[1].endsWith("os-detect.mjs");
+  import.meta.url === `file://${fileURLToPath(import.meta.url)}`.replace(/^file:\/\//, 'file://') &&
+  process.argv[1].endsWith('os-detect.mjs');
 
 if (invokedDirectly || invokedViaRealpath) {
   const obj = await osJson();
-  process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
+  process.stdout.write(JSON.stringify(obj, null, 2) + '\n');
 }
