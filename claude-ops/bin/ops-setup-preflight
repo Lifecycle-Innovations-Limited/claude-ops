@@ -3,10 +3,42 @@
 # Results written to /tmp/ops-preflight/ for the setup wizard to read
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+[ -r "$SCRIPT_DIR/lib/os-detect.sh" ]        && . "$SCRIPT_DIR/lib/os-detect.sh"
+[ -r "$SCRIPT_DIR/lib/credential-store.sh" ] && . "$SCRIPT_DIR/lib/credential-store.sh"
+
 OUT="/tmp/ops-preflight"
 rm -rf "$OUT" && mkdir -p "$OUT"
 
+# Back-compat wrapper: prefer cross-OS ops_cred_get, fall back to macOS `security`.
+cred_get() {
+  if declare -F ops_cred_get >/dev/null 2>&1; then
+    ops_cred_get "$1" "$2" 2>/dev/null
+  else
+    security find-generic-password -s "$1" -a "$2" -w 2>/dev/null
+  fi
+}
+
 # All probes run in parallel as background jobs
+{
+  # Host / OS context — foundational cache for downstream ops-setup-detect
+  if declare -F ops_os_json >/dev/null 2>&1; then
+    ops_os_json > "$OUT/host.json"
+  else
+    echo '{}' > "$OUT/host.json"
+  fi
+} &
+
+{
+  # Credential backends available on this host (debug aid)
+  if declare -F ops_cred_backends_available >/dev/null 2>&1; then
+    # ops_cred_backends_available emits space-separated; split to one per line
+    ops_cred_backends_available | tr ' ' '\n' | sed '/^$/d' > "$OUT/cred-backends.txt"
+  else
+    echo "security" > "$OUT/cred-backends.txt"
+  fi
+} &
+
 {
   # CLI detection
   for tool in jq git gh aws node brew doppler wacli gog sentry-cli expect; do
@@ -20,9 +52,9 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 } &
 
 {
-  # Slack keychain scout
-  xoxc=$(security find-generic-password -s slack-xoxc -w 2>/dev/null || echo "")
-  xoxd=$(security find-generic-password -s slack-xoxd -w 2>/dev/null || echo "")
+  # Slack credential scout (cross-OS)
+  xoxc=$(cred_get slack-xoxc slack-xoxc || echo "")
+  xoxd=$(cred_get slack-xoxd slack-xoxd || echo "")
   if [ -n "$xoxc" ] && [ -n "$xoxd" ]; then
     # Validate
     result=$(curl -s -H "Authorization: Bearer $xoxc" -b "d=$xoxd" "https://slack.com/api/auth.test" 2>/dev/null || echo '{"ok":false}')
@@ -33,9 +65,9 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 } &
 
 {
-  # Telegram keychain scout
+  # Telegram credential scout (cross-OS)
   for key in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
-    val=$(security find-generic-password -s "$key" -w 2>/dev/null || echo "")
+    val=$(cred_get "$key" "$key" || echo "")
     echo "$key=$( [ -n "$val" ] && echo "found" || echo "missing" )" >> "$OUT/telegram.txt"
   done
 } &

@@ -14,6 +14,48 @@ for arg in "$@"; do
   esac
 done
 
+# ─── Cross-OS credential store ──────────────────────────────────────────────
+# Source the cascading credential-store library if present. ops-autofix must
+# still run (degraded, macOS-only) when shipped without lib/ — e.g. a partial
+# install mid-upgrade — so sourcing is best-effort.
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LIB_CRED="$SCRIPT_DIR/lib/credential-store.sh"
+if [ -r "$LIB_CRED" ]; then
+  # shellcheck source=../lib/credential-store.sh
+  . "$LIB_CRED"
+fi
+
+# Account name used for all credential lookups. Matches the convention in
+# ops-slack-autolink.mjs / ops-telegram-autolink.mjs where entries are stored
+# under account=$USER.
+CRED_ACCOUNT="${USER:-$(id -un 2>/dev/null || echo user)}"
+
+# Thin wrappers: prefer the cross-OS API; fall back to direct `security` on
+# macOS so older installs without lib/credential-store.sh still work.
+_cred_get() {
+  if declare -F ops_cred_get >/dev/null 2>&1; then
+    ops_cred_get "$@"
+  else
+    security find-generic-password -s "$1" -a "$2" -w 2>/dev/null
+  fi
+}
+
+_cred_set() {
+  if declare -F ops_cred_set >/dev/null 2>&1; then
+    ops_cred_set "$@"
+  else
+    security add-generic-password -U -s "$1" -a "$2" -w "$3" 2>/dev/null
+  fi
+}
+
+_cred_delete() {
+  if declare -F ops_cred_delete >/dev/null 2>&1; then
+    ops_cred_delete "$@"
+  else
+    security delete-generic-password -s "$1" -a "$2" >/dev/null 2>&1
+  fi
+}
+
 FIXES_APPLIED=()
 FIXES_FAILED=()
 FIXES_SKIPPED=()
@@ -87,9 +129,9 @@ fix_slack_mcp() {
     return
   fi
 
-  # Check for tokens in keychain
-  XOXC=$(security find-generic-password -s slack-xoxc -w 2>/dev/null || echo "")
-  XOXD=$(security find-generic-password -s slack-xoxd -w 2>/dev/null || echo "")
+  # Check for tokens in credential store
+  XOXC=$(_cred_get slack-xoxc "$CRED_ACCOUNT" 2>/dev/null || echo "")
+  XOXD=$(_cred_get slack-xoxd "$CRED_ACCOUNT" 2>/dev/null || echo "")
 
   if [ -z "$XOXC" ] || [ -z "$XOXD" ]; then
     log_skip "slack-mcp: no tokens in keychain (run /ops:setup slack to extract)"
@@ -203,9 +245,9 @@ fix_channel_health() {
   fi
 
   # ── Slack: tokens in keychain but expired ──
-  XOXC=$(security find-generic-password -s slack-xoxc -w 2>/dev/null || echo "")
+  XOXC=$(_cred_get slack-xoxc "$CRED_ACCOUNT" 2>/dev/null || echo "")
   if [ -n "$XOXC" ]; then
-    XOXD=$(security find-generic-password -s slack-xoxd -w 2>/dev/null || echo "")
+    XOXD=$(_cred_get slack-xoxd "$CRED_ACCOUNT" 2>/dev/null || echo "")
     SLACK_OK=$(curl -s -H "Authorization: Bearer $XOXC" -b "d=$XOXD" "https://slack.com/api/auth.test" 2>/dev/null | jq -r '.ok // false' 2>/dev/null || echo "false")
     if [ "$SLACK_OK" != "true" ]; then
       log_fail "slack-health: tokens in keychain are expired (re-run /ops:setup slack)"
@@ -215,9 +257,9 @@ fix_channel_health() {
   fi
 
   # ── Telegram: session in keychain but expired ──
-  TG_SESSION=$(security find-generic-password -s telegram-session -w 2>/dev/null || echo "")
+  TG_SESSION=$(_cred_get telegram-session "$CRED_ACCOUNT" 2>/dev/null || echo "")
   if [ -n "$TG_SESSION" ]; then
-    TG_API_ID=$(security find-generic-password -s telegram-api-id -w 2>/dev/null || echo "")
+    TG_API_ID=$(_cred_get telegram-api-id "$CRED_ACCOUNT" 2>/dev/null || echo "")
     if [ -z "$TG_API_ID" ]; then
       log_fail "telegram-health: session exists but api_id missing from keychain"
     else
