@@ -243,10 +243,12 @@ claude-ops has been completely removed.
   Settings:    cleaned (installed_plugins, known_marketplaces, settings)
   Directories: removed (marketplace, cache, data)
 
-Run `/plugin` in Claude Code to verify ops no longer appears.
+Run `/reload-plugins` then `/plugin` in Claude Code to verify ops no longer appears.
 
 To reinstall later:
+  /reload-plugins
   /plugin marketplace add Lifecycle-Innovations-Limited/claude-ops
   /plugin install ops@lifecycle-innovations-limited-claude-ops
+  /reload-plugins
   /ops:setup
 ```
