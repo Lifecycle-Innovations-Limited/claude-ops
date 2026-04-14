@@ -4,7 +4,7 @@
 
 *All 21 skills available in claude-ops — your business operations command surface*
 
-[![version](https://img.shields.io/badge/version-0.8.0-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.0.0-blue)](../CHANGELOG.md)
 [![skills](https://img.shields.io/badge/skills-21-8b5cf6)](.)
 [![license](https://img.shields.io/badge/license-MIT-22c55e)](../LICENSE)
 [![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-f59e0b)](.)

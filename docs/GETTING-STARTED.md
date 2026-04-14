@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # Getting Started with claude-ops
 
-claude-ops v0.8.0 — Business Operating System for Claude Code. This guide takes you from zero to your first morning briefing in under five minutes.
+claude-ops v1.0.0 — Business Operating System for Claude Code. This guide takes you from zero to your first morning briefing in under five minutes.
 
 ---
 
@@ -90,7 +90,7 @@ The doctor runs a diagnostic script and displays a report:
  OPS ► DOCTOR — 2026-04-14 09:00
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
- Plugin:      0.8.0 at /path/to/plugin
+ Plugin:      1.0.0 at /path/to/plugin
  Skills:      22 defined
  Agents:      12 defined
  Bin scripts: 8 available
