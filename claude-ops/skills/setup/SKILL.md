@@ -31,6 +31,10 @@ This is non-negotiable. EVERY SINGLE Bash tool call in this entire setup wizard 
 
 While background commands run, immediately continue to the next independent step or ask the user the next question. Handle results when the `<task-notification>` arrives. The setup wizard must NEVER show `(ctrl+b to run in background)` — if the user sees that prompt, you violated this rule.
 
+**RULE ONE — SILENT BASH CALLS**
+
+Every Bash tool call MUST include a short `description` parameter (5-10 words, e.g. "Install missing CLIs", "Scout keychain for Telegram creds", "Reload daemon"). This is what the user sees instead of the raw command. Keep setup clean and quiet — the user should see progress titles, not shell scripts.
+
 ---
 
 **Other hard rules:**
