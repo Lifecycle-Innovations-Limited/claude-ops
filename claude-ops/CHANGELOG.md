@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`/ops:monitor`** — Unified APM surface for Datadog, New Relic, and OpenTelemetry. Active alerts, error traces, entity health. `--watch` for live polling.
+- **`/ops:settings`** — Post-setup credential manager. Shows integration status, allows selective updates with smoke tests.
+- **`/ops:integrate`** — Onboard any SaaS API into the partner registry (WebSearch discovery → confirm → credential → health check).
+- **`monitor-agent`** — Lightweight haiku-4-5 agent for APM polling.
+- **`templates/nestjs-api/`** — Full NestJS API template with JWT auth, BullMQ queues, Prisma, Fastify, health endpoint, multi-stage Dockerfile.
+- **`templates/nextjs-saas/`** — Full Next.js SaaS App Router template with Auth.js v5, Stripe billing, Prisma, Tailwind, shadcn/ui.
+- **`@claude-ops/sdk`** — npm package with TypeScript types (SkillManifest, AgentManifest, PluginManifest, HooksConfig) and `create-ops-skill` CLI scaffolder for third-party skill authors.
+- **Automated release pipeline** — GitHub Actions workflow triggered on v* tag push, parses CHANGELOG, creates GitHub Release.
+- **Ubuntu 24.04 CI** — Full test suite runs on both ubuntu-latest and ubuntu-24.04.
+- **Merge conflict resolution** — `/ops:merge` now auto-rebases on `origin/main`; on failure offers accept-theirs / accept-ours / manual / skip.
 - **CLAUDE.md plugin rules** — Plugin-root `CLAUDE.md` with two hard rules enforced across all skills: (1) max 4 options per `AskUserQuestion` call (schema limit), (2) never delegate CLI commands to the user — run via Bash tool instead (exception: `wacli auth` QR code).
 - **Shopify admin app template** — `templates/shopify-admin-app/` — full Shopify Admin Remix template with all admin scopes, forked from Shopify/shopify-app-template-remix.
 - **`bin/ops-shopify-create`** — Non-interactive Shopify app scaffolding script. Automates device-code OAuth (auto-opens browser via `expect`), fetches org ID from Shopify Partners API cache, runs `shopify app init` with all flags, and injects client ID into `shopify.app.toml`.

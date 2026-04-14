@@ -44,8 +44,9 @@ Route `$ARGUMENTS` to the correct ops skill:
 | voice, call, tts, transcribe, phone           | `/ops:ops-voice $ARGUMENTS` |
 | yolo                                          | `/ops-yolo`             |
 | doctor, health, fix, diagnose                 | `/ops:ops-doctor`       |
+| monitor, apm, alerts, datadog, newrelic, otel | `/ops:ops-monitor $ARGUMENTS` |
 | settings, credentials, creds, config, reconfigure | `/ops:ops-settings $ARGUMENTS` |
-| integrate, connect, add-api, saas                 | `/ops:ops-integrate $ARGUMENTS` |
+| integrate, connect, add-api, saas, partner    | `/ops:ops-integrate $ARGUMENTS` |
 | speedup, clean, optimize, cleanup             | `/ops:ops-speedup`      |
 | orchestrate, subagents, agents, dispatch, run | `/ops:ops-orchestrate $ARGUMENTS` |
 
