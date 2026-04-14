@@ -77,7 +77,7 @@ Agent(team_name="yolo-csuite", name="cfo", subagent_type="ops:yolo-cfo", ...)
 Agent(team_name="yolo-csuite", name="coo", subagent_type="ops:yolo-coo", ...)
 ```
 
-After initial analysis, use `SendMessage(to="ceo", content="CTO found critical tech debt in auth service — does this change your strategic recommendation?")` to cross-pollinate findings before synthesizing the Hard Truths report.
+After initial analysis, use `SendMessage(to="cto", content="CFO flagged $400/mo in waste — does this change your tech-debt ranking?")` or similar to cross-pollinate findings between peer agents. The **main `/ops:yolo` orchestrator** (this skill) then reads all four analysis files (ceo-analysis.md, cto-analysis.md, cfo-analysis.md, coo-analysis.md) and synthesizes them into the Hard Truths report. `yolo-ceo` is a parallel peer, not the synthesizer.
 
 If the flag is NOT set, fall back to standard parallel subagents (fire-and-forget, no mid-task steering).
 
@@ -164,9 +164,9 @@ Uses `agents/yolo-coo.md`. Writes `/tmp/yolo-[session]/coo-analysis.md`.
 
 ---
 
-## Phase 3 — Hard Truths Report
+## Phase 3 — Hard Truths Report (orchestrator synthesis)
 
-After all 4 agents complete, synthesize into a unified report:
+**This skill (the main orchestrator) is the synthesizer** — NOT `yolo-ceo`. After all 4 parallel agents complete and have written their analysis files to `/tmp/yolo-[session]/{ceo,cto,cfo,coo}-analysis.md`, read all four files here in the main context and synthesize them into a unified report:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
