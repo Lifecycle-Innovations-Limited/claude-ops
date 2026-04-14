@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # Architecture
 
-claude-ops is a Claude Code plugin (v0.8.0) that installs as a business operating system on top of the Claude Code CLI. It exposes 22 slash-command skills that orchestrate 12 autonomous agents, a persistent background daemon, and a bundled Telegram MCP server. The primary inputs are tool calls from Claude Code sessions; the primary outputs are structured reports, drafted communications, and autonomous code/infrastructure actions executed via shell and API calls.
+claude-ops is a Claude Code plugin (v1.0.0) that installs as a business operating system on top of the Claude Code CLI. It exposes 22 slash-command skills that orchestrate 12 autonomous agents, a persistent background daemon, and a bundled Telegram MCP server. The primary inputs are tool calls from Claude Code sessions; the primary outputs are structured reports, drafted communications, and autonomous code/infrastructure actions executed via shell and API calls.
 
 ---
 
