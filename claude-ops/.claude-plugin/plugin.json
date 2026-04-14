@@ -224,6 +224,34 @@
       "type": "string",
       "sensitive": false,
       "default": ""
+    },
+    "telegram_notify_chat_id": {
+      "title": "Telegram Notification Chat ID",
+      "description": "Chat ID to receive fire alerts. Defaults to telegram_phone's DM if unset.",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "ntfy_topic": {
+      "title": "ntfy.sh Topic",
+      "description": "Topic name (e.g., claude-ops-fires-<random>) for ntfy.sh pushes. Free, no account required.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "pushover_user_key": {
+      "title": "Pushover User Key",
+      "description": "From https://pushover.net/ — paired with pushover_app_token.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "pushover_app_token": {
+      "title": "Pushover App Token",
+      "description": "App-specific token from https://pushover.net/apps/build",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
     }
   }
 }
