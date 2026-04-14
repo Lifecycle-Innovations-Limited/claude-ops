@@ -113,6 +113,21 @@ Use `✓` for present/set, `○` for missing/unset, `✗` for broken.
 
 ## Step 1 — Ask which sections to configure
 
+First, offer a quick "set up everything" option:
+
+```
+How would you like to run setup?
+  [Set up everything — install CLIs, configure all channels, MCPs, registry, daemon, preferences (Recommended)]
+  [Pick sections — choose which parts to configure]
+  [Re-run a specific section — I know what I need]
+```
+
+If the user selects "Set up everything", select ALL sections across all batches and run them in order (Step 2 → 2b → 2c → 3 → 4 → 5 → 5b → 6 → 7), skipping any already fully configured. Within each step, use the "Configure all" fast-path where available.
+
+If the user selects "Re-run a specific section", show a single `AskUserQuestion` listing the section names (cli, daemon, channels, mcp, registry, prefs, env, ecom, mktg, voice, revenue) and jump directly to that step.
+
+If the user selects "Pick sections", proceed with the batched selection below.
+
 Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need attention** (skip ones already green). Because AskUserQuestion allows max 4 options, batch into logical groups:
 
 **Batch 1 — Core setup (run early so the daemon can pre-warm caches while you finish):**
@@ -148,7 +163,16 @@ Present each batch as a separate `AskUserQuestion` call. Skip batches where all 
 
 ## Step 2 — Install CLIs (if selected)
 
-For each missing tool in the detector output, ask with `AskUserQuestion` one question per tool (or a single multiSelect listing all missing ones):
+If multiple CLIs are missing, offer a bulk install first:
+
+```
+Missing CLIs detected: jq, gh, wacli. What would you like to do?
+  [Install all missing CLIs (Recommended)]
+  [Pick which to install]
+  [Skip CLI installation]
+```
+
+If the user selects "Install all", install every missing tool in sequence without further prompts. If "Pick which to install", ask per tool:
 
 ```
 Install jq?           [Yes, install now] [Skip]
@@ -332,7 +356,18 @@ Continue immediately to Step 3 — do NOT wait for the daemon to confirm startup
 
 ## Step 3 — Configure channels (if selected)
 
-Ask which channels the user wants to configure using `AskUserQuestion` with `multiSelect: true`. Because AskUserQuestion allows max 4 options, batch into two groups. Skip channels already configured (show only those needing attention).
+First, offer a quick "configure everything" option before individual selection. Use `AskUserQuestion`:
+
+```
+How would you like to configure channels and integrations?
+  [Configure all — set up every available channel and service (Recommended)]
+  [Pick individually — choose which channels to configure]
+  [Skip all — configure channels later]
+```
+
+If the user selects "Configure all", run every channel sub-flow below in sequence (Telegram → WhatsApp → Email → Slack → Calendar → Doppler → Vault), skipping any already configured. If the user selects "Skip all", move to Step 4.
+
+If the user selects "Pick individually", ask which channels using `AskUserQuestion` with `multiSelect: true`. Because AskUserQuestion allows max 4 options, batch into two groups. Skip channels already configured (show only those needing attention).
 
 **Batch 1 — Messaging:**
 
@@ -1993,7 +2028,16 @@ Prefer a Doppler reference (`doppler:STRIPE_SECRET_KEY`, `doppler:REVENUECAT_API
 
 ## Step 4 — Configure MCPs (if selected)
 
-For each MCP that isn't in `mcp_configured`, print the one-line command the user should run:
+For each MCP that isn't in `mcp_configured`, offer bulk setup first:
+
+```
+Unconfigured MCPs: Linear, Sentry, Vercel. What would you like to do?
+  [Configure all MCPs — run claude mcp add for each (Recommended)]
+  [Pick which MCPs to add]
+  [Skip MCP configuration]
+```
+
+If the user selects "Configure all", run `claude mcp add <name>` for each unconfigured MCP in sequence. If "Pick which", list each individually:
 
 ```
 Linear:  claude mcp add linear
@@ -2003,7 +2047,7 @@ Slack:   claude mcp add slack
 Gmail:   claude mcp add gmail   (fallback only — prefer `gog` CLI, see Step 3c)
 ```
 
-Offer `[Open Claude Code docs]`, `[Skip]`. Do **not** try to register MCPs from the skill — the plugin can't do that safely.
+Offer `[Add now]`, `[Skip]` for each. Do **not** try to register MCPs from the skill — the plugin can't do that safely.
 
 **Email note:** the ops plugin's primary email path is the `gog` CLI (full read + send, own OAuth). The Gmail MCP connector works as a fallback but **cannot send** without extra permission config in Claude Desktop → Settings → Connectors. The wizard handles that detection in Step 3c; this step only lists it so users who deliberately prefer MCP can install it here.
 
