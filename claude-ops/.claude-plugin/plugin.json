@@ -189,6 +189,41 @@
       "type": "string",
       "sensitive": false,
       "default": ""
+    },
+    "datadog_api_key": {
+      "title": "Datadog API Key",
+      "description": "From Datadog Organization Settings > API Keys — used for /ops:monitor",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "datadog_app_key": {
+      "title": "Datadog Application Key",
+      "description": "From Datadog Organization Settings > Application Keys",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "newrelic_api_key": {
+      "title": "New Relic API Key",
+      "description": "User API Key from one.newrelic.com/api-keys — used for /ops:monitor",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "newrelic_account_id": {
+      "title": "New Relic Account ID",
+      "description": "Numeric account ID from New Relic admin portal",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "otel_endpoint": {
+      "title": "OTEL Backend Endpoint",
+      "description": "Base URL of your OpenTelemetry-compatible backend (e.g., https://otlp.grafana.net)",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
     }
   }
 }
