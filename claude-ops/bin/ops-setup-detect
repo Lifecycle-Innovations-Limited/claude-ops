@@ -16,6 +16,9 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REGISTRY="$SCRIPT_DIR/scripts/registry.json"
 
+LIB_OS_DETECT="$SCRIPT_DIR/lib/os-detect.sh"
+[ -r "$LIB_OS_DETECT" ] && . "$LIB_OS_DETECT"
+
 # Preferences live in Claude Code's per-plugin data dir so they survive plugin
 # reinstalls/version bumps. Falls back to the plugin source dir for users who
 # run bin/ops-setup-detect directly outside a Claude Code plugin context.
@@ -82,8 +85,20 @@ tool_status() {
   has "$tool"
 }
 
+# host — OS/arch/pkg-mgr/keyring context from lib/os-detect.sh (used by channel installers)
+if declare -F ops_os_json >/dev/null 2>&1; then
+  if command -v jq >/dev/null 2>&1; then
+    HOST_JSON="$(ops_os_json | jq '.' 2>/dev/null || echo '{}')"
+  else
+    HOST_JSON="$(ops_os_json)"
+  fi
+else
+  HOST_JSON="{}"
+fi
+
 cat <<EOF
 {
+  "host": $HOST_JSON,
   "platform": "$PLATFORM",
   "shell": "$SHELL_NAME",
   "profile_file": "$PROFILE_FILE",
