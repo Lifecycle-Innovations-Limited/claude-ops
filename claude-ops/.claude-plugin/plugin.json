@@ -1,6 +1,6 @@
 {
   "name": "ops",
-  "version": "0.8.0",
+  "version": "1.0.0",
   "description": "Business operations command center for Claude Code — 22 skills, 12 agents, and a smart background daemon that manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (all AWS services), revenue (Stripe + RevenueCat), e-commerce (Shopify), marketing (Klaviyo/Meta/GA4/GSC), and voice (Bland AI/ElevenLabs/Whisper). Includes YOLO mode for autonomous operation.",
   "author": {
     "name": "Lifecycle Innovations Limited",
