@@ -7,10 +7,15 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
+  # ─── 1. GitHub Release from CHANGELOG ───────────────────────────────────────
   create-release:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+      notes_file: ${{ steps.changelog.outputs.NOTES_FILE }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -41,31 +46,148 @@ jobs:
           echo "$NOTES" > /tmp/release-notes.md
           echo "NOTES_FILE=/tmp/release-notes.md" >> "$GITHUB_OUTPUT"
 
-      - name: Update version in plugin.json
-        run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" claude-ops/.claude-plugin/plugin.json
-
-      - name: Update version in marketplace.json
-        run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" .claude-plugin/marketplace.json
-
-      - name: Commit version bumps
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add claude-ops/.claude-plugin/plugin.json .claude-plugin/marketplace.json
-          git diff --cached --quiet || git commit -m "chore: bump version to ${{ steps.version.outputs.VERSION }} [skip ci]"
-          git push origin HEAD:main || true
-
       - name: Create GitHub Release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          release_name: "claude-ops v${{ steps.version.outputs.VERSION }}"
+          name: "claude-ops v${{ steps.version.outputs.VERSION }}"
           body_path: ${{ steps.changelog.outputs.NOTES_FILE }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── 2. Open a PR with the version bumps ────────────────────────────────────
+  # Branch protection on `main` rejects direct pushes from github-actions[bot],
+  # so the previous "Commit version bumps" step silently failed every release.
+  # We now open a PR against main with the bumps and let the maintainer
+  # squash-merge.
+  bump-version-pr:
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump versions in plugin/marketplace/package JSON
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          # Use jq for safe JSON edits when available; fall back to sed otherwise.
+          if command -v jq >/dev/null 2>&1; then
+            tmp=$(mktemp)
+            jq --arg v "$VERSION" '.version = $v' claude-ops/.claude-plugin/plugin.json > "$tmp" \
+              && mv "$tmp" claude-ops/.claude-plugin/plugin.json
+            jq --arg v "$VERSION" '.version = $v' claude-ops/package.json > "$tmp" \
+              && mv "$tmp" claude-ops/package.json
+            jq --arg v "$VERSION" '.plugins |= map(if .name == "ops" then .version = $v else . end)' \
+              .claude-plugin/marketplace.json > "$tmp" \
+              && mv "$tmp" .claude-plugin/marketplace.json
+          else
+            # Fallback: target the literal "version" line in each file. This is
+            # less safe (matches the first .version key) but keeps the workflow
+            # working on minimal runners.
+            sed -i "0,/\"version\":/{s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/}" \
+              claude-ops/.claude-plugin/plugin.json
+            sed -i "0,/\"version\":/{s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/}" \
+              claude-ops/package.json
+            # marketplace.json — only the ops plugin entry, not the marketplace meta
+            sed -i "/\"name\": \"ops\"/,/\"version\":/{s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/}" \
+              .claude-plugin/marketplace.json
+          fi
+
+      - name: Open bump PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          BRANCH="release/bump-${VERSION}"
+          if git diff --quiet; then
+            echo "no version changes to commit (already at v${VERSION})"
+            exit 0
+          fi
+          git checkout -B "$BRANCH"
+          git add claude-ops/.claude-plugin/plugin.json \
+                  claude-ops/package.json \
+                  .claude-plugin/marketplace.json
+          git commit -m "chore: bump version to ${VERSION} [skip ci]"
+          git push -f origin "$BRANCH"
+
+          # Write PR body to a file to avoid YAML/shell quoting hell
+          cat > /tmp/bump-pr-body.md <<EOF
+          Auto-generated by the Release workflow after publishing v${VERSION}.
+
+          Bumps:
+          - \`claude-ops/.claude-plugin/plugin.json\`
+          - \`claude-ops/package.json\`
+          - \`.claude-plugin/marketplace.json\` (\`plugins.ops.version\`)
+
+          Squash-merge to finish the release. Safe to merge — no code changes.
+          EOF
+
+          # Open the PR; ignore failure if it already exists
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "chore: bump version to ${VERSION}" \
+            --body-file /tmp/bump-pr-body.md \
+            || echo "PR may already exist for $BRANCH — skipping create"
+
+  # ─── 3. (Optional) Publish @claude-ops/sdk to npm ──────────────────────────
+  # No-op when NPM_TOKEN isn't set — gates the whole job behind the secret.
+  # When the maintainer wires NPM_TOKEN into org/repo Actions secrets, this
+  # job builds and publishes the SDK package on every v* tag.
+  publish-sdk:
+    needs: create-release
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.ref_name, '-') }}  # skip prereleases
+    steps:
+      - name: Check NPM_TOKEN availability
+        id: check
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "NPM_TOKEN not configured — skipping npm publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6
+        if: steps.check.outputs.publish == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.publish == 'true'
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install + build SDK
+        if: steps.check.outputs.publish == 'true'
+        working-directory: sdk
+        run: |
+          npm ci 2>/dev/null || npm install
+          npm run build
+
+      - name: Publish to npm (public scope)
+        if: steps.check.outputs.publish == 'true'
+        working-directory: sdk
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # SDK has its own version track; only publish when sdk/package.json
+          # contains a version that doesn't already exist on npm.
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if npm view "@claude-ops/sdk@${PKG_VERSION}" version >/dev/null 2>&1; then
+            echo "@claude-ops/sdk@${PKG_VERSION} already on npm — skipping publish"
+            exit 0
+          fi
+          npm publish --access public
