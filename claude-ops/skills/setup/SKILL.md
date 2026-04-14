@@ -176,7 +176,7 @@ GSD is a third-party Claude Code plugin that adds project roadmap tracking. When
 Check if GSD is already installed:
 
 ```bash
-ls ~/.claude/skills/gsd-progress/SKILL.md 2>/dev/null && echo "installed" || echo "not_installed"
+find ~/.claude -name "gsd-progress" -path "*/skills/*" 2>/dev/null | head -1 | grep -q . && echo "installed" || echo "not_installed"
 ```
 
 If not installed, ask via `AskUserQuestion`:
@@ -549,7 +549,7 @@ Set up Telegram personal account access?
 
 If the user skips, record `channels.telegram = "skipped"` in `$PREFS_PATH` and move on. Do NOT silently mark Telegram as unconfigured — the explicit skip prevents the status header from showing `○ telegram (no token)` as an action item on subsequent runs.
 
-**Rate-limit guard**: Before starting, check `$PREFS_PATH` for `channels.telegram.status == "rate_limited"`. If `retry_after` is in the future, tell the user: `"Telegram rate-limited until [time]. Skipping — re-run /ops:setup telegram after [time]."` and move to the next channel. Do NOT attempt `send_password` — it will fail immediately and may extend the cooldown.
+**Rate-limit guard**: Before starting, check `$PREFS_PATH` for `channels.telegram` being an object with `.status == "rate_limited"` — use a type guard: `if (channels.telegram | type) == "object" and .channels.telegram.status == "rate_limited"` (jq: `if (.channels.telegram | type) == "object" then .channels.telegram.status else "skipped" end`). If `retry_after` is in the future, tell the user: `"Telegram rate-limited until [time]. Skipping — re-run /ops:setup telegram after [time]."` and move to the next channel. Do NOT attempt `send_password` — it will fail immediately and may extend the cooldown.
 
 **Bots cannot read user DMs**, so `/ops-inbox telegram` requires a personal-account MCP. The plugin ships `bin/ops-telegram-autolink.mjs` which:
 
@@ -595,7 +595,7 @@ Sub-flow (only runs if user selected Yes above):
 
    **Error recovery — CRITICAL: do NOT burn login attempts.** Each `send_password` call counts toward Telegram's rate limit (~3-5 per 8 hours). If the autolink fails:
 
-   - **`"selectors may have changed"` / extraction failure**: The HTML parsing failed but the login succeeded. Do NOT re-run the script. Instead, check if the error includes `html_snippet` — the snippet shows the stripped page text. If it contains a 5-12 digit number near "api_id" and a 32-char hex near "api_hash", extract them directly with grep/regex from the snippet. If the snippet shows a login page or redirect, the session expired during extraction.
+   - **`"could not extract ... after 6 extraction strategies"` / extraction failure**: The HTML parsing failed but the login succeeded. Do NOT re-run the script. Instead, check if the error includes `html_snippet` — the snippet shows the stripped page text. If it contains a 5-12 digit number near "api_id" and a 32-char hex near "api_hash", extract them directly with grep/regex from the snippet. If the snippet shows a login page or redirect, the session expired during extraction.
    - **`rate-limited`**: Record `channels.telegram.status = "rate_limited"` and `channels.telegram.retry_after` (now + 8 hours) in `$PREFS_PATH`. Move on to the next channel. On subsequent `/ops:setup` runs, check `retry_after` and skip Telegram if the cooldown hasn't expired.
    - **Code file not consumed**: If `/tmp/telegram-code.txt` still exists 10+ seconds after writing, the validation regex rejected it. Read the file contents and the log. Do NOT ask the user for another code — the original code is still valid, you just need to fix the bridge.
    - **General rule**: You get at most 2 `send_password` attempts per setup session. If the first attempt fails for a non-rate-limit reason, diagnose the root cause before trying again. If the second attempt fails, save state and move on.
