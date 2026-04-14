@@ -1,80 +1,225 @@
 #!/usr/bin/env bash
 # ops-setup-install — Idempotent installer for ops CLI dependencies
-# Usage: ops-setup-install <tool> [<tool>...]
-# Tools: jq git gh aws node doppler wacli gog sentry-cli
+# Usage: ops-setup-install [--dry-run] [--json] [--list-pkg-mgr] <tool> [<tool>...]
+# Tools: jq git gh aws node brew doppler wacli gog sentry-cli expect
 set -euo pipefail
 
-PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')"
+# ─── Source the os-detect helper (cross-OS pkg mgr detection) ───────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LIB_OS_DETECT="$SCRIPT_DIR/lib/os-detect.sh"
+if [ -r "$LIB_OS_DETECT" ]; then
+  # shellcheck source=../lib/os-detect.sh
+  . "$LIB_OS_DETECT"
+fi
 
-install_mac() {
-  local tool="$1"
-  if ! command -v brew >/dev/null 2>&1; then
-    echo "✗ Homebrew not found. Install from https://brew.sh first." >&2
-    return 1
-  fi
+DRY_RUN=0
+JSON=0
+LIST_PKG_MGR=0
+TOOLS=()
+
+# ─── CLI arg parsing (preserves legacy positional tool args) ────────────────
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run)       DRY_RUN=1 ;;
+    --json)          JSON=1 ;;
+    --list-pkg-mgr)  LIST_PKG_MGR=1 ;;
+    --tool=*)        TOOLS+=("${arg#--tool=}") ;;
+    -h|--help)
+      sed -n '2,4p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0 ;;
+    --*)             echo "✗ Unknown flag: $arg" >&2; exit 2 ;;
+    *)               TOOLS+=("$arg") ;;
+  esac
+done
+
+# ─── Debug: --list-pkg-mgr prints OS + pkg_mgr + sample install cmd ─────────
+if [ "$LIST_PKG_MGR" -eq 1 ]; then
+  os="unknown"; mgr=""; cmd=""
+  if declare -F ops_os >/dev/null 2>&1;               then os="$(ops_os)"; fi
+  if declare -F ops_pkg_mgr >/dev/null 2>&1;          then mgr="$(ops_pkg_mgr)"; fi
+  if declare -F ops_pkg_install_cmd >/dev/null 2>&1;  then cmd="$(ops_pkg_install_cmd jq 2>/dev/null || echo '')"; fi
+  echo "os=$os pkg_mgr=$mgr cmd=\"$cmd\""
+  exit 0
+fi
+
+# ─── Package-name translation table ─────────────────────────────────────────
+# Many tools have different package names across distros. Given a logical
+# "tool" name + the detected pkg manager, echo the right package name.
+# Defaults to $tool if no mapping exists.
+resolve_pkg_name() {
+  local tool="$1" mgr="$2"
   case "$tool" in
-    jq)         brew install jq ;;
-    git)        brew install git ;;
-    gh)         brew install gh ;;
-    aws)        brew install awscli ;;
-    node)       brew install node ;;
-    doppler)    brew install dopplerhq/cli/doppler ;;
-    sentry-cli) brew install getsentry/tools/sentry-cli ;;
-    expect)     brew install expect ;;
-    wacli)      echo "○ wacli is not on Homebrew — install manually: https://github.com/wacli/wacli" >&2; return 2 ;;
-    gog)        install_gog ;;
-    *) echo "✗ Unknown tool: $tool" >&2; return 1 ;;
+    jq|git|expect|brew) echo "$tool" ;;
+    gh)
+      case "$mgr" in
+        pacman) echo "github-cli" ;;
+        winget) echo "GitHub.cli" ;;
+        *)      echo "gh" ;;
+      esac ;;
+    aws)
+      case "$mgr" in
+        brew|apt-get|dnf|zypper|apk) echo "awscli" ;;
+        pacman)                      echo "aws-cli" ;;
+        winget)                      echo "Amazon.AWSCLI" ;;
+        choco)                       echo "awscli" ;;
+        scoop)                       echo "aws" ;;
+        *)                           echo "awscli" ;;
+      esac ;;
+    node)
+      case "$mgr" in
+        brew)                               echo "node" ;;
+        apt-get|dnf|pacman|zypper|apk)      echo "nodejs" ;;
+        winget)                             echo "OpenJS.NodeJS.LTS" ;;
+        choco)                              echo "nodejs-lts" ;;
+        scoop)                              echo "nodejs-lts" ;;
+        *)                                  echo "nodejs" ;;
+      esac ;;
+    gog)
+      case "$mgr" in
+        brew)   echo "gogcli" ;;          # also: steipete/tap/gogcli if tapped
+        pacman) echo "gogcli" ;;          # typically via yay/AUR
+        winget) echo "steipete.gogcli" ;;
+        *)      echo "gogcli" ;;
+      esac ;;
+    *) echo "$tool" ;;
   esac
 }
 
-# install_gog — try npm, then bun, then source-clone (private repo).
-# Returns 0 on success, 2 on failure (with manual instructions printed).
-install_gog() {
-  if command -v npm >/dev/null 2>&1 && npm install -g @auroracapital/gog >/dev/null 2>&1; then
-    echo "✓ gog installed via npm"
-    return 0
-  fi
-  if command -v bun >/dev/null 2>&1 && bun install -g @auroracapital/gog >/dev/null 2>&1; then
-    echo "✓ gog installed via bun"
-    return 0
-  fi
-  if command -v git >/dev/null 2>&1 && \
-     git clone https://github.com/auroracapital/gog "$HOME/.gog" >/dev/null 2>&1 && \
-     ( cd "$HOME/.gog" && ./install.sh >/dev/null 2>&1 ); then
-    echo "✓ gog installed from source (~/.gog)"
-    return 0
-  fi
-  echo "✗ Could not install gog. Options:" >&2
-  echo "  1. Ask Sam (internal team) for the latest release binary" >&2
-  echo "  2. Request access to github.com/auroracapital/gog" >&2
-  echo "  3. Use the Gmail MCP fallback (read-only, drafts only)" >&2
-  return 2
-}
-
-install_linux() {
-  local tool="$1"
-  if command -v apt-get >/dev/null 2>&1; then
-    case "$tool" in
-      jq|git|gh|awscli) sudo apt-get install -y "$tool" ;;
-      aws)              sudo apt-get install -y awscli ;;
-      node)             sudo apt-get install -y nodejs npm ;;
-      *) echo "○ $tool not handled by apt — install manually." >&2; return 2 ;;
-    esac
+# ─── install_pkg: prefer ops_pkg_install_cmd, fall back to legacy ───────────
+install_pkg() {
+  local pkg="$1" cmd
+  if declare -F ops_pkg_install_cmd >/dev/null 2>&1; then
+    cmd="$(ops_pkg_install_cmd "$pkg")" || {
+      echo "✗ no package manager detected for this OS; install $pkg manually" >&2
+      return 1
+    }
+    if [ -z "$cmd" ]; then
+      echo "✗ no package manager detected for this OS; install $pkg manually" >&2
+      return 1
+    fi
+    echo "+ $cmd"
+    if [ "$DRY_RUN" -eq 0 ]; then
+      eval "$cmd"
+    fi
   else
-    echo "✗ No supported package manager found (apt-get)." >&2
-    return 1
+    # Legacy path: preserve existing behavior for mid-upgrade users.
+    case "$(uname -s)" in
+      Darwin*) [ "$DRY_RUN" -eq 0 ] && brew install "$pkg" || echo "+ brew install $pkg" ;;
+      Linux*)  [ "$DRY_RUN" -eq 0 ] && sudo apt-get install -y "$pkg" || echo "+ sudo apt-get install -y $pkg" ;;
+      *)       echo "✗ unsupported OS: $(uname -s)" >&2; return 1 ;;
+    esac
   fi
 }
 
-for tool in "$@"; do
+# ─── Special-case tools that aren't on a package manager ────────────────────
+# Some tools require custom install paths (install scripts, npm, source).
+# Returns 0 on success, 1 on hard failure, 2 when user must install manually.
+install_special() {
+  local tool="$1" os=""
+  if declare -F ops_os >/dev/null 2>&1; then os="$(ops_os)"; fi
+
+  case "$tool" in
+    doppler)
+      # Doppler ships an official install script; use pkg mgr where it exists.
+      local mgr=""
+      if declare -F ops_pkg_mgr >/dev/null 2>&1; then mgr="$(ops_pkg_mgr)"; fi
+      case "$mgr" in
+        brew)   echo "+ brew install dopplerhq/cli/doppler"
+                [ "$DRY_RUN" -eq 0 ] && brew install dopplerhq/cli/doppler ;;
+        scoop)  echo "+ scoop bucket add doppler https://github.com/DopplerHQ/scoop-doppler.git && scoop install doppler"
+                [ "$DRY_RUN" -eq 0 ] && { scoop bucket add doppler https://github.com/DopplerHQ/scoop-doppler.git 2>/dev/null || true; scoop install doppler; } ;;
+        winget) echo "+ winget install -e --id Doppler.Doppler"
+                [ "$DRY_RUN" -eq 0 ] && winget install -e --id Doppler.Doppler ;;
+        *)      echo "+ curl -Ls https://cli.doppler.com/install.sh | sh"
+                [ "$DRY_RUN" -eq 0 ] && curl -Ls https://cli.doppler.com/install.sh | sh ;;
+      esac
+      return 0 ;;
+    sentry-cli)
+      # Preferred install path is npm (cross-platform, no pkg mgr needed).
+      if [ "$os" = "macos" ] && command -v brew >/dev/null 2>&1; then
+        echo "+ brew install getsentry/tools/sentry-cli"
+        [ "$DRY_RUN" -eq 0 ] && brew install getsentry/tools/sentry-cli
+        return 0
+      fi
+      if command -v npm >/dev/null 2>&1; then
+        echo "+ npm install -g @sentry/cli"
+        [ "$DRY_RUN" -eq 0 ] && npm install -g @sentry/cli
+        return 0
+      fi
+      echo "○ sentry-cli needs npm or Homebrew — install Node first, then retry." >&2
+      return 2 ;;
+    wacli)
+      # wacli isn't on any package manager yet — point users to source install.
+      echo "○ wacli is not on any package manager — install from source:" >&2
+      echo "  git clone https://github.com/wacli/wacli && cd wacli && ./install.sh" >&2
+      return 2 ;;
+    brew)
+      # Homebrew has its own bootstrap installer.
+      echo "+ /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+      if [ "$DRY_RUN" -eq 0 ]; then
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      fi
+      return 0 ;;
+    *) return 127 ;;  # 127 = "not a special case; caller should use install_pkg"
+  esac
+}
+
+# ─── Per-tool install driver ────────────────────────────────────────────────
+install_tool() {
+  local tool="$1" mgr="" pkg rc
+  if declare -F ops_pkg_mgr >/dev/null 2>&1; then mgr="$(ops_pkg_mgr)"; fi
+
+  # Try special-case installers first (doppler, sentry-cli, wacli, brew).
+  install_special "$tool"
+  rc=$?
+  if [ "$rc" -ne 127 ]; then
+    return "$rc"
+  fi
+
+  # Default path: resolve pkg name + invoke pkg manager.
+  pkg="$(resolve_pkg_name "$tool" "$mgr")"
+  install_pkg "$pkg"
+}
+
+# ─── JSON result accumulator ────────────────────────────────────────────────
+json_results=()
+
+# ─── Main loop ──────────────────────────────────────────────────────────────
+if [ "${#TOOLS[@]}" -eq 0 ]; then
+  echo "✗ No tools specified. Usage: $(basename "$0") [--dry-run] <tool>..." >&2
+  exit 2
+fi
+
+overall_rc=0
+for tool in "${TOOLS[@]}"; do
   if command -v "$tool" >/dev/null 2>&1; then
     echo "✓ $tool already installed"
+    json_results+=("{\"tool\":\"$tool\",\"status\":\"present\"}")
     continue
   fi
   echo "⏳ Installing $tool..."
-  case "$PLATFORM" in
-    darwin) install_mac "$tool" ;;
-    linux)  install_linux "$tool" ;;
-    *) echo "✗ Unsupported platform: $PLATFORM" >&2; exit 1 ;;
-  esac
+  if install_tool "$tool"; then
+    echo "✓ $tool installed"
+    json_results+=("{\"tool\":\"$tool\",\"status\":\"installed\"}")
+  else
+    rc=$?
+    if [ "$rc" -eq 2 ]; then
+      json_results+=("{\"tool\":\"$tool\",\"status\":\"manual\"}")
+    else
+      json_results+=("{\"tool\":\"$tool\",\"status\":\"failed\"}")
+      overall_rc=1
+    fi
+  fi
 done
+
+# ─── Optional JSON output (for setup skill to parse) ────────────────────────
+if [ "$JSON" -eq 1 ]; then
+  printf '['
+  for i in "${!json_results[@]}"; do
+    [ "$i" -gt 0 ] && printf ','
+    printf '%s' "${json_results[$i]}"
+  done
+  printf ']\n'
+fi
+
+exit "$overall_rc"
