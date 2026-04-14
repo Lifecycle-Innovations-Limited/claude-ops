@@ -67,11 +67,31 @@ for script in "${script_files[@]}"; do
       ok "macOS-only tool usage present (macOS environment)"
     fi
   else
-    # On Linux: check that macOS-only tool calls are guarded
+    # On Linux: check that macOS-only tool calls are guarded by an IS_MACOS / OS check
     unguarded=false
+    macos_guard_depth=0   # >0 means we are inside a macOS-only if-block
+    if_depth=0            # overall if nesting depth when guard started
     while IFS= read -r line; do
-      # Skip lines that are comments
+      # Skip blank lines and full-line comments
       [[ "$line" =~ ^[[:space:]]*# ]] && continue
+      stripped="${line#"${line%%[! ]*}"}"   # leading-whitespace stripped
+
+      # Detect entry into a macOS-guarded block:
+      #   if $IS_MACOS;  /  if [ "$OS" = "macos" ]  /  Darwin*) in case  /  $IS_MACOS &&
+      if echo "$stripped" | grep -qE \
+          '^\$IS_MACOS\s*&&|if[[:space:]].*\$IS_MACOS|if[[:space:]].*"macos"|if[[:space:]].*Darwin|Darwin\*\)'; then
+        macos_guard_depth=$(( macos_guard_depth + 1 ))
+      fi
+
+      # Track fi / esac / ;; that close guarded blocks
+      if (( macos_guard_depth > 0 )); then
+        if echo "$stripped" | grep -qE '^fi[[:space:];]*(#.*)?$|^esac[[:space:];]*(#.*)?$'; then
+          macos_guard_depth=$(( macos_guard_depth - 1 ))
+        fi
+        # Lines inside a guard are safe — skip the macOS-tool check
+        continue
+      fi
+
       # Check for macOS-only tools outside of IS_MACOS guards
       if echo "$line" | grep -qE "(security find-generic-password|pbcopy|osascript|defaults read)"; then
         unguarded=true
