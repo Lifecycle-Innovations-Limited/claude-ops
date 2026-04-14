@@ -2,10 +2,10 @@
 
 # Skills Reference
 
-*All 21 skills available in claude-ops — your business operations command surface*
+*All 22 skills available in claude-ops — your business operations command surface*
 
 [![version](https://img.shields.io/badge/version-1.1.0-blue)](../CHANGELOG.md)
-[![skills](https://img.shields.io/badge/skills-21-8b5cf6)](.)
+[![skills](https://img.shields.io/badge/skills-22-8b5cf6)](.)
 [![license](https://img.shields.io/badge/license-MIT-22c55e)](../LICENSE)
 [![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-f59e0b)](.)
 
@@ -249,6 +249,16 @@ Health check and auto-repair. Diagnoses manifest errors, broken permissions, inv
 - `/ops:doctor` — full health check + auto-fix
 - `/ops:doctor --check-only` — diagnose only, no fixes
 - `/ops:doctor --verbose` — detailed output
+
+### `/ops:status` · `skills/ops-status/SKILL.md`
+Lightweight green/red status panel for every configured integration. No gathering, no actions — just a sub-second probe of CLIs, channels, MCPs, commerce / voice / monitoring userConfig, the daemon, and the project registry. Much lighter than `/ops:go`; pair with `--json` for machine-readable output.
+- `/ops:status` — compact pretty panel
+- `/ops:status --json` — flat JSON for tooling
+
+> [!TIP]
+> `/ops:status` targets <1s runtime and makes zero network calls. Use it as a quick "is everything still plugged in?" glance. For live data, use `/ops:go`; for deep diagnostics + auto-repair, use `/ops:doctor`.
+
+Router mapping (in `/ops`): `status`, `health-status` → `/ops:ops-status`.
 
 ### `/ops:speedup` · `skills/ops-speedup/SKILL.md`
 Cross-platform system optimizer. Detects macOS/Linux/WSL, scans for reclaimable disk space, memory pressure, runaway processes, startup bloat, network latency. Health score 0–100.
