@@ -1,7 +1,7 @@
 ---
 name: ops-inbox
-description: Full inbox management across all channels — WhatsApp (wacli), Email (Gmail MCP), Slack (MCP), Telegram (user-auth MCP). Scans FULL inbox (not just unread), identifies messages needing replies, archives handled conversations.
-argument-hint: "[channel: whatsapp|email|slack|telegram|all]"
+description: Full inbox management across all channels — WhatsApp (wacli), Email (Gmail MCP), Slack (MCP), Telegram (user-auth MCP), Discord (webhook + REST read). Scans FULL inbox (not just unread), identifies messages needing replies, archives handled conversations.
+argument-hint: "[channel: whatsapp|email|slack|telegram|discord|all]"
 allowed-tools:
   - Bash
   - Read
@@ -184,6 +184,7 @@ For each channel, detect availability at runtime:
 2. **WhatsApp**: First check `~/.wacli/.health` for keepalive daemon status. If `status=needs_auth` or `status=needs_reauth`, do NOT attempt wacli commands — instead prompt the user: "WhatsApp needs re-authentication. Run `wacli auth` in a separate terminal and scan the QR code, then type 'done'." Use `AskUserQuestion`: `[Done — re-paired]`, `[Skip WhatsApp]`. On Done, restart the daemon: `launchctl kickstart -k gui/$(id -u)/com.claude-ops.wacli-keepalive`, wait 5s, re-check health. If no health file exists, fall back to `wacli doctor` for auth/connection status. If outdated (405 error), advise rebuilding from source.
 3. **Slack**: Only via MCP tools (`mcp__claude_ai_Slack__*`). Check `SLACK_MCP_ENABLED` env var.
 4. **Telegram**: Only via user-auth MCP (tdlib/MTProto). Check `TELEGRAM_ENABLED` env var. Never use BotFather bots.
+5. **Discord**: Via `${CLAUDE_PLUGIN_ROOT}/bin/ops-discord read <CHANNEL_ID> --limit 20 --json`. Requires `DISCORD_BOT_TOKEN` (v1 is channel-scoped — no DM/gateway support yet). Pre-configured read list lives at `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` under `discord.inbox_channels` (array of channel IDs). If neither a bot token nor a read list is configured, skip Discord with a one-line note ("Discord not configured — run `/ops:setup discord`") rather than prompting — ops-inbox is not a setup flow. Rule 3 still applies to `/ops:setup`.
 
 ## Your task
 
@@ -446,6 +447,27 @@ Use the Telegram user-auth MCP server if available.
 ```
 
 If no Telegram user-auth tool is available, report: "Telegram not configured — needs user-auth MCP server (tdlib/MTProto)".
+
+### Discord (v1 — REST channel scan)
+
+Discord v1 support is channel-scoped (webhook send + REST read). DM + gateway are deferred to a v2 issue.
+
+1. Resolve the read list: read `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` → `discord.inbox_channels[]`. If empty and `DISCORD_GUILD_ID` is set, fall back to `bin/ops-discord channels --json` (list the guild's text channels and let the user pick via `AskUserQuestion`, ≤4 per Rule 1 — paginate with `[More...]`).
+2. For each channel ID:
+   ```bash
+   ${CLAUDE_PLUGIN_ROOT}/bin/ops-discord read "<CHANNEL_ID>" --limit 20 --json
+   ```
+3. Classify each channel's recent messages:
+   - **NEEDS REPLY**: Latest non-bot message mentions the operator (`<@user-id>`) or is a direct question.
+   - **FYI**: Bot-posted notifications (CI, alerts) — summarize counts and skip.
+4. For replies, reuse the `send` path documented in `skills/ops-comms/SKILL.md` → **Discord send**.
+
+If `bin/ops-discord` exits 1 with `{"error":"no discord credential configured — run /ops:setup discord"}`, print a single-line note and continue to the next channel — do not prompt inside the inbox flow.
+
+```
+💬 DISCORD — activity (last 7d)
+ #channel-name  [N messages] | [M need reply]
+```
 
 ---
 
