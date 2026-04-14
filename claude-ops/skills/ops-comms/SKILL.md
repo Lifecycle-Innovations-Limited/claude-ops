@@ -61,10 +61,12 @@ Before executing, load available context:
 
 | Command | Usage | Output |
 |---------|-------|--------|
-| `gog gmail search -j --results-only --no-input --max 30 "in:inbox"` | Search inbox | JSON array of threads |
-| `gog gmail read -j --no-input "<thread_id>"` | Read thread | Full message JSON |
-| `gog gmail send -j --to "<email>" --subject "<subj>" --body "<body>"` | Send email | Send result |
-| `gog gmail labels modify --remove INBOX <thread_ids>` | Archive | Label change |
+| `gog gmail search "in:inbox" --max 50 -j --results-only --no-input` | Search inbox | JSON array of threads |
+| `gog gmail thread get <threadId> -j` | Get full thread with all messages | Full message JSON |
+| `gog gmail send --to "user@example.com" --subject "subj" --body "text"` | Send new email | Send result |
+| `gog gmail send --reply-to-message-id <msgId> --reply-all --body "text"` | Reply all | Send result |
+| `gog gmail send --to "a@b.com" --subject "subj" --body "text" --attach /path/file` | With attachment | Send result |
+| `gog gmail archive <messageId> ... --no-input --force` | Archive messages | Archive result |
 
 ---
 
