@@ -7,8 +7,8 @@
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blueviolet.svg)
-![Skills](https://img.shields.io/badge/skills-22-success)
-![Agents](https://img.shields.io/badge/agents-12-informational)
+![Skills](https://img.shields.io/badge/skills-25-success)
+![Agents](https://img.shields.io/badge/agents-13-informational)
 ![Integrations](https://img.shields.io/badge/integrations-22-orange)
 ![Models](https://img.shields.io/badge/Opus%204.6%20%2F%20Sonnet%204.6%20%2F%20Haiku%204.5-ff69b4)
 
