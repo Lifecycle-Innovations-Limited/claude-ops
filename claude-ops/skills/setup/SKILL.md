@@ -611,7 +611,14 @@ Sub-flow (only runs if user selected Yes above):
 
    Also check `~/.claude.json mcpServers.telegram.env.TELEGRAM_API_ID`. If all 4 are found and the stored `TELEGRAM_SESSION` decodes as a StringSession, tell the user `"✓ Telegram already configured (api_id=XXXXXXX, phone=+XX...)"` and skip to step 8.
 
-2. **Ask the user for their phone number** via `AskUserQuestion` (free-text). Validate it matches `^\+\d{7,15}$`. Explain that the phone is only used once during the first-run extraction and is stored locally only.
+2. **Ask the user for their phone number** via `AskUserQuestion` with a single free-text option. Do NOT offer country-specific presets or example numbers — just one option that prompts for direct input:
+
+   ```
+   Enter your Telegram phone number (include country code, e.g. +31612345678):
+     [Enter phone number — type your full number starting with +]
+   ```
+
+   The user will select this option and type their number in the "Other" free-text field. Validate it matches `^\+\d{7,15}$`. Explain that the phone is only used once during the first-run extraction and is stored locally only.
 
 3. **Warn about 2 codes.** Inform the user via `AskUserQuestion`: `"Telegram will send TWO codes to your Telegram app — one for my.telegram.org web login, then a second one for gram.js auth. Have your Telegram app ready."` Options: `[I'm ready]`, `[Cancel]`.
 
@@ -2285,9 +2292,8 @@ If the file already exists, **merge** — don't overwrite. Read with `jq`, apply
 ## Step 7 — Shell env (if selected)
 
 1. Check whether `CLAUDE_PLUGIN_ROOT` is already exported in the profile file (grep for `CLAUDE_PLUGIN_ROOT`).
-2. If missing, ask: "Append `export CLAUDE_PLUGIN_ROOT=...` to `~/.zshrc`?" → `[Yes]`, `[Skip — I'll do it manually]`.
-3. If Yes, append (don't overwrite). Use `>>`, not `>`.
-4. Tell the user to run `source ~/.zshrc` or open a new terminal for it to take effect.
+2. If missing, **append it automatically** — this is a required step, not optional. Use `>>` (append, never overwrite). Print: `"✓ Added export CLAUDE_PLUGIN_ROOT=... to ~/.zshrc"`. Do NOT ask the user for permission — Rule 2 (never delegate commands to the user) applies here.
+3. Tell the user: `"Run 'source ~/.zshrc' or open a new terminal for it to take effect."` — this will show as an approval prompt in Claude's next tool call, which the user accepts normally.
 
 ---
 
