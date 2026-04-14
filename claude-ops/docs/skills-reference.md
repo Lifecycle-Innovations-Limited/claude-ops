@@ -1,8 +1,24 @@
+<div align="center">
+
 # Skills Reference
 
-All 21 skills available in claude-ops v0.8.0. Skills live in `skills/<name>/SKILL.md`.
+*All 21 skills available in claude-ops — your business operations command surface*
 
-## AskUserQuestion Batching Pattern
+[![version](https://img.shields.io/badge/version-0.8.0-blue)](../CHANGELOG.md)
+[![skills](https://img.shields.io/badge/skills-21-8b5cf6)](.)
+[![license](https://img.shields.io/badge/license-MIT-22c55e)](../LICENSE)
+[![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-f59e0b)](.)
+
+</div>
+
+---
+
+Skills live in `skills/<name>/SKILL.md`.
+
+> [!NOTE]
+> Skills are the user-facing slash commands. They route work to agents, orchestrate multi-step flows, and present results. See [`agents-reference.md`](agents-reference.md) for the agents they spawn.
+
+## 🧩 AskUserQuestion Batching Pattern
 
 All skills enforce a hard limit of **<=4 options per `AskUserQuestion` call** (plugin-root CLAUDE.md rule, enforced by the tool schema). When a menu has more than 4 entries, apply this strategy:
 
@@ -10,9 +26,14 @@ All skills enforce a hard limit of **<=4 options per `AskUserQuestion` call** (p
 2. **Batch with "More..."** — split remaining items into sequential calls of <=4. Last option in each non-final batch is `[More options...]` to advance to the next batch.
 3. **Paginate dynamic lists** — any runtime list (projects, configs) that may exceed 4 items must be paginated at 4 per page.
 
+> [!IMPORTANT]
+> Passing more than 4 options causes an `InputValidationError` and the skill crashes. Always filter and batch.
+
 Examples in this release: setup section picker (11 items → 4+4+3), setup channel picker (7 items → 4+3), ops-comms / deploy / fires / go / inbox / linear / projects / revenue / speedup / triage / yolo all use "More..." bridges where needed. ops-dash hotkey menu was refactored to comply.
 
-## Core Navigation
+---
+
+## 🧭 Core Navigation
 
 ### `/ops` · `skills/ops/SKILL.md`
 Business operations router. Routes to the right skill based on arguments, or launches the dashboard with no args.
@@ -28,12 +49,15 @@ Interactive pixel-art command center. Visual HQ with live status indicators (fir
 
 ---
 
-## Daily Operations
+## ☀️ Daily Operations
 
 ### `/ops:go` · `skills/ops-go/SKILL.md`
 Token-efficient morning briefing. Pre-gathers all data via shell scripts (`bin/ops-infra`, `bin/ops-dash`) in parallel, then presents a unified dashboard in under 10 seconds.
 - `/ops:go` — full briefing
 - `/ops:go my-app` — briefing scoped to one project alias
+
+> [!TIP]
+> `/ops:go` hits the pre-warmed daemon cache — first load is typically <3s. Run the briefing pre-warm service (see [`daemon-guide.md`](daemon-guide.md)) to keep it snappy.
 
 ### `/ops:next` · `skills/ops-next/SKILL.md`
 Priority-ordered next action. Applies the priority stack: fires > urgent comms > ready-to-merge PRs > Linear sprint > GSD work.
@@ -55,7 +79,7 @@ Send and read messages across all channels. Full conversation context required b
 
 ---
 
-## Project & Engineering
+## 🛠️ Project & Engineering
 
 ### `/ops:projects` · `skills/ops-projects/SKILL.md`
 Portfolio dashboard. Shows all registered projects with GSD phase, branch state, uncommitted files, open PRs, and CI status.
@@ -92,9 +116,40 @@ Autonomous PR merge pipeline. Dispatches subagents to fix CI, resolve conflicts,
 - `/ops:merge --dry-run` — preview only
 - `/ops:merge --repo Lifecycle-Innovations-Limited/my-app`
 
+#### `/ops:merge` Flow
+
+```mermaid
+flowchart TB
+    Start([/ops:merge]) --> Scan[Scan open PRs<br/>across registered repos]
+    Scan --> Ready{PR ready<br/>to merge?}
+    Ready -->|CI red| FixCI[Dispatch CI-fix<br/>subagent]
+    Ready -->|Conflicts| Resolve[Dispatch conflict<br/>resolver subagent]
+    Ready -->|Review comments| Address[Dispatch review<br/>addressor subagent]
+    Ready -->|Clean| Merge[Merge PR]
+    FixCI --> Recheck[Re-check status]
+    Resolve --> Recheck
+    Address --> Recheck
+    Recheck --> Ready
+    Merge --> Sync{--main flag?}
+    Sync -->|Yes| DevMain[Sync dev → main]
+    Sync -->|No| Done([Report])
+    DevMain --> Done
+
+    classDef primary fill:#6366f1,color:#fff
+    classDef agent fill:#8b5cf6,color:#fff
+    classDef success fill:#22c55e,color:#fff
+
+    class Start,Scan,Recheck primary
+    class FixCI,Resolve,Address agent
+    class Merge,DevMain,Done success
+```
+
+> [!WARNING]
+> `/ops:merge` merges PRs autonomously. Run `--dry-run` first on new repos to confirm the pipeline behaves correctly before letting it merge for real.
+
 ---
 
-## Business Intelligence
+## 📊 Business Intelligence
 
 ### `/ops:revenue` · `skills/ops-revenue/SKILL.md`
 Revenue and costs dashboard. AWS spend via Cost Explorer, credits tracker, project revenue stages, burn rate, and runway estimate.
@@ -107,9 +162,41 @@ C-suite analysis + autonomous mode. Spawns 4 parallel agents (CEO, CTO, CFO, COO
 - `/ops:yolo` — run C-suite analysis
 - `/ops:yolo YOLO` — autonomous mode
 
+#### `/ops:yolo` Flow
+
+```mermaid
+flowchart LR
+    Invoke([/ops:yolo]) --> Gather[Gather context<br/>ops-infra + ops-dash]
+    Gather --> Fanout{Parallel spawn}
+    Fanout --> CEO[yolo-ceo<br/>strategic]
+    Fanout --> CTO[yolo-cto<br/>technical]
+    Fanout --> CFO[yolo-cfo<br/>financial]
+    Fanout --> COO[yolo-coo<br/>operational]
+    CEO --> Merge[Merge perspectives<br/>into Hard Truths]
+    CTO --> Merge
+    CFO --> Merge
+    COO --> Merge
+    Merge --> Mode{YOLO mode?}
+    Mode -->|No| Report([Present report])
+    Mode -->|YOLO| Auto[Execute recommendations<br/>with per-action confirm]
+
+    classDef primary fill:#6366f1,color:#fff
+    classDef agent fill:#8b5cf6,color:#fff
+    classDef danger fill:#ef4444,color:#fff
+    classDef success fill:#22c55e,color:#fff
+
+    class Invoke,Gather,Merge primary
+    class CEO,CTO,CFO,COO agent
+    class Auto danger
+    class Report success
+```
+
+> [!CAUTION]
+> YOLO autonomous mode executes recommendations directly. Destructive actions (delete ECS, stop services, rewrite git history) still require per-action confirmation per CLAUDE.md Rule 5, but everything else runs without pause. Use with intent.
+
 ---
 
-## E-Commerce & Marketing
+## 🛒 E-Commerce & Marketing
 
 ### `/ops:ecom` · `skills/ops-ecom/SKILL.md`
 Shopify store command center. Orders, inventory, fulfillment, analytics, and store health via Shopify Admin API.
@@ -134,7 +221,7 @@ Voice channel management. Make phone calls (Bland AI), text-to-speech (ElevenLab
 
 ---
 
-## Orchestration & Automation
+## 🤖 Orchestration & Automation
 
 ### `/ops:orchestrate` · `skills/ops-orchestrate/SKILL.md`
 Autonomous multi-project orchestration engine. Audits all registered projects, structures work into dependency-wired tasks, dispatches parallel agents, audits completions, and ships PRs.
@@ -148,7 +235,7 @@ Autonomous multi-project orchestration engine. Audits all registered projects, s
 
 ---
 
-## Setup & Maintenance
+## 🔧 Setup & Maintenance
 
 ### `/ops:setup` · `skills/setup/SKILL.md`
 Interactive setup wizard. Installs CLIs, configures secrets (Doppler, 1Password, Bitwarden), connects integrations (Telegram, WhatsApp, Email, Slack, Linear, Sentry, Vercel), builds project registry.
@@ -173,3 +260,6 @@ Cross-platform system optimizer. Detects macOS/Linux/WSL, scans for reclaimable 
 Complete removal of the plugin, all credentials, cached files, shell exports, and MCP registrations. Confirms each step before deletion.
 - `/ops:uninstall` — guided removal
 - `/ops:uninstall --confirm` — skip confirmations
+
+> [!CAUTION]
+> `/ops:uninstall --confirm` skips all confirmations and removes credentials, MCP registrations, and shell exports. There's no undo — back up `~/.claude/plugins/data/` first if you have memories you want to keep.

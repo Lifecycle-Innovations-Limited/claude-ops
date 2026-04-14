@@ -4,6 +4,10 @@
 # Usage: ops-autofix [--json] [--fix=all|wacli-fts|slack-mcp|vercel-mcp]
 set -euo pipefail
 
+# Platform detection — Keychain-based fixes only run on macOS
+IS_MAC=0
+[ "$(uname -s)" = "Darwin" ] && IS_MAC=1
+
 JSON_OUTPUT=false
 FIX_TARGET="all"
 
@@ -87,7 +91,11 @@ fix_slack_mcp() {
     return
   fi
 
-  # Check for tokens in keychain
+  # Check for tokens in keychain (macOS only — Keychain is macOS-specific)
+  if [ "$IS_MAC" != "1" ]; then
+    log_skip "slack-mcp: Keychain unavailable (not macOS) — use env vars or Doppler"
+    return
+  fi
   XOXC=$(security find-generic-password -s slack-xoxc -w 2>/dev/null || echo "")
   XOXD=$(security find-generic-password -s slack-xoxd -w 2>/dev/null || echo "")
 
@@ -202,27 +210,32 @@ fix_channel_health() {
     fi
   fi
 
-  # ── Slack: tokens in keychain but expired ──
-  XOXC=$(security find-generic-password -s slack-xoxc -w 2>/dev/null || echo "")
-  if [ -n "$XOXC" ]; then
-    XOXD=$(security find-generic-password -s slack-xoxd -w 2>/dev/null || echo "")
-    SLACK_OK=$(curl -s -H "Authorization: Bearer $XOXC" -b "d=$XOXD" "https://slack.com/api/auth.test" 2>/dev/null | jq -r '.ok // false' 2>/dev/null || echo "false")
-    if [ "$SLACK_OK" != "true" ]; then
-      log_fail "slack-health: tokens in keychain are expired (re-run /ops:setup slack)"
-    else
-      log_skip "slack-health: tokens valid"
+  # ── Slack: tokens in keychain but expired (macOS only) ──
+  if [ "$IS_MAC" = "1" ]; then
+    XOXC=$(security find-generic-password -s slack-xoxc -w 2>/dev/null || echo "")
+    if [ -n "$XOXC" ]; then
+      XOXD=$(security find-generic-password -s slack-xoxd -w 2>/dev/null || echo "")
+      SLACK_OK=$(curl -s -H "Authorization: Bearer $XOXC" -b "d=$XOXD" "https://slack.com/api/auth.test" 2>/dev/null | jq -r '.ok // false' 2>/dev/null || echo "false")
+      if [ "$SLACK_OK" != "true" ]; then
+        log_fail "slack-health: tokens in keychain are expired (re-run /ops:setup slack)"
+      else
+        log_skip "slack-health: tokens valid"
+      fi
     fi
-  fi
 
-  # ── Telegram: session in keychain but expired ──
-  TG_SESSION=$(security find-generic-password -s telegram-session -w 2>/dev/null || echo "")
-  if [ -n "$TG_SESSION" ]; then
-    TG_API_ID=$(security find-generic-password -s telegram-api-id -w 2>/dev/null || echo "")
-    if [ -z "$TG_API_ID" ]; then
-      log_fail "telegram-health: session exists but api_id missing from keychain"
-    else
-      log_skip "telegram-health: credentials present (runtime validation requires MCP)"
+    # ── Telegram: session in keychain but expired ──
+    TG_SESSION=$(security find-generic-password -s telegram-session -w 2>/dev/null || echo "")
+    if [ -n "$TG_SESSION" ]; then
+      TG_API_ID=$(security find-generic-password -s telegram-api-id -w 2>/dev/null || echo "")
+      if [ -z "$TG_API_ID" ]; then
+        log_fail "telegram-health: session exists but api_id missing from keychain"
+      else
+        log_skip "telegram-health: credentials present (runtime validation requires MCP)"
+      fi
     fi
+  else
+    log_skip "slack-health: Keychain unavailable (not macOS)"
+    log_skip "telegram-health: Keychain unavailable (not macOS)"
   fi
 }
 
