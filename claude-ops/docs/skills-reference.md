@@ -69,13 +69,14 @@ Full inbox management. Reads complete conversation threads (20+ messages), build
 - `/ops:inbox` — all channels
 - `/ops:inbox whatsapp` — WhatsApp only
 - `/ops:inbox email` — Gmail only
-- `/ops:inbox slack` / `/ops:inbox telegram`
+- `/ops:inbox slack` / `/ops:inbox telegram` / `/ops:inbox discord`
 
 ### `/ops:comms` · `skills/ops-comms/SKILL.md`
 Send and read messages across all channels. Full conversation context required before any send. WhatsApp health pre-flight via PreToolUse hook.
 - `/ops:comms send "hey, can we chat?" to John Smith`
 - `/ops:comms read whatsapp`
 - `/ops:comms read slack #general`
+- `/ops:comms send "deploy green" to #ops-alerts on discord` (v1: webhook + REST read via `bin/ops-discord`)
 
 ---
 
