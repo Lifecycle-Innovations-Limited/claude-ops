@@ -4,6 +4,17 @@
 # Runs every 30 min via ops-daemon cron service.
 set -euo pipefail
 
+# ── Portable shell helpers ────────────────────────────────────────────────────
+_date_days_ago() {
+  # Portable: echoes "N days ago" in the given format (default YYYY-MM-DD)
+  local days=$1 fmt=${2:-+%Y-%m-%d}
+  if date -d "$days days ago" "$fmt" >/dev/null 2>&1; then
+    date -d "$days days ago" "$fmt"   # GNU coreutils (Linux, Windows/Git Bash)
+  else
+    date -v-"${days}"d "$fmt"         # BSD (macOS)
+  fi
+}
+
 # ── Config ────────────────────────────────────────────────────────────────────
 MEMORIES_DIR="${HOME}/.claude/plugins/data/ops-ops-marketplace/memories"
 HEALTH_FILE="${MEMORIES_DIR}/.health"
@@ -57,7 +68,7 @@ resolve_api_key() {
 collect_data() {
   local wacli_data="" email_data=""
   local yesterday
-  yesterday=$(date -u -v-1d +"%Y-%m-%d" 2>/dev/null || date -u -d "yesterday" +"%Y-%m-%d")
+  yesterday=$(TZ=UTC _date_days_ago 1 "+%Y-%m-%d")
 
   # WhatsApp via wacli
   if command -v wacli &>/dev/null; then
