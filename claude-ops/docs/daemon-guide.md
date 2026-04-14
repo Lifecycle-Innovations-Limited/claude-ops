@@ -4,7 +4,7 @@
 
 *The unified background process manager that pre-warms briefings, syncs WhatsApp, extracts memories, and watches your fires — persistently, via launchd*
 
-[![version](https://img.shields.io/badge/version-1.0.0-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.1.0-blue)](../CHANGELOG.md)
 [![services](https://img.shields.io/badge/services-7-f59e0b)](.)
 [![launchd](https://img.shields.io/badge/runtime-launchd-6366f1)](.)
 [![pre--warm](https://img.shields.io/badge/pre--warm-every%202%20min-22c55e)](.)
@@ -13,10 +13,10 @@
 
 ---
 
-The **ops-daemon** is a unified background process manager that runs persistently via macOS launchd. It replaced per-service launchd agents (introduced in v0.5.0, expanded in v1.0.0).
+The **ops-daemon** is a unified background process manager that runs persistently via macOS launchd. It replaced per-service launchd agents (introduced in v0.5.0, expanded in v1.1.0).
 
 > [!NOTE]
-> As of **v1.0.0**, the daemon installs at **setup Step 2c** (not 5b) so it begins pre-warming the briefing cache while the rest of setup is still running. By the time you finish configuring integrations, `/ops:go` is already instant.
+> As of **v1.1.0**, the daemon installs at **setup Step 2c** (not 5b) so it begins pre-warming the briefing cache while the rest of setup is still running. By the time you finish configuring integrations, `/ops:go` is already instant.
 
 ---
 
@@ -83,7 +83,7 @@ sequenceDiagram
 ```
 
 > [!IMPORTANT]
-> **Step 5b changed in v1.0.0.** It used to be "install daemon + launchd plist" (fresh install). It is now "**daemon service reconciliation**" — the daemon is already running from Step 2c; Step 5b just reconciles the active service set with whatever integrations the user configured in Steps 3–7 (enables `store-health` only if Shopify was configured, etc.).
+> **Step 5b changed in v1.1.0.** It used to be "install daemon + launchd plist" (fresh install). It is now "**daemon service reconciliation**" — the daemon is already running from Step 2c; Step 5b just reconciles the active service set with whatever integrations the user configured in Steps 3–7 (enables `store-health` only if Shopify was configured, etc.).
 
 ---
 
