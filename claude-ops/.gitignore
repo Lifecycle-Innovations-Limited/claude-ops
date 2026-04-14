@@ -19,6 +19,21 @@ telegram-server/node_modules/
 scripts/registry.json
 scripts/preferences.json
 
+# Per-user runtime state written by /ops:setup and the ops-daemon. These
+# normally live under $CLAUDE_PLUGIN_DATA_DIR, NOT inside the repo — these
+# patterns defend against an accidental drop-in during development.
+scripts/daemon-services.json
+scripts/daemon-services.json.bak.*
+scripts/daemon-health.json
+scripts/*.health
+scripts/credentials/
+scripts/logs/
+scripts/cache/
+
+# Launchd plists copied into the repo dir (template stays, per-user copies don't)
+com.claude-ops.daemon.plist.bak.*
+com.claude-ops.wacli-keepalive.plist.bak.*
+
 # Temp files from autolink scripts
 /tmp/
 ops-*.out
