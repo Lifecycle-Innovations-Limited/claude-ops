@@ -11,7 +11,7 @@
       "name": "ops",
       "description": "Business operations command center for Claude Code",
       "source": "./claude-ops",
-      "version": "0.8.0",
+      "version": "1.0.0",
       "category": "productivity"
     }
   ]
