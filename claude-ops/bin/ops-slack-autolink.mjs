@@ -29,10 +29,22 @@
  */
 
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { homedir, userInfo } from "node:os";
+import { join, basename } from "node:path";
 import { parseArgs } from "node:util";
 import { execSync } from "node:child_process";
+import { osId, isWsl, browserProfileDirs } from "../lib/os-detect.mjs";
+import {
+  setCredential,
+  getCredential,
+  deleteCredential,
+  backendsAvailable,
+} from "../lib/credential-store.mjs";
+
+const OS_ID = osId();
+const IS_WSL = isWsl();
+const USER_ACCOUNT =
+  userInfo().username || process.env.USER || process.env.USERNAME || "default";
 
 const { values } = parseArgs({
   options: {
@@ -91,7 +103,7 @@ emit({
   message: "Scouting for existing Slack tokens",
 });
 
-function scoutSources() {
+async function scoutSources() {
   const sources = [];
 
   // 1. ~/.claude.json mcpServers.slack.env — where Claude Code stores them
@@ -131,31 +143,65 @@ function scoutSources() {
     });
   }
 
-  // 3. macOS keychain (generic password items named slack-xoxc / slack-xoxd)
-  if (process.platform === "darwin") {
-    try {
-      const xoxc = execSync(
-        `security find-generic-password -s slack-xoxc -w 2>/dev/null`,
-        { encoding: "utf8" },
-      ).trim();
-      const xoxd = execSync(
-        `security find-generic-password -s slack-xoxd -w 2>/dev/null`,
-        { encoding: "utf8" },
-      ).trim();
-      if (xoxc?.startsWith("xoxc-") && xoxd?.startsWith("xoxd-")) {
-        sources.push({
-          source: "keychain",
-          xoxc_token: xoxc,
-          xoxd_token: xoxd,
-        });
-      }
-    } catch {}
-  }
+  // 3. OS-native credential store (macOS Keychain, Linux libsecret, Windows
+  //    credential manager — cmdkey on Windows can't read, so it's skipped).
+  //    Items are stored under service=slack-xoxc / slack-xoxd, account=$USER.
+  try {
+    const xoxcHit = await getCredential("slack-xoxc", USER_ACCOUNT);
+    const xoxdHit = await getCredential("slack-xoxd", USER_ACCOUNT);
+    const xoxc = xoxcHit?.secret;
+    const xoxd = xoxdHit?.secret;
+    if (xoxc?.startsWith("xoxc-") && xoxd?.startsWith("xoxd-")) {
+      sources.push({
+        source: `credential-store:${xoxcHit.backend}`,
+        xoxc_token: xoxc,
+        xoxd_token: xoxd,
+      });
+    }
+  } catch {}
 
-  // 4. Shell profile files
-  const profiles = [".zshrc", ".bashrc", ".zprofile", ".envrc"].map((f) =>
-    join(homedir(), f),
-  );
+  // 4. Shell profile files (OS-aware)
+  const profiles = [];
+  if (OS_ID !== "windows") {
+    // Unix-style shell profiles (macOS, Linux, WSL)
+    profiles.push(
+      ...[".zshrc", ".bashrc", ".zprofile", ".envrc"].map((f) =>
+        join(homedir(), f),
+      ),
+    );
+  }
+  if (OS_ID === "windows" || IS_WSL) {
+    // PowerShell profiles — check common canonical locations.
+    //   $PROFILE on Windows typically resolves to:
+    //     %USERPROFILE%\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1
+    //   PowerShell 7+ uses the "PowerShell" folder instead of "WindowsPowerShell".
+    if (OS_ID === "windows") {
+      const userProfile = process.env.USERPROFILE || homedir();
+      profiles.push(
+        join(
+          userProfile,
+          "Documents",
+          "WindowsPowerShell",
+          "Microsoft.PowerShell_profile.ps1",
+        ),
+        join(
+          userProfile,
+          "Documents",
+          "PowerShell",
+          "Microsoft.PowerShell_profile.ps1",
+        ),
+      );
+    } else if (IS_WSL) {
+      // Best-effort: check the Windows-side PowerShell profile from /mnt/c.
+      const winUser = process.env.USER || process.env.USERNAME || "";
+      if (winUser) {
+        profiles.push(
+          `/mnt/c/Users/${winUser}/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1`,
+          `/mnt/c/Users/${winUser}/Documents/PowerShell/Microsoft.PowerShell_profile.ps1`,
+        );
+      }
+    }
+  }
   for (const path of profiles) {
     if (!existsSync(path)) continue;
     try {
@@ -193,7 +239,7 @@ function scoutSources() {
   return sources;
 }
 
-const scouted = scoutSources();
+const scouted = await scoutSources();
 for (const s of scouted) {
   emit({
     type: "found",
@@ -243,32 +289,74 @@ import { tmpdir } from "node:os";
 import { cpSync, readdirSync } from "node:fs";
 
 /**
+ * Map an absolute browser-profile directory to a friendly name. Uses path
+ * substrings so it works uniformly across macOS/Linux/Windows conventions
+ * (e.g. "Google/Chrome", "google-chrome", "Chrome\\User Data").
+ */
+function browserNameForDir(dir) {
+  const d = dir.replace(/\\/g, "/").toLowerCase();
+  if (d.includes("/google/chrome beta") || d.includes("chrome-beta"))
+    return "Google Chrome Beta";
+  if (d.includes("/google/chrome") || d.includes("google-chrome"))
+    return "Google Chrome";
+  if (d.includes("bravesoftware")) return "Brave";
+  if (d.includes("/arc/")) return "Arc";
+  if (d.includes("/chromium")) return "Chromium";
+  if (d.includes("microsoft edge") || d.includes("edge/user data"))
+    return "Microsoft Edge";
+  if (d.includes("com.operasoftware.opera") || d.includes("/opera"))
+    return "Opera";
+  if (d.includes("/comet")) return "Comet";
+  if (d.includes("/vivaldi")) return "Vivaldi";
+  if (d.includes("/orion")) return "Orion";
+  return basename(dir);
+}
+
+/**
  * Detect installed browser profiles that might contain Slack cookies.
  * Returns [{name, cookieDb, localStorageDir, userDataDir}] sorted by preference.
+ *
+ * On macOS we include several extra Chromium-forks (Edge/Opera/Vivaldi/Orion
+ * /Comet), the Slack desktop app containers, Firefox, and Safari. On
+ * Linux/Windows we rely on browserProfileDirs() for the canonical Chrome/
+ * Chromium/Brave/Arc set, plus Firefox where applicable. Direct cookie
+ * decryption below is still macOS-only; other platforms fall through to the
+ * Playwright path.
  */
-function detectBrowserProfiles() {
+async function detectBrowserProfiles() {
   const home = homedir();
-  const appSupport = join(home, "Library", "Application Support");
-
-  // --- Chromium-based browsers (standard profile layout) ---
-  const chromiumCandidates = [
-    { name: "Google Chrome", dir: join(appSupport, "Google", "Chrome") },
-    {
-      name: "Google Chrome Beta",
-      dir: join(appSupport, "Google", "Chrome Beta"),
-    },
-    { name: "Arc", dir: join(appSupport, "Arc", "User Data") },
-    { name: "Brave", dir: join(appSupport, "BraveSoftware", "Brave-Browser") },
-    { name: "Microsoft Edge", dir: join(appSupport, "Microsoft Edge") },
-    { name: "Chromium", dir: join(appSupport, "Chromium") },
-    { name: "Opera", dir: join(appSupport, "com.operasoftware.Opera") },
-    { name: "Comet", dir: join(appSupport, "Comet") },
-    { name: "Vivaldi", dir: join(appSupport, "Vivaldi") },
-    { name: "Orion", dir: join(appSupport, "Orion") },
-  ];
-
   const found = [];
-  for (const { name, dir } of chromiumCandidates) {
+
+  // --- Chromium-based browsers from the shared detector --------------------
+  const chromiumDirs = (await browserProfileDirs()).map((dir) => ({
+    name: browserNameForDir(dir),
+    dir,
+  }));
+
+  // On macOS, also probe browsers that browserProfileDirs() doesn't cover
+  // (Edge/Opera/Vivaldi/Orion/Comet/Chrome Beta). Keeps parity with the
+  // pre-refactor behavior.
+  if (OS_ID === "macos") {
+    const appSupport = join(home, "Library", "Application Support");
+    const extras = [
+      {
+        name: "Google Chrome Beta",
+        dir: join(appSupport, "Google", "Chrome Beta"),
+      },
+      { name: "Microsoft Edge", dir: join(appSupport, "Microsoft Edge") },
+      { name: "Opera", dir: join(appSupport, "com.operasoftware.Opera") },
+      { name: "Comet", dir: join(appSupport, "Comet") },
+      { name: "Vivaldi", dir: join(appSupport, "Vivaldi") },
+      { name: "Orion", dir: join(appSupport, "Orion") },
+    ];
+    for (const e of extras) {
+      if (existsSync(e.dir) && !chromiumDirs.some((c) => c.dir === e.dir)) {
+        chromiumDirs.push(e);
+      }
+    }
+  }
+
+  for (const { name, dir } of chromiumDirs) {
     const profiles = ["Default"];
     try {
       const entries = readdirSync(dir);
@@ -282,10 +370,17 @@ function detectBrowserProfiles() {
     for (const profile of profiles) {
       const cookieDb = join(dir, profile, "Cookies");
       const localStorageDir = join(dir, profile, "Local Storage", "leveldb");
-      if (existsSync(cookieDb)) {
+      // Chrome/Chromium on some platforms store cookies under Network/Cookies
+      const netCookieDb = join(dir, profile, "Network", "Cookies");
+      const cookieDbFinal = existsSync(cookieDb)
+        ? cookieDb
+        : existsSync(netCookieDb)
+          ? netCookieDb
+          : null;
+      if (cookieDbFinal) {
         found.push({
           name: `${name}/${profile}`,
-          cookieDb,
+          cookieDb: cookieDbFinal,
           localStorageDir,
           userDataDir: dir,
           profile,
@@ -294,77 +389,102 @@ function detectBrowserProfiles() {
     }
   }
 
-  // --- Slack desktop app (Electron, macOS sandboxed container) ---
-  const slackDesktopPaths = [
-    // Mac App Store version (sandboxed)
-    join(
-      home,
-      "Library",
-      "Containers",
-      "com.tinyspeck.slackmacgap",
-      "Data",
-      "Library",
-      "Application Support",
-      "Slack",
-    ),
-    // Direct download version (non-sandboxed)
-    join(appSupport, "Slack"),
-  ];
-  for (const slackDir of slackDesktopPaths) {
-    const cookieDb = join(slackDir, "Cookies");
-    const localStorageDir = join(slackDir, "Local Storage", "leveldb");
-    if (existsSync(cookieDb)) {
-      found.unshift({
-        name: "Slack Desktop",
-        cookieDb,
-        localStorageDir,
-        userDataDir: slackDir,
-        profile: ".",
-      });
-    }
-  }
-
-  // --- Firefox (SQLite cookies.sqlite, different schema) ---
-  const firefoxDir = join(
-    home,
-    "Library",
-    "Application Support",
-    "Firefox",
-    "Profiles",
-  );
-  try {
-    const profiles = readdirSync(firefoxDir);
-    for (const p of profiles) {
-      const cookieDb = join(firefoxDir, p, "cookies.sqlite");
+  // --- Slack desktop app (macOS-only container layout) --------------------
+  if (OS_ID === "macos") {
+    const appSupport = join(home, "Library", "Application Support");
+    const slackDesktopPaths = [
+      // Mac App Store version (sandboxed)
+      join(
+        home,
+        "Library",
+        "Containers",
+        "com.tinyspeck.slackmacgap",
+        "Data",
+        "Library",
+        "Application Support",
+        "Slack",
+      ),
+      // Direct download version (non-sandboxed)
+      join(appSupport, "Slack"),
+    ];
+    for (const slackDir of slackDesktopPaths) {
+      const cookieDb = join(slackDir, "Cookies");
+      const localStorageDir = join(slackDir, "Local Storage", "leveldb");
       if (existsSync(cookieDb)) {
-        found.push({
-          name: `Firefox/${p}`,
+        found.unshift({
+          name: "Slack Desktop",
           cookieDb,
-          localStorageDir: null,
-          userDataDir: join(firefoxDir, p),
-          profile: p,
-          isFirefox: true,
+          localStorageDir,
+          userDataDir: slackDir,
+          profile: ".",
         });
       }
     }
-  } catch {}
+  }
 
-  // --- Safari (Cookies.binarycookies — binary format, check presence only) ---
-  const safariCookies = join(
-    home,
-    "Library",
-    "Cookies",
-    "Cookies.binarycookies",
-  );
-  if (existsSync(safariCookies)) {
-    found.push({
-      name: "Safari",
-      cookieDb: safariCookies,
-      localStorageDir: null,
-      userDataDir: null,
-      profile: ".",
-      isSafari: true,
-    });
+  // --- Firefox (SQLite cookies.sqlite, unencrypted) -----------------------
+  const firefoxDirs = [];
+  if (OS_ID === "macos") {
+    firefoxDirs.push(
+      join(home, "Library", "Application Support", "Firefox", "Profiles"),
+    );
+  } else if (process.platform === "linux") {
+    firefoxDirs.push(join(home, ".mozilla", "firefox"));
+    if (IS_WSL) {
+      const winUser = process.env.USER || process.env.USERNAME || "";
+      if (winUser) {
+        firefoxDirs.push(
+          `/mnt/c/Users/${winUser}/AppData/Roaming/Mozilla/Firefox/Profiles`,
+        );
+      }
+    }
+  } else if (OS_ID === "windows") {
+    const appData =
+      process.env.APPDATA ||
+      (process.env.USERPROFILE
+        ? join(process.env.USERPROFILE, "AppData", "Roaming")
+        : null);
+    if (appData) {
+      firefoxDirs.push(join(appData, "Mozilla", "Firefox", "Profiles"));
+    }
+  }
+  for (const firefoxDir of firefoxDirs) {
+    try {
+      const profiles = readdirSync(firefoxDir);
+      for (const p of profiles) {
+        const cookieDb = join(firefoxDir, p, "cookies.sqlite");
+        if (existsSync(cookieDb)) {
+          found.push({
+            name: `Firefox/${p}`,
+            cookieDb,
+            localStorageDir: null,
+            userDataDir: join(firefoxDir, p),
+            profile: p,
+            isFirefox: true,
+          });
+        }
+      }
+    } catch {}
+  }
+
+  // --- Safari (macOS-only binary cookie file) -----------------------------
+  if (OS_ID === "macos") {
+    const safariCookies = join(
+      home,
+      "Library",
+      "Cookies",
+      "Cookies.binarycookies",
+    );
+    if (existsSync(safariCookies)) {
+      found.push({
+        name: "Safari",
+        cookieDb: safariCookies,
+        localStorageDir: null,
+        userDataDir: null,
+        profile: ".",
+        isSafari: true,
+      });
+    }
   }
 
   return found;
@@ -408,7 +528,7 @@ function querySlackCookieFromDb(cookieDb, browserName, opts = {}) {
   }
 }
 
-const browserProfiles = detectBrowserProfiles();
+const browserProfiles = await detectBrowserProfiles();
 emit({
   type: "step",
   message: `Found ${browserProfiles.length} browser profile(s) to scan`,
@@ -670,24 +790,35 @@ if (selectedBrowser && !selectedBrowser.isSafari) {
         });
       }
 
-      // Persist to keychain
-      if (process.platform === "darwin") {
-        try {
-          execSync(
-            `security add-generic-password -U -s slack-xoxc -a "$USER" -w '${xoxcToken.replace(/'/g, "'\\''")}'`,
-            { timeout: 5000 },
-          );
-          execSync(
-            `security add-generic-password -U -s slack-xoxd -a "$USER" -w '${xoxdToken.replace(/'/g, "'\\''")}'`,
-            { timeout: 5000 },
-          );
-          emit({ type: "step", message: "✓ Saved tokens to macOS keychain" });
-        } catch (e) {
+      // Persist via cascading credential store (macOS Keychain → libsecret →
+      // Windows Credential Manager → keytar → encrypted JSON → plaintext).
+      try {
+        const xoxcRes = await setCredential(
+          "slack-xoxc",
+          USER_ACCOUNT,
+          xoxcToken,
+        );
+        const xoxdRes = await setCredential(
+          "slack-xoxd",
+          USER_ACCOUNT,
+          xoxdToken,
+        );
+        if (xoxcRes.ok && xoxdRes.ok) {
           emit({
             type: "step",
-            message: `○ Keychain save failed: ${e.message}`,
+            message: `✓ Saved tokens via credential-store (${xoxcRes.backend})`,
+          });
+        } else {
+          emit({
+            type: "step",
+            message: `○ Credential-store save partial: xoxc=${xoxcRes.backend}/${xoxcRes.ok} xoxd=${xoxdRes.backend}/${xoxdRes.ok}`,
           });
         }
+      } catch (e) {
+        emit({
+          type: "step",
+          message: `○ Credential-store save failed: ${e.message}`,
+        });
       }
 
       // Register Slack MCP server in Claude Code (fully automated)
@@ -743,21 +874,71 @@ try {
   );
 }
 
-mkdirSync(PROFILE_DIR, { recursive: true });
+// Resolve the Playwright persistent-profile directory.
+//
+// If the user explicitly passed --profile-dir, honor it. Otherwise prefer the
+// first real Chrome/Chromium profile discovered by browserProfileDirs() so we
+// inherit an existing login where possible. Fall back to a per-user dir under
+// $XDG_DATA_HOME (or ~/.local/share on Linux/macOS, or the default elsewhere).
+async function resolvePlaywrightProfileDir() {
+  // --profile-dir was explicitly provided and differs from the library default?
+  const libDefault = join(homedir(), ".claude-ops", "slack-profile");
+  if (PROFILE_DIR && PROFILE_DIR !== libDefault) return PROFILE_DIR;
+
+  try {
+    const dirs = await browserProfileDirs();
+    const chromeDir = dirs.find((d) => {
+      const low = d.replace(/\\/g, "/").toLowerCase();
+      return low.includes("chrome") || low.includes("chromium");
+    });
+    if (chromeDir) return chromeDir;
+  } catch {}
+
+  // Nothing pre-existing — use an XDG-compliant fresh profile.
+  const xdgData =
+    process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+  return join(xdgData, "claude-ops", "chromium-profile");
+}
+
+const LAUNCH_PROFILE_DIR = await resolvePlaywrightProfileDir();
+mkdirSync(LAUNCH_PROFILE_DIR, { recursive: true });
 emit({
   type: "step",
-  message: `Launching Chromium (headless=${HEADLESS}, profile=${PROFILE_DIR})`,
+  message: `Launching Chromium (headless=${HEADLESS}, profile=${LAUNCH_PROFILE_DIR})`,
 });
 
-const context = await chromium.launchPersistentContext(PROFILE_DIR, {
-  headless: HEADLESS,
-  args: [
-    "--disable-blink-features=AutomationControlled",
-    "--no-first-run",
-    "--no-default-browser-check",
-  ],
-  viewport: { width: 1280, height: 800 },
-});
+let context;
+try {
+  context = await chromium.launchPersistentContext(LAUNCH_PROFILE_DIR, {
+    headless: HEADLESS,
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--no-first-run",
+      "--no-default-browser-check",
+    ],
+    viewport: { width: 1280, height: 800 },
+  });
+} catch (err) {
+  // Common on headless Linux hosts / CI sandboxes where no $DISPLAY exists
+  // and Playwright's Chromium cannot attach to a windowing system.
+  const msg = String(err?.message || err);
+  const looksHeadlessy =
+    /missing (x server|display)|\$DISPLAY|xcb|cannot open display|no protocol specified|Host system is missing dependencies/i.test(
+      msg,
+    );
+  if (looksHeadlessy || !HEADLESS) {
+    emit({
+      type: "error",
+      message:
+        "no display available — run ops:setup slack on a machine with a desktop environment",
+      os: OS_ID,
+      headless_available: false,
+      detail: msg,
+    });
+    process.exit(1);
+  }
+  die(`playwright launch failed: ${msg}`);
+}
 
 const page = context.pages()[0] || (await context.newPage());
 
