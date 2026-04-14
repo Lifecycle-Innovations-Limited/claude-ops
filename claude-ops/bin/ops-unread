@@ -85,10 +85,10 @@ except:
     [[ "$EMAIL_COUNT" =~ ^[0-9]+$ ]] || EMAIL_COUNT="0"
     RESULT=$(echo "$RESULT" | jq --argjson c "$EMAIL_COUNT" '.channels.email = {"inbox_count": $c, "available": true}')
   else
-    RESULT=$(echo "$RESULT" | jq '.channels.email = {"unread": 0, "available": false, "note": "gog not authenticated — run: gog gmail auth"}')
+    RESULT=$(echo "$RESULT" | jq '.channels.email = {"inbox_count": 0, "available": false, "note": "gog not authenticated — run: gog gmail auth"}')
   fi
 else
-  RESULT=$(echo "$RESULT" | jq '.channels.email = {"unread": 0, "available": false, "note": "gog not installed — run: npm install -g @auroracapital/gog (or bun install -g @auroracapital/gog, or clone github.com/auroracapital/gog)"}')
+  RESULT=$(echo "$RESULT" | jq '.channels.email = {"inbox_count": 0, "available": false, "note": "gog not installed — run: npm install -g @auroracapital/gog (or bun install -g @auroracapital/gog, or clone github.com/auroracapital/gog)"}')
 fi
 
 # ── Slack — MCP-based, check env ──
