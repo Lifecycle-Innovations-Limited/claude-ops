@@ -19,6 +19,14 @@
       "health_file": "~/.claude/plugins/data/ops-ops-marketplace/memories/.health",
       "restart_delay": 3600,
       "cron": "*/30 * * * *"
+    },
+    "fires-watcher": {
+      "enabled": false,
+      "command": "__SCRIPTS_DIR__/ops-fires-watcher.sh",
+      "health_file": "~/.claude/plugins/data/ops-ops-marketplace/fires-watcher.health",
+      "restart_delay": 60,
+      "max_restarts": 20,
+      "_note": "Polls ops-infra + Sentry every 60s; pushes notifications on new CRITICAL/HIGH incidents. Requires at least one notify sink (Telegram bot, Discord webhook, ntfy, Pushover, or macOS). Run /ops:setup notifications to enable."
     }
   }
 }
