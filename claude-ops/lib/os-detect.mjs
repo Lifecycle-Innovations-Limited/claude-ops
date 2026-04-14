@@ -223,7 +223,8 @@ export function keyringBackend() {
   if (process.platform === "darwin") return "security";
   if (process.platform === "win32") return "wincred";
   if (isWsl() && hasBin("cmd.exe")) return "wincred";
-  if (process.platform === "linux" && hasBin("secret-tool")) return "secret-tool";
+  if (process.platform === "linux" && hasBin("secret-tool"))
+    return "secret-tool";
   return null;
 }
 
@@ -360,10 +361,11 @@ const invokedDirectly =
 // Also handle symlinks and realpath differences that can trip the naive check.
 const invokedViaRealpath =
   process.argv[1] &&
-  import.meta.url === `file://${fileURLToPath(import.meta.url)}`.replace(
-    /^file:\/\//,
-    "file://",
-  ) &&
+  import.meta.url ===
+    `file://${fileURLToPath(import.meta.url)}`.replace(
+      /^file:\/\//,
+      "file://",
+    ) &&
   process.argv[1].endsWith("os-detect.mjs");
 
 if (invokedDirectly || invokedViaRealpath) {
