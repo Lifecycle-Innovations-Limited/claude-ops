@@ -1,0 +1,66 @@
+# claude-ops — dev compose stack.
+#
+# Quick start:
+#   docker compose up -d
+#   docker compose exec claude-ops bash
+#
+# This is intentionally a CLI/dev container, not a long-running service.
+# `restart: "no"` keeps it from respawning when you exit the shell.
+#
+# Credentials are passed via env (`${VAR:-}` so all are optional) and host
+# mounts (~/.aws, ~/.config/gh). See docs/docker.md for the full matrix.
+
+services:
+  claude-ops:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: claude-ops:local
+    container_name: claude-ops
+    hostname: claude-ops
+    tty: true
+    stdin_open: true
+    restart: "no"
+
+    # Keep the default ENTRYPOINT (/bin/bash -l). Use `docker compose exec`
+    # for follow-up shells so the original TTY stays attached.
+    command: ["-l"]
+
+    environment:
+      # LLM providers
+      OPENAI_API_KEY:      "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY:   "${ANTHROPIC_API_KEY:-}"
+
+      # Source hosting
+      GITHUB_TOKEN:        "${GITHUB_TOKEN:-}"
+
+      # Secret manager
+      DOPPLER_TOKEN:       "${DOPPLER_TOKEN:-}"
+
+      # Billing / payments
+      STRIPE_SECRET_KEY:   "${STRIPE_SECRET_KEY:-}"
+      REVENUECAT_API_KEY:  "${REVENUECAT_API_KEY:-}"
+
+      # Observability
+      DATADOG_API_KEY:     "${DATADOG_API_KEY:-}"
+      DATADOG_APP_KEY:     "${DATADOG_APP_KEY:-}"
+      NEWRELIC_API_KEY:    "${NEWRELIC_API_KEY:-}"
+      NEWRELIC_ACCOUNT_ID: "${NEWRELIC_ACCOUNT_ID:-}"
+
+      # Marketing
+      KLAVIYO_PRIVATE_KEY: "${KLAVIYO_PRIVATE_KEY:-}"
+
+    volumes:
+      # Persist plugin data (preferences, cache, memory, plugin installs) on the host.
+      - "${HOME}/.claude:/home/ops/.claude:rw"
+
+      # AWS credentials — read-only so the container can't clobber your host creds.
+      - "${HOME}/.aws:/home/ops/.aws:ro"
+
+      # GitHub CLI auth — read-only for the same reason.
+      - "${HOME}/.config/gh:/home/ops/.config/gh:ro"
+
+      # Project registry. Map ./registry.json on the host into the plugin tree
+      # so edits survive container rebuilds. Create an empty file first if you
+      # don't have one yet: `echo '{"projects":[]}' > registry.json`.
+      - "./registry.json:/opt/claude-ops/scripts/registry.json:rw"
