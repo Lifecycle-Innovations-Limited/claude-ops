@@ -40,11 +40,11 @@ else
   err "ops-daemon.sh is missing bash version guard"
 fi
 
-# 4. Daemon script does not use bare `wait` in refresh_briefing
-if grep -Pzo 'refresh_briefing\(\)[\s\S]*?^\}' "$DAEMON_SCRIPT" 2>/dev/null | grep -qE '^\s*wait\s*$'; then
-  err "refresh_briefing still contains a bare 'wait' — will block on long-lived services"
+# 4. Daemon script does not use bare `wait` in prefetch_briefing_cache
+if grep -Pzo 'prefetch_briefing_cache\(\)[\s\S]*?^\}' "$DAEMON_SCRIPT" 2>/dev/null | grep -qE '^\s*wait\s*$'; then
+  err "prefetch_briefing_cache still contains a bare 'wait' — will block on long-lived services"
 else
-  ok "refresh_briefing uses targeted wait (no bare 'wait')"
+  ok "prefetch_briefing_cache uses targeted wait (no bare 'wait')"
 fi
 
 # 5. No hardcoded user paths
