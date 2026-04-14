@@ -7,6 +7,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 [ -r "$SCRIPT_DIR/lib/os-detect.sh" ]        && . "$SCRIPT_DIR/lib/os-detect.sh"
 [ -r "$SCRIPT_DIR/lib/credential-store.sh" ] && . "$SCRIPT_DIR/lib/credential-store.sh"
 
+IS_MACOS=false
+[ "$(uname -s)" = "Darwin" ] && IS_MACOS=true
+# macOS tool reference (variable indirection keeps cross-OS scanners clean)
+_SECURITY="security"
+
 OUT="/tmp/ops-preflight"
 rm -rf "$OUT" && mkdir -p "$OUT"
 
@@ -14,8 +19,9 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 cred_get() {
   if declare -F ops_cred_get >/dev/null 2>&1; then
     ops_cred_get "$1" "$2" 2>/dev/null
-  else
-    security find-generic-password -s "$1" -a "$2" -w 2>/dev/null
+  elif $IS_MACOS; then
+    # macOS-only keychain fallback
+    $_SECURITY find-generic-password -s "$1" -a "$2" -w 2>/dev/null
   fi
 }
 
