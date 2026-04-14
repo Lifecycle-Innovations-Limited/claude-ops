@@ -135,6 +135,9 @@ start_service() {
     return 1
   fi
 
+  # Expand env vars in command path (e.g. ${CLAUDE_PLUGIN_ROOT}/scripts/...)
+  cmd=$(eval echo "$cmd")
+
   log "START: launching $name — $cmd"
   # Export daemon identity so child scripts can detect they're managed
   export OPS_DAEMON_PID=$$
@@ -328,6 +331,9 @@ run_cron_service() {
   local cmd
   cmd=$(get_service_field "$name" "command")
   if [[ -z "$cmd" ]]; then return; fi
+
+  # Expand env vars in command path
+  cmd=$(eval echo "$cmd")
 
   log "CRON: running $name"
   SERVICE_STATUS["$name"]="running"

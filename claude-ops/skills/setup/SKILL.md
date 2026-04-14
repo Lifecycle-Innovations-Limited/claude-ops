@@ -322,8 +322,19 @@ DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketpla
 LOG_DIR="$DATA_DIR/logs"
 mkdir -p "$LOG_DIR"
 
+# Resolve bash 4+ (required for associative arrays in ops-daemon.sh).
+# macOS ships bash 3; Homebrew installs bash 5 at /opt/homebrew/bin/bash.
+BASH_PATH="/bin/bash"
+if [[ -x /opt/homebrew/bin/bash ]]; then
+  BASH_PATH="/opt/homebrew/bin/bash"
+elif [[ -x /usr/local/bin/bash ]]; then
+  BASH_PATH="/usr/local/bin/bash"
+fi
+
 # Generate plist
 sed -e "s|__DAEMON_SCRIPT_PATH__|$DAEMON_SCRIPT|g" \
+    -e "s|__BASH_PATH__|$BASH_PATH|g" \
+    -e "s|__PLUGIN_ROOT__|$PLUGIN_ROOT|g" \
     -e "s|__LOG_DIR__|$LOG_DIR|g" \
     -e "s|__HOME__|$HOME|g" \
     "$PLIST_TEMPLATE" > "$PLIST_DEST"
@@ -883,7 +894,16 @@ PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist"
 LOG_DIR="$HOME/.claude/plugins/data/ops-ops-marketplace/logs"
 mkdir -p "$LOG_DIR" "$HOME/Library/LaunchAgents"
 
+# Resolve bash 4+ (same logic as daemon plist)
+BASH_PATH="/bin/bash"
+if [[ -x /opt/homebrew/bin/bash ]]; then
+  BASH_PATH="/opt/homebrew/bin/bash"
+elif [[ -x /usr/local/bin/bash ]]; then
+  BASH_PATH="/usr/local/bin/bash"
+fi
+
 sed -e "s|__KEEPALIVE_SCRIPT_PATH__|$KEEPALIVE_SCRIPT|g" \
+    -e "s|__BASH_PATH__|$BASH_PATH|g" \
     -e "s|__LOG_DIR__|$LOG_DIR|g" \
     -e "s|__HOME__|$HOME|g" \
     "$PLIST_TEMPLATE" > "$PLIST_DEST"
@@ -2449,14 +2469,14 @@ fi
 echo "Services to enable: $SERVICES"
 ```
 
-Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with the existing config from Step 2c, preserving `briefing-pre-warm` and `memory-extractor`, and enabling the new channel-dependent services. Each service entry should include:
-- `briefing-pre-warm`: `{ "enabled": true, "cron": "*/2 * * * *" }` — pre-warms /ops:go cache (installed in 2c)
-- `wacli-sync`: `{ "enabled": true, "interval": "continuous" }` — only if WhatsApp configured
-- `memory-extractor`: `{ "enabled": true, "cron": "*/30 * * * *" }` — every 30 min (installed in 2c)
-- `inbox-digest`: `{ "enabled": true, "cron": "0 */4 * * *" }` — every 4h
-- `store-health`: `{ "enabled": true, "cron": "0 9 * * *" }` — daily 9am, only if ecom configured
-- `competitor-intel`: `{ "enabled": true, "cron": "0 10 * * 1" }` — weekly Monday 10am
-- `message-listener`: `{ "enabled": true, "interval": "continuous" }` — only if WhatsApp or Telegram configured
+Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with the existing config from Step 2c, preserving `briefing-pre-warm` and `memory-extractor`, and enabling the new channel-dependent services. **Every service MUST include a `command` field** — the daemon's `start_service()` skips any service without one. Use `${CLAUDE_PLUGIN_ROOT}` (resolved at runtime) for script paths. Each service entry should include:
+- `briefing-pre-warm`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/bin/ops-gather", "cron": "*/2 * * * *" }` — pre-warms /ops:go cache (installed in 2c)
+- `wacli-sync`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/wacli-keepalive.sh", "health_file": "~/.wacli/.health", "restart_delay": 60, "max_restarts": 10 }` — only if WhatsApp configured
+- `memory-extractor`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-memory-extractor.sh", "health_file": "~/.claude/plugins/data/ops-ops-marketplace/memories/.health", "cron": "*/30 * * * *" }` — every 30 min (installed in 2c)
+- `inbox-digest`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-inbox-digest.sh", "cron": "0 */4 * * *" }` — every 4h
+- `store-health`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-store-health.sh", "cron": "0 9 * * *" }` — daily 9am, only if ecom configured
+- `competitor-intel`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-competitor-intel.sh", "cron": "0 10 * * 1" }` — weekly Monday 10am
+- `message-listener`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-message-listener.sh" }` — only if WhatsApp or Telegram configured
 
 After rewriting the services config, do a quick health check (foreground, <2s), then background the reload:
 
