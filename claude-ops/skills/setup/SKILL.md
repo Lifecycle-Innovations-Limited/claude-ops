@@ -2137,8 +2137,10 @@ After auto-discovery (or if the user selects "I'll enter projects manually"):
   - `revenue.stage` → select `[pre-launch]`, `[development]`, `[growth]`, `[active]`
   - `gsd` → select `[Yes]`, `[No]`
   - `priority` (1-99, defaults to max+1)
+- Ensure the registry directory exists: `mkdir -p "${CLAUDE_PLUGIN_ROOT}/scripts"`. If the write fails due to permissions (plugin cache dirs can be read-only), fall back to writing at `$DATA_DIR/registry.json` and symlink it.
 - Read the current registry with `jq`, append the new project, write back atomically (`jq ... > tmp && mv tmp registry.json`).
 - After each addition, print the running count and offer `[Add another]` / `[Done]`.
+- The registry agent (if spawned) MUST have write access to the target path. If it can't write, the setup wizard should write the file itself from the agent's returned JSON — do not ask the user to intervene.
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-projects/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for the project registry (auto-discovery, registry schema, GSD filters, priority ordering). The setup agent can load that file directly when it needs more depth than this wizard provides.
 
