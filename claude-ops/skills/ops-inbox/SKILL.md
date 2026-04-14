@@ -347,7 +347,7 @@ The keepalive daemon holds the store lock, so you can't run backfill directly. I
 
 **Phase 1 — Classify:**
 1. Search `in:inbox` (NOT `is:unread`) via `gog gmail search -a $GMAIL_ACCOUNT -j --results-only --no-input --max 30 "in:inbox"`
-2. For each thread, read the FULL thread via `gog gmail thread get <threadId> -j` — read ALL messages, not just the last one
+2. For each thread, read the FULL thread via `gog gmail thread get -a $GMAIL_ACCOUNT <threadId> -j` — read ALL messages, not just the last one
 3. Check the last message's `From` header and `labelIds` (SENT, DRAFT)
 4. Classify:
    - **NEEDS REPLY**: Last sender is NOT you AND no unsent draft exists → action needed
