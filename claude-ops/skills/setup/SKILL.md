@@ -8,6 +8,7 @@ allowed-tools:
   - Write
   - Edit
   - AskUserQuestion
+  - Agent
 effort: high
 maxTurns: 80
 ---
@@ -33,6 +34,18 @@ You are running an **interactive configuration wizard** for the `claude-ops` plu
   - **`${CLAUDE_PLUGIN_ROOT}/.mcp.json`** — only to add `${user_config.*}` placeholders, never hardcoded tokens.
   - The user's shell profile (`~/.zshrc` etc.) — append-only, never rewrite.
 - At the top of every wizard step, make sure `$PREFS_PATH`'s parent directory exists: `mkdir -p "$(dirname "$PREFS_PATH")"`. Claude Code creates `~/.claude/plugins/data/ops-ops-marketplace/` on plugin install but don't assume.
+
+---
+
+## Setup agent delegation pattern
+
+When the user asks a complex integration-specific question during setup (e.g., "how does /ops:ecom handle multi-store setups?"), the setup agent can load the related skill's SKILL.md for deeper context:
+
+```bash
+cat "${CLAUDE_PLUGIN_ROOT}/skills/ops-ecom/SKILL.md"
+```
+
+Each sub-step below includes a `> **Deep-dive:**` pointer to the related skill file. Follow these pointers instead of duplicating operational details in this wizard.
 
 ---
 
@@ -102,14 +115,14 @@ Use `✓` for present/set, `○` for missing/unset, `✗` for broken.
 
 Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need attention** (skip ones already green). Because AskUserQuestion allows max 4 options, batch into logical groups:
 
-**Batch 1 — Core setup:**
+**Batch 1 — Core setup (run early so the daemon can pre-warm caches while you finish):**
 
-| Option             | Header   | Description                                                   |
-| ------------------ | -------- | ------------------------------------------------------------- |
-| Install CLIs       | cli      | Install missing command-line tools via Homebrew               |
-| Configure MCPs      | mcp      | Enable Linear, Sentry, Vercel, Gmail MCP servers              |
-| Build registry      | registry | Register projects Claude should manage                        |
-| Shell env           | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile                  |
+| Option             | Header   | Description                                                                   |
+| ------------------ | -------- | ----------------------------------------------------------------------------- |
+| Install CLIs       | cli      | Install missing command-line tools via Homebrew                               |
+| Background daemon  | daemon   | Install ops-daemon early — pre-warms briefing cache while remaining setup runs |
+| Configure MCPs      | mcp      | Enable Linear, Sentry, Vercel, Gmail MCP servers                              |
+| Build registry      | registry | Register projects Claude should manage                                        |
 
 **Batch 2 — Channels & plugins:**
 
@@ -118,7 +131,7 @@ Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need 
 | Configure channels  | channels | Set tokens for Telegram, WhatsApp, Email, Slack               |
 | Companion plugins   | plugins  | Install GSD for project roadmap tracking                      |
 | Save preferences    | prefs    | Owner name, timezone, default priorities                      |
-| Background daemon   | daemon   | Install ops-daemon for persistent wacli-sync + memory extract |
+| Shell env           | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile                  |
 
 **Batch 3 — Extras (only show if not already configured):**
 
@@ -127,6 +140,7 @@ Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need 
 | Configure ecommerce | ecom     | Set Shopify store URL + admin token, ShipBob                  |
 | Configure marketing | mktg     | Set Klaviyo, Meta Ads, GA4, Search Console keys               |
 | Configure voice     | voice    | Set Bland AI, ElevenLabs, Groq API keys                       |
+| Configure revenue   | revenue  | Set Stripe + RevenueCat keys for live MRR tracking            |
 
 Present each batch as a separate `AskUserQuestion` call. Skip batches where all items are already green. Collect all selections across batches and run each selected section in order.
 
@@ -163,7 +177,7 @@ GSD is a third-party Claude Code plugin that adds project roadmap tracking. When
 Check if GSD is already installed:
 
 ```bash
-ls ~/.claude/skills/gsd-progress/SKILL.md 2>/dev/null && echo "installed" || echo "not_installed"
+find ~/.claude -name "gsd-progress" -path "*/skills/*" 2>/dev/null | head -1 | grep -q . && echo "installed" || echo "not_installed"
 ```
 
 If not installed, ask via `AskUserQuestion`:
@@ -205,6 +219,117 @@ Skipped GSD. Install later with: /plugin marketplace add gsd-build/get-shit-done
 
 ---
 
+## Step 2c — Background Daemon (early install, pre-warm caches)
+
+**Why install the daemon this early?** Running the daemon in parallel with the rest of setup lets it start pre-warming the briefing cache (`ops-gather` results for infra/git/PRs/CI), so by the time the user reaches Step 7 and runs `/ops:go`, the briefing is already cached and loads in under 3 seconds instead of 10. Channel-dependent services (wacli-sync, message-listener, inbox-digest, store-health) are added later in Step 5b once their channels are configured.
+
+### Platform support
+
+The background daemon ships with a `launchd` integration (macOS only). Detect the platform before attempting install:
+
+```bash
+case "$(uname -s)" in
+  Darwin)                OS=macos ;;
+  Linux)                 grep -qi microsoft /proc/version 2>/dev/null && OS=wsl || OS=linux ;;
+  MINGW*|MSYS*|CYGWIN*)  OS=windows ;;
+  *)                     OS=unknown ;;
+esac
+```
+
+- **macOS** (`OS=macos`): proceed with the full `launchctl bootstrap` flow below.
+- **Linux / WSL** (`OS=linux|wsl`): `launchctl` is not available. The daemon script (`${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh`) runs fine under `bash`, but installing it as a user service requires `systemd --user` (Linux) or a custom cron/at wrapper (WSL). That work is **out of scope for this patch** — track as future work. For now, print:
+
+  ```
+  ○ Background daemon — skipped (Linux/WSL install via systemd --user is pending; see docs/daemon-guide.md).
+    You can still launch it manually with:  nohup ${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh &
+  ```
+
+  Write `daemon.enabled = false` and `daemon.skip_reason = "platform:<os>"` to `$PREFS_PATH` and continue to Step 3.
+- **Windows** (native, `OS=windows`): the daemon is **not installed**. Print `○ Background daemon — not supported on native Windows. Use WSL or run ops-daemon.sh manually.` and continue.
+
+If `OS=macos`, check whether the daemon is already installed:
+
+```bash
+launchctl print gui/$(id -u)/com.claude-ops.daemon 2>/dev/null | head -1
+```
+
+If already loaded, print `✓ Background daemon already running — will reconcile services in Step 5b.` and skip to Step 3.
+
+Otherwise ask via `AskUserQuestion`:
+
+```
+Install the ops background daemon now?
+  Starts pre-warming briefing cache while you finish the rest of setup.
+  Auto-heals on failure. Single launchd agent (com.claude-ops.daemon).
+  Channel services (wacli-sync, message-listener) added after channels are set up.
+  [Yes — install now]  [Skip — I'll run it manually later]
+```
+
+On `Yes`, run the install (use `run_in_background: true` per Rule 4 — this runs in parallel with the next wizard steps):
+
+```bash
+DAEMON_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh"
+chmod +x "$DAEMON_SCRIPT"
+PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/scripts/com.claude-ops.daemon.plist"
+PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.daemon.plist"
+DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+LOG_DIR="$DATA_DIR/logs"
+mkdir -p "$LOG_DIR"
+
+# Generate plist
+sed -e "s|__DAEMON_SCRIPT_PATH__|$DAEMON_SCRIPT|g" \
+    -e "s|__LOG_DIR__|$LOG_DIR|g" \
+    -e "s|__HOME__|$HOME|g" \
+    "$PLIST_TEMPLATE" > "$PLIST_DEST"
+
+# Write a minimal initial services config — only the services that don't depend on
+# channels yet. `briefing-pre-warm` runs ops-gather every 2 minutes so the next
+# /ops:go is instant. `memory-extractor` runs but stays idle until channels exist.
+SERVICES_CONFIG="$DATA_DIR/daemon-services.json"
+cat > "$SERVICES_CONFIG" <<JSON
+{
+  "services": {
+    "briefing-pre-warm": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/ops-gather",
+      "cron": "*/2 * * * *",
+      "_note": "Pre-warms /ops:go cache. Runs every 2 minutes."
+    },
+    "memory-extractor": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-memory-extractor.sh",
+      "cron": "*/30 * * * *",
+      "health_file": "~/.claude/plugins/data/ops-ops-marketplace/memories/.health",
+      "_note": "Idle until channels are configured; will extract profiles once wacli/gog are live."
+    }
+  }
+}
+JSON
+
+# Remove the old standalone wacli keepalive if present
+launchctl bootout gui/$(id -u)/com.claude-ops.wacli-keepalive 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist"
+
+# Load daemon in background — does NOT block the wizard
+launchctl bootout gui/$(id -u) "$PLIST_DEST" 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) "$PLIST_DEST"
+```
+
+Write `daemon.enabled = true` and `daemon.installed_at_step = "2c"` to `$PREFS_PATH` so Step 5b knows to reconcile services instead of re-installing.
+
+Print:
+
+```
+✓ Background daemon — installed. Pre-warming briefing cache in parallel while you finish setup.
+  Channel-dependent services will be added after channels are configured (Step 5b).
+```
+
+Continue immediately to Step 3 — do NOT wait for the daemon to confirm startup. The health file check is deferred to Step 5b.
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/docs/daemon-guide.md` for full operational instructions, CLI reference, and troubleshooting for the background daemon. The setup agent can load that file directly when it needs more depth than this wizard provides.
+
+---
+
 ## Step 3 — Configure channels (if selected)
 
 Ask which channels the user wants to configure using `AskUserQuestion` with `multiSelect: true`. Because AskUserQuestion allows max 4 options, batch into two groups. Skip channels already configured (show only those needing attention).
@@ -222,11 +347,49 @@ Ask which channels the user wants to configure using `AskUserQuestion` with `mul
 
 | Option   | Header   | Description                                                             |
 | -------- | -------- | ----------------------------------------------------------------------- |
-| Calendar | calendar | gog cal → Google Calendar MCP fallback — schedule context for briefings |
+| Calendar | calendar | gog calendar → Google Calendar MCP fallback — schedule context for briefings |
 | Doppler  | doppler  | Secrets manager — set default project + config for all ops skills       |
 | Vault    | vault    | Password manager — 1Password, Dashlane, Bitwarden, or macOS Keychain    |
 
 Present each batch as a separate `AskUserQuestion` call. Skip batches where all items are already configured. For each selected channel, run the matching sub-flow below.
+
+---
+
+#### Shared: detect the host OS before suggesting installs
+
+The claude-ops wizard runs on macOS, Linux (all major distros + WSL), and Windows (native + WSL). Before printing any install command, the skill MUST detect the host OS and pick the OS-appropriate variant. Never print a `brew install …` command to a Windows user, and never print `winget install …` to a macOS user.
+
+Minimal detection snippet (bash — works on macOS, Linux, WSL, MSYS/Cygwin):
+
+```bash
+case "$(uname -s)" in
+  Darwin*) OS=macos ;;
+  Linux*)
+    if grep -qi microsoft /proc/version 2>/dev/null; then OS=wsl
+    elif [ -f /etc/os-release ]; then
+      . /etc/os-release
+      case "$ID" in
+        arch|manjaro) OS=arch ;;
+        fedora|rhel|centos|rocky|almalinux) OS=fedora ;;
+        debian|ubuntu|pop|linuxmint) OS=debian ;;
+        alpine) OS=alpine ;;
+        opensuse*|sles) OS=suse ;;
+        *) OS=linux ;;
+      esac
+    else OS=linux; fi ;;
+  MINGW*|MSYS*|CYGWIN*) OS=windows ;;
+  *) OS=unknown ;;
+esac
+```
+
+Cascade for the package manager (pick the first one available):
+1. `brew` (macOS + Linuxbrew) — preferred on macOS.
+2. Native OS manager — `apt-get` (debian/ubuntu), `dnf` (fedora/rhel), `pacman` (arch), `zypper` (suse), `apk` (alpine).
+3. `winget` (Windows 10 1809+) → `scoop` → `choco` → build-from-source as last resort on Windows.
+
+When the preferred manager isn't installed, fall forward to the next available option rather than aborting the flow. Every `AskUserQuestion` "[Install now — …]" prompt below uses an OS-aware command table — print only the row(s) that match the detected OS.
+
+For the authoritative cross-OS detection logic, reuse `bin/ops-setup-detect` (which emits `os`, `pkg_mgr`, `arch`, `keyring_backend`, `shell`, `browser_profiles_found` in its JSON output).
 
 ---
 
@@ -236,8 +399,8 @@ Whenever a channel has a **browser-based OAuth flow** available, offer that firs
 
 | Channel        | OAuth path                                                 | Manual fallback                        |
 | -------------- | ---------------------------------------------------------- | -------------------------------------- |
-| Email (gog)    | `gog auth login` (browser)                                 | n/a — gog is OAuth-only                |
-| Calendar (gog) | same `gog auth login` with `--scopes=calendar`             | n/a                                    |
+| Email (gog)    | `gog auth add <email> --services gmail,calendar,drive,contacts,docs,sheets` (browser) | n/a — gog is OAuth-only |
+| Calendar (gog) | same `gog auth add` with calendar in `--services`          | n/a                                    |
 | Slack          | `claude mcp add slack` (handles OAuth through Claude Code) | bot token via auto-scan + manual paste |
 | Linear         | `claude mcp add linear`                                    | API key                                |
 | Sentry         | `claude mcp add sentry`                                    | DSN / auth token                       |
@@ -261,7 +424,7 @@ Only go into the credential auto-scan flow below when the user picks "manually" 
 
 **BEFORE asking the user for ANY credential**, run this scan sequence. This applies to ALL steps — channels, ecommerce, marketing, voice, and MCPs. The user should never be asked to find a key that's already on their system.
 
-**CRITICAL — exhaust ALL sources before reporting.** Run every scan source (1-8 below) in a single batch, THEN analyze the combined results. Do NOT report "no credentials found" after checking only env vars and Dashlane — Chrome history, .env files, Doppler, and keychain may have the answer. If API tokens are missing but the store/service identity was found (e.g. store URL in Chrome history, login entry in Dashlane), report what you found and skip to the token step with the identity pre-filled. The user saying "find it" or "check all available sources" means you did not search thoroughly enough — never ask the user to look for something you can find programmatically.
+**CRITICAL — exhaust ALL sources before reporting.** Run every scan source (1-10 below) in a single batch, THEN analyze the combined results. Do NOT report "no credentials found" after checking only env vars and Dashlane — Chrome history, .env files, Doppler, and keychain may have the answer. If API tokens are missing but the store/service identity was found (e.g. store URL in Chrome history, login entry in Dashlane), report what you found and skip to the token step with the identity pre-filled. The user saying "find it" or "check all available sources" means you did not search thoroughly enough — never ask the user to look for something you can find programmatically.
 
 For each variable name (e.g. `TELEGRAM_BOT_TOKEN`, `SHOPIFY_ACCESS_TOKEN`, `KLAVIYO_API_KEY`):
 
@@ -351,10 +514,9 @@ Rules for the prompt:
     3. macOS Keychain (security find-generic-password with various service name patterns)
     4. Dashlane CLI (dcli password <service> + related keywords)
     5. Chrome browser — navigate to <service_admin_url> via Kapture/Playwright MCP, log in if needed, and extract the credential from the settings page
-    6. ~/.claude.json MCP server env vars
-    7. All shell profile files (~/.zshrc, ~/.bashrc, ~/.zprofile, ~/.envrc, ~/.config/fish/*)
-    8. 1Password CLI (op item list --tags <service>) if available
-    9. AWS Secrets Manager / SSM Parameter Store if aws cli authenticated
+    6. All shell profile files (~/.zshrc, ~/.bashrc, ~/.zprofile, ~/.envrc, ~/.config/fish/*)
+    7. 1Password CLI (op item list --tags <service>) if available
+    8. AWS Secrets Manager / SSM Parameter Store if aws cli authenticated
 
     Return the credential value if found, or a detailed report of everywhere you checked and what you found (partial matches, expired tokens, wrong-format values).
     ```
@@ -387,7 +549,13 @@ Set up Telegram personal account access?
 
 If the user skips, record `channels.telegram = "skipped"` in `$PREFS_PATH` and move on. Do NOT silently mark Telegram as unconfigured — the explicit skip prevents the status header from showing `○ telegram (no token)` as an action item on subsequent runs.
 
-**Rate-limit guard**: Before starting, check `$PREFS_PATH` for `channels.telegram.status == "rate_limited"`. If `retry_after` is in the future, tell the user: `"Telegram rate-limited until [time]. Skipping — re-run /ops:setup telegram after [time]."` and move to the next channel. Do NOT attempt `send_password` — it will fail immediately and may extend the cooldown.
+**Rate-limit guard**: Before starting, check `$PREFS_PATH` for `channels.telegram` being an object with `.status == "rate_limited"` — use a type guard: `if (channels.telegram | type) == "object" and .channels.telegram.status == "rate_limited"` (jq: `if (.channels.telegram | type) == "object" then .channels.telegram.status else "skipped" end`). If `retry_after` is in the future, present the user with `AskUserQuestion`:
+```
+Telegram is rate-limited until [time]. What would you like to do?
+  [Wait and retry after cooldown — re-run /ops:setup telegram after [time]]
+  [Skip Telegram for now]
+```
+Do NOT attempt `send_password` during a rate-limit window — it will fail immediately and may extend the cooldown. If the user selects Skip, record the skip in `$PREFS_PATH` and move to the next channel.
 
 **Bots cannot read user DMs**, so `/ops-inbox telegram` requires a personal-account MCP. The plugin ships `bin/ops-telegram-autolink.mjs` which:
 
@@ -433,7 +601,7 @@ Sub-flow (only runs if user selected Yes above):
 
    **Error recovery — CRITICAL: do NOT burn login attempts.** Each `send_password` call counts toward Telegram's rate limit (~3-5 per 8 hours). If the autolink fails:
 
-   - **`"selectors may have changed"` / extraction failure**: The HTML parsing failed but the login succeeded. Do NOT re-run the script. Instead, check if the error includes `html_snippet` — the snippet shows the stripped page text. If it contains a 5-12 digit number near "api_id" and a 32-char hex near "api_hash", extract them directly with grep/regex from the snippet. If the snippet shows a login page or redirect, the session expired during extraction.
+   - **`"could not extract ... after 6 extraction strategies"` / extraction failure**: The HTML parsing failed but the login succeeded. Do NOT re-run the script. Instead, check if the error includes `html_snippet` — the snippet shows the stripped page text. If it contains a 5-12 digit number near "api_id" and a 32-char hex near "api_hash", extract them directly with grep/regex from the snippet. If the snippet shows a login page or redirect, the session expired during extraction.
    - **`rate-limited`**: Record `channels.telegram.status = "rate_limited"` and `channels.telegram.retry_after` (now + 8 hours) in `$PREFS_PATH`. Move on to the next channel. On subsequent `/ops:setup` runs, check `retry_after` and skip Telegram if the cooldown hasn't expired.
    - **Code file not consumed**: If `/tmp/telegram-code.txt` still exists 10+ seconds after writing, the validation regex rejected it. Read the file contents and the log. Do NOT ask the user for another code — the original code is still valid, you just need to fix the bridge.
    - **General rule**: You get at most 2 `send_password` attempts per setup session. If the first attempt fails for a non-rate-limit reason, diagnose the root cause before trying again. If the second attempt fails, save state and move on.
@@ -503,6 +671,8 @@ Sub-flow (only runs if user selected Yes above):
 - The phone number and all credentials stay on your machine. The wizard never transmits them anywhere except to Telegram's own servers during the HTTP login flow.
 - If you already have a gram.js / Telethon session for another project, you can skip this and paste those values manually into `/plugin settings`.
 - If Telegram replies "Sorry, too many tries. Please try again later." your account is rate-limited for ~8 hours — the wizard cannot bypass this. Wait and retry.
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration. The setup agent can load that file directly when it needs more depth than this wizard provides.
 
 ### 3b — WhatsApp (doctor + self-heal + backfill)
 
@@ -708,6 +878,8 @@ All ops skills that use WhatsApp (`ops-inbox`, `ops-comms`, `ops-go`) MUST check
 
 This ensures the user is never silently left with a broken WhatsApp connection — every ops skill surfaces the problem and walks them through the fix.
 
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` and `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration. The setup agent can load those files directly when it needs more depth than this wizard provides.
+
 ### 3c — Email
 
 Email has two possible backends, tried in this order:
@@ -718,12 +890,12 @@ Email has two possible backends, tried in this order:
 
 1. Check `gog` on PATH with `command -v gog`.
 2. **If installed**, run `gog auth status 2>&1 || true` and show the output.
-   - If auth is red (not authenticated / token expired / exit != 0), run `gog auth login` via Bash tool with `run_in_background: true` (it opens a browser for the OAuth flow). Tell the user: "Opening browser for Gmail OAuth — complete the sign-in there, then type 'done'." Use `AskUserQuestion`: `[Done — authenticated]`, `[Skip email]`.
+   - If auth is red (not authenticated / token expired / exit != 0), run `gog auth add "$USER_EMAIL" --services gmail,calendar,drive,contacts,docs,sheets` via Bash tool with `run_in_background: true` (it opens a browser for the OAuth flow). Tell the user: "Opening browser for Gmail OAuth — complete the sign-in there, then type 'done'." Use `AskUserQuestion`: `[Done — authenticated]`, `[Skip email]`.
    - If auth is green, probe with:
      ```bash
      gog gmail labels list --json 2>&1 | head -5
      ```
-     If this returns JSON containing a `labels` array, gog is authenticated and the Gmail API is working. Report ✓. If the output is an error or empty, treat as broken and instruct the user to re-run `gog auth login`.
+     If this returns JSON containing a `labels` array, gog is authenticated and the Gmail API is working. Report ✓. If the output is an error or empty, treat as broken and instruct the user to re-run `gog auth add <email> --services gmail,calendar,drive,contacts,docs,sheets`.
    - Record `channels.email = "gog"` in `$PREFS_PATH` and stop here.
 
 #### Fallback: Claude Gmail MCP connector
@@ -744,13 +916,23 @@ If `gog` is not on PATH, look at the detector's `mcp_configured` array for any e
       Desktop-side setting tied to your account.
       If you want unattended sending from ops-comms, install `gog` instead.
    ```
-5. On "Install gog instead", print:
+5. On "Install gog instead", print the OS-appropriate install command:
+
+   | OS            | Command                                                       |
+   |---------------|---------------------------------------------------------------|
+   | macOS / Linuxbrew | `brew install gogcli`                                     |
+   | Windows       | `winget install -e --id steipete.gogcli`                      |
+   | Arch Linux    | `yay -S gogcli`                                               |
+   | From source   | `git clone https://github.com/steipete/gogcli.git && cd gogcli && make` |
+
+   Docs: <https://gogcli.sh/> · Repo: <https://github.com/steipete/gogcli>
+
+   After install, authorise once per account:
+   ```bash
+   gog auth credentials /path/to/client_secret.json
+   gog auth add you@example.com --services gmail,calendar,drive,contacts,docs,sheets
    ```
-   gog is a private CLI — install from source:
-     git clone https://github.com/Lifecycle-Innovations-Limited/gog ~/.gog && cd ~/.gog && ./install.sh
-   Or download a release binary from the GitHub releases page.
-   ```
-   Then stop this sub-flow (don't attempt to `brew install` — gog isn't on Homebrew).
+   Refresh tokens are stored in the OS keyring (Keychain on macOS, Secret Service / libsecret on Linux, Credential Manager on Windows). Then stop this sub-flow and wait for the user to re-run `/ops:setup email`.
 
 #### Neither available
 
@@ -759,6 +941,8 @@ If `gog` is not on PATH, look at the detector's `mcp_configured` array for any e
    - `[Add a Gmail MCP — show docs]` → print `claude mcp add gmail` and tell the user to re-run `/ops:setup email` after
    - `[Skip email for now]`
 7. Whatever the user picks, record the resulting state in `$PREFS_PATH` (either `channels.email = "gog"`, `channels.email = "mcp:<name>"`, or omit the key entirely).
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/SKILL.md` and `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration. The setup agent can load those files directly when it needs more depth than this wizard provides.
 
 ### 3d — Slack (scout + ops-slack-autolink)
 
@@ -836,24 +1020,28 @@ Sub-flow:
 - Logging out of Slack invalidates the `d` cookie and breaks the MCP. Use `/ops:setup slack` to re-extract.
 - Slack's Terms of Service allow personal-session-token use for your own account. Do not use this flow to access accounts you don't own.
 
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` and `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration. The setup agent can load those files directly when it needs more depth than this wizard provides.
+
 ### 3e — Calendar
 
 Calendar isn't a messaging channel, but every other ops skill (briefings, `/ops-next`, `/ops-go`) benefits massively from knowing the user's schedule — meetings blocking deep work, deploy windows, travel days. The wizard wires it up the same way as email: `gog calendar` primary, Google Calendar MCP connector fallback.
 
 #### Preferred: `gog calendar`
 
-`gog` already handles email; the same binary exposes `gog calendar` / `gog cal` with the same OAuth token. No additional auth needed if Step 3c went green.
+`gog` (the `gogcli` binary — see Step 3c) already handles email; the same binary exposes `gog calendar` with the same OAuth token. No additional auth needed if Step 3c went green. Note: `gog cal` is **not** a valid alias — always use `gog calendar`.
 
 1. Check `gog` on PATH with `command -v gog`.
 2. **If installed and already authed from Step 3c**, probe:
    ```bash
-   gog cal list --json --max 3 2>&1 | head -20
+   gog calendar calendars --json 2>&1 | head -20
    ```
-   If this returns JSON with calendar data, record `channels.calendar = "gog"` in `$PREFS_PATH` and print `✓ Calendar — gog cal`. Stop here.
+   If this returns JSON with calendar metadata, record `channels.calendar = "gog"` in `$PREFS_PATH` and print `✓ Calendar — gog calendar`. Stop here.
 3. **If gog is installed but calendar scope is missing** (typical error: `insufficient scope` or `403 insufficient_permissions`), print:
    ```
    Your gog OAuth token doesn't include the calendar scope.
-   Run `gog auth login --scopes=gmail,calendar` via Bash tool with `run_in_background: true` to re-authorize with calendar read access. Tell the user: "Opening browser for Calendar OAuth — complete the sign-in there, then type 'done'." Use `AskUserQuestion`: `[Done — re-authorized]`, `[Skip calendar]`.
+   Re-add the account with the calendar service via Bash tool with `run_in_background: true`:
+     gog auth add "$USER_EMAIL" --services gmail,calendar,drive,contacts,docs,sheets
+   Tell the user: "Opening browser for Calendar OAuth — complete the sign-in there, then type 'done'." Use `AskUserQuestion`: `[Done — re-authorized]`, `[Skip calendar]`.
    ```
    Do not attempt to re-auth from the skill — it's a browser flow.
 
@@ -875,7 +1063,7 @@ Calendar isn't a messaging channel, but every other ops skill (briefings, `/ops-
       If you want ops-next to auto-block focus time or ops-comms to confirm
       meetings, install `gog` instead.
    ```
-7. On "Install gog instead", print the same gog install snippet as Step 3c.
+7. On "Install gog instead", **run the install via Bash** (Rule 2) using the same npm → bun → source-clone chain as Step 3c — either inline the snippet or call `${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-install gog` (background per Rule 4). Only fall back to printing manual instructions if all four attempts fail.
 
 #### Neither available
 
@@ -893,6 +1081,8 @@ Downstream skills (`/ops-go`, `/ops-next`, `/ops-fires`) read `channels.calendar
 - `/ops-fires` warns if a production incident falls during a scheduled call
   So this section is not optional for users who want context-aware briefings.
 
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-go/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration (calendar context feeds `/ops:go` briefings). The setup agent can load that file directly when it needs more depth than this wizard provides.
+
 ### 3f — Doppler (secrets management)
 
 Doppler is a secrets manager that injects environment variables at runtime. When configured, all ops skills can query secrets via `doppler secrets get` instead of reading from dotfiles or keychain. The wizard checks presence, auth status, and default project context.
@@ -903,21 +1093,27 @@ Doppler is a secrets manager that injects environment variables at runtime. When
 command -v doppler
 ```
 
-If missing, ask via `AskUserQuestion`:
+If missing, detect the host OS via `uname -s` / `$OSTYPE` / `$OS` and pick the right install command. Ask via `AskUserQuestion`:
 
 ```
 Doppler CLI is not installed.
-  [Install now — brew install dopplerhq/cli/doppler]
+  [Install now — <os-specific command>]
   [Skip Doppler]
 ```
 
-On install, run in the background:
+Where the OS-specific command is:
 
-```bash
-brew install dopplerhq/cli/doppler
-```
+| OS                  | Install command                                                                     |
+|---------------------|-------------------------------------------------------------------------------------|
+| macOS / Linuxbrew   | `brew install dopplerhq/cli/doppler`                                                |
+| Debian / Ubuntu     | `curl -Ls https://cli.doppler.com/install.sh \| sudo sh`                            |
+| Fedora / RHEL       | `sudo rpm --import https://packages.doppler.com/public.key && sudo dnf install -y doppler` |
+| Arch Linux          | `yay -S doppler-cli`                                                                |
+| Alpine              | `apk add --no-cache doppler-cli`                                                    |
+| Windows (winget)    | `winget install Doppler.doppler`                                                    |
+| Windows (scoop)     | `scoop bucket add doppler https://github.com/DopplerHQ/scoop-doppler.git; scoop install doppler` |
 
-Report success/failure. If the user skips, record `secrets_manager: "none"` in `$PREFS_PATH` and end this sub-flow.
+Run the chosen command in the background, capture stdout/stderr, and report success/failure. If the user skips, record `secrets_manager: "none"` in `$PREFS_PATH` and end this sub-flow.
 
 #### Step 3f.2 — Auth status
 
@@ -1007,6 +1203,8 @@ For example:
 The project and config above are the defaults saved to preferences.
 Individual skills can override with --project / --config flags.
 ```
+
+> **Deep-dive:** no dedicated skill ships with Doppler — see `${CLAUDE_PLUGIN_ROOT}/docs/memories-system.md` (Runtime Context section) for how downstream skills consume the `secrets_manager` / `doppler.*` values from `$PREFS_PATH` and resolve `doppler:KEY_NAME` references at runtime. The setup agent can load that file directly when it needs more depth than this wizard provides.
 
 ### 3g — Password Manager (credential vault)
 
@@ -1192,6 +1390,8 @@ Omit this line entirely if `password_manager` is `"none"` or unset.
 
 Add to the shortcuts table: `vault`, `password-manager`, `pm` → Step 3g
 
+> **Deep-dive:** no dedicated skill ships with the password manager integration — see `${CLAUDE_PLUGIN_ROOT}/docs/memories-system.md` (Runtime Context section) for how downstream skills resolve `password_manager` + related vault references from `$PREFS_PATH`. Privacy-and-security guidance lives in this SKILL.md (keychain-only storage of API hashes/session strings, `umask 077` for bridge files). The setup agent can load that file directly when it needs more depth than this wizard provides.
+
 ---
 
 ### 3h — Ecommerce (Shopify + dynamic partners)
@@ -1263,16 +1463,34 @@ Validate the input: strip `https://`, strip trailing slash, check that the resul
 
 #### Step 3h.3 — Shopify Admin API token
 
-If `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_ADMIN_TOKEN`, or `SHOPIFY_ADMIN_API_ACCESS_TOKEN` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format with truncated display (`shpat_508b...682e`). Only ask via free text if no value was found:
-```
-Enter your Shopify Admin API access token:
-  To generate one:
-  1. Go to your Shopify admin → Settings → Apps → Develop apps
-  2. Create an app (or select an existing one)
-  3. Under "Configuration", grant the scopes you need (read_orders, read_products, etc.)
-  4. Install the app, then copy the "Admin API access token"
-  Token starts with "shpat_"
-```
+If `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_ADMIN_TOKEN`, or `SHOPIFY_ADMIN_API_ACCESS_TOKEN` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format with truncated display (`shpat_508b...682e`). Only ask via free text if no value was found.
+
+**Multi-store handling**: When multiple stores are discovered, process each one independently. For stores without tokens, try automated approaches first:
+
+1. **Check Doppler across all projects** for store-specific Shopify tokens:
+   ```bash
+   for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
+     doppler secrets --project "$proj" --config prd --json 2>/dev/null | \
+       jq -r --arg proj "$proj" 'to_entries[] | select(.key | test("SHOPIFY.*TOKEN|SHOPIFY.*ACCESS"; "i")) | "\(.key)=\(.value.computed | .[0:12])... (doppler:\($proj)/prd)"'
+   done
+   ```
+2. **Try Shopify CLI** if installed (`command -v shopify`):
+   ```bash
+   shopify auth logout 2>/dev/null  # Clear stale session
+   shopify auth login --store <store>.myshopify.com 2>&1  # Opens browser OAuth
+   ```
+   After successful auth, generate a custom app token via the CLI. This avoids manual admin navigation.
+3. **Browser automation** — if Kapture/Playwright MCP is available, navigate to `https://admin.shopify.com/store/<slug>/settings/apps/development` and automate the "Create an app" → "Configure scopes" → "Install" → "Reveal token" flow. Use scopes: `read_orders,read_products,read_customers,read_inventory,read_fulfillments,read_analytics`.
+4. **Manual fallback** — only if all automated approaches fail:
+   ```
+   No automated path available for <store>.myshopify.com.
+   To generate a token manually:
+     1. Go to https://admin.shopify.com/store/<slug>/settings/apps/development
+     2. Create an app → Configure → grant scopes → Install → copy token
+     Token starts with "shpat_"
+   ```
+
+**Do NOT skip a store** just because no token was found — always attempt automation first. The user expects the wizard to handle credential generation, not just credential lookup.
 
 Save to `$PREFS_PATH` under `ecom.shopify`. Apply the Doppler-reference pattern — if Doppler is configured, run:
 ```bash
@@ -1332,7 +1550,7 @@ If the user provides partner names, process each one in a loop:
      "ecom": {
        "partners": {
          "shipbob": {
-           "api_base_url": "https://developer.shipbob.com/v1",
+           "api_base_url": "https://api.shipbob.com/v1",
            "auth_pattern": "Authorization: Bearer <token>",
            "credentials": { "api_token": "doppler:SHIPBOB_API_TOKEN" },
            "health_endpoint": "/user",
@@ -1355,15 +1573,17 @@ If the user provides partner names, process each one in a loop:
 
 | Partner    | Auth header                              | Base URL                               | Health endpoint        |
 | ---------- | ---------------------------------------- | -------------------------------------- | ---------------------- |
-| ShipBob    | `Authorization: Bearer <token>`          | `https://developer.shipbob.com/v1`     | `/user`                |
-| Recharge   | `X-Recharge-Access-Token: <token>`       | `https://api.rechargeapayments.com/v1` | `/shop`                |
+| ShipBob    | `Authorization: Bearer <token>`          | `https://api.shipbob.com/v1`           | `/user`                |
+| Recharge   | `X-Recharge-Access-Token: <token>`       | `https://api.rechargeapps.com/v1`      | `/shop`                |
 | Yotpo      | `X-Api-Key: <app_key>`                   | `https://api.yotpo.com`                | `/core/v3/stores/<id>` |
 | Shippo     | `Authorization: ShippoToken <token>`     | `https://api.goshippo.com`             | `/carrier_accounts`    |
 | Gorgias    | `Authorization: Basic <base64>`          | `https://<domain>.gorgias.com/api`     | `/account`             |
-| Loop       | `x-loop-signature: <secret>`             | `https://api.loopreturns.com/api/v1`   | `/warehouse`           |
+| Loop       | `X-Authorization: <secret>`              | `https://api.loopreturns.com/api/v1`   | `/warehouse`           |
 | Attentive  | `Authorization: Bearer <token>`          | `https://api.attentivemobile.com/v1`   | `/me`                  |
 
 For any partner not in this table, always web search for current auth docs before asking for credentials.
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-ecom/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for the ecommerce integration (multi-store Shopify, partner dispatching, store-health daemon). The setup agent can load that file directly when it needs more depth than this wizard provides.
 
 ---
 
@@ -1517,6 +1737,8 @@ If the user provides partner names, apply the same dynamic partner loop as Step 
 
 For any partner not in this table, always web search for current auth docs before asking for credentials.
 
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-marketing/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for marketing integrations (Klaviyo flows, Meta Ads, GA4, Search Console). The setup agent can load that file directly when it needs more depth than this wizard provides.
+
 ---
 
 ### 3j — Voice (Bland AI, ElevenLabs, Groq)
@@ -1614,6 +1836,159 @@ Write to `$PREFS_PATH` (merge):
 
 Same Doppler-reference pattern — prefer `doppler:KEY_NAME` over raw tokens when Doppler is configured.
 
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-voice/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for voice integrations (Bland AI call flows, ElevenLabs TTS, Groq transcription). The setup agent can load that file directly when it needs more depth than this wizard provides.
+
+---
+
+### 3k — Revenue (Stripe + RevenueCat)
+
+**Before showing the service selector**, run the Universal Credential Auto-Scan for all revenue vars simultaneously (Rule 4 — background these):
+
+```bash
+# Shell env
+printenv STRIPE_SECRET_KEY STRIPE_API_KEY REVENUECAT_API_KEY REVENUECAT_SECRET_KEY REVENUECAT_PROJECT_ID 2>/dev/null
+
+# Shell profiles + .envrc files
+grep -h 'STRIPE\|REVENUECAT\|RC_API' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
+
+# Doppler across all projects
+for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
+  doppler secrets --project "$proj" --config prd --json 2>/dev/null | \
+    jq -r --arg proj "$proj" 'to_entries[] | select(.key | test("STRIPE|REVENUECAT|RC_API")) | "\(.key)=\(.value.computed) (doppler:\($proj)/prd)"'
+done
+
+# 1Password
+op item list --categories "API Credential" --format json 2>/dev/null | \
+  jq -r '.[] | select(.title | test("stripe|revenuecat"; "i")) | .id' | \
+  while read id; do op item get "$id" --format json 2>/dev/null; done
+
+# Dashlane
+dcli password stripe --output json 2>/dev/null
+dcli password revenuecat --output json 2>/dev/null
+
+# Bitwarden
+bw list items --search stripe 2>/dev/null | jq -r '.[] | select(.login.password) | .login.password' | head -1
+bw list items --search revenuecat 2>/dev/null | jq -r '.[] | select(.login.password) | .login.password' | head -1
+
+# macOS Keychain
+security find-generic-password -s "stripe" -w 2>/dev/null
+security find-generic-password -s "revenuecat" -w 2>/dev/null
+
+# OpenClaw
+jq -r '.agents.defaults.env | to_entries[] | select(.key | test("STRIPE|REVENUECAT")) | "\(.key)=\(.value)"' ~/.openclaw/openclaw.json 2>/dev/null
+```
+
+Cache these results. Also check `$PREFS_PATH` under `revenue.stripe.*` and `revenue.revenuecat.*` — if already set, show `✓ <service> — already configured` and offer `[Keep]` / `[Reconfigure]`.
+
+Ask which revenue integrations to configure via `AskUserQuestion` with `multiSelect: true`:
+
+| Option       | Header       | Description                                                    |
+| ------------ | ------------ | -------------------------------------------------------------- |
+| Stripe       | stripe       | SaaS revenue — secret key for MRR, charges, disputes           |
+| RevenueCat   | revenuecat   | Mobile subs — API key + project ID for mobile MRR              |
+
+#### Stripe
+
+If `STRIPE_SECRET_KEY` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format with `[Use this value]` / `[Paste a different one]` / `[Skip]`.
+
+Per Rule 3 — if nothing was found, offer (≤4 options):
+```
+No Stripe secret key found. How do you want to provide one?
+  [Paste Stripe secret key manually]
+  [Deep hunt — spawn agent]
+  [Skip — use registry.json values]
+```
+
+On `[Deep hunt — spawn agent]`, spawn a background research agent per Rule 3:
+
+```
+Agent(
+  subagent_type: "general-purpose",
+  model: "haiku",
+  run_in_background: true,
+  prompt: "Grep the filesystem under $HOME (excluding node_modules, .git, Library/Caches) for Stripe secret key patterns: sk_live_[A-Za-z0-9]+ and sk_test_[A-Za-z0-9]+. Also scan ~/.config, ~/.aws, ~/.docker, any .env files, and known secrets directories. Return every hit with file path + line number + 6 chars of redacted prefix (e.g. sk_live_abc***). Do not print full keys."
+)
+```
+
+While it runs, continue to the RevenueCat block. Return to Stripe when the agent reports results; present findings via `AskUserQuestion` (paginate to ≤4 per Rule 1).
+
+On `[Paste Stripe secret key manually]`:
+```
+Enter your Stripe Secret Key:
+  Format: sk_live_XXX  (production)  or  sk_test_XXX  (test mode)
+  Find it: Stripe Dashboard → Developers → API keys → Secret key → Reveal
+  Prefer a Doppler reference (e.g. doppler:STRIPE_SECRET_KEY) over the raw value.
+```
+
+Smoke test:
+```bash
+curl -s -u "$STRIPE_SECRET_KEY:" "https://api.stripe.com/v1/balance" | jq '.available | length'
+```
+Expect a non-zero integer. If `{"error": ...}`, show the message and re-ask.
+
+#### RevenueCat
+
+If `REVENUECAT_API_KEY` and `REVENUECAT_PROJECT_ID` were both found in the auto-scan, present them together with `[Use these values]` / `[Paste different ones]` / `[Skip]`.
+
+Per Rule 3 — if not found, offer:
+```
+No RevenueCat credentials found. How do you want to provide them?
+  [Paste RevenueCat API key manually]
+  [Deep hunt — spawn agent]
+  [Skip — mobile MRR will be omitted]
+```
+
+On `[Deep hunt — spawn agent]`, spawn (background, Rule 4):
+
+```
+Agent(
+  subagent_type: "general-purpose",
+  model: "haiku",
+  run_in_background: true,
+  prompt: "Grep the filesystem under $HOME (excluding node_modules, .git, Library/Caches) for RevenueCat credential patterns: rcb_[A-Za-z0-9]+ (V2 secret), sk_[A-Za-z0-9]+ near the literal string 'revenuecat', and any env vars matching REVENUECAT_* or RC_API_*. Also look for project IDs (32-char alphanum strings) adjacent to any revenuecat match. Return each hit with file path + line number + 6-char redacted prefix. Do not print full keys."
+)
+```
+
+On `[Paste RevenueCat API key manually]`:
+```
+Enter your RevenueCat V1 API Key:
+  Find it: app.revenuecat.com → Project settings → API keys → V1 secret key
+  Format: rcb_XXX (V2)  or  legacy secret (starts with sk_)
+
+Enter your RevenueCat Project ID:
+  Find it in the URL: app.revenuecat.com/projects/<project_id>/...
+```
+
+Smoke test:
+```bash
+curl -s -H "Authorization: Bearer $REVENUECAT_API_KEY" \
+  "https://api.revenuecat.com/v1/projects/$REVENUECAT_PROJECT_ID/metrics/overview" | jq '.mrr // .object'
+```
+Expect a numeric `mrr` or an object descriptor. If the response is `{"code": 7243, ...}` (auth error), re-ask.
+
+#### Save to preferences
+
+Write to `$PREFS_PATH` (merge):
+```json
+{
+  "revenue": {
+    "stripe": {
+      "secret_key": "doppler:STRIPE_SECRET_KEY",
+      "configured_at": "<ISO timestamp>"
+    },
+    "revenuecat": {
+      "api_key": "doppler:REVENUECAT_API_KEY",
+      "project_id": "<project_id>",
+      "configured_at": "<ISO timestamp>"
+    }
+  }
+}
+```
+
+Prefer a Doppler reference (`doppler:STRIPE_SECRET_KEY`, `doppler:REVENUECAT_API_KEY`) over raw tokens when Doppler is configured. For either service, if the user picked `[Skip]`, save `{"revenue": {"<service>": "skipped"}}` so the wizard doesn't re-prompt on the next run — but `/ops:revenue` will fall back to `scripts/registry.json` `revenue.mrr` values as documented in the `revenue-tracker` agent.
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-revenue/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for revenue integrations (Stripe MRR/ARR queries, RevenueCat subscription metrics, registry fallbacks). The setup agent can load that file directly when it needs more depth than this wizard provides.
+
 ---
 
 ## Step 4 — Configure MCPs (if selected)
@@ -1631,6 +2006,8 @@ Gmail:   claude mcp add gmail   (fallback only — prefer `gog` CLI, see Step 3c
 Offer `[Open Claude Code docs]`, `[Skip]`. Do **not** try to register MCPs from the skill — the plugin can't do that safely.
 
 **Email note:** the ops plugin's primary email path is the `gog` CLI (full read + send, own OAuth). The Gmail MCP connector works as a fallback but **cannot send** without extra permission config in Claude Desktop → Settings → Connectors. The wizard handles that detection in Step 3c; this step only lists it so users who deliberately prefer MCP can install it here.
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-linear/SKILL.md`, `${CLAUDE_PLUGIN_ROOT}/skills/ops-triage/SKILL.md`, and `${CLAUDE_PLUGIN_ROOT}/skills/ops-fires/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for the MCP-backed integrations (Linear issue flows, triage routing, Sentry/Vercel fires). The setup agent can load those files directly when it needs more depth than this wizard provides.
 
 ---
 
@@ -1690,58 +2067,29 @@ After auto-discovery (or if the user selects "I'll enter projects manually"):
 - Read the current registry with `jq`, append the new project, write back atomically (`jq ... > tmp && mv tmp registry.json`).
 - After each addition, print the running count and offer `[Add another]` / `[Done]`.
 
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-projects/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for the project registry (auto-discovery, registry schema, GSD filters, priority ordering). The setup agent can load that file directly when it needs more depth than this wizard provides.
+
 ---
 
-## Step 5b — Background Daemon (if selected)
+## Step 5b — Daemon Service Reconciliation
 
-The ops-daemon manages persistent background services — WhatsApp sync, memory extraction, and future integrations — under a single launchd agent. It auto-heals on failure and writes a shared health file that all ops skills can read.
+By now, the daemon was already installed in Step 2c and has been pre-warming the briefing cache in the background while the user configured channels. This step adds **channel-dependent services** (`wacli-sync`, `message-listener`, `inbox-digest`, `store-health`, `competitor-intel`) now that we know which channels and integrations are configured.
 
-**What the daemon does:** Manages persistent connections (WhatsApp sync, memory extraction) and auto-heals on failure. All services run under a single launchd agent (`com.claude-ops.daemon`) that restarts itself if it crashes, with per-service health tracking written to `daemon-health.json`.
+**Skip conditions:**
+- If the user declined daemon install in Step 2c, skip this step entirely.
+- If `daemon.enabled != true` in `$PREFS_PATH`, skip.
 
-Ask the user via `AskUserQuestion`:
+Otherwise continue — reconcile the services list:
 
-```
-Install the ops background daemon?
-  Manages background services persistently — recommended for reliable briefings and monitoring.
-  Services enabled depend on what was configured earlier in setup.
-  [Yes — install daemon]  [Skip — use standalone keepalive instead]
-```
-
-If the user skips, fall back to the standalone keepalive path in Step 3b.7.
-
-On `Yes`:
-
-**1. Install and configure the daemon:**
+**1. Verify the daemon is running:**
 
 ```bash
-DAEMON_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh"
-chmod +x "$DAEMON_SCRIPT"
-PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/scripts/com.claude-ops.daemon.plist"
-PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.daemon.plist"
 DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
-LOG_DIR="$DATA_DIR/logs"
-mkdir -p "$LOG_DIR"
-
-# Generate plist
-sed -e "s|__DAEMON_SCRIPT_PATH__|$DAEMON_SCRIPT|g" \
-    -e "s|__LOG_DIR__|$LOG_DIR|g" \
-    -e "s|__HOME__|$HOME|g" \
-    "$PLIST_TEMPLATE" > "$PLIST_DEST"
-
-# Copy default services config if none exists
-SERVICES_CONFIG="$DATA_DIR/daemon-services.json"
-if [[ ! -f "$SERVICES_CONFIG" ]]; then
-  sed "s|__SCRIPTS_DIR__|${CLAUDE_PLUGIN_ROOT}/scripts|g" \
-    "${CLAUDE_PLUGIN_ROOT}/scripts/daemon-services.default.json" > "$SERVICES_CONFIG"
-fi
-
-# Remove the old standalone wacli keepalive if present
-launchctl bootout gui/$(id -u)/com.claude-ops.wacli-keepalive 2>/dev/null || true
-rm -f "$HOME/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist"
-
-# Load daemon
-launchctl bootout gui/$(id -u) "$PLIST_DEST" 2>/dev/null || true
-launchctl bootstrap gui/$(id -u) "$PLIST_DEST"
+PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.daemon.plist"
+launchctl print gui/$(id -u)/com.claude-ops.daemon >/dev/null 2>&1 || {
+  # Daemon not running — install it now as a fallback
+  launchctl bootstrap gui/$(id -u) "$PLIST_DEST" 2>/dev/null
+}
 ```
 
 **2. Verify health after 5 seconds:**
@@ -1764,9 +2112,9 @@ If the health file is missing (daemon may still be initializing), wait 5 more se
   tail -20 ~/.claude/plugins/data/ops-ops-marketplace/logs/ops-daemon.log
 ```
 
-**3. Build the services list and record in preferences:**
+**3. Build the full services list and reconcile with the config written in Step 2c:**
 
-Determine which services to enable based on what was configured in earlier steps:
+Determine which services to enable based on what was configured in earlier steps. The `briefing-pre-warm` and `memory-extractor` services were already enabled at Step 2c — preserve them. Add channel-dependent services based on what's now configured:
 
 - `wacli-sync` — always include if WhatsApp is configured (`channels.whatsapp` is set)
 - `memory-extractor` — always include
@@ -1775,9 +2123,9 @@ Determine which services to enable based on what was configured in earlier steps
 - `competitor-intel` — always include (runs weekly Monday 10am)
 - `message-listener` — include if WhatsApp or Telegram is configured (persistent poller)
 
-Build the services array programmatically:
+Build the services array programmatically (starting from the 2c baseline):
 ```bash
-SERVICES='["memory-extractor","inbox-digest","competitor-intel"]'
+SERVICES='["briefing-pre-warm","memory-extractor","inbox-digest","competitor-intel"]'
 PREFS=$(cat "$PREFS_PATH" 2>/dev/null || echo '{}')
 # Add wacli-sync + message-listener if WhatsApp is configured
 if echo "$PREFS" | jq -e '.channels.whatsapp' > /dev/null 2>&1; then
@@ -1794,15 +2142,28 @@ fi
 echo "Services to enable: $SERVICES"
 ```
 
-Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with or replace the default, enabling only the services determined above. Each service entry should include:
-- `wacli-sync`: `{ "enabled": true, "interval": "continuous" }`
-- `memory-extractor`: `{ "enabled": true, "interval": "300" }` (every 5 min)
-- `inbox-digest`: `{ "enabled": true, "schedule": "0 */4 * * *" }` (every 4h)
-- `store-health`: `{ "enabled": true, "schedule": "0 9 * * *" }` (daily 9am) — only if ecom configured
-- `competitor-intel`: `{ "enabled": true, "schedule": "0 10 * * 1" }` (weekly Monday 10am)
-- `message-listener`: `{ "enabled": true, "interval": "continuous" }`
+Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with the existing config from Step 2c, preserving `briefing-pre-warm` and `memory-extractor`, and enabling the new channel-dependent services. Each service entry should include:
+- `briefing-pre-warm`: `{ "enabled": true, "cron": "*/2 * * * *" }` — pre-warms /ops:go cache (installed in 2c)
+- `wacli-sync`: `{ "enabled": true, "interval": "continuous" }` — only if WhatsApp configured
+- `memory-extractor`: `{ "enabled": true, "cron": "*/30 * * * *" }` — every 30 min (installed in 2c)
+- `inbox-digest`: `{ "enabled": true, "cron": "0 */4 * * *" }` — every 4h
+- `store-health`: `{ "enabled": true, "cron": "0 9 * * *" }` — daily 9am, only if ecom configured
+- `competitor-intel`: `{ "enabled": true, "cron": "0 10 * * 1" }` — weekly Monday 10am
+- `message-listener`: `{ "enabled": true, "interval": "continuous" }` — only if WhatsApp or Telegram configured
 
-Write `daemon.enabled = true` and `daemon.services` (the computed array) to `$PREFS_PATH`.
+After rewriting the services config, reload the daemon so it picks up the new services:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.claude-ops.daemon
+```
+
+Write `daemon.enabled = true` and `daemon.services` (the reconciled array) to `$PREFS_PATH`. Print a summary:
+
+```
+✓ Daemon services reconciled — N services enabled (briefing-pre-warm, memory-extractor, wacli-sync, ...)
+```
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/docs/daemon-guide.md` for full operational instructions, CLI reference, and troubleshooting for the background daemon (service lifecycle, launchctl/systemd integration, health reporting, reconciliation semantics). The setup agent can load that file directly when it needs more depth than this wizard provides.
 
 ---
 
@@ -1843,11 +2204,11 @@ Collect these via `AskUserQuestion` — one question each. **Never auto-fill fro
 
 5. **YOLO mode** → select `[Yes — auto-approve low-risk actions]`, `[No — always confirm]`.
 
-6. **Default channels** (multiSelect over configured channels only — never show channels that weren't configured in Step 3). **"All configured" should be the first option and pre-selected by default** — most users want all their channels active:
+6. **Default channels** (single-select — these two options are mutually exclusive). **"All configured" should be the first option and pre-selected by default** — most users want all their channels active:
    ```
    Which channels should ops skills use by default?
-     [x] All configured channels
-     [ ] Pick specific channels...
+     [All configured channels]
+     [Pick specific channels...]
    ```
    If the user picks "specific channels", show a follow-up multiSelect with individual channel checkboxes. If they accept "All configured", set `default_channels` to the full list of configured channel names.
 
@@ -1999,11 +2360,14 @@ gog gmail send --to "user@example.com" --subject "test" --body "hello"
 # Gmail — archive (remove INBOX label)
 gog gmail labels modify MESSAGE_ID --remove INBOX
 
-# Calendar — list today's events (NOT --time-min, use `gog cal list`)
-gog cal list --json --max 10
+# Calendar — list calendars
+gog calendar calendars --json
 
-# Calendar — auth with calendar scope
-gog auth login --scopes=gmail,calendar
+# Calendar — today's events on primary
+gog calendar events primary --today --json
+
+# Calendar — (re-)add account with calendar scope
+gog auth add you@example.com --services gmail,calendar,drive,contacts,docs,sheets
 ```
 
 ### wacli

@@ -11,10 +11,24 @@ All notable changes to this project will be documented in this file.
 - **`bin/ops-shopify-create`** — Non-interactive Shopify app scaffolding script. Automates device-code OAuth (auto-opens browser via `expect`), fetches org ID from Shopify Partners API cache, runs `shopify app init` with all flags, and injects client ID into `shopify.app.toml`.
 - **`expect` as required CLI** — Added to `bin/ops-setup-preflight` detection and `bin/ops-setup-install` for browser-automation flows.
 - **Test suite** — New `tests/` directory with bash-based validation covering skills, bin scripts, hooks, templates, and secrets.
+- **`briefing-pre-warm` daemon service** — Runs `bin/ops-gather` every 2 minutes and caches dashboards so `/ops:go` loads in <3s instead of <10s. Registered under `ops-daemon` alongside wacli-keepalive and memory-extractor.
+- **Early daemon install (Step 2c of setup wizard)** — Setup wizard now installs `ops-daemon` immediately after CLI tooling so the `briefing-pre-warm` service can start caching `/ops:go` data while the remaining setup steps run. Step 5b became "daemon service reconciliation" (verify + restart) instead of fresh install.
+- **`/ops:revenue` actual revenue tracking** — `revenue-tracker` agent now queries Stripe (charges, subscriptions → MRR, balance, disputes, open invoices, churn) and RevenueCat (mobile subscription MRR, active subs, churn). AWS cost data still included alongside revenue. `/ops:setup` Step 3k prompts for Stripe + RevenueCat credentials.
+- **New `userConfig` keys** — `stripe_secret_key`, `revenuecat_api_key`, `revenuecat_project_id` added to `plugin.json`.
+- **`infra-monitor` full-AWS coverage** — Service discovery probes IAM access per service, then reports on ECS, EC2, RDS, Lambda, S3 (flags public buckets), CloudFront, ALB/NLB, API Gateway, SQS (backlogs + DLQ), SNS, DynamoDB, ElastiCache, Route 53, ACM (cert expiry), CloudWatch alarms, Budgets, and IAM (stale access keys).
+- **Wiki revamp** — 10 wiki pages rewritten with 2026 GitHub formatting (badges, mermaid diagrams, alert callouts). New pages: `Daemon-Guide`, `Memories-System`, `Plugin-Rules`, `Changelog`, `Privacy-and-Security`.
+- **Privacy & Security transparency** — new `Privacy-and-Security.md` wiki page and README section explicitly document every credential scan source, what the daemon does on disk, and the plugin's no-telemetry / no-phone-home stance.
 
 ### Changed
 
 - **AskUserQuestion <=4 enforcement** — All 15 skills audited and fixed. setup section picker (11→batched 4+4+3), setup channel picker (7→4+3), ops-comms / deploy / fires / go / inbox / linear / projects / revenue / speedup / triage / yolo all batch >4 menus with `[More options...]` bridges. ops-dash hotkey menu refactored.
+- **Subagent models bumped Sonnet 4.5 → Sonnet 4.6** — `comms-scanner`, `infra-monitor`, `project-scanner`, `revenue-tracker`, and `triage-agent` now run on `claude-sonnet-4-6`. `yolo-*` agents stayed on `claude-opus-4-6`; `memory-extractor` stayed on `claude-haiku-4-5`.
+- **Agent Teams adoption** — `/ops:fires`, `/ops:inbox`, `/ops:merge`, `/ops:orchestrate`, `/ops:triage`, and `/ops:yolo` now use the `TeamCreate` + `SendMessage` primitives for parallel agent coordination instead of sequential `Task`-based dispatch.
+- **`/ops:speedup` is now OS- and hardware-agnostic** — auto-detects macOS / Linux / WSL / Windows, selects the right sub-script per platform, and degrades gracefully when tools are missing instead of erroring out.
+
+### Fixed
+
+- **`gog` install fallback chain** — Setup wizard now tries `npm install -g @auroracapital/gog` → `bun install -g @auroracapital/gog` → `git clone https://github.com/auroracapital/gog ~/.gog && ./install.sh` → clear manual instructions. Removed the previous incorrect pointer to `Lifecycle-Innovations-Limited/tap/gog` (Homebrew) — `gog` is a private `@auroracapital` CLI and is not distributed via Homebrew.
 
 ## [0.6.0] — 2026-04-13
 

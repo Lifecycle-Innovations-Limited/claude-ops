@@ -85,10 +85,11 @@ for i in 3 2 1; do
 done
 
 # Reserved instances utilization
-aws ce get-reservation-utilization --time-period "Start=$(date -v-30d +%Y-%m-%d),End=$(date +%Y-%m-%d)" --output json 2>/dev/null
+RES_START=$(date -v-30d +%Y-%m-%d 2>/dev/null || date -d '30 days ago' +%Y-%m-%d)
+aws ce get-reservation-utilization --time-period "Start=$RES_START,End=$(date +%Y-%m-%d)" --output json 2>/dev/null
 
 # Savings plans utilization
-aws ce get-savings-plans-utilization --time-period "Start=$(date -v-30d +%Y-%m-%d),End=$(date +%Y-%m-%d)" --output json 2>/dev/null
+aws ce get-savings-plans-utilization --time-period "Start=$RES_START,End=$(date +%Y-%m-%d)" --output json 2>/dev/null
 
 # NAT Gateway costs (common silent killer)
 aws ce get-cost-and-usage --time-period "Start=$(date +%Y-%m-01),End=$(date +%Y-%m-%d)" --granularity MONTHLY --metrics UnblendedCost --filter '{"Dimensions":{"Key":"USAGE_TYPE","Values":["NatGateway-Bytes"]}}' --output json 2>/dev/null
