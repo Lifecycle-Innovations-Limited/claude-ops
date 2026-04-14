@@ -9,6 +9,8 @@ allowed-tools:
   - Glob
   - Skill
   - Agent
+  - TeamCreate
+  - SendMessage
   - AskUserQuestion
   - CronCreate
   - CronList
@@ -46,6 +48,24 @@ Before rendering, load available context:
 The bin script reads `preferences.json` and `daemon-health.json` internally. The skill reads these files separately to check for warnings before invoking the script.
 
 ---
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when loading dashboard data in parallel. This enables:
+- Agents share context and can coordinate mid-flight
+- You can steer priorities in real-time
+- Agents report progress as they complete
+
+**Team setup** (only when flag is enabled):
+```
+TeamCreate("dash-team")
+Agent(team_name="dash-team", name="infra-loader", prompt="Gather ECS health, Vercel status, and CI pipeline state")
+Agent(team_name="dash-team", name="comms-loader", prompt="Gather unread counts across all configured channels")
+Agent(team_name="dash-team", name="projects-loader", prompt="Gather GSD phase, git status, and PRs for all projects")
+Agent(team_name="dash-team", name="business-loader", prompt="Gather revenue, Linear sprint, and fire alerts")
+```
+
+If the flag is NOT set, use standard fire-and-forget subagents.
 
 ## Render dashboard instantly
 
