@@ -38,8 +38,15 @@
 import { readFileSync, existsSync, unlinkSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { parseArgs } from "node:util";
+import os from "node:os";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
+import {
+  setCredential,
+  getCredential,
+  deleteCredential,
+} from "../lib/credential-store.mjs";
+import { osId, keyringBackend } from "../lib/os-detect.mjs";
 
 const { values } = parseArgs({
   options: {
@@ -444,24 +451,42 @@ try {
   await client.disconnect().catch(() => {});
 }
 
-// Step 2.2: Save to macOS keychain
-if (process.platform === "darwin") {
-  try {
-    for (const [svc, val] of [
-      ["telegram-api-id", apiId],
-      ["telegram-api-hash", apiHash],
-      ["telegram-phone", PHONE],
-      ["telegram-session", sessionStr],
-    ]) {
-      execSync(
-        `security add-generic-password -U -s "${svc}" -a "$USER" -w '${val.replace(/'/g, "'\\''")}'`,
-        { timeout: 5000 },
+// Step 2.2: Save to cross-OS credential store
+//
+// Cascades through the host-native keyring (macOS security / Linux secret-tool /
+// Windows cmdkey) → keytar → encrypted JSON → plaintext JSON. Existing macOS
+// installations keep working because the service/account names (and the
+// underlying `security add-generic-password` invocation on darwin) are
+// unchanged. See lib/credential-store.mjs for cascade details.
+const CRED_ACCOUNT =
+  process.env.USER || process.env.USERNAME || os.userInfo().username || "user";
+try {
+  const backends = new Set();
+  for (const [svc, val] of [
+    ["telegram-api-id", apiId],
+    ["telegram-api-hash", apiHash],
+    ["telegram-phone", PHONE],
+    ["telegram-session", sessionStr],
+  ]) {
+    const r = await setCredential(svc, CRED_ACCOUNT, val);
+    if (!r || !r.ok) {
+      throw new Error(
+        `setCredential(${svc}) failed (backend=${r ? r.backend : "none"})`,
       );
     }
-    emit({ type: "step", message: "✓ Saved credentials to macOS keychain" });
-  } catch (e) {
-    emit({ type: "step", message: `○ Keychain save failed: ${e.message}` });
+    if (r.backend) backends.add(r.backend);
   }
+  const backendList = Array.from(backends).join(", ") || "unknown";
+  emit({
+    type: "step",
+    message: `✓ Saved credentials to credential store (backend=${backendList}, host=${osId()}, native=${keyringBackend() || "none"})`,
+    backend: backendList,
+  });
+} catch (e) {
+  emit({
+    type: "step",
+    message: `○ Credential store save failed: ${e.message}`,
+  });
 }
 
 // Step 2.3: Register MCP server
