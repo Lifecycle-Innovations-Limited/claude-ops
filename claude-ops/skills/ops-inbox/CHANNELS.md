@@ -59,17 +59,19 @@ wacli sync --follow
 **Setup:**
 
 ```bash
-# Install gog (private auroracapital/gog CLI — try npm/bun first, fall back to source)
-npm install -g @auroracapital/gog 2>/dev/null || \
-bun install -g @auroracapital/gog 2>/dev/null || \
-(git clone https://github.com/auroracapital/gog ~/.gog && cd ~/.gog && ./install.sh) || \
-{ echo "Could not install gog. Options:"; \
-  echo "  1. Ask Sam (internal team) for the latest release binary"; \
-  echo "  2. Request access to github.com/auroracapital/gog"; \
-  echo "  3. Use the Gmail MCP fallback (read-only, drafts only)"; }
+# Install gog (gogcli — public CLI from steipete/gogcli, used by the OpenClaw ecosystem)
+case "$(uname -s)" in
+  Darwin*)            brew install gogcli ;;
+  Linux*)             brew install gogcli 2>/dev/null \
+                        || (command -v yay >/dev/null 2>&1 && yay -S gogcli) \
+                        || (git clone https://github.com/steipete/gogcli.git /tmp/gogcli && cd /tmp/gogcli && make) ;;
+  MINGW*|MSYS*|CYGWIN*) winget install -e --id steipete.gogcli ;;
+  *) echo "Unsupported OS — see https://gogcli.sh/ for install instructions" ;;
+esac
 
-# Authenticate
-gog auth login
+# Authorize once per Google account (uses your OS keyring for refresh tokens)
+gog auth credentials /path/to/client_secret.json
+gog auth add you@example.com --services gmail,calendar,drive,contacts,docs,sheets
 ```
 
 **Env vars (optional):**
