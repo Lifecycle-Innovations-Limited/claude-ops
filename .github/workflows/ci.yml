@@ -7,7 +7,10 @@ on:
 
 jobs:
   lint-and-check:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -44,3 +47,19 @@ jobs:
           chmod +x gitleaks
       - name: Run gitleaks
         run: ./gitleaks detect --source . --config claude-ops/.gitleaks.toml --verbose
+
+  test-suite:
+    runs-on: ${{ matrix.os }}
+    needs: lint-and-check
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: |
+          sudo apt-get install -y shellcheck 2>/dev/null || true
+      - name: Run full test suite
+        run: bash claude-ops/tests/run-all.sh
+        env:
+          CI: true
