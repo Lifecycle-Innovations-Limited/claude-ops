@@ -1,0 +1,430 @@
+#!/usr/bin/env bash
+# ops-discord — Discord communication helper (v1: webhook send + channel read)
+#
+# Subcommands:
+#   send     <channel-id-or-webhook-url> "message" [--json]
+#   read     <channel-id> [--limit N] [--json]
+#   channels [--json]                  (list channels in configured guild)
+#   --help | -h
+#
+# Credential resolution order:
+#   1. Env vars: DISCORD_BOT_TOKEN, DISCORD_GUILD_ID, DISCORD_WEBHOOK_URL
+#      Per-channel webhooks via DISCORD_WEBHOOK_<CHANNEL_UPPER>
+#   2. ops_cred_get discord <account>   (via lib/credential-store.sh)
+#   3. $PREFS_PATH (preferences.json)    — discord.{bot_token,guild_id,default_webhook_url}
+#
+# v1 scope: webhook-based send + REST channel reads.
+# Deferred (v2 issue): gateway connection, DM support, slash commands.
+set -euo pipefail
+
+# ─── Paths & lib sourcing ───────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LIB_OS_DETECT="$SCRIPT_DIR/lib/os-detect.sh"
+LIB_CRED="$SCRIPT_DIR/lib/credential-store.sh"
+
+# shellcheck disable=SC1090
+[ -r "$LIB_OS_DETECT" ] && . "$LIB_OS_DETECT" || true
+# shellcheck disable=SC1090
+[ -r "$LIB_CRED" ] && . "$LIB_CRED" || true
+
+PREFS_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PREFS_PATH="${PREFS_PATH:-$PREFS_DIR/preferences.json}"
+
+API_BASE="https://discord.com/api/v10"
+USER_AGENT="ops-discord (claude-ops, v1)"
+
+# ─── Output helpers ─────────────────────────────────────────────────────────
+JSON_MODE=false
+
+emit_err() {
+  local msg="$1"
+  if $JSON_MODE; then
+    printf '{"error":%s}\n' "$(json_escape "$msg")"
+  else
+    printf 'ops-discord: %s\n' "$msg" >&2
+  fi
+}
+
+json_escape() {
+  # Minimal JSON string escape. Prefer jq when available.
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$1" | jq -Rs .
+    return 0
+  fi
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '"%s"' "$s"
+}
+
+# ─── Credential resolution ──────────────────────────────────────────────────
+get_bot_token() {
+  if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
+    printf '%s' "$DISCORD_BOT_TOKEN"
+    return 0
+  fi
+  if declare -F ops_cred_get >/dev/null 2>&1; then
+    local out
+    out="$(ops_cred_get discord bot-token 2>/dev/null || true)"
+    if [[ -n "$out" ]]; then
+      printf '%s' "$out"
+      return 0
+    fi
+  fi
+  if [[ -s "$PREFS_PATH" ]] && command -v jq >/dev/null 2>&1; then
+    local pref
+    pref="$(jq -r '.discord.bot_token // ""' "$PREFS_PATH" 2>/dev/null || true)"
+    if [[ -n "$pref" && "$pref" != "null" ]]; then
+      printf '%s' "$pref"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+get_guild_id() {
+  if [[ -n "${DISCORD_GUILD_ID:-}" ]]; then
+    printf '%s' "$DISCORD_GUILD_ID"
+    return 0
+  fi
+  if [[ -s "$PREFS_PATH" ]] && command -v jq >/dev/null 2>&1; then
+    local pref
+    pref="$(jq -r '.discord.guild_id // ""' "$PREFS_PATH" 2>/dev/null || true)"
+    if [[ -n "$pref" && "$pref" != "null" ]]; then
+      printf '%s' "$pref"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# Resolve a webhook URL given either a full URL, a channel name/alias, or empty.
+#   - If arg starts with https://discord.com/api/webhooks/ → use directly
+#   - Else look up DISCORD_WEBHOOK_<UPPER> env var
+#   - Else fall back to DISCORD_WEBHOOK_URL env var
+#   - Else fall back to discord.default_webhook_url in prefs
+resolve_webhook() {
+  local raw="${1:-}"
+  if [[ "$raw" =~ ^https://(discord|discordapp)\.com/api/webhooks/ ]]; then
+    printf '%s' "$raw"
+    return 0
+  fi
+  if [[ -n "$raw" ]]; then
+    local upper envvar val
+    upper="$(printf '%s' "$raw" | tr '[:lower:]-' '[:upper:]_' | tr -cd 'A-Z0-9_')"
+    envvar="DISCORD_WEBHOOK_${upper}"
+    val="${!envvar:-}"
+    if [[ -n "$val" ]]; then
+      printf '%s' "$val"
+      return 0
+    fi
+  fi
+  if [[ -n "${DISCORD_WEBHOOK_URL:-}" ]]; then
+    printf '%s' "$DISCORD_WEBHOOK_URL"
+    return 0
+  fi
+  if [[ -s "$PREFS_PATH" ]] && command -v jq >/dev/null 2>&1; then
+    local pref
+    # Try nested form first, then the flat key shared with ops-notify.sh.
+    pref="$(jq -r '.discord.default_webhook_url // .discord.webhook_url // .discord_webhook_url // ""' "$PREFS_PATH" 2>/dev/null || true)"
+    if [[ -n "$pref" && "$pref" != "null" ]]; then
+      printf '%s' "$pref"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+no_credential_exit() {
+  emit_err "no discord credential configured — run /ops:setup discord"
+  exit 1
+}
+
+require_curl() {
+  if ! command -v curl >/dev/null 2>&1; then
+    emit_err "curl is required for ops-discord but is not installed"
+    exit 1
+  fi
+}
+
+# ─── Subcommand: send ───────────────────────────────────────────────────────
+cmd_send() {
+  local target="${1:-}"
+  local message="${2:-}"
+  if [[ -z "$target" || -z "$message" ]]; then
+    emit_err "usage: ops-discord send <channel-id|webhook-url> \"message\" [--json]"
+    exit 2
+  fi
+  require_curl
+
+  local url="" via="" payload http code resp
+  if url="$(resolve_webhook "$target")"; then
+    via="webhook"
+  elif [[ "$target" =~ ^[0-9]{17,20}$ ]]; then
+    # Channel ID (snowflake). Needs bot token + channels/<id>/messages endpoint.
+    local token
+    if ! token="$(get_bot_token)"; then
+      no_credential_exit
+    fi
+    url="$API_BASE/channels/$target/messages"
+    via="bot-channel"
+  else
+    no_credential_exit
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    payload="$(jq -nc --arg c "$message" '{content:$c}')"
+  else
+    payload="{\"content\":$(json_escape "$message")}"
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' EXIT
+
+  if [[ "$via" == "webhook" ]]; then
+    http=$(curl -sS -o "$tmp" -w '%{http_code}' \
+      -X POST "$url" \
+      -H "Content-Type: application/json" \
+      -H "User-Agent: $USER_AGENT" \
+      -d "$payload" || echo 000)
+  else
+    local token
+    token="$(get_bot_token)" || no_credential_exit
+    http=$(curl -sS -o "$tmp" -w '%{http_code}' \
+      -X POST "$url" \
+      -H "Authorization: Bot $token" \
+      -H "Content-Type: application/json" \
+      -H "User-Agent: $USER_AGENT" \
+      -d "$payload" || echo 000)
+  fi
+
+  resp="$(cat "$tmp" 2>/dev/null || true)"
+  code="$http"
+
+  # Webhooks with no ?wait=true return 204 No Content. Everything else returns 200/201.
+  if [[ "$code" =~ ^2[0-9][0-9]$ ]]; then
+    if $JSON_MODE; then
+      if [[ -n "$resp" ]]; then
+        printf '{"ok":true,"via":"%s","http":%s,"response":%s}\n' \
+          "$via" "$code" "$resp"
+      else
+        printf '{"ok":true,"via":"%s","http":%s}\n' "$via" "$code"
+      fi
+    else
+      printf 'Sent via Discord %s (HTTP %s)\n' "$via" "$code"
+    fi
+    return 0
+  fi
+
+  if $JSON_MODE; then
+    local esc_resp
+    esc_resp="$(json_escape "$resp")"
+    printf '{"ok":false,"via":"%s","http":%s,"response":%s}\n' \
+      "$via" "$code" "$esc_resp"
+  else
+    printf 'ops-discord: send failed (HTTP %s): %s\n' "$code" "$resp" >&2
+  fi
+  exit 1
+}
+
+# ─── Subcommand: read ───────────────────────────────────────────────────────
+cmd_read() {
+  local channel_id="${1:-}"
+  local limit=20
+  shift || true
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --limit)
+        limit="${2:-20}"; shift 2 ;;
+      --limit=*)
+        limit="${1#--limit=}"; shift ;;
+      --json)
+        JSON_MODE=true; shift ;;
+      *)
+        shift ;;
+    esac
+  done
+
+  if [[ -z "$channel_id" ]]; then
+    emit_err "usage: ops-discord read <channel-id> [--limit N] [--json]"
+    exit 2
+  fi
+  if ! [[ "$channel_id" =~ ^[0-9]{17,20}$ ]]; then
+    emit_err "invalid channel id (expected 17-20 digit snowflake): $channel_id"
+    exit 2
+  fi
+  if ! [[ "$limit" =~ ^[0-9]+$ ]] || (( limit < 1 || limit > 100 )); then
+    emit_err "--limit must be an integer between 1 and 100"
+    exit 2
+  fi
+
+  local token
+  if ! token="$(get_bot_token)"; then
+    no_credential_exit
+  fi
+  require_curl
+
+  local url="$API_BASE/channels/$channel_id/messages?limit=$limit"
+  local tmp http resp
+  tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' EXIT
+
+  http=$(curl -sS -o "$tmp" -w '%{http_code}' \
+    "$url" \
+    -H "Authorization: Bot $token" \
+    -H "User-Agent: $USER_AGENT" || echo 000)
+  resp="$(cat "$tmp" 2>/dev/null || true)"
+
+  if [[ "$http" != "200" ]]; then
+    if $JSON_MODE; then
+      printf '{"ok":false,"http":%s,"response":%s}\n' \
+        "$http" "$(json_escape "$resp")"
+    else
+      printf 'ops-discord: read failed (HTTP %s): %s\n' "$http" "$resp" >&2
+    fi
+    exit 1
+  fi
+
+  if $JSON_MODE; then
+    printf '%s\n' "$resp"
+    return 0
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$resp" | jq -r '
+      .[] | "[\(.timestamp)] \(.author.username // .author.global_name // "?"): \(.content // "(no content)")"
+    '
+  else
+    printf '%s\n' "$resp"
+  fi
+}
+
+# ─── Subcommand: channels ───────────────────────────────────────────────────
+cmd_channels() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) JSON_MODE=true; shift ;;
+      *) shift ;;
+    esac
+  done
+
+  local token guild
+  if ! token="$(get_bot_token)"; then
+    no_credential_exit
+  fi
+  if ! guild="$(get_guild_id)"; then
+    emit_err "no guild id configured — set DISCORD_GUILD_ID or discord.guild_id in preferences.json"
+    exit 1
+  fi
+  require_curl
+
+  local url="$API_BASE/guilds/$guild/channels"
+  local tmp http resp
+  tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' EXIT
+
+  http=$(curl -sS -o "$tmp" -w '%{http_code}' \
+    "$url" \
+    -H "Authorization: Bot $token" \
+    -H "User-Agent: $USER_AGENT" || echo 000)
+  resp="$(cat "$tmp" 2>/dev/null || true)"
+
+  if [[ "$http" != "200" ]]; then
+    if $JSON_MODE; then
+      printf '{"ok":false,"http":%s,"response":%s}\n' \
+        "$http" "$(json_escape "$resp")"
+    else
+      printf 'ops-discord: channels failed (HTTP %s): %s\n' "$http" "$resp" >&2
+    fi
+    exit 1
+  fi
+
+  if $JSON_MODE; then
+    printf '%s\n' "$resp"
+    return 0
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$resp" | jq -r '
+      .[] | select(.type == 0 or .type == 5 or .type == 15) |
+      "\(.id)\t#\(.name)\t(type=\(.type))"
+    '
+  else
+    printf '%s\n' "$resp"
+  fi
+}
+
+# ─── Help ───────────────────────────────────────────────────────────────────
+print_help() {
+  cat <<'EOF'
+ops-discord — Discord v1 helper (webhook send + REST channel read)
+
+USAGE
+  ops-discord send <channel-id|webhook-url> "message" [--json]
+  ops-discord read <channel-id> [--limit N] [--json]
+  ops-discord channels [--json]
+  ops-discord --help
+
+SUBCOMMANDS
+  send       Post a message. Accepts either a full webhook URL
+             (https://discord.com/api/webhooks/…) or a channel snowflake
+             (17-20 digit id, routed via bot token).
+  read       Fetch recent messages from a channel via REST. Requires
+             DISCORD_BOT_TOKEN or credential-store entry (discord/bot-token).
+             --limit defaults to 20, max 100.
+  channels   List guild channels. Requires bot token + DISCORD_GUILD_ID.
+
+CREDENTIAL LOOKUP (first hit wins)
+  1. env:    DISCORD_BOT_TOKEN, DISCORD_GUILD_ID,
+             DISCORD_WEBHOOK_URL, DISCORD_WEBHOOK_<CHANNEL_UPPER>
+  2. store:  ops_cred_get discord bot-token   (see lib/credential-store.sh)
+  3. prefs:  $PREFS_PATH → discord.{bot_token,guild_id,default_webhook_url}
+
+EXAMPLES
+  ops-discord send general "deploy green"
+  ops-discord send https://discord.com/api/webhooks/<ID>/<TOKEN> "hi" --json
+  ops-discord read <CHANNEL_ID> --limit 10 --json
+  ops-discord channels --json
+
+NOTES
+  v1 scope: webhook send + REST channel reads. DM + gateway connections
+  are deferred to a v2 issue.
+EOF
+}
+
+# ─── Top-level dispatcher ───────────────────────────────────────────────────
+# Pre-scan for --json anywhere so subcommands can pick it up early.
+args=()
+for a in "$@"; do
+  case "$a" in
+    --json) JSON_MODE=true ;;
+    *) args+=("$a") ;;
+  esac
+done
+
+if [[ ${#args[@]} -eq 0 ]]; then
+  print_help
+  exit 0
+fi
+
+sub="${args[0]}"
+rest=("${args[@]:1}")
+
+case "$sub" in
+  send)
+    cmd_send "${rest[@]:-}" ;;
+  read)
+    cmd_read "${rest[@]:-}" ;;
+  channels)
+    cmd_channels "${rest[@]:-}" ;;
+  -h|--help|help|"")
+    print_help ;;
+  *)
+    emit_err "unknown subcommand: $sub (try --help)"
+    exit 2 ;;
+esac
