@@ -20,7 +20,7 @@ You are running an **interactive configuration wizard** for the `claude-ops` plu
 **Hard rules:**
 
 - This is a _conversation_, not a script dump. Use `AskUserQuestion` for every decision — never ask in prose when a structured selector will do.
-- Never install anything or write any file without explicit user confirmation via `AskUserQuestion`.
+- Confirm actions via `AskUserQuestion` where the user hasn't already opted in (e.g., "Configure all" covers everything — no per-action confirmation needed after that).
 - Skip sections the user declines. Don't nag.
 - **NEVER auto-skip a channel or integration.** Every channel/service the user selected must get an explicit `AskUserQuestion` with skip as one of the options. If a credential isn't found, present the [Paste manually] / [Deep hunt] / [Skip] options. If a smoke test fails, ask the user whether to retry, reconfigure, or skip. The ONLY acceptable way to skip is the user choosing a "Skip" option. Do not silently move past a service because scanning found nothing — that's when the user needs to be asked the most.
 - Show what's already configured first, so the user only fills gaps.
@@ -2202,16 +2202,27 @@ Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with 
 - `competitor-intel`: `{ "enabled": true, "cron": "0 10 * * 1" }` — weekly Monday 10am
 - `message-listener`: `{ "enabled": true, "interval": "continuous" }` — only if WhatsApp or Telegram configured
 
-After rewriting the services config, reload the daemon so it picks up the new services:
+After rewriting the services config, do a quick health check (foreground, <2s), then background the reload:
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.claude-ops.daemon
+# Quick health check — foreground (fast)
+test -f "$DATA_DIR/daemon-services.json" && echo "✓ Daemon services config written — N services enabled"
 ```
 
-Write `daemon.enabled = true` and `daemon.services` (the reconciled array) to `$PREFS_PATH`. Print a summary:
+Then **background** the actual daemon reload — it can be slow:
+
+```bash
+# Background — daemon reload is slow, don't block setup
+launchctl kickstart -k gui/$(id -u)/com.claude-ops.daemon 2>&1 && echo "✓ Daemon reloaded" || echo "⚠ Daemon kick failed (may still be running)"
+```
+
+Use `run_in_background: true` on the reload command. Do NOT wait for it — continue immediately to the next step. The daemon will pick up the new config on its own cycle even if kickstart is slow.
+
+Write `daemon.enabled = true` and `daemon.services` (the reconciled array) to `$PREFS_PATH`. Print:
 
 ```
 ✓ Daemon services reconciled — N services enabled (briefing-pre-warm, memory-extractor, wacli-sync, ...)
+  Daemon reloading in background.
 ```
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/docs/daemon-guide.md` for full operational instructions, CLI reference, and troubleshooting for the background daemon (service lifecycle, launchctl/systemd integration, health reporting, reconciliation semantics). The setup agent can load that file directly when it needs more depth than this wizard provides.
