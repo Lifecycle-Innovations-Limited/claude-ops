@@ -1,0 +1,25 @@
+version: '3.8'
+services:
+  app:
+    build: .
+    ports:
+      - '3000:3000'
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: nestapp
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redisdata:/data
+volumes:
+  pgdata:
+  redisdata:
