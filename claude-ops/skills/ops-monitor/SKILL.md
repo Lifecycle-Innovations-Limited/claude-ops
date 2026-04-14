@@ -7,6 +7,8 @@ allowed-tools:
   - Read
   - Agent
   - AskUserQuestion
+  - TeamCreate
+  - SendMessage
 effort: low
 maxTurns: 20
 ---
@@ -62,6 +64,23 @@ Run smoke test after saving:
 - **OTEL**: `curl -sf "$OTEL_ENDPOINT/healthz"` → expect HTTP 200
 
 Report ✅ or ❌ with status for each backend.
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when querying multiple backends simultaneously. This enables:
+- Backend probes run in parallel with shared context (e.g., Datadog agent detects latency spike → OTEL agent can correlate with traces)
+- You can steer: "focus on Datadog alerts first, then cross-reference with New Relic"
+- Real-time progress: agents report per-backend as results arrive
+
+**Team setup** (only when flag is enabled, multiple backends configured):
+```
+TeamCreate("monitor-probes")
+Agent(team_name="monitor-probes", name="datadog-probe", subagent_type="ops:monitor-agent", ...)
+Agent(team_name="monitor-probes", name="newrelic-probe", subagent_type="ops:monitor-agent", ...)
+Agent(team_name="monitor-probes", name="otel-probe", subagent_type="ops:monitor-agent", ...)
+```
+
+If the flag is NOT set or only one backend is configured, use a single `monitor-agent` subagent.
 
 ## Default health check (no flags)
 
