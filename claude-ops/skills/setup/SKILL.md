@@ -1188,9 +1188,13 @@ For claude.ai integration:
 
 Test the integration (run in background):
 ```bash
-# For claude.ai: integration auto-detected
-# For self-hosted: verify MCP server responds
-echo '{"test": true}' | timeout 10 npx -y @notionhq/notion-mcp-server 2>/dev/null && echo "OK" || echo "FAIL"
+# For claude.ai: integration auto-detected — test via MCP tool call
+# For self-hosted: verify API key works
+if [ -n "$NOTION_API_KEY" ]; then
+  curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $NOTION_API_KEY" -H "Notion-Version: 2022-06-28" https://api.notion.com/v1/users/me | grep -q "200" && echo "OK" || echo "FAIL"
+else
+  echo "OK — claude.ai integration (verify via MCP tool call after restart)"
+fi
 ```
 
 #### Finalize
@@ -1203,8 +1207,6 @@ echo '{"test": true}' | timeout 10 npx -y @notionhq/notion-mcp-server 2>/dev/nul
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/CHANNELS.md` for full Notion MCP tool reference and troubleshooting.
 
 ### 3f — Calendar
-
-> **Note:** Sections after this were originally labeled 3f–3m. The insertion of Notion (3e) shifted Calendar to 3f. Downstream section headers retain their original labels to avoid breaking cross-references.
 
 Calendar isn't a messaging channel, but every other ops skill (briefings, `/ops-next`, `/ops-go`) benefits massively from knowing the user's schedule — meetings blocking deep work, deploy windows, travel days. The wizard wires it up the same way as email: `gog calendar` primary, Google Calendar MCP connector fallback.
 
@@ -1265,11 +1267,11 @@ Downstream skills (`/ops-go`, `/ops-next`, `/ops-fires`) read `channels.calendar
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-go/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration (calendar context feeds `/ops:go` briefings). The setup agent can load that file directly when it needs more depth than this wizard provides.
 
-### 3f — Doppler (secrets management)
+### 3g — Doppler (secrets management)
 
 Doppler is a secrets manager that injects environment variables at runtime. When configured, all ops skills can query secrets via `doppler secrets get` instead of reading from dotfiles or keychain. The wizard checks presence, auth status, and default project context.
 
-#### Step 3f.1 — Presence
+#### Step 3g.1 — Presence
 
 ```bash
 command -v doppler
@@ -1297,7 +1299,7 @@ Where the OS-specific command is:
 
 Run the chosen command in the background, capture stdout/stderr, and report success/failure. If the user skips, record `secrets_manager: "none"` in `$PREFS_PATH` and end this sub-flow.
 
-#### Step 3f.2 — Auth status
+#### Step 3g.2 — Auth status
 
 Run:
 
@@ -1319,7 +1321,7 @@ Run `doppler login` via Bash tool with `run_in_background: true` (it opens a bro
 
 Never display the name or email unless they came from `doppler me` output in this session.
 
-#### Step 3f.3 — Project context
+#### Step 3g.3 — Project context
 
 If authenticated, list available projects:
 
@@ -1370,7 +1372,7 @@ Print confirmation:
 ✓ Doppler default context set: <project>/<config>
 ```
 
-#### Step 3f.4 — Document for agents
+#### Step 3g.4 — Document for agents
 
 Print this note so it's visible in the session:
 
@@ -1388,11 +1390,11 @@ Individual skills can override with --project / --config flags.
 
 > **Deep-dive:** no dedicated skill ships with Doppler — see `${CLAUDE_PLUGIN_ROOT}/docs/memories-system.md` (Runtime Context section) for how downstream skills consume the `secrets_manager` / `doppler.*` values from `$PREFS_PATH` and resolve `doppler:KEY_NAME` references at runtime. The setup agent can load that file directly when it needs more depth than this wizard provides.
 
-### 3g — Password Manager (credential vault)
+### 3h — Password Manager (credential vault)
 
 Ops agents frequently need to look up credentials (API keys, database passwords, service tokens) on your behalf. This step wires up a password manager so those queries can be automated via a standard command template stored in `$PREFS_PATH`.
 
-#### Step 3g.1 — Auto-detect installed managers
+#### Step 3h.1 — Auto-detect installed managers
 
 Run these in parallel:
 
@@ -1405,7 +1407,7 @@ security find-generic-password -s "test" 2>&1 | head -1             # macOS Keyc
 
 Parse each result to classify as `authenticated`, `needs_unlock`, `not_installed`, or `available` (Keychain is always `available`).
 
-#### Step 3g.2 — Present findings
+#### Step 3h.2 — Present findings
 
 Show only what was detected via `AskUserQuestion`. **Max 4 options per call.** Since macOS Keychain and Skip are always shown, you have room for at most 2 detected managers per call. If all 3 CLIs (1Password, Dashlane, Bitwarden) are installed, batch into two calls:
 
@@ -1434,7 +1436,7 @@ Call 2:
 
 Never show managers that aren't installed. Always show macOS Keychain and Skip. If none of the CLIs are installed, skip straight to showing just `[macOS Keychain — always available]` and `[Skip]`.
 
-#### Step 3g.3 — Configure selected manager
+#### Step 3h.3 — Configure selected manager
 
 **1Password (`op`):**
 
@@ -1506,7 +1508,7 @@ Never show managers that aren't installed. Always show macOS Keychain and Skip. 
    security find-generic-password -s "{{name}}" -w
    ```
 
-#### Step 3g.4 — Write to preferences
+#### Step 3h.4 — Write to preferences
 
 After the user selects and configures a manager, write to `$PREFS_PATH`:
 
@@ -1534,7 +1536,7 @@ Merge with the existing file (`jq '. + { ... }'`) — never overwrite. Example f
 
 If the user picks Skip, write `"password_manager": "none"` so subsequent runs don't re-prompt unless the user explicitly runs `/ops:setup vault`.
 
-#### Step 3g.5 — Document for agents
+#### Step 3h.5 — Document for agents
 
 After saving, print this note once:
 
@@ -1570,15 +1572,15 @@ Omit this line entirely if `password_manager` is `"none"` or unset.
 
 #### Invocation shortcut
 
-Add to the shortcuts table: `vault`, `password-manager`, `pm` → Step 3g
+Add to the shortcuts table: `vault`, `password-manager`, `pm` → Step 3h
 
 > **Deep-dive:** no dedicated skill ships with the password manager integration — see `${CLAUDE_PLUGIN_ROOT}/docs/memories-system.md` (Runtime Context section) for how downstream skills resolve `password_manager` + related vault references from `$PREFS_PATH`. Privacy-and-security guidance lives in this SKILL.md (keychain-only storage of API hashes/session strings, `umask 077` for bridge files). The setup agent can load that file directly when it needs more depth than this wizard provides.
 
 ---
 
-### 3h — Ecommerce (Shopify + dynamic partners)
+### 3i — Ecommerce (Shopify + dynamic partners)
 
-#### Step 3h.1 — Auto-scan for existing Shopify credentials
+#### Step 3i.1 — Auto-scan for existing Shopify credentials
 
 **Before asking for anything**, run the Universal Credential Auto-Scan for all Shopify-related vars simultaneously:
 
@@ -1623,16 +1625,16 @@ dcli password shopify --output json 2>/dev/null | jq -r '.[].url // empty' | gre
 grep -rhE 'myshopify\.com|SHOPIFY_STORE' ~/Projects/*/.env* 2>/dev/null | grep -v '^#' | head -5
 ```
 
-**Important**: Do NOT report "No Shopify credentials found" until ALL scan sources have been checked. If tokens are missing but store URLs are found (e.g. from Chrome history or Dashlane), report: `"Found Shopify store(s): <stores>. No API token found — you'll need to create one."` and skip straight to Step 3h.3 (token) with the store URL pre-filled.
+**Important**: Do NOT report "No Shopify credentials found" until ALL scan sources have been checked. If tokens are missing but store URLs are found (e.g. from Chrome history or Dashlane), report: `"Found Shopify store(s): <stores>. No API token found — you'll need to create one."` and skip straight to Step 3i.3 (token) with the store URL pre-filled.
 
 If both `store_url` and `admin_token` are already found, show:
 ```
 ✓ Shopify — already configured (<store_url>)
   [Keep existing]  [Reconfigure]
 ```
-If the user keeps existing, skip to Step 3h.4. If reconfiguring or no values found, continue.
+If the user keeps existing, skip to Step 3i.4. If reconfiguring or no values found, continue.
 
-#### Step 3h.2 — Shopify store URL
+#### Step 3i.2 — Shopify store URL
 
 If `SHOPIFY_STORE_URL` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format. Only ask via free text if no value was found:
 ```
@@ -1643,7 +1645,7 @@ Enter your Shopify store URL:
 
 Validate the input: strip `https://`, strip trailing slash, check that the result ends with `.myshopify.com`. If invalid, ask again with a correction note.
 
-#### Step 3h.3 — Shopify Admin API token
+#### Step 3i.3 — Shopify Admin API token
 
 If `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_ADMIN_TOKEN`, or `SHOPIFY_ADMIN_API_ACCESS_TOKEN` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format with truncated display (`shpat_508b...682e`). Only ask via free text if no value was found.
 
@@ -1693,7 +1695,7 @@ curl -s -H "X-Shopify-Access-Token: $TOKEN" \
 ```
 Expect a shop name string. If the response contains `errors` or `{"shop":null}`, show the error and ask the user to check the token scopes. Print `✓ Shopify — connected (<shop name>)`.
 
-#### Step 3h.4 — Dynamic ecommerce partners
+#### Step 3i.4 — Dynamic ecommerce partners
 
 After Shopify is configured, ask via `AskUserQuestion` (free text):
 ```
@@ -1769,7 +1771,7 @@ For any partner not in this table, always web search for current auth docs befor
 
 ---
 
-### 3i — Marketing (Klaviyo, Meta Ads, GA4, Search Console)
+### 3j — Marketing (Klaviyo, Meta Ads, GA4, Search Console)
 
 **Before showing the service selector**, run the Universal Credential Auto-Scan for all marketing vars simultaneously:
 
@@ -1871,7 +1873,7 @@ Write to `$PREFS_PATH` (merge):
 }
 ```
 
-Same Doppler-reference pattern as Step 3h — prefer `doppler:KEY_NAME` over raw tokens when Doppler is configured.
+Same Doppler-reference pattern as Step 3i — prefer `doppler:KEY_NAME` over raw tokens when Doppler is configured.
 
 #### Dynamic marketing partners
 
@@ -1883,7 +1885,7 @@ Any other marketing tools you'd like to connect?
   Type names separated by commas, or leave blank to skip.
 ```
 
-If the user provides partner names, apply the same dynamic partner loop as Step 3h.4 — for each partner:
+If the user provides partner names, apply the same dynamic partner loop as Step 3i.4 — for each partner:
 
 1. **Research credentials** via web search: `"<partner name> API authentication developer docs 2025"`
 2. **Ask for credentials** via `AskUserQuestion` with instructions sourced from the docs
@@ -1923,7 +1925,7 @@ For any partner not in this table, always web search for current auth docs befor
 
 ---
 
-### 3j — Voice (Bland AI, ElevenLabs, Groq)
+### 3k — Voice (Bland AI, ElevenLabs, Groq)
 
 **Before showing the service selector**, run the Universal Credential Auto-Scan for all voice vars simultaneously:
 
@@ -2022,7 +2024,7 @@ Same Doppler-reference pattern — prefer `doppler:KEY_NAME` over raw tokens whe
 
 ---
 
-### 3k — Revenue (Stripe + RevenueCat)
+### 3l — Revenue (Stripe + RevenueCat)
 
 **Before showing the service selector**, run the Universal Credential Auto-Scan for all revenue vars simultaneously (Rule 4 — background these):
 
@@ -2173,7 +2175,7 @@ Prefer a Doppler reference (`doppler:STRIPE_SECRET_KEY`, `doppler:REVENUECAT_API
 
 ---
 
-### 3m — Notifications (fires-watcher sinks)
+### 3n — Notifications (fires-watcher sinks)
 
 Sets up push notifications for CRITICAL/HIGH fires so the user stops having to poll `/ops:fires` manually. Gated behind the `fires-watcher` daemon service (disabled by default).
 
@@ -2279,7 +2281,7 @@ Expect `{"status": "ok", ...}` within 60 seconds.
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/docs/notifications.md`, `${CLAUDE_PLUGIN_ROOT}/scripts/ops-fires-watcher.sh`, and `${CLAUDE_PLUGIN_ROOT}/scripts/ops-notify.sh` for sink priority rationale, debounce rules, and a troubleshooting walk-through.
 
-### 3l — Discord (webhook + optional bot)
+### 3m — Discord (webhook + optional bot)
 
 Discord is a v1 integration — webhook-based send + REST channel reads. DM + gateway support are deferred to a v2 issue. The send-side webhook also supplies the Discord notification sink consumed by `scripts/ops-notify.sh`, so configuring it here covers both `/ops:comms discord send` and ops-fires alerts.
 
@@ -2746,12 +2748,13 @@ If `$ARGUMENTS` contains a specific section name, jump straight to that section:
 | `whatsapp`, `wacli`, `whatsapp-doctor` | Step 3b |
 | `email`                                | Step 3c |
 | `slack`                                | Step 3d |
-| `calendar`, `cal`                      | Step 3e |
-| `doppler`, `secrets`                   | Step 3f |
-| `vault`, `password-manager`, `pm`      | Step 3g |
-| `ecom`, `shopify`, `store`             | Step 3h |
-| `marketing`, `klaviyo`, `ads`, `meta`, `ga4` | Step 3i |
-| `voice`, `bland`, `elevenlabs`, `tts`  | Step 3j |
+| `notion`                               | Step 3e |
+| `calendar`, `cal`                      | Step 3f |
+| `doppler`, `secrets`                   | Step 3g |
+| `vault`, `password-manager`, `pm`      | Step 3h |
+| `ecom`, `shopify`, `store`             | Step 3i |
+| `marketing`, `klaviyo`, `ads`, `meta`, `ga4` | Step 3j |
+| `voice`, `bland`, `elevenlabs`, `tts`  | Step 3k |
 | `mcp`                                  | Step 4  |
 | `registry`, `projects`                 | Step 5  |
 | `daemon`, `background`                 | Step 5b |
