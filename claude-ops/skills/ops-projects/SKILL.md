@@ -9,6 +9,8 @@ allowed-tools:
   - Glob
   - Skill
   - Agent
+  - TeamCreate
+  - SendMessage
   - AskUserQuestion
   - TaskCreate
   - TaskUpdate
@@ -41,6 +43,22 @@ Before rendering, load:
 | `gh issue list --repo <repo> --json number,title,labels,state` | Issues | JSON array |
 
 ---
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when scanning projects in parallel. This enables:
+- Agents share context and can coordinate mid-flight
+- You can steer priorities in real-time
+- Agents report progress as they complete
+
+**Team setup** (only when flag is enabled):
+```
+TeamCreate("projects-team")
+# Spawn one agent per registered project for parallel scanning
+Agent(team_name="projects-team", name="project-<alias>", prompt="Scan <path> for git status, GSD phase, CI, and open PRs")
+```
+
+If the flag is NOT set, use standard fire-and-forget subagents.
 
 ## Pre-gathered git status
 

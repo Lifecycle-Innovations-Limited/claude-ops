@@ -11,6 +11,8 @@ allowed-tools:
   - AskUserQuestion
   - WebSearch
   - WebFetch
+  - TeamCreate
+  - SendMessage
 effort: medium
 maxTurns: 30
 ---
@@ -83,6 +85,23 @@ Parse the JSON output. Display a summary:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when multiple independent fix categories are identified (e.g., manifest issues + permission issues + registry issues). This enables:
+- Fix agents work in parallel on different issue categories without stepping on each other
+- You can prioritize: "fix manifest errors first, then permissions"
+- Agents share context so a manifest fix can inform the registry repair
+
+**Team setup** (only when flag is enabled, multiple issue categories):
+```
+TeamCreate("doctor-fixers")
+Agent(team_name="doctor-fixers", name="fix-manifest", subagent_type="ops:doctor-agent", ...)
+Agent(team_name="doctor-fixers", name="fix-permissions", subagent_type="ops:doctor-agent", ...)
+Agent(team_name="doctor-fixers", name="fix-registry", subagent_type="ops:doctor-agent", ...)
+```
+
+If the flag is NOT set or only one issue category exists, use a single `doctor-agent` subagent.
+
 ## Phase 2 — Decision
 
 If `$ARGUMENTS` contains `--check-only`: stop here, display results only.
@@ -91,7 +110,7 @@ If there are **errors or warnings**:
 
 Display: "Found [N] issues. Spawning doctor agent to auto-fix..."
 
-Then spawn the doctor agent:
+Then spawn the doctor agent (or Agent Team — see above):
 
 ```
 Agent({
