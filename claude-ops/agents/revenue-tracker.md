@@ -32,20 +32,38 @@ Only run if `STRIPE_SECRET_KEY` is set. If not, emit `stripe: not_configured` an
 ### Recent charges (for MTD + trailing-30d gross)
 
 ```bash
-curl -s https://api.stripe.com/v1/charges?limit=100 \
-  -u "$STRIPE_SECRET_KEY:" 2>/dev/null
+# Paginate through all charges using has_more + starting_after loop
+AFTER=""
+while true; do
+  PARAMS="limit=100${AFTER:+&starting_after=$AFTER}"
+  PAGE=$(curl -s "https://api.stripe.com/v1/charges?$PARAMS" \
+    -u "$STRIPE_SECRET_KEY:" 2>/dev/null)
+  echo "$PAGE"
+  HAS_MORE=$(echo "$PAGE" | jq -r '.has_more')
+  [ "$HAS_MORE" = "true" ] || break
+  AFTER=$(echo "$PAGE" | jq -r '.data[-1].id')
+done
 ```
 
-Filter `data[].created >= first-of-month` for MTD gross; filter `data[].created >= now - 30d` for trailing-30d gross. Sum `amount` in cents, divide by 100. Only count `status=succeeded` and `paid=true`; subtract `amount_refunded`.
+Collect all pages. Filter `data[].created >= first-of-month` for MTD gross; filter `data[].created >= now - 30d` for trailing-30d gross. Sum `amount` in cents, divide by 100. Only count `status=succeeded` and `paid=true`; subtract `amount_refunded`.
 
 ### Active subscriptions (MRR)
 
 ```bash
-curl -s "https://api.stripe.com/v1/subscriptions?status=active&limit=100" \
-  -u "$STRIPE_SECRET_KEY:" 2>/dev/null
+# Paginate through all active subscriptions using has_more + starting_after loop
+AFTER=""
+while true; do
+  PARAMS="status=active&limit=100${AFTER:+&starting_after=$AFTER}"
+  PAGE=$(curl -s "https://api.stripe.com/v1/subscriptions?$PARAMS" \
+    -u "$STRIPE_SECRET_KEY:" 2>/dev/null)
+  echo "$PAGE"
+  HAS_MORE=$(echo "$PAGE" | jq -r '.has_more')
+  [ "$HAS_MORE" = "true" ] || break
+  AFTER=$(echo "$PAGE" | jq -r '.data[-1].id')
+done
 ```
 
-MRR = sum over `data[].items.data[].price.unit_amount * items.data[].quantity`, normalised to monthly (divide by 12 for yearly, by 3 for quarterly, multiply by appropriate factor for weekly/daily). Convert cents → dollars.
+MRR = sum over all pages: `data[].items.data[].price.unit_amount * items.data[].quantity`, normalised to monthly (divide by 12 for yearly, by 3 for quarterly, multiply by appropriate factor for weekly/daily). Convert cents → dollars.
 
 ### Balance (pending + available)
 
@@ -73,15 +91,24 @@ curl -s "https://api.stripe.com/v1/invoices?status=open&limit=50" \
 
 Count and sum `amount_due`.
 
-### Churn — subscriptions 30d ago
+### Churn — subscriptions cancelled in the last 30d
 
 ```bash
 TS_30D=$(date -v-30d +%s 2>/dev/null || date -d "-30 days" +%s)
-curl -s "https://api.stripe.com/v1/subscriptions?status=active&created[lte]=$TS_30D&limit=100" \
-  -u "$STRIPE_SECRET_KEY:" 2>/dev/null
+# Paginate through all recently-cancelled subscriptions
+AFTER=""
+while true; do
+  PARAMS="status=canceled&canceled_at[gte]=$TS_30D&limit=100${AFTER:+&starting_after=$AFTER}"
+  PAGE=$(curl -s "https://api.stripe.com/v1/subscriptions?$PARAMS" \
+    -u "$STRIPE_SECRET_KEY:" 2>/dev/null)
+  echo "$PAGE"
+  HAS_MORE=$(echo "$PAGE" | jq -r '.has_more')
+  [ "$HAS_MORE" = "true" ] || break
+  AFTER=$(echo "$PAGE" | jq -r '.data[-1].id')
+done
 ```
 
-Compare `data | length` to current active count. `churn_rate_pct = max(0, (subs_30d_ago - subs_now) / subs_30d_ago * 100)`.
+Count total cancelled subs across all pages as `recently_cancelled`. Use the active sub count from the MRR query above as `subs_now`. `churn_rate_pct = recently_cancelled / (subs_now + recently_cancelled) * 100` (0 if denominator is 0).
 
 ---
 
