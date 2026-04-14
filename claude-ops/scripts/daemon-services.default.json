@@ -2,27 +2,27 @@
   "services": {
     "briefing-pre-warm": {
       "enabled": true,
-      "command": "__SCRIPTS_DIR__/../bin/ops-gather",
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/ops-gather",
       "cron": "*/2 * * * *",
       "_note": "Pre-warms /ops:go briefing cache every 2 minutes. Runs immediately after daemon install so /ops:go is instant by the time setup finishes."
     },
     "wacli-sync": {
       "enabled": true,
-      "command": "__SCRIPTS_DIR__/wacli-keepalive.sh",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/wacli-keepalive.sh",
       "health_file": "~/.wacli/.health",
       "restart_delay": 60,
       "max_restarts": 10
     },
     "memory-extractor": {
       "enabled": true,
-      "command": "__SCRIPTS_DIR__/ops-memory-extractor.sh",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-memory-extractor.sh",
       "health_file": "~/.claude/plugins/data/ops-ops-marketplace/memories/.health",
       "restart_delay": 3600,
       "cron": "*/30 * * * *"
     },
     "fires-watcher": {
       "enabled": false,
-      "command": "__SCRIPTS_DIR__/ops-fires-watcher.sh",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-fires-watcher.sh",
       "health_file": "~/.claude/plugins/data/ops-ops-marketplace/fires-watcher.health",
       "restart_delay": 60,
       "max_restarts": 20,
