@@ -4,7 +4,7 @@
 
 *Persistent local context about people, projects, and your communication patterns — extracted from your chats, stored as markdown, never sent anywhere*
 
-[![version](https://img.shields.io/badge/version-0.8.0-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.0.0-blue)](../CHANGELOG.md)
 [![storage](https://img.shields.io/badge/storage-local%20markdown-22c55e)](.)
 [![privacy](https://img.shields.io/badge/privacy-on--device-6366f1)](.)
 [![extractor](https://img.shields.io/badge/extractor-haiku--4--5-f59e0b)](.)
@@ -13,7 +13,7 @@
 
 ---
 
-The memories system gives claude-ops persistent context about people, projects, and your communication patterns. Introduced in v0.5.0, upgraded in v0.8.0 with richer project context blocks.
+The memories system gives claude-ops persistent context about people, projects, and your communication patterns. Introduced in v0.5.0, upgraded in v1.0.0 with richer project context blocks.
 
 > [!IMPORTANT]
 > **Files never leave your machine.** Memories are plain markdown on your local disk at `~/.claude/plugins/data/ops-ops-marketplace/memories/`. The extractor reads your local wacli database and local email cache — nothing is uploaded. See [Privacy](#-privacy) below.
