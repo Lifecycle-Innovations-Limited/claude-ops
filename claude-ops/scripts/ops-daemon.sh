@@ -537,7 +537,7 @@ prefetch_calendar() {
 
   if command -v gog &>/dev/null; then
     log "BRAIN: refreshing calendar cache"
-    gog cal list -j --no-input --days 1 > "$CAL_CACHE" 2>/dev/null || echo '[]' > "$CAL_CACHE"
+    gog calendar events primary --today --json > "$CAL_CACHE" 2>/dev/null || echo '[]' > "$CAL_CACHE"
     date +%s > "$LAST_FETCH"
   fi
 }
