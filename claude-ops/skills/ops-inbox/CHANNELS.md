@@ -59,11 +59,17 @@ wacli sync --follow
 **Setup:**
 
 ```bash
-# Install gog
-brew install Lifecycle-Innovations-Limited/tap/gog
+# Install gog (private auroracapital/gog CLI — try npm/bun first, fall back to source)
+npm install -g @auroracapital/gog 2>/dev/null || \
+bun install -g @auroracapital/gog 2>/dev/null || \
+(git clone https://github.com/auroracapital/gog ~/.gog && cd ~/.gog && ./install.sh) || \
+{ echo "Could not install gog. Options:"; \
+  echo "  1. Ask Sam (internal team) for the latest release binary"; \
+  echo "  2. Request access to github.com/auroracapital/gog"; \
+  echo "  3. Use the Gmail MCP fallback (read-only, drafts only)"; }
 
 # Authenticate
-gog gmail auth
+gog auth login
 ```
 
 **Env vars (optional):**

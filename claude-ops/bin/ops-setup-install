@@ -22,9 +22,33 @@ install_mac() {
     sentry-cli) brew install getsentry/tools/sentry-cli ;;
     expect)     brew install expect ;;
     wacli)      echo "○ wacli is not on Homebrew — install manually: https://github.com/wacli/wacli" >&2; return 2 ;;
-    gog)        echo "○ gog is not on Homebrew — install manually or skip email integration." >&2; return 2 ;;
+    gog)        install_gog ;;
     *) echo "✗ Unknown tool: $tool" >&2; return 1 ;;
   esac
+}
+
+# install_gog — try npm, then bun, then source-clone (private repo).
+# Returns 0 on success, 2 on failure (with manual instructions printed).
+install_gog() {
+  if command -v npm >/dev/null 2>&1 && npm install -g @auroracapital/gog >/dev/null 2>&1; then
+    echo "✓ gog installed via npm"
+    return 0
+  fi
+  if command -v bun >/dev/null 2>&1 && bun install -g @auroracapital/gog >/dev/null 2>&1; then
+    echo "✓ gog installed via bun"
+    return 0
+  fi
+  if command -v git >/dev/null 2>&1 && \
+     git clone https://github.com/auroracapital/gog "$HOME/.gog" >/dev/null 2>&1 && \
+     ( cd "$HOME/.gog" && ./install.sh >/dev/null 2>&1 ); then
+    echo "✓ gog installed from source (~/.gog)"
+    return 0
+  fi
+  echo "✗ Could not install gog. Options:" >&2
+  echo "  1. Ask Sam (internal team) for the latest release binary" >&2
+  echo "  2. Request access to github.com/auroracapital/gog" >&2
+  echo "  3. Use the Gmail MCP fallback (read-only, drafts only)" >&2
+  return 2
 }
 
 install_linux() {

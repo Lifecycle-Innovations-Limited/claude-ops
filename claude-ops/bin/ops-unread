@@ -88,7 +88,7 @@ except:
     RESULT=$(echo "$RESULT" | jq '.channels.email = {"unread": 0, "available": false, "note": "gog not authenticated — run: gog gmail auth"}')
   fi
 else
-  RESULT=$(echo "$RESULT" | jq '.channels.email = {"unread": 0, "available": false, "note": "gog not installed — see github.com/Lifecycle-Innovations-Limited/gog"}')
+  RESULT=$(echo "$RESULT" | jq '.channels.email = {"unread": 0, "available": false, "note": "gog not installed — run: npm install -g @auroracapital/gog (or bun install -g @auroracapital/gog, or clone github.com/auroracapital/gog)"}')
 fi
 
 # ── Slack — MCP-based, check env ──
