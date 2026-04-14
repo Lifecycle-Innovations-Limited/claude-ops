@@ -182,6 +182,80 @@ gog auth add you@example.com --services gmail,calendar,drive,contacts,docs,sheet
 
 ---
 
+## Notion
+
+**Status:** MCP-based (claude.ai integration or self-hosted MCP server).
+
+Notion acts as a knowledge base and task management channel. The integration surfaces:
+- **Comments needing reply** — mentions, questions, and comments on pages/databases you own
+- **Recently updated pages** — changes in databases you track (e.g., project boards, CRM)
+- **Assigned tasks** — items assigned to you across Notion databases
+
+**Requirements:**
+
+- Notion MCP server configured via one of:
+  - **Claude.ai integration** (recommended): Add Notion via claude.ai > Settings > Integrations
+  - **Self-hosted MCP**: Install `@notionhq/notion-mcp-server` or similar
+
+**Setup (Claude.ai integration — recommended):**
+
+1. Go to claude.ai > Settings > Integrations > Notion
+2. Authorize access to your Notion workspace
+3. Set env var in `~/.claude/settings.json`:
+   ```json
+   {
+     "env": {
+       "NOTION_MCP_ENABLED": "true"
+     }
+   }
+   ```
+4. Restart Claude Code to load the integration
+
+**Setup (Self-hosted MCP server):**
+
+1. Install the Notion MCP server:
+   ```bash
+   npm install -g @notionhq/notion-mcp-server
+   ```
+2. Create a Notion integration at https://www.notion.so/my-integrations
+3. Add to `~/.claude/settings.json`:
+   ```json
+   {
+     "mcpServers": {
+       "notion": {
+         "command": "npx",
+         "args": ["-y", "@notionhq/notion-mcp-server"],
+         "env": {
+           "NOTION_API_KEY": "${NOTION_API_KEY}"
+         }
+       }
+     }
+   }
+   ```
+4. Export env vars:
+   ```bash
+   export NOTION_API_KEY="ntn_..."
+   export NOTION_MCP_ENABLED=true
+   ```
+
+**Env vars:**
+
+- `NOTION_API_KEY` — Integration token (starts with `ntn_`, only for self-hosted MCP)
+- `NOTION_MCP_ENABLED` — Set `true` to enable in ops-unread
+
+**MCP tools used:**
+
+| Tool | Purpose |
+|------|---------|
+| `notion-search` | Search across workspace and connected sources (Slack, Drive, etc.) |
+| `notion-fetch` | Fetch full page/database content by URL or ID |
+| `notion-get-comments` | Get comments on a specific page |
+| `notion-create-comment` | Reply to a comment thread on a page |
+| `notion-update-page` | Update page properties (status, assignee, etc.) |
+| `notion-create-pages` | Create new pages in databases |
+
+---
+
 ## Verification
 
 After configuring any channel, verify with:

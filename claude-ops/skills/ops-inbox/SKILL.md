@@ -1,7 +1,7 @@
 ---
 name: ops-inbox
-description: Full inbox management across all channels — WhatsApp (wacli), Email (Gmail MCP), Slack (MCP), Telegram (user-auth MCP), Discord (webhook + REST read). Scans FULL inbox (not just unread), identifies messages needing replies, archives handled conversations.
-argument-hint: "[channel: whatsapp|email|slack|telegram|discord|all]"
+description: Full inbox management across all channels — WhatsApp (wacli), Email (Gmail MCP), Slack (MCP), Telegram (user-auth MCP), Discord (webhook + REST read), Notion (MCP — comments, mentions, assigned tasks). Scans FULL inbox (not just unread), identifies messages needing replies, archives handled conversations.
+argument-hint: "[channel: whatsapp|email|slack|telegram|discord|notion|all]"
 allowed-tools:
   - Bash
   - Read
@@ -23,6 +23,12 @@ allowed-tools:
   - mcp__gog__gmail_labels
   # Slack: MCP tools added when configured
   # Telegram: user-auth MCP tools added when configured
+  # Notion: MCP tools (claude.ai integration or self-hosted)
+  - mcp__claude_ai_Notion__notion-search
+  - mcp__claude_ai_Notion__notion-fetch
+  - mcp__claude_ai_Notion__notion-get-comments
+  - mcp__claude_ai_Notion__notion-create-comment
+  - mcp__claude_ai_Notion__notion-update-page
 effort: high
 maxTurns: 60
 ---
@@ -93,6 +99,7 @@ Agent(team_name="inbox-channels", name="whatsapp-scanner", ...)
 Agent(team_name="inbox-channels", name="email-scanner", ...)
 Agent(team_name="inbox-channels", name="slack-scanner", ...)
 Agent(team_name="inbox-channels", name="telegram-scanner", ...)
+Agent(team_name="inbox-channels", name="notion-scanner", ...)
 ```
 
 Each agent scans its channel and reports back classified results. You then process NEEDS_REPLY items across all channels in priority order.
@@ -114,6 +121,7 @@ All channel credentials come from env vars or CLI auth — no hardcoded secrets.
 | `GMAIL_ACCOUNT`     | auto-detect | Gmail account for `gog` CLI                          |
 | `SLACK_MCP_ENABLED` | `false`     | Set `true` when Slack MCP server is configured       |
 | `TELEGRAM_ENABLED`  | `false`     | Set `true` when Telegram user-auth MCP is configured |
+| `NOTION_MCP_ENABLED`| `false`     | Set `true` when Notion MCP integration is configured |
 | `WACLI_STORE`       | `~/.wacli`  | wacli store directory                                |
 
 ## Core principle: FULL INBOX SCAN
@@ -185,6 +193,7 @@ For each channel, detect availability at runtime:
 3. **Slack**: Only via MCP tools (`mcp__claude_ai_Slack__*`). Check `SLACK_MCP_ENABLED` env var.
 4. **Telegram**: Only via user-auth MCP (tdlib/MTProto). Check `TELEGRAM_ENABLED` env var. Never use BotFather bots.
 5. **Discord**: Via `${CLAUDE_PLUGIN_ROOT}/bin/ops-discord read <CHANNEL_ID> --limit 20 --json`. Requires `DISCORD_BOT_TOKEN` (v1 is channel-scoped — no DM/gateway support yet). Pre-configured read list lives at `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` under `discord.inbox_channels` (array of channel IDs). If neither a bot token nor a read list is configured, skip Discord with a one-line note ("Discord not configured — run `/ops:setup discord`") rather than prompting — ops-inbox is not a setup flow. Rule 3 still applies to `/ops:setup`.
+6. **Notion**: Only via MCP tools (`mcp__claude_ai_Notion__*` or self-hosted Notion MCP). Check `NOTION_MCP_ENABLED` env var. Searches workspace for recent comments, mentions, and assigned tasks.
 
 ## Your task
 
@@ -447,6 +456,70 @@ Use the Telegram user-auth MCP server if available.
 ```
 
 If no Telegram user-auth tool is available, report: "Telegram not configured — needs user-auth MCP server (tdlib/MTProto)".
+
+### Notion (MCP — comments, mentions, assigned tasks)
+
+Notion serves as a knowledge base and task management channel. Unlike messaging channels, Notion "inbox" items are:
+- **Comments on pages you own or are mentioned in**
+- **Tasks assigned to you** in tracked databases
+- **Recently updated pages** in databases you monitor
+
+**Phase 1 — Discover and scan:**
+
+1. Search for recent activity using `mcp__claude_ai_Notion__notion-search`:
+   - `query: "@me"` or `query: "comment"` with `query_type: "internal"` — find pages with recent mentions/comments
+   - Filter by `created_date_range` to last 7 days for relevance
+2. For each result, fetch full content: `mcp__claude_ai_Notion__notion-fetch` with the page URL/ID
+3. Get comments on active pages: `mcp__claude_ai_Notion__notion-get-comments` with the page ID
+
+**Phase 2 — Classify:**
+
+For each page with comments or mentions:
+- **NEEDS REPLY**: Someone commented/mentioned you and you haven't responded
+- **WAITING**: You commented last, waiting for others
+- **FYI**: Page updated but no direct mention or action needed
+- **TASK**: Item assigned to you in a database (check status property)
+
+**Phase 3 — Present with context:**
+
+```
+📓 NOTION — NEEDS REPLY
+
+━━━ 1. [Page Title] — [Database Name] ━━━
+ Page: [page URL]
+ Comment by: [commenter name] — [time ago]
+ Comment: "[full comment text]"
+ Page context: [2-3 sentence summary of the page content]
+
+ Draft reply: "[context-aware reply to the comment]"
+
+ [Reply] [View page] [Skip] [More...]
+
+If "More...":
+ [Mark resolved] [Archive]
+
+📓 NOTION — ASSIGNED TASKS
+
+ N. [Task title] — [database] — Status: [status] — Due: [date]
+    Context: [1-line summary]
+
+📓 NOTION — RECENTLY UPDATED (FYI)
+
+ N. [Page title] — updated by [person] — [time ago]
+```
+
+Use `AskUserQuestion` for each NEEDS REPLY item.
+
+**When replying to Notion comments:**
+- Use `mcp__claude_ai_Notion__notion-create-comment` with the page ID and reply text
+- Match the formality of the original comment
+- Reference specific page content when relevant
+
+**When updating tasks:**
+- Use `mcp__claude_ai_Notion__notion-update-page` to change status, add notes
+- Only update properties the user explicitly approves
+
+If `NOTION_MCP_ENABLED` is not set or Notion MCP tools are unavailable, report: "Notion not configured — set NOTION_MCP_ENABLED=true and add Notion integration via claude.ai or self-hosted MCP".
 
 ### Discord (v1 — REST channel scan)
 
