@@ -65,7 +65,11 @@ env var isn't set), so you don't have to export secrets globally.
 - **Premium iOS/Android →** Pushover. ~$5 one-time per platform, fastest and
   most reliable delivery with priority bypass for CRITICAL.
 - **Team channel →** Discord webhook. Drops the alert into an existing
-  `#incidents` channel where your team already lives.
+  `#incidents` channel where your team already lives. Configure once via
+  `/ops:setup discord` (sub-step 3l) — the same webhook URL powers both
+  fires alerts here and `/ops:comms discord send` (see
+  [`skills-reference.md`](skills-reference.md#opscomms--skillsops-commsskillmd)
+  and `bin/ops-discord`).
 - **Desktop only →** macOS `osascript`. Silent fallback; fine for a dev
   laptop but don't rely on it as your only sink.
 
