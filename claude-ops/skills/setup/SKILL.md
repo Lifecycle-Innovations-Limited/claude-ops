@@ -222,11 +222,49 @@ Ask which channels the user wants to configure using `AskUserQuestion` with `mul
 
 | Option   | Header   | Description                                                             |
 | -------- | -------- | ----------------------------------------------------------------------- |
-| Calendar | calendar | gog cal → Google Calendar MCP fallback — schedule context for briefings |
+| Calendar | calendar | gog calendar → Google Calendar MCP fallback — schedule context for briefings |
 | Doppler  | doppler  | Secrets manager — set default project + config for all ops skills       |
 | Vault    | vault    | Password manager — 1Password, Dashlane, Bitwarden, or macOS Keychain    |
 
 Present each batch as a separate `AskUserQuestion` call. Skip batches where all items are already configured. For each selected channel, run the matching sub-flow below.
+
+---
+
+#### Shared: detect the host OS before suggesting installs
+
+The claude-ops wizard runs on macOS, Linux (all major distros + WSL), and Windows (native + WSL). Before printing any install command, the skill MUST detect the host OS and pick the OS-appropriate variant. Never print a `brew install …` command to a Windows user, and never print `winget install …` to a macOS user.
+
+Minimal detection snippet (bash — works on macOS, Linux, WSL, MSYS/Cygwin):
+
+```bash
+case "$(uname -s)" in
+  Darwin*) OS=macos ;;
+  Linux*)
+    if grep -qi microsoft /proc/version 2>/dev/null; then OS=wsl
+    elif [ -f /etc/os-release ]; then
+      . /etc/os-release
+      case "$ID" in
+        arch|manjaro) OS=arch ;;
+        fedora|rhel|centos|rocky|almalinux) OS=fedora ;;
+        debian|ubuntu|pop|linuxmint) OS=debian ;;
+        alpine) OS=alpine ;;
+        opensuse*|sles) OS=suse ;;
+        *) OS=linux ;;
+      esac
+    else OS=linux; fi ;;
+  MINGW*|MSYS*|CYGWIN*) OS=windows ;;
+  *) OS=unknown ;;
+esac
+```
+
+Cascade for the package manager (pick the first one available):
+1. `brew` (macOS + Linuxbrew) — preferred on macOS.
+2. Native OS manager — `apt-get` (debian/ubuntu), `dnf` (fedora/rhel), `pacman` (arch), `zypper` (suse), `apk` (alpine).
+3. `winget` (Windows 10 1809+) → `scoop` → `choco` → build-from-source as last resort on Windows.
+
+When the preferred manager isn't installed, fall forward to the next available option rather than aborting the flow. Every `AskUserQuestion` "[Install now — …]" prompt below uses an OS-aware command table — print only the row(s) that match the detected OS.
+
+For the authoritative cross-OS detection logic, reuse `bin/ops-setup-detect` (which emits `os`, `pkg_mgr`, `arch`, `keyring_backend`, `shell`, `browser_profiles_found` in its JSON output).
 
 ---
 
@@ -744,13 +782,23 @@ If `gog` is not on PATH, look at the detector's `mcp_configured` array for any e
       Desktop-side setting tied to your account.
       If you want unattended sending from ops-comms, install `gog` instead.
    ```
-5. On "Install gog instead", print:
+5. On "Install gog instead", print the OS-appropriate install command:
+
+   | OS            | Command                                                       |
+   |---------------|---------------------------------------------------------------|
+   | macOS / Linuxbrew | `brew install gogcli`                                     |
+   | Windows       | `winget install -e --id steipete.gogcli`                      |
+   | Arch Linux    | `yay -S gogcli`                                               |
+   | From source   | `git clone https://github.com/steipete/gogcli.git && cd gogcli && make` |
+
+   Docs: <https://gogcli.sh/> · Repo: <https://github.com/steipete/gogcli>
+
+   After install, authorise once per account:
+   ```bash
+   gog auth credentials /path/to/client_secret.json
+   gog auth add you@example.com --services gmail,calendar,drive,contacts,docs,sheets
    ```
-   gog is a private CLI — install from source:
-     git clone https://github.com/Lifecycle-Innovations-Limited/gog ~/.gog && cd ~/.gog && ./install.sh
-   Or download a release binary from the GitHub releases page.
-   ```
-   Then stop this sub-flow (don't attempt to `brew install` — gog isn't on Homebrew).
+   Refresh tokens are stored in the OS keyring (Keychain on macOS, Secret Service / libsecret on Linux, Credential Manager on Windows). Then stop this sub-flow and wait for the user to re-run `/ops:setup email`.
 
 #### Neither available
 
@@ -842,18 +890,20 @@ Calendar isn't a messaging channel, but every other ops skill (briefings, `/ops-
 
 #### Preferred: `gog calendar`
 
-`gog` already handles email; the same binary exposes `gog calendar` / `gog cal` with the same OAuth token. No additional auth needed if Step 3c went green.
+`gog` (the `gogcli` binary — see Step 3c) already handles email; the same binary exposes `gog calendar` with the same OAuth token. No additional auth needed if Step 3c went green. Note: `gog cal` is **not** a valid alias — always use `gog calendar`.
 
 1. Check `gog` on PATH with `command -v gog`.
 2. **If installed and already authed from Step 3c**, probe:
    ```bash
-   gog cal list --json --max 3 2>&1 | head -20
+   gog calendar calendars --json 2>&1 | head -20
    ```
-   If this returns JSON with calendar data, record `channels.calendar = "gog"` in `$PREFS_PATH` and print `✓ Calendar — gog cal`. Stop here.
+   If this returns JSON with calendar metadata, record `channels.calendar = "gog"` in `$PREFS_PATH` and print `✓ Calendar — gog calendar`. Stop here.
 3. **If gog is installed but calendar scope is missing** (typical error: `insufficient scope` or `403 insufficient_permissions`), print:
    ```
    Your gog OAuth token doesn't include the calendar scope.
-   Run `gog auth login --scopes=gmail,calendar` via Bash tool with `run_in_background: true` to re-authorize with calendar read access. Tell the user: "Opening browser for Calendar OAuth — complete the sign-in there, then type 'done'." Use `AskUserQuestion`: `[Done — re-authorized]`, `[Skip calendar]`.
+   Re-add the account with the calendar service via Bash tool with `run_in_background: true`:
+     gog auth add "$USER_EMAIL" --services gmail,calendar,drive,contacts,docs,sheets
+   Tell the user: "Opening browser for Calendar OAuth — complete the sign-in there, then type 'done'." Use `AskUserQuestion`: `[Done — re-authorized]`, `[Skip calendar]`.
    ```
    Do not attempt to re-auth from the skill — it's a browser flow.
 
@@ -903,21 +953,27 @@ Doppler is a secrets manager that injects environment variables at runtime. When
 command -v doppler
 ```
 
-If missing, ask via `AskUserQuestion`:
+If missing, detect the host OS via `uname -s` / `$OSTYPE` / `$OS` and pick the right install command. Ask via `AskUserQuestion`:
 
 ```
 Doppler CLI is not installed.
-  [Install now — brew install dopplerhq/cli/doppler]
+  [Install now — <os-specific command>]
   [Skip Doppler]
 ```
 
-On install, run in the background:
+Where the OS-specific command is:
 
-```bash
-brew install dopplerhq/cli/doppler
-```
+| OS                  | Install command                                                                     |
+|---------------------|-------------------------------------------------------------------------------------|
+| macOS / Linuxbrew   | `brew install dopplerhq/cli/doppler`                                                |
+| Debian / Ubuntu     | `curl -Ls https://cli.doppler.com/install.sh \| sudo sh`                            |
+| Fedora / RHEL       | `sudo rpm --import https://packages.doppler.com/public.key && sudo dnf install -y doppler` |
+| Arch Linux          | `yay -S doppler-cli`                                                                |
+| Alpine              | `apk add --no-cache doppler-cli`                                                    |
+| Windows (winget)    | `winget install Doppler.doppler`                                                    |
+| Windows (scoop)     | `scoop bucket add doppler https://github.com/DopplerHQ/scoop-doppler.git; scoop install doppler` |
 
-Report success/failure. If the user skips, record `secrets_manager: "none"` in `$PREFS_PATH` and end this sub-flow.
+Run the chosen command in the background, capture stdout/stderr, and report success/failure. If the user skips, record `secrets_manager: "none"` in `$PREFS_PATH` and end this sub-flow.
 
 #### Step 3f.2 — Auth status
 
@@ -1999,11 +2055,14 @@ gog gmail send --to "user@example.com" --subject "test" --body "hello"
 # Gmail — archive (remove INBOX label)
 gog gmail labels modify MESSAGE_ID --remove INBOX
 
-# Calendar — list today's events (NOT --time-min, use `gog cal list`)
-gog cal list --json --max 10
+# Calendar — list calendars
+gog calendar calendars --json
 
-# Calendar — auth with calendar scope
-gog auth login --scopes=gmail,calendar
+# Calendar — today's events on primary
+gog calendar events primary --today --json
+
+# Calendar — (re-)add account with calendar scope
+gog auth add you@example.com --services gmail,calendar,drive,contacts,docs,sheets
 ```
 
 ### wacli
