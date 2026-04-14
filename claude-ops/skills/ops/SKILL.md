@@ -32,7 +32,8 @@ Route `$ARGUMENTS` to the correct ops skill:
 | inbox, unread, messages                       | `/ops-inbox`            |
 | comms, send, whatsapp, email, slack, telegram | `/ops-comms $ARGUMENTS` |
 | fires, incidents, down, sentry                | `/ops-fires`            |
-| projects, dashboard, status                   | `/ops-projects`         |
+| projects, dashboard                           | `/ops-projects`         |
+| status, health-status                         | `/ops:ops-status`       |
 | next, priority, what                          | `/ops-next`             |
 | triage, issues                                | `/ops-triage`           |
 | linear, sprint, board                         | `/ops-linear`           |
