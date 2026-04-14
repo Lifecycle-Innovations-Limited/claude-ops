@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "owner": "owner",
+  "projects": [
+    {
+      "alias": "company-monorepo",
+      "paths": [
+        "~/Projects/company/apps/web",
+        "~/Projects/company/apps/mobile",
+        "~/Projects/company/services/api"
+      ],
+      "repos": ["your-org/company"],
+      "org": "your-org",
+      "type": "monorepo",
+      "infra": {
+        "ecs_clusters": ["company-production"],
+        "vercel_project": "company-web",
+        "platform": "aws"
+      },
+      "revenue": {
+        "model": "saas",
+        "stage": "growth"
+      },
+      "gsd": true,
+      "priority": 1
+    }
+  ]
+}
