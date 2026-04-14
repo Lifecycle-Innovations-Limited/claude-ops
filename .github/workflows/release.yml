@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Parse CHANGELOG for this version
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          NOTES=$(awk -v ver="$VERSION" '
+            /^## \[/ {
+              if (found) exit
+              if (index($0, "[" ver "]") > 0) found=1
+              next
+            }
+            found { print }
+          ' claude-ops/CHANGELOG.md)
+
+          if [[ -z "$NOTES" ]]; then
+            NOTES="Release v${VERSION}. See CHANGELOG.md for details."
+          fi
+
+          # Write to file to avoid quoting issues
+          echo "$NOTES" > /tmp/release-notes.md
+          echo "NOTES_FILE=/tmp/release-notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Update version in plugin.json
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" claude-ops/.claude-plugin/plugin.json
+
+      - name: Update version in marketplace.json
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" .claude-plugin/marketplace.json
+
+      - name: Commit version bumps
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add claude-ops/.claude-plugin/plugin.json .claude-plugin/marketplace.json
+          git diff --cached --quiet || git commit -m "chore: bump version to ${{ steps.version.outputs.VERSION }} [skip ci]"
+          git push origin HEAD:main || true
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: "claude-ops v${{ steps.version.outputs.VERSION }}"
+          body_path: ${{ steps.changelog.outputs.NOTES_FILE }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
