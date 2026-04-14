@@ -331,7 +331,15 @@ See [telegram-server/README.md](telegram-server/README.md) for first-run auth fl
 
 ## Contributing
 
-PRs welcome. See [`docs/`](docs/) for detailed reference documentation on skills, agents, the daemon, and the memories system.
+PRs welcome. See [`docs/`](docs/) for reference documentation:
+
+- [`docs/skills-reference.md`](docs/skills-reference.md) — every skill, its triggers, and what it does
+- [`docs/agents-reference.md`](docs/agents-reference.md) — agents and their tool surfaces
+- [`docs/daemon-guide.md`](docs/daemon-guide.md) — background brain: services, cron, health
+- [`docs/memories-system.md`](docs/memories-system.md) — long-term memory store + extraction
+- [`docs/os-compatibility.md`](docs/os-compatibility.md) — macOS/Linux/WSL/Windows support matrix, per-channel install paths, credential cascade, daemon registration
+
+Cross-platform support is tested in CI via [`.github/workflows/cross-os.yml`](.github/workflows/cross-os.yml) (ubuntu-latest, macos-latest, windows-latest).
 
 ## License
 
