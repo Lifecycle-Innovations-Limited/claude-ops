@@ -173,10 +173,12 @@ Fall back to: `telegram-cli --exec "dialog_list" 2>/dev/null || echo "Telegram M
 `${CLAUDE_PLUGIN_ROOT}/bin/ops-discord read "<CHANNEL_ID>" --limit 20 --json` — requires `DISCORD_BOT_TOKEN` (or credential-store `discord/bot-token`). Fall back to `bin/ops-discord channels --json` if the user doesn't know the channel ID and `DISCORD_GUILD_ID` is set.
 
 **Notion:**
-Use `mcp__claude_ai_Notion__notion-search` with the user's query (or `query: "recent"` for general browsing). For each result:
+Use `mcp__claude_ai_Notion__notion-search` with the user's query (or `query: ""` sorted by `last_edited_time` for general browsing). For each result:
 - Fetch full page content with `mcp__claude_ai_Notion__notion-fetch` using the page URL/ID from search results
 - Get comments with `mcp__claude_ai_Notion__notion-get-comments`
 - Show page title, database name, last editor, and recent comments
+
+**Notion API fallback:** If MCP tools fail and `NOTION_API_KEY` is set, use `curl -s -H "Authorization: Bearer $NOTION_API_KEY" -H "Notion-Version: 2022-06-28" -X POST https://api.notion.com/v1/search -d '{"query":"<QUERY>","page_size":10}'`
 
 ### Notion comment/reply
 
