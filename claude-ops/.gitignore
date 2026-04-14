@@ -1,6 +1,7 @@
 node_modules/
 .env
 .env.*
+!templates/**/.env.example
 .DS_Store
 *.swp
 *.swo
