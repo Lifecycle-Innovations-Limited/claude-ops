@@ -40,6 +40,7 @@ run_suite "$TESTS_DIR/test-template.sh"
 run_suite "$TESTS_DIR/test-claude-md.sh"
 run_suite "$TESTS_DIR/test-no-secrets.sh"
 run_suite "$TESTS_DIR/test-agent-teams.sh"
+run_suite "$TESTS_DIR/test-ops-daemon-manager.sh"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "SUMMARY"

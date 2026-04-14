@@ -4,6 +4,19 @@
 # daemon registration: launchd on macOS, systemd on Linux, Task Scheduler on Windows
 set -euo pipefail
 
+# ── Bash version guard ───────────────────────────────────────────────────
+# This script uses associative arrays (`declare -A`) which require bash 4+.
+# macOS ships bash 3.2 at /bin/bash; callers must use a newer bash (e.g.
+# `/opt/homebrew/bin/bash` on Apple Silicon, `/usr/local/bin/bash` on Intel).
+# Fail loud with a clear message instead of the cryptic `declare -A` error.
+if (( BASH_VERSINFO[0] < 4 )); then
+  echo "ERROR: ops-daemon.sh requires bash 4 or newer (current: $BASH_VERSION)" >&2
+  echo "       macOS ships /bin/bash 3.2 — install GNU bash via Homebrew:" >&2
+  echo "         brew install bash" >&2
+  echo "       then invoke with /opt/homebrew/bin/bash (or /usr/local/bin/bash)." >&2
+  exit 78  # EX_CONFIG
+fi
+
 # ── OS detection (sourced) ────────────────────────────────────────────────
 # Resolves to the claude-ops plugin root (parent of scripts/).
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -374,6 +387,7 @@ prefetch_briefing_cache() {
 
   local tmpdir
   tmpdir=$(mktemp -d)
+  local -a _refresh_pids=()
 
   # Unread counts
   (command -v wacli &>/dev/null && wacli chats list --json 2>/dev/null | python3 -c "
@@ -383,6 +397,7 @@ cutoff=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=7))
 recent=[c for c in data if c.get('LastMessageTS','')>cutoff]
 print(json.dumps({'total_chats':len(recent),'count':len(data)}))
 " > "$tmpdir/wa.json" 2>/dev/null) &
+  _refresh_pids+=($!)
 
   # Email count
   (command -v gog &>/dev/null && gog gmail search -j --results-only --no-input --max 10 "in:inbox" 2>/dev/null | python3 -c "
@@ -390,17 +405,23 @@ import json,sys
 data=json.load(sys.stdin)
 print(json.dumps({'unread_count':len(data)}))
 " > "$tmpdir/email.json" 2>/dev/null) &
+  _refresh_pids+=($!)
 
   # Open PRs
   (command -v gh &>/dev/null && gh pr list --json number,title,headRefName,createdAt --limit 20 2>/dev/null > "$tmpdir/prs.json") &
+  _refresh_pids+=($!)
 
   # Projects placeholder with timestamp
   (python3 -c "
 import json
 print(json.dumps({'cached_at':'$(date -u +%Y-%m-%dT%H:%M:%SZ)'}))
 " > "$tmpdir/projects.json" 2>/dev/null) &
+  _refresh_pids+=($!)
 
-  wait
+  # Wait only on the 4 gather subshells above. Bare `wait` blocks on ALL
+  # children — including long-lived services like message-listener — which
+  # would freeze the monitor loop on the first refresh.
+  wait "${_refresh_pids[@]}" 2>/dev/null || true
 
   # Merge all into briefing cache
   python3 -c "
