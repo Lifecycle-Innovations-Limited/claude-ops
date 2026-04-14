@@ -19,7 +19,7 @@
 If you discover a security vulnerability, please report it responsibly:
 
 1. **Do NOT** open a public GitHub issue.
-2. Email: `security@example.com`
+2. Email: `info@lifecycleinnovations.limited`
 3. Include: description, reproduction steps, affected version, and impact assessment.
 
 **Expected response time:** we acknowledge within 48 hours and aim to ship a fix or mitigation within 14 days. We will coordinate a disclosure timeline with you and credit you in the release notes (unless you prefer to remain anonymous).
