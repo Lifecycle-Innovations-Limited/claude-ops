@@ -21,16 +21,8 @@
     },
     {
       "alias": "example-multi-repo",
-      "paths": [
-        "~/Projects/example-api",
-        "~/Projects/example-web",
-        "~/Projects/example-mobile"
-      ],
-      "repos": [
-        "your-github-org/example-api",
-        "your-github-org/example-web",
-        "your-github-org/example-mobile"
-      ],
+      "paths": ["~/Projects/example-api", "~/Projects/example-web", "~/Projects/example-mobile"],
+      "repos": ["your-github-org/example-api", "your-github-org/example-web", "your-github-org/example-mobile"],
       "org": "your-github-org",
       "type": "multi-repo",
       "infra": {
