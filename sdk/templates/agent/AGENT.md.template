@@ -1,0 +1,31 @@
+---
+name: {{SKILL_NAME}}-agent
+description: Agent for the {{SKILL_NAME}} skill. Describe what this agent does.
+model: claude-sonnet-4-6
+effort: medium
+maxTurns: 25
+tools:
+  - Bash
+  - Read
+disallowedTools:
+  - Write
+  - Edit
+  - Agent
+memory: project
+initialPrompt: "Perform the {{SKILL_NAME}} analysis and return structured JSON results."
+---
+
+# {{SKILL_NAME}} AGENT
+
+Describe what this agent does. Keep it read-only where possible.
+
+## Preflight
+
+```bash
+PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+# Load required credentials
+```
+
+## Output
+
+Return JSON. Do not print any other text.
