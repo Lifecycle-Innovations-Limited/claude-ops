@@ -4,7 +4,7 @@
   "description": "Local marketplace for claude-ops plugin",
   "owner": {
     "name": "Lifecycle Innovations Limited",
-    "email": "security@example.com"
+    "email": "info@lifecycleinnovations.limited"
   },
   "plugins": [
     {
