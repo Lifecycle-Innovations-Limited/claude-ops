@@ -55,7 +55,7 @@ Before executing, load available context:
 
 | Command | Usage | Output |
 |---------|-------|--------|
-| `gog calendar list --date "$(date +%Y-%m-%d)"` | Today's calendar events | Calendar events |
+| `gog calendar events primary --today --json` | Today's calendar events | Calendar events |
 | `gog gmail search -j --results-only --no-input --max 30 "in:inbox"` | Search inbox | JSON array of threads |
 
 ---
@@ -111,7 +111,7 @@ done
 ### Calendar (today)
 
 ```!
-gog calendar list --date "$(date +%Y-%m-%d)" 2>/dev/null | head -20 || echo "calendar unavailable"
+gog calendar events primary --today --json 2>/dev/null | head -20 || echo "calendar unavailable"
 ```
 
 ## Your task
