@@ -2086,6 +2086,8 @@ Offer `[Add now]`, `[Skip]` for each. Do **not** try to register MCPs from the s
 
 ## Step 5 — Build the project registry (if selected)
 
+> **Templates:** a pre-baked starter for common stacks lives in `${CLAUDE_PLUGIN_ROOT}/scripts/registry.templates/`. If you want to start from one, `cp "${CLAUDE_PLUGIN_ROOT}/scripts/registry.templates/<stack>.json" "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"` then edit — or continue the wizard below for interactive discovery.
+
 ### Auto-discover from filesystem
 
 Before asking the user to manually enter projects, scan for existing git repositories:
