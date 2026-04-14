@@ -1,0 +1,24 @@
+{
+  "version": "1.0",
+  "owner": "owner",
+  "projects": [
+    {
+      "alias": "my-saas",
+      "paths": ["~/Projects/my-saas"],
+      "repos": ["your-org/my-saas"],
+      "org": "your-org",
+      "type": "monorepo",
+      "infra": {
+        "vercel_project": "my-saas",
+        "platform": "vercel"
+      },
+      "revenue": {
+        "model": "saas",
+        "stage": "growth",
+        "mrr": 2500
+      },
+      "gsd": true,
+      "priority": 1
+    }
+  ]
+}
