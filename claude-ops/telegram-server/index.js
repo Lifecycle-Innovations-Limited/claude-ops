@@ -63,8 +63,7 @@ if (CONFIGURED) {
     await authClient.start({
       phoneNumber: async () =>
         PHONE || (await rl.question("Phone number (E.164): ")),
-      password: async () =>
-        await rl.question("2FA password (blank if none): "),
+      password: async () => await rl.question("2FA password (blank if none): "),
       phoneCode: async () => await rl.question("SMS code: "),
       onError: (err) => process.stderr.write(`Auth error: ${err.message}\n`),
     });
