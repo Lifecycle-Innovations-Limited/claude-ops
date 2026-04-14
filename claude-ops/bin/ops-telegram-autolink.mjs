@@ -35,46 +35,42 @@
  * simple regex to keep the dep footprint minimal.
  */
 
-import { readFileSync, existsSync, unlinkSync } from "node:fs";
-import { execSync } from "node:child_process";
-import { parseArgs } from "node:util";
-import os from "node:os";
-import { TelegramClient } from "telegram";
-import { StringSession } from "telegram/sessions/index.js";
-import {
-  setCredential,
-  getCredential,
-  deleteCredential,
-} from "../lib/credential-store.mjs";
-import { osId, keyringBackend } from "../lib/os-detect.mjs";
+import { readFileSync, existsSync, unlinkSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { parseArgs } from 'node:util';
+import os from 'node:os';
+import { TelegramClient } from 'telegram';
+import { StringSession } from 'telegram/sessions/index.js';
+import { setCredential, getCredential, deleteCredential } from '../lib/credential-store.mjs';
+import { osId, keyringBackend } from '../lib/os-detect.mjs';
 
 const { values } = parseArgs({
   options: {
-    phone: { type: "string" },
-    "app-title": { type: "string", default: "claude-ops" },
-    "app-short": { type: "string", default: "claude_ops" },
-    "skip-session": { type: "boolean", default: false },
-    "code-file": { type: "string", default: "/tmp/telegram-code.txt" },
+    phone: { type: 'string' },
+    'app-title': { type: 'string', default: 'claude-ops' },
+    'app-short': { type: 'string', default: 'claude_ops' },
+    'skip-session': { type: 'boolean', default: false },
+    'code-file': { type: 'string', default: '/tmp/telegram-code.txt' },
   },
 });
 
 const PHONE = values.phone;
-const APP_TITLE = values["app-title"];
-const APP_SHORT = values["app-short"];
-const SKIP_SESSION = values["skip-session"];
-const CODE_FILE = values["code-file"];
+const APP_TITLE = values['app-title'];
+const APP_SHORT = values['app-short'];
+const SKIP_SESSION = values['skip-session'];
+const CODE_FILE = values['code-file'];
 
 function emit(event) {
-  process.stderr.write(JSON.stringify(event) + "\n");
+  process.stderr.write(JSON.stringify(event) + '\n');
 }
 
 function die(message, extra = {}) {
-  emit({ type: "error", message, ...extra });
+  emit({ type: 'error', message, ...extra });
   process.exit(1);
 }
 
 if (!PHONE || !/^\+\d{7,15}$/.test(PHONE)) {
-  die("missing or invalid --phone (E.164 required, e.g. +15551234567)");
+  die('missing or invalid --phone (E.164 required, e.g. +15551234567)');
 }
 
 if (existsSync(CODE_FILE)) unlinkSync(CODE_FILE);
@@ -87,7 +83,7 @@ async function waitForCode(maxSec = 300) {
   let lastLog = 0;
   while (Date.now() - start < maxSec * 1000) {
     if (existsSync(CODE_FILE)) {
-      const raw = readFileSync(CODE_FILE, "utf8").trim();
+      const raw = readFileSync(CODE_FILE, 'utf8').trim();
       if (/^[\w\-]{3,20}$/.test(raw)) {
         try {
           unlinkSync(CODE_FILE);
@@ -97,7 +93,7 @@ async function waitForCode(maxSec = 300) {
     }
     if (Date.now() - lastLog > 15000) {
       emit({
-        type: "heartbeat",
+        type: 'heartbeat',
         waited_s: Math.floor((Date.now() - start) / 1000),
       });
       lastLog = Date.now();
@@ -117,48 +113,47 @@ class CookieJar {
   update(response) {
     const raw = response.headers.getSetCookie
       ? response.headers.getSetCookie()
-      : [response.headers.get("set-cookie")].filter(Boolean);
+      : [response.headers.get('set-cookie')].filter(Boolean);
     for (const c of raw || []) {
-      const [kv] = c.split(";");
-      const eq = kv.indexOf("=");
-      if (eq > 0)
-        this.cookies.set(kv.slice(0, eq).trim(), kv.slice(eq + 1).trim());
+      const [kv] = c.split(';');
+      const eq = kv.indexOf('=');
+      if (eq > 0) this.cookies.set(kv.slice(0, eq).trim(), kv.slice(eq + 1).trim());
     }
   }
   header() {
     return Array.from(this.cookies.entries())
       .map(([k, v]) => `${k}=${v}`)
-      .join("; ");
+      .join('; ');
   }
 }
 
 // --- Phase 1: my.telegram.org HTTP flow ---
 emit({
-  type: "phase",
+  type: 'phase',
   phase: 1,
-  message: "Extracting api_id / api_hash from my.telegram.org",
+  message: 'Extracting api_id / api_hash from my.telegram.org',
 });
 
 const jar = new CookieJar();
 const COMMON_HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-  "Accept-Language": "en-US,en;q=0.9",
+  'User-Agent':
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+  'Accept-Language': 'en-US,en;q=0.9',
 };
 
 async function httpPost(url, body) {
   const res = await fetch(url, {
-    method: "POST",
+    method: 'POST',
     headers: {
       ...COMMON_HEADERS,
-      "Content-Type": "application/x-www-form-urlencoded",
-      "X-Requested-With": "XMLHttpRequest",
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'X-Requested-With': 'XMLHttpRequest',
       Cookie: jar.header(),
-      Referer: "https://my.telegram.org/auth",
-      Origin: "https://my.telegram.org",
+      Referer: 'https://my.telegram.org/auth',
+      Origin: 'https://my.telegram.org',
     },
     body: new URLSearchParams(body).toString(),
-    redirect: "manual",
+    redirect: 'manual',
   });
   jar.update(res);
   return res;
@@ -167,48 +162,48 @@ async function httpPost(url, body) {
 async function httpGet(url) {
   const res = await fetch(url, {
     headers: { ...COMMON_HEADERS, Cookie: jar.header() },
-    redirect: "manual",
+    redirect: 'manual',
   });
   jar.update(res);
   return res;
 }
 
 // Step 1.1: request a login code for PHONE
-emit({ type: "step", message: `POST /auth/send_password for ${PHONE}` });
-const sendRes = await httpPost("https://my.telegram.org/auth/send_password", {
+emit({ type: 'step', message: `POST /auth/send_password for ${PHONE}` });
+const sendRes = await httpPost('https://my.telegram.org/auth/send_password', {
   phone: PHONE,
 });
 const sendText = await sendRes.text();
-if (sendText.includes("Sorry, too many tries")) {
-  die("my.telegram.org rate-limited your account. Wait ~8 hours and retry.");
+if (sendText.includes('Sorry, too many tries')) {
+  die('my.telegram.org rate-limited your account. Wait ~8 hours and retry.');
 }
 let randomHash;
 try {
   const parsed = JSON.parse(sendText);
   randomHash = parsed.random_hash;
-  if (!randomHash) throw new Error("no random_hash in response");
+  if (!randomHash) throw new Error('no random_hash in response');
 } catch (e) {
-  die("send_password response was not valid JSON", {
+  die('send_password response was not valid JSON', {
     body: sendText.slice(0, 200),
   });
 }
 emit({
-  type: "step",
-  message: "Telegram has sent a code to your Telegram account",
+  type: 'step',
+  message: 'Telegram has sent a code to your Telegram account',
 });
 
 // Step 1.2: wait for code from the bridge
 emit({
-  type: "need_code",
-  channel: "web_login",
+  type: 'need_code',
+  channel: 'web_login',
   message: `Enter the code from Telegram → write it to ${CODE_FILE}`,
   code_file: CODE_FILE,
 });
 const webCode = await waitForCode(300);
 
 // Step 1.3: POST login with phone + random_hash + password=code
-emit({ type: "step", message: "POST /auth/login" });
-const loginRes = await httpPost("https://my.telegram.org/auth/login", {
+emit({ type: 'step', message: 'POST /auth/login' });
+const loginRes = await httpPost('https://my.telegram.org/auth/login', {
   phone: PHONE,
   random_hash: randomHash,
   password: webCode,
@@ -219,8 +214,8 @@ if (loginBody && /error|invalid|wrong/i.test(loginBody)) {
 }
 
 // Step 1.4: GET /apps to see if an app already exists
-emit({ type: "step", message: "GET /apps" });
-let appsRes = await httpGet("https://my.telegram.org/apps");
+emit({ type: 'step', message: 'GET /apps' });
+let appsRes = await httpGet('https://my.telegram.org/apps');
 let appsHtml = await appsRes.text();
 
 /**
@@ -237,12 +232,8 @@ function extract(html) {
   let apiHash = null;
 
   // Strategy 1: label + nearby span (original layout)
-  const idS1 = html.match(
-    /api_id[^<]*<\/label>[\s\S]*?<span[^>]*>\s*(\d{5,12})\s*<\/span>/i,
-  );
-  const hashS1 = html.match(
-    /api_hash[^<]*<\/label>[\s\S]*?<span[^>]*>\s*([a-f0-9]{32})\s*<\/span>/i,
-  );
+  const idS1 = html.match(/api_id[^<]*<\/label>[\s\S]*?<span[^>]*>\s*(\d{5,12})\s*<\/span>/i);
+  const hashS1 = html.match(/api_hash[^<]*<\/label>[\s\S]*?<span[^>]*>\s*([a-f0-9]{32})\s*<\/span>/i);
   if (idS1) apiId = idS1[1];
   if (hashS1) apiHash = hashS1[1];
 
@@ -268,22 +259,18 @@ function extract(html) {
 
   // Strategy 4: input/hidden fields with api_id/api_hash as name or id
   if (!apiId) {
-    const idS4 = html.match(
-      /(?:name|id)=['"]?api_id['"]?[^>]*value=['"]?(\d{5,12})['"]?/i,
-    );
+    const idS4 = html.match(/(?:name|id)=['"]?api_id['"]?[^>]*value=['"]?(\d{5,12})['"]?/i);
     if (idS4) apiId = idS4[1];
   }
   if (!apiHash) {
-    const hashS4 = html.match(
-      /(?:name|id)=['"]?api_hash['"]?[^>]*value=['"]?([a-f0-9]{32})['"]?/i,
-    );
+    const hashS4 = html.match(/(?:name|id)=['"]?api_hash['"]?[^>]*value=['"]?([a-f0-9]{32})['"]?/i);
     if (hashS4) apiHash = hashS4[1];
   }
 
   // Strategy 5: brute-force — strip all HTML tags and look for the
   // characteristic patterns near their keywords in plain text
   if (!apiId || !apiHash) {
-    const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
     if (!apiId) {
       const idS5 = text.match(/api_id\s*:?\s*(\d{5,12})/i);
       if (idS5) apiId = idS5[1];
@@ -308,23 +295,18 @@ let { apiId, apiHash } = extract(appsHtml);
 
 if (!apiId || !apiHash) {
   // Step 1.5: no app exists → create one
-  emit({ type: "step", message: "No existing app — creating one" });
+  emit({ type: 'step', message: 'No existing app — creating one' });
   // Extract CSRF token / hash value from the create-app form if present
-  const hashInput = appsHtml.match(
-    /name=['"]hash['"]\s+value=['"]([a-z0-9]+)['"]/i,
-  );
+  const hashInput = appsHtml.match(/name=['"]hash['"]\s+value=['"]([a-z0-9]+)['"]/i);
   const createParams = {
-    hash: hashInput ? hashInput[1] : "",
+    hash: hashInput ? hashInput[1] : '',
     app_title: APP_TITLE,
     app_shortname: APP_SHORT,
-    app_url: "https://github.com/claude-ops-marketplace/claude-ops",
-    app_platform: "desktop",
-    app_desc: "claude-ops — automated operations for Claude Code",
+    app_url: 'https://github.com/claude-ops-marketplace/claude-ops',
+    app_platform: 'desktop',
+    app_desc: 'claude-ops — automated operations for Claude Code',
   };
-  const createRes = await httpPost(
-    "https://my.telegram.org/apps/create",
-    createParams,
-  );
+  const createRes = await httpPost('https://my.telegram.org/apps/create', createParams);
   const createBody = await createRes.text();
   if (createRes.status >= 400 || /error/i.test(createBody.slice(0, 200))) {
     die(`/apps/create failed (HTTP ${createRes.status})`, {
@@ -332,7 +314,7 @@ if (!apiId || !apiHash) {
     });
   }
   // Re-fetch the apps page now that an app exists
-  appsRes = await httpGet("https://my.telegram.org/apps");
+  appsRes = await httpGet('https://my.telegram.org/apps');
   appsHtml = await appsRes.text();
   ({ apiId, apiHash } = extract(appsHtml));
 }
@@ -340,22 +322,22 @@ if (!apiId || !apiHash) {
 if (!apiId || !apiHash) {
   // Dump a snippet of the HTML so the caller can diagnose what changed
   const snippet = appsHtml
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 500);
   die(
-    `could not extract ${!apiId ? "api_id" : ""}${!apiId && !apiHash ? " or " : ""}${!apiHash ? "api_hash" : ""} from /apps HTML after 6 extraction strategies`,
+    `could not extract ${!apiId ? 'api_id' : ''}${!apiId && !apiHash ? ' or ' : ''}${!apiHash ? 'api_hash' : ''} from /apps HTML after 6 extraction strategies`,
     { html_snippet: snippet },
   );
 }
 
 emit({
-  type: "phase",
+  type: 'phase',
   phase: 1,
-  message: "Extracted credentials",
+  message: 'Extracted credentials',
   api_id: apiId,
 });
 
@@ -367,20 +349,20 @@ if (SKIP_SESSION) {
       api_hash: apiHash,
       phone: PHONE,
       session: null,
-    }) + "\n",
+    }) + '\n',
   );
   process.exit(0);
 }
 
-emit({ type: "phase", phase: 2, message: "Generating gram.js session string" });
+emit({ type: 'phase', phase: 2, message: 'Generating gram.js session string' });
 
-const stringSession = new StringSession("");
+const stringSession = new StringSession('');
 const client = new TelegramClient(stringSession, parseInt(apiId, 10), apiHash, {
   connectionRetries: 3,
   baseLogger: {
     log: () => {},
     warn: () => {},
-    error: (...a) => emit({ type: "gram_error", message: a.join(" ") }),
+    error: (...a) => emit({ type: 'gram_error', message: a.join(' ') }),
     info: () => {},
     debug: () => {},
   },
@@ -401,34 +383,34 @@ try {
       // enabled, we'd need another bridge file. For MVP, default to empty
       // and let gram.js error loudly if 2FA is required.
       emit({
-        type: "need_password",
+        type: 'need_password',
         message:
-          "Telegram 2FA password required. Write to /tmp/telegram-password.txt or leave unset for no-2FA accounts",
-        password_file: "/tmp/telegram-password.txt",
+          'Telegram 2FA password required. Write to /tmp/telegram-password.txt or leave unset for no-2FA accounts',
+        password_file: '/tmp/telegram-password.txt',
       });
       const start = Date.now();
       while (Date.now() - start < 60_000) {
-        if (existsSync("/tmp/telegram-password.txt")) {
-          const pw = readFileSync("/tmp/telegram-password.txt", "utf8").trim();
+        if (existsSync('/tmp/telegram-password.txt')) {
+          const pw = readFileSync('/tmp/telegram-password.txt', 'utf8').trim();
           try {
-            unlinkSync("/tmp/telegram-password.txt");
+            unlinkSync('/tmp/telegram-password.txt');
           } catch {}
           return pw;
         }
         await new Promise((r) => setTimeout(r, 2000));
       }
-      return "";
+      return '';
     },
     phoneCode: async () => {
       emit({
-        type: "need_code",
-        channel: "gram_auth",
+        type: 'need_code',
+        channel: 'gram_auth',
         message: `Telegram sent a SECOND code for gram.js auth. Write digits-only to ${CODE_FILE}`,
         code_file: CODE_FILE,
       });
       return await waitForCode(300);
     },
-    onError: (err) => emit({ type: "gram_error", message: err.message }),
+    onError: (err) => emit({ type: 'gram_error', message: err.message }),
   });
 } catch (err) {
   die(`gram.js auth failed: ${err.message}`);
@@ -437,17 +419,17 @@ try {
 const sessionStr = client.session.save();
 
 // Step 2.1: Validate session
-emit({ type: "step", message: "Validating session..." });
+emit({ type: 'step', message: 'Validating session...' });
 try {
   await client.connect();
   const me = await client.getMe();
   emit({
-    type: "step",
-    message: `✓ Validated — ${me.firstName} (@${me.username || "no-username"})`,
+    type: 'step',
+    message: `✓ Validated — ${me.firstName} (@${me.username || 'no-username'})`,
   });
   await client.disconnect();
 } catch (e) {
-  emit({ type: "step", message: `⚠ Session validation failed: ${e.message}` });
+  emit({ type: 'step', message: `⚠ Session validation failed: ${e.message}` });
   await client.disconnect().catch(() => {});
 }
 
@@ -458,33 +440,30 @@ try {
 // installations keep working because the service/account names (and the
 // underlying `security add-generic-password` invocation on darwin) are
 // unchanged. See lib/credential-store.mjs for cascade details.
-const CRED_ACCOUNT =
-  process.env.USER || process.env.USERNAME || os.userInfo().username || "user";
+const CRED_ACCOUNT = process.env.USER || process.env.USERNAME || os.userInfo().username || 'user';
 try {
   const backends = new Set();
   for (const [svc, val] of [
-    ["telegram-api-id", apiId],
-    ["telegram-api-hash", apiHash],
-    ["telegram-phone", PHONE],
-    ["telegram-session", sessionStr],
+    ['telegram-api-id', apiId],
+    ['telegram-api-hash', apiHash],
+    ['telegram-phone', PHONE],
+    ['telegram-session', sessionStr],
   ]) {
     const r = await setCredential(svc, CRED_ACCOUNT, val);
     if (!r || !r.ok) {
-      throw new Error(
-        `setCredential(${svc}) failed (backend=${r ? r.backend : "none"})`,
-      );
+      throw new Error(`setCredential(${svc}) failed (backend=${r ? r.backend : 'none'})`);
     }
     if (r.backend) backends.add(r.backend);
   }
-  const backendList = Array.from(backends).join(", ") || "unknown";
+  const backendList = Array.from(backends).join(', ') || 'unknown';
   emit({
-    type: "step",
-    message: `✓ Saved credentials to credential store (backend=${backendList}, host=${osId()}, native=${keyringBackend() || "none"})`,
+    type: 'step',
+    message: `✓ Saved credentials to credential store (backend=${backendList}, host=${osId()}, native=${keyringBackend() || 'none'})`,
     backend: backendList,
   });
 } catch (e) {
   emit({
-    type: "step",
+    type: 'step',
     message: `○ Credential store save failed: ${e.message}`,
   });
 }
@@ -492,11 +471,8 @@ try {
 // Step 2.3: Register MCP server
 try {
   const pluginRoot =
-    process.env.CLAUDE_PLUGIN_ROOT ||
-    execSync("echo $CLAUDE_PLUGIN_ROOT", { encoding: "utf8" }).trim();
-  const telegramServerPath = pluginRoot
-    ? `${pluginRoot}/telegram-server/index.js`
-    : null;
+    process.env.CLAUDE_PLUGIN_ROOT || execSync('echo $CLAUDE_PLUGIN_ROOT', { encoding: 'utf8' }).trim();
+  const telegramServerPath = pluginRoot ? `${pluginRoot}/telegram-server/index.js` : null;
   if (telegramServerPath) {
     execSync(
       `claude mcp add telegram -s user` +
@@ -505,17 +481,17 @@ try {
         ` -e TELEGRAM_PHONE='${PHONE}'` +
         ` -e TELEGRAM_SESSION='${sessionStr.replace(/'/g, "'\\''")}'` +
         ` -- node "${telegramServerPath}"`,
-      { timeout: 15000, stdio: "pipe" },
+      { timeout: 15000, stdio: 'pipe' },
     );
     emit({
-      type: "step",
-      message: "✓ Registered Telegram MCP server in Claude Code",
+      type: 'step',
+      message: '✓ Registered Telegram MCP server in Claude Code',
     });
   }
 } catch {
   emit({
-    type: "step",
-    message: "○ Could not auto-register MCP — run: claude mcp add telegram",
+    type: 'step',
+    message: '○ Could not auto-register MCP — run: claude mcp add telegram',
   });
 }
 
@@ -525,5 +501,5 @@ const result = {
   phone: PHONE,
   session: sessionStr,
 };
-process.stdout.write(JSON.stringify(result) + "\n");
+process.stdout.write(JSON.stringify(result) + '\n');
 process.exit(0);
