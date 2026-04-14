@@ -16,8 +16,9 @@ The OS detection layer (`lib/os-detect.{sh,mjs}`), credential cascade (`lib/cred
 | **Alpine** | 2 | `apk` | `secret-tool` (if installed) | `openrc` (manual) | Headless deployments — no Slack browser autolink. |
 | **Windows 10/11 native** | 2 | `winget` → `scoop` → `choco` | `wincred` (write-only) | Task Scheduler | Use Git Bash or PowerShell. `cmdkey` cannot read passwords from the CLI; reads cascade through `keytar`/encrypted JSON. |
 | **WSL2** | 1 | `apt-get` (or distro of choice) | `secret-tool` (preferred) → `wincred` (fallback) | `systemd --user` | Inherits Linux. Browser profiles auto-discovered from `/mnt/c/Users/$USER/AppData/Local/...`. URL opens via `wslview` if installed. |
+| **Docker (any host)** | 1 | `apt-get` (Ubuntu 24.04 base) | `enc-json` (default) → `secret-tool` (if you unlock a keyring inside the container) | foreground loop (no init) | Turnkey image with Node 22, `gh`, `aws`, `doppler`, `jq`, `expect`, `libsecret-tools` pre-installed. See [`docker.md`](./docker.md) for quick-start, credential mounting, and limitations (no `launchd`/`systemd`, no browser automation without an X11 socket mount). |
 
-> **Tier 1** = covered by CI (`.github/workflows/cross-os.yml` runs ubuntu-latest, macos-latest, windows-latest on every push). **Tier 2** = supported but not in matrix.
+> **Tier 1** = covered by CI (`.github/workflows/cross-os.yml` runs ubuntu-latest, macos-latest, windows-latest on every push; `.github/workflows/docker-build.yml` builds and smoke-tests the container image). **Tier 2** = supported but not in matrix.
 
 ## OS / package-manager detection
 

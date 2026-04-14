@@ -1,0 +1,75 @@
+name: Docker Build
+
+# Build the turnkey container image (see claude-ops/Dockerfile + docs/docker.md)
+# and smoke-test it. No publish step — registry pushes live in a separate,
+# future workflow so this one stays safe to run on any branch.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build + smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: claude-ops
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (load into local daemon)
+        uses: docker/build-push-action@v6
+        with:
+          context: claude-ops
+          file: claude-ops/Dockerfile
+          load: true
+          push: false
+          tags: claude-ops:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test — image boots and ops-status returns parseable JSON
+        run: |
+          docker run --rm claude-ops:local \
+            bash /opt/claude-ops/bin/ops-status --json | jq . > /tmp/status.json
+          echo "ops-status JSON keys:"
+          jq -r 'keys[]' /tmp/status.json
+          # Daemon block must exist; registry block must exist; generated_at present.
+          jq -e '.daemon and .registry and .generated_at' /tmp/status.json
+
+      - name: Smoke test — os-detect reports linux
+        run: |
+          docker run --rm claude-ops:local \
+            bash /opt/claude-ops/lib/os-detect.sh | jq . > /tmp/os.json
+          cat /tmp/os.json
+          jq -e '.os == "linux"' /tmp/os.json
+
+      - name: Smoke test — CLIs present
+        run: |
+          docker run --rm claude-ops:local bash -lc '\
+            set -e; \
+            node --version; \
+            npm --version; \
+            gh --version; \
+            aws --version; \
+            doppler --version; \
+            jq --version; \
+            secret-tool --version || true; \
+            expect -version'
