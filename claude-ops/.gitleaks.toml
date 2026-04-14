@@ -56,10 +56,13 @@ allowlist.paths = [
   '''test''',
   '''plugin\.json$''',
   '''CHANGELOG\.md$''',
+  '''CONFIGURATION\.md$''',
+  '''docs/''',
 ]
 allowlist.regexes = [
   '''\+15551234567''',
   '''\+1234567890''',
+  '''\+14155550100''',
 ]
 
 [[rules]]
@@ -82,4 +85,5 @@ paths = [
 stopwords = [
   "XOXC_TOKEN",
   "XOXD_TOKEN",
+  "STRIPE_SECRET_KEY",
 ]
