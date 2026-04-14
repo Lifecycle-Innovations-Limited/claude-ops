@@ -4,7 +4,7 @@
 
 **Business Operating System for Claude Code**
 
-![Version](https://img.shields.io/badge/version-0.8.0-blue)
+![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blueviolet.svg)
 ![Skills](https://img.shields.io/badge/skills-22-success)
@@ -239,7 +239,7 @@ Just [Claude Code](https://claude.ai/code) 1.0+. Everything else is installed au
 
 ---
 
-## What's New in v0.8.0
+## What's New in v1.0.0
 
 - **CLAUDE.md plugin rules** — 5 non-negotiable rules enforced across every skill
 - **Shopify Admin template** + `bin/ops-shopify-create`
@@ -280,6 +280,6 @@ See [`claude-ops/README.md`](./claude-ops/README.md) for detailed documentation 
 
 <div align="center">
 
-**v0.8.0 · MIT · github.com/Lifecycle-Innovations-Limited**
+**v1.0.0 · MIT · github.com/Lifecycle-Innovations-Limited**
 
 </div>
