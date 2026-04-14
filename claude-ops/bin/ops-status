@@ -1,0 +1,434 @@
+#!/usr/bin/env bash
+# ops-status — Lightweight green/red status panel for every configured integration.
+#
+# Unlike /ops:go and /ops:doctor, this script does NO gathering, NO actions, and
+# NO heavy API calls. It only probes local state (installed CLIs, presence of
+# stored credentials, MCP servers in ~/.claude.json, userConfig values in
+# preferences.json, daemon-health.json, registry.json) and emits either a
+# pretty compact panel or flat JSON (`--json`).
+#
+# Design goals:
+#   - Fast (<1s target). No network calls, no external API probes.
+#   - Cross-OS. Sources lib/os-detect.sh when available; guards macOS-only
+#     calls behind IS_MACOS.
+#   - Dependency-light. Works without jq (degrades gracefully).
+#   - Safe. Never prints secret values; only ok/missing/skipped/not-configured.
+#
+# Symbols:
+#   ✓ ok             — tool installed / credential present / service running
+#   ○ not-configured — known integration, no credential / config recorded
+#   ✗ missing        — declared/required but not resolvable
+#   ─ not-configured — category unused; rendered as a single-cell row
+#
+# Usage:
+#   bin/ops-status          # pretty text panel (default)
+#   bin/ops-status --json   # flat JSON (machine-readable)
+
+set -u
+# Don't use -e; we want best-effort probes that never exit early.
+
+# ─── Paths ──────────────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LIB_DIR="$SCRIPT_DIR/lib"
+PREFS_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PREFS="$PREFS_DIR/preferences.json"
+DAEMON_HEALTH="$PREFS_DIR/daemon-health.json"
+REGISTRY="$SCRIPT_DIR/scripts/registry.json"
+CLAUDE_JSON="$HOME/.claude.json"
+
+# ─── OS detection ───────────────────────────────────────────────────────────
+IS_MACOS=0
+if [ -f "$LIB_DIR/os-detect.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$LIB_DIR/os-detect.sh" 2>/dev/null || true
+  if declare -F ops_os >/dev/null 2>&1; then
+    [ "$(ops_os)" = "macos" ] && IS_MACOS=1
+  fi
+fi
+if [ "$IS_MACOS" = "0" ] && [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+  IS_MACOS=1
+fi
+
+# ─── Credential store (optional) ────────────────────────────────────────────
+HAVE_CRED_STORE=0
+if [ -f "$LIB_DIR/credential-store.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$LIB_DIR/credential-store.sh" 2>/dev/null || true
+  declare -F ops_cred_get >/dev/null 2>&1 && HAVE_CRED_STORE=1
+fi
+
+# ─── Arg parsing ────────────────────────────────────────────────────────────
+MODE="pretty"
+for arg in "$@"; do
+  case "$arg" in
+    --json) MODE="json" ;;
+    -h|--help)
+      cat <<EOF
+ops-status — compact green/red panel for every configured integration
+Usage:
+  ops-status           pretty text panel (default)
+  ops-status --json    flat JSON for machine consumption
+EOF
+      exit 0
+      ;;
+  esac
+done
+
+# ─── Helpers ────────────────────────────────────────────────────────────────
+has_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+# jq wrapper that never errors. Echoes empty string on miss/invalid JSON.
+_jq() {
+  local file="$1"; local filter="$2"
+  [ -f "$file" ] || { printf ''; return 0; }
+  has_cmd jq || { printf ''; return 0; }
+  jq -r "$filter" "$file" 2>/dev/null || printf ''
+}
+
+# Check if a userConfig / preferences key is set (non-empty, non-placeholder).
+_pref_has() {
+  local path="$1"  # jq path fragment, e.g. '.ecom.shopify.admin_token'
+  local val
+  val="$(_jq "$PREFS" "$path // empty")"
+  case "$val" in
+    ""|"null"|'${user_config.'*|"<YOUR_"*|"CHANGE_ME") return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# Probe a channel credential. Returns 0 if configured (via prefs OR keychain).
+# Never prints the secret — only reports presence.
+_channel_configured() {
+  local channel="$1"
+  # 1. Quick check — preferences.json records configuration status.
+  case "$channel" in
+    whatsapp)
+      _pref_has ".channels.whatsapp" && return 0
+      has_cmd wacli && return 0
+      ;;
+    telegram)
+      _pref_has ".channels.telegram" && return 0
+      _pref_has ".user_config.telegram_session" && return 0
+      ;;
+    slack)
+      _pref_has ".channels.slack" && return 0
+      ;;
+    email|gmail)
+      _pref_has ".channels.email" && return 0
+      has_cmd gog && return 0
+      ;;
+    calendar)
+      _pref_has ".channels.calendar" && return 0
+      ;;
+  esac
+  # 2. Fallback — best-effort credential store lookup (silent on miss).
+  if [ "$HAVE_CRED_STORE" = "1" ]; then
+    ops_cred_get "$channel" "default" >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
+# Check if an MCP server is registered in ~/.claude.json.
+_mcp_present() {
+  local name="$1"
+  [ -f "$CLAUDE_JSON" ] || return 1
+  has_cmd jq || return 1
+  local found
+  found="$(jq -r --arg n "$name" \
+    '(.mcpServers // {}) + (.projects[]?.mcpServers // {}) | has($n)' \
+    "$CLAUDE_JSON" 2>/dev/null | grep -c '^true$' || true)"
+  [ "${found:-0}" -gt 0 ]
+}
+
+# ─── 1. CLIs ────────────────────────────────────────────────────────────────
+CLI_LIST=(gh aws jq node wacli gog doppler)
+declare -A CLI_STATUS
+for c in "${CLI_LIST[@]}"; do
+  if has_cmd "$c"; then CLI_STATUS[$c]="ok"; else CLI_STATUS[$c]="missing"; fi
+done
+
+# ─── 2. Channels ────────────────────────────────────────────────────────────
+CHANNEL_LIST=(whatsapp email slack telegram calendar)
+declare -A CH_STATUS
+for ch in "${CHANNEL_LIST[@]}"; do
+  # Skipped (explicit user choice) vs configured vs missing.
+  skipped_val="$(_jq "$PREFS" ".channels.$ch // empty")"
+  if [ "$skipped_val" = "skipped" ]; then
+    CH_STATUS[$ch]="skipped"
+  elif _channel_configured "$ch"; then
+    CH_STATUS[$ch]="ok"
+  else
+    # Only flag as missing if the channel key was defined but empty; otherwise
+    # treat as not-configured (○).
+    CH_STATUS[$ch]="not-configured"
+  fi
+done
+
+# ─── 3. MCPs ────────────────────────────────────────────────────────────────
+MCP_LIST=(linear sentry vercel gmail shopify stripe datadog)
+declare -A MCP_STATUS
+for m in "${MCP_LIST[@]}"; do
+  if _mcp_present "$m"; then MCP_STATUS[$m]="ok"; else MCP_STATUS[$m]="not-configured"; fi
+done
+
+# ─── 4. Commerce (Shopify + partners) ───────────────────────────────────────
+# Declare + seed with a sentinel so the array is always "bound" under `set -u`.
+declare -A COMMERCE_STATUS=()
+if _pref_has ".ecom.shopify.admin_token" || _pref_has ".user_config.shopify_admin_token"; then
+  COMMERCE_STATUS[shopify]="ok"
+elif _jq "$PREFS" '.ecom.shopify // empty' | grep -q .; then
+  COMMERCE_STATUS[shopify]="not-configured"
+fi
+
+# ─── 5. Voice ───────────────────────────────────────────────────────────────
+declare -A VOICE_STATUS=()
+for v in bland elevenlabs groq; do
+  if _pref_has ".voice.$v" || _pref_has ".user_config.${v}_api_key"; then
+    VOICE_STATUS[$v]="ok"
+  elif _jq "$PREFS" ".voice.$v // empty" | grep -q .; then
+    VOICE_STATUS[$v]="not-configured"
+  fi
+done
+
+# ─── 6. Monitoring ──────────────────────────────────────────────────────────
+declare -A MON_STATUS=()
+for mon in datadog newrelic otel; do
+  if _pref_has ".monitoring.$mon" || _pref_has ".user_config.${mon}_api_key"; then
+    MON_STATUS[$mon]="ok"
+  elif _jq "$PREFS" ".monitoring.$mon // empty" | grep -q .; then
+    MON_STATUS[$mon]="not-configured"
+  fi
+done
+
+# ─── 7. Daemon ──────────────────────────────────────────────────────────────
+DAEMON_STATE="missing"
+DAEMON_SERVICES=0
+DAEMON_LAST_SYNC=""
+if [ -f "$DAEMON_HEALTH" ]; then
+  if has_cmd jq && jq empty "$DAEMON_HEALTH" >/dev/null 2>&1; then
+    # Running if there's a recent timestamp and the PID is alive (best-effort).
+    pid="$(jq -r '.pid // empty' "$DAEMON_HEALTH" 2>/dev/null)"
+    ts="$(jq -r '.timestamp // empty' "$DAEMON_HEALTH" 2>/dev/null)"
+    DAEMON_SERVICES="$(jq -r '.services // {} | length' "$DAEMON_HEALTH" 2>/dev/null || echo 0)"
+    DAEMON_LAST_SYNC="$ts"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      DAEMON_STATE="ok"
+    elif [ -n "$ts" ]; then
+      DAEMON_STATE="stale"
+    fi
+  else
+    DAEMON_STATE="unhealthy"
+  fi
+fi
+
+# ─── 8. Registry ────────────────────────────────────────────────────────────
+REGISTRY_STATE="missing"
+REGISTRY_COUNT=0
+if [ -f "$REGISTRY" ]; then
+  if has_cmd jq && jq empty "$REGISTRY" >/dev/null 2>&1; then
+    REGISTRY_COUNT="$(jq '.projects | length' "$REGISTRY" 2>/dev/null || echo 0)"
+    REGISTRY_STATE="ok"
+  else
+    REGISTRY_STATE="invalid"
+  fi
+fi
+
+# ─── Rendering ──────────────────────────────────────────────────────────────
+_glyph() {
+  case "$1" in
+    ok)              printf '✓' ;;
+    missing)         printf '✗' ;;
+    not-configured)  printf '○' ;;
+    skipped)         printf '○' ;;
+    stale|invalid|unhealthy) printf '✗' ;;
+    *)               printf '─' ;;
+  esac
+}
+
+_now_header() {
+  # Example: "Mon 14 Apr 2026 09:45 UTC"
+  date -u '+%a %d %b %Y %H:%M UTC' 2>/dev/null || date
+}
+
+render_pretty() {
+  local sep_top="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  local sep_bot="──────────────────────────────────────────────────────"
+  printf '%s\n' "$sep_top"
+  printf ' OPS ► STATUS — %s\n' "$(_now_header)"
+  printf '%s\n' "$sep_top"
+
+  # CLIs
+  printf ' CLIs         '
+  for c in "${CLI_LIST[@]}"; do
+    printf '%s %s  ' "$(_glyph "${CLI_STATUS[$c]}")" "$c"
+  done
+  printf '\n'
+
+  # Channels
+  printf ' Channels     '
+  for ch in "${CHANNEL_LIST[@]}"; do
+    printf '%s %s  ' "$(_glyph "${CH_STATUS[$ch]}")" "$ch"
+  done
+  printf '\n'
+
+  # MCPs
+  printf ' MCPs         '
+  for m in "${MCP_LIST[@]}"; do
+    printf '%s %s  ' "$(_glyph "${MCP_STATUS[$m]}")" "$m"
+  done
+  printf '\n'
+
+  # Commerce
+  local c_keys="${!COMMERCE_STATUS[*]:-}"
+  if [ -n "$c_keys" ]; then
+    printf ' Commerce     '
+    for k in $c_keys; do
+      printf '%s %s  ' "$(_glyph "${COMMERCE_STATUS[$k]}")" "$k"
+    done
+    printf '\n'
+  else
+    printf ' Commerce     ─ (not configured)\n'
+  fi
+
+  # Voice
+  local v_keys="${!VOICE_STATUS[*]:-}"
+  if [ -n "$v_keys" ]; then
+    printf ' Voice        '
+    for k in $v_keys; do
+      printf '%s %s  ' "$(_glyph "${VOICE_STATUS[$k]}")" "$k"
+    done
+    printf '\n'
+  else
+    printf ' Voice        ─ (not configured)\n'
+  fi
+
+  # Monitoring
+  local m_keys="${!MON_STATUS[*]:-}"
+  if [ -n "$m_keys" ]; then
+    printf ' Monitoring   '
+    for k in $m_keys; do
+      printf '%s %s  ' "$(_glyph "${MON_STATUS[$k]}")" "$k"
+    done
+    printf '\n'
+  else
+    printf ' Monitoring   ─ (not configured)\n'
+  fi
+
+  # Daemon
+  case "$DAEMON_STATE" in
+    ok)       printf ' Daemon       ✓ running (%s services, last-sync %s)\n' "$DAEMON_SERVICES" "${DAEMON_LAST_SYNC:-?}" ;;
+    stale)    printf ' Daemon       ✗ stale health file (last-sync %s)\n' "${DAEMON_LAST_SYNC:-?}" ;;
+    invalid)  printf ' Daemon       ✗ invalid daemon-health.json\n' ;;
+    unhealthy)printf ' Daemon       ✗ unhealthy\n' ;;
+    *)        printf ' Daemon       ○ not running\n' ;;
+  esac
+
+  # Registry
+  case "$REGISTRY_STATE" in
+    ok)      printf ' Registry     ✓ %s projects\n' "$REGISTRY_COUNT" ;;
+    invalid) printf ' Registry     ✗ invalid JSON\n' ;;
+    *)       printf ' Registry     ○ not built yet\n' ;;
+  esac
+
+  printf '%s\n' "$sep_bot"
+}
+
+# JSON emitter — uses jq when available, falls back to hand-rolled.
+_json_map() {
+  # $1: "name1=status1 name2=status2 ..."; emits {"name1":"status1",...}
+  local pairs="$1"
+  local out="{"
+  local first=1
+  for p in $pairs; do
+    k="${p%%=*}"
+    v="${p#*=}"
+    if [ "$first" = "1" ]; then first=0; else out+=","; fi
+    out+="\"$k\":\"$v\""
+  done
+  out+="}"
+  printf '%s' "$out"
+}
+
+_pairs_from_map() {
+  # $1 is the name of an associative array; prints "k=v k=v ..."
+  # Dispatches to the known arrays directly — avoids bash nameref ambiguity
+  # where `${!ref[*]}` can resolve to values instead of keys.
+  local name="$1"
+  local k
+  case "$name" in
+    CLI_STATUS)
+      for k in "${!CLI_STATUS[@]}"; do printf '%s=%s ' "$k" "${CLI_STATUS[$k]}"; done ;;
+    CH_STATUS)
+      for k in "${!CH_STATUS[@]}"; do printf '%s=%s ' "$k" "${CH_STATUS[$k]}"; done ;;
+    MCP_STATUS)
+      for k in "${!MCP_STATUS[@]}"; do printf '%s=%s ' "$k" "${MCP_STATUS[$k]}"; done ;;
+    COMMERCE_STATUS)
+      [ "${#COMMERCE_STATUS[@]}" -gt 0 ] || return 0
+      for k in "${!COMMERCE_STATUS[@]}"; do printf '%s=%s ' "$k" "${COMMERCE_STATUS[$k]}"; done ;;
+    VOICE_STATUS)
+      [ "${#VOICE_STATUS[@]}" -gt 0 ] || return 0
+      for k in "${!VOICE_STATUS[@]}"; do printf '%s=%s ' "$k" "${VOICE_STATUS[$k]}"; done ;;
+    MON_STATUS)
+      [ "${#MON_STATUS[@]}" -gt 0 ] || return 0
+      for k in "${!MON_STATUS[@]}"; do printf '%s=%s ' "$k" "${MON_STATUS[$k]}"; done ;;
+  esac
+}
+
+render_json() {
+  local clis channels mcps commerce voice monitoring
+  clis="$(_json_map "$(_pairs_from_map CLI_STATUS)")"
+  channels="$(_json_map "$(_pairs_from_map CH_STATUS)")"
+  mcps="$(_json_map "$(_pairs_from_map MCP_STATUS)")"
+  commerce="$(_json_map "$(_pairs_from_map COMMERCE_STATUS)")"
+  voice="$(_json_map "$(_pairs_from_map VOICE_STATUS)")"
+  monitoring="$(_json_map "$(_pairs_from_map MON_STATUS)")"
+
+  if has_cmd jq; then
+    jq -n \
+      --argjson clis "$clis" \
+      --argjson channels "$channels" \
+      --argjson mcps "$mcps" \
+      --argjson commerce "$commerce" \
+      --argjson voice "$voice" \
+      --argjson monitoring "$monitoring" \
+      --arg daemon_state "$DAEMON_STATE" \
+      --arg daemon_last_sync "$DAEMON_LAST_SYNC" \
+      --argjson daemon_services "${DAEMON_SERVICES:-0}" \
+      --arg registry_state "$REGISTRY_STATE" \
+      --argjson registry_count "${REGISTRY_COUNT:-0}" \
+      --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{
+        clis: $clis,
+        channels: $channels,
+        mcps: $mcps,
+        commerce: $commerce,
+        voice: $voice,
+        monitoring: $monitoring,
+        daemon: {state: $daemon_state, services: $daemon_services, last_sync: $daemon_last_sync},
+        registry: {state: $registry_state, projects: $registry_count},
+        generated_at: $generated_at
+      }'
+    return
+  fi
+
+  # Fallback without jq.
+  printf '{'
+  printf '"clis":%s,' "$clis"
+  printf '"channels":%s,' "$channels"
+  printf '"mcps":%s,' "$mcps"
+  printf '"commerce":%s,' "$commerce"
+  printf '"voice":%s,' "$voice"
+  printf '"monitoring":%s,' "$monitoring"
+  printf '"daemon":{"state":"%s","services":%s,"last_sync":"%s"},' \
+    "$DAEMON_STATE" "${DAEMON_SERVICES:-0}" "$DAEMON_LAST_SYNC"
+  printf '"registry":{"state":"%s","projects":%s},' \
+    "$REGISTRY_STATE" "${REGISTRY_COUNT:-0}"
+  printf '"generated_at":"%s"' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '}\n'
+}
+
+if [ "$MODE" = "json" ]; then
+  render_json
+else
+  render_pretty
+fi
