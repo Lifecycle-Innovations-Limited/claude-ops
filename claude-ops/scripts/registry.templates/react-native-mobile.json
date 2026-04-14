@@ -1,0 +1,24 @@
+{
+  "version": "1.0",
+  "owner": "owner",
+  "projects": [
+    {
+      "alias": "my-mobile-app",
+      "paths": ["~/Projects/my-mobile-app"],
+      "repos": ["your-org/my-mobile-app"],
+      "org": "your-org",
+      "type": "monorepo",
+      "infra": {
+        "platform": "mobile-ci",
+        "ci_provider": "eas"
+      },
+      "revenue": {
+        "model": "subs",
+        "stage": "growth",
+        "revenuecat_project_id": "proj_XXX"
+      },
+      "gsd": true,
+      "priority": 1
+    }
+  ]
+}
