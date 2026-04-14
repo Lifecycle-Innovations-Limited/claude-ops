@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0] — 2026-04-14
+
+### Added
+
+- **"Configure all" first option in every setup phase** — Enter→Enter→Enter = full optimized install with zero friction. Steps 1 (sections), 2 (CLIs), 3 (channels), and 4 (MCPs) all offer "configure/install everything" as the recommended first option.
+- **CODE_OF_CONDUCT.md** — Contributor Covenant 2.1.
+- **Dependabot** — Weekly npm + GitHub Actions version bumps.
+- **`.prettierrc.json`** — Explicit formatting config (was implicit defaults).
+- **`npm scripts`** — `lint`, `format`, `test`, `type-check` in package.json.
+- **Cross-OS foundation** — `lib/os-detect.{sh,mjs}`, `lib/credential-store.{sh,mjs}`, `lib/opener.{sh,mjs}` for macOS/Linux/WSL/Windows portability.
+- **Cross-OS CI matrix** — GitHub Actions workflow tests on ubuntu-latest, macos-latest, windows-latest.
+- **Gitleaks coverage** — Custom rules for all 22 integrated services (Shopify, RevenueCat, Sentry, Doppler, Linear, Klaviyo, ElevenLabs, Bland AI, Cloudflare).
+- **SDK** — `sdk/` directory with TypeScript types, validators, helpers, and `create-ops-skill` scaffolding CLI.
+
+### Changed
+
+- **Telegram phone number prompt** — Now a single free-text field starting with `+` instead of country-specific presets.
+- **Setup wizard gog install** — Points to `steipete/gogcli` (public) with cross-OS install table instead of private repo.
+- **All `gog` commands updated** — `gog auth login` → `gog auth add`, `gog cal` → `gog calendar events`.
+
+### Fixed
+
+- **Gitleaks false positives** — `curl-auth-user` in SKILL.md docs, example phone numbers, `$STRIPE_SECRET_KEY` env var references.
+- **Prettier formatting** — All `.mjs`/`.js`/`.json` files formatted with explicit config.
+
+---
+
 ## [1.0.0] — 2026-04-14
 
 ### Added

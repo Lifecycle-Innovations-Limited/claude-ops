@@ -4,7 +4,7 @@
 
 *All 12 agents that power claude-ops — scanners, fixers, C-suite analysts, and the daemon brain*
 
-[![version](https://img.shields.io/badge/version-1.0.0-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.1.0-blue)](../CHANGELOG.md)
 [![agents](https://img.shields.io/badge/agents-12-8b5cf6)](.)
 [![sonnet](https://img.shields.io/badge/model-sonnet--4--6-6366f1)](.)
 [![opus](https://img.shields.io/badge/model-opus--4--6-ef4444)](.)
@@ -14,13 +14,13 @@
 
 ---
 
-All 12 agents in claude-ops v1.0.0. Agent files live in `agents/`.
+All 12 agents in claude-ops v1.1.0. Agent files live in `agents/`.
 
 > [!NOTE]
 > Agents are spawned by skills — they are not invoked directly. Each has a `memory` scope for cross-session learning and a defined `effort` level that controls token budget.
 
 > [!IMPORTANT]
-> **v1.0.0 model bumps:** All scanner, fix, and daemon agents upgraded to **`claude-sonnet-4-6`**. All C-suite analysts upgraded to **`claude-opus-4-6`**. The `memory-extractor` stays on Haiku for cost — it's the only background service that runs every 30 min on every box.
+> **v1.1.0 model bumps:** All scanner, fix, and daemon agents upgraded to **`claude-sonnet-4-6`**. All C-suite analysts upgraded to **`claude-opus-4-6`**. The `memory-extractor` stays on Haiku for cost — it's the only background service that runs every 30 min on every box.
 
 ---
 
@@ -85,7 +85,7 @@ These agents are dispatched when issues are found and need resolution.
 All four run in **parallel** when `/ops:yolo` is invoked. Each uses **Opus 4.6** for maximum analytical depth.
 
 > [!IMPORTANT]
-> **v1.0.0 bump:** all four C-suite agents now run on `claude-opus-4-6` (up from `claude-opus-4-5` in v0.7.x). Expect sharper reasoning and slightly higher per-run token cost.
+> **v1.1.0 bump:** all four C-suite agents now run on `claude-opus-4-6` (up from `claude-opus-4-5` in v0.7.x). Expect sharper reasoning and slightly higher per-run token cost.
 
 ### C-Suite Spawn Flow
 
