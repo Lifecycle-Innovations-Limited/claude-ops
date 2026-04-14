@@ -693,9 +693,23 @@ install_daemon_launchd() {
   local daemon_plist_dst="$agents_dir/com.claude-ops.daemon.plist"
   local keepalive_plist_dst="$agents_dir/com.claude-ops.wacli-keepalive.plist"
 
+  local bash_path
+  bash_path="$(command -v bash)"
+  if [[ -z "$bash_path" ]]; then
+    echo "install_daemon_launchd: bash not found on PATH" >&2
+    return 1
+  fi
+  local plugin_root="$SCRIPT_DIR"
+  if [[ -z "$plugin_root" ]] || [[ ! -d "$plugin_root/scripts" ]]; then
+    echo "install_daemon_launchd: invalid plugin root: $plugin_root" >&2
+    return 1
+  fi
+
   # Substitute placeholders while copying.
   if [[ -f "$daemon_plist_src" ]]; then
     sed \
+      -e "s|__BASH_PATH__|$bash_path|g" \
+      -e "s|__PLUGIN_ROOT__|$plugin_root|g" \
       -e "s|__DAEMON_SCRIPT_PATH__|$OPS_DAEMON_SCRIPT|g" \
       -e "s|__LOG_DIR__|$LOG_DIR|g" \
       -e "s|__HOME__|$HOME|g" \
@@ -707,6 +721,8 @@ install_daemon_launchd() {
 
   if [[ -f "$keepalive_plist_src" ]]; then
     sed \
+      -e "s|__BASH_PATH__|$bash_path|g" \
+      -e "s|__PLUGIN_ROOT__|$plugin_root|g" \
       -e "s|__KEEPALIVE_SCRIPT_PATH__|$OPS_KEEPALIVE_SCRIPT|g" \
       -e "s|__LOG_DIR__|$LOG_DIR|g" \
       -e "s|__HOME__|$HOME|g" \
