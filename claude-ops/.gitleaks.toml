@@ -155,6 +155,18 @@ allowlist.paths = [
   '''CHANGELOG\.md$''',
 ]
 
+# Override default curl-auth-user rule to allowlist docs
+[[rules]]
+id = "curl-auth-user"
+description = "Curl with auth user (override default to allowlist docs)"
+regex = '''curl.*-u\s+[^\s]+'''
+allowlist.paths = [
+  '''SKILL\.md$''',
+  '''README\.md$''',
+  '''docs/''',
+  '''CONFIGURATION\.md$''',
+]
+
 [allowlist]
 paths = [
   '''node_modules''',
