@@ -1,0 +1,29 @@
+# Keep the build context small and reproducible.
+
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# CI definitions (not needed inside the image)
+.github/workflows
+
+# Dependencies that get reinstalled inside the image
+node_modules
+**/node_modules
+
+# Test suites — not shipped in the runtime image
+tests/
+
+# User-specific plugin data (never bake this into a public image)
+.claude-plugin/data/
+
+# Per-user registry — mount this at runtime via docker-compose instead
+scripts/registry.json
+
+# Build / editor / OS cruft
+*.log
+.DS_Store
+Thumbs.db
+.vscode
+.idea
