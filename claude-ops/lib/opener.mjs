@@ -22,10 +22,10 @@
 //     string is `start`'s title placeholder; without it, a path/URL
 //     containing spaces gets eaten as the window title.
 
-import { spawn, spawnSync } from "node:child_process";
-import { promises as fsp } from "node:fs";
-import process from "node:process";
-import { osId, opener } from "./os-detect.mjs";
+import { spawn, spawnSync } from 'node:child_process';
+import { promises as fsp } from 'node:fs';
+import process from 'node:process';
+import { osId, opener } from './os-detect.mjs';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -39,12 +39,12 @@ import { osId, opener } from "./os-detect.mjs";
  */
 function hasBin(name) {
   try {
-    if (process.platform === "win32") {
-      return spawnSync("where.exe", [name], { stdio: "ignore" }).status === 0;
+    if (process.platform === 'win32') {
+      return spawnSync('where.exe', [name], { stdio: 'ignore' }).status === 0;
     }
     return (
-      spawnSync("/bin/sh", ["-c", `command -v ${name}`], {
-        stdio: "ignore",
+      spawnSync('/bin/sh', ['-c', `command -v ${name}`], {
+        stdio: 'ignore',
       }).status === 0
     );
   } catch {
@@ -61,10 +61,10 @@ function resolveOpener() {
   const detected = opener();
   if (detected) return detected;
 
-  if (hasBin("open")) return "open";
-  if (hasBin("wslview")) return "wslview";
-  if (hasBin("xdg-open")) return "xdg-open";
-  if (hasBin("cmd.exe")) return "cmd.exe /c start";
+  if (hasBin('open')) return 'open';
+  if (hasBin('wslview')) return 'wslview';
+  if (hasBin('xdg-open')) return 'xdg-open';
+  if (hasBin('cmd.exe')) return 'cmd.exe /c start';
   return null;
 }
 
@@ -101,13 +101,13 @@ function logOpen(cmd, target) {
  */
 export async function openTarget(target) {
   if (!target) {
-    process.stderr.write("opener: missing target\n");
-    return { ok: false, command: null, target: "" };
+    process.stderr.write('opener: missing target\n');
+    return { ok: false, command: null, target: '' };
   }
 
   const cmd = resolveOpener();
   if (!cmd) {
-    process.stderr.write("opener: no URL opener available on this host\n");
+    process.stderr.write('opener: no URL opener available on this host\n');
     return { ok: false, command: null, target };
   }
 
@@ -115,15 +115,12 @@ export async function openTarget(target) {
 
   try {
     // Windows: always use `cmd.exe /c start "" <target>` with the empty title.
-    const isWindowsStart =
-      cmd === "cmd.exe /c start" ||
-      osId() === "windows" ||
-      process.platform === "win32";
+    const isWindowsStart = cmd === 'cmd.exe /c start' || osId() === 'windows' || process.platform === 'win32';
 
-    if (isWindowsStart && cmd.includes("start")) {
-      const child = spawn("cmd.exe", ["/c", "start", "", target], {
+    if (isWindowsStart && cmd.includes('start')) {
+      const child = spawn('cmd.exe', ['/c', 'start', '', target], {
         detached: true,
-        stdio: "ignore",
+        stdio: 'ignore',
         windowsVerbatimArguments: false,
       });
       child.unref();
@@ -137,7 +134,7 @@ export async function openTarget(target) {
     const [program, extraArgs] = split;
     const child = spawn(program, [...extraArgs, target], {
       detached: true,
-      stdio: "ignore",
+      stdio: 'ignore',
     });
     child.unref();
     return { ok: true, command: cmd, target };
@@ -154,8 +151,8 @@ export async function openTarget(target) {
  */
 export async function openUrl(url) {
   if (!url) {
-    process.stderr.write("opener: missing url\n");
-    return { ok: false, command: null, target: "" };
+    process.stderr.write('opener: missing url\n');
+    return { ok: false, command: null, target: '' };
   }
   if (!/^https?:\/\/|^mailto:|^tel:/.test(url)) {
     process.stderr.write(`opener: refusing to open non-URL scheme: ${url}\n`);
@@ -171,8 +168,8 @@ export async function openUrl(url) {
  */
 export async function openDir(pathStr) {
   if (!pathStr) {
-    process.stderr.write("opener: missing directory path\n");
-    return { ok: false, command: null, target: "" };
+    process.stderr.write('opener: missing directory path\n');
+    return { ok: false, command: null, target: '' };
   }
   try {
     const st = await fsp.stat(pathStr);
@@ -191,25 +188,24 @@ export async function openDir(pathStr) {
 // CLI entry
 // ---------------------------------------------------------------------------
 
-const invokedDirectly =
-  process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const invokedDirectly = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 
 if (invokedDirectly) {
   const [, , sub, ...rest] = process.argv;
-  const target = rest[0] || "";
+  const target = rest[0] || '';
   let result;
   switch (sub) {
-    case "open":
+    case 'open':
       result = await openTarget(target);
       break;
-    case "url":
+    case 'url':
       result = await openUrl(target);
       break;
-    case "dir":
+    case 'dir':
       result = await openDir(target);
       break;
     default:
-      process.stderr.write("usage: opener.mjs {open|url|dir} <target>\n");
+      process.stderr.write('usage: opener.mjs {open|url|dir} <target>\n');
       process.exit(2);
   }
   process.exit(result.ok ? 0 : 1);
