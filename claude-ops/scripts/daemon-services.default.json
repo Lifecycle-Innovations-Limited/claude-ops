@@ -1,5 +1,11 @@
 {
   "services": {
+    "briefing-pre-warm": {
+      "enabled": true,
+      "command": "__SCRIPTS_DIR__/../bin/ops-gather",
+      "cron": "*/2 * * * *",
+      "_note": "Pre-warms /ops:go briefing cache every 2 minutes. Runs immediately after daemon install so /ops:go is instant by the time setup finishes."
+    },
     "wacli-sync": {
       "enabled": true,
       "command": "__SCRIPTS_DIR__/wacli-keepalive.sh",
