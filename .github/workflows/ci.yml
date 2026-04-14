@@ -12,7 +12,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -55,7 +55,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install test dependencies
         run: |
           sudo apt-get install -y shellcheck 2>/dev/null || true
