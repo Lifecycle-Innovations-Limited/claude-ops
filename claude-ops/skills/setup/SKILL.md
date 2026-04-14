@@ -8,6 +8,7 @@ allowed-tools:
   - Write
   - Edit
   - AskUserQuestion
+  - Agent
 effort: high
 maxTurns: 80
 ---
@@ -423,7 +424,7 @@ Only go into the credential auto-scan flow below when the user picks "manually" 
 
 **BEFORE asking the user for ANY credential**, run this scan sequence. This applies to ALL steps — channels, ecommerce, marketing, voice, and MCPs. The user should never be asked to find a key that's already on their system.
 
-**CRITICAL — exhaust ALL sources before reporting.** Run every scan source (1-8 below) in a single batch, THEN analyze the combined results. Do NOT report "no credentials found" after checking only env vars and Dashlane — Chrome history, .env files, Doppler, and keychain may have the answer. If API tokens are missing but the store/service identity was found (e.g. store URL in Chrome history, login entry in Dashlane), report what you found and skip to the token step with the identity pre-filled. The user saying "find it" or "check all available sources" means you did not search thoroughly enough — never ask the user to look for something you can find programmatically.
+**CRITICAL — exhaust ALL sources before reporting.** Run every scan source (1-10 below) in a single batch, THEN analyze the combined results. Do NOT report "no credentials found" after checking only env vars and Dashlane — Chrome history, .env files, Doppler, and keychain may have the answer. If API tokens are missing but the store/service identity was found (e.g. store URL in Chrome history, login entry in Dashlane), report what you found and skip to the token step with the identity pre-filled. The user saying "find it" or "check all available sources" means you did not search thoroughly enough — never ask the user to look for something you can find programmatically.
 
 For each variable name (e.g. `TELEGRAM_BOT_TOKEN`, `SHOPIFY_ACCESS_TOKEN`, `KLAVIYO_API_KEY`):
 
@@ -513,10 +514,9 @@ Rules for the prompt:
     3. macOS Keychain (security find-generic-password with various service name patterns)
     4. Dashlane CLI (dcli password <service> + related keywords)
     5. Chrome browser — navigate to <service_admin_url> via Kapture/Playwright MCP, log in if needed, and extract the credential from the settings page
-    6. ~/.claude.json MCP server env vars
-    7. All shell profile files (~/.zshrc, ~/.bashrc, ~/.zprofile, ~/.envrc, ~/.config/fish/*)
-    8. 1Password CLI (op item list --tags <service>) if available
-    9. AWS Secrets Manager / SSM Parameter Store if aws cli authenticated
+    6. All shell profile files (~/.zshrc, ~/.bashrc, ~/.zprofile, ~/.envrc, ~/.config/fish/*)
+    7. 1Password CLI (op item list --tags <service>) if available
+    8. AWS Secrets Manager / SSM Parameter Store if aws cli authenticated
 
     Return the credential value if found, or a detailed report of everywhere you checked and what you found (partial matches, expired tokens, wrong-format values).
     ```
@@ -549,7 +549,13 @@ Set up Telegram personal account access?
 
 If the user skips, record `channels.telegram = "skipped"` in `$PREFS_PATH` and move on. Do NOT silently mark Telegram as unconfigured — the explicit skip prevents the status header from showing `○ telegram (no token)` as an action item on subsequent runs.
 
-**Rate-limit guard**: Before starting, check `$PREFS_PATH` for `channels.telegram` being an object with `.status == "rate_limited"` — use a type guard: `if (channels.telegram | type) == "object" and .channels.telegram.status == "rate_limited"` (jq: `if (.channels.telegram | type) == "object" then .channels.telegram.status else "skipped" end`). If `retry_after` is in the future, tell the user: `"Telegram rate-limited until [time]. Skipping — re-run /ops:setup telegram after [time]."` and move to the next channel. Do NOT attempt `send_password` — it will fail immediately and may extend the cooldown.
+**Rate-limit guard**: Before starting, check `$PREFS_PATH` for `channels.telegram` being an object with `.status == "rate_limited"` — use a type guard: `if (channels.telegram | type) == "object" and .channels.telegram.status == "rate_limited"` (jq: `if (.channels.telegram | type) == "object" then .channels.telegram.status else "skipped" end`). If `retry_after` is in the future, present the user with `AskUserQuestion`:
+```
+Telegram is rate-limited until [time]. What would you like to do?
+  [Wait and retry after cooldown — re-run /ops:setup telegram after [time]]
+  [Skip Telegram for now]
+```
+Do NOT attempt `send_password` during a rate-limit window — it will fail immediately and may extend the cooldown. If the user selects Skip, record the skip in `$PREFS_PATH` and move to the next channel.
 
 **Bots cannot read user DMs**, so `/ops-inbox telegram` requires a personal-account MCP. The plugin ships `bin/ops-telegram-autolink.mjs` which:
 
@@ -1465,7 +1471,7 @@ If `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_ADMIN_TOKEN`, or `SHOPIFY_ADMIN_API_ACCESS_T
    ```bash
    for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
      doppler secrets --project "$proj" --config prd --json 2>/dev/null | \
-       jq -r 'to_entries[] | select(.key | test("SHOPIFY.*TOKEN|SHOPIFY.*ACCESS"; "i")) | "\(.key)=\(.value.computed | .[0:12])... (doppler:\($ENV.proj)/prd)"'
+       jq -r --arg proj "$proj" 'to_entries[] | select(.key | test("SHOPIFY.*TOKEN|SHOPIFY.*ACCESS"; "i")) | "\(.key)=\(.value.computed | .[0:12])... (doppler:\($proj)/prd)"'
    done
    ```
 2. **Try Shopify CLI** if installed (`command -v shopify`):
@@ -2198,11 +2204,11 @@ Collect these via `AskUserQuestion` — one question each. **Never auto-fill fro
 
 5. **YOLO mode** → select `[Yes — auto-approve low-risk actions]`, `[No — always confirm]`.
 
-6. **Default channels** (multiSelect over configured channels only — never show channels that weren't configured in Step 3). **"All configured" should be the first option and pre-selected by default** — most users want all their channels active:
+6. **Default channels** (single-select — these two options are mutually exclusive). **"All configured" should be the first option and pre-selected by default** — most users want all their channels active:
    ```
    Which channels should ops skills use by default?
-     [x] All configured channels
-     [ ] Pick specific channels...
+     [All configured channels]
+     [Pick specific channels...]
    ```
    If the user picks "specific channels", show a follow-up multiSelect with individual channel checkboxes. If they accept "All configured", set `default_channels` to the full list of configured channel names.
 
