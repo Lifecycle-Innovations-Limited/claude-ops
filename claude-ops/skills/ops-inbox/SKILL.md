@@ -29,6 +29,7 @@ allowed-tools:
   - mcp__claude_ai_Notion__notion-get-comments
   - mcp__claude_ai_Notion__notion-create-comment
   - mcp__claude_ai_Notion__notion-update-page
+  - mcp__claude_ai_Notion__notion-create-pages
 effort: high
 maxTurns: 60
 ---
@@ -467,10 +468,12 @@ Notion serves as a knowledge base and task management channel. Unlike messaging 
 **Phase 1 — Discover and scan:**
 
 1. Search for recent activity using `mcp__claude_ai_Notion__notion-search`:
-   - `query: "@me"` or `query: "comment"` with `query_type: "internal"` — find pages with recent mentions/comments
-   - Filter by `created_date_range` to last 7 days for relevance
+   - Use broad queries like `query: ""` (empty string returns recent pages) or topic-specific terms
+   - Use `filter: {"property": "object", "value": "page"}` to limit to pages (not databases)
+   - Sort by `last_edited_time` descending to surface recent activity
+   - Note: Notion search is full-text over titles/content — it does NOT support mention-based queries or date range filters
 2. For each result, fetch full content: `mcp__claude_ai_Notion__notion-fetch` with the page URL/ID
-3. Get comments on active pages: `mcp__claude_ai_Notion__notion-get-comments` with the page ID
+3. Get comments on active pages: `mcp__claude_ai_Notion__notion-get-comments` with the page ID — scan comment authors and timestamps to determine which need replies
 
 **Phase 2 — Classify:**
 
@@ -518,6 +521,15 @@ Use `AskUserQuestion` for each NEEDS REPLY item.
 **When updating tasks:**
 - Use `mcp__claude_ai_Notion__notion-update-page` to change status, add notes
 - Only update properties the user explicitly approves
+
+**API fallback (when MCP is down):**
+If Notion MCP tools fail or are unavailable but `NOTION_API_KEY` is set, fall back to direct API:
+```bash
+curl -s -H "Authorization: Bearer $NOTION_API_KEY" -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -X POST https://api.notion.com/v1/search \
+  -d '{"sort":{"direction":"descending","timestamp":"last_edited_time"},"page_size":10}'
+```
 
 If `NOTION_MCP_ENABLED` is not set or Notion MCP tools are unavailable, report: "Notion not configured — set NOTION_MCP_ENABLED=true and add Notion integration via claude.ai or self-hosted MCP".
 
