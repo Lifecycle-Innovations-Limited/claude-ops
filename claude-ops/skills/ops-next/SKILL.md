@@ -9,6 +9,8 @@ allowed-tools:
   - Glob
   - Skill
   - Agent
+  - TeamCreate
+  - SendMessage
   - AskUserQuestion
   - TaskCreate
   - TaskUpdate
@@ -38,6 +40,24 @@ Before advising, load:
 | `gh pr list --state open --json number,title,statusCheckRollup,reviewDecision` | Open PRs with CI/review status | JSON array |
 
 ---
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when gathering priority data in parallel. This enables:
+- Agents share context and can coordinate mid-flight
+- You can steer priorities in real-time
+- Agents report progress as they complete
+
+**Team setup** (only when flag is enabled):
+```
+TeamCreate("next-team")
+Agent(team_name="next-team", name="fires-checker", prompt="Check infra health and CI for production fires")
+Agent(team_name="next-team", name="comms-checker", prompt="Check unread messages across all channels")
+Agent(team_name="next-team", name="prs-checker", prompt="Find PRs ready to merge — CI green, reviews approved")
+Agent(team_name="next-team", name="sprint-checker", prompt="Check Linear sprint for highest-priority in-progress issues")
+```
+
+If the flag is NOT set, use standard fire-and-forget subagents.
 
 ## Pre-gathered data
 

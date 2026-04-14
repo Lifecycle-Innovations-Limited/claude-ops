@@ -9,6 +9,8 @@ allowed-tools:
   - Glob
   - Skill
   - Agent
+  - TeamCreate
+  - SendMessage
   - AskUserQuestion
   - TaskCreate
   - TaskUpdate
@@ -64,6 +66,23 @@ Before executing, load available context:
 | `gh run watch <run-id> --repo <repo>` | Stream CI run | Live output (use with Monitor) |
 
 ---
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when checking deploy platforms in parallel. This enables:
+- Agents share context and can coordinate mid-flight
+- You can steer priorities in real-time
+- Agents report progress as they complete
+
+**Team setup** (only when flag is enabled):
+```
+TeamCreate("deploy-team")
+Agent(team_name="deploy-team", name="ecs-checker", prompt="List all ECS clusters and describe service health, running/desired counts")
+Agent(team_name="deploy-team", name="vercel-checker", prompt="List Vercel projects and recent deployments with status")
+Agent(team_name="deploy-team", name="ci-checker", prompt="Check GitHub Actions runs across all registered repos for failures")
+```
+
+If the flag is NOT set, use standard fire-and-forget subagents.
 
 ## Phase 1 — Gather deploy data in parallel
 
