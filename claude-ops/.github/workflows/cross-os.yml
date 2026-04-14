@@ -1,0 +1,122 @@
+name: Cross-OS
+
+# Exercise claude-ops cross-OS helpers (lib/os-detect.*, lib/credential-store.*)
+# across Linux, macOS, and Windows to catch portability regressions early.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main, dev]
+
+# Cancel in-flight runs on the same ref when a new push arrives.
+concurrency:
+  group: cross-os-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-probe:
+    name: lint-and-probe (${{ matrix.os }} / ${{ matrix.runtime }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        runtime: [bash, node]
+    # Route every `run:` step through bash. On windows-latest this resolves to
+    # Git Bash, which GitHub Actions provisions automatically.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 22 is used for both the node matrix leg and the `node --check`
+      # syntax validation performed in every leg. No cache: no package-lock.json
+      # at the repo root (telegram-server has its own, but that is out of scope).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # --- OS-native keyring setup -------------------------------------------
+
+      # Ubuntu: install libsecret CLI + gnome-keyring, then bring up a dbus
+      # session and unlock an empty keyring so credential-store can round-trip.
+      # gnome-keyring on headless CI is known to be flaky; continue-on-error
+      # keeps the job green and downstream steps can detect its absence.
+      - name: Install keyring (Ubuntu)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-tools gnome-keyring dbus-x11
+          eval "$(dbus-launch --sh-syntax)"
+          echo -n '' | gnome-keyring-daemon --components=secrets --daemonize --unlock || true
+
+      # macOS: `security` is built in. Unlocking the login keychain with an
+      # empty password mirrors the default CI image state; tolerate failure.
+      - name: Unlock login keychain (macOS)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: security unlock-keychain -p "" login.keychain
+
+      # Windows: cmdkey ships with Windows itself, so there is nothing to
+      # install. Step left here as a documented no-op for future contributors.
+      - name: Keyring setup (Windows)
+        if: runner.os == 'Windows'
+        run: echo "cmdkey is built into Windows; no install required"
+
+      # --- Probes ------------------------------------------------------------
+
+      - name: Probe os-detect.sh
+        run: |
+          bash lib/os-detect.sh
+          echo "---"
+          bash lib/os-detect.sh | head -c 2048
+
+      - name: Probe os-detect.mjs
+        run: |
+          node lib/os-detect.mjs
+          echo "---"
+          node lib/os-detect.mjs | head -c 2048
+
+      # Smoke tests are authored in a parallel PR; guard so this workflow is
+      # green before tests/lib/smoke.sh lands.
+      - name: Smoke tests
+        run: |
+          if [ -f tests/lib/smoke.sh ]; then
+            bash tests/lib/smoke.sh
+          else
+            echo "tests/lib/smoke.sh not present yet; skipping"
+          fi
+
+      # --- Syntax validation -------------------------------------------------
+
+      - name: node --check credential-store.mjs
+        run: node --check lib/credential-store.mjs
+
+      - name: bash -n credential-store.sh
+        run: bash -n lib/credential-store.sh
+
+      # --- shellcheck (best-effort) -----------------------------------------
+
+      - name: Install shellcheck (Ubuntu)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: sudo apt-get install -y shellcheck
+
+      - name: Install shellcheck (macOS)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: brew install shellcheck
+
+      # Windows has no first-class shellcheck path we want to maintain; skip.
+      - name: Run shellcheck
+        if: runner.os != 'Windows'
+        continue-on-error: true
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck lib/*.sh
+          else
+            echo "shellcheck not available; skipping"
+          fi
