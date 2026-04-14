@@ -9,6 +9,8 @@ allowed-tools:
   - Edit
   - AskUserQuestion
   - Agent
+  - TeamCreate
+  - SendMessage
 effort: high
 maxTurns: 80
 ---
@@ -53,6 +55,27 @@ Every Bash tool call MUST include a short `description` parameter (5-10 words, e
   - **`${CLAUDE_PLUGIN_ROOT}/.mcp.json`** — only to add `${user_config.*}` placeholders, never hardcoded tokens.
   - The user's shell profile (`~/.zshrc` etc.) — append-only, never rewrite.
 - At the top of every wizard step, make sure `$PREFS_PATH`'s parent directory exists: `mkdir -p "$(dirname "$PREFS_PATH")"`. Claude Code creates `~/.claude/plugins/data/ops-ops-marketplace/` on plugin install but don't assume.
+
+---
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when multiple "Deep hunt" credential agents are needed simultaneously. This enables:
+- Credential scouts run in parallel across Doppler, keychains, browser profiles, and password managers
+- Agents share findings (e.g., Doppler agent finds a partial config → keychain agent knows to skip that service)
+- You can steer mid-hunt: "found the Telegram token, stop hunting for that one"
+
+**Team setup** (only when flag is enabled, multiple deep hunts triggered):
+```
+TeamCreate("setup-hunters")
+Agent(team_name="setup-hunters", name="hunt-telegram", model="haiku", ...)
+Agent(team_name="setup-hunters", name="hunt-sentry", model="haiku", ...)
+Agent(team_name="setup-hunters", name="hunt-shopify", model="haiku", ...)
+```
+
+Each agent reports back its findings. Merge results and present to the user for confirmation.
+
+If the flag is NOT set, use independent fire-and-forget subagents with `run_in_background: true`.
 
 ---
 

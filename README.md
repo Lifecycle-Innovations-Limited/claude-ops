@@ -89,23 +89,23 @@ All 22 skills, grouped by category:
 
 ```mermaid
 flowchart TD
-    U[User] --> O[/ops]
-    O --> D[Dashboard]
-    D --> Daily[Daily Ops]
-    D --> Eng[Project & Eng]
-    D --> Biz[Business]
-    D --> Auto[Automation]
-    Daily --> go[/ops:go]
-    Daily --> inbox[/ops:inbox]
-    Daily --> merge[/ops:merge]
-    Eng --> projects[/ops:projects]
-    Eng --> linear[/ops:linear]
-    Eng --> fires[/ops:fires]
-    Biz --> revenue[/ops:revenue]
-    Biz --> ecom[/ops:ecom]
-    Biz --> marketing[/ops:marketing]
-    Auto --> yolo[/ops:yolo]
-    Auto --> orchestrate[/ops:orchestrate]
+    U["User"] --> O["/ops"]
+    O --> D["Dashboard"]
+    D --> Daily["Daily Ops"]
+    D --> Eng["Project & Eng"]
+    D --> Biz["Business"]
+    D --> Auto["Automation"]
+    Daily --> go["/ops:go"]
+    Daily --> inbox["/ops:inbox"]
+    Daily --> merge["/ops:merge"]
+    Eng --> projects["/ops:projects"]
+    Eng --> linear["/ops:linear"]
+    Eng --> fires["/ops:fires"]
+    Biz --> revenue["/ops:revenue"]
+    Biz --> ecom["/ops:ecom"]
+    Biz --> marketing["/ops:marketing"]
+    Auto --> yolo["/ops:yolo"]
+    Auto --> orchestrate["/ops:orchestrate"]
 ```
 
 ---
@@ -198,6 +198,46 @@ claude-ops/                        ← marketplace root (this repo, this README)
     ├── tests/                     # bash validation · test-no-secrets.sh
     └── .mcp.json                  # MCP server declarations
 ```
+
+---
+
+## Agent Teams
+
+Every ops skill that spawns agents supports [Claude Code Agent Teams](https://docs.anthropic.com/en/docs/claude-code) — a coordination layer where agents share context, report progress, and accept mid-flight steering.
+
+**Enable:** Set `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in your environment.
+
+**How it works:** When the flag is set, skills create a named team and dispatch agents into it. Agents within a team can share findings (e.g., an inbox agent discovers a Slack message referencing an email thread, so the email agent prioritizes it) and you can steer priorities via `SendMessage`.
+
+```
+TeamCreate("fire-fixers")
+Agent(team_name="fire-fixers", name="fix-ecs", ...)
+Agent(team_name="fire-fixers", name="fix-ci", ...)
+SendMessage(to="fix-ecs", content="This is P0, prioritize over CI")
+```
+
+**Without the flag:** Skills fall back to standard fire-and-forget subagents — still parallel, but no coordination or steering.
+
+| Skill | Team name | Agents |
+|-------|-----------|--------|
+| `/ops:go` | `go-team` | infra-scanner, inbox-scanner, pr-scanner, sprint-scanner |
+| `/ops:inbox` | `inbox-channels` | whatsapp-scanner, email-scanner, slack-scanner, telegram-scanner |
+| `/ops:merge` | `merge-fixers` | fixer-[repo] per failing PR |
+| `/ops:fires` | `fire-fixers` | fix-[service] per active incident |
+| `/ops:triage` | `triage-fixers` | fix-[issue-id] per active issue |
+| `/ops:yolo` | `yolo-csuite` | ceo, cto, cfo, coo |
+| `/ops:orchestrate` | `orchestrate-team` | per-project agents (hybrid auto-select) |
+| `/ops:monitor` | `monitor-probes` | datadog-probe, newrelic-probe, otel-probe |
+| `/ops:doctor` | `doctor-fixers` | fix-manifest, fix-permissions, fix-registry |
+| `/ops:marketing` | `marketing-team` | email-metrics, ads-metrics, analytics-metrics, seo-metrics |
+| `/ops:ecom` | `ecom-team` | orders-scanner, inventory-scanner, fulfillment-scanner |
+| `/ops:deploy` | `deploy-team` | ecs-checker, vercel-checker, ci-checker |
+| `/ops:projects` | `projects-team` | project-[alias] per registered project |
+| `/ops:dash` | `dash-team` | infra-loader, comms-loader, projects-loader, business-loader |
+| `/ops:next` | `next-team` | fires-checker, comms-checker, prs-checker, sprint-checker |
+| `setup` | `setup-hunters` | hunt-[service] per credential deep hunt |
+
+**Compliance enforced by CI:** `tests/test-agent-teams.sh` audits every skill for Agent Teams support — any skill with `Agent` in its allowed-tools must have `TeamCreate`/`SendMessage`, a documentation section, the feature flag check, and a fallback path.
 
 ---
 

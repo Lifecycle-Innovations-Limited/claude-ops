@@ -9,6 +9,8 @@ allowed-tools:
   - Grep
   - Glob
   - Agent
+  - TeamCreate
+  - SendMessage
   - AskUserQuestion
   - WebFetch
   - WebSearch
@@ -53,6 +55,24 @@ Before executing, load available context:
 | `https://api.shipbob.com/1.0/shipment?Status=Processing&PageSize=20` | GET | Pending shipments |
 
 **Auth header**: `Authorization: Bearer ${SHIPBOB_TOKEN}`
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when probing store data in parallel. This enables:
+- Agents share context and can coordinate mid-flight
+- You can steer priorities in real-time
+- Agents report progress as they complete
+
+**Team setup** (only when flag is enabled):
+```
+TeamCreate("ecom-team")
+Agent(team_name="ecom-team", name="orders-scanner", prompt="Fetch recent orders, compute revenue for today/7d/30d")
+Agent(team_name="ecom-team", name="inventory-scanner", prompt="Fetch all products, flag low stock and out-of-stock items")
+Agent(team_name="ecom-team", name="fulfillment-scanner", prompt="Fetch unfulfilled orders and ShipBob shipment status")
+Agent(team_name="ecom-team", name="analytics-scanner", prompt="Compute revenue analytics, AOV, and top products for 30d")
+```
+
+If the flag is NOT set, use standard fire-and-forget subagents.
 
 ## Phase 1 — Resolve credentials
 

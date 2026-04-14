@@ -9,6 +9,8 @@ allowed-tools:
   - Glob
   - Skill
   - Agent
+  - TeamCreate
+  - SendMessage
   - AskUserQuestion
   - TaskCreate
   - TaskUpdate
@@ -59,6 +61,24 @@ Before executing, load available context:
 | `gog gmail search -j --results-only --no-input --max 30 "in:inbox"` | Search inbox | JSON array of threads |
 
 ---
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when gathering briefing data in parallel. This enables:
+- Agents share context and can coordinate mid-flight
+- You can steer priorities in real-time
+- Agents report progress as they complete
+
+**Team setup** (only when flag is enabled):
+```
+TeamCreate("go-team")
+Agent(team_name="go-team", name="infra-scanner", prompt="Check ECS health, Vercel status, and CI failures across all clusters")
+Agent(team_name="go-team", name="inbox-scanner", prompt="Scan unread messages across WhatsApp, Email, Slack, Telegram")
+Agent(team_name="go-team", name="pr-scanner", prompt="Find open PRs needing action — reviews, CI fixes, merge-ready")
+Agent(team_name="go-team", name="sprint-scanner", prompt="Check Linear sprint progress and GSD phase state across projects")
+```
+
+If the flag is NOT set, use standard fire-and-forget subagents.
 
 ## Pre-gathered data
 

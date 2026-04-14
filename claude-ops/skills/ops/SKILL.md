@@ -9,6 +9,8 @@ allowed-tools:
   - Glob
   - Skill
   - Agent
+  - TeamCreate
+  - SendMessage
 effort: medium
 maxTurns: 20
 ---
@@ -52,6 +54,24 @@ Route `$ARGUMENTS` to the correct ops skill:
 | orchestrate, subagents, agents, dispatch, run | `/ops:ops-orchestrate $ARGUMENTS` |
 
 If `$ARGUMENTS` is empty, launch the interactive dashboard: invoke `/ops:ops-dash` directly.
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when building dashboard sections in parallel. This enables:
+- Agents share context and can coordinate mid-flight
+- You can steer priorities in real-time
+- Agents report progress as they complete
+
+**Team setup** (only when flag is enabled):
+```
+TeamCreate("ops-team")
+Agent(team_name="ops-team", name="daily-ops", prompt="Gather fires, inbox, and unread comms status")
+Agent(team_name="ops-team", name="engineering", prompt="Gather PRs, CI status, and deploy state")
+Agent(team_name="ops-team", name="business", prompt="Gather revenue, Linear sprint, and project progress")
+Agent(team_name="ops-team", name="automation", prompt="Check cron jobs, daemon health, and scheduled tasks")
+```
+
+If the flag is NOT set, use standard fire-and-forget subagents.
 
 ## CLI/API Reference
 
