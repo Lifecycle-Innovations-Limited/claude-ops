@@ -338,6 +338,7 @@ PRs welcome. See [`docs/`](docs/) for reference documentation:
 - [`docs/daemon-guide.md`](docs/daemon-guide.md) — background brain: services, cron, health
 - [`docs/memories-system.md`](docs/memories-system.md) — long-term memory store + extraction
 - [`docs/os-compatibility.md`](docs/os-compatibility.md) — macOS/Linux/WSL/Windows support matrix, per-channel install paths, credential cascade, daemon registration
+- [`docs/marketplace-submissions.md`](docs/marketplace-submissions.md) — submission status across platform.claude.com, buildwithclaude.com, aitmpl.com, claudemarketplaces.com
 
 Cross-platform support is tested in CI via [`.github/workflows/cross-os.yml`](.github/workflows/cross-os.yml) (ubuntu-latest, macos-latest, windows-latest).
 
