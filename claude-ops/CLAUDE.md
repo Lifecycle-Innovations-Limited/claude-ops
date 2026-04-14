@@ -37,7 +37,7 @@ The `AskUserQuestion` tool enforces a hard schema limit of `<=4` items in the `o
 
 When a skill says "tell the user to run X in a separate terminal" or "Run `command` in your terminal":
 - **Run it via the Bash tool instead** (backgrounded with `run_in_background: true` if it is long-running or interactive).
-- **OAuth flows** (`gog auth login`, `doppler login`, `op signin`): run via Bash with `run_in_background: true` — the browser will open automatically.
+- **OAuth flows** (`gog auth add <email> --services gmail,calendar,...`, `doppler login`, `op signin`): run via Bash with `run_in_background: true` — the browser will open automatically.
 - **Password manager unlock** (`bw unlock`, `dcli configure`): run via Bash tool directly.
 - **Exception — QR-based auth** (`wacli auth`): this genuinely requires the user's phone camera pointed at the terminal. This is the ONLY case where you should tell the user to act in a separate terminal.
 

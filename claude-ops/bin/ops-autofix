@@ -193,7 +193,7 @@ fix_channel_health() {
     if echo "$GOG_AUTH" | grep -qi "authenticated\|logged in\|valid"; then
       GOG_TEST=$(gog gmail labels list --json 2>/dev/null | head -5)
       if [ -z "$GOG_TEST" ] || echo "$GOG_TEST" | grep -qi "error\|failed"; then
-        log_fail "gog-health: authenticated but Gmail API failing (token may need refresh — run gog auth login)"
+        log_fail "gog-health: authenticated but Gmail API failing (token may need refresh — run gog auth add <email> --services gmail,calendar,drive,contacts,docs,sheets)"
       else
         log_skip "gog-health: email working"
       fi

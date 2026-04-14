@@ -274,8 +274,8 @@ Whenever a channel has a **browser-based OAuth flow** available, offer that firs
 
 | Channel        | OAuth path                                                 | Manual fallback                        |
 | -------------- | ---------------------------------------------------------- | -------------------------------------- |
-| Email (gog)    | `gog auth login` (browser)                                 | n/a — gog is OAuth-only                |
-| Calendar (gog) | same `gog auth login` with `--scopes=calendar`             | n/a                                    |
+| Email (gog)    | `gog auth add <email> --services gmail,calendar,drive,contacts,docs,sheets` (browser) | n/a — gog is OAuth-only |
+| Calendar (gog) | same `gog auth add` with calendar in `--services`          | n/a                                    |
 | Slack          | `claude mcp add slack` (handles OAuth through Claude Code) | bot token via auto-scan + manual paste |
 | Linear         | `claude mcp add linear`                                    | API key                                |
 | Sentry         | `claude mcp add sentry`                                    | DSN / auth token                       |
@@ -756,12 +756,12 @@ Email has two possible backends, tried in this order:
 
 1. Check `gog` on PATH with `command -v gog`.
 2. **If installed**, run `gog auth status 2>&1 || true` and show the output.
-   - If auth is red (not authenticated / token expired / exit != 0), run `gog auth login` via Bash tool with `run_in_background: true` (it opens a browser for the OAuth flow). Tell the user: "Opening browser for Gmail OAuth — complete the sign-in there, then type 'done'." Use `AskUserQuestion`: `[Done — authenticated]`, `[Skip email]`.
+   - If auth is red (not authenticated / token expired / exit != 0), run `gog auth add "$USER_EMAIL" --services gmail,calendar,drive,contacts,docs,sheets` via Bash tool with `run_in_background: true` (it opens a browser for the OAuth flow). Tell the user: "Opening browser for Gmail OAuth — complete the sign-in there, then type 'done'." Use `AskUserQuestion`: `[Done — authenticated]`, `[Skip email]`.
    - If auth is green, probe with:
      ```bash
      gog gmail labels list --json 2>&1 | head -5
      ```
-     If this returns JSON containing a `labels` array, gog is authenticated and the Gmail API is working. Report ✓. If the output is an error or empty, treat as broken and instruct the user to re-run `gog auth login`.
+     If this returns JSON containing a `labels` array, gog is authenticated and the Gmail API is working. Report ✓. If the output is an error or empty, treat as broken and instruct the user to re-run `gog auth add <email> --services gmail,calendar,drive,contacts,docs,sheets`.
    - Record `channels.email = "gog"` in `$PREFS_PATH` and stop here.
 
 #### Fallback: Claude Gmail MCP connector
