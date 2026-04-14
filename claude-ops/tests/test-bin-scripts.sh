@@ -2,6 +2,9 @@
 # test-bin-scripts.sh — Validates bin/ scripts
 set -euo pipefail
 
+IS_MACOS=false
+[[ "$(uname)" == "Darwin" ]] && IS_MACOS=true
+
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_DIR="$PLUGIN_ROOT/bin"
 
@@ -57,10 +60,35 @@ for script in "${script_files[@]}"; do
     echo "  SKIP: shellcheck not installed"
   fi
 
+  # 4. macOS-only tool checks
+  if $IS_MACOS; then
+    # Verify script doesn't call macOS-only tools without guards
+    if grep -qE "(security find-generic-password|pbcopy|osascript|defaults read)" "$script" 2>/dev/null; then
+      ok "macOS-only tool usage present (macOS environment)"
+    fi
+  else
+    # On Linux: check that macOS-only tool calls are guarded
+    unguarded=false
+    while IFS= read -r line; do
+      # Skip lines that are comments
+      [[ "$line" =~ ^[[:space:]]*# ]] && continue
+      # Check for macOS-only tools outside of IS_MACOS guards
+      if echo "$line" | grep -qE "(security find-generic-password|pbcopy|osascript|defaults read)"; then
+        unguarded=true
+        break
+      fi
+    done < "$script"
+    if $unguarded; then
+      err "unguarded macOS-only tool call in $name (wrap with IS_MACOS guard)"
+    else
+      ok "no unguarded macOS-only tool calls (Linux safe)"
+    fi
+  fi
+
   echo ""
 done
 
-# 4. Cross-check: ops-setup-install handles all tools listed in ops-setup-preflight
+# 5. Cross-check: ops-setup-install handles all tools listed in ops-setup-preflight
 echo "Cross-check: ops-setup-install vs ops-setup-preflight"
 preflight="$BIN_DIR/ops-setup-preflight"
 install_script="$BIN_DIR/ops-setup-install"
