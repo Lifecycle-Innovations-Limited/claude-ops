@@ -2,6 +2,9 @@
 # test-skills-lint.sh — Validates all SKILL.md files in skills/
 set -euo pipefail
 
+IS_MACOS=false
+[[ "$(uname)" == "Darwin" ]] && IS_MACOS=true
+
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SKILLS_DIR="$PLUGIN_ROOT/skills"
 
