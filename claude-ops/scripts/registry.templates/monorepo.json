@@ -4,11 +4,7 @@
   "projects": [
     {
       "alias": "company-monorepo",
-      "paths": [
-        "~/Projects/company/apps/web",
-        "~/Projects/company/apps/mobile",
-        "~/Projects/company/services/api"
-      ],
+      "paths": ["~/Projects/company/apps/web", "~/Projects/company/apps/mobile", "~/Projects/company/services/api"],
       "repos": ["your-org/company"],
       "org": "your-org",
       "type": "monorepo",
