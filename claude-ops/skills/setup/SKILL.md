@@ -2292,9 +2292,8 @@ If the file already exists, **merge** — don't overwrite. Read with `jq`, apply
 ## Step 7 — Shell env (if selected)
 
 1. Check whether `CLAUDE_PLUGIN_ROOT` is already exported in the profile file (grep for `CLAUDE_PLUGIN_ROOT`).
-2. If missing, ask: "Append `export CLAUDE_PLUGIN_ROOT=...` to `~/.zshrc`?" → `[Yes]`, `[Skip — I'll do it manually]`.
-3. If Yes, append (don't overwrite). Use `>>`, not `>`.
-4. Tell the user to run `source ~/.zshrc` or open a new terminal for it to take effect.
+2. If missing, **append it automatically** — this is a required step, not optional. Use `>>` (append, never overwrite). Print: `"✓ Added export CLAUDE_PLUGIN_ROOT=... to ~/.zshrc"`. Do NOT ask the user for permission — Rule 2 (never delegate commands to the user) applies here.
+3. Tell the user: `"Run 'source ~/.zshrc' or open a new terminal for it to take effect."` — this will show as an approval prompt in Claude's next tool call, which the user accepts normally.
 
 ---
 
