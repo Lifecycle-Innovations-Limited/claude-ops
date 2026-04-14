@@ -258,7 +258,9 @@ Just [Claude Code](https://claude.ai/code) 1.0+. Everything else is installed au
 
 ## Contributing
 
-PRs welcome. See [`claude-ops/README.md`](./claude-ops/README.md) for detailed documentation on each skill, agent, and integration. Full guides, troubleshooting, and the threat model live on the [wiki](https://github.com/Lifecycle-Innovations-Limited/claude-ops/wiki).
+PRs welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide, branch rules, and PR workflow.
+
+**Branch strategy:** `main` is the only long-lived branch. All work goes through feature branches → PR to `main`. Branch protection is enforced at repo and org level — no direct pushes, no force pushes, no branch deletion.
 
 ```bash
 # Development mode — load plugin from local directory
@@ -267,6 +269,8 @@ claude --plugin-dir ./claude-ops/claude-ops
 # Reload after changes
 /reload-plugins
 ```
+
+See [`claude-ops/README.md`](./claude-ops/README.md) for detailed documentation on each skill, agent, and integration. Full guides, troubleshooting, and the threat model live on the [wiki](https://github.com/Lifecycle-Innovations-Limited/claude-ops/wiki).
 
 ---
 
