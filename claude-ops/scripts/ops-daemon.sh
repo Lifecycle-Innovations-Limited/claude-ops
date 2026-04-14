@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # ops-daemon.sh — Unified background process manager for claude-ops
 # Manages: wacli sync, memory extraction, health monitors
-# Runs via launchd as com.claude-ops.daemon
+# daemon registration: launchd on macOS, systemd on Linux, Task Scheduler on Windows
 set -euo pipefail
+
+# ── OS detection (sourced) ────────────────────────────────────────────────
+# Resolves to the claude-ops plugin root (parent of scripts/).
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck disable=SC1091
+[ -r "$SCRIPT_DIR/lib/os-detect.sh" ] && . "$SCRIPT_DIR/lib/os-detect.sh"
 
 DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 LOG_DIR="$DATA_DIR/logs"
@@ -15,11 +21,45 @@ DAEMON_START=$(date +%s)
 mkdir -p "$LOG_DIR"
 mkdir -p "$DATA_DIR/cache"
 
+# ── Portable shim helpers (GNU vs BSD) ───────────────────────────────────
+# _file_size: echoes byte size of a file. GNU `stat -c%s` vs BSD `stat -f%z`.
+_file_size() {
+  if stat --version >/dev/null 2>&1; then
+    stat -c%s "$1"  # GNU (Linux, Cygwin, busybox w/ coreutils)
+  else
+    stat -f%z "$1"  # BSD (macOS, *BSD)
+  fi
+}
+
+# _date_days_ago: echoes a date N days before now in the given format.
+#   $1 = days (positive integer)
+#   $2 = date format string (default: +%Y-%m-%d)
+_date_days_ago() {
+  local days="$1"
+  local fmt="${2:-+%Y-%m-%d}"
+  if date -d "1 day ago" >/dev/null 2>&1; then
+    date -d "$days days ago" "$fmt"         # GNU
+  else
+    date -v-"${days}"d "$fmt"                # BSD
+  fi
+}
+
+# _date_from_epoch: echoes ISO-8601 UTC for an epoch timestamp.
+#   $1 = epoch seconds
+_date_from_epoch() {
+  local epoch="$1"
+  if date --version >/dev/null 2>&1; then
+    date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ    # GNU
+  else
+    date -u -r "$epoch" +%Y-%m-%dT%H:%M:%SZ     # BSD
+  fi
+}
+
 # ── Logging ──────────────────────────────────────────────────────────────
 log() { printf '%s [ops-daemon] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$LOG"; }
 
 rotate_log() {
-  if [[ -f "$LOG" ]] && [[ $(stat -f%z "$LOG" 2>/dev/null || stat -c%s "$LOG" 2>/dev/null || echo 0) -gt $MAX_LOG_SIZE ]]; then
+  if [[ -f "$LOG" ]] && [[ $(_file_size "$LOG" 2>/dev/null || echo 0) -gt $MAX_LOG_SIZE ]]; then
     mv "$LOG" "$LOG.old"
     log "LOG: rotated (exceeded 2MB)"
   fi
@@ -222,8 +262,8 @@ write_daemon_health() {
       local next_run="${SERVICE_NEXT_RUN[$name]:-}"
       local last_run="${SERVICE_LAST_RUN[$name]:-}"
       local next_iso="" last_iso=""
-      [[ -n "$next_run" ]] && next_iso=$(date -u -r "$next_run" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$next_run" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
-      [[ -n "$last_run" ]] && last_iso=$(date -u -r "$last_run" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$last_run" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
+      [[ -n "$next_run" ]] && next_iso=$(_date_from_epoch "$next_run" 2>/dev/null || echo "")
+      [[ -n "$last_run" ]] && last_iso=$(_date_from_epoch "$last_run" 2>/dev/null || echo "")
       services_json+="\"$name\": {\"status\": \"$status\", \"next_run\": \"$next_iso\", \"last_run\": \"$last_iso\"}"
     else
       local pid_val
@@ -434,7 +474,7 @@ except: print('')
 
     if command -v wacli &>/dev/null; then
       local new_count
-      new_count=$(wacli messages list --after="${last_ts:-$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d 'yesterday' +%Y-%m-%d 2>/dev/null || echo '')}" --limit=5 --json 2>/dev/null | python3 -c "
+      new_count=$(wacli messages list --after="${last_ts:-$(_date_days_ago 1 +%Y-%m-%d 2>/dev/null || echo '')}" --limit=5 --json 2>/dev/null | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 msgs=d.get('data',{}).get('messages',[]) or []
@@ -602,6 +642,225 @@ PYEOF
   log "BRAIN: project health cache updated"
 }
 
+# ── Daemon registration (cross-OS) ────────────────────────────────────────
+# On macOS we load a launchd agent; on Linux a systemd --user unit + timer;
+# on Windows a Task Scheduler (schtasks) entry. Each path is best-effort and
+# returns a non-zero exit if the host service manager isn't reachable — the
+# caller (setup.sh / user) can decide how to surface the warning.
+
+# Resolve plugin-root-relative paths for daemon scripts (so the unit files
+# embed absolute paths that still work when invoked by another user context).
+OPS_DAEMON_SCRIPT="$SCRIPT_DIR/scripts/ops-daemon.sh"
+OPS_KEEPALIVE_SCRIPT="$SCRIPT_DIR/scripts/wacli-keepalive.sh"
+
+install_daemon_launchd() {
+  command -v launchctl >/dev/null 2>&1 || {
+    echo "install_daemon_launchd: launchctl not found on PATH" >&2
+    return 1
+  }
+  local agents_dir="$HOME/Library/LaunchAgents"
+  mkdir -p "$agents_dir"
+
+  local daemon_plist_src="$SCRIPT_DIR/scripts/com.claude-ops.daemon.plist"
+  local keepalive_plist_src="$SCRIPT_DIR/scripts/com.claude-ops.wacli-keepalive.plist"
+  local daemon_plist_dst="$agents_dir/com.claude-ops.daemon.plist"
+  local keepalive_plist_dst="$agents_dir/com.claude-ops.wacli-keepalive.plist"
+
+  # Substitute placeholders while copying.
+  if [[ -f "$daemon_plist_src" ]]; then
+    sed \
+      -e "s|__DAEMON_SCRIPT_PATH__|$OPS_DAEMON_SCRIPT|g" \
+      -e "s|__LOG_DIR__|$LOG_DIR|g" \
+      -e "s|__HOME__|$HOME|g" \
+      "$daemon_plist_src" > "$daemon_plist_dst"
+    launchctl unload -w "$daemon_plist_dst" 2>/dev/null || true
+    launchctl load -w "$daemon_plist_dst"
+    log "INSTALL(launchd): loaded $daemon_plist_dst"
+  fi
+
+  if [[ -f "$keepalive_plist_src" ]]; then
+    sed \
+      -e "s|__KEEPALIVE_SCRIPT_PATH__|$OPS_KEEPALIVE_SCRIPT|g" \
+      -e "s|__LOG_DIR__|$LOG_DIR|g" \
+      -e "s|__HOME__|$HOME|g" \
+      "$keepalive_plist_src" > "$keepalive_plist_dst"
+    launchctl unload -w "$keepalive_plist_dst" 2>/dev/null || true
+    launchctl load -w "$keepalive_plist_dst"
+    log "INSTALL(launchd): loaded $keepalive_plist_dst"
+  fi
+}
+
+uninstall_daemon_launchd() {
+  command -v launchctl >/dev/null 2>&1 || {
+    echo "uninstall_daemon_launchd: launchctl not found on PATH" >&2
+    return 1
+  }
+  local agents_dir="$HOME/Library/LaunchAgents"
+  local f
+  for f in com.claude-ops.daemon.plist com.claude-ops.wacli-keepalive.plist; do
+    if [[ -f "$agents_dir/$f" ]]; then
+      launchctl unload -w "$agents_dir/$f" 2>/dev/null || true
+      rm -f "$agents_dir/$f"
+      log "UNINSTALL(launchd): removed $agents_dir/$f"
+    fi
+  done
+}
+
+install_daemon_systemd() {
+  command -v systemctl >/dev/null 2>&1 || {
+    echo "install_daemon_systemd: systemctl not found on PATH" >&2
+    return 1
+  }
+  local unit_dir="$HOME/.config/systemd/user"
+  mkdir -p "$unit_dir"
+
+  # Main daemon: a oneshot service triggered by a 5-minute timer that runs
+  # ops-daemon.sh in single-pass mode (--run-once). This mirrors the
+  # ThrottleInterval/KeepAlive behavior of the launchd plist without holding
+  # a persistent bash process in user-session memory between firings.
+  cat > "$unit_dir/claude-ops.service" <<EOF
+[Unit]
+Description=claude-ops background brain (ops-daemon single pass)
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash $OPS_DAEMON_SCRIPT --run-once
+StandardOutput=append:$LOG_DIR/ops-daemon-stdout.log
+StandardError=append:$LOG_DIR/ops-daemon-stderr.log
+Environment=HOME=$HOME
+EOF
+
+  cat > "$unit_dir/claude-ops.timer" <<EOF
+[Unit]
+Description=Fire claude-ops ops-daemon every 5 minutes
+After=default.target
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=claude-ops.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  # wacli-keepalive: persistent service (Restart=always) — no timer needed.
+  cat > "$unit_dir/claude-ops-wacli-keepalive.service" <<EOF
+[Unit]
+Description=claude-ops wacli keepalive
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env bash $OPS_KEEPALIVE_SCRIPT
+Restart=always
+RestartSec=60
+StandardOutput=append:$LOG_DIR/wacli-launchd-stdout.log
+StandardError=append:$LOG_DIR/wacli-launchd-stderr.log
+Environment=HOME=$HOME
+
+[Install]
+WantedBy=default.target
+EOF
+
+  systemctl --user daemon-reload
+  systemctl --user enable --now claude-ops.timer
+  systemctl --user enable --now claude-ops-wacli-keepalive.service || true
+  log "INSTALL(systemd): enabled claude-ops.timer + claude-ops-wacli-keepalive.service"
+}
+
+uninstall_daemon_systemd() {
+  command -v systemctl >/dev/null 2>&1 || {
+    echo "uninstall_daemon_systemd: systemctl not found on PATH" >&2
+    return 1
+  }
+  local unit_dir="$HOME/.config/systemd/user"
+  systemctl --user disable --now claude-ops.timer 2>/dev/null || true
+  systemctl --user disable --now claude-ops.service 2>/dev/null || true
+  systemctl --user disable --now claude-ops-wacli-keepalive.service 2>/dev/null || true
+  rm -f "$unit_dir/claude-ops.service" \
+        "$unit_dir/claude-ops.timer" \
+        "$unit_dir/claude-ops-wacli-keepalive.service"
+  systemctl --user daemon-reload 2>/dev/null || true
+  log "UNINSTALL(systemd): removed claude-ops units"
+}
+
+install_daemon_schtasks() {
+  # Windows best-effort: prefer bash.exe (Git Bash / WSL bash) since the daemon
+  # is a bash script. If unavailable, fall back to pwsh wrapper. Users on real
+  # WSL should prefer install_daemon_systemd from inside the WSL shell — it
+  # gives proper timer semantics instead of Task Scheduler's 5-minute floor.
+  local schtasks_bin
+  if command -v schtasks >/dev/null 2>&1; then
+    schtasks_bin="schtasks"
+  elif command -v schtasks.exe >/dev/null 2>&1; then
+    schtasks_bin="schtasks.exe"
+  else
+    echo "install_daemon_schtasks: schtasks not found on PATH" >&2
+    return 1
+  fi
+
+  local run_cmd
+  if command -v bash.exe >/dev/null 2>&1 || command -v bash >/dev/null 2>&1; then
+    run_cmd="bash.exe $OPS_DAEMON_SCRIPT --run-once"
+  else
+    # pwsh wrapper fallback — expects the user to have bash reachable inside
+    # the invoked shell (WSL default, Git Bash, etc.).
+    run_cmd="pwsh.exe -NoProfile -File $SCRIPT_DIR/scripts/ops-daemon-wrapper.ps1"
+  fi
+
+  "$schtasks_bin" /Create /F /SC MINUTE /MO 5 \
+    /TN "ClaudeOpsDaemon" \
+    /TR "$run_cmd" \
+    || { echo "install_daemon_schtasks: schtasks /Create failed" >&2; return 1; }
+
+  local keepalive_cmd="bash.exe $OPS_KEEPALIVE_SCRIPT"
+  "$schtasks_bin" /Create /F /SC MINUTE /MO 1 \
+    /TN "ClaudeOpsWacliKeepalive" \
+    /TR "$keepalive_cmd" \
+    || true
+  log "INSTALL(schtasks): registered ClaudeOpsDaemon + ClaudeOpsWacliKeepalive"
+}
+
+uninstall_daemon_schtasks() {
+  local schtasks_bin
+  if command -v schtasks >/dev/null 2>&1; then
+    schtasks_bin="schtasks"
+  elif command -v schtasks.exe >/dev/null 2>&1; then
+    schtasks_bin="schtasks.exe"
+  else
+    echo "uninstall_daemon_schtasks: schtasks not found on PATH" >&2
+    return 1
+  fi
+  "$schtasks_bin" /Delete /F /TN "ClaudeOpsDaemon" 2>/dev/null || true
+  "$schtasks_bin" /Delete /F /TN "ClaudeOpsWacliKeepalive" 2>/dev/null || true
+  log "UNINSTALL(schtasks): removed ClaudeOpsDaemon + ClaudeOpsWacliKeepalive"
+}
+
+install_daemon() {
+  local os
+  os="$(ops_os 2>/dev/null || uname -s)"
+  case "$os" in
+    macos|Darwin*)                                        install_daemon_launchd ;;
+    debian|fedora|arch|suse|alpine|linux|wsl|Linux*)      install_daemon_systemd ;;
+    windows|MINGW*|MSYS*|CYGWIN*)                         install_daemon_schtasks ;;
+    *) echo "install_daemon: unsupported OS '$os' for daemon registration" >&2; return 1 ;;
+  esac
+}
+
+uninstall_daemon() {
+  local os
+  os="$(ops_os 2>/dev/null || uname -s)"
+  case "$os" in
+    macos|Darwin*)                                        uninstall_daemon_launchd ;;
+    debian|fedora|arch|suse|alpine|linux|wsl|Linux*)      uninstall_daemon_systemd ;;
+    windows|MINGW*|MSYS*|CYGWIN*)                         uninstall_daemon_schtasks ;;
+    *) echo "uninstall_daemon: unsupported OS '$os' for daemon registration" >&2; return 1 ;;
+  esac
+}
+
 # ── Graceful shutdown ─────────────────────────────────────────────────────
 cleanup() {
   log "SHUTDOWN: SIGTERM received — stopping all services"
@@ -616,8 +875,54 @@ cleanup() {
 
 trap cleanup SIGTERM SIGINT
 
+# ── CLI dispatch ──────────────────────────────────────────────────────────
+# Flags are positional and mutually exclusive-ish. When none are given we
+# fall through to the classic "enter monitor loop" behavior so the existing
+# launchd plist (which invokes `bash ops-daemon.sh` with no arguments) keeps
+# working unchanged.
+OPS_RUN_ONCE=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --os)
+      # Print the detected OS bucket (for setup scripts & debugging).
+      ops_os 2>/dev/null || uname -s
+      exit 0
+      ;;
+    --install)
+      install_daemon
+      exit $?
+      ;;
+    --uninstall)
+      uninstall_daemon
+      exit $?
+      ;;
+    --run-once)
+      # Single-pass execution: for systemd timer / schtasks invocations that
+      # fire the daemon periodically instead of keeping it resident.
+      OPS_RUN_ONCE=1
+      shift
+      ;;
+    -h|--help)
+      cat <<EOF
+Usage: $(basename "$0") [--os|--install|--uninstall|--run-once]
+  (no args)    Start the resident daemon monitor loop (launchd-compatible).
+  --os         Print the detected OS bucket and exit.
+  --install    Register the daemon with the host service manager
+               (launchd on macOS, systemd --user on Linux, schtasks on Windows).
+  --uninstall  Remove the host service manager registration.
+  --run-once   Run one intelligence + health pass and exit (for timer-based hosts).
+EOF
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1 (try --help)" >&2
+      exit 2
+      ;;
+  esac
+done
+
 # ── Main ──────────────────────────────────────────────────────────────────
-log "START: ops-daemon pid=$$ starting"
+log "START: ops-daemon pid=$$ starting (run_once=$OPS_RUN_ONCE)"
 rotate_log
 
 if ! load_services_config; then
@@ -625,7 +930,9 @@ if ! load_services_config; then
   cat > "$HEALTH_FILE" <<EOF
 {"timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)", "pid": $$, "uptime_seconds": 0, "services": {}, "action_needed": null}
 EOF
-  # Sleep forever until SIGTERM; launchd keeps us alive
+  # In --run-once mode we exit after writing the health file; otherwise
+  # sleep forever until SIGTERM (launchd/systemd simple-mode keeps us alive).
+  if [[ $OPS_RUN_ONCE -eq 1 ]]; then exit 0; fi
   while true; do sleep 30; done
 fi
 
@@ -683,5 +990,14 @@ while true; do
   prefetch_project_health          # Every 10 min: git/branch status per registered repo
 
   write_daemon_health
+
+  # In --run-once mode we return after a single intelligence + health pass
+  # so timer-driven hosts (systemd .timer, Task Scheduler) don't accumulate
+  # overlapping long-lived daemon processes.
+  if [[ $OPS_RUN_ONCE -eq 1 ]]; then
+    log "RUN-ONCE: single pass complete — exiting"
+    exit 0
+  fi
+
   sleep 30
 done
