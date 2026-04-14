@@ -39,6 +39,14 @@ EOF
 }
 
 # ── Arg parsing ──────────────────────────────────────────────────────────
+# Handle bare --help / -h before any required-value flag handling so users
+# can run `ops-daemon-manager.sh --help` without supplying a subcommand.
+if (( $# >= 1 )); then
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+  esac
+fi
+
 if (( $# < 1 )); then
   usage
   exit 64
@@ -49,7 +57,14 @@ DRY_RUN=0
 CLI_PLUGIN_ROOT=""
 while (( $# > 0 )); do
   case "$1" in
-    --plugin-root) CLI_PLUGIN_ROOT="$2"; shift 2 ;;
+    --plugin-root)
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --plugin-root requires a value" >&2
+        exit 64
+      fi
+      CLI_PLUGIN_ROOT="$2"
+      shift 2
+      ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 64 ;;
