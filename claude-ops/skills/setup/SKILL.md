@@ -1544,7 +1544,7 @@ If the user provides partner names, process each one in a loop:
      "ecom": {
        "partners": {
          "shipbob": {
-           "api_base_url": "https://developer.shipbob.com/v1",
+           "api_base_url": "https://api.shipbob.com/v1",
            "auth_pattern": "Authorization: Bearer <token>",
            "credentials": { "api_token": "doppler:SHIPBOB_API_TOKEN" },
            "health_endpoint": "/user",
@@ -1567,12 +1567,12 @@ If the user provides partner names, process each one in a loop:
 
 | Partner    | Auth header                              | Base URL                               | Health endpoint        |
 | ---------- | ---------------------------------------- | -------------------------------------- | ---------------------- |
-| ShipBob    | `Authorization: Bearer <token>`          | `https://developer.shipbob.com/v1`     | `/user`                |
-| Recharge   | `X-Recharge-Access-Token: <token>`       | `https://api.rechargeapayments.com/v1` | `/shop`                |
+| ShipBob    | `Authorization: Bearer <token>`          | `https://api.shipbob.com/v1`           | `/user`                |
+| Recharge   | `X-Recharge-Access-Token: <token>`       | `https://api.rechargeapps.com/v1`      | `/shop`                |
 | Yotpo      | `X-Api-Key: <app_key>`                   | `https://api.yotpo.com`                | `/core/v3/stores/<id>` |
 | Shippo     | `Authorization: ShippoToken <token>`     | `https://api.goshippo.com`             | `/carrier_accounts`    |
 | Gorgias    | `Authorization: Basic <base64>`          | `https://<domain>.gorgias.com/api`     | `/account`             |
-| Loop       | `x-loop-signature: <secret>`             | `https://api.loopreturns.com/api/v1`   | `/warehouse`           |
+| Loop       | `X-Authorization: <secret>`              | `https://api.loopreturns.com/api/v1`   | `/warehouse`           |
 | Attentive  | `Authorization: Bearer <token>`          | `https://api.attentivemobile.com/v1`   | `/me`                  |
 
 For any partner not in this table, always web search for current auth docs before asking for credentials.
