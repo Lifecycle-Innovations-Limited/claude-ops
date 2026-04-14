@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.1] — 2026-04-14
+
+### Added
+
+- **`docs/os-compatibility.md`** — Authoritative cross-OS reference: support matrix (macOS, Debian/Fedora/Arch/SUSE/Alpine, Windows, WSL2), per-channel install tables, credential cascade explainer, daemon registration mechanisms, browser-profile discovery roots, URL opener resolution, dev/CI guidance, known limitations, contributor testing notes (#100).
+
+### Fixed
+
+- **`bin/ops-setup-preflight`** — Restored `gog calendar calendars --json` (the v1.1.0 release dropped this fix during merge, leaving a probe of the non-existent `gog cal list` that silently wrote `{"error":"failed"}` to the calendar cache) (#101).
+- **`bin/ops-unread`** — Error message no longer suggests `npm install -g @auroracapital/gog` (a package that doesn't exist on npm); now points to `brew install gogcli` / `winget install -e --id steipete.gogcli` / source build (#101).
+- **`skills/ops-inbox/CHANNELS.md`** — Install snippet replaced the private `auroracapital/gog` references and invalid `gog auth login` command with an OS-aware `gogcli` install + `gog auth add` flow (#101).
+- **`skills/ops-go/SKILL.md`** — Wording fix: "When `gog cal` fails" → "When `gog calendar` fails" (#101).
+- **`bin/ops-autofix` + `bin/ops-setup-preflight`** — Back-compat `_cred_*` wrappers now gated by `IS_MACOS` / `[[ "$(uname)" == "Darwin" ]]` so the macOS-only `security` fallback never runs on Linux/Windows (would have crashed under `set -euo pipefail`) (#101).
+- **`tests/test-bin-scripts.sh`** — macOS-tool detector now recognizes broader guard patterns (`if [ "$OS" = "macos" ]`, `case "$(uname)" in Darwin)`, the `else` branch of `if declare -F ops_cred_*`), eliminating false-positive failures on `ops-speedup`, `ops-autofix`, and `ops-setup-preflight` that were blocking PR merges (#101).
+
+---
+
 ## [1.1.0] — 2026-04-14
 
 ### Added
