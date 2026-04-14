@@ -1,5 +1,5 @@
 {
-  "name": "@claude-ops/sdk",
+  "name": "claude-ops-plugin",
   "version": "1.0.0",
   "description": "SDK and scaffolder for building claude-ops skills and agents",
   "type": "module",
