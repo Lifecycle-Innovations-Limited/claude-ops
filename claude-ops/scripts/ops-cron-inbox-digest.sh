@@ -64,7 +64,7 @@ data = json.load(sys.stdin)
 subjects = [m.get('subject', '')[:50] for m in (data if isinstance(data, list) else [])[:3]]
 print('\n  - '.join(subjects))
 " 2>/dev/null || echo "")
-  EMAIL_SUMMARY="Email: $EMAIL_COUNT unread"
+  EMAIL_SUMMARY="Email: $EMAIL_COUNT in inbox"
   [[ -n "$EMAIL_SUBJECTS" ]] && EMAIL_SUMMARY="$EMAIL_SUMMARY
   - $EMAIL_SUBJECTS"
 fi
