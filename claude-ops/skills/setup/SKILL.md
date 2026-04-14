@@ -304,12 +304,15 @@ Install the ops background daemon now?
   [Yes — install now]  [Skip — I'll run it manually later]
 ```
 
-On `Yes`, run the install (use `run_in_background: true` per Rule 4 — this runs in parallel with the next wizard steps):
+On `Yes`, run the install (use `run_in_background: true` — RULE ZERO):
 
 ```bash
-DAEMON_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh"
+# Always resolve CLAUDE_PLUGIN_ROOT to the CURRENT installed version — never hardcode a version number.
+# If CLAUDE_PLUGIN_ROOT is not set, detect it from the plugin cache:
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1)}"
+DAEMON_SCRIPT="${PLUGIN_ROOT}/scripts/ops-daemon.sh"
 chmod +x "$DAEMON_SCRIPT"
-PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/scripts/com.claude-ops.daemon.plist"
+PLIST_TEMPLATE="${PLUGIN_ROOT}/scripts/com.claude-ops.daemon.plist"
 PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.daemon.plist"
 DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 LOG_DIR="$DATA_DIR/logs"
