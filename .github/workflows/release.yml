@@ -140,10 +140,10 @@ jobs:
             --body-file /tmp/bump-pr-body.md \
             || echo "PR may already exist for $BRANCH — skipping create"
 
-  # ─── 3. (Optional) Publish @claude-ops/sdk to npm ──────────────────────────
+  # ─── 3. (Optional) Publish claude-ops-plugin to npm ─────────────────────────
   # No-op when NPM_TOKEN isn't set — gates the whole job behind the secret.
-  # When the maintainer wires NPM_TOKEN into org/repo Actions secrets, this
-  # job builds and publishes the SDK package on every v* tag.
+  # Token must be a granular token with "bypass 2FA" enabled and read+write
+  # access to all packages on the claude-ops-plugin npm account.
   publish-sdk:
     needs: create-release
     runs-on: ubuntu-latest
@@ -183,11 +183,10 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # SDK has its own version track; only publish when sdk/package.json
-          # contains a version that doesn't already exist on npm.
+          PKG_NAME=$(node -p "require('./package.json').name")
           PKG_VERSION=$(node -p "require('./package.json').version")
-          if npm view "@claude-ops/sdk@${PKG_VERSION}" version >/dev/null 2>&1; then
-            echo "@claude-ops/sdk@${PKG_VERSION} already on npm — skipping publish"
+          if npm view "${PKG_NAME}@${PKG_VERSION}" version >/dev/null 2>&1; then
+            echo "${PKG_NAME}@${PKG_VERSION} already on npm — skipping publish"
             exit 0
           fi
           npm publish --access public
