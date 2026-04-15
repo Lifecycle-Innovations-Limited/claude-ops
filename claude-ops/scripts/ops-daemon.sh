@@ -778,16 +778,22 @@ _install_launchd_plist() {
     return 1
   fi
 
-  # Check if already running with a live PID — skip reinstall.
-  # Parse `launchctl list` (no label): format is "PID\tExitStatus\tLabel".
-  # The labeled form `launchctl list <label>` outputs '"PID" = 12345;' which
-  # yields '=' as $2 — never the PID — so we avoid it entirely.
-  local existing_pid
-  existing_pid=$(launchctl list 2>/dev/null \
-    | awk -v lbl="$label" '$3==lbl && $1!="-" {print $1; exit}' || true)
-  if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
-    log "INSTALL(launchd): $label already running (pid=$existing_pid) — skipping"
-    return 0
+  # Only skip reinstall if BOTH the destination plist file exists AND a live
+  # PID is registered. If the file is missing, always proceed with a full
+  # install so the plist is (re)copied — a live PID from a previous session
+  # running an old plist would otherwise cause us to silently skip and leave
+  # the service unregistered on next reboot.
+  local existing_pid=""
+  if [[ -f "$dst" ]]; then
+    # Parse `launchctl list` (no label): format is "PID\tExitStatus\tLabel".
+    # The labeled form `launchctl list <label>` outputs '"PID" = 12345;' which
+    # yields '=' as $2 — never the PID — so we avoid it entirely.
+    existing_pid=$(launchctl list 2>/dev/null \
+      | awk -v lbl="$label" '$3==lbl && $1!="-" {print $1; exit}' || true)
+    if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+      log "INSTALL(launchd): $label already installed at $dst and running (pid=$existing_pid) — skipping"
+      return 0
+    fi
   fi
 
   # Substitute placeholders
