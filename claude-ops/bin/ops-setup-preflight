@@ -148,6 +148,29 @@ cred_get() {
   fi
 } &
 
+{
+  # Doppler CLI auth + projects cache
+  if command -v doppler &>/dev/null; then
+    doppler me --json 2>/dev/null > "$OUT/doppler.json" || echo '{"error":"not_authenticated"}' > "$OUT/doppler.json"
+  else
+    echo '{"error":"not_installed"}' > "$OUT/doppler.json"
+  fi
+} &
+
+{
+  # Doppler MCP server availability
+  if [ -n "${DOPPLER_TOKEN:-}" ]; then
+    echo '{"available":true,"token_set":true}' > "$OUT/doppler-mcp.json"
+  else
+    # Check if doppler CLI is configured and could provide a token
+    if command -v doppler &>/dev/null && doppler me --json &>/dev/null 2>&1; then
+      echo '{"available":true,"token_set":false,"cli_authenticated":true}' > "$OUT/doppler-mcp.json"
+    else
+      echo '{"available":false,"token_set":false,"cli_authenticated":false}' > "$OUT/doppler-mcp.json"
+    fi
+  fi
+} &
+
 # Wait for all background jobs
 wait
 

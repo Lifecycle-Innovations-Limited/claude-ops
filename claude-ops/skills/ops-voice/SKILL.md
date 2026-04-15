@@ -14,7 +14,7 @@ allowed-tools:
 
 Voice interface commands. All API calls via curl — no SDK dependencies.
 
-**Credential resolution order:** userConfig → env vars → Doppler secrets
+**Credential resolution order:** userConfig → env vars → Doppler MCP tools (`mcp__doppler__*`) → Doppler CLI fallback (`doppler secrets get <KEY> --plain`) → password manager
 
 ---
 

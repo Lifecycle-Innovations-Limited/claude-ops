@@ -1390,6 +1390,44 @@ Individual skills can override with --project / --config flags.
 
 > **Deep-dive:** no dedicated skill ships with Doppler — see `${CLAUDE_PLUGIN_ROOT}/docs/memories-system.md` (Runtime Context section) for how downstream skills consume the `secrets_manager` / `doppler.*` values from `$PREFS_PATH` and resolve `doppler:KEY_NAME` references at runtime. The setup agent can load that file directly when it needs more depth than this wizard provides.
 
+#### Step 3g.5 — Doppler MCP Server
+
+After the CLI is configured and authenticated, offer to set up the official `@dopplerhq/mcp-server` MCP integration. This gives Claude direct tool access to Doppler secrets without shelling out.
+
+1. **Check availability**: Run `npx -y @dopplerhq/mcp-server --help 2>&1` in the background. If it exits 0, the package is available.
+
+2. **Generate a service token**: If the user selected a project/config in Step 3g.3, generate a scoped token:
+   ```bash
+   doppler configs tokens create mcp-server-token --project <project> --config <config> --plain 2>/dev/null
+   ```
+   If the command fails or if no project/config was selected, ask:
+   ```
+   Doppler MCP Server needs a token. Options:
+     [Generate from CLI (requires project/config)]
+     [Paste a token manually]
+     [Skip MCP server]
+   ```
+
+3. **Save token to userConfig**: Write the token to `doppler_token` in the plugin's `userConfig` (this feeds `.mcp.json` at runtime via `${user_config.doppler_token}`). Also save `doppler_project` and `doppler_config` if selected.
+
+4. **Smoke test**: Verify the MCP server can start:
+   ```bash
+   DOPPLER_TOKEN="<token>" timeout 10 npx -y @dopplerhq/mcp-server --help 2>&1
+   ```
+   If it exits 0, the server is functional.
+
+5. **Confirmation**:
+   ```
+   ✓ Doppler MCP Server configured — secrets accessible via MCP tools (mcp__doppler__*)
+   ```
+
+6. **Note for agents**:
+   ```
+   With the MCP server configured, skills can now query secrets directly via
+   MCP tool calls (mcp__doppler__*) instead of shelling out to `doppler secrets get`.
+   The Doppler CLI remains available as a fallback when the MCP server is unavailable.
+   ```
+
 ### 3h — Password Manager (credential vault)
 
 Ops agents frequently need to look up credentials (API keys, database passwords, service tokens) on your behalf. This step wires up a password manager so those queries can be automated via a standard command template stored in `$PREFS_PATH`.
