@@ -73,6 +73,7 @@ For integrations with a cheap health check, run it to distinguish "configured bu
 | GitHub | `gh auth status 2>&1` | "Logged in" |
 | AWS | `aws sts get-caller-identity --output text 2>/dev/null` | exits 0 |
 | Linear | `cat "$PREFS" | jq -r .linear_team` | non-empty |
+| Doppler MCP | Check if DOPPLER_TOKEN is set and valid | Token present and MCP server responds |
 
 Show `🔴 expired` if probe fails for a previously-configured key.
 
@@ -106,6 +107,7 @@ When a specific integration is selected (via argument or user pick from dashboar
 | Klaviyo | `curl -s -H "Authorization: Klaviyo-API-Key ${new_key}" https://a.klaviyo.com/api/accounts/ \| jq '.data[0].id'` → non-null |
 | Datadog | `curl -s -H "DD-API-KEY: ${new_key}" https://api.datadoghq.com/api/v1/validate \| jq .valid` → true |
 | New Relic | `curl -s -H "Api-Key: ${new_key}" https://api.newrelic.com/v2/applications.json \| jq '.applications | length'` → numeric |
+| Doppler MCP | `npx -y @dopplerhq/mcp-server --help 2>&1` with DOPPLER_TOKEN set | exits 0 |
 
 ## CLI/API Reference
 

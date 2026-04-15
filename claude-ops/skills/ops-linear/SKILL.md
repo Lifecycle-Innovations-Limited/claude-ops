@@ -33,7 +33,8 @@ Before executing, load available context:
 1. **Secrets**: Linear API key required for MCP fallback queries.
    ### Secret Resolution
    - Check `$LINEAR_API_KEY` env var
-   - Then: `doppler secrets get LINEAR_API_KEY --plain` (if doppler configured in prefs)
+   - Then: Doppler MCP tools (`mcp__doppler__*`) — if Doppler MCP server is configured
+   - Then: `doppler secrets get LINEAR_API_KEY --plain` (if doppler CLI configured in prefs)
    - Then: use `password_manager_config.query_cmd` from `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`
    - If unavailable, use Linear MCP tools exclusively (no curl fallback possible)
 
