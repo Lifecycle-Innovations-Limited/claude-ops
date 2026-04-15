@@ -1778,14 +1778,15 @@ For any partner not in this table, always web search for current auth docs befor
 ```bash
 # Shell env
 printenv KLAVIYO_API_KEY KLAVIYO_PRIVATE_KEY META_ACCESS_TOKEN FACEBOOK_ACCESS_TOKEN META_AD_ACCOUNT_ID GA4_PROPERTY_ID GA_MEASUREMENT_ID 2>/dev/null
+printenv GOOGLE_ADS_DEVELOPER_TOKEN GOOGLE_ADS_CLIENT_ID GOOGLE_ADS_CLIENT_SECRET GOOGLE_ADS_REFRESH_TOKEN GOOGLE_ADS_CUSTOMER_ID 2>/dev/null
 
 # Shell profiles
-grep -h 'KLAVIYO\|META_\|FACEBOOK\|GA4\|GA_MEASUREMENT' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
+grep -h 'KLAVIYO\|META_\|FACEBOOK\|GA4\|GA_MEASUREMENT\|GOOGLE_ADS' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
 
 # Doppler across all projects
 for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
   doppler secrets --project "$proj" --config prd --json 2>/dev/null | \
-    jq -r --arg proj "$proj" 'to_entries[] | select(.key | test("KLAVIYO|META|FACEBOOK|GA4|GOOGLE")) | "\(.key)=\(.value.computed) (doppler:\($proj)/prd)"'
+    jq -r --arg proj "$proj" 'to_entries[] | select(.key | test("KLAVIYO|META|FACEBOOK|GA4|GOOGLE|GOOGLE_ADS")) | "\(.key)=\(.value.computed) (doppler:\($proj)/prd)"'
 done
 
 # Dashlane
@@ -1799,14 +1800,25 @@ jq -r '.agents.defaults.env | to_entries[] | select(.key | test("KLAVIYO|META_|F
 
 Cache these results — use them to pre-fill answers for each sub-step below. For each service below, check if already configured (check `$PREFS_PATH` under `marketing.*`, then the auto-scan results above) before prompting. If already set, show `✓ <service> — already configured` and offer `[Keep]` / `[Reconfigure]`.
 
-Ask which marketing integrations to configure via `AskUserQuestion` with `multiSelect: true` (4 options — fits in one call):
+Ask which marketing integrations to configure via two sequential `AskUserQuestion` calls with `multiSelect: true` (max 4 per Rule 1):
+
+**First call** (primary integrations):
+
+| Option                  | Header        | Description                                   |
+| ----------------------- | ------------- | --------------------------------------------- |
+| Klaviyo                 | klaviyo       | Email/SMS marketing — private API key         |
+| Meta Ads                | meta          | Facebook/Instagram ads — access token + ad account ID |
+| Google Ads              | google-ads    | Paid search ads — OAuth2 + developer token    |
+| More...                 | more          | Google Analytics 4, Search Console            |
+
+If user selects `[More...]`, present **second call**:
 
 | Option                  | Header   | Description                                   |
 | ----------------------- | -------- | --------------------------------------------- |
-| Klaviyo                 | klaviyo  | Email/SMS marketing — private API key         |
-| Meta Ads                | meta     | Facebook/Instagram ads — access token + ad account ID |
 | Google Analytics 4      | ga4      | Web analytics — GA4 property ID               |
-| Google Search Console   | gsc      | SEO data — site URL (uses gcloud auth)         |
+| Google Search Console   | gsc      | SEO data — site URL (uses gcloud auth)        |
+
+Run the selected sub-step(s) below in the order selected.
 
 #### Klaviyo
 
@@ -1837,6 +1849,100 @@ Smoke test:
 ```bash
 curl -s "https://graph.facebook.com/v20.0/$AD_ACCOUNT_ID/campaigns?access_token=$TOKEN&limit=1" | jq '.data | length'
 ```
+
+#### Google Ads
+
+Google Ads requires three credential groups. Guide the user through each step sequentially.
+
+**Step A — Developer Token:**
+If `GOOGLE_ADS_DEVELOPER_TOKEN` was found in auto-scan, present it and offer `[Keep]` / `[Reconfigure]`.
+Otherwise, ask via free text:
+> Your Google Ads developer token (found in Google Ads → Tools & Settings → API Center).
+> Note: New developer tokens start in "test" mode — they work against test accounts only. For production data, apply for Basic Access at https://ads.google.com/home/tools/manager-accounts/
+
+**Step B — OAuth2 Client Credentials:**
+If `GOOGLE_ADS_CLIENT_ID` and `GOOGLE_ADS_CLIENT_SECRET` were found in auto-scan, present and offer `[Keep]` / `[Reconfigure]`.
+Otherwise, ask via free text (two prompts):
+1. OAuth2 Client ID (from Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client ID, type: Desktop app, Google Ads API must be enabled)
+2. OAuth2 Client Secret (shown alongside the client ID)
+
+**Step C — Refresh Token (browser OAuth flow):**
+If `GOOGLE_ADS_REFRESH_TOKEN` was found in auto-scan, present and offer `[Keep]` / `[Reconfigure]`.
+Otherwise, generate the auth URL and run the OAuth flow:
+
+```bash
+AUTH_URL="https://accounts.google.com/o/oauth2/auth?client_id=${GADS_CLIENT_ID}&redirect_uri=http://localhost:8080&response_type=code&scope=https://www.googleapis.com/auth/adwords&access_type=offline&prompt=consent"
+open "$AUTH_URL"  # macOS
+```
+
+Start a temporary localhost server to catch the redirect:
+```bash
+# One-liner node HTTP server to capture the auth code
+node -e "require('http').createServer((req,res)=>{const code=new URL(req.url,'http://localhost').searchParams.get('code');if(code){res.end('Authorization code received. You can close this tab.');process.stdout.write(code);process.exit(0)}else{res.end('Waiting for auth...')}}).listen(8080)"
+```
+
+Run the server via Bash with `run_in_background: true`. Wait up to 120 seconds for the auth code.
+
+If the localhost approach fails, fall back to asking the user to paste the code from the browser URL bar (the `code=` parameter).
+
+Exchange code for refresh token:
+```bash
+TOKEN_RESP=$(curl -s -X POST https://oauth2.googleapis.com/token \
+  --data "code=${AUTH_CODE}" \
+  --data "client_id=${GADS_CLIENT_ID}" \
+  --data "client_secret=${GADS_CLIENT_SECRET}" \
+  --data "redirect_uri=http://localhost:8080" \
+  --data "grant_type=authorization_code")
+GADS_REFRESH_TOKEN=$(echo "$TOKEN_RESP" | jq -r '.refresh_token')
+```
+
+If `GADS_REFRESH_TOKEN` is null or empty, print error and offer retry.
+
+Warning: If the user's Google Cloud project is in "testing" publishing status, the refresh token expires in 7 days. Warn: "Your OAuth app is in testing mode — tokens expire in 7 days. To get long-lived tokens, publish the app in Google Cloud Console → OAuth consent screen → Publish App."
+
+**Step D — Customer ID:**
+Use the refresh token to get an access token, then list accessible customers:
+```bash
+ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
+  --data "client_id=${GADS_CLIENT_ID}&client_secret=${GADS_CLIENT_SECRET}&refresh_token=${GADS_REFRESH_TOKEN}&grant_type=refresh_token" | jq -r '.access_token')
+
+CUSTOMERS=$(curl -s -X GET \
+  "https://googleads.googleapis.com/v23/customers:listAccessibleCustomers" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -H "developer-token: ${GADS_DEV_TOKEN}")
+```
+
+If multiple accounts returned, present as `AskUserQuestion` options (max 4 per Rule 1 — paginate if more). If single account, auto-select. Store as `customer_id` (strip "customers/" prefix and dashes).
+
+If any account is a manager (MCC) account, also store `login_customer_id`. Auto-detect by checking if `listAccessibleCustomers` returns both manager and client accounts.
+
+**Step E — Smoke Test:**
+```bash
+curl -s -X GET "https://googleads.googleapis.com/v23/customers:listAccessibleCustomers" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -H "developer-token: ${GADS_DEV_TOKEN}"
+```
+Expect JSON with `resourceNames` array. If error, print the error and offer `[Retry]` / `[Skip]`.
+
+**Step F — Save to preferences:**
+```json
+{
+  "marketing": {
+    "google_ads": {
+      "developer_token": "<YOUR_DEVELOPER_TOKEN>",
+      "client_id": "<YOUR_CLIENT_ID>.apps.googleusercontent.com",
+      "client_secret": "GOCSPX-<YOUR_SECRET>",
+      "refresh_token": "1//<YOUR_REFRESH_TOKEN>",
+      "customer_id": "1234567890",
+      "login_customer_id": "9876543210"
+    }
+  }
+}
+```
+
+Same Doppler-reference pattern as Step 3i — prefer `doppler:KEY_NAME` over raw tokens when Doppler is configured.
+
+Print: `[Google Ads] ✓ connected — customer ID: XXXXXXXXXX`
 
 #### Google Analytics 4
 
@@ -2695,7 +2801,7 @@ Re-run the detector and present a final status dashboard:
  ✓ Core CLIs:  jq, git, gh, aws, node
  ✓ Channels:   telegram, whatsapp, email
  ✓ Ecommerce:  shopify (<store_url>)             ← omit line if not configured
- ✓ Marketing:  klaviyo, meta, ga4, gsc           ← omit line if not configured
+ ✓ Marketing:  klaviyo, meta, google-ads, ga4, gsc           ← omit line if not configured
  ✓ Voice:      bland, elevenlabs, groq           ← omit line if not configured
  ✓ Secrets:    doppler → my-app/dev
  ✓ MCPs:       linear, sentry, vercel
@@ -2754,6 +2860,7 @@ If `$ARGUMENTS` contains a specific section name, jump straight to that section:
 | `vault`, `password-manager`, `pm`      | Step 3h |
 | `ecom`, `shopify`, `store`             | Step 3i |
 | `marketing`, `klaviyo`, `ads`, `meta`, `ga4` | Step 3j |
+| `google-ads`, `gads` | Step 3j (Google Ads) |
 | `voice`, `bland`, `elevenlabs`, `tts`  | Step 3k |
 | `mcp`                                  | Step 4  |
 | `registry`, `projects`                 | Step 5  |
