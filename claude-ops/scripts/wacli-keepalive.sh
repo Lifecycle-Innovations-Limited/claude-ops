@@ -77,14 +77,46 @@ fi
 
 log "START: keepalive pid=$$ starting"
 
-# ── Step 0: Race condition prevention ───────────────────────────────────
+# ── Step 0: Race condition prevention with exponential backoff ──────────
 # Both com.claude-ops.daemon and com.claude-ops.wacli-keepalive start at boot.
 # If both try wacli sync simultaneously, one crashes on the store lock.
-# Wait briefly for any concurrent sync to claim the lock first.
-if pgrep -f "wacli sync" >/dev/null 2>&1; then
-  log "START: another wacli sync is running — waiting 15s for lock release"
-  sleep 15
-fi
+# Retry with exponential backoff instead of a single fixed wait.
+LOCK_RETRY_MAX=5
+LOCK_RETRY_DELAY=5  # seconds — doubles each attempt: 5, 10, 20, 40, 80
+_wait_for_store_lock() {
+  local attempt=0
+  local delay=$LOCK_RETRY_DELAY
+  while (( attempt < LOCK_RETRY_MAX )); do
+    # Check both running sync processes and the store lock itself
+    local has_sync=0 has_lock=0
+    pgrep -f "wacli sync" >/dev/null 2>&1 && has_sync=1
+    local doctor_json
+    doctor_json=$("$WACLI" doctor --json 2>/dev/null || echo '{}')
+    echo "$doctor_json" | grep -q '"locked":true' && has_lock=1
+
+    if [[ $has_sync -eq 0 ]] && [[ $has_lock -eq 0 ]]; then
+      return 0  # Lock is free
+    fi
+
+    log "START: store locked or another sync running (attempt $((attempt+1))/$LOCK_RETRY_MAX) — waiting ${delay}s"
+    sleep "$delay"
+    delay=$((delay * 2))
+    (( attempt++ )) || true
+  done
+
+  # Final attempt: force-kill competing processes and clear the lock
+  log "START: lock still held after $LOCK_RETRY_MAX retries — force-clearing"
+  local stale_pids
+  stale_pids=$(pgrep -f "wacli sync" 2>/dev/null || true)
+  for pid in $stale_pids; do
+    if [[ "$pid" != "$$" ]]; then
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+  done
+  sleep 2
+  return 0
+}
+_wait_for_store_lock
 
 # ── Step 1: Kill orphaned wacli sync processes ──────────────────────────
 cleanup_stale() {
