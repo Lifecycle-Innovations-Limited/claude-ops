@@ -85,6 +85,8 @@ declare -A SERVICE_NEXT_RUN    # service name → next run epoch (cron services)
 declare -A SERVICE_LAST_RUN    # service name → last run epoch (cron services)
 declare -A SERVICE_STATUS      # service name → status string
 declare -A SERVICE_LAST_HEALTH # service name → last health string
+declare -A SERVICE_LAST_RESTART_EPOCH  # service name → epoch of last restart attempt
+RESTART_COOLDOWN=1800  # Reset restart counter after 30 min of stability
 ACTION_NEEDED="null"
 
 # ── Config loading ────────────────────────────────────────────────────────
@@ -236,20 +238,27 @@ restart_service() {
   max_restarts="${max_restarts:-10}"
 
   local count="${SERVICE_RESTARTS[$name]:-0}"
+  local now
+  now=$(date +%s)
+
+  # Cooldown: reset restart counter after RESTART_COOLDOWN seconds of stability
+  local last_restart_epoch="${SERVICE_LAST_RESTART_EPOCH[$name]:-0}"
+  if [[ $count -gt 0 ]] && (( now - last_restart_epoch > RESTART_COOLDOWN )); then
+    log "RESTART: $name stable for ${RESTART_COOLDOWN}s — resetting restart counter (was $count)"
+    count=0
+    SERVICE_RESTARTS["$name"]=0
+  fi
+
   if [[ $count -ge $max_restarts ]]; then
-    log "RESTART: $name hit max_restarts=$max_restarts — not restarting"
+    log "RESTART: $name hit max_restarts=$max_restarts — not restarting (resets after ${RESTART_COOLDOWN}s cooldown)"
     SERVICE_STATUS["$name"]="max_restarts_exceeded"
     return
   fi
 
   SERVICE_RESTARTS["$name"]=$(( count + 1 ))
+  SERVICE_LAST_RESTART_EPOCH["$name"]=$now
   log "RESTART: $name (attempt $((count+1))/$max_restarts) — waiting ${restart_delay}s"
-  # Non-blocking: schedule restart by marking it, actual start happens in main loop
-  # For simplicity, stop and re-start after the delay inline (daemon loop is 30s anyway)
   stop_service "$name"
-  sleep "${restart_delay}" &
-  # We record the sleep PID to avoid blocking; restart happens next health check after delay
-  # Use a simpler approach: just restart immediately (launchd handles overall throttle)
   start_service "$name"
 }
 
@@ -333,11 +342,22 @@ except: print('')
 " 2>/dev/null || true)
   fi
 
+  # Daemon version from package.json
+  local daemon_version=""
+  if [[ -f "$SCRIPT_DIR/package.json" ]]; then
+    daemon_version=$(python3 -c "
+import json
+try: print(json.load(open('$SCRIPT_DIR/package.json')).get('version',''))
+except: print('')
+" 2>/dev/null || true)
+  fi
+
   cat > "$HEALTH_FILE" <<EOF
 {
   "timestamp": "$now",
   "pid": $$,
   "uptime_seconds": $uptime,
+  "version": "$daemon_version",
   "services": $services_json,
   "action_needed": $ACTION_NEEDED,
   "brain": {
@@ -400,14 +420,17 @@ prefetch_briefing_cache() {
   tmpdir=$(mktemp -d)
   local -a _refresh_pids=()
 
-  # Unread counts
-  (command -v wacli &>/dev/null && wacli chats list --json 2>/dev/null | python3 -c "
-import json,sys,datetime
-data=json.load(sys.stdin).get('data',[]) or []
+  # Unread counts — read from keepalive cache to avoid store-lock contention
+  local wacli_cache="$DATA_DIR/cache/wacli_chats.json"
+  (if [[ -f "$wacli_cache" ]]; then
+    python3 -c "
+import json,datetime
+data=json.load(open('$wacli_cache')).get('data',[]) or []
 cutoff=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=7)).isoformat()
 recent=[c for c in data if c.get('LastMessageTS','')>cutoff]
 print(json.dumps({'total_chats':len(recent),'count':len(data)}))
-" > "$tmpdir/wa.json" 2>/dev/null) &
+" > "$tmpdir/wa.json" 2>/dev/null
+  fi) &
   _refresh_pids+=($!)
 
   # Email count
@@ -467,11 +490,12 @@ detect_urgent_messages() {
     if (( now - last < 300 )); then return 0; fi
   fi
 
-  # Check WhatsApp for messages with urgent keywords (skip if wacli unavailable)
-  if command -v wacli &>/dev/null; then
-    wacli messages search --query "urgent OR asap OR deadline OR emergency OR ASAP" --json 2>/dev/null | python3 -c "
-import json,sys,datetime
-data=json.load(sys.stdin)
+  # Check WhatsApp urgent messages — read from keepalive cache (no store-lock contention)
+  local urgent_cache="$DATA_DIR/cache/wacli_urgent.json"
+  if [[ -f "$urgent_cache" ]]; then
+    python3 -c "
+import json,datetime
+data=json.load(open('$urgent_cache'))
 msgs=data.get('data',{}).get('messages',[]) or []
 cutoff=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=4)).isoformat()
 urgent=[m for m in msgs if m.get('Timestamp','')>cutoff and not m.get('FromMe',True)]
@@ -510,18 +534,35 @@ try:
 except: print('')
 " 2>/dev/null)
 
-    if command -v wacli &>/dev/null; then
+    # Read from keepalive cache to check for new messages (no store-lock contention)
+    local wacli_chats_cache="$DATA_DIR/cache/wacli_chats.json"
+    if [[ -f "$wacli_chats_cache" ]]; then
       local new_count
-      new_count=$(wacli messages list --after="${last_ts:-$(_date_days_ago 1 +%Y-%m-%d 2>/dev/null || echo '')}" --limit=5 --json 2>/dev/null | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-msgs=d.get('data',{}).get('messages',[]) or []
-print(len(msgs))
+      new_count=$(python3 -c "
+import json,datetime
+data=json.load(open('$wacli_chats_cache')).get('data',[]) or []
+last='${last_ts:-}'
+recent=[c for c in data if c.get('LastMessageTS','')>last] if last else data[:5]
+print(len(recent))
 " 2>/dev/null || echo 0)
 
       if [[ "$new_count" -gt 3 ]] && [[ -f "$MEM_SCRIPT" ]]; then
-        log "BRAIN: $new_count new messages since last extraction — triggering memory update"
-        bash "$MEM_SCRIPT" >> "$LOG_DIR/memory-extractor.log" 2>&1 &
+        # Guard against duplicate extractors
+        local extractor_pid_file="$DATA_DIR/memories/.extractor_pid"
+        local should_run=1
+        if [[ -f "$extractor_pid_file" ]]; then
+          local existing_pid
+          existing_pid=$(cat "$extractor_pid_file" 2>/dev/null || true)
+          if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+            log "BRAIN: memory extractor already running (pid=$existing_pid) — skipping"
+            should_run=0
+          fi
+        fi
+        if [[ $should_run -eq 1 ]]; then
+          log "BRAIN: $new_count new messages since last extraction — triggering memory update"
+          bash "$MEM_SCRIPT" >> "$LOG_DIR/memory-extractor.log" 2>&1 &
+          echo $! > "$extractor_pid_file"
+        fi
       fi
     fi
   fi
@@ -548,9 +589,13 @@ import json, subprocess, sys, datetime, os, collections
 data_dir = sys.argv[1]
 contacts = collections.defaultdict(lambda: {"channels": [], "last_seen": "", "msg_count": 0, "needs_reply": False})
 
-# WhatsApp contacts
+# WhatsApp contacts — read from keepalive cache (no store-lock contention)
 try:
-    wa = json.loads(subprocess.check_output(["wacli", "chats", "list", "--json"], timeout=10, stderr=subprocess.DEVNULL))
+    cache_path = os.path.join(data_dir, "cache", "wacli_chats.json")
+    if os.path.exists(cache_path):
+        wa = json.load(open(cache_path))
+    else:
+        wa = {"data": []}
     cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)).isoformat()
     for chat in (wa.get("data") or []):
         if chat.get("LastMessageTS", "") < cutoff: continue
