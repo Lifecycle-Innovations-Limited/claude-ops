@@ -179,7 +179,7 @@
     },
     "revenuecat_api_key": {
       "title": "RevenueCat API Key",
-      "description": "RevenueCat V1 API key for mobile subscription revenue tracking.",
+      "description": "RevenueCat API key for mobile subscription revenue tracking (V2 API).",
       "type": "string",
       "sensitive": true,
       "default": ""
