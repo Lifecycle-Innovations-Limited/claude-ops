@@ -91,6 +91,9 @@ REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"
 [ -f "$REGISTRY" ] || REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.example.json"
 PROJECT_PATHS=$(jq -r '.projects[] | select(.gsd == true) | .paths[]' "$REGISTRY" 2>/dev/null | while read p; do printf '%s\n' "${p/#\~/$HOME}"; done)
 
+# External projects (non-repo: Shopify, Linear, Slack, Notion, custom)
+EXTERNAL_JSON=$("${CLAUDE_PLUGIN_ROOT}/bin/ops-external" 2>/dev/null || echo '[]')
+
 # Find TODOs and hacks across all registered projects
 echo "$PROJECT_PATHS" | xargs -I{} grep -r "TODO\|FIXME\|HACK\|temp\|hardcoded" {} \
   --include="*.ts" --include="*.py" --include="*.js" --include="*.tsx" \
