@@ -43,6 +43,9 @@ export AWS_DEFAULT_REGION="$REGION"
 # 4. Registry (optional — drives project-scoped deep scans)
 REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.json"
 [ -f "$REGISTRY" ] || REGISTRY="${CLAUDE_PLUGIN_ROOT}/scripts/registry.example.json"
+
+# 5. External projects (non-repo — Shopify, Linear, Slack, Notion, custom)
+EXTERNAL_JSON=$("${CLAUDE_PLUGIN_ROOT}/bin/ops-external" 2>/dev/null || echo '[]')
 ```
 
 ## Service discovery
@@ -388,6 +391,14 @@ done
     ]
   },
   "ci": { "recent_runs": [] },
+  "external_projects": [
+    {
+      "alias": "[alias]",
+      "source": "shopify|linear|slack|notion|custom",
+      "status": "healthy|auth_expired|unreachable|degraded|not_configured|discovered",
+      "details": {}
+    }
+  ],
   "anomalies": [
     {
       "severity": "critical|high|medium|low",
@@ -413,6 +424,7 @@ Flag as `critical` if:
 - CloudWatch alarm count in ALARM state > 0 on a resource marked critical in registry
 - Vercel deployment state == "ERROR" on production
 - CI conclusion == "failure" on `main` or `dev` branch
+- External project status == "unreachable" (service may be down)
 
 Flag as `high` if:
 
@@ -425,6 +437,7 @@ Flag as `high` if:
 - RDS pending maintenance actions present
 - Vercel deployment state == "ERROR" on preview
 - CI failure on feature branch with open PR
+- External project status == "auth_expired" (credential rotation needed)
 
 Flag as `medium` if:
 
