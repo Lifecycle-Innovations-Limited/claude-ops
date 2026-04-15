@@ -2,6 +2,67 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] — 2026-04-15
+
+### Added
+
+- **External project support** — Non-repo projects (Shopify stores, Linear teams, Slack/Notion workspaces, custom SaaS endpoints) can now be registered in `registry.json` with `type: "external"` and appear across all dashboards, briefings, fire detection, revenue tracking, and C-suite analysis.
+- **`bin/ops-external`** — New data collector that probes external project health (Shopify Admin API, Linear GraphQL, custom health endpoints).
+- **`registry.templates/external-project.json`** — Registry template for all supported external project types.
+- **`/ops:daemon` skill** — Manage the background daemon (start, stop, restart, health check).
+- **gog CLI reference** — Comprehensive command reference added to all agent skills.
+
+### Changed
+
+- **`ops-projects`** — Portfolio dashboard now includes an EXTERNAL PROJECTS table.
+- **`ops-go`** — Morning briefing includes external project health status.
+- **`ops-fires`** — Classifies external project issues by severity (unreachable=CRITICAL, auth_expired=HIGH).
+- **`ops-revenue`** — Pulls Shopify GMV for external stores, adds SOURCE column to revenue pipeline.
+- **`ops-yolo`** — Pre-gathers external project data for all 4 C-suite agents.
+- **`project-scanner` agent** — Handles external projects in scan output.
+- **`infra-monitor` agent** — Probes external projects, fire detection rules for auth_expired/unreachable.
+- **`revenue-tracker` agent** — Queries Shopify orders API for GMV on external stores.
+- **All C-suite agents** (CEO/CTO/CFO/COO) — Factor external projects into strategic, technical, financial, and operational analysis.
+
+### Fixed
+
+- **`ops-daemon`** — Critical installer, test, and arg-parser fixes.
+- **Stale plist and wait bugs** in `ops-daemon.sh`.
+
+---
+
+## [1.3.0] — 2026-04-14
+
+### Added
+
+- **Notion integration** — Full channel support for Notion workspaces in inbox, comms, and setup flows.
+
+### Fixed
+
+- **Notion search API** — Corrected API usage, added missing tools and API fallback.
+- **Setup wizard** — Renumbered sections after Notion insertion, fixed verification command.
+
+---
+
+## [1.2.0] — 2026-04-14
+
+### Added
+
+- **Agent Teams enforcement** — All agent-spawning skills now support Agent Teams when `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set.
+- **Discord integration** — `/ops:comms discord` via webhook + bot read.
+- **Docker support** — Turnkey container image + compose stack for Linux/CI.
+- **Fires-watcher daemon** — Push notification sinks (Telegram/Discord/ntfy/Pushover).
+- **`/ops:status` skill** — Lightweight integration health panel.
+- **Registry templates** — Starter templates for 4 common stacks (monorepo, Next.js SaaS, Python microservices, React Native).
+- **CI release workflow** — Auto-opens PR for version bumps + optional npm publish.
+
+### Fixed
+
+- **Daemon** — Services work out of the box on fresh install.
+- **npm publish** — Updated to use `claude-ops-plugin` package name.
+
+---
+
 ## [1.1.1] — 2026-04-14
 
 ### Added
