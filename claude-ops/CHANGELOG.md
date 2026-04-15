@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] — 2026-04-15
+
+### Added
+
+- **`bin/wacli-safe`** — Lock-free one-shot wacli command wrapper. Pauses keepalive sync via pause-signal protocol, runs the command, then resumes automatically.
+- **`bin/wacli-health`** — Health check script with `--json` and `--repair` flags for any ops skill to verify wacli + keepalive status.
+- **Self-healing service supervisor** — `ensure_all_services()` in ops-daemon enumerates all expected `com.claude-ops.*` launchd agents (macOS) and systemd units (Linux), verifies each is installed with a live PID, and auto-repairs (reinstall, kickstart) unhealthy services. Runs at startup + every 5min.
+- **Wacli data cache** — Keepalive writes `wacli_chats.json` and `wacli_urgent.json` to cache every 5min. Daemon intelligence functions read from cache instead of calling wacli directly, eliminating store-lock contention.
+- **Periodic backfill** — Keepalive re-checks for chats needing backfill every 30min (configurable via `BACKFILL_INTERVAL`).
+- **Missed message detection** — Compares chat metadata timestamps against actual DB content; gaps > 1 hour are auto-queued for backfill.
+- **Backfill memory integration** — Writes conversation summaries to `$DATA_DIR/memories/` for the ops memory-extractor to consume.
+- **Pause-signal protocol** — `$STORE/.pause_sync` + `$STORE/.batch_wacli` files coordinate exclusive wacli access between keepalive, daemon, and external commands.
+
+### Fixed
+
+- **Keepalive P0 crash** — `detect_missed_messages` was called before its function definition; keepalive exited with status 127 on every machine, never reaching persistent sync.
+- **Cache directory never created** — `WACLI_CACHE_DIR` was defined but not included in `mkdir -p`, causing all cache writes to silently fail.
+- **Restart delay never applied** — `restart_delay` was logged but no `sleep` happened; services restarted immediately ignoring configured backoff.
+- **Launchctl PID parsing** — `awk '/PID/{print $2}'` extracted `=` instead of the PID from `launchctl list` dictionary output; replaced with `launchctl list | awk '$3==lbl'` which parses the tabular format correctly.
+- **Plist repair early-return** — `_install_launchd_plist` returned early on live PID even when the destination plist file was missing; service would vanish on reboot. Now requires both file existence AND live PID to skip.
+- **Store-lock contention in cache refresh** — `refresh_wacli_cache`, `detect_missed_messages`, and `write_backfill_memory` all called wacli directly during persistent sync. Now use `acquire_wacli_batch` / `release_wacli_batch` to pause sync first.
+- **dateutil dependency** — Replaced third-party `dateutil.parser` with stdlib `datetime.fromisoformat` in missed-message detection.
+- **Restart counter permanent death** — `max_restarts` counter now resets after 30min of stability instead of staying dead forever.
+- **Startup race condition** — 15s delay in keepalive when another `wacli sync` is already running.
+- **Daemon version tracking** — Health JSON now includes daemon version from package.json.
+
+---
+
 ## [1.4.0] — 2026-04-15
 
 ### Added
