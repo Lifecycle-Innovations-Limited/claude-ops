@@ -204,6 +204,33 @@ auto_detect_empty_chats
 detect_missed_messages
 run_backfill
 
+# ── Wacli data cache for daemon consumption ─────────────────────────────
+# Write chat/message data to JSON cache so the daemon never calls wacli directly.
+# This eliminates store-lock contention between daemon intelligence functions
+# and the persistent sync.
+WACLI_CACHE_DIR="$DATA_DIR/cache"
+WACLI_CACHE_INTERVAL=300  # 5 min
+LAST_WACLI_CACHE=0
+
+refresh_wacli_cache() {
+  local now
+  now=$(date +%s)
+  if (( now - LAST_WACLI_CACHE < WACLI_CACHE_INTERVAL )); then return 0; fi
+  LAST_WACLI_CACHE=$now
+
+  # Write chats cache
+  "$WACLI" chats list --json > "$WACLI_CACHE_DIR/wacli_chats.json" 2>/dev/null || true
+
+  # Write recent messages cache (search for urgent keywords)
+  "$WACLI" messages search --query "urgent OR asap OR deadline OR emergency OR ASAP" --json \
+    > "$WACLI_CACHE_DIR/wacli_urgent.json" 2>/dev/null || true
+
+  log "CACHE: refreshed wacli data cache"
+}
+
+# Initial cache write before starting persistent sync
+refresh_wacli_cache
+
 write_health "connected" "persistent sync starting"
 
 # ── Pause-signal handler ────────────────────────────────────────────────
@@ -403,8 +430,9 @@ while true; do
       break
     fi
 
-    # Periodic backfill (non-blocking, runs in subshell)
+    # Periodic backfill (non-blocking, runs in subshell) + cache refresh
     periodic_backfill
+    refresh_wacli_cache
 
     sleep 5
   done
