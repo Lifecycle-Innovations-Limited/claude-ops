@@ -200,6 +200,69 @@ if jids:
   fi
 }
 
+# ── Missed message detection ───────────────────────────────────────────
+# Compare chat metadata LastMessageTS against actual latest DB message.
+# If gap > 1 hour, the chat has missing messages and needs backfill.
+detect_missed_messages() {
+  command -v "$WACLI" &>/dev/null || return 0
+  local backfill_file="$STORE/.backfill_jids"
+
+  "$WACLI" chats list --json 2>/dev/null | python3 -c "
+import json, sys, subprocess, datetime
+
+data = json.load(sys.stdin)
+chats = data.get('data', []) or []
+wacli = '${WACLI}'
+cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=14)).isoformat()
+gap_threshold = 3600  # 1 hour in seconds
+missed = []
+
+for c in chats:
+    jid = c.get('JID', '')
+    meta_ts = c.get('LastMessageTS', '')
+    if not jid or not meta_ts or meta_ts < cutoff:
+        continue
+    try:
+        result = subprocess.run(
+            [wacli, 'messages', 'list', '--chat', jid, '--limit', '1', '--json'],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            continue
+        msg_data = json.loads(result.stdout)
+        msgs = msg_data.get('data', {}).get('messages', []) or []
+        if not msgs:
+            missed.append(jid)
+            continue
+        db_ts = msgs[0].get('Timestamp', '')
+        if not db_ts:
+            continue
+        # Parse both timestamps and compare
+        from dateutil.parser import parse as dtparse
+        meta_dt = dtparse(meta_ts)
+        db_dt = dtparse(db_ts)
+        gap = abs((meta_dt - db_dt).total_seconds())
+        if gap > gap_threshold:
+            missed.append(jid)
+    except Exception:
+        continue
+
+if missed:
+    # Append to existing backfill file (don't overwrite)
+    existing = set()
+    try:
+        with open('${backfill_file}') as f:
+            existing = set(l.strip() for l in f if l.strip())
+    except: pass
+    with open('${backfill_file}', 'w') as f:
+        for jid in sorted(existing | set(missed)):
+            f.write(jid + '\n')
+    print(f'MISSED: {len(missed)} chats with message gaps detected')
+" 2>/dev/null | while IFS= read -r line; do
+    log "$line"
+  done || true
+}
+
 auto_detect_empty_chats
 detect_missed_messages
 run_backfill
@@ -279,69 +342,6 @@ periodic_backfill() {
       write_backfill_memory
     fi
   ) &
-}
-
-# ── Missed message detection ───────────────────────────────────────────
-# Compare chat metadata LastMessageTS against actual latest DB message.
-# If gap > 1 hour, the chat has missing messages and needs backfill.
-detect_missed_messages() {
-  command -v "$WACLI" &>/dev/null || return 0
-  local backfill_file="$STORE/.backfill_jids"
-
-  "$WACLI" chats list --json 2>/dev/null | python3 -c "
-import json, sys, subprocess, datetime
-
-data = json.load(sys.stdin)
-chats = data.get('data', []) or []
-wacli = '${WACLI}'
-cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=14)).isoformat()
-gap_threshold = 3600  # 1 hour in seconds
-missed = []
-
-for c in chats:
-    jid = c.get('JID', '')
-    meta_ts = c.get('LastMessageTS', '')
-    if not jid or not meta_ts or meta_ts < cutoff:
-        continue
-    try:
-        result = subprocess.run(
-            [wacli, 'messages', 'list', '--chat', jid, '--limit', '1', '--json'],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode != 0:
-            continue
-        msg_data = json.loads(result.stdout)
-        msgs = msg_data.get('data', {}).get('messages', []) or []
-        if not msgs:
-            missed.append(jid)
-            continue
-        db_ts = msgs[0].get('Timestamp', '')
-        if not db_ts:
-            continue
-        # Parse both timestamps and compare
-        from dateutil.parser import parse as dtparse
-        meta_dt = dtparse(meta_ts)
-        db_dt = dtparse(db_ts)
-        gap = abs((meta_dt - db_dt).total_seconds())
-        if gap > gap_threshold:
-            missed.append(jid)
-    except Exception:
-        continue
-
-if missed:
-    # Append to existing backfill file (don't overwrite)
-    existing = set()
-    try:
-        with open('${backfill_file}') as f:
-            existing = set(l.strip() for l in f if l.strip())
-    except: pass
-    with open('${backfill_file}', 'w') as f:
-        for jid in sorted(existing | set(missed)):
-            f.write(jid + '\n')
-    print(f'MISSED: {len(missed)} chats with message gaps detected')
-" 2>/dev/null | while IFS= read -r line; do
-    log "$line"
-  done || true
 }
 
 # ── Write backfill summary to ops memory ────────────────────────────────
