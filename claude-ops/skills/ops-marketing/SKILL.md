@@ -27,6 +27,7 @@ Before executing, load available context:
 1. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`
    - `timezone` — display all timestamps correctly
    - `klaviyo_private_key`, `meta_ads_token`, `meta_ad_account_id`, `ga4_property_id`, `google_search_console_site` — check userConfig keys before env vars
+   - `google_ads_developer_token`, `google_ads_client_id`, `google_ads_client_secret`, `google_ads_refresh_token`, `google_ads_customer_id`, `google_ads_login_customer_id` — Google Ads credentials
 
 2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
    - If `action_needed` is not null → surface it before running any channel queries
@@ -124,6 +125,42 @@ GSC_SITE="${GOOGLE_SEARCH_CONSOLE_SITE:-$(claude plugin config get google_search
 # Uses same gcloud ADC as GA4
 ```
 
+### Google Ads
+
+```bash
+GADS_API_VERSION="v23"
+GADS_DEV_TOKEN="${GOOGLE_ADS_DEVELOPER_TOKEN:-$(claude plugin config get google_ads_developer_token 2>/dev/null)}"
+GADS_CLIENT_ID="${GOOGLE_ADS_CLIENT_ID:-$(claude plugin config get google_ads_client_id 2>/dev/null)}"
+GADS_CLIENT_SECRET="${GOOGLE_ADS_CLIENT_SECRET:-$(claude plugin config get google_ads_client_secret 2>/dev/null)}"
+GADS_REFRESH_TOKEN="${GOOGLE_ADS_REFRESH_TOKEN:-$(claude plugin config get google_ads_refresh_token 2>/dev/null)}"
+GADS_CUSTOMER_ID="${GOOGLE_ADS_CUSTOMER_ID:-$(claude plugin config get google_ads_customer_id 2>/dev/null)}"
+GADS_LOGIN_CUSTOMER_ID="${GOOGLE_ADS_LOGIN_CUSTOMER_ID:-$(claude plugin config get google_ads_login_customer_id 2>/dev/null)}"
+
+# Doppler fallback
+if [ -z "$GADS_REFRESH_TOKEN" ]; then
+  GADS_REFRESH_TOKEN="$(doppler secrets get GOOGLE_ADS_REFRESH_TOKEN --plain 2>/dev/null)"
+fi
+if [ -z "$GADS_DEV_TOKEN" ]; then
+  GADS_DEV_TOKEN="$(doppler secrets get GOOGLE_ADS_DEVELOPER_TOKEN --plain 2>/dev/null)"
+fi
+
+# Strip dashes from customer ID (API requires no dashes)
+GADS_CUSTOMER_ID="${GADS_CUSTOMER_ID//-/}"
+
+# Refresh access token (expires in ~1 hour — always refresh before API calls)
+GADS_ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
+  --data "client_id=${GADS_CLIENT_ID}" \
+  --data "client_secret=${GADS_CLIENT_SECRET}" \
+  --data "refresh_token=${GADS_REFRESH_TOKEN}" \
+  --data "grant_type=refresh_token" | jq -r '.access_token')
+
+# Common headers for all Google Ads API calls
+GADS_HEADERS=(-H "Content-Type: application/json" -H "Authorization: Bearer ${GADS_ACCESS_TOKEN}" -H "developer-token: ${GADS_DEV_TOKEN}")
+if [ -n "$GADS_LOGIN_CUSTOMER_ID" ]; then
+  GADS_HEADERS+=(-H "login-customer-id: ${GADS_LOGIN_CUSTOMER_ID}")
+fi
+```
+
 ---
 
 ## Sub-command Routing
@@ -135,7 +172,7 @@ Route `$ARGUMENTS` to the correct section below:
 | (empty), dashboard | Run full marketing dashboard |
 | email, klaviyo | Klaviyo email metrics |
 | ads, meta | Meta Ads performance |
-| google-ads | Google Ads (if configured) |
+| google-ads, gads | Google Ads dashboard + campaign management (see ## google-ads section) |
 | analytics, ga4 | GA4 sessions + conversions |
 | seo, gsc | Search Console metrics |
 | social | Social media aggregator |
@@ -424,6 +461,20 @@ Show `[not configured]` for any unconfigured channels rather than failing.
 
 ---
 
+## google-ads
+
+**Credential check**: If `GADS_DEV_TOKEN` or `GADS_REFRESH_TOKEN` is empty after resolution, print:
+`Warning: Google Ads not configured. Run /ops:setup marketing to set up credentials.`
+and stop.
+
+**Token refresh**: Run the access token refresh curl (from Credential Resolution above) at the start of every google-ads invocation. If `GADS_ACCESS_TOKEN` is null or "null", print:
+`Warning: Google Ads token refresh failed. Check client_id/client_secret/refresh_token in /ops:setup.`
+and stop.
+
+Sub-commands are defined in Plans 02 and 03.
+
+---
+
 ## campaigns
 
 Cross-channel campaign overview — unified view of active campaigns across all configured channels.
@@ -483,15 +534,16 @@ For any channel with missing credentials, show `[not configured — /ops:marketi
 ```bash
 # Env vars
 printenv KLAVIYO_API_KEY KLAVIYO_PRIVATE_KEY META_ACCESS_TOKEN FACEBOOK_ACCESS_TOKEN META_AD_ACCOUNT_ID GA4_PROPERTY_ID GA_MEASUREMENT_ID 2>/dev/null
+printenv GOOGLE_ADS_DEVELOPER_TOKEN GOOGLE_ADS_CLIENT_ID GOOGLE_ADS_CLIENT_SECRET GOOGLE_ADS_REFRESH_TOKEN GOOGLE_ADS_CUSTOMER_ID 2>/dev/null
 
 # Shell profiles
-grep -h 'KLAVIYO\|META_\|FACEBOOK\|GA4\|GA_MEASUREMENT' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
+grep -h 'KLAVIYO\|META_\|FACEBOOK\|GA4\|GA_MEASUREMENT\|GOOGLE_ADS' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
 
 # Doppler — ALL projects, ALL configs
 for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
   for cfg in dev stg prd; do
     doppler secrets --project "$proj" --config "$cfg" --json 2>/dev/null | \
-      jq -r --arg proj "$proj" --arg cfg "$cfg" 'to_entries[] | select(.key | test("KLAVIYO|META|FACEBOOK|GA4|GOOGLE"; "i")) | "\(.key)=\(.value.computed) (doppler:\($proj)/\($cfg))"'
+      jq -r --arg proj "$proj" --arg cfg "$cfg" 'to_entries[] | select(.key | test("KLAVIYO|META|FACEBOOK|GA4|GOOGLE|GOOGLE_ADS"; "i")) | "\(.key)=\(.value.computed) (doppler:\($proj)/\($cfg))"'
   done
 done
 
@@ -499,17 +551,19 @@ done
 dcli password klaviyo --output json 2>/dev/null | jq -r '.[] | select(.password != null and .password != "") | "\(.title): token found"'
 dcli password facebook --output json 2>/dev/null | jq -r '.[] | select(.password != null and .password != "") | "\(.title): token found"'
 dcli password meta --output json 2>/dev/null | jq -r '.[] | select(.password != null and .password != "") | "\(.title): token found"'
+dcli password "google ads" --output json 2>/dev/null | jq -r '.[] | select(.password != null and .password != "") | "\(.title): token found"'
 
 # Keychain
 security find-generic-password -s "klaviyo-api-key" -w 2>/dev/null
 security find-generic-password -s "meta-ads-token" -w 2>/dev/null
+security find-generic-password -s "google-ads-refresh-token" -w 2>/dev/null
 
 # gcloud ADC (for GA4 + Search Console)
 gcloud auth application-default print-access-token 2>/dev/null | head -c 10 && echo "...gcloud-ok"
 
 # Chrome history — reveals account identity
 sqlite3 ~/Library/Application\ Support/Google/Chrome/Default/History \
-  "SELECT DISTINCT url FROM urls WHERE url LIKE '%klaviyo.com%' OR url LIKE '%analytics.google.com%' OR url LIKE '%business.facebook.com%' OR url LIKE '%search.google.com/search-console%' ORDER BY last_visit_time DESC LIMIT 15" 2>/dev/null
+  "SELECT DISTINCT url FROM urls WHERE url LIKE '%klaviyo.com%' OR url LIKE '%analytics.google.com%' OR url LIKE '%business.facebook.com%' OR url LIKE '%search.google.com/search-console%' OR url LIKE '%ads.google.com%' ORDER BY last_visit_time DESC LIMIT 15" 2>/dev/null
 
 # Existing prefs + userConfig
 jq -r '.marketing // empty' "$PREFS_PATH" 2>/dev/null
@@ -524,5 +578,7 @@ Present ALL findings before asking for anything. Only prompt for values NOT foun
 **GA4:** Only needs Property ID + gcloud ADC. If gcloud ADC not set up, run `gcloud auth application-default login` in background (opens browser). Check Chrome history for GA4 property URLs to auto-detect the property ID.
 
 **Search Console:** Only needs site URL + gcloud ADC. Check Chrome history for `search.google.com/search-console` URLs to auto-detect the site.
+
+**Google Ads:** More complex than other marketing credentials — requires 3 pieces: (1) developer token from Google Ads MCC → Tools & Settings → API Center, (2) OAuth2 client ID + secret from Google Cloud Console (Desktop app type, Google Ads API enabled), (3) refresh token via browser OAuth flow. Setup flow: collect developer token and client credentials first, then open browser auth URL, user pastes authorization code, exchange for refresh token via curl, then list accessible customer accounts and let user select. Smoke test: `curl -s -X GET "https://googleads.googleapis.com/v23/customers:listAccessibleCustomers" -H "Authorization: Bearer $TOKEN" -H "developer-token: $DEV_TOKEN"` — expect JSON with `resourceNames` array.
 
 Save via userConfig (preferred) or Doppler. Report: `[service] ✓ connected` or `[service] ✗ invalid key — [error]`.
