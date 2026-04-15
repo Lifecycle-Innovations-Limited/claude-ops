@@ -181,6 +181,25 @@ aws ce get-anomalies \
   --output json 2>/dev/null || echo '{"Anomalies": []}'
 ```
 
+### Shopify revenue (external projects)
+
+Check registry for external Shopify projects and pull their revenue data:
+
+```bash
+SHOPIFY_PROJECTS=$(jq -c '[.projects[] | select(.source == "shopify")]' "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null)
+```
+
+For each Shopify project with valid credentials, query recent orders:
+
+```bash
+STORE_URL="[from project.shopify.store_url]"
+TOKEN="[from env var named in project.shopify.credential_key]"
+curl -s -H "X-Shopify-Access-Token: $TOKEN" \
+  "https://$STORE_URL/admin/api/2024-10/orders.json?status=any&created_at_min=$(date -v-30d +%Y-%m-%dT00:00:00Z 2>/dev/null)&limit=250" 2>/dev/null
+```
+
+Sum `orders[].total_price` for trailing 30d GMV. Include in `revenue.breakdown.shopify_gmv`.
+
 ### Project registry (revenue metadata — fallback)
 
 ```bash
@@ -188,7 +207,7 @@ cat "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null | \
   jq '[.projects[] | {alias, name, revenue_stage: (.revenue_stage // "pre-revenue"), mrr: (.mrr // 0), arr: (.arr // 0)}]'
 ```
 
-Use this only if BOTH `STRIPE_SECRET_KEY` and `REVENUECAT_API_KEY` are unset. In that case populate `revenue.mrr` as the sum of `registry.json` project `mrr` values and set `mrr_source: "registry.json"`.
+Use this only if BOTH `STRIPE_SECRET_KEY` and `REVENUECAT_API_KEY` are unset and no Shopify projects are configured. In that case populate `revenue.mrr` as the sum of `registry.json` project `mrr` values and set `mrr_source: "registry.json"`.
 
 ---
 

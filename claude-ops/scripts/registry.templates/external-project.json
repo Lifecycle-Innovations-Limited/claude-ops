@@ -1,0 +1,62 @@
+{
+  "version": "1.0",
+  "owner": "owner",
+  "projects": [
+    {
+      "alias": "my-shopify-store",
+      "source": "shopify",
+      "type": "external",
+      "shopify": {
+        "store_url": "yourstore.myshopify.com",
+        "credential_key": "SHOPIFY_TOKEN"
+      },
+      "revenue": {
+        "model": "ecommerce",
+        "stage": "growth"
+      },
+      "priority": 3
+    },
+    {
+      "alias": "team-linear",
+      "source": "linear",
+      "type": "external",
+      "linear": {
+        "team_key": "ENG"
+      },
+      "priority": 5
+    },
+    {
+      "alias": "company-slack",
+      "source": "slack",
+      "type": "external",
+      "slack": {
+        "workspace": "your-workspace"
+      },
+      "priority": 5
+    },
+    {
+      "alias": "docs-notion",
+      "source": "notion",
+      "type": "external",
+      "notion": {
+        "workspace": "your-workspace"
+      },
+      "priority": 5
+    },
+    {
+      "alias": "custom-saas",
+      "source": "custom",
+      "type": "external",
+      "custom": {
+        "url": "https://app.example.com",
+        "health_endpoint": "https://app.example.com/api/health",
+        "credential_key": "CUSTOM_API_KEY"
+      },
+      "revenue": {
+        "model": "saas",
+        "stage": "pre-launch"
+      },
+      "priority": 4
+    }
+  ]
+}
