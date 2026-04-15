@@ -34,8 +34,9 @@ SYNC_PROBE_TIMEOUT=20
 BACKFILL_INTERVAL="${BACKFILL_INTERVAL:-1800}"  # 30 min default
 PAUSE_SIGNAL="$STORE/.pause_sync"
 SYNC_PID_FILE="$STORE/.sync_pid"
+WACLI_CACHE_DIR="$DATA_DIR/cache"
 
-mkdir -p "$LOG_DIR" "$STORE" "$MEMORY_DIR"
+mkdir -p "$LOG_DIR" "$STORE" "$MEMORY_DIR" "$WACLI_CACHE_DIR"
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$LOG"; }
 
@@ -271,7 +272,6 @@ run_backfill
 # Write chat/message data to JSON cache so the daemon never calls wacli directly.
 # This eliminates store-lock contention between daemon intelligence functions
 # and the persistent sync.
-WACLI_CACHE_DIR="$DATA_DIR/cache"
 WACLI_CACHE_INTERVAL=300  # 5 min
 LAST_WACLI_CACHE=0
 
