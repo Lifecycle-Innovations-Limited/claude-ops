@@ -3,38 +3,35 @@
   "owner": "Your Name",
   "projects": [
     {
-      "alias": "example-project",
-      "paths": ["~/Projects/example-project"],
-      "repos": ["your-github-org/example-project"],
-      "org": "your-github-org",
+      "alias": "my-app",
+      "paths": ["~/Projects/my-app"],
+      "repos": ["your-org/my-app"],
+      "org": "your-org",
       "type": "monorepo",
       "infra": {
         "platform": "vercel"
       },
-      "revenue": {
-        "model": "saas",
-        "stage": "pre-launch",
-        "target_date": "2026-12-31"
-      },
+      "revenue": { "model": "saas", "stage": "pre-launch" },
       "gsd": true,
       "priority": 1
     },
     {
-      "alias": "example-multi-repo",
-      "paths": ["~/Projects/example-api", "~/Projects/example-web", "~/Projects/example-mobile"],
-      "repos": ["your-github-org/example-api", "your-github-org/example-web", "your-github-org/example-mobile"],
-      "org": "your-github-org",
-      "type": "multi-repo",
-      "infra": {
-        "ecs_clusters": ["example-production", "example-staging"],
-        "platform": "aws"
+      "alias": "my-store",
+      "source": "shopify",
+      "type": "external",
+      "shopify": {
+        "store_url": "yourstore.myshopify.com",
+        "credential_key": "SHOPIFY_TOKEN"
       },
-      "revenue": {
-        "model": "subscription",
-        "stage": "growth"
-      },
-      "gsd": true,
-      "priority": 2
+      "revenue": { "model": "ecommerce", "stage": "growth" },
+      "priority": 3
+    },
+    {
+      "alias": "eng-team",
+      "source": "linear",
+      "type": "external",
+      "linear": { "team_key": "ENG" },
+      "priority": 5
     }
   ]
 }

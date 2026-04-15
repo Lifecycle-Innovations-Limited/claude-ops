@@ -95,14 +95,21 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-infra 2>/dev/null || echo '{"clusters":[],"error":
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-ci 2>/dev/null || echo '[]'
 ```
 
+## External projects health
+
+```!
+${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
+```
+
 ## Your task
 
-Analyze the pre-gathered data. Then run parallel checks:
+Analyze the pre-gathered data — including external projects. Then run parallel checks:
 
 1. **ECS health** — parse infra data for unhealthy services, stopped tasks, failed deployments.
 2. **Sentry** — if Sentry MCP is connected, query recent unresolved errors. Otherwise note it's unavailable.
 3. **CI** — parse CI data for failing pipelines, broken main/dev branches.
 4. **GitHub Actions** — `gh run list --limit 20 --json status,conclusion,name,headBranch,createdAt 2>/dev/null`
+5. **External projects** — parse ops-external data. Flag `auth_expired` as HIGH (credential rotation needed), `unreachable`/`degraded` as MEDIUM, `not_configured` as LOW.
 
 Classify each issue by severity:
 
@@ -139,6 +146,9 @@ CI STATUS
 
 SENTRY (top errors, 24h)
 [error] [count] [first seen] [project]
+
+EXTERNAL PROJECTS
+[alias] [source] [status] [details — e.g. auth_expired, unreachable]
 
 ──────────────────────────────────────────────────────
 ```

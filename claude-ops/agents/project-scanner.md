@@ -28,9 +28,17 @@ Load the project registry:
 cat "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null || echo '{}'
 ```
 
-For each project in the registry, run these checks in parallel:
+For each project in the registry, run these checks in parallel.
 
-### Per-project git checks
+**Important**: Projects with `"type": "external"` have no local paths or git repos. For these, run the external health check instead:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
+```
+
+Include external projects in the output under the same `projects[]` array with `"source"` set to their type (shopify/linear/slack/notion/custom) and git/PR fields set to `null`.
+
+### Per-project git checks (repo-based projects only)
 
 ```bash
 PROJECT_PATH="[expanded path]"
@@ -97,13 +105,28 @@ gh pr list --repo "$REPO" --state open \
         }
       ],
       "health": "clean|dirty|behind|ahead|stale"
+    },
+    {
+      "alias": "[alias]",
+      "name": "[name]",
+      "source": "shopify|linear|slack|notion|custom",
+      "type": "external",
+      "git": null,
+      "gsd": null,
+      "prs": null,
+      "external_status": "healthy|auth_expired|unreachable|degraded|not_configured|discovered",
+      "external_details": {},
+      "health": "healthy|degraded|unreachable|auth_expired|not_configured"
     }
   ],
   "summary": {
     "total_projects": 0,
+    "total_repo_projects": 0,
+    "total_external_projects": 0,
     "dirty": 0,
     "ready_to_merge_prs": 0,
-    "stale_branches": 0
+    "stale_branches": 0,
+    "external_unhealthy": 0
   }
 }
 ```

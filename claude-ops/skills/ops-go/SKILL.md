@@ -128,6 +128,12 @@ for d in $(jq -r '.projects[] | select(.gsd == true) | .paths[]' "${CLAUDE_PLUGI
 done
 ```
 
+### External Projects (non-repo)
+
+```!
+${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
+```
+
 ### Calendar (today)
 
 ```!
@@ -153,6 +159,9 @@ PRs NEEDING ACTION
 
 PORTFOLIO DASHBOARD
 [table: project, phase, branch, uncommitted, CI, next action]
+
+EXTERNAL PROJECTS
+[table: alias, source, status, details — from ops-external data]
 
 UNREAD
 [WhatsApp: N, Email: N, Slack: check MCP, Notion: N items, Calendar: N events today]

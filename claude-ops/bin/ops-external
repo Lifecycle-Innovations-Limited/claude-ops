@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# ops-external — Health status for non-git (external) projects → JSON
+# Checks Shopify stores, Linear teams, Slack workspaces, Notion, custom endpoints
+# Reads from registry.json, outputs compact JSON for skill injection
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REGISTRY="${SCRIPT_DIR}/../scripts/registry.json"
+
+if [ ! -f "$REGISTRY" ]; then
+  echo '[]' && exit 0
+fi
+
+# Extract external projects (type=external or source is set without paths/repos)
+EXTERNAL=$(jq -c '[.projects[] | select(.type == "external" or (.source != null and .source != "git"))]' "$REGISTRY" 2>/dev/null)
+
+if [ "$EXTERNAL" = "[]" ] || [ -z "$EXTERNAL" ]; then
+  echo '[]' && exit 0
+fi
+
+TMPDIR_OPS=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_OPS"' EXIT
+
+COUNT=$(echo "$EXTERNAL" | jq 'length')
+
+for i in $(seq 0 $((COUNT - 1))); do
+  PROJECT=$(echo "$EXTERNAL" | jq -c ".[$i]")
+  ALIAS=$(echo "$PROJECT" | jq -r '.alias')
+  SOURCE=$(echo "$PROJECT" | jq -r '.source // "unknown"')
+
+  (
+    STATUS="unknown"
+    DETAILS="{}"
+
+    case "$SOURCE" in
+      shopify)
+        STORE_URL=$(echo "$PROJECT" | jq -r '.shopify.store_url // empty')
+        CRED_KEY=$(echo "$PROJECT" | jq -r '.shopify.credential_key // "SHOPIFY_TOKEN"')
+        TOKEN="${!CRED_KEY:-}"
+
+        if [ -n "$TOKEN" ] && [ -n "$STORE_URL" ]; then
+          RESP=$(curl -s -w "\n%{http_code}" \
+            -H "X-Shopify-Access-Token: $TOKEN" \
+            "https://$STORE_URL/admin/api/2024-10/shop.json" 2>/dev/null || echo -e "\n000")
+          HTTP_CODE=$(echo "$RESP" | tail -1)
+          BODY=$(echo "$RESP" | sed '$d')
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            STATUS="healthy"
+            SHOP_NAME=$(echo "$BODY" | jq -r '.shop.name // "unknown"' 2>/dev/null)
+            PLAN=$(echo "$BODY" | jq -r '.shop.plan_name // "unknown"' 2>/dev/null)
+            DETAILS=$(jq -n --arg n "$SHOP_NAME" --arg p "$PLAN" '{shop_name:$n,plan:$p}')
+          elif [ "$HTTP_CODE" = "401" ]; then
+            STATUS="auth_expired"
+          else
+            STATUS="unreachable"
+          fi
+        else
+          STATUS="not_configured"
+        fi
+        ;;
+
+      linear)
+        TEAM_KEY=$(echo "$PROJECT" | jq -r '.linear.team_key // empty')
+        LINEAR_KEY="${LINEAR_API_KEY:-}"
+
+        if [ -n "$LINEAR_KEY" ] && [ -n "$TEAM_KEY" ]; then
+          RESP=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: $LINEAR_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"{ team(id: \\\"$TEAM_KEY\\\") { name issueCount } }\"}" \
+            "https://api.linear.app/graphql" 2>/dev/null || echo -e "\n000")
+          HTTP_CODE=$(echo "$RESP" | tail -1)
+          BODY=$(echo "$RESP" | sed '$d')
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            ERRORS=$(echo "$BODY" | jq '.errors' 2>/dev/null)
+            if [ "$ERRORS" = "null" ] || [ -z "$ERRORS" ]; then
+              STATUS="healthy"
+              TEAM_NAME=$(echo "$BODY" | jq -r '.data.team.name // "unknown"' 2>/dev/null)
+              ISSUES=$(echo "$BODY" | jq -r '.data.team.issueCount // 0' 2>/dev/null)
+              DETAILS=$(jq -n --arg n "$TEAM_NAME" --arg c "$ISSUES" '{team_name:$n,issue_count:($c|tonumber)}')
+            else
+              STATUS="error"
+            fi
+          else
+            STATUS="unreachable"
+          fi
+        else
+          STATUS="not_configured"
+        fi
+        ;;
+
+      slack)
+        # Slack health is checked via MCP — just mark as discovered
+        WORKSPACE=$(echo "$PROJECT" | jq -r '.slack.workspace // "unknown"')
+        STATUS="discovered"
+        DETAILS=$(jq -n --arg w "$WORKSPACE" '{workspace:$w,note:"use Slack MCP for details"}')
+        ;;
+
+      notion)
+        # Notion health is checked via MCP — just mark as discovered
+        WORKSPACE=$(echo "$PROJECT" | jq -r '.notion.workspace // "unknown"')
+        STATUS="discovered"
+        DETAILS=$(jq -n --arg w "$WORKSPACE" '{workspace:$w,note:"use Notion MCP for details"}')
+        ;;
+
+      custom)
+        HEALTH_URL=$(echo "$PROJECT" | jq -r '.custom.health_endpoint // empty')
+        CRED_KEY=$(echo "$PROJECT" | jq -r '.custom.credential_key // empty')
+        TOKEN="${CRED_KEY:+${!CRED_KEY:-}}"
+
+        if [ -n "$HEALTH_URL" ]; then
+          AUTH_HEADER=""
+          [ -n "$TOKEN" ] && AUTH_HEADER="-H \"Authorization: Bearer $TOKEN\""
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $AUTH_HEADER "$HEALTH_URL" 2>/dev/null || echo "000")
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            STATUS="healthy"
+          elif [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+            STATUS="auth_expired"
+          else
+            STATUS="degraded"
+          fi
+          DETAILS=$(jq -n --arg u "$HEALTH_URL" --arg c "$HTTP_CODE" '{health_url:$u,http_status:$c}')
+        else
+          STATUS="not_configured"
+        fi
+        ;;
+
+      *)
+        STATUS="unknown_source"
+        ;;
+    esac
+
+    REVENUE_STAGE=$(echo "$PROJECT" | jq -r '.revenue.stage // "unknown"')
+    REVENUE_MODEL=$(echo "$PROJECT" | jq -r '.revenue.model // "unknown"')
+    PRIORITY=$(echo "$PROJECT" | jq -r '.priority // 99')
+
+    jq -n \
+      --arg a "$ALIAS" --arg s "$SOURCE" --arg st "$STATUS" \
+      --arg rs "$REVENUE_STAGE" --arg rm "$REVENUE_MODEL" --arg p "$PRIORITY" \
+      --argjson d "$DETAILS" \
+      '{alias:$a,source:$s,status:$st,revenue_stage:$rs,revenue_model:$rm,priority:($p|tonumber),details:$d}' \
+      > "$TMPDIR_OPS/$ALIAS.json"
+  ) &
+done
+wait
+
+# Assemble array
+echo -n '['
+first=true
+for f in "$TMPDIR_OPS"/*.json; do
+  [ ! -f "$f" ] && continue
+  [ "$first" = true ] && first=false || echo -n ','
+  cat "$f"
+done
+echo ']'
