@@ -471,7 +471,209 @@ and stop.
 `Warning: Google Ads token refresh failed. Check client_id/client_secret/refresh_token in /ops:setup.`
 and stop.
 
-Sub-commands are defined in Plans 02 and 03.
+Route `$ARGUMENTS` within the google-ads section:
+
+| Input | Action |
+|---|---|
+| (empty), dashboard, overview | Campaign performance dashboard (last 7 days) |
+| search-terms, terms | Search Terms Report with negative keyword candidates (last 30 days) |
+| budget-recs, recommendations, recs | Budget optimization recommendations from Google |
+| campaigns, manage | Campaign management (create, pause, enable, budget) — see Plan 03 |
+| keywords, kw | Keyword Planner + ad group management — see Plan 03 |
+
+### Dashboard (default — no args, `dashboard`, `overview`)
+
+```bash
+# Campaign performance — last 7 days
+CAMPAIGNS=$(curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/googleAds:searchStream" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary '{
+    "query": "SELECT campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM campaign WHERE segments.date DURING LAST_7_DAYS AND campaign.status != REMOVED ORDER BY metrics.cost_micros DESC LIMIT 20"
+  }')
+
+# Check for API error
+GADS_ERROR=$(echo "$CAMPAIGNS" | jq -r '.[0].error.message // empty' 2>/dev/null)
+if [ -n "$GADS_ERROR" ]; then
+  echo "Google Ads API error: ${GADS_ERROR}"
+  echo "Check credentials with /ops:marketing setup."
+  exit 0
+fi
+
+# Check for empty results
+CAMPAIGN_COUNT=$(echo "$CAMPAIGNS" | jq '[.[].results[]?] | length' 2>/dev/null || echo "0")
+if [ "$CAMPAIGN_COUNT" -eq 0 ]; then
+  echo "No active campaigns found in the last 7 days."
+  exit 0
+fi
+
+# Compute totals
+TOTAL_SPEND=$(echo "$CAMPAIGNS" | jq '[.[].results[]?.metrics.costMicros // "0" | tonumber] | add / 1000000' 2>/dev/null)
+TOTAL_CONVERSIONS=$(echo "$CAMPAIGNS" | jq '[.[].results[]?.metrics.conversions // "0" | tonumber] | add' 2>/dev/null)
+TOTAL_VALUE=$(echo "$CAMPAIGNS" | jq '[.[].results[]?.metrics.conversionsValue // "0" | tonumber] | add' 2>/dev/null)
+OVERALL_ROAS=$(awk "BEGIN { if (${TOTAL_SPEND:-0} > 0) printf \"%.2f\", ${TOTAL_VALUE:-0} / ${TOTAL_SPEND:-1}; else print \"—\" }")
+TOTAL_SPEND_FMT=$(awk "BEGIN { printf \"%.2f\", ${TOTAL_SPEND:-0} }")
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  GOOGLE ADS — Last 7 Days"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "Total Spend: \$${TOTAL_SPEND_FMT}"
+echo "Total Conversions: ${TOTAL_CONVERSIONS}"
+echo "Overall ROAS: ${OVERALL_ROAS}"
+echo ""
+
+# Print table header
+printf "| %-30s | %-8s | %-10s | %-10s | %-8s | %-8s | %-6s | %-6s | %-6s |\n" \
+  "Campaign" "Status" "Budget/day" "Spend" "Impr" "Clicks" "CTR" "Conv" "ROAS"
+printf "|%s|%s|%s|%s|%s|%s|%s|%s|%s|\n" \
+  "--------------------------------" "----------" "------------" "------------" "----------" "----------" "--------" "--------" "--------"
+
+# Print each campaign row
+echo "$CAMPAIGNS" | jq -r '.[].results[]? | [
+  .campaign.name,
+  .campaign.status,
+  (.campaignBudget.amountMicros // "0" | tonumber / 1000000),
+  (.metrics.costMicros // "0" | tonumber / 1000000),
+  (.metrics.impressions // "0" | tonumber),
+  (.metrics.clicks // "0" | tonumber),
+  (.metrics.conversions // "0" | tonumber),
+  (.metrics.conversionsValue // "0" | tonumber),
+  (.metrics.costMicros // "0" | tonumber)
+] | @tsv' 2>/dev/null | while IFS=$'\t' read -r name status budget_raw spend_raw impr_raw clicks_raw conv_raw value_raw cost_raw; do
+  BUDGET=$(awk "BEGIN { printf \"%.2f\", ${budget_raw:-0} }")
+  SPEND=$(awk "BEGIN { printf \"%.2f\", ${spend_raw:-0} }")
+  CTR=$(awk "BEGIN { if (${impr_raw:-0} > 0) printf \"%.2f\", ${clicks_raw:-0} / ${impr_raw:-0} * 100; else print \"0.00\" }")
+  ROAS=$(awk "BEGIN { if (${spend_raw:-0} > 0) printf \"%.2f\", ${value_raw:-0} / ${spend_raw:-1}; else print \"—\" }")
+  printf "| %-30s | %-8s | \$%-9s | \$%-9s | %-8s | %-8s | %-5s%% | %-6s | %-6s |\n" \
+    "${name:0:30}" "$status" "$BUDGET" "$SPEND" "$impr_raw" "$clicks_raw" "$CTR" "$conv_raw" "$ROAS"
+done
+```
+
+### Search Terms (`search-terms`, `terms`)
+
+```bash
+SEARCH_TERMS=$(curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/googleAds:searchStream" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary '{
+    "query": "SELECT search_term_view.search_term, search_term_view.status, campaign.name, ad_group.name, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions FROM search_term_view WHERE segments.date DURING LAST_30_DAYS AND metrics.impressions > 0 ORDER BY metrics.impressions DESC LIMIT 100"
+  }')
+
+# Check for API error
+GADS_ST_ERROR=$(echo "$SEARCH_TERMS" | jq -r '.[0].error.message // empty' 2>/dev/null)
+if [ -n "$GADS_ST_ERROR" ]; then
+  echo "Google Ads API error: ${GADS_ST_ERROR}"
+  echo "Check credentials with /ops:marketing setup."
+  exit 0
+fi
+
+TERM_COUNT=$(echo "$SEARCH_TERMS" | jq '[.[].results[]?] | length' 2>/dev/null || echo "0")
+if [ "$TERM_COUNT" -eq 0 ]; then
+  echo "No search term data found for the last 30 days."
+  exit 0
+fi
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  SEARCH TERMS REPORT — Last 30 Days"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+printf "| %-30s | %-10s | %-20s | %-15s | %-6s | %-6s | %-7s | %-6s |\n" \
+  "Search Term" "Status" "Campaign" "Ad Group" "Impr" "Clicks" "Cost" "Conv"
+printf "|%s|%s|%s|%s|%s|%s|%s|%s|\n" \
+  "--------------------------------" "------------" "----------------------" "-----------------" "--------" "--------" "---------" "--------"
+
+# Status mapping and table rows
+echo "$SEARCH_TERMS" | jq -r '.[].results[]? | [
+  .searchTermView.searchTerm,
+  .searchTermView.status,
+  .campaign.name,
+  .adGroup.name,
+  (.metrics.impressions // "0" | tostring),
+  (.metrics.clicks // "0" | tostring),
+  (.metrics.costMicros // "0" | tonumber / 1000000 | tostring),
+  (.metrics.conversions // "0" | tostring)
+] | @tsv' 2>/dev/null | while IFS=$'\t' read -r term status campaign adgroup impr clicks cost_raw conv; do
+  case "$status" in
+    ADDED)    STATUS_LABEL="✓ Added"   ;;
+    EXCLUDED) STATUS_LABEL="✗ Excluded" ;;
+    *)        STATUS_LABEL="○ New"     ;;
+  esac
+  COST=$(awk "BEGIN { printf \"%.2f\", ${cost_raw:-0} }")
+  printf "| %-30s | %-10s | %-20s | %-15s | %-6s | %-6s | \$%-6s | %-6s |\n" \
+    "${term:0:30}" "$STATUS_LABEL" "${campaign:0:20}" "${adgroup:0:15}" "$impr" "$clicks" "$COST" "$conv"
+done
+
+echo ""
+echo "Negative keyword candidates (high spend, zero conversions):"
+
+echo "$SEARCH_TERMS" | jq -r '.[].results[]? | select(
+  (.metrics.conversions // "0" | tonumber) == 0 and
+  (.metrics.costMicros // "0" | tonumber) > 1000000
+) | "  • \(.searchTermView.searchTerm) — $\(.metrics.costMicros | tonumber / 1000000 | tostring | split(".") | .[0] + "." + (.[1] // "00")[0:2])"' 2>/dev/null || echo "  (none found)"
+```
+
+### Budget Recommendations (`budget-recs`, `recommendations`, `recs`)
+
+```bash
+RECS=$(curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/googleAds:searchStream" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary '{
+    "query": "SELECT recommendation.resource_name, recommendation.type, recommendation.campaign, recommendation.impact, recommendation.campaign_budget_recommendation FROM recommendation WHERE recommendation.type IN (CAMPAIGN_BUDGET, MOVE_UNUSED_BUDGET, MARGINAL_ROI_CAMPAIGN_BUDGET, FORECASTING_CAMPAIGN_BUDGET)"
+  }')
+
+# Check for API error
+GADS_REC_ERROR=$(echo "$RECS" | jq -r '.[0].error.message // empty' 2>/dev/null)
+if [ -n "$GADS_REC_ERROR" ]; then
+  echo "Google Ads API error: ${GADS_REC_ERROR}"
+  echo "Check credentials with /ops:marketing setup."
+  exit 0
+fi
+
+REC_COUNT=$(echo "$RECS" | jq '[.[].results[]?] | length' 2>/dev/null || echo "0")
+if [ "$REC_COUNT" -eq 0 ]; then
+  echo "No budget recommendations available. Google needs campaign data to generate recommendations."
+  exit 0
+fi
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  BUDGET RECOMMENDATIONS"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+printf "| %-22s | %-25s | %-15s | %-13s | %-20s |\n" \
+  "Type" "Campaign" "Current Budget" "Recommended" "Impact"
+printf "|%s|%s|%s|%s|%s|\n" \
+  "------------------------" "---------------------------" "-----------------" "---------------" "----------------------"
+
+echo "$RECS" | jq -r '.[].results[]? | [
+  .recommendation.type,
+  .recommendation.campaign,
+  (.recommendation.campaignBudgetRecommendation.currentBudgetAmountMicros // "0" | tonumber / 1000000 | tostring),
+  (.recommendation.campaignBudgetRecommendation.recommendedBudgetAmountMicros // "0" | tonumber / 1000000 | tostring),
+  (.recommendation.impact.baseMetrics.impressions // "0" | tonumber | tostring),
+  (.recommendation.impact.potentialMetrics.impressions // "0" | tonumber | tostring)
+] | @tsv' 2>/dev/null | while IFS=$'\t' read -r rec_type campaign current_raw recommended_raw base_impr_raw pot_impr_raw; do
+  case "$rec_type" in
+    CAMPAIGN_BUDGET)             TYPE_LABEL="Increase Budget"      ;;
+    MOVE_UNUSED_BUDGET)          TYPE_LABEL="Move Unused Budget"   ;;
+    MARGINAL_ROI_CAMPAIGN_BUDGET) TYPE_LABEL="Marginal ROI"        ;;
+    FORECASTING_CAMPAIGN_BUDGET) TYPE_LABEL="Forecasting"          ;;
+    *)                           TYPE_LABEL="$rec_type"            ;;
+  esac
+  CURRENT=$(awk "BEGIN { printf \"%.2f\", ${current_raw:-0} }")
+  RECOMMENDED=$(awk "BEGIN { printf \"%.2f\", ${recommended_raw:-0} }")
+  IMPACT=$(awk "BEGIN {
+    base = ${base_impr_raw:-0}; pot = ${pot_impr_raw:-0}
+    if (base > 0) printf \"+%.0f%% impressions\", (pot - base) / base * 100
+    else print \"—\"
+  }")
+  printf "| %-22s | %-25s | \$%-14s | \$%-12s | %-20s |\n" \
+    "$TYPE_LABEL" "${campaign:0:25}" "$CURRENT" "$RECOMMENDED" "$IMPACT"
+done
+```
 
 ---
 
