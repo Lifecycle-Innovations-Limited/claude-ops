@@ -91,8 +91,26 @@ aws ce get-cost-forecast \
 ### Project registry (revenue stage)
 
 ```bash
-cat "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null | jq '[.projects[] | {alias, name, stage: (.revenue_stage // "pre-revenue"), mrr: (.mrr // 0)}]'
+cat "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null | jq '[.projects[] | {alias, name, stage: (.revenue_stage // .revenue.stage // "pre-revenue"), mrr: (.mrr // 0), source: (.source // "git"), type: (.type // "repo")}]'
 ```
+
+### External project revenue (Shopify, custom SaaS)
+
+```!
+${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
+```
+
+For Shopify projects showing `status: "healthy"`, pull GMV via Shopify Admin API:
+
+```bash
+# For each Shopify project in registry with valid credentials:
+STORE_URL="[from project.shopify.store_url]"
+TOKEN="[from env var named in project.shopify.credential_key]"
+curl -s -H "X-Shopify-Access-Token: $TOKEN" \
+  "https://$STORE_URL/admin/api/2024-10/orders.json?status=any&created_at_min=$(date -v-30d +%Y-%m-%dT00:00:00Z 2>/dev/null)&limit=250" 2>/dev/null
+```
+
+Include Shopify GMV in the revenue pipeline table with source=shopify.
 
 ---
 
@@ -120,12 +138,15 @@ CREDITS
  Burn rate at current:   [N months remaining]
 
 REVENUE PIPELINE
- PROJECT        STAGE           MRR      STATUS
- ────────────────────────────────────────────────
- [project]      [stage]         $[X]     [status]
+ PROJECT        SOURCE     STAGE           MRR/GMV    STATUS
+ ──────────────────────────────────────────────────────────────
+ [project]      git        [stage]         $[X]       [status]
+ [project]      shopify    [stage]         $[X] GMV   [status]
+ [project]      custom     [stage]         $[X]       [status]
  ...
- ────────────────────────────────────────────────
- TOTAL MRR                      $[X]
+ ──────────────────────────────────────────────────────────────
+ TOTAL MRR                                 $[X]
+ TOTAL SHOPIFY GMV (30d)                   $[X]
 
 RUNWAY ESTIMATE
  Monthly burn (AWS):  $[X]
