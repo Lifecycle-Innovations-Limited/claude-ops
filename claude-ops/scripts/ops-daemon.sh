@@ -140,9 +140,39 @@ else:
   echo $(( $(date +%s) + interval_min ))
 }
 
+# ── Launchd ownership check ──────────────────────────────────────────────
+# Returns 0 if the launchd keepalive service for wacli is loaded and has a
+# live process.  When true, the daemon must NOT start wacli-sync itself —
+# launchd is the sole owner and handles restarts via KeepAlive=true.
+_wacli_owned_by_launchd() {
+  command -v launchctl >/dev/null 2>&1 || return 1
+  local pid_str
+  pid_str=$(launchctl list 2>/dev/null \
+    | awk '$3=="com.claude-ops.wacli-keepalive" {print $1}' || true)
+  # Service must be registered AND have a live PID (not "-")
+  if [[ -n "$pid_str" ]] && [[ "$pid_str" != "-" ]] && kill -0 "$pid_str" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
 # ── Service lifecycle ─────────────────────────────────────────────────────
 start_service() {
   local name="$1"
+
+  # ── Race-condition guard: wacli-sync ownership ──────────────────────────
+  # The launchd keepalive service (com.claude-ops.wacli-keepalive) is the
+  # sole owner of the wacli sync process.  If it is loaded and running, the
+  # daemon must not spawn a competing wacli-sync — doing so causes store-lock
+  # errors and WhatsApp disconnections.  Instead we mark the service as
+  # "delegated" and monitor health passively via the health file.
+  if [[ "$name" == "wacli-sync" ]] && _wacli_owned_by_launchd; then
+    log "START: $name — launchd keepalive is running, deferring ownership (no duplicate spawn)"
+    SERVICE_STATUS["$name"]="delegated"
+    SERVICE_LAST_HEALTH["$name"]="launchd-owned"
+    return 0
+  fi
+
   local cmd
   cmd=$(get_service_field "$name" "command")
   if [[ -z "$cmd" ]]; then
@@ -231,6 +261,14 @@ check_health() {
 
 restart_service() {
   local name="$1"
+
+  # ── Race-condition guard (mirrors start_service) ────────────────────────
+  if [[ "$name" == "wacli-sync" ]] && _wacli_owned_by_launchd; then
+    log "RESTART: $name — launchd keepalive owns this service, skipping daemon restart"
+    SERVICE_STATUS["$name"]="delegated"
+    return 0
+  fi
+
   local restart_delay max_restarts
   restart_delay=$(get_service_field "$name" "restart_delay")
   restart_delay="${restart_delay:-60}"
@@ -1240,7 +1278,19 @@ while true; do
       fi
     else
       # Persistent service: check health + restart if needed
-      if ! check_health "$svc"; then
+      # For wacli-sync delegated to launchd, re-check ownership each loop.
+      # If launchd stopped unexpectedly, the daemon can take over.
+      if [[ "$svc" == "wacli-sync" ]] && [[ "${SERVICE_STATUS[$svc]:-}" == "delegated" ]]; then
+        if _wacli_owned_by_launchd; then
+          # Still owned by launchd — just read the health file passively
+          check_health "$svc" || true
+          SERVICE_STATUS["$svc"]="delegated"
+        else
+          log "MONITOR: $svc — launchd keepalive no longer running, daemon taking ownership"
+          SERVICE_STATUS["$svc"]="dead"
+          start_service "$svc"
+        fi
+      elif ! check_health "$svc"; then
         local_status="${SERVICE_STATUS[$svc]}"
         if [[ "$local_status" != "needs_reauth" ]] && [[ "$local_status" != "max_restarts_exceeded" ]]; then
           restart_service "$svc"
