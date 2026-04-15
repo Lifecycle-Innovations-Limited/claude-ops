@@ -54,12 +54,11 @@ All notable changes to this project will be documented in this file.
 - **Fires-watcher daemon** — Push notification sinks (Telegram/Discord/ntfy/Pushover).
 - **`/ops:status` skill** — Lightweight integration health panel.
 - **Registry templates** — Starter templates for 4 common stacks (monorepo, Next.js SaaS, Python microservices, React Native).
-- **CI release workflow** — Auto-opens PR for version bumps + optional npm publish.
+- **CI release workflow** — Auto-opens PR for version bumps.
 
 ### Fixed
 
 - **Daemon** — Services work out of the box on fresh install.
-- **npm publish** — Updated to use `claude-ops-plugin` package name.
 
 ---
 
@@ -92,7 +91,6 @@ All notable changes to this project will be documented in this file.
 - **Cross-OS foundation** — `lib/os-detect.{sh,mjs}`, `lib/credential-store.{sh,mjs}`, `lib/opener.{sh,mjs}` for macOS/Linux/WSL/Windows portability.
 - **Cross-OS CI matrix** — GitHub Actions workflow tests on ubuntu-latest, macos-latest, windows-latest.
 - **Gitleaks coverage** — Custom rules for all 22 integrated services (Shopify, RevenueCat, Sentry, Doppler, Linear, Klaviyo, ElevenLabs, Bland AI, Cloudflare).
-- **SDK** — `sdk/` directory with TypeScript types, validators, helpers, and `create-ops-skill` scaffolding CLI.
 
 ### Changed
 
