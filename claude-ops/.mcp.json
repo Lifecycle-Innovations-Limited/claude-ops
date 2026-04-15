@@ -9,6 +9,13 @@
         "TELEGRAM_PHONE": "${user_config.telegram_phone}",
         "TELEGRAM_SESSION": "${user_config.telegram_session}"
       }
+    },
+    "doppler": {
+      "command": "npx",
+      "args": ["-y", "@dopplerhq/mcp-server"],
+      "env": {
+        "DOPPLER_TOKEN": "${user_config.doppler_token}"
+      }
     }
   }
 }
