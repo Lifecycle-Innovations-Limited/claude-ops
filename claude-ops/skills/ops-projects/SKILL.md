@@ -99,11 +99,17 @@ for d in $(jq -r '.projects[] | select(.gsd == true) | .paths[]' "${CLAUDE_PLUGI
 done | jq -s '.'
 ```
 
+## External projects (non-repo)
+
+```!
+${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
+```
+
 ---
 
 ## Your task
 
-Parse all pre-gathered data and render the portfolio dashboard.
+Parse all pre-gathered data — including external projects — and render the portfolio dashboard.
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -114,6 +120,14 @@ Parse all pre-gathered data and render the portfolio dashboard.
  ────────────────────────────────────────────────────────────────
  example-app   7.2        feature/auth    3      ✓     finish auth tests
  example-api   5.0        dev             0      ✗     fix CI (unit tests)
+ ...
+
+EXTERNAL PROJECTS
+ ALIAS         SOURCE     STATUS     DETAILS
+ ────────────────────────────────────────────────────────────────
+ my-store      shopify    ✓ healthy  My Store (basic plan)
+ eng-team      linear     ✓ healthy  Engineering (42 issues)
+ company-slack slack      ● discovered  your-workspace
  ...
 
 OPEN PRs
