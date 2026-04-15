@@ -34,9 +34,39 @@ SYNC_PROBE_TIMEOUT=20
 BACKFILL_INTERVAL="${BACKFILL_INTERVAL:-1800}"  # 30 min default
 PAUSE_SIGNAL="$STORE/.pause_sync"
 SYNC_PID_FILE="$STORE/.sync_pid"
+BATCH_MARKER="$STORE/.batch_wacli"  # set by self-initiated sync kills (not external pause)
 WACLI_CACHE_DIR="$DATA_DIR/cache"
 
 mkdir -p "$LOG_DIR" "$STORE" "$MEMORY_DIR" "$WACLI_CACHE_DIR"
+
+# ── Self-pause helpers (bug 5) ──────────────────────────────────────────
+# Kill the persistent sync from within the keepalive's own process so we can
+# access wacli exclusively without colliding on the store lock. The outer
+# supervisor loop watches $BATCH_MARKER and always restarts sync when it's set,
+# distinguishing a deliberate batch pause from an unexpected crash.
+acquire_wacli_batch() {
+  touch "$BATCH_MARKER"
+  local sync_pid=""
+  [[ -f "$SYNC_PID_FILE" ]] && sync_pid=$(cat "$SYNC_PID_FILE" 2>/dev/null || true)
+  if [[ -n "$sync_pid" ]] && kill -0 "$sync_pid" 2>/dev/null; then
+    kill -TERM "$sync_pid" 2>/dev/null || true
+    local waited=0
+    while kill -0 "$sync_pid" 2>/dev/null && [[ $waited -lt 10 ]]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    if kill -0 "$sync_pid" 2>/dev/null; then
+      kill -KILL "$sync_pid" 2>/dev/null || true
+    fi
+    rm -f "$SYNC_PID_FILE"
+  fi
+  # Give the OS a moment to fully release the store lock file
+  sleep 1
+}
+
+release_wacli_batch() {
+  rm -f "$BATCH_MARKER"
+}
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$LOG"; }
 
@@ -208,8 +238,23 @@ detect_missed_messages() {
   command -v "$WACLI" &>/dev/null || return 0
   local backfill_file="$STORE/.backfill_jids"
 
+  # Acquire exclusive wacli access — this function subprocesses wacli many times
+  acquire_wacli_batch
+
   "$WACLI" chats list --json 2>/dev/null | python3 -c "
 import json, sys, subprocess, datetime
+
+def parse_ts(s):
+    '''Parse an ISO-8601 timestamp using only stdlib.
+    Handles the Z suffix for UTC.'''
+    if not s:
+        return None
+    if s.endswith('Z'):
+        s = s[:-1] + '+00:00'
+    try:
+        return datetime.datetime.fromisoformat(s)
+    except Exception:
+        return None
 
 data = json.load(sys.stdin)
 chats = data.get('data', []) or []
@@ -238,10 +283,11 @@ for c in chats:
         db_ts = msgs[0].get('Timestamp', '')
         if not db_ts:
             continue
-        # Parse both timestamps and compare
-        from dateutil.parser import parse as dtparse
-        meta_dt = dtparse(meta_ts)
-        db_dt = dtparse(db_ts)
+        # Parse both timestamps and compare — stdlib only
+        meta_dt = parse_ts(meta_ts)
+        db_dt = parse_ts(db_ts)
+        if meta_dt is None or db_dt is None:
+            continue
         gap = abs((meta_dt - db_dt).total_seconds())
         if gap > gap_threshold:
             missed.append(jid)
@@ -262,6 +308,8 @@ if missed:
 " 2>/dev/null | while IFS= read -r line; do
     log "$line"
   done || true
+
+  release_wacli_batch
 }
 
 auto_detect_empty_chats
@@ -281,6 +329,10 @@ refresh_wacli_cache() {
   if (( now - LAST_WACLI_CACHE < WACLI_CACHE_INTERVAL )); then return 0; fi
   LAST_WACLI_CACHE=$now
 
+  # Acquire exclusive wacli access by killing the persistent sync.
+  # The outer supervisor loop restarts sync after this batch returns.
+  acquire_wacli_batch
+
   # Write chats cache
   "$WACLI" chats list --json > "$WACLI_CACHE_DIR/wacli_chats.json" 2>/dev/null || true
 
@@ -288,6 +340,7 @@ refresh_wacli_cache() {
   "$WACLI" messages search --query "urgent OR asap OR deadline OR emergency OR ASAP" --json \
     > "$WACLI_CACHE_DIR/wacli_urgent.json" 2>/dev/null || true
 
+  release_wacli_batch
   log "CACHE: refreshed wacli data cache"
 }
 
@@ -348,6 +401,8 @@ periodic_backfill() {
 write_backfill_memory() {
   command -v "$WACLI" &>/dev/null || return 0
 
+  acquire_wacli_batch
+
   "$WACLI" chats list --json 2>/dev/null | python3 -c "
 import json, sys, subprocess, datetime, os
 
@@ -399,6 +454,8 @@ if summaries:
 " 2>/dev/null | while IFS= read -r line; do
     log "$line"
   done || true
+
+  release_wacli_batch
 }
 
 # ── Persistent sync with pause-signal + periodic backfill ──────────────
@@ -437,10 +494,14 @@ while true; do
     sleep 5
   done
 
-  # If sync exited on its own (not paused), break out of the restart loop
-  if ! check_pause_signal; then
+  # If sync exited on its own (not paused, not batch-killed), break out.
+  # A batch kill is a deliberate self-pause from refresh_wacli_cache et al
+  # — we always want to restart sync after a batch completes.
+  if ! check_pause_signal && [[ ! -f "$BATCH_MARKER" ]]; then
     break
   fi
+  # Clear any stale batch marker before restarting
+  rm -f "$BATCH_MARKER"
 done
 
 rm -f "$SYNC_PID_FILE"
