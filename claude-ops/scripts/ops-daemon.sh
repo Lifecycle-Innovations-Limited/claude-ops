@@ -285,6 +285,17 @@ write_daemon_health() {
       local pid_val
       if [[ "$pid" == "null" ]] || [[ -z "$pid" ]]; then
         pid_val="null"
+        # No PID tracked — status cannot be "running"
+        if [[ "$status" == "running" ]]; then
+          status="dead"
+          SERVICE_STATUS["$name"]="dead"
+        fi
+      elif ! kill -0 "$pid" 2>/dev/null; then
+        # PID exists in our tracking but process is dead
+        pid_val="null"
+        status="dead"
+        SERVICE_STATUS["$name"]="dead"
+        SERVICE_PIDS["$name"]=""
       else
         pid_val="$pid"
       fi
@@ -705,31 +716,57 @@ install_daemon_launchd() {
     return 1
   fi
 
-  # Substitute placeholders while copying.
-  if [[ -f "$daemon_plist_src" ]]; then
-    sed \
-      -e "s|__BASH_PATH__|$bash_path|g" \
-      -e "s|__PLUGIN_ROOT__|$plugin_root|g" \
-      -e "s|__DAEMON_SCRIPT_PATH__|$OPS_DAEMON_SCRIPT|g" \
-      -e "s|__LOG_DIR__|$LOG_DIR|g" \
-      -e "s|__HOME__|$HOME|g" \
-      "$daemon_plist_src" > "$daemon_plist_dst"
-    launchctl unload -w "$daemon_plist_dst" 2>/dev/null || true
-    launchctl load -w "$daemon_plist_dst"
-    log "INSTALL(launchd): loaded $daemon_plist_dst"
+  _install_launchd_plist "$daemon_plist_src" "$daemon_plist_dst" \
+    "$bash_path" "$plugin_root" "com.claude-ops.daemon"
+  _install_launchd_plist "$keepalive_plist_src" "$keepalive_plist_dst" \
+    "$bash_path" "$plugin_root" "com.claude-ops.wacli-keepalive"
+}
+
+# Install a single launchd plist: substitute placeholders, copy, bootstrap.
+# Args: $1=src $2=dst $3=bash_path $4=plugin_root $5=label
+_install_launchd_plist() {
+  local src="$1" dst="$2" bash_path="$3" plugin_root="$4" label="$5"
+  if [[ ! -f "$src" ]]; then
+    log "INSTALL(launchd): source plist not found: $src"
+    return 1
   fi
 
-  if [[ -f "$keepalive_plist_src" ]]; then
-    sed \
-      -e "s|__BASH_PATH__|$bash_path|g" \
-      -e "s|__PLUGIN_ROOT__|$plugin_root|g" \
-      -e "s|__KEEPALIVE_SCRIPT_PATH__|$OPS_KEEPALIVE_SCRIPT|g" \
-      -e "s|__LOG_DIR__|$LOG_DIR|g" \
-      -e "s|__HOME__|$HOME|g" \
-      "$keepalive_plist_src" > "$keepalive_plist_dst"
-    launchctl unload -w "$keepalive_plist_dst" 2>/dev/null || true
-    launchctl load -w "$keepalive_plist_dst"
-    log "INSTALL(launchd): loaded $keepalive_plist_dst"
+  # Check if already running with a live PID — skip reinstall
+  local existing_pid
+  existing_pid=$(launchctl list "$label" 2>/dev/null | awk '/PID/{print $2}' || true)
+  if [[ -z "$existing_pid" ]]; then
+    # Also try parsing the list output (format: PID\tStatus\tLabel)
+    existing_pid=$(launchctl list 2>/dev/null | awk -v lbl="$label" '$3==lbl && $1!="-" {print $1}' || true)
+  fi
+  if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+    log "INSTALL(launchd): $label already running (pid=$existing_pid) — skipping"
+    return 0
+  fi
+
+  # Substitute placeholders
+  sed \
+    -e "s|__BASH_PATH__|$bash_path|g" \
+    -e "s|__PLUGIN_ROOT__|$plugin_root|g" \
+    -e "s|__DAEMON_SCRIPT_PATH__|$OPS_DAEMON_SCRIPT|g" \
+    -e "s|__KEEPALIVE_SCRIPT_PATH__|$OPS_KEEPALIVE_SCRIPT|g" \
+    -e "s|__LOG_DIR__|$LOG_DIR|g" \
+    -e "s|__HOME__|$HOME|g" \
+    "$src" > "$dst"
+
+  # Bootstrap: prefer modern launchctl bootstrap, fallback to legacy load
+  local uid
+  uid=$(id -u)
+  local gui_domain="gui/$uid"
+
+  # Bootout first to clear stale registrations
+  launchctl bootout "$gui_domain/$label" 2>/dev/null || true
+  if launchctl bootstrap "$gui_domain" "$dst" 2>/dev/null; then
+    log "INSTALL(launchd): bootstrapped $label into $gui_domain"
+  else
+    # Fallback: legacy load (macOS <10.10 or restricted environments)
+    launchctl unload -w "$dst" 2>/dev/null || true
+    launchctl load -w "$dst"
+    log "INSTALL(launchd): loaded $label via legacy launchctl load"
   fi
 }
 
@@ -882,6 +919,139 @@ uninstall_daemon_schtasks() {
   log "UNINSTALL(schtasks): removed ClaudeOpsDaemon + ClaudeOpsWacliKeepalive"
 }
 
+# ── General self-healing supervisor for all com.claude-ops.* services ─────
+# Enumerates expected services, checks each is installed + alive, auto-repairs.
+# Called at daemon startup and periodically during the monitor loop.
+ENSURE_SERVICES_LAST_RUN=0
+ENSURE_SERVICES_INTERVAL="${ENSURE_SERVICES_INTERVAL:-300}"  # every 5 min
+
+# Expected launchd agents (macOS) / systemd units (Linux).
+# Format: "label|plist_src_basename|description"
+EXPECTED_SERVICES=(
+  "com.claude-ops.daemon|com.claude-ops.daemon.plist|ops daemon"
+  "com.claude-ops.wacli-keepalive|com.claude-ops.wacli-keepalive.plist|wacli keepalive"
+)
+
+ensure_all_services() {
+  local now
+  now=$(date +%s)
+  # Throttle: skip if ran recently (unless force=1 passed)
+  if [[ "${1:-}" != "force" ]] && (( now - ENSURE_SERVICES_LAST_RUN < ENSURE_SERVICES_INTERVAL )); then
+    return 0
+  fi
+  ENSURE_SERVICES_LAST_RUN=$now
+
+  local os
+  os="$(ops_os 2>/dev/null || uname -s)"
+
+  case "$os" in
+    macos|Darwin*)  _ensure_all_services_launchd ;;
+    debian|fedora|arch|suse|alpine|linux|wsl|Linux*)  _ensure_all_services_systemd ;;
+    *)  return 0 ;;  # Windows/unsupported — skip
+  esac
+}
+
+_ensure_all_services_launchd() {
+  command -v launchctl >/dev/null 2>&1 || return 0
+  local agents_dir="$HOME/Library/LaunchAgents"
+  local entry label plist_base desc
+  local repaired=0
+
+  for entry in "${EXPECTED_SERVICES[@]}"; do
+    IFS='|' read -r label plist_base desc <<< "$entry"
+    local plist_dst="$agents_dir/$plist_base"
+    local plist_src="$SCRIPT_DIR/scripts/$plist_base"
+
+    # 1. Check if plist is installed
+    if [[ ! -f "$plist_dst" ]]; then
+      log "ENSURE: $label plist missing from $agents_dir — installing"
+      _repair_launchd_service "$label" "$plist_src" "$plist_dst"
+      (( repaired++ )) || true
+      continue
+    fi
+
+    # 2. Check if service is registered and has a live PID
+    local pid_str
+    pid_str=$(launchctl list 2>/dev/null | awk -v lbl="$label" '$3==lbl {print $1}' || true)
+
+    if [[ -z "$pid_str" ]]; then
+      # Not registered at all — bootstrap it
+      log "ENSURE: $label not registered in launchctl — bootstrapping"
+      _repair_launchd_service "$label" "$plist_src" "$plist_dst"
+      (( repaired++ )) || true
+      continue
+    fi
+
+    if [[ "$pid_str" == "-" ]]; then
+      # Registered but no PID — crashed or not started
+      local exit_status
+      exit_status=$(launchctl list 2>/dev/null | awk -v lbl="$label" '$3==lbl {print $2}' || true)
+      if [[ "$exit_status" != "0" ]] && [[ -n "$exit_status" ]] && [[ "$exit_status" != "-" ]]; then
+        log "ENSURE: $label crashed (exit=$exit_status) — kickstarting"
+        launchctl kickstart "gui/$(id -u)/$label" 2>/dev/null || {
+          # Fallback: full reinstall
+          _repair_launchd_service "$label" "$plist_src" "$plist_dst"
+        }
+        (( repaired++ )) || true
+      fi
+      continue
+    fi
+
+    # 3. Has a PID — verify it's actually alive
+    if ! kill -0 "$pid_str" 2>/dev/null; then
+      log "ENSURE: $label has stale PID $pid_str — kickstarting"
+      launchctl kickstart -k "gui/$(id -u)/$label" 2>/dev/null || {
+        _repair_launchd_service "$label" "$plist_src" "$plist_dst"
+      }
+      (( repaired++ )) || true
+    fi
+  done
+
+  if [[ $repaired -gt 0 ]]; then
+    log "ENSURE: repaired $repaired service(s)"
+  fi
+}
+
+_repair_launchd_service() {
+  local label="$1" plist_src="$2" plist_dst="$3"
+  local bash_path
+  bash_path="$(command -v bash)"
+  local plugin_root="$SCRIPT_DIR"
+  if [[ -z "$bash_path" ]] || [[ ! -f "$plist_src" ]]; then
+    log "ENSURE: cannot repair $label — missing bash or source plist"
+    return 1
+  fi
+  _install_launchd_plist "$plist_src" "$plist_dst" "$bash_path" "$plugin_root" "$label"
+}
+
+_ensure_all_services_systemd() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  local repaired=0
+
+  # Check wacli-keepalive systemd unit
+  if ! systemctl --user is-active claude-ops-wacli-keepalive.service &>/dev/null; then
+    log "ENSURE: claude-ops-wacli-keepalive.service not active — restarting"
+    systemctl --user restart claude-ops-wacli-keepalive.service 2>/dev/null || {
+      # Unit may not exist — trigger full install
+      install_daemon_systemd
+    }
+    (( repaired++ )) || true
+  fi
+
+  # Check timer
+  if ! systemctl --user is-active claude-ops.timer &>/dev/null; then
+    log "ENSURE: claude-ops.timer not active — restarting"
+    systemctl --user restart claude-ops.timer 2>/dev/null || {
+      install_daemon_systemd
+    }
+    (( repaired++ )) || true
+  fi
+
+  if [[ $repaired -gt 0 ]]; then
+    log "ENSURE: repaired $repaired systemd service(s)"
+  fi
+}
+
 install_daemon() {
   local os
   os="$(ops_os 2>/dev/null || uname -s)"
@@ -968,6 +1138,9 @@ done
 log "START: ops-daemon pid=$$ starting (run_once=$OPS_RUN_ONCE)"
 rotate_log
 
+# Ensure all com.claude-ops.* services are installed and healthy at startup
+ensure_all_services "force"
+
 if ! load_services_config; then
   log "FATAL: no services config — writing empty health and sleeping"
   cat > "$HEALTH_FILE" <<EOF
@@ -1022,6 +1195,9 @@ while true; do
       fi
     fi
   done < <(get_enabled_services)
+
+  # ── Service self-healing pass ────────────────────────────────────────────
+  ensure_all_services              # Every 5 min: verify all launchd/systemd services
 
   # ── Intelligence pass (smart brain) ──────────────────────────────────────
   # These run with their own internal throttles — safe to call every loop
