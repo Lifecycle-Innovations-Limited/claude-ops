@@ -120,7 +120,7 @@ Only run if `REVENUECAT_API_KEY` is set AND a project ID is available (from `$RE
 
 ```bash
 curl -s -H "Authorization: Bearer $REVENUECAT_API_KEY" \
-  "https://api.revenuecat.com/v1/projects/$REVENUECAT_PROJECT_ID/metrics/overview" 2>/dev/null
+  "https://api.revenuecat.com/v2/projects/$REVENUECAT_PROJECT_ID/metrics/overview" 2>/dev/null
 ```
 
 Extract `mrr`, `revenue` (trailing 30d), `active_subscriptions`, `active_trials`.
@@ -129,7 +129,7 @@ Extract `mrr`, `revenue` (trailing 30d), `active_subscriptions`, `active_trials`
 
 ```bash
 curl -s -H "Authorization: Bearer $REVENUECAT_API_KEY" \
-  "https://api.revenuecat.com/v1/projects/$REVENUECAT_PROJECT_ID/metrics/active_subscribers" 2>/dev/null
+  "https://api.revenuecat.com/v2/projects/$REVENUECAT_PROJECT_ID/metrics/active_subscribers" 2>/dev/null
 ```
 
 ### Churn rate
