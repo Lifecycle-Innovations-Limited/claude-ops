@@ -207,11 +207,17 @@ Shopify store command center. Orders, inventory, fulfillment, analytics, and sto
 - `/ops:ecom setup` — configure Shopify API credentials
 
 ### `/ops:marketing` · `skills/ops-marketing/SKILL.md`
-Marketing analytics dashboard. Email campaigns (Klaviyo), paid ads (Meta/Google), analytics (GA4), SEO, and social media metrics.
+Marketing analytics dashboard. Email campaigns (Klaviyo), paid ads (Meta Ads, Google Ads), analytics (GA4), SEO, and social media metrics.
 - `/ops:marketing` — full dashboard
 - `/ops:marketing email` — Klaviyo campaign performance
 - `/ops:marketing ads` — Meta + Google Ads spend/ROAS
 - `/ops:marketing seo` — SEO + GA4 organic traffic
+- `/ops:marketing google-ads` — Google Ads campaign dashboard (last 7 days spend, ROAS, per-campaign breakdown)
+- `/ops:marketing google-ads search-terms` — Search Terms Report with negative keyword candidates (last 30 days)
+- `/ops:marketing google-ads budget-recs` — Budget optimization recommendations from Google
+- `/ops:marketing google-ads campaigns` — Campaign management — list, create, pause, enable, adjust budget
+- `/ops:marketing google-ads keywords` — Keyword Planner — discover keywords with volume and bid data
+- `/ops:marketing google-ads ad-groups` — Ad group management — list, create, add/remove keywords, adjust bids
 
 ### `/ops:voice` · `skills/ops-voice/SKILL.md`
 Voice channel management. Make phone calls (Bland AI), text-to-speech (ElevenLabs), transcribe audio (Whisper/Groq).
