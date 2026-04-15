@@ -2279,9 +2279,9 @@ Agent(
 
 On `[Paste RevenueCat API key manually]`:
 ```
-Enter your RevenueCat V1 API Key:
-  Find it: app.revenuecat.com → Project settings → API keys → V1 secret key
-  Format: rcb_XXX (V2)  or  legacy secret (starts with sk_)
+Enter your RevenueCat API Key:
+  Find it: app.revenuecat.com → Project settings → API keys → Secret key
+  Format: rcb_XXX (V2 secret)  or  sk_XXX (legacy secret key)
 
 Enter your RevenueCat Project ID:
   Find it in the URL: app.revenuecat.com/projects/<project_id>/...
@@ -2290,7 +2290,7 @@ Enter your RevenueCat Project ID:
 Smoke test:
 ```bash
 curl -s -H "Authorization: Bearer $REVENUECAT_API_KEY" \
-  "https://api.revenuecat.com/v1/projects/$REVENUECAT_PROJECT_ID/metrics/overview" | jq '.mrr // .object'
+  "https://api.revenuecat.com/v2/projects/$REVENUECAT_PROJECT_ID/metrics/overview" | jq '.metrics // .object'
 ```
 Expect a numeric `mrr` or an object descriptor. If the response is `{"code": 7243, ...}` (auth error), re-ask.
 
