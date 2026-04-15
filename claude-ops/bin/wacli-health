@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# wacli-health — Check wacli + keepalive health. Returns 0 if healthy, 1 if not.
+#
+# Usage: wacli-health            # exit code only
+#        wacli-health --json     # JSON output
+#        wacli-health --repair   # auto-fix if unhealthy
+#
+# Any ops skill can call this before using wacli to ensure the connection is live.
+set -euo pipefail
+
+WACLI="${WACLI_BIN:-/usr/local/bin/wacli}"
+STORE="${WACLI_STORE:-$HOME/.wacli}"
+HEALTH_FILE="$STORE/.health"
+KEEPALIVE_LABEL="com.claude-ops.wacli-keepalive"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+JSON_MODE=0
+REPAIR_MODE=0
+for arg in "$@"; do
+  case "$arg" in
+    --json) JSON_MODE=1 ;;
+    --repair) REPAIR_MODE=1 ;;
+  esac
+done
+
+healthy=1
+issues=()
+
+# 1. Check wacli binary exists
+if ! command -v "$WACLI" &>/dev/null; then
+  healthy=0
+  issues+=("wacli binary not found at $WACLI")
+fi
+
+# 2. Check authentication
+if [[ $healthy -eq 1 ]]; then
+  doctor_out=$("$WACLI" doctor 2>&1) || true
+  if ! echo "$doctor_out" | grep -q "AUTHENTICATED.*true"; then
+    healthy=0
+    issues+=("not authenticated — QR scan required")
+  fi
+fi
+
+# 3. Check health file
+if [[ -f "$HEALTH_FILE" ]]; then
+  status=$(grep '^status=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2- || echo "unknown")
+  case "$status" in
+    connected|running|ok) ;;
+    needs_auth|needs_reauth)
+      healthy=0
+      issues+=("health file reports: $status")
+      ;;
+    paused)
+      issues+=("sync currently paused for external command")
+      ;;
+    *)
+      issues+=("health file status: $status")
+      ;;
+  esac
+  health_pid=$(grep '^pid=' "$HEALTH_FILE" 2>/dev/null | cut -d= -f2- || true)
+  if [[ -n "$health_pid" ]] && ! kill -0 "$health_pid" 2>/dev/null; then
+    healthy=0
+    issues+=("keepalive pid=$health_pid is dead")
+  fi
+else
+  healthy=0
+  issues+=("no health file — keepalive may not be running")
+fi
+
+# 4. Check launchd/systemd registration
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  pid_str=$(launchctl list 2>/dev/null | awk -v lbl="$KEEPALIVE_LABEL" '$3==lbl {print $1}' || true)
+  if [[ -z "$pid_str" ]]; then
+    healthy=0
+    issues+=("$KEEPALIVE_LABEL not registered in launchd")
+  elif [[ "$pid_str" == "-" ]]; then
+    healthy=0
+    issues+=("$KEEPALIVE_LABEL registered but not running")
+  elif ! kill -0 "$pid_str" 2>/dev/null; then
+    healthy=0
+    issues+=("$KEEPALIVE_LABEL has stale PID $pid_str")
+  fi
+elif command -v systemctl &>/dev/null; then
+  if ! systemctl --user is-active claude-ops-wacli-keepalive.service &>/dev/null; then
+    healthy=0
+    issues+=("claude-ops-wacli-keepalive.service not active")
+  fi
+fi
+
+# Output
+if [[ $JSON_MODE -eq 1 ]]; then
+  issues_json="["
+  first=1
+  for i in "${issues[@]+"${issues[@]}"}"; do
+    [[ $first -eq 0 ]] && issues_json+=","
+    first=0
+    issues_json+="\"$(echo "$i" | sed 's/"/\\"/g')\""
+  done
+  issues_json+="]"
+  echo "{\"healthy\": $([ $healthy -eq 1 ] && echo true || echo false), \"issues\": $issues_json}"
+else
+  if [[ $healthy -eq 1 ]]; then
+    echo "wacli: healthy"
+  else
+    echo "wacli: UNHEALTHY"
+    for i in "${issues[@]+"${issues[@]}"}"; do
+      echo "  - $i"
+    done
+  fi
+fi
+
+# Auto-repair if requested and unhealthy
+if [[ $REPAIR_MODE -eq 1 ]] && [[ $healthy -eq 0 ]]; then
+  echo "Attempting auto-repair..."
+  if [[ -f "$SCRIPT_DIR/scripts/ops-daemon.sh" ]]; then
+    bash "$SCRIPT_DIR/scripts/ops-daemon.sh" --install 2>&1 || true
+    echo "Reinstalled launchd/systemd services. Check again in ~15s."
+  else
+    echo "Cannot find ops-daemon.sh for repair" >&2
+  fi
+fi
+
+exit $(( 1 - healthy ))
