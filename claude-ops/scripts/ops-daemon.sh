@@ -778,13 +778,13 @@ _install_launchd_plist() {
     return 1
   fi
 
-  # Check if already running with a live PID — skip reinstall
+  # Check if already running with a live PID — skip reinstall.
+  # Parse `launchctl list` (no label): format is "PID\tExitStatus\tLabel".
+  # The labeled form `launchctl list <label>` outputs '"PID" = 12345;' which
+  # yields '=' as $2 — never the PID — so we avoid it entirely.
   local existing_pid
-  existing_pid=$(launchctl list "$label" 2>/dev/null | awk '/PID/{print $2}' || true)
-  if [[ -z "$existing_pid" ]]; then
-    # Also try parsing the list output (format: PID\tStatus\tLabel)
-    existing_pid=$(launchctl list 2>/dev/null | awk -v lbl="$label" '$3==lbl && $1!="-" {print $1}' || true)
-  fi
+  existing_pid=$(launchctl list 2>/dev/null \
+    | awk -v lbl="$label" '$3==lbl && $1!="-" {print $1; exit}' || true)
   if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
     log "INSTALL(launchd): $label already running (pid=$existing_pid) — skipping"
     return 0
