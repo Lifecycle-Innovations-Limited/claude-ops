@@ -85,6 +85,8 @@ declare -A SERVICE_NEXT_RUN    # service name → next run epoch (cron services)
 declare -A SERVICE_LAST_RUN    # service name → last run epoch (cron services)
 declare -A SERVICE_STATUS      # service name → status string
 declare -A SERVICE_LAST_HEALTH # service name → last health string
+declare -A SERVICE_LAST_RESTART_EPOCH  # service name → epoch of last restart attempt
+RESTART_COOLDOWN=1800  # Reset restart counter after 30 min of stability
 ACTION_NEEDED="null"
 
 # ── Config loading ────────────────────────────────────────────────────────
@@ -236,20 +238,29 @@ restart_service() {
   max_restarts="${max_restarts:-10}"
 
   local count="${SERVICE_RESTARTS[$name]:-0}"
+  local now
+  now=$(date +%s)
+
+  # Cooldown: reset restart counter after RESTART_COOLDOWN seconds of stability
+  local last_restart_epoch="${SERVICE_LAST_RESTART_EPOCH[$name]:-0}"
+  if [[ $count -gt 0 ]] && (( now - last_restart_epoch > RESTART_COOLDOWN )); then
+    log "RESTART: $name stable for ${RESTART_COOLDOWN}s — resetting restart counter (was $count)"
+    count=0
+    SERVICE_RESTARTS["$name"]=0
+  fi
+
   if [[ $count -ge $max_restarts ]]; then
-    log "RESTART: $name hit max_restarts=$max_restarts — not restarting"
+    log "RESTART: $name hit max_restarts=$max_restarts — not restarting (resets after ${RESTART_COOLDOWN}s cooldown)"
     SERVICE_STATUS["$name"]="max_restarts_exceeded"
     return
   fi
 
   SERVICE_RESTARTS["$name"]=$(( count + 1 ))
-  log "RESTART: $name (attempt $((count+1))/$max_restarts) — waiting ${restart_delay}s"
-  # Non-blocking: schedule restart by marking it, actual start happens in main loop
-  # For simplicity, stop and re-start after the delay inline (daemon loop is 30s anyway)
+  SERVICE_LAST_RESTART_EPOCH["$name"]=$now
+  log "RESTART: $name (attempt $((count+1))/$max_restarts) — waiting ${restart_delay}s before restart"
   stop_service "$name"
-  sleep "${restart_delay}" &
-  # We record the sleep PID to avoid blocking; restart happens next health check after delay
-  # Use a simpler approach: just restart immediately (launchd handles overall throttle)
+  # Apply configured backoff synchronously before re-launching
+  sleep "$restart_delay"
   start_service "$name"
 }
 
@@ -285,6 +296,17 @@ write_daemon_health() {
       local pid_val
       if [[ "$pid" == "null" ]] || [[ -z "$pid" ]]; then
         pid_val="null"
+        # No PID tracked — status cannot be "running"
+        if [[ "$status" == "running" ]]; then
+          status="dead"
+          SERVICE_STATUS["$name"]="dead"
+        fi
+      elif ! kill -0 "$pid" 2>/dev/null; then
+        # PID exists in our tracking but process is dead
+        pid_val="null"
+        status="dead"
+        SERVICE_STATUS["$name"]="dead"
+        SERVICE_PIDS["$name"]=""
       else
         pid_val="$pid"
       fi
@@ -322,11 +344,22 @@ except: print('')
 " 2>/dev/null || true)
   fi
 
+  # Daemon version from package.json
+  local daemon_version=""
+  if [[ -f "$SCRIPT_DIR/package.json" ]]; then
+    daemon_version=$(python3 -c "
+import json
+try: print(json.load(open('$SCRIPT_DIR/package.json')).get('version',''))
+except: print('')
+" 2>/dev/null || true)
+  fi
+
   cat > "$HEALTH_FILE" <<EOF
 {
   "timestamp": "$now",
   "pid": $$,
   "uptime_seconds": $uptime,
+  "version": "$daemon_version",
   "services": $services_json,
   "action_needed": $ACTION_NEEDED,
   "brain": {
@@ -389,14 +422,17 @@ prefetch_briefing_cache() {
   tmpdir=$(mktemp -d)
   local -a _refresh_pids=()
 
-  # Unread counts
-  (command -v wacli &>/dev/null && wacli chats list --json 2>/dev/null | python3 -c "
-import json,sys,datetime
-data=json.load(sys.stdin).get('data',[]) or []
+  # Unread counts — read from keepalive cache to avoid store-lock contention
+  local wacli_cache="$DATA_DIR/cache/wacli_chats.json"
+  (if [[ -f "$wacli_cache" ]]; then
+    python3 -c "
+import json,datetime
+data=json.load(open('$wacli_cache')).get('data',[]) or []
 cutoff=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=7)).isoformat()
 recent=[c for c in data if c.get('LastMessageTS','')>cutoff]
 print(json.dumps({'total_chats':len(recent),'count':len(data)}))
-" > "$tmpdir/wa.json" 2>/dev/null) &
+" > "$tmpdir/wa.json" 2>/dev/null
+  fi) &
   _refresh_pids+=($!)
 
   # Email count
@@ -456,11 +492,12 @@ detect_urgent_messages() {
     if (( now - last < 300 )); then return 0; fi
   fi
 
-  # Check WhatsApp for messages with urgent keywords (skip if wacli unavailable)
-  if command -v wacli &>/dev/null; then
-    wacli messages search --query "urgent OR asap OR deadline OR emergency OR ASAP" --json 2>/dev/null | python3 -c "
-import json,sys,datetime
-data=json.load(sys.stdin)
+  # Check WhatsApp urgent messages — read from keepalive cache (no store-lock contention)
+  local urgent_cache="$DATA_DIR/cache/wacli_urgent.json"
+  if [[ -f "$urgent_cache" ]]; then
+    python3 -c "
+import json,datetime
+data=json.load(open('$urgent_cache'))
 msgs=data.get('data',{}).get('messages',[]) or []
 cutoff=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=4)).isoformat()
 urgent=[m for m in msgs if m.get('Timestamp','')>cutoff and not m.get('FromMe',True)]
@@ -499,18 +536,35 @@ try:
 except: print('')
 " 2>/dev/null)
 
-    if command -v wacli &>/dev/null; then
+    # Read from keepalive cache to check for new messages (no store-lock contention)
+    local wacli_chats_cache="$DATA_DIR/cache/wacli_chats.json"
+    if [[ -f "$wacli_chats_cache" ]]; then
       local new_count
-      new_count=$(wacli messages list --after="${last_ts:-$(_date_days_ago 1 +%Y-%m-%d 2>/dev/null || echo '')}" --limit=5 --json 2>/dev/null | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-msgs=d.get('data',{}).get('messages',[]) or []
-print(len(msgs))
+      new_count=$(python3 -c "
+import json,datetime
+data=json.load(open('$wacli_chats_cache')).get('data',[]) or []
+last='${last_ts:-}'
+recent=[c for c in data if c.get('LastMessageTS','')>last] if last else data[:5]
+print(len(recent))
 " 2>/dev/null || echo 0)
 
       if [[ "$new_count" -gt 3 ]] && [[ -f "$MEM_SCRIPT" ]]; then
-        log "BRAIN: $new_count new messages since last extraction — triggering memory update"
-        bash "$MEM_SCRIPT" >> "$LOG_DIR/memory-extractor.log" 2>&1 &
+        # Guard against duplicate extractors
+        local extractor_pid_file="$DATA_DIR/memories/.extractor_pid"
+        local should_run=1
+        if [[ -f "$extractor_pid_file" ]]; then
+          local existing_pid
+          existing_pid=$(cat "$extractor_pid_file" 2>/dev/null || true)
+          if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+            log "BRAIN: memory extractor already running (pid=$existing_pid) — skipping"
+            should_run=0
+          fi
+        fi
+        if [[ $should_run -eq 1 ]]; then
+          log "BRAIN: $new_count new messages since last extraction — triggering memory update"
+          bash "$MEM_SCRIPT" >> "$LOG_DIR/memory-extractor.log" 2>&1 &
+          echo $! > "$extractor_pid_file"
+        fi
       fi
     fi
   fi
@@ -537,9 +591,13 @@ import json, subprocess, sys, datetime, os, collections
 data_dir = sys.argv[1]
 contacts = collections.defaultdict(lambda: {"channels": [], "last_seen": "", "msg_count": 0, "needs_reply": False})
 
-# WhatsApp contacts
+# WhatsApp contacts — read from keepalive cache (no store-lock contention)
 try:
-    wa = json.loads(subprocess.check_output(["wacli", "chats", "list", "--json"], timeout=10, stderr=subprocess.DEVNULL))
+    cache_path = os.path.join(data_dir, "cache", "wacli_chats.json")
+    if os.path.exists(cache_path):
+        wa = json.load(open(cache_path))
+    else:
+        wa = {"data": []}
     cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)).isoformat()
     for chat in (wa.get("data") or []):
         if chat.get("LastMessageTS", "") < cutoff: continue
@@ -705,31 +763,63 @@ install_daemon_launchd() {
     return 1
   fi
 
-  # Substitute placeholders while copying.
-  if [[ -f "$daemon_plist_src" ]]; then
-    sed \
-      -e "s|__BASH_PATH__|$bash_path|g" \
-      -e "s|__PLUGIN_ROOT__|$plugin_root|g" \
-      -e "s|__DAEMON_SCRIPT_PATH__|$OPS_DAEMON_SCRIPT|g" \
-      -e "s|__LOG_DIR__|$LOG_DIR|g" \
-      -e "s|__HOME__|$HOME|g" \
-      "$daemon_plist_src" > "$daemon_plist_dst"
-    launchctl unload -w "$daemon_plist_dst" 2>/dev/null || true
-    launchctl load -w "$daemon_plist_dst"
-    log "INSTALL(launchd): loaded $daemon_plist_dst"
+  _install_launchd_plist "$daemon_plist_src" "$daemon_plist_dst" \
+    "$bash_path" "$plugin_root" "com.claude-ops.daemon"
+  _install_launchd_plist "$keepalive_plist_src" "$keepalive_plist_dst" \
+    "$bash_path" "$plugin_root" "com.claude-ops.wacli-keepalive"
+}
+
+# Install a single launchd plist: substitute placeholders, copy, bootstrap.
+# Args: $1=src $2=dst $3=bash_path $4=plugin_root $5=label
+_install_launchd_plist() {
+  local src="$1" dst="$2" bash_path="$3" plugin_root="$4" label="$5"
+  if [[ ! -f "$src" ]]; then
+    log "INSTALL(launchd): source plist not found: $src"
+    return 1
   fi
 
-  if [[ -f "$keepalive_plist_src" ]]; then
-    sed \
-      -e "s|__BASH_PATH__|$bash_path|g" \
-      -e "s|__PLUGIN_ROOT__|$plugin_root|g" \
-      -e "s|__KEEPALIVE_SCRIPT_PATH__|$OPS_KEEPALIVE_SCRIPT|g" \
-      -e "s|__LOG_DIR__|$LOG_DIR|g" \
-      -e "s|__HOME__|$HOME|g" \
-      "$keepalive_plist_src" > "$keepalive_plist_dst"
-    launchctl unload -w "$keepalive_plist_dst" 2>/dev/null || true
-    launchctl load -w "$keepalive_plist_dst"
-    log "INSTALL(launchd): loaded $keepalive_plist_dst"
+  # Only skip reinstall if BOTH the destination plist file exists AND a live
+  # PID is registered. If the file is missing, always proceed with a full
+  # install so the plist is (re)copied — a live PID from a previous session
+  # running an old plist would otherwise cause us to silently skip and leave
+  # the service unregistered on next reboot.
+  local existing_pid=""
+  if [[ -f "$dst" ]]; then
+    # Parse `launchctl list` (no label): format is "PID\tExitStatus\tLabel".
+    # The labeled form `launchctl list <label>` outputs '"PID" = 12345;' which
+    # yields '=' as $2 — never the PID — so we avoid it entirely.
+    existing_pid=$(launchctl list 2>/dev/null \
+      | awk -v lbl="$label" '$3==lbl && $1!="-" {print $1; exit}' || true)
+    if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+      log "INSTALL(launchd): $label already installed at $dst and running (pid=$existing_pid) — skipping"
+      return 0
+    fi
+  fi
+
+  # Substitute placeholders
+  sed \
+    -e "s|__BASH_PATH__|$bash_path|g" \
+    -e "s|__PLUGIN_ROOT__|$plugin_root|g" \
+    -e "s|__DAEMON_SCRIPT_PATH__|$OPS_DAEMON_SCRIPT|g" \
+    -e "s|__KEEPALIVE_SCRIPT_PATH__|$OPS_KEEPALIVE_SCRIPT|g" \
+    -e "s|__LOG_DIR__|$LOG_DIR|g" \
+    -e "s|__HOME__|$HOME|g" \
+    "$src" > "$dst"
+
+  # Bootstrap: prefer modern launchctl bootstrap, fallback to legacy load
+  local uid
+  uid=$(id -u)
+  local gui_domain="gui/$uid"
+
+  # Bootout first to clear stale registrations
+  launchctl bootout "$gui_domain/$label" 2>/dev/null || true
+  if launchctl bootstrap "$gui_domain" "$dst" 2>/dev/null; then
+    log "INSTALL(launchd): bootstrapped $label into $gui_domain"
+  else
+    # Fallback: legacy load (macOS <10.10 or restricted environments)
+    launchctl unload -w "$dst" 2>/dev/null || true
+    launchctl load -w "$dst"
+    log "INSTALL(launchd): loaded $label via legacy launchctl load"
   fi
 }
 
@@ -882,6 +972,139 @@ uninstall_daemon_schtasks() {
   log "UNINSTALL(schtasks): removed ClaudeOpsDaemon + ClaudeOpsWacliKeepalive"
 }
 
+# ── General self-healing supervisor for all com.claude-ops.* services ─────
+# Enumerates expected services, checks each is installed + alive, auto-repairs.
+# Called at daemon startup and periodically during the monitor loop.
+ENSURE_SERVICES_LAST_RUN=0
+ENSURE_SERVICES_INTERVAL="${ENSURE_SERVICES_INTERVAL:-300}"  # every 5 min
+
+# Expected launchd agents (macOS) / systemd units (Linux).
+# Format: "label|plist_src_basename|description"
+EXPECTED_SERVICES=(
+  "com.claude-ops.daemon|com.claude-ops.daemon.plist|ops daemon"
+  "com.claude-ops.wacli-keepalive|com.claude-ops.wacli-keepalive.plist|wacli keepalive"
+)
+
+ensure_all_services() {
+  local now
+  now=$(date +%s)
+  # Throttle: skip if ran recently (unless force=1 passed)
+  if [[ "${1:-}" != "force" ]] && (( now - ENSURE_SERVICES_LAST_RUN < ENSURE_SERVICES_INTERVAL )); then
+    return 0
+  fi
+  ENSURE_SERVICES_LAST_RUN=$now
+
+  local os
+  os="$(ops_os 2>/dev/null || uname -s)"
+
+  case "$os" in
+    macos|Darwin*)  _ensure_all_services_launchd ;;
+    debian|fedora|arch|suse|alpine|linux|wsl|Linux*)  _ensure_all_services_systemd ;;
+    *)  return 0 ;;  # Windows/unsupported — skip
+  esac
+}
+
+_ensure_all_services_launchd() {
+  command -v launchctl >/dev/null 2>&1 || return 0
+  local agents_dir="$HOME/Library/LaunchAgents"
+  local entry label plist_base desc
+  local repaired=0
+
+  for entry in "${EXPECTED_SERVICES[@]}"; do
+    IFS='|' read -r label plist_base desc <<< "$entry"
+    local plist_dst="$agents_dir/$plist_base"
+    local plist_src="$SCRIPT_DIR/scripts/$plist_base"
+
+    # 1. Check if plist is installed
+    if [[ ! -f "$plist_dst" ]]; then
+      log "ENSURE: $label plist missing from $agents_dir — installing"
+      _repair_launchd_service "$label" "$plist_src" "$plist_dst"
+      (( repaired++ )) || true
+      continue
+    fi
+
+    # 2. Check if service is registered and has a live PID
+    local pid_str
+    pid_str=$(launchctl list 2>/dev/null | awk -v lbl="$label" '$3==lbl {print $1}' || true)
+
+    if [[ -z "$pid_str" ]]; then
+      # Not registered at all — bootstrap it
+      log "ENSURE: $label not registered in launchctl — bootstrapping"
+      _repair_launchd_service "$label" "$plist_src" "$plist_dst"
+      (( repaired++ )) || true
+      continue
+    fi
+
+    if [[ "$pid_str" == "-" ]]; then
+      # Registered but no PID — crashed or not started
+      local exit_status
+      exit_status=$(launchctl list 2>/dev/null | awk -v lbl="$label" '$3==lbl {print $2}' || true)
+      if [[ "$exit_status" != "0" ]] && [[ -n "$exit_status" ]] && [[ "$exit_status" != "-" ]]; then
+        log "ENSURE: $label crashed (exit=$exit_status) — kickstarting"
+        launchctl kickstart "gui/$(id -u)/$label" 2>/dev/null || {
+          # Fallback: full reinstall
+          _repair_launchd_service "$label" "$plist_src" "$plist_dst"
+        }
+        (( repaired++ )) || true
+      fi
+      continue
+    fi
+
+    # 3. Has a PID — verify it's actually alive
+    if ! kill -0 "$pid_str" 2>/dev/null; then
+      log "ENSURE: $label has stale PID $pid_str — kickstarting"
+      launchctl kickstart -k "gui/$(id -u)/$label" 2>/dev/null || {
+        _repair_launchd_service "$label" "$plist_src" "$plist_dst"
+      }
+      (( repaired++ )) || true
+    fi
+  done
+
+  if [[ $repaired -gt 0 ]]; then
+    log "ENSURE: repaired $repaired service(s)"
+  fi
+}
+
+_repair_launchd_service() {
+  local label="$1" plist_src="$2" plist_dst="$3"
+  local bash_path
+  bash_path="$(command -v bash)"
+  local plugin_root="$SCRIPT_DIR"
+  if [[ -z "$bash_path" ]] || [[ ! -f "$plist_src" ]]; then
+    log "ENSURE: cannot repair $label — missing bash or source plist"
+    return 1
+  fi
+  _install_launchd_plist "$plist_src" "$plist_dst" "$bash_path" "$plugin_root" "$label"
+}
+
+_ensure_all_services_systemd() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  local repaired=0
+
+  # Check wacli-keepalive systemd unit
+  if ! systemctl --user is-active claude-ops-wacli-keepalive.service &>/dev/null; then
+    log "ENSURE: claude-ops-wacli-keepalive.service not active — restarting"
+    systemctl --user restart claude-ops-wacli-keepalive.service 2>/dev/null || {
+      # Unit may not exist — trigger full install
+      install_daemon_systemd
+    }
+    (( repaired++ )) || true
+  fi
+
+  # Check timer
+  if ! systemctl --user is-active claude-ops.timer &>/dev/null; then
+    log "ENSURE: claude-ops.timer not active — restarting"
+    systemctl --user restart claude-ops.timer 2>/dev/null || {
+      install_daemon_systemd
+    }
+    (( repaired++ )) || true
+  fi
+
+  if [[ $repaired -gt 0 ]]; then
+    log "ENSURE: repaired $repaired systemd service(s)"
+  fi
+}
+
 install_daemon() {
   local os
   os="$(ops_os 2>/dev/null || uname -s)"
@@ -968,6 +1191,9 @@ done
 log "START: ops-daemon pid=$$ starting (run_once=$OPS_RUN_ONCE)"
 rotate_log
 
+# Ensure all com.claude-ops.* services are installed and healthy at startup
+ensure_all_services "force"
+
 if ! load_services_config; then
   log "FATAL: no services config — writing empty health and sleeping"
   cat > "$HEALTH_FILE" <<EOF
@@ -1022,6 +1248,9 @@ while true; do
       fi
     fi
   done < <(get_enabled_services)
+
+  # ── Service self-healing pass ────────────────────────────────────────────
+  ensure_all_services              # Every 5 min: verify all launchd/systemd services
 
   # ── Intelligence pass (smart brain) ──────────────────────────────────────
   # These run with their own internal throttles — safe to call every loop

@@ -24,13 +24,49 @@ fi
 
 WACLI="${WACLI_BIN:-/usr/local/bin/wacli}"
 STORE="${WACLI_STORE:-$HOME/.wacli}"
-LOG_DIR="${WACLI_LOG_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace/logs}"
+DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+LOG_DIR="${WACLI_LOG_DIR:-$DATA_DIR/logs}"
 LOG="$LOG_DIR/wacli-keepalive.log"
 HEALTH_FILE="$STORE/.health"
+MEMORY_DIR="$DATA_DIR/memories"
 MAX_LOG_SIZE=1048576  # 1MB
 SYNC_PROBE_TIMEOUT=20
+BACKFILL_INTERVAL="${BACKFILL_INTERVAL:-1800}"  # 30 min default
+PAUSE_SIGNAL="$STORE/.pause_sync"
+SYNC_PID_FILE="$STORE/.sync_pid"
+BATCH_MARKER="$STORE/.batch_wacli"  # set by self-initiated sync kills (not external pause)
+WACLI_CACHE_DIR="$DATA_DIR/cache"
 
-mkdir -p "$LOG_DIR" "$STORE"
+mkdir -p "$LOG_DIR" "$STORE" "$MEMORY_DIR" "$WACLI_CACHE_DIR"
+
+# ── Self-pause helpers (bug 5) ──────────────────────────────────────────
+# Kill the persistent sync from within the keepalive's own process so we can
+# access wacli exclusively without colliding on the store lock. The outer
+# supervisor loop watches $BATCH_MARKER and always restarts sync when it's set,
+# distinguishing a deliberate batch pause from an unexpected crash.
+acquire_wacli_batch() {
+  touch "$BATCH_MARKER"
+  local sync_pid=""
+  [[ -f "$SYNC_PID_FILE" ]] && sync_pid=$(cat "$SYNC_PID_FILE" 2>/dev/null || true)
+  if [[ -n "$sync_pid" ]] && kill -0 "$sync_pid" 2>/dev/null; then
+    kill -TERM "$sync_pid" 2>/dev/null || true
+    local waited=0
+    while kill -0 "$sync_pid" 2>/dev/null && [[ $waited -lt 10 ]]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    if kill -0 "$sync_pid" 2>/dev/null; then
+      kill -KILL "$sync_pid" 2>/dev/null || true
+    fi
+    rm -f "$SYNC_PID_FILE"
+  fi
+  # Give the OS a moment to fully release the store lock file
+  sleep 1
+}
+
+release_wacli_batch() {
+  rm -f "$BATCH_MARKER"
+}
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$LOG"; }
 
@@ -40,6 +76,15 @@ if [[ -f "$LOG" ]] && [[ $(stat -f%z "$LOG" 2>/dev/null || stat -c%s "$LOG" 2>/d
 fi
 
 log "START: keepalive pid=$$ starting"
+
+# ── Step 0: Race condition prevention ───────────────────────────────────
+# Both com.claude-ops.daemon and com.claude-ops.wacli-keepalive start at boot.
+# If both try wacli sync simultaneously, one crashes on the store lock.
+# Wait briefly for any concurrent sync to claim the lock first.
+if pgrep -f "wacli sync" >/dev/null 2>&1; then
+  log "START: another wacli sync is running — waiting 15s for lock release"
+  sleep 15
+fi
 
 # ── Step 1: Kill orphaned wacli sync processes ──────────────────────────
 cleanup_stale() {
@@ -186,22 +231,280 @@ if jids:
   fi
 }
 
+# ── Missed message detection ───────────────────────────────────────────
+# Compare chat metadata LastMessageTS against actual latest DB message.
+# If gap > 1 hour, the chat has missing messages and needs backfill.
+detect_missed_messages() {
+  command -v "$WACLI" &>/dev/null || return 0
+  local backfill_file="$STORE/.backfill_jids"
+
+  # Acquire exclusive wacli access — this function subprocesses wacli many times
+  acquire_wacli_batch
+
+  "$WACLI" chats list --json 2>/dev/null | python3 -c "
+import json, sys, subprocess, datetime
+
+def parse_ts(s):
+    '''Parse an ISO-8601 timestamp using only stdlib.
+    Handles the Z suffix for UTC.'''
+    if not s:
+        return None
+    if s.endswith('Z'):
+        s = s[:-1] + '+00:00'
+    try:
+        return datetime.datetime.fromisoformat(s)
+    except Exception:
+        return None
+
+data = json.load(sys.stdin)
+chats = data.get('data', []) or []
+wacli = '${WACLI}'
+cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=14)).isoformat()
+gap_threshold = 3600  # 1 hour in seconds
+missed = []
+
+for c in chats:
+    jid = c.get('JID', '')
+    meta_ts = c.get('LastMessageTS', '')
+    if not jid or not meta_ts or meta_ts < cutoff:
+        continue
+    try:
+        result = subprocess.run(
+            [wacli, 'messages', 'list', '--chat', jid, '--limit', '1', '--json'],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            continue
+        msg_data = json.loads(result.stdout)
+        msgs = msg_data.get('data', {}).get('messages', []) or []
+        if not msgs:
+            missed.append(jid)
+            continue
+        db_ts = msgs[0].get('Timestamp', '')
+        if not db_ts:
+            continue
+        # Parse both timestamps and compare — stdlib only
+        meta_dt = parse_ts(meta_ts)
+        db_dt = parse_ts(db_ts)
+        if meta_dt is None or db_dt is None:
+            continue
+        gap = abs((meta_dt - db_dt).total_seconds())
+        if gap > gap_threshold:
+            missed.append(jid)
+    except Exception:
+        continue
+
+if missed:
+    # Append to existing backfill file (don't overwrite)
+    existing = set()
+    try:
+        with open('${backfill_file}') as f:
+            existing = set(l.strip() for l in f if l.strip())
+    except: pass
+    with open('${backfill_file}', 'w') as f:
+        for jid in sorted(existing | set(missed)):
+            f.write(jid + '\n')
+    print(f'MISSED: {len(missed)} chats with message gaps detected')
+" 2>/dev/null | while IFS= read -r line; do
+    log "$line"
+  done || true
+
+  release_wacli_batch
+}
+
 auto_detect_empty_chats
+detect_missed_messages
 run_backfill
+
+# ── Wacli data cache for daemon consumption ─────────────────────────────
+# Write chat/message data to JSON cache so the daemon never calls wacli directly.
+# This eliminates store-lock contention between daemon intelligence functions
+# and the persistent sync.
+WACLI_CACHE_INTERVAL=300  # 5 min
+LAST_WACLI_CACHE=0
+
+refresh_wacli_cache() {
+  local now
+  now=$(date +%s)
+  if (( now - LAST_WACLI_CACHE < WACLI_CACHE_INTERVAL )); then return 0; fi
+  LAST_WACLI_CACHE=$now
+
+  # Acquire exclusive wacli access by killing the persistent sync.
+  # The outer supervisor loop restarts sync after this batch returns.
+  acquire_wacli_batch
+
+  # Write chats cache
+  "$WACLI" chats list --json > "$WACLI_CACHE_DIR/wacli_chats.json" 2>/dev/null || true
+
+  # Write recent messages cache (search for urgent keywords)
+  "$WACLI" messages search --query "urgent OR asap OR deadline OR emergency OR ASAP" --json \
+    > "$WACLI_CACHE_DIR/wacli_urgent.json" 2>/dev/null || true
+
+  release_wacli_batch
+  log "CACHE: refreshed wacli data cache"
+}
+
+# Initial cache write before starting persistent sync
+refresh_wacli_cache
 
 write_health "connected" "persistent sync starting"
 
-# Persistent sync for real-time messages. If it exits, launchd restarts us.
+# ── Pause-signal handler ────────────────────────────────────────────────
+# External processes (send, backfill) write $PAUSE_SIGNAL to request exclusive
+# wacli access. We stop the persistent sync, wait for the signal to clear
+# (or auto-expire after 60s), then restart.
+check_pause_signal() {
+  if [[ ! -f "$PAUSE_SIGNAL" ]]; then return 1; fi
+
+  # Auto-expire stale pause signals (>60s old)
+  local pause_age
+  pause_age=$(( $(date +%s) - $(stat -f%m "$PAUSE_SIGNAL" 2>/dev/null || stat -c%Y "$PAUSE_SIGNAL" 2>/dev/null || echo 0) ))
+  if [[ $pause_age -gt 60 ]]; then
+    log "PAUSE: stale pause signal (${pause_age}s old) — removing"
+    rm -f "$PAUSE_SIGNAL"
+    return 1
+  fi
+
+  local requester_pid
+  requester_pid=$(head -1 "$PAUSE_SIGNAL" 2>/dev/null | grep -o '[0-9]*' || true)
+  if [[ -n "$requester_pid" ]] && ! kill -0 "$requester_pid" 2>/dev/null; then
+    log "PAUSE: requester pid=$requester_pid is dead — removing signal"
+    rm -f "$PAUSE_SIGNAL"
+    return 1
+  fi
+
+  return 0
+}
+
+# ── Periodic backfill in background ─────────────────────────────────────
+# Runs every BACKFILL_INTERVAL during persistent sync. Non-blocking.
+LAST_BACKFILL_TIME=$(date +%s)
+
+periodic_backfill() {
+  local now
+  now=$(date +%s)
+  if (( now - LAST_BACKFILL_TIME < BACKFILL_INTERVAL )); then return 0; fi
+  LAST_BACKFILL_TIME=$now
+
+  log "PERIODIC-BACKFILL: checking for chats needing backfill"
+  (
+    auto_detect_empty_chats
+    detect_missed_messages
+    if [[ -f "$STORE/.backfill_jids" ]] && [[ -s "$STORE/.backfill_jids" ]]; then
+      run_backfill
+      write_backfill_memory
+    fi
+  ) &
+}
+
+# ── Write backfill summary to ops memory ────────────────────────────────
+write_backfill_memory() {
+  command -v "$WACLI" &>/dev/null || return 0
+
+  acquire_wacli_batch
+
+  "$WACLI" chats list --json 2>/dev/null | python3 -c "
+import json, sys, subprocess, datetime, os
+
+data = json.load(sys.stdin)
+chats = data.get('data', []) or []
+wacli = '${WACLI}'
+memory_dir = '${MEMORY_DIR}'
+now = datetime.datetime.now(datetime.timezone.utc)
+summaries = []
+
+for c in chats[:20]:
+    jid = c.get('JID', '')
+    name = c.get('Name', '') or c.get('PushName', '') or jid
+    meta_ts = c.get('LastMessageTS', '')
+    if not jid or not meta_ts:
+        continue
+    try:
+        result = subprocess.run(
+            [wacli, 'messages', 'list', '--chat', jid, '--limit', '3', '--json'],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            continue
+        msg_data = json.loads(result.stdout)
+        msgs = msg_data.get('data', {}).get('messages', []) or []
+        if not msgs:
+            continue
+        # Build summary
+        texts = [m.get('Text', '')[:100] for m in msgs if m.get('Text')]
+        if texts:
+            summaries.append({
+                'contact': name,
+                'jid': jid,
+                'last_message_ts': meta_ts,
+                'recent_topics': texts[:3],
+                'msg_count_local': len(msgs)
+            })
+    except:
+        continue
+
+if summaries:
+    summary_file = os.path.join(memory_dir, 'whatsapp_backfill_summary.json')
+    with open(summary_file, 'w') as f:
+        json.dump({
+            'updated': now.isoformat(),
+            'backfilled_chats': summaries
+        }, f, indent=2)
+    print(f'MEMORY: wrote backfill summary for {len(summaries)} chats')
+" 2>/dev/null | while IFS= read -r line; do
+    log "$line"
+  done || true
+
+  release_wacli_batch
+}
+
+# ── Persistent sync with pause-signal + periodic backfill ──────────────
 log "SYNC: starting persistent sync --follow"
-"$WACLI" sync --follow --refresh-contacts --refresh-groups 2>&1 | while IFS= read -r line; do
-  # Filter noise
-  case "$line" in
-    *"app state key"*|*"Failed to sync app state"*|*"Failed to do initial fetch"*) ;;
-    *"ERROR"*) log "SYNC-ERR: $line" ;;
-    *"Synced"*|*"Connected"*|*"Stopping"*) log "SYNC: $line" ;;
-  esac
+
+while true; do
+  # Check for pause signal before starting sync
+  if check_pause_signal; then
+    log "SYNC: pause signal detected — waiting for external command to finish"
+    write_health "paused" "sync paused for external wacli command"
+    while check_pause_signal; do sleep 2; done
+    log "SYNC: pause cleared — resuming"
+    write_health "connected" "sync resuming after pause"
+  fi
+
+  # Start persistent sync in background so we can monitor pause signals
+  "$WACLI" sync --follow --refresh-contacts --refresh-groups 2>&1 &
+  local_sync_pid=$!
+  echo "$local_sync_pid" > "$SYNC_PID_FILE"
+
+  # Monitor loop: check pause signals + trigger periodic backfill
+  while kill -0 "$local_sync_pid" 2>/dev/null; do
+    # If pause signal appears, stop sync gracefully
+    if check_pause_signal; then
+      log "SYNC: pause signal received — stopping sync pid=$local_sync_pid"
+      kill -TERM "$local_sync_pid" 2>/dev/null || true
+      wait "$local_sync_pid" 2>/dev/null || true
+      rm -f "$SYNC_PID_FILE"
+      break
+    fi
+
+    # Periodic backfill (non-blocking, runs in subshell) + cache refresh
+    periodic_backfill
+    refresh_wacli_cache
+
+    sleep 5
+  done
+
+  # If sync exited on its own (not paused, not batch-killed), break out.
+  # A batch kill is a deliberate self-pause from refresh_wacli_cache et al
+  # — we always want to restart sync after a batch completes.
+  if ! check_pause_signal && [[ ! -f "$BATCH_MARKER" ]]; then
+    break
+  fi
+  # Clear any stale batch marker before restarting
+  rm -f "$BATCH_MARKER"
 done
 
+rm -f "$SYNC_PID_FILE"
 write_health "disconnected" "sync exited"
 log "EXIT: sync process ended — launchd will restart"
 exit 0
