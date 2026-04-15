@@ -257,8 +257,10 @@ restart_service() {
 
   SERVICE_RESTARTS["$name"]=$(( count + 1 ))
   SERVICE_LAST_RESTART_EPOCH["$name"]=$now
-  log "RESTART: $name (attempt $((count+1))/$max_restarts) — waiting ${restart_delay}s"
+  log "RESTART: $name (attempt $((count+1))/$max_restarts) — waiting ${restart_delay}s before restart"
   stop_service "$name"
+  # Apply configured backoff synchronously before re-launching
+  sleep "$restart_delay"
   start_service "$name"
 }
 
