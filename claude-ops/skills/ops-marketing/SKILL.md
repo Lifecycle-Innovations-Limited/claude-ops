@@ -478,8 +478,9 @@ Route `$ARGUMENTS` within the google-ads section:
 | (empty), dashboard, overview | Campaign performance dashboard (last 7 days) |
 | search-terms, terms | Search Terms Report with negative keyword candidates (last 30 days) |
 | budget-recs, recommendations, recs | Budget optimization recommendations from Google |
-| campaigns, manage | Campaign management (create, pause, enable, budget) — see Plan 03 |
-| keywords, kw | Keyword Planner + ad group management — see Plan 03 |
+| campaigns, manage | Campaign management — list, create, pause, enable, adjust budget |
+| keywords, kw, keyword-planner | Keyword Planner — discover keywords with volume and bid data |
+| ad-groups, ag | Ad group management — list, create, add/remove keywords, adjust bids |
 
 ### Dashboard (default — no args, `dashboard`, `overview`)
 
@@ -674,6 +675,320 @@ echo "$RECS" | jq -r '.[].results[]? | [
     "$TYPE_LABEL" "${campaign:0:25}" "$CURRENT" "$RECOMMENDED" "$IMPACT"
 done
 ```
+
+### Campaign Management (`campaigns`, `manage`)
+
+**List campaigns:**
+
+```bash
+curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/googleAds:searchStream" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary '{
+    "query": "SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign_budget.amount_micros FROM campaign WHERE campaign.status != REMOVED ORDER BY campaign.name LIMIT 50"
+  }'
+```
+
+Output as table:
+```
+| # | Campaign ID | Name | Status | Channel | Budget/day |
+```
+
+**Create campaign** (`campaigns create`):
+
+Collect from user via AskUserQuestion (free text, one at a time):
+1. Campaign name
+2. Daily budget in dollars (convert to micros: `BUDGET_MICROS=$(awk "BEGIN {printf \"%d\", $DOLLARS * 1000000}")`)
+3. Channel type — AskUserQuestion with options: `[Search, Display, Shopping, Video]`
+   Map to API values: `SEARCH`, `DISPLAY`, `SHOPPING`, `VIDEO`
+
+Two-step mutate:
+
+Step 1 — Create budget:
+```bash
+BUDGET_RESP=$(curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/campaignBudgets:mutate" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary "{
+    \"operations\": [{
+      \"create\": {
+        \"name\": \"Budget for ${CAMPAIGN_NAME}\",
+        \"deliveryMethod\": \"STANDARD\",
+        \"amountMicros\": \"${BUDGET_MICROS}\"
+      }
+    }]
+  }")
+BUDGET_RESOURCE=$(echo "$BUDGET_RESP" | jq -r '.results[0].resourceName')
+```
+
+Step 2 — Create campaign (always in PAUSED status for safety):
+```bash
+curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/campaigns:mutate" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary "{
+    \"operations\": [{
+      \"create\": {
+        \"name\": \"${CAMPAIGN_NAME}\",
+        \"campaignBudget\": \"${BUDGET_RESOURCE}\",
+        \"advertisingChannelType\": \"${CHANNEL_TYPE}\",
+        \"status\": \"PAUSED\",
+        \"manualCpc\": {},
+        \"networkSettings\": {
+          \"targetGoogleSearch\": true,
+          \"targetSearchNetwork\": true,
+          \"targetContentNetwork\": false
+        }
+      }
+    }]
+  }"
+```
+
+Print: `✓ Campaign "${CAMPAIGN_NAME}" created (status: PAUSED, budget: $XX.XX/day). Enable it with: /ops:marketing google-ads campaigns enable <ID>`
+
+If error, parse `error.message` from response and display.
+
+**Pause campaign** (`campaigns pause <ID>`):
+
+⚠ **Rule 5 — confirm before pausing** via AskUserQuestion: `"Pause campaign <NAME> (ID: <ID>)?"` with options `[Pause, Cancel]`.
+
+```bash
+curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/campaigns:mutate" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary "{
+    \"operations\": [{
+      \"update\": {
+        \"resourceName\": \"customers/${GADS_CUSTOMER_ID}/campaigns/${CAMPAIGN_ID}\",
+        \"status\": \"PAUSED\"
+      },
+      \"updateMask\": \"status\"
+    }]
+  }"
+```
+
+Print: `✓ Campaign <NAME> paused.`
+
+**Enable campaign** (`campaigns enable <ID>`):
+
+Same as pause but `"status": "ENABLED"`. No confirmation needed (enabling is not destructive).
+
+```bash
+curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/campaigns:mutate" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary "{
+    \"operations\": [{
+      \"update\": {
+        \"resourceName\": \"customers/${GADS_CUSTOMER_ID}/campaigns/${CAMPAIGN_ID}\",
+        \"status\": \"ENABLED\"
+      },
+      \"updateMask\": \"status\"
+    }]
+  }"
+```
+
+Print: `✓ Campaign <NAME> enabled.`
+
+**Adjust budget** (`campaigns budget <ID> <AMOUNT>`):
+
+First, fetch the campaign's current budget resource name:
+```bash
+CAMPAIGN_DATA=$(curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/googleAds:searchStream" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary "{\"query\": \"SELECT campaign.campaign_budget, campaign_budget.amount_micros FROM campaign WHERE campaign.id = ${CAMPAIGN_ID}\"}")
+BUDGET_RESOURCE=$(echo "$CAMPAIGN_DATA" | jq -r '.[0].results[0].campaign.campaignBudget // empty')
+CURRENT_BUDGET_MICROS=$(echo "$CAMPAIGN_DATA" | jq -r '.[0].results[0].campaignBudget.amountMicros // "0"')
+CURRENT_BUDGET=$(awk "BEGIN { printf \"%.2f\", ${CURRENT_BUDGET_MICROS:-0} / 1000000 }")
+```
+
+Confirm via AskUserQuestion: `"Change budget from $<CURRENT> to $<NEW>/day?"` with options `[Confirm, Cancel]`.
+
+Then update:
+```bash
+NEW_BUDGET_MICROS=$(awk "BEGIN {printf \"%d\", ${NEW_AMOUNT} * 1000000}")
+curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/campaignBudgets:mutate" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary "{
+    \"operations\": [{
+      \"update\": {
+        \"resourceName\": \"${BUDGET_RESOURCE}\",
+        \"amountMicros\": \"${NEW_BUDGET_MICROS}\"
+      },
+      \"updateMask\": \"amountMicros\"
+    }]
+  }"
+```
+
+Print: `✓ Budget updated: $<OLD>/day → $<NEW>/day`
+
+### Keyword Planner (`keywords`, `kw`, `keyword-planner`)
+
+```bash
+# Collect seed keywords from user via AskUserQuestion (free text)
+# "Enter seed keywords (comma-separated):"
+# Split into JSON array for the request: KEYWORDS_JSON_ARRAY=$(echo "$SEED_KEYWORDS" | sed 's/,/","/g' | sed 's/^/"/;s/$/"/')
+
+curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}:generateKeywordIdeas" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary "{
+    \"language\": \"languageConstants/1000\",
+    \"geoTargetConstants\": [\"geoTargetConstants/2840\"],
+    \"includeAdultKeywords\": false,
+    \"keywordPlanNetwork\": \"GOOGLE_SEARCH\",
+    \"keywordSeed\": {
+      \"keywords\": [${KEYWORDS_JSON_ARRAY}]
+    }
+  }"
+```
+
+Language `1000` = English, Geo `2840` = United States. These are defaults — if user has locale configured in preferences, use those instead. Other common values: UK=`2826`, Canada=`2124`, Australia=`2036`.
+
+**Output format:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  KEYWORD IDEAS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Seeds: keyword1, keyword2
+
+| Keyword | Avg Monthly Searches | Competition | Low Bid | High Bid |
+|---------|---------------------|-------------|---------|----------|
+```
+
+- `avgMonthlySearches` displayed as-is (integer)
+- `competition` displayed as-is (`LOW`, `MEDIUM`, `HIGH`)
+- `lowTopOfPageBidMicros` and `highTopOfPageBidMicros` divided by 1,000,000 and displayed as `$X.XX`
+- Sort by `avgMonthlySearches` descending in the output
+
+If no results, print: `No keyword ideas found for these seeds. Try different or broader keywords.`
+
+### Ad Group Management (`ad-groups`, `ag`)
+
+**List ad groups for a campaign** (`ad-groups list <CAMPAIGN_ID>`):
+
+```bash
+curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/googleAds:searchStream" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary "{\"query\": \"SELECT ad_group.id, ad_group.name, ad_group.status, ad_group.cpc_bid_micros FROM ad_group WHERE campaign.id = ${CAMPAIGN_ID} AND ad_group.status != REMOVED ORDER BY ad_group.name\"}"
+```
+
+Output:
+```
+| # | Ad Group ID | Name | Status | CPC Bid |
+```
+
+**Create ad group** (`ad-groups create <CAMPAIGN_ID>`):
+
+Collect via AskUserQuestion:
+1. Ad group name (free text)
+2. Default CPC bid in dollars (free text, convert to micros)
+
+```bash
+BID_MICROS=$(awk "BEGIN {printf \"%d\", ${BID_DOLLARS} * 1000000}")
+curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/adGroups:mutate" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary "{
+    \"operations\": [{
+      \"create\": {
+        \"name\": \"${AD_GROUP_NAME}\",
+        \"campaign\": \"customers/${GADS_CUSTOMER_ID}/campaigns/${CAMPAIGN_ID}\",
+        \"status\": \"ENABLED\",
+        \"type\": \"SEARCH_STANDARD\",
+        \"cpcBidMicros\": \"${BID_MICROS}\"
+      }
+    }]
+  }"
+```
+
+Print: `✓ Ad group "${AD_GROUP_NAME}" created in campaign ${CAMPAIGN_ID} (CPC bid: $X.XX)`
+
+**List keywords in ad group** (`ad-groups keywords <AD_GROUP_ID>`):
+
+```bash
+curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/googleAds:searchStream" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary "{\"query\": \"SELECT ad_group_criterion.criterion_id, ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type, ad_group_criterion.cpc_bid_micros, ad_group_criterion.status FROM ad_group_criterion WHERE ad_group.id = ${AD_GROUP_ID} AND ad_group_criterion.type = KEYWORD AND ad_group_criterion.status != REMOVED\"}"
+```
+
+Output:
+```
+| # | Keyword | Match Type | CPC Bid | Status |
+```
+
+**Add keyword to ad group** (`ad-groups add-keyword <AD_GROUP_ID>`):
+
+Collect via AskUserQuestion:
+1. Keyword text (free text)
+2. Match type — AskUserQuestion options: `[Broad, Phrase, Exact]`
+   Map: `BROAD`, `PHRASE`, `EXACT`
+3. CPC bid in dollars (free text, convert to micros) — optional, uses ad group default if not provided
+
+```bash
+curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/adGroupCriteria:mutate" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary "{
+    \"operations\": [{
+      \"create\": {
+        \"adGroup\": \"customers/${GADS_CUSTOMER_ID}/adGroups/${AD_GROUP_ID}\",
+        \"status\": \"ENABLED\",
+        \"keyword\": {
+          \"text\": \"${KEYWORD_TEXT}\",
+          \"matchType\": \"${MATCH_TYPE}\"
+        }
+        ${BID_MICROS:+,\"cpcBidMicros\": \"${BID_MICROS}\"}
+      }
+    }]
+  }"
+```
+
+Print: `✓ Keyword "${KEYWORD_TEXT}" (${MATCH_TYPE}) added to ad group ${AD_GROUP_ID}`
+
+Note: Keywords are immutable after creation. To change match type or text, remove and recreate. To change bid only, use `ad-groups update-bid`.
+
+**Remove keyword** (`ad-groups remove-keyword <AD_GROUP_ID> <CRITERION_ID>`):
+
+⚠ **Rule 5 — confirm before removing** via AskUserQuestion: `"Remove keyword <TEXT> from ad group <NAME>?"` with options `[Remove, Cancel]`.
+
+```bash
+curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/adGroupCriteria:mutate" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary "{
+    \"operations\": [{
+      \"remove\": \"customers/${GADS_CUSTOMER_ID}/adGroupCriteria/${AD_GROUP_ID}~${CRITERION_ID}\"
+    }]
+  }"
+```
+
+Print: `✓ Keyword removed from ad group.`
+
+**Update keyword bid** (`ad-groups update-bid <AD_GROUP_ID> <CRITERION_ID> <BID>`):
+
+```bash
+NEW_BID_MICROS=$(awk "BEGIN {printf \"%d\", ${NEW_BID} * 1000000}")
+curl -s -X POST \
+  "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/adGroupCriteria:mutate" \
+  "${GADS_HEADERS[@]}" \
+  --data-binary "{
+    \"operations\": [{
+      \"update\": {
+        \"resourceName\": \"customers/${GADS_CUSTOMER_ID}/adGroupCriteria/${AD_GROUP_ID}~${CRITERION_ID}\",
+        \"cpcBidMicros\": \"${NEW_BID_MICROS}\"
+      },
+      \"updateMask\": \"cpcBidMicros\"
+    }]
+  }"
+```
+
+Print: `✓ Keyword bid updated to $X.XX`
 
 ---
 
