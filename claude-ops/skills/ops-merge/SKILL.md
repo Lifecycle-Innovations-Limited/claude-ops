@@ -27,7 +27,7 @@ maxTurns: 50
 Before executing, load:
 1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `timezone`, project registry
 2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — if `action_needed` set, surface to user
-3. **Secrets**: GitHub token: env `$GITHUB_TOKEN` → `doppler secrets get GITHUB_TOKEN --plain` → password manager
+3. **Secrets**: GitHub token: env `$GITHUB_TOKEN` → Doppler MCP (`mcp__doppler__*`) → `doppler secrets get GITHUB_TOKEN --plain` → password manager
 
 
 # OPS ► MERGE

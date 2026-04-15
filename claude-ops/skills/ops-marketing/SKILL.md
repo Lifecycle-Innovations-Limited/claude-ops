@@ -32,7 +32,7 @@ Before executing, load available context:
 2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
    - If `action_needed` is not null → surface it before running any channel queries
 
-3. **Secrets**: Resolve API keys via userConfig → env vars → Doppler (see Credential Resolution section below)
+3. **Secrets**: Resolve API keys via userConfig → env vars → Doppler MCP (`mcp__doppler__*`) → Doppler CLI fallback (see Credential Resolution section below)
 
 ## CLI/API Reference
 
