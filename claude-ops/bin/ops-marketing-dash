@@ -10,6 +10,12 @@ META_TOKEN="${META_ADS_TOKEN:-$(claude plugin config get meta_ads_token 2>/dev/n
 META_ACCOUNT="${META_AD_ACCOUNT_ID:-$(claude plugin config get meta_ad_account_id 2>/dev/null || echo "")}"
 GA4_PROPERTY="${GA4_PROPERTY_ID:-$(claude plugin config get ga4_property_id 2>/dev/null || echo "")}"
 GSC_SITE="${GOOGLE_SEARCH_CONSOLE_SITE:-$(claude plugin config get google_search_console_site 2>/dev/null || echo "")}"
+GADS_DEV_TOKEN="${GOOGLE_ADS_DEVELOPER_TOKEN:-$(claude plugin config get google_ads_developer_token 2>/dev/null || echo "")}"
+GADS_CLIENT_ID="${GOOGLE_ADS_CLIENT_ID:-$(claude plugin config get google_ads_client_id 2>/dev/null || echo "")}"
+GADS_CLIENT_SECRET="${GOOGLE_ADS_CLIENT_SECRET:-$(claude plugin config get google_ads_client_secret 2>/dev/null || echo "")}"
+GADS_REFRESH_TOKEN="${GOOGLE_ADS_REFRESH_TOKEN:-$(claude plugin config get google_ads_refresh_token 2>/dev/null || echo "")}"
+GADS_CUSTOMER_ID="${GOOGLE_ADS_CUSTOMER_ID:-$(claude plugin config get google_ads_customer_id 2>/dev/null || echo "")}"
+GADS_LOGIN_CUSTOMER_ID="${GOOGLE_ADS_LOGIN_CUSTOMER_ID:-$(claude plugin config get google_ads_login_customer_id 2>/dev/null || echo "")}"
 
 # Doppler fallback
 if [ -z "$KLAVIYO_KEY" ]; then
@@ -19,6 +25,12 @@ if [ -z "$META_TOKEN" ]; then
   META_TOKEN="$(doppler secrets get META_ADS_TOKEN --plain 2>/dev/null || echo "")"
   META_ACCOUNT="$(doppler secrets get META_AD_ACCOUNT_ID --plain 2>/dev/null || echo "")"
 fi
+if [ -z "$GADS_REFRESH_TOKEN" ]; then
+  GADS_REFRESH_TOKEN="$(doppler secrets get GOOGLE_ADS_REFRESH_TOKEN --plain 2>/dev/null || echo "")"
+fi
+
+# Strip dashes from customer ID (API requires no dashes)
+GADS_CUSTOMER_ID="${GADS_CUSTOMER_ID//-/}"
 
 TODAY=$(date +%Y-%m-%d)
 
@@ -167,11 +179,39 @@ gather_gsc() {
     '{clicks: $clicks, impressions: $impressions, ctr: $ctr, avg_position: $position}'
 }
 
+# --- Google Ads ---
+gather_google_ads() {
+  if [ -z "$GADS_REFRESH_TOKEN" ] || [ -z "$GADS_DEV_TOKEN" ]; then
+    echo "null"
+    return
+  fi
+
+  # Refresh access token
+  GADS_ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
+    --data "client_id=${GADS_CLIENT_ID}&client_secret=${GADS_CLIENT_SECRET}&refresh_token=${GADS_REFRESH_TOKEN}&grant_type=refresh_token" \
+    | jq -r '.access_token // empty')
+  if [ -z "$GADS_ACCESS_TOKEN" ]; then
+    echo "null"
+    return
+  fi
+
+  # Campaign summary (last 7 days)
+  curl -s -X POST \
+    "https://googleads.googleapis.com/v23/customers/${GADS_CUSTOMER_ID}/googleAds:searchStream" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${GADS_ACCESS_TOKEN}" \
+    -H "developer-token: ${GADS_DEV_TOKEN}" \
+    ${GADS_LOGIN_CUSTOMER_ID:+-H "login-customer-id: ${GADS_LOGIN_CUSTOMER_ID}"} \
+    --data-binary '{"query": "SELECT campaign.id, campaign.name, campaign.status, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM campaign WHERE segments.date DURING LAST_7_DAYS AND campaign.status != REMOVED ORDER BY metrics.cost_micros DESC LIMIT 20"}' \
+    2>/dev/null || echo "null"
+}
+
 # Run all in parallel (subshells)
 KLAVIYO_DATA=$(gather_klaviyo) &
 META_DATA=$(gather_meta) &
 GA4_DATA=$(gather_ga4) &
 GSC_DATA=$(gather_gsc) &
+GADS_DATA=$(gather_google_ads) &
 wait
 
 # Emit unified JSON
@@ -180,5 +220,6 @@ jq -n \
   --argjson meta "$META_DATA" \
   --argjson ga4 "$GA4_DATA" \
   --argjson gsc "$GSC_DATA" \
+  --argjson google_ads "$GADS_DATA" \
   --arg date "$TODAY" \
-  '{date: $date, klaviyo: $klaviyo, meta: $meta, ga4: $ga4, gsc: $gsc}'
+  '{date: $date, klaviyo: $klaviyo, meta: $meta, ga4: $ga4, gsc: $gsc, google_ads: $google_ads}'
