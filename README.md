@@ -155,7 +155,7 @@ Most integrations offer two paths — MCP (zero-config OAuth) or CLI (fuller fea
 | ElevenLabs | — | API key | TTS + cloning via `/ops:voice` |
 | Whisper | — | API key | Transcription via `/ops:voice` |
 | GSD | — | auto-detected | Optional — roadmap state; degrades gracefully |
-| Doppler | — | `doppler` CLI | Optional secret source; falls through to next resolver |
+| Doppler | `@dopplerhq/mcp-server` (MCP) | `doppler` CLI (fallback) | Secrets manager; MCP server provides direct tool access |
 
 > [!NOTE]
 > **`infra-monitor` now covers every AWS service you have IAM for** — ECS, EC2, RDS, Lambda, S3, CloudFront, ALB/NLB, API Gateway, SQS, SNS, DynamoDB, ElastiCache, Route 53, ACM, CloudWatch, Budgets, IAM. Probes run in parallel; services you can't access are silently skipped.
@@ -246,7 +246,7 @@ SendMessage(to="fix-ecs", content="This is P0, prioritize over CI")
 > [!IMPORTANT]
 > **Transparency matters.** claude-ops reads from your AWS, GitHub, Linear, Sentry, WhatsApp, Email, Slack, Telegram, Shopify, Stripe, RevenueCat, and more. You should know exactly what it touches.
 
-**Credential resolution chain (in order):** Doppler → 1Password/Dashlane/Bitwarden → macOS Keychain → env vars → Claude Code's encrypted `userConfig` (`~/.claude.json`).
+**Credential resolution chain (in order):** Doppler MCP → Doppler CLI → 1Password/Dashlane/Bitwarden → macOS Keychain → env vars → Claude Code's encrypted `userConfig` (`~/.claude.json`).
 
 **Setup auto-scan sources (only during `/ops:setup`):** env, shell profiles, Doppler, 1Password, Dashlane, Bitwarden, macOS Keychain, Claude Code's `~/.claude.json`, Chrome history URL list (never page content), Slack Playwright profile (only if chosen).
 
