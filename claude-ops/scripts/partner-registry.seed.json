@@ -1,0 +1,11 @@
+{
+  "partner_registry": {
+    "myparcel": {
+      "category": "shipping",
+      "auth_type": "basic",
+      "base_url": "https://api.myparcel.nl",
+      "credential_key": "MYPARCEL_API_KEY",
+      "docs_url": "https://developer.myparcel.nl/api-reference/"
+    }
+  }
+}
