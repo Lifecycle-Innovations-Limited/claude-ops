@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "ops",
-      "description": "Business operations command center for Claude Code \u2014 25 skills, 13 agents, smart background daemon. Manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (AWS), revenue (Stripe+RevenueCat), e-commerce, marketing, monitoring (Datadog/New Relic/OTEL), and voice. Includes YOLO autonomous mode with 4 C-suite agents.",
+      "description": "Business operations command center for Claude Code — 25 skills, 13 agents, smart background daemon. Manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (AWS), revenue (Stripe+RevenueCat), e-commerce, marketing, monitoring (Datadog/New Relic/OTEL), and voice. Includes YOLO autonomous mode with 4 C-suite agents.",
       "source": "./claude-ops",
       "version": "1.6.1",
       "category": "productivity",
