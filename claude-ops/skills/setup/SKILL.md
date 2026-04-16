@@ -1851,10 +1851,12 @@ Ask which marketing integrations to configure via two sequential `AskUserQuestio
 
 If user selects `[More...]`, present **second call**:
 
-| Option                  | Header   | Description                                   |
-| ----------------------- | -------- | --------------------------------------------- |
-| Google Analytics 4      | ga4      | Web analytics — GA4 property ID               |
-| Google Search Console   | gsc      | SEO data — site URL (uses gcloud auth)        |
+| Option                      | Header   | Description                                            |
+| --------------------------- | -------- | ------------------------------------------------------ |
+| Google Analytics 4          | ga4      | Web analytics — GA4 property ID                        |
+| Google Search Console       | gsc      | SEO data — site URL (uses gcloud auth)                 |
+| WhatsApp Business API       | waba     | Template messaging at scale — Business token + IDs     |
+| Skip                        | skip     | Done with marketing setup                              |
 
 Run the selected sub-step(s) below in the order selected.
 
@@ -2003,6 +2005,38 @@ curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
   "https://searchconsole.googleapis.com/webmasters/v3/sites" | jq '.siteEntry | length'
 ```
 
+#### WhatsApp Business API
+
+**Separate from wacli personal WhatsApp.** Used for Business-to-customer template messaging at scale.
+
+Auto-scan for:
+```bash
+printenv WHATSAPP_BUSINESS_TOKEN WHATSAPP_PHONE_NUMBER_ID WHATSAPP_BUSINESS_ACCOUNT_ID 2>/dev/null
+claude plugin config get whatsapp_business_token 2>/dev/null && echo "waba_token: already configured"
+claude plugin config get whatsapp_phone_number_id 2>/dev/null && echo "waba_phone_id: already configured"
+claude plugin config get whatsapp_business_account_id 2>/dev/null && echo "waba_account_id: already configured"
+```
+
+Where to find credentials:
+- `WHATSAPP_BUSINESS_TOKEN`: Meta Developer Portal → Your App → WhatsApp → API Setup → Temporary or System User token
+- `WHATSAPP_PHONE_NUMBER_ID`: Same page → "From" phone number → Phone Number ID
+- `WHATSAPP_BUSINESS_ACCOUNT_ID`: Meta Business Manager → Business Settings → WhatsApp Accounts → ID
+
+Collect each via AskUserQuestion (free text) if not found. Save:
+```bash
+claude plugin config set whatsapp_business_token "$WABA_TOKEN"
+claude plugin config set whatsapp_phone_number_id "$WABA_PHONE_ID"
+claude plugin config set whatsapp_business_account_id "$WABA_ACCOUNT_ID"
+```
+
+Smoke test:
+```bash
+curl -s "https://graph.facebook.com/v20.0/${WABA_PHONE_ID}" \
+  -H "Authorization: Bearer ${WABA_TOKEN}" | jq '.display_phone_number // empty'
+```
+
+If returns phone number: `WhatsApp Business ✓ connected — Phone: <number>`. Else show error.
+
 #### Save to preferences
 
 Write to `$PREFS_PATH` (merge):
@@ -2012,7 +2046,8 @@ Write to `$PREFS_PATH` (merge):
     "klaviyo": { "api_key": "<pk_...>" },
     "meta": { "access_token": "<token>", "ad_account_id": "act_XXXXXXXXXX" },
     "ga4": { "property_id": "123456789" },
-    "gsc": { "site_url": "https://example.com/" }
+    "gsc": { "site_url": "https://example.com/" },
+    "whatsapp_business": { "phone_number_id": "<ID>", "business_account_id": "<WABA_ID>" }
   }
 }
 ```
