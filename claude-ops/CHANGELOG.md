@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.2] — 2026-04-16
+
+### Fixed
+
+- **`bin/ops-marketing-dash` — empty data from background gatherers** (sentry[bot] + cursor[bot], HIGH). `VAR=$(fn) &` with `wait` only assigns inside the backgrounded subshell, so `KLAVIYO_DATA`, `META_DATA`, `GA4_DATA`, `GSC_DATA`, `GADS_DATA`, and `INSTAGRAM_DATA` were all empty after `wait`. Switched to the tempfile pattern already used in `bin/ops-external` / `bin/ops-discover-external`.
+- **`bin/ops-marketing-dash` — hardcoded `EMAIL_SCORE=10`** (cursor[bot]). Now derived from Klaviyo last-campaign `open_rate` (≥20% → 20pt, ≥10% → 10pt, else 0), matching the thresholds documented in `skills/ops-marketing/SKILL.md §Marketing Health Score`. `gather_klaviyo` now fetches campaign-values-reports for the most recent campaign.
+- **`bin/ops-marketing-dash` — active-channel count used string compare** (cursor[bot] + codex[bot]). After the tempfile fix, unconfigured gatherers emit JSON `null`, so the literal `!= "0"` test mis-counted. Replaced with a numeric `is_positive` awk helper.
+- **`skills/ops-marketing/SKILL.md` — Meta ad creative passed ad account ID as page_id** (codex[bot] P1 + sentry[bot]). Meta's `object_story_spec.page_id` requires a real FB Page ID, not `act_…`. Now requires `META_PAGE_ID` in env or plugin config with a clear error message.
+- **`skills/ops-marketing/SKILL.md` — Instagram Story publishing sent duplicate `media_type`** (cursor[bot]). Removed the duplicate form field from the Stories container `curl`.
+- **`agents/marketing-optimizer.md` — parser keys mismatched dashboard schema** (codex[bot] P1). Optimizer expected `meta_ads.*` / `google_ads.campaigns[]` / `klaviyo.attributed_revenue` but dashboard emits `meta.*` / raw `google_ads` searchStream array / no `attributed_revenue` field. Rewrote the schema reference to match what `bin/ops-marketing-dash` actually produces, with null-safe jq reductions for the Google Ads path.
+
 ## [1.6.1] — 2026-04-16
 
 ### Added
