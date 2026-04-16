@@ -299,9 +299,10 @@ BLENDED_ROAS=$(awk "BEGIN { if (${TOTAL_SPEND:-0} > 0) printf \"%.2f\", ${TOTAL_
 # ROAS score (0-30)
 ROAS_SCORE=$(awk "BEGIN { r = ${BLENDED_ROAS:-0}; if (r >= 3) print 30; else if (r >= 1) print 15; else print 0 }")
 # Email open rate score (0-20) — derived from Klaviyo last-campaign open rate
-# when available; falls back to 0 when we have no campaign data.
+# when available; falls back to 0 when we have no campaign data. Thresholds
+# come from SKILL.md §Marketing Health Score: >=20% → 20pt, 10-20% → 10pt.
 KLAVIYO_OPEN_RATE=$(echo "$KLAVIYO_DATA" | jq -r '.open_rate // "0"' 2>/dev/null || echo "0")
-EMAIL_SCORE=$(awk "BEGIN { r = ${KLAVIYO_OPEN_RATE:-0}; if (r >= 0.25) print 20; else if (r >= 0.15) print 10; else print 0 }")
+EMAIL_SCORE=$(awk "BEGIN { r = ${KLAVIYO_OPEN_RATE:-0}; if (r >= 0.20) print 20; else if (r >= 0.10) print 10; else print 0 }")
 # Channel diversification (0-20): count active platforms.
 # Compare numerically — after the tempfile fix these fields can be JSON null or
 # numeric strings like "0.00", neither of which a literal != "0" string test
