@@ -16,11 +16,17 @@ Read pre-gathered marketing data from the ops-marketing-dash script:
 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/ops-ops-marketplace}/bin/ops-marketing-dash" 2>/dev/null
 ```
 
-Parse the JSON output. Look for:
-- `meta_ads.spend`, `meta_ads.roas`, `meta_ads.purchases`, `meta_ads.campaigns[]`
-- `google_ads.spend`, `google_ads.conversions_value`, `google_ads.campaigns[]`
-- `klaviyo.attributed_revenue`
-- `ga4.revenue`, `ga4.conversions`
+Parse the JSON output. The schema emitted by `ops-marketing-dash` (v1.5+) is:
+
+- `meta` — account-level Meta Ads totals (last 7 days): `meta.spend`, `meta.impressions`, `meta.clicks`, `meta.ctr`, `meta.purchases`, `meta.purchase_value`, `meta.roas`. All values are strings. No per-campaign breakdown is pre-gathered — fetch campaigns directly via the fallback query below if you need per-campaign analysis.
+- `google_ads` — raw Google Ads `searchStream` response (array of pages). Each page has `.results[]` with `.campaign.{id,name,status}` and `.metrics.{costMicros,impressions,clicks,conversions,conversionsValue}`. Compute `google_ads.spend` as `[.[].results[]?.metrics.costMicros | tonumber] | add / 1000000` and `google_ads.conversions_value` as `[.[].results[]?.metrics.conversionsValue | tonumber] | add`.
+- `klaviyo` — `klaviyo.subscribers`, `klaviyo.last_campaign`, `klaviyo.last_campaign_status`, `klaviyo.open_rate`.
+- `ga4` — `ga4.sessions`, `ga4.users`, `ga4.conversions`, `ga4.revenue`, `ga4.cvr`.
+- `gsc` — `gsc.clicks`, `gsc.impressions`, `gsc.ctr`, `gsc.avg_position`.
+- `instagram` — `instagram.followers`, `instagram.media_count`, `instagram.reach_7d`.
+- Top-level: `blended_roas`, `health_score`, `health_status`, `date`.
+
+Any channel the user has not configured will be JSON `null` rather than an object.
 
 If ops-marketing-dash data is unavailable, pull directly:
 
