@@ -22,7 +22,7 @@ resolve_env() {
     printf '%s' "$v"; return 0
   fi
   if [ -f "$PREFS_PATH" ] && command -v jq &>/dev/null; then
-    v=$(jq -r --arg k "$prefs_key" '.[$k] // empty' "$PREFS_PATH" 2>/dev/null || true)
+    v=$(jq -r --arg k "$prefs_key" '.[$k] // .user_config[$k] // empty' "$PREFS_PATH" 2>/dev/null || true)
     if [ -n "$v" ] && [ "$v" != "null" ]; then
       printf '%s' "$v"; return 0
     fi
@@ -134,13 +134,13 @@ parse_ship_flags() {
   SIGNATURE="false"; INSURANCE="0"; DESCRIPTION=""; PICKUP="false"
   while [ $# -gt 0 ]; do
     case "$1" in
-      --to) TO_RAW="$2"; shift 2 ;;
-      --from) FROM_RAW="$2"; shift 2 ;;
-      --weight) WEIGHT="$2"; shift 2 ;;
-      --package-type) PKG_TYPE="$2"; shift 2 ;;
+      --to) TO_RAW="${2:-}"; shift 2 ;;
+      --from) FROM_RAW="${2:-}"; shift 2 ;;
+      --weight) WEIGHT="${2:-}"; shift 2 ;;
+      --package-type) PKG_TYPE="${2:-1}"; shift 2 ;;
       --signature) SIGNATURE="true"; shift ;;
-      --insurance) INSURANCE="$2"; shift 2 ;;
-      --description) DESCRIPTION="$2"; shift 2 ;;
+      --insurance) INSURANCE="${2:-0}"; shift 2 ;;
+      --description) DESCRIPTION="${2:-}"; shift 2 ;;
       --pickup) PICKUP="true"; shift ;;
       *) echo "ship: unknown flag: $1" >&2; return 64 ;;
     esac

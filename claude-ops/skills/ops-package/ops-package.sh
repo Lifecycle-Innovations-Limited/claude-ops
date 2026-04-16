@@ -55,29 +55,9 @@ Credential resolution (per-carrier env var → preferences.json key → Doppler)
 EOF
 }
 
-# list_configured_carriers — emits only carriers whose credentials resolve.
-list_configured_carriers() {
-  local out=()
-  for c in "${CARRIERS[@]}"; do
-    if "${c}_configured"; then
-      out+=("$c")
-    fi
-  done
-  printf '%s\n' "${out[@]:-}"
-}
-
-# resolve_carrier [--carrier name] ...
 # Sets $CARRIER to the selected carrier name. Exits with a helpful error when
 # no carrier is configured.
 CARRIER=""
-consume_carrier_flag() {
-  if [ "${1:-}" = "--carrier" ]; then
-    CARRIER="${2:-}"
-    FLAG_ARGS_CONSUMED=2
-  else
-    FLAG_ARGS_CONSUMED=0
-  fi
-}
 
 pick_carrier() {
   if [ -n "$CARRIER" ]; then

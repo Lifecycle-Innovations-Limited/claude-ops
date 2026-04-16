@@ -11,7 +11,7 @@ set -euo pipefail
 
 DPD_DEFAULT_BASE_URL="https://public-dis-ws.dpd.nl/shipping/rest"
 
-_dpd_token_cache="${TMPDIR:-/tmp}/dpd_token.json"
+_dpd_token_cache="${TMPDIR:-/tmp}/dpd_token_${USER:-$(id -u)}.json"
 
 _dpd_base_url() {
   local override
@@ -55,8 +55,8 @@ dpd_auth_header() {
     return 1
   fi
   # DPD tokens last ~24h; cache for 23.
-  jq -n --arg t "$token" --arg e "$((now + 82800))" \
-    '{token:$t, expires_at: ($e|tonumber)}' > "$_dpd_token_cache"
+  (umask 077; jq -n --arg t "$token" --arg e "$((now + 82800))" \
+    '{token:$t, expires_at: ($e|tonumber)}' > "$_dpd_token_cache")
   printf 'Authorization: %s' "$token"
 }
 

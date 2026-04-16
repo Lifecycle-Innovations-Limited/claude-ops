@@ -11,7 +11,7 @@ set -euo pipefail
 
 UPS_BASE_URL="https://onlinetools.ups.com"
 
-_ups_token_cache="${TMPDIR:-/tmp}/ups_token.json"
+_ups_token_cache="${TMPDIR:-/tmp}/ups_token_${USER:-$(id -u)}.json"
 
 ups_auth_header() {
   local cid secret
@@ -48,8 +48,8 @@ ups_auth_header() {
     printf '%s\n' "$resp" >&2
     return 1
   fi
-  jq -n --arg t "$token" --arg e "$((now + ttl - 60))" \
-    '{token:$t, expires_at: ($e|tonumber)}' > "$_ups_token_cache"
+  (umask 077; jq -n --arg t "$token" --arg e "$((now + ttl - 60))" \
+    '{token:$t, expires_at: ($e|tonumber)}' > "$_ups_token_cache")
   printf 'Authorization: Bearer %s' "$token"
 }
 
