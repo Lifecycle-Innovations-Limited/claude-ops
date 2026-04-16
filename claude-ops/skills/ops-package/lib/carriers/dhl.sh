@@ -123,17 +123,18 @@ dhl_label() {
   local auth; auth=$(dhl_auth_header)
 
   local tmp; tmp=$(mktemp)
+  trap 'rm -f "$tmp"' RETURN
   curl -sS -H "$auth" -H "$UA_HEADER" \
     -H "Accept: application/pdf" \
     -o "$tmp" \
     "$DHL_BASE_URL/labels/${id}?format=PDF&printerType=A4"
 
   if file "$tmp" 2>/dev/null | grep -qi "PDF"; then
+    trap - RETURN
     save_label_pdf "dhl" "$id" "$tmp"
   else
     echo "dhl label: unexpected non-PDF response:" >&2
     cat "$tmp" >&2 2>/dev/null || true
-    rm -f "$tmp"
     return 1
   fi
 }

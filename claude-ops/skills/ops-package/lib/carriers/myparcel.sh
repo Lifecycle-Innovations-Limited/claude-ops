@@ -11,7 +11,7 @@ myparcel_auth_header() {
   local k; k=$(resolve_env "MYPARCEL_API_KEY" "myparcel_api_key") || \
     die_missing_creds "MyParcel.nl" "MYPARCEL_API_KEY" "https://developer.myparcel.nl/api-reference/"
   local b64; b64=$(printf '%s' "$k" | base64 | tr -d '\n')
-  printf 'Authorization: basic %s' "$b64"
+  printf 'Authorization: Basic %s' "$b64"
 }
 
 myparcel_ship() {
@@ -120,19 +120,20 @@ myparcel_label() {
 
   local tmp_body tmp_headers
   tmp_body=$(mktemp); tmp_headers=$(mktemp)
-  trap 'rm -f "$tmp_body" "$tmp_headers"' EXIT
+  trap 'rm -f "$tmp_body" "$tmp_headers"' RETURN
   curl -sS -D "$tmp_headers" -o "$tmp_body" \
     -H "$auth" -H "$UA_HEADER" -H "Accept: application/pdf" \
     "$MYPARCEL_BASE_URL/shipment_labels/${id}?format=A4&positions=1"
 
   local ctype
   ctype=$(awk -F': *' 'tolower($1)=="content-type"{print tolower($2)}' "$tmp_headers" | tr -d '\r' | tail -1)
-  rm -f "$tmp_headers"
 
   if [[ "$ctype" == application/pdf* ]]; then
+    trap - RETURN
+    rm -f "$tmp_headers"
     save_label_pdf "myparcel" "$id" "$tmp_body"
   else
-    local body; body=$(cat "$tmp_body"); rm -f "$tmp_body"
+    local body; body=$(cat "$tmp_body")
     local pay_url
     pay_url=$(printf '%s' "$body" | jq -r '.data.payment_instructions.payment_url // empty' 2>/dev/null)
     if [ -n "$pay_url" ]; then
