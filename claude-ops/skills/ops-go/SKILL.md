@@ -163,6 +163,12 @@ PORTFOLIO DASHBOARD
 EXTERNAL PROJECTS
 [table: alias, source, status, details — from ops-external data]
 
+MARKETING
+ Health: [N]/100 ([Healthy/Warning/Critical])  |  Blended ROAS: [X]x  |  Top channel: [channel]
+ Meta: $[X] spent (7d) [X]x ROAS  |  Google: $[X] spent (7d) [X]x ROAS  |  Email: [N] subs
+[If health < 70: "⚠ Run /ops:marketing optimize for recommendations"]
+[If no marketing configured: "(marketing not configured — /ops:marketing setup)"]
+
 UNREAD
 [WhatsApp: N, Email: N, Slack: check MCP, Notion: N items, Calendar: N events today]
 
@@ -173,6 +179,8 @@ TODAY'S PRIORITIES (ranked by revenue impact + urgency)
 
 ──────────────────────────────────────────────────────
 ```
+
+**Marketing section data source**: Read from `ops-marketing-dash` pre-gathered output (see Pre-gathered data section). If marketing data is present in the dash output, compute the health score inline (see ops-marketing SKILL.md health score formula). If ops-marketing-dash is not configured or returns empty marketing data, show `(marketing not configured — /ops:marketing setup)`.
 
 **Priority ranking**: fires > degraded infra > CI failures > unread comms > ready-to-merge PRs > revenue-generating GSD work > stale projects.
 

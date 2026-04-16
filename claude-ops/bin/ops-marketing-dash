@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ops-marketing-dash — pre-gathers data from all configured marketing channels
 # Output: JSON object with data from each channel (null for unconfigured)
+# v1.5: adds Instagram, blended_roas, marketing_health_score
 
 set -euo pipefail
 
@@ -31,6 +32,7 @@ fi
 
 # Strip dashes from customer ID (API requires no dashes)
 GADS_CUSTOMER_ID="${GADS_CUSTOMER_ID//-/}"
+INSTAGRAM_ACCOUNT_ID="${INSTAGRAM_ACCOUNT_ID:-$(claude plugin config get instagram_account_id 2>/dev/null || echo "")}"
 
 TODAY=$(date +%Y-%m-%d)
 
@@ -179,6 +181,49 @@ gather_gsc() {
     '{clicks: $clicks, impressions: $impressions, ctr: $ctr, avg_position: $position}'
 }
 
+# --- Instagram ---
+gather_instagram() {
+  if [ -z "$META_TOKEN" ]; then
+    echo "null"
+    return
+  fi
+
+  # Resolve IG account ID if not cached
+  IG_ID="$INSTAGRAM_ACCOUNT_ID"
+  if [ -z "$IG_ID" ]; then
+    IG_ID=$(curl -s "https://graph.facebook.com/v21.0/me/accounts?fields=instagram_business_account" \
+      -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null | jq -r '.data[0].instagram_business_account.id // empty')
+    [ -n "$IG_ID" ] && claude plugin config set instagram_account_id "$IG_ID" 2>/dev/null
+  fi
+
+  if [ -z "$IG_ID" ]; then
+    echo "null"
+    return
+  fi
+
+  # Account stats
+  ACCOUNT=$(curl -s "https://graph.facebook.com/v21.0/${IG_ID}?fields=followers_count,media_count" \
+    -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null)
+  FOLLOWERS=$(echo "$ACCOUNT" | jq -r '.followers_count // 0')
+  MEDIA_COUNT=$(echo "$ACCOUNT" | jq -r '.media_count // 0')
+
+  # Reach last 7d
+  END_DATE=$(date +%Y-%m-%d)
+  START_DATE=$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo "")
+  REACH=0
+  if [ -n "$START_DATE" ]; then
+    INSIGHTS=$(curl -s "https://graph.facebook.com/v21.0/${IG_ID}/insights?metric=reach&period=day&since=${START_DATE}&until=${END_DATE}" \
+      -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null)
+    REACH=$(echo "$INSIGHTS" | jq '[.data[]?.values[]?.value | tonumber] | add // 0' 2>/dev/null || echo "0")
+  fi
+
+  jq -n \
+    --argjson followers "$FOLLOWERS" \
+    --argjson media_count "$MEDIA_COUNT" \
+    --argjson reach_7d "$REACH" \
+    '{followers: $followers, media_count: $media_count, reach_7d: $reach_7d}'
+}
+
 # --- Google Ads ---
 gather_google_ads() {
   if [ -z "$GADS_REFRESH_TOKEN" ] || [ -z "$GADS_DEV_TOKEN" ]; then
@@ -212,7 +257,40 @@ META_DATA=$(gather_meta) &
 GA4_DATA=$(gather_ga4) &
 GSC_DATA=$(gather_gsc) &
 GADS_DATA=$(gather_google_ads) &
+INSTAGRAM_DATA=$(gather_instagram) &
 wait
+
+# Compute blended ROAS across Meta + Google Ads
+META_SPEND=$(echo "$META_DATA" | jq -r '.spend // "0"' 2>/dev/null || echo "0")
+META_REV=$(echo "$META_DATA" | jq -r '.purchase_value // "0"' 2>/dev/null || echo "0")
+GADS_SPEND_RAW=$(echo "$GADS_DATA" | jq '[.[].results[]?.metrics.costMicros // "0" | tonumber] | add / 1000000 // 0' 2>/dev/null || echo "0")
+GADS_REV_RAW=$(echo "$GADS_DATA" | jq '[.[].results[]?.metrics.conversionsValue // "0" | tonumber] | add // 0' 2>/dev/null || echo "0")
+TOTAL_SPEND=$(awk "BEGIN { printf \"%.2f\", ${META_SPEND:-0} + ${GADS_SPEND_RAW:-0} }")
+TOTAL_REV=$(awk "BEGIN { printf \"%.2f\", ${META_REV:-0} + ${GADS_REV_RAW:-0} }")
+BLENDED_ROAS=$(awk "BEGIN { if (${TOTAL_SPEND:-0} > 0) printf \"%.2f\", ${TOTAL_REV:-0} / ${TOTAL_SPEND:-1}; else print \"0\" }")
+
+# Compute marketing health score (0-100)
+# ROAS score (0-30)
+ROAS_SCORE=$(awk "BEGIN { r = ${BLENDED_ROAS:-0}; if (r >= 3) print 30; else if (r >= 1) print 15; else print 0 }")
+# Email open rate score — use Klaviyo data if available (0-20)
+EMAIL_SCORE=10  # default medium score if no open rate data available
+# Channel diversification (0-20): count active platforms
+ACTIVE_CHANNELS=0
+[ "$(echo "$META_DATA" | jq -r '.spend // "0"')" != "0" ] && ACTIVE_CHANNELS=$((ACTIVE_CHANNELS + 1))
+[ "$(echo "$GADS_SPEND_RAW" | tr -d ' ')" != "0" ] && ACTIVE_CHANNELS=$((ACTIVE_CHANNELS + 1))
+[ "$(echo "$KLAVIYO_DATA" | jq -r '.subscribers // 0')" != "0" ] && ACTIVE_CHANNELS=$((ACTIVE_CHANNELS + 1))
+[ "$(echo "$INSTAGRAM_DATA" | jq -r '.followers // 0')" != "0" ] && ACTIVE_CHANNELS=$((ACTIVE_CHANNELS + 1))
+DIV_SCORE=$([ $ACTIVE_CHANNELS -ge 3 ] && echo 20 || ([ $ACTIVE_CHANNELS -ge 2 ] && echo 10 || echo 0))
+# GA4 CVR score (0-20)
+GA4_CVR=$(echo "$GA4_DATA" | jq -r '.cvr // "0"' 2>/dev/null || echo "0")
+CVR_SCORE=$(awk "BEGIN { c = ${GA4_CVR:-0}; if (c >= 2) print 20; else if (c >= 1) print 10; else print 0 }")
+# SEO clicks score (0-10)
+GSC_CLICKS=$(echo "$GSC_DATA" | jq -r '.clicks // 0' 2>/dev/null || echo "0")
+SEO_SCORE=$(awk "BEGIN { c = ${GSC_CLICKS:-0}; if (c >= 1000) print 10; else if (c >= 100) print 5; else print 0 }")
+HEALTH_SCORE=$((ROAS_SCORE + EMAIL_SCORE + DIV_SCORE + CVR_SCORE + SEO_SCORE))
+HEALTH_STATUS="Critical"
+[ $HEALTH_SCORE -ge 40 ] && HEALTH_STATUS="Warning"
+[ $HEALTH_SCORE -ge 70 ] && HEALTH_STATUS="Healthy"
 
 # Emit unified JSON
 jq -n \
@@ -221,5 +299,9 @@ jq -n \
   --argjson ga4 "$GA4_DATA" \
   --argjson gsc "$GSC_DATA" \
   --argjson google_ads "$GADS_DATA" \
+  --argjson instagram "$INSTAGRAM_DATA" \
+  --arg blended_roas "$BLENDED_ROAS" \
+  --argjson health_score "$HEALTH_SCORE" \
+  --arg health_status "$HEALTH_STATUS" \
   --arg date "$TODAY" \
-  '{date: $date, klaviyo: $klaviyo, meta: $meta, ga4: $ga4, gsc: $gsc, google_ads: $google_ads}'
+  '{date: $date, klaviyo: $klaviyo, meta: $meta, ga4: $ga4, gsc: $gsc, google_ads: $google_ads, instagram: $instagram, blended_roas: $blended_roas, health_score: $health_score, health_status: $health_status}'
