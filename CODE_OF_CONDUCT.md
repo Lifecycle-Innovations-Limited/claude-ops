@@ -31,7 +31,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders at **support@healify.ai**. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders at **info@lifecycleinnovations.limited**. All complaints will be reviewed and investigated promptly and fairly.
 
 ## Attribution
 
