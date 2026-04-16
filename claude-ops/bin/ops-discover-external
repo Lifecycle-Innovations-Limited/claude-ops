@@ -80,14 +80,22 @@ if want_source shopify; then
   (
     STORE_URL="$(prefs_get '.ecom.shopify.store_url')"
     TOKEN=""
+    # Track which env-var name supplied the token so the candidate config
+    # references the key the user actually has set, not a hardcoded default.
+    CRED_KEY="SHOPIFY_ADMIN_TOKEN"
 
     # Resolve token: prefs -> env fallbacks. prefs may contain a `doppler:` reference,
     # in which case we cannot dereference without running the doppler CLI — skip that case.
     PREFS_TOKEN="$(prefs_get '.ecom.shopify.admin_token')"
     if [ -n "$PREFS_TOKEN" ] && [[ "$PREFS_TOKEN" != doppler:* ]]; then
       TOKEN="$PREFS_TOKEN"
+    elif [ -n "${SHOPIFY_ADMIN_TOKEN:-}" ]; then
+      TOKEN="$SHOPIFY_ADMIN_TOKEN"
+      CRED_KEY="SHOPIFY_ADMIN_TOKEN"
+    elif [ -n "${SHOPIFY_ACCESS_TOKEN:-}" ]; then
+      TOKEN="$SHOPIFY_ACCESS_TOKEN"
+      CRED_KEY="SHOPIFY_ACCESS_TOKEN"
     fi
-    TOKEN="${TOKEN:-${SHOPIFY_ADMIN_TOKEN:-${SHOPIFY_ACCESS_TOKEN:-}}}"
     STORE_URL="${STORE_URL:-${SHOPIFY_STORE_URL:-}}"
 
     if [ -z "$STORE_URL" ] || [ -z "$TOKEN" ]; then
@@ -117,6 +125,7 @@ if want_source shopify; then
       --arg shop_name "$SHOP_NAME" \
       --arg plan "$PLAN" \
       --arg store_url "$STORE_URL" \
+      --arg cred_key "$CRED_KEY" \
       '{
         alias: $alias,
         source: "shopify",
@@ -126,7 +135,7 @@ if want_source shopify; then
           alias: $alias,
           source: "shopify",
           type: "external",
-          shopify: { store_url: $store_url, credential_key: "SHOPIFY_ADMIN_TOKEN" },
+          shopify: { store_url: $store_url, credential_key: $cred_key },
           revenue: { model: "ecommerce", stage: "active" },
           priority: 3
         }
@@ -189,9 +198,14 @@ fi
 #
 if want_source slack; then
   (
-    XOXC=$(cred_get slack-xoxc slack-xoxc || true)
-    XOXD=$(cred_get slack-xoxd slack-xoxd || true)
-    [ -z "$XOXC" ] || [ -z "$XOXD" ] && exit 0
+    # bin/ops-slack-autolink.mjs stores tokens as service=slack-xoxc|slack-xoxd,
+    # account=$USER. Older bin/ops-setup-preflight probes used the service name
+    # as the account too; try the real convention first, then fall back.
+    XOXC=$(cred_get slack-xoxc "${USER:-$(id -un)}" || true)
+    XOXD=$(cred_get slack-xoxd "${USER:-$(id -un)}" || true)
+    [ -z "$XOXC" ] && XOXC=$(cred_get slack-xoxc slack-xoxc || true)
+    [ -z "$XOXD" ] && XOXD=$(cred_get slack-xoxd slack-xoxd || true)
+    { [ -z "$XOXC" ] || [ -z "$XOXD" ]; } && exit 0
 
     RESP=$(curl -fsS --max-time 8 \
       -H "Authorization: Bearer $XOXC" \
