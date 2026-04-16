@@ -59,3 +59,23 @@ REGISTRY="$SCRIPT_DIR/registry.json"
 if [ ! -f "$REGISTRY" ]; then
   echo "  ✗ ops: no project registry — run /ops:setup to create one"
 fi
+
+# ─── Seed partner_registry into preferences.json (idempotent) ────────
+# Adds integrations shipped with the plugin (e.g. myparcel) without
+# clobbering any user-added entries or credentials.
+PREFS_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PREFS="$PREFS_DIR/preferences.json"
+SEED="$SCRIPT_DIR/partner-registry.seed.json"
+if [ -f "$SEED" ] && command -v jq &>/dev/null; then
+  mkdir -p "$PREFS_DIR"
+  [ -f "$PREFS" ] || echo '{}' > "$PREFS"
+  tmp=$(mktemp)
+  # Seed wins only for keys the user hasn't already set.
+  jq -s '.[0] as $prefs
+    | .[1].partner_registry as $seed
+    | $prefs
+    | .partner_registry = (($seed // {}) + ($prefs.partner_registry // {}))' \
+    "$PREFS" "$SEED" > "$tmp" 2>/dev/null \
+    && mv "$tmp" "$PREFS" \
+    || rm -f "$tmp"
+fi
