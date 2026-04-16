@@ -10,7 +10,7 @@ set -euo pipefail
 FEDEX_BASE_URL_PROD="https://apis.fedex.com"
 FEDEX_BASE_URL_SANDBOX="https://apis-sandbox.fedex.com"
 
-_fedex_token_cache="${TMPDIR:-/tmp}/fedex_token.json"
+_fedex_token_cache="${TMPDIR:-/tmp}/fedex_token_${USER:-$(id -u)}.json"
 
 _fedex_base_url() {
   if [ "${FEDEX_SANDBOX:-0}" = "1" ]; then
@@ -56,8 +56,8 @@ fedex_auth_header() {
     printf '%s\n' "$resp" >&2
     return 1
   fi
-  jq -n --arg t "$token" --arg e "$((now + ttl - 60))" \
-    '{token:$t, expires_at: ($e|tonumber)}' > "$_fedex_token_cache"
+  (umask 077; jq -n --arg t "$token" --arg e "$((now + ttl - 60))" \
+    '{token:$t, expires_at: ($e|tonumber)}' > "$_fedex_token_cache")
   printf 'Authorization: Bearer %s' "$token"
 }
 
