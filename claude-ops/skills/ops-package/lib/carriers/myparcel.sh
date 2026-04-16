@@ -38,15 +38,28 @@ myparcel_ship() {
     } | with_entries(select(.value != null))')
   fi
 
+  # For NL insured shipments MyParcel requires signature + only_recipient.
+  local _sig_val="$SIGNATURE"
+  local _only_recip="false"
+  if [ "$INSURANCE" -gt 0 ] 2>/dev/null; then
+    local _to_cc; _to_cc=$(printf '%s' "$TO_JSON" | jq -r '.cc // "NL"')
+    if [ "$_to_cc" = "NL" ]; then
+      _sig_val="true"
+      _only_recip="true"
+    fi
+  fi
+
   local options
   options=$(jq -n \
     --argjson pkg "$PKG_TYPE" \
-    --argjson sig "$(printf '%s' "$SIGNATURE" | sed 's/true/1/;s/false/0/')" \
+    --arg sig "$_sig_val" \
+    --arg only "$_only_recip" \
     --argjson ins "$INSURANCE" \
     --arg desc "$DESCRIPTION" \
     '{
       package_type: $pkg,
-      signature: $sig,
+      signature: ($sig == "true"),
+      only_recipient: (if $only == "true" then true else null end),
       label_description: (if $desc == "" then null else $desc end),
       insurance: (if $ins > 0 then {amount: ($ins * 100), currency: "EUR"} else null end)
     } | with_entries(select(.value != null))')
@@ -107,6 +120,7 @@ myparcel_label() {
 
   local tmp_body tmp_headers
   tmp_body=$(mktemp); tmp_headers=$(mktemp)
+  trap 'rm -f "$tmp_body" "$tmp_headers"' EXIT
   curl -sS -D "$tmp_headers" -o "$tmp_body" \
     -H "$auth" -H "$UA_HEADER" -H "Accept: application/pdf" \
     "$MYPARCEL_BASE_URL/shipment_labels/${id}?format=A4&positions=1"
@@ -157,11 +171,11 @@ myparcel_list() {
   local auth; auth=$(myparcel_auth_header)
   curl -sS -H "$auth" -H "$UA_HEADER" \
     -H "Accept: application/json;charset=utf-8" \
-    "$MYPARCEL_BASE_URL/shipments?size=10&page=1" \
+    "$MYPARCEL_BASE_URL/shipments?size=30&page=1" \
   | jq '[.data.shipments[] | {
       carrier: "myparcel",
       id, status, barcode,
-      recipient: (.recipient.person + " — " + .recipient.city + " (" + .recipient.cc + ")"),
+      recipient: ((.recipient.person // "") + " — " + (.recipient.city // "") + " (" + (.recipient.cc // "") + ")"),
       created
     }]'
 }
