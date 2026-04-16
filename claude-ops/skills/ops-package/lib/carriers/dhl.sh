@@ -10,7 +10,7 @@ set -euo pipefail
 
 DHL_BASE_URL="https://api-gw.dhlparcel.nl"
 
-_dhl_token_cache="${TMPDIR:-/tmp}/dhl_parcel_nl_token.json"
+_dhl_token_cache="${TMPDIR:-/tmp}/dhl_parcel_nl_token_${USER:-$(id -u)}.json"
 
 dhl_auth_header() {
   local uid key
@@ -46,8 +46,8 @@ dhl_auth_header() {
     return 1
   fi
   # DHL tokens last ~10 minutes; cache for 9.
-  jq -n --arg t "$token" --arg e "$((now + 540))" \
-    '{token:$t, expires_at: ($e|tonumber)}' > "$_dhl_token_cache"
+  (umask 077; jq -n --arg t "$token" --arg e "$((now + 540))" \
+    '{token:$t, expires_at: ($e|tonumber)}' > "$_dhl_token_cache")
   printf 'Authorization: Bearer %s' "$token"
 }
 
