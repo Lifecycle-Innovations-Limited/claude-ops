@@ -41,7 +41,9 @@
     "stripe",
     "revenuecat",
     "mrr",
-    "aws-monitoring"
+    "aws-monitoring",
+    "shipping",
+    "myparcel"
   ],
   "userConfig": {
     "telegram_api_id": {
@@ -294,6 +296,13 @@
       "description": "Default Doppler config name (e.g. 'dev', 'stg', 'prd'). Used by the Doppler MCP server.",
       "type": "string",
       "sensitive": false,
+      "default": ""
+    },
+    "myparcel_api_key": {
+      "title": "MyParcel.nl API Key",
+      "description": "Plain API key from backoffice.myparcel.nl \u2192 Settings \u2192 API. Used by /ops:ops-package for creating shipments, downloading labels, and tracking parcels. Script base64-encodes it at runtime \u2014 do NOT pre-encode.",
+      "type": "string",
+      "sensitive": true,
       "default": ""
     }
   }
