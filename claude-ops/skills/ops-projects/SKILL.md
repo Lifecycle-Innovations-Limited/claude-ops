@@ -105,6 +105,24 @@ done | jq -s '.'
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
 ```
 
+## External-project auto-discovery (candidates not yet registered)
+
+```!
+${CLAUDE_PLUGIN_ROOT}/bin/ops-discover-external 2>/dev/null || echo '[]'
+```
+
+Cross-reference the candidates against the registry loaded above. If a candidate's `config.alias` is NOT already registered, surface it in a footer section of the dashboard so the user can register it via `/ops:setup registry`:
+
+```
+UNREGISTERED CANDIDATES (found via configured integrations)
+ SOURCE    DETAILS                            ACTION
+ ──────────────────────────────────────────────────────
+ shopify   mystore (basic plan)               /ops:setup registry
+ linear    Engineering (42 issues)            /ops:setup registry
+```
+
+Suppress this section if all candidates are already registered or the script returns `[]`.
+
 ---
 
 ## Your task
@@ -147,7 +165,9 @@ Use **batched AskUserQuestion calls** (max 4 options each) for the project selec
 
 ## Jump to project
 
-If `$ARGUMENTS` contains a project alias, show a deep-dive for that project:
+If `$ARGUMENTS` contains a project alias, look up the project in the registry and branch on `type`:
+
+### Git-backed project (default)
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -167,7 +187,33 @@ If `$ARGUMENTS` contains a project alias, show a deep-dive for that project:
  d) Check fires (/ops-fires [alias])
 ```
 
-Use AskUserQuestion after displaying either view.
+### External project (type: external, no git repo)
+
+For `source: shopify|linear|slack|notion|custom`, render a source-specific deep-dive pulled from `ops-external` + live MCP/API data — no git/CI/PR rows:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ [PROJECT] — EXTERNAL (shopify)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ Source:  shopify — mystore.myshopify.com (basic plan)
+ Status:  ✓ healthy    Revenue: ecommerce / growth
+ Recent:  [last 5 orders / Linear issues / Slack threads / Notion page edits]
+
+ Actions:
+ a) Jump to relevant tool (/ops:ecom, /ops:linear, /ops:inbox --slack, etc.)
+ b) Check fires (/ops-fires [alias])
+ c) View revenue (/ops:revenue [alias])
+ d) Back to portfolio
+```
+
+Source → action-skill map:
+- `shopify` → `/ops:ecom [alias]`
+- `linear`  → `/ops:linear [alias]`
+- `slack`   → `/ops:inbox --slack` (filter to that workspace)
+- `notion`  → `mcp__claude_ai_Notion__notion-search` or `/ops:inbox --notion`
+- `custom`  → show the `custom.url` and offer to open it via `WebFetch`
+
+Use AskUserQuestion (≤ 4 options) after displaying either view.
 
 ---
 

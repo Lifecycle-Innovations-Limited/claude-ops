@@ -1,0 +1,360 @@
+#!/usr/bin/env bash
+# ops-discover-external — Auto-discover external (non-git) projects from configured integrations.
+#
+# Probes Shopify, Linear, Slack, and Notion using credentials already available in the environment,
+# plugin preferences, or the OS keychain. Outputs a JSON array of candidate projects that the setup
+# wizard (Step 5) can present to the user for registration in registry.json.
+#
+# The script never writes to registry.json itself — it only surfaces candidates. Secrets are
+# redacted from the output (only the credential_key name is returned, never the value).
+#
+# Output shape:
+# [
+#   {
+#     "alias":   "suggested-alias",
+#     "source":  "shopify|linear|slack|notion",
+#     "status":  "discovered|auth_expired|unreachable",
+#     "details": { ... source-specific metadata ... },
+#     "config":  { ... ready-to-merge block for registry.json .projects[] ... }
+#   }
+# ]
+#
+# Usage:
+#   ops-discover-external                # all sources, JSON to stdout
+#   ops-discover-external --source shopify  # single source
+#   ops-discover-external --pretty       # pretty-printed JSON
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+[ -r "$SCRIPT_DIR/lib/os-detect.sh" ]        && . "$SCRIPT_DIR/lib/os-detect.sh"
+[ -r "$SCRIPT_DIR/lib/credential-store.sh" ] && . "$SCRIPT_DIR/lib/credential-store.sh"
+
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+
+ONLY_SOURCE=""
+PRETTY=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --source) ONLY_SOURCE="$2"; shift 2 ;;
+    --pretty) PRETTY=true; shift ;;
+    -h|--help)
+      sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0 ;;
+    *) echo "Unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+cred_get() {
+  if declare -F ops_cred_get >/dev/null 2>&1; then
+    ops_cred_get "$1" "$2" 2>/dev/null || true
+  elif [ "$(uname -s)" = "Darwin" ]; then
+    security find-generic-password -s "$1" -a "$2" -w 2>/dev/null || true
+  fi
+}
+
+prefs_get() {
+  [ -f "$PREFS_PATH" ] || return 0
+  jq -r "${1} // empty" "$PREFS_PATH" 2>/dev/null
+}
+
+# Sanitize a candidate alias: lowercase, replace non-alphanum with '-', trim
+slugify() {
+  echo "$1" | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' \
+    | cut -c1-40
+}
+
+TMPDIR_D=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_D"' EXIT
+
+want_source() {
+  [ -z "$ONLY_SOURCE" ] || [ "$ONLY_SOURCE" = "$1" ]
+}
+
+#
+# Shopify — one candidate per configured store
+#
+if want_source shopify; then
+  (
+    STORE_URL="$(prefs_get '.ecom.shopify.store_url')"
+    TOKEN=""
+
+    # Resolve token: prefs -> env fallbacks. prefs may contain a `doppler:` reference,
+    # in which case we cannot dereference without running the doppler CLI — skip that case.
+    PREFS_TOKEN="$(prefs_get '.ecom.shopify.admin_token')"
+    if [ -n "$PREFS_TOKEN" ] && [[ "$PREFS_TOKEN" != doppler:* ]]; then
+      TOKEN="$PREFS_TOKEN"
+    fi
+    TOKEN="${TOKEN:-${SHOPIFY_ADMIN_TOKEN:-${SHOPIFY_ACCESS_TOKEN:-}}}"
+    STORE_URL="${STORE_URL:-${SHOPIFY_STORE_URL:-}}"
+
+    if [ -z "$STORE_URL" ] || [ -z "$TOKEN" ]; then
+      exit 0
+    fi
+
+    RESP=$(curl -fsS --max-time 8 \
+      -H "X-Shopify-Access-Token: $TOKEN" \
+      "https://$STORE_URL/admin/api/2024-10/shop.json" 2>/dev/null || echo "")
+
+    if [ -z "$RESP" ]; then
+      STATUS="unreachable"
+      SHOP_NAME="$STORE_URL"
+      PLAN="unknown"
+    else
+      STATUS="discovered"
+      SHOP_NAME=$(echo "$RESP" | jq -r '.shop.name // ""')
+      PLAN=$(echo "$RESP" | jq -r '.shop.plan_name // ""')
+    fi
+
+    ALIAS=$(slugify "${SHOP_NAME:-$STORE_URL}")
+    [ -z "$ALIAS" ] && ALIAS="shopify-store"
+
+    jq -n \
+      --arg alias "$ALIAS" \
+      --arg status "$STATUS" \
+      --arg shop_name "$SHOP_NAME" \
+      --arg plan "$PLAN" \
+      --arg store_url "$STORE_URL" \
+      '{
+        alias: $alias,
+        source: "shopify",
+        status: $status,
+        details: { shop_name: $shop_name, plan: $plan, store_url: $store_url },
+        config: {
+          alias: $alias,
+          source: "shopify",
+          type: "external",
+          shopify: { store_url: $store_url, credential_key: "SHOPIFY_ADMIN_TOKEN" },
+          revenue: { model: "ecommerce", stage: "active" },
+          priority: 3
+        }
+      }' > "$TMPDIR_D/shopify.json"
+  ) &
+fi
+
+#
+# Linear — one candidate per team (teams are projects)
+#
+if want_source linear; then
+  (
+    LINEAR_KEY="${LINEAR_API_KEY:-}"
+    [ -z "$LINEAR_KEY" ] && exit 0
+
+    RESP=$(curl -fsS --max-time 8 -X POST \
+      -H "Authorization: $LINEAR_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{"query":"{ teams(first: 25) { nodes { id key name issueCount } } }"}' \
+      "https://api.linear.app/graphql" 2>/dev/null || echo "")
+
+    if [ -z "$RESP" ]; then exit 0; fi
+
+    COUNT=$(echo "$RESP" | jq '.data.teams.nodes | length' 2>/dev/null || echo 0)
+    [ "$COUNT" -eq 0 ] && exit 0
+
+    for i in $(seq 0 $((COUNT - 1))); do
+      TEAM=$(echo "$RESP" | jq -c ".data.teams.nodes[$i]")
+      TEAM_KEY=$(echo "$TEAM" | jq -r '.key // ""')
+      TEAM_NAME=$(echo "$TEAM" | jq -r '.name // ""')
+      ISSUES=$(echo "$TEAM" | jq -r '.issueCount // 0')
+      [ -z "$TEAM_KEY" ] && continue
+
+      ALIAS=$(slugify "linear-$TEAM_KEY")
+
+      jq -n \
+        --arg alias "$ALIAS" \
+        --arg team_key "$TEAM_KEY" \
+        --arg team_name "$TEAM_NAME" \
+        --argjson issues "$ISSUES" \
+        '{
+          alias: $alias,
+          source: "linear",
+          status: "discovered",
+          details: { team_key: $team_key, team_name: $team_name, issue_count: $issues },
+          config: {
+            alias: $alias,
+            source: "linear",
+            type: "external",
+            linear: { team_key: $team_key },
+            priority: 5
+          }
+        }' > "$TMPDIR_D/linear-$TEAM_KEY.json"
+    done
+  ) &
+fi
+
+#
+# Slack — one candidate per workspace (from xoxc/xoxd session tokens)
+#
+if want_source slack; then
+  (
+    XOXC=$(cred_get slack-xoxc slack-xoxc || true)
+    XOXD=$(cred_get slack-xoxd slack-xoxd || true)
+    [ -z "$XOXC" ] || [ -z "$XOXD" ] && exit 0
+
+    RESP=$(curl -fsS --max-time 8 \
+      -H "Authorization: Bearer $XOXC" \
+      -b "d=$XOXD" \
+      "https://slack.com/api/auth.test" 2>/dev/null || echo "")
+
+    OK=$(echo "$RESP" | jq -r '.ok // false' 2>/dev/null)
+    if [ "$OK" != "true" ]; then
+      # Token exists but call failed — surface as auth_expired so the wizard can flag it
+      jq -n '{
+        alias: "slack-workspace",
+        source: "slack",
+        status: "auth_expired",
+        details: { note: "xoxc/xoxd tokens present but auth.test failed — re-run /ops:setup slack" },
+        config: null
+      }' > "$TMPDIR_D/slack.json"
+      exit 0
+    fi
+
+    TEAM_ID=$(echo "$RESP" | jq -r '.team_id // ""')
+    URL=$(echo "$RESP" | jq -r '.url // ""')
+    # Extract workspace slug from URL (https://yourteam.slack.com/)
+    WORKSPACE=$(echo "$URL" | sed -E 's#https?://([^.]+)\..*#\1#; s#/$##')
+    [ -z "$WORKSPACE" ] && WORKSPACE="slack-workspace"
+
+    ALIAS=$(slugify "slack-$WORKSPACE")
+
+    jq -n \
+      --arg alias "$ALIAS" \
+      --arg workspace "$WORKSPACE" \
+      --arg team_id "$TEAM_ID" \
+      --arg url "$URL" \
+      '{
+        alias: $alias,
+        source: "slack",
+        status: "discovered",
+        details: { workspace: $workspace, team_id: $team_id, url: $url },
+        config: {
+          alias: $alias,
+          source: "slack",
+          type: "external",
+          slack: { workspace: $workspace, team_id: $team_id },
+          priority: 5
+        }
+      }' > "$TMPDIR_D/slack.json"
+  ) &
+fi
+
+#
+# Notion — one candidate per database the token can see (databases = project trackers)
+#
+if want_source notion; then
+  (
+    # Prefer env, fall back to keychain; skip if neither present. claude.ai managed Notion
+    # does not expose a raw token — in that case the setup wizard handles discovery via the MCP
+    # tools (out of scope for this script).
+    NOTION_TOKEN="${NOTION_API_KEY:-}"
+    if [ -z "$NOTION_TOKEN" ]; then
+      NOTION_TOKEN=$(cred_get notion-api-key claude-ops || true)
+    fi
+    [ -z "$NOTION_TOKEN" ] && exit 0
+
+    # List databases (projects) the integration can see
+    RESP=$(curl -fsS --max-time 10 -X POST \
+      -H "Authorization: Bearer $NOTION_TOKEN" \
+      -H "Notion-Version: 2022-06-28" \
+      -H "Content-Type: application/json" \
+      -d '{"filter":{"value":"database","property":"object"},"page_size":25}' \
+      "https://api.notion.com/v1/search" 2>/dev/null || echo "")
+
+    if [ -z "$RESP" ]; then
+      # Token exists but API call failed
+      jq -n '{
+        alias: "notion-workspace",
+        source: "notion",
+        status: "auth_expired",
+        details: { note: "Notion token present but /v1/search failed — re-run /ops:setup notion" },
+        config: null
+      }' > "$TMPDIR_D/notion.json"
+      exit 0
+    fi
+
+    COUNT=$(echo "$RESP" | jq '.results | length' 2>/dev/null || echo 0)
+
+    if [ "$COUNT" -eq 0 ]; then
+      # Token works but no databases shared — still surface the workspace itself so the user
+      # can register it as a general knowledge-base project.
+      BOT_RESP=$(curl -fsS --max-time 8 \
+        -H "Authorization: Bearer $NOTION_TOKEN" \
+        -H "Notion-Version: 2022-06-28" \
+        "https://api.notion.com/v1/users/me" 2>/dev/null || echo "")
+      WORKSPACE=$(echo "$BOT_RESP" | jq -r '.bot.workspace_name // .name // "notion-workspace"')
+      ALIAS=$(slugify "notion-$WORKSPACE")
+
+      jq -n \
+        --arg alias "$ALIAS" \
+        --arg workspace "$WORKSPACE" \
+        '{
+          alias: $alias,
+          source: "notion",
+          status: "discovered",
+          details: { workspace: $workspace, note: "no databases shared with the integration" },
+          config: {
+            alias: $alias,
+            source: "notion",
+            type: "external",
+            notion: { workspace: $workspace },
+            priority: 5
+          }
+        }' > "$TMPDIR_D/notion-root.json"
+      exit 0
+    fi
+
+    for i in $(seq 0 $((COUNT - 1))); do
+      DB=$(echo "$RESP" | jq -c ".results[$i]")
+      DB_ID=$(echo "$DB" | jq -r '.id // ""')
+      TITLE=$(echo "$DB" | jq -r '.title[0].plain_text // .title[0].text.content // ""' 2>/dev/null)
+      [ -z "$DB_ID" ] && continue
+      [ -z "$TITLE" ] && TITLE="untitled-database"
+
+      ALIAS=$(slugify "notion-$TITLE")
+
+      jq -n \
+        --arg alias "$ALIAS" \
+        --arg db_id "$DB_ID" \
+        --arg title "$TITLE" \
+        '{
+          alias: $alias,
+          source: "notion",
+          status: "discovered",
+          details: { database_id: $db_id, title: $title },
+          config: {
+            alias: $alias,
+            source: "notion",
+            type: "external",
+            notion: { database_id: $db_id, title: $title },
+            priority: 5
+          }
+        }' > "$TMPDIR_D/notion-$i.json"
+    done
+  ) &
+fi
+
+wait
+
+# Assemble output array
+RESULTS=$(find "$TMPDIR_D" -maxdepth 1 -name '*.json' -type f 2>/dev/null | sort)
+if [ -z "$RESULTS" ]; then
+  echo '[]'
+  exit 0
+fi
+
+OUT="["
+first=true
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  [ "$first" = true ] && first=false || OUT="$OUT,"
+  OUT="$OUT$(cat "$f")"
+done <<< "$RESULTS"
+OUT="$OUT]"
+
+if [ "$PRETTY" = true ]; then
+  echo "$OUT" | jq .
+else
+  echo "$OUT" | jq -c .
+fi

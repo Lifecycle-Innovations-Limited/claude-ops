@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **`bin/ops-discover-external`** — Auto-discovers external (non-git) projects from credentials already configured in the plugin: Shopify stores (via prefs/env), Linear teams (via `LINEAR_API_KEY`), Slack workspaces (via keychain `slack-xoxc`/`slack-xoxd`), and Notion databases (via `NOTION_API_KEY` / keychain `notion-api-key`). Emits a JSON array of ready-to-register candidates with pre-built `config` blocks. Never writes to `registry.json` itself — the setup wizard handles registration after user confirmation.
+- **Setup Step 5: "Auto-discover external projects"** — New sub-step in `skills/setup/SKILL.md` that runs `ops-discover-external` after the filesystem git-repo scan, cross-references against the existing registry, and presents only unregistered candidates via batched `AskUserQuestion` calls (≤ 4 options per call, per Rule 1).
+- **`ops-projects` external candidate surfacing** — The portfolio dashboard now runs `ops-discover-external` alongside `ops-external` and shows an "UNREGISTERED CANDIDATES" footer listing Shopify/Linear/Slack/Notion projects the user has credentials for but has not yet added to `registry.json`, with a one-line path to `/ops:setup registry`.
+- **`ops-projects` external deep-dive** — The `/ops:projects <alias>` jump-to-project view now branches on `type: external` and renders a source-specific deep-dive (Shopify order summary, Linear team issues, Slack workspace health, Notion recent edits) with actions that route to the relevant source-specific skill instead of assuming git/CI/PR context.
+
 ## [1.5.0] — 2026-04-15
 
 ### Added
