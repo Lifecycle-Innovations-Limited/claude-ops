@@ -57,12 +57,25 @@ gather_klaviyo() {
 
   LAST_CAMPAIGN_NAME=$(echo "$CAMPAIGNS" | jq -r '.data[0].attributes.name // "none"' 2>/dev/null || echo "none")
   LAST_CAMPAIGN_STATUS=$(echo "$CAMPAIGNS" | jq -r '.data[0].attributes.status // "none"' 2>/dev/null || echo "none")
+  LAST_CAMPAIGN_ID=$(echo "$CAMPAIGNS" | jq -r '.data[0].id // empty' 2>/dev/null || echo "")
+
+  # Open rate (0.0-1.0) for last campaign — feeds marketing health score email component.
+  OPEN_RATE="0"
+  if [ -n "$LAST_CAMPAIGN_ID" ]; then
+    VALUES=$(curl -s -X POST "https://a.klaviyo.com/api/campaign-values-reports/" \
+      -H "Authorization: Klaviyo-API-Key ${KLAVIYO_KEY}" \
+      -H "revision: 2024-10-15" \
+      -H "Content-Type: application/json" \
+      -d "{\"data\":{\"type\":\"campaign-values-report\",\"attributes\":{\"statistics\":[\"open_rate\"],\"timeframe\":{\"key\":\"last_30_days\"},\"filter\":\"equals(campaign_id,\\\"${LAST_CAMPAIGN_ID}\\\")\"}}}" 2>/dev/null)
+    OPEN_RATE=$(echo "$VALUES" | jq -r '.data.attributes.results[0].statistics.open_rate // 0' 2>/dev/null || echo "0")
+  fi
 
   jq -n \
     --argjson subs "$TOTAL_SUBS" \
     --arg last_campaign "$LAST_CAMPAIGN_NAME" \
     --arg last_status "$LAST_CAMPAIGN_STATUS" \
-    '{subscribers: $subs, last_campaign: $last_campaign, last_campaign_status: $last_status}'
+    --argjson open_rate "${OPEN_RATE:-0}" \
+    '{subscribers: $subs, last_campaign: $last_campaign, last_campaign_status: $last_status, open_rate: $open_rate}'
 }
 
 # --- Meta Ads ---
@@ -251,14 +264,27 @@ gather_google_ads() {
     2>/dev/null || echo "null"
 }
 
-# Run all in parallel (subshells)
-KLAVIYO_DATA=$(gather_klaviyo) &
-META_DATA=$(gather_meta) &
-GA4_DATA=$(gather_ga4) &
-GSC_DATA=$(gather_gsc) &
-GADS_DATA=$(gather_google_ads) &
-INSTAGRAM_DATA=$(gather_instagram) &
+# Run all in parallel. VAR=$(fn) & does NOT propagate assignments to the parent
+# shell after `wait` (the assignment happens in the backgrounded subshell only),
+# so write each gatherer's stdout to a tempfile and read them back post-wait.
+# This mirrors the pattern already used in bin/ops-external and bin/ops-discover-external.
+TMPDIR_MD=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_MD"' EXIT
+
+( gather_klaviyo     > "$TMPDIR_MD/klaviyo.json"   ) &
+( gather_meta        > "$TMPDIR_MD/meta.json"      ) &
+( gather_ga4         > "$TMPDIR_MD/ga4.json"       ) &
+( gather_gsc         > "$TMPDIR_MD/gsc.json"       ) &
+( gather_google_ads  > "$TMPDIR_MD/google_ads.json") &
+( gather_instagram   > "$TMPDIR_MD/instagram.json" ) &
 wait
+
+KLAVIYO_DATA=$(cat "$TMPDIR_MD/klaviyo.json"    2>/dev/null); KLAVIYO_DATA=${KLAVIYO_DATA:-null}
+META_DATA=$(cat "$TMPDIR_MD/meta.json"          2>/dev/null); META_DATA=${META_DATA:-null}
+GA4_DATA=$(cat "$TMPDIR_MD/ga4.json"            2>/dev/null); GA4_DATA=${GA4_DATA:-null}
+GSC_DATA=$(cat "$TMPDIR_MD/gsc.json"            2>/dev/null); GSC_DATA=${GSC_DATA:-null}
+GADS_DATA=$(cat "$TMPDIR_MD/google_ads.json"    2>/dev/null); GADS_DATA=${GADS_DATA:-null}
+INSTAGRAM_DATA=$(cat "$TMPDIR_MD/instagram.json" 2>/dev/null); INSTAGRAM_DATA=${INSTAGRAM_DATA:-null}
 
 # Compute blended ROAS across Meta + Google Ads
 META_SPEND=$(echo "$META_DATA" | jq -r '.spend // "0"' 2>/dev/null || echo "0")
@@ -272,14 +298,24 @@ BLENDED_ROAS=$(awk "BEGIN { if (${TOTAL_SPEND:-0} > 0) printf \"%.2f\", ${TOTAL_
 # Compute marketing health score (0-100)
 # ROAS score (0-30)
 ROAS_SCORE=$(awk "BEGIN { r = ${BLENDED_ROAS:-0}; if (r >= 3) print 30; else if (r >= 1) print 15; else print 0 }")
-# Email open rate score — use Klaviyo data if available (0-20)
-EMAIL_SCORE=10  # default medium score if no open rate data available
-# Channel diversification (0-20): count active platforms
+# Email open rate score (0-20) — derived from Klaviyo last-campaign open rate
+# when available; falls back to 0 when we have no campaign data. Thresholds
+# come from SKILL.md §Marketing Health Score: >=20% → 20pt, 10-20% → 10pt.
+KLAVIYO_OPEN_RATE=$(echo "$KLAVIYO_DATA" | jq -r '.open_rate // "0"' 2>/dev/null || echo "0")
+EMAIL_SCORE=$(awk "BEGIN { r = ${KLAVIYO_OPEN_RATE:-0}; if (r >= 0.20) print 20; else if (r >= 0.10) print 10; else print 0 }")
+# Channel diversification (0-20): count active platforms.
+# Compare numerically — after the tempfile fix these fields can be JSON null or
+# numeric strings like "0.00", neither of which a literal != "0" string test
+# handles correctly.
 ACTIVE_CHANNELS=0
-[ "$(echo "$META_DATA" | jq -r '.spend // "0"')" != "0" ] && ACTIVE_CHANNELS=$((ACTIVE_CHANNELS + 1))
-[ "$(echo "$GADS_SPEND_RAW" | tr -d ' ')" != "0" ] && ACTIVE_CHANNELS=$((ACTIVE_CHANNELS + 1))
-[ "$(echo "$KLAVIYO_DATA" | jq -r '.subscribers // 0')" != "0" ] && ACTIVE_CHANNELS=$((ACTIVE_CHANNELS + 1))
-[ "$(echo "$INSTAGRAM_DATA" | jq -r '.followers // 0')" != "0" ] && ACTIVE_CHANNELS=$((ACTIVE_CHANNELS + 1))
+is_positive() { awk -v v="${1:-0}" 'BEGIN { v = v + 0; exit !(v > 0) }'; }
+META_SPEND_CHECK=$(echo "$META_DATA" | jq -r '.spend // 0' 2>/dev/null || echo 0)
+KLAVIYO_SUBS_CHECK=$(echo "$KLAVIYO_DATA" | jq -r '.subscribers // 0' 2>/dev/null || echo 0)
+INSTAGRAM_FOLLOWERS_CHECK=$(echo "$INSTAGRAM_DATA" | jq -r '.followers // 0' 2>/dev/null || echo 0)
+is_positive "$META_SPEND_CHECK"          && ACTIVE_CHANNELS=$((ACTIVE_CHANNELS + 1))
+is_positive "$GADS_SPEND_RAW"            && ACTIVE_CHANNELS=$((ACTIVE_CHANNELS + 1))
+is_positive "$KLAVIYO_SUBS_CHECK"        && ACTIVE_CHANNELS=$((ACTIVE_CHANNELS + 1))
+is_positive "$INSTAGRAM_FOLLOWERS_CHECK" && ACTIVE_CHANNELS=$((ACTIVE_CHANNELS + 1))
 DIV_SCORE=$([ $ACTIVE_CHANNELS -ge 3 ] && echo 20 || ([ $ACTIVE_CHANNELS -ge 2 ] && echo 10 || echo 0))
 # GA4 CVR score (0-20)
 GA4_CVR=$(echo "$GA4_DATA" | jq -r '.cvr // "0"' 2>/dev/null || echo "0")
