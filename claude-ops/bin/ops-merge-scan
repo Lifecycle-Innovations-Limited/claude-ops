@@ -8,6 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_DIR="${CLAUDE_PLUGIN_ROOT:-${SCRIPT_DIR}/..}"
 REGISTRY="${PLUGIN_DIR}/scripts/registry.json"
+PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
 
 # Optional: scope to a single repo
 FILTER_REPO="${1:-}"
@@ -25,6 +26,14 @@ if [ -n "$FILTER_REPO" ]; then
   REPOS="$FILTER_REPO"
 else
   REPOS=$(jq -r '[.projects[].repos[]] | unique | .[]' "$REGISTRY")
+fi
+
+# Approved PR author logins (owner + bots). Configured in preferences.json
+# under .merge_authors (array of GitHub logins, e.g. "you", "dependabot[bot]").
+# Empty / missing → keep all authors (legacy behavior).
+MERGE_AUTHORS_JSON='[]'
+if [ -f "$PREFS" ]; then
+  MERGE_AUTHORS_JSON=$(jq -c '.merge_authors // []' "$PREFS" 2>/dev/null || echo '[]')
 fi
 
 TMPDIR_OPS=$(mktemp -d)
@@ -46,35 +55,49 @@ for repo in $REPOS; do
         echo "$pr" | jq --argjson ci "$CI_JSON" '. + {statusCheckRollup: $ci.statusCheckRollup}'
       done | jq -s '.')
 
-      # Classify each PR
-      CLASSIFIED=$(echo "$ENRICHED" | jq --arg repo "$repo" '[.[] | {
-        repo: $repo,
-        number,
-        title,
-        branch: .headRefName,
-        draft: .isDraft,
-        review: .reviewDecision,
-        mergeable: .mergeable,
-        merge_state: .mergeStateStatus,
-        ci_status: (if (.statusCheckRollup | length) > 0 then
-          (if (.statusCheckRollup | map(select(.conclusion == "FAILURE")) | length) > 0 then "failing"
-           elif (.statusCheckRollup | map(select(.status != "COMPLETED")) | length) > 0 then "pending"
-           else "passing" end)
-        else "unknown" end),
-        ci_failures: [(.statusCheckRollup // [])[] | select(.conclusion == "FAILURE") | .name],
-        created: .createdAt,
-        author: .author.login,
-        classification: (
-          if .isDraft then "draft"
-          elif .mergeable == "CONFLICTING" then "needs-rebase"
-          elif (.statusCheckRollup // [] | map(select(.conclusion == "FAILURE")) | length) > 0 then "needs-ci-fix"
-          elif .reviewDecision == "CHANGES_REQUESTED" then "needs-review-response"
-          elif .mergeStateStatus == "BLOCKED" then "blocked"
-          elif .mergeable == "MERGEABLE" and .reviewDecision == "APPROVED" then "ready"
-          else "unknown" end
-        )
-      }]')
-      echo "$CLASSIFIED" > "$TMPDIR_OPS/$SAFE_NAME.json"
+      # Classify each PR.
+      # If merge_authors is configured, PRs from unlisted authors are dropped
+      # entirely — they do not belong in the operator's merge queue.
+      CLASSIFIED=$(echo "$ENRICHED" | jq \
+        --arg repo "$repo" \
+        --argjson allowed "$MERGE_AUTHORS_JSON" \
+        '[.[]
+          | (if ($allowed | length) > 0
+             then select(.author.login as $a | $allowed | any(. == $a))
+             else .
+             end)
+          | {
+            repo: $repo,
+            number,
+            title,
+            branch: .headRefName,
+            draft: .isDraft,
+            review: .reviewDecision,
+            mergeable: .mergeable,
+            merge_state: .mergeStateStatus,
+            ci_status: (if (.statusCheckRollup | length) > 0 then
+              (if (.statusCheckRollup | map(select(.conclusion == "FAILURE")) | length) > 0 then "failing"
+               elif (.statusCheckRollup | map(select(.status != "COMPLETED")) | length) > 0 then "pending"
+               else "passing" end)
+            else "unknown" end),
+            ci_failures: [(.statusCheckRollup // [])[] | select(.conclusion == "FAILURE") | .name],
+            created: .createdAt,
+            author: .author.login,
+            classification: (
+              if .isDraft then "draft"
+              elif .mergeable == "CONFLICTING" then "needs-rebase"
+              elif (.statusCheckRollup // [] | map(select(.conclusion == "FAILURE")) | length) > 0 then "needs-ci-fix"
+              elif .reviewDecision == "CHANGES_REQUESTED" then "needs-review-response"
+              elif .mergeStateStatus == "BLOCKED" then "blocked"
+              elif .mergeable == "MERGEABLE" and .reviewDecision == "APPROVED" then "ready"
+              else "unknown" end
+            )
+          }
+        ]')
+      # Only write the file if there is at least one PR left after filtering.
+      if [ "$(echo "$CLASSIFIED" | jq 'length')" != "0" ]; then
+        echo "$CLASSIFIED" > "$TMPDIR_OPS/$SAFE_NAME.json"
+      fi
     fi
   ) &
 done
