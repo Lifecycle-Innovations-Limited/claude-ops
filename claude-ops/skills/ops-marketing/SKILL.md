@@ -171,12 +171,17 @@ Route `$ARGUMENTS` to the correct section below:
 |---|---|
 | (empty), dashboard | Run full marketing dashboard |
 | email, klaviyo | Klaviyo email metrics |
-| ads, meta | Meta Ads performance |
+| ads, meta | Meta Ads performance (read-only overview) |
+| meta-manage, meta create-campaign, meta target, meta creative, meta rules, meta audiences, meta advantage | Meta Ads campaign management (see ## meta-manage section) |
 | google-ads, gads | Google Ads dashboard + campaign management (see ## google-ads section) |
 | analytics, ga4 | GA4 sessions + conversions |
+| ga4 realtime, ga4 funnel, ga4 cohort, ga4 audience, ga4 pivot | GA4 advanced analytics (see ## ga4-advanced section) |
 | seo, gsc | Search Console metrics |
 | social | Social media aggregator |
-| campaigns | Cross-channel campaign overview |
+| instagram, instagram post, instagram reel, instagram story, instagram insights, instagram demographics | Instagram publishing + insights (see ## instagram section) |
+| campaigns | Cross-channel campaign overview (all platforms) |
+| optimize | Cross-platform ad optimization agent |
+| attribution | Unified attribution table (Meta + Google + Klaviyo + GA4) |
 | setup | Configure API keys |
 
 ---
@@ -276,6 +281,275 @@ curl -s "https://graph.facebook.com/v18.0/${META_ACCOUNT}/ads?fields=name,adset_
 
 ---
 
+## meta-manage
+
+Full Meta Ads campaign management. Uses same `META_TOKEN` and `META_ACCOUNT` credentials as read-only `ads` section.
+
+**Credential check**: If `META_TOKEN` is empty, print `Meta Ads not configured. Run /ops:marketing setup.` and stop.
+
+Route `$ARGUMENTS` within meta-manage:
+
+| Input | Action |
+|---|---|
+| create-campaign | Create a new campaign (always PAUSED) |
+| target \<ADSET_ID\> | Configure ad set targeting |
+| creative \<CAMPAIGN_ID\> | Upload image + create ad with copy |
+| rules | List / create automation rules |
+| audiences | Create custom or lookalike audiences |
+| advantage | Create Advantage+ AI-optimized campaign |
+
+### create-campaign
+
+Collect via AskUserQuestion (max 4 options each call):
+
+1. Campaign objective — `[OUTCOME_TRAFFIC, OUTCOME_SALES, OUTCOME_LEADS, OUTCOME_AWARENESS]`
+2. Daily budget in dollars (free text)
+3. Campaign name (free text)
+
+Then confirm via AskUserQuestion: `"Create Meta campaign '<NAME>' with $<BUDGET>/day budget?"` options `[Create, Cancel]`
+
+```bash
+BUDGET_CENTS=$(awk "BEGIN {printf \"%d\", ${BUDGET_DOLLARS} * 100}")
+curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/campaigns" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -F "name=${CAMPAIGN_NAME}" \
+  -F "objective=${OBJECTIVE}" \
+  -F "status=PAUSED" \
+  -F "special_ad_categories=[]" \
+  -F "daily_budget=${BUDGET_CENTS}" | jq '{id: .id, error: .error.message}'
+```
+
+Print: `Campaign "${CAMPAIGN_NAME}" created (ID: <ID>, status: PAUSED, budget: $<BUDGET>/day). Enable via Meta Ads Manager or add ad sets first.`
+
+If error, print the error message.
+
+### target \<ADSET_ID\>
+
+Configure targeting for an existing ad set. Collect via AskUserQuestion:
+
+1. Target countries (comma-separated ISO codes, e.g. `US,CA,GB`) — free text
+2. Age range: `[18-34, 25-54, 35-65, 18-65]`
+3. Gender: `[All, Men only, Women only, Skip]`
+
+```bash
+# Build geo_locations JSON
+GEO_JSON=$(echo "$COUNTRIES" | tr ',' '\n' | jq -Rc '.' | jq -sc '{"countries": .}')
+
+# Build targeting spec
+TARGETING_JSON=$(jq -n \
+  --argjson geo "$GEO_JSON" \
+  --arg age_min "$AGE_MIN" \
+  --arg age_max "$AGE_MAX" \
+  '{
+    geo_locations: $geo,
+    age_min: ($age_min | tonumber),
+    age_max: ($age_max | tonumber)
+  }')
+
+# Add gender filter if requested
+if [ "$GENDER" = "Men only" ]; then
+  TARGETING_JSON=$(echo "$TARGETING_JSON" | jq '. + {"genders": [1]}')
+elif [ "$GENDER" = "Women only" ]; then
+  TARGETING_JSON=$(echo "$TARGETING_JSON" | jq '. + {"genders": [2]}')
+fi
+
+curl -s -X POST "https://graph.facebook.com/v20.0/${ADSET_ID}" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -F "targeting=${TARGETING_JSON}" | jq '{success: .success, error: .error.message}'
+```
+
+Print: `Ad set ${ADSET_ID} targeting updated: ${COUNTRIES}, ages ${AGE_MIN}-${AGE_MAX}${GENDER_LABEL}.`
+
+### creative \<CAMPAIGN_ID\>
+
+Upload an image and create an ad. Collect via AskUserQuestion:
+
+1. Image file path or URL (free text)
+2. Ad set ID to attach the ad to (free text)
+3. Primary text (ad copy, free text — up to 125 characters recommended)
+
+Then collect headline (free text, up to 40 characters) via a second AskUserQuestion.
+
+```bash
+# Step 1: Upload image
+if [[ "$IMAGE_INPUT" == http* ]]; then
+  # Upload by URL
+  UPLOAD_RESP=$(curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/adimages" \
+    -H "Authorization: Bearer ${META_TOKEN}" \
+    -F "url=${IMAGE_INPUT}")
+else
+  # Upload by file (multipart)
+  UPLOAD_RESP=$(curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/adimages" \
+    -H "Authorization: Bearer ${META_TOKEN}" \
+    -F "filename=@${IMAGE_INPUT}")
+fi
+IMAGE_HASH=$(echo "$UPLOAD_RESP" | jq -r '.images | to_entries[0].value.hash // empty')
+
+if [ -z "$IMAGE_HASH" ]; then
+  echo "Image upload failed: $(echo "$UPLOAD_RESP" | jq -r '.error.message // "unknown error"')"
+  exit 0
+fi
+
+# Step 2: Create ad creative
+CREATIVE_RESP=$(curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/adcreatives" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -F "name=Creative for ${AD_NAME}" \
+  -F "object_story_spec={\"page_id\": \"$(echo "$META_ACCOUNT" | sed 's/act_//')\", \"link_data\": {\"image_hash\": \"${IMAGE_HASH}\", \"message\": \"${PRIMARY_TEXT}\", \"name\": \"${HEADLINE}\"}}")
+CREATIVE_ID=$(echo "$CREATIVE_RESP" | jq -r '.id // empty')
+
+if [ -z "$CREATIVE_ID" ]; then
+  echo "Creative creation failed: $(echo "$CREATIVE_RESP" | jq -r '.error.message // "unknown error"')"
+  exit 0
+fi
+
+# Step 3: Create ad (status PAUSED — Rule 5)
+curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/ads" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -F "name=${AD_NAME}" \
+  -F "adset_id=${ADSET_ID}" \
+  -F "creative={\"creative_id\": \"${CREATIVE_ID}\"}" \
+  -F "status=PAUSED" | jq '{id: .id, error: .error.message}'
+```
+
+Print: `Ad created (ID: <ID>, creative: <CREATIVE_ID>, status: PAUSED). Enable via Meta Ads Manager when ready.`
+
+### rules
+
+List existing rules or create a new automation rule.
+
+**List rules:**
+```bash
+curl -s "https://graph.facebook.com/v20.0/${META_ACCOUNT}/adrules_library?fields=name,status,evaluation_spec,execution_spec" \
+  -H "Authorization: Bearer ${META_TOKEN}" | jq '.data[] | {id: .id, name: .name, status: .status}'
+```
+
+**Create rule** (prompt via AskUserQuestion):
+
+1. Rule type: `[Pause low performers, Scale winners, Increase budget, Decrease budget]`
+
+For "Pause low performers":
+```bash
+# Pause ads where CPA > $50 and spend > $20 in last 7 days
+curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/adrules_library" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Pause high CPA ads",
+    "schedule_spec": {"schedule_type": "SEMI_HOURLY"},
+    "evaluation_spec": {
+      "evaluation_type": "SCHEDULE",
+      "filters": [
+        {"field": "cost_per_result", "value": [50], "operator": "GREATER_THAN"},
+        {"field": "spent", "value": [20], "operator": "GREATER_THAN"},
+        {"field": "entity_type", "value": ["AD"], "operator": "EQUAL"},
+        {"field": "time_preset", "value": ["LAST_7_DAYS"], "operator": "EQUAL"}
+      ]
+    },
+    "execution_spec": {
+      "execution_type": "PAUSE"
+    },
+    "status": "ENABLED"
+  }' | jq '{id: .id, error: .error.message}'
+```
+
+For "Scale winners":
+```bash
+# Increase budget 20% for ad sets with ROAS > 3x in last 7 days
+curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/adrules_library" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Scale winning ad sets",
+    "schedule_spec": {"schedule_type": "DAILY"},
+    "evaluation_spec": {
+      "evaluation_type": "SCHEDULE",
+      "filters": [
+        {"field": "purchase_roas", "value": [3], "operator": "GREATER_THAN"},
+        {"field": "entity_type", "value": ["ADSET"], "operator": "EQUAL"},
+        {"field": "time_preset", "value": ["LAST_7_DAYS"], "operator": "EQUAL"}
+      ]
+    },
+    "execution_spec": {
+      "execution_type": "INCREASE_BUDGET",
+      "execution_options": [{"field": "budget_value", "value": "20", "operator": "PERCENTAGE"}]
+    },
+    "status": "ENABLED"
+  }' | jq '{id: .id, error: .error.message}'
+```
+
+Print: `Rule created (ID: <ID>). Runs semi-hourly and will auto-pause ads with CPA > $50.`
+
+### audiences
+
+Create Custom Audience or Lookalike Audience.
+
+**Prompt via AskUserQuestion:**
+1. Audience type: `[Custom — website, Custom — customer list, Lookalike, Skip]`
+
+**Custom — website (Pixel-based):**
+```bash
+curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/customaudiences" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Website visitors — last 30 days",
+    "subtype": "WEBSITE",
+    "retention_days": 30,
+    "rule": {"inclusions": {"operator": "or", "rules": [{"event_sources": [{"id": "<PIXEL_ID>", "type": "pixel"}], "retention_seconds": 2592000, "filter": {"operator": "and", "filters": [{"field": "event", "operator": "eq", "value": "PageView"}]}}]}}
+  }' | jq '{id: .id, name: .name, error: .error.message}'
+```
+
+Note: Replace `<PIXEL_ID>` with actual pixel ID from Meta Events Manager.
+
+**Lookalike Audience** (requires origin audience with min 100 matched profiles):
+```bash
+# Prompt for origin audience ID via AskUserQuestion (free text)
+curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/customaudiences" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"name\": \"Lookalike — ${ORIGIN_AUDIENCE_NAME} 1%\",
+    \"subtype\": \"LOOKALIKE\",
+    \"origin_audience_id\": \"${ORIGIN_AUDIENCE_ID}\",
+    \"lookalike_spec\": {
+      \"country\": \"US\",
+      \"ratio\": 0.01,
+      \"type\": \"similarity\"
+    }
+  }" | jq '{id: .id, name: .name, error: .error.message}'
+```
+
+Print: `Lookalike audience created (ID: <ID>). Typically takes 1-6 hours to populate.`
+
+### advantage
+
+Create an Advantage+ Shopping Campaign (AI-optimized).
+
+Collect via AskUserQuestion:
+1. Daily budget in dollars (free text)
+2. Campaign name (free text)
+
+Then confirm: `"Create Advantage+ campaign '<NAME>' with $<BUDGET>/day?"` options `[Create, Cancel]`
+
+```bash
+BUDGET_CENTS=$(awk "BEGIN {printf \"%d\", ${BUDGET_DOLLARS} * 100}")
+curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/campaigns" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"name\": \"${CAMPAIGN_NAME}\",
+    \"objective\": \"OUTCOME_SALES\",
+    \"status\": \"PAUSED\",
+    \"special_ad_categories\": [],
+    \"daily_budget\": ${BUDGET_CENTS},
+    \"smart_promotion_type\": \"AUTOMATED_SHOPPING_ADS\"
+  }" | jq '{id: .id, error: .error.message}'
+```
+
+Print: `Advantage+ campaign "${CAMPAIGN_NAME}" created (ID: <ID>, status: PAUSED). Meta AI will optimize targeting and creative delivery once enabled.`
+
+---
+
 ## analytics / ga4
 
 Pull GA4 data via the Data API using gcloud ADC.
@@ -349,6 +623,286 @@ If `GA4_TOKEN` is empty or gcloud not available, output: `GA4 not configured —
 
  TOP PAGES
  [path]  [N views]
+```
+
+---
+
+## ga4-advanced
+
+Advanced GA4 analytics: realtime, funnel, cohort, audience export, and pivot reports.
+
+**Credential check**: If `GA4_TOKEN` is empty or `GA4_PROPERTY` is missing, print `GA4 not configured — run /ops:marketing setup or configure gcloud ADC` and stop.
+
+Route `$ARGUMENTS` within ga4-advanced (matches `ga4 <sub>` pattern):
+
+| Input | Action |
+|---|---|
+| realtime | Active users right now (last 30 min) |
+| funnel | Conversion funnel with step visualization |
+| cohort | Cohort retention analysis by device |
+| audience | Async audience segment export |
+| pivot | Multi-dimensional pivot report |
+
+### realtime
+
+```bash
+GA4_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
+RESULT=$(curl -s -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runRealtimeReport" \
+  -H "Authorization: Bearer ${GA4_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "minuteRanges": [{"startMinutesAgo": 29, "endMinutesAgo": 0}],
+    "dimensions": [
+      {"name": "unifiedScreenName"},
+      {"name": "deviceCategory"}
+    ],
+    "metrics": [{"name": "activeUsers"}],
+    "orderBys": [{"metric": {"metricName": "activeUsers"}, "desc": true}],
+    "limit": 10
+  }')
+
+TOTAL=$(echo "$RESULT" | jq '[.rows[]?.metricValues[0].value | tonumber] | add // 0')
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  GA4 REALTIME — Last 30 Minutes"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "Active Users Right Now: ${TOTAL}"
+echo ""
+echo "Top Pages:"
+printf "| %-40s | %-8s | %-7s |\n" "Page" "Device" "Users"
+printf "|%s|%s|%s|\n" "------------------------------------------" "----------" "---------"
+echo "$RESULT" | jq -r '.rows[]? | [.dimensionValues[0].value, .dimensionValues[1].value, .metricValues[0].value] | @tsv' 2>/dev/null | \
+  while IFS=$'\t' read -r page device users; do
+    printf "| %-40s | %-8s | %-7s |\n" "${page:0:40}" "$device" "$users"
+  done
+```
+
+### funnel
+
+Ask user for funnel steps via AskUserQuestion (free text). Default template uses session_start → page_view → purchase.
+
+```bash
+# NOTE: Uses v1alpha — breaking changes possible per Google's versioning policy
+GA4_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
+
+# Prompt for funnel type first
+# AskUserQuestion: "Funnel mode?" options [Closed funnel, Open funnel]
+
+IS_OPEN=$([ "$FUNNEL_MODE" = "Open funnel" ] && echo "true" || echo "false")
+
+RESULT=$(curl -s -X POST "https://analyticsdata.googleapis.com/v1alpha/properties/${GA4_PROPERTY}:runFunnelReport" \
+  -H "Authorization: Bearer ${GA4_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"dateRanges\": [{\"startDate\": \"30daysAgo\", \"endDate\": \"today\"}],
+    \"funnel\": {
+      \"isOpenFunnel\": ${IS_OPEN},
+      \"steps\": [
+        {
+          \"name\": \"Session Start\",
+          \"filterExpression\": {\"funnelEventFilter\": {\"eventName\": \"session_start\"}}
+        },
+        {
+          \"name\": \"Page View\",
+          \"filterExpression\": {\"funnelEventFilter\": {\"eventName\": \"page_view\"}}
+        },
+        {
+          \"name\": \"Purchase\",
+          \"filterExpression\": {\"funnelEventFilter\": {\"eventName\": \"purchase\"}}
+        }
+      ]
+    },
+    \"funnelBreakdown\": {
+      \"breakdownDimension\": {\"name\": \"deviceCategory\"},
+      \"limit\": 4
+    }
+  }")
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  GA4 FUNNEL — Last 30 Days (${FUNNEL_MODE})"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "$RESULT" | jq -r '
+  .funnelTable.rows[]? |
+  "Step: \(.dimensionValues[0].value)  Users: \(.metricValues[0].value)  Completion: \(.metricValues[1].value)%  Abandoned: \(.metricValues[2].value)"
+' 2>/dev/null || echo "No funnel data — ensure purchase events are firing in GA4."
+```
+
+### cohort
+
+Weekly cohort retention for users acquired in the past month, broken down by device.
+
+```bash
+GA4_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
+START_DATE=$(date -v-30d +%Y-%m-%d 2>/dev/null || date -d '30 days ago' +%Y-%m-%d)
+END_DATE=$(date +%Y-%m-%d)
+
+RESULT=$(curl -s -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport" \
+  -H "Authorization: Bearer ${GA4_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"dimensions\": [
+      {\"name\": \"cohort\"},
+      {\"name\": \"cohortNthWeek\"},
+      {\"name\": \"deviceCategory\"}
+    ],
+    \"metrics\": [
+      {\"name\": \"cohortActiveUsers\"},
+      {\"name\": \"cohortRetentionFraction\"}
+    ],
+    \"cohortSpec\": {
+      \"cohorts\": [{
+        \"dimension\": \"firstSessionDate\",
+        \"dateRange\": {\"startDate\": \"${START_DATE}\", \"endDate\": \"${END_DATE}\"}
+      }],
+      \"cohortsRange\": {
+        \"granularity\": \"WEEKLY\",
+        \"startOffset\": 0,
+        \"endOffset\": 5
+      }
+    }
+  }")
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  GA4 COHORT RETENTION — Last 30 Days"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+printf "| %-12s | %-6s | %-8s | %-10s | %-10s |\n" "Cohort" "Week" "Device" "Users" "Retention%"
+printf "|%s|%s|%s|%s|%s|\n" "--------------" "--------" "----------" "------------" "------------"
+echo "$RESULT" | jq -r '.rows[]? | [
+  .dimensionValues[0].value,
+  .dimensionValues[1].value,
+  .dimensionValues[2].value,
+  .metricValues[0].value,
+  (.metricValues[1].value | tonumber * 100 | tostring | split(".")[0])
+] | @tsv' 2>/dev/null | \
+  while IFS=$'\t' read -r cohort week device users retention; do
+    printf "| %-12s | %-6s | %-8s | %-10s | %-10s |\n" "$cohort" "$week" "$device" "$users" "${retention}%"
+  done
+```
+
+### audience
+
+Async audience export: create → poll until ACTIVE → show user count.
+
+```bash
+GA4_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
+
+# Step 1: List available audiences so user can pick one
+AUDIENCES=$(curl -s "https://analyticsadmin.googleapis.com/v1alpha/properties/${GA4_PROPERTY}/audiences" \
+  -H "Authorization: Bearer ${GA4_TOKEN}")
+echo "Available audiences:"
+echo "$AUDIENCES" | jq -r '.audiences[]? | "\(.name | split("/") | last): \(.displayName)"' 2>/dev/null
+
+# AskUserQuestion: "Enter audience ID from list above:" (free text)
+
+# Step 2: Create export
+EXPORT_RESP=$(curl -s -X POST \
+  "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}/audienceExports" \
+  -H "Authorization: Bearer ${GA4_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"audience\": \"properties/${GA4_PROPERTY}/audiences/${AUDIENCE_ID}\",
+    \"dimensions\": [
+      {\"dimensionName\": \"deviceId\"},
+      {\"dimensionName\": \"isAdsPersonalizationAllowed\"}
+    ]
+  }")
+EXPORT_NAME=$(echo "$EXPORT_RESP" | jq -r '.name // empty')
+
+if [ -z "$EXPORT_NAME" ]; then
+  echo "Failed to create export: $(echo "$EXPORT_RESP" | jq -r '.error.message // "unknown error"')"
+  exit 0
+fi
+
+echo "Export created: ${EXPORT_NAME}"
+echo "Polling for completion (small audiences: ~30s, large: up to 15 min)..."
+
+# Step 3: Poll until ACTIVE or FAILED
+ATTEMPTS=0
+while [ $ATTEMPTS -lt 60 ]; do
+  STATUS_RESP=$(curl -s "https://analyticsdata.googleapis.com/v1beta/${EXPORT_NAME}" \
+    -H "Authorization: Bearer ${GA4_TOKEN}")
+  STATE=$(echo "$STATUS_RESP" | jq -r '.state // "UNKNOWN"')
+  PCT=$(echo "$STATUS_RESP" | jq -r '.percentageCompleted // 0')
+  
+  if [ "$STATE" = "ACTIVE" ]; then break; fi
+  if [ "$STATE" = "FAILED" ]; then
+    echo "Export failed. Try again or check GA4 audience configuration."
+    exit 0
+  fi
+  echo "  State: ${STATE} (${PCT}% complete)..."
+  sleep 10
+  ATTEMPTS=$((ATTEMPTS + 1))
+done
+
+# Step 4: Query results
+QUERY_RESP=$(curl -s -X POST \
+  "https://analyticsdata.googleapis.com/v1beta/${EXPORT_NAME}:query" \
+  -H "Authorization: Bearer ${GA4_TOKEN}")
+ROW_COUNT=$(echo "$QUERY_RESP" | jq '.rowCount // 0')
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  GA4 AUDIENCE EXPORT"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Audience ID: ${AUDIENCE_ID}"
+echo "  Users exported: ${ROW_COUNT}"
+echo "  Ads-eligible: $(echo "$QUERY_RESP" | jq '[.audienceRows[]? | select(.dimensionValues[1].value == "true")] | length') users"
+echo ""
+echo "Export ready. Use this audience for retargeting in Meta or Google Ads."
+```
+
+### pivot
+
+Multi-dimensional pivot: channel group × device category × conversions.
+
+```bash
+GA4_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
+
+RESULT=$(curl -s -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runPivotReport" \
+  -H "Authorization: Bearer ${GA4_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dateRanges": [{"startDate": "30daysAgo", "endDate": "today"}],
+    "dimensions": [
+      {"name": "sessionDefaultChannelGrouping"},
+      {"name": "deviceCategory"}
+    ],
+    "metrics": [
+      {"name": "sessions"},
+      {"name": "conversions"},
+      {"name": "totalRevenue"}
+    ],
+    "pivots": [
+      {
+        "fieldNames": ["sessionDefaultChannelGrouping"],
+        "limit": 6
+      },
+      {
+        "fieldNames": ["deviceCategory"],
+        "limit": 3
+      }
+    ]
+  }')
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  GA4 PIVOT — Channel × Device (Last 30 Days)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+printf "| %-20s | %-8s | %-10s | %-11s | %-10s |\n" "Channel" "Device" "Sessions" "Conversions" "Revenue"
+printf "|%s|%s|%s|%s|%s|\n" "----------------------" "----------" "------------" "-------------" "------------"
+echo "$RESULT" | jq -r '.rows[]? | [
+  .dimensionValues[0].value,
+  .dimensionValues[1].value,
+  .metricValues[0].value,
+  .metricValues[1].value,
+  (.metricValues[2].value | tonumber | . * 100 | round / 100 | tostring)
+] | @tsv' 2>/dev/null | \
+  while IFS=$'\t' read -r channel device sessions convs revenue; do
+    printf "| %-20s | %-8s | %-10s | %-11s | \$%-9s |\n" "${channel:0:20}" "$device" "$sessions" "$convs" "$revenue"
+  done
 ```
 
 ---
@@ -457,6 +1011,245 @@ Show `[not configured]` for any unconfigured channels rather than failing.
  Instagram:  [N followers]  [N posts]  [N profile views]
  YouTube:    [N subscribers]  [N total views]
  TikTok:     [not configured] — set TIKTOK_ACCESS_TOKEN
+```
+
+---
+
+## instagram
+
+Instagram publishing and insights via Instagram Graph API (same `META_TOKEN` as Meta Ads).
+
+**Prerequisites:**
+- `META_TOKEN` configured (same as Meta Ads)
+- Instagram Business account linked to a Facebook Page
+- `IG_ACCOUNT_ID` resolved via: `curl "https://graph.facebook.com/v21.0/me/accounts?fields=instagram_business_account" -H "Authorization: Bearer ${META_TOKEN}"` → `data[0].instagram_business_account.id`
+
+**Rate limit:** 200 API calls/hour per app. Demographics require 48h reporting delay. Media insights require account with >1,000 followers.
+
+**Resolve IG account ID at the start of every instagram invocation:**
+```bash
+IG_ACCOUNT_ID=$(claude plugin config get instagram_account_id 2>/dev/null)
+if [ -z "$IG_ACCOUNT_ID" ]; then
+  IG_ACCOUNT_ID=$(curl -s "https://graph.facebook.com/v21.0/me/accounts?fields=instagram_business_account" \
+    -H "Authorization: Bearer ${META_TOKEN}" | jq -r '.data[0].instagram_business_account.id // empty')
+  # Cache it
+  [ -n "$IG_ACCOUNT_ID" ] && claude plugin config set instagram_account_id "$IG_ACCOUNT_ID" 2>/dev/null
+fi
+if [ -z "$IG_ACCOUNT_ID" ]; then
+  echo "Instagram Business account not linked to your Meta token. Ensure your Facebook Page has an Instagram Business account connected."
+  exit 0
+fi
+```
+
+Route `$ARGUMENTS` within instagram:
+
+| Input | Action |
+|---|---|
+| post \<IMAGE_URL\> | Publish image post to feed |
+| reel \<VIDEO_URL\> | Publish a Reel |
+| story \<IMAGE_URL\|VIDEO_URL\> | Publish a Story |
+| insights \<MEDIA_ID\> | Per-post metrics |
+| account-insights [days] | Account-level reach + impressions |
+| demographics | Audience age/gender/location |
+
+### post
+
+Publish an image post (two-step: create container → publish).
+
+Collect via AskUserQuestion:
+1. Image URL (publicly accessible HTTPS URL) — free text
+2. Caption — free text
+
+```bash
+# Step 1: Create media container
+CONTAINER=$(curl -s -X POST "https://graph.facebook.com/v21.0/${IG_ACCOUNT_ID}/media" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -F "image_url=${IMAGE_URL}" \
+  -F "caption=${CAPTION}" \
+  -F "media_type=IMAGE")
+CONTAINER_ID=$(echo "$CONTAINER" | jq -r '.id // empty')
+
+if [ -z "$CONTAINER_ID" ]; then
+  echo "Failed to create media container: $(echo "$CONTAINER" | jq -r '.error.message // "unknown error"')"
+  exit 0
+fi
+
+# Step 2: Publish
+PUBLISH=$(curl -s -X POST "https://graph.facebook.com/v21.0/${IG_ACCOUNT_ID}/media_publish" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -F "creation_id=${CONTAINER_ID}")
+MEDIA_ID=$(echo "$PUBLISH" | jq -r '.id // empty')
+
+if [ -n "$MEDIA_ID" ]; then
+  echo "Post published (Media ID: ${MEDIA_ID}). View at https://www.instagram.com/ — may take 1-2 min to appear."
+else
+  echo "Publish failed: $(echo "$PUBLISH" | jq -r '.error.message // "unknown error"')"
+fi
+```
+
+### reel
+
+Publish a Reel. Video must be an HTTPS URL (MP4, H.264, max 15 min, min 500px width).
+
+Collect via AskUserQuestion:
+1. Video URL (HTTPS) — free text
+2. Caption — free text
+
+```bash
+# Step 1: Create video container (async — must poll for status)
+CONTAINER=$(curl -s -X POST "https://graph.facebook.com/v21.0/${IG_ACCOUNT_ID}/media" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -F "media_type=REELS" \
+  -F "video_url=${VIDEO_URL}" \
+  -F "caption=${CAPTION}" \
+  -F "share_to_feed=true")
+CONTAINER_ID=$(echo "$CONTAINER" | jq -r '.id // empty')
+
+if [ -z "$CONTAINER_ID" ]; then
+  echo "Failed to create Reel container: $(echo "$CONTAINER" | jq -r '.error.message // "unknown error"')"
+  exit 0
+fi
+
+echo "Reel uploading... polling for ready status."
+
+# Poll until status is FINISHED
+ATTEMPTS=0
+while [ $ATTEMPTS -lt 30 ]; do
+  STATUS=$(curl -s "https://graph.facebook.com/v21.0/${CONTAINER_ID}?fields=status_code" \
+    -H "Authorization: Bearer ${META_TOKEN}" | jq -r '.status_code // "UNKNOWN"')
+  [ "$STATUS" = "FINISHED" ] && break
+  [ "$STATUS" = "ERROR" ] && echo "Reel processing failed." && exit 0
+  sleep 10
+  ATTEMPTS=$((ATTEMPTS + 1))
+done
+
+# Step 2: Publish
+PUBLISH=$(curl -s -X POST "https://graph.facebook.com/v21.0/${IG_ACCOUNT_ID}/media_publish" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -F "creation_id=${CONTAINER_ID}")
+MEDIA_ID=$(echo "$PUBLISH" | jq -r '.id // empty')
+
+if [ -n "$MEDIA_ID" ]; then
+  echo "Reel published (Media ID: ${MEDIA_ID}). Reach and plays metrics available after 24-48h."
+else
+  echo "Reel publish failed: $(echo "$PUBLISH" | jq -r '.error.message // "unknown error"')"
+fi
+```
+
+### story
+
+Publish a Story (image or video, 24h expiry).
+
+Collect via AskUserQuestion:
+1. Content URL (HTTPS image or video) — free text
+2. Content type: `[Image story, Video story]`
+
+```bash
+if [ "$CONTENT_TYPE" = "Video story" ]; then
+  MEDIA_TYPE="VIDEO"
+  URL_FIELD="video_url"
+else
+  MEDIA_TYPE="IMAGE"
+  URL_FIELD="image_url"
+fi
+
+CONTAINER=$(curl -s -X POST "https://graph.facebook.com/v21.0/${IG_ACCOUNT_ID}/media" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -F "media_type=${MEDIA_TYPE}" \
+  -F "${URL_FIELD}=${CONTENT_URL}" \
+  -F "media_type=STORIES")
+CONTAINER_ID=$(echo "$CONTAINER" | jq -r '.id // empty')
+
+if [ -z "$CONTAINER_ID" ]; then
+  echo "Failed to create Story container: $(echo "$CONTAINER" | jq -r '.error.message // "unknown error"')"
+  exit 0
+fi
+
+PUBLISH=$(curl -s -X POST "https://graph.facebook.com/v21.0/${IG_ACCOUNT_ID}/media_publish" \
+  -H "Authorization: Bearer ${META_TOKEN}" \
+  -F "creation_id=${CONTAINER_ID}")
+MEDIA_ID=$(echo "$PUBLISH" | jq -r '.id // empty')
+
+if [ -n "$MEDIA_ID" ]; then
+  echo "Story published (Media ID: ${MEDIA_ID}). Expires after 24 hours."
+else
+  echo "Story publish failed: $(echo "$PUBLISH" | jq -r '.error.message // "unknown error"')"
+fi
+```
+
+### insights \<MEDIA_ID\>
+
+Per-post metrics. Note: reach, saves, shares deprecated for non-Reels video; plays only for Reels/video.
+
+```bash
+METRICS="reach,saved,shares,comments_count,like_count,impressions"
+# For Reels, add plays: detect via media_type field
+MEDIA_TYPE=$(curl -s "https://graph.facebook.com/v21.0/${MEDIA_ID}?fields=media_type" \
+  -H "Authorization: Bearer ${META_TOKEN}" | jq -r '.media_type // "IMAGE"')
+[ "$MEDIA_TYPE" = "VIDEO" ] || [ "$MEDIA_TYPE" = "REEL" ] && METRICS="${METRICS},plays"
+
+RESULT=$(curl -s "https://graph.facebook.com/v21.0/${MEDIA_ID}/insights?metric=${METRICS}&period=lifetime" \
+  -H "Authorization: Bearer ${META_TOKEN}")
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  INSTAGRAM POST INSIGHTS — ${MEDIA_ID}"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "$RESULT" | jq -r '.data[]? | "  \(.name): \(.values[0].value)"' 2>/dev/null || \
+  echo "No insights data — account must have >1,000 followers for insights access."
+```
+
+### account-insights [days]
+
+Account-level reach and impressions. Default: last 7 days.
+
+```bash
+DAYS="${DAYS:-7}"
+END_DATE=$(date +%Y-%m-%d)
+START_DATE=$(date -v-${DAYS}d +%Y-%m-%d 2>/dev/null || date -d "${DAYS} days ago" +%Y-%m-%d)
+
+RESULT=$(curl -s "https://graph.facebook.com/v21.0/${IG_ACCOUNT_ID}/insights?metric=reach,impressions,profile_views&period=day&since=${START_DATE}&until=${END_DATE}" \
+  -H "Authorization: Bearer ${META_TOKEN}")
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  INSTAGRAM ACCOUNT INSIGHTS — Last ${DAYS} Days"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Note: Data reflects 24-48h reporting delay"
+echo ""
+
+REACH=$(echo "$RESULT" | jq '[.data[]? | select(.name == "reach") | .values[]?.value | tonumber] | add // 0')
+IMPRESSIONS=$(echo "$RESULT" | jq '[.data[]? | select(.name == "impressions") | .values[]?.value | tonumber] | add // 0')
+PROFILE_VIEWS=$(echo "$RESULT" | jq '[.data[]? | select(.name == "profile_views") | .values[]?.value | tonumber] | add // 0')
+
+echo "  Reach:         ${REACH}"
+echo "  Impressions:   ${IMPRESSIONS}"
+echo "  Profile Views: ${PROFILE_VIEWS}"
+```
+
+### demographics
+
+Audience breakdown by age/gender and top locations. Requires lifetime period (48h delay).
+
+```bash
+RESULT=$(curl -s "https://graph.facebook.com/v21.0/${IG_ACCOUNT_ID}/insights?metric=audience_gender_age,audience_city,audience_country&period=lifetime" \
+  -H "Authorization: Bearer ${META_TOKEN}")
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  INSTAGRAM DEMOGRAPHICS"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Note: Top 45 segments shown. Data has 48h delay."
+echo ""
+
+echo "AGE / GENDER BREAKDOWN:"
+echo "$RESULT" | jq -r '.data[]? | select(.name == "audience_gender_age") | .values[0].value | to_entries[] | "  \(.key): \(.value)%"' 2>/dev/null | head -20
+
+echo ""
+echo "TOP CITIES:"
+echo "$RESULT" | jq -r '.data[]? | select(.name == "audience_city") | .values[0].value | to_entries | sort_by(-.value) | .[0:10][] | "  \(.key): \(.value)%"' 2>/dev/null
+
+echo ""
+echo "TOP COUNTRIES:"
+echo "$RESULT" | jq -r '.data[]? | select(.name == "audience_country") | .values[0].value | to_entries | sort_by(-.value) | .[0:10][] | "  \(.key): \(.value)%"' 2>/dev/null
 ```
 
 ---
@@ -994,12 +1787,33 @@ Print: `✓ Keyword bid updated to $X.XX`
 
 ## campaigns
 
-Cross-channel campaign overview — unified view of active campaigns across all configured channels.
+Cross-channel campaign overview — unified view of active campaigns across all configured channels (Klaviyo, Meta Ads, Google Ads).
 
 Run in parallel:
 1. Klaviyo active campaigns (status: draft + scheduled + sending)
-2. Meta Ads active campaigns (status: ACTIVE)
-3. Show GA4 conversion goals if available
+2. Meta Ads active campaigns (status ACTIVE) — reuse `META_TOKEN` / `META_ACCOUNT`
+3. Google Ads active campaigns (status ENABLED) — reuse `GADS_*` credentials if configured
+4. Google Ads: refresh access token first (see Credential Resolution)
+
+```bash
+# Meta Ads campaigns
+META_CAMPAIGNS=$(curl -s "https://graph.facebook.com/v20.0/${META_ACCOUNT}/campaigns?fields=name,status,daily_budget,lifetime_budget,objective&filtering=[{\"field\":\"effective_status\",\"operator\":\"IN\",\"value\":[\"ACTIVE\"]}]" \
+  -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null)
+
+# Klaviyo campaigns
+KLAVIYO_CAMPAIGNS=$(curl -s "https://a.klaviyo.com/api/campaigns/?filter=equals(messages.channel,'email')&sort=-created_at&page[size]=10" \
+  -H "Authorization: Klaviyo-API-Key ${KLAVIYO_KEY}" \
+  -H "revision: 2024-10-15" 2>/dev/null)
+
+# Google Ads campaigns (if configured)
+GADS_CAMPAIGNS=""
+if [ -n "$GADS_ACCESS_TOKEN" ] && [ "$GADS_ACCESS_TOKEN" != "null" ]; then
+  GADS_CAMPAIGNS=$(curl -s -X POST \
+    "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/googleAds:searchStream" \
+    "${GADS_HEADERS[@]}" \
+    --data-binary '{"query": "SELECT campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros, metrics.cost_micros FROM campaign WHERE campaign.status = ENABLED ORDER BY metrics.cost_micros DESC LIMIT 10"}' 2>/dev/null)
+fi
+```
 
 ### Output format
 ```
@@ -1009,11 +1823,110 @@ Run in parallel:
  EMAIL (Klaviyo)
  [campaign name]  [status]  [send date or "scheduled for X"]
 
- PAID (Meta Ads)
+ PAID — META ADS
  [campaign name]  [status]  $[daily_budget]/day  [objective]
+
+ PAID — GOOGLE ADS
+ [campaign name]  [status]  $[budget]/day  $[spend 7d]
 
  FLOWS (Always-on automation)
  [flow name]  [trigger type]  [status: live/draft]
+```
+
+For any channel not configured, show `[not configured — /ops:marketing setup]`.
+
+---
+
+## optimize
+
+Cross-platform ad optimization agent. Reads Meta + Google Ads data, computes blended ROAS, and recommends where to shift budget.
+
+Spawn the marketing optimizer agent:
+```
+Agent(prompt="Run the marketing optimizer agent. Read ops-marketing-dash data for Meta Ads and Google Ads spend/conversions/ROAS. Compute blended ROAS across platforms. Identify the highest-ROAS platform. Recommend budget shifts with specific dollar amounts. List top 3 actions by expected impact. Use the marketing-optimizer.md agent instructions.", model="claude-sonnet-4-5")
+```
+
+If Agent Teams are available (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`):
+```
+TeamCreate("optimizer")
+Agent(team_name="optimizer", name="marketing-optimizer", prompt="You are the marketing optimizer. Read ops-marketing-dash pre-gathered data. Compute blended ROAS for Meta + Google. Recommend budget reallocation. Show unified attribution table.")
+```
+
+### Output format
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ AD OPTIMIZATION REPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ Blended ROAS:    [X]x  (Meta: [X]x  Google: [X]x)
+ Total Spend:     $[X]  Total Revenue: $[X]
+
+ RECOMMENDATIONS
+ 1. [Action]  Expected impact: [+X% ROAS / +$X revenue]
+ 2. [Action]  ...
+ 3. [Action]  ...
+
+ BUDGET REALLOCATION
+ Move $[X]/day from [Platform A] → [Platform B]
+ Rationale: [X]x ROAS vs [X]x ROAS
+```
+
+---
+
+## attribution
+
+Unified attribution table showing spend, conversions, revenue, and ROAS side-by-side across all configured platforms.
+
+```bash
+# Gather all platform data in parallel
+# Meta Ads — last 7d
+META_DATA=$(curl -s "https://graph.facebook.com/v20.0/${META_ACCOUNT}/insights?fields=spend,actions,action_values&date_preset=last_7d&level=account" \
+  -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null)
+META_SPEND=$(echo "$META_DATA" | jq -r '.data[0].spend // "0"')
+META_CONV=$(echo "$META_DATA" | jq '[.data[0].actions[]? | select(.action_type == "purchase") | .value | tonumber] | add // 0' 2>/dev/null)
+META_REV=$(echo "$META_DATA" | jq '[.data[0].action_values[]? | select(.action_type == "purchase") | .value | tonumber] | add // 0' 2>/dev/null)
+META_ROAS=$(awk "BEGIN { if (${META_SPEND:-0} > 0) printf \"%.2f\", ${META_REV:-0} / ${META_SPEND:-1}; else print \"—\" }")
+
+# Google Ads — last 7d
+GADS_DATA=""
+GADS_SPEND="0"; GADS_CONV="0"; GADS_REV="0"; GADS_ROAS="—"
+if [ -n "$GADS_ACCESS_TOKEN" ] && [ "$GADS_ACCESS_TOKEN" != "null" ]; then
+  GADS_DATA=$(curl -s -X POST \
+    "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/googleAds:searchStream" \
+    "${GADS_HEADERS[@]}" \
+    --data-binary '{"query": "SELECT metrics.cost_micros, metrics.conversions, metrics.conversions_value FROM customer WHERE segments.date DURING LAST_7_DAYS"}' 2>/dev/null)
+  GADS_SPEND=$(echo "$GADS_DATA" | jq '[.[].results[]?.metrics.costMicros // "0" | tonumber] | add / 1000000 // 0' 2>/dev/null || echo "0")
+  GADS_CONV=$(echo "$GADS_DATA" | jq '[.[].results[]?.metrics.conversions // "0" | tonumber] | add // 0' 2>/dev/null || echo "0")
+  GADS_REV=$(echo "$GADS_DATA" | jq '[.[].results[]?.metrics.conversionsValue // "0" | tonumber] | add // 0' 2>/dev/null || echo "0")
+  GADS_ROAS=$(awk "BEGIN { if (${GADS_SPEND:-0} > 0) printf \"%.2f\", ${GADS_REV:-0} / ${GADS_SPEND:-1}; else print \"—\" }")
+fi
+
+# Klaviyo attributed revenue
+KLAVIYO_REV="—"
+# (Pull from metric aggregates if needed — complex, show as note)
+
+# GA4 conversions + revenue
+GA4_DATA=$(curl -s -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport" \
+  -H "Authorization: Bearer ${GA4_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"dateRanges": [{"startDate": "7daysAgo", "endDate": "today"}], "metrics": [{"name": "conversions"}, {"name": "totalRevenue"}]}' 2>/dev/null)
+GA4_CONV=$(echo "$GA4_DATA" | jq -r '.rows[0].metricValues[0].value // "—"')
+GA4_REV=$(echo "$GA4_DATA" | jq -r '.rows[0].metricValues[1].value // "—"')
+
+TOTAL_AD_SPEND=$(awk "BEGIN { printf \"%.2f\", ${META_SPEND:-0} + ${GADS_SPEND:-0} }")
+TOTAL_AD_REV=$(awk "BEGIN { printf \"%.2f\", ${META_REV:-0} + ${GADS_REV:-0} }")
+BLENDED_ROAS=$(awk "BEGIN { if (${TOTAL_AD_SPEND:-0} > 0) printf \"%.2f\", ${TOTAL_AD_REV:-0} / ${TOTAL_AD_SPEND:-1}; else print \"—\" }")
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  UNIFIED ATTRIBUTION — Last 7 Days"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf "| %-14s | %-10s | %-12s | %-12s | %-8s |\n" "Platform" "Spend" "Conversions" "Revenue" "ROAS"
+printf "|%s|%s|%s|%s|%s|\n" "----------------" "------------" "--------------" "--------------" "----------"
+printf "| %-14s | \$%-9s | %-12s | \$%-11s | %-8s |\n" "Meta Ads" "$META_SPEND" "$META_CONV" "$META_REV" "${META_ROAS}x"
+printf "| %-14s | \$%-9s | %-12s | \$%-11s | %-8s |\n" "Google Ads" "$(printf "%.2f" ${GADS_SPEND})" "$GADS_CONV" "$(printf "%.2f" ${GADS_REV})" "${GADS_ROAS}x"
+printf "| %-14s | %-10s | %-12s | %-12s | %-8s |\n" "Klaviyo" "—" "—" "${KLAVIYO_REV}" "—"
+printf "| %-14s | %-10s | %-12s | %-12s | %-8s |\n" "GA4 (organic)" "—" "$GA4_CONV" "\$${GA4_REV}" "—"
+printf "|%s|%s|%s|%s|%s|\n" "----------------" "------------" "--------------" "--------------" "----------"
+printf "| %-14s | \$%-9s | %-12s | \$%-11s | %-8s |\n" "TOTAL (ads)" "$TOTAL_AD_SPEND" "—" "$TOTAL_AD_REV" "${BLENDED_ROAS}x"
 ```
 
 ---
@@ -1035,10 +1948,24 @@ Parse the JSON output and display:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  Email (Klaviyo)  [N] subs  |  [X]% open rate  |  $[X] attributed
  Paid (Meta)      $[X] spent  |  [X]x ROAS  |  [N] purchases
+ Paid (Google)    $[X] spent  |  [X]x ROAS  |  [N] conversions
  Organic (GA4)    [N] sessions  |  [X]% CVR  |  $[X] revenue
  SEO (GSC)        [N] clicks  |  [N] impressions  |  [X] avg pos
+ Instagram        [N] followers  |  [N] reach (7d)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ Marketing Health Score: [N]/100  ([status: Healthy/Warning/Critical])
+ Blended ROAS: [X]x  Top channel: [channel]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
+
+**Marketing Health Score computation** (0-100, shown at bottom of dashboard):
+- Blended ROAS ≥ 3x: +30 pts; 1-3x: +15 pts; < 1x: +0 pts
+- Email open rate ≥ 20%: +20 pts; 10-20%: +10 pts; < 10%: +0 pts
+- Channel diversity (3+ platforms active): +20 pts; 2 platforms: +10 pts; 1: +0 pts
+- GA4 CVR ≥ 2%: +20 pts; 1-2%: +10 pts; < 1%: +0 pts
+- Organic SEO clicks > 1,000/mo: +10 pts; 100-1000: +5 pts; < 100: +0 pts
+
+Status thresholds: ≥70 = Healthy, 40-69 = Warning, < 40 = Critical.
 
 For any channel with missing credentials, show `[not configured — /ops:marketing setup]`.
 
