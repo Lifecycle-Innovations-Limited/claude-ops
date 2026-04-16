@@ -390,11 +390,22 @@ if [ -z "$IMAGE_HASH" ]; then
   exit 0
 fi
 
+# Resolve the Facebook Page ID. Meta's `object_story_spec.page_id` requires a
+# real Page ID — the ad account ID (with `act_` stripped) is NOT a Page ID and
+# the API call will fail. Require META_PAGE_ID in env or plugin prefs.
+META_PAGE_ID="${META_PAGE_ID:-$(claude plugin config get meta_page_id 2>/dev/null || echo "")}"
+if [ -z "$META_PAGE_ID" ]; then
+  echo "META_PAGE_ID is required to create an ad creative. Set it via:"
+  echo "  claude plugin config set meta_page_id <your_fb_page_id>"
+  echo "Find your Page ID at https://www.facebook.com/<your-page>/about_profile_transparency"
+  exit 0
+fi
+
 # Step 2: Create ad creative
 CREATIVE_RESP=$(curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/adcreatives" \
   -H "Authorization: Bearer ${META_TOKEN}" \
   -F "name=Creative for ${AD_NAME}" \
-  -F "object_story_spec={\"page_id\": \"$(echo "$META_ACCOUNT" | sed 's/act_//')\", \"link_data\": {\"image_hash\": \"${IMAGE_HASH}\", \"message\": \"${PRIMARY_TEXT}\", \"name\": \"${HEADLINE}\"}}")
+  -F "object_story_spec={\"page_id\": \"${META_PAGE_ID}\", \"link_data\": {\"image_hash\": \"${IMAGE_HASH}\", \"message\": \"${PRIMARY_TEXT}\", \"name\": \"${HEADLINE}\"}}")
 CREATIVE_ID=$(echo "$CREATIVE_RESP" | jq -r '.id // empty')
 
 if [ -z "$CREATIVE_ID" ]; then
@@ -1155,9 +1166,8 @@ fi
 
 CONTAINER=$(curl -s -X POST "https://graph.facebook.com/v21.0/${IG_ACCOUNT_ID}/media" \
   -H "Authorization: Bearer ${META_TOKEN}" \
-  -F "media_type=${MEDIA_TYPE}" \
-  -F "${URL_FIELD}=${CONTENT_URL}" \
-  -F "media_type=STORIES")
+  -F "media_type=STORIES" \
+  -F "${URL_FIELD}=${CONTENT_URL}")
 CONTAINER_ID=$(echo "$CONTAINER" | jq -r '.id // empty')
 
 if [ -z "$CONTAINER_ID" ]; then
