@@ -6,6 +6,57 @@
       "base_url": "https://api.myparcel.nl",
       "credential_key": "MYPARCEL_API_KEY",
       "docs_url": "https://developer.myparcel.nl/api-reference/"
+    },
+    "sendcloud": {
+      "category": "shipping",
+      "auth_type": "basic",
+      "base_url": "https://panel.sendcloud.sc/api/v3",
+      "credential_key": "SENDCLOUD_PUBLIC_KEY",
+      "credential_key_secondary": "SENDCLOUD_PRIVATE_KEY",
+      "docs_url": "https://api.sendcloud.dev/docs/"
+    },
+    "dhl_parcel_nl": {
+      "category": "shipping",
+      "auth_type": "oauth2-api-key",
+      "base_url": "https://api-gw.dhlparcel.nl",
+      "credential_key": "DHL_PARCEL_USER_ID",
+      "credential_key_secondary": "DHL_PARCEL_KEY",
+      "docs_url": "https://api-gw.dhlparcel.nl/docs"
+    },
+    "postnl": {
+      "category": "shipping",
+      "auth_type": "api-key",
+      "base_url": "https://api.postnl.nl",
+      "credential_key": "POSTNL_API_KEY",
+      "credential_key_secondary": "POSTNL_CUSTOMER_CODE",
+      "credential_key_tertiary": "POSTNL_CUSTOMER_NUMBER",
+      "docs_url": "https://developer.postnl.nl/"
+    },
+    "dpd": {
+      "category": "shipping",
+      "auth_type": "basic-login-token",
+      "base_url": "https://public-dis-ws.dpd.nl/shipping/rest",
+      "credential_key": "DPD_DELIS_ID",
+      "credential_key_secondary": "DPD_PASSWORD",
+      "docs_url": "https://esolutions.dpd.com/"
+    },
+    "ups": {
+      "category": "shipping",
+      "auth_type": "oauth2-client-credentials",
+      "base_url": "https://onlinetools.ups.com",
+      "credential_key": "UPS_CLIENT_ID",
+      "credential_key_secondary": "UPS_CLIENT_SECRET",
+      "credential_key_tertiary": "UPS_SHIPPER_NUMBER",
+      "docs_url": "https://developer.ups.com/api/reference/shipping"
+    },
+    "fedex": {
+      "category": "shipping",
+      "auth_type": "oauth2-client-credentials",
+      "base_url": "https://apis.fedex.com",
+      "credential_key": "FEDEX_CLIENT_ID",
+      "credential_key_secondary": "FEDEX_CLIENT_SECRET",
+      "credential_key_tertiary": "FEDEX_ACCOUNT_NUMBER",
+      "docs_url": "https://developer.fedex.com/api/en-us/catalog/ship/v1/docs.html"
     }
   }
 }
