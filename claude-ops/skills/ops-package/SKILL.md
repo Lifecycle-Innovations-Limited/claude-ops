@@ -1,7 +1,7 @@
 ---
 name: ops-package
-description: Ship parcels via MyParcel.nl. Create shipments, download labels, track status, and list recent shipments. Wraps https://api.myparcel.nl with Basic auth (key base64-encoded at runtime).
-argument-hint: "<ship|label|track|list> [args...]"
+description: Ship parcels via any configured carrier — MyParcel, Sendcloud, DHL Parcel NL, PostNL, DPD, UPS, FedEx. Auto-selects the first carrier whose credentials are configured, or pass --carrier <name> to override. Verbs: ship, label, track, list, carriers.
+argument-hint: "[--carrier <name>] <ship|label|track|list|carriers> [args...]"
 allowed-tools:
   - Bash
   - Read
@@ -14,89 +14,101 @@ disallowedTools:
   - NotebookEdit
 ---
 
-# OPS ► PACKAGE — MyParcel.nl
+# OPS ► PACKAGE — multi-carrier shipping
 
-## Runtime Context
+One skill, seven carriers. The router picks the carrier automatically based on which credentials are configured.
 
-Credentials resolve in this order (script handles it — do not inline the key):
+## Which carrier do I get?
 
-1. `$MYPARCEL_API_KEY` env var (plain text — the script base64-encodes it).
-2. `preferences.json` key `myparcel_api_key` at `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`.
-3. Doppler: `doppler secrets get MYPARCEL_API_KEY --plain`.
+| Condition                                                            | Selected carrier          |
+| -------------------------------------------------------------------- | ------------------------- |
+| `--carrier <name>` flag passed                                       | That carrier (validated)  |
+| Exactly one carrier has credentials                                  | That carrier              |
+| Multiple carriers have credentials                                   | First match in this order |
+| No carrier has credentials                                           | Exit 2 with setup help    |
 
-If none is available, the script exits with a clear error telling the user how to set it.
+**Preference order:** `myparcel` → `sendcloud` → `dhl` → `postnl` → `dpd` → `ups` → `fedex`.
 
-Docs: https://developer.myparcel.nl/api-reference/
+## Credential resolution
 
-## Route by `$ARGUMENTS`
+Each carrier resolves its credential(s) from, in order:
 
-| First token | Action                            |
-| ----------- | --------------------------------- |
-| `ship`      | Create a shipment                 |
-| `label`     | Download + open label PDF         |
-| `track`     | Show status + tracking barcode    |
-| `list`      | List last 10 shipments            |
-| (empty)     | Show usage + suggest next command |
+1. Environment variable(s) listed below.
+2. `preferences.json` key (lowercase of the env var name) at `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`.
+3. Doppler: `doppler secrets get <NAME> --plain`.
 
-Delegate the actual API calls to `${CLAUDE_PLUGIN_ROOT}/skills/ops-package/ops-package.sh`. Do not re-implement curl logic inline — pass args through.
+| Carrier    | Env vars required                                                      | Docs                                                |
+| ---------- | ---------------------------------------------------------------------- | --------------------------------------------------- |
+| MyParcel   | `MYPARCEL_API_KEY`                                                     | https://developer.myparcel.nl/api-reference/        |
+| Sendcloud  | `SENDCLOUD_PUBLIC_KEY` + `SENDCLOUD_PRIVATE_KEY`                       | https://api.sendcloud.dev/docs/                     |
+| DHL NL     | `DHL_PARCEL_USER_ID` + `DHL_PARCEL_KEY`                                | https://api-gw.dhlparcel.nl/docs                    |
+| PostNL     | `POSTNL_API_KEY` + `POSTNL_CUSTOMER_CODE` + `POSTNL_CUSTOMER_NUMBER`   | https://developer.postnl.nl/                        |
+| DPD        | `DPD_DELIS_ID` + `DPD_PASSWORD`                                        | https://esolutions.dpd.com/                         |
+| UPS        | `UPS_CLIENT_ID` + `UPS_CLIENT_SECRET` + `UPS_SHIPPER_NUMBER`           | https://developer.ups.com/api/reference/shipping    |
+| FedEx      | `FEDEX_CLIENT_ID` + `FEDEX_CLIENT_SECRET` + `FEDEX_ACCOUNT_NUMBER`     | https://developer.fedex.com/api/en-us/catalog/      |
 
----
+## Routing
+
+All API calls are delegated to `${CLAUDE_PLUGIN_ROOT}/skills/ops-package/ops-package.sh`. Do not re-implement curl logic inline — pass args through.
+
+| First token | Action                                                             |
+| ----------- | ------------------------------------------------------------------ |
+| `carriers`  | Show configured vs unconfigured carriers                           |
+| `ship`      | Create a shipment                                                  |
+| `label`     | Download + open label PDF                                          |
+| `track`     | Show status + tracking barcode                                     |
+| `list`      | List last 10 shipments (MyParcel / Sendcloud; others unsupported)  |
+| (empty)     | Show usage                                                         |
 
 ## ship
 
-Create a shipment. Required: `--to "<address>"`. Address format:
+Required: `--to "<address>"`. Address format:
 
 ```
 "Person / Company, Street 12A, 1011AB Amsterdam, NL"
 ```
 
 - `/ Company` segment is optional.
-- Postcode can be with or without space (normalized to 4-digit+2-letter uppercase).
-- Country defaults to NL if missing; common names (Netherlands, Belgium, Germany, France) are mapped to ISO codes.
+- Postcode accepts with/without space; NL postcodes are normalised to uppercase without space.
+- Country defaults to NL; common names (Netherlands, Belgium, Germany, France, UK, USA) map to ISO codes.
 
-Flags:
-- `--from "<address>"` — override sender. Default: account's configured sender.
-- `--weight <grams>` — integer grams (used for carrier rating).
-- `--package-type 1|2|3` — 1=parcel (default), 2=mailbox, 3=letter.
-- `--signature` — require signature on delivery.
-- `--insurance <EUR>` — integer EUR; 0 disables (default). Script converts to cents.
-- `--description "<text>"` — label description, max ~45 chars.
-- `--pickup` — book home pickup at sender's address (requires `--from` to include address, otherwise MyParcel uses account default).
+Flags (not every carrier honours every flag — unsupported flags are safely ignored per adapter):
+- `--from "<address>"` override sender; default is the account's configured sender.
+- `--weight <grams>` integer grams.
+- `--package-type 1|2|3` 1=parcel (default), 2=mailbox, 3=letter (MyParcel only).
+- `--signature` require signature on delivery.
+- `--insurance <EUR>` integer EUR; 0 disables (MyParcel only).
+- `--description "<text>"` label reference (carriers differ; ~45 char max).
+- `--pickup` request home pickup at sender (MyParcel only).
 
-Run:
+### Invocation
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/skills/ops-package/ops-package.sh ship \
-  --to "$ADDRESS_STRING" \
-  [--from "$SENDER_STRING"] \
-  [--weight "$WEIGHT_G"] \
-  [--package-type "$PKG_TYPE"] \
-  [--signature] \
-  [--insurance "$INSURANCE_EUR"] \
-  [--description "$LABEL_DESC"] \
-  [--pickup]
+${CLAUDE_PLUGIN_ROOT}/skills/ops-package/ops-package.sh \
+  [--carrier myparcel|sendcloud|dhl|postnl|dpd|ups|fedex] \
+  ship --to "$TO" [--from "$FROM"] [--weight "$W"] \
+       [--signature] [--insurance "$INS"] [--description "$DESC"] \
+       [--package-type "$TYPE"] [--pickup]
 ```
 
-On success the script returns:
+Returns:
 
 ```json
-{"shipment_id": "<id>", "response": { ... raw MyParcel JSON ... }}
+{"carrier": "<name>", "shipment_id": "<id>", "response": { /* raw carrier JSON */ }}
 ```
 
 Summarise to the user as:
 
 ```
-Shipment created — id <id>
-Next: /ops:ops-package label <id>  to download the PDF (or pay if not prepaid).
+Shipment created — <carrier> #<id>
+Next: /ops:ops-package label <id>  to download the PDF.
 ```
 
-Then offer via `AskUserQuestion` (≤4 options):
-- `[Download label now]` — call `ops-package.sh label <id>` immediately
-- `[Track it]` — call `ops-package.sh track <id>`
+Offer via `AskUserQuestion` (≤4 options):
+- `[Download label now]` — call `label <id>` immediately
+- `[Track it]` — call `track <id>`
 - `[Ship another]`
 - `[Done]`
-
----
 
 ## label `<shipment-id>`
 
@@ -104,76 +116,47 @@ Then offer via `AskUserQuestion` (≤4 options):
 ${CLAUDE_PLUGIN_ROOT}/skills/ops-package/ops-package.sh label "$ID"
 ```
 
-Two possible outcomes:
-
-- **PDF returned** → saved to `/tmp/myparcel_label_<id>.pdf` and opened (macOS `open`). Output: `{"status":"ok","label_pdf":"/tmp/myparcel_label_<id>.pdf"}`.
-- **Payment required** → shipment not prepaid. Output: `{"status":"payment_required","payment_url":"https://payv2.multisafepay.com/..."}`. The script opens that URL in the browser on macOS. Tell the user: "Shipment <id> needs payment — MultiSafepay URL opened. After paying, re-run `/ops:ops-package label <id>`."
-
----
+Behaviour per carrier:
+- **MyParcel**: PDF saved to `/tmp/myparcel_label_<id>.pdf` and opened on macOS. If unpaid, returns `{"status":"payment_required","payment_url":"..."}` and opens the MultiSafepay URL.
+- **Sendcloud**: Fetches the CDN PDF URL (v2 `/labels/<id>`) and saves locally.
+- **DHL NL**: Fetches `/labels/<id>?format=PDF&printerType=A4`.
+- **DPD**: Fetches `/v1/parcellabelnumber/<id>?paperFormat=A4`.
+- **PostNL / UPS / FedEx**: PDF is returned inline with the `ship` call and cached to `/tmp/<carrier>_label_<id>.pdf`. Calling `label` re-opens that cached file. If the cache is gone, re-run `ship` (none of these carriers expose a stable label-recovery endpoint here).
 
 ## track `<shipment-id>`
 
-```bash
-${CLAUDE_PLUGIN_ROOT}/skills/ops-package/ops-package.sh track "$ID"
-```
+Returns a normalised object across all carriers:
 
-Returns shipment status + barcode + tracking URL. Render as:
-
+```json
+{"carrier":"<n>","id":"<id>","status":"<s>","barcode":"<b>","tracking_url":"<u>","recipient":<o>,"updated":"<ts>"}
 ```
-Shipment <id>
-  Status:    <status>
-  Barcode:   <barcode>
-  Tracking:  <tracking_url>
-  To:        <recipient summary>
-  Updated:   <modified timestamp>
-```
-
----
 
 ## list
 
-```bash
-${CLAUDE_PLUGIN_ROOT}/skills/ops-package/ops-package.sh list
-```
+`MyParcel` returns the last 10 shipments. `Sendcloud` returns the last 10 parcels. All other carriers return `{"shipments":[],"note":"..."}` because their APIs don't expose a customer-facing list endpoint — track by id instead.
 
-Returns an array of the last 10 shipments with id, status, barcode, recipient summary, and created timestamp. Render as a compact table:
+## carriers
 
-```
- ID          STATUS              BARCODE           RECIPIENT                     CREATED
- ─────────────────────────────────────────────────────────────────────────────────────────
- <id>        <status>            <barcode>         <person — city (cc)>          <date>
- ...
-```
-
-Then offer via `AskUserQuestion` (≤4 options):
-- `[Track a shipment]` — ask for id, then `track`
-- `[Download a label]` — ask for id, then `label`
-- `[Ship a new parcel]`
-- `[Done]`
-
----
+Prints which carriers are configured (`✓`) vs which are missing credentials (`·`). Use this when deciding which `--carrier` to pass.
 
 ## Error handling
 
-- **No API key** → script exits 2 with instructions. Surface the message verbatim; then ask via `AskUserQuestion`:
-  `[Paste key now]`  `[Skip — configure later]`
-  If "Paste key now", collect via `AskUserQuestion` free-text and write to `preferences.json`:
-  ```bash
-  PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
-  tmp=$(mktemp)
-  jq --arg v "$KEY" '.myparcel_api_key = $v' "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
-  ```
-- **4xx from MyParcel** → dump the JSON error and stop. Do not retry silently.
+- **No carrier configured** → script exits 2 with a checklist of envs. Surface it verbatim, then via `AskUserQuestion`:
+  `[Paste key now]`  `[Open carriers doc]`  `[Skip — configure later]`
+  On "Paste key now", collect via `AskUserQuestion` free-text and write to `preferences.json`.
+- **4xx from carrier** → dump the JSON error body and stop. Do not retry silently.
 - **Address parser looks wrong** → re-prompt the user with the parsed breakdown and ask for corrections before POSTing.
 
-## Package type reference
+## Verification status
 
-| code | type    | notes                                 |
-| ---- | ------- | ------------------------------------- |
-| 1    | package | default — any parcel                  |
-| 2    | mailbox | brievenbuspakje (fits through NL box) |
-| 3    | letter  | letter/stamp only                     |
+| Carrier    | Status                                                             |
+| ---------- | ------------------------------------------------------------------ |
+| MyParcel   | Verified against api.myparcel.nl v1.1 (same working reference)     |
+| Sendcloud  | Verified request/response shapes against Sendcloud Panel API v3    |
+| DHL NL     | UNVERIFIED — modelled on My DHL Parcel Swagger, needs live account |
+| PostNL     | UNVERIFIED — modelled on Send API v2.2 docs, needs live account    |
+| DPD        | UNVERIFIED — modelled on DPD eSolutions REST, needs live account   |
+| UPS        | UNVERIFIED — modelled on UPS v2403 Ship/Track REST, needs account  |
+| FedEx      | UNVERIFIED — modelled on FedEx Ship v1 + Track v1 REST             |
 
-## Carrier
-
-Defaults to PostNL (carrier id `1`), MyParcel's primary NL carrier. Other carrier ids require account configuration — out of scope for this skill.
+Unverified adapters are tagged with `# UNVERIFIED - pending live test with account` in the source. Payloads match the documented contract; adjustments may be needed when tested against live accounts.

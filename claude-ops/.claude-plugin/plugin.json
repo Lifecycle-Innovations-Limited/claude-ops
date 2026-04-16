@@ -43,7 +43,13 @@
     "mrr",
     "aws-monitoring",
     "shipping",
-    "myparcel"
+    "myparcel",
+    "sendcloud",
+    "dhl",
+    "postnl",
+    "dpd",
+    "ups",
+    "fedex"
   ],
   "userConfig": {
     "telegram_api_id": {
@@ -300,9 +306,114 @@
     },
     "myparcel_api_key": {
       "title": "MyParcel.nl API Key",
-      "description": "Plain API key from backoffice.myparcel.nl \u2192 Settings \u2192 API. Used by /ops:ops-package for creating shipments, downloading labels, and tracking parcels. Script base64-encodes it at runtime \u2014 do NOT pre-encode.",
+      "description": "Plain API key from backoffice.myparcel.nl \u2192 Settings \u2192 API. Used by /ops:ops-package. Script base64-encodes it at runtime \u2014 do NOT pre-encode.",
       "type": "string",
       "sensitive": true,
+      "default": ""
+    },
+    "sendcloud_public_key": {
+      "title": "Sendcloud Public Key",
+      "description": "Public key from Sendcloud Panel \u2192 Settings \u2192 Integrations \u2192 Sendcloud API. Paired with sendcloud_private_key.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "sendcloud_private_key": {
+      "title": "Sendcloud Private Key",
+      "description": "Private key from Sendcloud Panel \u2192 Settings \u2192 Integrations \u2192 Sendcloud API. Paired with sendcloud_public_key.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "dhl_parcel_user_id": {
+      "title": "DHL Parcel NL User ID",
+      "description": "User ID issued in My DHL Parcel \u2192 User settings \u2192 API settings. Paired with dhl_parcel_key.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "dhl_parcel_key": {
+      "title": "DHL Parcel NL API Key",
+      "description": "API key from My DHL Parcel \u2192 User settings \u2192 API settings. Paired with dhl_parcel_user_id.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "postnl_api_key": {
+      "title": "PostNL API Key",
+      "description": "apikey from developer.postnl.nl. Required together with postnl_customer_code and postnl_customer_number.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "postnl_customer_code": {
+      "title": "PostNL Customer Code",
+      "description": "Three-letter customer code from your PostNL contract (e.g. DEVC).",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "postnl_customer_number": {
+      "title": "PostNL Customer Number",
+      "description": "Eight-digit customer number from your PostNL contract.",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "dpd_delis_id": {
+      "title": "DPD DelisID",
+      "description": "DelisID from MyDPD / DPD eSolutions. Paired with dpd_password.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "dpd_password": {
+      "title": "DPD Password",
+      "description": "Password for the DelisID. Exchanged at login for a short-lived token.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "ups_client_id": {
+      "title": "UPS OAuth Client ID",
+      "description": "Client ID from developer.ups.com apps. Paired with ups_client_secret and ups_shipper_number.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "ups_client_secret": {
+      "title": "UPS OAuth Client Secret",
+      "description": "Client secret for the UPS app. Used for OAuth2 client_credentials.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "ups_shipper_number": {
+      "title": "UPS Shipper Number",
+      "description": "Six-character UPS shipper/account number used for billing shipments.",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "fedex_client_id": {
+      "title": "FedEx OAuth Client ID",
+      "description": "API Key from developer.fedex.com projects. Paired with fedex_client_secret and fedex_account_number.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "fedex_client_secret": {
+      "title": "FedEx OAuth Client Secret",
+      "description": "Secret Key for the FedEx project. Used for OAuth2 client_credentials.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "fedex_account_number": {
+      "title": "FedEx Account Number",
+      "description": "Nine-digit FedEx shipping account number used as the billing party.",
+      "type": "string",
+      "sensitive": false,
       "default": ""
     }
   }
