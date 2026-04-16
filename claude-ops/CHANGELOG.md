@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0] — 2026-04-16
+
+### Added
+
+- **`bin/ops-discover-external`** — Auto-discovers external (non-git) projects from credentials already configured in the plugin: Shopify stores (via prefs/env), Linear teams (via `LINEAR_API_KEY`), Slack workspaces (via keychain `slack-xoxc`/`slack-xoxd`), and Notion databases (via `NOTION_API_KEY` / keychain `notion-api-key`). Emits a JSON array of ready-to-register candidates with pre-built `config` blocks. Never writes to `registry.json` itself — the setup wizard handles registration after user confirmation. Shopify candidates emit the credential key that actually supplied the token (`SHOPIFY_ADMIN_TOKEN` or `SHOPIFY_ACCESS_TOKEN`) so downstream health checks resolve correctly, and Slack lookups use account=`$USER` (matching `bin/ops-slack-autolink.mjs`) so real installations are discovered.
+- **Setup Step 5: "Auto-discover external projects"** — New sub-step in `skills/setup/SKILL.md` that runs `ops-discover-external` after the filesystem git-repo scan, cross-references against the existing registry, and presents only unregistered candidates via batched `AskUserQuestion` calls (≤ 4 options per call, per Rule 1).
+- **`ops-projects` external candidate surfacing** — The portfolio dashboard now runs `ops-discover-external` alongside `ops-external` and shows an "UNREGISTERED CANDIDATES" footer listing Shopify/Linear/Slack/Notion projects the user has credentials for but has not yet added to `registry.json`, with a one-line path to `/ops:setup registry`.
+- **`ops-projects` external deep-dive** — The `/ops:projects <alias>` jump-to-project view now branches on `type: external` and renders a source-specific deep-dive (Shopify order summary, Linear team issues, Slack workspace health, Notion recent edits) with actions that route to the relevant source-specific skill instead of assuming git/CI/PR context.
+
+### Fixed
+
+- **`CODE_OF_CONDUCT.md`** — Enforcement contact changed from a product support address to the plugin maintainer email (`info@lifecycleinnovations.limited`), matching `SECURITY.md`. Fixes Rule 0 (no personal/product-specific emails in a public repo).
+
 ## [1.5.0] — 2026-04-15
 
 ### Added
@@ -243,7 +256,7 @@ All notable changes to this project will be documented in this file.
 - **Telegram setup** — After authenticating via `ops-telegram-autolink.mjs`, credentials are now auto-written to the MCP config. No more manual paste into `/plugin settings`.
 - **GSD companion install** — Now installs automatically with a single "Yes" instead of telling users to run slash commands manually.
 
-## [Unreleased]
+## [Unreleased — legacy drafts]
 
 ### Added — autolink wizards for Telegram and Slack
 
