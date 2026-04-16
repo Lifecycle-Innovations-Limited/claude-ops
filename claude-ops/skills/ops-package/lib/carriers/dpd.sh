@@ -139,15 +139,16 @@ dpd_label() {
   local base; base=$(_dpd_base_url)
 
   local tmp; tmp=$(mktemp)
+  trap 'rm -f "$tmp"' RETURN
   curl -sS -H "$auth" -H "$UA_HEADER" -H "Accept: application/pdf" \
     -o "$tmp" \
     "$base/v1/parcellabelnumber/${id}?paperFormat=A4"
   if file "$tmp" 2>/dev/null | grep -qi "PDF"; then
+    trap - RETURN
     save_label_pdf "dpd" "$id" "$tmp"
   else
     echo "dpd label: unexpected non-PDF response:" >&2
     cat "$tmp" >&2 2>/dev/null || true
-    rm -f "$tmp"
     return 1
   fi
 }

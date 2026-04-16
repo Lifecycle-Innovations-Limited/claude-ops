@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.1] — 2026-04-16
+
+### Added
+
+- **`ops-package` carrier-agnostic shipping skill** — Unified `/ops:package ship|label|track|list|carriers` entrypoint routing to 7 carrier adapters. Each adapter lives in `skills/ops-package/lib/carriers/<carrier>.sh` and shares common helpers (address parsing, credential resolution, label storage) in `lib/common.sh`.
+  - **VERIFIED (live API tested)**: MyParcel.nl (api.myparcel.nl v1.1), Sendcloud (Panel API v3).
+  - **UNVERIFIED (modelled from vendor docs, live account pending)**: DHL NL (My DHL Parcel Swagger), PostNL (Send API v2.2), DPD (eSolutions REST), UPS (v2403 Ship/Track REST), FedEx (Ship v1 + Track v1 REST). Adapters tagged `# UNVERIFIED - pending live test with account` in source; payloads may need adjustment against live accounts.
+
+### Fixed
+
+- **MyParcel NL insured shipments force `only_recipient:true` + `signature:true`** — MyParcel's own API contract requires both flags when `insurance > 0` for NL domestic shipments; omitting them returns a 422. Flagged by coderabbitai (Major).
+- **`mktemp` temp files leaked on `curl` failure** — Under `set -e`, a failed `curl` short-circuited label flows before `rm -f` ran, leaving stale PDFs in `$TMPDIR`. Fixed in myparcel, dhl, dpd, sendcloud label flows via `trap 'rm -f "$tmp"' RETURN` (scoped to the function, cleared on success path before `save_label_pdf` takes ownership). Flagged by sentry[bot] and chatgpt-codex-connector (P1).
+- **OAuth token cache written world-readable in `/tmp`** — `mktemp` inherits the ambient umask; on default systems that's 0644. Added `umask 077` before creating token cache files so only the owner can read them. Flagged by cursor[bot] (Medium).
+- **`myparcel_list` recipient concatenation NPE on missing name/city** — `jq` join of `.recipient.name` + `.recipient.city` crashed when either field was absent. Added `// empty` fallbacks. Flagged by cursor[bot] (Low).
+- **Dead code: `consume_carrier_flag` and `list_configured_carriers`** — Unused helper functions in `ops-package.sh` removed. Flagged by cursor[bot] (Low).
+- **`--carrier` without value crashed under `set -u`** — `CARRIER="$2"` expanded to unbound-variable error when user ran `ops-package.sh --carrier` with nothing after it. Now guards with `"${2:-}"` and exits 64 with a usage message. Flagged by devin-ai-integration[bot].
+- **MyParcel `Authorization` header scheme capitalization** — Changed `basic` to `Basic` to match RFC 7235 convention and MyParcel vendor docs (scheme matching is case-insensitive per spec but explicit casing avoids edge-case proxies). Flagged by coderabbitai (Minor).
+- **MyParcel list page size** — Bumped default from 10 to 30 to match the API's documented page size and reduce pagination chatter on the typical user's recent-shipment view. Flagged by chatgpt-codex-connector (P2).
+
 ## [1.6.0] — 2026-04-16
 
 ### Added

@@ -100,7 +100,9 @@ sendcloud_label() {
   fi
 
   local tmp; tmp=$(mktemp)
+  trap 'rm -f "$tmp"' RETURN
   curl -sS -H "$auth" -H "$UA_HEADER" -o "$tmp" "$pdf_url"
+  trap - RETURN
   save_label_pdf "sendcloud" "$id" "$tmp"
 }
 
