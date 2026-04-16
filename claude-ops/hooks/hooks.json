@@ -10,6 +10,10 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh 2>/dev/null | grep '✗' | head -3 || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon-manager.sh ensure-current --plugin-root ${CLAUDE_PLUGIN_ROOT} 2>/dev/null || true"
           }
         ]
       }
