@@ -21,7 +21,16 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<EOF
-Usage: ops-daemon-manager.sh <install|upgrade|uninstall|status|restart> [options]
+Usage: ops-daemon-manager.sh <install|upgrade|ensure-current|uninstall|status|restart> [options]
+
+Subcommands:
+  install         First-time install (writes plist + loads launchd)
+  upgrade         Re-point plist at PLUGIN_ROOT + reload (always reloads)
+  ensure-current  No-op if plist already points at PLUGIN_ROOT, else upgrade
+                  (cheap + idempotent — safe to run on every SessionStart)
+  restart         Unload + reload without reconfiguring
+  uninstall       Stop + remove plist
+  status          Emit JSON snapshot
 
 Options:
   --plugin-root PATH    Override auto-detected plugin root
@@ -34,7 +43,7 @@ Environment:
 Examples:
   ops-daemon-manager.sh install
   ops-daemon-manager.sh status
-  ops-daemon-manager.sh upgrade --plugin-root \$HOME/.claude/plugins/cache/ops-marketplace/ops/1.3.0
+  ops-daemon-manager.sh ensure-current
 EOF
 }
 
@@ -280,6 +289,20 @@ cmd_upgrade() {
   esac
 }
 
+cmd_ensure_current() {
+  [[ "$OS" == "macos" ]] || exit 0
+  [[ -n "$PLUGIN_ROOT" ]] && [[ -d "$PLUGIN_ROOT/scripts" ]] || exit 0
+  [[ -f "$PLIST_DEST" ]] || exit 0
+  local current_script="$PLUGIN_ROOT/scripts/ops-daemon.sh"
+  local plist_script
+  plist_script="$(mac_plist_script_path)"
+  if [[ "$plist_script" == "$current_script" ]]; then
+    exit 0
+  fi
+  log "plist points at stale version ($plist_script); upgrading to $PLUGIN_ROOT"
+  cmd_upgrade
+}
+
 cmd_uninstall() {
   case "$OS" in
     macos)
@@ -374,10 +397,11 @@ EOF
 
 # ── Dispatch ─────────────────────────────────────────────────────────────
 case "$CMD" in
-  install)   cmd_install ;;
-  upgrade)   cmd_upgrade ;;
-  uninstall) cmd_uninstall ;;
-  restart)   cmd_restart ;;
-  status)    cmd_status ;;
-  *)         usage; exit 64 ;;
+  install)        cmd_install ;;
+  upgrade)        cmd_upgrade ;;
+  ensure-current) cmd_ensure_current ;;
+  uninstall)      cmd_uninstall ;;
+  restart)        cmd_restart ;;
+  status)         cmd_status ;;
+  *)              usage; exit 64 ;;
 esac
