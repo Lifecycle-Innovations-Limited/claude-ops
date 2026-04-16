@@ -113,7 +113,14 @@ cmd_carriers() {
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --carrier) CARRIER="$2"; shift 2 ;;
+    --carrier)
+      CARRIER="${2:-}"
+      if [ -z "$CARRIER" ]; then
+        echo "ops-package.sh: --carrier requires a value (e.g. --carrier myparcel)" >&2
+        exit 64
+      fi
+      shift 2
+      ;;
     *) ARGS+=("$1"); shift ;;
   esac
 done
