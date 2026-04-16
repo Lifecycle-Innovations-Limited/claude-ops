@@ -2644,6 +2644,46 @@ For each selected project, collect these fields one `AskUserQuestion` at a time:
 - `infra.platform` → select `[aws]`, `[vercel]`, `[cloudflare]`, `[other]`
 - `revenue.model` → select in batches of 4: `[saas]`, `[subscription]`, `[marketplace]`, `[More...]` then `[internal]`, `[portfolio]`, `[other]`
 
+### Auto-discover external projects
+
+A real user's portfolio is rarely just git repos. Shopify stores, Linear teams, Slack workspaces, and Notion databases are first-class projects that `ops-external` + `ops-projects` know how to surface — but only if they land in `registry.json`. This sub-step probes whatever integrations the wizard has already configured and offers discovered items for one-click registration.
+
+```!
+${CLAUDE_PLUGIN_ROOT}/bin/ops-discover-external 2>/dev/null || echo '[]'
+```
+
+The script reads Shopify creds from `$PREFS_PATH .ecom.shopify.*` + `SHOPIFY_*` env, Linear from `LINEAR_API_KEY`, Slack from keychain `slack-xoxc`/`slack-xoxd`, and Notion from `NOTION_API_KEY` / keychain `notion-api-key`. It returns an array of candidate projects, each with a ready-to-merge `config` block.
+
+**Parse the candidates** and — for each one not already present in `registry.json` (match by `config.alias` or by `source + source-specific ID`) — present it via `AskUserQuestion`. Batch at 3 candidates per call + `[More...]` to respect Rule 1 (max 4 options). Example batch:
+
+```
+Found external projects not yet in your registry (page 1 of N):
+  [Register "mystore" (shopify — basic plan, 142 products)]
+  [Register "linear-eng" (linear — Engineering, 42 open issues)]
+  [Register "notion-roadmap" (notion — Product Roadmap database)]
+  [More candidates...]
+```
+
+On the final page, the last option becomes `[None of the remaining — skip]`. Multi-select is acceptable — if you offer it, keep the `multiSelect: true` list size ≤ 4.
+
+For each **accepted** candidate, merge its `config` block straight into `registry.json .projects[]` with `jq`:
+
+```bash
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT}"
+REG="$PLUGIN_ROOT/scripts/registry.json"
+[ -f "$REG" ] || echo '{"version":"1.0","owner":"","projects":[]}' > "$REG"
+jq --argjson new "$CONFIG_JSON" '.projects += [$new]' "$REG" > "$REG.tmp" && mv "$REG.tmp" "$REG"
+```
+
+**Status handling:**
+- `discovered` → register as-is.
+- `auth_expired` → surface a warning and route the user to `/ops:setup` for the affected channel before retrying.
+- `unreachable` → offer `[Register anyway (will show as unreachable in dashboards)]` / `[Skip]`.
+
+If the discovery script returns `[]`, print a single info line (`ℹ No external projects auto-discovered. You can add Shopify / Linear / Slack / Notion manually below.`) and continue. Never silently skip — the user must know the discovery ran.
+
+If the candidate's credential value came from an env var but the user later wants Doppler, the credential key stored in the candidate (`SHOPIFY_ADMIN_TOKEN`, etc.) is safe to replace with a `doppler:` reference later via `/ops:settings`.
+
 ### Existing registry
 
 If `registry.json` already has projects, ask first (4 options, fits in one call): `[Keep existing N projects]`, `[Add more projects]`, `[Auto-detect from existing registry]`, `[Start from scratch]`.
