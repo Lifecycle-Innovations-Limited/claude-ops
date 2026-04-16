@@ -1,6 +1,6 @@
 {
   "name": "claude-ops-bin",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "private": true,
   "description": "Runtime dependencies for claude-ops bin scripts (ops-telegram-autolink.mjs, ops-slack-autolink.mjs). Installed separately from telegram-server/ so the .mjs scripts resolve modules from claude-ops/node_modules regardless of invocation cwd.",
   "type": "module",
