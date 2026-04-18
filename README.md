@@ -4,11 +4,11 @@
 
 **Business Operating System for Claude Code**
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.7.0-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blueviolet.svg)
-![Skills](https://img.shields.io/badge/skills-25-success)
-![Agents](https://img.shields.io/badge/agents-13-informational)
+![Skills](https://img.shields.io/badge/skills-30-success)
+![Agents](https://img.shields.io/badge/agents-14-informational)
 ![Integrations](https://img.shields.io/badge/integrations-22-orange)
 ![Models](https://img.shields.io/badge/Opus%204.6%20%2F%20Sonnet%204.6%20%2F%20Haiku%204.5-ff69b4)
 
@@ -62,7 +62,7 @@ claude --plugin-dir ./claude-ops/claude-ops
 
 ## Commands
 
-All 22 skills, grouped by category:
+All 30 skills, grouped by category:
 
 | 🧭 Navigation | 📊 Daily Ops |
 |---|---|
@@ -74,16 +74,19 @@ All 22 skills, grouped by category:
 
 | 🛠️ Project & Eng | 💰 Business |
 |---|---|
-| `/ops:projects` — portfolio | `/ops:revenue` — **Stripe + RevenueCat** + AWS |
+| `/ops:projects` — **portfolio dashboard** | `/ops:revenue` — **Stripe + RevenueCat** + AWS |
 | `/ops:linear` — sprint board | `/ops:ecom` — Shopify operations |
 | `/ops:triage` — cross-platform issues | `/ops:marketing` — Klaviyo/Meta/GA4/GSC |
-| `/ops:fires` — incidents + **all AWS** | `/ops:voice` — Bland AI/ElevenLabs/Whisper |
-| `/ops:deploy` — ECS/Vercel/Actions | |
+| `/ops:fires` — incidents + **all AWS** | `/ops:gtm` — **cross-channel GTM planner** |
+| `/ops:deploy` — ECS/Vercel/Actions | `/ops:voice` — Bland AI/ElevenLabs/Whisper |
+| `/ops:monitor` — Datadog/New Relic/OTEL | `/ops:package` — carrier-agnostic shipping |
 
 | 🤖 Automation | 🧰 Maintenance |
 |---|---|
-| `/ops:orchestrate` — parallel engine | `/ops:speedup` — **OS+HW adaptive** |
+| `/ops:orchestrate` — parallel engine | `/ops:speedup` — **GPU/ANE + power hogs + OS actions** |
 | `/ops:yolo` — 4 parallel C-suite agents | `/ops:doctor` — plugin auto-repair |
+| `/ops:integrate` — add external service | `/ops:daemon` — launchd background brain |
+| `/ops:whatsapp-biz` — catalog/orders | `/ops:status` — plugin + daemon health |
 
 ### Skill routing
 
@@ -279,20 +282,16 @@ Just [Claude Code](https://claude.ai/code) 1.0+. Everything else is installed au
 
 ---
 
-## What's New in v1.1.0
+## What's New in v1.7.0
 
-- **CLAUDE.md plugin rules** — 5 non-negotiable rules enforced across every skill
-- **Shopify Admin template** + `bin/ops-shopify-create`
-- **Early daemon install at setup Step 2c** — `briefing-pre-warm` runs every 2 min so `/ops:go` loads in <3s
-- **All scanner/fix/daemon agents bumped to Sonnet 4.6** · C-suite agents on **Opus 4.6**
-- **`yolo-ceo` now runs as a parallel peer** (not synthesizer) — the main `/ops:yolo` skill synthesizes all 4 C-suite reports
-- **`/ops:revenue` tracks actual revenue** via Stripe + RevenueCat
-- **`infra-monitor` covers every accessible AWS service** (17+ services probed)
-- **`gog` install fix** — npm/bun → git-clone fallback
-- **`/ops:speedup` OS+hardware-adaptive** — macOS / Linux / WSL / Windows
-- **Agent Teams adoption** — `TeamCreate` + `SendMessage` in 6 parallel-dispatch skills
-- **AskUserQuestion ≤4 compliance** — all 22 skills audited, batch `[More options...]` bridges
-- **10-source credential auto-scan** + deep-hunt agent fallback
+- **`/gtm` — cross-channel go-to-market planner** (NEW skill). Strategy layer on top of `/ops:marketing` that generates plans across paid, unpaid, sales, and AI-automation avenues and hands launchable items to `/marketing` via the `Skill` tool.
+- **`/ops:projects` portfolio dashboard** — every project in the GSD registry with active phase, task count, dirty-file count, and open-PR status. Backed by the `gsd-registry-sync` daemon service.
+- **`ops-speedup` v2 parity** — `--gpu` (Neural Engine + GPU util via `powermetrics`), `--power` (energy hogs from `top -o pmem`), `--os-actions` (cross-platform kernel_task / WindowServer restarts + launchd/systemd masking behind an allowlist). Hardened against 9 review findings including a SEV-9 `eval` shell-injection and a SEV-8 RETURN-trap race.
+- **`ops-memory-extractor` Claude Code OAuth support** — prefers the OAuth token stored in the macOS Keychain (`Claude Code-credentials`) so memory extraction is billed against the Claude Max subscription instead of the API credit. Falls back to `ANTHROPIC_API_KEY`. The OAuth token is never exported to the shell.
+- **Persistent WhatsApp `--follow`** — `wacli-keepalive.sh` no longer tears down the follower within 5-20 min of start. `INITIAL_BACKFILL_DELAY=30` lets the follower stabilize before the first `--once` sweep, and a reentrant guard prevents overlapping sweeps.
+- **MCP auto-reconnect** — `PreToolUse` hook kills and respawns any disconnected MCP server without user prompting.
+- **30 skills, 14 agents** — up from 21/12 in v0.6.0. Full list in [`claude-ops/README.md`](./claude-ops/README.md#features).
+- **Models:** C-suite on **Opus 4.6**, scanners/monitors/fix agents on **Sonnet 4.6**, memory extractor on **Haiku 4.5**.
 
 ---
 
@@ -320,6 +319,6 @@ See [`claude-ops/README.md`](./claude-ops/README.md) for detailed documentation 
 
 <div align="center">
 
-**v1.1.0 · MIT · github.com/Lifecycle-Innovations-Limited**
+**v1.7.0 · MIT · github.com/Lifecycle-Innovations-Limited**
 
 </div>

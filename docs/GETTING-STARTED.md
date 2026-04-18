@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # Getting Started with claude-ops
 
-claude-ops v1.1.0 — Business Operating System for Claude Code. This guide takes you from zero to your first morning briefing in under five minutes.
+claude-ops v1.7.0 — Business Operating System for Claude Code. This guide takes you from zero to your first morning briefing in under five minutes.
 
 ---
 
@@ -144,7 +144,7 @@ Output looks like this:
 
 Each section (INFRA, CI/CD, INBOX, PRs, SPRINT, REVENUE) is pre-gathered by shell scripts before model context loads — no extra latency. The `briefing-pre-warm` daemon runs every 2 minutes in the background so data is always warm.
 
-From here, explore the other 21 skills — see the full command table in the root [README.md](../README.md).
+From here, explore the other 29 skills — see the full command table in the root [README.md](../README.md).
 
 ---
 
