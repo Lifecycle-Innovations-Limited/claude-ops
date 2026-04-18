@@ -49,19 +49,40 @@ cleanup() {
 trap cleanup EXIT
 
 # ── Resolve ANTHROPIC_API_KEY ─────────────────────────────────────────────────
+# Order of precedence:
+#   1. ANTHROPIC_API_KEY already exported in the environment
+#   2. macOS Keychain service "ANTHROPIC_API_KEY" (any account) — works without
+#      Doppler auth and survives plugin upgrades
+#   3. Doppler with OPS_DOPPLER_PROJECT + OPS_DOPPLER_CONFIG (or defaults)
+#   4. Plain `doppler secrets get` (uses ambient Doppler scope)
+# The daemon has no interactive Doppler auth by default, so the keychain path
+# is the reliable one for cron/launchd contexts. Seed it with:
+#   security add-generic-password -U -s ANTHROPIC_API_KEY -a ops-daemon -w sk-ant-...
 resolve_api_key() {
   if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
     return 0
   fi
-  if command -v doppler &>/dev/null; then
+  if command -v security &>/dev/null; then
     local key
-    key=$(doppler secrets get ANTHROPIC_API_KEY --plain 2>/dev/null || true)
+    key=$(security find-generic-password -s "ANTHROPIC_API_KEY" -w 2>/dev/null || true)
     if [[ -n "${key}" ]]; then
       export ANTHROPIC_API_KEY="${key}"
       return 0
     fi
   fi
-  die "ANTHROPIC_API_KEY not set and doppler unavailable"
+  if command -v doppler &>/dev/null; then
+    local key proj="${OPS_DOPPLER_PROJECT:-}" cfg="${OPS_DOPPLER_CONFIG:-}"
+    if [[ -n "${proj}" && -n "${cfg}" ]]; then
+      key=$(doppler secrets get ANTHROPIC_API_KEY --plain --project "${proj}" --config "${cfg}" 2>/dev/null || true)
+    else
+      key=$(doppler secrets get ANTHROPIC_API_KEY --plain 2>/dev/null || true)
+    fi
+    if [[ -n "${key}" ]]; then
+      export ANTHROPIC_API_KEY="${key}"
+      return 0
+    fi
+  fi
+  die "ANTHROPIC_API_KEY not set; tried env, macOS keychain (service=ANTHROPIC_API_KEY), and doppler"
 }
 
 # ── Collect raw data ──────────────────────────────────────────────────────────
