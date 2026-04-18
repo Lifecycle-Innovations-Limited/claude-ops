@@ -455,6 +455,11 @@ periodic_backfill() {
     _WACLI_BATCH_HELD=0
     release_wacli_batch
   ) &
+  # Track the subshell PID so the supervisor can wait for it before clearing
+  # BATCH_MARKER.  Without this, the supervisor can rm -f BATCH_MARKER and
+  # restart --follow while the subshell is still running backfill commands,
+  # recreating the WebSocket/store-lock race this PR is trying to eliminate.
+  _BACKFILL_PID=$!
 }
 
 # ── Write backfill summary to ops memory ────────────────────────────────
@@ -521,6 +526,11 @@ if summaries:
 # ── Persistent sync with pause-signal + periodic backfill ──────────────
 log "SYNC: starting persistent sync --follow"
 
+# PID of the most recent periodic_backfill background subshell.  The
+# supervisor waits for this before clearing BATCH_MARKER on restart so
+# that a new --follow never races an in-flight run_backfill session.
+_BACKFILL_PID=""
+
 while true; do
   # Check for pause signal before starting sync
   if check_pause_signal; then
@@ -560,6 +570,14 @@ while true; do
   if ! check_pause_signal && [[ ! -f "$BATCH_MARKER" ]]; then
     break
   fi
+  # Wait for any in-flight backfill subshell before clearing the marker and
+  # restarting --follow.  Without this, the new --follow process can overlap
+  # with run_backfill's individual wacli WebSocket calls.
+  if [[ -n "${_BACKFILL_PID:-}" ]] && kill -0 "${_BACKFILL_PID}" 2>/dev/null; then
+    log "SYNC: waiting for backfill subshell (pid=${_BACKFILL_PID}) to finish before restart"
+    wait "${_BACKFILL_PID}" 2>/dev/null || true
+  fi
+  _BACKFILL_PID=""
   # Clear any stale batch marker before restarting
   rm -f "$BATCH_MARKER"
 done

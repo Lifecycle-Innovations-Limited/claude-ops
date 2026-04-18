@@ -114,7 +114,7 @@ except Exception:
   if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
     key="${ANTHROPIC_API_KEY}"
   elif command -v security &>/dev/null; then
-    key=$(security find-generic-password -s "ANTHROPIC_API_KEY" -w 2>/dev/null || true)
+    key=$(security find-generic-password -s "ANTHROPIC_API_KEY" -a ops-daemon -w 2>/dev/null || true)
   fi
   if [[ -z "${key}" ]] && command -v doppler &>/dev/null; then
     local proj="${OPS_DOPPLER_PROJECT:-}" cfg="${OPS_DOPPLER_CONFIG:-}"
