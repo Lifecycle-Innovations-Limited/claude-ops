@@ -73,12 +73,20 @@ for base in [Path(HOME) / "Projects", Path(HOME) / "gsd-workspaces"]:
                     milestone = line.split(":",1)[1].strip()[:60]
 
         # Git info (fast, no network)
+        uncommitted = 0
         if has_git:
             try:
                 branch = subprocess.check_output(
                     ["git", "-C", str(d), "branch", "--show-current"],
                     timeout=2, stderr=subprocess.DEVNULL
                 ).strip().decode() or ""
+            except: pass
+            try:
+                dirty_out = subprocess.check_output(
+                    ["git", "-C", str(d), "status", "--porcelain"],
+                    timeout=3, stderr=subprocess.DEVNULL
+                ).decode()
+                uncommitted = len([l for l in dirty_out.splitlines() if l.strip()])
             except: pass
 
         total_phases = ""
@@ -104,6 +112,7 @@ for base in [Path(HOME) / "Projects", Path(HOME) / "gsd-workspaces"]:
             "blockers": blockers,
             "has_git": has_git,
             "branch": branch,
+            "uncommitted": uncommitted,
             "has_roadmap": roadmap.exists(),
             "has_milestones": milestones.exists(),
             "has_handoff": handoff.exists(),
@@ -124,12 +133,22 @@ projects.sort(key=sort_key)
 # Write registry.json
 REGISTRY.write_text(json.dumps({"updated": NOW, "projects": projects, "total": len(projects)}, indent=2))
 
-# Categorize for health summary
-executing = [p for p in projects if "executing" in p.get("status","").lower()]
-paused    = [p for p in projects if any(x in p.get("status","").lower() for x in ["paused","verifying","phase_complete"])]
-blocked   = [p for p in projects if any(x in p.get("status","").lower() for x in ["human","uat","blocked","pending"])]
-idle      = [p for p in projects if p.get("phase") and not p.get("status")]
-attention = [p for p in projects if int(p.get("blockers","0")) > 0]
+# Categorize for health summary (mutually exclusive, matching dashboard logic)
+executing = []
+paused = []
+blocked = []
+idle = []
+for p in projects:
+    s = p.get("status", "").lower()
+    if "executing" in s:
+        executing.append(p)
+    elif any(x in s for x in ["paused", "verifying", "phase_complete"]):
+        paused.append(p)
+    elif any(x in s for x in ["human", "uat", "blocked", "pending"]):
+        blocked.append(p)
+    else:
+        idle.append(p)
+attention = [p for p in projects if int(p.get("blockers", "0")) > 0]
 
 health = {
     "updated": NOW,
