@@ -47,7 +47,7 @@ jobs:
           echo "NOTES_FILE=/tmp/release-notes.md" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: "claude-ops v${{ steps.version.outputs.VERSION }}"
