@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.7.0] — 2026-04-18
+
+### Added
+
+- **`/gtm` — cross-channel go-to-market planning skill** (PR #141). New `ops-gtm` skill acts as a strategy layer on top of `/marketing`. Guides the operator through GTM intake (audience, positioning, constraints, targets), generates a full plan across paid, unpaid, sales, and AI-automation avenues, and persists dated plan/brief files under `${CLAUDE_PLUGIN_DATA_DIR}/gtm/`. Plan items hand off to `/marketing` sub-commands via the `Skill` tool so credential resolution and API calls stay single-sourced. Approval gates are enforced for every paid or outbound action.
+- **`ops-memory-extractor` — Claude Code OAuth support** (PR #138). The background memory extractor now prefers the Claude Code OAuth token stored in macOS Keychain (service `Claude Code-credentials`) over `ANTHROPIC_API_KEY`. Calls use `Authorization: Bearer <oauth-token>` with the `anthropic-beta: oauth-2025-04-20` header, billed against the user's Claude Max subscription instead of their API credit. Falls back to `ANTHROPIC_API_KEY` (env → keychain `anthropic-api-key` → Doppler `sharedsecrets/prd`). The OAuth token is never exported to the shell environment, avoiding the Claude Code misbehavior that occurs when `ANTHROPIC_API_KEY` is set in a parent terminal session.
+- **`/ops:projects` — portfolio dashboard** (PR #139). Renders a dashboard of every project in the GSD registry, including active phase, task count, dirty-file count, and open-PR status. Reads from `$OPS_DATA_DIR/registry.json` synced by `scripts/ops-gsd-registry-sync.sh`.
+- **`ops-speedup` v2 parity — GPU/ANE monitoring and power-hog detection** (PR #140). Full feature parity with the v1 bash script: `--gpu` reports GPU + Neural Engine utilization via `powermetrics` (macOS) with sampling-window controls, `--power` surfaces top energy consumers from `top -o pmem` / `ps -eo`, `--os-actions` performs cross-platform kernel_task / WindowServer restarts and launchd service masking behind an allowlist.
+
+### Fixed
+
+- **`scripts/wacli-keepalive.sh` — persistent `--follow` connection torn down by immediate backfill** (PR #138, reported via daemon log audit). The supervisor was invoking `wacli sync --once` on the very first supervisor tick before `--follow` had stabilized its store lock, which terminated the persistent connection within ~5-20 minutes every time. Added `INITIAL_BACKFILL_DELAY=30` seconds after follower start before the first `--once` sweep, and introduced `_WACLI_BATCH_HELD` reentrant guards to prevent overlapping sweeps. The `ops-daemon` now keeps `wacli --follow` alive indefinitely.
+- **`bin/ops-speedup` — `eval` on user-controlled strings** (PR #140, SEV-9 from Seer). Replaced `eval` with `declare -g` plus a string allowlist to close a shell-injection vector in the OS-action dispatcher.
+- **`bin/ops-speedup` — RETURN-trap race** (PR #140, SEV-8). Temp files previously leaked if the function returned mid-trap; now scoped with a local trap per function and cleared on the success path.
+- **`bin/ops-speedup` — systemd mask without allowlist** (PR #140, SEV-8). The Linux path now validates the service name against a static allowlist before calling `systemctl mask`, preventing accidental masking of critical services.
+- **`bin/ops-speedup` — `lsof +D` wedged the probe on large dirs** (PR #140, SEV-7). Replaced `+D` (recursive descent) with a bounded file-list argument so the liveness check returns in under 200 ms on any realistic directory.
+- **`bin/ops-speedup` — non-portable `mktemp`, awk field reorder, and `find` precedence** (PR #140, SEV-low trio). `mktemp` now passes an explicit template for BSD/GNU compatibility, the awk power-hog formatter orders by `%MEM` before `%CPU` (matching the help text), and `find` predicates are correctly parenthesized.
+- **`bin/ops-projects` — hardcoded developer registry path** (PR #139, SEV-9 blocker from Seer + blocksorg + cursor + devin + codex). The inline Python heredoc hardcoded `/Users/<user>/…/registry.json` inside a single-quoted heredoc, so the `$REGISTRY` shell variable never expanded and the dashboard printed `(no registry)` for every other user. Rewrote to read `OPS_DATA_DIR` from the environment inside the Python block (`import os; registry = Path(os.environ.get("OPS_DATA_DIR", os.path.expanduser("~/.claude/plugins/data/ops-ops-marketplace"))) / "registry.json"`). Also violated `CLAUDE.md Rule 0` (public repo, no personal paths).
+- **`scripts/daemon-services.default.json` — three services enabled without backing scripts** (PR #139, SEV-7 from blocksorg). `inbox-digest`, `message-listener`, and `competitor-intel` were default-enabled but their scripts were not shipped in the diff, so `message-listener` (with `max_restarts: 20`) would have log-spammed 20 restart attempts. Set `enabled: false` for all three; the daemon reconciles them back to `true` once the user configures the relevant channel during `/ops:setup`.
+- **`skills/ops-projects/SKILL.md` — `AskUserQuestion` removed from `allowed-tools` but still referenced in body** (PR #139, SEV-7 from blocksorg). Added `AskUserQuestion` back to the allowed-tools frontmatter so the interactive deep-dive flow doesn't crash with `InputValidationError`.
+
 ## [1.6.2] — 2026-04-16
 
 ### Fixed

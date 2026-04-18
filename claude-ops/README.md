@@ -1,6 +1,6 @@
 # claude-ops
 
-> **v0.6.0** — Smart Daemon · Deep Context Inbox · 21 Skills · 12 Agents · Full Plugin Feature Integration
+> **v1.7.0** — Smart Daemon · Deep Context Inbox · 30 Skills · 14 Agents · Full Plugin Feature Integration
 
 A Claude Code plugin that turns Claude into a business operating system. Run `/ops` to launch the interactive command center — a pixel-art dashboard with instant hotkey access to morning briefings, inbox management, fire alerts, deploy status, revenue tracking, and autonomous YOLO mode.
 
@@ -28,6 +28,16 @@ A Claude Code plugin that turns Claude into a business operating system. Run `/o
 | `/ops:marketing`  | Marketing analytics — email campaigns, ads (Meta/Google), SEO, social          |
 | `/ops:voice`      | Voice channel management — Bland AI calls, ElevenLabs TTS, Whisper transcribe  |
 | `/ops:orchestrate`| Autonomous multi-project work engine with parallel agents                      |
+| `/ops:gtm`        | Cross-channel go-to-market planner (paid/unpaid/sales/automation)              |
+| `/ops:package`    | Carrier-agnostic shipping (MyParcel/Sendcloud/DHL/PostNL/DPD/UPS/FedEx)        |
+| `/ops:whatsapp-biz`| WhatsApp Business catalog, product, and order operations                      |
+| `/ops:monitor`    | APM + metrics probe (Datadog/New Relic/OTEL)                                   |
+| `/ops:integrate`  | Connect new external services to the plugin partner registry                   |
+| `/ops:status`     | Current plugin + channel + daemon + registry health snapshot                   |
+| `/ops:settings`   | View/edit preferences, toggle features, rotate credentials                     |
+| `/ops:daemon`     | Start/stop/health for the launchd background daemon                            |
+| `/ops:doctor`     | Plugin config auto-diagnosis and repair                                        |
+| `/ops:uninstall`  | Clean removal — unload daemon, wipe cache, deregister marketplace              |
 
 ### Dashboard hotkeys
 
@@ -51,24 +61,27 @@ The `/ops:dash` command center provides instant navigation:
  g Share your setup              q Exit
 ```
 
-## What's New in v0.6.0
+## What's New in v1.7.0
 
-### Smart Background Daemon
-The ops-daemon runs persistently via launchd, keeping WhatsApp connected, pre-fetching briefing data every 5 minutes, detecting urgent messages, and triggering memory extraction on new conversations. Your `/ops:go` morning briefing loads instantly from cache.
+### `/gtm` — cross-channel go-to-market planner
+New strategy layer on top of `/ops:marketing`. Intakes audience, positioning, constraints, and targets, then generates a full plan across paid, unpaid, sales, and AI-automation avenues. Plan items hand off to `/ops:marketing` sub-commands via the `Skill` tool so credential resolution and API calls stay single-sourced. Approval gates are enforced for every paid or outbound action.
 
-### Deep Context Inbox
-`/ops:inbox` now reads full conversation threads (20+ messages), builds contact profile cards from cross-channel search, and drafts replies matching your language and style. It never sends without understanding the full conversation.
+### `/ops:projects` — portfolio dashboard
+Renders every project in your GSD registry with active phase, task count, dirty-file count, and open-PR status. Reads from `$OPS_DATA_DIR/registry.json` which is synced by the `gsd-registry-sync` daemon service every 5 minutes.
 
-### Memories System
-A background haiku agent extracts contact profiles, communication preferences, and conversation context from your chat history every 30 minutes. All skills use these memories for personalized, context-aware responses.
+### `ops-speedup` v2 parity
+Full feature parity with the legacy v1 bash script: `--gpu` reports GPU + Neural Engine utilization via `powermetrics` (macOS), `--power` surfaces top energy consumers from `top -o pmem` / `ps -eo`, `--os-actions` performs cross-platform kernel_task / WindowServer restarts and launchd/systemd service masking behind an allowlist.
 
-### Doppler + Password Manager Integration
-`/ops:setup` detects and configures Doppler for secrets management and 1Password/Dashlane/Bitwarden for credential vaults. All skills resolve secrets through the configured chain automatically.
+### `ops-memory-extractor` — Claude Code OAuth
+The background memory extractor now prefers the Claude Code OAuth token stored in macOS Keychain (`Claude Code-credentials`) over `ANTHROPIC_API_KEY`. Calls are billed against your Claude Max subscription instead of your API credit. The token is never exported to the shell environment, so parent terminal sessions stay unaffected. Falls back to `ANTHROPIC_API_KEY` (env → keychain → Doppler).
+
+### Persistent WhatsApp follower
+`scripts/wacli-keepalive.sh` now keeps `wacli --follow` alive indefinitely. Previously the supervisor invoked `wacli sync --once` on the first tick before `--follow` had stabilized its store lock, which tore down the persistent connection every 5-20 minutes. Fixed via `INITIAL_BACKFILL_DELAY=30` plus a reentrant guard against overlapping sweeps.
 
 ### Full Plugin Feature Adoption
-- All 21 skills: `effort`, `maxTurns`, `disallowedTools`, `model` annotations
-- All 12 agents: `memory` (cross-session learning), `initialPrompt`, `isolation`
-- PreToolUse hooks for WhatsApp health checks
+- All 30 skills: `effort`, `maxTurns`, `disallowedTools`, `model` annotations
+- All 14 agents: `memory` (cross-session learning), `initialPrompt`, `isolation`
+- PreToolUse hooks for WhatsApp health checks and MCP auto-reconnect
 - Runtime Context loading in every skill (preferences, daemon health, memories, secrets)
 - CLI/API reference tables in all operational skills
 
@@ -266,7 +279,7 @@ After the report, type `YOLO` to hand over the controls — Claude will autonomo
 │                  Claude Code                      │
 │  ┌──────────┐ ┌──────────┐ ┌──────────────────┐ │
 │  │  Skills   │ │  Agents  │ │     Hooks        │ │
-│  │  (21)     │ │  (12)    │ │  PreToolUse      │ │
+│  │  (30)     │ │  (14)    │ │  PreToolUse      │ │
 │  │  /ops:*   │ │  yolo-*  │ │  SessionStart    │ │
 │  └────┬──────┘ └────┬─────┘ │  Stop            │ │
 │       │              │       └──────────────────┘ │
@@ -311,7 +324,9 @@ This runs shell scripts *before* the model context is loaded, so data is pre-gat
 | `agents/triage-agent.md` | Issue triage and fix dispatch (worktree-isolated) |
 | `agents/daemon-agent.md` | Daemon start/stop/health management |
 | `agents/doctor-agent.md` | Plugin config diagnosis and auto-repair |
-| `agents/memory-extractor.md` | Contact profile and context extraction (Haiku) |
+| `agents/memory-extractor.md` | Contact profile and context extraction (Haiku, prefers Claude Code OAuth) |
+| `agents/marketing-optimizer.md` | Parses marketing-dash output and proposes next-step campaigns |
+| `agents/monitor-agent.md` | APM/metrics probe (Datadog/New Relic/OTEL) |
 | `agents/yolo-ceo.md` | CEO perspective (Opus, high effort) |
 | `agents/yolo-cto.md` | CTO perspective |
 | `agents/yolo-cfo.md` | CFO perspective |
