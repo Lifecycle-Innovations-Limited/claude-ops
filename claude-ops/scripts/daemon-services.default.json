@@ -35,25 +35,25 @@
       "_note": "Scans ~/Projects and ~/gsd-workspaces for GSD .planning/ dirs, updates central registry and projects_health cache. Runs at 6am and 6pm daily."
     },
     "inbox-digest": {
-      "enabled": true,
+      "enabled": false,
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-inbox-digest.sh",
       "cron": "0 */4 * * *",
-      "_note": "Aggregates all configured channels (WhatsApp, Email, Telegram, Slack) every 4 hours."
+      "_note": "Aggregates all configured channels (WhatsApp, Email, Telegram, Slack) every 4 hours. Script not yet landed — re-enable when ops-cron-inbox-digest.sh is added."
     },
     "message-listener": {
-      "enabled": true,
+      "enabled": false,
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-message-listener.sh",
       "interval": "continuous",
       "health_file": "~/.claude/plugins/data/ops-ops-marketplace/listener-health.txt",
       "restart_delay": 30,
       "max_restarts": 20,
-      "_note": "Persistent poller for WhatsApp and Telegram."
+      "_note": "Persistent poller for WhatsApp and Telegram. Script not yet landed — re-enable when ops-message-listener.sh is added."
     },
     "competitor-intel": {
-      "enabled": true,
+      "enabled": false,
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-competitor-intel.sh",
       "cron": "0 10 * * 1",
-      "_note": "Weekly competitor intelligence report every Monday at 10am."
+      "_note": "Weekly competitor intelligence report every Monday at 10am. Script not yet landed — re-enable when ops-cron-competitor-intel.sh is added."
     }
   }
 }
