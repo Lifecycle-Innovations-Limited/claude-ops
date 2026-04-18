@@ -63,7 +63,8 @@ for base in [Path(HOME) / "Projects", Path(HOME) / "gsd-workspaces"]:
                 blockers = str(len(h.get("blockers",[])))
             except: pass
 
-        elif state.exists():
+        # Fall back to STATE.md if HANDOFF.json is missing or yielded no phase/status
+        if not phase and not status and state.exists():
             for line in state.read_text().splitlines():
                 if line.startswith("Current Phase"):
                     phase = line.split(":",1)[1].strip()[:20]
