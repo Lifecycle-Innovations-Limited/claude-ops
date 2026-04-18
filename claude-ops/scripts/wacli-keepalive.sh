@@ -344,9 +344,14 @@ if missed:
   release_wacli_batch
 }
 
-auto_detect_empty_chats
-detect_missed_messages
-run_backfill
+# NOTE: initial backfill is NOT run here. Running `wacli history backfill`
+# N times before persistent sync --follow is established causes each
+# subprocess to open its own WebSocket to web.whatsapp.com; with dozens of
+# queued chats this races the DNS lookup and saturates WhatsApp's new-session
+# rate limit, yielding `failed to dial whatsapp web websocket` or 30s
+# on-demand history sync timeouts. Instead, we let periodic_backfill below
+# pick up the work AFTER --follow is connected — it pauses --follow,
+# reuses the warm session, and resumes. See LAST_BACKFILL_TIME=0 below.
 
 # ── Wacli data cache for daemon consumption ─────────────────────────────
 # Write chat/message data to JSON cache so the daemon never calls wacli directly.
@@ -410,7 +415,13 @@ check_pause_signal() {
 
 # ── Periodic backfill in background ─────────────────────────────────────
 # Runs every BACKFILL_INTERVAL during persistent sync. Non-blocking.
-LAST_BACKFILL_TIME=$(date +%s)
+# LAST_BACKFILL_TIME=0 forces the first check to fire immediately once
+# --follow is running (see supervisor loop below), replacing the pre-follow
+# backfill that used to live at line 347. The first pass does the same work
+# (auto_detect_empty_chats + detect_missed_messages + run_backfill) but runs
+# it through the warm --follow session via acquire_wacli_batch instead of
+# spinning up N parallel wacli processes that race for a fresh WebSocket.
+LAST_BACKFILL_TIME=0
 
 periodic_backfill() {
   local now
