@@ -6,6 +6,7 @@
 set -euo pipefail
 
 OPS_DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+export OPS_DATA_DIR  # ensure Python subprocess sees the same path
 REGISTRY="$OPS_DATA_DIR/registry.json"
 HEALTH="$OPS_DATA_DIR/cache/projects_health.json"
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -151,9 +152,19 @@ case "$MODE" in
   sync-dashboard)
     sync_and_show ;;
   json)
-    cat "$REGISTRY" ;;
+    if [[ -f "$REGISTRY" ]]; then
+      cat "$REGISTRY"
+    else
+      echo '{"error":"registry not found — run /ops projects --sync to build it"}' >&2
+      exit 1
+    fi ;;
   health)
-    cat "${HEALTH}" ;;
+    if [[ -f "$HEALTH" ]]; then
+      cat "$HEALTH"
+    else
+      echo '{"error":"health cache not found — run /ops projects --sync first"}' >&2
+      exit 1
+    fi ;;
   *)
     show_dashboard ;;
 esac

@@ -8,6 +8,7 @@ allowed-tools:
   - Grep
   - Glob
   - WebFetch
+  - AskUserQuestion
 effort: low
 maxTurns: 20
 disallowedTools:
