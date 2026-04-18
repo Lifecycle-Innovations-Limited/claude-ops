@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # Architecture
 
-claude-ops is a Claude Code plugin (v1.1.0) that installs as a business operating system on top of the Claude Code CLI. It exposes 22 slash-command skills that orchestrate 12 autonomous agents, a persistent background daemon, and a bundled Telegram MCP server. The primary inputs are tool calls from Claude Code sessions; the primary outputs are structured reports, drafted communications, and autonomous code/infrastructure actions executed via shell and API calls.
+claude-ops is a Claude Code plugin (v1.7.0) that installs as a business operating system on top of the Claude Code CLI. It exposes 30 slash-command skills that orchestrate 14 autonomous agents, a persistent background daemon, and a bundled Telegram MCP server. The primary inputs are tool calls from Claude Code sessions; the primary outputs are structured reports, drafted communications, and autonomous code/infrastructure actions executed via shell and API calls.
 
 ---
 
@@ -10,8 +10,8 @@ claude-ops is a Claude Code plugin (v1.1.0) that installs as a business operatin
 ```mermaid
 graph TD
     User["User (Claude Code session)"]
-    Skills["Skills Layer\n22 slash commands\nskills/<name>/SKILL.md"]
-    Agents["Agents Layer\n12 autonomous agents\nagents/<name>.md"]
+    Skills["Skills Layer\n30 slash commands\nskills/<name>/SKILL.md"]
+    Agents["Agents Layer\n14 autonomous agents\nagents/<name>.md"]
     Daemon["ops-daemon\nlaunchd-managed\nscripts/ops-daemon.sh"]
     Hooks["Hooks\nhooks/hooks.json"]
     Bin["Bin Scripts\nbin/ops-*"]

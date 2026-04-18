@@ -2,10 +2,10 @@
 
 # Agents Reference
 
-*All 12 agents that power claude-ops — scanners, fixers, C-suite analysts, and the daemon brain*
+*All 14 agents that power claude-ops — scanners, fixers, C-suite analysts, and the daemon brain*
 
-[![version](https://img.shields.io/badge/version-1.1.0-blue)](../CHANGELOG.md)
-[![agents](https://img.shields.io/badge/agents-12-8b5cf6)](.)
+[![version](https://img.shields.io/badge/version-1.7.0-blue)](../CHANGELOG.md)
+[![agents](https://img.shields.io/badge/agents-14-8b5cf6)](.)
 [![sonnet](https://img.shields.io/badge/model-sonnet--4--6-6366f1)](.)
 [![opus](https://img.shields.io/badge/model-opus--4--6-ef4444)](.)
 [![haiku](https://img.shields.io/badge/model-haiku--4--5-22c55e)](.)
@@ -14,7 +14,7 @@
 
 ---
 
-All 12 agents in claude-ops v1.1.0. Agent files live in `agents/`.
+All 14 agents in claude-ops v1.7.0. Agent files live in `agents/`.
 
 > [!NOTE]
 > Agents are spawned by skills — they are not invoked directly. Each has a `memory` scope for cross-session learning and a defined `effort` level that controls token budget.
