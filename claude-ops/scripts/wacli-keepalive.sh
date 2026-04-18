@@ -429,8 +429,14 @@ check_pause_signal() {
 # reusing the warm session via acquire_wacli_batch.
 INITIAL_BACKFILL_DELAY="${INITIAL_BACKFILL_DELAY:-30}"
 LAST_BACKFILL_TIME=$(( $(date +%s) - BACKFILL_INTERVAL + INITIAL_BACKFILL_DELAY ))
+_BACKFILL_PID=""
 
 periodic_backfill() {
+  # Skip if a previous backfill subshell is still running.
+  if [[ -n "${_BACKFILL_PID}" ]] && kill -0 "$_BACKFILL_PID" 2>/dev/null; then
+    return 0
+  fi
+
   local now
   now=$(date +%s)
   if (( now - LAST_BACKFILL_TIME < BACKFILL_INTERVAL )); then return 0; fi
@@ -452,13 +458,10 @@ periodic_backfill() {
       write_backfill_memory
     fi
 
-    _WACLI_BATCH_HELD=0
-    release_wacli_batch
+    # INVARIANT: BATCH_MARKER is NOT removed here — the supervisor
+    # wait-s on _BACKFILL_PID then clears the marker itself, preventing
+    # a race where the marker vanishes before the supervisor checks it.
   ) &
-  # Track the subshell PID so the supervisor can wait for it before clearing
-  # BATCH_MARKER.  Without this, the supervisor can rm -f BATCH_MARKER and
-  # restart --follow while the subshell is still running backfill commands,
-  # recreating the WebSocket/store-lock race this PR is trying to eliminate.
   _BACKFILL_PID=$!
 }
 
@@ -564,21 +567,21 @@ while true; do
     sleep 5
   done
 
+  # If a backfill subshell is running, wait for it before deciding whether
+  # to restart sync. This prevents restarting --follow while the subshell
+  # is still doing wacli operations against the store.
+  if [[ -n "${_BACKFILL_PID}" ]] && kill -0 "$_BACKFILL_PID" 2>/dev/null; then
+    log "SYNC: waiting for periodic_backfill pid=$_BACKFILL_PID to finish"
+    wait "$_BACKFILL_PID" 2>/dev/null || true
+  fi
+  _BACKFILL_PID=""
+
   # If sync exited on its own (not paused, not batch-killed), break out.
   # A batch kill is a deliberate self-pause from refresh_wacli_cache et al
   # — we always want to restart sync after a batch completes.
   if ! check_pause_signal && [[ ! -f "$BATCH_MARKER" ]]; then
     break
   fi
-  # Wait for any in-flight backfill subshell before clearing the marker and
-  # restarting --follow.  Without this, the new --follow process can overlap
-  # with run_backfill's individual wacli WebSocket calls.
-  if [[ -n "${_BACKFILL_PID:-}" ]] && kill -0 "${_BACKFILL_PID}" 2>/dev/null; then
-    log "SYNC: waiting for backfill subshell (pid=${_BACKFILL_PID}) to finish before restart"
-    wait "${_BACKFILL_PID}" 2>/dev/null || true
-  fi
-  _BACKFILL_PID=""
-  # Clear any stale batch marker before restarting
   rm -f "$BATCH_MARKER"
 done
 
