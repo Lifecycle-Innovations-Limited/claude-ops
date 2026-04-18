@@ -134,7 +134,7 @@ Actions:
   [4] Run /ops projects (back to portfolio)
 ```
 
-Use `AskUserQuestion` with up to 4 options.
+Present numbered actions and let the user pick by typing the number or action name.
 
 ---
 
