@@ -17,359 +17,222 @@ maxTurns: 30
 Before scanning, load:
 1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `timezone` for timestamps
 
-
 # OPS > SPEEDUP — System Optimizer
 
-## CLI/API Reference
+## Architecture
 
-### ops-speedup bin script
+The `bin/ops-speedup` binary is the single source of truth for probes AND actions. This skill's job is to:
+1. Call the binary with the right flags based on user intent
+2. Parse the JSON
+3. Present a health score + cleanup report
+4. Confirm destructive actions per plugin Rule 5
+5. Invoke the binary's clean/deep/aggressive modes to execute
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `${CLAUDE_PLUGIN_ROOT}/bin/ops-speedup` | Visual header + quick scan | Formatted ASCII output |
-| `${CLAUDE_PLUGIN_ROOT}/bin/ops-speedup --json` | Machine-readable diagnostics | JSON with disk, memory, process data |
-| `zsh ~/.claude/scripts/speedup.sh` | macOS comprehensive cleanup script | Autonomous cleanup with progress |
+## CLI Reference — `bin/ops-speedup`
 
-### System commands used
+| Command | Purpose | Side effects |
+|---------|---------|--------------|
+| `ops-speedup` | Visual banner + hardware summary | None |
+| `ops-speedup --json` | Quick JSON diagnostics (disk/mem/net only) | None |
+| `ops-speedup --scan` | Full parallel probe: disk + mem + CPU hogs + power hogs + GPU/ANE + startup | None |
+| `ops-speedup --clean` | Safe cleanup: caches, tmp, logs, demote daemons, DNS flush, kernel tune | Non-destructive |
+| `ops-speedup --deep` | `--clean` + Trash, DerivedData, simulators, animation cuts, launch-agent kill | Removes files |
+| `ops-speedup --aggressive` | `--deep` + unload launch agents, docker `--volumes`, stale `node_modules` (>14d), TCP BBR | Potentially breaking — confirm first |
 
-| Command | Purpose |
-|---------|---------|
-| `diskutil apfs list` | Purgeable space on APFS volumes |
-| `vm_stat` | macOS memory pressure and page stats |
-| `ps aux -m` / `ps aux --sort=-%mem` | Top processes by CPU/RAM |
-| `brew outdated --json` / `brew cleanup --dry-run` | Homebrew cache analysis |
-| `xcrun simctl list runtimes` / `xcrun simctl delete unavailable` | Xcode simulator management |
-| `tmutil listlocalsnapshots /` | Time Machine local snapshots |
-| `launchctl list` / `launchctl bootout` | Launch agent management |
-| `sudo dscacheutil -flushcache` + `sudo killall -HUP mDNSResponder` | macOS DNS flush |
-| `sudo systemd-resolve --flush-caches` | Linux DNS flush |
-| `journalctl --vacuum-time=7d` | Linux journal log cleanup |
+All modes:
+- Auto-detect OS (macOS / Linux / WSL / Windows) and dispatch OS-specific ops
+- Idempotent — skip DerivedData/Metro/journal if last run was <1h ago
+- Write telemetry to `~/.ops-speedup/history.jsonl`
+- Only raise kernel tuning parameters, never lower
+- Protected processes list blocks killing of shells, IDEs, daemons
 
----
+## OS-specific capabilities
 
-## Phase 1 — Visual header + system scan
+| Capability | macOS | Linux | WSL | Windows |
+|------------|-------|-------|-----|---------|
+| Disk reclaimable scan | ✓ | ✓ | ✓ | limited |
+| Memory + swap | ✓ | ✓ | ✓ | limited |
+| CPU hog kill | ✓ | ✓ | ✓ | — |
+| Power/Energy Impact | ✓ (`top -stats power`) | ✓ (`powertop`) | — | — |
+| GPU/Neural Engine | ✓ (`powermetrics`) | ✓ (`nvidia-smi`) | — | — |
+| Launch agent offenders | ✓ | — | — | — |
+| systemd unit masking | — | ✓ | ✓ | — |
+| E-core demotion | ✓ (`taskpolicy -b`) | ✓ (`renice`+`ionice`) | ✓ | — |
+| UI animation cuts | ✓ | — | — | — |
+| Kernel tune (vnodes/somaxconn) | ✓ | ✓ | ✓ | — |
+| TCP BBR | — | ✓ (aggressive) | ✓ (aggressive) | — |
+| DNS flush | ✓ (dscacheutil) | ✓ (resolved) | ✓ (via Windows) | — |
+| Memory purge | ✓ (`purge`) | ✓ (drop_caches) | ✓ | — |
+| Stale build dir prune (>14d) | ✓ | ✓ | ✓ | — |
+
+## Phase 1 — Visual header
 
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-speedup 2>/dev/null || echo "SCAN_FAILED"
 ```
 
-## Phase 2 — Deep diagnostic scan
-
-Gather full diagnostics (the --json flag returns machine-readable data):
+## Phase 2 — Full diagnostic scan (parallel, all probes)
 
 ```!
-${CLAUDE_PLUGIN_ROOT}/bin/ops-speedup --json 2>/dev/null || echo '{}'
+${CLAUDE_PLUGIN_ROOT}/bin/ops-speedup --scan 2>/dev/null || echo '{}'
 ```
 
-## macOS fast path
+The binary already runs all probes in parallel. Do NOT add additional serial probe calls from this skill — they will duplicate work that's already in the JSON output.
 
-On macOS, there's an existing comprehensive speedup script at `~/.claude/scripts/speedup.sh`. For `auto`, `clean`, or `deep` modes, run it directly:
+## Phase 3 — Health score + cleanup report
 
-```bash
-zsh ~/.claude/scripts/speedup.sh
-```
-
-This handles process cleanup, memory optimization, disk cleanup, network optimization, and more — all autonomously. The ops-speedup adds the visual dashboard wrapper and cross-platform support on top.
-
-## Your task
-
-Parse the diagnostic JSON and present an actionable cleanup report. Then execute cleanup actions the user approves. Run ALL diagnostic probes in parallel — never sequential when independent.
-
-### OS-specific scan additions
-
-After parsing the pre-gathered JSON, run these **parallel** additional scans based on detected OS:
-
-#### macOS additional scans
-
-```bash
-# Parallel scans — run all at once
-# 1. Homebrew outdated
-brew outdated --json 2>/dev/null | jq 'length' || echo "0"
-
-# 2. Simulator runtimes (Xcode)
-xcrun simctl list runtimes 2>/dev/null | grep -c "unavailable" || echo "0"
-
-# 3. Old iOS device support files
-du -sm ~/Library/Developer/Xcode/iOS\ DeviceSupport 2>/dev/null | awk '{print $1}' || echo "0"
-
-# 4. Homebrew cleanup potential
-brew cleanup --dry-run 2>/dev/null | tail -1 || echo "nothing"
-
-# 5. Time Machine local snapshots
-tmutil listlocalsnapshots / 2>/dev/null | wc -l | tr -d ' ' || echo "0"
-
-# 6. System caches
-du -sm ~/Library/Caches 2>/dev/null | awk '{print $1}' || echo "0"
-
-# 7. Application caches (Electron apps)
-du -sm ~/Library/Application\ Support/Slack/Cache 2>/dev/null | awk '{print $1}' || echo "0"
-du -sm ~/Library/Application\ Support/discord/Cache 2>/dev/null | awk '{print $1}' || echo "0"
-du -sm ~/Library/Application\ Support/Code/Cache 2>/dev/null | awk '{print $1}' || echo "0"
-
-# 8. Disabled SIP check
-csrutil status 2>/dev/null || echo "unknown"
-
-# 9. Spotlight indexing status
-mdutil -s / 2>/dev/null || echo "unknown"
-
-# 10. Purgeable space
-diskutil apfs list 2>/dev/null | grep -i "purgeable" || echo "unknown"
-```
-
-#### Linux additional scans
-
-```bash
-# 1. Old kernels
-dpkg --list 'linux-image-*' 2>/dev/null | grep ^ii | wc -l || rpm -qa kernel 2>/dev/null | wc -l || echo "?"
-
-# 2. Package cache
-du -sm /var/cache/apt/archives 2>/dev/null | awk '{print $1}' || du -sm /var/cache/yum 2>/dev/null | awk '{print $1}' || echo "0"
-
-# 3. Journal logs
-journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[MG]' || echo "?"
-
-# 4. Orphan packages
-apt list --installed 2>/dev/null | wc -l || echo "?"
-
-# 5. Systemd failed units
-systemctl --failed --no-pager 2>/dev/null | grep -c "loaded" || echo "0"
-```
-
----
-
-## Phase 3 — Present cleanup report
+Parse the JSON and render:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- OPS > SYSTEM SPEEDUP — [OS] [version] [chip]
+ OPS > SYSTEM SPEEDUP — [os] [os_version] [chip]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
  HEALTH SCORE: [0-100] / 100  [████████░░ 80%]
 
  DISK                                    RECLAIMABLE
  ────────────────────────────────────────────────────
- Brew cache          [N] MB              ✓ safe
+ brew cache          [N] MB              ✓ safe
  npm cache           [N] MB              ✓ safe
+ pnpm cache          [N] MB              ✓ safe
  Xcode DerivedData   [N] MB              ✓ safe
  Xcode DeviceSupport [N] MB              ✓ safe
- Docker unused       [N] MB              ✓ safe
- System caches       [N] MB              ⚠ review
- App caches          [N] MB              ✓ safe
+ Docker reclaimable  [N] MB              ✓ safe
+ Metal shader cache  [N] MB              ✓ safe
  Trash               [N] MB              ✓ safe
  Logs                [N] MB              ✓ safe
  Downloads           [N] MB              ⚠ review
+ Caches (general)    [N] MB              ⚠ review
  /tmp                [N] MB              ✓ safe
+ apt/journal         [N] MB              ✓ safe (linux)
  ────────────────────────────────────────────────────
  TOTAL RECLAIMABLE:  [N] GB
 
  MEMORY
  ────────────────────────────────────────────────────
- Pressure:    [N]%    Swap: [N] MB
- Processes:   [N]
- Top CPU:     [process] ([N]%)
- Top RAM:     [process] ([N] MB)
+ Pressure:    [N]% free    Swap: [N] MB    Free: [N] MB
 
  NETWORK
  ────────────────────────────────────────────────────
- DNS:         [N]ms   (< 50ms = good)
+ Interface:   [iface]      DNS: [N]ms
 
  STARTUP
  ────────────────────────────────────────────────────
- Login items:   [N]
- Launch agents: [N]
+ Login items:   [N]              (macOS)
+ Launch agents: [N]              (macOS)
+ Failed units:  [N]              (Linux)
+ Enabled units: [N]              (Linux)
 
-──────────────────────────────────────────────────────
- Cleanup options:
-──────────────────────────────────────────────────────
-```
-
-Use **batched AskUserQuestion calls** (max 4 options each):
-
-AskUserQuestion call 1 — Cleanup:
-```
-  [Quick clean — caches, tmp, logs (~[N] GB)]
-  [Full clean — + trash, brew, npm, docker (~[N] GB)]
-  [Deep clean — + DerivedData, simulators (~[N] GB)]
-  [More options...]
-```
-
-AskUserQuestion call 2 (only if "More options..."):
-```
-  [Custom — pick what to clean]
-  [Memory — kill top RAM hogs]
-  [Startup / Network / Skip...]
-```
-
-AskUserQuestion call 3 (only if "Startup / Network / Skip..."):
-```
-  [Startup — review & disable launch agents]
-  [Network — flush DNS, optimize resolver]
-  [Skip — just show the report]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 **Health score calculation:**
 - Start at 100
 - Disk > 90% used: -20
 - Disk > 80% used: -10
-- RAM pressure > 80%: -15
-- RAM pressure > 60%: -5
+- RAM pressure < 20% free: -15
+- RAM pressure < 40% free: -5
 - Swap > 1GB: -10
 - DNS > 100ms: -5
-- > 500 processes: -5
-- > 10 launch agents: -5
+- > 10 launch agents (macOS) or > 3 failed systemd units (Linux): -5
 - > 5GB reclaimable: -10
 - > 10GB reclaimable: -20
 
-Use AskUserQuestion for the user's choice.
+## Phase 4 — Present cleanup choice (max 4 options per AskUserQuestion)
 
----
-
-## Phase 4 — Execute cleanup
-
-**Before executing any cleanup**, use `AskUserQuestion` to confirm the scope and estimated impact:
-
+AskUserQuestion call 1 — Cleanup scope:
 ```
-About to run [quick/full/deep] clean:
-  Brew cache:        [N] MB  ✓
-  npm cache:         [N] MB  ✓
-  Logs:              [N] MB  ✓
-  Tmp files:         [N] MB  ✓
-  [Full: Trash:      [N] MB  ✓]
-  [Full: Docker:     [N] MB  ✓]
-  [Deep: DerivedData [N] MB  ✓]
-  [Deep: Simulators  [N] count ✓]
-  ────────────────────────────
-  Total:             ~[N] GB
-
-  [Proceed]  [Switch to custom — pick categories]  [Cancel]
+  [Quick — caches, tmp, logs, DNS flush (~[N] GB)]
+  [Deep — + Trash, DerivedData, simulators, animation cuts (~[N] GB)]
+  [Aggressive — + launch-agent unload, stale node_modules, docker volumes (~[N] GB)]
+  [More options...]
 ```
 
-### Quick clean (option 1)
+AskUserQuestion call 2 (only if "More options..."):
+```
+  [Custom — pick categories]
+  [Memory — kill top RAM hogs]
+  [Startup / Network / Skip...]
+```
+
+AskUserQuestion call 3 (only if "Startup / Network / Skip..."):
+```
+  [Startup — review & disable launch agents / systemd units]
+  [Network — flush DNS, tune TCP, BBR (aggressive)]
+  [Skip — just show the report]
+```
+
+## Phase 5 — Confirm destructive actions per Rule 5
+
+Per plugin Rule 5, destructive actions require explicit per-action confirmation. Before running `--aggressive`:
+
+```
+About to run AGGRESSIVE cleanup. Each item is destructive:
+
+  • Unload launch agents: [list]
+  • Docker volume prune (may delete unmounted volumes): [N] MB
+  • Stale node_modules (>14 days): [list of paths]
+  • TCP congestion control → BBR (Linux only)
+
+  [Proceed with all]  [Pick categories]  [Cancel]
+```
+
+If "Pick categories", batch per Rule 1 (max 4 options per `AskUserQuestion`).
+
+## Phase 6 — Execute
+
+Invoke the binary directly — it handles OS detection and dispatch:
 
 ```bash
-# macOS
-brew cleanup 2>/dev/null
-npm cache clean --force 2>/dev/null
-rm -rf ~/Library/Logs/*.log 2>/dev/null
-rm -rf /tmp/ops-* /tmp/yolo-* /tmp/claude-* 2>/dev/null
+# Quick clean
+${CLAUDE_PLUGIN_ROOT}/bin/ops-speedup --clean
 
-# Linux
-sudo apt-get autoclean 2>/dev/null || sudo yum clean all 2>/dev/null
-npm cache clean --force 2>/dev/null
-sudo journalctl --vacuum-time=7d 2>/dev/null
+# Deep clean
+${CLAUDE_PLUGIN_ROOT}/bin/ops-speedup --deep
+
+# Aggressive (after confirmation)
+${CLAUDE_PLUGIN_ROOT}/bin/ops-speedup --aggressive
 ```
 
-### Full clean (option 2)
+**Memory hog killing (option 5 from Phase 4):**
 
-Quick clean PLUS:
+Top processes are already in the scan JSON (`cpu_hogs` / `power_hogs`). Present them in paginated `AskUserQuestion` calls (max 3 processes + `[More...]` per page, final page has `[Kill selected]` + `[Skip]`).
 
-```bash
-# macOS
-rm -rf ~/.Trash/* 2>/dev/null
-brew autoremove 2>/dev/null
-docker system prune -f 2>/dev/null
+**NEVER kill**: kernel_task, launchd, WindowServer, loginwindow, Finder, Dock, systemd, init, shells (bash/zsh/fish), tmux, IDE processes (Cursor/Comet/Code), Claude, node, python, Xcode. The binary's PROTECTED_RE regex blocks these automatically.
 
-# Linux
-rm -rf ~/.local/share/Trash/files/* 2>/dev/null
-docker system prune -f 2>/dev/null
-```
+## Phase 7 — Results
 
-### Deep clean (option 3)
-
-Full clean PLUS:
-
-```bash
-# macOS only
-rm -rf ~/Library/Developer/Xcode/DerivedData/* 2>/dev/null
-xcrun simctl delete unavailable 2>/dev/null
-rm -rf ~/Library/Caches/com.apple.dt.Xcode 2>/dev/null
-```
-
-### Custom (option 4)
-
-Show each category with size and let user toggle on/off.
-
-### Memory (option 5)
-
-Show top 10 processes by RAM. Use **batched AskUserQuestion calls** with `multiSelect` (max 4 options per call) to let user pick which to kill. Paginate at 3 processes + `[More processes...]` per page, with `[Kill selected]` and `[Skip]` on the final page:
-
-AskUserQuestion call 1:
-```
-  [ ] [process] — [N] MB (PID [N])
-  [ ] [process] — [N] MB (PID [N])
-  [ ] [process] — [N] MB (PID [N])
-  [ ] More processes...
-```
-
-Continue batching until all processes shown, then final call:
-```
-  [ ] [process] — [N] MB (PID [N])
-  [Kill selected]
-  [Skip]
-```
-
-```bash
-# macOS
-ps aux -m | head -11
-
-# Linux
-ps aux --sort=-%mem | head -11
-```
-
-**NEVER kill**: Finder, WindowServer, kernel_task, systemd, init, loginwindow, Claude.
-
-### Startup (option 6)
-
-List launch agents with toggle:
-
-```bash
-# macOS
-ls -la ~/Library/LaunchAgents/ 2>/dev/null
-launchctl list 2>/dev/null | grep -v "com.apple" | head -20
-```
-
-Offer to disable selected agents:
-```bash
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/<plist> 2>/dev/null
-```
-
-### Network (option 7)
-
-```bash
-# macOS
-sudo dscacheutil -flushcache 2>/dev/null
-sudo killall -HUP mDNSResponder 2>/dev/null
-
-# Linux
-sudo systemd-resolve --flush-caches 2>/dev/null || sudo resolvectl flush-caches 2>/dev/null
-```
-
-Optionally test and suggest switching to faster DNS (1.1.1.1 or 8.8.8.8).
-
----
-
-## Phase 5 — Results
-
-After cleanup:
+After cleanup, re-scan and diff:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  OPS > CLEANUP COMPLETE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  Reclaimed:  [N] GB
- Disk free:  [before] GB -> [after] GB
- Health:     [before]/100 -> [after]/100
+ Disk free:  [before] GB → [after] GB
+ RAM free:   [before] MB → [after] MB
+ Swap:       [before] MB → [after] MB
+ Health:     [before]/100 → [after]/100
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+History: ~/.ops-speedup/history.jsonl
 ```
 
 If user came from `/ops:dash`, offer `b) Back to dashboard`.
 
----
-
 ## Mode shortcuts
 
 If `$ARGUMENTS` is:
-- `scan` or empty — run Phase 1-3 only (report, no cleanup)
-- `clean` — run quick clean automatically (no menu)
-- `deep` — run deep clean automatically (no menu)
-- `auto` — run full clean automatically, report results
+- `scan` or empty — Phase 1-3 only (report, no cleanup)
+- `clean` — run `ops-speedup --clean` automatically (safe)
+- `deep` — run `ops-speedup --deep` automatically (after 1 confirmation)
+- `auto` — run `ops-speedup --clean` automatically, print results
+- `aggressive` — run `ops-speedup --aggressive` after per-item confirmations
+
+## Trend analysis
+
+`~/.ops-speedup/history.jsonl` is append-only. For trend questions ("is my disk filling up?", "is swap growing over time?"), read + graph:
+
+```bash
+tail -30 ~/.ops-speedup/history.jsonl | jq -r '[.ts, .ram_free_mb, .swap_mb, .disk_pct] | @tsv'
+```
