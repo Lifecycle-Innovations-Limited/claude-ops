@@ -55,7 +55,7 @@ trap cleanup EXIT
 #      signed into Claude Code on this machine. Skipped if the token is expired
 #      or within 60 s of expiry.
 #   2. ANTHROPIC_API_KEY env var
-#   3. macOS Keychain service "ANTHROPIC_API_KEY" (any account)
+#   3. macOS Keychain service "ANTHROPIC_API_KEY", account "ops-daemon"
 #   4. Doppler — via OPS_DOPPLER_PROJECT + OPS_DOPPLER_CONFIG, or ambient scope
 #
 # Why OAuth-first:
