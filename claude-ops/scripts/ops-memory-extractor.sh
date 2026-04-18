@@ -55,7 +55,7 @@ trap cleanup EXIT
 #      signed into Claude Code on this machine. Skipped if the token is expired
 #      or within 60 s of expiry.
 #   2. ANTHROPIC_API_KEY env var
-#   3. macOS Keychain service "ANTHROPIC_API_KEY" (any account)
+#   3. macOS Keychain service "ANTHROPIC_API_KEY", account "ops-daemon"
 #   4. Doppler — via OPS_DOPPLER_PROJECT + OPS_DOPPLER_CONFIG, or ambient scope
 #
 # Why OAuth-first:
@@ -114,7 +114,7 @@ except Exception:
   if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
     key="${ANTHROPIC_API_KEY}"
   elif command -v security &>/dev/null; then
-    key=$(security find-generic-password -s "ANTHROPIC_API_KEY" -w 2>/dev/null || true)
+    key=$(security find-generic-password -s "ANTHROPIC_API_KEY" -a ops-daemon -w 2>/dev/null || true)
   fi
   if [[ -z "${key}" ]] && command -v doppler &>/dev/null; then
     local proj="${OPS_DOPPLER_PROJECT:-}" cfg="${OPS_DOPPLER_CONFIG:-}"
