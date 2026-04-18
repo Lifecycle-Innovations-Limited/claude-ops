@@ -45,6 +45,11 @@ mkdir -p "$LOG_DIR" "$STORE" "$MEMORY_DIR" "$WACLI_CACHE_DIR"
 # supervisor loop watches $BATCH_MARKER and always restarts sync when it's set,
 # distinguishing a deliberate batch pause from an unexpected crash.
 acquire_wacli_batch() {
+  # Reentrant: if an outer caller already holds the batch, skip the real work.
+  # _WACLI_BATCH_HELD is set by periodic_backfill to prevent inner functions
+  # (detect_missed_messages, write_backfill_memory) from releasing the marker
+  # while the backfill sequence is still running.
+  if [[ "${_WACLI_BATCH_HELD:-0}" == "1" ]]; then return 0; fi
   touch "$BATCH_MARKER"
   local sync_pid=""
   [[ -f "$SYNC_PID_FILE" ]] && sync_pid=$(cat "$SYNC_PID_FILE" 2>/dev/null || true)
@@ -65,6 +70,8 @@ acquire_wacli_batch() {
 }
 
 release_wacli_batch() {
+  # Reentrant: skip if an outer caller holds the batch (see acquire_wacli_batch).
+  if [[ "${_WACLI_BATCH_HELD:-0}" == "1" ]]; then return 0; fi
   rm -f "$BATCH_MARKER"
 }
 
@@ -344,9 +351,14 @@ if missed:
   release_wacli_batch
 }
 
-auto_detect_empty_chats
-detect_missed_messages
-run_backfill
+# NOTE: initial backfill is NOT run here. Running `wacli history backfill`
+# N times before persistent sync --follow is established causes each
+# subprocess to open its own WebSocket to web.whatsapp.com; with dozens of
+# queued chats this races the DNS lookup and saturates WhatsApp's new-session
+# rate limit, yielding `failed to dial whatsapp web websocket` or 30s
+# on-demand history sync timeouts. Instead, we let periodic_backfill below
+# pick up the work AFTER --follow has stabilised (INITIAL_BACKFILL_DELAY
+# seconds) — it pauses --follow, reuses the warm session, and resumes.
 
 # ── Wacli data cache for daemon consumption ─────────────────────────────
 # Write chat/message data to JSON cache so the daemon never calls wacli directly.
@@ -408,9 +420,18 @@ check_pause_signal() {
   return 0
 }
 
-# ── Periodic backfill in background ─────────────────────────────────────
-# Runs every BACKFILL_INTERVAL during persistent sync. Non-blocking.
-LAST_BACKFILL_TIME=$(date +%s)
+# ── Periodic backfill ───────────────────────────────────────────────────
+# Runs every BACKFILL_INTERVAL during persistent sync.  Synchronous: the
+# monitor loop breaks out immediately after this function returns (sync is
+# dead) and the outer supervisor restarts --follow.
+#
+# The initial backfill that used to live before --follow was removed because
+# each `wacli history backfill` opens its own WebSocket, racing WhatsApp's
+# new-session rate limit. Instead, the first backfill fires after a short
+# stabilisation delay (INITIAL_BACKFILL_DELAY) once --follow is connected,
+# reusing the warm session via acquire_wacli_batch.
+INITIAL_BACKFILL_DELAY="${INITIAL_BACKFILL_DELAY:-30}"
+LAST_BACKFILL_TIME=$(( $(date +%s) - BACKFILL_INTERVAL + INITIAL_BACKFILL_DELAY ))
 
 periodic_backfill() {
   local now
@@ -419,14 +440,24 @@ periodic_backfill() {
   LAST_BACKFILL_TIME=$now
 
   log "PERIODIC-BACKFILL: checking for chats needing backfill"
-  (
-    auto_detect_empty_chats
-    detect_missed_messages
-    if [[ -f "$STORE/.backfill_jids" ]] && [[ -s "$STORE/.backfill_jids" ]]; then
-      run_backfill
-      write_backfill_memory
-    fi
-  ) &
+
+  # Acquire exclusive wacli access — kills --follow, sets BATCH_MARKER.
+  # _WACLI_BATCH_HELD prevents inner acquire/release calls (in
+  # detect_missed_messages, write_backfill_memory) from prematurely
+  # removing BATCH_MARKER while we are still working.
+  acquire_wacli_batch
+  _WACLI_BATCH_HELD=1
+
+  auto_detect_empty_chats
+  detect_missed_messages
+  if [[ -f "$STORE/.backfill_jids" ]] && [[ -s "$STORE/.backfill_jids" ]]; then
+    run_backfill
+    write_backfill_memory
+  fi
+
+  _WACLI_BATCH_HELD=0
+  # Intentionally omit release_wacli_batch — BATCH_MARKER stays so the
+  # outer supervisor loop restarts sync instead of exiting the script.
 }
 
 # ── Write backfill summary to ops memory ────────────────────────────────
@@ -519,8 +550,12 @@ while true; do
       break
     fi
 
-    # Periodic backfill (non-blocking, runs in subshell) + cache refresh
     periodic_backfill
+    # If periodic_backfill killed sync, break immediately so the supervisor
+    # restarts it.  Falling through to refresh_wacli_cache or sleep would
+    # let refresh_wacli_cache remove BATCH_MARKER, triggering a false exit.
+    if ! kill -0 "$local_sync_pid" 2>/dev/null; then break; fi
+
     refresh_wacli_cache
 
     sleep 5
