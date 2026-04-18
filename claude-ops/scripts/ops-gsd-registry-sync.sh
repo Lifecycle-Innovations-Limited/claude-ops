@@ -5,6 +5,7 @@
 set -euo pipefail
 
 DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+export DATA_DIR  # pass to Python subprocess
 CACHE_DIR="$DATA_DIR/cache"
 REGISTRY="$DATA_DIR/registry.json"
 PROJECTS_HEALTH="$CACHE_DIR/projects_health.json"
@@ -19,7 +20,7 @@ log() { printf '%s [gsd-registry] %s\n' "$NOW" "$1" | tee -a "$LOG"; }
 log "Starting GSD registry sync..."
 
 # Collect project data using Python inline (avoids complex interpreter preflight)
-python3 - << 'PYEOF'
+python3 - << PYEOF
 import json, os, subprocess
 from pathlib import Path
 
