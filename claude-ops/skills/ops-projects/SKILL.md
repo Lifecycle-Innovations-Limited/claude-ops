@@ -77,21 +77,21 @@ Build the dashboard from `${OPS_DATA_DIR}/cache/projects_health.json` (fall back
 ║  GSD Portfolio — 23 projects                                 ║
 ║                                                              ║
 ║  🟢 EXECUTING (3)                                           ║
-║    healify-workspace    Phase 12  [executing]   branch: main  0 dirty ║
-║    claude-ops           Phase 16  [executing]   branch: main  2 dirty ║
-║    agentcore            Phase 39  [paused]      branch: dev   0 dirty ║
+║    my-webapp            Phase 12  [executing]   branch: main  0 dirty ║
+║    my-plugin            Phase 16  [executing]   branch: main  2 dirty ║
+║    my-saas-app          Phase 39  [executing]   branch: dev   0 dirty ║
 ║                                                              ║
 ║  🟡 PAUSED (4)                                              ║
-║    inboxassist.ai       Phase 08  [paused]      branch: feat  1 dirty ║
-║    xpod.run             Phase 3   [verifying]   branch: main  0 dirty ║
+║    my-project-a         Phase 08  [paused]      branch: feat  1 dirty ║
+║    my-project-b         Phase 3   [verifying]   branch: main  0 dirty ║
 ║    ...                                                          ║
 ║                                                              ║
 ║  🔴 BLOCKED (1)                                             ║
-║    estaterestyle        Phase 7   [await-UAT]   branch: prod  0 dirty ║
+║    my-ecommerce         Phase 7   [await-UAT]   branch: prod  0 dirty ║
 ║                                                              ║
 ║  ⚪ IDLE / UNTRACKED (15)                                    ║
-║    makeit8k.ai          Phase 1   [complete]    branch: main  0 dirty ║
-║    defimagic.app        —         —              branch: dev  3 dirty ║
+║    my-side-project      Phase 1   [complete]    branch: main  0 dirty ║
+║    my-other-app         —         —              branch: dev  3 dirty ║
 ║    ...                                                          ║
 ╠══════════════════════════════════════════════════════════════╣
 ║  ⚡ Services: message-listener ● | inbox-digest ⏱ 2h | gsd-registry ⏱ 12h ║
