@@ -1,19 +1,12 @@
 ---
 name: ops-projects
-description: Portfolio dashboard — shows all projects with GSD phase, branch, uncommitted changes, CI status, and next action. Jump to any project by alias.
-argument-hint: "[project-alias]"
+description: "Portfolio dashboard for all GSD-tracked projects. Scans ~/Projects and ~/gsd-workspaces for .planning/ directories, shows phase status, git state, blockers, and next actions for every project. Run /ops projects to see the full portfolio."
+argument-hint: "[project-alias|--sync|--refresh]"
 allowed-tools:
   - Bash
   - Read
   - Grep
   - Glob
-  - Skill
-  - Agent
-  - TeamCreate
-  - SendMessage
-  - AskUserQuestion
-  - TaskCreate
-  - TaskUpdate
   - WebFetch
 effort: low
 maxTurns: 20
@@ -26,203 +19,151 @@ disallowedTools:
 ## Runtime Context
 
 Before rendering, load:
-1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `timezone` for display
-2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — show service status in dashboard
+1. **Preferences**: `cat ${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `timezone`
+2. **Daemon health**: `cat ${OPS_DATA_DIR}/daemon-health.json` — show service status in dashboard footer
+3. **GSD registry**: `cat ${OPS_DATA_DIR}/registry.json` — primary project index (updated by daemon twice daily + on-demand with --sync)
 
 
-# OPS ► PROJECTS DASHBOARD
+# OPS ► PROJECTS — GSD Portfolio Dashboard
 
-## CLI/API Reference
+## Quick commands
 
-### gh CLI (GitHub)
+```bash
+# Refresh registry data on demand
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/ops-gsd-registry-sync.sh
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `gh pr list --repo <owner/repo> --json number,title,statusCheckRollup,reviewDecision,mergeable` | Open PRs with CI | JSON array |
-| `gh run list --repo <repo> --limit 5 --json status,conclusion,name,headBranch` | CI runs | JSON array |
-| `gh issue list --repo <repo> --json number,title,labels,state` | Issues | JSON array |
+# Show registry contents
+cat ${OPS_DATA_DIR}/registry.json
+
+# Show health summary
+cat ${OPS_DATA_DIR}/cache/projects_health.json
+```
+
+## Data flow
+
+```
+~/Projects/              ~/gsd-workspaces/
+    │                          │
+    ▼                          ▼
+ [project]/.planning/    [project]/.planning/
+    │                          │
+    ├── HANDOFF.json           ├── HANDOFF.json     ← active-phase projects
+    ├── STATE.md               ├── MILESTONES.md
+    ├── ROADMAP.md             └── STATE.md
+    └── MILESTONES.md
+              │
+              ▼  ops-gsd-registry-sync.sh (daemon: 6am + 6pm)
+                    │
+                    ▼
+              ${OPS_DATA_DIR}/
+                  ├── registry.json          ← all projects, sorted by priority
+                  └── cache/
+                        └── projects_health.json  ← health summary
+                              │
+                              ▼  ops-projects skill reads this
+```
 
 ---
 
-## Agent Teams support
+## Dashboard output
 
-If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when scanning projects in parallel. This enables:
-- Agents share context and can coordinate mid-flight
-- You can steer priorities in real-time
-- Agents report progress as they complete
-
-**Team setup** (only when flag is enabled):
-```
-TeamCreate("projects-team")
-# Spawn one agent per registered project for parallel scanning
-Agent(team_name="projects-team", name="project-<alias>", prompt="Scan <path> for git status, GSD phase, CI, and open PRs")
-```
-
-If the flag is NOT set, use standard fire-and-forget subagents.
-
-## Pre-gathered git status
-
-```!
-${CLAUDE_PLUGIN_ROOT}/bin/ops-git 2>/dev/null || echo '[]'
-```
-
-## Open PRs
-
-```!
-${CLAUDE_PLUGIN_ROOT}/bin/ops-prs 2>/dev/null || echo '[]'
-```
-
-## CI status
-
-```!
-${CLAUDE_PLUGIN_ROOT}/bin/ops-ci 2>/dev/null || echo '[]'
-```
-
-## Project registry
-
-```!
-cat "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null || echo '{}'
-```
-
-## GSD state (all active roadmaps)
-
-```!
-for d in $(jq -r '.projects[] | select(.gsd == true) | .paths[]' "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null); do
-  expanded="${d/#\~/$HOME}"
-  if [ -f "$expanded/.planning/STATE.md" ]; then
-    alias=$(jq -r --arg p "$d" '.projects[] | select(.paths[] == $p) | .alias' "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null | head -1)
-    phase=$(grep -m1 'current_phase' "$expanded/.planning/STATE.md" 2>/dev/null | sed 's/.*: //' || echo "?")
-    branch=$(git -C "$expanded" branch --show-current 2>/dev/null || echo "?")
-    dirty=$(git -C "$expanded" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-    echo "{\"alias\":\"$alias\",\"path\":\"$d\",\"phase\":\"$phase\",\"branch\":\"$branch\",\"dirty\":$dirty}"
-  fi
-done | jq -s '.'
-```
-
-## External projects (non-repo)
-
-```!
-${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
-```
-
-## External-project auto-discovery (candidates not yet registered)
-
-```!
-${CLAUDE_PLUGIN_ROOT}/bin/ops-discover-external 2>/dev/null || echo '[]'
-```
-
-Cross-reference the candidates against the registry loaded above. If a candidate's `config.alias` is NOT already registered, surface it in a footer section of the dashboard so the user can register it via `/ops:setup registry`:
+Build the dashboard from `${OPS_DATA_DIR}/cache/projects_health.json` (fall back to `${OPS_DATA_DIR}/registry.json` if missing). Show:
 
 ```
-UNREGISTERED CANDIDATES (found via configured integrations)
- SOURCE    DETAILS                            ACTION
- ──────────────────────────────────────────────────────
- shopify   mystore (basic plan)               /ops:setup registry
- linear    Engineering (42 issues)            /ops:setup registry
+╔══════════════════════════════════════════════════════════════╗
+║  OPS ► PROJECTS          [owner]    [date]    [daemon status] ║
+╠══════════════════════════════════════════════════════════════╣
+║  GSD Portfolio — 23 projects                                 ║
+║                                                              ║
+║  🟢 EXECUTING (3)                                           ║
+║    healify-workspace    Phase 12  [executing]   branch: main  0 dirty ║
+║    claude-ops           Phase 16  [executing]   branch: main  2 dirty ║
+║    agentcore            Phase 39  [paused]      branch: dev   0 dirty ║
+║                                                              ║
+║  🟡 PAUSED (4)                                              ║
+║    inboxassist.ai       Phase 08  [paused]      branch: feat  1 dirty ║
+║    xpod.run             Phase 3   [verifying]   branch: main  0 dirty ║
+║    ...                                                          ║
+║                                                              ║
+║  🔴 BLOCKED (1)                                             ║
+║    estaterestyle        Phase 7   [await-UAT]   branch: prod  0 dirty ║
+║                                                              ║
+║  ⚪ IDLE / UNTRACKED (15)                                    ║
+║    makeit8k.ai          Phase 1   [complete]    branch: main  0 dirty ║
+║    defimagic.app        —         —              branch: dev  3 dirty ║
+║    ...                                                          ║
+╠══════════════════════════════════════════════════════════════╣
+║  ⚡ Services: message-listener ● | inbox-digest ⏱ 2h | gsd-registry ⏱ 12h ║
+╚══════════════════════════════════════════════════════════════╝
 ```
 
-Suppress this section if all candidates are already registered or the script returns `[]`.
+### Status indicators (from `status` field, case-insensitive)
+- **executing** → 🟢
+- **paused / verifying / phase_complete** → 🟡
+- **human / uat / blocked / pending** → 🔴
+- **empty status + has phase** → ⚪ (idle)
+- **no phase, no status** → ⚪ (untracked/no GSD)
+
+### Columns per project: ALIAS | PHASE | STATUS | BRANCH | DIRTY | NEXT ACTION
 
 ---
 
-## Your task
+## Project deep-dive
 
-Parse all pre-gathered data — including external projects — and render the portfolio dashboard.
+If `$ARGUMENTS` contains a project alias, find it in the registry and show:
 
 ```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- OPS ► PROJECTS — [date]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+╔══════════════════════════════════════════════════════════════╗
+║  PROJECT — [alias]                                           ║
+╠══════════════════════════════════════════════════════════════╣
+║  Path:      ~/Projects/[alias]/                              ║
+║  Phase:     [phase]  Status: [status]                       ║
+║  Milestone: [milestone name]                                ║
+║  Branch:    [branch]   Dirty: [N]  Unpushed: [N]            ║
+║  Blockers:  [N]                                            ║
+║  Next:      [next_action text]                              ║
+║                                                              ║
+║  GSD files: ✓ ROADMAP  ✓ MILESTONES  [HAS_HANDOFF] STATE   ║
+╚══════════════════════════════════════════════════════════════╝
 
- ALIAS         PHASE      BRANCH          DIRTY  CI    NEXT ACTION
- ────────────────────────────────────────────────────────────────
- example-app   7.2        feature/auth    3      ✓     finish auth tests
- example-api   5.0        dev             0      ✗     fix CI (unit tests)
- ...
-
-EXTERNAL PROJECTS
- ALIAS         SOURCE     STATUS     DETAILS
- ────────────────────────────────────────────────────────────────
- my-store      shopify    ✓ healthy  My Store (basic plan)
- eng-team      linear     ✓ healthy  Engineering (42 issues)
- company-slack slack      ● discovered  your-workspace
- ...
-
-OPEN PRs
- #123  example-api  fix: auth middleware  ✓ CI  ready to merge
- #456  example-app  feat: onboarding      ✗ CI  needs fix
-
-──────────────────────────────────────────────────────
+Actions:
+  [1] Open project directory
+  [2] Continue GSD (/gsd-next [alias])
+  [3] Git: branch / status / log
+  [4] Run /ops projects (back to portfolio)
 ```
 
-Use **batched AskUserQuestion calls** (max 4 options each) for the project selector. Paginate at 3 projects + `[More projects...]` per page. On the final page, replace "More projects..." with the remaining projects. The user can also type a project alias directly as free text.
-
-**CI column**: green ✓ if last run passed, red ✗ if failing, — if no CI.
-**DIRTY**: number of uncommitted files.
-**NEXT ACTION**: inferred from GSD phase state and open issues.
+Use `AskUserQuestion` with up to 4 options.
 
 ---
 
-## Jump to project
+## --sync flag
 
-If `$ARGUMENTS` contains a project alias, look up the project in the registry and branch on `type`:
+If `--sync` or `--refresh` is passed, run the registry sync script first, then display the updated dashboard:
 
-### Git-backed project (default)
-
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- [PROJECT] — DEEP DIVE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- Path:    [path]
- Branch:  [branch]   Dirty: [N files]
- GSD:     Phase [N] — [phase name]
- CI:      [last 5 runs with status]
- PRs:     [open PRs]
- Sentry:  [recent errors for this project]
-
- Actions:
- a) Continue GSD work (/gsd-next)
- b) Fix CI failure
- c) Review open PRs
- d) Check fires (/ops-fires [alias])
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/ops-gsd-registry-sync.sh 2>&1
 ```
 
-### External project (type: external, no git repo)
-
-For `source: shopify|linear|slack|notion|custom`, render a source-specific deep-dive pulled from `ops-external` + live MCP/API data — no git/CI/PR rows:
-
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- [PROJECT] — EXTERNAL (shopify)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- Source:  shopify — mystore.myshopify.com (basic plan)
- Status:  ✓ healthy    Revenue: ecommerce / growth
- Recent:  [last 5 orders / Linear issues / Slack threads / Notion page edits]
-
- Actions:
- a) Jump to relevant tool (/ops:ecom, /ops:linear, /ops:inbox --slack, etc.)
- b) Check fires (/ops-fires [alias])
- c) View revenue (/ops:revenue [alias])
- d) Back to portfolio
-```
-
-Source → action-skill map:
-- `shopify` → `/ops:ecom [alias]`
-- `linear`  → `/ops:linear [alias]`
-- `slack`   → `/ops:inbox --slack` (filter to that workspace)
-- `notion`  → `mcp__claude_ai_Notion__notion-search` or `/ops:inbox --notion`
-- `custom`  → show the `custom.url` and offer to open it via `WebFetch`
-
-Use AskUserQuestion (≤ 4 options) after displaying either view.
+Show "Refreshing..." while running, then present the full updated dashboard.
 
 ---
 
-## Native tool usage
+## Error states
 
-### Tasks — project action tracking
+- If `registry.json` is missing/empty: show a one-shot sync prompt
+  ```
+  No project registry found. Run /ops projects --sync to build it.
+  ```
+- If daemon health shows `action_needed`: surface that in a warning banner
 
-When the user jumps to a project, use `TaskCreate` to track the action they take. This carries context forward if they switch between projects.
+---
 
-### WebFetch — CI enrichment
+## CLI reference (for manual use)
 
-When `gh` is slow or rate-limited, use `WebFetch` to query GitHub Actions API directly for run status.
+| Command | What it does |
+|---------|-------------|
+| `/ops projects` | Show full portfolio |
+| `/ops projects [alias]` | Deep-dive on one project |
+| `/ops projects --sync` | Force-refresh registry + show dashboard |
+| `/ops:setup registry` | Open registry setup (future) |

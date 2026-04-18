@@ -27,6 +27,33 @@
       "restart_delay": 60,
       "max_restarts": 20,
       "_note": "Polls ops-infra + Sentry every 60s; pushes notifications on new CRITICAL/HIGH incidents. Requires at least one notify sink (Telegram bot, Discord webhook, ntfy, Pushover, or macOS). Run /ops:setup notifications to enable."
+    },
+    "gsd-registry-sync": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-gsd-registry-sync.sh",
+      "cron": "0 6,18 * * *",
+      "_note": "Scans ~/Projects and ~/gsd-workspaces for GSD .planning/ dirs, updates central registry and projects_health cache. Runs at 6am and 6pm daily."
+    },
+    "inbox-digest": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-inbox-digest.sh",
+      "cron": "0 */4 * * *",
+      "_note": "Aggregates all configured channels (WhatsApp, Email, Telegram, Slack) every 4 hours."
+    },
+    "message-listener": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-message-listener.sh",
+      "interval": "continuous",
+      "health_file": "~/.claude/plugins/data/ops-ops-marketplace/listener-health.txt",
+      "restart_delay": 30,
+      "max_restarts": 20,
+      "_note": "Persistent poller for WhatsApp and Telegram."
+    },
+    "competitor-intel": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-competitor-intel.sh",
+      "cron": "0 10 * * 1",
+      "_note": "Weekly competitor intelligence report every Monday at 10am."
     }
   }
 }
