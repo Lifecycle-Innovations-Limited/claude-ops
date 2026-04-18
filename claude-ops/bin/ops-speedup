@@ -154,7 +154,7 @@ probe_memory() {
       local total avail
       total=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}')
       avail=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}')
-      echo "pressure_pct=$(( (total - avail) * 100 / total ))"
+      echo "pressure_pct=$(( avail * 100 / total ))"
       echo "free_mb=$(( avail / 1024 ))"
       echo "swap_mb=$(awk '/SwapFree/ {free=$2} /SwapTotal/ {total=$2} END {print (total-free)/1024}' /proc/meminfo 2>/dev/null || echo 0)"
     else
@@ -187,9 +187,12 @@ probe_power_hogs() {
         awk 'NF==3 && $1 ~ /^[0-9]+$/ {cnt[$1]++; sum[$1]+=$2; name[$1]=$3} END {for (p in sum) if (cnt[p] >= 2 && sum[p]/cnt[p] > 50) printf "%s|%.0f|%s\n", p, sum[p]/cnt[p], name[p]}' | head -10
     elif $IS_LINUX || $IS_WSL; then
       # Try powertop (needs sudo), fall back to /proc/*/stat delta
+      # Output format must match parser: pid|power|name
       if command -v powertop >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
         sudo timeout 5 powertop --csv="$out.pt" --time=3 >/dev/null 2>&1 || true
-        grep -h "PID" "$out.pt" 2>/dev/null | head -10 || true
+        # powertop CSV: Usage;Wakeups/s;GPU ops/s;Disk IO/s;GFX Wakeups/s;PID;Description;...
+        awk -F';' 'NR>1 && $6 ~ /^[0-9]+$/ && $6+0 > 0 {printf "%s|%s|%s\n", $6, $1, $7}' \
+          "$out.pt" 2>/dev/null | head -10 || true
         rm -f "$out.pt"
       fi
     fi
@@ -259,8 +262,7 @@ probe_startup() {
 # PARALLEL SCAN DISPATCHER
 # ═════════════════════════════════════════════════════════════════
 run_parallel_scan() {
-  local tmp; tmp=$(mktemp -d -t ops-speedup)
-  trap "rm -rf '$tmp'" RETURN
+  local tmp; tmp=$(mktemp -d "/tmp/ops-speedup.XXXXXX")
 
   probe_disk_reclaimable "$tmp/disk" &
   probe_memory "$tmp/mem" &
@@ -273,30 +275,39 @@ run_parallel_scan() {
   fi
   wait
 
-  # Load disk vars
+  # Load disk vars — key must be alphanumeric+underscore to prevent injection
   while IFS='=' read -r k v; do
-    eval "DISK_${k}='${v}'"
+    [[ "$k" =~ ^[a-zA-Z0-9_]+$ ]] || continue
+    declare -g "DISK_${k}=${v}"
   done < "$tmp/disk" 2>/dev/null || true
 
   # Load memory vars
   while IFS='=' read -r k v; do
-    eval "MEM_${k}='${v}'"
+    [[ "$k" =~ ^[a-zA-Z0-9_]+$ ]] || continue
+    declare -g "MEM_${k}=${v}"
   done < "$tmp/mem" 2>/dev/null || true
 
   # Load network vars
   while IFS='=' read -r k v; do
-    eval "NET_${k}='${v}'"
+    [[ "$k" =~ ^[a-zA-Z0-9_]+$ ]] || continue
+    declare -g "NET_${k}=${v}"
   done < "$tmp/net" 2>/dev/null || true
 
   # Load startup vars
   while IFS='=' read -r k v; do
-    eval "STARTUP_${k}='${v}'"
+    [[ "$k" =~ ^[a-zA-Z0-9_]+$ ]] || continue
+    declare -g "STARTUP_${k}=${v}"
   done < "$tmp/startup" 2>/dev/null || true
 
-  CPU_HOGS_FILE="$tmp/cpu"
-  POWER_HOGS_FILE="$tmp/power"
-  GPU_HOGS_FILE="$tmp/gpu"
+  # Persist scan data; update file vars to the persistent copy so action
+  # functions can read them after this function returns (tmp is cleaned up
+  # at script exit via the EXIT trap set in main, not here).
+  rm -rf "$STATE_DIR/last_scan" 2>/dev/null || true
   cp -r "$tmp" "$STATE_DIR/last_scan" 2>/dev/null || true
+  CPU_HOGS_FILE="$STATE_DIR/last_scan/cpu"
+  POWER_HOGS_FILE="$STATE_DIR/last_scan/power"
+  GPU_HOGS_FILE="$STATE_DIR/last_scan/gpu"
+  rm -rf "$tmp" 2>/dev/null || true
 }
 
 # ═════════════════════════════════════════════════════════════════
@@ -327,7 +338,7 @@ action_clean_caches() {
     [ -d "$HOME/Library/Caches/com.apple.nsurlsessiond" ] && rm -rf "$HOME/Library/Caches/com.apple.nsurlsessiond"/* 2>/dev/null
     [ -d "$HOME/Library/Caches/com.apple.metal" ] && rm -rf "$HOME/Library/Caches/com.apple.metal"/* 2>/dev/null
     [ -d "$HOME/Library/Caches/CloudKit" ] && rm -rf "$HOME/Library/Caches/CloudKit"/* 2>/dev/null
-    find /tmp -maxdepth 1 -name 'ops-*' -o -name 'yolo-*' -o -name 'claude-*' -mtime +1 -delete 2>/dev/null || true
+    find /tmp -maxdepth 1 \( -name 'ops-*' -o -name 'yolo-*' -o -name 'claude-*' \) -mtime +1 -delete 2>/dev/null || true
     find /tmp /private/var/tmp -type f -mtime +1 -delete 2>/dev/null || true
     command -v watchman >/dev/null 2>&1 && { watchman watch-del-all >/dev/null 2>&1 || true; } 2>/dev/null
     compgen -G '/tmp/metro-*' >/dev/null 2>&1 && rm -rf /tmp/metro-* 2>/dev/null || true
@@ -402,6 +413,11 @@ action_clean_stale_builds() {
     [ -d "$root" ] || continue
     while IFS= read -r stale; do
       [ -z "$stale" ] && continue
+      # Skip if any process has an open file descriptor inside this directory
+      if command -v lsof >/dev/null 2>&1 && lsof +D "$stale" >/dev/null 2>&1; then
+        echo "  ${YLW}⚠${RST}  Skipping (in use): $stale"
+        continue
+      fi
       local kb; kb=$(du -sk "$stale" 2>/dev/null | awk '{print $1}')
       rm -rf "$stale" 2>/dev/null && { count=$((count + 1)); total_kb=$((total_kb + ${kb:-0})); }
     done < <(find "$root" -maxdepth 5 \( -name node_modules -o -name .next -o -name dist -o -name .turbo \) -type d -not -path '*/node_modules/*' -mtime +14 2>/dev/null)
@@ -453,14 +469,33 @@ action_launch_offenders() {
     (( total > 0 )) && echo "  ${GRN}✓${RST} $total offender process(es) stopped"
   elif $IS_LINUX || $IS_WSL; then
     # Linux equivalent — show top slow-start units, require aggressive to mask
+    # Only units in this allowlist are ever masked — everything else is skip-listed.
+    local -a SAFE_TO_MASK=(
+      "apt-daily.service"
+      "apt-daily-upgrade.service"
+      "apt-daily.timer"
+      "apt-daily-upgrade.timer"
+      "snapd.service"
+      "snapd.socket"
+      "motd-news.service"
+      "motd-news.timer"
+      "fwupd.service"
+      "man-db.service"
+      "man-db.timer"
+      "packagekit.service"
+    )
     if command -v systemd-analyze >/dev/null 2>&1; then
-      local slow; slow=$(systemd-analyze blame 2>/dev/null | head -5 | awk '{print $2}' | grep -vE "^(sshd|systemd|networkd|resolved)\.service$" || true)
+      local slow; slow=$(systemd-analyze blame 2>/dev/null | head -10 | awk '{print $2}' || true)
       if [ -n "$slow" ]; then
-        echo "  ${DIM}Slow-start units (top 5):${RST}"
-        echo "$slow" | head -5 | while read -r unit; do echo "    - $unit"; done
+        echo "  ${DIM}Slow-start units (top 10):${RST}"
+        echo "$slow" | while read -r unit; do echo "    - $unit"; done
         if $MODE_AGGRESSIVE; then
-          echo "$slow" | head -3 | while read -r unit; do
-            sudo systemctl mask "$unit" 2>/dev/null && echo "  ${RED}✗${RST} Masked $unit"
+          echo "$slow" | while read -r unit; do
+            local ok=false
+            for allowed in "${SAFE_TO_MASK[@]}"; do
+              [ "$unit" = "$allowed" ] && ok=true && break
+            done
+            $ok && sudo systemctl mask "$unit" 2>/dev/null && echo "  ${RED}✗${RST} Masked $unit"
           done
         fi
       fi
@@ -647,7 +682,10 @@ write_telemetry() {
   cat >> "$HISTORY_FILE" <<TELEOF
 {"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","os":"$OS","mode":"$mode","ram_free_mb":${MEM_free_mb:-0},"pressure_pct":"${MEM_pressure_pct:-?}","swap_mb":"${MEM_swap_mb:-0}","disk_pct":"$DISK_USED_PCT","dns_ms":"${NET_dns_ms:-?}"}
 TELEOF
-  date +%s > "$LAST_RUN_FILE"
+  # Only stamp LAST_RUN_FILE on actual cleanup runs — scan-only (--json/--scan)
+  # must not set the idempotency guard or DerivedData cleanup will be skipped
+  # the next time a real cleanup is requested.
+  $MODE_CLEAN && date +%s > "$LAST_RUN_FILE"
 }
 
 # ═════════════════════════════════════════════════════════════════
