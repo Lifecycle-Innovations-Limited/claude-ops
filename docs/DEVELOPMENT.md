@@ -41,8 +41,8 @@ claude-ops/                          ← marketplace root (the GitHub repo)
 └── claude-ops/                      ← plugin root (Claude Code loads from here)
     ├── .claude-plugin/plugin.json   # plugin manifest (name, version, userConfig)
     ├── CLAUDE.md                    # 6 non-negotiable plugin rules (Rule 0–5)
-    ├── skills/                      # 22 slash commands — one subdirectory per skill
-    ├── agents/                      # 12 autonomous agents (Opus/Sonnet/Haiku)
+    ├── skills/                      # 30 slash commands — one subdirectory per skill
+    ├── agents/                      # 14 autonomous agents (Opus/Sonnet/Haiku)
     ├── bin/                         # ops-* shell scripts called by skills
     ├── hooks/
     │   └── hooks.json               # SessionStart / PreToolUse / Stop hooks
@@ -311,7 +311,7 @@ If `test-no-secrets.sh` fails, the commit must not proceed. This is enforced by 
 - One skill per directory; one `SKILL.md` per skill directory
 - Frontmatter `name` must match directory name exactly
 - Never include personal data, real org names, store URLs, or tokens in examples (Rule 0)
-- Use pre-execution shell blocks (`!` fences) to gather data before model context loads — this is the primary token-saving pattern used across all 22 skills
+- Use pre-execution shell blocks (`!` fences) to gather data before model context loads — this is the primary token-saving pattern used across all 30 skills
 
 **Agents (`agents/`):**
 - Agents are read-only by default — add `Write` and `Edit` to `disallowedTools` unless the agent genuinely needs to write files
