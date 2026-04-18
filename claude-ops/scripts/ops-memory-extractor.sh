@@ -48,42 +48,95 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ── Resolve ANTHROPIC_API_KEY ─────────────────────────────────────────────────
-# Order of precedence:
-#   1. ANTHROPIC_API_KEY already exported in the environment
-#   2. macOS Keychain service "ANTHROPIC_API_KEY" (any account) — works without
-#      Doppler auth and survives plugin upgrades
-#   3. Doppler with OPS_DOPPLER_PROJECT + OPS_DOPPLER_CONFIG (or defaults)
-#   4. Plain `doppler secrets get` (uses ambient Doppler scope)
-# The daemon has no interactive Doppler auth by default, so the keychain path
-# is the reliable one for cron/launchd contexts. Seed it with:
+# ── Resolve auth (Claude Code OAuth preferred, API key fallback) ──────────────
+# Preference order:
+#   1. Claude Code OAuth token from macOS Keychain — uses your Claude Max/Pro
+#      subscription (no per-token API billing). Works out of the box if you're
+#      signed into Claude Code on this machine. Skipped if the token is expired
+#      or within 60 s of expiry.
+#   2. ANTHROPIC_API_KEY env var
+#   3. macOS Keychain service "ANTHROPIC_API_KEY" (any account)
+#   4. Doppler — via OPS_DOPPLER_PROJECT + OPS_DOPPLER_CONFIG, or ambient scope
+#
+# Why OAuth-first:
+#   Subscription users shouldn't pay API-metered rates for daemon-scheduled
+#   background work. There is also a known behavioural gotcha with Claude Code
+#   itself: if ANTHROPIC_API_KEY is exported globally (shell profile, ~/.env,
+#   etc.) Claude Code preferentially bills that key instead of honouring the
+#   OAuth subscription. Keeping the API key only in keychain (unexported) and
+#   preferring OAuth here sidesteps both problems.
+#
+# Globals set by this function (consumed by call_claude):
+#   OPS_AUTH_HEADER         - full HTTP header value, e.g.
+#                             "Authorization: Bearer sk-ant-oat01-..." (OAuth)
+#                             "x-api-key: sk-ant-api03-..." (API key)
+#   OPS_AUTH_MODE           - "oauth" or "apikey"
+#   OPS_AUTH_EXTRA_HEADERS  - bash array of additional curl -H args
+#                             (OAuth needs `anthropic-beta: oauth-2025-04-20`)
+#
+# To seed the API-key fallback in keychain:
 #   security add-generic-password -U -s ANTHROPIC_API_KEY -a ops-daemon -w sk-ant-...
-resolve_api_key() {
-  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
-    return 0
-  fi
+resolve_auth() {
+  OPS_AUTH_HEADER=""
+  OPS_AUTH_MODE=""
+  OPS_AUTH_EXTRA_HEADERS=()
+
+  # ─ Try Claude Code OAuth first ─
   if command -v security &>/dev/null; then
-    local key
-    key=$(security find-generic-password -s "ANTHROPIC_API_KEY" -w 2>/dev/null || true)
-    if [[ -n "${key}" ]]; then
-      export ANTHROPIC_API_KEY="${key}"
-      return 0
+    local blob token
+    blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)
+    if [[ -n "${blob}" ]]; then
+      token=$(printf '%s' "${blob}" | python3 -c "
+import json, sys, time
+try:
+    d = json.loads(sys.stdin.read())
+    o = d.get('claudeAiOauth') or {}
+    tok = o.get('accessToken') or ''
+    exp = o.get('expiresAt') or 0
+    # Require >= 60 s of remaining life to avoid mid-call expiry
+    if tok and exp > int(time.time() * 1000) + 60000:
+        print(tok)
+except Exception:
+    pass
+" 2>/dev/null || true)
+      if [[ -n "${token}" ]]; then
+        OPS_AUTH_HEADER="Authorization: Bearer ${token}"
+        OPS_AUTH_MODE="oauth"
+        OPS_AUTH_EXTRA_HEADERS=(-H "anthropic-beta: oauth-2025-04-20")
+        log "Auth: Claude Code OAuth (subscription — no per-token billing)"
+        return 0
+      fi
     fi
   fi
-  if command -v doppler &>/dev/null; then
-    local key proj="${OPS_DOPPLER_PROJECT:-}" cfg="${OPS_DOPPLER_CONFIG:-}"
+
+  # ─ Fallback: API key via env / keychain / doppler ─
+  local key=""
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    key="${ANTHROPIC_API_KEY}"
+  elif command -v security &>/dev/null; then
+    key=$(security find-generic-password -s "ANTHROPIC_API_KEY" -w 2>/dev/null || true)
+  fi
+  if [[ -z "${key}" ]] && command -v doppler &>/dev/null; then
+    local proj="${OPS_DOPPLER_PROJECT:-}" cfg="${OPS_DOPPLER_CONFIG:-}"
     if [[ -n "${proj}" && -n "${cfg}" ]]; then
       key=$(doppler secrets get ANTHROPIC_API_KEY --plain --project "${proj}" --config "${cfg}" 2>/dev/null || true)
     else
       key=$(doppler secrets get ANTHROPIC_API_KEY --plain 2>/dev/null || true)
     fi
-    if [[ -n "${key}" ]]; then
-      export ANTHROPIC_API_KEY="${key}"
-      return 0
-    fi
   fi
-  die "ANTHROPIC_API_KEY not set; tried env, macOS keychain (service=ANTHROPIC_API_KEY), and doppler"
+
+  if [[ -n "${key}" ]]; then
+    OPS_AUTH_HEADER="x-api-key: ${key}"
+    OPS_AUTH_MODE="apikey"
+    log "Auth: ANTHROPIC_API_KEY (API-metered billing)"
+    return 0
+  fi
+
+  die "No auth available; tried Claude Code OAuth (keychain), \$ANTHROPIC_API_KEY, keychain ANTHROPIC_API_KEY, and doppler"
 }
+
+# Back-compat alias so older callers / forks still work
+resolve_api_key() { resolve_auth; }
 
 # ── Collect raw data ──────────────────────────────────────────────────────────
 collect_data() {
@@ -243,13 +296,14 @@ print(json.dumps(data))
 EOF
 )
 
-  log "Calling Claude Haiku for extraction..."
+  log "Calling Claude Haiku for extraction (auth: ${OPS_AUTH_MODE:-unknown})..."
   local http_status
   http_status=$(curl -s -o "${TMP_RESPONSE}" -w "%{http_code}" \
     https://api.anthropic.com/v1/messages \
     -H "content-type: application/json" \
-    -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+    -H "${OPS_AUTH_HEADER}" \
     -H "anthropic-version: 2023-06-01" \
+    "${OPS_AUTH_EXTRA_HEADERS[@]}" \
     -d "${payload}" 2>/dev/null)
 
   if [[ "${http_status}" != "200" ]]; then
@@ -284,7 +338,7 @@ write_memory_files() {
 
   mkdir -p "${MEMORIES_DIR}"
 
-  python3 - <<PYEOF "${MEMORIES_DIR}" "${now}" "${extraction}"
+  python3 - <<'PYEOF' "${MEMORIES_DIR}" "${now}" "${extraction}"
 import sys, json, os, re
 from pathlib import Path
 
@@ -444,7 +498,7 @@ auto_compress() {
     fsize=$(wc -c < "$f" 2>/dev/null || echo 0)
     if [[ "${fsize}" -gt "${MAX_FILE_BYTES}" ]]; then
       log "Compressing ${f} (${fsize} bytes > ${MAX_FILE_BYTES})"
-      python3 - <<PYEOF "${f}"
+      python3 - <<'PYEOF' "${f}"
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
@@ -485,7 +539,7 @@ main() {
   log "Starting memory extraction run at $(ts)"
   mkdir -p "${MEMORIES_DIR}"
 
-  resolve_api_key
+  resolve_auth
   collect_data
 
   build_prompt
