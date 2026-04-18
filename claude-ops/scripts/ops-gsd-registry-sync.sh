@@ -5,7 +5,7 @@
 set -euo pipefail
 
 DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
-export DATA_DIR  # pass to Python subprocess
+export OPS_DATA_DIR="$DATA_DIR"  # expose resolved path to Python subprocess
 CACHE_DIR="$DATA_DIR/cache"
 REGISTRY="$DATA_DIR/registry.json"
 PROJECTS_HEALTH="$CACHE_DIR/projects_health.json"
@@ -82,11 +82,11 @@ for base in [Path(HOME) / "Projects", Path(HOME) / "gsd-workspaces"]:
                 ).strip().decode() or ""
             except: pass
             try:
-                dirty_out = subprocess.check_output(
+                status_out = subprocess.check_output(
                     ["git", "-C", str(d), "status", "--porcelain"],
-                    timeout=3, stderr=subprocess.DEVNULL
+                    timeout=5, stderr=subprocess.DEVNULL
                 ).decode()
-                uncommitted = len([l for l in dirty_out.splitlines() if l.strip()])
+                uncommitted = len([l for l in status_out.strip().splitlines() if l.strip()])
             except: pass
 
         total_phases = ""

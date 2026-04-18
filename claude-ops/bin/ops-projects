@@ -7,8 +7,8 @@ set -euo pipefail
 
 OPS_DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 export OPS_DATA_DIR  # ensure Python subprocess sees the same path
-REGISTRY="$OPS_DATA_DIR/registry.json"
-HEALTH="$OPS_DATA_DIR/cache/projects_health.json"
+export REGISTRY="$OPS_DATA_DIR/registry.json"
+export HEALTH="$OPS_DATA_DIR/cache/projects_health.json"
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 usage() {
@@ -50,14 +50,14 @@ show_dashboard() {
   fi
 
   # Load registry
-  TOTAL=$(python3 -c "import json; print(json.load(open('$REGISTRY'))['total'])" 2>/dev/null || echo "?")
-  OWNER=$(python3 -c "import json; print(json.load(open('$OPS_DATA_DIR/preferences.json')).get('owner','owner'))" 2>/dev/null || echo "owner")
+  TOTAL=$(python3 -c "import json, os; print(json.load(open(os.environ['REGISTRY']))['total'])" 2>/dev/null || echo "?")
+  OWNER=$(python3 -c "import json, os; print(json.load(open(os.path.join(os.environ['OPS_DATA_DIR'],'preferences.json'))).get('owner','owner'))" 2>/dev/null || echo "owner")
   NOW=$(date +"%a %Y-%m-%d %H:%M")
 
   # Daemon health snippet
   DAEMON_STATUS="●"
   if [[ -f "$OPS_DATA_DIR/daemon-health.json" ]]; then
-    SERVICES=$(python3 -c "import json; d=json.load(open('$OPS_DATA_DIR/daemon-health.json')); print(sum(1 for v in d.get('services',{}).values() if v.get('status') in ['polling','scheduled']))" 2>/dev/null || echo "?")
+    SERVICES=$(python3 -c "import json, os; d=json.load(open(os.path.join(os.environ['OPS_DATA_DIR'],'daemon-health.json'))); print(sum(1 for v in d.get('services',{}).values() if v.get('status') in ['polling','scheduled']))" 2>/dev/null || echo "?")
     DAEMON_STATUS="● $SERVICES services"
   fi
 
@@ -69,8 +69,8 @@ show_dashboard() {
   # Get health summary if available
   if [[ -f "$HEALTH" ]]; then
     SUMMARY=$(python3 -c "
-import json
-d=json.load(open('$HEALTH'))
+import json, os
+d=json.load(open(os.environ['HEALTH']))
 s=d.get('summary',{})
 print(f\"  GSD Portfolio — {s.get('total',0)} projects\")
 print(f\"  🟢 {s.get('executing',0)} executing  🟡 {s.get('paused',0)} paused  🔴 {s.get('blocked',0)} blocked  ⚪ {s.get('idle',0)} idle\")
