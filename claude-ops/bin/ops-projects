@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# ops-projects — GSD Portfolio Dashboard
+# Reads from: ${OPS_DATA_DIR:-~/.claude/plugins/data/ops-ops-marketplace}/registry.json
+# Supports --sync and --json flags
+
+set -euo pipefail
+
+OPS_DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+export OPS_DATA_DIR  # ensure Python subprocess sees the same path
+export REGISTRY="$OPS_DATA_DIR/registry.json"
+export HEALTH="$OPS_DATA_DIR/cache/projects_health.json"
+PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+usage() {
+  cat <<EOF
+Usage: ops-projects [OPTIONS]
+
+Options:
+  --sync      Run GSD registry sync before displaying
+  --json      Output raw registry JSON instead of dashboard
+  --health    Output projects_health.json instead of dashboard
+  --help      Show this help
+
+Reads from: $REGISTRY
+EOF
+}
+
+# Parse args
+MODE="dashboard"
+for arg in "$@"; do
+  case "$arg" in
+    --sync)    MODE="sync-dashboard" ;;
+    --json)    MODE="json" ;;
+    --health)  MODE="health" ;;
+    --help)    usage; exit 0 ;;
+  esac
+done
+
+# Sync if requested
+sync_and_show() {
+  bash "$PLUGIN_ROOT/scripts/ops-gsd-registry-sync.sh" 2>&1 || true
+  show_dashboard
+}
+
+# Render the dashboard
+show_dashboard() {
+  if [[ ! -f "$REGISTRY" ]]; then
+    echo "No registry found. Run: bash $PLUGIN_ROOT/scripts/ops-gsd-registry-sync.sh"
+    exit 1
+  fi
+
+  # Load registry
+  TOTAL=$(python3 -c "import json, os; print(json.load(open(os.environ['REGISTRY']))['total'])" 2>/dev/null || echo "?")
+  OWNER=$(python3 -c "import json, os; print(json.load(open(os.path.join(os.environ['OPS_DATA_DIR'],'preferences.json'))).get('owner','owner'))" 2>/dev/null || echo "owner")
+  NOW=$(date +"%a %Y-%m-%d %H:%M")
+
+  # Daemon health snippet
+  DAEMON_STATUS="●"
+  if [[ -f "$OPS_DATA_DIR/daemon-health.json" ]]; then
+    SERVICES=$(python3 -c "import json, os; d=json.load(open(os.path.join(os.environ['OPS_DATA_DIR'],'daemon-health.json'))); print(sum(1 for v in d.get('services',{}).values() if v.get('status') in ['polling','scheduled']))" 2>/dev/null || echo "?")
+    DAEMON_STATUS="● $SERVICES services"
+  fi
+
+  echo ""
+  echo "╔══════════════════════════════════════════════════════════════╗"
+  echo "║  OPS ► PROJECTS        $OWNER    $NOW       $DAEMON_STATUS ║"
+  echo "╠══════════════════════════════════════════════════════════════╣"
+
+  # Get health summary if available
+  if [[ -f "$HEALTH" ]]; then
+    SUMMARY=$(python3 -c "
+import json, os
+d=json.load(open(os.environ['HEALTH']))
+s=d.get('summary',{})
+print(f\"  GSD Portfolio — {s.get('total',0)} projects\")
+print(f\"  🟢 {s.get('executing',0)} executing  🟡 {s.get('paused',0)} paused  🔴 {s.get('blocked',0)} blocked  ⚪ {s.get('idle',0)} idle\")
+" 2>/dev/null)
+  else
+    SUMMARY="  GSD Portfolio — $TOTAL projects"
+  fi
+  echo "$SUMMARY"
+  echo "╚══════════════════════════════════════════════════════════════╝"
+
+  # List all projects from registry
+  python3 - << 'PYEOF'
+import json, sys, os
+from pathlib import Path
+
+data_dir = os.environ.get("OPS_DATA_DIR", os.path.join(os.path.expanduser("~"), ".claude/plugins/data/ops-ops-marketplace"))
+registry = Path(data_dir) / "registry.json"
+if not registry.exists():
+    print("  (no registry — run with --sync to build)")
+    sys.exit(0)
+
+data = json.load(registry.open())
+projects = data.get("projects", [])
+
+# Group by status category
+executing = []
+paused = []
+blocked = []
+idle = []
+
+for p in projects:
+    status = p.get("status","").lower()
+    phase = p.get("phase","")
+    if "executing" in status:
+        executing.append(p)
+    elif any(x in status for x in ["paused","verifying","phase_complete"]):
+        paused.append(p)
+    elif any(x in status for x in ["human","uat","blocked","pending"]):
+        blocked.append(p)
+    elif phase:
+        idle.append(p)
+    else:
+        idle.append(p)
+
+def fmt_proj(p, indent="  "):
+    name = p.get("name","?")
+    phase = p.get("phase","—")
+    status = p.get("status","—")
+    branch = p.get("branch","—")
+    dirty = p.get("uncommitted",0)
+    source = p.get("source","")
+    blockers = p.get("blockers","0")
+    next_action = p.get("next_action","")[:40] or "—"
+    short_status = status[:30] if status else "—"
+    return f"{indent}{name:<22} {phase:<8} {short_status:<32} {branch:<12} {dirty} dirty  {next_action}"
+
+if executing:
+    print("\n  🟢 EXECUTING")
+    for p in executing: print(fmt_proj(p))
+if paused:
+    print("\n  🟡 PAUSED / VERIFYING")
+    for p in paused: print(fmt_proj(p))
+if blocked:
+    print("\n  🔴 BLOCKED / HUMAN")
+    for p in blocked: print(fmt_proj(p))
+if idle:
+    idle_projects = idle[:10]
+    print(f"\n  ⚪ IDLE / UNTRACKED ({len(idle)} total — first 10)")
+    for p in idle_projects: print(fmt_proj(p))
+    if len(idle) > 10:
+        print(f"  ... and {len(idle)-10} more (run /ops projects [alias] to inspect)")
+PYEOF
+
+  echo ""
+}
+
+# Main dispatch
+case "$MODE" in
+  sync-dashboard)
+    sync_and_show ;;
+  json)
+    if [[ -f "$REGISTRY" ]]; then
+      cat "$REGISTRY"
+    else
+      echo '{"error":"registry not found — run /ops projects --sync to build it"}' >&2
+      exit 1
+    fi ;;
+  health)
+    if [[ -f "$HEALTH" ]]; then
+      cat "$HEALTH"
+    else
+      echo '{"error":"health cache not found — run /ops projects --sync first"}' >&2
+      exit 1
+    fi ;;
+  *)
+    show_dashboard ;;
+esac
