@@ -82,10 +82,11 @@ print(f\"  🟢 {s.get('executing',0)} executing  🟡 {s.get('paused',0)} pause
 
   # List all projects from registry
   python3 - << 'PYEOF'
-import json, sys
+import json, sys, os
 from pathlib import Path
 
-registry = Path("REGISTRY" if False else "/Users/samrenders/.claude/plugins/data/ops-ops-marketplace/registry.json")
+data_dir = os.environ.get("OPS_DATA_DIR", os.path.join(os.path.expanduser("~"), ".claude/plugins/data/ops-ops-marketplace"))
+registry = Path(data_dir) / "registry.json"
 if not registry.exists():
     print("  (no registry — run with --sync to build)")
     sys.exit(0)
