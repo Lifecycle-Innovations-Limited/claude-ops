@@ -33,7 +33,7 @@
         },
         {
           "name": "TELEGRAM_PHONE",
-          "description": "Your Telegram phone number in E.164 format (e.g. +14155551234).",
+          "description": "Your Telegram phone number in E.164 format (e.g. +1234567890).",
           "isRequired": true,
           "format": "string",
           "isSecret": true
