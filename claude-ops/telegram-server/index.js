@@ -99,7 +99,7 @@ if (CONFIGURED) {
 }
 
 // ── MCP server setup ──
-const server = new Server({ name: 'claude-ops-telegram', version: '0.2.0' }, { capabilities: { tools: {} } });
+const server = new Server({ name: 'claude-ops-telegram', version: '0.2.1' }, { capabilities: { tools: {} } });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
