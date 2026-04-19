@@ -10,7 +10,13 @@
     "directory": "claude-ops/telegram-server"
   },
   "homepage": "https://github.com/Lifecycle-Innovations-Limited/claude-ops/tree/main/claude-ops/telegram-server",
-  "keywords": ["mcp", "telegram", "mtproto", "claude-code", "inbox"],
+  "keywords": [
+    "mcp",
+    "telegram",
+    "mtproto",
+    "claude-code",
+    "inbox"
+  ],
   "type": "module",
   "main": "index.js",
   "bin": {
