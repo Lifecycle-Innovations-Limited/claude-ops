@@ -1,7 +1,22 @@
 {
   "name": "claude-ops-telegram-server",
-  "version": "0.2.0",
+  "version": "0.2.1",
+  "mcpName": "io.github.auroracapital/claude-ops-telegram-server",
   "description": "Telegram user-auth MCP server for claude-ops plugin (personal account via MTProto, not bots)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lifecycle-Innovations-Limited/claude-ops.git",
+    "directory": "claude-ops/telegram-server"
+  },
+  "homepage": "https://github.com/Lifecycle-Innovations-Limited/claude-ops/tree/main/claude-ops/telegram-server",
+  "keywords": [
+    "mcp",
+    "telegram",
+    "mtproto",
+    "claude-code",
+    "inbox"
+  ],
   "type": "module",
   "main": "index.js",
   "bin": {
