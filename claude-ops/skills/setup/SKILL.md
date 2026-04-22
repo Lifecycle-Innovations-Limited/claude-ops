@@ -58,6 +58,45 @@ Every Bash tool call MUST include a short `description` parameter (5-10 words, e
 
 ---
 
+## Arguments
+
+The setup wizard accepts these flags (parsed from `$ARGUMENTS`):
+
+- `--fast` — Zero-prompt fast path. When credentials are found by the Universal Credential Auto-Scan, auto-select "Configure all" / "Set up everything" everywhere without asking. Only fall back to interactive prompts when a section has no credentials at all.
+- `--profile <name>` — Pre-select a curated integration subset. Valid names:
+  - `developer` — GitHub, AWS, Sentry, Linear, Doppler, Daemon.
+  - `founder` — All comms (Telegram, WhatsApp, Email, Slack, Calendar), plus Doppler, Linear, Daemon.
+  - `marketer` — Klaviyo, Meta Ads, GA4, Search Console, Shopify, Email (sending), Doppler.
+- `--re-setup` — Skip Step 1's "what do you want to configure" prompt and route directly to broken/unconfigured sections based on `/ops:status`. Equivalent to auto-detected incremental mode.
+
+**Precedence:** `--profile` narrows the section set first, `--fast` then auto-confirms within those sections, `--re-setup` further filters to only broken/unconfigured ones.
+
+### Profile → sections mapping
+
+| Profile | Sections enabled |
+|---------|------------------|
+| developer | 2 (CLIs), 2c (Daemon), 3g (Doppler), 3h (Vault), plus GitHub + AWS + Sentry + Linear integration paths |
+| founder | 2, 2c, 3a (Telegram), 3b (WhatsApp), 3c (Email), 3d (Slack), 3f (Calendar), 3g (Doppler), 3n (Notifications) |
+| marketer | 2, 2c, 3j (Marketing — Klaviyo/Meta Ads/GA4/GSC), 3i (Shopify), 3c (Email), 3g (Doppler) |
+
+### Incremental re-setup
+
+When Step 0b detects an existing `$PREFS_PATH/preferences.json` with ≥1 configured section AND no explicit arguments were passed, default Step 1's prompt to "Re-setup broken only" (instead of "Set up everything"). Skip every section where `/ops:status` reports green for that section's key integrations.
+
+### Progress panel
+
+After every section completes (or is skipped), print a single line progress panel:
+
+    Progress: {configured}/{total} configured · {working} working · {pending} pending
+
+Where:
+- `configured` = sections where credentials are present in `preferences.json`.
+- `working` = configured sections whose most recent `/ops:status` smoke test returned green.
+- `pending` = sections the user selected but hasn't configured yet.
+- `total` = total sections considered for this run (filtered by `--profile` if used).
+
+---
+
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when multiple "Deep hunt" credential agents are needed simultaneously. This enables:
@@ -151,9 +190,27 @@ Print a compact status header to the user, one line per category:
 
 Use `✓` for present/set, `○` for missing/unset, `✗` for broken.
 
+### Incremental re-setup routing
+
+If Step 0b finds `$PREFS_PATH/preferences.json` with ≥1 configured section and no `--fast`/`--profile` argument was passed:
+
+1. Read `/ops:status` snapshot to build a per-section health map (`green`/`red`/`missing`).
+2. Filter the Step 1 selector options to only sections where status is `red` or `missing`.
+3. Change the default option label to "Re-setup broken only (Recommended)".
+4. Add "Add new section" as a secondary option for users who want to configure a previously-skipped section.
+
+Fresh installs (no `preferences.json` at all) continue to see the full selector with "Set up everything" as the default.
+
 ---
 
 ## Step 1 — Ask which sections to configure
+
+**When `--profile <name>` was passed:** Skip this step entirely. Use the profile → sections mapping from the Arguments section to activate the curated subset and proceed to Step 2.
+
+**When `--re-setup` was passed (or incremental mode auto-detected from Step 0b):** Skip this step. Activate only sections reporting `red`/`missing` and proceed to Step 2.
+
+**Otherwise:** proceed with the standard selector below.
+
 
 First, offer a quick "set up everything" option:
 
