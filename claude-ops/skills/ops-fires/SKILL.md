@@ -225,3 +225,16 @@ When diagnosing fires, use `WebFetch` to check AWS status page (`https://health.
 ### WebSearch — known outage patterns
 
 Use `WebSearch` to find if the error pattern matches a known AWS/infrastructure issue (e.g., "ECS task stopped CannotPullContainerError" → known ECR throttling).
+
+
+---
+
+## Credential Expiry & Rate Limit Warnings (Phase 16)
+
+The ops-daemon surfaces two additional fire categories in `daemon-health.json`:
+
+- `credential_warnings` — tokens/keys expiring within 7 days OR API keys older than 180 days. Fed by offline inspection of `preferences.json` (`*_expires_at`, `*_created_at` fields). No live API calls are made to validate credentials.
+- `rate_limit_warnings` — integrations currently at ≥80% of their quota window. Fed by counters in `rate-limits.json`. Resets automatically when the window rolls over.
+
+`/ops:fires` lists both alongside Sentry / infra / CI issues. Push notifications are dispatched by the daemon on the first crossing of the threshold — not re-sent until the next day (credentials) or window rollover (rate limits).
+
