@@ -52,19 +52,85 @@ Accepts `--plugin-root PATH` to override auto-detection and `--dry-run` to previ
   "uptime_seconds": <int>,
   "services": {
     "<name>": {
-      "status": "running|polling|scheduled|dead|needs_reauth",
+      "status": "running|polling|scheduled|dead|needs_reauth|max_restarts_exceeded",
       "pid": <int|null>,
       "last_health": "<string|null>",
       "last_run": "<ISO-8601|empty>",
       "next_run": "<ISO-8601|empty>",
-      "restarts": <int>
+      "restarts": <int>,
+      "latency_ms": <int>,
+      "last_success": "<ISO-8601|empty>",
+      "error_count": <int>,
+      "last_error": "<string|null>"
     }
   },
-  "action_needed": null | {"kind": "...", "service": "...", "message": "..."}
+  "action_needed": null | {"kind": "...", "service": "...", "message": "..."},
+  "credential_warnings": ["<string>", ...],
+  "rate_limit_warnings": ["<string>", ...]
 }
 ```
 
 A healthy daemon refreshes this file every 30s. An `mtime` older than 120s is a strong fail signal.
+
+**Per-service fields (Phase 16 additions):**
+
+- `latency_ms` — duration of the most recent run for warm/cron services, in milliseconds. 0 when no run has occurred yet.
+- `last_success` — ISO-8601 UTC of the last clean run (no errors). Empty until the first success.
+- `error_count` — cumulative error count since daemon start. Reset on daemon restart.
+- `last_error` — truncated (≤300 chars) message from the most recent failure. `null` when there have been no failures.
+
+**Top-level fields (Phase 16 additions):**
+
+- `credential_warnings` — list of credentials that are expiring within 7 days or are keys older than 180 days. Populated from offline inspection of `preferences.json` (never a live API call).
+- `rate_limit_warnings` — list of integrations currently at ≥80% of their quota window. Populated from `rate-limits.json` counters.
+
+**Persistent service failure:** a service that hits `max_restarts_exceeded` status dispatches a one-shot `HIGH` severity push notification via `ops-notify.sh` to every configured sink (Telegram / Discord / ntfy / Pushover / macOS). The notification is re-armed the moment the service returns to `running`, so subsequent regressions still notify.
+
+### Smart Cache Invalidation (git hooks)
+
+Cache timestamp files (`.briefing_ts`, `.projects_ts`, `.marketing_ts`, `.prs_ts`, `.ci_ts`) are deleted on local `git commit` and `git merge` so the next daemon warm cycle refreshes those specific caches without waiting for the normal throttle window.
+
+Install:
+
+    bash ${CLAUDE_PLUGIN_ROOT}/scripts/ops-install-git-hooks.sh
+
+Preview without writing:
+
+    bash ${CLAUDE_PLUGIN_ROOT}/scripts/ops-install-git-hooks.sh --dry-run
+
+Remove:
+
+    bash ${CLAUDE_PLUGIN_ROOT}/scripts/ops-install-git-hooks.sh --uninstall
+
+The installer is idempotent and only touches the block between `# BEGIN ops-daemon-invalidate` and `# END ops-daemon-invalidate` — existing husky / lefthook / pre-commit content in `.git/hooks/post-commit` or `.git/hooks/post-merge` is preserved.
+
+### Marketing Pre-Warm
+
+The opt-in `marketing-prewarm` cron service pre-fetches cross-platform marketing data (Klaviyo, Meta Ads, GA4, GSC, Google Ads) every 15 minutes so `/ops:marketing` loads instantly from cache. Disabled by default; enable with `/ops:setup marketing` once marketing credentials are configured.
+
+### Rate Limit Tracking
+
+Per-integration counters in `${CLAUDE_PLUGIN_DATA_DIR}/rate-limits.json` — `{quota, calls, window_start, warned_80pct}` per integration. On each tracked API call the daemon advances the rolling window, increments the counter, and sends a single `MEDIUM` push notification when the ratio crosses 80%. Windows reset automatically on rollover, which re-arms the 80% warning.
+
+Override the seeded defaults by setting `rate_limit_quotas` in `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json`:
+
+```json
+{
+  "rate_limit_quotas": {
+    "meta_ads": {"quota": 200, "window_seconds": 3600},
+    "klaviyo":  {"quota": 75,  "window_seconds": 60}
+  }
+}
+```
+
+### Credential Rotation Alerts
+
+The daemon checks `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` once an hour for:
+
+- `<integration>_expires_at` — ISO-8601 timestamp or the literal string `"never"`. Warns when within 7 days of expiry.
+- `<integration>_created_at` — ISO-8601 timestamp of when an API key was last created/rotated. Warns once the key is 180 days old.
+
+The check is **entirely offline** — it never makes a network call. Warnings surface in `daemon-health.json` as `credential_warnings` and trigger a `MEDIUM` push notification once per `(credential, day)` tuple. `/ops:fires` lists them alongside Sentry / infra / CI issues.
 
 ---
 

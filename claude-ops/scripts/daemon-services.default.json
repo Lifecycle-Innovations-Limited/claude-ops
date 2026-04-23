@@ -54,6 +54,12 @@
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-competitor-intel.sh",
       "cron": "0 10 * * 1",
       "_note": "Weekly competitor intelligence report every Monday at 10am. Script not yet landed — re-enable when ops-cron-competitor-intel.sh is added."
+    },
+    "marketing-prewarm": {
+      "enabled": false,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-marketing-prewarm.sh",
+      "cron": "*/15 * * * *",
+      "_note": "Pre-warms /ops:marketing cache every 15 minutes. Requires marketing credentials (Klaviyo, Meta Ads, GA4, GSC, Google Ads). Enable with /ops:setup marketing after credentials are configured."
     }
   }
 }
