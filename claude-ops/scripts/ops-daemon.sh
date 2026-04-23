@@ -878,6 +878,14 @@ _run_parallel_warm() {
   local _pids=()
   local _fn_names=(prefetch_briefing_cache prefetch_calendar prefetch_project_health build_contact_activity_index prefetch_marketing_cache)
 
+  # Map function names → service config names used in SERVICE_STATUS / health JSON.
+  # Functions without a 1:1 service entry are stored under the function name and
+  # won't appear in per-service health (they are sub-components of the warm cycle).
+  declare -A _fn_svc_map=(
+    [prefetch_briefing_cache]="briefing-pre-warm"
+    [prefetch_marketing_cache]="marketing-prewarm"
+  )
+
   local fn
   for fn in "${_fn_names[@]}"; do
     if ! declare -F "$fn" >/dev/null 2>&1; then continue; fi
@@ -899,15 +907,16 @@ _run_parallel_warm() {
   wait "${_pids[@]}" 2>/dev/null || true
 
   for fn in "${_fn_names[@]}"; do
+    local svc_key="${_fn_svc_map[$fn]:-$fn}"
     if [[ -f "$tmpdir/${fn}.ms" ]]; then
-      SERVICE_LATENCY_MS["$fn"]=$(cat "$tmpdir/${fn}.ms")
+      SERVICE_LATENCY_MS["$svc_key"]=$(cat "$tmpdir/${fn}.ms")
     fi
     if [[ -f "$tmpdir/${fn}.ok" ]]; then
-      SERVICE_LAST_SUCCESS["$fn"]=$(cat "$tmpdir/${fn}.ok")
+      SERVICE_LAST_SUCCESS["$svc_key"]=$(cat "$tmpdir/${fn}.ok")
     fi
     if [[ -f "$tmpdir/${fn}.fail" ]]; then
-      SERVICE_ERROR_COUNT["$fn"]=$(( ${SERVICE_ERROR_COUNT[$fn]:-0} + 1 ))
-      SERVICE_LAST_ERROR["$fn"]=$(cat "$tmpdir/${fn}.fail")
+      SERVICE_ERROR_COUNT["$svc_key"]=$(( ${SERVICE_ERROR_COUNT[$svc_key]:-0} + 1 ))
+      SERVICE_LAST_ERROR["$svc_key"]=$(cat "$tmpdir/${fn}.fail")
     fi
   done
   rm -rf "$tmpdir" 2>/dev/null || true
