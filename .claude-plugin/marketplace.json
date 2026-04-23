@@ -13,6 +13,23 @@
       "source": "./claude-ops",
       "version": "1.7.1",
       "category": "productivity",
+      "keywords": [
+        "ops",
+        "operations",
+        "business",
+        "dashboard",
+        "automation",
+        "daemon",
+        "whatsapp",
+        "email",
+        "slack",
+        "marketing",
+        "aws",
+        "monitoring",
+        "yolo",
+        "revenue",
+        "gtm"
+      ],
       "screenshots": [
         "docs/screenshots/dashboard.png",
         "docs/screenshots/briefing.png",

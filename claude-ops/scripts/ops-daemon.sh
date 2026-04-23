@@ -86,6 +86,11 @@ declare -A SERVICE_LAST_RUN    # service name → last run epoch (cron services)
 declare -A SERVICE_STATUS      # service name → status string
 declare -A SERVICE_LAST_HEALTH # service name → last health string
 declare -A SERVICE_LAST_RESTART_EPOCH  # service name → epoch of last restart attempt
+declare -A SERVICE_LATENCY_MS     # service name → last run latency in ms (warm/cron services)
+declare -A SERVICE_LAST_SUCCESS   # service name → ISO-8601 UTC of last clean run
+declare -A SERVICE_ERROR_COUNT    # service name → cumulative errors since daemon start
+declare -A SERVICE_LAST_ERROR     # service name → last error message (truncated)
+declare -A SERVICE_NOTIFIED_CRASH # service name → set to 1 after persistent-failure notify (deduped)
 RESTART_COOLDOWN=1800  # Reset restart counter after 30 min of stability
 ACTION_NEEDED="null"
 
@@ -249,6 +254,10 @@ check_health() {
         ;;
       connected|running|ok)
         SERVICE_STATUS["$name"]="running"
+        # Phase 16 INFR-03: reset crash-notify dedup on recovery
+        if [[ -n "${SERVICE_NOTIFIED_CRASH[$name]:-}" ]]; then
+          unset "SERVICE_NOTIFIED_CRASH[$name]"
+        fi
         ;;
       *)
         SERVICE_STATUS["$name"]="${file_status:-running}"
@@ -290,6 +299,17 @@ restart_service() {
   if [[ $count -ge $max_restarts ]]; then
     log "RESTART: $name hit max_restarts=$max_restarts — not restarting (resets after ${RESTART_COOLDOWN}s cooldown)"
     SERVICE_STATUS["$name"]="max_restarts_exceeded"
+    # Phase 16 INFR-03: notify on persistent failure (deduped)
+    if [[ -z "${SERVICE_NOTIFIED_CRASH[$name]:-}" ]]; then
+      local _notify_script="$SCRIPT_DIR/scripts/ops-notify.sh"
+      if [[ -f "$_notify_script" ]]; then
+        bash "$_notify_script" HIGH \
+          "ops-daemon: $name crashed (persistent)" \
+          "Service '$name' hit max_restarts=$max_restarts. Manual intervention required." \
+          >/dev/null 2>&1 &
+      fi
+      SERVICE_NOTIFIED_CRASH["$name"]=1
+    fi
     return
   fi
 
@@ -319,6 +339,17 @@ write_daemon_health() {
     local pid="${SERVICE_PIDS[$name]:-null}"
     local restarts="${SERVICE_RESTARTS[$name]:-0}"
     local health="${SERVICE_LAST_HEALTH[$name]:-unknown}"
+    local latency_ms="${SERVICE_LATENCY_MS[$name]:-0}"
+    local last_success="${SERVICE_LAST_SUCCESS[$name]:-}"
+    local error_count="${SERVICE_ERROR_COUNT[$name]:-0}"
+    local last_error_raw="${SERVICE_LAST_ERROR[$name]:-}"
+    local last_error_json="null"
+    if [[ -n "$last_error_raw" ]]; then
+      last_error_json=$(python3 -c "
+import json, sys
+print(json.dumps(sys.argv[1]))
+" "$last_error_raw" 2>/dev/null || echo "null")
+    fi
 
     [[ $first -eq 0 ]] && services_json+=","
     first=0
@@ -329,7 +360,7 @@ write_daemon_health() {
       local next_iso="" last_iso=""
       [[ -n "$next_run" ]] && next_iso=$(_date_from_epoch "$next_run" 2>/dev/null || echo "")
       [[ -n "$last_run" ]] && last_iso=$(_date_from_epoch "$last_run" 2>/dev/null || echo "")
-      services_json+="\"$name\": {\"status\": \"$status\", \"next_run\": \"$next_iso\", \"last_run\": \"$last_iso\"}"
+      services_json+="\"$name\": {\"status\": \"$status\", \"next_run\": \"$next_iso\", \"last_run\": \"$last_iso\", \"latency_ms\": $latency_ms, \"last_success\": \"$last_success\", \"error_count\": $error_count, \"last_error\": $last_error_json}"
     else
       local pid_val
       if [[ "$pid" == "null" ]] || [[ -z "$pid" ]]; then
@@ -348,10 +379,41 @@ write_daemon_health() {
       else
         pid_val="$pid"
       fi
-      services_json+="\"$name\": {\"status\": \"$status\", \"pid\": $pid_val, \"last_health\": \"$health\", \"restarts\": $restarts}"
+      services_json+="\"$name\": {\"status\": \"$status\", \"pid\": $pid_val, \"last_health\": \"$health\", \"restarts\": $restarts, \"latency_ms\": $latency_ms, \"last_success\": \"$last_success\", \"error_count\": $error_count, \"last_error\": $last_error_json}"
     fi
   done
   services_json+="}"
+
+  # Top-level credential_warnings + rate_limit_warnings (Phase 16)
+  local cred_warn_json="[]"
+  if [[ -f "$DATA_DIR/cache/cred-expiry-warnings.json" ]]; then
+    cred_warn_json=$(python3 -c "
+import json
+try:
+  d = json.load(open('$DATA_DIR/cache/cred-expiry-warnings.json'))
+  print(json.dumps(d.get('warnings', [])))
+except Exception:
+  print('[]')
+" 2>/dev/null || echo "[]")
+  fi
+
+  local rate_warn_json="[]"
+  if [[ -f "$DATA_DIR/rate-limits.json" ]]; then
+    rate_warn_json=$(python3 -c "
+import json
+warns = []
+try:
+  d = json.load(open('$DATA_DIR/rate-limits.json'))
+  for integ, v in d.items():
+    q = v.get('quota', 0)
+    c = v.get('calls', 0)
+    if q and (c / q) >= 0.8:
+      warns.append(f\"{integ}: {c}/{q}\")
+except Exception:
+  pass
+print(json.dumps(warns))
+" 2>/dev/null || echo "[]")
+  fi
 
   # Read brain cache metadata
   local brain_briefing_cached_at=""
@@ -400,6 +462,8 @@ except: print('')
   "version": "$daemon_version",
   "services": $services_json,
   "action_needed": $ACTION_NEEDED,
+  "credential_warnings": $cred_warn_json,
+  "rate_limit_warnings": $rate_warn_json,
   "brain": {
     "briefing_cached_at": "$brain_briefing_cached_at",
     "urgent_count": $brain_urgent_count,
@@ -763,6 +827,287 @@ PYEOF
 
   date +%s > "$LAST_FETCH"
   log "BRAIN: project health cache updated"
+}
+
+# ── Phase 16: marketing pre-warm ─────────────────────────────────────────
+# Fetches cross-platform marketing snapshot (Klaviyo, Meta Ads, GA4, GSC,
+# Google Ads) via bin/ops-marketing-dash and caches to marketing.json so
+# /ops:marketing loads instantly. Throttled to 15 min.
+prefetch_marketing_cache() {
+  local LAST_FETCH="$DATA_DIR/cache/.marketing_ts"
+  local now; now=$(date +%s)
+  local MARKETING_INTERVAL=900  # 15 min
+  if [[ -f "$LAST_FETCH" ]]; then
+    local last; last=$(cat "$LAST_FETCH" 2>/dev/null || echo 0)
+    if (( now - last < MARKETING_INTERVAL )); then return 0; fi
+  fi
+
+  local marketing_bin="$SCRIPT_DIR/bin/ops-marketing-dash"
+  [[ -x "$marketing_bin" ]] || return 0
+
+  mkdir -p "$DATA_DIR/cache" 2>/dev/null || true
+  local cache_file="$DATA_DIR/cache/marketing.json"
+  local tmp_file="${cache_file}.tmp.$$"
+  if "$marketing_bin" --json > "$tmp_file" 2>/dev/null; then
+    python3 - "$tmp_file" <<'PY' 2>/dev/null || true
+import json, sys, datetime
+p = sys.argv[1]
+try:
+  d = json.load(open(p))
+  d["cached_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+  json.dump(d, open(p, "w"))
+except Exception:
+  pass
+PY
+    mv "$tmp_file" "$cache_file"
+    date +%s > "$LAST_FETCH"
+    log "BRAIN: marketing cache updated"
+  else
+    rm -f "$tmp_file" 2>/dev/null || true
+    return 1
+  fi
+}
+
+# ── Phase 16: parallel warm wrapper ──────────────────────────────────────
+# Runs all intelligence prefetch functions concurrently. Each subshell writes
+# latency to a tmpdir file; parent merges into SERVICE_LATENCY_MS after wait.
+# Source: extended from prefetch_briefing_cache PID-array pattern.
+_run_parallel_warm() {
+  local tmpdir
+  tmpdir=$(mktemp -d 2>/dev/null) || return 0
+  local _pids=()
+  local _fn_names=(prefetch_briefing_cache prefetch_calendar prefetch_project_health build_contact_activity_index prefetch_marketing_cache)
+
+  local fn
+  for fn in "${_fn_names[@]}"; do
+    if ! declare -F "$fn" >/dev/null 2>&1; then continue; fi
+    (
+      local _t0 _t1
+      _t0=$(python3 -c 'import time;print(int(time.time()*1000))' 2>/dev/null || echo 0)
+      local _err_file="$tmpdir/${fn}.err"
+      if "$fn" 2>"$_err_file" >/dev/null; then
+        _t1=$(python3 -c 'import time;print(int(time.time()*1000))' 2>/dev/null || echo 0)
+        echo $(( _t1 - _t0 )) > "$tmpdir/${fn}.ms"
+        date -u +"%Y-%m-%dT%H:%M:%SZ" > "$tmpdir/${fn}.ok"
+      else
+        tail -c 300 "$_err_file" 2>/dev/null | tr -d '\n' > "$tmpdir/${fn}.fail" 2>/dev/null || true
+      fi
+    ) &
+    _pids+=($!)
+  done
+
+  wait "${_pids[@]}" 2>/dev/null || true
+
+  for fn in "${_fn_names[@]}"; do
+    if [[ -f "$tmpdir/${fn}.ms" ]]; then
+      SERVICE_LATENCY_MS["$fn"]=$(cat "$tmpdir/${fn}.ms")
+    fi
+    if [[ -f "$tmpdir/${fn}.ok" ]]; then
+      SERVICE_LAST_SUCCESS["$fn"]=$(cat "$tmpdir/${fn}.ok")
+    fi
+    if [[ -f "$tmpdir/${fn}.fail" ]]; then
+      SERVICE_ERROR_COUNT["$fn"]=$(( ${SERVICE_ERROR_COUNT[$fn]:-0} + 1 ))
+      SERVICE_LAST_ERROR["$fn"]=$(cat "$tmpdir/${fn}.fail")
+    fi
+  done
+  rm -rf "$tmpdir" 2>/dev/null || true
+}
+
+# ── Phase 16: rate-limit tracking ────────────────────────────────────────
+# Counts API calls per integration, reads quotas from preferences.json (or
+# bundled defaults), warns once per window at 80% via ops-notify.sh. Window
+# resets reset warned_80pct too.
+RATE_LIMITS_FILE="$DATA_DIR/rate-limits.json"
+
+_seed_rate_limit_defaults() {
+  [[ -f "$RATE_LIMITS_FILE" ]] && return 0
+  mkdir -p "$(dirname "$RATE_LIMITS_FILE")" 2>/dev/null || true
+  python3 - "$RATE_LIMITS_FILE" <<'PY' 2>/dev/null || true
+import json, sys, datetime
+now = datetime.datetime.utcnow().isoformat() + "Z"
+defaults = {
+  "meta_ads":    {"quota": 200,   "window_seconds": 3600, "calls": 0, "window_start": now, "warned_80pct": False},
+  "klaviyo":     {"quota": 75,    "window_seconds": 60,   "calls": 0, "window_start": now, "warned_80pct": False},
+  "google_ads":  {"quota": 1000,  "window_seconds": 60,   "calls": 0, "window_start": now, "warned_80pct": False},
+  "ga4":         {"quota": 1000,  "window_seconds": 60,   "calls": 0, "window_start": now, "warned_80pct": False},
+  "stripe":      {"quota": 100,   "window_seconds": 1,    "calls": 0, "window_start": now, "warned_80pct": False},
+  "github":      {"quota": 5000,  "window_seconds": 3600, "calls": 0, "window_start": now, "warned_80pct": False}
+}
+json.dump(defaults, open(sys.argv[1], "w"), indent=2)
+PY
+}
+
+track_api_call() {
+  local integration="$1" count="${2:-1}"
+  [[ -n "$integration" ]] || return 0
+  _seed_rate_limit_defaults
+  local notify_script="$SCRIPT_DIR/scripts/ops-notify.sh"
+  python3 - "$RATE_LIMITS_FILE" "$integration" "$count" "$notify_script" <<'PY' 2>/dev/null || true
+import json, sys, os, subprocess, datetime
+path, integ, inc, notify = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+try:
+  data = json.load(open(path))
+except Exception:
+  sys.exit(0)
+entry = data.get(integ)
+if entry is None:
+  sys.exit(0)
+now = datetime.datetime.utcnow()
+try:
+  ws = datetime.datetime.fromisoformat(entry["window_start"].replace("Z",""))
+except Exception:
+  ws = now
+age = (now - ws).total_seconds()
+if age >= entry.get("window_seconds", 60):
+  entry["calls"] = 0
+  entry["window_start"] = now.isoformat() + "Z"
+  entry["warned_80pct"] = False
+entry["calls"] = entry.get("calls", 0) + inc
+quota = entry.get("quota", 0)
+ratio = (entry["calls"] / quota) if quota else 0
+if ratio >= 0.8 and not entry.get("warned_80pct") and os.path.isfile(notify):
+  subprocess.Popen(["bash", notify, "MEDIUM",
+    f"ops-daemon: {integ} rate limit 80%",
+    f"{integ}: {entry['calls']}/{quota} ({ratio*100:.0f}%) in current window"],
+    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+  entry["warned_80pct"] = True
+data[integ] = entry
+tmp = path + ".tmp." + str(os.getpid())
+json.dump(data, open(tmp, "w"), indent=2)
+os.replace(tmp, path)
+PY
+}
+
+# Called every 5 min from monitor loop. Resets rollover windows so
+# warned_80pct clears when the window advances without any new calls.
+check_rate_limits() {
+  local LAST_CHECK="$DATA_DIR/cache/.rate_limits_check_ts"
+  local now; now=$(date +%s)
+  mkdir -p "$DATA_DIR/cache" 2>/dev/null || true
+  if [[ -f "$LAST_CHECK" ]]; then
+    local last; last=$(cat "$LAST_CHECK" 2>/dev/null || echo 0)
+    if (( now - last < 300 )); then return 0; fi
+  fi
+  _seed_rate_limit_defaults
+  python3 - "$RATE_LIMITS_FILE" <<'PY' 2>/dev/null || true
+import json, sys, os, datetime
+path = sys.argv[1]
+try:
+  data = json.load(open(path))
+except Exception:
+  sys.exit(0)
+now = datetime.datetime.utcnow()
+changed = False
+for k, v in data.items():
+  try:
+    ws = datetime.datetime.fromisoformat(v["window_start"].replace("Z",""))
+  except Exception:
+    continue
+  if (now - ws).total_seconds() >= v.get("window_seconds", 60):
+    v["calls"] = 0
+    v["window_start"] = now.isoformat() + "Z"
+    v["warned_80pct"] = False
+    changed = True
+if changed:
+  tmp = path + ".tmp." + str(os.getpid())
+  json.dump(data, open(tmp, "w"), indent=2)
+  os.replace(tmp, path)
+PY
+  date +%s > "$LAST_CHECK"
+}
+
+# ── Phase 16: credential expiry (offline) ────────────────────────────────
+# Reads *_expires_at / *_created_at from preferences.json and warns:
+#   - expires within WARN_DAYS (7)
+#   - keys older than MAX_KEY_AGE_DAYS (180) — rotation recommended
+# Strictly offline — never makes a network call. Dedups per (credential, day).
+check_credential_expiry() {
+  local LAST_CHECK="$DATA_DIR/cache/.cred_expiry_ts"
+  local now; now=$(date +%s)
+  mkdir -p "$DATA_DIR/cache" 2>/dev/null || true
+  if [[ -f "$LAST_CHECK" ]]; then
+    local last; last=$(cat "$LAST_CHECK" 2>/dev/null || echo 0)
+    if (( now - last < 3600 )); then return 0; fi
+  fi
+
+  local prefs="${PREFS_PATH:-$DATA_DIR/preferences.json}"
+  local warn_file="$DATA_DIR/cache/cred-expiry-warnings.json"
+  if [[ ! -f "$prefs" ]]; then
+    date +%s > "$LAST_CHECK"
+    return 0
+  fi
+
+  python3 - "$prefs" "$warn_file" <<'PY' 2>/dev/null || true
+import json, sys, os, datetime
+prefs_path, warn_path = sys.argv[1], sys.argv[2]
+WARN_DAYS = 7
+MAX_KEY_AGE_DAYS = 180
+try:
+  prefs = json.load(open(prefs_path))
+except Exception:
+  sys.exit(0)
+now = datetime.datetime.now(datetime.timezone.utc)
+warnings = []
+for key, val in prefs.items():
+  if not isinstance(val, str) or not val:
+    continue
+  if key.endswith("_expires_at") and val != "never":
+    try:
+      expiry = datetime.datetime.fromisoformat(val.replace("Z", "+00:00"))
+      days_left = (expiry - now).days
+      if days_left <= WARN_DAYS:
+        cred_name = key[:-len("_expires_at")].replace("_", " ")
+        warnings.append(f"{cred_name}: expires in {days_left}d")
+    except Exception:
+      pass
+  if key.endswith("_created_at"):
+    try:
+      created = datetime.datetime.fromisoformat(val.replace("Z", "+00:00"))
+      age_days = (now - created).days
+      if age_days >= MAX_KEY_AGE_DAYS:
+        cred_name = key[:-len("_created_at")].replace("_", " ")
+        warnings.append(f"{cred_name}: {age_days}d old (rotate recommended)")
+    except Exception:
+      pass
+os.makedirs(os.path.dirname(warn_path), exist_ok=True)
+if warnings:
+  out = {"checked_at": now.isoformat(), "warnings": warnings}
+  tmp = warn_path + ".tmp." + str(os.getpid())
+  json.dump(out, open(tmp, "w"), indent=2)
+  os.replace(tmp, warn_path)
+else:
+  if os.path.exists(warn_path):
+    os.remove(warn_path)
+PY
+
+  # Dispatch notifications (dedup per credential-line per day)
+  local notify_script="$SCRIPT_DIR/scripts/ops-notify.sh"
+  local dedup_dir="$DATA_DIR/cache/.cred_notify_sent"
+  mkdir -p "$dedup_dir" 2>/dev/null || true
+  if [[ -f "$warn_file" ]] && [[ -f "$notify_script" ]]; then
+    local today
+    today=$(date -u +%Y-%m-%d)
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      local dedup_key
+      dedup_key=$(printf '%s' "$line" | python3 -c "import sys,re;print(re.sub(r'[^a-zA-Z0-9_-]+','_',sys.stdin.read().strip())[:80])" 2>/dev/null || echo "unknown")
+      local sent_marker="$dedup_dir/${today}_${dedup_key}"
+      if [[ ! -f "$sent_marker" ]]; then
+        bash "$notify_script" MEDIUM "ops-daemon: credential expiry" "$line" >/dev/null 2>&1 &
+        touch "$sent_marker"
+      fi
+    done < <(python3 -c "
+import json
+try:
+  d = json.load(open('$warn_file'))
+  for w in d.get('warnings', []):
+    print(w)
+except Exception:
+  pass
+" 2>/dev/null)
+  fi
+
+  date +%s > "$LAST_CHECK"
 }
 
 # ── Daemon registration (cross-OS) ────────────────────────────────────────
@@ -1303,13 +1648,18 @@ while true; do
   ensure_all_services              # Every 5 min: verify all launchd/systemd services
 
   # ── Intelligence pass (smart brain) ──────────────────────────────────────
-  # These run with their own internal throttles — safe to call every loop
-  prefetch_briefing_cache          # Every 5 min: WA/email/PR counts for ops-go
+  # Parallel warm — all prefetch fns run concurrently via _run_parallel_warm
+  # (Phase 16). detect_urgent_messages + trigger_smart_memory_extraction keep
+  # their own internal throttles and run inline (not warm-parallel).
+  _run_parallel_warm               # prefetch_briefing_cache + prefetch_calendar
+                                   # + prefetch_project_health + build_contact_activity_index
+                                   # + prefetch_marketing_cache (all parallel)
   detect_urgent_messages           # Every 5 min: keyword scan for time-sensitive msgs
   trigger_smart_memory_extraction  # Every 10 min: haiku extraction if new msgs arrived
-  build_contact_activity_index     # Every 15 min: cross-channel contact scoring
-  prefetch_calendar                # Every 15 min: today's meetings for context
-  prefetch_project_health          # Every 10 min: git/branch status per registered repo
+
+  # ── Phase 16: infrastructure hardening ───────────────────────────────────
+  check_rate_limits                # Every 5 min: reset rollover windows + warnings
+  check_credential_expiry          # Hourly: offline check of *_expires_at / *_created_at
 
   write_daemon_health
 
