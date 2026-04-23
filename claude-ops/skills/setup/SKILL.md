@@ -81,7 +81,7 @@ The setup wizard accepts these flags (parsed from `$ARGUMENTS`):
 
 ### Incremental re-setup
 
-When Step 0b detects an existing `$PREFS_PATH/preferences.json` with ≥1 configured section AND no explicit arguments were passed, default Step 1's prompt to "Re-setup broken only" (instead of "Set up everything"). Skip every section where `/ops:status` reports green for that section's key integrations.
+When Step 0b detects an existing `$PREFS_PATH` with ≥1 configured section AND no explicit arguments were passed, default Step 1's prompt to "Re-setup broken only" (instead of "Set up everything"). Skip every section where `/ops:status` reports green for that section's key integrations.
 
 ### Progress panel
 
@@ -192,7 +192,7 @@ Use `✓` for present/set, `○` for missing/unset, `✗` for broken.
 
 ### Incremental re-setup routing
 
-If Step 0b finds `$PREFS_PATH/preferences.json` with ≥1 configured section and no `--fast`/`--profile` argument was passed:
+If Step 0b finds `$PREFS_PATH` with ≥1 configured section and no `--fast`/`--profile` argument was passed:
 
 1. Read `/ops:status` snapshot to build a per-section health map (`green`/`red`/`missing`).
 2. Filter the Step 1 selector options to only sections where status is `red` or `missing`.
