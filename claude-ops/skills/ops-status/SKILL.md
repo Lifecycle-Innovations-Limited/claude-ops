@@ -103,3 +103,18 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-status $ARGUMENTS
 | The full morning briefing with real data | `/ops:go` |
 | Deep diagnostics + auto-repair | `/ops:doctor` |
 | An interactive dashboard with hotkeys | `/ops:dash` |
+
+## Integration with /ops:setup
+
+`/ops:setup` (and its `--re-setup` flag) queries this skill for a per-section health map and uses it to filter the setup selector to only broken/unconfigured sections. The compact shape expected is:
+
+```json
+{
+  "telegram": "green",
+  "whatsapp": "missing",
+  "email": "red",
+  "slack": "green"
+}
+```
+
+Maintain this contract when extending the status output — the setup wizard keys on section names like `telegram`, `whatsapp`, `email`, `slack`, `notion`, `calendar`, `doppler`, `vault`, `ecommerce`, `marketing`, `voice`, `revenue`, `discord`, `notifications`, `github`, `aws`, `sentry`, `linear`. A `--brief` (or equivalent JSON) mode that returns this map is the recommended integration surface.
