@@ -20,6 +20,31 @@ const DEFAULT_MODEL = 'claude-haiku-4-5';
 const MAX_DECISIONS = 6;
 const REQUEST_TIMEOUT_MS = 30_000;
 
+const GOTO_ALLOWED_HOSTS = new Set([
+  'localhost',
+  '127.0.0.1',
+  'claude.ai',
+  'www.claude.ai',
+  'platform.claude.com',
+  'accounts.google.com',
+  'myaccount.google.com',
+  'oauth2.googleapis.com',
+  'login.microsoftonline.com',
+]);
+
+function isAllowedGotoUrl(urlStr) {
+  try {
+    const u = new URL(urlStr);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+    const host = u.hostname.toLowerCase();
+    if (GOTO_ALLOWED_HOSTS.has(host)) return true;
+    if (host.endsWith('.google.com')) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 // ── Resolve API key from env → Doppler → keychain ────────────────────────────
 function readCommand(argv, timeout = 4000) {
   try {
@@ -297,17 +322,7 @@ export async function executeAIAction(driver, action, { googlePassword } = {}) {
         return await driver.fillInput(sel, googlePassword);
       }
       case 'goto': {
-        if (!action.url) return false;
-        // Code-level URL allowlist — prompt constraints alone are insufficient
-        const allowedHosts = ['claude.ai', 'accounts.google.com', 'myaccount.google.com', 'login.microsoftonline.com'];
-        try {
-          const host = new URL(action.url).hostname;
-          if (!allowedHosts.some((d) => host === d || host.endsWith('.' + d))) {
-            return false;
-          }
-        } catch {
-          return false;
-        }
+        if (!action.url || !isAllowedGotoUrl(action.url)) return false;
         await driver.goto(action.url);
         return true;
       }
