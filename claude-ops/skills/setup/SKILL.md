@@ -686,7 +686,11 @@ On `Add to Claude Code statusLine`:
 
    ```bash
    prev_cmd=$(jq -r '.statusLine.command // ""' "$SETTINGS")
-   new_cmd="${prev_cmd}; cat /tmp/claude-recap-digest 2>/dev/null | head -c 80"
+   if [ -n "$prev_cmd" ]; then
+     new_cmd="${prev_cmd}; cat /tmp/claude-recap-digest 2>/dev/null | head -c 80"
+   else
+     new_cmd="cat /tmp/claude-recap-digest 2>/dev/null | head -c 80"
+   fi
    TMP=$(mktemp)
    jq --arg cmd "$new_cmd" '.statusLine.command = $cmd' "$SETTINGS" > "$TMP" && mv "$TMP" "$SETTINGS"
    ```
@@ -727,21 +731,23 @@ Wait up to 60s for the daemon to write its first digest. Run in background; do N
 
 ### Step 2d.5 — Persist preferences
 
-Write to `$PREFS_PATH`. Set `"statusline_wired"` to the boolean you recorded in Step 2d.3b: `true` only after **Add to Claude Code statusLine** successfully merged recap into `~/.claude/settings.json`; `false` after **Skip** or **Show me the JSON** there, after the nested **Skip** when an existing statusLine was detected, or if Step 2d.3b did not run (e.g. tmux path only).
+Write to `$PREFS_PATH`. Set both `"tmux_wired"` and `"statusline_wired"` dynamically based on the user’s actual choices:
 
+- `"tmux_wired"`: `true` when tmux was installed and the user chose to wire `status-right` in Step 2d.3; `false` when tmux was missing, the user chose **Skip**, or **Show me the line**.
+- `"statusline_wired"`: `true` only after **Add to Claude Code statusLine** successfully merged recap into `~/.claude/settings.json` in Step 2d.3b; `false` after **Skip**, **Show me the JSON**, the nested **Skip** when an existing statusLine was detected, or if Step 2d.3b did not run (e.g. tmux-only path).
 ```json
 {
   "recap": {
     "enabled": true,
-    "tmux_wired": true,
-    "statusline_wired": false,
+    "tmux_wired": "<true|false — based on Step 2d.3 outcome>",
+    "statusline_wired": "<true|false — based on Step 2d.3b outcome>",
     "installed_at_step": "2d",
     "platform": "macos"
   }
 }
 ```
 
-Use `"statusline_wired": true` when you recorded `recap.statusline_wired = true` after **Add to Claude Code statusLine** successfully merged into `~/.claude/settings.json` in Step 2d.3b.
+Example: tmux wired + statusLine skipped → `"tmux_wired": true, "statusline_wired": false`. No tmux + statusLine wired → `"tmux_wired": false, "statusline_wired": true`.
 
 Print:
 
