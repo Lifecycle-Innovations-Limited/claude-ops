@@ -17,18 +17,11 @@
  *   node daemon.mjs --status  # Show daemon status
  */
 
-import {
-  readFileSync,
-  writeFileSync,
-  existsSync,
-  unlinkSync,
-  appendFileSync,
-  statSync,
-} from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-import { execSync, execFileSync, spawn, spawnSync } from "child_process";
-import { tmpdir } from "os";
+import { readFileSync, writeFileSync, existsSync, unlinkSync, appendFileSync, statSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { execSync, execFileSync, spawn, spawnSync } from 'child_process';
+import { tmpdir } from 'os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
@@ -157,18 +150,11 @@ function readStoredToken(account) {
 function readActiveKeychainToken() {
   try {
     const r = spawnSync(
-      "security",
-      [
-        "find-generic-password",
-        "-s",
-        "Claude Code-credentials",
-        "-a",
-        KEYCHAIN_ACCOUNT,
-        "-g",
-      ],
-      { encoding: "utf8", timeout: 5000 },
+      'security',
+      ['find-generic-password', '-s', 'Claude Code-credentials', '-a', KEYCHAIN_ACCOUNT, '-g'],
+      { encoding: 'utf8', timeout: 5000 },
     );
-    const out = `${r.stdout || ""}${r.stderr || ""}`;
+    const out = `${r.stdout || ''}${r.stderr || ''}`;
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
@@ -541,8 +527,8 @@ async function doRotation(reason) {
 // ── Token refresh (vault entries) ───────────────────────────────────────────
 // In-place refresh via OAuth; invoked from shouldRotate / findValidRotationTarget.
 
-const TOKEN_ENDPOINT = "https://platform.claude.com/v1/oauth/token";
-const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const TOKEN_ENDPOINT = 'https://platform.claude.com/v1/oauth/token';
+const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 
 function parseTokenExpiry(tokenJson) {
   try {
@@ -607,8 +593,8 @@ async function refreshSingleToken(account) {
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 async function mainLoop() {
-  log("Daemon started (v3 — on-demand token refresh)");
-  notify("Claude Rotation Daemon", "Monitoring usage — on-demand refresh");
+  log('Daemon started (v3 — on-demand token refresh)');
+  notify('Claude Rotation Daemon', 'Monitoring usage — on-demand refresh');
 
   let lastRotatedAt = 0; // track when we last rotated
   let lastStatusLog = 0; // periodic status logging
