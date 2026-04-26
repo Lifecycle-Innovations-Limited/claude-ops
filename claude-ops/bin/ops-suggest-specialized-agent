@@ -46,15 +46,25 @@ elif match_kw 'design|architecture|blueprint|implementation plan'; then suggest=
 elif match_kw 'simplify|refactor.*for clarity'; then suggest="code-simplifier:code-simplifier"
 fi
 
+mkdir -p "${HOME}/.claude/logs/ops" 2>/dev/null
+
 if [ -z "$suggest" ]; then
-  # No keyword match — let it through but log it so we can build out the map.
-  mkdir -p "${HOME}/.claude/logs/ops" 2>/dev/null
+  # No keyword match — log AND prompt to create a new agent type for this recurring class.
   printf '[%s] general-purpose, no keyword match: %s\n' "$(date '+%H:%M:%S')" "${description:0:80}" \
     >> "${HOME}/.claude/logs/ops/specialized-agent-misses.log"
+  cat <<JSON
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "ask",
+    "permissionDecisionReason": "[ops] subagent_type='general-purpose' chosen for: \"${description:0:80}\" — and no existing specialized agent matches the keywords in this prompt. Per Sam's preference, create a new specialized agent type for this recurring class FIRST (Write a new agent file under ~/.claude/agents/<name>.md with frontmatter: name, description, tools, model), then respawn with that subagent_type. If this is genuinely a one-off multi-domain task that doesn't justify a new agent, confirm to proceed with general-purpose."
+  }
+}
+JSON
   exit 0
 fi
 
-# Emit permissionDecision=ask so the operator confirms or switches.
+# Keyword match — emit permissionDecision=ask suggesting the specialist.
 cat <<JSON
 {
   "hookSpecificOutput": {
