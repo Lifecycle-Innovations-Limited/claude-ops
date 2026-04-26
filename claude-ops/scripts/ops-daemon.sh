@@ -78,6 +78,18 @@ rotate_log() {
   fi
 }
 
+# Rotate per-service log when it exceeds MAX_LOG_SIZE.
+# Without this, long-running services (briefing-pre-warm, memory-extractor) accumulate
+# unbounded — observed 118MB briefing-pre-warm.log in production.
+rotate_service_log() {
+  local svc_log="$1"
+  [[ -f "$svc_log" ]] || return 0
+  if [[ $(_file_size "$svc_log" 2>/dev/null || echo 0) -gt $MAX_LOG_SIZE ]]; then
+    mv "$svc_log" "$svc_log.old"
+    log "LOG: rotated $svc_log (exceeded 2MB)"
+  fi
+}
+
 # ── State tracking ────────────────────────────────────────────────────────
 declare -A SERVICE_PIDS        # service name → pid
 declare -A SERVICE_RESTARTS    # service name → restart count
@@ -193,6 +205,7 @@ start_service() {
   export OPS_DAEMON_PID=$$
   export OPS_DAEMON_MANAGED=1
 
+  rotate_service_log "$LOG_DIR/${name}.log"
   bash "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
   local pid=$!
   SERVICE_PIDS["$name"]=$pid
@@ -489,6 +502,7 @@ run_cron_service() {
 
   export OPS_DAEMON_PID=$$
   export OPS_DAEMON_MANAGED=1
+  rotate_service_log "$LOG_DIR/${name}.log"
   bash "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
   local pid=$!
   wait "$pid" 2>/dev/null || true
@@ -664,6 +678,7 @@ print(len(recent))
         fi
         if [[ $should_run -eq 1 ]]; then
           log "BRAIN: $new_count new messages since last extraction — triggering memory update"
+          rotate_service_log "$LOG_DIR/memory-extractor.log"
           bash "$MEM_SCRIPT" >> "$LOG_DIR/memory-extractor.log" 2>&1 &
           echo $! > "$extractor_pid_file"
         fi
