@@ -221,9 +221,9 @@ How would you like to run setup?
   [Re-run a specific section — I know what I need]
 ```
 
-If the user selects "Set up everything", select ALL sections across all batches and run them in order (Step 2 → 2b → 2c → 3 → 4 → 5 → 5b → 6 → 7), skipping any already fully configured. Within each step, use the "Configure all" fast-path where available.
+If the user selects "Set up everything", select ALL sections across all batches and run them in order (Step 2 → 2b → 2c → 3 → 4 → 5 → 5b → 6 → 6.5 → 7), skipping any already fully configured. Within each step, use the "Configure all" fast-path where available.
 
-If the user selects "Re-run a specific section", show a single `AskUserQuestion` listing the section names (cli, daemon, channels, mcp, registry, prefs, env, ecom, mktg, voice, revenue) and jump directly to that step.
+If the user selects "Re-run a specific section", show a single `AskUserQuestion` listing the section names (cli, daemon, channels, mcp, registry, prefs, deploy-fix, env, ecom, mktg, voice, revenue) — paginated 4 per page per Rule 1 — and jump directly to that step. The `deploy-fix` section routes to Step 6.5.
 
 If the user selects "Pick sections", proceed with the batched selection below.
 
@@ -255,6 +255,15 @@ Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need 
 | Configure marketing | mktg     | Set Klaviyo, Meta Ads, GA4, Search Console keys               |
 | Configure voice     | voice    | Set Bland AI, ElevenLabs, Groq API keys                       |
 | Configure revenue   | revenue  | Set Stripe + RevenueCat keys for live MRR tracking            |
+
+**Batch 4 — Auto-fix subsystem + auxiliary daemons:**
+
+| Option              | Header      | Description                                                       |
+| ------------------- | ----------- | ----------------------------------------------------------------- |
+| Deploy auto-fix     | deploy-fix  | Configure post-merge + build-failure auto-fix (Step 6.5a)         |
+| Recap marquee       | marquee     | tmux digest of parallel Claude sessions (Step 6.5b)               |
+| Task* reminder      | task-rem    | PostToolUse nudge to use TaskCreate/TaskUpdate (Step 6.5c)        |
+| Account rotation    | rotator     | Multi-account Claude rotator toggle (Step 6.5d)                   |
 
 Present each batch as a separate `AskUserQuestion` call. Skip batches where all items are already green. Collect all selections across batches and run each selected section in order.
 
@@ -2994,6 +3003,249 @@ Write to `$PREFS_PATH`:
 ```
 
 If the file already exists, **merge** — don't overwrite. Read with `jq`, apply updates with `jq '. + { ... }'`, write back.
+
+---
+
+## Step 6.5 — Auto-fix subsystem + auxiliary daemons (if selected)
+
+This step configures four subsystems that ship with the plugin but stay opt-in: the deploy/build auto-fix loop, the recap marquee (tmux digest), the periodic Task* tool reminder, and the multi-account Claude rotator. All settings persist into `$PREFS_PATH` under the same keys declared in `.claude-plugin/plugin.json` `userConfig`, so the running daemons and hooks pick them up immediately.
+
+**Re-run guard (Rule 3 compliant).** Before each sub-flow, check `$PREFS_PATH` for an existing block. If found, show current state and ask:
+
+```
+Deploy auto-fix is already configured. What now?
+  [Keep current settings]
+  [Re-run wizard]
+  [Show full config]
+  [Skip]
+```
+
+Only continue into the wizard on `Re-run wizard`. Same pattern for `recap_marquee_enabled`, `task_reminder_enabled`, and `account_rotation_enabled`.
+
+All `jq` writes use the merge pattern from Step 6: read → `jq '. + { ... }'` → write to a temp file → `mv`. Never overwrite the file.
+
+### 6.5a — Deploy auto-fix wizard
+
+**Step A1 — master switch** (`AskUserQuestion`, 4 options — Rule 1):
+
+```
+Enable deploy auto-fix?
+  [Yes — full autonomy (monitor + dispatch fixer)]
+  [Yes — notify only, no agent dispatch]
+  [Skip]
+  [Configure later]
+```
+
+Mapping:
+- `Yes — full autonomy` → `deploy_fix_enabled=true`, `auto_dispatch_fixer=true`
+- `Yes — notify only` → `deploy_fix_enabled=true`, `auto_dispatch_fixer=false`
+- `Skip` → `deploy_fix_enabled=false`, persist and jump to 6.5b
+- `Configure later` → record `deploy_fix.deferred=true` and jump to 6.5b
+
+**Step A2 — behavior toggles** (only when enabled). `AskUserQuestion` `multiSelect: true`, exactly 4 options:
+
+```
+Which auto-fix behaviors should run? (multi-select)
+  [monitor_post_merge — watch deploy after PR merge]
+  [monitor_build_failures — auto-fix local `npm run build:*` failures]
+  [audit_health_after_deploy — curl /health after deploy]
+  [verify_served_commit — check served SHA matches merged SHA]
+```
+
+Persist each as a top-level boolean key. Unchecked = `false`.
+
+**Step A3 — danger flag:**
+
+```
+Allow fixer to skip permission prompts (true unattended autonomy)?
+  [Yes — pass --dangerously-skip-permissions]
+  [No — safer, may prompt mid-fix]
+  [Skip]
+```
+
+Persist `allow_dangerous` (true/false). `Skip` → leave default (`false`).
+
+**Step A4 — hourly budget:**
+
+```
+Per-repo hourly fix budget?
+  [1 — conservative]
+  [3 — default]
+  [5]
+  [10 — aggressive]
+```
+
+Persist `max_fixes_per_hour` (integer).
+
+**Step A5 — notification channel:**
+
+```
+Notification channel for failures?
+  [macOS — terminal-notifier]
+  [ntfy.sh — phone push]
+  [Discord webhook]
+  [None]
+```
+
+Persist `notify_channel` ∈ `macos|ntfy|discord|none`.
+
+**Step A6 — channel credentials** (Rule 3 — never silently skip):
+
+- `ntfy` selected and `ntfy_topic` empty in prefs → ask for topic. The topic name is public (not sensitive). If user picks `Skip`, downgrade `notify_channel` to `none` and tell them why.
+
+  ```
+  ntfy.sh topic name?
+    [Paste topic]
+    [Skip — downgrade to no notifications]
+  ```
+
+- `discord` selected and no `discord_default_webhook_url` AND no `discord_webhook_url` in prefs → ask for webhook URL with `sensitive: true`:
+
+  ```
+  Discord webhook URL?
+    [Paste webhook URL]
+    [Reuse existing channel webhook (discord_webhook_url)]
+    [Skip — downgrade to no notifications]
+  ```
+
+  On paste, write `discord_default_webhook_url` (sensitive). On reuse, copy `discord_webhook_url` → `discord_default_webhook_url` so the deploy-fix sink finds it. On skip, downgrade `notify_channel` to `none`.
+
+- `macos` selected → background-check `command -v terminal-notifier` (Rule 4). If missing, run `brew install terminal-notifier` with `run_in_background: true` and continue.
+
+Use the `lib/credential-store.{sh,mjs}` helpers when persisting sensitive values so they land in the keychain instead of plaintext prefs.
+
+**Step A7 — registry seeding:**
+
+```
+Seed service registry from your repos?
+  [Yes — scan ~/Projects + ~ for git repos]
+  [No — I'll edit ~/.claude/config/post-merge-services.json by hand]
+  [Skip]
+```
+
+If yes, run in background (Rule 4):
+
+```bash
+find ~/Projects ~ -maxdepth 3 -type d -name .git 2>/dev/null \
+  | xargs -I{} dirname {} \
+  | while read repo; do
+      slug=$(cd "$repo" && gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)
+      [ -n "$slug" ] && echo "$slug|$repo"
+    done > /tmp/ops-deploy-fix-detected.$$
+```
+
+Read the detected slugs, dedupe, then prompt the user **paginated 4 at a time per `AskUserQuestion`** (Rule 1) for the health URL of each repo's `:dev` and `:main` bases.
+
+Per-repo prompt:
+
+```
+Health URL for <slug>:dev? (leave blank to skip)
+  [Paste URL]
+  [Reuse last pattern — apply *-dev → * for :main]
+  [Skip this repo]
+  [Skip remaining repos]
+```
+
+For each accepted entry, append to `~/.claude/config/post-merge-services.json` (create file if missing) using the merge pattern:
+
+```bash
+mkdir -p ~/.claude/config
+[ -f ~/.claude/config/post-merge-services.json ] || echo '{}' > ~/.claude/config/post-merge-services.json
+jq --arg k "$slug:dev" --arg h "$health_url" --arg v "$version_url" \
+  '. + { ($k): { health: $h, version: $v } }' \
+  ~/.claude/config/post-merge-services.json > /tmp/reg.$$ \
+  && mv /tmp/reg.$$ ~/.claude/config/post-merge-services.json
+```
+
+Tell the user the count written and the file path.
+
+**Step A8 — persist the deploy-fix block:**
+
+```bash
+jq '. + {
+  deploy_fix_enabled: <bool>,
+  monitor_post_merge: <bool>,
+  monitor_build_failures: <bool>,
+  audit_health_after_deploy: <bool>,
+  verify_served_commit: <bool>,
+  auto_dispatch_fixer: <bool>,
+  allow_dangerous: <bool>,
+  max_fixes_per_hour: <int>,
+  notify_channel: "<channel>",
+  ntfy_topic: "<topic>",
+  discord_default_webhook_url: "<url>",
+  deploy_fix: { configured_at: "<ISO timestamp>", wizard_version: 1 }
+}' "$PREFS_FILE" > /tmp/p.$$ && mv /tmp/p.$$ "$PREFS_FILE"
+```
+
+Omit any key whose value is empty/unset. Use `lib/credential-store` for sensitive values rather than plaintext.
+
+### 6.5b — Recap marquee (tmux digest)
+
+```
+Enable recap marquee daemon? (one-line digest of all parallel Claude sessions in tmux status-right)
+  [Yes — auto-configure ~/.tmux.conf]
+  [Yes — toggle on, don't touch tmux.conf]
+  [No]
+  [Skip]
+```
+
+- `Yes — auto-configure` → `recap_marquee_enabled=true`, `recap_marquee_auto_configure_tmux=true`. In background (Rule 4): grep `~/.tmux.conf` for `ops-recap-marquee`. If absent, append the source line and run `tmux source-file ~/.tmux.conf` (only if `tmux info` succeeds — i.e. server is running).
+- `Yes — no tmux change` → `recap_marquee_enabled=true`, `recap_marquee_auto_configure_tmux=false`.
+- `No` → both keys `false`.
+- `Skip` → leave defaults, mark `recap_marquee.deferred=true`.
+
+### 6.5c — Periodic Task* tool reminder
+
+```
+Enable Task* tool reminder hook?
+  [Yes — default threshold (10 calls)]
+  [Yes — custom threshold]
+  [No — disable hook]
+  [Skip]
+```
+
+If `custom threshold`, follow up:
+
+```
+Reminder threshold (tool calls without a Task*)?
+  [5]
+  [10]
+  [20]
+  [50]
+```
+
+Persist `task_reminder_enabled` (bool) and `task_reminder_threshold` (int).
+
+### 6.5d — Account rotation toggle (toggle only)
+
+The full multi-account OAuth wizard is a separate task — this step only flips the master toggle.
+
+```
+Enable multi-account Claude rotator?
+  [Yes — enable toggle, OAuth wizard later]
+  [No]
+  [Skip]
+```
+
+Persist `account_rotation_enabled` (bool). On `Yes`, print:
+
+```
+✓ Account rotation toggle enabled. Run /ops:setup --section account-rotation later to wire OAuth per account.
+```
+
+### 6.5 — completion print
+
+After all four sub-flows, print:
+
+```
+✓ Deploy auto-fix:    <on/off>  (autonomy=<full|notify|off>, budget=<N>/hr, notify=<channel>)
+✓ Recap marquee:      <on/off>  (tmux=<auto|manual>)
+✓ Task reminder:      <on/off>  (threshold=<N>)
+✓ Account rotation:   <on/off>  (OAuth wizard pending)
+```
+
+Then continue to Step 7.
 
 ---
 
