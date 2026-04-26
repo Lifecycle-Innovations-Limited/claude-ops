@@ -601,13 +601,14 @@ Existing tmux status-right detected. How to integrate recap marquee?
   [Replace with recap-only]  [Append (keep existing line as comment)]  [Show me, I'll edit manually]  [Skip]
 ```
 
-Append the snippet (or replace, per choice):
+Append the snippet (or replace, per choice). Use an unquoted heredoc delimiter so `${PLUGIN_ROOT}` expands to the installed plugin path (tmux `#()` does not expand env vars):
 
 ```bash
-cat >> "$TMUX_CONF" <<'TMUX'
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1)}"
+cat >> "$TMUX_CONF" <<TMUX
 
 # claude-ops recap marquee — synthesizes multi-session digest into status-right
-set -g status-right '#(cat /tmp/claude-recap-digest 2>/dev/null | head -c 80) #[fg=#a6e3a1]%H:%M '
+set -g status-right '#('"${PLUGIN_ROOT}"'/scripts/recap/marquee.sh) #[fg=#a6e3a1]%H:%M '
 set -g status-interval 2
 TMUX
 

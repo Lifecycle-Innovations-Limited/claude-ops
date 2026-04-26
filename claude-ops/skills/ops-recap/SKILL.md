@@ -126,12 +126,16 @@ Walk the user through tmux integration if not already wired. Detect existing `st
 
 4. On append: insert the marquee snippet ahead of the existing setting so both render. On replace: comment out the old line and add the new one.
 
-   Snippet to append:
+   Snippet to append — expand the plugin path when writing `~/.tmux.conf` (tmux `#()` does not expand env vars):
 
-   ```
-   # claude-ops recap marquee
-   set -g status-right '#(cat /tmp/claude-recap-digest 2>/dev/null | head -c 80) #[fg=#a6e3a1]%H:%M '
-   set -g status-interval 2
+   ```bash
+   PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1)}"
+   cat >> "$TMUX_CONF" <<TMUX
+
+# claude-ops recap marquee
+set -g status-right '#('"${PLUGIN_ROOT}"'/scripts/recap/marquee.sh) #[fg=#a6e3a1]%H:%M '
+set -g status-interval 2
+TMUX
    ```
 
 5. Reload if tmux is running:

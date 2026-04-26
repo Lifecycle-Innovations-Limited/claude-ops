@@ -23,7 +23,7 @@ now=$(date +%s)
 
 # Block A: current per-session recaps (newest first, max 8, drop stale >2h)
 sessions=""
-for f in $(ls -t /tmp/claude-recap-* 2>/dev/null | grep -v -- '-digest$' | grep -v -- '-digest\.log$' | grep -v -- '-latest$' | grep -v -- '-pinned$' | head -8); do
+for f in $(ls -t /tmp/claude-recap-* 2>/dev/null | grep -v -- '-digest$' | grep -v -- '-digest\.log$' | grep -v -- '-latest$' | grep -v -- '-pinned$' | grep -v daemon | head -8); do
   mtime=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)
   age=$((now - mtime))
   [ "$age" -gt 7200 ] && continue
