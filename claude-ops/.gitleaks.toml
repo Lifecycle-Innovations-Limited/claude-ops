@@ -178,3 +178,7 @@ stopwords = [
   "XOXD_TOKEN",
   "STRIPE_SECRET_KEY",
 ]
+# Public OAuth client IDs (not secrets — embedded in upstream CLIs)
+regexes = [
+  '''9d1c250a-e61b-44d9-88ed-5944d1962f5e''',  # Claude Code OAuth client ID (public)
+]
