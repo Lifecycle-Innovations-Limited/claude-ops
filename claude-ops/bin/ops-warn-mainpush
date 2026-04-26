@@ -53,9 +53,19 @@ if [[ -z "$DEST" ]] && command -v git >/dev/null 2>&1; then
     BRANCH=$(git -C "$PWD" branch --show-current 2>/dev/null || true)
     case "$BRANCH" in
       main|master|production)
-        # Bare push (no explicit refspec) defaults to current branch.
-        if echo "$CMD" | grep -Eq 'git[[:space:]]+push([[:space:]]+(-u[[:space:]]+)?[a-zA-Z0-9_.-]+)?[[:space:]]*$' \
-           || echo "$CMD" | grep -Eq 'git[[:space:]]+push[[:space:]]+(-u[[:space:]]+)?[a-zA-Z0-9_.-]+[[:space:]]*$'; then
+        # Bare push (no explicit refspec) defaults to current branch. Count tokens
+        # AFTER `push` — only match: 0 args (truly bare), or 1 arg = remote name
+        # (e.g., `git push`, `git push origin`, `git push -u origin`). If a third
+        # token is present (e.g., `git push origin feature-x`), that's an explicit
+        # refspec — Case A/B will catch protected names; do NOT flag it here.
+        push_args=$(echo "$CMD" \
+          | sed -E 's/.*git[[:space:]]+push[[:space:]]*//' \
+          | sed -E 's/[[:space:];&|`].*$//')
+        # Strip leading -u flag.
+        push_args=$(echo "$push_args" | sed -E 's/^-u[[:space:]]+//')
+        # Re-tokenize what's left (remote-only or empty) by counting words.
+        n_words=$(echo "$push_args" | awk '{print NF}')
+        if [[ "$n_words" -le 1 ]]; then
           DEST="current branch '$BRANCH'"
           REASON="You are on protected branch '$BRANCH' and about to push. Confirm before publishing — prefer a feature branch + PR."
         fi

@@ -9,7 +9,7 @@
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh 2>/dev/null | grep '✗' | head -3 || true"
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh 2>/dev/null | grep '\u2717' | head -3 || true"
           },
           {
             "type": "command",
@@ -25,24 +25,6 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-pretool-wacli-health \"$TOOL_INPUT\" 2>/dev/null || true"
-          },
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-prevent-secret-commit",
-            "timeout": 5,
-            "if": "Bash(git commit*)"
-          },
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-no-rm-rf-anchor",
-            "timeout": 3,
-            "if": "Bash(rm *)"
-          },
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-warn-mainpush",
-            "timeout": 3,
-            "if": "Bash(git push*)"
           }
         ]
       },
@@ -76,17 +58,12 @@
         ]
       },
       {
-        "matcher": "*",
+        "matcher": "Bash|Edit|Write",
         "hooks": [
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-task-reminder 2>/dev/null || true",
             "timeout": 3
-          },
-          {
-            "type": "command",
-            "command": "[ \"${CLAUDE_PLUGIN_USERCONFIG_RECAP_MARQUEE_ENABLED:-false}\" = \"true\" ] && sh ${CLAUDE_PLUGIN_ROOT}/hooks/recap-tool-activity.sh 2>/dev/null || true",
-            "timeout": 2
           }
         ]
       }
@@ -97,11 +74,6 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-post-session-cleanup 2>/dev/null || true"
-          },
-          {
-            "type": "command",
-            "command": "[ \"${CLAUDE_PLUGIN_USERCONFIG_RECAP_MARQUEE_ENABLED:-false}\" = \"true\" ] && sh ${CLAUDE_PLUGIN_ROOT}/hooks/recap-capture.sh 2>/dev/null || true",
-            "timeout": 3
           }
         ]
       }

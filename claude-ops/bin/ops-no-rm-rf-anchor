@@ -6,9 +6,9 @@
 # userConfig: no_rm_rf_anchor (boolean, default true). Disable by setting
 # CLAUDE_PLUGIN_OPTION_NO_RM_RF_ANCHOR=false.
 set -uo pipefail
-# Disable filename globbing so unquoted `/*` / `../*` tokens don't expand
-# when we tokenize the command string.
-set -f
+# Globbing is disabled only inside the tokenization loop below (via subshell)
+# so unquoted `/*` / `../*` tokens don't expand. We do NOT set -f at script
+# scope because callers who source this file would inherit the change.
 
 if [[ "${CLAUDE_PLUGIN_OPTION_NO_RM_RF_ANCHOR:-true}" == "false" ]]; then
   exit 0
@@ -38,7 +38,7 @@ echo "$CMD" | grep -Eq '(^|[[:space:];&|`])rm([[:space:]]|$)' || exit 0
 NORM="$(echo "$CMD" | tr '\n' ' ' | tr -s ' ')"
 
 # Match `rm` with -rf / -fr / -r -f (any combo of -r, -R, -f, --recursive, --force).
-# Then check ALL arguments after the flags for dangerous anchors.
+# Then check the FIRST argument after the flags for dangerous anchors.
 #
 # Dangerous anchor regex matches the target token explicitly:
 #   /                /*               /.
@@ -51,9 +51,10 @@ NORM="$(echo "$CMD" | tr '\n' ' ' | tr -s ' ')"
 DANGER=""
 
 # shellcheck disable=SC2001
-SEGMENTS=$(echo "$NORM" | awk '{ gsub(/&&/, "\n"); gsub(/\|\|/, "\n"); gsub(/\|/, "\n"); gsub(/;/, "\n"); print }')
+SEGMENTS=$(echo "$NORM" | sed 's/\(&&\|||\||\|;\)/\n/g')
 
-while IFS= read -r seg; do
+# Run the loop in a subshell so `set -f` (no-glob) doesn't leak to the parent.
+DANGER=$(set -f; while IFS= read -r seg; do
   seg="$(echo "$seg" | sed 's/^ *//;s/ *$//')"
   [[ -z "$seg" ]] && continue
   # Must start with rm (allow `sudo rm`, `time rm`, etc.)
@@ -99,12 +100,18 @@ while IFS= read -r seg; do
     if [[ "$tok" == '"$HOME"' || "$tok" == '"$HOME"/' || "$tok" == '"$HOME"/*' ]]; then
       DANGER="$tok"; break
     fi
+    # Only inspect the first non-flag target — that's enough to flag.
+    break
   done
 
-  [[ -n "$DANGER" ]] && break
+  if [[ -n "$DANGER" ]]; then
+    printf '%s' "$DANGER"
+    break
+  fi
 done <<EOF
 $SEGMENTS
 EOF
+)
 
 if [[ -n "$DANGER" ]]; then
   reason="Blocked rm -rf against dangerous anchor: '$DANGER'. This can destroy the system, your home directory, or the calling repo. Use a specific subpath (e.g. ./node_modules, /tmp/foo). To override (NOT RECOMMENDED) set CLAUDE_PLUGIN_OPTION_NO_RM_RF_ANCHOR=false."
