@@ -57,7 +57,7 @@
           },
           {
             "type": "command",
-            "command": "[ \"${CLAUDE_PLUGIN_USERCONFIG_RECAP_MARQUEE_ENABLED:-true}\" = \"true\" ] && sh ${CLAUDE_PLUGIN_ROOT}/hooks/recap-tool-activity.sh 2>/dev/null || true",
+            "command": "[ \"${CLAUDE_PLUGIN_USERCONFIG_RECAP_MARQUEE_ENABLED:-false}\" = \"true\" ] && sh ${CLAUDE_PLUGIN_ROOT}/hooks/recap-tool-activity.sh 2>/dev/null || true",
             "timeout": 2
           }
         ]
@@ -72,7 +72,7 @@
           },
           {
             "type": "command",
-            "command": "[ \"${CLAUDE_PLUGIN_USERCONFIG_RECAP_MARQUEE_ENABLED:-true}\" = \"true\" ] && sh ${CLAUDE_PLUGIN_ROOT}/hooks/recap-capture.sh 2>/dev/null || true",
+            "command": "[ \"${CLAUDE_PLUGIN_USERCONFIG_RECAP_MARQUEE_ENABLED:-false}\" = \"true\" ] && sh ${CLAUDE_PLUGIN_ROOT}/hooks/recap-capture.sh 2>/dev/null || true",
             "timeout": 3
           }
         ]

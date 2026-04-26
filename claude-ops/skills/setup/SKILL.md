@@ -555,10 +555,12 @@ PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.recap-daemon.plist"
 DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 LOG_DIR="$DATA_DIR/logs"
 mkdir -p "$LOG_DIR"
-
+# Resolve claude CLI bin directory (handles nvm, homebrew, system npm)
+CLAUDE_BIN_DIR=$(dirname "$(command -v claude 2>/dev/null || echo /usr/local/bin/claude)")
 sed -e "s|__DAEMON_SCRIPT_PATH__|$DAEMON_SCRIPT|g" \
     -e "s|__LOG_DIR__|$LOG_DIR|g" \
     -e "s|__HOME__|$HOME|g" \
+    -e "s|__CLAUDE_BIN_DIR__|$CLAUDE_BIN_DIR|g" \
     "$PLIST_TEMPLATE" > "$PLIST_DEST"
 
 launchctl bootout "gui/$(id -u)/com.claude-ops.recap-daemon" 2>/dev/null || true

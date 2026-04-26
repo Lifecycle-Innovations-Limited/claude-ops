@@ -25,6 +25,9 @@ last_text=$(_transcript_rev_lines "$transcript" | awk '
   fi
 done)
 
+# Restrict file permissions — /tmp is world-readable on most systems
+umask 177
+
 if [ -z "$last_text" ]; then
   : > "/tmp/claude-recap-${session_id}"
   exit 0

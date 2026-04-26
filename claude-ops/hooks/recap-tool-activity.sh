@@ -42,5 +42,5 @@ esac
 ts=$(date '+%H:%M:%S')
 line="[$ts] $label"
 
-[ -n "$session_id" ] && printf '%s' "$line" > "/tmp/claude-recap-${session_id}"
+[ -n "$session_id" ] && { umask 177; printf '%s' "$line" > "/tmp/claude-recap-${session_id}"; }
 exit 0
