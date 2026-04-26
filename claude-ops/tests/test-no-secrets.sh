@@ -13,7 +13,11 @@ err()  { echo "  FAIL: $1 — $2"; fail=$((fail+1)); }
 echo "Scanning for secrets and personal data in: $PLUGIN_ROOT"
 echo ""
 
-# Directories/files to exclude from scanning
+# Directories/files to exclude from scanning.
+# NOTE: `tests/` is intentionally excluded from the MAIN sweep because test files
+# legitimately assemble runtime patterns (e.g., regex literals matching `sk_live_`)
+# that look identical to real secrets. A separate, narrower `tests/`-only sweep
+# below flags ONLY high-confidence string-literal secrets in tests.
 EXCLUDE_DIRS=(
   "node_modules"
   ".git"
@@ -101,6 +105,35 @@ scan_pattern "AWS secret access keys" '(?i)aws.{0,20}secret.{0,20}[A-Za-z0-9/+=]
 
 # Generic high-entropy tokens with common prefixes
 scan_pattern "org_ prefixed tokens (often API keys)" 'org_[a-zA-Z0-9]{20,}'
+
+# --- Tests-only narrow sweep ---
+# We allow regex literals + assembled patterns in tests/ but flag anything that
+# looks like a literal high-value secret embedded in a test file.
+scan_tests_literal() {
+  local label="$1"
+  local pattern="$2"
+  local results
+  results=$(grep -rE "$pattern" \
+    --include="*.sh" --include="*.ts" --include="*.js" --include="*.mjs" \
+    "$PLUGIN_ROOT/tests" 2>/dev/null || true)
+  # Strip lines where the pattern is wrapped in single/double quotes followed by
+  # regex meta (`{`, `[`, `+`, `*`) — those are pattern definitions, not secrets.
+  results=$(echo "$results" | grep -vE "['\"][a-z_]+_(\[|\\\\|\{|\+|\*)" || true)
+  results=$(echo "$results" | grep -vE "(example|placeholder|your[-_]|<[A-Z_]+>|\[YOUR_|TODO|REPLACE|fake|dummy|test-token|sk_test_EXAMPLE)" || true)
+  results=$(echo "$results" | grep -v "^$" || true)
+  if [[ -n "$results" ]]; then
+    local count
+    count=$(echo "$results" | wc -l | tr -d ' ')
+    err "tests/ literal $label" "$count match(es)"
+    echo "$results" | head -3 | sed 's/^/    /'
+  else
+    ok "no tests/ literal $label"
+  fi
+}
+
+scan_tests_literal "Stripe sk_live_" 'sk_live_[a-zA-Z0-9]{24,}'
+scan_tests_literal "GitHub ghp_" 'ghp_[a-zA-Z0-9]{36,}'
+scan_tests_literal "Slack xoxb-" 'xoxb-[0-9]{10,}-[0-9]{10,}-[a-zA-Z0-9]{20,}'
 
 echo ""
 echo "---"
