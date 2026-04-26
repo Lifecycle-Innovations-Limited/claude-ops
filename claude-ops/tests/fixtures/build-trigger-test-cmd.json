@@ -1,1 +1,1 @@
-{"tool_input":{"command":"npm run test"},"tool_response":{"exitCode":1,"output":"❌ test failed\n"}}
+{ "tool_input": { "command": "npm run test" }, "tool_response": { "exitCode": 1, "output": "❌ test failed\n" } }

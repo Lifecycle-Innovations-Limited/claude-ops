@@ -1,1 +1,4 @@
-{"tool_input":{"command":"npm run build:all"},"tool_response":{"exitCode":1,"output":"❌ failed\nnpm error code E429\nToo Many Requests\n"}}
+{
+  "tool_input": { "command": "npm run build:all" },
+  "tool_response": { "exitCode": 1, "output": "❌ failed\nnpm error code E429\nToo Many Requests\n" }
+}
