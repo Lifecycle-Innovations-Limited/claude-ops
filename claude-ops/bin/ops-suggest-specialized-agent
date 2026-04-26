@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# ops-suggest-specialized-agent — PreToolUse hook on Agent.
+# ops-suggest-specialized-agent — PreToolUse hook on Agent (silent + autonomous).
 #
-# When subagent_type=general-purpose, scans the prompt for keywords mapping to a
-# more specialized agent and emits permissionDecision="ask" forcing the operator
-# to pick a better fit (or confirm general-purpose is genuinely correct).
+# When subagent_type=general-purpose:
+#   1. Keyword match against existing specialists → silently swap via updatedInput.
+#   2. No match → fire-and-forget Haiku call drafts a new ~/.claude/agents/<name>.md
+#      for this recurring class; current call proceeds as-is (no block, no prompt).
+#      Next time the same pattern appears, the new agent will exist and may match.
 #
-# Per the design philosophy: never default to general-purpose if a domain-specific
-# agent fits; if none fits a recurring class, create a new agent type first.
+# Operator never sees a permission prompt. Sam's preference: silent + autonomous.
 set -e
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 . "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh" 2>/dev/null || { config() { echo "${2:-}"; }; }
@@ -21,56 +22,77 @@ prompt=$(printf '%s' "$INPUT" | jq -r '.tool_input.prompt // ""' 2>/dev/null)
 description=$(printf '%s' "$INPUT" | jq -r '.tool_input.description // ""' 2>/dev/null)
 combined=$(printf '%s\n%s' "$description" "$prompt" | tr '[:upper:]' '[:lower:]')
 
-# Keyword → suggested specialized agent mapping. Customize via plugin data:
-# ~/.claude/plugins/data/ops-ops-marketplace/agent-suggestions.json (optional override)
+mkdir -p "${HOME}/.claude/logs/ops" "${HOME}/.claude/agents" 2>/dev/null
+
+# Canonical specialist names — must exactly match an installed subagent_type.
 suggest=""
 match_kw() { echo "$combined" | grep -qE "$1"; }
 
-# Order matters — first match wins. Most specific first.
-if   match_kw 'mobile|expo|ios|android|react native|fastlane|testflight'; then suggest="fullstack-mobile-architect (or Mobile App Specialist)"
-elif match_kw 'multi[- ]repo|cross[- ]repo|api contract|ripple|workspace.*span'; then suggest="multi-repo-coordinator"
-elif match_kw 'sentry|otel|datadog|new relic|telemetry|observability|structured logging'; then suggest="observability-engineer"
+if   match_kw 'mobile|expo|\bios\b|android|react native|fastlane|testflight'; then suggest="fullstack-mobile-architect"
+elif match_kw 'multi[- ]repo|cross[- ]repo|api contract|workspace.*span'; then suggest="multi-repo-coordinator"
+elif match_kw 'sentry|otel|datadog|new relic|telemetry|observability'; then suggest="observability-engineer"
 elif match_kw 'eval|judge[- ]llm|golden snapshot|llm[- ]eval'; then suggest="llm-eval-engineer"
 elif match_kw 'prompt[- ]engineer|persona|few[- ]shot|prompt cache'; then suggest="prompt-engineer"
 elif match_kw 'json schema|tool use spec|structured output|instructor'; then suggest="structured-output-engineer"
 elif match_kw 'migration|version bump|sdk upgrade|model upgrade|rollback plan'; then suggest="migration-engineer"
 elif match_kw 'test strategy|test pyramid|coverage gap|flaky test'; then suggest="test-strategist"
 elif match_kw 'security audit|owasp|injection|secret leak|csrf|xss'; then suggest="security-reviewer"
-elif match_kw 'database|sql|prisma|drizzle|n\+1|migration|index'; then suggest="database-reviewer (or Database Optimizer)"
+elif match_kw 'database|\bsql\b|prisma|drizzle|n\+1|index'; then suggest="database-reviewer"
 elif match_kw 'health.*data|healthkit|hipaa|medical|clinical'; then suggest="Health Data Expert"
 elif match_kw 'devops|terraform|ecs|cloudformation|aws cdk|cicd|github action'; then suggest="DevOps Engineer"
-elif match_kw 'typescript|tsconfig|type[- ]check|tsc'; then suggest="typescript-reviewer"
+elif match_kw 'typescript|tsconfig|type[- ]check|\btsc\b'; then suggest="typescript-reviewer"
 elif match_kw 'review.*pr|code review|review code'; then suggest="feature-dev:code-reviewer"
 elif match_kw 'explore|map|trace.*execution|architecture'; then suggest="feature-dev:code-explorer"
-elif match_kw 'design|architecture|blueprint|implementation plan'; then suggest="feature-dev:code-architect"
+elif match_kw 'design.*architecture|blueprint|implementation plan'; then suggest="feature-dev:code-architect"
 elif match_kw 'simplify|refactor.*for clarity'; then suggest="code-simplifier:code-simplifier"
 fi
 
-mkdir -p "${HOME}/.claude/logs/ops" 2>/dev/null
-
-if [ -z "$suggest" ]; then
-  # No keyword match — log AND prompt to create a new agent type for this recurring class.
-  printf '[%s] general-purpose, no keyword match: %s\n' "$(date '+%H:%M:%S')" "${description:0:80}" \
-    >> "${HOME}/.claude/logs/ops/specialized-agent-misses.log"
-  cat <<JSON
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "ask",
-    "permissionDecisionReason": "[ops] subagent_type='general-purpose' chosen for: \"${description:0:80}\" — and no existing specialized agent matches the keywords in this prompt. Per Sam's preference, create a new specialized agent type for this recurring class FIRST (Write a new agent file under ~/.claude/agents/<name>.md with frontmatter: name, description, tools, model), then respawn with that subagent_type. If this is genuinely a one-off multi-domain task that doesn't justify a new agent, confirm to proceed with general-purpose."
-  }
-}
-JSON
+if [ -n "$suggest" ]; then
+  # Silent autonomous swap via updatedInput.
+  printf '[%s] auto-swap general-purpose → %s for: %s\n' "$(date '+%H:%M:%S')" "$suggest" "${description:0:80}" \
+    >> "${HOME}/.claude/logs/ops/agent-auto-swap.log"
+  jq -n --arg new "$suggest" --argjson orig "$(printf '%s' "$INPUT" | jq '.tool_input')" '
+    {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        updatedInput: ($orig | .subagent_type = $new)
+      }
+    }
+  '
   exit 0
 fi
 
-# Keyword match — emit permissionDecision=ask suggesting the specialist.
-cat <<JSON
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "ask",
-    "permissionDecisionReason": "[ops] subagent_type='general-purpose' chosen for: \"${description:0:60}\". A more specialized agent fits this work: $suggest. If you actually need general-purpose (e.g. multi-domain task that no specialist covers), confirm. Otherwise cancel and respawn with the suggested subagent_type."
-  }
-}
-JSON
+# No keyword match — log + spawn background Haiku to draft a new agent for this class.
+# Current call proceeds as general-purpose (no block).
+printf '[%s] no specialist match — spawning Haiku drafter for: %s\n' "$(date '+%H:%M:%S')" "${description:0:80}" \
+  >> "${HOME}/.claude/logs/ops/specialized-agent-misses.log"
+
+if command -v claude >/dev/null 2>&1; then
+  drafter_log="${HOME}/.claude/logs/ops/agent-drafter-$(date +%s)-$$.log"
+  draft_prompt="You are an agent-builder. Look at this real task that just had no specialist match:
+
+DESCRIPTION: ${description:0:200}
+PROMPT EXCERPT: ${prompt:0:600}
+
+Draft a new specialized Claude Code subagent definition file. Write it to ~/.claude/agents/<short-kebab-name>.md with this exact frontmatter:
+---
+name: <short-kebab-name>
+description: <one-paragraph: when this agent should be used, with 2-3 example scenarios>
+tools: <comma-separated tool list — Read, Write, Edit, Bash, Grep, Glob, etc — restrict to what this class genuinely needs>
+model: sonnet|haiku|opus
+---
+
+Then a body that describes the persona, capabilities, and operating constraints.
+
+Pick a name that captures the recurring CLASS (not this one task). Avoid duplicating these existing agents: fullstack-mobile-architect, multi-repo-coordinator, observability-engineer, llm-eval-engineer, prompt-engineer, structured-output-engineer, migration-engineer, test-strategist, security-reviewer, database-reviewer, Health Data Expert, DevOps Engineer, typescript-reviewer.
+
+If a sibling agent file already exists for this class at ~/.claude/agents/, do NOT overwrite — exit silently. Final line of output: NEW: <name> or SKIP: <reason>."
+
+  nohup bash -c "
+    printf '%s' \"\$1\" | claude -p --model haiku --dangerously-skip-permissions --no-session-persistence > '$drafter_log' 2>&1
+  " _ "$draft_prompt" </dev/null >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+fi
+
+# Let the general-purpose call proceed unmodified.
+exit 0
