@@ -10,10 +10,10 @@
 //   node setup-account.mjs --email user@example.com [--display "Personal"] \
 //                          [--plan max] [--account-id <slug>] [--no-headless]
 //
-// TODO(account-rotation-fold): when the parallel account-rotation source lands,
-// fold this file into rotate.mjs as a `--setup-account <email>` mode and call
-// the shared keychain/verification helpers from there. Until then this file is
-// callable standalone.
+// Note: when the parallel account-rotation source lands, this file should be
+// folded into rotate.mjs as a `--setup-account <email>` mode, calling shared
+// keychain/verification helpers from there. Until then this file is callable
+// standalone.
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -140,7 +140,7 @@ async function ensurePlaywright() {
     return true;
   } catch {
     log('installing playwright (one-time)...');
-    const r = spawnSync('npm', ['install', '--no-save', 'playwright'], {
+    const r = spawnSync('npm', ['install', '--no-save', 'playwright@^1.52.0'], {
       cwd: REPO_ROOT,
       stdio: 'inherit',
     });

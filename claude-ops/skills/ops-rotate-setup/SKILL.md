@@ -60,7 +60,7 @@ No Claude accounts are configured for the rotator yet. Add some now?
 ```
 
 - `[Help]`: print one-paragraph explainer (rotator purpose, where keychain entries live, how `/plugins` toggles `account_rotation_enabled`) and exit.
-- `[Use existing keychain]`: print "Looking for `Claude-Rotation-*` entries..." and run `bash $CRED_STORE list 2>/dev/null | grep -i 'Claude-Rotation' || echo "(none found — re-run with [Add now])"`. Exit.
+- `[Use existing keychain]`: print "Looking for `Claude-Rotation-*` entries..." and run `bash $CRED_STORE backends 2>/dev/null && for id in $(jq -r '.accounts[].id' "$CFG" 2>/dev/null); do bash $CRED_STORE get "Claude-Rotation" "$id" >/dev/null 2>&1 && echo "✓ $id" || echo "✗ $id"; done || echo "(no backends available — re-run with [Add now])"`. Exit.
 - `[Skip]`: exit.
 - `[Add now]`: enter the **add loop** below.
 
@@ -184,8 +184,8 @@ to the user, made explicitly through the plugin settings UI.
 
 | Symptom | Cause | Action |
 |---|---|---|
-| `playwright install failed` | npm offline / sandbox | Tell user to run `npx playwright install chromium` then retry |
+| `playwright install failed` | npm offline / sandbox | Run `npx playwright install chromium` via Bash tool, then retry |
 | `oauth_failed` | login form selector changed | Open log, surface the page URL at failure, suggest `--no-headless` retry |
 | `verify_failed` | session cookie captured but rejected | Re-run; likely transient |
-| `keychain_write_failed` | no backend available | Run `bash $CRED list-backends` and surface options |
+| `keychain_write_failed` | no backend available | Run `bash $CRED backends` and surface options |
 | `no session cookie` | login flow blocked by 2FA | Re-run with `--no-headless` so user can complete in-browser |
