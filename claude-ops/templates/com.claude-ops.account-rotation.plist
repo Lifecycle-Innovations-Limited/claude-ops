@@ -21,8 +21,9 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/node</string>
-    <string>${HOME}/.claude/plugins/data/ops/account-rotation/daemon.mjs</string>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>exec "$(command -v node)" "${HOME}/.claude/plugins/data/ops/account-rotation/daemon.mjs"</string>
   </array>
 
   <key>WorkingDirectory</key>
