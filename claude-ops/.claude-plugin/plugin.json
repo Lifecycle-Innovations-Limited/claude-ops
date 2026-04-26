@@ -1,6 +1,6 @@
 {
   "name": "ops",
-  "version": "1.8.2",
+  "version": "2.0.0",
   "description": "Business operations command center for Claude Code \u2014 30 skills, 14 agents, and a smart background daemon that manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (all AWS services), revenue (Stripe + RevenueCat), e-commerce (Shopify), marketing (Klaviyo/Meta/GA4/GSC), monitoring (Datadog/New Relic/OTEL), and voice (Bland AI/ElevenLabs/Whisper). Includes /gtm go-to-market planner, /ops:projects portfolio dashboard, and YOLO mode for autonomous operation with 4 parallel C-suite agents.",
   "author": {
     "name": "Lifecycle Innovations Limited",
@@ -61,7 +61,7 @@
     "no_rm_rf_anchor": {
       "type": "boolean",
       "title": "Block rm -rf against root anchors",
-      "description": "PreToolUse hook denies `rm -rf` targeting /, ~, $HOME, .., or . — protecting against catastrophic filesystem wipes. Specific subpaths (./node_modules, /tmp/foo) are allowed.",
+      "description": "PreToolUse hook denies `rm -rf` targeting /, ~, $HOME, .., or . \u2014 protecting against catastrophic filesystem wipes. Specific subpaths (./node_modules, /tmp/foo) are allowed.",
       "default": true
     },
     "warn_mainpush": {
