@@ -100,6 +100,54 @@ During `/ops:setup` and any skill's setup/configure flow, use `run_in_background
 
 **Why this rule exists:** On 2026-04-20, the `/ops:ops` router — when given a free-form argument that didn't match a keyword route — fell through to autonomous agent behavior and fired 15 `mcp__gog__gmail_send` calls in a 3-minute burst to 6 business contacts (royalty-collection labels, publishing partners, legal counsel, intro subjects). The user was never shown individual drafts. Real relationships received un-reviewed AI emails. This cannot repeat.
 
+## Rule 7 — Mobile / SSH sessions: compact text, no tables
+
+**Detection — any of these = mobile mode:**
+- `$SSH_CONNECTION`, `$SSH_CLIENT`, or `$SSH_TTY` is set (user is on a remote terminal — likely Termius/iSH on a phone, or a tmux pane on a remote host)
+- `$OPS_MOBILE=1` (explicit override)
+- `$COLUMNS` < 80 (narrow terminal regardless of cause)
+
+**When mobile mode is detected, every ops skill MUST:**
+
+1. **No tables.** Markdown tables, ASCII boxes, and multi-column ANSI dashboards wrap unreadably in a tmux pane on a phone. Use plain text lines — one fact per line.
+2. **No banners or section headers.** Skip `━━━━━` rules, `║ OPS ► … ║` boxes, ASCII art, and `──────` footers. They eat the vertical space the user doesn't have.
+3. **No emoji-prefixed status columns.** A plain `whatsapp: connected` reads cleanly; `✓ WhatsApp     connected     N chats     last sync 2m` does not.
+4. **Short answers.** Aim for 3–8 lines total. If a briefing has 20 items, summarize the top 3 + total count, not all 20.
+5. **URLs print, never `open`.** Always go through `lib/opener.sh::ops_open_url` — it auto-detects SSH/mobile and prints a copy-able URL block instead of spawning the host's opener (which would launch a browser on the SSH target the user can't see).
+6. **No ANSI colors that depend on background detection.** Termius doesn't always negotiate them; plain text wins.
+7. **`AskUserQuestion` stays normal.** Approval prompts are the one place the user IS reading carefully — don't over-truncate options. But still skip table layouts inside option descriptions.
+
+**Example — `/ops:go` desktop output:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ OPS ► MORNING BRIEFING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIRES         (none)
+PRs           3 open: #N owner-a (CI red), #N owner-b, ...
+INBOX         WhatsApp 12 · Email 50 · Slack 4
+PORTFOLIO     22 projects · 3 executing · 1 blocked
+PRIORITIES
+  1. ...
+  2. ...
+```
+
+**Same content in mobile mode:**
+
+```
+no fires.
+3 open PRs — top: owner-a#N CI red.
+inbox: wa 12, mail 50, slack 4.
+portfolio: 3 active, 1 blocked.
+next: fix owner-a#N CI.
+```
+
+That's the bar. If a skill can't compress to that shape, it's too verbose for mobile.
+
+**For shell scripts and binaries** (anything in `bin/` or `scripts/`):
+- Detect via `[[ -n "$SSH_CONNECTION$SSH_CLIENT$SSH_TTY" || "$OPS_MOBILE" == "1" ]]` and switch to a compact code path.
+- For URL opening, source `lib/opener.sh` and call `ops_open_url` — never call `open`/`xdg-open` directly.
+
 ## Appendix: CLI Reference (EXACT SYNTAX — never guess)
 
 ### gog (v0.12.0+)

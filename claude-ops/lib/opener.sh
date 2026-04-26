@@ -43,6 +43,35 @@ __ops_open_log() {
   printf 'opener: using %s for %s\n' "$1" "$2" >&2
 }
 
+# ─── __ops_is_remote_session: detect SSH / mobile / headless contexts ───────
+# Returns 0 (true) when the caller is sitting at a TTY where `open URL` would
+# launch a browser the user cannot see — typically Termius/iSH over SSH, a
+# tmux pane on a remote host, or any explicit OPS_MOBILE/OPS_PRINT_URLS
+# override. In those cases ops_open_url should print the URL instead of
+# spawning the host's opener.
+#
+# Overrides:
+#   OPS_PRINT_URLS=1  → always print
+#   OPS_MOBILE=1      → always print (also shortens skill output elsewhere)
+#   OPS_FORCE_OPEN=1  → always spawn opener (debugging / explicit local use)
+__ops_is_remote_session() {
+  [[ "${OPS_PRINT_URLS:-}" == "1" ]] && return 0
+  [[ "${OPS_MOBILE:-}"     == "1" ]] && return 0
+  [[ "${OPS_FORCE_OPEN:-}" == "1" ]] && return 1
+  [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" || -n "${SSH_TTY:-}" ]] && return 0
+  return 1
+}
+
+# ─── __ops_print_url: visible, copy-able URL block for SSH / mobile users ───
+__ops_print_url() {
+  local url="$1"
+  printf '\n' >&2
+  printf '  Open this URL on your device:\n' >&2
+  printf '\n' >&2
+  printf '  %s\n' "$url" >&2
+  printf '\n' >&2
+}
+
 # ─── __ops_resolve_opener: pick a command, honoring os-detect first ─────────
 # Echoes the full opener command string, or empty if none.
 __ops_resolve_opener() {
@@ -102,6 +131,12 @@ ops_open_url() {
   if [[ ! "$url" =~ ^https?://|^mailto:|^tel: ]]; then
     echo "opener: refusing to open non-URL scheme: $url" >&2
     return 1
+  fi
+  # On SSH/mobile sessions, `open URL` would launch a browser on the SSH
+  # target instead of the user's device — print a copy-able block instead.
+  if __ops_is_remote_session; then
+    __ops_print_url "$url"
+    return 0
   fi
   ops_open "$url"
 }
