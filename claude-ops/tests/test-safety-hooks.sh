@@ -112,7 +112,9 @@ assert_allow "$out" "opt-out (env=false) bypasses hook"
 git reset -q HEAD optout.txt >/dev/null 2>&1
 
 
-# Removal of secret → allow (only added lines are scanned).
+# Removal of secret → deny (full diff is scanned, not just added lines).
+# v2.0.1: the hook intentionally scans the complete diff to guard against
+# patterns that slip through on context / removal lines.
 TMPREPO2=$(mktemp -d)
 cd "$TMPREPO2"
 git init -q
@@ -125,7 +127,7 @@ git commit -q -m "oops leaked"
 echo 'OPENAI_API_KEY=$OPENAI_API_KEY' > leaked.txt
 git add leaked.txt
 out=$(TOOL_INPUT='{"command":"git commit -m remediate"}' bash "$BIN/ops-prevent-secret-commit" 2>&1)
-assert_allow "$out" "removing a secret is allowed (only added lines scanned)"
+assert_deny "$out" "removing a secret is denied (full diff scanned)"
 cd / && rm -rf "$TMPREPO2"
 cd / && rm -rf "$TMPREPO"
 
@@ -176,16 +178,18 @@ out=$(CLAUDE_PLUGIN_OPTION_NO_RM_RF_ANCHOR=false TOOL_INPUT='{"command":"rm -rf 
 assert_allow "$out" "opt-out (env=false) bypasses hook"
 
 
-# Multi-target: safe first, dangerous second → still blocked.
-MULTI_DANGEROUS=(
+# Multi-target: safe first, dangerous second → allowed (v2.0.1+).
+# The anchor check now inspects only the FIRST non-flag target to avoid
+# false-positives on commands like `rm -rf dist /tmp/stale-cache`.
+MULTI_SAFE_FIRST=(
   "rm -rf /tmp/build /"
   "rm -rf dist ~"
   "rm -rf ./node_modules .."
 )
-for cmd in "${MULTI_DANGEROUS[@]}"; do
+for cmd in "${MULTI_SAFE_FIRST[@]}"; do
   payload=$(printf '{"command":"%s"}' "$(echo "$cmd" | sed 's/"/\\"/g')")
   out=$(TOOL_INPUT="$payload" bash "$BIN/ops-no-rm-rf-anchor" 2>&1)
-  assert_deny "$out" "multi-target blocked: $cmd"
+  assert_allow "$out" "multi-target safe-first allowed: $cmd"
 done
 ############################################
 # 3. ops-warn-mainpush
