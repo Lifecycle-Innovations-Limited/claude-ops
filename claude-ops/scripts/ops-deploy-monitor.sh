@@ -83,7 +83,7 @@ if [ "$CONCLUSION" != "success" ]; then
   notify "Deploy failed" "$REPO #$PR → $BASE: $CONCLUSION"
 
   if [ "$(config auto_dispatch_fixer true)" = "true" ]; then
-    fix_log=$(dispatch_fix_agent "deploy-fix.md" "$SLUG-deploy" \
+    fix_log=$(dispatch_fix_agent "deploy-fixer" "$SLUG-deploy" \
       "REPO=$REPO" "PR=$PR" "BASE=$BASE" "SHA=$SHA" "RUN_ID=$RUN_ID" \
       "SUMMARY=deploy workflow #$RUN_ID concluded $CONCLUSION" \
       "LOGS=$failed_log")
@@ -110,7 +110,7 @@ if [ "$HTTP" != "200" ]; then
   fire "service $URL → HTTP $HTTP after deploy"
   notify "Service unhealthy" "$REPO $BASE: $URL → HTTP $HTTP"
   if [ "$(config auto_dispatch_fixer true)" = "true" ]; then
-    dispatch_fix_agent "deploy-fix.md" "$SLUG-health" \
+    dispatch_fix_agent "deploy-fixer" "$SLUG-health" \
       "REPO=$REPO" "PR=$PR" "BASE=$BASE" "SHA=$SHA" "RUN_ID=$RUN_ID" \
       "SUMMARY=service health URL $URL returned HTTP $HTTP" \
       "LOGS=(no workflow logs — health check failure)" >/dev/null
