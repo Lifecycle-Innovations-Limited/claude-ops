@@ -60,7 +60,7 @@
     },
     "monitor_post_merge": {
       "type": "boolean",
-      "title": "Monitor PR merges → deploys",
+      "title": "Monitor PR merges \u2192 deploys",
       "description": "After `gh pr merge` to dev/main, watch the deploy workflow + audit service health.",
       "default": true
     },
@@ -73,7 +73,7 @@
     "auto_dispatch_fixer": {
       "type": "boolean",
       "title": "Auto-dispatch headless Claude fixer",
-      "description": "When off, failures are logged + notified only — no agent runs.",
+      "description": "When off, failures are logged + notified only \u2014 no agent runs.",
       "default": true
     },
     "allow_dangerous": {
@@ -125,7 +125,7 @@
     "registry_path": {
       "type": "file",
       "title": "Service registry JSON",
-      "description": "Maps owner/repo:base → health/version URLs. Project .claude/post-merge-services.json overrides.",
+      "description": "Maps owner/repo:base \u2192 health/version URLs. Project .claude/post-merge-services.json overrides.",
       "default": "~/.claude/config/post-merge-services.json"
     },
     "repo_search_roots": {
@@ -183,6 +183,12 @@
       "default": 10,
       "min": 3,
       "max": 50
+    },
+    "suggest_specialized_agents": {
+      "type": "boolean",
+      "title": "Suggest specialized subagents",
+      "description": "PreToolUse hook on Agent \u2014 when subagent_type=general-purpose, asks if a domain-specific agent fits better.",
+      "default": true
     },
     "telegram_api_id": {
       "title": "Telegram API ID",
