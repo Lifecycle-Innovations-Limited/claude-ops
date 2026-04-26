@@ -669,7 +669,7 @@ On `Add to Claude Code statusLine`:
 
    - `Replace with recap` → overwrite the `statusLine` key.
    - `Append after current` → preserve the existing command but suffix `; cat /tmp/claude-recap-digest 2>/dev/null | head -c 80` so both render. Use the existing entry's `type` and `refreshInterval`.
-   - `Skip` → leave settings.json untouched and continue.
+   - `Skip` → leave settings.json untouched, write `recap.statusline_wired = false`, and continue.
 
 3. Merge with `jq` (preserves all other keys — never overwrite the whole file):
 
@@ -696,6 +696,8 @@ On `Add to Claude Code statusLine`:
    ```
    ✓ Claude Code statusLine wired — restart Claude Code (or open a new session) to activate.
    ```
+
+   Then write `recap.statusline_wired = true` before continuing to Step 2d.4.
 
 The JSON snippet to show on `Show me the JSON`:
 
@@ -725,7 +727,7 @@ Wait up to 60s for the daemon to write its first digest. Run in background; do N
 
 ### Step 2d.5 — Persist preferences
 
-Write to `$PREFS_PATH`:
+Write to `$PREFS_PATH`. Set `"statusline_wired"` to the boolean you recorded in Step 2d.3b: `true` only after **Add to Claude Code statusLine** successfully merged recap into `~/.claude/settings.json`; `false` after **Skip** or **Show me the JSON** there, after the nested **Skip** when an existing statusLine was detected, or if Step 2d.3b did not run (e.g. tmux path only).
 
 ```json
 {
@@ -738,6 +740,8 @@ Write to `$PREFS_PATH`:
   }
 }
 ```
+
+Use `"statusline_wired": true` when you recorded `recap.statusline_wired = true` after **Add to Claude Code statusLine** successfully merged into `~/.claude/settings.json` in Step 2d.3b.
 
 Print:
 
