@@ -28,10 +28,12 @@ echo "$output" | tail -120 | grep -qE \
 
 last_lines=$(echo "$output" | tail -120)
 
-# Repo = healify (mobile build hooks always operate against this)
-repo_slug="healify"
-repo_path=$(locate_repo "Lifecycle-Innovations-Limited/healify" 2>/dev/null)
-[ -z "$repo_path" ] && repo_path="$HOME/healify"
+# Resolve repo from PWD (where the build was invoked). Fall back to gh repo view.
+repo_path="$(pwd -P)"
+slug_full=$(git -C "$repo_path" config --get remote.origin.url 2>/dev/null | \
+  sed -E 's|.*[:/]([^/]+/[^/]+)(\.git)?$|\1|; s|\.git$||')
+[ -z "$slug_full" ] && slug_full="local-build"
+repo_slug=$(echo "$slug_full" | tr '/' '-')
 branch=$(git -C "$repo_path" branch --show-current 2>/dev/null || echo "unknown")
 
 # Transient → tell user to retry, no agent
