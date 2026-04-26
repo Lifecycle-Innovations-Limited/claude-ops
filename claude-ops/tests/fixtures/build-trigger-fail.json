@@ -1,0 +1,1 @@
+{"tool_input":{"command":"npm run build:all"},"tool_response":{"exitCode":1,"output":"Building...\n❌ archive failed\nerror TS2322: Type 'string' is not assignable to type 'number'.\n"}}
