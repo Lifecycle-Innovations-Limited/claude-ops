@@ -342,6 +342,51 @@ Skipped GSD. Install later with: /plugin marketplace add gsd-build/get-shit-done
 
 ---
 
+## Step 2b.5 — Superpowers (optional, recommended)
+
+Several ops skills (`/ops:ops-merge`, `/ops:ops-orchestrate`, `/ops:ops-triage`) integrate with `superpowers:*` skills at key checkpoints — verification-before-completion, finishing-a-development-branch, dispatching-parallel-agents, systematic-debugging. Without superpowers installed, those checkpoints are no-ops; with it, they enforce stronger guardrails on merges, multi-agent dispatch, and root-cause analysis.
+
+Check if superpowers is already installed:
+
+```bash
+find ~/.claude/plugins -path "*/superpowers/skills/using-superpowers" -type d 2>/dev/null | head -1 | grep -q . && echo "installed" || echo "not_installed"
+```
+
+If not installed, ask via `AskUserQuestion`:
+
+```
+Superpowers adds verification, dispatch, and debugging guardrails to ops skills.
+
+  [Install Superpowers (latest)] [Skip — I'll add it later]
+```
+
+On install, run the commands directly:
+
+```bash
+claude plugin marketplace add obra/superpowers-marketplace 2>/dev/null && \
+claude plugin install superpowers@superpowers-marketplace 2>/dev/null
+```
+
+Fallback if `claude` CLI is not on PATH:
+
+```bash
+SP_MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/superpowers-marketplace"
+if [ ! -d "$SP_MARKETPLACE_DIR" ]; then
+  git clone https://github.com/obra/superpowers-marketplace.git "$SP_MARKETPLACE_DIR" 2>/dev/null
+fi
+```
+
+Report success/failure. Record `plugins.superpowers = "installed"` in `$PREFS_PATH`.
+
+If they skip:
+
+```
+Skipped Superpowers. Ops skills will run without superpower checkpoints.
+Install later with: /plugin marketplace add obra/superpowers-marketplace
+```
+
+---
+
 ## Step 2c — Background Daemon (early install, pre-warm caches)
 
 **Why install the daemon this early?** Running the daemon in parallel with the rest of setup lets it start pre-warming the briefing cache (`ops-gather` results for infra/git/PRs/CI), so by the time the user reaches Step 7 and runs `/ops:go`, the briefing is already cached and loads in under 3 seconds instead of 10. Channel-dependent services (wacli-sync, message-listener, inbox-digest, store-health) are added later in Step 5b once their channels are configured.
