@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.1] — 2026-04-26
+
+### Fixed
+
+- **`scripts/wacli-keepalive.sh` — `refresh_wacli_cache` cold-restarted the keepalive every cache cycle.** `refresh_wacli_cache` called `release_wacli_batch` after killing `--follow` to refresh the chats/urgent caches, which removed `BATCH_MARKER`. The supervisor's exit-detect (line 567) saw the marker missing and treated the kill as a clean shutdown instead of a deliberate self-pause, breaking out of the while-loop and letting launchd cold-restart the script with a fresh bootstrap sync. Symptom: persistent `wacli sync --follow` could not stay alive longer than ~15 minutes; the daemon was effectively in a restart loop disguised as healthy backfill cycles. Fix: omit `release_wacli_batch` in `refresh_wacli_cache`, matching the deliberate behavior already documented in `periodic_backfill`. The supervisor's pre-restart `rm -f "$BATCH_MARKER"` (line 571) handles cleanup.
+- **`.claude-plugin/marketplace.json` — plugin version pin lagged `plugin.json`.** v1.8.0 bumped `claude-ops/.claude-plugin/plugin.json` but missed the version field in the marketplace manifest at the repo root, so users discovering the plugin via the marketplace still saw `1.7.1`. Now both files agree.
+
 ## [1.8.0] — 2026-04-26
 
 ### Added

@@ -384,7 +384,12 @@ refresh_wacli_cache() {
   "$WACLI" messages search --query "urgent OR asap OR deadline OR emergency OR ASAP" --json \
     > "$WACLI_CACHE_DIR/wacli_urgent.json" 2>/dev/null || true
 
-  release_wacli_batch
+  # Intentionally omit release_wacli_batch — BATCH_MARKER stays so the
+  # supervisor's exit-detect at line 567 sees the marker and restarts
+  # --follow instead of treating the kill as a clean shutdown. This matches
+  # the deliberate behavior in periodic_backfill (see comment at line 459).
+  # Without this, refresh_wacli_cache caused the keepalive to cold-restart
+  # via launchd every time it ran, defeating persistent sync.
   log "CACHE: refreshed wacli data cache"
 }
 
