@@ -43,6 +43,7 @@ run_suite "$TESTS_DIR/test-agent-teams.sh"
 run_suite "$TESTS_DIR/test-ops-daemon-manager.sh"
 run_suite "$TESTS_DIR/test-ops-package.sh"
 run_suite "$TESTS_DIR/test-safety-hooks.sh"
+run_suite "$TESTS_DIR/test-deploy-fix-hooks.sh"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "SUMMARY"
