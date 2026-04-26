@@ -8,6 +8,7 @@
     "orgUuid": "optional-workspace-uuid",
     "dashlaneTokenPath": "dl://claude-max-user@example.com/password",
     "dashlaneGooglePath": null,
+    "googleSmsPhone": "+1234567890",
     "extraUsageEnabled": false,
     "capacityMultiplier": 1.0
   },

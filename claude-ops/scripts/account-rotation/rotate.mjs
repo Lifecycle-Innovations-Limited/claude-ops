@@ -517,6 +517,7 @@ function fetchGoogleCreds(account) {
     return {
       password: match.password || null,
       otpSecret: match.otpSecret || null,
+      phone: match.phone || match.phoneNumber || null,
     };
   } catch {
     return null;
@@ -1588,11 +1589,15 @@ async function runAuthFlow(driver, account) {
   const creds = fetchGoogleCreds(account) || {};
   const googlePassword = creds.password || fetchGooglePassword(account);
   const googleOtpSecret = creds.otpSecret || null;
+  const googleSmsPhone =
+    (process.env.CLAUDE_ROTATION_GOOGLE_SMS_PHONE || "").trim() ||
+    (account.googleSmsPhone || "").trim() ||
+    (creds.phone || "").trim() ||
+    null;
   if (googlePassword)
     log(
       `dcli Google password available for ${account.email}${googleOtpSecret ? " (+TOTP)" : ""}`,
     );
-  const PHONE_NUMBER = "+31614446458";
 
   // AI-brain stall detector: when the URL doesn't advance for N consecutive
   // steps, hand the page to Claude to decide what to do. Kept separate from
@@ -1797,8 +1802,17 @@ async function runAuthFlow(driver, account) {
       url.includes("accounts.google.com") &&
       url.includes("challenge/ipp/collect")
     ) {
-      log(`SMS phone collect — entering ${PHONE_NUMBER} and clicking Send`);
-      await driver.fillInput('#phoneNumberId, input[type="tel"]', PHONE_NUMBER);
+      if (!googleSmsPhone) {
+        log(
+          `SMS phone collect page — no phone (set CLAUDE_ROTATION_GOOGLE_SMS_PHONE, account.googleSmsPhone, or dcli phone on google.com cred)`,
+        );
+        return false;
+      }
+      log(`SMS phone collect — entering configured number and clicking Send`);
+      await driver.fillInput(
+        '#phoneNumberId, input[type="tel"]',
+        googleSmsPhone,
+      );
       await sleep(500);
       await driver.findAndClick(["Send", "Next", "Verstuur"]);
       await sleep(4000);
@@ -1869,6 +1883,17 @@ async function runAuthFlow(driver, account) {
       continue;
     }
 
+    // Google password prompt (standalone /challenge/pwd — must run BEFORE the
+    // broad accounts.google.com account-chooser branch below).
+    if (url.includes("accounts.google.com") && url.includes("challenge/pwd")) {
+      if (googlePassword) {
+        await driver.fillInput('input[type="password"]', googlePassword);
+        await sleep(500);
+        await driver.findAndClick(["Next", "#passwordNext button"]);
+        continue;
+      }
+    }
+
     // Google account chooser — click the target account
     if (url.includes("accounts.google.com")) {
       // Detect "Signed out" next to the target account (needs re-login)
@@ -1912,16 +1937,6 @@ async function runAuthFlow(driver, account) {
         }
       }
       continue;
-    }
-
-    // Google password prompt (standalone page, no account chooser)
-    if (url.includes("accounts.google.com") && url.includes("challenge/pwd")) {
-      if (googlePassword) {
-        await driver.fillInput('input[type="password"]', googlePassword);
-        await sleep(500);
-        await driver.findAndClick(["Next", "#passwordNext button"]);
-        continue;
-      }
     }
 
     // Claude organization/workspace chooser (Workspace accounts on a custom domain)
@@ -3395,16 +3410,28 @@ function showStatus() {
 
 // ── --capture: print current token for Dashlane ───────────────────────────────
 
-function captureCmd() {
+function captureCmd(targetEmail = null) {
   const state = readState();
   const config = readConfig();
-  const activeKey = state.activeAccount;
-  const account =
-    config.accounts.find((a) => accountKey(a) === activeKey) ||
-    config.accounts.find((a) => a.email === activeKey);
-  if (!account) {
-    console.error(`Active account ${activeKey} not in config`);
-    process.exit(1);
+  let account;
+  if (targetEmail) {
+    const needle = String(targetEmail).trim().toLowerCase();
+    account = config.accounts.find(
+      (a) => a.email.toLowerCase() === needle,
+    );
+    if (!account) {
+      console.error(`No account in config matching --to ${targetEmail}`);
+      process.exit(1);
+    }
+  } else {
+    const activeKey = state.activeAccount;
+    account =
+      config.accounts.find((a) => accountKey(a) === activeKey) ||
+      config.accounts.find((a) => a.email === activeKey);
+    if (!account) {
+      console.error(`Active account ${activeKey} not in config`);
+      process.exit(1);
+    }
   }
 
   try {
@@ -3521,7 +3548,10 @@ if (args.includes("--setup")) {
 } else if (args.includes("--status")) {
   showStatus();
 } else if (args.includes("--capture")) {
-  captureCmd();
+  const capToIdx = args.indexOf("--to");
+  const captureTo =
+    capToIdx !== -1 && args[capToIdx + 1] ? args[capToIdx + 1] : null;
+  captureCmd(captureTo);
 } else {
   const toIdx = args.indexOf("--to");
   const target = toIdx !== -1 ? args[toIdx + 1] : null;
