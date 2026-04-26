@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# ops-deploy-fix-build-trigger — PostToolUse hook on Bash, gated by `if: Bash(npm run build:*)`.
+# Detects local build failures (npm run build:all / build:*:local / build-queue.sh) and
+# dispatches a Haiku build-fixer. Single-flight per repo; budget-capped; transient detection.
+set -e
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+. "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh"
+
+is_enabled monitor_build_failures || exit 0
+
+INPUT=$(cat)
+cmd=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null)
+exit_code=$(printf '%s' "$INPUT" | jq -r '.tool_response.exitCode // .tool_response.exit_code // 0' 2>/dev/null)
+output=$(printf '%s' "$INPUT" | jq -r '.tool_response.output // .tool_response.stdout // ""' 2>/dev/null)
+
+case "$cmd" in
+  *"npm run build:"*|*"bash scripts/build-queue.sh"*|*"bash ./scripts/build-queue.sh"*) ;;
+  *) exit 0 ;;
+esac
+
+# Failure detection
+failed=0
+[ "$exit_code" != "0" ] && [ -n "$exit_code" ] && failed=1
+echo "$output" | tail -120 | grep -qE \
+'fastlane (FAIL|failed)|❌|✖  Abort|error TS|FAIL  |Error: AI|Build FAILED|RuntimeError|exit code [^0]|npm error|prepare-build-branch.*Abort' \
+  && failed=1
+[ "$failed" -ne 1 ] && exit 0
+
+last_lines=$(echo "$output" | tail -120)
+
+# Repo = healify (mobile build hooks always operate against this)
+repo_slug="healify"
+repo_path=$(locate_repo "Lifecycle-Innovations-Limited/healify" 2>/dev/null)
+[ -z "$repo_path" ] && repo_path="$HOME/healify"
+branch=$(git -C "$repo_path" branch --show-current 2>/dev/null || echo "unknown")
+
+# Transient → tell user to retry, no agent
+if [ "$(config auto_rerun_transients true)" = "true" ] && is_transient "$last_lines"; then
+  notify "Build transient" "Detected transient ($cmd) — recommend retry"
+  cat <<JSON
+{
+  "suppressOutput": true,
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "[ops-deploy-fix] '${cmd:0:60}' failed with a transient signature (network/registry/runner blip). No fixer dispatched — retry the build."
+  }
+}
+JSON
+  exit 0
+fi
+
+# Dedup: same failure tail twice = skip
+if already_seen "$repo_slug-build" "$last_lines"; then
+  notify "Duplicate build failure" "$cmd same root cause — fixer NOT re-dispatched"
+  exit 0
+fi
+
+if [ "$(config auto_dispatch_fixer true)" != "true" ]; then
+  notify "Build failed" "$cmd — auto_dispatch_fixer=false, manual intervention"
+  exit 0
+fi
+
+fix_log=$(dispatch_fix_agent "build-fix.md" "$repo_slug-build" \
+  "COMMAND=$cmd" "REPO_PATH=$repo_path" "BRANCH=$branch" "LOGS=$last_lines")
+case $? in
+  0)
+    cat <<JSON
+{
+  "suppressOutput": true,
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "[ops-deploy-fix] Build failure detected in '${cmd:0:60}'. Haiku build-fixer dispatched (logs: $fix_log). Will open fix PR or report transient."
+  }
+}
+JSON
+    ;;
+  2|3) notify "Auto-fix skipped" "$repo_slug — already in flight or budget exhausted" ;;
+esac
+exit 0
