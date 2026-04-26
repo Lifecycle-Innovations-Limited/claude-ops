@@ -51,12 +51,27 @@ log "tracking run #$RUN_ID"
 
 # Wait for completion (configurable timeout)
 TIMEOUT=$(config watcher_timeout_seconds 1800)
+# Validate numeric — non-numeric values from prefs would crash `sleep`.
+case "$TIMEOUT" in
+  ''|*[!0-9]*) TIMEOUT=1800 ;;
+esac
 gh run watch "$RUN_ID" --repo "$REPO" --exit-status >> "$LOG" 2>&1 &
 WATCH_PID=$!
-( sleep "$TIMEOUT"; kill -9 $WATCH_PID 2>/dev/null ) &
+( sleep "$TIMEOUT"
+  # Graceful: TERM, wait, then KILL only if still alive.
+  if kill -0 "$WATCH_PID" 2>/dev/null; then
+    kill -TERM "$WATCH_PID" 2>/dev/null
+    sleep 2
+    kill -0 "$WATCH_PID" 2>/dev/null && kill -KILL "$WATCH_PID" 2>/dev/null
+  fi
+) &
 TIMEOUT_PID=$!
 wait $WATCH_PID; RC=$?
-kill -9 $TIMEOUT_PID 2>/dev/null
+if kill -0 "$TIMEOUT_PID" 2>/dev/null; then
+  kill -TERM "$TIMEOUT_PID" 2>/dev/null
+  sleep 1
+  kill -0 "$TIMEOUT_PID" 2>/dev/null && kill -KILL "$TIMEOUT_PID" 2>/dev/null
+fi
 
 CONCLUSION=$(gh run view "$RUN_ID" --repo "$REPO" --json conclusion --jq .conclusion 2>/dev/null)
 log "conclusion=$CONCLUSION rc=$RC"
