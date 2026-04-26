@@ -41,6 +41,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execSync, execFileSync, spawn } from "child_process";
 import { tmpdir } from "os";
+import { createHmac } from "node:crypto";
 import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS } from "./ai-brain.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -546,7 +547,7 @@ function fetchGooglePassword(account) {
 // Generate a TOTP code from a base32 secret using the Node crypto module.
 // Used when an account has 2FA and we have the secret in dcli.
 function generateTOTP(base32Secret) {
-  const crypto = require("crypto");
+  // Uses top-level ESM import: createHmac from "node:crypto"
   // Decode base32
   const base32chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   const clean = base32Secret.replace(/\s/g, "").toUpperCase();
@@ -567,7 +568,7 @@ function generateTOTP(base32Secret) {
   const buf = Buffer.alloc(8);
   buf.writeBigUInt64BE(BigInt(counter));
 
-  const hmac = crypto.createHmac("sha1", key).update(buf).digest();
+  const hmac = createHmac("sha1", key).update(buf).digest();
   const offset = hmac[hmac.length - 1] & 0x0f;
   const code =
     ((hmac[offset] & 0x7f) << 24) |
@@ -2169,7 +2170,7 @@ async function runAuthFlow(driver, account) {
             // so the OAuth flow can complete (org chooser → authorize → callback)
             if (driver._authUrl) {
               // For multi-org accounts (same email, multiple workspaces like
-              // heartfeldt-personal vs heartfeldt-team), force an explicit org
+              // user-personal vs user-team), force an explicit org
               // pick BEFORE hitting /oauth/authorize. Otherwise claude.ai uses
               // the "last active" org silently, and both sibling vaults end up
               // holding the same org's token.
@@ -2854,7 +2855,7 @@ async function rotate(targetEmail, opts = {}) {
       }
       if (liveEmail) {
         // For multi-entry emails (same email under multiple config entries,
-        // e.g. heartfeldt-personal + heartfeldt-team), prefer the entry whose
+        // e.g. user-personal + user-team), prefer the entry whose
         // orgUuid matches live. Fall back to first email match.
         let liveAccount = null;
         if (liveOrgUuid) {
@@ -3018,7 +3019,7 @@ async function rotate(targetEmail, opts = {}) {
   );
 
   // Org-match check: for accounts where label != email (multi-org under same
-  // email, like heartfeldt-personal vs heartfeldt-team), confirm the live
+  // email, like user-personal vs user-team), confirm the live
   // /oauth/profile returns the expected organization. Drift here means the
   // OAuth flow landed on the wrong org picker — the stored token will be
   // usable but will double-count capacity with the sibling account.

@@ -27,7 +27,7 @@ import {
 } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { execSync, spawn } from "child_process";
+import { execSync, execFileSync, spawn } from "child_process";
 import { tmpdir } from "os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -73,9 +73,11 @@ function log(msg) {
 
 function notify(title, msg) {
   try {
-    execSync(
-      `osascript -e 'display notification "${msg.replace(/"/g, '\\"')}" with title "${title}"'`,
-    );
+    // Use execFileSync to avoid shell interpretation of quotes in title/msg
+    execFileSync("osascript", [
+      "-e",
+      `display notification "${msg.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}" with title "${title.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`,
+    ], { timeout: 5000 });
   } catch {}
 }
 
@@ -208,7 +210,7 @@ async function detectLiveAccountFromVault(config) {
     );
     if (matches.length === 1) return accountKey(matches[0]);
     if (matches.length > 1) {
-      // Multiple labels for same email (e.g. heartfeldt-personal vs -team).
+      // Multiple labels for same email (e.g. user-personal vs -team).
       // Use orgName from profile to disambiguate.
       const orgName = body?.organization?.name?.toLowerCase() || "";
       const byOrg = matches.find((a) =>
@@ -541,8 +543,9 @@ async function doRotation(reason) {
     // When sessions hit the wall they show "not logged in" — user runs /login → instant
     // success because the fresh token is already in the keychain.
     // --session: inject /login into running sessions (safe — keychain token is pre-validated)
-    const result = execSync(
-      `node "${ROTATE_SCRIPT}" --no-browser --session --to "${targetKey}" 2>&1`,
+    const result = execFileSync(
+      process.execPath,
+      [ROTATE_SCRIPT, "--no-browser", "--session", "--to", targetKey],
       {
         cwd: __dirname,
         timeout: 300_000, // 5min — session restart takes ~15s per session × up to 8 sessions
@@ -616,11 +619,13 @@ async function refreshSingleToken(account) {
 
     // Save back to vault
     const svc = `Claude-Rotation-${key}`;
-    const escaped = JSON.stringify(parsed).replace(/"/g, '\\"');
-    execSync(
-      `security add-generic-password -U -s "${svc}" -a "${KEYCHAIN_ACCOUNT}" -w "${escaped}"`,
-      { timeout: 5000 },
-    );
+    // Use execFileSync to avoid shell-escaping issues with JSON tokens
+    execFileSync("security", [
+      "add-generic-password", "-U",
+      "-s", svc,
+      "-a", KEYCHAIN_ACCOUNT,
+      "-w", JSON.stringify(parsed),
+    ], { timeout: 5000 });
     log(
       `[refresh] ${key}: refreshed (${((parsed.claudeAiOauth.expiresAt - Date.now()) / 3_600_000).toFixed(1)}h remaining)`,
     );
@@ -720,9 +725,8 @@ async function mainLoop() {
       // Post-rotation blackout: ALL rotation triggers are suppressed for 90s
       // after any rotation. `claude auth status` returns stale data during this
       // window, which causes drift detection → re-rotation thrashing loops.
-      const stateForBlackout = readState();
-      const stateLastRotation = stateForBlackout.lastRotation
-        ? new Date(stateForBlackout.lastRotation).getTime()
+      const stateLastRotation = state.lastRotation
+        ? new Date(state.lastRotation).getTime()
         : 0;
       const effectiveLastRotated = Math.max(lastRotatedAt, stateLastRotation);
       const inBlackout =
