@@ -19,6 +19,10 @@ MOCKS="$TESTS_DIR/mocks"
 # Make mocks executable (idempotent — safe on every run)
 chmod +x "$MOCKS"/* 2>/dev/null || true
 
+
+# Capture the real sleep binary BEFORE any PATH overrides, so that wait-loops
+# in tests that mock sleep (cases 9/10/11) still pause properly.
+REAL_SLEEP=$(command -v sleep)
 # Per-suite isolated state
 SUITE_TMP="$(mktemp -d -t ops-deploy-fix-tests.XXXXXX)"
 trap 'rm -rf "$SUITE_TMP"' EXIT
@@ -473,7 +477,7 @@ test_monitor_real_failure() {
   # Wait for nohup'd claude
   for _ in 1 2 3 4 5 6 7 8 10 12 14 16; do
     [ -s "$TEST_LOGS/claude-prompt.txt" ] && break
-    sleep 0.3
+    "$REAL_SLEEP" 0.3
   done
   if [ -s "$TEST_LOGS/claude-prompt.txt" ]; then
     pass "11a.fixer-dispatched"
@@ -489,7 +493,7 @@ test_monitor_real_failure() {
   # Verify haiku model flag was passed (wait — log is written after prompt by the mock)
   for _ in 1 2 3 4 5 6 7 8 10; do
     [ -s "$TEST_LOGS/claude.log" ] && break
-    sleep 0.3
+    "$REAL_SLEEP" 0.3
   done
   argv=$(cat "$TEST_LOGS/claude.log")
   assert_contains "11f.model-haiku" "haiku" "$argv"
