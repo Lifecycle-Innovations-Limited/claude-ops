@@ -115,8 +115,8 @@ function upsertAccount(args) {
 }
 
 function credSet(service, account, secret) {
-  const r = spawnSync('bash', [CRED_STORE, 'set', service, account, secret], {
-    input: '',
+  const r = spawnSync('bash', [CRED_STORE, 'set-stdin', service, account], {
+    input: secret,
     encoding: 'utf8',
   });
   if (r.status !== 0) {
@@ -210,6 +210,7 @@ async function runOAuth(args) {
 
   log(`filling email: ${args.email}`);
   // Selector is best-effort — Anthropic's login form may change.
+  let emailSubmitted = true;
   try {
     await page.fill('input[type="email"], input[name="email"]', args.email, {
       timeout: 15000,
@@ -219,6 +220,13 @@ async function runOAuth(args) {
     });
   } catch (e) {
     log(`email entry failed: ${e.message}`);
+    emailSubmitted = false;
+  }
+
+  if (!emailSubmitted && args.headless) {
+    log('aborting: email step failed in headless mode (no manual recovery)');
+    await browser.close();
+    return null;
   }
 
   const sinceTs = Date.now();
@@ -251,15 +259,16 @@ async function runOAuth(args) {
     log('no session cookie found after login');
     return null;
   }
-  return session.value;
+  return { name: session.name, value: session.value };
 }
 
-async function verifyToken(token) {
+async function verifyToken(session) {
   // Minimal probe — the rotation system uses this token to mint API requests
   // via the Claude Code OAuth bridge. We just check that claude.ai accepts it.
+  const { name, value } = session;
   try {
     const res = await fetch('https://claude.ai/api/organizations', {
-      headers: { Cookie: `sessionKey=${token}` },
+      headers: { Cookie: `${name}=${value}` },
     });
     return res.ok;
   } catch (e) {
@@ -281,19 +290,19 @@ async function main() {
     return;
   }
 
-  const token = await runOAuth(args);
-  if (!token) {
+  const session = await runOAuth(args);
+  if (!session) {
     console.log(JSON.stringify({ ok: false, accountId: args.accountId, error: 'oauth_failed' }));
     process.exit(1);
   }
 
-  const verified = await verifyToken(token);
+  const verified = await verifyToken(session);
   if (!verified) {
     console.log(JSON.stringify({ ok: false, accountId: args.accountId, error: 'verify_failed' }));
     process.exit(1);
   }
 
-  const stored = credSet('Claude-Rotation', args.accountId, token);
+  const stored = credSet('Claude-Rotation', args.accountId, session.value);
   if (!stored) {
     console.log(JSON.stringify({ ok: false, accountId: args.accountId, error: 'keychain_write_failed' }));
     process.exit(1);

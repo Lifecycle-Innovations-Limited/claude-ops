@@ -122,7 +122,7 @@ LOG="$HOME/.claude/logs/account-rotation/setup-${ID}-$(date +%s).log"
 mkdir -p "$(dirname "$LOG")"
 node "$SCRIPT" \
   --email "$EMAIL" \
-  --display "$DISPLAY" \
+  --display "$ACCOUNT_DISPLAY" \
   --plan "$PLAN" \
   --account-id "$ID" \
   --gmail-poll \

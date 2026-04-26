@@ -19,7 +19,7 @@
 #   ops_cred_backend_for <service> <account>
 #
 # Direct-execution CLI (for the .mjs helper to shell out to):
-#   credential-store.sh set|get|delete|backends|backend-for ...
+#   credential-store.sh set|set-stdin|get|delete|backends|backend-for ...
 
 # ─── Re-source guard ────────────────────────────────────────────────────────
 if [[ -n "${__OPS_CREDENTIAL_STORE_SH_LOADED__:-}" ]]; then
@@ -589,6 +589,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     set)
       [[ $# -eq 3 ]] || { echo "usage: credential-store.sh set <service> <account> <secret>" >&2; exit 2; }
       ops_cred_set "$@" ;;
+    set-stdin)
+      [[ $# -eq 2 ]] || { echo "usage: credential-store.sh set-stdin <service> <account>" >&2; exit 2; }
+      sec="$(cat)" || sec=""
+      ops_cred_set "$1" "$2" "$sec" ;;
     get)
       [[ $# -eq 2 ]] || { echo "usage: credential-store.sh get <service> <account>" >&2; exit 2; }
       ops_cred_get "$@" ;;
@@ -605,6 +609,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 credential-store.sh — cross-OS secret storage with cascading backends
 Usage:
   credential-store.sh set         <service> <account> <secret>
+  credential-store.sh set-stdin   <service> <account>   # secret on stdin (avoids argv exposure)
   credential-store.sh get         <service> <account>
   credential-store.sh delete      <service> <account>
   credential-store.sh backends
