@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# ops-suggest-specialized-agent — PreToolUse hook on Agent.
+#
+# When subagent_type=general-purpose, scans the prompt for keywords mapping to a
+# more specialized agent and emits permissionDecision="ask" forcing the operator
+# to pick a better fit (or confirm general-purpose is genuinely correct).
+#
+# Per the design philosophy: never default to general-purpose if a domain-specific
+# agent fits; if none fits a recurring class, create a new agent type first.
+set -e
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+. "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh" 2>/dev/null || { config() { echo "${2:-}"; }; }
+
+[ "$(config suggest_specialized_agents true)" = "false" ] && exit 0
+
+INPUT=$(cat)
+subagent_type=$(printf '%s' "$INPUT" | jq -r '.tool_input.subagent_type // ""' 2>/dev/null)
+[ "$subagent_type" != "general-purpose" ] && exit 0
+
+prompt=$(printf '%s' "$INPUT" | jq -r '.tool_input.prompt // ""' 2>/dev/null)
+description=$(printf '%s' "$INPUT" | jq -r '.tool_input.description // ""' 2>/dev/null)
+combined=$(printf '%s\n%s' "$description" "$prompt" | tr '[:upper:]' '[:lower:]')
+
+# Keyword → suggested specialized agent mapping. Customize via plugin data:
+# ~/.claude/plugins/data/ops-ops-marketplace/agent-suggestions.json (optional override)
+suggest=""
+match_kw() { echo "$combined" | grep -qE "$1"; }
+
+# Order matters — first match wins. Most specific first.
+if   match_kw 'mobile|expo|ios|android|react native|fastlane|testflight'; then suggest="fullstack-mobile-architect (or Mobile App Specialist)"
+elif match_kw 'multi[- ]repo|cross[- ]repo|api contract|ripple|workspace.*span'; then suggest="multi-repo-coordinator"
+elif match_kw 'sentry|otel|datadog|new relic|telemetry|observability|structured logging'; then suggest="observability-engineer"
+elif match_kw 'eval|judge[- ]llm|golden snapshot|llm[- ]eval'; then suggest="llm-eval-engineer"
+elif match_kw 'prompt[- ]engineer|persona|few[- ]shot|prompt cache'; then suggest="prompt-engineer"
+elif match_kw 'json schema|tool use spec|structured output|instructor'; then suggest="structured-output-engineer"
+elif match_kw 'migration|version bump|sdk upgrade|model upgrade|rollback plan'; then suggest="migration-engineer"
+elif match_kw 'test strategy|test pyramid|coverage gap|flaky test'; then suggest="test-strategist"
+elif match_kw 'security audit|owasp|injection|secret leak|csrf|xss'; then suggest="security-reviewer"
+elif match_kw 'database|sql|prisma|drizzle|n\+1|migration|index'; then suggest="database-reviewer (or Database Optimizer)"
+elif match_kw 'health.*data|healthkit|hipaa|medical|clinical'; then suggest="Health Data Expert"
+elif match_kw 'devops|terraform|ecs|cloudformation|aws cdk|cicd|github action'; then suggest="DevOps Engineer"
+elif match_kw 'typescript|tsconfig|type[- ]check|tsc'; then suggest="typescript-reviewer"
+elif match_kw 'review.*pr|code review|review code'; then suggest="feature-dev:code-reviewer"
+elif match_kw 'explore|map|trace.*execution|architecture'; then suggest="feature-dev:code-explorer"
+elif match_kw 'design|architecture|blueprint|implementation plan'; then suggest="feature-dev:code-architect"
+elif match_kw 'simplify|refactor.*for clarity'; then suggest="code-simplifier:code-simplifier"
+fi
+
+if [ -z "$suggest" ]; then
+  # No keyword match — let it through but log it so we can build out the map.
+  mkdir -p "${HOME}/.claude/logs/ops" 2>/dev/null
+  printf '[%s] general-purpose, no keyword match: %s\n' "$(date '+%H:%M:%S')" "${description:0:80}" \
+    >> "${HOME}/.claude/logs/ops/specialized-agent-misses.log"
+  exit 0
+fi
+
+# Emit permissionDecision=ask so the operator confirms or switches.
+cat <<JSON
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "ask",
+    "permissionDecisionReason": "[ops] subagent_type='general-purpose' chosen for: \"${description:0:60}\". A more specialized agent fits this work: $suggest. If you actually need general-purpose (e.g. multi-domain task that no specialist covers), confirm. Otherwise cancel and respawn with the suggested subagent_type."
+  }
+}
+JSON
