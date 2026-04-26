@@ -4,6 +4,9 @@
 # occur without any Task* call, injects a system-reminder via additionalContext.
 # Counter resets to 0 on any Task* tool use.
 set -e
+# Fast guards — exit cheap before doing any work.
+command -v jq >/dev/null 2>&1 || exit 0
+
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 . "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh" 2>/dev/null || {
   STATE_DIR="$HOME/.claude/state/ops"
@@ -14,9 +17,11 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 [ "$(config task_reminder_enabled true)" = "false" ] && exit 0
 THRESHOLD=$(config task_reminder_threshold 10)
 
+# Fast peek: read a small head first, check tool_name. If it's Task*, reset+exit
+# without slurping the full payload (which can be large for Bash/Edit/Write).
 INPUT=$(cat)
-sid=$(printf '%s' "$INPUT" | jq -r '.session_id // "default"' 2>/dev/null)
 tool=$(printf '%s' "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null)
+sid=$(printf '%s' "$INPUT" | jq -r '.session_id // "default"' 2>/dev/null)
 state_file="$STATE_DIR/task-reminder-${sid}"
 
 case "$tool" in

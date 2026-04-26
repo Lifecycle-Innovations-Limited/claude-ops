@@ -17,12 +17,9 @@ repo=$(printf '%s' "$cmd" | sed -nE 's/.*--repo[[:space:]]+([^[:space:]]+).*/\1/
 [ -z "$pr" ] || [ -z "$repo" ] && exit 0
 [[ "$pr" =~ ^[0-9]+$ ]] || exit 0
 
-# Single-flight: if a monitor is already in flight for this PR, no-op.
-slug=$(repo_slug_safe "$repo")
-monitor_lock="monitor-$slug-pr$pr"
-if [ -f "$STATE_DIR/lock-$monitor_lock" ] && kill -0 "$(cat "$STATE_DIR/lock-$monitor_lock" 2>/dev/null)" 2>/dev/null; then
-  exit 0
-fi
+# Single-flight is enforced by ops-deploy-monitor.sh's own lock_acquire "$MONITOR_LOCK".
+# The monitor exits silently if the lock is held; do not duplicate that check here
+# (writing this trigger's $$ as the monitor's lock would create an immediately stale entry).
 
 nohup bash "$PLUGIN_ROOT/scripts/ops-deploy-monitor.sh" "$repo" "$pr" </dev/null >/dev/null 2>&1 &
 disown 2>/dev/null || true
