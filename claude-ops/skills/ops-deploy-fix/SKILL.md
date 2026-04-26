@@ -1,6 +1,11 @@
 ---
 name: ops-deploy-fix
 description: Inspect and control the deploy/build auto-fix subsystem. Use for `/ops:deploy-fix status` (last monitor runs, fixer dispatches, locks, hourly budget), `/ops:deploy-fix tail` (follow latest fixer log), `/ops:deploy-fix configure` (re-run the wizard), and `/ops:deploy-fix test` (synthetic dry-run through the pipeline). Trigger when the user mentions deploy auto-fix, post-merge monitor, build fixer, fix budget, fix-agent log, or asks why a deploy didn't get auto-fixed.
+allowed-tools:
+  - Bash
+  - Read
+  - AskUserQuestion
+  - Skill
 ---
 
 # /ops:deploy-fix — Auto-fix subsystem control surface
