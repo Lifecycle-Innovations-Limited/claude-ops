@@ -592,6 +592,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     set-stdin)
       [[ $# -eq 2 ]] || { echo "usage: credential-store.sh set-stdin <service> <account>" >&2; exit 2; }
       sec="$(cat)" || sec=""
+      [[ -n "$sec" ]] || { echo "error: empty secret on stdin (pipe the secret, e.g. echo \"tok\" | credential-store.sh set-stdin svc acct)" >&2; exit 2; }
       ops_cred_set "$1" "$2" "$sec" ;;
     get)
       [[ $# -eq 2 ]] || { echo "usage: credential-store.sh get <service> <account>" >&2; exit 2; }
