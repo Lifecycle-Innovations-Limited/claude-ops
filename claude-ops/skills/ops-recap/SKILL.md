@@ -72,14 +72,34 @@ if [ -f "$DAEMON_LOG" ]; then
 fi
 
 # tmux integration?
+# Display surfaces — tmux status-right + Claude Code statusLine can coexist
+tmux_wired=0
+statusline_wired=0
+
 if command -v tmux >/dev/null 2>&1; then
   if grep -q claude-recap "$HOME/.tmux.conf" 2>/dev/null; then
     echo "✓ tmux status-right wired"
+    tmux_wired=1
   else
     echo "○ tmux installed but status-right not wired — run /ops:recap configure"
   fi
 else
-  echo "○ tmux not installed — marquee won't display, daemon still useful for /ops:recap tail"
+  echo "○ tmux not installed"
+fi
+
+SETTINGS="$HOME/.claude/settings.json"
+if [ -f "$SETTINGS" ] && command -v jq >/dev/null 2>&1; then
+  sl_cmd=$(jq -r '.statusLine.command // empty' "$SETTINGS" 2>/dev/null)
+  if echo "$sl_cmd" | grep -q claude-recap-digest; then
+    echo "✓ Claude Code statusLine wired"
+    statusline_wired=1
+  else
+    echo "○ Claude Code statusLine not wired — run /ops:recap configure"
+  fi
+fi
+
+if [ "$tmux_wired" -eq 0 ] && [ "$statusline_wired" -eq 0 ]; then
+  echo "  → no display surface active. Daemon still produces /tmp/claude-recap-digest (useful for /ops:recap tail)."
 fi
 ```
 
@@ -97,14 +117,14 @@ tail -n 30 /tmp/claude-recap-daemon.log 2>/dev/null || echo "(no daemon log yet)
 
 ## Subcommand: `configure`
 
-Walk the user through tmux integration if not already wired. Detect existing `status-right` first to avoid clobbering.
+Walk the user through display-surface integration. Two surfaces are supported and they can coexist: tmux `status-right` and Claude Code `statusLine` (`~/.claude/settings.json`). Detect existing config first to avoid clobbering.
 
-1. Check tmux availability:
+1. Check tmux availability — if missing, jump to the statusLine fallback flow below:
 
    ```bash
    if ! command -v tmux >/dev/null 2>&1; then
-     echo "tmux not installed — recap daemon still runs and you can read /tmp/claude-recap-digest manually."
-     exit 0
+     echo "tmux not installed — offering Claude Code statusLine fallback."
+     # → see "statusLine fallback" section below
    fi
    ```
 
@@ -143,6 +163,67 @@ TMUX
    ```bash
    tmux info >/dev/null 2>&1 && tmux source-file "$TMUX_CONF" 2>/dev/null
    ```
+
+### `configure` — statusLine fallback (no tmux, or in addition to tmux)
+
+When tmux is missing — or the user wants a second surface — wire the recap into Claude Code's own status bar via `~/.claude/settings.json`.
+
+1. `AskUserQuestion` (Rule 1 — exactly 4 options):
+
+   ```
+   Wire recap into Claude Code statusLine (~/.claude/settings.json)?
+     [Add to Claude Code statusLine]  [Show me the JSON, I'll add manually]  [Skip]  [Help]
+   ```
+
+2. On `Add to Claude Code statusLine`, detect existing entry:
+
+   ```bash
+   SETTINGS="$HOME/.claude/settings.json"
+   mkdir -p "$(dirname "$SETTINGS")"
+   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+   existing=$(jq -r '.statusLine // empty' "$SETTINGS")
+   ```
+
+3. If `existing` is non-empty, ask (Rule 1 — 3 options):
+
+   ```
+   Existing statusLine detected. How to handle?
+     [Replace with recap]  [Append after current (chain commands)]  [Skip]
+   ```
+
+4. Merge with `jq` so other settings are preserved:
+
+   ```bash
+   TMP=$(mktemp)
+   jq '.statusLine = {
+     "type": "command",
+     "command": "cat /tmp/claude-recap-digest 2>/dev/null | head -c 80",
+     "refreshInterval": 30
+   }' "$SETTINGS" > "$TMP" && mv "$TMP" "$SETTINGS"
+   ```
+
+   For the append branch, chain commands so both render side-by-side:
+
+   ```bash
+   prev_cmd=$(jq -r '.statusLine.command // ""' "$SETTINGS")
+   new_cmd="${prev_cmd}; cat /tmp/claude-recap-digest 2>/dev/null | head -c 80"
+   TMP=$(mktemp)
+   jq --arg cmd "$new_cmd" '.statusLine.command = $cmd' "$SETTINGS" > "$TMP" && mv "$TMP" "$SETTINGS"
+   ```
+
+5. Print: `✓ Claude Code statusLine wired — restart Claude Code (or open a new session) to activate.`
+
+The JSON snippet (for the manual / `Show me the JSON` path):
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "cat /tmp/claude-recap-digest 2>/dev/null | head -c 80",
+    "refreshInterval": 30
+  }
+}
+```
 
 ## Subcommand: `restart`
 
