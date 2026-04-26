@@ -36,28 +36,25 @@ import {
   chmodSync,
   readdirSync,
   renameSync,
-} from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-import { execSync, execFileSync, spawn } from "child_process";
-import { tmpdir } from "os";
-import { createHmac } from "node:crypto";
-import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS } from "./ai-brain.mjs";
+} from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { execSync, execFileSync, spawnSync, spawn } from 'child_process';
+import { tmpdir } from 'os';
+import { createHmac } from 'node:crypto';
+import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS } from './ai-brain.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, "config.json");
-const STATE_PATH = join(__dirname, "state.json");
-const LOCK_PATH = join(__dirname, ".rotating");
-const LOG_PATH = join(__dirname, "rotation.log");
+const CONFIG_PATH = join(__dirname, 'config.json');
+const STATE_PATH = join(__dirname, 'state.json');
+const LOCK_PATH = join(__dirname, '.rotating');
+const LOG_PATH = join(__dirname, 'rotation.log');
 
-const KEYCHAIN_SERVICE = "Claude Code-credentials";
+const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 // Use the OS username so multiple users on the same Mac don't collide on
 // keychain entries. Override with CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT if needed.
 const KEYCHAIN_ACCOUNT =
-  process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT ||
-  process.env.USER ||
-  process.env.LOGNAME ||
-  "claude-ops";
+  process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || process.env.LOGNAME || 'claude-ops';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -74,14 +71,14 @@ function ensureMCPServersAndTools() {
 
   // 1. Chrome or Chrome Beta binary (Comet is off-limits)
   const realChromes = [
-    "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   ];
   const foundChrome = realChromes.find((p) => existsSync(p));
   if (foundChrome) {
-    actions.push(`chrome-binary: ${foundChrome.split("/").pop()}`);
+    actions.push(`chrome-binary: ${foundChrome.split('/').pop()}`);
   } else {
-    actions.push("chrome-binary: WARNING — no Chrome/Chrome Beta found");
+    actions.push('chrome-binary: WARNING — no Chrome/Chrome Beta found');
   }
 
   // 2. Chrome CDP port 9222 — probe (driver will launch Chrome if needed)
@@ -89,24 +86,24 @@ function ensureMCPServersAndTools() {
     execSync(`curl -sf http://localhost:9222/json/version >/dev/null 2>&1`, {
       timeout: 1500,
     });
-    actions.push("chrome-cdp: reachable on :9222");
+    actions.push('chrome-cdp: reachable on :9222');
   } catch {
-    actions.push("chrome-cdp: not reachable (driver will launch Chrome)");
+    actions.push('chrome-cdp: not reachable (driver will launch Chrome)');
   }
 
   // 3. dcli (Dashlane) — required for primary token path
   try {
     execSync(`command -v dcli >/dev/null 2>&1`, { timeout: 1000 });
-    actions.push("dcli: available");
+    actions.push('dcli: available');
   } catch {
-    actions.push("dcli: MISSING — primary token path will fail");
+    actions.push('dcli: MISSING — primary token path will fail');
   }
 
   // 4. security (macOS keychain) — required for token writes
   try {
     execSync(`command -v security >/dev/null 2>&1`, { timeout: 1000 });
   } catch {
-    actions.push("security(1): MISSING — keychain writes will fail");
+    actions.push('security(1): MISSING — keychain writes will fail');
   }
 
   for (const a of actions) earlyLog(a);
@@ -114,10 +111,7 @@ function ensureMCPServersAndTools() {
 
 // Unconditional warmup: every rotate.mjs run starts its MCP servers + tools FIRST.
 // Skip only for --help (where nothing runs downstream).
-if (
-  !process.argv.slice(2).includes("--help") &&
-  !process.argv.slice(2).includes("--no-browser")
-) {
+if (!process.argv.slice(2).includes('--help') && !process.argv.slice(2).includes('--no-browser')) {
   ensureMCPServersAndTools();
 }
 
@@ -127,24 +121,22 @@ function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   console.error(line);
   try {
-    appendFileSync(LOG_PATH, line + "\n");
+    appendFileSync(LOG_PATH, line + '\n');
   } catch {}
 }
 
 function notify(title, msg) {
   try {
-    execSync(
-      `osascript -e 'display notification "${msg.replace(/"/g, '\\"')}" with title "${title}"'`,
-    );
+    execSync(`osascript -e 'display notification "${msg.replace(/"/g, '\\"')}" with title "${title}"'`);
   } catch {}
 }
 
 function readConfig() {
-  return JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+  return JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
 }
 function readState() {
   try {
-    return JSON.parse(readFileSync(STATE_PATH, "utf8"));
+    return JSON.parse(readFileSync(STATE_PATH, 'utf8'));
   } catch {
     return {
       activeAccount: null,
@@ -156,10 +148,10 @@ function readState() {
 }
 function writeState(s, dryRun = false) {
   if (dryRun) {
-    log("[DRY-RUN] Would write state");
+    log('[DRY-RUN] Would write state');
     return;
   }
-  const tmp = STATE_PATH + ".tmp." + process.pid;
+  const tmp = STATE_PATH + '.tmp.' + process.pid;
   writeFileSync(tmp, JSON.stringify(s, null, 2));
   renameSync(tmp, STATE_PATH);
 }
@@ -169,9 +161,9 @@ function writeState(s, dryRun = false) {
 const LOCK_MAX_AGE_MS = 15 * 60_000; // hard ceiling; browser OAuth can take minutes
 function readLock() {
   try {
-    const raw = readFileSync(LOCK_PATH, "utf8").trim();
+    const raw = readFileSync(LOCK_PATH, 'utf8').trim();
     const [ts, pidStr] = raw.split(/\s+/);
-    const pid = parseInt(pidStr || "", 10);
+    const pid = parseInt(pidStr || '', 10);
     const when = new Date(ts).getTime();
     return {
       when: Number.isFinite(when) ? when : 0,
@@ -201,7 +193,7 @@ function acquireLock() {
       }
       log(`Lock held by PID ${info.pid} but >${Math.round(LOCK_MAX_AGE_MS / 60_000)}min old — breaking`);
     } else if (info) {
-      log(`Stale lock (PID ${info.pid || "?"} not running) — breaking`);
+      log(`Stale lock (PID ${info.pid || '?'} not running) — breaking`);
     }
   }
   writeFileSync(LOCK_PATH, `${new Date().toISOString()}\n${process.pid}`);
@@ -235,13 +227,13 @@ async function queryAllUtilization(config) {
 
       const headers = {
         Authorization: `Bearer ${accessToken}`,
-        "anthropic-beta": "oauth-2025-04-20",
-        "Content-Type": "application/json",
+        'anthropic-beta': 'oauth-2025-04-20',
+        'Content-Type': 'application/json',
       };
 
       async function fetchWithRetry(url, attempt = 0) {
         const res = await fetch(url, {
-          method: "GET",
+          method: 'GET',
           headers,
           signal: AbortSignal.timeout(5000),
         });
@@ -255,8 +247,8 @@ async function queryAllUtilization(config) {
       }
 
       const [usageRes, profileRes] = await Promise.all([
-        fetchWithRetry("https://api.anthropic.com/api/oauth/usage"),
-        fetchWithRetry("https://api.anthropic.com/api/oauth/profile"),
+        fetchWithRetry('https://api.anthropic.com/api/oauth/usage'),
+        fetchWithRetry('https://api.anthropic.com/api/oauth/profile'),
       ]);
 
       if (!usageRes.ok) return null;
@@ -271,10 +263,8 @@ async function queryAllUtilization(config) {
         subscriptionStatus = prof?.organization?.subscription_status ?? null;
       }
       return {
-        five_hour_pct:
-          Math.round((data.five_hour?.utilization ?? 0) * 100) / 100,
-        seven_day_pct:
-          Math.round((data.seven_day?.utilization ?? 0) * 100) / 100,
+        five_hour_pct: Math.round((data.five_hour?.utilization ?? 0) * 100) / 100,
+        seven_day_pct: Math.round((data.seven_day?.utilization ?? 0) * 100) / 100,
         resets_at_5h: data.five_hour?.resets_at || null,
         resets_at_7d: data.seven_day?.resets_at || null,
         extra_usage_enabled: extraUsageEnabled,
@@ -298,7 +288,7 @@ async function queryAllUtilization(config) {
   );
   const map = {};
   for (const r of results) {
-    if (r.status === "fulfilled" && r.value.util) {
+    if (r.status === 'fulfilled' && r.value.util) {
       map[r.value.key] = r.value.util;
     }
   }
@@ -382,24 +372,16 @@ function pickNextAccount(config, state, liveUtil = {}, opts = {}) {
     log(
       `⚠  EXTRA USAGE ENABLED on ${extraUsageAccounts.length} account(s): ${extraUsageAccounts
         .map((a) => accountKey(a))
-        .join(
-          ", ",
-        )} — these can incur overage charges. Disable at console.anthropic.com/settings/billing.`,
+        .join(', ')} — these can incur overage charges. Disable at console.anthropic.com/settings/billing.`,
     );
   }
 
   const excludeKey = (a) =>
-    a.disabled === true ||
-    accountKey(a) === activeKey ||
-    (!allowExtraUsage && hasExtraUsageEnabled(a));
+    a.disabled === true || accountKey(a) === activeKey || (!allowExtraUsage && hasExtraUsageEnabled(a));
 
   // Separate normal and low-priority, excluding current active + extra-usage accounts
-  const normal = config.accounts.filter(
-    (a) => a.priority !== "low" && !excludeKey(a),
-  );
-  const low = config.accounts.filter(
-    (a) => a.priority === "low" && !excludeKey(a),
-  );
+  const normal = config.accounts.filter((a) => a.priority !== 'low' && !excludeKey(a));
+  const low = config.accounts.filter((a) => a.priority === 'low' && !excludeKey(a));
 
   const UTIL_HARD_BLOCK = 90; // Skip accounts at/above this util% if possible
 
@@ -411,24 +393,20 @@ function pickNextAccount(config, state, liveUtil = {}, opts = {}) {
       const viable = candidates.filter((a) => score(a) < UTIL_HARD_BLOCK);
       const blocked = candidates.filter((a) => score(a) >= UTIL_HARD_BLOCK);
       const sorted = [...viable].sort((a, b) => score(a) - score(b));
-      const pool2 = sorted.length
-        ? sorted
-        : [...blocked].sort((a, b) => score(a) - score(b));
+      const pool2 = sorted.length ? sorted : [...blocked].sort((a, b) => score(a) - score(b));
 
       if (pool2.length > 0) {
         const best = pool2[0];
         const u5 = getUtil5h(best);
         const u7 = getUtil7d(best);
         const src = liveUtil[accountKey(best)]
-          ? "live"
+          ? 'live'
           : state.accounts[accountKey(best)]?.lastUtilization
-            ? "cached"
-            : "unknown";
-        const utilStr = ` 5h=${u5 ?? "?"}% 7d=${u7 ?? "?"}% [${src}]`;
+            ? 'cached'
+            : 'unknown';
+        const utilStr = ` 5h=${u5 ?? '?'}% 7d=${u7 ?? '?'}% [${src}]`;
         if (score(best) >= UTIL_HARD_BLOCK) {
-          log(
-            `WARNING: All candidates near limit — rotating to ${accountKey(best)}${utilStr}`,
-          );
+          log(`WARNING: All candidates near limit — rotating to ${accountKey(best)}${utilStr}`);
         } else {
           log(`Picked ${accountKey(best)}${utilStr}`);
         }
@@ -442,10 +420,11 @@ function pickNextAccount(config, state, liveUtil = {}, opts = {}) {
 // ── Keychain ─────────────────────────────────────────────────────────────────
 
 function readKeychain(svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
-  const out = execSync(
-    `security find-generic-password -s "${svc}" -a "${acct}" -g 2>&1`,
-    { timeout: 5000 },
-  ).toString();
+  const result = spawnSync('security', ['find-generic-password', '-s', svc, '-a', acct, '-g'], {
+    timeout: 5000,
+    encoding: 'utf8',
+  });
+  const out = (result.stdout || '') + (result.stderr || '');
   const m = out.match(/^password: "?(.*?)"?$/m);
   if (!m) throw new Error(`No keychain entry ${svc}/${acct}`);
   return m[1].replace(/\\"/g, '"');
@@ -453,14 +432,11 @@ function readKeychain(svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
 
 function writeKeychain(json, svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
   try {
-    execSync(
-      `security delete-generic-password -s "${svc}" -a "${acct}" 2>/dev/null`,
-    );
+    execFileSync('security', ['delete-generic-password', '-s', svc, '-a', acct], {
+      stdio: 'ignore',
+    });
   } catch {}
-  execSync(
-    `security add-generic-password -s "${svc}" -a "${acct}" -w ${JSON.stringify(json)}`,
-    { timeout: 5000 },
-  );
+  execFileSync('security', ['add-generic-password', '-s', svc, '-a', acct, '-w', json], { timeout: 5000 });
 }
 
 function tokenExpired(json) {
@@ -476,7 +452,7 @@ function tokenExpired(json) {
 
 // ── Token vault (local keychain entries per account) ─────────────────────────
 
-const TOKEN_PREFIX = "Claude-Rotation";
+const TOKEN_PREFIX = 'Claude-Rotation';
 
 function tokenService(account) {
   return `${TOKEN_PREFIX}-${accountKey(account)}`;
@@ -513,9 +489,7 @@ function fetchGoogleCreds(account) {
     }).toString();
     const creds = JSON.parse(json);
     // Find credential whose email matches account.email
-    const match = creds.find(
-      (c) => (c.email || "").toLowerCase() === account.email.toLowerCase(),
-    );
+    const match = creds.find((c) => (c.email || '').toLowerCase() === account.email.toLowerCase());
     if (!match) return null;
     return {
       password: match.password || null,
@@ -532,7 +506,7 @@ function fetchGooglePassword(account) {
   // Legacy path: honor explicit dashlaneGooglePath if set
   if (account.dashlaneGooglePath) {
     try {
-      return execSync(`dcli read "${account.dashlaneGooglePath}" 2>/dev/null`, {
+      return execFileSync('dcli', ['read', account.dashlaneGooglePath], {
         timeout: 10_000,
       })
         .toString()
@@ -551,13 +525,13 @@ function fetchGooglePassword(account) {
 function generateTOTP(base32Secret) {
   // Uses top-level ESM import: createHmac from "node:crypto"
   // Decode base32
-  const base32chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  const clean = base32Secret.replace(/\s/g, "").toUpperCase();
-  let bits = "";
+  const base32chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = base32Secret.replace(/\s/g, '').toUpperCase();
+  let bits = '';
   for (const c of clean) {
     const i = base32chars.indexOf(c);
     if (i === -1) continue;
-    bits += i.toString(2).padStart(5, "0");
+    bits += i.toString(2).padStart(5, '0');
   }
   const bytes = [];
   for (let i = 0; i + 8 <= bits.length; i += 8) {
@@ -570,14 +544,14 @@ function generateTOTP(base32Secret) {
   const buf = Buffer.alloc(8);
   buf.writeBigUInt64BE(BigInt(counter));
 
-  const hmac = createHmac("sha1", key).update(buf).digest();
+  const hmac = createHmac('sha1', key).update(buf).digest();
   const offset = hmac[hmac.length - 1] & 0x0f;
   const code =
     ((hmac[offset] & 0x7f) << 24) |
     ((hmac[offset + 1] & 0xff) << 16) |
     ((hmac[offset + 2] & 0xff) << 8) |
     (hmac[offset + 3] & 0xff);
-  return (code % 1_000_000).toString().padStart(6, "0");
+  return (code % 1_000_000).toString().padStart(6, '0');
 }
 
 // Read the latest SMS verification code from Messages.app for the Google 2FA number.
@@ -587,18 +561,14 @@ function generateTOTP(base32Secret) {
 // We hex-dump both and extract G-XXXXXX or a 6-digit code.
 function readLatestSMSCode({ maxAgeSec = 300 } = {}) {
   try {
-    const db = join(process.env.HOME || "", "Library/Messages/chat.db");
+    const db = join(process.env.HOME || '', 'Library/Messages/chat.db');
     if (!existsSync(db)) return null;
     // Apple timestamp = seconds since 2001-01-01, stored as nanoseconds
-    const cutoffAppleNs =
-      (Math.floor(Date.now() / 1000) - 978307200 - maxAgeSec) * 1_000_000_000;
+    const cutoffAppleNs = (Math.floor(Date.now() / 1000) - 978307200 - maxAgeSec) * 1_000_000_000;
     const sql = `SELECT hex(attributedBody), text FROM message WHERE date > ${cutoffAppleNs} AND service IN ('SMS','iMessage') ORDER BY date DESC LIMIT 10;`;
-    const rows = execSync(`sqlite3 "${db}" "${sql}"`, { timeout: 5000 })
-      .toString()
-      .split("\n")
-      .filter(Boolean);
+    const rows = execSync(`sqlite3 "${db}" "${sql}"`, { timeout: 5000 }).toString().split('\n').filter(Boolean);
     for (const row of rows) {
-      const [hex, text] = row.split("|");
+      const [hex, text] = row.split('|');
       // Plain text column (older macOS)
       if (text) {
         const m = text.match(/G-(\d{6})/) || text.match(/\b(\d{6})\b/);
@@ -606,10 +576,8 @@ function readLatestSMSCode({ maxAgeSec = 300 } = {}) {
       }
       // attributedBody blob — decode as latin-1 and regex-match
       if (hex && hex.length > 20) {
-        const decoded = Buffer.from(hex, "hex").toString("latin1");
-        const m =
-          decoded.match(/G-(\d{6})/) ||
-          decoded.match(/(\d{6})\s+is your (?:Google )?verification code/);
+        const decoded = Buffer.from(hex, 'hex').toString('latin1');
+        const m = decoded.match(/G-(\d{6})/) || decoded.match(/(\d{6})\s+is your (?:Google )?verification code/);
         if (m) return m[1];
       }
     }
@@ -624,11 +592,11 @@ function readLatestSMSCode({ maxAgeSec = 300 } = {}) {
 async function swapToken(account) {
   const token = readStoredToken(account);
   if (!token) {
-    log("[primary] No stored token — need browser fallback");
+    log('[primary] No stored token — need browser fallback');
     return false;
   }
   if (tokenExpired(token)) {
-    log("[primary] Token expired — need browser fallback");
+    log('[primary] Token expired — need browser fallback');
     return false;
   }
   log(`[primary] Swapping active keychain for ${accountKey(account)}...`);
@@ -639,14 +607,11 @@ async function swapToken(account) {
     const current = readKeychain();
     const currentParsed = JSON.parse(current);
     const newParsed = JSON.parse(token);
-    if (
-      currentParsed.mcpOAuth &&
-      Object.keys(currentParsed.mcpOAuth).length > 0
-    ) {
+    if (currentParsed.mcpOAuth && Object.keys(currentParsed.mcpOAuth).length > 0) {
       // Merge: keep current mcpOAuth, only swap claudeAiOauth
       newParsed.mcpOAuth = { ...newParsed.mcpOAuth, ...currentParsed.mcpOAuth };
       writeKeychain(JSON.stringify(newParsed));
-      log("[primary] Preserved mcpOAuth from previous session");
+      log('[primary] Preserved mcpOAuth from previous session');
       return true;
     }
   } catch {}
@@ -660,7 +625,7 @@ async function swapToken(account) {
 function saveCurrentToken(account) {
   try {
     const token = readKeychain();
-    if (token.includes("claudeAiOauth")) {
+    if (token.includes('claudeAiOauth')) {
       // Store only claudeAiOauth, not mcpOAuth (that's session-specific)
       try {
         const parsed = JSON.parse(token);
@@ -683,14 +648,14 @@ function saveCurrentToken(account) {
 // Driver cascade — Playwright only by default.
 // Kapture/Chrome-JXA/Manual are disabled because they may touch Comet (user's browser)
 // or depend on whatever is frontmost. Set CLAUDE_ROTATION_ENABLE_FALLBACKS=1 to enable.
-const _fallbacksEnabled = process.env.CLAUDE_ROTATION_ENABLE_FALLBACKS === "1";
+const _fallbacksEnabled = process.env.CLAUDE_ROTATION_ENABLE_FALLBACKS === '1';
 const DRIVER_CASCADE = [
-  ["playwright", makePlaywrightDriver], // CDP to Chrome/Chrome Beta with real profile
+  ['playwright', makePlaywrightDriver], // CDP to Chrome/Chrome Beta with real profile
   ...(_fallbacksEnabled
     ? [
-        ["kapture", makeKaptureDriver],
-        ["chrome-jxa", makeChromeJXADriver],
-        ["manual", makeManualDriver],
+        ['kapture', makeKaptureDriver],
+        ['chrome-jxa', makeChromeJXADriver],
+        ['manual', makeManualDriver],
       ]
     : []),
 ];
@@ -707,29 +672,29 @@ async function getBrowserDriver(skip = new Set()) {
       log(`Driver [${name}] unavailable: ${err.message}`);
     }
   }
-  throw new Error("All browser drivers failed");
+  throw new Error('All browser drivers failed');
 }
 
 // ─── Driver 1: Kapture MCP (WebSocket → real Chrome, all Google sessions) ────
 
 async function makeKaptureDriver() {
-  const { default: WebSocket } = await import("ws");
+  const { default: WebSocket } = await import('ws');
 
   // Auto-start Kapture server if not running
   let ws;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       ws = await new Promise((resolve, reject) => {
-        const socket = new WebSocket("ws://localhost:61822/mcp");
+        const socket = new WebSocket('ws://localhost:61822/mcp');
         const timer = setTimeout(() => {
           socket.terminate();
-          reject(new Error("timeout"));
+          reject(new Error('timeout'));
         }, 4000);
-        socket.once("open", () => {
+        socket.once('open', () => {
           clearTimeout(timer);
           resolve(socket);
         });
-        socket.once("error", (e) => {
+        socket.once('error', (e) => {
           clearTimeout(timer);
           reject(e);
         });
@@ -737,30 +702,28 @@ async function makeKaptureDriver() {
       break;
     } catch {
       if (attempt === 0) {
-        log("Kapture not running — starting server...");
-        spawn("npx", ["kapture-mcp"], {
+        log('Kapture not running — starting server...');
+        spawn('npx', ['kapture-mcp'], {
           detached: true,
-          stdio: "ignore",
+          stdio: 'ignore',
         }).unref();
         await sleep(3000);
       }
     }
   }
-  if (!ws) throw new Error("Kapture unavailable");
+  if (!ws) throw new Error('Kapture unavailable');
 
   // JSON-RPC over WebSocket
   let msgId = 0;
   const pending = new Map();
 
-  ws.on("message", (data) => {
+  ws.on('message', (data) => {
     try {
       const msg = JSON.parse(data.toString());
       if (msg.id !== undefined && pending.has(msg.id)) {
         const { resolve, reject } = pending.get(msg.id);
         pending.delete(msg.id);
-        msg.error
-          ? reject(new Error(msg.error.message || JSON.stringify(msg.error)))
-          : resolve(msg.result);
+        msg.error ? reject(new Error(msg.error.message || JSON.stringify(msg.error))) : resolve(msg.result);
       }
     } catch {}
   });
@@ -769,7 +732,7 @@ async function makeKaptureDriver() {
     return new Promise((resolve, reject) => {
       const id = ++msgId;
       pending.set(id, { resolve, reject });
-      ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+      ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
       const t = setTimeout(() => {
         pending.delete(id);
         reject(new Error(`RPC timeout: ${method}`));
@@ -791,19 +754,19 @@ async function makeKaptureDriver() {
   }
 
   function tool(name, args = {}) {
-    return rpc("tools/call", { name, arguments: args });
+    return rpc('tools/call', { name, arguments: args });
   }
 
   // MCP handshake
-  await rpc("initialize", {
-    protocolVersion: "2024-11-05",
+  await rpc('initialize', {
+    protocolVersion: '2024-11-05',
     capabilities: {},
-    clientInfo: { name: "claude-rotation", version: "1.0" },
+    clientInfo: { name: 'claude-rotation', version: '1.0' },
   });
   ws.send(
     JSON.stringify({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
+      jsonrpc: '2.0',
+      method: 'notifications/initialized',
       params: {},
     }),
   );
@@ -811,7 +774,7 @@ async function makeKaptureDriver() {
   // Get existing tab or open new one
   let tabId;
   try {
-    const tabsResult = await tool("list_tabs", {});
+    const tabsResult = await tool('list_tabs', {});
     const text = extractText(tabsResult);
     log(`Kapture tabs: ${text.substring(0, 200)}`);
     // Parse first tab ID from format: "Tab ID: abc123" or "id: abc123" or "(abc123)"
@@ -824,54 +787,47 @@ async function makeKaptureDriver() {
 
   if (!tabId) {
     // Open new tab
-    const result = await tool("new_tab", { browser: "chrome" });
+    const result = await tool('new_tab', { browser: 'chrome' });
     const text = extractText(result);
-    const m =
-      text.match(/[Tt]ab\s+[Ii][Dd][:\s]+([a-zA-Z0-9_-]+)/) ||
-      text.match(/([a-zA-Z0-9_-]{8,})/);
-    tabId = m?.[1] || "tab1";
+    const m = text.match(/[Tt]ab\s+[Ii][Dd][:\s]+([a-zA-Z0-9_-]+)/) || text.match(/([a-zA-Z0-9_-]{8,})/);
+    tabId = m?.[1] || 'tab1';
     await sleep(2000);
   }
 
   log(`Kapture using tab: ${tabId}`);
 
   return {
-    name: "kapture",
+    name: 'kapture',
     _tabId: tabId,
     async goto(url) {
-      await tool("navigate", { tabId, url, timeout: 30_000 });
+      await tool('navigate', { tabId, url, timeout: 30_000 });
       await sleep(2500);
     },
     async currentUrl() {
       try {
-        const r = await tool("tab_detail", { tabId });
+        const r = await tool('tab_detail', { tabId });
         const text = extractText(r);
-        const m =
-          text.match(/[Uu][Rr][Ll][:\s]+(\S+)/) ||
-          text.match(/https?:\/\/[^\s"',]+/);
-        return m?.[1] || m?.[0] || "";
+        const m = text.match(/[Uu][Rr][Ll][:\s]+(\S+)/) || text.match(/https?:\/\/[^\s"',]+/);
+        return m?.[1] || m?.[0] || '';
       } catch {
-        return "";
+        return '';
       }
     },
     async findAndClick(texts) {
       for (const t of texts) {
         // CSS selector? Try that first — most reliable.
-        const isCss =
-          /^[\[#.]/.test(t) ||
-          t.includes("data-testid") ||
-          t.includes("[type=");
+        const isCss = /^[\[#.]/.test(t) || t.includes('data-testid') || t.includes('[type=');
         if (isCss) {
           try {
-            await tool("click", { tabId, selector: t });
+            await tool('click', { tabId, selector: t });
             log(`[kapture] clicked via CSS: ${t}`);
             return true;
           } catch {}
           continue;
         }
         const clean = t
-          .replace(/button:has-text\("?([^"]+)"?\)/g, "$1")
-          .replace(/['"]/g, "")
+          .replace(/button:has-text\("?([^"]+)"?\)/g, '$1')
+          .replace(/['"]/g, '')
           .trim();
         const escaped = clean.replace(/'/g, "\\'");
         const xpaths = [
@@ -886,7 +842,7 @@ async function makeKaptureDriver() {
         ];
         for (const xpath of xpaths) {
           try {
-            await tool("click", { tabId, xpath });
+            await tool('click', { tabId, xpath });
             log(`[kapture] clicked via xpath: ${xpath.substring(0, 80)}`);
             return true;
           } catch {}
@@ -897,13 +853,13 @@ async function makeKaptureDriver() {
     async fillInput(sel, val) {
       if (!val) return false;
       try {
-        await tool("fill", { tabId, selector: sel, value: val });
+        await tool('fill', { tabId, selector: sel, value: val });
         return true;
       } catch {}
       // XPath fallback
       try {
-        const xpath = `//*[self::input or self::textarea][@type='${sel.includes("password") ? "password" : "email"}']`;
-        await tool("fill", { tabId, xpath, value: val });
+        const xpath = `//*[self::input or self::textarea][@type='${sel.includes('password') ? 'password' : 'email'}']`;
+        await tool('fill', { tabId, xpath, value: val });
         return true;
       } catch {
         return false;
@@ -911,23 +867,23 @@ async function makeKaptureDriver() {
     },
     async screenshot(path) {
       try {
-        const r = await tool("screenshot", {
+        const r = await tool('screenshot', {
           tabId,
-          format: "png",
+          format: 'png',
           scale: 0.5,
         });
         const content = r?.content?.[0];
-        if (content?.type === "image" && content.data) {
-          writeFileSync(path, Buffer.from(content.data, "base64"));
+        if (content?.type === 'image' && content.data) {
+          writeFileSync(path, Buffer.from(content.data, 'base64'));
         }
       } catch {}
     },
     async readPageText() {
       try {
-        const r = await tool("dom", { tabId });
+        const r = await tool('dom', { tabId });
         return extractText(r);
       } catch {
-        return "";
+        return '';
       }
     },
     // Poll list_tabs for a new tab that appears after a Google OAuth click.
@@ -936,12 +892,11 @@ async function makeKaptureDriver() {
       // Snapshot current tabs
       const snapshotTabs = async () => {
         try {
-          const r = await tool("list_tabs", {});
+          const r = await tool('list_tabs', {});
           const text = extractText(r);
           // Parse all tab IDs from the response
           const ids = [];
-          const re =
-            /[Tt]ab\s+[Ii][Dd][:\s]+([a-zA-Z0-9_-]+)|\(([a-zA-Z0-9_-]{6,})\)|"id"\s*:\s*"([a-zA-Z0-9_-]+)"/g;
+          const re = /[Tt]ab\s+[Ii][Dd][:\s]+([a-zA-Z0-9_-]+)|\(([a-zA-Z0-9_-]{6,})\)|"id"\s*:\s*"([a-zA-Z0-9_-]+)"/g;
           let m;
           while ((m = re.exec(text)) !== null) {
             const id = m[1] || m[2] || m[3];
@@ -958,18 +913,16 @@ async function makeKaptureDriver() {
       while (Date.now() < deadline) {
         await sleep(1000);
         const after = await snapshotTabs();
-        const newTabs = [...after].filter(
-          (id) => !before.has(id) && id !== tabId,
-        );
+        const newTabs = [...after].filter((id) => !before.has(id) && id !== tabId);
         if (newTabs.length > 0) {
           const popupTabId = newTabs[0];
           log(`Popup detected, switching to tab: ${popupTabId}`);
           // Return a minimal driver bound to the popup tab
           return {
-            name: "kapture-popup",
+            name: 'kapture-popup',
             _tabId: popupTabId,
             async goto(url) {
-              await tool("navigate", {
+              await tool('navigate', {
                 tabId: popupTabId,
                 url,
                 timeout: 30_000,
@@ -978,21 +931,19 @@ async function makeKaptureDriver() {
             },
             async currentUrl() {
               try {
-                const r = await tool("tab_detail", { tabId: popupTabId });
+                const r = await tool('tab_detail', { tabId: popupTabId });
                 const text = extractText(r);
-                const m =
-                  text.match(/[Uu][Rr][Ll][:\s]+(\S+)/) ||
-                  text.match(/https?:\/\/[^\s"',]+/);
-                return m?.[1] || m?.[0] || "";
+                const m = text.match(/[Uu][Rr][Ll][:\s]+(\S+)/) || text.match(/https?:\/\/[^\s"',]+/);
+                return m?.[1] || m?.[0] || '';
               } catch {
-                return "";
+                return '';
               }
             },
             async findAndClick(texts) {
               for (const t of texts) {
                 const clean = t
-                  .replace(/button:has-text\("?([^"]+)"?\)/g, "$1")
-                  .replace(/['"]/g, "")
+                  .replace(/button:has-text\("?([^"]+)"?\)/g, '$1')
+                  .replace(/['"]/g, '')
                   .trim();
                 const xpaths = [
                   `//*[normalize-space(text())='${clean}']`,
@@ -1002,7 +953,7 @@ async function makeKaptureDriver() {
                 ];
                 for (const xpath of xpaths) {
                   try {
-                    await tool("click", { tabId: popupTabId, xpath });
+                    await tool('click', { tabId: popupTabId, xpath });
                     return true;
                   } catch {}
                 }
@@ -1012,7 +963,7 @@ async function makeKaptureDriver() {
             async fillInput(sel, val) {
               if (!val) return false;
               try {
-                await tool("fill", {
+                await tool('fill', {
                   tabId: popupTabId,
                   selector: sel,
                   value: val,
@@ -1028,7 +979,7 @@ async function makeKaptureDriver() {
           };
         }
       }
-      log("No popup appeared within timeout");
+      log('No popup appeared within timeout');
       return null;
     },
     async close() {
@@ -1039,11 +990,11 @@ async function makeKaptureDriver() {
 
 // Helper: extract text from MCP tool result
 function extractText(result) {
-  if (!result) return "";
-  if (typeof result === "string") return result;
+  if (!result) return '';
+  if (typeof result === 'string') return result;
   const content = result.content || result;
   if (Array.isArray(content)) {
-    return content.map((c) => c.text || c.data || "").join("\n");
+    return content.map((c) => c.text || c.data || '').join('\n');
   }
   return JSON.stringify(result);
 }
@@ -1064,10 +1015,10 @@ function extractText(result) {
 // Comet = user's browser (never touch). Chrome = user's browser (never touch).
 const REAL_BROWSERS = [
   {
-    name: "Google Chrome Beta",
-    bin: "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
-    profile: join(__dirname, ".chrome-beta-automation"),
-    appName: "Google Chrome Beta",
+    name: 'Google Chrome Beta',
+    bin: '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta',
+    profile: join(__dirname, '.chrome-beta-automation'),
+    appName: 'Google Chrome Beta',
   },
 ];
 
@@ -1099,9 +1050,7 @@ function findRealBrowser({ preferNotRunning = true } = {}) {
 
 async function tryConnectCDP(chromium) {
   try {
-    const browser = await chromium.connectOverCDP(
-      `http://localhost:${CDP_PORT}`,
-    );
+    const browser = await chromium.connectOverCDP(`http://localhost:${CDP_PORT}`);
     const contexts = browser.contexts();
     const ctx = contexts[0] || (await browser.newContext());
     const page = ctx.pages()[0] || (await ctx.newPage());
@@ -1114,7 +1063,7 @@ async function tryConnectCDP(chromium) {
 
 function isAppRunning(appName) {
   try {
-    execSync(`pgrep -f "${appName.replace(/ /g, ".")}" > /dev/null 2>&1`, {
+    execSync(`pgrep -f "${appName.replace(/ /g, '.')}" > /dev/null 2>&1`, {
       timeout: 2000,
     });
     return true;
@@ -1125,21 +1074,18 @@ function isAppRunning(appName) {
 
 function gracefullyQuitApp(appName) {
   try {
-    execSync(
-      `osascript -e 'tell application "${appName}" to quit' 2>/dev/null`,
-      { timeout: 8000 },
-    );
+    execSync(`osascript -e 'tell application "${appName}" to quit' 2>/dev/null`, { timeout: 8000 });
     // Wait up to 5s for it to actually quit
     for (let i = 0; i < 10; i++) {
       if (!isAppRunning(appName)) return true;
-      execSync("sleep 0.5");
+      execSync('sleep 0.5');
     }
   } catch {}
   return false;
 }
 
 async function makePlaywrightDriver() {
-  const { chromium } = await import("playwright");
+  const { chromium } = await import('playwright');
 
   // 1. Try attaching to already-running Chrome on CDP
   let attached = await tryConnectCDP(chromium);
@@ -1148,8 +1094,7 @@ async function makePlaywrightDriver() {
 
   if (!attached) {
     const browser = findRealBrowser();
-    if (!browser)
-      throw new Error("No Comet / Chrome Beta / Chrome binary found");
+    if (!browser) throw new Error('No Comet / Chrome Beta / Chrome binary found');
 
     // 2. Ensure symlinked profile exists (Chrome CDP requires non-default user-data-dir)
     ensureSymlinkedProfile(browser);
@@ -1157,9 +1102,7 @@ async function makePlaywrightDriver() {
     // 3. Quit any running Chrome Beta that might be holding the real profile
     //    (the symlinked profile shares Cookies/LoginData files with the real one).
     if (isAppRunning(browser.appName)) {
-      log(
-        `[playwright] ${browser.name} running — quitting to release profile files...`,
-      );
+      log(`[playwright] ${browser.name} running — quitting to release profile files...`);
       gracefullyQuitApp(browser.appName);
       await sleep(1500);
       // Force kill if still alive
@@ -1172,26 +1115,24 @@ async function makePlaywrightDriver() {
     // 4. Launch visible (NOT headless — Cloudflare blocks headless Chrome)
     //    Positioned off-screen + 1x1 size so the window is effectively invisible
     //    even on multi-monitor / retina setups where 3000,3000 clamps onto a display.
-    log(
-      `[playwright] Launching ${browser.name} hidden (1x1 off-screen) with CDP :${CDP_PORT}...`,
-    );
+    log(`[playwright] Launching ${browser.name} hidden (1x1 off-screen) with CDP :${CDP_PORT}...`);
     spawn(
       browser.bin,
       [
         `--remote-debugging-port=${CDP_PORT}`,
         `--user-data-dir=${browser.profile}`,
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-blink-features=AutomationControlled",
-        "--disable-background-networking",
-        "--disable-component-update",
-        "--disable-default-apps",
-        "--disable-sync",
-        "--disable-notifications",
-        "--window-position=9000,9000",
-        "--window-size=1,1",
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-background-networking',
+        '--disable-component-update',
+        '--disable-default-apps',
+        '--disable-sync',
+        '--disable-notifications',
+        '--window-position=9000,9000',
+        '--window-size=1,1',
       ],
-      { detached: true, stdio: "ignore" },
+      { detached: true, stdio: 'ignore' },
     ).unref();
     weSpawnedChrome = true;
     spawnedProfile = browser.profile;
@@ -1202,13 +1143,12 @@ async function makePlaywrightDriver() {
       attached = await tryConnectCDP(chromium);
       if (attached) break;
     }
-    if (!attached)
-      throw new Error(`CDP didn't come up on :${CDP_PORT} within 15s`);
+    if (!attached) throw new Error(`CDP didn't come up on :${CDP_PORT} within 15s`);
   }
 
   const { browser: pwBrowser, ctx, page } = attached;
   return buildPageDriver(
-    "playwright",
+    'playwright',
     page,
     async () => {
       try {
@@ -1237,7 +1177,7 @@ async function makeChromeJXADriver() {
   )
     .toString()
     .trim();
-  if (!test.startsWith("ok:")) throw new Error("Chrome JXA test failed");
+  if (!test.startsWith('ok:')) throw new Error('Chrome JXA test failed');
 
   function jxaJs(js) {
     return execSync(
@@ -1252,7 +1192,7 @@ async function makeChromeJXADriver() {
   }
 
   return {
-    name: "chrome-jxa",
+    name: 'chrome-jxa',
     async goto(url) {
       // Do NOT activate Chrome — focus-steal would interrupt the user's work.
       // URL assignment alone is enough to drive navigation via JXA.
@@ -1272,15 +1212,15 @@ async function makeChromeJXADriver() {
     async findAndClick(texts) {
       for (const t of texts) {
         const clean = t
-          .replace(/button:has-text\("?([^"]+)"?\)/g, "$1")
-          .replace(/['"]/g, "")
+          .replace(/button:has-text\("?([^"]+)"?\)/g, '$1')
+          .replace(/['"]/g, '')
           .trim();
         try {
           const r = jxaJs(
             `(function(){var els=document.querySelectorAll('button,a,[role=button],input[type=submit]');` +
               `for(var e of els){if((e.textContent||e.value||'').trim().toLowerCase().includes('${clean.toLowerCase()}')){e.click();return'ok';}}return'miss';})()`,
           );
-          if (r === "ok") return true;
+          if (r === 'ok') return true;
         } catch {}
       }
       return false;
@@ -1312,13 +1252,13 @@ async function makeChromeJXADriver() {
 
 async function makeManualDriver() {
   return {
-    name: "manual",
+    name: 'manual',
     async goto(url) {
       execSync(`open "${url}"`);
-      notify("Account Rotation", "Complete Google sign-in → click Allow");
+      notify('Account Rotation', 'Complete Google sign-in → click Allow');
     },
     async currentUrl() {
-      return "";
+      return '';
     },
     async findAndClick() {
       return false;
@@ -1344,10 +1284,8 @@ function buildPageDriver(name, page, closeFn, ctx) {
     _page: page,
     _ctx: ctx,
     async goto(url) {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      await page
-        .waitForLoadState?.("networkidle", { timeout: 10_000 })
-        .catch(() => {});
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await page.waitForLoadState?.('networkidle', { timeout: 10_000 }).catch(() => {});
     },
     async currentUrl() {
       return page.url();
@@ -1355,10 +1293,7 @@ function buildPageDriver(name, page, closeFn, ctx) {
     async findAndClick(texts) {
       for (const t of texts) {
         // If it looks like a CSS selector (starts with [, #, ., or contains data-testid), use directly
-        const isCss =
-          /^[\[#.]/.test(t) ||
-          t.includes("data-testid") ||
-          t.includes("[type=");
+        const isCss = /^[\[#.]/.test(t) || t.includes('data-testid') || t.includes('[type=');
         if (isCss) {
           try {
             const loc = page.locator(t).first();
@@ -1372,8 +1307,8 @@ function buildPageDriver(name, page, closeFn, ctx) {
         // Otherwise treat as text — broad matcher covering buttons, links, list items,
         // and ARIA roles (Google 2FA pages use <li> for options, not <button>)
         const clean = t
-          .replace(/button:has-text\("?([^"]+)"?\)/g, "$1")
-          .replace(/['"]/g, "")
+          .replace(/button:has-text\("?([^"]+)"?\)/g, '$1')
+          .replace(/['"]/g, '')
           .trim();
         try {
           // Try each element type individually so we don't get strict-mode violations
@@ -1421,15 +1356,13 @@ function buildPageDriver(name, page, closeFn, ctx) {
     },
     async readPageText() {
       try {
-        return await page.evaluate(() => document.body?.innerText || "");
+        return await page.evaluate(() => document.body?.innerText || '');
       } catch {
-        return "";
+        return '';
       }
     },
     async waitForPopup(timeout = 10_000) {
-      return ctx
-        ? ctx.waitForEvent("page", { timeout }).catch(() => null)
-        : null;
+      return ctx ? ctx.waitForEvent('page', { timeout }).catch(() => null) : null;
     },
     async close() {
       await closeFn();
@@ -1447,10 +1380,10 @@ function buildPageDriver(name, page, closeFn, ctx) {
 // Format: https://claude.ai/magic-link#<hex>:<base64-email>
 function magicLinkTargetEmail(url) {
   try {
-    const hash = url.split("#")[1] || "";
-    const b64 = hash.split(":")[1] || "";
+    const hash = url.split('#')[1] || '';
+    const b64 = hash.split(':')[1] || '';
     if (!b64) return null;
-    return Buffer.from(b64, "base64").toString("utf-8").trim().toLowerCase();
+    return Buffer.from(b64, 'base64').toString('utf-8').trim().toLowerCase();
   } catch {
     return null;
   }
@@ -1461,9 +1394,7 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
   // Anchor to "now" so we never accept a magic-link email older than this call.
   const requestedAt = Math.floor(Date.now() / 1000);
   const targetLower = accountEmail.toLowerCase();
-  log(
-    `[magic-link] Polling Gmail for login email to ${accountEmail} (max ${maxWaitMs / 1000}s)...`,
-  );
+  log(`[magic-link] Polling Gmail for login email to ${accountEmail} (max ${maxWaitMs / 1000}s)...`);
 
   // Track skipped (stale/wrong-target) thread IDs so we don't re-evaluate them every poll
   const seenSkip = new Set();
@@ -1472,24 +1403,15 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
     try {
       // Pull up to 10 recent matches so a stale top-result doesn't block us.
       const searchResult = execFileSync(
-        "gog",
-        [
-          "gmail",
-          "search",
-          'subject:"Secure link to log in to Claude" newer_than:5m',
-          "--max",
-          "10",
-          "-j",
-        ],
-        { timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] },
+        'gog',
+        ['gmail', 'search', 'subject:"Secure link to log in to Claude" newer_than:5m', '--max', '10', '-j'],
+        { timeout: 15_000, stdio: ['ignore', 'pipe', 'pipe'] },
       )
         .toString()
         .trim();
 
       const parsedSearch = JSON.parse(searchResult);
-      const list = Array.isArray(parsedSearch)
-        ? parsedSearch
-        : parsedSearch.threads || parsedSearch.results || [];
+      const list = Array.isArray(parsedSearch) ? parsedSearch : parsedSearch.threads || parsedSearch.results || [];
 
       for (const item of list) {
         const threadIdRaw = item.id || item.threadId;
@@ -1498,19 +1420,16 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
         if (!/^[A-Za-z0-9_-]+$/.test(threadIdRaw)) continue;
         if (seenSkip.has(threadIdRaw)) continue;
 
-        const threadJson = execFileSync(
-          "gog",
-          ["gmail", "read", threadIdRaw, "-j"],
-          { timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] },
-        ).toString();
+        const threadJson = execFileSync('gog', ['gmail', 'read', threadIdRaw, '-j'], {
+          timeout: 15_000,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }).toString();
 
         const parsed = JSON.parse(threadJson);
         const messages = parsed?.thread?.messages || [];
 
         // Reject any message older than our requestedAt (stale link from prior call)
-        const msgTimes = messages
-          .map((m) => parseInt(m.internalDate || "0", 10) / 1000)
-          .filter((t) => t > 0);
+        const msgTimes = messages.map((m) => parseInt(m.internalDate || '0', 10) / 1000).filter((t) => t > 0);
         const newestMsg = msgTimes.length ? Math.max(...msgTimes) : 0;
         if (newestMsg && newestMsg < requestedAt - 5) {
           seenSkip.add(threadIdRaw);
@@ -1522,15 +1441,13 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
           const data = part?.body?.data;
           if (data) {
             try {
-              decodedBodies.push(
-                Buffer.from(data, "base64url").toString("utf-8"),
-              );
+              decodedBodies.push(Buffer.from(data, 'base64url').toString('utf-8'));
             } catch {}
           }
           for (const p of part?.parts || []) walkParts(p);
         };
         for (const msg of messages) walkParts(msg.payload);
-        const fullBody = decodedBodies.join("\n");
+        const fullBody = decodedBodies.join('\n');
 
         const linkPatterns = [
           /https:\/\/claude\.ai\/magic-link#[^\s"'<>)}\]]+/,
@@ -1564,21 +1481,17 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
         // (subject is identical for every account) and rotate to the wrong one.
         const linkTarget = magicLinkTargetEmail(url);
         if (linkTarget && linkTarget !== targetLower) {
-          log(
-            `[magic-link] Skipping stale link for ${linkTarget} (waiting for ${targetLower})`,
-          );
+          log(`[magic-link] Skipping stale link for ${linkTarget} (waiting for ${targetLower})`);
           seenSkip.add(threadIdRaw);
           continue;
         }
 
-        log(
-          `[magic-link] Found login link: ${url.substring(0, 100)}...`,
-        );
+        log(`[magic-link] Found login link: ${url.substring(0, 100)}...`);
         return url;
       }
     } catch (err) {
-      const stderr = err.stderr ? err.stderr.toString().trim() : "";
-      log(`[magic-link] Gmail poll error: ${err.message}${stderr ? " | stderr: " + stderr : ""}`);
+      const stderr = err.stderr ? err.stderr.toString().trim() : '';
+      log(`[magic-link] Gmail poll error: ${err.message}${stderr ? ' | stderr: ' + stderr : ''}`);
     }
     await sleep(5000);
   }
@@ -1593,14 +1506,11 @@ async function runAuthFlow(driver, account) {
   const googlePassword = creds.password || fetchGooglePassword(account);
   const googleOtpSecret = creds.otpSecret || null;
   const googleSmsPhone =
-    (process.env.CLAUDE_ROTATION_GOOGLE_SMS_PHONE || "").trim() ||
-    (account.googleSmsPhone || "").trim() ||
-    (creds.phone || "").trim() ||
+    (process.env.CLAUDE_ROTATION_GOOGLE_SMS_PHONE || '').trim() ||
+    (account.googleSmsPhone || '').trim() ||
+    (creds.phone || '').trim() ||
     null;
-  if (googlePassword)
-    log(
-      `dcli Google password available for ${account.email}${googleOtpSecret ? " (+TOTP)" : ""}`,
-    );
+  if (googlePassword) log(`dcli Google password available for ${account.email}${googleOtpSecret ? ' (+TOTP)' : ''}`);
 
   // AI-brain stall detector: when the URL doesn't advance for N consecutive
   // steps, hand the page to Claude to decide what to do. Kept separate from
@@ -1610,33 +1520,28 @@ async function runAuthFlow(driver, account) {
   // Threshold is low (2) because each iteration's findAndClick/fillInput
   // retries can take 20-60s on a page with nothing to match — we want Claude
   // to intervene on the second stagnant step, not the fourth.
-  let lastStallUrl = "";
+  let lastStallUrl = '';
   let stallCount = 0;
   const STALL_THRESHOLD = 2;
   const aiBrainHistory = [];
-  const aiBrainEnabled =
-    driver._page &&
-    process.env.CLAUDE_ROTATOR_DISABLE_AI_BRAIN !== "1";
+  const aiBrainEnabled = driver._page && process.env.CLAUDE_ROTATOR_DISABLE_AI_BRAIN !== '1';
 
   for (let step = 0; step < 20; step++) {
     await sleep(2500);
-    const url = await driver.currentUrl().catch(() => "");
+    const url = await driver.currentUrl().catch(() => '');
     log(`Step ${step} [${driver.name}]: ${url.substring(0, 100)}`);
 
     // Stall check — run BEFORE the URL pattern dispatcher so an unknown
     // challenge page gets escalated to the AI brain. Skip on the very first
     // step (no history yet) and skip inside the manual driver.
-    if (aiBrainEnabled && step > 0 && driver.name !== "manual") {
+    if (aiBrainEnabled && step > 0 && driver.name !== 'manual') {
       if (url && url === lastStallUrl) {
         stallCount++;
       } else {
         stallCount = 0;
       }
       lastStallUrl = url;
-      if (
-        stallCount >= STALL_THRESHOLD &&
-        aiBrainHistory.length < AI_BRAIN_MAX_DECISIONS
-      ) {
+      if (stallCount >= STALL_THRESHOLD && aiBrainHistory.length < AI_BRAIN_MAX_DECISIONS) {
         const stallReason = `url stagnant for ${stallCount} steps: ${url.substring(0, 100)}`;
         log(`[ai-brain] STALL DETECTED — ${stallReason}`);
         const action = await askAIBrain({
@@ -1647,16 +1552,14 @@ async function runAuthFlow(driver, account) {
           logger: (m) => log(`[ai-brain] ${m}`),
         });
         aiBrainHistory.push(
-          `${action.action}${action.selector ? `(${String(action.selector).slice(0, 40)})` : ""} — ${String(action.reason || "").slice(0, 60)}`,
+          `${action.action}${action.selector ? `(${String(action.selector).slice(0, 40)})` : ''} — ${String(action.reason || '').slice(0, 60)}`,
         );
-        if (action.action === "abort") {
-          log(
-            `[ai-brain] aborted — reason: ${action.reason}. Returning to caller.`,
-          );
+        if (action.action === 'abort') {
+          log(`[ai-brain] aborted — reason: ${action.reason}. Returning to caller.`);
           return false;
         }
         const ok = await executeAIAction(driver, action, { googlePassword });
-        log(`[ai-brain] executed ${action.action}: ${ok ? "ok" : "no-op"}`);
+        log(`[ai-brain] executed ${action.action}: ${ok ? 'ok' : 'no-op'}`);
         stallCount = 0;
         await sleep(3000);
         continue;
@@ -1666,45 +1569,40 @@ async function runAuthFlow(driver, account) {
     // Success: redirected to localhost callback (check hostname, not query string)
     try {
       const parsed = new URL(url);
-      if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") {
-        log("Auth callback reached (localhost) — success");
+      if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+        log('Auth callback reached (localhost) — success');
         return true;
       }
     } catch {}
 
     // Success: landed on platform.claude.com success page
-    if (url.includes("/oauth/code/success")) {
-      log("Auth success page reached");
+    if (url.includes('/oauth/code/success')) {
+      log('Auth success page reached');
       return true;
     }
 
     // Anthropic fallback redirect — extract code and replay to CLI's localhost
-    if (url.includes("/oauth/code/callback") && url.includes("code=")) {
-      log(
-        "Auth callback reached (platform.claude.com) — replaying to localhost",
-      );
+    if (url.includes('/oauth/code/callback') && url.includes('code=')) {
+      log('Auth callback reached (platform.claude.com) — replaying to localhost');
       const codeMatch = url.match(/[?&]code=([^&]+)/);
       const stateMatch = url.match(/[?&]state=([^&]+)/);
       if (codeMatch && driver._localhostPort) {
-        const replayUrl = `http://localhost:${driver._localhostPort}/callback?code=${codeMatch[1]}${stateMatch ? "&state=" + stateMatch[1] : ""}`;
+        const replayUrl = `http://localhost:${driver._localhostPort}/callback?code=${codeMatch[1]}${stateMatch ? '&state=' + stateMatch[1] : ''}`;
         try {
           execSync(`curl -s "${replayUrl}" -o /dev/null`, { timeout: 5000 });
         } catch {}
       }
       return true;
     }
-    if (driver.name === "manual") {
+    if (driver.name === 'manual') {
       await sleep(12_000);
       continue;
     }
 
     // Google 2FA: push notification to phone (/challenge/dp) — can't automate, must switch
-    if (url.includes("accounts.google.com") && url.includes("challenge/dp")) {
+    if (url.includes('accounts.google.com') && url.includes('challenge/dp')) {
       log(`Push-notification 2FA detected — clicking "Try another way"`);
-      const clicked = await driver.findAndClick([
-        "Try another way",
-        "Probeer een andere manier",
-      ]);
+      const clicked = await driver.findAndClick(['Try another way', 'Probeer een andere manier']);
       if (!clicked) {
         log(`Could not find "Try another way" button`);
         return false;
@@ -1715,15 +1613,15 @@ async function runAuthFlow(driver, account) {
 
     // Google passkey challenge (/challenge/pk/presend, /challenge/pk/verify).
     // No hardware key available — bail out via "Try another way".
-    if (url.includes("accounts.google.com") && url.includes("/challenge/pk")) {
+    if (url.includes('accounts.google.com') && url.includes('/challenge/pk')) {
       log(`Passkey challenge detected — clicking "Try another way"`);
       const clicked = await driver.findAndClick([
-        "Try another way",
-        "Try another method",
-        "Use password instead",
-        "Use your password instead",
-        "Probeer een andere manier",
-        "Gebruik wachtwoord",
+        'Try another way',
+        'Try another method',
+        'Use password instead',
+        'Use your password instead',
+        'Probeer een andere manier',
+        'Gebruik wachtwoord',
         'button:has-text("Try another way")',
         'button:has-text("Use password")',
         '[jsname="QkNstf"]',
@@ -1745,31 +1643,28 @@ async function runAuthFlow(driver, account) {
     //   - data-challengetype="6"  → TOTP authenticator app
     // Preference: password (we have it via dcli) > TOTP (we have the secret)
     //           > SMS (requires a phone) > passkey (no hardware).
-    if (
-      url.includes("accounts.google.com") &&
-      url.includes("challenge/selection")
-    ) {
+    if (url.includes('accounts.google.com') && url.includes('challenge/selection')) {
       log(`On 2FA selection page — prefer password, then TOTP, then SMS`);
       const selectors = [];
       if (googlePassword)
         selectors.push(
           'div[data-challengetype="1"]',
           'li:has-text("Enter your password")',
-          "Enter your password",
-          "Wachtwoord invoeren",
+          'Enter your password',
+          'Wachtwoord invoeren',
         );
       if (googleOtpSecret)
         selectors.push(
           'div[data-challengetype="6"]',
           'li:has-text("Google Authenticator")',
-          "Google Authenticator",
-          "Authenticator app",
+          'Google Authenticator',
+          'Authenticator app',
         );
       selectors.push(
         'div[data-challengetype="9"]',
         'li:has-text("Get a verification code")',
-        "Get a verification code",
-        "Text message",
+        'Get a verification code',
+        'Text message',
       );
       const clicked = await driver.findAndClick(selectors);
       if (clicked) {
@@ -1781,30 +1676,24 @@ async function runAuthFlow(driver, account) {
     }
 
     // Google 2FA: TOTP code entry
-    if (url.includes("accounts.google.com") && url.includes("challenge/totp")) {
+    if (url.includes('accounts.google.com') && url.includes('challenge/totp')) {
       if (googleOtpSecret) {
         const code = generateTOTP(googleOtpSecret);
         log(`Entering TOTP code from dcli secret`);
-        await driver.fillInput(
-          'input[type="tel"], input[name=totpPin], #totpPin',
-          code,
-        );
+        await driver.fillInput('input[type="tel"], input[name=totpPin], #totpPin', code);
         await sleep(500);
-        await driver.findAndClick(["Next", "#totpNext button", "Verify"]);
+        await driver.findAndClick(['Next', '#totpNext button', 'Verify']);
         await sleep(3000);
         continue;
       }
       log(`No TOTP secret — trying alternate verification`);
-      await driver.findAndClick(["Try another way"]);
+      await driver.findAndClick(['Try another way']);
       await sleep(2000);
       continue;
     }
 
     // Google 2FA: SMS phone collect (/challenge/ipp/collect) — enter phone, click Send
-    if (
-      url.includes("accounts.google.com") &&
-      url.includes("challenge/ipp/collect")
-    ) {
+    if (url.includes('accounts.google.com') && url.includes('challenge/ipp/collect')) {
       if (!googleSmsPhone) {
         log(
           `SMS phone collect page — no phone (set CLAUDE_ROTATION_GOOGLE_SMS_PHONE, account.googleSmsPhone, or dcli phone on google.com cred)`,
@@ -1812,20 +1701,17 @@ async function runAuthFlow(driver, account) {
         return false;
       }
       log(`SMS phone collect — entering configured number and clicking Send`);
-      await driver.fillInput(
-        '#phoneNumberId, input[type="tel"]',
-        googleSmsPhone,
-      );
+      await driver.fillInput('#phoneNumberId, input[type="tel"]', googleSmsPhone);
       await sleep(500);
-      await driver.findAndClick(["Send", "Next", "Verstuur"]);
+      await driver.findAndClick(['Send', 'Next', 'Verstuur']);
       await sleep(4000);
       continue;
     }
 
     // Google 2FA: SMS code verify (/challenge/ipp/verify or /challenge/sms)
     if (
-      url.includes("accounts.google.com") &&
-      (url.includes("challenge/ipp/verify") || url.includes("challenge/sms"))
+      url.includes('accounts.google.com') &&
+      (url.includes('challenge/ipp/verify') || url.includes('challenge/sms'))
     ) {
       log(`Waiting for SMS code from Messages.app (up to 60s)...`);
       let smsCode = null;
@@ -1839,22 +1725,19 @@ async function runAuthFlow(driver, account) {
         return false;
       }
       log(`Got SMS code: ${smsCode}`);
-      await driver.fillInput(
-        '#idvPin, input[name="Pin"], input[type="tel"]',
-        smsCode,
-      );
+      await driver.fillInput('#idvPin, input[name="Pin"], input[type="tel"]', smsCode);
       await sleep(500);
-      await driver.findAndClick(["Next", "Verify"]);
+      await driver.findAndClick(['Next', 'Verify']);
       await sleep(4000);
       continue;
     }
 
     // Google consent page (/signin/oauth/id or /signin/oauth/consent) — click Continue
     if (
-      url.includes("accounts.google.com") &&
-      (url.includes("/signin/oauth/id") ||
-        url.includes("/signin/oauth/consent") ||
-        url.includes("/signin/oauth/legacy"))
+      url.includes('accounts.google.com') &&
+      (url.includes('/signin/oauth/id') ||
+        url.includes('/signin/oauth/consent') ||
+        url.includes('/signin/oauth/legacy'))
     ) {
       log(`Google OAuth consent — clicking Continue`);
       // Workspace accounts show a scope list with a Continue button at the bottom;
@@ -1872,12 +1755,12 @@ async function runAuthFlow(driver, account) {
         '[role="button"]:has-text("Continue")',
         '[role="button"]:has-text("Allow")',
         '[role="button"]:has-text("Approve")',
-        "Continue",
-        "Allow",
-        "Approve",
-        "Confirm",
-        "Doorgaan",
-        "Toestaan",
+        'Continue',
+        'Allow',
+        'Approve',
+        'Confirm',
+        'Doorgaan',
+        'Toestaan',
       ]);
       if (!clicked) {
         log(`Continue button not found on consent page — waiting and retrying`);
@@ -1888,17 +1771,17 @@ async function runAuthFlow(driver, account) {
 
     // Google password prompt (standalone /challenge/pwd — must run BEFORE the
     // broad accounts.google.com account-chooser branch below).
-    if (url.includes("accounts.google.com") && url.includes("challenge/pwd")) {
+    if (url.includes('accounts.google.com') && url.includes('challenge/pwd')) {
       if (googlePassword) {
         await driver.fillInput('input[type="password"]', googlePassword);
         await sleep(500);
-        await driver.findAndClick(["Next", "#passwordNext button"]);
+        await driver.findAndClick(['Next', '#passwordNext button']);
         continue;
       }
     }
 
     // Google account chooser — click the target account
-    if (url.includes("accounts.google.com")) {
+    if (url.includes('accounts.google.com')) {
       // Detect "Signed out" next to the target account (needs re-login)
       let targetSignedOut = false;
       if (driver.readPageText) {
@@ -1907,36 +1790,28 @@ async function runAuthFlow(driver, account) {
           const emailIdx = txt.indexOf(account.email.toLowerCase());
           if (emailIdx >= 0) {
             const nearby = txt.substring(emailIdx, emailIdx + 200);
-            targetSignedOut = nearby.includes("signed out");
+            targetSignedOut = nearby.includes('signed out');
           }
         } catch {}
       }
 
-      const picked = await driver.findAndClick([
-        account.email,
-        `data-identifier="${account.email}"`,
-      ]);
+      const picked = await driver.findAndClick([account.email, `data-identifier="${account.email}"`]);
       if (picked && targetSignedOut && googlePassword) {
         // Account was signed out — click picked it, now password prompt will appear
-        log(
-          `Account ${account.email} was signed out — password flow will handle`,
-        );
+        log(`Account ${account.email} was signed out — password flow will handle`);
       }
       if (!picked) {
         // Not in list — add manually
-        await driver.findAndClick(["Use another account", "Add account"]);
+        await driver.findAndClick(['Use another account', 'Add account']);
         await sleep(2000);
-        await driver.fillInput(
-          'input[type="email"], #identifierId',
-          account.email,
-        );
+        await driver.fillInput('input[type="email"], #identifierId', account.email);
         await sleep(500);
-        await driver.findAndClick(["Next", "#identifierNext button"]);
+        await driver.findAndClick(['Next', '#identifierNext button']);
         await sleep(2000);
         if (googlePassword) {
           await driver.fillInput('input[type="password"]', googlePassword);
           await sleep(500);
-          await driver.findAndClick(["Next", "#passwordNext button"]);
+          await driver.findAndClick(['Next', '#passwordNext button']);
         }
       }
       continue;
@@ -1949,32 +1824,32 @@ async function runAuthFlow(driver, account) {
     // several times (select-organization, onboarding/organization, workspaces,
     // choose-workspace). Also triggers on page-text heuristic for routes we miss.
     const isOrgChooserUrl =
-      url.includes("claude.ai") &&
-      (url.includes("select-organization") ||
-        url.includes("/onboarding/organization") ||
-        url.includes("choose-organization") ||
-        url.includes("select-workspace") ||
-        url.includes("choose-workspace") ||
-        url.includes("workspaces") ||
-        url.includes("select-account") ||
-        url.includes("switch-org"));
+      url.includes('claude.ai') &&
+      (url.includes('select-organization') ||
+        url.includes('/onboarding/organization') ||
+        url.includes('choose-organization') ||
+        url.includes('select-workspace') ||
+        url.includes('choose-workspace') ||
+        url.includes('workspaces') ||
+        url.includes('select-account') ||
+        url.includes('switch-org'));
     let isOrgChooserByText = false;
-    if (!isOrgChooserUrl && url.includes("claude.ai") && driver.readPageText) {
+    if (!isOrgChooserUrl && url.includes('claude.ai') && driver.readPageText) {
       try {
         const t = (await driver.readPageText()).toLowerCase();
         isOrgChooserByText =
-          (t.includes("choose an organization") ||
-            t.includes("select an organization") ||
-            t.includes("choose a workspace") ||
-            t.includes("select a workspace") ||
-            t.includes("which organization")) &&
-          (t.includes("personal") || t.includes("organization"));
+          (t.includes('choose an organization') ||
+            t.includes('select an organization') ||
+            t.includes('choose a workspace') ||
+            t.includes('select a workspace') ||
+            t.includes('which organization')) &&
+          (t.includes('personal') || t.includes('organization'));
       } catch {}
     }
     if (isOrgChooserUrl || isOrgChooserByText) {
-      const orgLabel = account.organization || account.orgName || "Personal";
+      const orgLabel = account.organization || account.orgName || 'Personal';
       log(
-        `Claude organization chooser (${isOrgChooserByText ? "via page-text" : "via URL"}) — selecting "${orgLabel}"`,
+        `Claude organization chooser (${isOrgChooserByText ? 'via page-text' : 'via URL'}) — selecting "${orgLabel}"`,
       );
       // Dump all visible button/link labels so we can see the real workspace
       // names claude.ai is showing (vs what's configured as orgName).
@@ -1983,8 +1858,8 @@ async function runAuthFlow(driver, account) {
           const t = await driver.readPageText();
           const labels = [
             ...new Set(
-              (t || "")
-                .split("\n")
+              (t || '')
+                .split('\n')
                 .map((l) => l.trim())
                 .filter((l) => l.length > 0 && l.length < 80),
             ),
@@ -1999,12 +1874,10 @@ async function runAuthFlow(driver, account) {
         orgLabel,
         // Only fall back to "Personal" / "Continue" if the configured label
         // is itself Personal — never silently default a team account to Personal.
-        ...(orgLabel === "Personal" ? ["Personal", "Continue"] : []),
+        ...(orgLabel === 'Personal' ? ['Personal', 'Continue'] : []),
       ]);
       if (!picked) {
-        log(
-          `No organization button matched "${orgLabel}" — the account may land on the wrong org`,
-        );
+        log(`No organization button matched "${orgLabel}" — the account may land on the wrong org`);
       }
       await sleep(3000);
       continue;
@@ -2013,40 +1886,31 @@ async function runAuthFlow(driver, account) {
     // Claude OAuth consent page — MUST check account BEFORE clicking Authorize.
     // Match by pathname only — URL params (like redirect_uri=...callback) would
     // false-match a substring check on the full URL.
-    let oauthPath = "";
+    let oauthPath = '';
     try {
       oauthPath = new URL(url).pathname;
     } catch {}
-    if (
-      oauthPath.includes("/oauth/authorize") ||
-      (oauthPath.endsWith("/authorize") && url.includes("claude"))
-    ) {
+    if (oauthPath.includes('/oauth/authorize') || (oauthPath.endsWith('/authorize') && url.includes('claude'))) {
       // Step 1: Read page to verify "Logged in as <correct email>"
-      let pageText = "";
+      let pageText = '';
       if (driver.readPageText) {
         try {
           pageText = (await driver.readPageText()).toLowerCase();
         } catch {}
       }
 
-      const hasCorrectAccount =
-        pageText && pageText.includes(account.email.toLowerCase());
-      const hasAnyOtherEmail =
-        pageText &&
-        /[\w.+-]+@[\w.-]+\.\w+/.test(pageText) &&
-        !hasCorrectAccount;
+      const hasCorrectAccount = pageText && pageText.includes(account.email.toLowerCase());
+      const hasAnyOtherEmail = pageText && /[\w.+-]+@[\w.-]+\.\w+/.test(pageText) && !hasCorrectAccount;
 
       // If we can't read the page OR we see the wrong account, force switch
       if (!pageText || hasAnyOtherEmail) {
-        log(
-          `Page text: ${pageText ? "wrong account" : "unreadable"} — clicking Switch account / Logout`,
-        );
+        log(`Page text: ${pageText ? 'wrong account' : 'unreadable'} — clicking Switch account / Logout`);
         const switched = await driver.findAndClick([
-          "Switch account",
-          "Log out",
-          "Logout",
-          "Sign out",
-          "Use another account",
+          'Switch account',
+          'Log out',
+          'Logout',
+          'Sign out',
+          'Use another account',
         ]);
         if (switched) {
           await sleep(3000);
@@ -2068,26 +1932,20 @@ async function runAuthFlow(driver, account) {
       // Step 2: Click Authorize — wait for button to become enabled (up to 30s)
       let authorized = false;
       for (let wait = 0; wait < 6; wait++) {
-        if (
-          await driver.findAndClick(["Authorize", "Allow", "Approve", "Accept"])
-        ) {
-          log("Clicked Authorize");
+        if (await driver.findAndClick(['Authorize', 'Allow', 'Approve', 'Accept'])) {
+          log('Clicked Authorize');
           authorized = true;
           break;
         }
         // Button might exist but be disabled — wait for page to finish loading
-        log(
-          `Authorize button not clickable — waiting (attempt ${wait + 1}/6)...`,
-        );
+        log(`Authorize button not clickable — waiting (attempt ${wait + 1}/6)...`);
         await sleep(5000);
       }
       if (authorized) {
         await sleep(4000);
         continue;
       }
-      log(
-        "Authorize button still not clickable after 30s — escalating to ai-brain",
-      );
+      log('Authorize button still not clickable after 30s — escalating to ai-brain');
       // Fast-path ai-brain escalation: don't wait for stall detector to catch up
       // on the next loop iter. The page is stuck on OAuth authorize and Haiku
       // can usually pick the right org/continue button immediately.
@@ -2100,11 +1958,11 @@ async function runAuthFlow(driver, account) {
           logger: (m) => log(`[ai-brain] ${m}`),
         });
         aiBrainHistory.push(
-          `${action.action}${action.selector ? `(${String(action.selector).slice(0, 40)})` : ""} — ${String(action.reason || "").slice(0, 60)}`,
+          `${action.action}${action.selector ? `(${String(action.selector).slice(0, 40)})` : ''} — ${String(action.reason || '').slice(0, 60)}`,
         );
-        if (action.action !== "abort") {
+        if (action.action !== 'abort') {
           const ok = await executeAIAction(driver, action, { googlePassword });
-          log(`[ai-brain] executed ${action.action}: ${ok ? "ok" : "no-op"}`);
+          log(`[ai-brain] executed ${action.action}: ${ok ? 'ok' : 'no-op'}`);
           stallCount = 0;
           await sleep(3000);
           continue;
@@ -2116,24 +1974,21 @@ async function runAuthFlow(driver, account) {
     }
 
     // Dismiss cookie consent banner if present (blocks clicks on everything else)
-    if (url.includes("claude.ai")) {
+    if (url.includes('claude.ai')) {
       await driver.findAndClick([
         '[data-testid="consent-reject"]',
         '[data-testid="consent-accept"]',
-        "Reject All Cookies",
-        "Accept All Cookies",
+        'Reject All Cookies',
+        'Accept All Cookies',
       ]);
       await sleep(500);
     }
 
     // Claude.ai login → Magic link path (when account.useMagicLink is set)
     // The email input is always visible on /login — no button click needed first.
-    if (account.useMagicLink && url.includes("claude.ai/login")) {
+    if (account.useMagicLink && url.includes('claude.ai/login')) {
       // Fill the email input directly
-      const filled = await driver.fillInput(
-        '[data-testid="email"], #email, input[type="email"]',
-        account.email,
-      );
+      const filled = await driver.fillInput('[data-testid="email"], #email, input[type="email"]', account.email);
       if (filled) {
         log(`[magic-link] Filled email: ${account.email}`);
         await sleep(500);
@@ -2150,19 +2005,14 @@ async function runAuthFlow(driver, account) {
           // Poll Gmail for the magic link
           const magicLink = await pollGmailForMagicLink(account.email);
           if (magicLink) {
-            if (magicLink.startsWith("code:")) {
-              const code = magicLink.replace("code:", "");
+            if (magicLink.startsWith('code:')) {
+              const code = magicLink.replace('code:', '');
               log(`[magic-link] Entering verification code: ${code}`);
               await driver.fillInput(
                 'input[type="text"], input[type="number"], input[name="code"], input[placeholder*="code" i]',
                 code,
               );
-              await driver.findAndClick([
-                "Continue",
-                "Verify",
-                "Submit",
-                'button[type="submit"]',
-              ]);
+              await driver.findAndClick(['Continue', 'Verify', 'Submit', 'button[type="submit"]']);
             } else {
               log(`[magic-link] Navigating to login link`);
               await driver.goto(magicLink);
@@ -2177,16 +2027,13 @@ async function runAuthFlow(driver, account) {
               // the "last active" org silently, and both sibling vaults end up
               // holding the same org's token.
               const isMultiOrg =
-                account.label &&
-                account.orgName &&
-                account.orgName.toLowerCase() !==
-                  account.email.toLowerCase();
+                account.label && account.orgName && account.orgName.toLowerCase() !== account.email.toLowerCase();
               if (isMultiOrg) {
                 log(
                   `[magic-link] Multi-org account — forcing org pick for "${account.orgName}" via claude.ai/home detour`,
                 );
                 try {
-                  await driver.goto("https://claude.ai/home");
+                  await driver.goto('https://claude.ai/home');
                 } catch {}
                 await sleep(3500);
                 // Try to click the configured orgName if a chooser is showing.
@@ -2200,9 +2047,7 @@ async function runAuthFlow(driver, account) {
                   account.orgName,
                 ]);
                 if (picked) {
-                  log(
-                    `[magic-link] Pre-selected org "${account.orgName}" before OAuth`,
-                  );
+                  log(`[magic-link] Pre-selected org "${account.orgName}" before OAuth`);
                   await sleep(2500);
                 } else {
                   log(
@@ -2218,48 +2063,31 @@ async function runAuthFlow(driver, account) {
             }
             continue;
           }
-          log(
-            `[magic-link] No magic link found in Gmail — falling through to Google OAuth`,
-          );
+          log(`[magic-link] No magic link found in Gmail — falling through to Google OAuth`);
         }
       }
     }
 
     // Claude.ai login → Continue with Google (button has data-testid="login-with-google")
-    const popupP = driver.waitForPopup
-      ? driver.waitForPopup(15_000)
-      : Promise.resolve(null);
+    const popupP = driver.waitForPopup ? driver.waitForPopup(15_000) : Promise.resolve(null);
     if (
-      await driver.findAndClick([
-        '[data-testid="login-with-google"]',
-        "Continue with Google",
-        "Sign in with Google",
-      ])
+      await driver.findAndClick(['[data-testid="login-with-google"]', 'Continue with Google', 'Sign in with Google'])
     ) {
       const popup = await popupP;
       if (popup) {
         // Kapture popup is already a full driver; Playwright returns a raw Page
-        const pd = popup.name
-          ? popup
-          : buildPageDriver(driver.name + "-popup", popup, () => {}, null);
+        const pd = popup.name ? popup : buildPageDriver(driver.name + '-popup', popup, () => {}, null);
         await runAuthFlow(pd, account);
         if (popup.waitForEvent) {
-          await popup
-            .waitForEvent("close", { timeout: 30_000 })
-            .catch(() => {});
+          await popup.waitForEvent('close', { timeout: 30_000 }).catch(() => {});
         }
       }
       continue;
     }
 
     // Email input
-    if (
-      await driver.fillInput(
-        '#identifierId, input[type="email"]',
-        account.email,
-      )
-    ) {
-      await driver.findAndClick(["Next", "#identifierNext button"]);
+    if (await driver.fillInput('#identifierId, input[type="email"]', account.email)) {
+      await driver.findAndClick(['Next', '#identifierNext button']);
     }
   }
 
@@ -2267,13 +2095,9 @@ async function runAuthFlow(driver, account) {
   // legitimately exceed 20 steps (multi-factor + workspace chooser + consent),
   // so give Claude up to its remaining decision budget to unstick us.
   if (aiBrainEnabled && aiBrainHistory.length < AI_BRAIN_MAX_DECISIONS) {
-    const url = await driver.currentUrl().catch(() => "");
+    const url = await driver.currentUrl().catch(() => '');
     log(`[ai-brain] loop exhausted — final rescue attempt`);
-    for (
-      let rescue = 0;
-      rescue < AI_BRAIN_MAX_DECISIONS - aiBrainHistory.length && rescue < 3;
-      rescue++
-    ) {
+    for (let rescue = 0; rescue < AI_BRAIN_MAX_DECISIONS - aiBrainHistory.length && rescue < 3; rescue++) {
       const action = await askAIBrain({
         page: driver._page,
         account,
@@ -2282,22 +2106,22 @@ async function runAuthFlow(driver, account) {
         logger: (m) => log(`[ai-brain] ${m}`),
       });
       aiBrainHistory.push(
-        `${action.action}${action.selector ? `(${String(action.selector).slice(0, 40)})` : ""} — ${String(action.reason || "").slice(0, 60)}`,
+        `${action.action}${action.selector ? `(${String(action.selector).slice(0, 40)})` : ''} — ${String(action.reason || '').slice(0, 60)}`,
       );
-      if (action.action === "abort") break;
+      if (action.action === 'abort') break;
       await executeAIAction(driver, action, { googlePassword });
       await sleep(4000);
       // Re-check success conditions after each rescue action
-      const newUrl = await driver.currentUrl().catch(() => "");
+      const newUrl = await driver.currentUrl().catch(() => '');
       try {
         const parsed = new URL(newUrl);
-        if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") {
-          log("[ai-brain] rescue SUCCEEDED — localhost callback reached");
+        if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+          log('[ai-brain] rescue SUCCEEDED — localhost callback reached');
           return true;
         }
       } catch {}
-      if (newUrl.includes("/oauth/code/success")) {
-        log("[ai-brain] rescue SUCCEEDED — claude.ai success page");
+      if (newUrl.includes('/oauth/code/success')) {
+        log('[ai-brain] rescue SUCCEEDED — claude.ai success page');
         return true;
       }
     }
@@ -2316,9 +2140,9 @@ async function browserOAuthFallback(account) {
   writeFileSync(capScript, `#!/bin/bash\necho "$1" > "${urlFile}"\n`);
   chmodSync(capScript, 0o755);
 
-  const proc = spawn("claude", ["auth", "login", "--email", account.email], {
+  const proc = spawn('claude', ['auth', 'login', '--email', account.email], {
     env: { ...process.env, BROWSER: capScript },
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
 
   // BROWSER script gets the URL with localhost redirect (what we want).
@@ -2328,11 +2152,11 @@ async function browserOAuthFallback(account) {
   for (let i = 0; i < 30; i++) {
     await sleep(500);
     if (existsSync(urlFile)) {
-      const u = readFileSync(urlFile, "utf8").trim();
+      const u = readFileSync(urlFile, 'utf8').trim();
       try {
         unlinkSync(urlFile);
       } catch {}
-      if (u.startsWith("http")) {
+      if (u.startsWith('http')) {
         authUrl = u;
         break;
       }
@@ -2345,8 +2169,8 @@ async function browserOAuthFallback(account) {
         const m = d.toString().match(/https?:\/\/[^\s\])"'\n]+/);
         if (m) resolve(m[0]);
       };
-      proc.stdout.on("data", scan);
-      proc.stderr.on("data", scan);
+      proc.stdout.on('data', scan);
+      proc.stderr.on('data', scan);
       setTimeout(() => resolve(null), 15_000);
     });
   }
@@ -2361,11 +2185,9 @@ async function browserOAuthFallback(account) {
   log(`Auth URL captured: ${authUrl.substring(0, 80)}...`);
 
   // Extract localhost port from redirect_uri in the auth URL for code replay
-  const portMatch = authUrl.match(
-    /redirect_uri=http%3A%2F%2Flocalhost%3A(\d+)/,
-  );
+  const portMatch = authUrl.match(/redirect_uri=http%3A%2F%2Flocalhost%3A(\d+)/);
   const localhostPort = portMatch ? portMatch[1] : null;
-  log(`Localhost callback port: ${localhostPort || "unknown"}`);
+  log(`Localhost callback port: ${localhostPort || 'unknown'}`);
 
   // Cascade: try each driver in order until one completes the OAuth flow.
   // A driver "fails" if runAuthFlow returns false (URL never reaches localhost callback).
@@ -2386,11 +2208,11 @@ async function browserOAuthFallback(account) {
     try {
       log(`[${driver._driverName}] Logging out existing claude.ai session...`);
       try {
-        await driver.goto("https://claude.ai/api/auth/logout");
+        await driver.goto('https://claude.ai/api/auth/logout');
       } catch {}
       await sleep(1500);
       try {
-        await driver.goto("https://claude.ai/logout");
+        await driver.goto('https://claude.ai/logout');
       } catch {}
       await sleep(1500);
 
@@ -2399,9 +2221,7 @@ async function browserOAuthFallback(account) {
       try {
         await driver.goto(authUrl);
       } catch (navErr) {
-        log(
-          `[${driver._driverName}] Page died after logout (${navErr.message}) — getting fresh driver`,
-        );
+        log(`[${driver._driverName}] Page died after logout (${navErr.message}) — getting fresh driver`);
         try {
           await driver.close();
         } catch {}
@@ -2410,19 +2230,15 @@ async function browserOAuthFallback(account) {
           driver._localhostPort = localhostPort;
           await driver.goto(authUrl);
         } catch (freshErr) {
-          log(
-            `[${driver._driverName}] Fresh driver also failed: ${freshErr.message}`,
-          );
-          failed.add(driver._driverName || "unknown");
+          log(`[${driver._driverName}] Fresh driver also failed: ${freshErr.message}`);
+          failed.add(driver._driverName || 'unknown');
           continue;
         }
       }
       success = await runAuthFlow(driver, account);
 
       if (!success) {
-        log(
-          `[${driver._driverName}] runAuthFlow returned false — trying next driver`,
-        );
+        log(`[${driver._driverName}] runAuthFlow returned false — trying next driver`);
         failed.add(driver._driverName);
         continue;
       }
@@ -2433,7 +2249,7 @@ async function browserOAuthFallback(account) {
           proc.kill();
           r();
         }, 30_000);
-        proc.on("exit", () => {
+        proc.on('exit', () => {
           clearTimeout(t);
           r();
         });
@@ -2476,13 +2292,13 @@ function findClaudeSessions() {
       )
         .toString()
         .trim();
-      for (const line of paneOut.split("\n")) {
-        const [tty, pane] = line.split("|");
+      for (const line of paneOut.split('\n')) {
+        const [tty, pane] = line.split('|');
         if (tty && pane) ttyMap[tty] = pane;
       }
     } catch {}
 
-    for (const line of psOut.split("\n")) {
+    for (const line of psOut.split('\n')) {
       const match = line.trim().match(/^(\d+)\s+(ttys?\d+)\s+(.+)$/);
       if (!match) continue;
       const [, pid, ttyShort, args] = match;
@@ -2493,9 +2309,7 @@ function findClaudeSessions() {
       sessions.push({ pid: parseInt(pid), tty, pane, resumeId, args });
     }
   } catch (e) {
-    log(
-      `[session] Failed to enumerate sessions: ${e.message.substring(0, 80)}`,
-    );
+    log(`[session] Failed to enumerate sessions: ${e.message.substring(0, 80)}`);
   }
   return sessions;
 }
@@ -2503,10 +2317,7 @@ function findClaudeSessions() {
 function sendKeysToPane(pane, txt) {
   if (!pane) return false;
   try {
-    execSync(
-      `tmux send-keys -t ${JSON.stringify(pane)} ${JSON.stringify(txt)} C-m 2>/dev/null`,
-      { timeout: 3000 },
-    );
+    execSync(`tmux send-keys -t ${JSON.stringify(pane)} ${JSON.stringify(txt)} C-m 2>/dev/null`, { timeout: 3000 });
     return true;
   } catch {
     return false;
@@ -2518,7 +2329,7 @@ function sendKeysToITerm(tty, txt) {
   // IMPORTANT: Use `tell s to write text cmd` — the `write text "..." in s`
   // form fails with -1723 ("Can't get ... in s. Access not allowed.") because
   // AppleScript parses the `in s` clause as an accessor lookup, not a target.
-  const escaped = txt.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escaped = txt.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const script = `
 tell application "iTerm2"
   repeat with w in windows
@@ -2534,13 +2345,10 @@ tell application "iTerm2"
   return "not_found"
 end tell`;
   try {
-    const result = execSync(
-      `osascript -e '${script.replace(/'/g, "'\"'\"'")}'`,
-      { timeout: 5000 },
-    )
+    const result = execSync(`osascript -e '${script.replace(/'/g, "'\"'\"'")}'`, { timeout: 5000 })
       .toString()
       .trim();
-    return result === "ok";
+    return result === 'ok';
   } catch {
     return false;
   }
@@ -2552,11 +2360,9 @@ end tell`;
 // terminals we know actually support it without launching a new app.
 function detectTerminalForPid(pid) {
   try {
-    const out = execSync(`ps -eo pid,ppid,comm`, { timeout: 3000 })
-      .toString()
-      .trim();
+    const out = execSync(`ps -eo pid,ppid,comm`, { timeout: 3000 }).toString().trim();
     const byPid = new Map();
-    for (const line of out.split("\n").slice(1)) {
+    for (const line of out.split('\n').slice(1)) {
       const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
       if (m) byPid.set(parseInt(m[1]), { ppid: parseInt(m[2]), comm: m[3] });
     }
@@ -2565,16 +2371,16 @@ function detectTerminalForPid(pid) {
       const entry = byPid.get(cur);
       if (!entry) break;
       const c = entry.comm.toLowerCase();
-      if (c.includes("ghostty")) return "Ghostty";
-      if (c.includes("iterm2") || c.includes("iterm")) return "iTerm2";
-      if (c.includes("terminal.app") || /\/terminal$/.test(c)) return "Terminal";
-      if (c.includes("alacritty")) return "Alacritty";
-      if (c.includes("wezterm")) return "WezTerm";
-      if (c.includes("kitty")) return "kitty";
+      if (c.includes('ghostty')) return 'Ghostty';
+      if (c.includes('iterm2') || c.includes('iterm')) return 'iTerm2';
+      if (c.includes('terminal.app') || /\/terminal$/.test(c)) return 'Terminal';
+      if (c.includes('alacritty')) return 'Alacritty';
+      if (c.includes('wezterm')) return 'WezTerm';
+      if (c.includes('kitty')) return 'kitty';
       cur = entry.ppid;
     }
   } catch {}
-  return "unknown";
+  return 'unknown';
 }
 
 async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
@@ -2582,7 +2388,7 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
   const sessions = findClaudeSessions();
 
   if (sessions.length === 0) {
-    log("[session] No running Claude Code sessions found");
+    log('[session] No running Claude Code sessions found');
     return;
   }
 
@@ -2596,8 +2402,7 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
 
   const sendKeys = (s, txt) => {
     if (s.pane) return sendKeysToPane(s.pane, txt);
-    if (s.terminal === "iTerm2" && s.tty)
-      return sendKeysToITerm(s.tty, txt);
+    if (s.terminal === 'iTerm2' && s.tty) return sendKeysToITerm(s.tty, txt);
     // Ghostty, Terminal.app, Alacritty, WezTerm, kitty, unknown: skip.
     // Raw TTY write would render "/login" as on-screen output text, not
     // stdin — corrupting the session without triggering the re-auth.
@@ -2606,27 +2411,21 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
 
   // Reachable = tmux pane OR known-good terminal (iTerm2). Everyone else
   // is logged + skipped so we never pop a visual window or garble Ghostty.
-  const reachable = sessions.filter(
-    (s) => s.pane || (s.terminal === "iTerm2" && s.tty),
-  );
-  const skipped = sessions.filter(
-    (s) => !s.pane && s.terminal && s.terminal !== "iTerm2",
-  );
+  const reachable = sessions.filter((s) => s.pane || (s.terminal === 'iTerm2' && s.tty));
+  const skipped = sessions.filter((s) => !s.pane && s.terminal && s.terminal !== 'iTerm2');
   for (const s of skipped) {
     log(
       `[session] Skipping PID ${s.pid} (${s.terminal}) — no safe inject path; token-refresh daemon keeps keys fresh so restart isn't required`,
     );
   }
   if (reachable.length === 0) {
-    log(
-      `[session] Found ${sessions.length} sessions but none have a reachable TTY`,
-    );
+    log(`[session] Found ${sessions.length} sessions but none have a reachable TTY`);
     return;
   }
 
   log(`[session] Injecting /login into ${reachable.length} session(s):`);
   for (const s of reachable) {
-    log(`  PID ${s.pid} ${s.pane ? "pane=" + s.pane : "tty=" + s.tty}`);
+    log(`  PID ${s.pid} ${s.pane ? 'pane=' + s.pane : 'tty=' + s.tty}`);
   }
 
   // Keychain was already swapped to the fresh account's valid token.
@@ -2634,12 +2433,10 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
   // No /exit, no process restart, no OAuth browser flow needed (token is already valid).
   // Stagger slightly to avoid all sessions hitting the API at the exact same millisecond.
   for (const s of reachable) {
-    if (sendKeys(s, "/login")) {
+    if (sendKeys(s, '/login')) {
       log(`[session] Sent /login to PID ${s.pid} (${s.pane || s.tty})`);
     } else {
-      log(
-        `[session] Failed to inject /login to PID ${s.pid} (${s.pane || s.tty})`,
-      );
+      log(`[session] Failed to inject /login to PID ${s.pid} (${s.pane || s.tty})`);
     }
     await sleep(500); // 500ms stagger between sessions
   }
@@ -2653,16 +2450,9 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
       await sleep(2000);
       const driver = await getBrowserDriver(new Set()).catch(() => null);
       if (driver) {
-        const url = await driver.currentUrl().catch(() => "");
-        if (
-          url &&
-          (url.includes("oauth") ||
-            url.includes("authorize") ||
-            url.includes("claude.ai/login"))
-        ) {
-          log(
-            `[session] Detected post-restart OAuth page (${url.substring(0, 60)}) — driving flow`,
-          );
+        const url = await driver.currentUrl().catch(() => '');
+        if (url && (url.includes('oauth') || url.includes('authorize') || url.includes('claude.ai/login'))) {
+          log(`[session] Detected post-restart OAuth page (${url.substring(0, 60)}) — driving flow`);
           if (rotatedAccount) await runAuthFlow(driver, rotatedAccount);
         }
         try {
@@ -2670,9 +2460,7 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
         } catch {}
       }
     } catch (e) {
-      log(
-        `[session] Post-restart browser check skipped: ${e.message.substring(0, 60)}`,
-      );
+      log(`[session] Post-restart browser check skipped: ${e.message.substring(0, 60)}`);
     }
   }
 
@@ -2688,20 +2476,18 @@ async function rotate(targetEmail, opts = {}) {
 
   if (!targetEmail) {
     // Query live utilization for all accounts before picking — best-effort, ~2s
-    log("Querying live utilization for all accounts...");
+    log('Querying live utilization for all accounts...');
     const liveUtil = await queryAllUtilization(config);
     const utilSummary = Object.entries(liveUtil)
       .map(([k, v]) => `${k}:5h=${v.five_hour_pct}%/7d=${v.seven_day_pct}%`)
-      .join(", ");
+      .join(', ');
     if (utilSummary) log(`Live util: ${utilSummary}`);
     // Snapshot live data into state for future daemon decisions
     for (const [key, util] of Object.entries(liveUtil)) {
       state.accounts[key] = state.accounts[key] || {};
       state.accounts[key].lastUtilization = {
         pct: util.five_hour_pct,
-        reset: util.resets_at_5h
-          ? Math.floor(new Date(util.resets_at_5h).getTime() / 1000)
-          : null,
+        reset: util.resets_at_5h ? Math.floor(new Date(util.resets_at_5h).getTime() / 1000) : null,
         ts: Date.now(),
       };
     }
@@ -2709,7 +2495,7 @@ async function rotate(targetEmail, opts = {}) {
       allowExtraUsage: opts.allowExtraUsage === true,
     });
     if (!next) {
-      log("No account available (all excluded — extra_usage enabled?)");
+      log('No account available (all excluded — extra_usage enabled?)');
       return false;
     }
     targetEmail = accountKey(next);
@@ -2721,37 +2507,31 @@ async function rotate(targetEmail, opts = {}) {
   // to bypass.
   try {
     if (!opts.allowExtraUsage) {
-      const target = config.accounts.find(
-        (a) => accountKey(a) === targetEmail || a.email === targetEmail,
-      );
+      const target = config.accounts.find((a) => accountKey(a) === targetEmail || a.email === targetEmail);
       if (target) {
         const tokenJson = readStoredToken(target);
         if (tokenJson) {
           const parsed = JSON.parse(tokenJson);
           const accessToken = parsed?.claudeAiOauth?.accessToken;
           if (accessToken) {
-            const res = await fetch(
-              "https://api.anthropic.com/api/oauth/profile",
-              {
-                method: "GET",
-                headers: {
-                  Authorization: `Bearer ${accessToken}`,
-                  "anthropic-beta": "oauth-2025-04-20",
-                  "Content-Type": "application/json",
-                },
-                signal: AbortSignal.timeout(5000),
+            const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
+              method: 'GET',
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'anthropic-beta': 'oauth-2025-04-20',
+                'Content-Type': 'application/json',
               },
-            );
+              signal: AbortSignal.timeout(5000),
+            });
             if (res.ok) {
               const prof = await res.json();
-              const euEnabled =
-                prof?.organization?.has_extra_usage_enabled === true;
+              const euEnabled = prof?.organization?.has_extra_usage_enabled === true;
               if (euEnabled) {
                 log(
                   `REFUSED: target ${targetEmail} has extra_usage enabled (pay-per-use). Pass --allow-extra-usage to override.`,
                 );
                 notify(
-                  "Rotation BLOCKED",
+                  'Rotation BLOCKED',
                   `${targetEmail}: extra_usage enabled — would risk credit-card overage. Disable at console.anthropic.com/settings/billing`,
                 );
                 return false;
@@ -2767,8 +2547,7 @@ async function rotate(targetEmail, opts = {}) {
 
   // Find by label first, then by email
   const account =
-    config.accounts.find((a) => accountKey(a) === targetEmail) ||
-    config.accounts.find((a) => a.email === targetEmail);
+    config.accounts.find((a) => accountKey(a) === targetEmail) || config.accounts.find((a) => a.email === targetEmail);
   if (!account) {
     log(`Account ${targetEmail} not in config`);
     return false;
@@ -2776,27 +2555,20 @@ async function rotate(targetEmail, opts = {}) {
   if (opts.magicLink) account.useMagicLink = true;
   const key = accountKey(account);
 
-  log(
-    `=== ROTATING: ${state.activeAccount || "none"} → ${key} (${account.email}) ===`,
-  );
-  notify("Claude Account Rotation", `Switching to ${key}...`);
+  log(`=== ROTATING: ${state.activeAccount || 'none'} → ${key} (${account.email}) ===`);
+  notify('Claude Account Rotation', `Switching to ${key}...`);
 
   // Clear statsig cache to prevent device-level rate limit stickiness (anthropics/claude-code#12786)
   try {
-    const statsigDir = join(process.env.HOME || "", ".claude", "statsig");
+    const statsigDir = join(process.env.HOME || '', '.claude', 'statsig');
     if (existsSync(statsigDir)) {
-      const files = readdirSync(statsigDir).filter((f) =>
-        f.startsWith("statsig.cached.evaluations."),
-      );
+      const files = readdirSync(statsigDir).filter((f) => f.startsWith('statsig.cached.evaluations.'));
       for (const f of files) {
         try {
           unlinkSync(join(statsigDir, f));
         } catch {}
       }
-      if (files.length > 0)
-        log(
-          `Cleared ${files.length} statsig cache files (device-level stickiness fix)`,
-        );
+      if (files.length > 0) log(`Cleared ${files.length} statsig cache files (device-level stickiness fix)`);
     }
   } catch {}
 
@@ -2805,14 +2577,10 @@ async function rotate(targetEmail, opts = {}) {
   // hits the Anthropic API and fails when we're already rate limited.
   // Trust state.activeAccount instead.
   if (opts.noBrowser) {
-    const trackedAccount = config.accounts.find(
-      (a) => accountKey(a) === state.activeAccount,
-    );
+    const trackedAccount = config.accounts.find((a) => accountKey(a) === state.activeAccount);
     if (trackedAccount) {
       if (!dryRun) saveCurrentToken(trackedAccount);
-      log(
-        `[no-browser] Saved outgoing token for tracked ${accountKey(trackedAccount)}`,
-      );
+      log(`[no-browser] Saved outgoing token for tracked ${accountKey(trackedAccount)}`);
     } else {
       log(`[no-browser] No tracked active account — skipping outgoing save`);
     }
@@ -2833,20 +2601,16 @@ async function rotate(targetEmail, opts = {}) {
       let liveOrgUuid = null;
       if (liveTokenJson) {
         try {
-          const liveAccessToken =
-            JSON.parse(liveTokenJson)?.claudeAiOauth?.accessToken;
+          const liveAccessToken = JSON.parse(liveTokenJson)?.claudeAiOauth?.accessToken;
           if (liveAccessToken) {
-            const res = await fetch(
-              "https://api.anthropic.com/api/oauth/profile",
-              {
-                method: "GET",
-                headers: {
-                  Authorization: `Bearer ${liveAccessToken}`,
-                  "anthropic-beta": "oauth-2025-04-20",
-                },
-                signal: AbortSignal.timeout(5000),
+            const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
+              method: 'GET',
+              headers: {
+                Authorization: `Bearer ${liveAccessToken}`,
+                'anthropic-beta': 'oauth-2025-04-20',
               },
-            );
+              signal: AbortSignal.timeout(5000),
+            });
             if (res.ok) {
               const prof = await res.json();
               liveEmail = prof?.account?.email || null;
@@ -2861,9 +2625,7 @@ async function rotate(targetEmail, opts = {}) {
         // orgUuid matches live. Fall back to first email match.
         let liveAccount = null;
         if (liveOrgUuid) {
-          liveAccount = config.accounts.find(
-            (a) => a.email === liveEmail && a.orgUuid === liveOrgUuid,
-          );
+          liveAccount = config.accounts.find((a) => a.email === liveEmail && a.orgUuid === liveOrgUuid);
         }
         if (!liveAccount) {
           liveAccount = config.accounts.find((a) => a.email === liveEmail);
@@ -2871,19 +2633,15 @@ async function rotate(targetEmail, opts = {}) {
         if (liveAccount) {
           if (!dryRun) saveCurrentToken(liveAccount);
           log(
-            `${dryRun ? "[DRY-RUN] Would save" : "Saved"} outgoing token for LIVE account ${accountKey(liveAccount)} (was tracked as ${state.activeAccount || "none"})`,
+            `${dryRun ? '[DRY-RUN] Would save' : 'Saved'} outgoing token for LIVE account ${accountKey(liveAccount)} (was tracked as ${state.activeAccount || 'none'})`,
           );
           // Keep state in sync with reality
           if (state.activeAccount !== accountKey(liveAccount)) {
-            log(
-              `State drift corrected: activeAccount ${state.activeAccount} → ${accountKey(liveAccount)}`,
-            );
+            log(`State drift corrected: activeAccount ${state.activeAccount} → ${accountKey(liveAccount)}`);
             state.activeAccount = accountKey(liveAccount);
           }
         } else {
-          log(
-            `WARNING: live account ${liveEmail} not in config — skipping outgoing save`,
-          );
+          log(`WARNING: live account ${liveEmail} not in config — skipping outgoing save`);
         }
       }
     } catch (e) {
@@ -2893,9 +2651,9 @@ async function rotate(targetEmail, opts = {}) {
   // Snapshot outgoing account's utilization before clearing the rate-limits file.
   // This lets pickNextAccount avoid rotating back to an exhausted account.
   try {
-    const rlPath = join(__dirname, ".rate-limits.json");
+    const rlPath = join(__dirname, '.rate-limits.json');
     if (existsSync(rlPath)) {
-      const rl = JSON.parse(readFileSync(rlPath, "utf8"));
+      const rl = JSON.parse(readFileSync(rlPath, 'utf8'));
       const outKey = state.activeAccount;
       if (outKey && rl.five_hour) {
         state.accounts[outKey] = state.accounts[outKey] || {};
@@ -2914,30 +2672,28 @@ async function rotate(targetEmail, opts = {}) {
   // Clear stale rate limits file so daemon doesn't use old account's utilization
   if (!dryRun) {
     try {
-      unlinkSync(join(__dirname, ".rate-limits.json"));
+      unlinkSync(join(__dirname, '.rate-limits.json'));
     } catch {}
   } else {
-    log("[DRY-RUN] Would clear .rate-limits.json");
+    log('[DRY-RUN] Would clear .rate-limits.json');
   }
 
   let ok;
   if (dryRun) {
-    log("[DRY-RUN] Would swap token via swapToken()");
+    log('[DRY-RUN] Would swap token via swapToken()');
     ok = true;
   } else {
     ok = await swapToken(account);
     if (!ok && !opts.noBrowser) {
       ok = await browserOAuthFallback(account);
     } else if (!ok) {
-      log(
-        "[no-browser] Token swap failed — skipping browser fallback (daemon mode)",
-      );
+      log('[no-browser] Token swap failed — skipping browser fallback (daemon mode)');
     }
   }
 
   if (!ok) {
-    log("Rotation failed");
-    notify("Account Rotation", `FAILED for ${targetEmail}`);
+    log('Rotation failed');
+    notify('Account Rotation', `FAILED for ${targetEmail}`);
     return false;
   }
 
@@ -2951,32 +2707,27 @@ async function rotate(targetEmail, opts = {}) {
       const fresh = JSON.parse(freshJson);
       const freshToken = fresh?.claudeAiOauth?.accessToken;
       if (freshToken) {
-        const res = await fetch("https://api.anthropic.com/api/oauth/profile", {
-          method: "GET",
+        const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
+          method: 'GET',
           headers: {
             Authorization: `Bearer ${freshToken}`,
-            "anthropic-beta": "oauth-2025-04-20",
-            "Content-Type": "application/json",
+            'anthropic-beta': 'oauth-2025-04-20',
+            'Content-Type': 'application/json',
           },
           signal: AbortSignal.timeout(5000),
         });
         if (res.ok) {
           const prof = await res.json();
-          const euOn =
-            prof?.organization?.has_extra_usage_enabled === true;
+          const euOn = prof?.organization?.has_extra_usage_enabled === true;
           if (euOn) {
-            log(
-              `POST-SWAP BLOCK: ${targetEmail} has extra_usage=ON (overage billing). Reverting swap.`,
-            );
+            log(`POST-SWAP BLOCK: ${targetEmail} has extra_usage=ON (overage billing). Reverting swap.`);
             notify(
-              "Rotation REVERTED",
+              'Rotation REVERTED',
               `${targetEmail}: extra_usage enabled — charges would hit your card. Rollback in progress.`,
             );
             // Revert: restore previous account's stored token to active slot
             const prevKey = state.activeAccount;
-            const prevAccount = prevKey
-              ? config.accounts.find((a) => accountKey(a) === prevKey)
-              : null;
+            const prevAccount = prevKey ? config.accounts.find((a) => accountKey(a) === prevKey) : null;
             if (prevAccount) {
               const prevToken = readStoredToken(prevAccount);
               if (prevToken) {
@@ -2993,9 +2744,7 @@ async function rotate(targetEmail, opts = {}) {
         }
       }
     } catch (e) {
-      log(
-        `POST-SWAP billing check error (non-fatal): ${e.message?.slice(0, 80)}`,
-      );
+      log(`POST-SWAP billing check error (non-fatal): ${e.message?.slice(0, 80)}`);
     }
   }
 
@@ -3010,15 +2759,13 @@ async function rotate(targetEmail, opts = {}) {
     if (stored && stored.length > 80 && active.includes(stored.substring(20, 80))) verified = true;
     // Browser fallback: verify via CLI (skip in --no-browser mode — API may be rate limited)
     if (!verified && !opts.noBrowser) {
-      const out = execSync("claude auth status 2>&1", {
+      const out = execSync('claude auth status 2>&1', {
         timeout: 10_000,
       }).toString();
       verified = out.includes(account.email);
     }
   } catch {}
-  log(
-    `Rotation ${verified ? "VERIFIED" : "UNVERIFIED"}: ${key} (${account.email})`,
-  );
+  log(`Rotation ${verified ? 'VERIFIED' : 'UNVERIFIED'}: ${key} (${account.email})`);
 
   // Org-match check: for accounts where label != email (multi-org under same
   // email, like user-personal vs user-team), confirm the live
@@ -3031,19 +2778,16 @@ async function rotate(targetEmail, opts = {}) {
       const liveTok = readKeychain();
       const accessToken = JSON.parse(liveTok)?.claudeAiOauth?.accessToken;
       if (accessToken) {
-        const res = await fetch(
-          "https://api.anthropic.com/api/oauth/profile",
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              "anthropic-beta": "oauth-2025-04-20",
-            },
-            signal: AbortSignal.timeout(5000),
+        const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'anthropic-beta': 'oauth-2025-04-20',
           },
-        );
+          signal: AbortSignal.timeout(5000),
+        });
         if (res.ok) {
           const prof = await res.json();
-          const liveOrg = prof?.organization?.name || "";
+          const liveOrg = prof?.organization?.name || '';
           if (liveOrg && liveOrg !== account.orgName) {
             log(
               `⚠  ORG MISMATCH: ${key} expected "${account.orgName}" but live is "${liveOrg}" — OAuth org picker likely landed on wrong workspace. Token still saved but will share quota with sibling account under same email.`,
@@ -3063,26 +2807,23 @@ async function rotate(targetEmail, opts = {}) {
   // Claude Code's own 30s keychain re-read will pick up the new token.
   if (verified && !opts.noBrowser) {
     try {
-      execSync("claude auth status 2>&1", { timeout: 10_000 });
-      log("Token refresh triggered via auth status");
+      execSync('claude auth status 2>&1', { timeout: 10_000 });
+      log('Token refresh triggered via auth status');
     } catch {}
   }
 
   // Save verified (and possibly refreshed) token to vault for future fast swaps
   if (verified && !dryRun) saveCurrentToken(account);
-  if (verified && dryRun) log("[DRY-RUN] Would save verified token to vault");
+  if (verified && dryRun) log('[DRY-RUN] Would save verified token to vault');
 
   // Update state — track cumulative window usage per account
   const now = new Date().toISOString();
   const windowMs = (config.rateLimits?.windowHours || 5) * 3_600_000;
   if (state.activeAccount) {
-    const prev = (state.accounts[state.activeAccount] =
-      state.accounts[state.activeAccount] || {});
+    const prev = (state.accounts[state.activeAccount] = state.accounts[state.activeAccount] || {});
     prev.lastActive = now;
     // Accumulate tool uses into the account's window total
-    const windowAge = prev.windowStart
-      ? Date.now() - new Date(prev.windowStart).getTime()
-      : Infinity;
+    const windowAge = prev.windowStart ? Date.now() - new Date(prev.windowStart).getTime() : Infinity;
     if (windowAge >= windowMs) {
       // Window expired — reset
       prev.windowStart = prev.switchedAt || now;
@@ -3097,9 +2838,7 @@ async function rotate(targetEmail, opts = {}) {
     switchedAt: now,
     messagesSinceSwitch: 0,
   });
-  const targetWindowAge = target.windowStart
-    ? Date.now() - new Date(target.windowStart).getTime()
-    : Infinity;
+  const targetWindowAge = target.windowStart ? Date.now() - new Date(target.windowStart).getTime() : Infinity;
   if (targetWindowAge >= windowMs) {
     // Window expired — fresh start
     target.windowStart = now;
@@ -3112,13 +2851,11 @@ async function rotate(targetEmail, opts = {}) {
   state.totalRotations = (state.totalRotations || 0) + 1;
   writeState(state, dryRun);
 
-  notify("Claude Account Rotation", `${verified ? "✓" : "⚠"} Now using ${key}`);
+  notify('Claude Account Rotation', `${verified ? '✓' : '⚠'} Now using ${key}`);
 
   if (opts.session) {
     if (dryRun) {
-      log(
-        "[DRY-RUN] Would restart running Claude sessions with --continue and send resume prompt",
-      );
+      log('[DRY-RUN] Would restart running Claude sessions with --continue and send resume prompt');
     } else {
       await refreshRunningSession(account, opts.noBrowser);
     }
@@ -3131,35 +2868,26 @@ async function rotate(targetEmail, opts = {}) {
 async function setup() {
   const config = readConfig();
   const argv = process.argv.slice(2);
-  const filter = argv.find((a) => a.startsWith("--only="))?.slice(7);
-  const autoMode = argv.includes("--auto");
-  const magicLinkMode = autoMode || argv.includes("--magic-link");
-  const skipDone = argv.includes("--skip-valid");
-  const accounts = (filter
-    ? config.accounts.filter(
-        (a) => accountKey(a) === filter || a.email === filter,
-      )
-    : config.accounts
+  const filter = argv.find((a) => a.startsWith('--only='))?.slice(7);
+  const autoMode = argv.includes('--auto');
+  const magicLinkMode = autoMode || argv.includes('--magic-link');
+  const skipDone = argv.includes('--skip-valid');
+  const accounts = (
+    filter ? config.accounts.filter((a) => accountKey(a) === filter || a.email === filter) : config.accounts
   ).filter((a) => {
     if (a.disabled === true && !filter) {
-      console.log(`⏭  Skipping ${accountKey(a)}: disabled (${a.disabledReason || "no reason given"})`);
+      console.log(`⏭  Skipping ${accountKey(a)}: disabled (${a.disabledReason || 'no reason given'})`);
       return false;
     }
     return true;
   });
 
-  console.log("\n=== Claude Account Rotation — Setup ===\n");
+  console.log('\n=== Claude Account Rotation — Setup ===\n');
   if (autoMode) {
-    console.log(
-      `🤖 AUTO MODE — browser driver cascade + magic-link polling via gog/Gmail`,
-    );
-    console.log(
-      `   Sequential processing (~60-120s per account). Logs → rotation.log.\n`,
-    );
+    console.log(`🤖 AUTO MODE — browser driver cascade + magic-link polling via gog/Gmail`);
+    console.log(`   Sequential processing (~60-120s per account). Logs → rotation.log.\n`);
   }
-  console.log(
-    `Re-capturing ${accounts.length} account(s). For each: OAuth → verify → save to vault.\n`,
-  );
+  console.log(`Re-capturing ${accounts.length} account(s). For each: OAuth → verify → save to vault.\n`);
 
   const results = [];
   for (const account of accounts) {
@@ -3174,22 +2902,17 @@ async function setup() {
           const p = JSON.parse(existing);
           const t = p?.claudeAiOauth?.accessToken;
           if (t) {
-            const res = await fetch(
-              "https://api.anthropic.com/api/oauth/profile",
-              {
-                method: "GET",
-                headers: {
-                  Authorization: `Bearer ${t}`,
-                  "anthropic-beta": "oauth-2025-04-20",
-                  "Content-Type": "application/json",
-                },
-                signal: AbortSignal.timeout(4000),
+            const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
+              method: 'GET',
+              headers: {
+                Authorization: `Bearer ${t}`,
+                'anthropic-beta': 'oauth-2025-04-20',
+                'Content-Type': 'application/json',
               },
-            );
+              signal: AbortSignal.timeout(4000),
+            });
             if (res.ok) {
-              console.log(
-                `⏭  Skipped: vault token still valid (--skip-valid).`,
-              );
+              console.log(`⏭  Skipped: vault token still valid (--skip-valid).`);
               results.push({ key, ok: true, skipped: true });
               continue;
             }
@@ -3203,47 +2926,31 @@ async function setup() {
       // Fully automated: claude auth login subprocess + browser driver cascade
       // + magic-link email polling. No terminal interaction required.
       account.useMagicLink = true;
-      console.log(
-        `[auto] Automated OAuth — magic-link email to ${account.email} (routed to Gmail)...`,
-      );
+      console.log(`[auto] Automated OAuth — magic-link email to ${account.email} (routed to Gmail)...`);
       try {
         oauthOk = await browserOAuthFallback(account);
       } catch (e) {
-        console.error(
-          `❌ Automation threw: ${String(e.message || e).slice(0, 120)}`,
-        );
+        console.error(`❌ Automation threw: ${String(e.message || e).slice(0, 120)}`);
         oauthOk = false;
       }
       if (!oauthOk) {
-        console.error(
-          `❌ ${key}: auto OAuth failed. Retry manually: node rotate.mjs --setup --only=${key}`,
-        );
-        results.push({ key, ok: false, reason: "auto-oauth-failed" });
+        console.error(`❌ ${key}: auto OAuth failed. Retry manually: node rotate.mjs --setup --only=${key}`);
+        results.push({ key, ok: false, reason: 'auto-oauth-failed' });
         continue;
       }
     } else {
-      console.log(
-        "Opening browser for OAuth. Complete the Google login, then come back here.",
-      );
-      const child = spawn(
-        "claude",
-        ["auth", "login", "--email", account.email],
-        {
-          stdio: "inherit",
-        },
-      );
-      await new Promise((r) => child.on("exit", r));
+      console.log('Opening browser for OAuth. Complete the Google login, then come back here.');
+      const child = spawn('claude', ['auth', 'login', '--email', account.email], {
+        stdio: 'inherit',
+      });
+      await new Promise((r) => child.on('exit', r));
     }
 
     // Verify the login succeeded and matches the expected account
     try {
-      const status = JSON.parse(
-        execSync("claude auth status 2>&1", { timeout: 10_000 }).toString(),
-      );
+      const status = JSON.parse(execSync('claude auth status 2>&1', { timeout: 10_000 }).toString());
       if (status.email !== account.email) {
-        console.error(
-          `\n❌ MISMATCH: expected ${account.email}, got ${status.email}. Skipping save.`,
-        );
+        console.error(`\n❌ MISMATCH: expected ${account.email}, got ${status.email}. Skipping save.`);
         results.push({ key, ok: false, reason: `mismatch:${status.email}` });
         continue;
       }
@@ -3274,12 +2981,10 @@ async function setup() {
   const okCount = results.filter((r) => r.ok).length;
   const failCount = results.length - okCount;
   for (const r of results) {
-    const icon = r.ok ? (r.skipped ? "⏭ " : "✅") : "❌";
-    console.log(`  ${icon} ${r.key}${r.reason ? `  (${r.reason})` : ""}`);
+    const icon = r.ok ? (r.skipped ? '⏭ ' : '✅') : '❌';
+    console.log(`  ${icon} ${r.key}${r.reason ? `  (${r.reason})` : ''}`);
   }
-  console.log(
-    `\n${okCount}/${results.length} captured${failCount ? `, ${failCount} failed` : ""}.`,
-  );
+  console.log(`\n${okCount}/${results.length} captured${failCount ? `, ${failCount} failed` : ''}.`);
 
   // Post-setup billing audit (auto mode) — surfaces accounts with extra_usage on
   if (autoMode && okCount > 0) {
@@ -3303,9 +3008,7 @@ async function setup() {
         console.log(`  🔴 ${k}: EXTRA_USAGE=ON — overage billing ACTIVE`);
         risky++;
       } else if (u.extra_usage_enabled === false) {
-        console.log(
-          `  🟢 ${k}: extra_usage=off  5h=${u.five_hour_pct}% 7d=${u.seven_day_pct}%`,
-        );
+        console.log(`  🟢 ${k}: extra_usage=off  5h=${u.five_hour_pct}% 7d=${u.seven_day_pct}%`);
       } else {
         console.log(`  ⚠  ${k}: extra_usage=unknown`);
         unknown++;
@@ -3319,9 +3022,7 @@ async function setup() {
       console.log(`\n✅ All auditable accounts have extra_usage=off.`);
     }
   }
-  console.log(
-    `\nSetup done. Run \`node rotate.mjs --audit-billing\` anytime to re-check.\n`,
-  );
+  console.log(`\nSetup done. Run \`node rotate.mjs --audit-billing\` anytime to re-check.\n`);
 }
 
 // ── Status ────────────────────────────────────────────────────────────────────
@@ -3331,14 +3032,14 @@ function showStatus() {
   const state = readState();
   let liveEmail = null;
   try {
-    const m = execSync("claude auth status 2>&1", { timeout: 10_000 })
+    const m = execSync('claude auth status 2>&1', { timeout: 10_000 })
       .toString()
       .match(/"email":\s*"([^"]+)"/);
     if (m) liveEmail = m[1];
   } catch {}
 
   const since = (d) => {
-    if (!d) return "never";
+    if (!d) return 'never';
     const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000);
     if (s < 60) return `${s}s ago`;
     if (s < 3600) return `${Math.floor(s / 60)}m ago`;
@@ -3349,43 +3050,33 @@ function showStatus() {
   // Read real utilization if available
   let realUtil = null;
   try {
-    const rlFile = join(__dirname, ".rate-limits.json");
+    const rlFile = join(__dirname, '.rate-limits.json');
     if (existsSync(rlFile)) {
-      const rl = JSON.parse(readFileSync(rlFile, "utf8"));
+      const rl = JSON.parse(readFileSync(rlFile, 'utf8'));
       const age = Date.now() - rl.ts * 1000;
       if (age < 5 * 60_000) realUtil = rl;
     }
   } catch {}
 
   // Determine if the mismatch is expected (rotation just ran, session hasn't reloaded)
-  const recentRotation = state.lastRotation
-    ? Date.now() - new Date(state.lastRotation).getTime() < 90_000
-    : false;
+  const recentRotation = state.lastRotation ? Date.now() - new Date(state.lastRotation).getTime() < 90_000 : false;
   const mismatch =
     liveEmail &&
     state.activeAccount &&
     !state.activeAccount.startsWith(liveEmail) &&
     !liveEmail.startsWith(state.activeAccount);
-  const liveNote =
-    mismatch && recentRotation
-      ? " (stale session — restart Claude Code to apply)"
-      : "";
+  const liveNote = mismatch && recentRotation ? ' (stale session — restart Claude Code to apply)' : '';
 
-  console.log("\n=== Claude Account Rotation ===\n");
-  console.log(`Live auth:       ${liveEmail || "unknown"}${liveNote}`);
-  console.log(`Tracked active:  ${state.activeAccount || "unknown"}`);
-  console.log(
-    `Tool uses:       ${state.toolUses || 0} / ${config.toolUseThreshold}`,
-  );
+  console.log('\n=== Claude Account Rotation ===\n');
+  console.log(`Live auth:       ${liveEmail || 'unknown'}${liveNote}`);
+  console.log(`Tracked active:  ${state.activeAccount || 'unknown'}`);
+  console.log(`Tool uses:       ${state.toolUses || 0} / ${config.toolUseThreshold}`);
   if (realUtil) {
     console.log(
-      `Real utilization: 5h=${realUtil.five_hour?.pct?.toFixed(1) || "?"}%  7d=${realUtil.seven_day?.pct?.toFixed(1) || "?"}%`,
+      `Real utilization: 5h=${realUtil.five_hour?.pct?.toFixed(1) || '?'}%  7d=${realUtil.seven_day?.pct?.toFixed(1) || '?'}%`,
     );
     if (realUtil.five_hour?.reset) {
-      const resetIn = Math.max(
-        0,
-        realUtil.five_hour.reset - Math.floor(Date.now() / 1000),
-      );
+      const resetIn = Math.max(0, realUtil.five_hour.reset - Math.floor(Date.now() / 1000));
       const hrs = Math.floor(resetIn / 3600);
       const mins = Math.floor((resetIn % 3600) / 60);
       console.log(`5h resets in:    ${hrs}h${mins}m`);
@@ -3393,22 +3084,20 @@ function showStatus() {
   }
   console.log(`Total rotations: ${state.totalRotations || 0}`);
   console.log(`Last rotation:   ${since(state.lastRotation)}\n`);
-  console.log("Accounts:");
+  console.log('Accounts:');
   for (const a of config.accounts) {
     const key = accountKey(a);
     const s = state.accounts[key] || {};
-    const active = key === state.activeAccount ? " ◀ ACTIVE" : "";
-    const prio = a.priority === "low" ? " (low priority)" : "";
-    const tokenOk = hasStoredToken(a) ? "✓ token stored" : "✗ no token";
-    const label = a.label ? ` [${a.label}]` : "";
-    const windowInfo = s.windowToolUses
-      ? ` | window: ${s.windowToolUses} uses`
-      : "";
+    const active = key === state.activeAccount ? ' ◀ ACTIVE' : '';
+    const prio = a.priority === 'low' ? ' (low priority)' : '';
+    const tokenOk = hasStoredToken(a) ? '✓ token stored' : '✗ no token';
+    const label = a.label ? ` [${a.label}]` : '';
+    const windowInfo = s.windowToolUses ? ` | window: ${s.windowToolUses} uses` : '';
     console.log(`  ${a.email}${label}${active}${prio}`);
     console.log(`    Keychain:    ${tokenOk}`);
     console.log(`    Last active: ${since(s.lastActive)}${windowInfo}`);
   }
-  console.log("");
+  console.log('');
 }
 
 // ── --capture: print current token for Dashlane ───────────────────────────────
@@ -3419,9 +3108,7 @@ function captureCmd(targetEmail = null) {
   let account;
   if (targetEmail) {
     const needle = String(targetEmail).trim().toLowerCase();
-    account = config.accounts.find(
-      (a) => a.email.toLowerCase() === needle,
-    );
+    account = config.accounts.find((a) => a.email.toLowerCase() === needle);
     if (!account) {
       console.error(`No account in config matching --to ${targetEmail}`);
       process.exit(1);
@@ -3429,8 +3116,7 @@ function captureCmd(targetEmail = null) {
   } else {
     const activeKey = state.activeAccount;
     account =
-      config.accounts.find((a) => accountKey(a) === activeKey) ||
-      config.accounts.find((a) => a.email === activeKey);
+      config.accounts.find((a) => accountKey(a) === activeKey) || config.accounts.find((a) => a.email === activeKey);
     if (!account) {
       console.error(`Active account ${activeKey} not in config`);
       process.exit(1);
@@ -3439,17 +3125,13 @@ function captureCmd(targetEmail = null) {
 
   try {
     const token = readKeychain();
-    if (!token.includes("claudeAiOauth")) {
-      console.error("No valid OAuth token in active keychain");
+    if (!token.includes('claudeAiOauth')) {
+      console.error('No valid OAuth token in active keychain');
       process.exit(1);
     }
     writeStoredToken(account, token);
-    console.log(
-      `✓ Token captured and saved to keychain: ${tokenService(account)}`,
-    );
-    console.log(
-      `  Account: ${account.email}${account.label ? " [" + account.label + "]" : ""}`,
-    );
+    console.log(`✓ Token captured and saved to keychain: ${tokenService(account)}`);
+    console.log(`  Account: ${account.email}${account.label ? ' [' + account.label + ']' : ''}`);
   } catch (e) {
     console.error(e.message);
     process.exit(1);
@@ -3460,21 +3142,21 @@ function captureCmd(targetEmail = null) {
 
 const args = process.argv.slice(2);
 
-if (args.includes("--setup")) {
+if (args.includes('--setup')) {
   await setup();
-} else if (args.includes("--utilization")) {
+} else if (args.includes('--utilization')) {
   // Live utilization query for all accounts
   const config = readConfig();
   const state = readState();
-  console.log("\nQuerying live utilization for all accounts...\n");
+  console.log('\nQuerying live utilization for all accounts...\n');
   const liveUtil = await queryAllUtilization(config);
   for (const a of config.accounts) {
     const key = accountKey(a);
     if (a.disabled === true) {
-      console.log(`  ⏸  ${key}: DISABLED — ${a.disabledReason || "no reason given"}`);
+      console.log(`  ⏸  ${key}: DISABLED — ${a.disabledReason || 'no reason given'}`);
       continue;
     }
-    const active = state.activeAccount === key ? " ◀ ACTIVE" : "";
+    const active = state.activeAccount === key ? ' ◀ ACTIVE' : '';
     const u = liveUtil[key];
     if (!u) {
       console.log(`  ${key}: ❌ query failed${active}`);
@@ -3483,102 +3165,81 @@ if (args.includes("--setup")) {
     const s5 = u.five_hour_pct;
     const s7 = u.seven_day_pct;
     const worst = Math.max(s5 ?? 0, s7 ?? 0);
-    const icon = worst >= 90 ? "🔴" : worst >= 70 ? "🟡" : "🟢";
-    const reset5 = u.resets_at_5h
-      ? `resets ${new Date(u.resets_at_5h).toLocaleTimeString()}`
-      : "no reset";
+    const icon = worst >= 90 ? '🔴' : worst >= 70 ? '🟡' : '🟢';
+    const reset5 = u.resets_at_5h ? `resets ${new Date(u.resets_at_5h).toLocaleTimeString()}` : 'no reset';
     const euIcon =
-      u.extra_usage_enabled === true
-        ? " 💳 EXTRA_USAGE_ON"
-        : u.extra_usage_enabled === false
-          ? ""
-          : " (eu?)";
-    console.log(
-      `  ${icon} ${key}: 5h=${s5}% 7d=${s7}%  (${reset5})${euIcon}${active}`,
-    );
+      u.extra_usage_enabled === true ? ' 💳 EXTRA_USAGE_ON' : u.extra_usage_enabled === false ? '' : ' (eu?)';
+    console.log(`  ${icon} ${key}: 5h=${s5}% 7d=${s7}%  (${reset5})${euIcon}${active}`);
   }
-  console.log("");
-} else if (args.includes("--audit-billing")) {
+  console.log('');
+} else if (args.includes('--audit-billing')) {
   // Per-account billing audit — prints extra_usage state + any risk flags
   const config = readConfig();
   const state = readState();
-  console.log("\nAuditing billing state for all accounts...\n");
+  console.log('\nAuditing billing state for all accounts...\n');
   const liveUtil = await queryAllUtilization(config);
   let risky = 0;
   let unknown = 0;
   for (const a of config.accounts) {
     const key = accountKey(a);
     if (a.disabled === true) {
-      console.log(`  ⏸  ${key}: DISABLED — ${a.disabledReason || "no reason given"}`);
+      console.log(`  ⏸  ${key}: DISABLED — ${a.disabledReason || 'no reason given'}`);
       continue;
     }
-    const active = state.activeAccount === key ? " ◀ ACTIVE" : "";
+    const active = state.activeAccount === key ? ' ◀ ACTIVE' : '';
     const u = liveUtil[key];
     if (!u) {
-      console.log(
-        `  ⚠  ${key}: token invalid/expired — cannot audit${active}`,
-      );
+      console.log(`  ⚠  ${key}: token invalid/expired — cannot audit${active}`);
       unknown++;
       continue;
     }
     const eu = u.extra_usage_enabled;
-    const bt = u.billing_type ?? "?";
-    const ss = u.subscription_status ?? "?";
+    const bt = u.billing_type ?? '?';
+    const ss = u.subscription_status ?? '?';
     if (eu === true) {
-      console.log(
-        `  🔴 ${key}: EXTRA_USAGE=ON billing=${bt} status=${ss}${active}  ← overage billing ACTIVE`,
-      );
+      console.log(`  🔴 ${key}: EXTRA_USAGE=ON billing=${bt} status=${ss}${active}  ← overage billing ACTIVE`);
       risky++;
     } else if (eu === false) {
-      console.log(
-        `  🟢 ${key}: extra_usage=off billing=${bt} status=${ss}${active}`,
-      );
+      console.log(`  🟢 ${key}: extra_usage=off billing=${bt} status=${ss}${active}`);
     } else {
       console.log(`  ⚠  ${key}: extra_usage=unknown billing=${bt}${active}`);
       unknown++;
     }
   }
-  console.log("");
-  console.log(
-    `Summary: ${risky} risky, ${unknown} unknown, ${config.accounts.length - risky - unknown} safe`,
-  );
+  console.log('');
+  console.log(`Summary: ${risky} risky, ${unknown} unknown, ${config.accounts.length - risky - unknown} safe`);
   if (risky > 0) {
-    console.log(
-      `\n⚠  Disable extra_usage at https://console.anthropic.com/settings/billing for each risky account.`,
-    );
+    console.log(`\n⚠  Disable extra_usage at https://console.anthropic.com/settings/billing for each risky account.`);
   }
-  console.log("");
-} else if (args.includes("--status")) {
+  console.log('');
+} else if (args.includes('--status')) {
   showStatus();
-} else if (args.includes("--capture")) {
-  const capToIdx = args.indexOf("--to");
-  const captureTo =
-    capToIdx !== -1 && args[capToIdx + 1] ? args[capToIdx + 1] : null;
+} else if (args.includes('--capture')) {
+  const capToIdx = args.indexOf('--to');
+  const captureTo = capToIdx !== -1 && args[capToIdx + 1] ? args[capToIdx + 1] : null;
   captureCmd(captureTo);
 } else {
-  const toIdx = args.indexOf("--to");
+  const toIdx = args.indexOf('--to');
   const target = toIdx !== -1 ? args[toIdx + 1] : null;
-  const session = args.includes("--session");
-  const noBrowser = args.includes("--no-browser");
-  const force = args.includes("--force");
-  const dryRun = args.includes("--dry-run");
-  const magicLink = args.includes("--magic-link");
-  const allowExtraUsage = args.includes("--allow-extra-usage");
-  if (dryRun) log("DRY RUN MODE — no changes will be made");
+  const session = args.includes('--session');
+  const noBrowser = args.includes('--no-browser');
+  const force = args.includes('--force');
+  const dryRun = args.includes('--dry-run');
+  const magicLink = args.includes('--magic-link');
+  const allowExtraUsage = args.includes('--allow-extra-usage');
+  if (dryRun) log('DRY RUN MODE — no changes will be made');
   if (force) {
-    log("Force mode — bypassing lock and killing any competing rotations");
+    log('Force mode — bypassing lock and killing any competing rotations');
     // Kill other rotate.mjs processes (not this one)
     try {
-      execSync(
-        `pgrep -f 'node.*rotate.mjs' | grep -v ${process.pid} | xargs -r kill -9 2>/dev/null`,
-      );
+      execSync(`pgrep -f 'node.*rotate.mjs' | grep -v ${process.pid} | xargs -r kill -9 2>/dev/null`);
     } catch {}
     try {
       unlinkSync(LOCK_PATH);
     } catch {}
   }
   if (!dryRun && !acquireLock()) {
-    console.error("Rotation in progress.");
+    console.error('Rotation in progress.');
     process.exit(1);
   }
   try {
@@ -3592,7 +3253,7 @@ if (args.includes("--setup")) {
     process.exit(ok ? 0 : 1);
   } catch (err) {
     log(`FATAL: ${err.message}`);
-    notify("Account Rotation", `FAILED: ${err.message}`);
+    notify('Account Rotation', `FAILED: ${err.message}`);
     process.exit(1);
   } finally {
     releaseLock();
