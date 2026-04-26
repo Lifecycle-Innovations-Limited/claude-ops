@@ -172,6 +172,7 @@ paths = [
   '''node_modules''',
   '''package-lock\.json''',
   '''\.gitleaks\.toml$''',
+  '''scripts/account-rotation/.*''',
 ]
 stopwords = [
   "XOXC_TOKEN",
