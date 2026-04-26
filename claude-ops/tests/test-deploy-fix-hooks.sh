@@ -259,6 +259,31 @@ test_build_trigger_transient() {
   assert_contains "2d.transient-message" "transient" "$out"
 }
 test_build_trigger_transient
+
+# 2e — dispatch_fix_agent returns non-zero (lock held) under set -e: hook must still exit 0
+test_build_trigger_lock_held() {
+  new_isolated_env "case2-lock-held"
+  export CLAUDE_PLUGIN_OPTION_DEPLOY_FIX_ENABLED=true
+  export CLAUDE_PLUGIN_OPTION_MONITOR_BUILD_FAILURES=true
+  export CLAUDE_PLUGIN_OPTION_AUTO_DISPATCH_FIXER=true
+  # Pre-create a live lock owned by current PID so dispatch_fix_agent returns 2
+  local slug_full
+  slug_full=$(git -C "$(pwd -P)" config --get remote.origin.url 2>/dev/null | \
+    sed -E 's|.*[:/]([^/]+/[^/]+)(\.git)?$|\1|; s|\.git$||' || true)
+  local repo_slug
+  repo_slug=$(echo "${slug_full:-local-build}" | tr '/' '-')
+  echo $$ > "$TEST_STATE/lock-${repo_slug}-build"
+  out=$(cat "$FIXTURES/build-trigger-fail.json" | bash "$PLUGIN_ROOT/bin/ops-deploy-fix-build-trigger" 2>&1)
+  rc=$?
+  assert_eq "2e.exit-zero-on-lock" "0" "$rc"
+  sleep 0.3
+  if [ ! -s "$TEST_LOGS/claude.log" ]; then
+    pass "2e.no-dispatch-when-locked"
+  else
+    fail "2e.no-dispatch-when-locked" "claude invoked despite lock"
+  fi
+}
+test_build_trigger_lock_held
 # ===========================================================================
 # CASE 3 — is_transient
 # ===========================================================================
