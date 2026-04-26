@@ -559,47 +559,6 @@ async function doRotation(reason) {
   }
 }
 
-// ── Auto-sync: detect if live auth drifted from state ────────────────────────
-
-function syncDriftedState(state, config, lastRotatedAt = 0) {
-  // After a rotation, `claude auth status` still returns the OLD session's email
-  // until the user restarts Claude Code. Don't undo the rotation by "correcting"
-  // state back to the stale live email — wait for the blackout to pass.
-  // Use the shared state.lastRotation (written by rotate.mjs) so duplicate daemon
-  // instances both respect the blackout, even if one of them didn't do the rotation.
-  const stateLastRotation = state.lastRotation
-    ? new Date(state.lastRotation).getTime()
-    : 0;
-  const effectiveLastRotation = Math.max(lastRotatedAt, stateLastRotation);
-  if (
-    effectiveLastRotation &&
-    Date.now() - effectiveLastRotation < POST_ROTATION_BLACKOUT
-  )
-    return false;
-
-  try {
-    const liveAuth = execSync("claude auth status 2>&1", {
-      timeout: 5_000,
-    }).toString();
-    const liveEmail = JSON.parse(liveAuth)?.email;
-    if (!liveEmail) return false;
-
-    const liveKey = config.accounts.find((a) => a.email === liveEmail);
-    if (!liveKey) return false;
-
-    const liveAccountKey = accountKey(liveKey);
-    if (state.activeAccount !== liveAccountKey) {
-      log(
-        `⚠️ DRIFT DETECTED: state says ${state.activeAccount || "none"}, live auth is ${liveAccountKey} — syncing state`,
-      );
-      state.activeAccount = liveAccountKey;
-      writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
-      return true; // Drift was corrected
-    }
-  } catch {}
-  return false;
-}
-
 // ── Dynamic token refresh ────────────────────────────────────────────────────
 // Instead of a fixed hourly launchd job refreshing all accounts, refresh
 // on-demand: when utilization is climbing (50%+), pre-refresh candidate
@@ -761,8 +720,9 @@ async function mainLoop() {
       // Post-rotation blackout: ALL rotation triggers are suppressed for 90s
       // after any rotation. `claude auth status` returns stale data during this
       // window, which causes drift detection → re-rotation thrashing loops.
-      const stateLastRotation = readState().lastRotation
-        ? new Date(readState().lastRotation).getTime()
+      const stateForBlackout = readState();
+      const stateLastRotation = stateForBlackout.lastRotation
+        ? new Date(stateForBlackout.lastRotation).getTime()
         : 0;
       const effectiveLastRotated = Math.max(lastRotatedAt, stateLastRotation);
       const inBlackout =
