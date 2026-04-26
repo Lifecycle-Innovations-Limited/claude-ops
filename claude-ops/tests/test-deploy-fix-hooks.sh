@@ -184,10 +184,10 @@ test_merge_trigger_no_repo
 echo ""
 echo "── Case 2: ops-deploy-fix-build-trigger ──────────────────────────"
 
-# Stub dispatch_fix_agent inside the lib by overriding the `claude` binary,
-# but the trigger path also calls `git -C` and locate_repo. We keep it simple
-# by setting auto_dispatch_fixer=false where we want NO dispatch, or by
-# swapping in our mock claude.
+# Stub dispatch_fix_agent inside the lib by overriding the `claude` binary.
+# The trigger resolves repo from PWD (git remote.origin.url) so tests run from
+# inside the repo dir. We swap in our mock claude for dispatch, or set
+# auto_dispatch_fixer=false where we want NO dispatch.
 test_build_trigger_fires_on_failure() {
   new_isolated_env "case2-fail"
   # Disable auto-rerun-of-transients false-positive: real failure (TS error)
@@ -239,6 +239,26 @@ test_build_trigger_skips_test_cmd() {
 }
 test_build_trigger_skips_test_cmd
 
+
+# 2d — transient failure is detected and no fixer dispatched
+test_build_trigger_transient() {
+  new_isolated_env "case2-transient"
+  export CLAUDE_PLUGIN_OPTION_DEPLOY_FIX_ENABLED=true
+  export CLAUDE_PLUGIN_OPTION_MONITOR_BUILD_FAILURES=true
+  export CLAUDE_PLUGIN_OPTION_AUTO_DISPATCH_FIXER=true
+  export CLAUDE_PLUGIN_OPTION_AUTO_RERUN_TRANSIENTS=true
+  out=$(cat "$FIXTURES/build-trigger-transient.json" | bash "$PLUGIN_ROOT/bin/ops-deploy-fix-build-trigger" 2>&1)
+  rc=$?
+  assert_eq "2d.exit-zero" "0" "$rc"
+  sleep 0.5
+  if [ ! -s "$TEST_LOGS/claude.log" ]; then
+    pass "2d.no-fixer-on-transient"
+  else
+    fail "2d.no-fixer-on-transient" "claude invoked for transient build failure"
+  fi
+  assert_contains "2d.transient-message" "transient" "$out"
+}
+test_build_trigger_transient
 # ===========================================================================
 # CASE 3 — is_transient
 # ===========================================================================
@@ -347,16 +367,13 @@ echo "── Case 7: resolve_health_url precedence ─────────�
 echo ""
 echo "── Case 8: dispatch_fix_agent ────────────────────────────────────"
 
-# Build a dummy template inside plugin prompts
-DUMMY_TEMPLATE="$PLUGIN_ROOT/prompts/__dummy-fix-test.md"
-cat > "$DUMMY_TEMPLATE" <<'TPL'
-REPO={{REPO}} SHA={{SHA}} BRANCH={{BRANCH}} EXTRA={{EXTRA}}
-TPL
-trap 'rm -rf "$SUITE_TMP" "$DUMMY_TEMPLATE"' EXIT
+# dispatch_fix_agent now takes (agent_name, lock_id, KEY=VAL ...) and pipes
+# a thin brief to `claude --agent <name>`. No template file needed.
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
-# 8a — happy: dispatches, prompt placeholders replaced
+# 8a — happy: dispatches, context vars appear in the brief piped to claude
 ( new_isolated_env "case8-happy" ; load_lib
-  out=$(dispatch_fix_agent "__dummy-fix-test.md" "myslug-deploy" "REPO=owner/repo" "SHA=abc1234" "BRANCH=dev" "EXTRA=hi")
+  out=$(dispatch_fix_agent "test-agent" "myslug-deploy" "REPO=owner/repo" "SHA=abc1234" "BRANCH=dev" "EXTRA=hi")
   rc=$?
   [ "$rc" = "0" ] || { echo "  FAIL: 8a.rc=$rc"; exit 1; }
   echo "  PASS: 8a.dispatch-rc-zero"
@@ -367,10 +384,10 @@ trap 'rm -rf "$SUITE_TMP" "$DUMMY_TEMPLATE"' EXIT
   done
   prompt=$(cat "$TEST_LOGS/claude-prompt.txt" 2>/dev/null || echo "")
   case "$prompt" in
-    *"REPO=owner/repo"*"SHA=abc1234"*"BRANCH=dev"*"EXTRA=hi"*)
-      echo "  PASS: 8a.placeholders-replaced" ;;
+    *"REPO: owner/repo"*"SHA: abc1234"*"BRANCH: dev"*"EXTRA: hi"*)
+      echo "  PASS: 8a.context-vars-in-brief" ;;
     *)
-      echo "  FAIL: 8a.placeholders-replaced got: $prompt"; exit 1 ;;
+      echo "  FAIL: 8a.context-vars-in-brief got: $prompt"; exit 1 ;;
   esac
 ) && PASS=$((PASS+2)) || { fail "case8a" "see above"; }
 
@@ -379,20 +396,20 @@ trap 'rm -rf "$SUITE_TMP" "$DUMMY_TEMPLATE"' EXIT
   # Pre-create a live lock owned by current PID
   echo $$ > "$TEST_STATE/lock-myslug-deploy"
   rc=0
-  dispatch_fix_agent "__dummy-fix-test.md" "myslug-deploy" "REPO=x" "SHA=y" "BRANCH=z" "EXTRA=w" >/dev/null 2>&1 || rc=$?
+  dispatch_fix_agent "test-agent" "myslug-deploy" "REPO=x" "SHA=y" "BRANCH=z" "EXTRA=w" >/dev/null 2>&1 || rc=$?
   [ "$rc" = "2" ] && echo "  PASS: 8b.skips-on-lock-rc2" || { echo "  FAIL: 8b got rc=$rc"; exit 1; }
 ) && PASS=$((PASS+1)) || { fail "case8b" "see above"; }
 
 # 8c — skip on budget exhausted
 ( new_isolated_env "case8-budget" ; load_lib
   export CLAUDE_PLUGIN_OPTION_MAX_FIXES_PER_HOUR=1
-  dispatch_fix_agent "__dummy-fix-test.md" "myslug-deploy" "REPO=x" "SHA=y" "BRANCH=z" "EXTRA=w" >/dev/null 2>&1
+  dispatch_fix_agent "test-agent" "myslug-deploy" "REPO=x" "SHA=y" "BRANCH=z" "EXTRA=w" >/dev/null 2>&1
   # Wait for first to clear the lock (claude mock exits fast, then lock is removed by the bg shell)
   sleep 1
   # Force lock release in case timing leaves it
   rm -f "$TEST_STATE/lock-myslug-deploy"
   rc=0
-  dispatch_fix_agent "__dummy-fix-test.md" "myslug-deploy" "REPO=x" "SHA=y" "BRANCH=z" "EXTRA=w" >/dev/null 2>&1 || rc=$?
+  dispatch_fix_agent "test-agent" "myslug-deploy" "REPO=x" "SHA=y" "BRANCH=z" "EXTRA=w" >/dev/null 2>&1 || rc=$?
   [ "$rc" = "3" ] && echo "  PASS: 8c.skips-on-budget-rc3" || { echo "  FAIL: 8c got rc=$rc"; exit 1; }
 ) && PASS=$((PASS+1)) || { fail "case8c" "see above"; }
 
@@ -490,13 +507,13 @@ test_monitor_real_failure() {
   assert_contains "11c.prompt-has-pr" "11" "$prompt"
   assert_contains "11d.prompt-has-sha" "abcdef1" "$prompt"
   assert_contains "11e.prompt-has-runid" "99" "$prompt"
-  # Verify haiku model flag was passed (wait — log is written after prompt by the mock)
+  # Verify agent flag was passed (model is in agent frontmatter, not CLI argv)
   for _ in 1 2 3 4 5 6 7 8 10; do
     [ -s "$TEST_LOGS/claude.log" ] && break
     "$REAL_SLEEP" 0.3
   done
   argv=$(cat "$TEST_LOGS/claude.log")
-  assert_contains "11f.model-haiku" "haiku" "$argv"
+  assert_contains "11f.agent-deploy-fixer" "deploy-fixer" "$argv"
   # Verify lock was acquired (file exists or was acquired then released)
   # Since dispatch_fix_agent acquires then the bg shell releases, just confirm the
   # state dir saw the lock at some point by checking budget counter (proxy)
@@ -507,11 +524,6 @@ test_monitor_real_failure() {
   fi
 }
 test_monitor_real_failure
-
-# ===========================================================================
-# Cleanup the dummy template
-# ===========================================================================
-rm -f "$DUMMY_TEMPLATE"
 
 # ===========================================================================
 # SUMMARY
