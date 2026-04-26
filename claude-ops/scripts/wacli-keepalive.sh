@@ -395,6 +395,11 @@ refresh_wacli_cache() {
 
 # Initial cache write before starting persistent sync
 refresh_wacli_cache
+# Clear BATCH_MARKER after bootstrap only — inside the supervisor monitor loop
+# refresh_wacli_cache must leave the marker so exit-detect can distinguish batch
+# kills from real failures; here there is no running sync yet, so a stale marker
+# would make the first genuine sync exit look like a deliberate pause.
+release_wacli_batch
 
 write_health "connected" "persistent sync starting"
 
