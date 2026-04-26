@@ -1,7 +1,7 @@
 {
   "name": "ops",
   "version": "1.8.1",
-  "description": "Business operations command center for Claude Code \u2014 30 skills, 14 agents, and a smart background daemon that manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (all AWS services), revenue (Stripe + RevenueCat), e-commerce (Shopify), marketing (Klaviyo/Meta/GA4/GSC), monitoring (Datadog/New Relic/OTEL), and voice (Bland AI/ElevenLabs/Whisper). Includes /gtm go-to-market planner, /ops:projects portfolio dashboard, and YOLO mode for autonomous operation with 4 parallel C-suite agents.",
+  "description": "Business operations command center for Claude Code — 30 skills, 14 agents, and a smart background daemon that manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (all AWS services), revenue (Stripe + RevenueCat), e-commerce (Shopify), marketing (Klaviyo/Meta/GA4/GSC), monitoring (Datadog/New Relic/OTEL), and voice (Bland AI/ElevenLabs/Whisper). Includes /gtm go-to-market planner, /ops:projects portfolio dashboard, and YOLO mode for autonomous operation with 4 parallel C-suite agents.",
   "author": {
     "name": "Lifecycle Innovations Limited",
     "url": "https://github.com/Lifecycle-Innovations-Limited"
@@ -54,28 +54,28 @@
   "userConfig": {
     "telegram_api_id": {
       "title": "Telegram API ID",
-      "description": "Numeric API ID from https://my.telegram.org/apps. Optional \u2014 run /ops:setup telegram to auto-configure.",
+      "description": "Numeric API ID from https://my.telegram.org/apps. Optional — run /ops:setup telegram to auto-configure.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "telegram_api_hash": {
       "title": "Telegram API Hash",
-      "description": "API hash from https://my.telegram.org/apps. Optional \u2014 run /ops:setup telegram to auto-configure.",
+      "description": "API hash from https://my.telegram.org/apps. Optional — run /ops:setup telegram to auto-configure.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "telegram_phone": {
       "title": "Telegram Phone Number",
-      "description": "Your phone number in E.164 format. Optional \u2014 run /ops:setup telegram to auto-configure.",
+      "description": "Your phone number in E.164 format. Optional — run /ops:setup telegram to auto-configure.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "telegram_session": {
       "title": "Telegram Session String",
-      "description": "gram.js StringSession. Optional \u2014 run /ops:setup telegram to auto-configure.",
+      "description": "gram.js StringSession. Optional — run /ops:setup telegram to auto-configure.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -159,21 +159,21 @@
     },
     "bland_ai_api_key": {
       "title": "Bland AI API Key",
-      "description": "API key from https://app.bland.ai \u2014 used for /ops:ops-voice call",
+      "description": "API key from https://app.bland.ai — used for /ops:ops-voice call",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "elevenlabs_api_key": {
       "title": "ElevenLabs API Key",
-      "description": "API key from https://elevenlabs.io \u2014 used for /ops:ops-voice tts",
+      "description": "API key from https://elevenlabs.io — used for /ops:ops-voice tts",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "groq_api_key": {
       "title": "Groq API Key",
-      "description": "API key from https://console.groq.com \u2014 used for /ops:ops-voice transcribe (Whisper)",
+      "description": "API key from https://console.groq.com — used for /ops:ops-voice transcribe (Whisper)",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -201,7 +201,7 @@
     },
     "datadog_api_key": {
       "title": "Datadog API Key",
-      "description": "From Datadog Organization Settings > API Keys \u2014 used for /ops:monitor",
+      "description": "From Datadog Organization Settings > API Keys — used for /ops:monitor",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -215,7 +215,7 @@
     },
     "newrelic_api_key": {
       "title": "New Relic API Key",
-      "description": "User API Key from one.newrelic.com/api-keys \u2014 used for /ops:monitor",
+      "description": "User API Key from one.newrelic.com/api-keys — used for /ops:monitor",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -250,7 +250,7 @@
     },
     "pushover_user_key": {
       "title": "Pushover User Key",
-      "description": "From https://pushover.net/ \u2014 paired with pushover_app_token.",
+      "description": "From https://pushover.net/ — paired with pushover_app_token.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -264,21 +264,21 @@
     },
     "discord_bot_token": {
       "title": "Discord Bot Token",
-      "description": "Bot token from Discord Developer Portal \u2014 used for channel reads and DMs. Prefer Doppler reference.",
+      "description": "Bot token from Discord Developer Portal — used for channel reads and DMs. Prefer Doppler reference.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "discord_guild_id": {
       "title": "Discord Guild ID",
-      "description": "Server/guild ID (right-click server in Discord \u2192 Copy ID with Developer Mode enabled)",
+      "description": "Server/guild ID (right-click server in Discord → Copy ID with Developer Mode enabled)",
       "type": "string",
       "sensitive": false,
       "default": ""
     },
     "discord_default_webhook_url": {
       "title": "Discord Default Webhook URL",
-      "description": "Optional default webhook URL (https://discord.com/api/webhooks/\u2026) for /ops:comms discord send. Shared with the ops-fires notification sink (which also reads discord_webhook_url).",
+      "description": "Optional default webhook URL (https://discord.com/api/webhooks/…) for /ops:comms discord send. Shared with the ops-fires notification sink (which also reads discord_webhook_url).",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -306,35 +306,35 @@
     },
     "myparcel_api_key": {
       "title": "MyParcel.nl API Key",
-      "description": "Plain API key from backoffice.myparcel.nl \u2192 Settings \u2192 API. Used by /ops:ops-package. Script base64-encodes it at runtime \u2014 do NOT pre-encode.",
+      "description": "Plain API key from backoffice.myparcel.nl → Settings → API. Used by /ops:ops-package. Script base64-encodes it at runtime — do NOT pre-encode.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "sendcloud_public_key": {
       "title": "Sendcloud Public Key",
-      "description": "Public key from Sendcloud Panel \u2192 Settings \u2192 Integrations \u2192 Sendcloud API. Paired with sendcloud_private_key.",
+      "description": "Public key from Sendcloud Panel → Settings → Integrations → Sendcloud API. Paired with sendcloud_private_key.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "sendcloud_private_key": {
       "title": "Sendcloud Private Key",
-      "description": "Private key from Sendcloud Panel \u2192 Settings \u2192 Integrations \u2192 Sendcloud API. Paired with sendcloud_public_key.",
+      "description": "Private key from Sendcloud Panel → Settings → Integrations → Sendcloud API. Paired with sendcloud_public_key.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "dhl_parcel_user_id": {
       "title": "DHL Parcel NL User ID",
-      "description": "User ID issued in My DHL Parcel \u2192 User settings \u2192 API settings. Paired with dhl_parcel_key.",
+      "description": "User ID issued in My DHL Parcel → User settings → API settings. Paired with dhl_parcel_key.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "dhl_parcel_key": {
       "title": "DHL Parcel NL API Key",
-      "description": "API key from My DHL Parcel \u2192 User settings \u2192 API settings. Paired with dhl_parcel_user_id.",
+      "description": "API key from My DHL Parcel → User settings → API settings. Paired with dhl_parcel_user_id.",
       "type": "string",
       "sensitive": true,
       "default": ""
