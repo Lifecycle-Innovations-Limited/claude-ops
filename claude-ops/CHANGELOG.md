@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.0] — 2026-04-26
+
+### Added
+
+- **Superpowers integration across `/ops:ops-merge`, `/ops:ops-orchestrate`, `/ops:ops-triage`.** Each skill now invokes specific `superpowers:*` skills at well-defined checkpoints to enforce stronger guardrails:
+  - `ops-merge` calls `superpowers:verification-before-completion` + `superpowers:finishing-a-development-branch` before the final merge decision (after fixer reports green) so nothing ships half-done.
+  - `ops-orchestrate` calls `superpowers:dispatching-parallel-agents` when launching 2+ parallel teammates per wave, enforcing file-ownership boundaries and task-independence checks.
+  - `ops-triage` calls `superpowers:systematic-debugging` during root-cause investigation so fix agents target the real defect, not the symptom.
+- **`/ops:setup` Step 2b.5 — installs the `superpowers` plugin.** Mirrors the existing GSD install step: detects whether `superpowers` is already present, prompts the user, runs `claude plugin marketplace add obra/superpowers-marketplace && claude plugin install superpowers@superpowers-marketplace`, and falls back to a direct `git clone` of the marketplace if the `claude` CLI is unavailable. Skipping is fine — the superpower checkpoints become no-ops without it.
+
+### Fixed
+
+- **`bin/ops-autofix` — `wacli-health` killed the legitimate `wacli sync --follow` daemon every run.** The auto-fix unconditionally killed any process holding the wacli store lock, despite a comment promising a `>2 min` age check that was never implemented. `wacli sync --follow` legitimately holds the lock for its entire lifetime to stream live messages, so every `/ops:ops-doctor` invocation cold-restarted the keepalive and broke message reception. The fix:
+  - Skips the kill outright when the lock holder's command matches `wacli sync --follow`.
+  - Implements the >2 min age check the comment promised, parsing `ps etime` formats `SS`, `MM:SS`, `HH:MM:SS`, and `DD-HH:MM:SS`.
+  - Logs cmd + age when killing for traceability, and logs skips with a reason (young vs `--follow`) instead of silently passing through.
+
 ## [1.7.0] — 2026-04-18
 
 ### Added
