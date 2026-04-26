@@ -223,7 +223,7 @@ How would you like to run setup?
 
 If the user selects "Set up everything", select ALL sections across all batches and run them in order (Step 2 → 2b → 2c → 3 → 4 → 5 → 5b → 6 → 6.5 → 7), skipping any already fully configured. Within each step, use the "Configure all" fast-path where available.
 
-If the user selects "Re-run a specific section", show a single `AskUserQuestion` listing the section names (cli, daemon, channels, mcp, registry, prefs, deploy-fix, env, ecom, mktg, voice, revenue) — paginated 4 per page per Rule 1 — and jump directly to that step. The `deploy-fix` section routes to Step 6.5.
+If the user selects "Re-run a specific section", use sequential `AskUserQuestion` calls (paginated 4 options per page per Rule 1) to let the user pick from the section names (cli, daemon, channels, mcp, registry, prefs, deploy-fix, env, ecom, mktg, voice, revenue), then jump directly to that step. The `deploy-fix` section routes to Step 6.5.
 
 If the user selects "Pick sections", proceed with the batched selection below.
 
@@ -3104,11 +3104,10 @@ Persist `notify_channel` ∈ `macos|ntfy|discord|none`.
   ```
   Discord webhook URL?
     [Paste webhook URL]
-    [Reuse existing channel webhook (discord_webhook_url)]
     [Skip — downgrade to no notifications]
   ```
 
-  On paste, write `discord_default_webhook_url` (sensitive). On reuse, copy `discord_webhook_url` → `discord_default_webhook_url` so the deploy-fix sink finds it. On skip, downgrade `notify_channel` to `none`.
+  On paste, write `discord_default_webhook_url` (sensitive). On skip, downgrade `notify_channel` to `none`.
 
 - `macos` selected → background-check `command -v terminal-notifier` (Rule 4). If missing, run `brew install terminal-notifier` with `run_in_background: true` and continue.
 
@@ -3175,7 +3174,7 @@ jq '. + {
   ntfy_topic: "<topic>",
   discord_default_webhook_url: "<url>",
   deploy_fix: { configured_at: "<ISO timestamp>", wizard_version: 1 }
-}' "$PREFS_FILE" > /tmp/p.$$ && mv /tmp/p.$$ "$PREFS_FILE"
+}' "$PREFS_PATH" > /tmp/p.$$ && mv /tmp/p.$$ "$PREFS_PATH"
 ```
 
 Omit any key whose value is empty/unset. Use `lib/credential-store` for sensitive values rather than plaintext.
@@ -3231,7 +3230,7 @@ Enable multi-account Claude rotator?
 Persist `account_rotation_enabled` (bool). On `Yes`, print:
 
 ```
-✓ Account rotation toggle enabled. Run /ops:setup --section account-rotation later to wire OAuth per account.
+✓ Account rotation toggle enabled. Run /ops:setup --section deploy-fix later to wire OAuth per account.
 ```
 
 ### 6.5 — completion print
@@ -3334,6 +3333,7 @@ If `$ARGUMENTS` contains a specific section name, jump straight to that section:
 | `daemon`, `background`                 | Step 5b |
 | `prefs`, `preferences`                 | Step 6  |
 | `env`, `shell`                         | Step 7  |
+| `deploy-fix`, `auto-fix`               | Step 6.5|
 
 Empty argument → full wizard from Step 0.
 

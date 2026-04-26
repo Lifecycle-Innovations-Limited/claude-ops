@@ -90,7 +90,7 @@ jq -r '{
 
 # Monitor runs — last 5 across all repos
 ls -t "$LOGS"/monitor-*.log 2>/dev/null | head -5 | while read f; do
-  printf '%s  %s\n' "$(stat -f '%Sm' -t '%FT%RZ' "$f")" "$(basename "$f")"
+  printf '%s  %s\n' "$(stat -f '%Sm' -t '%FT%RZ' "$f" 2>/dev/null || stat --format='%y' "$f" 2>/dev/null | awk '{print $1"T"$2"Z"}')" "$(basename "$f")"
 done
 
 # Fixer dispatches — last 5
@@ -98,7 +98,7 @@ ls -t "$LOGS"/fix-*.log 2>/dev/null | head -5 | while read f; do
   pid_file="$STATE/lock-$(basename "$f" | sed 's/^fix-//; s/-[0-9]*\.log$//')"
   status="done"
   [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null && status="in-flight"
-  printf '%s  %s  %s\n' "$(stat -f '%Sm' -t '%FT%RZ' "$f")" "$status" "$(basename "$f")"
+  printf '%s  %s  %s\n' "$(stat -f '%Sm' -t '%FT%RZ' "$f" 2>/dev/null || stat --format='%y' "$f" 2>/dev/null | awk '{print $1"T"$2"Z"}')" "$status" "$(basename "$f")"
 done
 
 # Active locks
@@ -221,7 +221,7 @@ Steps:
    - Skipping the actual `claude -p ...` dispatch in `dispatch_fix_agent`
    - Writing a `would-dispatch-<id>-<ts>.log` to `$LOGS_DIR` instead
    - Still incrementing the budget counter (so the test exercises the cap)
-   - Still firing `notify` so the user sees the channel ping
+   - Logging `[DRY-RUN] would notify <channel>` instead of firing real `notify` (no actual outbound messages during test — Rule 6)
 
    *If the trigger scripts don't yet support `--synthetic` / `OPS_DEPLOY_FIX_DRY_RUN`, surface that as a known TODO in the output and degrade to "would-have-dispatched" log-only.*
 
