@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# ops-suggest-specialized-agent — PreToolUse hook on Agent (silent + autonomous).
+#
+# When subagent_type=general-purpose:
+#   1. Load user-extensible keyword map (claude-ops/config/specialist-keywords.example.json
+#      with override at ~/.claude/plugins/data/ops-ops-marketplace/specialist-keywords.json).
+#   2. First regex match → verify the agent exists installed → silent swap via updatedInput.
+#   3. No match → fire-and-forget Haiku drafts a new ~/.claude/agents/<name>.md.
+#      Current call proceeds as general-purpose (no block).
+set -e
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+. "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh" 2>/dev/null || { config() { echo "${2:-}"; }; }
+
+[ "$(config suggest_specialized_agents true)" = "false" ] && exit 0
+
+INPUT=$(cat)
+subagent_type=$(printf '%s' "$INPUT" | jq -r '.tool_input.subagent_type // ""' 2>/dev/null)
+[ "$subagent_type" != "general-purpose" ] && exit 0
+
+prompt=$(printf '%s' "$INPUT" | jq -r '.tool_input.prompt // ""' 2>/dev/null)
+description=$(printf '%s' "$INPUT" | jq -r '.tool_input.description // ""' 2>/dev/null)
+combined=$(printf '%s\n%s' "$description" "$prompt" | tr '[:upper:]' '[:lower:]')
+mkdir -p "${HOME}/.claude/logs/ops" "${HOME}/.claude/agents" 2>/dev/null
+
+# Layered keyword map: user override → plugin default
+USER_MAP="${HOME}/.claude/plugins/data/ops-ops-marketplace/specialist-keywords.json"
+PLUGIN_MAP="$PLUGIN_ROOT/config/specialist-keywords.example.json"
+MAP=""
+[ -f "$USER_MAP" ] && MAP="$USER_MAP"
+[ -z "$MAP" ] && [ -f "$PLUGIN_MAP" ] && MAP="$PLUGIN_MAP"
+[ -z "$MAP" ] && exit 0
+
+# Agent existence check — true if installed (any of the locations claude-code searches)
+agent_installed() {
+  local name="$1"
+  [ -f "${HOME}/.claude/agents/${name}.md" ] && return 0
+  [ -f "$PLUGIN_ROOT/agents/${name}.md" ] && return 0
+  # built-in / plugin-marketplace agents (presence indicated by registry — coarse: assume true if no user override)
+  case "$name" in
+    general-purpose|statusline-setup) return 0 ;;
+  esac
+  # claude-code marketplace: cache dirs
+  for d in "${HOME}/.claude/plugins/cache"/*/agents "${HOME}/.claude/plugins/cache"/*/*/agents; do
+    [ -f "$d/${name}.md" ] && return 0
+  done
+  return 1
+}
+
+# Iterate rules; first match where agent is installed wins
+suggest=""
+while IFS=$'\t' read -r pattern agent; do
+  [ -z "$pattern" ] && continue
+  if echo "$combined" | grep -qiE "$pattern"; then
+    if agent_installed "$agent"; then
+      suggest="$agent"
+      break
+    fi
+  fi
+done < <(jq -r '.rules[] | "\(.pattern)\t\(.agent)"' "$MAP" 2>/dev/null)
+
+if [ -n "$suggest" ]; then
+  printf '[%s] auto-swap general-purpose → %s for: %s\n' "$(date '+%H:%M:%S')" "$suggest" "${description:0:80}" \
+    >> "${HOME}/.claude/logs/ops/agent-auto-swap.log"
+  jq -n --arg new "$suggest" --argjson orig "$(printf '%s' "$INPUT" | jq '.tool_input')" '
+    {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        updatedInput: ($orig | .subagent_type = $new)
+      }
+    }
+  '
+  exit 0
+fi
+
+# No match (or matched agent not installed) — log + spawn Haiku drafter
+printf '[%s] no installed specialist match for: %s\n' "$(date '+%H:%M:%S')" "${description:0:80}" \
+  >> "${HOME}/.claude/logs/ops/specialized-agent-misses.log"
+
+if command -v claude >/dev/null 2>&1 && [ "$(config auto_draft_new_agents true)" != "false" ]; then
+  drafter_log="${HOME}/.claude/logs/ops/agent-drafter-$(date +%s)-$$.log"
+  draft_prompt="You are an agent-builder. A subagent call was made as general-purpose with no installed specialist match.
+
+DESCRIPTION: ${description:0:200}
+PROMPT EXCERPT: ${prompt:0:600}
+
+Existing installed agents (do not duplicate):
+$(ls -1 ${HOME}/.claude/agents/ 2>/dev/null | sed 's/\.md$//' | sed 's/^/  - /')
+$(ls -1 $PLUGIN_ROOT/agents/ 2>/dev/null | sed 's/\.md$//' | sed 's/^/  - /')
+
+Task:
+1. Identify the recurring CLASS this task represents (not this one task).
+2. Pick a short kebab-case name for the new specialist.
+3. If a sibling at ~/.claude/agents/<name>.md already exists, exit with 'SKIP: exists'.
+4. Otherwise, Write to ~/.claude/agents/<name>.md with this frontmatter format:
+---
+name: <kebab-name>
+description: <one-paragraph: when to use, with 2-3 example scenarios in <example>...</example> tags>
+tools: <comma-separated tool list scoped to genuine needs>
+model: haiku|sonnet|opus
+---
+<persona body — 100-300 words covering capabilities, operating constraints, output format>
+
+Final line of your output: 'NEW: <name>' or 'SKIP: <reason>'."
+
+  nohup bash -c "
+    printf '%s' \"\$1\" | claude -p --model haiku --dangerously-skip-permissions --no-session-persistence > '$drafter_log' 2>&1
+  " _ "$draft_prompt" </dev/null >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+fi
+
+exit 0
