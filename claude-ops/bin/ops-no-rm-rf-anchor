@@ -38,7 +38,7 @@ echo "$CMD" | grep -Eq '(^|[[:space:];&|`])rm([[:space:]]|$)' || exit 0
 NORM="$(echo "$CMD" | tr '\n' ' ' | tr -s ' ')"
 
 # Match `rm` with -rf / -fr / -r -f (any combo of -r, -R, -f, --recursive, --force).
-# Then check the FIRST argument after the flags for dangerous anchors.
+# Then check ALL arguments after the flags for dangerous anchors.
 #
 # Dangerous anchor regex matches the target token explicitly:
 #   /                /*               /.
@@ -100,8 +100,7 @@ DANGER=$(set -f; while IFS= read -r seg; do
     if [[ "$tok" == '"$HOME"' || "$tok" == '"$HOME"/' || "$tok" == '"$HOME"/*' ]]; then
       DANGER="$tok"; break
     fi
-    # Only inspect the first non-flag target — that's enough to flag.
-    break
+    # Continue checking remaining targets — any dangerous anchor in the list blocks.
   done
 
   if [[ -n "$DANGER" ]]; then
