@@ -25,6 +25,24 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-pretool-wacli-health \"$TOOL_INPUT\" 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-prevent-secret-commit",
+            "timeout": 5,
+            "if": "Bash(git commit*)"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-no-rm-rf-anchor",
+            "timeout": 3,
+            "if": "Bash(rm *)"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-warn-mainpush",
+            "timeout": 3,
+            "if": "Bash(git push*)"
           }
         ]
       },
