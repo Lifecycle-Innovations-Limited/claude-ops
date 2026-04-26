@@ -1,1 +1,4 @@
-{"tool_input":{"command":"gh pr merge 123 --repo owner/repo --squash --admin"},"tool_response":{"exitCode":0}}
+{
+  "tool_input": { "command": "gh pr merge 123 --repo owner/repo --squash --admin" },
+  "tool_response": { "exitCode": 0 }
+}
