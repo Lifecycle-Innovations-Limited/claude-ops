@@ -54,11 +54,11 @@ while true; do
       *digest*|*latest*|*daemon*|*pinned*) continue ;;
     esac
     [ -f "$f" ] || continue
-    m=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)
+    m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
     [ "$m" -gt "$newest" ] && newest=$m
   done
 
-  digest_m=$(stat -f %m "$DIGEST" 2>/dev/null || stat -c %Y "$DIGEST" 2>/dev/null || echo 0)
+  digest_m=$(stat -c %Y "$DIGEST" 2>/dev/null || stat -f %m "$DIGEST" 2>/dev/null || echo 0)
   now=$(date +%s)
 
   if [ "$newest" -gt "$digest_m" ] && [ $((now - last_run)) -ge "$MIN_GAP" ]; then
@@ -66,7 +66,7 @@ while true; do
     THROTTLE_OVERRIDE=1 sh "$DIGEST_SCRIPT" >> "$LOG" 2>&1
   fi
 
-  log_bytes=$(stat -f %z "$LOG" 2>/dev/null || stat -c %s "$LOG" 2>/dev/null || echo 0)
+  log_bytes=$(stat -c %s "$LOG" 2>/dev/null || stat -f %z "$LOG" 2>/dev/null || echo 0)
   if [ "$log_bytes" -gt 512000 ]; then
     tail -n 200 "$LOG" > "${LOG}.tmp" && mv "${LOG}.tmp" "$LOG"
   fi

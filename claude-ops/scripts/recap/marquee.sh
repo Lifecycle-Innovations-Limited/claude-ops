@@ -32,11 +32,11 @@ total=$((hold_start + scroll_steps + hold_end))
 [ "$total" -lt 2 ] && total=2
 
 now=$(date +%s)
-pinned_mtime=$(stat -f %m "$PINNED" 2>/dev/null || stat -c %Y "$PINNED" 2>/dev/null || echo "$now")
+pinned_mtime=$(stat -c %Y "$PINNED" 2>/dev/null || stat -f %m "$PINNED" 2>/dev/null || echo "$now")
 elapsed=$((now - pinned_mtime))
 
 if [ "$elapsed" -ge "$total" ] && [ -f "$DIGEST" ]; then
-  digest_mtime=$(stat -f %m "$DIGEST" 2>/dev/null || stat -c %Y "$DIGEST" 2>/dev/null || echo 0)
+  digest_mtime=$(stat -c %Y "$DIGEST" 2>/dev/null || stat -f %m "$DIGEST" 2>/dev/null || echo 0)
   if [ "$digest_mtime" -gt "$pinned_mtime" ]; then
     cp "$DIGEST" "$PINNED" 2>/dev/null
     touch "$PINNED"

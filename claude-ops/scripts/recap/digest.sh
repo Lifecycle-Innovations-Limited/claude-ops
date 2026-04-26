@@ -11,7 +11,7 @@ THROTTLE=20
 
 # Throttle by file age unless explicitly overridden
 if [ -z "$THROTTLE_OVERRIDE" ] && [ -f "$DIGEST" ]; then
-  age=$(($(date +%s) - $(stat -f %m "$DIGEST" 2>/dev/null || stat -c %Y "$DIGEST" 2>/dev/null || echo 0)))
+  age=$(($(date +%s) - $(stat -c %Y "$DIGEST" 2>/dev/null || stat -f %m "$DIGEST" 2>/dev/null || echo 0)))
   [ "$age" -lt "$THROTTLE" ] && exit 0
 fi
 
@@ -24,7 +24,7 @@ now=$(date +%s)
 # Block A: current per-session recaps (newest first, max 8, drop stale >2h)
 sessions=""
 for f in $(ls -t /tmp/claude-recap-* 2>/dev/null | grep -v -- '-digest$' | grep -v -- '-digest\.log$' | grep -v -- '-latest$' | grep -v -- '-pinned$' | grep -v daemon | head -8); do
-  mtime=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)
+  mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
   age=$((now - mtime))
   [ "$age" -gt 7200 ] && continue
   base=$(basename "$f")
@@ -46,7 +46,7 @@ fi
 # Block C: recent non-Claude zsh shell activity (last 15 cmds across live shells)
 shell_activity=""
 for sf in $(ls -t /tmp/zsh-activity-*.log 2>/dev/null | head -6); do
-  smtime=$(stat -f %m "$sf" 2>/dev/null || stat -c %Y "$sf" 2>/dev/null || echo 0)
+  smtime=$(stat -c %Y "$sf" 2>/dev/null || stat -f %m "$sf" 2>/dev/null || echo 0)
   [ $((now - smtime)) -gt 1800 ] && continue
   spid=$(basename "$sf" | sed 's/zsh-activity-\(.*\)\.log/\1/')
   recent=$(tail -n 15 "$sf" 2>/dev/null)
