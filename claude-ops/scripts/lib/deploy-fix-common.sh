@@ -74,13 +74,13 @@ already_seen() {
 
 # Detect transient failure signatures. Returns 0 (transient) or 1.
 is_transient() {
-  printf '%s' "$1" | grep -qE \
-'ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|TLS handshake timeout|unexpected EOF while reading|Could not resolve host|network is unreachable|\
-npm error code E429|npm error 5(0[0-9]|2[0-9])|HTTP(S)?Error:? 429|HTTP(S)?Error:? 5[0-9]{2}|\
-The runner has received a shutdown signal|The hosted runner lost communication|The operation was canceled\.|GH001:|\
-TooManyRequestsException|ThrottlingException|RequestLimitExceeded|Service Unavailable Exception|\
-Apple ID server.*temporarily unavailable|App Store Connect.*timed out|ASC.*5[0-9]{2}|\
-Simulator failed to launch|ECR.*throttle'
+  local pat='ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|TLS handshake timeout|unexpected EOF while reading|Could not resolve host|network is unreachable'
+  pat="$pat|npm error code E429|npm error 5(0[0-9]|2[0-9])|HTTP(S)?Error:? 429|HTTP(S)?Error:? 5[0-9]{2}"
+  pat="$pat|The runner has received a shutdown signal|The hosted runner lost communication|The operation was canceled\.|GH001:"
+  pat="$pat|TooManyRequestsException|ThrottlingException|RequestLimitExceeded|Service Unavailable Exception"
+  pat="$pat|Apple ID server.*temporarily unavailable|App Store Connect.*timed out|ASC.*5[0-9]{2}"
+  pat="$pat|Simulator failed to launch|ECR.*throttle"
+  printf '%s' "$1" | grep -qE "$pat"
 }
 
 notify() {
@@ -126,8 +126,9 @@ locate_repo() {
 
 # Resolve health URL via layered registry: project → user → plugin example.
 resolve_health_url() {
-  local slug="$1" base="$2" key="$slug:$base"
-  local proj=$(locate_repo "$slug" 2>/dev/null)
+  local slug="$1" base="$2"
+  local key="$slug:$base"
+  local proj=$(locate_repo "$slug" 2>/dev/null) || true
   if [ -n "$proj" ] && [ -f "$proj/.claude/post-merge-services.json" ]; then
     local v=$(jq -r --arg k "$key" '.[$k].health // ""' "$proj/.claude/post-merge-services.json" 2>/dev/null)
     [ -n "$v" ] && { echo "$v"; return; }
@@ -144,8 +145,9 @@ resolve_health_url() {
 }
 
 resolve_version_url() {
-  local slug="$1" base="$2" key="$slug:$base"
-  local proj=$(locate_repo "$slug" 2>/dev/null)
+  local slug="$1" base="$2"
+  local key="$slug:$base"
+  local proj=$(locate_repo "$slug" 2>/dev/null) || true
   if [ -n "$proj" ] && [ -f "$proj/.claude/post-merge-services.json" ]; then
     local v=$(jq -r --arg k "$key" '.[$k].version // ""' "$proj/.claude/post-merge-services.json" 2>/dev/null)
     [ -n "$v" ] && { echo "$v"; return; }

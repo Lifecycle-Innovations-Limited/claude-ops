@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Mock `claude` CLI used by dispatch_fix_agent. Records the prompt + flags.
+#   MOCK_CLAUDE_LOG — file to append "MODEL=<m> FLAGS=<...> PROMPT_HASH=<...>"
+#   MOCK_CLAUDE_PROMPT_OUT — file to write the FULL stdin prompt verbatim
+#   MOCK_CLAUDE_RC  — exit code (default 0)
+set -u
+LOG="${MOCK_CLAUDE_LOG:-/dev/null}"
+PROMPT_OUT="${MOCK_CLAUDE_PROMPT_OUT:-/dev/null}"
+prompt="$(cat)"
+printf '%s' "$prompt" > "$PROMPT_OUT"
+hash="$(printf '%s' "$prompt" | shasum | awk '{print $1}')"
+printf 'argv=%s prompt_hash=%s\n' "$*" "$hash" >> "$LOG"
+exit "${MOCK_CLAUDE_RC:-0}"

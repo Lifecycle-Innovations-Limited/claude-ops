@@ -1,0 +1,1 @@
+{"tool_input":{"command":"npm run build:all"},"tool_response":{"exitCode":0,"output":"Build succeeded\n"}}

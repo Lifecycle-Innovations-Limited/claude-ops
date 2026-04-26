@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Mock `gh` CLI. Behavior controlled by env vars:
+#   MOCK_GH_PR_VIEW_JSON   — JSON returned by `gh pr view ... --json ...`
+#   MOCK_GH_RUN_LIST_JSON  — JSON array returned by `gh run list ... --json ...`
+#                            (script will run --jq filter against it)
+#   MOCK_GH_RUN_WATCH_RC   — exit code from `gh run watch` (default 0)
+#   MOCK_GH_RUN_VIEW_CONCLUSION — string conclusion ("success"/"failure"/...)
+#   MOCK_GH_RUN_VIEW_LOG_FAILED — stdout for `gh run view ... --log-failed`
+#   MOCK_GH_LOG_FILE       — append every invocation (argv) to this file
+set -u
+LOG="${MOCK_GH_LOG_FILE:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+# parse: gh <subcommand> <subsubcommand?> ...
+sub="${1:-}"
+shift || true
+sub2="${1:-}"
+
+case "$sub" in
+  pr)
+    case "$sub2" in
+      view)
+        echo "${MOCK_GH_PR_VIEW_JSON:-{\"baseRefName\":\"dev\",\"mergeCommit\":{\"oid\":\"abcdef1234567890\"},\"state\":\"MERGED\"\}}"
+        exit 0
+        ;;
+    esac
+    ;;
+  run)
+    case "$sub2" in
+      list)
+        # Honor --jq if present
+        local_jq=""
+        while [ $# -gt 0 ]; do
+          if [ "$1" = "--jq" ]; then shift; local_jq="$1"; fi
+          shift || break
+        done
+        json="${MOCK_GH_RUN_LIST_JSON:-[]}"
+        if [ -n "$local_jq" ] && command -v jq >/dev/null 2>&1; then
+          printf '%s' "$json" | jq -r "$local_jq" 2>/dev/null
+        else
+          printf '%s' "$json"
+        fi
+        exit 0
+        ;;
+      watch)
+        echo "[mock-gh] watching run"
+        exit "${MOCK_GH_RUN_WATCH_RC:-0}"
+        ;;
+      view)
+        # Detect --log-failed
+        for a in "$@"; do
+          if [ "$a" = "--log-failed" ]; then
+            printf '%s' "${MOCK_GH_RUN_VIEW_LOG_FAILED:-}"
+            exit 0
+          fi
+        done
+        # Else assume --json conclusion --jq .conclusion
+        printf '%s' "${MOCK_GH_RUN_VIEW_CONCLUSION:-success}"
+        exit 0
+        ;;
+      rerun)
+        echo "[mock-gh] rerun invoked"
+        exit 0
+        ;;
+    esac
+    ;;
+esac
+exit 0
