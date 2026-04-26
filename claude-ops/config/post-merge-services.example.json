@@ -1,0 +1,8 @@
+{
+  "_doc": "Service health registry for ops-deploy-monitor. Key = '<owner/repo>:<base_branch>'. Each entry: { health: <url>, version: <url> (optional, returns {commit/sha/gitSha}) }. Layered lookup: project .claude/post-merge-services.json (committed) → user ~/.claude/config/post-merge-services.json → this plugin default. Add your own services in user-level or per-project file.",
+  "your-org/your-api:dev": {
+    "health": "https://api-dev.example.com/health",
+    "version": "https://api-dev.example.com/version"
+  },
+  "your-org/your-api:main": { "health": "https://api.example.com/health", "version": "https://api.example.com/version" }
+}

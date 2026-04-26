@@ -1,0 +1,5 @@
+{
+  "version": "1.0",
+  "comment": "Default empty config. User overrides land at ~/.claude/plugins/data/ops-ops-marketplace/account-rotation-config.json (gitignored). Never commit real emails — Rule 0.",
+  "accounts": []
+}
