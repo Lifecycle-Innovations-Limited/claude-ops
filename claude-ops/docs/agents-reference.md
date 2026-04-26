@@ -4,8 +4,8 @@
 
 *All 14 agents that power claude-ops — scanners, fixers, C-suite analysts, and the daemon brain*
 
-[![version](https://img.shields.io/badge/version-1.7.0-blue)](../CHANGELOG.md)
-[![agents](https://img.shields.io/badge/agents-14-8b5cf6)](.)
+[![version](https://img.shields.io/badge/version-2.0.0-blue)](../CHANGELOG.md)
+[![agents](https://img.shields.io/badge/agents-18-8b5cf6)](.)
 [![sonnet](https://img.shields.io/badge/model-sonnet--4--6-6366f1)](.)
 [![opus](https://img.shields.io/badge/model-opus--4--6-ef4444)](.)
 [![haiku](https://img.shields.io/badge/model-haiku--4--5-22c55e)](.)
@@ -14,7 +14,10 @@
 
 ---
 
-All 14 agents in claude-ops v1.7.0. Agent files live in `agents/`.
+All 18 agents in claude-ops v2.0.0. Agent files live in `agents/`.
+
+> [!NOTE]
+> v2.0 added four pre-installed specialists — `general-purpose` (override), `deploy-fixer`, `build-fixer`, `dependency-auditor`. These power the deploy auto-fix subsystem and are silently routed to via the PreToolUse:Agent hook. See [`agents.md`](agents.md) for the v2 specialist catalog and [`deploy-fix.md`](deploy-fix.md) for the auto-fix subsystem.
 
 > [!NOTE]
 > Agents are spawned by skills — they are not invoked directly. Each has a `memory` scope for cross-session learning and a defined `effort` level that controls token budget.

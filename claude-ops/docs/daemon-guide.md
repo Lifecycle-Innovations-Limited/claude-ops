@@ -4,7 +4,10 @@
 
 *The unified background process manager that pre-warms briefings, syncs WhatsApp, extracts memories, and watches your fires — persistently, via launchd*
 
-[![version](https://img.shields.io/badge/version-1.1.0-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.0.0-blue)](../CHANGELOG.md)
+
+> [!NOTE]
+> v2.0 introduces two **additional** daemons alongside the v1 ops-daemon documented here: the **recap-daemon** ([`recap.md`](recap.md)) and the **account-rotation daemon** ([`CHANGELOG.md`](../CHANGELOG.md#6-multi-account-claude-max-rotator)). The ops-daemon described below is unchanged in v2.
 [![services](https://img.shields.io/badge/services-7-f59e0b)](.)
 [![launchd](https://img.shields.io/badge/runtime-launchd-6366f1)](.)
 [![pre--warm](https://img.shields.io/badge/pre--warm-every%202%20min-22c55e)](.)
