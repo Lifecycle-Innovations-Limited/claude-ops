@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# ops-deploy-fix-merge-trigger — PostToolUse hook on Bash, gated by `if: Bash(gh pr merge *)`.
+# Detects `gh pr merge <pr> --repo <owner/repo>` and spawns the deploy monitor in the background.
+# Single-flight per repo:base via lock; never duplicates.
+set -e
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+. "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh"
+
+is_enabled monitor_post_merge || exit 0
+
+INPUT=$(cat)
+cmd=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null)
+case "$cmd" in *"gh pr merge "*) ;; *) exit 0 ;; esac
+
+pr=$(printf '%s' "$cmd" | sed -E 's/.*gh pr merge[[:space:]]+([0-9]+).*/\1/' | head -c 10)
+repo=$(printf '%s' "$cmd" | sed -nE 's/.*--repo[[:space:]]+([^[:space:]]+).*/\1/p' | head -c 80)
+[ -z "$pr" ] || [ -z "$repo" ] && exit 0
+[[ "$pr" =~ ^[0-9]+$ ]] || exit 0
+
+# Single-flight: if a monitor is already in flight for this PR, no-op.
+slug=$(repo_slug_safe "$repo")
+monitor_lock="monitor-$slug-pr$pr"
+if [ -f "$STATE_DIR/lock-$monitor_lock" ] && kill -0 "$(cat "$STATE_DIR/lock-$monitor_lock" 2>/dev/null)" 2>/dev/null; then
+  exit 0
+fi
+
+nohup bash "$PLUGIN_ROOT/scripts/ops-deploy-monitor.sh" "$repo" "$pr" </dev/null >/dev/null 2>&1 &
+disown 2>/dev/null || true
+
+cat <<JSON
+{
+  "suppressOutput": true,
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "[ops-deploy-fix] Background monitor watching deploy of ${repo}#${pr}. Logs: ~/.claude/logs/ops-deploy-fix/. Will dispatch a Haiku fixer on failure (per-hour budget enforced)."
+  }
+}
+JSON
