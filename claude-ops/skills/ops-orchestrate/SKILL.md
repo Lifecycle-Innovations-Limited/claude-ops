@@ -340,6 +340,14 @@ SendMessage(to="mobile-worker", content="API endpoint ready. New: POST /v2/users
 3. When api-worker completes schema → `SendMessage` to consumer with the new types/endpoint
 4. Consumer proceeds with full context — no re-dispatch needed
 
+### Superpowers Integration
+
+During this command's execution, invoke the following superpower skill at the specified checkpoint:
+
+- **Checkpoint:** When dispatching 2+ parallel subagents/teammates to independent tasks at the start of each wave (Phase 3).
+- **Skill:** `superpowers:dispatching-parallel-agents`
+- **Why:** Enforces file-ownership boundaries and task-independence checks so concurrent agents don't overwrite each other or serialize hidden dependencies.
+
 ### Wave execution — NEVER idle
 
 ```
