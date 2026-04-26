@@ -4,7 +4,7 @@
 
 *Tracking where claude-ops is listed (or pending listing) across the Claude plugin ecosystem*
 
-[![version](https://img.shields.io/badge/version-1.1.0-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.0.0-blue)](../CHANGELOG.md)
 [![destinations](https://img.shields.io/badge/destinations-4-6366f1)](.)
 [![status](https://img.shields.io/badge/status-in--progress-f59e0b)](.)
 

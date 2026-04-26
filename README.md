@@ -4,12 +4,14 @@
 
 **Business Operating System for Claude Code**
 
-![Version](https://img.shields.io/badge/version-1.7.0-blue)
+![Version](https://img.shields.io/badge/version-2.0.0-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blueviolet.svg)
-![Skills](https://img.shields.io/badge/skills-30-success)
-![Agents](https://img.shields.io/badge/agents-14-informational)
+![Skills](https://img.shields.io/badge/skills-33%2B-success)
+![Agents](https://img.shields.io/badge/agents-18-informational)
 ![Integrations](https://img.shields.io/badge/integrations-22-orange)
+![Auto-fix](https://img.shields.io/badge/v2-auto--fix%20subsystem-ef4444)
+![Safety](https://img.shields.io/badge/v2-safety%20hooks-22c55e)
 ![Models](https://img.shields.io/badge/Opus%204.6%20%2F%20Sonnet%204.6%20%2F%20Haiku%204.5-ff69b4)
 
 **One command. Sixty seconds. Your entire business, at a glance.**
@@ -32,6 +34,44 @@
 ```
 
 Turn Claude Code into a complete business operating system — infrastructure health, CI/CD status, unified inbox, open PRs, sprint state, revenue snapshot (Stripe + RevenueCat + AWS), and autonomous C-suite agents that act on your behalf.
+
+---
+
+## What's new in v2.0
+
+v2 turns claude-ops from a *briefing + comms surface* into an **autonomy layer for Claude Code itself.** Purely additive — no v1 behaviour changes by default. See [`claude-ops/CHANGELOG.md`](claude-ops/CHANGELOG.md#200--2026-04-26) and [`docs/migrating-from-v1.md`](claude-ops/docs/migrating-from-v1.md).
+
+| Capability | Skill | Doc |
+|------------|-------|-----|
+| Post-merge + build-failure auto-fix (PostToolUse hooks → headless Haiku fixer) | [`/ops:deploy-fix`](claude-ops/skills/ops-deploy-fix/SKILL.md) | [deploy-fix.md](claude-ops/docs/deploy-fix.md) |
+| Pre-installed specialist agents + silent `general-purpose` → specialist routing | (transparent) | [agents.md](claude-ops/docs/agents.md) |
+| Universal safety hooks: secret-scan, `rm -rf` anchor block, `main` push warn | (always-on) | [safety-hooks.md](claude-ops/docs/safety-hooks.md) |
+| Recap marquee — multi-session digest in tmux `status-right` / `statusLine` | [`/ops:recap`](claude-ops/skills/ops-recap/SKILL.md) | [recap.md](claude-ops/docs/recap.md) |
+| Multi-account Claude Max rotator with launchd daemon + AI-brain | [`/ops:rotate`](claude-ops/skills/ops-rotate/SKILL.md), [`/ops:rotate-setup`](claude-ops/skills/ops-rotate-setup/SKILL.md) | [CHANGELOG](claude-ops/CHANGELOG.md#6-multi-account-claude-max-rotator) |
+| Periodic Task* tracking nudge | (PostToolUse hook) | [CHANGELOG](claude-ops/CHANGELOG.md#4-universal-task-tracking-nudge) |
+
+### Quick start for the auto-fix subsystem
+
+```bash
+# 1. Upgrade
+/plugin update ops@lifecycle-innovations-limited-claude-ops
+
+# 2. Run the wizard (hits new steps 6.5a–6.5d for v2 toggles)
+/ops:setup
+
+# 3. Map your repos to their deploy URLs
+/ops:deploy-fix configure
+# (opens ~/.claude/config/post-merge-services.json)
+
+# 4. From now on, every `gh pr merge` you run from Claude Code will:
+#    - poll the deploy workflow
+#    - curl /health on success
+#    - verify /version returns the merged SHA
+#    - on failure: auto-rerun transients, OR dispatch a Haiku deploy-fixer
+/ops:deploy-fix          # see status / budget / live runs
+```
+
+Per-repo budget caps (default 3/hour), single-flight locks, and content-hash dedup prevent runaway spending. Notifications route via `macos`/`ntfy`/`pushover`/`discord`/`telegram`/`none`. Every toggle is spacebar-toggleable in `/plugins` settings.
 
 ---
 
