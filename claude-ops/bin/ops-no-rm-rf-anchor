@@ -100,8 +100,7 @@ DANGER=$(set -f; while IFS= read -r seg; do
     if [[ "$tok" == '"$HOME"' || "$tok" == '"$HOME"/' || "$tok" == '"$HOME"/*' ]]; then
       DANGER="$tok"; break
     fi
-    # Only inspect the first non-flag target — that's enough to flag.
-    break
+    # Check ALL non-flag targets — "rm -rf /tmp/build /" must still be blocked.
   done
 
   if [[ -n "$DANGER" ]]; then
