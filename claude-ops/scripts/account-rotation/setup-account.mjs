@@ -241,16 +241,44 @@ async function runOAuth(args) {
     }
   }
 
+  // Poll for 2FA indicators while waiting for the post-login app shell.
+  // This emits a log line the SKILL.md contract expects so the operator
+  // can relay a TOTP code via AskUserQuestion.
+  let twoFaLogged = false;
+  const twoFaPoll = setInterval(async () => {
+    if (twoFaLogged) return;
+    try {
+      const has2FA = await page.evaluate(() => {
+        const text = (document.body?.innerText || '').toLowerCase();
+        return (
+          text.includes('two-factor') ||
+          text.includes('2fa') ||
+          text.includes('verification code') ||
+          text.includes('authenticator') ||
+          text.includes('one-time') ||
+          !!document.querySelector('input[autocomplete="one-time-code"]')
+        );
+      });
+      if (has2FA) {
+        twoFaLogged = true;
+        log('2FA prompt detected');
+      }
+    } catch {
+      /* page may have navigated — ignore */
+    }
+  }, 3000);
   // Wait for the post-login app shell. 10 min ceiling for 2FA / manual click.
   try {
     await page.waitForURL(/claude\.ai\/(?:chats?|new|projects)/, {
       timeout: 10 * 60 * 1000,
     });
   } catch (e) {
+    clearInterval(twoFaPoll);
     log(`login did not complete in time: ${e.message}`);
     await browser.close();
     return null;
   }
+  clearInterval(twoFaPoll);
 
   const cookies = await ctx.cookies('https://claude.ai');
   const session = cookies.find((c) => c.name === 'sessionKey' || c.name === '__Secure-next-auth.session-token');

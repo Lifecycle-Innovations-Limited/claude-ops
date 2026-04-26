@@ -136,10 +136,15 @@ echo "PID=$! LOG=$LOG"
   1. Opens Playwright Chromium
   2. Navigates to `claude.ai/login`, fills email, submits magic-link
   3. Polls Gmail via `gog` (best-effort) OR waits up to 10 minutes for the user to click the link manually
-  4. Captures `sessionKey` cookie
+  4. Captures `sessionKey` or `__Secure-next-auth.session-token` cookie
   5. Verifies via `GET claude.ai/api/organizations`
   6. Writes to keychain as `Claude-Rotation-<account_id>` via `credential-store.sh`
-- **2FA / TOTP**: if the script logs `2FA prompt detected`, ask the user via `AskUserQuestion` to type the code; do NOT attempt to auto-solve.
+- **2FA / TOTP**: the script polls the page for two-factor prompts every 3 seconds.
+  If it detects one it logs `2FA prompt detected` to stderr. When you see that
+  line in the log, ask the user via `AskUserQuestion` to provide the TOTP code.
+  In **headless** mode the code cannot be typed into the browser — re-run the
+  account with `--no-headless` so the user can complete 2FA interactively.
+  Do NOT attempt to auto-solve 2FA.
 
 After each account completes (success or failure):
 
@@ -189,3 +194,4 @@ to the user, made explicitly through the plugin settings UI.
 | `verify_failed` | session cookie captured but rejected | Re-run; likely transient |
 | `keychain_write_failed` | no backend available | Run `bash $CRED backends` and surface options |
 | `no session cookie` | login flow blocked by 2FA | Re-run with `--no-headless` so user can complete in-browser |
+| `2FA prompt detected` + timeout | 2FA required in headless mode | Re-run with `--no-headless`; prompt user for TOTP via `AskUserQuestion` |
