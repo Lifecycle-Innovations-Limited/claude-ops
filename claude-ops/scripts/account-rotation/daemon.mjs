@@ -17,22 +17,32 @@
  *   node daemon.mjs --status  # Show daemon status
  */
 
-import { readFileSync, writeFileSync, existsSync, unlinkSync, appendFileSync, statSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import { execSync, execFileSync, spawn, spawnSync } from 'child_process';
-import { tmpdir } from 'os';
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  unlinkSync,
+  appendFileSync,
+  statSync,
+} from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+import { execSync, spawn } from "child_process";
+import { tmpdir } from "os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, 'config.json');
-const STATE_PATH = join(__dirname, 'state.json');
-const LOG_PATH = join(__dirname, 'rotation.log');
-const PID_FILE = join(__dirname, '.daemon.pid');
-const ROTATE_SCRIPT = join(__dirname, 'rotate.mjs');
+const CONFIG_PATH = join(__dirname, "config.json");
+const STATE_PATH = join(__dirname, "state.json");
+const LOG_PATH = join(__dirname, "rotation.log");
+const PID_FILE = join(__dirname, ".daemon.pid");
+const ROTATE_SCRIPT = join(__dirname, "rotate.mjs");
 
 // Keychain account name — must match rotate.mjs convention.
 const KEYCHAIN_ACCOUNT =
-  process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || process.env.LOGNAME || 'claude-ops';
+  process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT ||
+  process.env.USER ||
+  process.env.LOGNAME ||
+  "claude-ops";
 
 const POLL_INTERVAL = 15_000; // Check every 15s — fast enough to catch hook-triggered 429 signals (fireAt = now+15s)
 const RATE_LIMIT_COOLDOWN = 10_000; // 10s after rate limit before rotating
@@ -45,14 +55,17 @@ function log(msg) {
   const line = `[${new Date().toISOString()}] [daemon] ${msg}`;
   console.error(line);
   try {
-    appendFileSync(LOG_PATH, line + '\n');
+    appendFileSync(LOG_PATH, line + "\n");
     // Truncate: keep last half when exceeding max
     try {
       const { size } = statSync(LOG_PATH);
       if (size > MAX_LOG_SIZE) {
-        const content = readFileSync(LOG_PATH, 'utf8');
-        const lines = content.split('\n');
-        writeFileSync(LOG_PATH, lines.slice(Math.floor(lines.length / 2)).join('\n'));
+        const content = readFileSync(LOG_PATH, "utf8");
+        const lines = content.split("\n");
+        writeFileSync(
+          LOG_PATH,
+          lines.slice(Math.floor(lines.length / 2)).join("\n"),
+        );
       }
     } catch {}
   } catch {}
@@ -60,24 +73,18 @@ function log(msg) {
 
 function notify(title, msg) {
   try {
-    // Use execFileSync to avoid shell interpretation of quotes in title/msg
-    execFileSync(
-      'osascript',
-      [
-        '-e',
-        `display notification "${msg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" with title "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
-      ],
-      { timeout: 5000 },
+    execSync(
+      `osascript -e 'display notification "${msg.replace(/"/g, '\\"')}" with title "${title}"'`,
     );
   } catch {}
 }
 
 function readConfig() {
-  return JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+  return JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
 }
 function readState() {
   try {
-    return JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+    return JSON.parse(readFileSync(STATE_PATH, "utf8"));
   } catch {
     return {
       activeAccount: null,
@@ -105,16 +112,20 @@ function accountCooldownStatus(state) {
     }
     const resetMs = util.reset ? util.reset * 1000 : 0;
     const fresh = resetMs && resetMs < now;
-    const pct = util.pct ?? '?';
+    const pct = util.pct ?? "?";
     if (fresh) {
-      summary.push(`  ${key}: READY (reset ${Math.round((now - resetMs) / 60_000)}min ago, was ${pct}%)`);
+      summary.push(
+        `  ${key}: READY (reset ${Math.round((now - resetMs) / 60_000)}min ago, was ${pct}%)`,
+      );
     } else if (resetMs) {
-      summary.push(`  ${key}: COOLING (${pct}%, resets in ${Math.round((resetMs - now) / 60_000)}min)`);
+      summary.push(
+        `  ${key}: COOLING (${pct}%, resets in ${Math.round((resetMs - now) / 60_000)}min)`,
+      );
     } else {
       summary.push(`  ${key}: ${pct}% (no reset info)`);
     }
   }
-  return summary.join('\n');
+  return summary.join("\n");
 }
 
 function accountKey(a) {
@@ -135,11 +146,10 @@ function tokenExpired(json) {
 function readStoredToken(account) {
   const svc = `Claude-Rotation-${accountKey(account)}`;
   try {
-    const result = spawnSync('security', ['find-generic-password', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-g'], {
-      timeout: 5000,
-      encoding: 'utf8',
-    });
-    const out = (result.stdout || '') + (result.stderr || '');
+    const out = execSync(
+      `security find-generic-password -s "${svc}" -a "${KEYCHAIN_ACCOUNT}" -g 2>&1`,
+      { timeout: 5000 },
+    ).toString();
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
@@ -149,12 +159,10 @@ function readStoredToken(account) {
 
 function readActiveKeychainToken() {
   try {
-    const r = spawnSync(
-      'security',
-      ['find-generic-password', '-s', 'Claude Code-credentials', '-a', KEYCHAIN_ACCOUNT, '-g'],
-      { encoding: 'utf8', timeout: 5000 },
-    );
-    const out = `${r.stdout || ''}${r.stderr || ''}`;
+    const out = execSync(
+      'security find-generic-password -s "Claude Code-credentials" -g 2>&1',
+      { timeout: 5000 },
+    ).toString();
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
@@ -182,11 +190,11 @@ async function detectLiveAccountFromVault(config) {
   }
   // Vault miss — query profile to get the actual email
   try {
-    const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
-      method: 'GET',
+    const res = await fetch("https://api.anthropic.com/api/oauth/profile", {
+      method: "GET",
       headers: {
         Authorization: `Bearer ${liveTok}`,
-        'anthropic-beta': 'oauth-2025-04-20',
+        "anthropic-beta": "oauth-2025-04-20",
       },
       signal: AbortSignal.timeout(5000),
     });
@@ -195,13 +203,17 @@ async function detectLiveAccountFromVault(config) {
     const liveEmail = body?.account?.email?.toLowerCase();
     if (!liveEmail) return null;
     // Map email → account key (handle multi-org accounts via label)
-    const matches = config.accounts.filter((a) => a.email.toLowerCase() === liveEmail);
+    const matches = config.accounts.filter(
+      (a) => a.email.toLowerCase() === liveEmail,
+    );
     if (matches.length === 1) return accountKey(matches[0]);
     if (matches.length > 1) {
-      // Multiple labels for same email (e.g. user-personal vs -team).
+      // Multiple labels for same email (e.g. heartfeldt-personal vs -team).
       // Use orgName from profile to disambiguate.
-      const orgName = body?.organization?.name?.toLowerCase() || '';
-      const byOrg = matches.find((a) => (a.orgName || '').toLowerCase() === orgName);
+      const orgName = body?.organization?.name?.toLowerCase() || "";
+      const byOrg = matches.find((a) =>
+        (a.orgName || "").toLowerCase() === orgName,
+      );
       if (byOrg) return accountKey(byOrg);
     }
     return null;
@@ -212,13 +224,13 @@ async function detectLiveAccountFromVault(config) {
 
 // ── Real utilization from Anthropic (via statusline export) ──────────────────
 
-const RATE_LIMITS_FILE = join(__dirname, '.rate-limits.json');
+const RATE_LIMITS_FILE = join(__dirname, ".rate-limits.json");
 const UTILIZATION_ROTATE_THRESHOLD = 80; // Rotate at 80% — with 8+ concurrent sessions burning tokens fast, 95% was too late (hit 100% between statusline updates)
 
 function readRealUtilization() {
   try {
     if (!existsSync(RATE_LIMITS_FILE)) return null;
-    const data = JSON.parse(readFileSync(RATE_LIMITS_FILE, 'utf8'));
+    const data = JSON.parse(readFileSync(RATE_LIMITS_FILE, "utf8"));
     const age = Date.now() - data.ts * 1000;
     if (age > 5 * 60_000) return null; // Stale (>5min) — session may be dead
     return data;
@@ -259,9 +271,9 @@ function checkRateLimited() {
   // real 429 response. We honor the delay to give the user time to see the
   // error and let the rotation complete before they retry.
   try {
-    const rateLimitFile = join(tmpdir(), 'claude-rate-limited.json');
+    const rateLimitFile = join(tmpdir(), "claude-rate-limited.json");
     if (existsSync(rateLimitFile)) {
-      const data = JSON.parse(readFileSync(rateLimitFile, 'utf8'));
+      const data = JSON.parse(readFileSync(rateLimitFile, "utf8"));
       const fireAt = data.fireAt || 0;
       const age = Date.now() - new Date(data.timestamp).getTime();
       if (age > 5 * 60_000) {
@@ -272,7 +284,7 @@ function checkRateLimited() {
         unlinkSync(rateLimitFile);
         return {
           limited: true,
-          reason: `429 signal: ${(data.reason || 'rate_limit').substring(0, 120)}`,
+          reason: `429 signal: ${(data.reason || "rate_limit").substring(0, 120)}`,
         };
       }
       // else: signal fresh but delay not elapsed — wait for next poll
@@ -288,7 +300,7 @@ function getActiveAccount(config, activeKey) {
   return config.accounts.find((a) => accountKey(a) === activeKey) || null;
 }
 
-const AUTH_ERROR_FILE = join(tmpdir(), 'claude-auth-error.json');
+const AUTH_ERROR_FILE = join(tmpdir(), "claude-auth-error.json");
 
 async function shouldRotate(config, state) {
   // 1. Real utilization from statusline (PRIMARY signal for rotation)
@@ -298,14 +310,14 @@ async function shouldRotate(config, state) {
   // 2. Auth error signal (401) from PostToolUseFailure hook
   try {
     if (existsSync(AUTH_ERROR_FILE)) {
-      const sig = JSON.parse(readFileSync(AUTH_ERROR_FILE, 'utf8'));
+      const sig = JSON.parse(readFileSync(AUTH_ERROR_FILE, "utf8"));
       const age = Date.now() - new Date(sig.timestamp).getTime();
       if (age < 5 * 60_000) {
         unlinkSync(AUTH_ERROR_FILE);
-        log(`401 auth error detected: ${sig.reason || 'unknown'}`);
+        log(`401 auth error detected: ${sig.reason || "unknown"}`);
         return {
           should: true,
-          reason: `Auth error (401): ${sig.reason || 'invalid credentials'}`,
+          reason: `Auth error (401): ${sig.reason || "invalid credentials"}`,
         };
       }
       unlinkSync(AUTH_ERROR_FILE); // Stale
@@ -318,28 +330,34 @@ async function shouldRotate(config, state) {
     const token = readStoredToken(account);
     if (token && tokenExpired(token)) {
       // Try refreshing the active token in-place before rotating
-      log('[active-refresh] Active token expiring — attempting in-place refresh');
+      log(
+        "[active-refresh] Active token expiring — attempting in-place refresh",
+      );
       const refreshed = await refreshSingleToken(account);
       if (refreshed) {
         // Also update the active keychain so running sessions pick it up on next /login
         try {
           const freshToken = readStoredToken(account);
           if (freshToken) {
-            const svc = 'Claude Code-credentials';
-            execFileSync(
-              'security',
-              ['add-generic-password', '-U', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-w', freshToken],
+            const svc = "Claude Code-credentials";
+            const escaped = freshToken.replace(/"/g, '\\"');
+            execSync(
+              `security add-generic-password -U -s "${svc}" -a "${KEYCHAIN_ACCOUNT}" -w "${escaped}"`,
               { timeout: 5000 },
             );
-            log('[active-refresh] Active keychain updated — sessions will auto-recover');
+            log(
+              "[active-refresh] Active keychain updated — sessions will auto-recover",
+            );
           }
         } catch (err) {
-          log(`[active-refresh] Keychain update failed: ${err.message?.substring(0, 60)}`);
+          log(
+            `[active-refresh] Keychain update failed: ${err.message?.substring(0, 60)}`,
+          );
         }
         return { should: false }; // Refreshed in-place, no rotation needed
       }
-      log('[active-refresh] Refresh failed — triggering rotation');
-      return { should: true, reason: 'Token expired and refresh failed' };
+      log("[active-refresh] Refresh failed — triggering rotation");
+      return { should: true, reason: "Token expired and refresh failed" };
     }
   }
 
@@ -356,11 +374,11 @@ async function queryLiveUtilization(account) {
     if (!tokenJson) return null;
     const accessToken = JSON.parse(tokenJson)?.claudeAiOauth?.accessToken;
     if (!accessToken) return null;
-    const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
-      method: 'GET',
+    const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
+      method: "GET",
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        'anthropic-beta': 'oauth-2025-04-20',
+        "anthropic-beta": "oauth-2025-04-20",
       },
       signal: AbortSignal.timeout(4000),
     });
@@ -382,7 +400,9 @@ async function findValidRotationTarget(config, state) {
   const SAFE_UTIL_7D_PCT = 95; // 7d resets weekly — only hard-skip if truly capped
 
   // Build candidate list: all accounts except the active one AND disabled ones.
-  const candidates = config.accounts.filter((a) => accountKey(a) !== activeKey && a.disabled !== true);
+  const candidates = config.accounts.filter(
+    (a) => accountKey(a) !== activeKey && a.disabled !== true,
+  );
 
   // Sort by cached util (best-guess ordering before live query). Treat
   // missing reset as "unknown utilization" — DON'T treat null reset as
@@ -420,7 +440,9 @@ async function findValidRotationTarget(config, state) {
       }
       log(`[pre-rotate] ${key}: refresh succeeded`);
     } else {
-      log(`[pre-rotate] ${key}: token valid (${((expiry - now) / 3_600_000).toFixed(1)}h remaining)`);
+      log(
+        `[pre-rotate] ${key}: token valid (${((expiry - now) / 3_600_000).toFixed(1)}h remaining)`,
+      );
     }
 
     // Live util check — never rotate to a high-utilization account.
@@ -447,7 +469,9 @@ async function findValidRotationTarget(config, state) {
         };
         continue;
       }
-      log(`[pre-rotate] ${key}: live util 5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}% — OK`);
+      log(
+        `[pre-rotate] ${key}: live util 5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}% — OK`,
+      );
     } else {
       log(`[pre-rotate] ${key}: live util query failed — accepting anyway`);
     }
@@ -459,17 +483,17 @@ async function findValidRotationTarget(config, state) {
 }
 
 async function doRotation(reason) {
-  const lockFile = join(__dirname, '.rotating');
+  const lockFile = join(__dirname, ".rotating");
   // Lock format written by rotate.mjs: `<ISO timestamp>\n<pid>`. If the holder
   // PID is still alive, skip — don't race even if the wall-clock is ancient
   // (browser OAuth flows can legitimately run several minutes).
   const LOCK_HARD_CEILING_MS = 15 * 60_000;
   if (existsSync(lockFile)) {
     try {
-      const raw = readFileSync(lockFile, 'utf8').trim();
+      const raw = readFileSync(lockFile, "utf8").trim();
       const [tsStr, pidStr] = raw.split(/\s+/);
       const age = Date.now() - new Date(tsStr).getTime();
-      const pid = parseInt(pidStr || '', 10);
+      const pid = parseInt(pidStr || "", 10);
       let holderAlive = false;
       if (Number.isFinite(pid) && pid > 0) {
         try {
@@ -481,7 +505,7 @@ async function doRotation(reason) {
         log(`Rotation already in progress (holder PID ${pid}, ${Math.round(age / 1000)}s) — skipping`);
         return;
       }
-      if (!holderAlive) log(`Stale lock (PID ${pid || '?'} dead) — proceeding`);
+      if (!holderAlive) log(`Stale lock (PID ${pid || "?"} dead) — proceeding`);
       else log(`Lock exceeded hard ceiling (${Math.round(age / 60_000)}min) — proceeding`);
     } catch {
       // Unparseable lock — treat as stale
@@ -496,39 +520,97 @@ async function doRotation(reason) {
   const target = await findValidRotationTarget(config, state);
 
   if (!target) {
-    log('ROTATION ABORTED: no candidate has a valid or refreshable token');
-    notify('Account Rotation', 'ABORTED — all candidate tokens expired/invalid');
+    log("ROTATION ABORTED: no candidate has a valid or refreshable token");
+    notify(
+      "Account Rotation",
+      "ABORTED — all candidate tokens expired/invalid",
+    );
     return;
   }
 
   const targetKey = accountKey(target);
-  log(`Target account: ${targetKey} — token validated, proceeding with rotation`);
-  notify('Claude Account Rotation', `Auto-rotating to ${targetKey}: ${reason}`);
+  log(
+    `Target account: ${targetKey} — token validated, proceeding with rotation`,
+  );
+  notify("Claude Account Rotation", `Auto-rotating to ${targetKey}: ${reason}`);
 
   try {
     // --no-browser: no Chrome, no API calls (works when rate limited)
     // --to: daemon controls which account to rotate to (pre-validated token)
-    // NO --session: keychain swap only. Running sessions can't accept /login mid-work.
-    // When sessions hit the wall they show "not logged in" — user runs /login → instant
-    // success because the fresh token is already in the keychain.
-    // --session: inject /login into running sessions (safe — keychain token is pre-validated)
-    const result = execFileSync(process.execPath, [ROTATE_SCRIPT, '--no-browser', '--session', '--to', targetKey], {
-      cwd: __dirname,
-      timeout: 300_000, // 5min — session restart takes ~15s per session × up to 8 sessions
-      env: { ...process.env, NODE_NO_WARNINGS: '1' },
-    }).toString();
+    // NO --session: keychain swap only. Background rotation must NEVER inject /login
+    // into running sessions — that interrupts active work. Sessions pick up the new
+    // token on next 401 (auto-retry) or when the user voluntarily runs /login.
+    // execFileSync (not execSync) — no shell, no injection risk on targetKey.
+    const result = execFileSync(
+      "node",
+      [ROTATE_SCRIPT, "--no-browser", "--to", targetKey],
+      {
+        cwd: __dirname,
+        timeout: 120_000, // 2min — keychain swap is fast; no per-session injection
+        env: { ...process.env, NODE_NO_WARNINGS: "1" },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    ).toString();
     log(`Rotation result: ${result.substring(0, 200)}`);
   } catch (err) {
     log(`Rotation failed: ${err.message}`);
-    notify('Account Rotation', `Auto-rotation failed: ${err.message.substring(0, 60)}`);
+    notify(
+      "Account Rotation",
+      `Auto-rotation failed: ${err.message.substring(0, 60)}`,
+    );
   }
 }
 
-// ── Token refresh (vault entries) ───────────────────────────────────────────
-// In-place refresh via OAuth; invoked from shouldRotate / findValidRotationTarget.
+// ── Auto-sync: detect if live auth drifted from state ────────────────────────
 
-const TOKEN_ENDPOINT = 'https://platform.claude.com/v1/oauth/token';
-const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+function syncDriftedState(state, config, lastRotatedAt = 0) {
+  // After a rotation, `claude auth status` still returns the OLD session's email
+  // until the user restarts Claude Code. Don't undo the rotation by "correcting"
+  // state back to the stale live email — wait for the blackout to pass.
+  // Use the shared state.lastRotation (written by rotate.mjs) so duplicate daemon
+  // instances both respect the blackout, even if one of them didn't do the rotation.
+  const stateLastRotation = state.lastRotation
+    ? new Date(state.lastRotation).getTime()
+    : 0;
+  const effectiveLastRotation = Math.max(lastRotatedAt, stateLastRotation);
+  if (
+    effectiveLastRotation &&
+    Date.now() - effectiveLastRotation < POST_ROTATION_BLACKOUT
+  )
+    return false;
+
+  try {
+    const liveAuth = execSync("claude auth status 2>&1", {
+      timeout: 5_000,
+    }).toString();
+    const liveEmail = JSON.parse(liveAuth)?.email;
+    if (!liveEmail) return false;
+
+    const liveKey = config.accounts.find((a) => a.email === liveEmail);
+    if (!liveKey) return false;
+
+    const liveAccountKey = accountKey(liveKey);
+    if (state.activeAccount !== liveAccountKey) {
+      log(
+        `⚠️ DRIFT DETECTED: state says ${state.activeAccount || "none"}, live auth is ${liveAccountKey} — syncing state`,
+      );
+      state.activeAccount = liveAccountKey;
+      writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+      return true; // Drift was corrected
+    }
+  } catch {}
+  return false;
+}
+
+// ── Dynamic token refresh ────────────────────────────────────────────────────
+// Instead of a fixed hourly launchd job refreshing all accounts, refresh
+// on-demand: when utilization is climbing (50%+), pre-refresh candidate
+// accounts so they're ready for rotation. Also refresh any token within
+// 1h of expiry regardless of utilization.
+
+const TOKEN_ENDPOINT = "https://platform.claude.com/v1/oauth/token";
+const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const REFRESH_URGENCY_MS = 1 * 3_600_000; // Refresh if <1h remaining
 
 function parseTokenExpiry(tokenJson) {
   try {
@@ -556,10 +638,10 @@ async function refreshSingleToken(account) {
 
   try {
     const res = await fetch(TOKEN_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        grant_type: 'refresh_token',
+        grant_type: "refresh_token",
         refresh_token: refreshToken,
         client_id: OAUTH_CLIENT_ID,
       }),
@@ -569,15 +651,17 @@ async function refreshSingleToken(account) {
 
     const parsed = JSON.parse(tokenJson);
     parsed.claudeAiOauth.accessToken = body.access_token;
-    if (body.refresh_token) parsed.claudeAiOauth.refreshToken = body.refresh_token;
-    parsed.claudeAiOauth.expiresAt = body.expires_in ? Date.now() + body.expires_in * 1000 : Date.now() + 8 * 3_600_000;
+    if (body.refresh_token)
+      parsed.claudeAiOauth.refreshToken = body.refresh_token;
+    parsed.claudeAiOauth.expiresAt = body.expires_in
+      ? Date.now() + body.expires_in * 1000
+      : Date.now() + 8 * 3_600_000;
 
     // Save back to vault
     const svc = `Claude-Rotation-${key}`;
-    // Use execFileSync to avoid shell-escaping issues with JSON tokens
-    execFileSync(
-      'security',
-      ['add-generic-password', '-U', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-w', JSON.stringify(parsed)],
+    const escaped = JSON.stringify(parsed).replace(/"/g, '\\"');
+    execSync(
+      `security add-generic-password -U -s "${svc}" -a "${KEYCHAIN_ACCOUNT}" -w "${escaped}"`,
       { timeout: 5000 },
     );
     log(
@@ -590,14 +674,41 @@ async function refreshSingleToken(account) {
   }
 }
 
+async function dynamicRefresh(config, state) {
+  const now = Date.now();
+  const real = readRealUtilization();
+  const pct5h = real?.five_hour?.pct || 0;
+
+  for (const account of config.accounts) {
+    const key = accountKey(account);
+    if (key === state.activeAccount) continue; // Don't refresh active account mid-session
+
+    const tokenJson = readStoredToken(account);
+    if (!tokenJson) continue;
+    const expiry = parseTokenExpiry(tokenJson);
+    const remaining = expiry - now;
+
+    // Refresh if: token expiring within 1h, OR utilization >50% and token <3h
+    const urgent = remaining > 0 && remaining < REFRESH_URGENCY_MS;
+    const preemptive =
+      pct5h >= 50 && remaining > 0 && remaining < 3 * 3_600_000;
+
+    if (urgent || preemptive) {
+      await refreshSingleToken(account);
+      await sleep(2000); // Don't hammer the token endpoint
+    }
+  }
+}
+
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 async function mainLoop() {
-  log('Daemon started (v3 — on-demand token refresh)');
-  notify('Claude Rotation Daemon', 'Monitoring usage — on-demand refresh');
+  log("Daemon started (v3 — dynamic refresh, no hourly launchd)");
+  notify("Claude Rotation Daemon", "Monitoring usage — dynamic refresh");
 
   let lastRotatedAt = 0; // track when we last rotated
   let lastStatusLog = 0; // periodic status logging
+  let lastRefreshCheck = 0; // dynamic refresh check
   let lastDriftCheck = 0; // cheap vault-based drift detection
 
   while (true) {
@@ -624,12 +735,18 @@ async function mainLoop() {
       // (crashed rotation, manual /login, leftover lock).
       if (Date.now() - lastDriftCheck > 120_000) {
         lastDriftCheck = Date.now();
-        const stateLastRotation2 = state.lastRotation ? new Date(state.lastRotation).getTime() : 0;
-        const inBlackoutDrift = stateLastRotation2 && Date.now() - stateLastRotation2 < POST_ROTATION_BLACKOUT;
+        const stateLastRotation2 = state.lastRotation
+          ? new Date(state.lastRotation).getTime()
+          : 0;
+        const inBlackoutDrift =
+          stateLastRotation2 &&
+          Date.now() - stateLastRotation2 < POST_ROTATION_BLACKOUT;
         if (!inBlackoutDrift) {
           const liveKey = await detectLiveAccountFromVault(config);
           if (liveKey && liveKey !== state.activeAccount) {
-            log(`⚠️ DRIFT: state=${state.activeAccount || 'none'} but keychain=${liveKey} — syncing state.json`);
+            log(
+              `⚠️ DRIFT: state=${state.activeAccount || "none"} but keychain=${liveKey} — syncing state.json`,
+            );
             state.activeAccount = liveKey;
             writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
           }
@@ -646,13 +763,21 @@ async function mainLoop() {
       // Post-rotation blackout: ALL rotation triggers are suppressed for 90s
       // after any rotation. `claude auth status` returns stale data during this
       // window, which causes drift detection → re-rotation thrashing loops.
-      const stateLastRotation = state.lastRotation ? new Date(state.lastRotation).getTime() : 0;
+      const stateLastRotation = readState().lastRotation
+        ? new Date(readState().lastRotation).getTime()
+        : 0;
       const effectiveLastRotated = Math.max(lastRotatedAt, stateLastRotation);
-      const inBlackout = effectiveLastRotated && Date.now() - effectiveLastRotated < POST_ROTATION_BLACKOUT;
+      const inBlackout =
+        effectiveLastRotated &&
+        Date.now() - effectiveLastRotated < POST_ROTATION_BLACKOUT;
 
       if (should && inBlackout) {
-        const remaining = Math.ceil((POST_ROTATION_BLACKOUT - (Date.now() - effectiveLastRotated)) / 1000);
-        log(`Post-rotation blackout: ignoring "${reason}" for ${remaining}s more`);
+        const remaining = Math.ceil(
+          (POST_ROTATION_BLACKOUT - (Date.now() - effectiveLastRotated)) / 1000,
+        );
+        log(
+          `Post-rotation blackout: ignoring "${reason}" for ${remaining}s more`,
+        );
       } else if (should) {
         await doRotation(reason);
         lastRotatedAt = Date.now();
@@ -670,9 +795,9 @@ async function mainLoop() {
 
 const args = process.argv.slice(2);
 
-if (args.includes('--stop')) {
+if (args.includes("--stop")) {
   if (existsSync(PID_FILE)) {
-    const pid = readFileSync(PID_FILE, 'utf8').trim();
+    const pid = readFileSync(PID_FILE, "utf8").trim();
     try {
       process.kill(parseInt(pid));
       log(`Stopped daemon (PID ${pid})`);
@@ -682,28 +807,28 @@ if (args.includes('--stop')) {
     } catch {}
     console.log(`Daemon stopped (PID ${pid})`);
   } else {
-    console.log('No daemon running');
+    console.log("No daemon running");
   }
-} else if (args.includes('--status')) {
+} else if (args.includes("--status")) {
   if (existsSync(PID_FILE)) {
-    const pid = readFileSync(PID_FILE, 'utf8').trim();
+    const pid = readFileSync(PID_FILE, "utf8").trim();
     try {
       process.kill(parseInt(pid), 0); // Check if alive
       console.log(`Daemon running (PID ${pid})`);
     } catch {
-      console.log('Daemon PID file exists but process is dead');
+      console.log("Daemon PID file exists but process is dead");
       unlinkSync(PID_FILE);
     }
   } else {
-    console.log('Daemon not running');
+    console.log("Daemon not running");
   }
-} else if (args.includes('--bg')) {
+} else if (args.includes("--bg")) {
   // Daemonize
-  const child = spawn('node', [join(__dirname, 'daemon.mjs')], {
+  const child = spawn("node", [join(__dirname, "daemon.mjs")], {
     cwd: __dirname,
     detached: true,
-    stdio: 'ignore',
-    env: { ...process.env, NODE_NO_WARNINGS: '1' },
+    stdio: "ignore",
+    env: { ...process.env, NODE_NO_WARNINGS: "1" },
   });
   child.unref();
   writeFileSync(PID_FILE, String(child.pid));
@@ -715,13 +840,13 @@ if (args.includes('--stop')) {
 } else {
   // Foreground
   writeFileSync(PID_FILE, String(process.pid));
-  process.on('SIGINT', () => {
+  process.on("SIGINT", () => {
     try {
       unlinkSync(PID_FILE);
     } catch {}
     process.exit(0);
   });
-  process.on('SIGTERM', () => {
+  process.on("SIGTERM", () => {
     try {
       unlinkSync(PID_FILE);
     } catch {}
