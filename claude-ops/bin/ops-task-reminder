@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# ops-task-reminder — PostToolUse hook on every tool.
+# Per-session counter at $STATE_DIR/task-reminder-<sid>. When N non-Task tool calls
+# occur without any Task* call, injects a system-reminder via additionalContext.
+# Counter resets to 0 on any Task* tool use.
+set -e
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+. "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh" 2>/dev/null || {
+  STATE_DIR="$HOME/.claude/state/ops"
+  mkdir -p "$STATE_DIR" 2>/dev/null
+  config() { echo "${2:-}"; }
+}
+
+[ "$(config task_reminder_enabled true)" = "false" ] && exit 0
+THRESHOLD=$(config task_reminder_threshold 10)
+
+INPUT=$(cat)
+sid=$(printf '%s' "$INPUT" | jq -r '.session_id // "default"' 2>/dev/null)
+tool=$(printf '%s' "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null)
+state_file="$STATE_DIR/task-reminder-${sid}"
+
+case "$tool" in
+  Task*) echo 0 > "$state_file"; exit 0 ;;
+esac
+
+count=$(cat "$state_file" 2>/dev/null || echo 0)
+count=$((count + 1))
+
+if [ "$count" -ge "$THRESHOLD" ]; then
+  echo 0 > "$state_file"
+  cat <<JSON
+{
+  "suppressOutput": true,
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "[ops-task-reminder] No Task* tool used in the last $THRESHOLD calls. For multi-step work, consider TaskCreate to track open items, TaskUpdate to mark progress, TaskList to review status. Skip this reminder if your current work is a single quick action."
+  }
+}
+JSON
+else
+  echo "$count" > "$state_file"
+fi
+exit 0
