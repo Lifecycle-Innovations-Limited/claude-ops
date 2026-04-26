@@ -162,8 +162,9 @@ resolve_version_url() {
 }
 
 dispatch_fix_agent() {
-  # $1 = prompt template path (in $PLUGIN_ROOT/prompts/), $2 = lock_id, rest = template vars as KEY=VAL
-  local template="$1" lock_id="$2"; shift 2
+  # $1 = agent_name (matches claude-ops/agents/<name>.md OR ~/.claude/agents/<name>.md)
+  # $2 = lock_id, rest = context vars as KEY=VAL (substituted into a thin task brief)
+  local agent_name="$1" lock_id="$2"; shift 2
   if ! lock_acquire "$lock_id"; then
     return 2  # already in flight
   fi
@@ -174,28 +175,30 @@ dispatch_fix_agent() {
     return 3
   fi
 
-  local prompt_file="$PLUGIN_ROOT/prompts/$template"
-  if [ ! -f "$prompt_file" ]; then
-    lock_release "$lock_id"
-    return 4
-  fi
-  local prompt=$(cat "$prompt_file")
+  # Build the thin task brief — full persona/tools/model come from the agent file.
+  local context=""
   for kv in "$@"; do
     local k="${kv%%=*}" v="${kv#*=}"
-    prompt="${prompt//\{\{${k}\}\}/$v}"
+    context="${context}${k}: ${v}"$'\n'
   done
 
   local fix_log="$LOGS_DIR/fix-${lock_id}-$(date +%s).log"
-  local model=$(config fix_model haiku)
   local danger_flag="--permission-mode acceptEdits"
   [ "$(config allow_dangerous false)" = "true" ] && danger_flag="--dangerously-skip-permissions"
 
   command -v claude >/dev/null || { lock_release "$lock_id"; return 5; }
 
+  # Use --agent <name> so the agent's frontmatter (model/tools/persona) is honored.
+  # The brief is just the failure context — persona + workflow + guardrails come from agent file.
+  local brief="Failure context for your repair task:
+
+${context}
+Execute per your agent definition. Final line of output must be RESOLVED/RERUN/RETRY/BLOCKED."
+
   nohup bash -c "
-    printf '%s' \"\$1\" | claude -p --model $model $danger_flag --no-session-persistence > '$fix_log' 2>&1
+    printf '%s' \"\$1\" | claude -p --agent '$agent_name' $danger_flag --no-session-persistence > '$fix_log' 2>&1
     rm -f '$STATE_DIR/lock-$lock_id'
-  " _ "$prompt" </dev/null >/dev/null 2>&1 &
+  " _ "$brief" </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
   echo "$fix_log"
   return 0
