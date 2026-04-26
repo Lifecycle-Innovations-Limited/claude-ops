@@ -4,7 +4,7 @@
 
 *Persistent local context about people, projects, and your communication patterns — extracted from your chats, stored as markdown, never sent anywhere*
 
-[![version](https://img.shields.io/badge/version-1.1.0-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.0.0-blue)](../CHANGELOG.md)
 [![storage](https://img.shields.io/badge/storage-local%20markdown-22c55e)](.)
 [![privacy](https://img.shields.io/badge/privacy-on--device-6366f1)](.)
 [![extractor](https://img.shields.io/badge/extractor-haiku--4--5-f59e0b)](.)

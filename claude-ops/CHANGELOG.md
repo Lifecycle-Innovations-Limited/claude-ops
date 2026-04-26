@@ -2,6 +2,140 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.0] — 2026-04-26
+
+> **Major release.** Purely additive — no behavior of any v1.x skill changes by default. Existing users can upgrade in place. Every new subsystem is gated by a `userConfig` toggle (defaults documented per-feature below) and can be turned off from `/plugins` settings without uninstalling. See [`docs/migrating-from-v1.md`](docs/migrating-from-v1.md) and the [Migrating-from-v1 wiki page](https://github.com/Lifecycle-Innovations-Limited/claude-ops/wiki/Migrating-from-v1).
+
+### Headline
+
+v2.0 turns claude-ops from a *briefing + comms surface* into an **autonomy layer** for Claude Code itself. It now:
+
+1. Watches every `gh pr merge` you run, follows the deploy workflow, audits service health + verifies the served commit, and dispatches a Haiku **deploy-fixer** if anything goes wrong (PR #158).
+2. Watches every `npm run build:*`, parses the failure, and dispatches a Haiku **build-fixer** (PR #158).
+3. Pre-installs four specialist subagents (`general-purpose`, `deploy-fixer`, `build-fixer`, `dependency-auditor`) and silently swaps `general-purpose` → matching specialist via a PreToolUse hook on `Agent` (PRs #161, #162).
+4. Ships three universal **safety hooks** that block the most common foot-guns: secrets-in-staged-diff, `rm -rf` against anchor paths, and direct `git push` to `main` (PR #163).
+5. Periodically nudges Claude to use `Task*` tools when a session has gone N tool calls without one (PR #163).
+6. Runs a **recap marquee daemon** that synthesises a one-line digest across all parallel Claude sessions and surfaces it in tmux `status-right` or the Claude Code `statusLine` (PR #160).
+7. Folds in a **multi-account Claude Max rotator** with launchd daemon + AI-brain heuristics so you never blow a weekly cap (PR #160).
+8. Expands `/ops:setup` with steps 2d, 3o, and 6.5a–6.5d so every new subsystem has a guided wizard.
+9. Overhauls `plugin.json` `userConfig` so 19+ entries render as proper spacebar-toggle booleans / numeric caps / file pickers in `/plugins` settings (PR #164).
+10. Adds two new test scripts (`tests/test-deploy-fix-hooks.sh`, `tests/test-safety-hooks.sh`) wired into `tests/run-all.sh` (PR #163).
+
+### Added
+
+#### 1. Deploy auto-fix subsystem — `/ops:deploy-fix` (PR #158)
+
+The flagship v2 feature. Watches your merges and your local builds; verifies the result; auto-fixes failures.
+
+- **`hooks/hooks.json` PostToolUse:Bash → `bin/ops-deploy-fix-merge-trigger`** — fires on `gh pr merge *`, parses repo + PR + base + sha, spawns `scripts/ops-deploy-monitor.sh` in the background. The monitor:
+  1. Polls the deploy GitHub Actions workflow until completion (regex configurable via `deploy_workflow_pattern`, default `deploy|Deploy|build|Build|ECS|cd|CD`).
+  2. On success: optionally `curl`s the service `/health` URL and verifies `/version` returns the merged SHA.
+  3. On failure: classifies as **transient** (npm registry blip, rate limit, network timeout) and `gh run rerun`s, OR dispatches a headless Haiku `deploy-fixer` agent with the failing log tail injected into [`prompts/deploy-fix.md`](prompts/deploy-fix.md).
+- **`hooks/hooks.json` PostToolUse:Bash → `bin/ops-deploy-fix-build-trigger`** — fires on `npm run build:*`, parses the local build script output, dispatches a Haiku `build-fixer` agent with [`prompts/build-fix.md`](prompts/build-fix.md). Single-flight per repo.
+- **`scripts/lib/deploy-fix-common.sh`** — shared library: single-flight lock acquisition, per-repo hourly budget cap (default 3, see `max_fixes_per_hour`), content-hash dedup, transient classifier, notify dispatcher.
+- **Layered service registry**: project `.claude/post-merge-services.json` → user `~/.claude/config/post-merge-services.json` → plugin `config/post-merge-services.example.json`. Maps `owner/repo:base` → `{ health_url, version_url, deploy_workflow }`.
+- **Notification channel** (`notify_channel` userConfig): `macos` (osascript), `ntfy` (ntfy.sh topic), `pushover`, `discord` webhook, `telegram`, or `none`.
+- **`/ops:deploy-fix` skill** — `status` (live runs, today's history, budget remaining), `tail <run-id>` (stream the monitor log), `configure` (open the registry), `test` (dry-run the hook against a synthetic merge).
+- **userConfig toggles** (all spacebar-toggleable in `/plugins` settings): `deploy_fix_enabled`, `monitor_post_merge`, `monitor_build_failures`, `auto_dispatch_fixer`, `allow_dangerous`, `auto_rerun_transients`, `audit_health_after_deploy`, `verify_served_commit`, `fix_model`, `max_fixes_per_hour`, `watcher_timeout_seconds`, `registry_path`, `repo_search_roots`, `deploy_workflow_pattern`, `notify_channel`. See [`docs/deploy-fix.md`](docs/deploy-fix.md) for the full table with defaults.
+
+#### 2. Specialized agent system (PRs #161, #162)
+
+- [`agents/general-purpose.md`](agents/general-purpose.md) — local override that limits the default agent to research and read-only investigation.
+- [`agents/deploy-fixer.md`](agents/deploy-fixer.md) — single-shot SRE persona invoked by the deploy auto-fix subsystem.
+- [`agents/build-fixer.md`](agents/build-fixer.md) — focused TypeScript/bundler error fixer for local build failures.
+- [`agents/dependency-auditor.md`](agents/dependency-auditor.md) — runs `npm audit` / `pip-audit` / SCA equivalents and proposes minimal upgrades.
+- **`bin/ops-suggest-specialized-agent`** — PreToolUse hook on `Agent`. When `subagent_type=general-purpose`, inspects the prompt against [`config/specialist-keywords.example.json`](config/specialist-keywords.example.json) (also user-extensible at `~/.claude/config/specialist-keywords.json`) and **silently swaps** to the matching specialist via `updatedInput`. If no match, fires a Haiku drafter that proposes a brand-new agent file under `~/.claude/agents/`.
+- **userConfig**: `suggest_specialized_agents` (default `true`).
+- **Deep dive**: [`docs/agents.md`](docs/agents.md).
+
+#### 3. Universal safety hooks (PR #163)
+
+Three PreToolUse:Bash hooks. Always-on by design; per-hook escape via `permissionDecision`.
+
+- **`bin/ops-prevent-secret-commit`** — denies `git commit` when the staged diff matches secret patterns (AWS keys, GitHub PATs, Slack tokens, OpenAI/Anthropic keys, `.env` content).
+- **`bin/ops-no-rm-rf-anchor`** — denies `rm -rf` when the resolved target is `/`, `~`, `$HOME`, `..`, or `.`. Symlink-resolved before the check.
+- **`bin/ops-warn-mainpush`** — fires `permissionDecision: ask` when the user runs `git push` and the current branch is `main`/`master`/`prod`/`production`.
+- **Deep dive**: [`docs/safety-hooks.md`](docs/safety-hooks.md).
+
+#### 4. Universal Task* tracking nudge (PR #163)
+
+- **`bin/ops-task-reminder`** — PostToolUse `*` hook. Increments a session-scoped counter on every non-Task tool call. When the counter exceeds `task_reminder_threshold` (default `10`), emits a single `additionalContext` line nudging Claude to use `TaskCreate` / `TaskUpdate` / `TaskList`. Counter resets when any `Task*` tool fires.
+- **userConfig**: `task_reminder_enabled` (default `true`), `task_reminder_threshold` (default `10`, range `3..50`).
+
+#### 5. Recap marquee daemon — `/ops:recap` (PR #160)
+
+- **`scripts/recap/daemon.sh`** — long-lived loop, every 30s reads tool-activity logs from `hooks/recap-tool-activity.sh` + per-session captures from `hooks/recap-capture.sh`.
+- **`scripts/recap/digest.sh`** — synthesises the digest (active session count, latest action per session, fire flags).
+- **`scripts/recap/marquee.sh`** — formats the digest as a one-line ANSI string for tmux `status-right`.
+- **`templates/com.claude-ops.recap-daemon.plist`** — launchd unit; systemd alternative documented inline in [`docs/recap.md`](docs/recap.md).
+- **`/ops:recap` skill** — `status`, `tail`, `configure`, `restart`.
+- **`/ops:setup` step 2d** — auto-appends the marquee source to `~/.tmux.conf` (or wires the Claude Code `statusLine` if no tmux is detected).
+- **userConfig**: `recap_marquee_enabled` (default `true`), `recap_marquee_auto_configure_tmux` (default `true`).
+
+#### 6. Multi-account Claude Max rotator — `/ops:rotate` + `/ops:rotate-setup` (PR #160)
+
+- **`scripts/account-rotation/rotate.mjs`** — swaps the `Claude Code-credentials` keychain entry to the next configured account.
+- **`scripts/account-rotation/daemon.mjs`** — launchd-managed; polls each account's usage every N minutes and rotates *before* hitting the cap.
+- **`scripts/account-rotation/ai-brain.mjs`** — Haiku-powered heuristic that decides which account to rotate to based on remaining quota + recent usage trajectory.
+- **`scripts/account-rotation/setup-account.mjs`** — OAuth init for one account.
+- **`scripts/account-rotation/force-rotate.sh`** — manual override.
+- **`templates/com.claude-ops.account-rotation.plist`** — launchd unit.
+- **`/ops:rotate`** — manual rotate. **`/ops:rotate-setup`** — interactive multi-account onboarding.
+- **`/ops:setup` step 3o** — walks through OAuth init for every configured account that lacks a keychain token.
+- **userConfig**: `account_rotation_enabled` (default `false` — opt-in), `account_rotation_setup_oauth_each` (default `true`).
+- **Hard guardrail**: rotator refuses any account with overage billing enabled unless `--allow-extra-usage` is passed.
+
+#### 7. `/ops:setup` wizard — new steps
+
+- **Step 2d** — recap marquee install + tmux/`statusLine` configuration.
+- **Step 3o** — Claude Max account OAuth init loop (one prompt per configured account).
+- **Step 6.5a** — deploy auto-fix toggle + registry path picker.
+- **Step 6.5b** — recap marquee toggle.
+- **Step 6.5c** — task reminder toggle + threshold.
+- **Step 6.5d** — account rotator toggle.
+
+#### 8. `plugin.json` userConfig overhaul (PR #164)
+
+19+ new entries. Existing string entries swept to proper types so they render correctly in `/plugins` settings:
+
+- `ga4_property_id`, `newrelic_account_id` — `string` → `number`.
+- `aws_region` — description improved with valid options.
+- All new toggles use `type: boolean` with explicit `default` so they're spacebar-toggleable.
+- All new caps use `type: number` with `min`/`max`.
+- `registry_path` uses `type: file` for native file picker.
+
+#### 9. Test suite expansion (PR #163)
+
+- **`tests/test-deploy-fix-hooks.sh`** — 39 assertions across 11 cases (trigger detection, transient classification, dedup, budget cap, single-flight lock, registry layering, notify dispatch).
+- **`tests/test-safety-hooks.sh`** — 45/45 pass (each safety hook gets positive + negative tests).
+- Both wired into `tests/run-all.sh`.
+
+#### 10. New documentation
+
+- [`docs/deploy-fix.md`](docs/deploy-fix.md), [`docs/agents.md`](docs/agents.md), [`docs/safety-hooks.md`](docs/safety-hooks.md), [`docs/recap.md`](docs/recap.md), [`docs/migrating-from-v1.md`](docs/migrating-from-v1.md), [`docs/INDEX.md`](docs/INDEX.md).
+- Wiki: `Auto-Fix-Subsystem`, `Specialized-Agents`, `Safety-Hooks`, `Recap-Marquee`, `Multi-Account-Rotator`, `Migrating-from-v1` (new); `Home`, `Sidebar`, `Setup-Wizard`, `Configuration` (updated).
+
+### Changed
+
+- **Default agent for tool dispatch** is no longer raw `general-purpose`. The PreToolUse hook now silently routes via the specialist keyword map. To restore v1 behaviour, set `suggest_specialized_agents: false`.
+- **`/ops:setup`** has six new steps (2d, 3o, 6.5a, 6.5b, 6.5c, 6.5d). Existing steps are unchanged.
+- **`plugin.json` description + keywords** rewritten to mention the v2 surface.
+- **`README.md` + `claude-ops/README.md`** front-load a "What's new in v2.0" section before the existing feature list.
+
+### Migration
+
+**No breaking changes.** Every v2 subsystem is opt-out via a `userConfig` toggle. Existing v1 settings, registries, preferences, and daemon services are unchanged. Upgrade in place:
+
+```bash
+# inside Claude Code:
+/plugin update ops@lifecycle-innovations-limited-claude-ops
+/ops:setup   # walks through the 6 new steps; safe to skip any
+```
+
+See [`docs/migrating-from-v1.md`](docs/migrating-from-v1.md) for the full v1 → v2 reference.
+
+---
+
 ## [1.8.1] — 2026-04-26
 
 ### Fixed

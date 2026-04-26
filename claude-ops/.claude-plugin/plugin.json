@@ -1,6 +1,6 @@
 {
   "name": "ops",
-  "version": "1.8.2",
+  "version": "2.0.0",
   "description": "Business operations command center for Claude Code \u2014 30 skills, 14 agents, and a smart background daemon that manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (all AWS services), revenue (Stripe + RevenueCat), e-commerce (Shopify), marketing (Klaviyo/Meta/GA4/GSC), monitoring (Datadog/New Relic/OTEL), and voice (Bland AI/ElevenLabs/Whisper). Includes /gtm go-to-market planner, /ops:projects portfolio dashboard, and YOLO mode for autonomous operation with 4 parallel C-suite agents.",
   "author": {
     "name": "Lifecycle Innovations Limited",
@@ -52,6 +52,162 @@
     "fedex"
   ],
   "userConfig": {
+    "prevent_secret_commit": {
+      "type": "boolean",
+      "title": "Block git commits containing secrets",
+      "description": "PreToolUse hook scans `git diff --cached` for high-confidence secret patterns (Stripe, AWS, GitHub tokens, JWTs, hardcoded passwords) and denies the commit if a match is found.",
+      "default": true
+    },
+    "no_rm_rf_anchor": {
+      "type": "boolean",
+      "title": "Block rm -rf against root anchors",
+      "description": "PreToolUse hook denies `rm -rf` targeting /, ~, $HOME, .., or . \u2014 protecting against catastrophic filesystem wipes. Specific subpaths (./node_modules, /tmp/foo) are allowed.",
+      "default": true
+    },
+    "warn_mainpush": {
+      "type": "boolean",
+      "title": "Confirm direct push to main/master/production",
+      "description": "PreToolUse hook forces user confirmation when pushing directly to a protected branch (main/master/production), either via explicit destination or while currently on the branch.",
+      "default": true
+    },
+    "deploy_fix_enabled": {
+      "type": "boolean",
+      "title": "Deploy auto-fix enabled",
+      "description": "Master switch for the post-merge + build-failure auto-fix subsystem. Spacebar toggles.",
+      "default": true
+    },
+    "monitor_post_merge": {
+      "type": "boolean",
+      "title": "Monitor PR merges \u2192 deploys",
+      "description": "After `gh pr merge` to dev/main, watch the deploy workflow + audit service health.",
+      "default": true
+    },
+    "monitor_build_failures": {
+      "type": "boolean",
+      "title": "Monitor `npm run build:*` failures",
+      "description": "After a local build script fails, dispatch a Haiku build-fixer.",
+      "default": true
+    },
+    "auto_dispatch_fixer": {
+      "type": "boolean",
+      "title": "Auto-dispatch headless Claude fixer",
+      "description": "When off, failures are logged + notified only \u2014 no agent runs.",
+      "default": true
+    },
+    "allow_dangerous": {
+      "type": "boolean",
+      "title": "Fixer skips permission prompts",
+      "description": "Pass --dangerously-skip-permissions to the headless fixer (required for unattended autonomy).",
+      "default": false
+    },
+    "auto_rerun_transients": {
+      "type": "boolean",
+      "title": "Auto-rerun on transient failures",
+      "description": "Detect npm/gh-actions/network blips and `gh run rerun` instead of dispatching an agent.",
+      "default": true
+    },
+    "audit_health_after_deploy": {
+      "type": "boolean",
+      "title": "Audit /health after deploy",
+      "description": "curl service health URL once deploy succeeds. Failure dispatches a fixer.",
+      "default": true
+    },
+    "verify_served_commit": {
+      "type": "boolean",
+      "title": "Verify served commit matches merge",
+      "description": "Hit /version and check served SHA equals merged SHA.",
+      "default": true
+    },
+    "fix_model": {
+      "type": "string",
+      "title": "Fix-agent model",
+      "description": "Anthropic model the fixer runs on. Default haiku (fast/cheap). Use sonnet/opus for harder failures.",
+      "default": "haiku"
+    },
+    "max_fixes_per_hour": {
+      "type": "number",
+      "title": "Per-repo fix budget per hour",
+      "description": "Cap on auto-fix dispatches per repo per hour.",
+      "default": 3,
+      "min": 0,
+      "max": 20
+    },
+    "watcher_timeout_seconds": {
+      "type": "number",
+      "title": "Deploy watcher timeout (seconds)",
+      "description": "Max wait for deploy workflow completion.",
+      "default": 1800,
+      "min": 60,
+      "max": 7200
+    },
+    "registry_path": {
+      "type": "file",
+      "title": "Service registry JSON",
+      "description": "Maps owner/repo:base \u2192 health/version URLs. Project .claude/post-merge-services.json overrides.",
+      "default": "~/.claude/config/post-merge-services.json"
+    },
+    "repo_search_roots": {
+      "type": "string",
+      "title": "Repo search roots",
+      "description": "Colon-separated dirs to find a repo on disk. Example: ~/Projects:~/work",
+      "default": "~/Projects:~"
+    },
+    "deploy_workflow_pattern": {
+      "type": "string",
+      "title": "Deploy workflow regex",
+      "description": "Identifies which GitHub Actions run is the deploy.",
+      "default": "deploy|Deploy|build|Build|ECS|cd|CD"
+    },
+    "notify_channel": {
+      "type": "string",
+      "title": "Failure notification channel",
+      "description": "Where to push failure alerts: macos, ntfy, pushover, discord, telegram, or none.",
+      "default": "macos"
+    },
+    "recap_marquee_enabled": {
+      "type": "boolean",
+      "title": "Recap marquee (tmux digest)",
+      "description": "Run the daemon that synthesizes a one-line digest across all parallel Claude sessions, displayed in tmux status-right.",
+      "default": true
+    },
+    "recap_marquee_auto_configure_tmux": {
+      "type": "boolean",
+      "title": "Auto-configure tmux status-right",
+      "description": "Append the marquee source to ~/.tmux.conf during /ops:setup.",
+      "default": true
+    },
+    "account_rotation_enabled": {
+      "type": "boolean",
+      "title": "Multi-account Claude rotator",
+      "description": "Run the launchd daemon that rotates between Claude Max accounts as quotas approach the cap.",
+      "default": false
+    },
+    "account_rotation_setup_oauth_each": {
+      "type": "boolean",
+      "title": "Setup OAuth for each account",
+      "description": "During /ops:setup, walk through OAuth init for every configured Claude account that doesn't have a keychain token yet.",
+      "default": true
+    },
+    "task_reminder_enabled": {
+      "type": "boolean",
+      "title": "Periodic Task* tool reminder",
+      "description": "PostToolUse hook nudging Claude to use TaskCreate/TaskUpdate every N tool calls without one.",
+      "default": true
+    },
+    "task_reminder_threshold": {
+      "type": "number",
+      "title": "Task reminder threshold",
+      "description": "Number of non-Task tool calls before the reminder fires.",
+      "default": 10,
+      "min": 3,
+      "max": 50
+    },
+    "suggest_specialized_agents": {
+      "type": "boolean",
+      "title": "Suggest specialized subagents",
+      "description": "PreToolUse hook on Agent \u2014 when subagent_type=general-purpose, asks if a domain-specific agent fits better.",
+      "default": true
+    },
     "telegram_api_id": {
       "title": "Telegram API ID",
       "description": "Numeric API ID from https://my.telegram.org/apps. Optional \u2014 run /ops:setup telegram to auto-configure.",
@@ -96,7 +252,7 @@
     },
     "aws_region": {
       "title": "AWS Region",
-      "description": "Default AWS region for infra checks e.g. 'us-east-1' (optional)",
+      "description": "Default AWS region for infra checks. Valid: us-east-1, us-east-2, us-west-1, us-west-2, eu-west-1, eu-central-1, ap-southeast-1, ap-northeast-1.",
       "type": "string",
       "sensitive": false,
       "default": "us-east-1"
@@ -124,10 +280,11 @@
     },
     "ga4_property_id": {
       "title": "Google Analytics 4 Property ID",
-      "description": "GA4 property ID (numeric, from Admin > Property Settings)",
-      "type": "string",
+      "description": "Numeric GA4 property ID. Find in GA4 Admin > Property Settings.",
+      "type": "number",
       "sensitive": false,
-      "default": ""
+      "default": 0,
+      "min": 0
     },
     "google_search_console_site": {
       "title": "Google Search Console Site URL",
@@ -222,10 +379,11 @@
     },
     "newrelic_account_id": {
       "title": "New Relic Account ID",
-      "description": "Numeric account ID from New Relic admin portal",
-      "type": "string",
+      "description": "Numeric account ID from one.newrelic.com admin portal.",
+      "type": "number",
       "sensitive": false,
-      "default": ""
+      "default": 0,
+      "min": 0
     },
     "otel_endpoint": {
       "title": "OTEL Backend Endpoint",

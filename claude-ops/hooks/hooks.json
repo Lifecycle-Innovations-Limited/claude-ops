@@ -25,6 +25,68 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-pretool-wacli-health \"$TOOL_INPUT\" 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-prevent-secret-commit",
+            "timeout": 5,
+            "if": "Bash(git commit*)"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-no-rm-rf-anchor",
+            "timeout": 3,
+            "if": "Bash(rm *)"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-warn-mainpush",
+            "timeout": 3,
+            "if": "Bash(git push*)"
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-suggest-specialized-agent 2>/dev/null || true",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-deploy-fix-merge-trigger 2>/dev/null || true",
+            "timeout": 5,
+            "if": "Bash(gh pr merge *)"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-deploy-fix-build-trigger 2>/dev/null || true",
+            "timeout": 5,
+            "if": "Bash(npm run build:*)"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-task-reminder 2>/dev/null || true",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "[ \"${CLAUDE_PLUGIN_USERCONFIG_RECAP_MARQUEE_ENABLED:-false}\" = \"true\" ] && sh ${CLAUDE_PLUGIN_ROOT}/hooks/recap-tool-activity.sh 2>/dev/null || true",
+            "timeout": 2
           }
         ]
       }
@@ -35,6 +97,11 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-post-session-cleanup 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "[ \"${CLAUDE_PLUGIN_USERCONFIG_RECAP_MARQUEE_ENABLED:-false}\" = \"true\" ] && sh ${CLAUDE_PLUGIN_ROOT}/hooks/recap-capture.sh 2>/dev/null || true",
+            "timeout": 3
           }
         ]
       }
