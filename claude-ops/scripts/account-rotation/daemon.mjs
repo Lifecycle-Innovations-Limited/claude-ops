@@ -553,7 +553,7 @@ function syncDriftedState(state, config, lastRotatedAt = 0) {
 // 1h of expiry regardless of utilization.
 
 const TOKEN_ENDPOINT = 'https://platform.claude.com/v1/oauth/token';
-const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'; // gitleaks:allow — public OAuth client ID, not a secret
 const REFRESH_URGENCY_MS = 1 * 3_600_000; // Refresh if <1h remaining
 
 function parseTokenExpiry(tokenJson) {
