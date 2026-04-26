@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# PreToolUse hook (Bash, gated `rm *`):
+# Blocks `rm -rf` against root anchors (/, ~, $HOME, .., .) which can wipe the
+# user's machine or the calling repo. Allows specific subpaths.
+#
+# userConfig: no_rm_rf_anchor (boolean, default true). Disable by setting
+# CLAUDE_PLUGIN_OPTION_NO_RM_RF_ANCHOR=false.
+set -uo pipefail
+# Disable filename globbing so unquoted `/*` / `../*` tokens don't expand
+# when we tokenize the command string.
+set -f
+
+if [[ "${CLAUDE_PLUGIN_OPTION_NO_RM_RF_ANCHOR:-true}" == "false" ]]; then
+  exit 0
+fi
+
+INPUT="${TOOL_INPUT:-${1:-}}"
+
+# Try to parse JSON tool_input.command if INPUT is a JSON object; else use as-is.
+CMD="$INPUT"
+if [[ "$INPUT" == *'"command"'* ]]; then
+  parsed=$(python3 -c '
+import json, sys
+try:
+  d = json.loads(sys.argv[1])
+  if isinstance(d, dict):
+    print(d.get("command") or d.get("tool_input", {}).get("command", ""))
+except Exception:
+  pass
+' "$INPUT" 2>/dev/null || true)
+  [[ -n "$parsed" ]] && CMD="$parsed"
+fi
+
+# Only act on rm commands.
+echo "$CMD" | grep -Eq '(^|[[:space:];&|`])rm([[:space:]]|$)' || exit 0
+
+# Normalize: collapse whitespace.
+NORM="$(echo "$CMD" | tr '\n' ' ' | tr -s ' ')"
+
+# Match `rm` with -rf / -fr / -r -f (any combo of -r, -R, -f, --recursive, --force).
+# Then check ALL arguments after the flags for dangerous anchors.
+#
+# Dangerous anchor regex matches the target token explicitly:
+#   /                /*               /.
+#   ~                ~/               ~/*
+#   $HOME            $HOME/           $HOME/*           "$HOME"          "$HOME/..."
+#   ..               ../*             ../              .
+#   (also empty target)
+#
+# We split commands on ; && || | and check each segment.
+DANGER=""
+
+# shellcheck disable=SC2001
+SEGMENTS=$(echo "$NORM" | awk '{ gsub(/&&/, "\n"); gsub(/\|\|/, "\n"); gsub(/\|/, "\n"); gsub(/;/, "\n"); print }')
+
+while IFS= read -r seg; do
+  seg="$(echo "$seg" | sed 's/^ *//;s/ *$//')"
+  [[ -z "$seg" ]] && continue
+  # Must start with rm (allow `sudo rm`, `time rm`, etc.)
+  if ! echo "$seg" | grep -Eq '(^|[[:space:]])rm([[:space:]]|$)'; then
+    continue
+  fi
+  # Must have recursive + force flags. Accept: -rf, -fr, -Rf, -fR, -r ... -f, --recursive ... --force, -rfv, etc.
+  has_r=0; has_f=0
+  if echo "$seg" | grep -Eq '(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)' || echo "$seg" | grep -Eq -- '--recursive([[:space:]]|=|$)'; then
+    has_r=1
+  fi
+  if echo "$seg" | grep -Eq '(^|[[:space:]])-[a-zA-Z]*f[a-zA-Z]*([[:space:]]|$)' || echo "$seg" | grep -Eq -- '--force([[:space:]]|=|$)'; then
+    has_f=1
+  fi
+  if (( has_r == 0 || has_f == 0 )); then
+    continue
+  fi
+
+  # Extract tokens after `rm`, drop flag-tokens, examine targets.
+  # Strip leading `sudo`/`time`/etc and then `rm`.
+  rest=$(echo "$seg" | sed -E 's/^.*[[:space:]]?rm([[:space:]]+|$)//')
+  # Tokenize on spaces (best-effort — won't perfectly handle quoted-with-spaces but covers the patterns specified).
+  for tok in $rest; do
+    # Skip flags.
+    case "$tok" in
+      -*) continue ;;
+    esac
+    # Strip surrounding quotes for comparison.
+    bare="${tok%\"}"; bare="${bare#\"}"
+    bare="${bare%\'}"; bare="${bare#\'}"
+
+    case "$bare" in
+      "" | "/" | "/*" | "/." | \
+      "~" | "~/" | "~/*" | \
+      '$HOME' | '$HOME/' | '$HOME/*' | \
+      ".." | "../" | "../*" | \
+      ".")
+        DANGER="$bare"
+        break
+        ;;
+    esac
+    # Also catch quoted $HOME variants where the shell hasn't expanded them.
+    if [[ "$tok" == '"$HOME"' || "$tok" == '"$HOME"/' || "$tok" == '"$HOME"/*' ]]; then
+      DANGER="$tok"; break
+    fi
+  done
+
+  [[ -n "$DANGER" ]] && break
+done <<EOF
+$SEGMENTS
+EOF
+
+if [[ -n "$DANGER" ]]; then
+  reason="Blocked rm -rf against dangerous anchor: '$DANGER'. This can destroy the system, your home directory, or the calling repo. Use a specific subpath (e.g. ./node_modules, /tmp/foo). To override (NOT RECOMMENDED) set CLAUDE_PLUGIN_OPTION_NO_RM_RF_ANCHOR=false."
+  python3 -c '
+import json, sys
+print(json.dumps({
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": sys.argv[1]
+  }
+}))' "$reason"
+  exit 0
+fi
+
+exit 0
