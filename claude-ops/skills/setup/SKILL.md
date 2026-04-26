@@ -512,6 +512,153 @@ Continue immediately to Step 3 — do NOT wait for the daemon to confirm startup
 
 ---
 
+## Step 2d — Recap Marquee (multi-session digest in tmux status-right)
+
+The recap marquee is a separate launchd daemon (`com.claude-ops.recap-daemon`) that synthesizes a one-line digest across all parallel Claude Code sessions and recent shell activity, then exposes it via `/tmp/claude-recap-digest` for tmux to scroll across `status-right`. Independent from the main ops daemon — it can run on its own.
+
+Skip this step entirely if `recap_marquee_enabled = false` in userConfig.
+
+### Step 2d.1 — Ask the user
+
+Use `AskUserQuestion`:
+
+```
+Enable multi-session recap marquee?
+  Background daemon synthesizes a one-line digest across all parallel Claude
+  Code sessions + recent shell commands. Display in tmux status-right.
+  [Yes — install + auto-configure]  [No — skip]  [What is this?]
+```
+
+If `What is this?`: explain (the daemon polls per-session recap files written by Stop + PostToolUse hooks, aggregates last 8 sessions + 10 prior digests + recent zsh activity into one Haiku-generated headline, refreshed every ~15s; tmux reads `/tmp/claude-recap-digest` from `status-right` and scrolls it). Then re-ask the binary question.
+
+If `No`: write `recap.enabled = false` to `$PREFS_PATH` and skip to Step 3.
+
+### Step 2d.2 — Install launchd plist (macOS only)
+
+Same platform gate as Step 2c. On Linux/WSL/Windows, print:
+
+```
+○ Recap daemon — skipped (launchd is macOS-only). Linux users: see
+  /ops:recap configure for systemd unit example.
+```
+
+On macOS, install the plist (RULE 4 — `run_in_background: true`):
+
+```bash
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1)}"
+DAEMON_SCRIPT="${PLUGIN_ROOT}/scripts/recap/daemon.sh"
+chmod +x "$DAEMON_SCRIPT" "${PLUGIN_ROOT}/scripts/recap/digest.sh" "${PLUGIN_ROOT}/scripts/recap/marquee.sh"
+chmod +x "${PLUGIN_ROOT}/hooks/recap-capture.sh" "${PLUGIN_ROOT}/hooks/recap-tool-activity.sh"
+
+PLIST_TEMPLATE="${PLUGIN_ROOT}/templates/com.claude-ops.recap-daemon.plist"
+PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.recap-daemon.plist"
+DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+LOG_DIR="$DATA_DIR/logs"
+mkdir -p "$LOG_DIR"
+# Resolve claude CLI bin directory (handles nvm, homebrew, system npm)
+CLAUDE_BIN_DIR=$(dirname "$(command -v claude 2>/dev/null || echo /usr/local/bin/claude)")
+sed -e "s|__DAEMON_SCRIPT_PATH__|$DAEMON_SCRIPT|g" \
+    -e "s|__LOG_DIR__|$LOG_DIR|g" \
+    -e "s|__HOME__|$HOME|g" \
+    -e "s|__CLAUDE_BIN_DIR__|$CLAUDE_BIN_DIR|g" \
+    "$PLIST_TEMPLATE" > "$PLIST_DEST"
+
+launchctl bootout "gui/$(id -u)/com.claude-ops.recap-daemon" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$PLIST_DEST"
+```
+
+### Step 2d.3 — tmux integration
+
+Detect tmux availability — skip cleanly if missing:
+
+```bash
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "○ tmux not installed — daemon installed, but no marquee surface. Daemon still useful for /ops:recap tail."
+  # write recap.enabled = true, recap.tmux_wired = false, then skip to Step 2d.5
+fi
+```
+
+If `recap_marquee_auto_configure_tmux = false`, print the snippet and skip the rest of this step (let user wire manually).
+
+If tmux is present and `recap_marquee_auto_configure_tmux = true`, ask:
+
+```
+Auto-configure tmux status-right?
+  [Yes — append to ~/.tmux.conf]  [Show me the line, I'll add manually]  [Skip]
+```
+
+On `Show me the line`, print the snippet and continue.
+
+On `Yes — append`, detect existing `status-right`:
+
+```bash
+TMUX_CONF="$HOME/.tmux.conf"
+existing=$(grep -E '^\s*set\s+-g\s+status-right' "$TMUX_CONF" 2>/dev/null | head -1)
+```
+
+If `existing` is non-empty, ask via `AskUserQuestion` (Rule 1 — exactly 4 options max):
+
+```
+Existing tmux status-right detected. How to integrate recap marquee?
+  [Replace with recap-only]  [Append (keep existing line as comment)]  [Show me, I'll edit manually]  [Skip]
+```
+
+Append the snippet (or replace, per choice). Use an unquoted heredoc delimiter so `${PLUGIN_ROOT}` expands to the installed plugin path (tmux `#()` does not expand env vars):
+
+```bash
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1)}"
+cat >> "$TMUX_CONF" <<TMUX
+
+# claude-ops recap marquee — synthesizes multi-session digest into status-right
+set -g status-right '#('"${PLUGIN_ROOT}"'/scripts/recap/marquee.sh) #[fg=#a6e3a1]%H:%M '
+set -g status-interval 2
+TMUX
+
+# Live-reload if tmux is currently running
+tmux info >/dev/null 2>&1 && tmux source-file "$TMUX_CONF" 2>/dev/null
+```
+
+### Step 2d.4 — Verify daemon is producing output
+
+Wait up to 60s for the daemon to write its first digest. Run in background; do NOT block the wizard:
+
+```bash
+(
+  for i in $(seq 1 12); do
+    [ -f /tmp/claude-recap-digest ] && [ -s /tmp/claude-recap-digest ] && exit 0
+    sleep 5
+  done
+  echo "WARN: recap daemon did not produce /tmp/claude-recap-digest within 60s — check /tmp/claude-recap-daemon.log" >&2
+) &
+```
+
+### Step 2d.5 — Persist preferences
+
+Write to `$PREFS_PATH`:
+
+```json
+{
+  "recap": {
+    "enabled": true,
+    "tmux_wired": true,
+    "installed_at_step": "2d",
+    "platform": "macos"
+  }
+}
+```
+
+Print:
+
+```
+✓ Recap marquee — daemon installed (com.claude-ops.recap-daemon).
+  Tmux status-right wired (or skipped per your choice).
+  Manage anytime: /ops:recap status | tail | configure | restart
+```
+
+Continue to Step 3.
+
+---
+
 ## Step 3 — Configure channels (if selected)
 
 First, offer a quick "configure everything" option before individual selection. Use `AskUserQuestion`:
