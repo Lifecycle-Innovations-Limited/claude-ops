@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# PreToolUse hook (Bash, gated `git push*`):
+# Forces user confirmation (permissionDecision=ask) when pushing to main/master/production
+# directly. Allows feature-branch pushes silently.
+#
+# userConfig: warn_mainpush (boolean, default true). Disable by setting
+# CLAUDE_PLUGIN_OPTION_WARN_MAINPUSH=false.
+set -uo pipefail
+
+if [[ "${CLAUDE_PLUGIN_OPTION_WARN_MAINPUSH:-true}" == "false" ]]; then
+  exit 0
+fi
+
+INPUT="${TOOL_INPUT:-${1:-}}"
+
+# Parse JSON command if applicable.
+CMD="$INPUT"
+if [[ "$INPUT" == *'"command"'* ]]; then
+  parsed=$(python3 -c '
+import json, sys
+try:
+  d = json.loads(sys.argv[1])
+  if isinstance(d, dict):
+    print(d.get("command") or d.get("tool_input", {}).get("command", ""))
+except Exception:
+  pass
+' "$INPUT" 2>/dev/null || true)
+  [[ -n "$parsed" ]] && CMD="$parsed"
+fi
+
+# Only inspect git push commands.
+echo "$CMD" | grep -Eq '(^|[[:space:];&|`])git[[:space:]]+push' || exit 0
+
+DEST=""
+REASON=""
+
+# Case A: explicit `git push [flags...] <remote> <branch>` targeting main/master/production.
+# Match by checking if any token after `push` equals one of the protected branch names.
+if echo "$CMD" | grep -Eq 'git[[:space:]]+push([[:space:]]+(-[^[:space:]]+|[a-zA-Z0-9_./-]+))*[[:space:]]+(main|master|production)([[:space:]]|$)'; then
+  DEST=$(echo "$CMD" | grep -Eo '(main|master|production)' | tail -1)
+  REASON="Pushing directly to protected branch '$DEST'. Confirm before publishing — prefer a feature branch + PR."
+fi
+
+# Case B: explicit refspec like `HEAD:main` or `feature:main`.
+if [[ -z "$DEST" ]] && echo "$CMD" | grep -Eq 'git[[:space:]]+push[[:space:]].*:[[:space:]]*(main|master|production)([[:space:]]|$)'; then
+  DEST=$(echo "$CMD" | grep -Eo '[^[:space:]]+:(main|master|production)' | tail -1)
+  REASON="Pushing refspec $DEST — this updates a protected branch. Confirm before publishing."
+fi
+
+# Case C: bare `git push` (or `git push origin`/`git push -u origin`) — check current branch.
+if [[ -z "$DEST" ]] && command -v git >/dev/null 2>&1; then
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    BRANCH=$(git -C "$PWD" branch --show-current 2>/dev/null || true)
+    case "$BRANCH" in
+      main|master|production)
+        # Bare push (no explicit refspec) defaults to current branch.
+        if echo "$CMD" | grep -Eq 'git[[:space:]]+push([[:space:]]+(-u[[:space:]]+)?[a-zA-Z0-9_.-]+)?[[:space:]]*$' \
+           || echo "$CMD" | grep -Eq 'git[[:space:]]+push[[:space:]]+(-u[[:space:]]+)?[a-zA-Z0-9_.-]+[[:space:]]*$'; then
+          DEST="current branch '$BRANCH'"
+          REASON="You are on protected branch '$BRANCH' and about to push. Confirm before publishing — prefer a feature branch + PR."
+        fi
+        ;;
+    esac
+  fi
+fi
+
+if [[ -n "$DEST" ]]; then
+  python3 -c '
+import json, sys
+print(json.dumps({
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "ask",
+    "permissionDecisionReason": sys.argv[1]
+  }
+}))' "$REASON"
+  exit 0
+fi
+
+exit 0
