@@ -88,7 +88,11 @@ else
 fi
 
 SETTINGS="$HOME/.claude/settings.json"
-if [ -f "$SETTINGS" ] && command -v jq >/dev/null 2>&1; then
+if ! command -v jq >/dev/null 2>&1; then
+  echo "○ Claude Code statusLine — cannot check (jq not installed)"
+elif [ ! -f "$SETTINGS" ]; then
+  echo "○ Claude Code statusLine — no ~/.claude/settings.json found"
+else
   sl_cmd=$(jq -r '.statusLine.command // empty' "$SETTINGS" 2>/dev/null)
   if echo "$sl_cmd" | grep -q claude-recap-digest; then
     echo "✓ Claude Code statusLine wired"
@@ -132,12 +136,15 @@ Walk the user through display-surface integration. Two surfaces are supported an
 
    ```bash
    TMUX_CONF="$HOME/.tmux.conf"
+   tmux_already_wired=0
    if grep -q claude-recap "$TMUX_CONF" 2>/dev/null; then
-     echo "✓ already configured."
-     exit 0
+     echo "✓ tmux status-right already configured."
+     tmux_already_wired=1
    fi
    existing=$(grep -E '^\s*set\s+-g\s+status-right' "$TMUX_CONF" 2>/dev/null | head -1)
    ```
+
+   **Steps 3–5 only apply when tmux is not already wired (`tmux_already_wired=0`):**
 
 3. If `existing` is non-empty, `AskUserQuestion`:
 
@@ -206,7 +213,11 @@ When tmux is missing — or the user wants a second surface — wire the recap i
 
    ```bash
    prev_cmd=$(jq -r '.statusLine.command // ""' "$SETTINGS")
-   new_cmd="${prev_cmd}; cat /tmp/claude-recap-digest 2>/dev/null | head -c 80"
+   if [ -n "$prev_cmd" ]; then
+     new_cmd="${prev_cmd}; cat /tmp/claude-recap-digest 2>/dev/null | head -c 80"
+   else
+     new_cmd="cat /tmp/claude-recap-digest 2>/dev/null | head -c 80"
+   fi
    TMP=$(mktemp)
    jq --arg cmd "$new_cmd" '.statusLine.command = $cmd' "$SETTINGS" > "$TMP" && mv "$TMP" "$SETTINGS"
    ```
