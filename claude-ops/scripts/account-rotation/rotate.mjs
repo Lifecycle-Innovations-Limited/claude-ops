@@ -127,6 +127,7 @@ function log(msg) {
 
 function notify(title, msg) {
   try {
+    // Use execFileSync to avoid shell interpretation of quotes in title/msg
     execFileSync(
       'osascript',
       [
@@ -2104,6 +2105,9 @@ async function runAuthFlow(driver, account) {
   if (aiBrainEnabled && aiBrainHistory.length < AI_BRAIN_MAX_DECISIONS) {
     const url = await driver.currentUrl().catch(() => '');
     log(`[ai-brain] loop exhausted — final rescue attempt`);
+    // Snapshot remaining budget before the loop — aiBrainHistory grows each
+    // iteration, so re-evaluating inside the condition would shrink the bound
+    // twice as fast (once from rescue++, once from the growing length).
     const rescueBudget = Math.min(3, AI_BRAIN_MAX_DECISIONS - aiBrainHistory.length);
     for (let rescue = 0; rescue < rescueBudget; rescue++) {
       const action = await askAIBrain({
