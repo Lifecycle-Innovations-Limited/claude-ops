@@ -1,0 +1,27 @@
+{
+  "_comment": "Copy to config.json and add your Claude Max accounts. The rotator does NOT ship with any accounts — you opt in by populating this file via /ops:rotate add-account or by editing it directly. See README.md for details.",
+  "accounts": [],
+  "_account_schema_example": {
+    "email": "user@example.com",
+    "label": "optional-disambiguator",
+    "orgName": "Optional Workspace Name",
+    "orgUuid": "optional-workspace-uuid",
+    "dashlaneTokenPath": "dl://claude-max-user@example.com/password",
+    "dashlaneGooglePath": null,
+    "extraUsageEnabled": false,
+    "capacityMultiplier": 1.0
+  },
+  "rateLimits": {
+    "tokensPerWindow": 220000,
+    "windowHours": 5,
+    "messagesPerWindow": 900,
+    "weeklyCapMultiplier": 1.0,
+    "extraUsageSafetyMargin": 0.75,
+    "note": "Max 20x defaults: ~220K tokens / ~900 messages per 5h window. extraUsageSafetyMargin: accounts with paid overage enabled rotate at 75% of their threshold to avoid incurring charges."
+  },
+  "toolUseThreshold": 800,
+  "maxHoursPerAccount": 4,
+  "autoRotate": true,
+  "refreshSession": false,
+  "notifyOnRotation": true
+}
