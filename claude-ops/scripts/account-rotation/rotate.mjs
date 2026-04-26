@@ -127,7 +127,14 @@ function log(msg) {
 
 function notify(title, msg) {
   try {
-    execSync(`osascript -e 'display notification "${msg.replace(/"/g, '\\"')}" with title "${title}"'`);
+    execFileSync(
+      'osascript',
+      [
+        '-e',
+        `display notification "${msg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" with title "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
+      ],
+      { timeout: 5000 },
+    );
   } catch {}
 }
 
@@ -2097,7 +2104,8 @@ async function runAuthFlow(driver, account) {
   if (aiBrainEnabled && aiBrainHistory.length < AI_BRAIN_MAX_DECISIONS) {
     const url = await driver.currentUrl().catch(() => '');
     log(`[ai-brain] loop exhausted — final rescue attempt`);
-    for (let rescue = 0; rescue < AI_BRAIN_MAX_DECISIONS - aiBrainHistory.length && rescue < 3; rescue++) {
+    const rescueBudget = Math.min(3, AI_BRAIN_MAX_DECISIONS - aiBrainHistory.length);
+    for (let rescue = 0; rescue < rescueBudget; rescue++) {
       const action = await askAIBrain({
         page: driver._page,
         account,
