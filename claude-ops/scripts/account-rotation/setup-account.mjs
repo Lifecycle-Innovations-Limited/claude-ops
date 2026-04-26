@@ -302,7 +302,11 @@ async function main() {
     process.exit(1);
   }
 
-  const stored = credSet('Claude-Rotation', args.accountId, JSON.stringify({ cookieName: session.name, token: session.value }));
+  const stored = credSet(
+    'Claude-Rotation',
+    args.accountId,
+    JSON.stringify({ cookieName: session.name, token: session.value }),
+  );
   if (!stored) {
     console.log(JSON.stringify({ ok: false, accountId: args.accountId, error: 'keychain_write_failed' }));
     process.exit(1);
