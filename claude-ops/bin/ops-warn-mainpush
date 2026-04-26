@@ -60,7 +60,7 @@ if [[ -z "$DEST" ]] && command -v git >/dev/null 2>&1; then
         # refspec — Case A/B will catch protected names; do NOT flag it here.
         push_args=$(echo "$CMD" \
           | sed -E 's/.*git[[:space:]]+push[[:space:]]*//' \
-          | sed -E 's/[[:space:];&|`].*$//')
+          | sed -E 's/[;&|`].*$//')
         # Strip leading -u flag.
         push_args=$(echo "$push_args" | sed -E 's/^-u[[:space:]]+//')
         # Re-tokenize what's left (remote-only or empty) by counting words.

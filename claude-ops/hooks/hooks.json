@@ -25,6 +25,21 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-pretool-wacli-health \"$TOOL_INPUT\" 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-prevent-secret-commit \"$TOOL_INPUT\" 2>/dev/null || true",
+            "if": "Bash(git commit *)"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-no-rm-rf-anchor \"$TOOL_INPUT\" 2>/dev/null || true",
+            "if": "Bash(rm *)"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-warn-mainpush \"$TOOL_INPUT\" 2>/dev/null || true",
+            "if": "Bash(git push *)"
           }
         ]
       },

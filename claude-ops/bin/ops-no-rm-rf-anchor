@@ -50,8 +50,7 @@ NORM="$(echo "$CMD" | tr '\n' ' ' | tr -s ' ')"
 # We split commands on ; && || | and check each segment.
 DANGER=""
 
-# shellcheck disable=SC2001
-SEGMENTS=$(echo "$NORM" | sed 's/\(&&\|||\||\|;\)/\n/g')
+SEGMENTS=$(echo "$NORM" | awk '{ gsub(/&&/, "\n"); gsub(/\|\|/, "\n"); gsub(/\|/, "\n"); gsub(/;/, "\n"); print }')
 
 # Run the loop in a subshell so `set -f` (no-glob) doesn't leak to the parent.
 DANGER=$(set -f; while IFS= read -r seg; do
@@ -100,8 +99,6 @@ DANGER=$(set -f; while IFS= read -r seg; do
     if [[ "$tok" == '"$HOME"' || "$tok" == '"$HOME"/' || "$tok" == '"$HOME"/*' ]]; then
       DANGER="$tok"; break
     fi
-    # Only inspect the first non-flag target — that's enough to flag.
-    break
   done
 
   if [[ -n "$DANGER" ]]; then

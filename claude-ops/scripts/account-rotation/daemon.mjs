@@ -20,7 +20,7 @@
 import { readFileSync, writeFileSync, existsSync, unlinkSync, appendFileSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { execSync, spawn } from 'child_process';
+import { execSync, execFileSync, spawn } from 'child_process';
 import { tmpdir } from 'os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -139,9 +139,12 @@ function readStoredToken(account) {
 
 function readActiveKeychainToken() {
   try {
-    const out = execSync('security find-generic-password -s "Claude Code-credentials" -g 2>&1', {
-      timeout: 5000,
-    }).toString();
+    const out = execSync(
+      `security find-generic-password -s "Claude Code-credentials" -a "${KEYCHAIN_ACCOUNT}" -g 2>&1`,
+      {
+        timeout: 5000,
+      }
+    ).toString();
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
@@ -696,7 +699,10 @@ async function mainLoop() {
       // Post-rotation blackout: ALL rotation triggers are suppressed for 90s
       // after any rotation. `claude auth status` returns stale data during this
       // window, which causes drift detection → re-rotation thrashing loops.
-      const stateLastRotation = readState().lastRotation ? new Date(readState().lastRotation).getTime() : 0;
+      const blackoutState = readState();
+      const stateLastRotation = blackoutState.lastRotation
+        ? new Date(blackoutState.lastRotation).getTime()
+        : 0;
       const effectiveLastRotated = Math.max(lastRotatedAt, stateLastRotation);
       const inBlackout = effectiveLastRotated && Date.now() - effectiveLastRotated < POST_ROTATION_BLACKOUT;
 
