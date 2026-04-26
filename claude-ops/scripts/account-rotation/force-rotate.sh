@@ -43,7 +43,7 @@
 #
 # Recovery from stuck state:
 #   pkill -9 -f "rotate\.mjs"
-#   rm -f ~/.claude/scripts/account-rotation/.rotating
+#   rm -f ~/.claude/plugins/data/ops/account-rotation/.rotating
 #   launchctl kickstart -k gui/$(id -u)/com.claude-ops.account-rotation
 #
 # Behavior: --force kills any stuck competing rotate.mjs and bypasses the lock.
@@ -52,7 +52,9 @@
 # by a watchdog so the rotation can never hang indefinitely.
 
 set -u
-DIR="$HOME/.claude/scripts/account-rotation"
+DEFAULT_ROT_DIR="${HOME}/.claude/plugins/data/ops/account-rotation"
+DIR="${CLAUDE_ROTATION_DATA_DIR:-${CLAUDE_PLUGIN_DATA_DIR:-${HOME}/.claude/plugins/data/ops}/account-rotation}"
+[ -d "$DIR" ] || DIR="$DEFAULT_ROT_DIR"
 WATCHDOG_SECONDS="${FORCE_ROTATE_TIMEOUT:-360}"
 
 echo "🔄 Force-rotating Claude account..."
