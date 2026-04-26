@@ -27,7 +27,7 @@ import {
 } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { execSync, execFileSync, spawn } from "child_process";
+import { execSync, execFileSync, spawn, spawnSync } from "child_process";
 import { tmpdir } from "os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -161,10 +161,19 @@ function readStoredToken(account) {
 
 function readActiveKeychainToken() {
   try {
-    const out = execSync(
-      'security find-generic-password -s "Claude Code-credentials" -g 2>&1',
-      { timeout: 5000 },
-    ).toString();
+    const r = spawnSync(
+      "security",
+      [
+        "find-generic-password",
+        "-s",
+        "Claude Code-credentials",
+        "-a",
+        KEYCHAIN_ACCOUNT,
+        "-g",
+      ],
+      { encoding: "utf8", timeout: 5000 },
+    );
+    const out = `${r.stdout || ""}${r.stderr || ""}`;
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
@@ -562,15 +571,11 @@ async function doRotation(reason) {
   }
 }
 
-// ── Dynamic token refresh ────────────────────────────────────────────────────
-// Instead of a fixed hourly launchd job refreshing all accounts, refresh
-// on-demand: when utilization is climbing (50%+), pre-refresh candidate
-// accounts so they're ready for rotation. Also refresh any token within
-// 1h of expiry regardless of utilization.
+// ── Token refresh (vault entries) ───────────────────────────────────────────
+// In-place refresh via OAuth; invoked from shouldRotate / findValidRotationTarget.
 
 const TOKEN_ENDPOINT = "https://platform.claude.com/v1/oauth/token";
 const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const REFRESH_URGENCY_MS = 1 * 3_600_000; // Refresh if <1h remaining
 
 function parseTokenExpiry(tokenJson) {
   try {
@@ -636,41 +641,14 @@ async function refreshSingleToken(account) {
   }
 }
 
-async function dynamicRefresh(config, state) {
-  const now = Date.now();
-  const real = readRealUtilization();
-  const pct5h = real?.five_hour?.pct || 0;
-
-  for (const account of config.accounts) {
-    const key = accountKey(account);
-    if (key === state.activeAccount) continue; // Don't refresh active account mid-session
-
-    const tokenJson = readStoredToken(account);
-    if (!tokenJson) continue;
-    const expiry = parseTokenExpiry(tokenJson);
-    const remaining = expiry - now;
-
-    // Refresh if: token expiring within 1h, OR utilization >50% and token <3h
-    const urgent = remaining > 0 && remaining < REFRESH_URGENCY_MS;
-    const preemptive =
-      pct5h >= 50 && remaining > 0 && remaining < 3 * 3_600_000;
-
-    if (urgent || preemptive) {
-      await refreshSingleToken(account);
-      await sleep(2000); // Don't hammer the token endpoint
-    }
-  }
-}
-
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 async function mainLoop() {
-  log("Daemon started (v3 — dynamic refresh, no hourly launchd)");
-  notify("Claude Rotation Daemon", "Monitoring usage — dynamic refresh");
+  log("Daemon started (v3 — on-demand token refresh)");
+  notify("Claude Rotation Daemon", "Monitoring usage — on-demand refresh");
 
   let lastRotatedAt = 0; // track when we last rotated
   let lastStatusLog = 0; // periodic status logging
-  let lastRefreshCheck = 0; // dynamic refresh check
   let lastDriftCheck = 0; // cheap vault-based drift detection
 
   while (true) {

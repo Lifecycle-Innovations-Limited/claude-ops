@@ -466,7 +466,9 @@ function writeKeychain(json, svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
 function tokenExpired(json) {
   try {
     const exp = JSON.parse(json)?.claudeAiOauth?.expiresAt;
-    return exp ? Date.now() > exp : false;
+    if (!exp) return false;
+    // Match daemon.mjs: treat as expired within 5 minutes of expiry
+    return Date.now() > exp - 5 * 60_000;
   } catch {
     return false;
   }
