@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Multi-account Claude Max rotation daemon (claude-ops plugin).
+
+  This file is a TEMPLATE. The setup wizard substitutes ${HOME} and installs
+  the rendered copy to ~/Library/LaunchAgents/com.claude-ops.account-rotation.plist
+  before running:
+
+    launchctl load ~/Library/LaunchAgents/com.claude-ops.account-rotation.plist
+
+  To uninstall:
+
+    launchctl unload ~/Library/LaunchAgents/com.claude-ops.account-rotation.plist
+    rm ~/Library/LaunchAgents/com.claude-ops.account-rotation.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.claude-ops.account-rotation</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>${HOME}/.claude/plugins/data/ops/account-rotation/daemon.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>${HOME}/.claude/plugins/data/ops/account-rotation</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>NODE_NO_WARNINGS</key>
+    <string>1</string>
+    <key>HOME</key>
+    <string>${HOME}</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>${HOME}/.claude/plugins/data/ops/account-rotation/daemon-launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>${HOME}/.claude/plugins/data/ops/account-rotation/daemon-launchd.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
