@@ -29,6 +29,35 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-deploy-fix-merge-trigger 2>/dev/null || true",
+            "timeout": 5,
+            "if": "Bash(gh pr merge *)"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-deploy-fix-build-trigger 2>/dev/null || true",
+            "timeout": 5,
+            "if": "Bash(npm run build:*)"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-task-reminder 2>/dev/null || true",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
