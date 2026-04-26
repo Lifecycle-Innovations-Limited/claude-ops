@@ -2,21 +2,24 @@
   "_doc": "Maps a regex pattern (matched against subagent description+prompt) → canonical specialist subagent_type. Used by ops-suggest-specialized-agent hook to silently swap general-purpose calls for a better fit. First match wins; order matters. Override by copying to ~/.claude/plugins/data/ops-ops-marketplace/specialist-keywords.json and editing.",
   "_format": "Each rule: { pattern: <egrep regex>, agent: <subagent_type> }. Patterns are case-insensitive.",
   "rules": [
-    { "pattern": "mobile|expo|\\bios\\b|android|react native|fastlane|testflight",       "agent": "fullstack-mobile-architect" },
-    { "pattern": "multi[- ]repo|cross[- ]repo|api contract|workspace.*span",             "agent": "multi-repo-coordinator" },
-    { "pattern": "sentry|otel|datadog|new relic|telemetry|observability",                "agent": "observability-engineer" },
-    { "pattern": "\\beval\\b|judge[- ]llm|golden snapshot|llm[- ]eval",                  "agent": "llm-eval-engineer" },
-    { "pattern": "prompt[- ]engineer|persona|few[- ]shot|prompt cache",                  "agent": "prompt-engineer" },
-    { "pattern": "json schema|tool use spec|structured output|instructor",               "agent": "structured-output-engineer" },
-    { "pattern": "migration|version bump|sdk upgrade|model upgrade|rollback plan",       "agent": "migration-engineer" },
-    { "pattern": "test strategy|test pyramid|coverage gap|flaky test",                   "agent": "test-strategist" },
-    { "pattern": "security audit|owasp|injection|secret leak|csrf|xss",                  "agent": "security-reviewer" },
-    { "pattern": "database|\\bsql\\b|prisma|drizzle|n\\+1|index",                        "agent": "database-reviewer" },
-    { "pattern": "devops|terraform|ecs|cloudformation|aws cdk|cicd|github action",       "agent": "DevOps Engineer" },
-    { "pattern": "typescript|tsconfig|type[- ]check|\\btsc\\b",                          "agent": "typescript-reviewer" },
-    { "pattern": "review.*pr|code review|review code",                                   "agent": "feature-dev:code-reviewer" },
-    { "pattern": "explore|map.*codebase|trace.*execution|architecture",                  "agent": "feature-dev:code-explorer" },
-    { "pattern": "design.*architecture|blueprint|implementation plan",                   "agent": "feature-dev:code-architect" },
-    { "pattern": "simplify|refactor.*for clarity",                                       "agent": "code-simplifier:code-simplifier" }
+    {
+      "pattern": "mobile|expo|\\bios\\b|android|react native|fastlane|testflight",
+      "agent": "fullstack-mobile-architect"
+    },
+    { "pattern": "multi[- ]repo|cross[- ]repo|api contract|workspace.*span", "agent": "multi-repo-coordinator" },
+    { "pattern": "sentry|otel|datadog|new relic|telemetry|observability", "agent": "observability-engineer" },
+    { "pattern": "\\beval\\b|judge[- ]llm|golden snapshot|llm[- ]eval", "agent": "llm-eval-engineer" },
+    { "pattern": "prompt[- ]engineer|persona|few[- ]shot|prompt cache", "agent": "prompt-engineer" },
+    { "pattern": "json schema|tool use spec|structured output|instructor", "agent": "structured-output-engineer" },
+    { "pattern": "migration|version bump|sdk upgrade|model upgrade|rollback plan", "agent": "migration-engineer" },
+    { "pattern": "test strategy|test pyramid|coverage gap|flaky test", "agent": "test-strategist" },
+    { "pattern": "security audit|owasp|injection|secret leak|csrf|xss", "agent": "security-reviewer" },
+    { "pattern": "database|\\bsql\\b|prisma|drizzle|n\\+1|index", "agent": "database-reviewer" },
+    { "pattern": "devops|terraform|ecs|cloudformation|aws cdk|cicd|github action", "agent": "DevOps Engineer" },
+    { "pattern": "typescript|tsconfig|type[- ]check|\\btsc\\b", "agent": "typescript-reviewer" },
+    { "pattern": "review.*pr|code review|review code", "agent": "feature-dev:code-reviewer" },
+    { "pattern": "explore|map.*codebase|trace.*execution|architecture", "agent": "feature-dev:code-explorer" },
+    { "pattern": "design.*architecture|blueprint|implementation plan", "agent": "feature-dev:code-architect" },
+    { "pattern": "simplify|refactor.*for clarity", "agent": "code-simplifier:code-simplifier" }
   ]
 }
