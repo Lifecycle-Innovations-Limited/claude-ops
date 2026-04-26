@@ -259,7 +259,8 @@
       "description": "Numeric GA4 property ID. Find in GA4 Admin > Property Settings.",
       "type": "number",
       "sensitive": false,
-      "min": 1
+      "default": 0,
+      "min": 0
     },
     "google_search_console_site": {
       "title": "Google Search Console Site URL",
@@ -357,7 +358,8 @@
       "description": "Numeric account ID from one.newrelic.com admin portal.",
       "type": "number",
       "sensitive": false,
-      "min": 1
+      "default": 0,
+      "min": 0
     },
     "otel_endpoint": {
       "title": "OTEL Backend Endpoint",

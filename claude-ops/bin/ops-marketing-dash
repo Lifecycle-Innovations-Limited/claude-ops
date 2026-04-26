@@ -113,7 +113,7 @@ gather_meta() {
 
 # --- GA4 ---
 gather_ga4() {
-  if [ -z "$GA4_PROPERTY" ]; then
+  if [ -z "$GA4_PROPERTY" ] || [ "$GA4_PROPERTY" = "0" ]; then
     echo "null"
     return
   fi
