@@ -52,6 +52,24 @@
     "fedex"
   ],
   "userConfig": {
+    "prevent_secret_commit": {
+      "type": "boolean",
+      "title": "Block git commits containing secrets",
+      "description": "PreToolUse hook scans `git diff --cached` for high-confidence secret patterns (Stripe, AWS, GitHub tokens, JWTs, hardcoded passwords) and denies the commit if a match is found.",
+      "default": true
+    },
+    "no_rm_rf_anchor": {
+      "type": "boolean",
+      "title": "Block rm -rf against root anchors",
+      "description": "PreToolUse hook denies `rm -rf` targeting /, ~, $HOME, .., or . — protecting against catastrophic filesystem wipes. Specific subpaths (./node_modules, /tmp/foo) are allowed.",
+      "default": true
+    },
+    "warn_mainpush": {
+      "type": "boolean",
+      "title": "Confirm direct push to main/master/production",
+      "description": "PreToolUse hook forces user confirmation when pushing directly to a protected branch (main/master/production), either via explicit destination or while currently on the branch.",
+      "default": true
+    },
     "deploy_fix_enabled": {
       "type": "boolean",
       "title": "Deploy auto-fix enabled",
