@@ -20,6 +20,7 @@ case "$sub" in
   pr)
     case "$sub2" in
       view)
+        # Single-quoted default: ${VAR:-...} cannot nest raw `}` in the default value.
         _default='{"baseRefName":"dev","mergeCommit":{"oid":"abcdef1234567890"},"state":"MERGED"}'
         echo "${MOCK_GH_PR_VIEW_JSON:-$_default}"
         exit 0

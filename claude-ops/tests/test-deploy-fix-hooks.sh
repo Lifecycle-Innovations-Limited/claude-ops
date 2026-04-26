@@ -136,6 +136,10 @@ STUB
   if [ -f "$TEST_LOGS/monitor-invoked.txt" ]; then
     assert_eq "1a.monitor-args" "owner/repo 123" "$(cat "$TEST_LOGS/monitor-invoked.txt")"
   fi
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -f "$TEST_STATE/lock-monitor-owner-repo-pr123" ] && break
+    sleep 0.2
+  done
   assert_file_exists "1a.lock-written" "$TEST_STATE/lock-monitor-owner-repo-pr123"
 }
 test_merge_trigger_happy
@@ -239,8 +243,7 @@ test_build_trigger_skips_test_cmd() {
 }
 test_build_trigger_skips_test_cmd
 
-
-# 2d — transient failure is detected and no fixer dispatched
+# 2d — transient (E429): JSON context, notify, no fixer dispatch
 test_build_trigger_transient() {
   new_isolated_env "case2-transient"
   export CLAUDE_PLUGIN_OPTION_DEPLOY_FIX_ENABLED=true
@@ -250,13 +253,14 @@ test_build_trigger_transient() {
   out=$(cat "$FIXTURES/build-trigger-transient.json" | bash "$PLUGIN_ROOT/bin/ops-deploy-fix-build-trigger" 2>&1)
   rc=$?
   assert_eq "2d.exit-zero" "0" "$rc"
+  assert_contains "2d.transient-context" "transient signature" "$out"
   sleep 0.5
   if [ ! -s "$TEST_LOGS/claude.log" ]; then
-    pass "2d.no-fixer-on-transient"
+    pass "2d.no-fixer-on-transient-build"
   else
-    fail "2d.no-fixer-on-transient" "claude invoked for transient build failure"
+    fail "2d.no-fixer-on-transient-build" "claude mock invoked for transient build failure"
   fi
-  assert_contains "2d.transient-message" "transient" "$out"
+  assert_contains "2d.notify-build-transient" "Build transient" "$(cat "$TEST_LOGS/notifier.log" 2>/dev/null || echo "")"
 }
 test_build_trigger_transient
 
@@ -505,6 +509,8 @@ echo ""
 echo "── Case 11: monitor real failure → fixer dispatched ──────────────"
 test_monitor_real_failure() {
   new_isolated_env "case11-real"
+  # Hermetic: outer env may set a non-haiku fix model; this case asserts the default Haiku path.
+  export CLAUDE_PLUGIN_OPTION_FIX_MODEL=haiku
   export MOCK_GH_PR_VIEW_JSON='{"baseRefName":"dev","mergeCommit":{"oid":"abcdef1234567890"},"state":"MERGED"}'
   export MOCK_GH_RUN_LIST_JSON='[{"databaseId":99,"headSha":"abcdef1234567890","name":"deploy"}]'
   export MOCK_GH_RUN_WATCH_RC=1
