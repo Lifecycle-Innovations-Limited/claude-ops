@@ -193,13 +193,35 @@ fix_channel_health() {
     WA_LOCK=$(echo "$DOCTOR" | jq -r '.data.lock_held // false' 2>/dev/null)
 
     if [ "$WA_AUTH" = "true" ]; then
-      # Kill stale lock if held >2 min
+      # Kill stale lock if held >2 min — but never kill the legitimate
+      # persistent `wacli sync --follow` daemon (it holds the lock for its
+      # entire lifetime by design; that's not "stale").
       if [ "$WA_LOCK" = "true" ]; then
         LOCK_PID=$(echo "$DOCTOR" | jq -r '.data.lock_info' 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2)
         if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
-          log_fix "wacli-health: killed stale lock holder (pid=$LOCK_PID)"
-          kill "$LOCK_PID" 2>/dev/null; sleep 2
-          kill -0 "$LOCK_PID" 2>/dev/null && kill -9 "$LOCK_PID" 2>/dev/null
+          LOCK_CMD=$(ps -p "$LOCK_PID" -o command= 2>/dev/null || echo "")
+          LOCK_ETIME=$(ps -p "$LOCK_PID" -o etime= 2>/dev/null | tr -d ' ')
+          # Skip if it's the persistent --follow daemon
+          if echo "$LOCK_CMD" | grep -q "wacli sync --follow"; then
+            log_skip "wacli-health: lock held by persistent --follow daemon (pid=$LOCK_PID) — leaving alone"
+          else
+            # Parse etime to seconds. Formats: SS, MM:SS, HH:MM:SS, DD-HH:MM:SS
+            LOCK_AGE=$(echo "$LOCK_ETIME" | awk -F'[-:]' '{
+              n=NF; s=0
+              if (n==1) s=$1
+              else if (n==2) s=$1*60+$2
+              else if (n==3) s=$1*3600+$2*60+$3
+              else if (n==4) s=$1*86400+$2*3600+$3*60+$4
+              print s
+            }')
+            if [ -n "$LOCK_AGE" ] && [ "$LOCK_AGE" -gt 120 ]; then
+              log_fix "wacli-health: killed stale lock holder (pid=$LOCK_PID, age=${LOCK_AGE}s, cmd=$LOCK_CMD)"
+              kill "$LOCK_PID" 2>/dev/null; sleep 2
+              kill -0 "$LOCK_PID" 2>/dev/null && kill -9 "$LOCK_PID" 2>/dev/null
+            else
+              log_skip "wacli-health: lock holder pid=$LOCK_PID is young (${LOCK_AGE}s) — not stale"
+            fi
+          fi
         fi
       fi
 

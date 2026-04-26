@@ -195,6 +195,16 @@ AskUserQuestion call 2 (only if "More..."):
 
 ---
 
+## Superpowers Integration
+
+During this command's execution, invoke the following superpower skill at the specified checkpoint:
+
+- **Checkpoint:** When diagnosing an active issue before proposing a fix (root-cause investigation during Phase 2 cross-reference or Phase 4 agent dispatch brief).
+- **Skill:** `superpowers:systematic-debugging`
+- **Why:** Enforces hypothesis-driven root-cause analysis so fix agents target the real defect, not the symptom.
+
+---
+
 ## Dispatch fix agent
 
 When dispatching for an issue, spawn an Agent using `agents/triage-agent.md` with:

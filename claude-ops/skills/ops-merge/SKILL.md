@@ -282,6 +282,16 @@ Main sync: N repos synced (dev → main → dev)
 
 ---
 
+## Superpowers Integration
+
+During this command's execution, invoke the following superpower skills at the specified checkpoint:
+
+- **Checkpoint:** Before the final merge decision for each PR in Phase 2 and Phase 5 (after fixer reports green).
+- **Skills:** `superpowers:verification-before-completion` + `superpowers:finishing-a-development-branch`
+- **Why:** Verification-before-completion forces evidence (CI green, tests pass) before the merge call; finishing-a-development-branch structures the merge/cleanup choice so nothing ships half-done.
+
+---
+
 ## Safety Rails (NEVER violate)
 
 - **NEVER force-push to main/master**
