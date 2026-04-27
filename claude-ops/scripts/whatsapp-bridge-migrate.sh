@@ -149,6 +149,9 @@ OSASCRIPT
     if [[ "$CONTACTS_JSON" == "[]" ]] || [[ -z "$CONTACTS_JSON" ]]; then
       log "  Contacts.app returned 0 contacts (permissions or empty) — leaving contacts table empty."
       log "  Re-run with WHATSAPP_BRIDGE_DB set after granting Contacts access to run a refresh."
+    elif [[ $DRY_RUN -eq 1 ]]; then
+      CONTACT_COUNT=$(echo "$CONTACTS_JSON" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo "?")
+      log "  DRY RUN — would insert up to $CONTACT_COUNT Contacts.app entries (skipping write)."
     else
       INSERTED=$(python3 - "$BRIDGE_DB" "$CONTACTS_JSON" <<'PYEOF' 2>/dev/null || echo "0"
 import json, sqlite3, sys, re, time
