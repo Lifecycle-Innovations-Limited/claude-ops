@@ -24,6 +24,29 @@ The calling skill has pre-gathered AWS cost data, project revenue stages, regist
 
 **External projects**: Factor Shopify GMV and external SaaS revenue into the financial picture. Flag external projects with auth_expired credentials as revenue risk (especially Shopify stores). Include external service costs in the total burn rate analysis.
 
+### Single source of truth — finops-dashboard first
+
+Before re-querying raw APIs, ALWAYS try the finops-dashboard bridge first.
+The dashboard is the canonical store for spend, anomalies, perks, and
+per-DBA Stripe revenue snapshots — re-computing from raw APIs creates
+drift and burns tokens.
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh snapshot   # canonical state
+${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh anomalies  # open anomalies
+${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh revenue project  # per-DBA MRR
+```
+
+Only fall through to the raw `aws ce`, RevenueCat, and Stripe queries
+below when the bridge returns `{}` or `[]` (dashboard unreachable / token
+unset). When you DO compute fresh numbers, push them back so the
+dashboard stays current:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh push-event \
+  action <project> <amount_saved> "<title>" '<payload_json>'
+```
+
 ## Your mandate
 
 ### 1. Actual burn rate vs. what we think it is
