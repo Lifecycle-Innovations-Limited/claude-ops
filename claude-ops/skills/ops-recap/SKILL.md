@@ -184,6 +184,20 @@ When tmux is missing — or the user wants a second surface — wire the recap i
 
 2. On `Add to Claude Code statusLine`, detect existing entry:
 
+
+   **Prerequisite:** verify `jq` is available before proceeding. If missing, fall back to the `Show me the JSON` path:
+
+   ```bash
+   if ! command -v jq >/dev/null 2>&1; then
+     echo "⚠ jq is not installed — cannot safely merge settings.json."
+     echo "  Install via: brew install jq (macOS) or sudo apt-get install jq (Debian/Ubuntu)"
+     echo "  Falling back to manual instructions."
+     # → show the JSON snippet and exit this flow with statusline_wired unchanged
+   fi
+   ```
+
+   If the guard fires, print the JSON snippet from step 5 and skip to the end of this section. Do NOT proceed with the `jq` operations below.
+
    ```bash
    SETTINGS="$HOME/.claude/settings.json"
    mkdir -p "$(dirname "$SETTINGS")"

@@ -651,6 +651,21 @@ On `Skip`: write `recap.statusline_wired = false` and continue to Step 2d.4.
 
 On `Add to Claude Code statusLine`:
 
+
+ **Prerequisite check:** `jq` is required for safe JSON merging. If missing, fall back to the manual path:
+
+   ```bash
+   if ! command -v jq >/dev/null 2>&1; then
+     echo "⚠ jq is not installed — cannot safely merge settings.json."
+     echo "  Install via: brew install jq (macOS) or sudo apt-get install jq (Debian/Ubuntu)"
+     echo "  Falling back to manual instructions."
+     # → show the JSON snippet (same as 'Show me the JSON' path) and continue
+     #   with recap.statusline_wired = false
+   fi
+   ```
+
+   If the guard fires, print the JSON snippet from the `Show me the JSON` path below, write `recap.statusline_wired = false`, and continue to Step 2d.4. Do NOT proceed with the `jq` operations below.
+
 1. Detect existing `statusLine` entry:
 
    ```bash
