@@ -88,10 +88,13 @@ else
 fi
 
 SETTINGS="$HOME/.claude/settings.json"
+statusline_check_skipped=0
 if ! command -v jq >/dev/null 2>&1; then
-  echo "○ Claude Code statusLine — cannot check (jq not installed)"
+  echo "○ Claude Code statusLine — cannot check (jq not installed; install via 'brew install jq' or your distro's package manager)"
+  statusline_check_skipped=1
 elif [ ! -f "$SETTINGS" ]; then
-  echo "○ Claude Code statusLine — no ~/.claude/settings.json found"
+  echo "○ Claude Code statusLine — no ~/.claude/settings.json found (run Claude Code at least once, or run /ops:recap configure to create one)"
+  statusline_check_skipped=1
 else
   sl_cmd=$(jq -r '.statusLine.command // empty' "$SETTINGS" 2>/dev/null)
   if echo "$sl_cmd" | grep -q claude-recap-digest; then
@@ -102,8 +105,15 @@ else
   fi
 fi
 
+# Only warn "no display surface active" when we actually verified both surfaces.
+# If statusline check was skipped due to missing prerequisites, statusline_wired
+# being 0 is uninformative — surface that explicitly instead of misleading text.
 if [ "$tmux_wired" -eq 0 ] && [ "$statusline_wired" -eq 0 ]; then
-  echo "  → no display surface active. Daemon still produces /tmp/claude-recap-digest (useful for /ops:recap tail)."
+  if [ "$statusline_check_skipped" -eq 1 ]; then
+    echo "  → tmux not wired; statusLine status unknown (prerequisite missing — see above). Daemon still produces /tmp/claude-recap-digest (useful for /ops:recap tail)."
+  else
+    echo "  → no display surface active. Daemon still produces /tmp/claude-recap-digest (useful for /ops:recap tail)."
+  fi
 fi
 ```
 
