@@ -24,7 +24,7 @@ for arg in "$@"; do
     --dry-run)  DRY_RUN=1 ;;
     --verbose)  VERBOSE=1 ;;
     -h|--help)
-      sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
   esac
 done
@@ -74,35 +74,28 @@ else
     content='messages',
     content_rowid='rowid'
   );"
-
   log "  Backfilling FTS index from existing messages..."
   run_sql "INSERT INTO messages_fts(rowid, content)
     SELECT rowid, content FROM messages WHERE content IS NOT NULL AND content != '';"
 fi
 
-FTS_EXISTS=$(query_sql "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts';" 2>/dev/null || echo "0")
-if [[ "$FTS_EXISTS" == "1" ]]; then
-  log "  Ensuring FTS sync triggers..."
-  run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_insert
-    AFTER INSERT ON messages
-    WHEN new.content IS NOT NULL AND new.content != ''
-    BEGIN
-      INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
-    END;"
-
+# Always ensure triggers exist (idempotent — handles partial failure recovery)
+log "  Ensuring FTS triggers exist..."
+run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_insert
+  AFTER INSERT ON messages BEGIN
+    INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+  END;"
   run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_update
-    AFTER UPDATE ON messages BEGIN
-      INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-      INSERT INTO messages_fts(rowid, content)
-        SELECT new.rowid, new.content
-        WHERE new.content IS NOT NULL AND new.content != '';
-    END;"
-
+  AFTER UPDATE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+    INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+  END;"
   run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_delete
-    AFTER DELETE ON messages BEGIN
-      INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-    END;"
-fi
+  AFTER DELETE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+  END;"
+
+log "  FTS5 index and triggers verified."
 
 # ── Step 2: contacts table ────────────────────────────────────────────────────
 log "Step 2: Checking contacts table..."
@@ -124,10 +117,6 @@ fi
 
 # ── Step 3: Seed contacts from macOS Contacts.app ────────────────────────────
 log "Step 3: Seeding contacts..."
-
-if [[ $DRY_RUN -eq 1 ]]; then
-  log "  DRY RUN — skipping contact seed entirely."
-else
 
 CONTACT_COUNT=$(query_sql "SELECT COUNT(*) FROM contacts;" 2>/dev/null || echo "0")
 if [[ "$CONTACT_COUNT" -gt 0 ]]; then
@@ -157,11 +146,12 @@ OSASCRIPT
       log "  Contacts.app returned 0 contacts (permissions or empty) — leaving contacts table empty."
       log "  Re-run with WHATSAPP_BRIDGE_DB set after granting Contacts access to run a refresh."
     else
-      INSERTED=$(CONTACTS_JSON_DATA="$CONTACTS_JSON" python3 - "$BRIDGE_DB" <<'PYEOF' 2>/dev/null || echo "0"
-import json, os, sqlite3, sys, re, time
+      INSERTED=$(python3 - "$BRIDGE_DB" "$CONTACTS_JSON" <<'PYEOF' 2>/dev/null || echo "0"
+import json, sqlite3, sys, re, time
 
 db_path = sys.argv[1]
-contacts = json.loads(os.environ["CONTACTS_JSON_DATA"])
+raw = sys.argv[2]
+contacts = json.loads(raw)
 
 def normalize_phone(p):
     digits = re.sub(r'[^\d+]', '', p)
@@ -198,8 +188,6 @@ PYEOF
     log "  Populate manually: INSERT INTO contacts (jid, name, phone, source) VALUES (...)"
   fi
 fi
-
-fi  # end DRY_RUN guard for contact seed
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 log "Migration complete."
