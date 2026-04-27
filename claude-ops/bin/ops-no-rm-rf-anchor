@@ -29,7 +29,12 @@ except Exception:
   pass
 ' "$INPUT" 2>/dev/null || true)
   # Bash-only fallback when python3 is unavailable or fails.
-  if [[ -z "$parsed" ]]; then
+  # Note: sed's [^"]* treats JSON-escaped quotes (\") as real delimiters,
+  # so it truncates values containing double-quotes — potentially hiding
+  # dangerous targets after a quoted argument (e.g. rm -rf \"dir\" /).
+  # Only use sed when the input has no escaped quotes; otherwise leave
+  # parsed empty so CMD stays as the raw input (safe default).
+  if [[ -z "$parsed" ]] && ! printf '%s' "$INPUT" | grep -qF '\"'; then
     parsed=$(echo "$INPUT" | sed -n 's/.*"command"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
   fi
   [[ -n "$parsed" ]] && CMD="$parsed"
