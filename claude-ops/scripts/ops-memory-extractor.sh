@@ -153,7 +153,7 @@ collect_data() {
     fi
     if echo "${health_status}" | grep -qi "connected\|ok\|healthy" 2>/dev/null; then
       log "Collecting WhatsApp messages..."
-      wa_data=$(sqlite3 "$bridge_db" "SELECT json_group_array(json_object('chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM messages WHERE timestamp >= '${yesterday}' ORDER BY timestamp DESC LIMIT 200;" 2>/dev/null || true)
+      wa_data=$(sqlite3 "$bridge_db" "SELECT json_group_array(json_object('chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM (SELECT chat_jid, sender, content, timestamp, is_from_me FROM messages WHERE timestamp >= '${yesterday}' ORDER BY timestamp DESC LIMIT 200);" 2>/dev/null || true)
       if [[ -z "${wa_data}" ]]; then
         log "bridge db returned no data (skipping)"
       fi

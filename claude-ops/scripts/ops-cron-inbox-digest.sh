@@ -23,7 +23,7 @@ fi
 WA_SUMMARY="WhatsApp: unavailable"
 if [[ -f "$BRIDGE_DB" ]]; then
   SINCE=$(date -u -v-4H "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "4 hours ago" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u "+%Y-%m-%dT%H:%M:%SZ")
-  WA_RAW=$(sqlite3 "$BRIDGE_DB" "SELECT json_group_array(json_object('chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM messages WHERE timestamp >= '${SINCE}' ORDER BY timestamp DESC LIMIT 20;" 2>/dev/null || echo "[]")
+  WA_RAW=$(sqlite3 "$BRIDGE_DB" "SELECT json_group_array(json_object('chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM (SELECT chat_jid, sender, content, timestamp, is_from_me FROM messages WHERE timestamp >= '${SINCE}' ORDER BY timestamp DESC LIMIT 20);" 2>/dev/null || echo "[]")
   WA_COUNT=$(echo "$WA_RAW" | python3 -c "
 import json, sys
 msgs = json.load(sys.stdin)

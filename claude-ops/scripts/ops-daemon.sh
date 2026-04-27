@@ -1143,7 +1143,7 @@ except Exception:
 # Resolve plugin-root-relative paths for daemon scripts (so the unit files
 # embed absolute paths that still work when invoked by another user context).
 OPS_DAEMON_SCRIPT="$SCRIPT_DIR/scripts/ops-daemon.sh"
-OPS_KEEPALIVE_SCRIPT="$SCRIPT_DIR/scripts/wacli-keepalive.sh"
+OPS_KEEPALIVE_SCRIPT="$SCRIPT_DIR/legacy/wacli-keepalive.sh.deprecated"
 
 install_daemon_launchd() {
   command -v launchctl >/dev/null 2>&1 || {
