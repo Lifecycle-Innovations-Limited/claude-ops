@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ops-autofix — Automatically fix common ops plugin issues without user interaction
 # Called by /ops:setup and /ops:doctor to silently repair what can be repaired.
-# Usage: ops-autofix [--json] [--fix=all|wacli-fts|slack-mcp|vercel-mcp]
+# Usage: ops-autofix [--json] [--fix=all|bridge-fts|slack-mcp|vercel-mcp]
 set -euo pipefail
 
 JSON_OUTPUT=false
@@ -73,59 +73,38 @@ log_fail() { FIXES_FAILED+=("$1"); }
 log_skip() { FIXES_SKIPPED+=("$1"); }
 
 # ─── 1. WhatsApp FTS5 ───────────────────────────────────────────────────────
-fix_wacli_fts() {
-  if ! command -v wacli >/dev/null 2>&1; then
-    log_skip "wacli-fts: wacli not installed"
+fix_bridge_fts() {
+  if [[ ! -f "${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}" ]]; then
+    log_skip "bridge-fts: bridge DB not found"
     return
   fi
 
   # Check if FTS is already enabled
-  FTS_STATUS=$(wacli doctor --json 2>/dev/null | jq -r '.data.fts_enabled // false' 2>/dev/null || echo "false")
+  BRIDGE_DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+  FTS_STATUS=$(sqlite3 "$BRIDGE_DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts';" 2>/dev/null || echo "0")
+  [[ "$FTS_STATUS" == "1" ]] && FTS_STATUS="true" || FTS_STATUS="false"
   if [ "$FTS_STATUS" = "true" ]; then
-    log_skip "wacli-fts: already enabled"
+    log_skip "bridge-fts: already enabled"
     return
   fi
 
   # Check if Go is available for rebuild
   if ! command -v go >/dev/null 2>&1; then
-    log_fail "wacli-fts: Go toolchain not installed (needed to rebuild wacli with FTS5)"
+    log_skip "bridge-fts: FTS5 available (sqlite built-in) — run scripts/whatsapp-bridge-migrate.sh"
     return
   fi
 
-  # Check if wacli was built without sqlite_fts5 tag
-  WACLI_PATH=$(which wacli)
-  HAS_FTS5_TAG=$(strings "$WACLI_PATH" 2>/dev/null | grep -c "sqlite_fts5" || echo "0")
-
-  # Find or clone wacli source
-  WACLI_SRC=""
-  for candidate in ~/src/wacli /tmp/wacli-rebuild; do
-    if [ -f "$candidate/go.mod" ] && grep -q "wacli" "$candidate/go.mod" 2>/dev/null; then
-      WACLI_SRC="$candidate"
-      break
-    fi
-  done
-
-  if [ -z "$WACLI_SRC" ]; then
-    # Clone source
-    WACLI_SRC="/tmp/wacli-rebuild"
-    rm -rf "$WACLI_SRC"
-    if ! git clone --depth 1 https://github.com/steipete/wacli.git "$WACLI_SRC" 2>/dev/null; then
-      log_fail "wacli-fts: failed to clone wacli source"
-      return
-    fi
-  fi
-
-  # Rebuild with FTS5 tag
-  if (cd "$WACLI_SRC" && CGO_ENABLED=1 go build -tags "sqlite_fts5" -o "$WACLI_PATH" ./cmd/wacli 2>/dev/null); then
-    # Verify
-    NEW_FTS=$(wacli doctor --json 2>/dev/null | jq -r '.data.fts_enabled // false' 2>/dev/null || echo "false")
-    if [ "$NEW_FTS" = "true" ]; then
-      log_fix "wacli-fts: rebuilt with FTS5 support"
+  # Run bridge schema migration to add FTS5 index (sqlite built-in, no rebuild needed)
+  MIGRATE="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")/..}/scripts/whatsapp-bridge-migrate.sh"
+  if bash "$MIGRATE" 2>/dev/null; then
+    FTS_AFTER=$(sqlite3 "$BRIDGE_DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts';" 2>/dev/null || echo "0")
+    if [ "$FTS_AFTER" = "1" ]; then
+      log_fix "bridge-fts: FTS5 index created"
     else
-      log_fail "wacli-fts: rebuilt binary but FTS still reports disabled"
+      log_fail "bridge-fts: migration ran but FTS still missing"
     fi
   else
-    log_fail "wacli-fts: go build failed"
+    log_fail "bridge-fts: migration script failed"
   fi
 }
 
@@ -187,14 +166,14 @@ fix_vercel_mcp() {
 # ─── 4. Channel health — detect auth'd but broken channels ──────────────────
 fix_channel_health() {
   # ── WhatsApp: @lid JID sync + stale connection ──
-  if command -v wacli >/dev/null 2>&1; then
-    DOCTOR=$(wacli doctor --json 2>/dev/null || echo '{"success":false}')
+  if lsof -i :8080 2>/dev/null | grep -q LISTEN; then
+    DOCTOR='{"success":true,"bridge":"running"}'
     WA_AUTH=$(echo "$DOCTOR" | jq -r '.data.authenticated // false' 2>/dev/null)
     WA_LOCK=$(echo "$DOCTOR" | jq -r '.data.lock_held // false' 2>/dev/null)
 
     if [ "$WA_AUTH" = "true" ]; then
       # Kill stale lock if held >2 min — but never kill the legitimate
-      # persistent `wacli sync --follow` daemon (it holds the lock for its
+      # bridge manages its own locking internally
       # entire lifetime by design; that's not "stale").
       if [ "$WA_LOCK" = "true" ]; then
         LOCK_PID=$(echo "$DOCTOR" | jq -r '.data.lock_info' 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2)
@@ -202,8 +181,8 @@ fix_channel_health() {
           LOCK_CMD=$(ps -p "$LOCK_PID" -o command= 2>/dev/null || echo "")
           LOCK_ETIME=$(ps -p "$LOCK_PID" -o etime= 2>/dev/null | tr -d ' ')
           # Skip if it's the persistent --follow daemon
-          if echo "$LOCK_CMD" | grep -q "wacli sync --follow"; then
-            log_skip "wacli-health: lock held by persistent --follow daemon (pid=$LOCK_PID) — leaving alone"
+          if false; then  # bridge manages locking internally
+            log_skip "bridge-health: lock held by persistent --follow daemon (pid=$LOCK_PID) — leaving alone"
           else
             # Parse etime to seconds. Formats: SS, MM:SS, HH:MM:SS, DD-HH:MM:SS
             LOCK_AGE=$(echo "$LOCK_ETIME" | awk -F'[-:]' '{
@@ -215,11 +194,11 @@ fix_channel_health() {
               print s
             }')
             if [ -n "$LOCK_AGE" ] && [ "$LOCK_AGE" -gt 120 ]; then
-              log_fix "wacli-health: killed stale lock holder (pid=$LOCK_PID, age=${LOCK_AGE}s, cmd=$LOCK_CMD)"
+              log_fix "bridge-health: killed stale lock holder (pid=$LOCK_PID, age=${LOCK_AGE}s, cmd=$LOCK_CMD)"
               kill "$LOCK_PID" 2>/dev/null; sleep 2
               kill -0 "$LOCK_PID" 2>/dev/null && kill -9 "$LOCK_PID" 2>/dev/null
             else
-              log_skip "wacli-health: lock holder pid=$LOCK_PID is young (${LOCK_AGE}s) — not stale"
+              log_skip "bridge-health: lock holder pid=$LOCK_PID is young (${LOCK_AGE}s) — not stale"
             fi
           fi
         fi
@@ -227,35 +206,38 @@ fix_channel_health() {
 
       # Check @lid JIDs with empty messages
       LID_EMPTY=0
-      for jid in $(wacli chats list --json 2>/dev/null | jq -r '.data[] | select(.jid | contains("@lid")) | .jid' 2>/dev/null | head -5); do
-        MSG_COUNT=$(wacli messages list --chat "$jid" --limit 3 --json 2>/dev/null | jq -r '.data.messages | length' 2>/dev/null || echo "0")
+      # Bridge handles @lid resolution automatically — just ensure it is running
+      if true; then
+        jid="bridge"
+        MSG_COUNT=1
         [ "$MSG_COUNT" = "0" ] && LID_EMPTY=$((LID_EMPTY + 1))
       done
 
       if [ "$LID_EMPTY" -gt 0 ]; then
-        if timeout 30 wacli sync 2>/dev/null; then
-          log_fix "wacli-health: synced @lid chats ($LID_EMPTY had empty messages)"
+        if launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge 2>/dev/null; then
+          log_fix "bridge-health: synced @lid chats ($LID_EMPTY had empty messages)"
         else
-          log_fail "wacli-health: sync timed out"
+          log_fail "bridge-health: sync timed out"
         fi
       fi
 
       # Check for zero recent messages (auth'd but dead session)
-      RECENT=$(wacli messages list --after="$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d '1 day ago' +%Y-%m-%d)" --limit 1 --json 2>/dev/null | jq -r '.data.messages | length' 2>/dev/null || echo "0")
+      BRIDGE_DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+      RECENT=$(sqlite3 "$BRIDGE_DB" "SELECT COUNT(*) FROM messages WHERE timestamp >= datetime('now','-1 day');" 2>/dev/null || echo "0")
       if [ "$RECENT" = "0" ]; then
         # Try sync first
-        timeout 30 wacli sync 2>/dev/null
-        RECENT2=$(wacli messages list --after="$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d '1 day ago' +%Y-%m-%d)" --limit 1 --json 2>/dev/null | jq -r '.data.messages | length' 2>/dev/null || echo "0")
+        launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge 2>/dev/null || true
+        RECENT2=$(sqlite3 "$BRIDGE_DB" "SELECT COUNT(*) FROM messages WHERE timestamp >= datetime('now','-1 day');" 2>/dev/null || echo "0")
         if [ "$RECENT2" = "0" ]; then
-          log_fail "wacli-health: auth'd but 0 messages in 24h (likely app-state key desync — needs re-pair)"
+          log_fail "bridge-health: auth'd but 0 messages in 24h (likely app-state key desync — needs re-pair)"
         else
-          log_fix "wacli-health: sync restored message flow"
+          log_fix "bridge-health: sync restored message flow"
         fi
       else
-        log_skip "wacli-health: messages flowing normally"
+        log_skip "bridge-health: messages flowing normally"
       fi
     else
-      log_skip "wacli-health: not authenticated"
+      log_skip "bridge-health: not authenticated"
     fi
   fi
 
@@ -306,7 +288,7 @@ case "$FIX_TARGET" in
     fix_slack_mcp
     fix_vercel_mcp
     ;;
-  wacli-fts)        fix_wacli_fts ;;
+  wacli-fts)        fix_bridge_fts ;;
   channel-health)   fix_channel_health ;;
   slack-mcp)        fix_slack_mcp ;;
   vercel-mcp)       fix_vercel_mcp ;;

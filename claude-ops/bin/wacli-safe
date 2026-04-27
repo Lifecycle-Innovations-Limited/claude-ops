@@ -1,48 +1,18 @@
 #!/usr/bin/env bash
-# wacli-safe — Run a one-shot wacli command without store-lock conflicts.
+# wacli-safe — DEPRECATED. wacli is decommissioned.
 #
-# Pauses the persistent keepalive sync, runs the command, then lets sync resume.
-# Usage: wacli-safe send --to "+1234567890" --text "Hello"
-#        wacli-safe history backfill --chat "12345@s.whatsapp.net" --count 50
+# The Baileys whatsapp-bridge manages its own store locking internally.
+# No external lock/pause mechanism is needed. This script is a no-op shim
+# kept for backwards compatibility with any scripts that may invoke it.
 #
-# The keepalive script watches for the pause signal file and gracefully stops
-# its persistent sync. After this script exits (or after 60s timeout), the
-# keepalive resumes automatically.
+# For bridge operations use mcp__whatsapp__* tools directly.
 set -euo pipefail
 
-WACLI="${WACLI_BIN:-/usr/local/bin/wacli}"
-STORE="${WACLI_STORE:-$HOME/.wacli}"
-PAUSE_SIGNAL="$STORE/.pause_sync"
-
 if [[ $# -eq 0 ]]; then
-  echo "Usage: wacli-safe <wacli-subcommand> [args...]" >&2
-  echo "  Pauses keepalive sync, runs the wacli command, then resumes sync." >&2
+  echo "wacli-safe: wacli is decommissioned. Use mcp__whatsapp__* tools instead." >&2
   exit 1
 fi
 
-cleanup() {
-  rm -f "$PAUSE_SIGNAL"
-}
-trap cleanup EXIT INT TERM
-
-# Write pause signal with our PID + timestamp
-mkdir -p "$STORE"
-echo "$$" > "$PAUSE_SIGNAL"
-
-# Wait for keepalive to stop its sync (check every 500ms, max 10s)
-waited=0
-while pgrep -f "wacli sync --follow" >/dev/null 2>&1 && [[ $waited -lt 20 ]]; do
-  sleep 0.5
-  (( waited++ )) || true
-done
-
-if pgrep -f "wacli sync --follow" >/dev/null 2>&1; then
-  echo "warning: keepalive sync still running after 10s — proceeding anyway" >&2
-fi
-
-# Run the actual wacli command
-"$WACLI" "$@"
-exit_code=$?
-
-# Cleanup happens via trap
-exit $exit_code
+echo "wacli-safe: wacli is decommissioned. Command ignored: $*" >&2
+echo "Use mcp__whatsapp__send_message / mcp__whatsapp__list_messages etc. instead." >&2
+exit 1

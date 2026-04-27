@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ops-setup-install — Idempotent installer for ops CLI dependencies
 # Usage: ops-setup-install [--dry-run] [--json] [--list-pkg-mgr] <tool> [<tool>...]
-# Tools: jq git gh aws node brew doppler wacli gog sentry-cli expect
+# Tools: jq git gh aws node brew doppler gog sentry-cli expect
 set -euo pipefail
 
 # ─── Source the os-detect helper (cross-OS pkg mgr detection) ───────────────
@@ -148,10 +148,9 @@ install_special() {
       fi
       echo "○ sentry-cli needs npm or Homebrew — install Node first, then retry." >&2
       return 2 ;;
-    wacli)
-      # wacli isn't on any package manager yet — point users to source install.
-      echo "○ wacli is not on any package manager — install from source:" >&2
-      echo "  git clone https://github.com/wacli/wacli && cd wacli && ./install.sh" >&2
+    whatsapp-bridge)
+      # whatsapp-bridge is installed as part of whatsapp-mcp
+      echo "○ whatsapp-bridge install: git clone https://github.com/Lifecycle-Innovations-Limited/whatsapp-mcp ~/.local/share/whatsapp-mcp && cd ~/.local/share/whatsapp-mcp/whatsapp-bridge && go build -o whatsapp-bridge ." >&2
       return 2 ;;
     brew)
       # Homebrew has its own bootstrap installer.

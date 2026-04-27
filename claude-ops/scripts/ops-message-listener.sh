@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ops-message-listener.sh — Poll-based message listener (replaces OpenClaw WebSocket gateway)
-# Supervised by ops-daemon. Polls WhatsApp (wacli) + Telegram every 60s.
+# Supervised by ops-daemon. Polls WhatsApp (Baileys bridge messages.db) + Telegram every 60s.
 # New non-owner messages → written to inbox-queue.json for /ops:inbox to consume.
 # Health status written to listener-health.txt for daemon monitoring.
 set -euo pipefail
@@ -11,7 +11,7 @@ LOG="$LOG_DIR/message-listener.log"
 QUEUE_FILE="$DATA_DIR/inbox-queue.json"
 HEALTH_FILE="$DATA_DIR/listener-health.txt"
 STATE_FILE="$DATA_DIR/listener-state.json"
-WACLI="${WACLI_BIN:-$(command -v wacli 2>/dev/null || echo /usr/local/bin/wacli)}"
+BRIDGE_DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
 POLL_INTERVAL="${OPS_LISTENER_POLL_INTERVAL:-60}"
 
 mkdir -p "$LOG_DIR" "$DATA_DIR"
@@ -87,7 +87,7 @@ print(added)
 # ── Poll WhatsApp ─────────────────────────────────────────────────────────
 poll_whatsapp() {
   local since="$1"
-  if ! command -v wacli &>/dev/null && [[ ! -x "$WACLI" ]]; then
+  if [[ ! -f "$BRIDGE_DB" ]]; then
     echo "[]"
     return
   fi
@@ -96,7 +96,7 @@ poll_whatsapp() {
   [[ -n "$since" ]] && since_flag="--after=$since"
 
   local raw
-  raw=$("$WACLI" messages list $since_flag --limit 20 --json 2>/dev/null || echo "[]")
+  raw=$(sqlite3 "$BRIDGE_DB" "SELECT json_group_array(json_object('chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM messages WHERE timestamp > '${WA_LAST_SEEN:-1970-01-01}' ORDER BY timestamp DESC LIMIT 20;" 2>/dev/null || echo "[]")
 
   # Filter: only non-owner (from_me=false) messages
   echo "$raw" | python3 -c "

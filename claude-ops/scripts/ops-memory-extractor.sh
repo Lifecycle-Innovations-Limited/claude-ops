@@ -140,27 +140,28 @@ resolve_api_key() { resolve_auth; }
 
 # ── Collect raw data ──────────────────────────────────────────────────────────
 collect_data() {
-  local wacli_data="" email_data=""
+  local wa_data="" email_data=""
   local yesterday
   yesterday=$(TZ=UTC _date_days_ago 1 "+%Y-%m-%d")
 
-  # WhatsApp via wacli
-  if command -v wacli &>/dev/null; then
+  # WhatsApp via Baileys bridge messages.db
+  local bridge_db="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+  if [[ -f "$bridge_db" ]]; then
     local health_status=""
-    if [[ -f "${HOME}/.wacli/.health" ]]; then
-      health_status=$(cat "${HOME}/.wacli/.health" 2>/dev/null || true)
+    if lsof -i :8080 2>/dev/null | grep -q LISTEN; then
+      health_status="connected"
     fi
     if echo "${health_status}" | grep -qi "connected\|ok\|healthy" 2>/dev/null; then
       log "Collecting WhatsApp messages..."
-      wacli_data=$(wacli messages list --after="${yesterday}" --limit=200 --json 2>/dev/null || true)
-      if [[ -z "${wacli_data}" ]]; then
-        log "wacli returned no data (skipping)"
+      wa_data=$(sqlite3 "$bridge_db" "SELECT json_group_array(json_object('chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM messages WHERE timestamp >= '${yesterday}' ORDER BY timestamp DESC LIMIT 200;" 2>/dev/null || true)
+      if [[ -z "${wa_data}" ]]; then
+        log "bridge db returned no data (skipping)"
       fi
     else
-      log "wacli not connected (skipping WhatsApp)"
+      log "whatsapp-bridge not running (skipping WhatsApp)"
     fi
   else
-    log "wacli not available (skipping WhatsApp)"
+    log "bridge db not found (skipping WhatsApp)"
   fi
 
   # Email via gog
@@ -174,7 +175,7 @@ collect_data() {
     log "gog not available (skipping email)"
   fi
 
-  if [[ -z "${wacli_data}" && -z "${email_data}" ]]; then
+  if [[ -z "${wa_data}" && -z "${email_data}" ]]; then
     log "No data sources available — nothing to extract"
     write_health "skipped" "no data sources"
     exit 0
@@ -183,7 +184,7 @@ collect_data() {
   # Write combined raw payload
   cat > "${TMP_RAW}" <<EOF
 {
-  "whatsapp_messages": ${wacli_data:-null},
+  "whatsapp_messages": ${wa_data:-null},
   "emails": ${email_data:-null},
   "collected_at": "$(ts)"
 }
