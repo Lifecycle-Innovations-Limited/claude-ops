@@ -75,7 +75,7 @@ cmd_push_event() {
   local amount="${3:-}"
   local title="${4:-}"
   local payload_json="${5:-{}}"
-  local idem="${6:-$(date +%s%N)-$$-${RANDOM}}"
+  local idem="${6:-$(date +%s)-$$-${RANDOM}-${RANDOM}}"
 
   [[ -z "$TOKEN" ]] && {
     echo "{\"error\":\"FINOPS_OPS_API_TOKEN not set\"}" >&2
@@ -90,7 +90,8 @@ cmd_push_event() {
     '{kind:$kind, project:($project|select(length>0)),
       amount_saved:($amount|select(length>0)|tonumber? // null),
       title:($title|select(length>0)), payload:$payload,
-      source:"claude-ops", idempotency_key:$idem}')
+      source:"claude-ops", idempotency_key:$idem}' 2>/dev/null) \
+    || { emit_empty obj; exit 0; }
 
   curl "${CURL_OPTS[@]}" -X POST "${BASE}/api/ops/events" \
     -H "Content-Type: application/json" -d "$body" 2>/dev/null || emit_empty obj
@@ -107,7 +108,8 @@ cmd_resolve_anomaly() {
   body=$(jq -nc --arg project "$project" --arg amount "$amount" \
     '{project:($project|select(length>0)),
       amount_saved:($amount|select(length>0)|tonumber? // null),
-      source:"claude-ops"}')
+      source:"claude-ops"}' 2>/dev/null) \
+    || { emit_empty obj; exit 0; }
 
   curl "${CURL_OPTS[@]}" -X POST "${BASE}/api/ops/anomalies/${id}/resolve" \
     -H "Content-Type: application/json" -d "$body" 2>/dev/null || emit_empty obj
