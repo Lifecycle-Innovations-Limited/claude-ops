@@ -79,7 +79,8 @@ cmd_push_event() {
 
   [[ -z "$TOKEN" ]] && {
     echo "{\"error\":\"FINOPS_OPS_API_TOKEN not set\"}" >&2
-    return 1
+    emit_empty obj
+    return 0
   }
 
   # Validate payload_json before passing to --argjson (bad JSON aborts jq under set -e)
@@ -105,7 +106,7 @@ cmd_resolve_anomaly() {
   local project="${2:-}"
   local amount="${3:-}"
 
-  [[ -z "$TOKEN" ]] && return 1
+  [[ -z "$TOKEN" ]] && { emit_empty obj; return 0; }
 
   local body
   body=$(jq -nc --arg project "$project" --arg amount "$amount" \
