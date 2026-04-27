@@ -10,7 +10,7 @@ memory: project
 ## Purpose
 
 Builds structured memory from raw chat data so ops skills (inbox, comms, go) can draft
-context-aware messages. Reads WhatsApp (wacli) and email (gog) history, calls Claude Haiku
+context-aware messages. Reads WhatsApp (bridge messages.db) and email (gog) history, calls Claude Haiku
 for extraction, and writes/merges structured markdown memory files.
 
 ## Memory Location
@@ -56,8 +56,12 @@ CONTACT_FILE=$(ls "${MEMORIES}/contact_"*deeksha* 2>/dev/null | head -1)
 
 ## Data Sources
 
-- **WhatsApp**: `wacli messages list --after=<yesterday> --limit=200 --json`
-  - Requires wacli connected (`~/.wacli/.health` contains "connected")
+- **WhatsApp**: direct sqlite3 query on bridge messages.db:
+  ```bash
+  DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+  sqlite3 "$DB" "SELECT chat_jid, sender, content, timestamp, is_from_me FROM messages WHERE timestamp >= '<yesterday>' ORDER BY timestamp DESC LIMIT 200;"
+  ```
+  - Requires bridge running: `lsof -i :8080 | grep LISTEN`
 - **Email**: `gog gmail search -j --results-only --no-input --max 20 "newer_than:1d"`
   - Requires gog available
 
