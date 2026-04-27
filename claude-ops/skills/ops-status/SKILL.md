@@ -68,7 +68,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-status $ARGUMENTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  OPS ► STATUS — Mon 14 Apr 2026 09:45 UTC
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- CLIs         ✓ gh   ✓ aws  ✓ jq   ✓ node   ✗ wacli
+ CLIs         ✓ gh   ✓ aws  ✓ jq   ✓ node   ✗ whatsapp-bridge
  Channels     ✓ gog   ✓ slack  ○ telegram   ✗ whatsapp
  MCPs         ✓ linear  ✓ sentry  ✓ vercel  ○ gmail
  Commerce     ○ shopify
@@ -83,7 +83,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-status $ARGUMENTS
 
 ```json
 {
-  "clis": {"gh": "ok", "aws": "ok", "jq": "ok", "node": "ok", "wacli": "missing"},
+  "clis": {"gh": "ok", "aws": "ok", "jq": "ok", "node": "ok", "whatsapp-bridge": "missing"},
   "channels": {"whatsapp": "ok", "slack": "ok", "telegram": "not-configured"},
   "mcps": {"linear": "ok", "sentry": "ok", "vercel": "ok", "gmail": "not-configured"},
   "commerce": {"shopify": "not-configured"},
