@@ -6,7 +6,7 @@ set -euo pipefail
 DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 LOG_DIR="$DATA_DIR/logs"
 LOG="$LOG_DIR/inbox-digest.log"
-WACLI="${WACLI_BIN:-$(command -v wacli 2>/dev/null || echo /usr/local/bin/wacli)}"
+BRIDGE_DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
 
 mkdir -p "$LOG_DIR"
 log() { printf '%s [inbox-digest] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" | tee -a "$LOG"; }
@@ -21,9 +21,9 @@ fi
 
 # ── Gather WhatsApp unread count ──────────────────────────────────────────
 WA_SUMMARY="WhatsApp: unavailable"
-if command -v wacli &>/dev/null || [[ -x "$WACLI" ]]; then
+if [[ -f "$BRIDGE_DB" ]]; then
   SINCE=$(date -u -v-4H "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "4 hours ago" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u "+%Y-%m-%dT%H:%M:%SZ")
-  WA_RAW=$("$WACLI" messages list --after="$SINCE" --limit 20 --json 2>/dev/null || echo "[]")
+  WA_RAW=$(sqlite3 "$BRIDGE_DB" "SELECT json_group_array(json_object('chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM messages WHERE timestamp >= '${SINCE}' ORDER BY timestamp DESC LIMIT 20;" 2>/dev/null || echo "[]")
   WA_COUNT=$(echo "$WA_RAW" | python3 -c "
 import json, sys
 msgs = json.load(sys.stdin)

@@ -104,7 +104,8 @@ _channel_configured() {
   case "$channel" in
     whatsapp)
       _pref_has ".channels.whatsapp" && return 0
-      has_cmd wacli && return 0
+      # wacli decommissioned — bridge check instead
+  lsof -i :8080 2>/dev/null | grep -q LISTEN && return 0
       ;;
     telegram)
       _pref_has ".channels.telegram" && return 0
@@ -141,7 +142,7 @@ _mcp_present() {
 }
 
 # ─── 1. CLIs ────────────────────────────────────────────────────────────────
-CLI_LIST=(gh aws jq node wacli gog doppler)
+CLI_LIST=(gh aws jq node gog doppler)
 declare -A CLI_STATUS
 for c in "${CLI_LIST[@]}"; do
   if has_cmd "$c"; then CLI_STATUS[$c]="ok"; else CLI_STATUS[$c]="missing"; fi
