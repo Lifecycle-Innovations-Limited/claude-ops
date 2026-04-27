@@ -206,7 +206,7 @@ start_service() {
   export OPS_DAEMON_MANAGED=1
 
   rotate_service_log "$LOG_DIR/${name}.log"
-  bash "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
+  bash -c "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
   local pid=$!
   SERVICE_PIDS["$name"]=$pid
   SERVICE_STATUS["$name"]="running"
@@ -503,7 +503,7 @@ run_cron_service() {
   export OPS_DAEMON_PID=$$
   export OPS_DAEMON_MANAGED=1
   rotate_service_log "$LOG_DIR/${name}.log"
-  bash "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
+  bash -c "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
   local pid=$!
   wait "$pid" 2>/dev/null || true
 
