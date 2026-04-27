@@ -84,14 +84,18 @@ FTS_EXISTS=$(query_sql "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AN
 if [[ "$FTS_EXISTS" == "1" ]]; then
   log "  Ensuring FTS sync triggers..."
   run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_insert
-    AFTER INSERT ON messages BEGIN
+    AFTER INSERT ON messages
+    WHEN new.content IS NOT NULL AND new.content != ''
+    BEGIN
       INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
     END;"
 
   run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_update
     AFTER UPDATE ON messages BEGIN
       INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-      INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+      INSERT INTO messages_fts(rowid, content)
+        SELECT new.rowid, new.content
+        WHERE new.content IS NOT NULL AND new.content != '';
     END;"
 
   run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_delete
