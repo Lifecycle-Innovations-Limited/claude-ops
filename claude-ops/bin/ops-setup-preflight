@@ -96,8 +96,6 @@ cred_get() {
     echo '{"bridge":"running"}' > "$OUT/bridge-health.json"
   else
     echo '{"bridge":"stopped"}' > "$OUT/bridge-health.json"
-  else
-    echo '{"success":false,"reason":"not_installed"}' > "$OUT/wacli-doctor.json"
   fi
 } &
 

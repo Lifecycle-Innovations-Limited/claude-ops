@@ -27,8 +27,8 @@ if [[ -f "$BRIDGE_DB" ]]; then
   WA_COUNT=$(echo "$WA_RAW" | python3 -c "
 import json, sys
 msgs = json.load(sys.stdin)
-# Filter out messages from owner (from_me=true)
-unread = [m for m in msgs if not m.get('from_me', False)]
+# Filter out messages from owner (is_from_me=true)
+unread = [m for m in msgs if not m.get('is_from_me', False)]
 print(len(unread))
 " 2>/dev/null || echo "0")
 
@@ -38,7 +38,7 @@ print(len(unread))
     WA_SENDERS=$(echo "$WA_RAW" | python3 -c "
 import json, sys
 msgs = json.load(sys.stdin)
-unread = [m for m in msgs if not m.get('from_me', False)]
+unread = [m for m in msgs if not m.get('is_from_me', False)]
 senders = list({m.get('contact_name', m.get('from', 'unknown')) for m in unread})[:5]
 print(', '.join(senders))
 " 2>/dev/null || echo "unknown")
