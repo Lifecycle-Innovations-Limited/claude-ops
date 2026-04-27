@@ -88,12 +88,6 @@ fix_bridge_fts() {
     return
   fi
 
-  # Check if Go is available for rebuild
-  if ! command -v go >/dev/null 2>&1; then
-    log_skip "bridge-fts: FTS5 available (sqlite built-in) — run scripts/whatsapp-bridge-migrate.sh"
-    return
-  fi
-
   # Run bridge schema migration to add FTS5 index (sqlite built-in, no rebuild needed)
   MIGRATE="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")/..}/scripts/whatsapp-bridge-migrate.sh"
   if bash "$MIGRATE" 2>/dev/null; then
@@ -211,7 +205,7 @@ fix_channel_health() {
         jid="bridge"
         MSG_COUNT=1
         [ "$MSG_COUNT" = "0" ] && LID_EMPTY=$((LID_EMPTY + 1))
-      done
+      fi
 
       if [ "$LID_EMPTY" -gt 0 ]; then
         if launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge 2>/dev/null; then
@@ -283,7 +277,7 @@ fix_channel_health() {
 # ─── Run fixes ───────────────────────────────────────────────────────────────
 case "$FIX_TARGET" in
   all)
-    fix_wacli_fts
+    fix_bridge_fts
     fix_channel_health
     fix_slack_mcp
     fix_vercel_mcp
