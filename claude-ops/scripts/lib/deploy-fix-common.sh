@@ -107,7 +107,16 @@ notify() {
           --form-string "token=$token" --form-string "user=$user" \
           --form-string "title=$title" --form-string "message=$msg" >/dev/null 2>&1
       ;;
+    telegram)
+      local token="${TELEGRAM_BOT_TOKEN:-}"
+      local chat_id="${TELEGRAM_NOTIFY_CHAT_ID:-${TELEGRAM_OWNER_ID:-}}"
+      [ -n "$token" ] && [ -n "$chat_id" ] && \
+        curl -sS -X POST "https://api.telegram.org/bot${token}/sendMessage" \
+          --data-urlencode "chat_id=${chat_id}" \
+          --data-urlencode "text=$title — $msg" --max-time 10 >/dev/null 2>&1
+      ;;
     none) : ;;
+    *) echo "[ops-deploy-fix] unknown notify_channel '$channel'" >&2 ;;
   esac
 }
 
