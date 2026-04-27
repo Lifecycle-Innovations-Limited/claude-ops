@@ -576,18 +576,23 @@ launchctl bootout "gui/$(id -u)/com.claude-ops.recap-daemon" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST_DEST"
 ```
 
-### Step 2d.3 — tmux integration
+### Step 2d.3 — Display surface integration (tmux OR Claude Code statusLine)
 
-Detect tmux availability — skip cleanly if missing:
+The daemon writes `/tmp/claude-recap-digest`. Two display surfaces can render it (and they can coexist):
+
+- **tmux `status-right`** — preferred when tmux is installed (richer color, scrolling).
+- **Claude Code `statusLine`** — fallback when tmux is missing; renders in Claude Code's own status bar via `~/.claude/settings.json`.
+
+Detect tmux availability and branch:
 
 ```bash
 if ! command -v tmux >/dev/null 2>&1; then
-  echo "○ tmux not installed — daemon installed, but no marquee surface. Daemon still useful for /ops:recap tail."
-  # write recap.enabled = true, recap.tmux_wired = false, then skip to Step 2d.5
+  echo "○ tmux not installed — offering Claude Code statusLine fallback instead."
+  # → jump to Step 2d.3b (statusLine fallback)
 fi
 ```
 
-If `recap_marquee_auto_configure_tmux = false`, print the snippet and skip the rest of this step (let user wire manually).
+If `recap_marquee_auto_configure_tmux = false`, print the tmux snippet and skip the rest of this step (let user wire manually). The statusLine fallback in Step 2d.3b still applies if tmux is absent.
 
 If tmux is present and `recap_marquee_auto_configure_tmux = true`, ask:
 
@@ -627,6 +632,102 @@ TMUX
 tmux info >/dev/null 2>&1 && tmux source-file "$TMUX_CONF" 2>/dev/null
 ```
 
+### Step 2d.3b — Claude Code statusLine fallback (no tmux)
+
+When `command -v tmux` returned non-zero in Step 2d.3, offer the Claude Code `statusLine` setting as the marquee surface. Same digest file (`/tmp/claude-recap-digest`), different render target. This is also safe to layer alongside tmux if both are present — but typically only run when tmux is absent.
+
+Ask via `AskUserQuestion` (Rule 1 — exactly 4 options):
+
+```
+No tmux detected. Wire the recap marquee into Claude Code's statusLine instead?
+  [Add to Claude Code statusLine]  [Show me the JSON, I'll add manually]  [Skip]  [Help]
+```
+
+On `Help`: explain that Claude Code reads `~/.claude/settings.json` → `statusLine` and runs the configured command on each refresh, displaying the output in its own status bar. Then re-ask.
+
+On `Show me the JSON`: print the snippet below and continue to Step 2d.4 with `recap.statusline_wired = false`.
+
+On `Skip`: write `recap.statusline_wired = false` and continue to Step 2d.4.
+
+On `Add to Claude Code statusLine`:
+
+0. **Pre-check — `jq` availability**: Step 2d.3b uses `jq` for every settings.json read/merge. If `jq` is missing, all subsequent `jq` calls silently fail (suppressed by `2>/dev/null`), `existing` evaluates to empty, and the merge step is skipped — but the success path would still record `recap.statusline_wired = true` in prefs, leaving the user in an inconsistent state. Guard up front:
+
+   ```bash
+   if ! command -v jq >/dev/null 2>&1; then
+     echo "○ jq not installed — cannot merge statusLine automatically."
+     echo "  Install jq (e.g. brew install jq, apt install jq) and re-run /ops:recap configure."
+     # Do NOT mark statusline_wired=true. Treat as Skip:
+     # write recap.statusline_wired = false in Step 2d.5 and continue to Step 2d.4.
+   fi
+   ```
+
+   Only continue with steps 1–5 below when `jq` is present.
+
+1. Detect existing `statusLine` entry:
+
+   ```bash
+   SETTINGS="$HOME/.claude/settings.json"
+   mkdir -p "$(dirname "$SETTINGS")"
+   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+   existing=$(jq -r '.statusLine // empty' "$SETTINGS" 2>/dev/null)
+   ```
+
+2. If `existing` is non-empty, ask via `AskUserQuestion` (Rule 1 — 3 options):
+
+   ```
+   Existing statusLine detected in ~/.claude/settings.json. How to handle?
+     [Replace with recap]  [Append after current (chain commands)]  [Skip]
+   ```
+
+   - `Replace with recap` → overwrite the `statusLine` key.
+   - `Append after current` → preserve the existing command but suffix `; cat /tmp/claude-recap-digest 2>/dev/null | head -c 80` so both render. Use the existing entry's `type` and `refreshInterval`.
+   - `Skip` → leave settings.json untouched, write `recap.statusline_wired = false`, and continue.
+
+3. Merge with `jq` (preserves all other keys — never overwrite the whole file):
+
+   ```bash
+   TMP=$(mktemp)
+   jq '.statusLine = {
+     "type": "command",
+     "command": "cat /tmp/claude-recap-digest 2>/dev/null | head -c 80",
+     "refreshInterval": 30
+   }' "$SETTINGS" > "$TMP" && mv "$TMP" "$SETTINGS"
+   ```
+
+   For the `Append after current` branch, build the merged command first:
+
+   ```bash
+   prev_cmd=$(jq -r '.statusLine.command // ""' "$SETTINGS")
+   if [ -n "$prev_cmd" ]; then
+     new_cmd="${prev_cmd}; cat /tmp/claude-recap-digest 2>/dev/null | head -c 80"
+   else
+     new_cmd="cat /tmp/claude-recap-digest 2>/dev/null | head -c 80"
+   fi
+   TMP=$(mktemp)
+   jq --arg cmd "$new_cmd" '.statusLine.command = $cmd' "$SETTINGS" > "$TMP" && mv "$TMP" "$SETTINGS"
+   ```
+
+4. Print:
+
+   ```
+   ✓ Claude Code statusLine wired — restart Claude Code (or open a new session) to activate.
+   ```
+
+   Then write `recap.statusline_wired = true` before continuing to Step 2d.4.
+
+The JSON snippet to show on `Show me the JSON`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "cat /tmp/claude-recap-digest 2>/dev/null | head -c 80",
+    "refreshInterval": 30
+  }
+}
+```
+
 ### Step 2d.4 — Verify daemon is producing output
 
 Wait up to 60s for the daemon to write its first digest. Run in background; do NOT block the wizard:
@@ -643,18 +744,23 @@ Wait up to 60s for the daemon to write its first digest. Run in background; do N
 
 ### Step 2d.5 — Persist preferences
 
-Write to `$PREFS_PATH`:
+Write to `$PREFS_PATH`. Set both `"tmux_wired"` and `"statusline_wired"` dynamically based on the user’s actual choices:
 
+- `"tmux_wired"`: `true` when tmux was installed and the user chose to wire `status-right` in Step 2d.3; `false` when tmux was missing, the user chose **Skip**, or **Show me the line**.
+- `"statusline_wired"`: `true` only after **Add to Claude Code statusLine** successfully merged recap into `~/.claude/settings.json` in Step 2d.3b; `false` after **Skip**, **Show me the JSON**, the nested **Skip** when an existing statusLine was detected, or if Step 2d.3b did not run (e.g. tmux-only path).
 ```json
 {
   "recap": {
     "enabled": true,
-    "tmux_wired": true,
+    "tmux_wired": "<true|false — based on Step 2d.3 outcome>",
+    "statusline_wired": "<true|false — based on Step 2d.3b outcome>",
     "installed_at_step": "2d",
     "platform": "macos"
   }
 }
 ```
+
+Example: tmux wired + statusLine skipped → `"tmux_wired": true, "statusline_wired": false`. No tmux + statusLine wired → `"tmux_wired": false, "statusline_wired": true`.
 
 Print:
 
