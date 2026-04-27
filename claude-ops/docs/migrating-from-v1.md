@@ -30,7 +30,7 @@ That's it. Existing settings, registries, preferences, and daemon services are u
 | Skills | 30 | 33+ (added `/ops:deploy-fix`, `/ops:recap`, `/ops:rotate`, `/ops:rotate-setup`) |
 | Agents | 14 | 18 (added `general-purpose` override, `deploy-fixer`, `build-fixer`, `dependency-auditor`) |
 | PostToolUse:Bash hooks | 0 | 3 (deploy-fix-merge, deploy-fix-build, task-reminder) |
-| PreToolUse:Bash hooks | 1 (wacli-health) | 4 (+ secret-commit, no-rm-rf-anchor, warn-mainpush) |
+| PreToolUse:Bash hooks | 1 (whatsapp-bridge-health) | 4 (+ secret-commit, no-rm-rf-anchor, warn-mainpush) |
 | PreToolUse:Agent hooks | 0 | 1 (specialized-agent suggestion) |
 | Daemons | 1 (ops-daemon, 7 services) | 3 (+ recap-daemon, account-rotation-daemon) |
 | `userConfig` toggles | ~25 string entries | 44 (19+ new booleans/numbers/file pickers) |
