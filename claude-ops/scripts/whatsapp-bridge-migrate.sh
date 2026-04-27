@@ -66,7 +66,7 @@ log "Step 1: Checking FTS5 index..."
 
 FTS_EXISTS=$(query_sql "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts';" 2>/dev/null || echo "0")
 if [[ "$FTS_EXISTS" == "1" ]]; then
-  log "  messages_fts already exists — skipping."
+  log "  messages_fts already exists — skipping table creation."
 else
   log "  Creating messages_fts FTS5 virtual table..."
   run_sql "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
@@ -78,27 +78,26 @@ else
   log "  Backfilling FTS index from existing messages..."
   run_sql "INSERT INTO messages_fts(rowid, content)
     SELECT rowid, content FROM messages WHERE content IS NOT NULL AND content != '';"
+fi
 
-  log "  Creating INSERT trigger..."
+FTS_EXISTS=$(query_sql "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts';" 2>/dev/null || echo "0")
+if [[ "$FTS_EXISTS" == "1" ]]; then
+  log "  Ensuring FTS sync triggers..."
   run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_insert
     AFTER INSERT ON messages BEGIN
       INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
     END;"
 
-  log "  Creating UPDATE trigger..."
   run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_update
     AFTER UPDATE ON messages BEGIN
       INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
       INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
     END;"
 
-  log "  Creating DELETE trigger..."
   run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_delete
     AFTER DELETE ON messages BEGIN
       INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
     END;"
-
-  log "  messages_fts created with triggers."
 fi
 
 # ── Step 2: contacts table ────────────────────────────────────────────────────
