@@ -121,6 +121,10 @@ fi
 # ── Step 3: Seed contacts from macOS Contacts.app ────────────────────────────
 log "Step 3: Seeding contacts..."
 
+if [[ $DRY_RUN -eq 1 ]]; then
+  log "  DRY RUN — skipping contact seed entirely."
+else
+
 CONTACT_COUNT=$(query_sql "SELECT COUNT(*) FROM contacts;" 2>/dev/null || echo "0")
 if [[ "$CONTACT_COUNT" -gt 0 ]]; then
   log "  contacts already has $CONTACT_COUNT rows — skipping seed."
@@ -148,15 +152,12 @@ OSASCRIPT
     if [[ "$CONTACTS_JSON" == "[]" ]] || [[ -z "$CONTACTS_JSON" ]]; then
       log "  Contacts.app returned 0 contacts (permissions or empty) — leaving contacts table empty."
       log "  Re-run with WHATSAPP_BRIDGE_DB set after granting Contacts access to run a refresh."
-    elif [[ $DRY_RUN -eq 1 ]]; then
-      CONTACT_COUNT=$(echo "$CONTACTS_JSON" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo "?")
-      log "  DRY RUN — would insert up to $CONTACT_COUNT Contacts.app entries (skipping write)."
     else
-      INSERTED=$(printf '%s' "$CONTACTS_JSON" | python3 - "$BRIDGE_DB" <<'PYEOF' 2>/dev/null || echo "0"
-import json, sqlite3, sys, re, time
+      INSERTED=$(CONTACTS_JSON_DATA="$CONTACTS_JSON" python3 - "$BRIDGE_DB" <<'PYEOF' 2>/dev/null || echo "0"
+import json, os, sqlite3, sys, re, time
 
 db_path = sys.argv[1]
-contacts = json.load(sys.stdin)
+contacts = json.loads(os.environ["CONTACTS_JSON_DATA"])
 
 def normalize_phone(p):
     digits = re.sub(r'[^\d+]', '', p)
@@ -193,6 +194,8 @@ PYEOF
     log "  Populate manually: INSERT INTO contacts (jid, name, phone, source) VALUES (...)"
   fi
 fi
+
+fi  # end DRY_RUN guard for contact seed
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 log "Migration complete."
