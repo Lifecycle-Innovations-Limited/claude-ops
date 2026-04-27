@@ -28,6 +28,11 @@ try:
 except Exception:
   pass
 ' "$INPUT" 2>/dev/null || true)
+  # NO sed fallback. A pure-shell JSON parser cannot safely handle escaped
+  # quotes or multiple "command" keys, and getting it wrong on a security
+  # hook means dangerous commands slip past. If python3 fails or is absent,
+  # we keep CMD == raw INPUT — downstream grep still sees `rm -rf /` etc.
+  # in the raw JSON string, preserving fail-closed behavior.
   [[ -n "$parsed" ]] && CMD="$parsed"
 fi
 
@@ -114,7 +119,9 @@ EOF
 
 if [[ -n "$DANGER" ]]; then
   reason="Blocked rm -rf against dangerous anchor: '$DANGER'. This can destroy the system, your home directory, or the calling repo. Use a specific subpath (e.g. ./node_modules, /tmp/foo). To override (NOT RECOMMENDED) set CLAUDE_PLUGIN_OPTION_NO_RM_RF_ANCHOR=false."
-  python3 -c '
+  # Emit JSON on stdout. Use python3 for safe JSON escaping; fall back to printf.
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c '
 import json, sys
 print(json.dumps({
   "hookSpecificOutput": {
@@ -123,6 +130,11 @@ print(json.dumps({
     "permissionDecisionReason": sys.argv[1]
   }
 }))' "$reason"
+  else
+    # Bash-only fallback: escape double quotes and backslashes in reason.
+    escaped_reason=$(printf '%s' "$reason" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "%s"}}\n' "$escaped_reason"
+  fi
   exit 0
 fi
 
