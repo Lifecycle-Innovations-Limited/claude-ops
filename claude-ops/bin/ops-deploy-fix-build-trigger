@@ -62,9 +62,10 @@ if [ "$(config auto_dispatch_fixer true)" != "true" ]; then
   exit 0
 fi
 
+fix_rc=0
 fix_log=$(dispatch_fix_agent "build-fixer" "$repo_slug-build" \
-  "COMMAND=$cmd" "REPO_PATH=$repo_path" "BRANCH=$branch" "LOGS=$last_lines")
-case $? in
+  "COMMAND=$cmd" "REPO_PATH=$repo_path" "BRANCH=$branch" "LOGS=$last_lines") || fix_rc=$?
+case $fix_rc in
   0)
     cat <<JSON
 {
