@@ -82,7 +82,22 @@ If the flag is NOT set, use standard fire-and-forget subagents.
 
 ## Pre-gathered data
 
-All data below was collected by shell scripts in <10 seconds:
+All data below was collected by shell scripts in <10 seconds.
+
+### FinOps snapshot (canonical state from finops-dashboard)
+
+Pulls current burn, anomalies, and revenue from the dashboard. Fails open
+to `{}` if `FINOPS_DASHBOARD_URL` / `FINOPS_OPS_API_TOKEN` are unset — in
+that case the briefing falls back to the per-source data below.
+
+```!
+${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh snapshot 2>/dev/null || echo "{}"
+```
+
+When this snapshot is non-empty, prefer it for the burn/runway/anomaly
+lines in the briefing. The per-source `Infrastructure` and AWS Cost
+Explorer sections below are kept as a fallback when the dashboard is
+unreachable.
 
 ### Infrastructure
 
