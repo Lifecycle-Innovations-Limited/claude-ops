@@ -651,6 +651,19 @@ On `Skip`: write `recap.statusline_wired = false` and continue to Step 2d.4.
 
 On `Add to Claude Code statusLine`:
 
+0. **Pre-check — `jq` availability**: Step 2d.3b uses `jq` for every settings.json read/merge. If `jq` is missing, all subsequent `jq` calls silently fail (suppressed by `2>/dev/null`), `existing` evaluates to empty, and the merge step is skipped — but the success path would still record `recap.statusline_wired = true` in prefs, leaving the user in an inconsistent state. Guard up front:
+
+   ```bash
+   if ! command -v jq >/dev/null 2>&1; then
+     echo "○ jq not installed — cannot merge statusLine automatically."
+     echo "  Install jq (e.g. brew install jq, apt install jq) and re-run /ops:recap configure."
+     # Do NOT mark statusline_wired=true. Treat as Skip:
+     # write recap.statusline_wired = false in Step 2d.5 and continue to Step 2d.4.
+   fi
+   ```
+
+   Only continue with steps 1–5 below when `jq` is present.
+
 1. Detect existing `statusLine` entry:
 
    ```bash
