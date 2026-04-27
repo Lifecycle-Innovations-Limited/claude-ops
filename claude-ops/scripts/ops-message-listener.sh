@@ -98,13 +98,13 @@ poll_whatsapp() {
   local raw
   raw=$(sqlite3 "$BRIDGE_DB" "SELECT json_group_array(json_object('chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM messages WHERE timestamp > '${WA_LAST_SEEN:-1970-01-01}' ORDER BY timestamp DESC LIMIT 20;" 2>/dev/null || echo "[]")
 
-  # Filter: only non-owner (from_me=false) messages
+  # Filter: only non-owner (is_from_me=false) messages
   echo "$raw" | python3 -c "
 import json, sys
 msgs = json.load(sys.stdin)
 filtered = []
 for m in msgs:
-    if not m.get('from_me', False):
+    if not m.get('is_from_me', False):
         filtered.append({
             'id': m.get('id', ''),
             'channel': 'whatsapp',
