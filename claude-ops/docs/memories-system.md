@@ -16,13 +16,13 @@
 The memories system gives claude-ops persistent context about people, projects, and your communication patterns. Introduced in v0.5.0, upgraded in v1.1.0 with richer project context blocks.
 
 > [!IMPORTANT]
-> **Files never leave your machine.** Memories are plain markdown on your local disk at `~/.claude/plugins/data/ops-ops-marketplace/memories/`. The extractor reads your local wacli database and local email cache — nothing is uploaded. See [Privacy](#-privacy) below.
+> **Files never leave your machine.** Memories are plain markdown on your local disk at `~/.claude/plugins/data/ops-ops-marketplace/memories/`. The extractor reads your local whatsapp-bridge database and local email cache — nothing is uploaded. See [Privacy](#-privacy) below.
 
 ---
 
 ## 🧠 How It Works
 
-1. **Extraction** — the `memory-extractor` agent (`agents/memory-extractor.md`) runs every 30 minutes as a daemon service. It reads recent WhatsApp messages (via `wacli`) and email threads (via `gog`) and calls Claude Haiku to extract structured profiles.
+1. **Extraction** — the `memory-extractor` agent (`agents/memory-extractor.md`) runs every 30 minutes as a daemon service. It reads recent WhatsApp messages (via `whatsapp-bridge`) and email threads (via `gog`) and calls Claude Haiku to extract structured profiles.
 2. **Storage** — profiles are written as markdown files to `~/.claude/plugins/data/ops-ops-marketplace/memories/`.
 3. **Consumption** — skills load the relevant memory files at runtime via the Runtime Context block at the top of each `SKILL.md`.
 
@@ -36,10 +36,10 @@ flowchart TB
     Trigger -->|/ops:doctor --run-memory-extractor| Start
 
     Start --> ReadLocal[Read LOCAL sources only]
-    ReadLocal --> Wacli[(~/.wacli<br/>local SQLite)]
+    ReadLocal --> Bridge[(~/.whatsapp-bridge<br/>local SQLite)]
     ReadLocal --> Gog[(~/.gog<br/>local email cache)]
 
-    Wacli --> Haiku[Claude Haiku 4.5<br/>structured extraction]
+    Bridge --> Haiku[Claude Haiku 4.5<br/>structured extraction]
     Gog --> Haiku
 
     Haiku --> Merge[Merge into existing<br/>profiles — never overwrite]
@@ -64,7 +64,7 @@ flowchart TB
 
     class Trigger,ReadLocal primary
     class Start,Haiku agent
-    class Wacli,Gog,Contacts,Prefs,Projects daemon
+    class Bridge,Gog,Contacts,Prefs,Projects daemon
     class Consumed,Inbox,Comms,Go success
 ```
 
@@ -182,7 +182,7 @@ The daemon triggers extraction when **any** of these conditions are met:
 | Trigger | Condition |
 |---------|-----------|
 | Time-based | 30 minutes elapsed since last run |
-| Volume-based | Message count in `~/.wacli/.health` increased by more than 5 |
+| Volume-based | Message count in `~/.whatsapp-bridge/.health` increased by more than 5 |
 | Manual | `/ops:doctor --run-memory-extractor` |
 
 The extractor uses `claude-haiku-4-5-20251001` (fast + cheap) for all extraction work. It merges new information into existing profiles rather than overwriting, so context accumulates over time.
@@ -199,7 +199,7 @@ The extractor uses `claude-haiku-4-5-20251001` (fast + cheap) for all extraction
 >
 > - **Location:** `~/.claude/plugins/data/ops-ops-marketplace/memories/`
 > - **Storage:** plain markdown files on your local disk
-> - **Sources:** the extractor reads your **local** wacli database and **local** email cache — not cloud APIs
+> - **Sources:** the extractor reads your **local** whatsapp-bridge database and **local** email cache — not cloud APIs
 > - **Upload:** nothing is sent to any server. Files are read by skills at runtime and that's it.
 >
 > If you want to wipe everything: `rm -rf ~/.claude/plugins/data/ops-ops-marketplace/memories/`.
