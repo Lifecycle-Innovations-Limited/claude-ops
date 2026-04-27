@@ -89,6 +89,17 @@ If the flag is NOT set, use standard parallel subagents.
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-infra 2>/dev/null || echo '{"clusters":[],"error":"infra check failed"}'
 ```
 
+### FinOps dashboard — open anomalies
+
+Live anomaly feed from finops-dashboard (spend spikes, idle services,
+expired credits, drift detections). High-severity items belong in the
+FIRES table alongside infra outages. Falls open to `[]` if the dashboard
+isn't configured.
+
+```!
+${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh anomalies high 2>/dev/null || echo "[]"
+```
+
 ## CI failures (last 24h)
 
 ```!
