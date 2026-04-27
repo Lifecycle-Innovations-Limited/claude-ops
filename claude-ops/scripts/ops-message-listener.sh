@@ -92,11 +92,8 @@ poll_whatsapp() {
     return
   fi
 
-  local since_flag=""
-  [[ -n "$since" ]] && since_flag="--after=$since"
-
   local raw
-  raw=$(sqlite3 "$BRIDGE_DB" "SELECT json_group_array(json_object('chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM messages WHERE timestamp > '${WA_LAST_SEEN:-1970-01-01}' ORDER BY timestamp DESC LIMIT 20;" 2>/dev/null || echo "[]")
+  raw=$(sqlite3 "$BRIDGE_DB" "SELECT json_group_array(json_object('chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM (SELECT chat_jid, sender, content, timestamp, is_from_me FROM messages WHERE timestamp > '${since:-1970-01-01}' ORDER BY timestamp DESC LIMIT 20);" 2>/dev/null || echo "[]")
 
   # Filter: only non-owner (is_from_me=false) messages
   echo "$raw" | python3 -c "
