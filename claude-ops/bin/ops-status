@@ -105,7 +105,7 @@ _channel_configured() {
     whatsapp)
       _pref_has ".channels.whatsapp" && return 0
       # wacli decommissioned — bridge check instead
-  lsof -i :8080 2>/dev/null | grep -q LISTEN && return 0
+      lsof -i :8080 2>/dev/null | grep -q LISTEN && return 0
       ;;
     telegram)
       _pref_has ".channels.telegram" && return 0

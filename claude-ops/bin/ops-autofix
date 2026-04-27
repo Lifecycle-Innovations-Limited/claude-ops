@@ -159,79 +159,20 @@ fix_vercel_mcp() {
 
 # ─── 4. Channel health — detect auth'd but broken channels ──────────────────
 fix_channel_health() {
-  # ── WhatsApp: @lid JID sync + stale connection ──
+  # ── WhatsApp: bridge listen + recent message flow (wacli doctor removed) ──
   if lsof -i :8080 2>/dev/null | grep -q LISTEN; then
-    DOCTOR='{"success":true,"bridge":"running"}'
-    WA_AUTH=$(echo "$DOCTOR" | jq -r '.data.authenticated // false' 2>/dev/null)
-    WA_LOCK=$(echo "$DOCTOR" | jq -r '.data.lock_held // false' 2>/dev/null)
-
-    if [ "$WA_AUTH" = "true" ]; then
-      # Kill stale lock if held >2 min — but never kill the legitimate
-      # bridge manages its own locking internally
-      # entire lifetime by design; that's not "stale").
-      if [ "$WA_LOCK" = "true" ]; then
-        LOCK_PID=$(echo "$DOCTOR" | jq -r '.data.lock_info' 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2)
-        if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
-          LOCK_CMD=$(ps -p "$LOCK_PID" -o command= 2>/dev/null || echo "")
-          LOCK_ETIME=$(ps -p "$LOCK_PID" -o etime= 2>/dev/null | tr -d ' ')
-          # Skip if it's the persistent --follow daemon
-          if false; then  # bridge manages locking internally
-            log_skip "bridge-health: lock held by persistent --follow daemon (pid=$LOCK_PID) — leaving alone"
-          else
-            # Parse etime to seconds. Formats: SS, MM:SS, HH:MM:SS, DD-HH:MM:SS
-            LOCK_AGE=$(echo "$LOCK_ETIME" | awk -F'[-:]' '{
-              n=NF; s=0
-              if (n==1) s=$1
-              else if (n==2) s=$1*60+$2
-              else if (n==3) s=$1*3600+$2*60+$3
-              else if (n==4) s=$1*86400+$2*3600+$3*60+$4
-              print s
-            }')
-            if [ -n "$LOCK_AGE" ] && [ "$LOCK_AGE" -gt 120 ]; then
-              log_fix "bridge-health: killed stale lock holder (pid=$LOCK_PID, age=${LOCK_AGE}s, cmd=$LOCK_CMD)"
-              kill "$LOCK_PID" 2>/dev/null; sleep 2
-              kill -0 "$LOCK_PID" 2>/dev/null && kill -9 "$LOCK_PID" 2>/dev/null
-            else
-              log_skip "bridge-health: lock holder pid=$LOCK_PID is young (${LOCK_AGE}s) — not stale"
-            fi
-          fi
-        fi
-      fi
-
-      # Check @lid JIDs with empty messages
-      LID_EMPTY=0
-      # Bridge handles @lid resolution automatically — just ensure it is running
-      if true; then
-        jid="bridge"
-        MSG_COUNT=1
-        [ "$MSG_COUNT" = "0" ] && LID_EMPTY=$((LID_EMPTY + 1))
-      fi
-
-      if [ "$LID_EMPTY" -gt 0 ]; then
-        if launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge 2>/dev/null; then
-          log_fix "bridge-health: synced @lid chats ($LID_EMPTY had empty messages)"
-        else
-          log_fail "bridge-health: sync timed out"
-        fi
-      fi
-
-      # Check for zero recent messages (auth'd but dead session)
-      BRIDGE_DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
-      RECENT=$(sqlite3 "$BRIDGE_DB" "SELECT COUNT(*) FROM messages WHERE timestamp >= datetime('now','-1 day');" 2>/dev/null || echo "0")
-      if [ "$RECENT" = "0" ]; then
-        # Try sync first
-        launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge 2>/dev/null || true
-        RECENT2=$(sqlite3 "$BRIDGE_DB" "SELECT COUNT(*) FROM messages WHERE timestamp >= datetime('now','-1 day');" 2>/dev/null || echo "0")
-        if [ "$RECENT2" = "0" ]; then
-          log_fail "bridge-health: auth'd but 0 messages in 24h (likely app-state key desync — needs re-pair)"
-        else
-          log_fix "bridge-health: sync restored message flow"
-        fi
+    BRIDGE_DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+    RECENT=$(sqlite3 "$BRIDGE_DB" "SELECT COUNT(*) FROM messages WHERE timestamp >= datetime('now','-1 day');" 2>/dev/null || echo "0")
+    if [ "$RECENT" = "0" ]; then
+      launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge 2>/dev/null || true
+      RECENT2=$(sqlite3 "$BRIDGE_DB" "SELECT COUNT(*) FROM messages WHERE timestamp >= datetime('now','-1 day');" 2>/dev/null || echo "0")
+      if [ "$RECENT2" = "0" ]; then
+        log_fail "bridge-health: bridge up but 0 messages in 24h (may need re-pair or sync)"
       else
-        log_skip "bridge-health: messages flowing normally"
+        log_fix "bridge-health: sync restored message flow"
       fi
     else
-      log_skip "bridge-health: not authenticated"
+      log_skip "bridge-health: messages flowing normally"
     fi
   fi
 
@@ -282,7 +223,7 @@ case "$FIX_TARGET" in
     fix_slack_mcp
     fix_vercel_mcp
     ;;
-  wacli-fts)        fix_bridge_fts ;;
+  bridge-fts|wacli-fts) fix_bridge_fts ;;
   channel-health)   fix_channel_health ;;
   slack-mcp)        fix_slack_mcp ;;
   vercel-mcp)       fix_vercel_mcp ;;

@@ -2998,7 +2998,7 @@ After auto-discovery (or if the user selects "I'll enter projects manually"):
 
 ## Step 5b — Daemon Service Reconciliation
 
-By now, the daemon was already installed in Step 2c and has been pre-warming the briefing cache in the background while the user configured channels. This step adds **channel-dependent services** (`whatsapp-bridge-sync`, `message-listener`, `inbox-digest`, `store-health`, `competitor-intel`) now that we know which channels and integrations are configured.
+By now, the daemon was already installed in Step 2c and has been pre-warming the briefing cache in the background while the user configured channels. This step adds **channel-dependent services** (`whatsapp-bridge`, `message-listener`, `inbox-digest`, `store-health`, `competitor-intel`) now that we know which channels and integrations are configured.
 
 **Skip conditions:**
 - If the user declined daemon install in Step 2c, skip this step entirely.
@@ -3026,7 +3026,7 @@ cat "$DATA_DIR/daemon-health.json" 2>/dev/null
 Parse the JSON. If `action_needed` is not null, surface the required action to the user. If the daemon wrote a health file, print:
 
 ```
-✓ Background daemon — running (whatsapp-bridge-sync: connected, memory-extractor: scheduled)
+✓ Background daemon — running (whatsapp-bridge: connected, memory-extractor: scheduled)
 ```
 
 If the health file is missing (daemon may still be initializing), wait 5 more seconds and retry once. If still missing, print:
@@ -3041,7 +3041,7 @@ If the health file is missing (daemon may still be initializing), wait 5 more se
 
 Determine which services to enable based on what was configured in earlier steps. The `briefing-pre-warm` and `memory-extractor` services were already enabled at Step 2c — preserve them. Add channel-dependent services based on what's now configured:
 
-- `whatsapp-bridge-sync` — always include if WhatsApp is configured (`channels.whatsapp` is set)
+- `whatsapp-bridge` — always include if WhatsApp is configured (`channels.whatsapp` is set)
 - `memory-extractor` — always include
 - `inbox-digest` — always include (runs every 4h, aggregates all configured channels)
 - `store-health` — include ONLY if ecommerce was configured (`ecom.shopify.store_url` is set in `$PREFS_PATH`)
@@ -3052,9 +3052,9 @@ Build the services array programmatically (starting from the 2c baseline):
 ```bash
 SERVICES='["briefing-pre-warm","memory-extractor","inbox-digest","competitor-intel"]'
 PREFS=$(cat "$PREFS_PATH" 2>/dev/null || echo '{}')
-# Add whatsapp-bridge-sync + message-listener if WhatsApp is configured
+# Add whatsapp-bridge + message-listener if WhatsApp is configured
 if echo "$PREFS" | jq -e '.channels.whatsapp' > /dev/null 2>&1; then
-  SERVICES=$(echo "$SERVICES" | jq '. + ["whatsapp-bridge-sync","message-listener"]')
+  SERVICES=$(echo "$SERVICES" | jq '. + ["whatsapp-bridge","message-listener"]')
 fi
 # Add message-listener for Telegram too (deduplicate)
 if echo "$PREFS" | jq -e '.channels.telegram' > /dev/null 2>&1; then
@@ -3069,7 +3069,7 @@ echo "Services to enable: $SERVICES"
 
 Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with the existing config from Step 2c, preserving `briefing-pre-warm` and `memory-extractor`, and enabling the new channel-dependent services. **Every service MUST include a `command` field** — the daemon's `start_service()` skips any service without one. Use `${CLAUDE_PLUGIN_ROOT}` (resolved at runtime) for script paths. Each service entry should include:
 - `briefing-pre-warm`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/bin/ops-gather", "cron": "*/2 * * * *" }` — pre-warms /ops:go cache (installed in 2c)
-- `whatsapp-bridge-sync`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/whatsapp-bridge-keepalive.sh", "health_file": "~/.whatsapp-bridge/.health", "restart_delay": 60, "max_restarts": 10 }` — only if WhatsApp configured
+- `whatsapp-bridge`: `{ "enabled": true, "command": "launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge", "health_check": "lsof -i :8080 | grep LISTEN", "restart_delay": 60, "max_restarts": 10 }` — only if WhatsApp configured (matches `daemon-services.default.json`; bridge is owned by LaunchAgent, not a plugin script)
 - `memory-extractor`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-memory-extractor.sh", "health_file": "~/.claude/plugins/data/ops-ops-marketplace/memories/.health", "cron": "*/30 * * * *" }` — every 30 min (installed in 2c)
 - `inbox-digest`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-inbox-digest.sh", "cron": "0 */4 * * *" }` — every 4h
 - `store-health`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-store-health.sh", "cron": "0 9 * * *" }` — daily 9am, only if ecom configured
@@ -3095,7 +3095,7 @@ Use `run_in_background: true` on the reload command. Do NOT wait for it — cont
 Write `daemon.enabled = true` and `daemon.services` (the reconciled array) to `$PREFS_PATH`. Print:
 
 ```
-✓ Daemon services reconciled — N services enabled (briefing-pre-warm, memory-extractor, whatsapp-bridge-sync, ...)
+✓ Daemon services reconciled — N services enabled (briefing-pre-warm, memory-extractor, whatsapp-bridge, ...)
   Daemon reloading in background.
 ```
 
@@ -3441,7 +3441,7 @@ Re-run the detector and present a final status dashboard:
  ✓ MCPs:       linear, sentry, vercel
  ✓ Registry:   20 projects
  ✓ Prefs:      saved to ~/.claude/plugins/data/ops-ops-marketplace/preferences.json
- ✓ Daemon:     ops-daemon → whatsapp-bridge-sync, memory-extractor, inbox-digest
+ ✓ Daemon:     ops-daemon → whatsapp-bridge, memory-extractor, inbox-digest
 
  Next: /ops-go for your first briefing
 ──────────────────────────────────────────────────────

@@ -102,14 +102,17 @@ poll_whatsapp() {
   echo "$raw" | python3 -c "
 import json, sys
 msgs = json.load(sys.stdin)
+def _from_me(m):
+    v = m.get('is_from_me', False)
+    return v is True or v == 1
 filtered = []
 for m in msgs:
-    if not m.get('is_from_me', False):
+    if not _from_me(m):
         filtered.append({
             'id': m.get('id', ''),
             'channel': 'whatsapp',
-            'from': m.get('contact_name', m.get('from', '')),
-            'text': m.get('body', m.get('text', '')),
+            'from': m.get('sender') or m.get('contact_name') or m.get('from', ''),
+            'text': m.get('content') or m.get('body') or m.get('text', ''),
             'timestamp': m.get('timestamp', ''),
             'raw': m
         })
