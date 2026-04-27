@@ -188,10 +188,20 @@ test_merge_trigger_no_repo
 echo ""
 echo "── Case 2: ops-deploy-fix-build-trigger ──────────────────────────"
 
+# The trigger resolves repo from PWD via `git -C "$pwd" config --get remote.origin.url`.
+# To keep tests independent of the reviewer's host (no dependency on ~/healify or
+# any other checkout existing), we cd to a non-git temp dir before each Case 2
+# test. The trigger's `slug_full` resolution falls back to "local-build" when
+# git fails, which is the safe codepath we want under test.
+SAVED_PWD="$(pwd)"
+NON_GIT_PWD="$SUITE_TMP/non-git-pwd"
+mkdir -p "$NON_GIT_PWD"
+cd "$NON_GIT_PWD"
+trap 'cd "$SAVED_PWD"; rm -rf "$SUITE_TMP"' EXIT
+
 # Stub dispatch_fix_agent inside the lib by overriding the `claude` binary.
-# The trigger resolves repo from PWD (git remote.origin.url) so tests run from
-# inside the repo dir. We swap in our mock claude for dispatch, or set
-# auto_dispatch_fixer=false where we want NO dispatch.
+# We swap in our mock claude for dispatch, or set auto_dispatch_fixer=false
+# where we want NO dispatch.
 test_build_trigger_fires_on_failure() {
   new_isolated_env "case2-fail"
   # Disable auto-rerun-of-transients false-positive: real failure (TS error)
@@ -288,6 +298,9 @@ test_build_trigger_lock_held() {
   fi
 }
 test_build_trigger_lock_held
+
+# Case 2 done — restore plugin-root CWD for remaining tests.
+cd "$SAVED_PWD"
 # ===========================================================================
 # CASE 3 — is_transient
 # ===========================================================================
