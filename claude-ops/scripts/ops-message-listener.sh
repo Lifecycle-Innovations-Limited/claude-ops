@@ -93,7 +93,7 @@ poll_whatsapp() {
   fi
 
   local raw
-  raw=$(sqlite3 "$BRIDGE_DB" "SELECT json_group_array(json_object('chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM (SELECT chat_jid, sender, content, timestamp, is_from_me FROM messages WHERE timestamp > '${since:-1970-01-01}' ORDER BY timestamp DESC LIMIT 20);" 2>/dev/null || echo "[]")
+  raw=$(sqlite3 "$BRIDGE_DB" "SELECT json_group_array(json_object('id',rowid,'chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM (SELECT rowid, chat_jid, sender, content, timestamp, is_from_me FROM messages WHERE timestamp > '${since:-1970-01-01}' ORDER BY timestamp DESC LIMIT 20);" 2>/dev/null || echo "[]")
 
   # Filter: only non-owner (is_from_me=false) messages
   echo "$raw" | python3 -c "
@@ -106,7 +106,7 @@ filtered = []
 for m in msgs:
     if not _from_me(m):
         filtered.append({
-            'id': m.get('id', ''),
+            'id': str(m.get('id', m.get('rowid', ''))),  # rowid from sqlite
             'channel': 'whatsapp',
             'from': m.get('sender') or m.get('contact_name') or m.get('from', ''),
             'text': m.get('content') or m.get('body') or m.get('text', ''),
