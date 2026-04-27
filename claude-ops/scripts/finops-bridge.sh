@@ -42,7 +42,7 @@ if [[ -z "$BASE" ]]; then
   esac
 fi
 
-CURL_OPTS=(--silent --show-error --connect-timeout 5 --max-time 15)
+CURL_OPTS=(--silent --show-error --fail --connect-timeout 5 --max-time 15)
 [[ -n "$TOKEN" ]] && CURL_OPTS+=(-H "Authorization: Bearer ${TOKEN}")
 CURL_OPTS+=(-H "Accept: application/json")
 
