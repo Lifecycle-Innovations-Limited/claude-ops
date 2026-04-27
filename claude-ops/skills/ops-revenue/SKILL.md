@@ -50,6 +50,25 @@ Before executing, load available context:
 
 ## Phase 1 — Gather financial data in parallel
 
+### FinOps dashboard — canonical revenue + burn
+
+If `FINOPS_DASHBOARD_URL` and `FINOPS_OPS_API_TOKEN` are configured, the
+dashboard is the single source of truth for per-project MRR, 30d revenue,
+and current burn. Per-DBA breakdown comes from the Stripe revenue
+snapshots ingested via `/api/ops/revenue`. Falls open to `{}` if unset —
+the per-source AWS / RevenueCat queries below run as fallback.
+
+```!
+${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh snapshot 2>/dev/null || echo "{}"
+```
+
+```!
+${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh revenue project 2>/dev/null || echo "{}"
+```
+
+When the dashboard returns data, render the per-project MRR section from
+`groups[]` rather than from RevenueCat-only data.
+
 ### AWS costs (current month)
 
 ```bash
