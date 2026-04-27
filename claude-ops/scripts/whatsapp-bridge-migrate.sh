@@ -24,7 +24,7 @@ for arg in "$@"; do
     --dry-run)  DRY_RUN=1 ;;
     --verbose)  VERBOSE=1 ;;
     -h|--help)
-      sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
   esac
 done
@@ -152,12 +152,11 @@ OSASCRIPT
       CONTACT_COUNT=$(echo "$CONTACTS_JSON" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo "?")
       log "  DRY RUN — would insert up to $CONTACT_COUNT Contacts.app entries (skipping write)."
     else
-      INSERTED=$(python3 - "$BRIDGE_DB" "$CONTACTS_JSON" <<'PYEOF' 2>/dev/null || echo "0"
+      INSERTED=$(printf '%s' "$CONTACTS_JSON" | python3 - "$BRIDGE_DB" <<'PYEOF' 2>/dev/null || echo "0"
 import json, sqlite3, sys, re, time
 
 db_path = sys.argv[1]
-raw = sys.argv[2]
-contacts = json.loads(raw)
+contacts = json.load(sys.stdin)
 
 def normalize_phone(p):
     digits = re.sub(r'[^\d+]', '', p)

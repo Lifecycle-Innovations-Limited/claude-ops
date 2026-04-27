@@ -11,12 +11,12 @@ connection and wrote `~/.wacli/.health` for ops skills to read. It consumed one 
 slots and double-stored messages alongside the Baileys bridge.
 
 WhatsApp ops are now handled exclusively by the Baileys-based `whatsapp-bridge` managed by the
-`com.samrenders.whatsapp-bridge` LaunchAgent, surfaced via `mcp__whatsapp__*` tools.
+`com.claude-ops.whatsapp-bridge` LaunchAgent, surfaced via `mcp__whatsapp__*` tools.
 
 ## com.claude-ops.wacli-keepalive.plist.deprecated
 
 LaunchAgent plist for the now-decommissioned wacli keepalive daemon. The replacement plist template
-lives at `assets/launchagents/com.samrenders.whatsapp-bridge.plist`.
+lives at `assets/launchagents/com.claude-ops.whatsapp-bridge.plist`.
 
 To fully remove the old daemon from a running system:
 

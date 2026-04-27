@@ -82,10 +82,13 @@ cmd_push_event() {
     return 1
   }
 
+  # Validate payload_json before passing to --argjson (bad JSON aborts jq under set -e)
+  local safe_payload
+  safe_payload=$(printf '%s' "$payload_json" | jq -c . 2>/dev/null) || safe_payload='{}'
   local body
   body=$(jq -nc \
     --arg kind "$kind" --arg project "$project" --arg title "$title" \
-    --arg idem "$idem" --argjson payload "$payload_json" \
+    --arg idem "$idem" --argjson payload "$safe_payload" \
     --arg amount "$amount" \
     '{kind:$kind, project:($project|select(length>0)),
       amount_saved:($amount|select(length>0)|tonumber? // null),
