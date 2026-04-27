@@ -10,6 +10,10 @@ prompt="$(cat)"
 printf '%s' "$prompt" > "$PROMPT_OUT"
 # Log argv first: hashing a large stdin can delay the line tests poll for.
 printf 'argv=%s ' "$*" >> "$LOG"
-hash="$(printf '%s' "$prompt" | shasum | awk '{print $1}')"
+if command -v shasum >/dev/null 2>&1; then
+  hash="$(printf '%s' "$prompt" | shasum | awk '{print $1}')"
+else
+  hash="$(printf '%s' "$prompt" | sha1sum | awk '{print $1}')"
+fi
 printf 'prompt_hash=%s\n' "$hash" >> "$LOG"
 exit "${MOCK_CLAUDE_RC:-0}"
