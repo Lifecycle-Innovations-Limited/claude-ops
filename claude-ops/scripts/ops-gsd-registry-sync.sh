@@ -88,6 +88,7 @@ if extra_roots:
             scan_roots.append(rp)
 
 planning_dirs = []
+visited_real_dirs = set()  # cycle guard for symlinks
 for root in scan_roots:
     if not root.exists():
         continue
@@ -101,8 +102,17 @@ for root in scan_roots:
         except (PermissionError, OSError):
             continue
         for entry in entries:
-            if not entry.is_dir() or entry.is_symlink():
+            if not entry.is_dir():
                 continue
+            # Follow symlinks but guard against cycles by tracking resolved paths
+            if entry.is_symlink():
+                try:
+                    resolved = str(entry.resolve())
+                except OSError:
+                    continue
+                if resolved in visited_real_dirs:
+                    continue
+                visited_real_dirs.add(resolved)
             if entry.name in EXCLUDE_PARTS:
                 continue
             if entry.name == ".planning":
