@@ -1,7 +1,7 @@
 ---
 name: yolo-coo
 description: Operations execution agent. Finds what's falling through the cracks — stale work, broken processes, missing automation, communication failures. What the CEO doesn't see.
-model: claude-opus-4-6
+model: sonnet
 effort: high
 maxTurns: 25
 tools:

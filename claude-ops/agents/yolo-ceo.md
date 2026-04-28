@@ -1,7 +1,7 @@
 ---
 name: yolo-ceo
 description: Strategic priority agent. Analyzes the business from a CEO perspective — growth blockers, resource allocation, build vs. buy decisions, investor-readiness. No sugar-coating. Runs in parallel with CTO/CFO/COO.
-model: claude-opus-4-6
+model: sonnet
 effort: high
 maxTurns: 20
 tools:

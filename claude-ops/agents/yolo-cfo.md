@@ -1,7 +1,7 @@
 ---
 name: yolo-cfo
 description: Financial analysis agent. Follows the money — AWS burn rate, runway, ROI on current work, credits expiry, cost anomalies. No optimism without data.
-model: claude-opus-4-6
+model: sonnet
 effort: high
 maxTurns: 20
 tools:

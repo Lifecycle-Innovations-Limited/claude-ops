@@ -314,22 +314,120 @@ run_parallel_scan() {
 # ACTIONS — os-agnostic dispatcher
 # ═════════════════════════════════════════════════════════════════
 
-# Protected processes — never kill
-PROTECTED_RE="kernel_task|launchd|WindowServer|loginwindow|Finder|SystemUIServer|Dock|systemd|init|sshd|ssh|mosh|bash|zsh|fish|tmux|screen|cursor|Cursor|comet|Comet|Shortwave|shortwave|claude|Claude|node|npm|python|Xcode|xcodebuild"
+# ── Sudo upfront + keep-alive ────────────────────────────────────
+# Aggressive needs sudo for purge / sysctl / launchctl bootout. Refresh
+# in background so multi-minute runs don't re-prompt.
+SELF_PID=$$
+SUDO_OK=false
+if $MODE_CLEAN || $MODE_DEEP || $MODE_AGGRESSIVE; then
+  if sudo -v 2>/dev/null; then
+    SUDO_OK=true
+    ( while true; do
+        sudo -n true 2>/dev/null || break
+        sleep 50
+        kill -0 "$SELF_PID" 2>/dev/null || break
+      done ) &
+    disown 2>/dev/null || true
+  fi
+fi
+
+# ── KEEP_RE — ABSOLUTELY NEVER touched (kill/demote/unload). ─────
+# Tailscale + password manager + window managers + cloud sync +
+# daily-driver apps. Hard top-level filter applied in every action.
+KEEP_RE="tailscale|Tailscale|tailscaled|IPNExtension|com\\.tailscale|1Password|1password|com\\.1password|com\\.agilebits|Bartender|com\\.surteesstudios|Magnet|com\\.crowdcafe|Rectangle|com\\.knollsoft\\.Rectangle|Dropbox|com\\.dropbox|Slack|com\\.tinyspeck|Spotify|com\\.spotify|Comet|comet|Cursor|cursor|Shortwave|shortwave|Claude|claude|Notion|com\\.notion|Linear|com\\.linear|Raycast|com\\.raycast|Arc|com\\.thebrowser|com\\.docker|colima|OrbStack|com\\.orbstack|Warp|com\\.warpdotdev|Ghostty|com\\.mitchellh\\.ghostty|iTerm|iTerm2|com\\.googlecode\\.iterm2|com\\.apple\\.Terminal|TeamViewer"
+
+# ── SHELL_UTILS_RE — pipeline tools we spawn; never signal even if U-state.
+SHELL_UTILS_RE="^(awk|gawk|mawk|sed|grep|egrep|fgrep|rg|jq|yq|xargs|wc|head|tail|cut|sort|uniq|tr|cat|tee|find|fd|du|df|ls|stat|date|expr|printf|echo|test|sleep|timeout|pgrep|pkill|ps|top|vm_stat|sysctl|powermetrics|tmutil|defaults|launchctl|networksetup|ifconfig|route|ping|nslookup|dig|curl)$"
+
+# Protected processes — comprehensive list (mirrors ~/.speedup/config.sh)
+PROTECTED_RE="kernel_task|launchd|WindowServer|loginwindow|Finder|SystemUIServer|Dock|systemd|init|sshd|ssh|mosh|bash|zsh|fish|sh|tmux|screen|coreservicesd|cfprefsd|coreaudiod|bluetoothd|mds|mds_stores|mdworker|mdworker_shared|Spotlight|notifyd|distnoted|powerd|watchdogd|opendirectoryd|syslogd|trustd|securityd|fseventsd|XProtect|softwareupdated|tailscaled|tailscale|Tailscale|IPNExtension|cursor|Cursor|comet|Comet|Shortwave|shortwave|claude|Claude|Code|node|npm|npx|python|Xcode|xcodebuild|swift-frontend|swift-driver|SourceKitService|simctl|CoreSimulator|Simulator|fastlane|watchman|metro|kapture|1Password|1password|Bartender|Magnet|Rectangle|Dropbox|Slack|Spotify|Notion|Linear|Raycast|Arc"
 
 # Safe to demote to background priority (not kill)
-MACOS_DEMOTE_RE="bird|cloudd|suggestd|knowledge-agent|photoanalysisd|mediaanalysisd|parsecd|tipsd|AMPLibraryAgent|cloudphotod|identityservicesd"
+MACOS_DEMOTE_RE="bird|cloudd|rapportd|parsecd|suggestd|knowledge-agent|photoanalysisd|mediaanalysisd|corespeechd|nsurlsessiond|AMPLibraryAgent|cloudphotod|identityservicesd|callservicesd|contactsd|accountsd|assistantd|tipsd|generativeexperiencesd|modeld|intelligenceplatformd|weatherd|newsd|stocksd|findmydeviced|biomesyncd|usernoted"
 
-# Launch agent offenders (macOS)
+# Launch agent offenders (macOS) — comprehensive
 MACOS_OFFENDER_AGENTS=(
   "com.apple.photoanalysisd"
   "com.apple.mediaanalysisd"
   "com.apple.suggestd"
   "com.apple.knowledge-agent"
+  "com.apple.knowledgeconstructiond"
   "com.apple.parsecd"
   "com.apple.tipsd"
   "com.apple.AMPLibraryAgent"
+  "com.apple.AMPDeviceDiscoveryAgent"
+  "com.apple.AMPDevicesAgent"
+  "com.apple.AddressBook.AddressBookSourceSync"
+  "com.apple.assistantd"
+  "com.apple.weatherd"
+  "com.apple.newsd"
+  "com.apple.stocksd"
+  "com.apple.gamed"
+  "com.apple.appleseed.seedusaged"
+  "com.apple.familycircled"
+  "com.apple.familycontrolsd"
+  "com.apple.intelligenceplatformd"
+  "com.apple.generativeexperiencesd"
+  "com.apple.modeld"
+  "com.apple.AppleOnDeviceDiag"
+  "com.apple.findmydeviced"
 )
+
+# Menu-bar bloat — permanent launchctl-disable in aggressive
+MACOS_BLOAT_LABELS=(
+  "com.macpaw.CleanMyMac-setapp.HealthMonitor"
+  "com.macpaw.CleanMyMac.Menu"
+  "com.macpaw.CleanMyMac-setapp.Menu"
+  "com.macpaw.CleanMyMac.Scheduler"
+  "com.macpaw.CleanMyMac.UpdateTracker"
+  "com.macpaw.MacUpdater.LaunchAgent"
+  "com.apple.AddressBook.AddressBookSourceSync"
+  "com.apple.AMPDeviceDiscoveryAgent"
+  "com.apple.AMPDevicesAgent"
+  "com.apple.AMPLibraryAgent"
+  "com.apple.tipsd"
+  "com.apple.suggestd"
+  "com.apple.weatherd"
+  "com.apple.newsd"
+  "com.apple.stocksd"
+  "com.apple.gamed"
+  "com.apple.appleseed.seedusaged"
+  "com.apple.familycircled"
+  "com.apple.parsecd"
+  "com.apple.intelligenceplatformd"
+  "com.apple.generativeexperiencesd"
+  "com.apple.modeld"
+)
+
+# Self-protection: build SCRIPT_FAMILY of PIDs we must never kill
+build_script_family() {
+  local pids="$SELF_PID $PPID"
+  local p="$PPID"
+  while [ -n "$p" ] && [ "$p" != "0" ] && [ "$p" != "1" ]; do
+    local pp; pp=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+    [ -z "$pp" ] || [ "$pp" = "0" ] || [ "$pp" = "1" ] && break
+    pids="$pids $pp"; p="$pp"
+  done
+  local pgid; pgid=$(ps -o pgid= -p "$SELF_PID" 2>/dev/null | tr -d ' ')
+  if [ -n "$pgid" ]; then
+    local kids; kids=$(ps -Ao pid,pgid 2>/dev/null | awk -v g="$pgid" '$2==g {print $1}' | tr '\n' ' ')
+    pids="$pids $kids"
+  fi
+  echo "$pids"
+}
+SCRIPT_FAMILY=" $(build_script_family) "
+
+# Returns 0 if pid/cmd must NEVER be signaled
+is_self_or_util() {
+  local pid="$1" cmd="${2:-}"
+  [ -z "$pid" ] && return 0
+  [ "$pid" = "$SELF_PID" ] && return 0
+  case "$SCRIPT_FAMILY" in *" $pid "*) return 0 ;; esac
+  [ -z "$cmd" ] && cmd=$(ps -o comm= -p "$pid" 2>/dev/null | awk '{print $1}' | xargs basename 2>/dev/null)
+  [ -n "$SHELL_UTILS_RE" ] && echo "$cmd" | grep -qE "$SHELL_UTILS_RE" && return 0
+  [ -n "$KEEP_RE" ] && echo "$cmd" | grep -qE "$KEEP_RE" && return 0
+  return 1
+}
 
 action_clean_caches() {
   local freed=0
@@ -379,11 +477,11 @@ action_clean_package_managers() {
 
 action_clean_deep() {
   if $IS_MACOS; then
-    # Skip DerivedData if Xcode is building OR recent run
-    if pgrep -f "xcodebuild" >/dev/null 2>&1; then
-      echo "  ${YLW}⚠${RST}  DerivedData: skipped (Xcode build active)"
-    elif recent_run; then
-      echo "  ${DIM}○${RST} DerivedData: skipped (recent run <1h)"
+    # Aggressive bypasses build-active and recent-run gates (user pref).
+    if pgrep -x xcodebuild >/dev/null 2>&1 && ! $MODE_AGGRESSIVE; then
+      echo "  ${YLW}⚠${RST}  DerivedData: skipped (Xcode build active — aggressive overrides)"
+    elif recent_run && ! $MODE_AGGRESSIVE; then
+      echo "  ${DIM}○${RST} DerivedData: skipped (recent run <1h — aggressive overrides)"
     else
       [ -d "$HOME/Library/Developer/Xcode/DerivedData" ] && rm -rf "$HOME/Library/Developer/Xcode/DerivedData"/* 2>/dev/null
       echo "  ${GRN}✓${RST} Xcode DerivedData cleared"
@@ -425,12 +523,13 @@ action_clean_stale_builds() {
   (( count > 0 )) && echo "  ${GRN}✓${RST} Stale build dirs: ${count} removed, ~$((total_kb / 1024))MB freed"
 }
 
-# Kill CPU/power/GPU hogs from probe output
+# Kill CPU/power/GPU hogs from probe output. Filters self/utils/KEEP.
 action_kill_hogs() {
   [ -f "${CPU_HOGS_FILE:-}" ] || return 0
   local killed=0
   while IFS='|' read -r pid cpu mem cmd; do
     [ -z "$pid" ] && continue
+    is_self_or_util "$pid" "$cmd" && continue
     echo "$cmd" | grep -qE "$PROTECTED_RE" && continue
     ps -p "$pid" >/dev/null 2>&1 || continue
     kill -TERM "$pid" 2>/dev/null && killed=$((killed + 1))
@@ -441,27 +540,135 @@ action_kill_hogs() {
     local pkilled=0
     while IFS='|' read -r pid power name; do
       [ -z "$pid" ] && continue
+      is_self_or_util "$pid" "$name" && continue
       echo "$name" | grep -qE "$PROTECTED_RE" && continue
       ps -p "$pid" >/dev/null 2>&1 || continue
       kill -TERM "$pid" 2>/dev/null && pkilled=$((pkilled + 1))
     done < "$POWER_HOGS_FILE"
     (( pkilled > 0 )) && echo "  ${GRN}✓${RST} Killed $pkilled power hog(s)"
   fi
+
+  if [ -f "${GPU_HOGS_FILE:-}" ]; then
+    local gkilled=0
+    while IFS='|' read -r kind pid load name; do
+      [ -z "$pid" ] && continue
+      is_self_or_util "$pid" "$name" && continue
+      echo "$name" | grep -qE "$PROTECTED_RE" && continue
+      ps -p "$pid" >/dev/null 2>&1 || continue
+      kill -TERM "$pid" 2>/dev/null && gkilled=$((gkilled + 1))
+    done < "$GPU_HOGS_FILE"
+    (( gkilled > 0 )) && echo "  ${GRN}✓${RST} Killed $gkilled GPU/ANE hog(s)"
+  fi
 }
 
-# Launch agent / systemd offenders
+# ── Stale-PID sweep: long-running, idle, memory-leaking procs (aggressive) ─
+action_stale_pids() {
+  $MODE_AGGRESSIVE || return 0
+  $IS_MACOS || return 0
+  local age_secs=$((24 * 3600)) rss_kb=512000 cpu_max=2 killed=0
+  ps -Ao pid,etime,%cpu,rss,comm 2>/dev/null | awk -v age="$age_secs" -v rk="$rss_kb" -v cm="$cpu_max" '
+    NR == 1 { next }
+    {
+      t = $2; gsub(/-/, " ", t); gsub(/:/, " ", t)
+      n = split(t, a, " "); secs = 0
+      if (n == 4)      { secs = a[1]*86400 + a[2]*3600 + a[3]*60 + a[4] }
+      else if (n == 3) { secs = a[1]*3600 + a[2]*60 + a[3] }
+      else if (n == 2) { secs = a[1]*60 + a[2] }
+      else             { secs = a[1] }
+      if (secs >= age && $4+0 >= rk && $3+0 < cm) printf "%s|%d|%s\n", $1, $4/1024, $5
+    }' | while IFS='|' read -r pid rssmb cmd; do
+    is_self_or_util "$pid" "$cmd" && continue
+    echo "$cmd" | grep -qE "$PROTECTED_RE" && continue
+    kill -TERM "$pid" 2>/dev/null && killed=$((killed + 1))
+  done
+  (( killed > 0 )) && echo "  ${GRN}✓${RST} Reaped $killed stale process(es) (>24h, RSS>500MB, idle)"
+}
+
+# ── Crashing-PID sweep: repeat-offender detection (aggressive) ────
+action_crash_pids() {
+  $MODE_AGGRESSIVE || return 0
+  $IS_MACOS || return 0
+  local threshold=3 window_min=120 killed=0
+  local repeats; repeats=$(
+    for d in "$HOME/Library/Logs/DiagnosticReports" /Library/Logs/DiagnosticReports; do
+      [ -d "$d" ] || continue
+      find "$d" -maxdepth 1 -type f \( -name '*.ips' -o -name '*.crash' \) -mmin -$window_min 2>/dev/null
+    done | awk -F/ '{print $NF}' | awk -F'[-_]' '{print $1}' | sort | uniq -c | awk -v t="$threshold" '$1 >= t {print $2}'
+  )
+  [ -z "$repeats" ] && return 0
+  echo "$repeats" | while read -r off; do
+    [ -z "$off" ] && continue
+    [ -n "$KEEP_RE" ] && echo "$off" | grep -qE "$KEEP_RE" && continue
+    echo "$off" | grep -qE "$PROTECTED_RE" && continue
+    pgrep -x "$off" 2>/dev/null | while read -r cpid; do
+      is_self_or_util "$cpid" "$off" && continue
+      kill -TERM "$cpid" 2>/dev/null && killed=$((killed + 1))
+    done
+  done
+  (( killed > 0 )) && echo "  ${GRN}✓${RST} Killed $killed repeat-crasher(s)"
+}
+
+# ── Menu-bar bloat: permanent disable in aggressive (KEEP_RE filtered) ──
+action_bloat_disable() {
+  $MODE_AGGRESSIVE || return 0
+  $IS_MACOS || return 0
+  local count=0 uid; uid=$(id -u)
+  for lbl in "${MACOS_BLOAT_LABELS[@]}"; do
+    [ -n "$KEEP_RE" ] && echo "$lbl" | grep -qE "$KEEP_RE" && continue
+    launchctl bootout "gui/$uid/$lbl" 2>/dev/null || true
+    launchctl disable "gui/$uid/$lbl" 2>/dev/null || true
+    count=$((count + 1))
+  done
+  echo "  ${GRN}✓${RST} Permanently disabled $count menu-bar bloat label(s) — Tailscale/1P/Bartender protected"
+}
+
+# ── IO/swap supercharge (aggressive only) ────────────────────────
+action_io_supercharge() {
+  $MODE_AGGRESSIVE || return 0
+  $SUDO_OK || return 0
+  if $IS_MACOS; then
+    sync 2>/dev/null; sync 2>/dev/null; sync 2>/dev/null
+    local cur tgt
+    cur=$(sysctl -n kern.aiomax 2>/dev/null || echo 0); tgt=8192
+    (( cur < tgt )) && sudo sysctl -w kern.aiomax=$tgt 2>/dev/null >/dev/null
+    cur=$(sysctl -n kern.aioprocmax 2>/dev/null || echo 0); tgt=2048
+    (( cur < tgt )) && sudo sysctl -w kern.aioprocmax=$tgt 2>/dev/null >/dev/null
+    cur=$(sysctl -n kern.tty.ptmx_max 2>/dev/null || echo 0); tgt=511
+    (( cur < tgt )) && sudo sysctl -w kern.tty.ptmx_max=$tgt 2>/dev/null >/dev/null
+    sudo sysctl -w kern.maxnbuf=131072 2>/dev/null >/dev/null
+    echo "  ${GRN}✓${RST} IO supercharge: aiomax=$(sysctl -n kern.aiomax) aioprocmax=$(sysctl -n kern.aioprocmax) maxnbuf=$(sysctl -n kern.maxnbuf)"
+  elif $IS_LINUX || $IS_WSL; then
+    sync 2>/dev/null; sync 2>/dev/null; sync 2>/dev/null
+    # Aggressive Linux tuning: lower swappiness, raise dirty ratios for SSD
+    sudo sysctl -w vm.swappiness=10 2>/dev/null >/dev/null || true
+    sudo sysctl -w vm.dirty_ratio=30 2>/dev/null >/dev/null || true
+    sudo sysctl -w vm.dirty_background_ratio=10 2>/dev/null >/dev/null || true
+    sudo sysctl -w vm.vfs_cache_pressure=50 2>/dev/null >/dev/null || true
+    echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true
+    echo "  ${GRN}✓${RST} Linux IO/swap supercharge: swappiness=10, dirty_ratio=30, drop_caches=3"
+  fi
+}
+
+# Launch agent / systemd offenders. KEEP_RE always enforced — Tailscale
+# / 1Password / Bartender / etc. survive even if listed accidentally.
 action_launch_offenders() {
   if $IS_MACOS; then
     local total=0
     for agent in "${MACOS_OFFENDER_AGENTS[@]}"; do
+      [ -n "$KEEP_RE" ] && echo "$agent" | grep -qE "$KEEP_RE" && continue
       local pids; pids=$(pgrep -f "$agent" 2>/dev/null || true)
       [ -z "$pids" ] && continue
-      echo "$pids" | while read -r pid; do kill -TERM "$pid" 2>/dev/null || true; done
+      echo "$pids" | while read -r pid; do
+        [ -z "$pid" ] && continue
+        is_self_or_util "$pid" "$agent" && continue
+        kill -TERM "$pid" 2>/dev/null || true
+      done
       total=$((total + $(echo "$pids" | wc -l | tr -d ' ')))
       if $MODE_AGGRESSIVE; then
         launchctl bootout "gui/$(id -u)/$agent" 2>/dev/null || \
           launchctl unload -w "/System/Library/LaunchAgents/$agent.plist" 2>/dev/null || true
-        echo "  ${RED}✗${RST} Unloaded $agent (aggressive)"
+        launchctl disable "gui/$(id -u)/$agent" 2>/dev/null || true
+        echo "  ${RED}✗${RST} Unloaded + disabled $agent (aggressive)"
       else
         echo "  ${YLW}⚠${RST}  Killed $agent (will respawn — use --aggressive to unload)"
       fi
@@ -568,23 +775,29 @@ action_kernel_tune() {
   fi
 }
 
-# Memory purge (macOS) — only when pressure or swap high
+# Memory purge — always-fire in aggressive (user pref). Otherwise gated.
 action_memory_purge() {
   if $IS_MACOS; then
-    local pressure swap
-    pressure=${MEM_pressure_pct:-0}
-    swap=${MEM_swap_mb:-0}
-    # Strip decimals and non-digits
+    local pressure swap trigger=""
+    pressure=${MEM_pressure_pct:-0}; swap=${MEM_swap_mb:-0}
     pressure=$(echo "$pressure" | awk -F. '{print int($1+0)}')
     swap=$(echo "$swap" | awk -F. '{print int($1+0)}')
     [ -z "$pressure" ] && pressure=0
     [ -z "$swap" ] && swap=0
-    if (( pressure < 30 || swap > 200 )) && sudo -n true 2>/dev/null; then
+    if $MODE_AGGRESSIVE; then
+      trigger="aggressive"
+    elif (( pressure < 30 )); then
+      trigger="pressure ${pressure}%"
+    elif (( swap > 200 )); then
+      trigger="swap ${swap}MB"
+    fi
+    if [ -n "$trigger" ] && $SUDO_OK; then
+      sync 2>/dev/null
       sudo purge 2>/dev/null || true
-      echo "  ${GRN}✓${RST} Memory purged (pressure=${pressure}% free, swap=${swap}MB)"
+      echo "  ${GRN}✓${RST} Memory purged (${trigger}; free=${pressure}% swap=${swap}MB)"
     fi
   elif $IS_LINUX || $IS_WSL; then
-    if sudo -n true 2>/dev/null; then
+    if $SUDO_OK; then
       sync; echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true
       echo "  ${GRN}✓${RST} Memory caches dropped"
     fi

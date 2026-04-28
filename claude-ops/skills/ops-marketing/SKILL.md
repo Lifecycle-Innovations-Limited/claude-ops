@@ -1,7 +1,7 @@
 ---
 name: ops-marketing
 description: Marketing command center. Email campaigns (Klaviyo), paid ads (Meta/Google), analytics (GA4), SEO, and social media metrics. One dashboard for all marketing channels.
-argument-hint: "[email|ads|analytics|seo|social|campaigns|setup]"
+argument-hint: "[--project <slug>] [email|ads|analytics|seo|social|campaigns|projects|setup]"
 allowed-tools:
   - Bash
   - Read
@@ -19,6 +19,62 @@ maxTurns: 40
 ---
 
 # OPS ► MARKETING COMMAND CENTER
+
+## Multi-Project Support
+
+This skill is **project-scoped**. Each user may operate multiple businesses (Shopify stores, SaaS apps, marketing sites) with separate Klaviyo / Meta / GA4 / Google Ads accounts. Credentials are namespaced under `marketing.projects.<slug>` in `preferences.json`.
+
+### Resolving the active project
+
+Order of precedence:
+1. `--project <slug>` CLI flag on the invocation (`/ops:ops-marketing --project mystore email`)
+2. `MARKETING_PROJECT` environment variable
+3. `marketing.default_project` from `preferences.json`
+4. Legacy fallback: root-level `marketing.{klaviyo,meta,...}` (single-project installs pre-v2)
+
+### Listing configured projects (`projects` subcommand)
+
+```bash
+PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+DEFAULT=$(jq -r '.marketing.default_project // "—"' "$PREFS")
+echo "Default: $DEFAULT"
+echo ""
+jq -r '.marketing.projects // {} | to_entries[] |
+  "\(.key)\t\(.value | keys | join(","))"' "$PREFS" | \
+  awk -F'\t' 'BEGIN{printf "%-16s %s\n", "PROJECT", "CONFIGURED"} {printf "%-16s %s\n", $1, ($2 ? $2 : "(empty)")}'
+```
+
+### Switching default project
+
+```bash
+jq --arg p "$NEW_DEFAULT" '.marketing.default_project = $p' "$PREFS" > "${PREFS}.new" && mv "${PREFS}.new" "$PREFS"
+```
+
+### Schema (`preferences.json`)
+
+```json
+{
+  "marketing": {
+    "default_project": "<slug>",
+    "projects": {
+      "<slug>": {
+        "klaviyo":     { "private_key": "<value | env:VAR | doppler:VAR | keychain:SERVICE>" },
+        "meta":        { "access_token": "...", "ad_account_id": "act_...", "page_id": "...", "page_name": "..." },
+        "instagram":   { "account_id": "..." },
+        "ga4":         { "property_id": "..." },
+        "gsc":         { "site": "https://example.com/" },
+        "google_ads":  { "developer_token": "...", "client_id": "...", "client_secret": "...", "refresh_token": "...", "customer_id": "...", "login_customer_id": "..." }
+      }
+    }
+  }
+}
+```
+
+**Secret resolver prefixes** (handled automatically by `bin/ops-marketing-dash`):
+- `env:VAR_NAME` — read environment variable
+- `doppler:VAR_NAME` — `doppler secrets get VAR_NAME --plain`
+- `keychain:SERVICE` — `security find-generic-password -s SERVICE -w` (macOS)
+- raw string — used as-is (acceptable for non-sensitive values like account IDs)
 
 ## Runtime Context
 
@@ -165,11 +221,13 @@ fi
 
 ## Sub-command Routing
 
-Route `$ARGUMENTS` to the correct section below:
+Route `$ARGUMENTS` to the correct section below. **First, strip any `--project <slug>` flag** and export it as `MARKETING_PROJECT` for downstream Bash calls — every section's curl/CLI work happens against the active project.
 
 | Input | Action |
 |---|---|
-| (empty), dashboard | Run full marketing dashboard |
+| projects, list-projects | List configured projects + show default (see ## Multi-Project Support) |
+| project use \<slug\>, set-default \<slug\> | Switch `marketing.default_project` in preferences.json |
+| (empty), dashboard | Run full marketing dashboard for active project |
 | email, klaviyo | Klaviyo email metrics |
 | ads, meta | Meta Ads performance (read-only overview) |
 | meta-manage, meta create-campaign, meta target, meta creative, meta rules, meta audiences, meta advantage | Meta Ads campaign management (see ## meta-manage section) |
@@ -1943,18 +2001,20 @@ printf "| %-14s | \$%-9s | %-12s | \$%-11s | %-8s |\n" "TOTAL (ads)" "$TOTAL_AD_
 
 ## dashboard (default — no args)
 
-Run ALL sections in parallel, then render unified dashboard.
+Run ALL sections in parallel, then render unified dashboard. The script reads the active project from `--project <slug>` arg, `MARKETING_PROJECT` env, or `marketing.default_project` in prefs (see ## Multi-Project Support).
 
 ```bash
-# Run the pre-gathered data script
-"${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-dash" 2>/dev/null
+# Run the pre-gathered data script — pass through --project if user specified one
+"${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-dash" ${MARKETING_PROJECT:+--project "$MARKETING_PROJECT"} 2>/dev/null
 ```
+
+The output JSON includes a top-level `"project"` field — use it in the dashboard header.
 
 Parse the JSON output and display:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- MARKETING DASHBOARD — [date]
+ MARKETING DASHBOARD — [project] · [date]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  Email (Klaviyo)  [N] subs  |  [X]% open rate  |  $[X] attributed
  Paid (Meta)      $[X] spent  |  [X]x ROAS  |  [N] purchases

@@ -46,17 +46,17 @@ maxTurns: 60
 
 For **all** WhatsApp operations in this skill (list chats, read messages, search contacts, send replies), use the `mcp__whatsapp__*` tool family backed by the Baileys whatsapp-bridge.
 
-**NEVER call the legacy `wacli` CLI** (`wacli chats list`, `wacli messages list`, `wacli send`, `wacli doctor`, `wacli history backfill`, etc). The wacli store and keepalive daemon are deprecated for this skill.
+**NEVER call the legacy `wacli` CLI** (`wacli chats list`, `wacli messages list`, `wacli send`, `wacli doctor`, `wacli history backfill`, etc). The wacli store and keepalive daemon are deprecated for this skill — they are kept around only as a background sync helper.
 
 If you find yourself reaching for any `wacli ...` shell command, stop and use the MCP tool with the same intent:
 
-| Intent                  | ✅ Use this                                                              | ❌ Do NOT use            |
-|-------------------------|--------------------------------------------------------------------------|---------------------------|
-| List recent chats       | `mcp__whatsapp__list_chats {sort_by: "last_active", limit: 25}`          | `wacli chats list`        |
-| Read full thread        | `mcp__whatsapp__list_messages {chat_jid, limit: 20}`                     | `wacli messages list`     |
-| Full-text search        | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}`              | `wacli messages search`   |
-| Resolve a contact       | `mcp__whatsapp__search_contacts {query: "<name>"}`                        | `wacli contacts`          |
-| Send a reply (after approval) | `mcp__whatsapp__send_message {recipient: "<JID>", message: "<text>"}` | `wacli send`              |
+| Intent                  | ✅ Use this                                                              | ❌ Do NOT use      |
+|-------------------------|--------------------------------------------------------------------------|---------------------|
+| List recent chats       | `mcp__whatsapp__list_chats {sort_by: "last_active", limit: 25}`          | `wacli chats list`  |
+| Read full thread        | `mcp__whatsapp__list_messages {chat_jid, limit: 20}`                     | `wacli messages list` |
+| Full-text search        | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}`              | `wacli messages search` |
+| Resolve a contact       | `mcp__whatsapp__search_contacts {query: "<name>"}`                        | `wacli contacts`    |
+| Send a reply (after approval) | `mcp__whatsapp__send_message {recipient: "<JID>", message: "<text>"}` | `wacli send`        |
 | Health check            | `lsof -i :8080 \| grep LISTEN` + `launchctl list com.samrenders.whatsapp-bridge` | `wacli doctor` / `~/.wacli/.health` |
 
 **Rationale:** the bridge exposes a typed MCP surface, returns consistent JSON shapes (`is_from_me`, `content`, `timestamp`, `sender`), supports FTS5 search natively, and avoids store-lock contention with the wacli keepalive daemon. Mixing the two surfaces caused inconsistent state in past sessions.

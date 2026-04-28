@@ -39,6 +39,19 @@ WACLI_CACHE_DIR="$DATA_DIR/cache"
 
 mkdir -p "$LOG_DIR" "$STORE" "$MEMORY_DIR" "$WACLI_CACHE_DIR"
 
+# ── Stale state cleanup at startup ──────────────────────────────────────
+# .batch_wacli and .pause_sync are signal files. If a previous keepalive
+# crashed mid-batch, these stick around forever and poison subsequent runs.
+# Clear anything >5 minutes old at startup.
+for stale_signal in "$BATCH_MARKER" "$PAUSE_SIGNAL"; do
+  if [[ -f "$stale_signal" ]]; then
+    age=$(( $(date +%s) - $(stat -f%m "$stale_signal" 2>/dev/null || stat -c%Y "$stale_signal" 2>/dev/null || echo 0) ))
+    if (( age > 300 )); then
+      rm -f "$stale_signal"
+    fi
+  fi
+done
+
 # ── Self-pause helpers (bug 5) ──────────────────────────────────────────
 # Kill the persistent sync from within the keepalive's own process so we can
 # access wacli exclusively without colliding on the store lock. The outer
@@ -76,6 +89,22 @@ release_wacli_batch() {
 }
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$LOG"; }
+
+# Refresh the health-file timestamp without changing status. Called every
+# monitor tick so consumers can distinguish "daemon alive, sync transiently
+# paused for batch work" from "daemon dead". Preserves status/detail/pid lines.
+heartbeat_health() {
+  [[ -f "$HEALTH_FILE" ]] || return 0
+  local existing_status existing_detail
+  existing_status=$(grep '^status=' "$HEALTH_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo "connected")
+  existing_detail=$(grep '^detail=' "$HEALTH_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo "")
+  cat > "$HEALTH_FILE" <<EOF
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+status=$existing_status
+detail=$existing_detail
+pid=$$
+EOF
+}
 
 # Rotate log if too large
 if [[ -f "$LOG" ]] && [[ $(stat -f%z "$LOG" 2>/dev/null || stat -c%s "$LOG" 2>/dev/null || echo 0) -gt $MAX_LOG_SIZE ]]; then
@@ -562,6 +591,11 @@ while true; do
     if ! kill -0 "$local_sync_pid" 2>/dev/null; then break; fi
 
     refresh_wacli_cache
+
+    # Heartbeat — keep .health mtime fresh so consumers can detect liveness
+    # independent of whether `wacli doctor` reports connected:true at this
+    # exact instant (which can be false during batch backfill cycles).
+    heartbeat_health
 
     sleep 5
   done
