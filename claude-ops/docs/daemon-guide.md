@@ -30,7 +30,7 @@ The daemon supervises **seven** long-lived services:
 | Service | Cadence | Purpose |
 |---------|---------|---------|
 | `briefing-pre-warm` | every **2 min** | Runs `bin/ops-gather` to keep `/ops:go` cache hot |
-| `wacli-sync` | persistent | Keeps WhatsApp connected, auto-reconnects, backfills `@lid` chats |
+| `whatsapp-bridge-sync` | persistent | Keeps WhatsApp connected, auto-reconnects, backfills `@lid` chats |
 | `memory-extractor` | every 30 min | Spawns `memory-extractor` agent to refresh `memories/` |
 | `inbox-digest` | every 15 min | Pre-classifies comms across channels for `/ops:inbox` |
 | `store-health` | every 10 min | Shopify orders + inventory polling (if configured) |
@@ -125,7 +125,7 @@ The daemon script lives at `scripts/ops-daemon.sh`.
 
 ## 📋 Health File Contract
 
-The daemon writes `~/.wacli/.health` on every successful wacli sync. Skills read this file before any WhatsApp operation.
+The daemon writes `~/.whatsapp-bridge/.health` on every successful whatsapp-bridge sync. Skills read this file before any WhatsApp operation.
 
 ```json
 {
@@ -139,8 +139,8 @@ The daemon writes `~/.wacli/.health` on every successful wacli sync. Skills read
 | Field | Meaning |
 |-------|---------|
 | `status` | `ok`, `degraded`, or `down` |
-| `last_sync` | ISO timestamp of last successful wacli poll |
-| `wacli_pid` | PID of the running wacli process |
+| `last_sync` | ISO timestamp of last successful whatsapp-bridge poll |
+| `wacli_pid` | PID of the running whatsapp-bridge process |
 | `message_count` | Total messages in local DB |
 
 > [!WARNING]
@@ -150,7 +150,7 @@ The daemon writes `~/.wacli/.health` on every successful wacli sync. Skills read
 
 ## 🪝 PreToolUse Hook
 
-`hooks/whatsapp-health-check.sh` runs automatically before any `wacli` call. It checks the health file and either:
+`hooks/whatsapp-health-check.sh` runs automatically before any `whatsapp-bridge` call. It checks the health file and either:
 - Proceeds silently if `status === ok` and `last_sync` is recent
 - Surfaces a warning with instructions to restart the daemon if degraded
 
@@ -191,7 +191,7 @@ Common issues:
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `wacli not connected` | Auth expired | `/ops:setup whatsapp` to re-authenticate |
+| `whatsapp-bridge not connected` | Auth expired | `/ops:setup whatsapp` to re-authenticate |
 | `health file stale` | Daemon crashed | Check `/tmp/com.claude-ops.daemon.log`, restart via launchctl |
 | `memory extractor not running` | Missing Haiku API key | Configure in preferences or Doppler |
 | `briefing-pre-warm errors` | `bin/ops-gather` failing | Run `bin/ops-gather` manually to see the error, often a missing CLI |

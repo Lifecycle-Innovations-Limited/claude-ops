@@ -268,7 +268,7 @@ TOOLS_JSON=$(cat <<TOOLS
   "gh": $(has gh),
   "aws": $(has aws),
   "node": $(has node),
-  "wacli": $(has wacli),
+  "whatsapp-bridge": $(lsof -i :8080 2>/dev/null | grep -q LISTEN && echo true || echo false),
   "gog": $(has gog),
   "sentry-cli": $(has sentry-cli),
   "doppler": $(has doppler)

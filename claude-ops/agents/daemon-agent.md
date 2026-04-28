@@ -60,11 +60,11 @@ tail -f ~/.claude/plugins/data/ops-ops-marketplace/logs/<service-name>.log
 
 ## Action Needed
 
-When a service requires user intervention (e.g. wacli reauth), `action_needed` is set:
+When a service requires user intervention (e.g. whatsapp-bridge restart), `action_needed` is set:
 
 ```json
 {
-  "action_needed": {"service": "wacli-sync", "action": "reauth"}
+  "action_needed": {"service": "whatsapp-bridge", "action": "restart"}
 }
 ```
 
@@ -78,7 +78,7 @@ Any ops skill that reads `daemon-health.json` should surface this to the user im
   "pid": 12345,
   "uptime_seconds": 3600,
   "services": {
-    "wacli-sync": {"status": "running", "pid": 67890, "last_health": "connected", "restarts": 0},
+    "whatsapp-bridge": {"status": "running", "pid": 67890, "last_health": "connected", "restarts": 0},
     "memory-extractor": {"status": "scheduled", "next_run": "2026-04-13T15:30:00Z", "last_run": "2026-04-13T15:00:00Z"}
   },
   "action_needed": null

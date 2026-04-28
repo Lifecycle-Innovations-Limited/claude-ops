@@ -73,11 +73,11 @@ Tokens are stored via the credential cascade (see below). Service names: `slack-
 
 `bin/ops-telegram-autolink.mjs` uses gram.js to capture an MTProto session string. Works identically on every OS — the only platform difference is where the credentials are persisted (cred cascade). Service names: `telegram-api-id`, `telegram-api-hash`, `telegram-phone`, `telegram-session`.
 
-### WhatsApp — `wacli`
+### WhatsApp — `whatsapp-bridge`
 
 | OS | Status | Notes |
 |---|---|---|
-| macOS | Tier 1 | `wacli` builds from source: `git clone … && go build -o /usr/local/bin/wacli ./cmd/wacli` |
+| macOS | Tier 1 | `whatsapp-bridge` builds from source: `git clone … && go build -o /usr/local/bin/whatsapp-bridge ./cmd/whatsapp-bridge` |
 | Linux | Tier 1 | Same build flow; install Go first: `apt-get install -y golang` etc. |
 | WSL2 | Tier 1 | Same as Linux. |
 | Windows | Tier 3 | Build under WSL — native Windows builds untested. |
@@ -157,8 +157,8 @@ Backend names: `security`, `secret-tool`, `wincred`, `keytar`, `enc-json`, `plai
 
 | OS | Mechanism | Files written |
 |---|---|---|
-| macOS | `launchd` user agent | `~/Library/LaunchAgents/com.claude-ops.daemon.plist` + `…wacli-keepalive.plist` |
-| Linux / WSL2 | `systemd --user` unit + timer | `~/.config/systemd/user/claude-ops.service`, `claude-ops.timer`, `claude-ops-wacli-keepalive.service` |
+| macOS | `launchd` user agent | `~/Library/LaunchAgents/com.claude-ops.daemon.plist` + `…whatsapp-bridge-keepalive.plist` |
+| Linux / WSL2 | `systemd --user` unit + timer | `~/.config/systemd/user/claude-ops.service`, `claude-ops.timer`, `claude-ops-whatsapp-bridge-keepalive.service` |
 | Windows | Task Scheduler | `ClaudeOpsDaemon` task running `bash.exe scripts/ops-daemon.sh --run-once` every 5 min (falls back to `pwsh.exe` wrapper if Git Bash isn't on PATH) |
 
 **Cadence** is 5 minutes everywhere (`/SC MINUTE /MO 5` on Windows, `OnUnitActiveSec=5min` on systemd, throttled-loop on launchd).
