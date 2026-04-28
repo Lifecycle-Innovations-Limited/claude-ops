@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ops-message-listener.sh — Poll-based message listener (replaces OpenClaw WebSocket gateway)
-# Supervised by ops-daemon. Polls WhatsApp (wacli) + Telegram every 60s.
+# Supervised by ops-daemon. Polls WhatsApp (Baileys bridge messages.db) + Telegram every 60s.
 # New non-owner messages → written to inbox-queue.json for /ops:inbox to consume.
 # Health status written to listener-health.txt for daemon monitoring.
 set -euo pipefail
@@ -11,7 +11,7 @@ LOG="$LOG_DIR/message-listener.log"
 QUEUE_FILE="$DATA_DIR/inbox-queue.json"
 HEALTH_FILE="$DATA_DIR/listener-health.txt"
 STATE_FILE="$DATA_DIR/listener-state.json"
-WACLI="${WACLI_BIN:-$(command -v wacli 2>/dev/null || echo /usr/local/bin/wacli)}"
+BRIDGE_DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
 POLL_INTERVAL="${OPS_LISTENER_POLL_INTERVAL:-60}"
 
 mkdir -p "$LOG_DIR" "$DATA_DIR"
@@ -87,29 +87,29 @@ print(added)
 # ── Poll WhatsApp ─────────────────────────────────────────────────────────
 poll_whatsapp() {
   local since="$1"
-  if ! command -v wacli &>/dev/null && [[ ! -x "$WACLI" ]]; then
+  if [[ ! -f "$BRIDGE_DB" ]]; then
     echo "[]"
     return
   fi
 
-  local since_flag=""
-  [[ -n "$since" ]] && since_flag="--after=$since"
-
   local raw
-  raw=$("$WACLI" messages list $since_flag --limit 20 --json 2>/dev/null || echo "[]")
+  raw=$(sqlite3 "$BRIDGE_DB" "SELECT json_group_array(json_object('id',rowid,'chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM (SELECT rowid, chat_jid, sender, content, timestamp, is_from_me FROM messages WHERE timestamp > '${since:-1970-01-01}' ORDER BY timestamp DESC LIMIT 20);" 2>/dev/null || echo "[]")
 
-  # Filter: only non-owner (from_me=false) messages
+  # Filter: only non-owner (is_from_me=false) messages
   echo "$raw" | python3 -c "
 import json, sys
 msgs = json.load(sys.stdin)
+def _from_me(m):
+    v = m.get('is_from_me', False)
+    return v is True or v == 1
 filtered = []
 for m in msgs:
-    if not m.get('from_me', False):
+    if not _from_me(m):
         filtered.append({
-            'id': m.get('id', ''),
+            'id': str(m.get('id', m.get('rowid', ''))),  # rowid from sqlite
             'channel': 'whatsapp',
-            'from': m.get('contact_name', m.get('from', '')),
-            'text': m.get('body', m.get('text', '')),
+            'from': m.get('sender') or m.get('contact_name') or m.get('from', ''),
+            'text': m.get('content') or m.get('body') or m.get('text', ''),
             'timestamp': m.get('timestamp', ''),
             'raw': m
         })
