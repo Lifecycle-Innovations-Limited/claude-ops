@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# PreToolUse hook: check wacli health before WhatsApp commands
-# Receives tool input as $1, checks if it contains wacli commands
+# PreToolUse hook: DEPRECATED — replaced by ops-pretool-whatsapp-bridge-health
+# Kept as no-op shim for backwards compat
 set -euo pipefail
 
 INPUT="${1:-}"
@@ -15,7 +15,7 @@ HEALTH_FILE="$HOME/.wacli/.health"
 if [[ -f "$HEALTH_FILE" ]]; then
   STATUS=$(grep "^status=" "$HEALTH_FILE" | cut -d= -f2)
   if [[ "$STATUS" == "needs_auth" ]] || [[ "$STATUS" == "needs_reauth" ]]; then
-    echo "⚠ WhatsApp needs re-authentication. Run 'wacli auth' in a separate terminal."
+    echo "⚠ WhatsApp bridge may not be running. Check: launchctl list com.samrenders.whatsapp-bridge"
     # Don't block — just warn. The skill's own health check will handle it.
   fi
 fi

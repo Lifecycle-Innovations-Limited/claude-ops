@@ -6,7 +6,7 @@ set -euo pipefail
 DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 LOG_DIR="$DATA_DIR/logs"
 LOG="$LOG_DIR/inbox-digest.log"
-WACLI="${WACLI_BIN:-$(command -v wacli 2>/dev/null || echo /usr/local/bin/wacli)}"
+BRIDGE_DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
 
 mkdir -p "$LOG_DIR"
 log() { printf '%s [inbox-digest] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" | tee -a "$LOG"; }
@@ -21,14 +21,17 @@ fi
 
 # ── Gather WhatsApp unread count ──────────────────────────────────────────
 WA_SUMMARY="WhatsApp: unavailable"
-if command -v wacli &>/dev/null || [[ -x "$WACLI" ]]; then
+if [[ -f "$BRIDGE_DB" ]]; then
   SINCE=$(date -u -v-4H "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "4 hours ago" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u "+%Y-%m-%dT%H:%M:%SZ")
-  WA_RAW=$("$WACLI" messages list --after="$SINCE" --limit 20 --json 2>/dev/null || echo "[]")
+  WA_RAW=$(sqlite3 "$BRIDGE_DB" "SELECT json_group_array(json_object('chat_jid',chat_jid,'sender',sender,'content',content,'timestamp',timestamp,'is_from_me',is_from_me)) FROM (SELECT chat_jid, sender, content, timestamp, is_from_me FROM messages WHERE timestamp >= '${SINCE}' ORDER BY timestamp DESC LIMIT 20);" 2>/dev/null || echo "[]")
   WA_COUNT=$(echo "$WA_RAW" | python3 -c "
 import json, sys
 msgs = json.load(sys.stdin)
-# Filter out messages from owner (from_me=true)
-unread = [m for m in msgs if not m.get('from_me', False)]
+# Filter out messages from owner (is_from_me=true)
+def _from_me(m):
+    v = m.get('is_from_me', False)
+    return v is True or v == 1
+unread = [m for m in msgs if not _from_me(m)]
 print(len(unread))
 " 2>/dev/null || echo "0")
 
@@ -38,8 +41,11 @@ print(len(unread))
     WA_SENDERS=$(echo "$WA_RAW" | python3 -c "
 import json, sys
 msgs = json.load(sys.stdin)
-unread = [m for m in msgs if not m.get('from_me', False)]
-senders = list({m.get('contact_name', m.get('from', 'unknown')) for m in unread})[:5]
+def _from_me(m):
+    v = m.get('is_from_me', False)
+    return v is True or v == 1
+unread = [m for m in msgs if not _from_me(m)]
+senders = list({m.get('sender') or m.get('contact_name') or m.get('from') or 'unknown' for m in unread})[:5]
 print(', '.join(senders))
 " 2>/dev/null || echo "unknown")
     WA_SUMMARY="WhatsApp: $WA_COUNT unread from $WA_SENDERS"

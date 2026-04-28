@@ -6,10 +6,10 @@
       "cron": "*/2 * * * *",
       "_note": "Pre-warms /ops:go briefing cache every 2 minutes. Runs immediately after daemon install so /ops:go is instant by the time setup finishes."
     },
-    "wacli-sync": {
+    "whatsapp-bridge": {
       "enabled": true,
-      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/wacli-keepalive.sh",
-      "health_file": "~/.wacli/.health",
+      "command": "launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge",
+      "health_check": "lsof -i :8080 | grep LISTEN",
       "restart_delay": 60,
       "max_restarts": 10
     },

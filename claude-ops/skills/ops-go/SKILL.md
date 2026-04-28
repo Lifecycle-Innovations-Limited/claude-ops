@@ -35,23 +35,23 @@ Before executing, load available context:
 
 2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
    - If `action_needed` is not null → surface it before the briefing
-   - Check `wacli-sync` status before including WhatsApp unread counts
-   - Also check `~/.wacli/.health` for live auth status
+   - Check `whatsapp-bridge` status before including WhatsApp unread counts
+   - Also check bridge liveness: `lsof -i :8080 | grep LISTEN`
 
-3. **WhatsApp pre-check**: Only include WhatsApp data if `~/.wacli/.health` shows `status=connected`.
+3. **WhatsApp pre-check**: Only include WhatsApp data if bridge is running (`lsof -i :8080 | grep LISTEN`).
 
 ## CLI/API Reference
 
-### wacli (WhatsApp)
+### whatsapp-bridge (WhatsApp — mcp__whatsapp__*)
 
-**Health file** — check `~/.wacli/.health` BEFORE any wacli command:
-- `status=connected` → proceed
-- `status=needs_auth` or `status=needs_reauth` → prompt user for QR scan
+**Bridge health** — check before any WhatsApp operation:
+- Running: `lsof -i :8080 | grep LISTEN` → proceed
+- Not running → `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`, wait 5s
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `wacli doctor --json` | Check auth/connected/lock/FTS | `{data: {authenticated, connected, lock_held, fts_enabled}}` |
-| `wacli chats list --json` | All chats | `{data: [{JID, Name, Kind, LastMessageTS}]}` |
+| Tool | Params | Output |
+|------|--------|--------|
+| `mcp__whatsapp__list_chats` | `{sort_by: "last_active"}` | Array of chats with jid, name, last_message_time |
+| `mcp__whatsapp__list_messages` | `{chat_jid, limit, query}` | Message array with is_from_me, content, timestamp |
 
 ### gog CLI (Gmail/Calendar)
 

@@ -1,57 +1,39 @@
 #!/usr/bin/env bash
 # ops-unread — Channel availability + unread counts → JSON
-# Checks WhatsApp (wacli), Email (gog), Slack (env), Telegram (env)
+# Checks WhatsApp (Baileys bridge), Email (gog), Slack (env), Telegram (env)
 # All secrets via env vars or CLI auth — no hardcoded credentials.
 #
 # ENV VARS (optional — tools auto-detect if installed):
 #   GMAIL_ACCOUNT     — Gmail account for gog (default: auto-detect)
 #   SLACK_MCP_ENABLED — "true" if Slack MCP server is configured
 #   TELEGRAM_ENABLED  — "true" if Telegram user-auth MCP is configured
-#   WACLI_STORE       — wacli store path (default: ~/.wacli)
+#   WHATSAPP_BRIDGE_DB — bridge messages.db path (default: ~/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db)
 
 set -euo pipefail
 
 RESULT='{"channels":{}}'
 
-# ── WhatsApp via wacli ──
-if command -v wacli &>/dev/null; then
-  # Check connection status
-  WA_STATUS=$(wacli doctor 2>/dev/null | grep -i "CONNECTED" | awk '{print $2}' || echo "unknown")
-  WA_AUTH=$(wacli doctor 2>/dev/null | grep -i "AUTHENTICATED" | awk '{print $2}' || echo "unknown")
+# ── WhatsApp via Baileys bridge ──
+BRIDGE_DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+BRIDGE_RUNNING=0
+if lsof -i :8080 2>/dev/null | grep -q LISTEN; then
+  BRIDGE_RUNNING=1
+fi
 
-  if [ "$WA_AUTH" = "true" ]; then
-    # Count non-archived chats with recent activity (7 days)
-    WA_RECENT=$(wacli chats list --json 2>/dev/null | python3 -c "
-import json, sys
-from datetime import datetime, timezone, timedelta
-try:
-    raw = json.loads(sys.stdin.read())
-    data = raw.get('data', raw)
-    chats = data if isinstance(data, list) else data.get('chats', [])
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-    count = 0
-    for c in chats:
-        ts = c.get('LastMessageTS', '')
-        try:
-            t = datetime.fromisoformat(ts.replace('Z', '+00:00'))
-            if t > cutoff:
-                count += 1
-        except: pass
-    print(count)
-except:
-    print(0)
-" 2>/dev/null || echo "0")
-
-    [[ "$WA_RECENT" =~ ^[0-9]+$ ]] || WA_RECENT="0"
-    RESULT=$(echo "$RESULT" | jq \
-      --argjson c "$WA_RECENT" \
-      --arg status "$WA_STATUS" \
-      '.channels.whatsapp = {"recent_chats": $c, "connected": ($status == "true"), "available": true}')
-  else
-    RESULT=$(echo "$RESULT" | jq '.channels.whatsapp = {"unread": 0, "available": false, "note": "wacli not authenticated — run: wacli auth"}')
-  fi
+if [[ $BRIDGE_RUNNING -eq 1 ]] && [[ -f "$BRIDGE_DB" ]]; then
+  # Count chats with recent activity (7 days) directly from bridge messages.db
+  WA_RECENT=$(sqlite3 "$BRIDGE_DB" "
+    SELECT COUNT(DISTINCT chat_jid) FROM messages
+    WHERE timestamp >= datetime('now', '-7 days');
+  " 2>/dev/null || echo "0")
+  [[ "$WA_RECENT" =~ ^[0-9]+$ ]] || WA_RECENT="0"
+  RESULT=$(echo "$RESULT" | jq \
+    --argjson c "$WA_RECENT" \
+    '.channels.whatsapp = {"recent_chats": $c, "connected": true, "available": true}')
+elif [[ $BRIDGE_RUNNING -eq 0 ]]; then
+  RESULT=$(echo "$RESULT" | jq '.channels.whatsapp = {"unread": 0, "available": false, "note": "whatsapp-bridge not running — restart: launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge"}')
 else
-  RESULT=$(echo "$RESULT" | jq '.channels.whatsapp = {"unread": 0, "available": false, "note": "wacli not installed"}')
+  RESULT=$(echo "$RESULT" | jq '.channels.whatsapp = {"unread": 0, "available": false, "note": "whatsapp-bridge DB not found — run scripts/whatsapp-bridge-migrate.sh"}')
 fi
 
 # ── Email via gog ──

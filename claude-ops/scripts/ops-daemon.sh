@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ops-daemon.sh — Unified background process manager for claude-ops
-# Manages: wacli sync, memory extraction, health monitors
+# Manages: whatsapp-bridge health, memory extraction, health monitors
 # daemon registration: launchd on macOS, systemd on Linux, Task Scheduler on Windows
 set -euo pipefail
 
@@ -158,14 +158,14 @@ else:
 }
 
 # ── Launchd ownership check ──────────────────────────────────────────────
-# Returns 0 if the launchd keepalive service for wacli is loaded and has a
-# live process.  When true, the daemon must NOT start wacli-sync itself —
+# Returns 0 if the launchd service for whatsapp-bridge is loaded and has a
+# live process.  When true, the daemon must NOT start whatsapp-bridge itself —
 # launchd is the sole owner and handles restarts via KeepAlive=true.
-_wacli_owned_by_launchd() {
+_whatsapp_bridge_owned_by_launchd() {
   command -v launchctl >/dev/null 2>&1 || return 1
   local pid_str
   pid_str=$(launchctl list 2>/dev/null \
-    | awk '$3=="com.claude-ops.wacli-keepalive" {print $1}' || true)
+    | awk '$3=="com.samrenders.whatsapp-bridge" {print $1}' || true)
   # Service must be registered AND have a live PID (not "-")
   if [[ -n "$pid_str" ]] && [[ "$pid_str" != "-" ]] && kill -0 "$pid_str" 2>/dev/null; then
     return 0
@@ -177,14 +177,14 @@ _wacli_owned_by_launchd() {
 start_service() {
   local name="$1"
 
-  # ── Race-condition guard: wacli-sync ownership ──────────────────────────
-  # The launchd keepalive service (com.claude-ops.wacli-keepalive) is the
-  # sole owner of the wacli sync process.  If it is loaded and running, the
-  # daemon must not spawn a competing wacli-sync — doing so causes store-lock
-  # errors and WhatsApp disconnections.  Instead we mark the service as
-  # "delegated" and monitor health passively via the health file.
-  if [[ "$name" == "wacli-sync" ]] && _wacli_owned_by_launchd; then
-    log "START: $name — launchd keepalive is running, deferring ownership (no duplicate spawn)"
+  # ── Race-condition guard: whatsapp-bridge ownership ─────────────────────
+  # The LaunchAgent com.samrenders.whatsapp-bridge is the sole owner of the WA
+  # connection. If it is loaded and running, the daemon must not spawn a
+  # competing whatsapp-bridge — doing so causes store-lock errors and
+  # disconnections. Instead we mark the service as "delegated" and monitor
+  # health passively.
+  if [[ "$name" == "whatsapp-bridge" ]] && _whatsapp_bridge_owned_by_launchd; then
+    log "START: $name — launchd WhatsApp bridge is running, deferring ownership (no duplicate spawn)"
     SERVICE_STATUS["$name"]="delegated"
     SERVICE_LAST_HEALTH["$name"]="launchd-owned"
     return 0
@@ -206,7 +206,7 @@ start_service() {
   export OPS_DAEMON_MANAGED=1
 
   rotate_service_log "$LOG_DIR/${name}.log"
-  bash "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
+  bash -c "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
   local pid=$!
   SERVICE_PIDS["$name"]=$pid
   SERVICE_STATUS["$name"]="running"
@@ -285,8 +285,8 @@ restart_service() {
   local name="$1"
 
   # ── Race-condition guard (mirrors start_service) ────────────────────────
-  if [[ "$name" == "wacli-sync" ]] && _wacli_owned_by_launchd; then
-    log "RESTART: $name — launchd keepalive owns this service, skipping daemon restart"
+  if [[ "$name" == "whatsapp-bridge" ]] && _whatsapp_bridge_owned_by_launchd; then
+    log "RESTART: $name — launchd WhatsApp bridge owns this service, skipping daemon restart"
     SERVICE_STATUS["$name"]="delegated"
     return 0
   fi
@@ -503,7 +503,7 @@ run_cron_service() {
   export OPS_DAEMON_PID=$$
   export OPS_DAEMON_MANAGED=1
   rotate_service_log "$LOG_DIR/${name}.log"
-  bash "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
+  bash -c "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
   local pid=$!
   wait "$pid" 2>/dev/null || true
 
@@ -1143,7 +1143,7 @@ except Exception:
 # Resolve plugin-root-relative paths for daemon scripts (so the unit files
 # embed absolute paths that still work when invoked by another user context).
 OPS_DAEMON_SCRIPT="$SCRIPT_DIR/scripts/ops-daemon.sh"
-OPS_KEEPALIVE_SCRIPT="$SCRIPT_DIR/scripts/wacli-keepalive.sh"
+OPS_KEEPALIVE_SCRIPT="$SCRIPT_DIR/legacy/wacli-keepalive.sh.deprecated"
 
 install_daemon_launchd() {
   command -v launchctl >/dev/null 2>&1 || {
@@ -1289,7 +1289,7 @@ EOF
   # wacli-keepalive: persistent service (Restart=always) — no timer needed.
   cat > "$unit_dir/claude-ops-wacli-keepalive.service" <<EOF
 [Unit]
-Description=claude-ops wacli keepalive
+Description=claude-ops whatsapp-bridge keepalive
 After=default.target
 
 [Service]
@@ -1389,7 +1389,7 @@ ENSURE_SERVICES_INTERVAL="${ENSURE_SERVICES_INTERVAL:-300}"  # every 5 min
 # Format: "label|plist_src_basename|description"
 EXPECTED_SERVICES=(
   "com.claude-ops.daemon|com.claude-ops.daemon.plist|ops daemon"
-  "com.claude-ops.wacli-keepalive|com.claude-ops.wacli-keepalive.plist|wacli keepalive"
+  "com.samrenders.whatsapp-bridge|com.samrenders.whatsapp-bridge.plist|whatsapp-bridge"
 )
 
 ensure_all_services() {
@@ -1647,15 +1647,15 @@ while true; do
       fi
     else
       # Persistent service: check health + restart if needed
-      # For wacli-sync delegated to launchd, re-check ownership each loop.
+      # For whatsapp-bridge delegated to launchd, re-check ownership each loop.
       # If launchd stopped unexpectedly, the daemon can take over.
-      if [[ "$svc" == "wacli-sync" ]] && [[ "${SERVICE_STATUS[$svc]:-}" == "delegated" ]]; then
-        if _wacli_owned_by_launchd; then
+      if [[ "$svc" == "whatsapp-bridge" ]] && [[ "${SERVICE_STATUS[$svc]:-}" == "delegated" ]]; then
+        if _whatsapp_bridge_owned_by_launchd; then
           # Still owned by launchd — just read the health file passively
           check_health "$svc" || true
           SERVICE_STATUS["$svc"]="delegated"
         else
-          log "MONITOR: $svc — launchd keepalive no longer running, daemon taking ownership"
+          log "MONITOR: $svc — launchd WhatsApp bridge no longer running, daemon taking ownership"
           SERVICE_STATUS["$svc"]="dead"
           start_service "$svc"
         fi

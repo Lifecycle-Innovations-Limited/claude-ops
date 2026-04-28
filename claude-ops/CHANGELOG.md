@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] — 2026-04-27
+
+### Changed
+
+- **Decommission wacli daemon. WhatsApp ops now Baileys-only via `mcp__whatsapp__*`.** Migration script in `scripts/whatsapp-bridge-migrate.sh`.
+  - All skill references to `wacli chats list`, `wacli messages list/search`, `wacli contacts --search`, `wacli send`, `wacli history backfill`, and `wacli doctor` replaced with `mcp__whatsapp__*` tool calls or direct `sqlite3` queries against the bridge `messages.db`.
+  - `scripts/wacli-keepalive.sh` and `scripts/com.claude-ops.wacli-keepalive.plist` moved to `legacy/` (preserved for reference).
+  - `bin/wacli-health` rewritten to check bridge port 8080 and launchd status.
+  - `bin/wacli-safe` replaced with a deprecation shim.
+  - New `bin/ops-pretool-whatsapp-bridge-health` PreToolUse hook for bridge liveness.
+  - New `assets/launchagents/com.samrenders.whatsapp-bridge.plist` template.
+  - `scripts/whatsapp-bridge-migrate.sh`: idempotent FTS5 virtual table + contacts table migration for `messages.db`; seeds contacts from macOS Contacts.app via osascript.
+
+### Migration steps (manual, post-merge)
+
+1. Run `scripts/whatsapp-bridge-migrate.sh` to add FTS5 index and contacts table to bridge `messages.db`.
+2. Revoke the wacli linked device on your phone (WhatsApp → Settings → Linked Devices).
+3. `launchctl bootout gui/$UID ~/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist 2>/dev/null || true`
+4. `rm -f ~/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist`
+
+### Rollback
+
+WhatsApp supports 4 linked devices. Re-link wacli at any time:
+```bash
+wacli auth   # scan QR
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist
+```
+History from before rollback won't be in new wacli store, but bridge keeps running independently — no message loss.
+
+---
+
 ## [2.0.0] — 2026-04-26
 
 > **Major release.** Purely additive — no behavior of any v1.x skill changes by default. Existing users can upgrade in place. Every new subsystem is gated by a `userConfig` toggle (defaults documented per-feature below) and can be turned off from `/plugins` settings without uninstalling. See [`docs/migrating-from-v1.md`](docs/migrating-from-v1.md) and the [Migrating-from-v1 wiki page](https://github.com/Lifecycle-Innovations-Limited/claude-ops/wiki/Migrating-from-v1).

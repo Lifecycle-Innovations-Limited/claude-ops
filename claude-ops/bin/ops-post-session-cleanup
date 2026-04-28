@@ -2,7 +2,7 @@
 # Stop hook: cleanup stale worktrees and temp files on session end
 set -euo pipefail
 
-# Clean temp wacli files
+# Clean temp bridge files (formerly wacli temp files)
 rm -f /tmp/wacli-sync-probe-*.log /tmp/wacli-bootstrap-*.log 2>/dev/null || true
 
 # Clean stale agent worktrees older than 2 hours

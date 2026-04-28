@@ -123,7 +123,7 @@ Full feature parity with the legacy v1 bash script: `--gpu` reports GPU + Neural
 The background memory extractor now prefers the Claude Code OAuth token stored in macOS Keychain (`Claude Code-credentials`) over `ANTHROPIC_API_KEY`. Calls are billed against your Claude Max subscription instead of your API credit. The token is never exported to the shell environment, so parent terminal sessions stay unaffected. Falls back to `ANTHROPIC_API_KEY` (env → keychain → Doppler).
 
 ### Persistent WhatsApp follower
-`scripts/wacli-keepalive.sh` now keeps `wacli --follow` alive indefinitely. Previously the supervisor invoked `wacli sync --once` on the first tick before `--follow` had stabilized its store lock, which tore down the persistent connection every 5-20 minutes. Fixed via `INITIAL_BACKFILL_DELAY=30` plus a reentrant guard against overlapping sweeps.
+`whatsapp-bridge` (Baileys) now manages WhatsApp connectivity via the `com.samrenders.whatsapp-bridge` LaunchAgent. Previously `whatsapp-bridge-keepalive.sh` kept `whatsapp-bridge --follow` alive — that daemon has been decommissioned (see `legacy/`). Which tore down the persistent connection every 5-20 minutes. Fixed via `INITIAL_BACKFILL_DELAY=30` plus a reentrant guard against overlapping sweeps.
 
 ### Full Plugin Feature Adoption
 - All 30 skills: `effort`, `maxTurns`, `disallowedTools`, `model` annotations
@@ -149,7 +149,7 @@ The setup wizard (`/ops:setup`) walks through each one interactively. You choose
 |------|---------------|--------------|
 | `gh` (GitHub CLI) | Yes (Homebrew) | PRs, CI logs, issue triage, merge pipeline — used by 8+ skills |
 | `aws` (AWS CLI) | Yes (Homebrew) | ECS health, Cost Explorer, CloudWatch — used by ops-fires, ops-revenue, ops-deploy |
-| `wacli` (WhatsApp) | Manual ([source](https://github.com/Lifecycle-Innovations-Limited/wacli)) | WhatsApp inbox, send/read, contact lookup — no MCP equivalent exists |
+| `whatsapp-bridge` (WhatsApp) | Bundled ([source](https://github.com/Lifecycle-Innovations-Limited/whatsapp-mcp)) | WhatsApp inbox, send/read, contact lookup via `mcp__whatsapp__*` tools |
 | Node.js 18+ | Yes (Homebrew) | Runs the bundled Telegram MCP server |
 
 #### MCP-only (no CLI needed)
@@ -341,7 +341,7 @@ After the report, type `YOLO` to hand over the controls — Claude will autonomo
 ┌─────────────────────────┼────────────────────────┐
 │              ops-daemon (launchd)                  │
 │  ┌──────────┐ ┌──────────┐ ┌──────────────────┐ │
-│  │ wacli    │ │ memory   │ │   brain layer    │ │
+│  │ bridge  │ │ memory   │ │   brain layer    │ │
 │  │ sync     │ │ extractor│ │ briefing cache   │ │
 │  │ (follow) │ │ (cron)   │ │ urgent detect    │ │
 │  └──────────┘ └──────────┘ └──────────────────┘ │

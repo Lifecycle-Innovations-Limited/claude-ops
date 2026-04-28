@@ -48,7 +48,7 @@ Every Bash tool call MUST include a short `description` parameter (5-10 words, e
 - Show what's already configured first, so the user only fills gaps.
 - **Never show the user's real name or email in output unless the user explicitly provided it in THIS session.** Do not read from memory, existing configs, or environment variables to populate display names.
 - **Max 4 options per `AskUserQuestion` call.** The tool schema enforces `<=4` items in the `options` array. When a step lists >4 choices, filter already-configured items first, then batch the rest into multiple sequential calls of <=4 options each, grouped logically. Use `[More options...]` as the last option to bridge between batches.
-- Run ALL diagnostic/probe commands in parallel when possible. Use multiple Bash tool calls in a single message. Never run sequential probes when they're independent (e.g., `gog auth status` AND `wacli doctor` AND keychain scouts should all run simultaneously).
+- Run ALL diagnostic/probe commands in parallel when possible. Use multiple Bash tool calls in a single message. Never run sequential probes when they're independent (e.g., `gog auth status` AND `lsof -i :8080 | grep LISTEN` AND keychain scouts should all run simultaneously).
 - All writes go to one of these paths — and nothing else:
   - **`$PREFS_PATH`** — per-user preferences + secrets. Resolves to `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`. Lives in Claude Code's plugin data dir so it survives plugin reinstalls and version bumps. Never committed to git.
   - **`${CLAUDE_PLUGIN_ROOT}/scripts/registry.json`** — per-user project registry (gitignored in the source repo). `mkdir -p` its parent if missing.
@@ -142,7 +142,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-preflight &>/dev/null &
 - Telegram: `cat /tmp/ops-preflight/telegram.txt`
 - gog/Gmail: `cat /tmp/ops-preflight/gog-gmail.json`
 - gog/Calendar: `cat /tmp/ops-preflight/gog-cal.json`
-- WhatsApp: `cat /tmp/ops-preflight/wacli-doctor.json` and `wacli-chats.json`
+- WhatsApp: `cat /tmp/ops-preflight/bridge-health.json`
 - MCP servers: `cat /tmp/ops-preflight/mcp-servers.txt`
 - GitHub: `cat /tmp/ops-preflight/gh-auth.txt`
 - AWS: `cat /tmp/ops-preflight/aws-identity.json`
@@ -180,7 +180,7 @@ Print a compact status header to the user, one line per category:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  Shell:       zsh → ~/.zshrc
  Core CLIs:   ✓ jq  ✓ git  ✓ gh  ✓ aws  ✓ node
- Channels:    ✓ wacli  ✓ gog  ○ telegram (no token)
+ Channels:    ✓ bridge  ✓ gog  ○ telegram (no token)
  Secrets:     ✓ doppler (project: my-app, config: dev)
  MCPs:        ✓ linear  ✓ sentry  ○ slack  ○ vercel
  Registry:    19 projects
@@ -274,7 +274,7 @@ Present each batch as a separate `AskUserQuestion` call. Skip batches where all 
 If multiple CLIs are missing, offer a bulk install first:
 
 ```
-Missing CLIs detected: jq, gh, wacli. What would you like to do?
+Missing CLIs detected: jq, gh. What would you like to do?
   [Install all missing CLIs (Recommended)]
   [Pick which to install]
   [Skip CLI installation]
@@ -285,7 +285,7 @@ If the user selects "Install all", install every missing tool in sequence withou
 ```
 Install jq?           [Yes, install now] [Skip]
 Install gh?           [Yes, install now] [Skip]
-Install wacli?        [Yes, install now] [Skip — manual install required]
+
 ```
 
 For each `Yes`, run:
@@ -398,7 +398,7 @@ Install later with: /plugin marketplace add obra/superpowers-marketplace
 
 ## Step 2c — Background Daemon (early install, pre-warm caches)
 
-**Why install the daemon this early?** Running the daemon in parallel with the rest of setup lets it start pre-warming the briefing cache (`ops-gather` results for infra/git/PRs/CI), so by the time the user reaches Step 7 and runs `/ops:go`, the briefing is already cached and loads in under 3 seconds instead of 10. Channel-dependent services (wacli-sync, message-listener, inbox-digest, store-health) are added later in Step 5b once their channels are configured.
+**Why install the daemon this early?** Running the daemon in parallel with the rest of setup lets it start pre-warming the briefing cache (`ops-gather` results for infra/git/PRs/CI), so by the time the user reaches Step 7 and runs `/ops:go`, the briefing is already cached and loads in under 3 seconds instead of 10. Channel-dependent services (message-listener, inbox-digest) are added later in Step 5b once their channels are configured.
 
 ### Platform support
 
@@ -438,7 +438,7 @@ Otherwise ask via `AskUserQuestion`:
 Install the ops background daemon now?
   Starts pre-warming briefing cache while you finish the rest of setup.
   Auto-heals on failure. Single launchd agent (com.claude-ops.daemon).
-  Channel services (wacli-sync, message-listener) added after channels are set up.
+  Channel services (whatsapp-bridge health, message-listener) added after channels are set up.
   [Yes — install now]  [Skip — I'll run it manually later]
 ```
 
@@ -491,15 +491,15 @@ cat > "$SERVICES_CONFIG" <<JSON
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-memory-extractor.sh",
       "cron": "*/30 * * * *",
       "health_file": "~/.claude/plugins/data/ops-ops-marketplace/memories/.health",
-      "_note": "Idle until channels are configured; will extract profiles once wacli/gog are live."
+      "_note": "Idle until channels are configured; will extract profiles once whatsapp-bridge/gog are live."
     }
   }
 }
 JSON
 
-# Remove the old standalone wacli keepalive if present
-launchctl bootout gui/$(id -u)/com.claude-ops.wacli-keepalive 2>/dev/null || true
-rm -f "$HOME/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist"
+# Remove legacy whatsapp-bridge keepalive if still present
+launchctl bootout gui/$(id -u)/com.claude-ops.whatsapp-bridge-keepalive 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/com.claude-ops.whatsapp-bridge-keepalive.plist" 2>/dev/null || true
 
 # Load daemon in background — does NOT block the wizard
 launchctl bootout gui/$(id -u) "$PLIST_DEST" 2>/dev/null || true
@@ -794,7 +794,7 @@ If the user selects "Pick individually", ask which channels using `AskUserQuesti
 | Option   | Header   | Description                                                             |
 | -------- | -------- | ----------------------------------------------------------------------- |
 | Telegram | telegram | Bot token + owner ID for `/ops-comms telegram`                          |
-| WhatsApp | whatsapp | wacli doctor + auto-heal + backfill                                     |
+| WhatsApp | whatsapp | bridge health check + QR pair + schema migration                         |
 | Email    | email    | gog CLI → Gmail MCP fallback for `/ops-inbox email`                     |
 | Slack    | slack    | Slack MCP server (managed by Claude Code)                               |
 
@@ -862,7 +862,7 @@ Whenever a channel has a **browser-based OAuth flow** available, offer that firs
 | Sentry         | `claude mcp add sentry`                                    | DSN / auth token                       |
 | Vercel         | `claude mcp add vercel`                                    | personal access token                  |
 | Telegram       | ❌ no OAuth (Bot API is token-only by design)              | auto-scan + manual paste (only option) |
-| WhatsApp       | QR pairing via `wacli auth` (similar UX to OAuth)          | n/a — paired sessions only             |
+| WhatsApp       | QR pairing via `whatsapp-bridge auth` (similar UX to OAuth)          | n/a — paired sessions only             |
 
 When a channel supports OAuth, the default `AskUserQuestion` should lead with it:
 
@@ -1137,220 +1137,98 @@ Sub-flow (only runs if user selected Yes above):
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration. The setup agent can load that file directly when it needs more depth than this wizard provides.
 
-### 3b — WhatsApp (doctor + self-heal + backfill)
+### 3b — WhatsApp (bridge health + QR pair)
 
-WhatsApp is the channel that most often breaks silently. The wizard must **auto-diagnose, doctor, and fix** — not just report status and give up. Run this whole sub-flow top-to-bottom, stopping only when the system is healthy or the user declines a remediation.
+WhatsApp is handled exclusively by the Baileys `whatsapp-bridge` (managed by `com.samrenders.whatsapp-bridge` LaunchAgent) and accessed via `mcp__whatsapp__*` tools.
 
 #### Step 3b.1 — Presence
 
-Run `command -v wacli`. If missing, ask `AskUserQuestion`: `[Show install docs]`, `[Skip WhatsApp]`. On install docs, print:
-
-```
-wacli is not on Homebrew. Install:
-  git clone https://github.com/Lifecycle-Innovations-Limited/wacli ~/src/wacli
-  cd ~/src/wacli && go build -o /usr/local/bin/wacli ./cmd/wacli
-```
-
-and stop this sub-flow.
-
-#### Step 3b.2 — Collect state
-
-Run these in parallel:
+Check bridge binary exists and LaunchAgent is installed:
 
 ```bash
-wacli doctor --json 2>&1
-wacli auth status --json 2>&1
-wacli messages list --after="$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d '1 day ago' +%Y-%m-%d)" --limit=5 --json 2>&1
-wacli chats list --json 2>&1 | head -c 4000
+ls ~/.local/share/whatsapp-mcp/whatsapp-bridge/whatsapp-bridge 2>/dev/null && echo "binary ok"
+launchctl list com.samrenders.whatsapp-bridge 2>/dev/null | head -3
+lsof -i :8080 2>/dev/null | grep LISTEN
 ```
 
-Parse:
-
-- `doctor.data.authenticated` (bool)
-- `doctor.data.lock_held` + `doctor.data.lock_info` (PID + acquired_at timestamp)
-- `doctor.data.fts_enabled` (bool — if false, search is degraded, not fatal)
-- `messages.data.messages` length → **this is the key health signal**. Authed with zero messages in the last 24h = broken.
-- `chats` count and whether it populated at all
-
-#### Step 3b.3 — Diagnose and classify
-
-Apply these rules in order. Stop at the first match.
-
-**A. Not authenticated**
-If `doctor.authenticated: false` → print "WhatsApp needs QR pairing. Run `wacli auth` in a separate terminal and scan the QR code with your phone (WhatsApp → Linked Devices → Link a device), then re-run /ops:setup whatsapp." End of sub-flow. Do **not** try to automate the QR scan — it requires the user's phone camera pointed at the terminal (exception to Rule 2).
-
-**B. Stuck sync (stale lock)**
-If `lock_held: true` AND the `lock_info.acquired_at` is older than 2 minutes AND the lock-holder PID is still alive (`ps -p <pid>`):
-
-1. Run `wacli sync` in the background (`timeout 15 wacli sync 2>&1`) via the existing process's stderr tail — OR if we can't tee into it, fall back to:
-2. Ask `AskUserQuestion`: `"A wacli sync process (pid=N) has been holding the store lock for Xm. Most likely stuck. Kill it?"` → `[Kill pid N and restart sync]`, `[Leave it running]`.
-3. On kill: `kill <pid>` (not -9 first). Wait 3s. If still alive, `kill -9 <pid>`. Verify with `ps -p <pid>`.
-4. After kill, re-run `wacli doctor --json` to confirm lock is released. Continue to the next rule.
-
-**C. App-state key desync (the big one)**
-Run `timeout 15 wacli sync 2>&1 | tee /tmp/wacli-sync-probe.log` (must be done after B so the lock is free). Grep the output for:
-
-- `didn't find app state key` → **session keys are desynced**, needs re-pair
-- `failed to decode app state` → same class of error
-- `Failed to do initial fetch of app state` → same class of error
-
-If any match:
-
-1. Print the diagnosis verbatim:
-   ```
-   ⚠  WhatsApp session is authenticated but the app-state decryption keys
-      are out of sync with your primary device. This happens when the
-      linked-device session is partially wiped on the phone side.
-      Symptom: sync runs but 0 messages come through.
-      Fix: logout this session and re-pair via QR.
-   ```
-2. Ask `AskUserQuestion`: `[Logout and walk me through re-pair]`, `[Skip — I'll fix manually]`.
-3. On logout: run `wacli auth logout --json` and show the result. Then print:
-   ```
-   Now run `wacli auth` in a separate terminal (QR-based auth — requires your phone camera).
-   A QR code will appear — scan it from WhatsApp → Settings → Linked Devices → Link a device.
-   When it says "Connected", come back and type "done".
-   ```
-4. Wait for the user to confirm via `AskUserQuestion`: `[Done — re-paired]`, `[Cancel]`.
-5. On Done, re-run Step 3b.2 to re-collect state and continue to rule D.
-
-**D. Authenticated, lock free, no recent messages, no key errors**
-This is usually a cold cache. Go to Step 3b.4 (backfill).
-
-**E. Healthy (messages flowing)**
-If `messages.data.messages` has ≥1 entry from the last 24h, print a ✓ summary and skip to Step 3b.5.
-
-#### Step 3b.4 — Historical backfill (background, silent)
-
-Always run this after a fresh re-pair, AND run it when rule D matches. Never skip unless the user explicitly declines.
-
-Backfill is a background optimization — it should not produce verbose output or alarming status messages. Run it silently and swallow non-fatal errors.
-
-1. Load the top 10 chats by recency:
-   ```bash
-   wacli chats list --json 2>&1 | jq -r '[.data[] | select(.jid) | {jid, name, last_msg: .last_message_ts}] | sort_by(.last_msg) | reverse | .[0:10]'
-   ```
-2. Tell the user: `"Running historical backfill on your 10 most-recent chats. This runs in the background."` Do not print per-chat progress or 0-message results.
-3. For each chat JID, run **sequentially** (backfill shares the store lock, can't parallelize):
-   ```bash
-   wacli history backfill --chat="<jid>" --count=50 --requests=2 --wait=30s --idle-exit=5s --json 2>&1
-   ```
-4. **Suppress all per-chat output.** If the command exits non-zero, swallow the error silently — backfill failures are not user-visible events. Do NOT print "0 messages synced", error tracebacks, or explanations about device connectivity.
-5. After the loop completes, print only the final health summary (Step 3b.6).
-
-#### Step 3b.5 — FTS index check (optional)
-
-If `doctor.fts_enabled: false`, print:
+If binary missing: ask `AskUserQuestion`: `[Show install docs]`, `[Skip WhatsApp]`. On install docs, print:
 
 ```
-ℹ  Full-text search is disabled — `wacli messages search` will use SQL LIKE (slower).
-   This is a non-fatal known-limitation. See wacli docs to enable FTS5.
+whatsapp-bridge (Baileys) is not installed. Install:
+  git clone https://github.com/Lifecycle-Innovations-Limited/whatsapp-mcp ~/.local/share/whatsapp-mcp
+  cd ~/.local/share/whatsapp-mcp/whatsapp-bridge && go build -o whatsapp-bridge .
+  mkdir -p ~/.local/share/whatsapp-mcp/whatsapp-bridge/logs
 ```
 
-Don't block on this.
-
-#### Step 3b.6 — Record state
-
-Write `channels.whatsapp = "wacli"` to `$PREFS_PATH` and print the final ✓ summary:
-
-```
-✓ WhatsApp — wacli authenticated, N chats
-```
-
-Never include message counts or backfill results in this summary line.
-
-#### Step 3b.7 — Persistent connection (keepalive)
-
-After successful auth and backfill, set up a persistent connection that keeps wacli connected and auto-syncing. This is what makes WhatsApp reliable across sessions — without it, the linked device disconnects after ~14 days of inactivity and @lid JIDs return empty messages.
-
-**If the ops-daemon is configured (Step 5b), wacli runs as a daemon service** — skip the standalone launchd path below and note to the user that wacli sync is managed by the daemon. The daemon handles bootstrap, auto-backfill, and health reporting centrally.
-
-**Standalone launchd fallback** (only if the ops-daemon is NOT being set up):
-
-**1. Install the keepalive script:**
-
+If LaunchAgent not installed, install it from template:
 ```bash
-KEEPALIVE_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/wacli-keepalive.sh"
-chmod +x "$KEEPALIVE_SCRIPT"
-```
-
-**2. Generate the launchd plist from template:**
-
-```bash
-PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/scripts/com.claude-ops.wacli-keepalive.plist"
-PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist"
-LOG_DIR="$HOME/.claude/plugins/data/ops-ops-marketplace/logs"
-mkdir -p "$LOG_DIR" "$HOME/Library/LaunchAgents"
-
-# Resolve bash 4+ (same logic as daemon plist)
-BASH_PATH="/bin/bash"
-if [[ -x /opt/homebrew/bin/bash ]]; then
-  BASH_PATH="/opt/homebrew/bin/bash"
-elif [[ -x /usr/local/bin/bash ]]; then
-  BASH_PATH="/usr/local/bin/bash"
-fi
-
-sed -e "s|__KEEPALIVE_SCRIPT_PATH__|$KEEPALIVE_SCRIPT|g" \
-    -e "s|__BASH_PATH__|$BASH_PATH|g" \
-    -e "s|__LOG_DIR__|$LOG_DIR|g" \
+PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.samrenders.whatsapp-bridge.plist"
+PLIST_DEST="$HOME/Library/LaunchAgents/com.samrenders.whatsapp-bridge.plist"
+BRIDGE_DIR="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge"
+mkdir -p "$BRIDGE_DIR/logs"
+sed -e "s|__BRIDGE_BINARY_PATH__|$BRIDGE_DIR/whatsapp-bridge|g" \
+    -e "s|__BRIDGE_WORKING_DIR__|$BRIDGE_DIR|g" \
     -e "s|__HOME__|$HOME|g" \
     "$PLIST_TEMPLATE" > "$PLIST_DEST"
-```
-
-**3. Load the agent:**
-
-```bash
-# Unload if already loaded (idempotent)
-launchctl bootout gui/$(id -u) "$PLIST_DEST" 2>/dev/null || true
 launchctl bootstrap gui/$(id -u) "$PLIST_DEST"
 ```
 
-**4. Verify it's running:**
+#### Step 3b.2 — QR pairing (first run)
 
-Wait 3 seconds, then check:
+On first run, the bridge needs QR pairing. Check `bridge.err.log`:
+
 ```bash
-launchctl print gui/$(id -u)/com.claude-ops.wacli-keepalive 2>&1 | head -5
-cat "$HOME/.wacli/.health" 2>/dev/null
+tail -50 ~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log 2>/dev/null
 ```
 
-If the health file shows `status=connected` or `status=needs_reauth`, the daemon is working. Print:
+If log contains a QR code or "scan QR" message, print to the user:
 
 ```
-✓ WhatsApp keepalive — launchd agent installed and running
-  Persistent sync active. Auto-restarts on disconnect.
-  Health: ~/.wacli/.health | Logs: ~/.claude/plugins/data/ops-ops-marketplace/logs/
+The bridge is waiting for QR pairing.
+Open ~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log in a terminal to see the QR code.
+Scan it from WhatsApp → Settings → Linked Devices → Link a device.
 ```
 
-If `status=needs_reauth`, immediately trigger the re-pair flow from Step 3b.3 Rule C.
+Use `AskUserQuestion`: `[Done — QR scanned]`, `[Skip WhatsApp]`. This is the ONLY step that requires user's phone.
 
-**5. How the keepalive self-heals:**
+#### Step 3b.3 — Schema migration
 
-The keepalive script (`wacli-keepalive.sh`) handles these failure modes automatically:
+After bridge is running and paired, run the idempotent schema migration:
 
-| Failure | Auto-fix |
-|---------|----------|
-| Orphaned wacli process holding lock | Kills stale PIDs, clears lock |
-| Connection drop (WhatsApp server restart) | launchd restarts within 60s |
-| App-state key desync | Writes `needs_reauth` to health file — ops skills detect this and prompt QR |
-| Auth expired | Writes `needs_auth` — same prompt flow |
-| Script crash | launchd KeepAlive=true restarts immediately (throttled 60s) |
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/whatsapp-bridge-migrate.sh"
+```
 
-**6. Health file contract for other ops skills:**
+This adds FTS5 index and contacts table to messages.db. Safe to re-run.
 
-All ops skills that use WhatsApp (`ops-inbox`, `ops-comms`, `ops-go`) MUST check `~/.wacli/.health` before attempting wacli commands. If `status=needs_auth` or `status=needs_reauth`:
+#### Step 3b.4 — Smoke test
 
-1. Print the diagnosis to the user:
-   ```
-   ⚠ WhatsApp needs re-authentication.
-   Run `wacli auth` in a separate terminal and scan the QR code with your phone
-   (QR-based auth — exception to Rule 2). Then type "done" to continue.
-   ```
-2. Use `AskUserQuestion`: `[Done — re-paired]`, `[Skip WhatsApp]`.
-3. On Done: restart the keepalive daemon via `launchctl kickstart -k gui/$(id -u)/com.claude-ops.wacli-keepalive` and wait 5s for health file update.
+```bash
+lsof -i :8080 | grep LISTEN   # bridge running?
+DB="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db"
+sqlite3 "$DB" "SELECT COUNT(*) FROM messages;" 2>/dev/null   # messages present?
+sqlite3 "$DB" "SELECT COUNT(*) FROM messages_fts;" 2>/dev/null   # FTS index present?
+```
 
-This ensures the user is never silently left with a broken WhatsApp connection — every ops skill surfaces the problem and walks them through the fix.
+If messages > 0 and FTS index present, print:
 
-> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` and `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration. The setup agent can load those files directly when it needs more depth than this wizard provides.
+```
+✓ WhatsApp — bridge running, N messages, FTS indexed
+```
+
+#### Step 3b.5 — Record state
+
+Write `channels.whatsapp = "whatsapp-bridge"` to `$PREFS_PATH`.
+
+**Health contract for other ops skills:**
+
+All ops skills that use WhatsApp must check `lsof -i :8080 | grep LISTEN` before MCP tool calls.
+If bridge is not running:
+1. Print: "WhatsApp bridge is not running."
+2. Use `AskUserQuestion`: `[Restart bridge]`, `[Skip WhatsApp]`.
+3. On restart: `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`, wait 5s.
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` and `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/SKILL.md` for full operational instructions.
 
 ### 3c — Email
 
@@ -3120,7 +2998,7 @@ After auto-discovery (or if the user selects "I'll enter projects manually"):
 
 ## Step 5b — Daemon Service Reconciliation
 
-By now, the daemon was already installed in Step 2c and has been pre-warming the briefing cache in the background while the user configured channels. This step adds **channel-dependent services** (`wacli-sync`, `message-listener`, `inbox-digest`, `store-health`, `competitor-intel`) now that we know which channels and integrations are configured.
+By now, the daemon was already installed in Step 2c and has been pre-warming the briefing cache in the background while the user configured channels. This step adds **channel-dependent services** (`whatsapp-bridge`, `message-listener`, `inbox-digest`, `store-health`, `competitor-intel`) now that we know which channels and integrations are configured.
 
 **Skip conditions:**
 - If the user declined daemon install in Step 2c, skip this step entirely.
@@ -3148,7 +3026,7 @@ cat "$DATA_DIR/daemon-health.json" 2>/dev/null
 Parse the JSON. If `action_needed` is not null, surface the required action to the user. If the daemon wrote a health file, print:
 
 ```
-✓ Background daemon — running (wacli-sync: connected, memory-extractor: scheduled)
+✓ Background daemon — running (whatsapp-bridge: connected, memory-extractor: scheduled)
 ```
 
 If the health file is missing (daemon may still be initializing), wait 5 more seconds and retry once. If still missing, print:
@@ -3163,7 +3041,7 @@ If the health file is missing (daemon may still be initializing), wait 5 more se
 
 Determine which services to enable based on what was configured in earlier steps. The `briefing-pre-warm` and `memory-extractor` services were already enabled at Step 2c — preserve them. Add channel-dependent services based on what's now configured:
 
-- `wacli-sync` — always include if WhatsApp is configured (`channels.whatsapp` is set)
+- `whatsapp-bridge` — always include if WhatsApp is configured (`channels.whatsapp` is set)
 - `memory-extractor` — always include
 - `inbox-digest` — always include (runs every 4h, aggregates all configured channels)
 - `store-health` — include ONLY if ecommerce was configured (`ecom.shopify.store_url` is set in `$PREFS_PATH`)
@@ -3174,9 +3052,9 @@ Build the services array programmatically (starting from the 2c baseline):
 ```bash
 SERVICES='["briefing-pre-warm","memory-extractor","inbox-digest","competitor-intel"]'
 PREFS=$(cat "$PREFS_PATH" 2>/dev/null || echo '{}')
-# Add wacli-sync + message-listener if WhatsApp is configured
+# Add whatsapp-bridge + message-listener if WhatsApp is configured
 if echo "$PREFS" | jq -e '.channels.whatsapp' > /dev/null 2>&1; then
-  SERVICES=$(echo "$SERVICES" | jq '. + ["wacli-sync","message-listener"]')
+  SERVICES=$(echo "$SERVICES" | jq '. + ["whatsapp-bridge","message-listener"]')
 fi
 # Add message-listener for Telegram too (deduplicate)
 if echo "$PREFS" | jq -e '.channels.telegram' > /dev/null 2>&1; then
@@ -3191,7 +3069,7 @@ echo "Services to enable: $SERVICES"
 
 Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with the existing config from Step 2c, preserving `briefing-pre-warm` and `memory-extractor`, and enabling the new channel-dependent services. **Every service MUST include a `command` field** — the daemon's `start_service()` skips any service without one. Use `${CLAUDE_PLUGIN_ROOT}` (resolved at runtime) for script paths. Each service entry should include:
 - `briefing-pre-warm`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/bin/ops-gather", "cron": "*/2 * * * *" }` — pre-warms /ops:go cache (installed in 2c)
-- `wacli-sync`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/wacli-keepalive.sh", "health_file": "~/.wacli/.health", "restart_delay": 60, "max_restarts": 10 }` — only if WhatsApp configured
+- `whatsapp-bridge`: `{ "enabled": true, "command": "launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge", "health_check": "lsof -i :8080 | grep LISTEN", "restart_delay": 60, "max_restarts": 10 }` — only if WhatsApp configured (matches `daemon-services.default.json`; bridge is owned by LaunchAgent, not a plugin script)
 - `memory-extractor`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-memory-extractor.sh", "health_file": "~/.claude/plugins/data/ops-ops-marketplace/memories/.health", "cron": "*/30 * * * *" }` — every 30 min (installed in 2c)
 - `inbox-digest`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-inbox-digest.sh", "cron": "0 */4 * * *" }` — every 4h
 - `store-health`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-store-health.sh", "cron": "0 9 * * *" }` — daily 9am, only if ecom configured
@@ -3217,7 +3095,7 @@ Use `run_in_background: true` on the reload command. Do NOT wait for it — cont
 Write `daemon.enabled = true` and `daemon.services` (the reconciled array) to `$PREFS_PATH`. Print:
 
 ```
-✓ Daemon services reconciled — N services enabled (briefing-pre-warm, memory-extractor, wacli-sync, ...)
+✓ Daemon services reconciled — N services enabled (briefing-pre-warm, memory-extractor, whatsapp-bridge, ...)
   Daemon reloading in background.
 ```
 
@@ -3563,7 +3441,7 @@ Re-run the detector and present a final status dashboard:
  ✓ MCPs:       linear, sentry, vercel
  ✓ Registry:   20 projects
  ✓ Prefs:      saved to ~/.claude/plugins/data/ops-ops-marketplace/preferences.json
- ✓ Daemon:     ops-daemon → wacli-sync, memory-extractor, inbox-digest
+ ✓ Daemon:     ops-daemon → whatsapp-bridge, memory-extractor, inbox-digest
 
  Next: /ops-go for your first briefing
 ──────────────────────────────────────────────────────
@@ -3607,7 +3485,7 @@ If `$ARGUMENTS` contains a specific section name, jump straight to that section:
 | `cli`, `install`                       | Step 2  |
 | `channels`                             | Step 3  |
 | `telegram`                             | Step 3a |
-| `whatsapp`, `wacli`, `whatsapp-doctor` | Step 3b |
+| `whatsapp`, `whatsapp-bridge`, `whatsapp-doctor` | Step 3b |
 | `email`                                | Step 3c |
 | `slack`                                | Step 3d |
 | `notion`                               | Step 3e |
@@ -3717,35 +3595,35 @@ gog auth status                                                     # Check auth
 gog auth add user@example.com --services gmail,calendar,drive,contacts,docs,sheets
 ```
 
-### wacli
+### whatsapp-bridge
 
 ```bash
 # Health check
-wacli doctor --json
+lsof -i :8080 | grep LISTEN --json
 
 # Auth status
-wacli auth status --json
+whatsapp-bridge auth status --json
 
 # List chats (MUST use subcommand `list`)
-wacli chats list --json
+whatsapp-bridge chats list --json
 
 # List messages (--after flag uses YYYY-MM-DD)
 # macOS
-wacli messages list --after="$(date -v-1d +%Y-%m-%d)" --limit=5 --json
+whatsapp-bridge messages list --after="$(date -v-1d +%Y-%m-%d)" --limit=5 --json
 # Linux
-wacli messages list --after="$(date -d '1 day ago' +%Y-%m-%d)" --limit=5 --json
+whatsapp-bridge messages list --after="$(date -d '1 day ago' +%Y-%m-%d)" --limit=5 --json
 
 # Send message
-wacli send --to "JID" --message "text"
+whatsapp-bridge send --to "JID" --message "text"
 
 # Sync (connect and pull)
-wacli sync
+whatsapp-bridge sync
 
 # Backfill history
-wacli history backfill --chat="JID" --count=50 --requests=2 --wait=30s --idle-exit=5s --json
+whatsapp-bridge history backfill --chat="JID" --count=50 --requests=2 --wait=30s --idle-exit=5s --json
 
 # Contact lookup
-wacli contacts --search "name" --json
+whatsapp-bridge contacts --search "name" --json
 ```
 
 > After setup, the memory-extractor daemon service will populate `memories/contact_*.md` from this contact data.
