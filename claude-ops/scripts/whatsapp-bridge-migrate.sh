@@ -118,13 +118,16 @@ fi
 # ── Step 3: Seed contacts from macOS Contacts.app ────────────────────────────
 log "Step 3: Seeding contacts..."
 
-CONTACT_COUNT=$(query_sql "SELECT COUNT(*) FROM contacts;" 2>/dev/null || echo "0")
-if [[ "$CONTACT_COUNT" -gt 0 ]]; then
-  log "  contacts already has $CONTACT_COUNT rows — skipping seed."
+if [[ $DRY_RUN -eq 1 ]]; then
+  log "  DRY RUN — skipping contact seed entirely."
 else
-  if [[ "$(uname -s)" == "Darwin" ]] && command -v osascript &>/dev/null; then
-    log "  Extracting from macOS Contacts.app via osascript..."
-    CONTACTS_JSON=$(osascript -l JavaScript <<'OSASCRIPT' 2>/dev/null || echo "[]"
+  CONTACT_COUNT=$(query_sql "SELECT COUNT(*) FROM contacts;" 2>/dev/null || echo "0")
+  if [[ "$CONTACT_COUNT" -gt 0 ]]; then
+    log "  contacts already has $CONTACT_COUNT rows — skipping seed."
+  else
+    if [[ "$(uname -s)" == "Darwin" ]] && command -v osascript &>/dev/null; then
+      log "  Extracting from macOS Contacts.app via osascript..."
+      CONTACTS_JSON=$(osascript -l JavaScript <<'OSASCRIPT' 2>/dev/null || echo "[]"
 var app = Application("Contacts");
 var contacts = [];
 app.people().forEach(function(p) {
@@ -140,13 +143,13 @@ app.people().forEach(function(p) {
 });
 JSON.stringify(contacts);
 OSASCRIPT
-    )
+      )
 
-    if [[ "$CONTACTS_JSON" == "[]" ]] || [[ -z "$CONTACTS_JSON" ]]; then
-      log "  Contacts.app returned 0 contacts (permissions or empty) — leaving contacts table empty."
-      log "  Re-run with WHATSAPP_BRIDGE_DB set after granting Contacts access to run a refresh."
-    else
-      INSERTED=$(python3 - "$BRIDGE_DB" "$CONTACTS_JSON" <<'PYEOF' 2>/dev/null || echo "0"
+      if [[ "$CONTACTS_JSON" == "[]" ]] || [[ -z "$CONTACTS_JSON" ]]; then
+        log "  Contacts.app returned 0 contacts (permissions or empty) — leaving contacts table empty."
+        log "  Re-run with WHATSAPP_BRIDGE_DB set after granting Contacts access to run a refresh."
+      else
+        INSERTED=$(python3 - "$BRIDGE_DB" "$CONTACTS_JSON" <<'PYEOF' 2>/dev/null || echo "0"
 import json, sqlite3, sys, re, time
 
 db_path = sys.argv[1]
@@ -180,12 +183,13 @@ conn.commit()
 conn.close()
 print(inserted)
 PYEOF
-      )
-      log "  Inserted $INSERTED contacts from Contacts.app."
+        )
+        log "  Inserted $INSERTED contacts from Contacts.app."
+      fi
+    else
+      log "  Not macOS or osascript unavailable — leaving contacts table empty."
+      log "  Populate manually: INSERT INTO contacts (jid, name, phone, source) VALUES (...)"
     fi
-  else
-    log "  Not macOS or osascript unavailable — leaving contacts table empty."
-    log "  Populate manually: INSERT INTO contacts (jid, name, phone, source) VALUES (...)"
   fi
 fi
 

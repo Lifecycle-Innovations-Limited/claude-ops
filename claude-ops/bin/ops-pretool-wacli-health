@@ -15,7 +15,7 @@ HEALTH_FILE="$HOME/.wacli/.health"
 if [[ -f "$HEALTH_FILE" ]]; then
   STATUS=$(grep "^status=" "$HEALTH_FILE" | cut -d= -f2)
   if [[ "$STATUS" == "needs_auth" ]] || [[ "$STATUS" == "needs_reauth" ]]; then
-    echo "⚠ WhatsApp bridge may not be running. Check: launchctl list com.samrenders.whatsapp-bridge"
+    echo "⚠ WhatsApp bridge may not be running. Check: launchctl list com.claude-ops.whatsapp-bridge"
     # Don't block — just warn. The skill's own health check will handle it.
   fi
 fi

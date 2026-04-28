@@ -6,20 +6,20 @@ This document explains how to configure each communication channel for the `/ops
 
 **Status:** MCP-based via `mcp__whatsapp__*` tools. No CLI needed.
 
-The Baileys `whatsapp-bridge` binary runs as a persistent LaunchAgent (`com.samrenders.whatsapp-bridge`)
+The Baileys `whatsapp-bridge` binary runs as a persistent LaunchAgent (`com.claude-ops.whatsapp-bridge`)
 and exposes WhatsApp over a local HTTP/MCP interface on port 8080.
 
 ### Setup
 
 1. Ensure the bridge binary is installed at `~/.local/share/whatsapp-mcp/whatsapp-bridge/whatsapp-bridge`
-2. Install the LaunchAgent plist from `assets/launchagents/com.samrenders.whatsapp-bridge.plist`:
+2. Install the LaunchAgent plist from `assets/launchagents/com.claude-ops.whatsapp-bridge.plist`:
    ```bash
-   PLIST="$HOME/Library/LaunchAgents/com.samrenders.whatsapp-bridge.plist"
+   PLIST="$HOME/Library/LaunchAgents/com.claude-ops.whatsapp-bridge.plist"
    BRIDGE_DIR="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge"
    sed -e "s|__BRIDGE_BINARY_PATH__|$BRIDGE_DIR/whatsapp-bridge|g" \
        -e "s|__BRIDGE_WORKING_DIR__|$BRIDGE_DIR|g" \
        -e "s|__HOME__|$HOME|g" \
-       "${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.samrenders.whatsapp-bridge.plist" > "$PLIST"
+       "${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.claude-ops.whatsapp-bridge.plist" > "$PLIST"
    launchctl bootstrap gui/$(id -u) "$PLIST"
    ```
 3. On first run the bridge prints a QR code to its log — scan from WhatsApp → Linked Devices.
@@ -29,13 +29,13 @@ and exposes WhatsApp over a local HTTP/MCP interface on port 8080.
 
 ```bash
 lsof -i :8080 | grep LISTEN                           # bridge running?
-launchctl list com.samrenders.whatsapp-bridge         # launchd status
+launchctl list com.claude-ops.whatsapp-bridge         # launchd status
 cat ~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log | tail -20
 ```
 
 ### Troubleshooting
 
-- `bridge not running`: `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`
+- `bridge not running`: `launchctl kickstart -k gui/$(id -u)/com.claude-ops.whatsapp-bridge`
 - Auth expired: check `bridge.err.log` for QR prompt; session stored in `whatsapp.db`
 - Missing messages: restart bridge (re-syncs history on connect)
 - FTS search slow: run `scripts/whatsapp-bridge-migrate.sh` to add FTS5 index

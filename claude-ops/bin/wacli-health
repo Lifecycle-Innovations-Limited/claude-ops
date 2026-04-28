@@ -22,9 +22,9 @@ fi
 
 # Check launchd registration
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  if ! launchctl list 2>/dev/null | grep -q "com.samrenders.whatsapp-bridge"; then
+  if ! launchctl list 2>/dev/null | grep -q "com.claude-ops.whatsapp-bridge"; then
     healthy=0
-    issues+=("com.samrenders.whatsapp-bridge not registered in launchd")
+    issues+=("com.claude-ops.whatsapp-bridge not registered in launchd")
   fi
 fi
 
@@ -53,7 +53,7 @@ else
     for i in "${issues[@]+"${issues[@]}"}"; do
       echo "  - $i"
     done
-    echo "Restart: launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge"
+    echo "Restart: launchctl kickstart -k gui/$(id -u)/com.claude-ops.whatsapp-bridge"
   fi
 fi
 

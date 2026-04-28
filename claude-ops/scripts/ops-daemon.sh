@@ -165,7 +165,7 @@ _whatsapp_bridge_owned_by_launchd() {
   command -v launchctl >/dev/null 2>&1 || return 1
   local pid_str
   pid_str=$(launchctl list 2>/dev/null \
-    | awk '$3=="com.samrenders.whatsapp-bridge" {print $1}' || true)
+    | awk '$3=="com.claude-ops.whatsapp-bridge" {print $1}' || true)
   # Service must be registered AND have a live PID (not "-")
   if [[ -n "$pid_str" ]] && [[ "$pid_str" != "-" ]] && kill -0 "$pid_str" 2>/dev/null; then
     return 0
@@ -178,7 +178,7 @@ start_service() {
   local name="$1"
 
   # ── Race-condition guard: whatsapp-bridge ownership ─────────────────────
-  # The LaunchAgent com.samrenders.whatsapp-bridge is the sole owner of the WA
+  # The LaunchAgent com.claude-ops.whatsapp-bridge is the sole owner of the WA
   # connection. If it is loaded and running, the daemon must not spawn a
   # competing whatsapp-bridge — doing so causes store-lock errors and
   # disconnections. Instead we mark the service as "delegated" and monitor
@@ -1145,6 +1145,50 @@ except Exception:
 OPS_DAEMON_SCRIPT="$SCRIPT_DIR/scripts/ops-daemon.sh"
 OPS_KEEPALIVE_SCRIPT="$SCRIPT_DIR/legacy/wacli-keepalive.sh.deprecated"
 
+# Install Baileys whatsapp-bridge LaunchAgent (template under assets/).
+_install_whatsapp_bridge_launchd_plist() {
+  local agents_dir="$HOME/Library/LaunchAgents"
+  local src="$SCRIPT_DIR/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
+  local dst="$agents_dir/com.claude-ops.whatsapp-bridge.plist"
+  local bridge_dir="${WHATSAPP_BRIDGE_HOME:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
+  local bridge_bin="$bridge_dir/whatsapp-bridge"
+  local label="com.claude-ops.whatsapp-bridge"
+
+  if [[ ! -f "$src" ]]; then
+    log "INSTALL(launchd): whatsapp-bridge template missing: $src"
+    return 1
+  fi
+
+  local existing_pid=""
+  if [[ -f "$dst" ]]; then
+    existing_pid=$(launchctl list 2>/dev/null \
+      | awk -v lbl="$label" '$3==lbl && $1!="-" {print $1; exit}' || true)
+    if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+      log "INSTALL(launchd): $label already installed at $dst and running (pid=$existing_pid) — skipping"
+      return 0
+    fi
+  fi
+
+  mkdir -p "$bridge_dir/logs" 2>/dev/null || true
+  sed \
+    -e "s#__BRIDGE_BINARY_PATH__#$bridge_bin#g" \
+    -e "s#__BRIDGE_WORKING_DIR__#$bridge_dir#g" \
+    -e "s#__HOME__#$HOME#g" \
+    "$src" > "$dst"
+
+  local uid
+  uid=$(id -u)
+  local gui_domain="gui/$uid"
+  launchctl bootout "$gui_domain/$label" 2>/dev/null || true
+  if launchctl bootstrap "$gui_domain" "$dst" 2>/dev/null; then
+    log "INSTALL(launchd): bootstrapped $label into $gui_domain"
+  else
+    launchctl unload -w "$dst" 2>/dev/null || true
+    launchctl load -w "$dst"
+    log "INSTALL(launchd): loaded $label via legacy launchctl load"
+  fi
+}
+
 install_daemon_launchd() {
   command -v launchctl >/dev/null 2>&1 || {
     echo "install_daemon_launchd: launchctl not found on PATH" >&2
@@ -1154,9 +1198,7 @@ install_daemon_launchd() {
   mkdir -p "$agents_dir"
 
   local daemon_plist_src="$SCRIPT_DIR/scripts/com.claude-ops.daemon.plist"
-  local keepalive_plist_src="$SCRIPT_DIR/scripts/com.claude-ops.wacli-keepalive.plist"
   local daemon_plist_dst="$agents_dir/com.claude-ops.daemon.plist"
-  local keepalive_plist_dst="$agents_dir/com.claude-ops.wacli-keepalive.plist"
 
   local bash_path
   bash_path="$(command -v bash)"
@@ -1172,8 +1214,7 @@ install_daemon_launchd() {
 
   _install_launchd_plist "$daemon_plist_src" "$daemon_plist_dst" \
     "$bash_path" "$plugin_root" "com.claude-ops.daemon"
-  _install_launchd_plist "$keepalive_plist_src" "$keepalive_plist_dst" \
-    "$bash_path" "$plugin_root" "com.claude-ops.wacli-keepalive"
+  _install_whatsapp_bridge_launchd_plist
 }
 
 # Install a single launchd plist: substitute placeholders, copy, bootstrap.
@@ -1237,7 +1278,7 @@ uninstall_daemon_launchd() {
   }
   local agents_dir="$HOME/Library/LaunchAgents"
   local f
-  for f in com.claude-ops.daemon.plist com.claude-ops.wacli-keepalive.plist; do
+  for f in com.claude-ops.daemon.plist com.claude-ops.wacli-keepalive.plist com.claude-ops.whatsapp-bridge.plist; do
     if [[ -f "$agents_dir/$f" ]]; then
       launchctl unload -w "$agents_dir/$f" 2>/dev/null || true
       rm -f "$agents_dir/$f"
@@ -1389,7 +1430,7 @@ ENSURE_SERVICES_INTERVAL="${ENSURE_SERVICES_INTERVAL:-300}"  # every 5 min
 # Format: "label|plist_src_basename|description"
 EXPECTED_SERVICES=(
   "com.claude-ops.daemon|com.claude-ops.daemon.plist|ops daemon"
-  "com.samrenders.whatsapp-bridge|com.samrenders.whatsapp-bridge.plist|whatsapp-bridge"
+  "com.claude-ops.whatsapp-bridge|com.claude-ops.whatsapp-bridge.plist|whatsapp-bridge"
 )
 
 ensure_all_services() {
@@ -1421,6 +1462,9 @@ _ensure_all_services_launchd() {
     IFS='|' read -r label plist_base desc <<< "$entry"
     local plist_dst="$agents_dir/$plist_base"
     local plist_src="$SCRIPT_DIR/scripts/$plist_base"
+    if [[ "$plist_base" == "com.claude-ops.whatsapp-bridge.plist" ]]; then
+      plist_src="$SCRIPT_DIR/assets/launchagents/$plist_base"
+    fi
 
     # 1. Check if plist is installed
     if [[ ! -f "$plist_dst" ]]; then
@@ -1477,6 +1521,10 @@ _repair_launchd_service() {
   local bash_path
   bash_path="$(command -v bash)"
   local plugin_root="$SCRIPT_DIR"
+  if [[ "$label" == "com.claude-ops.whatsapp-bridge" ]]; then
+    _install_whatsapp_bridge_launchd_plist
+    return $?
+  fi
   if [[ -z "$bash_path" ]] || [[ ! -f "$plist_src" ]]; then
     log "ENSURE: cannot repair $label — missing bash or source plist"
     return 1

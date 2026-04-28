@@ -12,13 +12,13 @@ fi
 
 # Check bridge is listening on port 8080
 if ! lsof -i :8080 2>/dev/null | grep -q LISTEN; then
-  echo "⚠ WhatsApp bridge not running on :8080. Restart: launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge"
+  echo "⚠ WhatsApp bridge not running on :8080. Restart: launchctl kickstart -k gui/$(id -u)/com.claude-ops.whatsapp-bridge"
   # Don't block — just warn. The skill's own health check will handle it.
 fi
 
 # Check launchd registration
-if ! launchctl list com.samrenders.whatsapp-bridge 2>/dev/null | grep -q '"PID"'; then
-  echo "⚠ com.samrenders.whatsapp-bridge not active in launchd. Check: launchctl list com.samrenders.whatsapp-bridge"
+if ! launchctl list com.claude-ops.whatsapp-bridge 2>/dev/null | grep -q '"PID"'; then
+  echo "⚠ com.claude-ops.whatsapp-bridge not active in launchd. Check: launchctl list com.claude-ops.whatsapp-bridge"
 fi
 
 exit 0

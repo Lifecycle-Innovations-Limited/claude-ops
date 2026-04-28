@@ -12,7 +12,7 @@ All notable changes to this project will be documented in this file.
   - `bin/wacli-health` rewritten to check bridge port 8080 and launchd status.
   - `bin/wacli-safe` replaced with a deprecation shim.
   - New `bin/ops-pretool-whatsapp-bridge-health` PreToolUse hook for bridge liveness.
-  - New `assets/launchagents/com.samrenders.whatsapp-bridge.plist` template.
+  - New `assets/launchagents/com.claude-ops.whatsapp-bridge.plist` template.
   - `scripts/whatsapp-bridge-migrate.sh`: idempotent FTS5 virtual table + contacts table migration for `messages.db`; seeds contacts from macOS Contacts.app via osascript.
 
 ### Migration steps (manual, post-merge)

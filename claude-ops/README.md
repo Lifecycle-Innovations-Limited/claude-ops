@@ -123,7 +123,7 @@ Full feature parity with the legacy v1 bash script: `--gpu` reports GPU + Neural
 The background memory extractor now prefers the Claude Code OAuth token stored in macOS Keychain (`Claude Code-credentials`) over `ANTHROPIC_API_KEY`. Calls are billed against your Claude Max subscription instead of your API credit. The token is never exported to the shell environment, so parent terminal sessions stay unaffected. Falls back to `ANTHROPIC_API_KEY` (env → keychain → Doppler).
 
 ### Persistent WhatsApp follower
-`whatsapp-bridge` (Baileys) now manages WhatsApp connectivity via the `com.samrenders.whatsapp-bridge` LaunchAgent. Previously `whatsapp-bridge-keepalive.sh` kept `whatsapp-bridge --follow` alive — that daemon has been decommissioned (see `legacy/`). Which tore down the persistent connection every 5-20 minutes. Fixed via `INITIAL_BACKFILL_DELAY=30` plus a reentrant guard against overlapping sweeps.
+`whatsapp-bridge` (Baileys) now manages WhatsApp connectivity via the `com.claude-ops.whatsapp-bridge` LaunchAgent. Previously `whatsapp-bridge-keepalive.sh` kept `whatsapp-bridge --follow` alive — that daemon has been decommissioned (see `legacy/`). Which tore down the persistent connection every 5-20 minutes. Fixed via `INITIAL_BACKFILL_DELAY=30` plus a reentrant guard against overlapping sweeps.
 
 ### Full Plugin Feature Adoption
 - All 30 skills: `effort`, `maxTurns`, `disallowedTools`, `model` annotations

@@ -31,7 +31,7 @@ if [[ $BRIDGE_RUNNING -eq 1 ]] && [[ -f "$BRIDGE_DB" ]]; then
     --argjson c "$WA_RECENT" \
     '.channels.whatsapp = {"recent_chats": $c, "connected": true, "available": true}')
 elif [[ $BRIDGE_RUNNING -eq 0 ]]; then
-  RESULT=$(echo "$RESULT" | jq '.channels.whatsapp = {"unread": 0, "available": false, "note": "whatsapp-bridge not running — restart: launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge"}')
+  RESULT=$(echo "$RESULT" | jq '.channels.whatsapp = {"unread": 0, "available": false, "note": "whatsapp-bridge not running — restart: launchctl kickstart -k gui/$UID/com.claude-ops.whatsapp-bridge"}')
 else
   RESULT=$(echo "$RESULT" | jq '.channels.whatsapp = {"unread": 0, "available": false, "note": "whatsapp-bridge DB not found — run scripts/whatsapp-bridge-migrate.sh"}')
 fi

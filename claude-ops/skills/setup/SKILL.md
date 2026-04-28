@@ -1139,7 +1139,7 @@ Sub-flow (only runs if user selected Yes above):
 
 ### 3b — WhatsApp (bridge health + QR pair)
 
-WhatsApp is handled exclusively by the Baileys `whatsapp-bridge` (managed by `com.samrenders.whatsapp-bridge` LaunchAgent) and accessed via `mcp__whatsapp__*` tools.
+WhatsApp is handled exclusively by the Baileys `whatsapp-bridge` (managed by `com.claude-ops.whatsapp-bridge` LaunchAgent) and accessed via `mcp__whatsapp__*` tools.
 
 #### Step 3b.1 — Presence
 
@@ -1147,7 +1147,7 @@ Check bridge binary exists and LaunchAgent is installed:
 
 ```bash
 ls ~/.local/share/whatsapp-mcp/whatsapp-bridge/whatsapp-bridge 2>/dev/null && echo "binary ok"
-launchctl list com.samrenders.whatsapp-bridge 2>/dev/null | head -3
+launchctl list com.claude-ops.whatsapp-bridge 2>/dev/null | head -3
 lsof -i :8080 2>/dev/null | grep LISTEN
 ```
 
@@ -1162,8 +1162,8 @@ whatsapp-bridge (Baileys) is not installed. Install:
 
 If LaunchAgent not installed, install it from template:
 ```bash
-PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.samrenders.whatsapp-bridge.plist"
-PLIST_DEST="$HOME/Library/LaunchAgents/com.samrenders.whatsapp-bridge.plist"
+PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
+PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.whatsapp-bridge.plist"
 BRIDGE_DIR="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge"
 mkdir -p "$BRIDGE_DIR/logs"
 sed -e "s|__BRIDGE_BINARY_PATH__|$BRIDGE_DIR/whatsapp-bridge|g" \
@@ -1226,7 +1226,7 @@ All ops skills that use WhatsApp must check `lsof -i :8080 | grep LISTEN` before
 If bridge is not running:
 1. Print: "WhatsApp bridge is not running."
 2. Use `AskUserQuestion`: `[Restart bridge]`, `[Skip WhatsApp]`.
-3. On restart: `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`, wait 5s.
+3. On restart: `launchctl kickstart -k gui/$(id -u)/com.claude-ops.whatsapp-bridge`, wait 5s.
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` and `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/SKILL.md` for full operational instructions.
 
@@ -3069,7 +3069,7 @@ echo "Services to enable: $SERVICES"
 
 Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with the existing config from Step 2c, preserving `briefing-pre-warm` and `memory-extractor`, and enabling the new channel-dependent services. **Every service MUST include a `command` field** — the daemon's `start_service()` skips any service without one. Use `${CLAUDE_PLUGIN_ROOT}` (resolved at runtime) for script paths. Each service entry should include:
 - `briefing-pre-warm`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/bin/ops-gather", "cron": "*/2 * * * *" }` — pre-warms /ops:go cache (installed in 2c)
-- `whatsapp-bridge`: `{ "enabled": true, "command": "launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge", "health_check": "lsof -i :8080 | grep LISTEN", "restart_delay": 60, "max_restarts": 10 }` — only if WhatsApp configured (matches `daemon-services.default.json`; bridge is owned by LaunchAgent, not a plugin script)
+- `whatsapp-bridge`: `{ "enabled": true, "command": "launchctl kickstart -k gui/$UID/com.claude-ops.whatsapp-bridge", "health_check": "lsof -i :8080 | grep LISTEN", "restart_delay": 60, "max_restarts": 10 }` — only if WhatsApp configured (matches `daemon-services.default.json`; bridge is owned by LaunchAgent, not a plugin script)
 - `memory-extractor`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-memory-extractor.sh", "health_file": "~/.claude/plugins/data/ops-ops-marketplace/memories/.health", "cron": "*/30 * * * *" }` — every 30 min (installed in 2c)
 - `inbox-digest`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-inbox-digest.sh", "cron": "0 */4 * * *" }` — every 4h
 - `store-health`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-store-health.sh", "cron": "0 9 * * *" }` — daily 9am, only if ecom configured

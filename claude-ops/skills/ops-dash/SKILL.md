@@ -313,7 +313,7 @@ When user selects `h`:
 | 5 | Command reference | List all `/ops:*` commands with descriptions |
 | 6 | Shortcuts | `1-9, 0` for actions, `a-h` for power/comms/settings, `b` always goes back, `q` exits |
 | 7 | MCP disconnected | Wait 5s and retry (auto-reconnect hook). After 3 fails, falls back to CLI tools. |
-| 8 | WhatsApp | Check bridge liveness: `lsof -i :8080 | grep LISTEN`. If not running, prompt restart: `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`. Check `launchctl list com.samrenders.whatsapp-bridge` for status. If store locked: `kill $(pgrep whatsapp-bridge)`. |
+| 8 | WhatsApp | Check bridge liveness: `lsof -i :8080 | grep LISTEN`. If not running, prompt restart: `launchctl kickstart -k gui/$(id -u)/com.claude-ops.whatsapp-bridge`. Check `launchctl list com.claude-ops.whatsapp-bridge` for status. If store locked: `kill $(pgrep whatsapp-bridge)`. |
 | 9 | Telegram | Needs user-auth (not bot). Run `/ops:setup` → Telegram section. API ID + hash from my.telegram.org. |
 | 10 | Unread | Channel must be configured in `/ops:setup`. Check `ops-unread` script output for errors. |
 

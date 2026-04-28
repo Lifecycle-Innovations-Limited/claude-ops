@@ -8,7 +8,7 @@
     },
     "whatsapp-bridge": {
       "enabled": true,
-      "command": "launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge",
+      "command": "launchctl kickstart -k gui/$UID/com.claude-ops.whatsapp-bridge",
       "health_check": "lsof -i :8080 | grep LISTEN",
       "restart_delay": 60,
       "max_restarts": 10

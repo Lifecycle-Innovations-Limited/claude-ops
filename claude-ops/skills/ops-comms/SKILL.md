@@ -37,7 +37,7 @@ Before executing, load available context:
 
 1. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/daemon-health.json`
    - Check bridge liveness before any WhatsApp operation: `lsof -i :8080 | grep LISTEN`
-   - If bridge not running, prompt user to restart: `launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge`
+   - If bridge not running, prompt user to restart: `launchctl kickstart -k gui/$UID/com.claude-ops.whatsapp-bridge`
 
 2. **Ops memories**: Before drafting any message, check `${CLAUDE_PLUGIN_DATA_DIR}/memories/`:
    - `contact_*.md` — load profile for the recipient
@@ -53,9 +53,9 @@ Before executing, load available context:
 **Bridge health** — check bridge is running before any WhatsApp operation:
 ```bash
 lsof -i :8080 | grep LISTEN
-launchctl list com.samrenders.whatsapp-bridge
+launchctl list com.claude-ops.whatsapp-bridge
 ```
-If not running: `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`
+If not running: `launchctl kickstart -k gui/$(id -u)/com.claude-ops.whatsapp-bridge`
 
 | Tool | Params | Output |
 |------|--------|--------|
@@ -131,7 +131,7 @@ If user picks "Edit message", use `AskUserQuestion` with free-text to get the re
 
 **Never send a reply based on a single message.** A message like "can you pull it from Klaviyo?" means nothing without knowing what "it" refers to from prior messages.
 
-**Pre-flight:** Check bridge is running: `lsof -i :8080 | grep LISTEN`. If not running, restart: `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge` and wait 5s.
+**Pre-flight:** Check bridge is running: `lsof -i :8080 | grep LISTEN`. If not running, restart: `launchctl kickstart -k gui/$(id -u)/com.claude-ops.whatsapp-bridge` and wait 5s.
 
 ```
 mcp__whatsapp__send_message {recipient: "[contact_jid]", message: "[message]"}

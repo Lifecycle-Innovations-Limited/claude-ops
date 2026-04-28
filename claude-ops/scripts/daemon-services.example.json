@@ -7,7 +7,7 @@
   "services": {
     "whatsapp-bridge": {
       "enabled": true,
-      "command": "launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge",
+      "command": "launchctl kickstart -k gui/$UID/com.claude-ops.whatsapp-bridge",
       "health_check": "lsof -i :8080 | grep LISTEN",
       "restart_delay": 60,
       "max_restarts": 10
@@ -36,7 +36,7 @@
       "health_file": "~/.claude/plugins/data/ops-ops-marketplace/listener-health.txt",
       "restart_delay": 30,
       "max_restarts": 20,
-      "_note": "Requires: whatsapp-bridge running (com.samrenders.whatsapp-bridge LaunchAgent). Optional: TELEGRAM_BOT_TOKEN, TELEGRAM_OWNER_ID."
+      "_note": "Requires: whatsapp-bridge running (com.claude-ops.whatsapp-bridge LaunchAgent). Optional: TELEGRAM_BOT_TOKEN, TELEGRAM_OWNER_ID."
     },
     "memory-extractor": {
       "enabled": false,

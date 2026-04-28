@@ -164,7 +164,7 @@ fix_channel_health() {
     BRIDGE_DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
     RECENT=$(sqlite3 "$BRIDGE_DB" "SELECT COUNT(*) FROM messages WHERE timestamp >= datetime('now','-1 day');" 2>/dev/null || echo "0")
     if [ "$RECENT" = "0" ]; then
-      launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge 2>/dev/null || true
+      launchctl kickstart -k gui/$(id -u)/com.claude-ops.whatsapp-bridge 2>/dev/null || true
       RECENT2=$(sqlite3 "$BRIDGE_DB" "SELECT COUNT(*) FROM messages WHERE timestamp >= datetime('now','-1 day');" 2>/dev/null || echo "0")
       if [ "$RECENT2" = "0" ]; then
         log_fail "bridge-health: bridge up but 0 messages in 24h (may need re-pair or sync)"
