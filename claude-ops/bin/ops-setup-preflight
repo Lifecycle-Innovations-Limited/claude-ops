@@ -47,7 +47,7 @@ cred_get() {
 
 {
   # CLI detection
-  for tool in jq git gh aws node brew doppler wacli gog sentry-cli expect; do
+  for tool in jq git gh aws node brew doppler gog sentry-cli expect; do
     if command -v "$tool" &>/dev/null; then
       ver=$("$tool" --version 2>/dev/null | head -1 || echo "installed")
       echo "$tool=$ver" >> "$OUT/clis.txt"
@@ -91,11 +91,11 @@ cred_get() {
 
 {
   # WhatsApp probe
-  if command -v wacli &>/dev/null; then
-    wacli doctor --json 2>/dev/null > "$OUT/wacli-doctor.json" || echo '{"success":false}' > "$OUT/wacli-doctor.json"
-    wacli chats list --json 2>/dev/null > "$OUT/wacli-chats.json" || echo '{"success":false,"data":[]}' > "$OUT/wacli-chats.json"
+  # Bridge health check
+  if lsof -i :8080 2>/dev/null | grep -q LISTEN; then
+    echo '{"bridge":"running"}' > "$OUT/bridge-health.json"
   else
-    echo '{"success":false,"reason":"not_installed"}' > "$OUT/wacli-doctor.json"
+    echo '{"bridge":"stopped"}' > "$OUT/bridge-health.json"
   fi
 } &
 
@@ -141,7 +141,7 @@ cred_get() {
 } &
 
 {
-  # Auto-fix pass: silently repair wacli FTS, missing MCPs, etc.
+  # Auto-fix pass: silently repair bridge FTS, missing MCPs, etc.
   SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
   if [ -x "$SCRIPT_DIR/bin/ops-autofix" ]; then
     "$SCRIPT_DIR/bin/ops-autofix" --json > "$OUT/autofix.json" 2>/dev/null || true
