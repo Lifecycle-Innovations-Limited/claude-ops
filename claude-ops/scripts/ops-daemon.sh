@@ -628,13 +628,12 @@ try:
         WHERE m.is_from_me = 0
           AND m.timestamp >= datetime('now','-4 hours')
         ORDER BY m.timestamp DESC
-        LIMIT 5
     ''').fetchall()
     if rows:
         with open('$URGENT_FILE','w') as f:
             json.dump({
                 'urgent_count': len(rows),
-                'messages': [{'from': r[1], 'text': (r[2] or '')[:100], 'ts': r[3]} for r in rows]
+                'messages': [{'from': r[1], 'text': (r[2] or '')[:100], 'ts': r[3]} for r in rows[:5]]
             }, f, indent=2)
     con.close()
 except Exception:
