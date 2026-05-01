@@ -918,6 +918,22 @@ For each variable name (e.g. `TELEGRAM_BOT_TOKEN`, `SHOPIFY_ACCESS_TOKEN`, `KLAV
    ```
    Extract identifiers (e.g. `*.myshopify.com` store slugs, account IDs) from the URLs.
 10. **Project .env files** — scan `~/Projects/*/.env*` for the variable name or service domain patterns. These often contain credentials from other projects that can be reused.
+11. **Plugin user-config.json** — read `${CLAUDE_PLUGIN_DATA_DIR:-~/.claude/plugins/data/ops-ops-marketplace}/user-config.json`. This file is written by the setup flow when keychain persistence is unavailable or when the SSE router stores credentials. Keys use underscores: `telegram_api_id`, `telegram_api_hash`, `telegram_phone`, `telegram_session`. For Slack and Telegram specifically, **always check this file** — preferences.json only stores metadata (status/source), while the actual credentials may live here.
+    ```bash
+    USER_CONFIG="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/user-config.json"
+    [ -f "$USER_CONFIG" ] && jq -r --arg key "$VAR_UNDERSCORE" '.[$key] // empty' "$USER_CONFIG" 2>/dev/null
+    ```
+12. **SSE-router detection** — for any MCP server, check `~/.claude.json mcpServers.<name>.type`. If `"sse"`, the router holds auth server-side and no local credential is needed. Probe the URL:
+    ```bash
+    CLAUDE_JSON="$HOME/.claude.json"
+    srv_type=$(jq -r --arg s "<service>" '.mcpServers[$s].type // ""' "$CLAUDE_JSON" 2>/dev/null)
+    if [ "$srv_type" = "sse" ]; then
+      srv_url=$(jq -r --arg s "<service>" '.mcpServers[$s].url // ""' "$CLAUDE_JSON" 2>/dev/null)
+      http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$srv_url" 2>/dev/null || echo "000")
+      # 200 = router is live, service is configured — do NOT prompt for credentials
+    fi
+    ```
+    If the SSE router returns 200, report the service as `configured (source: sse_router)` and skip the credential prompt entirely.
 
 **Env var → service keyword mapping for auto-scan:**
 
@@ -1022,15 +1038,28 @@ Do NOT attempt `send_password` during a rate-limit window — it will fail immed
 
 Sub-flow (only runs if user selected Yes above):
 
-1. **Scout first.** Check keychain for previously-extracted Telegram credentials:
+1. **Scout first.** Check all sources for previously-extracted Telegram credentials, in priority order:
 
+   a. **SSE-router check** — if `~/.claude.json mcpServers.telegram.type == "sse"`, probe the URL. A 200 response means the router holds auth and Telegram is already configured — tell the user `"✓ Telegram already configured (source: sse_router)"` and skip to step 8.
+
+   b. **user-config.json** — check `${CLAUDE_PLUGIN_DATA_DIR:-~/.claude/plugins/data/ops-ops-marketplace}/user-config.json` for `telegram_api_id`, `telegram_api_hash`, `telegram_phone`, `telegram_session`.
+   ```bash
+   USER_CONFIG="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/user-config.json"
+   if [ -f "$USER_CONFIG" ]; then
+     jq -r '{api_id: .telegram_api_id, api_hash: .telegram_api_hash, phone: .telegram_phone, session: .telegram_session}' "$USER_CONFIG" 2>/dev/null
+   fi
+   ```
+
+   c. **macOS keychain**:
    ```bash
    for svc in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
      security find-generic-password -s "$svc" -w 2>/dev/null && echo "FOUND: $svc"
    done
    ```
 
-   Also check `~/.claude.json mcpServers.telegram.env.TELEGRAM_API_ID`. If all 4 are found and the stored `TELEGRAM_SESSION` decodes as a StringSession, tell the user `"✓ Telegram already configured (api_id=XXXXXXX, phone=+XX...)"` and skip to step 8.
+   d. **MCP config env** — check `~/.claude.json mcpServers.telegram.env.TELEGRAM_API_ID`.
+
+   If all 4 credentials are found from any combination of the above sources, tell the user `"✓ Telegram already configured (api_id=XXXXXXX, phone=+XX..., source=<source>)"` and skip to step 8.
 
 2. **Ask the user for their phone number** via `AskUserQuestion` with a single free-text option. Do NOT offer country-specific presets or example numbers — just one option that prompts for direct input:
 
@@ -1309,6 +1338,21 @@ Slack's official API requires workspace admin approval for most useful scopes. T
 Ported from [maorfr/slack-token-extractor](https://github.com/maorfr/slack-token-extractor) (Python → Node).
 
 Sub-flow:
+
+0. **SSE-router check (before all other scouts).** If `~/.claude.json mcpServers.slack.type == "sse"`, the router holds auth server-side — no xoxc/xoxd are needed locally. Probe the endpoint:
+
+   ```bash
+   SLACK_URL=$(jq -r '.mcpServers.slack.url // ""' "$HOME/.claude.json" 2>/dev/null)
+   HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$SLACK_URL" 2>/dev/null || echo "000")
+   ```
+
+   If `HTTP == 200`: report `"✓ Slack already configured (source: sse_router)"` and skip to step 5 (smoke test). If `HTTP != 200` but the type is `"sse"`, report the router as unreachable and ask:
+   ```
+   Slack SSE router at <url> returned HTTP <code>.
+     [Retry / restart the SSE router daemon]
+     [Fall back to keychain/Playwright scout]
+     [Skip Slack]
+   ```
 
 1. **Scout first.** Run:
 

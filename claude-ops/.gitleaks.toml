@@ -172,6 +172,7 @@ paths = [
   '''node_modules''',
   '''package-lock\.json''',
   '''\.gitleaks\.toml$''',
+  '''tests/''',
 ]
 stopwords = [
   "XOXC_TOKEN",
