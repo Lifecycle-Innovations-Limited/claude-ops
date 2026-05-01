@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.8] — 2026-05-01
+
+### Fixed
+
+- **Hotfix: remove unsupported `enum` keys from plugin.json `userConfig`.** Claude Code's plugin manifest validator rejects `enum` on userConfig fields ("Unrecognized key"), which broke plugin loading on the latest stable. Removed `enum` from `fix_model`, `max_fixes_per_hour`, `watcher_timeout_seconds`, `notify_channel`, `task_reminder_threshold`, `aws_region`, and `doppler_config`. Field descriptions retain the valid value lists so users still know what's allowed. Restores plugin install on Claude Code stable.
+
 ## [2.0.7] — 2026-05-01
 
 ### Fixed
