@@ -1168,7 +1168,7 @@ Sub-flow (only runs if user selected Yes above):
 
 ### 3b — WhatsApp (bridge health + QR pair)
 
-WhatsApp is handled exclusively by the Baileys `whatsapp-bridge` (managed by `com.samrenders.whatsapp-bridge` LaunchAgent) and accessed via `mcp__whatsapp__*` tools.
+WhatsApp is handled exclusively by the whatsmeow `whatsapp-bridge` (managed by `com.samrenders.whatsapp-bridge` LaunchAgent) and accessed via `mcp__whatsapp__*` tools.
 
 #### Step 3b.1 — Presence
 
@@ -1183,8 +1183,8 @@ lsof -i :8080 2>/dev/null | grep LISTEN
 If binary missing: ask `AskUserQuestion`: `[Show install docs]`, `[Skip WhatsApp]`. On install docs, print:
 
 ```
-whatsapp-bridge (Baileys) is not installed. Install:
-  git clone https://github.com/Lifecycle-Innovations-Limited/whatsapp-mcp ~/.local/share/whatsapp-mcp
+whatsapp-bridge (whatsmeow) is not installed. Install:
+  git clone https://github.com/lharries/whatsapp-mcp ~/.local/share/whatsapp-mcp
   cd ~/.local/share/whatsapp-mcp/whatsapp-bridge && go build -o whatsapp-bridge .
   mkdir -p ~/.local/share/whatsapp-mcp/whatsapp-bridge/logs
 ```
