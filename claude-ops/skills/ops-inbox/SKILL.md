@@ -109,7 +109,7 @@ If bridge is not running: `launchctl kickstart -k gui/$UID/com.samrenders.whatsa
 
 **Bulk archive non-actionable WA chats** — for newsletters, dead group chats, one-word reactions, etc.:
 ```bash
-for jid in "120363...@newsletter" "120363...@g.us" "31...@s.whatsapp.net"; do
+for jid in "<NEWSLETTER_JID>@newsletter" "<GROUP_JID>@g.us" "<CONTACT_PHONE>@s.whatsapp.net"; do
   curl -s -X POST http://localhost:8080/api/archive \
     -H 'Content-Type: application/json' \
     -d "{\"chat_jid\":\"$jid\",\"archive\":true}"
