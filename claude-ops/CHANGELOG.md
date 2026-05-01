@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.6] — 2026-04-30
+
+### Added
+
+- **`/ops:credentials` skill + `bin/ops-credentials` audit CLI.** Scans shell env, ops preferences.json, Doppler (resolves `doppler:KEY` references live), macOS Keychain, and Dashlane to report which integration credentials are configured vs missing. Output formats: human table (default), JSON (`--json`), single-service filter (`--service stripe`). Values masked as `first6•••last4`; never prints raw secrets. Auto-switches to compact one-line-per-cred format on SSH/mobile (`$SSH_CONNECTION` or `$OPS_MOBILE=1` per Rule 7). Solves the "Claude Code settings UI can't see my keychain" problem — users can now check at a glance which integrations are ready to use.
+- **Credential field hints in plugin.json descriptions.** All 22 credential fields now include "If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically" in their description, so users don't waste time pasting values that are already in scope.
+
 ## [2.0.5] — 2026-04-30
 
 ### Fixed

@@ -1,6 +1,6 @@
 {
   "name": "ops",
-  "version": "2.0.5",
+  "version": "2.0.6",
   "description": "Business operations command center for Claude Code — 30 skills, 14 agents, and a smart background daemon that manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (all AWS services), revenue (Stripe + RevenueCat), e-commerce (Shopify), marketing (Klaviyo/Meta/GA4/GSC), monitoring (Datadog/New Relic/OTEL), and voice (Bland AI/ElevenLabs/Whisper). Includes /gtm go-to-market planner, /ops:projects portfolio dashboard, and YOLO mode for autonomous operation with 4 parallel C-suite agents.",
   "author": {
     "name": "Lifecycle Innovations Limited",
@@ -222,7 +222,7 @@
     },
     "telegram_api_hash": {
       "title": "Telegram API Hash",
-      "description": "API hash from https://my.telegram.org/apps. Optional — run /ops:setup telegram to auto-configure.",
+      "description": "API hash from https://my.telegram.org/apps. Optional — run /ops:setup telegram to auto-configure. If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -236,7 +236,7 @@
     },
     "telegram_session": {
       "title": "Telegram Session String",
-      "description": "gram.js StringSession. Optional — run /ops:setup telegram to auto-configure.",
+      "description": "gram.js StringSession. Optional — run /ops:setup telegram to auto-configure. If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -282,14 +282,14 @@
     },
     "klaviyo_private_key": {
       "title": "Klaviyo Private API Key",
-      "description": "Private API key from Klaviyo Settings > API Keys (starts with pk_ or ck_)",
+      "description": "Private API key from Klaviyo Settings > API Keys (starts with pk_ or ck_) If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "meta_ads_token": {
       "title": "Meta Ads Access Token",
-      "description": "Meta Marketing API access token from Facebook Business",
+      "description": "Meta Marketing API access token from Facebook Business If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -325,49 +325,49 @@
     },
     "shopify_admin_token": {
       "title": "Shopify Admin API Token",
-      "description": "Admin API access token from Shopify Partners or custom app",
+      "description": "Admin API access token from Shopify Partners or custom app If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "shipbob_access_token": {
       "title": "ShipBob Access Token",
-      "description": "ShipBob Personal Access Token for fulfillment tracking (optional)",
+      "description": "ShipBob Personal Access Token for fulfillment tracking (optional) If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "bland_ai_api_key": {
       "title": "Bland AI API Key",
-      "description": "API key from https://app.bland.ai — used for /ops:ops-voice call",
+      "description": "API key from https://app.bland.ai — used for /ops:ops-voice call If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "elevenlabs_api_key": {
       "title": "ElevenLabs API Key",
-      "description": "API key from https://elevenlabs.io — used for /ops:ops-voice tts",
+      "description": "API key from https://elevenlabs.io — used for /ops:ops-voice tts If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "groq_api_key": {
       "title": "Groq API Key",
-      "description": "API key from https://console.groq.com — used for /ops:ops-voice transcribe (Whisper)",
+      "description": "API key from https://console.groq.com — used for /ops:ops-voice transcribe (Whisper) If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "stripe_secret_key": {
       "title": "Stripe Secret Key",
-      "description": "Stripe secret key (sk_live_... or sk_test_...) for revenue tracking. Prefer Doppler reference.",
+      "description": "Stripe secret key (sk_live_... or sk_test_...) for revenue tracking. Prefer Doppler reference. If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "revenuecat_api_key": {
       "title": "RevenueCat API Key",
-      "description": "RevenueCat API key for mobile subscription revenue tracking (V2 API).",
+      "description": "RevenueCat API key for mobile subscription revenue tracking (V2 API). If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -381,21 +381,21 @@
     },
     "datadog_api_key": {
       "title": "Datadog API Key",
-      "description": "From Datadog Organization Settings > API Keys — used for /ops:monitor",
+      "description": "From Datadog Organization Settings > API Keys — used for /ops:monitor If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "datadog_app_key": {
       "title": "Datadog Application Key",
-      "description": "From Datadog Organization Settings > Application Keys",
+      "description": "From Datadog Organization Settings > Application Keys If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "newrelic_api_key": {
       "title": "New Relic API Key",
-      "description": "User API Key from one.newrelic.com/api-keys — used for /ops:monitor",
+      "description": "User API Key from one.newrelic.com/api-keys — used for /ops:monitor If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -431,21 +431,21 @@
     },
     "pushover_user_key": {
       "title": "Pushover User Key",
-      "description": "From https://pushover.net/ — paired with pushover_app_token.",
+      "description": "From https://pushover.net/ — paired with pushover_app_token. If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "pushover_app_token": {
       "title": "Pushover App Token",
-      "description": "App-specific token from https://pushover.net/apps/build",
+      "description": "App-specific token from https://pushover.net/apps/build If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "discord_bot_token": {
       "title": "Discord Bot Token",
-      "description": "Bot token from Discord Developer Portal — used for channel reads and DMs. Prefer Doppler reference.",
+      "description": "Bot token from Discord Developer Portal — used for channel reads and DMs. Prefer Doppler reference. If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -459,14 +459,14 @@
     },
     "discord_default_webhook_url": {
       "title": "Discord Default Webhook URL",
-      "description": "Optional default webhook URL (https://discord.com/api/webhooks/…) for /ops:comms discord send. Shared with the ops-fires notification sink (which also reads discord_webhook_url).",
+      "description": "Optional default webhook URL (https://discord.com/api/webhooks/…) for /ops:comms discord send. Shared with the ops-fires notification sink (which also reads discord_webhook_url). If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "doppler_token": {
       "title": "Doppler Token",
-      "description": "Doppler service or personal token for the @dopplerhq/mcp-server MCP integration. Generated by /ops:setup or paste manually.",
+      "description": "Doppler service or personal token for the @dopplerhq/mcp-server MCP integration. Generated by /ops:setup or paste manually. If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -551,7 +551,7 @@
     },
     "dpd_password": {
       "title": "DPD Password",
-      "description": "Password for the DelisID. Exchanged at login for a short-lived token.",
+      "description": "Password for the DelisID. Exchanged at login for a short-lived token. If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -565,7 +565,7 @@
     },
     "ups_client_secret": {
       "title": "UPS OAuth Client Secret",
-      "description": "Client secret for the UPS app. Used for OAuth2 client_credentials.",
+      "description": "Client secret for the UPS app. Used for OAuth2 client_credentials. If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -586,7 +586,7 @@
     },
     "fedex_client_secret": {
       "title": "FedEx OAuth Client Secret",
-      "description": "Secret Key for the FedEx project. Used for OAuth2 client_credentials.",
+      "description": "Secret Key for the FedEx project. Used for OAuth2 client_credentials. If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -750,4 +750,3 @@
     }
   }
 }
-
