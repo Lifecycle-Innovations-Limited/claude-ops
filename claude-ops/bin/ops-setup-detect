@@ -166,7 +166,7 @@ if [ "$USE_CACHE" = true ] && [ -f "$PREFLIGHT/telegram.txt" ]; then
     TELEGRAM_KEYS_FOUND=4
   else
     # Count keys with "found" in their value
-    TELEGRAM_KEYS_FOUND=$(grep -c '=found' "$PREFLIGHT/telegram.txt" 2>/dev/null || echo 0)
+    TELEGRAM_KEYS_FOUND=$(grep -c '=found' "$PREFLIGHT/telegram.txt" 2>/dev/null) || TELEGRAM_KEYS_FOUND=0
     if [ "$TELEGRAM_KEYS_FOUND" -eq 4 ]; then
       TELEGRAM_STATUS="configured"
       # Determine the dominant source
