@@ -621,6 +621,11 @@ import json, sqlite3
 try:
     con = sqlite3.connect('file:$bridge_db?mode=ro', uri=True, timeout=2)
     cur = con.cursor()
+    urgent_count = cur.execute('''
+        SELECT COUNT(*) FROM messages m
+        WHERE m.is_from_me = 0
+          AND m.timestamp >= datetime('now','-4 hours')
+    ''').fetchone()[0]
     rows = cur.execute('''
         SELECT m.chat_jid, COALESCE(c.name, m.chat_jid) AS chat_name, m.content, m.timestamp
         FROM messages m
@@ -628,12 +633,13 @@ try:
         WHERE m.is_from_me = 0
           AND m.timestamp >= datetime('now','-4 hours')
         ORDER BY m.timestamp DESC
+        LIMIT 5
     ''').fetchall()
-    if rows:
+    if urgent_count:
         with open('$URGENT_FILE','w') as f:
             json.dump({
-                'urgent_count': len(rows),
-                'messages': [{'from': r[1], 'text': (r[2] or '')[:100], 'ts': r[3]} for r in rows[:5]]
+                'urgent_count': urgent_count,
+                'messages': [{'from': r[1], 'text': (r[2] or '')[:100], 'ts': r[3]} for r in rows]
             }, f, indent=2)
     con.close()
 except Exception:
