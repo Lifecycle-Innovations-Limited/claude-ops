@@ -73,12 +73,78 @@ else
   RESULT=$(echo "$RESULT" | jq '.channels.email = {"inbox_count": 0, "available": false, "note": "gog not installed — install gogcli: `brew install gogcli` (macOS/Linuxbrew), `winget install -e --id steipete.gogcli` (Windows), or see https://github.com/steipete/gogcli"}')
 fi
 
-# ── Slack — MCP-based, check env ──
-SLACK_ENABLED="${SLACK_MCP_ENABLED:-false}"
-if [ "$SLACK_ENABLED" = "true" ]; then
-  RESULT=$(echo "$RESULT" | jq '.channels.slack = {"unread": null, "available": true, "note": "Scan via Slack MCP tools"}')
+# ── Slack — multi-workspace support ──
+# Reads slack_workspaces array from preferences.json.
+# Backwards-compat: if array is absent/empty, falls back to legacy SLACK_MCP_ENABLED env var.
+#
+# preferences.json schema (new):
+#   "slack_workspaces": [
+#     { "name": "<workspace_a>", "token_env": "SLACK_BOT_TOKEN_<WORKSPACE_A>", "kind": "bot_token" },
+#     { "name": "<workspace_b>", "token_env": "SLACK_BOT_TOKEN_<WORKSPACE_B>", "kind": "user_token" }
+#   ]
+#
+# Backwards-compat (legacy):
+#   SLACK_MCP_ENABLED=true  →  single unnamed workspace via mcp__claude_ai_Slack__*
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+
+SLACK_WS_COUNT=0
+SLACK_WS_NAMES=()
+SLACK_WS_AVAILABLE=()
+
+if command -v jq >/dev/null 2>&1 && [ -f "$PREFS_PATH" ]; then
+  SLACK_WS_COUNT=$(jq -r '(.slack_workspaces // []) | length' "$PREFS_PATH" 2>/dev/null || echo "0")
+  [[ "$SLACK_WS_COUNT" =~ ^[0-9]+$ ]] || SLACK_WS_COUNT=0
+fi
+
+if [ "$SLACK_WS_COUNT" -gt 0 ]; then
+  # New multi-workspace path — iterate each configured workspace
+  WS_ARRAY="[]"
+  for i in $(seq 0 $((SLACK_WS_COUNT - 1))); do
+    ws_name=$(jq -r ".slack_workspaces[$i].name // \"workspace-$i\"" "$PREFS_PATH" 2>/dev/null)
+    token_env=$(jq -r ".slack_workspaces[$i].token_env // \"\"" "$PREFS_PATH" 2>/dev/null)
+    ws_kind=$(jq -r ".slack_workspaces[$i].kind // \"bot_token\"" "$PREFS_PATH" 2>/dev/null)
+
+    # Resolve token from the named env var.
+    # Validate token_env is a legal POSIX shell identifier before indirect expansion;
+    # bash aborts the entire script under `set -u`/`set -e` if `${!var}` is given a
+    # name with invalid characters (e.g. "SLACK-TOKEN" → "invalid variable name").
+    ws_token=""
+    if [[ "$token_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      ws_token="${!token_env:-}"
+    elif [ -n "$token_env" ]; then
+      # Configured but the env var name is not a valid shell identifier — emit an
+      # explicit error record and skip without aborting the rest of the scan.
+      WS_ARRAY=$(echo "$WS_ARRAY" | jq \
+        --arg name "$ws_name" \
+        --arg env "$token_env" \
+        '. + [{"name": $name, "available": false, "unread": null, "note": ("invalid token_env (must match [A-Za-z_][A-Za-z0-9_]*): " + $env)}]')
+      continue
+    fi
+
+    if [ -n "$ws_token" ]; then
+      # Token present — mark available, actual unread count requires MCP at scan time
+      WS_ARRAY=$(echo "$WS_ARRAY" | jq \
+        --arg name "$ws_name" \
+        --arg kind "$ws_kind" \
+        --arg env "$token_env" \
+        '. + [{"name": $name, "kind": $kind, "token_env": $env, "available": true, "unread": null, "note": "Scan via mcp__claude_ai_Slack__* or direct curl with token_env"}]')
+    else
+      # Token env var not set — workspace configured but credential missing
+      WS_ARRAY=$(echo "$WS_ARRAY" | jq \
+        --arg name "$ws_name" \
+        --arg env "$token_env" \
+        '. + [{"name": $name, "available": false, "unread": null, "note": ("token env var not set: " + $env)}]')
+    fi
+  done
+  RESULT=$(echo "$RESULT" | jq --argjson ws "$WS_ARRAY" '.channels.slack = {"workspaces": $ws, "multi_workspace": true}')
 else
-  RESULT=$(echo "$RESULT" | jq '.channels.slack = {"unread": null, "available": false, "note": "Set SLACK_MCP_ENABLED=true when Slack MCP server is configured"}')
+  # Legacy single-workspace path — honour SLACK_MCP_ENABLED env var
+  SLACK_ENABLED="${SLACK_MCP_ENABLED:-false}"
+  if [ "$SLACK_ENABLED" = "true" ]; then
+    RESULT=$(echo "$RESULT" | jq '.channels.slack = {"unread": null, "available": true, "multi_workspace": false, "note": "Scan via Slack MCP tools (legacy single-workspace mode)"}')
+  else
+    RESULT=$(echo "$RESULT" | jq '.channels.slack = {"unread": null, "available": false, "multi_workspace": false, "note": "No slack_workspaces configured. Set SLACK_MCP_ENABLED=true (legacy) or add slack_workspaces[] to preferences.json"}')
+  fi
 fi
 
 # ── Telegram — user-auth MCP, check env ──

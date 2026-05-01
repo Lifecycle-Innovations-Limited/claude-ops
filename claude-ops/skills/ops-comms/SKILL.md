@@ -167,8 +167,12 @@ Show last 10 chats with sender, preview, timestamp. Use `mcp__whatsapp__list_mes
 **Email:**
 Use `mcp__claude_ai_Gmail__search_threads` with `query: "in:inbox"` (NOT `is:unread` — scan full inbox including read messages), show thread list.
 
-**Slack:**
-Use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` (NOT `is:unread` — scan full recent activity).
+**Slack (multi-workspace):**
+
+Read the **derived** `channels.slack.workspaces[]` object from the pre-gathered `bin/ops-unread` output (NOT the raw `preferences.json` → `slack_workspaces[]`, which has no `available` field — it only persists workspace metadata). The `bin/ops-unread` step resolves each workspace's `token_env` and emits `available: true|false` per entry. Iterate that array:
+- For each `available: true` entry, use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` (NOT `is:unread`) if the MCP token matches, or direct curl for non-bound workspaces. To resolve the token for direct curl, the entry's `token_env` field is the **name** of the env var; validate it matches `^[A-Za-z_][A-Za-z0-9_]*$` before indirect expansion (`${!token_env}`) to avoid bash aborting on invalid identifiers.
+- Label results with the workspace name: `Slack/<workspace_a>`, `Slack/<workspace_b>`, etc.
+- **`channels.slack.multi_workspace == false` / legacy mode**: fall back to `mcp__claude_ai_Slack__slack_search_public_and_private` if `channels.slack.available == true`, otherwise report "Slack not configured".
 
 **Telegram:**
 Use `mcp__claude_ops_telegram__get_updates` (limit: 20) and `mcp__claude_ops_telegram__list_chats`.

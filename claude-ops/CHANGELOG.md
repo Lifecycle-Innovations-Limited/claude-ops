@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.9] — 2026-05-01
+
+### Added
+
+- **Multi-workspace Slack support.** `preferences.json` now accepts a `slack_workspaces` array so ops briefings, inbox scans, and comms reads iterate ALL configured Slack workspaces instead of stopping at one. Each entry carries `name`, `token_env` (the env var holding the token — never stored in prefs), and `kind` (`bot_token` | `user_token`). Backwards-compatible: configs with no `slack_workspaces` fall back to legacy `SLACK_MCP_ENABLED=true` single-workspace path.
+- **`bin/ops-slack-workspaces` helper.** Lists every configured workspace, resolves token env vars, and calls `slack.com/api/auth.test` for each. Outputs a table or `--json` for machine consumers. Exit code is non-zero if any token is missing or invalid.
+- **Setup wizard multi-workspace loop.** Step 3d now persists each workspace into `slack_workspaces[]` and asks "Add another workspace?" until done. Running `/ops:setup slack` a second time appends to the array without overwriting existing entries.
+- Updated `ops-go`, `ops-inbox`, `ops-comms`, `ops-dash` SKILL.md docs to describe multi-workspace iteration, per-workspace labelling, and the MCP-bound-token fallback path (direct curl for non-primary workspaces).
+
 ## [2.0.8] — 2026-05-01
 
 ### Fixed
