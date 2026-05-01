@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# ops-post-update-migrate — auto-fire idempotent migrations after plugin install/update.
+#
+# Runs ONCE per plugin version (sentinel: $DATA_DIR/.migrated/v<VERSION>).
+# Wired from hooks/hooks.json (SessionStart) and scripts/ops-daemon-manager.sh.
+#
+# Add new migrations to the run_migrations() function below — they MUST be
+# idempotent so a re-run is a no-op.
+
+set -euo pipefail
+
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PLUGIN_JSON="$PLUGIN_ROOT/.claude-plugin/plugin.json"
+
+[[ -f "$PLUGIN_JSON" ]] || exit 0
+
+VERSION=$(python3 -c "import json,sys; print(json.load(open('$PLUGIN_JSON'))['version'])" 2>/dev/null || echo "unknown")
+SENTINEL_DIR="$DATA_DIR/.migrated"
+SENTINEL="$SENTINEL_DIR/v${VERSION}"
+
+# Already migrated this version → exit fast (SessionStart hook fires every session)
+[[ -f "$SENTINEL" ]] && exit 0
+
+mkdir -p "$SENTINEL_DIR" 2>/dev/null || true
+LOG="$DATA_DIR/post-update-migrate.log"
+mkdir -p "$DATA_DIR" 2>/dev/null || true
+
+log() { printf "[%s] %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
+
+run_migrations() {
+  log "post-update-migrate START version=$VERSION plugin_root=$PLUGIN_ROOT"
+
+  # 1. WhatsApp bridge: FTS5 + contacts table (idempotent — script self-checks)
+  local wa_migrate="$PLUGIN_ROOT/scripts/whatsapp-bridge-migrate.sh"
+  if [[ -x "$wa_migrate" ]]; then
+    if bash "$wa_migrate" >> "$LOG" 2>&1; then
+      log "  ok: whatsapp-bridge-migrate"
+    else
+      log "  warn: whatsapp-bridge-migrate exit=$? (non-fatal)"
+    fi
+  fi
+
+  # 2. Refresh whatsapp-bridge LaunchAgent (idempotent — only writes if template changed)
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    local plist_src="$PLUGIN_ROOT/scripts/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
+    local plist_dst="$HOME/Library/LaunchAgents/com.claude-ops.whatsapp-bridge.plist"
+    if [[ -f "$plist_src" ]] && [[ ! -f "$plist_dst" || "$plist_src" -nt "$plist_dst" ]]; then
+      mkdir -p "$HOME/Library/LaunchAgents" 2>/dev/null || true
+      local bridge_dir="${WHATSAPP_BRIDGE_HOME:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
+      sed -e "s#__BRIDGE_BINARY_PATH__#$bridge_dir/whatsapp-bridge#g" \
+          -e "s#__BRIDGE_WORKING_DIR__#$bridge_dir#g" \
+          "$plist_src" > "$plist_dst" 2>/dev/null && {
+        launchctl unload "$plist_dst" 2>/dev/null || true
+        launchctl load "$plist_dst" 2>/dev/null || true
+        log "  ok: whatsapp-bridge LaunchAgent refreshed"
+      }
+    fi
+  fi
+
+  # 3. Decommission deprecated wacli-keepalive plist (idempotent)
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    local stale_plist="$HOME/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist"
+    if [[ -f "$stale_plist" ]]; then
+      launchctl unload "$stale_plist" 2>/dev/null || true
+      rm -f "$stale_plist" 2>/dev/null || true
+      log "  ok: removed deprecated wacli-keepalive LaunchAgent"
+    fi
+  fi
+
+  # 4. Add future migrations here. Pattern:
+  #    if needs_migration; then
+  #      run_idempotent_migration && log "  ok: <name>"
+  #    fi
+
+  log "post-update-migrate DONE version=$VERSION"
+}
+
+# Run with a 60s wall-clock budget so a SessionStart hook never blocks Claude.
+( run_migrations ) &
+MIGRATE_PID=$!
+( sleep 60; kill -0 "$MIGRATE_PID" 2>/dev/null && kill "$MIGRATE_PID" 2>/dev/null ) &
+
+wait "$MIGRATE_PID" 2>/dev/null || true
+
+# Stamp sentinel even on partial failure — individual migrations log their own state.
+# Re-run forced by deleting the sentinel or bumping plugin.json version.
+touch "$SENTINEL"
+exit 0

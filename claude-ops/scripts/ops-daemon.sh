@@ -538,15 +538,20 @@ prefetch_briefing_cache() {
   tmpdir=$(mktemp -d)
   local -a _refresh_pids=()
 
-  # Unread counts — read from keepalive cache to avoid store-lock contention
-  local wacli_cache="$DATA_DIR/cache/wacli_chats.json"
-  (if [[ -f "$wacli_cache" ]]; then
+  # Unread counts — read directly from Baileys bridge messages.db (wacli decommissioned)
+  local bridge_db="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+  (if [[ -f "$bridge_db" ]]; then
     python3 -c "
-import json,datetime
-data=json.load(open('$wacli_cache')).get('data',[]) or []
-cutoff=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=7)).isoformat()
-recent=[c for c in data if c.get('LastMessageTS','')>cutoff]
-print(json.dumps({'total_chats':len(recent),'count':len(data)}))
+import json, sqlite3
+try:
+    con = sqlite3.connect('file:$bridge_db?mode=ro', uri=True, timeout=2)
+    cur = con.cursor()
+    recent = cur.execute(\"SELECT COUNT(DISTINCT chat_jid) FROM messages WHERE timestamp >= datetime('now','-7 days')\").fetchone()[0]
+    total = cur.execute('SELECT COUNT(*) FROM chats').fetchone()[0]
+    print(json.dumps({'total_chats': recent, 'count': total}))
+    con.close()
+except Exception:
+    print(json.dumps({'total_chats': 0, 'count': 0}))
 " > "$tmpdir/wa.json" 2>/dev/null
   fi) &
   _refresh_pids+=($!)
@@ -608,18 +613,32 @@ detect_urgent_messages() {
     if (( now - last < 300 )); then return 0; fi
   fi
 
-  # Check WhatsApp urgent messages — read from keepalive cache (no store-lock contention)
-  local urgent_cache="$DATA_DIR/cache/wacli_urgent.json"
-  if [[ -f "$urgent_cache" ]]; then
+  # Check WhatsApp urgent messages — read directly from Baileys bridge messages.db
+  local bridge_db="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+  if [[ -f "$bridge_db" ]]; then
     python3 -c "
-import json,datetime
-data=json.load(open('$urgent_cache'))
-msgs=data.get('data',{}).get('messages',[]) or []
-cutoff=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=4)).isoformat()
-urgent=[m for m in msgs if m.get('Timestamp','')>cutoff and not m.get('FromMe',True)]
-if urgent:
-    with open('$URGENT_FILE','w') as f:
-        json.dump({'urgent_count':len(urgent),'messages':[{'from':m.get('ChatName',''),'text':m.get('Text','')[:100],'ts':m.get('Timestamp','')} for m in urgent[:5]]},f,indent=2)
+import json, sqlite3
+try:
+    con = sqlite3.connect('file:$bridge_db?mode=ro', uri=True, timeout=2)
+    cur = con.cursor()
+    rows = cur.execute('''
+        SELECT m.chat_jid, COALESCE(c.name, m.chat_jid) AS chat_name, m.content, m.timestamp
+        FROM messages m
+        LEFT JOIN chats c ON c.jid = m.chat_jid
+        WHERE m.is_from_me = 0
+          AND m.timestamp >= datetime('now','-4 hours')
+        ORDER BY m.timestamp DESC
+        LIMIT 5
+    ''').fetchall()
+    if rows:
+        with open('$URGENT_FILE','w') as f:
+            json.dump({
+                'urgent_count': len(rows),
+                'messages': [{'from': r[1], 'text': (r[2] or '')[:100], 'ts': r[3]} for r in rows]
+            }, f, indent=2)
+    con.close()
+except Exception:
+    pass
 " 2>/dev/null || true
   fi
 
@@ -652,16 +671,24 @@ try:
 except: print('')
 " 2>/dev/null)
 
-    # Read from keepalive cache to check for new messages (no store-lock contention)
-    local wacli_chats_cache="$DATA_DIR/cache/wacli_chats.json"
-    if [[ -f "$wacli_chats_cache" ]]; then
+    # Read from Baileys bridge messages.db to check for new messages (wacli decommissioned)
+    local bridge_db="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+    if [[ -f "$bridge_db" ]]; then
       local new_count
       new_count=$(python3 -c "
-import json,datetime
-data=json.load(open('$wacli_chats_cache')).get('data',[]) or []
-last='${last_ts:-}'
-recent=[c for c in data if c.get('LastMessageTS','')>last] if last else data[:5]
-print(len(recent))
+import sqlite3
+try:
+    con = sqlite3.connect('file:$bridge_db?mode=ro', uri=True, timeout=2)
+    cur = con.cursor()
+    last = '${last_ts:-}'
+    if last:
+        n = cur.execute('SELECT COUNT(DISTINCT chat_jid) FROM messages WHERE timestamp > ?', (last,)).fetchone()[0]
+    else:
+        n = cur.execute(\"SELECT COUNT(DISTINCT chat_jid) FROM messages WHERE timestamp >= datetime('now','-1 day')\").fetchone()[0]
+    print(n)
+    con.close()
+except Exception:
+    print(0)
 " 2>/dev/null || echo 0)
 
       if [[ "$new_count" -gt 3 ]] && [[ -f "$MEM_SCRIPT" ]]; then
@@ -708,21 +735,26 @@ import json, subprocess, sys, datetime, os, collections
 data_dir = sys.argv[1]
 contacts = collections.defaultdict(lambda: {"channels": [], "last_seen": "", "msg_count": 0, "needs_reply": False})
 
-# WhatsApp contacts — read from keepalive cache (no store-lock contention)
+# WhatsApp contacts — read directly from Baileys bridge messages.db (wacli decommissioned)
 try:
-    cache_path = os.path.join(data_dir, "cache", "wacli_chats.json")
-    if os.path.exists(cache_path):
-        wa = json.load(open(cache_path))
-    else:
-        wa = {"data": []}
-    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)).isoformat()
-    for chat in (wa.get("data") or []):
-        if chat.get("LastMessageTS", "") < cutoff: continue
-        name = chat.get("Name", "Unknown")
-        contacts[name]["channels"].append("whatsapp")
-        contacts[name]["last_seen"] = max(contacts[name]["last_seen"], chat.get("LastMessageTS", ""))
-        contacts[name]["jid"] = chat.get("JID", "")
-except: pass
+    import sqlite3
+    bridge_db = os.environ.get("WHATSAPP_BRIDGE_DB",
+        os.path.expanduser("~/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db"))
+    if os.path.exists(bridge_db):
+        con = sqlite3.connect(f"file:{bridge_db}?mode=ro", uri=True, timeout=2)
+        cur = con.cursor()
+        rows = cur.execute("""
+            SELECT COALESCE(c.name, c.jid) AS name, c.jid, c.last_message_time
+            FROM chats c
+            WHERE c.last_message_time >= datetime('now','-7 days')
+        """).fetchall()
+        for name, jid, last_seen in rows:
+            name = name or "Unknown"
+            contacts[name]["channels"].append("whatsapp")
+            contacts[name]["last_seen"] = max(contacts[name]["last_seen"], str(last_seen or ""))
+            contacts[name]["jid"] = jid or ""
+        con.close()
+except Exception: pass
 
 # Email contacts (recent senders)
 try:

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.3] — 2026-04-30
+
+### Fixed
+
+- **Daemon: WhatsApp state now reads from Baileys bridge `messages.db` directly.** Removed last 4 references to deprecated `wacli_chats.json` / `wacli_urgent.json` keepalive caches in `scripts/ops-daemon.sh` (briefing refresh, urgent-message detection, smart memory trigger, contact activity index). Briefings no longer surface false "WhatsApp disconnected" warnings when the bridge is healthy.
+
+### Added
+
+- **`bin/ops-post-update-migrate`: auto-fire migrations on plugin update.** Wired into `hooks/hooks.json` SessionStart and `scripts/ops-daemon-manager.sh ensure-current`. Idempotent, gated by per-version sentinel (`$DATA_DIR/.migrated/v<VERSION>`), wall-clock budget 60s. Currently runs: `whatsapp-bridge-migrate.sh` (FTS5 + contacts), refreshes `com.claude-ops.whatsapp-bridge` LaunchAgent, decommissions stale `com.claude-ops.wacli-keepalive` plist. Future migrations chain into `run_migrations()`.
+
 ## [Unreleased] — 2026-04-27
 
 ### Changed
