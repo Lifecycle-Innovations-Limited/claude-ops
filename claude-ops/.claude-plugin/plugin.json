@@ -123,11 +123,7 @@
       "title": "Fix-agent model",
       "description": "Anthropic model the fixer runs on. Default haiku (fast/cheap). Use sonnet/opus for harder failures.",
       "default": "haiku",
-      "enum": [
-        "opus",
-        "sonnet",
-        "haiku"
-      ]
+      "enum": ["opus", "sonnet", "haiku"]
     },
     "max_fixes_per_hour": {
       "type": "number",
@@ -136,12 +132,7 @@
       "default": 3,
       "min": 0,
       "max": 20,
-      "enum": [
-        1,
-        3,
-        5,
-        10
-      ]
+      "enum": [1, 3, 5, 10]
     },
     "watcher_timeout_seconds": {
       "type": "number",
@@ -150,13 +141,7 @@
       "default": 1800,
       "min": 60,
       "max": 7200,
-      "enum": [
-        300,
-        600,
-        900,
-        1800,
-        3600
-      ]
+      "enum": [300, 600, 900, 1800, 3600]
     },
     "registry_path": {
       "type": "file",
@@ -181,14 +166,7 @@
       "title": "Failure notification channel",
       "description": "Where to push failure alerts: macos, ntfy, pushover, discord, telegram, or none.",
       "default": "macos",
-      "enum": [
-        "macos",
-        "ntfy",
-        "pushover",
-        "discord",
-        "telegram",
-        "none"
-      ]
+      "enum": ["macos", "ntfy", "pushover", "discord", "telegram", "none"]
     },
     "recap_marquee_enabled": {
       "type": "boolean",
@@ -227,12 +205,7 @@
       "default": 10,
       "min": 3,
       "max": 50,
-      "enum": [
-        5,
-        10,
-        20,
-        50
-      ]
+      "enum": [5, 10, 20, 50]
     },
     "suggest_specialized_agents": {
       "type": "boolean",
@@ -511,12 +484,7 @@
       "type": "string",
       "sensitive": false,
       "default": "",
-      "enum": [
-        "dev",
-        "stg",
-        "prd",
-        "ci"
-      ]
+      "enum": ["dev", "stg", "prd", "ci"]
     },
     "myparcel_api_key": {
       "title": "MyParcel.nl API Key",
