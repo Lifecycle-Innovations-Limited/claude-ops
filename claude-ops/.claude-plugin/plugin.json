@@ -1,7 +1,7 @@
 {
   "name": "ops",
-  "version": "2.0.4",
-  "description": "Business operations command center for Claude Code \u2014 30 skills, 14 agents, and a smart background daemon that manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (all AWS services), revenue (Stripe + RevenueCat), e-commerce (Shopify), marketing (Klaviyo/Meta/GA4/GSC), monitoring (Datadog/New Relic/OTEL), and voice (Bland AI/ElevenLabs/Whisper). Includes /gtm go-to-market planner, /ops:projects portfolio dashboard, and YOLO mode for autonomous operation with 4 parallel C-suite agents.",
+  "version": "2.0.5",
+  "description": "Business operations command center for Claude Code — 30 skills, 14 agents, and a smart background daemon that manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (all AWS services), revenue (Stripe + RevenueCat), e-commerce (Shopify), marketing (Klaviyo/Meta/GA4/GSC), monitoring (Datadog/New Relic/OTEL), and voice (Bland AI/ElevenLabs/Whisper). Includes /gtm go-to-market planner, /ops:projects portfolio dashboard, and YOLO mode for autonomous operation with 4 parallel C-suite agents.",
   "author": {
     "name": "Lifecycle Innovations Limited",
     "url": "https://github.com/Lifecycle-Innovations-Limited"
@@ -61,7 +61,7 @@
     "no_rm_rf_anchor": {
       "type": "boolean",
       "title": "Block rm -rf against root anchors",
-      "description": "PreToolUse hook denies `rm -rf` targeting /, ~, $HOME, .., or . \u2014 protecting against catastrophic filesystem wipes. Specific subpaths (./node_modules, /tmp/foo) are allowed.",
+      "description": "PreToolUse hook denies `rm -rf` targeting /, ~, $HOME, .., or . — protecting against catastrophic filesystem wipes. Specific subpaths (./node_modules, /tmp/foo) are allowed.",
       "default": true
     },
     "warn_mainpush": {
@@ -78,7 +78,7 @@
     },
     "monitor_post_merge": {
       "type": "boolean",
-      "title": "Monitor PR merges \u2192 deploys",
+      "title": "Monitor PR merges → deploys",
       "description": "After `gh pr merge` to dev/main, watch the deploy workflow + audit service health.",
       "default": true
     },
@@ -91,7 +91,7 @@
     "auto_dispatch_fixer": {
       "type": "boolean",
       "title": "Auto-dispatch headless Claude fixer",
-      "description": "When off, failures are logged + notified only \u2014 no agent runs.",
+      "description": "When off, failures are logged + notified only — no agent runs.",
       "default": true
     },
     "allow_dangerous": {
@@ -122,7 +122,8 @@
       "type": "string",
       "title": "Fix-agent model",
       "description": "Anthropic model the fixer runs on. Default haiku (fast/cheap). Use sonnet/opus for harder failures.",
-      "default": "haiku"
+      "default": "haiku",
+      "enum": ["opus", "sonnet", "haiku"]
     },
     "max_fixes_per_hour": {
       "type": "number",
@@ -130,7 +131,8 @@
       "description": "Cap on auto-fix dispatches per repo per hour.",
       "default": 3,
       "min": 0,
-      "max": 20
+      "max": 20,
+      "enum": [1, 3, 5, 10]
     },
     "watcher_timeout_seconds": {
       "type": "number",
@@ -138,12 +140,13 @@
       "description": "Max wait for deploy workflow completion.",
       "default": 1800,
       "min": 60,
-      "max": 7200
+      "max": 7200,
+      "enum": [300, 600, 900, 1800, 3600]
     },
     "registry_path": {
       "type": "file",
       "title": "Service registry JSON",
-      "description": "Maps owner/repo:base \u2192 health/version URLs. Project .claude/post-merge-services.json overrides.",
+      "description": "Maps owner/repo:base → health/version URLs. Project .claude/post-merge-services.json overrides.",
       "default": "~/.claude/config/post-merge-services.json"
     },
     "repo_search_roots": {
@@ -162,7 +165,8 @@
       "type": "string",
       "title": "Failure notification channel",
       "description": "Where to push failure alerts: macos, ntfy, pushover, discord, telegram, or none.",
-      "default": "macos"
+      "default": "macos",
+      "enum": ["macos", "ntfy", "pushover", "discord", "telegram", "none"]
     },
     "recap_marquee_enabled": {
       "type": "boolean",
@@ -200,38 +204,39 @@
       "description": "Number of non-Task tool calls before the reminder fires.",
       "default": 10,
       "min": 3,
-      "max": 50
+      "max": 50,
+      "enum": [5, 10, 20, 50]
     },
     "suggest_specialized_agents": {
       "type": "boolean",
       "title": "Suggest specialized subagents",
-      "description": "PreToolUse hook on Agent \u2014 when subagent_type=general-purpose, asks if a domain-specific agent fits better.",
+      "description": "PreToolUse hook on Agent — when subagent_type=general-purpose, asks if a domain-specific agent fits better.",
       "default": true
     },
     "telegram_api_id": {
       "title": "Telegram API ID",
-      "description": "Numeric API ID from https://my.telegram.org/apps. Optional \u2014 run /ops:setup telegram to auto-configure.",
+      "description": "Numeric API ID from https://my.telegram.org/apps. Optional — run /ops:setup telegram to auto-configure.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "telegram_api_hash": {
       "title": "Telegram API Hash",
-      "description": "API hash from https://my.telegram.org/apps. Optional \u2014 run /ops:setup telegram to auto-configure.",
+      "description": "API hash from https://my.telegram.org/apps. Optional — run /ops:setup telegram to auto-configure.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "telegram_phone": {
       "title": "Telegram Phone Number",
-      "description": "Your phone number in E.164 format. Optional \u2014 run /ops:setup telegram to auto-configure.",
+      "description": "Your phone number in E.164 format. Optional — run /ops:setup telegram to auto-configure.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "telegram_session": {
       "title": "Telegram Session String",
-      "description": "gram.js StringSession. Optional \u2014 run /ops:setup telegram to auto-configure.",
+      "description": "gram.js StringSession. Optional — run /ops:setup telegram to auto-configure.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -255,7 +260,25 @@
       "description": "Default AWS region for infra checks. Valid: us-east-1, us-east-2, us-west-1, us-west-2, eu-west-1, eu-central-1, ap-southeast-1, ap-northeast-1.",
       "type": "string",
       "sensitive": false,
-      "default": "us-east-1"
+      "default": "us-east-1",
+      "enum": [
+        "us-east-1",
+        "us-east-2",
+        "us-west-1",
+        "us-west-2",
+        "eu-west-1",
+        "eu-west-2",
+        "eu-west-3",
+        "eu-central-1",
+        "eu-north-1",
+        "ap-southeast-1",
+        "ap-southeast-2",
+        "ap-northeast-1",
+        "ap-northeast-2",
+        "ap-south-1",
+        "sa-east-1",
+        "ca-central-1"
+      ]
     },
     "klaviyo_private_key": {
       "title": "Klaviyo Private API Key",
@@ -316,21 +339,21 @@
     },
     "bland_ai_api_key": {
       "title": "Bland AI API Key",
-      "description": "API key from https://app.bland.ai \u2014 used for /ops:ops-voice call",
+      "description": "API key from https://app.bland.ai — used for /ops:ops-voice call",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "elevenlabs_api_key": {
       "title": "ElevenLabs API Key",
-      "description": "API key from https://elevenlabs.io \u2014 used for /ops:ops-voice tts",
+      "description": "API key from https://elevenlabs.io — used for /ops:ops-voice tts",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "groq_api_key": {
       "title": "Groq API Key",
-      "description": "API key from https://console.groq.com \u2014 used for /ops:ops-voice transcribe (Whisper)",
+      "description": "API key from https://console.groq.com — used for /ops:ops-voice transcribe (Whisper)",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -358,7 +381,7 @@
     },
     "datadog_api_key": {
       "title": "Datadog API Key",
-      "description": "From Datadog Organization Settings > API Keys \u2014 used for /ops:monitor",
+      "description": "From Datadog Organization Settings > API Keys — used for /ops:monitor",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -372,7 +395,7 @@
     },
     "newrelic_api_key": {
       "title": "New Relic API Key",
-      "description": "User API Key from one.newrelic.com/api-keys \u2014 used for /ops:monitor",
+      "description": "User API Key from one.newrelic.com/api-keys — used for /ops:monitor",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -408,7 +431,7 @@
     },
     "pushover_user_key": {
       "title": "Pushover User Key",
-      "description": "From https://pushover.net/ \u2014 paired with pushover_app_token.",
+      "description": "From https://pushover.net/ — paired with pushover_app_token.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -422,21 +445,21 @@
     },
     "discord_bot_token": {
       "title": "Discord Bot Token",
-      "description": "Bot token from Discord Developer Portal \u2014 used for channel reads and DMs. Prefer Doppler reference.",
+      "description": "Bot token from Discord Developer Portal — used for channel reads and DMs. Prefer Doppler reference.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "discord_guild_id": {
       "title": "Discord Guild ID",
-      "description": "Server/guild ID (right-click server in Discord \u2192 Copy ID with Developer Mode enabled)",
+      "description": "Server/guild ID (right-click server in Discord → Copy ID with Developer Mode enabled)",
       "type": "string",
       "sensitive": false,
       "default": ""
     },
     "discord_default_webhook_url": {
       "title": "Discord Default Webhook URL",
-      "description": "Optional default webhook URL (https://discord.com/api/webhooks/\u2026) for /ops:comms discord send. Shared with the ops-fires notification sink (which also reads discord_webhook_url).",
+      "description": "Optional default webhook URL (https://discord.com/api/webhooks/…) for /ops:comms discord send. Shared with the ops-fires notification sink (which also reads discord_webhook_url).",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -460,39 +483,40 @@
       "description": "Default Doppler config name (e.g. 'dev', 'stg', 'prd'). Used by the Doppler MCP server.",
       "type": "string",
       "sensitive": false,
-      "default": ""
+      "default": "",
+      "enum": ["dev", "stg", "prd", "ci"]
     },
     "myparcel_api_key": {
       "title": "MyParcel.nl API Key",
-      "description": "Plain API key from backoffice.myparcel.nl \u2192 Settings \u2192 API. Used by /ops:ops-package. Script base64-encodes it at runtime \u2014 do NOT pre-encode.",
+      "description": "Plain API key from backoffice.myparcel.nl → Settings → API. Used by /ops:ops-package. Script base64-encodes it at runtime — do NOT pre-encode.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "sendcloud_public_key": {
       "title": "Sendcloud Public Key",
-      "description": "Public key from Sendcloud Panel \u2192 Settings \u2192 Integrations \u2192 Sendcloud API. Paired with sendcloud_private_key.",
+      "description": "Public key from Sendcloud Panel → Settings → Integrations → Sendcloud API. Paired with sendcloud_private_key.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "sendcloud_private_key": {
       "title": "Sendcloud Private Key",
-      "description": "Private key from Sendcloud Panel \u2192 Settings \u2192 Integrations \u2192 Sendcloud API. Paired with sendcloud_public_key.",
+      "description": "Private key from Sendcloud Panel → Settings → Integrations → Sendcloud API. Paired with sendcloud_public_key.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "dhl_parcel_user_id": {
       "title": "DHL Parcel NL User ID",
-      "description": "User ID issued in My DHL Parcel \u2192 User settings \u2192 API settings. Paired with dhl_parcel_key.",
+      "description": "User ID issued in My DHL Parcel → User settings → API settings. Paired with dhl_parcel_key.",
       "type": "string",
       "sensitive": true,
       "default": ""
     },
     "dhl_parcel_key": {
       "title": "DHL Parcel NL API Key",
-      "description": "API key from My DHL Parcel \u2192 User settings \u2192 API settings. Paired with dhl_parcel_user_id.",
+      "description": "API key from My DHL Parcel → User settings → API settings. Paired with dhl_parcel_user_id.",
       "type": "string",
       "sensitive": true,
       "default": ""
@@ -573,6 +597,156 @@
       "type": "string",
       "sensitive": false,
       "default": ""
+    },
+    "telegram_enabled": {
+      "type": "boolean",
+      "title": "Enable Telegram integration",
+      "description": "Use Telegram for inbox + notifications. Requires telegram_api_id/hash/phone/session — run /ops:setup telegram.",
+      "default": false
+    },
+    "discord_enabled": {
+      "type": "boolean",
+      "title": "Enable Discord integration",
+      "description": "Use Discord for outbound webhooks + bot reads. Requires discord_bot_token or discord_default_webhook_url.",
+      "default": false
+    },
+    "pushover_enabled": {
+      "type": "boolean",
+      "title": "Enable Pushover notifications",
+      "description": "Use Pushover for failure alerts. Requires pushover_user_key + pushover_app_token.",
+      "default": false
+    },
+    "ntfy_enabled": {
+      "type": "boolean",
+      "title": "Enable ntfy.sh notifications",
+      "description": "Use ntfy.sh for free phone-push alerts. Requires ntfy_topic.",
+      "default": false
+    },
+    "sentry_enabled": {
+      "type": "boolean",
+      "title": "Enable Sentry integration",
+      "description": "Use Sentry MCP for error/issue triage. Requires sentry_org.",
+      "default": false
+    },
+    "linear_enabled": {
+      "type": "boolean",
+      "title": "Enable Linear integration",
+      "description": "Use Linear MCP for issue/sprint workflows. Requires linear_team.",
+      "default": false
+    },
+    "datadog_enabled": {
+      "type": "boolean",
+      "title": "Enable Datadog integration",
+      "description": "Use Datadog for APM + monitor pulls. Requires datadog_api_key + datadog_app_key.",
+      "default": false
+    },
+    "newrelic_enabled": {
+      "type": "boolean",
+      "title": "Enable New Relic integration",
+      "description": "Use New Relic for APM + alerts. Requires newrelic_api_key + newrelic_account_id.",
+      "default": false
+    },
+    "otel_enabled": {
+      "type": "boolean",
+      "title": "Enable OpenTelemetry endpoint",
+      "description": "Send ops traces/metrics to OTEL collector. Requires otel_endpoint.",
+      "default": false
+    },
+    "doppler_enabled": {
+      "type": "boolean",
+      "title": "Enable Doppler integration",
+      "description": "Use Doppler for secret resolution + MCP server. Requires doppler_token + doppler_project.",
+      "default": false
+    },
+    "klaviyo_enabled": {
+      "type": "boolean",
+      "title": "Enable Klaviyo integration",
+      "description": "Pull email/SMS marketing data. Requires klaviyo_private_key.",
+      "default": false
+    },
+    "meta_ads_enabled": {
+      "type": "boolean",
+      "title": "Enable Meta Ads integration",
+      "description": "Pull Facebook/Instagram ad spend + ROAS. Requires meta_ads_token + meta_ad_account_id.",
+      "default": false
+    },
+    "ga4_enabled": {
+      "type": "boolean",
+      "title": "Enable Google Analytics 4",
+      "description": "Pull GA4 traffic + conversion data. Requires ga4_property_id and gcloud ADC.",
+      "default": false
+    },
+    "gsc_enabled": {
+      "type": "boolean",
+      "title": "Enable Google Search Console",
+      "description": "Pull SEO + organic search data. Requires google_search_console_site and gcloud ADC.",
+      "default": false
+    },
+    "shopify_enabled": {
+      "type": "boolean",
+      "title": "Enable Shopify integration",
+      "description": "Use Shopify Admin API for orders/inventory. Requires shopify_store_url + shopify_admin_token.",
+      "default": false
+    },
+    "shipbob_enabled": {
+      "type": "boolean",
+      "title": "Enable ShipBob integration",
+      "description": "Pull fulfillment + inventory data from ShipBob. Requires shipbob_access_token.",
+      "default": false
+    },
+    "bland_ai_enabled": {
+      "type": "boolean",
+      "title": "Enable Bland AI integration",
+      "description": "Outbound AI phone calls via Bland AI. Requires bland_ai_api_key.",
+      "default": false
+    },
+    "elevenlabs_enabled": {
+      "type": "boolean",
+      "title": "Enable ElevenLabs integration",
+      "description": "Text-to-speech + voice cloning via ElevenLabs. Requires elevenlabs_api_key.",
+      "default": false
+    },
+    "groq_enabled": {
+      "type": "boolean",
+      "title": "Enable Groq integration",
+      "description": "Fast inference (Whisper, LLaMA) via Groq. Requires groq_api_key.",
+      "default": false
+    },
+    "stripe_enabled": {
+      "type": "boolean",
+      "title": "Enable Stripe revenue tracking",
+      "description": "Query Stripe for MRR/charges/disputes. Requires stripe_secret_key.",
+      "default": false
+    },
+    "revenuecat_enabled": {
+      "type": "boolean",
+      "title": "Enable RevenueCat integration",
+      "description": "Query RevenueCat for mobile sub MRR. Requires revenuecat_api_key + revenuecat_project_id.",
+      "default": false
+    },
+    "postnl_enabled": {
+      "type": "boolean",
+      "title": "Enable PostNL shipping",
+      "description": "Use PostNL labels via /ops:package. Requires postnl_customer_code + customer_number.",
+      "default": false
+    },
+    "dpd_enabled": {
+      "type": "boolean",
+      "title": "Enable DPD shipping",
+      "description": "Use DPD labels via /ops:package. Requires dpd_delis_id + dpd_password.",
+      "default": false
+    },
+    "ups_enabled": {
+      "type": "boolean",
+      "title": "Enable UPS shipping",
+      "description": "Use UPS labels via /ops:package. Requires ups_client_id/secret + shipper_number.",
+      "default": false
+    },
+    "fedex_enabled": {
+      "type": "boolean",
+      "title": "Enable FedEx shipping",
+      "description": "Use FedEx labels via /ops:package. Requires fedex_client_id/secret + account_number.",
+      "default": false
     }
   }
 }
