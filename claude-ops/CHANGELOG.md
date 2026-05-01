@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.5] — 2026-04-30
+
+### Fixed
+
+- **Plugin settings UI: enums + sensitive flags.** Added `enum` to every userConfig field with a finite known value space — `fix_model` (opus/sonnet/haiku), `notify_channel` (macos/ntfy/pushover/discord/telegram/none), `aws_region` (16 regions), `max_fixes_per_hour` (1/3/5/10), `task_reminder_threshold` (5/10/20/50), `watcher_timeout_seconds` (5min–1hr buckets), `doppler_config` (dev/stg/prd/ci). Marked 22 credential fields `sensitive: true` so the settings UI masks them: Telegram api_hash/session, Klaviyo, Meta Ads, Shopify admin, ShipBob, Bland AI, ElevenLabs, Groq, Stripe, RevenueCat, Datadog, New Relic, Pushover, Discord bot/webhook, Doppler token, DPD password, UPS/FedEx client secrets. Remaining text inputs are user-specific identifiers (Sentry org slug, Linear team key, store URLs, account/customer IDs) with no enumerable value space — freeform text is correct for those.
+
 ## [2.0.4] — 2026-04-30
 
 ### Fixed
