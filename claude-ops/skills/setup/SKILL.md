@@ -1389,24 +1389,54 @@ Sub-flow:
    ```
    Expect `{"ok":true, "team_id":"T...", "user_id":"U...", "url":"https://<workspace>.slack.com/"}`. If `ok:false`, show the error and re-ask.
 
-6. **Persist.**
-   - Keychain: `security add-generic-password -U -s slack-xoxc -a "$USER" -w "$XOXC"; security add-generic-password -U -s slack-xoxd -a "$USER" -w "$XOXD"`.
-   - `$PREFS_PATH` → `channels.slack = {backend: "mcp:slack", team_id: "...", source: "...", status: "configured"}`. **Do not** store the raw tokens in preferences.json — keychain only.
+6. **Persist — multi-workspace schema.**
+
+   The plugin now supports multiple Slack workspaces. Each workspace is stored as an entry in `slack_workspaces[]` in `$PREFS_PATH`. The raw token is stored in a named env var (never in preferences.json).
+
+   a. Ask the user for a short workspace name (e.g. `lifecycle`, `stagery`, `personal`). Use `AskUserQuestion` with free-text.
+   b. Ask which env var name to use for this workspace's token (suggest `SLACK_BOT_TOKEN_<UPPERCASE_NAME>`). Free-text.
+   c. Advise the user to add the token to their shell profile or Doppler:
+      ```bash
+      echo 'export SLACK_BOT_TOKEN_LIFECYCLE="xoxb-..."' >> ~/.zshrc
+      ```
+   d. Also persist to keychain as `slack-<name>-token`:
+      ```bash
+      security add-generic-password -U -s "slack-<name>-token" -a "$USER" -w "$TOKEN"
+      ```
+   e. Append the entry to `$PREFS_PATH` → `slack_workspaces[]`:
+      ```bash
+      jq --arg name "<name>" --arg env "SLACK_BOT_TOKEN_<NAME>" --arg kind "bot_token" \
+        '.slack_workspaces = ((.slack_workspaces // []) + [{"name": $name, "token_env": $env, "kind": $kind}])' \
+        "$PREFS_PATH" > "${PREFS_PATH}.tmp" && mv "${PREFS_PATH}.tmp" "$PREFS_PATH"
+      ```
+   f. Also write the legacy compat key for backwards-compat: `channels.slack = {backend: "mcp:slack", team_id: "...", source: "...", status: "configured"}`.
+
+   **After persisting**, ask: "Add another Slack workspace?" → `[Yes — add another]` / `[No — done]`. Loop until done. This is how to register the Stagery workspace alongside the Lifecycle workspace.
+
+   Run `bin/ops-slack-workspaces` to verify all configured workspaces and their token status.
 
 7. **Wire into Claude Code plugin settings.** Print instructions:
 
    ```
-   Slack tokens saved to keychain. To activate the MCP, Claude Code needs them
-   in ~/.claude.json. Since this skill can't write to ~/.claude.json directly,
+   Slack tokens saved. To activate the MCP for a workspace, Claude Code needs
+   the token in ~/.claude.json. Since this skill can't write to ~/.claude.json directly,
    either:
      a) Run: claude mcp add slack --transport stdio -- npx -y slack-mcp-server@latest --transport stdio
         and Claude Code will prompt for the env vars.
-     b) Manually paste the xoxc + xoxd into /plugin settings for the Slack MCP.
+     b) Manually paste the token into /plugin settings for the Slack MCP.
+   For workspaces not bound to the MCP, ops-inbox/ops-go will use direct curl
+   with the token from the named env var.
    ```
 
-   (The reason we don't auto-write: per user-level feedback, ~/.claude.json is a Claude Code internal file and the plugin must not touch it. MCP registration is Claude Code's responsibility.)
+   (The reason we don't auto-write: ~/.claude.json is a Claude Code internal file. MCP registration is Claude Code's responsibility.)
 
-8. **Smoke test**: call `https://slack.com/api/conversations.list?limit=1` with the tokens. Expect `ok:true` with at least one channel in the response.
+8. **Smoke test per workspace**: for each entry in `slack_workspaces[]`, resolve the token env var and call:
+   ```bash
+   curl -s -H "Authorization: Bearer ${TOKEN}" "https://slack.com/api/auth.test"
+   ```
+   Expect `{"ok":true, "team_id":"T...", "url":"https://<workspace>.slack.com/"}`. Report pass/fail per workspace.
+
+   Or run the helper: `${CLAUDE_PLUGIN_ROOT}/bin/ops-slack-workspaces`
 
 **Privacy notes**:
 

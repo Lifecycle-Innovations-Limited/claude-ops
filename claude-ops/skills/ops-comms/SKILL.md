@@ -167,8 +167,12 @@ Show last 10 chats with sender, preview, timestamp. Use `mcp__whatsapp__list_mes
 **Email:**
 Use `mcp__claude_ai_Gmail__search_threads` with `query: "in:inbox"` (NOT `is:unread` — scan full inbox including read messages), show thread list.
 
-**Slack:**
-Use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` (NOT `is:unread` — scan full recent activity).
+**Slack (multi-workspace):**
+
+Read `preferences.json` → `slack_workspaces[]`. Iterate all entries:
+- For each `available: true` entry, use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` (NOT `is:unread`) if the MCP token matches, or direct curl for non-bound workspaces.
+- Label results with the workspace name: `Slack/lifecycle`, `Slack/stagery`, etc.
+- **0 workspaces / legacy mode**: fall back to `mcp__claude_ai_Slack__slack_search_public_and_private` if `SLACK_MCP_ENABLED=true`, otherwise report "Slack not configured".
 
 **Telegram:**
 Use `mcp__claude_ops_telegram__get_updates` (limit: 20) and `mcp__claude_ops_telegram__list_chats`.

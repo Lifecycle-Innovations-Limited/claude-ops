@@ -256,7 +256,10 @@ For each channel, detect availability at runtime:
 
 1. **Email**: Try `gog` CLI first. If `gog` unavailable, try `mcp__gog__gmail_*` MCP tools. If neither, report unavailable.
 2. **WhatsApp**: Check bridge liveness: `lsof -i :8080 | grep LISTEN`. If not listening, prompt the user: "WhatsApp bridge is not running." Use `AskUserQuestion`: `[Restart bridge]`, `[Skip WhatsApp]`. On restart: `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`, wait 5s, re-check. If bridge is running but MCP tools fail, the bridge may need QR re-pairing — check `~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log` for auth errors.
-3. **Slack**: Only via MCP tools (`mcp__claude_ai_Slack__*`). Check `SLACK_MCP_ENABLED` env var.
+3. **Slack**: Read `channels.slack` from pre-gathered data (or `preferences.json` directly).
+   - **Multi-workspace** (`"multi_workspace": true`): iterate the `workspaces` array. For each `available: true` entry, scan via `mcp__claude_ai_Slack__*` if the MCP token matches, or via direct curl with the workspace's `token_env` value. Aggregate results; label each message block with the workspace name.
+   - **Legacy** (`"multi_workspace": false`): use `mcp__claude_ai_Slack__*` as before. Check `SLACK_MCP_ENABLED` env var.
+   - 0 workspaces configured → skip Slack with a one-line note: "Slack: no workspaces configured — run /ops:setup slack".
 4. **Telegram**: Only via user-auth MCP (tdlib/MTProto). Check `TELEGRAM_ENABLED` env var. Never use BotFather bots.
 5. **Discord**: Via `${CLAUDE_PLUGIN_ROOT}/bin/ops-discord read <CHANNEL_ID> --limit 20 --json`. Requires `DISCORD_BOT_TOKEN` (v1 is channel-scoped — no DM/gateway support yet). Pre-configured read list lives at `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` under `discord.inbox_channels` (array of channel IDs). If neither a bot token nor a read list is configured, skip Discord with a one-line note ("Discord not configured — run `/ops:setup discord`") rather than prompting — ops-inbox is not a setup flow. Rule 3 still applies to `/ops:setup`.
 6. **Notion**: Only via MCP tools (`mcp__claude_ai_Notion__*` or self-hosted Notion MCP). Check `NOTION_MCP_ENABLED` env var. Searches workspace for recent comments, mentions, and assigned tasks.
@@ -474,9 +477,23 @@ Archive N FYI/newsletter emails?
 
 Draft replies via `gog gmail send`. Archive via `gog gmail archive <messageId> ... --no-input --force`.
 
-### Slack
+### Slack (multi-workspace)
 
-Use Slack MCP tools with `query: "in:*"` (NOT `is:unread` — scan full recent activity, not just unread) for mentions.
+Read `preferences.json` → `slack_workspaces[]`. For each configured workspace:
+
+1. **Resolve the workspace token**: the entry's `token_env` names the env var holding the token (e.g. `SLACK_BOT_TOKEN_LIFECYCLE`). If the env var is set, use it for direct curl; otherwise rely on the bound MCP token.
+2. **Scan**: use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` (NOT `is:unread`). If the MCP is only bound to one workspace, make direct `curl` calls for the others:
+   ```bash
+   curl -s -H "Authorization: Bearer ${TOKEN}" \
+     "https://slack.com/api/conversations.history?channel=<CHANNEL_ID>&limit=20"
+   ```
+3. **Label output per workspace**: prefix every result block with the workspace name.
+
+```
+💬 Slack / lifecycle   [N need reply] | [N waiting]
+💬 Slack / stagery     [N need reply] | [N waiting]
+```
+
 For each result, show channel, sender, preview. Read thread for context.
 
 ```
@@ -484,6 +501,9 @@ For each result, show channel, sender, preview. Read thread for context.
   b) Reply
   c) Mark read / skip
 ```
+
+**0 workspaces** → skip with: "Slack: no workspaces configured — run /ops:setup slack".
+**Legacy mode** (no `slack_workspaces`, `SLACK_MCP_ENABLED=true`) → single unnamed workspace, behaviour unchanged.
 
 ### Telegram (FULL SCAN — User Account, NOT Bot)
 

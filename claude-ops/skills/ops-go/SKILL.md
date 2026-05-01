@@ -203,7 +203,13 @@ If `$ARGUMENTS` contains a project alias, focus the briefing on that project onl
 
 After the briefing, use **batched AskUserQuestion calls** (max 4 options each) for the "What's next?" prompt. Show the top 3 priority actions + `[More...]` in the first call, then remaining actions + `[/ops-yolo — let me run your business today]` in the second call. Route to the appropriate ops skill or project.
 
-For Slack counts: if the pre-gathered data shows `"count": -1`, use `mcp__claude_ai_Slack__slack_search_public_and_private` with query `in:channel` (NOT `is:unread` — scan full recent activity) to get actual message counts. Do this as a parallel tool call while analyzing other data.
+For Slack counts: read the `channels.slack` object from the pre-gathered data.
+
+- **Multi-workspace mode** (`"multi_workspace": true`): the object has a `workspaces` array. For each entry where `available: true`, call `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` scoped to that workspace. If the MCP is bound to a single token at startup (only one workspace is active in `~/.claude.json`), fall back to direct curl: `curl -s -H "Authorization: Bearer ${TOKEN_ENV_VALUE}" "https://slack.com/api/conversations.list?limit=1"` to verify the token, then use `mcp__claude_ai_Slack__*` for the bound workspace and log a note that the others require a direct API call. Aggregate results and label each with the workspace name (e.g. `Slack/lifecycle: 3 unread`, `Slack/stagery: 1 unread`).
+- **Legacy mode** (`"multi_workspace": false`, `"available": true`): use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` (NOT `is:unread`) as before.
+- If `available: false` for all workspaces: show `Slack: not configured` and skip.
+
+Always do Slack queries as parallel tool calls while analyzing other data.
 
 For Notion counts: if `NOTION_MCP_ENABLED=true` and pre-gathered data shows Notion as available, use `mcp__claude_ai_Notion__notion-search` with `query: ""` sorted by `last_edited_time` descending to surface recently active pages. Then call `mcp__claude_ai_Notion__notion-get-comments` on the top results to find comments needing response. Note: Notion search does not support date range filters — sort by recency and limit to the first 10-20 results instead.
 
