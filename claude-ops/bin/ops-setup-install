@@ -49,7 +49,10 @@ fi
 resolve_pkg_name() {
   local tool="$1" mgr="$2"
   case "$tool" in
-    jq|git|expect|brew) echo "$tool" ;;
+    jq)     echo "$tool" ;;
+    git)    echo "$tool" ;;
+    expect) echo "$tool" ;;
+    brew)   echo "$tool" ;;
     gh)
       case "$mgr" in
         pacman) echo "github-cli" ;;
