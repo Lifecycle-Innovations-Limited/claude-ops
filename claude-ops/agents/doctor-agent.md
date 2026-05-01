@@ -59,6 +59,8 @@ The `repository` field in `.claude-plugin/plugin.json` is an object but must be 
 An MCP server references `${user_config.*}` variables that have no value configured.
 - Read the plugin's preferences.json (at `$CLAUDE_PLUGIN_DATA_DIR/preferences.json` or `~/.claude/plugins/data/ops-ops-marketplace/preferences.json`)
 - **First check `channels.*` section** for matching values using the key mapping (e.g. `telegram_api_id` ← `channels.telegram.api_id`). Auto-populate `user_config` from these if found.
+- **Second**: Check `user-config.json` at `${CLAUDE_PLUGIN_DATA_DIR:-~/.claude/plugins/data/ops-ops-marketplace}/user-config.json` — this file may have credentials written by a prior setup run.
+- **Third**: Check `~/.claude.json mcpServers.<service>.type` — if `"sse"`, the SSE router holds auth server-side; probe the URL with `curl -s -o /dev/null -w "%{http_code}" --max-time 3 <url>`. A 200 response means the service is configured and no `user_config` entry is required.
 - Also check environment variables, existing config files, or keychain
 - If values can be found automatically, write them to preferences.json under `user_config.<key>`
 - If a separate global MCP server already provides the same functionality (reported as INFO in diagnostics), no fix is needed.
@@ -76,7 +78,9 @@ Sensitive userConfig values (API keys, tokens) declared in plugin.json are not s
   ```bash
   jq --arg key "$SKEY" --arg val "$CHAN_VAL" '.user_config[$key] = $val' "$PREFS" > "$PREFS.tmp" && mv "$PREFS.tmp" "$PREFS"
   ```
-- Also check environment variables and keychain as fallbacks.
+- **Second**: If not found in `channels.*`, check `user-config.json` at `${CLAUDE_PLUGIN_DATA_DIR:-~/.claude/plugins/data/ops-ops-marketplace}/user-config.json`. This file may have been written by a previous setup run before keychain persistence was available.
+- **Third**: Check `~/.claude.json mcpServers.<service>.type` — if `"sse"`, the SSE router holds auth server-side. Probe the URL with `curl -s -o /dev/null -w "%{http_code}" <url>`. A 200 means the server is configured; no keychain entry is needed.
+- Also check environment variables and macOS keychain as fallbacks.
 - If the diagnostic reports this as INFO (not a warning), it means a separate global MCP server already provides the same functionality — no action needed, just acknowledge.
 - Only report "needs manual configuration via /ops:setup" if the value cannot be found anywhere.
 

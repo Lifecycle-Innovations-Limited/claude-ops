@@ -58,24 +58,89 @@ cred_get() {
 } &
 
 {
-  # Slack credential scout (cross-OS)
-  xoxc=$(cred_get slack-xoxc slack-xoxc || echo "")
-  xoxd=$(cred_get slack-xoxd slack-xoxd || echo "")
-  if [ -n "$xoxc" ] && [ -n "$xoxd" ]; then
-    # Validate
-    result=$(curl -s -H "Authorization: Bearer $xoxc" -b "d=$xoxd" "https://slack.com/api/auth.test" 2>/dev/null || echo '{"ok":false}')
-    echo "$result" > "$OUT/slack.json"
+  # Slack credential scout — keychain first, then SSE-router fallback
+  # If ~/.claude.json registers slack as an SSE MCP server, the router owns auth.
+  # Probe the router URL; a 200 means Slack is configured without needing keychain tokens.
+  slack_sse_url=""
+  if [ -f "$HOME/.claude.json" ] && command -v jq >/dev/null 2>&1; then
+    slack_type=$(jq -r '.mcpServers.slack.type // ""' "$HOME/.claude.json" 2>/dev/null)
+    if [ "$slack_type" = "sse" ]; then
+      slack_sse_url=$(jq -r '.mcpServers.slack.url // ""' "$HOME/.claude.json" 2>/dev/null)
+    fi
+  fi
+
+  if [ -n "$slack_sse_url" ]; then
+    # SSE router pattern — probe the endpoint; auth is held server-side
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$slack_sse_url" 2>/dev/null || echo "000")
+    if [ "$http_code" = "200" ]; then
+      echo '{"ok":true,"source":"sse_router"}' > "$OUT/slack.json"
+    else
+      echo "{\"ok\":false,\"reason\":\"sse_router_unreachable\",\"http_code\":\"$http_code\",\"url\":\"$slack_sse_url\"}" > "$OUT/slack.json"
+    fi
   else
-    echo '{"ok":false,"reason":"no_keychain_tokens"}' > "$OUT/slack.json"
+    xoxc=$(cred_get slack-xoxc slack-xoxc || echo "")
+    xoxd=$(cred_get slack-xoxd slack-xoxd || echo "")
+    if [ -n "$xoxc" ] && [ -n "$xoxd" ]; then
+      result=$(curl -s -H "Authorization: Bearer $xoxc" -b "d=$xoxd" "https://slack.com/api/auth.test" 2>/dev/null || echo '{"ok":false}')
+      echo "$result" > "$OUT/slack.json"
+    else
+      echo '{"ok":false,"reason":"no_keychain_tokens"}' > "$OUT/slack.json"
+    fi
   fi
 } &
 
 {
-  # Telegram credential scout (cross-OS)
+  # Telegram credential scout — keychain first, then user-config.json fallback
+  USER_CONFIG_FILE="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/user-config.json"
+  declare -A tg_vals
   for key in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
-    val=$(cred_get "$key" "$key" || echo "")
-    echo "$key=$( [ -n "$val" ] && echo "found" || echo "missing" )" >> "$OUT/telegram.txt"
+    tg_vals["$key"]=$(cred_get "$key" "$key" || echo "")
   done
+
+  # Fallback: check user-config.json (keys use underscores, not hyphens)
+  if [ -f "$USER_CONFIG_FILE" ] && command -v jq >/dev/null 2>&1; then
+    [ -z "${tg_vals[telegram-api-id]}" ]   && tg_vals["telegram-api-id"]=$(jq -r '.telegram_api_id   // ""' "$USER_CONFIG_FILE" 2>/dev/null)
+    [ -z "${tg_vals[telegram-api-hash]}" ] && tg_vals["telegram-api-hash"]=$(jq -r '.telegram_api_hash // ""' "$USER_CONFIG_FILE" 2>/dev/null)
+    [ -z "${tg_vals[telegram-phone]}" ]    && tg_vals["telegram-phone"]=$(jq -r '.telegram_phone     // ""' "$USER_CONFIG_FILE" 2>/dev/null)
+    [ -z "${tg_vals[telegram-session]}" ]  && tg_vals["telegram-session"]=$(jq -r '.telegram_session  // ""' "$USER_CONFIG_FILE" 2>/dev/null)
+  fi
+
+  # Also check SSE router pattern for Telegram
+  tg_sse_url=""
+  if [ -f "$HOME/.claude.json" ] && command -v jq >/dev/null 2>&1; then
+    tg_type=$(jq -r '.mcpServers.telegram.type // ""' "$HOME/.claude.json" 2>/dev/null)
+    if [ "$tg_type" = "sse" ]; then
+      tg_sse_url=$(jq -r '.mcpServers.telegram.url // ""' "$HOME/.claude.json" 2>/dev/null)
+    fi
+  fi
+
+  if [ -n "$tg_sse_url" ]; then
+    # SSE router — treat probe result as the configured state
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$tg_sse_url" 2>/dev/null || echo "000")
+    if [ "$http_code" = "200" ]; then
+      echo "source=sse_router" > "$OUT/telegram.txt"
+      for key in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
+        echo "$key=found(sse_router)" >> "$OUT/telegram.txt"
+      done
+    else
+      echo "source=sse_router_unreachable" > "$OUT/telegram.txt"
+      for key in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
+        echo "$key=missing" >> "$OUT/telegram.txt"
+      done
+    fi
+  else
+    # Determine source label for keys found in user-config.json vs keychain
+    for key in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
+      kc_val=$(cred_get "$key" "$key" || echo "")
+      if [ -n "$kc_val" ]; then
+        echo "$key=found(keychain)" >> "$OUT/telegram.txt"
+      elif [ -n "${tg_vals[$key]}" ]; then
+        echo "$key=found(user_config)" >> "$OUT/telegram.txt"
+      else
+        echo "$key=missing" >> "$OUT/telegram.txt"
+      fi
+    done
+  fi
 } &
 
 {
