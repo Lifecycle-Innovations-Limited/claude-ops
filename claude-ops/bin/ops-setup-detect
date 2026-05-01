@@ -14,7 +14,7 @@ if [ -f "$PREFLIGHT/.complete" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-REGISTRY="$SCRIPT_DIR/scripts/registry.json"
+OPS_PLUGIN_ROOT_FALLBACK="$SCRIPT_DIR" . "$SCRIPT_DIR/lib/registry-path.sh"
 
 LIB_OS_DETECT="$SCRIPT_DIR/lib/os-detect.sh"
 [ -r "$LIB_OS_DETECT" ] && . "$LIB_OS_DETECT"

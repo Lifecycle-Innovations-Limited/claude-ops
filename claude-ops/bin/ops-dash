@@ -4,8 +4,8 @@
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-REGISTRY="${PLUGIN_ROOT}/scripts/registry.json"
-PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+. "${PLUGIN_ROOT}/lib/registry-path.sh"
+PREFS="${OPS_DATA_DIR}/preferences.json"
 
 # --- Color setup ---
 if [[ -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then

@@ -5,7 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REGISTRY="${SCRIPT_DIR}/../scripts/registry.json"
+OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-path.sh"
 
 if [ ! -f "$REGISTRY" ]; then
   echo '{"error":"registry.json not found"}' && exit 1
