@@ -79,8 +79,8 @@ fi
 #
 # preferences.json schema (new):
 #   "slack_workspaces": [
-#     { "name": "lifecycle", "token_env": "SLACK_BOT_TOKEN_LIFECYCLE", "kind": "bot_token" },
-#     { "name": "stagery",   "token_env": "SLACK_BOT_TOKEN_STAGERY",   "kind": "user_token" }
+#     { "name": "<workspace_a>", "token_env": "SLACK_BOT_TOKEN_<WORKSPACE_A>", "kind": "bot_token" },
+#     { "name": "<workspace_b>", "token_env": "SLACK_BOT_TOKEN_<WORKSPACE_B>", "kind": "user_token" }
 #   ]
 #
 # Backwards-compat (legacy):
@@ -104,10 +104,21 @@ if [ "$SLACK_WS_COUNT" -gt 0 ]; then
     token_env=$(jq -r ".slack_workspaces[$i].token_env // \"\"" "$PREFS_PATH" 2>/dev/null)
     ws_kind=$(jq -r ".slack_workspaces[$i].kind // \"bot_token\"" "$PREFS_PATH" 2>/dev/null)
 
-    # Resolve token from the named env var
+    # Resolve token from the named env var.
+    # Validate token_env is a legal POSIX shell identifier before indirect expansion;
+    # bash aborts the entire script under `set -u`/`set -e` if `${!var}` is given a
+    # name with invalid characters (e.g. "SLACK-TOKEN" → "invalid variable name").
     ws_token=""
-    if [ -n "$token_env" ]; then
+    if [[ "$token_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
       ws_token="${!token_env:-}"
+    elif [ -n "$token_env" ]; then
+      # Configured but the env var name is not a valid shell identifier — emit an
+      # explicit error record and skip without aborting the rest of the scan.
+      WS_ARRAY=$(echo "$WS_ARRAY" | jq \
+        --arg name "$ws_name" \
+        --arg env "$token_env" \
+        '. + [{"name": $name, "available": false, "unread": null, "note": ("invalid token_env (must match [A-Za-z_][A-Za-z0-9_]*): " + $env)}]')
+      continue
     fi
 
     if [ -n "$ws_token" ]; then

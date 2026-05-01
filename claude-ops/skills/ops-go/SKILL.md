@@ -18,6 +18,13 @@ allowed-tools:
   - CronCreate
   - CronList
   - WebFetch
+  # Slack — multi-workspace scan during the briefing. The flow falls back to
+  # direct curl from Bash for workspaces whose token_env is not bound to the MCP.
+  - mcp__claude_ai_Slack__slack_search_public_and_private
+  - mcp__claude_ai_Slack__slack_read_channel
+  # Notion — comments/mentions surfaced in the briefing.
+  - mcp__claude_ai_Notion__notion-search
+  - mcp__claude_ai_Notion__notion-get-comments
 effort: medium
 maxTurns: 40
 ---
@@ -205,7 +212,24 @@ After the briefing, use **batched AskUserQuestion calls** (max 4 options each) f
 
 For Slack counts: read the `channels.slack` object from the pre-gathered data.
 
-- **Multi-workspace mode** (`"multi_workspace": true`): the object has a `workspaces` array. For each entry where `available: true`, call `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` scoped to that workspace. If the MCP is bound to a single token at startup (only one workspace is active in `~/.claude.json`), fall back to direct curl: `curl -s -H "Authorization: Bearer ${TOKEN_ENV_VALUE}" "https://slack.com/api/conversations.list?limit=1"` to verify the token, then use `mcp__claude_ai_Slack__*` for the bound workspace and log a note that the others require a direct API call. Aggregate results and label each with the workspace name (e.g. `Slack/lifecycle: 3 unread`, `Slack/stagery: 1 unread`).
+- **Multi-workspace mode** (`"multi_workspace": true`): the object has a `workspaces` array. For each entry where `available: true`, call `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` scoped to that workspace. If the MCP is bound to a single token at startup (only one workspace is active in `~/.claude.json`), fall back to direct curl. The entry's `token_env` field is the **name** of the env var holding the token, so resolve it before passing to curl:
+
+  ```bash
+  # token_env is the env var NAME (e.g. "SLACK_BOT_TOKEN_<WORKSPACE>"), not the token value.
+  # Validate it's a legal shell identifier before indirect expansion to avoid script abort
+  # under set -u when token_env contains hyphens or other invalid characters.
+  if [[ "$token_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    token_value="${!token_env:-}"
+  else
+    token_value=""
+  fi
+  if [ -n "$token_value" ]; then
+    curl -s -H "Authorization: Bearer $token_value" \
+      "https://slack.com/api/conversations.list?limit=1"
+  fi
+  ```
+
+  Use `mcp__claude_ai_Slack__*` for the bound workspace and log a note that the others require a direct API call. Aggregate results and label each with the workspace name (e.g. `Slack/<workspace_a>: 3 unread`, `Slack/<workspace_b>: 1 unread`).
 - **Legacy mode** (`"multi_workspace": false`, `"available": true`): use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` (NOT `is:unread`) as before.
 - If `available: false` for all workspaces: show `Slack: not configured` and skip.
 
