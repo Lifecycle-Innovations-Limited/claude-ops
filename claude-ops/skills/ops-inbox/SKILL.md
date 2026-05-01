@@ -36,6 +36,8 @@ allowed-tools:
   - mcp__whatsapp__send_message
   - mcp__whatsapp__get_chat
   - mcp__whatsapp__get_message_context
+  - mcp__whatsapp__archive_chat
+  - mcp__whatsapp__resync_app_state
 effort: high
 maxTurns: 60
 ---
