@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.7] — 2026-05-01
+
+### Fixed
+
+- **Telegram MCP server: keychain fallback at startup.** `telegram-server/index.js` previously read `TELEGRAM_API_ID/HASH/SESSION/PHONE` exclusively from `process.env`. The plugin's `.mcp.json` injects those via `${user_config.telegram_*}` placeholders, which resolve to empty strings when the user configured Telegram via `/ops:setup` (which writes to macOS Keychain) instead of the plugin settings UI. Result: a working keychain integration appeared "not configured". Server now falls back to `security find-generic-password -s telegram-{api-id,api-hash,session,phone} -w` when env vars are empty. macOS-only fallback; Linux/Windows users continue to set env vars or paste in plugin settings.
+- **Preflight: detect SSE-router + user-config.json credential sources.** Adds two new credential scout sources to the setup preflight: SSE router config (for users running custom MCP routing) and `${CLAUDE_PLUGIN_DATA_DIR}/user-config.json`. New test in `tests/test-preflight-sse-userconfig.sh` exercises both detection paths. Also tightens `bin/ops-setup-detect` to handle the SSE/user-config presence map.
+
 ## [2.0.6] — 2026-04-30
 
 ### Added
