@@ -1,6 +1,6 @@
 ---
 name: ops-inbox
-description: Full inbox management across all channels — WhatsApp (Baileys bridge via mcp__whatsapp__*), Email (Gmail MCP), Slack (MCP), Telegram (user-auth MCP), Discord (webhook + REST read), Notion (MCP — comments, mentions, assigned tasks). Scans FULL inbox (not just unread), identifies messages needing replies, archives handled conversations.
+description: Full inbox management across all channels — WhatsApp (whatsmeow bridge via mcp__whatsapp__*), Email (Gmail MCP), Slack (MCP), Telegram (user-auth MCP), Discord (webhook + REST read), Notion (MCP — comments, mentions, assigned tasks). Scans FULL inbox (not just unread), identifies messages needing replies, archives handled conversations.
 argument-hint: "[channel: whatsapp|email|slack|telegram|discord|notion|all]"
 allowed-tools:
   - Bash
@@ -44,7 +44,7 @@ maxTurns: 60
 
 ## ⚠️ WHATSAPP TRANSPORT — MCP ONLY, NEVER `wacli`
 
-For **all** WhatsApp operations in this skill (list chats, read messages, search contacts, send replies), use the `mcp__whatsapp__*` tool family backed by the Baileys whatsapp-bridge.
+For **all** WhatsApp operations in this skill (list chats, read messages, search contacts, send replies, archive chats), use the `mcp__whatsapp__*` tool family backed by the whatsmeow (Go) whatsapp-bridge — upstream `lharries/whatsapp-mcp`. (Earlier docs misnamed this as "Baileys" — Baileys is the Node.js WhatsApp library; this bridge uses `go.mau.fi/whatsmeow`.)
 
 **NEVER call the legacy `wacli` CLI** (`wacli chats list`, `wacli messages list`, `wacli send`, `wacli doctor`, `wacli history backfill`, etc). The wacli store and keepalive daemon are deprecated for this skill.
 
@@ -102,6 +102,18 @@ If bridge is not running: `launchctl kickstart -k gui/$UID/com.samrenders.whatsa
 | `mcp__whatsapp__send_message` | `{recipient, message}` | Send result |
 | `mcp__whatsapp__get_chat` | `{chat_jid}` | Chat metadata |
 | `mcp__whatsapp__get_message_context` | `{chat_jid, message_id}` | Message context window |
+| `mcp__whatsapp__archive_chat` | `{chat_jid, archive: true}` | Archive (or unarchive with `archive: false`) a chat — sends app-state mutation via whatsmeow |
+| `mcp__whatsapp__resync_app_state` | `{name: "regular_low", full_sync: true}` | Force full app-state resync — run when archive fails with `LTHash mismatch` (server/local desync) |
+
+**Bulk archive non-actionable WA chats** — for newsletters, dead group chats, one-word reactions, etc.:
+```bash
+for jid in "120363...@newsletter" "120363...@g.us" "31...@s.whatsapp.net"; do
+  curl -s -X POST http://localhost:8080/api/archive \
+    -H 'Content-Type: application/json' \
+    -d "{\"chat_jid\":\"$jid\",\"archive\":true}"
+done
+```
+If you get `409 conflict / LTHash mismatch`, run resync first: `curl -s -X POST http://localhost:8080/api/resync_app_state -d '{"name":"regular_low","full_sync":true}'`.
 
 **Full-text search** — use `mcp__whatsapp__list_messages` with a `query` param (backed by FTS5 after running `scripts/whatsapp-bridge-migrate.sh`):
 ```bash
@@ -115,7 +127,7 @@ sqlite3 "$DB" "SELECT chat_jid, sender, content, timestamp FROM messages WHERE r
 sqlite3 "$DB" "SELECT jid, name, phone FROM contacts WHERE name LIKE '%<name>%' COLLATE NOCASE LIMIT 10;"
 ```
 
-**History backfill** — the Baileys bridge automatically syncs history on connection. No manual backfill command exists; if messages are missing, restart the bridge:
+**History backfill** — the whatsmeow bridge automatically syncs history on connection. No manual backfill command exists; if messages are missing, restart the bridge:
 ```bash
 launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge
 ```
@@ -309,7 +321,7 @@ If only 3 channels are configured, "All channels" + 3 channel options = 4, fits 
 6. Classify each chat:
    - **NEEDS REPLY**: Last message has `is_from_me: false` (they sent last)
    - **WAITING**: Last message has `is_from_me: true` (you sent last)
-   - **ARCHIVE**: Old conversation, no recent activity, or concluded
+   - **ARCHIVE**: Newsletters (`@newsletter` JIDs), dead group chats with no recent activity, one-word reactions, or concluded conversations. Bulk-archive these via `mcp__whatsapp__archive_chat {chat_jid, archive: true}` after user confirmation. If the call fails with `LTHash mismatch`, run `mcp__whatsapp__resync_app_state {name: "regular_low", full_sync: true}` first, then retry.
 
 **Phase 2 — Build context for NEEDS REPLY chats (run in parallel):**
 For each NEEDS REPLY chat:
