@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.4] — 2026-04-30
+
+### Fixed
+
+- **Registry path resolution: survive plugin updates.** Bin scripts read `registry.json` from `$PLUGIN_ROOT/scripts/registry.json` (the cache path), which is wiped on every plugin upgrade. Symptom: after a version bump, `/ops:ops-dash` and friends report "No project registry found" until the user manually re-runs `/ops:setup`, even though their data-dir registry is intact. Introduced `lib/registry-path.sh` that resolves `OPS_DATA_DIR` and `REGISTRY` with precedence: data-dir → caller-supplied legacy fallback → `$PLUGIN_ROOT/scripts` → canonical default. Patched `bin/ops-dash`, `ops-merge-scan`, `ops-ci`, `ops-external`, `ops-infra`, `ops-prs`, `ops-git`, `ops-doctor`, `ops-setup-detect`, and `scripts/ops-daemon.sh::prefetch_project_health`. `bin/ops-projects` already followed this pattern; this brings the rest of the surface in line. (#180)
+
 ## [2.0.3] — 2026-04-30
 
 ### Fixed
