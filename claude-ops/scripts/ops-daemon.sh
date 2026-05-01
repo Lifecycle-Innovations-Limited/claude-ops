@@ -819,7 +819,9 @@ prefetch_calendar() {
 prefetch_project_health() {
   local PROJ_CACHE="$DATA_DIR/cache/projects_health.json"
   local LAST_FETCH="$DATA_DIR/cache/.projects_ts"
-  local REGISTRY="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")/../}/scripts/registry.json"
+  local PLUGIN_ROOT_LOCAL="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")/../}"
+  local REGISTRY="${OPS_DATA_DIR:-${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}}/registry.json"
+  [[ -f "$REGISTRY" ]] || REGISTRY="${PLUGIN_ROOT_LOCAL}/scripts/registry.json"
 
   # Every 10 min
   if [[ -f "$LAST_FETCH" ]]; then

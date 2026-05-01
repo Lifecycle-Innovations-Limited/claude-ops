@@ -7,8 +7,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_DIR="${CLAUDE_PLUGIN_ROOT:-${SCRIPT_DIR}/..}"
-REGISTRY="${PLUGIN_DIR}/scripts/registry.json"
-PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+OPS_PLUGIN_ROOT_FALLBACK="$PLUGIN_DIR" . "${PLUGIN_DIR}/lib/registry-path.sh"
+PREFS="${OPS_DATA_DIR}/preferences.json"
 
 # Optional: scope to a single repo
 FILTER_REPO="${1:-}"

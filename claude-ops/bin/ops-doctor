@@ -9,7 +9,7 @@ has_env() { [ -n "${!1:-}" ] && echo true || echo false; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PLUGIN_JSON="$SCRIPT_DIR/.claude-plugin/plugin.json"
-REGISTRY="$SCRIPT_DIR/scripts/registry.json"
+OPS_PLUGIN_ROOT_FALLBACK="$SCRIPT_DIR" . "$SCRIPT_DIR/lib/registry-path.sh"
 MCP_JSON_FILE="$SCRIPT_DIR/.mcp.json"
 PREFS_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 PREFS="$PREFS_DIR/preferences.json"
@@ -247,7 +247,7 @@ if [ -f "$REGISTRY" ]; then
     fi
   fi
 else
-  WARNINGS+=("registry_missing: scripts/registry.json not found — run /ops:setup to create")
+  WARNINGS+=("registry_missing: registry.json not found at $OPS_DATA_DIR/registry.json — run /ops:setup to create")
 fi
 
 # --- 7. Preferences ---
