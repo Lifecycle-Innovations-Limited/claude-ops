@@ -19,6 +19,19 @@ OPS_PLUGIN_ROOT_FALLBACK="$SCRIPT_DIR" . "$SCRIPT_DIR/lib/registry-path.sh"
 LIB_OS_DETECT="$SCRIPT_DIR/lib/os-detect.sh"
 [ -r "$LIB_OS_DETECT" ] && . "$LIB_OS_DETECT"
 
+LIB_CRED_STORE="$SCRIPT_DIR/lib/credential-store.sh"
+[ -r "$LIB_CRED_STORE" ] && . "$LIB_CRED_STORE"
+
+# Back-compat wrapper: prefer cross-OS ops_cred_get, fall back to macOS `security`.
+IS_MACOS=false; [ "$(uname -s)" = "Darwin" ] && IS_MACOS=true
+cred_get() {
+  if declare -F ops_cred_get >/dev/null 2>&1; then
+    ops_cred_get "$1" "$2" 2>/dev/null
+  elif $IS_MACOS; then
+    security find-generic-password -s "$1" -a "$2" -w 2>/dev/null
+  fi
+}
+
 # Preferences live in Claude Code's per-plugin data dir so they survive plugin
 # reinstalls/version bumps. Falls back to the plugin source dir for users who
 # run bin/ops-setup-detect directly outside a Claude Code plugin context.
@@ -125,6 +138,15 @@ elif [ -f "$HOME/.claude.json" ] && command -v jq >/dev/null 2>&1; then
     fi
   fi
 fi
+# Keychain fallback (source 3) — only when no SSE router was configured
+if [ "$SLACK_STATUS" = "unconfigured" ]; then
+  xoxc=$(cred_get slack-xoxc slack-xoxc 2>/dev/null || echo "")
+  xoxd=$(cred_get slack-xoxd slack-xoxd 2>/dev/null || echo "")
+  if [ -n "$xoxc" ] && [ -n "$xoxd" ]; then
+    SLACK_STATUS="configured"
+    SLACK_SOURCE="keychain"
+  fi
+fi
 
 # ── Telegram status ───────────────────────────────────────────────────────────
 # Resolution order:
@@ -194,6 +216,25 @@ else
     elif [ "$count" -gt 0 ]; then
       TELEGRAM_STATUS="partial"
       TELEGRAM_SOURCE="user_config"
+    fi
+  fi
+
+  # Keychain fallback (source 4) — check credential store when still unconfigured
+  if [ "$TELEGRAM_STATUS" = "unconfigured" ] || [ "$TELEGRAM_STATUS" = "partial" ]; then
+    kc_count=0
+    for key in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
+      kc_val=$(cred_get "$key" "$key" 2>/dev/null || echo "")
+      [ -n "$kc_val" ] && kc_count=$((kc_count+1))
+    done
+    if [ "$kc_count" -gt "$TELEGRAM_KEYS_FOUND" ]; then
+      TELEGRAM_KEYS_FOUND=$kc_count
+      if [ "$kc_count" -eq 4 ]; then
+        TELEGRAM_STATUS="configured"
+        TELEGRAM_SOURCE="keychain"
+      elif [ "$kc_count" -gt 0 ]; then
+        TELEGRAM_STATUS="partial"
+        TELEGRAM_SOURCE="keychain"
+      fi
     fi
   fi
 fi
