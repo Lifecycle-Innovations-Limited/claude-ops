@@ -118,10 +118,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
 ```
 
 ```!
-for d in $(jq -r '.projects[] | select(.gsd == true) | .paths[]' "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null); do
-  expanded="${d/#\~/$HOME}"
-  [ -f "$expanded/.planning/STATE.md" ] && echo "=== $(basename $expanded) ===" && cat "$expanded/.planning/STATE.md" && echo "---"
-done
+${CLAUDE_PLUGIN_ROOT}/bin/ops-gsd-states 2>/dev/null || true
 ```
 
 ---
