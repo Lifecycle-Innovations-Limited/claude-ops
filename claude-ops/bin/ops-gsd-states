@@ -5,6 +5,11 @@
 # STATE.md files it finds with a header and `---` separator so callers can grep
 # or read them as a single stream.
 #
+# Surfaces the `status:` field from each STATE.md frontmatter as a SUBORDINATE
+# annotation when it equals `subordinate_to_workspace`, so the YOLO C-suite
+# agents don't flag those projects as stalled (their tracking is intentionally
+# delegated to a workspace-level coordinator).
+#
 # Extracted from skills/ops-yolo/SKILL.md (used to be an inline `! ` shell
 # block) so it runs under bash explicitly. The previous inline form used
 # `${d/#\~/$HOME}` (a bash-only parameter expansion) and aborted under `sh`.
@@ -20,13 +25,39 @@ fi
 
 expand_path() { echo "${1/#\~/$HOME}"; }
 
+# Extract a top-level YAML frontmatter scalar (between leading --- and the
+# first closing ---). Strips quotes. Empty if the key is missing.
+frontmatter_value() {
+  local file="$1" key="$2"
+  awk -v k="$key" '
+    BEGIN { fm = 0 }
+    /^---[[:space:]]*$/ { fm++; if (fm == 2) exit; next }
+    fm == 1 {
+      idx = index($0, ":")
+      if (idx > 0) {
+        f = substr($0, 1, idx - 1)
+        v = substr($0, idx + 1)
+        sub(/^[[:space:]]+/, "", f); sub(/[[:space:]]+$/, "", f)
+        sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v)
+        gsub(/^"|"$/, "", v); gsub(/^'\''|'\''$/, "", v)
+        if (f == k) { print v; exit }
+      }
+    }
+  ' "$file"
+}
+
 jq -r '.projects[] | select(.gsd == true) | .paths[]' "$REGISTRY" 2>/dev/null \
 | while IFS= read -r raw; do
     [ -z "$raw" ] && continue
     expanded=$(expand_path "$raw")
     state="$expanded/.planning/STATE.md"
     if [ -f "$state" ]; then
-      printf '=== %s ===\n' "$(basename "$expanded")"
+      status=$(frontmatter_value "$state" "status" || true)
+      header="=== $(basename "$expanded") ==="
+      if [ "$status" = "subordinate_to_workspace" ]; then
+        header="$header [SUBORDINATE — tracking delegated to workspace; do NOT flag as stalled]"
+      fi
+      printf '%s\n' "$header"
       cat "$state"
       printf -- '---\n'
     fi
