@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
-# ops-ci — Recent CI failures across all repos → JSON
-# Checks last 24h of GitHub Actions failures
+# ops-ci — Currently-failing CI workflows across all repos → JSON
+#
+# Returns workflows where the LATEST run on a tracked branch (main/dev/master)
+# is currently failing. Stale failures that have since been fixed by a newer
+# successful run are excluded — this prevents downstream consumers
+# (ops-fires, ops-go) from dispatching fix agents to already-resolved fires
+# and burning tokens.
+#
+# Algorithm per repo:
+#   1. Pull last 30 runs (any branch, any conclusion) — survey workflows in play
+#   2. Extract distinct workflow names from those runs
+#   3. For each workflow × tracked branch (main, dev, master), fetch latest run
+#   4. Emit only entries where conclusion == "failure"
+#
+# Override: OPS_CI_MODE=legacy reverts to "any failure in last 24h" (slower
+# but matches pre-1.7.x behaviour). Default is "current-state".
 
 set -euo pipefail
 
@@ -16,19 +30,70 @@ if ! command -v gh &>/dev/null; then
 fi
 
 REPOS=$(jq -r '[.projects[].repos[]] | unique | .[]' "$REGISTRY")
-SINCE=$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d '1 day ago' +%Y-%m-%d 2>/dev/null || date +%Y-%m-%d)
+MODE="${OPS_CI_MODE:-current}"
+TRACKED_BRANCHES=("main" "dev" "master")
 
 TMPDIR_OPS=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_OPS"' EXIT
 
+# ─── Per-repo scan ──────────────────────────────────────────────────────────
+scan_repo_current() {
+  local repo="$1"
+  local safe_name
+  safe_name=$(echo "$repo" | tr '/' '_')
+
+  # Survey workflows in recent activity (last 30 runs across all branches)
+  local recent_workflows
+  recent_workflows=$(gh run list --repo "$repo" --limit 30 \
+    --json name,workflowName 2>/dev/null \
+    | jq -r '[.[] | (.workflowName // .name)] | unique | .[]' 2>/dev/null || true)
+
+  [ -z "$recent_workflows" ] && return 0
+
+  local failures="[]"
+  while IFS= read -r workflow; do
+    [ -z "$workflow" ] && continue
+    for branch in "${TRACKED_BRANCHES[@]}"; do
+      # Latest run for this workflow + branch
+      local latest
+      latest=$(gh run list --repo "$repo" --workflow "$workflow" --branch "$branch" --limit 1 \
+        --json name,headBranch,createdAt,conclusion,event,workflowName 2>/dev/null || echo '[]')
+
+      # Skip if no run, or latest is success/skipped/cancelled/in_progress
+      local conclusion
+      conclusion=$(echo "$latest" | jq -r '.[0].conclusion // empty' 2>/dev/null)
+      [ "$conclusion" != "failure" ] && continue
+
+      # Append to failures array
+      failures=$(echo "$failures" | jq --argjson new "$latest" '. + $new')
+    done
+  done <<< "$recent_workflows"
+
+  if [ "$(echo "$failures" | jq 'length')" -gt 0 ]; then
+    echo "{\"repo\":\"$repo\",\"failures\":$failures}" > "$TMPDIR_OPS/$safe_name.json"
+  fi
+}
+
+scan_repo_legacy() {
+  local repo="$1"
+  local safe_name
+  safe_name=$(echo "$repo" | tr '/' '_')
+
+  local failures
+  failures=$(gh run list --repo "$repo" --status failure --limit 3 \
+    --json name,headBranch,createdAt,conclusion,event 2>/dev/null || echo '[]')
+
+  if [ "$failures" != "[]" ] && [ -n "$failures" ]; then
+    echo "{\"repo\":\"$repo\",\"failures\":$failures}" > "$TMPDIR_OPS/$safe_name.json"
+  fi
+}
+
 for repo in $REPOS; do
   (
-    SAFE_NAME=$(echo "$repo" | tr '/' '_')
-    FAILURES=$(gh run list --repo "$repo" --status failure --limit 3 \
-      --json name,headBranch,createdAt,conclusion,event 2>/dev/null || echo '[]')
-
-    if [ "$FAILURES" != "[]" ] && [ -n "$FAILURES" ]; then
-      echo "{\"repo\":\"$repo\",\"failures\":$FAILURES}" > "$TMPDIR_OPS/$SAFE_NAME.json"
+    if [ "$MODE" = "legacy" ]; then
+      scan_repo_legacy "$repo"
+    else
+      scan_repo_current "$repo"
     fi
   ) &
 done
