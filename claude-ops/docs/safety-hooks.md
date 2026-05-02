@@ -4,7 +4,7 @@
 
 *Three PreToolUse:Bash hooks that block the most common foot-guns: secrets in commits, `rm -rf` against anchor paths, and direct `git push` to `main`.*
 
-[![version](https://img.shields.io/badge/version-2.0.0-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.0.9-blue)](../CHANGELOG.md)
 [![hook](https://img.shields.io/badge/PreToolUse-Bash-6366f1)](.)
 [![always-on](https://img.shields.io/badge/always--on-by%20design-ef4444)](.)
 

@@ -4,7 +4,7 @@
 
 *Pre-installed subagent personas + the auto-suggestion hook that routes `general-purpose` calls to the right specialist.*
 
-[![version](https://img.shields.io/badge/version-2.0.0-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.0.9-blue)](../CHANGELOG.md)
 [![agents](https://img.shields.io/badge/agents-18-8b5cf6)](.)
 [![hook](https://img.shields.io/badge/PreToolUse-Agent-6366f1)](.)
 

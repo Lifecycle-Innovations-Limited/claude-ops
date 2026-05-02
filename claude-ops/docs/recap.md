@@ -4,7 +4,7 @@
 
 *One-line situational awareness across every parallel Claude Code session, surfaced in tmux `status-right` or the Claude Code `statusLine`.*
 
-[![version](https://img.shields.io/badge/version-2.0.0-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.0.9-blue)](../CHANGELOG.md)
 [![daemon](https://img.shields.io/badge/runtime-launchd%20%2F%20systemd-6366f1)](.)
 [![cadence](https://img.shields.io/badge/refresh-30s-22c55e)](.)
 
