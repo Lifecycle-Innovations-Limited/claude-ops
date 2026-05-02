@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.2] — 2026-05-02
+
+Patch release — second pass on YOLO false-fire suppression. Adds an inline annotation so C-suite agents can short-circuit on projects whose tracking is intentionally delegated to a workspace-level coordinator.
+
+### Changed
+
+- **`bin/ops-gsd-states` annotates SUBORDINATE projects** (PR #204). When a GSD project's `.planning/STATE.md` frontmatter has `status: subordinate_to_workspace`, its phase tracking is intentionally delegated to a workspace-level coordinator (e.g. `healify-api` and `healify-agentcore` both delegate to `healify-workspace`). Prior to this fix, the C-suite YOLO agents treated these as independent projects and flagged them as "stalled" when their phase progress was static — but the staticness is correct: the workspace owns the schedule. Now the script appends `[SUBORDINATE — tracking delegated to workspace; do NOT flag as stalled]` to the project header, giving C-suite agents an inline short-circuit. Pairs with the CLAIM VERIFICATION GUARDRAIL shipped in 2.1.1. Concrete case from 2026-05-01 YOLO session: COO claimed `healify-api v3.1 Phase 1 stalled 6d on closed PR #3217`. Reality: PR #3217 was intentionally closed and superseded by #3222, which merged 2026-04-25. The workspace-level STATE.md correctly reflects this with `status: subordinate_to_workspace`; the YOLO scan would have surfaced that status if the script annotated it. Implementation uses a small awk frontmatter scalar parser; activates only on the literal value `subordinate_to_workspace`; all other status values stay silent.
+
 ## [2.1.1] — 2026-05-02
 
 Patch release — `/ops:ops-yolo` reliability fixes. Restores Phase 1 data-gathering after a regression, and adds a verification guardrail to the C-suite agents so they stop reporting false fires.
