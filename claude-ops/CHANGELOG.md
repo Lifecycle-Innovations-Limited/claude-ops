@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0] — 2026-05-02
+
+Minor release — consolidates the feature work from the v2.0.5–v2.0.9 patch series into a single coherent version. No breaking changes; drop-in replacement for v2.0.x.
+
+### Added
+
+- **Multi-workspace Slack support** (was v2.0.9 / PR #195). Single ops install can now connect to multiple Slack workspaces simultaneously and route messages by workspace context. Adds `bin/ops-slack-workspaces` for inspection.
+- **`/ops:credentials` audit skill** (was v2.0.6 / PR #184). On-demand audit of which integration credentials are configured, expiring soon (<7d), or stale (>180d). Plugin.json `userConfig` now carries field hints so the audit can tell users which env var or vault key holds each credential.
+- **ops-ci current-state filter** (was v2.0.9 / PR #196). `bin/ops-ci` now emits ONLY workflows whose latest run on a tracked branch (main/dev/master) is currently failing — not "any failure in the last 24h". Eliminates the false-fire cascade in `/ops-fires` and `/ops-go` where stale failures triggered fix-agent dispatch on already-resolved CI. Smoke test on a real 38-repo portfolio: 14 → 6 entries (57% noise reduction). Behind `OPS_CI_MODE=current` default; `OPS_CI_MODE=legacy` reverts.
+- **MANDATORY pre-dispatch staleness check in ops-fires SKILL** (was v2.0.9 / PR #196). Defense-in-depth gate — `gh run list --workflow X --branch Y --limit 1` — before spawning any fix agent. Catches cache races where a fix landed in the seconds since the CI cache was written.
+- **Telegram preflight + keychain fallback** (was v2.0.7 / PR #185). SSE/user-config detection runs before Telegram MCP auth; macOS keychain is the fallback secret store when Doppler is unconfigured.
+- **userConfig schema upgrades** (was v2.0.5 / PR #182). `enum` values, `sensitive` flags, and per-integration toggles for fine-grained capability gating.
+
+### Fixed
+
+- userConfig `enum` rejection by Claude Code stable (was v2.0.8 / PR #190). Removed unsupported `enum` keys from `fix_model`, `max_fixes_per_hour`, `watcher_timeout_seconds`, `notify_channel`, `task_reminder_threshold`, `aws_region`, `doppler_config`. Field descriptions retain the valid value lists.
+- Cross-OS macOS keychain guard in `/ops:credentials` (was v2.0.6 hotfix).
+- Plugin.json Prettier formatting (was v2.0.5 hotfix).
+
+### Notes
+
+- Plugin v2.1.0 ships 35 skills, 18 agents.
+- Marketplace pin must be bumped to `2.1.0` — see follow-up PR.
+- Local plugin cache: clear old `ops/2.0.*` cache directories and re-install via marketplace refresh after merge.
+
 ## [2.0.9] — 2026-05-01
 
 ### Fixed
