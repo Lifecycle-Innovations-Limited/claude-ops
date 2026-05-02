@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1] — 2026-05-02
+
+Patch release — `/ops:ops-yolo` reliability fixes. Restores Phase 1 data-gathering after a regression, and adds a verification guardrail to the C-suite agents so they stop reporting false fires.
+
+### Fixed
+
+- **`/ops:ops-yolo` Phase 1 silent abort** (PR #201). The inline `! ` shell block in `skills/ops-yolo/SKILL.md` used the bash-only parameter expansion `${d/#\~/$HOME}` for tilde substitution. Claude Code's `!` block executor runs under `sh`/`dash`, so the expansion was a syntax error and the GSD-state aggregation step silently aborted — taking the rest of YOLO data-gathering down with it. Extracted the loop to `bin/ops-gsd-states` with an explicit `#!/usr/bin/env bash` shebang. Same convention as every other Phase 1 block, which are all thin shims around `bin/` scripts. Output format unchanged: `=== <basename> ===` header + STATE.md body + `---` separator.
+
+### Changed
+
+- **YOLO C-suite agents now require claim verification** (PR #202). The 2026-05-01 YOLO session produced multiple false-positive fires: agents flagged `CLERK_AUTHORIZED_PARTIES` as missing on a stagery-api Doppler config that already had it set; flagged `healify-langgraphs-prod` desired=0 as a fire when the most recent commit was `chore(decomm): disable prod deploy workflow per phase 19.4 Stage 2`; and referenced a Doppler `stg` config that does not exist on stagery-api. Root cause: agent prompts told them to be "brutally honest" but did not require them to verify external state before asserting it. Stale STATE.md notes were promoted to P0 claims. Added a `## CLAIM VERIFICATION GUARDRAIL` section to all four agents (`yolo-ceo`, `yolo-cto`, `yolo-cfo`, `yolo-coo`). Identical block in each, placed before the existing `DESTRUCTIVE ACTION GUARDRAIL`. Mandates concrete verification commands per claim type (`doppler secrets get --plain`, `aws secretsmanager get-secret-value`, `git log --grep decomm`), distinguishes "set to empty" from "unset", and requires `UNVERIFIED` labeling when verification is impossible (rate limit, missing creds). Forbidden output patterns include "X is missing in production" without a corresponding read, and any P0/CRITICAL label on state that is the result of a documented planned change.
+
 ## [2.1.0] — 2026-05-02
 
 Minor release — consolidates the feature work from the v2.0.5–v2.0.9 patch series into a single coherent version. No breaking changes; drop-in replacement for v2.0.x.
