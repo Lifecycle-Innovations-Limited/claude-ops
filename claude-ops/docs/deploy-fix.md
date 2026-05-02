@@ -4,7 +4,7 @@
 
 *Watches every `gh pr merge` and `npm run build:*` you run, verifies the deploy, and dispatches a Haiku fixer if anything fails.*
 
-[![version](https://img.shields.io/badge/version-2.0.9-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.1.0-blue)](../CHANGELOG.md)
 [![hook](https://img.shields.io/badge/PostToolUse-Bash-6366f1)](.)
 [![model](https://img.shields.io/badge/fixer-haiku--default-22c55e)](.)
 

@@ -4,7 +4,7 @@
 
 *Top-level map of every doc file in `claude-ops/docs/`.*
 
-[![version](https://img.shields.io/badge/version-2.0.9-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.1.0-blue)](../CHANGELOG.md)
 
 </div>
 
