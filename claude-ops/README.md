@@ -1,6 +1,14 @@
 # claude-ops
 
-> **v2.0.0** — Autonomy Layer · Deploy Auto-Fix · Safety Hooks · Specialist Agents · Recap Marquee · Multi-Account Rotator · 33+ Skills · 18 Agents
+> **v2.0.9** — Autonomy Layer · Deploy Auto-Fix · Safety Hooks · Specialist Agents · Recap Marquee · Multi-Account Rotator · Multi-Workspace Slack · ops-ci Current-State Filter · Credentials Audit · 35 Skills · 18 Agents
+
+## What's new since v2.0.0
+
+- **v2.0.9** — ops-ci current-state filter (57% noise reduction in `/ops:fires`); MANDATORY pre-dispatch staleness check in ops-fires SKILL
+- **v2.0.8** — multi-workspace Slack support; userConfig schema fixes
+- **v2.0.7** — Telegram keychain fallback + SSE/user-config preflight
+- **v2.0.6** — `/ops:credentials` audit skill + plugin.json field hints
+- **v2.0.5** — userConfig enums + per-integration toggles
 
 A Claude Code plugin that turns Claude into a business operating system **and** an autonomy layer. Run `/ops` for the interactive command center — pixel-art dashboard with instant hotkey access to morning briefings, inbox, fires, deploys, revenue, and YOLO mode. Or just keep working — v2's hooks watch every merge, every build, every commit, every push, and every agent dispatch in the background.
 
@@ -126,8 +134,8 @@ The background memory extractor now prefers the Claude Code OAuth token stored i
 `whatsapp-bridge` (Baileys) now manages WhatsApp connectivity via the `com.samrenders.whatsapp-bridge` LaunchAgent. Previously `whatsapp-bridge-keepalive.sh` kept `whatsapp-bridge --follow` alive — that daemon has been decommissioned (see `legacy/`). Which tore down the persistent connection every 5-20 minutes. Fixed via `INITIAL_BACKFILL_DELAY=30` plus a reentrant guard against overlapping sweeps.
 
 ### Full Plugin Feature Adoption
-- All 30 skills: `effort`, `maxTurns`, `disallowedTools`, `model` annotations
-- All 14 agents: `memory` (cross-session learning), `initialPrompt`, `isolation`
+- All 35 skills: `effort`, `maxTurns`, `disallowedTools`, `model` annotations
+- All 18 agents: `memory` (cross-session learning), `initialPrompt`, `isolation`
 - PreToolUse hooks for WhatsApp health checks and MCP auto-reconnect
 - Runtime Context loading in every skill (preferences, daemon health, memories, secrets)
 - CLI/API reference tables in all operational skills

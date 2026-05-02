@@ -4,7 +4,7 @@
 
 *Top-level map of every doc file in `claude-ops/docs/`.*
 
-[![version](https://img.shields.io/badge/version-2.0.0-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.0.9-blue)](../CHANGELOG.md)
 
 </div>
 
@@ -25,7 +25,7 @@
 | Doc | Subject |
 |-----|---------|
 | [`agents-reference.md`](agents-reference.md) | Catalog of all 18 agents (4 v2 specialists + 14 v1 scanners/fixers/C-suite). |
-| [`skills-reference.md`](skills-reference.md) | Catalog of all 33+ skills with usage examples. |
+| [`skills-reference.md`](skills-reference.md) | Catalog of all 35 skills with usage examples. |
 | [`daemon-guide.md`](daemon-guide.md) | The v1 ops-daemon (briefing pre-warm, whatsapp-bridge-sync, memory-extractor, etc). |
 | [`docker.md`](docker.md) | Running claude-ops in a container. |
 | [`marketplace-submissions.md`](marketplace-submissions.md) | Publishing your own plugin to the same marketplace. |

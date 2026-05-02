@@ -2,9 +2,9 @@
 
 # Agents Reference
 
-*All 14 agents that power claude-ops — scanners, fixers, C-suite analysts, and the daemon brain*
+*All 18 agents that power claude-ops — scanners, fixers, C-suite analysts, and the daemon brain*
 
-[![version](https://img.shields.io/badge/version-2.0.0-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.0.9-blue)](../CHANGELOG.md)
 [![agents](https://img.shields.io/badge/agents-18-8b5cf6)](.)
 [![sonnet](https://img.shields.io/badge/model-sonnet--4--6-6366f1)](.)
 [![opus](https://img.shields.io/badge/model-opus--4--6-ef4444)](.)
@@ -14,7 +14,7 @@
 
 ---
 
-All 18 agents in claude-ops v2.0.0. Agent files live in `agents/`.
+All 18 agents in claude-ops v2.0.9. Agent files live in `agents/`.
 
 > [!NOTE]
 > v2.0 added four pre-installed specialists — `general-purpose` (override), `deploy-fixer`, `build-fixer`, `dependency-auditor`. These power the deploy auto-fix subsystem and are silently routed to via the PreToolUse:Agent hook. See [`agents.md`](agents.md) for the v2 specialist catalog and [`deploy-fix.md`](deploy-fix.md) for the auto-fix subsystem.
