@@ -185,6 +185,29 @@ If no fires: show "ALL SYSTEMS OPERATIONAL" with last-checked timestamps.
 
 ---
 
+## Pre-dispatch staleness check (MANDATORY)
+
+The pre-gathered CI data is cached and may be minutes-to-hours old. Before
+dispatching ANY fix agent, verify the failure is still red on its branch HEAD.
+This is defense-in-depth: even after the `bin/ops-ci` "current-state" filter
+(which only emits workflows whose latest run on a tracked branch is failing),
+a fix may have landed in the seconds since the cache was written. Dispatching
+to a self-resolved fire wastes Sonnet quota — typically 50–150k tokens per
+agent before it figures out there's nothing to fix.
+
+For each fire the user selects:
+
+```bash
+gh run list --repo "$REPO" --workflow "$WORKFLOW" --branch "$BRANCH" --limit 1 \
+  --json conclusion,databaseId,createdAt --jq '.[0]'
+```
+
+- If `conclusion == "success"` → SKIP. Mark task completed with metadata `{resolution: "self-resolved-pre-dispatch"}`. Do NOT spawn agent.
+- If `conclusion == "failure"` → proceed to dispatch.
+- If `conclusion == null` (in_progress) → wait 30s, recheck once, then proceed if still null.
+
+For workflows scoped only to PRs (no main/dev runs), check the PR's combined CI status instead: `gh pr checks <num> --repo "$REPO" --json bucket,name`.
+
 ## Dispatch fix agent
 
 When user selects to fix an issue, use `AskUserQuestion` to confirm the scope before dispatching:
