@@ -4,12 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [2.0.9] — 2026-05-01
 
-### Added
+### Fixed
 
-- **Multi-workspace Slack support.** `preferences.json` now accepts a `slack_workspaces` array so ops briefings, inbox scans, and comms reads iterate ALL configured Slack workspaces instead of stopping at one. Each entry carries `name`, `token_env` (the env var holding the token — never stored in prefs), and `kind` (`bot_token` | `user_token`). Backwards-compatible: configs with no `slack_workspaces` fall back to legacy `SLACK_MCP_ENABLED=true` single-workspace path.
-- **`bin/ops-slack-workspaces` helper.** Lists every configured workspace, resolves token env vars, and calls `slack.com/api/auth.test` for each. Outputs a table or `--json` for machine consumers. Exit code is non-zero if any token is missing or invalid.
-- **Setup wizard multi-workspace loop.** Step 3d now persists each workspace into `slack_workspaces[]` and asks "Add another workspace?" until done. Running `/ops:setup slack` a second time appends to the array without overwriting existing entries.
-- Updated `ops-go`, `ops-inbox`, `ops-comms`, `ops-dash` SKILL.md docs to describe multi-workspace iteration, per-workspace labelling, and the MCP-bound-token fallback path (direct curl for non-primary workspaces).
+- **ops-ci current-state filter (57% noise reduction).** `bin/ops-ci` previously pulled "last 3 failures" per repo regardless of whether those workflows are still red on HEAD. Downstream consumers (`ops-fires`, `ops-go`) treated any 24h failure as actionable and dispatched fix agents to already-self-resolved fires — burning ~50–150k Sonnet tokens per agent before it concluded "nothing to fix". Smoke test on a real portfolio: legacy mode emits 14 repos with failures, new mode emits 6 (8 stale entries filtered). Now surveys last 30 runs per repo and emits only workflows whose latest run on the tracked branch (main/dev/master) has `conclusion=="failure"`. Behind `OPS_CI_MODE=current` default; `OPS_CI_MODE=legacy` reverts to old behaviour.
+- **MANDATORY pre-dispatch staleness check in ops-fires SKILL.** Adds a defense-in-depth gate — `gh run list --workflow X --branch Y --limit 1` — before spawning any fix agent. Catches cache races where a fix landed in the seconds since the CI cache was written.
 
 ## [2.0.8] — 2026-05-01
 
