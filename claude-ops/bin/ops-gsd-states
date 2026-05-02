@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# ops-gsd-states — Concatenate .planning/STATE.md from every GSD-tracked project
+#
+# Reads registry.json, walks each project flagged `gsd: true`, and prints any
+# STATE.md files it finds with a header and `---` separator so callers can grep
+# or read them as a single stream.
+#
+# Extracted from skills/ops-yolo/SKILL.md (used to be an inline `! ` shell
+# block) so it runs under bash explicitly. The previous inline form used
+# `${d/#\~/$HOME}` (a bash-only parameter expansion) and aborted under `sh`.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-path.sh"
+
+if [ ! -f "$REGISTRY" ]; then
+  exit 0
+fi
+
+expand_path() { echo "${1/#\~/$HOME}"; }
+
+jq -r '.projects[] | select(.gsd == true) | .paths[]' "$REGISTRY" 2>/dev/null \
+| while IFS= read -r raw; do
+    [ -z "$raw" ] && continue
+    expanded=$(expand_path "$raw")
+    state="$expanded/.planning/STATE.md"
+    if [ -f "$state" ]; then
+      printf '=== %s ===\n' "$(basename "$expanded")"
+      cat "$state"
+      printf -- '---\n'
+    fi
+  done
