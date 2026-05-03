@@ -192,7 +192,7 @@ MARKETING
 [If no marketing configured: "(marketing not configured — /ops:marketing setup)"]
 
 UNREAD
-[WhatsApp: N, Email: N, Slack: check MCP, Notion: N items, Calendar: N events today]
+[WhatsApp: N, Email: N, Slack: N workspace(s) configured (no scan), Notion: N items, Calendar: N events today]
 
 TODAY'S PRIORITIES (ranked by revenue impact + urgency)
 1. [action] — [project] — [why]
@@ -210,30 +210,11 @@ If `$ARGUMENTS` contains a project alias, focus the briefing on that project onl
 
 After the briefing, use **batched AskUserQuestion calls** (max 4 options each) for the "What's next?" prompt. Show the top 3 priority actions + `[More...]` in the first call, then remaining actions + `[/ops-yolo — let me run your business today]` in the second call. Route to the appropriate ops skill or project.
 
-For Slack counts: read the `channels.slack` object from the pre-gathered data.
+For Slack counts: read the `channels.slack` object from the pre-gathered data and surface workspace presence ONLY. **Do NOT auto-scan Slack workspaces during briefings** — Slack scans are expensive, noisy, and frequently produce stale/unread counts that don't match the user's actual triage state. The user explicitly opted out of auto-scan on briefing surfaces.
 
-- **Multi-workspace mode** (`"multi_workspace": true`): the object has a `workspaces` array. For each entry where `available: true`, call `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` scoped to that workspace. If the MCP is bound to a single token at startup (only one workspace is active in `~/.claude.json`), fall back to direct curl. The entry's `token_env` field is the **name** of the env var holding the token, so resolve it before passing to curl:
-
-  ```bash
-  # token_env is the env var NAME (e.g. "SLACK_BOT_TOKEN_<WORKSPACE>"), not the token value.
-  # Validate it's a legal shell identifier before indirect expansion to avoid script abort
-  # under set -u when token_env contains hyphens or other invalid characters.
-  if [[ "$token_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-    token_value="${!token_env:-}"
-  else
-    token_value=""
-  fi
-  if [ -n "$token_value" ]; then
-    curl -s -H "Authorization: Bearer $token_value" \
-      "https://slack.com/api/conversations.list?limit=1"
-  fi
-  ```
-
-  Use `mcp__claude_ai_Slack__*` for the bound workspace and log a note that the others require a direct API call. Aggregate results and label each with the workspace name (e.g. `Slack/<workspace_a>: 3 unread`, `Slack/<workspace_b>: 1 unread`).
-- **Legacy mode** (`"multi_workspace": false`, `"available": true`): use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` (NOT `is:unread`) as before.
+- If `workspaces` array is present: render `Slack: N workspace(s) configured (<name1>, <name2>) — run /ops:ops-inbox to scan`.
 - If `available: false` for all workspaces: show `Slack: not configured` and skip.
-
-Always do Slack queries as parallel tool calls while analyzing other data.
+- Never call `mcp__claude_ai_Slack__*` or curl Slack APIs from this skill. Defer all Slack scans to `/ops:ops-inbox` where the user explicitly opts in.
 
 For Notion counts: if `NOTION_MCP_ENABLED=true` and pre-gathered data shows Notion as available, use `mcp__claude_ai_Notion__notion-search` with `query: ""` sorted by `last_edited_time` descending to surface recently active pages. Then call `mcp__claude_ai_Notion__notion-get-comments` on the top results to find comments needing response. Note: Notion search does not support date range filters — sort by recency and limit to the first 10-20 results instead.
 
