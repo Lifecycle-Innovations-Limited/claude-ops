@@ -81,6 +81,12 @@ trap 'rm -rf "$TMPDIR_DASH"' EXIT
   echo "${LATEST_YOLO:-none}" > "$TMPDIR_DASH/yolo"
 ) &
 
+(
+  # Marketing health (live, project-aware) + external/Shopify surface
+  "$PLUGIN_ROOT/bin/ops-marketing-dash" 2>/dev/null > "$TMPDIR_DASH/marketing.json" || echo '{}' > "$TMPDIR_DASH/marketing.json"
+  "$PLUGIN_ROOT/bin/ops-external"       2>/dev/null > "$TMPDIR_DASH/external.json"  || echo '[]' > "$TMPDIR_DASH/external.json"
+) &
+
 wait
 
 # --- Read results ---
@@ -90,6 +96,13 @@ PRS=$(cat "$TMPDIR_DASH/prs" 2>/dev/null || echo "?")
 CI_FAILS=$(cat "$TMPDIR_DASH/ci_fails" 2>/dev/null || echo "?")
 GSD_ACTIVE=$(cat "$TMPDIR_DASH/gsd" 2>/dev/null || echo "?")
 LATEST_YOLO=$(cat "$TMPDIR_DASH/yolo" 2>/dev/null || echo "none")
+MARKETING_JSON=$(cat "$TMPDIR_DASH/marketing.json" 2>/dev/null || echo '{}')
+EXTERNAL_JSON=$(cat "$TMPDIR_DASH/external.json"   2>/dev/null || echo '[]')
+MK_HEALTH=$(echo "$MARKETING_JSON" | jq -r '.health_score // "?"' 2>/dev/null || echo "?")
+MK_STATUS=$(echo "$MARKETING_JSON" | jq -r '.health_status // "n/a"' 2>/dev/null || echo "n/a")
+MK_PROJECT=$(echo "$MARKETING_JSON" | jq -r '.project // ""' 2>/dev/null || echo "")
+SHOPIFY_HEALTHY=$(echo "$EXTERNAL_JSON" | jq -r '[.[] | select(.source=="shopify_admin" and .status=="healthy")] | length' 2>/dev/null || echo "0")
+SHOPIFY_TOTAL=$(echo "$EXTERNAL_JSON"   | jq -r '[.[] | select(.source | startswith("shopify"))] | length' 2>/dev/null || echo "0")
 
 # Unread parsing
 UNREAD_JSON=$(cat "$TMPDIR_DASH/unread.json" 2>/dev/null || echo '{}')
@@ -135,6 +148,7 @@ sp "${DIM}${CYN}  ╠═══════════════════�
 sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
 sp "${DIM}${CYN}  ║${RST}   ${FIRE_ICON} ${BWHT}STATUS${RST}  ${FIRE_STATUS}    ${DIM}|${RST}  ${BWHT}${TOTAL_UNREAD}${RST} unread  ${DIM}|${RST}  ${BWHT}${PRS}${RST} PRs    ${DIM}${CYN}║${RST}"
 sp "${DIM}${CYN}  ║${RST}   ${DIM}  ${PROJECTS} projects${RST}  ${DIM}|${RST}  ${DIM}${GSD_ACTIVE} GSD active${RST}  ${DIM}|${RST}  ${DIM}${CLUSTERS} clusters${RST}   ${DIM}${CYN}║${RST}"
+sp "${DIM}${CYN}  ║${RST}   ${DIM}  marketing ${MK_HEALTH}/100 ${MK_STATUS}${MK_PROJECT:+ (${MK_PROJECT})}  ${DIM}|${RST}  ${DIM}shopify ${SHOPIFY_HEALTHY}/${SHOPIFY_TOTAL}${RST}   ${DIM}${CYN}║${RST}"
 sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
 sp "${DIM}${CYN}  ╠══════════════════════════════════════════════════════════════╣${RST}"
 sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"

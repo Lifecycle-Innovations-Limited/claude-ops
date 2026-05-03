@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.3] — 2026-05-03
+
+Patch release — `bin/ops-external` and `bin/ops-marketing-dash` are now preferences-aware and surface real Shopify, Klaviyo, Meta, Instagram, and GSC data per project. `/ops:ops-yolo` always archives prior session reports to force a fresh-state run.
+
+### Fixed
+
+- **`bin/ops-external` now reads `preferences.json`** (Shopify stores in `.ecom.projects` and `.partner_registry.shopify_admin.stores`, marketing channels in `.marketing.projects`, `.integrations`) instead of returning `[]` when only `registry.json` is empty. Resolves credential references using a shared grammar (`env:VAR` / `doppler:project/config/SECRET` / inline). Probes Shopify Admin API for live `healthy / auth_expired / not_found / unreachable` status. Adds `-g` (globoff) to all curl calls so bracketed query params (`fields[shop]=…`) don't get mangled. Guards against the BSD `seq 0 -1` quirk that previously emitted spurious `alias: null` entries when the registry selection was empty.
+- **`bin/ops-marketing-dash` is now project-aware**. Reads `marketing.default_project` from `preferences.json` (overridable via `--project <name>` arg or `OPS_MARKETING_PROJECT` env). Resolves nested cred refs (`env:AB_KLAVIYO_TOKEN`, `doppler:hueman/prd/BRIGHT_KLAVIYO_TOKEN`, etc.) before falling back to the legacy flat env / `claude plugin config get` / bare-Doppler chain. Adds `-g` and `--max-time 5` to every curl. Output now includes a `project` field so downstream surfaces know which project's data they're seeing.
+
+### Added
+
+- **`bin/ops-dash` surfaces marketing health + Shopify count** in the header status block (`marketing N/100 Status (project) | shopify N/N`), backgrounded against the existing probes so render time is unchanged.
+- **`/ops:ops-go` Phase-1 pre-gather** now invokes `ops-marketing-dash` so the briefing's MARKETING section actually has data instead of falling through to `(marketing not configured)`.
+- **`/ops:ops-yolo` Phase 0** archives any prior `/tmp/yolo-*/` to `~/.claude/yolo-archive/<session>-<epoch>/` and allocates a fresh `SESSION_DIR` on every run. C-suite agent prompts now include a verbatim "fresh-state" directive forbidding reuse of cached reports. `ops-marketing-dash` added to Phase-1 data.
+
 ## [2.1.2] — 2026-05-02
 
 Patch release — second pass on YOLO false-fire suppression. Adds an inline annotation so C-suite agents can short-circuit on projects whose tracking is intentionally delegated to a workspace-level coordinator.

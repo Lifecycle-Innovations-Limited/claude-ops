@@ -81,7 +81,35 @@ After initial analysis, use `SendMessage(to="cto", content="CFO flagged $400/mo 
 
 If the flag is NOT set, fall back to standard parallel subagents (fire-and-forget, no mid-task steering).
 
-## Phase 1 — Pre-gather ALL data
+## Phase 0 — MANDATORY: Clear cached state, force fresh-state collection
+
+**NEVER reuse a prior YOLO session's reports.** Stale C-suite analyses misinform decisions.
+Before pre-gathering anything, run:
+
+```!
+# Archive any prior YOLO sessions (don't delete — keep history) then start fresh.
+mkdir -p ~/.claude/yolo-archive
+for d in /tmp/yolo-*/; do
+  [ -d "$d" ] || continue
+  ts=$(basename "$d")
+  mv "$d" "$HOME/.claude/yolo-archive/${ts}-$(date +%s)" 2>/dev/null || true
+done
+
+# Allocate this run's session dir.
+SESSION_ID="$(date +%Y%m%d-%H%M%S)-$$"
+SESSION_DIR="/tmp/yolo-${SESSION_ID}"
+mkdir -p "$SESSION_DIR"
+echo "$SESSION_DIR" > /tmp/yolo-current-session
+echo "YOLO session: $SESSION_DIR (prior reports archived to ~/.claude/yolo-archive/)"
+
+# Drop any cached pre-gather artifacts so Phase 1 hits live sources.
+rm -f /tmp/ops-marketing-dash.cache /tmp/ops-external.cache /tmp/ops-infra.cache 2>/dev/null || true
+```
+
+Each C-suite agent prompt MUST include this line verbatim:
+> "Use ONLY the pre-gathered data block in this prompt. Do NOT read prior /tmp/yolo-*/ files, do NOT reference cached reports, do NOT cite earlier session findings. This is a fresh-state run; report what is true RIGHT NOW."
+
+## Phase 1 — Pre-gather ALL data (live, never cached)
 
 Run all of these simultaneously:
 
@@ -115,6 +143,10 @@ cat "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null || echo '{}'
 
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
+```
+
+```!
+${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-dash 2>/dev/null || echo '{}'
 ```
 
 ```!
