@@ -1,151 +1,274 @@
 #!/usr/bin/env bash
 # ops-external — Health status for non-git (external) projects → JSON
-# Checks Shopify stores, Linear teams, Slack workspaces, Notion, custom endpoints
-# Reads from registry.json, outputs compact JSON for skill injection
+# Reads from TWO sources, merged + deduped:
+#   1. preferences.json — .ecom.projects.<alias>.{shopify,shipbob,...}
+#                       — .partner_registry.shopify_admin.stores.<alias>
+#                       — .partner_registry.{klaviyo,revenuecat,...}
+#                       — .marketing.projects.<alias>.<channel>  (declared but not probed here)
+#   2. registry.json    — legacy .projects[] entries with type/source markers
+#
+# Emits a JSON array; each entry: {alias, source, status, details, ...}.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-path.sh"
-
-if [ ! -f "$REGISTRY" ]; then
-  echo '[]' && exit 0
-fi
-
-# Extract external projects (type=external or source is set without paths/repos)
-EXTERNAL=$(jq -c '[.projects[] | select(.type == "external" or (.source != null and .source != "git"))]' "$REGISTRY" 2>/dev/null)
-
-if [ "$EXTERNAL" = "[]" ] || [ -z "$EXTERNAL" ]; then
-  echo '[]' && exit 0
-fi
+PREFS="${OPS_DATA_DIR}/preferences.json"
 
 TMPDIR_OPS=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_OPS"' EXIT
 
-COUNT=$(echo "$EXTERNAL" | jq 'length')
+# Resolve a cred reference. Same grammar as ops-marketing-dash.
+#   env:VAR | doppler:project/config/SECRET | inline literal
+resolve_cred() {
+  local ref="${1:-}"
+  [ -z "$ref" ] || [ "$ref" = "null" ] && return 0
+  case "$ref" in
+    env:*)
+      local var="${ref#env:}"
+      printf '%s' "${!var:-}"
+      ;;
+    doppler:*)
+      local path="${ref#doppler:}"
+      local proj="${path%%/*}"
+      local rest="${path#*/}"
+      local cfg="${rest%%/*}"
+      local secret="${rest#*/}"
+      [ -z "$proj" ] || [ -z "$cfg" ] || [ -z "$secret" ] && return 0
+      doppler secrets get "$secret" --project "$proj" --config "$cfg" --plain 2>/dev/null || true
+      ;;
+    *)
+      printf '%s' "$ref"
+      ;;
+  esac
+}
 
-for i in $(seq 0 $((COUNT - 1))); do
-  PROJECT=$(echo "$EXTERNAL" | jq -c ".[$i]")
-  ALIAS=$(echo "$PROJECT" | jq -r '.alias')
-  SOURCE=$(echo "$PROJECT" | jq -r '.source // "unknown"')
-
-  (
-    STATUS="unknown"
-    DETAILS="{}"
-
-    case "$SOURCE" in
-      shopify)
-        STORE_URL=$(echo "$PROJECT" | jq -r '.shopify.store_url // empty')
-        CRED_KEY=$(echo "$PROJECT" | jq -r '.shopify.credential_key // "SHOPIFY_TOKEN"')
-        TOKEN="${!CRED_KEY:-}"
-
-        if [ -n "$TOKEN" ] && [ -n "$STORE_URL" ]; then
-          RESP=$(curl -s -w "\n%{http_code}" \
-            -H "X-Shopify-Access-Token: $TOKEN" \
-            "https://$STORE_URL/admin/api/2024-10/shop.json" 2>/dev/null || echo -e "\n000")
-          HTTP_CODE=$(echo "$RESP" | tail -1)
-          BODY=$(echo "$RESP" | sed '$d')
-
-          if [ "$HTTP_CODE" = "200" ]; then
-            STATUS="healthy"
-            SHOP_NAME=$(echo "$BODY" | jq -r '.shop.name // "unknown"' 2>/dev/null)
-            PLAN=$(echo "$BODY" | jq -r '.shop.plan_name // "unknown"' 2>/dev/null)
-            DETAILS=$(jq -n --arg n "$SHOP_NAME" --arg p "$PLAN" '{shop_name:$n,plan:$p}')
-          elif [ "$HTTP_CODE" = "401" ]; then
-            STATUS="auth_expired"
-          else
-            STATUS="unreachable"
-          fi
-        else
-          STATUS="not_configured"
-        fi
-        ;;
-
-      linear)
-        TEAM_KEY=$(echo "$PROJECT" | jq -r '.linear.team_key // empty')
-        LINEAR_KEY="${LINEAR_API_KEY:-}"
-
-        if [ -n "$LINEAR_KEY" ] && [ -n "$TEAM_KEY" ]; then
-          RESP=$(curl -s -w "\n%{http_code}" -X POST \
-            -H "Authorization: $LINEAR_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"query\":\"{ team(id: \\\"$TEAM_KEY\\\") { name issueCount } }\"}" \
-            "https://api.linear.app/graphql" 2>/dev/null || echo -e "\n000")
-          HTTP_CODE=$(echo "$RESP" | tail -1)
-          BODY=$(echo "$RESP" | sed '$d')
-
-          if [ "$HTTP_CODE" = "200" ]; then
-            ERRORS=$(echo "$BODY" | jq '.errors' 2>/dev/null)
-            if [ "$ERRORS" = "null" ] || [ -z "$ERRORS" ]; then
-              STATUS="healthy"
-              TEAM_NAME=$(echo "$BODY" | jq -r '.data.team.name // "unknown"' 2>/dev/null)
-              ISSUES=$(echo "$BODY" | jq -r '.data.team.issueCount // 0' 2>/dev/null)
-              DETAILS=$(jq -n --arg n "$TEAM_NAME" --arg c "$ISSUES" '{team_name:$n,issue_count:($c|tonumber)}')
-            else
-              STATUS="error"
-            fi
-          else
-            STATUS="unreachable"
-          fi
-        else
-          STATUS="not_configured"
-        fi
-        ;;
-
-      slack)
-        # Slack health is checked via MCP — just mark as discovered
-        WORKSPACE=$(echo "$PROJECT" | jq -r '.slack.workspace // "unknown"')
-        STATUS="discovered"
-        DETAILS=$(jq -n --arg w "$WORKSPACE" '{workspace:$w,note:"use Slack MCP for details"}')
-        ;;
-
-      notion)
-        # Notion health is checked via MCP — just mark as discovered
-        WORKSPACE=$(echo "$PROJECT" | jq -r '.notion.workspace // "unknown"')
-        STATUS="discovered"
-        DETAILS=$(jq -n --arg w "$WORKSPACE" '{workspace:$w,note:"use Notion MCP for details"}')
-        ;;
-
-      custom)
-        HEALTH_URL=$(echo "$PROJECT" | jq -r '.custom.health_endpoint // empty')
-        CRED_KEY=$(echo "$PROJECT" | jq -r '.custom.credential_key // empty')
-        TOKEN="${CRED_KEY:+${!CRED_KEY:-}}"
-
-        if [ -n "$HEALTH_URL" ]; then
-          AUTH_HEADER=""
-          [ -n "$TOKEN" ] && AUTH_HEADER="-H \"Authorization: Bearer $TOKEN\""
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $AUTH_HEADER "$HEALTH_URL" 2>/dev/null || echo "000")
-
-          if [ "$HTTP_CODE" = "200" ]; then
-            STATUS="healthy"
-          elif [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
-            STATUS="auth_expired"
-          else
-            STATUS="degraded"
-          fi
-          DETAILS=$(jq -n --arg u "$HEALTH_URL" --arg c "$HTTP_CODE" '{health_url:$u,http_status:$c}')
-        else
-          STATUS="not_configured"
-        fi
-        ;;
-
-      *)
-        STATUS="unknown_source"
-        ;;
+# Probe a Shopify Admin API store. Echoes a JSON entry to stdout.
+#   $1 alias  $2 store_url  $3 token  $4 origin (preferences|partner_registry|registry)
+probe_shopify_admin() {
+  local alias="$1" store="$2" token="$3" origin="$4"
+  local status="unknown" shop_name="" plan=""
+  if [ -n "$token" ] && [ -n "$store" ]; then
+    local resp http body
+    resp=$(curl -gsS --max-time 5 -w "\n%{http_code}" \
+      -H "X-Shopify-Access-Token: $token" \
+      "https://${store}/admin/api/2024-10/shop.json" 2>/dev/null || echo -e "\n000")
+    http=$(echo "$resp" | tail -1)
+    body=$(echo "$resp" | sed '$d')
+    case "$http" in
+      200)  status="healthy"
+            shop_name=$(echo "$body" | jq -r '.shop.name // ""' 2>/dev/null || echo "")
+            plan=$(echo "$body"      | jq -r '.shop.plan_name // ""' 2>/dev/null || echo "") ;;
+      401)  status="auth_expired" ;;
+      404)  status="not_found" ;;
+      000)  status="unreachable" ;;
+      *)    status="degraded_http_${http}" ;;
     esac
+  else
+    status="not_configured"
+  fi
+  jq -n --arg a "$alias" --arg s "shopify_admin" --arg st "$status" \
+        --arg store "$store" --arg name "$shop_name" --arg plan "$plan" --arg o "$origin" \
+        '{alias:$a, source:$s, status:$st, origin:$o,
+          details:{store_url:$store, shop_name:$name, plan:$plan}}' \
+    > "$TMPDIR_OPS/shopify-${alias}.json"
+}
 
-    REVENUE_STAGE=$(echo "$PROJECT" | jq -r '.revenue.stage // "unknown"')
-    REVENUE_MODEL=$(echo "$PROJECT" | jq -r '.revenue.model // "unknown"')
-    PRIORITY=$(echo "$PROJECT" | jq -r '.priority // 99')
+# Probe Shopify Partner API token (used for app developers, not merchants).
+probe_shopify_partner() {
+  local alias="$1" token="$2" origin="$3"
+  local status="unknown"
+  if [ -n "$token" ]; then
+    # Cheap reachability probe: token presence is the signal; full Partner API
+    # GraphQL needs an org_id which varies by app. Mark as configured if non-empty.
+    status="configured"
+  else
+    status="not_configured"
+  fi
+  jq -n --arg a "$alias" --arg s "shopify_partner" --arg st "$status" --arg o "$origin" \
+        '{alias:$a, source:$s, status:$st, origin:$o,
+          details:{type:"partner_app", note:"Token presence verified; full Partner API probe requires org_id."}}' \
+    > "$TMPDIR_OPS/shopify-partner-${alias}.json"
+}
 
-    jq -n \
-      --arg a "$ALIAS" --arg s "$SOURCE" --arg st "$STATUS" \
-      --arg rs "$REVENUE_STAGE" --arg rm "$REVENUE_MODEL" --arg p "$PRIORITY" \
-      --argjson d "$DETAILS" \
-      '{alias:$a,source:$s,status:$st,revenue_stage:$rs,revenue_model:$rm,priority:($p|tonumber),details:$d}' \
-      > "$TMPDIR_OPS/$ALIAS.json"
-  ) &
-done
+# --- 1. preferences.json: Shopify stores in .ecom.projects ---
+if [ -f "$PREFS" ]; then
+  ECOM_ALIASES=$(jq -r '.ecom.projects // {} | keys[]' "$PREFS" 2>/dev/null || true)
+  for alias in $ECOM_ALIASES; do
+    SHOP=$(jq -c --arg a "$alias" '.ecom.projects[$a].shopify // empty' "$PREFS" 2>/dev/null || true)
+    [ -z "$SHOP" ] || [ "$SHOP" = "null" ] && continue
+
+    TYPE=$(echo "$SHOP" | jq -r '.type // "merchant"')
+    if [ "$TYPE" = "partner_app" ]; then
+      DOPPLER_KEY=$(echo "$SHOP" | jq -r '.partner_api_token_doppler_key // empty')
+      DOPPLER_PROJ=$(echo "$SHOP" | jq -r '.partner_api_token_project // empty')
+      TOKEN=""
+      if [ -n "$DOPPLER_KEY" ] && [ -n "$DOPPLER_PROJ" ]; then
+        PROJ="${DOPPLER_PROJ%%/*}"; CFG="${DOPPLER_PROJ#*/}"
+        TOKEN=$(doppler secrets get "$DOPPLER_KEY" --project "$PROJ" --config "$CFG" --plain 2>/dev/null || true)
+      fi
+      ( probe_shopify_partner "$alias" "$TOKEN" "preferences.ecom" ) &
+    else
+      STORE_REF=$(echo "$SHOP" | jq -r '.store_url // empty')
+      TOKEN_REF=$(echo "$SHOP" | jq -r '.admin_token // empty')
+      STORE=$(resolve_cred "$STORE_REF")
+      TOKEN=$(resolve_cred "$TOKEN_REF")
+      ( probe_shopify_admin "$alias" "$STORE" "$TOKEN" "preferences.ecom" ) &
+    fi
+  done
+
+  # --- 2. preferences.json: partner_registry.shopify_admin.stores ---
+  PR_ALIASES=$(jq -r '.partner_registry.shopify_admin.stores // {} | keys[]' "$PREFS" 2>/dev/null || true)
+  for alias in $PR_ALIASES; do
+    # Skip if we already emitted this alias from .ecom.projects
+    [ -f "$TMPDIR_OPS/shopify-${alias}.json" ] && continue
+    [ -f "$TMPDIR_OPS/shopify-partner-${alias}.json" ] && continue
+
+    STORE_INFO=$(jq -c --arg a "$alias" '.partner_registry.shopify_admin.stores[$a]' "$PREFS")
+    TYPE=$(echo "$STORE_INFO" | jq -r '.type // "merchant"')
+    DOPPLER_KEY=$(echo "$STORE_INFO" | jq -r '.doppler_key // empty')
+    DOPPLER_PROJ=$(echo "$STORE_INFO" | jq -r '.doppler_project // empty')
+    STORE=$(echo "$STORE_INFO" | jq -r '.store // empty')
+
+    if [ "$TYPE" = "partner_app" ]; then
+      TOKEN=""
+      if [ -n "$DOPPLER_KEY" ] && [ -n "$DOPPLER_PROJ" ]; then
+        PROJ="${DOPPLER_PROJ%%/*}"; CFG="${DOPPLER_PROJ#*/}"
+        TOKEN=$(doppler secrets get "$DOPPLER_KEY" --project "$PROJ" --config "$CFG" --plain 2>/dev/null || true)
+      fi
+      ( probe_shopify_partner "$alias" "$TOKEN" "preferences.partner_registry" ) &
+    else
+      TOKEN=""
+      if [ -n "$DOPPLER_KEY" ]; then
+        # Single-segment doppler key — try $alias/prd as the canonical path
+        TOKEN=$(doppler secrets get "$DOPPLER_KEY" --project "${alias}" --config "prd" --plain 2>/dev/null || true)
+      fi
+      ( probe_shopify_admin "$alias" "$STORE" "$TOKEN" "preferences.partner_registry" ) &
+    fi
+  done
+
+  # --- 3. preferences.json: marketing.projects (declared channels per project) ---
+  MARKETING_ALIASES=$(jq -r '.marketing.projects // {} | keys[]' "$PREFS" 2>/dev/null || true)
+  for alias in $MARKETING_ALIASES; do
+    CHANNELS=$(jq -r --arg a "$alias" \
+      '.marketing.projects[$a] | to_entries | map(select(.value | type == "object" and ([.[] | select(. != null and . != {})] | length) > 0)) | .[].key' \
+      "$PREFS" 2>/dev/null | sort -u | tr '\n' ',' | sed 's/,$//')
+    [ -z "$CHANNELS" ] && continue
+    jq -n --arg a "$alias" --arg c "$CHANNELS" \
+      '{alias:$a, source:"marketing", status:"declared", origin:"preferences.marketing",
+        details:{channels:($c | split(","))}}' \
+      > "$TMPDIR_OPS/marketing-${alias}.json" &
+  done
+
+  # --- 4. preferences.json: integrations (RevenueCat etc.) ---
+  jq -r '.integrations // {} | to_entries[] | "\(.key)\t\(.value.status // "unknown")"' "$PREFS" 2>/dev/null \
+  | while IFS=$'\t' read -r name status; do
+    [ -z "$name" ] && continue
+    jq -n --arg a "$name" --arg s "integration" --arg st "$status" \
+      '{alias:$a, source:$s, status:$st, origin:"preferences.integrations", details:{}}' \
+      > "$TMPDIR_OPS/integration-${name}.json" &
+  done
+fi
+
+# --- 5. registry.json: legacy external entries (Linear teams, Slack, custom endpoints) ---
+if [ -f "$REGISTRY" ]; then
+  EXTERNAL=$(jq -c '[.projects[]? | select(.type == "external" or (.source != null and .source != "git"))]' "$REGISTRY" 2>/dev/null || echo '[]')
+  COUNT=$(echo "$EXTERNAL" | jq 'length')
+  # BSD `seq 0 -1` counts down (prints 0\n-1) — guard explicitly when COUNT==0.
+  if [ "$COUNT" -gt 0 ]; then
+   for i in $(seq 0 $((COUNT - 1))); do
+    PROJECT=$(echo "$EXTERNAL" | jq -c ".[$i]")
+    ALIAS=$(echo "$PROJECT" | jq -r '.alias')
+    SOURCE=$(echo "$PROJECT" | jq -r '.source // "unknown"')
+
+    # Skip Shopify duplicates already covered by preferences.
+    if [ "$SOURCE" = "shopify" ] && \
+       { [ -f "$TMPDIR_OPS/shopify-${ALIAS}.json" ] || [ -f "$TMPDIR_OPS/shopify-partner-${ALIAS}.json" ]; }; then
+      continue
+    fi
+
+    (
+      STATUS="unknown"
+      DETAILS="{}"
+
+      case "$SOURCE" in
+        shopify)
+          STORE_URL=$(echo "$PROJECT" | jq -r '.shopify.store_url // empty')
+          CRED_KEY=$(echo "$PROJECT" | jq -r '.shopify.credential_key // "SHOPIFY_TOKEN"')
+          TOKEN="${!CRED_KEY:-}"
+          probe_shopify_admin "$ALIAS" "$STORE_URL" "$TOKEN" "registry"
+          continue
+          ;;
+
+        linear)
+          TEAM_KEY=$(echo "$PROJECT" | jq -r '.linear.team_key // empty')
+          LINEAR_KEY="${LINEAR_API_KEY:-}"
+          if [ -n "$LINEAR_KEY" ] && [ -n "$TEAM_KEY" ]; then
+            RESP=$(curl -gsS --max-time 5 -w "\n%{http_code}" -X POST \
+              -H "Authorization: $LINEAR_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\":\"{ team(id: \\\"$TEAM_KEY\\\") { name issueCount } }\"}" \
+              "https://api.linear.app/graphql" 2>/dev/null || echo -e "\n000")
+            HTTP_CODE=$(echo "$RESP" | tail -1); BODY=$(echo "$RESP" | sed '$d')
+            if [ "$HTTP_CODE" = "200" ]; then
+              ERRORS=$(echo "$BODY" | jq '.errors' 2>/dev/null)
+              if [ "$ERRORS" = "null" ] || [ -z "$ERRORS" ]; then
+                STATUS="healthy"
+                TEAM_NAME=$(echo "$BODY" | jq -r '.data.team.name // "unknown"')
+                ISSUES=$(echo "$BODY"  | jq -r '.data.team.issueCount // 0')
+                DETAILS=$(jq -n --arg n "$TEAM_NAME" --arg c "$ISSUES" '{team_name:$n,issue_count:($c|tonumber)}')
+              else STATUS="error"; fi
+            else STATUS="unreachable"; fi
+          else STATUS="not_configured"; fi
+          ;;
+
+        slack)
+          WORKSPACE=$(echo "$PROJECT" | jq -r '.slack.workspace // "unknown"')
+          STATUS="discovered"
+          DETAILS=$(jq -n --arg w "$WORKSPACE" '{workspace:$w,note:"use Slack MCP for details"}')
+          ;;
+
+        notion)
+          WORKSPACE=$(echo "$PROJECT" | jq -r '.notion.workspace // "unknown"')
+          STATUS="discovered"
+          DETAILS=$(jq -n --arg w "$WORKSPACE" '{workspace:$w,note:"use Notion MCP for details"}')
+          ;;
+
+        custom)
+          HEALTH_URL=$(echo "$PROJECT" | jq -r '.custom.health_endpoint // empty')
+          CRED_KEY=$(echo "$PROJECT" | jq -r '.custom.credential_key // empty')
+          TOKEN="${CRED_KEY:+${!CRED_KEY:-}}"
+          if [ -n "$HEALTH_URL" ]; then
+            AUTH_HEADER=""
+            [ -n "$TOKEN" ] && AUTH_HEADER="-H \"Authorization: Bearer $TOKEN\""
+            HTTP_CODE=$(curl -gsS --max-time 5 -o /dev/null -w "%{http_code}" $AUTH_HEADER "$HEALTH_URL" 2>/dev/null || echo "000")
+            case "$HTTP_CODE" in
+              200) STATUS="healthy" ;;
+              401|403) STATUS="auth_expired" ;;
+              *) STATUS="degraded" ;;
+            esac
+            DETAILS=$(jq -n --arg u "$HEALTH_URL" --arg c "$HTTP_CODE" '{health_url:$u,http_status:$c}')
+          else STATUS="not_configured"; fi
+          ;;
+
+        *) STATUS="unknown_source" ;;
+      esac
+
+      REVENUE_STAGE=$(echo "$PROJECT" | jq -r '.revenue.stage // "unknown"')
+      REVENUE_MODEL=$(echo "$PROJECT" | jq -r '.revenue.model // "unknown"')
+      PRIORITY=$(echo "$PROJECT" | jq -r '.priority // 99')
+
+      jq -n \
+        --arg a "$ALIAS" --arg s "$SOURCE" --arg st "$STATUS" \
+        --arg rs "$REVENUE_STAGE" --arg rm "$REVENUE_MODEL" --arg p "$PRIORITY" \
+        --argjson d "$DETAILS" \
+        '{alias:$a, source:$s, status:$st, origin:"registry", revenue_stage:$rs, revenue_model:$rm, priority:($p|tonumber), details:$d}' \
+        > "$TMPDIR_OPS/registry-${ALIAS}.json"
+    ) &
+   done
+  fi
+fi
+
 wait
 
 # Assemble array

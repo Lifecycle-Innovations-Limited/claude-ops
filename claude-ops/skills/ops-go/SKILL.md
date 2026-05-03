@@ -156,6 +156,12 @@ done
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
 ```
 
+### Marketing (live channel data per project)
+
+```!
+${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-dash 2>/dev/null || echo '{}'
+```
+
 ### Calendar (today)
 
 ```!
