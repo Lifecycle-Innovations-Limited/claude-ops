@@ -11,11 +11,10 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
+    "@clerk/nextjs": "^6.36.5",
     "next": "^16.2.3",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
-    "next-auth": "^5.0.0-beta.25",
-    "@auth/prisma-adapter": "^2.0.0",
     "@prisma/client": "^5.0.0",
     "stripe": "^14.0.0",
     "clsx": "^2.0.0",

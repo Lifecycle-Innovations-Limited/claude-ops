@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **`templates/nextjs-saas/`** — Replaced Auth.js (next-auth) with [Clerk](https://clerk.com): `@clerk/nextjs`, `ClerkProvider`, `middleware.ts` with `clerkMiddleware` + `createRouteMatcher`, `<SignIn />` / `<SignUp />` at `/login` and `/register`, and `UserButton` in the dashboard layout. Prisma `User` now stores `clerkUserId` (unique); NextAuth `Account`, `Session`, and `VerificationToken` models removed. Added `lib/sync-user.ts` so the first dashboard visit upserts a Prisma user for Stripe `metadata.userId`. Environment variables are Clerk keys plus optional `NEXT_PUBLIC_CLERK_SIGN_*` URL hints (see template `.env.example`).
+
 ## [2.1.3] — 2026-05-03
 
 Patch release — `bin/ops-external` and `bin/ops-marketing-dash` are now preferences-aware and surface real Shopify, Klaviyo, Meta, Instagram, and GSC data per project. `/ops:ops-yolo` always archives prior session reports to force a fresh-state run.
