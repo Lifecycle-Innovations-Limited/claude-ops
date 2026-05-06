@@ -523,13 +523,27 @@ prefetch_briefing_cache() {
   local CACHE="$CACHE_DIR/briefing.json"
   local LAST_FETCH="$CACHE_DIR/.briefing_ts"
 
-  # Throttle: only run every 5 min
+  # Throttle: only run every 30 min by default.
+  #
+  # Why 30 min and not 5: every refresh fires `gh pr list` (line below) which
+  # consumes one GitHub REST API call against the user's personal token. At a
+  # 5-minute TTL that is 12 calls/hr * 24h = 288 calls/day from this single
+  # callsite, on top of any interactive `gh` use. Over a few days that
+  # accumulation alone can exhaust the 5000/hr REST budget that's shared
+  # with every other tool authenticated as the same user (gh CLI, MCP github
+  # server, hosted CI using the same PAT). 30 min keeps morning-briefing
+  # data fresh enough — open PR lists rarely change faster than that — and
+  # cuts the daily call volume to ~48.
+  #
+  # Override with $OPS_BRIEFING_PREFETCH_TTL (seconds) if a deployment
+  # genuinely needs faster cycles.
+  local PREFETCH_TTL="${OPS_BRIEFING_PREFETCH_TTL:-1800}"
   if [[ -f "$LAST_FETCH" ]]; then
     local last
     last=$(cat "$LAST_FETCH")
     local now
     now=$(date +%s)
-    if (( now - last < 300 )); then return 0; fi
+    if (( now - last < PREFETCH_TTL )); then return 0; fi
   fi
 
   log "BRAIN: refreshing briefing cache"
