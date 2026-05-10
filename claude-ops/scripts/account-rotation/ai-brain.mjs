@@ -148,7 +148,7 @@ async function invokeBedrockConverse(bedrockMessages, log, options = {}) {
       accessKeyId: aws.accessKeyId,
       secretAccessKey: aws.secretAccessKey,
       region: aws.region,
-      service: "bedrock",
+      service: "bedrock-runtime",
     });
 
     const bedrockUrl = `https://bedrock-runtime.${aws.region}.amazonaws.com/model/${modelId}/converse`;
