@@ -1087,6 +1087,62 @@ PY
   date +%s > "$LAST_CHECK"
 }
 
+# ── Kill stuck gh polling processes (REST rate-limit hygiene) ────────────
+# `gh pr checks <N> --watch` and `gh run watch <N>` poll the GitHub REST API
+# every ~2s indefinitely. When left behind by an interrupted skill or a
+# forgotten foreground command, a single watcher can burn 1800 calls/hr —
+# half the 5000/hr personal token bucket. This kills any gh poller older
+# than MAX_AGE_SECONDS (default 30 min) so the REST quota stays healthy
+# for interactive work.
+#
+# Scope: only matches `gh.*--watch` (the polling pattern). One-shot kills
+# (`gh pr merge`, `gh api`) are not affected. Self-throttled to 5 min.
+kill_stuck_gh_watchers() {
+  local LAST_CHECK="$DATA_DIR/cache/.gh_watcher_kill_ts"
+  local now; now=$(date +%s)
+  mkdir -p "$DATA_DIR/cache" 2>/dev/null || true
+  if [[ -f "$LAST_CHECK" ]]; then
+    local last; last=$(cat "$LAST_CHECK" 2>/dev/null || echo 0)
+    if (( now - last < 300 )); then return 0; fi
+  fi
+
+  local MAX_AGE_SECONDS="${OPS_GH_WATCHER_MAX_AGE:-1800}"
+  local killed=0
+
+  # ps -eo etime format: "MM:SS" | "HH:MM:SS" | "DD-HH:MM:SS"
+  # Parse via awk to seconds, kill anything older than threshold.
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local pid="${line%% *}"
+    [[ -z "$pid" ]] && continue
+    log "WATCHER-KILL: terminating stuck gh poller (PID $pid, age >${MAX_AGE_SECONDS}s)"
+    kill -TERM "$pid" 2>/dev/null || true
+    killed=$((killed + 1))
+  done < <(ps -eo pid,etime,command 2>/dev/null | awk -v max="$MAX_AGE_SECONDS" '
+    # Match gh ... --watch (excluding our own awk and grep noise)
+    /gh .*--watch/ && !/awk/ && !/grep/ {
+      et = $2
+      secs = 0
+      # Strip days prefix "DD-"
+      if (et ~ /-/) {
+        n = split(et, a, "-")
+        secs += a[1] * 86400
+        et = a[2]
+      }
+      # Parse remaining HH:MM:SS or MM:SS
+      n = split(et, b, ":")
+      if (n == 3) secs += b[1]*3600 + b[2]*60 + b[3]
+      else if (n == 2) secs += b[1]*60 + b[2]
+      if (secs > max) print $1
+    }
+  ')
+
+  if (( killed > 0 )); then
+    log "WATCHER-KILL: killed $killed stuck gh poller process(es)"
+  fi
+  date +%s > "$LAST_CHECK"
+}
+
 # ── Phase 16: credential expiry (offline) ────────────────────────────────
 # Reads *_expires_at / *_created_at from preferences.json and warns:
 #   - expires within WARN_DAYS (7)
@@ -1730,6 +1786,7 @@ while true; do
 
   # ── Phase 16: infrastructure hardening ───────────────────────────────────
   check_rate_limits                # Every 5 min: reset rollover windows + warnings
+  kill_stuck_gh_watchers           # Every 5 min: TERM gh ... --watch processes >30 min old
   check_credential_expiry          # Hourly: offline check of *_expires_at / *_created_at
 
   write_daemon_health
