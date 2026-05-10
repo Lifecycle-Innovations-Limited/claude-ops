@@ -72,6 +72,15 @@ Produce ONE single line (max 240 chars) describing the CURRENT state of work, we
 
 result=$(printf '%s' "$prompt" | claude -p --model haiku --no-session-persistence --output-format text 2>/dev/null | head -c 260 | LC_ALL=C tr '\n' ' ')
 
+# Reject Claude error / auth / quota strings — never let them pollute the
+# digest OR the rolling log (which feeds back as PRIOR HEADLINES on next run).
+case "$result" in
+  ""|"Prompt is too long"*|"Error:"*|"error:"*|"API Error"*|"Credit balance"*|"Invalid API"*|"You've hit your limit"*|"You've reached your"*|"Claude AI usage limit"*|"Usage limit"*|"usage limit"*|"Rate limit"*|"rate limit"*|"resets May"*|"resets at"*|"Please try again"*|"Account is restricted"*|"Not logged in"*|*"Please run /login"*|*"run /login"*|"OAuth"*|"oauth"*|"Authentication"*|"authentication"*)
+    printf '[%s] SKIP bad-result: %s\n' "$(date '+%H:%M')" "$result" >> "${LOG}.errors"
+    exit 0
+    ;;
+esac
+
 if [ -n "$result" ]; then
   printf '%s' "$result" > "$DIGEST"
   printf '[%s] %s\n' "$(date '+%H:%M')" "$result" >> "$LOG"
