@@ -23,18 +23,8 @@
  *   node daemon.mjs --status  # Show daemon status
  */
 
-import {
-  readFileSync,
-  writeFileSync,
-  existsSync,
-  unlinkSync,
-  appendFileSync,
-  statSync,
-} from 'fs';
-import {
-  persistBedrockClaudeSettings,
-  clearHardcodedModelsForOAuthClaudeSettings,
-} from './claude-settings-mode.mjs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync, appendFileSync, statSync } from 'fs';
+import { persistBedrockClaudeSettings, clearHardcodedModelsForOAuthClaudeSettings } from './claude-settings-mode.mjs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync, execFileSync, spawn } from 'child_process';
@@ -469,9 +459,7 @@ async function findValidRotationTarget(config, state) {
         continue;
       }
       if (cachedAge > 30) {
-        log(
-          `[pre-rotate] ${key}: live query FAILED + cache stale (${cachedAge.toFixed(0)}min) — REFUSING (safety)`,
-        );
+        log(`[pre-rotate] ${key}: live query FAILED + cache stale (${cachedAge.toFixed(0)}min) — REFUSING (safety)`);
         continue;
       }
       log(
@@ -549,7 +537,9 @@ async function allCandidatesExhausted(config, state) {
     if (now - cached.ts > 15 * 60_000) return false;
     if (cached.pct < EXHAUSTED_THRESHOLD) return false;
   }
-  log('[allCandidatesExhausted] cached-evidence path: live unreachable but cached + rate-limit signal confirm exhaustion');
+  log(
+    '[allCandidatesExhausted] cached-evidence path: live unreachable but cached + rate-limit signal confirm exhaustion',
+  );
   return true;
 }
 
@@ -875,7 +865,9 @@ async function mainLoop() {
             state.accounts = state.accounts || {};
             state.accounts[probeKey] = state.accounts[probeKey] || {};
             state.accounts[probeKey].lastUtilization = { pct: max, reset: null, ts: Date.now() };
-            try { writeFileSync(STATE_PATH, JSON.stringify(state, null, 2)); } catch {}
+            try {
+              writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+            } catch {}
             if (max < 70) {
               const tokenJson = readStoredToken(probe);
               if (tokenJson && !tokenExpired(tokenJson)) {

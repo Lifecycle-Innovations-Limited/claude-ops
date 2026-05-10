@@ -528,10 +528,7 @@ function recommendAccount(config, state, liveUtil) {
       return Math.max(u.five_hour_pct, u.seven_day_pct) >= EXHAUSTED_THRESHOLD;
     });
   const destinationCapStuck =
-    !pick &&
-    !onlyActiveViable &&
-    !allExhausted &&
-    allNonActiveLiveConfirmedOverDestinationCap(config, state, liveUtil);
+    !pick && !onlyActiveViable && !allExhausted && allNonActiveLiveConfirmedOverDestinationCap(config, state, liveUtil);
   return { pick, allExhausted, allHaveLive, onlyActiveViable, destinationCapStuck };
 }
 
@@ -578,10 +575,7 @@ async function activateBedrockFallback(reason) {
       log(`⚠ settings.json Bedrock persist failed: ${(e.message || e).toString().slice(0, 120)}`);
     }
     log(`✅ BEDROCK FALLBACK ACTIVATED region=${region} reason=${reason}`);
-    notify(
-      'Bedrock Fallback Active',
-      `All Anthropic accounts exhausted — switched to Bedrock (${region}).`,
-    );
+    notify('Bedrock Fallback Active', `All Anthropic accounts exhausted — switched to Bedrock (${region}).`);
     console.log('');
     console.log('━━━ BEDROCK FALLBACK ACTIVE ━━━');
     console.log(`Reason : ${reason}`);
@@ -2687,16 +2681,16 @@ async function rotate(targetEmail, opts = {}) {
       };
     }
   }
-  try { writeState(state); } catch {}
+  try {
+    writeState(state);
+  } catch {}
   const bedrockOnExhausted = opts.bedrockOnExhausted !== false; // default ON
 
   if (!targetEmail) {
     const { pick, allExhausted, onlyActiveViable, destinationCapStuck } = recommendAccount(config, state, liveUtil);
     if (!pick) {
       if (onlyActiveViable) {
-        log(
-          'Rotation skipped — already on the only viable Max account (API headroom; other accounts exhausted).',
-        );
+        log('Rotation skipped — already on the only viable Max account (API headroom; other accounts exhausted).');
         return true;
       }
       if (allExhausted || destinationCapStuck) {
@@ -2707,9 +2701,10 @@ async function rotate(targetEmail, opts = {}) {
             `Every live-confirmed non-active account is ≥${destinationUtilHardBlock(config)}% max(5h,7d) — no rotation target; engaging Bedrock fallback`,
           );
         }
-        if (bedrockOnExhausted) await activateBedrockFallback(
-          allExhausted ? 'all_accounts_exhausted_picker_null' : 'destination_cap_no_headroom',
-        );
+        if (bedrockOnExhausted)
+          await activateBedrockFallback(
+            allExhausted ? 'all_accounts_exhausted_picker_null' : 'destination_cap_no_headroom',
+          );
       } else {
         log('No account available (see utilization / query logs above)');
       }
@@ -3484,7 +3479,7 @@ if (args.includes('--setup')) {
   }
   // Exit codes: 0 = viable pick available, 2 = Bedrock path (exhausted or destination-cap stuck),
   // 3 = no viable pick but not confirmed for Bedrock (some queries failed — investigate).
-  process.exit(pick || onlyActiveViable ? 0 : (allExhausted || destinationCapStuck ? 2 : 3));
+  process.exit(pick || onlyActiveViable ? 0 : allExhausted || destinationCapStuck ? 2 : 3);
 } else if (args.includes('--status')) {
   showStatus();
 } else if (args.includes('--capture')) {

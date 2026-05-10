@@ -6,9 +6,6 @@
  */
 import { resolveBedrockClaudeModelIds } from './claude-settings-mode.mjs';
 
-const region =
-  process.env.AWS_BEDROCK_REGION ||
-  process.argv[2] ||
-  'us-east-1';
+const region = process.env.AWS_BEDROCK_REGION || process.argv[2] || 'us-east-1';
 
 console.log(JSON.stringify(resolveBedrockClaudeModelIds(region)));
