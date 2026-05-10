@@ -579,6 +579,29 @@ export async function askAIBrain({
   }
 }
 
+// Code-level URL allowlist — prompt constraints alone are insufficient.
+const GOTO_ALLOWED_HOST_SUFFIXES = [
+  "claude.ai",
+  "accounts.google.com",
+  "myaccount.google.com",
+  "login.microsoftonline.com",
+];
+
+function isAllowedAIGotoUrl(raw) {
+  let u;
+  try {
+    u = new URL(String(raw));
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:") return false;
+  const host = u.hostname.toLowerCase();
+  for (const suffix of GOTO_ALLOWED_HOST_SUFFIXES) {
+    if (host === suffix || host.endsWith(`.${suffix}`)) return true;
+  }
+  return false;
+}
+
 // ── Execute the returned action against the existing driver ──────────────────
 export async function executeAIAction(driver, action, { googlePassword } = {}) {
   if (!action?.action) return false;
@@ -598,7 +621,7 @@ export async function executeAIAction(driver, action, { googlePassword } = {}) {
         return await driver.fillInput(sel, googlePassword);
       }
       case "goto": {
-        if (!action.url) return false;
+        if (!action.url || !isAllowedAIGotoUrl(action.url)) return false;
         await driver.goto(action.url);
         return true;
       }
