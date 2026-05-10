@@ -226,6 +226,7 @@ export function clearHardcodedModelsForOAuthClaudeSettings() {
   for (const k of [
     'CLAUDE_CODE_USE_BEDROCK',
     'AWS_BEDROCK_REGION',
+    'AWS_REGION',
     'ANTHROPIC_API_KEY',
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_BASE_URL',

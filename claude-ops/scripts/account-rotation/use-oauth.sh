@@ -8,6 +8,7 @@
 
 unset CLAUDE_CODE_USE_BEDROCK
 unset AWS_BEDROCK_REGION
+unset AWS_REGION
 unset ANTHROPIC_MODEL
 unset ANTHROPIC_SMALL_FAST_MODEL
 unset ANTHROPIC_API_KEY
@@ -22,7 +23,7 @@ try:
 except Exception:
     s = {}
 env = s.setdefault("env", {})
-for k in ("CLAUDE_CODE_USE_BEDROCK", "AWS_BEDROCK_REGION",
+for k in ("CLAUDE_CODE_USE_BEDROCK", "AWS_BEDROCK_REGION", "AWS_REGION",
           "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
           "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"):
     env.pop(k, None)

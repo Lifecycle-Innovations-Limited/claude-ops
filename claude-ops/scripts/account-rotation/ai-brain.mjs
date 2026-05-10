@@ -99,7 +99,7 @@ function extractBedrockText(data) {
 }
 
 function resolveAwsCredentials() {
-  const envPath = join(process.env.HOME, ".env");
+  const envPath = join(process.env.HOME || "", ".env");
   let envContent = "";
   try {
     envContent = readFileSync(envPath, "utf8");
