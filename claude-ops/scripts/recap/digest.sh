@@ -76,10 +76,20 @@ result=$(printf '%s' "$prompt" | claude -p --model haiku --no-session-persistenc
 # digest OR the rolling log (which feeds back as PRIOR HEADLINES on next run).
 case "$result" in
   ""|"Prompt is too long"*|"Error:"*|"error:"*|"API Error"*|"Credit balance"*|"Invalid API"*|"You've hit your limit"*|"You've reached your"*|"Claude AI usage limit"*|"Usage limit"*|"usage limit"*|"Rate limit"*|"rate limit"*|"resets May"*|"resets at"*|"Please try again"*|"Account is restricted"*|"Not logged in"*|*"Please run /login"*|*"run /login"*|"OAuth"*|"oauth"*|"Authentication"*|"authentication"*)
-    printf '[%s] SKIP bad-result: %s\n' "$(date '+%H:%M')" "$result" >> "${LOG}.errors"
-    exit 0
+    printf '[%s] SKIP bad-result: %s
+' "$(date '+%H:%M')" "$result" >> "${LOG}.errors"
+    result=""
     ;;
 esac
+
+# Fallback: if Claude unavailable, assemble a plain-text digest from session recaps
+if [ -z "$result" ] && [ -n "$sessions" ]; then
+  result=$(printf '%s' "$sessions" \
+    | LC_ALL=C tr '
+' ' ' \
+    | LC_ALL=C sed 's/^- //; s/ - /  /g' \
+    | head -c 240)
+fi
 
 if [ -n "$result" ]; then
   printf '%s' "$result" > "$DIGEST"
