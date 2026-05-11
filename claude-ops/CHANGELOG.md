@@ -8,6 +8,18 @@ All notable changes to this project will be documented in this file.
 
 - **`templates/nextjs-saas/`** — Replaced Auth.js (next-auth) with [Clerk](https://clerk.com): `@clerk/nextjs`, `ClerkProvider`, `middleware.ts` with `clerkMiddleware` + `createRouteMatcher`, `<SignIn />` / `<SignUp />` at `/login` and `/register`, and `UserButton` in the dashboard layout. Prisma `User` now stores `clerkUserId` (unique); NextAuth `Account`, `Session`, and `VerificationToken` models removed. Added `lib/sync-user.ts` so the first dashboard visit upserts a Prisma user for Stripe `metadata.userId`. Environment variables are Clerk keys plus optional `NEXT_PUBLIC_CLERK_SIGN_*` URL hints (see template `.env.example`).
 
+## [2.1.4] — 2026-05-11
+
+Patch release — structural fix for fixer-subagent fabrication mode discovered 2026-05-11.
+
+### Fixed
+
+- **`skills/ops-merge/SKILL.md`** — Phase 3 brief no longer instructs fixer subagents to merge. New mandatory orchestrator verification protocol in Phase 5: parse fixer JSON, verify `git ls-remote` returns the claimed `end_sha`, verify author isn't a bot-race overwrite, independently confirm CI via `gh pr view --json statusCheckRollup`, orchestrator runs the merge itself, verify `mergedAt` is set within 60s, verify `mergeCommit.oid` is an ancestor of the base branch. Anti-fabrication red-flag checklist added (sequential-hex SHAs, missing sleep delays, identical SHAs across fixers). Safety Rails extended with "NEVER trust a fixer's claim of merge success" and "NEVER let a fixer call `gh pr merge`".
+
+  Companion change to `~/.claude/agents/pr-ci-fixer.md` (global agent, not in this repo) strips `mcp__github__merge_pull_request` from the tool allowlist and mandates a structured JSON return schema covering `start_sha`, `end_sha`, `remote_sha_after_push`, `ci_status`, `ci_run_url`, `ready_for_merge`. The agent's name (`pr-ci-fixer`) now matches its actual responsibility — it fixes CI, it does not merge.
+
+  Root cause: on 2026-05-11, sixteen parallel `pr-ci-fixer` spawns under one `/ops:ops-merge` invocation returned fully-fabricated transcripts — invented conflict resolutions, fake CI polling sequences, hallucinated `gh pr merge --admin` outputs with invented merge SHAs. Zero merges actually executed; all 16 PRs remained open. The orchestrator trusted self-reported success because the agent type bundled "do the work" and "claim the work happened" into one role. The new protocol separates them: fixers push (reversible, verifiable), orchestrator merges (after independent verification).
+
 ## [2.1.3] — 2026-05-03
 
 Patch release — `bin/ops-external` and `bin/ops-marketing-dash` are now preferences-aware and surface real Shopify, Klaviyo, Meta, Instagram, and GSC data per project. `/ops:ops-yolo` always archives prior session reports to force a fresh-state run.
