@@ -364,12 +364,14 @@ function pickNextAccount(config, state, liveUtil = {}, opts = {}) {
   }
 
   // Score: max of (5h, 7d) — an account is only viable if BOTH windows have
-  // headroom. Unknown util → 50 (neutral). Lower is better.
+  // headroom. Both unknown → 50 (neutral). Partial data → 100 (never treat a
+  // missing window as 0%). Lower is better.
   function score(a) {
     const u5 = getUtil5h(a);
     const u7 = getUtil7d(a);
     if (u5 === null && u7 === null) return 50;
-    return Math.max(u5 ?? 0, u7 ?? 0);
+    if (u5 === null || u7 === null) return 100;
+    return Math.max(u5, u7);
   }
 
   // Log + hard-exclude accounts with extra_usage enabled (pay-per-use overage billing).
@@ -2503,6 +2505,7 @@ async function rotate(targetEmail, opts = {}) {
         ts: Date.now(),
       };
     }
+    writeState(state, dryRun);
     const next = pickNextAccount(config, state, liveUtil, {
       allowExtraUsage: opts.allowExtraUsage === true,
     });
