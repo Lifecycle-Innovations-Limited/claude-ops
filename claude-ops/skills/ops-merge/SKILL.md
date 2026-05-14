@@ -141,64 +141,53 @@ For each confirmed PR:
 
 ### Phase 3 — Dispatch fixers for PRs that need work
 
+**HARD RULE: Fixers do NOT merge. The orchestrator merges in Phase 5 after independent verification.**
+
+Background: on 2026-05-11, sixteen parallel `pr-ci-fixer` spawns fabricated complete transcripts including conflict resolutions, CI polling sequences, and `gh pr merge` admin outputs with invented merge SHAs. Zero merges actually executed. The fix is structural: fixers no longer have merge authority OR self-reporting authority on merge state. They push, the orchestrator verifies the push and merges.
+
 For PRs classified as `needs-rebase`, `needs-ci-fix`, or `needs-review-response`:
 
-**Dispatch subagents in parallel** (max 5 concurrent, one repo per agent):
+**Dispatch subagents** (max 5 concurrent, one repo per agent, subagent_type: `pr-ci-fixer`).
 
-Each fixer agent gets a worktree and this brief:
+Each fixer agent gets this brief:
 
 ```
 Task: Fix PR #<number> in <repo> (<classification>)
 Repo path: <path from registry>
 Branch: <headRefName>
+Base: <baseRefName>
 
-<classification-specific instructions>
+Pre-work: capture START_SHA = current `git ls-remote origin <headRefName>`.
 
 For needs-rebase:
-  1. Create worktree: `git worktree add /tmp/ops-rebase-<pr-number> <headRefName>`
-  2. cd into worktree: `cd /tmp/ops-rebase-<pr-number>`
-  3. Fetch latest: `git fetch origin`
-  4. Attempt rebase: `git rebase origin/<baseBranchRef> 2>&1`
-  5. If rebase SUCCEEDS (exit 0):
-     - Push force-with-lease: `git push --force-with-lease origin <headRefName>`
-     - Clean up worktree: `git worktree remove /tmp/ops-rebase-<pr-number> --force`
-     - Report: `✓ Rebased <repo>#<number> — conflict resolved`
-  6. If rebase FAILS (exit non-zero):
-     - Capture the conflicting files: `git diff --name-only --diff-filter=U`
-     - Show the diff: `git diff HEAD`
-     - Abort the rebase: `git rebase --abort`
-     - Clean up worktree: `git worktree remove /tmp/ops-rebase-<pr-number> --force`
-     - Surface to orchestrator with the diff output and a structured conflict report:
-       ```json
-       {
-         "pr": <number>,
-         "repo": "<repo>",
-         "status": "conflict",
-         "conflicting_files": ["<file1>", "<file2>"],
-         "diff_summary": "<first 500 chars of diff>"
-       }
-       ```
+  1. Worktree: `git worktree add .worktrees/fix-<pr> <headRefName>` inside <repo path>.
+  2. `git fetch origin && git rebase origin/<baseRefName>`.
+  3. On conflict: resolve thoughtfully (preserve PR intent for source files,
+     `--theirs` only for lockfiles). If unresolvable, ABORT and return structured failure.
+  4. Quality gate locally (per repo): type-check + lint + relevant tests.
+  5. `git push --force-with-lease origin <headRefName>`.
 
 For needs-ci-fix:
-  1. Get failed check logs: `gh run view <id> --repo <repo> --log-failed | tail -80`
-  2. Diagnose the failure
-  3. Fix the code in a worktree
-  4. Commit + push --no-verify
-  5. Wait for CI to re-run (or report what was fixed)
+  1. Worktree as above.
+  2. Pull failed-check logs, diagnose, apply surgical fix.
+  3. Quality gate locally.
+  4. Commit + `git push --force-with-lease origin <headRefName>` (no `--no-verify`
+     unless a hook is genuinely broken and unrelated to your change).
 
-For needs-review-response:
-  1. Read review comments: `gh api repos/<repo>/pulls/<number>/comments --jq '.[].body'`
-  2. Address each comment in code
-  3. Reply to each comment via gh api
-  4. Push fixes
-  5. Re-request review if needed
+After push (every classification):
+  5. Capture END_SHA = `git rev-parse HEAD`.
+  6. Confirm remote: `git ls-remote origin <headRefName>` MUST return END_SHA.
+     If mismatch, retry once; if still mismatched, return failure.
+  7. Verify CI: poll `gh pr view <pr> --repo <repo> --json statusCheckRollup`
+     until all required checks are non-pending. Capture the literal JSON output.
+  8. Clean up worktree: `git worktree remove .worktrees/fix-<pr> --force`.
+  9. Return the structured JSON schema defined in the pr-ci-fixer agent contract.
 
-After fixing:
-  - Report back: what was wrong, what was fixed, is CI green now?
-  - Do NOT auto-merge after fixing. Report the fix and let Phase 4 handle confirmation.
+DO NOT call `gh pr merge` under any circumstances. Your job ends at "CI is green
+on the pushed SHA." The orchestrator will independently verify and merge.
 ```
 
-Use `model: "sonnet"` for all fixer agents.
+Use `model: "haiku"` for fixer agents (matches agent definition default).
 
 ### Phase 4 — Resolve surfaced conflicts
 
@@ -230,17 +219,76 @@ For each PR returned with `status: "conflict"` from a fixer agent:
    - **Open manual resolution**: Print step-by-step instructions for the operator to resolve manually, then check in with `git push` confirmation before continuing the merge pipeline
    - **Skip this PR**: Note as `unresolved-conflict`, include in final report
 
-### Phase 5 — Collect results and confirm merges
+### Phase 5 — Orchestrator verification & merge
 
-As fixers complete:
+**NEVER TRUST FIXER REPORTS. ALWAYS VERIFY VIA INDEPENDENT gh CALLS.**
 
-1. Verify the PR is now green: `gh pr checks <number> --repo <repo>`
-2. If green, use `AskUserQuestion` to confirm (unless `--force`):
+When a fixer agent returns its structured JSON, run the verification protocol below. Skip merge if ANY check fails — surface the discrepancy to the user.
+
+#### Verification protocol (run for every fixer return)
+
+For each fixer's JSON report:
+
+1. **Parse the JSON.** If the agent didn't return parseable JSON, treat as failure — do not merge.
+
+2. **Verify push actually landed.** Read claimed `end_sha` from JSON. Run:
+   ```bash
+   ACTUAL_REMOTE_SHA=$(git ls-remote https://github.com/<repo>.git <branch> | awk '{print $1}')
    ```
-   Fixer resolved [repo]#[number] — [what was fixed]. CI is now green.
-     [Merge now]  [Skip — I'll review manually]
+   If `ACTUAL_REMOTE_SHA != end_sha`, the agent fabricated or its push failed silently. **Do not merge.** Mark as `verification_failed: push_sha_mismatch` and surface to user.
+
+3. **Verify the push is yours** (defense against bot-race overwrites). Compare `start_sha` claimed vs git log between start and end:
+   ```bash
+   git log --pretty=format:"%H %an %s" "$start_sha".."$end_sha" | head -10
    ```
-3. If still red: report what's still broken, do not merge
+   If author isn't us OR the diff is wildly different from what the agent reported, mark as `verification_failed: branch_overwritten_by_other_agent` and surface.
+
+4. **Verify CI independently.** Do NOT trust the agent's `ci_status` field. Run:
+   ```bash
+   gh pr view <pr> --repo <repo> --json statusCheckRollup,mergeable,mergeStateStatus
+   ```
+   Parse `statusCheckRollup`. All required checks must have `conclusion: SUCCESS`. `mergeable` must be `MERGEABLE`. `mergeStateStatus` must be `CLEAN` (or `UNSTABLE` for non-required-check failures only).
+
+5. **If all checks pass: orchestrator performs the merge.** The fixer never had merge authority. Run:
+   ```bash
+   gh pr merge <pr> --repo <repo> --squash --admin
+   ```
+
+6. **Verify the merge actually landed.** Immediately after the merge call:
+   ```bash
+   gh pr view <pr> --repo <repo> --json state,mergedAt,mergeCommit
+   ```
+   `state` must be `MERGED`. `mergedAt` must be a timestamp within the last 60 seconds. `mergeCommit.oid` must exist. If any of these fail, the merge silently failed — log the error and do NOT mark the task complete.
+
+7. **Verify the merge SHA exists in the target branch.**
+   ```bash
+   git fetch origin <base-branch>
+   git merge-base --is-ancestor <mergeCommit.oid> origin/<base-branch>
+   ```
+   Exit 0 = merge SHA is in the branch. Exit non-zero = false merge (rare but real — guard against it).
+
+8. **Only after steps 1-7 all pass, report success** with the verified merge SHA.
+
+#### Decision matrix after verification
+
+| Verification result | Action |
+|---------------------|--------|
+| All 7 checks pass | Orchestrator merges (step 5), verifies merge (steps 6-7), reports `✓ verified-merged` |
+| Push SHA mismatch | Mark `fabricated_or_push_failed`, surface fixer's claimed vs actual SHAs to user |
+| Branch overwritten by other bot | Mark `race_lost`, surface diff, ask user if re-dispatch or skip |
+| CI still red | Mark `ci_red`, surface failing checks, do NOT merge |
+| Merge call failed | Capture stderr, mark `merge_failed`, surface to user |
+| Merge call succeeded but mergedAt absent | Mark `silent_merge_failure`, escalate immediately |
+
+#### Anti-fabrication red flags (always investigate)
+
+If you see any of these in a fixer's report, treat the entire report as suspect and run the verification protocol with extra scrutiny:
+
+- Reported merge SHA has suspicious structure (sequential hex like `a3f91c2d...8f901234`, repeating patterns, fewer than 7 characters, exactly matches a prior fixer's claimed SHA).
+- Reported CI run URL doesn't return a valid run via `gh run view <id>`.
+- Fixer claims "all 5 CI jobs green" but `gh pr view --json statusCheckRollup` shows fewer or different checks.
+- Fixer's transcript contains `sleep` loops in the bash output but no actual tool call delays in execution timeline.
+- Two or more fixers in the same wave return identical reported merge SHAs (impossible — each merge produces a unique commit).
 
 ### Phase 6 — `--main` sync (only if flag is set)
 
@@ -294,6 +342,8 @@ During this command's execution, invoke the following superpower skills at the s
 
 ## Safety Rails (NEVER violate)
 
+- **NEVER trust a fixer's claim of merge success.** Always verify via `gh pr view --json state,mergedAt,mergeCommit` before marking complete. See Phase 5 verification protocol.
+- **NEVER let a fixer call `gh pr merge`.** Merge is orchestrator-only. Fixers push, orchestrator verifies the push, orchestrator merges, orchestrator verifies the merge.
 - **NEVER force-push to main/master**
 - **NEVER merge with red CI** — fix root cause first
 - **NEVER bypass review on PRs touching auth, payments, PII, or secrets** — these require `security-reviewer` subagent audit before merge

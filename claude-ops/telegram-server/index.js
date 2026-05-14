@@ -29,11 +29,29 @@ import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
+import { execFileSync } from 'node:child_process';
 
-const API_ID = parseInt(process.env.TELEGRAM_API_ID || '0', 10);
-const API_HASH = process.env.TELEGRAM_API_HASH || '';
-const SESSION_STRING = process.env.TELEGRAM_SESSION || '';
-const PHONE = process.env.TELEGRAM_PHONE || '';
+// macOS Keychain fallback — when ${user_config.*} placeholders in .mcp.json
+// resolve to empty strings (because the user configured Telegram via
+// /ops:setup which writes to keychain, not via the plugin settings UI),
+// reach into Keychain directly so the MCP server still starts cleanly.
+function keychainGet(serviceName) {
+  if (process.platform !== 'darwin') return '';
+  try {
+    const out = execFileSync('security', ['find-generic-password', '-s', serviceName, '-w'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return out.trim();
+  } catch {
+    return '';
+  }
+}
+
+const API_ID = parseInt(process.env.TELEGRAM_API_ID || keychainGet('telegram-api-id') || '0', 10);
+const API_HASH = process.env.TELEGRAM_API_HASH || keychainGet('telegram-api-hash') || '';
+const SESSION_STRING = process.env.TELEGRAM_SESSION || keychainGet('telegram-session') || '';
+const PHONE = process.env.TELEGRAM_PHONE || keychainGet('telegram-phone') || '';
 
 // Detect whether credentials are present — server always starts regardless
 const CONFIGURED = !!(API_ID && API_HASH && SESSION_STRING);

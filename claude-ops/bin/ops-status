@@ -112,6 +112,9 @@ _channel_configured() {
       _pref_has ".user_config.telegram_session" && return 0
       ;;
     slack)
+      # Multi-workspace: at least one entry in slack_workspaces[]
+      _pref_has ".slack_workspaces[0]" && return 0
+      # Legacy single-workspace
       _pref_has ".channels.slack" && return 0
       ;;
     email|gmail)
