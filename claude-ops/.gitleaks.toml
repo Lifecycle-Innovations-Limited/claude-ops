@@ -172,9 +172,18 @@ paths = [
   '''node_modules''',
   '''package-lock\.json''',
   '''\.gitleaks\.toml$''',
+  '''tests/''',
 ]
 stopwords = [
   "XOXC_TOKEN",
   "XOXD_TOKEN",
   "STRIPE_SECRET_KEY",
+  # Claude Code public OAuth client ID (not a secret — client IDs are public by design)
+  "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+]
+# Public OAuth client IDs (not secrets — embedded in upstream CLIs).
+# Narrow regex allowlist preferred over directory exclusion so secret scanning
+# still runs against scripts/account-rotation/ (handles real auth tokens).
+regexes = [
+  '''9d1c250a-e61b-44d9-88ed-5944d1962f5e''',  # Claude Code OAuth client ID (public)
 ]

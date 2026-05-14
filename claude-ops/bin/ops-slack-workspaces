@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+# ops-slack-workspaces — List configured Slack workspaces and test each token.
+#
+# Reads slack_workspaces[] from preferences.json. For each entry, resolves the
+# named token env var and calls slack.com/api/auth.test. Also handles the legacy
+# single-workspace path (SLACK_MCP_ENABLED=true).
+#
+# Output: one line per workspace with status. Exit 0 if all tokens valid,
+# non-zero if any are missing or invalid.
+#
+# Usage:
+#   bin/ops-slack-workspaces            # human-readable table
+#   bin/ops-slack-workspaces --json     # JSON array
+
+set -uo pipefail
+
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+JSON_MODE=0
+[[ "${1:-}" == "--json" ]] && JSON_MODE=1
+
+# Mobile / SSH detection — switches to compact plain-text output without
+# wide tables, banners, or ANSI colours so output stays readable on small
+# terminals (per repo formatting rule for claude-ops/bin/**/*).
+IS_MOBILE=0
+if [[ -n "${OPS_MOBILE:-}" && "${OPS_MOBILE:-0}" == "1" ]] \
+  || [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" || -n "${SSH_TTY:-}" ]] \
+  || [[ "${COLUMNS:-120}" -lt 80 ]]; then
+  IS_MOBILE=1
+fi
+
+# Colours (suppressed when not a tty, JSON mode, or mobile/SSH compact mode)
+if [[ -t 1 && $JSON_MODE -eq 0 && $IS_MOBILE -eq 0 ]]; then
+  GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[0;33m'; RESET='\033[0m'
+else
+  GREEN=''; RED=''; YELLOW=''; RESET=''
+fi
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+_test_token() {
+  local token="$1"
+  curl -s --max-time 5 \
+    -H "Authorization: Bearer $token" \
+    "https://slack.com/api/auth.test" 2>/dev/null
+}
+
+_jq() { command -v jq >/dev/null 2>&1 && jq -r "$@" 2>/dev/null || echo ""; }
+
+# ── load workspaces ───────────────────────────────────────────────────────────
+
+WS_COUNT=0
+if command -v jq >/dev/null 2>&1 && [[ -f "$PREFS_PATH" ]]; then
+  WS_COUNT=$(jq -r '(.slack_workspaces // []) | length' "$PREFS_PATH" 2>/dev/null || echo "0")
+  [[ "$WS_COUNT" =~ ^[0-9]+$ ]] || WS_COUNT=0
+fi
+
+# ── JSON output path ──────────────────────────────────────────────────────────
+
+if [[ $JSON_MODE -eq 1 ]]; then
+  RESULTS="[]"
+  EXIT_CODE=0
+
+  if [[ $WS_COUNT -eq 0 ]]; then
+    # Legacy fallback
+    SLACK_ENABLED="${SLACK_MCP_ENABLED:-false}"
+    if [[ "$SLACK_ENABLED" == "true" ]]; then
+      RESULTS='[{"name":"legacy","mode":"mcp","status":"mcp_bound","note":"Single-workspace MCP mode. Migrate to slack_workspaces[] for multi-workspace support."}]'
+    else
+      RESULTS='[]'
+    fi
+    echo "$RESULTS"
+    exit 0
+  fi
+
+  for i in $(seq 0 $((WS_COUNT - 1))); do
+    ws_name=$(jq -r ".slack_workspaces[$i].name // \"workspace-$i\"" "$PREFS_PATH" 2>/dev/null)
+    token_env=$(jq -r ".slack_workspaces[$i].token_env // \"\"" "$PREFS_PATH" 2>/dev/null)
+    ws_kind=$(jq -r ".slack_workspaces[$i].kind // \"bot_token\"" "$PREFS_PATH" 2>/dev/null)
+
+    # Validate token_env is a legal POSIX shell identifier before indirect expansion;
+    # bash aborts under set -u/-e if `${!var}` is given a name with invalid chars.
+    ws_token=""
+    if [[ "$token_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      ws_token="${!token_env:-}"
+    elif [[ -n "$token_env" ]]; then
+      RESULTS=$(echo "$RESULTS" | jq \
+        --arg name "$ws_name" \
+        --arg env "$token_env" \
+        --arg kind "$ws_kind" \
+        '. + [{"name":$name,"token_env":$env,"kind":$kind,"status":"invalid_token_env","note":"token_env must match [A-Za-z_][A-Za-z0-9_]*","team_id":null,"url":null}]')
+      EXIT_CODE=1
+      continue
+    fi
+
+    if [[ -z "$ws_token" ]]; then
+      RESULTS=$(echo "$RESULTS" | jq \
+        --arg name "$ws_name" \
+        --arg env "$token_env" \
+        --arg kind "$ws_kind" \
+        '. + [{"name":$name,"token_env":$env,"kind":$kind,"status":"token_missing","team_id":null,"url":null}]')
+      EXIT_CODE=1
+    else
+      resp=$(_test_token "$ws_token")
+      ok=$(echo "$resp" | jq -r '.ok // false' 2>/dev/null)
+      team_id=$(echo "$resp" | jq -r '.team_id // ""' 2>/dev/null)
+      url=$(echo "$resp" | jq -r '.url // ""' 2>/dev/null)
+      if [[ "$ok" == "true" ]]; then
+        RESULTS=$(echo "$RESULTS" | jq \
+          --arg name "$ws_name" \
+          --arg env "$token_env" \
+          --arg kind "$ws_kind" \
+          --arg team "$team_id" \
+          --arg u "$url" \
+          '. + [{"name":$name,"token_env":$env,"kind":$kind,"status":"ok","team_id":$team,"url":$u}]')
+      else
+        err=$(echo "$resp" | jq -r '.error // "unknown"' 2>/dev/null)
+        RESULTS=$(echo "$RESULTS" | jq \
+          --arg name "$ws_name" \
+          --arg env "$token_env" \
+          --arg kind "$ws_kind" \
+          --arg err "$err" \
+          '. + [{"name":$name,"token_env":$env,"kind":$kind,"status":"token_invalid","error":$err,"team_id":null,"url":null}]')
+        EXIT_CODE=1
+      fi
+    fi
+  done
+
+  echo "$RESULTS"
+  exit $EXIT_CODE
+fi
+
+# ── human-readable output path ────────────────────────────────────────────────
+
+if [[ $IS_MOBILE -eq 0 ]]; then
+  printf '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+  printf ' OPS ► SLACK WORKSPACES\n'
+  printf '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+fi
+
+EXIT_CODE=0
+
+if [[ $WS_COUNT -eq 0 ]]; then
+  SLACK_ENABLED="${SLACK_MCP_ENABLED:-false}"
+  if [[ "$SLACK_ENABLED" == "true" ]]; then
+    if [[ $IS_MOBILE -eq 1 ]]; then
+      printf "○ legacy: SLACK_MCP_ENABLED=true (single MCP-bound workspace)\n"
+      printf "  migrate via /ops:setup slack\n"
+    else
+      printf " ${YELLOW}○${RESET}  (legacy)   SLACK_MCP_ENABLED=true  — single MCP-bound workspace\n"
+      printf "    Migrate to slack_workspaces[] in preferences.json for multi-workspace support.\n"
+      printf "    Run /ops:setup slack to add named workspaces.\n"
+    fi
+  else
+    if [[ $IS_MOBILE -eq 1 ]]; then
+      printf "✗ no Slack workspaces — /ops:setup slack\n"
+    else
+      printf " ${RED}✗${RESET}  No Slack workspaces configured.\n"
+      printf "    Run: /ops:setup slack\n"
+    fi
+    EXIT_CODE=1
+  fi
+  [[ $IS_MOBILE -eq 0 ]] && printf '──────────────────────────────────────────────────────\n'
+  exit $EXIT_CODE
+fi
+
+if [[ $IS_MOBILE -eq 0 ]]; then
+  printf " %-20s %-35s %-12s %s\n" "WORKSPACE" "TOKEN ENV" "KIND" "STATUS"
+  printf ' %.0s─' {1..54}; printf '\n'
+fi
+
+for i in $(seq 0 $((WS_COUNT - 1))); do
+  ws_name=$(jq -r ".slack_workspaces[$i].name // \"workspace-$i\"" "$PREFS_PATH" 2>/dev/null)
+  token_env=$(jq -r ".slack_workspaces[$i].token_env // \"\"" "$PREFS_PATH" 2>/dev/null)
+  ws_kind=$(jq -r ".slack_workspaces[$i].kind // \"bot_token\"" "$PREFS_PATH" 2>/dev/null)
+
+  # Validate token_env before indirect expansion (see JSON path above).
+  ws_token=""
+  if [[ "$token_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    ws_token="${!token_env:-}"
+  elif [[ -n "$token_env" ]]; then
+    if [[ $IS_MOBILE -eq 1 ]]; then
+      printf "✗ %s: invalid token_env=%s\n" "$ws_name" "$token_env"
+    else
+      printf " ${RED}✗${RESET}  %-20s %-35s %-12s ${RED}invalid token_env (must match [A-Za-z_][A-Za-z0-9_]*)${RESET}\n" \
+        "$ws_name" "$token_env" "$ws_kind"
+    fi
+    EXIT_CODE=1
+    continue
+  fi
+
+  if [[ -z "$ws_token" ]]; then
+    if [[ $IS_MOBILE -eq 1 ]]; then
+      printf "✗ %s: token env not set (%s)\n" "$ws_name" "$token_env"
+    else
+      printf " ${RED}✗${RESET}  %-20s %-35s %-12s ${RED}token env not set${RESET}\n" \
+        "$ws_name" "$token_env" "$ws_kind"
+    fi
+    EXIT_CODE=1
+  else
+    [[ $IS_MOBILE -eq 0 ]] && printf "    %-20s %-35s %-12s testing..." "$ws_name" "$token_env" "$ws_kind"
+    resp=$(_test_token "$ws_token")
+    ok=$(echo "$resp" | jq -r '.ok // false' 2>/dev/null)
+    if [[ "$ok" == "true" ]]; then
+      team_url=$(echo "$resp" | jq -r '.url // ""' 2>/dev/null)
+      if [[ $IS_MOBILE -eq 1 ]]; then
+        printf "✓ %s: ok %s\n" "$ws_name" "$team_url"
+      else
+        printf "\r ${GREEN}✓${RESET}  %-20s %-35s %-12s ${GREEN}ok${RESET}  %s\n" \
+          "$ws_name" "$token_env" "$ws_kind" "$team_url"
+      fi
+    else
+      err=$(echo "$resp" | jq -r '.error // "unknown"' 2>/dev/null)
+      if [[ $IS_MOBILE -eq 1 ]]; then
+        printf "✗ %s: invalid (%s)\n" "$ws_name" "$err"
+      else
+        printf "\r ${RED}✗${RESET}  %-20s %-35s %-12s ${RED}invalid: %s${RESET}\n" \
+          "$ws_name" "$token_env" "$ws_kind" "$err"
+      fi
+      EXIT_CODE=1
+    fi
+  fi
+done
+
+if [[ $IS_MOBILE -eq 0 ]]; then
+  printf '──────────────────────────────────────────────────────\n'
+  printf ' %d workspace(s) configured. To add another: /ops:setup slack\n' "$WS_COUNT"
+  printf '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+else
+  printf "%d workspace(s); add: /ops:setup slack\n" "$WS_COUNT"
+fi
+
+exit $EXIT_CODE
