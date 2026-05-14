@@ -30,7 +30,7 @@ import { existsSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSyn
 import { spawnSync, spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { homedir } from 'os';
+import { homedir, constants } from 'os';
 
 import { swapToEmail, restoreToken } from './keychain-swap.mjs';
 
@@ -251,7 +251,8 @@ async function main(argv) {
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']) {
     process.on(sig, () => {
       restoreOnce();
-      process.exit(130);
+      const n = constants.signals[sig];
+      process.exit(n == null ? 130 : 128 + n);
     });
   }
 
@@ -281,7 +282,14 @@ async function main(argv) {
   });
 
   const exitCode = await new Promise((resolve) => {
-    child.on('exit', (code, signal) => resolve(signal ? 128 : (code ?? 1)));
+    child.on('exit', (code, signal) => {
+      if (signal) {
+        const n = constants.signals[signal];
+        resolve(n == null ? 128 : 128 + n);
+      } else {
+        resolve(code ?? 1);
+      }
+    });
     child.on('error', (e) => {
       process.stderr.write(`[claude-p-as] spawn failed: ${e.message}\n`);
       resolve(127);
