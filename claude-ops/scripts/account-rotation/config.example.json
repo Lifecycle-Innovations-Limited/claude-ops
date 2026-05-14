@@ -18,7 +18,8 @@
     "messagesPerWindow": 900,
     "weeklyCapMultiplier": 1.0,
     "extraUsageSafetyMargin": 0.75,
-    "note": "Max 20x defaults: ~220K tokens / ~900 messages per 5h window. extraUsageSafetyMargin: accounts with paid overage enabled rotate at 75% of their threshold to avoid incurring charges."
+    "destinationMaxUtilPercent": 95,
+    "note": "Max 20x defaults: ~220K tokens / ~900 messages per 5h window. extraUsageSafetyMargin: accounts with paid overage enabled rotate at 75% of their threshold to avoid incurring charges. destinationMaxUtilPercent: refuse to rotate TO accounts with max(5h,7d) util at or above this (default 95). Use 90 if destinations near 95% still hit limits in practice."
   },
   "toolUseThreshold": 800,
   "maxHoursPerAccount": 4,

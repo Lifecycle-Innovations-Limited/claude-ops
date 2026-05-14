@@ -198,6 +198,39 @@ Write to `/tmp/yolo-[session]/coo-analysis.md`:
 
 No platitudes. Specific findings with specific fixes.
 
+## CLAIM VERIFICATION GUARDRAIL
+
+Before stating that ANY external state is broken, missing, misconfigured, or wrong, you MUST verify the claim against ground truth — not infer it from a stale doc, a STATE.md note, or "this looks like it might be off."
+
+**Mandatory verification rules:**
+
+1. **"Secret X is missing" — verify with the secret store.**
+   Doppler: `doppler secrets get <NAME> --project <p> --config <c> --plain` (returns empty if unset, the value if set). Never claim a secret is missing without this check. If unsure which configs exist, run `doppler configs --project <p>` first — do not assume names like `stg` / `prd` / `prod` exist.
+   AWS Secrets Manager: `aws secretsmanager get-secret-value --secret-id <arn>`.
+   GitHub Actions: `gh secret list --repo <r>`.
+
+2. **"Service X is broken / down" — verify with recent intent.**
+   Before flagging a service with `desiredCount=0`, `runningCount=0`, or in a stopped state as a fire, check the OWNING repo's git log for recent commits that explain the state:
+   `cd <repo> && git log --oneline -20 --all --since="7 days ago" | grep -iE "decomm|scale|disable|sunset|stage [0-9]|phase [0-9]"`.
+   Intentional decommissions, planned scale-downs, and phase migrations are NOT fires. If the most recent commit on any branch says `chore(decomm):` or `phase X.Y Stage N`, treat the state as intentional unless the user says otherwise.
+
+3. **"Config Y has wrong value" — read the value, don't infer it.**
+   Don't claim a value is wrong from a key list alone. Pull the actual value (Doppler `--plain`, AWS `--query`, etc.) and compare. An empty string is different from an unset key — distinguish them.
+
+4. **"Project Z is abandoned" — check ALL signals.**
+   Recent git activity (any branch, last 30 days) + active `.planning/` + registry status. A scale-to-0 service is NOT proof of abandonment. See DESTRUCTIVE ACTION GUARDRAIL below.
+
+5. **Acknowledge gaps explicitly.**
+   If you cannot verify a claim (rate-limited, no creds, tool unavailable), do NOT assert it as fact. Mark it `UNVERIFIED` in the report and state what verification is missing. False fires erode trust faster than missed ones.
+
+**Forbidden output patterns:**
+- "X is missing in production" without a corresponding read confirming absence
+- "Y is broken / down / a fire" without checking the owning repo's git log for intentional state
+- "Config `<env>` is missing var Z" without first verifying that `<env>` config exists in the secret store
+- Any P0/P1/CRITICAL label on state that is the result of a documented planned change
+
+When in doubt: verify, downgrade severity, or label `UNVERIFIED`. The orchestrator will present your claims to the user as if they're true — don't make the user chase ghosts.
+
 ## DESTRUCTIVE ACTION GUARDRAIL
 
 Before recommending deletion, shutdown, or cleanup of ANY infrastructure:

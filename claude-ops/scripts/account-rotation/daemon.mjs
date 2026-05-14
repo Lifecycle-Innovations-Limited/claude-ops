@@ -10,6 +10,12 @@
  *
  * Auto-rotates to the most cooled-down account when any threshold is hit.
  *
+ * Rotation path: `node rotate.mjs --no-browser --to <key>` only (keychain swap,
+ * no browser). That path does not invoke ai-brain.mjs. Full ai-brain (Bedrock
+ * Converse, stall recovery, optional Context7 + web research, billing scrape)
+ * runs inside `rotate.mjs` when a browser OAuth flow is used — e.g. force-rotate.sh
+ * after fast path fails, `node rotate.mjs --magic-link --force --to …`, or setup --auto.
+ *
  * Usage:
  *   node daemon.mjs           # Run in foreground
  *   node daemon.mjs --bg      # Daemonize
@@ -18,6 +24,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, unlinkSync, appendFileSync, statSync } from 'fs';
+import { persistBedrockClaudeSettings, clearHardcodedModelsForOAuthClaudeSettings } from './claude-settings-mode.mjs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync, execFileSync, spawn } from 'child_process';
@@ -435,13 +442,151 @@ async function findValidRotationTarget(config, state) {
       }
       log(`[pre-rotate] ${key}: live util 5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}% — OK`);
     } else {
-      log(`[pre-rotate] ${key}: live util query failed — accepting anyway`);
+      // Live query failed (Anthropic 429 or network). DO NOT accept blindly —
+      // that's how we picked an exhausted account and bricked Sam's session.
+      // Fall back to cached util; refuse if cached is unknown OR >=90%.
+      const cached = state.accounts?.[key]?.lastUtilization;
+      const cachedPct = cached?.pct;
+      const cachedAge = cached?.ts ? (now - cached.ts) / 60_000 : Infinity;
+      if (cachedPct == null) {
+        log(`[pre-rotate] ${key}: live query FAILED + no cache — REFUSING`);
+        continue;
+      }
+      if (cachedPct >= 90) {
+        log(
+          `[pre-rotate] ${key}: live query FAILED + cached ${cachedPct.toFixed(0)}% (${cachedAge.toFixed(0)}min old) — REFUSING`,
+        );
+        continue;
+      }
+      if (cachedAge > 30) {
+        log(`[pre-rotate] ${key}: live query FAILED + cache stale (${cachedAge.toFixed(0)}min) — REFUSING (safety)`);
+        continue;
+      }
+      log(
+        `[pre-rotate] ${key}: live query failed but cached ${cachedPct.toFixed(0)}% (${cachedAge.toFixed(0)}min old) — accepting`,
+      );
     }
 
     return account;
   }
 
+  // SECOND PASS: strict bar (70%/95%) excluded everyone. Try a relaxed bar
+  // (94%/94%) so we still rotate to "warm but not exhausted" rather than
+  // stalling. Only Bedrock fallback when even the relaxed bar fails.
+  log('[pre-rotate] strict-bar pass empty — trying relaxed (sub-95%) bar');
+  const RELAXED_BAR = 94;
+  for (const account of candidates) {
+    const key = accountKey(account);
+    const tokenJson = readStoredToken(account);
+    if (!tokenJson) continue;
+    const live = await queryLiveUtilization(account);
+    if (!live) continue;
+    const max = Math.max(live.pct5h, live.pct7d);
+    if (max < RELAXED_BAR) {
+      log(`[pre-rotate-relaxed] ${key}: 5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}% — accepting`);
+      return account;
+    }
+  }
   return null; // No valid candidate found
+}
+
+// Exhaustion check across ALL non-active, non-disabled accounts.
+// Two acceptance modes:
+//   1. LIVE-confirmed: every candidate live-queried >= 95% (preferred).
+//   2. CACHED-evidence: when API is throttling us (live fails) BUT every
+//      candidate has fresh (<15min) cached util >= 95% AND a recent rate-limit
+//      signal exists, we accept cached evidence — refusing to fall back when
+//      Anthropic API is dead would just leave Sam stuck.
+async function allCandidatesExhausted(config, state) {
+  const EXHAUSTED_THRESHOLD = 95;
+  const now = Date.now();
+  const activeKey = state.activeAccount;
+  const candidates = config.accounts.filter((a) => accountKey(a) !== activeKey && a.disabled !== true);
+  if (candidates.length === 0) return false;
+
+  let liveOk = true;
+  let allLiveExhausted = true;
+  for (const a of candidates) {
+    const live = await queryLiveUtilization(a);
+    if (!live) {
+      liveOk = false;
+      break;
+    }
+    if (Math.max(live.pct5h, live.pct7d) < EXHAUSTED_THRESHOLD) {
+      allLiveExhausted = false;
+      break;
+    }
+  }
+  if (liveOk && allLiveExhausted) return true;
+
+  // CACHED fallback: only when we have recent rate-limit evidence
+  let recentRateLimit = false;
+  try {
+    if (existsSync(RATE_LIMITS_FILE)) {
+      const rl = JSON.parse(readFileSync(RATE_LIMITS_FILE, 'utf8'));
+      const age = now - new Date(rl.timestamp || rl.ts || 0).getTime();
+      if (age < 5 * 60_000) recentRateLimit = true;
+    }
+  } catch {}
+  if (!recentRateLimit) return false;
+
+  // All cached >=95% AND fresh? Then we're truly stuck.
+  for (const a of candidates) {
+    const cached = state.accounts?.[accountKey(a)]?.lastUtilization;
+    if (!cached?.pct || !cached?.ts) return false;
+    if (now - cached.ts > 15 * 60_000) return false;
+    if (cached.pct < EXHAUSTED_THRESHOLD) return false;
+  }
+  log(
+    '[allCandidatesExhausted] cached-evidence path: live unreachable but cached + rate-limit signal confirm exhaustion',
+  );
+  return true;
+}
+
+// Activate Bedrock fallback from inside daemon. Probes AWS reachability,
+// writes the sentinel + sends a desktop notification. Returns true on success.
+function activateBedrockFallbackFromDaemon(reason) {
+  const region = process.env.AWS_BEDROCK_REGION || 'us-east-1';
+  try {
+    execFileSync('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
+      stdio: 'pipe',
+      timeout: 5000,
+    });
+    execFileSync('aws', ['bedrock', 'list-inference-profiles', '--region', region, '--max-results', '1'], {
+      stdio: 'pipe',
+      timeout: 6000,
+    });
+  } catch (e) {
+    log(`[bedrock-fallback] AWS unreachable: ${(e.message || '').slice(0, 80)}`);
+    notify('Bedrock Fallback FAILED', 'aws sts/bedrock unreachable — manual intervention needed');
+    return false;
+  }
+  try {
+    const sentinel = join(process.env.HOME || '', '.claude', '.bedrock-fallback.json');
+    const payload = {
+      activated_at: new Date().toISOString(),
+      reason,
+      region,
+      available: true,
+      activated_by: 'daemon',
+    };
+    writeFileSync(sentinel, JSON.stringify(payload, null, 2));
+    try {
+      persistBedrockClaudeSettings(region);
+      log(`[bedrock-fallback] settings.json → Bedrock env (${region})`);
+    } catch (e) {
+      log(`[bedrock-fallback] settings persist failed: ${e.message?.slice(0, 80)}`);
+    }
+    log(`[bedrock-fallback] ACTIVATED region=${region} reason=${reason}`);
+    notify(
+      'Bedrock Fallback Active',
+      `All Anthropic accounts exhausted (live-confirmed) — switched to Bedrock (${region}). New sessions: source use-bedrock.sh`,
+    );
+    return true;
+  } catch (e) {
+    log(`[bedrock-fallback] write error: ${e.message?.slice(0, 80)}`);
+    return false;
+  }
 }
 
 async function doRotation(reason) {
@@ -483,7 +628,14 @@ async function doRotation(reason) {
 
   if (!target) {
     log('ROTATION ABORTED: no candidate has a valid or refreshable token');
-    notify('Account Rotation', 'ABORTED — all candidate tokens expired/invalid');
+    // Live-confirm exhaustion before flipping to Bedrock — Sam's rule.
+    const exhausted = await allCandidatesExhausted(config, state);
+    if (exhausted) {
+      log('All candidates LIVE-CONFIRMED exhausted (>=95%) — engaging Bedrock fallback');
+      activateBedrockFallbackFromDaemon(`auto_rotation: ${reason}`);
+    } else {
+      notify('Account Rotation', 'ABORTED — all candidate tokens expired/invalid');
+    }
     return;
   }
 
@@ -649,6 +801,8 @@ async function mainLoop() {
   let lastStatusLog = 0; // periodic status logging
   let lastRefreshCheck = 0; // dynamic refresh check
   let lastDriftCheck = 0; // cheap vault-based drift detection
+  let lastBedrockRecoveryCheck = 0; // poll for OAuth recovery while sentinel exists
+  let bedrockRecoveryRoundRobin = 0; // round-robin index across accounts
 
   while (true) {
     try {
@@ -690,6 +844,59 @@ async function mainLoop() {
       // actually needs rotation (shouldRotate handles in-place refresh, and
       // findValidRotationTarget refreshes candidates lazily). Avoids keychain
       // churn that was disconnecting HTTP MCP sessions every 5 min.
+
+      // Bedrock recovery watcher — when the sentinel exists, round-robin
+      // probe ONE account per minute (avoid 429 spam). When any account drops
+      // below 70% util AND has a valid token, delete the sentinel + auto-rotate
+      // keychain to it + notify Sam to exit Bedrock shells.
+      const sentinelPath = join(process.env.HOME || '', '.claude', '.bedrock-fallback.json');
+      if (existsSync(sentinelPath) && Date.now() - lastBedrockRecoveryCheck > 60_000) {
+        lastBedrockRecoveryCheck = Date.now();
+        const allAccts = config.accounts.filter((a) => a.disabled !== true);
+        if (allAccts.length > 0) {
+          const probe = allAccts[bedrockRecoveryRoundRobin % allAccts.length];
+          bedrockRecoveryRoundRobin++;
+          const probeKey = accountKey(probe);
+          const live = await queryLiveUtilization(probe);
+          if (live) {
+            const max = Math.max(live.pct5h, live.pct7d);
+            log(`[bedrock-recovery] probe ${probeKey}: 5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}%`);
+            // Update cache
+            state.accounts = state.accounts || {};
+            state.accounts[probeKey] = state.accounts[probeKey] || {};
+            state.accounts[probeKey].lastUtilization = { pct: max, reset: null, ts: Date.now() };
+            try {
+              writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+            } catch {}
+            if (max < 70) {
+              const tokenJson = readStoredToken(probe);
+              if (tokenJson && !tokenExpired(tokenJson)) {
+                log(`[bedrock-recovery] ${probeKey} cooled to ${max.toFixed(0)}% — exiting Bedrock fallback`);
+                try {
+                  unlinkSync(sentinelPath);
+                } catch {}
+                try {
+                  clearHardcodedModelsForOAuthClaudeSettings();
+                  log('[bedrock-recovery] settings.json → OAuth (hardcoded models cleared)');
+                } catch (e) {
+                  log(`[bedrock-recovery] settings clear failed: ${e.message?.slice(0, 80)}`);
+                }
+                notify(
+                  'OAuth Restored',
+                  `${probeKey} cooled to ${max.toFixed(0)}% — settings.json cleared for OAuth; Bedrock shells: source use-oauth.sh`,
+                );
+                // Auto-rotate keychain so new sessions pick up the cooled account
+                if (state.activeAccount !== probeKey) {
+                  await doRotation(`bedrock-recovery: ${probeKey} cooled to ${max.toFixed(0)}%`);
+                  lastRotatedAt = Date.now();
+                }
+              } else {
+                log(`[bedrock-recovery] ${probeKey} cooled but token expired/missing — staying on Bedrock`);
+              }
+            }
+          }
+        }
+      }
 
       const { should, reason } = await shouldRotate(config, state);
 
