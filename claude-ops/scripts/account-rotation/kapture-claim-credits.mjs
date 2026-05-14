@@ -57,7 +57,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
@@ -100,8 +100,8 @@ const EMAIL_SELECTORS = [
 // Selectors that confirm the credit balance after claim.
 const BALANCE_SELECTORS = [
   '[data-testid="agent-sdk-credit-remaining"]',
-  ':text-matches("\\\\$[0-9]+(\\\\.[0-9]{2})? remaining")',
-  ':text-matches("Agent SDK credit:.*\\\\$")',
+  ':text-matches("\\$[0-9]+(\\.[0-9]{2})? remaining")',
+  ':text-matches("Agent SDK credit:.*\\$")',
 ];
 
 const args = process.argv.slice(2);
@@ -124,7 +124,9 @@ if (flag('--help') || flag('-h')) {
 const DRY_RUN = !flag('--live'); // default ON
 const ONLY = valueOf('--only');
 const SKIP = (valueOf('--skip') ?? '').split(',').filter(Boolean);
-const MAX_CONCURRENCY = Number(valueOf('--max-concurrency') ?? '1');
+const rawMaxConcurrency = Number(valueOf('--max-concurrency') ?? '1');
+const MAX_CONCURRENCY =
+  Number.isFinite(rawMaxConcurrency) && rawMaxConcurrency >= 1 ? Math.floor(rawMaxConcurrency) : 1;
 
 function loadAccounts() {
   if (!existsSync(CONFIG_PATH)) {
@@ -190,6 +192,7 @@ function buildPrompt(email, screenshotTo) {
     `2. mcp__kapture__navigate to the first candidate URL: ${CANDIDATE_BILLING_URLS.join(', ')}.`,
     `   If 404 or redirect to login, try the next.`,
     `3. Read the page (mcp__kapture__dom or elements) and find the user-menu email.`,
+    `   Try EMAIL_SELECTORS: ${JSON.stringify(EMAIL_SELECTORS)}.`,
     `   Match against "${email}". If wrong account is logged in, locate the account switcher`,
     `   (look for a "Switch account" menu item or sign-out link) and either switch in-app`,
     `   or sign out + sign in via Google OAuth (the Google session is already present in`,
@@ -218,21 +221,63 @@ function invokeClaude(prompt) {
   // `claude -p` runs a one-shot Claude Code session. The MCP servers configured
   // in ~/.claude/ are inherited, so Kapture is available. We don't pass any
   // model flag — defer to Sam's default profile.
-  const res = spawnSync('claude', ['-p', prompt], { encoding: 'utf8', timeout: 5 * 60 * 1000 });
-  if (res.status !== 0) {
-    return { ok: false, error: `claude -p exited ${res.status}: ${res.stderr?.slice(0, 500)}` };
-  }
-  // Find the last JSON line in stdout.
-  const lines = (res.stdout ?? '').trim().split('\n').reverse();
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+  // Use async spawn (not spawnSync) so parallel batches can run concurrent subprocesses.
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer;
+    const timeoutMs = 5 * 60 * 1000;
+    const done = (payload) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(payload);
+    };
+
+    const child = spawn('claude', ['-p', prompt]);
+    timer = setTimeout(() => {
       try {
-        return { ok: true, result: JSON.parse(trimmed) };
-      } catch {}
-    }
-  }
-  return { ok: false, error: 'no JSON result line in claude -p stdout' };
+        child.kill('SIGTERM');
+      } catch {
+        /* ignore */
+      }
+      done({ ok: false, error: 'claude -p timed out after 5 minutes' });
+    }, timeoutMs);
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('error', (err) => {
+      done({ ok: false, error: `claude -p spawn failed: ${err.message}` });
+    });
+    child.on('close', (code, signal) => {
+      if (settled) return;
+      if (code !== 0) {
+        const hint = signal ? ` (signal ${signal})` : '';
+        done({ ok: false, error: `claude -p exited ${code}${hint}: ${stderr.slice(0, 500)}` });
+        return;
+      }
+      const lines = stdout.trim().split('\n').reverse();
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+          try {
+            done({ ok: true, result: JSON.parse(trimmed) });
+            return;
+          } catch {
+            /* try next line */
+          }
+        }
+      }
+      done({ ok: false, error: 'no JSON result line in claude -p stdout' });
+    });
+  });
 }
 
 async function processAccount(email) {
@@ -247,10 +292,10 @@ async function processAccount(email) {
   }
 
   const t0 = Date.now();
-  const { ok, result, error } = invokeClaude(prompt);
+  const { ok, result, error } = await invokeClaude(prompt);
   const ms = Date.now() - t0;
   if (!ok) return { email, claimed: false, remaining_usd: null, screenshot: shot, error, elapsed_ms: ms };
-  return { ...result, elapsed_ms: ms };
+  return { ...result, email, elapsed_ms: ms };
 }
 
 async function main() {
