@@ -326,12 +326,20 @@ async function main() {
       results.push(r);
       if (!DRY_RUN && r && !r.error) {
         ledger.accounts[r.email] ??= {};
+        const prev = ledger.accounts[r.email][cycle];
+        const claimed = !!(r.claimed || prev?.claimed);
+        const claimedAt =
+          prev?.claimed && prev.claimed_at
+            ? prev.claimed_at
+            : r.claimed
+              ? new Date().toISOString()
+              : (prev?.claimed_at ?? new Date().toISOString());
         ledger.accounts[r.email][cycle] = {
-          claimed: !!r.claimed,
-          already_claimed: !!r.already_claimed,
-          remaining_usd: r.remaining_usd ?? null,
-          screenshot: r.screenshot,
-          claimed_at: new Date().toISOString(),
+          claimed,
+          already_claimed: !!(r.already_claimed || prev?.already_claimed || prev?.claimed),
+          remaining_usd: r.remaining_usd ?? prev?.remaining_usd ?? null,
+          screenshot: r.screenshot ?? prev?.screenshot,
+          claimed_at: claimedAt,
         };
       }
     }
