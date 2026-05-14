@@ -74,13 +74,13 @@ already_seen() {
 
 # Detect transient failure signatures. Returns 0 (transient) or 1.
 is_transient() {
-  local pat='ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|TLS handshake timeout|unexpected EOF while reading|Could not resolve host|network is unreachable'
-  pat="$pat|npm error code E429|npm error 5(0[0-9]|2[0-9])|HTTP(S)?Error:? 429|HTTP(S)?Error:? 5[0-9]{2}"
-  pat="$pat|The runner has received a shutdown signal|The hosted runner lost communication|The operation was canceled\.|GH001:"
-  pat="$pat|TooManyRequestsException|ThrottlingException|RequestLimitExceeded|Service Unavailable Exception"
-  pat="$pat|Apple ID server.*temporarily unavailable|App Store Connect.*timed out|ASC.*5[0-9]{2}"
-  pat="$pat|Simulator failed to launch|ECR.*throttle"
-  printf '%s' "$1" | grep -qE "$pat"
+  printf '%s' "$1" | grep -qE \
+'ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|TLS handshake timeout|unexpected EOF while reading|Could not resolve host|network is unreachable|\
+npm error code E429|npm error 5(0[0-9]|2[0-9])|HTTP(S)?Error:? 429|HTTP(S)?Error:? 5[0-9]{2}|\
+The runner has received a shutdown signal|The hosted runner lost communication|The operation was canceled\.|GH001:|\
+TooManyRequestsException|ThrottlingException|RequestLimitExceeded|Service Unavailable Exception|\
+Apple ID server.*temporarily unavailable|App Store Connect.*timed out|ASC.*5[0-9]{2}|\
+Simulator failed to launch|ECR.*throttle'
 }
 
 notify() {
@@ -107,16 +107,7 @@ notify() {
           --form-string "token=$token" --form-string "user=$user" \
           --form-string "title=$title" --form-string "message=$msg" >/dev/null 2>&1
       ;;
-    telegram)
-      local token="${TELEGRAM_BOT_TOKEN:-}"
-      local chat_id="${TELEGRAM_NOTIFY_CHAT_ID:-${TELEGRAM_OWNER_ID:-}}"
-      [ -n "$token" ] && [ -n "$chat_id" ] && \
-        curl -sS -X POST "https://api.telegram.org/bot${token}/sendMessage" \
-          --data-urlencode "chat_id=${chat_id}" \
-          --data-urlencode "text=$title — $msg" --max-time 10 >/dev/null 2>&1
-      ;;
     none) : ;;
-    *) echo "[ops-deploy-fix] unknown notify_channel '$channel'" >&2 ;;
   esac
 }
 
@@ -135,9 +126,8 @@ locate_repo() {
 
 # Resolve health URL via layered registry: project → user → plugin example.
 resolve_health_url() {
-  local slug="$1" base="$2"
-  local key="$slug:$base"
-  local proj=$(locate_repo "$slug" 2>/dev/null) || true
+  local slug="$1" base="$2" key="$slug:$base"
+  local proj=$(locate_repo "$slug" 2>/dev/null)
   if [ -n "$proj" ] && [ -f "$proj/.claude/post-merge-services.json" ]; then
     local v=$(jq -r --arg k "$key" '.[$k].health // ""' "$proj/.claude/post-merge-services.json" 2>/dev/null)
     [ -n "$v" ] && { echo "$v"; return; }
@@ -154,9 +144,8 @@ resolve_health_url() {
 }
 
 resolve_version_url() {
-  local slug="$1" base="$2"
-  local key="$slug:$base"
-  local proj=$(locate_repo "$slug" 2>/dev/null) || true
+  local slug="$1" base="$2" key="$slug:$base"
+  local proj=$(locate_repo "$slug" 2>/dev/null)
   if [ -n "$proj" ] && [ -f "$proj/.claude/post-merge-services.json" ]; then
     local v=$(jq -r --arg k "$key" '.[$k].version // ""' "$proj/.claude/post-merge-services.json" 2>/dev/null)
     [ -n "$v" ] && { echo "$v"; return; }
@@ -173,9 +162,8 @@ resolve_version_url() {
 }
 
 dispatch_fix_agent() {
-  # $1 = agent_name (matches claude-ops/agents/<name>.md OR ~/.claude/agents/<name>.md)
-  # $2 = lock_id, rest = context vars as KEY=VAL (substituted into a thin task brief)
-  local agent_name="$1" lock_id="$2"; shift 2
+  # $1 = prompt template path (in $PLUGIN_ROOT/prompts/), $2 = lock_id, rest = template vars as KEY=VAL
+  local template="$1" lock_id="$2"; shift 2
   if ! lock_acquire "$lock_id"; then
     return 2  # already in flight
   fi
@@ -186,30 +174,28 @@ dispatch_fix_agent() {
     return 3
   fi
 
-  # Build the thin task brief — full persona/tools/model come from the agent file.
-  local context=""
+  local prompt_file="$PLUGIN_ROOT/prompts/$template"
+  if [ ! -f "$prompt_file" ]; then
+    lock_release "$lock_id"
+    return 4
+  fi
+  local prompt=$(cat "$prompt_file")
   for kv in "$@"; do
     local k="${kv%%=*}" v="${kv#*=}"
-    context="${context}${k}: ${v}"$'\n'
+    prompt="${prompt//\{\{${k}\}\}/$v}"
   done
 
   local fix_log="$LOGS_DIR/fix-${lock_id}-$(date +%s).log"
+  local model=$(config fix_model haiku)
   local danger_flag="--permission-mode acceptEdits"
   [ "$(config allow_dangerous false)" = "true" ] && danger_flag="--dangerously-skip-permissions"
 
   command -v claude >/dev/null || { lock_release "$lock_id"; return 5; }
 
-  # Use --agent <name> so the agent's frontmatter (model/tools/persona) is honored.
-  # The brief is just the failure context — persona + workflow + guardrails come from agent file.
-  local brief="Failure context for your repair task:
-
-${context}
-Execute per your agent definition. Final line of output must be RESOLVED/RERUN/RETRY/BLOCKED."
-
   nohup bash -c "
-    printf '%s' \"\$1\" | claude -p --agent '$agent_name' $danger_flag --no-session-persistence > '$fix_log' 2>&1
+    printf '%s' \"\$1\" | claude -p --model $model $danger_flag --no-session-persistence > '$fix_log' 2>&1
     rm -f '$STATE_DIR/lock-$lock_id'
-  " _ "$brief" </dev/null >/dev/null 2>&1 &
+  " _ "$prompt" </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
   echo "$fix_log"
   return 0
