@@ -25,9 +25,10 @@ Run all channel scans in parallel:
 
 ```bash
 # WhatsApp — ALL non-archived chats (not just unread)
-wacli chats list --json 2>/dev/null || echo '{"error": "wacli not available"}'
+# WhatsApp via bridge MCP tools
+mcp__whatsapp__list_chats sort_by=last_active  # or via sqlite3 direct query
 # Then for each chat with recent activity (last 7 days):
-# wacli messages list --chat "<JID>" --limit 5 --json
+# mcp__whatsapp__list_messages chat_jid="<JID>" limit=5
 # Check FromMe on last message to classify NEEDS_REPLY vs WAITING
 ```
 
