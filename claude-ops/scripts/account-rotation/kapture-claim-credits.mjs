@@ -333,7 +333,7 @@ async function main() {
             ? prev.claimed_at
             : r.claimed
               ? new Date().toISOString()
-              : (prev?.claimed_at ?? new Date().toISOString());
+              : (prev?.claimed_at ?? null);
         ledger.accounts[r.email][cycle] = {
           claimed,
           already_claimed: !!(r.already_claimed || prev?.already_claimed || prev?.claimed),
