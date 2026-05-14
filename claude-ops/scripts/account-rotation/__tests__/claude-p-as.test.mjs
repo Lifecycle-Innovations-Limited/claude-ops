@@ -16,13 +16,7 @@ import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
-import {
-  parseArgs,
-  pickAccount,
-  effectiveBudget,
-  parseUsageCost,
-  decrementLedger,
-} from '../claude-p-as.mjs';
+import { parseArgs, pickAccount, effectiveBudget, parseUsageCost, decrementLedger } from '../claude-p-as.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(__dirname, '..', 'claude-p-as.mjs');
@@ -105,10 +99,7 @@ test('assertNotExtraUsage refuses accounts with extra_usage flag in ledger', () 
 
 test('assertNotExtraUsage refuses accounts with extraUsageEnabled=true in rotation config', () => {
   const cfgPath = tmpFile('config.json');
-  writeFileSync(
-    cfgPath,
-    JSON.stringify({ accounts: [{ email: 'a@x.com', extraUsageEnabled: true }] }),
-  );
+  writeFileSync(cfgPath, JSON.stringify({ accounts: [{ email: 'a@x.com', extraUsageEnabled: true }] }));
   const account = { email: 'a@x.com', remaining_usd: 100 };
   const r = spawnSync(
     'node',
@@ -139,9 +130,7 @@ test('parseUsageCost extracts $cost from claude output strings', () => {
 
 test('decrementLedger atomically subtracts cost and stamps last_call_at', () => {
   const ledgerPath = tmpFile();
-  const ledger = makeLedger([
-    { email: 'a@x.com', monthly_credit_usd: 200, remaining_usd: 150, last_call_at: null },
-  ]);
+  const ledger = makeLedger([{ email: 'a@x.com', monthly_credit_usd: 200, remaining_usd: 150, last_call_at: null }]);
   writeFileSync(ledgerPath, JSON.stringify(ledger));
   decrementLedger(ledgerPath, 'a@x.com', 0.42);
   const after = JSON.parse(readFileSync(ledgerPath, 'utf8'));
