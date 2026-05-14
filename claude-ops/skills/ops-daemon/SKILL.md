@@ -162,8 +162,8 @@ Run each check and track results as `pass` / `fail` / `warn`:
 10. **Every service has a command** — iterate `daemon-services.json` services; each enabled entry must have a non-empty `command` field. Missing `command` silently skips the service (historical bug).
 11. **Running services alive** — for each service in the health file with `status=running|polling`, verify `kill -0 <pid>` succeeds.
 12. **Cron services have future `next_run`** — `scheduled` services must have a `next_run` timestamp in the future.
-13. **wacli-sync path resolves** — if enabled, `~/.wacli/.health` exists and is fresh. (Optional — mark warn not fail if missing.)
-14. **No zombie children** — no orphaned `ops-message-listener.sh` or `wacli-keepalive.sh` processes without a parent `ops-daemon.sh`.
+13. **whatsapp-bridge running** — if enabled, `lsof -i :8080 | grep LISTEN` returns a result. (Optional — mark warn not fail if missing.)
+14. **No zombie children** — no orphaned `ops-message-listener.sh` processes without a parent `ops-daemon.sh`.
 
 ### Fix playbook
 
