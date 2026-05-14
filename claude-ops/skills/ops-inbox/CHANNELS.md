@@ -2,55 +2,49 @@
 
 This document explains how to configure each communication channel for the `/ops:ops-inbox` skill. All credentials come from environment variables or CLI auth — **no secrets are committed to this repo**.
 
-## WhatsApp (wacli)
+## WhatsApp (Baileys bridge)
 
-**Status:** CLI-based (wacli), no MCP needed.
+**Status:** MCP-based via `mcp__whatsapp__*` tools. No CLI needed.
 
-**Setup:**
+The Baileys `whatsapp-bridge` binary runs as a persistent LaunchAgent (`com.samrenders.whatsapp-bridge`)
+and exposes WhatsApp over a local HTTP/MCP interface on port 8080.
 
-```bash
-# Install latest version from source (brew version may be outdated)
-git clone https://github.com/steipete/wacli.git /tmp/wacli-src
-cd /tmp/wacli-src
-go build -o wacli ./cmd/wacli/
-cp wacli /usr/local/bin/
+### Setup
 
-# Authenticate (scans QR code with phone)
-wacli auth
+1. Ensure the bridge binary is installed at `~/.local/share/whatsapp-mcp/whatsapp-bridge/whatsapp-bridge`
+2. Install the LaunchAgent plist from `assets/launchagents/com.samrenders.whatsapp-bridge.plist`:
+   ```bash
+   PLIST="$HOME/Library/LaunchAgents/com.samrenders.whatsapp-bridge.plist"
+   BRIDGE_DIR="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge"
+   sed -e "s|__BRIDGE_BINARY_PATH__|$BRIDGE_DIR/whatsapp-bridge|g" \
+       -e "s|__BRIDGE_WORKING_DIR__|$BRIDGE_DIR|g" \
+       -e "s|__HOME__|$HOME|g" \
+       "${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.samrenders.whatsapp-bridge.plist" > "$PLIST"
+   launchctl bootstrap gui/$(id -u) "$PLIST"
+   ```
+3. On first run the bridge prints a QR code to its log — scan from WhatsApp → Linked Devices.
+4. Run schema migration: `${CLAUDE_PLUGIN_ROOT}/scripts/whatsapp-bridge-migrate.sh`
 
-# Verify
-wacli doctor
-# Expected: AUTHENTICATED true, CONNECTED false (until sync runs)
-
-# Initial sync (takes a minute for 142+ conversations)
-wacli sync
-```
-
-**Troubleshooting:**
-
-- `Client outdated (405)`: Rebuild from source above
-- `store is locked`: Kill stale process: `kill $(pgrep wacli)`
-- After version upgrade: `wacli auth logout && wacli auth`
-
-**History limitations:**
-wacli only captures messages **received while connected**. It cannot reliably backfill historical messages after the fact:
-
-- `wacli history backfill --chat <jid>` requires ≥1 existing local message per chat and often times out on the WhatsApp on-demand sync response.
-- Chats in the new `@lid` (Linked Device) format frequently return empty message queries because their history was never captured during an active sync session.
-- For ongoing inbox management, run `wacli sync --follow` in a persistent terminal (outside Claude Code) so new messages land in the local DB in real-time.
-
-**Env vars (optional):**
-
-- `WACLI_STORE` — default `~/.wacli`
-
-**Run sync persistently (recommended):**
+### Check health
 
 ```bash
-# In a dedicated terminal tab — keeps wacli connected so new messages are captured
-wacli sync --follow
+lsof -i :8080 | grep LISTEN                           # bridge running?
+launchctl list com.samrenders.whatsapp-bridge         # launchd status
+cat ~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log | tail -20
 ```
 
----
+### Troubleshooting
+
+- `bridge not running`: `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`
+- Auth expired: check `bridge.err.log` for QR prompt; session stored in `whatsapp.db`
+- Missing messages: restart bridge (re-syncs history on connect)
+- FTS search slow: run `scripts/whatsapp-bridge-migrate.sh` to add FTS5 index
+
+### Persistence note
+
+The bridge syncs messages continuously while running. History is stored in
+`~/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db`.
+The `WHATSAPP_BRIDGE_DB` env var overrides the DB path.
 
 ## Email (gog)
 

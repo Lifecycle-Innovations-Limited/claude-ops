@@ -1,6 +1,6 @@
 ---
 name: ops-inbox
-description: Full inbox management across all channels — WhatsApp (wacli), Email (Gmail MCP), Slack (MCP), Telegram (user-auth MCP), Discord (webhook + REST read), Notion (MCP — comments, mentions, assigned tasks). Scans FULL inbox (not just unread), identifies messages needing replies, archives handled conversations.
+description: Full inbox management across all channels — WhatsApp (whatsmeow bridge via mcp__whatsapp__*), Email (Gmail MCP), Slack (MCP), Telegram (user-auth MCP), Discord (webhook + REST read), Notion (MCP — comments, mentions, assigned tasks). Scans FULL inbox (not just unread), identifies messages needing replies, archives handled conversations.
 argument-hint: "[channel: whatsapp|email|slack|telegram|discord|notion|all]"
 allowed-tools:
   - Bash
@@ -21,7 +21,12 @@ allowed-tools:
   - mcp__gog__gmail_read_thread
   - mcp__gog__gmail_send
   - mcp__gog__gmail_labels
-  # Slack: MCP tools added when configured
+  # Slack — multi-workspace inbox scan uses these MCP tools when a workspace's
+  # token is bound to the Slack MCP in ~/.claude.json. Workspaces whose
+  # token_env is NOT bound to the MCP are scanned via direct curl from Bash
+  # (no MCP entry needed for those).
+  - mcp__claude_ai_Slack__slack_search_public_and_private
+  - mcp__claude_ai_Slack__slack_read_channel
   # Telegram: user-auth MCP tools added when configured
   # Notion: MCP tools (claude.ai integration or self-hosted)
   - mcp__claude_ai_Notion__notion-search
@@ -30,11 +35,40 @@ allowed-tools:
   - mcp__claude_ai_Notion__notion-create-comment
   - mcp__claude_ai_Notion__notion-update-page
   - mcp__claude_ai_Notion__notion-create-pages
+  - mcp__whatsapp__list_chats
+  - mcp__whatsapp__list_messages
+  - mcp__whatsapp__search_contacts
+  - mcp__whatsapp__send_message
+  - mcp__whatsapp__get_chat
+  - mcp__whatsapp__get_message_context
+  - mcp__whatsapp__archive_chat
+  - mcp__whatsapp__resync_app_state
 effort: high
 maxTurns: 60
 ---
 
 # OPS ► INBOX ZERO
+
+## ⚠️ WHATSAPP TRANSPORT — MCP ONLY, NEVER `wacli`
+
+For **all** WhatsApp operations in this skill (list chats, read messages, search contacts, send replies, archive chats), use the `mcp__whatsapp__*` tool family backed by the whatsmeow (Go) whatsapp-bridge — upstream `lharries/whatsapp-mcp`. (Earlier docs misnamed this as "Baileys" — Baileys is the Node.js WhatsApp library; this bridge uses `go.mau.fi/whatsmeow`.)
+
+**NEVER call the legacy `wacli` CLI** (`wacli chats list`, `wacli messages list`, `wacli send`, `wacli doctor`, `wacli history backfill`, etc). The wacli store and keepalive daemon are deprecated for this skill.
+
+If you find yourself reaching for any `wacli ...` shell command, stop and use the MCP tool with the same intent:
+
+| Intent                  | ✅ Use this                                                              | ❌ Do NOT use            |
+|-------------------------|--------------------------------------------------------------------------|---------------------------|
+| List recent chats       | `mcp__whatsapp__list_chats {sort_by: "last_active", limit: 25}`          | `wacli chats list`        |
+| Read full thread        | `mcp__whatsapp__list_messages {chat_jid, limit: 20}`                     | `wacli messages list`     |
+| Full-text search        | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}`              | `wacli messages search`   |
+| Resolve a contact       | `mcp__whatsapp__search_contacts {query: "<name>"}`                        | `wacli contacts`          |
+| Send a reply (after approval) | `mcp__whatsapp__send_message {recipient: "<JID>", message: "<text>"}` | `wacli send`              |
+| Health check            | `lsof -i :8080 \| grep LISTEN` + `launchctl list com.samrenders.whatsapp-bridge` | `wacli doctor` / `~/.wacli/.health` |
+
+**Rationale:** the bridge exposes a typed MCP surface, returns consistent JSON shapes (`is_from_me`, `content`, `timestamp`, `sender`), supports FTS5 search natively, and avoids store-lock contention with the wacli keepalive daemon. Mixing the two surfaces caused inconsistent state in past sessions.
+
+**Sole exception:** the `~/.wacli/.health` file is still readable for legacy daemon-health surfacing in other skills, but no `wacli` command should be invoked from this skill.
 
 ## Runtime Context
 
@@ -45,8 +79,8 @@ Before executing, load available context:
    - `secrets_manager` / `doppler` — how to resolve channel credentials if not in env
 
 2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
-   - Check `wacli-sync` status — if not running or auth needed, skip WhatsApp and surface the issue
-   - Also check `~/.wacli/.health` for live auth status before any wacli command
+   - Check `whatsapp-bridge` status — verify `com.samrenders.whatsapp-bridge` is running (`lsof -i :8080` or `launchctl list com.samrenders.whatsapp-bridge`)
+   - If bridge is not running, surface the issue before WhatsApp operations
 
 3. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/` before drafting any reply:
    - `contact_*.md` — load profile for the contact you're about to reply to
@@ -56,23 +90,54 @@ Before executing, load available context:
 
 ## CLI/API Reference
 
-### wacli (WhatsApp)
+### whatsapp-bridge (WhatsApp — mcp__whatsapp__*)
 
-**Health file** — check `~/.wacli/.health` BEFORE any wacli command:
-- `status=connected` → proceed normally
-- `status=needs_auth` → prompt user: "Run `wacli auth` in terminal, scan QR"
-- `status=needs_reauth` → prompt user: "WhatsApp session expired. Run `wacli auth` to re-pair"
-- File missing → fall back to `wacli doctor --json`
+**Bridge health** — check bridge is running before any WhatsApp operation:
+```bash
+lsof -i :8080 | grep LISTEN   # bridge listens on :8080
+launchctl list com.samrenders.whatsapp-bridge  # check launchd status
+```
+If bridge is not running: `launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge`
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `wacli doctor --json` | Check auth/connected/lock/FTS | `{data: {authenticated, connected, lock_held, fts_enabled}}` |
-| `wacli chats list --json` | All chats | `{data: [{JID, Name, Kind, LastMessageTS}]}` |
-| `wacli messages list --chat "<JID>" --limit N --json` | Messages for chat | `{data: {messages: [{FromMe, Text, Timestamp, SenderName, ChatName}]}}` |
-| `wacli messages search --query "<text>" --json` | FTS search | Same as above |
-| `wacli contacts --search "<name>" --json` | Contact lookup | Contact objects |
-| `wacli send --to "<JID>" --message "<msg>"` | Send text | Success/error |
-| `wacli history backfill --chat="<JID>" --count=50 --requests=2 --wait=30s --idle-exit=5s --json` | Fetch older messages | Backfill result |
+**MCP tools** (use these instead of any wacli CLI command):
+
+| Tool | Usage | Output |
+|------|-------|--------|
+| `mcp__whatsapp__list_chats` | `{sort_by: "last_active"}` | Array of chats with jid, name, last_message_time |
+| `mcp__whatsapp__list_messages` | `{chat_jid, limit, query}` | Array of messages with id, sender, content, timestamp, is_from_me |
+| `mcp__whatsapp__search_contacts` | `{query}` | Contacts matching name or phone |
+| `mcp__whatsapp__send_message` | `{recipient, message}` | Send result |
+| `mcp__whatsapp__get_chat` | `{chat_jid}` | Chat metadata |
+| `mcp__whatsapp__get_message_context` | `{chat_jid, message_id}` | Message context window |
+| `mcp__whatsapp__archive_chat` | `{chat_jid, archive: true}` | Archive (or unarchive with `archive: false`) a chat — sends app-state mutation via whatsmeow |
+| `mcp__whatsapp__resync_app_state` | `{name: "regular_low", full_sync: true}` | Force full app-state resync — run when archive fails with `LTHash mismatch` (server/local desync) |
+
+**Bulk archive non-actionable WA chats** — for newsletters, dead group chats, one-word reactions, etc.:
+```bash
+for jid in "<NEWSLETTER_JID>@newsletter" "<GROUP_JID>@g.us" "<CONTACT_PHONE>@s.whatsapp.net"; do
+  curl -s -X POST http://localhost:8080/api/archive \
+    -H 'Content-Type: application/json' \
+    -d "{\"chat_jid\":\"$jid\",\"archive\":true}"
+done
+```
+If you get `409 conflict / LTHash mismatch`, run resync first: `curl -s -X POST http://localhost:8080/api/resync_app_state -d '{"name":"regular_low","full_sync":true}'`.
+
+**Full-text search** — use `mcp__whatsapp__list_messages` with a `query` param (backed by FTS5 after running `scripts/whatsapp-bridge-migrate.sh`):
+```bash
+# Direct sqlite3 FTS query (fallback when MCP unavailable):
+DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+sqlite3 "$DB" "SELECT chat_jid, sender, content, timestamp FROM messages WHERE rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH '<query>') ORDER BY timestamp DESC LIMIT 20;"
+```
+
+**Contact lookup** — use `mcp__whatsapp__search_contacts` or query contacts table directly:
+```bash
+sqlite3 "$DB" "SELECT jid, name, phone FROM contacts WHERE name LIKE '%<name>%' COLLATE NOCASE LIMIT 10;"
+```
+
+**History backfill** — the whatsmeow bridge automatically syncs history on connection. No manual backfill command exists; if messages are missing, restart the bridge:
+```bash
+launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge
+```
 
 ### gog CLI (Gmail/Calendar)
 
@@ -128,7 +193,7 @@ All channel credentials come from env vars or CLI auth — no hardcoded secrets.
 | `SLACK_MCP_ENABLED` | `false`     | Set `true` when Slack MCP server is configured       |
 | `TELEGRAM_ENABLED`  | `false`     | Set `true` when Telegram user-auth MCP is configured |
 | `NOTION_MCP_ENABLED`| `false`     | Set `true` when Notion MCP integration is configured |
-| `WACLI_STORE`       | `~/.wacli`  | wacli store directory                                |
+| `WHATSAPP_BRIDGE_DB`| `~/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db` | Bridge messages DB path |
 
 ## Core principle: FULL INBOX SCAN
 
@@ -151,16 +216,16 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
 
 **For every NEEDS REPLY item, gather this context automatically:**
 
-1. **Full thread body** — read the ENTIRE thread (`gog gmail thread get` / `wacli messages list --limit 20`), not just the last message. Summarize the full conversation arc.
+1. **Full thread body** — read the ENTIRE thread (`gog gmail thread get` / `mcp__whatsapp__list_messages {limit: 20}`), not just the last message. Summarize the full conversation arc.
 2. **Contact profile** — search across channels to build a card:
    - `gog gmail search "from:<contact_email>" --max 10` — recent email history
-   - `wacli contacts --search "<name>" --json` — WhatsApp presence
-   - `wacli messages search --query "<name>" --json --limit 5` — recent WhatsApp mentions
+   - `mcp__whatsapp__search_contacts {query: "<name>"}` — WhatsApp presence
+   - `mcp__whatsapp__list_messages {query: "<name>", limit: 5}` — recent WhatsApp mentions
    - If Linear configured: search for issues assigned to or mentioning this contact
    - Present: who they are, role/company, last N interactions, relationship context
 3. **Topic context** — identify the subject matter and search for related threads:
    - `gog gmail search "subject:<keywords>" --max 5` — related email threads
-   - `wacli messages search --query "<topic keywords>" --json --limit 5` — related WA messages
+   - `mcp__whatsapp__list_messages {query: "<topic keywords>", limit: 5}` — related WA messages
    - Summarize: what this topic is about, any deadlines, any pending decisions
 4. **ops-memories** (if available) — check `~/.claude/plugins/data/ops-ops-marketplace/memories/` for any stored context about this contact or topic
 
@@ -195,8 +260,11 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
 For each channel, detect availability at runtime:
 
 1. **Email**: Try `gog` CLI first. If `gog` unavailable, try `mcp__gog__gmail_*` MCP tools. If neither, report unavailable.
-2. **WhatsApp**: First check `~/.wacli/.health` for keepalive daemon status. If `status=needs_auth` or `status=needs_reauth`, do NOT attempt wacli commands — instead prompt the user: "WhatsApp needs re-authentication. Run `wacli auth` in a separate terminal and scan the QR code, then type 'done'." Use `AskUserQuestion`: `[Done — re-paired]`, `[Skip WhatsApp]`. On Done, restart the daemon: `launchctl kickstart -k gui/$(id -u)/com.claude-ops.wacli-keepalive`, wait 5s, re-check health. If no health file exists, fall back to `wacli doctor` for auth/connection status. If outdated (405 error), advise rebuilding from source.
-3. **Slack**: Only via MCP tools (`mcp__claude_ai_Slack__*`). Check `SLACK_MCP_ENABLED` env var.
+2. **WhatsApp**: Check bridge liveness: `lsof -i :8080 | grep LISTEN`. If not listening, prompt the user: "WhatsApp bridge is not running." Use `AskUserQuestion`: `[Restart bridge]`, `[Skip WhatsApp]`. On restart: `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`, wait 5s, re-check. If bridge is running but MCP tools fail, the bridge may need QR re-pairing — check `~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log` for auth errors.
+3. **Slack**: Read the derived `channels.slack` object from pre-gathered `bin/ops-unread` data (it resolves each `token_env` and reports per-workspace `available`; do NOT read raw `preferences.json → slack_workspaces[]` directly — that array has no `available` flag).
+   - **Multi-workspace** (`"multi_workspace": true`): iterate the `workspaces` array. For each `available: true` entry, scan via `mcp__claude_ai_Slack__*` if the MCP token matches, or via direct curl. To resolve the token for direct curl, validate `token_env` matches `^[A-Za-z_][A-Za-z0-9_]*$` before `${!token_env}` indirect expansion. Aggregate results; label each message block with the workspace name.
+   - **Legacy** (`"multi_workspace": false`): use `mcp__claude_ai_Slack__*` if `channels.slack.available == true` (which itself reflects `SLACK_MCP_ENABLED`).
+   - 0 workspaces configured → skip Slack with a one-line note: "Slack: no workspaces configured — run /ops:setup slack".
 4. **Telegram**: Only via user-auth MCP (tdlib/MTProto). Check `TELEGRAM_ENABLED` env var. Never use BotFather bots.
 5. **Discord**: Via `${CLAUDE_PLUGIN_ROOT}/bin/ops-discord read <CHANNEL_ID> --limit 20 --json`. Requires `DISCORD_BOT_TOKEN` (v1 is channel-scoped — no DM/gateway support yet). Pre-configured read list lives at `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` under `discord.inbox_channels` (array of channel IDs). If neither a bot token nor a read list is configured, skip Discord with a one-line note ("Discord not configured — run `/ops:setup discord`") rather than prompting — ops-inbox is not a setup flow. Rule 3 still applies to `/ops:setup`.
 6. **Notion**: Only via MCP tools (`mcp__claude_ai_Notion__*` or self-hosted Notion MCP). Check `NOTION_MCP_ENABLED` env var. Searches workspace for recent comments, mentions, and assigned tasks.
@@ -207,7 +275,7 @@ For each channel, detect availability at runtime:
 
 2. **For each channel, run a FULL scan** (not just unread):
    - **Email**: Search `in:inbox` (not `is:unread`) via `gog gmail search -a $GMAIL_ACCOUNT -j --results-only --no-input --max 30 "in:inbox"`. For each thread, read the last message to determine who sent it last. Check for DRAFT or SENT labels. **Before suggesting to send a draft, verify no reply was already sent in the thread.**
-   - **WhatsApp**: Run `wacli chats list --json` to get all chats. Filter to non-archived chats with `LastMessageTS` in the last 7 days. For each, fetch the FULL conversation via `wacli messages list --chat <JID> --limit 20 --json` (20 messages, not 5 — you need the full thread). Parse `data.messages[]` with fields `FromMe`, `Text`, `Timestamp`, `ChatName`. Understand which messages are from the user (`FromMe: true`) vs the contact (`FromMe: false`). Classify by last message `FromMe` field.
+   - **WhatsApp**: Call `mcp__whatsapp__list_chats {sort_by: "last_active"}` to get all chats. Filter to chats with `last_message_time` in the last 7 days. For each, fetch the FULL conversation via `mcp__whatsapp__list_messages {chat_jid, limit: 20}` (20 messages, not 5 — you need the full thread). Parse message array with fields `is_from_me`, `content`, `timestamp`, `sender`. Classify by last message `is_from_me` field.
    - **Slack**: Search via Slack MCP tools. Check who sent last message in each thread.
    - **Telegram**: Use user-auth MCP (NOT bot API) to read recent conversations.
 
@@ -252,31 +320,31 @@ If only 3 channels are configured, "All channels" + 3 channel options = 4, fits 
 ### WhatsApp (FULL SCAN + DEEP CONTEXT)
 
 **Phase 1 — Classify:**
-1. Get all chats: `wacli chats list --json`
-2. Filter to chats with `LastMessageTS` in the last 7 days
-3. For each, fetch the FULL recent conversation: `wacli messages list --chat "<JID>" --limit 20 --json` — get 20 messages, NOT 5. You need the full conversation thread to understand context.
-4. Parse `data.messages[]` — fields: `FromMe`, `Text`, `Timestamp`, `ChatName`, `SenderName`
+1. Get all chats: `mcp__whatsapp__list_chats` with `{sort_by: "last_active"}`
+2. Filter to chats with `last_message_time` in the last 7 days
+3. For each, fetch the FULL recent conversation: `mcp__whatsapp__list_messages` with `{chat_jid: "<JID>", limit: 20}` — get 20 messages, NOT 5.
+4. Parse message array — fields: `is_from_me`, `content`, `timestamp`, `sender`
 5. For EVERY chat, understand the conversation:
-   - Read ALL messages in order. Know which are `FromMe: true` (user sent) vs `FromMe: false` (contact sent)
+   - Read ALL messages in order. Know which have `is_from_me: true` (user sent) vs `is_from_me: false` (contact sent)
    - Understand what the conversation is about, what was discussed, what's pending
    - Identify the user's tone and style in their sent messages
 6. Classify each chat:
-   - **NEEDS REPLY**: Last message has `FromMe: false` (they sent last)
-   - **WAITING**: Last message has `FromMe: true` (you sent last)
-   - **ARCHIVE**: Old conversation, no recent activity, or concluded
+   - **NEEDS REPLY**: Last message has `is_from_me: false` (they sent last)
+   - **WAITING**: Last message has `is_from_me: true` (you sent last)
+   - **ARCHIVE**: Newsletters (`@newsletter` JIDs), dead group chats with no recent activity, one-word reactions, or concluded conversations. Bulk-archive these via `mcp__whatsapp__archive_chat {chat_jid, archive: true}` after user confirmation. If the call fails with `LTHash mismatch`, run `mcp__whatsapp__resync_app_state {name: "regular_low", full_sync: true}` first, then retry.
 
 **Phase 2 — Build context for NEEDS REPLY chats (run in parallel):**
 For each NEEDS REPLY chat:
 1. **Full conversation summary** — read all 20 messages, summarize the arc: what was discussed, key decisions, open questions
 2. **Contact profile** — search for this person:
-   - `wacli messages search --query "<contact_name>" --json --limit 10` — mentions in other chats
+   - `mcp__whatsapp__list_messages` with `{query: "<contact_name>", limit: 10}` — mentions across chats
    - `gog gmail search -j --results-only --no-input --max 5 "from:<name> OR to:<name>"` — email history
    - Check `~/.claude/plugins/data/ops-ops-marketplace/memories/contact_*.md` for stored profile
    - Build: who they are, relationship, communication history across channels
 3. **Topic context** — extract keywords from the conversation and search:
-   - `wacli messages search --query "<topic keywords>" --json --limit 5` — related WA messages
+   - `mcp__whatsapp__list_messages` with `{query: "<topic keywords>", limit: 5}` — related WA messages
    - `gog gmail search -j --results-only --no-input --max 3 "<topic keywords>"` — related emails
-4. **User's messaging style** — from the `FromMe: true` messages in this chat, note: language (NL/EN), formality, emoji usage, typical response length
+4. **User's messaging style** — from the `is_from_me: true` messages in this chat, note: language (NL/EN), formality, emoji usage, typical response length
 
 **Phase 3 — Present with full context:**
 
@@ -313,45 +381,28 @@ Use `AskUserQuestion` for each NEEDS REPLY chat.
 - If ops-memories has preferences for this contact, apply them
 - Never generate a generic reply — every draft must show you understood the full conversation
 
-Reply via: `wacli send --to "<JID>" --message "<msg>"`
+Reply via: `mcp__whatsapp__send_message` with `{recipient: "<JID>", message: "<msg>"}`
 
-**wacli CLI reference (v0.5.0):**
+**WhatsApp bridge reference:**
 
-| Command | Usage | Notes |
-|---------|-------|-------|
-| `wacli doctor` | `wacli doctor --json` | Check auth/connected/lock/FTS status |
-| `wacli auth` | `wacli auth` | QR pairing (interactive — shows QR in terminal) |
-| `wacli sync` | `wacli sync --follow --refresh-contacts --refresh-groups` | Persistent sync (managed by launchd keepalive) |
-| `wacli sync --once` | `wacli sync --once --idle-exit=10s` | One-shot sync, exits when idle |
-| `wacli chats list` | `wacli chats list --json` | All chats with JID, Name, Kind, LastMessageTS |
-| `wacli messages list` | `wacli messages list --chat "<JID>" --limit 5 --json` | Messages: ChatJID, FromMe, Text, Timestamp, SenderName |
-| `wacli messages search` | `wacli messages search --query "<text>" --json` | FTS5 search across all messages |
-| `wacli contacts` | `wacli contacts --search "<name>" --json` | Contact lookup by name |
-| `wacli send` | `wacli send --to "<JID>" --message "<msg>"` | Send text message |
-| `wacli history backfill` | `wacli history backfill --chat="<JID>" --count=50 --requests=2 --wait=30s --idle-exit=5s --json` | Fetch older messages from phone (needs store lock) |
+| Operation | Tool / Command |
+|-----------|---------------|
+| List chats | `mcp__whatsapp__list_chats {sort_by: "last_active"}` |
+| Read messages | `mcp__whatsapp__list_messages {chat_jid, limit: 20}` |
+| Search messages (FTS) | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}` |
+| Find contact | `mcp__whatsapp__search_contacts {query: "<name>"}` |
+| Send message | `mcp__whatsapp__send_message {recipient, message}` |
+| Chat metadata | `mcp__whatsapp__get_chat {chat_jid}` |
+| Message context | `mcp__whatsapp__get_message_context {chat_jid, message_id}` |
+| Check bridge | `lsof -i :8080 | grep LISTEN` |
+| Restart bridge | `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge` |
 
-**Health file contract (`~/.wacli/.health`):**
+**Bridge troubleshooting:**
 
-Before ANY wacli command, read `~/.wacli/.health`:
-- `status=connected` → proceed normally
-- `status=needs_auth` → prompt user: "Run `wacli auth` in terminal, scan QR"
-- `status=needs_reauth` → prompt user: "WhatsApp session expired. Run `wacli auth` to re-pair"
-- File missing → fall back to `wacli doctor --json`
-
-**Requesting backfill for @lid chats with empty messages:**
-
-The keepalive daemon holds the store lock, so you can't run backfill directly. Instead:
-1. Write JIDs to `~/.wacli/.backfill_jids` (one per line)
-2. Restart the daemon: `launchctl kickstart -k gui/$(id -u)/com.claude-ops.wacli-keepalive`
-3. The daemon runs backfill before starting persistent sync
-
-**wacli troubleshooting:**
-
-- `@lid` JIDs (linked device format) may return empty messages → request backfill via the daemon (see above)
-- "Client outdated (405)" → rebuild from source: `cd /tmp && git clone https://github.com/Lifecycle-Innovations-Limited/wacli.git && cd wacli && go build -o /usr/local/bin/wacli ./cmd/wacli/`
-- "store is locked" → the keepalive daemon holds the lock; to release: `launchctl bootout gui/$(id -u)/com.claude-ops.wacli-keepalive`
-- Auth expired → daemon writes `needs_auth` to health file; prompt user for QR scan
-- Key desync (0 messages synced) → daemon writes `needs_reauth`; user needs `wacli auth` re-pair
+- Bridge not running → `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`; wait 5s, re-check
+- Auth expired / QR needed → check `~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log`; bridge prints QR to log on startup if session is invalid
+- Missing messages → bridge syncs history on connect; if gap persists, restart bridge
+- FTS not available → run `scripts/whatsapp-bridge-migrate.sh` to add FTS5 index to messages.db
 
 ### Email (FULL SCAN + DEEP CONTEXT)
 
@@ -370,8 +421,8 @@ For each NEEDS REPLY thread, gather:
 1. **Full thread summary** — read every message in the thread, summarize the conversation arc (who said what, key decisions, open questions)
 2. **Contact profile** — for the sender:
    - `gog gmail search -j --results-only --no-input --max 10 "from:<sender_email>"` — their recent emails to you
-   - `wacli contacts --search "<sender_name>" --json` — WhatsApp contact
-   - `wacli messages search --query "<sender_name>" --json --limit 5` — recent WhatsApp mentions
+   - `mcp__whatsapp__search_contacts {query: "<sender_name>"}` — WhatsApp contact
+   - `mcp__whatsapp__list_messages {query: "<sender_name>", limit: 5}` — recent WhatsApp mentions
    - Build: name, role/company, relationship history, last N interactions
 3. **Topic search** — extract key terms from subject + body, then:
    - `gog gmail search -j --results-only --no-input --max 5 "subject:<keywords>"` — related threads
@@ -431,9 +482,29 @@ Archive N FYI/newsletter emails?
 
 Draft replies via `gog gmail send`. Archive via `gog gmail archive <messageId> ... --no-input --force`.
 
-### Slack
+### Slack (multi-workspace)
 
-Use Slack MCP tools with `query: "in:*"` (NOT `is:unread` — scan full recent activity, not just unread) for mentions.
+Read the **derived** `channels.slack.workspaces[]` from the pre-gathered `bin/ops-unread` output. That object resolves each workspace's `token_env` and emits `available: true|false` per entry — `preferences.json → slack_workspaces[]` itself only persists metadata and does not contain `available`. For each entry where `available: true`:
+
+1. **Resolve the workspace token (only when falling back to direct curl)**: the entry's `token_env` field is the **name** of an env var. Validate it matches `^[A-Za-z_][A-Za-z0-9_]*$` before using `${!token_env}` (bash aborts under `set -u` if an indirect expansion is given an invalid identifier):
+   ```bash
+   if [[ "$token_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+     TOKEN="${!token_env:-}"
+   fi
+   ```
+   If the env var is set, use it for direct curl; otherwise rely on the bound MCP token.
+2. **Scan**: use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` (NOT `is:unread`). If the MCP is only bound to one workspace, make direct `curl` calls for the others:
+   ```bash
+   curl -s -H "Authorization: Bearer $TOKEN" \
+     "https://slack.com/api/conversations.history?channel=<CHANNEL_ID>&limit=20"
+   ```
+3. **Label output per workspace**: prefix every result block with the workspace name.
+
+```
+💬 Slack / <workspace_a>   [N need reply] | [N waiting]
+💬 Slack / <workspace_b>   [N need reply] | [N waiting]
+```
+
 For each result, show channel, sender, preview. Read thread for context.
 
 ```
@@ -442,9 +513,12 @@ For each result, show channel, sender, preview. Read thread for context.
   c) Mark read / skip
 ```
 
+**0 workspaces** → skip with: "Slack: no workspaces configured — run /ops:setup slack".
+**Legacy mode** (no `slack_workspaces`, `SLACK_MCP_ENABLED=true`) → single unnamed workspace, behaviour unchanged.
+
 ### Telegram (FULL SCAN — User Account, NOT Bot)
 
-Telegram integration must authenticate as the user's personal account (user-auth via tdlib/MTProto), NOT a BotFather bot. The goal is to manage real conversations just like WhatsApp via wacli.
+Telegram integration must authenticate as the user's personal account (user-auth via tdlib/MTProto), NOT a BotFather bot. The goal is to manage real conversations just like WhatsApp via the bridge MCP tools.
 
 Use the Telegram user-auth MCP server if available.
 

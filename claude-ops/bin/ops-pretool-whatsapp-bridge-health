@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# PreToolUse hook: check whatsapp-bridge health before WhatsApp MCP tool calls
+# Receives tool input as $1, warns if bridge appears down
+set -euo pipefail
+
+INPUT="${1:-}"
+
+# Only check if the tool call involves whatsapp MCP tools
+if ! echo "$INPUT" | grep -q "whatsapp"; then
+  exit 0
+fi
+
+# Check bridge is listening on port 8080
+if ! lsof -i :8080 2>/dev/null | grep -q LISTEN; then
+  echo "⚠ WhatsApp bridge not running on :8080. Restart: launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge"
+  # Don't block — just warn. The skill's own health check will handle it.
+fi
+
+# Check launchd registration
+if ! launchctl list com.samrenders.whatsapp-bridge 2>/dev/null | grep -q '"PID"'; then
+  echo "⚠ com.samrenders.whatsapp-bridge not active in launchd. Check: launchctl list com.samrenders.whatsapp-bridge"
+fi
+
+exit 0

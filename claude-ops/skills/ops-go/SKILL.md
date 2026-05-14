@@ -18,6 +18,13 @@ allowed-tools:
   - CronCreate
   - CronList
   - WebFetch
+  # Slack — multi-workspace scan during the briefing. The flow falls back to
+  # direct curl from Bash for workspaces whose token_env is not bound to the MCP.
+  - mcp__claude_ai_Slack__slack_search_public_and_private
+  - mcp__claude_ai_Slack__slack_read_channel
+  # Notion — comments/mentions surfaced in the briefing.
+  - mcp__claude_ai_Notion__notion-search
+  - mcp__claude_ai_Notion__notion-get-comments
 effort: medium
 maxTurns: 40
 ---
@@ -35,23 +42,23 @@ Before executing, load available context:
 
 2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
    - If `action_needed` is not null → surface it before the briefing
-   - Check `wacli-sync` status before including WhatsApp unread counts
-   - Also check `~/.wacli/.health` for live auth status
+   - Check `whatsapp-bridge` status before including WhatsApp unread counts
+   - Also check bridge liveness: `lsof -i :8080 | grep LISTEN`
 
-3. **WhatsApp pre-check**: Only include WhatsApp data if `~/.wacli/.health` shows `status=connected`.
+3. **WhatsApp pre-check**: Only include WhatsApp data if bridge is running (`lsof -i :8080 | grep LISTEN`).
 
 ## CLI/API Reference
 
-### wacli (WhatsApp)
+### whatsapp-bridge (WhatsApp — mcp__whatsapp__*)
 
-**Health file** — check `~/.wacli/.health` BEFORE any wacli command:
-- `status=connected` → proceed
-- `status=needs_auth` or `status=needs_reauth` → prompt user for QR scan
+**Bridge health** — check before any WhatsApp operation:
+- Running: `lsof -i :8080 | grep LISTEN` → proceed
+- Not running → `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`, wait 5s
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `wacli doctor --json` | Check auth/connected/lock/FTS | `{data: {authenticated, connected, lock_held, fts_enabled}}` |
-| `wacli chats list --json` | All chats | `{data: [{JID, Name, Kind, LastMessageTS}]}` |
+| Tool | Params | Output |
+|------|--------|--------|
+| `mcp__whatsapp__list_chats` | `{sort_by: "last_active"}` | Array of chats with jid, name, last_message_time |
+| `mcp__whatsapp__list_messages` | `{chat_jid, limit, query}` | Message array with is_from_me, content, timestamp |
 
 ### gog CLI (Gmail/Calendar)
 
@@ -82,7 +89,22 @@ If the flag is NOT set, use standard fire-and-forget subagents.
 
 ## Pre-gathered data
 
-All data below was collected by shell scripts in <10 seconds:
+All data below was collected by shell scripts in <10 seconds.
+
+### FinOps snapshot (canonical state from finops-dashboard)
+
+Pulls current burn, anomalies, and revenue from the dashboard. Fails open
+to `{}` if `FINOPS_DASHBOARD_URL` / `FINOPS_OPS_API_TOKEN` are unset — in
+that case the briefing falls back to the per-source data below.
+
+```!
+${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh snapshot 2>/dev/null || echo "{}"
+```
+
+When this snapshot is non-empty, prefer it for the burn/runway/anomaly
+lines in the briefing. The per-source `Infrastructure` and AWS Cost
+Explorer sections below are kept as a fallback when the dashboard is
+unreachable.
 
 ### Infrastructure
 
@@ -134,6 +156,12 @@ done
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
 ```
 
+### Marketing (live channel data per project)
+
+```!
+${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-dash 2>/dev/null || echo '{}'
+```
+
 ### Calendar (today)
 
 ```!
@@ -170,7 +198,7 @@ MARKETING
 [If no marketing configured: "(marketing not configured — /ops:marketing setup)"]
 
 UNREAD
-[WhatsApp: N, Email: N, Slack: check MCP, Notion: N items, Calendar: N events today]
+[WhatsApp: N, Email: N, Slack: N workspace(s) configured (no scan), Notion: N items, Calendar: N events today]
 
 TODAY'S PRIORITIES (ranked by revenue impact + urgency)
 1. [action] — [project] — [why]
@@ -188,7 +216,11 @@ If `$ARGUMENTS` contains a project alias, focus the briefing on that project onl
 
 After the briefing, use **batched AskUserQuestion calls** (max 4 options each) for the "What's next?" prompt. Show the top 3 priority actions + `[More...]` in the first call, then remaining actions + `[/ops-yolo — let me run your business today]` in the second call. Route to the appropriate ops skill or project.
 
-For Slack counts: if the pre-gathered data shows `"count": -1`, use `mcp__claude_ai_Slack__slack_search_public_and_private` with query `in:channel` (NOT `is:unread` — scan full recent activity) to get actual message counts. Do this as a parallel tool call while analyzing other data.
+For Slack counts: read the `channels.slack` object from the pre-gathered data and surface workspace presence ONLY. **Do NOT auto-scan Slack workspaces during briefings** — Slack scans are expensive, noisy, and frequently produce stale/unread counts that don't match the user's actual triage state. The user explicitly opted out of auto-scan on briefing surfaces.
+
+- If `workspaces` array is present: render `Slack: N workspace(s) configured (<name1>, <name2>) — run /ops:ops-inbox to scan`.
+- If `available: false` for all workspaces: show `Slack: not configured` and skip.
+- Never call `mcp__claude_ai_Slack__*` or curl Slack APIs from this skill. Defer all Slack scans to `/ops:ops-inbox` where the user explicitly opts in.
 
 For Notion counts: if `NOTION_MCP_ENABLED=true` and pre-gathered data shows Notion as available, use `mcp__claude_ai_Notion__notion-search` with `query: ""` sorted by `last_edited_time` descending to surface recently active pages. Then call `mcp__claude_ai_Notion__notion-get-comments` on the top results to find comments needing response. Note: Notion search does not support date range filters — sort by recency and limit to the first 10-20 results instead.
 

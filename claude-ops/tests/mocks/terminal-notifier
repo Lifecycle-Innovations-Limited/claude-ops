@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Mock terminal-notifier — silent, just record argv.
+LOG="${MOCK_NOTIFIER_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+exit 0
