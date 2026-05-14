@@ -116,8 +116,8 @@ install_script="$BIN_DIR/ops-setup-install"
 if [[ -f "$preflight" && -f "$install_script" ]]; then
   # Extract tool names from preflight — lines like: check_tool jq / command -v jq
   preflight_tools=$(grep -oE 'command -v [a-z_-]+' "$preflight" 2>/dev/null | awk '{print $3}' | sort -u || true)
-  # Extract tools handled by install script — lines like: jq) / "jq")
-  install_tools=$(grep -oE '"?[a-z_-]+"?\)' "$install_script" 2>/dev/null | tr -d '"()' | sort -u || true)
+  # Extract tools handled by install script — lines like: jq) / "jq") / jq|git|brew)
+  install_tools=$(grep -oE '"?[a-z_-]+"?[|)]' "$install_script" 2>/dev/null | tr -d '"()|' | sort -u || true)
 
   missing_count=0
   while IFS= read -r tool; do
