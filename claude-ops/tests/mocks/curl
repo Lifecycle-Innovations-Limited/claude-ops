@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Mock `curl`. Behavior:
+#   MOCK_CURL_HEALTH_CODE — HTTP code returned for health probe (-w '%{http_code}')
+#   MOCK_CURL_VERSION_BODY — body returned for version-URL fetch
+#   MOCK_CURL_LOG — append argv to this file
+set -u
+LOG="${MOCK_CURL_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+# Detect -w '%{http_code}' (used for health probe)
+for a in "$@"; do
+  if [ "$a" = "%{http_code}" ]; then
+    printf '%s' "${MOCK_CURL_HEALTH_CODE:-200}"
+    exit 0
+  fi
+done
+
+# Default: emit version body
+printf '%s' "${MOCK_CURL_VERSION_BODY:-}"
+exit 0

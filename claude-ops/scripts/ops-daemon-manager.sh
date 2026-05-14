@@ -290,6 +290,13 @@ cmd_upgrade() {
 }
 
 cmd_ensure_current() {
+  # Always run post-update migrations FIRST (idempotent — sentinel-gated per-version).
+  # This catches version bumps even when the daemon plist itself didn't change.
+  local migrate_bin="$PLUGIN_ROOT/bin/ops-post-update-migrate"
+  if [[ -x "$migrate_bin" ]]; then
+    CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$migrate_bin" 2>/dev/null || true
+  fi
+
   [[ "$OS" == "macos" ]] || exit 0
   [[ -n "$PLUGIN_ROOT" ]] && [[ -d "$PLUGIN_ROOT/scripts" ]] || exit 0
   [[ -f "$PLIST_DEST" ]] || exit 0
