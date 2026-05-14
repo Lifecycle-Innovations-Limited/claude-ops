@@ -174,9 +174,10 @@ function effectiveBudget(userBudget, remainingUsd) {
   return cap;
 }
 
-function parseUsageCost(stdout, stderr) {
-  // Best-effort parse — claude prints things like "Cost: $0.0123" on completion.
-  const text = (stdout || '') + '\n' + (stderr || '');
+function parseUsageCost(_stdout, stderr) {
+  // Best-effort parse — usage/cost lines come from the CLI on stderr. stdout is
+  // model text and must not be scanned (phrases like "$500 cost estimate" false-match).
+  const text = stderr || '';
   const m =
     text.match(/\$([0-9]+(?:\.[0-9]+)?)[ \t]*(?:total|cost|spend)/i) ||
     text.match(/total[^$\n]*\$([0-9.]+)/i) ||
