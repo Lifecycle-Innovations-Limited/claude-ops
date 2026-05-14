@@ -69,8 +69,6 @@ If user passed an explicit target email (`/ops:rotate rotate-now user@example.co
 bash "$ROT_SRC/force-rotate.sh" "${TARGET_EMAIL:-}"
 ```
 
-Browser fallback (when fast `--no-browser` fails) runs full OAuth in `rotate.mjs` with **ai-brain** (Bedrock vision, optional Context7 + web research via env) and billing scrape — requires AWS credentials on the machine. Daemon-only rotations stay `--no-browser` and never load ai-brain.
-
 Show the trailing status output. Remind the user that running Claude Code sessions hold their own access token until next `/login` or until they exit and re-enter.
 
 ## list
