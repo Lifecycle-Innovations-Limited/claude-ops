@@ -263,7 +263,7 @@ async function main(argv) {
     });
   }
 
-  // Build claude args. Strip user-supplied --max-budget-usd if present, then append our floor.
+  // Build claude args. Strip user-supplied --max-budget-usd if present, then prefix our floor.
   const userArgs = [];
   for (let i = 0; i < opts.rest.length; i++) {
     const a = opts.rest[i];
@@ -273,7 +273,7 @@ async function main(argv) {
     }
     userArgs.push(a);
   }
-  const finalArgs = ['-p', ...userArgs, '--max-budget-usd', String(budget)];
+  const finalArgs = ['-p', '--max-budget-usd', String(budget), ...userArgs];
 
   // Spawn claude. Stream output through; collect for cost parsing.
   const stdoutChunks = [];
