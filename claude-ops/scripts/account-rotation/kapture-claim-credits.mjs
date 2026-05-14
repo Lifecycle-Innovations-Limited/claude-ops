@@ -89,6 +89,15 @@ const ALREADY_CLAIMED_SELECTORS = [
   '[data-testid="agent-sdk-credit-claimed"]',
 ];
 
+// Selectors that indicate the claim click succeeded (post-submit confirmation).
+const SUCCESS_SELECTORS = [
+  ':text("Credit claimed")',
+  ':text("Successfully claimed")',
+  ':text("Claim complete")',
+  '[data-testid="agent-sdk-credit-claimed"]',
+  '[role="alert"]:has-text("credit")',
+];
+
 // Selectors that reveal the logged-in account email.
 const EMAIL_SELECTORS = [
   '[data-testid="user-menu-email"]',
@@ -201,7 +210,8 @@ function buildPrompt(email, screenshotTo) {
     `   If none match, check ALREADY_CLAIMED_SELECTORS: ${JSON.stringify(ALREADY_CLAIMED_SELECTORS)}.`,
     `   If neither matches, ABORT — the DOM has shifted; do not click anything.`,
     `5. If claimable: click the button, wait 2s, verify success by reading the page state.`,
-    `   If success markers are present, set claimed=true.`,
+    `   Try SUCCESS_SELECTORS: ${JSON.stringify(SUCCESS_SELECTORS)}.`,
+    `   If at least one matches, set claimed=true.`,
     `6. Read the remaining balance via BALANCE_SELECTORS: ${JSON.stringify(BALANCE_SELECTORS)}.`,
     `   Parse the dollar amount as remaining_usd. If unparseable, leave null.`,
     `7. mcp__kapture__screenshot the page → save to "${screenshotTo}".`,
