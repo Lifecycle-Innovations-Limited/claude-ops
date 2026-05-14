@@ -90,11 +90,10 @@ const ALREADY_CLAIMED_SELECTORS = [
 ];
 
 // Selectors that indicate the claim click succeeded (post-submit confirmation).
+// Must not overlap ALREADY_CLAIMED_SELECTORS — those match the idle pre-claim UI.
 const SUCCESS_SELECTORS = [
-  ':text("Credit claimed")',
   ':text("Successfully claimed")',
   ':text("Claim complete")',
-  '[data-testid="agent-sdk-credit-claimed"]',
   '[role="alert"]:has-text("credit")',
 ];
 
