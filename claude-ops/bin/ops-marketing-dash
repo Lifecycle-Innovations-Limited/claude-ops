@@ -1,38 +1,105 @@
 #!/usr/bin/env bash
 # ops-marketing-dash — pre-gathers data from all configured marketing channels
 # Output: JSON object with data from each channel (null for unconfigured)
-# v1.5: adds Instagram, blended_roas, marketing_health_score
+# v1.6: project-aware — reads preferences.json marketing.{default_project,projects.<name>.<channel>}
+#       and resolves cred refs (env:VAR | doppler:project/config/SECRET | inline)
 
 set -euo pipefail
 
-# Credential resolution
-KLAVIYO_KEY="${KLAVIYO_PRIVATE_KEY:-$(claude plugin config get klaviyo_private_key 2>/dev/null || echo "")}"
-META_TOKEN="${META_ADS_TOKEN:-$(claude plugin config get meta_ads_token 2>/dev/null || echo "")}"
-META_ACCOUNT="${META_AD_ACCOUNT_ID:-$(claude plugin config get meta_ad_account_id 2>/dev/null || echo "")}"
-GA4_PROPERTY="${GA4_PROPERTY_ID:-$(claude plugin config get ga4_property_id 2>/dev/null || echo "")}"
-GSC_SITE="${GOOGLE_SEARCH_CONSOLE_SITE:-$(claude plugin config get google_search_console_site 2>/dev/null || echo "")}"
-GADS_DEV_TOKEN="${GOOGLE_ADS_DEVELOPER_TOKEN:-$(claude plugin config get google_ads_developer_token 2>/dev/null || echo "")}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-path.sh"
+PREFS="${OPS_DATA_DIR}/preferences.json"
+
+# Resolve a cred reference value.
+#   env:VAR_NAME                   -> $VAR_NAME from environment
+#   doppler:project/config/SECRET  -> doppler secrets get SECRET --project P --config C --plain
+#   <anything else>                -> treated as inline literal
+# Empty input -> empty output. Never fails.
+resolve_cred() {
+  local ref="${1:-}"
+  [ -z "$ref" ] || [ "$ref" = "null" ] && return 0
+  case "$ref" in
+    env:*)
+      local var="${ref#env:}"
+      printf '%s' "${!var:-}"
+      ;;
+    doppler:*)
+      local path="${ref#doppler:}"
+      local proj="${path%%/*}"
+      local rest="${path#*/}"
+      local cfg="${rest%%/*}"
+      local secret="${rest#*/}"
+      [ -z "$proj" ] || [ -z "$cfg" ] || [ -z "$secret" ] && return 0
+      doppler secrets get "$secret" --project "$proj" --config "$cfg" --plain 2>/dev/null || true
+      ;;
+    *)
+      printf '%s' "$ref"
+      ;;
+  esac
+}
+
+# Pull a value from preferences.json marketing.projects.<project>.<channel>.<field>.
+# $1 project, $2 channel, $3 field. Echoes nothing if missing or prefs absent.
+prefs_get() {
+  [ -f "$PREFS" ] || return 0
+  jq -r --arg p "$1" --arg c "$2" --arg f "$3" \
+    '.marketing.projects[$p][$c][$f] // empty' "$PREFS" 2>/dev/null
+}
+
+# Project selection: --project <name> arg, OPS_MARKETING_PROJECT env, or
+# marketing.default_project from prefs. Empty if no project context.
+PROJECT=""
+for ((i=1; i<=$#; i++)); do
+  if [ "${!i}" = "--project" ]; then
+    j=$((i+1))
+    PROJECT="${!j:-}"
+    break
+  fi
+done
+PROJECT="${PROJECT:-${OPS_MARKETING_PROJECT:-}}"
+if [ -z "$PROJECT" ] && [ -f "$PREFS" ]; then
+  PROJECT="$(jq -r '.marketing.default_project // empty' "$PREFS" 2>/dev/null || true)"
+fi
+
+# Credential resolution — three-tier:
+#   1. Project config in preferences.json (NEW, primary)
+#   2. Flat env / `claude plugin config get` (legacy)
+#   3. Doppler with bare key name (legacy)
+get_cred() {
+  local proj_channel="$1"  # e.g. "klaviyo.private_key"
+  local env_var="$2"
+  local plugin_key="$3"
+  local doppler_key="${4:-}"
+
+  local val=""
+  if [ -n "$PROJECT" ]; then
+    local channel="${proj_channel%%.*}"
+    local field="${proj_channel#*.}"
+    val="$(resolve_cred "$(prefs_get "$PROJECT" "$channel" "$field")")"
+  fi
+  if [ -z "$val" ]; then val="${!env_var:-}"; fi
+  if [ -z "$val" ]; then val="$(claude plugin config get "$plugin_key" 2>/dev/null || echo "")"; fi
+  if [ -z "$val" ] && [ -n "$doppler_key" ]; then
+    val="$(doppler secrets get "$doppler_key" --plain 2>/dev/null || echo "")"
+  fi
+  printf '%s' "$val"
+}
+
+KLAVIYO_KEY="$(get_cred 'klaviyo.private_key' KLAVIYO_PRIVATE_KEY klaviyo_private_key KLAVIYO_PRIVATE_KEY)"
+META_TOKEN="$(get_cred 'meta.access_token' META_ADS_TOKEN meta_ads_token META_ADS_TOKEN)"
+META_ACCOUNT="$(get_cred 'meta.ad_account_id' META_AD_ACCOUNT_ID meta_ad_account_id META_AD_ACCOUNT_ID)"
+GA4_PROPERTY="$(get_cred 'ga4.property_id' GA4_PROPERTY_ID ga4_property_id)"
+GSC_SITE="$(get_cred 'gsc.site_url' GOOGLE_SEARCH_CONSOLE_SITE google_search_console_site)"
+GADS_DEV_TOKEN="$(get_cred 'google_ads.developer_token' GOOGLE_ADS_DEVELOPER_TOKEN google_ads_developer_token)"
 GADS_CLIENT_ID="${GOOGLE_ADS_CLIENT_ID:-$(claude plugin config get google_ads_client_id 2>/dev/null || echo "")}"
 GADS_CLIENT_SECRET="${GOOGLE_ADS_CLIENT_SECRET:-$(claude plugin config get google_ads_client_secret 2>/dev/null || echo "")}"
-GADS_REFRESH_TOKEN="${GOOGLE_ADS_REFRESH_TOKEN:-$(claude plugin config get google_ads_refresh_token 2>/dev/null || echo "")}"
-GADS_CUSTOMER_ID="${GOOGLE_ADS_CUSTOMER_ID:-$(claude plugin config get google_ads_customer_id 2>/dev/null || echo "")}"
+GADS_REFRESH_TOKEN="$(get_cred 'google_ads.refresh_token' GOOGLE_ADS_REFRESH_TOKEN google_ads_refresh_token GOOGLE_ADS_REFRESH_TOKEN)"
+GADS_CUSTOMER_ID="$(get_cred 'google_ads.customer_id' GOOGLE_ADS_CUSTOMER_ID google_ads_customer_id)"
 GADS_LOGIN_CUSTOMER_ID="${GOOGLE_ADS_LOGIN_CUSTOMER_ID:-$(claude plugin config get google_ads_login_customer_id 2>/dev/null || echo "")}"
-
-# Doppler fallback
-if [ -z "$KLAVIYO_KEY" ]; then
-  KLAVIYO_KEY="$(doppler secrets get KLAVIYO_PRIVATE_KEY --plain 2>/dev/null || echo "")"
-fi
-if [ -z "$META_TOKEN" ]; then
-  META_TOKEN="$(doppler secrets get META_ADS_TOKEN --plain 2>/dev/null || echo "")"
-  META_ACCOUNT="$(doppler secrets get META_AD_ACCOUNT_ID --plain 2>/dev/null || echo "")"
-fi
-if [ -z "$GADS_REFRESH_TOKEN" ]; then
-  GADS_REFRESH_TOKEN="$(doppler secrets get GOOGLE_ADS_REFRESH_TOKEN --plain 2>/dev/null || echo "")"
-fi
+INSTAGRAM_ACCOUNT_ID="$(get_cred 'instagram.account_id' INSTAGRAM_ACCOUNT_ID instagram_account_id)"
 
 # Strip dashes from customer ID (API requires no dashes)
 GADS_CUSTOMER_ID="${GADS_CUSTOMER_ID//-/}"
-INSTAGRAM_ACCOUNT_ID="${INSTAGRAM_ACCOUNT_ID:-$(claude plugin config get instagram_account_id 2>/dev/null || echo "")}"
 
 TODAY=$(date +%Y-%m-%d)
 
@@ -44,14 +111,14 @@ gather_klaviyo() {
   fi
 
   # Get total subscriber count across all lists
-  LISTS=$(curl -s "https://a.klaviyo.com/api/lists/?fields[list]=name,id,profile_count" \
+  LISTS=$(curl -gsS --max-time 5 "https://a.klaviyo.com/api/lists/?fields[list]=name,id,profile_count" \
     -H "Authorization: Klaviyo-API-Key ${KLAVIYO_KEY}" \
     -H "revision: 2024-10-15" 2>/dev/null)
 
   TOTAL_SUBS=$(echo "$LISTS" | jq '[.data[].attributes.profile_count // 0] | add // 0' 2>/dev/null || echo "0")
 
   # Get last campaign stats
-  CAMPAIGNS=$(curl -s "https://a.klaviyo.com/api/campaigns/?filter=equals(messages.channel,'email')&sort=-created_at&page[size]=1&fields[campaign]=name,status,send_time" \
+  CAMPAIGNS=$(curl -gsS --max-time 5 "https://a.klaviyo.com/api/campaigns/?filter=equals(messages.channel,'email')&sort=-created_at&page[size]=1&fields[campaign]=name,status,send_time" \
     -H "Authorization: Klaviyo-API-Key ${KLAVIYO_KEY}" \
     -H "revision: 2024-10-15" 2>/dev/null)
 
@@ -62,7 +129,7 @@ gather_klaviyo() {
   # Open rate (0.0-1.0) for last campaign — feeds marketing health score email component.
   OPEN_RATE="0"
   if [ -n "$LAST_CAMPAIGN_ID" ]; then
-    VALUES=$(curl -s -X POST "https://a.klaviyo.com/api/campaign-values-reports/" \
+    VALUES=$(curl -gsS --max-time 5 -X POST "https://a.klaviyo.com/api/campaign-values-reports/" \
       -H "Authorization: Klaviyo-API-Key ${KLAVIYO_KEY}" \
       -H "revision: 2024-10-15" \
       -H "Content-Type: application/json" \
@@ -85,7 +152,7 @@ gather_meta() {
     return
   fi
 
-  INSIGHTS=$(curl -s "https://graph.facebook.com/v18.0/${META_ACCOUNT}/insights?fields=spend,impressions,clicks,ctr,cpc,actions,action_values&date_preset=last_7d&level=account" \
+  INSIGHTS=$(curl -gsS --max-time 5 "https://graph.facebook.com/v18.0/${META_ACCOUNT}/insights?fields=spend,impressions,clicks,ctr,cpc,actions,action_values&date_preset=last_7d&level=account" \
     -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null)
 
   SPEND=$(echo "$INSIGHTS" | jq -r '.data[0].spend // "0"' 2>/dev/null || echo "0")
@@ -124,7 +191,7 @@ gather_ga4() {
     return
   fi
 
-  REPORT=$(curl -s -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport" \
+  REPORT=$(curl -gsS --max-time 5 -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport" \
     -H "Authorization: Bearer ${GA4_TOKEN}" \
     -H "Content-Type: application/json" \
     -d '{
@@ -176,7 +243,7 @@ gather_gsc() {
     return
   fi
 
-  REPORT=$(curl -s -X POST "https://searchconsole.googleapis.com/webmasters/v3/sites/${GSC_SITE_ENCODED}/searchAnalytics/query" \
+  REPORT=$(curl -gsS --max-time 5 -X POST "https://searchconsole.googleapis.com/webmasters/v3/sites/${GSC_SITE_ENCODED}/searchAnalytics/query" \
     -H "Authorization: Bearer ${GSC_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "{\"startDate\": \"${START_DATE}\", \"endDate\": \"${TODAY}\", \"dimensions\": [], \"rowLimit\": 1}" 2>/dev/null)
@@ -204,7 +271,7 @@ gather_instagram() {
   # Resolve IG account ID if not cached
   IG_ID="$INSTAGRAM_ACCOUNT_ID"
   if [ -z "$IG_ID" ]; then
-    IG_ID=$(curl -s "https://graph.facebook.com/v21.0/me/accounts?fields=instagram_business_account" \
+    IG_ID=$(curl -gsS --max-time 5 "https://graph.facebook.com/v21.0/me/accounts?fields=instagram_business_account" \
       -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null | jq -r '.data[0].instagram_business_account.id // empty')
     [ -n "$IG_ID" ] && claude plugin config set instagram_account_id "$IG_ID" 2>/dev/null
   fi
@@ -215,7 +282,7 @@ gather_instagram() {
   fi
 
   # Account stats
-  ACCOUNT=$(curl -s "https://graph.facebook.com/v21.0/${IG_ID}?fields=followers_count,media_count" \
+  ACCOUNT=$(curl -gsS --max-time 5 "https://graph.facebook.com/v21.0/${IG_ID}?fields=followers_count,media_count" \
     -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null)
   FOLLOWERS=$(echo "$ACCOUNT" | jq -r '.followers_count // 0')
   MEDIA_COUNT=$(echo "$ACCOUNT" | jq -r '.media_count // 0')
@@ -225,7 +292,7 @@ gather_instagram() {
   START_DATE=$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo "")
   REACH=0
   if [ -n "$START_DATE" ]; then
-    INSIGHTS=$(curl -s "https://graph.facebook.com/v21.0/${IG_ID}/insights?metric=reach&period=day&since=${START_DATE}&until=${END_DATE}" \
+    INSIGHTS=$(curl -gsS --max-time 5 "https://graph.facebook.com/v21.0/${IG_ID}/insights?metric=reach&period=day&since=${START_DATE}&until=${END_DATE}" \
       -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null)
     REACH=$(echo "$INSIGHTS" | jq '[.data[]?.values[]?.value | tonumber] | add // 0' 2>/dev/null || echo "0")
   fi
@@ -245,7 +312,7 @@ gather_google_ads() {
   fi
 
   # Refresh access token
-  GADS_ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
+  GADS_ACCESS_TOKEN=$(curl -gsS --max-time 5 -X POST https://oauth2.googleapis.com/token \
     --data "client_id=${GADS_CLIENT_ID}&client_secret=${GADS_CLIENT_SECRET}&refresh_token=${GADS_REFRESH_TOKEN}&grant_type=refresh_token" \
     | jq -r '.access_token // empty')
   if [ -z "$GADS_ACCESS_TOKEN" ]; then
@@ -254,7 +321,7 @@ gather_google_ads() {
   fi
 
   # Campaign summary (last 7 days)
-  curl -s -X POST \
+  curl -gsS --max-time 5 -X POST \
     "https://googleads.googleapis.com/v23/customers/${GADS_CUSTOMER_ID}/googleAds:searchStream" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${GADS_ACCESS_TOKEN}" \
@@ -330,6 +397,7 @@ HEALTH_STATUS="Critical"
 
 # Emit unified JSON
 jq -n \
+  --arg project "$PROJECT" \
   --argjson klaviyo "$KLAVIYO_DATA" \
   --argjson meta "$META_DATA" \
   --argjson ga4 "$GA4_DATA" \
@@ -340,4 +408,4 @@ jq -n \
   --argjson health_score "$HEALTH_SCORE" \
   --arg health_status "$HEALTH_STATUS" \
   --arg date "$TODAY" \
-  '{date: $date, klaviyo: $klaviyo, meta: $meta, ga4: $ga4, gsc: $gsc, google_ads: $google_ads, instagram: $instagram, blended_roas: $blended_roas, health_score: $health_score, health_status: $health_status}'
+  '{date: $date, project: (if $project == "" then null else $project end), klaviyo: $klaviyo, meta: $meta, ga4: $ga4, gsc: $gsc, google_ads: $google_ads, instagram: $instagram, blended_roas: $blended_roas, health_score: $health_score, health_status: $health_status}'

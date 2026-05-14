@@ -96,6 +96,108 @@ else
   HOST_JSON="{}"
 fi
 
+# ── Slack status ─────────────────────────────────────────────────────────────
+# Resolution order:
+#   1. Preflight cache (ops-setup-preflight already ran full probe)
+#   2. SSE-router pattern in ~/.claude.json (.type == "sse" → probe URL)
+#   3. Keychain tokens (xoxc + xoxd)
+SLACK_STATUS="unconfigured"
+SLACK_SOURCE="none"
+
+if [ "$USE_CACHE" = true ] && [ -f "$PREFLIGHT/slack.json" ] && command -v jq >/dev/null 2>&1; then
+  slack_ok=$(jq -r '.ok // false' "$PREFLIGHT/slack.json" 2>/dev/null)
+  slack_src=$(jq -r '.source // ""' "$PREFLIGHT/slack.json" 2>/dev/null)
+  if [ "$slack_ok" = "true" ]; then
+    SLACK_STATUS="configured"
+    SLACK_SOURCE="${slack_src:-keychain}"
+  fi
+elif [ -f "$HOME/.claude.json" ] && command -v jq >/dev/null 2>&1; then
+  slack_type=$(jq -r '.mcpServers.slack.type // ""' "$HOME/.claude.json" 2>/dev/null)
+  if [ "$slack_type" = "sse" ]; then
+    slack_url=$(jq -r '.mcpServers.slack.url // ""' "$HOME/.claude.json" 2>/dev/null)
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$slack_url" 2>/dev/null || echo "000")
+    if [ "$http_code" = "200" ]; then
+      SLACK_STATUS="configured"
+      SLACK_SOURCE="sse_router"
+    else
+      SLACK_STATUS="sse_router_unreachable"
+      SLACK_SOURCE="sse_router"
+    fi
+  fi
+fi
+
+# ── Telegram status ───────────────────────────────────────────────────────────
+# Resolution order:
+#   1. Preflight cache
+#   2. SSE-router pattern in ~/.claude.json
+#   3. user-config.json (telegram_api_id, telegram_api_hash, telegram_phone, telegram_session)
+#   4. Keychain
+TELEGRAM_STATUS="unconfigured"
+TELEGRAM_SOURCE="none"
+TELEGRAM_KEYS_FOUND=0
+
+if [ "$USE_CACHE" = true ] && [ -f "$PREFLIGHT/telegram.txt" ]; then
+  tg_src=$(grep '^source=' "$PREFLIGHT/telegram.txt" 2>/dev/null | cut -d= -f2 || echo "")
+  if [ "$tg_src" = "sse_router" ]; then
+    TELEGRAM_STATUS="configured"
+    TELEGRAM_SOURCE="sse_router"
+    TELEGRAM_KEYS_FOUND=4
+  else
+    # Count keys with "found" in their value
+    TELEGRAM_KEYS_FOUND=$(grep -c '=found' "$PREFLIGHT/telegram.txt" 2>/dev/null || echo 0)
+    if [ "$TELEGRAM_KEYS_FOUND" -eq 4 ]; then
+      TELEGRAM_STATUS="configured"
+      # Determine the dominant source
+      if grep -q 'found(keychain)' "$PREFLIGHT/telegram.txt" 2>/dev/null; then
+        TELEGRAM_SOURCE="keychain"
+      else
+        TELEGRAM_SOURCE="user_config"
+      fi
+    elif [ "$TELEGRAM_KEYS_FOUND" -gt 0 ]; then
+      TELEGRAM_STATUS="partial"
+      TELEGRAM_SOURCE="mixed"
+    fi
+  fi
+else
+  # Live detection without preflight cache
+  USER_CONFIG_FILE="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/user-config.json"
+
+  # Check SSE router first
+  if [ -f "$HOME/.claude.json" ] && command -v jq >/dev/null 2>&1; then
+    tg_type=$(jq -r '.mcpServers.telegram.type // ""' "$HOME/.claude.json" 2>/dev/null)
+    if [ "$tg_type" = "sse" ]; then
+      tg_url=$(jq -r '.mcpServers.telegram.url // ""' "$HOME/.claude.json" 2>/dev/null)
+      http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$tg_url" 2>/dev/null || echo "000")
+      if [ "$http_code" = "200" ]; then
+        TELEGRAM_STATUS="configured"
+        TELEGRAM_SOURCE="sse_router"
+        TELEGRAM_KEYS_FOUND=4
+      fi
+    fi
+  fi
+
+  # Check user-config.json if not already found via SSE
+  if [ "$TELEGRAM_STATUS" = "unconfigured" ] && [ -f "$USER_CONFIG_FILE" ] && command -v jq >/dev/null 2>&1; then
+    tg_api_id=$(jq -r '.telegram_api_id // ""' "$USER_CONFIG_FILE" 2>/dev/null)
+    tg_api_hash=$(jq -r '.telegram_api_hash // ""' "$USER_CONFIG_FILE" 2>/dev/null)
+    tg_phone=$(jq -r '.telegram_phone // ""' "$USER_CONFIG_FILE" 2>/dev/null)
+    tg_session=$(jq -r '.telegram_session // ""' "$USER_CONFIG_FILE" 2>/dev/null)
+    count=0
+    [ -n "$tg_api_id" ]   && count=$((count+1))
+    [ -n "$tg_api_hash" ] && count=$((count+1))
+    [ -n "$tg_phone" ]    && count=$((count+1))
+    [ -n "$tg_session" ]  && count=$((count+1))
+    TELEGRAM_KEYS_FOUND=$count
+    if [ "$count" -eq 4 ]; then
+      TELEGRAM_STATUS="configured"
+      TELEGRAM_SOURCE="user_config"
+    elif [ "$count" -gt 0 ]; then
+      TELEGRAM_STATUS="partial"
+      TELEGRAM_SOURCE="user_config"
+    fi
+  fi
+fi
+
 cat <<EOF
 {
   "host": $HOST_JSON,
@@ -124,6 +226,17 @@ cat <<EOF
     "GH_TOKEN": $(has_env GH_TOKEN)
   },
   "mcp_configured": $MCP_JSON,
+  "channels": {
+    "slack": {
+      "status": "$SLACK_STATUS",
+      "source": "$SLACK_SOURCE"
+    },
+    "telegram": {
+      "status": "$TELEGRAM_STATUS",
+      "source": "$TELEGRAM_SOURCE",
+      "keys_found": $TELEGRAM_KEYS_FOUND
+    }
+  },
   "registry": {
     "exists": $([ -f "$REGISTRY" ] && echo true || echo false),
     "project_count": $PROJECT_COUNT,
