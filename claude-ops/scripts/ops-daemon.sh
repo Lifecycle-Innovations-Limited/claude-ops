@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ops-daemon.sh — Unified background process manager for claude-ops
-# Manages: whatsapp-bridge health, memory extraction, health monitors
+# Manages: wacli sync, memory extraction, health monitors
 # daemon registration: launchd on macOS, systemd on Linux, Task Scheduler on Windows
 set -euo pipefail
 
@@ -158,14 +158,14 @@ else:
 }
 
 # ── Launchd ownership check ──────────────────────────────────────────────
-# Returns 0 if the launchd service for whatsapp-bridge is loaded and has a
-# live process.  When true, the daemon must NOT start whatsapp-bridge itself —
+# Returns 0 if the launchd keepalive service for wacli is loaded and has a
+# live process.  When true, the daemon must NOT start wacli-sync itself —
 # launchd is the sole owner and handles restarts via KeepAlive=true.
-_whatsapp_bridge_owned_by_launchd() {
+_wacli_owned_by_launchd() {
   command -v launchctl >/dev/null 2>&1 || return 1
   local pid_str
   pid_str=$(launchctl list 2>/dev/null \
-    | awk '$3=="com.samrenders.whatsapp-bridge" {print $1}' || true)
+    | awk '$3=="com.claude-ops.wacli-keepalive" {print $1}' || true)
   # Service must be registered AND have a live PID (not "-")
   if [[ -n "$pid_str" ]] && [[ "$pid_str" != "-" ]] && kill -0 "$pid_str" 2>/dev/null; then
     return 0
@@ -177,14 +177,14 @@ _whatsapp_bridge_owned_by_launchd() {
 start_service() {
   local name="$1"
 
-  # ── Race-condition guard: whatsapp-bridge ownership ─────────────────────
-  # The LaunchAgent com.samrenders.whatsapp-bridge is the sole owner of the WA
-  # connection. If it is loaded and running, the daemon must not spawn a
-  # competing whatsapp-bridge — doing so causes store-lock errors and
-  # disconnections. Instead we mark the service as "delegated" and monitor
-  # health passively.
-  if [[ "$name" == "whatsapp-bridge" ]] && _whatsapp_bridge_owned_by_launchd; then
-    log "START: $name — launchd WhatsApp bridge is running, deferring ownership (no duplicate spawn)"
+  # ── Race-condition guard: wacli-sync ownership ──────────────────────────
+  # The launchd keepalive service (com.claude-ops.wacli-keepalive) is the
+  # sole owner of the wacli sync process.  If it is loaded and running, the
+  # daemon must not spawn a competing wacli-sync — doing so causes store-lock
+  # errors and WhatsApp disconnections.  Instead we mark the service as
+  # "delegated" and monitor health passively via the health file.
+  if [[ "$name" == "wacli-sync" ]] && _wacli_owned_by_launchd; then
+    log "START: $name — launchd keepalive is running, deferring ownership (no duplicate spawn)"
     SERVICE_STATUS["$name"]="delegated"
     SERVICE_LAST_HEALTH["$name"]="launchd-owned"
     return 0
@@ -206,7 +206,7 @@ start_service() {
   export OPS_DAEMON_MANAGED=1
 
   rotate_service_log "$LOG_DIR/${name}.log"
-  bash -c "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
+  bash "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
   local pid=$!
   SERVICE_PIDS["$name"]=$pid
   SERVICE_STATUS["$name"]="running"
@@ -285,8 +285,8 @@ restart_service() {
   local name="$1"
 
   # ── Race-condition guard (mirrors start_service) ────────────────────────
-  if [[ "$name" == "whatsapp-bridge" ]] && _whatsapp_bridge_owned_by_launchd; then
-    log "RESTART: $name — launchd WhatsApp bridge owns this service, skipping daemon restart"
+  if [[ "$name" == "wacli-sync" ]] && _wacli_owned_by_launchd; then
+    log "RESTART: $name — launchd keepalive owns this service, skipping daemon restart"
     SERVICE_STATUS["$name"]="delegated"
     return 0
   fi
@@ -503,7 +503,7 @@ run_cron_service() {
   export OPS_DAEMON_PID=$$
   export OPS_DAEMON_MANAGED=1
   rotate_service_log "$LOG_DIR/${name}.log"
-  bash -c "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
+  bash "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
   local pid=$!
   wait "$pid" 2>/dev/null || true
 
@@ -523,27 +523,13 @@ prefetch_briefing_cache() {
   local CACHE="$CACHE_DIR/briefing.json"
   local LAST_FETCH="$CACHE_DIR/.briefing_ts"
 
-  # Throttle: only run every 30 min by default.
-  #
-  # Why 30 min and not 5: every refresh fires `gh pr list` (line below) which
-  # consumes one GitHub REST API call against the user's personal token. At a
-  # 5-minute TTL that is 12 calls/hr * 24h = 288 calls/day from this single
-  # callsite, on top of any interactive `gh` use. Over a few days that
-  # accumulation alone can exhaust the 5000/hr REST budget that's shared
-  # with every other tool authenticated as the same user (gh CLI, MCP github
-  # server, hosted CI using the same PAT). 30 min keeps morning-briefing
-  # data fresh enough — open PR lists rarely change faster than that — and
-  # cuts the daily call volume to ~48.
-  #
-  # Override with $OPS_BRIEFING_PREFETCH_TTL (seconds) if a deployment
-  # genuinely needs faster cycles.
-  local PREFETCH_TTL="${OPS_BRIEFING_PREFETCH_TTL:-1800}"
+  # Throttle: only run every 5 min
   if [[ -f "$LAST_FETCH" ]]; then
     local last
     last=$(cat "$LAST_FETCH")
     local now
     now=$(date +%s)
-    if (( now - last < PREFETCH_TTL )); then return 0; fi
+    if (( now - last < 300 )); then return 0; fi
   fi
 
   log "BRAIN: refreshing briefing cache"
@@ -552,20 +538,15 @@ prefetch_briefing_cache() {
   tmpdir=$(mktemp -d)
   local -a _refresh_pids=()
 
-  # Unread counts — read directly from Baileys bridge messages.db (wacli decommissioned)
-  local bridge_db="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
-  (if [[ -f "$bridge_db" ]]; then
+  # Unread counts — read from keepalive cache to avoid store-lock contention
+  local wacli_cache="$DATA_DIR/cache/wacli_chats.json"
+  (if [[ -f "$wacli_cache" ]]; then
     python3 -c "
-import json, sqlite3
-try:
-    con = sqlite3.connect('file:$bridge_db?mode=ro', uri=True, timeout=2)
-    cur = con.cursor()
-    recent = cur.execute(\"SELECT COUNT(DISTINCT chat_jid) FROM messages WHERE timestamp >= datetime('now','-7 days')\").fetchone()[0]
-    total = cur.execute('SELECT COUNT(*) FROM chats').fetchone()[0]
-    print(json.dumps({'total_chats': recent, 'count': total}))
-    con.close()
-except Exception:
-    print(json.dumps({'total_chats': 0, 'count': 0}))
+import json,datetime
+data=json.load(open('$wacli_cache')).get('data',[]) or []
+cutoff=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=7)).isoformat()
+recent=[c for c in data if c.get('LastMessageTS','')>cutoff]
+print(json.dumps({'total_chats':len(recent),'count':len(data)}))
 " > "$tmpdir/wa.json" 2>/dev/null
   fi) &
   _refresh_pids+=($!)
@@ -627,31 +608,18 @@ detect_urgent_messages() {
     if (( now - last < 300 )); then return 0; fi
   fi
 
-  # Check WhatsApp urgent messages — read directly from Baileys bridge messages.db
-  local bridge_db="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
-  if [[ -f "$bridge_db" ]]; then
+  # Check WhatsApp urgent messages — read from keepalive cache (no store-lock contention)
+  local urgent_cache="$DATA_DIR/cache/wacli_urgent.json"
+  if [[ -f "$urgent_cache" ]]; then
     python3 -c "
-import json, sqlite3
-try:
-    con = sqlite3.connect('file:$bridge_db?mode=ro', uri=True, timeout=2)
-    cur = con.cursor()
-    rows = cur.execute('''
-        SELECT m.chat_jid, COALESCE(c.name, m.chat_jid) AS chat_name, m.content, m.timestamp
-        FROM messages m
-        LEFT JOIN chats c ON c.jid = m.chat_jid
-        WHERE m.is_from_me = 0
-          AND m.timestamp >= datetime('now','-4 hours')
-        ORDER BY m.timestamp DESC
-    ''').fetchall()
-    if rows:
-        with open('$URGENT_FILE','w') as f:
-            json.dump({
-                'urgent_count': len(rows),
-                'messages': [{'from': r[1], 'text': (r[2] or '')[:100], 'ts': r[3]} for r in rows[:5]]
-            }, f, indent=2)
-    con.close()
-except Exception:
-    pass
+import json,datetime
+data=json.load(open('$urgent_cache'))
+msgs=data.get('data',{}).get('messages',[]) or []
+cutoff=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=4)).isoformat()
+urgent=[m for m in msgs if m.get('Timestamp','')>cutoff and not m.get('FromMe',True)]
+if urgent:
+    with open('$URGENT_FILE','w') as f:
+        json.dump({'urgent_count':len(urgent),'messages':[{'from':m.get('ChatName',''),'text':m.get('Text','')[:100],'ts':m.get('Timestamp','')} for m in urgent[:5]]},f,indent=2)
 " 2>/dev/null || true
   fi
 
@@ -684,24 +652,16 @@ try:
 except: print('')
 " 2>/dev/null)
 
-    # Read from Baileys bridge messages.db to check for new messages (wacli decommissioned)
-    local bridge_db="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
-    if [[ -f "$bridge_db" ]]; then
+    # Read from keepalive cache to check for new messages (no store-lock contention)
+    local wacli_chats_cache="$DATA_DIR/cache/wacli_chats.json"
+    if [[ -f "$wacli_chats_cache" ]]; then
       local new_count
       new_count=$(python3 -c "
-import sqlite3
-try:
-    con = sqlite3.connect('file:$bridge_db?mode=ro', uri=True, timeout=2)
-    cur = con.cursor()
-    last = '${last_ts:-}'
-    if last:
-        n = cur.execute('SELECT COUNT(DISTINCT chat_jid) FROM messages WHERE timestamp > ?', (last,)).fetchone()[0]
-    else:
-        n = cur.execute(\"SELECT COUNT(DISTINCT chat_jid) FROM messages WHERE timestamp >= datetime('now','-1 day')\").fetchone()[0]
-    print(n)
-    con.close()
-except Exception:
-    print(0)
+import json,datetime
+data=json.load(open('$wacli_chats_cache')).get('data',[]) or []
+last='${last_ts:-}'
+recent=[c for c in data if c.get('LastMessageTS','')>last] if last else data[:5]
+print(len(recent))
 " 2>/dev/null || echo 0)
 
       if [[ "$new_count" -gt 3 ]] && [[ -f "$MEM_SCRIPT" ]]; then
@@ -748,26 +708,21 @@ import json, subprocess, sys, datetime, os, collections
 data_dir = sys.argv[1]
 contacts = collections.defaultdict(lambda: {"channels": [], "last_seen": "", "msg_count": 0, "needs_reply": False})
 
-# WhatsApp contacts — read directly from Baileys bridge messages.db (wacli decommissioned)
+# WhatsApp contacts — read from keepalive cache (no store-lock contention)
 try:
-    import sqlite3
-    bridge_db = os.environ.get("WHATSAPP_BRIDGE_DB",
-        os.path.expanduser("~/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db"))
-    if os.path.exists(bridge_db):
-        con = sqlite3.connect(f"file:{bridge_db}?mode=ro", uri=True, timeout=2)
-        cur = con.cursor()
-        rows = cur.execute("""
-            SELECT COALESCE(c.name, c.jid) AS name, c.jid, c.last_message_time
-            FROM chats c
-            WHERE c.last_message_time >= datetime('now','-7 days')
-        """).fetchall()
-        for name, jid, last_seen in rows:
-            name = name or "Unknown"
-            contacts[name]["channels"].append("whatsapp")
-            contacts[name]["last_seen"] = max(contacts[name]["last_seen"], str(last_seen or ""))
-            contacts[name]["jid"] = jid or ""
-        con.close()
-except Exception: pass
+    cache_path = os.path.join(data_dir, "cache", "wacli_chats.json")
+    if os.path.exists(cache_path):
+        wa = json.load(open(cache_path))
+    else:
+        wa = {"data": []}
+    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)).isoformat()
+    for chat in (wa.get("data") or []):
+        if chat.get("LastMessageTS", "") < cutoff: continue
+        name = chat.get("Name", "Unknown")
+        contacts[name]["channels"].append("whatsapp")
+        contacts[name]["last_seen"] = max(contacts[name]["last_seen"], chat.get("LastMessageTS", ""))
+        contacts[name]["jid"] = chat.get("JID", "")
+except: pass
 
 # Email contacts (recent senders)
 try:
@@ -833,9 +788,7 @@ prefetch_calendar() {
 prefetch_project_health() {
   local PROJ_CACHE="$DATA_DIR/cache/projects_health.json"
   local LAST_FETCH="$DATA_DIR/cache/.projects_ts"
-  local PLUGIN_ROOT_LOCAL="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")/../}"
-  local REGISTRY="${OPS_DATA_DIR:-${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}}/registry.json"
-  [[ -f "$REGISTRY" ]] || REGISTRY="${PLUGIN_ROOT_LOCAL}/scripts/registry.json"
+  local REGISTRY="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")/../}/scripts/registry.json"
 
   # Every 10 min
   if [[ -f "$LAST_FETCH" ]]; then
@@ -1087,62 +1040,6 @@ PY
   date +%s > "$LAST_CHECK"
 }
 
-# ── Kill stuck gh polling processes (REST rate-limit hygiene) ────────────
-# `gh pr checks <N> --watch` and `gh run watch <N>` poll the GitHub REST API
-# every ~2s indefinitely. When left behind by an interrupted skill or a
-# forgotten foreground command, a single watcher can burn 1800 calls/hr —
-# half the 5000/hr personal token bucket. This kills any gh poller older
-# than MAX_AGE_SECONDS (default 30 min) so the REST quota stays healthy
-# for interactive work.
-#
-# Scope: only matches `gh.*--watch` (the polling pattern). One-shot kills
-# (`gh pr merge`, `gh api`) are not affected. Self-throttled to 5 min.
-kill_stuck_gh_watchers() {
-  local LAST_CHECK="$DATA_DIR/cache/.gh_watcher_kill_ts"
-  local now; now=$(date +%s)
-  mkdir -p "$DATA_DIR/cache" 2>/dev/null || true
-  if [[ -f "$LAST_CHECK" ]]; then
-    local last; last=$(cat "$LAST_CHECK" 2>/dev/null || echo 0)
-    if (( now - last < 300 )); then return 0; fi
-  fi
-
-  local MAX_AGE_SECONDS="${OPS_GH_WATCHER_MAX_AGE:-1800}"
-  local killed=0
-
-  # ps -eo etime format: "MM:SS" | "HH:MM:SS" | "DD-HH:MM:SS"
-  # Parse via awk to seconds, kill anything older than threshold.
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    local pid="${line%% *}"
-    [[ -z "$pid" ]] && continue
-    log "WATCHER-KILL: terminating stuck gh poller (PID $pid, age >${MAX_AGE_SECONDS}s)"
-    kill -TERM "$pid" 2>/dev/null || true
-    killed=$((killed + 1))
-  done < <(ps -eo pid,etime,command 2>/dev/null | awk -v max="$MAX_AGE_SECONDS" '
-    # Match gh ... --watch (excluding our own awk and grep noise)
-    /gh .*--watch/ && !/awk/ && !/grep/ {
-      et = $2
-      secs = 0
-      # Strip days prefix "DD-"
-      if (et ~ /-/) {
-        n = split(et, a, "-")
-        secs += a[1] * 86400
-        et = a[2]
-      }
-      # Parse remaining HH:MM:SS or MM:SS
-      n = split(et, b, ":")
-      if (n == 3) secs += b[1]*3600 + b[2]*60 + b[3]
-      else if (n == 2) secs += b[1]*60 + b[2]
-      if (secs > max) print $1
-    }
-  ')
-
-  if (( killed > 0 )); then
-    log "WATCHER-KILL: killed $killed stuck gh poller process(es)"
-  fi
-  date +%s > "$LAST_CHECK"
-}
-
 # ── Phase 16: credential expiry (offline) ────────────────────────────────
 # Reads *_expires_at / *_created_at from preferences.json and warns:
 #   - expires within WARN_DAYS (7)
@@ -1246,7 +1143,7 @@ except Exception:
 # Resolve plugin-root-relative paths for daemon scripts (so the unit files
 # embed absolute paths that still work when invoked by another user context).
 OPS_DAEMON_SCRIPT="$SCRIPT_DIR/scripts/ops-daemon.sh"
-OPS_KEEPALIVE_SCRIPT="$SCRIPT_DIR/legacy/wacli-keepalive.sh.deprecated"
+OPS_KEEPALIVE_SCRIPT="$SCRIPT_DIR/scripts/wacli-keepalive.sh"
 
 install_daemon_launchd() {
   command -v launchctl >/dev/null 2>&1 || {
@@ -1392,7 +1289,7 @@ EOF
   # wacli-keepalive: persistent service (Restart=always) — no timer needed.
   cat > "$unit_dir/claude-ops-wacli-keepalive.service" <<EOF
 [Unit]
-Description=claude-ops whatsapp-bridge keepalive
+Description=claude-ops wacli keepalive
 After=default.target
 
 [Service]
@@ -1492,7 +1389,7 @@ ENSURE_SERVICES_INTERVAL="${ENSURE_SERVICES_INTERVAL:-300}"  # every 5 min
 # Format: "label|plist_src_basename|description"
 EXPECTED_SERVICES=(
   "com.claude-ops.daemon|com.claude-ops.daemon.plist|ops daemon"
-  "com.samrenders.whatsapp-bridge|com.samrenders.whatsapp-bridge.plist|whatsapp-bridge"
+  "com.claude-ops.wacli-keepalive|com.claude-ops.wacli-keepalive.plist|wacli keepalive"
 )
 
 ensure_all_services() {
@@ -1750,15 +1647,15 @@ while true; do
       fi
     else
       # Persistent service: check health + restart if needed
-      # For whatsapp-bridge delegated to launchd, re-check ownership each loop.
+      # For wacli-sync delegated to launchd, re-check ownership each loop.
       # If launchd stopped unexpectedly, the daemon can take over.
-      if [[ "$svc" == "whatsapp-bridge" ]] && [[ "${SERVICE_STATUS[$svc]:-}" == "delegated" ]]; then
-        if _whatsapp_bridge_owned_by_launchd; then
+      if [[ "$svc" == "wacli-sync" ]] && [[ "${SERVICE_STATUS[$svc]:-}" == "delegated" ]]; then
+        if _wacli_owned_by_launchd; then
           # Still owned by launchd — just read the health file passively
           check_health "$svc" || true
           SERVICE_STATUS["$svc"]="delegated"
         else
-          log "MONITOR: $svc — launchd WhatsApp bridge no longer running, daemon taking ownership"
+          log "MONITOR: $svc — launchd keepalive no longer running, daemon taking ownership"
           SERVICE_STATUS["$svc"]="dead"
           start_service "$svc"
         fi
@@ -1786,7 +1683,6 @@ while true; do
 
   # ── Phase 16: infrastructure hardening ───────────────────────────────────
   check_rate_limits                # Every 5 min: reset rollover windows + warnings
-  kill_stuck_gh_watchers           # Every 5 min: TERM gh ... --watch processes >30 min old
   check_credential_expiry          # Hourly: offline check of *_expires_at / *_created_at
 
   write_daemon_health

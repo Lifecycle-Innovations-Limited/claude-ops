@@ -28,12 +28,10 @@ echo "$output" | tail -120 | grep -qE \
 
 last_lines=$(echo "$output" | tail -120)
 
-# Resolve repo from PWD (where the build was invoked). Fall back to gh repo view.
-repo_path="$(pwd -P)"
-slug_full=$(git -C "$repo_path" config --get remote.origin.url 2>/dev/null | \
-  sed -E 's|.*[:/]([^/]+/[^/]+)(\.git)?$|\1|; s|\.git$||')
-[ -z "$slug_full" ] && slug_full="local-build"
-repo_slug=$(echo "$slug_full" | tr '/' '-')
+# Repo = healify (mobile build hooks always operate against this)
+repo_slug="healify"
+repo_path=$(locate_repo "Lifecycle-Innovations-Limited/healify" 2>/dev/null)
+[ -z "$repo_path" ] && repo_path="$HOME/healify"
 branch=$(git -C "$repo_path" branch --show-current 2>/dev/null || echo "unknown")
 
 # Transient → tell user to retry, no agent
@@ -62,10 +60,12 @@ if [ "$(config auto_dispatch_fixer true)" != "true" ]; then
   exit 0
 fi
 
-fix_rc=0
-fix_log=$(dispatch_fix_agent "build-fixer" "$repo_slug-build" \
-  "COMMAND=$cmd" "REPO_PATH=$repo_path" "BRANCH=$branch" "LOGS=$last_lines") || fix_rc=$?
-case $fix_rc in
+set +e
+fix_log=$(dispatch_fix_agent "build-fix.md" "$repo_slug-build" \
+  "COMMAND=$cmd" "REPO_PATH=$repo_path" "BRANCH=$branch" "LOGS=$last_lines")
+dispatch_status=$?
+set -e
+case $dispatch_status in
   0)
     cat <<JSON
 {
