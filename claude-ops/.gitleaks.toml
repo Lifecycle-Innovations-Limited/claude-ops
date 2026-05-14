@@ -139,10 +139,11 @@ allowlist.paths = [
   '''docs/''',
 ]
 allowlist.regexes = [
-  '''\+15551234567''',
-  '''\+1234567890''',
-  '''\+14155550100''',
-]
+	  '''\+15551234567''',
+	  '''\+1234567890''',
+	  '''\+14155550100''',
+	  '''\+31612345678''',
+	]
 
 [[rules]]
 id = "email-address-personal"
@@ -184,6 +185,8 @@ stopwords = [
 # Public OAuth client IDs (not secrets — embedded in upstream CLIs).
 # Narrow regex allowlist preferred over directory exclusion so secret scanning
 # still runs against scripts/account-rotation/ (handles real auth tokens).
-regexes = [
-  '''9d1c250a-e61b-44d9-88ed-5944d1962f5e''',  # Claude Code OAuth client ID (public)
-]
+	regexes = [
+	  '''9d1c250a-e61b-44d9-88ed-5944d1962f5e''',  # Claude Code OAuth client ID (public)
+	  '''8ae31cacf141669ddfb5da''',
+	  '''cafebabe:deadbeef''',
+	]
