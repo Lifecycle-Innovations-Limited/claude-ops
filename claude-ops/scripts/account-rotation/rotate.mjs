@@ -24,7 +24,7 @@
  *   node rotate.mjs --capture                 # save current active token (print for Dashlane)
  *   node rotate.mjs --session                 # also send /login to running iTerm2 session
  *   node rotate.mjs --magic-link --to <email> # re-auth via email magic link (no Google OAuth)
- *   Note: --allow-extra-usage is ignored if passed (legacy); extra_usage is per-org in Claude console only.
+ *   node rotate.mjs --allow-extra-usage       # BYPASS extra_usage billing guard (opt-in only)
  */
 
 import {
@@ -37,13 +37,12 @@ import {
   readdirSync,
   renameSync,
 } from 'fs';
-import { persistBedrockClaudeSettings } from './claude-settings-mode.mjs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync, execFileSync, spawnSync, spawn } from 'child_process';
 import { tmpdir } from 'os';
 import { createHmac } from 'node:crypto';
-import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS, scrapeBillingState } from './ai-brain.mjs';
+import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS } from './ai-brain.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
@@ -128,7 +127,15 @@ function log(msg) {
 
 function notify(title, msg) {
   try {
-    execSync(`osascript -e 'display notification "${msg.replace(/"/g, '\\"')}" with title "${title}"'`);
+    // Use execFileSync to avoid shell interpretation of quotes in title/msg
+    execFileSync(
+      'osascript',
+      [
+        '-e',
+        `display notification "${msg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" with title "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
+      ],
+      { timeout: 5000 },
+    );
   } catch {}
 }
 
@@ -210,39 +217,6 @@ function releaseLock() {
 
 function accountKey(a) {
   return a.label || a.email;
-}
-
-/** After OAuth completes in the same Playwright session, scrape console billing into state. */
-async function maybeScrapeBillingAfterOAuth(driver, account, log) {
-  if (process.env.CLAUDE_ROTATOR_SKIP_BILLING_SCRAPE === '1') return;
-  const page = driver?._page;
-  if (!page || typeof page.goto !== 'function') return;
-  const key = accountKey(account);
-  try {
-    log(`[billing-scrape] console billing for ${key}...`);
-    const billing = await scrapeBillingState(page, (m) => log(m));
-    if (!billing) return;
-    const state = readState();
-    state.accounts[key] = state.accounts[key] || {};
-    const prev = state.accounts[key].lastBilling || {};
-    state.accounts[key].lastBilling = {
-      ...prev,
-      credits_usd: billing.credits_usd,
-      auto_reload_enabled: billing.auto_reload_enabled,
-      extra_usage_enabled:
-        billing.extra_usage_enabled !== null && billing.extra_usage_enabled !== undefined
-          ? billing.extra_usage_enabled === true
-          : prev.extra_usage_enabled,
-      ts: Date.now(),
-      source: 'console_scrape',
-    };
-    writeState(state);
-    log(
-      `[billing-scrape] merged credits=${billing.credits_usd} auto_reload=${billing.auto_reload_enabled} extra_usage=${billing.extra_usage_enabled}`,
-    );
-  } catch (e) {
-    log(`[billing-scrape] error: ${String(e.message || e).slice(0, 100)}`);
-  }
 }
 
 // ── Live utilization query ────────────────────────────────────────────────────
@@ -329,45 +303,21 @@ async function queryAllUtilization(config) {
   return map;
 }
 
-// Active account is excluded from pickNextAccount pools, so when every *other*
-// account is over the destination utilization cap, pick returns null even though the current
-// session is already on the only healthy Max account.
-function destinationUtilHardBlock(config) {
-  const v = config.rateLimits?.destinationMaxUtilPercent;
-  if (typeof v === 'number' && v > 0 && v <= 100) return v;
-  return 95;
-}
-
-function currentActiveIsOnlyViableTarget(config, state, liveUtil) {
-  const activeKey = state.activeAccount;
-  if (!activeKey) return false;
-  const activeAcc = config.accounts.find((a) => accountKey(a) === activeKey);
-  if (!activeAcc || activeAcc.disabled === true) return false;
-  const key = accountKey(activeAcc);
-  const live = liveUtil[key];
-  const u5 = live?.five_hour_pct;
-  const u7 = live?.seven_day_pct;
-  if (u5 == null || u7 == null) return false;
-  const cap = destinationUtilHardBlock(config);
-  return Math.max(u5, u7) < cap;
-}
-
 // liveUtil: optional map from queryAllUtilization() — key → { five_hour_pct, ... }
-function pickNextAccount(config, state, liveUtil = {}) {
+function pickNextAccount(config, state, liveUtil = {}, opts = {}) {
   const activeKey = state.activeAccount;
   const windowMs = (config.rateLimits?.windowHours || 5) * 3_600_000;
   const now = Date.now();
 
-  // extra_usage is informational only — manage pay-per-use per org in the Claude console;
-  // it does not affect who we can rotate to.
+  // Hard block: account has Anthropic-side extra-usage (pay-per-use overage) enabled.
+  // Rotating to such an account risks credit-card charges when the weekly cap is hit.
+  // Override with opts.allowExtraUsage=true (CLI flag --allow-extra-usage) only when
+  // the user has explicitly opted in for this run.
+  const allowExtraUsage = opts.allowExtraUsage === true;
   function hasExtraUsageEnabled(a) {
     const key = accountKey(a);
     const live = liveUtil[key];
-    if (live && live.extra_usage_enabled === true) return true;
-    // Fallback to last-known extra_usage state from state.json
-    const cached = state.accounts?.[key]?.lastBilling?.extra_usage_enabled;
-    if (cached === true) return true;
-    return false;
+    return live && live.extra_usage_enabled === true;
   }
 
   // Check if an account's quota window has been exhausted (local tool-use tracking)
@@ -413,9 +363,9 @@ function pickNextAccount(config, state, liveUtil = {}) {
     return null;
   }
 
-  // Score: max of (5h, 7d) — both windows must be known or we penalize heavily.
-  // Never treat a missing window as 0%: old bug was max(0, null→0)=0, so an account
-  // with live 7d=100% but a transient live miss became "best" pick via stale 5h cache.
+  // Score: max of (5h, 7d) — an account is only viable if BOTH windows have
+  // headroom. Both unknown → 50 (neutral). Partial data → 100 (never treat a
+  // missing window as 0%). Lower is better.
   function score(a) {
     const u5 = getUtil5h(a);
     const u7 = getUtil7d(a);
@@ -424,25 +374,26 @@ function pickNextAccount(config, state, liveUtil = {}) {
     return Math.max(u5, u7);
   }
 
+  // Log + hard-exclude accounts with extra_usage enabled (pay-per-use overage billing).
+  // These are the accounts that silently charge your credit card when the weekly cap
+  // is exceeded. Unless --allow-extra-usage was passed, we refuse to rotate to them.
   const extraUsageAccounts = config.accounts.filter(hasExtraUsageEnabled);
   if (extraUsageAccounts.length > 0) {
     log(
       `⚠  EXTRA USAGE ENABLED on ${extraUsageAccounts.length} account(s): ${extraUsageAccounts
         .map((a) => accountKey(a))
-        .join(', ')} — overage billing possible; manage per org in console (rotation is not blocked).`,
+        .join(', ')} — these can incur overage charges. Disable at console.anthropic.com/settings/billing.`,
     );
   }
 
-  const excludeKey = (a) => a.disabled === true || accountKey(a) === activeKey;
+  const excludeKey = (a) =>
+    a.disabled === true || accountKey(a) === activeKey || (!allowExtraUsage && hasExtraUsageEnabled(a));
 
-  // Separate normal and low-priority, excluding current active only
+  // Separate normal and low-priority, excluding current active + extra-usage accounts
   const normal = config.accounts.filter((a) => a.priority !== 'low' && !excludeKey(a));
   const low = config.accounts.filter((a) => a.priority === 'low' && !excludeKey(a));
 
-  // Hard refusal for rotation *destination*: max(5h,7d) must stay below this.
-  // Default 95 (matches EXHAUSTED for Bedrock). Lower with
-  // rateLimits.destinationMaxUtilPercent (e.g. 90) if 90% 5h still feels empty in practice.
-  const UTIL_HARD_BLOCK = destinationUtilHardBlock(config);
+  const UTIL_HARD_BLOCK = 90; // Skip accounts at/above this util% if possible
 
   for (const pool of [normal, low]) {
     const fresh = pool.filter((a) => !isExhausted(a));
@@ -450,10 +401,12 @@ function pickNextAccount(config, state, liveUtil = {}) {
 
     for (const candidates of [fresh, exhausted]) {
       const viable = candidates.filter((a) => score(a) < UTIL_HARD_BLOCK);
+      const blocked = candidates.filter((a) => score(a) >= UTIL_HARD_BLOCK);
       const sorted = [...viable].sort((a, b) => score(a) - score(b));
+      const pool2 = sorted.length ? sorted : [...blocked].sort((a, b) => score(a) - score(b));
 
-      if (sorted.length > 0) {
-        const best = sorted[0];
+      if (pool2.length > 0) {
+        const best = pool2[0];
         const u5 = getUtil5h(best);
         const u7 = getUtil7d(best);
         const src = liveUtil[accountKey(best)]
@@ -461,133 +414,17 @@ function pickNextAccount(config, state, liveUtil = {}) {
           : state.accounts[accountKey(best)]?.lastUtilization
             ? 'cached'
             : 'unknown';
-        log(`Picked ${accountKey(best)} 5h=${u5 ?? '?'}% 7d=${u7 ?? '?'}% [${src}]`);
+        const utilStr = ` 5h=${u5 ?? '?'}% 7d=${u7 ?? '?'}% [${src}]`;
+        if (score(best) >= UTIL_HARD_BLOCK) {
+          log(`WARNING: All candidates near limit — rotating to ${accountKey(best)}${utilStr}`);
+        } else {
+          log(`Picked ${accountKey(best)}${utilStr}`);
+        }
         return best;
       }
     }
   }
-  // Already on the only account with API headroom (non-active pool is empty of viable targets).
-  if (activeKey && currentActiveIsOnlyViableTarget(config, state, liveUtil)) {
-    const aa = config.accounts.find((a) => accountKey(a) === activeKey);
-    const u5 = aa ? getUtil5h(aa) : null;
-    const u7 = aa ? getUtil7d(aa) : null;
-    log(
-      `Only viable Max account is already active (${activeKey}, 5h=${u5 ?? '?'}% 7d=${u7 ?? '?'}%) — no rotation target (others exceed ${UTIL_HARD_BLOCK}% max(5h,7d) destination cap or tool-window exhausted).`,
-    );
-    return null;
-  }
-  // All non-active candidates exceed UTIL_HARD_BLOCK — refuse to pick. Caller handles
-  // Bedrock fallback. Sam's rule: never rotate to an account that will
-  // immediately say token-limit-reached.
-  log(
-    `All non-active candidates score ≥${UTIL_HARD_BLOCK}% max(5h,7d) (or pool empty) — refusing to pick (use Bedrock fallback)`,
-  );
   return null;
-}
-
-// ── Smart recommend / Bedrock fallback ────────────────────────────────────────
-// "Will immediately say token-limit-reached" guard. Anything at/above this
-// 5h or 7d util is refused as a rotation target.
-const EXHAUSTED_THRESHOLD = 95;
-
-/** True when every non-active account with complete live util is at/above destination cap (no swap target). */
-function allNonActiveLiveConfirmedOverDestinationCap(config, state, liveUtil) {
-  const destCap = destinationUtilHardBlock(config);
-  const activeKey = state.activeAccount;
-  const others = config.accounts.filter((a) => a.disabled !== true && accountKey(a) !== activeKey);
-  if (others.length === 0) return false;
-  let nConfirmed = 0;
-  for (const a of others) {
-    const u = liveUtil[accountKey(a)];
-    if (!u || u.five_hour_pct == null || u.seven_day_pct == null) continue;
-    nConfirmed++;
-    if (Math.max(u.five_hour_pct, u.seven_day_pct) < destCap) return false;
-  }
-  return nConfirmed > 0;
-}
-
-// Returns { pick, allExhausted, allHaveLive, onlyActiveViable, destinationCapStuck } using LIVE util only.
-// allExhausted is true ONLY when every viable candidate has live data AND
-// max(5h,7d) >= EXHAUSTED_THRESHOLD. Per Sam's rule: never assume exhaustion
-// from cached / unknown data — Bedrock fallback must be live-confirmed.
-function recommendAccount(config, state, liveUtil) {
-  const candidates = config.accounts.filter((a) => a.disabled !== true);
-  const pick = pickNextAccount(config, state, liveUtil);
-  const onlyActiveViable = !pick && currentActiveIsOnlyViableTarget(config, state, liveUtil);
-  const allHaveLive =
-    candidates.length > 0 &&
-    candidates.every((a) => {
-      const u = liveUtil[accountKey(a)];
-      return u && u.five_hour_pct != null && u.seven_day_pct != null;
-    });
-  const allExhausted =
-    !onlyActiveViable &&
-    allHaveLive &&
-    candidates.every((a) => {
-      const u = liveUtil[accountKey(a)];
-      return Math.max(u.five_hour_pct, u.seven_day_pct) >= EXHAUSTED_THRESHOLD;
-    });
-  const destinationCapStuck =
-    !pick && !onlyActiveViable && !allExhausted && allNonActiveLiveConfirmedOverDestinationCap(config, state, liveUtil);
-  return { pick, allExhausted, allHaveLive, onlyActiveViable, destinationCapStuck };
-}
-
-// True if AWS Bedrock is reachable (sts + bedrock list).
-function checkBedrockAvailable(region) {
-  const reg = region || process.env.AWS_BEDROCK_REGION || 'us-east-1';
-  try {
-    execFileSync('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
-      stdio: 'pipe',
-      timeout: 5000,
-    });
-    execFileSync('aws', ['bedrock', 'list-inference-profiles', '--region', reg, '--max-results', '1'], {
-      stdio: 'pipe',
-      timeout: 6000,
-    });
-    return { ok: true, region: reg };
-  } catch (e) {
-    return { ok: false, region: reg, error: (e.message || '').slice(0, 120) };
-  }
-}
-
-// Activate Bedrock fallback. Writes a sentinel + prints source instructions.
-// Cannot mutate env of an already-running session — user must start a new
-// one with `source ~/.claude/scripts/account-rotation/use-bedrock.sh`.
-async function activateBedrockFallback(reason) {
-  const region = process.env.AWS_BEDROCK_REGION || 'us-east-1';
-  const result = checkBedrockAvailable(region);
-  const sentinel = join(process.env.HOME || '', '.claude', '.bedrock-fallback.json');
-  const payload = {
-    activated_at: new Date().toISOString(),
-    reason,
-    region,
-    available: result.ok,
-    error: result.error || null,
-  };
-  try {
-    writeFileSync(sentinel, JSON.stringify(payload, null, 2));
-  } catch {}
-  if (result.ok) {
-    try {
-      persistBedrockClaudeSettings(region);
-      log(`✅ settings.json → Bedrock env (${region})`);
-    } catch (e) {
-      log(`⚠ settings.json Bedrock persist failed: ${(e.message || e).toString().slice(0, 120)}`);
-    }
-    log(`✅ BEDROCK FALLBACK ACTIVATED region=${region} reason=${reason}`);
-    notify('Bedrock Fallback Active', `All Anthropic accounts exhausted — switched to Bedrock (${region}).`);
-    console.log('');
-    console.log('━━━ BEDROCK FALLBACK ACTIVE ━━━');
-    console.log(`Reason : ${reason}`);
-    console.log(`Region : ${region}`);
-    console.log('Use it : source ~/.claude/scripts/account-rotation/use-bedrock.sh');
-    console.log(`Clear  : rm ${sentinel}`);
-    console.log('');
-  } else {
-    log(`❌ Bedrock fallback FAILED reason=${reason} aws_error=${result.error}`);
-    notify('Bedrock Fallback FAILED', `aws sts/bedrock unreachable in ${region} — manual intervention needed`);
-  }
-  return result.ok;
 }
 
 // ── Keychain ─────────────────────────────────────────────────────────────────
@@ -2120,8 +1957,8 @@ async function runAuthFlow(driver, account) {
       }
       log('Authorize button still not clickable after 30s — escalating to ai-brain');
       // Fast-path ai-brain escalation: don't wait for stall detector to catch up
-      // on the next loop iter. The page is stuck on OAuth authorize — Bedrock
-      // vision + optional Context7 / web research picks the next action.
+      // on the next loop iter. The page is stuck on OAuth authorize and Haiku
+      // can usually pick the right org/continue button immediately.
       if (aiBrainEnabled && aiBrainHistory.length < AI_BRAIN_MAX_DECISIONS) {
         const action = await askAIBrain({
           page: driver._page,
@@ -2270,7 +2107,11 @@ async function runAuthFlow(driver, account) {
   if (aiBrainEnabled && aiBrainHistory.length < AI_BRAIN_MAX_DECISIONS) {
     const url = await driver.currentUrl().catch(() => '');
     log(`[ai-brain] loop exhausted — final rescue attempt`);
-    for (let rescue = 0; rescue < AI_BRAIN_MAX_DECISIONS - aiBrainHistory.length && rescue < 3; rescue++) {
+    // Snapshot remaining budget before the loop — aiBrainHistory grows each
+    // iteration, so re-evaluating inside the condition would shrink the bound
+    // twice as fast (once from rescue++, once from the growing length).
+    const rescueBudget = Math.min(3, AI_BRAIN_MAX_DECISIONS - aiBrainHistory.length);
+    for (let rescue = 0; rescue < rescueBudget; rescue++) {
       const action = await askAIBrain({
         page: driver._page,
         account,
@@ -2409,10 +2250,6 @@ async function browserOAuthFallback(account) {
         }
       }
       success = await runAuthFlow(driver, account);
-
-      if (success) {
-        await maybeScrapeBillingAfterOAuth(driver, account, log);
-      }
 
       if (!success) {
         log(`[${driver._driverName}] runAuthFlow returned false — trying next driver`);
@@ -2630,10 +2467,7 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
         const url = await driver.currentUrl().catch(() => '');
         if (url && (url.includes('oauth') || url.includes('authorize') || url.includes('claude.ai/login'))) {
           log(`[session] Detected post-restart OAuth page (${url.substring(0, 60)}) — driving flow`);
-          if (rotatedAccount) {
-            const authOk = await runAuthFlow(driver, rotatedAccount);
-            if (authOk) await maybeScrapeBillingAfterOAuth(driver, rotatedAccount, log);
-          }
+          if (rotatedAccount) await runAuthFlow(driver, rotatedAccount);
         }
         try {
           await driver.close?.();
@@ -2654,107 +2488,76 @@ async function rotate(targetEmail, opts = {}) {
   const state = readState();
   const dryRun = opts.dryRun || false;
 
-  // ALWAYS query live util — needed for picker (no target) AND for
-  // target-validation (with --to). This is the safety net that makes sure
-  // we never rotate to an account that will immediately say "token-limit".
-  log('Querying live utilization for all accounts...');
-  const liveUtil = await queryAllUtilization(config);
-  const utilSummary = Object.entries(liveUtil)
-    .map(([k, v]) => `${k}:5h=${v.five_hour_pct}%/7d=${v.seven_day_pct}%`)
-    .join(', ');
-  if (utilSummary) log(`Live util: ${utilSummary}`);
-  // Snapshot live data into state for future daemon decisions.
-  // Includes BOTH 5h util AND extra_usage_enabled — the latter is sticky-true
-  // so EU accounts stay refused even when subsequent live queries fail.
-  for (const [key, util] of Object.entries(liveUtil)) {
-    state.accounts[key] = state.accounts[key] || {};
-    state.accounts[key].lastUtilization = {
-      pct: util.five_hour_pct,
-      reset: util.resets_at_5h ? Math.floor(new Date(util.resets_at_5h).getTime() / 1000) : null,
-      ts: Date.now(),
-    };
-    if (util.extra_usage_enabled !== null && util.extra_usage_enabled !== undefined) {
-      state.accounts[key].lastBilling = {
-        extra_usage_enabled: util.extra_usage_enabled === true,
-        billing_type: util.billing_type || null,
+  if (!targetEmail) {
+    // Query live utilization for all accounts before picking — best-effort, ~2s
+    log('Querying live utilization for all accounts...');
+    const liveUtil = await queryAllUtilization(config);
+    const utilSummary = Object.entries(liveUtil)
+      .map(([k, v]) => `${k}:5h=${v.five_hour_pct}%/7d=${v.seven_day_pct}%`)
+      .join(', ');
+    if (utilSummary) log(`Live util: ${utilSummary}`);
+    // Snapshot live data into state for future daemon decisions
+    for (const [key, util] of Object.entries(liveUtil)) {
+      state.accounts[key] = state.accounts[key] || {};
+      state.accounts[key].lastUtilization = {
+        pct: util.five_hour_pct,
+        reset: util.resets_at_5h ? Math.floor(new Date(util.resets_at_5h).getTime() / 1000) : null,
         ts: Date.now(),
       };
     }
-  }
-  try {
-    writeState(state);
-  } catch {}
-  const bedrockOnExhausted = opts.bedrockOnExhausted !== false; // default ON
-
-  if (!targetEmail) {
-    const { pick, allExhausted, onlyActiveViable, destinationCapStuck } = recommendAccount(config, state, liveUtil);
-    if (!pick) {
-      if (onlyActiveViable) {
-        log('Rotation skipped — already on the only viable Max account (API headroom; other accounts exhausted).');
-        return true;
-      }
-      if (allExhausted || destinationCapStuck) {
-        if (allExhausted) {
-          log('All accounts live-confirmed EXHAUSTED — engaging Bedrock fallback');
-        } else {
-          log(
-            `Every live-confirmed non-active account is ≥${destinationUtilHardBlock(config)}% max(5h,7d) — no rotation target; engaging Bedrock fallback`,
-          );
-        }
-        if (bedrockOnExhausted)
-          await activateBedrockFallback(
-            allExhausted ? 'all_accounts_exhausted_picker_null' : 'destination_cap_no_headroom',
-          );
-      } else {
-        log('No account available (see utilization / query logs above)');
-      }
+    writeState(state, dryRun);
+    const next = pickNextAccount(config, state, liveUtil, {
+      allowExtraUsage: opts.allowExtraUsage === true,
+    });
+    if (!next) {
+      log('No account available (all excluded — extra_usage enabled?)');
       return false;
     }
-    targetEmail = accountKey(pick);
-  } else {
-    // Target validation: refuse exhausted API targets unless overridden.
-    const targetAcct =
-      config.accounts.find((a) => accountKey(a) === targetEmail) ||
-      config.accounts.find((a) => a.email === targetEmail);
-    if (targetAcct) {
-      const tKey = accountKey(targetAcct);
-      const tu = liveUtil[tKey];
-      const targetExhausted =
-        tu &&
-        tu.five_hour_pct != null &&
-        tu.seven_day_pct != null &&
-        Math.max(tu.five_hour_pct, tu.seven_day_pct) >= EXHAUSTED_THRESHOLD;
-      if (targetExhausted && !opts.allowExhausted) {
-        log(
-          `⚠  --to ${targetEmail} is EXHAUSTED (5h=${tu.five_hour_pct}% 7d=${tu.seven_day_pct}%) — auto-falling back to picker`,
-        );
-        const { pick, allExhausted, onlyActiveViable, destinationCapStuck } = recommendAccount(config, state, liveUtil);
-        if (!pick) {
-          if (onlyActiveViable) {
-            log('Rotation skipped — already on the only viable Max account.');
-            return true;
-          }
-          if (allExhausted || destinationCapStuck) {
-            if (allExhausted) log('No alternative — all accounts exhausted');
-            else {
-              log(
-                `No alternative under destination cap (${destinationUtilHardBlock(config)}%) — engaging Bedrock fallback`,
-              );
+    targetEmail = accountKey(next);
+  }
+
+  // Hard safety gate: even when the user passes --to <email> explicitly,
+  // refuse to activate a Max account where the Anthropic org has
+  // has_extra_usage_enabled=true (overage billing). Requires --allow-extra-usage
+  // to bypass.
+  try {
+    if (!opts.allowExtraUsage) {
+      const target = config.accounts.find((a) => accountKey(a) === targetEmail || a.email === targetEmail);
+      if (target) {
+        const tokenJson = readStoredToken(target);
+        if (tokenJson) {
+          const parsed = JSON.parse(tokenJson);
+          const accessToken = parsed?.claudeAiOauth?.accessToken;
+          if (accessToken) {
+            const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
+              method: 'GET',
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'anthropic-beta': 'oauth-2025-04-20',
+                'Content-Type': 'application/json',
+              },
+              signal: AbortSignal.timeout(5000),
+            });
+            if (res.ok) {
+              const prof = await res.json();
+              const euEnabled = prof?.organization?.has_extra_usage_enabled === true;
+              if (euEnabled) {
+                log(
+                  `REFUSED: target ${targetEmail} has extra_usage enabled (pay-per-use). Pass --allow-extra-usage to override.`,
+                );
+                notify(
+                  'Rotation BLOCKED',
+                  `${targetEmail}: extra_usage enabled — would risk credit-card overage. Disable at console.anthropic.com/settings/billing`,
+                );
+                return false;
+              }
             }
-            if (bedrockOnExhausted) {
-              await activateBedrockFallback(
-                allExhausted ? 'target_and_all_others_exhausted' : 'destination_cap_after_exhausted_target',
-              );
-            }
-          } else {
-            log('No alternative — see utilization / query logs above');
           }
-          return false;
         }
-        targetEmail = accountKey(pick);
-        log(`→ Picker chose ${targetEmail} instead`);
       }
     }
+  } catch (e) {
+    log(`Extra-usage preflight error (non-fatal): ${e.message?.slice(0, 80)}`);
   }
 
   // Find by label first, then by email
@@ -2907,6 +2710,57 @@ async function rotate(targetEmail, opts = {}) {
     log('Rotation failed');
     notify('Account Rotation', `FAILED for ${targetEmail}`);
     return false;
+  }
+
+  // POST-SWAP BILLING SAFETY CHECK
+  // The fresh token is now in the active keychain. Query /api/oauth/profile to
+  // verify has_extra_usage_enabled=false. If true, revert the swap by restoring
+  // the previous account's token — this prevents silent credit-card overages.
+  if (!opts.allowExtraUsage && !dryRun) {
+    try {
+      const freshJson = readKeychain();
+      const fresh = JSON.parse(freshJson);
+      const freshToken = fresh?.claudeAiOauth?.accessToken;
+      if (freshToken) {
+        const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${freshToken}`,
+            'anthropic-beta': 'oauth-2025-04-20',
+            'Content-Type': 'application/json',
+          },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (res.ok) {
+          const prof = await res.json();
+          const euOn = prof?.organization?.has_extra_usage_enabled === true;
+          if (euOn) {
+            log(`POST-SWAP BLOCK: ${targetEmail} has extra_usage=ON (overage billing). Reverting swap.`);
+            notify(
+              'Rotation REVERTED',
+              `${targetEmail}: extra_usage enabled — charges would hit your card. Rollback in progress.`,
+            );
+            // Revert: restore previous account's stored token to active slot
+            const prevKey = state.activeAccount;
+            const prevAccount = prevKey ? config.accounts.find((a) => accountKey(a) === prevKey) : null;
+            if (prevAccount) {
+              const prevToken = readStoredToken(prevAccount);
+              if (prevToken) {
+                writeKeychain(prevToken);
+                log(`Reverted keychain to previous account ${prevKey}`);
+              }
+            }
+            return false;
+          }
+        } else {
+          log(
+            `POST-SWAP profile check returned ${res.status} — unable to verify extra_usage; proceeding (fail-open for transient errors)`,
+          );
+        }
+      }
+    } catch (e) {
+      log(`POST-SWAP billing check error (non-fatal): ${e.message?.slice(0, 80)}`);
+    }
   }
 
   // Verify by reading back what's now in the active keychain
@@ -3219,10 +3073,14 @@ function showStatus() {
     }
   } catch {}
 
-  // Statusline must not depend on Claude Code restart. Token swap is keychain-level;
-  // any live/tracked mismatch is surfaced silently via the two separate lines below —
-  // no prescriptive "restart Claude Code" nag in the statusline.
-  const liveNote = '';
+  // Determine if the mismatch is expected (rotation just ran, session hasn't reloaded)
+  const recentRotation = state.lastRotation ? Date.now() - new Date(state.lastRotation).getTime() < 90_000 : false;
+  const mismatch =
+    liveEmail &&
+    state.activeAccount &&
+    !state.activeAccount.startsWith(liveEmail) &&
+    !liveEmail.startsWith(state.activeAccount);
+  const liveNote = mismatch && recentRotation ? ' (stale session — restart Claude Code to apply)' : '';
 
   console.log('\n=== Claude Account Rotation ===\n');
   console.log(`Live auth:       ${liveEmail || 'unknown'}${liveNote}`);
@@ -3369,117 +3227,6 @@ if (args.includes('--setup')) {
     console.log(`\n⚠  Disable extra_usage at https://console.anthropic.com/settings/billing for each risky account.`);
   }
   console.log('');
-} else if (args.includes('--recommend') || args.includes('--pick')) {
-  // Live-query all accounts and print the recommended next account WITHOUT
-  // swapping. Used as preflight by force-rotate.sh / rotate-magic / daemon-log.
-  const config = readConfig();
-  const state = readState();
-  const json = args.includes('--json');
-  if (!json) console.log('Querying live utilization for recommendation...');
-  const liveUtil = await queryAllUtilization(config);
-  const destCap = destinationUtilHardBlock(config);
-  const { pick, allExhausted, allHaveLive, onlyActiveViable, destinationCapStuck } = recommendAccount(
-    config,
-    state,
-    liveUtil,
-  );
-  const accountsOut = {};
-  for (const a of config.accounts) {
-    if (a.disabled === true) continue;
-    const k = accountKey(a);
-    const u = liveUtil[k];
-    if (!u) {
-      accountsOut[k] = { error: 'query_failed' };
-      continue;
-    }
-    const worst = Math.max(u.five_hour_pct ?? 0, u.seven_day_pct ?? 0);
-    accountsOut[k] = {
-      five_hour: u.five_hour_pct,
-      seven_day: u.seven_day_pct,
-      extra_usage: u.extra_usage_enabled,
-      worst,
-      viable: worst < destCap,
-      destination_cap_pct: destCap,
-      resets_at_5h: u.resets_at_5h,
-    };
-  }
-  // Bedrock readiness probe (fast — ~2s), only when needed
-  let bedrock = null;
-  if (allExhausted || destinationCapStuck) {
-    bedrock = checkBedrockAvailable();
-  }
-  const out = {
-    activeAccount: state.activeAccount || null,
-    pick: pick ? accountKey(pick) : null,
-    pick_email: pick ? pick.email : null,
-    allExhausted,
-    allHaveLive,
-    onlyActiveViable,
-    destinationCapStuck,
-    destinationMaxUtilPercent: destCap,
-    bedrock_ready: bedrock ? bedrock.ok : null,
-    bedrock_region: bedrock ? bedrock.region : null,
-    accounts: accountsOut,
-  };
-  if (json) {
-    console.log(JSON.stringify(out, null, 2));
-  } else {
-    console.log('');
-    console.log(
-      `Active: ${out.activeAccount || '(none)'}  ·  rotation targets need max(5h,7d) < ${destCap}% (see rateLimits.destinationMaxUtilPercent; Bedrock exhaustion is still ≥${EXHAUSTED_THRESHOLD}%)`,
-    );
-    for (const [k, v] of Object.entries(accountsOut)) {
-      if (v.error) {
-        console.log(`  ❌ ${k}: ${v.error}`);
-        continue;
-      }
-      let icon;
-      if (v.extra_usage === true) icon = '💳';
-      else if (v.worst >= EXHAUSTED_THRESHOLD) icon = '🔴';
-      else if (!v.viable) icon = '🟡';
-      else if (v.worst >= 70) icon = '🟡';
-      else icon = '🟢';
-      const tags = [];
-      if (v.extra_usage === true) tags.push('EU-ON');
-      if (v.worst >= EXHAUSTED_THRESHOLD) tags.push('EXHAUSTED');
-      else if (!v.viable) tags.push(`≥${destCap}%cap`);
-      const tag = tags.length ? ' ' + tags.join(' ') : '';
-      const star = k === out.activeAccount ? ' ◀ active' : '';
-      console.log(`  ${icon} ${k}: 5h=${v.five_hour ?? '?'}% 7d=${v.seven_day ?? '?'}%${tag}${star}`);
-    }
-    console.log('');
-    if (allExhausted) {
-      console.log(`⚠  ALL ACCOUNTS EXHAUSTED (live-confirmed, threshold ${EXHAUSTED_THRESHOLD}%)`);
-      if (bedrock?.ok) {
-        console.log(`✅ Bedrock fallback READY in ${bedrock.region}`);
-        console.log('   Next session: source ~/.claude/scripts/account-rotation/use-bedrock.sh');
-      } else {
-        console.log(`❌ Bedrock NOT reachable: ${bedrock?.error || 'unknown'}`);
-      }
-    } else if (destinationCapStuck) {
-      console.log(
-        `⚠  STUCK: every live-confirmed non-active account is ≥${destCap}% — no Max rotation target (Bedrock or lower destinationMaxUtilPercent).`,
-      );
-      if (bedrock?.ok) {
-        console.log(`✅ Bedrock fallback READY in ${bedrock.region}`);
-        console.log('   Next rotation: will activate Bedrock; then source use-bedrock.sh in new shells.');
-      } else {
-        console.log(`❌ Bedrock NOT reachable: ${bedrock?.error || 'unknown'}`);
-      }
-    } else if (out.onlyActiveViable) {
-      console.log(
-        `→ Already optimal: only account under ${destCap}% destination cap is active (${out.activeAccount || '?'}) — stay put.`,
-      );
-    } else if (out.pick) {
-      console.log(`→ Recommended: ${out.pick}`);
-    } else {
-      console.log('→ No viable account (all API-exhausted or missing utilization data)');
-    }
-    console.log('');
-  }
-  // Exit codes: 0 = viable pick available, 2 = Bedrock path (exhausted or destination-cap stuck),
-  // 3 = no viable pick but not confirmed for Bedrock (some queries failed — investigate).
-  process.exit(pick || onlyActiveViable ? 0 : allExhausted || destinationCapStuck ? 2 : 3);
 } else if (args.includes('--status')) {
   showStatus();
 } else if (args.includes('--capture')) {
@@ -3494,8 +3241,7 @@ if (args.includes('--setup')) {
   const force = args.includes('--force');
   const dryRun = args.includes('--dry-run');
   const magicLink = args.includes('--magic-link');
-  const allowExhausted = args.includes('--allow-exhausted');
-  const bedrockOnExhausted = !args.includes('--no-bedrock-fallback');
+  const allowExtraUsage = args.includes('--allow-extra-usage');
   if (dryRun) log('DRY RUN MODE — no changes will be made');
   if (force) {
     log('Force mode — bypassing lock and killing any competing rotations');
@@ -3517,8 +3263,7 @@ if (args.includes('--setup')) {
       noBrowser,
       dryRun,
       magicLink,
-      allowExhausted,
-      bedrockOnExhausted,
+      allowExtraUsage,
     });
     process.exit(ok ? 0 : 1);
   } catch (err) {
