@@ -11,7 +11,7 @@
  *   3. Verify selected account is not flagged extra_usage: true (post-2026-04-21 guard).
  *   4. flock on ~/.claude/keychain.lock (O_EXCL atomic).
  *   5. Swap active Claude keychain to that account's stored OAuth token.
- *   6. Run `claude -p <args> --max-budget-usd <cap>` (cap = min(200, user-supplied)).
+ *   6. Run `claude -p <args> --max-budget-usd <cap>` (cap = min(200, user-supplied, account remaining_usd)).
  *   7. On exit (any signal), restore prior keychain & release lock.
  *   8. Best-effort parse usage from claude output → decrement remaining_usd atomically.
  *
@@ -166,15 +166,21 @@ function releaseLock(fd, lockPath) {
   }
 }
 
-function effectiveBudget(userBudget) {
-  if (userBudget == null || Number.isNaN(userBudget)) return HARD_CAP_USD;
-  return Math.min(HARD_CAP_USD, Math.max(0, userBudget));
+function effectiveBudget(userBudget, remainingUsd) {
+  const cap =
+    userBudget == null || Number.isNaN(userBudget) ? HARD_CAP_USD : Math.min(HARD_CAP_USD, Math.max(0, userBudget));
+  const rem = Number(remainingUsd);
+  if (Number.isFinite(rem) && rem >= 0) return Math.min(cap, rem);
+  return cap;
 }
 
 function parseUsageCost(stdout, stderr) {
   // Best-effort parse — claude prints things like "Cost: $0.0123" on completion.
   const text = (stdout || '') + '\n' + (stderr || '');
-  const m = text.match(/\$([0-9]+(?:\.[0-9]+)?)\s*(?:total|cost|spend)/i) || text.match(/cost[^$]*\$([0-9.]+)/i);
+  const m =
+    text.match(/\$([0-9]+(?:\.[0-9]+)?)[ \t]*(?:total|cost|spend)/i) ||
+    text.match(/total[^$\n]*\$([0-9.]+)/i) ||
+    text.match(/cost[^$\n]*\$([0-9.]+)/i);
   if (m) {
     const v = Number(m[1]);
     if (!Number.isNaN(v) && v >= 0) return v;
@@ -221,7 +227,7 @@ async function main(argv) {
   assertNotExtraUsage(account, opts.config);
   assertBudgetFlagAvailable();
 
-  const budget = effectiveBudget(opts.budget);
+  const budget = effectiveBudget(opts.budget, account.remaining_usd);
 
   // Acquire lock BEFORE any keychain mutation.
   const lockFd = acquireLock(opts.lock);
