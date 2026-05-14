@@ -508,13 +508,13 @@ async function doRotation(reason) {
   try {
     // --no-browser: no Chrome, no API calls (works when rate limited)
     // --to: daemon controls which account to rotate to (pre-validated token)
-    // NO --session: keychain swap only. Running sessions can't accept /login mid-work.
-    // When sessions hit the wall they show "not logged in" — user runs /login → instant
-    // success because the fresh token is already in the keychain.
-    // --session: inject /login into running sessions (safe — keychain token is pre-validated)
-    const result = execFileSync(process.execPath, [ROTATE_SCRIPT, '--no-browser', '--session', '--to', targetKey], {
+    // NO --session: keychain swap only. Background rotation must not inject /login
+    // into running sessions — that interrupts active work. When sessions hit the wall
+    // they show "not logged in" — user runs /login → instant success because the fresh
+    // token is already in the keychain.
+    const result = execFileSync(process.execPath, [ROTATE_SCRIPT, '--no-browser', '--to', targetKey], {
       cwd: __dirname,
-      timeout: 300_000, // 5min — session restart takes ~15s per session × up to 8 sessions
+      timeout: 120_000, // keychain swap only — no session restarts
       env: { ...process.env, NODE_NO_WARNINGS: '1' },
     }).toString();
     log(`Rotation result: ${result.substring(0, 200)}`);
