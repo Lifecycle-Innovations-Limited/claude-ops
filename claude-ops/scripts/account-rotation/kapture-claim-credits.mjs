@@ -112,7 +112,12 @@ const valueOf = (name) => {
 };
 
 if (flag('--help') || flag('-h')) {
-  console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(0, 60).join('\n'));
+  console.log(
+    readFileSync(fileURLToPath(import.meta.url), 'utf8')
+      .split('\n')
+      .slice(0, 60)
+      .join('\n'),
+  );
   process.exit(0);
 }
 
@@ -130,7 +135,9 @@ function loadAccounts() {
   const accounts = (cfg.accounts ?? []).filter((a) => a?.email);
   if (accounts.length === 0) {
     console.error(`[fatal] no accounts in ${CONFIG_PATH}. The committed config is empty by Rule 0;`);
-    console.error('        real accounts live at ~/.claude/plugins/data/ops-ops-marketplace/account-rotation-config.json');
+    console.error(
+      '        real accounts live at ~/.claude/plugins/data/ops-ops-marketplace/account-rotation-config.json',
+    );
     console.error('        or are user-supplied. Point this script at the populated config.');
     process.exit(2);
   }
@@ -284,8 +291,12 @@ async function main() {
   }
 
   console.log('\n=== SUMMARY ===');
-  console.log('account                                  | claimed | remaining | screenshot                              | error');
-  console.log('-----------------------------------------|---------|-----------|-----------------------------------------|------');
+  console.log(
+    'account                                  | claimed | remaining | screenshot                              | error',
+  );
+  console.log(
+    '-----------------------------------------|---------|-----------|-----------------------------------------|------',
+  );
   for (const r of results) {
     const account = (r.email ?? '?').padEnd(40);
     const claimed = String(r.claimed ?? 'dry').padEnd(7);
