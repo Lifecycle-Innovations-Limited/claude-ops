@@ -172,7 +172,7 @@ Display the full settings menu as text (for reference), then use **batched AskUs
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
  PROFILE:       Owner=[value] | TZ=[value] | Style=[value]
- CHANNELS:      Email=[✓/✗] | WA=[✓/✗] | Slack=[✓/✗] | Telegram=[✓/✗]
+ CHANNELS:      Email=[✓/✗] | WA=[✓/✗] | Slack=[N workspaces/✗] | Telegram=[✓/✗]
  INTEGRATIONS:  AWS=[value] | Sentry=[value] | Linear=[value]
  PROJECTS:      [N] registered
  PLUGIN:        v[version]
