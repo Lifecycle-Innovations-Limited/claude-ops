@@ -69,7 +69,7 @@ Override the keychain account name via `CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT` if you 
 | --------------------- | ---------------------------------------------------------------------- |
 | `rotate.mjs`          | Main rotation logic. CLI: `--status`, `--utilization`, `--to`, `--setup`. |
 | `daemon.mjs`          | launchd-managed monitor. Polls every 15s, rotates at 80% utilization.  |
-| `ai-brain.mjs`        | Bedrock stall helper: vision + optional Context7 / web research; billing scrape after OAuth. |
+| `ai-brain.mjs`        | Claude Haiku fallback for unexpected OAuth pages.                      |
 | `force-rotate.sh`     | Out-of-band rotation when Claude Code is unreachable.                  |
 | `config.example.json` | Schema reference. Copy to `config.json` and populate.                  |
 
