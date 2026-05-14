@@ -1,13 +1,13 @@
 # Next.js SaaS Template
 
-Production-ready SaaS starter with Next.js 14 App Router, Auth.js v5, Stripe billing, Prisma ORM, and Tailwind CSS.
+Production-ready SaaS starter with Next.js App Router, Clerk authentication, Stripe billing, Prisma ORM, and Tailwind CSS.
 
 ## Features
 
-- **Next.js 14 App Router** — server components, layouts, route groups
-- **Auth.js v5 (next-auth@beta)** — GitHub and Google OAuth, PrismaAdapter, server-side sessions
-- **Stripe billing** — subscription webhook handler with signature verification
-- **Prisma ORM** — PostgreSQL with User, Account, Session, Subscription, VerificationToken models
+- **Next.js App Router** — server components, layouts, route groups
+- **Clerk** — hosted sign-in/sign-up, `clerkMiddleware` route protection, `UserButton` in the dashboard shell
+- **Prisma** — PostgreSQL with `User` (linked to Clerk via `clerkUserId`) and `Subscription` models
+- **Stripe billing** — subscription webhook handler with signature verification (`metadata.userId` = Prisma `User.id`)
 - **Tailwind CSS v3** — utility-first styling, responsive dashboard layout
 - **Landing page** — hero section with CTA buttons
 - **Dashboard layout** — sidebar navigation, metric cards
@@ -16,8 +16,8 @@ Production-ready SaaS starter with Next.js 14 App Router, Auth.js v5, Stripe bil
 
 - Node 20+
 - PostgreSQL (local or hosted)
+- [Clerk](https://clerk.com) application (API keys)
 - Stripe account (for billing features)
-- GitHub OAuth App and/or Google OAuth credentials
 
 ## Quick Start
 
@@ -39,30 +39,23 @@ The app will be available at `http://localhost:3000`.
 
 ## Environment Variables
 
-| Variable                 | Description                                       |
-| ------------------------ | ------------------------------------------------- |
-| `DATABASE_URL`           | PostgreSQL connection string                      |
-| `NEXTAUTH_URL`           | Full URL of your app (e.g. `http://localhost:3000`) |
-| `NEXTAUTH_SECRET`        | Random 32+ char secret for session signing        |
-| `GITHUB_CLIENT_ID`       | GitHub OAuth App client ID                        |
-| `GITHUB_CLIENT_SECRET`   | GitHub OAuth App client secret                    |
-| `GOOGLE_CLIENT_ID`       | Google OAuth client ID                            |
-| `GOOGLE_CLIENT_SECRET`   | Google OAuth client secret                        |
-| `STRIPE_SECRET_KEY`      | Stripe secret key (`sk_test_...` or `sk_live_...`) |
-| `STRIPE_WEBHOOK_SECRET`  | Stripe webhook signing secret (`whsec_...`)       |
+| Variable | Description |
+| -------- | ----------- |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key (`pk_test_...` / `pk_live_...`) |
+| `CLERK_SECRET_KEY` | Clerk secret key (`sk_test_...` / `sk_live_...`) |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | Path hosting `<SignIn />` (default `/login`) |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | Path hosting `<SignUp />` (default `/register`) |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | Post sign-in redirect when none is specified |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | Post sign-up redirect when none is specified |
+| `STRIPE_SECRET_KEY` | Stripe secret key (`sk_test_...` or `sk_live_...`) |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret (`whsec_...`) |
 
-## Auth Provider Setup
+Create a Clerk application at [dashboard.clerk.com](https://dashboard.clerk.com), copy the keys into `.env`, and add `http://localhost:3000` to allowed origins / redirect URLs as prompted in the Clerk dashboard.
 
-### GitHub OAuth
-1. Go to GitHub → Settings → Developer Settings → OAuth Apps → New OAuth App
-2. Set **Authorization callback URL** to `http://localhost:3000/api/auth/callback/github`
-3. Copy Client ID and Client Secret to `.env`
+## Clerk + Stripe
 
-### Google OAuth
-1. Go to [Google Cloud Console](https://console.cloud.google.com) → APIs & Services → Credentials
-2. Create OAuth 2.0 Client ID (Web application)
-3. Add `http://localhost:3000/api/auth/callback/google` as an authorized redirect URI
-4. Copy Client ID and Client Secret to `.env`
+The dashboard calls `syncClerkUser()` on first load so a Prisma `User` row exists before Stripe webhooks attach subscriptions. When creating Stripe Checkout sessions, set `metadata: { userId: '<prisma User.id>' }` so the webhook in `app/api/webhooks/stripe/route.ts` can link rows correctly.
 
 ## Stripe Webhook Setup
 
@@ -82,13 +75,10 @@ The app will be available at `http://localhost:3000`.
 
 1. Push your repo to GitHub
 2. Import the project in Vercel
-3. Add all environment variables in the Vercel dashboard
-4. Set `NEXTAUTH_URL` to your production domain
-5. Deploy
+3. Add all environment variables in the Vercel dashboard (including Clerk keys and sign-in URL envs)
+4. Deploy
 
 ### Other platforms
-
-Build the app and run it:
 
 ```bash
 npm run build

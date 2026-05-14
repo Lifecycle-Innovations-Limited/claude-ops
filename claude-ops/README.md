@@ -1,8 +1,55 @@
 # claude-ops
 
-> **v1.7.0** — Smart Daemon · Deep Context Inbox · 30 Skills · 14 Agents · Full Plugin Feature Integration
+> **v2.1.0** — Autonomy Layer · Deploy Auto-Fix · Safety Hooks · Specialist Agents · Recap Marquee · Multi-Account Rotator · Multi-Workspace Slack · ops-ci Current-State Filter · Credentials Audit · 35 Skills · 18 Agents
 
-A Claude Code plugin that turns Claude into a business operating system. Run `/ops` to launch the interactive command center — a pixel-art dashboard with instant hotkey access to morning briefings, inbox management, fire alerts, deploy status, revenue tracking, and autonomous YOLO mode.
+## What's new since v2.0.0
+
+- **v2.1.0** — Minor release rolling up the v2.0.5–v2.0.9 feature series. Multi-workspace Slack, ops-ci current-state filter, `/ops:credentials` audit, telegram preflight, userConfig schema upgrades — see [CHANGELOG.md](CHANGELOG.md#210--2026-05-02) for the full list.
+
+A Claude Code plugin that turns Claude into a business operating system **and** an autonomy layer. Run `/ops` for the interactive command center — pixel-art dashboard with instant hotkey access to morning briefings, inbox, fires, deploys, revenue, and YOLO mode. Or just keep working — v2's hooks watch every merge, every build, every commit, every push, and every agent dispatch in the background.
+
+---
+
+## What's new in v2.0
+
+Purely additive — no v1 behaviour changes by default. Full migration guide: [`docs/migrating-from-v1.md`](docs/migrating-from-v1.md). Full changelog: [`CHANGELOG.md`](CHANGELOG.md#200--2026-04-26).
+
+### v2 capability matrix
+
+| Subsystem | Trigger | Outcome | Skill | userConfig | Doc |
+|-----------|---------|---------|-------|------------|-----|
+| Post-merge deploy auto-fix | `gh pr merge *` | Watches deploy → audits `/health` → verifies `/version` SHA → dispatches Haiku `deploy-fixer` on failure | [`/ops:deploy-fix`](skills/ops-deploy-fix/SKILL.md) | `deploy_fix_enabled` (default `true`) + 14 more | [deploy-fix.md](docs/deploy-fix.md) |
+| Build-failure auto-fix | `npm run build:*` | Dispatches Haiku `build-fixer` on failure | (same skill) | `monitor_build_failures` (default `true`) | [deploy-fix.md](docs/deploy-fix.md) |
+| Specialized agent auto-suggestion | `Agent` tool with `subagent_type=general-purpose` | Silently swaps to matching specialist via `updatedInput` | (transparent) | `suggest_specialized_agents` (default `true`) | [agents.md](docs/agents.md) |
+| Secret-commit guard | `git commit *` | Denies commit when staged diff contains secrets | (always-on) | — | [safety-hooks.md](docs/safety-hooks.md) |
+| `rm -rf` anchor block | `rm -rf *` | Denies destructive paths (`/`, `~`, `$HOME`, `..`, `.`) | (always-on) | — | [safety-hooks.md](docs/safety-hooks.md) |
+| Direct main-push warning | `git push *` on `main`/`master`/`prod` | `permissionDecision: ask` to confirm | (always-on) | — | [safety-hooks.md](docs/safety-hooks.md) |
+| Task* tracking nudge | every Nth non-Task tool call | One-line `additionalContext` reminder | (transparent) | `task_reminder_enabled` (default `true`) | [CHANGELOG](CHANGELOG.md#4-universal-task-tracking-nudge) |
+| Recap marquee | every 30s | Multi-session digest in tmux `status-right` / `statusLine` | [`/ops:recap`](skills/ops-recap/SKILL.md) | `recap_marquee_enabled` (default `true`) | [recap.md](docs/recap.md) |
+| Multi-account Claude Max rotator | quota approaching cap | launchd daemon swaps `Claude Code-credentials` keychain entry to next account | [`/ops:rotate`](skills/ops-rotate/SKILL.md), [`/ops:rotate-setup`](skills/ops-rotate-setup/SKILL.md) | `account_rotation_enabled` (default `false` — opt-in) | [CHANGELOG](CHANGELOG.md#6-multi-account-claude-max-rotator) |
+
+### v2 quick start — deploy auto-fix in 60 seconds
+
+```bash
+/plugin update ops@lifecycle-innovations-limited-claude-ops
+/ops:setup                       # walks through new steps 2d, 3o, 6.5a–6.5d
+/ops:deploy-fix configure        # map your repos → /health + /version URLs
+# done — every future `gh pr merge` is now watched + verified + auto-fixed
+/ops:deploy-fix                  # live status, today's runs, budget remaining
+```
+
+Per-repo budget caps (default 3/hour), single-flight locks, content-hash dedup, and a transient classifier (auto-`gh run rerun`s on npm/network blips instead of dispatching an agent) keep spend bounded. Notification channels: `macos`/`ntfy`/`pushover`/`discord`/`telegram`/`none`.
+
+### v2 docs
+
+- [`docs/deploy-fix.md`](docs/deploy-fix.md) — auto-fix architecture, registry, dedup/budget, troubleshooting, FAQ.
+- [`docs/agents.md`](docs/agents.md) — pre-installed specialists + how to add your own + how the auto-suggestion hook works.
+- [`docs/safety-hooks.md`](docs/safety-hooks.md) — the three safety hooks + per-hook disable.
+- [`docs/recap.md`](docs/recap.md) — recap marquee daemon + tmux/`statusLine` setup.
+- [`docs/migrating-from-v1.md`](docs/migrating-from-v1.md) — v1 → v2 (no breaking changes).
+- [`docs/INDEX.md`](docs/INDEX.md) — full documentation index.
+
+---
 
 ## Features
 
@@ -38,6 +85,10 @@ A Claude Code plugin that turns Claude into a business operating system. Run `/o
 | `/ops:daemon`     | Start/stop/health for the launchd background daemon                            |
 | `/ops:doctor`     | Plugin config auto-diagnosis and repair                                        |
 | `/ops:uninstall`  | Clean removal — unload daemon, wipe cache, deregister marketplace              |
+| `/ops:deploy-fix` | **v2** — Status/tail/configure/test for the post-merge + build auto-fix subsystem |
+| `/ops:recap`      | **v2** — Status/tail/configure/restart for the multi-session recap marquee daemon |
+| `/ops:rotate`     | **v2** — Manually rotate the active Claude Max account                         |
+| `/ops:rotate-setup` | **v2** — Multi-account onboarding for the rotator                            |
 
 ### Dashboard hotkeys
 
@@ -76,11 +127,11 @@ Full feature parity with the legacy v1 bash script: `--gpu` reports GPU + Neural
 The background memory extractor now prefers the Claude Code OAuth token stored in macOS Keychain (`Claude Code-credentials`) over `ANTHROPIC_API_KEY`. Calls are billed against your Claude Max subscription instead of your API credit. The token is never exported to the shell environment, so parent terminal sessions stay unaffected. Falls back to `ANTHROPIC_API_KEY` (env → keychain → Doppler).
 
 ### Persistent WhatsApp follower
-`scripts/wacli-keepalive.sh` now keeps `wacli --follow` alive indefinitely. Previously the supervisor invoked `wacli sync --once` on the first tick before `--follow` had stabilized its store lock, which tore down the persistent connection every 5-20 minutes. Fixed via `INITIAL_BACKFILL_DELAY=30` plus a reentrant guard against overlapping sweeps.
+`whatsapp-bridge` (Baileys) now manages WhatsApp connectivity via the `com.<user>.whatsapp-bridge` LaunchAgent. Previously `whatsapp-bridge-keepalive.sh` kept `whatsapp-bridge --follow` alive — that daemon has been decommissioned (see `legacy/`). Which tore down the persistent connection every 5-20 minutes. Fixed via `INITIAL_BACKFILL_DELAY=30` plus a reentrant guard against overlapping sweeps.
 
 ### Full Plugin Feature Adoption
-- All 30 skills: `effort`, `maxTurns`, `disallowedTools`, `model` annotations
-- All 14 agents: `memory` (cross-session learning), `initialPrompt`, `isolation`
+- All 35 skills: `effort`, `maxTurns`, `disallowedTools`, `model` annotations
+- All 18 agents: `memory` (cross-session learning), `initialPrompt`, `isolation`
 - PreToolUse hooks for WhatsApp health checks and MCP auto-reconnect
 - Runtime Context loading in every skill (preferences, daemon health, memories, secrets)
 - CLI/API reference tables in all operational skills
@@ -102,7 +153,7 @@ The setup wizard (`/ops:setup`) walks through each one interactively. You choose
 |------|---------------|--------------|
 | `gh` (GitHub CLI) | Yes (Homebrew) | PRs, CI logs, issue triage, merge pipeline — used by 8+ skills |
 | `aws` (AWS CLI) | Yes (Homebrew) | ECS health, Cost Explorer, CloudWatch — used by ops-fires, ops-revenue, ops-deploy |
-| `wacli` (WhatsApp) | Manual ([source](https://github.com/Lifecycle-Innovations-Limited/wacli)) | WhatsApp inbox, send/read, contact lookup — no MCP equivalent exists |
+| `whatsapp-bridge` (WhatsApp) | Bundled ([source](https://github.com/your-org/whatsapp-mcp)) | WhatsApp inbox, send/read, contact lookup via `mcp__whatsapp__*` tools |
 | Node.js 18+ | Yes (Homebrew) | Runs the bundled Telegram MCP server |
 
 #### MCP-only (no CLI needed)
@@ -294,7 +345,7 @@ After the report, type `YOLO` to hand over the controls — Claude will autonomo
 ┌─────────────────────────┼────────────────────────┐
 │              ops-daemon (launchd)                  │
 │  ┌──────────┐ ┌──────────┐ ┌──────────────────┐ │
-│  │ wacli    │ │ memory   │ │   brain layer    │ │
+│  │ bridge  │ │ memory   │ │   brain layer    │ │
 │  │ sync     │ │ extractor│ │ briefing cache   │ │
 │  │ (follow) │ │ (cron)   │ │ urgent detect    │ │
 │  └──────────┘ └──────────┘ └──────────────────┘ │

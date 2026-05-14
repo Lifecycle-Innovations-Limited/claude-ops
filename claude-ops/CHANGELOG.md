@@ -2,6 +2,298 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **`templates/nextjs-saas/`** — Replaced Auth.js (next-auth) with [Clerk](https://clerk.com): `@clerk/nextjs`, `ClerkProvider`, `middleware.ts` with `clerkMiddleware` + `createRouteMatcher`, `<SignIn />` / `<SignUp />` at `/login` and `/register`, and `UserButton` in the dashboard layout. Prisma `User` now stores `clerkUserId` (unique); NextAuth `Account`, `Session`, and `VerificationToken` models removed. Added `lib/sync-user.ts` so the first dashboard visit upserts a Prisma user for Stripe `metadata.userId`. Environment variables are Clerk keys plus optional `NEXT_PUBLIC_CLERK_SIGN_*` URL hints (see template `.env.example`).
+
+## [2.1.4] — 2026-05-11
+
+Patch release — structural fix for fixer-subagent fabrication mode discovered 2026-05-11.
+
+### Fixed
+
+- **`skills/ops-merge/SKILL.md`** — Phase 3 brief no longer instructs fixer subagents to merge. New mandatory orchestrator verification protocol in Phase 5: parse fixer JSON, verify `git ls-remote` returns the claimed `end_sha`, verify author isn't a bot-race overwrite, independently confirm CI via `gh pr view --json statusCheckRollup`, orchestrator runs the merge itself, verify `mergedAt` is set within 60s, verify `mergeCommit.oid` is an ancestor of the base branch. Anti-fabrication red-flag checklist added (sequential-hex SHAs, missing sleep delays, identical SHAs across fixers). Safety Rails extended with "NEVER trust a fixer's claim of merge success" and "NEVER let a fixer call `gh pr merge`".
+
+  Companion change to `~/.claude/agents/pr-ci-fixer.md` (global agent, not in this repo) strips `mcp__github__merge_pull_request` from the tool allowlist and mandates a structured JSON return schema covering `start_sha`, `end_sha`, `remote_sha_after_push`, `ci_status`, `ci_run_url`, `ready_for_merge`. The agent's name (`pr-ci-fixer`) now matches its actual responsibility — it fixes CI, it does not merge.
+
+  Root cause: on 2026-05-11, sixteen parallel `pr-ci-fixer` spawns under one `/ops:ops-merge` invocation returned fully-fabricated transcripts — invented conflict resolutions, fake CI polling sequences, hallucinated `gh pr merge --admin` outputs with invented merge SHAs. Zero merges actually executed; all 16 PRs remained open. The orchestrator trusted self-reported success because the agent type bundled "do the work" and "claim the work happened" into one role. The new protocol separates them: fixers push (reversible, verifiable), orchestrator merges (after independent verification).
+
+## [2.1.3] — 2026-05-03
+
+Patch release — `bin/ops-external` and `bin/ops-marketing-dash` are now preferences-aware and surface real Shopify, Klaviyo, Meta, Instagram, and GSC data per project. `/ops:ops-yolo` always archives prior session reports to force a fresh-state run.
+
+### Fixed
+
+- **`bin/ops-external` now reads `preferences.json`** (Shopify stores in `.ecom.projects` and `.partner_registry.shopify_admin.stores`, marketing channels in `.marketing.projects`, `.integrations`) instead of returning `[]` when only `registry.json` is empty. Resolves credential references using a shared grammar (`env:VAR` / `doppler:project/config/SECRET` / inline). Probes Shopify Admin API for live `healthy / auth_expired / not_found / unreachable` status. Adds `-g` (globoff) to all curl calls so bracketed query params (`fields[shop]=…`) don't get mangled. Guards against the BSD `seq 0 -1` quirk that previously emitted spurious `alias: null` entries when the registry selection was empty.
+- **`bin/ops-marketing-dash` is now project-aware**. Reads `marketing.default_project` from `preferences.json` (overridable via `--project <name>` arg or `OPS_MARKETING_PROJECT` env). Resolves nested cred refs (`env:AB_KLAVIYO_TOKEN`, `doppler:hueman/prd/BRIGHT_KLAVIYO_TOKEN`, etc.) before falling back to the legacy flat env / `claude plugin config get` / bare-Doppler chain. Adds `-g` and `--max-time 5` to every curl. Output now includes a `project` field so downstream surfaces know which project's data they're seeing.
+
+### Added
+
+- **`bin/ops-dash` surfaces marketing health + Shopify count** in the header status block (`marketing N/100 Status (project) | shopify N/N`), backgrounded against the existing probes so render time is unchanged.
+- **`/ops:ops-go` Phase-1 pre-gather** now invokes `ops-marketing-dash` so the briefing's MARKETING section actually has data instead of falling through to `(marketing not configured)`.
+- **`/ops:ops-yolo` Phase 0** archives any prior `/tmp/yolo-*/` to `~/.claude/yolo-archive/<session>-<epoch>/` and allocates a fresh `SESSION_DIR` on every run. C-suite agent prompts now include a verbatim "fresh-state" directive forbidding reuse of cached reports. `ops-marketing-dash` added to Phase-1 data.
+
+## [2.1.2] — 2026-05-02
+
+Patch release — second pass on YOLO false-fire suppression. Adds an inline annotation so C-suite agents can short-circuit on projects whose tracking is intentionally delegated to a workspace-level coordinator.
+
+### Changed
+
+- **`bin/ops-gsd-states` annotates SUBORDINATE projects** (PR #204). When a GSD project's `.planning/STATE.md` frontmatter has `status: subordinate_to_workspace`, its phase tracking is intentionally delegated to a workspace-level coordinator (e.g. `my-project-api` and `my-project-agentcore` both delegate to `my-project-workspace`). Prior to this fix, the C-suite YOLO agents treated these as independent projects and flagged them as "stalled" when their phase progress was static — but the staticness is correct: the workspace owns the schedule. Now the script appends `[SUBORDINATE — tracking delegated to workspace; do NOT flag as stalled]` to the project header, giving C-suite agents an inline short-circuit. Pairs with the CLAIM VERIFICATION GUARDRAIL shipped in 2.1.1. Concrete case from 2026-05-01 YOLO session: COO claimed `my-project-api v3.1 Phase 1 stalled 6d on closed PR #3217`. Reality: PR #3217 was intentionally closed and superseded by #3222, which merged 2026-04-25. The workspace-level STATE.md correctly reflects this with `status: subordinate_to_workspace`; the YOLO scan would have surfaced that status if the script annotated it. Implementation uses a small awk frontmatter scalar parser; activates only on the literal value `subordinate_to_workspace`; all other status values stay silent.
+
+## [2.1.1] — 2026-05-02
+
+Patch release — `/ops:ops-yolo` reliability fixes. Restores Phase 1 data-gathering after a regression, and adds a verification guardrail to the C-suite agents so they stop reporting false fires.
+
+### Fixed
+
+- **`/ops:ops-yolo` Phase 1 silent abort** (PR #201). The inline `! ` shell block in `skills/ops-yolo/SKILL.md` used the bash-only parameter expansion `${d/#\~/$HOME}` for tilde substitution. Claude Code's `!` block executor runs under `sh`/`dash`, so the expansion was a syntax error and the GSD-state aggregation step silently aborted — taking the rest of YOLO data-gathering down with it. Extracted the loop to `bin/ops-gsd-states` with an explicit `#!/usr/bin/env bash` shebang. Same convention as every other Phase 1 block, which are all thin shims around `bin/` scripts. Output format unchanged: `=== <basename> ===` header + STATE.md body + `---` separator.
+
+### Changed
+
+- **YOLO C-suite agents now require claim verification** (PR #202). The 2026-05-01 YOLO session produced multiple false-positive fires: agents flagged `CLERK_AUTHORIZED_PARTIES` as missing on a example-project-api Doppler config that already had it set; flagged `my-project-langgraphs-prod` desired=0 as a fire when the most recent commit was `chore(decomm): disable prod deploy workflow per phase 19.4 Stage 2`; and referenced a Doppler `stg` config that does not exist on example-project-api. Root cause: agent prompts told them to be "brutally honest" but did not require them to verify external state before asserting it. Stale STATE.md notes were promoted to P0 claims. Added a `## CLAIM VERIFICATION GUARDRAIL` section to all four agents (`yolo-ceo`, `yolo-cto`, `yolo-cfo`, `yolo-coo`). Identical block in each, placed before the existing `DESTRUCTIVE ACTION GUARDRAIL`. Mandates concrete verification commands per claim type (`doppler secrets get --plain`, `aws secretsmanager get-secret-value`, `git log --grep decomm`), distinguishes "set to empty" from "unset", and requires `UNVERIFIED` labeling when verification is impossible (rate limit, missing creds). Forbidden output patterns include "X is missing in production" without a corresponding read, and any P0/CRITICAL label on state that is the result of a documented planned change.
+
+## [2.1.0] — 2026-05-02
+
+Minor release — consolidates the feature work from the v2.0.5–v2.0.9 patch series into a single coherent version. No breaking changes; drop-in replacement for v2.0.x.
+
+### Added
+
+- **Multi-workspace Slack support** (was v2.0.9 / PR #195). Single ops install can now connect to multiple Slack workspaces simultaneously and route messages by workspace context. Adds `bin/ops-slack-workspaces` for inspection.
+- **`/ops:credentials` audit skill** (was v2.0.6 / PR #184). On-demand audit of which integration credentials are configured, expiring soon (<7d), or stale (>180d). Plugin.json `userConfig` now carries field hints so the audit can tell users which env var or vault key holds each credential.
+- **ops-ci current-state filter** (was v2.0.9 / PR #196). `bin/ops-ci` now emits ONLY workflows whose latest run on a tracked branch (main/dev/master) is currently failing — not "any failure in the last 24h". Eliminates the false-fire cascade in `/ops-fires` and `/ops-go` where stale failures triggered fix-agent dispatch on already-resolved CI. Smoke test on a real 38-repo portfolio: 14 → 6 entries (57% noise reduction). Behind `OPS_CI_MODE=current` default; `OPS_CI_MODE=legacy` reverts.
+- **MANDATORY pre-dispatch staleness check in ops-fires SKILL** (was v2.0.9 / PR #196). Defense-in-depth gate — `gh run list --workflow X --branch Y --limit 1` — before spawning any fix agent. Catches cache races where a fix landed in the seconds since the CI cache was written.
+- **Telegram preflight + keychain fallback** (was v2.0.7 / PR #185). SSE/user-config detection runs before Telegram MCP auth; macOS keychain is the fallback secret store when Doppler is unconfigured.
+- **userConfig schema upgrades** (was v2.0.5 / PR #182). `enum` values, `sensitive` flags, and per-integration toggles for fine-grained capability gating.
+
+### Fixed
+
+- userConfig `enum` rejection by Claude Code stable (was v2.0.8 / PR #190). Removed unsupported `enum` keys from `fix_model`, `max_fixes_per_hour`, `watcher_timeout_seconds`, `notify_channel`, `task_reminder_threshold`, `aws_region`, `doppler_config`. Field descriptions retain the valid value lists.
+- Cross-OS macOS keychain guard in `/ops:credentials` (was v2.0.6 hotfix).
+- Plugin.json Prettier formatting (was v2.0.5 hotfix).
+
+### Notes
+
+- Plugin v2.1.0 ships 35 skills, 18 agents.
+- Marketplace pin must be bumped to `2.1.0` — see follow-up PR.
+- Local plugin cache: clear old `ops/2.0.*` cache directories and re-install via marketplace refresh after merge.
+
+## [2.0.9] — 2026-05-01
+
+### Fixed
+
+- **ops-ci current-state filter (57% noise reduction).** `bin/ops-ci` previously pulled "last 3 failures" per repo regardless of whether those workflows are still red on HEAD. Downstream consumers (`ops-fires`, `ops-go`) treated any 24h failure as actionable and dispatched fix agents to already-self-resolved fires — burning ~50–150k Sonnet tokens per agent before it concluded "nothing to fix". Smoke test on a real portfolio: legacy mode emits 14 repos with failures, new mode emits 6 (8 stale entries filtered). Now surveys last 30 runs per repo and emits only workflows whose latest run on the tracked branch (main/dev/master) has `conclusion=="failure"`. Behind `OPS_CI_MODE=current` default; `OPS_CI_MODE=legacy` reverts to old behaviour.
+- **MANDATORY pre-dispatch staleness check in ops-fires SKILL.** Adds a defense-in-depth gate — `gh run list --workflow X --branch Y --limit 1` — before spawning any fix agent. Catches cache races where a fix landed in the seconds since the CI cache was written.
+
+## [2.0.8] — 2026-05-01
+
+### Fixed
+
+- **Hotfix: remove unsupported `enum` keys from plugin.json `userConfig`.** Claude Code's plugin manifest validator rejects `enum` on userConfig fields ("Unrecognized key"), which broke plugin loading on the latest stable. Removed `enum` from `fix_model`, `max_fixes_per_hour`, `watcher_timeout_seconds`, `notify_channel`, `task_reminder_threshold`, `aws_region`, and `doppler_config`. Field descriptions retain the valid value lists so users still know what's allowed. Restores plugin install on Claude Code stable.
+
+## [2.0.7] — 2026-05-01
+
+### Fixed
+
+- **Telegram MCP server: keychain fallback at startup.** `telegram-server/index.js` previously read `TELEGRAM_API_ID/HASH/SESSION/PHONE` exclusively from `process.env`. The plugin's `.mcp.json` injects those via `${user_config.telegram_*}` placeholders, which resolve to empty strings when the user configured Telegram via `/ops:setup` (which writes to macOS Keychain) instead of the plugin settings UI. Result: a working keychain integration appeared "not configured". Server now falls back to `security find-generic-password -s telegram-{api-id,api-hash,session,phone} -w` when env vars are empty. macOS-only fallback; Linux/Windows users continue to set env vars or paste in plugin settings.
+- **Preflight: detect SSE-router + user-config.json credential sources.** Adds two new credential scout sources to the setup preflight: SSE router config (for users running custom MCP routing) and `${CLAUDE_PLUGIN_DATA_DIR}/user-config.json`. New test in `tests/test-preflight-sse-userconfig.sh` exercises both detection paths. Also tightens `bin/ops-setup-detect` to handle the SSE/user-config presence map.
+
+## [2.0.6] — 2026-04-30
+
+### Added
+
+- **`/ops:credentials` skill + `bin/ops-credentials` audit CLI.** Scans shell env, ops preferences.json, Doppler (resolves `doppler:KEY` references live), macOS Keychain, and Dashlane to report which integration credentials are configured vs missing. Output formats: human table (default), JSON (`--json`), single-service filter (`--service stripe`). Values masked as `first6•••last4`; never prints raw secrets. Auto-switches to compact one-line-per-cred format on SSH/mobile (`$SSH_CONNECTION` or `$OPS_MOBILE=1` per Rule 7). Solves the "Claude Code settings UI can't see my keychain" problem — users can now check at a glance which integrations are ready to use.
+- **Credential field hints in plugin.json descriptions.** All 22 credential fields now include "If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically" in their description, so users don't waste time pasting values that are already in scope.
+
+## [2.0.5] — 2026-04-30
+
+### Fixed
+
+- **Plugin settings UI: enums + sensitive flags.** Added `enum` to every userConfig field with a finite known value space — `fix_model` (opus/sonnet/haiku), `notify_channel` (macos/ntfy/pushover/discord/telegram/none), `aws_region` (16 regions), `max_fixes_per_hour` (1/3/5/10), `task_reminder_threshold` (5/10/20/50), `watcher_timeout_seconds` (5min–1hr buckets), `doppler_config` (dev/stg/prd/ci). Marked 22 credential fields `sensitive: true` so the settings UI masks them: Telegram api_hash/session, Klaviyo, Meta Ads, Shopify admin, ShipBob, Bland AI, ElevenLabs, Groq, Stripe, RevenueCat, Datadog, New Relic, Pushover, Discord bot/webhook, Doppler token, DPD password, UPS/FedEx client secrets. Remaining text inputs are user-specific identifiers (Sentry org slug, Linear team key, store URLs, account/customer IDs) with no enumerable value space — freeform text is correct for those.
+
+## [2.0.4] — 2026-04-30
+
+### Fixed
+
+- **Registry path resolution: survive plugin updates.** Bin scripts read `registry.json` from `$PLUGIN_ROOT/scripts/registry.json` (the cache path), which is wiped on every plugin upgrade. Symptom: after a version bump, `/ops:ops-dash` and friends report "No project registry found" until the user manually re-runs `/ops:setup`, even though their data-dir registry is intact. Introduced `lib/registry-path.sh` that resolves `OPS_DATA_DIR` and `REGISTRY` with precedence: data-dir → caller-supplied legacy fallback → `$PLUGIN_ROOT/scripts` → canonical default. Patched `bin/ops-dash`, `ops-merge-scan`, `ops-ci`, `ops-external`, `ops-infra`, `ops-prs`, `ops-git`, `ops-doctor`, `ops-setup-detect`, and `scripts/ops-daemon.sh::prefetch_project_health`. `bin/ops-projects` already followed this pattern; this brings the rest of the surface in line. (#180)
+
+## [2.0.3] — 2026-04-30
+
+### Fixed
+
+- **Daemon: WhatsApp state now reads from Baileys bridge `messages.db` directly.** Removed last 4 references to deprecated `wacli_chats.json` / `wacli_urgent.json` keepalive caches in `scripts/ops-daemon.sh` (briefing refresh, urgent-message detection, smart memory trigger, contact activity index). Briefings no longer surface false "WhatsApp disconnected" warnings when the bridge is healthy.
+
+### Added
+
+- **`bin/ops-post-update-migrate`: auto-fire migrations on plugin update.** Wired into `hooks/hooks.json` SessionStart and `scripts/ops-daemon-manager.sh ensure-current`. Idempotent, gated by per-version sentinel (`$DATA_DIR/.migrated/v<VERSION>`), wall-clock budget 60s. Currently runs: `whatsapp-bridge-migrate.sh` (FTS5 + contacts), refreshes `com.claude-ops.whatsapp-bridge` LaunchAgent, decommissions stale `com.claude-ops.wacli-keepalive` plist. Future migrations chain into `run_migrations()`.
+
+## [Unreleased] — 2026-04-27
+
+### Changed
+
+- **Decommission wacli daemon. WhatsApp ops now Baileys-only via `mcp__whatsapp__*`.** Migration script in `scripts/whatsapp-bridge-migrate.sh`.
+  - All skill references to `wacli chats list`, `wacli messages list/search`, `wacli contacts --search`, `wacli send`, `wacli history backfill`, and `wacli doctor` replaced with `mcp__whatsapp__*` tool calls or direct `sqlite3` queries against the bridge `messages.db`.
+  - `scripts/wacli-keepalive.sh` and `scripts/com.claude-ops.wacli-keepalive.plist` moved to `legacy/` (preserved for reference).
+  - `bin/wacli-health` rewritten to check bridge port 8080 and launchd status.
+  - `bin/wacli-safe` replaced with a deprecation shim.
+  - New `bin/ops-pretool-whatsapp-bridge-health` PreToolUse hook for bridge liveness.
+  - New `assets/launchagents/com.<user>.whatsapp-bridge.plist` template.
+  - `scripts/whatsapp-bridge-migrate.sh`: idempotent FTS5 virtual table + contacts table migration for `messages.db`; seeds contacts from macOS Contacts.app via osascript.
+
+### Migration steps (manual, post-merge)
+
+1. Run `scripts/whatsapp-bridge-migrate.sh` to add FTS5 index and contacts table to bridge `messages.db`.
+2. Revoke the wacli linked device on your phone (WhatsApp → Settings → Linked Devices).
+3. `launchctl bootout gui/$UID ~/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist 2>/dev/null || true`
+4. `rm -f ~/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist`
+
+### Rollback
+
+WhatsApp supports 4 linked devices. Re-link wacli at any time:
+```bash
+wacli auth   # scan QR
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist
+```
+History from before rollback won't be in new wacli store, but bridge keeps running independently — no message loss.
+
+---
+
+## [2.0.0] — 2026-04-26
+
+> **Major release.** Purely additive — no behavior of any v1.x skill changes by default. Existing users can upgrade in place. Every new subsystem is gated by a `userConfig` toggle (defaults documented per-feature below) and can be turned off from `/plugins` settings without uninstalling. See [`docs/migrating-from-v1.md`](docs/migrating-from-v1.md) and the [Migrating-from-v1 wiki page](https://github.com/Lifecycle-Innovations-Limited/claude-ops/wiki/Migrating-from-v1).
+
+### Headline
+
+v2.0 turns claude-ops from a *briefing + comms surface* into an **autonomy layer** for Claude Code itself. It now:
+
+1. Watches every `gh pr merge` you run, follows the deploy workflow, audits service health + verifies the served commit, and dispatches a Haiku **deploy-fixer** if anything goes wrong (PR #158).
+2. Watches every `npm run build:*`, parses the failure, and dispatches a Haiku **build-fixer** (PR #158).
+3. Pre-installs four specialist subagents (`general-purpose`, `deploy-fixer`, `build-fixer`, `dependency-auditor`) and silently swaps `general-purpose` → matching specialist via a PreToolUse hook on `Agent` (PRs #161, #162).
+4. Ships three universal **safety hooks** that block the most common foot-guns: secrets-in-staged-diff, `rm -rf` against anchor paths, and direct `git push` to `main` (PR #163).
+5. Periodically nudges Claude to use `Task*` tools when a session has gone N tool calls without one (PR #163).
+6. Runs a **recap marquee daemon** that synthesises a one-line digest across all parallel Claude sessions and surfaces it in tmux `status-right` or the Claude Code `statusLine` (PR #160).
+7. Folds in a **multi-account Claude Max rotator** with launchd daemon + AI-brain heuristics so you never blow a weekly cap (PR #160).
+8. Expands `/ops:setup` with steps 2d, 3o, and 6.5a–6.5d so every new subsystem has a guided wizard.
+9. Overhauls `plugin.json` `userConfig` so 19+ entries render as proper spacebar-toggle booleans / numeric caps / file pickers in `/plugins` settings (PR #164).
+10. Adds two new test scripts (`tests/test-deploy-fix-hooks.sh`, `tests/test-safety-hooks.sh`) wired into `tests/run-all.sh` (PR #163).
+
+### Added
+
+#### 1. Deploy auto-fix subsystem — `/ops:deploy-fix` (PR #158)
+
+The flagship v2 feature. Watches your merges and your local builds; verifies the result; auto-fixes failures.
+
+- **`hooks/hooks.json` PostToolUse:Bash → `bin/ops-deploy-fix-merge-trigger`** — fires on `gh pr merge *`, parses repo + PR + base + sha, spawns `scripts/ops-deploy-monitor.sh` in the background. The monitor:
+  1. Polls the deploy GitHub Actions workflow until completion (regex configurable via `deploy_workflow_pattern`, default `deploy|Deploy|build|Build|ECS|cd|CD`).
+  2. On success: optionally `curl`s the service `/health` URL and verifies `/version` returns the merged SHA.
+  3. On failure: classifies as **transient** (npm registry blip, rate limit, network timeout) and `gh run rerun`s, OR dispatches a headless Haiku `deploy-fixer` agent with the failing log tail injected into [`prompts/deploy-fix.md`](prompts/deploy-fix.md).
+- **`hooks/hooks.json` PostToolUse:Bash → `bin/ops-deploy-fix-build-trigger`** — fires on `npm run build:*`, parses the local build script output, dispatches a Haiku `build-fixer` agent with [`prompts/build-fix.md`](prompts/build-fix.md). Single-flight per repo.
+- **`scripts/lib/deploy-fix-common.sh`** — shared library: single-flight lock acquisition, per-repo hourly budget cap (default 3, see `max_fixes_per_hour`), content-hash dedup, transient classifier, notify dispatcher.
+- **Layered service registry**: project `.claude/post-merge-services.json` → user `~/.claude/config/post-merge-services.json` → plugin `config/post-merge-services.example.json`. Maps `owner/repo:base` → `{ health_url, version_url, deploy_workflow }`.
+- **Notification channel** (`notify_channel` userConfig): `macos` (osascript), `ntfy` (ntfy.sh topic), `pushover`, `discord` webhook, `telegram`, or `none`.
+- **`/ops:deploy-fix` skill** — `status` (live runs, today's history, budget remaining), `tail <run-id>` (stream the monitor log), `configure` (open the registry), `test` (dry-run the hook against a synthetic merge).
+- **userConfig toggles** (all spacebar-toggleable in `/plugins` settings): `deploy_fix_enabled`, `monitor_post_merge`, `monitor_build_failures`, `auto_dispatch_fixer`, `allow_dangerous`, `auto_rerun_transients`, `audit_health_after_deploy`, `verify_served_commit`, `fix_model`, `max_fixes_per_hour`, `watcher_timeout_seconds`, `registry_path`, `repo_search_roots`, `deploy_workflow_pattern`, `notify_channel`. See [`docs/deploy-fix.md`](docs/deploy-fix.md) for the full table with defaults.
+
+#### 2. Specialized agent system (PRs #161, #162)
+
+- [`agents/general-purpose.md`](agents/general-purpose.md) — local override that limits the default agent to research and read-only investigation.
+- [`agents/deploy-fixer.md`](agents/deploy-fixer.md) — single-shot SRE persona invoked by the deploy auto-fix subsystem.
+- [`agents/build-fixer.md`](agents/build-fixer.md) — focused TypeScript/bundler error fixer for local build failures.
+- [`agents/dependency-auditor.md`](agents/dependency-auditor.md) — runs `npm audit` / `pip-audit` / SCA equivalents and proposes minimal upgrades.
+- **`bin/ops-suggest-specialized-agent`** — PreToolUse hook on `Agent`. When `subagent_type=general-purpose`, inspects the prompt against [`config/specialist-keywords.example.json`](config/specialist-keywords.example.json) (also user-extensible at `~/.claude/config/specialist-keywords.json`) and **silently swaps** to the matching specialist via `updatedInput`. If no match, fires a Haiku drafter that proposes a brand-new agent file under `~/.claude/agents/`.
+- **userConfig**: `suggest_specialized_agents` (default `true`).
+- **Deep dive**: [`docs/agents.md`](docs/agents.md).
+
+#### 3. Universal safety hooks (PR #163)
+
+Three PreToolUse:Bash hooks. Always-on by design; per-hook escape via `permissionDecision`.
+
+- **`bin/ops-prevent-secret-commit`** — denies `git commit` when the staged diff matches secret patterns (AWS keys, GitHub PATs, Slack tokens, OpenAI/Anthropic keys, `.env` content).
+- **`bin/ops-no-rm-rf-anchor`** — denies `rm -rf` when the resolved target is `/`, `~`, `$HOME`, `..`, or `.`. Symlink-resolved before the check.
+- **`bin/ops-warn-mainpush`** — fires `permissionDecision: ask` when the user runs `git push` and the current branch is `main`/`master`/`prod`/`production`.
+- **Deep dive**: [`docs/safety-hooks.md`](docs/safety-hooks.md).
+
+#### 4. Universal Task* tracking nudge (PR #163)
+
+- **`bin/ops-task-reminder`** — PostToolUse `*` hook. Increments a session-scoped counter on every non-Task tool call. When the counter exceeds `task_reminder_threshold` (default `10`), emits a single `additionalContext` line nudging Claude to use `TaskCreate` / `TaskUpdate` / `TaskList`. Counter resets when any `Task*` tool fires.
+- **userConfig**: `task_reminder_enabled` (default `true`), `task_reminder_threshold` (default `10`, range `3..50`).
+
+#### 5. Recap marquee daemon — `/ops:recap` (PR #160)
+
+- **`scripts/recap/daemon.sh`** — long-lived loop, every 30s reads tool-activity logs from `hooks/recap-tool-activity.sh` + per-session captures from `hooks/recap-capture.sh`.
+- **`scripts/recap/digest.sh`** — synthesises the digest (active session count, latest action per session, fire flags).
+- **`scripts/recap/marquee.sh`** — formats the digest as a one-line ANSI string for tmux `status-right`.
+- **`templates/com.claude-ops.recap-daemon.plist`** — launchd unit; systemd alternative documented inline in [`docs/recap.md`](docs/recap.md).
+- **`/ops:recap` skill** — `status`, `tail`, `configure`, `restart`.
+- **`/ops:setup` step 2d** — auto-appends the marquee source to `~/.tmux.conf` (or wires the Claude Code `statusLine` if no tmux is detected).
+- **userConfig**: `recap_marquee_enabled` (default `true`), `recap_marquee_auto_configure_tmux` (default `true`).
+
+#### 6. Multi-account Claude Max rotator — `/ops:rotate` + `/ops:rotate-setup` (PR #160)
+
+- **`scripts/account-rotation/rotate.mjs`** — swaps the `Claude Code-credentials` keychain entry to the next configured account.
+- **`scripts/account-rotation/daemon.mjs`** — launchd-managed; polls each account's usage every N minutes and rotates *before* hitting the cap.
+- **`scripts/account-rotation/ai-brain.mjs`** — Haiku-powered heuristic that decides which account to rotate to based on remaining quota + recent usage trajectory.
+- **`scripts/account-rotation/setup-account.mjs`** — OAuth init for one account.
+- **`scripts/account-rotation/force-rotate.sh`** — manual override.
+- **`templates/com.claude-ops.account-rotation.plist`** — launchd unit.
+- **`/ops:rotate`** — manual rotate. **`/ops:rotate-setup`** — interactive multi-account onboarding.
+- **`/ops:setup` step 3o** — walks through OAuth init for every configured account that lacks a keychain token.
+- **userConfig**: `account_rotation_enabled` (default `false` — opt-in), `account_rotation_setup_oauth_each` (default `true`).
+- **Hard guardrail**: rotator refuses any account with overage billing enabled unless `--allow-extra-usage` is passed.
+
+#### 7. `/ops:setup` wizard — new steps
+
+- **Step 2d** — recap marquee install + tmux/`statusLine` configuration.
+- **Step 3o** — Claude Max account OAuth init loop (one prompt per configured account).
+- **Step 6.5a** — deploy auto-fix toggle + registry path picker.
+- **Step 6.5b** — recap marquee toggle.
+- **Step 6.5c** — task reminder toggle + threshold.
+- **Step 6.5d** — account rotator toggle.
+
+#### 8. `plugin.json` userConfig overhaul (PR #164)
+
+19+ new entries. Existing string entries swept to proper types so they render correctly in `/plugins` settings:
+
+- `ga4_property_id`, `newrelic_account_id` — `string` → `number`.
+- `aws_region` — description improved with valid options.
+- All new toggles use `type: boolean` with explicit `default` so they're spacebar-toggleable.
+- All new caps use `type: number` with `min`/`max`.
+- `registry_path` uses `type: file` for native file picker.
+
+#### 9. Test suite expansion (PR #163)
+
+- **`tests/test-deploy-fix-hooks.sh`** — 39 assertions across 11 cases (trigger detection, transient classification, dedup, budget cap, single-flight lock, registry layering, notify dispatch).
+- **`tests/test-safety-hooks.sh`** — 45/45 pass (each safety hook gets positive + negative tests).
+- Both wired into `tests/run-all.sh`.
+
+#### 10. New documentation
+
+- [`docs/deploy-fix.md`](docs/deploy-fix.md), [`docs/agents.md`](docs/agents.md), [`docs/safety-hooks.md`](docs/safety-hooks.md), [`docs/recap.md`](docs/recap.md), [`docs/migrating-from-v1.md`](docs/migrating-from-v1.md), [`docs/INDEX.md`](docs/INDEX.md).
+- Wiki: `Auto-Fix-Subsystem`, `Specialized-Agents`, `Safety-Hooks`, `Recap-Marquee`, `Multi-Account-Rotator`, `Migrating-from-v1` (new); `Home`, `Sidebar`, `Setup-Wizard`, `Configuration` (updated).
+
+### Changed
+
+- **Default agent for tool dispatch** is no longer raw `general-purpose`. The PreToolUse hook now silently routes via the specialist keyword map. To restore v1 behaviour, set `suggest_specialized_agents: false`.
+- **`/ops:setup`** has six new steps (2d, 3o, 6.5a, 6.5b, 6.5c, 6.5d). Existing steps are unchanged.
+- **`plugin.json` description + keywords** rewritten to mention the v2 surface.
+- **`README.md` + `claude-ops/README.md`** front-load a "What's new in v2.0" section before the existing feature list.
+
+### Migration
+
+**No breaking changes.** Every v2 subsystem is opt-out via a `userConfig` toggle. Existing v1 settings, registries, preferences, and daemon services are unchanged. Upgrade in place:
+
+```bash
+# inside Claude Code:
+/plugin update ops@lifecycle-innovations-limited-claude-ops
+/ops:setup   # walks through the 6 new steps; safe to skip any
+```
+
+See [`docs/migrating-from-v1.md`](docs/migrating-from-v1.md) for the full v1 → v2 reference.
+
+---
+
 ## [1.8.1] — 2026-04-26
 
 ### Fixed
