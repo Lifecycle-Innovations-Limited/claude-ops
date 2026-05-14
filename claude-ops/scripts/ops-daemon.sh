@@ -523,13 +523,27 @@ prefetch_briefing_cache() {
   local CACHE="$CACHE_DIR/briefing.json"
   local LAST_FETCH="$CACHE_DIR/.briefing_ts"
 
-  # Throttle: only run every 5 min
+  # Throttle: only run every 30 min by default.
+  #
+  # Why 30 min and not 5: every refresh fires `gh pr list` (line below) which
+  # consumes one GitHub REST API call against the user's personal token. At a
+  # 5-minute TTL that is 12 calls/hr * 24h = 288 calls/day from this single
+  # callsite, on top of any interactive `gh` use. Over a few days that
+  # accumulation alone can exhaust the 5000/hr REST budget that's shared
+  # with every other tool authenticated as the same user (gh CLI, MCP github
+  # server, hosted CI using the same PAT). 30 min keeps morning-briefing
+  # data fresh enough — open PR lists rarely change faster than that — and
+  # cuts the daily call volume to ~48.
+  #
+  # Override with $OPS_BRIEFING_PREFETCH_TTL (seconds) if a deployment
+  # genuinely needs faster cycles.
+  local PREFETCH_TTL="${OPS_BRIEFING_PREFETCH_TTL:-1800}"
   if [[ -f "$LAST_FETCH" ]]; then
     local last
     last=$(cat "$LAST_FETCH")
     local now
     now=$(date +%s)
-    if (( now - last < 300 )); then return 0; fi
+    if (( now - last < PREFETCH_TTL )); then return 0; fi
   fi
 
   log "BRAIN: refreshing briefing cache"
@@ -1070,6 +1084,62 @@ if changed:
   json.dump(data, open(tmp, "w"), indent=2)
   os.replace(tmp, path)
 PY
+  date +%s > "$LAST_CHECK"
+}
+
+# ── Kill stuck gh polling processes (REST rate-limit hygiene) ────────────
+# `gh pr checks <N> --watch` and `gh run watch <N>` poll the GitHub REST API
+# every ~2s indefinitely. When left behind by an interrupted skill or a
+# forgotten foreground command, a single watcher can burn 1800 calls/hr —
+# half the 5000/hr personal token bucket. This kills any gh poller older
+# than MAX_AGE_SECONDS (default 30 min) so the REST quota stays healthy
+# for interactive work.
+#
+# Scope: only matches `gh.*--watch` (the polling pattern). One-shot kills
+# (`gh pr merge`, `gh api`) are not affected. Self-throttled to 5 min.
+kill_stuck_gh_watchers() {
+  local LAST_CHECK="$DATA_DIR/cache/.gh_watcher_kill_ts"
+  local now; now=$(date +%s)
+  mkdir -p "$DATA_DIR/cache" 2>/dev/null || true
+  if [[ -f "$LAST_CHECK" ]]; then
+    local last; last=$(cat "$LAST_CHECK" 2>/dev/null || echo 0)
+    if (( now - last < 300 )); then return 0; fi
+  fi
+
+  local MAX_AGE_SECONDS="${OPS_GH_WATCHER_MAX_AGE:-1800}"
+  local killed=0
+
+  # ps -eo etime format: "MM:SS" | "HH:MM:SS" | "DD-HH:MM:SS"
+  # Parse via awk to seconds, kill anything older than threshold.
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local pid="${line%% *}"
+    [[ -z "$pid" ]] && continue
+    log "WATCHER-KILL: terminating stuck gh poller (PID $pid, age >${MAX_AGE_SECONDS}s)"
+    kill -TERM "$pid" 2>/dev/null || true
+    killed=$((killed + 1))
+  done < <(ps -eo pid,etime,command 2>/dev/null | awk -v max="$MAX_AGE_SECONDS" '
+    # Match gh ... --watch (excluding our own awk and grep noise)
+    /gh .*--watch/ && !/awk/ && !/grep/ {
+      et = $2
+      secs = 0
+      # Strip days prefix "DD-"
+      if (et ~ /-/) {
+        n = split(et, a, "-")
+        secs += a[1] * 86400
+        et = a[2]
+      }
+      # Parse remaining HH:MM:SS or MM:SS
+      n = split(et, b, ":")
+      if (n == 3) secs += b[1]*3600 + b[2]*60 + b[3]
+      else if (n == 2) secs += b[1]*60 + b[2]
+      if (secs > max) print $1
+    }
+  ')
+
+  if (( killed > 0 )); then
+    log "WATCHER-KILL: killed $killed stuck gh poller process(es)"
+  fi
   date +%s > "$LAST_CHECK"
 }
 
@@ -1716,6 +1786,7 @@ while true; do
 
   # ── Phase 16: infrastructure hardening ───────────────────────────────────
   check_rate_limits                # Every 5 min: reset rollover windows + warnings
+  kill_stuck_gh_watchers           # Every 5 min: TERM gh ... --watch processes >30 min old
   check_credential_expiry          # Hourly: offline check of *_expires_at / *_created_at
 
   write_daemon_health

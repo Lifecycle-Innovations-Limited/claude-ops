@@ -9,6 +9,8 @@
 
 </div>
 
+> **Latest stable: v2.1.0** — see [CHANGELOG.md](../CHANGELOG.md) for releases since v2.0.0.
+
 ---
 
 ## TL;DR
