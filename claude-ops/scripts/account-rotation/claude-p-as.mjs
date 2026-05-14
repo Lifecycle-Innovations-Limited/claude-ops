@@ -282,7 +282,7 @@ async function main(argv) {
   });
 
   const exitCode = await new Promise((resolve) => {
-    child.on('exit', (code, signal) => {
+    child.on('close', (code, signal) => {
       if (signal) {
         const n = constants.signals[signal];
         resolve(n == null ? 128 : 128 + n);
