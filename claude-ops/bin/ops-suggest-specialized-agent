@@ -10,6 +10,10 @@
 set -e
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 . "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh" 2>/dev/null || { config() { echo "${2:-}"; }; }
+# Route claude invocations through the credit-pool wrapper when
+# CLAUDE_OPS_USE_CREDIT_POOL=1; otherwise calls claude directly.
+# shellcheck source=../scripts/lib/claude-invoke.sh
+. "$PLUGIN_ROOT/scripts/lib/claude-invoke.sh"
 
 [ "$(config suggest_specialized_agents true)" = "false" ] && exit 0
 
@@ -103,7 +107,8 @@ model: haiku|sonnet|opus
 Final line of your output: 'NEW: <name>' or 'SKIP: <reason>'."
 
   nohup bash -c "
-    printf '%s' \"\$1\" | claude -p --model haiku --dangerously-skip-permissions --no-session-persistence > '$drafter_log' 2>&1
+    . '$PLUGIN_ROOT/scripts/lib/claude-invoke.sh'
+    printf '%s' \"\$1\" | claude_invoke -p --model haiku --dangerously-skip-permissions --no-session-persistence > '$drafter_log' 2>&1
   " _ "$draft_prompt" </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
 fi
