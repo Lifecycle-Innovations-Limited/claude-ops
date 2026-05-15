@@ -10,8 +10,7 @@
 # Files in this directory:
 #   rotate.mjs        - main rotation logic, holds .rotating lock (PID-tagged)
 #   daemon.mjs        - launchd-managed monitor (com.claude-ops.account-rotation)
-#   ai-brain.mjs      - Bedrock vision for stuck OAuth; planner may call Context7 (npx ctx7)
-#                         + DuckDuckGo; optional billing scrape after successful OAuth
+#   ai-brain.mjs      - Haiku fallback for stuck OAuth pages
 #   state.json        - activeAccount, lastRotation, per-account util snapshots
 #   config.json       - account list, autoRotate toggle
 #   .rotating         - lock file: <ISO ts>\n<pid>; auto-broken if PID dead or >15min
@@ -36,14 +35,10 @@
 #     up stale links from prior rotation calls (subject is identical for all).
 #   - Rejects emails older than the poll start (5s clock skew tolerance).
 #
-#   Daemon auto-rotation uses --no-browser only (no ai-brain). Browser fallback here
-#   runs full rotate.mjs OAuth + ai-brain + billing scrape (needs AWS creds for Bedrock;
-#   PATH must include npx for Context7 research).
-#
 # OAuth stall handling:
 #   - Authorize button: 6 attempts × 5s = 30s, then escalates to ai-brain
 #   - General URL stall: 2 stagnant steps -> ai-brain
-#   - ai-brain: Bedrock Converse (not API key); optional research via CLAUDE_ROTATOR_* env
+#   - ai-brain (Haiku) pulls API key from env -> Doppler -> keychain
 #   - Max 6 ai-brain decisions per rotation
 #
 # Recovery from stuck state:
@@ -99,16 +94,6 @@ if [ $# -ge 1 ] && [ -n "${1:-}" ]; then
   TARGET_ARG=(--to "$1")
 fi
 
-# Preflight: live-query all accounts and print recommendation BEFORE rotating.
-# Exit code 2 from --recommend = all accounts live-confirmed exhausted.
-echo "→ Preflight: scanning live utilization..."
-node "$DIR/rotate.mjs" --recommend 2>&1 | sed 's/^/   /'
-PREFLIGHT_RC=${PIPESTATUS[0]}
-if [ "$PREFLIGHT_RC" -eq 2 ]; then
-  echo "⚠  All Anthropic accounts live-confirmed at >=95% util."
-  echo "   Rotation will trigger Bedrock fallback automatically."
-fi
-
 run_with_watchdog() {
   # Runs a command in the background with a hard kill after $WATCHDOG_SECONDS.
   # Returns the command's exit code, or 124 if the watchdog fired.
@@ -147,12 +132,12 @@ echo ""
 node "$DIR/rotate.mjs" --status 2>&1 | head -40
 
 # macOS notification
-osascript -e 'display notification "Account rotated to new keychain entry" with title "Claude Rotation"' 2>/dev/null
+osascript -e 'display notification "Account rotated — restart Claude Code session" with title "Claude Rotation"' 2>/dev/null
 
 echo ""
 if [ "$FAST_OK" -eq 1 ]; then
-  echo "✅ Done (fast path). Token swapped in keychain — next request will pick it up."
+  echo "✅ Done (fast path). Start a new Claude Code session to use the fresh account."
 else
-  echo "✅ Done (browser fallback). Token swapped in keychain — next request will pick it up."
+  echo "✅ Done (browser fallback). Start a new Claude Code session to use the fresh account."
 fi
 echo "   (Running sessions may still use the old token — exit and re-enter)"
