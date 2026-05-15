@@ -1,0 +1,12 @@
+# claude-ops scheduled jobs — examples
+# Copy entries into your local crontab via `crontab -e`.
+# Paths assume claude-ops is checked out at ~/Projects/claude-ops.
+
+# ── Anthropic $200/mo Agent SDK credit redemption sweep ──────────────────────
+# Effective 2026-06-15. Claims the monthly credit on day 1 of each month at
+# 09:00 local time. The credit is monthly + non-rolling, so missing day 1
+# leaves up to 30 days of unclaimed credit on the table per account.
+#
+# Pass --live to actually claim; default is --dry-run. Verify DOM selectors
+# in kapture-claim-credits.mjs against the live console once before flipping.
+0 9 1 * * cd ~/Projects/claude-ops && node claude-ops/scripts/account-rotation/kapture-claim-credits.mjs --live >> ~/.claude/credit-claim.log 2>&1
