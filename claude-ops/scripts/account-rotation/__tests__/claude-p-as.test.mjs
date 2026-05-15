@@ -19,14 +19,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
 import { parseArgs, pickAccount, effectiveBudget, parseUsageCost, decrementLedger } from '../claude-p-as.mjs';
-import {
-  readLedger,
-  writeLedger,
-  findAccount,
-  upsertAccount,
-  MAX_PLAN_MONTHLY_USD,
-  SCHEMA_VERSION,
-} from '../ledger.mjs';
+import { readLedger, findAccount, upsertAccount, MAX_PLAN_MONTHLY_USD, SCHEMA_VERSION } from '../ledger.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(__dirname, '..', 'claude-p-as.mjs');
