@@ -53,11 +53,20 @@
 //    --help                          Print this header.
 // ──────────────────────────────────────────────────────────────────────────────
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
+
+import {
+  MAX_PLAN_MONTHLY_USD,
+  SCHEMA_VERSION,
+  readLedger,
+  writeLedger,
+  findAccount,
+  upsertAccount,
+} from './ledger.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
@@ -159,17 +168,21 @@ function loadAccounts() {
 }
 
 function loadLedger() {
-  if (!existsSync(LEDGER_PATH)) return { version: 1, updated_at: null, accounts: {} };
   try {
-    return JSON.parse(readFileSync(LEDGER_PATH, 'utf8'));
-  } catch {
-    return { version: 1, updated_at: null, accounts: {} };
+    return readLedger(LEDGER_PATH);
+  } catch (e) {
+    if (e.code === 'LEDGER_VERSION_MISMATCH') {
+      console.error(`[fatal] ${e.message}`);
+      process.exit(2);
+    }
+    // Unreadable / corrupt → start fresh (will be written as v2 on next save)
+    console.error(`[warn] ledger unreadable (${e.message}), starting fresh`);
+    return { schema_version: SCHEMA_VERSION, month: ymKey(), accounts: [] };
   }
 }
 
 function saveLedger(ledger) {
-  mkdirSync(dirname(LEDGER_PATH), { recursive: true });
-  writeFileSync(LEDGER_PATH, JSON.stringify(ledger, null, 2) + '\n');
+  writeLedger(LEDGER_PATH, ledger);
 }
 
 function ymKey(date = new Date()) {
@@ -325,22 +338,26 @@ async function main() {
     for (const r of batchResults) {
       results.push(r);
       if (!DRY_RUN && r && !r.error) {
-        ledger.accounts[r.email] ??= {};
-        const prev = ledger.accounts[r.email][cycle];
+        const prev = findAccount(ledger, r.email);
         const claimed = !!(r.claimed || prev?.claimed);
         const claimedAt =
-          prev?.claimed && prev.claimed_at
-            ? prev.claimed_at
+          prev?.claimed && prev.last_claim_at
+            ? prev.last_claim_at
             : r.claimed
               ? new Date().toISOString()
-              : (prev?.claimed_at ?? null);
-        ledger.accounts[r.email][cycle] = {
+              : (prev?.last_claim_at ?? null);
+        // P0b fix: seed remaining_usd = MAX_PLAN_MONTHLY_USD when claim succeeds
+        // and UI did not return a parseable balance.
+        const remainingUsd = r.remaining_usd ?? (claimed ? MAX_PLAN_MONTHLY_USD : (prev?.remaining_usd ?? null));
+        upsertAccount(ledger, r.email, {
+          cycle,
           claimed,
           already_claimed: !!(r.already_claimed || prev?.already_claimed || prev?.claimed),
-          remaining_usd: r.remaining_usd ?? prev?.remaining_usd ?? null,
+          remaining_usd: remainingUsd,
           screenshot: r.screenshot ?? prev?.screenshot,
-          claimed_at: claimedAt,
-        };
+          last_claim_at: claimedAt,
+          last_call_at: prev?.last_call_at ?? null,
+        });
       }
     }
   }
