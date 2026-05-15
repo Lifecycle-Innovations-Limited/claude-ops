@@ -126,10 +126,7 @@ test('parseUsageCost extracts $cost from claude output strings', () => {
   assert.equal(parseUsageCost('foo\n', 'Cost: $0.1234\n'), 0.1234);
   assert.equal(parseUsageCost('', 'Total cost: $1.5'), 1.5);
   assert.equal(parseUsageCost('no money here', ''), null);
-  assert.equal(
-    parseUsageCost('The project has a $500 cost estimate.\n', 'Cost: $0.05\n'),
-    0.05,
-  );
+  assert.equal(parseUsageCost('The project has a $500 cost estimate.\n', 'Cost: $0.05\n'), 0.05);
 });
 
 test('decrementLedger atomically subtracts cost and stamps last_call_at', () => {
