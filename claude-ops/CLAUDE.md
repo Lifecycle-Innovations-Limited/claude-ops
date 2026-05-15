@@ -20,6 +20,10 @@ These rules apply to ALL skills in this plugin. They are non-negotiable and over
 
 Run `tests/test-no-secrets.sh` before every commit to verify.
 
+## Credit-pool gate — `CLAUDE_OPS_USE_CREDIT_POOL`
+
+Daemon scripts that invoke Claude (recap digest, deploy-fix fixer, agent-drafter hook) route through `scripts/lib/claude-invoke.sh`, which provides a `claude_invoke` shell function. When `CLAUDE_OPS_USE_CREDIT_POOL=1` is exported in the environment, `claude_invoke` delegates to `scripts/account-rotation/claude-p-as.mjs`, which selects the highest-credit Max-OAuth account from the shared ledger. When the variable is unset or any other value, `claude_invoke` calls `claude` directly (standard keychain account), preserving existing behaviour. Set `CLAUDE_OPS_USE_CREDIT_POOL=1` only after the credit ledger is activated (target: 2026-06-15); before that date the wrapper exits 2 when the ledger is empty and daemons would fail silently. The gate can be exported in your shell profile or per-launch environment and takes effect immediately without restarting daemons.
+
 ## Rule 1 — Max 4 options per AskUserQuestion
 
 The `AskUserQuestion` tool enforces a hard schema limit of `<=4` items in the `options` array. Passing more than 4 options causes an `InputValidationError` and the skill crashes.
