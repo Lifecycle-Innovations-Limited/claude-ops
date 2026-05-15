@@ -267,6 +267,9 @@ async function main(argv) {
   const userArgs = [];
   for (let i = 0; i < opts.rest.length; i++) {
     const a = opts.rest[i];
+    if (a.startsWith('--max-budget-usd=')) {
+      continue;
+    }
     if (a === '--max-budget-usd' && opts.rest[i + 1] != null) {
       i++; // skip the value too
       continue;
