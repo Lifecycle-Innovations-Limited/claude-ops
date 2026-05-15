@@ -187,6 +187,4 @@ stopwords = [
 # still runs against scripts/account-rotation/ (handles real auth tokens).
 	regexes = [
 	  '''9d1c250a-e61b-44d9-88ed-5944d1962f5e''',  # Claude Code OAuth client ID (public)
-	  '''8ae31cacf141669ddfb5da''',
-	  '''cafebabe:deadbeef''',
 	]
