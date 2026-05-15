@@ -192,8 +192,13 @@ dispatch_fix_agent() {
 
   command -v claude >/dev/null || { lock_release "$lock_id"; return 5; }
 
+  # Capture invoker path so the nohup subshell can source it without relying
+  # on $PLUGIN_ROOT being exported (it may not be in all caller environments).
+  local _invoker="$PLUGIN_ROOT/scripts/lib/claude-invoke.sh"
+
   nohup bash -c "
-    printf '%s' \"\$1\" | claude -p --model $model $danger_flag --no-session-persistence > '$fix_log' 2>&1
+    . '$_invoker'
+    printf '%s' \"\$1\" | claude_invoke -p --model $model $danger_flag --no-session-persistence > '$fix_log' 2>&1
     rm -f '$STATE_DIR/lock-$lock_id'
   " _ "$prompt" </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
