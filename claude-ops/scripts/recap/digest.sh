@@ -1,9 +1,15 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # AI-generated rolling digest: summarizes the last 10 digests + current session recaps
 # + recent shell activity into one unified ticker line. 20s throttle (bypassable via
 # THROTTLE_OVERRIDE=1 — daemon.sh sets this).
 
 set -e
+
+# Route claude invocations through the credit-pool wrapper when
+# CLAUDE_OPS_USE_CREDIT_POOL=1; otherwise calls claude directly.
+_CI_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/claude-invoke.sh
+. "$_CI_SH_DIR/../lib/claude-invoke.sh"
 DIGEST=/tmp/claude-recap-digest
 LOG=/tmp/claude-recap-digest.log
 LOCK=/tmp/claude-recap-digest.lock
@@ -70,7 +76,7 @@ ${shell_activity:-(none)}
 
 Produce ONE single line (max 240 chars) describing the CURRENT state of work, weighted heavily toward the most-recent activity (last 1-2 headlines + current session activity + last few shell commands). DROP themes from older headlines that are no longer mentioned in current activity — assume they are resolved or no longer relevant. Only carry forward an older theme if there is concrete evidence in the current activity that it is still in flight. Translate raw shell commands into plain English (e.g., 'ssh into bastion', 'inspecting prod logs', 'running tests'). Plain English ticker style. No bullets, no quotes, no preface, no markdown."
 
-result=$(printf '%s' "$prompt" | claude -p --model haiku --no-session-persistence --output-format text 2>/dev/null | head -c 260 | LC_ALL=C tr '\n' ' ')
+result=$(printf '%s' "$prompt" | claude_invoke -p --model haiku --no-session-persistence --output-format text 2>/dev/null | head -c 260 | LC_ALL=C tr '\n' ' ')
 
 # Reject Claude error / auth / quota strings — never let them pollute the
 # digest OR the rolling log (which feeds back as PRIOR HEADLINES on next run).
