@@ -1,10 +1,10 @@
 # claude-ops
 
-> **v2.1.0** — Autonomy Layer · Deploy Auto-Fix · Safety Hooks · Specialist Agents · Recap Marquee · Multi-Account Rotator · Multi-Workspace Slack · ops-ci Current-State Filter · Credentials Audit · 35 Skills · 18 Agents
+> **v2.2.0** — Autonomy Layer · Deploy Auto-Fix · Safety Hooks · Specialist Agents · Recap Marquee · Multi-Account Rotator · Multi-Workspace Slack · ops-ci Current-State Filter · Credentials Audit · 35 Skills · 18 Agents
 
-## What's new since v2.0.0
+## What's new in v2.2.0
 
-- **v2.1.0** — Minor release rolling up the v2.0.5–v2.0.9 feature series. Multi-workspace Slack, ops-ci current-state filter, `/ops:credentials` audit, telegram preflight, userConfig schema upgrades — see [CHANGELOG.md](CHANGELOG.md#210--2026-05-02) for the full list.
+- **v2.2.0** — Audit fixes: plugin validation (install unblocked), deploy-fix test suite (45/45 passing), `set -e` safety, account-rotation stdin handling. See [CHANGELOG.md](CHANGELOG.md#220--2026-05-16) for the full list.
 
 A Claude Code plugin that turns Claude into a business operating system **and** an autonomy layer. Run `/ops` for the interactive command center — pixel-art dashboard with instant hotkey access to morning briefings, inbox, fires, deploys, revenue, and YOLO mode. Or just keep working — v2's hooks watch every merge, every build, every commit, every push, and every agent dispatch in the background.
 
