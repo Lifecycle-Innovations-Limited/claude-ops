@@ -1,15 +1,37 @@
 #!/usr/bin/env bash
 # ops-cron-competitor-intel.sh — Weekly Competitor Intel cron job
 # Searches competitors and own brand reviews, reports to Telegram
-# Configure via env vars: COMPETITOR_A_QUERY, COMPETITOR_B_QUERY, BRAND_QUERY, REPORT_TIMEZONE
+# Configure via /ops:setup (writes to preferences.json) OR env vars:
+#   COMPETITOR_A_QUERY, COMPETITOR_B_QUERY, BRAND_QUERY, REPORT_TIMEZONE
+# Env vars override preferences.json when both are set.
 set -euo pipefail
 
 DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 LOG_DIR="$DATA_DIR/logs"
 LOG="$LOG_DIR/competitor-intel.log"
+PREFS_PATH="$DATA_DIR/preferences.json"
 
 mkdir -p "$LOG_DIR"
 log() { printf '%s [competitor-intel] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" | tee -a "$LOG"; }
+
+# ── Resolve query config from preferences.json (env vars take precedence) ─
+pref_get() {
+  local key="$1"
+  [[ -f "$PREFS_PATH" ]] || { echo ""; return; }
+  jq -r --arg k "$key" '.competitor_intel[$k] // ""' "$PREFS_PATH" 2>/dev/null || echo ""
+}
+
+COMPETITOR_A_QUERY="${COMPETITOR_A_QUERY:-$(pref_get competitor_a_query)}"
+COMPETITOR_B_QUERY="${COMPETITOR_B_QUERY:-$(pref_get competitor_b_query)}"
+BRAND_QUERY="${BRAND_QUERY:-$(pref_get brand_query)}"
+REPORT_TIMEZONE="${REPORT_TIMEZONE:-$(pref_get report_timezone)}"
+
+# ── Refuse to run with placeholder queries ────────────────────────────────
+if [[ -z "$COMPETITOR_A_QUERY" && -z "$COMPETITOR_B_QUERY" && -z "$BRAND_QUERY" ]]; then
+  log "SKIP: no competitor/brand queries configured. Run /ops:setup to configure."
+  log "HEARTBEAT_OK"
+  exit 0
+fi
 
 # ── Resolve credentials ───────────────────────────────────────────────────
 TELEGRAM_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
@@ -67,9 +89,9 @@ print(' | '.join(clean[:2]) if clean else 'No results')
 # ── Run searches ──────────────────────────────────────────────────────────
 log "Running weekly competitor intelligence searches"
 
-COMPETITOR_A_RESULT=$(search_web "${COMPETITOR_A_QUERY:-competitor-a reviews $YEAR}" "Competitor A")
-COMPETITOR_B_RESULT=$(search_web "${COMPETITOR_B_QUERY:-competitor-b new products $YEAR}" "Competitor B")
-BRAND_RESULT=$(search_web "${BRAND_QUERY:-your-brand reviews $YEAR}" "Brand mentions")
+COMPETITOR_A_RESULT=$([[ -n "$COMPETITOR_A_QUERY" ]] && search_web "$COMPETITOR_A_QUERY" "Competitor A" || echo "(not configured)")
+COMPETITOR_B_RESULT=$([[ -n "$COMPETITOR_B_QUERY" ]] && search_web "$COMPETITOR_B_QUERY" "Competitor B" || echo "(not configured)")
+BRAND_RESULT=$([[ -n "$BRAND_QUERY" ]] && search_web "$BRAND_QUERY" "Brand mentions" || echo "(not configured)")
 
 # ── Build report ──────────────────────────────────────────────────────────
 DATE_LABEL=$(TZ="${REPORT_TIMEZONE:-UTC}" date "+%a %d %b %Y")
