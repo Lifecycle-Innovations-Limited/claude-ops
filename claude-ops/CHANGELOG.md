@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.3] — 2026-05-17
+### Fixed
+- **Doppler MCP server failed to connect on every reload.** Plugin's `.mcp.json` invoked `npx -y @dopplerhq/mcp-server` which tries to run a binary matching the package name. The actual bin is `doppler-mcp` (`bin: { "doppler-mcp": "bin/doppler-mcp" }`), so npx couldn't find a command and exited with `command not found`. Switched to `npx -y -p @dopplerhq/mcp-server doppler-mcp` form which explicitly names the binary, eliminating the `Failed to connect` error from `/reload-plugins`.
+
 ## [2.2.2] — 2026-05-16
 ### Changed
 - **`competitor-intel` cron rewritten as self-discovering LLM-driven analyzer.** Previous version posted Telegram digests from 2 hardcoded queries (`COMPETITOR_A_QUERY`, `COMPETITOR_B_QUERY`, `BRAND_QUERY`) that `/ops:setup` never collected — every Monday at 10am the cron broadcast placeholder garbage like `"competitor-a reviews 2026"`. New pipeline: Tavily discovery pass auto-surfaces the current competitor landscape for `{brand_name}` in `{category}`; diffs against persisted `competitor_state.json` to flag NEW entrants week-over-week; runs per-competitor news searches (pricing/launches/funding/layoffs, last 7d); brand-mention pass; Sonnet synthesis (`claude_invoke`, ~5–10k tokens/week against Max-OAuth, no API billing) produces a one-page strategic delta with NEW entrants / competitor moves / brand signal / threats & opportunities. Graceful degradation: missing `TAVILY_API_KEY` → SKIP and exit 0; missing `claude_invoke` or empty LLM response → raw Tavily fallback. (#237)
