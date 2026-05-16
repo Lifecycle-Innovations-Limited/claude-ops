@@ -1154,9 +1154,7 @@ install_daemon_launchd() {
   mkdir -p "$agents_dir"
 
   local daemon_plist_src="$SCRIPT_DIR/scripts/com.claude-ops.daemon.plist"
-  local keepalive_plist_src="$SCRIPT_DIR/scripts/com.claude-ops.wacli-keepalive.plist"
   local daemon_plist_dst="$agents_dir/com.claude-ops.daemon.plist"
-  local keepalive_plist_dst="$agents_dir/com.claude-ops.wacli-keepalive.plist"
 
   local bash_path
   bash_path="$(command -v bash)"
@@ -1172,8 +1170,7 @@ install_daemon_launchd() {
 
   _install_launchd_plist "$daemon_plist_src" "$daemon_plist_dst" \
     "$bash_path" "$plugin_root" "com.claude-ops.daemon"
-  _install_launchd_plist "$keepalive_plist_src" "$keepalive_plist_dst" \
-    "$bash_path" "$plugin_root" "com.claude-ops.wacli-keepalive"
+  # wacli-keepalive decommissioned in v2.0.3 — WhatsApp now uses Baileys MCP.
 }
 
 # Install a single launchd plist: substitute placeholders, copy, bootstrap.
@@ -1387,10 +1384,19 @@ ENSURE_SERVICES_INTERVAL="${ENSURE_SERVICES_INTERVAL:-300}"  # every 5 min
 
 # Expected launchd agents (macOS) / systemd units (Linux).
 # Format: "label|plist_src_basename|description"
-EXPECTED_SERVICES=(
-  "com.claude-ops.daemon|com.claude-ops.daemon.plist|ops daemon"
-  "com.claude-ops.wacli-keepalive|com.claude-ops.wacli-keepalive.plist|wacli keepalive"
-)
+#
+# IMPORTANT: do NOT include com.claude-ops.daemon here. The daemon must not
+# monitor itself — launchd's KeepAlive=true already auto-restarts on crash.
+# Self-monitoring causes the ENSURE loop to read its own stale launchctl
+# exit=1 status during early init, call `launchctl kickstart` on itself,
+# receive SIGTERM, and respawn every ~30s in a silent crash loop (no
+# stderr/stdout, just rapid START log entries).
+#
+# wacli-keepalive was decommissioned in v2.0.3 — WhatsApp ops moved to the
+# Baileys bridge (com.<user>.whatsapp-bridge) and mcp__whatsapp__* tools.
+# Including it caused noisy "cannot repair — missing bash or source plist"
+# entries every monitor loop because its plist no longer ships in the package.
+EXPECTED_SERVICES=()
 
 ensure_all_services() {
   local now
