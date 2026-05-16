@@ -148,8 +148,13 @@ resolve_health_url() {
     [ -n "$v" ] && { echo "$v"; return; }
   fi
   if [ -f "$PLUGIN_ROOT/config/post-merge-services.example.json" ]; then
-    jq -r --arg k "$key" '.[$k].health // ""' "$PLUGIN_ROOT/config/post-merge-services.example.json" 2>/dev/null
+    jq -r --arg k "$key" '.[$k].health // ""' "$PLUGIN_ROOT/config/post-merge-services.example.json" 2>/dev/null || true
   fi
+  # Always succeed. When no registry layer matches, the function's last command
+  # is the `[ -f ... ]` test (false → status 1) or a failed jq; either would
+  # abort a `set -e` caller doing `URL=$(resolve_health_url ...)`. The empty
+  # stdout is the intended "not found" signal — return status must stay 0.
+  return 0
 }
 
 resolve_version_url() {
@@ -168,8 +173,10 @@ resolve_version_url() {
     [ -n "$v" ] && { echo "$v"; return; }
   fi
   if [ -f "$PLUGIN_ROOT/config/post-merge-services.example.json" ]; then
-    jq -r --arg k "$key" '.[$k].version // ""' "$PLUGIN_ROOT/config/post-merge-services.example.json" 2>/dev/null
+    jq -r --arg k "$key" '.[$k].version // ""' "$PLUGIN_ROOT/config/post-merge-services.example.json" 2>/dev/null || true
   fi
+  # Always succeed — see resolve_health_url above for the rationale.
+  return 0
 }
 
 dispatch_fix_agent() {
