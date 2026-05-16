@@ -74,13 +74,17 @@ already_seen() {
 
 # Detect transient failure signatures. Returns 0 (transient) or 1.
 is_transient() {
-  printf '%s' "$1" | grep -qE \
-'ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|TLS handshake timeout|unexpected EOF while reading|Could not resolve host|network is unreachable|\
-npm error code E429|npm error 5(0[0-9]|2[0-9])|HTTP(S)?Error:? 429|HTTP(S)?Error:? 5[0-9]{2}|\
-The runner has received a shutdown signal|The hosted runner lost communication|The operation was canceled\.|GH001:|\
-TooManyRequestsException|ThrottlingException|RequestLimitExceeded|Service Unavailable Exception|\
-Apple ID server.*temporarily unavailable|App Store Connect.*timed out|ASC.*5[0-9]{2}|\
-Simulator failed to launch|ECR.*throttle'
+  # Pattern stored in a variable so the regex is one logical token —
+  # the previous inline backslash-continuation produced literal '\' chars
+  # inside single-quoted alternatives and broke matching under set -e.
+  local pat
+  pat='ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|TLS handshake timeout|unexpected EOF while reading|Could not resolve host|network is unreachable'
+  pat="$pat"'|npm error code E429|npm error 5(0[0-9]|2[0-9])|HTTP(S)?Error:? 429|HTTP(S)?Error:? 5[0-9]{2}'
+  pat="$pat"'|The runner has received a shutdown signal|The hosted runner lost communication|The operation was canceled\.|GH001:'
+  pat="$pat"'|TooManyRequestsException|ThrottlingException|RequestLimitExceeded|Service Unavailable Exception'
+  pat="$pat"'|Apple ID server.*temporarily unavailable|App Store Connect.*timed out|ASC.*5[0-9]{2}'
+  pat="$pat"'|Simulator failed to launch|ECR.*throttle'
+  printf '%s' "$1" | grep -qE "$pat"
 }
 
 notify() {
@@ -126,7 +130,12 @@ locate_repo() {
 
 # Resolve health URL via layered registry: project → user → plugin example.
 resolve_health_url() {
-  local slug="$1" base="$2" key="$slug:$base"
+  # Split onto separate `local` lines: bash evaluates each RHS in the parent
+  # scope first, so multi-assignment cross-refs (`key="$slug:$base"`) trip
+  # set -u with "slug: unbound variable".
+  local slug="$1"
+  local base="$2"
+  local key="$slug:$base"
   local proj=$(locate_repo "$slug" 2>/dev/null)
   if [ -n "$proj" ] && [ -f "$proj/.claude/post-merge-services.json" ]; then
     local v=$(jq -r --arg k "$key" '.[$k].health // ""' "$proj/.claude/post-merge-services.json" 2>/dev/null)
@@ -139,12 +148,19 @@ resolve_health_url() {
     [ -n "$v" ] && { echo "$v"; return; }
   fi
   if [ -f "$PLUGIN_ROOT/config/post-merge-services.example.json" ]; then
-    jq -r --arg k "$key" '.[$k].health // ""' "$PLUGIN_ROOT/config/post-merge-services.example.json" 2>/dev/null
+    jq -r --arg k "$key" '.[$k].health // ""' "$PLUGIN_ROOT/config/post-merge-services.example.json" 2>/dev/null || true
   fi
+  # Always succeed. When no registry layer matches, the function's last command
+  # is the `[ -f ... ]` test (false → status 1) or a failed jq; either would
+  # abort a `set -e` caller doing `URL=$(resolve_health_url ...)`. The empty
+  # stdout is the intended "not found" signal — return status must stay 0.
+  return 0
 }
 
 resolve_version_url() {
-  local slug="$1" base="$2" key="$slug:$base"
+  local slug="$1"
+  local base="$2"
+  local key="$slug:$base"
   local proj=$(locate_repo "$slug" 2>/dev/null)
   if [ -n "$proj" ] && [ -f "$proj/.claude/post-merge-services.json" ]; then
     local v=$(jq -r --arg k "$key" '.[$k].version // ""' "$proj/.claude/post-merge-services.json" 2>/dev/null)
@@ -157,13 +173,20 @@ resolve_version_url() {
     [ -n "$v" ] && { echo "$v"; return; }
   fi
   if [ -f "$PLUGIN_ROOT/config/post-merge-services.example.json" ]; then
-    jq -r --arg k "$key" '.[$k].version // ""' "$PLUGIN_ROOT/config/post-merge-services.example.json" 2>/dev/null
+    jq -r --arg k "$key" '.[$k].version // ""' "$PLUGIN_ROOT/config/post-merge-services.example.json" 2>/dev/null || true
   fi
+  # Always succeed — see resolve_health_url above for the rationale.
+  return 0
 }
 
 dispatch_fix_agent() {
-  # $1 = prompt template path (in $PLUGIN_ROOT/prompts/), $2 = lock_id, rest = template vars as KEY=VAL
-  local template="$1" lock_id="$2"; shift 2
+  # $1 = agent name (resolved via `claude --agent <name>` against agents/<name>.md),
+  # $2 = lock_id, $3.. = context KEY=VAL pairs that become "KEY: VAL" lines in the brief.
+  # Legacy callers passed prompt template paths like "build-fix.md" / "deploy-fix.md";
+  # those are remapped to the new agent names so the contract change is transparent.
+  local agent_name="$1"
+  local lock_id="$2"
+  shift 2
   if ! lock_acquire "$lock_id"; then
     return 2  # already in flight
   fi
@@ -174,19 +197,31 @@ dispatch_fix_agent() {
     return 3
   fi
 
-  local prompt_file="$PLUGIN_ROOT/prompts/$template"
-  if [ ! -f "$prompt_file" ]; then
+  # Legacy → new contract mapping.
+  agent_name="${agent_name%.md}"
+  case "$agent_name" in
+    build-fix) agent_name="build-fixer" ;;
+    deploy-fix) agent_name="deploy-fixer" ;;
+  esac
+
+  # If the agent file is absent, treat as misconfiguration: release the lock
+  # and surface rc=4 so callers can fall back to manual notification.
+  if [ ! -f "$PLUGIN_ROOT/agents/$agent_name.md" ]; then
     lock_release "$lock_id"
     return 4
   fi
-  local prompt=$(cat "$prompt_file")
+
+  # Build the brief from KEY=VAL pairs. One pair per line so downstream parsers
+  # (and the test mock) can match on `REPO: owner/repo` etc.
+  local brief="Context for this fix:"
+  local kv k v
   for kv in "$@"; do
-    local k="${kv%%=*}" v="${kv#*=}"
-    prompt="${prompt//\{\{${k}\}\}/$v}"
+    k="${kv%%=*}"
+    v="${kv#*=}"
+    brief="$brief"$'\n'"$k: $v"
   done
 
   local fix_log="$LOGS_DIR/fix-${lock_id}-$(date +%s).log"
-  local model=$(config fix_model haiku)
   local danger_flag="--permission-mode acceptEdits"
   [ "$(config allow_dangerous false)" = "true" ] && danger_flag="--dangerously-skip-permissions"
 
@@ -198,9 +233,9 @@ dispatch_fix_agent() {
 
   nohup bash -c "
     . '$_invoker'
-    printf '%s' \"\$1\" | claude_invoke -p --model $model $danger_flag --no-session-persistence > '$fix_log' 2>&1
+    printf '%s' \"\$1\" | claude_invoke -p --agent $agent_name $danger_flag --no-session-persistence > '$fix_log' 2>&1
     rm -f '$STATE_DIR/lock-$lock_id'
-  " _ "$prompt" </dev/null >/dev/null 2>&1 &
+  " _ "$brief" </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
   echo "$fix_log"
   return 0

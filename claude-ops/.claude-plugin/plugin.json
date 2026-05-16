@@ -1,7 +1,7 @@
 {
   "name": "ops",
-  "version": "2.0.6",
-  "description": "Business operations command center for Claude Code — 30 skills, 14 agents, and a smart background daemon that manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (all AWS services), revenue (Stripe + RevenueCat), e-commerce (Shopify), marketing (Klaviyo/Meta/GA4/GSC), monitoring (Datadog/New Relic/OTEL), and voice (Bland AI/ElevenLabs/Whisper). Includes /gtm go-to-market planner, /ops:projects portfolio dashboard, and YOLO mode for autonomous operation with 4 parallel C-suite agents.",
+  "version": "2.2.0",
+  "description": "Business operations command center for Claude Code — 35 skills, 18 agents, and a smart background daemon that manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (all AWS services), revenue (Stripe + RevenueCat), e-commerce (Shopify), marketing (Klaviyo/Meta/GA4/GSC), monitoring (Datadog/New Relic/OTEL), and voice (Bland AI/ElevenLabs/Whisper). Includes /gtm go-to-market planner, /ops:projects portfolio dashboard, and YOLO mode for autonomous operation with 4 parallel C-suite agents.",
   "author": {
     "name": "Lifecycle Innovations Limited",
     "url": "https://github.com/Lifecycle-Innovations-Limited"
@@ -121,27 +121,24 @@
     "fix_model": {
       "type": "string",
       "title": "Fix-agent model",
-      "description": "Anthropic model the fixer runs on. Default haiku (fast/cheap). Use sonnet/opus for harder failures.",
-      "default": "haiku",
-      "enum": ["opus", "sonnet", "haiku"]
+      "description": "Anthropic model the fixer runs on. Default haiku (fast/cheap). Use sonnet/opus for harder failures. Allowed values: opus, sonnet, haiku.",
+      "default": "haiku"
     },
     "max_fixes_per_hour": {
       "type": "number",
       "title": "Per-repo fix budget per hour",
-      "description": "Cap on auto-fix dispatches per repo per hour.",
+      "description": "Cap on auto-fix dispatches per repo per hour. Suggested values: 1, 3, 5, 10.",
       "default": 3,
       "min": 0,
-      "max": 20,
-      "enum": [1, 3, 5, 10]
+      "max": 20
     },
     "watcher_timeout_seconds": {
       "type": "number",
       "title": "Deploy watcher timeout (seconds)",
-      "description": "Max wait for deploy workflow completion.",
+      "description": "Max wait for deploy workflow completion. Suggested values: 300, 600, 900, 1800, 3600.",
       "default": 1800,
       "min": 60,
-      "max": 7200,
-      "enum": [300, 600, 900, 1800, 3600]
+      "max": 7200
     },
     "registry_path": {
       "type": "file",
@@ -164,9 +161,8 @@
     "notify_channel": {
       "type": "string",
       "title": "Failure notification channel",
-      "description": "Where to push failure alerts: macos, ntfy, pushover, discord, telegram, or none.",
-      "default": "macos",
-      "enum": ["macos", "ntfy", "pushover", "discord", "telegram", "none"]
+      "description": "Where to push failure alerts. Allowed values: macos, ntfy, pushover, discord, telegram, none.",
+      "default": "macos"
     },
     "recap_marquee_enabled": {
       "type": "boolean",
@@ -201,11 +197,10 @@
     "task_reminder_threshold": {
       "type": "number",
       "title": "Task reminder threshold",
-      "description": "Number of non-Task tool calls before the reminder fires.",
+      "description": "Number of non-Task tool calls before the reminder fires. Suggested values: 5, 10, 20, 50.",
       "default": 10,
       "min": 3,
-      "max": 50,
-      "enum": [5, 10, 20, 50]
+      "max": 50
     },
     "suggest_specialized_agents": {
       "type": "boolean",
@@ -257,28 +252,10 @@
     },
     "aws_region": {
       "title": "AWS Region",
-      "description": "Default AWS region for infra checks. Valid: us-east-1, us-east-2, us-west-1, us-west-2, eu-west-1, eu-central-1, ap-southeast-1, ap-northeast-1.",
+      "description": "Default AWS region for infra checks. Allowed values: us-east-1, us-east-2, us-west-1, us-west-2, eu-west-1, eu-west-2, eu-west-3, eu-central-1, eu-north-1, ap-southeast-1, ap-southeast-2, ap-northeast-1, ap-northeast-2, ap-south-1, sa-east-1, ca-central-1.",
       "type": "string",
       "sensitive": false,
-      "default": "us-east-1",
-      "enum": [
-        "us-east-1",
-        "us-east-2",
-        "us-west-1",
-        "us-west-2",
-        "eu-west-1",
-        "eu-west-2",
-        "eu-west-3",
-        "eu-central-1",
-        "eu-north-1",
-        "ap-southeast-1",
-        "ap-southeast-2",
-        "ap-northeast-1",
-        "ap-northeast-2",
-        "ap-south-1",
-        "sa-east-1",
-        "ca-central-1"
-      ]
+      "default": "us-east-1"
     },
     "klaviyo_private_key": {
       "title": "Klaviyo Private API Key",
@@ -480,11 +457,10 @@
     },
     "doppler_config": {
       "title": "Doppler Default Config",
-      "description": "Default Doppler config name (e.g. 'dev', 'stg', 'prd'). Used by the Doppler MCP server.",
+      "description": "Default Doppler config name. Used by the Doppler MCP server. Allowed values: dev, stg, prd, ci.",
       "type": "string",
       "sensitive": false,
-      "default": "",
-      "enum": ["dev", "stg", "prd", "ci"]
+      "default": ""
     },
     "myparcel_api_key": {
       "title": "MyParcel.nl API Key",

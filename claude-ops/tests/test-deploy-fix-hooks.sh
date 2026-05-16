@@ -280,13 +280,10 @@ test_build_trigger_lock_held() {
   export CLAUDE_PLUGIN_OPTION_DEPLOY_FIX_ENABLED=true
   export CLAUDE_PLUGIN_OPTION_MONITOR_BUILD_FAILURES=true
   export CLAUDE_PLUGIN_OPTION_AUTO_DISPATCH_FIXER=true
-  # Pre-create a live lock owned by current PID so dispatch_fix_agent returns 2
-  local slug_full
-  slug_full=$(git -C "$(pwd -P)" config --get remote.origin.url 2>/dev/null | \
-    sed -E 's|.*[:/]([^/]+/[^/]+)(\.git)?$|\1|; s|\.git$||' || true)
-  local repo_slug
-  repo_slug=$(echo "${slug_full:-local-build}" | tr '/' '-')
-  echo $$ > "$TEST_STATE/lock-${repo_slug}-build"
+  # The build trigger pins `repo_slug=my-project` (mobile build hooks always
+  # operate against the my-project repo), so the lock path is fixed regardless
+  # of the caller's PWD or git remote.
+  echo $$ > "$TEST_STATE/lock-my-project-build"
   out=$(cat "$FIXTURES/build-trigger-fail.json" | bash "$PLUGIN_ROOT/bin/ops-deploy-fix-build-trigger" 2>&1)
   rc=$?
   assert_eq "2e.exit-zero-on-lock" "0" "$rc"
@@ -415,7 +412,7 @@ trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # 8a — happy: dispatches, context vars appear in the brief piped to claude
 ( new_isolated_env "case8-happy" ; load_lib
-  out=$(dispatch_fix_agent "test-agent" "myslug-deploy" "REPO=owner/repo" "SHA=abc1234" "BRANCH=dev" "EXTRA=hi")
+  out=$(dispatch_fix_agent "build-fixer" "myslug-deploy" "REPO=owner/repo" "SHA=abc1234" "BRANCH=dev" "EXTRA=hi")
   rc=$?
   [ "$rc" = "0" ] || { echo "  FAIL: 8a.rc=$rc"; exit 1; }
   echo "  PASS: 8a.dispatch-rc-zero"
@@ -438,20 +435,20 @@ trap 'rm -rf "$SUITE_TMP"' EXIT
   # Pre-create a live lock owned by current PID
   echo $$ > "$TEST_STATE/lock-myslug-deploy"
   rc=0
-  dispatch_fix_agent "test-agent" "myslug-deploy" "REPO=x" "SHA=y" "BRANCH=z" "EXTRA=w" >/dev/null 2>&1 || rc=$?
+  dispatch_fix_agent "build-fixer" "myslug-deploy" "REPO=x" "SHA=y" "BRANCH=z" "EXTRA=w" >/dev/null 2>&1 || rc=$?
   [ "$rc" = "2" ] && echo "  PASS: 8b.skips-on-lock-rc2" || { echo "  FAIL: 8b got rc=$rc"; exit 1; }
 ) && PASS=$((PASS+1)) || { fail "case8b" "see above"; }
 
 # 8c — skip on budget exhausted
 ( new_isolated_env "case8-budget" ; load_lib
   export CLAUDE_PLUGIN_OPTION_MAX_FIXES_PER_HOUR=1
-  dispatch_fix_agent "test-agent" "myslug-deploy" "REPO=x" "SHA=y" "BRANCH=z" "EXTRA=w" >/dev/null 2>&1
+  dispatch_fix_agent "build-fixer" "myslug-deploy" "REPO=x" "SHA=y" "BRANCH=z" "EXTRA=w" >/dev/null 2>&1
   # Wait for first to clear the lock (claude mock exits fast, then lock is removed by the bg shell)
   sleep 1
   # Force lock release in case timing leaves it
   rm -f "$TEST_STATE/lock-myslug-deploy"
   rc=0
-  dispatch_fix_agent "test-agent" "myslug-deploy" "REPO=x" "SHA=y" "BRANCH=z" "EXTRA=w" >/dev/null 2>&1 || rc=$?
+  dispatch_fix_agent "build-fixer" "myslug-deploy" "REPO=x" "SHA=y" "BRANCH=z" "EXTRA=w" >/dev/null 2>&1 || rc=$?
   [ "$rc" = "3" ] && echo "  PASS: 8c.skips-on-budget-rc3" || { echo "  FAIL: 8c got rc=$rc"; exit 1; }
 ) && PASS=$((PASS+1)) || { fail "case8c" "see above"; }
 
