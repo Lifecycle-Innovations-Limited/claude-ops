@@ -1,6 +1,6 @@
 ---
 name: ops-package
-description: Ship parcels via any configured carrier — MyParcel, Sendcloud, DHL Parcel NL, PostNL, DPD, UPS, FedEx. Auto-selects the first carrier whose credentials are configured, or pass --carrier <name> to override. Verbs: ship, label, track, list, carriers.
+description: "Ship parcels via any configured carrier — MyParcel, Sendcloud, DHL Parcel NL, PostNL, DPD, UPS, FedEx. Auto-selects the first carrier whose credentials are configured, or pass --carrier <name> to override. Verbs: ship, label, track, list, carriers."
 argument-hint: "[--carrier <name>] <ship|label|track|list|carriers> [args...]"
 allowed-tools:
   - Bash
