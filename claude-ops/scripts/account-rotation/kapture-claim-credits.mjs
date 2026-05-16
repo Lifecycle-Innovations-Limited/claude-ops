@@ -254,7 +254,8 @@ function invokeClaude(prompt) {
       resolve(payload);
     };
 
-    const child = spawn('claude', ['-p', prompt]);
+    // stdio: close stdin so `claude -p` doesn't emit "no stdin data received in 3s" and exit 1.
+    const child = spawn('claude', ['-p', prompt], { stdio: ['ignore', 'pipe', 'pipe'] });
     timer = setTimeout(() => {
       try {
         child.kill('SIGTERM');
