@@ -12,7 +12,7 @@
     },
     "doppler": {
       "command": "npx",
-      "args": ["-y", "@dopplerhq/mcp-server"],
+      "args": ["-y", "-p", "@dopplerhq/mcp-server", "doppler-mcp"],
       "env": {
         "DOPPLER_TOKEN": "${user_config.doppler_token}"
       }
