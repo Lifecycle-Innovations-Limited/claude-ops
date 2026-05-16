@@ -3,13 +3,14 @@
 All notable changes to this project will be documented in this file.
 
 ## [2.2.0] — 2026-05-16
-
 ### Fixed
-
-- **Plugin installation blocked by unsupported `enum` keys in plugin.json.** Claude Code's plugin validator rejects `enum` as an unrecognized key in userConfig fields. Removed `enum` from 7 fields (fix_model, max_fixes_per_hour, watcher_timeout_seconds, notify_channel, task_reminder_threshold, aws_region, doppler_config) and moved allowed values into descriptions.
-- **ops-package SKILL.md YAML frontmatter parse error.** Unquoted colon in description field caused YAML parse failure, silently dropping all frontmatter metadata at runtime. Wrapped in quotes.
-- **Version number alignment.** Synchronized version across plugin.json (was 2.0.6), package.json (was 1.7.2), and marketplace.json (was 2.0.6) to 2.2.0.
+- **Plugin installation blocked by unsupported `enum` keys in `plugin.json`.** Claude Code's plugin validator rejects `enum` as an unrecognized key in userConfig fields. Removed `enum` from 7 fields (`fix_model`, `max_fixes_per_hour`, `watcher_timeout_seconds`, `notify_channel`, `task_reminder_threshold`, `aws_region`, `doppler_config`) and moved allowed values into descriptions.
+- **`ops-package` SKILL.md YAML frontmatter parse error.** Unquoted colon in description field caused YAML parse failure, silently dropping all frontmatter metadata at runtime. Wrapped in quotes.
+- **Version number alignment.** Synchronized version across `plugin.json` (was 2.0.6), `package.json` (was 1.7.2), and `marketplace.json` (was 2.0.6) to 2.2.0.
 - **Plugin description counts updated.** Changed "30 skills, 14 agents" to "35 skills, 18 agents" to match actual inventory.
+- **Deploy-fix test suite: 45/45 passing (was 39/45).** Refactored `dispatch_fix_agent` from template-based (`prompts/*.md`) to agent-based dispatch (`claude --agent <name>`). Fixed `is_transient` regex line continuations. Fixed `resolve_health_url`/`resolve_version_url` multi-`local` cross-references. Updated test cases to use real agent names (`build-fixer`, `deploy-fixer`).
+- **`set -e` safety for `locate_repo` and `resolve_*` functions.** Added `|| true` guards so `locate_repo` returning 1 no longer aborts `ops-deploy-fix-build-trigger` under `set -e`. Added explicit `return 0` to `resolve_health_url` and `resolve_version_url`.
+- **Account rotation stdin handling.** Fixed `claude -p` subprocess invocation in `bulk-setup-token.mjs` and `kapture-claim-credits.mjs` to explicitly close stdin via `stdio: ['ignore','pipe','pipe']`, preventing newer CLI versions from warning about missing stdin.
 
 ## [2.0.6] — 2026-04-30
 
