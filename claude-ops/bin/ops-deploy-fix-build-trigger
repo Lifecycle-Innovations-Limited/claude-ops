@@ -30,7 +30,10 @@ last_lines=$(echo "$output" | tail -120)
 
 # Repo = my-project (mobile build hooks always operate against this)
 repo_slug="my-project"
-repo_path=$(locate_repo "your-org/my-project" 2>/dev/null)
+# `|| true` — locate_repo returns 1 when the checkout is absent. Without it the
+# plain assignment leaks that non-zero status and `set -e` aborts the hook
+# before the fallback below (and the transient/dispatch paths) can run.
+repo_path=$(locate_repo "your-org/my-project" 2>/dev/null) || true
 [ -z "$repo_path" ] && repo_path="$HOME/my-project"
 branch=$(git -C "$repo_path" branch --show-current 2>/dev/null || echo "unknown")
 
@@ -61,7 +64,7 @@ if [ "$(config auto_dispatch_fixer true)" != "true" ]; then
 fi
 
 set +e
-fix_log=$(dispatch_fix_agent "build-fix.md" "$repo_slug-build" \
+fix_log=$(dispatch_fix_agent "build-fixer" "$repo_slug-build" \
   "COMMAND=$cmd" "REPO_PATH=$repo_path" "BRANCH=$branch" "LOGS=$last_lines")
 dispatch_status=$?
 set -e
