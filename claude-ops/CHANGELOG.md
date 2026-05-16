@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.2] — 2026-05-17
+### Fixed
+- **Doppler MCP server failed to connect on every reload.** Plugin's `.mcp.json` invoked `npx -y @dopplerhq/mcp-server` which tries to run a binary matching the package name. The actual bin is `doppler-mcp` (`bin: { "doppler-mcp": "bin/doppler-mcp" }`), so npx couldn't find a command and exited with `command not found`. Switched to `npx -y -p @dopplerhq/mcp-server doppler-mcp` form which explicitly names the binary.
+
 ## [2.2.1] — 2026-05-16
 ### Fixed
 - **Plugin load error: `marketplace.json` rejected by validator.** Removed unsupported `screenshots` key from `.claude-plugin/marketplace.json`. `claude plugin validate` was reporting `Unrecognized key: "screenshots"` and the Claude Code loader surfaced this as an error on `/reload-plugins`.
