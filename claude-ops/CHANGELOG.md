@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.1] — 2026-05-16
+### Fixed
+- **Plugin load error: `marketplace.json` rejected by validator.** Removed unsupported `screenshots` key from `.claude-plugin/marketplace.json`. `claude plugin validate` was reporting `Unrecognized key: "screenshots"` and the Claude Code loader surfaced this as an error on `/reload-plugins`.
+
 ## [2.2.0] — 2026-05-16
 ### Fixed
 - **Plugin installation blocked by unsupported `enum` keys in `plugin.json`.** Claude Code's plugin validator rejects `enum` as an unrecognized key in userConfig fields. Removed `enum` from 7 fields (`fix_model`, `max_fixes_per_hour`, `watcher_timeout_seconds`, `notify_channel`, `task_reminder_threshold`, `aws_region`, `doppler_config`) and moved allowed values into descriptions.
