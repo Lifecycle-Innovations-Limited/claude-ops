@@ -1040,39 +1040,38 @@ Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with 
 - `store-health`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-store-health.sh", "cron": "0 9 * * *" }` — daily 9am, only if ecom configured
 - `competitor-intel`: `{ "enabled": <bool>, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-competitor-intel.sh", "cron": "0 10 * * 1" }` — weekly Monday 10am. `enabled` is `true` only when queries were configured in step 5b-i; otherwise `false` so the cron doesn't post placeholder garbage to Telegram
 
-#### Step 5b-i — Competitor intel queries (gate before enabling the service)
+#### Step 5b-i — Competitor intel (self-discovering, gate before enabling)
 
 Per Rule 3, never silently skip a service. Before deciding `competitor-intel.enabled`, ask the user explicitly:
 
 ```
 AskUserQuestion({
-  question: "Configure competitor & brand intel queries? (Weekly search → Telegram)",
+  question: "Configure competitor intel? (Weekly: Tavily auto-discovers competitors → Sonnet synthesizes strategic delta → Telegram)",
   header: "Competitor intel",
   options: [
-    { label: "Configure now",   description: "Enter competitor A/B + own brand search queries — runs every Mon 10am" },
+    { label: "Configure now",   description: "Provide brand name + category. System auto-discovers competitors every week and detects deltas." },
     { label: "Skip — disable",  description: "Leave competitor-intel disabled. Re-run /ops:setup later to configure." }
   ]
 })
 ```
 
-If the user chose **Skip — disable**: set `competitor-intel.enabled = false` in `daemon-services.json`. Do not prompt further.
+If **Skip — disable**: set `competitor-intel.enabled = false` in `daemon-services.json`. Stop.
 
-If the user chose **Configure now**: collect four values (one prompt per value — they are free-text, not multiple choice):
+If **Configure now**: collect two free-text values plus one optional:
 
-1. `competitor_a_query` — e.g. `"acme inc reviews"` or `"competitor-a $YEAR pricing"`
-2. `competitor_b_query` — e.g. `"competitor-b new product launches"`
-3. `brand_query` — e.g. `"yourbrand reviews"` (the user's own brand for reputation monitoring)
-4. `report_timezone` — IANA TZ, e.g. `"Europe/Amsterdam"`. Default: `"UTC"`
+1. `brand_name` — e.g. `"My-Project"`, `"Example-Project"`. The product/company being tracked.
+2. `category` — e.g. `"AI health coaching apps"`, `"NL virtual real estate staging"`. The market segment Tavily searches in.
+3. `report_timezone` — IANA TZ. Default: system TZ from previous setup steps, or `"UTC"`.
 
-Persist to `$PREFS_PATH` under a top-level `competitor_intel` object:
+The system handles competitor discovery, news scanning, and synthesis automatically — no hardcoded competitor list to maintain. Tavily API key (`TAVILY_API_KEY` in env or Doppler) is required; if missing, the cron logs SKIP and exits cleanly.
+
+Persist to `$PREFS_PATH`:
 
 ```bash
-jq --arg a "$A" --arg b "$B" --arg brand "$BRAND" --arg tz "$TZ" \
-   '.competitor_intel = {competitor_a_query: $a, competitor_b_query: $b, brand_query: $brand, report_timezone: $tz}' \
+jq --arg brand "$BRAND" --arg cat "$CATEGORY" --arg tz "$TZ" \
+   '.competitor_intel = {brand_name: $brand, category: $cat, max_competitors: 5, report_timezone: $tz}' \
    "$PREFS_PATH" > "$PREFS_PATH.tmp" && mv "$PREFS_PATH.tmp" "$PREFS_PATH"
 ```
-
-The cron script (`ops-cron-competitor-intel.sh`) reads from `preferences.json` automatically — no env-var wiring needed in the daemon plist. Env vars still override `preferences.json` when set, for power users.
 
 Now set `competitor-intel.enabled = true` in `daemon-services.json`.
 - `message-listener`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-message-listener.sh" }` — only if WhatsApp or Telegram configured
