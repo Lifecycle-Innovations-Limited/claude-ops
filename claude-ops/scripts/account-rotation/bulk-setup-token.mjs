@@ -29,6 +29,14 @@
 //
 //  Required tools on PATH: claude, aws, gog, expect.
 //
+//  NOTE on `claude -p` stdio: the Anthropic CLI (>= v2.1.x) refuses to start
+//  unless stdin is closed or piped. Inheriting the parent stdin (the default
+//  for child_process.spawn) makes the CLI emit
+//      "Warning: no stdin data received in 3s, proceeding without it"
+//  and then exit 1, which breaks the whole loop. Always spawn with
+//  `stdio: ['ignore', 'pipe', 'pipe']` (or pipe + immediate `stdin.end()`).
+//  Regression fix landed after PR #229.
+//
 //  HARD RULES
 //    - Never log plaintext tokens.
 //    - Never write tokens to disk except via `aws secretsmanager update-secret`
@@ -163,7 +171,8 @@ function invokeClaude(prompt, label) {
     };
 
     log(`${label}: invoking claude -p…`);
-    const child = spawn('claude', ['-p', prompt]);
+    // stdio: close stdin so `claude -p` doesn't emit "no stdin data received in 3s" and exit 1.
+    const child = spawn('claude', ['-p', prompt], { stdio: ['ignore', 'pipe', 'pipe'] });
     timer = setTimeout(() => {
       try {
         child.kill('SIGTERM');
