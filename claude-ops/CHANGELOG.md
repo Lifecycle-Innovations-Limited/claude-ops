@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.4] — 2026-05-17
+### Fixed
+- **Daemon silent crash-loop under launchd.** `scripts/ops-daemon.sh` included `com.claude-ops.daemon` in its own `EXPECTED_SERVICES` self-healing list. On startup the ENSURE loop read its own previous launchctl `exit=1` status (a normal post-install state), called `launchctl kickstart "gui/$UID/com.claude-ops.daemon"`, received SIGTERM, and respawned every ~30s via launchd's `ThrottleInterval`. Net effect: no `daemon-health.json` refresh, no service supervision, no message-listener, but `launchctl list` showed the entry registered with exit=1, no PID. Removed `com.claude-ops.daemon` from `EXPECTED_SERVICES` (launchd's `KeepAlive=true` already handles auto-restart). Also removed the decommissioned `com.claude-ops.wacli-keepalive` entry — it was a v2.0.3 leftover whose plist no longer ships, causing noisy "cannot repair — missing bash or source plist" log entries every monitor cycle. `install_daemon_launchd()` cleaned up to stop trying to install the non-existent wacli plist. (#241)
+
 ## [2.2.3] — 2026-05-17
 ### Fixed
 - **Doppler MCP server failed to connect on every reload.** Plugin's `.mcp.json` invoked `npx -y @dopplerhq/mcp-server` which tries to run a binary matching the package name. The actual bin is `doppler-mcp` (`bin: { "doppler-mcp": "bin/doppler-mcp" }`), so npx couldn't find a command and exited with `command not found`. Switched to `npx -y -p @dopplerhq/mcp-server doppler-mcp` form which explicitly names the binary, eliminating the `Failed to connect` error from `/reload-plugins`.
