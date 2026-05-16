@@ -29,12 +29,6 @@
         "yolo",
         "revenue",
         "gtm"
-      ],
-      "screenshots": [
-        "docs/screenshots/dashboard.png",
-        "docs/screenshots/briefing.png",
-        "docs/screenshots/inbox.png",
-        "docs/screenshots/yolo.png"
       ]
     }
   ]
