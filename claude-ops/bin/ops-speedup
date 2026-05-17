@@ -365,7 +365,10 @@ _pwsh_elevated() {
 # Check if current process is already elevated (admin). Returns 0 if yes.
 _is_elevated() {
   if $IS_WINDOWS || $IS_WSL; then
-    local result; result=$(_pwsh "[bool]([Security.Principal.WindowsIdentity]::GetCurrent().Owner.IsWellKnown('BuiltinAdministratorsSid'))" 2>/dev/null | tr -d '\r ')
+    local result; result=$(_pwsh "
+\$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+[bool]\$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+" 2>/dev/null | tr -d '\r ')
     [ "$result" = "True" ]
   else
     sudo -n true 2>/dev/null
@@ -1007,11 +1010,16 @@ action_disk_reclaim_aggressive() {
     echo "    ${GRN}✓${RST} pip cache purge"
   fi
   if [ -d "$HOME/.gradle/caches" ]; then
-    local before; before=$(_size_kb "$HOME/.gradle/caches")
-    find "$HOME/.gradle/caches" -name "*.lock" -delete 2>/dev/null
-    find "$HOME/.gradle/caches/transforms-"* -mtime +30 -delete 2>/dev/null
-    local after; after=$(_size_kb "$HOME/.gradle/caches")
-    _report "~/.gradle/caches" "$before" "$after"
+    # Check if Gradle is running or any process holds files in .gradle/caches
+    if pgrep -f "gradle|gradlew" >/dev/null 2>&1 || { command -v lsof >/dev/null 2>&1 && lsof +D "$HOME/.gradle/caches" >/dev/null 2>&1; }; then
+      echo "    ${YLW}⚠${RST}  Gradle in-use: skipped (active build)"
+    else
+      local before; before=$(_size_kb "$HOME/.gradle/caches")
+      find "$HOME/.gradle/caches" -name "*.lock" -delete 2>/dev/null
+      find "$HOME/.gradle/caches/transforms-"* -mtime +30 -delete 2>/dev/null
+      local after; after=$(_size_kb "$HOME/.gradle/caches")
+      _report "~/.gradle/caches" "$before" "$after"
+    fi
   fi
 
   # 9. Claude plugin cache — keep latest version only + nuke temp_git_*
