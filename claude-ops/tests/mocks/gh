@@ -27,6 +27,20 @@ case "$sub" in
         ;;
     esac
     ;;
+  secret)
+    case "$sub2" in
+      list)
+        # MOCK_GH_SECRET_JSON — JSON array of {name, updatedAt} for `gh secret list --json name,updatedAt`
+        printf '%s' "${MOCK_GH_SECRET_JSON:-[]}"
+        exit 0
+        ;;
+      set)
+        # Simulate a successful secret write (no-op in tests)
+        echo "[mock-gh] secret set: $*"
+        exit "${MOCK_GH_SECRET_SET_RC:-0}"
+        ;;
+    esac
+    ;;
   run)
     case "$sub2" in
       list)
