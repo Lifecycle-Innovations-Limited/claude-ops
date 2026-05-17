@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.5] — 2026-05-17
+### Fixed
+- **`competitor-intel` LLM synth dropped to raw Tavily fallback when output didn't include `---REPORT---` marker.** Sonnet was producing valid strategic deltas but the strict marker check threw them away. Three-strategy JSON extraction now: (1) fenced ` ```json ` block, (2) bare `{"competitors":[...]}` regex anywhere in output, (3) bullet-list scrape from "NEW entrants" / "Competitor moves" sections. Report extraction now falls back to stripping JSON blocks from full synthesis instead of dropping to raw Tavily dump.
+- **Weekly reports invisible without Telegram bot configured.** Cron now writes every report to `$DATA_DIR/reports/competitor-intel/YYYY-MM-DD_<brand>.md` and maintains a `latest-<brand>.md` symlink. Telegram push is now additive — disk write happens unconditionally, even when bot creds are missing.
+
 ## [2.2.4] — 2026-05-17
 ### Fixed
 - **Daemon silent crash-loop under launchd.** `scripts/ops-daemon.sh` included `com.claude-ops.daemon` in its own `EXPECTED_SERVICES` self-healing list. On startup the ENSURE loop read its own previous launchctl `exit=1` status (a normal post-install state), called `launchctl kickstart "gui/$UID/com.claude-ops.daemon"`, received SIGTERM, and respawned every ~30s via launchd's `ThrottleInterval`. Net effect: no `daemon-health.json` refresh, no service supervision, no message-listener, but `launchctl list` showed the entry registered with exit=1, no PID. Removed `com.claude-ops.daemon` from `EXPECTED_SERVICES` (launchd's `KeepAlive=true` already handles auto-restart). Also removed the decommissioned `com.claude-ops.wacli-keepalive` entry — it was a v2.0.3 leftover whose plist no longer ships, causing noisy "cannot repair — missing bash or source plist" log entries every monitor cycle. `install_daemon_launchd()` cleaned up to stop trying to install the non-existent wacli plist. (#241)

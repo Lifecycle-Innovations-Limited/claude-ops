@@ -176,9 +176,30 @@ EOF
   rm -f "$PROMPT_FILE"
 
   if [[ -n "$SYNTHESIS" ]]; then
-    EXTRACTED=$(echo "$SYNTHESIS" | sed -n '/```json/,/```/p' | sed '1d;$d' | jq -r '.competitors // []' 2>/dev/null || echo "")
-    [[ -n "$EXTRACTED" && "$EXTRACTED" != "null" ]] && NEW_STATE_COMPETITORS="$EXTRACTED"
+    # Try three JSON-extraction strategies in order of strictness
+    EXTRACTED=""
+    # 1. Fenced ```json block
+    CAND=$(echo "$SYNTHESIS" | sed -n '/```json/,/```/p' | sed '1d;$d' | jq -r '.competitors // empty' 2>/dev/null || true)
+    [[ -n "$CAND" && "$CAND" != "null" && "$CAND" != "[]" ]] && EXTRACTED="$CAND"
+    # 2. Bare {"competitors":[...]} anywhere in output (no fence)
+    if [[ -z "$EXTRACTED" ]]; then
+      CAND=$(echo "$SYNTHESIS" | grep -oE '\{"competitors":\s*\[[^]]*\][^}]*\}' | head -1 | jq -r '.competitors // empty' 2>/dev/null || true)
+      [[ -n "$CAND" && "$CAND" != "null" && "$CAND" != "[]" ]] && EXTRACTED="$CAND"
+    fi
+    # 3. Greedy bullet-list scrape from "NEW entrants" or "Competitor moves" sections
+    if [[ -z "$EXTRACTED" ]]; then
+      CAND=$(echo "$SYNTHESIS" | awk '/[Cc]ompetitor|[Ee]ntrant/{flag=1} flag && /^\s*[-•*]\s*\*?\*?[A-Z][A-Za-z0-9 .&-]+/' | grep -oE '\*?\*?[A-Z][A-Za-z0-9 .&-]{2,30}\*?\*?' | sed 's/\*//g; s/^[[:space:]]*//; s/[[:space:]]*$//' | sort -u | head -10 | jq -R . | jq -s . 2>/dev/null || true)
+      [[ -n "$CAND" && "$CAND" != "null" && "$CAND" != "[]" ]] && EXTRACTED="$CAND"
+    fi
+    [[ -n "$EXTRACTED" ]] && NEW_STATE_COMPETITORS="$EXTRACTED"
+
+    # Report extraction: prefer ---REPORT--- marker; otherwise strip JSON block
+    # and use whatever LLM produced — do NOT silently fall back to raw Tavily.
     REPORT=$(echo "$SYNTHESIS" | awk '/---REPORT---/{flag=1; next} flag' | sed '/^```/,/^```$/d')
+    if [[ -z "$REPORT" ]]; then
+      REPORT=$(echo "$SYNTHESIS" | sed -E '/^```(json)?$/,/^```$/d')
+      log "WARN: ---REPORT--- marker missing in LLM output — using full synthesis as report"
+    fi
   fi
 else
   log "WARN: claude-invoke.sh not found at $PLUGIN_ROOT — using Tavily-only fallback"
@@ -209,7 +230,16 @@ fi
 mv "$TMP_STATE" "$STATE_PATH"
 log "State persisted: $(echo "$NEW_STATE_COMPETITORS" | jq 'length // 0' 2>/dev/null || echo 0) competitors tracked for $BRAND_NAME"
 
-# ── Stage 6: Send to Telegram ─────────────────────────────────────────────
+# ── Stage 6: Persist report to disk (always) + push to Telegram (if creds) ─
+REPORT_DIR="$DATA_DIR/reports/competitor-intel"
+mkdir -p "$REPORT_DIR"
+REPORT_FILE="$REPORT_DIR/$(date +%Y-%m-%d)_$(echo "$BRAND_NAME" | tr '[:upper:] ' '[:lower:]-').md"
+printf '%s\n' "$REPORT" > "$REPORT_FILE"
+log "Report written to $REPORT_FILE"
+
+# Update latest pointer for easy access
+ln -sf "$REPORT_FILE" "$REPORT_DIR/latest-$(echo "$BRAND_NAME" | tr '[:upper:] ' '[:lower:]-').md"
+
 log "Stage 6: dispatching Telegram digest"
 if [[ -n "$TELEGRAM_TOKEN" && -n "$TELEGRAM_CHAT" ]]; then
   curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
@@ -219,8 +249,7 @@ if [[ -n "$TELEGRAM_TOKEN" && -n "$TELEGRAM_CHAT" ]]; then
     >> "$LOG" 2>&1
   log "Competitor intel sent to Telegram chat=$TELEGRAM_CHAT"
 else
-  log "WARN: TELEGRAM creds not set — printing report to stdout"
-  printf '%s\n' "$REPORT"
+  log "INFO: TELEGRAM creds not set — report saved to disk only ($REPORT_FILE)"
 fi
 
 log "HEARTBEAT_OK"
