@@ -857,7 +857,7 @@ action_disk_reclaim_aggressive() {
     command -v npm >/dev/null 2>&1 && npm cache clean --force >/dev/null 2>&1 || true
     rm -rf "$HOME/.npm/_npx" "$HOME/.npm/_logs" 2>/dev/null
     local after; after=$(_size_kb "$HOME/.npm")
-    _report "\$HOME/.npm" "$before" "$after"
+    _report "$HOME/.npm" "$before" "$after"
   fi
 
   # 3. uv (Python) cache
@@ -870,7 +870,7 @@ action_disk_reclaim_aggressive() {
       rm -rf "$HOME/.cache/uv"
     fi
     local after; after=$(_size_kb "$HOME/.cache/uv")
-    _report "\$HOME/.cache/uv" "$before" "$after"
+    _report "$HOME/.cache/uv" "$before" "$after"
   else
     echo "    ${DIM}·${RST} no uv cache"
   fi
@@ -1017,7 +1017,7 @@ action_disk_reclaim_aggressive() {
       find "$HOME/.gradle/caches" -name "*.lock" -delete 2>/dev/null
       find "$HOME/.gradle/caches/transforms-"* -mtime +30 -delete 2>/dev/null
       local after; after=$(_size_kb "$HOME/.gradle/caches")
-      _report "\$HOME/.gradle/caches" "$before" "$after"
+      _report "$HOME/.gradle/caches" "$before" "$after"
     fi
   fi
 
@@ -1053,7 +1053,7 @@ action_disk_reclaim_aggressive() {
     local before; before=$(_size_kb "$HOME/Library/Logs")
     find "$HOME/Library/Logs" -type f -mtime +14 -delete 2>/dev/null
     local after; after=$(_size_kb "$HOME/Library/Logs")
-    _report "\$HOME/Library/Logs (>14d)" "$before" "$after"
+    _report "$HOME/Library/Logs (>14d)" "$before" "$after"
     rm -f "$HOME/Library/Logs/DiagnosticReports"/*.ips 2>/dev/null
     rm -f "$HOME/Library/Logs/DiagnosticReports"/*.diag 2>/dev/null
     echo "    ${GRN}✓${RST} DiagnosticReports purged"
@@ -1062,7 +1062,7 @@ action_disk_reclaim_aggressive() {
       local before; before=$(_size_kb "$HOME/.cache")
       find "$HOME/.cache" -type f -mtime +14 -delete 2>/dev/null
       local after; after=$(_size_kb "$HOME/.cache")
-      _report "\$HOME/.cache (>14d)" "$before" "$after"
+      _report "$HOME/.cache (>14d)" "$before" "$after"
     fi
     sudo journalctl --vacuum-time=7d 2>/dev/null >/dev/null || true
   elif $IS_WINDOWS; then
