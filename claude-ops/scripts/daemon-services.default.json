@@ -55,6 +55,18 @@
       "cron": "0 10 * * 1",
       "_note": "Weekly competitor intelligence report every Monday at 10am. Script not yet landed — re-enable when ops-cron-competitor-intel.sh is added."
     },
+    "competitor-alert": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-competitor-alert.sh",
+      "cron": "*/10 * * * *",
+      "_note": "Drains queue/immediate.jsonl every 10 min. Pushes high-severity competitor signals to Telegram (if TELEGRAM_BOT_TOKEN+TELEGRAM_CHAT_ID set) and always persists to reports/competitor-intel/alerts.log."
+    },
+    "competitor-daily": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-competitor-daily.sh",
+      "cron": "0 17 * * *",
+      "_note": "Daily 17:00 roll-up of med-severity competitor signals. Groups by competitor, writes daily-YYYY-MM-DD.md, pushes Telegram digest if creds present."
+    },
     "marketing-prewarm": {
       "enabled": false,
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-marketing-prewarm.sh",
