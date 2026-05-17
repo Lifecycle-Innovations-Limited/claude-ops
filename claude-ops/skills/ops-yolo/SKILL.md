@@ -155,6 +155,8 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-gsd-states 2>/dev/null || true
 
 ---
 
+> **Competitor state**: Each C-suite agent sources `scripts/lib/competitor/context.sh` and calls `competitor_vertical_slice <role>` internally. The orchestrator does NOT need to pre-fetch competitor data — it is loaded on-demand per agent with role-specific filtering.
+
 ## Phase 2 — Spawn 4 C-suite agents in parallel
 
 Spawn these 4 agents simultaneously using all pre-gathered data as context. Each writes their analysis to a file in `/tmp/yolo-[session]/`:

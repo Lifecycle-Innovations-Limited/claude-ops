@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# ops-competitors — Competitor-intel dashboard + management CLI
+# Usage: ops-competitors [dashboard|<brand>|refresh [brand]|add-url <b> <c> <k> <url>|alerts|help]
+set -euo pipefail
+
+PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+OPS_DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PREFS="$OPS_DATA_DIR/preferences.json"
+COMP_REPORTS="$OPS_DATA_DIR/reports/competitor-intel"
+LIB_COMP="$PLUGIN_ROOT/scripts/lib/competitor/context.sh"
+CRON_SCRIPT="$PLUGIN_ROOT/scripts/ops-cron-competitor-intel.sh"
+
+# ── Mobile detection (Rule 7) ────────────────────────────────────────────────
+MOBILE=0
+[[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] && MOBILE=1
+[[ "${OPS_MOBILE:-}" == "1" ]] && MOBILE=1
+[[ "${COLUMNS:-80}" -lt 80 ]] && MOBILE=1
+
+# ── Source competitor lib ────────────────────────────────────────────────────
+if [[ ! -f "$LIB_COMP" ]]; then
+  echo "error: competitor lib not found at $LIB_COMP" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$LIB_COMP"
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+brand_slug() { printf '%s' "$1" | tr '[:upper:] /' '[:lower:]--' | tr -cd 'a-z0-9-_.'; }
+
+err() { echo "error: $*" >&2; exit 1; }
+
+# ── Dashboard ────────────────────────────────────────────────────────────────
+cmd_dashboard() {
+  local ctx; ctx=$(competitor_context --window-days 7 2>/dev/null \
+    || printf '{"configured":false,"reason":"context_failed"}')
+
+  if [[ "$(printf '%s' "$ctx" | jq -r '.configured')" != "true" ]]; then
+    echo "Competitor-intel not configured. Run /ops:setup competitor-intel to get started."
+    exit 0
+  fi
+
+  local now; now=$(date '+%Y-%m-%d %H:%M')
+
+  if [[ "$MOBILE" -eq 1 ]]; then
+    printf '%s' "$ctx" | jq -r '
+      .brands[] as $b |
+      ($b + ": " +
+        ((.events.high | map(select(.competitor)) | length) | tostring) + " alerts  " +
+        (.events.med_count | tostring) + " med  last " +
+        (.by_brand[$b].last_run // "never"))
+    '
+    printf '%s' "$ctx" | jq -r '"queues: imm=" + (.queues.immediate_pending|tostring) + " daily=" + (.queues.daily_pending|tostring)'
+    return
+  fi
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo " OPS ► COMPETITORS — $now"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+
+  local n_brands; n_brands=$(printf '%s' "$ctx" | jq '.brands | length')
+  echo "TRACKED BRANDS ($n_brands)"
+  printf '%s' "$ctx" | jq -r '
+    .brands[] as $b |
+    ("  " + ($b | .[0:20]) + "\t" +
+      "last " + (.by_brand[$b].last_run // "never")[0:10] + "  " +
+      (.events.high | map(select(.competitor)) | length | tostring) + " alerts  " +
+      (.events.med_count | tostring) + " med  " +
+      (.events.low_count | tostring) + " low")
+  ' | expand -t 24
+
+  echo ""
+  printf '%s' "$ctx" | jq -r '"PENDING QUEUES  immediate: " + (.queues.immediate_pending|tostring) + "   daily: " + (.queues.daily_pending|tostring)'
+
+  local high_count; high_count=$(printf '%s' "$ctx" | jq '.events.high | length')
+  if [[ "$high_count" -gt 0 ]]; then
+    echo ""
+    echo "RECENT HIGH ALERTS (7d)"
+    printf '%s' "$ctx" | jq -r '
+      .events.high[0:8][] |
+      "  " + .timestamp[0:16] + "  " + ((.competitor // "?") | .[0:18]) +
+      "  " + ((.source // "?") | .[0:12]) + "  " +
+      ((.snippet // "") | .[0:60])
+    '
+  fi
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+# ── Brand drill-down ─────────────────────────────────────────────────────────
+cmd_brand() {
+  local brand="$1"
+  local ctx; ctx=$(competitor_context --brand "$brand" --window-days 30 2>/dev/null \
+    || printf '{"configured":false,"reason":"context_failed"}')
+
+  if [[ "$(printf '%s' "$ctx" | jq -r '.configured')" != "true" ]]; then
+    echo "Competitor-intel not configured."
+    exit 0
+  fi
+
+  local slug; slug=$(brand_slug "$brand")
+  local report="$COMP_REPORTS/latest-${slug}.md"
+
+  if [[ "$MOBILE" -eq 1 ]]; then
+    printf '%s' "$ctx" | jq -r --arg b "$brand" '
+      $b + " | " + (.by_brand[$b].category // "?") + " | last: " + (.by_brand[$b].last_run // "never")[0:10]
+    '
+    printf '%s' "$ctx" | jq -r --arg b "$brand" '
+      .by_brand[$b].competitors[]? | "  - " + .
+    '
+    [[ -f "$report" ]] && head -20 "$report"
+    return
+  fi
+
+  echo ""
+  printf '%s' "$ctx" | jq -r --arg b "$brand" '
+    "BRAND: " + $b + "  category: " + (.by_brand[$b].category // "?") +
+    "  last run: " + (.by_brand[$b].last_run // "never")[0:19]
+  '
+  printf '%s' "$ctx" | jq -r --arg b "$brand" '
+    "competitors: " + ((.by_brand[$b].competitors // []) | join(", "))
+  '
+
+  echo ""
+  echo "SIGNAL BREAKDOWN (30d)"
+  printf '%s' "$ctx" | jq -r '
+    (.events.high + []) | group_by(.competitor)[] |
+    "  " + (.[0].competitor | .[0:20]) +
+    "\thigh: " + ([.[] | select(.severity=="high")] | length | tostring) +
+    "  med: " + ([.[] | select(.severity=="med")] | length | tostring)
+  ' | expand -t 24
+
+  if [[ -f "$report" ]]; then
+    echo ""
+    echo "LATEST REPORT (excerpt)"
+    head -80 "$report" | sed 's/^/  /'
+  else
+    echo ""
+    echo "No report found at $report"
+  fi
+
+  local total; total=$(printf '%s' "$ctx" | jq '.events.total')
+  echo ""
+  echo "EVENT TIMELINE (30d — $total total)"
+  printf '%s' "$ctx" | jq -r '
+    .events.high[] |
+    "  " + .timestamp[0:16] + "  HIGH  " +
+    ((.competitor // "?") | .[0:18]) + "  " +
+    ((.source // "?") | .[0:10]) + "  " +
+    ((.snippet // "") | .[0:70])
+  '
+}
+
+# ── Refresh ──────────────────────────────────────────────────────────────────
+cmd_refresh() {
+  local brand_arg="${1:-}"
+  [[ ! -f "$CRON_SCRIPT" ]] && err "cron script not found: $CRON_SCRIPT"
+  echo "Running competitor-intel cron${brand_arg:+ for brand: $brand_arg}..."
+  if [[ -n "$brand_arg" ]]; then
+    BRAND_NAME="$brand_arg" bash "$CRON_SCRIPT"
+  else
+    bash "$CRON_SCRIPT"
+  fi
+  echo ""
+  echo "Done. Updated briefing:"
+  # shellcheck disable=SC1090
+  source "$LIB_COMP"
+  competitor_briefing_line
+}
+
+# ── Add URL ──────────────────────────────────────────────────────────────────
+cmd_add_url() {
+  local brand="${1:-}" comp="${2:-}" kind="${3:-}" url="${4:-}"
+  [[ -z "$brand" || -z "$comp" || -z "$kind" || -z "$url" ]] && \
+    err "usage: ops-competitors add-url <brand> <competitor> <kind> <url>  (kind: pricing|features|changelog|careers)"
+  [[ ! "$kind" =~ ^(pricing|features|changelog|careers)$ ]] && \
+    err "invalid kind '$kind'. Must be: pricing, features, changelog, careers"
+  [[ ! -f "$PREFS" ]] && err "preferences.json not found at $PREFS"
+
+  echo "Proposed change:"
+  echo "  brand=$brand  competitor=$comp  kind=$kind"
+  echo "  url=$url"
+  echo ""
+  read -rp "Add? [y/N] " confirm
+  [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Cancelled."; exit 0; }
+
+  local tmp; tmp=$(mktemp)
+  jq --arg brand "$brand" --arg comp "$comp" --arg kind "$kind" --arg url "$url" '
+    .competitor_intel.urls[$brand][$comp][$kind] = $url
+  ' "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
+  echo "Saved to preferences.json."
+}
+
+# ── Alerts ───────────────────────────────────────────────────────────────────
+cmd_alerts() {
+  local log="$COMP_REPORTS/alerts.log"
+  if [[ -f "$log" ]]; then
+    tail -20 "$log"
+  else
+    echo "No alerts log found at $log"
+  fi
+}
+
+# ── Help ─────────────────────────────────────────────────────────────────────
+cmd_help() {
+  cat <<'EOF'
+ops-competitors                              dashboard (all brands)
+ops-competitors <brand>                      drill-down: events, report, breakdown
+ops-competitors refresh [brand]              run intel cron now (optional brand filter)
+ops-competitors add-url <b> <c> <k> <url>   add page-diff URL to preferences.json
+ops-competitors alerts                       tail alerts.log (last 20 lines)
+ops-competitors help                         this message
+
+kinds for add-url: pricing | features | changelog | careers
+EOF
+}
+
+# ── Dispatch ─────────────────────────────────────────────────────────────────
+CMD="${1:-dashboard}"
+shift || true
+
+case "$CMD" in
+  dashboard|"") cmd_dashboard ;;
+  refresh)      cmd_refresh "${1:-}" ;;
+  add-url)      cmd_add_url "$@" ;;
+  alerts)       cmd_alerts ;;
+  help|--help)  cmd_help ;;
+  *)            cmd_brand "$CMD" ;;
+esac

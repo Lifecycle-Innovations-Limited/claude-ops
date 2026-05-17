@@ -95,6 +95,23 @@ Write your CEO analysis to `/tmp/yolo-[session]/ceo-analysis.md`. The calling `/
 
 Be specific. Reference actual data. No generic advice. No synthesis of other agents' work — just your own unfiltered CEO perspective.
 
+## Competitor Context
+
+Before writing your analysis, pull the last 7 days of competitor signals relevant to a CEO:
+
+```bash
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1 | sed 's:/$::')}"
+. "$PLUGIN_ROOT/scripts/lib/competitor/context.sh"
+competitor_vertical_slice ceo
+```
+
+This returns a JSON array of high-severity competitor events (new entrants, funding rounds, competitor product moves, page-diff signals). If the array is `[]`, skip this section — no signal to react to. Do not fabricate competitor data.
+
+Weave real signals into your strategic assessment:
+- New entrants or funding rounds → is the market heating up? reframe our defensibility narrative.
+- Competitor product moves → do they change our build priorities or positioning?
+- No signals → note that the competitive landscape was quiet this week.
+
 ## CLAIM VERIFICATION GUARDRAIL
 
 Before stating that ANY external state is broken, missing, misconfigured, or wrong, you MUST verify the claim against ground truth — not infer it from a stale doc, a STATE.md note, or "this looks like it might be off."

@@ -1,6 +1,6 @@
 ---
 name: ops-next
-description: Business-level "what should I do next". Priority stack — fires > unread comms > ready-to-merge PRs > Linear sprint > revenue-generating GSD work. Uses pre-gathered data and routes to the right skill.
+description: Business-level "what should I do next". Priority stack — fires > competitor alerts > unread comms > ready-to-merge PRs > Linear sprint > revenue-generating GSD work. Uses pre-gathered data and routes to the right skill.
 argument-hint: "[context]"
 allowed-tools:
   - Bash
@@ -79,6 +79,14 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-prs 2>/dev/null || echo '[]'
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-ci 2>/dev/null || echo '[]'
 ```
 
+### Competitor alerts (last 24h)
+
+```!
+source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/competitor/context.sh" 2>/dev/null \
+  && competitor_priority_items --top 3 --window-days 1 2>/dev/null \
+  || true
+```
+
 ### Unread messages
 
 ```!
@@ -110,25 +118,35 @@ Check infra data for: unhealthy ECS tasks, stopped services, failed deployments.
 Check CI for: broken `main` or `dev` branches.
 If any fires exist → **recommend `/ops-fires` immediately**.
 
-### Priority 2 — URGENT COMMS
+### Priority 2 — COMPETITOR ALERTS
+
+Check the competitor alerts pre-gathered data (last 24h window).
+If `competitor_priority_items` returned lines (non-empty output):
+- Surface each as: `REACT: <competitor> <source> changed — see latest-<brand>.md`
+- Recommend the user open the latest report file (path from `competitor_context` → `by_brand.<brand>.latest_report`)
+- If high-severity alerts exist → **recommend addressing before comms**
+
+If the output is empty or the source block returned nothing, skip this priority silently.
+
+### Priority 3 — URGENT COMMS
 
 Check unread counts. If WhatsApp or email has unread messages from humans (not automated):
 
 - Estimate urgency from sender/preview if available
 - If urgent comms → **recommend `/ops-inbox [channel]`**
 
-### Priority 3 — READY-TO-MERGE PRs
+### Priority 4 — READY-TO-MERGE PRs
 
 Check PRs for: CI green + no unresolved review comments + not draft.
 If any ready → **recommend reviewing that PR now**.
 Check: `gh pr list --state open --json number,title,statusCheckRollup,reviewDecision 2>/dev/null`
 
-### Priority 4 — LINEAR SPRINT
+### Priority 5 — LINEAR SPRINT
 
 Fetch current sprint issues: use `mcp__linear__list_issues` filtered to current cycle (use Linear GraphQL fallback for cycle queries if needed).
 Find highest-priority issue that is in progress or unstarted.
 
-### Priority 5 — GSD WORK
+### Priority 6 — GSD WORK
 
 From GSD state, find the highest revenue-impact active phase across all projects.
 Revenue weighting: read `revenue.stage` and `priority` from `scripts/registry.json` — projects with lower priority numbers (higher priority) and revenue stage of `growth` or `active` outrank `pre-launch` or `development`. Within the same tier, prioritize closest-to-done phases.

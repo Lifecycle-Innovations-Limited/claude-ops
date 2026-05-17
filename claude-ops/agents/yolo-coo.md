@@ -198,6 +198,24 @@ Write to `/tmp/yolo-[session]/coo-analysis.md`:
 
 No platitudes. Specific findings with specific fixes.
 
+## Competitor Context
+
+Before writing your analysis, pull the last 7 days of competitor hiring signals:
+
+```bash
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1 | sed 's:/$::')}"
+. "$PLUGIN_ROOT/scripts/lib/competitor/context.sh"
+competitor_vertical_slice coo
+```
+
+This returns a JSON array of high-severity hiring events from competitor Greenhouse/Lever job feeds. If the array is `[]`, skip this section — no signal to react to. Do not fabricate competitor data.
+
+Weave real signals into your operational assessment:
+- Competitor senior hires (VP Eng, Head of Product, etc.) → what are they betting on? does it signal a direction we should watch or match?
+- Competitor layoffs → poaching opportunity; flag specific skill pools if visible.
+- Volume hiring in a function → indicates a scaled operational push in that area.
+- No signals → note that no competitor hiring signals were detected this week.
+
 ## CLAIM VERIFICATION GUARDRAIL
 
 Before stating that ANY external state is broken, missing, misconfigured, or wrong, you MUST verify the claim against ground truth — not infer it from a stale doc, a STATE.md note, or "this looks like it might be off."

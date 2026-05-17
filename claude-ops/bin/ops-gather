@@ -17,6 +17,33 @@ START_TIME=$(date +%s)
 "$SCRIPT_DIR/ops-prs" > "$TMPDIR_OPS/prs.json" 2>/dev/null &
 "$SCRIPT_DIR/ops-ci" > "$TMPDIR_OPS/ci.json" 2>/dev/null &
 "$SCRIPT_DIR/ops-unread" > "$TMPDIR_OPS/unread.json" 2>/dev/null &
+
+# Competitor intel — sourced from lib (jq-only, cheap)
+(
+  # shellcheck source=scripts/lib/competitor/context.sh
+  source "$(dirname "$SCRIPT_DIR")/scripts/lib/competitor/context.sh" 2>/dev/null || true
+  ctx=$(competitor_context --window-days 7 2>/dev/null || echo '{"configured":false}')
+  if [[ "$(printf '%s' "$ctx" | jq -r '.configured' 2>/dev/null)" != "true" ]]; then
+    printf '{"configured":false}'
+  else
+    # Extract what briefing consumers need: summary line + top-3 high events
+    printf '%s' "$ctx" | jq -c '{
+      configured: true,
+      brands: .brands,
+      by_brand: (.by_brand | to_entries | map({
+        key: .key,
+        value: {last_run: .value.last_run, latest_report: .value.latest_report}
+      }) | from_entries),
+      events: {
+        total: .events.total,
+        high_count: (.events.high | length),
+        med_count: .events.med_count,
+        top_high: (.events.high[0:3] | map({competitor, source, snippet: (.snippet // "" | .[0:140])}))
+      }
+    }'
+  fi
+) > "$TMPDIR_OPS/competitor.json" 2>/dev/null &
+
 wait
 
 END_TIME=$(date +%s)
@@ -31,6 +58,7 @@ jq -n \
   --slurpfile prs "$TMPDIR_OPS/prs.json" \
   --slurpfile ci "$TMPDIR_OPS/ci.json" \
   --slurpfile unread "$TMPDIR_OPS/unread.json" \
+  --slurpfile competitor "$TMPDIR_OPS/competitor.json" \
   '{
     "timestamp": $ts,
     "gather_duration": $dur,
@@ -38,5 +66,6 @@ jq -n \
     "infrastructure": $infra[0],
     "pull_requests": $prs[0],
     "ci_failures": $ci[0],
-    "unread_messages": $unread[0]
+    "unread_messages": $unread[0],
+    "competitor": $competitor[0]
   }'
