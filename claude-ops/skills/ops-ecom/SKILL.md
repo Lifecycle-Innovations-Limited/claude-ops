@@ -537,6 +537,38 @@ If the connectivity check returns valid shop data, confirm success. If it fails 
 
 When called with no arguments, show a compact store overview:
 
+### Competitor activity (gather before rendering)
+
+```bash
+# Resolve PLUGIN_ROOT: directory containing the ops-ops-marketplace plugin scripts
+_COMP_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$(dirname "$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")")")}"
+_COMP_LIB="$_COMP_PLUGIN_ROOT/scripts/lib/competitor/context.sh"
+_COMP_ECOM_SIGNALS="[]"
+if [[ -f "$_COMP_LIB" ]]; then
+  # shellcheck source=/dev/null
+  . "$_COMP_LIB"
+  _COMP_ECOM_SIGNALS=$(competitor_vertical_slice ecom --window-days 7 2>/dev/null || echo "[]")
+fi
+```
+
+Parse `_COMP_ECOM_SIGNALS` JSON array. If it is non-empty, append the **COMPETITOR ACTIVITY** section after FULFILLMENT in the store summary render. If it is `[]`, skip the section entirely.
+
+Render using this shape (mobile mode: plain text, no banners; desktop: with `━━━` rules):
+
+```
+━━━ COMPETITOR ACTIVITY (last 7d) ━━━
+APP RELEASES
+  • [competitor] — v[version] released this week (rating: [X.X], [N]k reviews)
+PRODUCT / PRICING CHANGES
+  • [competitor] — pricing page changed ([low/med/high] severity)
+  • [competitor] — features page changed ([brief description from snippet])
+```
+
+Mapping rules (apply per event in the JSON array):
+- `source == "appstore"` → APP RELEASES entry. Extract version, rating, and review count from `snippet` if present.
+- `source == "page-diff"` and `kind` matches `features` → PRODUCT / PRICING CHANGES entry, labelled as features change.
+- `source == "page-diff"` and `kind == "pricing"` → PRODUCT / PRICING CHANGES entry, labelled as pricing change with severity from `severity` field.
+
 Run orders, inventory, and health checks in parallel (separate Bash calls), then render:
 
 ```
@@ -553,6 +585,8 @@ TODAY         $[revenue]  [N] orders
 
 INVENTORY     [N] products  |  [N] low stock  |  [N] out of stock
 FULFILLMENT   [N] unfulfilled orders pending
+
+[COMPETITOR ACTIVITY section here if non-empty — see above]
 
 ──────────────────────────────────────────────────────
  /ops:ops-ecom orders     — order management

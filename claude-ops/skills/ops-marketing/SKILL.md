@@ -1950,6 +1950,39 @@ Run ALL sections in parallel, then render unified dashboard.
 "${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-dash" 2>/dev/null
 ```
 
+### Competitor signals (gather before rendering)
+
+```bash
+# Resolve PLUGIN_ROOT: directory containing the ops-ops-marketplace plugin scripts
+_COMP_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$(dirname "$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")")")}"
+_COMP_LIB="$_COMP_PLUGIN_ROOT/scripts/lib/competitor/context.sh"
+_COMP_MARKETING_SIGNALS="[]"
+if [[ -f "$_COMP_LIB" ]]; then
+  # shellcheck source=/dev/null
+  . "$_COMP_LIB"
+  _COMP_MARKETING_SIGNALS=$(competitor_vertical_slice marketing --window-days 7 2>/dev/null || echo "[]")
+fi
+```
+
+Parse `_COMP_MARKETING_SIGNALS` JSON array. If it is non-empty, emit the **COMPETITOR SIGNALS** section immediately before the Marketing Health Score footer. If it is `[]`, skip the section entirely.
+
+Render the section using this shape (mobile mode: plain text, no banners; desktop: with `━━━` rules):
+
+```
+━━━ COMPETITOR SIGNALS (last 7d) ━━━
+PRICING MOVES (react in your campaigns)
+  • [competitor] — pricing page changed ([price drop/increase detected]) — see latest-[slug].md
+FUNDING / NEWS
+  • [competitor] — [snippet summary, e.g. "Series C announced"] — campaign angle: [one-liner]
+SENTIMENT (Reddit / HN)
+  • [competitor] — [N]-point [HN/Reddit] thread on "[topic]" — content opportunity
+```
+
+Mapping rules (apply per event in the JSON array):
+- `source == "page-diff"` and `kind == "pricing"` → PRICING MOVES entry. Describe the direction (drop/increase) if inferable from snippet.
+- `snippet` matches `funding|raised|series [A-D]` (case-insensitive) → FUNDING / NEWS entry. Suggest a campaign counter-angle framing the competitor as an "established player" or "new entrant" as appropriate.
+- `source == "reddit"` or `source == "hn"` → SENTIMENT entry. Extract the core concern from `snippet` as a content opportunity.
+
 Parse the JSON output and display:
 
 ```
@@ -1962,6 +1995,8 @@ Parse the JSON output and display:
  Organic (GA4)    [N] sessions  |  [X]% CVR  |  $[X] revenue
  SEO (GSC)        [N] clicks  |  [N] impressions  |  [X] avg pos
  Instagram        [N] followers  |  [N] reach (7d)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[COMPETITOR SIGNALS section here if non-empty — see above]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  Marketing Health Score: [N]/100  ([status: Healthy/Warning/Critical])
  Blended ROAS: [X]x  Top channel: [channel]
