@@ -34,7 +34,9 @@ The daemon supervises **seven** long-lived services:
 | `memory-extractor` | every 30 min | Spawns `memory-extractor` agent to refresh `memories/` |
 | `inbox-digest` | every 15 min | Pre-classifies comms across channels for `/ops:inbox` |
 | `store-health` | every 10 min | Shopify orders + inventory polling (if configured) |
-| `competitor-intel` | hourly | Background market/competitor monitoring |
+| `competitor-intel` | Mon 10:00 (TZ) | **v2.3**: weekly strategic synthesis. Tavily discovery (cached 30d) + 5 parallel signal collectors (Reddit/HN/AppStore/jobs/page-diff) + 7d events.jsonl window → Sonnet → `reports/competitor-intel/YYYY-MM-DD_<brand>.md` |
+| `competitor-alert` | every 10 min | **v2.3**: drains `queue/immediate.jsonl` (severity:high). Telegram push if configured + always appends to `alerts.log`. Heartbeats on empty queue |
+| `competitor-daily` | daily 17:00 (TZ) | **v2.3**: drains `queue/daily.jsonl` (severity:med). Groups by competitor, emits `daily-YYYY-MM-DD.md` roll-up + Telegram digest |
 | `message-listener` | persistent | Surfaces urgent patterns (your name, "urgent", "ASAP", "fire", "down") |
 
 > [!TIP]
