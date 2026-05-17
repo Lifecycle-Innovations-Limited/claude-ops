@@ -34,6 +34,7 @@ echo "Running from: $TESTS_DIR"
 echo ""
 
 run_suite "$TESTS_DIR/test-skills-lint.sh"
+run_suite "$TESTS_DIR/test-agents-lint.sh"
 run_suite "$TESTS_DIR/test-bin-scripts.sh"
 run_suite "$TESTS_DIR/test-hooks.sh"
 run_suite "$TESTS_DIR/test-template.sh"
