@@ -281,6 +281,42 @@ if command -v jq >/dev/null 2>&1; then
   esac
 fi
 
+# --- 5d. Stale GH secrets check (Doppler→GH drift, read-only) ---
+# If ops-secret-sync bin is available AND both gh + doppler are installed, run a
+# quick per-project drift scan for projects in the registry that have a
+# doppler_project field. Only emits a WARNING — never reads or writes secret values.
+if command -v jq >/dev/null 2>&1 && \
+   command -v gh >/dev/null 2>&1 && \
+   command -v doppler >/dev/null 2>&1 && \
+   [ -x "$SCRIPT_DIR/bin/ops-secret-sync" ] && \
+   [ -f "$REGISTRY" ] && jq empty "$REGISTRY" >/dev/null 2>&1; then
+
+  STALE_PROJECTS=()
+
+  # Iterate projects that have both github_repo and doppler_project defined
+  PROJ_COUNT=$(jq '.projects | length' "$REGISTRY" 2>/dev/null || echo 0)
+  for i in $(seq 0 $((PROJ_COUNT - 1))); do
+    GH_REPO=$(jq -r ".projects[$i].github_repo // empty" "$REGISTRY" 2>/dev/null)
+    DOP_PROJ=$(jq -r ".projects[$i].doppler_project // empty" "$REGISTRY" 2>/dev/null)
+    DOP_CFG=$(jq -r ".projects[$i].doppler_config // \"prd\"" "$REGISTRY" 2>/dev/null)
+    [ -z "$GH_REPO" ] || [ -z "$DOP_PROJ" ] && continue
+
+    # Run drift check — exit 1 = drift found, exit 0 = in sync, exit 2 = error/skip
+    if "$SCRIPT_DIR/bin/ops-secret-sync" \
+         --repo "$GH_REPO" --project "$DOP_PROJ" --config "$DOP_CFG" \
+         --json >/dev/null 2>&1; then
+      : # in sync
+    elif [ $? -eq 1 ]; then
+      STALE_PROJECTS+=("$GH_REPO ($DOP_PROJ/$DOP_CFG)")
+    fi
+    # exit 2 (error/missing tools) — silently skip
+  done
+
+  if [ ${#STALE_PROJECTS[@]} -gt 0 ]; then
+    WARNINGS+=("stale_gh_secrets: Potentially stale GH secrets detected in: $(IFS=', '; echo "${STALE_PROJECTS[*]}"). Run /ops:secret-sync --repo <repo> --project <proj> to review and sync.")
+  fi
+fi
+
 # --- 6. Registry ---
 REGISTRY_STATUS="missing"
 REGISTRY_COUNT=0
