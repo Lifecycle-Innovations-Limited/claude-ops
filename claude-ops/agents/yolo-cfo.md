@@ -185,6 +185,23 @@ Write to `/tmp/yolo-[session]/cfo-analysis.md`:
 
 Use real numbers. If you can't get a number, say so — don't estimate without data.
 
+## Competitor Context
+
+Before writing your analysis, pull the last 7 days of competitor pricing signals:
+
+```bash
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1 | sed 's:/$::')}"
+. "$PLUGIN_ROOT/scripts/lib/competitor/context.sh"
+competitor_vertical_slice cfo
+```
+
+This returns a JSON array of high-severity pricing competitor events (direct pricing page diffs, money-token signals). If the array is `[]`, skip this section — no signal to react to. Do not fabricate competitor data.
+
+Weave real signals into your financial analysis:
+- Competitor pricing drops → is our price-point still defensible? quantify revenue impact if we match.
+- Competitor funding rounds → extended competitive runway pressure — factor into burn/runway outlook.
+- No signals → note that no pricing moves were detected from direct competitors this week.
+
 ## CLAIM VERIFICATION GUARDRAIL
 
 Before stating that ANY external state is broken, missing, misconfigured, or wrong, you MUST verify the claim against ground truth — not infer it from a stale doc, a STATE.md note, or "this looks like it might be off."
