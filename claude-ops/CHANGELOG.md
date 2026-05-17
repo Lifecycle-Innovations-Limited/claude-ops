@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.0] — 2026-05-17
+### Added
+- **Competitor-intel v2.3 — full pipeline redesign with 5 signal sources, severity-tiered routing, and append-only event log.** Goes from "weekly Tavily dump + Sonnet synth" to a real CI system that rivals Crayon/Klue/Kompyte's signal breadth at $0 incremental cost.
+
+  **New signal collectors** (`scripts/lib/competitor/`, all bash + jq + curl, no extra deps):
+  - `reddit-search.sh` — Reddit JSON API (no auth), severity-classified by score + keyword heuristics (complaint, vs, alternative, switching from).
+  - `hn-search.sh` — HN Algolia API (no auth), severity by points + comments + Show HN/Launch HN/is hiring detection.
+  - `appstore-lookup.sh` — Apple iTunes Lookup API (no auth), version + rating + release-date snapshots for mobile competitors (opt-in via `preferences.json .competitor_intel.app_store: true`).
+  - `jobs-feed.sh` — Greenhouse + Lever public job APIs (no auth), strategic-hire detection (VP / Head of / Director / Chief / Founding → high severity).
+  - `page-diff.sh` — HTML pricing/features/careers/changelog page-diff engine. Fetches with curl, normalizes via Python (strip script/style/svg, decode entities, collapse whitespace), SHA-256, persists snapshots to `competitor_state/<brand>/<comp>/snapshots/<kind>.<sha8>.txt` with `<kind>.latest` symlink. Diffs emit lines-changed + extracted snippet. Severity: pricing-page change with money token (`$`, `€`, `/mo`, `/yr`) → high; other pricing/features/changelog → med; tiny copy tweaks → low. Last 12 snapshots retained per kind.
+
+  **Severity-tiered routing** (`scripts/lib/competitor/event-router.sh` + 2 new crons):
+  - All events append to `competitor_state/events.jsonl` (audit log).
+  - `severity: high` → also writes to `queue/immediate.jsonl`, drained every 10min by `ops-competitor-alert.sh` (Telegram push if creds + always `alerts.log`).
+  - `severity: med` → `queue/daily.jsonl`, drained at 17:00 by `ops-cron-competitor-daily.sh` (grouped-by-competitor roll-up, dated daily-YYYY-MM-DD.md + Telegram digest with 4000-char cap).
+  - `severity: low` → state-only, surfaced in weekly strategic synthesis.
+
+  **Weekly cron pipeline rewrite** (`ops-cron-competitor-intel.sh`, 432 lines):
+  - Discovery cached 30d (skips Tavily when state has fresh `last_discovery`, saving ~60% Tavily spend).
+  - Per-competitor signals collected in parallel background jobs with 30s timeout guards; page-diff URLs read per-competitor from `preferences.json .competitor_intel.urls.<competitor>`.
+  - Reads 7d window of `events.jsonl` (jq epoch filter) and merges into Sonnet prompt (capped at 100k chars).
+  - Raw synthesis always persisted to `reports/competitor-intel/YYYY-MM-DD_<brand>-synthesis.md` BEFORE extraction so partial LLM output is never lost.
+  - State extended with `last_discovery` and `app_store_enabled` keys (backward compat with v2.2.5 `competitors` + `last_run` preserved).
+  - Graceful degradation: missing `TAVILY_API_KEY` AND no cached state → SKIP cleanly; missing Tavily but cached state present → proceed with non-Tavily signals only.
+
+  **Daemon services config** — `competitor-alert` (`*/10 * * * *`) and `competitor-daily` (`0 17 * * *`) added to `daemon-services.default.json` and `daemon-services.example.json` alongside existing weekly `competitor-intel` (`0 10 * * 1` Europe/Amsterdam).
+
+  **Cost model at 10-brand scale**: ~13 Tavily calls/wk total (cached discovery), ~320k Sonnet tokens/mo on Max-OAuth — $0 incremental.
+
 ## [2.2.5] — 2026-05-17
 ### Fixed
 - **`competitor-intel` LLM synth dropped to raw Tavily fallback when output didn't include `---REPORT---` marker.** Sonnet was producing valid strategic deltas but the strict marker check threw them away. Three-strategy JSON extraction now: (1) fenced ` ```json ` block, (2) bare `{"competitors":[...]}` regex anywhere in output, (3) bullet-list scrape from "NEW entrants" / "Competitor moves" sections. Report extraction now falls back to stripping JSON blocks from full synthesis instead of dropping to raw Tavily dump.
