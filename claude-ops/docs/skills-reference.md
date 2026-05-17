@@ -87,6 +87,15 @@ Portfolio dashboard. Shows all registered projects with GSD phase, branch state,
 - `/ops:projects` — all projects
 - `/ops:projects my-app` — single project deep-dive
 
+### `/ops:competitors` · `skills/ops-competitors/SKILL.md` · `bin/ops-competitors`
+Dedicated dashboard + management UI for the v2.3 competitor-intelligence subsystem.
+- `/ops:competitors` — dashboard: all tracked brands with alert counts, last_run, recent high-severity events
+- `/ops:competitors <brand>` — drill-down: 30d event timeline, competitor breakdown, latest weekly report excerpt
+- `/ops:competitors refresh [brand]` — manually trigger the weekly cron immediately, optional per-brand env override
+- `/ops:competitors add-url <brand> <competitor> <kind> <url>` — `jq`-merge a page-diff URL into `preferences.json` (kind ∈ pricing/features/careers/blog/changelog) with confirm prompt
+- `/ops:competitors alerts` — tail last 20 of `reports/competitor-intel/alerts.log`
+- `/ops:competitors help` — print subcommand reference
+
 ### `/ops:linear` · `skills/ops-linear/SKILL.md`
 Linear sprint board and issue management. Uses Linear MCP for full sprint visibility and GSD sync.
 - `/ops:linear sprint` — current sprint

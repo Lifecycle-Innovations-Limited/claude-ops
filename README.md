@@ -102,7 +102,7 @@ claude --plugin-dir ./claude-ops/claude-ops
 
 ## Commands
 
-All 30 skills, grouped by category:
+All 36 skills, grouped by category:
 
 | 🧭 Navigation | 📊 Daily Ops |
 |---|---|
@@ -120,6 +120,7 @@ All 30 skills, grouped by category:
 | `/ops:fires` — incidents + **all AWS** | `/ops:gtm` — **cross-channel GTM planner** |
 | `/ops:deploy` — ECS/Vercel/Actions | `/ops:voice` — Bland AI/ElevenLabs/Whisper |
 | `/ops:monitor` — Datadog/New Relic/OTEL | `/ops:package` — carrier-agnostic shipping |
+| `/ops:competitors` — **self-discovering competitor intel** (v2.3) | |
 
 | 🤖 Automation | 🧰 Maintenance |
 |---|---|
@@ -284,6 +285,57 @@ SendMessage(to="fix-ecs", content="This is P0, prioritize over CI")
 
 ---
 
+## Competitor Intelligence (v2.3)
+
+A self-discovering competitive-intelligence pipeline that goes well past "weekly Google Alert." Free signals + LLM curation, $0 incremental cost, configurable per brand.
+
+**Pipeline per configured brand:**
+
+1. **Discovery** (Tavily, cached 30d) — surfaces the current competitor landscape for `{brand_name}` in `{category}`.
+2. **Per-competitor signal collectors** run in parallel (`scripts/lib/competitor/`):
+   - `reddit-search.sh` — Reddit JSON API
+   - `hn-search.sh` — HN Algolia API
+   - `appstore-lookup.sh` — iTunes Lookup (opt-in for mobile brands)
+   - `jobs-feed.sh` — Greenhouse + Lever public APIs (senior-hire detection)
+   - `page-diff.sh` — HTML pricing/features/careers SHA snapshots with money-token detection
+3. **Severity routing** via `event-router.sh`:
+   - `high` (price change on direct rival, funding, Show HN going viral) → immediate Telegram push every 10 min via `competitor-alert` cron
+   - `med` → daily 17:00 grouped roll-up via `competitor-daily` cron
+   - `low` → state-only, surfaces in weekly strategic synthesis
+4. **Weekly synthesis** (Mon 10:00) — `claude_invoke` Sonnet 4.6 against 7-day events.jsonl window. Output: `NEW entrants / Competitor moves / Brand signal / Threats & opportunities`.
+
+**Where it shows up:**
+
+| Surface | What you see |
+|---|---|
+| `/ops:go` | `COMPETITOR` row: alerts count, last_run, top-3 event snippets |
+| `/ops:next` | Priority 2 (between fires + comms): `REACT: <competitor> <source> changed` |
+| `/ops:marketing` | PRICING MOVES + FUNDING + SENTIMENT section |
+| `/ops:ecom` | APP RELEASES + PRODUCT/PRICING CHANGES section |
+| `/ops:yolo` | CEO/CTO/CFO/COO agents each load role-specific vertical slice |
+| `/ops:competitors` | Dedicated dashboard + `bin/ops-competitors` CLI |
+| Disk | `$DATA_DIR/reports/competitor-intel/YYYY-MM-DD_<brand>.md` |
+
+**Config** (`preferences.json .competitor_intel`):
+```json
+{
+  "brand_name": "My-Project",
+  "category": "AI health coaching apps",
+  "max_competitors": 5,
+  "report_timezone": "Europe/Amsterdam",
+  "app_store": true,
+  "urls": {
+    "Noom": { "pricing": "https://www.noom.com/plans/", "features": "..." }
+  }
+}
+```
+
+**Required env:** `TAVILY_API_KEY` (free tier 1000 searches/mo — covers ~30 brands). **Optional:** `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` for push delivery (otherwise reports persist to disk only).
+
+**Cost at 10-brand scale:** ~13 Tavily calls/wk + ~320k Sonnet tokens/mo on Max-OAuth = **$0 incremental**.
+
+---
+
 ## Privacy & Security
 
 > [!IMPORTANT]
@@ -305,7 +357,9 @@ SendMessage(to="fix-ecs", content="This is P0, prioritize over CI")
 - `memory-extractor` every 30 min — Haiku summarizes local chats to `memories/`.
 - `inbox-digest` every 4h — aggregates for your configured Telegram bot (if any).
 - `store-health` daily 9am — Shopify Admin API, read-only.
-- `competitor-intel` weekly — your configured competitor feeds.
+- `competitor-intel` weekly Mon 10:00 — full strategic synthesis for each configured brand (see below).
+- `competitor-alert` every 10 min — drains high-severity competitor events to Telegram + `alerts.log`.
+- `competitor-daily` daily 17:00 — drains medium-severity events into a grouped roll-up digest.
 - `message-listener` continuous — local polling, never sends outbound on its own.
 
 **Security measures:** `umask 077` on preferences.json · credentials in Claude Code's encrypted `userConfig` · registry/preferences gitignored · `tests/test-no-secrets.sh` pre-commit · Rule 5 blocks destructive actions without confirmation · append-only shell profile writes.

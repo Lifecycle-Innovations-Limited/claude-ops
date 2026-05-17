@@ -130,25 +130,31 @@ sequenceDiagram
 > [!IMPORTANT]
 > `Hard Truths Merger` in the diagram above is the **main `/ops:yolo` skill orchestrator** running in the Claude Code main agent context — NOT a separate agent. It reads all four parallel analysis files (`ceo-analysis.md`, `cto-analysis.md`, `cfo-analysis.md`, `coo-analysis.md`) and composes the unified report. `yolo-ceo` is a peer agent with its own strategic perspective; it does not synthesize the others' work.
 
+> **v2.3.1 — competitor context auto-loaded.** Each C-suite agent now sources `scripts/lib/competitor/context.sh` at the start of its run and calls `competitor_vertical_slice <role>` to pull a role-filtered slice of last-7d high-severity competitor events. The slice is folded into each agent's analysis. Skipped silently when competitor-intel is unconfigured.
+
 ### `yolo-ceo` · `agents/yolo-ceo.md`
 - **Model**: `claude-opus-4-6`
 - **Effort**: high · **maxTurns**: 20
 - **Purpose**: Strategic priority analysis. Growth blockers, resource allocation, build vs. buy decisions, investor-readiness. No sugar-coating.
+- **Competitor slice**: `competitor_vertical_slice ceo` — NEW entrants, comp funding, strategic moves. Factors into market-positioning recommendations.
 
 ### `yolo-cto` · `agents/yolo-cto.md`
 - **Model**: `claude-opus-4-6`
 - **Effort**: high · **maxTurns**: 25
 - **Purpose**: Technical health analysis. Architecture, tech debt, production risks, scalability limits, and cut corners. Brutally honest about what will break.
+- **Competitor slice**: `competitor_vertical_slice cto` — changelog/feature page-diffs, Show HN / Launch HN. Benchmarks tech velocity.
 
 ### `yolo-cfo` · `agents/yolo-cfo.md`
 - **Model**: `claude-opus-4-6`
 - **Effort**: high · **maxTurns**: 20
 - **Purpose**: Financial analysis. AWS burn rate, runway, ROI on current work, credits expiry, cost anomalies. No optimism without data.
+- **Competitor slice**: `competitor_vertical_slice cfo` — pricing diffs with money tokens (severity:high), comp funding rounds. Quantifies revenue impact of competitor pricing moves.
 
 ### `yolo-coo` · `agents/yolo-coo.md`
 - **Model**: `claude-opus-4-6`
 - **Effort**: high · **maxTurns**: 25
 - **Purpose**: Operations execution analysis. Stale work, broken processes, missing automation, communication failures. What the CEO doesn't see.
+- **Competitor slice**: `competitor_vertical_slice coo` — Greenhouse/Lever hiring signals (especially senior roles), layoff signals. Surfaces operational threats and poaching opportunities.
 
 > [!WARNING]
 > C-suite agents produce unfiltered "Hard Truths" — they will flag risks, dead projects, and wasted spend by name. Review before sharing with investors or teammates.

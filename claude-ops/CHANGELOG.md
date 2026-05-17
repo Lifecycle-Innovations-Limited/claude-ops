@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.2] — 2026-05-17
+### Changed
+- **Docs/wiki/metadata sync for v2.3.x.** Producer side (v2.3.0) and consumer side (v2.3.1) shipped without doc surface updates; v2.3.2 catches everything up.
+  - `README.md`: new "Competitor Intelligence (v2.3)" section with pipeline overview, signal-source matrix, consumer integrations, config schema, cost model. Daemon-services list now reflects `competitor-intel` (Mon 10:00), `competitor-alert` (every 10 min), and `competitor-daily` (17:00). `/ops:competitors` added to the skills table. Skill count bumped 30 → 36.
+  - `claude-ops/docs/daemon-guide.md`: 3 competitor cron services listed with correct cadence + purpose.
+  - `claude-ops/docs/agents-reference.md`: each of `yolo-ceo`/`cto`/`cfo`/`coo` now documents its `competitor_vertical_slice` source and how the slice folds into the analysis.
+  - `claude-ops/docs/skills-reference.md`: `/ops:competitors` entry added with all 6 subcommands.
+  - Wiki: new `Competitor-Intelligence.md` page covering full architecture + signal sources + severity routing + consumer integrations + state/reports layout + cost model + operational commands. Sidebar updated. Version stamp bumped 2.2.0 → 2.3.2.
+  - Skill count drift fixed: `plugin.json` + `marketplace.json` descriptions now say "36 skills, 18 agents" (was "35 skills") to reflect the new `/ops:competitors` skill.
+
 ## [2.3.1] — 2026-05-17
 ### Added
 - **Competitor-intel outputs now consumed across the plugin.** v2.3.0 shipped the producer side (signal collectors, severity routing, weekly synthesis). v2.3.1 wires the consumer side so the data actually shows up where decisions get made:
