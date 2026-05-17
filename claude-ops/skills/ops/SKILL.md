@@ -52,6 +52,7 @@ Route `$ARGUMENTS` to the correct ops skill:
 | integrate, connect, add-api, saas, partner    | `/ops:ops-integrate $ARGUMENTS` |
 | speedup, clean, optimize, cleanup             | `/ops:ops-speedup`      |
 | orchestrate, subagents, agents, dispatch, run | `/ops:ops-orchestrate $ARGUMENTS` |
+| secret-sync, secrets, doppler-sync, drift     | `/ops:ops-secret-sync $ARGUMENTS` |
 
 If `$ARGUMENTS` is empty, launch the interactive dashboard: invoke `/ops:ops-dash` directly.
 
