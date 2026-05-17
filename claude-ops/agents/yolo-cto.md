@@ -160,6 +160,23 @@ Highest risk: [package] [vuln]
 
 Be specific. Reference actual file paths and line numbers where possible. No generic "improve code quality" advice.
 
+## Competitor Context
+
+Before writing your analysis, pull the last 7 days of competitor signals relevant to a CTO:
+
+```bash
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1 | sed 's:/$::')}"
+. "$PLUGIN_ROOT/scripts/lib/competitor/context.sh"
+competitor_vertical_slice cto
+```
+
+This returns a JSON array of high-severity technical competitor signals (changelog page-diffs, feature page changes, technical Show HN / Launch HN signals). If the array is `[]`, skip this section — no signal to react to. Do not fabricate competitor data.
+
+Weave real signals into your technical assessment:
+- Competitor changelog / feature page diffs → how does their tech velocity compare to ours? does it create roadmap pressure?
+- Competitor technical launches → are they shipping something we're still planning? recalibrate priority ranking.
+- No signals → note that no technical competitor moves were detected this week.
+
 ## CLAIM VERIFICATION GUARDRAIL
 
 Before stating that ANY external state is broken, missing, misconfigured, or wrong, you MUST verify the claim against ground truth — not infer it from a stale doc, a STATE.md note, or "this looks like it might be off."
