@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Mock `doppler` CLI for ops-secret-sync tests.
+# Behavior controlled by env vars:
+#   MOCK_DOPPLER_JSON        — JSON object returned by `doppler secrets --json`
+#   MOCK_DOPPLER_PLAIN_VALUE — plain-text value returned by `doppler secrets get <NAME> --plain`
+#   MOCK_DOPPLER_LOG_FILE    — append every invocation (argv) to this file
+set -u
+LOG="${MOCK_DOPPLER_LOG_FILE:-/dev/null}"
+printf '%s\n' "$*" >> "$LOG"
+
+sub="${1:-}"
+shift || true
+
+case "$sub" in
+  secrets)
+    # Scan remaining args for subcommand
+    subcmd=""
+    for a in "$@"; do
+      case "$a" in
+        get) subcmd="get"; break ;;
+      esac
+    done
+
+    if [[ "$subcmd" == "get" ]]; then
+      # `doppler secrets get <NAME> [--plain ...]`
+      printf '%s' "${MOCK_DOPPLER_PLAIN_VALUE:-mock-secret-value}"
+      exit 0
+    fi
+
+    # `doppler secrets [--project X] [--config Y] [--json]`
+    _dop_json="${MOCK_DOPPLER_JSON:-}"
+    printf '%s' "${_dop_json:-{\}}"
+    exit 0
+    ;;
+  projects)
+    printf '%s' '[{"slug":"your-project","name":"your-project"}]'
+    exit 0
+    ;;
+esac
+
+exit 0
