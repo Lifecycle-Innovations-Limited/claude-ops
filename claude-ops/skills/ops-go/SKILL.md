@@ -150,6 +150,14 @@ for d in $(jq -r '.projects[] | select(.gsd == true) | .paths[]' "${CLAUDE_PLUGI
 done
 ```
 
+### Competitor Intel
+
+```!
+source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/competitor/context.sh" 2>/dev/null \
+  && competitor_context --window-days 7 2>/dev/null \
+  || echo '{"configured":false}'
+```
+
 ### External Projects (non-repo)
 
 ```!
@@ -197,6 +205,11 @@ MARKETING
 [If health < 70: "⚠ Run /ops:marketing optimize for recommendations"]
 [If no marketing configured: "(marketing not configured — /ops:marketing setup)"]
 
+COMPETITOR    <brand>: N alerts · M med deltas · last run YYYY-MM-DD
+              <top high-severity event snippet, 1 line, truncated 140 chars>
+[If competitor data returns {configured:false}, omit this section entirely — no "(not configured)" noise]
+[Mobile mode (Rule 7): compress to one line: "comp: N alerts (top: brief snippet)"]
+
 UNREAD
 [WhatsApp: N, Email: N, Slack: N workspace(s) configured (no scan), Notion: N items, Calendar: N events today]
 
@@ -210,7 +223,7 @@ TODAY'S PRIORITIES (ranked by revenue impact + urgency)
 
 **Marketing section data source**: Read from `ops-marketing-dash` pre-gathered output (see Pre-gathered data section). If marketing data is present in the dash output, compute the health score inline (see ops-marketing SKILL.md health score formula). If ops-marketing-dash is not configured or returns empty marketing data, show `(marketing not configured — /ops:marketing setup)`.
 
-**Priority ranking**: fires > degraded infra > CI failures > unread comms > ready-to-merge PRs > revenue-generating GSD work > stale projects.
+**Priority ranking**: fires > degraded infra > CI failures > competitor alerts (high-severity, last 24h) > unread comms > ready-to-merge PRs > revenue-generating GSD work > stale projects.
 
 If `$ARGUMENTS` contains a project alias, focus the briefing on that project only.
 

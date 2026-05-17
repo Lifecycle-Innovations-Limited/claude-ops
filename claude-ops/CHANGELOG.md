@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.1] — 2026-05-17
+### Added
+- **Competitor-intel outputs now consumed across the plugin.** v2.3.0 shipped the producer side (signal collectors, severity routing, weekly synthesis). v2.3.1 wires the consumer side so the data actually shows up where decisions get made:
+
+  **Shared context lib** (`scripts/lib/competitor/context.sh`, 292 lines):
+  - `competitor_context [--brand X] [--window-days N] [--severity S]` — aggregated JSON with brands list, per-brand state + latest report path, events in window grouped by severity, pending queue sizes.
+  - `competitor_briefing_line` — one-line summary for briefing surfaces.
+  - `competitor_priority_items --top N` — bullet list of high-severity events for priority advisors.
+  - `competitor_vertical_slice <vertical>` — role-filtered slices (`marketing`, `ecom`, `ceo`, `cfo`, `coo`, `cto`) so each consumer gets only what's relevant to its lens.
+  - jq-only, no external calls — cheap enough to read on every command invocation.
+
+  **`/ops:go` morning briefing**: new `COMPETITOR` row in `bin/ops-gather` (parallel gather, skipped silently when unconfigured) shows alerts count, med-delta count, last_run, plus top-3 event snippets. Mobile mode compresses to `comp: N alerts (top: brief)`.
+
+  **`/ops:next` priority stack**: high-severity competitor events now slot between `fires` and `unread comms` as Priority 2, framed as `REACT: <competitor> <source> changed — see latest-<brand>.md`. Downstream priorities renumbered 3→6.
+
+  **`/ops:marketing`**: new "Competitor signals (last 7d)" section in dashboard — PRICING MOVES (campaign-react triggers), FUNDING/NEWS (positioning opportunities), SENTIMENT (Reddit/HN themes). Skipped when slice is empty.
+
+  **`/ops:ecom`**: new "Competitor activity (last 7d)" section — APP RELEASES (App Store version snapshots), PRODUCT/PRICING CHANGES (feature + pricing page diffs).
+
+  **`/ops:yolo` C-suite agents**: each of CEO/CTO/CFO/COO agent files (`agents/yolo-{ceo,cto,cfo,coo}.md`) now sources `competitor_vertical_slice <role>` and weaves role-specific signals into their analysis. CEO sees new entrants + funding; CFO sees pricing diffs with money tokens; COO sees Greenhouse/Lever hiring signals; CTO sees changelog/feature page-diffs.
+
+  **New `/ops:competitors` skill** + `bin/ops-competitors` CLI:
+  - Dashboard mode (no args): all tracked brands with alert counts, last_run, recent high events.
+  - Drill-down (`ops-competitors <brand>`): 30d event timeline, top competitors, latest report excerpt.
+  - `refresh [brand]` — manually trigger the weekly cron immediately, optional per-brand env override.
+  - `add-url <brand> <competitor> <kind> <url>` — jq-merges a page-diff URL into `preferences.json` with confirm prompt.
+  - `alerts` — tail last 20 of `reports/competitor-intel/alerts.log`.
+  - Mobile-aware rendering, no external deps beyond curl + jq.
+
 ## [2.3.0] — 2026-05-17
 ### Added
 - **Competitor-intel v2.3 — full pipeline redesign with 5 signal sources, severity-tiered routing, and append-only event log.** Goes from "weekly Tavily dump + Sonnet synth" to a real CI system that rivals Crayon/Klue/Kompyte's signal breadth at $0 incremental cost.
