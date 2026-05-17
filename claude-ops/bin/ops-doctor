@@ -233,6 +233,54 @@ if [ -f "$PLUGIN_JSON" ] && command -v jq >/dev/null 2>&1; then
   fi
 fi
 
+# --- 5c. Kapture MCP transport check (issue #206) ---
+# Kapture must be configured as direct stdio in ~/.claude.json.
+# When routed through mcp-proxy SSE, its internal 1-second WS handshake
+# pushes past Claude Code's tool-registration window, causing all
+# mcp__kapture__* tools to silently drop from the deferred-tool registry.
+if command -v jq >/dev/null 2>&1; then
+  KAPTURE_STATUS="unconfigured"
+  KAPTURE_CONFIG_FILE=""
+
+  # 1. Check ~/.claude.json for a direct kapture entry
+  for global_cfg in "$HOME/.claude.json" "$HOME/.claude/.mcp.json"; do
+    [ -f "$global_cfg" ] || continue
+    if jq -e '.mcpServers.kapture' "$global_cfg" >/dev/null 2>&1; then
+      KAPTURE_TRANSPORT=$(jq -r '.mcpServers.kapture.type // "stdio"' "$global_cfg" 2>/dev/null)
+      KAPTURE_CONFIG_FILE="$global_cfg"
+      if [ "$KAPTURE_TRANSPORT" = "sse" ]; then
+        KAPTURE_STATUS="sse"
+      else
+        KAPTURE_STATUS="stdio"
+      fi
+      break
+    fi
+  done
+
+  # 2. Check if kapture is proxy-routed via mcp-proxy servers.json
+  MCP_PROXY_SERVERS_FILE="$HOME/.claude/mcp-proxy/servers.json"
+  if [ -f "$MCP_PROXY_SERVERS_FILE" ] && jq -e '.kapture' "$MCP_PROXY_SERVERS_FILE" >/dev/null 2>&1; then
+    if [ "$KAPTURE_STATUS" != "stdio" ]; then
+      KAPTURE_STATUS="proxy"
+    fi
+  fi
+
+  case "$KAPTURE_STATUS" in
+    stdio)
+      INFO+=("kapture_transport_ok: Kapture MCP is configured as stdio in $(basename "$KAPTURE_CONFIG_FILE") — all 22 mcp__kapture__* tools will register correctly.")
+      ;;
+    sse)
+      WARNINGS+=("kapture_transport_sse: Kapture MCP in $(basename "$KAPTURE_CONFIG_FILE") uses type=sse. Its internal WS handshake delay causes mcp__kapture__* tools to silently drop from the registry. Fix: change to type=stdio with command=node and args=[path/to/kapture-mcp/dist/bridge.js]. See: https://github.com/Lifecycle-Innovations-Limited/claude-ops/issues/206")
+      ;;
+    proxy)
+      WARNINGS+=("kapture_transport_proxy: Kapture is routed through mcp-proxy (found in ~/.claude/mcp-proxy/servers.json) but not present as a direct stdio entry in ~/.claude.json. The proxy SSE layer causes mcp__kapture__* tools to silently drop. Move kapture to a direct stdio entry in ~/.claude.json. See: https://github.com/Lifecycle-Innovations-Limited/claude-ops/issues/206")
+      ;;
+    unconfigured)
+      INFO+=("kapture_not_configured: Kapture MCP is not configured. To enable browser automation (Kapture), add a stdio entry in ~/.claude.json. See: https://github.com/Lifecycle-Innovations-Limited/claude-ops/issues/206")
+      ;;
+  esac
+fi
+
 # --- 6. Registry ---
 REGISTRY_STATUS="missing"
 REGISTRY_COUNT=0
