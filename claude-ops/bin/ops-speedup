@@ -18,9 +18,9 @@ set -uo pipefail
 # ── Color ────────────────────────────────────────────────────────
 if [[ -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
   RST=$'\033[0m'; DIM=$'\033[2m'; CYN=$'\033[36m'; BCYN=$'\033[1;36m'; BWHT=$'\033[1;37m'
-  GRN=$'\033[32m'; BGRN=$'\033[1;32m'; RED=$'\033[31m'; BRED=$'\033[1;31m'; YLW=$'\033[33m'
+  GRN=$'\033[32m'; BGRN=$'\033[1;32m'; RED=$'\033[31m'; YLW=$'\033[33m'
 else
-  RST="" DIM="" CYN="" BCYN="" BWHT="" GRN="" BGRN="" RED="" BRED="" YLW=""
+  RST=""; DIM=""; CYN=""; BCYN=""; BWHT=""; GRN=""; BGRN=""; RED=""; YLW=""
 fi
 
 # ── Mode flags ───────────────────────────────────────────────────
@@ -28,10 +28,12 @@ MODE_JSON=false; MODE_SCAN=false; MODE_CLEAN=false; MODE_DEEP=false; MODE_AGGRES
 for arg in "$@"; do
   case "$arg" in
     --json) MODE_JSON=true ;;
-    --scan) MODE_SCAN=true; MODE_JSON=true ;;
+    --scan|--scan-only) MODE_SCAN=true; MODE_JSON=true ;;
     --clean) MODE_CLEAN=true ;;
     --deep) MODE_DEEP=true; MODE_CLEAN=true ;;
     --aggressive) MODE_AGGRESSIVE=true; MODE_DEEP=true; MODE_CLEAN=true ;;
+    # Legacy no-ops: defaults already include these
+    --safe|--full|--all) ;;
   esac
 done
 
@@ -48,6 +50,14 @@ case "$(uname -s)" in
     [ -f /etc/os-release ] && DISTRO=$(. /etc/os-release && echo "${ID:-unknown}") ;;
   MINGW*|MSYS*|CYGWIN*) OS="windows"; IS_WINDOWS=true ;;
 esac
+
+# ── v3: consolidated philosophy — every safe tweak ON by default ────
+# Like `speedup` standalone, `ops-speedup` runs THE WORKS in one shot:
+# clean + deep + aggressive disk reclaim + responsiveness tweaks.
+# Diagnostic-only modes (--json/--scan/--scan-only) skip the cleanup.
+if [ "$MODE_JSON" = false ] && [ "$MODE_SCAN" = false ]; then
+  MODE_CLEAN=true; MODE_DEEP=true; MODE_AGGRESSIVE=true
+fi
 
 # macOS tool reference (avoid triggering cross-OS static scanners)
 _OSASCRIPT="osa""script"
@@ -306,7 +316,6 @@ run_parallel_scan() {
   cp -r "$tmp" "$STATE_DIR/last_scan" 2>/dev/null || true
   CPU_HOGS_FILE="$STATE_DIR/last_scan/cpu"
   POWER_HOGS_FILE="$STATE_DIR/last_scan/power"
-  GPU_HOGS_FILE="$STATE_DIR/last_scan/gpu"
   rm -rf "$tmp" 2>/dev/null || true
 }
 
@@ -319,6 +328,51 @@ PROTECTED_RE="kernel_task|launchd|WindowServer|loginwindow|Finder|SystemUIServer
 
 # Safe to demote to background priority (not kill)
 MACOS_DEMOTE_RE="bird|cloudd|suggestd|knowledge-agent|photoanalysisd|mediaanalysisd|parsecd|tipsd|AMPLibraryAgent|cloudphotod|identityservicesd"
+
+# ─────────────────────────────────────────────────────────────────
+# Windows / WSL helpers
+# ─────────────────────────────────────────────────────────────────
+
+# Resolve Windows env vars when running in Git Bash / MSYS / WSL.
+# Returns the Linux-accessible path or empty if not on Windows surface.
+_win_env() {
+  local var="$1"
+  if $IS_WINDOWS; then
+    cmd.exe /c "echo %$var%" 2>/dev/null | tr -d '\r' | tr '\\' '/' | sed 's|^C:|/c|'
+  elif $IS_WSL; then
+    local raw
+    raw=$(cmd.exe /c "echo %$var%" 2>/dev/null | tr -d '\r')
+    [ -n "$raw" ] && wslpath -u "$raw" 2>/dev/null
+  fi
+}
+
+# Run a PowerShell command (works in Git Bash + WSL).
+_pwsh() {
+  if $IS_WINDOWS || $IS_WSL; then
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$1" 2>/dev/null
+  fi
+}
+
+# Run a PowerShell command ELEVATED (UAC prompt fires once per call).
+# Use sparingly — Sam-style: prefer non-elevated where possible.
+_pwsh_elevated() {
+  if $IS_WINDOWS || $IS_WSL; then
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','$1' -Wait" 2>/dev/null
+  fi
+}
+
+# Check if current process is already elevated (admin). Returns 0 if yes.
+_is_elevated() {
+  if $IS_WINDOWS || $IS_WSL; then
+    local result; result=$(_pwsh "
+\$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+[bool]\$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+" 2>/dev/null | tr -d '\r ')
+    [ "$result" = "True" ]
+  else
+    sudo -n true 2>/dev/null
+  fi
+}
 
 # Launch agent offenders (macOS)
 MACOS_OFFENDER_AGENTS=(
@@ -349,6 +403,17 @@ action_clean_caches() {
     command -v yum >/dev/null 2>&1 && sudo yum clean all 2>/dev/null >/dev/null || true
     find /tmp -maxdepth 1 -type f -mtime +1 -delete 2>/dev/null || true
     echo "  ${GRN}✓${RST} Cleared journal (>7d), apt/yum cache, old /tmp"
+  fi
+  if $IS_WINDOWS; then
+    local LOCALAPPDATA_UNIX TEMP_UNIX
+    LOCALAPPDATA_UNIX=$(_win_env LOCALAPPDATA)
+    TEMP_UNIX=$(_win_env TEMP)
+    [ -n "$LOCALAPPDATA_UNIX" ] && [ -d "$LOCALAPPDATA_UNIX/Temp" ] && \
+      find "$LOCALAPPDATA_UNIX/Temp" -maxdepth 1 -type f -mtime +1 -delete 2>/dev/null
+    [ -n "$TEMP_UNIX" ] && find "$TEMP_UNIX" -maxdepth 1 -type f -mtime +1 -delete 2>/dev/null
+    # Windows event log truncation (non-elevated — only the user-readable logs)
+    _pwsh "Get-EventLog -List | Where-Object { \$_.LogDisplayName -in 'Application','System' } | ForEach-Object { try { Clear-EventLog -LogName \$_.Log -ErrorAction SilentlyContinue } catch {} }" >/dev/null 2>&1
+    echo "  ${GRN}✓${RST} Cleared %TEMP%, %LOCALAPPDATA%\\Temp (old files), user event logs"
   fi
 }
 
@@ -402,6 +467,23 @@ action_clean_deep() {
       echo "  ${GRN}✓${RST} apt autoremove"
     fi
   fi
+  if $IS_WINDOWS; then
+    # Empty Recycle Bin (all drives, current user)
+    _pwsh "Clear-RecycleBin -Force -ErrorAction SilentlyContinue" >/dev/null 2>&1
+    echo "  ${GRN}✓${RST} Recycle Bin emptied"
+    # Run cleanmgr with pre-configured sageset profile (silent)
+    if command -v cleanmgr.exe >/dev/null 2>&1; then
+      cleanmgr.exe /sagerun:1 >/dev/null 2>&1 &
+      echo "  ${GRN}✓${RST} cleanmgr.exe /sagerun:1 dispatched (background)"
+    fi
+    # DISM component cleanup (elevated — winsxs / WinUpdate cleanup, multi-GB)
+    if $MODE_AGGRESSIVE && _is_elevated; then
+      _pwsh "dism.exe /online /cleanup-image /startcomponentcleanup /quiet" >/dev/null 2>&1
+      echo "  ${GRN}✓${RST} DISM startcomponentcleanup (WinSxS purge)"
+    elif $MODE_AGGRESSIVE; then
+      echo "  ${YLW}⚠${RST}  DISM cleanup needs admin — run as Administrator to reclaim WinSxS GBs"
+    fi
+  fi
 }
 
 # Stale node_modules / .next / dist (>14 days) — aggressive only
@@ -429,7 +511,7 @@ action_clean_stale_builds() {
 action_kill_hogs() {
   [ -f "${CPU_HOGS_FILE:-}" ] || return 0
   local killed=0
-  while IFS='|' read -r pid cpu mem cmd; do
+  while IFS='|' read -r pid _ _ cmd; do
     [ -z "$pid" ] && continue
     echo "$cmd" | grep -qE "$PROTECTED_RE" && continue
     ps -p "$pid" >/dev/null 2>&1 || continue
@@ -439,7 +521,7 @@ action_kill_hogs() {
 
   if [ -f "${POWER_HOGS_FILE:-}" ]; then
     local pkilled=0
-    while IFS='|' read -r pid power name; do
+    while IFS='|' read -r pid _ name; do
       [ -z "$pid" ] && continue
       echo "$name" | grep -qE "$PROTECTED_RE" && continue
       ps -p "$pid" >/dev/null 2>&1 || continue
@@ -589,6 +671,425 @@ action_memory_purge() {
       echo "  ${GRN}✓${RST} Memory caches dropped"
     fi
   fi
+  if $IS_WINDOWS; then
+    # Empty working sets across all processes (per-process, non-elevated for owned procs).
+    # Releases RSS back to standby — closest equivalent to macOS `purge`.
+    _pwsh "
+\$src = @'
+using System;
+using System.Runtime.InteropServices;
+public class Mem {
+  [DllImport(\"psapi.dll\")]
+  public static extern int EmptyWorkingSet(IntPtr hwProc);
+}
+'@
+Add-Type -TypeDefinition \$src -ErrorAction SilentlyContinue
+Get-Process | ForEach-Object {
+  try { [Mem]::EmptyWorkingSet(\$_.Handle) | Out-Null } catch {}
+}" >/dev/null 2>&1
+    echo "  ${GRN}✓${RST} Working sets emptied for owned processes"
+    # Standby list flush requires elevation + RAMMap CLI — skip unless aggressive+elevated
+    if $MODE_AGGRESSIVE && _is_elevated && command -v RAMMap64.exe >/dev/null 2>&1; then
+      RAMMap64.exe -Ew >/dev/null 2>&1
+      echo "  ${GRN}✓${RST} Standby list flushed (RAMMap64.exe -Ew)"
+    fi
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────────
+# Responsiveness pack — keyboard, animations, text input (OS-aware)
+# macOS: defaults write (Tahoe-tested values, addresses 26.x typing lag)
+# Linux: gsettings (GNOME) / kwriteconfig5 (KDE) where present
+# Windows/WSL: skipped (registry edits require elevation + reboot)
+# ─────────────────────────────────────────────────────────────────
+action_responsiveness_pack() {
+  if $IS_MACOS; then
+    # Keyboard max speed (fastest UI-exposed values)
+    defaults write NSGlobalDomain InitialKeyRepeat -int 10 2>/dev/null
+    defaults write NSGlobalDomain KeyRepeat -int 1 2>/dev/null
+    defaults write -g ApplePressAndHoldEnabled -bool false 2>/dev/null
+    # Tahoe-specific: NSAutomaticInlinePredictionEnabled fixes 1-2s typing lag
+    defaults write -g NSAutomaticInlinePredictionEnabled -bool false 2>/dev/null
+    # Text substitution kills (every keystroke skips lookup)
+    defaults write NSGlobalDomain NSAutomaticSpellingCorrectionEnabled -bool false 2>/dev/null
+    defaults write NSGlobalDomain NSAutomaticCapitalizationEnabled -bool false 2>/dev/null
+    defaults write NSGlobalDomain NSAutomaticDashSubstitutionEnabled -bool false 2>/dev/null
+    defaults write NSGlobalDomain NSAutomaticPeriodSubstitutionEnabled -bool false 2>/dev/null
+    defaults write NSGlobalDomain NSAutomaticQuoteSubstitutionEnabled -bool false 2>/dev/null
+    defaults write NSGlobalDomain NSAutomaticTextCompletionEnabled -bool false 2>/dev/null
+    # Reduce Motion + Reduce Transparency (biggest perceived Tahoe win)
+    defaults write com.apple.universalaccess reduceMotion -bool true 2>/dev/null
+    defaults write com.apple.universalaccess reduceTransparency -bool true 2>/dev/null
+    # Dock minimize: Genie → Scale (no mesh-warp), Launchpad 0.1s
+    defaults write com.apple.dock mineffect -string scale 2>/dev/null
+    defaults write com.apple.dock springboard-show-duration -float 0.1 2>/dev/null
+    defaults write com.apple.dock springboard-hide-duration -float 0.1 2>/dev/null
+    defaults write com.apple.dock springboard-page-duration -float 0.1 2>/dev/null
+    defaults write com.apple.dock no-bouncing -bool true 2>/dev/null
+    defaults write com.apple.dock mru-spaces -bool false 2>/dev/null
+    # Misc UI overhead
+    defaults write com.apple.LaunchServices LSQuarantine -bool false 2>/dev/null
+    defaults write -g NSWindowSupportsAutomaticInlineTitle -bool false 2>/dev/null
+    defaults write -g NSUseAnimatedFocusRing -bool false 2>/dev/null
+    defaults write com.apple.CrashReporter DialogType none 2>/dev/null
+    defaults write com.apple.screencapture disable-shadow -bool true 2>/dev/null
+    defaults write -g com.apple.sound.uiaudio.enabled -int 0 2>/dev/null
+    killall Dock SystemUIServer 2>/dev/null || true
+    echo "  ${GRN}✓${RST} Responsiveness pack: keyboard max, animations cut, Tahoe typing-lag fix, ReduceMotion+Transparency, mineffect=scale"
+  elif $IS_LINUX; then
+    # GNOME via gsettings
+    if command -v gsettings >/dev/null 2>&1; then
+      gsettings set org.gnome.desktop.interface enable-animations false 2>/dev/null
+      gsettings set org.gnome.desktop.peripherals.keyboard repeat-interval 15 2>/dev/null
+      gsettings set org.gnome.desktop.peripherals.keyboard delay 200 2>/dev/null
+      echo "  ${GRN}✓${RST} GNOME: animations off, keyboard repeat=15ms delay=200ms"
+    fi
+    # KDE via kwriteconfig
+    if command -v kwriteconfig5 >/dev/null 2>&1; then
+      kwriteconfig5 --file kdeglobals --group KDE --key AnimationDurationFactor 0 2>/dev/null
+      echo "  ${GRN}✓${RST} KDE: animation factor 0"
+    fi
+    # Linux keyboard via xset (X11 only)
+    if command -v xset >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
+      xset r rate 200 67 2>/dev/null && echo "  ${GRN}✓${RST} xset: keyboard delay=200 rate=67Hz"
+    fi
+  fi
+  if $IS_WINDOWS; then
+    # Keyboard repeat: HKCU\Control Panel\Keyboard
+    reg.exe ADD "HKCU\Control Panel\Keyboard" /v KeyboardDelay /t REG_SZ /d "0" /f >NUL 2>&1
+    reg.exe ADD "HKCU\Control Panel\Keyboard" /v KeyboardSpeed /t REG_SZ /d "31" /f >NUL 2>&1
+    # Menu show delay (default 400ms → 0)
+    reg.exe ADD "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_SZ /d "0" /f >NUL 2>&1
+    # Disable visual effects (animations, fade, smooth scroll) — UserPreferencesMask
+    reg.exe ADD "HKCU\Control Panel\Desktop" /v UserPreferencesMask /t REG_BINARY /d 9012038010000000 /f >NUL 2>&1
+    # Disable taskbar/window animations
+    reg.exe ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v VisualFXSetting /t REG_DWORD /d 2 /f >NUL 2>&1
+    # Disable "minimize/maximize" animations
+    reg.exe ADD "HKCU\Software\Microsoft\Windows\DWM" /v EnableAeroPeek /t REG_DWORD /d 0 /f >NUL 2>&1
+    # Disable transparency
+    reg.exe ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v EnableTransparency /t REG_DWORD /d 0 /f >NUL 2>&1
+    echo "  ${GRN}✓${RST} Windows: keyboard max, MenuShowDelay=0, animations off, transparency off (relog to fully apply)"
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────────
+# Power management — disable Power Nap, wake-on-LAN, hibernate image
+# macOS: pmset (saves multi-GB sleepimage, faster sleep transitions)
+# Linux: systemd-logind suppression + tlp (if present)
+# ─────────────────────────────────────────────────────────────────
+action_power_management() {
+  if $IS_MACOS; then
+    if sudo -n true 2>/dev/null; then
+      sudo pmset -a powernap 0 2>/dev/null && echo "  ${GRN}✓${RST} Power Nap disabled"
+      sudo pmset -a hibernatemode 0 2>/dev/null && echo "  ${GRN}✓${RST} hibernatemode=0 (faster sleep)"
+      sudo rm -f /private/var/vm/sleepimage 2>/dev/null && echo "  ${GRN}✓${RST} sleepimage purged"
+      # Don't disable TCP keepalive by default — breaks Find My Mac
+    else
+      echo "  ${DIM}○${RST} Power management: sudo unavailable"
+    fi
+  elif $IS_LINUX; then
+    # tlp handles most of this on Linux laptops
+    if command -v tlp >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+      sudo tlp start 2>/dev/null >/dev/null && echo "  ${GRN}✓${RST} tlp activated (laptop power profile)"
+    fi
+  fi
+  if $IS_WINDOWS; then
+    if command -v powercfg.exe >/dev/null 2>&1; then
+      # Set High Performance scheme (built-in GUID)
+      powercfg.exe -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c >/dev/null 2>&1
+      echo "  ${GRN}✓${RST} powercfg: High Performance scheme active"
+      # Disable hibernate (frees hiberfil.sys — multi-GB)
+      if _is_elevated; then
+        powercfg.exe -h off >/dev/null 2>&1
+        echo "  ${GRN}✓${RST} Hibernate disabled (hiberfil.sys reclaimed)"
+        # Disable USB selective suspend (lower input latency for HID devices)
+        powercfg.exe -setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0 >/dev/null 2>&1
+        powercfg.exe -setactive SCHEME_CURRENT >/dev/null 2>&1
+        echo "  ${GRN}✓${RST} USB selective suspend disabled (lower HID input latency)"
+      else
+        echo "  ${YLW}⚠${RST}  Hibernate disable + USB suspend tweaks need admin"
+      fi
+    fi
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────────
+# AGGRESSIVE DISK RECLAIM — verbose, cross-platform
+# Targets: package caches, browser caches, container runtimes,
+# IDE/build artifacts, sleep image, diagnostic reports.
+# Each step prints BEFORE/AFTER/freed with action transparency.
+# ─────────────────────────────────────────────────────────────────
+action_disk_reclaim_aggressive() {
+  $MODE_AGGRESSIVE || return 0
+  echo "  ${BCYN}── AGGRESSIVE DISK RECLAIM ──${RST}"
+
+  local TOTAL_FREED_KB=0
+  _size_kb() { [ -e "$1" ] && du -sk "$1" 2>/dev/null | awk '{print $1}' || echo 0; }
+  _report() {
+    local label="$1" before_kb="$2" after_kb="$3"
+    local freed_kb=$(( before_kb - after_kb ))
+    [ $freed_kb -lt 0 ] && freed_kb=0
+    TOTAL_FREED_KB=$(( TOTAL_FREED_KB + freed_kb ))
+    local freed_mb=$(( freed_kb / 1024 ))
+    if [ $freed_mb -ge 100 ]; then
+      echo "    ${GRN}✓${RST} $label: freed ${BWHT}${freed_mb}MB${RST}"
+    elif [ $freed_mb -gt 0 ]; then
+      echo "    ${GRN}✓${RST} $label: freed ${freed_mb}MB"
+    else
+      echo "    ${DIM}·${RST} $label: ${DIM}clean${RST}"
+    fi
+  }
+
+  # 1. Docker — biggest win when daemon is running
+  echo "  ${CYN}[1/10]${RST} Docker (containers/images/volumes/buildx)"
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    docker system prune -af --volumes >/dev/null 2>&1
+    docker buildx prune -af >/dev/null 2>&1
+    echo "    ${GRN}✓${RST} docker system prune -af --volumes + buildx prune"
+  else
+    echo "    ${DIM}·${RST} Docker not running or not installed"
+  fi
+
+  # 2. npm cache + npx tmp
+  echo "  ${CYN}[2/10]${RST} npm cache + ~/.npm/_npx"
+  if [ -d "$HOME/.npm" ]; then
+    local before; before=$(_size_kb "$HOME/.npm")
+    command -v npm >/dev/null 2>&1 && npm cache clean --force >/dev/null 2>&1 || true
+    rm -rf "$HOME/.npm/_npx" "$HOME/.npm/_logs" 2>/dev/null
+    local after; after=$(_size_kb "$HOME/.npm")
+    _report "\$HOME/.npm" "$before" "$after"
+  fi
+
+  # 3. uv (Python) cache
+  echo "  ${CYN}[3/10]${RST} uv (Python) cache"
+  if [ -d "$HOME/.cache/uv" ]; then
+    local before; before=$(_size_kb "$HOME/.cache/uv")
+    if command -v uv >/dev/null 2>&1; then
+      uv cache prune >/dev/null 2>&1
+    else
+      rm -rf "$HOME/.cache/uv"
+    fi
+    local after; after=$(_size_kb "$HOME/.cache/uv")
+    _report "\$HOME/.cache/uv" "$before" "$after"
+  else
+    echo "    ${DIM}·${RST} no uv cache"
+  fi
+
+  # 4. Puppeteer (Chrome download — keep latest only)
+  echo "  ${CYN}[4/10]${RST} Puppeteer Chrome (keep latest only)"
+  local PUP="$HOME/.cache/puppeteer/chrome"
+  if [ -d "$PUP" ]; then
+    local before; before=$(_size_kb "$PUP")
+    local latest; latest=$(ls -1t "$PUP" 2>/dev/null | head -1)
+    for ver in "$PUP"/*; do
+      [ "$(basename "$ver")" = "$latest" ] && continue
+      rm -rf "$ver"
+    done
+    local after; after=$(_size_kb "$PUP")
+    _report "Puppeteer (kept: $latest)" "$before" "$after"
+  else
+    echo "    ${DIM}·${RST} no Puppeteer cache"
+  fi
+
+  # 5. iOS Simulator (macOS only)
+  if $IS_MACOS; then
+    echo "  ${CYN}[5/10]${RST} iOS Simulator (unavailable + caches)"
+    if command -v xcrun >/dev/null 2>&1; then
+      local before; before=$(_size_kb "$HOME/Library/Developer/CoreSimulator")
+      xcrun simctl delete unavailable 2>/dev/null
+      rm -rf "$HOME/Library/Developer/CoreSimulator/Caches"/* 2>/dev/null
+      local after; after=$(_size_kb "$HOME/Library/Developer/CoreSimulator")
+      _report "CoreSimulator" "$before" "$after"
+    fi
+  else
+    echo "  ${CYN}[5/10]${RST} iOS Simulator ${DIM}(macOS-only — skipped)${RST}"
+  fi
+
+  # 6. Browser caches — Chrome/Comet/Brave/Arc/Edge (Cache subdirs only)
+  echo "  ${CYN}[6/10]${RST} Browser caches (Chrome/Brave/Edge/Arc/Comet)"
+  local browser_roots
+  if $IS_MACOS; then
+    browser_roots=(
+      "$HOME/Library/Application Support/Google/Chrome"
+      "$HOME/Library/Application Support/Comet"
+      "$HOME/Library/Application Support/BraveSoftware/Brave-Browser"
+      "$HOME/Library/Application Support/Arc"
+      "$HOME/Library/Application Support/Microsoft Edge"
+    )
+  elif $IS_WINDOWS; then
+    local LOCALAPPDATA_UNIX; LOCALAPPDATA_UNIX=$(_win_env LOCALAPPDATA)
+    browser_roots=(
+      "$LOCALAPPDATA_UNIX/Google/Chrome/User Data"
+      "$LOCALAPPDATA_UNIX/Microsoft/Edge/User Data"
+      "$LOCALAPPDATA_UNIX/BraveSoftware/Brave-Browser/User Data"
+      "$LOCALAPPDATA_UNIX/Arc/User Data"
+    )
+  else
+    browser_roots=(
+      "$HOME/.config/google-chrome"
+      "$HOME/.config/BraveSoftware/Brave-Browser"
+      "$HOME/.config/microsoft-edge"
+      "$HOME/.cache/google-chrome"
+      "$HOME/.cache/BraveSoftware/Brave-Browser"
+    )
+  fi
+  local browser_freed=0
+  for root in "${browser_roots[@]}"; do
+    [ -d "$root" ] || continue
+    for profile in "$root"/Default "$root"/Profile*; do
+      [ -d "$profile" ] || continue
+      for subdir in Cache "Code Cache" GPUCache "Service Worker/CacheStorage" "Service Worker/ScriptCache"; do
+        local target="$profile/$subdir"
+        if [ -d "$target" ]; then
+          local sz; sz=$(_size_kb "$target")
+          rm -rf "${target:?}"/* 2>/dev/null
+          browser_freed=$((browser_freed + sz))
+        fi
+      done
+    done
+  done
+  TOTAL_FREED_KB=$((TOTAL_FREED_KB + browser_freed))
+  if [ $browser_freed -gt 0 ]; then
+    echo "    ${GRN}✓${RST} Browser caches: freed $((browser_freed / 1024))MB"
+  else
+    echo "    ${DIM}·${RST} no browser caches found"
+  fi
+
+  # 7. Slack / Discord / Teams caches
+  echo "  ${CYN}[7/10]${RST} Slack/Discord/Teams caches"
+  local chat_caches
+  if $IS_MACOS; then
+    chat_caches=(
+      "$HOME/Library/Application Support/Slack/Cache"
+      "$HOME/Library/Application Support/Slack/Code Cache"
+      "$HOME/Library/Application Support/Slack/GPUCache"
+      "$HOME/Library/Application Support/discord/Cache"
+      "$HOME/Library/Application Support/discord/Code Cache"
+      "$HOME/Library/Containers/com.microsoft.teams2/Data/Library/Caches"
+    )
+  elif $IS_WINDOWS; then
+    local APPDATA_UNIX LOCALAPPDATA_UNIX
+    APPDATA_UNIX=$(_win_env APPDATA)
+    LOCALAPPDATA_UNIX=$(_win_env LOCALAPPDATA)
+    chat_caches=(
+      "$APPDATA_UNIX/Slack/Cache"
+      "$APPDATA_UNIX/Slack/Code Cache"
+      "$APPDATA_UNIX/Slack/GPUCache"
+      "$APPDATA_UNIX/discord/Cache"
+      "$APPDATA_UNIX/discord/Code Cache"
+      "$APPDATA_UNIX/Microsoft/Teams/Cache"
+      "$LOCALAPPDATA_UNIX/Packages/MSTeams_8wekyb3d8bbwe/LocalCache"
+    )
+  else
+    chat_caches=(
+      "$HOME/.config/Slack/Cache"
+      "$HOME/.config/Slack/Code Cache"
+      "$HOME/.config/discord/Cache"
+      "$HOME/.config/Microsoft/Microsoft Teams/Cache"
+    )
+  fi
+  local chat_freed=0
+  for c in "${chat_caches[@]}"; do
+    [ -d "$c" ] || continue
+    local sz; sz=$(_size_kb "$c")
+    rm -rf "$c"/* 2>/dev/null
+    chat_freed=$((chat_freed + sz))
+  done
+  TOTAL_FREED_KB=$((TOTAL_FREED_KB + chat_freed))
+  if [ $chat_freed -gt 0 ]; then
+    echo "    ${GRN}✓${RST} Chat caches: freed $((chat_freed / 1024))MB"
+  else
+    echo "    ${DIM}·${RST} no chat caches"
+  fi
+
+  # 8. pip + Gradle caches
+  echo "  ${CYN}[8/10]${RST} pip + Gradle"
+  if command -v pip >/dev/null 2>&1; then
+    pip cache purge >/dev/null 2>&1 || true
+    echo "    ${GRN}✓${RST} pip cache purge"
+  fi
+  if [ -d "$HOME/.gradle/caches" ]; then
+    # Check if Gradle is running or any process holds files in .gradle/caches
+    if pgrep -f "gradle|gradlew" >/dev/null 2>&1 || { command -v lsof >/dev/null 2>&1 && lsof +D "$HOME/.gradle/caches" >/dev/null 2>&1; }; then
+      echo "    ${YLW}⚠${RST}  Gradle in-use: skipped (active build)"
+    else
+      local before; before=$(_size_kb "$HOME/.gradle/caches")
+      find "$HOME/.gradle/caches" -name "*.lock" -delete 2>/dev/null
+      find "$HOME/.gradle/caches/transforms-"* -mtime +30 -delete 2>/dev/null
+      local after; after=$(_size_kb "$HOME/.gradle/caches")
+      _report "\$HOME/.gradle/caches" "$before" "$after"
+    fi
+  fi
+
+  # 9. Claude plugin cache — keep latest version only + nuke temp_git_*
+  echo "  ${CYN}[9/10]${RST} Claude plugin cache (keep latest version only)"
+  local PLUGIN_CACHE="$HOME/.claude/plugins/cache"
+  if [ -d "$PLUGIN_CACHE" ]; then
+    local before; before=$(_size_kb "$PLUGIN_CACHE")
+    local pruned=0
+    for plugin_dir in "$PLUGIN_CACHE"/*/*/; do
+      [ -d "$plugin_dir" ] || continue
+      local versions
+      versions=$(ls -1 "$plugin_dir" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V -r)
+      local vcount; vcount=$(echo "$versions" | wc -l | tr -d ' ')
+      [ "$vcount" -le 1 ] && continue
+      local latest; latest=$(echo "$versions" | head -1)
+      echo "$versions" | tail -n +2 | while read -r old; do
+        rm -rf "$plugin_dir$old" 2>/dev/null
+      done
+      pruned=$((pruned + vcount - 1))
+    done
+    rm -rf "$PLUGIN_CACHE"/temp_git_* 2>/dev/null
+    rm -rf "$PLUGIN_CACHE"/temp_subdir_* 2>/dev/null
+    local after; after=$(_size_kb "$PLUGIN_CACHE")
+    _report "Claude plugin cache" "$before" "$after"
+  else
+    echo "    ${DIM}·${RST} no plugin cache"
+  fi
+
+  # 10. Logs + DiagnosticReports + temp folders
+  echo "  ${CYN}[10/10]${RST} Logs + DiagnosticReports + tmp"
+  if $IS_MACOS; then
+    local before; before=$(_size_kb "$HOME/Library/Logs")
+    find "$HOME/Library/Logs" -type f -mtime +14 -delete 2>/dev/null
+    local after; after=$(_size_kb "$HOME/Library/Logs")
+    _report "\$HOME/Library/Logs (>14d)" "$before" "$after"
+    rm -f "$HOME/Library/Logs/DiagnosticReports"/*.ips 2>/dev/null
+    rm -f "$HOME/Library/Logs/DiagnosticReports"/*.diag 2>/dev/null
+    echo "    ${GRN}✓${RST} DiagnosticReports purged"
+  elif $IS_LINUX; then
+    if [ -d "$HOME/.cache" ]; then
+      local before; before=$(_size_kb "$HOME/.cache")
+      find "$HOME/.cache" -type f -mtime +14 -delete 2>/dev/null
+      local after; after=$(_size_kb "$HOME/.cache")
+      _report "\$HOME/.cache (>14d)" "$before" "$after"
+    fi
+    sudo journalctl --vacuum-time=7d 2>/dev/null >/dev/null || true
+  elif $IS_WINDOWS; then
+    # Windows error reports + temp + downloaded program files
+    local LOCALAPPDATA_UNIX PROGRAMDATA_UNIX
+    LOCALAPPDATA_UNIX=$(_win_env LOCALAPPDATA)
+    PROGRAMDATA_UNIX=$(_win_env ProgramData)
+    # User-level WER reports (no elevation needed)
+    [ -n "$LOCALAPPDATA_UNIX" ] && [ -d "$LOCALAPPDATA_UNIX/Microsoft/Windows/WER" ] && {
+      local before; before=$(_size_kb "$LOCALAPPDATA_UNIX/Microsoft/Windows/WER")
+      rm -rf "$LOCALAPPDATA_UNIX/Microsoft/Windows/WER/ReportArchive"/* 2>/dev/null
+      rm -rf "$LOCALAPPDATA_UNIX/Microsoft/Windows/WER/ReportQueue"/* 2>/dev/null
+      local after; after=$(_size_kb "$LOCALAPPDATA_UNIX/Microsoft/Windows/WER")
+      _report "WER reports" "$before" "$after"
+    }
+    # Windows Update download cache (elevated, multi-GB on stale systems)
+    if _is_elevated; then
+      _pwsh "Stop-Service wuauserv -Force; Remove-Item C:\Windows\SoftwareDistribution\Download\* -Recurse -Force -ErrorAction SilentlyContinue; Start-Service wuauserv" >/dev/null 2>&1
+      echo "    ${GRN}✓${RST} Windows Update download cache cleared"
+      # Pagefile reset / hiberfil already covered by power_management
+    else
+      echo "    ${YLW}⚠${RST}  Run as admin to clear C:\\Windows\\SoftwareDistribution\\Download (Windows Update cache)"
+    fi
+  fi
+
+  local freed_mb=$(( TOTAL_FREED_KB / 1024 ))
+  echo "  ${BGRN}── RECLAIM TOTAL: ${freed_mb}MB freed ──${RST}"
 }
 
 # DNS flush — OS-specific
@@ -603,6 +1104,46 @@ action_dns_flush() {
   elif $IS_WSL; then
     ipconfig.exe /flushdns >/dev/null 2>&1 || true
     echo "  ${GRN}✓${RST} Windows DNS cache flushed (via WSL)"
+  elif $IS_WINDOWS; then
+    ipconfig.exe /flushdns >/dev/null 2>&1 || true
+    echo "  ${GRN}✓${RST} DNS cache flushed (ipconfig /flushdns)"
+  fi
+}
+
+# DHCP lease release+renew — fixes stale routing / "wifi but no internet"
+# Only triggered in --aggressive (network blip ~2-5s during renew).
+action_dhcp_renew() {
+  $MODE_AGGRESSIVE || return 0
+  if $IS_MACOS; then
+    # Get primary active interface
+    local iface; iface=$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')
+    [ -z "$iface" ] && iface=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{getline; print $2}')
+    if [ -n "$iface" ] && sudo -n true 2>/dev/null; then
+      sudo ipconfig set "$iface" BOOTP 2>/dev/null
+      sleep 1
+      sudo ipconfig set "$iface" DHCP 2>/dev/null
+      echo "  ${GRN}✓${RST} DHCP lease renewed on $iface"
+    else
+      echo "  ${DIM}○${RST} DHCP renew: needs sudo or no interface detected"
+    fi
+  elif $IS_LINUX; then
+    if command -v nmcli >/dev/null 2>&1; then
+      # NetworkManager-driven renew (preferred)
+      local active; active=$(nmcli -t -f NAME connection show --active 2>/dev/null | head -1)
+      [ -n "$active" ] && sudo nmcli connection up "$active" 2>/dev/null >/dev/null && \
+        echo "  ${GRN}✓${RST} DHCP lease renewed via nmcli ($active)"
+    elif command -v dhclient >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+      local iface; iface=$(ip -o route get 1 2>/dev/null | awk '{print $5}')
+      [ -n "$iface" ] && sudo dhclient -r "$iface" 2>/dev/null && sudo dhclient "$iface" 2>/dev/null && \
+        echo "  ${GRN}✓${RST} DHCP lease renewed on $iface (dhclient)"
+    else
+      echo "  ${DIM}○${RST} DHCP renew: no nmcli or dhclient available"
+    fi
+  elif $IS_WSL || $IS_WINDOWS; then
+    ipconfig.exe /release >/dev/null 2>&1
+    sleep 1
+    ipconfig.exe /renew >/dev/null 2>&1
+    echo "  ${GRN}✓${RST} DHCP lease renewed (ipconfig /release + /renew)"
   fi
 }
 
@@ -723,6 +1264,10 @@ if $MODE_CLEAN; then
   fi
   if $MODE_AGGRESSIVE; then
     action_clean_stale_builds
+    action_disk_reclaim_aggressive
+    action_responsiveness_pack
+    action_power_management
+    action_dhcp_renew
   fi
   echo ""
   printf '  %s╔══════════════════════════════════════════════════════════════╗%s\n' "$BGRN" "$RST"
