@@ -181,6 +181,7 @@ Route `$ARGUMENTS` to the correct section below:
 | instagram, instagram post, instagram reel, instagram story, instagram insights, instagram demographics | Instagram publishing + insights (see ## instagram section) |
 | campaigns | Cross-channel campaign overview (all platforms) |
 | optimize | Cross-platform ad optimization agent |
+| autopilot | Autonomous per-project daily ad management (see ## autopilot section) |
 | attribution | Unified attribution table (Meta + Google + Klaviyo + GA4) |
 | setup | Configure API keys |
 
@@ -1879,6 +1880,60 @@ Agent(team_name="optimizer", name="marketing-optimizer", prompt="You are the mar
  Move $[X]/day from [Platform A] → [Platform B]
  Rationale: [X]x ROAS vs [X]x ROAS
 ```
+
+---
+
+## autopilot
+
+Autonomous, config-driven, per-project **daily** ad management for Meta + Google Ads. This is the productized form of the autonomous optimizer: it runs unattended from the `marketing-autopilot` daemon service (`0 8 * * *` UTC, disabled by default) and is also invokable directly.
+
+**Entry point:** `${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-autopilot [--dry-run] [--project <name>] [--channel meta|google_ads]`
+
+The binary owns all deterministic, money-touching logic (cap pre-flight, pause sweep, runaway detection) so it is robust with no LLM in the loop. It delegates **only higher-order reasoning** (creative-fatigue → regeneration, frame hallucination audit, weekly synthesis, cross-creative allocation) to a credit-pool-gated headless `claude_invoke` pass with a self-contained prompt built from the project config.
+
+### Per-project config
+
+`marketing.projects.<name>.autopilot` in `$PREFS_PATH` (account IDs/tokens stay as existing cred-refs under `.meta` / `.google_ads` — zero new secrets):
+
+```json
+"autopilot": {
+  "enabled": false,
+  "channels": ["meta", "google_ads"],
+  "daily_spend_cap_usd": 50,
+  "campaign_ids": { "meta": ["<CAMPAIGN_ID>"], "google_ads": ["<CAMPAIGN_ID>"] },
+  "pause_cpl_multiple": 2.0,
+  "pause_ctr_floor": 0.005,
+  "min_live_creatives": 2,
+  "creative_regen": { "enabled": true, "video": "veo3", "image": "gemini-image" },
+  "weekly_synthesis": true,
+  "notify_sink": null
+}
+```
+
+### Spend-safety doctrine (NEVER LEAK MONEY + Rule 5)
+
+1. **No cap ⇒ no run.** A project without a positive `daily_spend_cap_usd` is refused outright — escalation note written, zero mutations, non-zero exit.
+2. **Cap pre-flight per channel** *before any mutation*: Σ campaign daily_budget (campaign-level CBO, else summed ACTIVE adset budgets / Google `campaign_budget.amount_micros`) must be ≤ cap. On exceed → treat as budget tamper: abort that project, escalation note, no mutations.
+3. **Runaway trajectory check:** lifetime `amount_spent` delta since last pass must be ≤ 1.5× cap. On exceed → abort + escalate.
+4. **Allowed mutations only:** pause underperformers, swap/rotate creatives, regenerate creatives. Pause heuristics: CPL > `pause_cpl_multiple` × adset-avg CPL after ≥ $10 spend, OR CTR < `pause_ctr_floor` after ≥ 1000 impressions. Candidates are paused worst-CPL-first and the sweep **stops before live creatives would drop below `min_live_creatives`**.
+5. **Never autonomous:** raising budgets, creating campaigns, creating/expanding audiences, changing objectives. If the data implies any of these, it is written to the report under **Recommendations (require human action)** — never executed.
+6. **Dry-run:** `--dry-run` and the **first install run** (no `.installed` marker) perform zero mutations — every intended action is logged `[DRY]` in the report so an operator reviews one full pass before it goes live.
+
+### Creative fatigue → regeneration
+
+When every live ad in a campaign is fatigued (frequency > 3 **and** CTR below floor) and the campaign is at the `min_live_creatives` floor, the headless pass regenerates **one** fresh creative — video via the configured model (default `veo3`, 9:16 Reels), statics via the image model (default `gemini-image`). A **mandatory frame hallucination audit** runs before any deploy: sample frames are extracted, on-asset text OCR'd, and deploy is **blocked** if text is garbled/hallucinated/misspelled or off-brand. Only on a clean audit is the new ad deployed **PAUSED**, then swapped in (pause one fatigued ad, activate the new one) while preserving ≥ `min_live_creatives` live.
+
+### Server-side deterministic rules (complementary)
+
+For durable, no-compute protection between daily passes, also maintain a server-side Meta `adrules_library` PAUSE rule (see `## meta-manage` → `### rules`). The autopilot binary's in-pass sweep is the immediate actor; the server-side rule is the always-on backstop. The two are idempotent and safe to run together.
+
+### Weekly synthesis (Rule 6 safe)
+
+If `weekly_synthesis` is true and the pass runs on a Monday, a synthesis section (7d spend, CPL/CPA trend, best/worst creative, fatigue status, single highest-leverage next move) is appended to the report. The **report file is always written** to `$OPS_DATA_DIR/reports/marketing-autopilot/<project>-<date>.md` (+ `<project>-latest.md` symlink). A notification is sent **only if** `notify_sink` is set and that sink's credentials are present (competitor-daily pattern) — no sink ⇒ file only, never an outbound message without a configured channel.
+
+### Output
+
+`/ops:marketing autopilot` (and `/ops:go`) surface the latest per-project report. Escalations are appended to `$OPS_DATA_DIR/state/autopilot/escalations.log`.
 
 ---
 
