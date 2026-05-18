@@ -78,6 +78,12 @@
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-marketing-autopilot.sh",
       "cron": "0 8 * * *",
       "_note": "Autonomous per-project daily ad optimization (Meta + Google Ads) — mandatory per-project daily_spend_cap_usd, cap pre-flight, deterministic pause of underperformers (keeps >= min_live_creatives), creative-fatigue -> regen, weekly synthesis. Disabled by default; first run is forced dry. Opt-in via /ops:setup marketing (autopilot block). Cron is UTC: 08:00 UTC ~= 10:00 Europe/Amsterdam."
+    },
+    "marketing-autopilot-calibrate": {
+      "enabled": false,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-marketing-autopilot-calibrate.sh",
+      "cron": "0 9 * * 1",
+      "_note": "Weekly Autopilot Studio self-learning calibration (Monday 09:00 UTC ~= 11:00 Europe/Amsterdam, after the 08:00 daily pass). Joins each project's autopilot_state/<project>/creatives.jsonl pre-scores to realized KPIs (kpi.jsonl) and fits a monotone score->predicted_CPL calibrator.json consumed by the next daily pass. python3 stdlib only, no metered calls. Disabled by default; enabled alongside the autopilot block via /ops:setup marketing."
     }
   }
 }
