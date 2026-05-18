@@ -1914,9 +1914,9 @@ The binary owns all deterministic, money-touching logic (cap pre-flight, pause s
   "pause_cpl_multiple": 2.0, "pause_ctr_floor": 0.005, "min_live_creatives": 2,
   "creative_gen": {
     "enabled": true,
-    "video": "veo-3.0-fast-generate-001",
-    "image": "gemini-2.5-flash-image",
-    "analysis": { "multimodal": "gemini-3.1-pro", "judge": "claude-opus-4-7" },
+    "video": "veo-3.1-fast-generate-preview",
+    "image": "gemini-3.1-flash-image-preview",
+    "analysis": { "multimodal": "gemini-3.1-pro-preview", "judge": "claude-opus-4-7" },
     "daily_gen_spend_cap_usd": 5,
     "neurons": { "enabled": false }
   },
@@ -1939,7 +1939,7 @@ The `autonomy_level` and `envelope` settings (next section) layer **on top of** 
 
 ### Creative fatigue → regeneration
 
-When every live ad in a campaign is fatigued (frequency > 3 **and** CTR below floor) and the campaign is at the `min_live_creatives` floor, the headless pass regenerates **one** fresh creative — video via the configured model (default `veo3`, 9:16 Reels), statics via the image model (default `gemini-image`). A **mandatory frame hallucination audit** runs before any deploy: sample frames are extracted, on-asset text OCR'd, and deploy is **blocked** if text is garbled/hallucinated/misspelled or off-brand. Only on a clean audit is the new ad deployed **PAUSED**, then swapped in (pause one fatigued ad, activate the new one) while preserving ≥ `min_live_creatives` live.
+When every live ad in a campaign is fatigued (frequency > 3 **and** CTR below floor) and the campaign is at the `min_live_creatives` floor, the headless pass regenerates **one** fresh creative — video via the configured model (default `veo-3.1-fast-generate-preview`, 9:16 Reels), statics via the image model (default `gemini-3.1-flash-image-preview`). A **mandatory frame hallucination audit** runs before any deploy: sample frames are extracted, on-asset text OCR'd, and deploy is **blocked** if text is garbled/hallucinated/misspelled or off-brand. Only on a clean audit is the new ad deployed **PAUSED**, then swapped in (pause one fatigued ad, activate the new one) while preserving ≥ `min_live_creatives` live.
 
 ### Server-side deterministic rules (complementary)
 

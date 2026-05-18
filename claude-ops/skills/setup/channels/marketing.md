@@ -325,9 +325,9 @@ Write the block to `$PREFS_PATH` under `marketing.projects.<name>.autopilot` (me
           "pause_cpl_multiple": 2.0, "pause_ctr_floor": 0.005, "min_live_creatives": 2,
           "creative_gen": {
             "enabled": true,
-            "video": "veo-3.0-fast-generate-001",
-            "image": "gemini-2.5-flash-image",
-            "analysis": { "multimodal": "gemini-3.1-pro", "judge": "claude-opus-4-7" },
+            "video": "veo-3.1-fast-generate-preview",
+            "image": "gemini-3.1-flash-image-preview",
+            "analysis": { "multimodal": "gemini-3.1-pro-preview", "judge": "claude-opus-4-7" },
             "daily_gen_spend_cap_usd": 5,
             "neurons": { "enabled": false }
           },

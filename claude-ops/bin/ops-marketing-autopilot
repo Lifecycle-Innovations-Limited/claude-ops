@@ -723,8 +723,8 @@ delegate_claude() {
 
   # Build models_json from config
   local mm_model img_model api_key_ref
-  mm_model="$(ap_get "$proj" '.creative_gen.analysis.multimodal')"; mm_model="${mm_model:-gemini-2.0-flash}"
-  img_model="$(ap_get "$proj" '.creative_gen.image')"; img_model="${img_model:-gemini-2.0-flash-image}"
+  mm_model="$(ap_get "$proj" '.creative_gen.analysis.multimodal')"; mm_model="${mm_model:-gemini-3.1-pro-preview}"
+  img_model="$(ap_get "$proj" '.creative_gen.image')"; img_model="${img_model:-gemini-3.1-flash-image-preview}"
   api_key_ref="$(ap_get "$proj" '.creative_gen.api_key')"; api_key_ref="${api_key_ref:-env:GEMINI_API_KEY}"
   local models_json
   models_json="$(jq -n \
@@ -733,7 +733,7 @@ delegate_claude() {
     --arg judge "claude-opus-4-7" \
     --arg key "$api_key_ref" \
     '{multimodal:$mm,image:$img,judge:$judge,api_key_ref:$key}' 2>/dev/null \
-    || echo '{"multimodal":"gemini-2.0-flash","image":"gemini-2.0-flash-image","judge":"claude-opus-4-7","api_key_ref":"env:GEMINI_API_KEY"}')"
+    || echo '{"multimodal":"gemini-3.1-pro-preview","image":"gemini-3.1-flash-image-preview","judge":"claude-opus-4-7","api_key_ref":"env:GEMINI_API_KEY"}')"
 
   local state_dir="${OPS_DATA_DIR}/autopilot_state/${proj}"
   local asset_dir="${state_dir}/assets"

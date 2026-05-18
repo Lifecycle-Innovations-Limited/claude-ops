@@ -5,8 +5,8 @@
 #   creative_analyze <asset_path> <copy_text> <models_json>
 #
 # models_json example:
-#   '{"multimodal":"gemini-2.0-flash","judge":"claude-opus-4-7",
-#     "image":"gemini-2.0-flash","api_key_ref":"env:GEMINI_API_KEY"}'
+#   '{"multimodal":"gemini-3.1-pro-preview","judge":"claude-opus-4-7",
+#     "image":"gemini-flash-latest","api_key_ref":"env:GEMINI_API_KEY"}'
 #
 # Prints ONE JSON:
 #   {"visual":{hook,pacing,legibility,hallucination,cta,brand_safety,scroll_stop},
@@ -140,7 +140,7 @@ _gemini_vision_ocr() {
       {text:"Extract all visible text from this image exactly as it appears. Return only the raw text, no commentary."}
     ]}]}')"
 
-  local model="gemini-2.0-flash"
+  local model="gemini-flash-latest"
   local resp
   resp="$(curl -gsS --max-time 20 \
     -X POST "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${api_key}" \
@@ -274,8 +274,8 @@ creative_analyze() {
 
   # Parse models config
   local multimodal_model image_model judge_model api_key_ref
-  multimodal_model="$(printf '%s' "$models_json" | jq -r '.multimodal // "gemini-2.0-flash"' 2>/dev/null)"
-  image_model="$(printf '%s' "$models_json" | jq -r '.image // "gemini-2.0-flash"' 2>/dev/null)"
+  multimodal_model="$(printf '%s' "$models_json" | jq -r '.multimodal // "gemini-3.1-pro-preview"' 2>/dev/null)"
+  image_model="$(printf '%s' "$models_json" | jq -r '.image // "gemini-flash-latest"' 2>/dev/null)"
   judge_model="$(printf '%s' "$models_json" | jq -r '.judge // "claude-opus-4-7"' 2>/dev/null)"
   api_key_ref="$(printf '%s' "$models_json" | jq -r '.api_key_ref // "env:GEMINI_API_KEY"' 2>/dev/null)"
 
