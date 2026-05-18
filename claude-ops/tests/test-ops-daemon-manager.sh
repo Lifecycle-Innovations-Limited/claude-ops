@@ -164,6 +164,60 @@ fi
 
 rm -rf "$STATUS_HOME"
 
+# 14. mac_is_loaded must not misfire due to SIGPIPE under set -euo pipefail
+# Regression test for: grep -q closes pipe early → launchctl exits SIGPIPE (141)
+# → pipefail propagates non-zero → mac_is_loaded always "fails" even when loaded.
+# Simulate launchctl by writing a mock that outputs a known label list and verify
+# that a matching label returns 0 and a non-matching label returns 1.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  MOCK_LAUNCHCTL=$(mktemp /tmp/mock-launchctl.XXXXXX)
+  chmod +x "$MOCK_LAUNCHCTL"
+  # Write mock that emits 1000 lines to ensure the pipe-drain matters
+  cat > "$MOCK_LAUNCHCTL" <<'MOCK'
+#!/usr/bin/env bash
+for i in $(seq 1 1000); do echo "- 0 com.some.service.$i"; done
+echo "12419 0 com.claude-ops.daemon"
+MOCK
+
+  # Source only the mac_is_loaded function in a set -euo pipefail subshell,
+  # replacing 'launchctl' with the mock via PATH override.
+  MOCK_DIR=$(mktemp -d)
+  ln -sf "$MOCK_LAUNCHCTL" "$MOCK_DIR/launchctl"
+
+  set +e
+  result=$(PATH="$MOCK_DIR:$PATH" bash -euo pipefail -c '
+    PLIST_LABEL="com.claude-ops.daemon"
+    mac_is_loaded() {
+      launchctl list 2>/dev/null | awk -v l="$PLIST_LABEL" '"'"'BEGIN{r=1} $3==l{r=0} END{exit r}'"'"'
+    }
+    if mac_is_loaded; then echo "loaded"; else echo "not-loaded"; fi
+  ' 2>/dev/null)
+  set -e
+  if [[ "$result" == "loaded" ]]; then
+    ok "mac_is_loaded: matching label returns loaded under set -euo pipefail (SIGPIPE regression)"
+  else
+    err "mac_is_loaded: matching label returned '$result' — SIGPIPE regression not fixed"
+  fi
+
+  set +e
+  result=$(PATH="$MOCK_DIR:$PATH" bash -euo pipefail -c '
+    PLIST_LABEL="com.claude-ops.notloaded"
+    mac_is_loaded() {
+      launchctl list 2>/dev/null | awk -v l="$PLIST_LABEL" '"'"'BEGIN{r=1} $3==l{r=0} END{exit r}'"'"'
+    }
+    if mac_is_loaded; then echo "loaded"; else echo "not-loaded"; fi
+  ' 2>/dev/null)
+  set -e
+  if [[ "$result" == "not-loaded" ]]; then
+    ok "mac_is_loaded: non-matching label returns not-loaded under set -euo pipefail"
+  else
+    err "mac_is_loaded: non-matching label returned '$result'"
+  fi
+
+  rm -f "$MOCK_LAUNCHCTL"
+  rm -rf "$MOCK_DIR"
+fi
+
 echo ""
 echo "Results: $pass passed, $fail failed"
 [[ "$fail" == "0" ]]
