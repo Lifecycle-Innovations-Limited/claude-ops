@@ -106,7 +106,6 @@ def fit_isotonic(scores, cpls):
 
     # Un-negate: fitted_val is -CPL, so predicted_cpl = -fitted_val
     mapping = []
-    seen_scores = set()
     for s, neg_c in fitted:
         # Deduplicate scores in mapping (keep last, which is the pooled mean)
         score_key = round(s, 4)

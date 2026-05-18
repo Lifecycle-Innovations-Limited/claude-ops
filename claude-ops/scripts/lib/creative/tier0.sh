@@ -71,6 +71,13 @@ creative_tier0() {
   local ocr_text=""
   local garbled=false
 
+  # Fix E: initialize OCR_SOURCE here so it is always defined regardless of
+  # which branch (video/image/ffprobe-absent) executes.  Without this,
+  # OCR_SOURCE only gets set inside conditional branches declared as `local`,
+  # and the variable is unset when ffprobe is present but ffmpeg is absent,
+  # causing the OCR block to silently skip without recording degraded:"ffmpeg".
+  local OCR_SOURCE=""
+
   # checks defaults
   local aspect="unknown"
   local duration_s="null"
@@ -139,23 +146,38 @@ print(f'{w//g}:{h//g}')
     # Duration (video only)
     if [ "$asset_type" = "video" ]; then
       duration_s="$(printf '%s' "$probe_json" | jq -r '.format.duration // null' 2>/dev/null || echo 'null')"
-      [ "$duration_s" = "null" ] || duration_s="$(printf '%.1f' "$duration_s" 2>/dev/null || echo "$duration_s")"
+      # Strip whitespace — jq can produce trailing newline or multi-line on malformed input
+      duration_s="$(printf '%s' "$duration_s" | tr -d '[:space:]')"
+      [ "$duration_s" = "null" ] || [ -z "$duration_s" ] || duration_s="$(printf '%.1f' "$duration_s" 2>/dev/null || echo 'null')"
+      [ -z "$duration_s" ] && duration_s="null"
 
       # Audio stream present?
       local audio_streams
       audio_streams="$(printf '%s' "$probe_json" | jq '[.streams[]? | select(.codec_type=="audio")] | length' 2>/dev/null || echo 0)"
-      [ "${audio_streams:-0}" -gt 0 ] && has_audio=true
+      # Strip whitespace/newlines — jq can output trailing newline or multi-line on error
+      audio_streams="$(printf '%s' "$audio_streams" | tr -d '[:space:]')"
+      [ "${audio_streams:-0}" -gt 0 ] 2>/dev/null && has_audio=true || true
 
       # Extract keyframe for OCR (first scene-cut or 1s mark)
       if command -v ffmpeg >/dev/null 2>&1; then
         local keyframe_path="$TMPDIR_T0/keyframe.png"
         ffmpeg -v quiet -ss 1 -i "$asset_path" -frames:v 1 "$keyframe_path" 2>/dev/null || true
         [ -f "$keyframe_path" ] || ffmpeg -v quiet -i "$asset_path" -frames:v 1 "$TMPDIR_T0/keyframe.png" 2>/dev/null || true
-        local OCR_SOURCE="$keyframe_path"
+        OCR_SOURCE="$keyframe_path"
+      else
+        # Fix E: ffprobe present but ffmpeg absent — cannot extract keyframe.
+        # Record as degraded so the OCR block is not silently skipped.
+        # The garbled hard-fail must not be bypassable on the video path.
+        degraded_arr+=("ffmpeg")
+        _t0_log "ffmpeg absent — video keyframe extraction unavailable; OCR degraded"
+        # Leave OCR_SOURCE="" so the OCR block below correctly records degraded,
+        # does NOT attempt garbled-check on empty text, and lets analyze.sh know
+        # it must use vision-OCR fallback for this asset.
+        OCR_SOURCE=""
       fi
     else
       # Image: use asset directly for OCR
-      local OCR_SOURCE="$asset_path"
+      OCR_SOURCE="$asset_path"
       # Get image dimensions
       if [ "$width" = "null" ] || [ -z "$width" ]; then
         # Try identify if available
@@ -248,5 +270,11 @@ print(f'{w//g}:{h//g}')
       hard_fail: $hard_fail,
       degraded: $degraded,
       reason: $reason
-    }' 2>/dev/null || printf '{"ok":false,"asset_type":"%s","checks":{"aspect":"unknown","duration_s":null,"has_audio":false,"safe_zone_ok":false,"logo_present":null},"ocr_text":"","garbled":false,"hard_fail":true,"degraded":[],"reason":"json_assembly_error"}\n' "$asset_type"
+    }' 2>/dev/null || {
+    # Fallback: jq assembly failed; emit a safe minimal object that still carries
+    # the degraded array so callers know which tools were absent (Fix E: must not
+    # silently drop degraded entries just because the main jq call failed).
+    printf '{"ok":false,"asset_type":"%s","checks":{"aspect":"unknown","duration_s":null,"has_audio":false,"safe_zone_ok":false,"logo_present":null},"ocr_text":"","garbled":false,"hard_fail":true,"degraded":%s,"reason":"json_assembly_error"}\n' \
+      "$asset_type" "$degraded_json"
+  }
 }

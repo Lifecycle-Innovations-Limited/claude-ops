@@ -73,20 +73,91 @@ fi
 # ── extract_json — shared helper (exported; judge.sh sources analyze.sh) ─────
 # Usage: extract_json <raw_output> [retry_fn_name]
 # retry_fn_name: name of a shell function to call (no args) that produces new raw output.
+#
+# Extraction strategy (robust, handles deeply nested JSON):
+#   1. jq slurp pass: treat each line as a candidate JSON object; pick the last
+#      one that parses successfully.  This handles the common case where the LLM
+#      wrapper emits ANSI/progress lines before the JSON result line.
+#   2. python3 balanced-brace extraction: scan the raw text for the last
+#      balanced '{…}' span (handles multi-line JSON embedded in prose).
+#   3. If both fail and a retry function is provided, call it once and repeat.
+#   4. Return '{}' (empty object) and exit 1 if all attempts fail.
+#
+# Note: the old grep -o BRE only matched ~2 brace levels and always fell
+# through to the jq-slurp path for real nested responses.  It has been
+# replaced with the jq-slurp as the primary path (more correct and faster).
+#
+# extract_json is exported so it is available on ALL sourcing paths including
+# process_onboard (Fix B) and delegate_claude.
 extract_json() {
   local raw="$1"
   local retry_fn="${2:-}"
 
-  # Try to extract last JSON object from mixed output
-  local parsed
-  parsed="$(printf '%s' "$raw" | grep -o '{[^{}]*\({\([^{}]*\)*}[^{}]*\)*}' 2>/dev/null | tail -1 || true)"
-  if [ -z "$parsed" ]; then
-    # Fallback: try jq slurp on entire output to find any valid JSON object
-    parsed="$(printf '%s' "$raw" | jq -Rs 'split("\n") | map(select(startswith("{")) | . as $l | try ($l | fromjson)) | last // empty' 2>/dev/null || true)"
-  fi
+  _extract_json_once() {
+    local text="$1"
+    local parsed
 
-  if printf '%s' "$parsed" | jq -e '.' >/dev/null 2>&1; then
-    printf '%s' "$parsed"
+    # Primary: jq slurp — each line that starts with '{' is tried as JSON.
+    # 'last // empty' picks the last successfully parsed object.
+    parsed="$(printf '%s' "$text" | jq -Rs \
+      'split("\n") | map(select(startswith("{")) | . as $l | try ($l | fromjson) catch empty) | last // empty' \
+      2>/dev/null || true)"
+
+    if printf '%s' "$parsed" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      # Re-emit as compact JSON (not the jq-slurp wrapper string)
+      printf '%s' "$parsed" | jq -c '.'
+      return 0
+    fi
+
+    # Secondary: python3 balanced-brace scan for the last JSON object in mixed text.
+    parsed="$(python3 - "$text" <<'PYEOF' 2>/dev/null
+import sys, json
+text = sys.argv[1]
+last_obj = None
+i = 0
+n = len(text)
+while i < n:
+    if text[i] == '{':
+        depth = 0
+        in_str = False
+        escape = False
+        for j in range(i, n):
+            c = text[j]
+            if escape:
+                escape = False
+            elif c == '\\' and in_str:
+                escape = True
+            elif c == '"':
+                in_str = not in_str
+            elif not in_str:
+                if c == '{':
+                    depth += 1
+                elif c == '}':
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[i:j+1]
+                        try:
+                            obj = json.loads(candidate)
+                            if isinstance(obj, dict):
+                                last_obj = json.dumps(obj)
+                        except Exception:
+                            pass
+                        break
+    i += 1
+if last_obj:
+    print(last_obj)
+PYEOF
+    )"
+
+    if printf '%s' "$parsed" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      printf '%s' "$parsed"
+      return 0
+    fi
+
+    return 1
+  }
+
+  if _extract_json_once "$raw"; then
     return 0
   fi
 
@@ -95,9 +166,7 @@ extract_json() {
     _analyze_log "extract_json: parse failed, retrying via $retry_fn"
     local raw2
     raw2="$("$retry_fn")"
-    parsed="$(printf '%s' "$raw2" | grep -o '{[^{}]*\({\([^{}]*\)*}[^{}]*\)*}' 2>/dev/null | tail -1 || true)"
-    if printf '%s' "$parsed" | jq -e '.' >/dev/null 2>&1; then
-      printf '%s' "$parsed"
+    if _extract_json_once "$raw2"; then
       return 0
     fi
   fi
@@ -105,6 +174,7 @@ extract_json() {
   printf '{}'
   return 1
 }
+export -f extract_json
 
 # ── _gemini_vision_ocr — Gemini Flash vision OCR fallback ────────────────────
 # Used when tesseract is absent (tier0 sets ocr_text:"", degraded:["tesseract"]).

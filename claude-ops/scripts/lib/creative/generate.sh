@@ -85,31 +85,50 @@ _gen_spend_read() {
 # These are intentionally NOT used as a pair across a network call — the lock
 # is held only for the fast accumulator read+write, never across generation.
 
-# _gen_reserve <acc_file> <unit_cost> <cap>
-#   Atomically: read accumulated spend; if accumulated + unit_cost > cap →
-#   print current spend, return 1 (REFUSED, nothing written). Else write
-#   accumulated + unit_cost back (RESERVE) and print the new total, return 0.
-# The entire read-validate-add happens inside ONE critical section so N
-# concurrent callers can never all pass a stale read.
+# _gen_reserve <acc_file> <unit_cost> <cap> <count_file> <max_gens>
+#   Atomically inside ONE critical section: read spend AND count; refuse if
+#   spend+unit > cap OR count >= max_gens; else write both (spend+unit, count+1)
+#   and print the new spend total, return 0.
+#
+# Fix D: the count check+increment now happens inside the SAME lock as the
+# spend reserve so N concurrent callers cannot all read stale count=0 and
+# bypass the per-pass cap.  Previously count was read/written entirely outside
+# the lock, making it a TOCTOU money-leak under concurrency.
+#
+# Output on success: new accumulated spend (float string)
+# Output on failure: current accumulated spend (float string)
+# Return: 0 = reserved, 1 = refused (cap or count exceeded)
 _gen_reserve() {
   local acc_file="$1"
   local unit_cost="$2"
   local cap="$3"
+  local count_file="$4"
+  local max_gens="$5"
   local lock_dir="${acc_file}.lock"
 
   if command -v flock >/dev/null 2>&1; then
     (
       flock -x 200
-      local current new over
+      local current new over cnt
       current="$(_gen_spend_read "$acc_file")"
       over="$(python3 -c "print(1 if float('$current') + float('$unit_cost') > float('$cap') + 1e-9 else 0)" 2>/dev/null || echo 1)"
       if [ "$over" = "1" ]; then
         printf '%s' "$current"
         exit 1
       fi
+      # Fix D: count check inside the same lock
+      cnt="$(_gen_spend_read "$count_file" | tr -d '[:space:]')"
+      cnt="${cnt:-0}"
+      if [ "$cnt" -ge "$max_gens" ] 2>/dev/null; then
+        printf '%s' "$current"
+        exit 2
+      fi
       new="$(python3 -c "print(round(float('$current') + float('$unit_cost'), 4))" 2>/dev/null || echo "")"
       [ -z "$new" ] && { printf '%s' "$current"; exit 1; }
       printf '%s' "$new" > "$acc_file"
+      # Increment count atomically (same lock window)
+      local new_cnt=$(( cnt + 1 ))
+      printf '%s' "$new_cnt" > "$count_file"
       printf '%s' "$new"
       exit 0
     ) 200>"${acc_file}.flock"
@@ -124,13 +143,21 @@ _gen_reserve() {
     [ "$i" -gt 100 ] && break  # ~10s max wait (100 × 0.1s)
     python3 -c "import time; time.sleep(0.1)" 2>/dev/null || true
   done
-  local current new over rc
+  local current new over cnt
   current="$(_gen_spend_read "$acc_file")"
   over="$(python3 -c "print(1 if float('$current') + float('$unit_cost') > float('$cap') + 1e-9 else 0)" 2>/dev/null || echo 1)"
   if [ "$over" = "1" ]; then
     rmdir "$lock_dir" 2>/dev/null || true
     printf '%s' "$current"
     return 1
+  fi
+  # Fix D: count check inside the same lock
+  cnt="$(_gen_spend_read "$count_file" | tr -d '[:space:]')"
+  cnt="${cnt:-0}"
+  if [ "$cnt" -ge "$max_gens" ] 2>/dev/null; then
+    rmdir "$lock_dir" 2>/dev/null || true
+    printf '%s' "$current"
+    return 2
   fi
   new="$(python3 -c "print(round(float('$current') + float('$unit_cost'), 4))" 2>/dev/null || echo "")"
   if [ -z "$new" ]; then
@@ -139,28 +166,54 @@ _gen_reserve() {
     return 1
   fi
   printf '%s' "$new" > "$acc_file"
+  # Increment count atomically (same lock window)
+  local new_cnt=$(( cnt + 1 ))
+  printf '%s' "$new_cnt" > "$count_file"
   rmdir "$lock_dir" 2>/dev/null || true
   printf '%s' "$new"
   return 0
 }
 
-# _gen_refund <acc_file> <unit_cost> → atomically subtract unit_cost back off
-# the accumulator (used ONLY when a reserved generation fails). Clamped at 0.
-# Same single critical section as _gen_reserve so a refund can never race a
-# concurrent reserve. Prints the new total.
+# _gen_refund <acc_file> <unit_cost> <count_file>
+#   Atomically subtract unit_cost from spend AND decrement count (used ONLY
+#   when a reserved generation fails). Clamped at 0. Prints the new spend total.
+#   Fix D: also refunds the count so a failed generation doesn't consume a slot.
+#   Harden: verify the write succeeded via temp+rename; log if it fails so the
+#   accumulator is never permanently inflated on write failure.
 _gen_refund() {
   local acc_file="$1"
   local unit_cost="$2"
+  local count_file="${3:-}"
   local lock_dir="${acc_file}.lock"
+
+  _do_refund() {
+    local current new cnt new_cnt
+    current="$(_gen_spend_read "$acc_file")"
+    new="$(python3 -c "v=round(float('$current') - float('$unit_cost'), 4); print(v if v > 0 else 0)" 2>/dev/null || echo "$current")"
+    # Hardened write: write to temp then rename (atomic on POSIX)
+    local tmp_acc; tmp_acc="${acc_file}.tmp.$$"
+    if printf '%s' "$new" > "$tmp_acc" 2>/dev/null && mv "$tmp_acc" "$acc_file" 2>/dev/null; then
+      : # spend refund succeeded
+    else
+      rm -f "$tmp_acc" 2>/dev/null || true
+      printf '[generate] ERROR: _gen_refund failed to write acc_file %s — accumulator may be inflated\n' "$acc_file" >&2
+    fi
+    # Fix D: also decrement count file if provided
+    if [ -n "$count_file" ] && [ -f "$count_file" ]; then
+      cnt="$(_gen_spend_read "$count_file" | tr -d '[:space:]')"
+      cnt="${cnt:-0}"
+      new_cnt=$(( cnt > 0 ? cnt - 1 : 0 ))
+      local tmp_cnt; tmp_cnt="${count_file}.tmp.$$"
+      printf '%s' "$new_cnt" > "$tmp_cnt" 2>/dev/null && mv "$tmp_cnt" "$count_file" 2>/dev/null || \
+        rm -f "$tmp_cnt" 2>/dev/null || true
+    fi
+    printf '%s' "$new"
+  }
 
   if command -v flock >/dev/null 2>&1; then
     (
       flock -x 200
-      local current new
-      current="$(_gen_spend_read "$acc_file")"
-      new="$(python3 -c "v=round(float('$current') - float('$unit_cost'), 4); print(v if v > 0 else 0)" 2>/dev/null || echo "$current")"
-      printf '%s' "$new" > "$acc_file"
-      printf '%s' "$new"
+      _do_refund
     ) 200>"${acc_file}.flock"
     return $?
   fi
@@ -171,12 +224,8 @@ _gen_refund() {
     [ "$i" -gt 100 ] && break
     python3 -c "import time; time.sleep(0.1)" 2>/dev/null || true
   done
-  local current new
-  current="$(_gen_spend_read "$acc_file")"
-  new="$(python3 -c "v=round(float('$current') - float('$unit_cost'), 4); print(v if v > 0 else 0)" 2>/dev/null || echo "$current")"
-  printf '%s' "$new" > "$acc_file"
+  _do_refund
   rmdir "$lock_dir" 2>/dev/null || true
-  printf '%s' "$new"
   return 0
 }
 
@@ -317,40 +366,27 @@ creative_generate() {
   local unit_cost
   [ "$gen_type" = "video" ] && unit_cost="$_VEO3_FAST_COST_USD" || unit_cost="$_GEMINI_FLASH_IMAGE_COST_USD"
 
-  # ── Spend accumulator ─────────────────────────────────────────────────────
+  # ── Combined spend+count reserve under a single lock ─────────────────────
+  # Fix D: both the spend cap AND the per-pass count cap are enforced inside
+  # ONE critical section (inside _gen_reserve).  No pre-lock count read is
+  # performed — doing so would re-open the TOCTOU window under concurrency.
+  # Generation (slow network call) runs OUTSIDE the lock, as before.
   local acc_file="$STATE_BASE/.gen-spend-$(date +%F)"
   local today_pass_count_file="$STATE_BASE/.gen-count-$(date +%F)"
-  local pass_count
-  pass_count="$(_gen_spend_read "$today_pass_count_file" | tr -d '[:space:]' || echo 0)"
-  pass_count="${pass_count:-0}"
 
-  # Per-pass hard count cap check (second floor). This is a soft pre-filter;
-  # the authoritative count-cap enforcement happens inside the reservation
-  # critical section below so N concurrent callers can't all slip past a
-  # stale count read.
-  if [ "$pass_count" -ge "$max_gens" ] 2>/dev/null; then
-    local current_spend
-    current_spend="$(_gen_spend_read "$acc_file")"
-    _gen_log "per-pass count cap reached (${pass_count}/${max_gens})"
+  local new_spend reserve_rc
+  new_spend="$(_gen_reserve "$acc_file" "$unit_cost" "$cap" "$today_pass_count_file" "$max_gens")"
+  reserve_rc=$?
+
+  if [ "$reserve_rc" = "2" ]; then
+    # Count cap hit (return code 2 from _gen_reserve)
+    local current_spend; current_spend="$(_gen_spend_read "$acc_file")"
+    local pass_count; pass_count="$(_gen_spend_read "$today_pass_count_file" | tr -d '[:space:]')"
+    _gen_log "per-pass count cap reached (${pass_count:-?}/${max_gens})"
     printf '{"generated":[],"spend_today":%s,"capped":true,"refused":true,"reason":"per_pass_count_cap_%s_of_%s"}\n' \
-      "${current_spend:-0}" "$pass_count" "$max_gens"
+      "${current_spend:-0}" "${pass_count:-?}" "$max_gens"
     return 1
   fi
-
-  # ── RESERVE under lock (atomic read-validate-add) ─────────────────────────
-  # The cap decision AND the spend write happen inside ONE critical section so
-  # concurrent callers serialize: each sees the prior reservation, not a stale
-  # $0. The count cap is enforced in the SAME lock (count file lives next to
-  # the accumulator, guarded by the same flock fd / mkdir mutex) to prevent a
-  # parallel count-leak. Generation (slow network) runs OUTSIDE the lock.
-  local current_spend new_spend reserve_rc
-  current_spend="$(_gen_spend_read "$acc_file")"
-
-  # Reserve spend atomically (also re-validates count under the same mutex by
-  # piggybacking the count cap into the spend reservation: we recheck the
-  # persisted count inside _gen_reserve's lock window via a wrapper).
-  new_spend="$(_gen_reserve "$acc_file" "$unit_cost" "$cap")"
-  reserve_rc=$?
 
   if [ "$reserve_rc" -ne 0 ]; then
     _gen_log "daily gen spend cap reached (${new_spend} + ${unit_cost} > ${cap})"
@@ -358,7 +394,7 @@ creative_generate() {
       "${new_spend:-0}" "$cap"
     return 1
   fi
-  # Spend is now RESERVED. From here, any early exit MUST refund.
+  # Spend AND count are now RESERVED inside the lock. Any early exit MUST refund both.
 
   # ── Generate (network call, OUTSIDE the lock) ─────────────────────────────
   local out_file generated_path gen_ok=false
@@ -375,18 +411,18 @@ creative_generate() {
   fi
 
   if [ "$gen_ok" = "false" ]; then
-    # REFUND the reservation — no API spend actually incurred on failure.
+    # REFUND both spend and count — no API spend actually incurred on failure.
+    # Fix D: _gen_refund now also decrements the count file atomically.
     local refunded_spend
-    refunded_spend="$(_gen_refund "$acc_file" "$unit_cost")"
-    _gen_log "generation call failed — refunded \$${unit_cost} (spend now \$${refunded_spend})"
+    refunded_spend="$(_gen_refund "$acc_file" "$unit_cost" "$today_pass_count_file")"
+    _gen_log "generation call failed — refunded \$${unit_cost} + count slot (spend now \$${refunded_spend})"
     printf '{"generated":[],"spend_today":%s,"capped":false,"refused":true,"reason":"generation_api_call_failed"}\n' \
       "${refunded_spend:-0}"
     return 1
   fi
 
-  # Success: the reservation stands (no refund). Increment pass count.
-  local new_count=$(( pass_count + 1 ))
-  printf '%s' "$new_count" > "$today_pass_count_file"
+  # Success: spend and count were already incremented inside _gen_reserve's lock.
+  # No further count write needed here.
 
   jq -n \
     --arg path "$generated_path" \

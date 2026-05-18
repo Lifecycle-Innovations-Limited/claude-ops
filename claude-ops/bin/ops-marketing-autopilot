@@ -29,6 +29,15 @@ OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-pat
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/../scripts/lib/claude-invoke.sh"
 
+# Fix B: source analyze.sh once near top (makes extract_json available on ALL paths,
+# including process_onboard, which runs before delegate_claude would source it).
+# Guard so re-sourcing on the delegate_claude path is idempotent.
+if [ -z "${_AUTOPILOT_ANALYZE_LOADED:-}" ]; then
+  # shellcheck disable=SC1090
+  . "${SCRIPT_DIR}/../scripts/lib/creative/analyze.sh" 2>/dev/null || true
+  _AUTOPILOT_ANALYZE_LOADED=1
+fi
+
 PREFS="${OPS_AUTOPILOT_PREFS:-${OPS_DATA_DIR}/preferences.json}"
 REPORT_DIR="${OPS_DATA_DIR}/reports/marketing-autopilot"
 STATE_DIR="${OPS_DATA_DIR}/state/autopilot"
@@ -190,8 +199,22 @@ create_object() {
     report "- ⛔ kill_switch is active — no object creation permitted"
     return 0
   fi
+  # Fix G: under DRY_RUN or FIRST_RUN, still render the full staged proposal
+  # including ## Requires human action with proposed campaign details.
+  # No mutations and no write-back to preferences.json are performed.
   if [ "$DRY_RUN" = "1" ] || [ "${FIRST_RUN:-0}" = "1" ]; then
     report "- [STAGE] would create ${kind}: ${desc}"
+    report ""
+    report "## Requires human action"
+    report ""
+    report "- **Action:** Create ${kind}: ${desc}"
+    report "- **Budget:** \$${budget_usd}/day"
+    report "- **Note:** Dry-run / first-run mode — zero mutations performed"
+    report "- **To authorize:** Touch token file after reviewing:"
+    report "  \`touch ${STATE_DIR}/${proj}.create-ok\`"
+    # Proposed campaign_ids are listed in the report (not written back to prefs).
+    report "- **Proposed campaign_ids:** (pending creation — will be populated on first live run)"
+    report ""
     return 0
   fi
 
@@ -224,6 +247,53 @@ create_object() {
     max_campaigns="$(ap_get "$proj" '.envelope.max_campaigns')"; max_campaigns="${max_campaigns:-0}"
     max_audiences="$(ap_get "$proj" '.envelope.max_new_audiences')"; max_audiences="${max_audiences:-0}"
     max_daily_budget_usd="$(ap_get "$proj" '.envelope.max_daily_budget_usd')"; max_daily_budget_usd="${max_daily_budget_usd:-0}"
+
+    # Fix A: Parse the objective and geo from key=val args so we can enforce
+    # envelope.objective_allowlist and envelope.geo_allowlist BEFORE execution.
+    # Traverse remaining positional args (already shifted: kind/desc/budget gone).
+    local _sa_obj="" _sa_geo=""
+    for _kv in "$@"; do
+      case "$_kv" in
+        obj=*)  _sa_obj="${_kv#obj=}" ;;
+        geo=*)  _sa_geo="${_kv#geo=}" ;;
+      esac
+    done
+
+    # Fix A: objective_allowlist — empty/absent list = unconstrained (any objective allowed).
+    # Non-empty list: object's objective MUST be in the list or escalation fires.
+    # Use jq directly against PREFS (ap_get uses -r which multi-line-formats arrays;
+    # we need the array to remain parseable JSON for the membership check).
+    local _obj_list_len
+    _obj_list_len="$(jq -r --arg p "$proj" \
+      '(.marketing.projects[$p].autopilot.envelope.objective_allowlist // []) | length' \
+      "$PREFS" 2>/dev/null || echo 0)"
+    if [ "${_obj_list_len:-0}" -gt 0 ] && [ -n "$_sa_obj" ]; then
+      local _obj_in_list
+      _obj_in_list="$(jq -r --arg p "$proj" --arg o "$_sa_obj" \
+        '(.marketing.projects[$p].autopilot.envelope.objective_allowlist // []) | map(select(. == $o)) | length' \
+        "$PREFS" 2>/dev/null || echo 0)"
+      if [ "${_obj_in_list:-0}" -eq 0 ]; then
+        escalate "$proj" "sandbox: objective '${_sa_obj}' outside envelope.objective_allowlist — zero action"
+        return 1
+      fi
+    fi
+
+    # Fix A: geo_allowlist — empty/absent list = unconstrained (any geo allowed).
+    # Non-empty list: object's geo MUST be in the list or escalation fires.
+    local _geo_list_len
+    _geo_list_len="$(jq -r --arg p "$proj" \
+      '(.marketing.projects[$p].autopilot.envelope.geo_allowlist // []) | length' \
+      "$PREFS" 2>/dev/null || echo 0)"
+    if [ "${_geo_list_len:-0}" -gt 0 ] && [ -n "$_sa_geo" ]; then
+      local _geo_in_list
+      _geo_in_list="$(jq -r --arg p "$proj" --arg g "$_sa_geo" \
+        '(.marketing.projects[$p].autopilot.envelope.geo_allowlist // []) | map(select(. == $g)) | length' \
+        "$PREFS" 2>/dev/null || echo 0)"
+      if [ "${_geo_in_list:-0}" -eq 0 ]; then
+        escalate "$proj" "sandbox: geo '${_sa_geo}' outside envelope.geo_allowlist — zero action"
+        return 1
+      fi
+    fi
 
     # Campaign count check
     if [ "$kind" = "campaign" ] || [ "$kind" = "budget" ]; then
@@ -933,19 +1003,38 @@ _ledger_append() {
   local ledger="${OPS_DATA_DIR}/autopilot_state/${proj}/creatives.jsonl"
   mkdir -p "$(dirname "$ledger")"
   local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  jq -n \
+
+  # Fix C: Bash parses ${var:-{}} as ${var:-{}  +  literal } giving a spurious
+  # trailing "}" when var is non-empty, which produces invalid JSON and causes
+  # jq --argjson to exit 2.  Use explicit guarded vars instead.
+  local gp; gp="$gen_params"; [ -z "$gp" ] && gp='{}'
+  local _t0; _t0="$t0"; [ -z "$_t0" ] && _t0='{}'
+  local _t1; _t1="$t1"; [ -z "$_t1" ] && _t1='{}'
+  local _t2; _t2="$t2"; [ -z "$_t2" ] && _t2='{}'
+
+  local row
+  row="$(jq -n \
     --arg ts "$ts" --arg proj "$proj" --arg ch "$channel" \
     --arg ap "$asset_path" --arg at "$asset_type" \
-    --argjson gp "${gen_params:-{}}" \
-    --argjson t0 "${t0:-{}}" \
-    --argjson t1 "${t1:-{}}" \
-    --argjson t2 "${t2:-{}}" \
+    --argjson gp "$gp" \
+    --argjson t0 "$_t0" \
+    --argjson t1 "$_t1" \
+    --argjson t2 "$_t2" \
     --arg dts "${deploy_ts:-}" --arg aid "${ad_id:-}" \
     '{ts:$ts,project:$proj,channel:$ch,asset_path:$ap,asset_type:$at,
       gen_params:$gp,tier0:$t0,tier1:$t1,tier2:$t2,
       deploy_ts:(if $dts=="" then null else $dts end),
       ad_id:(if $aid=="" then null else $aid end)}' \
-    2>/dev/null >> "$ledger" || true
+    2>/dev/null)" || true
+
+  if [ -n "$row" ]; then
+    printf '%s\n' "$row" >> "$ledger" || log "ERROR: failed to append to ledger ${ledger}"
+  else
+    # jq failed: append a minimal valid row so the ledger is never silently empty
+    log "WARN: _ledger_append jq failed for proj=${proj} — appending minimal fallback row"
+    printf '{"ts":"%s","project":"%s","channel":"%s","asset_path":"%s","asset_type":"%s","gen_params":{},"tier0":{},"tier1":{},"tier2":{},"deploy_ts":null,"ad_id":null}\n' \
+      "$ts" "$proj" "$channel" "$asset_path" "$asset_type" >> "$ledger" || true
+  fi
 }
 
 # ── Onboarding: cold-start campaign scaffold ──────────────────────────────────
@@ -1138,9 +1227,29 @@ if [ "${#PROJECTS[@]}" -eq 0 ]; then
   exit 0
 fi
 
+# Fix F: project key sanitization — block path/prompt injection from operator-
+# controlled preferences.json keys.  Accept only [A-Za-z0-9._-] and reject
+# bare "." or ".." components.  Skip + log any key that fails the pattern.
+_validate_proj_key() {
+  local k="$1"
+  [ -z "$k" ] && return 1
+  # Reject . and .. outright
+  [ "$k" = "." ] || [ "$k" = ".." ] && return 1
+  # Must match the allowed pattern exactly
+  case "$k" in
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  return 0
+}
+
 RC=0
 for proj in "${PROJECTS[@]}"; do
   [ -z "$proj" ] && continue
+  # Fix F: sanitize before building any path or prompt from $proj
+  if ! _validate_proj_key "$proj"; then
+    log "SECURITY: skipping project key '${proj}' — fails [A-Za-z0-9._-] allowlist or is . / .."
+    continue
+  fi
   REPORT="${REPORT_DIR}/${proj}-${TODAY}.md"
   : > "$REPORT"
   MUTATIONS=0; ESCALATED=0; META_FATIGUE=0
