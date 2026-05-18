@@ -1,0 +1,505 @@
+#!/usr/bin/env bash
+# ops-marketing-autopilot — autonomous per-project daily ad optimization.
+#
+# Config-driven productization of the autonomous ad optimizer. Iterates
+# preferences.json marketing.projects.<name> where autopilot.enabled == true,
+# and per project/channel (Meta + Google Ads):
+#   1. Hard cap pre-flight (refuse w/o cap; abort on budget tamper / runaway spend)
+#   2. Deterministic pause of underperformers (keeps >= min_live_creatives live)
+#   3. Creative-fatigue detection -> delegates regen + hallucination audit +
+#      weekly synthesis to a credit-pool-gated headless claude pass
+#   4. Writes a per-project report (always) + optional notify if a sink is set
+#
+# Spend-safety invariants (NEVER LEAK MONEY + Rule 5):
+#   - No daily_spend_cap_usd  -> project skipped, escalation note, zero mutations
+#   - Sum(campaign daily_budget) > cap OR runaway amount_spent -> abort project
+#   - May ONLY pause / swap / regenerate creatives. NEVER raises budgets, creates
+#     campaigns, creates/expands audiences, or changes objectives — those are
+#     written to the report as human-action recommendations.
+#   - --dry-run flag; first install run is forced dry (logs intended actions only)
+#
+# Flags: --dry-run  --project <name>  --channel meta|google_ads
+#
+# Generic + config-driven: zero hardcoded account IDs / tokens (Rule 0).
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-path.sh"
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/../scripts/lib/claude-invoke.sh"
+
+PREFS="${OPS_AUTOPILOT_PREFS:-${OPS_DATA_DIR}/preferences.json}"
+REPORT_DIR="${OPS_DATA_DIR}/reports/marketing-autopilot"
+STATE_DIR="${OPS_DATA_DIR}/state/autopilot"
+LOG_DIR="${OPS_DATA_DIR}/logs"
+INSTALL_MARKER="${STATE_DIR}/.installed"
+mkdir -p "$REPORT_DIR" "$STATE_DIR" "$LOG_DIR"
+
+LOG="${LOG_DIR}/marketing-autopilot.log"
+log() { printf '%s [autopilot] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" | tee -a "$LOG" >&2; }
+
+# ── Flags ─────────────────────────────────────────────────────────────────────
+DRY_RUN=0
+ONLY_PROJECT=""
+ONLY_CHANNEL=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1 ;;
+    --project) ONLY_PROJECT="${2:-}"; shift ;;
+    --channel) ONLY_CHANNEL="${2:-}"; shift ;;
+    *) log "WARN: unknown arg '$1'" ;;
+  esac
+  shift
+done
+
+# First install run is always dry — never mutate before an operator has seen
+# one full dry pass in the report.
+if [ ! -f "$INSTALL_MARKER" ]; then
+  DRY_RUN=1
+  FIRST_RUN=1
+  log "first run detected — forcing --dry-run"
+else
+  FIRST_RUN=0
+fi
+
+TODAY="$(date +%Y-%m-%d)"
+DOW="$(date +%u)"  # 1=Mon .. 7=Sun
+
+# ── Cred + config resolvers (same contract as bin/ops-marketing-dash) ─────────
+# env:VAR | doppler:proj/cfg/SECRET | inline literal. Empty -> empty. Never fails.
+resolve_cred() {
+  local ref="${1:-}"
+  { [ -z "$ref" ] || [ "$ref" = "null" ]; } && return 0
+  case "$ref" in
+    env:*)
+      local var="${ref#env:}"; printf '%s' "${!var:-}" ;;
+    doppler:*)
+      local path="${ref#doppler:}" proj rest cfg secret
+      proj="${path%%/*}"; rest="${path#*/}"; cfg="${rest%%/*}"; secret="${rest#*/}"
+      { [ -z "$proj" ] || [ -z "$cfg" ] || [ -z "$secret" ]; } && return 0
+      doppler secrets get "$secret" --project "$proj" --config "$cfg" --plain 2>/dev/null || true ;;
+    *) printf '%s' "$ref" ;;
+  esac
+}
+
+# Raw jq read against marketing.projects.<project>...
+pref_json() { jq -r "$1" "$PREFS" 2>/dev/null || true; }
+ap_get() {
+  # $1 project, $2 jq path suffix under .autopilot (e.g. '.daily_spend_cap_usd')
+  [ -f "$PREFS" ] || return 0
+  jq -r --arg p "$1" ".marketing.projects[\$p].autopilot${2} // empty" "$PREFS" 2>/dev/null
+}
+chan_cred() {
+  # $1 project, $2 channel, $3 field -> resolved value
+  [ -f "$PREFS" ] || return 0
+  resolve_cred "$(jq -r --arg p "$1" --arg c "$2" --arg f "$3" \
+    '.marketing.projects[$p][$c][$f] // empty' "$PREFS" 2>/dev/null)"
+}
+
+# ── Report + escalation ───────────────────────────────────────────────────────
+REPORT=""
+report() { printf '%s\n' "$1" >> "$REPORT"; }
+ESCALATED=0
+escalate() {
+  local proj="$1" reason="$2"
+  ESCALATED=1
+  log "ESCALATE project=$proj — $reason"
+  report ""
+  report "## ⛔ ESCALATION — HUMAN ACTION REQUIRED"
+  report ""
+  report "- **Project:** $proj"
+  report "- **Reason:** $reason"
+  report "- **Mutations performed this pass:** NONE (aborted for safety)"
+  report ""
+  printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$proj" "$reason" \
+    >> "${STATE_DIR}/escalations.log"
+}
+
+# ── Mutation gate ─────────────────────────────────────────────────────────────
+# Every state-changing API call goes through here. In dry-run it ONLY logs the
+# intent (prefixed [DRY]) and performs no network mutation. The test harness
+# greps the report + a curl shim to assert zero mutations under --dry-run.
+MUTATIONS=0
+mutate() {
+  # $1 human description, rest = curl args (must be a mutating request)
+  local desc="$1"; shift
+  if [ "$DRY_RUN" = "1" ]; then
+    report "- [DRY] would: ${desc}"
+    log "[DRY] ${desc}"
+    return 0
+  fi
+  MUTATIONS=$((MUTATIONS+1))
+  report "- [EXEC] ${desc}"
+  log "[EXEC] ${desc}"
+  curl -gsS --max-time 15 "$@" 2>/dev/null || true
+}
+
+# ── Meta helpers ──────────────────────────────────────────────────────────────
+GRAPH="https://graph.facebook.com/v23.0"
+META_PROOF=""
+meta_proof() {
+  # appsecret_proof = HMAC-SHA256(app_secret, access_token). Only when app_secret
+  # is configured ("Require app secret" accounts). Empty otherwise.
+  local tok="$1" sec="$2"
+  [ -z "$sec" ] && { printf ''; return; }
+  printf '%s' "$tok" | openssl dgst -sha256 -hmac "$sec" 2>/dev/null | awk '{print $NF}'
+}
+meta_get() {
+  # $1 = path?query (no host). Appends auth + proof.
+  local q="$1" sep="?"
+  case "$q" in *\?*) sep="&";; esac
+  local url="${GRAPH}/${q}${sep}access_token=${META_TOKEN}"
+  [ -n "$META_PROOF" ] && url="${url}&appsecret_proof=${META_PROOF}"
+  curl -gsS --max-time 12 "$url" 2>/dev/null || echo '{}'
+}
+
+process_meta() {
+  local proj="$1"
+  META_TOKEN="$(chan_cred "$proj" meta access_token)"
+  local acct app_secret
+  acct="$(chan_cred "$proj" meta ad_account_id)"
+  app_secret="$(chan_cred "$proj" meta app_secret)"
+  if [ -z "$META_TOKEN" ] || [ -z "$acct" ]; then
+    report "- meta: not configured (missing access_token/ad_account_id) — skipped"
+    return 0
+  fi
+  META_PROOF="$(meta_proof "$META_TOKEN" "$app_secret")"
+
+  local cap; cap="$(ap_get "$proj" '.daily_spend_cap_usd')"
+  local cpl_mult ctr_floor min_live
+  cpl_mult="$(ap_get "$proj" '.pause_cpl_multiple')";  cpl_mult="${cpl_mult:-2.0}"
+  ctr_floor="$(ap_get "$proj" '.pause_ctr_floor')";    ctr_floor="${ctr_floor:-0.005}"
+  min_live="$(ap_get "$proj" '.min_live_creatives')";  min_live="${min_live:-2}"
+
+  mapfile -t CIDS < <(jq -r --arg p "$proj" \
+    '.marketing.projects[$p].autopilot.campaign_ids.meta[]? // empty' "$PREFS" 2>/dev/null)
+  if [ "${#CIDS[@]}" -eq 0 ]; then
+    report "- meta: no campaign_ids.meta configured — skipped"
+    return 0
+  fi
+
+  report ""
+  report "### Meta — account ${acct} (${#CIDS[@]} campaign(s))"
+
+  # ── Cap pre-flight: Σ campaign/adset daily_budget ≤ cap ────────────────────
+  local total_budget_usd=0 cid camp adsets
+  for cid in "${CIDS[@]}"; do
+    camp="$(meta_get "${cid}?fields=name,status,daily_budget")"
+    local cdb; cdb="$(echo "$camp" | jq -r '.daily_budget // empty' 2>/dev/null)"
+    if [ -n "$cdb" ] && [ "$cdb" != "null" ]; then
+      total_budget_usd="$(awk "BEGIN{printf \"%.2f\", ${total_budget_usd}+${cdb}/100}")"
+    else
+      # ABO: sum adset daily budgets
+      adsets="$(meta_get "${cid}/adsets?fields=daily_budget,effective_status&limit=200")"
+      local sumc
+      sumc="$(echo "$adsets" | jq '[.data[]? | select(.effective_status=="ACTIVE") | (.daily_budget|tonumber? // 0)] | add // 0' 2>/dev/null || echo 0)"
+      total_budget_usd="$(awk "BEGIN{printf \"%.2f\", ${total_budget_usd}+${sumc}/100}")"
+    fi
+  done
+
+  local over
+  over="$(awk "BEGIN{print (${total_budget_usd}+0 > ${cap}+0) ? 1 : 0}")"
+  if [ "$over" = "1" ]; then
+    escalate "$proj" "Meta Σ daily_budget \$${total_budget_usd} exceeds cap \$${cap} — possible budget tamper. No mutations."
+    return 0
+  fi
+  report "- cap pre-flight OK: Σ daily_budget \$${total_budget_usd} ≤ cap \$${cap}"
+
+  # ── Runaway spend trajectory check ─────────────────────────────────────────
+  local acct_json spent_now state_f spent_prev
+  acct_json="$(meta_get "${acct}?fields=amount_spent,spend_cap,currency")"
+  spent_now="$(echo "$acct_json" | jq -r '.amount_spent // "0"' 2>/dev/null)"
+  spent_now="$(awk "BEGIN{printf \"%.2f\", ${spent_now:-0}/100}")"
+  state_f="${STATE_DIR}/${proj}-meta.spent"
+  spent_prev="$(cat "$state_f" 2>/dev/null || echo "")"
+  if [ -n "$spent_prev" ]; then
+    local delta limit
+    delta="$(awk "BEGIN{printf \"%.2f\", ${spent_now}-${spent_prev}}")"
+    limit="$(awk "BEGIN{printf \"%.2f\", ${cap}*1.5}")"
+    if awk "BEGIN{exit !(${delta} > ${limit})}"; then
+      escalate "$proj" "Meta lifetime amount_spent jumped \$${delta} since last pass (> 1.5× cap \$${limit}) — runaway spend. No mutations."
+      return 0
+    fi
+    report "- spend trajectory OK: +\$${delta} since last pass (≤ 1.5× cap)"
+  fi
+  [ "$DRY_RUN" = "1" ] || printf '%s' "$spent_now" > "$state_f"
+
+  # ── Deterministic pause sweep (per campaign) ───────────────────────────────
+  local fatigue_flag=0
+  for cid in "${CIDS[@]}"; do
+    local ads insights live_count
+    ads="$(meta_get "${cid}/ads?fields=id,name,effective_status&limit=200")"
+    live_count="$(echo "$ads" | jq '[.data[]? | select(.effective_status=="ACTIVE")] | length' 2>/dev/null || echo 0)"
+    insights="$(meta_get "${cid}/insights?level=ad&date_preset=last_7d&fields=ad_id,spend,impressions,ctr,frequency,actions&limit=200")"
+
+    # adset avg CPL for the multiple test
+    local adset_cpl
+    adset_cpl="$(echo "$insights" | jq -r '
+      [ .data[]? | { s:(.spend|tonumber? // 0),
+                     l:([.actions[]? | select(.action_type|test("lead|purchase")) | (.value|tonumber? // 0)] | add // 0) } ]
+      | (map(.s)|add // 0) as $S | (map(.l)|add // 0) as $L
+      | if $L>0 then ($S/$L) else 0 end' 2>/dev/null || echo 0)"
+
+    # Build pause candidates worst-first; respect min_live floor.
+    local cand
+    cand="$(echo "$insights" | jq -c --argjson cpl "${adset_cpl:-0}" \
+      --argjson m "${cpl_mult}" --argjson ctrf "${ctr_floor}" '
+      [ .data[]? | {
+          ad_id, spend:(.spend|tonumber? // 0),
+          impr:(.impressions|tonumber? // 0),
+          ctr:(.ctr|tonumber? // 0),
+          freq:(.frequency|tonumber? // 0),
+          leads:([.actions[]? | select(.action_type|test("lead|purchase")) | (.value|tonumber? // 0)] | add // 0)
+        }
+        | .cpl = (if .leads>0 then .spend/.leads else 1e12 end)
+        | select(
+            (.spend>=10 and $cpl>0 and .cpl > ($cpl*$m)) or
+            (.impr>=1000 and .ctr < ($ctrf*100))
+          )
+      ] | sort_by(-.cpl)' 2>/dev/null || echo '[]')"
+
+    local n; n="$(echo "$cand" | jq 'length' 2>/dev/null || echo 0)"
+    report ""
+    report "**Campaign ${cid}** — ${live_count} live ad(s), ${n} underperformer(s)"
+
+    local i=0
+    while [ "$i" -lt "$n" ]; do
+      if [ "$((live_count - 1))" -lt "$min_live" ]; then
+        report "- floor reached (min_live_creatives=${min_live}) — stop pausing"
+        break
+      fi
+      local ad_id reason
+      ad_id="$(echo "$cand" | jq -r ".[$i].ad_id")"
+      reason="$(echo "$cand" | jq -r --argjson cpl_disp "${cpl_mult}" ".[$i] | (if .cpl < 1e11 then \"CPL \\(.cpl|floor) (>\\(\$cpl_disp)x adset avg)\" else \"CTR \\(.ctr)% < floor\" end) + \" / spend \\(.spend) / impr \\(.impr)\"")"
+      mutate "pause Meta ad ${ad_id} (${reason})" \
+        -X POST "${GRAPH}/${ad_id}" \
+        -d "status=PAUSED&access_token=${META_TOKEN}${META_PROOF:+&appsecret_proof=${META_PROOF}}"
+      live_count=$((live_count-1))
+      i=$((i+1))
+    done
+
+    # Creative fatigue: all live ads freq>3 AND ctr decayed below floor
+    local fatigued
+    fatigued="$(echo "$insights" | jq --argjson ctrf "${ctr_floor}" '
+      [ .data[]? | select((.frequency|tonumber? // 0) > 3 and (.ctr|tonumber? // 0) < ($ctrf*100)) ] | length' 2>/dev/null || echo 0)"
+    if [ "${fatigued:-0}" -gt 0 ] && [ "$live_count" -le "$min_live" ]; then
+      fatigue_flag=1
+      report "- ⚠️ creative fatigue: ${fatigued} live ad(s) freq>3 + CTR<floor and at min_live floor"
+    fi
+  done
+
+  META_FATIGUE="$fatigue_flag"
+}
+
+# ── Google Ads helpers ────────────────────────────────────────────────────────
+process_google_ads() {
+  local proj="$1"
+  local dev cid client_id client_secret refresh login
+  dev="$(chan_cred "$proj" google_ads developer_token)"
+  refresh="$(chan_cred "$proj" google_ads refresh_token)"
+  client_id="$(chan_cred "$proj" google_ads client_id)"
+  client_secret="$(chan_cred "$proj" google_ads client_secret)"
+  cid="$(chan_cred "$proj" google_ads customer_id)"; cid="${cid//-/}"
+  login="$(chan_cred "$proj" google_ads login_customer_id)"; login="${login//-/}"
+  if [ -z "$dev" ] || [ -z "$refresh" ] || [ -z "$cid" ]; then
+    report "- google_ads: not configured (missing developer_token/refresh_token/customer_id) — skipped"
+    return 0
+  fi
+
+  local cap; cap="$(ap_get "$proj" '.daily_spend_cap_usd')"
+  local access
+  access="$(curl -gsS --max-time 8 -X POST https://oauth2.googleapis.com/token \
+    --data "client_id=${client_id}&client_secret=${client_secret}&refresh_token=${refresh}&grant_type=refresh_token" \
+    2>/dev/null | jq -r '.access_token // empty')"
+  if [ -z "$access" ]; then
+    report "- google_ads: token refresh failed — skipped"
+    return 0
+  fi
+  local H=(-H "Content-Type: application/json" -H "Authorization: Bearer ${access}" -H "developer-token: ${dev}")
+  [ -n "$login" ] && H+=(-H "login-customer-id: ${login}")
+  local API="https://googleads.googleapis.com/v23/customers/${cid}"
+
+  mapfile -t GIDS < <(jq -r --arg p "$proj" \
+    '.marketing.projects[$p].autopilot.campaign_ids.google_ads[]? // empty' "$PREFS" 2>/dev/null)
+  if [ "${#GIDS[@]}" -eq 0 ]; then
+    report "- google_ads: no campaign_ids.google_ads configured — skipped"
+    return 0
+  fi
+  local idlist; idlist="$(printf '%s,' "${GIDS[@]}")"; idlist="${idlist%,}"
+
+  report ""
+  report "### Google Ads — customer ${cid} (${#GIDS[@]} campaign(s))"
+
+  # Cap pre-flight: Σ campaign_budget.amount_micros ≤ cap
+  local budrows total_usd
+  budrows="$(curl -gsS --max-time 10 -X POST "${API}/googleAds:searchStream" "${H[@]}" \
+    --data-binary "{\"query\":\"SELECT campaign.id, campaign.status, campaign_budget.amount_micros FROM campaign WHERE campaign.id IN (${idlist})\"}" 2>/dev/null || echo '[]')"
+  total_usd="$(echo "$budrows" | jq '[.[].results[]?.campaignBudget.amountMicros | tonumber? // 0] | add / 1000000 // 0' 2>/dev/null || echo 0)"
+  if awk "BEGIN{exit !(${total_usd:-0} > ${cap:-0})}"; then
+    escalate "$proj" "Google Ads Σ campaign budget \$${total_usd} exceeds cap \$${cap} — possible tamper. No mutations."
+    return 0
+  fi
+  report "- cap pre-flight OK: Σ campaign budget \$${total_usd} ≤ cap \$${cap}"
+
+  # Deterministic pause: over-cap-share campaigns with zero conversions over 7d
+  local perf
+  perf="$(curl -gsS --max-time 10 -X POST "${API}/googleAds:searchStream" "${H[@]}" \
+    --data-binary "{\"query\":\"SELECT campaign.id, campaign.name, metrics.cost_micros, metrics.conversions FROM campaign WHERE campaign.id IN (${idlist}) AND segments.date DURING LAST_7_DAYS\"}" 2>/dev/null || echo '[]')"
+  local losers
+  losers="$(echo "$perf" | jq -r '[.[].results[]? | select((.metrics.conversions|tonumber? // 0)==0 and (.metrics.costMicros|tonumber? // 0)>0) | .campaign.id] | .[]' 2>/dev/null || true)"
+  if [ -z "$losers" ]; then
+    report "- no zero-conversion spend campaigns to pause"
+  else
+    local gc
+    while read -r gc; do
+      [ -z "$gc" ] && continue
+      mutate "pause Google Ads campaign ${gc} (0 conv / 7d spend>0)" \
+        -X POST "${API}/campaigns:mutate" "${H[@]}" \
+        --data-binary "{\"operations\":[{\"updateMask\":\"status\",\"update\":{\"resourceName\":\"customers/${cid}/campaigns/${gc}\",\"status\":\"PAUSED\"}}]}"
+    done <<< "$losers"
+  fi
+}
+
+# ── Headless reasoning pass (regen + hallucination audit + synthesis) ─────────
+delegate_claude() {
+  local proj="$1"
+  local regen_enabled video_model image_model weekly
+  regen_enabled="$(ap_get "$proj" '.creative_regen.enabled')"
+  video_model="$(ap_get "$proj" '.creative_regen.video')";  video_model="${video_model:-veo3}"
+  image_model="$(ap_get "$proj" '.creative_regen.image')";  image_model="${image_model:-gemini-image}"
+  weekly="$(ap_get "$proj" '.weekly_synthesis')"
+
+  local want_regen=0 want_weekly=0
+  [ "${regen_enabled}" = "true" ] && [ "${META_FATIGUE:-0}" = "1" ] && want_regen=1
+  [ "${weekly}" = "true" ] && [ "${DOW}" = "1" ] && want_weekly=1
+  [ "$want_regen" = "0" ] && [ "$want_weekly" = "0" ] && return 0
+
+  local cap; cap="$(ap_get "$proj" '.daily_spend_cap_usd')"
+  local tasks=""
+  [ "$want_regen" = "1" ] && tasks="${tasks}
+- CREATIVE REGEN: at least one live campaign hit creative fatigue (all live ads freq>3 + CTR below floor) AND is at the min_live_creatives floor. Regenerate ONE fresh creative: video via ${video_model} (Reels/9:16), statics via ${image_model}. Then run a MANDATORY frame hallucination audit — extract sample frames, OCR the rendered text, and BLOCK deploy if any on-asset text is garbled/hallucinated/misspelled or off-brand. Only on a clean audit, deploy the new ad PAUSED, then swap it in (pause one fatigued ad, activate the new one) keeping >= min_live_creatives live."
+  [ "$want_weekly" = "1" ] && tasks="${tasks}
+- WEEKLY SYNTHESIS (today is Monday): append a synthesis section to this project's report — 7d spend, CPL/CPA trend, best & worst creative, fatigue status, and the single highest-leverage next move."
+
+  local prompt
+  prompt="Autonomous marketing-autopilot reasoning pass for project '${proj}'. Standing delegated mandate — NO per-action approval needed.
+
+HARD SPEND GUARDRAIL: daily spend cap is \$${cap}/day for this project. You may ONLY pause, swap, or regenerate creatives. You may NEVER raise budgets, create campaigns, create or expand audiences, or change objectives — if the data implies any of those, STOP that line of action and instead append it to the report under a 'Recommendations (require human action)' heading.
+
+Project ad config is in ${PREFS} at .marketing.projects.${proj} (channels + campaign_ids + cred-refs). Resolve creds the same way ops-marketing-dash does (env:/doppler:/inline). Re-verify the cap pre-flight before any creative mutation; abort on any budget tamper.
+$([ "$DRY_RUN" = "1" ] && echo 'DRY-RUN MODE: do NOT perform any deploy/swap/mutation — only describe exactly what you would do, and still run/describe the hallucination audit.')
+
+Tasks:${tasks}
+
+Append your findings and any actions taken to the report file: ${REPORT}
+Output a 3-line summary at the end."
+
+  report ""
+  report "### Headless reasoning pass"
+  if [ "$DRY_RUN" = "1" ]; then
+    report "- [DRY] would invoke claude_invoke (regen=${want_regen}, weekly=${want_weekly})"
+    log "[DRY] claude pass skipped (regen=${want_regen} weekly=${want_weekly})"
+    return 0
+  fi
+  log "invoking claude pass (regen=${want_regen} weekly=${want_weekly})"
+  claude_invoke -p "$prompt" --dangerously-skip-permissions >> "$REPORT" 2>>"$LOG" \
+    || report "- claude pass FAILED (see $LOG)"
+}
+
+# ── Optional notify (Rule 6: report file always; notify only if sink set) ─────
+notify() {
+  local proj="$1" sink
+  sink="$(ap_get "$proj" '.notify_sink')"
+  [ -z "$sink" ] || [ "$sink" = "null" ] && return 0
+  local tg_tok tg_chat
+  tg_tok="${TELEGRAM_BOT_TOKEN:-$(doppler secrets get TELEGRAM_BOT_TOKEN --plain 2>/dev/null || true)}"
+  tg_chat="${TELEGRAM_CHAT_ID:-$(doppler secrets get TELEGRAM_CHAT_ID --plain 2>/dev/null || true)}"
+  [ "$sink" = "telegram" ] && [ -n "$tg_tok" ] && [ -n "$tg_chat" ] || return 0
+  local txt
+  txt="$(printf '*autopilot — %s — %s*\nmutations: %s  escalated: %s\nreport: %s' \
+    "$proj" "$TODAY" "$MUTATIONS" "$ESCALATED" "$REPORT")"
+  curl -s --max-time 12 -X POST "https://api.telegram.org/bot${tg_tok}/sendMessage" \
+    -H 'Content-Type: application/json' \
+    -d "$(jq -n --arg c "$tg_chat" --arg t "$txt" '{chat_id:$c,text:$t,parse_mode:"Markdown"}')" \
+    >/dev/null 2>&1 || true
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+if [ ! -f "$PREFS" ]; then
+  log "no preferences.json at $PREFS — nothing to do"
+  exit 0
+fi
+
+mapfile -t PROJECTS < <(jq -r '
+  .marketing.projects // {} | to_entries[]
+  | select(.value.autopilot != null)
+  | select(.value.autopilot.enabled == true)
+  | .key' "$PREFS" 2>/dev/null)
+
+# An explicit --project may target a configured-but-disabled project (used by
+# the dry-run verification path); still requires an autopilot block.
+if [ -n "$ONLY_PROJECT" ]; then
+  if jq -e --arg p "$ONLY_PROJECT" '.marketing.projects[$p].autopilot != null' "$PREFS" >/dev/null 2>&1; then
+    PROJECTS=("$ONLY_PROJECT")
+  else
+    log "project '$ONLY_PROJECT' has no autopilot config — nothing to do"
+    exit 0
+  fi
+fi
+
+if [ "${#PROJECTS[@]}" -eq 0 ]; then
+  log "no projects with autopilot.enabled — nothing to do"
+  exit 0
+fi
+
+RC=0
+for proj in "${PROJECTS[@]}"; do
+  [ -z "$proj" ] && continue
+  REPORT="${REPORT_DIR}/${proj}-${TODAY}.md"
+  : > "$REPORT"
+  MUTATIONS=0; ESCALATED=0; META_FATIGUE=0
+  report "# Marketing Autopilot — ${proj} — ${TODAY}"
+  report ""
+  report "- Mode: $([ "$DRY_RUN" = "1" ] && echo 'DRY-RUN (no mutations)' || echo 'LIVE')"
+  [ "${FIRST_RUN:-0}" = "1" ] && report "- (first install run — forced dry)"
+
+  # NEVER LEAK MONEY: refuse without a cap.
+  CAP="$(ap_get "$proj" '.daily_spend_cap_usd')"
+  if [ -z "$CAP" ] || [ "$CAP" = "null" ] || ! awk "BEGIN{exit !(${CAP:-0}+0 > 0)}"; then
+    escalate "$proj" "No daily_spend_cap_usd configured — refusing to run any optimization."
+    ln -sf "$REPORT" "${REPORT_DIR}/${proj}-latest.md"
+    log "project=$proj REFUSED (no cap)"
+    RC=1
+    continue
+  fi
+  report "- Daily spend cap: \$${CAP}"
+
+  # Channels = autopilot.channels ∩ --channel filter
+  mapfile -t CHANS < <(jq -r --arg p "$proj" \
+    '.marketing.projects[$p].autopilot.channels[]? // empty' "$PREFS" 2>/dev/null)
+  [ "${#CHANS[@]}" -eq 0 ] && CHANS=(meta google_ads)
+
+  for ch in "${CHANS[@]}"; do
+    [ -n "$ONLY_CHANNEL" ] && [ "$ch" != "$ONLY_CHANNEL" ] && continue
+    case "$ch" in
+      meta)        process_meta "$proj" ;;
+      google_ads)  process_google_ads "$proj" ;;
+      *)           report "- unknown channel '$ch' — skipped" ;;
+    esac
+    [ "$ESCALATED" = "1" ] && break
+  done
+
+  [ "$ESCALATED" = "0" ] && delegate_claude "$proj"
+
+  report ""
+  report "---"
+  report "_autopilot pass complete — mutations: ${MUTATIONS}, escalated: ${ESCALATED}, $(date -u +%Y-%m-%dT%H:%M:%SZ)_"
+  ln -sf "$REPORT" "${REPORT_DIR}/${proj}-latest.md"
+  notify "$proj"
+  log "project=$proj done (dry=${DRY_RUN} mutations=${MUTATIONS} escalated=${ESCALATED})"
+done
+
+# Mark installed after the first (forced-dry) pass so the next run can go live.
+[ "${FIRST_RUN:-0}" = "1" ] && date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL_MARKER"
+
+exit $RC

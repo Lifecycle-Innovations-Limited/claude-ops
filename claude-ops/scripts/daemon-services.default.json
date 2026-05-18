@@ -72,6 +72,12 @@
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-marketing-prewarm.sh",
       "cron": "*/15 * * * *",
       "_note": "Pre-warms /ops:marketing cache every 15 minutes. Requires marketing credentials (Klaviyo, Meta Ads, GA4, GSC, Google Ads). Enable with /ops:setup marketing after credentials are configured."
+    },
+    "marketing-autopilot": {
+      "enabled": false,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-marketing-autopilot.sh",
+      "cron": "0 8 * * *",
+      "_note": "Autonomous per-project daily ad optimization (Meta + Google Ads) — mandatory per-project daily_spend_cap_usd, cap pre-flight, deterministic pause of underperformers (keeps >= min_live_creatives), creative-fatigue -> regen, weekly synthesis. Disabled by default; first run is forced dry. Opt-in via /ops:setup marketing (autopilot block). Cron is UTC: 08:00 UTC ~= 10:00 Europe/Amsterdam."
     }
   }
 }
