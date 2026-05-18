@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.0] — 2026-05-18
+### Added
+- **Autonomous ad management ("autopilot") for `/ops:marketing`.** Productizes the per-project autonomous ad optimizer into a reusable, config-driven capability — daily Meta + Google Ads optimization bounded by a mandatory per-project spend cap.
+  - `bin/ops-marketing-autopilot` — iterates `marketing.projects.*` where `autopilot.enabled`. Per project/channel: hard cap pre-flight, deterministic worst-first pause sweep (keeps ≥ `min_live_creatives` live), creative-fatigue detection. All money-touching logic is bash (no LLM in the path); creative regeneration + frame hallucination audit + weekly synthesis are delegated to a credit-pool-gated headless `claude_invoke` pass with a self-contained prompt built from project config. Flags: `--dry-run`, `--project`, `--channel`.
+  - `scripts/ops-cron-marketing-autopilot.sh` — thin daemon wrapper.
+  - `daemon-services.default.json` — new `marketing-autopilot` service (disabled by default, `0 8 * * *` UTC, opt-in via `/ops:setup marketing`).
+  - `skills/ops-marketing/SKILL.md` — `autopilot` sub-command route + full doctrine section. `skills/setup/channels/marketing.md` — autopilot opt-in block (spend cap, channels, regen).
+  - `tests/test-autopilot-cap.sh` — asserts the spend-safety invariants.
+- **Spend-safety (NEVER LEAK MONEY + Rule 5):** no `daily_spend_cap_usd` ⇒ refuse + escalate; Σ campaign budget > cap or runaway `amount_spent` ⇒ abort + escalation note, zero mutations. Autopilot may only pause/swap/regenerate creatives — budget raises, campaign/audience creation, and objective changes are written as human-action recommendations, never executed. `--dry-run` + first install run forced dry.
+
 ## [2.3.2] — 2026-05-17
 ### Changed
 - **Docs/wiki/metadata sync for v2.3.x.** Producer side (v2.3.0) and consumer side (v2.3.1) shipped without doc surface updates; v2.3.2 catches everything up.
