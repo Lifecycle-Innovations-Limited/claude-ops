@@ -47,3 +47,7 @@ slack-login-done
 
 # Package locks from sub-dirs (root only committed)
 telegram-server/package-lock.json
+
+# Python bytecode (calibrate.py)
+__pycache__/
+*.pyc
