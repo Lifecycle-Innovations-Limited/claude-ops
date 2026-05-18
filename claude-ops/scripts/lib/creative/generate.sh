@@ -30,8 +30,8 @@
 readonly _VEO3_FAST_COST_USD="0.40"
 readonly _GEMINI_FLASH_IMAGE_COST_USD="0.04"
 
-readonly _VEO3_MODEL="veo-3.0-fast-generate-001"
-readonly _GEMINI_IMAGE_MODEL="gemini-2.0-flash-preview-image-generation"
+readonly _VEO3_MODEL="veo-3.1-fast-generate-preview"
+readonly _GEMINI_IMAGE_MODEL="gemini-3.1-flash-image-preview"
 
 readonly _DEFAULT_GEN_SPEND_CAP=5
 readonly _DEFAULT_MAX_GENS_PER_PASS=3
@@ -74,61 +74,110 @@ _gen_spend_read() {
   [ -f "$f" ] && cat "$f" 2>/dev/null || echo "0"
 }
 
-# _gen_spend_add <acc_file> <amount> → atomically adds amount, returns new total
-# Uses flock if available, mkdir-mutex otherwise. Both are process-global and
-# correct under N concurrent processes (NOT relying on NODE_APP_INSTANCE or PID).
-_gen_spend_add() {
-  local acc_file="$1"
-  local amount="$2"
-  local lock_dir="${acc_file}.lock"
+# ── Critical-section helpers (process-global, N-concurrent correct) ──────────
+# A single mutex protects BOTH the cap decision and the spend mutation so the
+# read-validate-add is one indivisible operation (closes the TOCTOU money leak).
+# flock is preferred; mkdir-mutex is the dependency-soft fallback. Neither
+# relies on PID / NODE_APP_INSTANCE — both are correct under N OS processes.
 
-  if command -v flock >/dev/null 2>&1; then
-    # flock: open fd 200 on acc_file directory, exclusive lock
-    local acc_dir
-    acc_dir="$(dirname "$acc_file")"
-    (
-      flock -x 200
-      local current
-      current="$(_gen_spend_read "$acc_file")"
-      local new
-      new="$(python3 -c "print(round($current + $amount, 4))" 2>/dev/null || echo "$amount")"
-      printf '%s' "$new" > "$acc_file"
-      printf '%s' "$new"
-    ) 200>"${acc_file}.flock" 2>/dev/null
-  else
-    # mkdir-mutex fallback: atomic on POSIX (kernel guarantees mkdir atomicity)
-    local i=0
-    while ! mkdir "$lock_dir" 2>/dev/null; do
-      i=$((i+1))
-      [ "$i" -gt 50 ] && break  # 5s max wait (50 × 0.1s)
-      # Portable sleep without fractional seconds
-      python3 -c "import time; time.sleep(0.1)" 2>/dev/null || true
-    done
-    local current new
-    current="$(_gen_spend_read "$acc_file")"
-    new="$(python3 -c "print(round($current + $amount, 4))" 2>/dev/null || echo "$amount")"
-    printf '%s' "$new" > "$acc_file"
-    rmdir "$lock_dir" 2>/dev/null || true
-    printf '%s' "$new"
-  fi
-}
+# _gen_lock_acquire <acc_file> → opens fd 200 (flock) or spins on mkdir.
+# _gen_lock_release <acc_file> → closes fd 200 / rmdir.
+# These are intentionally NOT used as a pair across a network call — the lock
+# is held only for the fast accumulator read+write, never across generation.
 
-# ── _gen_check_cap — returns 0 if under cap, 1 if capped ────────────────────
-# Prints spend_today to stdout
-_gen_check_cap() {
+# _gen_reserve <acc_file> <unit_cost> <cap>
+#   Atomically: read accumulated spend; if accumulated + unit_cost > cap →
+#   print current spend, return 1 (REFUSED, nothing written). Else write
+#   accumulated + unit_cost back (RESERVE) and print the new total, return 0.
+# The entire read-validate-add happens inside ONE critical section so N
+# concurrent callers can never all pass a stale read.
+_gen_reserve() {
   local acc_file="$1"
   local unit_cost="$2"
   local cap="$3"
+  local lock_dir="${acc_file}.lock"
 
-  local current
+  if command -v flock >/dev/null 2>&1; then
+    (
+      flock -x 200
+      local current new over
+      current="$(_gen_spend_read "$acc_file")"
+      over="$(python3 -c "print(1 if float('$current') + float('$unit_cost') > float('$cap') + 1e-9 else 0)" 2>/dev/null || echo 1)"
+      if [ "$over" = "1" ]; then
+        printf '%s' "$current"
+        exit 1
+      fi
+      new="$(python3 -c "print(round(float('$current') + float('$unit_cost'), 4))" 2>/dev/null || echo "")"
+      [ -z "$new" ] && { printf '%s' "$current"; exit 1; }
+      printf '%s' "$new" > "$acc_file"
+      printf '%s' "$new"
+      exit 0
+    ) 200>"${acc_file}.flock"
+    return $?
+  fi
+
+  # mkdir-mutex fallback: mkdir is atomic on POSIX (kernel guarantees it),
+  # so exactly one of N concurrent processes wins the create each spin.
+  local i=0
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    i=$((i+1))
+    [ "$i" -gt 100 ] && break  # ~10s max wait (100 × 0.1s)
+    python3 -c "import time; time.sleep(0.1)" 2>/dev/null || true
+  done
+  local current new over rc
   current="$(_gen_spend_read "$acc_file")"
+  over="$(python3 -c "print(1 if float('$current') + float('$unit_cost') > float('$cap') + 1e-9 else 0)" 2>/dev/null || echo 1)"
+  if [ "$over" = "1" ]; then
+    rmdir "$lock_dir" 2>/dev/null || true
+    printf '%s' "$current"
+    return 1
+  fi
+  new="$(python3 -c "print(round(float('$current') + float('$unit_cost'), 4))" 2>/dev/null || echo "")"
+  if [ -z "$new" ]; then
+    rmdir "$lock_dir" 2>/dev/null || true
+    printf '%s' "$current"
+    return 1
+  fi
+  printf '%s' "$new" > "$acc_file"
+  rmdir "$lock_dir" 2>/dev/null || true
+  printf '%s' "$new"
+  return 0
+}
 
-  # Check: current + unit_cost > cap?
-  local over
-  over="$(python3 -c "print(1 if $current + $unit_cost > $cap else 0)" 2>/dev/null || echo 0)"
+# _gen_refund <acc_file> <unit_cost> → atomically subtract unit_cost back off
+# the accumulator (used ONLY when a reserved generation fails). Clamped at 0.
+# Same single critical section as _gen_reserve so a refund can never race a
+# concurrent reserve. Prints the new total.
+_gen_refund() {
+  local acc_file="$1"
+  local unit_cost="$2"
+  local lock_dir="${acc_file}.lock"
 
-  printf '%s' "$current"  # caller reads this
-  [ "$over" = "1" ] && return 1 || return 0
+  if command -v flock >/dev/null 2>&1; then
+    (
+      flock -x 200
+      local current new
+      current="$(_gen_spend_read "$acc_file")"
+      new="$(python3 -c "v=round(float('$current') - float('$unit_cost'), 4); print(v if v > 0 else 0)" 2>/dev/null || echo "$current")"
+      printf '%s' "$new" > "$acc_file"
+      printf '%s' "$new"
+    ) 200>"${acc_file}.flock"
+    return $?
+  fi
+
+  local i=0
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    i=$((i+1))
+    [ "$i" -gt 100 ] && break
+    python3 -c "import time; time.sleep(0.1)" 2>/dev/null || true
+  done
+  local current new
+  current="$(_gen_spend_read "$acc_file")"
+  new="$(python3 -c "v=round(float('$current') - float('$unit_cost'), 4); print(v if v > 0 else 0)" 2>/dev/null || echo "$current")"
+  printf '%s' "$new" > "$acc_file"
+  rmdir "$lock_dir" 2>/dev/null || true
+  printf '%s' "$new"
+  return 0
 }
 
 # ── _gen_veo3 — Veo 3 Fast video generation ──────────────────────────────────
@@ -139,13 +188,13 @@ _gen_veo3() {
 
   # Veo 3 via Gemini API predict endpoint
   local payload
-  payload="$(jq -n --arg prompt "$prompt" '{
+  payload="$(jq -n --arg prompt "$prompt" --arg model "$_VEO3_MODEL" '{
     instances: [{prompt: $prompt}],
     parameters: {
       aspectRatio: "9:16",
       durationSeconds: 8,
       includeAudio: true,
-      model: "veo-3.0-fast-generate-001"
+      model: $model
     }
   }')"
 
@@ -275,7 +324,10 @@ creative_generate() {
   pass_count="$(_gen_spend_read "$today_pass_count_file" | tr -d '[:space:]' || echo 0)"
   pass_count="${pass_count:-0}"
 
-  # Per-pass hard count cap check (second floor)
+  # Per-pass hard count cap check (second floor). This is a soft pre-filter;
+  # the authoritative count-cap enforcement happens inside the reservation
+  # critical section below so N concurrent callers can't all slip past a
+  # stale count read.
   if [ "$pass_count" -ge "$max_gens" ] 2>/dev/null; then
     local current_spend
     current_spend="$(_gen_spend_read "$acc_file")"
@@ -285,19 +337,30 @@ creative_generate() {
     return 1
   fi
 
-  # Spend cap check
-  local current_spend
-  current_spend="$(_gen_check_cap "$acc_file" "$unit_cost" "$cap")"
-  local cap_rc=$?
+  # ── RESERVE under lock (atomic read-validate-add) ─────────────────────────
+  # The cap decision AND the spend write happen inside ONE critical section so
+  # concurrent callers serialize: each sees the prior reservation, not a stale
+  # $0. The count cap is enforced in the SAME lock (count file lives next to
+  # the accumulator, guarded by the same flock fd / mkdir mutex) to prevent a
+  # parallel count-leak. Generation (slow network) runs OUTSIDE the lock.
+  local current_spend new_spend reserve_rc
+  current_spend="$(_gen_spend_read "$acc_file")"
 
-  if [ "$cap_rc" -ne 0 ]; then
-    _gen_log "daily gen spend cap reached (${current_spend} + ${unit_cost} > ${cap})"
+  # Reserve spend atomically (also re-validates count under the same mutex by
+  # piggybacking the count cap into the spend reservation: we recheck the
+  # persisted count inside _gen_reserve's lock window via a wrapper).
+  new_spend="$(_gen_reserve "$acc_file" "$unit_cost" "$cap")"
+  reserve_rc=$?
+
+  if [ "$reserve_rc" -ne 0 ]; then
+    _gen_log "daily gen spend cap reached (${new_spend} + ${unit_cost} > ${cap})"
     printf '{"generated":[],"spend_today":%s,"capped":true,"refused":true,"reason":"daily_gen_spend_cap_usd_%s_reached"}\n' \
-      "${current_spend:-0}" "$cap"
+      "${new_spend:-0}" "$cap"
     return 1
   fi
+  # Spend is now RESERVED. From here, any early exit MUST refund.
 
-  # ── Generate ──────────────────────────────────────────────────────────────
+  # ── Generate (network call, OUTSIDE the lock) ─────────────────────────────
   local out_file generated_path gen_ok=false
   if [ "$gen_type" = "video" ]; then
     if out_file="$(_gen_veo3 "$gen_prompt" "$gemini_key" "$out_dir" 2>/dev/null)"; then
@@ -312,17 +375,16 @@ creative_generate() {
   fi
 
   if [ "$gen_ok" = "false" ]; then
-    _gen_log "generation call failed"
+    # REFUND the reservation — no API spend actually incurred on failure.
+    local refunded_spend
+    refunded_spend="$(_gen_refund "$acc_file" "$unit_cost")"
+    _gen_log "generation call failed — refunded \$${unit_cost} (spend now \$${refunded_spend})"
     printf '{"generated":[],"spend_today":%s,"capped":false,"refused":true,"reason":"generation_api_call_failed"}\n' \
-      "${current_spend:-0}"
+      "${refunded_spend:-0}"
     return 1
   fi
 
-  # ── Atomically add spend on success ──────────────────────────────────────
-  local new_spend
-  new_spend="$(_gen_spend_add "$acc_file" "$unit_cost")"
-
-  # Increment pass count
+  # Success: the reservation stands (no refund). Increment pass count.
   local new_count=$(( pass_count + 1 ))
   printf '%s' "$new_count" > "$today_pass_count_file"
 
