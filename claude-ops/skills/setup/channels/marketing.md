@@ -265,12 +265,41 @@ If enabled, ask the spend cap (Rule 1 — max 4 options):
 
 Then ask channels (`multiSelect: true`, only show channels configured for this project): `[Meta]`, `[Google Ads]`.
 
-Then ask creative regeneration opt-in:
+Then ask the **autonomy level** (one `AskUserQuestion`, Rule 1 — max 4 options; recommended option first):
 
 | Option | Header | Description |
 | --- | --- | --- |
-| Enable regen | regen | On full creative fatigue, auto-generate a fresh creative (Veo3 video / Gemini image) with a mandatory hallucination audit before deploy |
+| Create-once (Recommended) | create_once | Safe default — creation actions are staged under "Requires human action" until a one-time approval token is dropped; daily optimize/regen loop is autonomous within the cap |
+| Sandbox (bounded auto-create) | sandbox | Auto-create campaigns/audiences ONLY if every envelope assertion passes (objective/geo allowlists, budget ≤ caps, max campaigns/audiences) |
+| Unrestricted (cap-only) | unrestricted | Auto-create bounded only by the daily spend cap — explicitly overrides the default creation guardrail |
+| More... | more | Envelope sub-fields (allowlists, max campaigns/audiences, kill_switch) are configurable later via `/ops:settings` → Autopilot Studio |
+
+Write the selection to `autopilot.autonomy_level`. Then ask the **source URL** (`AskUserQuestion` free text):
+
+```
+Website/landing page Autopilot Studio should market (cold-start onboarding).
+Leave blank to manage existing campaigns only.
+```
+
+Write it to `autopilot.source.url` (omit `source` if blank).
+
+Then ask **creative generation** opt-in (Rule 1 — max 4 options):
+
+| Option | Header | Description |
+| --- | --- | --- |
+| Enable gen | gen | On full creative fatigue, auto-generate a fresh creative (Veo3 video + Gemini image) through the Tier 0–3 pre-analysis brain with a mandatory hallucination/compliance audit before deploy |
 | Recommend only | norgen | Detect fatigue but only write a recommendation — no autonomous creative generation |
+
+If "Enable gen", ask a follow-up (`AskUserQuestion` free text) for `creative_gen.daily_gen_spend_cap_usd` (default `5`, must be ≤ `daily_spend_cap_usd`). Note to the operator: this is a **separate metered-Gemini ceiling**, distinct from the ad spend cap.
+
+Then ask the **Neurons external signal** (one `AskUserQuestion`; recommended option first):
+
+| Option | Header | Description |
+| --- | --- | --- |
+| Off (Recommended) | neurons_off | Default — no external attention/engagement signal in the creative brain |
+| Enable | neurons_on | Fold a Neurons ensemble signal into Tier 3; configure `marketing.partners.neurons` via the Dynamic marketing partners loop below |
+
+Write the choice to `creative_gen.neurons.enabled` (and run the Dynamic marketing partners loop for `neurons` if enabled).
 
 Write the block to `$PREFS_PATH` under `marketing.projects.<name>.autopilot` (merge — do not clobber existing `.meta`/`.google_ads` cred-refs):
 
@@ -281,13 +310,27 @@ Write the block to `$PREFS_PATH` under `marketing.projects.<name>.autopilot` (me
       "<name>": {
         "autopilot": {
           "enabled": true,
+          "autonomy_level": "create_once",
+          "envelope": {
+            "max_campaigns": 3, "max_new_audiences": 2,
+            "objective_allowlist": ["OUTCOME_LEADS", "OUTCOME_SALES"],
+            "geo_allowlist": ["NL", "US"],
+            "max_daily_budget_usd": 50,
+            "kill_switch": false
+          },
+          "source": { "url": "https://example.com" },
           "channels": ["meta"],
           "daily_spend_cap_usd": 50,
-          "campaign_ids": { "meta": ["<CAMPAIGN_ID>"], "google_ads": [] },
-          "pause_cpl_multiple": 2.0,
-          "pause_ctr_floor": 0.005,
-          "min_live_creatives": 2,
-          "creative_regen": { "enabled": true, "video": "veo3", "image": "gemini-image" },
+          "campaign_ids": { "meta": [], "google_ads": [] },
+          "pause_cpl_multiple": 2.0, "pause_ctr_floor": 0.005, "min_live_creatives": 2,
+          "creative_gen": {
+            "enabled": true,
+            "video": "veo-3.0-fast-generate-001",
+            "image": "gemini-2.5-flash-image",
+            "analysis": { "multimodal": "gemini-3.1-pro", "judge": "claude-opus-4-7" },
+            "daily_gen_spend_cap_usd": 5,
+            "neurons": { "enabled": false }
+          },
           "weekly_synthesis": true,
           "notify_sink": null
         }
@@ -300,11 +343,15 @@ Write the block to `$PREFS_PATH` under `marketing.projects.<name>.autopilot` (me
 Ask for the campaign ID(s) to manage per selected channel (free text, comma-separated) and populate `campaign_ids`. Then enable the daemon service and run one forced-dry pass so the operator can review the first report:
 
 ```bash
-# Enable the daemon service (merges into the user's daemon-services config)
-"${CLAUDE_PLUGIN_ROOT}/bin/ops-daemon-manager" enable marketing-autopilot 2>/dev/null \
-  || jq '.services["marketing-autopilot"].enabled = true' \
-       "$OPS_DATA_DIR/daemon-services.json" > "$OPS_DATA_DIR/daemon-services.json.tmp" \
-     && mv "$OPS_DATA_DIR/daemon-services.json.tmp" "$OPS_DATA_DIR/daemon-services.json"
+# Enable the daemon services (merges into the user's daemon-services config).
+# Enabling autopilot enables BOTH the daily pass and the weekly self-learning calibrator
+# (same enable mechanism).
+for svc in marketing-autopilot marketing-autopilot-calibrate; do
+  "${CLAUDE_PLUGIN_ROOT}/bin/ops-daemon-manager" enable "$svc" 2>/dev/null \
+    || { jq --arg s "$svc" '.services[$s].enabled = true' \
+           "$OPS_DATA_DIR/daemon-services.json" > "$OPS_DATA_DIR/daemon-services.json.tmp" \
+         && mv "$OPS_DATA_DIR/daemon-services.json.tmp" "$OPS_DATA_DIR/daemon-services.json"; }
+done
 
 # First run is forced dry by the binary regardless of this flag — review the report
 "${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-autopilot" --dry-run --project "<name>"

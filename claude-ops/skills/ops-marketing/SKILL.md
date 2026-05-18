@@ -182,6 +182,7 @@ Route `$ARGUMENTS` to the correct section below:
 | campaigns | Cross-channel campaign overview (all platforms) |
 | optimize | Cross-platform ad optimization agent |
 | autopilot | Autonomous per-project daily ad management (see ## autopilot section) |
+| autopilot onboard <url> | Cold-start: scrape URL, derive strategy, scaffold/stage campaigns (see ## autopilot → Autonomous onboarding) |
 | attribution | Unified attribution table (Meta + Google + Klaviyo + GA4) |
 | setup | Configure API keys |
 
@@ -1898,17 +1899,32 @@ The binary owns all deterministic, money-touching logic (cap pre-flight, pause s
 ```json
 "autopilot": {
   "enabled": false,
+  "autonomy_level": "create_once",
+  "envelope": {
+    "max_campaigns": 3, "max_new_audiences": 2,
+    "objective_allowlist": ["OUTCOME_LEADS", "OUTCOME_SALES"],
+    "geo_allowlist": ["NL", "US"],
+    "max_daily_budget_usd": 50,
+    "kill_switch": false
+  },
+  "source": { "url": "https://example.com" },
   "channels": ["meta", "google_ads"],
   "daily_spend_cap_usd": 50,
-  "campaign_ids": { "meta": ["<CAMPAIGN_ID>"], "google_ads": ["<CAMPAIGN_ID>"] },
-  "pause_cpl_multiple": 2.0,
-  "pause_ctr_floor": 0.005,
-  "min_live_creatives": 2,
-  "creative_regen": { "enabled": true, "video": "veo3", "image": "gemini-image" },
-  "weekly_synthesis": true,
-  "notify_sink": null
+  "campaign_ids": { "meta": [], "google_ads": [] },
+  "pause_cpl_multiple": 2.0, "pause_ctr_floor": 0.005, "min_live_creatives": 2,
+  "creative_gen": {
+    "enabled": true,
+    "video": "veo-3.0-fast-generate-001",
+    "image": "gemini-2.5-flash-image",
+    "analysis": { "multimodal": "gemini-3.1-pro", "judge": "claude-opus-4-7" },
+    "daily_gen_spend_cap_usd": 5,
+    "neurons": { "enabled": false }
+  },
+  "weekly_synthesis": true, "notify_sink": null
 }
 ```
+
+Account IDs/tokens stay as existing cred-refs under `.meta` / `.google_ads`. The Gemini API key resolves via cred-ref `creative_gen.api_key` (default `env:GEMINI_API_KEY`) — zero new plaintext secrets. `creative_gen` replaces the former `creative_regen` key (same shape the binary reads, expanded with the pre-analysis brain config); Neurons resolves via `marketing.partners.neurons` (the "Dynamic marketing partners" dynamic-partner cred pattern documented in `skills/setup/channels/marketing.md`).
 
 ### Spend-safety doctrine (NEVER LEAK MONEY + Rule 5)
 
@@ -1918,6 +1934,8 @@ The binary owns all deterministic, money-touching logic (cap pre-flight, pause s
 4. **Allowed mutations only:** pause underperformers, swap/rotate creatives, regenerate creatives. Pause heuristics: CPL > `pause_cpl_multiple` × adset-avg CPL after ≥ $10 spend, OR CTR < `pause_ctr_floor` after ≥ 1000 impressions. Candidates are paused worst-CPL-first and the sweep **stops before live creatives would drop below `min_live_creatives`**.
 5. **Never autonomous:** raising budgets, creating campaigns, creating/expanding audiences, changing objectives. If the data implies any of these, it is written to the report under **Recommendations (require human action)** — never executed.
 6. **Dry-run:** `--dry-run` and the **first install run** (no `.installed` marker) perform zero mutations — every intended action is logged `[DRY]` in the report so an operator reviews one full pass before it goes live.
+
+The `autonomy_level` and `envelope` settings (next section) layer **on top of** this numbered list — they govern only whether *creation* actions may execute autonomously. They never relax invariants 1–4 and 6: no-cap refusal, per-channel cap pre-flight, runaway-trajectory abort, pause-only-down to `min_live_creatives`, escalation, and the first-run/`--dry-run` forced-dry pass all hold **unconditionally at every level**.
 
 ### Creative fatigue → regeneration
 
@@ -1931,9 +1949,60 @@ For durable, no-compute protection between daily passes, also maintain a server-
 
 If `weekly_synthesis` is true and the pass runs on a Monday, a synthesis section (7d spend, CPL/CPA trend, best/worst creative, fatigue status, single highest-leverage next move) is appended to the report. The **report file is always written** to `$OPS_DATA_DIR/reports/marketing-autopilot/<project>-<date>.md` (+ `<project>-latest.md` symlink). A notification is sent **only if** `notify_sink` is set and that sink's credentials are present (competitor-daily pattern) — no sink ⇒ file only, never an outbound message without a configured channel.
 
+### Autonomy levels & envelope
+
+`autopilot.autonomy_level` selects how *creation* actions (new campaigns, new/expanded audiences, budget creation) are handled. The default is **`create_once`**, which equals the shipped spend-safety doctrine verbatim — the existing guardrail is never silently removed.
+
+- **`create_once`** (DEFAULT): creation actions are written to the report under a **"Requires human action"** heading and are **not executed**. A one-time approval token file `$OPS_DATA_DIR/state/autopilot/<project>.create-ok` unlocks creation; once present, the daily optimize/regen loop runs fully autonomously within the cap. This is identical to the shipped doctrine (invariant 5) — the safe default.
+- **`sandbox`**: creation is allowed **only if every `envelope` assertion passes**:
+  - objective ∈ `envelope.objective_allowlist`
+  - geo ⊆ `envelope.geo_allowlist`
+  - post-create Σ daily_budget ≤ `envelope.max_daily_budget_usd` ≤ `daily_spend_cap_usd`
+  - campaigns ≤ `envelope.max_campaigns`
+  - new audiences ≤ `envelope.max_new_audiences`
+  Any single miss ⇒ escalate, **zero action** (no partial creation).
+- **`unrestricted`**: creation is allowed bounded **only** by `daily_spend_cap_usd` (still cap-preflighted, runaway-checked, and first-run forced-dry). This explicitly **overrides the default creation guardrail** — operators consciously opt up; document/communicate this in the status dashboard.
+- **`envelope.kill_switch: true`** ⇒ hard stop: stage-only, **zero mutations**, regardless of `autonomy_level`.
+
+All other invariants (no-cap refusal, cap pre-flight, runaway abort, pause-only-down to `min_live_creatives`, escalation, first-run/`--dry-run` forced dry) remain **unconditionally** in force at every level.
+
+### Creative pre-analysis brain (Tier 0–3)
+
+Before any generated asset is deployed it passes a layered audit; only a clean asset is deployed (PAUSED, then bandit-swapped — never live on first appearance):
+
+- **Tier 0 — deterministic (no LLM):** `ffmpeg`/`ffprobe` extract keyframes; on-asset text is OCR'd via `tesseract` (fallback: Gemini Flash if tesseract absent). **Hard-fail** if on-asset text is garbled, truncated, or non-rendering — no spend on a broken render.
+- **Tier 1 — perceptual:** Gemini 3.1 Pro multimodal reviews video **and** audio (Gemini Flash for statics); copy is reviewed by Claude Opus 4.7 for hook strength, clarity, health-claim & platform-policy compliance, and CPL-risk.
+- **Tier 2 — judge:** Claude Opus 4.7 acts as final judge → `PASS | BLOCK | REVISE` with a 0–100 prior score. **Hard BLOCK** on any hallucination or compliance violation (no override path).
+- **Tier 3 — optional ensemble:** if `creative_gen.neurons.enabled` (default **off**, creds via `marketing.partners.neurons`), a Neurons attention/engagement signal is folded in as an additional ensemble input — advisory only, never an override of a Tier 2 BLOCK.
+
+Only an asset that clears Tier 0–2 (and Tier 3 if enabled) is deployed PAUSED and then swapped in by the bandit allocator while preserving ≥ `min_live_creatives` live.
+
+### Self-learning calibration loop
+
+A weekly `marketing-autopilot-calibrate` daemon service (`0 9 * * 1` UTC) closes the loop per project:
+
+1. Join pre-deploy scores in `$OPS_DATA_DIR/autopilot_state/<project>/creatives.jsonl` to realized KPIs in `$OPS_DATA_DIR/autopilot_state/<project>/kpi.jsonl`.
+2. Fit a monotone `score → predicted_CPL` mapping, written to `$OPS_DATA_DIR/autopilot_state/<project>/calibrator.json` (python3 stdlib only — no new deps).
+3. The **daily** pass loads `calibrator.json`, converts each raw Tier-2 prior into a calibrated predicted-CPL, ranks live + candidate creatives, and does bandit allocation (Thompson sampling / ε-greedy) **reusing the existing pause/keep + `min_live_creatives` machinery** — no new money-touching path.
+4. Every allocation decision is logged to the ledger, which feeds the next week's calibration → tighter priors. The model compounds per project over time.
+
+Enabling `autopilot` also enables this calibrate daemon (same enable mechanism as `marketing-autopilot`).
+
+### Autonomous onboarding (URL → campaigns)
+
+When `source.url` is set, `autopilot onboard <url>` (or the first pass on an empty `campaign_ids`) cold-starts a project:
+
+1. **Scrape** `source.url` (Tavily, falling back to `curl`) → extract copy, offers, brand.
+2. **Derive** ICP, value props, and brand voice from the scraped content.
+3. **Hand to `/ops:gtm`** for a channel plan + campaign scaffold (objectives, audiences, budgets, creative briefs).
+4. **Materialize under `autonomy_level`:**
+   - `create_once` → stage the scaffold under **"Requires human action"** (no API writes until the `.create-ok` token exists).
+   - `sandbox` / `unrestricted` → create via the Meta / Google Ads APIs, **envelope-asserted** (sandbox) or cap-bounded (unrestricted), with first-run forced-dry still applying.
+5. **Write back** the resulting campaign IDs into `marketing.projects.<name>.autopilot.campaign_ids`, then hand off to the standard daily loop.
+
 ### Output
 
-`/ops:marketing autopilot` (and `/ops:go`) surface the latest per-project report. Escalations are appended to `$OPS_DATA_DIR/state/autopilot/escalations.log`.
+`/ops:marketing autopilot` (and `/ops:go`) surface the latest per-project report. Escalations are appended to `$OPS_DATA_DIR/state/autopilot/escalations.log`. The status surface shows `autonomy_level` and `kill_switch` for any project with autopilot enabled.
 
 ---
 
