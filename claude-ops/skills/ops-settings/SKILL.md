@@ -109,6 +109,78 @@ When a specific integration is selected (via argument or user pick from dashboar
 | New Relic | `curl -s -H "Api-Key: ${new_key}" https://api.newrelic.com/v2/applications.json \| jq '.applications | length'` → numeric |
 | Doppler MCP | `npx -y @dopplerhq/mcp-server --help 2>&1` with DOPPLER_TOKEN set | exits 0 |
 
+## Autopilot Studio (per-project)
+
+Lets an operator view and edit per-project autopilot config **without re-running setup**. See `skills/ops-marketing/SKILL.md` → `## autopilot` for the full field semantics.
+
+**List projects that have an autopilot block:**
+
+```bash
+jq -r '.marketing.projects | to_entries[] | select(.value.autopilot) | .key' "$PREFS"
+```
+
+If more than 4 projects, paginate the picker at 4 per `AskUserQuestion` page with `[More...]` as the bridge (Rule 1).
+
+**Show current config for the chosen project `$P`:**
+
+```bash
+jq --arg p "$P" '.marketing.projects[$p].autopilot' "$PREFS"
+```
+
+**Editor.** Drive edits via `AskUserQuestion`, batching the editable fields across multiple ≤4-option questions (Rule 1):
+
+- **Q1 — autonomy & kill switch:** `[autonomy_level]` `[envelope.kill_switch]` `[Back]`
+- **Q2 — envelope limits:** `[envelope.max_campaigns]` `[envelope.max_new_audiences]` `[envelope.max_daily_budget_usd]` `[More...]`
+- **Q3 — envelope allowlists:** `[envelope.objective_allowlist]` `[envelope.geo_allowlist]` `[Back]`
+- **Q4 — source & creative:** `[source.url]` `[creative_gen.daily_gen_spend_cap_usd]` `[creative_gen.neurons.enabled]` `[Back]`
+
+For `autonomy_level` offer the 4 fixed values across one question: `[create_once]` `[sandbox]` `[unrestricted]` `[Back]`. Allowlists are comma-separated free text; numeric/boolean fields are free text or a 2-option toggle.
+
+**Merge-write pattern** (mirrors the "Update an integration" jq pattern, nested under `.marketing.projects[$p].autopilot` — never clobber sibling keys):
+
+```bash
+tmp=$(mktemp)
+jq --arg p "$P" --arg v "$V" \
+  '.marketing.projects[$p].autopilot.autonomy_level = $v' "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
+```
+
+Use the matching jq path per field, e.g.:
+
+```bash
+# numeric envelope field (jq tonumber to keep it a number)
+jq --arg p "$P" --argjson v "$V" \
+  '.marketing.projects[$p].autopilot.envelope.max_campaigns = $v' "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
+
+# boolean kill switch
+jq --arg p "$P" --argjson v true \
+  '.marketing.projects[$p].autopilot.envelope.kill_switch = $v' "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
+
+# allowlist (comma-separated input -> JSON array)
+jq --arg p "$P" --arg v "NL,US" \
+  '.marketing.projects[$p].autopilot.envelope.geo_allowlist = ($v | split(","))' \
+  "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
+
+# source URL
+jq --arg p "$P" --arg v "https://example.com" \
+  '.marketing.projects[$p].autopilot.source.url = $v' "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
+
+# Gemini gen spend cap (must be <= daily_spend_cap_usd — validate before write)
+jq --arg p "$P" --argjson v "$V" \
+  '.marketing.projects[$p].autopilot.creative_gen.daily_gen_spend_cap_usd = $v' \
+  "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
+
+# Neurons external signal
+jq --arg p "$P" --argjson v false \
+  '.marketing.projects[$p].autopilot.creative_gen.neurons.enabled = $v' \
+  "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
+```
+
+**Safety note (surface this before writing):**
+
+- Lowering `autonomy_level` to `unrestricted` **removes the default creation guardrail** — autonomous campaign/audience/budget creation becomes bounded only by `daily_spend_cap_usd`. Confirm via `AskUserQuestion` (`[Set unrestricted]` / `[Keep current]`) before writing.
+- Setting `envelope.kill_switch: true` **hard-stops all mutations** on the next pass (stage-only, zero writes) regardless of `autonomy_level`.
+- The Credential Status Dashboard MUST surface `autonomy_level` and `kill_switch` for every project with `autopilot.enabled == true`.
+
 ## CLI/API Reference
 
 | Command | Purpose |

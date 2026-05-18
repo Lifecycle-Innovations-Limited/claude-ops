@@ -125,22 +125,107 @@ else
   ok "dry-run performs ZERO network mutations"
 fi
 
-# ── Test 3: static — never raises budget / creates campaign / audience ───────
-# Allowed mutating verbs in source: PAUSE status only. Forbidden: budget writes,
-# campaign/audience creation, objective changes.
-FORBIDDEN='daily_budget=|lifetime_budget=|"objective"|customaudiences|create_campaign|/campaigns\?|adsets\?.*-X POST|"campaignBudget"'
-if grep -nEi "$FORBIDDEN" "$BIN" >/dev/null 2>&1; then
-  err "static budget/create scan" "forbidden mutation pattern present: $(grep -nEi "$FORBIDDEN" "$BIN" | head -1)"
+# ── Test 3: static — object creation is confined to the gated sentinel region ─
+# Object-creation strings (campaign/audience/budget writes, objective changes)
+# now legitimately exist INSIDE the autonomy-gated sentinel region. The safety
+# invariant is preserved by asserting they appear NOWHERE OUTSIDE that region.
+#
+#   sentinel open : # >>> CREATE_OBJECT_GATED_REGION ... >>>
+#   sentinel close: # <<< CREATE_OBJECT_GATED_REGION <<<
+OPEN_RE='# >>> CREATE_OBJECT_GATED_REGION'
+CLOSE_RE='# <<< CREATE_OBJECT_GATED_REGION'
+
+# (a) sentinel region exists exactly once and is well-formed (>>> before <<<).
+n_open="$(grep -cF '>>> CREATE_OBJECT_GATED_REGION' "$BIN" || true)"
+n_close="$(grep -cF '<<< CREATE_OBJECT_GATED_REGION' "$BIN" || true)"
+open_ln="$(grep -nF '>>> CREATE_OBJECT_GATED_REGION' "$BIN" | head -1 | cut -d: -f1)"
+close_ln="$(grep -nF '<<< CREATE_OBJECT_GATED_REGION' "$BIN" | head -1 | cut -d: -f1)"
+if [ "$n_open" = "1" ] && [ "$n_close" = "1" ] \
+   && [ -n "$open_ln" ] && [ -n "$close_ln" ] && [ "$open_ln" -lt "$close_ln" ]; then
+  ok "sentinel region exists exactly once (>>> @${open_ln} before <<< @${close_ln})"
 else
-  ok "source contains no budget-raise / campaign-create / audience-create calls"
+  err "sentinel region well-formed" "open=${n_open} close=${n_close} open_ln=${open_ln} close_ln=${close_ln}"
 fi
-# Any Google Ads :mutate must only updateMask status (never budget/objective).
-if grep -n ':mutate' "$BIN" | grep -qv 'updateMask.*status'; then
-  badm="$(grep -n ':mutate' "$BIN" | grep -v 'campaigns:mutate' || true)"
-  [ -z "$badm" ] && ok "Google Ads :mutate restricted to status updates" \
-    || err "google :mutate scope" "$badm"
+
+# Split bin into OUTSIDE vs INSIDE the sentinel region (sentinel marker lines
+# themselves count as inside — they carry no creation strings).
+OUTSIDE="$WORK/bin.outside"
+INSIDE="$WORK/bin.inside"
+awk -v o="$OPEN_RE" -v c="$CLOSE_RE" '
+  $0 ~ o {inside=1}
+  { if (inside) print > "'"$INSIDE"'"; else print > "'"$OUTSIDE"'" }
+  $0 ~ c {inside=0}
+' "$BIN"
+
+# (b) FORBIDDEN creation/budget-mutation pattern set must NOT appear OUTSIDE
+#     the gated region (no ungated creation anywhere else in the file).
+FORBIDDEN='daily_budget=|lifetime_budget=|"objective"|customaudiences|create_campaign|/campaigns\?|adsets\?.*-X POST|"campaignBudget"'
+if grep -nEi "$FORBIDDEN" "$OUTSIDE" >/dev/null 2>&1; then
+  err "no ungated create/budget outside region" \
+    "forbidden pattern outside sentinel: $(grep -nEi "$FORBIDDEN" "$OUTSIDE" | head -1)"
 else
-  ok "Google Ads :mutate restricted to status updates"
+  ok "no budget-raise / campaign-create / audience-create OUTSIDE gated region"
+fi
+
+# Sanity: the gated region DOES legitimately contain creation strings (proves
+# the split is real and creation didn't silently vanish).
+if grep -qE 'daily_budget=|customaudiences|/campaigns' "$INSIDE"; then
+  ok "gated region contains the object-creation API strings (as designed)"
+else
+  err "gated region populated" "expected creation strings inside sentinel region"
+fi
+
+# (c) _create_object_execute is called from NOWHERE except inside create_object()
+#     (which itself lives just above the sentinel region). Scan call sites:
+#     legitimate sites = the definition line + the 3 dispatch calls inside
+#     create_object(). Any call OUTSIDE create_object() is a gate bypass.
+co_open="$(grep -n '^create_object()' "$BIN" | head -1 | cut -d: -f1)"
+bad_callsites=""
+while IFS=: read -r lno _; do
+  [ -z "$lno" ] && continue
+  line_txt="$(sed -n "${lno}p" "$BIN")"
+  # Skip the function definition itself and comment references.
+  case "$line_txt" in
+    _create_object_execute\(\)*) continue ;;
+    \#*|*\#\ *_create_object_execute*) continue ;;
+  esac
+  # A real call. Must sit between create_object() open and the sentinel close.
+  if [ -z "$co_open" ] || [ "$lno" -lt "$co_open" ] || [ "$lno" -gt "$close_ln" ]; then
+    bad_callsites="${bad_callsites} line ${lno}: ${line_txt}"
+  fi
+done < <(grep -n '_create_object_execute' "$BIN" | grep -v '^[0-9]*:#')
+if [ -z "$bad_callsites" ]; then
+  ok "_create_object_execute called only from within create_object() gate"
+else
+  err "_create_object_execute call-site containment" "ungated call(s):${bad_callsites}"
+fi
+
+# (d) Google Ads :mutate scope — OUTSIDE the gated region only status updates
+#     are permitted (never budget/objective). Budget mutation is allowed ONLY
+#     inside the gated region. Outside region, every :mutate must be status-only.
+mutate_lines="$(grep -n ':mutate' "$OUTSIDE" | cut -d: -f1 || true)"
+if [ -z "$mutate_lines" ]; then
+  ok "no Google Ads :mutate outside gated region"
+else
+  # The :mutate verb and its JSON payload (updateMask/status) may span multiple
+  # lines of the same curl statement. Inspect the :mutate line plus the next 4
+  # lines for an updateMask=status (and the ABSENCE of budget/objective writes).
+  bad_mutate=""
+  while IFS= read -r ml; do
+    [ -z "$ml" ] && continue
+    stmt="$(sed -n "${ml},$((ml+4))p" "$OUTSIDE")"
+    case "$stmt" in
+      *updateMask*status*) : ;;
+      *) bad_mutate="${bad_mutate} line ${ml}" ;;
+    esac
+    case "$stmt" in
+      *amount_micros*|*\"objective\"*|*daily_budget*)
+        bad_mutate="${bad_mutate} line ${ml}:budget/objective-mutate" ;;
+    esac
+  done <<< "$mutate_lines"
+  [ -z "$bad_mutate" ] \
+    && ok "Google Ads :mutate outside region restricted to status updates" \
+    || err "google :mutate scope (outside region)" "$bad_mutate"
 fi
 
 echo ""
