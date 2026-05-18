@@ -1121,7 +1121,7 @@ Return ONLY the JSON, no other text."
       --arg obj "$_def_obj" \
       '{icp:$icp,value_props:["Quality","Results","Trust"],brand_voice:$bv,
         suggested_objectives:[$obj],suggested_geos:["US"],
-        campaign_scaffold:[{name:"Awareness Campaign",campaign_goal:$obj,budget_per_day:20,channel:"meta"}]}')"
+        campaign_scaffold:[{name:"Awareness Campaign",objective:$obj,daily_budget_usd:20,channel:"meta"}]}')"
     report "- WARNING: Claude strategy derivation failed — using defaults"
   fi
 
@@ -1135,11 +1135,11 @@ Return ONLY the JSON, no other text."
   report "- **Value props:** $(printf '%s' "$strategy" | jq -r '.value_props // [] | join(", ")' 2>/dev/null || echo '')"
   report ""
   report "#### Campaign scaffold:"
-  # Read scaffold — support both Claude-derived keys and fallback keys
+  # Read scaffold — canonical keys first (.objective/.daily_budget_usd), legacy keys as fallback
   printf '%s' "$strategy" | jq -r '.campaign_scaffold[]? |
     "- " + .channel + ": " + .name +
-    " | goal=" + (.campaign_goal // .camp_goal // "LEADS") +
-    " | budget=$" + ((.budget_per_day // .budget_usd // 20)|tostring) + "/day"' \
+    " | goal=" + (.objective // .campaign_goal // .camp_goal // "OUTCOME_LEADS") +
+    " | budget=$" + ((.daily_budget_usd // .budget_per_day // .budget_usd // 20)|tostring) + "/day"' \
     2>/dev/null >> "$REPORT" || true
 
   # For each scaffold item, call create_object with structured params.
@@ -1153,17 +1153,31 @@ Return ONLY the JSON, no other text."
     [ -z "$item" ] && continue
     local sc_name sc_obj sc_budget sc_channel
     sc_name="$(printf '%s' "$item" | jq -r '.name // "Unnamed Campaign"' 2>/dev/null || echo 'Unnamed Campaign')"
-    # Support both key names from Claude output and fallback defaults
-    sc_obj="$(printf '%s' "$item" | jq -r '(.campaign_goal // .camp_goal // "OUTCOME_LEADS")' 2>/dev/null || echo 'OUTCOME_LEADS')"
-    sc_budget="$(printf '%s' "$item" | jq -r '(.budget_per_day // .budget_usd // 20)' 2>/dev/null || echo 20)"
+    # Canonical keys first (.objective/.daily_budget_usd per the Claude prompt schema),
+    # legacy keys (.campaign_goal/.budget_per_day) as resilience fallbacks only.
+    sc_obj="$(printf '%s' "$item" | jq -r '(.objective // .campaign_goal // .camp_goal // "OUTCOME_LEADS")' 2>/dev/null || echo 'OUTCOME_LEADS')"
+    sc_budget="$(printf '%s' "$item" | jq -r '(.daily_budget_usd // .budget_per_day // .budget_usd // 20)' 2>/dev/null || echo 20)"
     sc_channel="$(printf '%s' "$item" | jq -r '.channel // "meta"' 2>/dev/null || echo meta)"
+    # Derive a geo so envelope.geo_allowlist enforcement is actually exercised:
+    # per-item .geo if present, else the strategy's first suggested_geos entry.
+    local sc_geo
+    sc_geo="$(printf '%s' "$item" | jq -r '.geo // empty' 2>/dev/null || true)"
+    if [ -z "$sc_geo" ]; then
+      sc_geo="$(printf '%s' "$strategy" | jq -r '.suggested_geos[0]? // empty' 2>/dev/null || true)"
+    fi
 
     if [ "$sc_channel" = "meta" ] && [ -n "$META_TOKEN_OB" ] && [ -n "$acct_ob" ]; then
       # Structured key=value params — no raw curl/API strings here; gated region builds the call
       local _co_resp
-      _co_resp="$(create_object campaign "${sc_name}" "$sc_budget" \
-        "channel=${sc_channel}" "acct=${acct_ob}" "token=${META_TOKEN_OB}" \
-        "name=${sc_name}" "obj=${sc_obj}" 2>/dev/null || echo '{}')"
+      if [ -n "$sc_geo" ]; then
+        _co_resp="$(create_object campaign "${sc_name}" "$sc_budget" \
+          "channel=${sc_channel}" "acct=${acct_ob}" "token=${META_TOKEN_OB}" \
+          "name=${sc_name}" "obj=${sc_obj}" "geo=${sc_geo}" 2>/dev/null || echo '{}')"
+      else
+        _co_resp="$(create_object campaign "${sc_name}" "$sc_budget" \
+          "channel=${sc_channel}" "acct=${acct_ob}" "token=${META_TOKEN_OB}" \
+          "name=${sc_name}" "obj=${sc_obj}" 2>/dev/null || echo '{}')"
+      fi
 
       # Capture created campaign ID and write back to prefs
       local _created_id
