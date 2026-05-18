@@ -198,7 +198,11 @@ mac_generate_plist() {
 }
 
 mac_is_loaded() {
-  launchctl list 2>/dev/null | grep -q "[[:space:]]${PLIST_LABEL}$"
+  # grep -q closes its stdin early on first match, causing launchctl to receive
+  # SIGPIPE. With set -euo pipefail the non-zero exit of launchctl propagates as
+  # the function's exit code, making the caller always see failure even when the
+  # service is loaded. Use awk (reads all input, exits 0/1 cleanly) instead.
+  launchctl list 2>/dev/null | awk -v l="$PLIST_LABEL" 'BEGIN{r=1} $3==l{r=0} END{exit r}'
 }
 
 mac_current_pid() {
