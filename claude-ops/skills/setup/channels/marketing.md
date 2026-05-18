@@ -243,6 +243,75 @@ Write to `$PREFS_PATH` (merge):
 
 Same Doppler-reference pattern as Step 3i — prefer `doppler:KEY_NAME` over raw tokens when Doppler is configured.
 
+#### Autopilot — autonomous daily ad management
+
+**Only offer this if Meta Ads and/or Google Ads were configured for this project.** Autopilot runs an unattended daily pass that pauses underperformers, rotates/regenerates creatives, and writes a report — bounded by a mandatory per-project spend cap. It never raises budgets or creates campaigns.
+
+Ask via `AskUserQuestion` whether to enable it:
+
+| Option | Header | Description |
+| --- | --- | --- |
+| Enable autopilot | autopilot | Daily autonomous optimization within a hard spend cap |
+| Skip | skip | Configure ad creds only, no autonomous management |
+
+If enabled, ask the spend cap (Rule 1 — max 4 options):
+
+| Option | Header | Description |
+| --- | --- | --- |
+| $25/day | cap25 | Conservative — small test budget |
+| $50/day | cap50 | Standard |
+| $100/day | cap100 | Aggressive |
+| Custom | custom | Free-text a different USD/day cap |
+
+Then ask channels (`multiSelect: true`, only show channels configured for this project): `[Meta]`, `[Google Ads]`.
+
+Then ask creative regeneration opt-in:
+
+| Option | Header | Description |
+| --- | --- | --- |
+| Enable regen | regen | On full creative fatigue, auto-generate a fresh creative (Veo3 video / Gemini image) with a mandatory hallucination audit before deploy |
+| Recommend only | norgen | Detect fatigue but only write a recommendation — no autonomous creative generation |
+
+Write the block to `$PREFS_PATH` under `marketing.projects.<name>.autopilot` (merge — do not clobber existing `.meta`/`.google_ads` cred-refs):
+
+```json
+{
+  "marketing": {
+    "projects": {
+      "<name>": {
+        "autopilot": {
+          "enabled": true,
+          "channels": ["meta"],
+          "daily_spend_cap_usd": 50,
+          "campaign_ids": { "meta": ["<CAMPAIGN_ID>"], "google_ads": [] },
+          "pause_cpl_multiple": 2.0,
+          "pause_ctr_floor": 0.005,
+          "min_live_creatives": 2,
+          "creative_regen": { "enabled": true, "video": "veo3", "image": "gemini-image" },
+          "weekly_synthesis": true,
+          "notify_sink": null
+        }
+      }
+    }
+  }
+}
+```
+
+Ask for the campaign ID(s) to manage per selected channel (free text, comma-separated) and populate `campaign_ids`. Then enable the daemon service and run one forced-dry pass so the operator can review the first report:
+
+```bash
+# Enable the daemon service (merges into the user's daemon-services config)
+"${CLAUDE_PLUGIN_ROOT}/bin/ops-daemon-manager" enable marketing-autopilot 2>/dev/null \
+  || jq '.services["marketing-autopilot"].enabled = true' \
+       "$OPS_DATA_DIR/daemon-services.json" > "$OPS_DATA_DIR/daemon-services.json.tmp" \
+     && mv "$OPS_DATA_DIR/daemon-services.json.tmp" "$OPS_DATA_DIR/daemon-services.json"
+
+# First run is forced dry by the binary regardless of this flag — review the report
+"${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-autopilot" --dry-run --project "<name>"
+```
+
+Print the report path (`$OPS_DATA_DIR/reports/marketing-autopilot/<name>-latest.md`) and tell the operator the next scheduled (live) run is the daemon's `0 8 * * *` UTC tick.
+
 #### Dynamic marketing partners
 
 After the known services, ask via `AskUserQuestion` (free text):
