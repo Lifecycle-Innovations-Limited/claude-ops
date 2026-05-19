@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# bin/ops-content-seo — CLI entry for SEO blog draft generator.
+#
+# Usage:
+#   ops-content-seo <project> [--dry-run]
+#   ops-content-seo --dry-run          # dry-runs all enabled projects
+#
+# NEVER auto-publishes.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$SCRIPT_DIR/..}"
+
+CRON="${PLUGIN_ROOT}/scripts/ops-cron-seo-blog-gen.sh"
+
+if [ ! -f "$CRON" ]; then
+  printf '[ops-content-seo] ERROR: script not found: %s\n' "$CRON" >&2
+  exit 1
+fi
+
+exec bash "$CRON" "$@"
