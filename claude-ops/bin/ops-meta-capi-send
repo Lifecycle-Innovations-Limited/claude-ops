@@ -9,6 +9,7 @@
 #   event --project <key> --event-name <name> --event-time <epoch>
 #         --action-source website --event-source-url <url>
 #         [--email <e>] [--phone <p>] [--value <v>] [--currency <c>]
+#         [--event-id <id>]  — Meta event_id for server-side deduplication
 #         [--fbp <fbp>] [--fbc <fbc>] [--client-ip <ip>] [--user-agent <ua>]
 #
 # Email and phone are SHA-256 hashed (lowercase-normalised) per Meta requirements.
@@ -77,6 +78,7 @@ Usage:
     [--phone <number>] \
     [--value <number>] \
     [--currency <ISO4217>] \
+    [--event-id <string>] \
     [--fbp <_fbp-cookie-value>] \
     [--fbc <_fbc-cookie-value>] \
     [--client-ip <ip>] \
@@ -118,6 +120,7 @@ EMAIL=""
 PHONE=""
 VALUE=""
 CURRENCY=""
+EVENT_ID=""
 FBP=""
 FBC=""
 CLIENT_IP=""
@@ -134,6 +137,7 @@ while [ $# -gt 0 ]; do
     --phone)            PHONE="${2:-}";             shift 2 ;;
     --value)            VALUE="${2:-}";             shift 2 ;;
     --currency)         CURRENCY="${2:-}";          shift 2 ;;
+    --event-id)         EVENT_ID="${2:-}";          shift 2 ;;
     --fbp)              FBP="${2:-}";               shift 2 ;;
     --fbc)              FBC="${2:-}";               shift 2 ;;
     --client-ip)        CLIENT_IP="${2:-}";         shift 2 ;;
@@ -190,6 +194,7 @@ EVENT_OBJECT="$(jq -n \
   --arg esurl "$EVENT_SOURCE_URL" \
   --argjson ud "$USER_DATA" \
   --argjson cd "$CUSTOM_DATA" \
+  --arg eid "$EVENT_ID" \
   '{
     event_name: $ename,
     event_time: $etime,
@@ -197,7 +202,7 @@ EVENT_OBJECT="$(jq -n \
     event_source_url: $esurl,
     user_data: $ud,
     custom_data: $cd
-  }')"
+  } | if ($eid | length) > 0 then . + {event_id: $eid} else . end')"
 
 PAYLOAD="$(jq -n \
   --argjson ev "$EVENT_OBJECT" \

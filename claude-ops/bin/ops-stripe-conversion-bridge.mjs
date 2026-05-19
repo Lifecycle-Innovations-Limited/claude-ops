@@ -213,16 +213,32 @@ function extractMetadata(stripeObject) {
 }
 
 /**
+ * Stable id for GA4 transaction_id / Meta event_id: shared across webhook types
+ * for the same Checkout payment (e.g. charge.succeeded vs checkout.session.completed).
+ * @param {object} stripeObject
+ * @param {string} fallbackWebhookEventId
+ * @returns {string}
+ */
+function stablePurchaseDedupId(stripeObject, fallbackWebhookEventId) {
+  const pi = stripeObject?.payment_intent;
+  if (typeof pi === 'string' && pi.length > 0) return pi;
+  if (pi && typeof pi === 'object' && typeof pi.id === 'string' && pi.id.length > 0) {
+    return pi.id;
+  }
+  return fallbackWebhookEventId;
+}
+
+/**
  * Fan out a purchase event to GA4 + Meta CAPI.
  * @param {object} stripeObject
- * @param {string} stripeEventId
+ * @param {string} conversionDedupId  GA4 --transaction-id / Meta --event-id
  */
-function fanoutPurchase(stripeObject, stripeEventId) {
+function fanoutPurchase(stripeObject, conversionDedupId) {
   const { meta, amountDecimal, currency } = extractMetadata(stripeObject);
   const eventTime = Math.floor(Date.now() / 1000).toString();
   const eventSourceUrl = meta.event_source_url ?? 'https://<your-domain.com>';
 
-  log(`Fanning out purchase: event_id=${stripeEventId} value=${amountDecimal} ${currency}`);
+  log(`Fanning out purchase: dedup_id=${conversionDedupId} value=${amountDecimal} ${currency}`);
 
   // ── GA4 ──────────────────────────────────────────────────────────────────
   if (meta.client_id) {
@@ -235,7 +251,7 @@ function fanoutPurchase(stripeObject, stripeEventId) {
       '--client-id',
       meta.client_id,
       '--transaction-id',
-      stripeEventId,
+      conversionDedupId,
     ];
     if (amountDecimal) ga4Args.push('--value', amountDecimal);
     if (currency) ga4Args.push('--currency', currency);
@@ -262,6 +278,7 @@ function fanoutPurchase(stripeObject, stripeEventId) {
   if (meta.fbc) capiArgs.push('--fbc', meta.fbc);
   if (amountDecimal) capiArgs.push('--value', amountDecimal);
   if (currency) capiArgs.push('--currency', currency);
+  capiArgs.push('--event-id', conversionDedupId);
   runSender(CAPI_BIN, capiArgs);
 }
 
@@ -296,14 +313,15 @@ const server = createServer((req, res) => {
 
     const eventType = event?.type ?? '';
     const obj = event?.data?.object ?? {};
-    const eventId = event?.id ?? `evt_${Date.now()}`;
+    const webhookEventId = event?.id ?? `evt_${Date.now()}`;
+    const conversionDedupId = stablePurchaseDedupId(obj, webhookEventId);
 
-    log(`Received Stripe event: type=${eventType} id=${eventId}`);
+    log(`Received Stripe event: type=${eventType} id=${webhookEventId}`);
 
     switch (eventType) {
       case 'charge.succeeded':
       case 'checkout.session.completed':
-        fanoutPurchase(obj, eventId);
+        fanoutPurchase(obj, conversionDedupId);
         break;
       default:
         log(`Ignoring unhandled event type: ${eventType}`);
