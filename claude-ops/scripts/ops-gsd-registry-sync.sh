@@ -251,7 +251,7 @@ for planning in unique_planning:
         })
 
 # ── Dedupe: same git remote URL ⇒ same logical project ────────────────────
-# Multiple checkout paths (e.g. ~/healify-api and ~/Projects/healify-api,
+# Multiple checkout paths (e.g. ~/my-api and ~/Projects/my-api,
 # or a clone in gsd-workspaces/) all map to one entry. Canonical path =
 # the one with the most recent commit; other paths land in `aliases`.
 # Projects without a git remote are deduped by resolved filesystem path

@@ -8,15 +8,15 @@
 #
 #   {
 #     "configured": true,
-#     "brands": ["Healify", ...],
+#     "brands": ["your-app", ...],
 #     "by_brand": {
-#       "Healify": {
-#         "category": "AI health coaching apps",
-#         "competitors": ["Noom", "MyFitnessPal", ...],
+#       "your-app": {
+#         "category": "your market category",
+#         "competitors": ["competitor-a", "competitor-b", ...],
 #         "last_run": "2026-05-17T...",
 #         "last_discovery": "2026-05-17T...",
-#         "latest_report": "/path/to/2026-05-17_healify.md",
-#         "latest_synthesis": "/path/to/2026-05-17_healify-synthesis.md"
+#         "latest_report": "/path/to/2026-05-17_your-app.md",
+#         "latest_synthesis": "/path/to/2026-05-17_your-app-synthesis.md"
 #       }
 #     },
 #     "events": {
@@ -184,7 +184,7 @@ competitor_context() {
 # ── Convenience helpers (small, focused) ───────────────────────────────
 
 # Print compact one-line summary for briefing surfaces (e.g. /ops:go).
-# Output: "Healify: 2 alerts (last: Noom price drop) · 5 med deltas · weekly report 2026-05-17"
+# Output: "your-app: 2 alerts (last: competitor-a price drop) · 5 med deltas · weekly report 2026-05-17"
 # or:     "(not configured — run /ops:setup competitor-intel)"
 competitor_briefing_line() {
   local ctx; ctx=$(competitor_context "$@")
@@ -232,7 +232,7 @@ competitor_priority_items() {
 # Get vertical-specific signal slice for /ops:marketing, /ops:ecom, /ops:yolo c-suite agents.
 # Filters events by source kind groupings.
 #   marketing  → pricing diffs, funding/news, brand sentiment from reddit/hn
-#   ecom       → app store version+rating, product page diffs, hueman-style competitor launches
+#   ecom       → app store version+rating, product page diffs, new competitor launches
 #   cfo        → pricing diffs only (money-token high severity)
 #   ceo        → new entrants, competitor moves (med + high)
 #   coo        → jobs feed (hiring signals)
