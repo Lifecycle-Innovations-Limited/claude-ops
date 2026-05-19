@@ -87,20 +87,20 @@
     },
     "content-seo-blog": {
       "enabled": false,
-      "schedule": "0 9 * * 1",
-      "cmd": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-seo-blog-gen.sh",
+      "cron": "0 9 * * 1",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-seo-blog-gen.sh",
       "_note": "Weekly SEO blog draft generator (Monday 09:00 UTC). Pulls GSC queries (position 8-30, impressions >50, CTR <5%), drafts 1200-word articles via Claude. Persists to content/blog/<project>/. NEVER auto-publishes. Enable per project by setting marketing.projects.<key>.blog.enabled=true and gsc.site_url + brand.voice in prefs."
     },
     "content-email-draft": {
       "enabled": false,
-      "schedule": "0 10 * * 1",
-      "cmd": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-email-draft.sh",
+      "cron": "0 10 * * 1",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-email-draft.sh",
       "_note": "Weekly email draft generator (Monday 10:00 UTC). Drafts Klaviyo flow variants + next Resend broadcast via Claude. NEVER auto-sends — all drafts require per-message approval (Rule 6). Enable per project by setting marketing.projects.<key>.email_marketing.enabled=true + brand.voice in prefs."
     },
     "content-social-calendar": {
       "enabled": false,
-      "schedule": "0 11 * * 1",
-      "cmd": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-social-calendar.sh",
+      "cron": "0 11 * * 1",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-social-calendar.sh",
       "_note": "Weekly social post calendar generator (Monday 11:00 UTC). Generates 5 LinkedIn + 5 X + 5 Instagram posts per project. NEVER auto-publishes — drafts require per-message approval (Rule 6). Enable per project by setting marketing.projects.<key>.social.enabled=true + brand.voice in prefs."
     }
   }

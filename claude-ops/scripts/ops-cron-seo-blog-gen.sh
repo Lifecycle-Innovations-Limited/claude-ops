@@ -52,7 +52,7 @@ prefs_get() {
 }
 
 prefs_projects() {
-  [ -f "$PREFS" ] || echo "[]"
+  [ -f "$PREFS" ] || { echo ""; return; }
   jq -r '.marketing.projects // {} | keys[]' "$PREFS" 2>/dev/null || true
 }
 

@@ -233,7 +233,9 @@ _process_project() {
       | sed 's/keyword: *//' | tr '\n' '; ' | head -c 200 || true)"
   fi
 
-  local all_posts=()
+  local json_linkedin='{"platform":"linkedin","posts":[]}'
+  local json_x='{"platform":"x","posts":[]}'
+  local json_instagram='{"platform":"instagram","posts":[]}'
   local total_posts=0
 
   for platform in linkedin x instagram; do
@@ -270,8 +272,11 @@ if m:
     local scheduled_json
     scheduled_json="$(_assign_schedule "$posts_json" "$platform" "$week_start")"
 
-    # Add to all_posts array
-    all_posts+=("$scheduled_json")
+    case "$platform" in
+      linkedin)  json_linkedin="$scheduled_json" ;;
+      x)         json_x="$scheduled_json" ;;
+      instagram) json_instagram="$scheduled_json" ;;
+    esac
     local pc
     pc="$(printf '%s' "$scheduled_json" | jq '.posts | length' 2>/dev/null || echo 0)"
     total_posts=$((total_posts + pc))
@@ -284,9 +289,9 @@ if m:
     --arg proj "$proj" \
     --arg date "$date_str" \
     --arg week "$week_start" \
-    --argjson linkedin "$(printf '%s\n' "${all_posts[@]:-}" | jq -s '.[0] // {"platform":"linkedin","posts":[]}' 2>/dev/null)" \
-    --argjson x_posts "$(printf '%s\n' "${all_posts[@]:-}" | jq -s '.[1] // {"platform":"x","posts":[]}' 2>/dev/null)" \
-    --argjson instagram "$(printf '%s\n' "${all_posts[@]:-}" | jq -s '.[2] // {"platform":"instagram","posts":[]}' 2>/dev/null)" \
+    --argjson linkedin "$json_linkedin" \
+    --argjson x_posts "$json_x" \
+    --argjson instagram "$json_instagram" \
     '{
       project: $proj,
       generated_date: $date,
