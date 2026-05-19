@@ -87,6 +87,36 @@ http_call() {
   printf '%s' "$body"
 }
 
+# Same as http_call but returns 1 on non-2xx without exiting; does not print
+# response body to stdout on failure (so "$(... || echo '{}')" fallbacks work).
+http_call_allow_fail() {
+  local method="$1"; shift
+  local url="$1"; shift
+  local extra_args=()
+  while [ $# -gt 0 ]; do
+    extra_args+=("$1")
+    shift
+  done
+
+  local tmpfile
+  tmpfile="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -f '$tmpfile'" RETURN
+
+  local response http_code body
+  response=$(curl -sS -w "\n%{http_code}" -X "$method" "$url" "${extra_args[@]}" 2>&1)
+  http_code="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+
+  if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
+    log "HTTP $http_code from $method $url"
+    log "Response: $body"
+    return 1
+  fi
+
+  printf '%s' "$body"
+}
+
 # ---------------------------------------------------------------------------
 # ADC token — get current access token with required scopes
 # ---------------------------------------------------------------------------
@@ -207,6 +237,7 @@ cmd_provision_ga4() {
     account_id="${GA4_ACCOUNT_ID:-$(prefs_get_raw '.marketing.ga4_account_id // empty')}"
   fi
   [ -n "$account_id" ] || die "--account-id is required (or set GA4_ACCOUNT_ID env / marketing.ga4_account_id in prefs)"
+  account_id="${account_id#accounts/}"
 
   local token
   token="$(ga4_get_token)"
@@ -225,7 +256,7 @@ cmd_provision_ga4() {
     else
       # Check existing
       local existing_bindings
-      existing_bindings="$(http_call GET "$base_admin/v1alpha/accounts/$account_id/accessBindings" \
+      existing_bindings="$(http_call_allow_fail GET "$base_admin/v1alpha/accounts/$account_id/accessBindings" \
         -H "$auth_header" 2>/dev/null || echo '{}')"
       local already_bound
       already_bound="$(printf '%s' "$existing_bindings" | jq -r \
@@ -415,7 +446,7 @@ cmd_provision_gsc() {
     log "[DRY-RUN] Skipping site list check"
   else
     local sites_resp
-    sites_resp="$(http_call GET "$base_gsc/sites" -H "$auth_header" 2>/dev/null || echo '{}')"
+    sites_resp="$(http_call_allow_fail GET "$base_gsc/sites" -H "$auth_header" 2>/dev/null || echo '{}')"
     local found
     found="$(printf '%s' "$sites_resp" | jq -r \
       --arg s "$site_url" '.siteEntry[]? | select(.siteUrl == $s) | .siteUrl' 2>/dev/null || true)"
@@ -427,7 +458,7 @@ cmd_provision_gsc() {
   else
     log "Adding site to Search Console: $site_url"
     if ! dry_notice "PUT $base_gsc/sites/$site_encoded"; then
-      http_call PUT "$base_gsc/sites/$site_encoded" -H "$auth_header" >/dev/null 2>&1 \
+      http_call_allow_fail PUT "$base_gsc/sites/$site_encoded" -H "$auth_header" >/dev/null 2>&1 \
         || log "WARN: PUT site returned non-2xx — site may need manual verification"
     fi
   fi
@@ -437,7 +468,7 @@ cmd_provision_gsc() {
   local verify_token=""
   if ! dry_notice "GET $base_gsc/sites/$site_encoded/siteVerificationToken"; then
     local token_resp
-    token_resp="$(http_call GET "$base_gsc/sites/$site_encoded" \
+    token_resp="$(http_call_allow_fail GET "$base_gsc/sites/$site_encoded" \
       -H "$auth_header" 2>/dev/null || echo '{}')"
     # The token is surfaced via webmasters API v1 (not v3); use that for verification info
     local verify_method
@@ -445,11 +476,18 @@ cmd_provision_gsc() {
     log "Verification state: $verify_method"
 
     # Try to get DNS TXT token via site verification API
-    local svt_resp
-    svt_resp="$(http_call POST \
+    local svt_resp svt_type svt_identifier
+    if [[ "$site_url" == sc-domain:* ]]; then
+      svt_type="INET_DOMAIN"
+      svt_identifier="${site_url#sc-domain:}"
+    else
+      svt_type="SITE"
+      svt_identifier="$site_url"
+    fi
+    svt_resp="$(http_call_allow_fail POST \
       "https://www.googleapis.com/siteVerification/v1/token" \
       -H "$auth_header" -H "Content-Type: application/json" \
-      --data "{\"site\":{\"type\":\"INET_DOMAIN\",\"identifier\":\"${site_url#sc-domain:}\"},\"verificationMethod\":\"DNS_TXT\"}" \
+      --data "{\"site\":{\"type\":\"$svt_type\",\"identifier\":\"$svt_identifier\"},\"verificationMethod\":\"DNS_TXT\"}" \
       2>/dev/null || echo '{}')"
     verify_token="$(printf '%s' "$svt_resp" | jq -r '.token // empty' 2>/dev/null || true)"
   else
@@ -548,12 +586,13 @@ cmd_provision_gsc() {
 # provision-all
 # ---------------------------------------------------------------------------
 cmd_provision_all() {
-  local project="" remaining=()
+  local project="" site_for_gsc="" ga4_remaining=()
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --project) project="${2:-}"; shift ;;
-      *) remaining+=("$1") ;;
+      --site) site_for_gsc="${2:-}"; shift ;;
+      *) ga4_remaining+=("$1") ;;
     esac
     shift
   done
@@ -564,11 +603,15 @@ cmd_provision_all() {
   info ""
 
   info "--- GA4 ---"
-  cmd_provision_ga4 --project "$project" "${remaining[@]+"${remaining[@]}"}"
+  cmd_provision_ga4 --project "$project" "${ga4_remaining[@]+"${ga4_remaining[@]}"}"
   info ""
 
   info "--- Google Search Console ---"
-  cmd_provision_gsc --project "$project" "${remaining[@]+"${remaining[@]}"}"
+  if [ -n "$site_for_gsc" ]; then
+    cmd_provision_gsc --project "$project" --site "$site_for_gsc"
+  else
+    cmd_provision_gsc --project "$project"
+  fi
   info ""
 
   info "Done. Run: $0 status --project $project"
