@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# bin/ops-content-landing — Generate landing-page hero copy variants for a project.
+#
+# Usage:
+#   ops-content-landing <project>
+#   ops-content-landing <project> --dry-run
+#
+# Reads brand.voice, brand.product, brand.target_persona, source.url from
+# marketing.projects.<project> in preferences.json. Refuses if any are absent.
+#
+# Output: JSON manifest with 3 hero variants + path to persisted markdown.
+#
+# NEVER auto-publishes. Drafts only.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$SCRIPT_DIR/..}"
+
+# ── Arg parsing ──────────────────────────────────────────────────────────────
+DRY_RUN=false
+PROJECT=""
+
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=true ;;
+    -*) printf '[ops-content-landing] unknown flag: %s\n' "$arg" >&2; exit 1 ;;
+    *)
+      if [ -z "$PROJECT" ]; then
+        PROJECT="$arg"
+      else
+        printf 'Usage: ops-content-landing <project> [--dry-run]\n' >&2; exit 1
+      fi ;;
+  esac
+done
+
+if [ -z "$PROJECT" ]; then
+  printf 'Usage: ops-content-landing <project> [--dry-run]\n' >&2
+  exit 1
+fi
+
+# ── Source lib ───────────────────────────────────────────────────────────────
+LIB="${PLUGIN_ROOT}/scripts/lib/creative/landing.sh"
+if [ ! -f "$LIB" ]; then
+  printf '[ops-content-landing] ERROR: lib not found: %s\n' "$LIB" >&2
+  exit 1
+fi
+# shellcheck source=scripts/lib/creative/landing.sh
+source "$LIB"
+
+# ── Route through credit pool when configured ─────────────────────────────
+export CLAUDE_OPS_USE_CREDIT_POOL="${CLAUDE_OPS_USE_CREDIT_POOL:-0}"
+
+# ── Dry-run guard ─────────────────────────────────────────────────────────
+if [ "$DRY_RUN" = "true" ]; then
+  printf '[ops-content-landing] DRY-RUN: would call generate_landing_variants "%s"\n' "$PROJECT" >&2
+
+  PREFS="${OPS_AUTOPILOT_PREFS:-${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json}"
+
+  if [ ! -f "$PREFS" ]; then
+    printf '{"error":"prefs_not_found","refused":true,"dry_run":true}\n'
+    exit 1
+  fi
+
+  bv="$(ap_get "$PROJECT" '.brand.voice')"
+  bp="$(ap_get "$PROJECT" '.brand.product')"
+  tp="$(ap_get "$PROJECT" '.brand.target_persona')"
+  su="$(ap_get "$PROJECT" '.source.url')"
+
+  missing=""
+  [ -z "$bv" ] && missing="${missing} brand.voice"
+  [ -z "$bp" ] && missing="${missing} brand.product"
+  [ -z "$tp" ] && missing="${missing} brand.target_persona"
+  [ -z "$su" ] && missing="${missing} source.url"
+
+  if [ -n "$missing" ]; then
+    missing_json="$(python3 -c "
+import json, sys
+fields = sys.argv[1].split()
+print(json.dumps(fields))
+" "$missing" 2>/dev/null || printf '[]')"
+    printf '{"error":"missing_required_fields","refused":true,"dry_run":true,"missing":%s}\n' "$missing_json"
+    exit 1
+  fi
+
+  printf '{"dry_run":true,"project":"%s","status":"fields_ok_would_generate"}\n' "$PROJECT"
+  exit 0
+fi
+
+# ── Live run ─────────────────────────────────────────────────────────────────
+generate_landing_variants "$PROJECT"
