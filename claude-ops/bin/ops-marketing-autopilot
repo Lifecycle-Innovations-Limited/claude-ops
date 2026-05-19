@@ -1305,6 +1305,7 @@ for proj in "${PROJECTS[@]}"; do
       ln -sf "$REPORT" "${REPORT_DIR}/${proj}-latest.md"
       log "project=$proj onboard REFUSED (no cap)"
       RC=1
+      DRY_RUN="$_SAVED_DRY_RUN"
       continue
     fi
     report "- Daily spend cap: \$${CAP}"
@@ -1315,6 +1316,7 @@ for proj in "${PROJECTS[@]}"; do
     ln -sf "$REPORT" "${REPORT_DIR}/${proj}-latest.md"
     notify "$proj"
     log "project=$proj onboard done (dry=${DRY_RUN} mutations=${MUTATIONS} escalated=${ESCALATED})"
+    DRY_RUN="$_SAVED_DRY_RUN"
     continue
   fi
 
@@ -1325,6 +1327,7 @@ for proj in "${PROJECTS[@]}"; do
     ln -sf "$REPORT" "${REPORT_DIR}/${proj}-latest.md"
     log "project=$proj REFUSED (no cap)"
     RC=1
+    DRY_RUN="$_SAVED_DRY_RUN"
     continue
   fi
   report "- Daily spend cap: \$${CAP}"

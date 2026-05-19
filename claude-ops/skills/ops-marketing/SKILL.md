@@ -173,7 +173,7 @@ Route `$ARGUMENTS` to the correct section below:
 | Input | Action |
 |---|---|
 | (empty), dashboard | Run full marketing dashboard |
-| `<project>` | If `marketing.projects.<project>.autopilot.enabled == true` → run live autopilot pass for that project. Otherwise → run `bin/ops-marketing-provision provision-all --project <project>` then `bin/ops-marketing-autopilot --project <project> --first-run-dry` (see ## project entry-point section) |
+| `<project>` | If `marketing.projects.<project>.autopilot.enabled == true` → run live autopilot pass for that project. Otherwise → run `bin/ops-marketing-provision provision-all --project <project>` then `bin/ops-marketing-autopilot --project <project> --dry-run` (see ## project entry-point section) |
 | email, klaviyo | Klaviyo email metrics |
 | ads, meta | Meta Ads performance (read-only overview) |
 | meta-manage, meta create-campaign, meta target, meta creative, meta rules, meta audiences, meta advantage | Meta Ads campaign management (see ## meta-manage section) |
