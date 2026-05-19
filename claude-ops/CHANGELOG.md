@@ -2,6 +2,58 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.0] — 2026-05-19
+
+`/ops:marketing <project>` — point-and-go autonomous marketing agent (self-provisioning + self-healing + closed ROAS loop).
+
+Seven PRs (#258, #260, #261, #256, #257, #262, #263) complete the arc from v2.4/v2.5's spend-bounded autopilot into a fully self-sufficient agent: it provisions its own analytics and DNS, fires its own conversion events, reads real revenue to close the ROAS loop, generates organic content as a parallel growth lane, and self-heals credential failures — all without manual intervention after the initial `/ops:marketing <project>` invocation.
+
+### Added
+
+- **Single-entry-point `/ops:marketing <project>`** — one command provisions, enables autopilot, and starts the loop for a new project (#258). New verbs `autopilot enable|disable|run|kill <project>` added alongside the existing `autopilot` subcommand surface. New `bin/ops-daemon-manager` shim closes a silent-fallback gap in the daemon setup flow (previously, a missing launchd plist silently fell through without error).
+
+- **Self-provisioning across 4 surfaces** (#256, #260, #257):
+  - `bin/ops-marketing-provision` — end-to-end GA4 property creation + Google Search Console site registration, full OAuth bootstrap, Doppler secret push, idempotent GET-before-create pattern throughout. Shared resolver extracted to `scripts/lib/ga4-resolve.sh` so both `ops-marketing-provision` and `ops-marketing-dash` share one GA4 lookup path (#256).
+  - `bin/ops-dns-provision` — Cloudflare-API-driven DNS provisioner covering GSC TXT ownership verification, Meta AEM domain verification, SPF/DKIM/DMARC email-auth records, MX, Apple Pay domain association, and Klaviyo dedicated-sending setup. 8 named subcommands plus `audit` (diff current vs desired) and `provision-all` (idempotent full-stack). Backed by new reusable lib `scripts/lib/cloudflare-dns.sh` which any other ops bin can source for idempotent CF DNS operations (#260).
+  - `bin/ops-conversion-send` (GA4 Measurement Protocol v2 event sender) + `bin/ops-meta-capi-send` (Meta Conversions API sender with SHA-256 PII hashing) + `scripts/ops-stripe-conversion-bridge.mjs` (Node.js Stripe webhook handler that fans out to GA4 MP + Meta CAPI in parallel) — closes the "we provisioned conversion secrets but never fire them" gap (#257). UTM enforcement library `scripts/lib/utm-validate.sh` + canonical attribution standard documented at `data/gtm/utm-attribution-standard.md`.
+
+- **Closed ROAS loop (#262):** autopilot now reads real performance data on every pass — GA4 conversion events (Measurement Protocol), GSC search-analytics (clicks/impressions/CTR/position), Klaviyo flow revenue, and Stripe ground-truth revenue. Bandit reward path upgraded from Meta-CPL-only to **blended** (GA4 + Meta) when available, or **Stripe ground-truth** when `STRIPE_WEBHOOK_SECRET` is configured. New **ROAS-rescue gate**: campaigns where `stripe_revenue >= OPS_PAUSE_ROAS_FLOOR × meta_spend` are excluded from the Meta-CPL pause sweep — preventing the autopilot from pausing profitable campaigns that happen to have high CPL. UTM enforcement wired into campaign-creation paths so all new campaigns produce attributable data from day one. Shared GA4 Data API helper extracted to `scripts/lib/ga4-data-api.sh`.
+
+- **Organic content generation (#261):** four new bins — `bin/ops-content-landing` (landing page variant generation), `bin/ops-content-seo` (SEO blog post drafting), `bin/ops-content-email` (Klaviyo email flow copy), `bin/ops-content-social` (LinkedIn/X/Instagram social calendar). Corresponding cron daemons: `content-seo` (GSC opportunity loop — surfaces high-impression/low-CTR queries, drafts posts targeting them), `content-email` (Klaviyo flow draft cadence), `content-social` (rolling 7-day social calendar). **Draft-only discipline throughout** — no bin auto-publishes, no bin auto-sends; all output is staged files + human-action recommendations, fully compliant with Rule 6. Generation is refused when `marketing.projects.<key>.brand.voice` is absent, escalating with an onboarding prompt — no wellness-defaults or placeholder voice will leak into generated copy.
+
+- **Self-healing autopilot (#263):**
+  - **Meta token auto-refresh:** error 190 (access token expired) triggers automatic long-lived token exchange via Graph OAuth `fb_exchange_token` endpoint; new token written back to Doppler immediately. Requires `marketing.projects.<key>.meta.app_id` + `meta.app_secret` in config (gracefully escalates if absent rather than silently skipping).
+  - **Google Ads OAuth recovery:** refresh failures promoted from silent skip to `escalate()` with distinction between `invalid_grant` (requires re-auth, 48h outage threshold before escalating) and transient network errors (retry with backoff).
+  - **Strict credential resolver:** new `resolve_cred_strict()` distinguishes "credential not configured" (rc=1, normal skip) from "Doppler key declared but value empty" (rc=2, escalate — a provisioning gap that should never silently pass).
+  - **Multi-sink notify fan-out:** `notify()` now iterates the `marketing.notify.sinks` array and delivers to all configured sinks (telegram, slack, email, whatsapp) in parallel. Per-project legacy `notify_sink` string still works as single-sink fallback.
+  - **`--health-check` subcommand** — probes Meta token TTL, Google Ads OAuth validity, ad-account status, Doppler secret freshness, GA4 service-account key, and GSC site auth. Exits non-zero and prints a remediation checklist on any failure. New `marketing-health-check` daemon (Sunday 08:00 UTC, disabled by default) runs this check weekly and routes failures to the notify fan-out.
+
+### Changed
+
+- **Rule 0 cleanup (#258):** 9 files scrubbed of real domains, emails, and repo slugs that had leaked into committed code: `bin/ops-meta-workspace-bootstrap`, `bin/ops-deploy-fix-build-trigger`, `prompts/build-fix.md`, `prompts/deploy-fix.md`, `skills/ops-secret-sync/SKILL.md`, `scripts/account-rotation/bulk-setup-token.mjs`, `scripts/lib/competitor/context.sh`, `scripts/lib/creative/context.sh`, `scripts/lib/creative/generate.sh`, `scripts/ops-gsd-registry-sync.sh`, `skills/setup/SKILL.md`. All replaced with `<placeholder>` / `$ENV_VAR` / `your-org/your-repo` forms.
+- **Hardcoded brand-voice defaults removed (#258):** wellness-vocabulary defaults stripped from `bin/ops-marketing-autopilot` and `scripts/lib/creative/generate.sh`. Autopilot now refuses content generation when `brand.voice` is absent and escalates with an onboarding prompt rather than silently substituting a default voice. This prevents content intended for one brand's audience from being generated with another brand's vocabulary.
+- **Per-project install marker (#258):** `${STATE_DIR}/${proj}.installed` replaces a prior global marker so each newly-added project gets its own forced dry-run on first pass, regardless of whether other projects are already installed.
+- **Mutation-counter leak fix (#258):** `MUTATIONS`, `ESCALATED`, and `CREATED_CAMPAIGNS` counters now reset at the top of each project iteration, preventing counts from accumulating across projects in a single autopilot run.
+- **`scripts/lib/cloudflare-dns.sh`** (#260) is a general-purpose reusable lib — any other ops bin can `source` it for idempotent Cloudflare DNS record management without duplicating CF API boilerplate.
+- **`scripts/lib/ga4-data-api.sh`** (#262) extracted from `ops-marketing-dash` so both the dashboard and the autopilot share one GA4 Data API helper with consistent error handling.
+- **`scripts/ops-stripe-conversion-bridge.mjs`** (#257) lives at `scripts/` as a `.mjs` Node.js module rather than `bin/` (which is bash-only by convention). Invoke via `node scripts/ops-stripe-conversion-bridge.mjs` or the provided systemd/launchd example in the file header.
+
+### Breaking Changes
+
+- **`META_<BRAND>_*` Doppler key pattern** — previously, per-brand Meta credentials used a hardcoded prefix. Operators with existing configurations must migrate their Doppler keys to the `META_${PROJECT^^}_*` pattern (e.g., `META_MYPROJECT_ACCESS_TOKEN`, `META_MYPROJECT_AD_ACCOUNT_ID`). The autopilot will emit a `resolve_cred_strict rc=2` escalation (not a silent skip) for any project where the old key pattern is detected, making the migration gap visible rather than silently passing with no data.
+- **`OPS_DEPLOY_FIX_REPO_SLUG` + `OPS_DEPLOY_FIX_REPO_ORG`** — these env vars are now required for the build-trigger hook; previously they were hardcoded. Existing deployments must add both vars to their environment or Doppler project before the next deploy-fix invocation.
+- **`marketing.projects.<key>.meta.app_id` + `meta.app_secret`** — required for Meta auto-refresh (error 190 recovery). If absent, the autopilot does not fail — it escalates with a remediation prompt — but token refresh will not be attempted and an expired token will block the Meta channel until manually rotated.
+
+### Migration Guide
+
+1. **Existing autopilot users** — no action required for existing projects. All new features are additive and opt-in. The autopilot's spend-safety guarantees, `create_once` default, and `--dry-run` behavior are unchanged.
+
+2. **New project setup** — `/ops:marketing <project>` is the one-shot entry point. It runs `provision-all` (GA4 + GSC + DNS), then `autopilot enable`, then starts the daemon. For projects with existing GA4/GSC already provisioned, the GET-first idempotency pattern means re-running provision is safe.
+
+3. **Conversion senders** — after provisioning, fire one debug event per channel to verify the full pipeline before live traffic: `bin/ops-conversion-send --debug` (GA4 MP — check Realtime in GA4 UI), `bin/ops-meta-capi-send --test-event-code <code>` (Meta — check Events Manager test events tab). Stripe bridge: deploy with `STRIPE_WEBHOOK_SECRET` set and send a `payment_intent.succeeded` test event from the Stripe dashboard.
+
+4. **Multi-sink notify** — populate `marketing.notify.sinks` array in `preferences.json` with any combination of `["telegram", "slack", "email", "whatsapp"]`. Legacy per-project `notify_sink: "telegram"` string still works as a single-sink fallback and does not need migration.
+
 ## [2.5.0] — 2026-05-18
 ### Added
 - **Autopilot Studio — the autonomous self-optimizing marketing agent.** Extends v2.4.0's pause-sweep autopilot into a closed compounding loop: give it a website + a spend cap + a few settings, and it researches, generates, pre-analyzes, launches, measures, and self-optimizes — bounded and auditable.
