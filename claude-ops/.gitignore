@@ -51,3 +51,6 @@ telegram-server/package-lock.json
 # Python bytecode (calibrate.py)
 __pycache__/
 *.pyc
+
+# GCP / Google ADC credentials — never committed; live in ~/.gcp/
+*.json.bak-ga4-*
