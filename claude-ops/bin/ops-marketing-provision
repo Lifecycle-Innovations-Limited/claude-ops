@@ -1,0 +1,724 @@
+#!/usr/bin/env bash
+# ops-marketing-provision — self-provision marketing channels for a project
+#
+# Subcommands:
+#   provision-ga4 --project <key> [--domain <d>] [--account-id <acc>]
+#                 [--display-name <name>] [--industry SHOPPING|TECHNOLOGY]
+#   provision-gsc --project <key> [--site sc-domain:<d>|https://<d>/]
+#   provision-all --project <key>
+#   status        --project <key> [--json]
+#   --help
+#
+# Idempotent: GET-first, reuse existing matches before creating.
+# Set OPS_MARKETING_DRY_RUN=1 to print planned API calls without executing.
+# Set OPS_MARKETING_BACKGROUND=1 to suppress interactive prompts.
+#
+# No real account IDs, emails, or domains are hardcoded in this file.
+# All config is read from preferences.json and environment variables.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck disable=SC1091
+OPS_PLUGIN_ROOT_FALLBACK="${PLUGIN_ROOT}" . "${PLUGIN_ROOT}/lib/registry-path.sh"
+# shellcheck disable=SC1091
+. "${PLUGIN_ROOT}/scripts/lib/ga4-resolve.sh"
+
+PREFS="${OPS_DATA_DIR}/preferences.json"
+DRY_RUN="${OPS_MARKETING_DRY_RUN:-0}"
+# OPS_MARKETING_BACKGROUND=1 suppresses interactive prompts (used by callers / tests)
+export OPS_MARKETING_BACKGROUND="${OPS_MARKETING_BACKGROUND:-0}"
+DOPPLER_PROJECT="${OPS_MARKETING_DOPPLER_PROJECT:-claude-ops}"
+DOPPLER_CONFIG="${OPS_MARKETING_DOPPLER_CONFIG:-prd}"
+
+# ---------------------------------------------------------------------------
+# Logging helpers
+# ---------------------------------------------------------------------------
+log()  { printf '[provision] %s\n' "$1" >&2; }
+info() { printf '%s\n' "$1"; }
+die()  { printf '[provision] ERROR: %s\n' "$1" >&2; exit 1; }
+
+dry_notice() {
+  if [ "$DRY_RUN" = "1" ]; then
+    printf '[DRY-RUN] would execute: %s\n' "$1" >&2
+    return 0
+  fi
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Prereq checks
+# ---------------------------------------------------------------------------
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1 — please install it first"
+}
+
+# ---------------------------------------------------------------------------
+# curl helper — checks HTTP status, aborts on non-2xx
+# Usage: http_call <METHOD> <URL> [--data <body>] [--header "K: V"] ...
+# Returns response body. Exits non-zero on error.
+# ---------------------------------------------------------------------------
+http_call() {
+  local method="$1"; shift
+  local url="$1"; shift
+  local extra_args=()
+  while [ $# -gt 0 ]; do
+    extra_args+=("$1")
+    shift
+  done
+
+  local tmpfile
+  tmpfile="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -f '$tmpfile'" RETURN
+
+  local response http_code body
+  response=$(curl -sS -w "\n%{http_code}" -X "$method" "$url" "${extra_args[@]}" 2>&1)
+  http_code="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+
+  if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
+    log "HTTP $http_code from $method $url"
+    log "Response: $body"
+    die "API call failed with HTTP $http_code"
+  fi
+
+  printf '%s' "$body"
+}
+
+# Same as http_call but returns 1 on non-2xx without exiting; does not print
+# response body to stdout on failure (so "$(... || echo '{}')" fallbacks work).
+http_call_allow_fail() {
+  local method="$1"; shift
+  local url="$1"; shift
+  local extra_args=()
+  while [ $# -gt 0 ]; do
+    extra_args+=("$1")
+    shift
+  done
+
+  local tmpfile
+  tmpfile="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -f '$tmpfile'" RETURN
+
+  local response http_code body
+  response=$(curl -sS -w "\n%{http_code}" -X "$method" "$url" "${extra_args[@]}" 2>&1)
+  http_code="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+
+  if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
+    log "HTTP $http_code from $method $url"
+    log "Response: $body"
+    return 1
+  fi
+
+  printf '%s' "$body"
+}
+
+# ---------------------------------------------------------------------------
+# ADC token — get current access token with required scopes
+# ---------------------------------------------------------------------------
+ga4_get_token() {
+  local token
+  token=$(gcloud auth application-default print-access-token 2>/dev/null || true)
+  if [ -z "$token" ]; then
+    log "No Application Default Credentials found."
+    log "Run the OAuth bootstrap to authenticate:"
+    log ""
+    log "  gcloud auth application-default login \\"
+    log "    --scopes=openid,email,profile,\\"
+    log "https://www.googleapis.com/auth/cloud-platform,\\"
+    log "https://www.googleapis.com/auth/analytics.edit,\\"
+    log "https://www.googleapis.com/auth/analytics.manage.users,\\"
+    log "https://www.googleapis.com/auth/webmasters"
+    log ""
+    log "Store your OAuth client JSON at: ~/.gcp/ops-oauth-client.json"
+    log "Then re-run this command."
+    die "Missing ADC credentials"
+  fi
+  printf '%s' "$token"
+}
+
+gsc_get_token() {
+  ga4_get_token
+}
+
+# ---------------------------------------------------------------------------
+# Preferences helpers
+# ---------------------------------------------------------------------------
+prefs_get_raw() {
+  [ -f "$PREFS" ] || return 0
+  jq -r "$1" "$PREFS" 2>/dev/null || true
+}
+
+prefs_get_project_field() {
+  local proj="$1" channel="$2" field="$3"
+  prefs_get_raw ".marketing.projects[\"$proj\"][\"$channel\"][\"$field\"] // empty"
+}
+
+prefs_get_domain() {
+  local proj="$1"
+  prefs_get_raw ".marketing.projects[\"$proj\"].domain // .projects[\"$proj\"].domain // empty"
+}
+
+# Write a value into preferences.json using jq in-place update
+prefs_set_marketing() {
+  local proj="$1" channel="$2" field="$3" value="$4"
+  [ -f "$PREFS" ] || echo '{}' > "$PREFS"
+
+  local tmp
+  tmp="$(mktemp)"
+  jq --arg p "$proj" --arg c "$channel" --arg f "$field" --arg v "$value" \
+    '.marketing.projects[$p][$c][$f] = $v' "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
+  log "prefs: marketing.projects.$proj.$channel.$field = $value"
+}
+
+prefs_set_marketing_status() {
+  local proj="$1" channel="$2" status="$3"
+  prefs_set_marketing "$proj" "$channel" "status" "$status"
+}
+
+# ---------------------------------------------------------------------------
+# Doppler push helper
+# ---------------------------------------------------------------------------
+doppler_set() {
+  local key="$1" value="$2"
+  if dry_notice "doppler secrets upload {\"$key\": \"<secret>\"} --project $DOPPLER_PROJECT --config $DOPPLER_CONFIG"; then
+    return 0
+  fi
+  need_cmd doppler
+  if printf '%s' "{\"$key\": \"$value\"}" | \
+    doppler secrets upload - --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" >/dev/null 2>&1; then
+    log "Doppler: set $key in $DOPPLER_PROJECT/$DOPPLER_CONFIG"
+  else
+    log "WARN: Doppler push failed for $key — set manually"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# GA4 provisioning
+# ---------------------------------------------------------------------------
+cmd_provision_ga4() {
+  local project="" domain="" account_id="" display_name="" industry="TECHNOLOGY"
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project)       project="${2:-}";      shift ;;
+      --domain)        domain="${2:-}";       shift ;;
+      --account-id)    account_id="${2:-}";   shift ;;
+      --display-name)  display_name="${2:-}"; shift ;;
+      --industry)      industry="${2:-}";     shift ;;
+      *) die "Unknown argument: $1" ;;
+    esac
+    shift
+  done
+
+  [ -n "$project" ] || die "--project is required"
+
+  need_cmd gcloud
+  need_cmd curl
+  need_cmd jq
+
+  # Resolve domain from prefs if not provided
+  if [ -z "$domain" ]; then
+    domain="$(prefs_get_domain "$project")"
+  fi
+  [ -n "$domain" ] || die "--domain is required (or set marketing.projects.$project.domain in preferences.json)"
+
+  # Resolve display name
+  if [ -z "$display_name" ]; then
+    display_name="$(printf '%s' "$project" | awk '{ print toupper(substr($0, 1, 1)) substr($0, 2) }') Web"
+  fi
+
+  # Resolve GA4 account ID from prefs or env
+  if [ -z "$account_id" ]; then
+    account_id="${GA4_ACCOUNT_ID:-$(prefs_get_raw '.marketing.ga4_account_id // empty')}"
+  fi
+  [ -n "$account_id" ] || die "--account-id is required (or set GA4_ACCOUNT_ID env / marketing.ga4_account_id in prefs)"
+  account_id="${account_id#accounts/}"
+
+  local token
+  if [ "$DRY_RUN" = "1" ]; then
+    token="dry-run"
+  else
+    token="$(ga4_get_token)"
+  fi
+
+  local auth_header="Authorization: Bearer $token"
+  local base_admin="https://analyticsadmin.googleapis.com"
+
+  log "Provisioning GA4 for project=$project domain=$domain account=accounts/$account_id"
+
+  # --- Step 1: Bind SA access (idempotent) ---
+  local sa_email="${GA4_SERVICE_ACCOUNT_EMAIL:-}"
+  if [ -n "$sa_email" ]; then
+    log "Checking SA access binding for $sa_email..."
+    if dry_notice "POST $base_admin/v1alpha/accounts/$account_id/accessBindings {user: $sa_email}"; then
+      true
+    else
+      # Check existing
+      local existing_bindings
+      existing_bindings="$(http_call_allow_fail GET "$base_admin/v1alpha/accounts/$account_id/accessBindings" \
+        -H "$auth_header" 2>/dev/null || echo '{}')"
+      local already_bound
+      already_bound="$(printf '%s' "$existing_bindings" | jq -r \
+        --arg sa "$sa_email" '.accessBindings[]? | select(.user == $sa) | .name' 2>/dev/null || true)"
+
+      if [ -z "$already_bound" ]; then
+        http_call POST "$base_admin/v1alpha/accounts/$account_id/accessBindings" \
+          -H "$auth_header" -H "Content-Type: application/json" \
+          --data "{\"user\":\"$sa_email\",\"roles\":[\"predefinedRoles/admin\"]}" >/dev/null
+        log "SA access binding created"
+      else
+        log "SA access binding already exists: $already_bound"
+      fi
+    fi
+  fi
+
+  # --- Step 2: Find or create GA4 property ---
+  log "Checking for existing GA4 property '$display_name'..."
+  local property_id=""
+  if dry_notice "GET $base_admin/v1beta/properties?filter=parent:accounts/$account_id"; then
+    property_id="000000000"
+    log "[DRY-RUN] Using placeholder property_id=$property_id"
+  else
+    local props_resp
+    props_resp="$(http_call GET "$base_admin/v1beta/properties?filter=parent:accounts%2F$account_id" \
+      -H "$auth_header")"
+    property_id="$(printf '%s' "$props_resp" | jq -r \
+      --arg name "$display_name" \
+      '.properties[]? | select(.displayName == $name) | .name | split("/")[1]' 2>/dev/null | head -1 || true)"
+
+    if [ -z "$property_id" ]; then
+      log "Creating GA4 property '$display_name'..."
+      local create_resp
+      create_resp="$(http_call POST "$base_admin/v1beta/properties" \
+        -H "$auth_header" -H "Content-Type: application/json" \
+        --data "{
+          \"parent\": \"accounts/$account_id\",
+          \"displayName\": \"$display_name\",
+          \"industryCategory\": \"$industry\",
+          \"timeZone\": \"Europe/Amsterdam\",
+          \"currencyCode\": \"USD\"
+        }")"
+      property_id="$(printf '%s' "$create_resp" | jq -r '.name | split("/")[1]' 2>/dev/null)"
+      log "Created GA4 property: $property_id"
+    else
+      log "Found existing GA4 property: $property_id"
+    fi
+  fi
+
+  # --- Step 3: Find or create web data stream ---
+  log "Checking for existing web data stream..."
+  local stream_id="" measurement_id=""
+  if dry_notice "GET $base_admin/v1beta/properties/$property_id/dataStreams"; then
+    stream_id="0000000000"
+    measurement_id="G-XXXXXXXXXX"
+    log "[DRY-RUN] Using placeholder stream_id=$stream_id measurement_id=$measurement_id"
+  else
+    local streams_resp
+    streams_resp="$(http_call GET "$base_admin/v1beta/properties/$property_id/dataStreams" \
+      -H "$auth_header")"
+    local domain_clean="${domain#https://}"; domain_clean="${domain_clean#http://}"; domain_clean="${domain_clean%/}"
+    stream_id="$(printf '%s' "$streams_resp" | jq -r \
+      --arg d "$domain_clean" \
+      '.dataStreams[]? | select(.type == "WEB_DATA_STREAM") | select(.webStreamData.defaultUri | test($d; "i")) | .name | split("/")[3]' \
+      2>/dev/null | head -1 || true)"
+
+    if [ -z "$stream_id" ]; then
+      log "Creating web data stream for https://$domain_clean..."
+      local stream_resp
+      stream_resp="$(http_call POST "$base_admin/v1beta/properties/$property_id/dataStreams" \
+        -H "$auth_header" -H "Content-Type: application/json" \
+        --data "{
+          \"type\": \"WEB_DATA_STREAM\",
+          \"displayName\": \"$display_name Web\",
+          \"webStreamData\": {\"defaultUri\": \"https://$domain_clean\"}
+        }")"
+      stream_id="$(printf '%s' "$stream_resp" | jq -r '.name | split("/")[3]' 2>/dev/null)"
+      measurement_id="$(printf '%s' "$stream_resp" | jq -r '.webStreamData.measurementId // empty' 2>/dev/null)"
+      log "Created stream: $stream_id, measurement_id: $measurement_id"
+    else
+      measurement_id="$(printf '%s' "$streams_resp" | jq -r \
+        --arg sid "$stream_id" \
+        '.dataStreams[]? | select(.name | endswith($sid)) | .webStreamData.measurementId // empty' \
+        2>/dev/null || true)"
+      log "Found existing stream: $stream_id, measurement_id: $measurement_id"
+    fi
+  fi
+
+  # --- Step 4: Find or create Measurement Protocol secret ---
+  log "Checking for existing MP secret..."
+  local api_secret=""
+  if dry_notice "GET $base_admin/v1beta/properties/$property_id/dataStreams/$stream_id/measurementProtocolSecrets"; then
+    api_secret="fake-mp-secret-for-dry-run"
+    log "[DRY-RUN] Using placeholder api_secret"
+  else
+    local secrets_resp
+    secrets_resp="$(http_call GET \
+      "$base_admin/v1beta/properties/$property_id/dataStreams/$stream_id/measurementProtocolSecrets" \
+      -H "$auth_header")"
+    api_secret="$(printf '%s' "$secrets_resp" | jq -r \
+      '.measurementProtocolSecrets[]? | select(.displayName == "server-events") | .secretValue // empty' \
+      2>/dev/null | head -1 || true)"
+
+    if [ -z "$api_secret" ]; then
+      log "Creating MP secret 'server-events'..."
+      local secret_resp
+      secret_resp="$(http_call POST \
+        "$base_admin/v1beta/properties/$property_id/dataStreams/$stream_id/measurementProtocolSecrets" \
+        -H "$auth_header" -H "Content-Type: application/json" \
+        --data '{"displayName":"server-events"}')"
+      api_secret="$(printf '%s' "$secret_resp" | jq -r '.secretValue // empty' 2>/dev/null)"
+      log "Created MP secret"
+    else
+      log "Found existing MP secret"
+    fi
+  fi
+
+  # --- Step 5: Push secret to Doppler ---
+  local doppler_key
+  doppler_key="GA4_API_SECRET_$(printf '%s' "$project" | tr '[:lower:]-' '[:upper:]_')"
+  doppler_set "$doppler_key" "$api_secret"
+
+  # --- Step 6: Write to preferences.json ---
+  if [ "$DRY_RUN" != "1" ]; then
+    prefs_set_marketing "$project" "ga4" "property_id" "$property_id"
+    prefs_set_marketing "$project" "ga4" "measurement_id" "$measurement_id"
+    prefs_set_marketing "$project" "ga4" "stream_id" "$stream_id"
+    prefs_set_marketing "$project" "ga4" "api_secret" "doppler:$DOPPLER_PROJECT/$DOPPLER_CONFIG/$doppler_key"
+    prefs_set_marketing_status "$project" "ga4" "active"
+  fi
+
+  info ""
+  info "GA4 provisioned for project: $project"
+  info "  property_id:    $property_id"
+  info "  measurement_id: $measurement_id"
+  info "  stream_id:      $stream_id"
+  info "  api_secret:     stored in Doppler as $doppler_key"
+}
+
+# ---------------------------------------------------------------------------
+# GSC provisioning
+# ---------------------------------------------------------------------------
+cmd_provision_gsc() {
+  local project="" site_url=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project) project="${2:-}"; shift ;;
+      --site)    site_url="${2:-}"; shift ;;
+      *) die "Unknown argument: $1" ;;
+    esac
+    shift
+  done
+
+  [ -n "$project" ] || die "--project is required"
+
+  need_cmd gcloud
+  need_cmd curl
+  need_cmd jq
+
+  # Resolve site URL from prefs if not provided
+  if [ -z "$site_url" ]; then
+    site_url="$(prefs_get_project_field "$project" "gsc" "site_url")"
+  fi
+  if [ -z "$site_url" ]; then
+    local domain
+    domain="$(prefs_get_domain "$project")"
+    [ -n "$domain" ] && site_url="https://$domain/"
+  fi
+  [ -n "$site_url" ] || die "--site is required (e.g. sc-domain:example.com or https://example.com/)"
+
+  local token
+  if [ "$DRY_RUN" = "1" ]; then
+    token="dry-run"
+  else
+    token="$(gsc_get_token)"
+  fi
+  local auth_header="Authorization: Bearer $token"
+  local base_gsc="https://searchconsole.googleapis.com/webmasters/v3"
+
+  log "Provisioning GSC for project=$project site=$site_url"
+
+  # URL-encode the site URL
+  local site_encoded
+  site_encoded="$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$site_url" 2>/dev/null \
+    || printf '%s' "$site_url" | sed 's|:|%3A|g; s|/|%2F|g')"
+
+  # --- Step 1: Check if site already added ---
+  local already_added=0
+  if dry_notice "GET $base_gsc/sites"; then
+    log "[DRY-RUN] Skipping site list check"
+  else
+    local sites_resp
+    sites_resp="$(http_call_allow_fail GET "$base_gsc/sites" -H "$auth_header" 2>/dev/null || echo '{}')"
+    local found
+    found="$(printf '%s' "$sites_resp" | jq -r \
+      --arg s "$site_url" '.siteEntry[]? | select(.siteUrl == $s) | .siteUrl' 2>/dev/null || true)"
+    [ -n "$found" ] && already_added=1
+  fi
+
+  if [ "$already_added" = "1" ]; then
+    log "Site already added to Search Console: $site_url"
+  else
+    log "Adding site to Search Console: $site_url"
+    if ! dry_notice "PUT $base_gsc/sites/$site_encoded"; then
+      http_call_allow_fail PUT "$base_gsc/sites/$site_encoded" -H "$auth_header" >/dev/null 2>&1 \
+        || log "WARN: PUT site returned non-2xx — site may need manual verification"
+    fi
+  fi
+
+  # --- Step 2: Verification via DNS TXT ---
+  log "Checking verification token..."
+  local verify_token=""
+  if ! dry_notice "GET $base_gsc/sites/$site_encoded/siteVerificationToken"; then
+    local token_resp
+    token_resp="$(http_call_allow_fail GET "$base_gsc/sites/$site_encoded" \
+      -H "$auth_header" 2>/dev/null || echo '{}')"
+    # The token is surfaced via webmasters API v1 (not v3); use that for verification info
+    local verify_method
+    verify_method="$(printf '%s' "$token_resp" | jq -r '.verificationState // "unverified"' 2>/dev/null || echo "unverified")"
+    log "Verification state: $verify_method"
+
+    # Try to get DNS TXT token via site verification API
+    local svt_resp svt_type svt_identifier
+    if [[ "$site_url" == sc-domain:* ]]; then
+      svt_type="INET_DOMAIN"
+      svt_identifier="${site_url#sc-domain:}"
+    else
+      svt_type="SITE"
+      svt_identifier="$site_url"
+    fi
+    svt_resp="$(http_call_allow_fail POST \
+      "https://www.googleapis.com/siteVerification/v1/token" \
+      -H "$auth_header" -H "Content-Type: application/json" \
+      --data "{\"site\":{\"type\":\"$svt_type\",\"identifier\":\"$svt_identifier\"},\"verificationMethod\":\"DNS_TXT\"}" \
+      2>/dev/null || echo '{}')"
+    verify_token="$(printf '%s' "$svt_resp" | jq -r '.token // empty' 2>/dev/null || true)"
+  else
+    verify_token="google-site-verification=DRY-RUN-PLACEHOLDER"
+  fi
+
+  # --- Step 3: Auto-add DNS TXT if Cloudflare available ---
+  local cf_token="${CLOUDFLARE_API_TOKEN:-}"
+  local cf_key="${CLOUDFLARE_API_KEY:-}"
+  local cf_email="${CLOUDFLARE_EMAIL:-}"
+  local dns_done=0
+
+  if [ -n "$verify_token" ] && { [ -n "$cf_token" ] || { [ -n "$cf_key" ] && [ -n "$cf_email" ]; }; }; then
+    local cf_auth_header=""
+    if [ -n "$cf_token" ]; then
+      cf_auth_header="Authorization: Bearer $cf_token"
+    else
+      cf_auth_header="X-Auth-Key: $cf_key"
+    fi
+
+    # Extract the root domain for zone lookup
+    local site_domain="${site_url#sc-domain:}"
+    site_domain="${site_domain#https://}"; site_domain="${site_domain#http://}"; site_domain="${site_domain%/}"
+    # Get the root domain (last two parts)
+    local root_domain
+    root_domain="$(printf '%s' "$site_domain" | awk -F. '{print $(NF-1)"."$NF}')"
+
+    log "Looking up Cloudflare zone for $root_domain..."
+    if ! dry_notice "GET https://api.cloudflare.com/client/v4/zones?name=$root_domain"; then
+      local zone_resp
+      zone_resp="$(curl -sS -w "\n%{http_code}" \
+        -H "$cf_auth_header" ${cf_email:+-H "X-Auth-Email: $cf_email"} \
+        "https://api.cloudflare.com/client/v4/zones?name=$root_domain" 2>/dev/null || echo '{}'$'\n'"0")"
+      local zone_code="${zone_resp##*$'\n'}"
+      local zone_body="${zone_resp%$'\n'*}"
+
+      if [ "$zone_code" = "200" ]; then
+        local zone_id
+        zone_id="$(printf '%s' "$zone_body" | jq -r '.result[0].id // empty' 2>/dev/null || true)"
+
+        if [ -n "$zone_id" ]; then
+          # Check for existing TXT record
+          local existing_txt
+          existing_txt="$(curl -sS \
+            -H "$cf_auth_header" ${cf_email:+-H "X-Auth-Email: $cf_email"} \
+            "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records?type=TXT&name=$root_domain" \
+            2>/dev/null | jq -r \
+            --arg t "$verify_token" '.result[]? | select(.content == $t) | .id' 2>/dev/null || true)"
+
+          if [ -z "$existing_txt" ]; then
+            log "Adding DNS TXT verification record via Cloudflare..."
+            if curl -sS -X POST \
+              -H "$cf_auth_header" ${cf_email:+-H "X-Auth-Email: $cf_email"} \
+              -H "Content-Type: application/json" \
+              "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records" \
+              --data "{\"type\":\"TXT\",\"name\":\"$root_domain\",\"content\":\"$verify_token\",\"ttl\":120}" \
+              >/dev/null 2>&1; then
+              log "DNS TXT record added"
+            else
+              log "WARN: DNS TXT upsert failed — add manually"
+            fi
+          else
+            log "DNS TXT record already exists"
+          fi
+          dns_done=1
+        fi
+      fi
+    else
+      dns_done=1
+    fi
+  fi
+
+  if [ "$dns_done" = "0" ] && [ -n "$verify_token" ]; then
+    info ""
+    info "Add this DNS TXT record to verify site ownership:"
+    info "  Type: TXT"
+    info "  Name: @ (root of your domain)"
+    info "  Value: $verify_token"
+    info ""
+    info "After adding, re-run: $0 provision-gsc --project $project --site $site_url"
+  fi
+
+  # --- Step 4: Write to preferences.json ---
+  if [ "$DRY_RUN" != "1" ]; then
+    prefs_set_marketing "$project" "gsc" "site_url" "$site_url"
+    prefs_set_marketing_status "$project" "gsc" "active"
+  fi
+
+  info ""
+  info "GSC provisioned for project: $project"
+  info "  site_url: $site_url"
+  [ -n "$verify_token" ] && info "  verify_token: $verify_token"
+}
+
+# ---------------------------------------------------------------------------
+# provision-all
+# ---------------------------------------------------------------------------
+cmd_provision_all() {
+  local project="" site_for_gsc="" ga4_remaining=()
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project) project="${2:-}"; shift ;;
+      --site) site_for_gsc="${2:-}"; shift ;;
+      *) ga4_remaining+=("$1") ;;
+    esac
+    shift
+  done
+
+  [ -n "$project" ] || die "--project is required"
+
+  info "Provisioning all channels for project: $project"
+  info ""
+
+  info "--- GA4 ---"
+  cmd_provision_ga4 --project "$project" "${ga4_remaining[@]+"${ga4_remaining[@]}"}"
+  info ""
+
+  info "--- Google Search Console ---"
+  if [ -n "$site_for_gsc" ]; then
+    cmd_provision_gsc --project "$project" --site "$site_for_gsc"
+  else
+    cmd_provision_gsc --project "$project"
+  fi
+  info ""
+
+  info "Done. Run: $0 status --project $project"
+}
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+cmd_status() {
+  local project="" json_mode=0
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project) project="${2:-}"; shift ;;
+      --json)    json_mode=1 ;;
+      *) die "Unknown argument: $1" ;;
+    esac
+    shift
+  done
+
+  [ -n "$project" ] || die "--project is required"
+
+  if [ "$json_mode" = "1" ]; then
+    marketing_channels_status "$project" --json
+  else
+    info "Marketing channel status for project: $project"
+    info ""
+    marketing_channels_status "$project"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# help
+# ---------------------------------------------------------------------------
+cmd_help() {
+  cat <<'HELP'
+ops-marketing-provision — self-provision marketing channels
+
+Usage:
+  ops-marketing-provision provision-ga4 --project <key> [options]
+  ops-marketing-provision provision-gsc --project <key> [--site <url>]
+  ops-marketing-provision provision-all --project <key> [options]
+  ops-marketing-provision status        --project <key> [--json]
+  ops-marketing-provision --help
+
+provision-ga4 options:
+  --project <key>          Project key (matches preferences.json marketing.projects.<key>)
+  --domain <domain>        Domain for the web stream (e.g. acme.example)
+  --account-id <acc>       GA4 account ID (or set GA4_ACCOUNT_ID env)
+  --display-name <name>    GA4 property display name (default: "<project> Web")
+  --industry <cat>         SHOPPING or TECHNOLOGY (default: TECHNOLOGY)
+
+provision-gsc options:
+  --project <key>          Project key
+  --site <url>             Site URL: sc-domain:example.com or https://example.com/
+
+Environment variables:
+  OPS_MARKETING_DRY_RUN=1          Print planned actions, no network calls
+  OPS_MARKETING_BACKGROUND=1       Suppress interactive prompts
+  OPS_MARKETING_DOPPLER_PROJECT     Doppler project for secrets (default: claude-ops)
+  OPS_MARKETING_DOPPLER_CONFIG      Doppler config for secrets (default: prd)
+  GA4_ACCOUNT_ID                    GA4 account ID
+  GA4_SERVICE_ACCOUNT_EMAIL         SA email to bind account-level admin access
+  CLOUDFLARE_API_TOKEN              Cloudflare Bearer token for DNS auto-upsert
+  CLOUDFLARE_API_KEY + CLOUDFLARE_EMAIL  Alternative Cloudflare auth
+
+OAuth bootstrap (required before first run):
+  gcloud auth application-default login \
+    --scopes=openid,email,profile,\
+https://www.googleapis.com/auth/cloud-platform,\
+https://www.googleapis.com/auth/analytics.edit,\
+https://www.googleapis.com/auth/analytics.manage.users,\
+https://www.googleapis.com/auth/webmasters
+
+  Store OAuth client JSON at: ~/.gcp/ops-oauth-client.json (never committed)
+
+Worked example:
+  ops-marketing-provision provision-ga4 \
+    --project myapp \
+    --domain myapp.example \
+    --account-id <YOUR_GA4_ACCOUNT_ID> \
+    --industry TECHNOLOGY
+
+  ops-marketing-provision status --project myapp --json
+HELP
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+SUBCMD="${1:-}"
+[ -n "$SUBCMD" ] || { cmd_help; exit 0; }
+shift
+
+case "$SUBCMD" in
+  provision-ga4)  cmd_provision_ga4 "$@" ;;
+  provision-gsc)  cmd_provision_gsc "$@" ;;
+  provision-all)  cmd_provision_all "$@" ;;
+  status)         cmd_status "$@" ;;
+  --help|-h|help) cmd_help ;;
+  *) die "Unknown subcommand: $SUBCMD — run '$0 --help' for usage" ;;
+esac
