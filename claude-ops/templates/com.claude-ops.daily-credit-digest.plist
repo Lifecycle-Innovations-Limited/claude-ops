@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Daily Anthropic credit-pool digest cron (HEA-4047).
+
+  Schedule: every day, 09:00 local time (Europe/Amsterdam for Sam).
+  Equivalent cron: 0 9 * * *
+
+  The installer (scripts/install-daily-credit-digest.sh) substitutes
+  __SCRIPT_PATH__, __LOG_DIR__, __HOME__, __NODE_BIN__, __SLACK_WEBHOOK_URL__,
+  __AWS_REGION__ (from SLACK_WEBHOOK_URL / AWS_REGION at install time; empty if
+  unset) and writes the rendered copy to
+  ~/Library/LaunchAgents/com.claude-ops.daily-credit-digest.plist
+  before running:
+    launchctl bootstrap "gui/$(id -u)" <plist>
+
+  To uninstall:
+    launchctl bootout "gui/$(id -u)/com.claude-ops.daily-credit-digest"
+    rm ~/Library/LaunchAgents/com.claude-ops.daily-credit-digest.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.claude-ops.daily-credit-digest</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE_BIN__</string>
+    <string>__SCRIPT_PATH__</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/daily-credit-digest-stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/daily-credit-digest-stderr.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>NODE_NO_WARNINGS</key>
+    <string>1</string>
+    <key>SLACK_WEBHOOK_URL</key>
+    <string>__SLACK_WEBHOOK_URL__</string>
+    <key>AWS_REGION</key>
+    <string>__AWS_REGION__</string>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
