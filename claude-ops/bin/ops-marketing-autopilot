@@ -65,12 +65,14 @@ ONLY_PROJECT=""
 ONLY_CHANNEL=""
 DO_ONBOARD=0
 ONBOARD_URL=""
+DO_HEALTH_CHECK=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dry-run)  DRY_RUN=1 ;;
-    --project)  ONLY_PROJECT="${2:-}"; shift ;;
-    --channel)  ONLY_CHANNEL="${2:-}"; shift ;;
-    --onboard)  DO_ONBOARD=1 ;;
+    --dry-run)      DRY_RUN=1 ;;
+    --project)      ONLY_PROJECT="${2:-}"; shift ;;
+    --channel)      ONLY_CHANNEL="${2:-}"; shift ;;
+    --onboard)      DO_ONBOARD=1 ;;
+    --health-check) DO_HEALTH_CHECK=1 ;;
     onboard)
       DO_ONBOARD=1
       if [ -n "${2:-}" ] && [[ "${2:-}" != --* ]]; then
@@ -108,6 +110,14 @@ chan_cred() {
   [ -f "$PREFS" ] || return 0
   resolve_cred "$(jq -r --arg p "$1" --arg c "$2" --arg f "$3" \
     '.marketing.projects[$p][$c][$f] // empty' "$PREFS" 2>/dev/null)"
+}
+chan_cred_strict() {
+  # Like chan_cred but propagates resolve_cred_strict rc (0=ok, 1=not-configured, 2=broken)
+  [ -f "$PREFS" ] || return 1
+  local ref
+  ref="$(jq -r --arg p "$1" --arg c "$2" --arg f "$3" \
+    '.marketing.projects[$p][$c][$f] // empty' "$PREFS" 2>/dev/null)"
+  resolve_cred_strict "$ref"
 }
 
 # ── Report + escalation ───────────────────────────────────────────────────────
@@ -459,24 +469,178 @@ meta_proof() {
 }
 meta_get() {
   # $1 = path?query (no host). Appends auth + proof.
-  local q="$1" sep="?"
+  # Handles rc=190 (token expired) and rc=17/4 (rate limit with backoff).
+  local q="$1" sep="?" proj="${2:-${_META_CURRENT_PROJ:-}}"
   case "$q" in *\?*) sep="&";; esac
   local url="${GRAPH}/${q}${sep}access_token=${META_TOKEN}"
   [ -n "$META_PROOF" ] && url="${url}&appsecret_proof=${META_PROOF}"
-  curl -gsS --max-time 12 "$url" 2>/dev/null || echo '{}'
+
+  local resp attempt delay
+  delay=1
+  for attempt in 1 2 3; do
+    resp="$(curl -gsS --max-time 12 "$url" 2>/dev/null || echo '{}')"
+    local err_code
+    err_code="$(printf '%s' "$resp" | jq -r '.error.code // empty' 2>/dev/null || true)"
+    case "$err_code" in
+      190)
+        # Token expired / invalidated — attempt long-lived refresh
+        if [ -n "$proj" ] && meta_refresh_token "$proj"; then
+          # Update url with new token + proof
+          url="${GRAPH}/${q}${sep}access_token=${META_TOKEN}"
+          [ -n "$META_PROOF" ] && url="${url}&appsecret_proof=${META_PROOF}"
+          resp="$(curl -gsS --max-time 12 "$url" 2>/dev/null || echo '{}')"
+          # If still error 190 after refresh, escalate
+          local err2; err2="$(printf '%s' "$resp" | jq -r '.error.code // empty' 2>/dev/null || true)"
+          if [ "$err2" = "190" ]; then
+            escalate "$proj" "Meta token expired and refresh failed — manual rotation needed"
+            printf '{}'
+            return 0
+          fi
+        else
+          escalate "${proj:-unknown}" "Meta token expired (code 190) and no app_id/app_secret for auto-refresh — manual rotation needed"
+          printf '{}'
+          return 0
+        fi
+        ;;
+      17|4)
+        # Rate limit — exponential backoff up to 3 retries
+        if [ "$attempt" -lt 3 ]; then
+          log "meta_get: rate limit (code ${err_code}), backoff ${delay}s (attempt ${attempt}/3)"
+          sleep "$delay"
+          delay=$((delay * 4))
+          continue
+        else
+          escalate "${proj:-unknown}" "Meta API rate limit (code ${err_code}) — 3 retries exhausted"
+          printf '{}'
+          return 0
+        fi
+        ;;
+      "") : ;;  # no error code — success or unrelated
+    esac
+    break
+  done
+  printf '%s' "$resp"
+}
+
+meta_refresh_token() {
+  # Attempt to exchange current META_TOKEN for a new long-lived token.
+  # Requires META_${PROJECT^^}_APP_ID and META_${PROJECT^^}_APP_SECRET in env/Doppler.
+  # On success: updates META_TOKEN in-memory, writes new token to Doppler, returns 0.
+  # On failure: returns 1 (caller should escalate).
+  local proj="$1"
+  local proj_upper; proj_upper="$(printf '%s' "$proj" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
+
+  local app_id app_secret _env_id_name _env_sec_name
+  app_id="$(chan_cred "$proj" meta app_id)"
+  app_secret="$(chan_cred "$proj" meta app_secret)"
+  # Fallback to env vars META_<PROJECT>_APP_ID / META_<PROJECT>_APP_SECRET
+  if [ -z "$app_id" ]; then
+    _env_id_name="META_${proj_upper}_APP_ID"
+    app_id="${!_env_id_name:-}"
+  fi
+  if [ -z "$app_secret" ]; then
+    _env_sec_name="META_${proj_upper}_APP_SECRET"
+    app_secret="${!_env_sec_name:-}"
+  fi
+
+  if [ -z "$app_id" ] || [ -z "$app_secret" ]; then
+    log "meta_refresh_token: missing app_id or app_secret for $proj — cannot auto-refresh"
+    return 1
+  fi
+
+  local refresh_resp new_token
+  refresh_resp="$(curl -gsS --max-time 15 \
+    "https://graph.facebook.com/v20.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${app_id}&client_secret=${app_secret}&fb_exchange_token=${META_TOKEN}" \
+    2>/dev/null || echo '{}')"
+  new_token="$(printf '%s' "$refresh_resp" | jq -r '.access_token // empty' 2>/dev/null || true)"
+
+  if [ -z "$new_token" ]; then
+    local err_msg; err_msg="$(printf '%s' "$refresh_resp" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown')"
+    log "meta_refresh_token: refresh failed for $proj — $err_msg"
+    return 1
+  fi
+
+  # Write new token to Doppler (best-effort, non-fatal)
+  local doppler_ref
+  doppler_ref="$(jq -r --arg p "$proj" '.marketing.projects[$p].meta.access_token // empty' "$PREFS" 2>/dev/null || true)"
+  if [[ "$doppler_ref" == doppler:* ]]; then
+    local dpath="${doppler_ref#doppler:}"
+    local dproj="${dpath%%/*}"
+    local drest="${dpath#*/}"; local dcfg="${drest%%/*}"; local dsecret="${drest#*/}"
+    if [ -n "$dproj" ] && [ -n "$dcfg" ] && [ -n "$dsecret" ]; then
+      if [ "$DRY_RUN" = "1" ]; then
+        log "[DRY] would write refreshed Meta token to Doppler ${dproj}/${dcfg}/${dsecret}"
+      else
+        printf '%s' "$new_token" | doppler secrets set "$dsecret" --project "$dproj" --config "$dcfg" --no-interactive 2>/dev/null || \
+          log "meta_refresh_token: Doppler write failed for $proj (non-fatal)"
+      fi
+    fi
+  fi
+
+  # Update in-memory token + proof
+  META_TOKEN="$new_token"
+  local app_sec_for_proof; app_sec_for_proof="$(chan_cred "$proj" meta app_secret)"
+  META_PROOF="$(meta_proof "$META_TOKEN" "$app_sec_for_proof")"
+  log "auto-refreshed Meta token for $proj"
+  report "- [token] Meta access token auto-refreshed for $proj"
+  return 0
+}
+
+meta_account_health() {
+  # Check Meta ad account status once per pass. Escalates on non-active states.
+  local proj="$1" acct="$2"
+  local health_resp
+  health_resp="$(meta_get "${acct}?fields=account_status,disable_reason,balance,spend_cap" "$proj")"
+  local status; status="$(printf '%s' "$health_resp" | jq -r '.account_status // empty' 2>/dev/null || true)"
+  [ -z "$status" ] && return 0  # field not returned — skip
+  case "$status" in
+    1) report "- meta account health: active" ;;
+    2) escalate "$proj" "Meta ad account disabled (account_status=2, disable_reason=$(printf '%s' "$health_resp" | jq -r '.disable_reason // "unknown"' 2>/dev/null))" ;;
+    3) escalate "$proj" "Meta ad account unsettled (account_status=3) — outstanding balance" ;;
+    7) escalate "$proj" "Meta ad account pending review (account_status=7)" ;;
+    8) report "- meta account health: in grace period (account_status=8)" ;;
+    9) escalate "$proj" "Meta ad account pending closure (account_status=9)" ;;
+    *) escalate "$proj" "Meta ad account in unexpected state (account_status=${status})" ;;
+  esac
 }
 
 process_meta() {
   local proj="$1"
-  META_TOKEN="$(chan_cred "$proj" meta access_token)"
-  local acct app_secret
-  acct="$(chan_cred "$proj" meta ad_account_id)"
-  app_secret="$(chan_cred "$proj" meta app_secret)"
-  if [ -z "$META_TOKEN" ] || [ -z "$acct" ]; then
+  _META_CURRENT_PROJ="$proj"
+  export _META_CURRENT_PROJ
+
+  # Strict credential resolution — distinguish not-configured vs declared-but-empty
+  local _tok_ref _acct_ref
+  _tok_ref="$(jq -r --arg p "$proj" '.marketing.projects[$p].meta.access_token // empty' "$PREFS" 2>/dev/null)"
+  _acct_ref="$(jq -r --arg p "$proj" '.marketing.projects[$p].meta.ad_account_id // empty' "$PREFS" 2>/dev/null)"
+
+  local _tok_val _acct_val _tok_rc _acct_rc
+  _tok_val="$(resolve_cred_strict "$_tok_ref")";  _tok_rc=$?
+  _acct_val="$(resolve_cred_strict "$_acct_ref")"; _acct_rc=$?
+
+  if [ "$_tok_rc" = "1" ] || [ "$_acct_rc" = "1" ]; then
     report "- meta: not configured (missing access_token/ad_account_id) — skipped"
     return 0
   fi
+  if [ "$_tok_rc" = "2" ]; then
+    escalate "$proj" "Doppler ref declared but empty: meta.access_token ($( jq -r --arg p "$proj" '.marketing.projects[$p].meta.access_token' "$PREFS" 2>/dev/null))"
+    return 0
+  fi
+  if [ "$_acct_rc" = "2" ]; then
+    escalate "$proj" "Doppler ref declared but empty: meta.ad_account_id ($( jq -r --arg p "$proj" '.marketing.projects[$p].meta.ad_account_id' "$PREFS" 2>/dev/null))"
+    return 0
+  fi
+
+  META_TOKEN="$_tok_val"
+  local acct app_secret
+  acct="$_acct_val"
+  app_secret="$(chan_cred "$proj" meta app_secret)"
   META_PROOF="$(meta_proof "$META_TOKEN" "$app_secret")"
+
+  # Account health check (status, disabled, unsettled, etc.)
+  meta_account_health "$proj" "$acct"
+  # If escalated by account health, abort Meta pass
+  [ "$ESCALATED" = "1" ] && return 0
 
   local cap; cap="$(ap_get "$proj" '.daily_spend_cap_usd')"
   local cpl_mult ctr_floor min_live
@@ -661,14 +825,48 @@ process_google_ads() {
   fi
 
   local cap; cap="$(ap_get "$proj" '.daily_spend_cap_usd')"
-  local access
-  access="$(curl -gsS --max-time 8 -X POST https://oauth2.googleapis.com/token \
+
+  # Strict credential check for declared-but-empty Doppler refs
+  local _ref_dev _ref_refresh _ref_cid
+  _ref_dev="$(jq -r --arg p "$proj" '.marketing.projects[$p].google_ads.developer_token // empty' "$PREFS" 2>/dev/null)"
+  _ref_refresh="$(jq -r --arg p "$proj" '.marketing.projects[$p].google_ads.refresh_token // empty' "$PREFS" 2>/dev/null)"
+  _ref_cid="$(jq -r --arg p "$proj" '.marketing.projects[$p].google_ads.customer_id // empty' "$PREFS" 2>/dev/null)"
+  local _rc
+  resolve_cred_strict "$_ref_dev" >/dev/null;     _rc=$?; [ "$_rc" = "2" ] && { escalate "$proj" "Doppler ref declared but empty: google_ads.developer_token ($_ref_dev)"; return 0; }
+  resolve_cred_strict "$_ref_refresh" >/dev/null; _rc=$?; [ "$_rc" = "2" ] && { escalate "$proj" "Doppler ref declared but empty: google_ads.refresh_token ($_ref_refresh)"; return 0; }
+  resolve_cred_strict "$_ref_cid" >/dev/null;     _rc=$?; [ "$_rc" = "2" ] && { escalate "$proj" "Doppler ref declared but empty: google_ads.customer_id ($_ref_cid)"; return 0; }
+
+  local token_resp access gads_err_desc
+  token_resp="$(curl -gsS --max-time 8 -X POST https://oauth2.googleapis.com/token \
     --data "client_id=${client_id}&client_secret=${client_secret}&refresh_token=${refresh}&grant_type=refresh_token" \
-    2>/dev/null | jq -r '.access_token // empty')"
+    2>/dev/null || echo '{}')"
+  access="$(printf '%s' "$token_resp" | jq -r '.access_token // empty' 2>/dev/null)"
+  gads_err_desc="$(printf '%s' "$token_resp" | jq -r '.error // empty' 2>/dev/null)"
+
   if [ -z "$access" ]; then
-    report "- google_ads: token refresh failed — skipped"
+    local gads_last_ok="${STATE_DIR}/${proj}-google.last_ok"
+    local now_ts; now_ts="$(date +%s)"
+    if [ "$gads_err_desc" = "invalid_grant" ]; then
+      escalate "$proj" "Google Ads OAuth refresh token revoked (invalid_grant) — user must re-authorize"
+      return 0
+    fi
+    # Record outage start time if not already set
+    if [ ! -f "$gads_last_ok" ]; then
+      [ "$DRY_RUN" = "0" ] && printf '%s' "$now_ts" > "$gads_last_ok"
+    else
+      local last_ok_ts; last_ok_ts="$(cat "$gads_last_ok" 2>/dev/null || echo "$now_ts")"
+      local outage_secs; outage_secs=$((now_ts - last_ok_ts))
+      if [ "$outage_secs" -gt 172800 ]; then  # 48h
+        escalate "$proj" "Google Ads OAuth outage > 48h for $proj (error: ${gads_err_desc:-unknown}) — token refresh failing"
+        return 0
+      fi
+    fi
+    report "- google_ads: token refresh failed (${gads_err_desc:-unknown}) — skipped"
     return 0
   fi
+
+  # Token refreshed OK — update last_ok timestamp
+  [ "$DRY_RUN" = "0" ] && date +%s > "${STATE_DIR}/${proj}-google.last_ok"
   local H=(-H "Content-Type: application/json" -H "Authorization: Bearer ${access}" -H "developer-token: ${dev}")
   [ -n "$login" ] && H+=(-H "login-customer-id: ${login}")
   local API="https://googleads.googleapis.com/v23/customers/${cid}"
@@ -1623,22 +1821,244 @@ Return ONLY the JSON, no other text."
   done < <(printf '%s' "$strategy" | jq -c '.campaign_scaffold[]? // empty' 2>/dev/null || true)
 }
 
-# ── Optional notify (Rule 6: report file always; notify only if sink set) ─────
+# ── Multi-sink notify (Rule 6: report file always) ────────────────────────────
+# Reads marketing.notify.sinks (array of {type, ref}) from prefs.
+# On ESCALATED=1, ALL configured sinks fire — not optional.
+# Legacy fallback: per-project autopilot.notify_sink=telegram still works.
+#
+# Sink types: telegram | slack | email (Resend) | whatsapp
 notify() {
-  local proj="$1" sink
-  sink="$(ap_get "$proj" '.notify_sink')"
-  [ -z "$sink" ] || [ "$sink" = "null" ] && return 0
-  local tg_tok tg_chat
-  tg_tok="${TELEGRAM_BOT_TOKEN:-$(doppler secrets get TELEGRAM_BOT_TOKEN --plain 2>/dev/null || true)}"
-  tg_chat="${TELEGRAM_CHAT_ID:-$(doppler secrets get TELEGRAM_CHAT_ID --plain 2>/dev/null || true)}"
-  [ "$sink" = "telegram" ] && [ -n "$tg_tok" ] && [ -n "$tg_chat" ] || return 0
+  local proj="$1"
   local txt
   txt="$(printf '*autopilot — %s — %s*\nmutations: %s  escalated: %s\nreport: %s' \
     "$proj" "$TODAY" "$MUTATIONS" "$ESCALATED" "$REPORT")"
-  curl -s --max-time 12 -X POST "https://api.telegram.org/bot${tg_tok}/sendMessage" \
-    -H 'Content-Type: application/json' \
-    -d "$(jq -n --arg c "$tg_chat" --arg t "$txt" '{chat_id:$c,text:$t,parse_mode:"Markdown"}')" \
-    >/dev/null 2>&1 || true
+
+  # Build effective sinks: global marketing.notify.sinks + legacy per-project fallback
+  local sinks_json
+  sinks_json="$(jq -c '.marketing.notify.sinks // []' "$PREFS" 2>/dev/null || echo '[]')"
+
+  # Legacy per-project fallback
+  local legacy_sink; legacy_sink="$(ap_get "$proj" '.notify_sink')"
+  if [ -n "$legacy_sink" ] && [ "$legacy_sink" != "null" ]; then
+    # Only add legacy if not already covered by global sinks
+    local already; already="$(printf '%s' "$sinks_json" | jq --arg t "$legacy_sink" '[.[] | select(.type==$t)] | length' 2>/dev/null || echo 0)"
+    if [ "$already" = "0" ]; then
+      sinks_json="$(printf '%s' "$sinks_json" | jq --arg t "$legacy_sink" '. + [{"type":$t,"ref":""}]' 2>/dev/null || echo '[]')"
+    fi
+  fi
+
+  local num_sinks; num_sinks="$(printf '%s' "$sinks_json" | jq 'length' 2>/dev/null || echo 0)"
+  [ "$num_sinks" = "0" ] && return 0
+
+  # For non-escalated passes, only notify if escalated or sinks configured
+  # (escalated=1 forces ALL sinks; escalated=0 still fires for summary)
+  local i=0
+  while [ "$i" -lt "$num_sinks" ]; do
+    local sink_type sink_ref
+    sink_type="$(printf '%s' "$sinks_json" | jq -r ".[$i].type // empty" 2>/dev/null)"
+    sink_ref="$(printf '%s' "$sinks_json" | jq -r ".[$i].ref // empty" 2>/dev/null)"
+    i=$((i+1))
+    [ -z "$sink_type" ] && continue
+    case "$sink_type" in
+      telegram)
+        local tg_tok tg_chat
+        tg_tok="$(resolve_cred "${sink_ref:-env:TELEGRAM_BOT_TOKEN}")"
+        [ -z "$tg_tok" ] && tg_tok="${TELEGRAM_BOT_TOKEN:-$(doppler secrets get TELEGRAM_BOT_TOKEN --plain 2>/dev/null || true)}"
+        local tg_chat_ref; tg_chat_ref="$(printf '%s' "$sinks_json" | jq -r ".[$((i-1))].chat_ref // empty" 2>/dev/null)"
+        tg_chat="$(resolve_cred "${tg_chat_ref:-env:TELEGRAM_CHAT_ID}")"
+        [ -z "$tg_chat" ] && tg_chat="${TELEGRAM_CHAT_ID:-$(doppler secrets get TELEGRAM_CHAT_ID --plain 2>/dev/null || true)}"
+        [ -n "$tg_tok" ] && [ -n "$tg_chat" ] || continue
+        curl -s --max-time 12 -X POST "https://api.telegram.org/bot${tg_tok}/sendMessage" \
+          -H 'Content-Type: application/json' \
+          -d "$(jq -n --arg c "$tg_chat" --arg t "$txt" '{chat_id:$c,text:$t,parse_mode:"Markdown"}')" \
+          >/dev/null 2>&1 || true
+        ;;
+      slack)
+        local slack_url; slack_url="$(resolve_cred "$sink_ref")"
+        [ -n "$slack_url" ] || continue
+        curl -s --max-time 12 -X POST "$slack_url" \
+          -H 'Content-Type: application/json' \
+          -d "$(jq -n --arg t "$txt" '{text:$t}')" \
+          >/dev/null 2>&1 || true
+        ;;
+      email)
+        local resend_key; resend_key="$(resolve_cred "$sink_ref")"
+        [ -z "$resend_key" ] && resend_key="${RESEND_API_KEY:-$(doppler secrets get RESEND_API_KEY --plain 2>/dev/null || true)}"
+        [ -n "$resend_key" ] || continue
+        local email_to; email_to="$(printf '%s' "$sinks_json" | jq -r ".[$((i-1))].to // empty" 2>/dev/null)"
+        [ -z "$email_to" ] && continue
+        local email_from; email_from="$(printf '%s' "$sinks_json" | jq -r ".[$((i-1))].from // \"autopilot@example.com\"" 2>/dev/null)"
+        curl -s --max-time 12 -X POST "https://api.resend.com/emails" \
+          -H "Authorization: Bearer ${resend_key}" \
+          -H 'Content-Type: application/json' \
+          -d "$(jq -n --arg to "$email_to" --arg from "$email_from" \
+                   --arg sub "autopilot — ${proj} — ${TODAY}" --arg body "$txt" \
+                   '{from:$from,to:[$to],subject:$sub,text:$body}')" \
+          >/dev/null 2>&1 || true
+        ;;
+      whatsapp)
+        # Send via mcp__whatsapp if available in environment (Claude context only)
+        # In daemon context this is a no-op — skip silently
+        local wa_to; wa_to="$(printf '%s' "$sinks_json" | jq -r ".[$((i-1))].to // empty" 2>/dev/null)"
+        [ -n "$wa_to" ] || continue
+        # Best-effort: wacli send if available
+        if command -v wacli >/dev/null 2>&1; then
+          wacli send --to "$wa_to" --message "$txt" 2>/dev/null || true
+        fi
+        ;;
+    esac
+  done
+}
+
+# ── Health-check subcommand ────────────────────────────────────────────────────
+# Run read-only probes across all surfaces for a project; emit JSON results.
+# Usage: ops-marketing-autopilot --health-check [--project <key>]
+run_health_check() {
+  local proj="$1"
+  local checks='[]'
+
+  _hc_add() {
+    # $1=surface $2=healthy(true/false) $3=issue(or "")
+    checks="$(printf '%s' "$checks" | jq \
+      --arg s "$1" --argjson h "$2" --arg i "$3" \
+      '. + [{"surface":$s,"healthy":$h,"issue":$i}]' 2>/dev/null || printf '%s' "$checks")"
+  }
+
+  # --- Meta token TTL ---
+  local meta_tok; meta_tok="$(chan_cred "$proj" meta access_token)"
+  local meta_acct; meta_acct="$(chan_cred "$proj" meta ad_account_id)"
+  if [ -n "$meta_tok" ] && [ -n "$meta_acct" ]; then
+    local dbg_resp dbg_err dbg_exp
+    dbg_resp="$(curl -gsS --max-time 10 \
+      "https://graph.facebook.com/v20.0/debug_token?input_token=${meta_tok}&access_token=${meta_tok}" \
+      2>/dev/null || echo '{}')"
+    dbg_err="$(printf '%s' "$dbg_resp" | jq -r '.error.code // empty' 2>/dev/null)"
+    dbg_exp="$(printf '%s' "$dbg_resp" | jq -r '.data.expires_at // empty' 2>/dev/null)"
+    if [ -n "$dbg_err" ]; then
+      _hc_add "meta_token" false "debug_token error code $dbg_err"
+    elif [ -n "$dbg_exp" ] && [ "$dbg_exp" != "0" ]; then
+      local now_ts; now_ts="$(date +%s)"
+      local ttl_days; ttl_days=$(( (dbg_exp - now_ts) / 86400 ))
+      if [ "$ttl_days" -lt 7 ]; then
+        _hc_add "meta_token" false "token expires in ${ttl_days}d — refresh soon"
+      else
+        _hc_add "meta_token" true ""
+      fi
+    else
+      _hc_add "meta_token" true "non-expiring or unverifiable token"
+    fi
+
+    # Meta account status
+    local acct_resp acct_status
+    acct_resp="$(curl -gsS --max-time 10 \
+      "${GRAPH}/${meta_acct}?fields=account_status&access_token=${meta_tok}" 2>/dev/null || echo '{}')"
+    acct_status="$(printf '%s' "$acct_resp" | jq -r '.account_status // empty' 2>/dev/null)"
+    if [ "$acct_status" = "1" ] || [ -z "$acct_status" ]; then
+      _hc_add "meta_account" true ""
+    else
+      _hc_add "meta_account" false "account_status=$acct_status"
+    fi
+  else
+    _hc_add "meta_token" false "not configured"
+    _hc_add "meta_account" false "not configured"
+  fi
+
+  # --- Google Ads OAuth health ---
+  local gads_dev; gads_dev="$(chan_cred "$proj" google_ads developer_token)"
+  local gads_refresh; gads_refresh="$(chan_cred "$proj" google_ads refresh_token)"
+  local gads_cid; gads_cid="$(chan_cred "$proj" google_ads client_id)"
+  local gads_csec; gads_csec="$(chan_cred "$proj" google_ads client_secret)"
+  if [ -n "$gads_refresh" ] && [ -n "$gads_cid" ] && [ -n "$gads_csec" ]; then
+    local tok_resp tok_acc tok_err
+    tok_resp="$(curl -gsS --max-time 8 -X POST https://oauth2.googleapis.com/token \
+      --data "client_id=${gads_cid}&client_secret=${gads_csec}&refresh_token=${gads_refresh}&grant_type=refresh_token" \
+      2>/dev/null || echo '{}')"
+    tok_acc="$(printf '%s' "$tok_resp" | jq -r '.access_token // empty' 2>/dev/null)"
+    tok_err="$(printf '%s' "$tok_resp" | jq -r '.error // empty' 2>/dev/null)"
+    if [ -n "$tok_acc" ]; then
+      _hc_add "google_ads_oauth" true ""
+    else
+      _hc_add "google_ads_oauth" false "${tok_err:-token refresh failed}"
+    fi
+  else
+    _hc_add "google_ads_oauth" false "not configured"
+  fi
+
+  # --- Doppler secrets freshness ---
+  local all_refs
+  all_refs="$(jq -r --arg p "$proj" '
+    .marketing.projects[$p] | .. | strings | select(startswith("doppler:") or startswith("env:"))
+    ' "$PREFS" 2>/dev/null || true)"
+  local broken_refs=0
+  while IFS= read -r ref; do
+    [ -z "$ref" ] && continue
+    local _v _rc
+    _v="$(resolve_cred_strict "$ref")"; _rc=$?
+    [ "$_rc" = "2" ] && broken_refs=$((broken_refs+1))
+  done <<< "$all_refs"
+  if [ "$broken_refs" = "0" ]; then
+    _hc_add "doppler_secrets" true ""
+  else
+    _hc_add "doppler_secrets" false "${broken_refs} declared ref(s) returning empty"
+  fi
+
+  # --- GA4 SA key validity ---
+  local ga4_prop; ga4_prop="$(chan_cred "$proj" ga4 property_id)"
+  if [ -n "$ga4_prop" ]; then
+    local ga4_tok
+    ga4_tok="$(gcloud auth application-default print-access-token 2>/dev/null || true)"
+    if [ -n "$ga4_tok" ]; then
+      local ga4_resp
+      ga4_resp="$(curl -gsS --max-time 10 -X POST \
+        "https://analyticsdata.googleapis.com/v1beta/properties/${ga4_prop}:runReport" \
+        -H "Authorization: Bearer ${ga4_tok}" \
+        -H 'Content-Type: application/json' \
+        -d '{"dateRanges":[{"startDate":"yesterday","endDate":"yesterday"}],"metrics":[{"name":"sessions"}],"limit":1}' \
+        2>/dev/null || echo '{}')"
+      local ga4_err; ga4_err="$(printf '%s' "$ga4_resp" | jq -r '.error.message // empty' 2>/dev/null)"
+      if [ -n "$ga4_err" ]; then
+        _hc_add "ga4_sa_key" false "$ga4_err"
+      else
+        _hc_add "ga4_sa_key" true ""
+      fi
+    else
+      _hc_add "ga4_sa_key" false "no gcloud ADC token"
+    fi
+  else
+    _hc_add "ga4_sa_key" false "not configured"
+  fi
+
+  # --- GSC site authorization ---
+  local gsc_site; gsc_site="$(chan_cred "$proj" gsc site_url)"
+  if [ -n "$gsc_site" ]; then
+    local gsc_tok
+    gsc_tok="$(gcloud auth application-default print-access-token 2>/dev/null || true)"
+    if [ -n "$gsc_tok" ]; then
+      local gsc_resp
+      gsc_resp="$(curl -gsS --max-time 10 \
+        "https://searchconsole.googleapis.com/webmasters/v3/sites/$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1],safe='')); " "$gsc_site" 2>/dev/null)" \
+        -H "Authorization: Bearer ${gsc_tok}" 2>/dev/null || echo '{}')"
+      local gsc_err; gsc_err="$(printf '%s' "$gsc_resp" | jq -r '.error.message // empty' 2>/dev/null)"
+      if [ -n "$gsc_err" ]; then
+        _hc_add "gsc_auth" false "$gsc_err"
+      else
+        _hc_add "gsc_auth" true ""
+      fi
+    else
+      _hc_add "gsc_auth" false "no gcloud ADC token"
+    fi
+  else
+    _hc_add "gsc_auth" false "not configured"
+  fi
+
+  # Compute overall health
+  local all_healthy
+  all_healthy="$(printf '%s' "$checks" | jq 'all(.healthy)' 2>/dev/null || echo false)"
+  local out
+  out="$(jq -n --argjson checks "$checks" --argjson healthy "$all_healthy" \
+    --arg proj "$proj" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{project:$proj,ts:$ts,healthy:$healthy,checks:$checks}')"
+  printf '%s\n' "$out"
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -1656,16 +2076,27 @@ mapfile -t PROJECTS < <(jq -r '
 # An explicit --project may target a configured-but-disabled project (used by
 # the dry-run verification path); still requires an autopilot block.
 if [ -n "$ONLY_PROJECT" ]; then
-  if jq -e --arg p "$ONLY_PROJECT" '.marketing.projects[$p].autopilot != null' "$PREFS" >/dev/null 2>&1; then
+  if jq -e --arg p "$ONLY_PROJECT" '.marketing.projects[$p] != null' "$PREFS" >/dev/null 2>&1; then
     PROJECTS=("$ONLY_PROJECT")
   else
-    log "project '$ONLY_PROJECT' has no autopilot config — nothing to do"
+    log "project '$ONLY_PROJECT' not found — nothing to do"
     exit 0
   fi
 fi
 
 if [ "${#PROJECTS[@]}" -eq 0 ]; then
   log "no projects with autopilot.enabled — nothing to do"
+  exit 0
+fi
+
+# ── health-check dispatch (read-only, exits after output) ─────────────────────
+if [ "$DO_HEALTH_CHECK" = "1" ]; then
+  HC_OUTPUT='[]'
+  for proj in "${PROJECTS[@]}"; do
+    [ -z "$proj" ] && continue
+    HC_OUTPUT="$(printf '%s' "$HC_OUTPUT" | jq ". + [$(run_health_check "$proj")]" 2>/dev/null || printf '%s' "$HC_OUTPUT")"
+  done
+  printf '%s\n' "$HC_OUTPUT"
   exit 0
 fi
 

@@ -85,6 +85,12 @@
       "cron": "0 9 * * 1",
       "_note": "Weekly Autopilot Studio self-learning calibration (Monday 09:00 UTC ~= 11:00 Europe/Amsterdam, after the 08:00 daily pass). Joins each project's autopilot_state/<project>/creatives.jsonl pre-scores to realized KPIs (kpi.jsonl) and fits a monotone score->predicted_CPL calibrator.json consumed by the next daily pass. python3 stdlib only, no metered calls. Disabled by default; enabled alongside the autopilot block via /ops:setup marketing."
     },
+    "marketing-health-check": {
+      "enabled": false,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-marketing-health-check.sh",
+      "cron": "0 8 * * 0",
+      "_note": "Weekly read-only health probe (Sunday 08:00 UTC) for all autopilot-enabled projects: Meta token TTL, Google Ads OAuth, ad account status, Doppler secret freshness, GA4 SA key, GSC site auth. Outputs JSON per project to reports/marketing-autopilot/<project>-health-<date>.json. Enable after credentials are configured. No mutations, no metered calls, OPS_DRY_RUN-safe."
+    },
     "content-seo-blog": {
       "enabled": false,
       "cron": "0 9 * * 1",
