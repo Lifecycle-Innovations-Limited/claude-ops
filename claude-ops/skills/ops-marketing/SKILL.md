@@ -1,7 +1,7 @@
 ---
 name: ops-marketing
 description: Marketing command center. Email campaigns (Klaviyo), paid ads (Meta/Google), analytics (GA4), SEO, and social media metrics. One dashboard for all marketing channels.
-argument-hint: "[email|ads|analytics|seo|social|campaigns|setup]"
+argument-hint: "<project> [email|ads|analytics|seo|social|campaigns|setup|autopilot ...]"
 allowed-tools:
   - Bash
   - Read
@@ -165,11 +165,15 @@ fi
 
 ## Sub-command Routing
 
+**Argument parsing:** `$ARGUMENTS` is split as `<first-token> [rest...]`.
+If `<first-token>` matches a known verb below, route by verb. If it looks like a project name (alphanumeric + hyphens, not a known verb), treat it as `<project>` and continue routing on `[rest...]`.
+
 Route `$ARGUMENTS` to the correct section below:
 
 | Input | Action |
 |---|---|
 | (empty), dashboard | Run full marketing dashboard |
+| `<project>` | If `marketing.projects.<project>.autopilot.enabled == true` → run live autopilot pass for that project. Otherwise → run `bin/ops-marketing-provision provision-all --project <project>` then `bin/ops-marketing-autopilot --project <project> --dry-run` (see ## project entry-point section) |
 | email, klaviyo | Klaviyo email metrics |
 | ads, meta | Meta Ads performance (read-only overview) |
 | meta-manage, meta create-campaign, meta target, meta creative, meta rules, meta audiences, meta advantage | Meta Ads campaign management (see ## meta-manage section) |
@@ -182,7 +186,11 @@ Route `$ARGUMENTS` to the correct section below:
 | campaigns | Cross-channel campaign overview (all platforms) |
 | optimize | Cross-platform ad optimization agent |
 | autopilot | Autonomous per-project daily ad management (see ## autopilot section) |
-| autopilot onboard <url> | Cold-start: scrape URL, derive strategy, scaffold/stage campaigns (see ## autopilot → Autonomous onboarding) |
+| autopilot onboard `<url>` | Cold-start: scrape URL, derive strategy, scaffold/stage campaigns (see ## autopilot → Autonomous onboarding) |
+| `autopilot enable <project> [--cap <usd>]` | Enable autopilot for a project (see ## autopilot-enable section) |
+| `autopilot disable <project>` | Disable autopilot for a project (see ## autopilot-disable section) |
+| `autopilot run <project> [--dry-run]` | Run one autopilot pass directly (see ## autopilot-run section) |
+| `autopilot kill <project>` | Set kill_switch for a project (see ## autopilot-kill section) |
 | attribution | Unified attribution table (Meta + Google + Klaviyo + GA4) |
 | setup | Configure API keys |
 
@@ -2006,6 +2014,78 @@ When `source.url` is set, `autopilot onboard <url>` (or the first pass on an emp
 
 ---
 
+## project entry-point
+
+When `$ARGUMENTS` is a single token that matches a configured project key (i.e. exists under `marketing.projects` in preferences.json), route as follows:
+
+1. Read `marketing.projects.<project>.autopilot.enabled` from preferences.json.
+2. **If `true`**: run a live autopilot pass — equivalent to `autopilot run <project>`.
+3. **If `false` or absent**: provision then dry-run:
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-provision" provision-all --project "<project>"
+   "${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-autopilot" --project "<project>" --dry-run
+   ```
+   Show the dry-run report and prompt the user to review before enabling autopilot.
+
+---
+
+## autopilot-enable
+
+Syntax: `autopilot enable <project> [--cap <usd>]`
+
+1. Read `marketing.projects.<project>` from preferences.json — abort with helpful message if project not found.
+2. Write to preferences.json (atomic jq → tmp → mv):
+   ```
+   marketing.projects.<project>.autopilot.enabled = true
+   marketing.projects.<project>.autopilot.daily_spend_cap_usd = <cap>   # only if --cap provided
+   ```
+3. Enable daemon services:
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/bin/ops-daemon-manager" enable marketing-autopilot
+   "${CLAUDE_PLUGIN_ROOT}/bin/ops-daemon-manager" enable marketing-autopilot-calibrate
+   ```
+4. Run one forced-dry pass so the operator sees the first report:
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-autopilot" --project "<project>" --dry-run
+   ```
+5. Print the report path and inform the operator the next scheduled live run is the daemon's `0 8 * * *` UTC tick.
+
+**Spend-safety:** if `--cap` is omitted and no existing `daily_spend_cap_usd` is configured, refuse and tell the operator to add `--cap <usd>` — autopilot refuses to run without a cap (NEVER LEAK MONEY).
+
+---
+
+## autopilot-disable
+
+Syntax: `autopilot disable <project>`
+
+Write `marketing.projects.<project>.autopilot.enabled = false` to preferences.json (atomic jq → tmp → mv). The daemon services are left running (they iterate only projects with `enabled: true`) so other projects are unaffected. Confirm the write with a one-line status message.
+
+---
+
+## autopilot-run
+
+Syntax: `autopilot run <project> [--dry-run]`
+
+Direct dispatch to the autopilot binary for a single project:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-autopilot" --project "<project>" ${DRY_RUN_FLAG}
+```
+
+Show the tail of the report (`$OPS_DATA_DIR/reports/marketing-autopilot/<project>-latest.md`) after the pass completes.
+
+---
+
+## autopilot-kill
+
+Syntax: `autopilot kill <project>`
+
+Write `marketing.projects.<project>.autopilot.envelope.kill_switch = true` to preferences.json (atomic jq → tmp → mv). This causes the autopilot binary to stage-only (no mutations, no object creation) on every subsequent pass until the flag is cleared. Confirm with a status message showing the new `kill_switch` value.
+
+To re-enable: `autopilot enable <project>` (which resets `kill_switch` to false along with setting `enabled: true`).
+
+---
+
 ## attribution
 
 Unified attribution table showing spend, conversions, revenue, and ROAS side-by-side across all configured platforms.
@@ -2195,3 +2275,30 @@ Present ALL findings before asking for anything. Only prompt for values NOT foun
 **Google Ads:** More complex than other marketing credentials — requires 3 pieces: (1) developer token from Google Ads MCC → Tools & Settings → API Center, (2) OAuth2 client ID + secret from Google Cloud Console (Desktop app type, Google Ads API enabled), (3) refresh token via browser OAuth flow. Setup flow: collect developer token and client credentials first, then open browser auth URL, user pastes authorization code, exchange for refresh token via curl, then list accessible customer accounts and let user select. Smoke test: `curl -s -X GET "https://googleads.googleapis.com/v23/customers:listAccessibleCustomers" -H "Authorization: Bearer $TOKEN" -H "developer-token: $DEV_TOKEN"` — expect JSON with `resourceNames` array.
 
 Save via userConfig (preferred) or Doppler. Report: `[service] ✓ connected` or `[service] ✗ invalid key — [error]`.
+
+---
+
+## Quick Start — autopilot verbs
+
+```
+# First time: provision + dry-run a project
+/ops:marketing <your-project>
+
+# Enable autopilot with a daily spend cap
+/ops:marketing autopilot enable <your-project> --cap 50
+
+# Run one pass immediately (dry-run to preview)
+/ops:marketing autopilot run <your-project> --dry-run
+
+# Run one live pass
+/ops:marketing autopilot run <your-project>
+
+# Disable autopilot (leaves daemon running for other projects)
+/ops:marketing autopilot disable <your-project>
+
+# Emergency stop — stage-only, no mutations until re-enabled
+/ops:marketing autopilot kill <your-project>
+
+# Full dashboard
+/ops:marketing
+```

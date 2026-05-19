@@ -8,9 +8,9 @@
 # Returns ONE JSON object:
 #   {
 #     "configured": true,
-#     "projects": ["my-project", ...],
+#     "projects": ["your-app", ...],
 #     "by_project": {
-#       "my-project": {
+#       "your-app": {
 #         "ledger_rows": 12,
 #         "last_gen": "2026-05-17T...",
 #         "last_calibrated": "2026-05-17T...",

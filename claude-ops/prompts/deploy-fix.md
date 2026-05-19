@@ -47,9 +47,9 @@ You are running headless inside a Claude Code session with full claude-ops tooli
 4. **Apply the minimal fix.** Surgical changes only.
 
 5. **Run the per-repo quality gate** before committing (per `~/.claude/CLAUDE.md`):
-   - `my-project-api`: `npm run type-check && npm run lint && npm run test:unit`
-   - `my-project`: `npm run type-check`
-   - `my-project-langgraphs` / `my-project-agentcore` / `meditation-service`: `source .venv/bin/activate && pytest tests/ -x --ignore=tests/e2e`
+   - Node/TS repos: `npm run type-check && npm run lint && npm run test:unit`
+   - React Native / Expo repos: `npm run type-check`
+   - Python repos: `source .venv/bin/activate && pytest tests/ -x --ignore=tests/e2e`
    - other Node repos: `npm run type-check && npm run lint && npm test`
 
 6. **Commit with `--no-verify`** (project hooks are bugged per Sam's CLAUDE.md). Co-author trailer: `Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>`.
