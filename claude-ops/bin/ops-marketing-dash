@@ -8,35 +8,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-path.sh"
+# resolve_cred, ga4_resolve, gsc_resolve, marketing_channels_status
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/../scripts/lib/ga4-resolve.sh"
 PREFS="${OPS_DATA_DIR}/preferences.json"
-
-# Resolve a cred reference value.
-#   env:VAR_NAME                   -> $VAR_NAME from environment
-#   doppler:project/config/SECRET  -> doppler secrets get SECRET --project P --config C --plain
-#   <anything else>                -> treated as inline literal
-# Empty input -> empty output. Never fails.
-resolve_cred() {
-  local ref="${1:-}"
-  [ -z "$ref" ] || [ "$ref" = "null" ] && return 0
-  case "$ref" in
-    env:*)
-      local var="${ref#env:}"
-      printf '%s' "${!var:-}"
-      ;;
-    doppler:*)
-      local path="${ref#doppler:}"
-      local proj="${path%%/*}"
-      local rest="${path#*/}"
-      local cfg="${rest%%/*}"
-      local secret="${rest#*/}"
-      [ -z "$proj" ] || [ -z "$cfg" ] || [ -z "$secret" ] && return 0
-      doppler secrets get "$secret" --project "$proj" --config "$cfg" --plain 2>/dev/null || true
-      ;;
-    *)
-      printf '%s' "$ref"
-      ;;
-  esac
-}
 
 # Pull a value from preferences.json marketing.projects.<project>.<channel>.<field>.
 # $1 project, $2 channel, $3 field. Echoes nothing if missing or prefs absent.
@@ -179,19 +154,52 @@ gather_meta() {
 }
 
 # --- GA4 ---
+# Auth: prefer SA key file (GA4_SERVICE_ACCOUNT_KEY_FILE or first ~/.config/gcloud/keys/*ga*.json)
+# over gcloud ADC, so the dash works in daemon context without interactive gcloud auth.
+_ga4_auth_token() {
+  local sa_key_file="${GA4_SERVICE_ACCOUNT_KEY_FILE:-}"
+  if [ -z "$sa_key_file" ]; then
+    # Auto-discover first matching SA key
+    sa_key_file="$(ls "$HOME"/.config/gcloud/keys/*ga*.json 2>/dev/null | head -1 || true)"
+  fi
+  if [ -n "$sa_key_file" ] && [ -f "$sa_key_file" ]; then
+    # Exchange SA key for access token via OAuth2
+    local now exp header payload sig jwt resp
+    now=$(date +%s)
+    exp=$((now + 3600))
+    header=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '+/' '-_' | tr -d '\n')
+    payload=$(printf '{"iss":"%s","scope":"https://www.googleapis.com/auth/analytics.readonly","aud":"https://oauth2.googleapis.com/token","exp":%d,"iat":%d}' \
+      "$(jq -r '.client_email' "$sa_key_file")" "$exp" "$now" \
+      | base64 | tr -d '=' | tr '+/' '-_' | tr -d '\n')
+    sig=$(printf '%s.%s' "$header" "$payload" \
+      | openssl dgst -sha256 -sign <(jq -r '.private_key' "$sa_key_file") 2>/dev/null \
+      | base64 | tr -d '=' | tr '+/' '-_' | tr -d '\n')
+    jwt="${header}.${payload}.${sig}"
+    resp=$(curl -sS --max-time 5 -X POST https://oauth2.googleapis.com/token \
+      --data "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}" 2>/dev/null || echo '{}')
+    printf '%s' "$(printf '%s' "$resp" | jq -r '.access_token // empty' 2>/dev/null || true)"
+    return
+  fi
+  # Fallback: ADC
+  gcloud auth application-default print-access-token 2>/dev/null || true
+}
+
 gather_ga4() {
   if [ -z "$GA4_PROPERTY" ] || [ "$GA4_PROPERTY" = "0" ]; then
     echo "null"
     return
   fi
 
-  GA4_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
+  local GA4_TOKEN
+  GA4_TOKEN=$(_ga4_auth_token)
   if [ -z "$GA4_TOKEN" ]; then
     echo "null"
     return
   fi
 
-  REPORT=$(curl -gsS --max-time 5 -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport" \
+  local REPORT
+  REPORT=$(curl -gsS --max-time 10 -X POST \
+    "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport" \
     -H "Authorization: Bearer ${GA4_TOKEN}" \
     -H "Content-Type: application/json" \
     -d '{
@@ -200,15 +208,17 @@ gather_ga4() {
         {"name": "sessions"},
         {"name": "totalUsers"},
         {"name": "conversions"},
-        {"name": "totalRevenue"},
-        {"name": "bounceRate"}
+        {"name": "screenPageViews"},
+        {"name": "totalRevenue"}
       ]
     }' 2>/dev/null)
 
-  SESSIONS=$(echo "$REPORT" | jq -r '.rows[0].metricValues[0].value // "0"' 2>/dev/null || echo "0")
-  USERS=$(echo "$REPORT" | jq -r '.rows[0].metricValues[1].value // "0"' 2>/dev/null || echo "0")
-  CONVERSIONS=$(echo "$REPORT" | jq -r '.rows[0].metricValues[2].value // "0"' 2>/dev/null || echo "0")
-  REVENUE=$(echo "$REPORT" | jq -r '.rows[0].metricValues[3].value // "0"' 2>/dev/null || echo "0")
+  local SESSIONS USERS CONVERSIONS PAGEVIEWS REVENUE CVR
+  SESSIONS=$(printf '%s' "$REPORT" | jq -r '.rows[0].metricValues[0].value // "0"' 2>/dev/null || echo "0")
+  USERS=$(printf '%s' "$REPORT" | jq -r '.rows[0].metricValues[1].value // "0"' 2>/dev/null || echo "0")
+  CONVERSIONS=$(printf '%s' "$REPORT" | jq -r '.rows[0].metricValues[2].value // "0"' 2>/dev/null || echo "0")
+  PAGEVIEWS=$(printf '%s' "$REPORT" | jq -r '.rows[0].metricValues[3].value // "0"' 2>/dev/null || echo "0")
+  REVENUE=$(printf '%s' "$REPORT" | jq -r '.rows[0].metricValues[4].value // "0"' 2>/dev/null || echo "0")
 
   CVR=$(awk "BEGIN {s=$SESSIONS+0; c=$CONVERSIONS+0; if (s>0) printf \"%.2f\", (c/s)*100; else print \"0\"}")
 
@@ -216,9 +226,10 @@ gather_ga4() {
     --arg sessions "$SESSIONS" \
     --arg users "$USERS" \
     --arg conversions "$CONVERSIONS" \
+    --arg pageviews "$PAGEVIEWS" \
     --arg revenue "$REVENUE" \
     --arg cvr "$CVR" \
-    '{sessions: $sessions, users: $users, conversions: $conversions, revenue: $revenue, cvr: $cvr}'
+    '{sessions: $sessions, users: $users, conversions: $conversions, pageviews: $pageviews, revenue: $revenue, cvr: $cvr}'
 }
 
 # --- Google Search Console ---
