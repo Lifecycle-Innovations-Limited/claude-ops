@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# ops-meta-capi-send — Meta Conversions API event sender
+#
+# Sends conversion events to the Meta Conversions API (CAPI).
+# Credentials resolved from preferences.json marketing.projects.<key>.meta.*
+# or doppler: / env: refs — zero hardcoded values (Rule 0).
+#
+# Subcommands:
+#   event --project <key> --event-name <name> --event-time <epoch>
+#         --action-source website --event-source-url <url>
+#         [--email <e>] [--phone <p>] [--value <v>] [--currency <c>]
+#         [--fbp <fbp>] [--fbc <fbc>] [--client-ip <ip>] [--user-agent <ua>]
+#
+# Email and phone are SHA-256 hashed (lowercase-normalised) per Meta requirements.
+#
+# Environment:
+#   OPS_DRY_RUN=1   Print planned curl + payload, exit 0 without network call
+#
+# Returns non-zero on non-200 from Meta Graph API; surfaces error.code on failure.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="${SCRIPT_DIR}/.."
+OPS_PLUGIN_ROOT_FALLBACK="$PLUGIN_ROOT" . "${PLUGIN_ROOT}/lib/registry-path.sh"
+
+PREFS="${OPS_CONVERSION_PREFS:-${OPS_DATA_DIR}/preferences.json}"
+LOG_DIR="${OPS_DATA_DIR}/logs"
+mkdir -p "$LOG_DIR"
+LOG="${LOG_DIR}/meta-capi-send.log"
+
+log() { printf '%s [ops-meta-capi-send] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" | tee -a "$LOG" >&2; }
+
+# ── Cred resolver: env:VAR | doppler:proj/cfg/SECRET | inline literal ────────
+resolve_cred() {
+  local ref="${1:-}"
+  { [ -z "$ref" ] || [ "$ref" = "null" ]; } && return 0
+  case "$ref" in
+    env:*)
+      local var="${ref#env:}"; printf '%s' "${!var:-}" ;;
+    doppler:*)
+      local path="${ref#doppler:}" proj rest cfg secret
+      proj="${path%%/*}"; rest="${path#*/}"; cfg="${rest%%/*}"; secret="${rest#*/}"
+      { [ -z "$proj" ] || [ -z "$cfg" ] || [ -z "$secret" ]; } && return 0
+      doppler secrets get "$secret" --project "$proj" --config "$cfg" --plain 2>/dev/null || true ;;
+    *) printf '%s' "$ref" ;;
+  esac
+}
+
+# ── Read a field from preferences.json marketing.projects.<key>.meta.<field> ─
+meta_pref() {
+  local key="$1" field="$2"
+  [ -f "$PREFS" ] || { echo ""; return 0; }
+  jq -r --arg k "$key" --arg f "$field" \
+    '.marketing.projects[$k].meta[$f] // empty' "$PREFS" 2>/dev/null || true
+}
+
+# ── SHA-256 hash (lowercase-normalised) ─────────────────────────────────────
+sha256_hash() {
+  local input
+  input="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+  [ -z "$input" ] && { printf ''; return 0; }
+  printf '%s' "$input" | shasum -a 256 | awk '{print $1}'
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+ops-meta-capi-send — Meta Conversions API sender
+
+Usage:
+  ops-meta-capi-send event \
+    --project <key> \
+    --event-name <name> \
+    --event-time <epoch-seconds> \
+    --action-source <website|app|email|phone_call|chat|physical_store|system_generated|other> \
+    --event-source-url <url> \
+    [--email <address>] \
+    [--phone <number>] \
+    [--value <number>] \
+    [--currency <ISO4217>] \
+    [--fbp <_fbp-cookie-value>] \
+    [--fbc <_fbc-cookie-value>] \
+    [--client-ip <ip>] \
+    [--user-agent <ua-string>]
+
+Credential resolution (preferences.json marketing.projects.<key>.meta):
+  pixel_id          — Meta Pixel ID (numeric string, e.g. <YOUR_PIXEL_ID>)
+  access_token      — System user access token; supports doppler: or env: refs
+  test_event_code   — Optional; if set, all events go to the test endpoint
+
+Email and phone are automatically SHA-256 hashed (Meta requirement).
+
+Environment:
+  OPS_DRY_RUN=1   Print planned payload and curl command; exit 0 without network call
+
+Returns non-zero on non-200; prints error.code if present in the response body.
+USAGE
+  exit 1
+}
+
+# ── Subcommand dispatch ───────────────────────────────────────────────────────
+SUBCMD="${1:-}"
+shift || true
+
+case "$SUBCMD" in
+  event) ;;
+  --help|-h) usage ;;
+  "") echo "ops-meta-capi-send: subcommand required (event | --help)" >&2; exit 1 ;;
+  *) echo "ops-meta-capi-send: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
+esac
+
+# ── Parse flags ───────────────────────────────────────────────────────────────
+PROJECT=""
+EVENT_NAME=""
+EVENT_TIME=""
+ACTION_SOURCE="website"
+EVENT_SOURCE_URL=""
+EMAIL=""
+PHONE=""
+VALUE=""
+CURRENCY=""
+FBP=""
+FBC=""
+CLIENT_IP=""
+USER_AGENT=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --project)          PROJECT="${2:-}";          shift 2 ;;
+    --event-name)       EVENT_NAME="${2:-}";        shift 2 ;;
+    --event-time)       EVENT_TIME="${2:-}";        shift 2 ;;
+    --action-source)    ACTION_SOURCE="${2:-}";     shift 2 ;;
+    --event-source-url) EVENT_SOURCE_URL="${2:-}";  shift 2 ;;
+    --email)            EMAIL="${2:-}";             shift 2 ;;
+    --phone)            PHONE="${2:-}";             shift 2 ;;
+    --value)            VALUE="${2:-}";             shift 2 ;;
+    --currency)         CURRENCY="${2:-}";          shift 2 ;;
+    --fbp)              FBP="${2:-}";               shift 2 ;;
+    --fbc)              FBC="${2:-}";               shift 2 ;;
+    --client-ip)        CLIENT_IP="${2:-}";         shift 2 ;;
+    --user-agent)       USER_AGENT="${2:-}";        shift 2 ;;
+    --help|-h)          usage ;;
+    *) echo "ops-meta-capi-send event: unknown flag '$1'" >&2; exit 1 ;;
+  esac
+done
+
+[ -z "$PROJECT" ]          && { echo "ops-meta-capi-send: --project is required" >&2; exit 1; }
+[ -z "$EVENT_NAME" ]       && { echo "ops-meta-capi-send: --event-name is required" >&2; exit 1; }
+[ -z "$EVENT_TIME" ]       && { echo "ops-meta-capi-send: --event-time is required (epoch seconds)" >&2; exit 1; }
+[ -z "$EVENT_SOURCE_URL" ] && { echo "ops-meta-capi-send: --event-source-url is required" >&2; exit 1; }
+
+# ── Resolve credentials ───────────────────────────────────────────────────────
+PIXEL_ID="$(resolve_cred "$(meta_pref "$PROJECT" "pixel_id")")"
+ACCESS_TOKEN="$(resolve_cred "$(meta_pref "$PROJECT" "access_token")")"
+TEST_EVENT_CODE="$(resolve_cred "$(meta_pref "$PROJECT" "test_event_code")")"
+
+[ -z "$PIXEL_ID" ] && {
+  log "ERROR: marketing.projects.${PROJECT}.meta.pixel_id not found in ${PREFS}"
+  exit 1
+}
+[ -z "$ACCESS_TOKEN" ] && {
+  log "ERROR: marketing.projects.${PROJECT}.meta.access_token not found in ${PREFS}"
+  exit 1
+}
+
+# ── Hash PII ──────────────────────────────────────────────────────────────────
+EMAIL_HASH=""
+PHONE_HASH=""
+[ -n "$EMAIL" ] && EMAIL_HASH="$(sha256_hash "$EMAIL")"
+[ -n "$PHONE" ] && PHONE_HASH="$(sha256_hash "$PHONE")"
+
+# ── Build user_data object ────────────────────────────────────────────────────
+USER_DATA="{}"
+[ -n "$EMAIL_HASH" ]  && USER_DATA="$(printf '%s' "$USER_DATA" | jq --arg v "$EMAIL_HASH" '.em = [$v]')"
+[ -n "$PHONE_HASH" ]  && USER_DATA="$(printf '%s' "$USER_DATA" | jq --arg v "$PHONE_HASH" '.ph = [$v]')"
+[ -n "$CLIENT_IP" ]   && USER_DATA="$(printf '%s' "$USER_DATA" | jq --arg v "$CLIENT_IP"   '.client_ip_address = $v')"
+[ -n "$USER_AGENT" ]  && USER_DATA="$(printf '%s' "$USER_DATA" | jq --arg v "$USER_AGENT"  '.client_user_agent = $v')"
+[ -n "$FBP" ]         && USER_DATA="$(printf '%s' "$USER_DATA" | jq --arg v "$FBP"         '.fbp = $v')"
+[ -n "$FBC" ]         && USER_DATA="$(printf '%s' "$USER_DATA" | jq --arg v "$FBC"         '.fbc = $v')"
+
+# ── Build custom_data object ──────────────────────────────────────────────────
+CUSTOM_DATA="{}"
+[ -n "$VALUE" ]    && CUSTOM_DATA="$(printf '%s' "$CUSTOM_DATA" | jq --argjson v "$VALUE" '.value = $v')"
+[ -n "$CURRENCY" ] && CUSTOM_DATA="$(printf '%s' "$CUSTOM_DATA" | jq --arg v "$CURRENCY" '.currency = $v')"
+
+# ── Build full payload ────────────────────────────────────────────────────────
+EVENT_OBJECT="$(jq -n \
+  --arg ename "$EVENT_NAME" \
+  --argjson etime "$EVENT_TIME" \
+  --arg asrc "$ACTION_SOURCE" \
+  --arg esurl "$EVENT_SOURCE_URL" \
+  --argjson ud "$USER_DATA" \
+  --argjson cd "$CUSTOM_DATA" \
+  '{
+    event_name: $ename,
+    event_time: $etime,
+    action_source: $asrc,
+    event_source_url: $esurl,
+    user_data: $ud,
+    custom_data: $cd
+  }')"
+
+PAYLOAD="$(jq -n \
+  --argjson ev "$EVENT_OBJECT" \
+  '{ data: [$ev] }')"
+
+# Inject test_event_code if present (never committed — comes from prefs/doppler)
+if [ -n "$TEST_EVENT_CODE" ] && [ "$TEST_EVENT_CODE" != "null" ]; then
+  PAYLOAD="$(printf '%s' "$PAYLOAD" | jq --arg tec "$TEST_EVENT_CODE" '.test_event_code = $tec')"
+fi
+
+GRAPH_URL="https://graph.facebook.com/v20.0/${PIXEL_ID}/events?access_token=${ACCESS_TOKEN}"
+GRAPH_URL_REDACTED="https://graph.facebook.com/v20.0/${PIXEL_ID}/events?access_token=<redacted>"
+
+# ── Dry-run: print and exit ───────────────────────────────────────────────────
+if [ "${OPS_DRY_RUN:-0}" = "1" ]; then
+  echo "[DRY RUN] ops-meta-capi-send event"
+  echo "  endpoint: ${GRAPH_URL_REDACTED}"
+  echo "  payload:  $(printf '%s' "$PAYLOAD" | jq -c .)"
+  echo "  user_data.em: ${EMAIL_HASH:-<not set>}"
+  echo "  user_data.ph: ${PHONE_HASH:-<not set>}"
+  echo "  curl:     curl -s -X POST '<endpoint>' -H 'Content-Type: application/json' -d '<payload>'"
+  exit 0
+fi
+
+# ── Live send ─────────────────────────────────────────────────────────────────
+log "Sending Meta CAPI event '${EVENT_NAME}' for project '${PROJECT}' (pixel=${PIXEL_ID})"
+response="$(curl -s -X POST "$GRAPH_URL" \
+  -H "Content-Type: application/json" \
+  -d "$PAYLOAD" 2>/dev/null)"
+
+http_success="$(printf '%s' "$response" | jq -r '.events_received // empty' 2>/dev/null || true)"
+error_code="$(printf '%s' "$response" | jq -r '.error.code // empty' 2>/dev/null || true)"
+error_msg="$(printf '%s' "$response" | jq -r '.error.message // empty' 2>/dev/null || true)"
+
+if [ -n "$http_success" ]; then
+  log "OK: Meta CAPI event '${EVENT_NAME}' accepted (events_received=${http_success})"
+  exit 0
+else
+  log "ERROR: Meta CAPI rejected event '${EVENT_NAME}' — code=${error_code:-unknown} msg=${error_msg:-unknown}"
+  log "Full response: $(printf '%s' "$response" | jq -c . 2>/dev/null || echo "$response")"
+  exit 1
+fi
