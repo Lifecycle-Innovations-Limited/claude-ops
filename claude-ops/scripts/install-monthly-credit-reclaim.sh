@@ -42,7 +42,10 @@ sed -e "s|__SCRIPT_PATH__|$SCRIPT_PATH|g" \
     -e "s|__LOG_DIR__|$LOG_DIR|g" \
     -e "s|__HOME__|$HOME|g" \
     -e "s|__NODE_BIN__|$NODE_BIN|g" \
-    "$PLIST_TEMPLATE" > "$PLIST_DEST"
+    "$PLIST_TEMPLATE" \
+  | SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}" "$NODE_BIN" -e \
+    'const fs=require("fs");const t=fs.readFileSync(0,"utf8");const e=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");process.stdout.write(t.replace("__SLACK_WEBHOOK_URL__",e(process.env.SLACK_WEBHOOK_URL||"")));' \
+    > "$PLIST_DEST"
 
 launchctl bootout "gui/$(id -u)/com.claude-ops.monthly-credit-reclaim" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST_DEST"
@@ -52,3 +55,6 @@ echo "  plist:  $PLIST_DEST"
 echo "  script: $SCRIPT_PATH"
 echo "  logs:   $LOG_DIR/monthly-credit-reclaim-*.log"
 echo "  next run: day 1 of next month, 09:00 local time"
+if [[ -z "${SLACK_WEBHOOK_URL:-}" ]]; then
+  echo "  note: SLACK_WEBHOOK_URL was unset — Slack summary is skipped unless you export it and re-run this installer."
+fi

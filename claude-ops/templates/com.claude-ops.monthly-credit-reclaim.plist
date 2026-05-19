@@ -6,7 +6,8 @@
   Equivalent cron: 0 9 1 * *
 
   The installer (scripts/install-monthly-credit-reclaim.sh) substitutes
-  __SCRIPT_PATH__, __LOG_DIR__, __HOME__, __NODE_BIN__ and writes the
+  __SCRIPT_PATH__, __LOG_DIR__, __HOME__, __NODE_BIN__, __SLACK_WEBHOOK_URL__
+  (from SLACK_WEBHOOK_URL at install time; empty if unset) and writes the
   rendered copy to ~/Library/LaunchAgents/com.claude-ops.monthly-credit-reclaim.plist
   before running:
     launchctl bootstrap "gui/$(id -u)" <plist>
@@ -53,6 +54,8 @@
     <string>__HOME__</string>
     <key>NODE_NO_WARNINGS</key>
     <string>1</string>
+    <key>SLACK_WEBHOOK_URL</key>
+    <string>__SLACK_WEBHOOK_URL__</string>
   </dict>
 
   <key>ProcessType</key>

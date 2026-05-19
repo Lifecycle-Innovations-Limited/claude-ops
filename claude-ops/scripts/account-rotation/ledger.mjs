@@ -42,7 +42,7 @@ export const SCHEMA_VERSION = 2;
  * @returns {object}
  */
 function migrateV1(v1) {
-  const month = v1.month || _ymKey();
+  const month = v1.month || ymKey();
   const accounts = [];
   const raw = v1.accounts || {};
   for (const [email, cycles] of Object.entries(raw)) {
@@ -69,9 +69,12 @@ function migrateV1(v1) {
 }
 
 /**
- * Returns "YYYY-MM" for the current UTC month.
+ * Returns "YYYY-MM" for the given date's UTC month (default: now).
+ *
+ * @param {Date} [date]
+ * @returns {string}
  */
-function _ymKey(date = new Date()) {
+export function ymKey(date = new Date()) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
@@ -87,7 +90,7 @@ function _ymKey(date = new Date()) {
  */
 export function readLedger(path) {
   if (!existsSync(path)) {
-    return { schema_version: SCHEMA_VERSION, month: _ymKey(), accounts: [] };
+    return { schema_version: SCHEMA_VERSION, month: ymKey(), accounts: [] };
   }
 
   let raw;

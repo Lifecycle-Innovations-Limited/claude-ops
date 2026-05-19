@@ -39,7 +39,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { MAX_PLAN_MONTHLY_USD, readLedger, findAccount } from './ledger.mjs';
+import { MAX_PLAN_MONTHLY_USD, readLedger, findAccount, ymKey } from './ledger.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLAIMER = join(__dirname, 'kapture-claim-credits.mjs');
@@ -64,10 +64,6 @@ function log(line) {
     /* logging is best-effort */
   }
   console.log(line);
-}
-
-function ymKey(date = new Date()) {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
 function priorMonthKey(date = new Date()) {
