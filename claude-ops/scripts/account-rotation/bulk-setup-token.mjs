@@ -8,7 +8,7 @@
 //  is missing an OAuth bearer token, drives the Anthropic web login via
 //  Kapture (delegated to a one-shot `claude -p` subprocess with the kapture
 //  MCP server enabled), then stores the resulting sk-ant-oat01-* token in AWS
-//  Secrets Manager at healify/claude-oauth-token/account-{1..7}.
+//  Secrets Manager at <your-org>/claude-oauth-token/account-{1..N}.
 //
 //  Idempotent: skips accounts whose Secrets Manager entry already contains a
 //  validated sk-ant-oat01-* token AND ledger entry says claimed=true.
@@ -24,7 +24,7 @@
 //  Defaults:
 //     --region          eu-west-1
 //     --ledger          ~/.claude/credits-ledger.json
-//     --secret-prefix   healify/claude-oauth-token/account-
+//     --secret-prefix   <your-org>/claude-oauth-token/account-
 //     --gmail-account   $BULK_SETUP_GMAIL_ACCOUNT (env) or unset
 //
 //  Required tools on PATH: claude, aws, gog, expect.
@@ -70,7 +70,7 @@ const ONLY = value('--only', null);
 const REGION = value('--region', 'eu-west-1');
 const HOME = process.env.HOME || process.env.USERPROFILE;
 const LEDGER_PATH = value('--ledger', join(HOME, '.claude', 'credits-ledger.json'));
-const SECRET_PREFIX = value('--secret-prefix', 'healify/claude-oauth-token/account-');
+const SECRET_PREFIX = value('--secret-prefix', '<your-org>/claude-oauth-token/account-');
 const GMAIL_ACCOUNT = value('--gmail-account', process.env.BULK_SETUP_GMAIL_ACCOUNT || null);
 const SUBPROCESS_TIMEOUT_MS = 8 * 60 * 1000; // 8 min per Kapture step
 
