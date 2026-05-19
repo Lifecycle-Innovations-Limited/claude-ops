@@ -20,6 +20,99 @@ maxTurns: 40
 
 # OPS ► MARKETING COMMAND CENTER
 
+## DNS provisioning
+
+`bin/ops-dns-provision` is the canonical DNS surface for any marketing project — it covers every record an end-to-end SaaS launch typically needs, all routed through `scripts/lib/cloudflare-dns.sh` for GET-first idempotency. Re-running is safe; `OPS_DRY_RUN=1` prints planned API calls without firing.
+
+| Subcommand | What it does |
+|------------|--------------|
+| `gsc <project> <domain>` | Google Search Console site verification — fetches token via `siteVerification/v1/token`, upserts TXT at apex, calls `webResource?verificationMethod=DNS_TXT` to verify. |
+| `meta-aem <project> <domain>` | Meta Aggregated Event Measurement — reads `verification_string` from `/me/owned_domains`, upserts `facebook-domain-verification=<token>` TXT at apex. |
+| `apple-pay <project> <domain>` | Two modes via `apple_pay.mode`: `static-file` (default — surfaces the `.well-known/apple-developer-merchantid-domain-association` deploy-hook path) or `stripe-dns` (Stripe `POST /v1/payment_method_domains`). |
+| `spf <project> <domain>` | Builds `v=spf1 include:... <policy>` from `.esp.spf_includes`, upserts merge-safely at apex (refuses to overwrite a foreign TXT lacking the `v=spf1` marker). |
+| `dkim <project> <domain>` | ESP-keyed off `.esp.provider`. Resend implemented (parses `records[]` from `POST /domains`, CNAME upserts). Postmark/SES stubbed. |
+| `dmarc <project> <domain>` | `_dmarc.<apex>` TXT with `v=DMARC1; p=<policy>; rua=<rua>`. Defaults: `policy=quarantine`, `rua=mailto:dmarc@<apex>`. |
+| `mx <project> <domain>` | Provider template keyed off `.inbound.provider`: `google-workspace` (smtp.google.com pri 1) / `resend-inbound` / `ses` (region from `.inbound.region`). |
+| `klaviyo-sending <project> <domain>` | Klaviyo dedicated sending domain — `POST /api/dedicated-sending-domains/`, CNAME upserts. |
+| `audit <project> [--json]` | Read-only — for each row, queries CF and reports `present` / `absent` / `conflicting`. |
+| `provision-all <project> [--skip <row,row>]` | Idempotent full sweep. |
+
+**Auth**: `CLOUDFLARE_API_TOKEN` (Bearer, preferred) or `CLOUDFLARE_API_KEY` + `CLOUDFLARE_EMAIL` (Global key, fallback). Zone lookup: `GET /zones?name=<apex>` finds the zone ID. Record writes: GET-first by `name+type`, then PUT existing ID or POST new — never duplicate.
+
+**Apex resolver** (`cf_apex_for`) handles co.uk-style 2nd-level TLDs (foo.co.uk → foo.co.uk) and strips proto/path/port.
+
+### Preferences schema additions
+
+The new bin reads project-level config from `$PREFS_PATH` under `marketing.projects.<key>`:
+
+```jsonc
+{
+  "marketing": {
+    "projects": {
+      "myapp": {
+        "domain": "example.com",
+
+        // Outbound email service provider (DKIM + SPF includes)
+        "esp": {
+          "provider": "resend",                  // "resend" | "postmark" | "ses"
+          "credentials": "doppler:prd:RESEND_API_KEY",  // cred-ref: "env:VAR" | "doppler:CFG:KEY"
+          "spf_includes": ["_spf.resend.com", "_spf.klaviyo.com"],  // optional; sensible defaults applied
+          "spf_policy": "-all"                   // "-all" (strict) | "~all" (soft-fail)
+        },
+
+        // Inbound mail (MX)
+        "inbound": {
+          "provider": "google-workspace",        // "google-workspace" | "resend-inbound" | "ses"
+          "region": "us-east-1"                  // only used by resend-inbound / ses
+        },
+
+        // DMARC policy
+        "dmarc": {
+          "policy": "quarantine",                // "none" | "quarantine" | "reject"
+          "rua": "mailto:dmarc@example.com"      // defaults to mailto:dmarc@<apex>
+        },
+
+        // Optional Cloudflare account override (for accounts that own multiple zones)
+        "dns": {
+          "cloudflare_account_id": "<your-cf-account-id>"
+        },
+
+        // Apple Pay domain registration
+        "apple_pay": {
+          "enabled": true,
+          "mode": "static-file"                  // default; "stripe-dns" registers via Stripe
+        },
+
+        // Cred-refs for individual rows
+        "stripe":  { "secret_key":     "env:STRIPE_SECRET_KEY" },
+        "meta":    { "access_token":   "env:META_ACCESS_TOKEN" },
+        "klaviyo": { "private_key":    "doppler:prd:KLAVIYO_API_KEY",
+                     "sending_subdomain": "em.example.com" }
+      }
+    }
+  }
+}
+```
+
+Defaults are applied bash-side via `${var:-default}`, so all values are optional except `domain` (required by `audit` and `provision-all`).
+
+### Quick examples
+
+```bash
+# Dry-run every row for a project
+OPS_DRY_RUN=1 ops-dns-provision provision-all myapp
+
+# Single row, ad-hoc domain (no prefs needed)
+ops-dns-provision dmarc myapp example.com
+
+# JSON audit for CI healthcheck
+ops-dns-provision audit myapp --json
+# → {"project":"myapp","domain":"example.com","zone":"...","rows":{"gsc":"present","spf":"present","dmarc":"present","mx":"present","meta_aem":"absent","dkim":"unknown"}}
+
+# Skip rows that need provider-specific manual setup first
+ops-dns-provision provision-all myapp --skip dkim,klaviyo-sending
+```
+
 ## Runtime Context
 
 Before executing, load available context:
