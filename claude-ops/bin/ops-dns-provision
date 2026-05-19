@@ -479,6 +479,9 @@ cmd_klaviyo_sending() {
   fi
   [[ -z "$key" ]] && { err "klaviyo-sending: api key missing"; return 1; }
 
+  local zone; zone="$(cf_zone_id "$apex")"
+  [[ -z "$zone" ]] && { err "klaviyo-sending: zone not found for $apex"; return 1; }
+
   local resp
   resp="$(curl -sS --max-time 15 -X POST \
     -H "Authorization: Klaviyo-API-Key $key" \
@@ -486,9 +489,6 @@ cmd_klaviyo_sending() {
     -H "Content-Type: application/json" \
     --data "{\"data\":{\"type\":\"dedicated-sending-domain\",\"attributes\":{\"domain_name\":\"$sending_sub\"}}}" \
     "https://a.klaviyo.com/api/dedicated-sending-domains/" 2>/dev/null || printf '{}')"
-
-  local zone; zone="$(cf_zone_id "$apex")"
-  [[ -z "$zone" ]] && { err "klaviyo-sending: zone not found for $apex"; return 1; }
 
   # Klaviyo returns CNAME records under data.attributes.cname_records[]
   local n
