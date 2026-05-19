@@ -175,7 +175,7 @@ Print: `[Google Ads] ✓ connected — customer ID: XXXXXXXXXX`
 
 #### Google Analytics 4
 
-**Branch A — property already exists:** If `GA4_PROPERTY_ID` or `GA_MEASUREMENT_ID` was found in the auto-scan (or already set under `marketing.projects.<key>.ga4.property_id`), present it and offer `[Keep]` / `[Reconfigure]`. On Keep, write the property ID directly to prefs and continue.
+**Branch A — property already exists:** If `GA4_PROPERTY_ID` or `GA_MEASUREMENT_ID` was found in the auto-scan (or already set under the project's GA4 config in prefs — `marketing.projects[<key>].ga4` with a `property_id` field), present it and offer `[Keep]` / `[Reconfigure]`. On Keep, write the property ID directly to prefs and continue.
 
 **Branch B — no property yet:** Ask via `AskUserQuestion`:
 
