@@ -42,7 +42,9 @@ PREFS="${OPS_AUTOPILOT_PREFS:-${OPS_DATA_DIR}/preferences.json}"
 REPORT_DIR="${OPS_DATA_DIR}/reports/marketing-autopilot"
 STATE_DIR="${OPS_DATA_DIR}/state/autopilot"
 LOG_DIR="${OPS_DATA_DIR}/logs"
-INSTALL_MARKER="${STATE_DIR}/.installed"
+# INSTALL_MARKER is now per-project: ${STATE_DIR}/${proj}.installed
+# The legacy single-file marker is intentionally removed so every project gets
+# its own forced-dry first pass regardless of when other projects were onboarded.
 mkdir -p "$REPORT_DIR" "$STATE_DIR" "$LOG_DIR"
 
 LOG="${LOG_DIR}/marketing-autopilot.log"
@@ -71,15 +73,9 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-# First install run is always dry — never mutate before an operator has seen
-# one full dry pass in the report.
-if [ ! -f "$INSTALL_MARKER" ]; then
-  DRY_RUN=1
-  FIRST_RUN=1
-  log "first run detected — forcing --dry-run"
-else
-  FIRST_RUN=0
-fi
+# FIRST_RUN / per-project dry gate is evaluated inside the main loop per project.
+# (Each project has its own install marker: ${STATE_DIR}/${proj}.installed)
+FIRST_RUN=0
 
 TODAY="$(date +%Y-%m-%d)"
 DOW="$(date +%u)"  # 1=Mon .. 7=Sun
@@ -825,13 +821,20 @@ delegate_claude() {
 
     # Build brief via claude_invoke (brand-aware)
     local brand_name; brand_name="$(jq -r --arg p "$proj" '.marketing.projects[$p].brand.name // $p' "$PREFS" 2>/dev/null || echo "$proj")"
-    local brand_voice; brand_voice="$(jq -r --arg p "$proj" '.marketing.projects[$p].brand.voice // "health, wellness, vibrant"' "$PREFS" 2>/dev/null || echo "health, wellness, vibrant")"
+    local brand_voice; brand_voice="$(jq -r --arg p "$proj" '.marketing.projects[$p].brand.voice // empty' "$PREFS" 2>/dev/null || true)"
+    if [ -z "$brand_voice" ]; then
+      escalate "$proj" "brand.voice not configured — run /ops:marketing onboard ${proj} to set brand voice before generating creatives"
+      return 0
+    fi
     local brief_prompt="Generate a brief for a single ad creative for brand '${brand_name}' with voice: ${brand_voice}. Return ONLY JSON: {\"prompt\":\"<vivid 9:16 portrait ad description>\",\"type\":\"video\",\"copy\":\"<headline copy 5-8 words>\"}"
     local brief_raw
     brief_raw="$(claude_invoke -p "$brief_prompt" --model claude-opus-4-7 --no-session-persistence --output-format json 2>/dev/null || echo '')"
     local brief_json
-    brief_json="$(extract_json "$brief_raw" 2>/dev/null || echo '{"prompt":"Compelling health and wellness ad, 9:16 portrait, vibrant lifestyle","type":"video","copy":"Transform Your Health Today"}')"
-    [ -z "$brief_json" ] || [ "$brief_json" = "{}" ] && brief_json='{"prompt":"Compelling health and wellness ad, 9:16 portrait, vibrant lifestyle","type":"video","copy":"Transform Your Health Today"}'
+    brief_json="$(extract_json "$brief_raw" 2>/dev/null || echo '')"
+    if [ -z "$brief_json" ] || [ "$brief_json" = "{}" ]; then
+      escalate "$proj" "brief generation failed — claude_invoke returned empty; check credit pool and model availability"
+      return 0
+    fi
 
     local gen_brief; gen_brief="$(printf '%s' "$brief_json" | jq '{prompt,type}' 2>/dev/null || echo "$brief_json")"
     local copy_text; copy_text="$(printf '%s' "$brief_json" | jq -r '.copy // ""' 2>/dev/null || echo '')"
@@ -1264,6 +1267,24 @@ for proj in "${PROJECTS[@]}"; do
     log "SECURITY: skipping project key '${proj}' — fails [A-Za-z0-9._-] allowlist or is . / .."
     continue
   fi
+
+  # Per-project install marker — first run for THIS project is always dry.
+  PROJ_INSTALL_MARKER="${STATE_DIR}/${proj}.installed"
+  if [ ! -f "$PROJ_INSTALL_MARKER" ]; then
+    PROJ_DRY_RUN=1
+    FIRST_RUN=1
+    log "project=${proj}: first run detected — forcing --dry-run"
+  else
+    PROJ_DRY_RUN="$DRY_RUN"
+    FIRST_RUN=0
+  fi
+  # Effective dry-run for this project (global --dry-run OR per-project first run).
+  # Shadow the global DRY_RUN so all sub-functions (mutate, create_object, etc.)
+  # automatically respect the per-project gate without needing changes.
+  _SAVED_DRY_RUN="$DRY_RUN"
+  DRY_RUN="$PROJ_DRY_RUN"
+  _PROJ_EFFECTIVE_DRY="$DRY_RUN"
+
   REPORT="${REPORT_DIR}/${proj}-${TODAY}.md"
   : > "$REPORT"
   MUTATIONS=0; ESCALATED=0; META_FATIGUE=0
@@ -1272,8 +1293,8 @@ for proj in "${PROJECTS[@]}"; do
   export _CREATE_OBJ_PROJ
   report "# Marketing Autopilot — ${proj} — ${TODAY}"
   report ""
-  report "- Mode: $([ "$DRY_RUN" = "1" ] && echo 'DRY-RUN (no mutations)' || echo 'LIVE')"
-  [ "${FIRST_RUN:-0}" = "1" ] && report "- (first install run — forced dry)"
+  report "- Mode: $([ "$_PROJ_EFFECTIVE_DRY" = "1" ] && echo 'DRY-RUN (no mutations)' || echo 'LIVE')"
+  [ "${FIRST_RUN:-0}" = "1" ] && report "- (first install run for ${proj} — forced dry)"
 
   # Onboarding route
   if [ "$DO_ONBOARD" = "1" ]; then
@@ -1284,6 +1305,7 @@ for proj in "${PROJECTS[@]}"; do
       ln -sf "$REPORT" "${REPORT_DIR}/${proj}-latest.md"
       log "project=$proj onboard REFUSED (no cap)"
       RC=1
+      DRY_RUN="$_SAVED_DRY_RUN"
       continue
     fi
     report "- Daily spend cap: \$${CAP}"
@@ -1294,6 +1316,7 @@ for proj in "${PROJECTS[@]}"; do
     ln -sf "$REPORT" "${REPORT_DIR}/${proj}-latest.md"
     notify "$proj"
     log "project=$proj onboard done (dry=${DRY_RUN} mutations=${MUTATIONS} escalated=${ESCALATED})"
+    DRY_RUN="$_SAVED_DRY_RUN"
     continue
   fi
 
@@ -1304,6 +1327,7 @@ for proj in "${PROJECTS[@]}"; do
     ln -sf "$REPORT" "${REPORT_DIR}/${proj}-latest.md"
     log "project=$proj REFUSED (no cap)"
     RC=1
+    DRY_RUN="$_SAVED_DRY_RUN"
     continue
   fi
   report "- Daily spend cap: \$${CAP}"
@@ -1333,10 +1357,13 @@ for proj in "${PROJECTS[@]}"; do
   report "_autopilot pass complete — mutations: ${MUTATIONS}, escalated: ${ESCALATED}, $(date -u +%Y-%m-%dT%H:%M:%SZ)_"
   ln -sf "$REPORT" "${REPORT_DIR}/${proj}-latest.md"
   notify "$proj"
-  log "project=$proj done (dry=${DRY_RUN} mutations=${MUTATIONS} escalated=${ESCALATED})"
-done
+  log "project=$proj done (dry=${_PROJ_EFFECTIVE_DRY} mutations=${MUTATIONS} escalated=${ESCALATED})"
 
-# Mark installed after the first (forced-dry) pass so the next run can go live.
-[ "${FIRST_RUN:-0}" = "1" ] && date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL_MARKER"
+  # Mark this project installed after its first (forced-dry) pass.
+  [ "${FIRST_RUN:-0}" = "1" ] && date -u +%Y-%m-%dT%H:%M:%SZ > "$PROJ_INSTALL_MARKER"
+
+  # Restore global DRY_RUN for next iteration (may differ from this project's gate)
+  DRY_RUN="$_SAVED_DRY_RUN"
+done
 
 exit $RC
