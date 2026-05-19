@@ -113,6 +113,33 @@ ops-dns-provision audit myapp --json
 ops-dns-provision provision-all myapp --skip dkim,klaviyo-sending
 ```
 
+## Quick start — autonomous mode
+
+Run `/ops:marketing <project>` to point-and-go:
+
+1. `ops-marketing-provision status --project <project>` — what's missing
+2. For each missing channel, run `ops-marketing-provision provision-<channel> --project <project>` (interactive only if OAuth/keys missing; otherwise idempotent)
+3. Verify with `ops-marketing-dash --project <project>`
+4. If autopilot not yet enabled, enable: `ops-marketing-autopilot --project <project> --first-run-dry`
+
+Provision a brand-new project end-to-end:
+```bash
+# One-shot: GA4 + GSC together
+ops-marketing-provision provision-all --project <project>
+
+# Or individually:
+ops-marketing-provision provision-ga4 --project <project> \
+  --domain <domain> --account-id <YOUR_GA4_ACCOUNT_ID>
+ops-marketing-provision provision-gsc --project <project> \
+  --site https://<domain>/
+
+# Check results
+ops-marketing-provision status --project <project> --json
+ops-marketing-dash --project <project>
+```
+
+Set `OPS_MARKETING_DRY_RUN=1` to print planned API calls without executing.
+
 ## Runtime Context
 
 Before executing, load available context:

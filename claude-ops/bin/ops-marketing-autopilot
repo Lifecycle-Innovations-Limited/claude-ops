@@ -28,6 +28,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-path.sh"
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/../scripts/lib/claude-invoke.sh"
+# resolve_cred canonical implementation — shared lib; local copy below is removed
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/../scripts/lib/ga4-resolve.sh"
 
 # Fix B: source analyze.sh once near top (makes extract_json available on ALL paths,
 # including process_onboard, which runs before delegate_claude would source it).
@@ -85,22 +88,7 @@ CREATED_CAMPAIGNS=0
 CREATED_AUDIENCES=0
 CREATED_BUDGET_USD=0
 
-# ── Cred + config resolvers (same contract as bin/ops-marketing-dash) ─────────
-# env:VAR | doppler:proj/cfg/SECRET | inline literal. Empty -> empty. Never fails.
-resolve_cred() {
-  local ref="${1:-}"
-  { [ -z "$ref" ] || [ "$ref" = "null" ]; } && return 0
-  case "$ref" in
-    env:*)
-      local var="${ref#env:}"; printf '%s' "${!var:-}" ;;
-    doppler:*)
-      local path="${ref#doppler:}" proj rest cfg secret
-      proj="${path%%/*}"; rest="${path#*/}"; cfg="${rest%%/*}"; secret="${rest#*/}"
-      { [ -z "$proj" ] || [ -z "$cfg" ] || [ -z "$secret" ]; } && return 0
-      doppler secrets get "$secret" --project "$proj" --config "$cfg" --plain 2>/dev/null || true ;;
-    *) printf '%s' "$ref" ;;
-  esac
-}
+# ── Cred + config resolvers (resolve_cred provided by scripts/lib/ga4-resolve.sh) ──
 
 # Raw jq read against marketing.projects.<project>...
 pref_json() { jq -r "$1" "$PREFS" 2>/dev/null || true; }
