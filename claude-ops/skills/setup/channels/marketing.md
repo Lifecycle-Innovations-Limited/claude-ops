@@ -175,19 +175,40 @@ Print: `[Google Ads] ✓ connected — customer ID: XXXXXXXXXX`
 
 #### Google Analytics 4
 
-If `GA4_PROPERTY_ID` or `GA_MEASUREMENT_ID` was found in the auto-scan, present it. Only ask via free text if not found. Ask for the GA4 Property ID (explain: GA4 dashboard → Admin → Property Settings → Property ID, format: numeric, e.g. `123456789`).
+**Branch A — property already exists:** If `GA4_PROPERTY_ID` or `GA_MEASUREMENT_ID` was found in the auto-scan (or already set under `marketing.projects.<key>.ga4.property_id`), present it and offer `[Keep]` / `[Reconfigure]`. On Keep, write the property ID directly to prefs and continue.
+
+**Branch B — no property yet:** Ask via `AskUserQuestion`:
+
+| Option | Description |
+|--------|-------------|
+| Provision new | Run `ops-marketing-provision provision-ga4` — creates property, stream, MP secret, pushes to Doppler (requires `gcloud` ADC + GA4 account ID) |
+| Paste existing | Enter a numeric property ID manually (GA4 dashboard → Admin → Property Settings) |
+
+For Branch B / Provision new, run:
+```bash
+ops-marketing-provision provision-ga4 \
+  --project <key> \
+  --domain <domain> \
+  --account-id <GA4_ACCOUNT_ID>
+```
+Capture the printed `property_id`, `measurement_id`, `stream_id` — they are written to prefs automatically.
 
 No API key needed if `gcloud` is authenticated — the GA4 Data API uses Application Default Credentials. Check:
 ```bash
 gcloud auth application-default print-access-token 2>/dev/null | head -c 10
 ```
-If gcloud ADC is not set up, note that GA4 queries will require manual auth: `gcloud auth application-default login`.
+If gcloud ADC is not set up, prompt: run `gcloud auth application-default login --scopes=...analytics.edit,...webmasters` (full scope list in `ops-marketing-provision --help`).
 
 #### Google Search Console
 
-Ask for the site URL (format: `https://example.com/` or `sc-domain:example.com`). No API key needed if gcloud is authed.
+Ask for the site URL (format: `https://example.com/` or `sc-domain:example.com`), or auto-derive from `marketing.projects.<key>.domain`.
 
-Smoke test:
+To self-provision (adds the site and auto-upserts DNS TXT via Cloudflare if `CLOUDFLARE_API_TOKEN` is set):
+```bash
+ops-marketing-provision provision-gsc --project <key> --site https://<domain>/
+```
+
+Smoke test (verify gcloud ADC is working):
 ```bash
 ACCESS_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
 curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
