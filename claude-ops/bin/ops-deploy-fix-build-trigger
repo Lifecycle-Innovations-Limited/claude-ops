@@ -28,13 +28,20 @@ echo "$output" | tail -120 | grep -qE \
 
 last_lines=$(echo "$output" | tail -120)
 
-# Repo = healify (mobile build hooks always operate against this)
-repo_slug="healify"
+# Repo slug and org are read from env (set via Doppler / shell profile) so this
+# hook stays project-agnostic and Rule-0 clean.
+repo_slug="${OPS_DEPLOY_FIX_REPO_SLUG:-}"
+repo_org="${OPS_DEPLOY_FIX_REPO_ORG:-}"
+if [ -z "$repo_slug" ]; then
+  notify "Build failed" "OPS_DEPLOY_FIX_REPO_SLUG not set — cannot dispatch fixer. Set it in your shell profile or Doppler."
+  exit 0
+fi
 # `|| true` — locate_repo returns 1 when the checkout is absent. Without it the
 # plain assignment leaks that non-zero status and `set -e` aborts the hook
 # before the fallback below (and the transient/dispatch paths) can run.
-repo_path=$(locate_repo "Lifecycle-Innovations-Limited/healify" 2>/dev/null) || true
-[ -z "$repo_path" ] && repo_path="$HOME/healify"
+repo_path=""
+[ -n "$repo_org" ] && repo_path=$(locate_repo "${repo_org}/${repo_slug}" 2>/dev/null) || true
+[ -z "$repo_path" ] && repo_path="$HOME/${repo_slug}"
 branch=$(git -C "$repo_path" branch --show-current 2>/dev/null || echo "unknown")
 
 # Transient → tell user to retry, no agent

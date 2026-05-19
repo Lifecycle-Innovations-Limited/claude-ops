@@ -189,10 +189,10 @@ echo ""
 echo "── Case 2: ops-deploy-fix-build-trigger ──────────────────────────"
 
 # The trigger resolves repo from PWD via `git -C "$pwd" config --get remote.origin.url`.
-# To keep tests independent of the reviewer's host (no dependency on ~/healify or
-# any other checkout existing), we cd to a non-git temp dir before each Case 2
-# test. The trigger's `slug_full` resolution falls back to "local-build" when
-# git fails, which is the safe codepath we want under test.
+# To keep tests independent of the reviewer's host (no dependency on any specific
+# checkout existing), we cd to a non-git temp dir before each Case 2 test and
+# export OPS_DEPLOY_FIX_REPO_SLUG so the trigger has a repo identity.
+# The trigger's slug is driven by that env var; the lock path uses it.
 SAVED_PWD="$(pwd)"
 NON_GIT_PWD="$SUITE_TMP/non-git-pwd"
 mkdir -p "$NON_GIT_PWD"
@@ -208,6 +208,7 @@ test_build_trigger_fires_on_failure() {
   export CLAUDE_PLUGIN_OPTION_DEPLOY_FIX_ENABLED=true
   export CLAUDE_PLUGIN_OPTION_MONITOR_BUILD_FAILURES=true
   export CLAUDE_PLUGIN_OPTION_AUTO_DISPATCH_FIXER=true
+  export OPS_DEPLOY_FIX_REPO_SLUG="app-a"
   out=$(cat "$FIXTURES/build-trigger-fail.json" | bash "$PLUGIN_ROOT/bin/ops-deploy-fix-build-trigger" 2>&1)
   rc=$?
   assert_eq "2a.exit-zero" "0" "$rc"
@@ -229,6 +230,7 @@ test_build_trigger_skips_success() {
   new_isolated_env "case2-success"
   export CLAUDE_PLUGIN_OPTION_DEPLOY_FIX_ENABLED=true
   export CLAUDE_PLUGIN_OPTION_MONITOR_BUILD_FAILURES=true
+  export OPS_DEPLOY_FIX_REPO_SLUG="app-a"
   cat "$FIXTURES/build-trigger-success.json" | bash "$PLUGIN_ROOT/bin/ops-deploy-fix-build-trigger" >/dev/null 2>&1
   sleep 0.5
   if [ ! -s "$TEST_LOGS/claude.log" ]; then
@@ -243,6 +245,7 @@ test_build_trigger_skips_test_cmd() {
   new_isolated_env "case2-test-cmd"
   export CLAUDE_PLUGIN_OPTION_DEPLOY_FIX_ENABLED=true
   export CLAUDE_PLUGIN_OPTION_MONITOR_BUILD_FAILURES=true
+  export OPS_DEPLOY_FIX_REPO_SLUG="app-a"
   cat "$FIXTURES/build-trigger-test-cmd.json" | bash "$PLUGIN_ROOT/bin/ops-deploy-fix-build-trigger" >/dev/null 2>&1
   sleep 0.5
   if [ ! -s "$TEST_LOGS/claude.log" ]; then
@@ -260,6 +263,7 @@ test_build_trigger_transient() {
   export CLAUDE_PLUGIN_OPTION_MONITOR_BUILD_FAILURES=true
   export CLAUDE_PLUGIN_OPTION_AUTO_DISPATCH_FIXER=true
   export CLAUDE_PLUGIN_OPTION_AUTO_RERUN_TRANSIENTS=true
+  export OPS_DEPLOY_FIX_REPO_SLUG="app-a"
   out=$(cat "$FIXTURES/build-trigger-transient.json" | bash "$PLUGIN_ROOT/bin/ops-deploy-fix-build-trigger" 2>&1)
   rc=$?
   assert_eq "2d.exit-zero" "0" "$rc"
@@ -280,10 +284,9 @@ test_build_trigger_lock_held() {
   export CLAUDE_PLUGIN_OPTION_DEPLOY_FIX_ENABLED=true
   export CLAUDE_PLUGIN_OPTION_MONITOR_BUILD_FAILURES=true
   export CLAUDE_PLUGIN_OPTION_AUTO_DISPATCH_FIXER=true
-  # The build trigger pins `repo_slug=healify` (mobile build hooks always
-  # operate against the healify repo), so the lock path is fixed regardless
-  # of the caller's PWD or git remote.
-  echo $$ > "$TEST_STATE/lock-healify-build"
+  export OPS_DEPLOY_FIX_REPO_SLUG="app-a"
+  # The lock path is keyed by repo_slug (read from OPS_DEPLOY_FIX_REPO_SLUG).
+  echo $$ > "$TEST_STATE/lock-app-a-build"
   out=$(cat "$FIXTURES/build-trigger-fail.json" | bash "$PLUGIN_ROOT/bin/ops-deploy-fix-build-trigger" 2>&1)
   rc=$?
   assert_eq "2e.exit-zero-on-lock" "0" "$rc"
