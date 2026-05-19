@@ -2469,4 +2469,112 @@ Save via userConfig (preferred) or Doppler. Report: `[service] ✓ connected` or
 
 # Full dashboard
 /ops:marketing
+
+# Run read-only health probe (all projects)
+/ops:marketing autopilot --health-check
+
+# Run health probe for one project
+/ops:marketing autopilot --health-check --project <your-project>
 ```
+
+---
+
+## P6 — Self-Healing Autopilot: Schema Reference
+
+### `marketing.notify.sinks` (global, array)
+
+Replaces per-project `autopilot.notify_sink`. On `ESCALATED=1` all sinks fire.
+
+```jsonc
+{
+  "marketing": {
+    "notify": {
+      "sinks": [
+        // Telegram
+        {
+          "type": "telegram",
+          "ref": "doppler:claude-ops/prd/TELEGRAM_BOT_TOKEN",   // or "env:TELEGRAM_BOT_TOKEN"
+          "chat_ref": "doppler:claude-ops/prd/TELEGRAM_CHAT_ID" // optional; falls back to env
+        },
+        // Slack incoming webhook
+        {
+          "type": "slack",
+          "ref": "doppler:claude-ops/prd/SLACK_AUTOPILOT_WEBHOOK"
+        },
+        // Email via Resend
+        {
+          "type": "email",
+          "ref": "doppler:claude-ops/prd/RESEND_API_KEY",
+          "to": "owner@example.com",
+          "from": "autopilot@example.com"
+        },
+        // WhatsApp (daemon context: wacli send; Claude context: mcp__whatsapp)
+        {
+          "type": "whatsapp",
+          "to": "+1234567890"
+        }
+      ]
+    }
+  }
+}
+```
+
+**Legacy fallback:** `marketing.projects.<key>.autopilot.notify_sink = "telegram"` still works if
+`marketing.notify.sinks` is empty. Prefer the global sinks array for new setups.
+
+---
+
+### `marketing.projects.<key>.meta` — auto-refresh fields (P6)
+
+Auto-refresh requires `app_id` and `app_secret` in addition to `access_token`:
+
+```jsonc
+{
+  "marketing": {
+    "projects": {
+      "my-project": {
+        "meta": {
+          "access_token":  "doppler:claude-ops/prd/META_MY_PROJECT_ACCESS_TOKEN",
+          "ad_account_id": "doppler:claude-ops/prd/META_MY_PROJECT_AD_ACCOUNT_ID",
+          "app_id":        "doppler:claude-ops/prd/META_MY_PROJECT_APP_ID",     // NEW — required for auto-refresh
+          "app_secret":    "doppler:claude-ops/prd/META_MY_PROJECT_APP_SECRET"  // NEW — required for auto-refresh
+        }
+      }
+    }
+  }
+}
+```
+
+**Migration:** if you only have `access_token` (P1–P5 config), auto-refresh is disabled and
+a 190 error triggers a manual-rotation escalation instead. No existing behaviour changes — add
+`app_id` + `app_secret` to opt in to auto-refresh.
+
+**Env var fallback:** if Doppler refs are absent, the autopilot also checks
+`META_<PROJECT_UPPER>_APP_ID` and `META_<PROJECT_UPPER>_APP_SECRET` environment variables
+(e.g. `META_MY_PROJECT_APP_ID`).
+
+---
+
+### `--health-check` output schema
+
+`ops-marketing-autopilot --health-check [--project <key>]` exits after printing a JSON array:
+
+```jsonc
+[
+  {
+    "project": "my-project",
+    "ts": "2026-01-01T08:00:00Z",
+    "healthy": false,
+    "checks": [
+      { "surface": "meta_token",     "healthy": true,  "issue": "" },
+      { "surface": "meta_account",   "healthy": false, "issue": "account_status=2" },
+      { "surface": "google_ads_oauth","healthy": true,  "issue": "" },
+      { "surface": "doppler_secrets","healthy": true,  "issue": "" },
+      { "surface": "ga4_sa_key",     "healthy": true,  "issue": "" },
+      { "surface": "gsc_auth",       "healthy": true,  "issue": "" }
+    ]
+  }
+]
+```
+
+`healthy` at the top level is `true` only when all checks pass. Pipe to `jq '.[] | select(.healthy==false)'` to filter unhealthy projects.
