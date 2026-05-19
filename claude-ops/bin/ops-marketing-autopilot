@@ -31,6 +31,12 @@ OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-pat
 # resolve_cred canonical implementation — shared lib; local copy below is removed
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/../scripts/lib/ga4-resolve.sh"
+# ga4_auth_token + ga4_run_report (shared with ops-marketing-dash)
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/../scripts/lib/ga4-data-api.sh"
+# utm_validate (UTM enforcement, P3 wiring)
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/../scripts/lib/utm-validate.sh"
 
 # Fix B: source analyze.sh once near top (makes extract_json available on ALL paths,
 # including process_onboard, which runs before delegate_claude would source it).
@@ -175,6 +181,51 @@ create_object() {
 
   report ""
   report "### Object creation: ${kind} — ${desc}"
+
+  # P3: UTM enforcement on campaign names. Conforms to scripts/lib/utm-validate.sh.
+  # campaign-kind only — audiences/budgets are not UTM-tagged objects.
+  if [ "$kind" = "campaign" ]; then
+    local _p_channel="" _p_name=""
+    for _kv in "$@"; do
+      case "$_kv" in
+        channel=*) _p_channel="${_kv#channel=}" ;;
+        name=*)    _p_name="${_kv#name=}" ;;
+      esac
+    done
+    # Derive (utm_source, utm_medium, utm_campaign) from channel + name.
+    # Convention: utm_source=channel (meta|google_ads → google),
+    #             utm_medium=paid, utm_campaign=<name>.
+    # If the supplied name is non-conforming, auto-normalize to
+    # <slug>_v1_YYYYMMDD so legacy strategy outputs ("Awareness Campaign")
+    # still pass — but log + report the auto-fix.
+    local _utm_source="$_p_channel" _utm_medium="paid" _utm_campaign="$_p_name"
+    [ "$_utm_source" = "google_ads" ] && _utm_source="google"
+    if ! utm_validate "$_utm_source" "$_utm_medium" "$_utm_campaign" 2>/dev/null; then
+      local _slug
+      _slug="$(printf '%s' "$_p_name" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-')"
+      [ -z "$_slug" ] && _slug="campaign"
+      _utm_campaign="${_slug}_v1_$(date +%Y%m%d)"
+      if utm_validate "$_utm_source" "$_utm_medium" "$_utm_campaign" 2>/dev/null; then
+        report "- UTM auto-normalize: '${_p_name}' → '${_utm_campaign}'"
+        # Rewrite the name in the args passed to _create_object_execute so the
+        # API call uses the conforming form.
+        local _new_args=()
+        for _kv in "$@"; do
+          case "$_kv" in
+            name=*)    _new_args+=("name=${_utm_campaign}") ;;
+            *)         _new_args+=("$_kv") ;;
+          esac
+        done
+        set -- "${_new_args[@]}"
+        _p_name="$_utm_campaign"
+      else
+        escalate "$proj" "UTM validation failed for ${kind} '${_p_name}' on channel '${_p_channel}' — non-conforming campaign name (expected <token>_<token>_YYYYMMDD)"
+        report "- ⛔ UTM validate FAIL: campaign='${_p_name}' channel='${_p_channel}' — staged only, no API mutation"
+        return 0
+      fi
+    fi
+    report "- UTM validate OK: source=${_utm_source} medium=${_utm_medium} campaign=${_utm_campaign}"
+  fi
 
   # ── Level 1: kill_switch / DRY_RUN / FIRST_RUN → stage only ─────────────
   if [ "$kill_switch" = "true" ]; then
@@ -553,9 +604,18 @@ $(jq -n \
         report "- floor reached (min_live_creatives=${min_live}) — stop pausing"
         break
       fi
-      local ad_id reason
+      local ad_id reason ad_spend
       ad_id="$(echo "$cand" | jq -r ".[$i].ad_id")"
+      ad_spend="$(echo "$cand" | jq -r ".[$i].spend // 0")"
       reason="$(echo "$cand" | jq -r --argjson cpl_disp "${cpl_mult}" ".[$i] | (if .cpl < 1e11 then \"CPL \\(.cpl|floor) (>\\(\$cpl_disp)x adset avg)\" else \"CTR \\(.ctr)% < floor\" end) + \" / spend \\(.spend) / impr \\(.impr)\"")"
+      # P3: stripe-revenue rescue gate — keep ad if its UTM-tagged stripe revenue
+      # ≥ OPS_PAUSE_ROAS_FLOOR (default 1.0) × meta spend on it.
+      local _decision
+      _decision="$(should_pause_ad "$proj" "$ad_id" "$ad_spend")"
+      if [ "$_decision" = "no" ]; then
+        i=$((i+1))
+        continue
+      fi
       mutate "pause Meta ad ${ad_id} (${reason})" \
         -X POST "${GRAPH}/${ad_id}" \
         -d "status=PAUSED&access_token=${META_TOKEN}${META_PROOF:+&appsecret_proof=${META_PROOF}}"
@@ -654,6 +714,331 @@ process_google_ads() {
   fi
 }
 
+# ── P3: real perf-data gatherers (GA4 conv / GSC / Klaviyo / Stripe) ─────────
+# Each helper:
+#   - reads marketing.projects.<proj>.<channel>.* from preferences.json
+#   - skips silently if not configured (no escalation, no error)
+#   - persists a JSON file to ${STATE_DIR}/${proj}-<channel>.json
+#   - respects OPS_DRY_RUN / DRY_RUN (no network calls)
+#   - never raises — failures degrade to a "null"-shaped envelope so the
+#     downstream bandit/dash path treats missing data as absent, not crashed.
+
+# gather_ga4_conversions <project>
+# 7d run-report with dim=(source/medium/campaign), metrics=(conversions,totalRevenue,sessions).
+# Aggregated JSON keyed by "source/medium/campaign".
+gather_ga4_conversions() {
+  local proj="$1"
+  local out="${STATE_DIR}/${proj}-ga4-conversions.json"
+  local prop sa_key
+  prop="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].ga4.property_id // empty' "$PREFS" 2>/dev/null)")"
+  sa_key="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].ga4.sa_key_file_ref // empty' "$PREFS" 2>/dev/null)")"
+  [ -n "$sa_key" ] && export GA4_SERVICE_ACCOUNT_KEY_FILE="$sa_key"
+  if [ -z "$prop" ]; then
+    report "- ga4-conversions: property_id not configured — skipped"
+    # Do NOT overwrite an existing file — leave whatever's there for callers/tests.
+    [ -f "$out" ] || printf '%s' '{"rows":[],"by_smc":{}}' > "$out"
+    return 0
+  fi
+  if [ "$DRY_RUN" = "1" ]; then
+    report "- [DRY] would query GA4 :runReport (property=${prop}, 7d, source/medium/campaign)"
+    printf '%s' '{"rows":[],"by_smc":{},"_dry_run":true}' > "$out"
+    return 0
+  fi
+  local body='{
+    "dateRanges":[{"startDate":"7daysAgo","endDate":"today"}],
+    "dimensions":[
+      {"name":"sessionSource"},
+      {"name":"sessionMedium"},
+      {"name":"sessionCampaign"}
+    ],
+    "metrics":[
+      {"name":"conversions"},
+      {"name":"totalRevenue"},
+      {"name":"sessions"}
+    ],
+    "limit":1000
+  }'
+  local raw
+  raw="$(ga4_run_report "$prop" "$body")"
+  if [ -z "$raw" ] || [ "$raw" = "{}" ]; then
+    report "- ga4-conversions: no response or auth failed — empty envelope"
+    printf '%s' '{"rows":[],"by_smc":{}}' > "$out"
+    return 0
+  fi
+  printf '%s' "$raw" | jq '{
+    rows: [(.rows // [])[] | {
+      source:   (.dimensionValues[0].value // "(none)"),
+      medium:   (.dimensionValues[1].value // "(none)"),
+      campaign: (.dimensionValues[2].value // "(none)"),
+      conversions:   (.metricValues[0].value // "0" | tonumber? // 0),
+      revenue:       (.metricValues[1].value // "0" | tonumber? // 0),
+      sessions:      (.metricValues[2].value // "0" | tonumber? // 0)
+    }],
+    by_smc: ((.rows // []) | map({
+      key:   ((.dimensionValues[0].value // "(none)") + "/" + (.dimensionValues[1].value // "(none)") + "/" + (.dimensionValues[2].value // "(none)")),
+      value: {
+        conversions: (.metricValues[0].value // "0" | tonumber? // 0),
+        revenue:     (.metricValues[1].value // "0" | tonumber? // 0),
+        sessions:    (.metricValues[2].value // "0" | tonumber? // 0)
+      }
+    }) | from_entries)
+  }' > "$out" 2>/dev/null || printf '%s' '{"rows":[],"by_smc":{}}' > "$out"
+  local n; n="$(jq '.rows | length' "$out" 2>/dev/null || echo 0)"
+  report "- ga4-conversions: ${n} source/medium/campaign rows captured → ${out##*/}"
+}
+
+# gather_gsc_signal <project>
+# Pulls GSC searchAnalytics last 28d (dim=query,page), bucketed into:
+#   - rescue:   pos 8-30, impressions>50, CTR<5%
+#   - hooks:    pos 1-3,  impressions>200, CTR<30%  (creative-gen seeds)
+gather_gsc_signal() {
+  local proj="$1"
+  local out="${STATE_DIR}/${proj}-gsc-signal.json"
+  local site
+  site="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].gsc.site_url // empty' "$PREFS" 2>/dev/null)")"
+  if [ -z "$site" ]; then
+    report "- gsc-signal: site_url not configured — skipped"
+    [ -f "$out" ] || printf '%s' '{"rescue":[],"hooks":[]}' > "$out"
+    return 0
+  fi
+  if [ "$DRY_RUN" = "1" ]; then
+    report "- [DRY] would query GSC searchAnalytics (site=${site}, 28d, query/page)"
+    printf '%s' '{"rescue":[],"hooks":[],"_dry_run":true}' > "$out"
+    return 0
+  fi
+  local tok
+  tok="$(ga4_auth_token)"  # GSC + GA4 share the SA scope when granted; ADC fallback works
+  if [ -z "$tok" ]; then
+    report "- gsc-signal: no auth token available — empty envelope"
+    printf '%s' '{"rescue":[],"hooks":[]}' > "$out"
+    return 0
+  fi
+  local site_enc
+  site_enc="$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$site" 2>/dev/null || echo "$site")"
+  local end_d start_d
+  end_d="$(date +%Y-%m-%d)"
+  start_d="$(date -v-28d +%Y-%m-%d 2>/dev/null || date -d '28 days ago' +%Y-%m-%d 2>/dev/null || echo "$end_d")"
+  local body
+  body="$(jq -n --arg s "$start_d" --arg e "$end_d" \
+    '{startDate:$s,endDate:$e,dimensions:["query","page"],rowLimit:1000}')"
+  local raw
+  raw="$(curl -gsS --max-time 15 -X POST \
+    "https://searchconsole.googleapis.com/webmasters/v3/sites/${site_enc}/searchAnalytics/query" \
+    -H "Authorization: Bearer ${tok}" \
+    -H "Content-Type: application/json" \
+    -d "$body" 2>/dev/null || echo '{}')"
+  if [ -z "$raw" ] || [ "$raw" = "{}" ]; then
+    report "- gsc-signal: GSC API empty/failed — empty envelope"
+    printf '%s' '{"rescue":[],"hooks":[]}' > "$out"
+    return 0
+  fi
+  printf '%s' "$raw" | jq '{
+    rescue: [
+      (.rows // [])[] | {
+        query: (.keys[0] // ""), page: (.keys[1] // ""),
+        impressions: (.impressions // 0), clicks: (.clicks // 0),
+        ctr: ((.ctr // 0) * 100), position: (.position // 0)
+      } | select(.position >= 8 and .position <= 30 and .impressions > 50 and .ctr < 5)
+    ],
+    hooks: [
+      (.rows // [])[] | {
+        query: (.keys[0] // ""), page: (.keys[1] // ""),
+        impressions: (.impressions // 0), clicks: (.clicks // 0),
+        ctr: ((.ctr // 0) * 100), position: (.position // 0)
+      } | select(.position >= 1 and .position <= 3 and .impressions > 200 and .ctr < 30)
+    ]
+  }' > "$out" 2>/dev/null || printf '%s' '{"rescue":[],"hooks":[]}' > "$out"
+  local nr nh
+  nr="$(jq '.rescue | length' "$out" 2>/dev/null || echo 0)"
+  nh="$(jq '.hooks  | length' "$out" 2>/dev/null || echo 0)"
+  report "- gsc-signal: ${nr} rescue opp(s), ${nh} ad-copy hook candidate(s) → ${out##*/}"
+}
+
+# gather_klaviyo_metrics <project>
+# Reads marketing.projects.<proj>.klaviyo.{api_key, account_id}, queries
+# /api/metrics → "Placed Order", /api/metric-aggregates last 7d, /api/flows.
+gather_klaviyo_metrics() {
+  local proj="$1"
+  local out="${STATE_DIR}/${proj}-klaviyo.json"
+  local api_key acct
+  api_key="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].klaviyo.api_key // .marketing.projects[$p].klaviyo.private_key // empty' "$PREFS" 2>/dev/null)")"
+  acct="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].klaviyo.account_id // empty' "$PREFS" 2>/dev/null)")"
+  if [ -z "$api_key" ]; then
+    report "- klaviyo: api_key not configured — skipped"
+    [ -f "$out" ] || printf '%s' '{"placed_order_revenue_7d":0,"flows":[]}' > "$out"
+    return 0
+  fi
+  if [ "$DRY_RUN" = "1" ]; then
+    report "- [DRY] would query Klaviyo /api/metrics + metric-aggregates + flows (acct=${acct:-n/a})"
+    printf '%s' '{"placed_order_revenue_7d":0,"flows":[],"_dry_run":true}' > "$out"
+    return 0
+  fi
+  local H=(-H "Authorization: Klaviyo-API-Key ${api_key}" -H "revision: 2024-10-15" -H "accept: application/json")
+  local metrics po_metric po_id rev_resp po_rev
+  metrics="$(curl -gsS --max-time 10 "${H[@]}" 'https://a.klaviyo.com/api/metrics' 2>/dev/null || echo '{}')"
+  po_metric="$(printf '%s' "$metrics" | jq -c '.data[]? | select(.attributes.name=="Placed Order") | {id:.id}' 2>/dev/null | head -1)"
+  po_id="$(printf '%s' "$po_metric" | jq -r '.id // empty' 2>/dev/null || true)"
+  po_rev=0
+  if [ -n "$po_id" ]; then
+    local agg_body
+    agg_body="$(jq -n --arg mid "$po_id" '{data:{type:"metric-aggregate",attributes:{metric_id:$mid,interval:"day",measurements:["sum_value"],filter:["greater-or-equal(datetime,2024-01-01T00:00:00)"]}}}')"
+    rev_resp="$(curl -gsS --max-time 12 "${H[@]}" -H 'content-type: application/json' \
+      -X POST 'https://a.klaviyo.com/api/metric-aggregates' \
+      -d "$agg_body" 2>/dev/null || echo '{}')"
+    po_rev="$(printf '%s' "$rev_resp" | jq -r '[.data.attributes.data[]? | .measurements.sum_value // 0] | (.[-7:] // []) | add // 0' 2>/dev/null || echo 0)"
+  fi
+  local flows flows_arr
+  flows="$(curl -gsS --max-time 10 "${H[@]}" 'https://a.klaviyo.com/api/flows/?filter=equals(status,%22live%22)&fields[flow]=name,status,trigger_type' 2>/dev/null || echo '{}')"
+  flows_arr="$(printf '%s' "$flows" | jq -c '[.data[]? | {id:.id,name:.attributes.name,status:.attributes.status,trigger_type:.attributes.trigger_type}]' 2>/dev/null || echo '[]')"
+  jq -n --argjson rev "${po_rev:-0}" --argjson flows "$flows_arr" --arg acct "${acct:-}" \
+    '{placed_order_revenue_7d:$rev,flows:$flows,account_id:$acct}' > "$out" 2>/dev/null \
+    || printf '%s' '{"placed_order_revenue_7d":0,"flows":[]}' > "$out"
+  local nf; nf="$(jq '.flows | length' "$out" 2>/dev/null || echo 0)"
+  report "- klaviyo: \$${po_rev} order revenue 7d, ${nf} live flow(s) → ${out##*/}"
+}
+
+# gather_stripe_revenue <project>
+# Calls /v1/charges last 7d, parses UTM metadata, aggregates by source/medium/campaign.
+gather_stripe_revenue() {
+  local proj="$1"
+  local out="${STATE_DIR}/${proj}-stripe.json"
+  local api_key acct
+  api_key="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].stripe.api_key // .marketing.projects[$p].stripe.secret_key // empty' "$PREFS" 2>/dev/null)")"
+  acct="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].stripe.account_id // empty' "$PREFS" 2>/dev/null)")"
+  if [ -z "$api_key" ]; then
+    report "- stripe: api_key not configured — skipped"
+    [ -f "$out" ] || printf '%s' '{"total_revenue_7d":0,"by_smc":{},"by_ad_id":{}}' > "$out"
+    return 0
+  fi
+  if [ "$DRY_RUN" = "1" ]; then
+    report "- [DRY] would query Stripe /v1/charges last 7d (acct=${acct:-default})"
+    printf '%s' '{"total_revenue_7d":0,"by_smc":{},"by_ad_id":{},"_dry_run":true}' > "$out"
+    return 0
+  fi
+  local since
+  since="$(date -v-7d +%s 2>/dev/null || date -d '7 days ago' +%s 2>/dev/null || echo 0)"
+  local H=(-H "Authorization: Bearer ${api_key}")
+  [ -n "$acct" ] && H+=(-H "Stripe-Account: ${acct}")
+  local agg='{"by_smc":{},"by_ad_id":{},"total_revenue_7d":0}'
+  local starting_after="" resp has_more
+  local pages=0
+  while [ "$pages" -lt 10 ]; do
+    pages=$((pages+1))
+    local url="https://api.stripe.com/v1/charges?limit=100&created[gte]=${since}"
+    [ -n "$starting_after" ] && url="${url}&starting_after=${starting_after}"
+    resp="$(curl -gsS --max-time 15 "${H[@]}" "$url" 2>/dev/null || echo '{}')"
+    [ -z "$resp" ] && break
+    has_more="$(printf '%s' "$resp" | jq -r '.has_more // false' 2>/dev/null || echo false)"
+    # Aggregate this page into agg
+    agg="$(printf '%s\n%s' "$agg" "$resp" | jq -sc '
+      .[0] as $acc | .[1] as $page |
+      ($page.data // []) as $charges |
+      reduce $charges[] as $c ($acc;
+        ($c.amount // 0) as $amt_cents |
+        ($amt_cents / 100.0) as $amt_usd |
+        ($c.status == "succeeded") as $ok |
+        if ($ok | not) then . else
+          ($c.metadata.utm_source   // "(none)") as $s |
+          ($c.metadata.utm_medium   // "(none)") as $m |
+          ($c.metadata.utm_campaign // "(none)") as $cmp |
+          ($c.metadata.ad_id // "(none)") as $aid |
+          ($s + "/" + $m + "/" + $cmp) as $k |
+          .total_revenue_7d = ((.total_revenue_7d // 0) + $amt_usd) |
+          .by_smc[$k] = ((.by_smc[$k] // {revenue:0,charges:0}) | .revenue = (.revenue + $amt_usd) | .charges = (.charges + 1)) |
+          .by_ad_id[$aid] = ((.by_ad_id[$aid] // {revenue:0,charges:0}) | .revenue = (.revenue + $amt_usd) | .charges = (.charges + 1))
+        end
+      )' 2>/dev/null || echo "$agg")"
+    [ "$has_more" = "true" ] || break
+    starting_after="$(printf '%s' "$resp" | jq -r '.data[-1].id // empty' 2>/dev/null || true)"
+    [ -z "$starting_after" ] && break
+  done
+  printf '%s' "$agg" > "$out"
+  local tot; tot="$(jq -r '.total_revenue_7d // 0' "$out" 2>/dev/null || echo 0)"
+  report "- stripe: \$${tot} attributed revenue 7d (UTM-tagged charges) → ${out##*/}"
+}
+
+# stripe_revenue_for_ad <project> <ad_id>
+# Returns total stripe-revenue for charges where metadata.ad_id matches.
+# Empty / 0 when stripe data is absent or the ad has no charges.
+stripe_revenue_for_ad() {
+  local proj="$1" ad_id="$2"
+  local f="${STATE_DIR}/${proj}-stripe.json"
+  [ -f "$f" ] || { printf '0'; return 0; }
+  jq -r --arg a "$ad_id" '(.by_ad_id[$a].revenue // 0)' "$f" 2>/dev/null || printf '0'
+}
+
+# surface_perf_signals <project>
+# Renders top GSC rescue/hook entries + Klaviyo underweight flag into the report.
+surface_perf_signals() {
+  local proj="$1"
+  local gsc_f="${STATE_DIR}/${proj}-gsc-signal.json"
+  local klv_f="${STATE_DIR}/${proj}-klaviyo.json"
+  local kpi_ledger="${OPS_DATA_DIR}/autopilot_state/${proj}/kpi.jsonl"
+  local stripe_f="${STATE_DIR}/${proj}-stripe.json"
+
+  # Stripe ground-truth ROAS slice
+  if [ -f "$stripe_f" ] && [ -f "$kpi_ledger" ]; then
+    local meta_spend_7d stripe_rev_7d gt_roas
+    meta_spend_7d="$(tail -n 2000 "$kpi_ledger" 2>/dev/null | jq -sr '[.[].spend // 0] | add // 0' 2>/dev/null || echo 0)"
+    stripe_rev_7d="$(jq -r '.total_revenue_7d // 0' "$stripe_f" 2>/dev/null || echo 0)"
+    gt_roas="$(awk -v r="${stripe_rev_7d:-0}" -v s="${meta_spend_7d:-0}" \
+      'BEGIN{ if (s+0>0) printf "%.2f", r/s; else print 0 }')"
+    report ""
+    report "### Ground-truth ROAS (Stripe-attributed)"
+    report "- meta_spend_7d=\$${meta_spend_7d}  stripe_revenue_7d=\$${stripe_rev_7d}  ROAS=${gt_roas}"
+  fi
+
+  # GSC rescue + hook signals
+  if [ -f "$gsc_f" ]; then
+    local nr nh
+    nr="$(jq '.rescue | length' "$gsc_f" 2>/dev/null || echo 0)"
+    nh="$(jq '.hooks | length' "$gsc_f" 2>/dev/null || echo 0)"
+    if [ "${nr:-0}" -gt 0 ] || [ "${nh:-0}" -gt 0 ]; then
+      report ""
+      report "### GSC opportunity signals"
+      [ "$nr" -gt 0 ] && report "- ${nr} rescue opportunity(ies) (high-impr, low-CTR, ranks 8-30)"
+      [ "$nh" -gt 0 ] && report "- ${nh} ad-copy hook candidate(s) (rank 1-3, CTR<30%)"
+      jq -r '(.hooks // [])[0:5][] | "  - hook seed: \"" + .query + "\" (pos " + (.position|tostring) + ", CTR " + (.ctr|tostring) + "%)"' "$gsc_f" 2>/dev/null >> "$REPORT" || true
+    fi
+  fi
+
+  # Klaviyo underweight signal
+  if [ -f "$klv_f" ]; then
+    local klv_rev meta_spend ratio threshold
+    klv_rev="$(jq -r '.placed_order_revenue_7d // 0' "$klv_f" 2>/dev/null || echo 0)"
+    threshold="${OPS_KLAVIYO_REVENUE_RATIO_FLAG:-0.5}"
+    if [ -f "$kpi_ledger" ]; then
+      meta_spend="$(tail -n 2000 "$kpi_ledger" 2>/dev/null | jq -sr '[.[].spend // 0] | add // 0' 2>/dev/null || echo 0)"
+      ratio="$(awk -v k="${klv_rev:-0}" -v s="${meta_spend:-0}" \
+        'BEGIN{ if (s+0>0) printf "%.2f", k/s; else print 0 }')"
+      if awk "BEGIN{exit !(${ratio:-0} > ${threshold:-0.5})}"; then
+        report ""
+        report "### Channel-mix signal"
+        report "- ⚠️ email channel underweighted: klaviyo_revenue/paid_spend = ${ratio} (> ${threshold} flag)"
+        report "  (do not auto-shift budget — P4 work)"
+      fi
+    fi
+  fi
+}
+
+# ROAS rescue gate: should_pause_ad <project> <ad_id> <meta_spend_per_ad>
+# Echoes "yes" to pause, "no" to keep. Threshold env-overridable.
+should_pause_ad() {
+  local proj="$1" ad_id="$2" meta_spend="${3:-0}"
+  local floor="${OPS_PAUSE_ROAS_FLOOR:-1.0}"
+  local rev; rev="$(stripe_revenue_for_ad "$proj" "$ad_id")"
+  local keep
+  keep="$(awk -v r="${rev:-0}" -v s="${meta_spend:-0}" -v f="${floor}" \
+    'BEGIN{ if (s+0 > 0 && r+0 >= f*s+0) print 1; else print 0 }')"
+  if [ "$keep" = "1" ]; then
+    log "stripe-rescue: kept ad ${ad_id} (revenue=\$${rev} ≥ ${floor}× spend=\$${meta_spend})"
+    report "- stripe-rescue: kept ad ${ad_id} despite meta CPL threshold (\$${rev} ≥ ${floor}× \$${meta_spend})"
+    printf 'no'
+  else
+    printf 'yes'
+  fi
+}
+
 # ── Calibrator + bandit selection ─────────────────────────────────────────────
 apply_calibration_and_bandit() {
   local proj="$1"
@@ -661,9 +1046,61 @@ apply_calibration_and_bandit() {
   local calibrator="${state_dir}/calibrator.json"
   local ledger="${state_dir}/creatives.jsonl"
   local min_live; min_live="$(ap_get "$proj" '.min_live_creatives')"; min_live="${min_live:-2}"
+  local bandit_source="${OPS_BANDIT_SOURCE:-blended}"  # ga4|meta|blended
 
   report ""
   report "### Calibrator + Bandit selection"
+  report "- bandit reward source: ${bandit_source}"
+
+  # ── Blended reward: meta purchase_value + ga4 revenue (per-ad average) ─────
+  # Reads ${STATE_DIR}/${proj}-ga4-conversions.json (written by gather_ga4_conversions)
+  # and the kpi.jsonl meta rows; appends a 'bandit_reward' event per ad to the
+  # creatives.jsonl ledger so downstream tools (calibrator + dashboards) can
+  # train/visualize. Replaces pure-Meta reward when bandit_source != "meta".
+  local ga4_conv_f="${STATE_DIR}/${proj}-ga4-conversions.json"
+  local kpi_ledger="${state_dir}/kpi.jsonl"
+  if [ -f "$kpi_ledger" ] && [ "$DRY_RUN" = "0" ] && [ "$bandit_source" != "meta" ]; then
+    local ga4_total_rev=0
+    if [ -f "$ga4_conv_f" ]; then
+      ga4_total_rev="$(jq -r '[(.rows // [])[] | .revenue] | add // 0' "$ga4_conv_f" 2>/dev/null || echo 0)"
+    fi
+    # Get most-recent meta KPI row per ad (last 24h)
+    local recent_kpi
+    recent_kpi="$(tail -n 500 "$kpi_ledger" 2>/dev/null | jq -sc 'group_by(.ad_id) | map(max_by(.ts // ""))' 2>/dev/null || echo '[]')"
+    local n_ads
+    n_ads="$(printf '%s' "$recent_kpi" | jq 'length' 2>/dev/null || echo 0)"
+    if [ "${n_ads:-0}" -gt 0 ]; then
+      # Allocate ga4 revenue proportionally to meta spend (per-ad) — best linear
+      # attribution we can do without UTM-tagged per-ad GA4 dims.
+      local total_meta_spend
+      total_meta_spend="$(printf '%s' "$recent_kpi" | jq -r '[.[].spend // 0] | add // 0' 2>/dev/null || echo 0)"
+      local ts_now; ts_now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      while IFS= read -r row; do
+        [ -z "$row" ] && continue
+        local ad_id _spend _leads meta_rev ga4_share blended
+        ad_id="$(printf '%s' "$row" | jq -r '.ad_id // empty' 2>/dev/null || true)"
+        _spend="$(printf '%s' "$row" | jq -r '.spend // 0' 2>/dev/null || echo 0)"
+        _leads="$(printf '%s' "$row" | jq -r '.leads // 0' 2>/dev/null || echo 0)"
+        meta_rev="$(printf '%s' "$row" | jq -r '.purchase_value // 0' 2>/dev/null || echo 0)"
+        ga4_share="$(awk -v g="${ga4_total_rev:-0}" -v s="${_spend:-0}" -v t="${total_meta_spend:-0}" \
+          'BEGIN{ if (t+0>0) printf "%.4f", (g*s)/t; else print 0 }')"
+        case "$bandit_source" in
+          ga4)     blended="$ga4_share" ;;
+          blended)
+            blended="$(awk -v m="${meta_rev:-0}" -v g="${ga4_share:-0}" \
+              'BEGIN{ if (m+0>0 && g+0>0) printf "%.4f", (m+g)/2.0; else if (m+0>0) print m; else print g }')"
+            ;;
+          *)       blended="$meta_rev" ;;
+        esac
+        [ -n "$ad_id" ] && printf '%s\n' "$(jq -n \
+          --arg ts "$ts_now" --arg p "$proj" --arg a "$ad_id" \
+          --arg src "$bandit_source" \
+          --argjson meta "${meta_rev:-0}" --argjson ga4 "${ga4_share:-0}" --argjson blend "${blended:-0}" \
+          '{ts:$ts,project:$p,event:"bandit_reward",ad_id:$a,source:$src,meta_revenue:$meta,ga4_revenue:$ga4,reward:$blend}')" >> "$ledger"
+      done < <(printf '%s' "$recent_kpi" | jq -c '.[]?' 2>/dev/null || true)
+      report "- bandit reward: appended ${n_ads} blended row(s) (ga4_total=\$${ga4_total_rev}, meta_spend=\$${total_meta_spend})"
+    fi
+  fi
 
   if [ ! -f "$ledger" ]; then
     report "- no creatives.jsonl ledger yet — skipping bandit"
@@ -1336,6 +1773,17 @@ for proj in "${PROJECTS[@]}"; do
   done
 
   if [ "$ESCALATED" = "0" ]; then
+    # P3: gather real perf data (GA4 conv + GSC + Klaviyo + Stripe) before bandit.
+    # Each helper is idempotent, OPS_DRY_RUN-safe, and silently skips when
+    # the project hasn't configured that channel.
+    report ""
+    report "### Perf-data gather (P3)"
+    gather_ga4_conversions "$proj"
+    gather_gsc_signal     "$proj"
+    gather_klaviyo_metrics "$proj"
+    gather_stripe_revenue "$proj"
+    surface_perf_signals  "$proj"
+
     apply_calibration_and_bandit "$proj"
     delegate_claude "$proj"
   fi
