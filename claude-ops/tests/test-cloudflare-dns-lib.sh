@@ -100,17 +100,15 @@ upsert_id="$(cf_record_upsert "zone-abc" "TXT" "example.com" "v=spf1 -all" 120)"
 call_count="$(wc -l < "$MOCK_CALLS" | tr -d ' ')"
 [[ "$call_count" = "1" ]] && ok "upsert no-op makes 1 call" || err "upsert no-op made $call_count calls"
 
-# --- cf_record_upsert: PUT existing ------------------------------------------
-echo "Testing cf_record_upsert PUT path"
+# --- cf_record_upsert: POST new TXT when another TXT already exists (append) ---
+echo "Testing cf_record_upsert TXT append (no clobber)"
 : > "$MOCK_CALLS"
-# GET response + PUT response (PUT response includes trailing http code line
-# because the lib uses -w '\n%{http_code}').
-write_resp_single '{"result":[{"id":"rec-1","type":"TXT","name":"example.com","content":"OLD"}]}'
-append_resp '{"success":true,"result":{"id":"rec-1"}}
-200'
-upsert_id="$(cf_record_upsert "zone-abc" "TXT" "example.com" "NEW" 120)"
-[[ "$upsert_id" = "rec-1" ]] && ok "upsert PUT returns id" || err "upsert PUT id -> $upsert_id"
-grep -q -- "-X PUT" "$MOCK_CALLS" && ok "upsert PUT uses PUT verb" || err "upsert PUT verb missing"
+write_resp_single '{"result":[{"id":"rec-1","type":"TXT","name":"example.com","content":"v=spf1 -all"}]}'
+append_resp '{"success":true,"result":{"id":"rec-2"}}
+201'
+upsert_id="$(cf_record_upsert "zone-abc" "TXT" "example.com" "google-site-verification=abc" 120)"
+[[ "$upsert_id" = "rec-2" ]] && ok "upsert TXT append returns new id" || err "upsert TXT append id -> $upsert_id"
+grep -q -- "-X POST" "$MOCK_CALLS" && ok "upsert TXT append uses POST" || err "upsert TXT append POST verb missing"
 
 # --- cf_record_upsert: POST new ----------------------------------------------
 echo "Testing cf_record_upsert POST path"

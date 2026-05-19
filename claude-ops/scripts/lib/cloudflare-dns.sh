@@ -8,10 +8,15 @@
 #   cf_auth_header              — echo Cloudflare auth header(s) for curl
 #   cf_apex_for                 — derive apex/zone domain from any FQDN
 #   cf_zone_id <apex>           — resolve zone ID via GET /zones?name=<apex>
+#   cf_dns_records_json <zone> <type> <name>
+#                               — raw JSON body of GET dns_records (full .result[])
 #   cf_record_get <zone> <type> <name>
 #                               — JSON of matching record (first hit) or empty
 #   cf_record_upsert <zone> <type> <name> <content> [ttl]
-#                               — GET-first idempotent upsert (POST or PUT)
+#                               — GET-first idempotent upsert (POST or PUT).
+#                                 For type=TXT: multiple RRs per name are
+#                                 supported — exact match no-ops; otherwise POST
+#                                 (append). Never PUT-replaces an unrelated TXT.
 #   cf_record_delete <zone> <id>
 #
 # Honors OPS_DRY_RUN=1 — prints planned API calls without firing.
@@ -131,26 +136,37 @@ cf_zone_id() {
   printf '%s' "$resp" | jq -r '.result[0].id // empty' 2>/dev/null
 }
 
+# Raw JSON from GET /zones/:zone/dns_records?type=&name= (includes full .result[]).
+# Args: <zone_id> <type> <name>
+cf_dns_records_json() {
+  local zone="${1:-}" type="${2:-}" name="${3:-}"
+  [[ -z "$zone" || -z "$type" || -z "$name" ]] && return 1
+  if cf_is_dry_run; then
+    _cf_dryrun "GET $CF_API_BASE/zones/$zone/dns_records?type=$type&name=$name"
+    printf '{"result":[]}'
+    return 0
+  fi
+  local -a CF_CURL_ARGS=()
+  cf_curl_args_set || return 1
+  curl -sS --max-time 10 "${CF_CURL_ARGS[@]}" \
+    "$CF_API_BASE/zones/$zone/dns_records?type=$type&name=$name" 2>/dev/null || printf '{}'
+}
+
 # Fetch first record matching type+name. Echoes JSON object or empty.
 # Args: <zone_id> <type> <name>
 cf_record_get() {
   local zone="${1:-}" type="${2:-}" name="${3:-}"
   [[ -z "$zone" || -z "$type" || -z "$name" ]] && return 1
-  if cf_is_dry_run; then
-    _cf_dryrun "GET $CF_API_BASE/zones/$zone/dns_records?type=$type&name=$name"
-    return 0
-  fi
-  local -a CF_CURL_ARGS=()
-  cf_curl_args_set || return 1
   local resp
-  resp="$(curl -sS --max-time 10 "${CF_CURL_ARGS[@]}" \
-    "$CF_API_BASE/zones/$zone/dns_records?type=$type&name=$name" 2>/dev/null || printf '{}')"
+  resp="$(cf_dns_records_json "$zone" "$type" "$name" || printf '{}')"
   printf '%s' "$resp" | jq -c '.result[0] // empty' 2>/dev/null
 }
 
 # Idempotent upsert. GET-first by name+type; PUT if found, POST if not.
 # Args: <zone_id> <type> <name> <content> [ttl=120] [proxied=false]
 # Echoes the record ID on success.
+# TXT: multiple records per name are normal at the apex — we never PUT an
+# unrelated existing TXT; we POST a new RR unless an exact content match exists.
 cf_record_upsert() {
   local zone="${1:-}" type="${2:-}" name="${3:-}" content="${4:-}"
   local ttl="${5:-120}" proxied="${6:-false}"
@@ -177,33 +193,47 @@ cf_record_upsert() {
     return 0
   fi
 
-  local existing
-  existing="$(cf_record_get "$zone" "$type" "$name" || true)"
-  local existing_id existing_content
-  existing_id="$(printf '%s' "$existing" | jq -r '.id // empty' 2>/dev/null || true)"
-  existing_content="$(printf '%s' "$existing" | jq -r '.content // empty' 2>/dev/null || true)"
-
   local -a CF_CURL_ARGS=()
   cf_curl_args_set || return 1
   CF_CURL_ARGS+=( -H "Content-Type: application/json" )
 
-  local resp http
+  local list_json existing_id
+  list_json="$(cf_dns_records_json "$zone" "$type" "$name" || printf '{}')"
+  existing_id="$(printf '%s' "$list_json" | jq -r --arg c "$content" \
+    '.result[]? | select(.content == $c) | .id' 2>/dev/null | head -n 1)"
   if [[ -n "$existing_id" ]]; then
-    # No-op if content already matches.
-    if [[ "$existing_content" = "$content" ]]; then
-      _cf_log "no-op: $type $name already has desired content"
-      printf '%s\n' "$existing_id"
-      return 0
-    fi
-    resp="$(curl -sS --max-time 10 -w '\n%{http_code}' -X PUT \
-      "${CF_CURL_ARGS[@]}" \
-      --data "$payload" \
-      "$CF_API_BASE/zones/$zone/dns_records/$existing_id" 2>/dev/null || printf '{}\n0')"
-  else
+    _cf_log "no-op: $type $name already has desired content"
+    printf '%s\n' "$existing_id"
+    return 0
+  fi
+
+  local resp http
+  if [[ "$type" = "TXT" ]]; then
     resp="$(curl -sS --max-time 10 -w '\n%{http_code}' -X POST \
       "${CF_CURL_ARGS[@]}" \
       --data "$payload" \
       "$CF_API_BASE/zones/$zone/dns_records" 2>/dev/null || printf '{}\n0')"
+  else
+    local existing existing_id2 existing_content
+    existing="$(printf '%s' "$list_json" | jq -c '.result[0] // empty' 2>/dev/null)"
+    existing_id2="$(printf '%s' "$existing" | jq -r '.id // empty' 2>/dev/null || true)"
+    existing_content="$(printf '%s' "$existing" | jq -r '.content // empty' 2>/dev/null || true)"
+    if [[ -n "$existing_id2" ]]; then
+      if [[ "$existing_content" = "$content" ]]; then
+        _cf_log "no-op: $type $name already has desired content"
+        printf '%s\n' "$existing_id2"
+        return 0
+      fi
+      resp="$(curl -sS --max-time 10 -w '\n%{http_code}' -X PUT \
+        "${CF_CURL_ARGS[@]}" \
+        --data "$payload" \
+        "$CF_API_BASE/zones/$zone/dns_records/$existing_id2" 2>/dev/null || printf '{}\n0')"
+    else
+      resp="$(curl -sS --max-time 10 -w '\n%{http_code}' -X POST \
+        "${CF_CURL_ARGS[@]}" \
+        --data "$payload" \
+        "$CF_API_BASE/zones/$zone/dns_records" 2>/dev/null || printf '{}\n0')"
+    fi
   fi
 
   http="${resp##*$'\n'}"
@@ -234,6 +264,7 @@ cf_record_delete() {
 # If record exists and already contains $merge_marker substring, leave alone.
 # Otherwise PUT the new content (caller is responsible for merge logic, this
 # helper is the "never silently overwrite a foreign value" guard).
+# Scans all TXT RRs at $name — never assumes .result[0] only.
 # Args: <zone> <name> <new_content> <merge_marker>
 cf_txt_upsert_safe() {
   local zone="${1:-}" name="${2:-}" new_content="${3:-}" marker="${4:-}"
@@ -245,26 +276,61 @@ cf_txt_upsert_safe() {
     return $?
   fi
 
-  local existing existing_content
-  existing="$(cf_record_get "$zone" "TXT" "$name" || true)"
-  existing_content="$(printf '%s' "$existing" | jq -r '.content // empty' 2>/dev/null || true)"
+  local list_json match_id match_content any_foreign
+  list_json="$(cf_dns_records_json "$zone" "TXT" "$name" || printf '{}')"
+  match_id="$(printf '%s' "$list_json" | jq -r --arg c "$new_content" \
+    '.result[]? | select(.content == $c) | .id' 2>/dev/null | head -n 1)"
+  if [[ -n "$match_id" ]]; then
+    _cf_log "no-op: TXT $name already matches"
+    printf '%s\n' "$match_id"
+    return 0
+  fi
 
-  if [[ -z "$existing_content" ]]; then
+  local n
+  n="$(printf '%s' "$list_json" | jq '.result | length // 0' 2>/dev/null || echo 0)"
+  if [[ "$n" -eq 0 ]]; then
     cf_record_upsert "$zone" "TXT" "$name" "$new_content" 120
     return $?
   fi
 
-  # Already same.
-  if [[ "$existing_content" = "$new_content" ]]; then
-    _cf_log "no-op: TXT $name already matches"
-    printf '%s\n' "$(printf '%s' "$existing" | jq -r '.id // empty')"
-    return 0
+  if [[ -n "$marker" ]]; then
+    match_id="$(printf '%s' "$list_json" | jq -r --arg m "$marker" \
+      '.result[]? | select(.content | contains($m)) | .id' 2>/dev/null | head -n 1)"
+    match_content="$(printf '%s' "$list_json" | jq -r --arg m "$marker" \
+      '.result[]? | select(.content | contains($m)) | .content' 2>/dev/null | head -n 1)"
+    if [[ -n "$match_id" ]]; then
+      if [[ "$match_content" = "$new_content" ]]; then
+        _cf_log "no-op: TXT $name (marker) already matches"
+        printf '%s\n' "$match_id"
+        return 0
+      fi
+      local payload
+      payload="$(jq -nc \
+        --arg name "$name" \
+        --arg content "$new_content" \
+        '{type:"TXT", name:$name, content:$content, ttl:120, proxied:false}')"
+      local -a CF_CURL_ARGS=()
+      cf_curl_args_set || return 1
+      CF_CURL_ARGS+=( -H "Content-Type: application/json" )
+      local resp http
+      resp="$(curl -sS --max-time 10 -w '\n%{http_code}' -X PUT \
+        "${CF_CURL_ARGS[@]}" \
+        --data "$payload" \
+        "$CF_API_BASE/zones/$zone/dns_records/$match_id" 2>/dev/null || printf '{}\n0')"
+      http="${resp##*$'\n'}"
+      local body="${resp%$'\n'*}"
+      if [[ "$http" != "200" && "$http" != "201" ]]; then
+        _cf_log "ERROR: safe TXT PUT failed (http=$http): $body"
+        return 1
+      fi
+      printf '%s' "$body" | jq -r '.result.id // empty' 2>/dev/null
+      return 0
+    fi
+    if [[ "$n" -gt 0 ]]; then
+      _cf_log "WARN: TXT $name has foreign content (no marker '$marker'); refusing to overwrite."
+      return 3
+    fi
   fi
 
-  # Foreign value present — refuse to overwrite unless marker matches.
-  if [[ -n "$marker" && "$existing_content" != *"$marker"* ]]; then
-    _cf_log "WARN: TXT $name has foreign content (no marker '$marker'); refusing to overwrite. Existing: $existing_content"
-    return 3
-  fi
   cf_record_upsert "$zone" "TXT" "$name" "$new_content" 120
 }

@@ -305,12 +305,23 @@ cmd_dkim() {
         return 0
       fi
       [[ -z "$key" ]] && { err "dkim: resend api key missing"; return 1; }
-      local resp
-      resp="$(curl -sS --max-time 15 -X POST \
+      local list_resp domain_id resp
+      list_resp="$(curl -sS --max-time 15 \
         -H "Authorization: Bearer $key" \
-        -H "Content-Type: application/json" \
-        --data "{\"name\":\"$apex\"}" \
         "https://api.resend.com/domains" 2>/dev/null || printf '{}')"
+      domain_id="$(printf '%s' "$list_resp" | jq -r --arg n "$apex" \
+        '.data[]? | select(.name == $n) | .id // empty' 2>/dev/null | head -n 1)"
+      if [[ -n "$domain_id" ]]; then
+        resp="$(curl -sS --max-time 15 \
+          -H "Authorization: Bearer $key" \
+          "https://api.resend.com/domains/$domain_id" 2>/dev/null || printf '{}')"
+      else
+        resp="$(curl -sS --max-time 15 -X POST \
+          -H "Authorization: Bearer $key" \
+          -H "Content-Type: application/json" \
+          --data "{\"name\":\"$apex\"}" \
+          "https://api.resend.com/domains" 2>/dev/null || printf '{}')"
+      fi
       local count
       count="$(printf '%s' "$resp" | jq '.records | length // 0' 2>/dev/null || echo 0)"
       if [[ "$count" -eq 0 ]]; then
@@ -365,8 +376,46 @@ cmd_dmarc() {
   local zone; zone="$(cf_zone_id "$apex")"
   [[ -z "$zone" ]] && { err "dmarc: zone not found for $apex"; return 1; }
 
-  cf_record_upsert "$zone" "TXT" "$name" "$content" 3600 false >/dev/null || {
-    err "dmarc: upsert failed"; return 1; }
+  if is_dry; then
+    dryrun "DMARC TXT upsert at $name (GET-first, single-record replace)"
+    cf_record_upsert "$zone" "TXT" "$name" "$content" 3600 false >/dev/null || {
+      err "dmarc: upsert failed"; return 1; }
+    log "dmarc: dry-run complete"
+    return 0
+  fi
+
+  local list_json dmarc_id
+  list_json="$(cf_dns_records_json "$zone" "TXT" "$name" || printf '{}')"
+  if printf '%s' "$list_json" | jq -e --arg c "$content" '.result[]? | select(.content == $c)' >/dev/null 2>&1; then
+    log "dmarc: no-op (already matches)"
+    log "dmarc: TXT @ $name ok"
+    return 0
+  fi
+  dmarc_id="$(printf '%s' "$list_json" | jq -r '.result[]? | select(.content | startswith("v=DMARC1")) | .id' 2>/dev/null | head -n 1)"
+  local payload
+  payload="$(jq -nc \
+    --arg name "$name" \
+    --arg content "$content" \
+    '{type:"TXT", name:$name, content:$content, ttl:3600, proxied:false}')"
+  local -a CF_CURL_ARGS=()
+  cf_curl_args_set || return 1
+  CF_CURL_ARGS+=( -H "Content-Type: application/json" )
+  local resp http
+  if [[ -n "$dmarc_id" ]]; then
+    resp="$(curl -sS --max-time 10 -w '\n%{http_code}' -X PUT "${CF_CURL_ARGS[@]}" \
+      --data "$payload" \
+      "$CF_API_BASE/zones/$zone/dns_records/$dmarc_id" 2>/dev/null || printf '{}\n0')"
+  else
+    resp="$(curl -sS --max-time 10 -w '\n%{http_code}' -X POST "${CF_CURL_ARGS[@]}" \
+      --data "$payload" \
+      "$CF_API_BASE/zones/$zone/dns_records" 2>/dev/null || printf '{}\n0')"
+  fi
+  http="${resp##*$'\n'}"
+  local body="${resp%$'\n'*}"
+  if [[ "$http" != "200" && "$http" != "201" ]]; then
+    err "dmarc: upsert failed (http=$http): $body"
+    return 1
+  fi
   log "dmarc: TXT @ $name upserted"
 }
 
@@ -513,7 +562,25 @@ cmd_klaviyo_sending() {
 #   present | absent | conflicting
 audit_row() {
   local zone="$1" type="$2" name="$3" expected_substr="$4"
-  local rec content
+  local rec content raw n
+  if [[ "$type" = "TXT" ]]; then
+    raw="$(cf_dns_records_json "$zone" "TXT" "$name" 2>/dev/null || printf '{}')"
+    n="$(printf '%s' "$raw" | jq '.result | length // 0' 2>/dev/null || echo 0)"
+    if [[ "$n" -eq 0 ]]; then
+      printf 'absent'
+      return
+    fi
+    if [[ -z "$expected_substr" ]]; then
+      printf 'present'
+      return
+    fi
+    if printf '%s' "$raw" | jq -e --arg s "$expected_substr" '.result[]? | select(.content | contains($s))' >/dev/null 2>&1; then
+      printf 'present'
+    else
+      printf 'conflicting'
+    fi
+    return
+  fi
   rec="$(cf_record_get "$zone" "$type" "$name" 2>/dev/null || true)"
   if [[ -z "$rec" ]]; then
     printf 'absent'
