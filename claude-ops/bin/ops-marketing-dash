@@ -156,6 +156,7 @@ gather_meta() {
 # --- GA4 ---
 # Auth: prefer SA key file (GA4_SERVICE_ACCOUNT_KEY_FILE or first ~/.config/gcloud/keys/*ga*.json)
 # over gcloud ADC, so the dash works in daemon context without interactive gcloud auth.
+# If the key file exists but JWT exchange yields no token, fall back to ADC.
 _ga4_auth_token() {
   local sa_key_file="${GA4_SERVICE_ACCOUNT_KEY_FILE:-}"
   if [ -z "$sa_key_file" ]; then
@@ -164,7 +165,7 @@ _ga4_auth_token() {
   fi
   if [ -n "$sa_key_file" ] && [ -f "$sa_key_file" ]; then
     # Exchange SA key for access token via OAuth2
-    local now exp header payload sig jwt resp
+    local now exp header payload sig jwt resp sa_token
     now=$(date +%s)
     exp=$((now + 3600))
     header=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '+/' '-_' | tr -d '\n')
@@ -177,8 +178,11 @@ _ga4_auth_token() {
     jwt="${header}.${payload}.${sig}"
     resp=$(curl -sS --max-time 5 -X POST https://oauth2.googleapis.com/token \
       --data "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}" 2>/dev/null || echo '{}')
-    printf '%s' "$(printf '%s' "$resp" | jq -r '.access_token // empty' 2>/dev/null || true)"
-    return
+    sa_token="$(printf '%s' "$resp" | jq -r '.access_token // empty' 2>/dev/null || true)"
+    if [ -n "$sa_token" ]; then
+      printf '%s' "$sa_token"
+      return
+    fi
   fi
   # Fallback: ADC
   gcloud auth application-default print-access-token 2>/dev/null || true

@@ -240,7 +240,11 @@ cmd_provision_ga4() {
   account_id="${account_id#accounts/}"
 
   local token
-  token="$(ga4_get_token)"
+  if [ "$DRY_RUN" = "1" ]; then
+    token="dry-run"
+  else
+    token="$(ga4_get_token)"
+  fi
 
   local auth_header="Authorization: Bearer $token"
   local base_admin="https://analyticsadmin.googleapis.com"
@@ -429,7 +433,11 @@ cmd_provision_gsc() {
   [ -n "$site_url" ] || die "--site is required (e.g. sc-domain:example.com or https://example.com/)"
 
   local token
-  token="$(gsc_get_token)"
+  if [ "$DRY_RUN" = "1" ]; then
+    token="dry-run"
+  else
+    token="$(gsc_get_token)"
+  fi
   local auth_header="Authorization: Bearer $token"
   local base_gsc="https://searchconsole.googleapis.com/webmasters/v3"
 
