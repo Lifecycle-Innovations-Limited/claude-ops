@@ -84,10 +84,18 @@ The new bin reads project-level config from `$PREFS_PATH` under `marketing.proje
         },
 
         // Cred-refs for individual rows
-        "stripe":  { "secret_key":     "env:STRIPE_SECRET_KEY" },
+        "stripe":  {
+          "secret_key":  "env:STRIPE_SECRET_KEY",  // legacy DNS provisioner key
+          "api_key":     "env:STRIPE_API_KEY",     // P3: used by ops-marketing-autopilot stripe ROAS gate
+          "account_id":  "acct_<id>"                // optional, only when calling on behalf of a connected acct
+        },
         "meta":    { "access_token":   "env:META_ACCESS_TOKEN" },
-        "klaviyo": { "private_key":    "doppler:prd:KLAVIYO_API_KEY",
-                     "sending_subdomain": "em.example.com" }
+        "klaviyo": {
+          "private_key": "doppler:prd:KLAVIYO_API_KEY",  // legacy DNS row
+          "api_key":     "doppler:prd:KLAVIYO_API_KEY",  // P3: used by gather_klaviyo_metrics
+          "account_id":  "<klaviyo-account-id>",         // P3: optional
+          "sending_subdomain": "em.example.com"
+        }
       }
     }
   }
@@ -95,6 +103,27 @@ The new bin reads project-level config from `$PREFS_PATH` under `marketing.proje
 ```
 
 Defaults are applied bash-side via `${var:-default}`, so all values are optional except `domain` (required by `audit` and `provision-all`).
+
+### P3 — perf-data wiring (autopilot)
+
+`bin/ops-marketing-autopilot` reads four perf-data sources per pass and persists them to `${OPS_DATA_DIR}/state/autopilot/<project>-{ga4-conversions,gsc-signal,klaviyo,stripe}.json`:
+
+| Source | Prefs path | Helper | Purpose |
+|---|---|---|---|
+| GA4 conversions | `marketing.projects.<key>.ga4.{property_id, sa_key_file_ref}` | `gather_ga4_conversions` | source/medium/campaign rows for the blended bandit reward |
+| GSC search | `marketing.projects.<key>.gsc.site_url` | `gather_gsc_signal` | rescue + ad-copy-hook candidate buckets |
+| Klaviyo | `marketing.projects.<key>.klaviyo.{api_key, account_id}` | `gather_klaviyo_metrics` | Placed Order revenue + flow inventory |
+| Stripe | `marketing.projects.<key>.stripe.{api_key, account_id}` | `gather_stripe_revenue` | UTM-attributed revenue per `source/medium/campaign` and per `ad_id` — ground-truth ROAS denominator + pause-rescue gate |
+
+Env knobs:
+
+| Env | Default | Effect |
+|---|---|---|
+| `OPS_BANDIT_SOURCE` | `blended` | `meta` → meta-only reward (legacy), `ga4` → GA4 attribution only, `blended` → `(meta + ga4)/2` |
+| `OPS_PAUSE_ROAS_FLOOR` | `1.0` | An ad with `stripe_revenue ≥ floor × meta_spend` is kept despite Meta CPL/CTR pause criteria |
+| `OPS_KLAVIYO_REVENUE_RATIO_FLAG` | `0.5` | When `klaviyo_revenue / paid_spend > flag`, surface "email channel underweighted" in the daily report (no auto-shift) |
+
+UTM enforcement: every `create_object campaign …` call runs `utm_validate` (from `scripts/lib/utm-validate.sh`) on the derived `(utm_source, utm_medium, utm_campaign)` triple before any API mutation. Non-conforming names escalate + stage-only.
 
 ### Quick examples
 

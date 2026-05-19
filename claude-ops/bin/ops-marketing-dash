@@ -11,6 +11,9 @@ OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-pat
 # resolve_cred, ga4_resolve, gsc_resolve, marketing_channels_status
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/../scripts/lib/ga4-resolve.sh"
+# ga4_auth_token + ga4_run_report (shared with ops-marketing-autopilot)
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/../scripts/lib/ga4-data-api.sh"
 PREFS="${OPS_DATA_DIR}/preferences.json"
 
 # Pull a value from preferences.json marketing.projects.<project>.<channel>.<field>.
@@ -154,39 +157,9 @@ gather_meta() {
 }
 
 # --- GA4 ---
-# Auth: prefer SA key file (GA4_SERVICE_ACCOUNT_KEY_FILE or first ~/.config/gcloud/keys/*ga*.json)
-# over gcloud ADC, so the dash works in daemon context without interactive gcloud auth.
-# If the key file exists but JWT exchange yields no token, fall back to ADC.
-_ga4_auth_token() {
-  local sa_key_file="${GA4_SERVICE_ACCOUNT_KEY_FILE:-}"
-  if [ -z "$sa_key_file" ]; then
-    # Auto-discover first matching SA key
-    sa_key_file="$(ls "$HOME"/.config/gcloud/keys/*ga*.json 2>/dev/null | head -1 || true)"
-  fi
-  if [ -n "$sa_key_file" ] && [ -f "$sa_key_file" ]; then
-    # Exchange SA key for access token via OAuth2
-    local now exp header payload sig jwt resp sa_token
-    now=$(date +%s)
-    exp=$((now + 3600))
-    header=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 | tr -d '=' | tr '+/' '-_' | tr -d '\n')
-    payload=$(printf '{"iss":"%s","scope":"https://www.googleapis.com/auth/analytics.readonly","aud":"https://oauth2.googleapis.com/token","exp":%d,"iat":%d}' \
-      "$(jq -r '.client_email' "$sa_key_file")" "$exp" "$now" \
-      | base64 | tr -d '=' | tr '+/' '-_' | tr -d '\n')
-    sig=$(printf '%s.%s' "$header" "$payload" \
-      | openssl dgst -sha256 -sign <(jq -r '.private_key' "$sa_key_file") 2>/dev/null \
-      | base64 | tr -d '=' | tr '+/' '-_' | tr -d '\n')
-    jwt="${header}.${payload}.${sig}"
-    resp=$(curl -sS --max-time 5 -X POST https://oauth2.googleapis.com/token \
-      --data "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}" 2>/dev/null || echo '{}')
-    sa_token="$(printf '%s' "$resp" | jq -r '.access_token // empty' 2>/dev/null || true)"
-    if [ -n "$sa_token" ]; then
-      printf '%s' "$sa_token"
-      return
-    fi
-  fi
-  # Fallback: ADC
-  gcloud auth application-default print-access-token 2>/dev/null || true
-}
+# Auth + transport now live in scripts/lib/ga4-data-api.sh (shared with autopilot).
+# Local wrapper kept as a thin shim for backward compatibility with prior callers.
+_ga4_auth_token() { ga4_auth_token; }
 
 gather_ga4() {
   if [ -z "$GA4_PROPERTY" ] || [ "$GA4_PROPERTY" = "0" ]; then
@@ -194,19 +167,8 @@ gather_ga4() {
     return
   fi
 
-  local GA4_TOKEN
-  GA4_TOKEN=$(_ga4_auth_token)
-  if [ -z "$GA4_TOKEN" ]; then
-    echo "null"
-    return
-  fi
-
   local REPORT
-  REPORT=$(curl -gsS --max-time 10 -X POST \
-    "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport" \
-    -H "Authorization: Bearer ${GA4_TOKEN}" \
-    -H "Content-Type: application/json" \
-    -d '{
+  REPORT=$(ga4_run_report "$GA4_PROPERTY" '{
       "dateRanges": [{"startDate": "7daysAgo", "endDate": "today"}],
       "metrics": [
         {"name": "sessions"},
@@ -215,7 +177,11 @@ gather_ga4() {
         {"name": "screenPageViews"},
         {"name": "totalRevenue"}
       ]
-    }' 2>/dev/null)
+    }')
+  if [ -z "$REPORT" ] || [ "$REPORT" = "{}" ]; then
+    echo "null"
+    return
+  fi
 
   local SESSIONS USERS CONVERSIONS PAGEVIEWS REVENUE CVR
   SESSIONS=$(printf '%s' "$REPORT" | jq -r '.rows[0].metricValues[0].value // "0"' 2>/dev/null || echo "0")
