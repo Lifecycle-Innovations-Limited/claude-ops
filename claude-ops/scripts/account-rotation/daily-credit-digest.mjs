@@ -306,7 +306,7 @@ export async function fetchFallbackRatio({ now = new Date(), region = process.en
       '--output',
       'json',
     ],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', timeout: 30_000 },
   );
 
   if (res.error) {

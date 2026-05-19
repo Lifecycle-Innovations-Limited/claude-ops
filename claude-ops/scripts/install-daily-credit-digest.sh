@@ -38,14 +38,16 @@ fi
 
 mkdir -p "$LOG_DIR" "$(dirname "$PLIST_DEST")"
 
-sed -e "s|__SCRIPT_PATH__|$SCRIPT_PATH|g" \
-    -e "s|__LOG_DIR__|$LOG_DIR|g" \
-    -e "s|__HOME__|$HOME|g" \
-    -e "s|__NODE_BIN__|$NODE_BIN|g" \
-    "$PLIST_TEMPLATE" \
-  | SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}" AWS_REGION="${AWS_REGION:-eu-west-1}" "$NODE_BIN" -e \
-    'const fs=require("fs");const t=fs.readFileSync(0,"utf8");const e=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");process.stdout.write(t.replace("__SLACK_WEBHOOK_URL__",e(process.env.SLACK_WEBHOOK_URL||"")).replace("__AWS_REGION__",e(process.env.AWS_REGION||"eu-west-1")));' \
-    > "$PLIST_DEST"
+PLIST_TEMPLATE_PATH="$PLIST_TEMPLATE" \
+DIGEST_SCRIPT_PATH="$SCRIPT_PATH" \
+DIGEST_LOG_DIR="$LOG_DIR" \
+DIGEST_HOME="$HOME" \
+DIGEST_NODE_BIN="$NODE_BIN" \
+SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}" \
+AWS_REGION="${AWS_REGION:-eu-west-1}" \
+"$NODE_BIN" -e \
+  'const fs=require("fs");const e=(s)=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");const t=fs.readFileSync(process.env.PLIST_TEMPLATE_PATH,"utf8");process.stdout.write(t.replace(/__SCRIPT_PATH__/g,e(process.env.DIGEST_SCRIPT_PATH)).replace(/__LOG_DIR__/g,e(process.env.DIGEST_LOG_DIR)).replace(/__HOME__/g,e(process.env.DIGEST_HOME)).replace(/__NODE_BIN__/g,e(process.env.DIGEST_NODE_BIN)).replace(/__SLACK_WEBHOOK_URL__/g,e(process.env.SLACK_WEBHOOK_URL||"")).replace(/__AWS_REGION__/g,e(process.env.AWS_REGION||"eu-west-1")));' \
+  > "$PLIST_DEST"
 
 launchctl bootout "gui/$(id -u)/com.claude-ops.daily-credit-digest" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST_DEST"
