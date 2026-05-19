@@ -142,6 +142,11 @@ allowlist.paths = [
   '''docs/''',
   '''CONFIGURATION\.md$''',
 ]
+# Shell-variable basic-auth (e.g. `-u "$skey:"`) cannot leak a literal secret —
+# the value resolves at runtime from env/prefs. Allowlist the pattern shape.
+allowlist.regexes = [
+  '''-u\s+["']?\$[A-Za-z_][A-Za-z0-9_]*''',
+]
 [allowlist]
 paths = [
   '''node_modules''',
