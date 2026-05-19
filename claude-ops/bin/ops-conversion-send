@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# ops-conversion-send — GA4 Measurement Protocol conversion event sender
+#
+# Sends conversion events to the GA4 Measurement Protocol (mp/collect).
+# Credentials resolved from preferences.json marketing.projects.<key>.ga4.*
+# or doppler: / env: refs — zero hardcoded values (Rule 0).
+#
+# Subcommands:
+#   ga4 --project <key> --event <name> --client-id <cid>
+#       [--value <v>] [--currency <c>] [--transaction-id <tx>]
+#       [--user-id <uid>] [--properties <json>]
+#
+# Environment:
+#   OPS_DRY_RUN=1        Print planned curl + payload, exit 0 without network call
+#   OPS_CONVERSION_DEBUG=1  Validate via debug endpoint before live send
+#
+# Supported event names: purchase, sign_up, generate_lead, add_to_cart, (custom)
+#
+# Returns non-zero on non-204 from GA4 API.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="${SCRIPT_DIR}/.."
+OPS_PLUGIN_ROOT_FALLBACK="$PLUGIN_ROOT" . "${PLUGIN_ROOT}/lib/registry-path.sh"
+
+PREFS="${OPS_CONVERSION_PREFS:-${OPS_DATA_DIR}/preferences.json}"
+LOG_DIR="${OPS_DATA_DIR}/logs"
+mkdir -p "$LOG_DIR"
+LOG="${LOG_DIR}/conversion-send.log"
+
+log() { printf '%s [ops-conversion-send] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" | tee -a "$LOG" >&2; }
+
+# ── Cred resolver: env:VAR | doppler:proj/cfg/SECRET | inline literal ────────
+resolve_cred() {
+  local ref="${1:-}"
+  { [ -z "$ref" ] || [ "$ref" = "null" ]; } && return 0
+  case "$ref" in
+    env:*)
+      local var="${ref#env:}"; printf '%s' "${!var:-}" ;;
+    doppler:*)
+      local path="${ref#doppler:}" proj rest cfg secret
+      proj="${path%%/*}"; rest="${path#*/}"; cfg="${rest%%/*}"; secret="${rest#*/}"
+      { [ -z "$proj" ] || [ -z "$cfg" ] || [ -z "$secret" ]; } && return 0
+      doppler secrets get "$secret" --project "$proj" --config "$cfg" --plain 2>/dev/null || true ;;
+    *) printf '%s' "$ref" ;;
+  esac
+}
+
+# ── Read a field from preferences.json marketing.projects.<key>.ga4.<field> ──
+ga4_pref() {
+  local key="$1" field="$2"
+  [ -f "$PREFS" ] || { echo ""; return 0; }
+  jq -r --arg k "$key" --arg f "$field" \
+    '.marketing.projects[$k].ga4[$f] // empty' "$PREFS" 2>/dev/null || true
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+ops-conversion-send — GA4 Measurement Protocol sender
+
+Usage:
+  ops-conversion-send ga4 --project <key> --event <name> --client-id <cid>
+      [--value <number>] [--currency <ISO4217>] [--transaction-id <tx>]
+      [--user-id <uid>] [--properties <json-object>]
+
+Supported event names:
+  purchase         — e-commerce purchase (value + currency + transaction_id recommended)
+  sign_up          — user registration
+  generate_lead    — lead capture
+  add_to_cart      — add-to-cart action
+  <custom>         — any string accepted by GA4 (snake_case recommended)
+
+Credential resolution (preferences.json marketing.projects.<key>.ga4):
+  measurement_id   — GA4 Measurement ID (e.g. G-XXXXXXXXXX)
+  api_secret       — API secret; supports doppler:proj/cfg/SECRET or env:VAR refs
+
+Environment:
+  OPS_DRY_RUN=1           Print planned curl + payload; exit 0 without network call
+  OPS_CONVERSION_DEBUG=1  POST to debug endpoint first (returns validation JSON)
+
+Returns non-zero on non-204 from the GA4 API.
+USAGE
+  exit 1
+}
+
+# ── Subcommand dispatch ───────────────────────────────────────────────────────
+SUBCMD="${1:-}"
+shift || true
+
+case "$SUBCMD" in
+  ga4) ;;
+  --help|-h) usage ;;
+  "") echo "ops-conversion-send: subcommand required (ga4 | --help)" >&2; exit 1 ;;
+  *) echo "ops-conversion-send: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
+esac
+
+# ── Parse flags ───────────────────────────────────────────────────────────────
+PROJECT=""
+EVENT_NAME=""
+CLIENT_ID=""
+VALUE=""
+CURRENCY=""
+TRANSACTION_ID=""
+USER_ID=""
+EXTRA_PROPS="{}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --project)        PROJECT="${2:-}";        shift 2 ;;
+    --event)          EVENT_NAME="${2:-}";     shift 2 ;;
+    --client-id)      CLIENT_ID="${2:-}";      shift 2 ;;
+    --value)          VALUE="${2:-}";          shift 2 ;;
+    --currency)       CURRENCY="${2:-}";       shift 2 ;;
+    --transaction-id) TRANSACTION_ID="${2:-}"; shift 2 ;;
+    --user-id)        USER_ID="${2:-}";        shift 2 ;;
+    --properties)     EXTRA_PROPS="${2:-}";    shift 2 ;;
+    --help|-h)        usage ;;
+    *) echo "ops-conversion-send ga4: unknown flag '$1'" >&2; exit 1 ;;
+  esac
+done
+
+[ -z "$PROJECT" ]    && { echo "ops-conversion-send: --project is required" >&2; exit 1; }
+[ -z "$EVENT_NAME" ] && { echo "ops-conversion-send: --event is required" >&2; exit 1; }
+[ -z "$CLIENT_ID" ]  && { echo "ops-conversion-send: --client-id is required" >&2; exit 1; }
+
+# ── Resolve credentials ───────────────────────────────────────────────────────
+MEASUREMENT_ID="$(resolve_cred "$(ga4_pref "$PROJECT" "measurement_id")")"
+API_SECRET="$(resolve_cred "$(ga4_pref "$PROJECT" "api_secret")")"
+
+[ -z "$MEASUREMENT_ID" ] && {
+  log "ERROR: marketing.projects.${PROJECT}.ga4.measurement_id not found in ${PREFS}"
+  exit 1
+}
+[ -z "$API_SECRET" ] && {
+  log "ERROR: marketing.projects.${PROJECT}.ga4.api_secret not found in ${PREFS}"
+  exit 1
+}
+
+# ── Build event params ────────────────────────────────────────────────────────
+# Start from --properties JSON (user-supplied extra params), then overlay
+# the typed fields so they always take precedence.
+EVENT_PARAMS="$EXTRA_PROPS"
+
+# Overlay value/currency/transaction_id if provided
+if [ -n "$VALUE" ]; then
+  EVENT_PARAMS="$(printf '%s' "$EVENT_PARAMS" | jq --argjson v "$VALUE" '.value = $v')"
+fi
+if [ -n "$CURRENCY" ]; then
+  EVENT_PARAMS="$(printf '%s' "$EVENT_PARAMS" | jq --arg c "$CURRENCY" '.currency = $c')"
+fi
+if [ -n "$TRANSACTION_ID" ]; then
+  EVENT_PARAMS="$(printf '%s' "$EVENT_PARAMS" | jq --arg tx "$TRANSACTION_ID" '.transaction_id = $tx')"
+fi
+
+# ── Build full payload ────────────────────────────────────────────────────────
+PAYLOAD="$(jq -n \
+  --arg cid "$CLIENT_ID" \
+  --arg uid "$USER_ID" \
+  --arg ename "$EVENT_NAME" \
+  --argjson eparams "$EVENT_PARAMS" \
+  '{
+    client_id: $cid,
+    events: [{ name: $ename, params: $eparams }]
+  }
+  | if $uid != "" then .user_id = $uid else . end')"
+
+GA4_BASE="https://www.google-analytics.com/mp/collect"
+GA4_DEBUG_BASE="https://www.google-analytics.com/debug/mp/collect"
+QUERY="measurement_id=${MEASUREMENT_ID}&api_secret=${API_SECRET}"
+
+# ── Dry-run: print and exit ───────────────────────────────────────────────────
+if [ "${OPS_DRY_RUN:-0}" = "1" ]; then
+  echo "[DRY RUN] ops-conversion-send ga4"
+  echo "  endpoint: ${GA4_BASE}?measurement_id=${MEASUREMENT_ID}&api_secret=<redacted>"
+  echo "  payload:  $(printf '%s' "$PAYLOAD" | jq -c .)"
+  echo "  curl:     curl -s -o /dev/null -w '%{http_code}' -X POST '${GA4_BASE}?measurement_id=${MEASUREMENT_ID}&api_secret=<redacted>' -H 'Content-Type: application/json' -d '<payload>'"
+  exit 0
+fi
+
+# ── Optional debug validation ─────────────────────────────────────────────────
+if [ "${OPS_CONVERSION_DEBUG:-0}" = "1" ]; then
+  log "Validating event via debug endpoint..."
+  debug_resp="$(curl -s -X POST \
+    "${GA4_DEBUG_BASE}?${QUERY}" \
+    -H "Content-Type: application/json" \
+    -d "$PAYLOAD" 2>/dev/null || true)"
+  log "Debug response: $(printf '%s' "$debug_resp" | jq -c . 2>/dev/null || echo "$debug_resp")"
+  validation_code="$(printf '%s' "$debug_resp" | jq -r '.validationMessages[0].validationCode // "VALID"' 2>/dev/null || echo "PARSE_ERROR")"
+  if [ "$validation_code" != "VALID" ] && [ "$validation_code" != "null" ]; then
+    log "ERROR: GA4 debug validation failed: $validation_code"
+    exit 1
+  fi
+fi
+
+# ── Live send ─────────────────────────────────────────────────────────────────
+log "Sending GA4 event '${EVENT_NAME}' for project '${PROJECT}' (client_id=${CLIENT_ID})"
+http_code="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  "${GA4_BASE}?${QUERY}" \
+  -H "Content-Type: application/json" \
+  -d "$PAYLOAD" 2>/dev/null)"
+
+if [ "$http_code" = "204" ] || [ "$http_code" = "200" ]; then
+  log "OK: GA4 event '${EVENT_NAME}' accepted (HTTP ${http_code})"
+  exit 0
+else
+  log "ERROR: GA4 returned HTTP ${http_code} for event '${EVENT_NAME}'"
+  exit 1
+fi
