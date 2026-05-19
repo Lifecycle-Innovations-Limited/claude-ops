@@ -158,7 +158,7 @@ function buildPriorMonthSummary(preLedger, accountsConfig) {
   };
 }
 
-function formatSlackBody(summary, postClaimSummary) {
+function formatSlackBody(summary, postClaimSummary, { dryRun = false, skipClaim = false } = {}) {
   const lines = [];
   lines.push(`Monthly Anthropic credit reclaim — ${ymKey()} (prior cycle ${summary.priorCycle})`);
   lines.push('');
@@ -174,9 +174,9 @@ function formatSlackBody(summary, postClaimSummary) {
     if (postClaimSummary.failed.length) {
       lines.push(`Failed: ${postClaimSummary.failed.join(', ')}`);
     }
-  } else if (DRY_RUN) {
+  } else if (dryRun) {
     lines.push('(dry-run — no claim attempted)');
-  } else if (SKIP_CLAIM) {
+  } else if (skipClaim) {
     lines.push('(--skip-claim — ledger unchanged this run)');
   }
   return lines.join('\n');
@@ -264,7 +264,7 @@ async function main() {
   const postLedger = snapshotLedger();
   const postClaim = SKIP_CLAIM || DRY_RUN ? null : summarizePostClaim(postLedger, accountsConfig);
 
-  const body = formatSlackBody(priorSummary, postClaim);
+  const body = formatSlackBody(priorSummary, postClaim, { dryRun: DRY_RUN, skipClaim: SKIP_CLAIM });
   const slack = await postSlack(body);
 
   const title = `Monthly credit reclaim — ${priorSummary.wastePct}% waste last month`;
