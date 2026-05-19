@@ -41,7 +41,7 @@ SERVICE_JSON="$(jq -n \
   --arg port "$PORT" \
   '{
     enabled: $enabled,
-    command: "${CLAUDE_PLUGIN_ROOT}/bin/ops-stripe-conversion-bridge",
+    command: "${CLAUDE_PLUGIN_ROOT}/bin/ops-stripe-conversion-bridge.mjs",
     health_check: ("lsof -i :" + $port + " | grep LISTEN"),
     restart_delay: 30,
     max_restarts: 10,
