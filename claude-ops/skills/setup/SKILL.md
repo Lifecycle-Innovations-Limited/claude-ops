@@ -1059,7 +1059,7 @@ If **Skip — disable**: set `competitor-intel.enabled = false` in `daemon-servi
 
 If **Configure now**: collect two free-text values plus one optional:
 
-1. `brand_name` — e.g. `"My-Project"`, `"Example-Project"`. The product/company being tracked.
+1. `brand_name` — e.g. `"your-app"`, `"your-brand"`. The product/company being tracked.
 2. `category` — e.g. `"AI health coaching apps"`, `"NL virtual real estate staging"`. The market segment Tavily searches in.
 3. `report_timezone` — IANA TZ. Default: system TZ from previous setup steps, or `"UTC"`.
 
