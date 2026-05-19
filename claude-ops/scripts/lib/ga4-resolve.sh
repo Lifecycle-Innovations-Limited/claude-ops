@@ -52,6 +52,35 @@ resolve_cred() {
 }
 
 # ---------------------------------------------------------------------------
+# resolve_cred_strict — like resolve_cred but distinguishes three states:
+#   rc=0 + stdout value  — resolved and non-empty (healthy)
+#   rc=1 + empty stdout  — ref is empty/null (not configured — expected)
+#   rc=2 + empty stdout  — ref is declared but resolver returned empty (broken)
+#
+# Usage:
+#   val="$(resolve_cred_strict "$ref")"; rc=$?
+#   case $rc in
+#     0) use "$val" ;;
+#     1) skip ;; # not configured — expected
+#     2) escalate "Doppler ref declared but empty: $ref" ;;
+#   esac
+# ---------------------------------------------------------------------------
+resolve_cred_strict() {
+  local ref="${1:-}"
+  if [ -z "$ref" ] || [ "$ref" = "null" ]; then
+    return 1
+  fi
+  local val
+  val="$(resolve_cred "$ref")"
+  if [ -n "$val" ]; then
+    printf '%s' "$val"
+    return 0
+  fi
+  # ref declared but resolver returned empty — broken configuration
+  return 2
+}
+
+# ---------------------------------------------------------------------------
 # _prefs_marketing — read a field from preferences.json marketing.projects.<p>.<c>.<f>
 # $1=project $2=channel $3=field
 # ---------------------------------------------------------------------------
