@@ -41,10 +41,31 @@ const PLUGIN_ROOT = resolve(__dirname, '..');
 const PORT = parseInt(process.env.OPS_STRIPE_BRIDGE_PORT ?? '8787', 10);
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET ?? '';
 const PROJECT = process.env.OPS_CONVERSION_PROJECT ?? '';
-const DATA_DIR = process.env.OPS_DATA_DIR
-  ?? `${process.env.HOME}/.claude/plugins/data/ops-ops-marketplace`;
+const DATA_DIR = process.env.OPS_DATA_DIR ?? `${process.env.HOME}/.claude/plugins/data/ops-ops-marketplace`;
 const LOG_DIR = resolve(DATA_DIR, 'logs');
 const LOG_FILE = resolve(LOG_DIR, 'stripe-bridge.log');
+
+/** ISO 4217 codes Stripe treats as zero-decimal (amount is already in major units). */
+const STRIPE_ZERO_DECIMAL = new Set([
+  'bif',
+  'clp',
+  'djf',
+  'gnf',
+  'isk',
+  'jpy',
+  'kmf',
+  'krw',
+  'mga',
+  'pyg',
+  'rwf',
+  'ugx',
+  'uyi',
+  'vnd',
+  'vuv',
+  'xaf',
+  'xof',
+  'xpf',
+]);
 
 if (!existsSync(LOG_DIR)) mkdirSync(LOG_DIR, { recursive: true });
 
@@ -52,7 +73,11 @@ if (!existsSync(LOG_DIR)) mkdirSync(LOG_DIR, { recursive: true });
 function log(msg) {
   const line = `${new Date().toISOString()} [stripe-bridge] ${msg}\n`;
   process.stderr.write(line);
-  try { appendFileSync(LOG_FILE, line); } catch { /* non-fatal */ }
+  try {
+    appendFileSync(LOG_FILE, line);
+  } catch {
+    /* non-fatal */
+  }
 }
 
 if (!WEBHOOK_SECRET) {
@@ -77,24 +102,22 @@ function constructEvent(payload, sigHeader, secret) {
   if (!sigHeader) return { valid: false, event: null };
 
   const parts = Object.fromEntries(
-    sigHeader.split(',').map(p => { const [k, v] = p.split('='); return [k, v]; })
+    sigHeader.split(',').map((p) => {
+      const [k, v] = p.split('=');
+      return [k, v];
+    }),
   );
   const ts = parts['t'];
   const v1 = parts['v1'];
   if (!ts || !v1) return { valid: false, event: null };
 
-  // Strip whsec_ prefix if present
-  const rawSecret = secret.startsWith('whsec_')
-    ? Buffer.from(secret.slice(6), 'base64')
-    : Buffer.from(secret);
-
+  // Stripe uses the full signing secret (including whsec_ prefix) as the UTF-8 HMAC key.
   const signedPayload = `${ts}.${payload}`;
-  const expected = createHmac('sha256', rawSecret).update(signedPayload).digest('hex');
+  const expected = createHmac('sha256', secret).update(signedPayload).digest('hex');
 
   const expectedBuf = Buffer.from(expected, 'hex');
   const v1Buf = Buffer.from(v1, 'hex');
-  const valid = expectedBuf.length === v1Buf.length &&
-    timingSafeEqual(expectedBuf, v1Buf);
+  const valid = expectedBuf.length === v1Buf.length && timingSafeEqual(expectedBuf, v1Buf);
 
   if (!valid) return { valid: false, event: null };
 
@@ -110,7 +133,7 @@ function constructEvent(payload, sigHeader, secret) {
 }
 
 // ── Shell out to conversion senders ─────────────────────────────────────────
-const GA4_BIN  = resolve(PLUGIN_ROOT, 'bin', 'ops-conversion-send');
+const GA4_BIN = resolve(PLUGIN_ROOT, 'bin', 'ops-conversion-send');
 const CAPI_BIN = resolve(PLUGIN_ROOT, 'bin', 'ops-meta-capi-send');
 
 /**
@@ -139,6 +162,17 @@ function runSender(bin, args) {
 }
 
 /**
+ * @param {number} amount Stripe amount (minor units, or major for zero-decimal currencies)
+ * @param {string} currencyLower ISO 4217 lowercased
+ */
+function formatStripeAmount(amount, currencyLower) {
+  if (STRIPE_ZERO_DECIMAL.has(currencyLower)) {
+    return String(amount);
+  }
+  return (amount / 100).toFixed(2);
+}
+
+/**
  * Extract metadata from a Stripe event object.
  * Handles both charge.succeeded and checkout.session.completed shapes.
  * @param {object} stripeObject  event.data.object
@@ -148,16 +182,17 @@ function extractMetadata(stripeObject) {
   const meta = stripeObject.metadata ?? {};
   let amountDecimal = null;
   let currency = null;
+  const currencyLower = (stripeObject.currency ?? 'usd').toLowerCase();
+  const currencyUpper = currencyLower.toUpperCase();
 
-  // charge.succeeded: amount is in smallest currency unit (cents)
+  // charge.succeeded / checkout.session: amount uses Stripe minor units except zero-decimal ISO codes
   if (typeof stripeObject.amount === 'number') {
-    amountDecimal = (stripeObject.amount / 100).toFixed(2);
-    currency = (stripeObject.currency ?? 'usd').toUpperCase();
+    amountDecimal = formatStripeAmount(stripeObject.amount, currencyLower);
+    currency = currencyUpper;
   }
-  // checkout.session.completed: amount_total in cents
   if (typeof stripeObject.amount_total === 'number') {
-    amountDecimal = (stripeObject.amount_total / 100).toFixed(2);
-    currency = (stripeObject.currency ?? 'usd').toUpperCase();
+    amountDecimal = formatStripeAmount(stripeObject.amount_total, currencyLower);
+    currency = currencyUpper;
   }
 
   // client_reference_id as fallback client_id
@@ -184,13 +219,17 @@ function fanoutPurchase(stripeObject, stripeEventId) {
   if (meta.client_id) {
     const ga4Args = [
       'ga4',
-      '--project',        PROJECT,
-      '--event',          'purchase',
-      '--client-id',      meta.client_id,
-      '--transaction-id', stripeEventId,
+      '--project',
+      PROJECT,
+      '--event',
+      'purchase',
+      '--client-id',
+      meta.client_id,
+      '--transaction-id',
+      stripeEventId,
     ];
     if (amountDecimal) ga4Args.push('--value', amountDecimal);
-    if (currency)      ga4Args.push('--currency', currency);
+    if (currency) ga4Args.push('--currency', currency);
     runSender(GA4_BIN, ga4Args);
   } else {
     log('WARN: no client_id in metadata — skipping GA4 fanout');
@@ -199,16 +238,21 @@ function fanoutPurchase(stripeObject, stripeEventId) {
   // ── Meta CAPI ─────────────────────────────────────────────────────────────
   const capiArgs = [
     'event',
-    '--project',          PROJECT,
-    '--event-name',       'Purchase',
-    '--event-time',       eventTime,
-    '--action-source',    'website',
-    '--event-source-url', eventSourceUrl,
+    '--project',
+    PROJECT,
+    '--event-name',
+    'Purchase',
+    '--event-time',
+    eventTime,
+    '--action-source',
+    'website',
+    '--event-source-url',
+    eventSourceUrl,
   ];
-  if (meta.fbp)              capiArgs.push('--fbp',         meta.fbp);
-  if (meta.fbc)              capiArgs.push('--fbc',         meta.fbc);
-  if (amountDecimal)         capiArgs.push('--value',       amountDecimal);
-  if (currency)              capiArgs.push('--currency',    currency);
+  if (meta.fbp) capiArgs.push('--fbp', meta.fbp);
+  if (meta.fbc) capiArgs.push('--fbc', meta.fbc);
+  if (amountDecimal) capiArgs.push('--value', amountDecimal);
+  if (currency) capiArgs.push('--currency', currency);
   runSender(CAPI_BIN, capiArgs);
 }
 
@@ -228,7 +272,7 @@ const server = createServer((req, res) => {
 
   /** @type {Buffer[]} */
   const chunks = [];
-  req.on('data', chunk => chunks.push(chunk));
+  req.on('data', (chunk) => chunks.push(chunk));
   req.on('end', () => {
     const body = Buffer.concat(chunks).toString('utf8');
     const sigHeader = req.headers['stripe-signature'] ?? '';
@@ -242,8 +286,8 @@ const server = createServer((req, res) => {
     }
 
     const eventType = event?.type ?? '';
-    const obj       = event?.data?.object ?? {};
-    const eventId   = event?.id ?? `evt_${Date.now()}`;
+    const obj = event?.data?.object ?? {};
+    const eventId = event?.id ?? `evt_${Date.now()}`;
 
     log(`Received Stripe event: type=${eventType} id=${eventId}`);
 

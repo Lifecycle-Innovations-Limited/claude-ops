@@ -173,7 +173,7 @@ if [ "${OPS_DRY_RUN:-0}" = "1" ]; then
   echo "[DRY RUN] ops-conversion-send ga4"
   echo "  endpoint: ${GA4_BASE}?measurement_id=${MEASUREMENT_ID}&api_secret=<redacted>"
   echo "  payload:  $(printf '%s' "$PAYLOAD" | jq -c .)"
-  echo "  curl:     curl -s -o /dev/null -w '%{http_code}' -X POST '${GA4_BASE}?${QUERY}' -H 'Content-Type: application/json' -d '<payload>'"
+  echo "  curl:     curl -s -o /dev/null -w '%{http_code}' -X POST '${GA4_BASE}?measurement_id=${MEASUREMENT_ID}&api_secret=<redacted>' -H 'Content-Type: application/json' -d '<payload>'"
   exit 0
 fi
 
