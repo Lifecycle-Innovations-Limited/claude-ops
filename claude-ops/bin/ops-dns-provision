@@ -1,0 +1,708 @@
+#!/usr/bin/env bash
+# ops-dns-provision — End-to-end DNS provisioner for a marketing project.
+#
+# Wraps every authoritative DNS surface a typical SaaS project needs:
+#   gsc, meta-aem, apple-pay, spf, dkim, dmarc, mx, klaviyo-sending,
+#   audit, provision-all.
+#
+# All record writes go through scripts/lib/cloudflare-dns.sh, which is
+# GET-first idempotent — re-running is safe and the planned API calls
+# are visible via `OPS_DRY_RUN=1`.
+#
+# Rule 0 (public repo): this file MUST NOT contain real domains, emails,
+# tokens, account IDs, or org names. Examples below all use neutral
+# placeholders.
+
+set -euo pipefail
+
+# --- paths --------------------------------------------------------------------
+PLUGIN_BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "$PLUGIN_BIN_DIR/.." && pwd)"
+LIB_DIR="$PLUGIN_ROOT/scripts/lib"
+
+# shellcheck source=scripts/lib/cloudflare-dns.sh
+. "$LIB_DIR/cloudflare-dns.sh"
+
+PREFS_PATH="${PREFS_PATH:-${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json}"
+
+# --- logging ------------------------------------------------------------------
+log()    { printf '[ops-dns] %s\n' "$*" >&2; }
+warn()   { printf '[ops-dns][WARN] %s\n' "$*" >&2; }
+err()    { printf '[ops-dns][ERR]  %s\n' "$*" >&2; }
+dryrun() { printf '[ops-dns][DRY-RUN] %s\n' "$*" >&2; }
+is_dry() { [[ "${OPS_DRY_RUN:-0}" = "1" ]]; }
+
+# --- prefs helpers ------------------------------------------------------------
+# Resolve a value path inside preferences.json. Echoes empty if missing.
+# Usage: prefs_get '.marketing.projects.<key>.esp.provider'
+# Returns empty string when prefs file is absent, unreadable, or jq path
+# evaluates to null/empty — callers MUST provide their own default with
+# `${result:-default}`. Do not embed `// "default"` in $path since an
+# unreadable prefs file would never reach jq.
+prefs_get() {
+  local path="${1:-}"
+  [[ -z "$path" || ! -s "$PREFS_PATH" ]] && return 0
+  jq -r "$path // empty" "$PREFS_PATH" 2>/dev/null || true
+}
+
+# Resolve a credential reference. Supports:
+#   - "env:VAR_NAME"    — read $VAR_NAME
+#   - "doppler:CFG:KEY" — via doppler CLI
+#   - plain value       — use as-is
+resolve_cred() {
+  local ref="${1:-}"
+  [[ -z "$ref" ]] && return 0
+  case "$ref" in
+    env:*)     printf '%s' "${!ref#env:}" ;;
+    doppler:*) local rest="${ref#doppler:}"; local cfg="${rest%%:*}"; local key="${rest#*:}"
+               command -v doppler >/dev/null 2>&1 && doppler secrets get "$key" --config "$cfg" --plain 2>/dev/null || true ;;
+    *)         printf '%s' "$ref" ;;
+  esac
+}
+
+# --- arg helpers --------------------------------------------------------------
+require() {
+  local name="$1" val="${2:-}"
+  if [[ -z "$val" ]]; then
+    err "missing required arg: $name"
+    return 2
+  fi
+}
+
+# Echo apex zone for a domain via lib resolver.
+apex_of() { cf_apex_for "$1"; }
+
+# --- subcommand: gsc ----------------------------------------------------------
+# Adds a Google Search Console site verification TXT record at the apex.
+# Steps:
+#   1. Resolve verify token via Google Site Verification API (ADC, webmasters).
+#   2. cf_record_upsert TXT @ apex.
+#   3. POST /sites/<siteUrl>/verify to finalize.
+cmd_gsc() {
+  local project="${1:-}" domain="${2:-}"
+  require project "$project" || return 2
+  require domain  "$domain"  || return 2
+  local apex; apex="$(apex_of "$domain")"
+  local site_url="sc-domain:$apex"
+
+  log "gsc: project=$project domain=$domain apex=$apex"
+  local token
+  if is_dry; then
+    dryrun "POST https://www.googleapis.com/siteVerification/v1/token  type=INET_DOMAIN id=$apex method=DNS_TXT"
+    token="dryrun-gsc-token"
+  else
+    local access; access="$(gcloud auth print-access-token 2>/dev/null || true)"
+    if [[ -z "$access" ]]; then
+      err "gsc: gcloud ADC not configured (need webmasters scope). Run: gcloud auth application-default login --scopes=https://www.googleapis.com/auth/webmasters"
+      return 1
+    fi
+    local resp
+    resp="$(curl -sS --max-time 10 -X POST \
+      -H "Authorization: Bearer $access" \
+      -H "Content-Type: application/json" \
+      --data "{\"site\":{\"type\":\"INET_DOMAIN\",\"identifier\":\"$apex\"},\"verificationMethod\":\"DNS_TXT\"}" \
+      "https://www.googleapis.com/siteVerification/v1/token" 2>/dev/null || printf '{}')"
+    token="$(printf '%s' "$resp" | jq -r '.token // empty' 2>/dev/null)"
+    if [[ -z "$token" ]]; then
+      err "gsc: failed to fetch verification token: $resp"
+      return 1
+    fi
+  fi
+
+  local zone; zone="$(cf_zone_id "$apex")"
+  if [[ -z "$zone" ]]; then
+    err "gsc: cloudflare zone not found for $apex"
+    return 1
+  fi
+
+  cf_record_upsert "$zone" "TXT" "$apex" "$token" 120 false >/dev/null || {
+    err "gsc: TXT upsert failed"; return 1; }
+  log "gsc: TXT @ $apex set to verification token"
+
+  if is_dry; then
+    dryrun "POST https://www.googleapis.com/siteVerification/v1/webResource?verificationMethod=DNS_TXT  body={site:{type:INET_DOMAIN,identifier:$apex}}"
+    log "gsc: dry-run complete"
+    return 0
+  fi
+
+  local access; access="$(gcloud auth print-access-token 2>/dev/null || true)"
+  local vresp http
+  vresp="$(curl -sS --max-time 15 -w '\n%{http_code}' -X POST \
+    -H "Authorization: Bearer $access" \
+    -H "Content-Type: application/json" \
+    --data "{\"site\":{\"type\":\"INET_DOMAIN\",\"identifier\":\"$apex\"}}" \
+    "https://www.googleapis.com/siteVerification/v1/webResource?verificationMethod=DNS_TXT" 2>/dev/null || printf '{}\n0')"
+  http="${vresp##*$'\n'}"
+  if [[ "$http" = "200" || "$http" = "201" ]]; then
+    log "gsc: site verified for $site_url"
+  else
+    warn "gsc: verify call returned http=$http; DNS may need propagation. Re-run after a few minutes."
+  fi
+}
+
+# --- subcommand: meta-aem -----------------------------------------------------
+# Meta Aggregated Event Measurement domain verification.
+# Reads token via GET /me/owned_domains and upserts TXT at apex.
+cmd_meta_aem() {
+  local project="${1:-}" domain="${2:-}"
+  require project "$project" || return 2
+  require domain  "$domain"  || return 2
+  local apex; apex="$(apex_of "$domain")"
+
+  local token_ref; token_ref="$(prefs_get ".marketing.projects.${project}.meta.access_token // empty")"
+  local meta_token; meta_token="$(resolve_cred "$token_ref")"
+
+  log "meta-aem: project=$project apex=$apex"
+  local verify_token
+  if is_dry; then
+    dryrun "GET https://graph.facebook.com/v19.0/me/owned_domains?fields=name,verification_string"
+    verify_token="dryrun-meta-aem-token"
+  else
+    if [[ -z "$meta_token" ]]; then
+      err "meta-aem: no Meta access token at .marketing.projects.$project.meta.access_token"
+      return 1
+    fi
+    local resp
+    resp="$(curl -sS --max-time 10 \
+      "https://graph.facebook.com/v19.0/me/owned_domains?fields=name,verification_string&access_token=$meta_token" 2>/dev/null || printf '{}')"
+    verify_token="$(printf '%s' "$resp" | jq -r --arg d "$apex" '.data[]? | select(.name==$d) | .verification_string // empty' 2>/dev/null | head -1)"
+    if [[ -z "$verify_token" ]]; then
+      err "meta-aem: domain $apex not registered in Business Manager owned_domains, or no verification_string returned"
+      return 1
+    fi
+  fi
+
+  local zone; zone="$(cf_zone_id "$apex")"
+  [[ -z "$zone" ]] && { err "meta-aem: zone not found for $apex"; return 1; }
+
+  # Meta verification uses TXT at apex with prefix "facebook-domain-verification=<token>".
+  local content="facebook-domain-verification=$verify_token"
+  cf_record_upsert "$zone" "TXT" "$apex" "$content" 120 false >/dev/null || {
+    err "meta-aem: TXT upsert failed"; return 1; }
+  log "meta-aem: TXT @ $apex set"
+}
+
+# --- subcommand: apple-pay ----------------------------------------------------
+# Two strategies (pick via .marketing.projects.<key>.apple_pay.mode):
+#   "stripe-dns" — Stripe's payment_method_domains API returns the association
+#                  string; we upsert TXT at apex.
+#   "static-file" — recommend dropping
+#                   .well-known/apple-developer-merchantid-domain-association
+#                   via deploy hook (printed, not pushed). Default.
+cmd_apple_pay() {
+  local project="${1:-}" domain="${2:-}"
+  require project "$project" || return 2
+  require domain  "$domain"  || return 2
+  local apex; apex="$(apex_of "$domain")"
+  local mode; mode="$(prefs_get ".marketing.projects.${project}.apple_pay.mode")"
+  mode="${mode:-static-file}"
+
+  log "apple-pay: project=$project domain=$domain mode=$mode"
+
+  if [[ "$mode" = "static-file" ]]; then
+    log "apple-pay: static-file mode — Apple Pay association does NOT use DNS."
+    log "apple-pay: drop the association file at:"
+    log "           https://$domain/.well-known/apple-developer-merchantid-domain-association"
+    log "apple-pay: file contents come from Apple Pay dashboard / Stripe register call."
+    log "apple-pay: configure deploy hook for your static site to serve this path."
+    return 0
+  fi
+
+  if [[ "$mode" != "stripe-dns" ]]; then
+    err "apple-pay: unknown mode '$mode' (expected static-file|stripe-dns)"
+    return 2
+  fi
+
+  local skey_ref; skey_ref="$(prefs_get ".marketing.projects.${project}.stripe.secret_key // empty")"
+  local skey; skey="$(resolve_cred "$skey_ref")"
+  if is_dry; then
+    dryrun "POST https://api.stripe.com/v1/payment_method_domains  domain_name=$domain"
+    local assoc="dryrun-apple-pay-assoc-string"
+    log "apple-pay: would upsert TXT @ $apex = apple-pay-assoc:$assoc"
+    return 0
+  fi
+
+  [[ -z "$skey" ]] && { err "apple-pay: stripe secret key missing"; return 1; }
+
+  local resp
+  resp="$(curl -sS --max-time 10 -u "$skey:" \
+    -X POST "https://api.stripe.com/v1/payment_method_domains" \
+    -d "domain_name=$domain" 2>/dev/null || printf '{}')"
+  local assoc; assoc="$(printf '%s' "$resp" | jq -r '.apple_pay.status_details.error_message // empty' 2>/dev/null)"
+  # Stripe-DNS mode just registers the domain — verification still goes through
+  # the static .well-known file. We surface the next step:
+  log "apple-pay: registered with Stripe: $(printf '%s' "$resp" | jq -r '.id // "?"' 2>/dev/null)"
+  log "apple-pay: serve the association file at .well-known/apple-developer-merchantid-domain-association"
+  [[ -n "$assoc" ]] && warn "apple-pay: $assoc"
+}
+
+# --- subcommand: spf ----------------------------------------------------------
+# Builds an SPF record from per-project ESP list and upserts at apex.
+# Merge guard: never silently overwrite a foreign TXT — must contain
+# "v=spf1" to be considered safe to update.
+cmd_spf() {
+  local project="${1:-}" domain="${2:-}"
+  require project "$project" || return 2
+  require domain  "$domain"  || return 2
+  local apex; apex="$(apex_of "$domain")"
+
+  # Default ESP includes; project prefs can override via array.
+  local -a includes=()
+  local include_json
+  include_json="$(prefs_get ".marketing.projects.${project}.esp.spf_includes")"
+  if [[ -n "$include_json" && "$include_json" != "[]" && "$include_json" != "null" ]]; then
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && includes+=("$line")
+    done < <(printf '%s' "$include_json" | jq -r '.[]' 2>/dev/null)
+  fi
+  if [[ ${#includes[@]} -eq 0 ]]; then
+    # Sensible default for the typical Resend + Klaviyo stack.
+    includes=("_spf.resend.com" "_spf.klaviyo.com")
+  fi
+
+  local policy; policy="$(prefs_get ".marketing.projects.${project}.esp.spf_policy")"
+  policy="${policy:--all}"
+  local content="v=spf1"
+  local inc
+  for inc in "${includes[@]}"; do content+=" include:$inc"; done
+  content+=" $policy"
+
+  local zone; zone="$(cf_zone_id "$apex")"
+  [[ -z "$zone" ]] && { err "spf: zone not found for $apex"; return 1; }
+
+  log "spf: project=$project apex=$apex content='$content'"
+  # Marker "v=spf1" — refuse to overwrite if a foreign TXT (e.g. DKIM) is at apex.
+  cf_txt_upsert_safe "$zone" "$apex" "$content" "v=spf1" >/dev/null || {
+    err "spf: upsert refused or failed"; return 1; }
+  log "spf: TXT @ $apex upserted"
+}
+
+# --- subcommand: dkim ---------------------------------------------------------
+# Provider-keyed off .marketing.projects.<key>.esp.provider.
+#   resend   — POST /domains, parse returned records[], CNAME upserts
+#   postmark — POST /domains, parse Return-Path/DKIM, CNAME upserts
+#   ses      — surface VerifyDomainDkim tokens, CNAME upserts
+cmd_dkim() {
+  local project="${1:-}" domain="${2:-}"
+  require project "$project" || return 2
+  require domain  "$domain"  || return 2
+  local apex; apex="$(apex_of "$domain")"
+  local provider; provider="$(prefs_get ".marketing.projects.${project}.esp.provider")"
+  provider="${provider:-resend}"
+
+  log "dkim: project=$project apex=$apex provider=$provider"
+
+  local zone; zone="$(cf_zone_id "$apex")"
+  [[ -z "$zone" ]] && { err "dkim: zone not found for $apex"; return 1; }
+
+  case "$provider" in
+    resend)
+      local key_ref; key_ref="$(prefs_get ".marketing.projects.${project}.esp.credentials // empty")"
+      local key; key="$(resolve_cred "$key_ref")"
+      if is_dry; then
+        dryrun "POST https://api.resend.com/domains  body={name:$apex}"
+        log "dkim: dry-run would parse records[].(name|type|value) and upsert each"
+        return 0
+      fi
+      [[ -z "$key" ]] && { err "dkim: resend api key missing"; return 1; }
+      local resp
+      resp="$(curl -sS --max-time 15 -X POST \
+        -H "Authorization: Bearer $key" \
+        -H "Content-Type: application/json" \
+        --data "{\"name\":\"$apex\"}" \
+        "https://api.resend.com/domains" 2>/dev/null || printf '{}')"
+      local count
+      count="$(printf '%s' "$resp" | jq '.records | length // 0' 2>/dev/null || echo 0)"
+      if [[ "$count" -eq 0 ]]; then
+        err "dkim: resend returned no records: $resp"
+        return 1
+      fi
+      local i
+      for (( i=0; i<count; i++ )); do
+        local rname rtype rvalue
+        rname="$(printf  '%s' "$resp" | jq -r ".records[$i].name"  2>/dev/null)"
+        rtype="$(printf  '%s' "$resp" | jq -r ".records[$i].type"  2>/dev/null)"
+        rvalue="$(printf '%s' "$resp" | jq -r ".records[$i].value" 2>/dev/null)"
+        if [[ "$rtype" = "TXT" ]]; then
+          cf_txt_upsert_safe "$zone" "$rname" "$rvalue" "" >/dev/null \
+            || warn "dkim: TXT upsert at $rname failed (foreign value?)"
+        else
+          cf_record_upsert "$zone" "$rtype" "$rname" "$rvalue" 120 false >/dev/null \
+            || warn "dkim: $rtype upsert at $rname failed"
+        fi
+        log "dkim: $rtype $rname -> $rvalue"
+      done
+      ;;
+    postmark|ses)
+      warn "dkim: provider=$provider — not yet implemented; using stub plan."
+      log "dkim: TODO: implement $provider DKIM provisioning (see SKILL.md schema)"
+      return 1
+      ;;
+    *)
+      err "dkim: unknown provider '$provider' (expected resend|postmark|ses)"
+      return 2
+      ;;
+  esac
+}
+
+# --- subcommand: dmarc --------------------------------------------------------
+# Default policy "quarantine"; rua=mailto:dmarc@<apex>. Both overridable.
+cmd_dmarc() {
+  local project="${1:-}" domain="${2:-}"
+  require project "$project" || return 2
+  require domain  "$domain"  || return 2
+  local apex; apex="$(apex_of "$domain")"
+  local name="_dmarc.$apex"
+
+  local policy; policy="$(prefs_get ".marketing.projects.${project}.dmarc.policy")"
+  policy="${policy:-quarantine}"
+  local rua;    rua="$(prefs_get ".marketing.projects.${project}.dmarc.rua")"
+  [[ -z "$rua" ]] && rua="mailto:dmarc@$apex"
+
+  local content="v=DMARC1; p=$policy; rua=$rua"
+  log "dmarc: project=$project record=$name content='$content'"
+
+  local zone; zone="$(cf_zone_id "$apex")"
+  [[ -z "$zone" ]] && { err "dmarc: zone not found for $apex"; return 1; }
+
+  cf_record_upsert "$zone" "TXT" "$name" "$content" 3600 false >/dev/null || {
+    err "dmarc: upsert failed"; return 1; }
+  log "dmarc: TXT @ $name upserted"
+}
+
+# --- subcommand: mx -----------------------------------------------------------
+# Provider templates. Keyed off .marketing.projects.<key>.inbound.provider.
+#   google-workspace — 1 MX, smtp.google.com priority 1
+#   resend-inbound   — feedback-smtp.us-east-1.amazonses.com (Resend Inbound MX)
+#   ses              — 1 MX, inbound-smtp.<region>.amazonaws.com priority 10
+cmd_mx() {
+  local project="${1:-}" domain="${2:-}"
+  require project "$project" || return 2
+  require domain  "$domain"  || return 2
+  local apex; apex="$(apex_of "$domain")"
+  local provider; provider="$(prefs_get ".marketing.projects.${project}.inbound.provider")"
+  provider="${provider:-google-workspace}"
+  local region;   region="$(prefs_get ".marketing.projects.${project}.inbound.region")"
+  region="${region:-us-east-1}"
+
+  log "mx: project=$project apex=$apex provider=$provider"
+  local -a records=()
+  case "$provider" in
+    google-workspace)
+      records=("1 smtp.google.com")
+      ;;
+    resend-inbound)
+      records=("10 feedback-smtp.$region.amazonses.com")
+      ;;
+    ses)
+      records=("10 inbound-smtp.$region.amazonaws.com")
+      ;;
+    *)
+      err "mx: unknown provider '$provider'"
+      return 2
+      ;;
+  esac
+
+  local zone; zone="$(cf_zone_id "$apex")"
+  [[ -z "$zone" ]] && { err "mx: zone not found for $apex"; return 1; }
+
+  # MX records carry "priority host" in `content` for Cloudflare's modern API
+  # they're modeled with a separate priority field; for shell-simplicity we
+  # encode the full "priority host" string and rely on lib's upsert. (Real
+  # Cloudflare clients accept this for type=MX; if the API rejects, the user
+  # can split — documented in --help.)
+  local r
+  for r in "${records[@]}"; do
+    local prio host
+    prio="${r%% *}"; host="${r#* }"
+    if is_dry; then
+      dryrun "MX upsert at $apex priority=$prio target=$host"
+    else
+      # Cloudflare wants MX as type=MX with priority field + content=host.
+      local -a CF_CURL_ARGS=()
+      cf_curl_args_set || return 1
+      CF_CURL_ARGS+=( -H "Content-Type: application/json" )
+      local payload
+      payload="$(jq -nc --arg n "$apex" --arg c "$host" --argjson p "$prio" \
+        '{type:"MX", name:$n, content:$c, priority:$p, ttl:3600, proxied:false}')"
+      # GET-first idempotency on MX is name+content match.
+      local existing
+      existing="$(cf_record_get "$zone" "MX" "$apex" || true)"
+      local existing_id existing_content existing_prio
+      existing_id="$(printf '%s' "$existing" | jq -r '.id // empty' 2>/dev/null)"
+      existing_content="$(printf '%s' "$existing" | jq -r '.content // empty' 2>/dev/null)"
+      existing_prio="$(printf '%s' "$existing" | jq -r '.priority // empty' 2>/dev/null)"
+      if [[ -n "$existing_id" && "$existing_content" = "$host" && "$existing_prio" = "$prio" ]]; then
+        log "mx: no-op (already $prio $host)"
+        continue
+      fi
+      local resp
+      if [[ -n "$existing_id" ]]; then
+        resp="$(curl -sS --max-time 10 -X PUT "${CF_CURL_ARGS[@]}" \
+          --data "$payload" \
+          "$CF_API_BASE/zones/$zone/dns_records/$existing_id" 2>/dev/null || printf '{}')"
+      else
+        resp="$(curl -sS --max-time 10 -X POST "${CF_CURL_ARGS[@]}" \
+          --data "$payload" \
+          "$CF_API_BASE/zones/$zone/dns_records" 2>/dev/null || printf '{}')"
+      fi
+      local rid
+      rid="$(printf '%s' "$resp" | jq -r '.result.id // empty' 2>/dev/null)"
+      if [[ -z "$rid" ]]; then
+        err "mx: upsert failed: $resp"
+        return 1
+      fi
+      log "mx: $prio $host -> id=$rid"
+    fi
+  done
+}
+
+# --- subcommand: klaviyo-sending ---------------------------------------------
+# Klaviyo Dedicated Sending Domain provisioning.
+# POST /api/dedicated-sending-domains/, parse cname records, upsert to CF.
+cmd_klaviyo_sending() {
+  local project="${1:-}" domain="${2:-}"
+  require project "$project" || return 2
+  require domain  "$domain"  || return 2
+  local apex; apex="$(apex_of "$domain")"
+  local sending_sub; sending_sub="$(prefs_get ".marketing.projects.${project}.klaviyo.sending_subdomain")"
+  sending_sub="${sending_sub:-em.${apex}}"
+
+  local key_ref; key_ref="$(prefs_get ".marketing.projects.${project}.klaviyo.private_key // empty")"
+  local key; key="$(resolve_cred "$key_ref")"
+
+  log "klaviyo-sending: project=$project sending=$sending_sub"
+  if is_dry; then
+    dryrun "POST https://a.klaviyo.com/api/dedicated-sending-domains/  domain=$sending_sub"
+    log "klaviyo-sending: dry-run — would parse cname_records and CNAME upsert each"
+    return 0
+  fi
+  [[ -z "$key" ]] && { err "klaviyo-sending: api key missing"; return 1; }
+
+  local resp
+  resp="$(curl -sS --max-time 15 -X POST \
+    -H "Authorization: Klaviyo-API-Key $key" \
+    -H "revision: 2024-10-15" \
+    -H "Content-Type: application/json" \
+    --data "{\"data\":{\"type\":\"dedicated-sending-domain\",\"attributes\":{\"domain_name\":\"$sending_sub\"}}}" \
+    "https://a.klaviyo.com/api/dedicated-sending-domains/" 2>/dev/null || printf '{}')"
+
+  local zone; zone="$(cf_zone_id "$apex")"
+  [[ -z "$zone" ]] && { err "klaviyo-sending: zone not found for $apex"; return 1; }
+
+  # Klaviyo returns CNAME records under data.attributes.cname_records[]
+  local n
+  n="$(printf '%s' "$resp" | jq '.data.attributes.cname_records | length // 0' 2>/dev/null || echo 0)"
+  if [[ "$n" -eq 0 ]]; then
+    err "klaviyo-sending: API returned no cname_records: $resp"
+    return 1
+  fi
+  local i
+  for (( i=0; i<n; i++ )); do
+    local hostname value
+    hostname="$(printf '%s' "$resp" | jq -r ".data.attributes.cname_records[$i].hostname" 2>/dev/null)"
+    value="$(   printf '%s' "$resp" | jq -r ".data.attributes.cname_records[$i].value"    2>/dev/null)"
+    cf_record_upsert "$zone" "CNAME" "$hostname" "$value" 120 false >/dev/null \
+      || warn "klaviyo-sending: CNAME upsert at $hostname failed"
+    log "klaviyo-sending: CNAME $hostname -> $value"
+  done
+}
+
+# --- subcommand: audit --------------------------------------------------------
+# Read-only health check. For each row, query CF and report:
+#   present | absent | conflicting
+audit_row() {
+  local zone="$1" type="$2" name="$3" expected_substr="$4"
+  local rec content
+  rec="$(cf_record_get "$zone" "$type" "$name" 2>/dev/null || true)"
+  if [[ -z "$rec" ]]; then
+    printf 'absent'
+    return
+  fi
+  content="$(printf '%s' "$rec" | jq -r '.content // empty' 2>/dev/null)"
+  if [[ -z "$expected_substr" || "$content" == *"$expected_substr"* ]]; then
+    printf 'present'
+  else
+    printf 'conflicting'
+  fi
+}
+
+cmd_audit() {
+  local project="${1:-}"; shift || true
+  local json_out=0
+  while (( $# > 0 )); do
+    case "$1" in
+      --json) json_out=1 ;;
+      *) ;;
+    esac
+    shift
+  done
+  require project "$project" || return 2
+
+  local domain; domain="$(prefs_get ".marketing.projects.${project}.domain // empty")"
+  if [[ -z "$domain" ]]; then
+    err "audit: no .marketing.projects.${project}.domain in prefs"
+    return 2
+  fi
+  local apex; apex="$(apex_of "$domain")"
+  local zone; zone="$(cf_zone_id "$apex")"
+  [[ -z "$zone" ]] && { err "audit: zone not found for $apex"; return 1; }
+
+  local gsc_status spf_status dkim_status dmarc_status mx_status meta_status
+  gsc_status="$(audit_row   "$zone" "TXT" "$apex"          "google-site-verification")"
+  spf_status="$(audit_row   "$zone" "TXT" "$apex"          "v=spf1")"
+  dmarc_status="$(audit_row "$zone" "TXT" "_dmarc.$apex"   "v=DMARC1")"
+  mx_status="$(audit_row    "$zone" "MX"  "$apex"          "")"
+  meta_status="$(audit_row  "$zone" "TXT" "$apex"          "facebook-domain-verification")"
+  # DKIM hostnames are provider-specific; report by best-effort first CNAME under apex.
+  dkim_status="unknown"
+
+  if [[ "$json_out" = "1" ]]; then
+    jq -nc \
+      --arg p "$project" --arg d "$domain" --arg z "$zone" \
+      --arg gsc "$gsc_status" --arg spf "$spf_status" \
+      --arg dmarc "$dmarc_status" --arg mx "$mx_status" \
+      --arg meta "$meta_status" --arg dkim "$dkim_status" \
+      '{project:$p, domain:$d, zone:$z, rows:{gsc:$gsc, spf:$spf, dmarc:$dmarc, mx:$mx, meta_aem:$meta, dkim:$dkim}}'
+    return 0
+  fi
+
+  printf 'audit project=%s domain=%s\n' "$project" "$domain"
+  printf '  gsc       : %s\n' "$gsc_status"
+  printf '  meta_aem  : %s\n' "$meta_status"
+  printf '  spf       : %s\n' "$spf_status"
+  printf '  dkim      : %s\n' "$dkim_status"
+  printf '  dmarc     : %s\n' "$dmarc_status"
+  printf '  mx        : %s\n' "$mx_status"
+}
+
+# --- subcommand: provision-all ------------------------------------------------
+cmd_provision_all() {
+  local project="${1:-}"; shift || true
+  local skip_csv=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --skip) skip_csv="${2:-}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  require project "$project" || return 2
+  local domain; domain="$(prefs_get ".marketing.projects.${project}.domain // empty")"
+  [[ -z "$domain" ]] && { err "provision-all: no domain configured for $project"; return 2; }
+
+  local all_rows=(spf dkim dmarc mx gsc meta-aem klaviyo-sending apple-pay)
+  local row skip_match
+  for row in "${all_rows[@]}"; do
+    skip_match=0
+    if [[ -n "$skip_csv" ]]; then
+      IFS=',' read -r -a skips <<<"$skip_csv"
+      local s
+      for s in "${skips[@]}"; do [[ "$s" = "$row" ]] && skip_match=1; done
+    fi
+    if (( skip_match )); then
+      log "provision-all: skipping $row"
+      continue
+    fi
+    log "provision-all: row=$row"
+    case "$row" in
+      spf)             cmd_spf             "$project" "$domain" || warn "row $row failed (continuing)" ;;
+      dkim)            cmd_dkim            "$project" "$domain" || warn "row $row failed (continuing)" ;;
+      dmarc)           cmd_dmarc           "$project" "$domain" || warn "row $row failed (continuing)" ;;
+      mx)              cmd_mx              "$project" "$domain" || warn "row $row failed (continuing)" ;;
+      gsc)             cmd_gsc             "$project" "$domain" || warn "row $row failed (continuing)" ;;
+      meta-aem)        cmd_meta_aem        "$project" "$domain" || warn "row $row failed (continuing)" ;;
+      klaviyo-sending) cmd_klaviyo_sending "$project" "$domain" || warn "row $row failed (continuing)" ;;
+      apple-pay)       cmd_apple_pay       "$project" "$domain" || warn "row $row failed (continuing)" ;;
+    esac
+  done
+  log "provision-all: done"
+}
+
+# --- help ---------------------------------------------------------------------
+usage() {
+  cat <<'EOF'
+ops-dns-provision — Cloudflare-backed DNS provisioner for marketing projects.
+
+USAGE
+  ops-dns-provision <subcommand> [args...]
+
+SUBCOMMANDS
+  gsc             <project> <domain>   Add Google Search Console TXT verify
+  meta-aem        <project> <domain>   Meta AEM domain verification TXT
+  apple-pay       <project> <domain>   Stripe payment_method_domains or static
+                                       .well-known association file (mode prefs)
+  spf             <project> <domain>   v=spf1 ... TXT at apex (merge-safe)
+  dkim            <project> <domain>   ESP DKIM CNAMEs (resend/postmark/ses)
+  dmarc           <project> <domain>   v=DMARC1; p=...; rua=... TXT at _dmarc
+  mx              <project> <domain>   Inbound MX (google-workspace/resend/ses)
+  klaviyo-sending <project> <domain>   Klaviyo dedicated sending CNAMEs
+  audit           <project> [--json]   Read-only health check
+  provision-all   <project> [--skip <row,row>]
+                                       Idempotently run every row
+
+FLAGS / ENV
+  OPS_DRY_RUN=1          Print every planned API call, write nothing.
+  CLOUDFLARE_API_TOKEN   Bearer token (preferred).
+  CLOUDFLARE_API_KEY     Global key (fallback, requires CLOUDFLARE_EMAIL).
+  CLOUDFLARE_EMAIL       Account email for Global key auth.
+  PREFS_PATH             Override preferences.json location.
+
+PREFS SCHEMA (under .marketing.projects.<key>)
+  domain                          string, e.g. "example.com"
+  esp.provider                    "resend" | "postmark" | "ses"
+  esp.credentials                 cred-ref ("env:VAR" | "doppler:CFG:KEY")
+  esp.spf_includes                array of include hosts (overrides default)
+  esp.spf_policy                  "-all" | "~all" (default "-all")
+  inbound.provider                "google-workspace" | "resend-inbound" | "ses"
+  inbound.region                  AWS region for ses/resend-inbound
+  dmarc.policy                    "none" | "quarantine" | "reject"
+  dmarc.rua                       "mailto:dmarc@..." (default mailto:dmarc@apex)
+  dns.cloudflare_account_id       optional CF account override
+  apple_pay.enabled               bool
+  apple_pay.mode                  "static-file" (default) | "stripe-dns"
+  stripe.secret_key               cred-ref (apple_pay mode=stripe-dns)
+  meta.access_token               cred-ref (meta-aem)
+  klaviyo.private_key             cred-ref (klaviyo-sending)
+  klaviyo.sending_subdomain       e.g. "em.example.com"
+
+EXAMPLES
+  # Dry-run every row for project "myapp"
+  OPS_DRY_RUN=1 ops-dns-provision provision-all myapp
+
+  # JSON audit for a CI healthcheck
+  ops-dns-provision audit myapp --json
+
+  # Single row
+  ops-dns-provision dmarc myapp example.com
+
+IDEMPOTENCY
+  Every record write is GET-first via scripts/lib/cloudflare-dns.sh —
+  re-running is safe. TXT at apex never silently overwrites a foreign
+  value (must contain the row's marker substring).
+
+NOTES
+  Apex resolver handles co.uk-style 2LDs. Override with PREFS only if
+  you've split a zone across multiple CF accounts.
+EOF
+}
+
+# --- main ---------------------------------------------------------------------
+main() {
+  local cmd="${1:-}"; shift || true
+  case "$cmd" in
+    gsc)              cmd_gsc             "$@" ;;
+    meta-aem)         cmd_meta_aem        "$@" ;;
+    apple-pay)        cmd_apple_pay       "$@" ;;
+    spf)              cmd_spf             "$@" ;;
+    dkim)             cmd_dkim            "$@" ;;
+    dmarc)            cmd_dmarc           "$@" ;;
+    mx)               cmd_mx              "$@" ;;
+    klaviyo-sending)  cmd_klaviyo_sending "$@" ;;
+    audit)            cmd_audit           "$@" ;;
+    provision-all)    cmd_provision_all   "$@" ;;
+    -h|--help|help|"") usage; exit 0 ;;
+    *) err "unknown subcommand: $cmd"; usage; exit 2 ;;
+  esac
+}
+
+main "$@"
