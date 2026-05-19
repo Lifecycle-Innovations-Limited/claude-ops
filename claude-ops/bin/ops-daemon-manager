@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# bin/ops-daemon-manager — Thin wrapper that adds `enable` / `disable` subcommands
+# on top of scripts/ops-daemon-manager.sh.
+#
+# New subcommands:
+#   enable  <svc>   Set services[<svc>].enabled = true  in daemon-services.json, then restart daemon.
+#   disable <svc>   Set services[<svc>].enabled = false in daemon-services.json, then restart daemon.
+#
+# All other subcommands (install, upgrade, ensure-current, uninstall, status, restart) are
+# passed through verbatim to scripts/ops-daemon-manager.sh.
+#
+# Exit codes mirror ops-daemon-manager.sh (0 = success, 1 = error, 64 = usage).
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Resolve OPS_DATA_DIR via the canonical lib (same as every other bin/).
+# SC2034: OPS_PLUGIN_ROOT_FALLBACK is read by registry-path.sh when sourced
+# shellcheck disable=SC2034
+OPS_PLUGIN_ROOT_FALLBACK="$PLUGIN_ROOT"
+# shellcheck disable=SC1091
+. "${PLUGIN_ROOT}/lib/registry-path.sh"
+
+LOG_DIR="${OPS_DATA_DIR}/logs"
+mkdir -p "$LOG_DIR"
+LOG="${LOG_DIR}/setup.log"
+
+_log() { printf '%s [ops-daemon-manager] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" | tee -a "$LOG" >&2; }
+
+_usage() {
+  cat >&2 <<EOF
+Usage: ops-daemon-manager <enable|disable|install|upgrade|ensure-current|uninstall|status|restart> [svc|options]
+
+  enable  <svc>   Enable a daemon service and restart the daemon
+  disable <svc>   Disable a daemon service and restart the daemon
+  (all other subcommands are forwarded to scripts/ops-daemon-manager.sh)
+EOF
+  exit 64
+}
+
+# ── Subcommand dispatch ────────────────────────────────────────────────────────
+SUBCMD="${1:-}"
+[ -z "$SUBCMD" ] && _usage
+
+case "$SUBCMD" in
+  enable|disable)
+    SVC="${2:-}"
+    if [ -z "$SVC" ]; then
+      _log "ERROR: ${SUBCMD} requires a service name"
+      _usage
+    fi
+
+    DAEMON_SERVICES_JSON="${OPS_DATA_DIR}/daemon-services.json"
+
+    # Bootstrap file from defaults if absent
+    if [ ! -f "$DAEMON_SERVICES_JSON" ]; then
+      if [ -f "${PLUGIN_ROOT}/scripts/daemon-services.default.json" ]; then
+        cp "${PLUGIN_ROOT}/scripts/daemon-services.default.json" "$DAEMON_SERVICES_JSON"
+        _log "bootstrapped daemon-services.json from default"
+      else
+        # Create a minimal skeleton so jq can work
+        printf '{"services":{}}\n' > "$DAEMON_SERVICES_JSON"
+        _log "bootstrapped empty daemon-services.json"
+      fi
+    fi
+
+    # Determine enabled value
+    if [ "$SUBCMD" = "enable" ]; then
+      ENABLED_VAL="true"
+    else
+      ENABLED_VAL="false"
+    fi
+
+    # Atomic write: jq → tmp → mv (idempotent)
+    TMP_FILE="${DAEMON_SERVICES_JSON}.tmp.$$"
+    if jq --arg svc "$SVC" --argjson val "$ENABLED_VAL" \
+        '.services[$svc].enabled = $val' \
+        "$DAEMON_SERVICES_JSON" > "$TMP_FILE" 2>/dev/null; then
+      mv "$TMP_FILE" "$DAEMON_SERVICES_JSON"
+      _log "${SUBCMD} ${SVC}: services.${SVC}.enabled = ${ENABLED_VAL}"
+    else
+      rm -f "$TMP_FILE"
+      _log "ERROR: jq failed writing daemon-services.json"
+      exit 1
+    fi
+
+    # Restart the daemon so the change takes effect immediately.
+    # Tolerate failure (daemon may not be installed yet — first-time setup).
+    if "${PLUGIN_ROOT}/scripts/ops-daemon-manager.sh" restart 2>/dev/null; then
+      _log "daemon restarted after ${SUBCMD} ${SVC}"
+    else
+      _log "WARN: daemon restart returned non-zero — daemon may not be installed yet; service flag persisted"
+    fi
+    ;;
+
+  *)
+    # Pass-through to the full daemon manager
+    exec "${PLUGIN_ROOT}/scripts/ops-daemon-manager.sh" "$@"
+    ;;
+esac
