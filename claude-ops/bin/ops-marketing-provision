@@ -199,7 +199,7 @@ cmd_provision_ga4() {
 
   # Resolve display name
   if [ -z "$display_name" ]; then
-    display_name="${project^} Web"
+    display_name="$(printf '%s' "$project" | awk '{ print toupper(substr($0, 1, 1)) substr($0, 2) }') Web"
   fi
 
   # Resolve GA4 account ID from prefs or env
