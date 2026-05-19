@@ -5,7 +5,7 @@
 #   creative_generate <project> <brief_json> <out_dir>
 #
 # brief_json example:
-#   '{"prompt":"Woman doing yoga at sunrise, 9:16, vibrant health","type":"video|image"}'
+#   '{"prompt":"Person using your product, 9:16 portrait, vibrant lifestyle","type":"video|image"}'
 #
 # Prints ONE JSON:
 #   {"generated":[{"path":"...","type":"video|image","est_cost_usd":N}],
@@ -358,7 +358,11 @@ creative_generate() {
 
   # ── Parse brief ───────────────────────────────────────────────────────────
   local gen_prompt gen_type
-  gen_prompt="$(printf '%s' "$brief_json" | jq -r '.prompt // "Compelling health and wellness ad creative, 9:16 portrait"' 2>/dev/null)"
+  gen_prompt="$(printf '%s' "$brief_json" | jq -r '.prompt // empty' 2>/dev/null)"
+  if [ -z "$gen_prompt" ]; then
+    printf '{"generated":[],"spend_today":0,"capped":false,"refused":true,"reason":"brand_voice_not_configured — run /ops:marketing onboard <project>"}\n'
+    return 1
+  fi
   gen_type="$(printf '%s' "$brief_json" | jq -r '.type // "video"' 2>/dev/null)"
   [ "$gen_type" != "video" ] && [ "$gen_type" != "image" ] && gen_type="video"
 
