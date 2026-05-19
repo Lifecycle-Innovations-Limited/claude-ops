@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# bin/ops-content-email — CLI entry for email draft generator.
+#
+# Usage:
+#   ops-content-email <project> [--dry-run]
+#   ops-content-email --dry-run     # dry-runs all enabled projects
+#
+# NEVER auto-sends. Staged drafts only. Per-message approval required.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$SCRIPT_DIR/..}"
+
+CRON="${PLUGIN_ROOT}/scripts/ops-cron-email-draft.sh"
+
+if [ ! -f "$CRON" ]; then
+  printf '[ops-content-email] ERROR: script not found: %s\n' "$CRON" >&2
+  exit 1
+fi
+
+exec bash "$CRON" "$@"
