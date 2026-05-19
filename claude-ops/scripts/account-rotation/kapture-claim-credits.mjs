@@ -66,6 +66,7 @@ import {
   writeLedger,
   findAccount,
   upsertAccount,
+  ymKey,
 } from './ledger.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -183,10 +184,6 @@ function loadLedger() {
 
 function saveLedger(ledger) {
   writeLedger(LEDGER_PATH, ledger);
-}
-
-function ymKey(date = new Date()) {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
 function receiptPath(email) {
