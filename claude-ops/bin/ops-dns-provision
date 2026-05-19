@@ -225,7 +225,7 @@ cmd_apple_pay() {
   [[ -z "$skey" ]] && { err "apple-pay: stripe secret key missing"; return 1; }
 
   local resp
-  resp="$(curl -sS --max-time 10 -u "$skey:" \
+  resp="$(curl -sS --max-time 10 -H "Authorization: Bearer $skey" \
     -X POST "https://api.stripe.com/v1/payment_method_domains" \
     -d "domain_name=$domain" 2>/dev/null || printf '{}')"
   local assoc; assoc="$(printf '%s' "$resp" | jq -r '.apple_pay.status_details.error_message // empty' 2>/dev/null)"
