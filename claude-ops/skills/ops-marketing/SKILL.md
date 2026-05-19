@@ -256,6 +256,25 @@ fi
 
 ---
 
+## Organic content generators
+
+Separate from paid ad creative gen. All outputs are **drafts only** — nothing auto-publishes or auto-sends (Rule 6).
+
+| Generator | CLI entry | Cron service | Enable flag |
+|---|---|---|---|
+| Landing-page hero variants | `ops-content-landing <project>` | — (on-demand) | `brand.voice` + `brand.product` + `brand.target_persona` + `source.url` in prefs |
+| SEO blog drafts | `ops-content-seo <project> [--dry-run]` | `content-seo-blog` (Mon 09:00 UTC) | `blog.enabled=true` + `gsc.site_url` + `brand.voice` |
+| Email drafts (Klaviyo flows + Resend) | `ops-content-email <project> [--dry-run]` | `content-email-draft` (Mon 10:00 UTC) | `email_marketing.enabled=true` + `brand.voice` |
+| Social calendar (LinkedIn + X + Instagram) | `ops-content-social <project> [--dry-run]` | `content-social-calendar` (Mon 11:00 UTC) | `social.enabled=true` + `brand.voice` |
+
+All generators **refuse to run if `brand.voice` is absent** — no defaults are substituted.
+
+Output paths: `${OPS_DATA_DIR}/content/{landing,blog,email,social}/<project>/`
+
+To enable a daemon service, set `enabled: true` in `daemon-services.default.json` or via `/ops:setup marketing`.
+
+---
+
 ## Sub-command Routing
 
 **Argument parsing:** `$ARGUMENTS` is split as `<first-token> [rest...]`.
