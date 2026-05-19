@@ -101,23 +101,32 @@ if (!PROJECT) {
 function constructEvent(payload, sigHeader, secret) {
   if (!sigHeader) return { valid: false, event: null };
 
-  const parts = Object.fromEntries(
-    sigHeader.split(',').map((p) => {
-      const [k, v] = p.split('=');
-      return [k, v];
-    }),
-  );
-  const ts = parts['t'];
-  const v1 = parts['v1'];
-  if (!ts || !v1) return { valid: false, event: null };
+  // Stripe may send multiple v1= signatures during webhook secret rotation; collect all.
+  let ts = '';
+  const v1Signatures = [];
+  for (const pair of sigHeader.split(',')) {
+    const eq = pair.indexOf('=');
+    if (eq === -1) continue;
+    const k = pair.slice(0, eq).trim();
+    const v = pair.slice(eq + 1);
+    if (k === 't') ts = v;
+    else if (k === 'v1') v1Signatures.push(v);
+  }
+  if (!ts || v1Signatures.length === 0) return { valid: false, event: null };
 
   // Stripe uses the full signing secret (including whsec_ prefix) as the UTF-8 HMAC key.
   const signedPayload = `${ts}.${payload}`;
   const expected = createHmac('sha256', secret).update(signedPayload).digest('hex');
 
   const expectedBuf = Buffer.from(expected, 'hex');
-  const v1Buf = Buffer.from(v1, 'hex');
-  const valid = expectedBuf.length === v1Buf.length && timingSafeEqual(expectedBuf, v1Buf);
+  let valid = false;
+  for (const v1 of v1Signatures) {
+    const v1Buf = Buffer.from(v1, 'hex');
+    if (expectedBuf.length === v1Buf.length && timingSafeEqual(expectedBuf, v1Buf)) {
+      valid = true;
+      break;
+    }
+  }
 
   if (!valid) return { valid: false, event: null };
 
