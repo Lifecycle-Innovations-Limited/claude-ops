@@ -102,6 +102,82 @@ d7="$(bash "$HELPERS" "$STATE_DIR" ad_A 30 1.0)"
   || err "no stripe file" "expected 'yes', got '$d7'"
 
 echo ""
+echo "--- token-expired ad account extension ---"
+echo ""
+
+# ── P6 extension: assert Meta token-expired (code 190) escalates correctly ────
+# We drive meta_account_health() directly to assert non-active account_status
+# values escalate with the right messages.
+
+ACCT_HELPERS="$WORK/acct_helpers.sh"
+{
+  echo '#!/usr/bin/env bash'
+  echo 'set -uo pipefail'
+  echo 'PREFS="/dev/null"'
+  echo 'DRY_RUN=0'
+  echo 'ESCALATED=0'
+  echo 'ESCALATE_REASON=""'
+  echo 'REPORT="$1"; shift'
+  echo 'STATE_DIR="'"$STATE_DIR"'"'
+  echo ': > "$REPORT"'
+  echo 'log() { :; }'
+  echo 'report() { printf "%s\n" "$1" >> "$REPORT"; }'
+  echo 'escalate() { ESCALATED=1; ESCALATE_REASON="$2"; }'
+  # stub meta_get to return our mock JSON
+  echo 'MOCK_JSON="$1"; shift'
+  echo 'meta_get() { printf "%s" "$MOCK_JSON"; }'
+  # Extract meta_account_health from binary
+  awk '/^meta_account_health\(\)/{p=1} p{print} p && /^}$/{p=0; exit}' "$BIN"
+  echo 'meta_account_health "$1" "$2"'
+  echo 'printf "%s:%s\n" "$ESCALATED" "${ESCALATE_REASON}"'
+} > "$ACCT_HELPERS"
+chmod +x "$ACCT_HELPERS"
+
+REPORT_A="$WORK/report_acct.md"
+
+# account_status=1 (active) → no escalation
+res1="$(bash "$ACCT_HELPERS" "$REPORT_A" '{"account_status":1}' "test-proj" "act_123")"
+e1="${res1%%:*}"
+[ "$e1" = "0" ] \
+  && ok "account_status=1 (active) → no escalation" \
+  || err "account_status=1" "ESCALATED=$e1, reason=${res1#*:}"
+
+# account_status=2 (disabled) → escalate
+res2="$(bash "$ACCT_HELPERS" "$REPORT_A" '{"account_status":2,"disable_reason":3}' "test-proj" "act_123")"
+e2="${res2%%:*}"
+[ "$e2" = "1" ] \
+  && ok "account_status=2 (disabled) → escalated" \
+  || err "account_status=2" "ESCALATED=$e2"
+
+# account_status=3 (unsettled) → escalate
+res3="$(bash "$ACCT_HELPERS" "$REPORT_A" '{"account_status":3}' "test-proj" "act_123")"
+e3="${res3%%:*}"
+[ "$e3" = "1" ] \
+  && ok "account_status=3 (unsettled) → escalated" \
+  || err "account_status=3" "ESCALATED=$e3"
+
+# account_status=7 (pending review) → escalate
+res7="$(bash "$ACCT_HELPERS" "$REPORT_A" '{"account_status":7}' "test-proj" "act_123")"
+e7="${res7%%:*}"
+[ "$e7" = "1" ] \
+  && ok "account_status=7 (pending review) → escalated" \
+  || err "account_status=7" "ESCALATED=$e7"
+
+# account_status=8 (grace period) → no escalation (informational)
+res8="$(bash "$ACCT_HELPERS" "$REPORT_A" '{"account_status":8}' "test-proj" "act_123")"
+e8="${res8%%:*}"
+[ "$e8" = "0" ] \
+  && ok "account_status=8 (grace period) → no escalation" \
+  || err "account_status=8" "ESCALATED=$e8"
+
+# missing account_status field → no escalation (field not returned — skip)
+res_empty="$(bash "$ACCT_HELPERS" "$REPORT_A" '{}' "test-proj" "act_123")"
+e_empty="${res_empty%%:*}"
+[ "$e_empty" = "0" ] \
+  && ok "empty account_status → no escalation (skipped)" \
+  || err "empty account_status" "ESCALATED=$e_empty"
+
+echo ""
 echo "---"
 echo "Results: $pass passed, $fail failed"
 (( fail == 0 )) || { echo "ACTION: fix failing tests above."; exit 1; }
