@@ -189,7 +189,8 @@ doppler_set() {
     return 0
   fi
   need_cmd doppler
-  if printf '%s' "{\"$key\": \"$value\"}" | \
+  need_cmd jq
+  if jq -n --arg k "$key" --arg v "$value" '{($k): $v}' | \
     doppler secrets upload - --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" >/dev/null 2>&1; then
     log "Doppler: set $key in $DOPPLER_PROJECT/$DOPPLER_CONFIG"
   else
@@ -324,7 +325,19 @@ cmd_provision_ga4() {
     local domain_clean="${domain#https://}"; domain_clean="${domain_clean#http://}"; domain_clean="${domain_clean%/}"
     stream_id="$(printf '%s' "$streams_resp" | jq -r \
       --arg d "$domain_clean" \
-      '.dataStreams[]? | select(.type == "WEB_DATA_STREAM") | select(.webStreamData.defaultUri | test($d; "i")) | .name | split("/")[3]' \
+      '.dataStreams[]?
+        | select(.type == "WEB_DATA_STREAM")
+        | select(
+            (
+              (.webStreamData.defaultUri // "")
+              | tostring
+              | sub("^https?://"; ""; "i")
+              | split("/")[0]
+              | split(":")[0]
+              | ascii_downcase
+            ) == ($d | ascii_downcase)
+          )
+        | .name | split("/")[3]' \
       2>/dev/null | head -1 || true)"
 
     if [ -z "$stream_id" ]; then

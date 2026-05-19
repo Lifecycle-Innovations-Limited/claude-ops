@@ -158,9 +158,32 @@ gather_meta() {
 # over gcloud ADC, so the dash works in daemon context without interactive gcloud auth.
 # If the key file exists but JWT exchange yields no token, fall back to ADC.
 _ga4_auth_token() {
-  local sa_key_file="${GA4_SERVICE_ACCOUNT_KEY_FILE:-}"
-  if [ -z "$sa_key_file" ]; then
-    # Auto-discover first matching SA key
+  local sa_key_file="" file_email="" target_email="${GA4_SERVICE_ACCOUNT_EMAIL:-}"
+  # When provision bound a specific SA, only use a key whose client_email matches it.
+  if [ -n "$target_email" ]; then
+    if [ -n "${GA4_SERVICE_ACCOUNT_KEY_FILE:-}" ] && [ -f "$GA4_SERVICE_ACCOUNT_KEY_FILE" ]; then
+      file_email="$(jq -r '.client_email // empty' "$GA4_SERVICE_ACCOUNT_KEY_FILE" 2>/dev/null || true)"
+      if [ "$file_email" = "$target_email" ]; then
+        sa_key_file="$GA4_SERVICE_ACCOUNT_KEY_FILE"
+      fi
+    fi
+    if [ -z "$sa_key_file" ] && [ -d "${HOME}/.config/gcloud/keys" ]; then
+      local f
+      for f in "${HOME}/.config/gcloud/keys"/*.json; do
+        [ -f "$f" ] || continue
+        file_email="$(jq -r '.client_email // empty' "$f" 2>/dev/null || true)"
+        if [ "$file_email" = "$target_email" ]; then
+          sa_key_file="$f"
+          break
+        fi
+      done
+    fi
+  fi
+  if [ -z "$sa_key_file" ] && [ -z "$target_email" ]; then
+    sa_key_file="${GA4_SERVICE_ACCOUNT_KEY_FILE:-}"
+  fi
+  if [ -z "$sa_key_file" ] && [ -z "$target_email" ]; then
+    # Auto-discover first matching SA key (legacy when GA4_SERVICE_ACCOUNT_EMAIL is unset)
     sa_key_file="$(ls "$HOME"/.config/gcloud/keys/*ga*.json 2>/dev/null | head -1 || true)"
   fi
   if [ -n "$sa_key_file" ] && [ -f "$sa_key_file" ]; then
