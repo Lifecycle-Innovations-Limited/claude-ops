@@ -185,17 +185,17 @@ If failures > 0: suggest `doppler run --project <proj> --config <env> -- gh secr
 
 ---
 
-## Real-world example: Stagery Inngest case
+## Example: recurring drift pattern
 
-This skill exists because of a recurring drift pattern:
+This skill exists because of a common drift pattern:
 
 | Project | Secret | Situation |
 |---------|--------|-----------|
-| stagery-api | `INNGEST_SIGNING_KEY` | Rotated in Doppler 2026-04-23 — GH secret was 24 days stale, CI failures started on 2026-05-17 |
-| inboxassist | `CEREBRAS_API_KEY` | Added to Doppler, never propagated to GH secrets — Phase 23 CI gate failed |
-| inboxassist | `OPENROUTER_API_KEY` | Same pattern — GH missing, Doppler current |
+| `<your-api>` | `INNGEST_SIGNING_KEY` | Rotated in Doppler — GH secret was 24 days stale, CI failures started after the grace period |
+| `<your-service>` | `CEREBRAS_API_KEY` | Added to Doppler, never propagated to GH secrets — CI gate failed |
+| `<your-service>` | `OPENROUTER_API_KEY` | Same pattern — GH missing, Doppler current |
 
-Running `/ops:secret-sync --repo your-org/stagery-api --project stagery-api --config prd` would have surfaced `INNGEST_SIGNING_KEY` as DRIFTED 24+ days before CI failed.
+Running `/ops:secret-sync --repo <your-org>/<your-api> --project <your-api> --config prd` would have surfaced `INNGEST_SIGNING_KEY` as DRIFTED before CI failed.
 
 ---
 
