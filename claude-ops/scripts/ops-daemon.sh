@@ -1149,7 +1149,16 @@ except Exception:
 
 # Resolve plugin-root-relative paths for daemon scripts (so the unit files
 # embed absolute paths that still work when invoked by another user context).
-OPS_DAEMON_SCRIPT="$SCRIPT_DIR/scripts/ops-daemon.sh"
+#
+# Prefer ops-daemon-launcher.sh when present: it resolves the highest-installed
+# ops plugin version at run time, so the LaunchAgent plist survives plugin
+# upgrades without re-running setup. Falls back to the direct daemon path if
+# the launcher isn't present (older plugin versions / partial installs).
+if [[ -x "$SCRIPT_DIR/scripts/ops-daemon-launcher.sh" ]]; then
+  OPS_DAEMON_SCRIPT="$SCRIPT_DIR/scripts/ops-daemon-launcher.sh"
+else
+  OPS_DAEMON_SCRIPT="$SCRIPT_DIR/scripts/ops-daemon.sh"
+fi
 OPS_KEEPALIVE_SCRIPT="$SCRIPT_DIR/scripts/wacli-keepalive.sh"
 
 install_daemon_launchd() {
