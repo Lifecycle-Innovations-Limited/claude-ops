@@ -1,0 +1,20 @@
+[Unit]
+Description=Pocket Ops Web UI (Flask/gunicorn on 127.0.0.1:7777)
+After=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__HOME__/pocket-ops-ui
+Environment=HOME=__HOME__
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
+Environment=TAILSCALE_USER=__TAILSCALE_USER__
+ExecStart=__HOME__/.venv-pocket/bin/gunicorn --workers 2 --bind 127.0.0.1:7777 app:app
+Restart=always
+RestartSec=5
+StandardOutput=append:__HOME__/.claude/state/pocket/ops-ui.log
+StandardError=append:__HOME__/.claude/state/pocket/ops-ui-stderr.log
+
+[Install]
+WantedBy=multi-user.target
