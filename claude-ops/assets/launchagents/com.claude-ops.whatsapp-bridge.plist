@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.claude-ops.whatsapp-bridge</string>
+    <string>com.__USER__.whatsapp-bridge</string>
 
     <key>ProgramArguments</key>
     <array>
