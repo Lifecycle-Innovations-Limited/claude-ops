@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.auroracapital/claude-ops-telegram-server",
+  "name": "io.github.lifecycle-innovations-limited/claude-ops-telegram-server",
   "description": "Telegram personal-account MCP (MTProto user-auth). Read DMs, send messages, search across chats.",
   "repository": {
     "url": "https://github.com/Lifecycle-Innovations-Limited/claude-ops",
