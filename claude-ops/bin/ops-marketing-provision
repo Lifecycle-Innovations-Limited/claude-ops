@@ -921,7 +921,7 @@ cmd_provision_google_ads() {
 
   # Single account: auto-select. Multiple: log all and pick first non-manager.
   local customer_count chosen_customer login_customer=""
-  customer_count=$(printf '%s' "$resource_names" | wc -l | tr -d ' ')
+  customer_count=$(printf '%s\n' "$resource_names" | wc -l | tr -d ' ')
   log "Accessible customers ($customer_count):"
   printf '%s\n' "$resource_names" | sed 's/^/  - /' >&2
 
@@ -942,7 +942,7 @@ cmd_provision_google_ads() {
         chosen_customer="$cid"
       fi
     done <<< "$resource_names"
-    [ -z "$chosen_customer" ] && chosen_customer="${resource_names##customers/}"
+    [ -z "$chosen_customer" ] && chosen_customer=$(printf '%s\n' "$resource_names" | head -n1 | sed 's#^customers/##')
   fi
 
   log "Selected customer: $chosen_customer${login_customer:+ (login-customer-id: $login_customer)}"
