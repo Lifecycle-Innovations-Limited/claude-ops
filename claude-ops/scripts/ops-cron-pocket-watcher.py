@@ -575,23 +575,28 @@ def save_cursor(ts: str) -> None:
     CURSOR_FILE.write_text(ts)
 
 
-def load_seen() -> set[str]:
+def load_seen() -> dict[str, None]:
+    """Ordered insertion map used as a set (keys only); order matters for save cap."""
     if SEEN_FILE.exists():
         try:
-            return set(json.loads(SEEN_FILE.read_text()))
+            raw = json.loads(SEEN_FILE.read_text())
+            if isinstance(raw, list):
+                return dict.fromkeys(str(x) for x in raw)
         except json.JSONDecodeError:
-            return set()
-    return set()
+            pass
+    return {}
 
 
-def save_seen(seen: set[str]) -> None:
+def save_seen(seen: dict[str, None]) -> None:
     if DRY_RUN:
         return
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    # Cap at 5000 ids to bound file size
+    # Cap at 5000 ids to bound file size (keep most recently inserted keys)
     if len(seen) > 5000:
-        seen = set(list(seen)[-5000:])
-    SEEN_FILE.write_text(json.dumps(sorted(seen)))
+        keys = list(seen.keys())[-5000:]
+        seen.clear()
+        seen.update(dict.fromkeys(keys))
+    SEEN_FILE.write_text(json.dumps(list(seen.keys())))
 
 
 # ── Output sinks ─────────────────────────────────────────────────────────────
@@ -824,12 +829,12 @@ def main() -> int:
             has_content = bool(transcript or segs)
             if duration and duration < 20 and not has_content:
                 log(f"skip noise recording {rid} (dur={duration}s, no transcript)")
-                seen.add(rid)
+                seen[rid] = None
                 continue
             write_memory(rec, giga=giga)
             new_memories += 1
             new_recordings.append(rid)
-            seen.add(rid)
+            seen[rid] = None
 
             # Implicit-task inference (Haiku) — only on substantive recordings
             inferred = infer_tasks_from_recording(rec)
@@ -861,7 +866,7 @@ def main() -> int:
                     with PENDING_TRIAGE.open("a") as f:
                         f.write(json.dumps(payload) + "\n")
                     log(f"queued for triage: {t['title'][:60]} (conf={t['confidence']:.2f})")
-                seen.add(inferred_id)
+                seen[inferred_id] = None
         if meta.get("hasMore") and meta.get("nextRecordingDateBeforeExclusive"):
             next_before = meta["nextRecordingDateBeforeExclusive"]
             if page >= 10:
@@ -890,7 +895,7 @@ def main() -> int:
                 continue
             route_actionitem(item, giga=giga)
             new_tasks += 1
-            seen.add(seen_key)
+            seen[seen_key] = None
 
     # 3) Optional consolidate pass (Giga merges adjacent neurons)
     if giga and giga.ok and GIGA_CONSOLIDATE and (new_memories + new_tasks) > 0:

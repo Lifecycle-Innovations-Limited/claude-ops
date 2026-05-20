@@ -16,8 +16,7 @@ LATEST_VERSION="$(
   find "$CACHE_ROOT" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null \
     | awk -F/ '{print $NF}' \
     | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-    | sort -n -t. -k1,1 -k2,2 -k3,3 \
-    | tac \
+    | sort -rn -t. -k1,1 -k2,2 -k3,3 \
     | while read -r v; do
         if [[ -x "$CACHE_ROOT/$v/scripts/ops-daemon.sh" ]]; then
           echo "$v"; break
