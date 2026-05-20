@@ -84,20 +84,10 @@ extract_project_hint() {
 
   # look for product name embedded in the key itself
   # e.g. META_HEALIFY_ACCESS_TOKEN → healify, STRIPE_FIBERWIFI_SECRET_KEY → fiberwifi
-  # Source of truth: user's configured projects in $PREFS_PATH under
-  # .marketing.projects (and optionally .marketing.account_slugs[]).
+  # Same slugs as CONFIGURED_SLUGS (loaded once from $PREFS_PATH:
+  # .marketing.projects keys and .marketing.account_slugs[]).
   # No hardcoded project names — those are user PII and must live in config.
-  local known_products=()
-  if [ -f "$PREFS_PATH" ]; then
-    while IFS= read -r p; do
-      [ -n "$p" ] && known_products+=("$p")
-    done < <(jq -r '
-      [
-        (.marketing.projects // {} | keys[]?),
-        (.marketing.account_slugs[]?)
-      ] | unique | .[]
-    ' "$PREFS_PATH" 2>/dev/null)
-  fi
+  local known_products=("${CONFIGURED_SLUGS[@]}")
 
   # No configured projects → no hint extraction possible; fall back to the
   # doppler project base name. Caller-level guard already handles the
