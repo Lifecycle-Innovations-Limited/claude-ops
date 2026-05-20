@@ -32,6 +32,9 @@ if [[ -z "$PLUGIN_ROOT" || ! -d "$PLUGIN_ROOT" ]]; then
 fi
 
 NOTIFIER_SCRIPT="$PLUGIN_ROOT/scripts/ops-pocket-activity-notifier.py"
+LAUNCHER_SCRIPT="$PLUGIN_ROOT/scripts/ops-pocket-activity-notifier-launcher.sh"
+LAUNCHER_DEST_DIR="$HOME/.claude/plugins/data/ops-ops-marketplace/bin"
+LAUNCHER_DEST="$LAUNCHER_DEST_DIR/ops-pocket-activity-notifier-launcher.sh"
 PLIST_TEMPLATE="$PLUGIN_ROOT/scripts/com.claude-ops.pocket-activity-notifier.plist"
 PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.pocket-activity-notifier.plist"
 STATE_DIR="$HOME/.claude/state/pocket"
@@ -39,36 +42,37 @@ STATE_DIR="$HOME/.claude/state/pocket"
 # Fall back to script-dir-relative paths when invoked from a fresh checkout
 # where the plugin root resolution above lands somewhere unexpected.
 [[ -f "$NOTIFIER_SCRIPT" ]] || NOTIFIER_SCRIPT="$SCRIPT_DIR/ops-pocket-activity-notifier.py"
+[[ -f "$LAUNCHER_SCRIPT" ]] || LAUNCHER_SCRIPT="$SCRIPT_DIR/ops-pocket-activity-notifier-launcher.sh"
 [[ -f "$PLIST_TEMPLATE"  ]] || PLIST_TEMPLATE="$SCRIPT_DIR/com.claude-ops.pocket-activity-notifier.plist"
 
-for f in "$NOTIFIER_SCRIPT" "$PLIST_TEMPLATE"; do
+for f in "$NOTIFIER_SCRIPT" "$LAUNCHER_SCRIPT" "$PLIST_TEMPLATE"; do
   [[ -f "$f" ]] || { echo "error: required plugin file not found: $f" >&2; exit 1; }
 done
 
-mkdir -p "$STATE_DIR"
+mkdir -p "$STATE_DIR" "$LAUNCHER_DEST_DIR"
 chmod +x "$NOTIFIER_SCRIPT"
 
-# Resolve python3. Prefer Homebrew on Apple Silicon, then Intel Homebrew,
-# then fall back to whichever python3 is first on PATH.
-PYTHON_PATH=""
-if [[ -x /opt/homebrew/bin/python3 ]]; then
-  PYTHON_PATH="/opt/homebrew/bin/python3"
-elif [[ -x /usr/local/bin/python3 ]]; then
-  PYTHON_PATH="/usr/local/bin/python3"
-else
-  PYTHON_PATH="$(command -v python3 || true)"
-fi
-if [[ -z "$PYTHON_PATH" || ! -x "$PYTHON_PATH" ]]; then
-  echo "error: could not find python3 — install via 'brew install python' and retry" >&2
-  exit 1
+# Install the version-agnostic launcher to a stable location outside the
+# version-pinned cache dir. The plist points at THIS path forever — the
+# launcher resolves the latest installed ops version at run time.
+cp "$LAUNCHER_SCRIPT" "$LAUNCHER_DEST"
+chmod +x "$LAUNCHER_DEST"
+
+# macOS ships bash 3; Homebrew installs bash 5 at /opt/homebrew/bin/bash.
+BASH_PATH="/bin/bash"
+if [[ -x /opt/homebrew/bin/bash ]]; then
+  BASH_PATH="/opt/homebrew/bin/bash"
+elif [[ -x /usr/local/bin/bash ]]; then
+  BASH_PATH="/usr/local/bin/bash"
 fi
 
-# Generate plist from template.
+# Generate plist from template. Point at the stable launcher path so plugin
+# upgrades don't strand the plist on a deleted version dir.
 TMP_PLIST="$(mktemp -t pocket-activity-notifier.XXXXXX.plist)"
 trap 'rm -f "$TMP_PLIST"' EXIT
 
-sed -e "s|__PYTHON_PATH__|$PYTHON_PATH|g" \
-    -e "s|__SCRIPT_PATH__|$NOTIFIER_SCRIPT|g" \
+sed -e "s|__BASH_PATH__|$BASH_PATH|g" \
+    -e "s|__POCKET_NOTIFIER_LAUNCHER_PATH__|$LAUNCHER_DEST|g" \
     -e "s|__HOME__|$HOME|g" \
     -e "s|__USER__|$USER|g" \
     "$PLIST_TEMPLATE" > "$TMP_PLIST"
@@ -85,8 +89,8 @@ launchctl enable "gui/$(id -u)/com.claude-ops.pocket-activity-notifier"
 if launchctl list | grep -q "com.claude-ops.pocket-activity-notifier"; then
   echo "✓ pocket-activity-notifier installed and bootstrapped"
   echo "  plist:    $PLIST_DEST"
-  echo "  script:   $NOTIFIER_SCRIPT"
-  echo "  python:   $PYTHON_PATH"
+  echo "  launcher: $LAUNCHER_DEST"
+  echo "  script:   $NOTIFIER_SCRIPT (resolved at run time via launcher)"
   echo "  interval: 60s"
   echo "  logs:     $STATE_DIR/activity-notifier.{stdout,stderr}.log"
 else

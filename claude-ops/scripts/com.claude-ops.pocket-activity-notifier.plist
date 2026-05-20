@@ -7,8 +7,8 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>__PYTHON_PATH__</string>
-        <string>__SCRIPT_PATH__</string>
+        <string>__BASH_PATH__</string>
+        <string>__POCKET_NOTIFIER_LAUNCHER_PATH__</string>
     </array>
 
     <key>StartInterval</key>
