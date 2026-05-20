@@ -221,7 +221,7 @@ def process_spawns(chat_jid: str | None, email_to: str | None, titles: dict) -> 
                 f"You will receive a DONE notification with the report "
                 f"attached when this completes.\n"
             )
-            email_subject = f"[Pocket] START — {(title or task_id)[:80]}"
+            email_subject = f"START — {(title or task_id)[:80]}"
             try:
                 if chat_jid:
                     enqueue_whatsapp(chat_jid, wa_msg)
@@ -329,7 +329,7 @@ def process_completions(chat_jid: str | None, email_to: str | None, titles: dict
                 f"Report file referenced but not found on disk: {output_file}"
             )
         email_body = "\n".join(email_body_parts)
-        email_subject = f"[Pocket] DONE — {(title or task_id)[:80]}"
+        email_subject = f"DONE — {(title or task_id)[:80]}"
 
         try:
             if chat_jid:
