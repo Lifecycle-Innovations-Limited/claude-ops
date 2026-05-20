@@ -1,7 +1,7 @@
 {
   "name": "claude-ops-telegram-server",
   "version": "0.2.1",
-  "mcpName": "io.github.auroracapital/claude-ops-telegram-server",
+  "mcpName": "io.github.lifecycle-innovations-limited/claude-ops-telegram-server",
   "description": "Telegram user-auth MCP server for claude-ops plugin (personal account via MTProto, not bots)",
   "license": "MIT",
   "repository": {
