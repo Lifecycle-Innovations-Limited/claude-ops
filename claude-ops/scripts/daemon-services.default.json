@@ -1,5 +1,12 @@
 {
   "services": {
+    "mcp-watchdog": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-mcp-watchdog.py",
+      "cron": "*/5 * * * *",
+      "health_file": "~/.claude/state/mcp-watchdog/.health",
+      "_note": "MCP server connectivity watchdog. Auto-reconnects degraded servers, sends WhatsApp/email alert via supervisor-out-queue when manual reauth needed. Cron interval drives latency of degraded-state detection."
+    },
     "briefing-pre-warm": {
       "enabled": true,
       "command": "${CLAUDE_PLUGIN_ROOT}/bin/ops-gather",
@@ -46,7 +53,7 @@
       "enabled": false,
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-inbox-digest.sh",
       "cron": "0 */4 * * *",
-      "_note": "Aggregates all configured channels (WhatsApp, Email, Telegram, Slack) every 4 hours. Script not yet landed — re-enable when ops-cron-inbox-digest.sh is added."
+      "_note": "Aggregates all configured channels (WhatsApp, Email, Telegram, Slack) every 4 hours into a single digest. Enable after configuring at least one channel in /ops:settings."
     },
     "message-listener": {
       "enabled": false,
@@ -55,13 +62,13 @@
       "health_file": "~/.claude/plugins/data/ops-ops-marketplace/listener-health.txt",
       "restart_delay": 30,
       "max_restarts": 20,
-      "_note": "Persistent poller for WhatsApp and Telegram. Script not yet landed — re-enable when ops-message-listener.sh is added."
+      "_note": "Persistent poller for WhatsApp and Telegram. Writes incoming messages to the ops inbox queue for /ops:inbox processing. Enable after configuring channel credentials in /ops:settings."
     },
     "competitor-intel": {
       "enabled": false,
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-competitor-intel.sh",
       "cron": "0 10 * * 1",
-      "_note": "Weekly competitor intelligence report every Monday at 10am. Script not yet landed — re-enable when ops-cron-competitor-intel.sh is added."
+      "_note": "Weekly competitor intelligence report every Monday at 10am. Fetches and summarises competitor activity across registered projects. Enable after configuring project registry."
     },
     "competitor-alert": {
       "enabled": true,
