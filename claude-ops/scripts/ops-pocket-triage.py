@@ -126,52 +126,6 @@ def write_health(status: str, msg: str = "", extra: dict | None = None) -> None:
         log(f"health write failed: {e}")
 
 
-_auth_logged = False
-
-
-def resolve_auth() -> tuple[str | None, dict]:
-    """Return (auth_header_value, extra_headers). Prefers Claude Code OAuth.
-
-    Logs auth mode on first call so we know whether we're on subscription
-    OAuth (no metered billing, separate rate-limit pool) or API key.
-    """
-    global _auth_logged
-    try:
-        out = subprocess.run(
-            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            d = json.loads(out.stdout.strip())
-            o = d.get("claudeAiOauth") or {}
-            tok = o.get("accessToken") or ""
-            exp = o.get("expiresAt") or 0
-            if tok and exp > int(time.time() * 1000) + 60000:
-                if not _auth_logged:
-                    log(f"auth: Claude Code OAuth (sub pool); expires in {(exp - int(time.time()*1000))//60000} min")
-                    _auth_logged = True
-                return (f"Bearer {tok}", {"anthropic-beta": "oauth-2025-04-20"})
-    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError):
-        pass
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not key:
-        try:
-            r = subprocess.run(
-                ["security", "find-generic-password", "-s", "ANTHROPIC_API_KEY", "-a", "ops-daemon", "-w"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                key = r.stdout.strip()
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
-    if key:
-        if not _auth_logged:
-            log("auth: ANTHROPIC_API_KEY (metered billing — tight burst limits)")
-            _auth_logged = True
-        return (None, {"_apikey": key})
-    return (None, {})
-
-
 _SYSTEM_PROMPT_TEMPLATE = """You are the safety triage agent for {owner_name}'s personal automation pipeline. {owner_name} records voice memos via Pocket AI. A Haiku layer extracts implicit tasks from each transcript. Your job is to decide, for ONE candidate task at a time, whether a Claude Code subagent can safely execute it autonomously on their machine.
 
 Use extended thinking. Reason step-by-step about:
