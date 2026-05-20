@@ -1,0 +1,15 @@
+[Unit]
+Description=Pocket Executor — supervisor watchdog (keeps pocket-exec tmux alive)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__HOME__
+Environment=HOME=__HOME__
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
+ExecStart=__HOME__/.venv-pocket/bin/python3 __HOME__/claude-ops/claude-ops/scripts/ops-cron-pocket-executor.py
+StandardOutput=append:__HOME__/.claude/state/pocket/executor-stdout.log
+StandardError=append:__HOME__/.claude/state/pocket/executor-stderr.log
