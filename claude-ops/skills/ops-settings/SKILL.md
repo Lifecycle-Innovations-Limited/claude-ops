@@ -181,6 +181,189 @@ jq --arg p "$P" --argjson v false \
 - Setting `envelope.kill_switch: true` **hard-stops all mutations** on the next pass (stage-only, zero writes) regardless of `autonomy_level`.
 - The Credential Status Dashboard MUST surface `autonomy_level` and `kill_switch` for every project with `autopilot.enabled == true`.
 
+## Pocket
+
+Manages the voice-journal activity notifier (POCKET_API_KEY watcher + WhatsApp/email bridges + launchd agent).
+
+Route here when the user runs `/ops:settings pocket` or selects "Pocket" from the dashboard.
+
+### View status
+
+Read all four health files and print a compact status block:
+
+```bash
+STATE_DIR="$HOME/.claude/state/pocket"
+for f in .activity-notifier-health .out-queue-health .email-bridge-health .whatsapp-bridge-health; do
+  label="${f#.}"
+  label="${label%-health}"
+  content=$(cat "$STATE_DIR/$f" 2>/dev/null)
+  if [ -z "$content" ]; then
+    echo "$label: missing"
+  else
+    status=$(echo "$content" | jq -r '.status // "unknown"' 2>/dev/null)
+    msg=$(echo "$content"    | jq -r '.message // ""'       2>/dev/null)
+    last=$(echo "$content"   | jq -r '.last_run // ""'      2>/dev/null)
+    echo "$label: $status  $msg  ($last)"
+  fi
+done
+```
+
+For each service whose status is not `"ok"`, flag it:
+
+```
+activity-notifier: ok  (2026-05-20T12:34:56Z)
+out-queue:         ok  sent=3  (2026-05-20T12:34:55Z)
+email-bridge:      disabled  (2026-05-20T12:34:50Z)
+whatsapp-bridge:   ok  scanned=12 routed=1  (2026-05-20T12:34:54Z)
+```
+
+Show `✗ missing` for any health file that does not exist.
+
+### View task counts
+
+```bash
+STATE_DIR="$HOME/.claude/state/pocket"
+echo "tasks.jsonl:          $(wc -l < "$STATE_DIR/tasks.jsonl"         2>/dev/null || echo 0) lines"
+echo "pending-triage.jsonl: $(wc -l < "$STATE_DIR/pending-triage.jsonl" 2>/dev/null || echo 0) lines"
+echo "executor-results/:    $(ls "$STATE_DIR/executor-results/" 2>/dev/null | wc -l | tr -d ' ') files"
+```
+
+### Toggle channels
+
+Ask `AskUserQuestion`:
+
+```
+Which Pocket notification channel setting would you like to change?
+  [Toggle WhatsApp]  [Toggle Email]  [Edit self-address]  [Back]
+```
+
+**Toggle WhatsApp** — read `~/.claude/state/pocket/whatsapp-config.json`, flip `.enabled`, write back:
+
+```bash
+F="$HOME/.claude/state/pocket/whatsapp-config.json"
+CUR=$(jq -r '.enabled' "$F" 2>/dev/null || echo false)
+NEW=$([ "$CUR" = "true" ] && echo false || echo true)
+jq --argjson v "$NEW" '.enabled = $v' "$F" > "${F}.tmp" && mv "${F}.tmp" "$F"
+echo "WhatsApp notifications: $NEW"
+```
+
+**Toggle Email** — same pattern with `~/.claude/state/pocket/email-config.json`.
+
+**Edit self-address** — show current `email-config.json:.self_address`, ask for new value via `AskUserQuestion` text input, write back:
+
+```bash
+F="$HOME/.claude/state/pocket/email-config.json"
+jq --arg v "$NEW_ADDR" '.self_address = $v | .from_account = $v' "$F" > "${F}.tmp" && mv "${F}.tmp" "$F"
+```
+
+### Force a fresh Pocket pull
+
+Run the watcher directly (picks up POCKET_API_KEY from keychain/env):
+
+```bash
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1)}"
+python3 "$PLUGIN_ROOT/scripts/ops-cron-pocket-watcher.py"
+```
+
+Report exit code and last line of `~/.claude/state/pocket/run.log`.
+
+### Restart notifier
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/com.claude-ops.pocket-activity-notifier"
+```
+
+Wait 3 seconds then print the updated `.activity-notifier-health` status.
+
+### View last 3 outbound notifications
+
+```bash
+STATE_DIR="$HOME/.claude/state/pocket"
+echo "=== WhatsApp (out-queue-sent.jsonl) ==="
+tail -3 "$STATE_DIR/out-queue-sent.jsonl" 2>/dev/null | jq -r '"\(.sent_at // .ts // "?")  \(.message // .body // "" | .[0:80])"' 2>/dev/null || echo "(none)"
+echo "=== Email (email-sent.jsonl) ==="
+tail -3 "$STATE_DIR/email-sent.jsonl"     2>/dev/null | jq -r '"\(.sent_at // .ts // "?")  \(.subject // "" | .[0:80])"'                2>/dev/null || echo "(none)"
+```
+
+## Daemon Services
+
+Manage background daemon services declared in `daemon-services.default.json`. Route here when the user runs `/ops:settings daemons` or selects "Daemon services" from the dashboard.
+
+### Display the daemon services table
+
+```bash
+DAEMON_DEFAULT="${CLAUDE_PLUGIN_ROOT}/scripts/daemon-services.default.json"
+DAEMON_OVERRIDE="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/daemon-services.override.json"
+
+# Merge: override file wins on matching service keys
+if [ -f "$DAEMON_OVERRIDE" ]; then
+  jq -s '.[0].services * .[1].services' "$DAEMON_DEFAULT" "$DAEMON_OVERRIDE" 2>/dev/null
+else
+  jq '.services' "$DAEMON_DEFAULT" 2>/dev/null
+fi
+```
+
+Display as a table (for each service, show enabled state, last_run age, and health status from the `health_file` if declared):
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ OPS ► SETTINGS — Daemon Services
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ Service                   Enabled   Last Run      Health
+ ──────────────────────── ───────── ────────────  ────────────
+ briefing-pre-warm          ✅ on    2m ago        ✓ ok
+ memory-extractor           ✅ on    18m ago       ✓ ok
+ message-listener           ⏸ off   —             —
+ competitor-intel           ⏸ off   —             —
+ marketing-autopilot        ⏸ off   —             —
+
+──────────────────────────────────────────────────────────────────
+```
+
+For each `enabled: true` service with a `health_file`, expand `~` → `$HOME`, read the JSON file, extract `.last_run` and `.status`. Services with no `health_file` show `—`.
+
+### Toggle a service on or off
+
+Writes to the **override file only** — never edits `daemon-services.default.json`.
+
+Confirm each toggle via `AskUserQuestion` (`[Enable]` / `[Disable]` / `[Cancel]`) before writing.
+
+```bash
+DAEMON_OVERRIDE="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/daemon-services.override.json"
+tmp=$(mktemp)
+# Enable:
+jq --arg svc "$SERVICE_NAME" '.services[$svc].enabled = true' \
+  "${DAEMON_OVERRIDE}" > "$tmp" 2>/dev/null \
+  || echo "{\"services\":{\"$SERVICE_NAME\":{\"enabled\":true}}}" > "$tmp"
+mv "$tmp" "$DAEMON_OVERRIDE"
+# Disable: same pattern with `= false`
+```
+
+If the override file does not exist yet, initialise it with `{"services":{}}` before writing.
+
+### View last 5 log lines for a service
+
+```bash
+OPS_DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+tail -n 5 "$OPS_DATA_DIR/logs/${SERVICE_NAME}.log" 2>/dev/null || echo "(no log file found)"
+```
+
+### Manually trigger a service
+
+- **launchd-registered** (plist-backed, e.g. `whatsapp-bridge`):
+  ```bash
+  launchctl kickstart -k "gui/$UID/com.samrenders.${SERVICE_NAME}"
+  ```
+- **Cron-style / script-based** (have a `command` pointing to a `.sh` file):
+  ```bash
+  COMMAND=$(jq -r ".services[\"$SERVICE_NAME\"].command" "$DAEMON_DEFAULT" \
+    | sed "s|\${CLAUDE_PLUGIN_ROOT}|${CLAUDE_PLUGIN_ROOT}|g")
+  bash "$COMMAND"
+  ```
+
+Always confirm via `AskUserQuestion` (`[Run now]` / `[Cancel]`) before triggering.
+
 ## CLI/API Reference
 
 | Command | Purpose |
