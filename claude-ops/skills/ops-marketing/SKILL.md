@@ -153,19 +153,33 @@ Run `/ops:marketing <project>` to point-and-go:
 
 Provision a brand-new project end-to-end:
 ```bash
-# One-shot: GA4 + GSC together
+# One-shot: GA4 + GSC + Instagram + Google Ads — sequential, idempotent
 ops-marketing-provision provision-all --project <project>
 
+# Iterate every project in prefs
+ops-marketing-provision provision-all --all-projects
+
 # Or individually:
-ops-marketing-provision provision-ga4 --project <project> \
+ops-marketing-provision provision-ga4         --project <project> \
   --domain <domain> --account-id <YOUR_GA4_ACCOUNT_ID>
-ops-marketing-provision provision-gsc --project <project> \
-  --site https://<domain>/
+ops-marketing-provision provision-gsc         --project <project> --site https://<domain>/
+ops-marketing-provision provision-instagram   --project <project>   # auto-resolves via Meta token
+ops-marketing-provision provision-google-ads  --project <project>   # 4-step OAuth flow
 
 # Check results
 ops-marketing-provision status --project <project> --json
 ops-marketing-dash --project <project>
 ```
+
+`provision-instagram` requires `marketing.projects.<key>.meta.access_token` (and optional `meta.app_secret` for `appsecret_proof` signing — required when the app's "Require App Secret" setting is on, which is the default for all system-user tokens). The verb is fully idempotent: smoke-tests an existing `instagram.account_id` before making any API calls; pass `--force` to re-resolve.
+
+`provision-google-ads` is a 4-step flow (each step is a no-op if the credential already exists):
+1. **Developer token** — scans env + Doppler. If missing, writes a pending-state JSON at `${OPS_DATA_DIR}/state/marketing-provision/<project>-google-ads-pending.json` and exits 1. Apply at <https://ads.google.com/aw/apicenter> (24–48h approval) then re-run.
+2. **OAuth client** — scans env + Doppler. If missing, prints Cloud Console URL for creating a Desktop OAuth client.
+3. **Refresh token** — launches a localhost HTTP server on `:8080` (120s timeout), opens the Google consent URL, captures the auth code, exchanges for `refresh_token`, writes to Doppler as `GOOGLE_ADS_<PROJECT_UPPER>_REFRESH_TOKEN`.
+4. **Customer ID** — calls `v24/customers:listAccessibleCustomers`, auto-detects MCC manager accounts (sets `login_customer_id`), writes `customer_id` to prefs.
+
+Pass `--skip-if-pending` to skip when a dev-token application is in-flight (used by `provision-all` to keep the chain unblocked).
 
 Set `OPS_MARKETING_DRY_RUN=1` to print planned API calls without executing.
 
@@ -340,7 +354,9 @@ Route `$ARGUMENTS` to the correct section below:
 
 | Input | Action |
 |---|---|
-| (empty), dashboard | Run full marketing dashboard |
+| (empty), dashboard, portfolio | Visual portfolio dashboard — all projects × all configured channels (Meta, Google Ads, GA4, GSC, Resend, SNS, IG, ShipBob, autopilot state). See ## dashboard section. |
+| portfolio --json | Machine-readable portfolio JSON (one row per project, full channel config) |
+| portfolio --project `<name>` | Full single-project config dump (every channel block) |
 | `<project>` | If `marketing.projects.<project>.autopilot.enabled == true` → run live autopilot pass for that project. Otherwise → run `bin/ops-marketing-provision provision-all --project <project>` then `bin/ops-marketing-autopilot --project <project> --dry-run` (see ## project entry-point section) |
 | email, klaviyo | Klaviyo email metrics |
 | ads, meta | Meta Ads performance (read-only overview) |
@@ -353,6 +369,10 @@ Route `$ARGUMENTS` to the correct section below:
 | instagram, instagram post, instagram reel, instagram story, instagram insights, instagram demographics | Instagram publishing + insights (see ## instagram section) |
 | campaigns | Cross-channel campaign overview (all platforms) |
 | optimize | Cross-platform ad optimization agent |
+| `provision <project>` | Idempotent full sweep — provisions GA4, GSC, Instagram, Google Ads in order. Each step is no-op if already configured. Aliases: `provision-all <project>` |
+| `provision-instagram <project>` | Auto-resolves `instagram.account_id` from Meta token (uses `appsecret_proof` when `meta.app_secret` configured). |
+| `provision-google-ads <project>` | 4-step OAuth flow — developer token + OAuth client + refresh token (localhost callback :8080) + customer ID resolution with auto-MCC detection. |
+| `provision --all-projects` | Iterate every project in prefs, run `provision-all` per project. |
 | autopilot | Autonomous per-project daily ad management (see ## autopilot section) |
 | autopilot onboard `<url>` | Cold-start: scrape URL, derive strategy, scaffold/stage campaigns (see ## autopilot → Autonomous onboarding) |
 | `autopilot enable <project> [--cap <usd>]` | Enable autopilot for a project (see ## autopilot-enable section) |
@@ -2315,12 +2335,29 @@ printf "| %-14s | \$%-9s | %-12s | \$%-11s | %-8s |\n" "TOTAL (ads)" "$TOTAL_AD_
 
 ## dashboard (default — no args)
 
-Run ALL sections in parallel, then render unified dashboard.
+The default `/ops:marketing` view is the **portfolio dashboard** — every configured project across every channel (Meta, Google Ads, GA4, GSC, Resend, SNS, Instagram, ShipBob, autopilot status). No API spam — pure config-state read, fast across 9+ projects.
 
 ```bash
-# Run the pre-gathered data script
-"${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-dash" 2>/dev/null
+"${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-portfolio" 2>/dev/null
 ```
+
+For a **live KPI pull** on a single project (Meta spend, GA4 sessions, GSC clicks, IG reach), use the per-project dash:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-dash" --project <name> 2>/dev/null
+```
+
+Routing summary:
+
+| Input | Action |
+|---|---|
+| `/ops:marketing` (no args) | Portfolio: all projects × all channels (configured/enabled state) |
+| `/ops:marketing dashboard` | Same as no args |
+| `/ops:marketing <project>` | If autopilot enabled → live pass; else provision + dry-run + per-project KPI dash |
+| `/ops:marketing portfolio --json` | Machine-readable portfolio dump |
+| `/ops:marketing portfolio --project <name>` | Single-project full config dump |
+
+The portfolio surfaces channels the per-project dash never showed: **Resend** (transactional/marketing email — `email_marketing.resend`), **AWS SNS** (push/SMS — `email_marketing.sns`), **ShipBob** (fulfillment — `shipbob`), **Meta Page/Business** (`meta.page_id`/`business_id`), and **GA4 Measurement Protocol** (`ga4.measurement_id`/`api_secret`). It also exposes per-project autopilot state (enabled / autonomy_level / cap_usd / kill_switch) at-a-glance — the kill-switch column is the answer to "which projects are stage-only right now".
 
 ### Competitor signals (gather before rendering)
 
