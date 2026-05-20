@@ -75,6 +75,18 @@ GADS_REFRESH_TOKEN="$(get_cred 'google_ads.refresh_token' GOOGLE_ADS_REFRESH_TOK
 GADS_CUSTOMER_ID="$(get_cred 'google_ads.customer_id' GOOGLE_ADS_CUSTOMER_ID google_ads_customer_id)"
 GADS_LOGIN_CUSTOMER_ID="${GOOGLE_ADS_LOGIN_CUSTOMER_ID:-$(claude plugin config get google_ads_login_customer_id 2>/dev/null || echo "")}"
 INSTAGRAM_ACCOUNT_ID="$(get_cred 'instagram.account_id' INSTAGRAM_ACCOUNT_ID instagram_account_id)"
+META_APP_SECRET="$(get_cred 'meta.app_secret' META_APP_SECRET meta_app_secret META_APP_SECRET)"
+
+# Compute appsecret_proof for projects that require it (Meta system-user tokens
+# and any project with app_secret configured). Empty string when no secret.
+META_PROOF=""
+if [ -n "$META_TOKEN" ] && [ -n "$META_APP_SECRET" ]; then
+  META_PROOF=$(printf '%s' "$META_TOKEN" | openssl dgst -sha256 -hmac "$META_APP_SECRET" -hex 2>/dev/null | awk '{print $NF}')
+fi
+
+# Build query-string fragment to append. Empty when no proof.
+META_PROOF_QS=""
+[ -n "$META_PROOF" ] && META_PROOF_QS="&appsecret_proof=${META_PROOF}"
 
 # Strip dashes from customer ID (API requires no dashes)
 GADS_CUSTOMER_ID="${GADS_CUSTOMER_ID//-/}"
@@ -130,7 +142,7 @@ gather_meta() {
     return
   fi
 
-  INSIGHTS=$(curl -gsS --max-time 5 "https://graph.facebook.com/v18.0/${META_ACCOUNT}/insights?fields=spend,impressions,clicks,ctr,cpc,actions,action_values&date_preset=last_7d&level=account" \
+  INSIGHTS=$(curl -gsS --max-time 5 "https://graph.facebook.com/v18.0/${META_ACCOUNT}/insights?fields=spend,impressions,clicks,ctr,cpc,actions,action_values&date_preset=last_7d&level=account${META_PROOF_QS}" \
     -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null)
 
   SPEND=$(echo "$INSIGHTS" | jq -r '.data[0].spend // "0"' 2>/dev/null || echo "0")
@@ -252,7 +264,7 @@ gather_instagram() {
   # Resolve IG account ID if not cached
   IG_ID="$INSTAGRAM_ACCOUNT_ID"
   if [ -z "$IG_ID" ]; then
-    IG_ID=$(curl -gsS --max-time 5 "https://graph.facebook.com/v21.0/me/accounts?fields=instagram_business_account" \
+    IG_ID=$(curl -gsS --max-time 5 "https://graph.facebook.com/v21.0/me/accounts?fields=instagram_business_account${META_PROOF_QS}" \
       -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null | jq -r '.data[0].instagram_business_account.id // empty')
     [ -n "$IG_ID" ] && claude plugin config set instagram_account_id "$IG_ID" 2>/dev/null
   fi
@@ -263,7 +275,7 @@ gather_instagram() {
   fi
 
   # Account stats
-  ACCOUNT=$(curl -gsS --max-time 5 "https://graph.facebook.com/v21.0/${IG_ID}?fields=followers_count,media_count" \
+  ACCOUNT=$(curl -gsS --max-time 5 "https://graph.facebook.com/v21.0/${IG_ID}?fields=followers_count,media_count${META_PROOF_QS}" \
     -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null)
   FOLLOWERS=$(echo "$ACCOUNT" | jq -r '.followers_count // 0')
   MEDIA_COUNT=$(echo "$ACCOUNT" | jq -r '.media_count // 0')
@@ -273,7 +285,7 @@ gather_instagram() {
   START_DATE=$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo "")
   REACH=0
   if [ -n "$START_DATE" ]; then
-    INSIGHTS=$(curl -gsS --max-time 5 "https://graph.facebook.com/v21.0/${IG_ID}/insights?metric=reach&period=day&since=${START_DATE}&until=${END_DATE}" \
+    INSIGHTS=$(curl -gsS --max-time 5 "https://graph.facebook.com/v21.0/${IG_ID}/insights?metric=reach&period=day&since=${START_DATE}&until=${END_DATE}${META_PROOF_QS}" \
       -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null)
     REACH=$(echo "$INSIGHTS" | jq '[.data[]?.values[]?.value | tonumber] | add // 0' 2>/dev/null || echo "0")
   fi
