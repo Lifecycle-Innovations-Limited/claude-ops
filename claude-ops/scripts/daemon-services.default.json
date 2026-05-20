@@ -20,6 +20,14 @@
       "restart_delay": 3600,
       "cron": "*/30 * * * *"
     },
+    "pocket-activity-notifier": {
+      "enabled": false,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-pocket-activity-notifier.py",
+      "cron": "* * * * *",
+      "health_file": "~/.claude/state/pocket/.activity-notifier-health",
+      "restart_delay": 60,
+      "_note": "Watches pocket spawn-ledger + executor-results dir; emits START + DONE events to WhatsApp self-chat + email with the report attached. Requires whatsapp-config.json and/or email-config.json under ~/.claude/state/pocket/. Run `bash scripts/install-pocket-notifier.sh` to register the launchd job (preferred over the cron-via-daemon path for sub-minute latency)."
+    },
     "fires-watcher": {
       "enabled": false,
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-fires-watcher.sh",
