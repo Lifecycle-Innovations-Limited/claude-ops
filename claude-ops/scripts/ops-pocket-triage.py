@@ -320,13 +320,21 @@ def main() -> int:
     write_health("running", "triage tick")
     log(f"start (dry_run={DRY_RUN}, model={MODEL})")
 
-    if not PENDING.exists() or PENDING.stat().st_size == 0:
+    try:
+        initial = PENDING.read_bytes()
+    except OSError as e:
+        log(f"read pending failed: {e}")
+        write_health("error", f"read pending: {e}")
+        return 1
+
+    if not initial.strip():
         log("no pending items — nothing to triage")
         write_health("ok", "no pending items", extra={"counts": {}})
         return 0
 
+    consumed = len(initial)
     tasks = []
-    for raw in PENDING.read_text().splitlines():
+    for raw in initial.decode("utf-8", errors="replace").splitlines():
         raw = raw.strip()
         if not raw:
             continue
@@ -355,9 +363,19 @@ def main() -> int:
             "routed_to": verdict,
         })
 
-    # Truncate pending if not dry run (consumed)
+    # Drop only the snapshot we read; bytes appended during triage are kept.
     if not DRY_RUN:
-        PENDING.write_text("")
+        try:
+            current = PENDING.read_bytes()
+        except OSError:
+            current = b""
+        tail = current[consumed:] if len(current) >= consumed else current
+        try:
+            PENDING.write_bytes(tail)
+        except OSError as e:
+            log(f"FATAL: could not rewrite pending file: {e}")
+            write_health("error", f"rewrite pending: {e}")
+            return 1
     log(f"done counts={counts}")
     write_health("ok", f"triaged={sum(counts.values())}", extra={"counts": counts})
     return 0
