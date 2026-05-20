@@ -148,9 +148,13 @@ calc_next_run() {
   interval_min=$(echo "$cron" | python3 -c "
 import sys, re
 expr = sys.stdin.read().strip()
+# */N * * * * → every N minutes
 m = re.match(r'^\*/(\d+)\s+\*\s+\*\s+\*\s+\*$', expr)
 if m:
     print(int(m.group(1)) * 60)
+elif re.match(r'^\*\s+\*\s+\*\s+\*\s+\*$', expr):
+    # * * * * * → every minute
+    print(60)
 else:
     print(3600)
 " 2>/dev/null || echo 3600)
@@ -503,7 +507,10 @@ run_cron_service() {
   export OPS_DAEMON_PID=$$
   export OPS_DAEMON_MANAGED=1
   rotate_service_log "$LOG_DIR/${name}.log"
-  bash "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
+  # Use `bash -c` so cmd can contain inline env vars + multi-word args
+  # (e.g. "/usr/bin/env FOO=bar /usr/bin/python3 script.py"). Plain
+  # `bash "$cmd"` treats the whole string as a single file path.
+  bash -c "$cmd" >> "$LOG_DIR/${name}.log" 2>&1 &
   local pid=$!
   wait "$pid" 2>/dev/null || true
 
