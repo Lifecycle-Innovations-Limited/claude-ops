@@ -1,0 +1,15 @@
+[Unit]
+Description=Pocket WhatsApp Bridge — inbound reply parser (reads Baileys SQLite)
+After=network-online.target whatsapp-baileys.service
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__HOME__
+Environment=HOME=__HOME__
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
+Environment=POCKET_WHATSAPP_DB=__HOME__/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db
+ExecStart=__HOME__/.venv-pocket/bin/python3 __HOME__/claude-ops/claude-ops/scripts/ops-pocket-whatsapp-bridge.py
+StandardOutput=append:__HOME__/.claude/state/pocket/whatsapp-bridge.log
+StandardError=append:__HOME__/.claude/state/pocket/whatsapp-bridge-stderr.log
