@@ -19,9 +19,9 @@ fi
 # Highest semver dir that contains scripts/ops-daemon.sh
 LATEST_VERSION="$(
   find "$CACHE_ROOT" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null \
-    | awk -F/ '{print $NF}' \
-    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-    | sort -rV \
+    | awk -F/ '{v=$NF} v ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ {print v}' \
+    | sort -t. -k1,1n -k2,2n -k3,3n \
+    | awk '{lines[NR]=$0} END{for (i=NR; i>=1; i--) print lines[i]}' \
     | while read -r v; do
         if [[ -x "$CACHE_ROOT/$v/scripts/ops-daemon.sh" ]]; then
           echo "$v"; break
