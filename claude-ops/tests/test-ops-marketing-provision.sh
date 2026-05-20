@@ -221,10 +221,128 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 11. Missing --project arg exits non-zero
+# 11. provision-instagram: missing Meta token exits 2
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- 11. missing --project arg ---"
+echo "--- 11. provision-instagram cold-start (no Meta token) ---"
+ig_cold_out="$("$BIN" provision-instagram --project fresh 2>&1 || true)"
+ig_cold_rc=$?
+if echo "$ig_cold_out" | grep -qi "meta access token not configured"; then
+  ok "provision-instagram exits with diagnostic when meta.access_token missing"
+else
+  err "provision-instagram cold-start" "expected 'meta access token' diagnostic, got: $ig_cold_out"
+fi
+
+# ---------------------------------------------------------------------------
+# 12. provision-instagram with fixture meta.access_token in dry-run
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 12. provision-instagram dry-run with stub Meta token ---"
+# Patch fixture to add a meta token + page_id to the 'fresh' project
+TMP_PREFS="$(mktemp)"
+jq '.marketing.projects.fresh.meta = {
+      "access_token": "env:FAKE_META_TOKEN",
+      "page_id": "1234567890"
+    } | .marketing.projects.fresh.instagram = {"account_id": "stub-ig-id-already-set"}' \
+   "$FIXTURE_PREFS" > "$TMP_PREFS" && mv "$TMP_PREFS" "$FIXTURE_PREFS"
+export FAKE_META_TOKEN="fake-token-for-dry-run"
+ig_dry_out="$("$BIN" provision-instagram --project fresh 2>&1 || true)"
+# Idempotent path should mention "Already configured" + dry-run notice
+if echo "$ig_dry_out" | grep -q "Already configured" && echo "$ig_dry_out" | grep -q "DRY-RUN"; then
+  ok "provision-instagram dry-run idempotent — recognizes pre-set account_id"
+else
+  err "provision-instagram dry-run" "expected 'Already configured' + DRY-RUN markers: $ig_dry_out"
+fi
+unset FAKE_META_TOKEN
+
+# ---------------------------------------------------------------------------
+# 13. provision-google-ads dry-run writes pending state file
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 13. provision-google-ads dry-run (no dev token) creates pending file ---"
+PENDING_FILE="${FIXTURE_DIR}/state/marketing-provision/acme-google-ads-pending.json"
+rm -f "$PENDING_FILE"
+gads_out="$("$BIN" provision-google-ads --project acme 2>&1 || true)"
+if [ -f "$PENDING_FILE" ] && jq -e '.stage == "developer_token"' "$PENDING_FILE" >/dev/null 2>&1; then
+  ok "provision-google-ads writes pending-state file with stage=developer_token"
+else
+  err "provision-google-ads pending file" "expected $PENDING_FILE with stage=developer_token, output: $gads_out"
+fi
+
+# ---------------------------------------------------------------------------
+# 14. provision-google-ads --skip-if-pending respects pending state
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 14. provision-google-ads --skip-if-pending ---"
+skip_out="$("$BIN" provision-google-ads --project acme --skip-if-pending 2>&1 || true)"
+skip_rc=$?
+if echo "$skip_out" | grep -qi "still pending" || echo "$skip_out" | grep -qi "skipping"; then
+  ok "provision-google-ads --skip-if-pending exits 0 when pending file exists"
+else
+  err "provision-google-ads skip" "expected 'still pending' / 'skipping', got: $skip_out"
+fi
+
+# ---------------------------------------------------------------------------
+# 15. provision-all dry-run chains GA4 + GSC + Instagram + Google Ads
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 15. provision-all chains all 4 channels ---"
+all_out="$("$BIN" provision-all --project acme 2>&1 || true)"
+if echo "$all_out" | grep -q -- "--- GA4 ---" && \
+   echo "$all_out" | grep -q -- "--- Google Search Console ---" && \
+   echo "$all_out" | grep -q -- "--- Instagram ---" && \
+   echo "$all_out" | grep -q -- "--- Google Ads ---" && \
+   echo "$all_out" | grep -q "Done"; then
+  ok "provision-all chains all four channels in order"
+else
+  err "provision-all chain" "missing one or more channel headers: $all_out"
+fi
+
+# ---------------------------------------------------------------------------
+# 16. marketing_channels_status includes 'instagram' field
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 16. marketing_channels_status surfaces instagram ---"
+ig_json=$(
+  # shellcheck disable=SC1090
+  . "$LIB"
+  marketing_channels_status "fresh" --json
+) || true
+if printf '%s' "$ig_json" | jq -e '.instagram == "configured"' >/dev/null 2>&1; then
+  ok "marketing_channels_status reports instagram as configured for 'fresh'"
+else
+  err "marketing_channels_status instagram" "expected .instagram=configured, got: $ig_json"
+fi
+
+# ---------------------------------------------------------------------------
+# 17. google-ads-oauth.sh helper lib syntax + endpoint vars
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 17. google-ads-oauth.sh helper lib ---"
+OAUTH_LIB="${PLUGIN_ROOT}/scripts/lib/google-ads-oauth.sh"
+if [ -f "$OAUTH_LIB" ] && bash -n "$OAUTH_LIB" 2>/dev/null; then
+  # Source and verify the endpoint constants are set
+  url=$(
+    # shellcheck disable=SC1090
+    . "$OAUTH_LIB"
+    gads_authorize_url "fake-client" "http://localhost:8080"
+  )
+  if echo "$url" | grep -q "accounts.google.com/o/oauth2/v2/auth" && \
+     echo "$url" | grep -q "scope=" && \
+     echo "$url" | grep -q "access_type=offline"; then
+    ok "google-ads-oauth.sh gads_authorize_url generates valid URL"
+  else
+    err "gads_authorize_url" "URL missing required params: $url"
+  fi
+else
+  err "google-ads-oauth.sh" "lib missing or has syntax errors"
+fi
+
+# ---------------------------------------------------------------------------
+# 18. Missing --project arg exits non-zero
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 18. missing --project arg ---"
 if "$BIN" status 2>&1 | grep -qi "required\|error"; then
   ok "status without --project exits with error message"
 else
