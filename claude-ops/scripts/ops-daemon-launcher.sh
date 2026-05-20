@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/opt/homebrew/bin/bash
 # ops-daemon-launcher.sh — version-agnostic launcher for the claude-ops daemon.
 # Resolves the highest installed ops plugin version at run time, then execs its
 # ops-daemon.sh. Survives plugin upgrades without plist edits.
@@ -34,4 +34,4 @@ DAEMON="$CACHE_ROOT/$LATEST_VERSION/scripts/ops-daemon.sh"
 export CLAUDE_PLUGIN_ROOT="$CACHE_ROOT/$LATEST_VERSION"
 
 echo "[ops-daemon-launcher] resolved ops $LATEST_VERSION → $DAEMON"
-exec "${BASH:-/bin/bash}" "$DAEMON" "$@"
+exec /opt/homebrew/bin/bash "$DAEMON" "$@"

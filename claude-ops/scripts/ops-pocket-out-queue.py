@@ -74,8 +74,11 @@ def load_config() -> dict:
         return {"enabled": False}
 
 
-def post_send(recipient: str, message: str) -> tuple[bool, str]:
-    body = json.dumps({"recipient": recipient, "message": message}).encode()
+def post_send(recipient: str, message: str, media_path: str = "") -> tuple[bool, str]:
+    payload = {"recipient": recipient, "message": message}
+    if media_path:
+        payload["media_path"] = media_path
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(
         BRIDGE_URL, data=body, method="POST",
         headers={"Content-Type": "application/json"},
@@ -167,7 +170,17 @@ def main() -> int:
                     log(f"REFUSED: jid {jid!r} != configured {expected_jid!r}")
                     skipped += 1
                     continue
-                ok, info = post_send(jid, msg)
+                media_path = (entry.get("media_path") or "").strip()
+                if media_path:
+                    # Expand ~ and validate the file exists; if missing,
+                    # send text-only rather than failing the whole entry.
+                    expanded = os.path.expanduser(media_path)
+                    if os.path.isfile(expanded):
+                        media_path = expanded
+                    else:
+                        log(f"media_path missing, sending text-only: {media_path}")
+                        media_path = ""
+                ok, info = post_send(jid, msg, media_path)
                 if ok:
                     sent += 1
                     try:
