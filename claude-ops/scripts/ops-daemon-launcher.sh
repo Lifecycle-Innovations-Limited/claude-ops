@@ -16,8 +16,7 @@ LATEST_VERSION="$(
   find "$CACHE_ROOT" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null \
     | awk -F/ '{print $NF}' \
     | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-    | sort -V \
-    | tac \
+    | sort -rV \
     | while read -r v; do
         if [[ -x "$CACHE_ROOT/$v/scripts/ops-daemon.sh" ]]; then
           echo "$v"; break
@@ -34,4 +33,11 @@ DAEMON="$CACHE_ROOT/$LATEST_VERSION/scripts/ops-daemon.sh"
 export CLAUDE_PLUGIN_ROOT="$CACHE_ROOT/$LATEST_VERSION"
 
 echo "[ops-daemon-launcher] resolved ops $LATEST_VERSION → $DAEMON"
-exec "${BASH:-/bin/bash}" "$DAEMON" "$@"
+# Bash 4+ required for ops-daemon.sh (associative arrays). Mirror install-ops-daemon.sh.
+OPS_EXEC_BASH="/bin/bash"
+if [[ -x /opt/homebrew/bin/bash ]]; then
+  OPS_EXEC_BASH="/opt/homebrew/bin/bash"
+elif [[ -x /usr/local/bin/bash ]]; then
+  OPS_EXEC_BASH="/usr/local/bin/bash"
+fi
+exec "$OPS_EXEC_BASH" "$DAEMON" "$@"
