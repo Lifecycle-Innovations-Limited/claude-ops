@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator
+from urllib.parse import quote
 
 from flask import Flask, Response, abort, jsonify, redirect, request, url_for
 
@@ -38,13 +39,18 @@ def check_auth() -> None:
 
 # ── Data helpers ─────────────────────────────────────────────────────────────
 
-def read_jsonl(path: Path, limit: int = 200) -> list[dict]:
+def _html(s: object) -> str:
+    return html.escape("" if s is None else str(s), quote=True)
+
+
+def read_jsonl(path: Path, limit: int | None = 200) -> list[dict]:
     if not path.exists():
         return []
     out = []
     try:
         lines = path.read_text().splitlines()
-        for raw in lines[-limit:]:
+        chunk = lines if limit is None else lines[-limit:]
+        for raw in chunk:
             raw = raw.strip()
             if not raw:
                 continue
@@ -360,11 +366,14 @@ def task_detail(task_id: str):
                             escaped = raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                             report_html = f'<pre class="whitespace-pre-wrap text-sm font-mono bg-gray-50 p-4 rounded border">{escaped}</pre>'
                 summary = data.get("summary", "")
+                worker_h = _html(data.get("worker", "?"))
+                fname_h = _html(p.name)
+                summary_h = _html(summary) if summary else ""
                 content = f"""
 <div class="mb-4">
   <h2 class="text-xl font-semibold mb-1">{task_id_html}</h2>
-  <p class="text-gray-500 text-sm">Worker: {data.get('worker','?')} &nbsp;|&nbsp; File: {p.name}</p>
-  {f'<p class="mt-2 text-gray-700">{summary}</p>' if summary else ''}
+  <p class="text-gray-500 text-sm">Worker: {worker_h} &nbsp;|&nbsp; File: {fname_h}</p>
+  {f'<p class="mt-2 text-gray-700">{summary_h}</p>' if summary else ''}
 </div>
 <h3 class="font-semibold mb-2 text-gray-700">Report</h3>
 {report_html}
@@ -383,8 +392,8 @@ def triage_action(task_id: str):
     decision = request.form.get("decision", "")  # "ACT" or "SKIP"
     if decision not in ("ACT", "SKIP"):
         abort(400)
-    # Read pending-triage to find the item
-    items = pending_triage()
+    # Read full pending-triage so rewrite does not drop older rows (see read_jsonl limit).
+    items = read_jsonl(STATE_DIR / "pending-triage.jsonl", limit=None)
     item = next((i for i in items if i.get("id") == task_id), None)
     if not item:
         abort(404)
@@ -399,7 +408,7 @@ def triage_action(task_id: str):
         with (STATE_DIR / "triage-decisions.jsonl").open("a") as f:
             f.write(json.dumps(entry) + "\n")
     except OSError:
-        pass
+        return "<p class='text-red-600'>Could not record triage decision.</p>", 500
     # Remove from pending-triage
     remaining = [i for i in items if i.get("id") != task_id]
     try:
@@ -455,25 +464,31 @@ def _render_triage_tab() -> str:
     cards = []
     for item in items:
         tid = item.get("id", "?")
-        title = item.get("title", "(no title)")
+        tid_seg = quote(str(tid), safe="")
+        title_h = _html(item.get("title", "(no title)"))
         context = item.get("context", "")
         rec_id = item.get("recording_id", "")
         ts = item.get("ts", "")
+        ts_str = str(ts)[:16] if ts else ""
+        meta_tid = _html(tid)
+        meta_rec = f"&nbsp;|&nbsp; rec: {_html(rec_id)}" if rec_id else ""
+        meta_ts = f"&nbsp;|&nbsp; {_html(ts_str)}" if ts_str else ""
+        context_html = f'<p class="text-sm text-gray-600 mt-2">{_html(str(context)[:300])}</p>' if context else ""
         cards.append(f"""
 <div class="bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
   <div class="flex items-start justify-between gap-2">
     <div class="flex-1 min-w-0">
-      <p class="font-semibold text-gray-900 truncate">{title}</p>
-      <p class="text-xs text-gray-400 mt-0.5">{tid} {f'&nbsp;|&nbsp; rec: {rec_id}' if rec_id else ''} {f'&nbsp;|&nbsp; {ts[:16]}' if ts else ''}</p>
-      {f'<p class="text-sm text-gray-600 mt-2">{context[:300]}</p>' if context else ''}
+      <p class="font-semibold text-gray-900 truncate">{title_h}</p>
+      <p class="text-xs text-gray-400 mt-0.5">{meta_tid}{meta_rec}{meta_ts}</p>
+      {context_html}
     </div>
   </div>
   <div class="mt-3 flex gap-2">
-    <form method="POST" action="/tasks/{tid}/triage" class="inline">
+    <form method="POST" action="/tasks/{tid_seg}/triage" class="inline">
       <input type="hidden" name="decision" value="ACT">
       <button type="submit" class="px-4 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 font-medium">ACT</button>
     </form>
-    <form method="POST" action="/tasks/{tid}/triage" class="inline">
+    <form method="POST" action="/tasks/{tid_seg}/triage" class="inline">
       <input type="hidden" name="decision" value="SKIP">
       <button type="submit" class="px-4 py-1.5 bg-gray-200 text-gray-700 text-sm rounded hover:bg-gray-300 font-medium">SKIP</button>
     </form>
@@ -540,8 +555,9 @@ def _render_completed_tab() -> str:
                 if fname.endswith(suf):
                     tid = fname[:-len(suf)]
                     break
-        title = r.get("title", "")[:60]
-        worker = r.get("worker", "")
+        title_raw = (r.get("title", "") or "")[:60]
+        title_h = _html(title_raw)
+        worker_h = _html(r.get("worker", ""))
         # Use mtime from file for completed_at
         p = STATE_DIR / "executor-results" / fname
         completed_at = ""
@@ -550,8 +566,10 @@ def _render_completed_tab() -> str:
             completed_at = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
         except OSError:
             completed_at = ""
-        detail_url = f"/tasks/{tid}" if tid else "#"
-        rows += f'<tr class="border-t border-gray-100 hover:bg-gray-50"><td class="py-2 pr-4 text-xs text-gray-500 whitespace-nowrap">{completed_at}</td><td class="py-2 pr-4 font-mono text-xs">{tid[:40]}</td><td class="py-2 pr-4 text-sm">{title}</td><td class="py-2 pr-4 text-sm text-gray-500">{worker}</td><td class="py-2"><a href="{detail_url}" class="text-indigo-600 text-xs hover:underline">view</a></td></tr>'
+        tid_str = str(tid) if tid else ""
+        tid_disp = _html(tid_str[:40])
+        detail_url = f"/tasks/{quote(tid_str, safe='')}" if tid_str else "#"
+        rows += f'<tr class="border-t border-gray-100 hover:bg-gray-50"><td class="py-2 pr-4 text-xs text-gray-500 whitespace-nowrap">{completed_at}</td><td class="py-2 pr-4 font-mono text-xs">{tid_disp}</td><td class="py-2 pr-4 text-sm">{title_h}</td><td class="py-2 pr-4 text-sm text-gray-500">{worker_h}</td><td class="py-2"><a href="{detail_url}" class="text-indigo-600 text-xs hover:underline">view</a></td></tr>'
 
     table = f"""<div class="overflow-x-auto">
 <table class="w-full text-left">
@@ -585,8 +603,10 @@ def _render_notifications_tab() -> str:
         ts = (item.get("ts") or "")[:16]
         msg = item.get("message") or item.get("body") or ""
         subject = item.get("subject", "")
-        preview = (subject or msg)[:100]
-        rows += f'<tr class="border-t border-gray-100"><td class="py-2 pr-3 text-xs text-gray-400 whitespace-nowrap">{ts}</td><td class="py-2 pr-3">{ch_badge}</td><td class="py-2 text-sm text-gray-700">{preview}</td></tr>'
+        preview_raw = (subject or msg)[:100]
+        preview_h = _html(preview_raw)
+        ts_h = _html(ts)
+        rows += f'<tr class="border-t border-gray-100"><td class="py-2 pr-3 text-xs text-gray-400 whitespace-nowrap">{ts_h}</td><td class="py-2 pr-3">{ch_badge}</td><td class="py-2 text-sm text-gray-700">{preview_h}</td></tr>'
 
     table = f"""<div class="overflow-x-auto">
 <table class="w-full text-left">
@@ -676,7 +696,7 @@ def _render_services_tab() -> str:
           <div>
             <span class="font-medium text-sm">WhatsApp</span>
             <span class="ml-2">{wa_badge}</span>
-            <p class="text-xs text-gray-400 mt-0.5">JID: {wa_cfg.get('chat_jid','not set')[:30]}</p>
+            <p class="text-xs text-gray-400 mt-0.5">JID: {(wa_cfg.get('chat_jid') or 'not set')[:30]}</p>
           </div>
           <form method="POST" action="/channels/whatsapp/toggle">
             <button class="text-xs text-indigo-600 hover:underline">{wa_toggle}</button>
