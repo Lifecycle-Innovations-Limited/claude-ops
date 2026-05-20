@@ -347,6 +347,22 @@ def _resolve_anthropic_auth() -> tuple[str, dict] | tuple[None, None]:
     return (None, None)
 
 
+def _transcript_for_infer_length_gate(recording: dict) -> str:
+    """Transcript string used for infer length gating and Haiku prompting.
+
+    Matches infer_tasks_from_recording: use Pocket transcript when non-empty;
+    otherwise join transcriptSegments with speaker prefixes (same as inference).
+    """
+    transcript = recording.get("transcript") or ""
+    if not transcript:
+        segs = recording.get("transcriptSegments") or []
+        transcript = "\n".join(
+            f"{s.get('speaker') or 'Speaker'}: {s.get('text', '').strip()}"
+            for s in segs[:80] if s.get("text")
+        )
+    return transcript
+
+
 def infer_tasks_from_recording(recording: dict) -> list[dict]:
     """Call Haiku to extract implicit tasks from a recording's transcript.
 
@@ -359,13 +375,7 @@ def infer_tasks_from_recording(recording: dict) -> list[dict]:
     duration = recording.get("durationSec") or recording.get("duration") or 0
     if duration and duration < INFER_MIN_SECS:
         return []
-    transcript = recording.get("transcript") or ""
-    if not transcript:
-        segs = recording.get("transcriptSegments") or []
-        transcript = "\n".join(
-            f"{s.get('speaker') or 'Speaker'}: {s.get('text', '').strip()}"
-            for s in segs[:80] if s.get("text")
-        )
+    transcript = _transcript_for_infer_length_gate(recording)
     if len(transcript) < 200:
         return []
 
@@ -838,12 +848,11 @@ def main() -> int:
             # the same gating logic infer_tasks_from_recording uses so we
             # don't artificially skip recordings that wouldn't trigger Haiku
             # anyway (too-short, INFER_TASKS=0, etc).
+            gate_transcript = _transcript_for_infer_length_gate(rec)
             would_infer = (
                 INFER_TASKS
                 and (not duration or duration >= INFER_MIN_SECS)
-                and (len(transcript) >= 200 or sum(
-                    len(s.get("text", "")) for s in segs[:80]
-                ) >= 200)
+                and len(gate_transcript) >= 200
             )
             if (
                 MAX_INFER_PER_RUN > 0
@@ -960,7 +969,7 @@ def main() -> int:
     write_health("ok", summary, extra={
         "new_memories": new_memories,
         "new_tasks": new_tasks,
-        "cursor": run_started,
+        "cursor": run_started if not cap_hit else cursor,
         "giga_sync": giga_status,
     })
     log(f"done {summary}")
