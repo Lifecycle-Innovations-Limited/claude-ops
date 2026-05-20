@@ -43,13 +43,15 @@ run_migrations() {
 
   # 2. Refresh whatsapp-bridge LaunchAgent (idempotent — only writes if template changed)
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    local plist_src="$PLUGIN_ROOT/scripts/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
-    local plist_dst="$HOME/Library/LaunchAgents/com.claude-ops.whatsapp-bridge.plist"
+    local plist_src="$PLUGIN_ROOT/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
+    local plist_dst="$HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
     if [[ -f "$plist_src" ]] && [[ ! -f "$plist_dst" || "$plist_src" -nt "$plist_dst" ]]; then
       mkdir -p "$HOME/Library/LaunchAgents" 2>/dev/null || true
       local bridge_dir="${WHATSAPP_BRIDGE_HOME:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
       sed -e "s#__BRIDGE_BINARY_PATH__#$bridge_dir/whatsapp-bridge#g" \
           -e "s#__BRIDGE_WORKING_DIR__#$bridge_dir#g" \
+          -e "s#__HOME__#$HOME#g" \
+          -e "s#__USER__#$USER#g" \
           "$plist_src" > "$plist_dst" 2>/dev/null && {
         launchctl unload "$plist_dst" 2>/dev/null || true
         launchctl load "$plist_dst" 2>/dev/null || true
