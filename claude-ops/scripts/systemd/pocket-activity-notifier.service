@@ -1,0 +1,14 @@
+[Unit]
+Description=Pocket Activity Notifier — sends WhatsApp/email on task start/done
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__HOME__
+Environment=HOME=__HOME__
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
+ExecStart=__HOME__/.venv-pocket/bin/python3 __HOME__/claude-ops/claude-ops/scripts/ops-pocket-activity-notifier.py
+StandardOutput=append:__HOME__/.claude/state/pocket/activity-notifier.stdout.log
+StandardError=append:__HOME__/.claude/state/pocket/activity-notifier.stderr.log

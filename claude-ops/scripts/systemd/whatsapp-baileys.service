@@ -1,0 +1,19 @@
+[Unit]
+Description=WhatsApp Baileys Bridge (whatsmeow Go bridge, HTTP API on :8080)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__HOME__/.local/share/whatsapp-mcp/whatsapp-bridge
+Environment=HOME=__HOME__
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=__HOME__/.local/share/whatsapp-mcp/whatsapp-bridge/whatsapp-bridge
+Restart=always
+RestartSec=10
+StandardOutput=append:__HOME__/.claude/state/pocket/whatsapp-baileys.log
+StandardError=append:__HOME__/.claude/state/pocket/whatsapp-baileys-stderr.log
+
+[Install]
+WantedBy=multi-user.target
