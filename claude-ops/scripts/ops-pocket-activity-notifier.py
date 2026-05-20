@@ -222,25 +222,16 @@ def process_spawns(chat_jid: str | None, email_to: str | None, titles: dict) -> 
                 f"attached when this completes.\n"
             )
             email_subject = f"START — {(title or task_id)[:80]}"
-            enqueue_errors: list[str] = []
-            if chat_jid:
-                try:
+            try:
+                if chat_jid:
                     enqueue_whatsapp(chat_jid, wa_msg)
-                except OSError as e:
-                    log(f"enqueue START whatsapp failed: {e}")
-                    enqueue_errors.append("whatsapp")
-            if email_to:
-                try:
+                if email_to:
                     enqueue_email(email_to, email_subject, email_body)
-                except OSError as e:
-                    log(f"enqueue START email failed: {e}")
-                    enqueue_errors.append("email")
-            channels_configured = (1 if chat_jid else 0) + (1 if email_to else 0)
-            if channels_configured and len(enqueue_errors) == channels_configured:
-                log("enqueue START all channels failed; retry next tick")
-                new_cursor = line_start
+                sent += 1
+            except OSError as e:
+                log(f"enqueue START failed: {e}")
+                new_cursor = line_start  # retry next tick
                 break
-            sent += 1
     try:
         SPAWN_CURSOR.write_text(str(new_cursor))
     except OSError as e:
@@ -340,26 +331,17 @@ def process_completions(chat_jid: str | None, email_to: str | None, titles: dict
         email_body = "\n".join(email_body_parts)
         email_subject = f"DONE — {(title or task_id)[:80]}"
 
-        enqueue_errors: list[str] = []
-        if chat_jid:
-            try:
+        try:
+            if chat_jid:
                 enqueue_whatsapp(chat_jid, wa_msg, media_path=attachment)
-            except OSError as e:
-                log(f"enqueue DONE whatsapp failed for {name}: {e}")
-                enqueue_errors.append("whatsapp")
-        if email_to:
-            try:
+            if email_to:
                 attachments = [attachment] if attachment else []
                 enqueue_email(email_to, email_subject, email_body, attachments)
-            except OSError as e:
-                log(f"enqueue DONE email failed for {name}: {e}")
-                enqueue_errors.append("email")
-        channels_configured = (1 if chat_jid else 0) + (1 if email_to else 0)
-        if channels_configured and len(enqueue_errors) == channels_configured:
-            log(f"enqueue DONE all channels failed for {name}; retry next tick")
-            break
-        sent += 1
-        new_seen.add(name)
+            sent += 1
+            new_seen.add(name)
+        except OSError as e:
+            log(f"enqueue DONE failed for {name}: {e}")
+            break  # don't mark seen — retry next tick
 
     if new_seen != seen:
         save_seen_results(new_seen)
