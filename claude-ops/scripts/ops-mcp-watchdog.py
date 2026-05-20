@@ -453,7 +453,7 @@ def main() -> int:
             log(f"{name}: attempting Playwright auto-reauth")
             try:
                 proc = subprocess.run(
-                    [sys.executable, str(REAUTH_SCRIPT), info["url"]],
+                    ["/opt/homebrew/bin/python3.14", str(REAUTH_SCRIPT), info["url"]],
                     capture_output=True, text=True, timeout=120,
                 )
                 if proc.returncode == 0:
