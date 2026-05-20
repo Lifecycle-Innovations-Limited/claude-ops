@@ -2,11 +2,13 @@
 # ops-marketing-provision — self-provision marketing channels for a project
 #
 # Subcommands:
-#   provision-ga4 --project <key> [--domain <d>] [--account-id <acc>]
-#                 [--display-name <name>] [--industry SHOPPING|TECHNOLOGY]
-#   provision-gsc --project <key> [--site sc-domain:<d>|https://<d>/]
-#   provision-all --project <key>
-#   status        --project <key> [--json]
+#   provision-ga4         --project <key> [--domain <d>] [--account-id <acc>]
+#                         [--display-name <name>] [--industry SHOPPING|TECHNOLOGY]
+#   provision-gsc         --project <key> [--site sc-domain:<d>|https://<d>/]
+#   provision-instagram   --project <key> [--force]
+#   provision-google-ads  --project <key> [--skip-if-pending]
+#   provision-all         --project <key> | --all-projects
+#   status                --project <key> [--json]
 #   --help
 #
 # Idempotent: GET-first, reuse existing matches before creating.
@@ -173,6 +175,28 @@ prefs_set_marketing() {
   jq --arg p "$proj" --arg c "$channel" --arg f "$field" --arg v "$value" \
     '.marketing.projects[$p][$c][$f] = $v' "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
   log "prefs: marketing.projects.$proj.$channel.$field = $value"
+}
+
+# Apply multiple field updates atomically via a single jq pipeline.
+# Args: <proj> <channel> <field1> <value1> [<field2> <value2> ...]
+# Empty value strings are skipped (use prefs_unset_marketing to delete).
+prefs_set_marketing_multi() {
+  local proj="$1" channel="$2"; shift 2
+  [ -f "$PREFS" ] || echo '{}' > "$PREFS"
+
+  local tmp filter='.'
+  local jq_args=(--arg p "$proj" --arg c "$channel")
+  local i=0
+  while [ $# -ge 2 ]; do
+    local f="$1" v="$2"; shift 2
+    [ -z "$v" ] && continue
+    jq_args+=(--arg "f${i}" "$f" --arg "v${i}" "$v")
+    filter+=" | .marketing.projects[\$p][\$c][\$f${i}] = \$v${i}"
+    i=$((i+1))
+  done
+  tmp="$(mktemp)"
+  jq "${jq_args[@]}" "$filter" "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
+  log "prefs: marketing.projects.$proj.$channel updated ($i fields)"
 }
 
 prefs_set_marketing_status() {
@@ -591,35 +615,423 @@ cmd_provision_gsc() {
 }
 
 # ---------------------------------------------------------------------------
-# provision-all
+# Meta appsecret_proof — required when "Require App Secret" is on (default for
+# all our system-user tokens). HMAC-SHA256(access_token, app_secret).
+# Echoes the hex digest (empty on missing inputs).
 # ---------------------------------------------------------------------------
-cmd_provision_all() {
-  local project="" site_for_gsc="" ga4_remaining=()
+meta_appsecret_proof() {
+  local token="$1" secret="$2"
+  { [ -z "$token" ] || [ -z "$secret" ]; } && return 0
+  printf '%s' "$token" | openssl dgst -sha256 -hmac "$secret" -hex 2>/dev/null | awk '{print $NF}'
+}
+
+# ---------------------------------------------------------------------------
+# provision-instagram — resolve IG Business Account ID from Meta token.
+# Idempotent: skips API call if instagram.account_id already populated and
+# smoke-tests it before declaring success. Requires meta.access_token in prefs.
+# ---------------------------------------------------------------------------
+cmd_provision_instagram() {
+  local project="" force=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --project) project="${2:-}"; shift ;;
-      --site) site_for_gsc="${2:-}"; shift ;;
-      *) ga4_remaining+=("$1") ;;
+      --force)   force=1 ;;
+      *) die "Unknown argument to provision-instagram: $1" ;;
     esac
     shift
   done
 
   [ -n "$project" ] || die "--project is required"
+  need_cmd jq
+  need_cmd openssl
+  need_cmd curl
+
+  log "Provisioning Instagram for project: $project"
+
+  local meta_token_ref meta_secret_ref page_id existing
+  meta_token_ref="$(prefs_get_project_field "$project" "meta" "access_token")"
+  meta_secret_ref="$(prefs_get_project_field "$project" "meta" "app_secret")"
+  page_id="$(prefs_get_project_field "$project" "meta" "page_id")"
+  existing="$(prefs_get_project_field "$project" "instagram" "account_id")"
+
+  local meta_token meta_secret
+  meta_token="$(resolve_cred "$meta_token_ref")"
+  meta_secret="$(resolve_cred "$meta_secret_ref")"
+
+  if [ -z "$meta_token" ]; then
+    log "Meta access token not configured for $project — required before Instagram"
+    log "Configure marketing.projects.$project.meta.access_token in preferences.json first"
+    exit 2
+  fi
+
+  local proof
+  proof="$(meta_appsecret_proof "$meta_token" "$meta_secret")"
+  local proof_qs=""
+  [ -n "$proof" ] && proof_qs="&appsecret_proof=$proof"
+
+  # Idempotent short-circuit: if account_id already set and not --force, verify
+  # it still works against the API and exit clean.
+  if [ -n "$existing" ] && [ "$existing" != "null" ] && [ "$force" = "0" ]; then
+    log "Already configured: instagram.account_id=$existing — running smoke test"
+    if dry_notice "GET graph.facebook.com/v22.0/$existing?fields=username,followers_count"; then
+      info "[Instagram] dry-run: existing id=$existing"
+      return 0
+    fi
+    local probe
+    probe=$(http_call_allow_fail GET \
+      "https://graph.facebook.com/v22.0/$existing?fields=username,followers_count,media_count${proof_qs}" \
+      -H "Authorization: Bearer $meta_token" 2>/dev/null || echo "{}")
+    local username followers
+    username=$(printf '%s' "$probe" | jq -r '.username // empty' 2>/dev/null)
+    followers=$(printf '%s' "$probe" | jq -r '.followers_count // empty' 2>/dev/null)
+    if [ -n "$username" ]; then
+      info "[Instagram] ✓ verified @${username} (${followers:-0} followers) — id=$existing"
+      return 0
+    fi
+    log "Existing id $existing failed verification — re-resolving"
+  fi
+
+  # Resolve via Page if page_id known, else /me/accounts.
+  local ig_id=""
+  if [ -n "$page_id" ] && [ "$page_id" != "null" ]; then
+    if dry_notice "GET graph.facebook.com/v22.0/$page_id?fields=instagram_business_account,connected_instagram_account"; then
+      info "[DRY-RUN] would resolve IG via page $page_id"
+      return 0
+    fi
+    local page_resp
+    page_resp=$(http_call_allow_fail GET \
+      "https://graph.facebook.com/v22.0/$page_id?fields=instagram_business_account,connected_instagram_account,name${proof_qs}" \
+      -H "Authorization: Bearer $meta_token" 2>/dev/null || echo "{}")
+    ig_id=$(printf '%s' "$page_resp" | jq -r '.instagram_business_account.id // .connected_instagram_account.id // empty' 2>/dev/null)
+  fi
+
+  if [ -z "$ig_id" ]; then
+    if dry_notice "GET graph.facebook.com/v22.0/me/accounts?fields=id,name,instagram_business_account"; then
+      info "[DRY-RUN] would fall back to /me/accounts"
+      return 0
+    fi
+    local me_resp
+    me_resp=$(http_call_allow_fail GET \
+      "https://graph.facebook.com/v22.0/me/accounts?fields=id,name,instagram_business_account${proof_qs}" \
+      -H "Authorization: Bearer $meta_token" 2>/dev/null || echo "{}")
+    ig_id=$(printf '%s' "$me_resp" | jq -r '.data[0].instagram_business_account.id // empty' 2>/dev/null)
+  fi
+
+  if [ -z "$ig_id" ]; then
+    die "Could not resolve Instagram Business Account ID — ensure the Facebook Page is linked to an IG Business account in Meta Business Manager"
+  fi
+
+  # Smoke-test resolved ID
+  local probe username followers
+  probe=$(http_call GET \
+    "https://graph.facebook.com/v22.0/$ig_id?fields=username,followers_count,media_count${proof_qs}" \
+    -H "Authorization: Bearer $meta_token")
+  username=$(printf '%s' "$probe" | jq -r '.username // empty')
+  followers=$(printf '%s' "$probe" | jq -r '.followers_count // 0')
+
+  # Atomic prefs write
+  local now
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  prefs_set_marketing_multi "$project" "instagram" \
+    "account_id" "$ig_id" \
+    "username"   "$username" \
+    "resolved_at" "$now"
+
+  info "[Instagram] ✓ resolved — @${username} (${followers} followers) — id=$ig_id"
+}
+
+# ---------------------------------------------------------------------------
+# Helper: scan env / Doppler for an existing Google Ads credential.
+# Args: <doppler_key> [env_var]
+# Echoes value if found (env first, then doppler), empty otherwise.
+# Always returns 0 — errexit-safe (callers check empty string, not exit code).
+# ---------------------------------------------------------------------------
+gads_scan_credential() {
+  local doppler_key="$1"
+  local env_var="${2:-$doppler_key}"
+  local val="${!env_var:-}"
+  if [ -n "$val" ]; then
+    printf '%s' "$val"
+    return 0
+  fi
+  if command -v doppler >/dev/null 2>&1; then
+    # Suppress non-zero exit when key is missing (set -e safety).
+    val="$(doppler secrets get "$doppler_key" --plain \
+      --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" 2>/dev/null || true)"
+    printf '%s' "$val"
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# provision-google-ads — 4-step Google Ads setup flow.
+#   Step A: developer token (manual approval pathway with pending-state)
+#   Step B: OAuth2 client (Cloud Console — shared across projects)
+#   Step C: refresh token via browser OAuth callback
+#   Step D: customer ID resolution (auto-MCC detection)
+# ---------------------------------------------------------------------------
+cmd_provision_google_ads() {
+  local project="" skip_if_pending=0
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project)         project="${2:-}"; shift ;;
+      --skip-if-pending) skip_if_pending=1 ;;
+      *) die "Unknown argument to provision-google-ads: $1" ;;
+    esac
+    shift
+  done
+
+  [ -n "$project" ] || die "--project is required"
+  need_cmd jq
+  need_cmd curl
+
+  local pending_dir="${OPS_DATA_DIR}/state/marketing-provision"
+  mkdir -p "$pending_dir"
+  local pending_file="${pending_dir}/${project}-google-ads-pending.json"
+
+  if [ "$skip_if_pending" = "1" ] && [ -f "$pending_file" ]; then
+    log "Google Ads still pending for $project (dev token approval) — skipping per --skip-if-pending"
+    return 0
+  fi
+
+  log "Provisioning Google Ads for project: $project"
+
+  # ── Step A: Developer Token ───────────────────────────────────────────
+  local dev_token
+  dev_token=$(gads_scan_credential GOOGLE_ADS_DEVELOPER_TOKEN)
+
+  if [ -z "$dev_token" ]; then
+    if [ "$DRY_RUN" = "1" ]; then
+      info "[DRY-RUN] dev token missing — would create pending state at $pending_file"
+      printf '{"project":"%s","stage":"developer_token","instructions":"Apply at ads.google.com/aw/apicenter","dry_run":true,"created_at":"%s"}\n' \
+        "$project" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$pending_file"
+      info "[Google Ads] DRY-RUN — pending file written ($pending_file). Apply for dev token at https://ads.google.com/aw/apicenter."
+      return 1
+    fi
+    log "GOOGLE_ADS_DEVELOPER_TOKEN not found in env or Doppler"
+    log "Apply for a developer token: https://ads.google.com/aw/apicenter"
+    log "Approval typically takes 24-48 hours. Re-run this command after approval."
+    printf '{"project":"%s","stage":"developer_token","instructions":"Apply at https://ads.google.com/aw/apicenter — re-run provision-google-ads --project %s after approval","created_at":"%s"}\n' \
+      "$project" "$project" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$pending_file"
+    log "Pending state written: $pending_file"
+    exit 1
+  fi
+  log "Developer token: present"
+
+  # ── Step B: OAuth2 Client ─────────────────────────────────────────────
+  local client_id client_secret
+  client_id=$(gads_scan_credential GOOGLE_ADS_CLIENT_ID)
+  client_secret=$(gads_scan_credential GOOGLE_ADS_CLIENT_SECRET)
+
+  if [ -z "$client_id" ] || [ -z "$client_secret" ]; then
+    if [ "$DRY_RUN" = "1" ]; then
+      info "[DRY-RUN] OAuth client missing — would create pending state"
+      printf '{"project":"%s","stage":"oauth_client","dry_run":true}\n' "$project" > "$pending_file"
+      return 1
+    fi
+    log "OAuth2 client credentials not found"
+    log "Create a Desktop OAuth client at: https://console.cloud.google.com/apis/credentials"
+    log "  - Application type: Desktop app"
+    log "  - Enabled API: Google Ads API"
+    log "Store as Doppler secrets: GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET"
+    printf '{"project":"%s","stage":"oauth_client","created_at":"%s"}\n' \
+      "$project" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$pending_file"
+    exit 1
+  fi
+  log "OAuth2 client: present"
+
+  # Source OAuth helper lib
+  # shellcheck disable=SC1091
+  . "${PLUGIN_ROOT}/scripts/lib/google-ads-oauth.sh"
+
+  # ── Step C: Refresh Token ─────────────────────────────────────────────
+  local refresh_token
+  refresh_token=$(gads_scan_credential "GOOGLE_ADS_${project^^}_REFRESH_TOKEN")
+  [ -z "$refresh_token" ] && refresh_token=$(gads_scan_credential GOOGLE_ADS_REFRESH_TOKEN)
+
+  if [ -z "$refresh_token" ]; then
+    if [ "$DRY_RUN" = "1" ]; then
+      info "[DRY-RUN] would launch localhost OAuth callback on :8080 (120s)"
+      printf '{"project":"%s","stage":"refresh_token","dry_run":true}\n' "$project" > "$pending_file"
+      return 1
+    fi
+    log "Starting OAuth browser flow on http://localhost:8080 (120s timeout)"
+    local auth_url
+    auth_url=$(gads_authorize_url "$client_id")
+    log "Open: $auth_url"
+    log "(opens automatically — Sam should authorize on the consent screen)"
+
+    # Open + capture in parallel; capture writes the code to a temp file.
+    local code_file
+    code_file=$(mktemp)
+    ( gads_localhost_capture 8080 120 > "$code_file" 2>/dev/null ) &
+    local capture_pid=$!
+    sleep 1
+    # Best-effort open (silent if `open` missing or on SSH per Rule 7)
+    if command -v open >/dev/null 2>&1 && [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
+      open "$auth_url" >/dev/null 2>&1 || true
+    fi
+    wait "$capture_pid" || true
+    local code
+    code=$(cat "$code_file" 2>/dev/null)
+    rm -f "$code_file"
+
+    [ -n "$code" ] || die "OAuth flow timed out — no authorization code received"
+    log "Authorization code received (${#code} chars)"
+
+    local token_resp
+    token_resp=$(gads_exchange_code "$code" "$client_id" "$client_secret")
+    refresh_token=$(printf '%s' "$token_resp" | jq -r '.refresh_token // empty')
+    [ -n "$refresh_token" ] || die "Token exchange failed: $(printf '%s' "$token_resp" | jq -r '.error_description // .error // "no refresh_token in response"')"
+
+    log "Refresh token obtained — writing to Doppler"
+    doppler_set "GOOGLE_ADS_${project^^}_REFRESH_TOKEN" "$refresh_token"
+    prefs_set_marketing "$project" "google_ads" "refresh_token" \
+      "doppler:${DOPPLER_PROJECT}/${DOPPLER_CONFIG}/GOOGLE_ADS_${project^^}_REFRESH_TOKEN"
+  else
+    log "Refresh token: present"
+  fi
+
+  # ── Step D: Customer ID ──────────────────────────────────────────────
+  local existing_customer
+  existing_customer="$(prefs_get_project_field "$project" "google_ads" "customer_id")"
+  if [ -n "$existing_customer" ] && [ "$existing_customer" != "null" ]; then
+    log "Customer ID already configured: $existing_customer"
+    rm -f "$pending_file"
+    info "[Google Ads] ✓ already configured — customer_id=$existing_customer"
+    return 0
+  fi
+
+  if dry_notice "POST oauth2.googleapis.com/token (refresh); GET v24/customers:listAccessibleCustomers"; then
+    info "[DRY-RUN] would resolve customer ID"
+    return 0
+  fi
+
+  local access_token
+  access_token=$(gads_refresh_access_token "$refresh_token" "$client_id" "$client_secret")
+  [ -n "$access_token" ] || die "Access token refresh failed — check client_id/client_secret/refresh_token"
+
+  local accessible
+  accessible=$(gads_list_accessible_customers "$access_token" "$dev_token")
+  local resource_names
+  resource_names=$(printf '%s' "$accessible" | jq -r '.resourceNames[]? // empty' 2>/dev/null)
+  [ -n "$resource_names" ] || die "No accessible customers — $(printf '%s' "$accessible" | jq -r '.error.message // "unknown error"')"
+
+  # Single account: auto-select. Multiple: log all and pick first non-manager.
+  local customer_count chosen_customer login_customer=""
+  customer_count=$(printf '%s' "$resource_names" | wc -l | tr -d ' ')
+  log "Accessible customers ($customer_count):"
+  printf '%s\n' "$resource_names" | sed 's/^/  - /' >&2
+
+  if [ "$customer_count" = "1" ]; then
+    chosen_customer="${resource_names##customers/}"
+  else
+    # Walk accounts, find first non-manager. Manager accounts become login_customer_id.
+    while IFS= read -r rn; do
+      [ -z "$rn" ] && continue
+      local cid info_resp is_manager
+      cid="${rn##customers/}"
+      info_resp=$(gads_get_customer_info "$cid" "$access_token" "$dev_token" 2>/dev/null || echo "{}")
+      is_manager=$(printf '%s' "$info_resp" | jq -r '.results[0].customer.manager // false' 2>/dev/null)
+      if [ "$is_manager" = "true" ] && [ -z "$login_customer" ]; then
+        login_customer="$cid"
+        log "  (MCC manager: $cid)"
+      elif [ "$is_manager" = "false" ] && [ -z "$chosen_customer" ]; then
+        chosen_customer="$cid"
+      fi
+    done <<< "$resource_names"
+    [ -z "$chosen_customer" ] && chosen_customer="${resource_names##customers/}"
+  fi
+
+  log "Selected customer: $chosen_customer${login_customer:+ (login-customer-id: $login_customer)}"
+
+  # Atomic prefs write
+  prefs_set_marketing_multi "$project" "google_ads" \
+    "customer_id"        "$chosen_customer" \
+    "developer_token"    "doppler:${DOPPLER_PROJECT}/${DOPPLER_CONFIG}/GOOGLE_ADS_DEVELOPER_TOKEN" \
+    "client_id"          "doppler:${DOPPLER_PROJECT}/${DOPPLER_CONFIG}/GOOGLE_ADS_CLIENT_ID" \
+    "client_secret"      "doppler:${DOPPLER_PROJECT}/${DOPPLER_CONFIG}/GOOGLE_ADS_CLIENT_SECRET" \
+    "login_customer_id"  "$login_customer" \
+    "configured_at"      "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  rm -f "$pending_file"
+  info "[Google Ads] ✓ configured — customer_id=$chosen_customer"
+}
+
+# ---------------------------------------------------------------------------
+# provision-all
+# ---------------------------------------------------------------------------
+cmd_provision_all() {
+  local project="" site_for_gsc="" all_projects=0 ga4_remaining=()
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project) project="${2:-}"; shift ;;
+      --site) site_for_gsc="${2:-}"; shift ;;
+      --all-projects) all_projects=1 ;;
+      *) ga4_remaining+=("$1") ;;
+    esac
+    shift
+  done
+
+  if [ "$all_projects" = "1" ]; then
+    [ -f "$PREFS" ] || die "preferences.json not found — cannot iterate projects"
+    local project_list
+    project_list=$(jq -r '.marketing.projects | keys[]' "$PREFS")
+    [ -n "$project_list" ] || die "no projects in marketing.projects"
+    local failed=0
+    while IFS= read -r p; do
+      info "════════════════════════════════════════════════════════════════"
+      info "  $p"
+      info "════════════════════════════════════════════════════════════════"
+      cmd_provision_all --project "$p" || failed=$((failed+1))
+      info ""
+    done <<< "$project_list"
+    [ "$failed" = "0" ] || log "$failed project(s) had failures — see logs above"
+    return $failed
+  fi
+
+  [ -n "$project" ] || die "--project is required (or use --all-projects)"
 
   info "Provisioning all channels for project: $project"
   info ""
 
+  # Each sub-call runs in a subshell so a downstream `die`/`exit` only kills
+  # that subshell — the chain continues to the next channel. Failures are
+  # logged but do not abort provision-all.
   info "--- GA4 ---"
-  cmd_provision_ga4 --project "$project" "${ga4_remaining[@]+"${ga4_remaining[@]}"}"
+  ( cmd_provision_ga4 --project "$project" "${ga4_remaining[@]+"${ga4_remaining[@]}"}" ) || \
+    log "GA4 provisioning failed for $project (continuing with other channels)"
   info ""
 
   info "--- Google Search Console ---"
   if [ -n "$site_for_gsc" ]; then
-    cmd_provision_gsc --project "$project" --site "$site_for_gsc"
+    ( cmd_provision_gsc --project "$project" --site "$site_for_gsc" ) || \
+      log "GSC provisioning failed for $project (continuing)"
   else
-    cmd_provision_gsc --project "$project"
+    ( cmd_provision_gsc --project "$project" ) || \
+      log "GSC provisioning failed for $project (continuing)"
   fi
+  info ""
+
+  info "--- Instagram ---"
+  # IG is best-effort: silent no-op if Meta token not configured.
+  local meta_tok_ref
+  meta_tok_ref="$(prefs_get_project_field "$project" "meta" "access_token")"
+  if [ -n "$meta_tok_ref" ] && [ "$meta_tok_ref" != "null" ]; then
+    ( cmd_provision_instagram --project "$project" ) || \
+      log "Instagram provisioning failed for $project (continuing)"
+  else
+    log "Skipping Instagram — meta.access_token not configured"
+  fi
+  info ""
+
+  info "--- Google Ads ---"
+  # Skip if pending (dev token approval in progress).
+  ( cmd_provision_google_ads --project "$project" --skip-if-pending ) || \
+    log "Google Ads provisioning incomplete for $project (likely awaiting dev token approval)"
   info ""
 
   info "Done. Run: $0 status --project $project"
@@ -659,10 +1071,12 @@ cmd_help() {
 ops-marketing-provision — self-provision marketing channels
 
 Usage:
-  ops-marketing-provision provision-ga4 --project <key> [options]
-  ops-marketing-provision provision-gsc --project <key> [--site <url>]
-  ops-marketing-provision provision-all --project <key> [options]
-  ops-marketing-provision status        --project <key> [--json]
+  ops-marketing-provision provision-ga4         --project <key> [options]
+  ops-marketing-provision provision-gsc         --project <key> [--site <url>]
+  ops-marketing-provision provision-instagram   --project <key> [--force]
+  ops-marketing-provision provision-google-ads  --project <key> [--skip-if-pending]
+  ops-marketing-provision provision-all         (--project <key> | --all-projects)
+  ops-marketing-provision status                --project <key> [--json]
   ops-marketing-provision --help
 
 provision-ga4 options:
@@ -675,6 +1089,29 @@ provision-ga4 options:
 provision-gsc options:
   --project <key>          Project key
   --site <url>             Site URL: sc-domain:example.com or https://example.com/
+
+provision-instagram options:
+  --project <key>          Project key
+  --force                  Re-resolve even if instagram.account_id is already set
+  Requires marketing.projects.<key>.meta.access_token (token + optional app_secret
+  for appsecret_proof signing). Idempotent — smoke-tests existing IDs before re-API.
+
+provision-google-ads options:
+  --project <key>          Project key
+  --skip-if-pending        Exit 0 if dev-token approval is pending (for provision-all chains)
+
+  Four-step flow (each step is no-op if cred already present):
+    A. GOOGLE_ADS_DEVELOPER_TOKEN — scan env+Doppler. If missing, writes a pending
+       state file at $OPS_DATA_DIR/state/marketing-provision/<key>-google-ads-pending.json
+       and exits 1 with instructions to apply at https://ads.google.com/aw/apicenter
+       (24-48h approval).
+    B. GOOGLE_ADS_CLIENT_ID/CLIENT_SECRET — scan env+Doppler. If missing, prints
+       Cloud Console URL to create a Desktop OAuth client.
+    C. Refresh token — launches a localhost OAuth callback on :8080 (120s timeout),
+       opens the consent URL, captures the auth code, exchanges for refresh_token,
+       writes to Doppler GOOGLE_ADS_<KEY_UPPER>_REFRESH_TOKEN.
+    D. Customer ID — calls v24/customers:listAccessibleCustomers, auto-detects MCC
+       manager accounts (sets login_customer_id), writes customer_id to prefs.
 
 Environment variables:
   OPS_MARKETING_DRY_RUN=1          Print planned actions, no network calls
@@ -715,10 +1152,12 @@ SUBCMD="${1:-}"
 shift
 
 case "$SUBCMD" in
-  provision-ga4)  cmd_provision_ga4 "$@" ;;
-  provision-gsc)  cmd_provision_gsc "$@" ;;
-  provision-all)  cmd_provision_all "$@" ;;
-  status)         cmd_status "$@" ;;
-  --help|-h|help) cmd_help ;;
+  provision-ga4)         cmd_provision_ga4 "$@" ;;
+  provision-gsc)         cmd_provision_gsc "$@" ;;
+  provision-instagram)   cmd_provision_instagram "$@" ;;
+  provision-google-ads)  cmd_provision_google_ads "$@" ;;
+  provision-all)         cmd_provision_all "$@" ;;
+  status)                cmd_status "$@" ;;
+  --help|-h|help)        cmd_help ;;
   *) die "Unknown subcommand: $SUBCMD — run '$0 --help' for usage" ;;
 esac
