@@ -2639,3 +2639,41 @@ a 190 error triggers a manual-rotation escalation instead. No existing behaviour
 ```
 
 `healthy` at the top level is `true` only when all checks pass. Pipe to `jq '.[] | select(.healthy==false)'` to filter unhealthy projects.
+
+---
+
+## Cron-driven autopilot
+
+Five cron wrapper scripts drive `bin/ops-marketing-autopilot` on schedule. They live in `${CLAUDE_PLUGIN_ROOT}/scripts/` and are registered as daemon-services entries (toggle via `/ops:settings` → Daemon Services):
+
+| Script | Daemon-service key | Schedule | Purpose |
+|--------|--------------------|----------|---------|
+| `ops-cron-marketing-autopilot.sh` | `marketing-autopilot` | Daily 08:00 UTC | Main daily ad-optimization pass (pause underperformers, regen fatigued creatives, cap pre-flight). First run is forced dry. |
+| `ops-cron-marketing-autopilot-calibrate.sh` | `marketing-autopilot-calibrate` | Monday 09:00 UTC | Self-learning calibration: joins pre-scores to realized KPIs, writes `calibrator.json` for the next daily pass. No metered calls. |
+| `ops-cron-marketing-prewarm.sh` | `marketing-prewarm` | Every 15 min | Pre-warms `/ops:marketing` credential and data cache so the dashboard opens instantly. Requires Klaviyo, Meta, GA4, GSC, Google Ads credentials. |
+| `ops-cron-marketing-auth-prewarm.sh` | `marketing-auth-prewarm` | Nightly 04:23 UTC | Scans Doppler + env + keychain for marketing creds; writes `marketing-auth-prewarm.json` so `/ops:marketing setup` can auto-link projects without per-credential prompts. |
+| `ops-cron-marketing-health-check.sh` | `marketing-health-check` | Sunday 08:00 UTC | Read-only weekly probe: Meta token TTL, Google Ads OAuth, ad account status, Doppler secret freshness, GA4 SA key, GSC site auth. Outputs per-project JSON to `reports/marketing-autopilot/`. No mutations. |
+
+### Inspect last-run for a cron wrapper
+
+```bash
+OPS_DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+# Logs written by cron wrappers (stdout + stderr):
+tail -20 "$OPS_DATA_DIR/logs/marketing-autopilot.log"
+tail -20 "$OPS_DATA_DIR/logs/marketing-autopilot-calibrate.log"
+tail -20 "$OPS_DATA_DIR/logs/marketing-prewarm.log"
+tail -20 "$OPS_DATA_DIR/logs/marketing-auth-prewarm.log"
+tail -20 "$OPS_DATA_DIR/logs/marketing-health-check.log"
+```
+
+### Toggle a cron wrapper
+
+Use `/ops:settings` → Daemon Services to enable or disable any of the five wrappers. Writes to the override file; never edits `daemon-services.default.json`.
+
+All five are **disabled by default**. Enable order:
+1. Configure credentials via `/ops:setup marketing`.
+2. Enable `marketing-prewarm` (optional but recommended — warms the cache).
+3. Enable `marketing-auth-prewarm` (nightly credential scan — low-cost, safe to enable early).
+4. Enable `marketing-autopilot` — first run will be a forced dry-run regardless of `autonomy_level`.
+5. Enable `marketing-autopilot-calibrate` after ≥7 days of autopilot data.
+6. Enable `marketing-health-check` as a weekly safety net once the above are stable.
