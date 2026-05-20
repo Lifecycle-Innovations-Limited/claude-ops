@@ -3,10 +3,10 @@
 # Resolves the highest installed ops plugin version at run time, then execs its
 # ops-daemon.sh. Survives plugin upgrades without plist edits.
 #
-# Why: the LaunchAgent plist points at this launcher (stable path), so plugin
-# upgrades don't require re-running install-ops-daemon.sh. The launcher walks
-# the plugin cache, finds the highest semver dir with a valid ops-daemon.sh,
-# and execs it.
+# Why: ops-daemon.sh installs this file at $CACHE_ROOT/ops-daemon-launcher.sh
+# (outside semver dirs) so launchd/systemd paths survive version pruning. It
+# walks the plugin cache, finds the highest semver dir with a valid
+# ops-daemon.sh, and execs it.
 set -euo pipefail
 
 CACHE_ROOT="${CLAUDE_PLUGIN_CACHE_ROOT:-$HOME/.claude/plugins/cache/ops-marketplace/ops}"

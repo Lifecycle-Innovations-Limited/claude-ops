@@ -24,6 +24,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 [ -r "$SCRIPT_DIR/lib/os-detect.sh" ] && . "$SCRIPT_DIR/lib/os-detect.sh"
 
 DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+# Ops plugin cache: semver version dirs live here; must match ops-daemon-launcher.sh default.
+OPS_PLUGIN_CACHE_ROOT="${CLAUDE_PLUGIN_CACHE_ROOT:-$HOME/.claude/plugins/cache/ops-marketplace/ops}"
+OPS_DAEMON_LAUNCHER_STABLE="$OPS_PLUGIN_CACHE_ROOT/ops-daemon-launcher.sh"
 LOG_DIR="$DATA_DIR/logs"
 LOG="$LOG_DIR/ops-daemon.log"
 SERVICES_CONFIG="$DATA_DIR/daemon-services.json"
@@ -1151,11 +1154,14 @@ except Exception:
 # embed absolute paths that still work when invoked by another user context).
 #
 # Prefer ops-daemon-launcher.sh when present: it resolves the highest-installed
-# ops plugin version at run time, so the LaunchAgent plist survives plugin
-# upgrades without re-running setup. Falls back to the direct daemon path if
-# the launcher isn't present (older plugin versions / partial installs).
+# ops plugin version at run time, so service configs survive plugin upgrades.
+# Keep a copy at OPS_PLUGIN_CACHE_ROOT (outside semver dirs) so baked paths
+# are not removed when an old version directory is pruned from the cache.
 if [[ -x "$SCRIPT_DIR/scripts/ops-daemon-launcher.sh" ]]; then
-  OPS_DAEMON_SCRIPT="$SCRIPT_DIR/scripts/ops-daemon-launcher.sh"
+  mkdir -p "$OPS_PLUGIN_CACHE_ROOT"
+  cp -f "$SCRIPT_DIR/scripts/ops-daemon-launcher.sh" "$OPS_DAEMON_LAUNCHER_STABLE"
+  chmod +x "$OPS_DAEMON_LAUNCHER_STABLE"
+  OPS_DAEMON_SCRIPT="$OPS_DAEMON_LAUNCHER_STABLE"
 else
   OPS_DAEMON_SCRIPT="$SCRIPT_DIR/scripts/ops-daemon.sh"
 fi
