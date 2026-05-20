@@ -50,6 +50,8 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib import error as urlerr
+from urllib import request as urlreq
 
 LOG_PREFIX = "[ops-pocket-triage]"
 HOME = Path(os.path.expanduser("~"))
@@ -323,16 +325,9 @@ def main() -> int:
         write_health("ok", "no pending items", extra={"counts": {}})
         return 0
 
-    # Claim file atomically so the watcher can append to a fresh pending-triage.jsonl
-    claim = PENDING.with_name("pending-triage.processing")
-    if not DRY_RUN:
-        PENDING.rename(claim)
-        pending_src = claim
-    else:
-        pending_src = PENDING
-
+    pending_snapshot = PENDING.read_text()
     tasks = []
-    for raw in pending_src.read_text().splitlines():
+    for raw in pending_snapshot.splitlines():
         raw = raw.strip()
         if not raw:
             continue
@@ -345,13 +340,27 @@ def main() -> int:
     counts = {"ACT": 0, "DRAFT": 0, "DROP": 0, "ASK": 0}
     inter_call_pause = float(os.environ.get("POCKET_TRIAGE_PACE_SEC", "8"))
     for i, task in enumerate(tasks, 1):
-        if i > 1 and inter_call_pause > 0:
-            time.sleep(inter_call_pause)  # avoid bursting Claude Max quota
         title = (task.get("title") or "")[:70]
-        log(f"[{i}/{len(tasks)}] triaging: {title}")
-        decision = triage_one(task)
-        verdict = route(task, decision)
-        counts[verdict] = counts.get(verdict, 0) + 1
+        task_id = task.get("id", "")
+        prior = _id_already_routed(task_id)
+        if prior:
+            verdict = f"SKIP_{prior}"
+            log(f"SKIP {task_id} — already in {prior}")
+            decision = {
+                "verdict": "ASK",
+                "confidence": 0.0,
+                "reasoning": f"skipped Opus triage — already present in {prior}",
+                "scoped_task_description": "",
+                "concerns": [],
+            }
+        else:
+            if i > 1 and inter_call_pause > 0:
+                time.sleep(inter_call_pause)  # avoid bursting Claude Max quota
+            log(f"[{i}/{len(tasks)}] triaging: {title}")
+            decision = triage_one(task)
+            verdict = route(task, decision)
+        if not verdict.startswith("SKIP_"):
+            counts[verdict] = counts.get(verdict, 0) + 1
         log(f"[{i}/{len(tasks)}] verdict={verdict} conf={decision.get('confidence')} — {decision.get('reasoning','')[:120]}")
         # Audit log every decision with full thinking
         append_jsonl(AUDIT, {
@@ -361,9 +370,16 @@ def main() -> int:
             "routed_to": verdict,
         })
 
-    # Drop claimed batch if not dry run (watcher recreated PENDING as needed)
+    # Drop only the snapshot we consumed; preserve any lines appended during triage.
     if not DRY_RUN:
-        claim.unlink(missing_ok=True)
+        try:
+            current = PENDING.read_text()
+            if current.startswith(pending_snapshot):
+                PENDING.write_text(current[len(pending_snapshot):])
+            else:
+                log("pending-triage prefix changed during triage — not rewriting file")
+        except OSError as e:
+            log(f"pending rewrite failed: {e}")
     log(f"done counts={counts}")
     write_health("ok", f"triaged={sum(counts.values())}", extra={"counts": counts})
     return 0
