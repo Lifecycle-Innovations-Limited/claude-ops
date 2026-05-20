@@ -53,7 +53,7 @@ Before executing, load available context:
 
 **Bridge health** — check before any WhatsApp operation:
 - Running: `lsof -i :8080 | grep LISTEN` → proceed
-- Not running → `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`, wait 5s
+- Not running → `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`, wait 5s
 
 | Tool | Params | Output |
 |------|--------|--------|

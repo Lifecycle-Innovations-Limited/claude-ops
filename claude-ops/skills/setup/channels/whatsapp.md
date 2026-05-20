@@ -1,6 +1,6 @@
 ### 3b — WhatsApp (bridge health + QR pair)
 
-WhatsApp is handled exclusively by the whatsmeow `whatsapp-bridge` (managed by `com.samrenders.whatsapp-bridge` LaunchAgent) and accessed via `mcp__whatsapp__*` tools.
+WhatsApp is handled exclusively by the whatsmeow `whatsapp-bridge` (managed by `com.${USER}.whatsapp-bridge` LaunchAgent — `${USER}` is your macOS username, expanded at install time so each user gets their own per-account bridge) and accessed via `mcp__whatsapp__*` tools.
 
 #### Step 3b.1 — Presence
 
@@ -8,7 +8,7 @@ Check bridge binary exists and LaunchAgent is installed:
 
 ```bash
 ls ~/.local/share/whatsapp-mcp/whatsapp-bridge/whatsapp-bridge 2>/dev/null && echo "binary ok"
-launchctl list com.samrenders.whatsapp-bridge 2>/dev/null | head -3
+launchctl list com.${USER}.whatsapp-bridge 2>/dev/null | head -3
 lsof -i :8080 2>/dev/null | grep LISTEN
 ```
 
@@ -21,15 +21,16 @@ whatsapp-bridge (whatsmeow) is not installed. Install:
   mkdir -p ~/.local/share/whatsapp-mcp/whatsapp-bridge/logs
 ```
 
-If LaunchAgent not installed, install it from template:
+If LaunchAgent not installed, install it from template. The template ships as `com.claude-ops.whatsapp-bridge.plist` with a `__USER__` Label placeholder; sed substitutes the running user so the installed plist's Label becomes `com.${USER}.whatsapp-bridge`:
 ```bash
-PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.samrenders.whatsapp-bridge.plist"
-PLIST_DEST="$HOME/Library/LaunchAgents/com.samrenders.whatsapp-bridge.plist"
+PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
+PLIST_DEST="$HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
 BRIDGE_DIR="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge"
 mkdir -p "$BRIDGE_DIR/logs"
 sed -e "s|__BRIDGE_BINARY_PATH__|$BRIDGE_DIR/whatsapp-bridge|g" \
     -e "s|__BRIDGE_WORKING_DIR__|$BRIDGE_DIR|g" \
     -e "s|__HOME__|$HOME|g" \
+    -e "s|__USER__|$USER|g" \
     "$PLIST_TEMPLATE" > "$PLIST_DEST"
 launchctl bootstrap gui/$(id -u) "$PLIST_DEST"
 ```
@@ -87,7 +88,7 @@ All ops skills that use WhatsApp must check `lsof -i :8080 | grep LISTEN` before
 If bridge is not running:
 1. Print: "WhatsApp bridge is not running."
 2. Use `AskUserQuestion`: `[Restart bridge]`, `[Skip WhatsApp]`.
-3. On restart: `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`, wait 5s.
+3. On restart: `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`, wait 5s.
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` and `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/SKILL.md` for full operational instructions.
 

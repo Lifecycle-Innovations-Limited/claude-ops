@@ -64,7 +64,7 @@ If you find yourself reaching for any `wacli ...` shell command, stop and use th
 | Full-text search        | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}`              | `wacli messages search`   |
 | Resolve a contact       | `mcp__whatsapp__search_contacts {query: "<name>"}`                        | `wacli contacts`          |
 | Send a reply (after approval) | `mcp__whatsapp__send_message {recipient: "<JID>", message: "<text>"}` | `wacli send`              |
-| Health check            | `lsof -i :8080 \| grep LISTEN` + `launchctl list com.samrenders.whatsapp-bridge` | `wacli doctor` / `~/.wacli/.health` |
+| Health check            | `lsof -i :8080 \| grep LISTEN` + `launchctl list com.${USER}.whatsapp-bridge` | `wacli doctor` / `~/.wacli/.health` |
 
 **Rationale:** the bridge exposes a typed MCP surface, returns consistent JSON shapes (`is_from_me`, `content`, `timestamp`, `sender`), supports FTS5 search natively, and avoids store-lock contention with the wacli keepalive daemon. Mixing the two surfaces caused inconsistent state in past sessions.
 
@@ -79,7 +79,7 @@ Before executing, load available context:
    - `secrets_manager` / `doppler` — how to resolve channel credentials if not in env
 
 2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
-   - Check `whatsapp-bridge` status — verify `com.samrenders.whatsapp-bridge` is running (`lsof -i :8080` or `launchctl list com.samrenders.whatsapp-bridge`)
+   - Check `whatsapp-bridge` status — verify `com.${USER}.whatsapp-bridge` is running (`lsof -i :8080` or `launchctl list com.${USER}.whatsapp-bridge`)
    - If bridge is not running, surface the issue before WhatsApp operations
 
 3. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/` before drafting any reply:
@@ -95,9 +95,9 @@ Before executing, load available context:
 **Bridge health** — check bridge is running before any WhatsApp operation:
 ```bash
 lsof -i :8080 | grep LISTEN   # bridge listens on :8080
-launchctl list com.samrenders.whatsapp-bridge  # check launchd status
+launchctl list com.${USER}.whatsapp-bridge  # check launchd status
 ```
-If bridge is not running: `launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge`
+If bridge is not running: `launchctl kickstart -k gui/$UID/com.${USER}.whatsapp-bridge`
 
 **MCP tools** (use these instead of any wacli CLI command):
 
@@ -136,7 +136,7 @@ sqlite3 "$DB" "SELECT jid, name, phone FROM contacts WHERE name LIKE '%<name>%' 
 
 **History backfill** — the whatsmeow bridge automatically syncs history on connection. No manual backfill command exists; if messages are missing, restart the bridge:
 ```bash
-launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge
+launchctl kickstart -k gui/$UID/com.${USER}.whatsapp-bridge
 ```
 
 ### gog CLI (Gmail/Calendar)
@@ -260,7 +260,7 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
 For each channel, detect availability at runtime:
 
 1. **Email**: Try `gog` CLI first. If `gog` unavailable, try `mcp__gog__gmail_*` MCP tools. If neither, report unavailable.
-2. **WhatsApp**: Check bridge liveness: `lsof -i :8080 | grep LISTEN`. If not listening, prompt the user: "WhatsApp bridge is not running." Use `AskUserQuestion`: `[Restart bridge]`, `[Skip WhatsApp]`. On restart: `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`, wait 5s, re-check. If bridge is running but MCP tools fail, the bridge may need QR re-pairing — check `~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log` for auth errors.
+2. **WhatsApp**: Check bridge liveness: `lsof -i :8080 | grep LISTEN`. If not listening, prompt the user: "WhatsApp bridge is not running." Use `AskUserQuestion`: `[Restart bridge]`, `[Skip WhatsApp]`. On restart: `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`, wait 5s, re-check. If bridge is running but MCP tools fail, the bridge may need QR re-pairing — check `~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log` for auth errors.
 3. **Slack**: Read the derived `channels.slack` object from pre-gathered `bin/ops-unread` data (it resolves each `token_env` and reports per-workspace `available`; do NOT read raw `preferences.json → slack_workspaces[]` directly — that array has no `available` flag).
    - **Multi-workspace** (`"multi_workspace": true`): iterate the `workspaces` array. For each `available: true` entry, scan via `mcp__claude_ai_Slack__*` if the MCP token matches, or via direct curl. To resolve the token for direct curl, validate `token_env` matches `^[A-Za-z_][A-Za-z0-9_]*$` before `${!token_env}` indirect expansion. Aggregate results; label each message block with the workspace name.
    - **Legacy** (`"multi_workspace": false`): use `mcp__claude_ai_Slack__*` if `channels.slack.available == true` (which itself reflects `SLACK_MCP_ENABLED`).
@@ -395,11 +395,11 @@ Reply via: `mcp__whatsapp__send_message` with `{recipient: "<JID>", message: "<m
 | Chat metadata | `mcp__whatsapp__get_chat {chat_jid}` |
 | Message context | `mcp__whatsapp__get_message_context {chat_jid, message_id}` |
 | Check bridge | `lsof -i :8080 | grep LISTEN` |
-| Restart bridge | `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge` |
+| Restart bridge | `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge` |
 
 **Bridge troubleshooting:**
 
-- Bridge not running → `launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge`; wait 5s, re-check
+- Bridge not running → `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`; wait 5s, re-check
 - Auth expired / QR needed → check `~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log`; bridge prints QR to log on startup if session is invalid
 - Missing messages → bridge syncs history on connect; if gap persists, restart bridge
 - FTS not available → run `scripts/whatsapp-bridge-migrate.sh` to add FTS5 index to messages.db

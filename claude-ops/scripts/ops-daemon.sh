@@ -1400,7 +1400,7 @@ ENSURE_SERVICES_INTERVAL="${ENSURE_SERVICES_INTERVAL:-300}"  # every 5 min
 # stderr/stdout, just rapid START log entries).
 #
 # wacli-keepalive was decommissioned in v2.0.3 — WhatsApp ops moved to the
-# Baileys bridge (com.samrenders.whatsapp-bridge) and mcp__whatsapp__* tools.
+# Baileys bridge (com.${USER}.whatsapp-bridge) and mcp__whatsapp__* tools.
 # Including it caused noisy "cannot repair — missing bash or source plist"
 # entries every monitor loop because its plist no longer ships in the package.
 EXPECTED_SERVICES=()
