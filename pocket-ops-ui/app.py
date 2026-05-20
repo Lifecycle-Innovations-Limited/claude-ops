@@ -8,6 +8,7 @@ Listens on 127.0.0.1:7777, served to the tailnet via `tailscale serve`.
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import subprocess
@@ -17,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator
 
-from flask import Flask, Response, abort, jsonify, redirect, render_template_string, request, url_for
+from flask import Flask, Response, abort, jsonify, redirect, request, url_for
 
 app = Flask(__name__)
 
@@ -197,70 +198,6 @@ def _sse_watcher() -> Generator[str, None, None]:
             yield ": ping\n\n"
 
 
-# ── Base template ─────────────────────────────────────────────────────────────
-
-BASE_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pocket Ops</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://unpkg.com/htmx.org@1.9.12"></script>
-<style>
-  .tab-active { @apply border-b-2 border-indigo-500 text-indigo-600 font-semibold; }
-  .status-ok { color: #22c55e; }
-  .status-warn { color: #f59e0b; }
-  .status-error, .status-disabled { color: #ef4444; }
-  .status-running { color: #3b82f6; }
-  .badge-green { background:#dcfce7; color:#166534; padding:2px 8px; border-radius:9999px; font-size:.75rem; }
-  .badge-red { background:#fee2e2; color:#991b1b; padding:2px 8px; border-radius:9999px; font-size:.75rem; }
-  .badge-yellow { background:#fef9c3; color:#854d0e; padding:2px 8px; border-radius:9999px; font-size:.75rem; }
-  .badge-gray { background:#f3f4f6; color:#374151; padding:2px 8px; border-radius:9999px; font-size:.75rem; }
-</style>
-</head>
-<body class="bg-gray-50 text-gray-900 min-h-screen">
-
-<!-- Top bar -->
-<header class="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
-  <div class="flex items-center gap-3">
-    <span class="text-lg font-bold tracking-tight">Pocket Ops</span>
-    <span class="text-xs text-gray-400 hidden sm:inline">dev-sandbox</span>
-  </div>
-  <div id="health-bar" class="flex gap-2 text-xs"
-       hx-get="/api/health-bar" hx-trigger="load, every 30s" hx-swap="innerHTML">
-    Loading…
-  </div>
-</header>
-
-<!-- Tab bar -->
-<nav class="bg-white border-b border-gray-200 px-4 flex gap-1 overflow-x-auto text-sm">
-  {% for tab, label in tabs %}
-  <a href="/?tab={{ tab }}"
-     class="px-3 py-2 whitespace-nowrap {{ 'tab-active' if active_tab == tab else 'text-gray-500 hover:text-gray-700' }}">
-    {{ label }}
-  </a>
-  {% endfor %}
-</nav>
-
-<main class="max-w-6xl mx-auto px-4 py-6">
-  {% block content %}{% endblock %}
-</main>
-
-<script>
-// SSE live-update: reload HTMX-marked elements on file change
-const evtSrc = new EventSource('/api/stream');
-evtSrc.onmessage = e => {
-  if (e.data === 'connected' || e.data.startsWith(':')) return;
-  const el = document.getElementById('live-content');
-  if (el) htmx.trigger(el, 'refresh');
-  // Refresh health bar
-  htmx.trigger(document.getElementById('health-bar'), 'load');
-};
-</script>
-</body>
-</html>"""
-
 TABS = [
     ("triage", "Pending Triage"),
     ("in-progress", "In Progress"),
@@ -402,6 +339,7 @@ def tasks_list():
 @app.route("/tasks/<task_id>")
 def task_detail(task_id: str):
     check_auth()
+    task_id_html = html.escape(task_id)
     # Find report file in executor-results
     results_dir = STATE_DIR / "executor-results"
     report_html = "<p class='text-gray-500'>No report found.</p>"
@@ -424,7 +362,7 @@ def task_detail(task_id: str):
                 summary = data.get("summary", "")
                 content = f"""
 <div class="mb-4">
-  <h2 class="text-xl font-semibold mb-1">{task_id}</h2>
+  <h2 class="text-xl font-semibold mb-1">{task_id_html}</h2>
   <p class="text-gray-500 text-sm">Worker: {data.get('worker','?')} &nbsp;|&nbsp; File: {p.name}</p>
   {f'<p class="mt-2 text-gray-700">{summary}</p>' if summary else ''}
 </div>
@@ -435,7 +373,7 @@ def task_detail(task_id: str):
                 return render_page("completed", content)
             except (OSError, json.JSONDecodeError):
                 continue
-    content = f'<p class="text-gray-500">Task {task_id} not found.</p><a href="/?tab=completed" class="text-indigo-600 text-sm hover:underline">&larr; Back</a>'
+    content = f'<p class="text-gray-500">Task {task_id_html} not found.</p><a href="/?tab=completed" class="text-indigo-600 text-sm hover:underline">&larr; Back</a>'
     return render_page("completed", content)
 
 
@@ -499,7 +437,7 @@ def toggle_channel(name: str):
     else:
         abort(400)
     cfg = read_json(cfg_path)
-    cfg["enabled"] = not cfg.get("enabled", True)
+    cfg["enabled"] = not cfg.get("enabled", False)
     try:
         cfg_path.write_text(json.dumps(cfg, indent=2))
     except OSError:

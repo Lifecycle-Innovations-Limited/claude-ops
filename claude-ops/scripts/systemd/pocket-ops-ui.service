@@ -10,7 +10,7 @@ Environment=HOME=__HOME__
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
 Environment=TAILSCALE_USER=__TAILSCALE_USER__
-ExecStart=__HOME__/.venv-pocket/bin/gunicorn --workers 2 --bind 127.0.0.1:7777 app:app
+ExecStart=__HOME__/.venv-pocket/bin/gunicorn --workers 2 --worker-class gthread --threads 8 --bind 127.0.0.1:7777 app:app
 Restart=always
 RestartSec=5
 StandardOutput=append:__HOME__/.claude/state/pocket/ops-ui.log
