@@ -1,0 +1,11 @@
+[Unit]
+Description=Run pocket-executor every 5 minutes
+Requires=pocket-executor.service
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
