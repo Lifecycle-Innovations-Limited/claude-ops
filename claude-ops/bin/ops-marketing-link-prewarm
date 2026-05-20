@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# bin/ops-marketing-link-prewarm — link prewarm cache creds into preferences.json
+#
+# Usage:
+#   ops-marketing-link-prewarm --project <key>
+#   ops-marketing-link-prewarm --all-projects
+#   ops-marketing-link-prewarm --project <key> --category <cat>
+#   OPS_MARKETING_DRY_RUN=1 ops-marketing-link-prewarm ...
+#   ops-marketing-link-prewarm --project <key> --dry-run
+#
+# PUBLIC REPO: no real project names, tokens, or paths.
+
+set -uo pipefail
+
+PREFS_PATH="${PREFS_PATH:-${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json}"
+OPS_DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PREWARM_CACHE="${OPS_DATA_DIR}/marketing-auth-prewarm.json"
+DRY_RUN="${OPS_MARKETING_DRY_RUN:-0}"
+
+# ── args ─────────────────────────────────────────────────────────────────────
+TARGET_PROJECT=""
+TARGET_CATEGORY=""
+ALL_PROJECTS=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --project)    TARGET_PROJECT="$2"; shift 2 ;;
+    --category)   TARGET_CATEGORY="$2"; shift 2 ;;
+    --all-projects) ALL_PROJECTS=1; shift ;;
+    --dry-run)    DRY_RUN=1; shift ;;
+    *) echo "Unknown flag: $1" >&2; exit 1 ;;
+  esac
+done
+
+if [[ $ALL_PROJECTS -eq 0 && -z "$TARGET_PROJECT" ]]; then
+  echo "Usage: ops-marketing-link-prewarm --project <key> | --all-projects [--category <cat>] [--dry-run]" >&2
+  exit 1
+fi
+
+# ── prewarm cache check ───────────────────────────────────────────────────────
+if [[ ! -f "$PREWARM_CACHE" ]]; then
+  echo "Prewarm cache not found: ${PREWARM_CACHE}" >&2
+  echo "Run: scripts/ops-marketing-auth-prewarm.sh" >&2
+  exit 1
+fi
+
+if [[ ! -f "$PREFS_PATH" ]]; then
+  echo "Preferences file not found: ${PREFS_PATH}" >&2
+  exit 1
+fi
+
+# ── category → prefs path mapping ────────────────────────────────────────────
+# Returns a list of "key_name:prefs_path" pairs for a given category.
+# prefs_path is relative to .marketing.projects.<project>
+category_mappings() {
+  local cat="$1"
+  case "$cat" in
+    ads_meta)
+      echo "access_token:meta.access_token"
+      echo "app_secret:meta.app_secret"
+      echo "app_id:meta.app_id"
+      echo "ad_account_id:meta.ad_account_id"
+      echo "page_id:meta.page_id"
+      ;;
+    ads_google)
+      echo "developer_token:google_ads.developer_token"
+      echo "client_id:google_ads.client_id"
+      echo "client_secret:google_ads.client_secret"
+      echo "refresh_token:google_ads.refresh_token"
+      echo "customer_id:google_ads.customer_id"
+      ;;
+    analytics_ga4)
+      echo "property_id:ga4.property_id"
+      echo "measurement_id:ga4.measurement_id"
+      echo "api_secret:ga4.api_secret"
+      ;;
+    analytics_amplitude)
+      echo "api_key:amplitude.api_key"
+      ;;
+    analytics_posthog)
+      echo "api_key:posthog.api_key"
+      ;;
+    email_resend)
+      echo "api_key:email_marketing.resend.api_key"
+      ;;
+    email_klaviyo)
+      echo "private_key:klaviyo.private_key"
+      echo "api_key:klaviyo.api_key"
+      ;;
+    errors_sentry)
+      echo "auth_token:sentry.auth_token"
+      echo "org:sentry.org"
+      ;;
+    issues_linear)
+      echo "api_key:linear.api_key"
+      ;;
+    mta_appsflyer)
+      echo "api_key:appsflyer.api_key"
+      ;;
+    payments_stripe)
+      echo "secret_key:stripe.secret_key"
+      ;;
+    prospect_apollo)
+      echo "api_key:apollo.api_key"
+      ;;
+    ecommerce_shopify)
+      echo "admin_token:shopify.admin_token"
+      echo "store:shopify.store"
+      ;;
+    fulfillment_shipbob)
+      echo "access_token:shipbob.access_token"
+      ;;
+    sms_twilio)
+      echo "account_sid:twilio.account_sid"
+      echo "auth_token:twilio.auth_token"
+      echo "api_key_sid:twilio.api_key_sid"
+      echo "api_key_secret:twilio.api_key_secret"
+      ;;
+    seo_ahrefs)
+      echo "api_key:ahrefs.api_key"
+      ;;
+    *)
+      # Unknown category — no mappings
+      ;;
+  esac
+}
+
+# ── link one project + one category ──────────────────────────────────────────
+link_category() {
+  local project="$1"
+  local cat="$2"
+  local linked_count=0
+
+  # Get all entries for this project+category from prewarm cache
+  local entries
+  entries="$(jq -c --arg p "$project" --arg c "$cat" \
+    '.by_project[$p][$c] // [] | .[]' "$PREWARM_CACHE" 2>/dev/null || true)"
+
+  [[ -z "$entries" ]] && return 0
+
+  # Build mapping of key_name → doppler_ref
+  declare -A key_to_ref
+  while IFS= read -r entry; do
+    [[ -z "$entry" ]] && continue
+    local entry_key entry_proj entry_config entry_doppler_key
+    entry_key="$(echo "$entry" | jq -r '.key // ""' 2>/dev/null)"
+    entry_proj="$(echo "$entry" | jq -r '.project // ""' 2>/dev/null)"
+    entry_config="$(echo "$entry" | jq -r '.config // ""' 2>/dev/null)"
+    entry_doppler_key="$(echo "$entry" | jq -r '.key // ""' 2>/dev/null)"
+    [[ -z "$entry_key" ]] && continue
+    key_to_ref["$entry_key"]="doppler:${entry_proj}/${entry_config}/${entry_doppler_key}"
+  done <<< "$entries"
+
+  # Apply mappings
+  while IFS=: read -r key_name rel_path; do
+    [[ -z "$key_name" || -z "$rel_path" ]] && continue
+    local doppler_ref="${key_to_ref[$key_name]:-}"
+    [[ -z "$doppler_ref" ]] && continue
+
+    # Build full jq path
+    local full_jq_path=".marketing.projects[\"${project}\"].${rel_path}"
+
+    # Check existing value — never overwrite non-null
+    local existing
+    existing="$(jq -r "${full_jq_path} // \"null\"" "$PREFS_PATH" 2>/dev/null || echo "null")"
+    if [[ "$existing" != "null" && -n "$existing" ]]; then
+      [[ "$DRY_RUN" == "1" ]] && echo "  [skip] ${project}.${rel_path} already set" >&2
+      continue
+    fi
+
+    if [[ "$DRY_RUN" == "1" ]]; then
+      echo "  [would set] ${project}.${rel_path} = ${doppler_ref}" >&2
+      (( linked_count++ )) || true
+      continue
+    fi
+
+    # Atomic write: jq → tmp → mv
+    local tmp
+    tmp="$(mktemp "${PREFS_PATH}.tmp.XXXXXX")"
+    # Build nested path dynamically from dot-separated rel_path
+    local jq_expr
+    jq_expr="$(echo "$rel_path" | awk -F. '{
+      path = ".marketing.projects[\"'"$project"'\"]"
+      for(i=1;i<=NF;i++) path = path "[\"" $i "\"]"
+      print path " = $val"
+    }')"
+    if jq --arg val "$doppler_ref" "$jq_expr" "$PREFS_PATH" > "$tmp" 2>/dev/null; then
+      mv "$tmp" "$PREFS_PATH"
+      (( linked_count++ )) || true
+    else
+      rm -f "$tmp"
+      echo "  [error] failed to write ${project}.${rel_path}" >&2
+    fi
+  done < <(category_mappings "$cat")
+
+  printf '%d' "$linked_count"
+}
+
+# ── link one project (all or filtered categories) ────────────────────────────
+link_project() {
+  local project="$1"
+  local total_linked=0
+  local total_cats=0
+
+  # Get categories from prewarm cache for this project
+  local cats
+  cats="$(jq -r --arg p "$project" '.by_project[$p] // {} | keys[]' "$PREWARM_CACHE" 2>/dev/null || true)"
+
+  if [[ -z "$cats" ]]; then
+    echo "No prewarm data for project: ${project}"
+    return 0
+  fi
+
+  while IFS= read -r cat; do
+    [[ -z "$cat" ]] && continue
+    # Filter by --category if specified
+    if [[ -n "$TARGET_CATEGORY" && "$cat" != "$TARGET_CATEGORY" ]]; then
+      continue
+    fi
+    local n
+    n="$(link_category "$project" "$cat")"
+    total_linked=$(( total_linked + n ))
+    (( total_cats++ )) || true
+  done <<< "$cats"
+
+  local dry_prefix=""
+  [[ "$DRY_RUN" == "1" ]] && dry_prefix="[dry-run] "
+  echo "${dry_prefix}Linked ${total_linked} creds across ${total_cats} categories for project '${project}'."
+}
+
+# ── main ─────────────────────────────────────────────────────────────────────
+if [[ $ALL_PROJECTS -eq 1 ]]; then
+  # Get all projects from prewarm cache
+  all_prewarm_projects="$(jq -r '(.by_project // {}) | keys[]' "$PREWARM_CACHE" 2>/dev/null || true)"
+  if [[ -z "$all_prewarm_projects" ]]; then
+    echo "No projects found in prewarm cache."
+    exit 0
+  fi
+  while IFS= read -r proj; do
+    [[ -z "$proj" ]] && continue
+    link_project "$proj"
+  done <<< "$all_prewarm_projects"
+else
+  link_project "$TARGET_PROJECT"
+fi
