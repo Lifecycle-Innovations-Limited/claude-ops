@@ -81,97 +81,99 @@ curl -s "https://graph.facebook.com/v20.0/$AD_ACCOUNT_ID/campaigns?access_token=
 
 #### Google Ads
 
-Google Ads requires three credential groups. Guide the user through each step sequentially.
-
-**Step A — Developer Token:**
-If `GOOGLE_ADS_DEVELOPER_TOKEN` was found in auto-scan, present it and offer `[Keep]` / `[Reconfigure]`.
-Otherwise, ask via free text:
-> Your Google Ads developer token (found in Google Ads → Tools & Settings → API Center).
-> Note: New developer tokens start in "test" mode — they work against test accounts only. For production data, apply for Basic Access at https://ads.google.com/home/tools/manager-accounts/
-
-**Step B — OAuth2 Client Credentials:**
-If `GOOGLE_ADS_CLIENT_ID` and `GOOGLE_ADS_CLIENT_SECRET` were found in auto-scan, present and offer `[Keep]` / `[Reconfigure]`.
-Otherwise, ask via free text (two prompts):
-1. OAuth2 Client ID (from Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client ID, type: Desktop app, Google Ads API must be enabled)
-2. OAuth2 Client Secret (shown alongside the client ID)
-
-**Step C — Refresh Token (browser OAuth flow):**
-If `GOOGLE_ADS_REFRESH_TOKEN` was found in auto-scan, present and offer `[Keep]` / `[Reconfigure]`.
-Otherwise, generate the auth URL and run the OAuth flow:
+**Primary path — delegate to the provision binary:**
 
 ```bash
-AUTH_URL="https://accounts.google.com/o/oauth2/auth?client_id=${GADS_CLIENT_ID}&redirect_uri=http://localhost:8080&response_type=code&scope=https://www.googleapis.com/auth/adwords&access_type=offline&prompt=consent"
-open "$AUTH_URL"  # macOS
+ops-marketing-provision provision-google-ads --project <project>
 ```
 
-Start a temporary localhost server to catch the redirect:
+This is now a callable 4-step flow (each step is a no-op if already configured):
+
+- **Step A — Developer token.** Scans env + Doppler. If missing, writes a pending-state file at `${OPS_DATA_DIR}/state/marketing-provision/<project>-google-ads-pending.json` with the application URL <https://ads.google.com/aw/apicenter>, then exits 1. Approval takes 24–48h.
+- **Step B — OAuth2 client.** Scans env + Doppler for `GOOGLE_ADS_CLIENT_ID` + `GOOGLE_ADS_CLIENT_SECRET`. If missing, prints the Cloud Console URL for creating a Desktop OAuth client.
+- **Step C — Refresh token.** Starts a Node HTTP server on `:8080` (120s timeout), opens the consent URL, captures the `code` query param, POSTs to `https://oauth2.googleapis.com/token` to exchange for `refresh_token`, writes to Doppler as `GOOGLE_ADS_<PROJECT_UPPER>_REFRESH_TOKEN`.
+- **Step D — Customer ID.** Calls `v24/customers:listAccessibleCustomers`. Auto-detects MCC manager accounts via the `customer.manager` field (sets `login_customer_id`). Writes everything to `marketing.projects.<project>.google_ads` as Doppler cred-refs.
+
+**Test-mode caveat:** if the Google Cloud OAuth app is in "Testing" publishing status, refresh tokens expire in 7 days. Surface this to the user; recommend "Publish App" in Cloud Console → OAuth consent screen.
+
+**Manual fallback path** (when the binary errors and the user wants to step through manually):
+
+The endpoints (validated 2026-05-20 against Google's OIDC discovery doc):
+- Auth: `https://accounts.google.com/o/oauth2/v2/auth`
+- Token: `https://oauth2.googleapis.com/token`
+- Scope: `https://www.googleapis.com/auth/adwords`
+- API: `https://googleads.googleapis.com/v24` (v24 became GA October 2025)
+
+Auth URL pattern:
 ```bash
-# One-liner node HTTP server to capture the auth code
-node -e "require('http').createServer((req,res)=>{const code=new URL(req.url,'http://localhost').searchParams.get('code');if(code){res.end('Authorization code received. You can close this tab.');process.stdout.write(code);process.exit(0)}else{res.end('Waiting for auth...')}}).listen(8080)"
+AUTH_URL="https://accounts.google.com/o/oauth2/v2/auth?client_id=${GADS_CLIENT_ID}&redirect_uri=http://localhost:8080&response_type=code&scope=https://www.googleapis.com/auth/adwords&access_type=offline&prompt=consent"
 ```
 
-Run the server via Bash with `run_in_background: true`. Wait up to 120 seconds for the auth code.
-
-If the localhost approach fails, fall back to asking the user to paste the code from the browser URL bar (the `code=` parameter).
-
-Exchange code for refresh token:
+Code → refresh-token exchange:
 ```bash
 TOKEN_RESP=$(curl -s -X POST https://oauth2.googleapis.com/token \
-  --data "code=${AUTH_CODE}" \
-  --data "client_id=${GADS_CLIENT_ID}" \
-  --data "client_secret=${GADS_CLIENT_SECRET}" \
-  --data "redirect_uri=http://localhost:8080" \
-  --data "grant_type=authorization_code")
+  --data-urlencode "code=${AUTH_CODE}" \
+  --data-urlencode "client_id=${GADS_CLIENT_ID}" \
+  --data-urlencode "client_secret=${GADS_CLIENT_SECRET}" \
+  --data-urlencode "redirect_uri=http://localhost:8080" \
+  --data-urlencode "grant_type=authorization_code")
 GADS_REFRESH_TOKEN=$(echo "$TOKEN_RESP" | jq -r '.refresh_token')
 ```
 
-If `GADS_REFRESH_TOKEN` is null or empty, print error and offer retry.
-
-Warning: If the user's Google Cloud project is in "testing" publishing status, the refresh token expires in 7 days. Warn: "Your OAuth app is in testing mode — tokens expire in 7 days. To get long-lived tokens, publish the app in Google Cloud Console → OAuth consent screen → Publish App."
-
-**Step D — Customer ID:**
-Use the refresh token to get an access token, then list accessible customers:
+List accessible customers (for picking `customer_id` + auto-detecting MCC):
 ```bash
 ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
-  --data "client_id=${GADS_CLIENT_ID}&client_secret=${GADS_CLIENT_SECRET}&refresh_token=${GADS_REFRESH_TOKEN}&grant_type=refresh_token" | jq -r '.access_token')
+  --data-urlencode "client_id=${GADS_CLIENT_ID}&client_secret=${GADS_CLIENT_SECRET}&refresh_token=${GADS_REFRESH_TOKEN}&grant_type=refresh_token" | jq -r '.access_token')
 
-CUSTOMERS=$(curl -s -X GET \
-  "https://googleads.googleapis.com/v23/customers:listAccessibleCustomers" \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-  -H "developer-token: ${GADS_DEV_TOKEN}")
-```
-
-If multiple accounts returned, present as `AskUserQuestion` options (max 4 per Rule 1 — paginate if more). If single account, auto-select. Store as `customer_id` (strip "customers/" prefix and dashes).
-
-If any account is a manager (MCC) account, also store `login_customer_id`. Auto-detect by checking if `listAccessibleCustomers` returns both manager and client accounts.
-
-**Step E — Smoke Test:**
-```bash
-curl -s -X GET "https://googleads.googleapis.com/v23/customers:listAccessibleCustomers" \
+curl -s -X GET "https://googleads.googleapis.com/v24/customers:listAccessibleCustomers" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -H "developer-token: ${GADS_DEV_TOKEN}"
 ```
-Expect JSON with `resourceNames` array. If error, print the error and offer `[Retry]` / `[Skip]`.
 
-**Step F — Save to preferences:**
+Detect manager accounts (set `login_customer_id` to the manager when calling sub-accounts):
+```bash
+curl -s -X POST "https://googleads.googleapis.com/v24/customers/${CID}/googleAds:search" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -H "developer-token: ${GADS_DEV_TOKEN}" \
+  -H "Content-Type: application/json" \
+  --data-binary '{"query":"SELECT customer.manager FROM customer LIMIT 1"}'
+```
+
+**Save to preferences (Doppler cred-refs preferred):**
 ```json
 {
   "marketing": {
-    "google_ads": {
-      "developer_token": "<YOUR_DEVELOPER_TOKEN>",
-      "client_id": "<YOUR_CLIENT_ID>.apps.googleusercontent.com",
-      "client_secret": "GOCSPX-<YOUR_SECRET>",
-      "refresh_token": "1//<YOUR_REFRESH_TOKEN>",
-      "customer_id": "1234567890",
-      "login_customer_id": "9876543210"
+    "projects": {
+      "<project>": {
+        "google_ads": {
+          "developer_token":   "doppler:claude-ops/prd/GOOGLE_ADS_DEVELOPER_TOKEN",
+          "client_id":         "doppler:claude-ops/prd/GOOGLE_ADS_CLIENT_ID",
+          "client_secret":     "doppler:claude-ops/prd/GOOGLE_ADS_CLIENT_SECRET",
+          "refresh_token":     "doppler:claude-ops/prd/GOOGLE_ADS_<PROJECT_UPPER>_REFRESH_TOKEN",
+          "customer_id":       "1234567890",
+          "login_customer_id": "9876543210"
+        }
+      }
     }
   }
 }
 ```
 
-Same Doppler-reference pattern as Step 3i — prefer `doppler:KEY_NAME` over raw tokens when Doppler is configured.
-
 Print: `[Google Ads] ✓ connected — customer ID: XXXXXXXXXX`
+
+#### Instagram
+
+**Primary path — delegate to the provision binary:**
+
+```bash
+ops-marketing-provision provision-instagram --project <project>
+```
+
+Auto-resolves `instagram.account_id` from the Meta access token by reading `instagram_business_account.id` off the configured Facebook Page (or `/me/accounts` fallback). When `marketing.projects.<project>.meta.app_secret` is configured, the verb computes `appsecret_proof = HMAC-SHA256(access_token, app_secret)` and appends it to every Graph API call — required when the Meta app's "Require App Secret" setting is on (default for all system-user tokens).
+
+Idempotent: re-runs smoke-test the existing `account_id` before re-resolving. Pass `--force` to bypass.
+
+Requires `marketing.projects.<project>.meta.access_token` to be configured first (via setup or manual prefs edit). Exits 2 if the Meta token is missing — does not fabricate.
 
 #### Google Analytics 4
 
