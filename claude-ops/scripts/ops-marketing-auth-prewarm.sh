@@ -10,6 +10,7 @@ set -euo pipefail
 #   OPS_PREWARM_DRY_RUN - if set to 1, print output to stderr only (no file write)
 
 DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PREFS_PATH="${PREFS_PATH:-${CLAUDE_PLUGIN_DATA_DIR:-$DATA_DIR}/preferences.json}"
 OUTPUT_FILE="$DATA_DIR/marketing-auth-prewarm.json"
 GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -83,24 +84,15 @@ extract_project_hint() {
 
   # look for product name embedded in the key itself
   # e.g. META_MY-PROJECT_ACCESS_TOKEN → my-project, STRIPE_SAMPLE-PROJECT_SECRET_KEY → sample-project
-  # First try projects already defined in prefs (highest signal — these are
-  # the projects /ops:marketing knows about). Then fall back to a static
-  # known list for projects that exist in Doppler but aren't yet in prefs.
-  local prefs_path="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
-  local prefs_projects=()
-  if [ -f "$prefs_path" ]; then
-    while IFS= read -r p; do
-      [ -n "$p" ] && prefs_projects+=("$p")
-    done < <(jq -r '.marketing.projects | keys[]?' "$prefs_path" 2>/dev/null)
-  fi
+  # Same slugs as CONFIGURED_SLUGS (loaded once from $PREFS_PATH:
+  # .marketing.projects keys and .marketing.account_slugs[]).
+  # No hardcoded project names — those are user PII and must live in config.
+  local known_products=("${CONFIGURED_SLUGS[@]}")
 
-  local known_products=(
-    "${prefs_projects[@]}"
-    "my-project" "alwaysbright" "example-project" "inboxassist" "fiberinternet" "sample-project"
-    "shannon" "talktoyourhouse" "claude-ops" "claudeops" "flowrider" "hueman"
-    "upres" "whoopgo" "aurora" "bondmcp" "payfwd" "messo" "manus"
-    "accounta" "homey" "carrier" "anna" "mango" "hypest" "maitre"
-  )
+  # No configured projects → no hint extraction possible; fall back to the
+  # doppler project base name. Caller-level guard already handles the
+  # zero-config case at script entry, so reaching here with an empty list
+  # is harmless.
   # Dedupe + sort by length descending so longer matches win (e.g. "sample-project" before "fiber")
   local sorted_products
   sorted_products=$(printf '%s\n' "${known_products[@]}" | awk 'NF' | sort -u | awk '{ print length, $0 }' | sort -rn | cut -d" " -f2-)
@@ -129,6 +121,26 @@ extract_project_hint() {
   # fall back to base doppler project name
   echo "$base_project"
 }
+
+# ── precondition: at least one marketing project must be configured ──────────
+# Load slugs from the partner registry (preferences.json). If empty, exit 0
+# as a graceful no-op so this script can be safely chained in setup flows.
+CONFIGURED_SLUGS=()
+if [ -f "$PREFS_PATH" ]; then
+  while IFS= read -r p; do
+    [ -n "$p" ] && CONFIGURED_SLUGS+=("$p")
+  done < <(jq -r '
+    [
+      (.marketing.projects // {} | keys[]?),
+      (.marketing.account_slugs[]?)
+    ] | unique | .[]
+  ' "$PREFS_PATH" 2>/dev/null)
+fi
+
+if [ "${#CONFIGURED_SLUGS[@]}" -eq 0 ]; then
+  echo "no marketing accounts configured — run /ops:setup marketing"
+  exit 0
+fi
 
 # ── accumulate entries into a temp JSON lines file ────────────────────────────
 TMP_ENTRIES="$(mktemp)"
