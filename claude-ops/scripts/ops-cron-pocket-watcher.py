@@ -94,6 +94,16 @@ INFER_MIN_SECS = int(os.environ.get("POCKET_INFER_MIN_SECS", "60"))
 INFER_CONFIDENCE = float(os.environ.get("POCKET_INFER_CONFIDENCE", "0.7"))
 LOG_FILE = STATE_DIR / "run.log"
 
+_USER_CONTEXT_PATH = Path(os.environ.get(
+    "POCKET_USER_CONTEXT",
+    str(HOME / ".claude/state/pocket/user-context.json"),
+))
+try:
+    _ctx = json.loads(_USER_CONTEXT_PATH.read_text())
+    _OWNER_NAME: str = _ctx.get("owner_name") or "the user"
+except (OSError, json.JSONDecodeError):
+    _OWNER_NAME = "the user"
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -379,7 +389,7 @@ def infer_tasks_from_recording(recording: dict) -> list[dict]:
         "Return STRICT JSON: an array of objects with keys: title (string, "
         "imperative form, <80 chars), context (string, 1-2 sentences of why), "
         "priority (low|medium|high), confidence (0.0-1.0 — your honest "
-        "certainty that this was implied as a task Sam would want done). "
+        f"certainty that this was implied as a task {_OWNER_NAME} would want done). "
         "Return [] if nothing actionable was implied. NO prose, NO markdown."
     )
 
@@ -846,7 +856,7 @@ def main() -> int:
                     # Inferred tasks go to pending-triage.jsonl, NOT directly to
                     # the live tasks.jsonl. The Opus triage agent must classify
                     # them (ACT / DRAFT / DROP / ASK) before any can reach the
-                    # supervisor. This is the safety guardrail Sam mandated:
+                    # supervisor. This is the mandated safety guardrail:
                     # no autonomous work without a verdict.
                     PENDING_TRIAGE.parent.mkdir(parents=True, exist_ok=True)
                     with PENDING_TRIAGE.open("a") as f:
