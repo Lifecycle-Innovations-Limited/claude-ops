@@ -25,18 +25,27 @@ if [[ -z "$PLUGIN_ROOT" || ! -d "$PLUGIN_ROOT" ]]; then
 fi
 
 DAEMON_SCRIPT="$PLUGIN_ROOT/scripts/ops-daemon.sh"
+LAUNCHER_SCRIPT="$PLUGIN_ROOT/scripts/ops-daemon-launcher.sh"
+LAUNCHER_DEST_DIR="$HOME/.claude/plugins/data/ops-ops-marketplace/bin"
+LAUNCHER_DEST="$LAUNCHER_DEST_DIR/ops-daemon-launcher.sh"
 PLIST_TEMPLATE="$PLUGIN_ROOT/scripts/com.claude-ops.daemon.plist"
 PLIST_DEST="$HOME/Library/LaunchAgents/com.claude-ops.daemon.plist"
 DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 LOG_DIR="$DATA_DIR/logs"
 SERVICES_CONFIG="$DATA_DIR/daemon-services.json"
 
-for f in "$DAEMON_SCRIPT" "$PLIST_TEMPLATE"; do
+for f in "$DAEMON_SCRIPT" "$LAUNCHER_SCRIPT" "$PLIST_TEMPLATE"; do
   [[ -f "$f" ]] || { echo "error: required plugin file not found: $f" >&2; exit 1; }
 done
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$LAUNCHER_DEST_DIR"
 chmod +x "$DAEMON_SCRIPT"
+
+# Install the version-agnostic launcher to a stable location outside the
+# version-pinned cache dir. The plist points at THIS path forever — the
+# launcher itself resolves the latest installed ops version at run time.
+cp "$LAUNCHER_SCRIPT" "$LAUNCHER_DEST"
+chmod +x "$LAUNCHER_DEST"
 
 # Resolve bash 4+ (required for associative arrays in ops-daemon.sh).
 # macOS ships bash 3; Homebrew installs bash 5 at /opt/homebrew/bin/bash.
@@ -47,10 +56,13 @@ elif [[ -x /usr/local/bin/bash ]]; then
   BASH_PATH="/usr/local/bin/bash"
 fi
 
-# Generate plist from template.
-sed -e "s|__DAEMON_SCRIPT_PATH__|$DAEMON_SCRIPT|g" \
+# Generate plist from template. Point at the stable launcher path so plugin
+# upgrades don't strand the plist on a deleted version dir.
+# CLAUDE_PLUGIN_ROOT is intentionally NOT set in the plist — the launcher
+# computes it at run time from the latest installed version.
+sed -e "s|__DAEMON_SCRIPT_PATH__|$LAUNCHER_DEST|g" \
     -e "s|__BASH_PATH__|$BASH_PATH|g" \
-    -e "s|__PLUGIN_ROOT__|$PLUGIN_ROOT|g" \
+    -e "s|__PLUGIN_ROOT__||g" \
     -e "s|__LOG_DIR__|$LOG_DIR|g" \
     -e "s|__HOME__|$HOME|g" \
     "$PLIST_TEMPLATE" > "$PLIST_DEST"
