@@ -82,15 +82,49 @@ extract_project_hint() {
   base_project=$(echo "$proj_lower" | sed 's/-api$//' | sed 's/-backend$//' | sed 's/-frontend$//' | sed 's/-web$//' | sed 's/-app$//')
 
   # look for product name embedded in the key itself
-  # e.g. META_HEALIFY_ACCESS_TOKEN → healify
-  local known_products=("healify" "alwaysbright" "stagery" "inboxassist" "fiberinternet" "shannon" "talktoyourhouse" "claude-ops" "claudeops")
-  for prod in "${known_products[@]}"; do
+  # e.g. META_HEALIFY_ACCESS_TOKEN → healify, STRIPE_FIBERWIFI_SECRET_KEY → fiberwifi
+  # First try projects already defined in prefs (highest signal — these are
+  # the projects /ops:marketing knows about). Then fall back to a static
+  # known list for projects that exist in Doppler but aren't yet in prefs.
+  local prefs_path="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+  local prefs_projects=()
+  if [ -f "$prefs_path" ]; then
+    while IFS= read -r p; do
+      [ -n "$p" ] && prefs_projects+=("$p")
+    done < <(jq -r '.marketing.projects | keys[]?' "$prefs_path" 2>/dev/null)
+  fi
+
+  local known_products=(
+    "${prefs_projects[@]}"
+    "healify" "alwaysbright" "stagery" "inboxassist" "fiberinternet" "fiberwifi"
+    "shannon" "talktoyourhouse" "claude-ops" "claudeops" "flowrider" "hueman"
+    "upres" "whoopgo" "aurora" "bondmcp" "payfwd" "messo" "manus"
+    "samrenders" "homey" "carrier" "anna" "mango" "hypest" "maitre"
+  )
+  # Dedupe + sort by length descending so longer matches win (e.g. "fiberwifi" before "fiber")
+  local sorted_products
+  sorted_products=$(printf '%s\n' "${known_products[@]}" | awk 'NF' | sort -u | awk '{ print length, $0 }' | sort -rn | cut -d" " -f2-)
+
+  while IFS= read -r prod; do
+    [ -z "$prod" ] && continue
     local prod_stripped="${prod//-/}"
-    if echo "$key_lower" | grep -qi "$prod_stripped"; then
-      echo "$prod_stripped"
+    # Match against underscore-bounded variants first (e.g. _HEALIFY_, _FIBERWIFI_).
+    # This matches keys like STRIPE_HEALIFY_API_SECRET_KEY → healify.
+    if echo "$key_lower" | grep -qE "(^|_)${prod_stripped}(_|$)"; then
+      echo "$prod"
       return
     fi
-  done
+  done <<< "$sorted_products"
+
+  # Looser fallback pass — substring match anywhere in the key.
+  while IFS= read -r prod; do
+    [ -z "$prod" ] && continue
+    local prod_stripped="${prod//-/}"
+    if echo "$key_lower" | grep -qi "$prod_stripped"; then
+      echo "$prod"
+      return
+    fi
+  done <<< "$sorted_products"
 
   # fall back to base doppler project name
   echo "$base_project"
