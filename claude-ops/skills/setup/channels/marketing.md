@@ -1,5 +1,7 @@
 ### 3j — Marketing (Klaviyo, Meta Ads, GA4, Search Console)
 
+> **Project slugs are the entry gate.** Every sub-step below writes under `marketing.projects.<slug>` in `$PREFS_PATH`. Those slugs (plus an optional flat `marketing.account_slugs[]` array) are the canonical source consumed by `ops-marketing-auth-prewarm.sh` for product-hint extraction. The prewarm script no longer ships a hardcoded slug list — if no projects/slugs exist in prefs it prints `no marketing accounts configured — run /ops:setup marketing` and exits 0. Make sure the user has at least one project slug picked before continuing.
+
 **Before showing the service selector**, run the Universal Credential Auto-Scan for all marketing vars simultaneously:
 
 ```bash
