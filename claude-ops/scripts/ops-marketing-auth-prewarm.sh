@@ -10,6 +10,7 @@ set -euo pipefail
 #   OPS_PREWARM_DRY_RUN - if set to 1, print output to stderr only (no file write)
 
 DATA_DIR="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PREFS_PATH="${PREFS_PATH:-${CLAUDE_PLUGIN_DATA_DIR:-$DATA_DIR}/preferences.json}"
 OUTPUT_FILE="$DATA_DIR/marketing-auth-prewarm.json"
 GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -86,17 +87,16 @@ extract_project_hint() {
   # Source of truth: user's configured projects in $PREFS_PATH under
   # .marketing.projects (and optionally .marketing.account_slugs[]).
   # No hardcoded project names — those are user PII and must live in config.
-  local prefs_path="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
   local known_products=()
-  if [ -f "$prefs_path" ]; then
+  if [ -f "$PREFS_PATH" ]; then
     while IFS= read -r p; do
       [ -n "$p" ] && known_products+=("$p")
     done < <(jq -r '
       [
-        (.marketing.projects | keys[]?),
+        (.marketing.projects // {} | keys[]?),
         (.marketing.account_slugs[]?)
       ] | unique | .[]
-    ' "$prefs_path" 2>/dev/null)
+    ' "$PREFS_PATH" 2>/dev/null)
   fi
 
   # No configured projects → no hint extraction possible; fall back to the
@@ -135,14 +135,13 @@ extract_project_hint() {
 # ── precondition: at least one marketing project must be configured ──────────
 # Load slugs from the partner registry (preferences.json). If empty, exit 0
 # as a graceful no-op so this script can be safely chained in setup flows.
-PREFS_PATH="$DATA_DIR/preferences.json"
 CONFIGURED_SLUGS=()
 if [ -f "$PREFS_PATH" ]; then
   while IFS= read -r p; do
     [ -n "$p" ] && CONFIGURED_SLUGS+=("$p")
   done < <(jq -r '
     [
-      (.marketing.projects | keys[]?),
+      (.marketing.projects // {} | keys[]?),
       (.marketing.account_slugs[]?)
     ] | unique | .[]
   ' "$PREFS_PATH" 2>/dev/null)
