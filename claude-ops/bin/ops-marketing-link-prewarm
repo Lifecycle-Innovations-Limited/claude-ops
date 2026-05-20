@@ -138,23 +138,55 @@ link_category() {
 
   [[ -z "$entries" ]] && return 0
 
-  # Build mapping of key_name → doppler_ref
-  declare -A key_to_ref
+  # Build a list of available Doppler refs for this category.
+  # Each entry has the FULL Doppler key (e.g. STRIPE_HEALIFY_API_SECRET_KEY).
+  # We match these against the category's expected field names heuristically
+  # in the second loop below — most categories have only one field, and many
+  # Doppler keys map unambiguously (only-one-stripe-key wins for stripe.secret_key).
+  local available_refs=()
+  local available_keys=()
   while IFS= read -r entry; do
     [[ -z "$entry" ]] && continue
-    local entry_key entry_proj entry_config entry_doppler_key
-    entry_key="$(echo "$entry" | jq -r '.key // ""' 2>/dev/null)"
-    entry_proj="$(echo "$entry" | jq -r '.project // ""' 2>/dev/null)"
+    local entry_doppler_proj entry_config entry_doppler_key
+    entry_doppler_proj="$(echo "$entry" | jq -r '.doppler_project // .project // ""' 2>/dev/null)"
     entry_config="$(echo "$entry" | jq -r '.config // ""' 2>/dev/null)"
     entry_doppler_key="$(echo "$entry" | jq -r '.key // ""' 2>/dev/null)"
-    [[ -z "$entry_key" ]] && continue
-    key_to_ref["$entry_key"]="doppler:${entry_proj}/${entry_config}/${entry_doppler_key}"
+    [[ -z "$entry_doppler_key" || -z "$entry_doppler_proj" ]] && continue
+    available_refs+=("doppler:${entry_doppler_proj}/${entry_config}/${entry_doppler_key}")
+    available_keys+=("$entry_doppler_key")
   done <<< "$entries"
+
+  # Heuristic: for each (local_field, prefs_path) mapping in the category,
+  # find the first available Doppler key whose name contains the field name
+  # (case-insensitive substring match). e.g. for local_field=secret_key,
+  # match STRIPE_HEALIFY_API_SECRET_KEY (contains "secret_key").
+  # If no fuzzy match, fall back to first available ref (works for
+  # single-field categories like email_resend, errors_sentry, etc).
+  find_ref_for_field() {
+    local field="$1"
+    local field_lower="${field,,}"
+    local i
+    # First pass: exact substring match
+    for i in "${!available_keys[@]}"; do
+      local k_lower="${available_keys[$i],,}"
+      if [[ "$k_lower" == *"$field_lower"* ]]; then
+        echo "${available_refs[$i]}"
+        return 0
+      fi
+    done
+    # Second pass (for single-field categories): just take the first
+    if [[ ${#available_refs[@]} -ge 1 ]]; then
+      echo "${available_refs[0]}"
+      return 0
+    fi
+    return 1
+  }
 
   # Apply mappings
   while IFS=: read -r key_name rel_path; do
     [[ -z "$key_name" || -z "$rel_path" ]] && continue
-    local doppler_ref="${key_to_ref[$key_name]:-}"
+    local doppler_ref
+    doppler_ref="$(find_ref_for_field "$key_name")" || continue
     [[ -z "$doppler_ref" ]] && continue
 
     # Build full jq path
