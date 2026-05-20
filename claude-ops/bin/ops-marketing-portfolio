@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+# ops-marketing-portfolio — visual portfolio dashboard for ALL marketing projects.
+#
+# Reads marketing.projects.* from preferences.json and surfaces every configured
+# channel per project — including ones the single-project dash never showed:
+#   - Resend (transactional/marketing email)
+#   - AWS SNS (push/SMS)
+#   - ShipBob (fulfillment)
+#   - Meta Page / Business Manager
+#   - GA4 Measurement Protocol
+#   - Autopilot status (enabled / cap / kill_switch / autonomy_level)
+#
+# Pure config-state read. No external API calls — fast across 9+ projects.
+# Pair with `ops-marketing-dash --project <name>` for live KPI data.
+#
+# Usage:
+#   ops-marketing-portfolio              # rendered table (auto mobile-aware)
+#   ops-marketing-portfolio --json       # raw JSON, one row per project
+#   ops-marketing-portfolio --project X  # single-project deep config view
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-path.sh"
+PREFS="${OPS_DATA_DIR}/preferences.json"
+
+JSON_OUT=0
+FILTER_PROJECT=""
+for ((i=1; i<=$#; i++)); do
+  case "${!i}" in
+    --json) JSON_OUT=1 ;;
+    --project)
+      j=$((i+1)); FILTER_PROJECT="${!j:-}"
+      i=$((i+1))
+      ;;
+  esac
+done
+
+if [ ! -f "$PREFS" ]; then
+  echo "preferences.json not found at $PREFS" >&2
+  exit 1
+fi
+
+# Mobile-mode detection (Rule 7)
+MOBILE=0
+if [ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ] || [ "${OPS_MOBILE:-}" = "1" ]; then
+  MOBILE=1
+fi
+COLS="${COLUMNS:-$(tput cols 2>/dev/null || echo 120)}"
+[ "$COLS" -lt 80 ] && MOBILE=1
+
+# Build the JSON portfolio.
+build_portfolio() {
+  local project_list
+  if [ -n "$FILTER_PROJECT" ]; then
+    project_list="$FILTER_PROJECT"
+  else
+    project_list=$(jq -r '.marketing.projects | keys[]' "$PREFS" 2>/dev/null)
+  fi
+
+  local rows="[]"
+  while IFS= read -r project; do
+    [ -z "$project" ] && continue
+    local row
+    row=$(jq -r --arg p "$project" '
+      .marketing.projects[$p] as $pc |
+      {
+        project: $p,
+        domain: ($pc.domain // null),
+        autopilot: {
+          enabled:       ($pc.autopilot.enabled // false),
+          autonomy:      ($pc.autopilot.autonomy_level // null),
+          cap_usd:       ($pc.autopilot.daily_spend_cap_usd // 0),
+          kill_switch:   ($pc.autopilot.envelope.kill_switch // false),
+          max_daily_usd: ($pc.autopilot.envelope.max_daily_budget_usd // null)
+        },
+        meta: (
+          if $pc.meta then {
+            configured: (($pc.meta.access_token // "") != ""),
+            ad_account_id: ($pc.meta.ad_account_id // null),
+            page_id:       ($pc.meta.page_id // null),
+            page_name:     ($pc.meta.page_name // null),
+            business_id:   ($pc.meta.business_id // null),
+            app_id:        ($pc.meta.app_id // null)
+          } else null end
+        ),
+        instagram: ($pc.instagram // null),
+        ga4: (
+          if $pc.ga4 then {
+            property_id:     ($pc.ga4.property_id // null),
+            measurement_id:  ($pc.ga4.measurement_id // null),
+            api_secret_set:  (($pc.ga4.api_secret // "") != ""),
+            status:          ($pc.ga4.status // null)
+          } else null end
+        ),
+        gsc: (
+          if $pc.gsc then {
+            site_url: ($pc.gsc.site_url // null),
+            verified: ($pc.gsc.verified // false)
+          } else null end
+        ),
+        google_ads: (
+          if $pc.google_ads then {
+            configured:  (($pc.google_ads.refresh_token // "") != ""),
+            customer_id: ($pc.google_ads.customer_id // null)
+          } else null end
+        ),
+        email_marketing: {
+          resend: (
+            if $pc.email_marketing.resend then {
+              enabled:      ($pc.email_marketing.resend.enabled // false),
+              from_address: ($pc.email_marketing.resend.from_address // null),
+              api_key_set:  (($pc.email_marketing.resend.api_key // "") != "")
+            } else null end
+          ),
+          sns: (
+            if $pc.email_marketing.sns then {
+              enabled:   ($pc.email_marketing.sns.enabled // false),
+              topic_arn: ($pc.email_marketing.sns.topic_arn // null),
+              region:    ($pc.email_marketing.sns.region // null)
+            } else null end
+          ),
+          klaviyo: (
+            if $pc.klaviyo then {
+              configured: (($pc.klaviyo.private_key // "") != "")
+            } else null end
+          )
+        },
+        shipbob: (
+          if $pc.shipbob then {
+            configured: (($pc.shipbob.access_token // "") != "")
+          } else null end
+        )
+      }
+    ' "$PREFS")
+    rows=$(jq --argjson r "$row" '. + [$r]' <<< "$rows")
+  done <<< "$project_list"
+
+  echo "$rows"
+}
+
+PORTFOLIO=$(build_portfolio)
+
+if [ "$JSON_OUT" = "1" ]; then
+  echo "$PORTFOLIO" | jq .
+  exit 0
+fi
+
+# Render — mobile-aware
+PROJECT_COUNT=$(echo "$PORTFOLIO" | jq 'length')
+AUTOPILOT_ON=$(echo "$PORTFOLIO" | jq '[.[] | select(.autopilot.enabled == true)] | length')
+KILLED=$(echo "$PORTFOLIO" | jq '[.[] | select(.autopilot.kill_switch == true)] | length')
+RESEND_ON=$(echo "$PORTFOLIO" | jq '[.[] | select(.email_marketing.resend.enabled == true)] | length')
+SNS_ON=$(echo "$PORTFOLIO" | jq '[.[] | select(.email_marketing.sns.enabled == true)] | length')
+META_OK=$(echo "$PORTFOLIO" | jq '[.[] | select(.meta.configured == true)] | length')
+GADS_OK=$(echo "$PORTFOLIO" | jq '[.[] | select(.google_ads.configured == true)] | length')
+GA4_OK=$(echo "$PORTFOLIO" | jq '[.[] | select(.ga4.property_id != null and .ga4.property_id != "")] | length')
+
+if [ "$MOBILE" = "1" ]; then
+  echo "marketing portfolio — ${PROJECT_COUNT} projects"
+  echo "autopilot: ${AUTOPILOT_ON} on, ${KILLED} killswitched"
+  echo "channels: meta ${META_OK}, gads ${GADS_OK}, ga4 ${GA4_OK}, resend ${RESEND_ON}, sns ${SNS_ON}"
+  echo ""
+  echo "$PORTFOLIO" | jq -r '.[] |
+    "\(.project): " +
+    (if .autopilot.kill_switch then "KILLED" elif .autopilot.enabled then "live(cap $\(.autopilot.cap_usd))" else "off" end) +
+    " | " +
+    ([
+      (if .meta.configured then "meta" else null end),
+      (if .google_ads.configured then "gads" else null end),
+      (if .ga4.property_id then "ga4" else null end),
+      (if .gsc.site_url then "gsc" else null end),
+      (if .email_marketing.resend.enabled then "resend" else null end),
+      (if .email_marketing.sns.enabled then "sns" else null end),
+      (if .instagram.account_id then "ig" else null end),
+      (if .shipbob.configured then "shipbob" else null end)
+    ] | map(select(. != null)) | join(","))'
+  exit 0
+fi
+
+# Desktop render
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  MARKETING PORTFOLIO — $(date +%Y-%m-%d)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Projects: ${PROJECT_COUNT}   Autopilot live: ${AUTOPILOT_ON}   Kill-switched: ${KILLED}"
+echo "  Channels configured — Meta: ${META_OK}/${PROJECT_COUNT}   Google Ads: ${GADS_OK}/${PROJECT_COUNT}   GA4: ${GA4_OK}/${PROJECT_COUNT}   Resend: ${RESEND_ON}/${PROJECT_COUNT}   SNS: ${SNS_ON}/${PROJECT_COUNT}"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf "  %-13s  %-10s  %-7s  %-5s  %-4s  %-4s  %-3s  %-3s  %-6s  %-3s  %-3s  %-7s\n" \
+  "Project" "Autopilot" "Cap/day" "Auton" "Meta" "GAds" "GA4" "GSC" "Resend" "SNS" "IG" "ShipBob"
+printf "  %-13s  %-10s  %-7s  %-5s  %-4s  %-4s  %-3s  %-3s  %-6s  %-3s  %-3s  %-7s\n" \
+  "-------------" "----------" "-------" "-----" "----" "----" "---" "---" "------" "---" "---" "-------"
+
+echo "$PORTFOLIO" | jq -c '.[]' | while IFS= read -r row; do
+  P=$(echo "$row"      | jq -r '.project')
+  AP_EN=$(echo "$row"  | jq -r '.autopilot.enabled')
+  AP_KS=$(echo "$row"  | jq -r '.autopilot.kill_switch')
+  AP_CAP=$(echo "$row" | jq -r '.autopilot.cap_usd')
+  AP_AUT=$(echo "$row" | jq -r '.autopilot.autonomy // "—"')
+  META_OK=$(echo "$row"| jq -r 'if .meta.configured then "y" else "·" end')
+  GADS_OK=$(echo "$row"| jq -r 'if .google_ads.configured then "y" else "·" end')
+  GA4_OK=$(echo "$row" | jq -r 'if .ga4.property_id != null then "y" else "·" end')
+  GSC_OK=$(echo "$row" | jq -r 'if .gsc.site_url != null then (if .gsc.verified then "y" else "?" end) else "·" end')
+  RES_OK=$(echo "$row" | jq -r 'if .email_marketing.resend.enabled then "ON" else (if .email_marketing.resend.api_key_set then "off" else "·" end) end')
+  SNS_OK=$(echo "$row" | jq -r 'if .email_marketing.sns.enabled then "ON" else (if .email_marketing.sns.topic_arn then "rdy" else "·" end) end')
+  IG_OK=$(echo "$row"  | jq -r 'if .instagram.account_id then "y" else "·" end')
+  SHB_OK=$(echo "$row" | jq -r 'if .shipbob.configured then "y" else "·" end')
+
+  if [ "$AP_KS" = "true" ]; then
+    AP_STATE="KILLED"
+  elif [ "$AP_EN" = "true" ]; then
+    AP_STATE="live"
+  else
+    AP_STATE="off"
+  fi
+  CAP_STR="\$${AP_CAP}"
+  printf "  %-13s  %-10s  %-7s  %-5s  %-4s  %-4s  %-3s  %-3s  %-6s  %-3s  %-3s  %-7s\n" \
+    "${P:0:13}" "$AP_STATE" "$CAP_STR" "${AP_AUT:0:5}" "$META_OK" "$GADS_OK" "$GA4_OK" "$GSC_OK" "$RES_OK" "$SNS_OK" "$IG_OK" "$SHB_OK"
+done
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Legend: y=configured · · =absent  GSC: y=verified, ?=unverified  Resend/SNS: ON=enabled, off/rdy=configured but disabled"
+echo "  Drill in:  ops-marketing-portfolio --project <name>           (full config dump for one project)"
+echo "             ops-marketing-dash --project <name>                (live KPI pull — Meta/GA4/GSC/IG)"
+echo "             ops-marketing-autopilot --health-check              (per-project credential health probe)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# If single-project filter was applied, also dump the full row JSON for deep inspection
+if [ -n "$FILTER_PROJECT" ]; then
+  echo ""
+  echo "  Full config for ${FILTER_PROJECT}:"
+  echo "$PORTFOLIO" | jq '.[0]'
+fi
