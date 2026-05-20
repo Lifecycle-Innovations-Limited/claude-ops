@@ -85,6 +85,12 @@
       "cron": "0 9 * * 1",
       "_note": "Weekly Autopilot Studio self-learning calibration (Monday 09:00 UTC ~= 11:00 Europe/Amsterdam, after the 08:00 daily pass). Joins each project's autopilot_state/<project>/creatives.jsonl pre-scores to realized KPIs (kpi.jsonl) and fits a monotone score->predicted_CPL calibrator.json consumed by the next daily pass. python3 stdlib only, no metered calls. Disabled by default; enabled alongside the autopilot block via /ops:setup marketing."
     },
+    "marketing-auth-prewarm": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-marketing-auth-prewarm.sh",
+      "cron": "23 4 * * *",
+      "_note": "Nightly at 04:23 UTC. Scans all Doppler projects + env + keychain for marketing creds and writes a cache at $OPS_DATA_DIR/marketing-auth-prewarm.json. /ops:marketing setup reads this to instantly auto-link new projects without per-credential prompts."
+    },
     "marketing-health-check": {
       "enabled": false,
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-marketing-health-check.sh",
