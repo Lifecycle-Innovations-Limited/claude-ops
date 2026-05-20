@@ -629,7 +629,8 @@ def write_memory(recording: dict, giga: "GigaClient | None" = None) -> Path | No
     the configured Giga mind with a back-reference to the local file.
     """
     rid = recording.get("id") or recording.get("recordingId") or ""
-    title = recording.get("title") or recording.get("summary", {}).get("title") or ""
+    summary = recording.get("summary") or {}
+    title = recording.get("title") or (summary.get("title") if isinstance(summary, dict) else "") or ""
     if not title:
         # Derive from first transcript line
         segs = recording.get("transcriptSegments") or []
@@ -637,7 +638,6 @@ def write_memory(recording: dict, giga: "GigaClient | None" = None) -> Path | No
     title = title.strip() or "voice memo"
 
     # Build body from summary + first chunk of transcript
-    summary = recording.get("summary") or {}
     if isinstance(summary, dict):
         summary_text = summary.get("text") or summary.get("body") or summary.get("summary") or ""
     else:
