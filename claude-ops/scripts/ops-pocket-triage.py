@@ -126,6 +126,52 @@ def write_health(status: str, msg: str = "", extra: dict | None = None) -> None:
         log(f"health write failed: {e}")
 
 
+_auth_logged = False
+
+
+def resolve_auth() -> tuple[str | None, dict]:
+    """Return (auth_header_value, extra_headers). Prefers Claude Code OAuth.
+
+    Logs auth mode on first call so we know whether we're on subscription
+    OAuth (no metered billing, separate rate-limit pool) or API key.
+    """
+    global _auth_logged
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            d = json.loads(out.stdout.strip())
+            o = d.get("claudeAiOauth") or {}
+            tok = o.get("accessToken") or ""
+            exp = o.get("expiresAt") or 0
+            if tok and exp > int(time.time() * 1000) + 60000:
+                if not _auth_logged:
+                    log(f"auth: Claude Code OAuth (sub pool); expires in {(exp - int(time.time()*1000))//60000} min")
+                    _auth_logged = True
+                return (f"Bearer {tok}", {"anthropic-beta": "oauth-2025-04-20"})
+    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        pass
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        try:
+            r = subprocess.run(
+                ["security", "find-generic-password", "-s", "ANTHROPIC_API_KEY", "-a", "ops-daemon", "-w"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                key = r.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+    if key:
+        if not _auth_logged:
+            log("auth: ANTHROPIC_API_KEY (metered billing — tight burst limits)")
+            _auth_logged = True
+        return (None, {"_apikey": key})
+    return (None, {})
+
+
 _SYSTEM_PROMPT_TEMPLATE = """You are the safety triage agent for {owner_name}'s personal automation pipeline. {owner_name} records voice memos via Pocket AI. A Haiku layer extracts implicit tasks from each transcript. Your job is to decide, for ONE candidate task at a time, whether a Claude Code subagent can safely execute it autonomously on their machine.
 
 Use extended thinking. Reason step-by-step about:
@@ -325,9 +371,8 @@ def main() -> int:
         write_health("ok", "no pending items", extra={"counts": {}})
         return 0
 
-    pending_snapshot = PENDING.read_text()
     tasks = []
-    for raw in pending_snapshot.splitlines():
+    for raw in PENDING.read_text().splitlines():
         raw = raw.strip()
         if not raw:
             continue
@@ -340,27 +385,13 @@ def main() -> int:
     counts = {"ACT": 0, "DRAFT": 0, "DROP": 0, "ASK": 0}
     inter_call_pause = float(os.environ.get("POCKET_TRIAGE_PACE_SEC", "8"))
     for i, task in enumerate(tasks, 1):
+        if i > 1 and inter_call_pause > 0:
+            time.sleep(inter_call_pause)  # avoid bursting Claude Max quota
         title = (task.get("title") or "")[:70]
-        task_id = task.get("id", "")
-        prior = _id_already_routed(task_id)
-        if prior:
-            verdict = f"SKIP_{prior}"
-            log(f"SKIP {task_id} — already in {prior}")
-            decision = {
-                "verdict": "ASK",
-                "confidence": 0.0,
-                "reasoning": f"skipped Opus triage — already present in {prior}",
-                "scoped_task_description": "",
-                "concerns": [],
-            }
-        else:
-            if i > 1 and inter_call_pause > 0:
-                time.sleep(inter_call_pause)  # avoid bursting Claude Max quota
-            log(f"[{i}/{len(tasks)}] triaging: {title}")
-            decision = triage_one(task)
-            verdict = route(task, decision)
-        if not verdict.startswith("SKIP_"):
-            counts[verdict] = counts.get(verdict, 0) + 1
+        log(f"[{i}/{len(tasks)}] triaging: {title}")
+        decision = triage_one(task)
+        verdict = route(task, decision)
+        counts[verdict] = counts.get(verdict, 0) + 1
         log(f"[{i}/{len(tasks)}] verdict={verdict} conf={decision.get('confidence')} — {decision.get('reasoning','')[:120]}")
         # Audit log every decision with full thinking
         append_jsonl(AUDIT, {
@@ -370,16 +401,9 @@ def main() -> int:
             "routed_to": verdict,
         })
 
-    # Drop only the snapshot we consumed; preserve any lines appended during triage.
+    # Truncate pending if not dry run (consumed)
     if not DRY_RUN:
-        try:
-            current = PENDING.read_text()
-            if current.startswith(pending_snapshot):
-                PENDING.write_text(current[len(pending_snapshot):])
-            else:
-                log("pending-triage prefix changed during triage — not rewriting file")
-        except OSError as e:
-            log(f"pending rewrite failed: {e}")
+        PENDING.write_text("")
     log(f"done counts={counts}")
     write_health("ok", f"triaged={sum(counts.values())}", extra={"counts": counts})
     return 0
