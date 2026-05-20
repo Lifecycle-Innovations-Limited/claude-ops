@@ -15,7 +15,7 @@ fi
 LATEST_VERSION="$(
   find "$CACHE_ROOT" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null \
     | awk -F/ '{print $NF}' \
-    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+    | awk '/^[0-9]+\.[0-9]+\.[0-9]+$/ { print }' \
     | sort -V \
     | tac \
     | while read -r v; do
