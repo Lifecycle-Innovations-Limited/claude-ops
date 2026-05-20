@@ -1,0 +1,15 @@
+[Unit]
+Description=Pocket Email Bridge — outbound send + inbound reply parsing via Gmail
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__HOME__
+Environment=HOME=__HOME__
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
+Environment=GOG_BIN=/usr/local/bin/gog
+ExecStart=__HOME__/.venv-pocket/bin/python3 __HOME__/claude-ops/claude-ops/scripts/ops-pocket-email-bridge.py
+StandardOutput=append:__HOME__/.claude/state/pocket/email-bridge.log
+StandardError=append:__HOME__/.claude/state/pocket/email-bridge-stderr.log

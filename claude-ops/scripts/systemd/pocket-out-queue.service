@@ -1,0 +1,15 @@
+[Unit]
+Description=Pocket Out-Queue — drains supervisor-out-queue.jsonl to WhatsApp bridge
+After=network-online.target whatsapp-baileys.service
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__HOME__
+Environment=HOME=__HOME__
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
+Environment=WHATSAPP_BRIDGE_URL=http://localhost:8080/api/send
+ExecStart=__HOME__/.venv-pocket/bin/python3 __HOME__/claude-ops/claude-ops/scripts/ops-pocket-out-queue.py
+StandardOutput=append:__HOME__/.claude/state/pocket/out-queue.log
+StandardError=append:__HOME__/.claude/state/pocket/out-queue-stderr.log
