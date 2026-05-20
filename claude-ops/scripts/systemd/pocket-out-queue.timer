@@ -1,0 +1,11 @@
+[Unit]
+Description=Run pocket-out-queue drain every minute
+Requires=pocket-out-queue.service
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
