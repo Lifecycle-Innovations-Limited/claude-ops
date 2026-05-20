@@ -45,10 +45,16 @@ run_migrations() {
   if [[ "$(uname -s)" == "Darwin" ]]; then
     local plist_dst="$HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
     local legacy_wa_plist="$HOME/Library/LaunchAgents/com.claude-ops.whatsapp-bridge.plist"
+    local legacy_samrenders_plist="$HOME/Library/LaunchAgents/com.samrenders.whatsapp-bridge.plist"
     if [[ -f "$legacy_wa_plist" && "$legacy_wa_plist" != "$plist_dst" ]]; then
       launchctl unload "$legacy_wa_plist" 2>/dev/null || true
       rm -f "$legacy_wa_plist" 2>/dev/null || true
       log "  ok: removed legacy com.claude-ops whatsapp-bridge LaunchAgent"
+    fi
+    if [[ -f "$legacy_samrenders_plist" && "$legacy_samrenders_plist" != "$plist_dst" ]]; then
+      launchctl unload "$legacy_samrenders_plist" 2>/dev/null || true
+      rm -f "$legacy_samrenders_plist" 2>/dev/null || true
+      log "  ok: removed legacy com.samrenders whatsapp-bridge LaunchAgent"
     fi
     local plist_src="$PLUGIN_ROOT/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
     if [[ -f "$plist_src" ]] && [[ ! -f "$plist_dst" || "$plist_src" -nt "$plist_dst" ]]; then
