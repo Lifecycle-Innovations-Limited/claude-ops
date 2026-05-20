@@ -371,8 +371,9 @@ def main() -> int:
         write_health("ok", "no pending items", extra={"counts": {}})
         return 0
 
+    pending_snapshot = PENDING.read_text()
     tasks = []
-    for raw in PENDING.read_text().splitlines():
+    for raw in pending_snapshot.splitlines():
         raw = raw.strip()
         if not raw:
             continue
@@ -401,9 +402,16 @@ def main() -> int:
             "routed_to": verdict,
         })
 
-    # Truncate pending if not dry run (consumed)
+    # Drop only the snapshot we consumed; preserve any lines appended during triage.
     if not DRY_RUN:
-        PENDING.write_text("")
+        try:
+            current = PENDING.read_text()
+            if current.startswith(pending_snapshot):
+                PENDING.write_text(current[len(pending_snapshot):])
+            else:
+                log("pending-triage prefix changed during triage — not rewriting file")
+        except OSError as e:
+            log(f"pending rewrite failed: {e}")
     log(f"done counts={counts}")
     write_health("ok", f"triaged={sum(counts.values())}", extra={"counts": counts})
     return 0
