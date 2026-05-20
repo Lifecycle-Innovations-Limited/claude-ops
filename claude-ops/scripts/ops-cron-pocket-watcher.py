@@ -11,6 +11,8 @@ Outputs (idempotent, dedup'd by state file):
 State:
   • cursor    -> ${POCKET_STATE_DIR}/cursor.txt
   • seen ids  -> ${POCKET_STATE_DIR}/seen.json
+  • recordings pagination resume (when the 10-page cap is hit)
+              -> ${POCKET_STATE_DIR}/recordings-pagination-resume.json
   • health    -> ${POCKET_STATE_DIR}/.health
   • log       -> ${POCKET_STATE_DIR}/run.log
 
@@ -88,6 +90,7 @@ DRY_RUN = os.environ.get("POCKET_DRY_RUN") == "1"
 CURSOR_FILE = STATE_DIR / "cursor.txt"
 SEEN_FILE = STATE_DIR / "seen.json"
 SEEN_CAP = 5000
+RECORDINGS_PAGINATION_RESUME_FILE = STATE_DIR / "recordings-pagination-resume.json"
 HEALTH_FILE = STATE_DIR / ".health"
 
 # Giga sync
@@ -636,6 +639,43 @@ def save_seen(seen: OrderedDict[str, None]) -> None:
     SEEN_FILE.write_text(json.dumps(list(seen.keys())))
 
 
+def load_recordings_pagination_resume(recording_date_after: str) -> str | None:
+    if not RECORDINGS_PAGINATION_RESUME_FILE.exists():
+        return None
+    try:
+        data = json.loads(RECORDINGS_PAGINATION_RESUME_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    if data.get("recordingDateAfter") != recording_date_after:
+        return None
+    nb = data.get("nextRecordingDateBeforeExclusive")
+    if not isinstance(nb, str) or not nb:
+        return None
+    return nb
+
+
+def save_recordings_pagination_resume(
+    recording_date_after: str, next_recording_date_before_exclusive: str,
+) -> None:
+    if DRY_RUN:
+        log("(dry-run) would save recordings-pagination-resume.json")
+        return
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    RECORDINGS_PAGINATION_RESUME_FILE.write_text(json.dumps({
+        "recordingDateAfter": recording_date_after,
+        "nextRecordingDateBeforeExclusive": next_recording_date_before_exclusive,
+    }))
+
+
+def clear_recordings_pagination_resume() -> None:
+    if DRY_RUN:
+        return
+    try:
+        RECORDINGS_PAGINATION_RESUME_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 # ── Output sinks ─────────────────────────────────────────────────────────────
 def slugify(text: str, maxlen: int = 60) -> str:
     s = re.sub(r"[^a-zA-Z0-9]+", "_", (text or "").lower()).strip("_")
@@ -839,7 +879,10 @@ def main() -> int:
     # 1) Pull recordings since cursor
     new_memories = 0
     new_recordings: list[str] = []
-    next_before: str | None = None
+    recordings_page_cap_hit = False
+    next_before: str | None = load_recordings_pagination_resume(cursor)
+    if next_before:
+        log("resuming pocket recordings pagination (nextRecordingDateBeforeExclusive set)")
     page = 0
     infer_calls = 0  # Haiku calls made this run; capped by MAX_INFER_PER_RUN
     cap_hit = False  # set when MAX_INFER_PER_RUN reached — breaks page loop too
@@ -856,6 +899,7 @@ def main() -> int:
         recordings = data.get("results") or data.get("recordings") or data.get("conversations") or []
         meta = data.get("meta") or {}
         if not recordings:
+            clear_recordings_pagination_resume()
             break
         for rec in recordings:
             rid = rec.get("id") or rec.get("recordingId") or ""
@@ -939,9 +983,12 @@ def main() -> int:
         if meta.get("hasMore") and meta.get("nextRecordingDateBeforeExclusive"):
             next_before = meta["nextRecordingDateBeforeExclusive"]
             if page >= 10:
-                log("hit page cap (10) — will pick up rest on next run")
+                log("hit page cap (10) — leaving cursor unchanged; saved pagination resume for next run")
+                save_recordings_pagination_resume(cursor, next_before)
+                recordings_page_cap_hit = True
                 break
         else:
+            clear_recordings_pagination_resume()
             break
 
     # 2) Pull action items since cursor (TODO only)
@@ -976,14 +1023,11 @@ def main() -> int:
         giga_flush_ok = giga.flush()
 
     # 4) Advance cursor & persist.
-    # If the Haiku-inference cap was hit, leave the cursor at the OLD value so
-    # next run re-queries the same window and picks up the deferred recordings
-    # (they're not in `seen`, so they won't be double-processed). Advancing the
-    # cursor here would skip them permanently — that's the money-leak that the
-    # cap is meant to PREVENT (not cause).
+    # Do not advance if either the Haiku-inference cap or pagination cap was hit —
+    # both mean there are deferred recordings that need the same window next run.
     if cap_hit:
         log(f"cap hit: holding cursor at {cursor} (not advancing to {run_started})")
-    else:
+    elif not recordings_page_cap_hit:
         save_cursor(run_started)
     save_seen(seen)
 
@@ -999,7 +1043,7 @@ def main() -> int:
     write_health("ok", summary, extra={
         "new_memories": new_memories,
         "new_tasks": new_tasks,
-        "cursor": run_started if not cap_hit else cursor,
+        "cursor": run_started if not cap_hit and not recordings_page_cap_hit else cursor,
         "giga_sync": giga_status,
     })
     log(f"done {summary}")
