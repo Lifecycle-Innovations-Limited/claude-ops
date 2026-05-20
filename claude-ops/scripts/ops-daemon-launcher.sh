@@ -34,4 +34,6 @@ DAEMON="$CACHE_ROOT/$LATEST_VERSION/scripts/ops-daemon.sh"
 export CLAUDE_PLUGIN_ROOT="$CACHE_ROOT/$LATEST_VERSION"
 
 echo "[ops-daemon-launcher] resolved ops $LATEST_VERSION → $DAEMON"
-exec /opt/homebrew/bin/bash "$DAEMON" "$@"
+# Re-exec under the same bash that is running this script (plist/installer may
+# use /opt/homebrew or /usr/local on Intel Mac); avoid hardcoding Homebrew path.
+exec "${OPS_DAEMON_LAUNCHER_BASH:-$BASH}" "$DAEMON" "$@"

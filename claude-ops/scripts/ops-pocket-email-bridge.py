@@ -8,8 +8,8 @@ Mirrors ops-pocket-whatsapp-bridge.py but on Gmail. Two duties:
      Each entry includes a question-id (qid) in the subject so replies can be
      correlated back via Gmail's threading.
 
-  2. INBOUND: poll Gmail for messages in a known label/thread set, parse Sam's
-     natural-language replies against the list of currently-open supervisor
+  2. INBOUND: poll Gmail for messages in a known label/thread set, parse the
+     owner's natural-language replies against the list of currently-open supervisor
      questions using `claude -p` (Sonnet 4.6), and append matched answers to
      supervisor-replies.jsonl — same downstream format as the WhatsApp bridge.
 
@@ -53,6 +53,16 @@ REPLIES = STATE_DIR / "supervisor-replies.jsonl"
 LOG_FILE = STATE_DIR / "email-bridge.log"
 HEALTH = STATE_DIR / ".email-bridge-health"
 SENT = STATE_DIR / "email-sent.jsonl"
+
+_USER_CONTEXT_PATH = Path(os.environ.get(
+    "POCKET_USER_CONTEXT",
+    HOME / ".claude/state/pocket/user-context.json",
+))
+try:
+    _uctx = json.loads(_USER_CONTEXT_PATH.read_text())
+    _OWNER_NAME: str = _uctx.get("owner_name") or "the user"
+except (OSError, json.JSONDecodeError):
+    _OWNER_NAME = "the user"
 
 GOG_BIN = os.environ.get("GOG_BIN", "gog")
 TIMEOUT = int(os.environ.get("EMAIL_BRIDGE_TIMEOUT", "60"))
@@ -255,11 +265,11 @@ QID_SUBJECT_RE = re.compile(r"\[qid:([a-zA-Z0-9_-]{4,})\]")
 
 def fetch_recent_replies(cfg: dict) -> list[dict]:
     """Use gog gmail search to find recent messages in the configured label
-    that are NOT from self (so we only get Sam's replies, not echoes).
+    that are NOT from self (so we only get the owner's replies, not echoes).
     Returns list of {messageId, threadId, subject, body, ts, fromMe}.
     """
     label = cfg.get("label", "Pocket")
-    # Look for messages SENT BY Sam in the label, within last 24h.
+    # Look for messages sent by the account owner in the label, within last 24h.
     query = f"label:{label} from:me newer_than:1d"
     try:
         proc = subprocess.run(
@@ -308,21 +318,21 @@ def parse_reply_with_llm(body: str, opens: list[dict], parser_model: str) -> lis
         f"  context: {(q.get('context') or '')[:200]}"
         for q in opens
     )
-    prompt = f"""You are the inbound-reply parser for Sam Renders' Pocket supervisor.
+    prompt = f"""You are the inbound-reply parser for {_OWNER_NAME}'s Pocket supervisor.
 
-Sam just sent an EMAIL reply. Your job: figure out which of the currently-open supervisor questions he's replying to (it may be one, several, or none), and extract the answer in a form the worker can use.
+{_OWNER_NAME} just sent an EMAIL reply. Your job: figure out which of the currently-open supervisor questions they are replying to (it may be one, several, or none), and extract the answer in a form the worker can use.
 
 Currently-open questions:
 {open_descriptions}
 
-Sam's email body:
+Their email body:
 \"\"\"{body[:4000]}\"\"\"
 
 Rules:
-- If Sam's message is clearly not a reply to any open question, return an empty array.
-- If Sam addresses one specific question, return one item.
-- If Sam addresses multiple, return multiple items.
-- The 'answer' field should be in Sam's voice and natural — the worker reads it as a direct instruction.
+- If their message is clearly not a reply to any open question, return an empty array.
+- If they address one specific question, return one item.
+- If they address multiple, return multiple items.
+- The 'answer' field should be in their voice and natural — the worker reads it as a direct instruction.
 - 'confidence' is your honest 0.0-1.0 estimate.
 - Output STRICT JSON array, no markdown fences, no prose.
 
@@ -385,19 +395,20 @@ def drain_inbound(cfg: dict) -> tuple[int, int]:
     messages = fetch_recent_replies(cfg)
     if not messages:
         return (0, 0)
-    # Filter: only NEW messages (after last_processed_id timestamp)
-    new_messages = []
-    seen_last = bool(last_id)
-    for m in messages:
-        if seen_last:
-            new_messages.append(m)
-            continue
-        if m["id"] == last_id:
-            seen_last = False  # consumed cursor; everything after is new
-            continue
-    # If last_id wasn't found in current window, treat all as new (first run / drift)
-    if not last_id or not any(m["id"] == last_id for m in messages):
-        new_messages = messages
+    # Filter: only NEW messages (strictly after last_processed_id in this window)
+    new_messages: list[dict] = []
+    if not last_id:
+        new_messages = list(messages)
+    else:
+        past_cursor = False
+        for m in messages:
+            if past_cursor:
+                new_messages.append(m)
+            elif m["id"] == last_id:
+                past_cursor = True
+        # If last_id wasn't found in current window, treat all as new (first run / drift)
+        if not any(m["id"] == last_id for m in messages):
+            new_messages = list(messages)
 
     opens = open_questions()
     parser_model = cfg.get("parser_model", "claude-sonnet-4-6")

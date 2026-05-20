@@ -74,6 +74,15 @@ MEMORY_DIR = Path(os.environ.get("POCKET_MEMORY_DIR", HOME / ".claude/memory"))
 TASK_QUEUE = Path(os.environ.get("POCKET_TASK_QUEUE", STATE_DIR / "tasks.jsonl"))
 DRAFT_QUEUE = Path(os.environ.get("POCKET_DRAFT_QUEUE", STATE_DIR / "drafts.jsonl"))
 PENDING_TRIAGE = Path(os.environ.get("POCKET_PENDING_TRIAGE", STATE_DIR / "pending-triage.jsonl"))
+_USER_CONTEXT_PATH = Path(os.environ.get(
+    "POCKET_USER_CONTEXT",
+    HOME / ".claude/state/pocket/user-context.json",
+))
+try:
+    _pocket_uc = json.loads(_USER_CONTEXT_PATH.read_text())
+    _OWNER_NAME: str = _pocket_uc.get("owner_name") or "the user"
+except (OSError, json.JSONDecodeError):
+    _OWNER_NAME = "the user"
 INDEX_FILE = os.environ.get("POCKET_INDEX_FILE")
 LOOKBACK_HOURS = int(os.environ.get("POCKET_LOOKBACK_HOURS", "24"))
 DRY_RUN = os.environ.get("POCKET_DRY_RUN") == "1"
@@ -379,7 +388,7 @@ def infer_tasks_from_recording(recording: dict) -> list[dict]:
         "Return STRICT JSON: an array of objects with keys: title (string, "
         "imperative form, <80 chars), context (string, 1-2 sentences of why), "
         "priority (low|medium|high), confidence (0.0-1.0 — your honest "
-        "certainty that this was implied as a task Sam would want done). "
+        f"certainty that this was implied as a task {_OWNER_NAME} would want done). "
         "Return [] if nothing actionable was implied. NO prose, NO markdown."
     )
 
@@ -846,7 +855,7 @@ def main() -> int:
                     # Inferred tasks go to pending-triage.jsonl, NOT directly to
                     # the live tasks.jsonl. The Opus triage agent must classify
                     # them (ACT / DRAFT / DROP / ASK) before any can reach the
-                    # supervisor. This is the safety guardrail Sam mandated:
+                    # supervisor. This is the safety guardrail the owner mandated:
                     # no autonomous work without a verdict.
                     PENDING_TRIAGE.parent.mkdir(parents=True, exist_ok=True)
                     with PENDING_TRIAGE.open("a") as f:
