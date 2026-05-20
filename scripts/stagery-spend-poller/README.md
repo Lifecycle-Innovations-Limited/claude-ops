@@ -11,19 +11,25 @@ do not expose native spending-limit APIs.
 | Resend | ACTIVE | counts emails sent in current calendar month via `GET /emails` |
 | fal.ai | SKIPPED | no usage API (all `/billing/*` `/usage` `/users/me` endpoints 404) |
 | Inngest | SKIPPED | `/v1/usage` `/v1/account` `/v1/billing` `/v1/runs` all 404 with both SIGNING_KEY and EVENT_KEY |
-| GCP / Gemini | OUT_OF_SCOPE | already covered by GCP billing budget `771c9623-9fb2-4ac9-8170-4cf90335cc18` |
+| GCP / Gemini | OUT_OF_SCOPE | already covered by GCP billing budget `<GCP_BUDGET_UUID>` (set `GCP_BUDGET_UUID` env var) |
 
 When fal.ai or Inngest expose a billing API, extend `poll.py` and remove the
 relevant entry from `SKIPPED_PLATFORMS`.
 
 ## Alert destination
 
-SNS topic `arn:aws:sns:us-east-1:410126241301:healify-cost-alerts`.
+SNS topic `arn:aws:sns:us-east-1:<AWS_ACCOUNT_ID>:<YOUR_TOPIC_NAME>`.
 
-Subscribers (verified 2026-05-19):
-- `support@healify.ai`
-- `user@gmail.com`
-- SMS `+31614446458`
+This MUST be set via the `SNS_TOPIC_ARN` environment variable — no default is
+baked into the code. Example: `SNS_TOPIC_ARN=arn:aws:sns:us-east-1:123456789012:cost-alerts`.
+
+Subscribers (configured at SNS topic level — not committed):
+- `<YOUR_ALERT_EMAIL>` (e.g. ops@example.com)
+- `<YOUR_SMS_PHONE>` (E.164 format, e.g. +12025550000)
+- `<YOUR_SUPPORT_EMAIL>`
+
+Actual subscriber configuration belongs in AWS SNS (or a deploy-time env var),
+never in source control.
 
 ## Idempotency
 
