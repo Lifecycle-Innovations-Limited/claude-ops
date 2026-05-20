@@ -385,19 +385,19 @@ def drain_inbound(cfg: dict) -> tuple[int, int]:
     messages = fetch_recent_replies(cfg)
     if not messages:
         return (0, 0)
-    # Filter: only NEW messages after last_processed_id (skip through cursor, then take rest)
-    new_messages: list[dict] = []
-    if not last_id:
-        new_messages = list(messages)
-    else:
-        past_cursor = False
-        for m in messages:
-            if past_cursor:
-                new_messages.append(m)
-            elif m["id"] == last_id:
-                past_cursor = True
-        if not past_cursor:
-            new_messages = list(messages)
+    # Filter: only NEW messages (after last_processed_id timestamp)
+    new_messages = []
+    seen_last = bool(last_id)
+    for m in messages:
+        if seen_last:
+            new_messages.append(m)
+            continue
+        if m["id"] == last_id:
+            seen_last = False  # consumed cursor; everything after is new
+            continue
+    # If last_id wasn't found in current window, treat all as new (first run / drift)
+    if not last_id or not any(m["id"] == last_id for m in messages):
+        new_messages = messages
 
     opens = open_questions()
     parser_model = cfg.get("parser_model", "claude-sonnet-4-6")
