@@ -385,19 +385,30 @@ def drain_inbound(cfg: dict) -> tuple[int, int]:
     messages = fetch_recent_replies(cfg)
     if not messages:
         return (0, 0)
-    # Filter: only NEW messages after last_processed_id (skip through cursor, then take rest)
-    new_messages: list[dict] = []
+
+    def _internal_ts_rank(m: dict) -> int:
+        """Gmail internalDate as int for ordering (matches WhatsApp strict > cursor)."""
+        t = m.get("ts")
+        try:
+            if isinstance(t, (int, float)):
+                return int(t)
+            s = str(t)
+            if s.isdigit():
+                return int(s)
+        except (TypeError, ValueError):
+            pass
+        return 0
+
+    # Filter: only NEW messages after last_processed_id (strictly newer internalDate).
     if not last_id:
-        new_messages = list(messages)
+        new_messages = messages
     else:
-        past_cursor = False
-        for m in messages:
-            if past_cursor:
-                new_messages.append(m)
-            elif m["id"] == last_id:
-                past_cursor = True
-        if not past_cursor:
-            new_messages = list(messages)
+        cur = next((m for m in messages if m["id"] == last_id), None)
+        if cur is None:
+            new_messages = messages
+        else:
+            t0 = _internal_ts_rank(cur)
+            new_messages = [m for m in messages if _internal_ts_rank(m) > t0]
 
     opens = open_questions()
     parser_model = cfg.get("parser_model", "claude-sonnet-4-6")
