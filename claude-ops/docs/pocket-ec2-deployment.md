@@ -9,7 +9,7 @@ workloads are too persistent for a laptop.
 Web UI: `https://dev-sandbox.tail6aeed8.ts.net` (Tailscale only — never
 exposed via public DNS or Cloudflare). Auth is enforced by the
 `Tailscale-User-Login` header injected by `tailscale serve`; only
-`sam.renders@gmail.com` is admitted.
+the configured owner identity is admitted (set via `TAILSCALE_USER` env in the systemd unit).
 
 SSH: `ssh dev-ts` (ec2-user, pem at `~/.ssh/dev-sandbox-2026-05-17.pem`,
 Tailscale IP 100.109.217.31).
