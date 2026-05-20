@@ -2,13 +2,13 @@
 """ops-pocket-whatsapp-bridge — WhatsApp ↔ supervisor question/reply bridge.
 
 Inbound: polls the Baileys bridge SQLite DB for new messages in the
-designated "pocket" chat. Each new message from the account owner is passed to `claude -p`
+designated "pocket" chat. Each new message from Sam is passed to `claude -p`
 along with the list of currently-open supervisor questions. Claude figures
-out which question the owner is replying to (if any) and extracts the answer in
+out which question Sam is replying to (if any) and extracts the answer in
 natural language. The structured result is appended to supervisor-replies.jsonl
 so the supervisor relays back to the asking worker on its next wake.
 
-This means the owner can reply naturally:
+This means Sam can reply naturally:
   "just do report only, don't auto-archive"
   "skip the kitchen one, audit gmail though"
   "yeah go ahead with option 2"
@@ -48,16 +48,6 @@ BRIDGE_DB = Path(os.environ.get(
     str(HOME / ".local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db"),
 ))
 CONFIG = STATE_DIR / "whatsapp-config.json"
-
-_USER_CONTEXT_PATH = Path(os.environ.get(
-    "POCKET_USER_CONTEXT",
-    HOME / ".claude/state/pocket/user-context.json",
-))
-try:
-    _uctx = json.loads(_USER_CONTEXT_PATH.read_text())
-    _OWNER_NAME: str = _uctx.get("owner_name") or "the user"
-except (OSError, json.JSONDecodeError):
-    _OWNER_NAME = "the user"
 REPLIES = STATE_DIR / "supervisor-replies.jsonl"
 QUESTIONS = STATE_DIR / "supervisor-questions.jsonl"
 LOG_FILE = STATE_DIR / "whatsapp-bridge.log"
@@ -132,7 +122,7 @@ def open_questions() -> list[dict]:
 
 
 def parse_with_llm(body: str, opens: list[dict], parser_model: str) -> list[dict]:
-    """Use `claude -p` to interpret the owner's natural-language reply against the
+    """Use `claude -p` to interpret Sam's natural-language reply against the
     list of currently-open questions. Returns a list of {qid, answer, confidence}
     items (may be empty if Claude judged this message is not a reply at all).
     """
@@ -149,21 +139,21 @@ def parse_with_llm(body: str, opens: list[dict], parser_model: str) -> list[dict
         for q in opens
     )
 
-    prompt = f"""You are the inbound-reply parser for {_OWNER_NAME}'s Pocket supervisor.
+    prompt = f"""You are the inbound-reply parser for Sam Renders' Pocket supervisor.
 
-{_OWNER_NAME} just sent a WhatsApp message. Your job: figure out which of the currently-open supervisor questions they are replying to (it may be one, several, or none), and extract the answer in a form the worker can use.
+Sam just sent a WhatsApp message. Your job: figure out which of the currently-open supervisor questions he's replying to (it may be one, several, or none), and extract the answer in a form the worker can use.
 
 Currently-open questions:
 {open_descriptions}
 
-Their WhatsApp message:
+Sam's WhatsApp message:
 \"\"\"{body}\"\"\"
 
 Rules:
-- If their message is clearly not a reply to any open question (chit-chat, unrelated request, ambiguous noise), return an empty array.
-- If they address one specific question, return one item.
-- If they address multiple in one message ("skip both kitchen ones, do the gmail one"), return multiple items.
-- The 'answer' field should be in their voice and natural — the worker reads it as a direct instruction.
+- If Sam's message is clearly not a reply to any open question (chit-chat, unrelated request, ambiguous noise), return an empty array.
+- If Sam addresses one specific question, return one item.
+- If Sam addresses multiple in one message ("skip both kitchen ones, do the gmail one"), return multiple items.
+- The 'answer' field should be in Sam's voice and natural — the worker reads it as a direct instruction.
 - 'confidence' is your honest 0.0-1.0 estimate that you correctly identified the question + intent.
 - Output STRICT JSON, no markdown fences, no prose. Just the array.
 
@@ -251,7 +241,7 @@ def main() -> int:
         return 3
 
     # Only inbound messages from this chat after the last_processed cursor.
-    # `is_from_me=1` are the account owner's own replies (this bridge only listens to those).
+    # `is_from_me=1` are Sam's own replies (this bridge only listens to those).
     # We accept both ID-based and timestamp-based cursors.
     try:
         if last_id:
