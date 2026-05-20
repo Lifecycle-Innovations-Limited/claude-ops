@@ -602,10 +602,10 @@ else
     if echo "$LAST_RUN_RAW" | grep -qE '^[0-9]+$'; then
       LAST_RUN_EPOCH="$LAST_RUN_RAW"
     else
-      # macOS date -jf is strict: strip fractional seconds and trailing Z (UTC).
-      LAST_RUN_PARSE="${LAST_RUN_RAW%%.*}"
-      LAST_RUN_PARSE="${LAST_RUN_PARSE%Z}"
-      LAST_RUN_EPOCH=$(date -d "$LAST_RUN_RAW" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%S" "$LAST_RUN_PARSE" +%s 2>/dev/null || echo "0")
+      LAST_RUN_TRIM="${LAST_RUN_RAW%Z}"
+      LAST_RUN_TRIM="${LAST_RUN_TRIM%%.*}"
+      # GNU date first; on macOS, date -jf treats bare timestamps as local time — force UTC to match Z-stripped ISO instants.
+      LAST_RUN_EPOCH=$(date -d "$LAST_RUN_RAW" +%s 2>/dev/null || TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "$LAST_RUN_TRIM" +%s 2>/dev/null || echo "0")
     fi
 
     AGE_SEC=$(( NOW_EPOCH - LAST_RUN_EPOCH ))

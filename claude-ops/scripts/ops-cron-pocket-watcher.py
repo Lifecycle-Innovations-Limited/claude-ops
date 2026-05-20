@@ -60,6 +60,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections import OrderedDict
 import re
 import subprocess
 import sys
@@ -86,6 +87,7 @@ DRY_RUN = os.environ.get("POCKET_DRY_RUN") == "1"
 
 CURSOR_FILE = STATE_DIR / "cursor.txt"
 SEEN_FILE = STATE_DIR / "seen.json"
+SEEN_CAP = 5000
 HEALTH_FILE = STATE_DIR / ".health"
 
 # Giga sync
@@ -597,23 +599,41 @@ def save_cursor(ts: str) -> None:
     CURSOR_FILE.write_text(ts)
 
 
-def load_seen() -> set[str]:
-    if SEEN_FILE.exists():
-        try:
-            return set(json.loads(SEEN_FILE.read_text()))
-        except json.JSONDecodeError:
-            return set()
-    return set()
+def load_seen() -> OrderedDict[str, None]:
+    """Most-recently touched ids last (LRU tail); matches save_seen capping."""
+    od: OrderedDict[str, None] = OrderedDict()
+    if not SEEN_FILE.exists():
+        return od
+    try:
+        raw = json.loads(SEEN_FILE.read_text())
+    except json.JSONDecodeError:
+        return od
+    if not isinstance(raw, list):
+        return od
+    for x in raw:
+        if isinstance(x, str) and x:
+            od.pop(x, None)
+            od[x] = None
+    return od
 
 
-def save_seen(seen: set[str]) -> None:
+def _seen_add(seen: OrderedDict[str, None], key: str) -> None:
+    """Record id as most recently seen so capped persistence keeps newest entries."""
+    seen.pop(key, None)
+    seen[key] = None
+
+
+def save_seen(seen: OrderedDict[str, None]) -> None:
     if DRY_RUN:
         return
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    # Cap at 5000 ids to bound file size
-    if len(seen) > 5000:
-        seen = set(list(seen)[-5000:])
-    SEEN_FILE.write_text(json.dumps(sorted(seen)))
+    # Cap at SEEN_CAP ids to bound file size (keep LRU tail deterministically)
+    if len(seen) > SEEN_CAP:
+        kept = list(seen.keys())[-SEEN_CAP:]
+        seen.clear()
+        for k in kept:
+            seen[k] = None
+    SEEN_FILE.write_text(json.dumps(list(seen.keys())))
 
 
 # ── Output sinks ─────────────────────────────────────────────────────────────
@@ -848,7 +868,7 @@ def main() -> int:
             has_content = bool(transcript or segs)
             if duration and duration < 20 and not has_content:
                 log(f"skip noise recording {rid} (dur={duration}s, no transcript)")
-                seen.add(rid)
+                _seen_add(seen, rid)
                 continue
 
             # Money-leak guard: if a Haiku inference would fire for THIS
@@ -879,7 +899,7 @@ def main() -> int:
             write_memory(rec, giga=giga)
             new_memories += 1
             new_recordings.append(rid)
-            seen.add(rid)
+            _seen_add(seen, rid)
 
             # Implicit-task inference (Haiku) — only on substantive recordings
             inferred = infer_tasks_from_recording(rec)
@@ -913,7 +933,7 @@ def main() -> int:
                     with PENDING_TRIAGE.open("a") as f:
                         f.write(json.dumps(payload) + "\n")
                     log(f"queued for triage: {t['title'][:60]} (conf={t['confidence']:.2f})")
-                seen.add(inferred_id)
+                _seen_add(seen, inferred_id)
         if cap_hit:
             break
         if meta.get("hasMore") and meta.get("nextRecordingDateBeforeExclusive"):
@@ -944,7 +964,7 @@ def main() -> int:
                 continue
             route_actionitem(item, giga=giga)
             new_tasks += 1
-            seen.add(seen_key)
+            _seen_add(seen, seen_key)
 
     # 3) Optional consolidate pass (Giga merges adjacent neurons)
     if giga and giga.ok and GIGA_CONSOLIDATE and (new_memories + new_tasks) > 0:
