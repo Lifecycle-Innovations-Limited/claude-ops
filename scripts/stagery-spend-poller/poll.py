@@ -1,7 +1,8 @@
 """Daily Stagery spend poller.
 
 Polls platforms without native spending-limit APIs and emits SNS alerts when
-usage crosses configured thresholds. Lands in `arn:aws:sns:us-east-1:000000000000:healify-cost-alerts`.
+usage crosses configured thresholds. Target SNS topic is set via SNS_TOPIC_ARN
+environment variable — no hardcoded default.
 
 Platform coverage (verified 2026-05-19):
   - Resend  : counts emails sent this month via GET /emails. Threshold = email count proxy.
@@ -10,12 +11,12 @@ Platform coverage (verified 2026-05-19):
   - Inngest : SKIPPED. /v1/usage, /v1/account, /v1/billing, /v1/runs all 404 with both
               SIGNING_KEY and EVENT_KEY. SDK keys are not billing API tokens.
 
-GCP (Gemini) is already covered by gcloud billing budget 771c9623-... created earlier.
+GCP (Gemini) is already covered by a gcloud billing budget (see GCP_BUDGET_UUID env var).
 
 Env contract:
   RESEND_API_KEY              required
   RESEND_THRESHOLD_EMAILS     optional, default 12500 (~$5/mo at $0.0004/email)
-  SNS_TOPIC_ARN               default arn:aws:sns:us-east-1:000000000000:healify-cost-alerts
+  SNS_TOPIC_ARN               required — e.g. arn:aws:sns:us-east-1:123456789012:cost-alerts
   AWS_REGION                  default us-east-1
   DRY_RUN                     if "1", skip SNS publish
 
@@ -37,10 +38,16 @@ import requests
 LOG = logging.getLogger("stagery-spend-poller")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-SNS_TOPIC = os.environ.get(
-    "SNS_TOPIC_ARN",
-    "arn:aws:sns:us-east-1:000000000000:healify-cost-alerts",
-)
+_sns_topic_env = os.environ.get("SNS_TOPIC_ARN", "").strip()
+if not _sns_topic_env:
+    print(
+        "ERROR: SNS_TOPIC_ARN env var is required but not set. "
+        "Set it to the full ARN of your SNS topic, e.g. "
+        "arn:aws:sns:us-east-1:123456789012:cost-alerts",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+SNS_TOPIC = _sns_topic_env
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
 MARKER_DIR = Path(os.environ.get("MARKER_DIR", "/tmp/stagery-spend-poller"))
