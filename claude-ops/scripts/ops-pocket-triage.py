@@ -323,8 +323,16 @@ def main() -> int:
         write_health("ok", "no pending items", extra={"counts": {}})
         return 0
 
+    # Claim file atomically so the watcher can append to a fresh pending-triage.jsonl
+    claim = PENDING.with_name("pending-triage.processing")
+    if not DRY_RUN:
+        PENDING.rename(claim)
+        pending_src = claim
+    else:
+        pending_src = PENDING
+
     tasks = []
-    for raw in PENDING.read_text().splitlines():
+    for raw in pending_src.read_text().splitlines():
         raw = raw.strip()
         if not raw:
             continue
@@ -353,9 +361,9 @@ def main() -> int:
             "routed_to": verdict,
         })
 
-    # Truncate pending if not dry run (consumed)
+    # Drop claimed batch if not dry run (watcher recreated PENDING as needed)
     if not DRY_RUN:
-        PENDING.write_text("")
+        claim.unlink(missing_ok=True)
     log(f"done counts={counts}")
     write_health("ok", f"triaged={sum(counts.values())}", extra={"counts": counts})
     return 0

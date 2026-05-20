@@ -31,7 +31,7 @@ for ((i=1; i<=$#; i++)); do
     --json) JSON_OUT=1 ;;
     --project)
       j=$((i+1)); FILTER_PROJECT="${!j:-}"
-      i=$((i+1))
+      i=$((i+1)) # skip value so it is not parsed as a flag on the next iteration
       ;;
   esac
 done
