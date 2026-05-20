@@ -34,6 +34,12 @@ Implicit-task inference (Haiku):
                          Pocket didn't flag as an actionItem.
   POCKET_INFER_MIN_SECS  default 60 (skip recordings shorter than this).
   POCKET_INFER_CONFIDENCE default 0.7 (skip tasks below this confidence).
+  POCKET_MAX_INFER_PER_RUN default 10. Hard cap on Haiku inference calls per
+                         run to prevent first-run / backfill blowout (N unseen
+                         recordings × 1 Haiku call each = unbounded spend).
+                         Recordings beyond the cap are NOT marked seen and are
+                         picked up on the next run. Set to 0 to disable the cap
+                         (NOT recommended in cron — leaves money-leak open).
   ANTHROPIC_API_KEY      env-or-keychain (service=ANTHROPIC_API_KEY,
                          account=ops-daemon). OAuth from keychain
                          (Claude Code-credentials) preferred if available.
@@ -92,6 +98,11 @@ GIGA_CONSOLIDATE = os.environ.get("GIGA_CONSOLIDATE", "0") == "1"
 INFER_TASKS = os.environ.get("POCKET_INFER_TASKS", "1") == "1"
 INFER_MIN_SECS = int(os.environ.get("POCKET_INFER_MIN_SECS", "60"))
 INFER_CONFIDENCE = float(os.environ.get("POCKET_INFER_CONFIDENCE", "0.7"))
+# Hard cap on Haiku inference calls per run — prevents first-run backfill
+# blowout. Recordings beyond the cap are NOT marked seen and roll over to the
+# next run. 0 disables the cap (not recommended in cron). See NEVER LEAK MONEY
+# in user CLAUDE.md.
+MAX_INFER_PER_RUN = int(os.environ.get("POCKET_MAX_INFER_PER_RUN", "10"))
 LOG_FILE = STATE_DIR / "run.log"
 
 
@@ -790,6 +801,8 @@ def main() -> int:
     new_recordings: list[str] = []
     next_before: str | None = None
     page = 0
+    infer_calls = 0  # Haiku calls made this run; capped by MAX_INFER_PER_RUN
+    cap_hit = False  # set when MAX_INFER_PER_RUN reached — breaks page loop too
     while True:
         page += 1
         args = {"recordingDateAfter": cursor}
@@ -817,6 +830,33 @@ def main() -> int:
                 log(f"skip noise recording {rid} (dur={duration}s, no transcript)")
                 seen.add(rid)
                 continue
+
+            # Money-leak guard: if a Haiku inference would fire for THIS
+            # recording and we've already hit the per-run cap, STOP the loop
+            # entirely — do NOT write_memory and do NOT mark seen, so the
+            # recording rolls over to the next run untouched. We pre-check
+            # the same gating logic infer_tasks_from_recording uses so we
+            # don't artificially skip recordings that wouldn't trigger Haiku
+            # anyway (too-short, INFER_TASKS=0, etc).
+            would_infer = (
+                INFER_TASKS
+                and (not duration or duration >= INFER_MIN_SECS)
+                and (len(transcript) >= 200 or sum(
+                    len(s.get("text", "")) for s in segs[:80]
+                ) >= 200)
+            )
+            if (
+                MAX_INFER_PER_RUN > 0
+                and would_infer
+                and infer_calls >= MAX_INFER_PER_RUN
+            ):
+                log(
+                    f"infer cap hit: {infer_calls}/{MAX_INFER_PER_RUN} Haiku "
+                    f"calls this run — deferring recording {rid} to next run"
+                )
+                cap_hit = True
+                break
+
             write_memory(rec, giga=giga)
             new_memories += 1
             new_recordings.append(rid)
@@ -824,6 +864,8 @@ def main() -> int:
 
             # Implicit-task inference (Haiku) — only on substantive recordings
             inferred = infer_tasks_from_recording(rec)
+            if would_infer:
+                infer_calls += 1
             for idx, t in enumerate(inferred):
                 inferred_id = f"inferred-{rid[:12]}-{idx}"
                 if inferred_id in seen:
@@ -853,6 +895,8 @@ def main() -> int:
                         f.write(json.dumps(payload) + "\n")
                     log(f"queued for triage: {t['title'][:60]} (conf={t['confidence']:.2f})")
                 seen.add(inferred_id)
+        if cap_hit:
+            break
         if meta.get("hasMore") and meta.get("nextRecordingDateBeforeExclusive"):
             next_before = meta["nextRecordingDateBeforeExclusive"]
             if page >= 10:
@@ -892,8 +936,16 @@ def main() -> int:
     if giga and giga.ok:
         giga_flush_ok = giga.flush()
 
-    # 4) Advance cursor & persist
-    save_cursor(run_started)
+    # 4) Advance cursor & persist.
+    # If the Haiku-inference cap was hit, leave the cursor at the OLD value so
+    # next run re-queries the same window and picks up the deferred recordings
+    # (they're not in `seen`, so they won't be double-processed). Advancing the
+    # cursor here would skip them permanently — that's the money-leak that the
+    # cap is meant to PREVENT (not cause).
+    if cap_hit:
+        log(f"cap hit: holding cursor at {cursor} (not advancing to {run_started})")
+    else:
+        save_cursor(run_started)
     save_seen(seen)
 
     if giga and giga.ok and not giga_flush_ok:
