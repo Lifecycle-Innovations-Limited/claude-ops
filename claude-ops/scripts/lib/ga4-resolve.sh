@@ -154,12 +154,13 @@ marketing_channels_status() {
     [ -n "$val" ] && [ "$val" != "null" ] && echo "true" || echo "false"
   }
 
-  local ga4_ok gsc_ok meta_ok gads_ok klaviyo_ok
+  local ga4_ok gsc_ok meta_ok gads_ok klaviyo_ok ig_ok
   ga4_ok="$(_chan_set "ga4" "property_id")"
   gsc_ok="$(_chan_set "gsc" "site_url")"
   meta_ok="$(_chan_set "meta" "access_token")"
   gads_ok="$(_chan_set "google_ads" "developer_token")"
   klaviyo_ok="$(_chan_set "klaviyo" "private_key")"
+  ig_ok="$(_chan_set "instagram" "account_id")"
 
   _label() { [ "$1" = "true" ] && echo "configured" || echo "missing"; }
 
@@ -170,12 +171,14 @@ marketing_channels_status() {
       --arg meta "$(_label "$meta_ok")" \
       --arg google_ads "$(_label "$gads_ok")" \
       --arg klaviyo "$(_label "$klaviyo_ok")" \
-      '{ga4: $ga4, gsc: $gsc, meta: $meta, google_ads: $google_ads, klaviyo: $klaviyo}'
+      --arg instagram "$(_label "$ig_ok")" \
+      '{ga4: $ga4, gsc: $gsc, meta: $meta, google_ads: $google_ads, klaviyo: $klaviyo, instagram: $instagram}'
   else
     echo "ga4: $(_label "$ga4_ok")"
     echo "gsc: $(_label "$gsc_ok")"
     echo "meta: $(_label "$meta_ok")"
     echo "google_ads: $(_label "$gads_ok")"
     echo "klaviyo: $(_label "$klaviyo_ok")"
+    echo "instagram: $(_label "$ig_ok")"
   fi
 }
