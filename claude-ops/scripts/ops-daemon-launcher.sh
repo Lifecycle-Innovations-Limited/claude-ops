@@ -22,7 +22,7 @@ LATEST_VERSION="$(
     | awk -F/ '{v=$NF} v ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ {print v}' \
     | sort -t. -k1,1rn -k2,2rn -k3,3rn \
     | while read -r v; do
-        if [[ -x "$CACHE_ROOT/$v/scripts/ops-daemon.sh" ]]; then
+        if [[ -r "$CACHE_ROOT/$v/scripts/ops-daemon.sh" ]]; then
           echo "$v"; break
         fi
       done
