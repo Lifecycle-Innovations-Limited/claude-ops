@@ -72,7 +72,7 @@ category_mappings() {
     analytics_ga4)
       echo "property_id:ga4.property_id"
       echo "measurement_id:ga4.measurement_id"
-      echo "api_secret:ga4.api_secret"  # gitleaks:allow — prefs path reference, not a literal secret
+      echo "api_secret:ga4.api_secret"  # gitleaks:allow
       ;;
     analytics_amplitude)
       echo "api_key:amplitude.api_key"
