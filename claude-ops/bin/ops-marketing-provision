@@ -926,7 +926,16 @@ cmd_provision_google_ads() {
   printf '%s\n' "$resource_names" | sed 's/^/  - /' >&2
 
   if [ "$customer_count" = "1" ]; then
-    chosen_customer="${resource_names##customers/}"
+    local rn_single cid_single info_resp_single is_manager_single
+    rn_single=$(printf '%s\n' "$resource_names" | head -n1)
+    cid_single="${rn_single##customers/}"
+    info_resp_single=$(gads_get_customer_info "$cid_single" "$access_token" "$dev_token" 2>/dev/null || echo "{}")
+    is_manager_single=$(printf '%s' "$info_resp_single" | jq -r '.results[0].customer.manager // false' 2>/dev/null)
+    if [ "$is_manager_single" = "true" ]; then
+      login_customer="$cid_single"
+      log "  (sole accessible account is MCC manager: $cid_single)"
+    fi
+    chosen_customer="$cid_single"
   else
     # Walk accounts, find first non-manager. Manager accounts become login_customer_id.
     while IFS= read -r rn; do
@@ -998,21 +1007,28 @@ cmd_provision_all() {
   info "Provisioning all channels for project: $project"
   info ""
 
+  local provision_failures=0
   # Each sub-call runs in a subshell so a downstream `die`/`exit` only kills
   # that subshell — the chain continues to the next channel. Failures are
   # logged but do not abort provision-all.
   info "--- GA4 ---"
-  ( cmd_provision_ga4 --project "$project" "${ga4_remaining[@]+"${ga4_remaining[@]}"}" ) || \
+  ( cmd_provision_ga4 --project "$project" "${ga4_remaining[@]+"${ga4_remaining[@]}"}" ) || {
     log "GA4 provisioning failed for $project (continuing with other channels)"
+    provision_failures=$((provision_failures + 1))
+  }
   info ""
 
   info "--- Google Search Console ---"
   if [ -n "$site_for_gsc" ]; then
-    ( cmd_provision_gsc --project "$project" --site "$site_for_gsc" ) || \
+    ( cmd_provision_gsc --project "$project" --site "$site_for_gsc" ) || {
       log "GSC provisioning failed for $project (continuing)"
+      provision_failures=$((provision_failures + 1))
+    }
   else
-    ( cmd_provision_gsc --project "$project" ) || \
+    ( cmd_provision_gsc --project "$project" ) || {
       log "GSC provisioning failed for $project (continuing)"
+      provision_failures=$((provision_failures + 1))
+    }
   fi
   info ""
 
@@ -1021,8 +1037,10 @@ cmd_provision_all() {
   local meta_tok_ref
   meta_tok_ref="$(prefs_get_project_field "$project" "meta" "access_token")"
   if [ -n "$meta_tok_ref" ] && [ "$meta_tok_ref" != "null" ]; then
-    ( cmd_provision_instagram --project "$project" ) || \
+    ( cmd_provision_instagram --project "$project" ) || {
       log "Instagram provisioning failed for $project (continuing)"
+      provision_failures=$((provision_failures + 1))
+    }
   else
     log "Skipping Instagram — meta.access_token not configured"
   fi
@@ -1030,11 +1048,14 @@ cmd_provision_all() {
 
   info "--- Google Ads ---"
   # Skip if pending (dev token approval in progress).
-  ( cmd_provision_google_ads --project "$project" --skip-if-pending ) || \
+  ( cmd_provision_google_ads --project "$project" --skip-if-pending ) || {
     log "Google Ads provisioning incomplete for $project (likely awaiting dev token approval)"
+    provision_failures=$((provision_failures + 1))
+  }
   info ""
 
   info "Done. Run: $0 status --project $project"
+  return "$provision_failures"
 }
 
 # ---------------------------------------------------------------------------
