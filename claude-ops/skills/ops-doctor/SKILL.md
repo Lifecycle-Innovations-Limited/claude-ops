@@ -124,6 +124,56 @@ If there are **no errors and no warnings**:
 
 Display: "All checks passed. Plugin is healthy."
 
+## MCP watchdog health probe
+
+After Phase 1 diagnostics, parse the `5f` block warnings from `bin/ops-doctor`. The bin script emits these MCP-specific keys:
+
+- `claude_json_invalid` — `~/.claude.json` is not valid JSON (hard error — all MCP tooling breaks)
+- `claude_json_missing` — no `~/.claude.json` (warning — no servers configured)
+- `mcp_stdio_cmd_missing_<name>` — stdio server `command` binary not on PATH
+- `mcp_watchdog_stale` — watchdog health not updated in >1h (cron not running)
+- `mcp_watchdog_no_health` — watchdog has never run (never registered)
+- `mcp_servers_degraded_long` — one or more HTTP MCP servers degraded >1h
+
+For each warning, surface a one-line fix hint:
+
+| Warning | Fix hint |
+|---------|----------|
+| `claude_json_invalid` | `python3 -c "import json; json.load(open('$HOME/.claude.json'))"` to find the syntax error |
+| `mcp_stdio_cmd_missing_<name>` | Verify the command path and install the missing binary; update `~/.claude.json` if path changed |
+| `mcp_watchdog_stale` or `mcp_watchdog_no_health` | `/ops:mcp restart` to register crontab entries |
+| `mcp_servers_degraded_long` | `/ops:mcp status` for full detail, then `/ops:mcp reauth <name>` for each `needs_bootstrap` |
+
+Include these warnings in the doctor-agent prompt for auto-fix where applicable (e.g., crontab registration is safe to do automatically).
+
+## Pocket health probe
+
+After Phase 1 diagnostics, run the pocket probe if the `pocket` section is configured in preferences or if `--verbose` was passed. The bin script already includes these checks (section 5e); this section describes what the SKILL layer adds on top.
+
+Parse the `pocket` block from the `bin/ops-doctor` JSON output. Surface any pocket-specific warnings:
+
+- `pocket_health_stale_*` — health file exists but mtime > 5 minutes
+- `pocket_health_missing_*` — health file does not exist
+- `pocket_health_error_*` — health file has `"status": "error"`
+- `pocket_tmux_missing` — `pocket-exec` tmux session not found
+- `pocket_config_invalid_*` — whatsapp-config.json or email-config.json not valid JSON
+- `pocket_email_auth` — `gog gmail status` not authenticated
+- `pocket_bridge_port` — Baileys bridge port 8080 not listening
+
+For each warning, surface a one-line fix hint:
+
+| Warning | Fix hint |
+|---------|----------|
+| `pocket_health_stale_activity-notifier` | `launchctl kickstart -k gui/$UID/com.claude-ops.pocket-activity-notifier` |
+| `pocket_health_missing_*` | `bash $CLAUDE_PLUGIN_ROOT/scripts/install-pocket-notifier.sh` |
+| `pocket_health_error_*` | `tail -30 ~/.claude/state/pocket/activity-notifier.stderr.log` |
+| `pocket_tmux_missing` | Executor not running — start with `python3 $CLAUDE_PLUGIN_ROOT/scripts/ops-cron-pocket-executor.py` |
+| `pocket_config_invalid_whatsapp` | Re-run `/ops:setup pocket` to write a valid whatsapp-config.json |
+| `pocket_config_invalid_email` | Re-run `/ops:setup pocket` to write a valid email-config.json |
+| `pocket_email_auth` | `gog auth add <your-email> --services gmail` |
+| `pocket_bridge_port` | `launchctl kickstart -k gui/$UID/com.samrenders.whatsapp-bridge` |
+
+Include pocket warnings in the doctor-agent prompt so it can auto-fix where possible.
 ## Phase 3 — Post-fix verification
 
 After the agent completes, re-run diagnostics:
