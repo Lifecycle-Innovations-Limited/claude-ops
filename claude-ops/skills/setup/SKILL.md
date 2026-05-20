@@ -736,6 +736,12 @@ If the user selects "Pick individually", ask which channels using `AskUserQuesti
 | Doppler  | doppler  | Secrets manager — set default project + config for all ops skills       |
 | Vault    | vault    | Password manager — 1Password, Dashlane, Bitwarden, or macOS Keychain    |
 
+**Batch 3 — Voice journal & integrations (show only if not already configured):**
+
+| Option   | Header   | Description                                                                    |
+| -------- | -------- | ------------------------------------------------------------------------------ |
+| Pocket   | pocket   | Voice journal notifier — POCKET_API_KEY + WhatsApp/email delivery + launchd agent |
+
 Present each batch as a separate `AskUserQuestion` call. Skip batches where all items are already configured. For each selected channel, run the matching sub-flow below.
 
 ---
@@ -826,6 +832,11 @@ Every channel sub-flow below references "the Universal Credential Auto-Scan" by 
 ### 3o — Claude account rotator OAuth (if selected)
 
 > **Loaded from `channels/claude-rotator.md`** — Account rotator OAuth — delegates to /ops:rotate-setup.
+> Load that file before running this sub-flow.
+
+### 3p — Pocket (voice journal activity notifier)
+
+> **Loaded from `channels/pocket.md`** — POCKET_API_KEY credential + WhatsApp/email channel config + launchd notifier install + smoke test.
 > Load that file before running this sub-flow.
 
 ## Step 4 — Configure MCPs (if selected)
