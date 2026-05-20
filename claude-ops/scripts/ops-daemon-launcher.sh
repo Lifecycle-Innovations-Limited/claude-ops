@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/bash
+#!/usr/bin/env bash
 # ops-daemon-launcher.sh — version-agnostic launcher for the claude-ops daemon.
 # Resolves the highest installed ops plugin version at run time, then execs its
 # ops-daemon.sh. Survives plugin upgrades without plist edits.
@@ -16,7 +16,8 @@ LATEST_VERSION="$(
   find "$CACHE_ROOT" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null \
     | awk -F/ '{print $NF}' \
     | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-    | sort -rn -t. -k1,1 -k2,2 -k3,3 \
+    | sort -V \
+    | tac \
     | while read -r v; do
         if [[ -x "$CACHE_ROOT/$v/scripts/ops-daemon.sh" ]]; then
           echo "$v"; break
@@ -33,6 +34,11 @@ DAEMON="$CACHE_ROOT/$LATEST_VERSION/scripts/ops-daemon.sh"
 export CLAUDE_PLUGIN_ROOT="$CACHE_ROOT/$LATEST_VERSION"
 
 echo "[ops-daemon-launcher] resolved ops $LATEST_VERSION → $DAEMON"
-# Re-exec under the same bash that is running this script (plist/installer may
-# use /opt/homebrew or /usr/local on Intel Mac); avoid hardcoding Homebrew path.
-exec "${OPS_DAEMON_LAUNCHER_BASH:-$BASH}" "$DAEMON" "$@"
+# Match install-ops-daemon.sh: Apple Silicon Homebrew → Intel Homebrew → system bash
+BASH_PATH="/bin/bash"
+if [[ -x /opt/homebrew/bin/bash ]]; then
+  BASH_PATH="/opt/homebrew/bin/bash"
+elif [[ -x /usr/local/bin/bash ]]; then
+  BASH_PATH="/usr/local/bin/bash"
+fi
+exec "$BASH_PATH" "$DAEMON" "$@"
