@@ -1,0 +1,11 @@
+[Unit]
+Description=Run pocket-watcher every 5 minutes
+Requires=pocket-watcher.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
