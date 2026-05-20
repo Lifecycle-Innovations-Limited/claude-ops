@@ -3,7 +3,7 @@
     "mcp-watchdog": {
       "enabled": true,
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-mcp-watchdog.py",
-      "cron": "*/2 * * * *",
+      "cron": "*/5 * * * *",
       "health_file": "~/.claude/state/mcp-watchdog/.health",
       "_note": "MCP server connectivity watchdog. Auto-reconnects degraded servers, sends WhatsApp/email alert via supervisor-out-queue when manual reauth needed. Cron interval drives latency of degraded-state detection."
     },
