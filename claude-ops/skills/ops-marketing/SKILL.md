@@ -381,6 +381,30 @@ Route `$ARGUMENTS` to the correct section below:
 | `autopilot kill <project>` | Set kill_switch for a project (see ## autopilot-kill section) |
 | attribution | Unified attribution table (Meta + Google + Klaviyo + GA4) |
 | setup | Configure API keys |
+| `portfolio --live` | Live KPI rollup across all projects with non-zero spend or revenue |
+| `portfolio --kpis` | Just the KPI section, no config-state table |
+| `portfolio --prewarm-status` | Show what marketing creds exist in Doppler that aren't yet linked |
+
+---
+
+## Auto-link from prewarm cache
+
+A background daemon (`marketing-auth-prewarm`, runs nightly at 04:23 UTC) scans every Doppler project + env + keychain + ~/.gcp for marketing credentials, classifies them into 20 categories (ads_meta, ads_google, analytics_ga4, payments_stripe, etc), and writes a cache at `$OPS_DATA_DIR/marketing-auth-prewarm.json`.
+
+When setting up a new project, run:
+
+```bash
+ops-marketing-link-prewarm --project <name>
+```
+
+…and any auto-detectable creds get linked into `marketing.projects.<name>.<category>.*` as Doppler cred-refs in one shot. No per-credential prompts.
+
+To see what would be linked without writing:
+
+```bash
+ops-marketing-portfolio --prewarm-status
+OPS_MARKETING_DRY_RUN=1 ops-marketing-link-prewarm --project <name>
+```
 
 ---
 
