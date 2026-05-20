@@ -340,13 +340,27 @@ def main() -> int:
     counts = {"ACT": 0, "DRAFT": 0, "DROP": 0, "ASK": 0}
     inter_call_pause = float(os.environ.get("POCKET_TRIAGE_PACE_SEC", "8"))
     for i, task in enumerate(tasks, 1):
-        if i > 1 and inter_call_pause > 0:
-            time.sleep(inter_call_pause)  # avoid bursting Claude Max quota
         title = (task.get("title") or "")[:70]
-        log(f"[{i}/{len(tasks)}] triaging: {title}")
-        decision = triage_one(task)
-        verdict = route(task, decision)
-        counts[verdict] = counts.get(verdict, 0) + 1
+        task_id = task.get("id", "")
+        prior = _id_already_routed(task_id)
+        if prior:
+            verdict = f"SKIP_{prior}"
+            log(f"SKIP {task_id} — already in {prior}")
+            decision = {
+                "verdict": "ASK",
+                "confidence": 0.0,
+                "reasoning": f"skipped Opus triage — already present in {prior}",
+                "scoped_task_description": "",
+                "concerns": [],
+            }
+        else:
+            if i > 1 and inter_call_pause > 0:
+                time.sleep(inter_call_pause)  # avoid bursting Claude Max quota
+            log(f"[{i}/{len(tasks)}] triaging: {title}")
+            decision = triage_one(task)
+            verdict = route(task, decision)
+        if not verdict.startswith("SKIP_"):
+            counts[verdict] = counts.get(verdict, 0) + 1
         log(f"[{i}/{len(tasks)}] verdict={verdict} conf={decision.get('confidence')} — {decision.get('reasoning','')[:120]}")
         # Audit log every decision with full thinking
         append_jsonl(AUDIT, {
