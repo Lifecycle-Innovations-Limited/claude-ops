@@ -611,7 +611,7 @@ else
     AGE_SEC=$(( NOW_EPOCH - LAST_RUN_EPOCH ))
     AGE_MIN=$(( AGE_SEC / 60 ))
 
-    # Determine staleness threshold: services with cron >= 30m use 15m warning, else 5m
+    # Staleness threshold: */N with N<=10 → 5m; larger N → N minutes (one cycle) so mid-cycle gaps are not false positives
     CRON_EXPR=$(jq -r ".services[\"$svc\"].cron // empty" "$DAEMON_SERVICES_FILE" 2>/dev/null || true)
     if [ -z "$CRON_EXPR" ]; then
       # continuous / no cron — use 15m threshold
@@ -624,7 +624,7 @@ else
         if [ "$CRON_INTERVAL" -le 10 ]; then
           STALE_THRESHOLD=5
         else
-          STALE_THRESHOLD=15
+          STALE_THRESHOLD="$CRON_INTERVAL"
         fi
       else
         # Hourly or less frequent — 15m threshold
