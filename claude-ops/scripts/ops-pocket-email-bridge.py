@@ -44,6 +44,15 @@ from pathlib import Path
 
 LOG_PREFIX = "[ops-pocket-email-bridge]"
 HOME = Path(os.path.expanduser("~"))
+_USER_CONTEXT_PATH = Path(os.environ.get(
+    "POCKET_USER_CONTEXT",
+    str(HOME / ".claude/state/pocket/user-context.json"),
+))
+try:
+    _ctx = json.loads(_USER_CONTEXT_PATH.read_text())
+    _OWNER_NAME: str = _ctx.get("owner_name") or "the user"
+except (OSError, json.JSONDecodeError):
+    _OWNER_NAME = "the user"
 STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", HOME / ".claude/state/pocket"))
 CONFIG = STATE_DIR / "email-config.json"
 QUEUE = STATE_DIR / "supervisor-out-queue.jsonl"
@@ -308,21 +317,21 @@ def parse_reply_with_llm(body: str, opens: list[dict], parser_model: str) -> lis
         f"  context: {(q.get('context') or '')[:200]}"
         for q in opens
     )
-    prompt = f"""You are the inbound-reply parser for Sam Renders' Pocket supervisor.
+    prompt = f"""You are the inbound-reply parser for {_OWNER_NAME}'s Pocket supervisor.
 
-Sam just sent an EMAIL reply. Your job: figure out which of the currently-open supervisor questions he's replying to (it may be one, several, or none), and extract the answer in a form the worker can use.
+{_OWNER_NAME} just sent an EMAIL reply. Your job: figure out which of the currently-open supervisor questions they're replying to (it may be one, several, or none), and extract the answer in a form the worker can use.
 
 Currently-open questions:
 {open_descriptions}
 
-Sam's email body:
+{_OWNER_NAME}'s email body:
 \"\"\"{body[:4000]}\"\"\"
 
 Rules:
-- If Sam's message is clearly not a reply to any open question, return an empty array.
-- If Sam addresses one specific question, return one item.
-- If Sam addresses multiple, return multiple items.
-- The 'answer' field should be in Sam's voice and natural — the worker reads it as a direct instruction.
+- If {_OWNER_NAME}'s message is clearly not a reply to any open question, return an empty array.
+- If {_OWNER_NAME} addresses one specific question, return one item.
+- If {_OWNER_NAME} addresses multiple, return multiple items.
+- The 'answer' field should be in {_OWNER_NAME}'s voice and natural — the worker reads it as a direct instruction.
 - 'confidence' is your honest 0.0-1.0 estimate.
 - Output STRICT JSON array, no markdown fences, no prose.
 
@@ -385,30 +394,18 @@ def drain_inbound(cfg: dict) -> tuple[int, int]:
     messages = fetch_recent_replies(cfg)
     if not messages:
         return (0, 0)
-
-    def _internal_ts_rank(m: dict) -> int:
-        """Gmail internalDate as int for ordering (matches WhatsApp strict > cursor)."""
-        t = m.get("ts")
-        try:
-            if isinstance(t, (int, float)):
-                return int(t)
-            s = str(t)
-            if s.isdigit():
-                return int(s)
-        except (TypeError, ValueError):
-            pass
-        return 0
-
-    # Filter: only NEW messages after last_processed_id (strictly newer internalDate).
-    if not last_id:
+    # Filter: only NEW messages (after last_processed_id timestamp)
+    new_messages = []
+    seen_last = False
+    for m in messages:
+        if m["id"] == last_id:
+            seen_last = True
+            continue
+        if seen_last:
+            new_messages.append(m)
+    # If last_id wasn't found in current window, treat all as new (first run / drift)
+    if not last_id or not any(m["id"] == last_id for m in messages):
         new_messages = messages
-    else:
-        cur = next((m for m in messages if m["id"] == last_id), None)
-        if cur is None:
-            new_messages = messages
-        else:
-            t0 = _internal_ts_rank(cur)
-            new_messages = [m for m in messages if _internal_ts_rank(m) > t0]
 
     opens = open_questions()
     parser_model = cfg.get("parser_model", "claude-sonnet-4-6")
