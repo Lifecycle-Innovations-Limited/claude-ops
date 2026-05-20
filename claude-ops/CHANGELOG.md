@@ -1,6 +1,38 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [2.7.0] — 2026-05-20
+
+`/ops:marketing` becomes the marketing control center. Every credential discoverable across Doppler/env/keychain auto-links into every project; live KPI rollup across all projects in one render; ad spend aggregated across every paid surface; Stripe revenue with UTM-attributed ROAS; Sentry crash-rate correlation flags ad-spend-at-risk projects.
+
+Builds on v2.6.0 (`/ops:marketing <project>` point-and-go).
+
+### Added
+
+- **`marketing-auth-prewarm` daemon** (`scripts/ops-marketing-auth-prewarm.sh`) — nightly at 04:23 UTC, scans every Doppler project + env vars + shell profiles + macOS keychain + `~/.gcp/*.json` for marketing credentials. Classifies into 20 categories (ads_meta, ads_google, ads_tiktok, ads_linkedin, analytics_ga4, analytics_amplitude, analytics_posthog, email_resend, email_klaviyo, payments_stripe, ecommerce_shopify, fulfillment_shipbob, sms_twilio, errors_sentry, issues_linear, mta_appsflyer, prospect_apollo, infra_cloudflare, infra_vercel). Writes cache at `$OPS_DATA_DIR/marketing-auth-prewarm.json`. Initial scan across 47 Doppler projects found 19 active categories.
+
+- **`bin/ops-marketing-link-prewarm`** — reads the prewarm cache and idempotently writes Doppler cred-refs into `marketing.projects.<key>.<category>.*` slots that are not yet configured. Modes: `--project <key>`, `--all-projects`, `--project <key> --category <cat>`. Atomic prefs writes; never overwrites existing values. Eliminates per-credential prompts during `/ops:marketing setup`.
+
+- **`bin/ops-marketing-portfolio` extension** — new flags `--live`, `--kpis`, `--prewarm-status`. `--live` fans out in parallel to every signal source (Meta + Google Ads spend, Stripe revenue + MRR + UTM-attributed ROAS, GA4 sessions/conversions/CVR, Sentry crash-free-rate) and renders a unified KPI table. Mobile-aware per CLAUDE.md Rule 7. `--prewarm-status` surfaces untapped credentials (creds exist in Doppler but not linked to any project).
+
+- **`scripts/lib/ad-spend-aggregator.sh`** — `ad_spend_meta`, `ad_spend_google`, `ad_spend_tiktok`, `ad_spend_linkedin`, `ad_spend_reddit`, `ad_spend_microsoft`, `ad_spend_pinterest`, `ad_spend_all`. Each normalizes to `{surface, project, spend, impressions, clicks, conversions, conversions_value, roas, window_days}`.
+
+- **`scripts/lib/stripe-revenue.sh`** — `stripe_revenue_7d <project>` returns `{revenue_7d, charge_count, refund_count, active_mrr, active_sub_count, by_utm_source[]}`. UTM-attributed breakdown closes the ground-truth ROAS gap.
+
+- **`scripts/lib/sentry-crash.sh`** — `sentry_crash_rate <project>` returns `{crash_free_7d, crash_free_24h, delta_dod, at_risk}`. When `at_risk == true` AND project has live ad spend, `portfolio --live` shows the project as "ad spend likely wasted today".
+
+- **`scripts/lib/marketing-kpis.sh`** — pure functions: `kpi_roas`, `kpi_cac`, `kpi_ltv`, `kpi_payback_months`, `kpi_cvr`, `kpi_ctr`, `kpi_health_score`, `kpi_compute_all`. Derives metrics from already-fetched JSON — no external API calls.
+
+- **`ops-marketing-provision provision-instagram` + `provision-google-ads`** verbs (from PR #266) — Meta token + page_id → IG Business Account ID auto-resolution with appsecret_proof signing; full 4-step Google Ads OAuth flow.
+
+### Fixed
+
+- `bin/ops-marketing-dash` — Meta + IG Graph API calls now compute and append `appsecret_proof` when `meta.app_secret` is configured. Previously the dash silently returned zeros for any project using a system-user token with "Require App Secret" enabled.
+
+### Tests
+
+107 tests passing across 6 test files: `test-ad-spend-aggregator.sh` (18), `test-stripe-revenue.sh` (6), `test-sentry-crash.sh` (2), `test-marketing-kpis.sh` (36), `test-ops-marketing-link-prewarm.sh` (15), `test-ops-marketing-auth-prewarm.sh` (1), plus all existing `test-ops-marketing-provision.sh` (11). Zero secrets leaked (`test-no-secrets.sh` 14/14 green).
+
 
 ## [2.6.0] — 2026-05-19
 
