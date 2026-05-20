@@ -74,15 +74,6 @@ MEMORY_DIR = Path(os.environ.get("POCKET_MEMORY_DIR", HOME / ".claude/memory"))
 TASK_QUEUE = Path(os.environ.get("POCKET_TASK_QUEUE", STATE_DIR / "tasks.jsonl"))
 DRAFT_QUEUE = Path(os.environ.get("POCKET_DRAFT_QUEUE", STATE_DIR / "drafts.jsonl"))
 PENDING_TRIAGE = Path(os.environ.get("POCKET_PENDING_TRIAGE", STATE_DIR / "pending-triage.jsonl"))
-_USER_CONTEXT_PATH = Path(os.environ.get(
-    "POCKET_USER_CONTEXT",
-    HOME / ".claude/state/pocket/user-context.json",
-))
-try:
-    _pocket_uc = json.loads(_USER_CONTEXT_PATH.read_text())
-    _OWNER_NAME: str = _pocket_uc.get("owner_name") or "the user"
-except (OSError, json.JSONDecodeError):
-    _OWNER_NAME = "the user"
 INDEX_FILE = os.environ.get("POCKET_INDEX_FILE")
 LOOKBACK_HOURS = int(os.environ.get("POCKET_LOOKBACK_HOURS", "24"))
 DRY_RUN = os.environ.get("POCKET_DRY_RUN") == "1"
@@ -388,7 +379,7 @@ def infer_tasks_from_recording(recording: dict) -> list[dict]:
         "Return STRICT JSON: an array of objects with keys: title (string, "
         "imperative form, <80 chars), context (string, 1-2 sentences of why), "
         "priority (low|medium|high), confidence (0.0-1.0 — your honest "
-        f"certainty that this was implied as a task {_OWNER_NAME} would want done). "
+        "certainty that this was implied as a task Sam would want done). "
         "Return [] if nothing actionable was implied. NO prose, NO markdown."
     )
 
@@ -575,28 +566,23 @@ def save_cursor(ts: str) -> None:
     CURSOR_FILE.write_text(ts)
 
 
-def load_seen() -> dict[str, None]:
-    """Ordered insertion map used as a set (keys only); order matters for save cap."""
+def load_seen() -> set[str]:
     if SEEN_FILE.exists():
         try:
-            raw = json.loads(SEEN_FILE.read_text())
-            if isinstance(raw, list):
-                return dict.fromkeys(str(x) for x in raw)
+            return set(json.loads(SEEN_FILE.read_text()))
         except json.JSONDecodeError:
-            pass
-    return {}
+            return set()
+    return set()
 
 
-def save_seen(seen: dict[str, None]) -> None:
+def save_seen(seen: set[str]) -> None:
     if DRY_RUN:
         return
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    # Cap at 5000 ids to bound file size (keep most recently inserted keys)
+    # Cap at 5000 ids to bound file size
     if len(seen) > 5000:
-        keys = list(seen.keys())[-5000:]
-        seen.clear()
-        seen.update(dict.fromkeys(keys))
-    SEEN_FILE.write_text(json.dumps(list(seen.keys())))
+        seen = set(list(seen)[-5000:])
+    SEEN_FILE.write_text(json.dumps(sorted(seen)))
 
 
 # ── Output sinks ─────────────────────────────────────────────────────────────
@@ -829,12 +815,12 @@ def main() -> int:
             has_content = bool(transcript or segs)
             if duration and duration < 20 and not has_content:
                 log(f"skip noise recording {rid} (dur={duration}s, no transcript)")
-                seen[rid] = None
+                seen.add(rid)
                 continue
             write_memory(rec, giga=giga)
             new_memories += 1
             new_recordings.append(rid)
-            seen[rid] = None
+            seen.add(rid)
 
             # Implicit-task inference (Haiku) — only on substantive recordings
             inferred = infer_tasks_from_recording(rec)
@@ -860,13 +846,13 @@ def main() -> int:
                     # Inferred tasks go to pending-triage.jsonl, NOT directly to
                     # the live tasks.jsonl. The Opus triage agent must classify
                     # them (ACT / DRAFT / DROP / ASK) before any can reach the
-                    # supervisor. This is the safety guardrail the owner mandated:
+                    # supervisor. This is the safety guardrail Sam mandated:
                     # no autonomous work without a verdict.
                     PENDING_TRIAGE.parent.mkdir(parents=True, exist_ok=True)
                     with PENDING_TRIAGE.open("a") as f:
                         f.write(json.dumps(payload) + "\n")
                     log(f"queued for triage: {t['title'][:60]} (conf={t['confidence']:.2f})")
-                seen[inferred_id] = None
+                seen.add(inferred_id)
         if meta.get("hasMore") and meta.get("nextRecordingDateBeforeExclusive"):
             next_before = meta["nextRecordingDateBeforeExclusive"]
             if page >= 10:
@@ -895,7 +881,7 @@ def main() -> int:
                 continue
             route_actionitem(item, giga=giga)
             new_tasks += 1
-            seen[seen_key] = None
+            seen.add(seen_key)
 
     # 3) Optional consolidate pass (Giga merges adjacent neurons)
     if giga and giga.ok and GIGA_CONSOLIDATE and (new_memories + new_tasks) > 0:
