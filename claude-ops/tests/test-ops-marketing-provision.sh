@@ -257,12 +257,18 @@ unset FAKE_META_TOKEN
 
 # ---------------------------------------------------------------------------
 # 13. provision-google-ads dry-run writes pending state file
+# Hermetic: point Doppler at a non-existent project so the scan returns empty
+# even when GOOGLE_ADS_DEVELOPER_TOKEN exists in the real Doppler config.
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- 13. provision-google-ads dry-run (no dev token) creates pending file ---"
 PENDING_FILE="${FIXTURE_DIR}/state/marketing-provision/acme-google-ads-pending.json"
 rm -f "$PENDING_FILE"
-gads_out="$("$BIN" provision-google-ads --project acme 2>&1 || true)"
+# Also unset env vars that gads_scan_credential reads to avoid leaks from CI/local shell
+gads_out="$(env -u GOOGLE_ADS_DEVELOPER_TOKEN -u GOOGLE_ADS_CLIENT_ID -u GOOGLE_ADS_CLIENT_SECRET -u GOOGLE_ADS_REFRESH_TOKEN \
+  OPS_MARKETING_DOPPLER_PROJECT="nonexistent-fixture-$RANDOM" \
+  OPS_MARKETING_DOPPLER_CONFIG="prd" \
+  "$BIN" provision-google-ads --project acme 2>&1 || true)"
 if [ -f "$PENDING_FILE" ] && jq -e '.stage == "developer_token"' "$PENDING_FILE" >/dev/null 2>&1; then
   ok "provision-google-ads writes pending-state file with stage=developer_token"
 else
