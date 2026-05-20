@@ -387,14 +387,13 @@ def drain_inbound(cfg: dict) -> tuple[int, int]:
         return (0, 0)
     # Filter: only NEW messages (after last_processed_id timestamp)
     new_messages = []
-    seen_last = bool(last_id)
+    seen_last = False
     for m in messages:
+        if m["id"] == last_id:
+            seen_last = True
+            continue
         if seen_last:
             new_messages.append(m)
-            continue
-        if m["id"] == last_id:
-            seen_last = False  # consumed cursor; everything after is new
-            continue
     # If last_id wasn't found in current window, treat all as new (first run / drift)
     if not last_id or not any(m["id"] == last_id for m in messages):
         new_messages = messages
