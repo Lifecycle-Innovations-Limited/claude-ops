@@ -317,6 +317,192 @@ if command -v jq >/dev/null 2>&1 && \
   fi
 fi
 
+# --- 5e. Pocket health probe ---
+POCKET_STATE_DIR="$HOME/.claude/state/pocket"
+POCKET_CONFIGURED=false
+if [ -f "$PREFS" ] && command -v jq >/dev/null 2>&1; then
+  jq -e '.pocket.enabled == true' "$PREFS" >/dev/null 2>&1 && POCKET_CONFIGURED=true
+fi
+# Also probe if any health/config file already exists (partial install)
+for _pf in \
+  "$POCKET_STATE_DIR/.activity-notifier-health" \
+  "$POCKET_STATE_DIR/.out-queue-health" \
+  "$POCKET_STATE_DIR/.email-bridge-health" \
+  "$POCKET_STATE_DIR/.whatsapp-bridge-health" \
+  "$POCKET_STATE_DIR/whatsapp-config.json" \
+  "$POCKET_STATE_DIR/email-config.json"; do
+  [ -f "$_pf" ] && POCKET_CONFIGURED=true && break
+done
+
+if [ "$POCKET_CONFIGURED" = true ]; then
+  NOW=$(date +%s)
+  MAX_HEALTH_AGE=300  # 5 minutes
+
+  # Map service name -> health file
+  _pocket_health_check() {
+    local svc="$1" hf="$2"
+    if [ ! -f "$hf" ]; then
+      WARNINGS+=("pocket_health_missing_${svc}: $hf does not exist — service may not be running")
+      return
+    fi
+    # Staleness check (macOS stat -f or GNU stat -c)
+    if command -v stat >/dev/null 2>&1; then
+      MTIME=$(stat -f '%m' "$hf" 2>/dev/null || stat -c '%Y' "$hf" 2>/dev/null || echo 0)
+      AGE=$(( NOW - MTIME ))
+      if [ "$AGE" -gt "$MAX_HEALTH_AGE" ]; then
+        WARNINGS+=("pocket_health_stale_${svc}: $hf last written ${AGE}s ago (threshold: ${MAX_HEALTH_AGE}s)")
+      fi
+    fi
+    # Status field
+    if command -v jq >/dev/null 2>&1; then
+      HF_STATUS=$(jq -r '.status // "unknown"' "$hf" 2>/dev/null || echo "unknown")
+      if [ "$HF_STATUS" = "error" ]; then
+        HF_MSG=$(jq -r '.message // ""' "$hf" 2>/dev/null || echo "")
+        WARNINGS+=("pocket_health_error_${svc}: reports error — $HF_MSG")
+      fi
+    fi
+  }
+
+  _pocket_health_check "activity-notifier" "$POCKET_STATE_DIR/.activity-notifier-health"
+  _pocket_health_check "out-queue"         "$POCKET_STATE_DIR/.out-queue-health"
+
+  # Email bridge — only if email is enabled
+  if [ -f "$POCKET_STATE_DIR/email-config.json" ]; then
+    EM_EN=$(jq -r '.enabled // "true"' "$POCKET_STATE_DIR/email-config.json" 2>/dev/null || echo "true")
+    [ "$EM_EN" != "false" ] && _pocket_health_check "email-bridge" "$POCKET_STATE_DIR/.email-bridge-health"
+  fi
+
+  # WhatsApp bridge — only if whatsapp is enabled
+  if [ -f "$POCKET_STATE_DIR/whatsapp-config.json" ]; then
+    WA_EN=$(jq -r '.enabled // "true"' "$POCKET_STATE_DIR/whatsapp-config.json" 2>/dev/null || echo "true")
+    [ "$WA_EN" != "false" ] && _pocket_health_check "whatsapp-bridge" "$POCKET_STATE_DIR/.whatsapp-bridge-health"
+  fi
+
+  # Validate JSON config files
+  for _cfg in whatsapp-config email-config; do
+    _cf="$POCKET_STATE_DIR/${_cfg}.json"
+    if [ -f "$_cf" ] && command -v jq >/dev/null 2>&1; then
+      if ! jq empty "$_cf" 2>/dev/null; then
+        ERRORS+=("pocket_config_invalid_${_cfg}: $_cf is not valid JSON — re-run /ops:setup pocket")
+      fi
+    fi
+  done
+
+  # pocket-exec tmux session
+  TMUX_SESSION="${POCKET_TMUX_SESSION:-pocket-exec}"
+  if command -v tmux >/dev/null 2>&1; then
+    if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+      INFO+=("pocket_tmux_missing: tmux session '$TMUX_SESSION' not running — pocket executor inactive (expected if executor not in use)")
+    fi
+  fi
+
+  # gog gmail auth (proxy for email send)
+  if [ -f "$POCKET_STATE_DIR/email-config.json" ]; then
+    EM_EN=$(jq -r '.enabled // "true"' "$POCKET_STATE_DIR/email-config.json" 2>/dev/null || echo "true")
+    if [ "$EM_EN" != "false" ] && command -v gog >/dev/null 2>&1; then
+      if ! gog auth status 2>&1 | grep -qi "authenticated\|logged in\|active"; then
+        WARNINGS+=("pocket_email_auth: gog gmail not authenticated — email notifications will fail. Run: gog auth add <email> --services gmail")
+      fi
+    fi
+  fi
+
+  # Baileys bridge port 8080 (proxy for WhatsApp send)
+  if [ -f "$POCKET_STATE_DIR/whatsapp-config.json" ]; then
+    WA_EN=$(jq -r '.enabled // "true"' "$POCKET_STATE_DIR/whatsapp-config.json" 2>/dev/null || echo "true")
+    if [ "$WA_EN" != "false" ]; then
+      if ! lsof -i :8080 2>/dev/null | grep -q LISTEN; then
+        WARNINGS+=("pocket_bridge_port: WhatsApp bridge not listening on :8080 — WhatsApp notifications will fail. Run: launchctl kickstart -k gui/$(id -u)/com.samrenders.whatsapp-bridge")
+      fi
+    fi
+  fi
+fi
+
+# --- 5f. MCP watchdog health probes ---
+# 1. ~/.claude.json is valid JSON
+if [ -f "$HOME/.claude.json" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    if ! jq empty "$HOME/.claude.json" 2>/dev/null; then
+      ERRORS+=("claude_json_invalid: ~/.claude.json is not valid JSON — MCP watchdog and Claude Code will fail to parse server list")
+    fi
+  fi
+else
+  WARNINGS+=("claude_json_missing: ~/.claude.json not found — no MCP servers configured")
+fi
+
+# 2. For each stdio MCP server, check its command resolves on PATH
+if [ -f "$HOME/.claude.json" ] && command -v jq >/dev/null 2>&1 && jq empty "$HOME/.claude.json" 2>/dev/null; then
+  STDIO_SERVERS=$(jq -r '
+    .mcpServers // {} | to_entries[] |
+    select(.value.type == null or .value.type == "stdio") |
+    select(.value.command != null) |
+    "\(.key)=\(.value.command)"
+  ' "$HOME/.claude.json" 2>/dev/null || true)
+  while IFS='=' read -r srv_name srv_cmd; do
+    [ -z "$srv_name" ] && continue
+    CMD_BIN="${srv_cmd%% *}"
+    if [[ "$CMD_BIN" == /* ]]; then
+      if [ ! -x "$CMD_BIN" ]; then
+        WARNINGS+=("mcp_stdio_cmd_missing_${srv_name}: MCP server '${srv_name}' command '${CMD_BIN}' not found or not executable")
+      fi
+    else
+      if ! command -v "$CMD_BIN" >/dev/null 2>&1; then
+        WARNINGS+=("mcp_stdio_cmd_missing_${srv_name}: MCP server '${srv_name}' command '${CMD_BIN}' not on PATH")
+      fi
+    fi
+  done <<< "$STDIO_SERVERS"
+fi
+
+# 3. Watchdog health file — check it exists and is not stale (>60 min = watchdog not running)
+WATCHDOG_HEALTH_FILE="$HOME/.claude/state/mcp-watchdog/.health"
+if [ -f "$WATCHDOG_HEALTH_FILE" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    WATCHDOG_AGE_STATUS=$(python3 -c "
+import json, time, sys
+try:
+    h = json.load(open('$WATCHDOG_HEALTH_FILE'))
+    last = h.get('last_run', '')
+    if not last:
+        print('unknown'); sys.exit(0)
+    from datetime import datetime, timezone
+    ts = datetime.fromisoformat(last.replace('Z','+00:00')).timestamp()
+    print('stale' if (time.time()-ts) > 3600 else 'ok')
+except Exception:
+    print('error')
+" 2>/dev/null || echo "unknown")
+    if [ "$WATCHDOG_AGE_STATUS" = "stale" ]; then
+      WARNINGS+=("mcp_watchdog_stale: MCP watchdog health not updated in >1h — cron may be unregistered. Run /ops:mcp restart")
+    fi
+
+    # 4. Warn on servers that have been degraded >1 hour
+    WATCHDOG_STATE_FILE="$HOME/.claude/state/mcp-watchdog/state.json"
+    if [ -f "$WATCHDOG_STATE_FILE" ] && [ "$WATCHDOG_AGE_STATUS" = "ok" ]; then
+      DEGRADED_LONG=$(python3 -c "
+import json, time
+try:
+    s = json.load(open('$WATCHDOG_STATE_FILE'))
+    now = time.time()
+    bad = []
+    for name, info in s.items():
+        if info.get('state') == 'healthy': continue
+        probed = info.get('probed_at', '')
+        if not probed: continue
+        from datetime import datetime
+        ts = datetime.fromisoformat(probed.replace('Z','+00:00')).timestamp()
+        if now - ts > 3600:
+            bad.append(name + ':' + info.get('state','?'))
+    print(','.join(bad))
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+      if [ -n "$DEGRADED_LONG" ]; then
+        WARNINGS+=("mcp_servers_degraded_long: MCP servers degraded >1h: $DEGRADED_LONG — run /ops:mcp status")
+      fi
+    fi
+  fi
+else
+  WARNINGS+=("mcp_watchdog_no_health: MCP watchdog has never run (no health file). Run /ops:mcp restart to register cron")
+fi
+
 # --- 6. Registry ---
 REGISTRY_STATUS="missing"
 REGISTRY_COUNT=0
@@ -373,7 +559,89 @@ ENV_JSON=$(cat <<ENV
 ENV
 )
 
-# --- 10. Cache copies vs source ---
+# --- 10. Daemon services health ---
+DAEMON_SERVICES_FILE="${CLAUDE_PLUGIN_ROOT:-$SCRIPT_DIR}/scripts/daemon-services.default.json"
+DAEMON_HEALTH=()
+if [ ! -f "$DAEMON_SERVICES_FILE" ]; then
+  WARNINGS+=("daemon_services_missing: daemon-services.default.json not found at $DAEMON_SERVICES_FILE")
+elif ! command -v jq >/dev/null 2>&1; then
+  WARNINGS+=("daemon_services_no_jq: cannot check daemon health without jq")
+else
+  NOW_EPOCH=$(date +%s)
+  SERVICE_NAMES=$(jq -r '.services | keys[]' "$DAEMON_SERVICES_FILE" 2>/dev/null || true)
+  for svc in $SERVICE_NAMES; do
+    ENABLED=$(jq -r ".services[\"$svc\"].enabled" "$DAEMON_SERVICES_FILE" 2>/dev/null || echo "false")
+    [ "$ENABLED" = "true" ] || continue
+
+    HEALTH_FILE_RAW=$(jq -r ".services[\"$svc\"].health_file // empty" "$DAEMON_SERVICES_FILE" 2>/dev/null || true)
+    if [ -z "$HEALTH_FILE_RAW" ]; then
+      DAEMON_HEALTH+=("?  $svc: no health file declared")
+      continue
+    fi
+
+    # Expand ~ to $HOME
+    HEALTH_FILE="${HEALTH_FILE_RAW/#\~/$HOME}"
+
+    if [ ! -f "$HEALTH_FILE" ]; then
+      DAEMON_HEALTH+=("⚠  $svc: health file missing ($HEALTH_FILE_RAW)")
+      WARNINGS+=("daemon_health_missing_${svc}: service '$svc' health file not found at $HEALTH_FILE_RAW")
+      continue
+    fi
+
+    # Parse status and last_run from JSON health file
+    SVC_STATUS=$(jq -r '.status // "unknown"' "$HEALTH_FILE" 2>/dev/null || echo "parse_error")
+    LAST_RUN_RAW=$(jq -r '.last_run // empty' "$HEALTH_FILE" 2>/dev/null || true)
+
+    if [ -z "$LAST_RUN_RAW" ]; then
+      DAEMON_HEALTH+=("⚠  $svc: status=$SVC_STATUS last_run=unknown")
+      WARNINGS+=("daemon_health_no_last_run_${svc}: service '$svc' health file has no last_run field")
+      continue
+    fi
+
+    # Compute age in seconds; handle both epoch integers and ISO-8601 strings
+    if echo "$LAST_RUN_RAW" | grep -qE '^[0-9]+$'; then
+      LAST_RUN_EPOCH="$LAST_RUN_RAW"
+    else
+      LAST_RUN_EPOCH=$(date -d "$LAST_RUN_RAW" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%S" "${LAST_RUN_RAW%%.*}" +%s 2>/dev/null || echo "0")
+    fi
+
+    AGE_SEC=$(( NOW_EPOCH - LAST_RUN_EPOCH ))
+    AGE_MIN=$(( AGE_SEC / 60 ))
+
+    # Determine staleness threshold: services with cron >= 30m use 15m warning, else 5m
+    CRON_EXPR=$(jq -r ".services[\"$svc\"].cron // empty" "$DAEMON_SERVICES_FILE" 2>/dev/null || true)
+    if [ -z "$CRON_EXPR" ]; then
+      # continuous / no cron — use 15m threshold
+      STALE_THRESHOLD=15
+    else
+      # Parse the minute field: if it's */N, use N; treat as frequent if N<=10
+      MINUTE_FIELD=$(echo "$CRON_EXPR" | awk '{print $1}')
+      if echo "$MINUTE_FIELD" | grep -qE '^\*/([0-9]+)$'; then
+        CRON_INTERVAL=$(echo "$MINUTE_FIELD" | grep -oE '[0-9]+')
+        if [ "$CRON_INTERVAL" -le 10 ]; then
+          STALE_THRESHOLD=5
+        else
+          STALE_THRESHOLD=15
+        fi
+      else
+        # Hourly or less frequent — 15m threshold
+        STALE_THRESHOLD=15
+      fi
+    fi
+
+    if [ "$SVC_STATUS" = "ok" ] && [ "$AGE_MIN" -le "$STALE_THRESHOLD" ]; then
+      DAEMON_HEALTH+=("✓  $svc: status=ok last_run=${AGE_MIN}m ago")
+    elif [ "$AGE_MIN" -gt "$STALE_THRESHOLD" ]; then
+      DAEMON_HEALTH+=("✗  $svc: stale (last_run=${AGE_MIN}m ago, threshold=${STALE_THRESHOLD}m)")
+      WARNINGS+=("daemon_health_stale_${svc}: service '$svc' last ran ${AGE_MIN}m ago (threshold ${STALE_THRESHOLD}m)")
+    else
+      DAEMON_HEALTH+=("⚠  $svc: status=$SVC_STATUS last_run=${AGE_MIN}m ago")
+      WARNINGS+=("daemon_health_status_${svc}: service '$svc' reported status='$SVC_STATUS'")
+    fi
+  done
+fi
+
+# --- 10b. Cache copies vs source ---
 CACHE_DIR="$HOME/.claude/plugins/cache/ops-marketplace/ops"
 CACHE_VERSIONS=()
 if [ -d "$CACHE_DIR" ]; then
@@ -388,6 +656,7 @@ err_json="[]"
 warn_json="[]"
 info_json="[]"
 cache_json="[]"
+daemon_json="[]"
 if command -v jq >/dev/null 2>&1; then
   if [ ${#ERRORS[@]} -gt 0 ]; then
     err_json=$(printf '%s\n' "${ERRORS[@]}" | jq -R . | jq -s . 2>/dev/null || echo "[]")
@@ -400,6 +669,9 @@ if command -v jq >/dev/null 2>&1; then
   fi
   if [ ${#CACHE_VERSIONS[@]} -gt 0 ]; then
     cache_json=$(printf '%s\n' "${CACHE_VERSIONS[@]}" | jq -R . | jq -s . 2>/dev/null || echo "[]")
+  fi
+  if [ ${#DAEMON_HEALTH[@]} -gt 0 ]; then
+    daemon_json=$(printf '%s\n' "${DAEMON_HEALTH[@]}" | jq -R . | jq -s . 2>/dev/null || echo "[]")
   fi
 fi
 
@@ -422,6 +694,7 @@ cat <<EOF
     "path": "$PREFS"
   },
   "cache_versions": $cache_json,
+  "daemon_services_health": $daemon_json,
   "skill_count": $(find "$SCRIPT_DIR/skills" -name "SKILL.md" 2>/dev/null | wc -l | tr -d ' '),
   "agent_count": $(find "$SCRIPT_DIR/agents" -name "*.md" 2>/dev/null | wc -l | tr -d ' '),
   "bin_count": $(find "$SCRIPT_DIR/bin" -name "ops-*" 2>/dev/null | wc -l | tr -d ' ')
