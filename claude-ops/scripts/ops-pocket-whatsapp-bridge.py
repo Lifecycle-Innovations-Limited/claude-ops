@@ -42,6 +42,15 @@ from pathlib import Path
 
 LOG_PREFIX = "[ops-pocket-whatsapp-bridge]"
 HOME = Path(os.path.expanduser("~"))
+_USER_CONTEXT_PATH = Path(os.environ.get(
+    "POCKET_USER_CONTEXT",
+    str(HOME / ".claude/state/pocket/user-context.json"),
+))
+try:
+    _ctx = json.loads(_USER_CONTEXT_PATH.read_text())
+    _OWNER_NAME: str = _ctx.get("owner_name") or "the user"
+except (OSError, json.JSONDecodeError):
+    _OWNER_NAME = "the user"
 STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", HOME / ".claude/state/pocket"))
 BRIDGE_DB = Path(os.environ.get(
     "POCKET_WHATSAPP_DB",
@@ -139,21 +148,21 @@ def parse_with_llm(body: str, opens: list[dict], parser_model: str) -> list[dict
         for q in opens
     )
 
-    prompt = f"""You are the inbound-reply parser for Sam Renders' Pocket supervisor.
+    prompt = f"""You are the inbound-reply parser for {_OWNER_NAME}'s Pocket supervisor.
 
-Sam just sent a WhatsApp message. Your job: figure out which of the currently-open supervisor questions he's replying to (it may be one, several, or none), and extract the answer in a form the worker can use.
+{_OWNER_NAME} just sent a WhatsApp message. Your job: figure out which of the currently-open supervisor questions they're replying to (it may be one, several, or none), and extract the answer in a form the worker can use.
 
 Currently-open questions:
 {open_descriptions}
 
-Sam's WhatsApp message:
+{_OWNER_NAME}'s WhatsApp message:
 \"\"\"{body}\"\"\"
 
 Rules:
-- If Sam's message is clearly not a reply to any open question (chit-chat, unrelated request, ambiguous noise), return an empty array.
-- If Sam addresses one specific question, return one item.
-- If Sam addresses multiple in one message ("skip both kitchen ones, do the gmail one"), return multiple items.
-- The 'answer' field should be in Sam's voice and natural — the worker reads it as a direct instruction.
+- If {_OWNER_NAME}'s message is clearly not a reply to any open question (chit-chat, unrelated request, ambiguous noise), return an empty array.
+- If {_OWNER_NAME} addresses one specific question, return one item.
+- If {_OWNER_NAME} addresses multiple in one message ("skip both kitchen ones, do the gmail one"), return multiple items.
+- The 'answer' field should be in {_OWNER_NAME}'s voice and natural — the worker reads it as a direct instruction.
 - 'confidence' is your honest 0.0-1.0 estimate that you correctly identified the question + intent.
 - Output STRICT JSON, no markdown fences, no prose. Just the array.
 
