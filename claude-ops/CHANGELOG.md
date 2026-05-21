@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.9.0] — 2026-05-21
+
+`/ops:ops-voice` rebuilt as a full voice/phone/video surface. Native macOS Phone.app (Continuity), FaceTime audio/video, and Zoom now work with zero credentials; Twilio voice + SMS and Bland AI agent calls added for programmatic outbound. New `bin/ops-voice` shell wrapper mirrors the `bin/ops-discord` pattern.
+
+### Added
+
+- **`bin/ops-voice`** — single entry point with sub-commands `phone`, `facetime`, `zoom {start|join|schedule}`, `twilio-call`, `twilio-sms`, `bland-call`. JSON output mode via `--json`. Credential resolution: env → `ops_cred_get` (keychain) → `preferences.json` → Doppler.
+- **Native macOS handlers** — `tel:`, `facetime:`, `facetime-audio:`, and `zoommtg:` URL schemes invoked via `/usr/bin/open`. No API keys required.
+- **Twilio voice + SMS** — `twilio-call <to> <from> --twiml <URL>` and `twilio-sms <to> <from> "<body>"` via `api.twilio.com/2010-04-01`. Per-message approval (Rule 6) enforced.
+- **Bland AI agent calls** — `bland-call <number> "<task prompt>"` posts to `api.bland.ai/v1/calls` with recording enabled. Returns call_id + poll URL.
+- **Zoom REST scheduling** — `zoom schedule "<topic>" --start <ISO8601> --duration <min>` via `api.zoom.us/v2/users/me/meetings`. Requires `ZOOM_API_TOKEN` (Server-to-Server OAuth access token).
+- **Routing in `/ops:comms`** — `call <contact>`, `facetime <contact>`, `start a zoom`, `join zoom <id>`, `text <contact> "<body>"`, and `have an AI call <contact>` now resolve to `bin/ops-voice` sub-commands with contact-number lookup via `mcp__whatsapp__search_contacts` and `preferences.json` → `contacts`.
+- **Channel picker** — `voice` added to the empty-args picker batch when `channels.voice` is configured or `default_channels` includes `"voice"`.
+
+### Changed
+
+- **`skills/ops-voice/SKILL.md`** — rewritten from "call (Bland only) / tts / transcribe / setup" to the full 8-subcommand surface above. Existing `tts` (ElevenLabs) and `transcribe` (Groq Whisper) preserved. Rule 6 outbound-comms guardrail and Rule 7 mobile-mode notes added inline.
+
+### Known follow-up
+
+- `bin/ops-voice` calls `/usr/bin/open` directly for native channels — needs Rule 7 adapter via `lib/opener.sh::ops_open_url` so SSH/mobile sessions get a copy-able URL instead of opening on the remote host. Tracked as v2.9.1 patch.
+- Twilio inbound webhook routing (SMS-in → ops daemon) deferred to v2.10.
+
 ## [2.8.3] — 2026-05-21
 
 `/ops:ops-dash` data completeness pass — every section now reflects the full portfolio across all integrations (PRs #284–#290).

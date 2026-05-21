@@ -1,7 +1,7 @@
 ---
 name: ops-voice
-description: Voice operations — make phone calls (Bland AI), text-to-speech (ElevenLabs), transcribe audio (Whisper/Groq). Replace OpenClaw voice capabilities.
-argument-hint: "[call|tts|transcribe|setup]"
+description: Voice operations — native macOS Phone (Continuity), FaceTime, Zoom, Twilio voice + SMS, Bland AI agent calls, ElevenLabs TTS, Whisper transcription. All curl-based, no SDK deps.
+argument-hint: "[phone|facetime|zoom|twilio-call|twilio-sms|bland-call|tts|transcribe|setup]"
 allowed-tools:
   - Bash
   - Read
@@ -12,73 +12,109 @@ allowed-tools:
 
 # OPS:VOICE — Voice Operations
 
-Voice interface commands. All API calls via curl — no SDK dependencies.
+Voice / phone / video interface. All API calls via curl — no SDK dependencies. Native macOS handlers (Phone.app, FaceTime, Zoom) require no credentials; programmatic channels (Twilio, Bland, ElevenLabs, Groq, Zoom schedule) resolve credentials via:
 
-**Credential resolution order:** userConfig → env vars → Doppler MCP tools (`mcp__doppler__*`) → Doppler CLI fallback (`doppler secrets get <KEY> --plain`) → password manager
+**Credential resolution order:** env vars → `ops_cred_get` (lib/credential-store.sh / keychain) → `preferences.json` → Doppler CLI (`doppler secrets get <KEY> --plain`) → password manager.
+
+All sub-commands have a thin bash wrapper at `bin/ops-voice` — prefer it over inline curl when scripting.
+
+**Outbound comms guardrail (Rule 6):** `twilio-call`, `twilio-sms`, and `bland-call` are 1:1 outbound channels and MUST follow the per-message approval gate — stage final draft, show full target+body, wait for explicit approval (`AskUserQuestion` or single-word chat approval), send one, then stage the next. Never batch.
 
 ---
 
 ## Sub-commands
 
-Parse `$ARGUMENTS` for the command keyword, then execute:
+Parse `$ARGUMENTS` for the command keyword, then execute. Native handlers exit fast; API calls report status and (where relevant) a poll command.
 
 ---
 
-### `call [phone] [prompt]` — Bland AI phone call
+### `phone <number>` — Native Phone.app via Continuity
 
-**Requires:** `bland_ai_api_key` in userConfig or `BLAND_AI_API_KEY` env or Doppler.
+Routes through the linked iPhone. Requires macOS + iPhone signed in to the same iCloud account with **Calls on Other Devices** enabled. No credentials.
 
 ```bash
-BLAND_KEY="${BLAND_AI_API_KEY:-$(doppler secrets get BLAND_AI_API_KEY --plain 2>/dev/null || true)}"
-PHONE="<extracted from $ARGUMENTS>"
-PROMPT="<extracted from $ARGUMENTS or ask user>"
-MAX_DURATION="${BLAND_MAX_DURATION:-300}"  # seconds
-VOICE="${BLAND_VOICE:-male}"
-
-# Make the call
-RESPONSE=$(curl -s -X POST "https://api.bland.ai/v1/calls" \
-  -H "authorization: $BLAND_KEY" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"phone_number\": \"$PHONE\",
-    \"task\": \"$PROMPT\",
-    \"voice\": \"$VOICE\",
-    \"max_duration\": $MAX_DURATION,
-    \"record\": true
-  }")
-
-CALL_ID=$(echo "$RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('call_id',''))" 2>/dev/null)
-
-# Poll for completion (up to 5 min)
-if [ -n "$CALL_ID" ]; then
-  echo "Call initiated: $CALL_ID"
-  for i in $(seq 1 30); do
-    sleep 10
-    STATUS=$(curl -s "https://api.bland.ai/v1/calls/$CALL_ID" \
-      -H "authorization: $BLAND_KEY" | \
-      python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status',''), d.get('transcripts','')[-1].get('text','') if d.get('transcripts') else '')" 2>/dev/null)
-    echo "Status: $STATUS"
-    [[ "$STATUS" == completed* ]] && break
-  done
-fi
+bin/ops-voice phone "+1234567890" --json
+# {"ok":true,"channel":"phone","detail":"dialing +1234567890 via Phone.app (Continuity)"}
 ```
 
-**Output:** Call ID, live status, transcript when complete.
+Under the hood: `open "tel:<E.164>"`.
+
+---
+
+### `facetime <number-or-email> [--audio]` — FaceTime video/audio
+
+Defaults to video. Pass `--audio` for FaceTime Audio (free, Apple↔Apple). Accepts phone numbers or Apple-ID emails.
+
+```bash
+bin/ops-voice facetime user@example.com               # video
+bin/ops-voice facetime "+1234567890" --audio --json   # audio
+```
+
+Under the hood: `open "facetime://<handle>"` or `open "facetime-audio://<handle>"`.
+
+---
+
+### `zoom start|join|schedule` — Zoom meetings
+
+```bash
+# Open zoom.us app and start a new instant meeting
+bin/ops-voice zoom start
+
+# Join an existing meeting
+bin/ops-voice zoom join 1234567890 --pwd <password>
+
+# Schedule a meeting via Zoom REST API (requires ZOOM_API_TOKEN — Server-to-Server OAuth access token)
+bin/ops-voice zoom schedule "<topic>" --start "2026-05-22T15:00:00Z" --duration 30 --json
+# {"ok":true,"channel":"zoom","detail":"scheduled meeting 12345 — https://us05web.zoom.us/j/..."}
+```
+
+Native start/join use `zoommtg://` URL scheme. Schedule requires `ZOOM_API_TOKEN` resolved via the order above. Generate a Server-to-Server OAuth app in your Zoom Marketplace, then exchange for an access token.
+
+---
+
+### `twilio-call <to> <from> --twiml <URL>` — Programmatic outbound voice
+
+Real telco call (per-minute cost). Requires `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN`. The `--twiml` URL must return TwiML XML describing call behavior — e.g. `https://demo.twilio.com/docs/voice.xml` or a custom Function/Studio flow.
+
+```bash
+bin/ops-voice twilio-call "+1234567890" "+15551234567" \
+  --twiml "https://demo.twilio.com/docs/voice.xml" --json
+```
+
+---
+
+### `twilio-sms <to> <from> "<body>"` — Programmatic outbound SMS
+
+```bash
+bin/ops-voice twilio-sms "+1234567890" "+15551234567" "<body>" --json
+```
+
+For inbound SMS / WhatsApp routing, point your Twilio webhook at the ops daemon (out of scope for v1).
+
+---
+
+### `bland-call <number> "<prompt>"` — Bland AI agent phone call
+
+AI agent calls the number and follows the natural-language prompt. Recordings + transcripts available via the poll URL printed on success.
+
+```bash
+bin/ops-voice bland-call "+1234567890" "<task prompt>" --json
+```
+
+Poll with: `curl -H "authorization: $BLAND_AI_API_KEY" https://api.bland.ai/v1/calls/<call_id>`.
 
 ---
 
 ### `tts [text] [--voice voice_id] [--out file.mp3]` — ElevenLabs text-to-speech
 
-**Requires:** `elevenlabs_api_key` in userConfig or `ELEVENLABS_API_KEY` env or Doppler.
+**Requires:** `ELEVENLABS_API_KEY` (env / keychain / Doppler).
 
 ```bash
 EL_KEY="${ELEVENLABS_API_KEY:-$(doppler secrets get ELEVENLABS_API_KEY --plain 2>/dev/null || true)}"
-VOICE_ID="${ELEVENLABS_VOICE_ID:-21m00Tcm4TlvDq8ikWAM}"  # Rachel (default)
-TEXT="<extracted from $ARGUMENTS>"
+VOICE_ID="${ELEVENLABS_VOICE_ID:-21m00Tcm4TlvDq8ikWAM}"  # Rachel
+TEXT="<from $ARGUMENTS>"
 OUT_FILE="${OUT_FILE:-/tmp/ops-tts-$(date +%s).mp3}"
 
-# List voices if voice name provided (not an ID)
-# Synthesize
 curl -s -X POST "https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}" \
   -H "xi-api-key: $EL_KEY" \
   -H "Content-Type: application/json" \
@@ -89,85 +125,131 @@ curl -s -X POST "https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}" \
   }" \
   --output "$OUT_FILE"
 
+command -v afplay >/dev/null && afplay "$OUT_FILE" &
 echo "Audio saved to: $OUT_FILE"
-# Auto-play on macOS
-command -v afplay &>/dev/null && afplay "$OUT_FILE" &
 ```
-
-**Output:** Audio file path. Auto-plays on macOS via `afplay`.
 
 ---
 
 ### `transcribe [file_path]` — Groq Whisper transcription
 
-**Requires:** `groq_api_key` in userConfig or `GROQ_API_KEY` env or Doppler.
+**Requires:** `GROQ_API_KEY` (env / keychain / Doppler).
 
 ```bash
 GROQ_KEY="${GROQ_API_KEY:-$(doppler secrets get GROQ_API_KEY --plain 2>/dev/null || true)}"
-AUDIO_FILE="<extracted from $ARGUMENTS>"
+AUDIO_FILE="<from $ARGUMENTS>"
 
-if [ ! -f "$AUDIO_FILE" ]; then
-  echo "ERROR: File not found: $AUDIO_FILE"
-  exit 1
-fi
+[ -f "$AUDIO_FILE" ] || { echo "ERROR: $AUDIO_FILE not found"; exit 1; }
 
-TRANSCRIPT=$(curl -s -X POST "https://api.groq.com/openai/v1/audio/transcriptions" \
+curl -s -X POST "https://api.groq.com/openai/v1/audio/transcriptions" \
   -H "Authorization: Bearer $GROQ_KEY" \
   -F "file=@$AUDIO_FILE" \
   -F "model=whisper-large-v3" \
   -F "response_format=json" | \
-  python3 -c "import json,sys; print(json.load(sys.stdin).get('text',''))" 2>/dev/null)
-
-echo "$TRANSCRIPT"
+  jq -r '.text'
 ```
-
-**Output:** Transcript text printed to stdout.
 
 ---
 
-### `setup` — Configure voice API keys
+### `setup` — Configure voice channels
 
-**Before asking for anything**, auto-scan ALL sources in a single background batch:
+Before asking for anything, auto-scan ALL sources in one background batch (Rule 4: `run_in_background: true`):
 
 ```bash
 # Env vars
-printenv BLAND_AI_API_KEY BLAND_API_KEY ELEVENLABS_API_KEY GROQ_API_KEY 2>/dev/null
+printenv \
+  TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_FROM_NUMBER \
+  BLAND_AI_API_KEY ELEVENLABS_API_KEY GROQ_API_KEY \
+  ZOOM_API_TOKEN ZOOM_ACCOUNT_ID ZOOM_CLIENT_ID ZOOM_CLIENT_SECRET 2>/dev/null
 
 # Shell profiles
-grep -h 'BLAND\|ELEVENLABS\|GROQ' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
+grep -hE 'TWILIO|BLAND|ELEVENLABS|GROQ|ZOOM' \
+  ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
 
 # Doppler — ALL projects
 for proj in $(doppler projects --json 2>/dev/null | jq -r '.[].slug'); do
   for cfg in dev stg prd; do
     doppler secrets --project "$proj" --config "$cfg" --json 2>/dev/null | \
-      jq -r --arg proj "$proj" --arg cfg "$cfg" 'to_entries[] | select(.key | test("BLAND|ELEVENLABS|GROQ"; "i")) | "\(.key)=\(.value.computed | .[0:12])... (doppler:\($proj)/\($cfg))"'
+      jq -r --arg p "$proj" --arg c "$cfg" \
+        'to_entries[]
+         | select(.key | test("TWILIO|BLAND|ELEVENLABS|GROQ|ZOOM"; "i"))
+         | "\(.key)=\(.value.computed | .[0:12])... (doppler:\($p)/\($c))"'
   done
 done
 
-# Dashlane
-dcli password bland --output json 2>/dev/null | jq -r '.[] | select(.password != null) | "\(.title): key found"'
-dcli password elevenlabs --output json 2>/dev/null | jq -r '.[] | select(.password != null) | "\(.title): key found"'
-dcli password groq --output json 2>/dev/null | jq -r '.[] | select(.password != null) | "\(.title): key found"'
-
 # Keychain
-security find-generic-password -s "bland-ai-api-key" -w 2>/dev/null
-security find-generic-password -s "elevenlabs-api-key" -w 2>/dev/null
-security find-generic-password -s "groq-api-key" -w 2>/dev/null
+for svc in twilio bland-ai elevenlabs groq zoom; do
+  security find-generic-password -s "$svc" -w 2>/dev/null >/dev/null \
+    && echo "[keychain] $svc ✓"
+done
+
+# Native macOS prerequisites
+ls /Applications/zoom.us.app \
+   /System/Applications/FaceTime.app \
+   /System/Applications/Phone.app 2>/dev/null
 ```
 
-Present all findings. Only prompt for keys NOT found in any source. Then validate each found key in background:
+Validate found keys (in parallel):
 
-1. **Bland AI**: `curl -s -H "authorization: $KEY" https://api.bland.ai/v1/me` — check balance
-2. **ElevenLabs**: `curl -s -H "xi-api-key: $KEY" https://api.elevenlabs.io/v1/voices?page_size=1` — list voices
-3. **Groq**: `curl -s -H "Authorization: Bearer $KEY" https://api.groq.com/openai/v1/models` — list models
+| Channel    | Probe                                                                              |
+|------------|------------------------------------------------------------------------------------|
+| Twilio     | `curl -u "$SID:$TOKEN" https://api.twilio.com/2010-04-01/Accounts/$SID.json`       |
+| Bland      | `curl -H "authorization: $KEY" https://api.bland.ai/v1/me`                         |
+| ElevenLabs | `curl -H "xi-api-key: $KEY" "https://api.elevenlabs.io/v1/voices?page_size=1"`     |
+| Groq       | `curl -H "Authorization: Bearer $KEY" https://api.groq.com/openai/v1/models`       |
+| Zoom       | `curl -H "Authorization: Bearer $TOKEN" https://api.zoom.us/v2/users/me`           |
 
-Report: `[service] ✓ connected` or `[service] ✗ invalid key — [error]`
+Report each as `[service] ✓ connected` or `[service] ✗ <error>`. **Rule 3 applies — never silently skip a channel.** For each unset service, present `AskUserQuestion` with `[Paste manually]` / `[Deep hunt — spawn agent]` / `[Skip]`.
+
+Persist to `preferences.json`:
+
+```json
+{
+  "channels": {
+    "voice": {
+      "backend": "native+twilio+zoom+bland",
+      "native": {"phone": true, "facetime": true, "zoom": true},
+      "twilio": {"status": "configured", "from_number": "env:TWILIO_FROM_NUMBER"},
+      "bland":  {"status": "configured"},
+      "zoom":   {"status": "configured"}
+    }
+  },
+  "default_channels": ["whatsapp", "email", "telegram", "slack", "voice"]
+}
+```
+
+---
+
+## Routing from `/ops:comms`
+
+Voice is wired into `/ops:comms` send-flow. The router resolves intent like:
+
+| User says                              | Resolves to                                |
+|----------------------------------------|--------------------------------------------|
+| `call <name>`                          | `ops-voice phone <number>`                 |
+| `facetime <name>`                      | `ops-voice facetime <handle>`              |
+| `start a zoom`                         | `ops-voice zoom start`                     |
+| `text <name> "..."`                    | `ops-voice twilio-sms ... "..."`           |
+| `have an AI call <name> and tell ...`  | `ops-voice bland-call <number> "..."`      |
+
+Contact-number lookup uses the same contact resolver as WhatsApp (`mcp__whatsapp__search_contacts`) plus an optional `contacts.json` map in `preferences.json`.
+
+---
+
+## Mobile / SSH mode (Rule 7)
+
+When `$SSH_CONNECTION$SSH_CLIENT$SSH_TTY` is set or `$OPS_MOBILE=1`:
+- `bin/ops-voice` still works for API channels.
+- Native channels (`phone`, `facetime`, `zoom start|join`) require a local macOS session — the script returns a plain-text instruction to open the URL on the host instead of calling `open` directly. The script must source `lib/opener.sh` and use `ops_open_url` for URL handoff.
+
+(v1 of `bin/ops-voice` calls `/usr/bin/open` directly — Rule 7 adapter is a v1.1 follow-up; tracked in CHANGELOG.)
 
 ---
 
 ## Execution
 
-1. Resolve the sub-command from `$ARGUMENTS` (first word: call / tts / transcribe / setup)
-2. Resolve credentials in order: env → Doppler
-3. Execute the matching curl block above
-4. If a required key is missing and `setup` was not invoked, suggest `/ops:ops-voice setup`
+1. Resolve the sub-command from `$ARGUMENTS` (first word).
+2. For native handlers (phone/facetime/zoom start|join), shell out to `bin/ops-voice` — exit fast.
+3. For API channels (twilio/bland/zoom-schedule/tts/transcribe), resolve credentials in order, then curl.
+4. If a required key is missing, suggest `/ops:ops-voice setup`.
+5. For 1:1 outbound channels (twilio-call/sms, bland-call): stage one draft → `AskUserQuestion` → send → next.
