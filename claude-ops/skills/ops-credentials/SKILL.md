@@ -57,6 +57,21 @@ Claude Code's plugin settings UI cannot introspect external credential stores. I
 
 `/ops:credentials` solves that — one command, one table, complete picture of which integrations are ready to use vs which still need `/ops:setup`.
 
+## Homey Pro (Home Automation)
+
+| Field | Value |
+|-------|-------|
+| Service name | Homey Pro |
+| Category | Home Automation |
+| Keys | `HOMEY_LOCAL_URL`, `HOMEY_LOCAL_TOKEN`, `HOMEY_CLOUD_TOKEN`, `HOMEY_ID` |
+| Storage | `$PREFS_PATH` → `.home_automation.homey_local_url`, `.homey_local_token`, `.homey_cloud_token`, `.homey_id` |
+| Required | `HOMEY_LOCAL_URL`, `HOMEY_LOCAL_TOKEN` |
+| Optional | `HOMEY_CLOUD_TOKEN` (off-LAN fallback), `HOMEY_ID` (cloud API only) |
+
+**Rotation:** Revoke the current token at `https://my.homey.app/manager/tokens`, generate a new one, then rerun `/ops:setup --section home` to save the replacement.
+
+---
+
 ## Privacy guarantees
 
 - **Never prints raw values.** All output is masked.
