@@ -260,10 +260,42 @@ TOTAL_PROBES=12
   touch "$TMPDIR_DASH/done_portfolio"
 ) &
 
-# 5) Marketing
+# 5) Marketing — iterate ALL configured projects in parallel subshells
 (
-  "$PLUGIN_ROOT/bin/ops-marketing-dash" 2>/dev/null > "$TMPDIR_DASH/marketing.json" \
-    || echo '{}' > "$TMPDIR_DASH/marketing.json"
+  MK_TMPDIR=$(mktemp -d)
+  trap 'rm -rf "$MK_TMPDIR"' EXIT
+
+  # Read project list from preferences; fall back to default_project only
+  if [ -f "$PREFS" ]; then
+    MK_PROJECTS=$(jq -r '.marketing.projects | keys[]' "$PREFS" 2>/dev/null || true)
+    [ -z "$MK_PROJECTS" ] && MK_PROJECTS=$(jq -r '.marketing.default_project // empty' "$PREFS" 2>/dev/null || true)
+  fi
+
+  if [ -z "${MK_PROJECTS:-}" ]; then
+    echo '{"projects":[]}' > "$TMPDIR_DASH/marketing.json"
+    touch "$TMPDIR_DASH/done_marketing"
+    exit 0
+  fi
+
+  # Fire one subshell per project — writes <project>.json to MK_TMPDIR
+  for _proj in $MK_PROJECTS; do
+    (
+      "$PLUGIN_ROOT/bin/ops-marketing-dash" --project "$_proj" 2>/dev/null \
+        > "$MK_TMPDIR/${_proj}.json" \
+        || echo '{}' > "$MK_TMPDIR/${_proj}.json"
+    ) &
+  done
+  wait
+
+  # Merge into {"projects":[...]} array; sort ascending by health_score (lowest first)
+  jq -s '
+    map(select(. != {}))
+    | sort_by(.health_score // 0)
+    | {projects: .}
+  ' "$MK_TMPDIR"/*.json 2>/dev/null \
+    > "$TMPDIR_DASH/marketing.json" \
+    || echo '{"projects":[]}' > "$TMPDIR_DASH/marketing.json"
+
   touch "$TMPDIR_DASH/done_marketing"
 ) &
 
@@ -458,9 +490,14 @@ RUNWAY=$(echo "$REVENUE_JSON" | jq -r '.runway_months // "n/a"' 2>/dev/null || e
 MRR_TREND=$(echo "$REVENUE_JSON" | jq -r '.mrr_trend // ""' 2>/dev/null || echo "")
 
 # ── Marketing at-a-glance ─────────────────────────────────────────────────────
-MK_HEALTH=$(echo "$MARKETING_JSON" | jq -r '.health_score // "?"' 2>/dev/null || echo "?")
-MK_STATUS=$(echo "$MARKETING_JSON" | jq -r '.health_status // "n/a"' 2>/dev/null || echo "n/a")
-MK_PROJECT=$(echo "$MARKETING_JSON" | jq -r '.project // ""' 2>/dev/null || echo "")
+MK_PROJECT_COUNT=$(echo "$MARKETING_JSON" | jq '.projects | length' 2>/dev/null || echo "0")
+[[ "$MK_PROJECT_COUNT" =~ ^[0-9]+$ ]] || MK_PROJECT_COUNT="0"
+MK_AVG_HEALTH=$(echo "$MARKETING_JSON" | jq -r '
+  if (.projects | length) > 0
+  then ([ .projects[].health_score // 0 ] | add / length | round | tostring)
+  else "?" end' 2>/dev/null || echo "?")
+MK_WORST=$(echo "$MARKETING_JSON" | jq -r '.projects[0].project // ""' 2>/dev/null || echo "")
+MK_WORST_SCORE=$(echo "$MARKETING_JSON" | jq -r '.projects[0].health_score // "?"' 2>/dev/null || echo "?")
 
 # ── Date ──────────────────────────────────────────────────────────────────────
 NOW=$(date "+%Y-%m-%d %H:%M")
@@ -749,29 +786,59 @@ render_section_revenue() {
 # SECTION 7 — MARKETING
 # ════════════════════════════════════════════════════════════════════════════
 render_section_marketing() {
-  section_hdr "📣" "MARKETING"
+  section_hdr "📣" "MARKETING  (${MK_PROJECT_COUNT} projects)"
 
-  if [[ "$MK_HEALTH" == "?" || -z "$MK_HEALTH" ]]; then
-    p "  ${DIM2}No marketing data. Configure marketing.default_project in preferences.json${RST}"
-  else
-    # Health color
-    if [[ "$MK_HEALTH" =~ ^[0-9]+$ ]]; then
-      if [[ "$MK_HEALTH" -ge 80 ]]; then HC="${BGRN}"
-      elif [[ "$MK_HEALTH" -ge 60 ]]; then HC="${BYLW}"
-      else HC="${BRED}"; fi
-    else HC="${DIM2}"; fi
-
-    p "  📊 ${BWHT}Health${RST}  ${HC}${MK_HEALTH}/100${RST}  ${MK_STATUS}${MK_PROJECT:+  (${MK_PROJECT})}"
-
-    echo "$MARKETING_JSON" | jq -r \
-      '.channels // {} | to_entries[] | select(.value.available == true) |
-       "  📈 \(.key | ascii_upcase)  \(.value.health_score // "?")/100  \(.value.top_metric // "")"' \
-      2>/dev/null \
-      | head -4 \
-      | while IFS= read -r line; do p "${DIM2}${line}${RST}"; done \
-      || true
+  if [[ "$MK_PROJECT_COUNT" -eq 0 ]]; then
+    p "  ${DIM2}No marketing data. Configure marketing.projects in preferences.json${RST}"
+    p ""; return
   fi
 
+  # Mobile: single summary line
+  if [[ "$MOBILE_MODE" -eq 1 ]]; then
+    p "marketing: ${MK_PROJECT_COUNT} projects, avg health ${MK_AVG_HEALTH}/100 (worst: ${MK_WORST} ${MK_WORST_SCORE}/100)"
+    p ""; return
+  fi
+
+  # Desktop: compact table — one row per project, sorted lowest health first
+  # Header
+  printf "  %-14s  %8s  %10s  %s\n" \
+    "${BWHT}PROJECT${RST}" "${BWHT}HEALTH${RST}" "${BWHT}ROAS${RST}" "${BWHT}STATUS${RST}"
+  printf "  %s\n" "${DIMX}─────────────────────────────────────────────────────────${RST}"
+
+  echo "$MARKETING_JSON" | jq -r \
+    '.projects[] |
+     [ (.project // "?"),
+       (.health_score // 0 | tostring),
+       (.health_status // "?"),
+       (.blended_roas // "0")
+     ] | @tsv' 2>/dev/null \
+    | head -12 \
+    | while IFS=$'\t' read -r proj score status roas; do
+        # Health color
+        if [[ "$score" =~ ^[0-9]+$ ]]; then
+          if   [[ "$score" -ge 70 ]]; then HC="${BGRN}"
+          elif [[ "$score" -ge 40 ]]; then HC="${BYLW}"
+          else HC="${BRED}"; fi
+        else HC="${DIM2}"; fi
+
+        # Top channel: first non-null channel key
+        top_channel=$(echo "$MARKETING_JSON" | jq -r \
+          --arg p "$proj" \
+          '.projects[] | select(.project == $p) |
+           if .meta != null then "meta"
+           elif .klaviyo != null then "email"
+           elif .ga4 != null then "ga4"
+           elif .instagram != null then "ig"
+           elif .gsc != null then "gsc"
+           else "-" end' 2>/dev/null | head -1 || echo "-")
+
+        printf "  %-14s  %s%-5s/100${RST}  %9sx  %s\n" \
+          "${CYN}${proj}${RST}" "$HC" "$score" "$roas" "${DIM2}${status}  ${top_channel}${RST}"
+      done \
+    || no_data
+
+  printf "  %s\n" "${DIMX}─────────────────────────────────────────────────────────${RST}"
+  printf "  ${DIM2}avg health: ${MK_AVG_HEALTH}/100  ·  worst: ${MK_WORST} ${MK_WORST_SCORE}/100${RST}\n"
   p ""
 }
 
