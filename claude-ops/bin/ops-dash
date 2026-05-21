@@ -329,12 +329,23 @@ TOTAL_PROBES=12
   touch "$TMPDIR_DASH/done_linear"
 ) &
 
-# 11) Competitor intel
+# 11) Competitor intel — all configured brands
 (
   INTEL_DIR="${OPS_DATA_DIR}/reports/competitor-intel"
+  COMP_LIB="${PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}/scripts/lib/competitor/context.sh"
+  CTX='{"configured":false}'
+  if [[ -f "$COMP_LIB" ]]; then
+    # shellcheck disable=SC1090
+    source "$COMP_LIB" 2>/dev/null || true
+    if declare -F competitor_context >/dev/null 2>&1; then
+      CTX=$(competitor_context --window-days 7 2>/dev/null || echo '{"configured":false}')
+    fi
+  fi
+  echo "$CTX" > "$TMPDIR_DASH/competitor.json"
+  # Legacy fallback: latest report file regardless of brand
   LATEST_INTEL=""
   if [ -d "$INTEL_DIR" ]; then
-    LATEST_INTEL=$(ls -t "$INTEL_DIR"/*.md 2>/dev/null | head -1 || true)
+    LATEST_INTEL=$(ls -t "$INTEL_DIR"/*.md 2>/dev/null | grep -v -- '-synthesis\.md$' | head -1 || true)
   fi
   echo "${LATEST_INTEL:-}" > "$TMPDIR_DASH/competitor"
   touch "$TMPDIR_DASH/done_competitor"
@@ -408,6 +419,7 @@ GSD_ACTIVE=$(cat "$TMPDIR_DASH/gsd"           2>/dev/null || echo "0")
 REVENUE_JSON=$(cat "$TMPDIR_DASH/revenue.json" 2>/dev/null || echo '{}')
 LINEAR_JSON=$(cat "$TMPDIR_DASH/linear.json"   2>/dev/null || echo '{}')
 COMPETITOR_FILE=$(cat "$TMPDIR_DASH/competitor" 2>/dev/null | head -1 || echo "")
+COMPETITOR_JSON=$(cat "$TMPDIR_DASH/competitor.json" 2>/dev/null || echo '{"configured":false}')
 DEPLOY_JSON=$(cat "$TMPDIR_DASH/deploys.json"  2>/dev/null || echo '[]')
 YOLO_LIST=$(cat "$TMPDIR_DASH/yolo_list"       2>/dev/null || echo "")
 PROJECTS=$([ -f "$REGISTRY" ] && jq '.projects | length' "$REGISTRY" 2>/dev/null || echo "0")
@@ -831,23 +843,67 @@ render_section_deploys() {
 # SECTION 10 — COMPETITOR INTEL
 # ════════════════════════════════════════════════════════════════════════════
 render_section_competitor() {
+  local configured
+  configured=$(printf '%s' "$COMPETITOR_JSON" | jq -r '.configured // false' 2>/dev/null || echo "false")
+
+  # Rule 7 fallback: if not configured AND no legacy report file, omit the section entirely.
+  if [[ "$configured" != "true" && ( -z "$COMPETITOR_FILE" || ! -f "$COMPETITOR_FILE" ) ]]; then
+    return
+  fi
+
   section_hdr "🕵️" "COMPETITOR INTEL"
 
-  if [[ -z "$COMPETITOR_FILE" || ! -f "$COMPETITOR_FILE" ]]; then
-    p "  ${DIM2}No reports in ${OPS_DATA_DIR}/reports/competitor-intel/${RST}"
-    p "  ${DIM2}Run /ops:ops-competitors to generate.${RST}"
+  if [[ "$configured" == "true" ]]; then
+    local n_brands
+    n_brands=$(printf '%s' "$COMPETITOR_JSON" | jq -r '.brands | length' 2>/dev/null || echo "0")
+
+    if [[ "$n_brands" -eq 0 ]]; then
+      p "  ${DIM2}No brands tracked yet. Run /ops:ops-competitors refresh.${RST}"
+      p ""; return
+    fi
+
+    # One line per brand: name, alert count (7d high), last run date, top snippet
+    printf '%s' "$COMPETITOR_JSON" | jq -r '
+      .brands as $bs |
+      . as $root |
+      $bs[] |
+      . as $b |
+      ($root.by_brand[$b] // {}) as $bd |
+      ($root.events.high | map(select(((.competitor // "") | ascii_downcase) as $c |
+        (($bd.competitors // []) | map(ascii_downcase) | index($c)) != null))) as $alerts |
+      [
+        $b,
+        ($alerts | length | tostring),
+        (($bd.last_run // "never")[0:10]),
+        ($alerts[0].snippet // "" | .[0:140])
+      ] | @tsv
+    ' 2>/dev/null | while IFS=$'\t' read -r brand alerts last snippet; do
+      [[ -z "$brand" ]] && continue
+      p "  ${BCYN}${brand}${RST}  ${DIM2}${alerts} alerts (7d)  last ${last}${RST}"
+      [[ -n "$snippet" ]] && p "    ${DIM2}${snippet}${RST}"
+    done
+
+    # Surface latest report path for the brand with most-recent run
+    local latest_report
+    latest_report=$(printf '%s' "$COMPETITOR_JSON" | jq -r '
+      [.by_brand | to_entries[] | select(.value.latest_report)] |
+      sort_by(.value.last_run // "") | reverse | .[0].value.latest_report // empty
+    ' 2>/dev/null)
+    if [[ -n "$latest_report" && -f "$latest_report" ]]; then
+      p "  📄 ${DIM2}$(basename "$latest_report")${RST}"
+    fi
+
     p ""; return
   fi
 
+  # Legacy fallback path (configured=false but a report file exists)
   REPORT_NAME=$(basename "$COMPETITOR_FILE")
   REPORT_DATE=$(echo "$REPORT_NAME" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1 || echo "?")
   p "  📄 ${DIM2}${REPORT_NAME}${RST}  ${DIM2}(${REPORT_DATE})${RST}"
-
   grep -v '^[[:space:]]*$' "$COMPETITOR_FILE" 2>/dev/null \
     | head -6 \
     | while IFS= read -r line; do p "  ${DIM2}${line}${RST}"; done \
     || true
-
   p ""
 }
 
