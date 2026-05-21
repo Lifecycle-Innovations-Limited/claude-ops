@@ -85,7 +85,9 @@ _TEAM_MEMBERS_DESC = (
 )
 
 STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", HOME / ".claude/state/pocket"))
-MODEL = os.environ.get("POCKET_TRIAGE_MODEL", "claude-opus-4-7")
+MODEL = os.environ.get("POCKET_TRIAGE_MODEL", "claude-sonnet-4-6")
+RETRY_ON_RATE_LIMIT = os.environ.get("POCKET_TRIAGE_RETRY_RATE_LIMIT", "1") != "0"
+RATE_LIMIT_BACKOFF_SECS = int(os.environ.get("POCKET_TRIAGE_RATE_LIMIT_BACKOFF", "60"))
 THINKING_BUDGET = int(os.environ.get("POCKET_TRIAGE_THINKING_TOKENS", "4000"))
 MAX_TOKENS = int(os.environ.get("POCKET_TRIAGE_MAX_TOKENS", "1500"))
 DRY_RUN = os.environ.get("POCKET_TRIAGE_DRY_RUN") == "1"
@@ -170,7 +172,38 @@ SYSTEM_PROMPT = _SYSTEM_PROMPT_TEMPLATE.format(
 )
 
 
+def _is_rate_limited(decision: dict) -> bool:
+    """Detect rate-limit signals in a triage_one result so the caller can
+    retry. Looks at structured _error + free-text concerns (since Claude
+    Code's exit-code stderr includes the upstream message)."""
+    err = str(decision.get("_error", "")).lower()
+    if "429" in err or "rate" in err:
+        return True
+    concerns = decision.get("concerns") or []
+    blob = " ".join(str(c) for c in concerns).lower()
+    return "rate_limit" in blob or "429" in blob or "quota" in blob
+
+
 def triage_one(task: dict) -> dict:
+    """Public triage entry point. Calls `_triage_once`; on a rate-limit
+    failure (and if RETRY_ON_RATE_LIMIT is set), sleeps
+    RATE_LIMIT_BACKOFF_SECS and retries exactly once. The historical
+    failure mode (2026-05-20: 12/22 records defaulted to ASK on a
+    sustained Opus 429 burst) — one retry with a 60s pause clears it
+    in practice, and Sonnet (the new default) has a much higher ceiling
+    than Opus so this rarely fires at all."""
+    decision = _triage_once(task)
+    if RETRY_ON_RATE_LIMIT and _is_rate_limited(decision):
+        log(f"rate-limited on first attempt; backing off {RATE_LIMIT_BACKOFF_SECS}s then retrying once")
+        time.sleep(RATE_LIMIT_BACKOFF_SECS)
+        retry = _triage_once(task)
+        retry["_retried_after_rate_limit"] = True
+        retry["_initial_attempt_error"] = decision.get("_error") or "rate-limited"
+        return retry
+    return decision
+
+
+def _triage_once(task: dict) -> dict:
     """Run triage via `claude -p` subprocess (uses Claude Code's internal
     session — same auth as the user's interactive chat, no per-token rate
     limits). ANTHROPIC_API_KEY is unset for the call so OAuth wins (a stale

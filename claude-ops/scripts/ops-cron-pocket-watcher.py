@@ -92,6 +92,13 @@ SEEN_FILE = STATE_DIR / "seen.json"
 SEEN_CAP = 5000
 RECORDINGS_PAGINATION_RESUME_FILE = STATE_DIR / "recordings-pagination-resume.json"
 HEALTH_FILE = STATE_DIR / ".health"
+# Tracks whether Pocket's search backend is currently unavailable. When the
+# watcher hits "search service unavailable" we touch this file with the
+# first-seen timestamp; on the next successful search we delete the file
+# AND send a recovery notification. This makes outage transitions
+# observable and gives the owner a real-time ping when Pocket comes back.
+SEARCH_OUTAGE_MARKER = STATE_DIR / ".search-outage-marker"
+WHATSAPP_CONFIG = STATE_DIR / "whatsapp-config.json"
 
 # Giga sync
 GIGA_SYNC = os.environ.get("GIGA_SYNC", "1") == "1"
@@ -310,6 +317,19 @@ class MCPClient:
         if "error" in msg:
             return None, json.dumps(msg["error"])[:300]
         result = msg.get("result", {})
+        # MCP tool spec: top-level `isError: true` means the tool ran but
+        # returned a server-side error (e.g. "search service unavailable").
+        # Surface this as an err so callers don't silently treat it as
+        # "no results found." Without this, an upstream Pocket search
+        # outage looks identical to a normal empty result set.
+        if result.get("isError"):
+            content = result.get("content") or []
+            msg_text = ""
+            for block in content:
+                if block.get("type") == "text":
+                    msg_text = block.get("text", "")
+                    break
+            return None, f"tool_error: {msg_text[:200] or 'isError=true with no text'}"
         content = result.get("content", [])
         # MCP tool responses wrap data in `content` blocks (type=text).
         for block in content:
@@ -676,6 +696,89 @@ def clear_recordings_pagination_resume() -> None:
         pass
 
 
+# ── Pocket search outage tracking ────────────────────────────────────────────
+def _is_search_unavailable(err: str) -> bool:
+    """True iff the error string indicates Pocket's search backend is down
+    (vs. a network/auth/local issue). We trust the upstream wording rather
+    than guessing — Pocket's MCP returns exactly this phrase when their
+    hybrid vector+BM25 index is offline."""
+    if not err:
+        return False
+    e = err.lower()
+    return "search service unavailable" in e
+
+
+def _send_whatsapp_notification(message: str) -> bool:
+    """Best-effort WhatsApp ping to the configured chat. Uses the same
+    WhatsApp bridge REST endpoint pocket-supervisor uses for question
+    escalation. Returns True if accepted (HTTP 2xx), False otherwise.
+    Failures are non-fatal — recovery alerts are informational."""
+    if not WHATSAPP_CONFIG.exists():
+        return False
+    try:
+        cfg = json.loads(WHATSAPP_CONFIG.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not cfg.get("enabled") or not cfg.get("chat_jid"):
+        return False
+    url = os.environ.get("WHATSAPP_BRIDGE_URL", "http://localhost:8080/api/send")
+    payload = json.dumps({"recipient": cfg["chat_jid"], "message": message}).encode()
+    try:
+        req = urlreq.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        with urlreq.urlopen(req, timeout=5) as resp:
+            return 200 <= resp.status < 300
+    except Exception as e:
+        log(f"whatsapp recovery ping failed: {type(e).__name__}: {e}")
+        return False
+
+
+def _on_search_outage_detected(err: str) -> None:
+    """First-time outage detection: write marker with timestamp. No-op if
+    marker already exists (we're in an ongoing outage)."""
+    if SEARCH_OUTAGE_MARKER.exists():
+        return
+    if DRY_RUN:
+        log(f"(dry-run) would mark search outage: {err}")
+        return
+    try:
+        SEARCH_OUTAGE_MARKER.write_text(json.dumps({
+            "first_seen": now_iso(),
+            "error": err[:200],
+        }))
+        log(f"NEW Pocket search outage detected: {err[:120]}")
+    except OSError as e:
+        log(f"failed to write outage marker: {e}")
+
+
+def _on_search_outage_resolved() -> None:
+    """Search came back. If we previously marked an outage, fire a
+    WhatsApp notification with the duration and clear the marker."""
+    if not SEARCH_OUTAGE_MARKER.exists():
+        return
+    try:
+        info = json.loads(SEARCH_OUTAGE_MARKER.read_text())
+        first_seen = info.get("first_seen", "")
+        duration_note = ""
+        if first_seen:
+            try:
+                start = datetime.strptime(first_seen, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                mins = int((datetime.now(timezone.utc) - start).total_seconds() // 60)
+                duration_note = f" (outage lasted ~{mins} min)"
+            except ValueError:
+                pass
+        msg = f"🟢 Pocket search backend is back online{duration_note}. Watcher will resume processing new recordings."
+        sent = _send_whatsapp_notification(msg)
+        log(f"search recovery — whatsapp_sent={sent}")
+        SEARCH_OUTAGE_MARKER.unlink(missing_ok=True)
+    except (OSError, json.JSONDecodeError) as e:
+        log(f"recovery handler failed: {e}")
+        # Try to clear the marker anyway so we don't loop alerts
+        try:
+            SEARCH_OUTAGE_MARKER.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 # ── Output sinks ─────────────────────────────────────────────────────────────
 def slugify(text: str, maxlen: int = 60) -> str:
     s = re.sub(r"[^a-zA-Z0-9]+", "_", (text or "").lower()).strip("_")
@@ -894,7 +997,17 @@ def main() -> int:
         result, err = client.call_tool("search_pocket_conversations_timerange", args, timeout=30)
         if err:
             log(f"recordings page {page} error: {err}")
+            # Distinguish "Pocket search backend is down" from other errors
+            # so we can fire a recovery alert when it comes back. Only mark
+            # outage on the first page (later pages may fail mid-pagination
+            # for unrelated reasons and shouldn't trigger the global flag).
+            if page == 1 and _is_search_unavailable(err):
+                _on_search_outage_detected(err)
             break
+        # Successful call — if we had a recorded outage, fire recovery
+        # notification (one-shot, marker is cleared inside the helper).
+        if page == 1:
+            _on_search_outage_resolved()
         data = (result or {}).get("data", result or {})
         recordings = data.get("results") or data.get("recordings") or data.get("conversations") or []
         meta = data.get("meta") or {}
@@ -1040,11 +1153,13 @@ def main() -> int:
     else:
         giga_status = "failed"
     summary = f"recordings={new_memories} tasks={new_tasks} giga={giga_status}"
+    pocket_search_state = "outage" if SEARCH_OUTAGE_MARKER.exists() else "ok"
     write_health("ok", summary, extra={
         "new_memories": new_memories,
         "new_tasks": new_tasks,
         "cursor": run_started if not cap_hit and not recordings_page_cap_hit else cursor,
         "giga_sync": giga_status,
+        "pocket_search": pocket_search_state,
     })
     log(f"done {summary}")
     return 0
