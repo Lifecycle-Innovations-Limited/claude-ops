@@ -128,7 +128,8 @@ ops_open_url() {
     echo "opener: missing url" >&2
     return 1
   fi
-  if [[ ! "$url" =~ ^https?://|^mailto:|^tel: ]]; then
+  # Allow web, mail, and the voice schemes used by bin/ops-voice.
+  if [[ ! "$url" =~ ^https?://|^mailto:|^tel:|^facetime(-audio)?:|^zoommtg: ]]; then
     echo "opener: refusing to open non-URL scheme: $url" >&2
     return 1
   fi

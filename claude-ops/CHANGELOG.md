@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.9.1] — 2026-05-21
+
+Rule 7 compliance for `bin/ops-voice` **plus** a new `join` sub-command that auto-joins the current or next calendar meeting with smart AV defaults. Native open-paths now route through `lib/opener.sh::ops_open_url` so SSH/mobile sessions get a copy-able URL block instead of opening on the remote host.
+
+### Added
+
+- **`bin/ops-voice join [--at now|next|HH:MM] [--window MIN] [--dry-run]`** — reads `gog calendar events --all --today -j`, picks the current event (within ±10min) or the next future event, extracts the conference URL (Google Meet via `hangoutLink`, Zoom/Meet/Teams/Webex via `conferenceData.entryPoints[]`, then location/description URL scan), classifies the meeting kind, applies a smart AV policy, and hands off to the native opener.
+- **Smart AV policy** — 1–2 attendees → cam ON + mic ON; 3–9 → cam ON + mic MUTED; 10+ → cam OFF + mic MUTED. Per-event overrides via `[cam:on|off]` / `[mic:on|off|muted]` tags in the event description.
+- **Lid-state mic selection** — macOS via `ioreg AppleClamshellState` (Yes=closed → external mic, No=open → MacBook mic); Linux via `/proc/acpi/button/lid/*/state`; other OSes report `unknown` → "default" mic source.
+- **Elgato Camera Hub auto-launch** — when installed, opens Camera Hub before the meeting starts so the Elgato virtual cam registers. Detects: macOS `.app` under `/Applications` or `~/Applications`, Linux `elgato-camera-hub` on PATH or AppImage in `~/Applications`, Windows/WSL `${PROGRAMFILES}\Elgato\CameraHub\CameraHub.exe`.
+- **Zoom `https://zoom.us/j/<ID>?pwd=<PWD>` → `zoommtg://` URL rewriting** — extracted Zoom links convert to the desktop-app URL scheme, skipping the browser prompt. Honors `cam=off` by appending `&zc=0`.
+
+### Changed
+
+- **`lib/opener.sh`** — `ops_open_url` scheme allow-list extended to include `facetime:`, `facetime-audio:`, and `zoommtg:` (was: `https?://`, `mailto:`, `tel:` only). All other schemes still rejected.
+- **`bin/ops-voice`** — sources `lib/opener.sh` and adds an `open_native` helper that prefers `ops_open_url` and falls back to `/usr/bin/open` when the lib is missing. `cmd_phone`, `cmd_facetime`, `zoom start`, and `zoom join` all swapped over.
+- **`iso8601_to_epoch` cross-OS helper** — replaces jq's `fromdateiso8601` (which only accepts `Z`, not `+HH:MM` offsets). Tries GNU `date -d` first, falls back to BSD `date -j -f` with colon-strip, then jq's UTC-only parse as last resort. Works on macOS, Linux, WSL, and FreeBSD.
+
+### Smoke test
+
+```
+$ bin/ops-voice join --dry-run
+dry-run: would join "Weekly Sync" (meet, 3 attendees)
+  url=https://meet.google.com/abc-defg-hij
+  cam=on mic=muted
+  lid=closed mic_source=external
+  elgato_hub=/Applications/Elgato Camera Hub.app
+```
+
+```
+$ OPS_PRINT_URLS=1 bin/ops-voice phone "+1234567890"
+  Open this URL on your device:
+
+  tel:+1234567890
+```
+
 ## [2.9.0] — 2026-05-21
 
 `/ops:ops-voice` rebuilt as a full voice/phone/video surface. Native macOS Phone.app (Continuity), FaceTime audio/video, and Zoom now work with zero credentials; Twilio voice + SMS and Bland AI agent calls added for programmatic outbound. New `bin/ops-voice` shell wrapper mirrors the `bin/ops-discord` pattern.
