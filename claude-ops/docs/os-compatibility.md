@@ -50,7 +50,7 @@ After install: `gog auth credentials /path/to/client_secret.json && gog auth add
 
 ### Calendar — `gog calendar`
 
-Same install as email — gog ships both. `gog cal` is **not** a valid alias; always use `gog calendar`. Probe with `gog calendar calendars --json`. Today's events: `gog calendar events primary --today --json`. The setup wizard auto-detects the calendar scope and prompts for re-auth if missing.
+Same install as email — gog ships both. `gog cal` is **not** a valid alias; always use `gog calendar`. Probe with `gog calendar calendars --json`. Today's events across all calendars: `gog calendar events --all --today --json --sort start`. The setup wizard auto-detects the calendar scope and prompts for re-auth if missing.
 
 If `gog` isn't installed, the wizard falls back to the Google Calendar MCP connector (read-only — write ops require explicit Claude Desktop permission grant).
 

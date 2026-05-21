@@ -51,7 +51,8 @@ gog gmail drafts create --to "user@example.com" --subject "subj" --body "text"
 #### Calendar
 ```bash
 gog calendar calendars -j                                           # List calendars
-gog calendar events primary --today -j                              # Today's events
+gog calendar events --all --today -j --sort start                   # Today's events across ALL calendars (preferred)
+gog calendar events primary --today -j                              # Today's events — primary calendar only
 gog calendar events primary --from "2026-04-14" --to "2026-04-15" -j  # Date range
 gog calendar create primary --summary "Meeting" --from "2026-04-15T10:00:00" --to "2026-04-15T11:00:00"
 gog calendar freebusy --from "2026-04-14T00:00:00Z" --to "2026-04-14T23:59:59Z" -j

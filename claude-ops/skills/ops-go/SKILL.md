@@ -64,7 +64,7 @@ Before executing, load available context:
 
 | Command | Usage | Output |
 |---------|-------|--------|
-| `gog calendar events primary --today --json` | Today's calendar events | Calendar events |
+| `gog calendar events --all --today --json --sort start` | Today's events across all calendars (sorted by start time) | Calendar events with `CalendarID` field for attribution |
 | `gog gmail search -j --results-only --no-input --max 30 "in:inbox"` | Search inbox | JSON array of threads |
 
 ---
@@ -170,10 +170,19 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-dash 2>/dev/null || echo '{}'
 ```
 
-### Calendar (today)
+### Calendar (today — all calendars)
 
 ```!
-gog calendar events primary --today --json 2>/dev/null | head -20 || echo "calendar unavailable"
+gog calendar events --all --today --json --sort start 2>/dev/null | head -60 || echo "calendar unavailable"
+```
+
+Events include a `CalendarID` field (e.g. `work@example.com`, `personal@gmail.com`). When rendering the briefing, attribute each event with a short calendar label in parentheses — derive it from the CalendarID domain or summary (e.g. work account → `(work)`, personal Gmail → `(personal)`). Show total count + top 3 events sorted by start time with format: `HH:MM  Title (calendar)`.
+
+Fallback: if `gog` is unavailable and `GOOGLE_CALENDAR_IDS` env var is set (comma-separated calendar IDs), fetch each ID individually:
+```
+for id in $(echo "$GOOGLE_CALENDAR_IDS" | tr ',' '\n'); do
+  gog calendar events "$id" --today --json 2>/dev/null
+done
 ```
 
 ## Your task
