@@ -101,7 +101,9 @@ Before executing, load available context:
 
 3. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
    - Check `whatsapp-bridge` status — verify `com.${USER}.whatsapp-bridge` is running (`lsof -i :8080` or `launchctl print "gui/$(id -u)/com.${USER}.whatsapp-bridge"`)
-   - If bridge is not running, surface the issue before WhatsApp operations
+   - Also verify the **ops mcp-proxy** is up on `:8090` (`lsof -i :8090 | grep LISTEN`) — Claude's MCP client connects through the proxy SSE endpoint, not directly to the bridge. If :8080 is up but :8090 is down, `mcp__whatsapp__*` tools will never load.
+   - If either layer is down, surface the issue before WhatsApp operations
+   - **Do not declare WhatsApp MCP unavailable purely because tools haven't loaded yet** — when both ports are LISTEN, retry `ToolSearch select:mcp__whatsapp__list_chats,...` up to 3× at 5s intervals to let the SSE handshake complete
 
 4. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/` before drafting any reply:
    - `contact_*.md` — load profile for the contact you're about to reply to
@@ -298,7 +300,13 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
 For each channel, detect availability at runtime:
 
 1. **Email**: Try `gog` CLI first. If `gog` unavailable, try `mcp__gog__gmail_*` MCP tools. If neither, report unavailable.
-2. **WhatsApp**: Check bridge liveness: `lsof -i :8080 | grep LISTEN`. If not listening, prompt the user: "WhatsApp bridge is not running." Use `AskUserQuestion`: `[Restart bridge]`, `[Skip WhatsApp]`. On restart: `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`, wait 5s, re-check. If bridge is running but MCP tools fail, the bridge may need QR re-pairing — check `~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log` for auth errors.
+2. **WhatsApp**: Two layers must be checked — DO NOT misdiagnose by only probing one.
+   - **Layer A — whatsmeow bridge** (`:8080`): `lsof -i :8080 | grep LISTEN`. If absent, bridge is down — run the robust restart recipe above (`launchctl load -w` fallback before `kickstart`), wait 5s, re-check.
+   - **Layer B — MCP transport**: Claude's client connects to `mcp__whatsapp__*` via the ops mcp-proxy at `127.0.0.1:8090/servers/whatsapp/sse`, NOT directly to :8080. Verify: `lsof -i :8090 | grep LISTEN` and `curl -sS -m 3 http://127.0.0.1:8090/servers/whatsapp/sse | head -1` (should emit `event: endpoint`). If :8090 isn't listening, the ops mcp-proxy daemon is down — restart via `bash ~/.claude/scripts/hooks/ops-plugin-version-heal.sh` then check `${CLAUDE_PLUGIN_DATA_DIR}/daemon-services.json` for the proxy service entry.
+   - **MCP tool-load handshake**: when both layers are up but `mcp__whatsapp__*` tools aren't listed yet, the SSE handshake is still in flight. Retry `ToolSearch select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__send_message,mcp__whatsapp__archive_chat,mcp__whatsapp__get_chat,mcp__whatsapp__resync_app_state` **up to 3 times with 5s spacing** before declaring unavailable. Never report "WhatsApp MCP not available" while :8080 AND :8090 are both LISTEN — that is a transient handshake, not a configuration failure.
+   - **Proxy fd exhaustion** (`EMFILE / Too many open files` in `~/.claude/mcp-proxy/logs/proxy.err.log`): mcp-proxy's `--stateless` mode spawns a new subprocess per SSE connection. macOS launchd's default `maxfiles=256` runs out quickly. Symptom: SSE endpoint resets with `Connection reset by peer` and many stale `whatsapp-mcp-server main.py` zombies linger (`ps aux | grep whatsapp-mcp-server`). Fix: ensure `~/Library/LaunchAgents/com.${USER}.mcp-proxy.plist` has `SoftResourceLimits.NumberOfFiles=4096` + `HardResourceLimits.NumberOfFiles=8192`, then `launchctl unload ~/Library/LaunchAgents/com.${USER}.mcp-proxy.plist && pkill -f whatsapp-mcp-server/.venv && launchctl load -w ~/Library/LaunchAgents/com.${USER}.mcp-proxy.plist`. After restart, Claude's MCP client typically needs a new session to re-handshake; surface this to the user.
+   - **QR re-pair**: only if :8080 is up but the bridge itself rejects calls (`/api/health` returns auth error, or messages return 401), check `~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log` for QR pairing prompts.
+   - **User prompt** (only after the above checks all fail): `AskUserQuestion` with `[Restart bridge]`, `[Restart mcp-proxy]`, `[Skip WhatsApp]`.
 3. **Slack**: Read the derived `channels.slack` object from pre-gathered `bin/ops-unread` data (it resolves each `token_env` and reports per-workspace `available`; do NOT read raw `preferences.json → slack_workspaces[]` directly — that array has no `available` flag).
    - **Multi-workspace** (`"multi_workspace": true`): iterate the `workspaces` array. For each `available: true` entry, scan via `mcp__claude_ai_Slack__*` if the MCP token matches, or via direct curl. To resolve the token for direct curl, validate `token_env` matches `^[A-Za-z_][A-Za-z0-9_]*$` before `${!token_env}` indirect expansion. Aggregate results; label each message block with the workspace name.
    - **Legacy** (`"multi_workspace": false`): use `mcp__claude_ai_Slack__*` if `channels.slack.available == true` (which itself reflects `SLACK_MCP_ENABLED`).
@@ -432,8 +440,11 @@ Reply via: `mcp__whatsapp__send_message` with `{recipient: "<JID>", message: "<m
 | Send message | `mcp__whatsapp__send_message {recipient, message}` |
 | Chat metadata | `mcp__whatsapp__get_chat {chat_jid}` |
 | Message context | `mcp__whatsapp__get_message_context {chat_jid, message_id}` |
-| Check bridge | `lsof -i :8080 | grep LISTEN` |
+| Check bridge (whatsmeow) | `lsof -i :8080 \| grep LISTEN` |
+| Check MCP proxy (Claude client transport) | `lsof -i :8090 \| grep LISTEN` + `curl -sS -m 3 http://127.0.0.1:8090/servers/whatsapp/sse \| head -1` |
+| Load WhatsApp MCP tool schemas | `ToolSearch select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__send_message,mcp__whatsapp__archive_chat,mcp__whatsapp__get_chat,mcp__whatsapp__resync_app_state` (retry 3× at 5s) |
 | Restart bridge | See robust restart recipe above (load-then-kickstart). Bare `launchctl kickstart` fails if the agent isn't loaded. |
+| Restart MCP proxy | `bash ~/.claude/scripts/hooks/ops-plugin-version-heal.sh` then re-check `${CLAUDE_PLUGIN_DATA_DIR}/daemon-services.json` |
 
 **Bridge troubleshooting:**
 
