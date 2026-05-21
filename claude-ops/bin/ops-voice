@@ -26,11 +26,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LIB_OS_DETECT="$SCRIPT_DIR/lib/os-detect.sh"
 LIB_CRED="$SCRIPT_DIR/lib/credential-store.sh"
+LIB_OPENER="$SCRIPT_DIR/lib/opener.sh"
 
 # shellcheck disable=SC1090
 [ -r "$LIB_OS_DETECT" ] && . "$LIB_OS_DETECT" || true
 # shellcheck disable=SC1090
 [ -r "$LIB_CRED" ] && . "$LIB_CRED" || true
+# shellcheck disable=SC1090
+[ -r "$LIB_OPENER" ] && . "$LIB_OPENER" || true
 
 PREFS_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 PREFS_PATH="${PREFS_PATH:-$PREFS_DIR/preferences.json}"
@@ -80,6 +83,18 @@ require_macos() {
   fi
 }
 
+# open_native — route URL-scheme launches through ops_open_url (Rule 7:
+# prints a copy-able block on SSH/mobile instead of opening on the remote
+# host). Falls back to /usr/bin/open if the opener lib isn't sourced.
+open_native() {
+  local url="$1"
+  if declare -F ops_open_url >/dev/null 2>&1; then
+    ops_open_url "$url"
+    return $?
+  fi
+  /usr/bin/open "$url" >/dev/null 2>&1
+}
+
 # ─── Number normalisation ───────────────────────────────────────────────────
 # Accept "+31612345678", "0612345678", "612-345-678", "(555) 123-4567".
 # Return canonical E.164 if input starts with +, else digits only.
@@ -124,7 +139,7 @@ cmd_phone() {
   [[ -z "$raw" ]] && { emit_err "usage: ops-voice phone <number>"; exit 2; }
   require_macos
   local number; number="$(normalize_number "$raw")"
-  /usr/bin/open "tel:${number}" >/dev/null 2>&1 || {
+  open_native "tel:${number}" || {
     emit_err "open tel: failed — Continuity / iPhone link may be unavailable"
     exit 1
   }
@@ -153,7 +168,7 @@ cmd_facetime() {
   fi
   local scheme="facetime"
   $audio_only && scheme="facetime-audio"
-  /usr/bin/open "${scheme}://${handle}" >/dev/null 2>&1 || {
+  open_native "${scheme}://${handle}" || {
     emit_err "open ${scheme}: failed — FaceTime may not be signed in"
     exit 1
   }
@@ -166,12 +181,17 @@ cmd_zoom() {
   case "$action" in
     start)
       require_macos
-      /usr/bin/open "zoommtg://zoom.us/start?confno=" >/dev/null 2>&1 || true
-      # Fallback: open the app directly so user picks "New Meeting".
-      /usr/bin/open -a "zoom.us" >/dev/null 2>&1 || {
-        emit_err "Zoom not installed (expected /Applications/zoom.us.app)"
-        exit 1
-      }
+      # On SSH/mobile, ops_open_url prints the URL instead of launching;
+      # falling back to `open -a zoom.us` only makes sense locally.
+      if declare -F __ops_is_remote_session >/dev/null 2>&1 && __ops_is_remote_session; then
+        open_native "zoommtg://zoom.us/start?confno="
+      else
+        open_native "zoommtg://zoom.us/start?confno=" || true
+        /usr/bin/open -a "zoom.us" >/dev/null 2>&1 || {
+          emit_err "Zoom not installed (expected /Applications/zoom.us.app)"
+          exit 1
+        }
+      fi
       emit_ok "zoom" "starting instant meeting in zoom.us"
       ;;
     join)
@@ -188,7 +208,7 @@ cmd_zoom() {
       require_macos
       local url="zoommtg://zoom.us/join?confno=${mid}"
       [[ -n "$pwd" ]] && url="${url}&pwd=${pwd}"
-      /usr/bin/open "$url" >/dev/null 2>&1 || {
+      open_native "$url" || {
         emit_err "open zoommtg: failed"
         exit 1
       }
@@ -354,6 +374,357 @@ cmd_bland_call() {
   emit_ok "bland-call" "$call_id (poll with: curl -H \"authorization: \$KEY\" https://api.bland.ai/v1/calls/$call_id)"
 }
 
+# ─── Cross-OS date helper ──────────────────────────────────────────────────
+# iso8601_to_epoch — Converts "2026-05-21T09:50:00+02:00" → epoch seconds.
+# Portable across GNU date (Linux/WSL), BSD date (macOS/FreeBSD). Emits
+# empty string on failure so callers can guard.
+iso8601_to_epoch() {
+  local iso="$1"
+  [[ -z "$iso" ]] && return 1
+  local epoch
+  # 1) GNU date — accepts "+02:00" natively.
+  if epoch="$(date -d "$iso" +%s 2>/dev/null)" && [[ -n "$epoch" ]]; then
+    printf '%s' "$epoch"
+    return 0
+  fi
+  # 2) BSD date — needs offset without colon.
+  local stripped="${iso}"
+  if [[ "$iso" =~ ([+-][0-9]{2}):([0-9]{2})$ ]]; then
+    stripped="${iso%${BASH_REMATCH[0]}}${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+  fi
+  if epoch="$(date -j -f "%Y-%m-%dT%H:%M:%S%z" "$stripped" +%s 2>/dev/null)" && [[ -n "$epoch" ]]; then
+    printf '%s' "$epoch"
+    return 0
+  fi
+  # 3) Naive UTC-only Z form via jq (last resort).
+  if [[ "$iso" =~ Z$ ]] && command -v jq >/dev/null 2>&1; then
+    epoch="$(printf '"%s"' "$iso" | jq -r 'fromdateiso8601' 2>/dev/null)"
+    [[ -n "$epoch" && "$epoch" != "null" ]] && { printf '%s' "$epoch"; return 0; }
+  fi
+  return 1
+}
+
+# ─── AV policy helpers (lid state, mic source, Elgato camera) ───────────────
+
+# detect_lid_state — Returns "open" / "closed" / "unknown".
+# macOS: ioreg reports AppleClamshellState=Yes when the lid is closed.
+# Linux: /proc/acpi/button/lid/*/state (LID0 etc.) → "state: open|closed".
+# Other: "unknown".
+detect_lid_state() {
+  case "$(uname -s)" in
+    Darwin)
+      local clamshell
+      clamshell="$(ioreg -r -k AppleClamshellState -d 4 2>/dev/null \
+        | awk -F'= ' '/AppleClamshellState/ {print $2; exit}')"
+      case "$clamshell" in
+        Yes) printf 'closed' ;;
+        No)  printf 'open' ;;
+        *)   printf 'unknown' ;;
+      esac
+      ;;
+    Linux)
+      local state_file
+      state_file="$(ls /proc/acpi/button/lid/*/state 2>/dev/null | head -1)"
+      if [[ -n "$state_file" ]]; then
+        local st
+        st="$(awk '{print $2}' "$state_file" 2>/dev/null)"
+        case "$st" in
+          open|closed) printf '%s' "$st" ;;
+          *)           printf 'unknown' ;;
+        esac
+      else
+        printf 'unknown'
+      fi
+      ;;
+    *)
+      printf 'unknown'
+      ;;
+  esac
+}
+
+# pick_mic_source — "macbook" when lid open, "external" when lid closed,
+# "default" when lid state is unknown (non-mac / non-laptop / unsupported).
+# Side-effect-free: just emits the policy; actual device switching is left
+# to the meeting app's audio settings (Zoom remembers last device).
+pick_mic_source() {
+  local lid; lid="$(detect_lid_state)"
+  case "$lid" in
+    closed) printf 'external' ;;
+    open)   printf 'macbook' ;;
+    *)      printf 'default' ;;
+  esac
+}
+
+# elgato_camera_hub_path — emits the path/binary for Elgato Camera Hub.
+#   macOS: .app bundle under /Applications.
+#   Linux: `elgato-camera-hub` on PATH (or AppImage in ~/Applications).
+#   Windows / WSL: PROGRAMFILES path if /mnt/c is mounted; else skip.
+elgato_camera_hub_path() {
+  case "$(uname -s)" in
+    Darwin)
+      for p in \
+        "/Applications/Elgato Camera Hub.app" \
+        "$HOME/Applications/Elgato Camera Hub.app" \
+        "/Applications/Camera Hub.app"; do
+        [[ -d "$p" ]] && { printf '%s' "$p"; return 0; }
+      done
+      ;;
+    Linux)
+      if command -v elgato-camera-hub >/dev/null 2>&1; then
+        command -v elgato-camera-hub
+        return 0
+      fi
+      local ai
+      ai="$(ls "$HOME/Applications"/Elgato*CameraHub*.AppImage 2>/dev/null | head -1)"
+      [[ -n "$ai" ]] && { printf '%s' "$ai"; return 0; }
+      ;;
+    MINGW*|MSYS*|CYGWIN*)
+      local pf="${PROGRAMFILES:-/c/Program Files}/Elgato/CameraHub/CameraHub.exe"
+      [[ -f "$pf" ]] && { printf '%s' "$pf"; return 0; }
+      ;;
+  esac
+  return 1
+}
+
+# launch_elgato_if_available — opens Camera Hub so the Elgato virtual cam
+# is registered before Zoom/FaceTime/Meet grab the device. The actual
+# "select Elgato Virtual Camera" choice is per-app — Zoom/FaceTime/Meet
+# remember the last selected device, so opening Camera Hub once is usually
+# enough; the user flips the toggle in-app the first time and it sticks.
+launch_elgato_if_available() {
+  local hub; hub="$(elgato_camera_hub_path)" || return 1
+  case "$(uname -s)" in
+    Darwin)
+      /usr/bin/open -a "$hub" >/dev/null 2>&1 || return 1 ;;
+    Linux)
+      ( "$hub" >/dev/null 2>&1 & ) || return 1 ;;
+    MINGW*|MSYS*|CYGWIN*)
+      ( "$hub" >/dev/null 2>&1 & ) || return 1 ;;
+    *)
+      return 1 ;;
+  esac
+  printf '%s' "$hub"
+}
+
+# decide_av_policy — Smart heuristic.
+#   1 or 2 attendees   → cam ON,  mic ON
+#   3–9 attendees      → cam ON,  mic MUTED
+#   10+ attendees      → cam OFF, mic MUTED
+# Description tags override: [cam:on|off] [mic:on|off|muted]
+# Emits a JSON-ish key=value line: cam=on|off mic=on|muted
+decide_av_policy() {
+  local attendee_count="${1:-0}" description="${2:-}"
+  local cam mic
+  if (( attendee_count <= 2 )); then
+    cam="on"; mic="on"
+  elif (( attendee_count <= 9 )); then
+    cam="on"; mic="muted"
+  else
+    cam="off"; mic="muted"
+  fi
+  # Tag overrides — case-insensitive, accept on/off for cam, on/off/muted for mic.
+  local d_lower; d_lower="$(printf '%s' "$description" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$d_lower" =~ \[cam:(on|off)\] ]]; then cam="${BASH_REMATCH[1]}"; fi
+  if [[ "$d_lower" =~ \[mic:(on|off|muted)\] ]]; then
+    mic="${BASH_REMATCH[1]}"
+    [[ "$mic" == "off" ]] && mic="muted"
+  fi
+  printf 'cam=%s mic=%s' "$cam" "$mic"
+}
+
+# extract_meeting_url — Pulls a Zoom/Meet/Teams/Webex URL from an event JSON.
+#   1. event.hangoutLink (Google Meet — gog surfaces it)
+#   2. conferenceData.entryPoints[].uri (preferred)
+#   3. location field
+#   4. description field (regex scan)
+extract_meeting_url() {
+  local event_json="$1"
+  local url
+  url="$(printf '%s' "$event_json" | jq -r '.hangoutLink // ""' 2>/dev/null)"
+  [[ -n "$url" && "$url" != "null" ]] && { printf '%s' "$url"; return 0; }
+  url="$(printf '%s' "$event_json" | jq -r '
+    (.conferenceData.entryPoints // [])
+    | map(select(.entryPointType == "video"))
+    | .[0].uri // ""' 2>/dev/null)"
+  [[ -n "$url" && "$url" != "null" ]] && { printf '%s' "$url"; return 0; }
+  local haystack
+  haystack="$(printf '%s' "$event_json" | jq -r '"\(.location // "") \(.description // "")"' 2>/dev/null)"
+  url="$(printf '%s' "$haystack" \
+    | grep -oE 'https?://[^[:space:]<>"]*(zoom\.us/j/[0-9]+(\?pwd=[^[:space:]<>"]*)?|meet\.google\.com/[a-z-]+|teams\.microsoft\.com/l/meetup-join/[^[:space:]<>"]+|[a-z0-9.-]*webex\.com/(meet|j|wbxmjs)/[^[:space:]<>"]+)' \
+    | head -1)"
+  [[ -n "$url" ]] && { printf '%s' "$url"; return 0; }
+  return 1
+}
+
+# classify_meeting_url — emits "zoom" / "meet" / "teams" / "webex" / "unknown".
+classify_meeting_url() {
+  local url="$1"
+  case "$url" in
+    *zoom.us/*)              printf 'zoom' ;;
+    *meet.google.com/*)      printf 'meet' ;;
+    *teams.microsoft.com/*)  printf 'teams' ;;
+    *webex.com/*)            printf 'webex' ;;
+    *)                       printf 'unknown' ;;
+  esac
+}
+
+# zoom_url_to_zoommtg — Converts https://*.zoom.us/j/<ID>?pwd=<PWD> to a
+# zoommtg:// URL that opens directly in the desktop app (no browser prompt).
+# Honors AV policy via &zc=0 (mute video) — Zoom doesn't expose a mic-mute
+# query param in the URL scheme; that has to be done via the desktop app
+# preference (Settings → Audio → "Always mute my microphone when joining").
+zoom_url_to_zoommtg() {
+  local https_url="$1" cam_pref="${2:-on}"
+  local confno pwd
+  confno="$(printf '%s' "$https_url" | sed -nE 's|.*zoom\.us/j/([0-9]+).*|\1|p')"
+  pwd="$(printf '%s' "$https_url" | sed -nE 's|.*[?&]pwd=([^&]+).*|\1|p')"
+  [[ -z "$confno" ]] && { printf '%s' "$https_url"; return 0; }
+  local out="zoommtg://zoom.us/join?confno=${confno}"
+  [[ -n "$pwd" ]] && out="${out}&pwd=${pwd}"
+  [[ "$cam_pref" == "off" ]] && out="${out}&zc=0"
+  printf '%s' "$out"
+}
+
+# ─── Subcommand: join (smart calendar-driven meeting joiner) ────────────────
+cmd_join() {
+  local when="now"  # now | next | HH:MM
+  local dry_run=false
+  local window_min=10
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --at)     when="$2"; shift 2 ;;
+      --window) window_min="$2"; shift 2 ;;
+      --dry-run) dry_run=true; shift ;;
+      --json)   JSON_MODE=true; shift ;;
+      *) shift ;;
+    esac
+  done
+
+  command -v gog >/dev/null 2>&1 || {
+    emit_err "join requires gog CLI (calendar lookup)"; exit 1; }
+
+  local raw
+  raw="$(gog calendar events --all --today -j --sort start --no-input 2>/dev/null)"
+  [[ -z "$raw" ]] && { emit_err "gog returned no calendar data"; exit 1; }
+
+  # Build a parallel TSV of (idx, start_epoch, end_epoch) using the portable
+  # iso8601_to_epoch helper — jq's fromdateiso8601 doesn't accept "+HH:MM"
+  # offsets (only "Z"), which breaks on every gog timestamp.
+  local now_epoch; now_epoch="$(date +%s)"
+  local window_sec=$(( window_min * 60 ))
+
+  local total_events
+  total_events="$(printf '%s' "$raw" | jq '(.events // []) | length' 2>/dev/null)"
+  [[ -z "$total_events" || "$total_events" == "null" ]] && total_events=0
+
+  local picked_idx="" picked_start=""
+  local i s_iso e_iso s_ep e_ep
+  for (( i=0; i<total_events; i++ )); do
+    s_iso="$(printf '%s' "$raw" | jq -r --argjson i "$i" '.events[$i].startLocal // ""')"
+    e_iso="$(printf '%s' "$raw" | jq -r --argjson i "$i" '.events[$i].endLocal // ""')"
+    [[ -z "$s_iso" || -z "$e_iso" ]] && continue
+    s_ep="$(iso8601_to_epoch "$s_iso")" || continue
+    e_ep="$(iso8601_to_epoch "$e_iso")" || continue
+    if [[ "$when" == "now" ]]; then
+      # Current event (within ±window) takes priority — pick the first match.
+      if (( now_epoch >= s_ep - window_sec && now_epoch <= e_ep + window_sec )); then
+        picked_idx="$i"
+        break
+      fi
+    fi
+    # Track earliest future event as fallback (next).
+    if (( s_ep > now_epoch )); then
+      if [[ -z "$picked_start" ]] || (( s_ep < picked_start )); then
+        picked_start="$s_ep"
+        # Only commit fallback once outer loop finishes "now" search.
+        [[ "$when" != "now" ]] && picked_idx="$i"
+      fi
+    fi
+  done
+
+  # "now" mode: if no current event matched, fall back to earliest future.
+  if [[ "$when" == "now" && -z "$picked_idx" && -n "$picked_start" ]]; then
+    for (( i=0; i<total_events; i++ )); do
+      s_iso="$(printf '%s' "$raw" | jq -r --argjson i "$i" '.events[$i].startLocal // ""')"
+      [[ -z "$s_iso" ]] && continue
+      s_ep="$(iso8601_to_epoch "$s_iso")" || continue
+      if (( s_ep == picked_start )); then
+        picked_idx="$i"
+        break
+      fi
+    done
+  fi
+
+  if [[ -z "$picked_idx" ]]; then
+    emit_err "no current or upcoming meeting found today"
+    exit 1
+  fi
+
+  local event
+  event="$(printf '%s' "$raw" | jq --argjson i "$picked_idx" '.events[$i]')"
+
+  local summary attendees_n description
+  summary="$(printf '%s' "$event" | jq -r '.summary // "(untitled)"')"
+  attendees_n="$(printf '%s' "$event" | jq -r '(.attendees // []) | length')"
+  description="$(printf '%s' "$event" | jq -r '.description // ""')"
+
+  local meeting_url
+  if ! meeting_url="$(extract_meeting_url "$event")"; then
+    emit_err "no meeting URL found in event \"$summary\" (no hangoutLink, no conferenceData, no scannable URL)"
+    exit 1
+  fi
+
+  local kind; kind="$(classify_meeting_url "$meeting_url")"
+  local policy; policy="$(decide_av_policy "$attendees_n" "$description")"
+  local cam_pref mic_pref
+  cam_pref="$(printf '%s' "$policy" | sed -nE 's/.*cam=([^ ]+).*/\1/p')"
+  mic_pref="$(printf '%s' "$policy" | sed -nE 's/.*mic=([^ ]+).*/\1/p')"
+
+  local lid mic_source elgato_hub=""
+  lid="$(detect_lid_state)"
+  mic_source="$(pick_mic_source)"
+  elgato_hub="$(launch_elgato_if_available 2>/dev/null || true)"
+
+  if $dry_run; then
+    if $JSON_MODE; then
+      jq -n \
+        --arg summary "$summary" \
+        --arg url "$meeting_url" \
+        --arg kind "$kind" \
+        --arg cam "$cam_pref" \
+        --arg mic "$mic_pref" \
+        --arg lid "$lid" \
+        --arg mic_source "$mic_source" \
+        --arg elgato "$elgato_hub" \
+        --argjson attendees "$attendees_n" \
+        '{ok:true, dry_run:true, summary:$summary, url:$url, kind:$kind,
+          attendees:$attendees, cam:$cam, mic:$mic,
+          lid:$lid, mic_source:$mic_source, elgato_hub:$elgato}'
+    else
+      printf 'dry-run: would join "%s" (%s, %d attendees)\n' "$summary" "$kind" "$attendees_n"
+      printf '  url=%s\n  cam=%s mic=%s\n  lid=%s mic_source=%s\n' \
+        "$meeting_url" "$cam_pref" "$mic_pref" "$lid" "$mic_source"
+      [[ -n "$elgato_hub" ]] && printf '  elgato_hub=%s\n' "$elgato_hub"
+    fi
+    return 0
+  fi
+
+  # Actually join.
+  local launch_url="$meeting_url"
+  if [[ "$kind" == "zoom" ]]; then
+    launch_url="$(zoom_url_to_zoommtg "$meeting_url" "$cam_pref")"
+  fi
+  open_native "$launch_url" || {
+    emit_err "failed to open meeting URL: $launch_url"
+    exit 1
+  }
+
+  local detail
+  detail="joined \"$summary\" ($kind, ${attendees_n} attendees) — cam=$cam_pref mic=$mic_pref lid=$lid mic_source=$mic_source"
+  [[ -n "$elgato_hub" ]] && detail="${detail} elgato=launched"
+  emit_ok "join" "$detail"
+}
+
 # ─── Dispatcher ─────────────────────────────────────────────────────────────
 usage() {
   cat >&2 <<'EOF'
@@ -365,12 +736,20 @@ usage:
   ops-voice zoom     start
   ops-voice zoom     join     <meeting-id> [--pwd P] [--json]
   ops-voice zoom     schedule "<topic>" [--start ISO8601] [--duration MIN] [--json]
+  ops-voice join     [--at now|next|HH:MM] [--window MIN] [--dry-run] [--json]
   ops-voice twilio-call <to> <from> --twiml <URL> [--json]
   ops-voice twilio-sms  <to> <from> "<body>" [--json]
   ops-voice bland-call  <number> "<prompt>" [--json]
 
-native channels (phone/facetime/zoom start|join) need no credentials.
+native channels (phone/facetime/zoom start|join, join) need no credentials.
 twilio/bland/zoom-schedule resolve via env → keychain → preferences.json → doppler.
+
+`join` reads today's calendar via gog, picks the current/next meeting (within
+±10min by default), extracts the conference URL, applies a smart AV policy
+(1-2 attendees → cam ON mic ON; 3-9 → cam ON mic MUTED; 10+ → both off),
+detects MacBook lid state (open=internal mic, closed=external), and launches
+Elgato Camera Hub when installed. Tag overrides in event description:
+[cam:on|off] [mic:on|off|muted].
 EOF
 }
 
@@ -390,6 +769,7 @@ main() {
     phone)        cmd_phone "$@" ;;
     facetime)     cmd_facetime "$@" ;;
     zoom)         cmd_zoom "$@" ;;
+    join)         cmd_join "$@" ;;
     twilio-call)  cmd_twilio_call "$@" ;;
     twilio-sms)   cmd_twilio_sms "$@" ;;
     bland-call)   cmd_bland_call "$@" ;;
