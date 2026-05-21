@@ -318,8 +318,6 @@ TOTAL_PROBES=12
   LINEAR_GQL='{"query":"{ issues(filter:{assignee:{isMe:{eq:true}},state:{type:{in:[\"started\",\"unstarted\"]}}}) { nodes { id identifier title priority state { name } team { key name } } } }"}'
 
   # Iterate all 3 workspace keys; dedupe by issue id at the end
-  declare -A SEEN_IDS
-  ALL_NODES="[]"
   WORKSPACE_COUNT=0
 
   _TMPLINEAR=$(mktemp -d)
@@ -807,17 +805,17 @@ render_section_linear() {
   IN_PROGRESS=$(echo "$NODES" | jq \
     '[.[]? | select(.state.name | test("(?i)in progress|started"))] | length' \
     2>/dev/null || echo "0")
-  # P0 = priority 0, P1 = priority 1 (urgent in Linear)
+  # Linear: 0 = no priority, 1 = Urgent, 2–4 = High/Normal/Low
   URGENT=$(echo "$NODES" | jq \
-    '[.[]? | select(.priority <= 1 and .priority >= 0)] | length' \
+    '[.[]? | select(.priority == 1)] | length' \
     2>/dev/null || echo "0")
 
-  p "  ${BWHT}Assigned${RST}  ${BCYN}${TOTAL_ASSIGNED}${RST}  (across ${WS_COUNT} workspace(s))  ·  🔄 in-progress: ${IN_PROGRESS}  ·  🚨 P0/P1: ${URGENT}"
+  p "  ${BWHT}Assigned${RST}  ${BCYN}${TOTAL_ASSIGNED}${RST}  (across ${WS_COUNT} workspace(s))  ·  🔄 in-progress: ${IN_PROGRESS}  ·  🚨 urgent: ${URGENT}"
 
-  # Top 3 urgent issues (priority 0 or 1), with team prefix
+  # Top 3 Urgent (priority 1), with team prefix
   echo "$NODES" | jq -r \
-    '[.[]? | select(.priority <= 1 and .priority >= 0)] |
-     sort_by(.priority) | .[0:3][] |
+    '[.[]? | select(.priority == 1)] |
+     .[0:3][] |
      "  🚨 [\(.team.key | ascii_upcase | .[0:3])]  \(.identifier)  \(.title | .[0:55])"' \
     2>/dev/null \
     | while IFS= read -r line; do p "${BRED}${line}${RST}"; done \
@@ -825,7 +823,7 @@ render_section_linear() {
 
   # Then in-progress (up to 3 more, skip already shown urgent ones)
   echo "$NODES" | jq -r \
-    '[.[]? | select((.state.name | test("(?i)in progress|started")) and (.priority > 1 or .priority == null))] |
+    '[.[]? | select((.state.name | test("(?i)in progress|started")) and (.priority != 1))] |
      .[0:3][] |
      "  🔄 [\(.team.key | ascii_upcase | .[0:3])]  \(.identifier)  \(.title | .[0:55])"' \
     2>/dev/null \
