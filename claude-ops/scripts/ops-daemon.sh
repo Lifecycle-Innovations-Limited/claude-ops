@@ -1052,6 +1052,55 @@ PY
 
 # ── Phase 16: credential expiry (offline) ────────────────────────────────
 # Reads *_expires_at / *_created_at from preferences.json and warns:
+# ── Self-upgrade on plugin version drift ──────────────────────────────────
+# Detects when a newer plugin cache version has been installed (e.g. via
+# `/plugin upgrade`) but the running daemon is still on the old version.
+# When drift is detected, calls ops-daemon-manager.sh upgrade — which rewrites
+# the plist + reloads launchd, causing this daemon process to exit and a
+# fresh one to start from the new cache. Idempotent. macOS-only.
+#
+# Runs every 5 minutes to keep cost low. Safe under SessionStart hook race
+# (manager script's mac_unload/load are themselves idempotent).
+check_self_upgrade() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  local LAST_CHECK="$DATA_DIR/cache/.self_upgrade_ts"
+  local now; now=$(date +%s)
+  mkdir -p "$DATA_DIR/cache" 2>/dev/null || true
+  if [[ -f "$LAST_CHECK" ]]; then
+    local last; last=$(cat "$LAST_CHECK" 2>/dev/null || echo 0)
+    if (( now - last < 300 )); then return 0; fi
+  fi
+  date +%s > "$LAST_CHECK"
+
+  local cache_dir="$HOME/.claude/plugins/cache/ops-marketplace/ops"
+  [[ -d "$cache_dir" ]] || return 0
+
+  # Resolve newest installed version via lexicographic sort (semver-safe enough
+  # for our 2.x line; major bumps are rare and would trigger anyway).
+  local newest
+  newest=$(ls -1 "$cache_dir" 2>/dev/null | sort -V | tail -1)
+  [[ -n "$newest" ]] || return 0
+
+  local newest_root="$cache_dir/$newest"
+  local current_root="${CLAUDE_PLUGIN_ROOT:-}"
+  [[ -d "$newest_root/scripts" ]] || return 0
+
+  # No drift if we're already on newest
+  if [[ "$current_root" == "$newest_root" ]]; then return 0; fi
+
+  log "SELF-UPGRADE: drift detected — running=$current_root newest=$newest_root"
+  local mgr="$newest_root/scripts/ops-daemon-manager.sh"
+  if [[ -x "$mgr" ]]; then
+    # Fire-and-forget — manager will SIGTERM us via mac_unload. We exit on
+    # signal; launchd reloads us from the new plist path.
+    CLAUDE_PLUGIN_ROOT="$newest_root" bash "$mgr" upgrade --plugin-root "$newest_root" >> "$LOG_FILE" 2>&1 &
+    log "SELF-UPGRADE: triggered manager upgrade to $newest"
+  else
+    log "SELF-UPGRADE: manager not executable at $mgr — skipping"
+  fi
+}
+
+# Credential expiry & rotation alerts. Warns when a stored key:
 #   - expires within WARN_DAYS (7)
 #   - keys older than MAX_KEY_AGE_DAYS (180) — rotation recommended
 # Strictly offline — never makes a network call. Dedups per (credential, day).
@@ -1712,6 +1761,7 @@ while true; do
   # ── Phase 16: infrastructure hardening ───────────────────────────────────
   check_rate_limits                # Every 5 min: reset rollover windows + warnings
   check_credential_expiry          # Hourly: offline check of *_expires_at / *_created_at
+  check_self_upgrade               # Every 5 min: auto-upgrade plist on version drift
 
   write_daemon_health
 
