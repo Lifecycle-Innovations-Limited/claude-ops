@@ -1,11 +1,16 @@
 [Unit]
 Description=Pocket Email Bridge — outbound send + inbound reply parsing via Gmail
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
 User=__USER__
 WorkingDirectory=__HOME__
+# Loads GOG_KEYRING_PASSWORD + GOG_ACCOUNT (file-keyring unlock for non-
+# interactive shells) from the operator-managed secrets file. See
+# scripts/systemd/secrets.env.example for the schema.
+EnvironmentFile=/etc/pocket/secrets.env
 Environment=HOME=__HOME__
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
