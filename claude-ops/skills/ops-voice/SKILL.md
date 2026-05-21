@@ -72,6 +72,59 @@ Native start/join use `zoommtg://` URL scheme. Schedule requires `ZOOM_API_TOKEN
 
 ---
 
+### `join [--at now|next|HH:MM] [--window MIN] [--dry-run]` — Smart calendar-driven meeting joiner
+
+Auto-joins the meeting that's happening **now** (within `±window` minutes, default 10) or the next future meeting if nothing is current. Reads `gog calendar events --all --today -j --sort start`, extracts a conference URL from `hangoutLink` → `conferenceData.entryPoints[]` → location → description scan (supports Zoom, Google Meet, Microsoft Teams, Webex), applies the smart AV policy below, and hands off to the native opener (which honors Rule 7 on SSH/mobile).
+
+```bash
+bin/ops-voice join                 # join current/next meeting
+bin/ops-voice join --at next       # skip current, go to next future
+bin/ops-voice join --window 5      # only consider events within ±5min of now
+bin/ops-voice join --dry-run       # show what would happen — no launch
+bin/ops-voice join --dry-run --json
+```
+
+**AV policy (smart heuristic):**
+
+| Attendees | Camera | Microphone |
+|-----------|--------|------------|
+| 1–2       | ON     | ON         |
+| 3–9       | ON     | MUTED      |
+| 10+       | OFF    | MUTED      |
+
+**Per-event overrides** — tag the event description (case-insensitive):
+
+```
+[cam:on] [mic:off]      → force camera on, mic muted
+[cam:off]               → force camera off (keep heuristic mic)
+[mic:muted]             → force mic muted
+```
+
+**Mic source — lid state:**
+- **macOS** via `ioreg AppleClamshellState` → `Yes`=closed (external mic), `No`=open (MacBook mic).
+- **Linux** via `/proc/acpi/button/lid/*/state` → "open"/"closed".
+- **Other OS / unknown** → reports `default`; the meeting app uses whatever the system has selected.
+
+Note: the script reports the policy and launches Camera Hub when present, but it does **not** programmatically flip Zoom/FaceTime/Meet in-app device settings — those apps remember the last-selected device, so flipping it once per app is permanent. (A future patch could AppleScript Zoom's preferences pane.)
+
+**Elgato Virtual Camera:** if Elgato Camera Hub is installed (any OS), it's launched before the meeting opens so the virtual cam is registered. Detection paths:
+- macOS: `/Applications/Elgato Camera Hub.app`, `~/Applications/Elgato Camera Hub.app`, `/Applications/Camera Hub.app`
+- Linux: `elgato-camera-hub` on PATH, or AppImage at `~/Applications/Elgato*CameraHub*.AppImage`
+- Windows/WSL: `${PROGRAMFILES}/Elgato/CameraHub/CameraHub.exe`
+
+**Zoom URL rewriting:** when the picked event has a `https://zoom.us/j/<ID>?pwd=<PWD>` link, it's converted to `zoommtg://zoom.us/join?confno=<ID>&pwd=<PWD>` so the desktop app opens directly (no browser prompt). If `cam=off` from the policy, `&zc=0` is appended.
+
+**Dry-run output (text mode):**
+```
+dry-run: would join "Weekly Sync" (meet, 3 attendees)
+  url=https://meet.google.com/abc-defg-hij
+  cam=on mic=muted
+  lid=closed mic_source=external
+  elgato_hub=/Applications/Elgato Camera Hub.app
+```
+
+---
+
 ### `twilio-call <to> <from> --twiml <URL>` — Programmatic outbound voice
 
 Real telco call (per-minute cost). Requires `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN`. The `--twiml` URL must return TwiML XML describing call behavior — e.g. `https://demo.twilio.com/docs/voice.xml` or a custom Function/Studio flow.
