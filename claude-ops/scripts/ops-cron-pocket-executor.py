@@ -1,39 +1,57 @@
 #!/usr/bin/env python3
-"""ops-cron-pocket-executor — Watchdog for the persistent Pocket supervisor.
+"""ops-cron-pocket-executor — Pocket supervisor (stateless, headless).
 
-Architecture (v2 — Agent Teams):
-  • A single long-lived Claude Code session runs in tmux window
-    `pocket-exec:supervisor`. It uses Agent Teams (TeamCreate +
-    Agent(team_name=...)) to spawn worker teammates per Pocket task.
-  • The supervisor reads `tasks.jsonl` directly on each wake (via its own
-    cursor file `supervisor-cursor.txt`) and dispatches up to N teammates.
-  • This script's only job is to keep that supervisor window alive.
+Architecture (v3 — stateless Python supervisor):
+  • The supervisor IS this cron script. No long-lived Claude Code
+    session. Each tick, all bookkeeping runs in plain Python.
+  • For each pending non-outbound task in tasks.jsonl, we spawn ONE
+    `claude -p <worker-prompt>` subprocess in the background, log its
+    spawn-ledger entry, and on completion persist a done.json receipt.
+  • Concurrency cap (default 3) keeps the box well-behaved. Workers in
+    flight survive across cron ticks; the next tick reaps completed
+    ones and spawns more if there is queue + headroom.
 
-Behaviour each cron tick:
-  1. Ensure tmux session `pocket-exec` exists (with an `_idle` keepalive window).
-  2. Check that `supervisor` window still has a live `claude` process — if
-     missing or dead, respawn it from the prompt template.
-  3. Write health heartbeat to `.executor-health`.
+Why v3 replaces v2:
+  v2 piped a 13 KB supervisor prompt into a long-running `claude.exe`
+  session via `tail -f /dev/null`. In headless mode Claude exits after
+  the first turn (no real TTY for follow-up turns), but the tail keeps
+  the wrapper bash alive — so the watchdog mistook a dead supervisor
+  for an alive one and never made progress. v3 removes Claude from the
+  supervisor role entirely; Claude only runs as a per-task worker via
+  `claude -p`, which is purpose-built for single-shot headless use.
 
-What this script does NOT do anymore:
-  • Spawning per-task worker windows (the supervisor does that as teammates).
-  • Reading tasks.jsonl (the supervisor handles it).
+Each cron tick:
+  1. Process supervisor-replies.jsonl → relay to workers, mark questions
+     answered, archive.
+  2. Reap completed worker subprocesses (PID watchdog) → write done.json
+     receipt + update in_flight registry.
+  3. Read tasks.jsonl from cursor; for each new task:
+       - outbound (send_message / draft_email / send_file) → stays in
+         drafts.jsonl, NOT dispatched.
+       - otherwise → spawn a `claude -p` worker (subject to concurrency
+         cap), record in spawn-ledger.jsonl + in-flight.json.
+     Advance cursor only after dispatch (or skip-to-drafts) decision is
+     persisted.
+  4. Write .supervisor-health + .executor-health heartbeats.
 
 Env:
   POCKET_STATE_DIR        default ~/.claude/state/pocket
-  POCKET_TMUX_SESSION     default pocket-exec
-  POCKET_CLAUDE_BIN       default $HOME/.local/bin/claude
-  POCKET_EXEC_CWD         supervisor working dir, default $HOME
-  POCKET_SUPERVISOR_PROMPT path to supervisor prompt; default = bundled template
-  POCKET_EXEC_DRY_RUN=1   skip tmux spawns, just log intent.
+  POCKET_CLAUDE_BIN       default /usr/local/bin/claude
+  POCKET_EXEC_CWD         worker working dir, default $HOME
+  POCKET_MAX_CONCURRENT   default 3
+  POCKET_WORKER_MODEL     default claude-sonnet-4-6
+  POCKET_WORKER_TIMEOUT   seconds, default 1800 (30 min)
+  POCKET_EXEC_DRY_RUN=1   inspect only, no spawns / no writes.
 """
 from __future__ import annotations
 
 import json
 import os
-import shlex
+import signal
 import subprocess
 import sys
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,22 +59,29 @@ LOG_PREFIX = "[ops-cron-pocket-executor]"
 HOME = Path(os.path.expanduser("~"))
 
 STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", HOME / ".claude/state/pocket"))
-TMUX_SESSION = os.environ.get("POCKET_TMUX_SESSION", "pocket-exec")
-TMUX_SOCKET = os.environ.get("POCKET_TMUX_SOCKET", "")  # e.g. "claw" → tmux -L claw; empty = default
-CLAUDE_BIN = os.environ.get("POCKET_CLAUDE_BIN", str(HOME / ".local/bin/claude"))
+CLAUDE_BIN = os.environ.get("POCKET_CLAUDE_BIN", "/usr/local/bin/claude")
 EXEC_CWD = Path(os.environ.get("POCKET_EXEC_CWD", str(HOME)))
+MAX_CONCURRENT = int(os.environ.get("POCKET_MAX_CONCURRENT", "3"))
+WORKER_MODEL = os.environ.get("POCKET_WORKER_MODEL", "claude-sonnet-4-6")
+WORKER_TIMEOUT = int(os.environ.get("POCKET_WORKER_TIMEOUT", "1800"))
 DRY_RUN = os.environ.get("POCKET_EXEC_DRY_RUN") == "1"
 
-SUPERVISOR_WINDOW = "supervisor"
-SUPERVISOR_PROMPT = Path(
-    os.environ.get(
-        "POCKET_SUPERVISOR_PROMPT",
-        str(Path(__file__).resolve().parent.parent / "templates" / "pocket-supervisor-prompt.md"),
-    )
-)
-
-HEALTH_FILE = STATE_DIR / ".executor-health"
+DURABLE_LOG = STATE_DIR / "tasks.jsonl"
+CURSOR_FILE = STATE_DIR / "supervisor-cursor.txt"
+SPAWN_LEDGER = STATE_DIR / "spawn-ledger.jsonl"
+IN_FLIGHT = STATE_DIR / "in-flight.json"
+RESULTS_DIR = STATE_DIR / "executor-results"
+WORKER_LOGS = STATE_DIR / "worker-logs"
+QUESTIONS = STATE_DIR / "supervisor-questions.jsonl"
+REPLIES = STATE_DIR / "supervisor-replies.jsonl"
+REPLIES_ARCHIVE = STATE_DIR / "replies-archive.jsonl"
+ANSWERED = STATE_DIR / "answered-questions.jsonl"
+DRAFTS = STATE_DIR / "drafts.jsonl"
+SUPERVISOR_HEALTH = STATE_DIR / ".supervisor-health"
+EXECUTOR_HEALTH = STATE_DIR / ".executor-health"
 LOG_FILE = STATE_DIR / "executor.log"
+
+OUTBOUND_KINDS = {"send_message", "draft_email", "send_file", "send_sms", "send_whatsapp"}
 
 
 def now_iso() -> str:
@@ -74,288 +99,459 @@ def log(msg: str) -> None:
         pass
 
 
-def write_health(status: str, msg: str = "", extra: dict | None = None) -> None:
+def write_health(target: Path, status: str, msg: str = "", extra: dict | None = None) -> None:
     payload = {"status": status, "message": msg, "last_run": now_iso()}
     if extra:
         payload.update(extra)
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        HEALTH_FILE.write_text(json.dumps(payload, indent=2))
+        target.write_text(json.dumps(payload, indent=2))
     except OSError as e:
-        log(f"health write failed: {e}")
+        log(f"health write to {target.name} failed: {e}")
 
 
-def tmux(*args: str, capture: bool = True) -> tuple[int, str, str]:
-    base = ["tmux", "-L", TMUX_SOCKET] if TMUX_SOCKET else ["tmux"]
-    cmd = [*base, *args]
+def read_cursor() -> int:
+    if not CURSOR_FILE.exists():
+        return 0
     try:
-        proc = subprocess.run(cmd, capture_output=capture, text=True, timeout=15)
-        return proc.returncode, proc.stdout, proc.stderr
-    except FileNotFoundError:
-        log("tmux not found on PATH")
-        return 127, "", "tmux not installed"
-    except subprocess.TimeoutExpired:
-        log(f"tmux {args[0]} timed out")
-        return 124, "", "timeout"
+        return int(CURSOR_FILE.read_text().strip() or "0")
+    except (OSError, ValueError):
+        return 0
 
 
-def list_windows() -> list[tuple[str, str]]:
-    """Returns [(name, pid_of_first_pane), ...]"""
-    rc, out, _ = tmux(
-        "list-windows", "-t", TMUX_SESSION,
-        "-F", "#{window_name}|#{pane_pid}",
-    )
-    if rc != 0:
+def write_cursor(pos: int) -> None:
+    if DRY_RUN:
+        return
+    try:
+        CURSOR_FILE.write_text(str(pos))
+    except OSError as e:
+        log(f"cursor write failed: {e}")
+
+
+def load_in_flight() -> dict[str, dict]:
+    if not IN_FLIGHT.exists():
+        return {}
+    try:
+        data = json.loads(IN_FLIGHT.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_in_flight(data: dict[str, dict]) -> None:
+    if DRY_RUN:
+        return
+    try:
+        IN_FLIGHT.write_text(json.dumps(data, indent=2))
+    except OSError as e:
+        log(f"in-flight save failed: {e}")
+
+
+def append_jsonl(path: Path, obj: dict) -> None:
+    if DRY_RUN:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as f:
+            f.write(json.dumps(obj) + "\n")
+    except OSError as e:
+        log(f"append to {path.name} failed: {e}")
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
         return []
-    pairs: list[tuple[str, str]] = []
-    for line in out.splitlines():
-        if "|" in line:
-            name, pid = line.split("|", 1)
-            pairs.append((name, pid))
-    return pairs
-
-
-def ensure_session() -> bool:
-    rc, _, _ = tmux("has-session", "-t", TMUX_SESSION)
-    if rc == 0:
-        return True
-    log(f"creating tmux session '{TMUX_SESSION}'")
-    rc, _, err = tmux(
-        "new-session", "-d", "-s", TMUX_SESSION, "-n", "_idle",
-        "-c", str(EXEC_CWD),
-        "bash", "-l",
-    )
-    if rc != 0:
-        log(f"tmux new-session failed: {err.strip()[:200]}")
-        return False
-    return True
-
-
-def supervisor_alive() -> bool:
-    """A 'live' supervisor has a `claude` process in its pane process tree."""
-    for name, pid in list_windows():
-        if name != SUPERVISOR_WINDOW:
-            continue
-        # pgrep -P checks children; we want to know if `claude` is anywhere in
-        # the descendant tree.
-        try:
-            out = subprocess.run(
-                ["pgrep", "-P", pid],
-                capture_output=True, text=True, timeout=5,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return True  # can't verify; assume alive to avoid thrashing
-        children_pids = [p for p in out.stdout.split() if p]
-        # Walk one level: check `ps` for any descendant whose command contains 'claude'
-        if not children_pids:
-            return False
-        try:
-            ps = subprocess.run(
-                ["ps", "-o", "command=", "-p", ",".join(children_pids)],
-                capture_output=True, text=True, timeout=5,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return True
-        return "claude" in ps.stdout.lower()
-    return False
-
-
-def ensure_supervisor() -> str:
-    """Returns 'spawned', 'alive', 'respawned', 'missing_prompt', or 'failed'."""
-    names = {n for n, _ in list_windows()}
-    has_window = SUPERVISOR_WINDOW in names
-
-    if has_window and supervisor_alive():
-        return "alive"
-
-    if not SUPERVISOR_PROMPT.exists():
-        log(f"supervisor prompt missing at {SUPERVISOR_PROMPT}")
-        return "missing_prompt"
-
-    if has_window:
-        log("supervisor window exists but Claude is not running — killing for clean respawn")
-        tmux("kill-window", "-t", f"{TMUX_SESSION}:{SUPERVISOR_WINDOW}")
-
-    log("spawning supervisor window")
-    # Inner command: pipe prompt into claude; keep shell open after exit so a
-    # post-mortem is visible if Claude crashes.
-    # Pipe the prompt as the first user message, then keep stdin open with
-    # `tail -f /dev/null` so Claude treats it as an interactive session and
-    # honors ScheduleWakeup. Without this, stdin EOF causes immediate exit.
-    inner = (
-        f"export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1; "
-        f"( cat {shlex.quote(str(SUPERVISOR_PROMPT))}; tail -f /dev/null ) | "
-        f"{shlex.quote(CLAUDE_BIN)} --dangerously-skip-permissions; "
-        f"echo; echo '[supervisor] exited at $(date -u +%FT%TZ) — next watchdog tick will respawn'; "
-        f"exec bash -l"
-    )
-    rc, _, err = tmux(
-        "new-window", "-t", TMUX_SESSION, "-n", SUPERVISOR_WINDOW,
-        "-c", str(EXEC_CWD),
-        "bash", "-c", inner,
-    )
-    if rc != 0:
-        log(f"supervisor spawn failed: {err.strip()[:200]}")
-        return "failed"
-    return "spawned" if not has_window else "respawned"
-
-
-SPAWN_LEDGER = STATE_DIR / "spawn-ledger.jsonl"
-TEAM_MAILBOX = Path(os.path.expanduser("~/.claude/teams/pocket-orchestrator/inboxes/team-lead.json"))
-RESULTS_DIR = STATE_DIR / "executor-results"
-ORPHAN_DIR = STATE_DIR / "orphans"
-DURABLE_LOG = STATE_DIR / "tasks.jsonl"
-
-
-def _load_ledger() -> dict[str, dict]:
-    """Map worker_name -> {pocket_task_id, title, ts}. Latest entry wins."""
-    if not SPAWN_LEDGER.exists():
-        return {}
-    out: dict[str, dict] = {}
+    out: list[dict] = []
     try:
-        for raw in SPAWN_LEDGER.read_text().splitlines():
-            raw = raw.strip()
-            if not raw:
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line:
                 continue
             try:
-                e = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            w = e.get("worker")
-            if w:
-                out[w] = e
-    except OSError:
-        return {}
-    return out
-
-
-def _load_durable_ids() -> set[str]:
-    """All known pocket_task_ids from the durable log — used to validate ledger entries."""
-    if not DURABLE_LOG.exists():
-        return set()
-    ids: set[str] = set()
-    try:
-        for raw in DURABLE_LOG.read_text().splitlines():
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                t = json.loads(raw)
-                tid = t.get("id")
-                if tid:
-                    ids.add(tid)
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    out.append(obj)
             except json.JSONDecodeError:
                 continue
     except OSError:
         pass
-    return ids
+    return out
 
 
-def reap_mailbox() -> tuple[int, int]:
-    """Scan the team mailbox for substantive (non-idle) worker messages,
-    persist each as a durable receipt linked to its pocket_task_id.
-
-    Returns (persisted_count, orphan_count). Orphans are messages from
-    workers not in the spawn-ledger — these indicate the supervisor either
-    skipped writing the ledger entry OR a teammate did unauthorized work.
-    Orphans are quarantined under STATE_DIR/orphans/ with a warning log.
-    """
-    if not TEAM_MAILBOX.exists():
-        return (0, 0)
+def pid_alive(pid: int) -> bool:
     try:
-        messages = json.loads(TEAM_MAILBOX.read_text())
-    except (OSError, json.JSONDecodeError):
-        return (0, 0)
-    if not isinstance(messages, list):
-        return (0, 0)
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
 
-    ledger = _load_ledger()
-    durable_ids = _load_durable_ids()
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    ORPHAN_DIR.mkdir(parents=True, exist_ok=True)
 
-    persisted = 0
-    orphans = 0
-    for m in messages:
-        text = m.get("text", "") or ""
-        # Skip idle / heartbeat JSON payloads
-        if text.startswith("{") and ("idle_notification" in text or "shutdown" in text):
+# ── Reply relay ───────────────────────────────────────────────────────────────
+
+
+def process_replies() -> int:
+    """Drain supervisor-replies.jsonl → notify workers via a per-worker
+    inbox file, archive processed replies, mark questions answered.
+    Returns number of replies processed."""
+    if not REPLIES.exists():
+        return 0
+    raw = REPLIES.read_text()
+    if not raw.strip():
+        return 0
+    new_replies: list[dict] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
             continue
-        sender = m.get("from", "") or ""
-        ts = m.get("timestamp", "") or now_iso()
-        summary = (m.get("summary") or text[:300]).strip()
-        if not summary:
+        try:
+            r = json.loads(line)
+            if isinstance(r, dict) and r.get("id"):
+                new_replies.append(r)
+        except json.JSONDecodeError:
             continue
+    if not new_replies:
+        return 0
 
-        # Stable receipt id: ISO-timestamp + sender, sanitized
-        safe_ts = ts.replace(":", "").replace(".", "_")[:20]
-        receipt_name = f"{safe_ts}__{sender}.completed.json"
+    questions = read_jsonl(QUESTIONS)
+    answered_ids: set[str] = set()
+    processed = 0
+    for r in new_replies:
+        qid = r["id"]
+        q = next((qq for qq in questions if qq.get("id") == qid and qq.get("status") == "open"), None)
+        if not q:
+            log(f"reply for unknown/closed qid {qid} — archiving")
+            append_jsonl(REPLIES_ARCHIVE, r)
+            processed += 1
+            continue
+        worker = q.get("from_worker", "")
+        if worker:
+            worker_inbox = STATE_DIR / "worker-inboxes" / f"{worker}.jsonl"
+            append_jsonl(worker_inbox, {
+                "ts": now_iso(),
+                "from": "supervisor",
+                "qid": qid,
+                "answer": r.get("answer", ""),
+                "via": r.get("via", ""),
+            })
+        append_jsonl(ANSWERED, {**q, "status": "answered",
+                                "answer": r.get("answer", ""),
+                                "answered_at": now_iso()})
+        append_jsonl(REPLIES_ARCHIVE, r)
+        answered_ids.add(qid)
+        processed += 1
+        log(f"relayed reply qid={qid} to worker={worker or '(none)'}")
 
-        ledger_entry = ledger.get(sender)
-        if ledger_entry and ledger_entry.get("pocket_task_id") in durable_ids:
-            target_dir = RESULTS_DIR
-            pocket_task_id = ledger_entry["pocket_task_id"]
-            kind = "linked"
-        else:
-            target_dir = ORPHAN_DIR
-            pocket_task_id = None
-            kind = "orphan"
+    if not DRY_RUN and processed:
+        try:
+            remaining = [q for q in questions if q.get("id") not in answered_ids]
+            QUESTIONS.write_text(
+                ("\n".join(json.dumps(q) for q in remaining) + "\n") if remaining else ""
+            )
+            REPLIES.write_text("")
+        except OSError as e:
+            log(f"questions/replies rewrite failed: {e}")
+    return processed
 
-        target = target_dir / receipt_name
-        if target.exists():
-            continue  # idempotent
 
+# ── Worker subprocess management ──────────────────────────────────────────────
+
+
+WORKER_PROMPT_TEMPLATE = """You are a single-shot Pocket worker. Complete EXACTLY ONE task and exit.
+
+Task ID: {task_id}
+Title: {title}
+Priority: {priority}
+Due: {due}
+Source recording: {recording_id}
+
+Context:
+{context}
+
+Hard rules:
+  - STAY ON THIS TASK. No sibling work, no scope expansion. If you
+    notice something else, mention it in your final summary — do NOT
+    act on it.
+  - Outbound comms (email, Slack, WhatsApp, SMS) require per-message
+    approval. NEVER send. Stage drafts inline in your summary instead.
+  - Destructive ops (rm -rf, force-push, drop table, aws ... delete-*)
+    NEVER without owner confirmation. Stop and describe what you would
+    have done.
+  - You are running headless via `claude -p`. You will NOT get
+    follow-up turns. Plan your single response carefully.
+  - All read-only investigation tools are available (Bash for reads,
+    Grep, Glob, Read, WebFetch). For writes/edits, use them only on
+    local state files needed to complete the task.
+  - End with a markdown block titled `## Outcome` describing what you
+    did, what (if anything) was blocked, and any follow-up the owner
+    should review. Keep it to 4-8 lines.
+
+Begin now. Be concise. The owner will read your final response."""
+
+
+def build_worker_prompt(task: dict) -> str:
+    return WORKER_PROMPT_TEMPLATE.format(
+        task_id=task.get("id", "?"),
+        title=(task.get("title") or "")[:200],
+        priority=task.get("priority", "normal"),
+        due=task.get("due") or "none",
+        recording_id=task.get("recording_id") or "none",
+        context=(task.get("context") or "")[:2000],
+    )
+
+
+def spawn_worker(task: dict) -> dict | None:
+    """Spawn a `claude -p` subprocess for the task. Returns in-flight
+    record on success, None on failure."""
+    task_id = task.get("id")
+    if not task_id:
+        return None
+    if DRY_RUN:
+        log(f"(dry-run) would spawn worker for {task_id}")
+        return None
+
+    WORKER_LOGS.mkdir(parents=True, exist_ok=True)
+    worker_id = f"worker-{task_id[:24]}-{uuid.uuid4().hex[:6]}"
+    stdout_path = WORKER_LOGS / f"{worker_id}.out.log"
+    stderr_path = WORKER_LOGS / f"{worker_id}.err.log"
+    prompt = build_worker_prompt(task)
+
+    cmd = [CLAUDE_BIN, "--dangerously-skip-permissions",
+           "--model", WORKER_MODEL, "-p", prompt]
+    env = os.environ.copy()
+    env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "0"
+
+    try:
+        out_f = stdout_path.open("w")
+        err_f = stderr_path.open("w")
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(EXEC_CWD),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=out_f,
+            stderr=err_f,
+            start_new_session=True,
+        )
+    except OSError as e:
+        log(f"spawn failed for {task_id}: {e}")
+        return None
+
+    record = {
+        "worker": worker_id,
+        "pid": proc.pid,
+        "pocket_task_id": task_id,
+        "title": (task.get("title") or "")[:120],
+        "started_at": now_iso(),
+        "deadline_epoch": int(time.time()) + WORKER_TIMEOUT,
+        "stdout": str(stdout_path),
+        "stderr": str(stderr_path),
+        "model": WORKER_MODEL,
+    }
+    append_jsonl(SPAWN_LEDGER, {
+        "ts": record["started_at"],
+        "worker": worker_id,
+        "pid": proc.pid,
+        "pocket_task_id": task_id,
+        "title": record["title"],
+        "model": WORKER_MODEL,
+    })
+    log(f"spawned {worker_id} pid={proc.pid} task={task_id}")
+    return record
+
+
+def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
+    """Check each in-flight worker. If exited, write done.json receipt
+    and remove from registry. If past deadline, SIGTERM. Returns
+    (completed_count, killed_count)."""
+    completed = 0
+    killed = 0
+    now = int(time.time())
+    for worker_id in list(in_flight.keys()):
+        rec = in_flight[worker_id]
+        pid = rec.get("pid")
+        if not pid:
+            del in_flight[worker_id]
+            continue
+        alive = pid_alive(pid)
+        if alive and now > rec.get("deadline_epoch", now + 1):
+            log(f"worker {worker_id} pid={pid} timed out — SIGTERM")
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+            killed += 1
+            continue
+        if alive:
+            continue
+        task_id = rec.get("pocket_task_id", "unknown")
+        stdout_path = Path(rec.get("stdout", ""))
+        summary = ""
+        if stdout_path.exists():
+            try:
+                txt = stdout_path.read_text()
+                summary = txt[-4000:]
+            except OSError:
+                summary = ""
         receipt = {
-            "ts": ts,
-            "worker": sender,
-            "summary": m.get("summary"),
-            "text": text,
-            "color": m.get("color"),
-            "pocket_task_id": pocket_task_id,
-            "ledger_entry": ledger_entry,
-            "kind": kind,
-            "captured_by": "executor-reaper",
-            "captured_at": now_iso(),
+            "status": "completed",
+            "pocket_task_id": task_id,
+            "worker": worker_id,
+            "started_at": rec.get("started_at"),
+            "completed_at": now_iso(),
+            "summary": summary[-1500:],
+            "stdout_path": str(stdout_path),
+            "stderr_path": rec.get("stderr"),
         }
         try:
-            target.write_text(json.dumps(receipt, indent=2))
-            if kind == "orphan":
-                orphans += 1
-                log(f"ORPHAN work persisted: {sender} (no ledger entry) — {summary[:80]}")
-            else:
-                persisted += 1
+            RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+            (RESULTS_DIR / f"{task_id}.done.json").write_text(json.dumps(receipt, indent=2))
         except OSError as e:
-            log(f"failed to write receipt {target}: {e}")
-    return (persisted, orphans)
+            log(f"failed to write receipt for {task_id}: {e}")
+        log(f"reaped {worker_id} task={task_id}")
+        del in_flight[worker_id]
+        completed += 1
+    return completed, killed
+
+
+# ── Task pump ─────────────────────────────────────────────────────────────────
+
+
+def pump_tasks(in_flight: dict[str, dict]) -> tuple[int, int, int]:
+    """Read new tasks from durable log, dispatch up to concurrency cap.
+    Returns (new_workers, drafts_frozen, queued_remaining_bytes)."""
+    if not DURABLE_LOG.exists():
+        return 0, 0, 0
+
+    cursor = read_cursor()
+    try:
+        with DURABLE_LOG.open("rb") as f:
+            f.seek(cursor)
+            raw = f.read()
+        file_size = DURABLE_LOG.stat().st_size
+    except OSError as e:
+        log(f"durable log read failed: {e}")
+        return 0, 0, 0
+    if not raw:
+        return 0, 0, 0
+
+    text = raw.decode("utf-8", errors="replace")
+    lines = text.splitlines(keepends=True)
+    dispatched = 0
+    drafted = 0
+    consumed = 0
+    in_flight_task_ids = {r.get("pocket_task_id") for r in in_flight.values()}
+
+    for line in lines:
+        if not line.endswith("\n"):
+            break  # partial trailing line — wait for next tick
+        stripped = line.strip()
+        line_bytes = len(line.encode("utf-8"))
+        if not stripped:
+            consumed += line_bytes
+            continue
+        try:
+            task = json.loads(stripped)
+        except json.JSONDecodeError:
+            log(f"skipping malformed task line: {stripped[:120]}")
+            consumed += line_bytes
+            continue
+        if not isinstance(task, dict):
+            consumed += line_bytes
+            continue
+        task_id = task.get("id")
+        if not task_id:
+            log(f"task missing id, skipping: {stripped[:120]}")
+            consumed += line_bytes
+            continue
+        kind = task.get("kind", "task")
+        if kind in OUTBOUND_KINDS:
+            append_jsonl(DRAFTS, task)
+            drafted += 1
+            log(f"frozen outbound draft kind={kind} task={task_id}")
+            consumed += line_bytes
+            continue
+        if task_id in in_flight_task_ids:
+            consumed += line_bytes
+            continue
+        receipt = RESULTS_DIR / f"{task_id}.done.json"
+        if receipt.exists():
+            consumed += line_bytes
+            continue
+        if len(in_flight) >= MAX_CONCURRENT:
+            break  # don't consume this line; retry next tick
+        rec = spawn_worker(task)
+        if rec:
+            in_flight[rec["worker"]] = rec
+            in_flight_task_ids.add(rec["pocket_task_id"])
+            dispatched += 1
+        consumed += line_bytes
+
+    new_cursor = cursor + consumed
+    if new_cursor != cursor:
+        write_cursor(new_cursor)
+    queued_remaining = max(0, file_size - new_cursor)
+    return dispatched, drafted, queued_remaining
+
+
+# ── Main tick ─────────────────────────────────────────────────────────────────
 
 
 def main() -> int:
-    write_health("running", "watchdog tick")
-    log("watchdog tick")
+    write_health(EXECUTOR_HEALTH, "running", "tick")
+    log("tick")
 
-    if DRY_RUN:
-        log("(dry-run) skipping tmux ops")
-        write_health("ok", "dry-run", extra={"supervisor": "skipped"})
-        return 0
+    in_flight = load_in_flight()
 
-    if not ensure_session():
-        write_health("error", "tmux session bootstrap failed")
-        return 2
+    replies_processed = process_replies()
+    completed, killed = reap_workers(in_flight)
+    new_workers, drafts, queue_remaining = pump_tasks(in_flight)
 
-    status = ensure_supervisor()
+    save_in_flight(in_flight)
 
-    # Mechanical receipt persistence — independent of supervisor behavior.
-    persisted, orphans = reap_mailbox()
+    supervisor_state = {
+        "status": "ok",
+        "ts": now_iso(),
+        "active_workers": len(in_flight),
+        "queue_remaining_bytes": queue_remaining,
+        "last_processed": f"cursor@{read_cursor()}",
+        "replies_processed_this_tick": replies_processed,
+        "workers_completed_this_tick": completed,
+        "workers_killed_this_tick": killed,
+        "workers_spawned_this_tick": new_workers,
+        "drafts_frozen_this_tick": drafts,
+    }
+    if not DRY_RUN:
+        try:
+            SUPERVISOR_HEALTH.write_text(json.dumps(supervisor_state, indent=2))
+        except OSError as e:
+            log(f"supervisor-health write failed: {e}")
 
-    write_health("ok", f"supervisor={status} reaped={persisted} orphans={orphans}", extra={
-        "supervisor": status,
-        "session": TMUX_SESSION,
-        "receipts_persisted": persisted,
-        "orphan_receipts": orphans,
-    })
-    log(f"done supervisor={status} reaped={persisted} orphans={orphans}")
-    return 0 if status in ("alive", "spawned", "respawned") else 1
+    write_health(
+        EXECUTOR_HEALTH,
+        "ok",
+        f"active={len(in_flight)} spawned={new_workers} done={completed} drafts={drafts}",
+        extra={
+            "active_workers": len(in_flight),
+            "spawned": new_workers,
+            "completed": completed,
+            "killed": killed,
+            "drafts": drafts,
+            "replies_processed": replies_processed,
+            "queue_remaining_bytes": queue_remaining,
+        },
+    )
+    log(
+        f"done active={len(in_flight)} spawned={new_workers} "
+        f"completed={completed} killed={killed} drafts={drafts} "
+        f"replies={replies_processed} queue_remaining_bytes={queue_remaining}"
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:
+        log(f"FATAL: {type(e).__name__}: {e}")
+        write_health(EXECUTOR_HEALTH, "error", f"FATAL: {type(e).__name__}: {e}")
+        sys.exit(1)
