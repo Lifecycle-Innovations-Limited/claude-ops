@@ -1,0 +1,16 @@
+[Unit]
+Description=cloudflared
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+TimeoutStartSec=30
+Type=notify
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate tunnel run --token ${CLOUDFLARED_TUNNEL_TOKEN}
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
