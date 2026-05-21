@@ -301,10 +301,25 @@ TOTAL_PROBES=12
 (
   FINOPS_URL="${FINOPS_DASHBOARD_URL:-}"
   FINOPS_TOKEN="${FINOPS_OPS_API_TOKEN:-}"
+  # Fall back to preferences.json if env vars not set
+  if [[ -z "$FINOPS_URL" || -z "$FINOPS_TOKEN" ]] && [[ -f "$PREFS" ]] && command -v jq &>/dev/null; then
+    FINOPS_URL="${FINOPS_URL:-$(jq -r '.finops.url // empty' "$PREFS" 2>/dev/null)}"
+    FINOPS_TOKEN="${FINOPS_TOKEN:-$(jq -r '.finops.token // empty' "$PREFS" 2>/dev/null)}"
+  fi
   if [[ -n "$FINOPS_URL" && -n "$FINOPS_TOKEN" ]]; then
-    curl -sf -H "Authorization: Bearer $FINOPS_TOKEN" \
-      "${FINOPS_URL}/api/summary" --max-time 5 2>/dev/null \
-      > "$TMPDIR_DASH/revenue.json" \
+    RAW=$(curl -sf -H "Authorization: Bearer $FINOPS_TOKEN" \
+      "${FINOPS_URL}/api/ops/snapshot" --max-time 5 2>/dev/null) \
+      && echo "$RAW" | jq '{
+        mrr: (.revenue_snapshot.total_mrr_usd | tostring),
+        mrr_cents: .revenue_snapshot.total_mrr_cents,
+        aws_burn_30d: (.current_month_spend | to_entries | map(.value) | add // 0 | tostring),
+        aws_burn_7d: "n/a",
+        runway_months: "n/a",
+        anomalies_open: .anomalies_open,
+        services_tracked: .services_tracked,
+        burn_by_service: .burn_by_service,
+        revenue_by_project: .revenue_snapshot.by_project
+      }' 2>/dev/null > "$TMPDIR_DASH/revenue.json" \
       || echo '{}' > "$TMPDIR_DASH/revenue.json"
   else
     echo '{}' > "$TMPDIR_DASH/revenue.json"
