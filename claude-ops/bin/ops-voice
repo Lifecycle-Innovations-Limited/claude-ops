@@ -1,0 +1,401 @@
+#!/usr/bin/env bash
+# ops-voice — Voice / call helper (native macOS + Twilio + FaceTime + Zoom + Bland AI)
+#
+# Subcommands:
+#   phone    <number> [--json]                       Native Phone.app via tel: (Continuity)
+#   facetime <number-or-handle> [--audio] [--json]   FaceTime video (default) or audio
+#   zoom     start|join <meeting-id> [--pwd P]       Open zoom.us app to start/join
+#   zoom     schedule "<topic>" [--start ISO8601] [--duration MIN]   Zoom REST schedule
+#   twilio-call <to> <from> --twiml URL [--json]     Programmatic outbound voice
+#   twilio-sms  <to> <from> "<body>" [--json]        Programmatic outbound SMS
+#   bland-call  <number> "<prompt>" [--json]         AI agent phone call
+#   --help | -h
+#
+# Credential resolution order (per channel):
+#   1. Env vars
+#   2. ops_cred_get <service> <account>   (via lib/credential-store.sh)
+#   3. $PREFS_PATH (preferences.json)
+#   4. Doppler CLI fallback
+#
+# Native channels (phone, facetime, zoom start/join) require no credentials —
+# they invoke macOS URL schemes via /usr/bin/open. Twilio / Bland / Zoom-schedule
+# require API keys.
+set -euo pipefail
+
+# ─── Paths & lib sourcing ───────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LIB_OS_DETECT="$SCRIPT_DIR/lib/os-detect.sh"
+LIB_CRED="$SCRIPT_DIR/lib/credential-store.sh"
+
+# shellcheck disable=SC1090
+[ -r "$LIB_OS_DETECT" ] && . "$LIB_OS_DETECT" || true
+# shellcheck disable=SC1090
+[ -r "$LIB_CRED" ] && . "$LIB_CRED" || true
+
+PREFS_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PREFS_PATH="${PREFS_PATH:-$PREFS_DIR/preferences.json}"
+
+USER_AGENT="ops-voice (claude-ops, v1)"
+
+JSON_MODE=false
+
+# ─── Output helpers ─────────────────────────────────────────────────────────
+emit_err() {
+  local msg="$1"
+  if $JSON_MODE; then
+    printf '{"error":%s}\n' "$(json_escape "$msg")"
+  else
+    printf 'ops-voice: %s\n' "$msg" >&2
+  fi
+}
+
+emit_ok() {
+  local channel="$1" detail="$2"
+  if $JSON_MODE; then
+    printf '{"ok":true,"channel":%s,"detail":%s}\n' \
+      "$(json_escape "$channel")" "$(json_escape "$detail")"
+  else
+    printf 'ops-voice [%s] %s\n' "$channel" "$detail"
+  fi
+}
+
+json_escape() {
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$1" | jq -Rs .
+    return 0
+  fi
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '"%s"' "$s"
+}
+
+require_macos() {
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    emit_err "native channel requires macOS (detected $(uname -s))"
+    exit 1
+  fi
+}
+
+# ─── Number normalisation ───────────────────────────────────────────────────
+# Accept "+31612345678", "0612345678", "612-345-678", "(555) 123-4567".
+# Return canonical E.164 if input starts with +, else digits only.
+normalize_number() {
+  local raw="$1"
+  if [[ "$raw" =~ ^\+ ]]; then
+    printf '+%s' "$(printf '%s' "${raw#+}" | tr -cd '0-9')"
+  else
+    printf '%s' "$(printf '%s' "$raw" | tr -cd '0-9')"
+  fi
+}
+
+# ─── Credential resolvers ───────────────────────────────────────────────────
+get_secret() {
+  # get_secret <service> <account> <env-fallback>
+  local service="$1" account="$2" env_fallback="$3"
+  local val="${!env_fallback:-}"
+  [[ -n "$val" ]] && { printf '%s' "$val"; return 0; }
+
+  if declare -F ops_cred_get >/dev/null 2>&1; then
+    val="$(ops_cred_get "$service" "$account" 2>/dev/null || true)"
+    [[ -n "$val" ]] && { printf '%s' "$val"; return 0; }
+  fi
+
+  if [[ -s "$PREFS_PATH" ]] && command -v jq >/dev/null 2>&1; then
+    val="$(jq -r --arg s "$service" --arg a "$account" \
+      '.[$s][$a] // .[$s].api_key // ""' "$PREFS_PATH" 2>/dev/null || true)"
+    [[ -n "$val" && "$val" != "null" ]] && { printf '%s' "$val"; return 0; }
+  fi
+
+  if command -v doppler >/dev/null 2>&1; then
+    val="$(doppler secrets get "$env_fallback" --plain 2>/dev/null || true)"
+    [[ -n "$val" ]] && { printf '%s' "$val"; return 0; }
+  fi
+
+  return 1
+}
+
+# ─── Subcommand: phone (native Continuity call) ─────────────────────────────
+cmd_phone() {
+  local raw="${1:-}"
+  [[ -z "$raw" ]] && { emit_err "usage: ops-voice phone <number>"; exit 2; }
+  require_macos
+  local number; number="$(normalize_number "$raw")"
+  /usr/bin/open "tel:${number}" >/dev/null 2>&1 || {
+    emit_err "open tel: failed — Continuity / iPhone link may be unavailable"
+    exit 1
+  }
+  emit_ok "phone" "dialing $number via Phone.app (Continuity)"
+}
+
+# ─── Subcommand: facetime ───────────────────────────────────────────────────
+cmd_facetime() {
+  local raw="${1:-}" audio_only=false
+  shift || true
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --audio) audio_only=true ;;
+      --json)  JSON_MODE=true ;;
+      *)       emit_err "unknown flag: $1"; exit 2 ;;
+    esac
+    shift
+  done
+  [[ -z "$raw" ]] && { emit_err "usage: ops-voice facetime <number-or-handle> [--audio]"; exit 2; }
+  require_macos
+  local handle
+  if [[ "$raw" =~ @ ]]; then
+    handle="$raw"
+  else
+    handle="$(normalize_number "$raw")"
+  fi
+  local scheme="facetime"
+  $audio_only && scheme="facetime-audio"
+  /usr/bin/open "${scheme}://${handle}" >/dev/null 2>&1 || {
+    emit_err "open ${scheme}: failed — FaceTime may not be signed in"
+    exit 1
+  }
+  emit_ok "facetime" "starting ${scheme} with $handle"
+}
+
+# ─── Subcommand: zoom ───────────────────────────────────────────────────────
+cmd_zoom() {
+  local action="${1:-}"; shift || true
+  case "$action" in
+    start)
+      require_macos
+      /usr/bin/open "zoommtg://zoom.us/start?confno=" >/dev/null 2>&1 || true
+      # Fallback: open the app directly so user picks "New Meeting".
+      /usr/bin/open -a "zoom.us" >/dev/null 2>&1 || {
+        emit_err "Zoom not installed (expected /Applications/zoom.us.app)"
+        exit 1
+      }
+      emit_ok "zoom" "starting instant meeting in zoom.us"
+      ;;
+    join)
+      local mid="${1:-}" pwd=""
+      shift || true
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --pwd|--password) pwd="$2"; shift 2 ;;
+          --json) JSON_MODE=true; shift ;;
+          *) shift ;;
+        esac
+      done
+      [[ -z "$mid" ]] && { emit_err "usage: ops-voice zoom join <meeting-id> [--pwd P]"; exit 2; }
+      require_macos
+      local url="zoommtg://zoom.us/join?confno=${mid}"
+      [[ -n "$pwd" ]] && url="${url}&pwd=${pwd}"
+      /usr/bin/open "$url" >/dev/null 2>&1 || {
+        emit_err "open zoommtg: failed"
+        exit 1
+      }
+      emit_ok "zoom" "joining meeting $mid"
+      ;;
+    schedule)
+      local topic="${1:-}"; shift || true
+      local start="" duration=30
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --start)    start="$2"; shift 2 ;;
+          --duration) duration="$2"; shift 2 ;;
+          --json)     JSON_MODE=true; shift ;;
+          *) shift ;;
+        esac
+      done
+      [[ -z "$topic" ]] && { emit_err 'usage: ops-voice zoom schedule "<topic>" [--start ISO8601] [--duration MIN]'; exit 2; }
+      local jwt
+      jwt="$(get_secret zoom api-token ZOOM_API_TOKEN)" || {
+        emit_err "no zoom credential — set ZOOM_API_TOKEN (Server-to-Server OAuth access token)"
+        exit 1
+      }
+      local body
+      body="$(jq -n --arg t "$topic" --arg s "$start" --argjson d "$duration" \
+        '{topic:$t, type: (if $s == "" then 1 else 2 end), duration:$d} +
+         (if $s == "" then {} else {start_time:$s, timezone:"UTC"} end)')"
+      local resp
+      resp="$(curl -sS -X POST "https://api.zoom.us/v2/users/me/meetings" \
+        -H "Authorization: Bearer $jwt" \
+        -H "Content-Type: application/json" \
+        -A "$USER_AGENT" \
+        --data "$body")"
+      local join_url id
+      join_url="$(printf '%s' "$resp" | jq -r '.join_url // empty' 2>/dev/null)"
+      id="$(printf '%s' "$resp" | jq -r '.id // empty' 2>/dev/null)"
+      if [[ -z "$join_url" ]]; then
+        emit_err "zoom schedule failed: $resp"
+        exit 1
+      fi
+      emit_ok "zoom" "scheduled meeting $id — $join_url"
+      ;;
+    *)
+      emit_err "usage: ops-voice zoom {start|join <id>|schedule \"<topic>\"}"
+      exit 2
+      ;;
+  esac
+}
+
+# ─── Subcommand: twilio-call ────────────────────────────────────────────────
+cmd_twilio_call() {
+  local to="${1:-}" from="${2:-}" twiml=""
+  shift 2 || true
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --twiml) twiml="$2"; shift 2 ;;
+      --json)  JSON_MODE=true; shift ;;
+      *) shift ;;
+    esac
+  done
+  [[ -z "$to" || -z "$from" || -z "$twiml" ]] && {
+    emit_err "usage: ops-voice twilio-call <to> <from> --twiml <URL>"
+    exit 2
+  }
+  local sid token
+  sid="$(get_secret twilio account-sid TWILIO_ACCOUNT_SID)" || {
+    emit_err "no twilio credential — set TWILIO_ACCOUNT_SID"; exit 1; }
+  token="$(get_secret twilio auth-token TWILIO_AUTH_TOKEN)" || {
+    emit_err "no twilio credential — set TWILIO_AUTH_TOKEN"; exit 1; }
+  local to_n from_n
+  to_n="$(normalize_number "$to")"
+  from_n="$(normalize_number "$from")"
+  local resp
+  resp="$(curl -sS -X POST \
+    "https://api.twilio.com/2010-04-01/Accounts/${sid}/Calls.json" \
+    -u "${sid}:${token}" \
+    -A "$USER_AGENT" \
+    --data-urlencode "To=${to_n}" \
+    --data-urlencode "From=${from_n}" \
+    --data-urlencode "Url=${twiml}")"
+  local call_sid status
+  call_sid="$(printf '%s' "$resp" | jq -r '.sid // empty' 2>/dev/null)"
+  status="$(printf '%s' "$resp" | jq -r '.status // empty' 2>/dev/null)"
+  if [[ -z "$call_sid" ]]; then
+    emit_err "twilio call failed: $resp"
+    exit 1
+  fi
+  emit_ok "twilio-call" "$call_sid status=$status"
+}
+
+# ─── Subcommand: twilio-sms ─────────────────────────────────────────────────
+cmd_twilio_sms() {
+  local to="${1:-}" from="${2:-}" body="${3:-}"
+  shift 3 || true
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) JSON_MODE=true; shift ;;
+      *) shift ;;
+    esac
+  done
+  [[ -z "$to" || -z "$from" || -z "$body" ]] && {
+    emit_err 'usage: ops-voice twilio-sms <to> <from> "<body>"'
+    exit 2
+  }
+  local sid token
+  sid="$(get_secret twilio account-sid TWILIO_ACCOUNT_SID)" || {
+    emit_err "no twilio credential — set TWILIO_ACCOUNT_SID"; exit 1; }
+  token="$(get_secret twilio auth-token TWILIO_AUTH_TOKEN)" || {
+    emit_err "no twilio credential — set TWILIO_AUTH_TOKEN"; exit 1; }
+  local to_n from_n
+  to_n="$(normalize_number "$to")"
+  from_n="$(normalize_number "$from")"
+  local resp
+  resp="$(curl -sS -X POST \
+    "https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json" \
+    -u "${sid}:${token}" \
+    -A "$USER_AGENT" \
+    --data-urlencode "To=${to_n}" \
+    --data-urlencode "From=${from_n}" \
+    --data-urlencode "Body=${body}")"
+  local msg_sid status
+  msg_sid="$(printf '%s' "$resp" | jq -r '.sid // empty' 2>/dev/null)"
+  status="$(printf '%s' "$resp" | jq -r '.status // empty' 2>/dev/null)"
+  if [[ -z "$msg_sid" ]]; then
+    emit_err "twilio sms failed: $resp"
+    exit 1
+  fi
+  emit_ok "twilio-sms" "$msg_sid status=$status"
+}
+
+# ─── Subcommand: bland-call ─────────────────────────────────────────────────
+cmd_bland_call() {
+  local number="${1:-}" prompt="${2:-}"
+  shift 2 || true
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) JSON_MODE=true; shift ;;
+      *) shift ;;
+    esac
+  done
+  [[ -z "$number" || -z "$prompt" ]] && {
+    emit_err 'usage: ops-voice bland-call <number> "<task prompt>"'
+    exit 2
+  }
+  local key
+  key="$(get_secret bland api-key BLAND_AI_API_KEY)" || {
+    emit_err "no bland credential — set BLAND_AI_API_KEY"; exit 1; }
+  local number_n; number_n="$(normalize_number "$number")"
+  local body
+  body="$(jq -n --arg p "$number_n" --arg t "$prompt" \
+    '{phone_number:$p, task:$t, record:true, max_duration:300}')"
+  local resp
+  resp="$(curl -sS -X POST "https://api.bland.ai/v1/calls" \
+    -H "authorization: $key" \
+    -H "Content-Type: application/json" \
+    -A "$USER_AGENT" \
+    --data "$body")"
+  local call_id
+  call_id="$(printf '%s' "$resp" | jq -r '.call_id // empty' 2>/dev/null)"
+  if [[ -z "$call_id" ]]; then
+    emit_err "bland call failed: $resp"
+    exit 1
+  fi
+  emit_ok "bland-call" "$call_id (poll with: curl -H \"authorization: \$KEY\" https://api.bland.ai/v1/calls/$call_id)"
+}
+
+# ─── Dispatcher ─────────────────────────────────────────────────────────────
+usage() {
+  cat >&2 <<'EOF'
+ops-voice — voice / call helper
+
+usage:
+  ops-voice phone    <number> [--json]
+  ops-voice facetime <number-or-email> [--audio] [--json]
+  ops-voice zoom     start
+  ops-voice zoom     join     <meeting-id> [--pwd P] [--json]
+  ops-voice zoom     schedule "<topic>" [--start ISO8601] [--duration MIN] [--json]
+  ops-voice twilio-call <to> <from> --twiml <URL> [--json]
+  ops-voice twilio-sms  <to> <from> "<body>" [--json]
+  ops-voice bland-call  <number> "<prompt>" [--json]
+
+native channels (phone/facetime/zoom start|join) need no credentials.
+twilio/bland/zoom-schedule resolve via env → keychain → preferences.json → doppler.
+EOF
+}
+
+main() {
+  # Strip a global --json flag if present anywhere.
+  local args=()
+  for a in "$@"; do
+    case "$a" in
+      --json) JSON_MODE=true ;;
+      *) args+=("$a") ;;
+    esac
+  done
+  set -- "${args[@]:-}"
+
+  local cmd="${1:-}"; shift || true
+  case "$cmd" in
+    phone)        cmd_phone "$@" ;;
+    facetime)     cmd_facetime "$@" ;;
+    zoom)         cmd_zoom "$@" ;;
+    twilio-call)  cmd_twilio_call "$@" ;;
+    twilio-sms)   cmd_twilio_sms "$@" ;;
+    bland-call)   cmd_bland_call "$@" ;;
+    -h|--help|"") usage; exit 0 ;;
+    *) emit_err "unknown subcommand: $cmd"; usage; exit 2 ;;
+  esac
+}
+
+main "$@"
