@@ -257,6 +257,27 @@ TOTAL_PROBES=12
   else
     echo '[]' > "$TMPDIR_DASH/portfolio.json"
   fi
+  # Shopify-only projects from preferences.json → .ecom.projects
+  if [ -f "$PREFS" ]; then
+    jq -c '[
+      (.ecom.projects // {}) | to_entries[] | {
+        name: .key,
+        kind: (
+          if (.value.shopify.type // "") == "partner_app" then "shopify_partner"
+          elif (.value.shopify // null) != null then "shopify_admin"
+          else "shopify"
+          end
+        ),
+        store: (.value.shopify.store_url // ""),
+        verified: (.value.shopify.verified // false),
+        shop_name: (.value.shopify.verified_shop_name // ""),
+        configured: ((.value.shopify // null) != null)
+      }
+    ]' "$PREFS" 2>/dev/null > "$TMPDIR_DASH/portfolio_shopify.json" \
+      || echo '[]' > "$TMPDIR_DASH/portfolio_shopify.json"
+  else
+    echo '[]' > "$TMPDIR_DASH/portfolio_shopify.json"
+  fi
   touch "$TMPDIR_DASH/done_portfolio"
 ) &
 
@@ -402,6 +423,7 @@ PRS_JSON=$(cat "$TMPDIR_DASH/prs.json"         2>/dev/null || echo '[]')
 CI_FAILS=$(cat "$TMPDIR_DASH/ci_fails"         2>/dev/null || echo "0")
 MERGED_SPARK=$(cat "$TMPDIR_DASH/merged_sparkline" 2>/dev/null || echo "0 0 0 0 0 0 0")
 PORTFOLIO_JSON=$(cat "$TMPDIR_DASH/portfolio.json" 2>/dev/null || echo '[]')
+PORTFOLIO_SHOPIFY_JSON=$(cat "$TMPDIR_DASH/portfolio_shopify.json" 2>/dev/null || echo '[]')
 MARKETING_JSON=$(cat "$TMPDIR_DASH/marketing.json" 2>/dev/null || echo '{}')
 EXTERNAL_JSON=$(cat "$TMPDIR_DASH/external.json"   2>/dev/null || echo '[]')
 GSD_ACTIVE=$(cat "$TMPDIR_DASH/gsd"           2>/dev/null || echo "0")
@@ -411,6 +433,8 @@ COMPETITOR_FILE=$(cat "$TMPDIR_DASH/competitor" 2>/dev/null | head -1 || echo ""
 DEPLOY_JSON=$(cat "$TMPDIR_DASH/deploys.json"  2>/dev/null || echo '[]')
 YOLO_LIST=$(cat "$TMPDIR_DASH/yolo_list"       2>/dev/null || echo "")
 PROJECTS=$([ -f "$REGISTRY" ] && jq '.projects | length' "$REGISTRY" 2>/dev/null || echo "0")
+SHOPIFY_PROJECTS=$(echo "$PORTFOLIO_SHOPIFY_JSON" | jq 'length' 2>/dev/null || echo "0")
+PROJECTS_TOTAL=$((PROJECTS + SHOPIFY_PROJECTS))
 
 # ── Unread — correct schema (.channels.whatsapp.recent_chats, .email.inbox_count) ──
 WA_UNREAD=$(echo "$UNREAD_JSON" | jq -r \
@@ -645,42 +669,85 @@ render_section_prs() {
 # SECTION 5 — PORTFOLIO
 # ════════════════════════════════════════════════════════════════════════════
 render_section_portfolio() {
-  section_hdr "🗂️" "PORTFOLIO  (${PROJECTS} projects, ${GSD_ACTIVE} GSD active)"
+  section_hdr "🗂️" "PORTFOLIO  (${PROJECTS_TOTAL} projects total — ${PROJECTS} git + ${SHOPIFY_PROJECTS} shopify, ${GSD_ACTIVE} GSD active)"
 
-  if [[ "$PORTFOLIO_JSON" == "[]" || -z "$PORTFOLIO_JSON" ]]; then
-    no_data; p ""; return
+  local _rendered=0
+
+  if [[ "$PORTFOLIO_JSON" != "[]" && -n "$PORTFOLIO_JSON" ]]; then
+    NOW_EPOCH=$(date +%s)
+
+    echo "$PORTFOLIO_JSON" | jq -r '.[] | [.name, (.path // ""), (.branch // "?")] | @tsv' 2>/dev/null \
+      | head -10 \
+      | while IFS=$'\t' read -r name path branch; do
+          expanded="${path/#\~/$HOME}"
+
+          if [[ -d "$expanded/.git" ]]; then
+            dirty=$(git -C "$expanded" status --porcelain 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+            ahead=$(git -C "$expanded" rev-list --count "@{upstream}..HEAD" 2>/dev/null || echo "0")
+            last_commit_epoch=$(git -C "$expanded" log -1 --format="%ct" 2>/dev/null || echo "$NOW_EPOCH")
+            age=$(age_human $((NOW_EPOCH - last_commit_epoch)))
+
+            status_icon="🟢"
+            flags=""
+            if [[ "$dirty" -gt 0 ]]; then
+              status_icon="🟡"
+              flags="${BYLW} ${dirty} dirty${RST}"
+            fi
+            if [[ "$ahead" -gt 0 ]]; then
+              status_icon="🟡"
+              flags="${flags} ${BCYN}↑${ahead}${RST}"
+            fi
+
+            p "  ${status_icon} ${BWHT}${name}${RST}  ${DIM2}${branch}${RST}  ${DIM2}⏱ ${age}${RST}${flags}"
+          else
+            p "  ⚪ ${BWHT}${name}${RST}  ${DIM2}${branch}${RST}  ${DIM2}(no git)${RST}"
+          fi
+        done
+    _rendered=1
   fi
 
-  NOW_EPOCH=$(date +%s)
-
-  echo "$PORTFOLIO_JSON" | jq -r '.[] | [.name, (.path // ""), (.branch // "?")] | @tsv' 2>/dev/null \
-    | head -10 \
-    | while IFS=$'\t' read -r name path branch; do
-        expanded="${path/#\~/$HOME}"
-
-        if [[ -d "$expanded/.git" ]]; then
-          dirty=$(git -C "$expanded" status --porcelain 2>/dev/null | wc -l | tr -d ' ' || echo "0")
-          ahead=$(git -C "$expanded" rev-list --count "@{upstream}..HEAD" 2>/dev/null || echo "0")
-          last_commit_epoch=$(git -C "$expanded" log -1 --format="%ct" 2>/dev/null || echo "$NOW_EPOCH")
-          age=$(age_human $((NOW_EPOCH - last_commit_epoch)))
-
-          status_icon="🟢"
-          flags=""
-          if [[ "$dirty" -gt 0 ]]; then
-            status_icon="🟡"
-            flags="${BYLW} ${dirty} dirty${RST}"
+  # Shopify-only projects (from preferences.json .ecom.projects)
+  if [[ "$PORTFOLIO_SHOPIFY_JSON" != "[]" && -n "$PORTFOLIO_SHOPIFY_JSON" ]]; then
+    p "  ${DIM2}── shopify ──${RST}"
+    echo "$PORTFOLIO_SHOPIFY_JSON" \
+      | jq -r '.[] | [.name, .kind, (.store // "-"), (.verified|tostring), (if (.shop_name // "") == "" then "-" else .shop_name end), (.configured|tostring)] | @tsv' 2>/dev/null \
+      | while IFS=$'\t' read -r sname skind sstore sverified sshop sconfigured; do
+          [[ "$sshop" == "-" ]] && sshop=""
+          [[ "$sstore" == "-" ]] && sstore=""
+          # Live status from EXTERNAL_JSON if probed
+          live_status=$(echo "$EXTERNAL_JSON" \
+            | jq -r --arg a "$sname" '[.[] | select(.alias==$a)][0].status // ""' 2>/dev/null || echo "")
+          if [[ "$sconfigured" != "true" ]]; then
+            icon="🟡"; note="${DIM2}configure → /ops:setup${RST}"
+          elif [[ "$live_status" == "healthy" ]]; then
+            icon="🟢"; note=""
+          elif [[ "$skind" == "shopify_partner" ]]; then
+            # Partner apps aren't probed via Admin API — trust the configured flag.
+            icon="🟢"; note=""
+          elif [[ "$live_status" == "not_configured" || -z "$live_status" ]]; then
+            icon="🟡"; note="${DIM2}not configured${RST}"
+          elif [[ "$sverified" == "true" ]]; then
+            icon="🟢"; note=""
+          else
+            icon="⚪"; note="${DIM2}unverified${RST}"
           fi
-          if [[ "$ahead" -gt 0 ]]; then
-            status_icon="🟡"
-            flags="${flags} ${BCYN}↑${ahead}${RST}"
-          fi
+          kind_short="shopify"
+          [[ "$skind" == "shopify_partner" ]] && kind_short="shopify (partner app)"
+          [[ "$skind" == "shopify_admin"   ]] && kind_short="shopify (admin)"
+          label="${sshop:-$sname}"
+          store_disp="${sstore}"
+          # If store_url is an env:/doppler: ref, mask it
+          case "$store_disp" in
+            env:*|doppler:*) store_disp="${DIM2}<secret>${RST}" ;;
+            "") store_disp="${DIM2}(no store)${RST}" ;;
+            *) store_disp="${DIM2}${store_disp}${RST}" ;;
+          esac
+          p "  ${icon} ${BWHT}${sname}${RST}  ${DIM2}${kind_short}${RST}  ${store_disp}  ${note}"
+        done
+    _rendered=1
+  fi
 
-          p "  ${status_icon} ${BWHT}${name}${RST}  ${DIM2}${branch}${RST}  ${DIM2}⏱ ${age}${RST}${flags}"
-        else
-          p "  ⚪ ${BWHT}${name}${RST}  ${DIM2}${branch}${RST}  ${DIM2}(no git)${RST}"
-        fi
-      done \
-    || no_data
+  [[ "$_rendered" -eq 0 ]] && no_data
 
   p ""
 }
