@@ -1271,10 +1271,13 @@ render_section_actions() {
 
   YOLO_LIST_NONEMPTY=""
   echo "$YOLO_LIST" | grep -q '[^[:space:]]' && YOLO_LIST_NONEMPTY="1" || true
+  # Pad YOLO_IND to a fixed visible width (15 cols) so the a/d row aligns
+  # regardless of whether reports exist. "🤖 REPORT READY" = 15 visible cols
+  # (emoji renders as 2 cols). "no reports" = 10 cols, needs 5 trailing spaces.
   if [[ -n "$YOLO_LIST_NONEMPTY" ]]; then
     YOLO_IND="${BCYN}🤖 REPORT READY${RST}"
   else
-    YOLO_IND="${DIM2}no reports${RST}"
+    YOLO_IND="${DIM2}no reports${RST}     "
   fi
 
   p ""
@@ -1289,7 +1292,7 @@ render_section_actions() {
   sp "  ${DIMX}│${RST}                                                              ${DIMX}│${RST}"
   sp "  ${DIMX}│${RST}   ${BWHT}POWER${RST}                            ${BWHT}COMMS${RST}               ${DIMX}│${RST}"
   sp "  ${DIMX}│${RST}                                                              ${DIMX}│${RST}"
-  sp "  ${DIMX}│${RST}   ${BMAG}a${RST} ${WHT}YOLO mode${RST}  ${YOLO_IND}   ${BCYN}d${RST} ${WHT}Send message${RST}        ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}   ${BMAG}a${RST} ${WHT}YOLO mode${RST}  ${YOLO_IND}   ${BCYN}d${RST} ${WHT}Send message${RST}   ${DIMX}│${RST}"
   sp "  ${DIMX}│${RST}   ${BMAG}b${RST} ${WHT}Auto-merge PRs${RST}                ${BCYN}e${RST} ${WHT}C-suite reports${RST}     ${DIMX}│${RST}"
   sp "  ${DIMX}│${RST}   ${BMAG}c${RST} ${WHT}Setup wizard${RST}                                       ${DIMX}│${RST}"
   sp "  ${DIMX}│${RST}                                                              ${DIMX}│${RST}"
