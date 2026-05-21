@@ -881,7 +881,8 @@ render_section_competitor() {
       [[ -z "$brand" ]] && continue
       p "  ${BCYN}${brand}${RST}  ${DIM2}${alerts} alerts (7d)  last ${last}${RST}"
       [[ -n "$snippet" ]] && p "    ${DIM2}${snippet}${RST}"
-    done
+    done \
+    || true
 
     # Surface latest report path for the brand with most-recent run
     local latest_report
