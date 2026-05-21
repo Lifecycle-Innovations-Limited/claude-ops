@@ -1,6 +1,17 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## [2.8.1] — 2026-05-21
+
+Hotfix: three production bugs in `/ops:ops-inbox` (PR #280).
+
+### Fixed
+
+- **WhatsApp bridge restart** — bare `launchctl kickstart -k gui/$UID/<label>` fails with `Could not find service` when the LaunchAgent isn't loaded (common after reboot or partial plist edit). Replaced with load-then-kickstart recipe (quoted target + `launchctl load -w "$PLIST"` fallback + `lsof -i :8080` verify). Health check now uses `launchctl print "gui/$(id -u)/<label>"` instead of `launchctl list` (which only shows already-loaded services).
+- **`gog gmail thread get -j` parsing** — agents kept writing naive `d['messages']` or `d['payload']` parsers expecting the search-array shape, then crashing with `KeyError` on the actual `{thread: {messages: [{payload: {headers}}]}}` envelope. Added an explicit shape table for the three read commands and a canonical copy-paste-safe `classify_thread()` Python recipe with graceful empty/error handling. Documented the fast-path: triage from the search envelope's `labels` + `from` fields without per-thread fetches.
+- **Stale plugin-version pin** — when `installed_plugins.json` (source of truth for `ops-plugin-version-heal.sh`) references a cache dir that no longer exists on disk, the heal hook becomes a no-op and downstream files keep their stale path, producing a recurring `Stop hook error: Plugin directory does not exist: …` on every turn. Added a runtime self-heal step at the top of the Runtime Context section that detects the mismatch, patches the source pin to the latest version present in the cache dir, then re-runs the existing heal script.
+
 ## [2.7.0] — 2026-05-20
 
 `/ops:marketing` becomes the marketing control center. Every credential discoverable across Doppler/env/keychain auto-links into every project; live KPI rollup across all projects in one render; ad spend aggregated across every paid surface; Stripe revenue with UTM-attributed ROAS; Sentry crash-rate correlation flags ad-spend-at-risk projects.
