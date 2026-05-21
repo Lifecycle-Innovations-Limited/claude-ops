@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.8.3] — 2026-05-21
+
+`/ops:ops-dash` data completeness pass — every section now reflects the full portfolio across all integrations (PRs #284–#290).
+
+### Added
+
+- **Multi-brand competitor intel** (#285) — competitor probe sources `scripts/lib/competitor/context.sh` and iterates `.brands[]`. One line per brand with 7d high-alert count, last-run date, top alert snippet (truncated 140 chars).
+- **All-project marketing dashboard** (#284) — renders one row per configured project (9 projects), sorted worst-health-first. Each row: project, health score, blended ROAS, top channel. Mobile collapses to single summary line.
+- **Linear multi-workspace + all-teams scan** (#287) — iterates `LINEAR_API_KEY`, `HEALIFY_LINEAR_API_KEY`, `STAGERY_LINEAR_API_KEY`. Enumerates all teams per workspace, de-dupes across keys, prefixes urgent rows with team key (`[HEA] HEA-4246`).
+- **Calendar all-calendar aggregation** (#286, #290) — `gog calendar events --all --today --sort start -j` surfaces events across every calendar. New `render_section_calendar` always renders — events list, "0 events today", or "not configured" + hint.
+- **Standalone FinOps block** (#290) — split from Revenue & Costs into its own `🔥 FINOPS` section: burn 7d / burn 30d / runway / services tracked / top 3 anomalies. Pulls `/api/ops/anomalies`.
+- **Portfolio includes Shopify-only projects** (#288) — extracts `.ecom.projects` from preferences, renders `── shopify ──` subsection. Each row: project, kind, masked store URL, status (🟢/🟡/⚪). Header: `41 projects total — 38 git + 3 shopify, 14 GSD active`.
+
+### Fixed
+
+- **FinOps endpoint mismatch** (#289) — `bin/ops-dash` was calling `/api/summary` (session-auth only). Switched to `/api/ops/snapshot` with proper field mapping and `preferences.finops` as cred fallback. Also fixed `FINOPS_OPS_API_TOKEN` missing from Render env.
+- **FinOps net summation** (#290) — snapshot ingest was summing `{gross, credit_applied, net}` as if per-service map. Now reads `.net` with `.gross` fallback.
+
 ## [2.8.2] — 2026-05-21
 
 `/ops:ops-dash` rewritten as a 2026-aesthetic hybrid live command center — pixel-art hero + 12 section-by-section panels ingesting live data from every `/ops:*` skill (PR #282).
