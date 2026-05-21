@@ -42,6 +42,7 @@ HOME = Path(os.path.expanduser("~"))
 
 STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", HOME / ".claude/state/pocket"))
 TMUX_SESSION = os.environ.get("POCKET_TMUX_SESSION", "pocket-exec")
+TMUX_SOCKET = os.environ.get("POCKET_TMUX_SOCKET", "")  # e.g. "claw" → tmux -L claw; empty = default
 CLAUDE_BIN = os.environ.get("POCKET_CLAUDE_BIN", str(HOME / ".local/bin/claude"))
 EXEC_CWD = Path(os.environ.get("POCKET_EXEC_CWD", str(HOME)))
 DRY_RUN = os.environ.get("POCKET_EXEC_DRY_RUN") == "1"
@@ -85,7 +86,8 @@ def write_health(status: str, msg: str = "", extra: dict | None = None) -> None:
 
 
 def tmux(*args: str, capture: bool = True) -> tuple[int, str, str]:
-    cmd = ["tmux", *args]
+    base = ["tmux", "-L", TMUX_SOCKET] if TMUX_SOCKET else ["tmux"]
+    cmd = [*base, *args]
     try:
         proc = subprocess.run(cmd, capture_output=capture, text=True, timeout=15)
         return proc.returncode, proc.stdout, proc.stderr
@@ -177,9 +179,12 @@ def ensure_supervisor() -> str:
     log("spawning supervisor window")
     # Inner command: pipe prompt into claude; keep shell open after exit so a
     # post-mortem is visible if Claude crashes.
+    # Pipe the prompt as the first user message, then keep stdin open with
+    # `tail -f /dev/null` so Claude treats it as an interactive session and
+    # honors ScheduleWakeup. Without this, stdin EOF causes immediate exit.
     inner = (
         f"export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1; "
-        f"cat {shlex.quote(str(SUPERVISOR_PROMPT))} | "
+        f"( cat {shlex.quote(str(SUPERVISOR_PROMPT))}; tail -f /dev/null ) | "
         f"{shlex.quote(CLAUDE_BIN)} --dangerously-skip-permissions; "
         f"echo; echo '[supervisor] exited at $(date -u +%FT%TZ) — next watchdog tick will respawn'; "
         f"exec bash -l"
