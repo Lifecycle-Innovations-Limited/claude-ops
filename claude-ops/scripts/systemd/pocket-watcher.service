@@ -6,11 +6,21 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=__USER__
+Group=__USER__
 WorkingDirectory=__HOME__
-# Secrets (POCKET_API_KEY, etc.) — see scripts/systemd/secrets.env.example.
-# This file MUST be created by the operator at /etc/pocket/secrets.env
-# with mode 600 owned by root. It is gitignored.
-EnvironmentFile=/etc/pocket/secrets.env
+# Doppler service token, scoped read-only to the operator's secrets config
+# (e.g. claude-ops/dev). The token file is root-owned mode 600; the
+# LoadCredential directive exposes it as $CREDENTIALS_DIRECTORY/doppler-token
+# only to this service unit. doppler run then injects POCKET_API_KEY into
+# the watcher's env at runtime — secrets never sit on disk in plaintext or
+# in `systemctl cat` output.
+#
+# Operator setup:
+#   sudo install -d -m 0750 -o root -g root /etc/pocket
+#   echo "dp.st.dev.YOUR_TOKEN" | sudo tee /etc/pocket/doppler-token >/dev/null
+#   sudo chmod 600 /etc/pocket/doppler-token && sudo chown root:root /etc/pocket/doppler-token
+#   sudo systemctl daemon-reload && sudo systemctl restart pocket-watcher.timer
+LoadCredential=doppler-token:/etc/pocket/doppler-token
 Environment=HOME=__HOME__
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
@@ -20,6 +30,6 @@ Environment=POCKET_LOOKBACK_HOURS=24
 Environment=GIGA_SYNC=1
 Environment=GIGA_MIND=global
 Environment=GIGA_CONSOLIDATE=1
-ExecStart=__HOME__/.venv-pocket/bin/python3 __HOME__/claude-ops/claude-ops/scripts/ops-cron-pocket-watcher.py
+ExecStart=/bin/bash -c 'DOPPLER_TOKEN=$(cat $CREDENTIALS_DIRECTORY/doppler-token) /usr/local/bin/doppler run --silent -- __HOME__/.venv-pocket/bin/python3 __HOME__/claude-ops/claude-ops/scripts/ops-cron-pocket-watcher.py'
 StandardOutput=append:__HOME__/.claude/state/pocket/watcher-stdout.log
 StandardError=append:__HOME__/.claude/state/pocket/watcher-stderr.log

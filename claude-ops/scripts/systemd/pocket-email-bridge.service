@@ -6,15 +6,18 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=__USER__
+Group=__USER__
 WorkingDirectory=__HOME__
-# Loads GOG_KEYRING_PASSWORD + GOG_ACCOUNT (file-keyring unlock for non-
-# interactive shells) from the operator-managed secrets file. See
-# scripts/systemd/secrets.env.example for the schema.
-EnvironmentFile=/etc/pocket/secrets.env
+# Doppler service token (same scoped token as pocket-watcher.service). Injects
+# GOG_KEYRING_PASSWORD + GOG_ACCOUNT into the bridge's env. Without these, gog
+# returns exit 2: "no TTY available for keyring file backend password prompt"
+# or "missing --account (or set GOG_ACCOUNT)". See pocket-watcher.service
+# operator setup notes.
+LoadCredential=doppler-token:/etc/pocket/doppler-token
 Environment=HOME=__HOME__
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
 Environment=GOG_BIN=/usr/local/bin/gog
-ExecStart=__HOME__/.venv-pocket/bin/python3 __HOME__/claude-ops/claude-ops/scripts/ops-pocket-email-bridge.py
+ExecStart=/bin/bash -c 'DOPPLER_TOKEN=$(cat $CREDENTIALS_DIRECTORY/doppler-token) /usr/local/bin/doppler run --silent -- __HOME__/.venv-pocket/bin/python3 __HOME__/claude-ops/claude-ops/scripts/ops-pocket-email-bridge.py'
 StandardOutput=append:__HOME__/.claude/state/pocket/email-bridge.log
 StandardError=append:__HOME__/.claude/state/pocket/email-bridge-stderr.log
