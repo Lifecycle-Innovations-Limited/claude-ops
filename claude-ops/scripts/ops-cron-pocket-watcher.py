@@ -1154,7 +1154,19 @@ def main() -> int:
         giga_status = "failed"
     summary = f"recordings={new_memories} tasks={new_tasks} giga={giga_status}"
     pocket_search_state = "outage" if SEARCH_OUTAGE_MARKER.exists() else "ok"
-    write_health("ok", summary, extra={
+    # Overall watcher status reflects upstream Pocket search availability.
+    # When Pocket's search backend is down, the watcher itself is fine, but
+    # the pipeline is effectively blocked — dashboards/alerts should treat
+    # this as degraded, not green. `degraded` is intentionally distinct from
+    # `error` (which is reserved for watcher-internal failures like an MCP
+    # init crash or unrecoverable exception).
+    overall_status = "degraded" if pocket_search_state == "outage" else "ok"
+    overall_msg = (
+        f"{summary} (upstream Pocket search unavailable)"
+        if pocket_search_state == "outage"
+        else summary
+    )
+    write_health(overall_status, overall_msg, extra={
         "new_memories": new_memories,
         "new_tasks": new_tasks,
         "cursor": run_started if not cap_hit and not recordings_page_cap_hit else cursor,
