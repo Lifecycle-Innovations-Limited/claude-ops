@@ -479,7 +479,7 @@ MK_PROJECT_COUNT=$(echo "$MARKETING_JSON" | jq '.projects | length' 2>/dev/null 
 [[ "$MK_PROJECT_COUNT" =~ ^[0-9]+$ ]] || MK_PROJECT_COUNT="0"
 MK_AVG_HEALTH=$(echo "$MARKETING_JSON" | jq -r '
   if (.projects | length) > 0
-  then ([ .projects[].health_score // 0 ] | add / length | round | tostring)
+  then ([ .projects[] | .health_score // 0 ] | add / length | round | tostring)
   else "?" end' 2>/dev/null || echo "?")
 MK_WORST=$(echo "$MARKETING_JSON" | jq -r '.projects[0].project // ""' 2>/dev/null || echo "")
 MK_WORST_SCORE=$(echo "$MARKETING_JSON" | jq -r '.projects[0].health_score // "?"' 2>/dev/null || echo "?")
