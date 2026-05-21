@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.8.2] — 2026-05-21
+
+`/ops:ops-dash` rewritten as a 2026-aesthetic hybrid live command center — pixel-art hero + 12 section-by-section panels ingesting live data from every `/ops:*` skill (PR #282).
+
+### Fixed
+
+- **Unread counts always 0** — `bin/ops-dash` was reading `.whatsapp.count` / `.email.count` / `.slack.count` from `ops-unread`, but the actual schema is `.channels.whatsapp.recent_chats` / `.channels.email.inbox_count` / `.channels.slack.workspaces[]`. Smoke test: 90 unread now detected (was 0).
+- **PR count always `?`** — `gh pr list --state open` with no `--repo` flag returns nothing when run outside a repo cwd (the bin script runs from `$HOME`). Replaced with `gh api graphql` cross-org search. Smoke test: 17 PRs now detected (was `?`).
+- **Marketing project name rendered outside its parens** — cosmetic alignment fix.
+
+### Changed
+
+- **`bin/ops-dash` — hybrid live command center.** 12 section panels render top-to-bottom after the hero header: FIRES, INBOX, OPEN PRs, PORTFOLIO, REVENUE, MARKETING, LINEAR, DEPLOYS, COMPETITOR, YOLO, QUICK ACTIONS, footer. All probes fire in parallel via background subshells; render is sequential top-to-bottom once `wait` completes.
+- **2026 visual layer** — pixel-art hero with double-line borders + drop shadow, animated braille spinner + progress bar during probe-wait, emoji icons on every section header and data row (🔥📬🔀🗂️💰📣📊🚀🕵️🤖⚡ / 💬📧💼✈️📓 / ✅⚠️🚨⏳🟢🔴🟡), unicode sparklines on time-series data (`▁▂▃▄▅▆▇█`), truecolor cyan-violet gradient palette (`38;2;R;G;B` when `$COLORTERM=truecolor`, else 256-color fallback), at-a-glance vitals strip, randomized footer one-liner.
+- **Mobile/SSH graceful degradation** — detected via `$SSH_CONNECTION$SSH_CLIENT$SSH_TTY` or `$OPS_MOBILE=1`; falls back to plain-text section list, no ANSI boxes, no animations. `NO_COLOR=1` and `TERM=dumb` also honored.
+
+### Known follow-up
+
+- Portfolio section shows `(no git)` for registry paths stored with literal `~/` prefix (e.g. `~/healify-api`) because `git -C` doesn't expand tildes. Cosmetic — does not affect rolled-up stats. To be fixed by tilde-expanding paths at read time.
+
 ## [2.8.1] — 2026-05-21
 
 Hotfix: three production bugs in `/ops:ops-inbox` (PR #280).
