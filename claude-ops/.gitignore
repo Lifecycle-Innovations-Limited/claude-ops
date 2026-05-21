@@ -4,10 +4,12 @@ node_modules/
 !templates/**/.env.example
 !scripts/systemd/secrets.env.example
 
-# Pocket pipeline secrets — installed at /etc/pocket/secrets.env mode 600
-# root-owned. Never check this file (or any copy of it) into the repo.
+# Pocket pipeline secrets — installed at /etc/pocket/{secrets.env,doppler-token}
+# mode 600 root-owned. Never check these files (or any copy of them) into git.
 secrets.env
 pocket-secrets.env
+doppler-token
+pocket-doppler-token*
 .DS_Store
 *.swp
 *.swo
