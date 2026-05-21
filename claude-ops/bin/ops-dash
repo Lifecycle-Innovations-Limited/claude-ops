@@ -710,7 +710,7 @@ render_section_portfolio() {
   if [[ "$PORTFOLIO_SHOPIFY_JSON" != "[]" && -n "$PORTFOLIO_SHOPIFY_JSON" ]]; then
     p "  ${DIM2}── shopify ──${RST}"
     echo "$PORTFOLIO_SHOPIFY_JSON" \
-      | jq -r '.[] | [.name, .kind, (.store // "-"), (.verified|tostring), (if (.shop_name // "") == "" then "-" else .shop_name end), (.configured|tostring)] | @tsv' 2>/dev/null \
+      | jq -r '.[] | [.name, .kind, (if (.store // "") == "" then "-" else .store end), (.verified|tostring), (if (.shop_name // "") == "" then "-" else .shop_name end), (.configured|tostring)] | @tsv' 2>/dev/null \
       | while IFS=$'\t' read -r sname skind sstore sverified sshop sconfigured; do
           [[ "$sshop" == "-" ]] && sshop=""
           [[ "$sstore" == "-" ]] && sstore=""
@@ -724,7 +724,7 @@ render_section_portfolio() {
           elif [[ "$skind" == "shopify_partner" ]]; then
             # Partner apps aren't probed via Admin API — trust the configured flag.
             icon="🟢"; note=""
-          elif [[ "$live_status" == "not_configured" || -z "$live_status" ]]; then
+          elif [[ "$live_status" == "not_configured" || (-z "$live_status" && "$sverified" != "true") ]]; then
             icon="🟡"; note="${DIM2}not configured${RST}"
           elif [[ "$sverified" == "true" ]]; then
             icon="🟢"; note=""
@@ -742,7 +742,7 @@ render_section_portfolio() {
             "") store_disp="${DIM2}(no store)${RST}" ;;
             *) store_disp="${DIM2}${store_disp}${RST}" ;;
           esac
-          p "  ${icon} ${BWHT}${sname}${RST}  ${DIM2}${kind_short}${RST}  ${store_disp}  ${note}"
+          p "  ${icon} ${BWHT}${label}${RST}  ${DIM2}${kind_short}${RST}  ${store_disp}  ${note}"
         done
     _rendered=1
   fi
