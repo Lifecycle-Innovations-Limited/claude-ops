@@ -118,7 +118,7 @@ All 36 skills, grouped by category:
 | `/ops:linear` — sprint board | `/ops:ecom` — Shopify operations |
 | `/ops:triage` — cross-platform issues | `/ops:marketing` — Klaviyo/Meta/GA4/GSC |
 | `/ops:fires` — incidents + **all AWS** | `/ops:gtm` — **cross-channel GTM planner** |
-| `/ops:deploy` — ECS/Vercel/Actions | `/ops:voice` — Bland AI/ElevenLabs/Whisper |
+| `/ops:deploy` — ECS/Vercel/Actions | `/ops:voice` — **native + Twilio + Bland + Zoom + smart `join`** |
 | `/ops:monitor` — Datadog/New Relic/OTEL | `/ops:package` — carrier-agnostic shipping |
 | `/ops:competitors` — **self-discovering competitor intel** (v2.3) | |
 
@@ -128,6 +128,22 @@ All 36 skills, grouped by category:
 | `/ops:yolo` — 4 parallel C-suite agents | `/ops:doctor` — plugin auto-repair |
 | `/ops:integrate` — add external service | `/ops:daemon` — launchd background brain |
 | `/ops:whatsapp-biz` — catalog/orders | `/ops:status` — plugin + daemon health |
+
+### Voice / phone / video (v2.9)
+
+`/ops:voice` is a full voice surface — not just AI calls.
+
+| Subcommand | What it does |
+|---|---|
+| `phone <number>` | Native Phone.app dial via Continuity |
+| `facetime <handle> [--audio]` | FaceTime video or audio |
+| `zoom start\|join\|schedule` | Native Zoom + REST scheduling |
+| `join [--at now\|next]` | Auto-joins the current/next calendar meeting with smart AV defaults (cam/mic policy by attendee count, lid-state mic switching, Elgato auto-launch) |
+| `twilio-call`, `twilio-sms` | Programmatic outbound voice + SMS |
+| `bland-call` | AI agent phone call |
+| `tts`, `transcribe` | ElevenLabs TTS + Groq Whisper |
+
+All outbound 1:1 channels (twilio, bland) go through the per-message approval gate (Rule 6).
 
 ### Skill routing
 
@@ -198,6 +214,10 @@ Most integrations offer two paths — MCP (zero-config OAuth) or CLI (fuller fea
 | Bland AI | — | API key | Outbound voice via `/ops:voice` |
 | ElevenLabs | — | API key | TTS + cloning via `/ops:voice` |
 | Whisper | — | API key | Transcription via `/ops:voice` |
+| Twilio | — | API (Account SID + Auth Token) | Outbound voice + SMS via `/ops:voice twilio-*` |
+| Zoom | Server-to-Server OAuth | API token | Native start/join (no creds) + REST schedule via `/ops:voice zoom *` |
+| macOS Phone / FaceTime | — | URL schemes (`tel:`, `facetime://`, `facetime-audio://`) | Native via Continuity — no creds, no API |
+| Elgato Camera Hub | — | auto-launched if installed | Virtual camera setup for meetings via `/ops:voice join` |
 | GSD | — | auto-detected | Optional — roadmap state; degrades gracefully |
 | Doppler | `@dopplerhq/mcp-server` (MCP) | `doppler` CLI (fallback) | Secrets manager; MCP server provides direct tool access |
 
