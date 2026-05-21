@@ -121,10 +121,16 @@ def open_questions() -> list[dict]:
                 continue
             try:
                 q = json.loads(line)
-                if q.get("status") == "open":
-                    out.append(q)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(q, dict):
+                continue
+            if q.get("status") != "open":
+                continue
+            if not q.get("id"):
+                log(f"skipping malformed open question (no id): {str(q)[:120]}")
+                continue
+            out.append(q)
     except OSError:
         pass
     return out
