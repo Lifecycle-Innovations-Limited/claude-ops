@@ -359,20 +359,43 @@ TOTAL_PROBES=12
   touch "$TMPDIR_DASH/done_revenue"
 ) &
 
-# 10) Linear
+# 10) Linear — multi-workspace, all-teams scan
 (
-  LINEAR_TOKEN="${LINEAR_API_KEY:-}"
-  if [[ -n "$LINEAR_TOKEN" ]]; then
-    curl -sf -X POST https://api.linear.app/graphql \
-      -H "Authorization: $LINEAR_TOKEN" \
+  # Query: assigned in-progress/unstarted issues across all teams
+  LINEAR_GQL='{"query":"{ issues(filter:{assignee:{isMe:{eq:true}},state:{type:{in:[\"started\",\"unstarted\"]}}}) { nodes { id identifier title priority state { name } team { key name } } } }"}'
+
+  # Iterate all 3 workspace keys; dedupe by issue id at the end
+  WORKSPACE_COUNT=0
+
+  _TMPLINEAR=$(mktemp -d)
+
+  for _KEY_VAR in LINEAR_API_KEY MY-PROJECT_LINEAR_API_KEY EXAMPLE-PROJECT_LINEAR_API_KEY; do
+    _TOKEN="${!_KEY_VAR:-}"
+    [[ -z "$_TOKEN" ]] && continue
+
+    _RESP=$(curl -sf -X POST https://api.linear.app/graphql \
+      -H "Authorization: $_TOKEN" \
       -H "Content-Type: application/json" \
-      --max-time 5 \
-      -d '{"query":"{ viewer { assignedIssues(filter:{state:{type:{in:[\"started\",\"unstarted\"]}}}) { nodes { id title priority state { name } } } } }"}' \
-      2>/dev/null > "$TMPDIR_DASH/linear.json" \
-      || echo '{}' > "$TMPDIR_DASH/linear.json"
-  else
-    echo '{}' > "$TMPDIR_DASH/linear.json"
-  fi
+      --max-time 8 \
+      -d "$LINEAR_GQL" 2>/dev/null || echo '{}')
+
+    _NODES=$(echo "$_RESP" | jq '.data.issues.nodes // []' 2>/dev/null || echo "[]")
+    _COUNT=$(echo "$_NODES" | jq 'length' 2>/dev/null || echo "0")
+    [[ "$_COUNT" -gt 0 ]] && WORKSPACE_COUNT=$((WORKSPACE_COUNT + 1))
+
+    echo "$_NODES" > "${_TMPLINEAR}/ws_${WORKSPACE_COUNT}_${_KEY_VAR}.json"
+  done
+
+  # Merge all partial files and dedupe by id
+  DEDUPED=$(cat "${_TMPLINEAR}"/*.json 2>/dev/null \
+    | jq -s 'add // [] | [group_by(.id)[] | first]' 2>/dev/null || echo "[]")
+  rm -rf "$_TMPLINEAR"
+
+  jq -n --argjson nodes "$DEDUPED" --argjson ws "$WORKSPACE_COUNT" \
+    '{"nodes": $nodes, "workspace_count": $ws}' \
+    > "$TMPDIR_DASH/linear.json" \
+    || echo '{"nodes":[],"workspace_count":0}' > "$TMPDIR_DASH/linear.json"
+
   touch "$TMPDIR_DASH/done_linear"
 ) &
 
@@ -464,7 +487,7 @@ MARKETING_JSON=$(cat "$TMPDIR_DASH/marketing.json" 2>/dev/null || echo '{}')
 EXTERNAL_JSON=$(cat "$TMPDIR_DASH/external.json"   2>/dev/null || echo '[]')
 GSD_ACTIVE=$(cat "$TMPDIR_DASH/gsd"           2>/dev/null || echo "0")
 REVENUE_JSON=$(cat "$TMPDIR_DASH/revenue.json" 2>/dev/null || echo '{}')
-LINEAR_JSON=$(cat "$TMPDIR_DASH/linear.json"   2>/dev/null || echo '{}')
+LINEAR_JSON=$(cat "$TMPDIR_DASH/linear.json"   2>/dev/null || echo '{"nodes":[],"workspace_count":0}')
 COMPETITOR_FILE=$(cat "$TMPDIR_DASH/competitor" 2>/dev/null | head -1 || echo "")
 COMPETITOR_JSON=$(cat "$TMPDIR_DASH/competitor.json" 2>/dev/null || echo '{"configured":false}')
 DEPLOY_JSON=$(cat "$TMPDIR_DASH/deploys.json"  2>/dev/null || echo '[]')
@@ -860,32 +883,44 @@ render_section_marketing() {
 render_section_linear() {
   section_hdr "📊" "LINEAR"
 
-  if [[ -z "${LINEAR_API_KEY:-}" ]]; then
-    p "  ${DIM2}LINEAR_API_KEY not set — export it to enable Linear data.${RST}"; p ""; return
+  # Check at least one key is set
+  if [[ -z "${LINEAR_API_KEY:-}" && -z "${MY-PROJECT_LINEAR_API_KEY:-}" && -z "${EXAMPLE-PROJECT_LINEAR_API_KEY:-}" ]]; then
+    p "  ${DIM2}No LINEAR_API_KEY / MY-PROJECT_LINEAR_API_KEY / EXAMPLE-PROJECT_LINEAR_API_KEY set.${RST}"; p ""; return
   fi
 
-  IN_PROGRESS=$(echo "$LINEAR_JSON" | jq -r \
-    '[.data.viewer.assignedIssues.nodes[]? | select(.state.name | test("(?i)in progress|started"))] | length' \
-    2>/dev/null || echo "0")
-  URGENT=$(echo "$LINEAR_JSON" | jq -r \
-    '[.data.viewer.assignedIssues.nodes[]? | select(.priority == 1)] | length' \
-    2>/dev/null || echo "0")
-  TOTAL_ASSIGNED=$(echo "$LINEAR_JSON" | jq -r \
-    '.data.viewer.assignedIssues.nodes | length' \
-    2>/dev/null || echo "0")
+  NODES=$(echo "$LINEAR_JSON" | jq '.nodes // []' 2>/dev/null || echo "[]")
+  WS_COUNT=$(echo "$LINEAR_JSON" | jq -r '.workspace_count // 0' 2>/dev/null || echo "0")
+  TOTAL_ASSIGNED=$(echo "$NODES" | jq 'length' 2>/dev/null || echo "0")
 
-  if [[ "$TOTAL_ASSIGNED" == "0" && "$LINEAR_JSON" == "{}" ]]; then
+  if [[ "$TOTAL_ASSIGNED" == "0" && "$WS_COUNT" == "0" ]]; then
     no_data; p ""; return
   fi
 
-  p "  ${BWHT}Assigned${RST}  ${BCYN}${TOTAL_ASSIGNED}${RST}  ·  🔄 in-progress: ${IN_PROGRESS}  ·  🚨 urgent (P1): ${URGENT}"
+  IN_PROGRESS=$(echo "$NODES" | jq \
+    '[.[]? | select(.state.name | test("(?i)in progress|started"))] | length' \
+    2>/dev/null || echo "0")
+  # Linear: 0 = no priority, 1 = Urgent, 2–4 = High/Normal/Low
+  URGENT=$(echo "$NODES" | jq \
+    '[.[]? | select(.priority == 1)] | length' \
+    2>/dev/null || echo "0")
 
-  echo "$LINEAR_JSON" | jq -r \
-    '.data.viewer.assignedIssues.nodes[]? |
-     select(.state.name | test("(?i)in progress|started")) |
-     "  🔄 \(.title | .[0:60])"' \
+  p "  ${BWHT}Assigned${RST}  ${BCYN}${TOTAL_ASSIGNED}${RST}  (across ${WS_COUNT} workspace(s))  ·  🔄 in-progress: ${IN_PROGRESS}  ·  🚨 urgent: ${URGENT}"
+
+  # Top 3 Urgent (priority 1), with team prefix
+  echo "$NODES" | jq -r \
+    '[.[]? | select(.priority == 1)] |
+     .[0:3][] |
+     "  🚨 [\(.team.key | ascii_upcase | .[0:3])]  \(.identifier)  \(.title | .[0:55])"' \
     2>/dev/null \
-    | head -5 \
+    | while IFS= read -r line; do p "${BRED}${line}${RST}"; done \
+    || true
+
+  # Then in-progress (up to 3 more, skip already shown urgent ones)
+  echo "$NODES" | jq -r \
+    '[.[]? | select((.state.name | test("(?i)in progress|started")) and (.priority != 1))] |
+     .[0:3][] |
+     "  🔄 [\(.team.key | ascii_upcase | .[0:3])]  \(.identifier)  \(.title | .[0:55])"' \
+    2>/dev/null \
     | while IFS= read -r line; do p "${CYN}${line}${RST}"; done \
     || true
 
