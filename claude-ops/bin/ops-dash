@@ -1,177 +1,945 @@
 #!/usr/bin/env bash
-# ops-dash — Instant pixel-art command center dashboard
-# Renders the visual dashboard shell with live data indicators
+# ops-dash — Hybrid live command center dashboard
+# 2026-aesthetic: gradient blocks, emoji sections, sparklines, animated load bar
+# Hero pixel-art header + section-by-section panels with live data from all /ops:* bins.
+# Probes fire in parallel; render is sequential top-to-bottom.
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "${PLUGIN_ROOT}/lib/registry-path.sh"
 PREFS="${OPS_DATA_DIR}/preferences.json"
 
-# --- Color setup ---
-if [[ -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
-  RST=$'\033[0m'; BOLD=$'\033[1m'; DIM=$'\033[2m'
-  CYN=$'\033[36m'; GRN=$'\033[32m'; RED=$'\033[31m'; YLW=$'\033[33m'; WHT=$'\033[37m'; MAG=$'\033[35m'; BLU=$'\033[34m'
-  BCYN=$'\033[1;36m'; BGRN=$'\033[1;32m'; BRED=$'\033[1;31m'; BYLW=$'\033[1;33m'; BWHT=$'\033[1;37m'; BMAG=$'\033[1;35m'; BBLU=$'\033[1;34m'
-  BGDIM=$'\033[48;5;236m'; BGDARK=$'\033[48;5;233m'
-else
-  RST="" BOLD="" DIM="" CYN="" GRN="" RED="" YLW="" WHT="" MAG="" BLU=""
-  BCYN="" BGRN="" BRED="" BYLW="" BWHT="" BMAG="" BBLU="" BGDIM="" BGDARK=""
+# ── Mobile / SSH detection (Rule 7) ─────────────────────────────────────────
+MOBILE_MODE=0
+if [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" || "${OPS_MOBILE:-}" == "1" ]]; then
+  MOBILE_MODE=1
+fi
+if [[ "${COLUMNS:-80}" -lt 80 ]]; then
+  MOBILE_MODE=1
 fi
 
-# --- Helpers ---
-p() { printf '%s\n' "$1"; }
-sp() { printf '%s\n' "$1"; sleep 0.015; }
+# ── Truecolor vs 256-color detection ─────────────────────────────────────────
+TRUECOLOR=0
+if [[ "${COLORTERM:-}" =~ ^(truecolor|24bit)$ ]]; then
+  TRUECOLOR=1
+fi
 
-# --- Check setup ---
-SETUP_OK="true"
-[ -f "$PREFS" ] || SETUP_OK="false"
+# ── Color setup ──────────────────────────────────────────────────────────────
+if [[ "$MOBILE_MODE" -eq 0 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
+  RST=$'\033[0m'
+  BOLD=$'\033[1m'
+  DIM=$'\033[2m'
 
-# --- Quick data probes (parallel, non-blocking) ---
+  if [[ "$TRUECOLOR" -eq 1 ]]; then
+    # 2026 dark-mode palette — truecolor
+    CYN=$'\033[38;2;0;210;220m'       # electric cyan
+    VIO=$'\033[38;2;180;100;255m'     # violet
+    GRN=$'\033[38;2;80;255;140m'      # bright green
+    RED=$'\033[38;2;255;60;100m'      # hot pink-red
+    YLW=$'\033[38;2;255;180;50m'      # amber
+    WHT=$'\033[38;2;220;225;240m'     # cool white
+    MAG=$'\033[38;2;255;80;200m'      # hot pink
+    BLU=$'\033[38;2;60;140;255m'      # bright blue
+    DIM2=$'\033[38;2;120;130;150m'    # cool gray dim
+    DIMX=$'\033[38;2;70;80;95m'       # deeper dim
+    # Bold variants (reuse same hues + bold)
+    BCYN=$'\033[1m\033[38;2;0;230;240m'
+    BVIO=$'\033[1m\033[38;2;200;120;255m'
+    BGRN=$'\033[1m\033[38;2;100;255;160m'
+    BRED=$'\033[1m\033[38;2;255;80;120m'
+    BYLW=$'\033[1m\033[38;2;255;200;60m'
+    BWHT=$'\033[1m\033[38;2;240;245;255m'
+    BMAG=$'\033[1m\033[38;2;255;100;220m'
+    BBLU=$'\033[1m\033[38;2;80;160;255m'
+    # BG for vitals strip
+    BG_DARK=$'\033[48;2;14;17;23m'
+    BG_CARD=$'\033[48;2;20;25;36m'
+  else
+    # 256-color fallback (same aesthetic, less precision)
+    CYN=$'\033[38;5;81m'
+    VIO=$'\033[38;5;141m'
+    GRN=$'\033[38;5;120m'
+    RED=$'\033[38;5;205m'
+    YLW=$'\033[38;5;215m'
+    WHT=$'\033[38;5;253m'
+    MAG=$'\033[38;5;177m'
+    BLU=$'\033[38;5;75m'
+    DIM2=$'\033[38;5;245m'
+    DIMX=$'\033[38;5;240m'
+    BCYN=$'\033[1;38;5;81m'
+    BVIO=$'\033[1;38;5;141m'
+    BGRN=$'\033[1;38;5;120m'
+    BRED=$'\033[1;38;5;205m'
+    BYLW=$'\033[1;38;5;215m'
+    BWHT=$'\033[1;38;5;253m'
+    BMAG=$'\033[1;38;5;177m'
+    BBLU=$'\033[1;38;5;75m'
+    BG_DARK=$'\033[48;5;233m'
+    BG_CARD=$'\033[48;5;236m'
+  fi
+else
+  RST="" BOLD="" DIM="" CYN="" VIO="" GRN="" RED="" YLW="" WHT="" MAG="" BLU=""
+  DIM2="" DIMX="" BCYN="" BVIO="" BGRN="" BRED="" BYLW="" BWHT="" BMAG="" BBLU=""
+  BG_DARK="" BG_CARD=""
+fi
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+p()  { printf '%s\n' "$1"; }
+sp() { printf '%s\n' "$1"; [[ "$MOBILE_MODE" -eq 0 ]] && sleep 0.015 || true; }
+
+# Section intro delay (skip in mobile/no-color)
+section_pause() { [[ "$MOBILE_MODE" -eq 0 && -z "${NO_COLOR:-}" ]] && sleep 0.04 || true; }
+
+# Section header with gradient divider
+section_hdr() {
+  local emoji="$1"
+  local title="$2"
+  section_pause
+  if [[ "$MOBILE_MODE" -eq 1 || -z "${CYN:-}" ]]; then
+    p "--- ${emoji} ${title} ---"
+  else
+    printf '%s' "  ${DIMX}─────────────────${RST} "
+    printf '%s' "${emoji} ${BCYN}${title}${RST}"
+    printf '%s\n' " ${DIMX}─────────────────────────────────────────────────${RST}"
+  fi
+}
+
+no_data() { p "  ${DIM2}(no data)${RST}"; }
+
+# Age helper: seconds → human string
+age_human() {
+  local secs="${1:-0}"
+  if   [[ "$secs" -lt 60 ]];    then echo "${secs}s"
+  elif [[ "$secs" -lt 3600 ]];  then echo "$((secs/60))m"
+  elif [[ "$secs" -lt 86400 ]]; then echo "$((secs/3600))h"
+  else echo "$((secs/86400))d"
+  fi
+}
+
+# Sparkline from space-separated numbers (max 8 values)
+sparkline() {
+  # shellcheck disable=SC2206
+  local values=($@)
+  local bars=("▁" "▂" "▃" "▄" "▅" "▆" "▇" "█")
+  local max=0
+  for v in "${values[@]}"; do
+    [[ "$v" -gt "$max" ]] && max=$v
+  done
+  [[ "$max" -eq 0 ]] && max=1
+  local out=""
+  for v in "${values[@]}"; do
+    local idx=$(( (v * 7 + max / 2) / max ))
+    [[ "$idx" -gt 7 ]] && idx=7
+    out="${out}${bars[$idx]}"
+  done
+  echo "$out"
+}
+
+# ── Motivational footer lines ─────────────────────────────────────────────────
+FOOTER_LINES=(
+  "⚡ ship it."
+  "🚀 your business is running."
+  "📬 inbox = action queue."
+  "✅ verify before you ship."
+  "🔥 stay close to the metal."
+  "💡 one glance. full picture."
+  "⚡ live. iterate. ship."
+)
+FOOTER="${FOOTER_LINES[$(( RANDOM % ${#FOOTER_LINES[@]} ))]}"
+
+# ── Parallel probes ──────────────────────────────────────────────────────────
 TMPDIR_DASH=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_DASH"' EXIT
 
-# Fire probes in background
+TOTAL_PROBES=12
+
+# 1) Unread
 (
-  if [ -f "$REGISTRY" ]; then
-    PROJECT_COUNT=$(jq '.projects | length' "$REGISTRY" 2>/dev/null || echo "0")
-    FIRE_PROJECTS=$(jq -r '.projects[].infra.ecs_clusters // [] | .[]' "$REGISTRY" 2>/dev/null | wc -l | tr -d ' ')
-  else
-    PROJECT_COUNT="0"
-    FIRE_PROJECTS="0"
-  fi
-  echo "$PROJECT_COUNT" > "$TMPDIR_DASH/projects"
-  echo "$FIRE_PROJECTS" > "$TMPDIR_DASH/clusters"
+  "$PLUGIN_ROOT/bin/ops-unread" 2>/dev/null > "$TMPDIR_DASH/unread.json" \
+    || echo '{}' > "$TMPDIR_DASH/unread.json"
+  touch "$TMPDIR_DASH/done_unread"
 ) &
 
+# 2) Open PRs — GraphQL org-wide search (works outside any git repo cwd)
 (
-  # PR count
-  PR_COUNT=$(gh pr list --state open --json number 2>/dev/null | jq 'length' 2>/dev/null || echo "?")
-  echo "$PR_COUNT" > "$TMPDIR_DASH/prs"
+  # GraphQL query: fetch open PRs authored by viewer across all orgs
+  GQL_RESULT=$(gh api graphql -f query='
+    {
+      search(query: "is:pr is:open author:@me", type: ISSUE, first: 50) {
+        nodes {
+          ... on PullRequest {
+            number
+            title
+            url
+            isDraft
+            createdAt
+            reviewDecision
+            headRefName
+            repository { nameWithOwner }
+            commits(last: 1) {
+              nodes {
+                commit {
+                  statusCheckRollup {
+                    state
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }' 2>/dev/null || echo '{"data":{"search":{"nodes":[]}}}')
+
+  # Normalise to flat array matching rest of render logic
+  echo "$GQL_RESULT" | jq '[
+    .data.search.nodes[] |
+    {
+      number,
+      title,
+      isDraft,
+      createdAt,
+      reviewDecision,
+      headRefName,
+      repository,
+      statusCheckRollup: (
+        .commits.nodes[0].commit.statusCheckRollup.state // null |
+        if . == "SUCCESS" then [{"conclusion":"SUCCESS"}]
+        elif . == "FAILURE" then [{"conclusion":"FAILURE"}]
+        elif . == "PENDING" then [{"conclusion":null}]
+        else [] end
+      )
+    }
+  ]' 2>/dev/null > "$TMPDIR_DASH/prs.json" \
+    || echo '[]' > "$TMPDIR_DASH/prs.json"
+
+  touch "$TMPDIR_DASH/done_prs"
 ) &
 
+# 3) CI failures (via registry repos) + merged PR sparkline (GraphQL)
 (
-  # CI failures (last 24h across repos)
-  FAIL_COUNT=$(gh run list --limit 30 --json conclusion 2>/dev/null | jq '[.[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo "?")
-  echo "$FAIL_COUNT" > "$TMPDIR_DASH/ci_fails"
-) &
-
-(
-  # Unread counts
-  "$PLUGIN_ROOT/bin/ops-unread" 2>/dev/null > "$TMPDIR_DASH/unread.json" || echo '{}' > "$TMPDIR_DASH/unread.json"
-) &
-
-(
-  # GSD active phases
-  GSD_ACTIVE=0
-  if [ -f "$REGISTRY" ]; then
-    for d in $(jq -r '.projects[] | select(.gsd == true) | .paths[]' "$REGISTRY" 2>/dev/null); do
-      expanded="${d/#\~/$HOME}"
-      [ -f "$expanded/.planning/STATE.md" ] && GSD_ACTIVE=$((GSD_ACTIVE + 1))
+  # CI fails: iterate registry repos with gh run list --repo (works outside git cwd)
+  FAIL_COUNT=0
+  if [ -f "$REGISTRY" ] && command -v gh &>/dev/null; then
+    REPOS=$(jq -r '[.projects[].repos[]?] | unique | .[]' "$REGISTRY" 2>/dev/null || true)
+    for repo in $REPOS; do
+      C=$(gh run list --repo "$repo" --limit 10 --json conclusion 2>/dev/null \
+        | jq '[.[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo "0")
+      FAIL_COUNT=$((FAIL_COUNT + C))
     done
   fi
+  echo "$FAIL_COUNT" > "$TMPDIR_DASH/ci_fails"
+
+  # Merged PRs last 7 days for sparkline — GraphQL, no cwd requirement
+  SEVEN_DAYS_AGO=$(date -v-7d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || echo "2026-05-14T00:00:00Z")
+  MERGED_7D=$(gh api graphql -f query="
+    { search(query: \"is:pr is:merged author:@me merged:>=${SEVEN_DAYS_AGO}\", type:ISSUE, first:100) {
+        nodes { ... on PullRequest { mergedAt } }
+    } }" 2>/dev/null \
+    | jq -r '[.data.search.nodes[] | .mergedAt[0:10]] | group_by(.) | map(length) | .[]' 2>/dev/null \
+    | tail -7 | tr '\n' ' ' | sed 's/ $//' || echo "")
+  [ -z "$MERGED_7D" ] && MERGED_7D="0 0 0 0 0 0 0"
+  echo "$MERGED_7D" > "$TMPDIR_DASH/merged_sparkline"
+  touch "$TMPDIR_DASH/done_ci"
+) &
+
+# 4) Portfolio
+(
+  if [ -f "$REGISTRY" ]; then
+    jq -c '[.projects[] | {
+      name,
+      path: (.paths[0] // ""),
+      branch: (.git.default_branch // "?"),
+      repos: (.repos // [])
+    }]' "$REGISTRY" 2>/dev/null > "$TMPDIR_DASH/portfolio.json" \
+      || echo '[]' > "$TMPDIR_DASH/portfolio.json"
+  else
+    echo '[]' > "$TMPDIR_DASH/portfolio.json"
+  fi
+  touch "$TMPDIR_DASH/done_portfolio"
+) &
+
+# 5) Marketing
+(
+  "$PLUGIN_ROOT/bin/ops-marketing-dash" 2>/dev/null > "$TMPDIR_DASH/marketing.json" \
+    || echo '{}' > "$TMPDIR_DASH/marketing.json"
+  touch "$TMPDIR_DASH/done_marketing"
+) &
+
+# 6) External / Shopify
+(
+  "$PLUGIN_ROOT/bin/ops-external" 2>/dev/null > "$TMPDIR_DASH/external.json" \
+    || echo '[]' > "$TMPDIR_DASH/external.json"
+  touch "$TMPDIR_DASH/done_external"
+) &
+
+# 7) GSD active count
+(
+  GSD_ACTIVE=0
+  if [ -f "$REGISTRY" ]; then
+    while IFS= read -r path_raw; do
+      expanded="${path_raw/#\~/$HOME}"
+      [ -f "$expanded/.planning/STATE.md" ] && GSD_ACTIVE=$((GSD_ACTIVE + 1))
+    done < <(jq -r '.projects[] | select(.gsd == true) | .paths[]' "$REGISTRY" 2>/dev/null || true)
+  fi
   echo "$GSD_ACTIVE" > "$TMPDIR_DASH/gsd"
+  touch "$TMPDIR_DASH/done_gsd"
 ) &
 
+# 8) YOLO reports
 (
-  # YOLO reports
-  LATEST_YOLO=""
+  REPORTS=()
   for dir in /tmp/yolo-*/; do
-    [ -f "${dir}ceo-analysis.md" ] && LATEST_YOLO="$dir"
+    [ -d "$dir" ] && REPORTS+=("$dir")
   done
-  echo "${LATEST_YOLO:-none}" > "$TMPDIR_DASH/yolo"
+  printf '%s\n' "${REPORTS[@]:-}" > "$TMPDIR_DASH/yolo_list"
+  touch "$TMPDIR_DASH/done_yolo"
 ) &
 
+# 9) Revenue / FinOps
 (
-  # Marketing health (live, project-aware) + external/Shopify surface
-  "$PLUGIN_ROOT/bin/ops-marketing-dash" 2>/dev/null > "$TMPDIR_DASH/marketing.json" || echo '{}' > "$TMPDIR_DASH/marketing.json"
-  "$PLUGIN_ROOT/bin/ops-external"       2>/dev/null > "$TMPDIR_DASH/external.json"  || echo '[]' > "$TMPDIR_DASH/external.json"
+  FINOPS_URL="${FINOPS_DASHBOARD_URL:-}"
+  FINOPS_TOKEN="${FINOPS_OPS_API_TOKEN:-}"
+  if [[ -n "$FINOPS_URL" && -n "$FINOPS_TOKEN" ]]; then
+    curl -sf -H "Authorization: Bearer $FINOPS_TOKEN" \
+      "${FINOPS_URL}/api/summary" --max-time 5 2>/dev/null \
+      > "$TMPDIR_DASH/revenue.json" \
+      || echo '{}' > "$TMPDIR_DASH/revenue.json"
+  else
+    echo '{}' > "$TMPDIR_DASH/revenue.json"
+  fi
+  touch "$TMPDIR_DASH/done_revenue"
 ) &
+
+# 10) Linear
+(
+  LINEAR_TOKEN="${LINEAR_API_KEY:-}"
+  if [[ -n "$LINEAR_TOKEN" ]]; then
+    curl -sf -X POST https://api.linear.app/graphql \
+      -H "Authorization: $LINEAR_TOKEN" \
+      -H "Content-Type: application/json" \
+      --max-time 5 \
+      -d '{"query":"{ viewer { assignedIssues(filter:{state:{type:{in:[\"started\",\"unstarted\"]}}}) { nodes { id title priority state { name } } } } }"}' \
+      2>/dev/null > "$TMPDIR_DASH/linear.json" \
+      || echo '{}' > "$TMPDIR_DASH/linear.json"
+  else
+    echo '{}' > "$TMPDIR_DASH/linear.json"
+  fi
+  touch "$TMPDIR_DASH/done_linear"
+) &
+
+# 11) Competitor intel
+(
+  INTEL_DIR="${OPS_DATA_DIR}/reports/competitor-intel"
+  LATEST_INTEL=""
+  if [ -d "$INTEL_DIR" ]; then
+    LATEST_INTEL=$(ls -t "$INTEL_DIR"/*.md 2>/dev/null | head -1 || true)
+  fi
+  echo "${LATEST_INTEL:-}" > "$TMPDIR_DASH/competitor"
+  touch "$TMPDIR_DASH/done_competitor"
+) &
+
+# 12) ECS deploy status
+(
+  if command -v aws &>/dev/null; then
+    aws ecs list-clusters --output json 2>/dev/null \
+      | jq -r '.clusterArns[]' 2>/dev/null \
+      | while read -r arn; do
+          cluster_name=$(basename "$arn")
+          SVC_LIST=$(aws ecs list-services --cluster "$arn" --output json 2>/dev/null \
+            | jq -r '.serviceArns[]' | xargs -I{} basename {} 2>/dev/null | tr '\n' ' ' || echo "")
+          [ -z "$SVC_LIST" ] && continue
+          aws ecs describe-services \
+            --cluster "$arn" \
+            --services $SVC_LIST \
+            --output json 2>/dev/null \
+            | jq --arg c "$cluster_name" \
+              '[.services[] | {cluster: $c, service: .serviceName,
+                desired: .desiredCount, running: .runningCount,
+                pending: .pendingCount, status: .status}]' \
+            2>/dev/null
+        done \
+      | jq -s 'add // []' 2>/dev/null \
+      > "$TMPDIR_DASH/deploys.json" \
+      || echo '[]' > "$TMPDIR_DASH/deploys.json"
+  else
+    echo '[]' > "$TMPDIR_DASH/deploys.json"
+  fi
+  touch "$TMPDIR_DASH/done_deploys"
+) &
+
+# ── Animated loading bar (while probes run) ───────────────────────────────────
+if [[ "$MOBILE_MODE" -eq 0 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
+  PROBE_NAMES=("fires" "inbox" "prs" "portfolio" "marketing" "external" "gsd" "yolo" "revenue" "linear" "competitor" "deploys")
+  _bar_width=20
+  _start_time=$(date +%s)
+  _tick=0
+  while true; do
+    _done=$(ls "$TMPDIR_DASH"/done_* 2>/dev/null | wc -l | tr -d ' ')
+    _pct=$(( (_done * 100) / TOTAL_PROBES ))
+    _filled=$(( (_done * _bar_width) / TOTAL_PROBES ))
+    _empty=$(( _bar_width - _filled ))
+    # shellcheck disable=SC2046
+    _bar="${BCYN}$(printf '█%.0s' $(seq 1 "$_filled" 2>/dev/null || true))${DIMX}$(printf '░%.0s' $(seq 1 "$_empty" 2>/dev/null || true))${RST}"
+    # pick spinner frame
+    _tick=$(( (_tick + 1) % 10 ))
+    _elapsed=$_tick
+    _spin_chars=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+    _spin="${_spin_chars[$(( _elapsed % ${#_spin_chars[@]} ))]}"
+    printf "\r  ${BCYN}${_spin}${RST} ${DIM2}Loading command center${RST}  ${_bar}  ${BWHT}${_pct}%%${RST}  ${DIMX}(${_done}/${TOTAL_PROBES} probes)${RST}  " >&2
+    [[ "$_done" -ge "$TOTAL_PROBES" ]] && break
+    sleep 0.1
+  done
+  printf "\r%*s\r" "$(tput cols 2>/dev/null || echo 80)" "" >&2  # clear line
+fi
 
 wait
 
-# --- Read results ---
-PROJECTS=$(cat "$TMPDIR_DASH/projects" 2>/dev/null || echo "?")
-CLUSTERS=$(cat "$TMPDIR_DASH/clusters" 2>/dev/null || echo "?")
-PRS=$(cat "$TMPDIR_DASH/prs" 2>/dev/null || echo "?")
-CI_FAILS=$(cat "$TMPDIR_DASH/ci_fails" 2>/dev/null || echo "?")
-GSD_ACTIVE=$(cat "$TMPDIR_DASH/gsd" 2>/dev/null || echo "?")
-LATEST_YOLO=$(cat "$TMPDIR_DASH/yolo" 2>/dev/null || echo "none")
+# ── Read results ─────────────────────────────────────────────────────────────
+UNREAD_JSON=$(cat "$TMPDIR_DASH/unread.json"   2>/dev/null || echo '{}')
+PRS_JSON=$(cat "$TMPDIR_DASH/prs.json"         2>/dev/null || echo '[]')
+CI_FAILS=$(cat "$TMPDIR_DASH/ci_fails"         2>/dev/null || echo "0")
+MERGED_SPARK=$(cat "$TMPDIR_DASH/merged_sparkline" 2>/dev/null || echo "0 0 0 0 0 0 0")
+PORTFOLIO_JSON=$(cat "$TMPDIR_DASH/portfolio.json" 2>/dev/null || echo '[]')
 MARKETING_JSON=$(cat "$TMPDIR_DASH/marketing.json" 2>/dev/null || echo '{}')
 EXTERNAL_JSON=$(cat "$TMPDIR_DASH/external.json"   2>/dev/null || echo '[]')
+GSD_ACTIVE=$(cat "$TMPDIR_DASH/gsd"           2>/dev/null || echo "0")
+REVENUE_JSON=$(cat "$TMPDIR_DASH/revenue.json" 2>/dev/null || echo '{}')
+LINEAR_JSON=$(cat "$TMPDIR_DASH/linear.json"   2>/dev/null || echo '{}')
+COMPETITOR_FILE=$(cat "$TMPDIR_DASH/competitor" 2>/dev/null | head -1 || echo "")
+DEPLOY_JSON=$(cat "$TMPDIR_DASH/deploys.json"  2>/dev/null || echo '[]')
+YOLO_LIST=$(cat "$TMPDIR_DASH/yolo_list"       2>/dev/null || echo "")
+PROJECTS=$([ -f "$REGISTRY" ] && jq '.projects | length' "$REGISTRY" 2>/dev/null || echo "0")
+
+# ── Unread — correct schema (.channels.whatsapp.recent_chats, .email.inbox_count) ──
+WA_UNREAD=$(echo "$UNREAD_JSON" | jq -r \
+  '(.channels.whatsapp.recent_chats // .channels.whatsapp.unread // 0)' 2>/dev/null || echo "0")
+EMAIL_UNREAD=$(echo "$UNREAD_JSON" | jq -r \
+  '(.channels.email.inbox_count // .channels.email.unread // 0)' 2>/dev/null || echo "0")
+SLACK_WS_COUNT=$(echo "$UNREAD_JSON" | jq -r \
+  '(.channels.slack.workspaces | length) // 0' 2>/dev/null || echo "0")
+[[ "$WA_UNREAD"      =~ ^[0-9]+$ ]] || WA_UNREAD="0"
+[[ "$EMAIL_UNREAD"   =~ ^[0-9]+$ ]] || EMAIL_UNREAD="0"
+[[ "$SLACK_WS_COUNT" =~ ^[0-9]+$ ]] || SLACK_WS_COUNT="0"
+TOTAL_UNREAD=$((WA_UNREAD + EMAIL_UNREAD))
+
+# ── PR count ─────────────────────────────────────────────────────────────────
+PR_COUNT=$(echo "$PRS_JSON" | jq 'length' 2>/dev/null || echo "0")
+[[ "$PR_COUNT" =~ ^[0-9]+$ ]] || PR_COUNT="0"
+
+# ── Fire indicator ────────────────────────────────────────────────────────────
+if [[ "${CI_FAILS:-0}" =~ ^[0-9]+$ ]] && [[ "${CI_FAILS:-0}" -gt 0 ]]; then
+  FIRE_STATUS="${BRED}🚨 FIRES DETECTED${RST}"
+else
+  FIRE_STATUS="${BGRN}✅ ALL CLEAR${RST}"
+fi
+
+# ── Revenue at-a-glance ───────────────────────────────────────────────────────
+MRR=$(echo "$REVENUE_JSON" | jq -r '.mrr // .MRR // "n/a"' 2>/dev/null || echo "n/a")
+BURN_7D=$(echo "$REVENUE_JSON" | jq -r '.aws_burn_7d // "n/a"' 2>/dev/null || echo "n/a")
+BURN_30D=$(echo "$REVENUE_JSON" | jq -r '.aws_burn_30d // "n/a"' 2>/dev/null || echo "n/a")
+RUNWAY=$(echo "$REVENUE_JSON" | jq -r '.runway_months // "n/a"' 2>/dev/null || echo "n/a")
+MRR_TREND=$(echo "$REVENUE_JSON" | jq -r '.mrr_trend // ""' 2>/dev/null || echo "")
+
+# ── Marketing at-a-glance ─────────────────────────────────────────────────────
 MK_HEALTH=$(echo "$MARKETING_JSON" | jq -r '.health_score // "?"' 2>/dev/null || echo "?")
 MK_STATUS=$(echo "$MARKETING_JSON" | jq -r '.health_status // "n/a"' 2>/dev/null || echo "n/a")
 MK_PROJECT=$(echo "$MARKETING_JSON" | jq -r '.project // ""' 2>/dev/null || echo "")
-SHOPIFY_HEALTHY=$(echo "$EXTERNAL_JSON" | jq -r '[.[] | select(.source=="shopify_admin" and .status=="healthy")] | length' 2>/dev/null || echo "0")
-SHOPIFY_TOTAL=$(echo "$EXTERNAL_JSON"   | jq -r '[.[] | select(.source | startswith("shopify"))] | length' 2>/dev/null || echo "0")
 
-# Unread parsing
-UNREAD_JSON=$(cat "$TMPDIR_DASH/unread.json" 2>/dev/null || echo '{}')
-WA_UNREAD=$(echo "$UNREAD_JSON" | jq -r '.whatsapp.count // 0' 2>/dev/null || echo "0")
-EMAIL_UNREAD=$(echo "$UNREAD_JSON" | jq -r '.email.count // 0' 2>/dev/null || echo "0")
-SLACK_UNREAD=$(echo "$UNREAD_JSON" | jq -r '.slack.count // 0' 2>/dev/null || echo "0")
-TOTAL_UNREAD=$((${WA_UNREAD:-0} + ${EMAIL_UNREAD:-0} + ${SLACK_UNREAD:-0}))
-
-# --- Fire indicator ---
-if [ "${CI_FAILS:-0}" != "?" ] && [ "${CI_FAILS:-0}" -gt 0 ] 2>/dev/null; then
-  FIRE_STATUS="${BRED}FIRES DETECTED${RST}"
-  FIRE_ICON="${RED}~${RST}"
-else
-  FIRE_STATUS="${BGRN}ALL CLEAR${RST}"
-  FIRE_ICON="${GRN}~${RST}"
-fi
-
-# --- YOLO indicator ---
-if [ "$LATEST_YOLO" != "none" ]; then
-  YOLO_STATUS="${BCYN}REPORT READY${RST}"
-else
-  YOLO_STATUS="${DIM}no reports${RST}"
-fi
-
-# --- Date ---
+# ── Date ──────────────────────────────────────────────────────────────────────
 NOW=$(date "+%Y-%m-%d %H:%M")
 DAY=$(date "+%A")
 
-# --- Render dashboard ---
-p ""
-sp "${DIM}${CYN}  ╔══════════════════════════════════════════════════════════════╗${RST}"
-sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BCYN}  ██████╗ ██████╗ ███████╗    ██████╗  █████╗ ███████╗${RST} ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BCYN} ██╔═══██╗██╔══██╗██╔════╝    ██╔══██╗██╔══██╗██╔════╝${RST}${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BCYN} ██║   ██║██████╔╝███████╗    ██║  ██║███████║███████╗${RST} ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BCYN} ██║   ██║██╔═══╝ ╚════██║    ██║  ██║██╔══██║╚════██║${RST} ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BCYN} ╚██████╔╝██║     ███████║    ██████╔╝██║  ██║███████║${RST} ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BCYN}  ╚═════╝ ╚═╝     ╚══════╝    ╚═════╝ ╚═╝  ╚═╝╚══════╝${RST}${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BWHT}COMMAND CENTER${RST}  ${DIM}v0.3.1${RST}        ${DIM}${NOW} ${DAY}${RST}   ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ╠══════════════════════════════════════════════════════════════╣${RST}"
-sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${FIRE_ICON} ${BWHT}STATUS${RST}  ${FIRE_STATUS}    ${DIM}|${RST}  ${BWHT}${TOTAL_UNREAD}${RST} unread  ${DIM}|${RST}  ${BWHT}${PRS}${RST} PRs    ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${DIM}  ${PROJECTS} projects${RST}  ${DIM}|${RST}  ${DIM}${GSD_ACTIVE} GSD active${RST}  ${DIM}|${RST}  ${DIM}${CLUSTERS} clusters${RST}   ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${DIM}  marketing ${MK_HEALTH}/100 ${MK_STATUS}${MK_PROJECT:+ (${MK_PROJECT})}  ${DIM}|${RST}  ${DIM}shopify ${SHOPIFY_HEALTHY}/${SHOPIFY_TOTAL}${RST}   ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ╠══════════════════════════════════════════════════════════════╣${RST}"
-sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BWHT}QUICK ACTIONS${RST}                    ${BWHT}INTEL${RST}                 ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BCYN}1${RST} ${WHT}Morning briefing${RST}             ${BCYN}6${RST} ${WHT}Revenue & costs${RST}       ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BCYN}2${RST} ${WHT}Inbox zero${RST}                   ${BCYN}7${RST} ${WHT}Linear sprint${RST}         ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BCYN}3${RST} ${WHT}Fire check${RST}                   ${BCYN}8${RST} ${WHT}Deploy status${RST}         ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BCYN}4${RST} ${WHT}Project dashboard${RST}            ${BCYN}9${RST} ${WHT}Triage issues${RST}         ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BCYN}5${RST} ${WHT}What's next?${RST}                 ${BCYN}0${RST} ${WHT}System speedup${RST}        ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BWHT}POWER${RST}                           ${BWHT}COMMS${RST}                ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BMAG}a${RST} ${WHT}YOLO mode${RST}  ${YOLO_STATUS}    ${BCYN}d${RST} ${WHT}Send message${RST}          ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BMAG}b${RST} ${WHT}Auto-merge PRs${RST}               ${BCYN}e${RST} ${WHT}C-suite reports${RST}       ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BMAG}c${RST} ${WHT}Setup wizard${RST}                                       ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ╠══════════════════════════════════════════════════════════════╣${RST}"
-sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BWHT}META${RST}                                                      ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BYLW}f${RST} ${WHT}Settings & config${RST}            ${BYLW}h${RST} ${WHT}Help / FAQ / Wiki${RST}     ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}   ${BYLW}g${RST} ${WHT}Share your setup${RST}             ${DIM}q  Exit${RST}                ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ║${RST}                                                              ${DIM}${CYN}║${RST}"
-sp "${DIM}${CYN}  ╚══════════════════════════════════════════════════════════════╝${RST}"
-p ""
+# ── Sparkline for PR merges ───────────────────────────────────────────────────
+SPARK=$(sparkline $MERGED_SPARK 2>/dev/null || echo "▁▁▁▁▁▁▁")
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 1 — HERO
+# ════════════════════════════════════════════════════════════════════════════
+render_section_hero() {
+  if [[ "$MOBILE_MODE" -eq 1 ]]; then
+    p "OPS COMMAND CENTER  ${NOW} ${DAY}"
+    p "fires: ${CI_FAILS:-0} | unread: ${TOTAL_UNREAD} (wa:${WA_UNREAD} mail:${EMAIL_UNREAD}) | prs: ${PR_COUNT} | mrr: ${MRR}"
+    p ""
+    return
+  fi
+
+  p ""
+
+  # Gradient block header — ▓▒░ shadow effect on border
+  sp "${DIMX}  ╔${BG_DARK}══════════════════════════════════════════════════════════════${RST}${DIMX}╗░${RST}"
+  sp "${DIMX}  ║${RST}                                                              ${DIMX}║░${RST}"
+  sp "${DIMX}  ║${RST}  ${BCYN} ██████╗ ██████╗ ███████╗    ██████╗  █████╗ ███████╗${RST}  ${DIMX}║░${RST}"
+  sp "${DIMX}  ║${RST}  ${CYN}██╔═══██╗██╔══██╗██╔════╝    ██╔══██╗██╔══██╗██╔════╝${RST}  ${DIMX}║░${RST}"
+  sp "${DIMX}  ║${RST}  ${CYN}██║   ██║██████╔╝███████╗    ██║  ██║███████║███████╗${RST}   ${DIMX}║░${RST}"
+  sp "${DIMX}  ║${RST}  ${BLU}██║   ██║██╔═══╝ ╚════██║    ██║  ██║██╔══██║╚════██║${RST}   ${DIMX}║░${RST}"
+  sp "${DIMX}  ║${RST}  ${VIO}╚██████╔╝██║     ███████║    ██████╔╝██║  ██║███████║${RST}   ${DIMX}║░${RST}"
+  sp "${DIMX}  ║${RST}  ${BVIO} ╚═════╝ ╚═╝     ╚══════╝    ╚═════╝ ╚═╝  ╚═╝╚══════╝${RST}  ${DIMX}║░${RST}"
+  sp "${DIMX}  ║${RST}                                                              ${DIMX}║░${RST}"
+  sp "${DIMX}  ║${RST}  ${BWHT}COMMAND CENTER${RST}  ${DIMX}⚡ live business OS · all systems · one glance${RST}  ${DIMX}║░${RST}"
+  sp "${DIMX}  ║${RST}  ${DIM2}${NOW}  ${DAY}${RST}                                        ${DIMX}║░${RST}"
+  sp "${DIMX}  ╚${BG_DARK}══════════════════════════════════════════════════════════════${RST}${DIMX}╝░${RST}"
+  sp "   ${DIMX}░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░${RST}"
+  p ""
+
+  # ── Vitals strip ─────────────────────────────────────────────────────────
+  printf "  "
+  printf " ${BRED}🔥 %s fires${RST}" "${CI_FAILS:-0}"
+  printf "  ${DIM2}│${RST}"
+  printf "  ${BCYN}📬 %s unread${RST}" "$TOTAL_UNREAD"
+  printf "  ${DIM2}│${RST}"
+  printf "  ${BVIO}🔀 %s PRs${RST}" "$PR_COUNT"
+  printf "  ${DIM2}│${RST}"
+  printf "  ${BGRN}💰 MRR %s${RST}" "$MRR"
+  printf "  ${DIM2}│${RST}"
+  printf "  ${BYLW}⚡ %s GSD${RST}" "$GSD_ACTIVE"
+  printf "  ${DIM2}│${RST}"
+  printf "  ${DIM2}%s projects${RST}" "$PROJECTS"
+  printf '\n'
+  p ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 2 — FIRES
+# ════════════════════════════════════════════════════════════════════════════
+render_section_fires() {
+  section_hdr "🔥" "FIRES"
+  if [[ "${CI_FAILS:-0}" =~ ^[0-9]+$ ]] && [[ "${CI_FAILS:-0}" -gt 0 ]]; then
+    p "  ${BRED}🚨 ${CI_FAILS} CI failure(s) detected across registered repos${RST}"
+    # Show failing runs per repo (using --repo flag, safe outside git cwd)
+    if [ -f "$REGISTRY" ] && command -v gh &>/dev/null; then
+      jq -r '[.projects[].repos[]?] | unique | .[]' "$REGISTRY" 2>/dev/null \
+        | head -10 \
+        | while IFS= read -r repo; do
+            gh run list --repo "$repo" --limit 10 --json conclusion,name,headBranch 2>/dev/null \
+              | jq -r --arg r "$repo" \
+                '.[] | select(.conclusion == "failure") |
+                 "  🔴 \($r) · \(.name) · \(.headBranch)"' 2>/dev/null
+          done \
+        | head -5 \
+        | while IFS= read -r line; do p "${RED}${line}${RST}"; done \
+        || true
+    fi
+  else
+    p "  ${BGRN}✅ All clear — no CI failures in registered repos${RST}"
+  fi
+  p ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 3 — INBOX
+# ════════════════════════════════════════════════════════════════════════════
+render_section_inbox() {
+  section_hdr "📬" "INBOX"
+
+  WA_AVAIL=$(echo "$UNREAD_JSON" | jq -r '.channels.whatsapp.available // false' 2>/dev/null || echo "false")
+  if [[ "$WA_AVAIL" == "true" ]]; then
+    p "  💬 ${BWHT}WhatsApp${RST}  🟢 connected  ${BCYN}${WA_UNREAD}${RST} recent chats (7d)"
+  else
+    WA_NOTE=$(echo "$UNREAD_JSON" | jq -r '.channels.whatsapp.note // "bridge not running"' 2>/dev/null | head -c 80 || echo "bridge not running")
+    p "  💬 ${BWHT}WhatsApp${RST}  🔴 offline  ${DIM2}${WA_NOTE}${RST}"
+  fi
+
+  EMAIL_AVAIL=$(echo "$UNREAD_JSON" | jq -r '.channels.email.available // false' 2>/dev/null || echo "false")
+  if [[ "$EMAIL_AVAIL" == "true" ]]; then
+    p "  📧 ${BWHT}Email${RST}     🟢 connected  ${BCYN}${EMAIL_UNREAD}${RST} in inbox"
+  else
+    EMAIL_NOTE=$(echo "$UNREAD_JSON" | jq -r '.channels.email.note // "gog not authenticated"' 2>/dev/null | head -c 80 || echo "gog not authenticated")
+    p "  📧 ${BWHT}Email${RST}     🔴 offline  ${DIM2}${EMAIL_NOTE}${RST}"
+  fi
+
+  if [[ "${SLACK_WS_COUNT:-0}" -gt 0 ]]; then
+    echo "$UNREAD_JSON" | jq -r \
+      '.channels.slack.workspaces[] |
+       if .available then "  💼 \(.name)  🟢 configured"
+       else "  💼 \(.name)  🟡 missing token: \(.token_env // "?")" end' \
+      2>/dev/null \
+      | head -5 \
+      | while IFS= read -r line; do p "${BWHT}${line}${RST}"; done \
+      || true
+  else
+    SLACK_NOTE=$(echo "$UNREAD_JSON" | jq -r '.channels.slack.note // "no workspaces configured"' 2>/dev/null | head -c 80 || echo "no workspaces configured")
+    p "  💼 ${BWHT}Slack${RST}     ⚠️  ${DIM2}${SLACK_NOTE}${RST}"
+  fi
+
+  TG_AVAIL=$(echo "$UNREAD_JSON" | jq -r '.channels.telegram.available // false' 2>/dev/null || echo "false")
+  if [[ "$TG_AVAIL" == "true" ]]; then
+    p "  ✈️  ${BWHT}Telegram${RST}  🟢 configured  (scan via MCP)"
+  else
+    p "  ✈️  ${BWHT}Telegram${RST}  ⚠️  ${DIM2}not configured — set TELEGRAM_ENABLED=true${RST}"
+  fi
+
+  NOTION_AVAIL=$(echo "$UNREAD_JSON" | jq -r '.channels.notion.available // false' 2>/dev/null || echo "false")
+  if [[ "$NOTION_AVAIL" == "true" ]]; then
+    p "  📓 ${BWHT}Notion${RST}    🟢 configured  (scan via MCP)"
+  else
+    p "  📓 ${BWHT}Notion${RST}    ⚠️  ${DIM2}not configured — set NOTION_MCP_ENABLED=true${RST}"
+  fi
+
+  p ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 4 — OPEN PRs
+# ════════════════════════════════════════════════════════════════════════════
+render_section_prs() {
+  section_hdr "🔀" "OPEN PRs  (${PR_COUNT})  merges 7d: ${BVIO}${SPARK}${RST}"
+
+  if [[ "$PR_COUNT" -eq 0 ]]; then
+    p "  ${BGRN}✅ No open PRs${RST}"; p ""; return
+  fi
+
+  NOW_EPOCH=$(date +%s)
+
+  echo "$PRS_JSON" | jq -r \
+    '.[] | [
+      (.repository.nameWithOwner // "unknown/unknown"),
+      (.number | tostring),
+      .title,
+      (.createdAt // ""),
+      (.reviewDecision // ""),
+      (.isDraft | tostring),
+      ((.statusCheckRollup // []) | if length > 0 then
+        (map(select(.conclusion != null)) |
+          if map(select(.conclusion == "FAILURE")) | length > 0 then "fail"
+          elif map(select(.conclusion == "SUCCESS")) | length > 0 then "pass"
+          else "pending" end)
+        else "unknown" end)
+    ] | @tsv' 2>/dev/null \
+    | sort \
+    | head -10 \
+    | while IFS=$'\t' read -r repo num title created review is_draft ci_state; do
+        created_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$created" +%s 2>/dev/null \
+          || date -d "$created" +%s 2>/dev/null || echo "$NOW_EPOCH")
+        age=$(age_human $((NOW_EPOCH - created_epoch)))
+
+        case "$ci_state" in
+          fail)    ci_icon="🔴 CI fail" ;;
+          pass)    ci_icon="🟢 CI pass" ;;
+          pending) ci_icon="⏳ CI pending" ;;
+          *)       ci_icon="❓ CI ?" ;;
+        esac
+
+        case "$review" in
+          APPROVED)          rev_icon="✨ approved" ;;
+          CHANGES_REQUESTED) rev_icon="⚠️  changes" ;;
+          *)                 rev_icon="👀 needs review" ;;
+        esac
+
+        draft_tag=""
+        [[ "$is_draft" == "true" ]] && draft_tag=" ${DIM2}🚧 draft${RST}"
+
+        short_title="${title:0:52}"
+        [[ "${#title}" -gt 52 ]] && short_title="${short_title}…"
+
+        p "  ${CYN}${repo}${RST}  ${BWHT}#${num}${RST}  ${short_title}${draft_tag}"
+        p "     ${DIM2}⏱ ${age}${RST}  ·  ${ci_icon}  ·  ${rev_icon}"
+      done \
+    || no_data
+
+  p ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 5 — PORTFOLIO
+# ════════════════════════════════════════════════════════════════════════════
+render_section_portfolio() {
+  section_hdr "🗂️" "PORTFOLIO  (${PROJECTS} projects, ${GSD_ACTIVE} GSD active)"
+
+  if [[ "$PORTFOLIO_JSON" == "[]" || -z "$PORTFOLIO_JSON" ]]; then
+    no_data; p ""; return
+  fi
+
+  NOW_EPOCH=$(date +%s)
+
+  echo "$PORTFOLIO_JSON" | jq -r '.[] | [.name, (.path // ""), (.branch // "?")] | @tsv' 2>/dev/null \
+    | head -10 \
+    | while IFS=$'\t' read -r name path branch; do
+        expanded="${path/#\~/$HOME}"
+
+        if [[ -d "$expanded/.git" ]]; then
+          dirty=$(git -C "$expanded" status --porcelain 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+          ahead=$(git -C "$expanded" rev-list --count "@{upstream}..HEAD" 2>/dev/null || echo "0")
+          last_commit_epoch=$(git -C "$expanded" log -1 --format="%ct" 2>/dev/null || echo "$NOW_EPOCH")
+          age=$(age_human $((NOW_EPOCH - last_commit_epoch)))
+
+          status_icon="🟢"
+          flags=""
+          if [[ "$dirty" -gt 0 ]]; then
+            status_icon="🟡"
+            flags="${BYLW} ${dirty} dirty${RST}"
+          fi
+          if [[ "$ahead" -gt 0 ]]; then
+            status_icon="🟡"
+            flags="${flags} ${BCYN}↑${ahead}${RST}"
+          fi
+
+          p "  ${status_icon} ${BWHT}${name}${RST}  ${DIM2}${branch}${RST}  ${DIM2}⏱ ${age}${RST}${flags}"
+        else
+          p "  ⚪ ${BWHT}${name}${RST}  ${DIM2}${branch}${RST}  ${DIM2}(no git)${RST}"
+        fi
+      done \
+    || no_data
+
+  p ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 6 — REVENUE & COSTS
+# ════════════════════════════════════════════════════════════════════════════
+render_section_revenue() {
+  section_hdr "💰" "REVENUE & COSTS"
+
+  if [[ "$REVENUE_JSON" == "{}" || -z "${FINOPS_DASHBOARD_URL:-}" ]]; then
+    p "  ${DIM2}FinOps dashboard not configured.${RST}"
+    p "  ${DIM2}Set FINOPS_DASHBOARD_URL + FINOPS_OPS_API_TOKEN to enable live data.${RST}"
+  else
+    # MRR sparkline from time series if available
+    MRR_SERIES=$(echo "$REVENUE_JSON" | jq -r '.mrr_series[]? // empty' 2>/dev/null | tr '\n' ' ' || echo "")
+    if [[ -n "$MRR_SERIES" ]]; then
+      MRR_SPARK=$(sparkline $MRR_SERIES 2>/dev/null || echo "")
+      p "  💰 ${BWHT}MRR${RST}  ${BCYN}${MRR}${RST}  ${BGRN}${MRR_SPARK}${RST}  ${DIM2}${MRR_TREND}${RST}"
+    else
+      p "  💰 ${BWHT}MRR${RST}  ${BCYN}${MRR}${RST}  ${DIM2}${MRR_TREND}${RST}"
+    fi
+
+    # Burn sparkline
+    BURN_SERIES=$(echo "$REVENUE_JSON" | jq -r '.burn_series[]? // empty' 2>/dev/null | tr '\n' ' ' || echo "")
+    if [[ -n "$BURN_SERIES" ]]; then
+      BURN_SPARK=$(sparkline $BURN_SERIES 2>/dev/null || echo "")
+      p "  🔥 ${BWHT}AWS burn${RST}  7d: ${BYLW}${BURN_7D}${RST}  ${RED}${BURN_SPARK}${RST}  30d: ${BURN_30D}  runway: ${RUNWAY}mo"
+    else
+      p "  🔥 ${BWHT}AWS burn${RST}  7d: ${BYLW}${BURN_7D}${RST}  30d: ${BURN_30D}  runway: ${RUNWAY}mo"
+    fi
+
+    ANOMALIES=$(echo "$REVENUE_JSON" | jq -r '.anomalies[]? | "  ⚠️  \(.service): \(.description)"' 2>/dev/null | head -3 || true)
+    if [[ -n "$ANOMALIES" ]]; then
+      echo "$ANOMALIES" | while IFS= read -r line; do p "${BRED}${line}${RST}"; done
+    fi
+  fi
+
+  SHOPIFY_HEALTHY=$(echo "$EXTERNAL_JSON" | jq '[.[] | select(.source=="shopify_admin" and .status=="healthy")] | length' 2>/dev/null || echo "0")
+  SHOPIFY_TOTAL=$(echo "$EXTERNAL_JSON" | jq '[.[] | select(.source | startswith("shopify"))] | length' 2>/dev/null || echo "0")
+  if [[ "$SHOPIFY_TOTAL" -gt 0 ]]; then
+    STATUS_ICON="🟢"
+    [[ "$SHOPIFY_HEALTHY" -lt "$SHOPIFY_TOTAL" ]] && STATUS_ICON="🟡"
+    p "  🛒 ${BWHT}Shopify${RST}  ${STATUS_ICON} ${SHOPIFY_HEALTHY}/${SHOPIFY_TOTAL} stores healthy"
+  fi
+
+  p ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 7 — MARKETING
+# ════════════════════════════════════════════════════════════════════════════
+render_section_marketing() {
+  section_hdr "📣" "MARKETING"
+
+  if [[ "$MK_HEALTH" == "?" || -z "$MK_HEALTH" ]]; then
+    p "  ${DIM2}No marketing data. Configure marketing.default_project in preferences.json${RST}"
+  else
+    # Health color
+    if [[ "$MK_HEALTH" =~ ^[0-9]+$ ]]; then
+      if [[ "$MK_HEALTH" -ge 80 ]]; then HC="${BGRN}"
+      elif [[ "$MK_HEALTH" -ge 60 ]]; then HC="${BYLW}"
+      else HC="${BRED}"; fi
+    else HC="${DIM2}"; fi
+
+    p "  📊 ${BWHT}Health${RST}  ${HC}${MK_HEALTH}/100${RST}  ${MK_STATUS}${MK_PROJECT:+  (${MK_PROJECT})}"
+
+    echo "$MARKETING_JSON" | jq -r \
+      '.channels // {} | to_entries[] | select(.value.available == true) |
+       "  📈 \(.key | ascii_upcase)  \(.value.health_score // "?")/100  \(.value.top_metric // "")"' \
+      2>/dev/null \
+      | head -4 \
+      | while IFS= read -r line; do p "${DIM2}${line}${RST}"; done \
+      || true
+  fi
+
+  p ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 8 — LINEAR
+# ════════════════════════════════════════════════════════════════════════════
+render_section_linear() {
+  section_hdr "📊" "LINEAR"
+
+  if [[ -z "${LINEAR_API_KEY:-}" ]]; then
+    p "  ${DIM2}LINEAR_API_KEY not set — export it to enable Linear data.${RST}"; p ""; return
+  fi
+
+  IN_PROGRESS=$(echo "$LINEAR_JSON" | jq -r \
+    '[.data.viewer.assignedIssues.nodes[]? | select(.state.name | test("(?i)in progress|started"))] | length' \
+    2>/dev/null || echo "0")
+  URGENT=$(echo "$LINEAR_JSON" | jq -r \
+    '[.data.viewer.assignedIssues.nodes[]? | select(.priority == 1)] | length' \
+    2>/dev/null || echo "0")
+  TOTAL_ASSIGNED=$(echo "$LINEAR_JSON" | jq -r \
+    '.data.viewer.assignedIssues.nodes | length' \
+    2>/dev/null || echo "0")
+
+  if [[ "$TOTAL_ASSIGNED" == "0" && "$LINEAR_JSON" == "{}" ]]; then
+    no_data; p ""; return
+  fi
+
+  p "  ${BWHT}Assigned${RST}  ${BCYN}${TOTAL_ASSIGNED}${RST}  ·  🔄 in-progress: ${IN_PROGRESS}  ·  🚨 urgent (P1): ${URGENT}"
+
+  echo "$LINEAR_JSON" | jq -r \
+    '.data.viewer.assignedIssues.nodes[]? |
+     select(.state.name | test("(?i)in progress|started")) |
+     "  🔄 \(.title | .[0:60])"' \
+    2>/dev/null \
+    | head -5 \
+    | while IFS= read -r line; do p "${CYN}${line}${RST}"; done \
+    || true
+
+  p ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 9 — DEPLOYS
+# ════════════════════════════════════════════════════════════════════════════
+render_section_deploys() {
+  section_hdr "🚀" "DEPLOYS  (ECS Fargate)"
+
+  if [[ "$DEPLOY_JSON" == "[]" || -z "$DEPLOY_JSON" ]]; then
+    p "  ${DIM2}No ECS clusters found — ensure AWS CLI is configured with access.${RST}"; p ""; return
+  fi
+
+  echo "$DEPLOY_JSON" | jq -r \
+    '.[] | [.cluster, .service, (.desired|tostring), (.running|tostring), (.pending|tostring)] | @tsv' \
+    2>/dev/null \
+    | head -10 \
+    | while IFS=$'\t' read -r cluster svc desired running pending; do
+        if [[ "$running" == "0" && "$desired" -gt 0 ]]; then
+          icon="🔴"
+        elif [[ "$pending" -gt 0 ]]; then
+          icon="⏳"
+        else
+          icon="🟢"
+        fi
+        p "  ${icon} ${BWHT}${svc}${RST}  ${DIM2}${cluster}${RST}  desired:${desired} running:${running} pending:${pending}"
+      done \
+    || no_data
+
+  p ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 10 — COMPETITOR INTEL
+# ════════════════════════════════════════════════════════════════════════════
+render_section_competitor() {
+  section_hdr "🕵️" "COMPETITOR INTEL"
+
+  if [[ -z "$COMPETITOR_FILE" || ! -f "$COMPETITOR_FILE" ]]; then
+    p "  ${DIM2}No reports in ${OPS_DATA_DIR}/reports/competitor-intel/${RST}"
+    p "  ${DIM2}Run /ops:ops-competitors to generate.${RST}"
+    p ""; return
+  fi
+
+  REPORT_NAME=$(basename "$COMPETITOR_FILE")
+  REPORT_DATE=$(echo "$REPORT_NAME" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1 || echo "?")
+  p "  📄 ${DIM2}${REPORT_NAME}${RST}  ${DIM2}(${REPORT_DATE})${RST}"
+
+  grep -v '^[[:space:]]*$' "$COMPETITOR_FILE" 2>/dev/null \
+    | head -6 \
+    | while IFS= read -r line; do p "  ${DIM2}${line}${RST}"; done \
+    || true
+
+  p ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 11 — YOLO REPORTS
+# ════════════════════════════════════════════════════════════════════════════
+render_section_yolo() {
+  section_hdr "🤖" "YOLO REPORTS"
+
+  if [[ -z "$YOLO_LIST" ]]; then
+    p "  ${DIM2}No reports yet. Run /ops:ops-yolo to generate C-suite analysis.${RST}"
+    p ""; return
+  fi
+
+  echo "$YOLO_LIST" | grep -v '^$' | head -5 | while IFS= read -r dir; do
+    [ -d "$dir" ] || continue
+    dir_name=$(basename "$dir")
+    verdict=""
+    [ -f "${dir}ceo-analysis.md" ] \
+      && verdict=$(grep -m1 "^#\|verdict\|VERDICT\|summary\|SUMMARY" "${dir}ceo-analysis.md" 2>/dev/null | head -1 | head -c 70 || true)
+    p "  🤖 ${BCYN}${dir_name}${RST}  ${DIM2}${verdict}${RST}"
+  done || no_data
+
+  p ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 12 — QUICK ACTIONS MENU
+# ════════════════════════════════════════════════════════════════════════════
+render_section_actions() {
+  section_hdr "⚡" "QUICK ACTIONS"
+
+  if [[ "$MOBILE_MODE" -eq 1 ]]; then
+    p "1:morning 2:inbox 3:fires 4:projects 5:next 6:revenue 7:linear 8:deploy 9:triage 0:speedup"
+    p "a:yolo b:merge c:setup d:comms e:reports f:settings g:share h:faq  q:exit"
+    p ""
+    return
+  fi
+
+  YOLO_LIST_NONEMPTY=""
+  echo "$YOLO_LIST" | grep -q '[^[:space:]]' && YOLO_LIST_NONEMPTY="1" || true
+  if [[ -n "$YOLO_LIST_NONEMPTY" ]]; then
+    YOLO_IND="${BCYN}🤖 REPORT READY${RST}"
+  else
+    YOLO_IND="${DIM2}no reports${RST}"
+  fi
+
+  p ""
+  sp "  ${DIMX}┌──────────────────────────────────────────────────────────────┐${RST}"
+  sp "  ${DIMX}│${RST}   ${BWHT}QUICK ACTIONS${RST}                       ${BWHT}INTEL${RST}               ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}                                                              ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}   ${BCYN}1${RST} ${WHT}Morning briefing${RST}              ${BCYN}6${RST} ${WHT}Revenue & costs${RST}     ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}   ${BCYN}2${RST} ${WHT}Inbox zero${RST}                    ${BCYN}7${RST} ${WHT}Linear sprint${RST}       ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}   ${BCYN}3${RST} ${WHT}Fire check${RST}                    ${BCYN}8${RST} ${WHT}Deploy status${RST}       ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}   ${BCYN}4${RST} ${WHT}Project dashboard${RST}             ${BCYN}9${RST} ${WHT}Triage issues${RST}       ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}   ${BCYN}5${RST} ${WHT}What's next?${RST}                  ${BCYN}0${RST} ${WHT}System speedup${RST}      ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}                                                              ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}   ${BWHT}POWER${RST}                            ${BWHT}COMMS${RST}               ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}                                                              ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}   ${BMAG}a${RST} ${WHT}YOLO mode${RST}  ${YOLO_IND}   ${BCYN}d${RST} ${WHT}Send message${RST}        ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}   ${BMAG}b${RST} ${WHT}Auto-merge PRs${RST}                ${BCYN}e${RST} ${WHT}C-suite reports${RST}     ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}   ${BMAG}c${RST} ${WHT}Setup wizard${RST}                                       ${DIMX}│${RST}"
+  sp "  ${DIMX}│${RST}                                                              ${DIMX}│${RST}"
+  sp "  ${DIMX}├──────────────────────────────────────────────────────────────┤${RST}"
+  sp "  ${DIMX}│${RST}   ${BYLW}f${RST} ${WHT}Settings${RST}      ${BYLW}g${RST} ${WHT}Share${RST}      ${BYLW}h${RST} ${WHT}FAQ/Help${RST}   ${DIM2}q exit${RST}     ${DIMX}│${RST}"
+  sp "  ${DIMX}└──────────────────────────────────────────────────────────────┘${RST}"
+  p ""
+}
+
+# ── Footer ───────────────────────────────────────────────────────────────────
+render_footer() {
+  if [[ "$MOBILE_MODE" -eq 0 ]]; then
+    p "  ${DIMX}────────────────────────────────────────────────────────────────${RST}"
+    p "  ${DIM2}${FOOTER}${RST}"
+    p "  ${DIMX}────────────────────────────────────────────────────────────────${RST}"
+    p ""
+  fi
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# RENDER — sequential top-to-bottom
+# ════════════════════════════════════════════════════════════════════════════
+render_section_hero
+render_section_fires
+render_section_inbox
+render_section_prs
+render_section_portfolio
+render_section_revenue
+render_section_marketing
+render_section_linear
+render_section_deploys
+render_section_competitor
+render_section_yolo
+render_section_actions
+render_footer
