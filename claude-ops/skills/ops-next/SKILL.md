@@ -27,6 +27,7 @@ Before advising, load:
 1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `primary_project`, `default_channels`
 2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — flag any action_needed as priority
 3. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/topics_active.md` for ongoing work context
+4. **Home automation**: If `home_automation` is configured in `$PREFS_PATH`, probe Homey via `/ops:ops-home status` for active alarms before composing the priority stack.
 
 
 # OPS ► NEXT ACTION
@@ -117,6 +118,15 @@ Apply the priority stack to all pre-gathered data:
 Check infra data for: unhealthy ECS tasks, stopped services, failed deployments.
 Check CI for: broken `main` or `dev` branches.
 If any fires exist → **recommend `/ops-fires` immediately**.
+
+### Priority 1.5 — HOME ALARMS (only if `home_automation` is configured in `$PREFS_PATH`)
+
+Probe `/ops:ops-home status` for active alarms.
+- Critical home alarms (smoke, water leak, security breach) → **top priority — recommend `/ops:ops-home alarm` immediately, above all other fires**.
+- Energy anomalies (current draw > 3× 7-day baseline) → near-top, surface before competitor alerts.
+- Routine home tasks (presence changes, flow failures) → low priority — fold into Priority 6 tail.
+
+If `home_automation` is NOT configured, skip this priority silently.
 
 ### Priority 2 — COMPETITOR ALERTS
 

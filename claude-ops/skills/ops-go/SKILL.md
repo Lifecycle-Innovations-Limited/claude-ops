@@ -170,6 +170,16 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-marketing-dash 2>/dev/null || echo '{}'
 ```
 
+### Home (smart-home — only if `home_automation` is configured)
+
+```!
+if jq -e '.home_automation' "${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json" >/dev/null 2>&1; then
+  ${CLAUDE_PLUGIN_ROOT}/bin/ops-home snapshot 2>/dev/null || echo '{"configured":true,"error":"home probe failed"}'
+else
+  echo '{"configured":false}'
+fi
+```
+
 ### Calendar (today — all calendars)
 
 ```!
@@ -218,6 +228,11 @@ COMPETITOR    <brand>: N alerts · M med deltas · last run YYYY-MM-DD
               <top high-severity event snippet, 1 line, truncated 140 chars>
 [If competitor data returns {configured:false}, omit this section entirely — no "(not configured)" noise]
 [Mobile mode (Rule 7): compress to one line: "comp: N alerts (top: brief snippet)"]
+
+HOME
+ Power: [X]W now · [Y]kWh today  |  Alarms: [N] active ([severity])  |  Presence: [home/empty since HH:MM]  |  Last flow: [name @ HH:MM]
+[If home data returns {configured:false}, omit this section entirely — no clutter]
+[If critical alarm active (smoke/water/security): prepend `⚠ CRITICAL` and route to FIRES at top]
 
 UNREAD
 [WhatsApp: N, Email: N, Slack: N workspace(s) configured (no scan), Notion: N items, Calendar: N events today]

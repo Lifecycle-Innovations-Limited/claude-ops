@@ -76,7 +76,7 @@ The setup wizard accepts these flags (parsed from `$ARGUMENTS`):
 | Profile | Sections enabled |
 |---------|------------------|
 | developer | 2 (CLIs), 2c (Daemon), 3g (Doppler), 3h (Vault), plus GitHub + AWS + Sentry + Linear integration paths |
-| founder | 2, 2c, 3a (Telegram), 3b (WhatsApp), 3c (Email), 3d (Slack), 3f (Calendar), 3g (Doppler), 3n (Notifications) |
+| founder | 2, 2c, 3a (Telegram), 3b (WhatsApp), 3c (Email), 3d (Slack), 3f (Calendar), 3g (Doppler), 3k-home (Home Automation), 3n (Notifications) |
 | marketer | 2, 2c, 3j (Marketing — Klaviyo/Meta Ads/GA4/GSC), 3i (Shopify), 3c (Email), 3g (Doppler) |
 
 ### Incremental re-setup
@@ -823,6 +823,56 @@ Every channel sub-flow below references "the Universal Credential Auto-Scan" by 
 
 > **Loaded from `channels/notifications.md`** — fires-watcher per-sink capture.
 > Load that file before running this sub-flow.
+
+### 3k-home — Home Automation (Homey Pro)
+
+Scout for credentials in background (RULE ZERO):
+
+```bash
+# Run all scouts simultaneously — run_in_background: true on each
+security find-generic-password -s homey-local-token -w 2>/dev/null
+echo "$HOMEY_LOCAL_TOKEN"
+doppler secrets get HOMEY_LOCAL_TOKEN --project homey-pro --plaintext 2>/dev/null
+op item get "Homey" --fields=token 2>/dev/null
+```
+
+If any scout returns a non-empty value, pre-fill it as the default; present found values alongside `[Use found value]` / `[Paste manually]` / `[Skip]`.
+
+**Required:**
+
+1. `HOMEY_LOCAL_URL` — LAN IP of the Homey Pro, e.g. `https://192.168.1.42`. Ask via `AskUserQuestion` free-text.
+2. `HOMEY_LOCAL_TOKEN` — Personal Access Token from `https://my.homey.app/manager/tokens`. Ask via `AskUserQuestion` with `sensitive: true`.
+
+**Optional:**
+
+Ask via one `AskUserQuestion` call:
+```
+Configure optional Homey cloud credentials?
+  [Yes — paste cloud token + Homey ID]
+  [Skip optional fields]
+```
+If yes, collect `HOMEY_CLOUD_TOKEN` (Athom OAuth token) and `HOMEY_ID` (hub ID) via two follow-up `AskUserQuestion` calls with `sensitive: true`.
+
+**Validate** (smoke test, RULE ZERO):
+```bash
+curl -s -H "Authorization: Bearer $HOMEY_LOCAL_TOKEN" \
+  "$HOMEY_LOCAL_URL/api/manager/system/system/info" 2>/dev/null
+```
+Expect HTTP 200 with JSON containing `homeyVersion`. If the check fails, present `[Retry]` / `[Save anyway — LAN may be offline]` / `[Skip]` via `AskUserQuestion` (Rule 3 — never auto-skip).
+
+**Save** to `$PREFS_PATH` via `jq`:
+```bash
+jq --arg url "$HOMEY_LOCAL_URL" \
+   --arg lt "$HOMEY_LOCAL_TOKEN" \
+   --arg ct "${HOMEY_CLOUD_TOKEN:-}" \
+   --arg id "${HOMEY_ID:-}" \
+   '.home_automation = {provider: "homey", homey_local_url: $url, homey_local_token: $lt, homey_cloud_token: $ct, homey_id: $id}' \
+   "$PREFS_PATH" > "$PREFS_PATH.tmp" && mv "$PREFS_PATH.tmp" "$PREFS_PATH"
+```
+
+Print: `✓ Home automation — Homey Pro configured (local: $HOMEY_LOCAL_URL)`
+
+---
 
 ### 3m — Discord (webhook + optional bot)
 

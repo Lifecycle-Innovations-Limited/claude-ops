@@ -364,6 +364,46 @@ tail -n 5 "$OPS_DATA_DIR/logs/${SERVICE_NAME}.log" 2>/dev/null || echo "(no log 
 
 Always confirm via `AskUserQuestion` (`[Run now]` / `[Cancel]`) before triggering.
 
+## Home Automation (Homey Pro)
+
+Route here when the user runs `/ops:settings home` or selects "Home Automation" from the dashboard.
+
+### View status
+
+```bash
+PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+jq '.home_automation // empty' "$PREFS" 2>/dev/null
+```
+
+Display as a compact block:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ OPS ► SETTINGS — Home Automation (Homey Pro)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ Status:        ✅ configured   (or ⚠️  not configured)
+ Local URL:     https://192.168.1.••• (mask all but last octet)
+ Local token:   ••••••••••••abcd  (last 4 chars only)
+ Cloud token:   ✅ present   (or ○ not set)
+ Homey ID:      ✅ present   (or ○ not set)
+──────────────────────────────────────────────────────
+ [r] reconfigure → /ops:setup --section home
+```
+
+URL masking: replace all octets except the last with `•••`, e.g. `https://192.168.1.42` → `https://•••.•••.•••.42`.
+Token masking: show last 4 characters only, prefix with `••••••••••••`.
+
+If `home_automation` key is absent from `preferences.json`, show:
+```
+ Status:  ○ not configured — run /ops:setup --section home
+```
+
+### Reconfigure
+
+When the user selects `[r] reconfigure`, route to `/ops:setup --section home` (invoke the `3k-home` sub-flow of the setup wizard).
+
+---
+
 ## CLI/API Reference
 
 | Command | Purpose |
