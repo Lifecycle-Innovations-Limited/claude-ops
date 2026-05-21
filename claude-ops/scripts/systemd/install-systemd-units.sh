@@ -43,6 +43,9 @@ UNITS=(
   pocket-whatsapp-bridge.timer
   whatsapp-baileys.service
   pocket-ops-ui.service
+  cloudflared.service
+  cloudflared-watchdog.service
+  cloudflared-watchdog.timer
 )
 
 for unit in "${UNITS[@]}"; do
@@ -69,6 +72,23 @@ for svc in whatsapp-baileys.service pocket-ops-ui.service; do
   systemctl enable "$svc"
   echo "  enabled $svc"
 done
+
+# Cloudflared tunnel (optional — only enable when /etc/cloudflared-watchdog.env
+# exists and the unit ExecStart has been populated with a tunnel token).
+if [[ -f /etc/cloudflared-watchdog.env ]] \
+   && grep -q 'tunnel run --token ' /etc/systemd/system/cloudflared.service \
+   && ! grep -q '${CLOUDFLARED_TUNNEL_TOKEN}' /etc/systemd/system/cloudflared.service; then
+  systemctl enable cloudflared.service
+  echo "  enabled cloudflared.service"
+  systemctl enable cloudflared-watchdog.timer
+  echo "  enabled cloudflared-watchdog.timer"
+else
+  echo "  SKIP cloudflared — /etc/cloudflared-watchdog.env missing OR token placeholder still present"
+  echo "        edit /etc/systemd/system/cloudflared.service to replace \${CLOUDFLARED_TUNNEL_TOKEN}"
+  echo "        with the real tunnel token from your Cloudflare Zero Trust dashboard,"
+  echo "        then write /etc/cloudflared-watchdog.env (chmod 600) with:"
+  echo "          CLOUDFLARE_API_TOKEN=<token with Account:Tunnel:Read scope>"
+fi
 
 # Timers (oneshot services triggered by timers)
 for timer in \
