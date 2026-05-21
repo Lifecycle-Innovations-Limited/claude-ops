@@ -91,11 +91,21 @@ Parse `$ARGUMENTS` and route immediately:
 | `telegram`    | Show Telegram recent chats                              |
 | `discord`     | Show recent Discord channel activity (via bin/ops-discord) |
 | `notion`      | Search Notion workspace — pages, comments, tasks          |
+| `voice`       | Voice / phone / video — routes to `/ops:ops-voice` (bin/ops-voice) |
+| `call * `     | Native Phone.app call via `bin/ops-voice phone`           |
+| `facetime *`  | FaceTime audio/video via `bin/ops-voice facetime`         |
+| `zoom`        | Start an instant Zoom meeting via `bin/ops-voice zoom start` |
 | `send * to *` | Parse message and contact, determine best channel, send |
 | `read *`      | Read the specified channel or contact's messages        |
 | (empty)       | Show channel picker menu                                |
 
-Natural-language parsing: phrases like `send "deploy done" to #general on discord` or `to #ops-alerts on Discord` should resolve to the `discord` branch below. Extract the channel token (the word after `#`, case-insensitive) and pass it as the first arg to `bin/ops-discord send`.
+Natural-language parsing:
+- `send "deploy done" to #general on discord` → `bin/ops-discord send general "deploy done"`.
+- `call <contact>` / `dial <contact>` / `phone <contact>` → resolve number, then `bin/ops-voice phone <E.164>`.
+- `facetime <contact>` (with optional `audio`) → `bin/ops-voice facetime <handle> [--audio]`.
+- `start a zoom` / `new zoom meeting` → `bin/ops-voice zoom start`.
+- `join zoom <ID>` → `bin/ops-voice zoom join <ID>`.
+- `text <contact> "<body>"` / `sms <contact> "<body>"` → `bin/ops-voice twilio-sms <to> $TWILIO_FROM_NUMBER "<body>"` (guarded by per-message approval).
 
 ---
 
@@ -225,6 +235,30 @@ If the script exits 1 with `{"error":"no discord credential configured — run /
 
 Note: `DISCORD_WEBHOOK_URL` is shared with the ops-fires notification sink (`scripts/ops-notify.sh`). When pre-existing, prefer it as the default for `/ops:comms discord send` rather than asking the user to set a separate value.
 
+### Voice / phone / video
+
+All voice traffic flows through `bin/ops-voice` (full surface documented in the `ops-voice` skill). Native channels (Phone.app, FaceTime, Zoom start|join) need no credentials; programmatic channels (Twilio voice/SMS, Bland AI, Zoom schedule) follow the standard credential-resolution order.
+
+```bash
+# Native — no creds
+${CLAUDE_PLUGIN_ROOT}/bin/ops-voice phone    "+1234567890" --json
+${CLAUDE_PLUGIN_ROOT}/bin/ops-voice facetime user@example.com --audio --json
+${CLAUDE_PLUGIN_ROOT}/bin/ops-voice zoom     start
+${CLAUDE_PLUGIN_ROOT}/bin/ops-voice zoom     join 1234567890 --pwd <password>
+
+# Programmatic — gated by Rule 6 (per-message approval)
+${CLAUDE_PLUGIN_ROOT}/bin/ops-voice twilio-call "+1234567890" "$TWILIO_FROM_NUMBER" --twiml "<URL>" --json
+${CLAUDE_PLUGIN_ROOT}/bin/ops-voice twilio-sms  "+1234567890" "$TWILIO_FROM_NUMBER" "<body>" --json
+${CLAUDE_PLUGIN_ROOT}/bin/ops-voice bland-call  "+1234567890" "<task prompt>" --json
+```
+
+**Send-flow integration:** when `$ARGUMENTS` looks like `call <contact>`, `facetime <contact>`, `text <contact> "<body>"`, or `have an AI call <contact> and ...`:
+
+1. Resolve the contact's number/handle (`mcp__whatsapp__search_contacts` or `preferences.json` → `contacts`).
+2. For native calls (`phone`, `facetime`, `zoom`): preview `[Place call via <channel> to <contact>] [Cancel]` then invoke.
+3. For Twilio voice/SMS and Bland AI: stage the full draft (recipient, channel, body or task-prompt) and gate behind one `AskUserQuestion` per message (Rule 6). Never batch.
+4. If no credential resolves for a programmatic channel, prompt via `AskUserQuestion` with `[Run /ops:ops-voice setup]` / `[Paste credential now]` / `[Try native instead]` / `[Skip]` (Rule 3 — never silently skip).
+
 ---
 
 ## Empty arguments — channel picker
@@ -250,9 +284,10 @@ AskUserQuestion call 1 — Read channels:
 AskUserQuestion call 2 (only if "More..."):
 ```
   [Read Telegram]
+  [Make a call (voice)]
   [Send a message]
 ```
 
-If all channels are configured, that's 5 options — always batch. If only 3 channels are configured, "Read X" + "Read Y" + "Read Z" + "Send a message" = 4, fits in one call.
+If all channels are configured, that's 6+ options — always batch. If only 3 channels are configured, "Read X" + "Read Y" + "Read Z" + "Send a message" = 4, fits in one call. The `voice` channel is configured iff `preferences.json` → `channels.voice` is present OR `default_channels` contains `"voice"`.
 
 Execute the selected action.
