@@ -151,7 +151,7 @@ FOOTER="${FOOTER_LINES[$(( RANDOM % ${#FOOTER_LINES[@]} ))]}"
 TMPDIR_DASH=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_DASH"' EXIT
 
-TOTAL_PROBES=12
+TOTAL_PROBES=13
 
 # 1) Unread
 (
@@ -361,23 +361,61 @@ TOTAL_PROBES=12
   fi
   if [[ -n "$FINOPS_URL" && -n "$FINOPS_TOKEN" ]]; then
     RAW=$(curl -sf -H "Authorization: Bearer $FINOPS_TOKEN" \
-      "${FINOPS_URL}/api/ops/snapshot" --max-time 5 2>/dev/null) \
-      && echo "$RAW" | jq '{
+      "${FINOPS_URL}/api/ops/snapshot" --max-time 5 2>/dev/null)
+    ANOM=$(curl -sf -H "Authorization: Bearer $FINOPS_TOKEN" \
+      "${FINOPS_URL}/api/ops/anomalies" --max-time 5 2>/dev/null || echo '[]')
+    [[ -z "$ANOM" ]] && ANOM='[]'
+    if [[ -n "$RAW" ]]; then
+      echo "$RAW" | jq --argjson anom "$ANOM" '{
         mrr: (.revenue_snapshot.total_mrr_usd | tostring),
         mrr_cents: .revenue_snapshot.total_mrr_cents,
-        aws_burn_30d: (.current_month_spend | to_entries | map(.value) | add // 0 | tostring),
+        aws_burn_30d: ((.current_month_spend.net // .current_month_spend.gross // 0) | tostring),
+        aws_burn_30d_gross: ((.current_month_spend.gross // 0) | tostring),
+        aws_credit_applied: ((.current_month_spend.credit_applied // 0) | tostring),
         aws_burn_7d: "n/a",
         runway_months: "n/a",
         anomalies_open: .anomalies_open,
+        anomalies: $anom,
         services_tracked: .services_tracked,
         burn_by_service: .burn_by_service,
-        revenue_by_project: .revenue_snapshot.by_project
+        revenue_by_project: .revenue_snapshot.by_project,
+        configured: true
       }' 2>/dev/null > "$TMPDIR_DASH/revenue.json" \
-      || echo '{}' > "$TMPDIR_DASH/revenue.json"
+        || echo '{"configured":false}' > "$TMPDIR_DASH/revenue.json"
+    else
+      echo '{"configured":false}' > "$TMPDIR_DASH/revenue.json"
+    fi
   else
-    echo '{}' > "$TMPDIR_DASH/revenue.json"
+    echo '{"configured":false}' > "$TMPDIR_DASH/revenue.json"
   fi
   touch "$TMPDIR_DASH/done_revenue"
+) &
+
+# 13) Calendar — today's events across ALL calendars (PR #286 wired into dash)
+(
+  CAL_JSON='{"configured":false,"events":[]}'
+  if command -v gog &>/dev/null; then
+    # Probe auth first — gog calendar exits non-zero or returns error if no auth
+    RAW=$(gog calendar events --all --today -j --sort start --no-input 2>/dev/null || echo '')
+    if [[ -n "$RAW" ]] && echo "$RAW" | jq -e '.events' >/dev/null 2>&1; then
+      CAL_JSON=$(echo "$RAW" | jq '{
+        configured: true,
+        events: (.events // [] | map({
+          summary: (.summary // "(no title)"),
+          calendar: (.CalendarID // ""),
+          start: (.startLocal // .start.dateTime // .start.date // ""),
+          end: (.endLocal // .end.dateTime // .end.date // ""),
+          allday: ((.start.date != null) and (.start.dateTime == null))
+        }))
+      }' 2>/dev/null || echo '{"configured":true,"events":[]}')
+    else
+      CAL_JSON='{"configured":false,"events":[],"note":"gog not authenticated"}'
+    fi
+  else
+    CAL_JSON='{"configured":false,"events":[],"note":"gog CLI not installed"}'
+  fi
+  echo "$CAL_JSON" > "$TMPDIR_DASH/calendar.json"
+  touch "$TMPDIR_DASH/done_calendar"
 ) &
 
 # 10) Linear — multi-workspace, all-teams scan
@@ -473,7 +511,7 @@ TOTAL_PROBES=12
 
 # ── Animated loading bar (while probes run) ───────────────────────────────────
 if [[ "$MOBILE_MODE" -eq 0 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
-  PROBE_NAMES=("fires" "inbox" "prs" "portfolio" "marketing" "external" "gsd" "yolo" "revenue" "linear" "competitor" "deploys")
+  PROBE_NAMES=("fires" "inbox" "prs" "portfolio" "marketing" "external" "gsd" "yolo" "revenue" "linear" "competitor" "deploys" "calendar")
   _bar_width=20
   _start_time=$(date +%s)
   _tick=0
@@ -513,6 +551,7 @@ LINEAR_JSON=$(cat "$TMPDIR_DASH/linear.json"   2>/dev/null || echo '{"nodes":[],
 COMPETITOR_FILE=$(cat "$TMPDIR_DASH/competitor" 2>/dev/null | head -1 || echo "")
 COMPETITOR_JSON=$(cat "$TMPDIR_DASH/competitor.json" 2>/dev/null || echo '{"configured":false}')
 DEPLOY_JSON=$(cat "$TMPDIR_DASH/deploys.json"  2>/dev/null || echo '[]')
+CALENDAR_JSON=$(cat "$TMPDIR_DASH/calendar.json" 2>/dev/null || echo '{"configured":false,"events":[]}')
 YOLO_LIST=$(cat "$TMPDIR_DASH/yolo_list"       2>/dev/null || echo "")
 PROJECTS=$([ -f "$REGISTRY" ] && jq '.projects | length' "$REGISTRY" 2>/dev/null || echo "0")
 SHOPIFY_PROJECTS=$(echo "$PORTFOLIO_SHOPIFY_JSON" | jq 'length' 2>/dev/null || echo "0")
@@ -840,36 +879,23 @@ render_section_portfolio() {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# SECTION 6 — REVENUE & COSTS
+# SECTION 6 — REVENUE & COSTS  (MRR + Shopify only — FinOps lives in its own block)
 # ════════════════════════════════════════════════════════════════════════════
 render_section_revenue() {
   section_hdr "💰" "REVENUE & COSTS"
 
-  if [[ "$REVENUE_JSON" == "{}" || -z "${FINOPS_DASHBOARD_URL:-}" ]]; then
-    p "  ${DIM2}FinOps dashboard not configured.${RST}"
-    p "  ${DIM2}Set FINOPS_DASHBOARD_URL + FINOPS_OPS_API_TOKEN to enable live data.${RST}"
+  FINOPS_CONFIGURED=$(echo "$REVENUE_JSON" | jq -r '.configured // false' 2>/dev/null || echo "false")
+
+  if [[ "$FINOPS_CONFIGURED" != "true" ]]; then
+    p "  ${DIM2}MRR data not available — FinOps dashboard not configured.${RST}"
   else
     # MRR sparkline from time series if available
     MRR_SERIES=$(echo "$REVENUE_JSON" | jq -r '.mrr_series[]? // empty' 2>/dev/null | tr '\n' ' ' || echo "")
     if [[ -n "$MRR_SERIES" ]]; then
       MRR_SPARK=$(sparkline $MRR_SERIES 2>/dev/null || echo "")
-      p "  💰 ${BWHT}MRR${RST}  ${BCYN}${MRR}${RST}  ${BGRN}${MRR_SPARK}${RST}  ${DIM2}${MRR_TREND}${RST}"
+      p "  💰 ${BWHT}MRR${RST}  ${BCYN}\$${MRR}${RST}  ${BGRN}${MRR_SPARK}${RST}  ${DIM2}${MRR_TREND}${RST}"
     else
-      p "  💰 ${BWHT}MRR${RST}  ${BCYN}${MRR}${RST}  ${DIM2}${MRR_TREND}${RST}"
-    fi
-
-    # Burn sparkline
-    BURN_SERIES=$(echo "$REVENUE_JSON" | jq -r '.burn_series[]? // empty' 2>/dev/null | tr '\n' ' ' || echo "")
-    if [[ -n "$BURN_SERIES" ]]; then
-      BURN_SPARK=$(sparkline $BURN_SERIES 2>/dev/null || echo "")
-      p "  🔥 ${BWHT}AWS burn${RST}  7d: ${BYLW}${BURN_7D}${RST}  ${RED}${BURN_SPARK}${RST}  30d: ${BURN_30D}  runway: ${RUNWAY}mo"
-    else
-      p "  🔥 ${BWHT}AWS burn${RST}  7d: ${BYLW}${BURN_7D}${RST}  30d: ${BURN_30D}  runway: ${RUNWAY}mo"
-    fi
-
-    ANOMALIES=$(echo "$REVENUE_JSON" | jq -r '.anomalies[]? | "  ⚠️  \(.service): \(.description)"' 2>/dev/null | head -3 || true)
-    if [[ -n "$ANOMALIES" ]]; then
-      echo "$ANOMALIES" | while IFS= read -r line; do p "${BRED}${line}${RST}"; done
+      p "  💰 ${BWHT}MRR${RST}  ${BCYN}\$${MRR}${RST}  ${DIM2}${MRR_TREND}${RST}"
     fi
   fi
 
@@ -879,6 +905,121 @@ render_section_revenue() {
     STATUS_ICON="🟢"
     [[ "$SHOPIFY_HEALTHY" -lt "$SHOPIFY_TOTAL" ]] && STATUS_ICON="🟡"
     p "  🛒 ${BWHT}Shopify${RST}  ${STATUS_ICON} ${SHOPIFY_HEALTHY}/${SHOPIFY_TOTAL} stores healthy"
+  fi
+
+  p ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 6b — FINOPS  (AWS spend + anomalies — standalone block)
+# ════════════════════════════════════════════════════════════════════════════
+render_section_finops() {
+  section_hdr "🔥" "FINOPS  (AWS spend & anomalies)"
+
+  FINOPS_CONFIGURED=$(echo "$REVENUE_JSON" | jq -r '.configured // false' 2>/dev/null || echo "false")
+
+  if [[ "$FINOPS_CONFIGURED" != "true" ]]; then
+    p "  ${DIM2}FinOps dashboard not configured.${RST}"
+    p "  ${DIM2}Set FINOPS_DASHBOARD_URL + FINOPS_OPS_API_TOKEN (or finops.url/finops.token in preferences.json).${RST}"
+    p ""; return
+  fi
+
+  ANOM_OPEN=$(echo "$REVENUE_JSON" | jq -r '.anomalies_open // 0' 2>/dev/null || echo "0")
+  SVCS=$(echo "$REVENUE_JSON" | jq -r '.services_tracked // 0' 2>/dev/null || echo "0")
+  BURN_30D_GROSS=$(echo "$REVENUE_JSON" | jq -r '.aws_burn_30d_gross // "n/a"' 2>/dev/null || echo "n/a")
+  CREDIT=$(echo "$REVENUE_JSON" | jq -r '.aws_credit_applied // "0"' 2>/dev/null || echo "0")
+
+  # Mobile: compact single line
+  if [[ "$MOBILE_MODE" -eq 1 ]]; then
+    p "finops: 7d ${BURN_7D} | 30d \$${BURN_30D} | runway ${RUNWAY}mo | anomalies ${ANOM_OPEN}"
+    p ""; return
+  fi
+
+  # Burn line — 7d / 30d / runway
+  BURN_SERIES=$(echo "$REVENUE_JSON" | jq -r '.burn_series[]? // empty' 2>/dev/null | tr '\n' ' ' || echo "")
+  if [[ -n "$BURN_SERIES" ]]; then
+    BURN_SPARK=$(sparkline $BURN_SERIES 2>/dev/null || echo "")
+    p "  🔥 ${BWHT}AWS burn${RST}  7d: ${BYLW}${BURN_7D}${RST}  ${RED}${BURN_SPARK}${RST}  30d: ${BYLW}\$${BURN_30D}${RST}  runway: ${BWHT}${RUNWAY}${RST}mo"
+  else
+    p "  🔥 ${BWHT}AWS burn${RST}  7d: ${BYLW}${BURN_7D}${RST}  30d: ${BYLW}\$${BURN_30D}${RST} ${DIM2}net${RST}  runway: ${BWHT}${RUNWAY}${RST}mo"
+  fi
+
+  # Gross / credit breakout when credit > 0
+  if [[ "$CREDIT" != "0" && "$CREDIT" != "0.0" && -n "$CREDIT" ]]; then
+    p "     ${DIM2}gross: \$${BURN_30D_GROSS}  credit applied: \$${CREDIT}${RST}"
+  fi
+
+  # Services tracked
+  p "  📊 ${BWHT}Services tracked${RST}  ${CYN}${SVCS}${RST}  ${DIM2}across AWS/Vercel/OpenAI/etc${RST}"
+
+  # Top anomaly
+  TOP_ANOM=$(echo "$REVENUE_JSON" | jq -r '.anomalies[0] // empty | "\(.service // "?"): \(.description // .message // "spend spike")"' 2>/dev/null || echo "")
+  if [[ -n "$TOP_ANOM" && "$TOP_ANOM" != "null" ]]; then
+    p "  ⚠️  ${BRED}Top anomaly${RST}  ${TOP_ANOM}"
+    # show up to 2 more if present
+    echo "$REVENUE_JSON" | jq -r '.anomalies[1:3]? // [] | .[] | "  ⚠️  \(.service // "?"): \(.description // .message // "spend spike")"' 2>/dev/null \
+      | while IFS= read -r line; do [[ -n "$line" ]] && p "${BRED}${line}${RST}"; done
+  else
+    if [[ "$ANOM_OPEN" -gt 0 ]] 2>/dev/null; then
+      p "  ⚠️  ${BYLW}${ANOM_OPEN} open anomalies${RST}  ${DIM2}(detail unavailable)${RST}"
+    else
+      p "  ✅ ${BGRN}No open anomalies${RST}"
+    fi
+  fi
+
+  p ""
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION — CALENDAR  (today's events across all calendars — PR #286)
+# ════════════════════════════════════════════════════════════════════════════
+render_section_calendar() {
+  section_hdr "📅" "CALENDAR  (today)"
+
+  CONFIGURED=$(echo "$CALENDAR_JSON" | jq -r '.configured // false' 2>/dev/null || echo "false")
+  EVENT_COUNT=$(echo "$CALENDAR_JSON" | jq '.events | length' 2>/dev/null || echo "0")
+  [[ "$EVENT_COUNT" =~ ^[0-9]+$ ]] || EVENT_COUNT="0"
+
+  if [[ "$CONFIGURED" != "true" ]]; then
+    NOTE=$(echo "$CALENDAR_JSON" | jq -r '.note // "not configured"' 2>/dev/null || echo "not configured")
+    p "  ${DIM2}Calendar: ${NOTE}${RST}"
+    p "  ${DIM2}Run \`gog auth add <email> --services calendar\` to enable.${RST}"
+    p ""; return
+  fi
+
+  if [[ "$EVENT_COUNT" -eq 0 ]]; then
+    p "  ${DIM2}0 events today.${RST}"
+    p ""; return
+  fi
+
+  # Mobile: just count + first 3 titles
+  if [[ "$MOBILE_MODE" -eq 1 ]]; then
+    p "calendar: ${EVENT_COUNT} events today"
+    echo "$CALENDAR_JSON" | jq -r '.events[0:3][] | "  \(.start | split("T")[1] // "all-day" | .[0:5])  \(.summary)"' 2>/dev/null \
+      | while IFS= read -r line; do [[ -n "$line" ]] && p "$line"; done
+    p ""; return
+  fi
+
+  # Desktop: time + title + calendar label (max 8)
+  echo "$CALENDAR_JSON" | jq -r '.events[0:8][] |
+    if .allday then
+      "ALLDAY\t\(.summary)\t\(.calendar)"
+    else
+      "\(.start | split("T")[1] // "" | .[0:5])\t\(.summary)\t\(.calendar)"
+    end' 2>/dev/null \
+    | while IFS=$'\t' read -r time summary cal; do
+        # Trim calendar to short label (before @)
+        cal_short="${cal%@*}"
+        [[ -z "$cal_short" || "$cal_short" == "$cal" ]] && cal_short="${cal:0:20}"
+        if [[ "$time" == "ALLDAY" ]]; then
+          p "  ${DIM2}all-day${RST}  ${BWHT}${summary}${RST}  ${DIM2}(${cal_short})${RST}"
+        else
+          p "  ${BCYN}${time}${RST}    ${BWHT}${summary}${RST}  ${DIM2}(${cal_short})${RST}"
+        fi
+      done
+
+  if [[ "$EVENT_COUNT" -gt 8 ]]; then
+    p "  ${DIM2}+ $((EVENT_COUNT - 8)) more${RST}"
   fi
 
   p ""
@@ -1173,10 +1314,12 @@ render_footer() {
 # ════════════════════════════════════════════════════════════════════════════
 render_section_hero
 render_section_fires
+render_section_calendar
 render_section_inbox
 render_section_prs
 render_section_portfolio
 render_section_revenue
+render_section_finops
 render_section_marketing
 render_section_linear
 render_section_deploys
