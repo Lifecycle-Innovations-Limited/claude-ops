@@ -1,0 +1,11 @@
+[Unit]
+Description=Run cloudflared-watchdog every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=cloudflared-watchdog.service
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

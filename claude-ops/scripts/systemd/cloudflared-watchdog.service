@@ -1,0 +1,7 @@
+[Unit]
+Description=cloudflared watchdog — restart when tunnel has empty ingress
+After=cloudflared.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/cloudflared-watchdog.sh
