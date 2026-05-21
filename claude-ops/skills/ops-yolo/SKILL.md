@@ -187,6 +187,7 @@ Uses `agents/yolo-cfo.md`. Writes `/tmp/yolo-[session]/cfo-analysis.md`.
 - Which AWS services are waste?
 - When do we hit zero if nothing changes?
 - What's the ROI on current work?
+- If `home_automation` is configured in `$PREFS_PATH`, check energy spend trend via `/ops:ops-home status` — is the kWh/day curve trending up materially? Flag anomalous draw.
 
 ### Agent 4 — COO (Operations)
 
@@ -196,6 +197,7 @@ Uses `agents/yolo-coo.md`. Writes `/tmp/yolo-[session]/coo-analysis.md`.
 - Which processes are broken?
 - What's the top execution risk this week?
 - What should be automated that isn't?
+- If `home_automation` is configured in `$PREFS_PATH`, include home-automation health in operations checks via `/ops:ops-home status`: are smoke/water alarms armed? Energy anomalies? Devices offline? Flow failures?
 
 ---
 

@@ -57,6 +57,17 @@
       "credential_key_secondary": "FEDEX_CLIENT_SECRET",
       "credential_key_tertiary": "FEDEX_ACCOUNT_NUMBER",
       "docs_url": "https://developer.fedex.com/api/en-us/catalog/ship/v1/docs.html"
+    },
+    "homey": {
+      "category": "home-automation",
+      "auth_type": "bearer-token",
+      "base_url": "https://api.athom.com",
+      "credential_key": "HOMEY_LOCAL_URL",
+      "credential_key_secondary": "HOMEY_LOCAL_TOKEN",
+      "credential_key_tertiary": "HOMEY_CLOUD_TOKEN",
+      "credential_key_quaternary": "HOMEY_ID",
+      "skill": "/ops:ops-home",
+      "docs_url": "https://apps.developer.homey.app/the-basics/web-api"
     }
   }
 }

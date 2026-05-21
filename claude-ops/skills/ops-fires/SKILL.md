@@ -112,6 +112,16 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-ci 2>/dev/null || echo '[]'
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-external 2>/dev/null || echo '[]'
 ```
 
+## Home automation (only if `home_automation` is configured in `$PREFS_PATH`)
+
+```!
+if jq -e '.home_automation' "${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json" >/dev/null 2>&1; then
+  ${CLAUDE_PLUGIN_ROOT}/bin/ops-home snapshot 2>/dev/null || echo '{"configured":true,"error":"home probe failed"}'
+else
+  echo '{"configured":false}'
+fi
+```
+
 ## Your task
 
 Analyze the pre-gathered data — including external projects. Then run parallel checks:
@@ -121,6 +131,11 @@ Analyze the pre-gathered data — including external projects. Then run parallel
 3. **CI** — parse CI data for failing pipelines, broken main/dev branches.
 4. **GitHub Actions** — `gh run list --limit 20 --json status,conclusion,name,headBranch,createdAt 2>/dev/null`
 5. **External projects** — parse ops-external data. Flag `auth_expired` as HIGH (credential rotation needed), `unreachable`/`degraded` as MEDIUM, `not_configured` as LOW.
+6. **Home automation** (only if home snapshot returned `configured:true`) — classify Homey incidents:
+   - Active critical alarm (smoke / water leak / security breach) → **P0 / CRITICAL** — cross-reference `/ops:ops-home alarm` for details.
+   - Major device offline (gateway, hub, primary thermostat) → **P1 / HIGH**.
+   - Energy spike > 3× 7-day baseline → **P2 / MEDIUM** — cross-reference `/ops:ops-home status`.
+   If snapshot returned `configured:false`, skip silently.
 
 Classify each issue by severity:
 
@@ -160,6 +175,10 @@ SENTRY (top errors, 24h)
 
 EXTERNAL PROJECTS
 [alias] [source] [status] [details — e.g. auth_expired, unreachable]
+
+HOME (only if `home_automation` is configured)
+[alarm/device] [type — smoke/water/security/offline/energy] [severity] [since]
+[If `configured:false`, omit this section entirely]
 
 ──────────────────────────────────────────────────────
 ```
