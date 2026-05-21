@@ -1,7 +1,7 @@
 ---
 name: ops-voice
-description: Voice operations — native macOS Phone (Continuity), FaceTime, Zoom, Twilio voice + SMS, Bland AI agent calls, ElevenLabs TTS, Whisper transcription. All curl-based, no SDK deps.
-argument-hint: "[phone|facetime|zoom|twilio-call|twilio-sms|bland-call|tts|transcribe|setup]"
+description: Voice operations — native macOS Phone (Continuity), FaceTime, Zoom, Google Meet, WhatsApp call, Twilio voice + SMS, Bland AI agent calls, ElevenLabs TTS, Whisper transcription. All curl-based, no SDK deps.
+argument-hint: "[phone|facetime|zoom|meet|whatsapp-call|twilio-call|twilio-sms|bland-call|tts|transcribe|setup]"
 allowed-tools:
   - Bash
   - Read
@@ -69,6 +69,35 @@ bin/ops-voice zoom schedule "<topic>" --start "2026-05-22T15:00:00Z" --duration 
 ```
 
 Native start/join use `zoommtg://` URL scheme. Schedule requires `ZOOM_API_TOKEN` resolved via the order above. Generate a Server-to-Server OAuth app in your Zoom Marketplace, then exchange for an access token.
+
+---
+
+### `meet start|join` — Google Meet
+
+```bash
+# Open a brand-new instant meeting (https://meet.new)
+bin/ops-voice meet start
+
+# Join by meeting code (xxx-yyyy-zzz) or full URL
+bin/ops-voice meet join abc-defg-hij
+bin/ops-voice meet join https://meet.google.com/abc-defg-hij --json
+```
+
+`meet start` opens `https://meet.new` in the default browser (creates a fresh meeting and lands you in it). `meet join` accepts a 3-4-3 Google Meet code, a bare code, or a full URL — all are normalized to `https://meet.google.com/<code>`. No credentials needed; the user must be signed into Google in the browser.
+
+---
+
+### `whatsapp-call <number> [--video]` — WhatsApp Desktop voice/video call
+
+```bash
+# Voice call (default)
+bin/ops-voice whatsapp-call "+1234567890"
+
+# Video call
+bin/ops-voice whatsapp-call "+1234567890" --video --json
+```
+
+Opens WhatsApp Desktop via the `whatsapp://call?phone=<digits>` or `whatsapp://video?phone=<digits>` URL scheme. Requires WhatsApp Desktop installed and signed in. The leading `+` is stripped — WhatsApp expects digits only after `phone=`. No credentials needed; the WhatsApp session lives in the desktop app.
 
 ---
 
