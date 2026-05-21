@@ -28,7 +28,7 @@ Route `$ARGUMENTS` to the correct ops skill:
 
 | Input                                         | Route to                |
 | --------------------------------------------- | ----------------------- |
-| (empty), dash, home, hq                       | `/ops:ops-dash`         |
+| (empty), dash, hq                             | `/ops:ops-dash`         |
 | go, morning, briefing                         | `/ops-go`               |
 | setup, configure, init, install               | `/ops:setup $ARGUMENTS` |
 | inbox, unread, messages                       | `/ops-inbox`            |
@@ -53,6 +53,7 @@ Route `$ARGUMENTS` to the correct ops skill:
 | speedup, clean, optimize, cleanup             | `/ops:ops-speedup`      |
 | orchestrate, subagents, agents, dispatch, run | `/ops:ops-orchestrate $ARGUMENTS` |
 | secret-sync, secrets, doppler-sync, drift     | `/ops:ops-secret-sync $ARGUMENTS` |
+| home, homey, lights, flow, scene, energy, climate, presence, alarm, smart-home, iot, thermostat, dim, door, lock | `/ops:ops-home $ARGUMENTS` |
 
 If `$ARGUMENTS` is empty, launch the interactive dashboard: invoke `/ops:ops-dash` directly.
 
