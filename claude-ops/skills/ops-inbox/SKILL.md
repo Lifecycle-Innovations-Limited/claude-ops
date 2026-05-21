@@ -74,15 +74,36 @@ If you find yourself reaching for any `wacli ...` shell command, stop and use th
 
 Before executing, load available context:
 
-1. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`
+1. **Self-heal plugin version pin** — if any `${CLAUDE_PLUGIN_DATA_DIR}` file or `~/.claude/plugins/installed_plugins.json` references a `cache/ops-marketplace/ops/X.Y.Z/` path that no longer exists on disk, downstream hooks (`stop-all.sh`, `ops-post-session-cleanup`) emit `Plugin directory does not exist`. Resolve before scanning:
+   ```bash
+   INSTALLED="$HOME/.claude/plugins/installed_plugins.json"
+   CACHE_DIR="$HOME/.claude/plugins/cache/ops-marketplace/ops"
+   PINNED=$(python3 -c "import json; d=json.load(open('$INSTALLED')); print(d.get('plugins',{}).get('ops@ops-marketplace',[{}])[0].get('version',''))")
+   LATEST=$(ls "$CACHE_DIR" 2>/dev/null | sort -V | tail -1)
+   if [ -n "$PINNED" ] && [ -n "$LATEST" ] && [ "$PINNED" != "$LATEST" ] && [ ! -d "$CACHE_DIR/$PINNED" ]; then
+     python3 -c "
+   import json
+   p='$INSTALLED'; d=json.load(open(p))
+   for e in d.get('plugins',{}).get('ops@ops-marketplace',[]):
+     if e.get('version')=='$PINNED':
+       e['version']='$LATEST'
+       e['installPath']='$CACHE_DIR/$LATEST'
+   json.dump(d, open(p,'w'), indent=2)
+   "
+     bash "$HOME/.claude/scripts/hooks/ops-plugin-version-heal.sh"   # rewrites daemon-services.json + mcp-proxy/servers.json
+   fi
+   ```
+   The existing `ops-plugin-version-heal.sh` only rewrites *downstream* targets from `installed_plugins.json` (the source of truth). When the source itself is stale, the heal hook is a no-op — patch it first, then re-run the hook.
+
+2. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`
    - `default_channels` — which channels to scan by default
    - `secrets_manager` / `doppler` — how to resolve channel credentials if not in env
 
-2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
-   - Check `whatsapp-bridge` status — verify `com.${USER}.whatsapp-bridge` is running (`lsof -i :8080` or `launchctl list com.${USER}.whatsapp-bridge`)
+3. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
+   - Check `whatsapp-bridge` status — verify `com.${USER}.whatsapp-bridge` is running (`lsof -i :8080` or `launchctl print "gui/$(id -u)/com.${USER}.whatsapp-bridge"`)
    - If bridge is not running, surface the issue before WhatsApp operations
 
-3. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/` before drafting any reply:
+4. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/` before drafting any reply:
    - `contact_*.md` — load profile for the contact you're about to reply to
    - `preferences.md` — apply user's communication style and language preferences
    - `topics_active.md` — check for active threads or deadlines related to this contact
@@ -95,9 +116,29 @@ Before executing, load available context:
 **Bridge health** — check bridge is running before any WhatsApp operation:
 ```bash
 lsof -i :8080 | grep LISTEN   # bridge listens on :8080
-launchctl list com.${USER}.whatsapp-bridge  # check launchd status
+launchctl print "gui/$(id -u)/com.${USER}.whatsapp-bridge" 2>&1 | head -3  # check launchd status (use print, NOT list — list only shows already-loaded services)
 ```
-If bridge is not running: `launchctl kickstart -k gui/$UID/com.${USER}.whatsapp-bridge`
+
+If bridge is not running, use this **robust restart recipe** (handles the "service not loaded" case that breaks bare `kickstart`):
+
+```bash
+LABEL="com.${USER}.whatsapp-bridge"
+PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+TARGET="gui/$(id -u)/${LABEL}"
+
+# 1) If kickstart fails with "Could not find service", load the plist first.
+if ! launchctl kickstart -k "$TARGET" 2>/dev/null; then
+  [ -f "$PLIST" ] && launchctl load -w "$PLIST"
+  sleep 2
+  launchctl kickstart -k "$TARGET" 2>/dev/null || true
+fi
+
+# 2) Verify it's actually listening.
+sleep 5
+lsof -i :8080 | grep -q LISTEN && echo "bridge up" || echo "bridge FAILED — check $HOME/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log"
+```
+
+**Why this matters:** bare `launchctl kickstart -k gui/$UID/<label>` exits with `Could not find service` if the LaunchAgent isn't loaded (common after reboot, plist edits, or when the daemon hasn't auto-registered). Always quote the target string and fall back to `launchctl load -w` before retrying.
 
 **MCP tools** (use these instead of any wacli CLI command):
 
@@ -134,10 +175,7 @@ sqlite3 "$DB" "SELECT chat_jid, sender, content, timestamp FROM messages WHERE r
 sqlite3 "$DB" "SELECT jid, name, phone FROM contacts WHERE name LIKE '%<name>%' COLLATE NOCASE LIMIT 10;"
 ```
 
-**History backfill** — the whatsmeow bridge automatically syncs history on connection. No manual backfill command exists; if messages are missing, restart the bridge:
-```bash
-launchctl kickstart -k gui/$UID/com.${USER}.whatsapp-bridge
-```
+**History backfill** — the whatsmeow bridge automatically syncs history on connection. No manual backfill command exists; if messages are missing, restart the bridge using the robust recipe above (load-then-kickstart).
 
 ### gog CLI (Gmail/Calendar)
 
@@ -395,21 +433,62 @@ Reply via: `mcp__whatsapp__send_message` with `{recipient: "<JID>", message: "<m
 | Chat metadata | `mcp__whatsapp__get_chat {chat_jid}` |
 | Message context | `mcp__whatsapp__get_message_context {chat_jid, message_id}` |
 | Check bridge | `lsof -i :8080 | grep LISTEN` |
-| Restart bridge | `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge` |
+| Restart bridge | See robust restart recipe above (load-then-kickstart). Bare `launchctl kickstart` fails if the agent isn't loaded. |
 
 **Bridge troubleshooting:**
 
-- Bridge not running → `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`; wait 5s, re-check
+- Bridge not running → use the robust restart recipe (`launchctl load -w` fallback before `kickstart`); wait 5s, verify `lsof -i :8080`
 - Auth expired / QR needed → check `~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log`; bridge prints QR to log on startup if session is invalid
 - Missing messages → bridge syncs history on connect; if gap persists, restart bridge
 - FTS not available → run `scripts/whatsapp-bridge-migrate.sh` to add FTS5 index to messages.db
 
 ### Email (FULL SCAN + DEEP CONTEXT)
 
+**`gog` JSON shapes — known traps. Read before writing any parser.**
+
+The two main read commands return DIFFERENT envelopes — agents have repeatedly written `payload.headers` parsers expecting the search shape and gotten `KeyError: 'value'` or `'payload'` on thread output:
+
+| Command | Top-level keys | Where messages live | Per-message shape |
+|---------|---------------|---------------------|-------------------|
+| `gog gmail search ... -j --results-only` | array of result objects | (each element IS a thread summary) | flat: `{id, date, from, subject, labels, messageCount}` |
+| `gog gmail thread get <id> -j` | `{downloaded, thread}` | `thread.messages[]` | full: `{id, labelIds, payload: {headers: [{name, value}, ...]}, ...}` |
+| `gog gmail get <messageId> -j` | full message envelope | (no nesting) | `{id, labelIds, payload: {headers}, ...}` |
+
+**Canonical thread-classification recipe** (copy-paste-safe, handles empty/error threads gracefully):
+
+```python
+import json, subprocess
+USER_ADDRS = ['user', 'user@example.com', 'user@example.com']  # adapt per user
+
+def classify_thread(thread_id):
+    r = subprocess.run(['gog','gmail','thread','get',thread_id,'-j'],
+                       capture_output=True, text=True, timeout=15)
+    if r.returncode != 0 or not r.stdout.strip():
+        return None  # gracefully skip; don't raise
+    d = json.loads(r.stdout)
+    msgs = d.get('thread', {}).get('messages', [])  # NOTE: nested under .thread
+    if not msgs:
+        return None
+    last = msgs[-1]
+    hdrs = {h['name']: h.get('value','') for h in last.get('payload', {}).get('headers', [])}
+    labels = last.get('labelIds', [])
+    from_addr = hdrs.get('From', '').lower()
+    is_sent_last = 'SENT' in labels or any(u in from_addr for u in USER_ADDRS)
+    is_draft = 'DRAFT' in labels
+    in_inbox = 'INBOX' in labels
+    if is_draft:    return 'DRAFT'
+    if is_sent_last: return 'WAITING'
+    if in_inbox:    return 'NEEDS_REPLY'
+    return 'HANDLED'
+```
+
+**Fast-path classification without per-thread fetch** — for the 80% case, the `gog gmail search` envelope is enough: each element already has `labels` (which is `labelIds` from the last message) and `from`. Skip the `thread get` round-trip for triage and only fetch the full thread when you need to draft a reply or summarize the conversation arc.
+
 **Phase 1 — Classify:**
 1. Search `in:inbox` (NOT `is:unread`) via `gog gmail search -a $GMAIL_ACCOUNT -j --results-only --no-input --max 30 "in:inbox"`
-2. For each thread, read the FULL thread via `gog gmail thread get -a $GMAIL_ACCOUNT <threadId> -j` — read ALL messages, not just the last one
-3. Check the last message's `From` header and `labelIds` (SENT, DRAFT)
+2. **For triage:** classify directly from the search envelope using `labels` + `from` (fast-path above). Only call `gog gmail thread get` for items the user opens or that need a draft.
+3. **For drafting:** read the FULL thread via `gog gmail thread get -a $GMAIL_ACCOUNT <threadId> -j` and parse using the canonical recipe — remember messages are at `thread.messages[]`, NOT at the top level.
+4. Check the last message's `From` header and `labelIds` (SENT, DRAFT)
 4. Classify:
    - **NEEDS REPLY**: Last sender is NOT you AND no unsent draft exists → action needed
    - **WAITING**: Last sender IS you (SENT label) → waiting for response
