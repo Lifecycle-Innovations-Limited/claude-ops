@@ -60,7 +60,7 @@ The bin script fires all 12 data probes in parallel (background subshells writin
 9. **DEPLOYS** — ECS Fargate desired/running/pending per cluster (requires AWS CLI)
 10. **COMPETITOR INTEL** — latest report from `${OPS_DATA_DIR}/reports/competitor-intel/`
 11. **YOLO REPORTS** — `/tmp/yolo-*/` directories with verdict summaries
-12. **QUICK ACTIONS** — keyboard shortcuts 1-9, 0, a-h
+12. **QUICK ACTIONS** — keyboard shortcuts 1-9, 0, a-h (where `h` = smart-home if `home_automation` is configured in `$PREFS_PATH`; FAQ moves to `?`). Status indicator next to `h`: green if all Homey devices online and no alarms, yellow if any device offline, red if active critical alarm. Hidden entirely if `home_automation` is not configured.
 
 **Schema fixes vs previous version:**
 - Unread: was reading `.whatsapp.count` / `.email.count` (always 0). Now reads `.channels.whatsapp.recent_chats` / `.channels.email.inbox_count`.
@@ -123,8 +123,9 @@ Skip straight to AskUserQuestion for the next action — no preamble, no recap, 
 | `e`, `report`, `csuite` | Read latest YOLO report | C-suite report |
 | `f`, `settings`, `prefs`, `config` | Settings sub-menu | Interactive config |
 | `g`, `share` | Share sub-menu | Share your setup |
-| `h`, `faq`, `help`, `wiki`, `?` | FAQ sub-menu | Help & FAQ |
-| `back`, `dash`, `home` | Re-render dashboard | Return to dash |
+| `h`, `home`, `homey`, `house` | `/ops:ops-home` | Smart-home control (only if `home_automation` configured in `$PREFS_PATH`) |
+| `?`, `faq`, `help`, `wiki` | FAQ sub-menu | Help & FAQ |
+| `back`, `dash` | Re-render dashboard | Return to dash |
 
 ---
 
@@ -285,9 +286,9 @@ Try it: /plugin marketplace add ops-marketplace
 
 ---
 
-## FAQ sub-menu (option h)
+## FAQ sub-menu (option ?)
 
-When user selects `h`:
+When user selects `?` (or `faq`/`help`/`wiki`):
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -335,6 +336,7 @@ When user selects `h`:
 | 8 | WhatsApp | Check bridge liveness: `lsof -i :8080 | grep LISTEN`. If not running, prompt restart: `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`. Check `launchctl list com.${USER}.whatsapp-bridge` for status. If store locked: `kill $(pgrep whatsapp-bridge)`. |
 | 9 | Telegram | Needs user-auth (not bot). Run `/ops:setup` → Telegram section. API ID + hash from my.telegram.org. |
 | 10 | Unread | Channel must be configured in `/ops:setup`. Check `ops-unread` script output for errors. |
+| 11 | Smart-home (Homey) | Run `/ops:setup --section home` to configure Homey Pro. Once set, hotkey `h` and `/ops:ops-home` are routable. Status dot on the dashboard: green = all devices online + no alarms, yellow = device offline, red = active critical alarm. |
 
 For links (w, r, i): open in browser via `open` (macOS) or `xdg-open` (Linux).
 
