@@ -6,6 +6,8 @@
 #   facetime <number-or-handle> [--audio] [--json]   FaceTime video (default) or audio
 #   zoom     start|join <meeting-id> [--pwd P]       Open zoom.us app to start/join
 #   zoom     schedule "<topic>" [--start ISO8601] [--duration MIN]   Zoom REST schedule
+#   whatsapp-call <number> [--video] [--json]        Open WhatsApp desktop to call
+#   meet     start|join <code> [--json]              Open Google Meet (new or by code)
 #   twilio-call <to> <from> --twiml URL [--json]     Programmatic outbound voice
 #   twilio-sms  <to> <from> "<body>" [--json]        Programmatic outbound SMS
 #   bland-call  <number> "<prompt>" [--json]         AI agent phone call
@@ -173,6 +175,92 @@ cmd_facetime() {
     exit 1
   }
   emit_ok "facetime" "starting ${scheme} with $handle"
+}
+
+# ─── Subcommand: whatsapp-call ──────────────────────────────────────────────
+# Opens WhatsApp desktop and starts a voice or video call with the contact.
+# Uses the `whatsapp://` URL scheme handled by WhatsApp.app / WhatsApp Desktop.
+cmd_whatsapp_call() {
+  local raw="${1:-}" video=false
+  shift || true
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --video) video=true ;;
+      --json)  JSON_MODE=true ;;
+      *)       emit_err "unknown flag: $1"; exit 2 ;;
+    esac
+    shift
+  done
+  [[ -z "$raw" ]] && { emit_err "usage: ops-voice whatsapp-call <number> [--video]"; exit 2; }
+  local number; number="$(normalize_number "$raw")"
+  # Strip leading + — WhatsApp's scheme expects digits only after `phone=`.
+  local digits="${number#+}"
+  local url
+  if $video; then
+    url="whatsapp://video?phone=${digits}"
+  else
+    url="whatsapp://call?phone=${digits}"
+  fi
+  open_native "$url" || {
+    emit_err "open whatsapp: failed — install WhatsApp Desktop and sign in"
+    exit 1
+  }
+  local kind="voice"; $video && kind="video"
+  emit_ok "whatsapp-call" "starting WhatsApp $kind call to $number"
+}
+
+# ─── Subcommand: meet ───────────────────────────────────────────────────────
+# Google Meet handler.
+#   meet start                — open https://meet.new (new instant meeting)
+#   meet join <code-or-url>   — join existing meeting by code (abc-defg-hij) or full URL
+cmd_meet() {
+  local action="${1:-}"; shift || true
+  case "$action" in
+    start)
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --json) JSON_MODE=true ;;
+          *)      emit_err "unknown flag: $1"; exit 2 ;;
+        esac
+        shift
+      done
+      open_native "https://meet.new" || {
+        emit_err "open https://meet.new failed"
+        exit 1
+      }
+      emit_ok "meet" "starting new Google Meet (meet.new)"
+      ;;
+    join)
+      local target="${1:-}"
+      shift || true
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --json) JSON_MODE=true ;;
+          *)      emit_err "unknown flag: $1"; exit 2 ;;
+        esac
+        shift
+      done
+      [[ -z "$target" ]] && { emit_err "usage: ops-voice meet join <code-or-url>"; exit 2; }
+      local url
+      if [[ "$target" =~ ^https?:// ]]; then
+        url="$target"
+      elif [[ "$target" =~ ^[a-z]{3}-[a-z]{4}-[a-z]{3}$ ]]; then
+        url="https://meet.google.com/${target}"
+      else
+        # Accept bare meeting codes without dashes too; pass through unchanged.
+        url="https://meet.google.com/${target}"
+      fi
+      open_native "$url" || {
+        emit_err "open $url failed"
+        exit 1
+      }
+      emit_ok "meet" "joining $url"
+      ;;
+    *)
+      emit_err "usage: ops-voice meet {start|join <code-or-url>}"
+      exit 2
+      ;;
+  esac
 }
 
 # ─── Subcommand: zoom ───────────────────────────────────────────────────────
@@ -736,6 +824,9 @@ usage:
   ops-voice zoom     start
   ops-voice zoom     join     <meeting-id> [--pwd P] [--json]
   ops-voice zoom     schedule "<topic>" [--start ISO8601] [--duration MIN] [--json]
+  ops-voice whatsapp-call <number> [--video] [--json]
+  ops-voice meet     start [--json]
+  ops-voice meet     join  <code-or-url> [--json]
   ops-voice join     [--at now|next|HH:MM] [--window MIN] [--dry-run] [--json]
   ops-voice twilio-call <to> <from> --twiml <URL> [--json]
   ops-voice twilio-sms  <to> <from> "<body>" [--json]
@@ -766,13 +857,15 @@ main() {
 
   local cmd="${1:-}"; shift || true
   case "$cmd" in
-    phone)        cmd_phone "$@" ;;
-    facetime)     cmd_facetime "$@" ;;
-    zoom)         cmd_zoom "$@" ;;
-    join)         cmd_join "$@" ;;
-    twilio-call)  cmd_twilio_call "$@" ;;
-    twilio-sms)   cmd_twilio_sms "$@" ;;
-    bland-call)   cmd_bland_call "$@" ;;
+    phone)          cmd_phone "$@" ;;
+    facetime)       cmd_facetime "$@" ;;
+    zoom)           cmd_zoom "$@" ;;
+    whatsapp-call)  cmd_whatsapp_call "$@" ;;
+    meet)           cmd_meet "$@" ;;
+    join)           cmd_join "$@" ;;
+    twilio-call)    cmd_twilio_call "$@" ;;
+    twilio-sms)     cmd_twilio_sms "$@" ;;
+    bland-call)     cmd_bland_call "$@" ;;
     -h|--help|"") usage; exit 0 ;;
     *) emit_err "unknown subcommand: $cmd"; usage; exit 2 ;;
   esac
