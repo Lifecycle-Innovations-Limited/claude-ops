@@ -97,6 +97,7 @@ Parse `$ARGUMENTS` and route immediately:
 | `zoom`        | Start an instant Zoom meeting via `bin/ops-voice zoom start` |
 | `send * to *` | Parse message and contact, determine best channel, send |
 | `read *`      | Read the specified channel or contact's messages        |
+| `home alarm`  | Pipe a Homey alarm event as a WhatsApp/Telegram alert — delegates to `/ops:ops-home alarm --notify` (only if `home_automation` is configured in `$PREFS_PATH`) |
 | (empty)       | Show channel picker menu                                |
 
 Natural-language parsing:
