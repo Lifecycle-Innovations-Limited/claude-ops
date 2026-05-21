@@ -376,7 +376,7 @@ if [[ "$MOBILE_MODE" -eq 0 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]
   _start_time=$(date +%s)
   _tick=0
   while true; do
-    _done=$(ls "$TMPDIR_DASH"/done_* 2>/dev/null | wc -l | tr -d ' ')
+    _done=$(ls "$TMPDIR_DASH"/done_* 2>/dev/null | wc -l | tr -d ' ' || true)
     _pct=$(( (_done * 100) / TOTAL_PROBES ))
     _filled=$(( (_done * _bar_width) / TOTAL_PROBES ))
     _empty=$(( _bar_width - _filled ))
