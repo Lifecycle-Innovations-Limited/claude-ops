@@ -55,7 +55,7 @@ Base URL: `${HOMEY_LOCAL_URL}` (e.g. `http://192.168.1.100`)
 | `/api/manager/energy/report` | GET | Historical energy report (kWh) |
 | `/api/manager/presence` | GET | Presence status (who is home) |
 | `/api/manager/alarms/alarm` | GET | Active alarms (smoke, water, security) |
-| `/api/manager/system/info` | GET | Homey system info |
+| `/api/manager/system` | GET | Homey system info (firmware, name, uptime) |
 
 **Auth header (local)**: `Authorization: Bearer ${HOMEY_LOCAL_TOKEN}`
 
@@ -188,6 +188,7 @@ homey_call() {
 | climate, temp, thermostat, heating        | Climate manager       |
 | presence, who, home                       | Presence              |
 | alarm, alarms, arm, disarm, security      | Alarms / security     |
+| health, diagnose, outage                  | Health / outage scan  |
 | setup, configure, init, token             | Setup flow            |
 
 ---
@@ -556,8 +557,8 @@ homey_call "/alarms/alarm" | jq '[.[] | select(.active == true) | {
   severity: .severity
 }]'
 
-# Security mode
-homey_call "/system/info" | jq '.securityMode // "unknown"'
+# Security mode (fw 13.2.0+: /api/manager/system — NOT /system/info, that returns the Web App HTML)
+homey_call "/system" | jq '.securityMode // "unknown"'
 ```
 
 If `$ARGUMENTS` is `alarm arm` or `alarm disarm`, set security mode (use a flow if Homey exposes it as such — typical Homey setups use a "Security Armed" flow):
@@ -615,6 +616,87 @@ Then `AskUserQuestion` with `[Send]` / `[Edit]` / `[Skip]`.
 
 ---
 
+## HEALTH (`health`, `diagnose`, `outage`)
+
+Plejd-style mass-outage detector. Groups offline devices by `driverUri` (the source app/integration), then flags any driver where > 30% of its devices are offline as a probable single-driver outage — usually an app crash, expired credentials, or hub-side disconnect inside that integration.
+
+```bash
+# Pull devices once, then group/aggregate locally
+DEVICES_JSON=$(homey_call "/devices/device")
+
+echo "$DEVICES_JSON" | jq '{
+  total: (. | length),
+  online: ([.[] | select(.available == true)] | length),
+  offline: ([.[] | select(.available == false)] | length),
+  drivers: (
+    [.[] | {driverUri: (.driverUri // "unknown"), available: .available}]
+    | group_by(.driverUri)
+    | map({
+        driverUri: .[0].driverUri,
+        total: length,
+        offline: ([.[] | select(.available == false)] | length),
+        offline_pct: (([.[] | select(.available == false)] | length) * 100 / length)
+      })
+    | sort_by(-.offline_pct)
+  )
+}'
+```
+
+Driver short-name: strip `homey:app:` prefix and dotted namespace (e.g. `homey:app:com.plejd` → `com.plejd` → `plejd`). Display logic:
+
+- Total banner: `total devices: N (X online, Y offline)`.
+- For each driver where `offline_pct > 30` AND `total >= 2`, surface a `MASS OUTAGE` line with the count, percentage, and a likely-cause hint based on the driver namespace.
+- For drivers where `total == 1` AND offline, label as `likely powered off` (single device — not a mass outage).
+- For drivers where `offline_pct <= 30`, list under a `partial outage` section only if `offline >= 2`.
+
+Likely-cause hints (keyed by driver namespace substring):
+- `plejd`, `hue`, `tradfri`, `lifx`, `tuya`, `smartthings`, `homekit` → `app credentials expired or app crashed. Fix: open Homey app → Apps → [app name] → reconfigure.`
+- `chromecast`, `sonos`, `airplay` → `media device dropped off network. Fix: power-cycle device + check Wi-Fi.`
+- `zwave`, `zigbee`, `433` → `radio congestion or hub-mesh issue. Fix: check Homey → Settings → Z-Wave/Zigbee mesh.`
+- `whisker`, `litter`, `vacuum`, generic single-device → `likely powered off`.
+- Unknown → `unknown integration — check the app's status in Homey app → Apps.`
+
+Render (desktop):
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ OPS ► HOME ► HEALTH — [timestamp]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+HOMEY ► HEALTH
+  total devices: 181 (82 online, 99 offline)
+
+  ⚠ MASS OUTAGE: com.plejd — 96 / 96 offline (100%)
+    likely: app credentials expired or app crashed.
+    Fix: open Homey app → Apps → Plejd → reconfigure.
+
+  whisker: 1 / 1 offline (100%) — likely powered off
+  chromecast: 2 / 4 offline (50%) — media device dropped off network.
+
+──────────────────────────────────────────────────────
+ Actions:
+ a) Reconfigure flagged app (deep-link to Homey app)
+ b) Power-cycle Homey hub
+ c) Re-run health scan after fix
+ d) Broadcast outage to /ops:ops-comms
+──────────────────────────────────────────────────────
+```
+
+Mobile mode:
+
+```
+home health: 82/181 online.
+⚠ plejd: 96/96 offline (app down — reconfigure in Homey app).
+whisker: 1/1 offline (powered off).
+next: /ops-home devices | reconfigure plejd
+```
+
+If any MASS OUTAGE is flagged, surface it at the top of the default STATUS dashboard as well (after the DEVICES line), so the user sees it without needing to run `/ops-home health` explicitly.
+
+Cross-channel: if `MASS OUTAGE` count > 50 devices OR a security-related integration is down (alarm panel, locks, cameras), suggest piping to `/ops:ops-comms` (Rule 6 — stage draft, never auto-send).
+
+---
+
 ## SETUP FLOW (`setup`, `configure`, `init`, `token`)
 
 Delegate to the central setup wizard with the home section:
@@ -657,7 +739,7 @@ Verify connectivity after acquisition:
 
 ```bash
 curl -s -H "Authorization: Bearer ${PROVIDED_TOKEN}" \
-  "${PROVIDED_LOCAL_URL}/api/manager/system/info" | jq '{name, firmware: .firmwareVersion}'
+  "${PROVIDED_LOCAL_URL}/api/manager/system" | jq '{name, firmware: .firmwareVersion}'
 ```
 
 If 200 — confirm success and write to `preferences.json` under `home_automation.*`. If 401/403 — token invalid, re-prompt via `AskUserQuestion` (`[Paste new token]`, `[Deep hunt — spawn agent]`, `[Skip]`).
