@@ -96,13 +96,11 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-dash 2>/dev/null || echo "DASH_RENDER_FAILED"
 
 ## Your task
 
-The dashboard has already rendered above via the shell script. Your job is to **route user input** to the right skill.
+The dashboard has **already rendered above** via the shell script — the user can see the full colored ANSI output directly. Your job is to **route user input** to the right skill.
 
-**Present the dashboard output as-is** (it's already formatted). Then immediately use AskUserQuestion:
+**DO NOT re-render, re-print, summarize, transcribe, or describe the dashboard output.** The user sees the rich colored render above; any plain-text re-statement is duplicate noise and destroys the visual quality.
 
-```
-  Type a number (1-9, 0), letter (a-j), or describe what you need
-```
+Skip straight to AskUserQuestion for the next action — no preamble, no recap, no "vitals" summary line. The dashboard speaks for itself.
 
 ## Routing table
 
