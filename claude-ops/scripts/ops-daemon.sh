@@ -20,6 +20,11 @@ fi
 # ── OS detection (sourced) ────────────────────────────────────────────────
 # Resolves to the claude-ops plugin root (parent of scripts/).
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Default CLAUDE_PLUGIN_ROOT so service `command` strings that reference
+# `${CLAUDE_PLUGIN_ROOT}/...` (expanded via `eval echo` in start_service /
+# run_cron_service below) don't trip `set -u` when this daemon runs outside
+# a plugin context (e.g. directly via launchd/systemd on the host).
+export CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$SCRIPT_DIR}"
 # shellcheck disable=SC1091
 [ -r "$SCRIPT_DIR/lib/os-detect.sh" ] && . "$SCRIPT_DIR/lib/os-detect.sh"
 
