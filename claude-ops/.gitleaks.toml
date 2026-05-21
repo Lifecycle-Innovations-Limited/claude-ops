@@ -18,6 +18,16 @@ id = "telegram-session-string"
 description = "Telegram Session String (gram.js)"
 regex = '''[A-Za-z0-9+/=]{100,}'''
 keywords = ["session", "StringSession", "TELEGRAM_SESSION"]
+[rules.allowlist]
+description = "macOS daemon-name pipe-separated regex strings in ops-speedup are not session secrets"
+regexes = [
+  '''bird/cloudd/akd''',
+  '''PROTECTED_RE=''',
+  '''MACOS_DEMOTE_RE=''',
+]
+paths = [
+  '''claude-ops/bin/ops-speedup$''',
+]
 [[rules]]
 id = "slack-xoxc-token"
 description = "Slack XOXC Token"
