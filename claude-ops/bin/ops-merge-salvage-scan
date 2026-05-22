@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+# ops-merge-salvage-scan — Inventory local work NOT yet on dev/main and NOT in an open PR.
+# Surfaces orphan worktrees, feature branches without PRs, uncommitted/staged/stashed work,
+# and unpushed commits across every repo in the project registry.
+#
+# Output: single JSON document consumed by /ops:merge Phase 0 (Salvage).
+# Used by /ops:merge to find and finish all loose local work BEFORE the PR merge pipeline runs.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_DIR="${CLAUDE_PLUGIN_ROOT:-${SCRIPT_DIR}/..}"
+OPS_PLUGIN_ROOT_FALLBACK="$PLUGIN_DIR" . "${PLUGIN_DIR}/lib/registry-path.sh"
+
+FILTER_REPO="${1:-}"
+
+if [ ! -f "$REGISTRY" ]; then
+  echo '{"error":"registry.json not found","repos":[]}' && exit 1
+fi
+
+if ! command -v gh &>/dev/null; then
+  echo '{"error":"gh CLI not found","repos":[]}' && exit 0
+fi
+
+# Walk every project in the registry. Each project entry should have a local
+# `path` field (the checkout root) and a `repos` array (owner/name slugs).
+# We pair them up; if a project has multiple repos we trust the path is the
+# parent that contains each as a subdir.
+PROJECTS_JSON=$(jq -c '.projects // []' "$REGISTRY")
+
+TMPDIR_OPS=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_OPS"' EXIT
+
+scan_repo() {
+  local repo_slug="$1"      # owner/name
+  local repo_path="$2"      # absolute path to working tree
+  local safe_name
+  safe_name=$(echo "$repo_slug" | tr '/' '_')
+
+  if [ ! -d "$repo_path/.git" ] && [ ! -f "$repo_path/.git" ]; then
+    return 0
+  fi
+
+  # --- Working tree state -------------------------------------------------
+  local current_branch dirty staged stashed unpushed ahead behind
+  current_branch=$(git -C "$repo_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "DETACHED")
+  dirty=$(git -C "$repo_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  staged=$(git -C "$repo_path" diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')
+  stashed=$(git -C "$repo_path" stash list 2>/dev/null | wc -l | tr -d ' ')
+
+  # Fetch quietly so ahead/behind are accurate. Skip on failure (offline / no remote).
+  git -C "$repo_path" fetch --quiet origin 2>/dev/null || true
+
+  # Detect default integration branches (dev preferred, fallback main/master).
+  local has_dev has_main integration_branch
+  has_dev=$(git -C "$repo_path" rev-parse --verify --quiet origin/dev >/dev/null 2>&1 && echo "true" || echo "false")
+  has_main=$(git -C "$repo_path" rev-parse --verify --quiet origin/main >/dev/null 2>&1 && echo "true" || echo "false")
+  if [ "$has_dev" = "true" ]; then
+    integration_branch="dev"
+  elif [ "$has_main" = "true" ]; then
+    integration_branch="main"
+  else
+    integration_branch=$(git -C "$repo_path" rev-parse --abbrev-ref --symbolic-full-name 'HEAD@{upstream}' 2>/dev/null | sed 's|^origin/||' || echo "main")
+  fi
+
+  # Unpushed commits on current branch (relative to its upstream, if any).
+  unpushed=$(git -C "$repo_path" log '@{u}..' --oneline 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+
+  # --- Local branches not on integration branch ---------------------------
+  # Branches whose tip is NOT an ancestor of origin/<integration_branch> AND
+  # which differ from main/dev/master themselves.
+  local LOCAL_BRANCHES BRANCHES_JSON
+  LOCAL_BRANCHES=$(git -C "$repo_path" for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null)
+  BRANCHES_JSON="[]"
+  if [ -n "$LOCAL_BRANCHES" ]; then
+    BRANCHES_JSON=$(
+      while IFS= read -r br; do
+        [ -z "$br" ] && continue
+        case "$br" in dev|main|master) continue ;; esac
+
+        local tip integrated has_remote has_pr pr_number ahead_int
+        tip=$(git -C "$repo_path" rev-parse "$br" 2>/dev/null || echo "")
+        [ -z "$tip" ] && continue
+
+        if git -C "$repo_path" merge-base --is-ancestor "$tip" "origin/$integration_branch" 2>/dev/null; then
+          integrated="true"
+        else
+          integrated="false"
+        fi
+
+        # Is the branch pushed to origin?
+        if git -C "$repo_path" rev-parse --verify --quiet "origin/$br" >/dev/null 2>&1; then
+          has_remote="true"
+        else
+          has_remote="false"
+        fi
+
+        # Open PR for this branch? (cheap check via gh — already authed).
+        pr_number=$(gh pr list --repo "$repo_slug" --head "$br" --state open --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+        if [ -n "$pr_number" ]; then
+          has_pr="true"
+        else
+          has_pr="false"
+        fi
+
+        ahead_int=$(git -C "$repo_path" rev-list --count "origin/$integration_branch..$br" 2>/dev/null || echo 0)
+
+        jq -n \
+          --arg name "$br" \
+          --arg tip "$tip" \
+          --argjson integrated "$integrated" \
+          --argjson has_remote "$has_remote" \
+          --argjson has_pr "$has_pr" \
+          --arg pr "$pr_number" \
+          --argjson ahead "$ahead_int" \
+          '{name:$name,tip:$tip,integrated:$integrated,pushed:$has_remote,has_open_pr:$has_pr,pr_number:($pr|tonumber? // null),commits_ahead_of_integration:$ahead}'
+      done <<< "$LOCAL_BRANCHES" | jq -s '.'
+    )
+  fi
+
+  # --- Worktrees ----------------------------------------------------------
+  # `git worktree list --porcelain` blocks of:
+  #   worktree <path>
+  #   HEAD <sha>
+  #   branch refs/heads/<name>  (or "detached")
+  local WORKTREES_JSON
+  WORKTREES_JSON=$(
+    git -C "$repo_path" worktree list --porcelain 2>/dev/null \
+      | awk 'BEGIN{path="";sha="";branch=""}
+             /^worktree /{if(path!=""){print path"|"sha"|"branch}; path=substr($0,10); sha=""; branch=""}
+             /^HEAD /{sha=substr($0,6)}
+             /^branch /{branch=substr($0,8); sub("refs/heads/","",branch)}
+             /^detached/{branch="DETACHED"}
+             END{if(path!=""){print path"|"sha"|"branch}}' \
+      | while IFS='|' read -r wt_path wt_sha wt_branch; do
+          [ -z "$wt_path" ] && continue
+          # Skip the primary working tree (we report it separately as repo state).
+          if [ "$wt_path" = "$repo_path" ]; then continue; fi
+
+          local wt_dirty wt_unpushed wt_has_pr wt_pr
+          wt_dirty=$(git -C "$wt_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+          wt_unpushed=0
+          if [ "$wt_branch" != "DETACHED" ] && [ -n "$wt_branch" ]; then
+            wt_unpushed=$(git -C "$wt_path" log '@{u}..' --oneline 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+            wt_pr=$(gh pr list --repo "$repo_slug" --head "$wt_branch" --state open --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+            [ -n "$wt_pr" ] && wt_has_pr="true" || wt_has_pr="false"
+          else
+            wt_has_pr="false"
+            wt_pr=""
+          fi
+
+          jq -n \
+            --arg path "$wt_path" \
+            --arg sha "$wt_sha" \
+            --arg branch "$wt_branch" \
+            --argjson dirty "$wt_dirty" \
+            --argjson unpushed "$wt_unpushed" \
+            --argjson has_pr "$wt_has_pr" \
+            --arg pr "$wt_pr" \
+            '{path:$path,sha:$sha,branch:$branch,dirty_files:$dirty,unpushed_commits:$unpushed,has_open_pr:$has_pr,pr_number:($pr|tonumber? // null)}'
+        done \
+      | jq -s '.'
+  )
+  [ -z "$WORKTREES_JSON" ] && WORKTREES_JSON="[]"
+
+  # --- Salvage classification ---------------------------------------------
+  # A repo has "salvage work" if ANY of:
+  #   - dirty/staged/stashed > 0 in main checkout
+  #   - any local feature branch without an open PR (branch-no-pr or branch-already-merged)
+  #   - any worktree with dirty or unpushed > 0 or branch without open PR
+  #   - unpushed > 0 on current branch
+  local has_salvage="false"
+  if [ "$dirty" -gt 0 ] || [ "$staged" -gt 0 ] || [ "$stashed" -gt 0 ] || [ "$unpushed" -gt 0 ]; then
+    has_salvage="true"
+  fi
+  if [ "$(echo "$BRANCHES_JSON" | jq '[.[] | select(.has_open_pr == false)] | length')" -gt 0 ]; then
+    has_salvage="true"
+  fi
+  if [ "$(echo "$WORKTREES_JSON" | jq '[.[] | select(.dirty_files > 0 or .unpushed_commits > 0 or .has_open_pr == false)] | length')" -gt 0 ]; then
+    has_salvage="true"
+  fi
+
+  jq -n \
+    --arg repo "$repo_slug" \
+    --arg path "$repo_path" \
+    --arg branch "$current_branch" \
+    --arg integration "$integration_branch" \
+    --argjson dirty "$dirty" \
+    --argjson staged "$staged" \
+    --argjson stashed "$stashed" \
+    --argjson unpushed "$unpushed" \
+    --argjson branches "$BRANCHES_JSON" \
+    --argjson worktrees "$WORKTREES_JSON" \
+    --argjson has_salvage "$has_salvage" \
+    '{
+      repo:$repo,
+      path:$path,
+      current_branch:$branch,
+      integration_branch:$integration,
+      working_tree:{
+        dirty_files:$dirty,
+        staged_files:$staged,
+        stashed:$stashed,
+        unpushed_commits:$unpushed
+      },
+      local_branches:$branches,
+      worktrees:$worktrees,
+      has_salvage:$has_salvage
+    }' > "$TMPDIR_OPS/$safe_name.json"
+}
+
+# Iterate projects → repos in parallel (cap at 8 simultaneous git fetches).
+# Use process substitution so the loop runs in the main shell; a pipeline would
+# subshell the while-loop and orphan background jobs from the final wait.
+SEM=0
+while IFS= read -r project; do
+  PROJECT_PATH=$(echo "$project" | jq -r '.path // empty')
+  REPOS=$(echo "$project" | jq -r '.repos[]? // empty')
+  [ -z "$REPOS" ] && continue
+
+  for repo in $REPOS; do
+    [ -n "$FILTER_REPO" ] && [ "$repo" != "$FILTER_REPO" ] && continue
+
+    # Resolve path: if project has multiple repos assume <project_path>/<repo-name>;
+    # otherwise use project_path itself.
+    REPO_NAME=$(echo "$repo" | awk -F/ '{print $2}')
+    NUM_REPOS=$(echo "$project" | jq '.repos | length')
+    if [ "$NUM_REPOS" -gt 1 ] && [ -d "$PROJECT_PATH/$REPO_NAME" ]; then
+      REPO_PATH="$PROJECT_PATH/$REPO_NAME"
+    else
+      REPO_PATH="$PROJECT_PATH"
+    fi
+
+    [ ! -d "$REPO_PATH" ] && continue
+
+    scan_repo "$repo" "$REPO_PATH" &
+
+    SEM=$((SEM + 1))
+    if [ "$SEM" -ge 8 ]; then
+      wait
+      SEM=0
+    fi
+  done
+done < <(echo "$PROJECTS_JSON" | jq -c '.[]')
+wait
+
+# Assemble final document
+echo -n '{"repos":['
+first=true
+for f in "$TMPDIR_OPS"/*.json; do
+  [ ! -f "$f" ] && continue
+  [ "$first" = true ] && first=false || echo -n ','
+  cat "$f"
+done
+echo '],"scanned_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'

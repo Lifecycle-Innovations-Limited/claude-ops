@@ -1,7 +1,7 @@
 ---
 name: ops-merge
-description: Autonomous PR merge pipeline. Scans all repos for open PRs, dispatches subagents to fix CI, resolve conflicts, address review comments, then merges. Use --main to also sync dev↔main branches.
-argument-hint: "[--main] [--repo org/repo] [--dry-run]"
+description: Autonomous salvage + PR merge pipeline. FIRST scans every repo in every org for orphan worktrees, feature branches without PRs, uncommitted/staged/stashed work, and unpushed commits — dispatches subagents to finish/PR all loose local work. THEN scans all open PRs, dispatches fixers for CI/conflicts/reviews, and merges. Use --main to also sync dev↔main branches. Use --no-salvage to skip Phase 0 (PR-only mode). Use --salvage-only to stop after Phase 0.
+argument-hint: "[--main] [--repo org/repo] [--dry-run] [--no-salvage] [--salvage-only]"
 allowed-tools:
   - Bash
   - Read
@@ -73,6 +73,12 @@ If the flag is NOT set, fall back to standard parallel subagents with `isolation
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-merge-scan 2>/dev/null || echo '{"prs":[],"error":"merge-scan failed"}'
 ```
 
+## Pre-gathered salvage data (orphan worktrees, branches without PRs, uncommitted/unpushed work)
+
+```!
+${CLAUDE_PLUGIN_ROOT}/bin/ops-merge-salvage-scan 2>/dev/null || echo '{"repos":[],"error":"salvage-scan failed"}'
+```
+
 ## Your task
 
 You are the **merge orchestrator**. Your job is to get every open PR across the owner's repos merged — fixing whatever blocks them first.
@@ -85,7 +91,104 @@ From `$ARGUMENTS`:
 - `--repo <slug>` → scope to one repo only (e.g., `--repo Lifecycle-Innovations-Limited/my-api`)
 - `--dry-run` → report what would happen, don't dispatch agents or merge anything
 - `--force` → skip the confirmation prompt before merging
-- (empty) → process all repos, merge to dev only
+- `--no-salvage` → skip Phase 0 (Salvage). Behaves like the legacy PR-only pipeline.
+- `--salvage-only` → run Phase 0 only and stop. Useful for "find and finish all loose local work" without touching the existing PR queue yet.
+- (empty) → process all repos: salvage local work first, then merge PRs to dev only
+
+### Phase 0 — Salvage scan (run BEFORE the PR queue)
+
+**Goal:** every repo in every org gets a clean slate before the PR merge pipeline runs. Find and finish every piece of local work that isn't already on `dev`/`main` and isn't already in an open PR — orphan worktrees, feature branches without PRs, uncommitted/staged/stashed changes, and unpushed commits.
+
+**Skip this phase only if `--no-salvage` is set.**
+
+Parse the JSON returned by `ops-merge-salvage-scan`. For each repo with `has_salvage: true`, classify each finding into one of:
+
+| Finding                                                            | Classification             | Action                                                                                                |
+| ------------------------------------------------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Worktree with `dirty_files > 0` or `unpushed_commits > 0`          | `worktree-incomplete`      | Dispatch salvager: finish work in the worktree, commit, push, open PR if missing                      |
+| Worktree on a branch with `has_open_pr: false`                     | `worktree-orphan-pr`       | Dispatch salvager: confirm work is complete (lint/type/test gate), push if needed, open PR            |
+| Local branch with `integrated: false` and `has_open_pr: false`     | `branch-no-pr`             | Dispatch salvager: review state, push if unpushed, open PR targeting integration branch               |
+| Local branch with `integrated: true` and `has_open_pr: false`      | `branch-already-merged`    | Surface to user → `[Delete local branch]` / `[Keep]` (NEVER auto-delete — Safety Rails)               |
+| Main checkout: `dirty_files > 0` or `staged_files > 0` or stash >0 | `checkout-dirty`           | Surface to user → `[Stash & continue]` / `[Open salvage worktree]` / `[Skip]`. Never auto-discard.    |
+| Main checkout: `unpushed_commits > 0` on a non-integration branch  | `checkout-unpushed`        | Dispatch salvager: push the branch, open PR if missing                                                |
+
+**Print the salvage queue:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ OPS ► MERGE — Phase 0: Salvage Queue
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+| Repo | Location | Branch | State | Classification | Action |
+|------|----------|--------|-------|----------------|--------|
+| my-api | .worktrees/feat-x | feat/x | 3 dirty, 2 unpushed | worktree-incomplete | salvage |
+| my-app | (main checkout) | feat/y | 5 unpushed, no PR | checkout-unpushed | salvage |
+| mise | refs/heads/old-experiment | old-experiment | integrated, no PR | branch-already-merged | confirm delete |
+| ... | ... | ... | ... | ... | ... |
+
+Salvageable: N  |  Needs user input: N  |  Clean: M
+──────────────────────────────────────────────────────
+```
+
+If `--dry-run`, print the queue and stop here (skip Phase 1+).
+If `--salvage-only`, run the salvage dispatch loop below, then stop (skip Phase 1+).
+
+**Confirmation gate:** unless `--force`, use `AskUserQuestion` (max 4 options — Plugin Rule 1) to confirm before dispatching salvagers:
+
+```
+N pieces of loose local work found across M repos.
+
+  [Salvage all N — dispatch agents]  [Let me pick which ones]  [Skip Phase 0 — go to PR queue]  [Abort]
+```
+
+**Dispatch salvager subagents** (max 5 concurrent, one repo per agent — never share the main checkout per CLAUDE.md worktree isolation rule). Use `subagent_type: "general-purpose"` for now (or a future `salvage-fixer` agent if one exists). Each salvager gets this brief:
+
+```
+Task: Finish and PR loose local work in <repo>
+Repo path: <path from salvage scan>
+Findings:
+  - <classification>: <branch / worktree path> — <state summary>
+  - ...
+
+Worktree isolation: if the work lives in an existing .worktrees/* dir, work IN that directory.
+If the work lives only on a local branch (no worktree), create one:
+  git -C <repo path> worktree add .worktrees/salvage-<branch> <branch>
+
+For each finding:
+  1. cd into the worktree.
+  2. Inspect state: `git status`, `git log <integration>..HEAD --oneline`, `git diff --stat`.
+  3. Read recent commit messages + any TODOs/HEREs in the diff. Decide whether the work is:
+       (a) complete and just needs commit/push/PR — proceed
+       (b) incomplete but obvious next step — finish it
+       (c) ambiguous or risky → ABORT this finding and return it for human review.
+  4. If finishing work: make the smallest correct commit. Quality gate locally
+     (per-repo: type-check + lint + relevant tests).
+  5. Commit with a clear message. NEVER use --no-verify unless a hook is genuinely
+     broken and unrelated to your change.
+  6. Push: `git push -u origin <branch>` (or `--force-with-lease` if branch already remote).
+  7. Open PR (only if has_open_pr=false in the brief):
+       gh pr create --repo <repo> --base <integration_branch> --head <branch> \
+         --title "<derived from commit messages>" \
+         --body "Salvaged by /ops:merge Phase 0. <commit summary>"
+  8. Return structured JSON:
+       {
+         "repo": "...",
+         "branch": "...",
+         "status": "pr_opened" | "pushed_only" | "aborted_for_review" | "failed",
+         "pr_number": <int or null>,
+         "pr_url": "<or null>",
+         "end_sha": "<remote head>",
+         "notes": "..."
+       }
+
+DO NOT call `gh pr merge` — newly opened PRs flow through Phase 1+ like any other PR.
+DO NOT delete branches, worktrees, or stashes. Salvage = finish + PR, never destroy.
+DO NOT touch files outside the assigned worktree.
+```
+
+**After all salvagers return:** re-run `ops-merge-scan` so the freshly opened PRs join the Phase 1 queue. Surface any `aborted_for_review` findings to the user with a brief explanation and `[Open in editor]` / `[Skip]` options.
+
+**Branches classified `branch-already-merged` and `checkout-dirty`** are surfaced one-by-one to the user via `AskUserQuestion` (never auto-handled — see Safety Rails).
 
 ### Phase 1 — Classify the PR queue
 
@@ -314,9 +417,22 @@ For each repo that has separate `dev` and `main` branches:
  OPS ► MERGE COMPLETE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+Phase 0 — Salvage
+| Repo | Finding | Result |
+|------|---------|--------|
+| my-api | feat/x worktree | ✓ pushed + PR #2999 opened |
+| my-app | feat/y local-only | ✓ pushed + PR #4470 opened |
+| mise | old-experiment (merged) | ⚠ surfaced for delete confirmation |
+
+Salvaged: N pieces of work → N new PRs opened
+Aborted for review: N
+User-input pending: N (dirty checkouts, already-merged branches)
+
+Phase 1–5 — PR merges
 | Repo | PR | Result |
 |------|----|--------|
 | my-api | #2958 | ✓ merged to dev |
+| my-api | #2999 | ✓ salvaged + merged to dev |
 | my-app | #4456 | ✓ fixed CI + merged |
 | mise | #10 | ✗ 3 critical bugs — skipped |
 
@@ -324,6 +440,7 @@ Merged: N PRs across M repos
 Skipped: N (blocked/draft)
 Failed: N (still need manual attention)
 
+Phase 6 — Main sync
 Main sync: N repos synced (dev → main → dev)
 ──────────────────────────────────────────────────────
 ```
@@ -352,6 +469,18 @@ During this command's execution, invoke the following superpower skills at the s
 - **ALWAYS use `--admin` only for squash merges to dev** (not main, unless `--main` flag)
 - **Max 10 PRs per invocation** to avoid GitHub API throttling
 - **If a PR has > 50 files changed**, flag it for manual review instead of auto-merging
+
+### Phase 0 (Salvage) Safety Rails
+
+- **NEVER auto-delete a local branch, worktree, or stash** — even if classified `branch-already-merged`. Always surface to the user via `AskUserQuestion`.
+- **NEVER `git stash drop` or `git checkout -- <file>` or `git clean`** in any checkout — uncommitted work is the user's, not the agent's, until they confirm.
+- **NEVER auto-commit ambiguous changes.** If a salvager can't tell whether work is complete, it MUST return `aborted_for_review` and let the user decide.
+- **NEVER share the main checkout between salvager subagents.** Per CLAUDE.md worktree isolation: each agent gets its own `.worktrees/salvage-<branch>` dir. Sharing the main checkout causes branch-switch collisions.
+- **NEVER force-push a branch the salvager didn't originate work on** — salvagers may only push with `--force-with-lease` to branches whose tip they fetched at start of work.
+- **NEVER salvage main/master/dev** — those are integration branches; loose work on them surfaces to the user, never auto-pushed.
+- **NEVER touch files outside the assigned worktree.** Salvagers are scoped to one repo + one branch.
+- **ALWAYS run the per-repo quality gate** (type-check + lint + tests) before pushing salvaged work.
+- **ALWAYS open a PR (not direct push to dev/main)** — salvaged work flows through the same review/CI/merge gate as any other PR.
 
 ---
 
