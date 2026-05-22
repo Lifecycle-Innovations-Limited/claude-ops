@@ -1,0 +1,22 @@
+[Unit]
+Description=claude-ops background daemon (briefing pre-warm, memory extraction, message listener, health monitors)
+Documentation=https://github.com/Lifecycle-Innovations-Limited/claude-ops/blob/main/claude-ops/docs/daemon-guide.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# CLAUDE_PLUGIN_ROOT is read by ops-daemon.sh and the services it spawns.
+# Override at install time if your marketplace dir lives elsewhere.
+Environment=CLAUDE_PLUGIN_ROOT=%h/.claude/plugins/marketplaces/ops-marketplace/claude-ops
+ExecStart=/bin/bash %h/.claude/plugins/marketplaces/ops-marketplace/claude-ops/scripts/ops-daemon.sh
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

@@ -25,7 +25,19 @@ fi
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 TAILSCALE_USER="${TAILSCALE_USER:-$TARGET_USER}"
 
-echo "Installing pocket systemd units for user=$TARGET_USER home=$TARGET_HOME"
+# Canonical plugin root — avoids dependency on the ~/claude-ops symlink, which
+# can drop during plugin reinstalls/upgrades and silently break every pocket
+# timer (each tick raises "No such file or directory" → no health write →
+# ops-doctor flags pocket_health_stale_*). Hard-anchor to the marketplace path.
+PLUGIN_ROOT_DEFAULT="$TARGET_HOME/.claude/plugins/marketplaces/ops-marketplace/claude-ops"
+PLUGIN_ROOT="${PLUGIN_ROOT:-$PLUGIN_ROOT_DEFAULT}"
+if [[ ! -d "$PLUGIN_ROOT/scripts" ]]; then
+  echo "ERROR: PLUGIN_ROOT=$PLUGIN_ROOT/scripts does not exist." >&2
+  echo "       Pass PLUGIN_ROOT=<path-to-claude-ops> as env if the plugin is installed elsewhere." >&2
+  exit 1
+fi
+
+echo "Installing pocket systemd units for user=$TARGET_USER home=$TARGET_HOME plugin_root=$PLUGIN_ROOT"
 
 # ── Copy + substitute units ──────────────────────────────────────────────────
 UNITS=(
@@ -59,6 +71,7 @@ for unit in "${UNITS[@]}"; do
     -e "s|__USER__|$TARGET_USER|g" \
     -e "s|__HOME__|$TARGET_HOME|g" \
     -e "s|__TAILSCALE_USER__|$TAILSCALE_USER|g" \
+    -e "s|__PLUGIN_ROOT__|$PLUGIN_ROOT|g" \
     "$src" > "$dest"
   chmod 644 "$dest"
   echo "  installed $dest"
