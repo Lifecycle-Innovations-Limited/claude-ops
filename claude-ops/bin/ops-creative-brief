@@ -456,7 +456,9 @@ branch="creative/${BRAND// /-}-${TS}"
   cd "$dashboard_dir"
   git checkout -b "$branch" >/dev/null 2>&1
   git add "marketing-creative/${TS}/"
-  git -c user.email="ops@lifecycleinnovations.limited" -c user.name="ops-creative-brief" \
+  commit_email="${GIT_AUTHOR_EMAIL:-${OPS_GIT_EMAIL:-$(git config user.email 2>/dev/null || echo "ops@example.com")}}"
+  commit_name="${GIT_AUTHOR_NAME:-${OPS_GIT_NAME:-ops-creative-brief}}"
+  git -c user.email="$commit_email" -c user.name="$commit_name" \
     commit -m "creative: ${BRAND} — ${GOAL} — ${TS}" --no-verify >/dev/null
   git push -u origin "$branch" >/dev/null 2>&1
   gh pr create --title "creative: ${BRAND} — ${GOAL} — ${TS}" \
