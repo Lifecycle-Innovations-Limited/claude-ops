@@ -15,7 +15,7 @@ Environment=POCKET_EXEC_CWD=__HOME__
 Environment=POCKET_MAX_CONCURRENT=3
 Environment=POCKET_WORKER_MODEL=claude-sonnet-4-6
 Environment=POCKET_WORKER_TIMEOUT=1800
-ExecStart=__HOME__/.venv-pocket/bin/python3 __HOME__/claude-ops/claude-ops/scripts/ops-cron-pocket-executor.py
+ExecStart=__HOME__/.venv-pocket/bin/python3 __PLUGIN_ROOT__/scripts/ops-cron-pocket-executor.py
 StandardOutput=append:__HOME__/.claude/state/pocket/executor-stdout.log
 StandardError=append:__HOME__/.claude/state/pocket/executor-stderr.log
 # v3 requires this: workers are claude -p subprocesses that must outlive
