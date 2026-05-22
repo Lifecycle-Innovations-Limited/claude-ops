@@ -30,6 +30,6 @@ Environment=POCKET_LOOKBACK_HOURS=24
 Environment=GIGA_SYNC=1
 Environment=GIGA_MIND=global
 Environment=GIGA_CONSOLIDATE=1
-ExecStart=/bin/bash -c 'DOPPLER_TOKEN=$(cat $CREDENTIALS_DIRECTORY/doppler-token) /usr/local/bin/doppler run --silent -- __HOME__/.venv-pocket/bin/python3 __HOME__/claude-ops/claude-ops/scripts/ops-cron-pocket-watcher.py'
+ExecStart=/bin/bash -c 'DOPPLER_TOKEN=$(cat $CREDENTIALS_DIRECTORY/doppler-token) /usr/local/bin/doppler run --silent -- __HOME__/.venv-pocket/bin/python3 __PLUGIN_ROOT__/scripts/ops-cron-pocket-watcher.py'
 StandardOutput=append:__HOME__/.claude/state/pocket/watcher-stdout.log
 StandardError=append:__HOME__/.claude/state/pocket/watcher-stderr.log
