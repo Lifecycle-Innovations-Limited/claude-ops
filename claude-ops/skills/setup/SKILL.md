@@ -414,14 +414,24 @@ esac
 ```
 
 - **macOS** (`OS=macos`): proceed with the full `launchctl bootstrap` flow below.
-- **Linux / WSL** (`OS=linux|wsl`): `launchctl` is not available. The daemon script (`${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh`) runs fine under `bash`, but installing it as a user service requires `systemd --user` (Linux) or a custom cron/at wrapper (WSL). That work is **out of scope for this patch** — track as future work. For now, print:
+- **Linux** (`OS=linux`): use the bundled `systemd --user` installer. Run (RULE ZERO — `run_in_background: true`):
+
+  ```bash
+  bash ${CLAUDE_PLUGIN_ROOT}/scripts/install-ops-daemon-linux.sh
+  ```
+
+  > Generates `~/.config/systemd/user/claude-ops-daemon.service` from `scripts/systemd/claude-ops-daemon.service`, enables linger (so the daemon survives logout), chowns `~/.claude/plugins/cache/` back to the user if it was left root-owned by a prior `sudo` run, then `daemon-reload + enable --now`. Idempotent. See `scripts/install-ops-daemon-linux.sh --help` for `--dry-run` and `--uninstall`.
+
+  Write `daemon.enabled = true`, `daemon.installed_at_step = "2c"`, `daemon.platform = "linux-systemd"` to `$PREFS_PATH` and continue immediately to Step 3 — health verification is deferred to Step 5b.
+
+- **WSL** (`OS=wsl`): `systemd --user` works on WSL2 with `systemd=true` in `/etc/wsl.conf`. If `systemctl --user status` succeeds, run the Linux installer above. Otherwise fall back to:
 
   ```
-  ○ Background daemon — skipped (Linux/WSL install via systemd --user is pending; see docs/daemon-guide.md).
-    You can still launch it manually with:  nohup ${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh &
+  ○ Background daemon — skipped (WSL without systemd). Launch manually with:
+    nohup ${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon.sh > /tmp/ops-daemon.log 2>&1 &
   ```
 
-  Write `daemon.enabled = false` and `daemon.skip_reason = "platform:<os>"` to `$PREFS_PATH` and continue to Step 3.
+  Write `daemon.enabled = false` and `daemon.skip_reason = "platform:wsl-no-systemd"` to `$PREFS_PATH` and continue.
 - **Windows** (native, `OS=windows`): the daemon is **not installed**. Print `○ Background daemon — not supported on native Windows. Use WSL or run ops-daemon.sh manually.` and continue.
 
 If `OS=macos`, check whether the daemon is already installed:
