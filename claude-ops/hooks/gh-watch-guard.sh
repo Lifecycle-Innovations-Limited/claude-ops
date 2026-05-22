@@ -27,6 +27,8 @@ if [ -z "$raw" ]; then
   raw=$(cat) || true
 fi
 CMD=$(printf '%s' "$raw" | jq -r '(.tool_input.command // .command // empty)' 2>/dev/null || true)
+# Collapse newlines so --watch / tight-loop patterns cannot be evaded by splitting lines.
+CMD_ONELINE=$(printf '%s' "$CMD" | tr '\n\r' '  ')
 
 # Fast path: not a gh command, exit immediately
 case "$CMD" in
@@ -37,7 +39,7 @@ esac
 # --- Pattern 1: --watch flag on gh pr checks / gh run watch ---
 # `gh pr checks <PR> --watch` and `gh run watch` poll every 2-5s.
 # 5000 REST/hr ÷ 2s = exhausted in ~3 hours of one process. Sam saw this in production.
-if echo "$CMD" | grep -qE 'gh[[:space:]]+pr[[:space:]]+checks[[:space:]]+[^|]*--watch|gh[[:space:]]+run[[:space:]]+watch'; then
+if echo "$CMD_ONELINE" | grep -qE 'gh[[:space:]]+pr[[:space:]]+checks[[:space:]]+[^|]*--watch|gh[[:space:]]+run[[:space:]]+watch'; then
     emit_pre_tool_deny <<'EOF'
 BLOCKED: `gh ... --watch` polls every 2-5s and exhausts the 5000/hr REST quota.
 
@@ -60,8 +62,8 @@ fi
 
 # --- Pattern 2: tight gh loops (single-digit sleep = under 10s) ---
 # Catches: `while true; do gh ...; sleep 5; done` style polls (not sleep 10+).
-if echo "$CMD" | grep -qE '(while|until|for).*gh[[:space:]]+(api|pr|run|issue)' && \
-   echo "$CMD" | grep -qE 'sleep[[:space:]]+[0-9]([[:space:];]|$)'; then
+if echo "$CMD_ONELINE" | grep -qE '(^|[^[:alnum:]_])(while|until|for)([^[:alnum:]_]|$).*gh[[:space:]]+(api|pr|run|issue)' && \
+   echo "$CMD_ONELINE" | grep -qE 'sleep[[:space:]]+[0-9]([[:space:];]|$)'; then
     emit_pre_tool_deny <<'EOF'
 BLOCKED: tight gh polling loop (sleep < 10s) detected.
 
