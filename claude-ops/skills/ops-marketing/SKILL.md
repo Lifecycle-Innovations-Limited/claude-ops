@@ -384,6 +384,68 @@ Route `$ARGUMENTS` to the correct section below:
 | `portfolio --live` | Live KPI rollup across all projects with non-zero spend or revenue |
 | `portfolio --kpis` | Just the KPI section, no config-state table |
 | `portfolio --prewarm-status` | Show what marketing creds exist in Doppler that aren't yet linked |
+| `<project> creative --brand=X --product=Y --audience=Z --goal=W [--num-shots=N --env=prd\|dev]` | Higgsfield brand asset generator. Drafts shot list, generates N images via Higgsfield API, uploads to S3, opens campaign-brief PR on healify-operating-dashboard. See ## creative (Higgsfield) section. |
+
+---
+
+## creative (Higgsfield)
+
+`/ops:ops-marketing <project> creative ...` drafts a shot list, calls the Higgsfield API, downloads the assets, uploads them to S3, assembles a campaign-brief markdown, and opens a PR on `Lifecycle-Innovations-Limited/healify-operating-dashboard`.
+
+**CLI entry:** `bin/ops-creative-brief` (executable, source: `claude-ops/bin/ops-creative-brief`).
+
+**Required flags:** `--brand=<name>` `--product=<name>` `--audience=<desc>` `--goal=<desc>`
+
+**Optional flags:** `--project=<key>` (default `healify`) · `--env=prd|dev` (default `prd`) · `--num-shots=N` (default 5, range 1..10) · `--model=<higgsfield model_id>` (default `higgsfield-ai/soul/standard`) · `--dry-run` · `--no-pr`
+
+### Higgsfield API surface (verified 2026-05-22)
+
+- **Base:** `https://platform.higgsfield.ai`
+- **Auth header:** `Authorization: Key <HIGGSFIELD_API_KEY_ID>:<HIGGSFIELD_API_KEY_SECRET>`
+- **Submit:** `POST /{model_id}` body `{"prompt":"...", "aspect_ratio":"16:9", "resolution":"720p"}` → `{status:"queued", request_id, status_url, cancel_url}`
+- **Poll:** `GET /requests/{request_id}/status` → `status` ∈ `queued|in_progress|nsfw|failed|completed`. On `completed`, response carries `images[].url` and/or `video.url`.
+- **Cancel:** `POST /requests/{request_id}/cancel` (only while `queued`).
+- Auth verified by submitting a status query for a UUID under a valid key → `404 Not found`; same query under bad key → `500`.
+
+### Credentials
+
+```
+doppler secrets get HIGGSFIELD_API_KEY_ID     --project healify-marketing --config prd --plain
+doppler secrets get HIGGSFIELD_API_KEY_SECRET --project healify-marketing --config prd --plain
+```
+
+Configs: `prd` and `dev`. Keychain mirrors: `security find-generic-password -a healify -s higgsfield-api-key-id -w` / `-s higgsfield-api-key-secret -w`. The script resolves automatically — never paste secrets into args.
+
+### Cost guardrails (NEVER LEAK MONEY)
+
+- **Plan:** Higgsfield Creator = $39/mo ≈ 1200 credits. Each generation = 5..15 credits.
+- **Rate floor:** hard ceiling of 5 generations/hour/project, enforced via `mkdir`-based lock on `${OPS_HIGGSFIELD_RATE_DIR:-/tmp}/.higgsfield-rate-<project>-<YYYYMMDDTHH>`. Slots are reserved atomically *before* any HTTP call. Override only with `OPS_HIGGSFIELD_RATE_LIMIT=N` and a documented reason.
+- **FinOps usage log:** `~/.creative-briefs/.usage-<YYYY-MM-DD>.log` — one tab-separated line per kicked-off request (timestamp, project, model, request_id). Read by FinOps reconciliation.
+- **Concurrency test:** `tests/ops-creative-brief.test.sh` spawns 6 concurrent dry-run invocations and asserts `ok_count ≤ 5` and `ratelimited_count ≥ 1`.
+
+### S3 destination
+
+Bucket: `s3://healify-marketing-creative/<TS>/shot-N.<ext>`. The script **refuses to create the bucket** — if `head-bucket` 404s, it prints the exact `aws s3 mb` + public-access-block commands and exits.
+
+### Outbound comms (Rule 6)
+
+This subcommand never sends an outbound message. The campaign brief lands as a **PR** on `healify-operating-dashboard` for human review. Sam approves and merges manually.
+
+### Quick examples
+
+```bash
+# Dry-run (no API spend, no S3, no PR — only validates flags + shot list scaffold)
+ops-creative-brief --brand=Healify --product="DBT app" --audience="anxious millennials" \
+  --goal="drive TestFlight signups" --num-shots=3 --dry-run --no-pr
+
+# Real run against prd credentials
+ops-creative-brief --brand=Healify --product="DBT app" \
+  --audience="adults 25-44 navigating burnout" \
+  --goal="hero imagery for Q3 paid social launch" --num-shots=5
+
+# Switch to dev Doppler config (separate billing context)
+ops-creative-brief --env=dev --brand=Healify --product="..." --audience="..." --goal="..."
+```
 
 ---
 
