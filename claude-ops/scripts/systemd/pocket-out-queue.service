@@ -10,6 +10,6 @@ Environment=HOME=__HOME__
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
 Environment=WHATSAPP_BRIDGE_URL=http://localhost:8080/api/send
-ExecStart=__HOME__/.venv-pocket/bin/python3 __HOME__/claude-ops/claude-ops/scripts/ops-pocket-out-queue.py
+ExecStart=__HOME__/.venv-pocket/bin/python3 __PLUGIN_ROOT__/scripts/ops-pocket-out-queue.py
 StandardOutput=append:__HOME__/.claude/state/pocket/out-queue.log
 StandardError=append:__HOME__/.claude/state/pocket/out-queue-stderr.log
