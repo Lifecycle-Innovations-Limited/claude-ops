@@ -239,14 +239,31 @@ def main() -> int:
         except ImportError:
             log("playwright not installed")
             return 3
-        log("BOOTSTRAP MODE — sign into each OAuth provider you use, then close the window")
+        # Default bootstrap targets — the providers that watchdog reports as
+        # needs_bootstrap. Override via CLI: --bootstrap <url1> <url2> ...
+        extra_urls = sys.argv[2:]
+        bootstrap_urls = extra_urls or [
+            "https://vercel.com/login",
+            "https://app.eu.amplitude.com/login",
+        ]
+        log("BOOTSTRAP MODE — sign into each tab, then close the window when done")
+        log(f"opening {len(bootstrap_urls)} provider login page(s): {bootstrap_urls}")
         BROWSER_PROFILE.mkdir(parents=True, exist_ok=True)
         with sync_playwright() as p:
             ctx = p.chromium.launch_persistent_context(str(BROWSER_PROFILE), headless=False)
-            page = ctx.new_page()
-            page.goto("about:blank")
-            # Block until user closes the window
-            page.wait_for_event("close", timeout=600_000)
+            pages = []
+            for u in bootstrap_urls:
+                pg = ctx.new_page()
+                try:
+                    pg.goto(u, wait_until="domcontentloaded", timeout=20000)
+                except Exception as e:
+                    log(f"failed to load {u}: {e}")
+                pages.append(pg)
+            # Block until user closes the LAST page (or 10 min hard cap)
+            try:
+                pages[-1].wait_for_event("close", timeout=600_000)
+            except Exception:
+                pass
         return 0
 
     url = sys.argv[1]
