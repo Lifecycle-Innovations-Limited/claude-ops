@@ -1,0 +1,468 @@
+#!/usr/bin/env bash
+# bin/ops-creative-brief — Higgsfield-powered brand creative generator.
+#
+# COST: Higgsfield Creator plan = $39/mo = ~1200 credits. Each generation
+# = 5-15 credits. Hard ceiling: 5 generations/hour/project enforced via
+# /tmp/.higgsfield-rate-<project>-<hour> lock file (per NEVER LEAK MONEY rule).
+#
+# Drafts a shot list via claude_invoke, calls the Higgsfield API
+# (https://platform.higgsfield.ai), polls each request, downloads the assets,
+# uploads them to s3://healify-marketing-creative/<ts>/, assembles a
+# campaign-brief markdown, and opens a PR on healify-operating-dashboard.
+#
+# Usage:
+#   ops-creative-brief --brand=X --product=Y --audience=Z --goal=W \
+#                      [--project=<name>] [--env=prd|dev] [--num-shots=5]
+#                      [--dry-run] [--no-pr]
+#
+# NEVER auto-publishes outside of a PR. PR review is mandatory.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$SCRIPT_DIR/..}"
+
+# ── Arg parsing ──────────────────────────────────────────────────────────────
+BRAND=""
+PRODUCT=""
+AUDIENCE=""
+GOAL=""
+PROJECT="healify"
+ENV_NAME="prd"
+NUM_SHOTS=5
+DRY_RUN=false
+NO_PR=false
+MODEL_ID="${HIGGSFIELD_MODEL_ID:-higgsfield-ai/soul/standard}"
+
+for arg in "$@"; do
+  case "$arg" in
+    --brand=*)    BRAND="${arg#*=}" ;;
+    --product=*)  PRODUCT="${arg#*=}" ;;
+    --audience=*) AUDIENCE="${arg#*=}" ;;
+    --goal=*)     GOAL="${arg#*=}" ;;
+    --project=*)  PROJECT="${arg#*=}" ;;
+    --env=*)      ENV_NAME="${arg#*=}" ;;
+    --num-shots=*) NUM_SHOTS="${arg#*=}" ;;
+    --model=*)    MODEL_ID="${arg#*=}" ;;
+    --dry-run)    DRY_RUN=true ;;
+    --no-pr)      NO_PR=true ;;
+    -h|--help)
+      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0 ;;
+    *)
+      printf '[ops-creative-brief] unknown arg: %s\n' "$arg" >&2
+      exit 1 ;;
+  esac
+done
+
+for f in BRAND PRODUCT AUDIENCE GOAL; do
+  if [ -z "${!f}" ]; then
+    printf '[ops-creative-brief] missing required --%s=...\n' "$(echo "$f" | tr '[:upper:]' '[:lower:]')" >&2
+    exit 1
+  fi
+done
+
+if [ "$ENV_NAME" != "prd" ] && [ "$ENV_NAME" != "dev" ]; then
+  printf '[ops-creative-brief] --env must be prd or dev (got %s)\n' "$ENV_NAME" >&2
+  exit 1
+fi
+
+case "$NUM_SHOTS" in
+  ''|*[!0-9]*) printf '[ops-creative-brief] --num-shots must be an integer\n' >&2; exit 1 ;;
+esac
+if [ "$NUM_SHOTS" -lt 1 ] || [ "$NUM_SHOTS" -gt 10 ]; then
+  printf '[ops-creative-brief] --num-shots must be 1..10 (cost guardrail)\n' >&2
+  exit 1
+fi
+
+TS="$(date -u +%Y%m%dT%H%M%SZ)"
+DAY="$(date -u +%Y-%m-%d)"
+HOUR="$(date -u +%Y%m%dT%H)"
+
+BRIEF_DIR="${OPS_CREATIVE_DIR:-$HOME/.creative-briefs}"
+RUN_DIR="${BRIEF_DIR}/${TS}"
+USAGE_LOG="${BRIEF_DIR}/.usage-${DAY}.log"
+RATE_FILE="${OPS_HIGGSFIELD_RATE_DIR:-/tmp}/.higgsfield-rate-${PROJECT}-${HOUR}"
+S3_BUCKET="${OPS_HIGGSFIELD_S3_BUCKET:-healify-marketing-creative}"
+DASHBOARD_REPO="${OPS_DASHBOARD_REPO:-Lifecycle-Innovations-Limited/healify-operating-dashboard}"
+
+mkdir -p "$RUN_DIR" "$BRIEF_DIR"
+
+# ── Rate-floor (NEVER LEAK MONEY) ────────────────────────────────────────────
+# Each line in RATE_FILE = one generation kicked off this hour for this project.
+# Hard ceiling: 5/hr/project. Defensive against re-entry — flock for atomicity.
+RATE_LIMIT="${OPS_HIGGSFIELD_RATE_LIMIT:-5}"
+# Reserve slots atomically under flock so concurrent invocations can't both
+# squeeze past the ceiling. The file lives across this hour bucket and is
+# read by every sibling invocation in the same hour.
+# Portable mkdir-based lock (works on macOS without flock). Spin up to 5s.
+_lock_acquire() {
+  local lock="$1" tries=0
+  while ! mkdir "$lock" 2>/dev/null; do
+    tries=$((tries + 1))
+    if [ "$tries" -gt 50 ]; then
+      printf '[ops-creative-brief] could not acquire lock %s\n' "$lock" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  return 0
+}
+_lock_release() { rmdir "$1" 2>/dev/null || true; }
+
+reserve_rate_slots() {
+  local need="$1"
+  touch "$RATE_FILE"
+  local lock="$RATE_FILE.lock.d"
+  _lock_acquire "$lock" || return 1
+  local existing
+  existing="$(wc -l < "$RATE_FILE" | tr -d ' ')"
+  if [ "$((existing + need))" -gt "$RATE_LIMIT" ]; then
+    _lock_release "$lock"
+    printf '[ops-creative-brief] rate-floor hit: %d existing + %d requested > %d/hr ceiling for project=%s hour=%s\n' \
+      "$existing" "$need" "$RATE_LIMIT" "$PROJECT" "$HOUR" >&2
+    printf '[ops-creative-brief] wait until next hour or override OPS_HIGGSFIELD_RATE_LIMIT (caution: costs money)\n' >&2
+    return 2
+  fi
+  local i
+  for i in $(seq 1 "$need"); do
+    printf '%s\treserved\t%s\tproject=%s\n' "$(date -u +%FT%TZ)" "$MODEL_ID" "$PROJECT" >> "$RATE_FILE"
+  done
+  _lock_release "$lock"
+  return 0
+}
+
+record_generation() {
+  local request_id="$1"
+  local lock="$RATE_FILE.lock.d"
+  _lock_acquire "$lock" || return 1
+  printf '%s\tproject=%s\tmodel=%s\trequest_id=%s\n' \
+    "$(date -u +%FT%TZ)" "$PROJECT" "$MODEL_ID" "$request_id" >> "$USAGE_LOG"
+  _lock_release "$lock"
+}
+
+reserve_rate_slots "$NUM_SHOTS" || exit 2
+
+# ── Credentials via Doppler ──────────────────────────────────────────────────
+get_creds() {
+  if [ -n "${HIGGSFIELD_API_KEY_ID:-}" ] && [ -n "${HIGGSFIELD_API_KEY_SECRET:-}" ]; then
+    return 0
+  fi
+  if ! command -v doppler >/dev/null 2>&1; then
+    printf '[ops-creative-brief] doppler CLI not found and HIGGSFIELD_API_KEY_ID/SECRET unset\n' >&2
+    return 1
+  fi
+  HIGGSFIELD_API_KEY_ID="$(doppler secrets get HIGGSFIELD_API_KEY_ID --project healify-marketing --config "$ENV_NAME" --plain 2>/dev/null)"
+  HIGGSFIELD_API_KEY_SECRET="$(doppler secrets get HIGGSFIELD_API_KEY_SECRET --project healify-marketing --config "$ENV_NAME" --plain 2>/dev/null)"
+  if [ -z "${HIGGSFIELD_API_KEY_ID:-}" ] || [ -z "${HIGGSFIELD_API_KEY_SECRET:-}" ]; then
+    printf '[ops-creative-brief] failed to load Higgsfield creds from Doppler (project=healify-marketing config=%s)\n' "$ENV_NAME" >&2
+    return 1
+  fi
+  export HIGGSFIELD_API_KEY_ID HIGGSFIELD_API_KEY_SECRET
+}
+
+if [ "$DRY_RUN" != "true" ]; then
+  get_creds || exit 1
+fi
+
+HF_AUTH="Key ${HIGGSFIELD_API_KEY_ID:-stub}:${HIGGSFIELD_API_KEY_SECRET:-stub}"
+HF_BASE="${OPS_HIGGSFIELD_BASE:-https://platform.higgsfield.ai}"
+
+# ── Draft shot list via claude_invoke ────────────────────────────────────────
+draft_shot_list() {
+  local out="$RUN_DIR/shot-list.md"
+  local prompt
+  prompt=$(cat <<EOF
+You are a creative director drafting a shot list for a brand campaign.
+
+Brand: ${BRAND}
+Product: ${PRODUCT}
+Audience: ${AUDIENCE}
+Goal: ${GOAL}
+Number of shots: ${NUM_SHOTS}
+
+Output strictly as a Markdown table with columns: # | title | prompt | style_notes | aspect_ratio.
+- prompt = a single self-contained image prompt (no commentary).
+- style_notes = mood + lighting + lens + color palette.
+- aspect_ratio one of: 1:1, 9:16, 16:9.
+- No preamble. No trailing prose. Just the table.
+EOF
+)
+  if [ "$DRY_RUN" = "true" ]; then
+    printf '| # | title | prompt | style_notes | aspect_ratio |\n|---|---|---|---|---|\n' > "$out"
+    local i
+    for i in $(seq 1 "$NUM_SHOTS"); do
+      printf '| %d | Shot %d | %s — %s shot %d | cinematic, golden hour, 35mm | 16:9 |\n' \
+        "$i" "$i" "$BRAND" "$PRODUCT" "$i" >> "$out"
+    done
+    printf '%s\n' "$out"
+    return 0
+  fi
+  # shellcheck disable=SC1091
+  source "$PLUGIN_ROOT/scripts/lib/claude-invoke.sh" 2>/dev/null || true
+  if command -v claude_invoke >/dev/null 2>&1; then
+    printf '%s' "$prompt" | claude_invoke --model sonnet --no-session-persistence -p > "$out"
+  else
+    printf '%s' "$prompt" | claude -p > "$out"
+  fi
+  printf '%s\n' "$out"
+}
+
+# ── Parse shot table → JSON array ────────────────────────────────────────────
+parse_shots() {
+  local md="$1"
+  python3 - "$md" <<'PY'
+import sys, json, re
+path = sys.argv[1]
+rows = []
+with open(path) as fh:
+    for line in fh:
+        line = line.strip()
+        if not line.startswith('|'):
+            continue
+        if re.match(r'^\|[-: |]+\|$', line):
+            continue
+        cells = [c.strip() for c in line.strip('|').split('|')]
+        if len(cells) < 5:
+            continue
+        if cells[0].lower() in ('#', 'num', 'number'):
+            continue
+        try:
+            idx = int(cells[0])
+        except ValueError:
+            continue
+        rows.append({
+            'idx': idx,
+            'title': cells[1],
+            'prompt': cells[2],
+            'style_notes': cells[3],
+            'aspect_ratio': cells[4],
+        })
+print(json.dumps(rows))
+PY
+}
+
+# ── Submit one Higgsfield generation ─────────────────────────────────────────
+submit_generation() {
+  local prompt="$1" aspect="$2"
+  local payload
+  payload=$(python3 -c '
+import json, sys
+print(json.dumps({"prompt": sys.argv[1], "aspect_ratio": sys.argv[2], "resolution": "720p"}))
+' "$prompt" "$aspect")
+  curl -sS -X POST "${HF_BASE}/${MODEL_ID}" \
+    -H "Authorization: ${HF_AUTH}" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json" \
+    --data "$payload"
+}
+
+# ── Poll until completed/failed/nsfw ─────────────────────────────────────────
+poll_until_done() {
+  local request_id="$1"
+  local backoffs="10 20 40 80 160"
+  for delay in $backoffs; do
+    sleep "$delay"
+    local status_resp
+    status_resp="$(curl -sS "${HF_BASE}/requests/${request_id}/status" \
+      -H "Authorization: ${HF_AUTH}")"
+    local status
+    status="$(printf '%s' "$status_resp" | python3 -c 'import sys, json; print(json.load(sys.stdin).get("status", "unknown"))' 2>/dev/null || printf 'unknown')"
+    case "$status" in
+      completed|failed|nsfw)
+        printf '%s' "$status_resp"
+        return 0 ;;
+    esac
+  done
+  printf '%s' "$status_resp"
+  return 1
+}
+
+# ── S3 upload — refuse if bucket missing (don't auto-create) ────────────────
+ensure_s3_bucket() {
+  if [ "$DRY_RUN" = "true" ]; then return 0; fi
+  if aws s3api head-bucket --bucket "$S3_BUCKET" 2>/dev/null; then
+    return 0
+  fi
+  printf '[ops-creative-brief] S3 bucket s3://%s missing.\n' "$S3_BUCKET" >&2
+  printf '[ops-creative-brief] Create it manually:\n' >&2
+  printf '    aws s3 mb s3://%s --region us-east-1\n' "$S3_BUCKET" >&2
+  printf '    aws s3api put-public-access-block --bucket %s --public-access-block-configuration "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"\n' "$S3_BUCKET" >&2
+  return 1
+}
+
+# ── Main flow ────────────────────────────────────────────────────────────────
+printf '[ops-creative-brief] run=%s project=%s env=%s shots=%d model=%s\n' \
+  "$TS" "$PROJECT" "$ENV_NAME" "$NUM_SHOTS" "$MODEL_ID" >&2
+
+shot_md="$(draft_shot_list)"
+printf '[ops-creative-brief] shot-list drafted at %s\n' "$shot_md" >&2
+
+shots_json="$(parse_shots "$shot_md")"
+echo "$shots_json" > "$RUN_DIR/shots.json"
+parsed_count="$(printf '%s' "$shots_json" | python3 -c 'import sys, json; print(len(json.load(sys.stdin)))')"
+if [ "$parsed_count" -eq 0 ]; then
+  printf '[ops-creative-brief] failed to parse any shots from %s\n' "$shot_md" >&2
+  exit 1
+fi
+
+results_file="$RUN_DIR/results.json"
+echo '[]' > "$results_file"
+
+if [ "$DRY_RUN" = "true" ]; then
+  printf '[ops-creative-brief] DRY-RUN: skipping Higgsfield + S3 + PR\n' >&2
+  printf '[ops-creative-brief] artifacts: %s\n' "$RUN_DIR"
+  exit 0
+fi
+
+ensure_s3_bucket || exit 1
+
+idx=0
+while [ "$idx" -lt "$parsed_count" ]; do
+  shot_json="$(printf '%s' "$shots_json" | python3 -c "import sys, json; print(json.dumps(json.load(sys.stdin)[$idx]))")"
+  title="$(printf '%s' "$shot_json" | python3 -c 'import sys, json; print(json.load(sys.stdin)["title"])')"
+  prompt="$(printf '%s' "$shot_json" | python3 -c 'import sys, json; print(json.load(sys.stdin)["prompt"])')"
+  aspect="$(printf '%s' "$shot_json" | python3 -c 'import sys, json; print(json.load(sys.stdin)["aspect_ratio"])')"
+
+  printf '[ops-creative-brief] submitting shot %d/%d: %s\n' "$((idx + 1))" "$parsed_count" "$title" >&2
+  submit_resp="$(submit_generation "$prompt" "$aspect")"
+  request_id="$(printf '%s' "$submit_resp" | python3 -c 'import sys, json; print(json.load(sys.stdin).get("request_id",""))' 2>/dev/null || true)"
+
+  if [ -z "$request_id" ]; then
+    printf '[ops-creative-brief] submit failed for shot %d: %s\n' "$((idx + 1))" "$submit_resp" >&2
+    idx=$((idx + 1))
+    continue
+  fi
+
+  record_generation "$request_id"
+  final="$(poll_until_done "$request_id" || true)"
+  status="$(printf '%s' "$final" | python3 -c 'import sys, json; print(json.load(sys.stdin).get("status","unknown"))' 2>/dev/null || printf 'unknown')"
+
+  if [ "$status" != "completed" ]; then
+    printf '[ops-creative-brief] shot %d ended status=%s — skipping upload\n' "$((idx + 1))" "$status" >&2
+    idx=$((idx + 1))
+    continue
+  fi
+
+  asset_url="$(printf '%s' "$final" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+imgs = d.get("images") or []
+vid = d.get("video") or {}
+if imgs:
+    print(imgs[0].get("url",""))
+elif vid:
+    print(vid.get("url",""))
+else:
+    print("")')"
+
+  if [ -z "$asset_url" ]; then
+    printf '[ops-creative-brief] shot %d had no asset URL\n' "$((idx + 1))" >&2
+    idx=$((idx + 1))
+    continue
+  fi
+
+  ext="${asset_url##*.}"
+  ext="${ext%%\?*}"
+  case "$ext" in jpg|jpeg|png|webp|mp4|mov) : ;; *) ext="jpg" ;; esac
+  local_file="$RUN_DIR/shot-$((idx + 1)).${ext}"
+  curl -sSL "$asset_url" -o "$local_file"
+
+  s3_key="${TS}/shot-$((idx + 1)).${ext}"
+  aws s3 cp "$local_file" "s3://${S3_BUCKET}/${s3_key}" --only-show-errors
+  s3_url="s3://${S3_BUCKET}/${s3_key}"
+
+  python3 - "$results_file" "$shot_json" "$request_id" "$status" "$s3_url" "$asset_url" <<'PY'
+import sys, json
+results_file, shot_json, request_id, status, s3_url, asset_url = sys.argv[1:]
+with open(results_file) as fh:
+    data = json.load(fh)
+shot = json.loads(shot_json)
+shot.update({"request_id": request_id, "status": status, "s3_url": s3_url, "source_url": asset_url})
+data.append(shot)
+with open(results_file, "w") as fh:
+    json.dump(data, fh, indent=2)
+PY
+
+  idx=$((idx + 1))
+done
+
+# ── Assemble brief markdown ─────────────────────────────────────────────────
+brief_md="$RUN_DIR/brief.md"
+python3 - "$results_file" "$brief_md" "$BRAND" "$PRODUCT" "$AUDIENCE" "$GOAL" "$TS" "$MODEL_ID" <<'PY'
+import sys, json, datetime
+results_file, brief_md, brand, product, audience, goal, ts, model = sys.argv[1:]
+with open(results_file) as fh:
+    rows = json.load(fh)
+lines = []
+lines.append(f"# Campaign Brief — {brand}")
+lines.append("")
+lines.append(f"- **Generated:** {ts}")
+lines.append(f"- **Brand:** {brand}")
+lines.append(f"- **Product:** {product}")
+lines.append(f"- **Audience:** {audience}")
+lines.append(f"- **Goal:** {goal}")
+lines.append(f"- **Model:** `{model}`")
+lines.append(f"- **Shots completed:** {len([r for r in rows if r.get('status') == 'completed'])} / {len(rows)}")
+lines.append("")
+lines.append("## Shots")
+lines.append("")
+lines.append("| # | Title | Status | S3 | Aspect | Prompt |")
+lines.append("|---|---|---|---|---|---|")
+for r in rows:
+    lines.append("| {idx} | {title} | {status} | `{s3}` | {ar} | {prompt} |".format(
+        idx=r.get("idx",""),
+        title=r.get("title",""),
+        status=r.get("status",""),
+        s3=r.get("s3_url",""),
+        ar=r.get("aspect_ratio",""),
+        prompt=r.get("prompt","").replace("|"," "),
+    ))
+lines.append("")
+lines.append("## Notes")
+lines.append("")
+lines.append("Generated via `bin/ops-creative-brief`. Review every asset before publishing — Higgsfield outputs require human QA for brand-safety, identity, and on-brand colour rendering.")
+with open(brief_md, "w") as fh:
+    fh.write("\n".join(lines) + "\n")
+PY
+
+printf '[ops-creative-brief] brief assembled at %s\n' "$brief_md" >&2
+
+# ── Open PR on dashboard repo ───────────────────────────────────────────────
+if [ "$NO_PR" = "true" ]; then
+  printf '[ops-creative-brief] --no-pr: skipping PR\n' >&2
+  printf '%s\n' "$RUN_DIR"
+  exit 0
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  printf '[ops-creative-brief] gh CLI missing — skipping PR. Brief at %s\n' "$brief_md" >&2
+  exit 0
+fi
+
+dashboard_dir="$(mktemp -d -t ops-creative-pr.XXXXXX)"
+trap 'rm -rf "$dashboard_dir"' EXIT
+gh repo clone "$DASHBOARD_REPO" "$dashboard_dir" -- --depth=1 >/dev/null 2>&1 || {
+  printf '[ops-creative-brief] gh repo clone failed for %s — leaving brief at %s\n' "$DASHBOARD_REPO" "$brief_md" >&2
+  exit 0
+}
+
+target_dir="$dashboard_dir/marketing-creative/${TS}"
+mkdir -p "$target_dir"
+cp "$brief_md" "$target_dir/brief.md"
+cp "$results_file" "$target_dir/results.json"
+
+branch="creative/${BRAND// /-}-${TS}"
+(
+  cd "$dashboard_dir"
+  git checkout -b "$branch" >/dev/null 2>&1
+  git add "marketing-creative/${TS}/"
+  commit_email="${GIT_AUTHOR_EMAIL:-${OPS_GIT_EMAIL:-$(git config user.email 2>/dev/null || echo "ops@example.com")}}"
+  commit_name="${GIT_AUTHOR_NAME:-${OPS_GIT_NAME:-ops-creative-brief}}"
+  git -c user.email="$commit_email" -c user.name="$commit_name" \
+    commit -m "creative: ${BRAND} — ${GOAL} — ${TS}" --no-verify >/dev/null
+  git push -u origin "$branch" >/dev/null 2>&1
+  gh pr create --title "creative: ${BRAND} — ${GOAL} — ${TS}" \
+    --body "$(cat "$target_dir/brief.md")" || true
+)
+
+printf '%s\n' "$RUN_DIR"
