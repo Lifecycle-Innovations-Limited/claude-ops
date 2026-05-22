@@ -86,7 +86,7 @@ if [ -d "$CACHE_DIR" ]; then
 fi
 
 # --- Unit file install ------------------------------------------------------
-mkdir -p "$USER_UNIT_DIR"
+run "mkdir -p '$USER_UNIT_DIR'"
 if [ -f "$UNIT_DST" ] && diff -q "$UNIT_SRC" "$UNIT_DST" >/dev/null 2>&1; then
   log "✓ Unit file unchanged: $UNIT_DST"
 else
