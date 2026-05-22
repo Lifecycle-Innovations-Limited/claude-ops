@@ -1,6 +1,7 @@
 #!/bin/bash
-# Kills orphan `gh ... --watch` and tight-poll-loop processes older than 5 min.
-# Runs every 60s while it's active. Idempotent. Safe to run in parallel.
+# Kills orphan `gh pr checks ... --watch` after 5 min; `gh run watch` only after
+# 2000s so deploy monitors (default watcher timeout 1800s in ops-deploy-monitor.sh)
+# are not SIGKILL'd mid-watch. Runs every 60s while active. Idempotent.
 #
 # Triggered by: SessionStart hook (foreground guarded by pidfile to avoid duplicates).
 #
@@ -22,20 +23,25 @@ fi
 echo $$ > "$PIDFILE"
 trap 'rm -f "$PIDFILE"' EXIT
 
+PR_CHECKS_WATCH_MAX_AGE=300
+# Above ops-deploy-monitor default watcher_timeout_seconds (1800) with headroom
+GH_RUN_WATCH_MAX_AGE=2000
+
 while true; do
-  # Find `gh ... --watch` and tight-poll loops older than 300s (5 min)
-  # `ps -eo pid,etimes,command` gives etimes = elapsed seconds since process start
+  # `ps -eo pid,etimes,command` — etimes = elapsed seconds since process start
   killed=0
-  while read -r pid etimes command; do
+  while read -r pid etimes max_age command; do
     [ -z "$pid" ] && continue
-    if [ "$etimes" -gt 300 ]; then
-      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) killing orphan pid=$pid age=${etimes}s: $command" >> "$LOG"
+    [[ "$etimes" =~ ^[0-9]+$ ]] || continue
+    [[ "$max_age" =~ ^[0-9]+$ ]] || continue
+    if [ "$etimes" -gt "$max_age" ]; then
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) killing orphan pid=$pid age=${etimes}s max=${max_age}s: $command" >> "$LOG"
       kill -9 "$pid" 2>/dev/null || true
       killed=$((killed + 1))
     fi
-  done < <(ps -eo pid,etimes,command 2>/dev/null | awk '
-    /gh pr checks .*--watch/ && !/awk|grep/ { print $1, $2, substr($0, index($0,$3)) }
-    /gh run watch/ && !/awk|grep/ { print $1, $2, substr($0, index($0,$3)) }
+  done < <(ps -eo pid,etimes,command 2>/dev/null | awk -v prmax="$PR_CHECKS_WATCH_MAX_AGE" -v runmax="$GH_RUN_WATCH_MAX_AGE" '
+    /gh pr checks .*--watch/ && !/awk|grep/ { print $1, $2, prmax, substr($0, index($0,$3)) }
+    /gh run watch/ && !/awk|grep/ { print $1, $2, runmax, substr($0, index($0,$3)) }
   ')
 
   [ "$killed" -gt 0 ] && echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) killed $killed orphan(s)" >> "$LOG"

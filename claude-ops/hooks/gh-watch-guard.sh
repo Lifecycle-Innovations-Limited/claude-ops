@@ -7,8 +7,11 @@
 # Source of truth: ~/Projects/claude-ops/claude-ops/hooks/gh-watch-guard.sh
 # Plugin cache copy (auto-installed via plugin update) is read-only.
 
-stdin=$(cat)
-CMD=$(echo "$stdin" | jq -r '.tool_input.command // empty' 2>/dev/null)
+raw="${TOOL_INPUT:-}"
+if [ -z "$raw" ]; then
+  raw=$(cat) || true
+fi
+CMD=$(printf '%s' "$raw" | jq -r '(.tool_input.command // .command // empty)' 2>/dev/null || true)
 
 # Fast path: not a gh command, exit immediately
 case "$CMD" in
@@ -19,7 +22,7 @@ esac
 # --- Pattern 1: --watch flag on gh pr checks / gh run watch ---
 # `gh pr checks <PR> --watch` and `gh run watch` poll every 2-5s.
 # 5000 REST/hr ÷ 2s = exhausted in ~3 hours of one process. Sam saw this in production.
-if echo "$CMD" | grep -qE 'gh\s+pr\s+checks\s+[^|]*--watch|gh\s+run\s+watch'; then
+if echo "$CMD" | grep -qE 'gh[[:space:]]+pr[[:space:]]+checks[[:space:]]+[^|]*--watch|gh[[:space:]]+run[[:space:]]+watch'; then
     cat >&2 <<'EOF'
 BLOCKED: `gh ... --watch` polls every 2-5s and exhausts the 5000/hr REST quota.
 
@@ -40,10 +43,10 @@ EOF
     exit 2
 fi
 
-# --- Pattern 2: tight gh loops (sleep < 10s) ---
-# Catches: `while true; do gh ...; sleep 5; done` style polls.
-if echo "$CMD" | grep -qE '(while|until|for).*gh\s+(api|pr|run|issue)' && \
-   echo "$CMD" | grep -qE 'sleep\s+([0-9]|10)(\s|;|$)'; then
+# --- Pattern 2: tight gh loops (single-digit sleep = under 10s) ---
+# Catches: `while true; do gh ...; sleep 5; done` style polls (not sleep 10+).
+if echo "$CMD" | grep -qE '(while|until|for).*gh[[:space:]]+(api|pr|run|issue)' && \
+   echo "$CMD" | grep -qE 'sleep[[:space:]]+[0-9]([[:space:];]|$)'; then
     cat >&2 <<'EOF'
 BLOCKED: tight gh polling loop (sleep < 10s) detected.
 
