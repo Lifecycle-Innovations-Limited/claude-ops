@@ -18,6 +18,6 @@ Environment=HOME=__HOME__
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
 Environment=GOG_BIN=/usr/local/bin/gog
-ExecStart=/bin/bash -c 'DOPPLER_TOKEN=$(cat $CREDENTIALS_DIRECTORY/doppler-token) /usr/local/bin/doppler run --silent -- __HOME__/.venv-pocket/bin/python3 __HOME__/claude-ops/claude-ops/scripts/ops-pocket-email-bridge.py'
+ExecStart=/bin/bash -c 'DOPPLER_TOKEN=$(cat $CREDENTIALS_DIRECTORY/doppler-token) /usr/local/bin/doppler run --silent -- __HOME__/.venv-pocket/bin/python3 __PLUGIN_ROOT__/scripts/ops-pocket-email-bridge.py'
 StandardOutput=append:__HOME__/.claude/state/pocket/email-bridge.log
 StandardError=append:__HOME__/.claude/state/pocket/email-bridge-stderr.log

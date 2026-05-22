@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.11.0] — 2026-05-22
+
+First-class Linux parity for the background daemon, plus two cross-platform fixes that surfaced during Linux bring-up on Amazon Linux 2023.
+
+### Added
+
+- **`scripts/install-ops-daemon-linux.sh`** — idempotent Linux installer that mirrors `install-ops-daemon.sh` (macOS launchd). Provisions a `systemd --user` service, enables `loginctl` linger, fixes the cache-permission footgun (chowns `~/.claude/plugins/cache/` back to the invoking user when a prior `sudo` left it root-owned), validates `bash >= 4`, and supports `--dry-run` and `--uninstall`. WSL2 with `systemd=true` in `/etc/wsl.conf` uses the same path; WSL without systemd still gets the legacy `nohup` fallback.
+- **`scripts/systemd/claude-ops-daemon.service`** — unit template using `%h` for HOME, `Type=simple`, `Restart=on-failure (10s)`, `WantedBy=default.target`, env block that explicitly sets `CLAUDE_PLUGIN_ROOT` so the daemon and every child service it spawns resolve scripts even outside the user's interactive shell.
+
+### Changed
+
+- **`skills/setup/SKILL.md` Step 2c** — Linux branch no longer prints "out of scope / skipped"; it invokes `install-ops-daemon-linux.sh` and writes `daemon.platform = "linux-systemd"` to `$PREFS_PATH`. macOS launchd path unchanged.
+- **`scripts/systemd/install-systemd-units.sh` + 6 pocket unit templates** — replaced hard-coded `__HOME__/claude-ops/claude-ops/scripts/` with `__PLUGIN_ROOT__`, resolved at install time to the canonical install path. Eliminates the silent-failure mode where a missing `~/claude-ops` symlink froze all 4 pocket health files.
+
+### Fixed
+
+- **`bin/ops-doctor` GNU `stat` crash** — `_pocket_health_check` used `stat -f '%m' || stat -c '%Y'`. On GNU coreutils `-f` means *filesystem stat* (not BSD's *format string*), so the first invocation succeeds with multi-line FS info and the fallback never fires. `MTIME` then becomes a multi-line blob and `$(( NOW - MTIME ))` parses words like `File:` as variable names under `set -u`. Flipped to try `-c '%Y'` first and defensively trim `MTIME` to its first numeric token.
+- **`bin/ops-doctor` false-positive flood for `unconfigured_sensitive_keys`** — used to warn about every one of the ~29 `sensitive: true` user-config keys declared in `plugin.json` (Datadog, NewRelic, Pushover, ntfy, Discord bot, 7 shipping carriers, etc.), even when no MCP server or skill referenced them. Now: collects env-var names from every `.mcp.json` and `~/.claude.json` mcpServers env block, filters `SENSITIVE_KEYS` to only those actually used, and skips the rest silently.
+
+### Verified on
+
+- Amazon Linux 2023 (aarch64, kernel 6.1, systemd 252) — install, re-run idempotency, `--dry-run`, `--uninstall`, ops-doctor recovery, pocket health refresh, `tests/test-no-secrets.sh` (14/14 pass).
+- macOS launchd path unchanged (no regression touched).
+- WSL2 / Ubuntu / Fedora desktop — not yet exercised; please flag regressions.
+
 ## [2.9.1] — 2026-05-21
 
 Rule 7 compliance for `bin/ops-voice` **plus** a new `join` sub-command that auto-joins the current or next calendar meeting with smart AV defaults. Native open-paths now route through `lib/opener.sh::ops_open_url` so SSH/mobile sessions get a copy-able URL block instead of opening on the remote host.
