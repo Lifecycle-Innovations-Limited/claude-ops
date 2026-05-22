@@ -1,0 +1,78 @@
+#!/bin/bash
+# PreToolUse Bash hook — blocks rate-limit-burning gh patterns.
+#
+# Allow: exit 0 (no stdout JSON). Deny: emit hookSpecificOutput with permissionDecision deny
+# on stdout (same contract as bin/ops-prevent-secret-commit and docs/safety-hooks.md), then exit 0.
+# Pairs with the persistent gh-orphan-killer.sh watchdog.
+#
+# Source of truth: ~/Projects/claude-ops/claude-ops/hooks/gh-watch-guard.sh
+# Plugin cache copy (auto-installed via plugin update) is read-only.
+
+emit_pre_tool_deny() {
+  python3 -c '
+import json, sys
+reason = sys.stdin.read().rstrip("\n")
+print(json.dumps({
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": reason
+  }
+}))
+'
+}
+
+raw="${TOOL_INPUT:-}"
+if [ -z "$raw" ]; then
+  raw=$(cat) || true
+fi
+CMD=$(printf '%s' "$raw" | jq -r '(.tool_input.command // .command // empty)' 2>/dev/null || true)
+# Collapse newlines so --watch / tight-loop patterns cannot be evaded by splitting lines.
+CMD_ONELINE=$(printf '%s' "$CMD" | tr '\n\r' '  ')
+
+# Fast path: not a gh command, exit immediately
+case "$CMD" in
+    *gh\ *|*gh-*) ;;
+    *) exit 0 ;;
+esac
+
+# --- Pattern 1: --watch flag on gh pr checks / gh run watch ---
+# `gh pr checks <PR> --watch` and `gh run watch` poll every 2-5s.
+# 5000 REST/hr ÷ 2s = exhausted in ~3 hours of one process. Sam saw this in production.
+if echo "$CMD_ONELINE" | grep -qE 'gh[[:space:]]+pr[[:space:]]+checks[[:space:]]+[^|]*--watch|gh[[:space:]]+run[[:space:]]+watch'; then
+    emit_pre_tool_deny <<'EOF'
+BLOCKED: `gh ... --watch` polls every 2-5s and exhausts the 5000/hr REST quota.
+
+Use the Monitor tool with an `until` poll loop at ≥25s instead:
+
+  prev=""
+  while true; do
+    s=$(gh pr view <PR> --repo <REPO> --json mergeStateStatus,statusCheckRollup)
+    state=$(echo "$s" | jq -r .mergeStateStatus)
+    [ "$state" = "CLEAN" ] || [ "$state" = "UNSTABLE" ] && { echo READY; break; }
+    sleep 30
+  done
+
+For multi-PR watching prefer GraphQL (separate 5000/hr bucket) — single query, multiple PRs.
+
+Source: ~/Projects/claude-ops/claude-ops/hooks/gh-watch-guard.sh
+EOF
+    exit 0
+fi
+
+# --- Pattern 2: tight gh loops (single-digit sleep = under 10s) ---
+# Catches: `while true; do gh ...; sleep 5; done` style polls (not sleep 10+).
+if echo "$CMD_ONELINE" | grep -qE '(^|[^[:alnum:]_])(while|until|for)([^[:alnum:]_]|$).*gh[[:space:]]+(api|pr|run|issue)' && \
+   echo "$CMD_ONELINE" | grep -qE 'sleep[[:space:]]+[0-9]([[:space:];]|$)'; then
+    emit_pre_tool_deny <<'EOF'
+BLOCKED: tight gh polling loop (sleep < 10s) detected.
+
+The 5000/hr REST quota is shared across this session, background daemons, the overnight
+sync cron, and any other gh process. A loop at sleep 5 burns 720 calls/hr — easy to OOM-cache.
+
+Bump to `sleep 30` (or use Monitor tool — handles ≥25s naturally).
+EOF
+    exit 0
+fi
+
+exit 0
