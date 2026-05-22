@@ -141,7 +141,7 @@ scan_repo() {
           wt_dirty=$(git -C "$wt_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
           wt_unpushed=0
           if [ "$wt_branch" != "DETACHED" ] && [ -n "$wt_branch" ]; then
-            wt_unpushed=$(git -C "$wt_path" log "origin/$integration_branch..HEAD" --oneline 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+            wt_unpushed=$(git -C "$wt_path" log '@{u}..' --oneline 2>/dev/null | wc -l | tr -d ' ' || echo 0)
             wt_pr=$(gh pr list --repo "$repo_slug" --head "$wt_branch" --state open --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
             [ -n "$wt_pr" ] && wt_has_pr="true" || wt_has_pr="false"
           else
@@ -166,14 +166,14 @@ scan_repo() {
   # --- Salvage classification ---------------------------------------------
   # A repo has "salvage work" if ANY of:
   #   - dirty/staged/stashed > 0 in main checkout
-  #   - any local feature branch with integrated=false (not yet on integration branch)
+  #   - any local feature branch without an open PR (branch-no-pr or branch-already-merged)
   #   - any worktree with dirty or unpushed > 0 or branch without open PR
   #   - unpushed > 0 on current branch
   local has_salvage="false"
   if [ "$dirty" -gt 0 ] || [ "$staged" -gt 0 ] || [ "$stashed" -gt 0 ] || [ "$unpushed" -gt 0 ]; then
     has_salvage="true"
   fi
-  if [ "$(echo "$BRANCHES_JSON" | jq '[.[] | select(.integrated == false)] | length')" -gt 0 ]; then
+  if [ "$(echo "$BRANCHES_JSON" | jq '[.[] | select(.has_open_pr == false)] | length')" -gt 0 ]; then
     has_salvage="true"
   fi
   if [ "$(echo "$WORKTREES_JSON" | jq '[.[] | select(.dirty_files > 0 or .unpushed_commits > 0 or .has_open_pr == false)] | length')" -gt 0 ]; then
@@ -210,8 +210,10 @@ scan_repo() {
 }
 
 # Iterate projects → repos in parallel (cap at 8 simultaneous git fetches).
+# Use process substitution so the loop runs in the main shell; a pipeline would
+# subshell the while-loop and orphan background jobs from the final wait.
 SEM=0
-echo "$PROJECTS_JSON" | jq -c '.[]' | while read -r project; do
+while IFS= read -r project; do
   PROJECT_PATH=$(echo "$project" | jq -r '.path // empty')
   REPOS=$(echo "$project" | jq -r '.repos[]? // empty')
   [ -z "$REPOS" ] && continue
@@ -239,7 +241,7 @@ echo "$PROJECTS_JSON" | jq -c '.[]' | while read -r project; do
       SEM=0
     fi
   done
-done
+done < <(echo "$PROJECTS_JSON" | jq -c '.[]')
 wait
 
 # Assemble final document
