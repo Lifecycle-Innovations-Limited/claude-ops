@@ -194,42 +194,63 @@ if [ -f "$PLUGIN_JSON" ] && command -v jq >/dev/null 2>&1; then
     fi
   done
   if [ ${#UNCONFIGURED_SENSITIVE[@]} -gt 0 ]; then
-    # Check if a separate working MCP server already provides the same functionality
-    # by scanning global MCP configs for a matching server name
-    _has_global_mcp_server() {
-      local server_name="$1"
-      for global_cfg in "$HOME/.claude/.mcp.json" "$HOME/.claude.json"; do
-        [ -f "$global_cfg" ] || continue
-        if jq -e ".mcpServers.\"$server_name\"" "$global_cfg" >/dev/null 2>&1; then
-          echo true; return
-        fi
-      done
-      # Also check if plugin cache copies provide a working server
-      for cache_mcp in "$HOME/.claude/plugins/cache"/*/ops/*/.mcp.json; do
-        [ -f "$cache_mcp" ] || continue
-        if jq -e ".mcpServers.\"$server_name\"" "$cache_mcp" >/dev/null 2>&1; then
-          echo true; return
-        fi
-      done
-      echo false
-    }
+    # Collect all env var names referenced by any MCP server across known config files.
+    # Only warn about keys that are actually referenced by an MCP server — keys for
+    # optional/unused integrations (shipping carriers, monitoring, etc.) are intentionally
+    # unconfigured and should not produce noise.
+    MCP_ENV_VARS=""
+    for mcp_cfg in "$MCP_JSON_FILE" "$HOME/.claude/.mcp.json" "$HOME/.claude.json" \
+                   "$HOME/.claude/plugins/cache"/*/ops/*/.mcp.json; do
+      [ -f "$mcp_cfg" ] || continue
+      VARS=$(jq -r '[.mcpServers // {} | to_entries[] | .value.env // {} | keys[]] | unique[]' \
+               "$mcp_cfg" 2>/dev/null || true)
+      MCP_ENV_VARS="$MCP_ENV_VARS $VARS"
+    done
 
-    # Determine which MCP servers the unconfigured keys belong to
-    ALL_COVERED_BY_GLOBAL=true
+    # Filter: only keep keys whose uppercase form appears in MCP env refs
+    MCP_REFERENCED_SENSITIVE=()
     for ukey in "${UNCONFIGURED_SENSITIVE[@]}"; do
-      # Extract server name from the key prefix (e.g. telegram_api_id -> telegram)
-      SERVER_PREFIX="${ukey%%_*}"
-      if [ "$(_has_global_mcp_server "$SERVER_PREFIX")" = false ]; then
-        ALL_COVERED_BY_GLOBAL=false
-        break
+      UPPER_KEY=$(echo "$ukey" | tr '[:lower:]' '[:upper:]')
+      if echo "$MCP_ENV_VARS" | grep -qw "$UPPER_KEY"; then
+        MCP_REFERENCED_SENSITIVE+=("$ukey")
       fi
     done
 
-    if [ "$ALL_COVERED_BY_GLOBAL" = true ]; then
-      INFO+=("unconfigured_sensitive_keys: Sensitive user config values not set in plugin: $(IFS=,; echo "${UNCONFIGURED_SENSITIVE[*]}"), but a separate working MCP server provides equivalent functionality.")
-    else
-      WARNINGS+=("unconfigured_sensitive_keys: Sensitive user config values not set: $(IFS=,; echo "${UNCONFIGURED_SENSITIVE[*]}"). MCP servers depending on these will fail. Run /ops:setup to configure.")
+    if [ ${#MCP_REFERENCED_SENSITIVE[@]} -gt 0 ]; then
+      # Check if a separate working MCP server already provides the same functionality
+      _has_global_mcp_server() {
+        local server_name="$1"
+        for global_cfg in "$HOME/.claude/.mcp.json" "$HOME/.claude.json"; do
+          [ -f "$global_cfg" ] || continue
+          if jq -e ".mcpServers.\"$server_name\"" "$global_cfg" >/dev/null 2>&1; then
+            echo true; return
+          fi
+        done
+        for cache_mcp in "$HOME/.claude/plugins/cache"/*/ops/*/.mcp.json; do
+          [ -f "$cache_mcp" ] || continue
+          if jq -e ".mcpServers.\"$server_name\"" "$cache_mcp" >/dev/null 2>&1; then
+            echo true; return
+          fi
+        done
+        echo false
+      }
+
+      ALL_COVERED_BY_GLOBAL=true
+      for ukey in "${MCP_REFERENCED_SENSITIVE[@]}"; do
+        SERVER_PREFIX="${ukey%%_*}"
+        if [ "$(_has_global_mcp_server "$SERVER_PREFIX")" = false ]; then
+          ALL_COVERED_BY_GLOBAL=false
+          break
+        fi
+      done
+
+      if [ "$ALL_COVERED_BY_GLOBAL" = true ]; then
+        INFO+=("unconfigured_sensitive_keys: Sensitive user config values not set in plugin: $(IFS=,; echo "${MCP_REFERENCED_SENSITIVE[*]}"), but a separate working MCP server provides equivalent functionality.")
+      else
+        WARNINGS+=("unconfigured_sensitive_keys: Sensitive user config values not set: $(IFS=,; echo "${MCP_REFERENCED_SENSITIVE[*]}"). MCP servers depending on these will fail. Run /ops:setup to configure.")
+      fi
     fi
+    # Keys with no MCP server reference are intentionally unconfigured — no warning emitted.
   fi
 fi
 
@@ -345,9 +366,17 @@ if [ "$POCKET_CONFIGURED" = true ]; then
       WARNINGS+=("pocket_health_missing_${svc}: $hf does not exist — service may not be running")
       return
     fi
-    # Staleness check (macOS stat -f or GNU stat -c)
+    # Staleness check (GNU stat -c on Linux, BSD stat -f on macOS).
+    # NOTE: order matters — `stat -f` on GNU coreutils means "filesystem stat" and
+    # *succeeds* with multi-line FS info instead of an mtime, which corrupts MTIME
+    # under `set -u` (the multi-line blob then trips $((NOW - MTIME)) on words like
+    # "File:"). Try GNU first; fall back to BSD; finally `echo 0` so MTIME is always
+    # a clean integer.
     if command -v stat >/dev/null 2>&1; then
-      MTIME=$(stat -f '%m' "$hf" 2>/dev/null || stat -c '%Y' "$hf" 2>/dev/null || echo 0)
+      MTIME=$(stat -c '%Y' "$hf" 2>/dev/null || stat -f '%m' "$hf" 2>/dev/null || echo 0)
+      # Defensive sanitize: keep only the first token if anything multi-line slipped through.
+      MTIME="${MTIME%%[!0-9]*}"
+      MTIME="${MTIME:-0}"
       AGE=$(( NOW - MTIME ))
       if [ "$AGE" -gt "$MAX_HEALTH_AGE" ]; then
         WARNINGS+=("pocket_health_stale_${svc}: $hf last written ${AGE}s ago (threshold: ${MAX_HEALTH_AGE}s)")
