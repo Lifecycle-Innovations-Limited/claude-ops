@@ -11,6 +11,7 @@
 #   IP_WHITELIST_REGION           default: us-east-1
 #   IP_WHITELIST_PORT             default: 22
 #   IP_WHITELIST_DESC_PREFIX      default: <hostname>-laptop
+#   IP_WHITELIST_KEEP_RECENT      default: 2 (newest N managed rules retained before prune)
 
 set -euo pipefail
 
@@ -26,6 +27,7 @@ IP_WHITELIST_REGION="${IP_WHITELIST_REGION:-us-east-1}"
 IP_WHITELIST_PORT="${IP_WHITELIST_PORT:-22}"
 DEFAULT_PREFIX="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo claude-ops)-laptop"
 IP_WHITELIST_DESC_PREFIX="${IP_WHITELIST_DESC_PREFIX:-$DEFAULT_PREFIX}"
+IP_WHITELIST_KEEP_RECENT="${IP_WHITELIST_KEEP_RECENT:-2}"
 
 log() { printf '[install-ip-whitelist] %s\n' "$*"; }
 die() { log "ERROR: $*"; exit 1; }
@@ -58,13 +60,14 @@ case "$OS" in
       -e "s|__IP_WHITELIST_REGION__|${IP_WHITELIST_REGION}|g" \
       -e "s|__IP_WHITELIST_PORT__|${IP_WHITELIST_PORT}|g" \
       -e "s|__IP_WHITELIST_DESC_PREFIX__|${IP_WHITELIST_DESC_PREFIX}|g" \
+      -e "s|__IP_WHITELIST_KEEP_RECENT__|${IP_WHITELIST_KEEP_RECENT}|g" \
       "$PLIST_TEMPLATE" > "$PLIST_DEST"
 
     log "bootstrapping ${GUI_DOMAIN}/${LABEL}"
     launchctl bootstrap "${GUI_DOMAIN}" "${PLIST_DEST}"
 
     log "agent loaded. status:"
-    launchctl print "${GUI_DOMAIN}/${LABEL}" | head -20
+    head -20 < <(launchctl print "${GUI_DOMAIN}/${LABEL}")
     ;;
   Linux)
     log "Linux support coming next — for now run the script via cron or systemd:"

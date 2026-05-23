@@ -39,6 +39,8 @@
         <string>__IP_WHITELIST_PORT__</string>
         <key>IP_WHITELIST_DESC_PREFIX</key>
         <string>__IP_WHITELIST_DESC_PREFIX__</string>
+        <key>IP_WHITELIST_KEEP_RECENT</key>
+        <string>__IP_WHITELIST_KEEP_RECENT__</string>
     </dict>
 
     <key>StandardOutPath</key>
