@@ -259,11 +259,22 @@ def main() -> int:
                 except Exception as e:
                     log(f"failed to load {u}: {e}")
                 pages.append(pg)
-            # Block until user closes the LAST page (or 10 min hard cap)
-            try:
-                pages[-1].wait_for_event("close", timeout=600_000)
-            except Exception:
-                pass
+            # Block until every bootstrap tab is closed (or 10 min total hard cap).
+            # Waiting only on the last-opened tab exits early if the user closes
+            # tabs in a different order, tearing down the context while other
+            # sign-ins are still in progress.
+            deadline = time.monotonic() + 600
+            while True:
+                open_pages = [p for p in pages if not p.is_closed()]
+                if not open_pages:
+                    break
+                remaining_ms = int(max(0, (deadline - time.monotonic()) * 1000))
+                if remaining_ms <= 0:
+                    break
+                try:
+                    open_pages[0].wait_for_event("close", timeout=remaining_ms)
+                except Exception:
+                    break
         return 0
 
     url = sys.argv[1]
