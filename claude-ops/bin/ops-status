@@ -225,6 +225,33 @@ if [ -f "$DAEMON_HEALTH" ]; then
   fi
 fi
 
+# ─── 7b. Claude Code background-server supervisor ──────────────────────────
+# Reports state of `claude --bg` supervisor. Ephemeral (0 bg sessions) is healthy.
+CC_BG_STATE="idle"
+CC_BG_COUNT=0
+CC_BG_INTERACTIVE=0
+if has_cmd claude && has_cmd jq; then
+  cc_agents_json="$(claude agents --json 2>/dev/null || echo '')"
+  if [ -n "$cc_agents_json" ] && echo "$cc_agents_json" | jq empty 2>/dev/null; then
+    CC_BG_COUNT="$(echo "$cc_agents_json" | jq '[.[] | select(.kind == "background")] | length' 2>/dev/null || echo 0)"
+    CC_BG_INTERACTIVE="$(echo "$cc_agents_json" | jq '[.[] | select(.kind == "interactive")] | length' 2>/dev/null || echo 0)"
+    if [ "$CC_BG_COUNT" -gt 0 ]; then
+      CC_BG_STATE="running"
+    else
+      CC_BG_STATE="idle"
+    fi
+  else
+    # Distinguish unreachable from not-installed via daemon status.
+    cc_daemon_raw="$(claude daemon status 2>&1 || true)"
+    if echo "$cc_daemon_raw" | grep -qi "unreachable"; then
+      roster_n="$(echo "$cc_daemon_raw" | grep -oE 'bg workers:[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo 0)"
+      if [ "${roster_n:-0}" -gt 0 ]; then
+        CC_BG_STATE="unreachable"
+      fi
+    fi
+  fi
+fi
+
 # ─── 8. Registry ────────────────────────────────────────────────────────────
 REGISTRY_STATE="missing"
 REGISTRY_COUNT=0
@@ -295,7 +322,10 @@ render_pretty() {
   fi
 
   # Voice
-  local v_keys="${!VOICE_STATUS[*]:-}"
+  # Bash 5.3 parses ${!ARR[*]:-} as ${!"ok ok ok"} (indirect-on-values) → invalid var name.
+  # Guard by array-length check, then expand keys directly.
+  local v_keys=""
+  if [ -n "${VOICE_STATUS[*]+x}" ] && [ "${#VOICE_STATUS[@]}" -gt 0 ]; then v_keys="${!VOICE_STATUS[*]}"; fi
   if [ -n "$v_keys" ]; then
     printf ' Voice        '
     for k in $v_keys; do
@@ -307,7 +337,8 @@ render_pretty() {
   fi
 
   # Monitoring
-  local m_keys="${!MON_STATUS[*]:-}"
+  local m_keys=""
+  if [ -n "${MON_STATUS[*]+x}" ] && [ "${#MON_STATUS[@]}" -gt 0 ]; then m_keys="${!MON_STATUS[*]}"; fi
   if [ -n "$m_keys" ]; then
     printf ' Monitoring   '
     for k in $m_keys; do
@@ -325,6 +356,13 @@ render_pretty() {
     invalid)  printf ' Daemon       ✗ invalid daemon-health.json\n' ;;
     unhealthy)printf ' Daemon       ✗ unhealthy\n' ;;
     *)        printf ' Daemon       ○ not running\n' ;;
+  esac
+
+  # Claude Code background-server
+  case "$CC_BG_STATE" in
+    running)     printf ' Claude bg    ✓ %s session(s) (interactive: %s)\n' "$CC_BG_COUNT" "$CC_BG_INTERACTIVE" ;;
+    unreachable) printf ' Claude bg    ✗ supervisor unreachable — run: claude respawn --all\n' ;;
+    *)           printf ' Claude bg    ○ idle (interactive: %s)\n' "$CC_BG_INTERACTIVE" ;;
   esac
 
   # Registry
@@ -398,6 +436,9 @@ render_json() {
       --arg daemon_state "$DAEMON_STATE" \
       --arg daemon_last_sync "$DAEMON_LAST_SYNC" \
       --argjson daemon_services "${DAEMON_SERVICES:-0}" \
+      --arg cc_bg_state "$CC_BG_STATE" \
+      --argjson cc_bg_count "${CC_BG_COUNT:-0}" \
+      --argjson cc_bg_interactive "${CC_BG_INTERACTIVE:-0}" \
       --arg registry_state "$REGISTRY_STATE" \
       --argjson registry_count "${REGISTRY_COUNT:-0}" \
       --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -409,6 +450,7 @@ render_json() {
         voice: $voice,
         monitoring: $monitoring,
         daemon: {state: $daemon_state, services: $daemon_services, last_sync: $daemon_last_sync},
+        claude_bg: {state: $cc_bg_state, sessions: $cc_bg_count, interactive: $cc_bg_interactive},
         registry: {state: $registry_state, projects: $registry_count},
         generated_at: $generated_at
       }'
@@ -425,6 +467,8 @@ render_json() {
   printf '"monitoring":%s,' "$monitoring"
   printf '"daemon":{"state":"%s","services":%s,"last_sync":"%s"},' \
     "$DAEMON_STATE" "${DAEMON_SERVICES:-0}" "$DAEMON_LAST_SYNC"
+  printf '"claude_bg":{"state":"%s","sessions":%s,"interactive":%s},' \
+    "$CC_BG_STATE" "${CC_BG_COUNT:-0}" "${CC_BG_INTERACTIVE:-0}"
   printf '"registry":{"state":"%s","projects":%s},' \
     "$REGISTRY_STATE" "${REGISTRY_COUNT:-0}"
   printf '"generated_at":"%s"' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
