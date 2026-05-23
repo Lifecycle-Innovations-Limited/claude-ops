@@ -239,14 +239,42 @@ def main() -> int:
         except ImportError:
             log("playwright not installed")
             return 3
-        log("BOOTSTRAP MODE — sign into each OAuth provider you use, then close the window")
+        # Default bootstrap targets — the providers that watchdog reports as
+        # needs_bootstrap. Override via CLI: --bootstrap <url1> <url2> ...
+        extra_urls = sys.argv[2:]
+        bootstrap_urls = extra_urls or [
+            "https://vercel.com/login",
+            "https://app.eu.amplitude.com/login",
+        ]
+        log("BOOTSTRAP MODE — sign into each tab, then close the window when done")
+        log(f"opening {len(bootstrap_urls)} provider login page(s): {bootstrap_urls}")
         BROWSER_PROFILE.mkdir(parents=True, exist_ok=True)
         with sync_playwright() as p:
             ctx = p.chromium.launch_persistent_context(str(BROWSER_PROFILE), headless=False)
-            page = ctx.new_page()
-            page.goto("about:blank")
-            # Block until user closes the window
-            page.wait_for_event("close", timeout=600_000)
+            pages = []
+            for u in bootstrap_urls:
+                pg = ctx.new_page()
+                try:
+                    pg.goto(u, wait_until="domcontentloaded", timeout=20000)
+                except Exception as e:
+                    log(f"failed to load {u}: {e}")
+                pages.append(pg)
+            # Block until every bootstrap tab is closed (or 10 min total hard cap).
+            # Waiting only on the last-opened tab exits early if the user closes
+            # tabs in a different order, tearing down the context while other
+            # sign-ins are still in progress.
+            deadline = time.monotonic() + 600
+            while True:
+                open_pages = [p for p in pages if not p.is_closed()]
+                if not open_pages:
+                    break
+                remaining_ms = int(max(0, (deadline - time.monotonic()) * 1000))
+                if remaining_ms <= 0:
+                    break
+                try:
+                    open_pages[0].wait_for_event("close", timeout=remaining_ms)
+                except Exception:
+                    break
         return 0
 
     url = sys.argv[1]
