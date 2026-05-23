@@ -29,11 +29,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-DEFAULT_REPO = os.environ.get(
-    "DESKTOP_ACT_REPO",
-    "https://github.com/your-org/desktop-act.git",
-)
-DEFAULT_BRANCH = os.environ.get("DESKTOP_ACT_BRANCH", "main")
+_DEFAULT_REPO = "https://github.com/your-org/desktop-act.git"
+_DEFAULT_BRANCH = "main"
+# MCP may inject empty strings from userConfig; treat those as unset so fallbacks apply.
+DEFAULT_REPO = os.environ.get("DESKTOP_ACT_REPO") or _DEFAULT_REPO
+DEFAULT_BRANCH = os.environ.get("DESKTOP_ACT_BRANCH") or _DEFAULT_BRANCH
+
+_CACHE_READY_MARKER = ".desktop-act-launcher-ready"
 
 
 def _system() -> str:
@@ -107,10 +109,33 @@ def _resolve_existing() -> Path | None:
         if runner:
             return runner
 
-    runner = _runner_in(_cache_root() / "src")
+    cache_src = _cache_root() / "src"
+    runner = _runner_in(cache_src)
+    if runner is not None and not _cache_install_usable(cache_src):
+        runner = None
     if runner:
         return runner
     return None
+
+
+def _venv_python(install_root: Path) -> str | None:
+    bin_dir = "Scripts" if _system() == "windows" else "bin"
+    py = (
+        install_root
+        / ".venv"
+        / bin_dir
+        / ("python.exe" if _system() == "windows" else "python")
+    )
+    return str(py) if py.exists() else None
+
+
+def _cache_install_usable(cache_src: Path) -> bool:
+    """True when cached checkout finished bootstrap (venv + deps marker)."""
+    marker = cache_src / _CACHE_READY_MARKER
+    if not marker.is_file():
+        return False
+    vpy = _venv_python(cache_src)
+    return bool(vpy and Path(vpy).is_file())
 
 
 def _exec_runner(runner: Path) -> None:
@@ -134,19 +159,14 @@ def _exec_runner(runner: Path) -> None:
                 print("[desktop-act-launcher] PowerShell not found", file=sys.stderr)
                 sys.exit(127)
             os.execv(ps, [ps, "-ExecutionPolicy", "Bypass", "-File", str(runner)])
-        os.execv(str(runner), [str(runner)])
+        cmd_exe = os.environ.get("ComSpec")
+        if not cmd_exe or not Path(cmd_exe).is_file():
+            cmd_exe = shutil.which("cmd.exe") or shutil.which("cmd") or ""
+        if not cmd_exe:
+            print("[desktop-act-launcher] cmd.exe not found", file=sys.stderr)
+            sys.exit(127)
+        os.execv(cmd_exe, [cmd_exe, "/c", str(runner)])
     os.execv(str(runner), [str(runner)])
-
-
-def _venv_python(install_root: Path) -> str | None:
-    bin_dir = "Scripts" if _system() == "windows" else "bin"
-    py = (
-        install_root
-        / ".venv"
-        / bin_dir
-        / ("python.exe" if _system() == "windows" else "python")
-    )
-    return str(py) if py.exists() else None
 
 
 def _have(cmd: str) -> bool:
@@ -229,6 +249,15 @@ def _bootstrap() -> Path | None:
                 file=sys.stderr,
             )
             return None
+
+    try:
+        (src / _CACHE_READY_MARKER).write_text("ok\n", encoding="ascii")
+    except OSError as e:
+        print(
+            f"[desktop-act-launcher] could not write cache ready marker: {e}",
+            file=sys.stderr,
+        )
+        return None
 
     return _runner_in(src)
 
