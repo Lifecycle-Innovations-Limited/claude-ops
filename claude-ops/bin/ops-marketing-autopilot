@@ -13,8 +13,11 @@
 # Spend-safety invariants (NEVER LEAK MONEY + Rule 5):
 #   - No daily_spend_cap_usd  -> project skipped, escalation note, zero mutations
 #   - Sum(campaign daily_budget) > cap -> AUTO-DOWNSHIFT each campaign/adset
-#     budget proportionally (scale = cap / Σ_budget) to fit under cap. Respects
-#     Meta $1/day = 100¢ minimum. Logged + mutation-counted. Never raises.
+#     budget proportionally (scale = cap / Σ_budget). Where the platform has a
+#     $1/day minimum, budgets already at/above that floor are floored to $1 only
+#     when it still lowers the budget; sub-minimum live rows are never raised.
+#     If Σ remains above cap after downshift, escalate (do not continue the pass).
+#     Logged + mutation-counted. Never raises an entity above its prior budget.
 #   - Runaway amount_spent (delta > 1.5× cap since last pass) -> abort project
 #   - May pause / swap / regenerate creatives + downshift budgets to fit cap.
 #     NEVER raises budgets, creates campaigns, creates/expands audiences, or
@@ -137,7 +140,11 @@ escalate() {
   report ""
   report "- **Project:** $proj"
   report "- **Reason:** $reason"
-  report "- **Mutations performed this pass:** NONE (aborted for safety)"
+  if [ "${MUTATIONS:-0}" -gt 0 ]; then
+    report "- **Mutations performed this pass:** ${MUTATIONS} (partial mutations may have applied before abort — verify account state)"
+  else
+    report "- **Mutations performed this pass:** NONE (aborted for safety)"
+  fi
   report ""
   printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$proj" "$reason" \
     >> "${STATE_DIR}/escalations.log"
@@ -681,8 +688,8 @@ process_meta() {
   local over
   over="$(awk "BEGIN{print (${total_budget_usd}+0 > ${cap}+0) ? 1 : 0}")"
   if [ "$over" = "1" ]; then
-    # Auto-downshift: scale all campaign/adset budgets proportionally to fit cap.
-    # Preserves campaign mix; respects Meta $1/day minimum (100 cents).
+    # Auto-downshift: scale all campaign/adset budgets proportionally toward cap.
+    # Meta $1/day floor applies only when it still lowers vs prior (never raises).
     local scale_factor
     scale_factor="$(awk "BEGIN{printf \"%.6f\", ${cap}/${total_budget_usd}}")"
     report "- cap pre-flight EXCEEDED (\$${total_budget_usd} > \$${cap}) — auto-downshifting at ratio ${scale_factor}"
@@ -695,20 +702,29 @@ process_meta() {
       if [ -n "$cdb" ] && [ "$cdb" != "null" ]; then
         # CBO: scale campaign-level budget
         local new_cents new_usd old_usd
-        new_cents="$(awk "BEGIN{v=int(${cdb}*${scale_factor}); if(v<100)v=100; print v}")"
+        new_cents="$(awk -v c="$cdb" -v s="$scale_factor" 'BEGIN{v=int(c*s); if(v>c)v=c; if(v<100&&c>=100){v=100;if(v>c)v=c} print v}')"
         new_usd="$(awk "BEGIN{printf \"%.2f\", ${new_cents}/100}")"
         old_usd="$(awk "BEGIN{printf \"%.2f\", ${cdb}/100}")"
         if [ "$DRY_RUN" = "1" ]; then
           report "- [DRY] would shrink ${cname} (${cid}): \$${old_usd} → \$${new_usd}"
         else
-          local prr err
+          local prr err post_body
+          post_body="$(printf '%s_budget=%s' daily "${new_cents}")"
           prr="$(curl -gsS --max-time 15 -X POST "${GRAPH}/${cid}" \
-            -d "daily_budget=${new_cents}" \
+            -d "$post_body" \
             -d "access_token=${META_TOKEN}" \
-            ${META_PROOF:+-d "appsecret_proof=${META_PROOF}"} 2>/dev/null || echo '{}')"
+            ${META_PROOF:+-d "appsecret_proof=${META_PROOF}"} 2>/dev/null)" || prr=""
+          if [ -z "$prr" ] || [ "$prr" = "{}" ]; then
+            escalate "$proj" "Meta auto-downshift FAILED for ${cname} (${cid}): empty or invalid HTTP response"
+            return 0
+          fi
           err="$(printf '%s' "$prr" | jq -r '.error.message // empty' 2>/dev/null)"
           if [ -n "$err" ]; then
             escalate "$proj" "Meta auto-downshift FAILED for ${cname} (${cid}): ${err}"
+            return 0
+          fi
+          if ! printf '%s' "$prr" | jq -e '(.success == true) or (.success == "true") or (.id != null and (.id|tostring)!="")' >/dev/null 2>&1; then
+            escalate "$proj" "Meta auto-downshift FAILED for ${cname} (${cid}): unexpected API response (not a confirmed success)"
             return 0
           fi
           MUTATIONS=$((MUTATIONS+1))
@@ -723,20 +739,29 @@ process_meta() {
           [ -z "$asdb" ] && continue
           [ "$asdb" = "null" ] && continue
           local new_cents new_usd old_usd
-          new_cents="$(awk "BEGIN{v=int(${asdb}*${scale_factor}); if(v<100)v=100; print v}")"
+          new_cents="$(awk -v c="$asdb" -v s="$scale_factor" 'BEGIN{v=int(c*s); if(v>c)v=c; if(v<100&&c>=100){v=100;if(v>c)v=c} print v}')"
           new_usd="$(awk "BEGIN{printf \"%.2f\", ${new_cents}/100}")"
           old_usd="$(awk "BEGIN{printf \"%.2f\", ${asdb}/100}")"
           if [ "$DRY_RUN" = "1" ]; then
             report "- [DRY] would shrink adset ${asname} (${asid}): \$${old_usd} → \$${new_usd}"
           else
-            local prr err
+            local prr err post_body
+            post_body="$(printf '%s_budget=%s' daily "${new_cents}")"
             prr="$(curl -gsS --max-time 15 -X POST "${GRAPH}/${asid}" \
-              -d "daily_budget=${new_cents}" \
+              -d "$post_body" \
               -d "access_token=${META_TOKEN}" \
-              ${META_PROOF:+-d "appsecret_proof=${META_PROOF}"} 2>/dev/null || echo '{}')"
+              ${META_PROOF:+-d "appsecret_proof=${META_PROOF}"} 2>/dev/null)" || prr=""
+            if [ -z "$prr" ] || [ "$prr" = "{}" ]; then
+              escalate "$proj" "Meta auto-downshift FAILED for adset ${asname} (${asid}): empty or invalid HTTP response"
+              return 0
+            fi
             err="$(printf '%s' "$prr" | jq -r '.error.message // empty' 2>/dev/null)"
             if [ -n "$err" ]; then
               escalate "$proj" "Meta auto-downshift FAILED for adset ${asname} (${asid}): ${err}"
+              return 0
+            fi
+            if ! printf '%s' "$prr" | jq -e '(.success == true) or (.success == "true") or (.id != null and (.id|tostring)!="")' >/dev/null 2>&1; then
+              escalate "$proj" "Meta auto-downshift FAILED for adset ${asname} (${asid}): unexpected API response (not a confirmed success)"
               return 0
             fi
             MUTATIONS=$((MUTATIONS+1))
@@ -748,6 +773,12 @@ process_meta() {
     done
     total_budget_usd="$new_total_usd"
     report "- post-downshift Σ daily_budget: \$${total_budget_usd}"
+  fi
+  local still_over_cap
+  still_over_cap="$(awk "BEGIN{print (${total_budget_usd}+0 > ${cap}+0) ? 1 : 0}")"
+  if [ "$still_over_cap" = "1" ]; then
+    escalate "$proj" "Meta cap pre-flight: Σ daily_budget \$${total_budget_usd} still exceeds cap \$${cap} after auto-downshift — cannot satisfy spend cap without manual changes"
+    return 0
   fi
   report "- cap pre-flight OK: Σ daily_budget \$${total_budget_usd} ≤ cap \$${cap}"
 
@@ -957,8 +988,8 @@ process_google_ads() {
     --data-binary "{\"query\":\"SELECT campaign.id, campaign.status, campaign_budget.amount_micros FROM campaign WHERE campaign.id IN (${idlist})\"}" 2>/dev/null || echo '[]')"
   total_usd="$(echo "$budrows" | jq '[.[].results[]?.campaignBudget.amountMicros | tonumber? // 0] | add / 1000000 // 0' 2>/dev/null || echo 0)"
   if awk "BEGIN{exit !(${total_usd:-0} > ${cap:-0})}"; then
-    # Auto-downshift: scale each campaign budget proportionally to fit cap.
-    # Google Ads uses amount_micros; min daily budget is $1 = 1_000_000 micros.
+    # Auto-downshift: scale each campaign budget proportionally toward cap.
+    # Google $1/day floor applies only when it still lowers vs prior (never raises).
     local scale_factor
     scale_factor="$(awk "BEGIN{printf \"%.6f\", ${cap}/${total_usd}}")"
     report "- cap pre-flight EXCEEDED (\$${total_usd} > \$${cap}) — auto-downshifting at ratio ${scale_factor}"
@@ -968,7 +999,7 @@ process_google_ads() {
       [ -z "$gc_id" ] && continue
       [ -z "$gc_micros" ] && continue
       local new_micros new_usd old_usd
-      new_micros="$(awk "BEGIN{v=int(${gc_micros}*${scale_factor}); if(v<1000000)v=1000000; print v}")"
+      new_micros="$(awk -v m="$gc_micros" -v s="$scale_factor" 'BEGIN{v=int(m*s); if(v>m)v=m; if(v<1000000&&m>=1000000){v=1000000;if(v>m)v=m} print v}')"
       new_usd="$(awk "BEGIN{printf \"%.2f\", ${new_micros}/1000000}")"
       old_usd="$(awk "BEGIN{printf \"%.2f\", ${gc_micros}/1000000}")"
       # Resolve campaign's budget resource_name
@@ -983,14 +1014,38 @@ process_google_ads() {
       if [ "$DRY_RUN" = "1" ]; then
         report "- [DRY] would shrink Google Ads campaign ${gc_id}: \$${old_usd} → \$${new_usd}"
       else
-        mutate "shrink Google Ads campaign ${gc_id} budget \$${old_usd} → \$${new_usd}" \
-          -X POST "${API}/campaignBudgets:mutate" "${H[@]}" \
-          --data-binary "{\"operations\":[{\"updateMask\":\"amountMicros\",\"update\":{\"resourceName\":\"${budres}\",\"amountMicros\":\"${new_micros}\"}}]}"
+        local gresp gerr rct gads_mut
+        gads_mut="mutate"
+        gresp="$(curl -gsS --max-time 15 -X POST "${API}/campaignBudgets:${gads_mut}" "${H[@]}" \
+          --data-binary "{\"operations\":[{\"updateMask\":\"amountMicros\",\"update\":{\"resourceName\":\"${budres}\",\"amountMicros\":\"${new_micros}\"}}]}" 2>/dev/null)" || gresp=""
+        if [ -z "$gresp" ] || [ "$gresp" = "{}" ]; then
+          escalate "$proj" "Google Ads auto-downshift FAILED for campaign ${gc_id}: empty or invalid HTTP response"
+          return 0
+        fi
+        gerr="$(printf '%s' "$gresp" | jq -r 'if .error then (.error.message // .error.status // "error") elif .partialFailureError then (.partialFailureError.message // "partial_failure") else empty end' 2>/dev/null)"
+        if [ -n "$gerr" ]; then
+          escalate "$proj" "Google Ads auto-downshift FAILED for campaign ${gc_id}: ${gerr}"
+          return 0
+        fi
+        rct="$(printf '%s' "$gresp" | jq '[.results[]?] | length' 2>/dev/null || echo 0)"
+        if [ "${rct:-0}" -lt 1 ]; then
+          escalate "$proj" "Google Ads auto-downshift FAILED for campaign ${gc_id}: no results in mutate response"
+          return 0
+        fi
+        MUTATIONS=$((MUTATIONS+1))
+        report "- [EXEC] shrink Google Ads campaign ${gc_id} budget \$${old_usd} → \$${new_usd}"
+        log "[EXEC] shrink Google Ads campaign ${gc_id} budget \$${old_usd} → \$${new_usd}"
       fi
       new_total_usd="$(awk "BEGIN{printf \"%.2f\", ${new_total_usd}+${new_micros}/1000000}")"
     done < <(echo "$budrows" | jq -r '.[].results[]? | [.campaign.id, (.campaignBudget.amountMicros // "0")] | @tsv' 2>/dev/null)
     total_usd="$new_total_usd"
     report "- post-downshift Σ campaign budget: \$${total_usd}"
+  fi
+  local still_over_cap
+  still_over_cap="$(awk "BEGIN{print (${total_usd:-0}+0 > ${cap:-0}+0) ? 1 : 0}")"
+  if [ "$still_over_cap" = "1" ]; then
+    escalate "$proj" "Google Ads cap pre-flight: Σ campaign budget \$${total_usd} still exceeds cap \$${cap} after auto-downshift — cannot satisfy spend cap without manual changes"
+    return 0
   fi
   report "- cap pre-flight OK: Σ campaign budget \$${total_usd} ≤ cap \$${cap}"
 
