@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# ops-bg — Wrapper around Claude Code background-session supervisor.
+#
+# Standardized entrypoint for dispatching, listing, attaching to, and managing
+# `claude --bg` sessions. Wraps the underlying `claude` CLI with sane defaults
+# and consistent ergonomics across the ops plugin.
+#
+# Subcommands:
+#   dispatch [opts] "<prompt>"  Start a new background session and return the ID.
+#   list                        List active background sessions (pretty or --json).
+#   status                      Supervisor health summary.
+#   attach <id>                 Re-attach an existing session in this terminal.
+#   logs <id>                   Print recent output from a session.
+#   stop <id>                   Stop a session (also: kill).
+#   rm <id>                     Remove a session from the roster.
+#   respawn [<id>|--all]        Restart sessions (e.g. to pick up a CC upgrade).
+#
+# Dispatch defaults (override via flags):
+#   --model      opus
+#   --effort     high
+#   --add-dir    $PWD
+#
+# Examples:
+#   ops-bg dispatch "audit My-Project repos for cost-leak gaps"
+#   ops-bg dispatch --agent ops:yolo-cto --model sonnet "analyze prod incidents"
+#   ops-bg list
+#   ops-bg list --json | jq '.[] | select(.status=="busy")'
+#   ops-bg logs 7c5dcf5d
+#   ops-bg respawn --all   # after `claude` binary upgrade
+
+set -u
+
+# Resolve underlying claude binary. If a shell function aliases `claude` for
+# Doppler routing, prefer the raw binary so we don't double-wrap secrets.
+CLAUDE_BIN="${CLAUDE_BIN:-}"
+if [ -z "$CLAUDE_BIN" ]; then
+  for candidate in \
+    "$HOME/.local/bin/claude" \
+    "/opt/homebrew/bin/claude" \
+    "/usr/local/bin/claude"; do
+    if [ -x "$candidate" ]; then
+      CLAUDE_BIN="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$CLAUDE_BIN" ] || [ ! -x "$CLAUDE_BIN" ]; then
+  echo "ops-bg: cannot find claude binary (set CLAUDE_BIN=...)" >&2
+  exit 127
+fi
+
+USAGE() {
+  sed -n '2,30p' "$0"
+  exit "${1:-0}"
+}
+
+[ $# -ge 1 ] || USAGE 1
+SUB="$1"; shift
+
+cmd_dispatch() {
+  local model="opus"
+  local effort="high"
+  local add_dir="$PWD"
+  local agent=""
+  local extra=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --model)   model="$2"; shift 2 ;;
+      --effort)  effort="$2"; shift 2 ;;
+      --cwd|--add-dir) add_dir="$2"; shift 2 ;;
+      --agent)   agent="$2"; shift 2 ;;
+      --) shift; extra+=("$@"); break ;;
+      --help|-h) USAGE 0 ;;
+      *) break ;;
+    esac
+  done
+  if [ $# -lt 1 ]; then
+    echo "ops-bg dispatch: missing <prompt>" >&2
+    exit 2
+  fi
+  local prompt="$*"
+  local -a args=(--bg --model "$model" --effort "$effort" --add-dir "$add_dir")
+  if [ -n "$agent" ]; then
+    args+=(--agent "$agent")
+  fi
+  args+=("$prompt")
+  args+=("${extra[@]}")
+  exec "$CLAUDE_BIN" "${args[@]}"
+}
+
+cmd_list() {
+  local fmt="pretty"
+  if [ "${1:-}" = "--json" ]; then fmt="json"; fi
+  local raw
+  raw="$("$CLAUDE_BIN" agents --json 2>/dev/null || echo '')"
+  if [ -z "$raw" ]; then
+    echo "ops-bg: claude agents --json returned empty (supervisor unreachable?)" >&2
+    return 1
+  fi
+  if [ "$fmt" = "json" ]; then
+    echo "$raw" | jq '[.[] | select(.kind == "background")]'
+    return
+  fi
+  command -v jq >/dev/null 2>&1 || { echo "$raw"; return; }
+  local n
+  n=$(echo "$raw" | jq '[.[] | select(.kind == "background")] | length')
+  printf 'background sessions: %s\n' "$n"
+  if [ "$n" -gt 0 ]; then
+    echo "$raw" | jq -r '
+      .[] | select(.kind == "background")
+      | "  \(.sessionId[0:8])  \(.status)  pid=\(.pid)  cwd=\(.cwd)"
+    '
+  fi
+}
+
+cmd_status() {
+  local raw
+  raw="$("$CLAUDE_BIN" daemon status 2>&1 || true)"
+  printf '%s\n' "$raw"
+}
+
+cmd_passthrough() {
+  local sub="$1"; shift
+  exec "$CLAUDE_BIN" "$sub" "$@"
+}
+
+cmd_respawn() {
+  if [ "${1:-}" = "--all" ]; then
+    exec "$CLAUDE_BIN" respawn --all
+  fi
+  if [ $# -lt 1 ]; then
+    echo "ops-bg respawn: pass <id> or --all" >&2
+    exit 2
+  fi
+  exec "$CLAUDE_BIN" respawn "$@"
+}
+
+case "$SUB" in
+  dispatch|d|run)        cmd_dispatch "$@" ;;
+  list|ls)               cmd_list "$@" ;;
+  status)                cmd_status ;;
+  attach|a)              cmd_passthrough attach "$@" ;;
+  logs|log|tail)         cmd_passthrough logs "$@" ;;
+  stop|kill)             cmd_passthrough stop "$@" ;;
+  rm|remove)             cmd_passthrough rm "$@" ;;
+  respawn|restart)       cmd_respawn "$@" ;;
+  help|--help|-h)        USAGE 0 ;;
+  *)
+    echo "ops-bg: unknown subcommand '$SUB'" >&2
+    USAGE 2
+    ;;
+esac
