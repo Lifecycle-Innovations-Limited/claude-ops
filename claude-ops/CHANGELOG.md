@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **`/ops:desktop` skill + `desktop-act` MCP wiring** — autonomous desktop + browser control surfaced as a first-class ops command. Acquires a noVNC desktop session, takes screenshots, clicks, types, scrolls, and runs the autonomous `act()` loop driven by the bundled `claude-agent-sdk` (OAuth via Claude Max, no Anthropic API key). Cross-platform launcher (Linux full / macOS / Windows partial).
+- **`mcp-servers/desktop-act-launcher.py`** — pure-Python cross-platform launcher. Resolves an installed `desktop-act` companion in (1) `$DESKTOP_ACT_COMMAND`, (2) `$DESKTOP_ACT_HOME`, (3) `$CLAUDE_CONFIG_DIR/plugins/marketplaces/desktop-act`, (4) the per-OS Claude config dir, (5) the per-user cache (`$XDG_CACHE_HOME` on Linux, `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows). If none exist it `git clone`s `$DESKTOP_ACT_REPO` (default your-org/desktop-act), bootstraps a venv, `pip install -r requirements.txt`, then `execv`s the runner. Falls back to a clear error message — never hangs the MCP host.
+- **plugin.json userConfig keys** — `desktop_act_command`, `desktop_act_home`, `desktop_act_repo`, `desktop_act_branch` for per-user overrides.
+- **`.mcp.json` `desktop-act` server registration** — wired via `${CLAUDE_PLUGIN_ROOT}/mcp-servers/desktop-act-launcher.py`. All `mcp__desktop-act__*` tools (`acquire_desktop`, `screenshot`, `click`, `type_text`, `act`, …) are now part of the ops surface.
+- **AWS Security Group IP-whitelist auto-updater** — keeps a single SG ingress rule synced to your current public IPv4 across Wi-Fi switches, VPN flaps, and ISP IP rotations. Useful for dev sandboxes / bastion hosts that should only accept connections from your laptop.
+  - `scripts/aws-sg-ip-whitelist.sh` — idempotent core: detect public IP → reap stale managed rules → authorize new IP with a timestamped description. Configured via `IP_WHITELIST_SG_ID` / `IP_WHITELIST_REGION` / `IP_WHITELIST_PORT` / `IP_WHITELIST_DESC_PREFIX` / `IP_WHITELIST_KEEP_RECENT` env vars.
+  - `scripts/ssh-auto-whitelist.sh` — SSH wrapper that retries once after refreshing the SG when the first attempt times out / is refused.
+  - `scripts/install-ip-whitelist-agent.sh` + `launchd/com.claude-ops.ip-whitelist.plist.template` — macOS launchd agent that fires on `/etc/resolv.conf` changes (network state) with a 5-minute fallback poll and a 30-second throttle. Linux support stubbed (cron / systemd path-unit guidance in the installer output).
+  - `plugin.json` userConfig: `ip_whitelist_sg_id`, `ip_whitelist_region`, `ip_whitelist_port`, `ip_whitelist_desc_prefix`, `ip_whitelist_keep_recent`.
+
+### Notes
+
+- Linux is the primary supported platform for desktop-act (X11 + Xvnc + websockify + python-xlib). macOS and Windows can launch the server but native X11 calls no-op; browser/Kapture paths still work.
+- First run on a fresh box performs a one-time clone + `pip install`. Subsequent launches `execv` directly into the cached venv with no extra latency.
+
 ## [2.11.0] — 2026-05-22
 
 First-class Linux parity for the background daemon, plus two cross-platform fixes that surfaced during Linux bring-up on Amazon Linux 2023.
