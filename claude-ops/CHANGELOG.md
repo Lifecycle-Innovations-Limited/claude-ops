@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **AWS Security Group IP-whitelist auto-updater** — keeps a single SG ingress rule synced to your current public IPv4 across Wi-Fi switches, VPN flaps, and ISP IP rotations. Useful for dev sandboxes / bastion hosts that should only accept connections from your laptop.
+  - `scripts/aws-sg-ip-whitelist.sh` — idempotent core: detect public IP → reap stale managed rules → authorize new IP with a timestamped description. Configured via `IP_WHITELIST_SG_ID` / `IP_WHITELIST_REGION` / `IP_WHITELIST_PORT` / `IP_WHITELIST_DESC_PREFIX` / `IP_WHITELIST_KEEP_RECENT` env vars.
+  - `scripts/ssh-auto-whitelist.sh` — SSH wrapper that retries once after refreshing the SG when the first attempt times out / is refused.
+  - `scripts/install-ip-whitelist-agent.sh` + `launchd/com.claude-ops.ip-whitelist.plist.template` — macOS launchd agent that fires on `/etc/resolv.conf` changes (network state) with a 5-minute fallback poll and a 30-second throttle. Linux support stubbed (cron / systemd path-unit guidance in the installer output).
+  - `plugin.json` userConfig: `ip_whitelist_sg_id`, `ip_whitelist_region`, `ip_whitelist_port`, `ip_whitelist_desc_prefix`, `ip_whitelist_keep_recent`.
+
 ## [2.11.0] — 2026-05-22
 
 First-class Linux parity for the background daemon, plus two cross-platform fixes that surfaced during Linux bring-up on Amazon Linux 2023.
