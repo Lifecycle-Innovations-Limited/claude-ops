@@ -25,6 +25,10 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **feat(ops): integrate Claude Code background-server supervisor** (#338) — first-class visibility + dispatch ergonomics for `claude --bg` background sessions across the ops plugin. Claude Code ships a persistent supervisor that hosts `--bg` agents independently of the interactive session (survives terminal close, sleep, CC binary upgrades).
+  - `bin/ops-doctor` — new section 10c probes `claude agents --json` (fallback: `claude daemon status`). Adds `claude_background_server` to JSON output with `supervisor_status` (`running|idle|unreachable`), `bg_sessions`, `interactive_sessions`. Warns when roster claims live sessions but control socket is dead (→ `claude respawn --all`).
+  - `bin/ops-status` — new `Claude bg` row in pretty panel + `claude_bg` field in `--json`. Distinguishes healthy ephemeral idle from broken-supervisor unreachable. Drive-by fix: bash 5.3 parses `${!ARR[*]:-}` as indirect-on-values, causing "invalid variable name" on Voice/Monitoring rows; guarded with array-bound + length check.
+  - `bin/ops-bg` (new) — thin wrapper around `claude --bg | agents --json | attach | logs | stop | rm | respawn` with standardized defaults (`--model opus --effort high --add-dir $PWD`). Subcommands: `dispatch | list | status | attach | logs | stop | rm | respawn`.
 - **feat(autopilot): auto-downshift Meta + Google Ads budgets when over cap** (#337) — autopilot detects when ad spend crosses the configured daily cap and automatically reduces the active budget on both Meta Marketing API and Google Ads API, preventing runaway spend without manual intervention.
 
 ## [2.11.0] — 2026-05-22
