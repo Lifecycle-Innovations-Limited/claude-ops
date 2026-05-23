@@ -728,6 +728,45 @@
       "title": "Enable FedEx shipping",
       "description": "Use FedEx labels via /ops:package. Requires fedex_client_id/secret + account_number.",
       "default": false
+    },
+    "ip_whitelist_sg_id": {
+      "title": "IP-whitelist target Security Group",
+      "description": "AWS Security Group ID (sg-...) that aws-sg-ip-whitelist.sh keeps in sync with your current public IPv4. Leave blank to disable the feature.",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "ip_whitelist_region": {
+      "title": "IP-whitelist AWS region",
+      "description": "Region containing ip_whitelist_sg_id. Defaults to us-east-1.",
+      "type": "string",
+      "sensitive": false,
+      "default": "us-east-1"
+    },
+    "ip_whitelist_port": {
+      "title": "IP-whitelist TCP port",
+      "description": "Single TCP port to authorize (default 22 for SSH).",
+      "type": "number",
+      "sensitive": false,
+      "default": 22,
+      "min": 1,
+      "max": 65535
+    },
+    "ip_whitelist_desc_prefix": {
+      "title": "IP-whitelist rule description prefix",
+      "description": "Description prefix for managed rules — e.g. 'mylaptop'. Defaults to <hostname>-laptop. Rules with this prefix are reaped when older than ip_whitelist_keep_recent.",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "ip_whitelist_keep_recent": {
+      "title": "IP-whitelist rules to retain",
+      "description": "Newest N managed rules retained before pruning. Default 2.",
+      "type": "number",
+      "sensitive": false,
+      "default": 2,
+      "min": 0,
+      "max": 20
     }
   }
 }
