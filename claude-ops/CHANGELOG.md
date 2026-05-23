@@ -21,6 +21,12 @@ All notable changes to this project will be documented in this file.
 - Linux is the primary supported platform for desktop-act (X11 + Xvnc + websockify + python-xlib). macOS and Windows can launch the server but native X11 calls no-op; browser/Kapture paths still work.
 - First run on a fresh box performs a one-time clone + `pip install`. Subsequent launches `execv` directly into the cached venv with no extra latency.
 
+## [2.11.2] — 2026-05-23
+
+### Added
+
+- **feat(autopilot): auto-downshift Meta + Google Ads budgets when over cap** (#337) — autopilot detects when ad spend crosses the configured daily cap and automatically reduces the active budget on both Meta Marketing API and Google Ads API, preventing runaway spend without manual intervention.
+
 ## [2.11.0] — 2026-05-22
 
 First-class Linux parity for the background daemon, plus two cross-platform fixes that surfaced during Linux bring-up on Amazon Linux 2023.
