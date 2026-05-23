@@ -219,19 +219,35 @@ def _bootstrap() -> Path | None:
 
     py_bin = shutil.which("python3") or shutil.which("python")
     venv_dir = src / ".venv"
-    if not venv_dir.exists():
-        print(f"[desktop-act-launcher] creating venv at {venv_dir}", file=sys.stderr)
-        try:
-            subprocess.run([py_bin, "-m", "venv", str(venv_dir)], check=True)
-        except subprocess.CalledProcessError as e:
+    vpy: str | None = None
+    for attempt in range(2):
+        if not venv_dir.exists():
+            print(f"[desktop-act-launcher] creating venv at {venv_dir}", file=sys.stderr)
+            try:
+                subprocess.run([py_bin, "-m", "venv", str(venv_dir)], check=True)
+            except subprocess.CalledProcessError as e:
+                print(
+                    f"[desktop-act-launcher] venv create failed (exit {e.returncode})",
+                    file=sys.stderr,
+                )
+                return None
+        vpy = _venv_python(src)
+        if vpy:
+            break
+        if attempt == 0 and venv_dir.exists():
             print(
-                f"[desktop-act-launcher] venv create failed (exit {e.returncode})",
+                f"[desktop-act-launcher] removing broken venv at {venv_dir}",
                 file=sys.stderr,
             )
-            return None
-
-    vpy = _venv_python(src)
-    if not vpy:
+            try:
+                shutil.rmtree(venv_dir)
+            except OSError as e:
+                print(
+                    f"[desktop-act-launcher] could not remove broken venv: {e}",
+                    file=sys.stderr,
+                )
+                return None
+            continue
         return None
     req = src / "requirements.txt"
     if req.exists():
