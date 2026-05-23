@@ -703,6 +703,44 @@ else
   done
 fi
 
+# --- 10c. Claude Code background-server supervisor ---
+# Probes `claude agents --json` to detect the persistent bg-session supervisor.
+# Ephemeral (no live bg sessions) is healthy. We only warn if the supervisor
+# is unreachable AND a live bg session is claimed in roster.json.
+CC_BG_SUPERVISOR_STATUS="unknown"
+CC_BG_SESSION_COUNT=0
+CC_INTERACTIVE_SESSION_COUNT=0
+if command -v claude >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  CC_AGENTS_JSON=$(claude agents --json 2>/dev/null || echo "")
+  if [ -n "$CC_AGENTS_JSON" ] && echo "$CC_AGENTS_JSON" | jq empty 2>/dev/null; then
+    CC_BG_SESSION_COUNT=$(echo "$CC_AGENTS_JSON" | jq '[.[] | select(.kind == "background")] | length' 2>/dev/null || echo 0)
+    CC_INTERACTIVE_SESSION_COUNT=$(echo "$CC_AGENTS_JSON" | jq '[.[] | select(.kind == "interactive")] | length' 2>/dev/null || echo 0)
+    if [ "$CC_BG_SESSION_COUNT" -gt 0 ]; then
+      CC_BG_SUPERVISOR_STATUS="running"
+    else
+      CC_BG_SUPERVISOR_STATUS="idle"
+    fi
+  else
+    # Fall back to `claude daemon status` to distinguish unreachable from idle.
+    CC_DAEMON_RAW=$(claude daemon status 2>&1 || true)
+    if echo "$CC_DAEMON_RAW" | head -1 | grep -qi "^not running"; then
+      CC_BG_SUPERVISOR_STATUS="idle"
+    elif echo "$CC_DAEMON_RAW" | grep -qi "unreachable"; then
+      # Roster claims sessions but socket is dead — real bug.
+      ROSTER_WORKERS=$(echo "$CC_DAEMON_RAW" | grep -oE 'bg workers:[[:space:]]+[0-9]+' | grep -oE '[0-9]+' || echo 0)
+      if [ "${ROSTER_WORKERS:-0}" -gt 0 ]; then
+        CC_BG_SUPERVISOR_STATUS="unreachable"
+        WARNINGS+=("claude_supervisor_unreachable: $ROSTER_WORKERS bg session(s) in roster but control.sock unreachable. Run: claude respawn --all")
+      else
+        CC_BG_SUPERVISOR_STATUS="idle"
+      fi
+    else
+      CC_BG_SUPERVISOR_STATUS="unknown"
+      INFO+=("claude_supervisor_probe_failed: could not parse 'claude agents --json' or 'claude daemon status' output")
+    fi
+  fi
+fi
+
 # --- 10b. Cache copies vs source ---
 CACHE_DIR="$HOME/.claude/plugins/cache/ops-marketplace/ops"
 CACHE_VERSIONS=()
@@ -757,6 +795,11 @@ cat <<EOF
   },
   "cache_versions": $cache_json,
   "daemon_services_health": $daemon_json,
+  "claude_background_server": {
+    "supervisor_status": "$CC_BG_SUPERVISOR_STATUS",
+    "bg_sessions": $CC_BG_SESSION_COUNT,
+    "interactive_sessions": $CC_INTERACTIVE_SESSION_COUNT
+  },
   "skill_count": $(find "$SCRIPT_DIR/skills" -name "SKILL.md" 2>/dev/null | wc -l | tr -d ' '),
   "agent_count": $(find "$SCRIPT_DIR/agents" -name "*.md" 2>/dev/null | wc -l | tr -d ' '),
   "bin_count": $(find "$SCRIPT_DIR/bin" -name "ops-*" 2>/dev/null | wc -l | tr -d ' ')
