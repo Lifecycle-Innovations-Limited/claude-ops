@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude-ops.ip-whitelist</string>
+
+    <!-- Fire on network state changes (resolv.conf is rewritten on each IP/DNS change) -->
+    <key>WatchPaths</key>
+    <array>
+        <string>/etc/resolv.conf</string>
+        <string>/var/run/resolv.conf</string>
+    </array>
+
+    <!-- Fallback: poll every 5 minutes to catch Wi-Fi switches WatchPaths may miss -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <!-- Prevent storm during network flap -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <!-- Source shell env (AWS creds, PATH), then run the whitelist script.
+             __PLUGIN_ROOT__ is substituted at install time by install-ip-whitelist-agent.sh. -->
+        <string>export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"; source "$HOME/.zshenv" 2>/dev/null; source "$HOME/.zprofile" 2>/dev/null; exec "__PLUGIN_ROOT__/scripts/aws-sg-ip-whitelist.sh"</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>IP_WHITELIST_SG_ID</key>
+        <string>__IP_WHITELIST_SG_ID__</string>
+        <key>IP_WHITELIST_REGION</key>
+        <string>__IP_WHITELIST_REGION__</string>
+        <key>IP_WHITELIST_PORT</key>
+        <string>__IP_WHITELIST_PORT__</string>
+        <key>IP_WHITELIST_DESC_PREFIX</key>
+        <string>__IP_WHITELIST_DESC_PREFIX__</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/ip-whitelist.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/ip-whitelist.err.log</string>
+
+    <!-- Do not trigger on login -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Oneshot per event, not a daemon -->
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
