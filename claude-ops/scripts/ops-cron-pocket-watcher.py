@@ -347,10 +347,11 @@ class MCPClient:
 def _resolve_anthropic_auth() -> tuple[str, dict] | tuple[None, None]:
     """Returns (header_value, extra_headers) or (None, None) if no auth.
 
-    Prefers Claude Code OAuth from keychain so subscription users don't pay
-    metered rates. Falls back to ANTHROPIC_API_KEY env / keychain.
+    Prefers Claude Code OAuth (macOS keychain or Linux/WSL file-backed
+    credentials at ~/.claude/.credentials.json) so subscription users don't
+    pay metered rates. Falls back to ANTHROPIC_API_KEY env / keychain.
     """
-    # Try Claude Code OAuth first
+    # Try Claude Code OAuth — macOS keychain
     try:
         blob = subprocess.run(
             ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
@@ -364,6 +365,18 @@ def _resolve_anthropic_auth() -> tuple[str, dict] | tuple[None, None]:
             if tok and exp > int(time.time() * 1000) + 60000:
                 return (f"Bearer {tok}", {"anthropic-beta": "oauth-2025-04-20"})
     except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        pass
+    # Try Claude Code OAuth — Linux/WSL file-backed credentials
+    try:
+        creds_path = Path(os.path.expanduser("~")) / ".claude" / ".credentials.json"
+        if creds_path.exists():
+            data = json.loads(creds_path.read_text())
+            o = data.get("claudeAiOauth") or {}
+            tok = o.get("accessToken") or ""
+            exp = o.get("expiresAt") or 0
+            if tok and exp > int(time.time() * 1000) + 60000:
+                return (f"Bearer {tok}", {"anthropic-beta": "oauth-2025-04-20"})
+    except (OSError, json.JSONDecodeError):
         pass
     # API key fallback
     key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
