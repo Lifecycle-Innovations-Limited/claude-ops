@@ -12,10 +12,14 @@
 #
 # Spend-safety invariants (NEVER LEAK MONEY + Rule 5):
 #   - No daily_spend_cap_usd  -> project skipped, escalation note, zero mutations
-#   - Sum(campaign daily_budget) > cap OR runaway amount_spent -> abort project
-#   - May ONLY pause / swap / regenerate creatives. NEVER raises budgets, creates
-#     campaigns, creates/expands audiences, or changes objectives — object creation
-#     goes through create_object() autonomy gate which enforces staging + approval.
+#   - Sum(campaign daily_budget) > cap -> AUTO-DOWNSHIFT each campaign/adset
+#     budget proportionally (scale = cap / Σ_budget) to fit under cap. Respects
+#     Meta $1/day = 100¢ minimum. Logged + mutation-counted. Never raises.
+#   - Runaway amount_spent (delta > 1.5× cap since last pass) -> abort project
+#   - May pause / swap / regenerate creatives + downshift budgets to fit cap.
+#     NEVER raises budgets, creates campaigns, creates/expands audiences, or
+#     changes objectives — object creation goes through create_object() autonomy
+#     gate which enforces staging + approval.
 #   - --dry-run flag; first install run is forced dry (logs intended actions only)
 #
 # Flags: --dry-run  --project <name>  --channel meta|google_ads
@@ -677,8 +681,73 @@ process_meta() {
   local over
   over="$(awk "BEGIN{print (${total_budget_usd}+0 > ${cap}+0) ? 1 : 0}")"
   if [ "$over" = "1" ]; then
-    escalate "$proj" "Meta Σ daily_budget \$${total_budget_usd} exceeds cap \$${cap} — possible budget tamper. No mutations."
-    return 0
+    # Auto-downshift: scale all campaign/adset budgets proportionally to fit cap.
+    # Preserves campaign mix; respects Meta $1/day minimum (100 cents).
+    local scale_factor
+    scale_factor="$(awk "BEGIN{printf \"%.6f\", ${cap}/${total_budget_usd}}")"
+    report "- cap pre-flight EXCEEDED (\$${total_budget_usd} > \$${cap}) — auto-downshifting at ratio ${scale_factor}"
+
+    local new_total_usd=0
+    for cid in "${CIDS[@]}"; do
+      camp="$(meta_get "${cid}?fields=name,status,daily_budget" "$proj")"
+      local cname; cname="$(echo "$camp" | jq -r '.name // empty' 2>/dev/null)"
+      local cdb; cdb="$(echo "$camp" | jq -r '.daily_budget // empty' 2>/dev/null)"
+      if [ -n "$cdb" ] && [ "$cdb" != "null" ]; then
+        # CBO: scale campaign-level budget
+        local new_cents new_usd old_usd
+        new_cents="$(awk "BEGIN{v=int(${cdb}*${scale_factor}); if(v<100)v=100; print v}")"
+        new_usd="$(awk "BEGIN{printf \"%.2f\", ${new_cents}/100}")"
+        old_usd="$(awk "BEGIN{printf \"%.2f\", ${cdb}/100}")"
+        if [ "$DRY_RUN" = "1" ]; then
+          report "- [DRY] would shrink ${cname} (${cid}): \$${old_usd} → \$${new_usd}"
+        else
+          local prr err
+          prr="$(curl -gsS --max-time 15 -X POST "${GRAPH}/${cid}" \
+            -d "daily_budget=${new_cents}" \
+            -d "access_token=${META_TOKEN}" \
+            ${META_PROOF:+-d "appsecret_proof=${META_PROOF}"} 2>/dev/null || echo '{}')"
+          err="$(printf '%s' "$prr" | jq -r '.error.message // empty' 2>/dev/null)"
+          if [ -n "$err" ]; then
+            escalate "$proj" "Meta auto-downshift FAILED for ${cname} (${cid}): ${err}"
+            return 0
+          fi
+          MUTATIONS=$((MUTATIONS+1))
+          report "- [SHRINK] ${cname} (${cid}): \$${old_usd} → \$${new_usd}"
+        fi
+        new_total_usd="$(awk "BEGIN{printf \"%.2f\", ${new_total_usd}+${new_cents}/100}")"
+      else
+        # ABO: scale each ACTIVE adset's daily_budget
+        adsets="$(meta_get "${cid}/adsets?fields=name,daily_budget,effective_status&limit=200" "$proj")"
+        while IFS=$'\t' read -r asid asname asdb; do
+          [ -z "$asid" ] && continue
+          [ -z "$asdb" ] && continue
+          [ "$asdb" = "null" ] && continue
+          local new_cents new_usd old_usd
+          new_cents="$(awk "BEGIN{v=int(${asdb}*${scale_factor}); if(v<100)v=100; print v}")"
+          new_usd="$(awk "BEGIN{printf \"%.2f\", ${new_cents}/100}")"
+          old_usd="$(awk "BEGIN{printf \"%.2f\", ${asdb}/100}")"
+          if [ "$DRY_RUN" = "1" ]; then
+            report "- [DRY] would shrink adset ${asname} (${asid}): \$${old_usd} → \$${new_usd}"
+          else
+            local prr err
+            prr="$(curl -gsS --max-time 15 -X POST "${GRAPH}/${asid}" \
+              -d "daily_budget=${new_cents}" \
+              -d "access_token=${META_TOKEN}" \
+              ${META_PROOF:+-d "appsecret_proof=${META_PROOF}"} 2>/dev/null || echo '{}')"
+            err="$(printf '%s' "$prr" | jq -r '.error.message // empty' 2>/dev/null)"
+            if [ -n "$err" ]; then
+              escalate "$proj" "Meta auto-downshift FAILED for adset ${asname} (${asid}): ${err}"
+              return 0
+            fi
+            MUTATIONS=$((MUTATIONS+1))
+            report "- [SHRINK] adset ${asname} (${asid}): \$${old_usd} → \$${new_usd}"
+          fi
+          new_total_usd="$(awk "BEGIN{printf \"%.2f\", ${new_total_usd}+${new_cents}/100}")"
+        done < <(echo "$adsets" | jq -r '.data[]? | select(.effective_status=="ACTIVE") | select(.daily_budget != null) | [.id, .name, .daily_budget] | @tsv' 2>/dev/null)
+      fi
+    done
+    total_budget_usd="$new_total_usd"
+    report "- post-downshift Σ daily_budget: \$${total_budget_usd}"
   fi
   report "- cap pre-flight OK: Σ daily_budget \$${total_budget_usd} ≤ cap \$${cap}"
 
@@ -888,8 +957,40 @@ process_google_ads() {
     --data-binary "{\"query\":\"SELECT campaign.id, campaign.status, campaign_budget.amount_micros FROM campaign WHERE campaign.id IN (${idlist})\"}" 2>/dev/null || echo '[]')"
   total_usd="$(echo "$budrows" | jq '[.[].results[]?.campaignBudget.amountMicros | tonumber? // 0] | add / 1000000 // 0' 2>/dev/null || echo 0)"
   if awk "BEGIN{exit !(${total_usd:-0} > ${cap:-0})}"; then
-    escalate "$proj" "Google Ads Σ campaign budget \$${total_usd} exceeds cap \$${cap} — possible tamper. No mutations."
-    return 0
+    # Auto-downshift: scale each campaign budget proportionally to fit cap.
+    # Google Ads uses amount_micros; min daily budget is $1 = 1_000_000 micros.
+    local scale_factor
+    scale_factor="$(awk "BEGIN{printf \"%.6f\", ${cap}/${total_usd}}")"
+    report "- cap pre-flight EXCEEDED (\$${total_usd} > \$${cap}) — auto-downshifting at ratio ${scale_factor}"
+
+    local new_total_usd=0 gc_id gc_budget_resource gc_micros
+    while IFS=$'\t' read -r gc_id gc_micros; do
+      [ -z "$gc_id" ] && continue
+      [ -z "$gc_micros" ] && continue
+      local new_micros new_usd old_usd
+      new_micros="$(awk "BEGIN{v=int(${gc_micros}*${scale_factor}); if(v<1000000)v=1000000; print v}")"
+      new_usd="$(awk "BEGIN{printf \"%.2f\", ${new_micros}/1000000}")"
+      old_usd="$(awk "BEGIN{printf \"%.2f\", ${gc_micros}/1000000}")"
+      # Resolve campaign's budget resource_name
+      local budres
+      budres="$(curl -gsS --max-time 10 -X POST "${API}/googleAds:searchStream" "${H[@]}" \
+        --data-binary "{\"query\":\"SELECT campaign.campaign_budget FROM campaign WHERE campaign.id = ${gc_id}\"}" 2>/dev/null \
+        | jq -r '.[0].results[0].campaign.campaignBudget // empty' 2>/dev/null)"
+      if [ -z "$budres" ]; then
+        escalate "$proj" "Google Ads auto-downshift: cannot resolve budget resource for campaign ${gc_id}"
+        return 0
+      fi
+      if [ "$DRY_RUN" = "1" ]; then
+        report "- [DRY] would shrink Google Ads campaign ${gc_id}: \$${old_usd} → \$${new_usd}"
+      else
+        mutate "shrink Google Ads campaign ${gc_id} budget \$${old_usd} → \$${new_usd}" \
+          -X POST "${API}/campaignBudgets:mutate" "${H[@]}" \
+          --data-binary "{\"operations\":[{\"updateMask\":\"amountMicros\",\"update\":{\"resourceName\":\"${budres}\",\"amountMicros\":\"${new_micros}\"}}]}"
+      fi
+      new_total_usd="$(awk "BEGIN{printf \"%.2f\", ${new_total_usd}+${new_micros}/1000000}")"
+    done < <(echo "$budrows" | jq -r '.[].results[]? | [.campaign.id, (.campaignBudget.amountMicros // "0")] | @tsv' 2>/dev/null)
+    total_usd="$new_total_usd"
+    report "- post-downshift Σ campaign budget: \$${total_usd}"
   fi
   report "- cap pre-flight OK: Σ campaign budget \$${total_usd} ≤ cap \$${cap}"
 
