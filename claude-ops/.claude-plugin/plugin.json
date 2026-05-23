@@ -728,6 +728,34 @@
       "title": "Enable FedEx shipping",
       "description": "Use FedEx labels via /ops:package. Requires fedex_client_id/secret + account_number.",
       "default": false
+    },
+    "desktop_act_command": {
+      "title": "desktop-act runner path (override)",
+      "description": "Absolute path to a custom desktop-act MCP server executable. Leave blank to auto-discover the desktop-act plugin or bootstrap into the per-user cache.",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "desktop_act_home": {
+      "title": "desktop-act install directory (override)",
+      "description": "Absolute path to a desktop-act marketplace checkout. Used when the plugin is installed outside the standard Claude Code marketplace tree.",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "desktop_act_repo": {
+      "title": "desktop-act source repository",
+      "description": "Git URL the launcher clones from when bootstrapping a fresh install. Defaults to the public Lifecycle-Innovations-Limited/desktop-act repo.",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
+    "desktop_act_branch": {
+      "title": "desktop-act branch / tag",
+      "description": "Branch or tag to clone when bootstrapping. Defaults to main.",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
     }
   }
 }
