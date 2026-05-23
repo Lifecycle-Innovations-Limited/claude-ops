@@ -41,7 +41,7 @@ jobs:
         run: pip install -r scripts/stagery-spend-poller/requirements.txt
 
       - name: Install Doppler CLI
-        uses: dopplerhq/cli-action@v3
+        uses: dopplerhq/cli-action@v4
 
       - name: Run poller
         run: |
