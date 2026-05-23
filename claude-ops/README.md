@@ -89,6 +89,7 @@ Per-repo budget caps (default 3/hour), single-flight locks, content-hash dedup, 
 | `/ops:recap`      | **v2** — Status/tail/configure/restart for the multi-session recap marquee daemon |
 | `/ops:rotate`     | **v2** — Manually rotate the active Claude Max account                         |
 | `/ops:rotate-setup` | **v2** — Multi-account onboarding for the rotator                            |
+| `/ops:desktop`    | Autonomous desktop + browser control via the `desktop-act` MCP companion       |
 
 ### Dashboard hotkeys
 
