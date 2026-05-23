@@ -35,9 +35,6 @@ allowed-tools:
   - mcp__x-mcp__get_following
   - mcp__x-mcp__get_bookmarks
   - mcp__x-mcp__bookmark_tweet
-  - mcp__x-mcp__like_tweet
-  - mcp__x-mcp__reply_to_tweet
-  - mcp__x-mcp__retweet
   - mcp__x-mcp__upload_media
 effort: medium
 maxTurns: 40
@@ -50,7 +47,7 @@ Three surfaces, three roles. Don't cross the streams.
 | Intent | Surface | Default tool |
 |---|---|---|
 | **Read X** — search, timeline, mentions, user lookup, "what's @x saying about Y", AI-news pulse | invoke skill `x-research-skill` for agentic multi-pass research; or call `mcp__x-mcp__*` directly for surgical queries | `mcp__x-mcp__search_tweets`, `get_timeline`, `get_mentions` |
-| **Long-form X Article** (markdown → X Premium Article) | invoke skill `x-article-publisher-skill` | requires X Premium Plus + Playwright |
+| **Long-form X Article** (markdown → X Premium Article) | **Not via `x-article-publisher-skill` here** — that path needs Playwright on X, which hard rule 3 forbids. | Stage a Typefully draft: hook + summary + URL to the full piece (hosted blog/newsletter/static page); publish a native X Article only manually in the X client if needed. |
 | **LinkedIn voice / human-sounding posts / comments / growth tactics** | invoke skill `linkedin-skills` for CRAFT; publish via Typefully | text drafted in linkedin-skills → handed to typefully_create_draft |
 | **Short tweet / thread / LinkedIn post / cross-platform** | Typefully (social set 294555) — `mcp__typefully__typefully_create_draft` | multi-platform: `platforms: ["x","linkedin","threads","bluesky","mastodon"]` |
 | **Schedule** | Typefully with `schedule_date: "next-free-slot"` or ISO | `mcp__typefully__typefully_get_queue` to inspect |
@@ -146,7 +143,7 @@ mcp__typefully__typefully_list_social_set_analytics_posts({
 Per-tweet drill-down on impressions/engagement: `mcp__x-mcp__get_metrics({ id })`.
 
 ### "Publish a markdown article to X"
-Invoke `x-article-publisher-skill` — needs X Premium Plus + Playwright MCP. Heavy artillery; use for genuine long-form, not short tweets.
+Do **not** invoke `x-article-publisher-skill` from this router: it depends on Playwright against X, which violates hard rule 3. For genuine long-form, host the markdown elsewhere, then `typefully_create_draft` with a teaser and link (and optional cross-platform `platforms`). If a native X Article is required, draft the promo in Typefully for approval, then create the article manually in X after ship — never automate the X web UI from here.
 
 ## Pre-flight check (run when troubleshooting)
 
