@@ -16,6 +16,16 @@
       "env": {
         "DOPPLER_TOKEN": "${user_config.doppler_token}"
       }
+    },
+    "desktop-act": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-servers/desktop-act-launcher.py"],
+      "env": {
+        "DESKTOP_ACT_COMMAND": "${user_config.desktop_act_command}",
+        "DESKTOP_ACT_HOME": "${user_config.desktop_act_home}",
+        "DESKTOP_ACT_REPO": "${user_config.desktop_act_repo}",
+        "DESKTOP_ACT_BRANCH": "${user_config.desktop_act_branch}"
+      }
     }
   }
 }
