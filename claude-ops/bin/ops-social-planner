@@ -1,11 +1,3 @@
 #!/usr/bin/env bash
-# ops-social-planner — engine-agnostic planned-posts/ads collector + local viewer.
-# Owner data is resolved at runtime into $OPS_DATA_DIR; nothing project-specific is hardcoded.
-set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-# Canonical OPS_DATA_DIR (respects $CLAUDE_PLUGIN_DATA_DIR) — same resolver every sibling bin uses.
-OPS_PLUGIN_ROOT_FALLBACK="$PLUGIN_ROOT" . "${PLUGIN_ROOT}/lib/registry-path.sh"
-export OPS_DATA_DIR
-export PREFS_PATH="${PREFS_PATH:-${OPS_DATA_DIR}/preferences.json}"
-exec node "${PLUGIN_ROOT}/skills/ops-social-planner/lib/planner.mjs" "$@"
+# Shim → ESM core (claude-ops package.json is type:module; .mjs is unambiguous).
+exec node "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/skills/ops-social-planner/lib/planner.mjs" "$@"

@@ -37,7 +37,7 @@ skills/ops-social-planner/
   ui/state.sample.json            # PII-free synthetic fixture so the UI renders in the PR with no creds
 ```
 Runtime data (gitignored / outside repo): `$OPS_DATA_DIR/social-planner/state.json`
-(`OPS_DATA_DIR` is resolved at runtime via `lib/registry-path.sh`, honoring `$CLAUDE_PLUGIN_DATA_DIR`).
+(`OPS_DATA_DIR` defaults to the plugin data dir `~/.claude/plugins/data/ops-ops-marketplace`).
 
 ### Collector flow
 1. Read `$PREFS_PATH/preferences.json` → `marketing.social_identities.personal.*` +
@@ -80,7 +80,7 @@ LLM-written one and pull ads through MCP (Meta/Google) before regenerating.
 - Semantic HTML, full keyboard nav, visible focus, `aria-*`, `prefers-reduced-motion`,
   `prefers-color-scheme` + manual toggle persisted to `localStorage`.
 - Fluid type (`clamp`), CSS grid + container-ish responsive, design tokens via custom properties.
-- Shareable state in URL hash (`#id=<project>&channel=<channel>&view=posts`).
+- Shareable state in URL hash (`#id=healify&channel=instagram&view=posts`).
 - Read-only; no secrets in client; `state.json` served from a localhost-bound server only.
 - Defensive: renders from `state.sample.json` when no live state exists.
 
