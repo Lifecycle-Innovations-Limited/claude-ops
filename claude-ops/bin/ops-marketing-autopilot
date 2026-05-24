@@ -1323,13 +1323,15 @@ gather_revenuecat_revenue() {
   # No revenuecat block → no-op (web-only projects stay Stripe-only, zero regression).
   local has_block
   has_block="$(jq -r --arg p "$proj" '.marketing.projects[$p].revenuecat // empty | if . == null then "" else "1" end' "$PREFS" 2>/dev/null)"
-  [ -z "$has_block" ] && return 0
+  # Drop stale JSON when RevenueCat is not configured — otherwise surface_perf_signals
+  # would still sum a leftover file and inflate ground-truth ROAS.
+  [ -z "$has_block" ] && { rm -f "$out"; return 0; }
   local api_key project_id
   api_key="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].revenuecat.api_key // .marketing.projects[$p].revenuecat.secret_key // empty' "$PREFS" 2>/dev/null)")"
   project_id="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].revenuecat.project_id // empty' "$PREFS" 2>/dev/null)")"
   if [ -z "$api_key" ] || [ -z "$project_id" ]; then
     report "- revenuecat: api_key/project_id not configured — skipped (App-Store revenue not counted in ROAS)"
-    [ -f "$out" ] || printf '%s' '{"revenuecat_revenue_7d":0,"revenuecat_revenue_28d":0,"_note":"not_configured"}' > "$out"
+    printf '%s' '{"revenuecat_revenue_7d":0,"revenuecat_revenue_28d":0,"_note":"not_configured"}' > "$out"
     return 0
   fi
   if [ "$DRY_RUN" = "1" ]; then
