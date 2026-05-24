@@ -1311,6 +1311,52 @@ gather_stripe_revenue() {
   report "- stripe: \$${tot} attributed revenue 7d (UTM-tagged charges) → ${out##*/}"
 }
 
+# gather_revenuecat_revenue <project>
+# RevenueCat is the App-Store/Play IAP revenue source (Stripe only sees web charges).
+# For mobile apps (e.g. healify) the real ROAS denominator lives here. Pulls the
+# v2 metrics overview (28d realized revenue) and normalizes to a 7d estimate
+# (/4) so it sums cleanly with the Stripe 7d window. Only runs for projects with
+# a `.revenuecat` config block; degrades gracefully to 0 (never hard-fails).
+gather_revenuecat_revenue() {
+  local proj="$1"
+  local out="${STATE_DIR}/${proj}-revenuecat.json"
+  # No revenuecat block → no-op (web-only projects stay Stripe-only, zero regression).
+  local has_block
+  has_block="$(jq -r --arg p "$proj" '.marketing.projects[$p].revenuecat // empty | if . == null then "" else "1" end' "$PREFS" 2>/dev/null)"
+  # Drop stale JSON when RevenueCat is not configured — otherwise surface_perf_signals
+  # would still sum a leftover file and inflate ground-truth ROAS.
+  [ -z "$has_block" ] && { rm -f "$out"; return 0; }
+  local api_key project_id
+  api_key="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].revenuecat.api_key // .marketing.projects[$p].revenuecat.secret_key // empty' "$PREFS" 2>/dev/null)")"
+  project_id="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].revenuecat.project_id // empty' "$PREFS" 2>/dev/null)")"
+  if [ -z "$api_key" ] || [ -z "$project_id" ]; then
+    report "- revenuecat: api_key/project_id not configured — skipped (App-Store revenue not counted in ROAS)"
+    printf '%s' '{"revenuecat_revenue_7d":0,"revenuecat_revenue_28d":0,"_note":"not_configured"}' > "$out"
+    return 0
+  fi
+  if [ "$DRY_RUN" = "1" ]; then
+    report "- [DRY] would query RevenueCat v2 metrics overview (project=${project_id}) — 28d revenue → 7d est"
+    printf '%s' '{"revenuecat_revenue_7d":0,"revenuecat_revenue_28d":0,"_dry_run":true}' > "$out"
+    return 0
+  fi
+  local resp rev28
+  resp="$(curl -sS --max-time 15 -H "Authorization: Bearer ${api_key}" \
+    "https://api.revenuecat.com/v2/projects/${project_id}/metrics/overview" 2>/dev/null || echo '{}')"
+  # Overview returns a metrics array; the realized-revenue metric id is "revenue"
+  # (trailing-28-days, USD). Match liberally in case the id label shifts.
+  rev28="$(printf '%s' "$resp" | jq -r '
+    (.metrics // []) | map(select((.id // "") | test("^revenue$|revenue_28|last_28.*revenue"; "i"))) | (.[0].value // 0)
+  ' 2>/dev/null || echo 0)"
+  [ -z "$rev28" ] && rev28=0
+  case "$rev28" in ''|*[!0-9.]*) rev28=0;; esac
+  local rev7
+  rev7="$(awk -v r="${rev28:-0}" 'BEGIN{ printf "%.2f", (r+0)/4.0 }')"
+  jq -nc --arg r7 "$rev7" --arg r28 "$rev28" \
+    '{revenuecat_revenue_7d:($r7|tonumber),revenuecat_revenue_28d:($r28|tonumber),_window:"28d_realized/4_est"}' \
+    > "$out" 2>/dev/null || printf '%s' '{"revenuecat_revenue_7d":0,"revenuecat_revenue_28d":0}' > "$out"
+  report "- revenuecat: \$${rev7} revenue 7d-est (\$${rev28} realized 28d ÷4) → ${out##*/}"
+}
+
 # stripe_revenue_for_ad <project> <ad_id>
 # Returns total stripe-revenue for charges where metadata.ad_id matches.
 # Empty / 0 when stripe data is absent or the ad has no charges.
@@ -1330,16 +1376,27 @@ surface_perf_signals() {
   local kpi_ledger="${OPS_DATA_DIR}/autopilot_state/${proj}/kpi.jsonl"
   local stripe_f="${STATE_DIR}/${proj}-stripe.json"
 
-  # Stripe ground-truth ROAS slice
+  # Ground-truth ROAS slice. Denominator = Stripe (web) + RevenueCat (App-Store/Play IAP)
+  # revenue, both attributed to the app. RevenueCat is summed only when that project
+  # has a revenuecat state file (i.e. a .revenuecat config block) — web-only projects
+  # stay Stripe-only with no behaviour change.
+  local revcat_f="${STATE_DIR}/${proj}-revenuecat.json"
   if [ -f "$stripe_f" ] && [ -f "$kpi_ledger" ]; then
-    local meta_spend_7d stripe_rev_7d gt_roas
+    local meta_spend_7d stripe_rev_7d revcat_rev_7d combined_rev_7d gt_roas
     meta_spend_7d="$(tail -n 2000 "$kpi_ledger" 2>/dev/null | jq -sr '[.[].spend // 0] | add // 0' 2>/dev/null || echo 0)"
     stripe_rev_7d="$(jq -r '.total_revenue_7d // 0' "$stripe_f" 2>/dev/null || echo 0)"
-    gt_roas="$(awk -v r="${stripe_rev_7d:-0}" -v s="${meta_spend_7d:-0}" \
+    revcat_rev_7d="$( [ -f "$revcat_f" ] && jq -r '.revenuecat_revenue_7d // 0' "$revcat_f" 2>/dev/null || echo 0 )"
+    [ -z "$revcat_rev_7d" ] && revcat_rev_7d=0
+    combined_rev_7d="$(awk -v a="${stripe_rev_7d:-0}" -v b="${revcat_rev_7d:-0}" 'BEGIN{ printf "%.2f", (a+0)+(b+0) }')"
+    gt_roas="$(awk -v r="${combined_rev_7d:-0}" -v s="${meta_spend_7d:-0}" \
       'BEGIN{ if (s+0>0) printf "%.2f", r/s; else print 0 }')"
     report ""
-    report "### Ground-truth ROAS (Stripe-attributed)"
-    report "- meta_spend_7d=\$${meta_spend_7d}  stripe_revenue_7d=\$${stripe_rev_7d}  ROAS=${gt_roas}"
+    report "### Ground-truth ROAS (Stripe + RevenueCat attributed)"
+    if awk "BEGIN{exit !(${revcat_rev_7d:-0} > 0)}" 2>/dev/null; then
+      report "- meta_spend_7d=\$${meta_spend_7d}  revenue_7d=\$${combined_rev_7d} (stripe \$${stripe_rev_7d} + revenuecat \$${revcat_rev_7d})  ROAS=${gt_roas}"
+    else
+      report "- meta_spend_7d=\$${meta_spend_7d}  revenue_7d=\$${combined_rev_7d} (stripe \$${stripe_rev_7d}; revenuecat \$${revcat_rev_7d})  ROAS=${gt_roas}"
+    fi
   fi
 
   # GSC rescue + hook signals
@@ -2378,6 +2435,7 @@ for proj in "${PROJECTS[@]}"; do
     gather_gsc_signal     "$proj"
     gather_klaviyo_metrics "$proj"
     gather_stripe_revenue "$proj"
+    gather_revenuecat_revenue "$proj"
     surface_perf_signals  "$proj"
 
     apply_calibration_and_bandit "$proj"
