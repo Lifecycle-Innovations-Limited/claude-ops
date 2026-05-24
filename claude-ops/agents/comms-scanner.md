@@ -32,7 +32,7 @@ mcp__whatsapp__list_chats sort_by=last_active
 #
 # NAME RESOLUTION — contacts.db is PRIMARY source; giga memory is fallback only.
 #   DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
-#   sqlite3 "$DB" "SELECT name FROM contacts WHERE jid=? LIMIT 1;" "$JID"
+#   sqlite3 "$DB" "SELECT name FROM contacts WHERE jid='$JID' LIMIT 1;"
 #   If empty → use the name field from list_chats response.
 #   Only consult giga memory (mcp__giga__evoke) when both DB lookup and list_chats name are empty.
 #
