@@ -252,7 +252,7 @@ def main() -> int:
 
     rows: list[tuple[dict, str | None]] = []
     wh_infer = f"wh-infer:{rid}"
-    infer_eligible = False
+    infer_claimed = False
 
     with _pocket_state_lock(w):
         seen = w.load_seen()
@@ -262,13 +262,14 @@ def main() -> int:
         # 1) HeyPocket pre-extracted action items — zero LLM cost.
         for idx, ai in enumerate(_pending_action_items(payload)):
             aid = ai.get("action_item_id")
-            watcher_key = f"action:{aid}" if aid else None
-            if watcher_key and watcher_key in seen:
-                continue
             if aid:
                 row_id = f"pocket-action-{aid}"
+                watcher_key = f"action:{aid}"
             else:
                 row_id = f"pocket-action-{rid[:16]}-{idx}-{w.slugify(ai['title'], 40)}"
+                watcher_key = f"action-todo:{rid}:{w.slugify(ai['title'], 40)}"
+            if watcher_key in seen:
+                continue
             if row_id in seen or row_id in emitted_action_ids:
                 continue
             emitted_action_ids.add(row_id)
@@ -288,7 +289,8 @@ def main() -> int:
                 watcher_key,
             ))
 
-        # 2) Optional implicit-task pass — eligibility only (Haiku runs outside lock).
+        # 2) Optional implicit-task pass — claim wh-infer under lock before Haiku so
+        # webhook and watcher cannot both pay for the same recording.
         if INFER and (not DRY_RUN) and _would_infer_haiku(w, recording):
             if wh_infer not in seen:
                 if not _infer_budget_room(w):
@@ -297,11 +299,13 @@ def main() -> int:
                         f"{w.MAX_INFER_PER_RUN}, POCKET_MAX_INFER_PER_RUN)"
                     )
                 else:
-                    infer_eligible = True
+                    w._seen_add(seen, wh_infer)
+                    w.save_seen(seen)
+                    infer_claimed = True
 
     inferred_list: list[dict] = []
     infer_api_ok = False
-    if infer_eligible:
+    if infer_claimed:
         try:
             inferred_list, infer_api_ok = w.infer_tasks_from_recording(recording)
         except Exception as e:  # noqa: BLE001 — inference must never block ingest
@@ -340,6 +344,8 @@ def main() -> int:
 
     with _pocket_state_lock(w):
         seen = w.load_seen()
+        if infer_claimed and not infer_api_ok:
+            seen.pop(wh_infer, None)
         to_write: list[tuple[dict, str | None]] = []
         for r, wk in rows:
             if r["id"] in seen:
@@ -355,9 +361,8 @@ def main() -> int:
             for r, _wk in to_write:
                 f.write(json.dumps(r) + "\n")
 
-        if infer_api_ok and infer_eligible:
+        if infer_claimed and infer_api_ok:
             _infer_budget_commit(w)
-            w._seen_add(seen, wh_infer)
 
         for r, wk in to_write:
             w._seen_add(seen, r["id"])

@@ -819,6 +819,15 @@ def slugify(text: str, maxlen: int = 60) -> str:
     return (s or "untitled")[:maxlen]
 
 
+def actionitem_webhook_triage_dedupe_key(recording_id: str, title: str) -> str | None:
+    """Matches ops-pocket-webhook-ingest keys for action items without MCP ids."""
+    rid = (recording_id or "").strip()
+    tit = (title or "").strip()
+    if not rid or not tit:
+        return None
+    return f"action-todo:{rid}:{slugify(tit, 40)}"
+
+
 def write_memory(recording: dict, giga: "GigaClient | None" = None) -> Path | None:
     """Persist a recording as a memory file. One file per recording_id.
 
@@ -1056,7 +1065,8 @@ def main() -> int:
             rid = rec.get("id") or rec.get("recordingId") or ""
             would_infer = False
             wh_infer = ""
-            webhook_already_inferred = False
+            infer_done_elsewhere = False
+            run_infer = False
 
             with pocket_state_lock():
                 seen = load_seen()
@@ -1087,7 +1097,7 @@ def main() -> int:
                     and len(gate_transcript) >= 200
                 )
                 wh_infer = f"wh-infer:{rid}"
-                webhook_already_inferred = wh_infer in seen
+                infer_done_elsewhere = wh_infer in seen
                 if (
                     MAX_INFER_PER_RUN > 0
                     and would_infer
@@ -1100,18 +1110,25 @@ def main() -> int:
                     cap_hit = True
                     break
 
+                if would_infer and not infer_done_elsewhere:
+                    _seen_add(seen, wh_infer)
+                    save_seen(seen)
+                    run_infer = True
+
             write_memory(rec, giga=giga)
 
-            if webhook_already_inferred:
+            if infer_done_elsewhere:
                 inferred: list[dict] = []
                 infer_api_ok = True
             else:
                 inferred, infer_api_ok = infer_tasks_from_recording(rec)
-            if would_infer and not webhook_already_inferred:
+            if would_infer and not infer_done_elsewhere and run_infer:
                 infer_calls += 1
 
             with pocket_state_lock():
                 seen = load_seen()
+                if run_infer and not infer_api_ok:
+                    seen.pop(wh_infer, None)
                 if rid not in seen:
                     _seen_add(seen, rid)
                     new_memories += 1
@@ -1145,8 +1162,6 @@ def main() -> int:
                             f.write(json.dumps(payload) + "\n")
                         log(f"queued for triage: {t['title'][:60]} (conf={t['confidence']:.2f})")
                     _seen_add(seen, inferred_id)
-                if would_infer and not webhook_already_inferred and infer_api_ok:
-                    _seen_add(seen, wh_infer)
                 save_seen(seen)
 
         if cap_hit:
@@ -1178,9 +1193,14 @@ def main() -> int:
             if not iid:
                 continue
             seen_key = f"action:{iid}"
+            rec_id = str(item.get("recordingId") or item.get("recording_id") or "").strip()
+            title = (item.get("title") or item.get("label") or "").strip()
+            webhook_triage_key = actionitem_webhook_triage_dedupe_key(rec_id, title)
             with pocket_state_lock():
                 seen = load_seen()
                 if seen_key in seen:
+                    continue
+                if webhook_triage_key and webhook_triage_key in seen:
                     continue
             route_actionitem(item, giga=giga)
             with pocket_state_lock():
