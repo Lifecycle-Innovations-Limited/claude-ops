@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Shim → ESM core (claude-ops package.json is type:module; .mjs is unambiguous).
+exec node "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/skills/ops-social-planner/lib/planner.mjs" "$@"
