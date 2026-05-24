@@ -59,10 +59,12 @@ Giga sync (optional but on-by-default):
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 from collections import OrderedDict
+from contextlib import contextmanager
 import re
 import subprocess
 import sys
@@ -621,6 +623,22 @@ class GigaClient:
 
 
 # ── State ────────────────────────────────────────────────────────────────────
+@contextmanager
+def pocket_state_lock() -> None:
+    """Serialize updates to seen.json and pending-triage.jsonl (watcher + webhook)."""
+    if DRY_RUN:
+        yield
+        return
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = STATE_DIR / ".pocket-webhook-state.lock"
+    with open(lock_path, "a+b") as lock_f:
+        fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+
+
 def load_cursor() -> str:
     if CURSOR_FILE.exists():
         return CURSOR_FILE.read_text().strip()
@@ -974,9 +992,7 @@ def main() -> int:
 
     api_key = resolve_api_key()
     cursor = load_cursor()
-    seen = load_seen()
     run_started = now_iso()
-    log(f"cursor={cursor} seen={len(seen)}")
 
     client = MCPClient(MCP_URL, api_key)
     if not client.initialize():
@@ -992,170 +1008,178 @@ def main() -> int:
             log("giga sync disabled (init failed)")
             giga = None
 
-    # 1) Pull recordings since cursor
-    new_memories = 0
-    new_recordings: list[str] = []
-    recordings_page_cap_hit = False
-    next_before: str | None = load_recordings_pagination_resume(cursor)
-    if next_before:
-        log("resuming pocket recordings pagination (nextRecordingDateBeforeExclusive set)")
-    page = 0
-    infer_calls = 0  # Haiku calls made this run; capped by MAX_INFER_PER_RUN
-    cap_hit = False  # set when MAX_INFER_PER_RUN reached — breaks page loop too
-    while True:
-        page += 1
-        args = {"recordingDateAfter": cursor}
+    with pocket_state_lock():
+        seen = load_seen()
+        log(f"cursor={cursor} seen={len(seen)}")
+
+        # 1) Pull recordings since cursor
+        new_memories = 0
+        new_recordings: list[str] = []
+        recordings_page_cap_hit = False
+        next_before: str | None = load_recordings_pagination_resume(cursor)
         if next_before:
-            args["recordingDateBeforeExclusive"] = next_before
-        result, err = client.call_tool("search_pocket_conversations_timerange", args, timeout=30)
-        if err:
-            log(f"recordings page {page} error: {err}")
-            # Distinguish "Pocket search backend is down" from other errors
-            # so we can fire a recovery alert when it comes back. Only mark
-            # outage on the first page (later pages may fail mid-pagination
-            # for unrelated reasons and shouldn't trigger the global flag).
-            if page == 1 and _is_search_unavailable(err):
-                _on_search_outage_detected(err)
-            break
-        # Successful call — if we had a recorded outage, fire recovery
-        # notification (one-shot, marker is cleared inside the helper).
-        if page == 1:
-            _on_search_outage_resolved()
-        data = (result or {}).get("data", result or {})
-        recordings = data.get("results") or data.get("recordings") or data.get("conversations") or []
-        meta = data.get("meta") or {}
-        if not recordings:
-            clear_recordings_pagination_resume()
-            break
-        for rec in recordings:
-            rid = rec.get("id") or rec.get("recordingId") or ""
-            if not rid or rid in seen:
-                continue
-            # Skip very short, transcript-less recordings (likely noise)
-            duration = rec.get("durationSec") or rec.get("duration") or 0
-            transcript = rec.get("transcript") or ""
-            segs = rec.get("transcriptSegments") or []
-            has_content = bool(transcript or segs)
-            if duration and duration < 20 and not has_content:
-                log(f"skip noise recording {rid} (dur={duration}s, no transcript)")
-                _seen_add(seen, rid)
-                continue
-
-            # Money-leak guard: if a Haiku inference would fire for THIS
-            # recording and we've already hit the per-run cap, STOP the loop
-            # entirely — do NOT write_memory and do NOT mark seen, so the
-            # recording rolls over to the next run untouched. We pre-check
-            # the same gating logic infer_tasks_from_recording uses so we
-            # don't artificially skip recordings that wouldn't trigger Haiku
-            # anyway (too-short, INFER_TASKS=0, etc).
-            gate_transcript = _transcript_for_infer_length_gate(rec)
-            would_infer = (
-                INFER_TASKS
-                and (not duration or duration >= INFER_MIN_SECS)
-                and len(gate_transcript) >= 200
-            )
-            if (
-                MAX_INFER_PER_RUN > 0
-                and would_infer
-                and infer_calls >= MAX_INFER_PER_RUN
-            ):
-                log(
-                    f"infer cap hit: {infer_calls}/{MAX_INFER_PER_RUN} Haiku "
-                    f"calls this run — deferring recording {rid} to next run"
-                )
-                cap_hit = True
+            log("resuming pocket recordings pagination (nextRecordingDateBeforeExclusive set)")
+        page = 0
+        infer_calls = 0  # Haiku calls made this run; capped by MAX_INFER_PER_RUN
+        cap_hit = False  # set when MAX_INFER_PER_RUN reached — breaks page loop too
+        while True:
+            page += 1
+            args = {"recordingDateAfter": cursor}
+            if next_before:
+                args["recordingDateBeforeExclusive"] = next_before
+            result, err = client.call_tool("search_pocket_conversations_timerange", args, timeout=30)
+            if err:
+                log(f"recordings page {page} error: {err}")
+                # Distinguish "Pocket search backend is down" from other errors
+                # so we can fire a recovery alert when it comes back. Only mark
+                # outage on the first page (later pages may fail mid-pagination
+                # for unrelated reasons and shouldn't trigger the global flag).
+                if page == 1 and _is_search_unavailable(err):
+                    _on_search_outage_detected(err)
                 break
-
-            write_memory(rec, giga=giga)
-            new_memories += 1
-            new_recordings.append(rid)
-            _seen_add(seen, rid)
-
-            # Implicit-task inference (Haiku) — only on substantive recordings
-            inferred = infer_tasks_from_recording(rec)
-            if would_infer:
-                infer_calls += 1
-            for idx, t in enumerate(inferred):
-                inferred_id = f"inferred-{rid[:12]}-{idx}"
-                if inferred_id in seen:
+            # Successful call — if we had a recorded outage, fire recovery
+            # notification (one-shot, marker is cleared inside the helper).
+            if page == 1:
+                _on_search_outage_resolved()
+            data = (result or {}).get("data", result or {})
+            recordings = data.get("results") or data.get("recordings") or data.get("conversations") or []
+            meta = data.get("meta") or {}
+            if not recordings:
+                clear_recordings_pagination_resume()
+                break
+            for rec in recordings:
+                rid = rec.get("id") or rec.get("recordingId") or ""
+                if not rid or rid in seen:
                     continue
-                payload = {
-                    "id": inferred_id,
-                    "kind": "inferred",
-                    "title": t["title"],
-                    "context": t["context"],
-                    "priority": t["priority"],
-                    "due": None,
-                    "recording_id": rid,
-                    "source": "pocket-haiku-inferred",
-                    "confidence": t["confidence"],
-                    "captured_at": now_iso(),
-                }
-                if DRY_RUN:
-                    log(f"(dry-run) would queue inferred task for triage: {t['title'][:60]} (conf={t['confidence']:.2f})")
-                else:
-                    # Inferred tasks go to pending-triage.jsonl, NOT directly to
-                    # the live tasks.jsonl. The Opus triage agent must classify
-                    # them (ACT / DRAFT / DROP / ASK) before any can reach the
-                    # supervisor. This is the mandated safety guardrail:
-                    # no autonomous work without a verdict.
-                    PENDING_TRIAGE.parent.mkdir(parents=True, exist_ok=True)
-                    with PENDING_TRIAGE.open("a") as f:
-                        f.write(json.dumps(payload) + "\n")
-                    log(f"queued for triage: {t['title'][:60]} (conf={t['confidence']:.2f})")
-                _seen_add(seen, inferred_id)
-        if cap_hit:
-            break
-        if meta.get("hasMore") and meta.get("nextRecordingDateBeforeExclusive"):
-            next_before = meta["nextRecordingDateBeforeExclusive"]
-            if page >= 10:
-                log("hit page cap (10) — leaving cursor unchanged; saved pagination resume for next run")
-                save_recordings_pagination_resume(cursor, next_before)
-                recordings_page_cap_hit = True
+                # Skip very short, transcript-less recordings (likely noise)
+                duration = rec.get("durationSec") or rec.get("duration") or 0
+                transcript = rec.get("transcript") or ""
+                segs = rec.get("transcriptSegments") or []
+                has_content = bool(transcript or segs)
+                if duration and duration < 20 and not has_content:
+                    log(f"skip noise recording {rid} (dur={duration}s, no transcript)")
+                    _seen_add(seen, rid)
+                    continue
+
+                # Money-leak guard: if a Haiku inference would fire for THIS
+                # recording and we've already hit the per-run cap, STOP the loop
+                # entirely — do NOT write_memory and do NOT mark seen, so the
+                # recording rolls over to the next run untouched. We pre-check
+                # the same gating logic infer_tasks_from_recording uses so we
+                # don't artificially skip recordings that wouldn't trigger Haiku
+                # anyway (too-short, INFER_TASKS=0, etc).
+                gate_transcript = _transcript_for_infer_length_gate(rec)
+                would_infer = (
+                    INFER_TASKS
+                    and (not duration or duration >= INFER_MIN_SECS)
+                    and len(gate_transcript) >= 200
+                )
+                if (
+                    MAX_INFER_PER_RUN > 0
+                    and would_infer
+                    and infer_calls >= MAX_INFER_PER_RUN
+                ):
+                    log(
+                        f"infer cap hit: {infer_calls}/{MAX_INFER_PER_RUN} Haiku "
+                        f"calls this run — deferring recording {rid} to next run"
+                    )
+                    cap_hit = True
+                    break
+
+                write_memory(rec, giga=giga)
+                new_memories += 1
+                new_recordings.append(rid)
+                _seen_add(seen, rid)
+
+                # Implicit-task inference (Haiku) — only on substantive recordings
+                wh_infer = f"wh-infer:{rid}"
+                webhook_already_inferred = wh_infer in seen
+                inferred = (
+                    [] if webhook_already_inferred else infer_tasks_from_recording(rec)
+                )
+                if would_infer and not webhook_already_inferred:
+                    infer_calls += 1
+                for idx, t in enumerate(inferred):
+                    inferred_id = f"inferred-{rid[:12]}-{idx}"
+                    if inferred_id in seen:
+                        continue
+                    payload = {
+                        "id": inferred_id,
+                        "kind": "inferred",
+                        "title": t["title"],
+                        "context": t["context"],
+                        "priority": t["priority"],
+                        "due": None,
+                        "recording_id": rid,
+                        "source": "pocket-haiku-inferred",
+                        "confidence": t["confidence"],
+                        "captured_at": now_iso(),
+                    }
+                    if DRY_RUN:
+                        log(f"(dry-run) would queue inferred task for triage: {t['title'][:60]} (conf={t['confidence']:.2f})")
+                    else:
+                        # Inferred tasks go to pending-triage.jsonl, NOT directly to
+                        # the live tasks.jsonl. The Opus triage agent must classify
+                        # them (ACT / DRAFT / DROP / ASK) before any can reach the
+                        # supervisor. This is the mandated safety guardrail:
+                        # no autonomous work without a verdict.
+                        PENDING_TRIAGE.parent.mkdir(parents=True, exist_ok=True)
+                        with PENDING_TRIAGE.open("a") as f:
+                            f.write(json.dumps(payload) + "\n")
+                        log(f"queued for triage: {t['title'][:60]} (conf={t['confidence']:.2f})")
+                    _seen_add(seen, inferred_id)
+            if cap_hit:
                 break
+            if meta.get("hasMore") and meta.get("nextRecordingDateBeforeExclusive"):
+                next_before = meta["nextRecordingDateBeforeExclusive"]
+                if page >= 10:
+                    log("hit page cap (10) — leaving cursor unchanged; saved pagination resume for next run")
+                    save_recordings_pagination_resume(cursor, next_before)
+                    recordings_page_cap_hit = True
+                    break
+            else:
+                clear_recordings_pagination_resume()
+                break
+
+        # 2) Pull action items since cursor (TODO only)
+        new_tasks = 0
+        result, err = client.call_tool("search_pocket_actionitems", {
+            "status": "TODO",
+            "recordingDateFrom": cursor,
+        }, timeout=30)
+        if err:
+            log(f"actionitems error: {err}")
         else:
-            clear_recordings_pagination_resume()
-            break
+            data = (result or {}).get("data", result or {})
+            items = data.get("results") or data.get("items") or data.get("actionItems") or []
+            for item in items:
+                iid = item.get("id") or item.get("actionItemId")
+                if not iid:
+                    continue
+                seen_key = f"action:{iid}"
+                if seen_key in seen:
+                    continue
+                route_actionitem(item, giga=giga)
+                new_tasks += 1
+                _seen_add(seen, seen_key)
 
-    # 2) Pull action items since cursor (TODO only)
-    new_tasks = 0
-    result, err = client.call_tool("search_pocket_actionitems", {
-        "status": "TODO",
-        "recordingDateFrom": cursor,
-    }, timeout=30)
-    if err:
-        log(f"actionitems error: {err}")
-    else:
-        data = (result or {}).get("data", result or {})
-        items = data.get("results") or data.get("items") or data.get("actionItems") or []
-        for item in items:
-            iid = item.get("id") or item.get("actionItemId")
-            if not iid:
-                continue
-            seen_key = f"action:{iid}"
-            if seen_key in seen:
-                continue
-            route_actionitem(item, giga=giga)
-            new_tasks += 1
-            _seen_add(seen, seen_key)
+        # 3) Optional consolidate pass (Giga merges adjacent neurons)
+        if giga and giga.ok and GIGA_CONSOLIDATE and (new_memories + new_tasks) > 0:
+            giga.consolidate()
 
-    # 3) Optional consolidate pass (Giga merges adjacent neurons)
-    if giga and giga.ok and GIGA_CONSOLIDATE and (new_memories + new_tasks) > 0:
-        giga.consolidate()
+        # 3.5) Flush buffered Giga neurons via claude -p subprocess (uses Claude Code auth)
+        giga_flush_ok = True
+        if giga and giga.ok:
+            giga_flush_ok = giga.flush()
 
-    # 3.5) Flush buffered Giga neurons via claude -p subprocess (uses Claude Code auth)
-    giga_flush_ok = True
-    if giga and giga.ok:
-        giga_flush_ok = giga.flush()
-
-    # 4) Advance cursor & persist.
-    # Do not advance if either the Haiku-inference cap or pagination cap was hit —
-    # both mean there are deferred recordings that need the same window next run.
-    if cap_hit:
-        log(f"cap hit: holding cursor at {cursor} (not advancing to {run_started})")
-    elif not recordings_page_cap_hit:
-        save_cursor(run_started)
-    save_seen(seen)
+        # 4) Advance cursor & persist.
+        # Do not advance if either the Haiku-inference cap or pagination cap was hit —
+        # both mean there are deferred recordings that need the same window next run.
+        if cap_hit:
+            log(f"cap hit: holding cursor at {cursor} (not advancing to {run_started})")
+        elif not recordings_page_cap_hit:
+            save_cursor(run_started)
+        save_seen(seen)
 
     if giga and giga.ok and not giga_flush_ok:
         giga_status = "flush_failed"

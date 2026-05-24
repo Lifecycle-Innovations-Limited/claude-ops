@@ -47,7 +47,6 @@ Env:
 """
 from __future__ import annotations
 
-import fcntl
 import importlib.util
 import json
 import os
@@ -82,17 +81,8 @@ def log(msg: str) -> None:
 @contextmanager
 def _pocket_state_lock(w):
     """Serialize webhook ingest against itself and the watcher's seen/pending writes."""
-    if DRY_RUN:
+    with w.pocket_state_lock():
         yield
-        return
-    w.STATE_DIR.mkdir(parents=True, exist_ok=True)
-    lock_path = w.STATE_DIR / ".pocket-webhook-state.lock"
-    with open(lock_path, "a+b") as lock_f:
-        fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
 
 
 def _infer_budget_read(w) -> tuple[str, int]:
@@ -307,6 +297,7 @@ def main() -> int:
                     else:
                         _infer_budget_commit(w)
                         w._seen_add(seen, wh_infer)
+                        w.save_seen(seen)
                         for idx, t in enumerate(inferred_list):
                             row_id = f"inferred-{rid[:12]}-{idx}"
                             if row_id in seen:
