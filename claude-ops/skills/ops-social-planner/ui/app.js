@@ -81,10 +81,12 @@ function render(){
   const ident=curIdentity(), tz=state.data.timezone;
   if(state.view==='ads'){
     const st=state.data.engine_status||{}; const pend=Object.values(st).some(v=>v.reason==='hook-pending');
-    board.append(stateMsg('📣', ident.items.some(i=>i.kind==='ad')?'':'No ads collected', pend?'Ad collectors (Meta / Google Ads) are scaffolded — the live fetch hook is pending. Posts are fully wired today.':'No paid campaigns for this account.'));
-    return;
+    if(!visibleItems().length){
+      board.append(stateMsg('📣', ident.items.some(i=>i.kind==='ad')?'':'No ads collected', pend?'Ad collectors (Meta / Google Ads) are scaffolded — the live fetch hook is pending. Posts are fully wired today.':'No paid campaigns for this account.'));
+      return;
+    }
   }
-  if(ident.status==='unprovisioned'){ board.append(stateMsg('🔒','Fail-closed — no engine registered',`${ident.label} has no social publishing engine. It will not post until one is registered (own upload-post profile or first-party Meta Graph).`)); return; }
+  if(state.view!=='ads' && ident.status==='unprovisioned'){ board.append(stateMsg('🔒','Fail-closed — no engine registered',`${ident.label} has no social publishing engine. It will not post until one is registered (own upload-post profile or first-party Meta Graph).`)); return; }
   const items=visibleItems();
   if(!items.length){ board.append(stateMsg('🗓️','Nothing scheduled here',state.q?'No posts match your search.':'No scheduled posts for this view.')); return; }
   const byCh={}; items.forEach(i=>(byCh[i.channel]=byCh[i.channel]||[]).push(i));
