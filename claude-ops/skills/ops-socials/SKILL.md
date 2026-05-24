@@ -79,7 +79,7 @@ The personal Typefully set is **NEVER** a fallback for a project. An unprovision
 
 This is a public plugin. The user's Typefully `social_set_id` and X handle are owner-specific data and MUST NOT be committed.
 
-At the start of any flow, resolve `$SOCIAL_SET_ID` in this order:
+At the start of any **personal/founder** flow only — never when handling a project brand via upload-post — resolve `$SOCIAL_SET_ID` in this order:
 
 1. **Env var** — read `$TYPEFULLY_SOCIAL_SET_ID` if set.
 2. **`$PREFS_PATH/preferences.json`** under key `typefully.default_social_set_id` (where `$PREFS_PATH` is the plugin data dir, set by claude-ops).
