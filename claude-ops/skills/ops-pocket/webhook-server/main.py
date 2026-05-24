@@ -237,6 +237,8 @@ async def webhook(
             conn.rollback()
             log.info("duplicate recording_id=%s event=%s — skipping", recording_id, event_type)
             return JSONResponse({"status": "duplicate"})
+        # Enqueue before commit so a failed append rolls back dedup and HeyPocket retries can re-insert.
+        _enqueue(task)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -244,5 +246,4 @@ async def webhook(
     finally:
         conn.close()
 
-    _enqueue(task)
     return JSONResponse({"status": "accepted", "skill": skill, "recording_id": recording_id})

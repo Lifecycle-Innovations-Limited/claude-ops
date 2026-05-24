@@ -277,7 +277,12 @@ def _dispatch_main() -> int:
                 errors += 1
 
             _stage_notification(task, dispatched)
-            new_cursor = line_end
+            if dispatched:
+                new_cursor = line_end
+            else:
+                # Rewind so transient claude --bg failures retry on the next run (see ops-pocket-out-queue.py).
+                new_cursor = line_start
+                break
 
     if new_cursor != cursor:
         _write_cursor(new_cursor)
