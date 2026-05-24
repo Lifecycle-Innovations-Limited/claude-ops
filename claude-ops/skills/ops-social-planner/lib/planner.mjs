@@ -15,6 +15,7 @@ const OPS_DATA_DIR = process.env.OPS_DATA_DIR ||
 const UI_DIR = path.join(__dirname, '..', 'ui');
 const OUT_DIR = path.join(OPS_DATA_DIR, 'social-planner');
 const args = process.argv.slice(2);
+const collectOnly = args.includes('--collect-only');
 const cmd = (args[0] && !args[0].startsWith('-')) ? args[0] : 'all';
 const flag = (n, d) => { const i = args.indexOf(n); return i >= 0 ? (args[i + 1] || true) : d; };
 const PORT = Number(flag('--port', process.env.OPS_PLANNER_PORT || 7937));
@@ -23,6 +24,19 @@ const OUT = flag('--out', path.join(OUT_DIR, 'state.json'));
 /* ---------- helpers ---------- */
 const readJSON = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
 const log = (...a) => console.error('[planner]', ...a);
+function resolveTypefullySocialSetId(p, prefs) {
+  if (p.typefully_social_set_id != null && String(p.typefully_social_set_id).trim() !== '') return String(p.typefully_social_set_id);
+  const fromPrefs = prefs.typefully && prefs.typefully.default_social_set_id;
+  if (fromPrefs != null && String(fromPrefs).trim() !== '') return String(fromPrefs);
+  const cfgPath = path.join(HOME, '.config/typefully/config.json');
+  if (!fs.existsSync(cfgPath)) return null;
+  try {
+    const j = readJSON(cfgPath);
+    const d = j.default_social_set ?? j.defaultSocialSet;
+    if (d != null && String(d).trim() !== '') return String(d);
+  } catch { /* ignore */ }
+  return null;
+}
 const URL_RE = /(https?:\/\/[^\s)]+)/g;
 const extractLinks = (t) => [...new Set((t || '').match(URL_RE) || [])];
 
@@ -136,9 +150,14 @@ async function collect() {
   // personal identities
   for (const [id, p] of Object.entries((mk.social_identities && mk.social_identities.personal) || {})) {
     let res = { ok: false, items: [] };
-    if (p.engine === 'typefully' && p.typefully_social_set_id) res = await fetchTypefully(p.typefully_social_set_id);
-    note(p.engine || 'typefully', res);
-    identities.push({ id, label: (p.aka && p.aka.join(' / ')) || id, kind: 'personal', engine: p.engine || 'typefully',
+    const engine = p.engine || 'typefully';
+    if (engine === 'typefully') {
+      const setId = resolveTypefullySocialSetId(p, prefs);
+      if (setId) res = await fetchTypefully(setId);
+    }
+    const engKey = engine === 'typefully' ? 'typefully' : engine;
+    note(engKey, res);
+    identities.push({ id, label: (p.aka && p.aka.join(' / ')) || id, kind: 'personal', engine,
       status: res.ok ? 'ok' : (res.reason || 'error'), channels: [...new Set(res.items.map(i => i.channel))].sort(), items: res.items });
   }
 
@@ -196,8 +215,8 @@ function serve() {
 
 (async () => {
   try {
-    if (cmd === 'collect' || cmd === 'all') await collect();
-    if (cmd === 'serve' || cmd === 'open' || cmd === 'all') serve();
-    else process.exit(0);
+    if (cmd === 'collect' || cmd === 'all' || collectOnly) await collect();
+    if (!collectOnly && (cmd === 'serve' || cmd === 'open' || cmd === 'all')) serve();
+    else if (!collectOnly) process.exit(0);
   } catch (e) { log('ERROR', e.message); process.exit(1); }
 })();
