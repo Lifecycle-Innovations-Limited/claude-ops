@@ -6,15 +6,23 @@ The pipeline turns voice memos recorded into Pocket (or any external memo source
 
 ## Pipeline overview
 
+Two triggers feed `pending-triage.jsonl` — a polling watcher (catch-up /
+backstop) and a real-time webhook ingest. Both append the **same** row schema;
+everything downstream of `pending-triage.jsonl` is identical.
+
 ```
- ┌─────────────────────────┐
- │ Pocket API              │
- └─────────┬───────────────┘
-           │ poll (cron)
-           ▼
- [1] ops-cron-pocket-watcher.py
-           │ writes pending-triage.jsonl
-           ▼
+ ┌─────────────────────────┐     ┌────────────────────────────────────┐
+ │ Pocket API              │     │ HeyPocket webhook (push, real-time) │
+ └─────────┬───────────────┘     │ POST https://<host>/webhook → HMAC  │
+           │ poll (cron ~5 min)  └────────────────────┬─────────────────┘
+           ▼                                          │ on-memory.sh "$EVENT" "$PAYLOAD"
+ [1] ops-cron-pocket-watcher.py        [1b] ops-pocket-webhook-ingest.py
+           │                                          │ (reuses watcher's row
+           │ writes pending-triage.jsonl              │  schema + Haiku gate)
+           └───────────────┬──────────────────────────┘
+                           ▼  (same canonical row schema)
+                    pending-triage.jsonl
+                           ▼
  [2] ops-pocket-triage.py            (Opus + extended thinking)
            │ ACT ⇒ tasks.jsonl
            │ SKIP ⇒ logged, discarded
