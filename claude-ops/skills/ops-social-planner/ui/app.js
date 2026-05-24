@@ -80,8 +80,11 @@ function render(){
   const board=$('#board'); board.innerHTML='';
   const ident=curIdentity(), tz=state.data.timezone;
   if(state.view==='ads'){
-    const st=state.data.engine_status||{}; const pend=Object.values(st).some(v=>v.reason==='hook-pending');
-    if(!visibleItems().length){
+    if(ident.status==='unprovisioned'){ board.append(stateMsg('🔒','Fail-closed — no engine registered',`${ident.label} has no social publishing engine. It will not post until one is registered (own upload-post profile or first-party Meta Graph).`)); return; }
+    const st=state.data.engine_status||{}; const pend=ident.engine && (st[ident.engine]||{}).reason==='hook-pending';
+    const adsItems=visibleItems();
+    if(!adsItems.length){
+      if(state.q||state.channel){ board.append(stateMsg('📣','Nothing here',state.q?'No ads match your search.':'No ads match this channel.')); return; }
       board.append(stateMsg('📣', ident.items.some(i=>i.kind==='ad')?'':'No ads collected', pend?'Ad collectors (Meta / Google Ads) are scaffolded — the live fetch hook is pending. Posts are fully wired today.':'No paid campaigns for this account.'));
       return;
     }
