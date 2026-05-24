@@ -11,6 +11,7 @@ once.sh-style lock pattern to prevent stacking.
 Env vars:
   POCKET_QUEUE_PATH      Path to pocket_queue.jsonl (required)
   POCKET_DISPATCHER_CURSOR  Cursor file path (default: alongside queue file)
+  POCKET_DISPATCHER_LOCK    Exclusive lock file (default: cursor path + ".lock")
   POCKET_NOTIFY_CHANNEL  "whatsapp" | "email" | "both" (default: whatsapp)
   POCKET_WA_JID          WhatsApp JID for self-chat notifications
   POCKET_EMAIL_TO        Email address for notifications
@@ -20,6 +21,7 @@ Env vars:
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -41,6 +43,7 @@ logging.basicConfig(
 
 QUEUE_PATH = Path(os.environ.get("POCKET_QUEUE_PATH", str(Path.home() / ".claude/state/pocket/pocket_queue.jsonl")))
 CURSOR_PATH = Path(os.environ.get("POCKET_DISPATCHER_CURSOR", str(QUEUE_PATH.parent / "pocket_queue.cursor")))
+LOCK_PATH = Path(os.environ.get("POCKET_DISPATCHER_LOCK", str(CURSOR_PATH) + ".lock"))
 NOTIFY_CHANNEL = os.environ.get("POCKET_NOTIFY_CHANNEL", "whatsapp")
 WA_JID = os.environ.get("POCKET_WA_JID", "")
 EMAIL_TO = os.environ.get("POCKET_EMAIL_TO", "")
@@ -156,19 +159,34 @@ def _stage_notification(task: dict, dispatched: bool) -> None:
         f"Recording: {task['recording_id']}"
     )
 
-    draft = {
-        "kind": NOTIFY_CHANNEL,
-        "to": WA_JID if NOTIFY_CHANNEL in ("whatsapp", "both") else EMAIL_TO,
-        "body": body,
-        "recording_id": task["recording_id"],
-        "staged_at": datetime.now(timezone.utc).isoformat(),
-        "requires_approval": True,  # outbound-comms guardrail
-    }
+    staged_at = datetime.now(timezone.utc).isoformat()
+
+    def _draft_row(kind: str, to_addr: str) -> dict:
+        return {
+            "kind": kind,
+            "to": to_addr,
+            "body": body,
+            "recording_id": task["recording_id"],
+            "staged_at": staged_at,
+            "requires_approval": True,  # outbound-comms guardrail
+        }
+
+    if NOTIFY_CHANNEL == "email":
+        rows = [_draft_row("email", EMAIL_TO)]
+    elif NOTIFY_CHANNEL == "both":
+        rows = [_draft_row("whatsapp", WA_JID), _draft_row("email", EMAIL_TO)]
+    else:
+        rows = [_draft_row("whatsapp", WA_JID)]
 
     draft_path = QUEUE_PATH.parent / "pocket_notify_drafts.jsonl"
     with draft_path.open("a") as f:
-        f.write(json.dumps(draft) + "\n")
-    log.info("staged notification draft for recording_id=%s", task["recording_id"])
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+    log.info(
+        "staged %d notification draft(s) for recording_id=%s",
+        len(rows),
+        task["recording_id"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +194,25 @@ def _stage_notification(task: dict, dispatched: bool) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = LOCK_PATH.open("a+")
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log.info("lock held — another dispatcher is running, exiting")
+        lock_file.close()
+        return 0
+
+    try:
+        return _dispatch_main()
+    finally:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
+
+
+def _dispatch_main() -> int:
     if not QUEUE_PATH.exists():
         log.info("queue not found at %s — nothing to process", QUEUE_PATH)
         return 0

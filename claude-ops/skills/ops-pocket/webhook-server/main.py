@@ -76,29 +76,6 @@ def _get_db() -> sqlite3.Connection:
     return conn
 
 
-def _is_duplicate(conn: sqlite3.Connection, recording_id: str, event_type: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM events WHERE id=? AND event_type=?",
-        (recording_id, event_type),
-    ).fetchone()
-    return row is not None
-
-
-def _record_event(
-    conn: sqlite3.Connection, recording_id: str, event_type: str, payload: dict[str, Any]
-) -> None:
-    conn.execute(
-        "INSERT INTO events (id, event_type, received_at, payload) VALUES (?,?,?,?)",
-        (
-            recording_id,
-            event_type,
-            datetime.now(timezone.utc).isoformat(),
-            json.dumps(payload),
-        ),
-    )
-    conn.commit()
-
-
 # ---------------------------------------------------------------------------
 # HMAC verification
 # ---------------------------------------------------------------------------
@@ -223,37 +200,47 @@ async def webhook(
         log.info("ignoring event_type=%s recording_id=%s", event_type, recording_id)
         return JSONResponse({"status": "ignored", "event": event_type})
 
-    # 3. Dedup
+    transcript: str = recording.get("transcript", "") or ""
+    summary: str = recording.get("summary", "") or ""
+    action_items: list[str] = [
+        ai.get("text", "") for ai in payload.get("actionItems", []) if ai.get("text")
+    ]
+    text_for_routing = " ".join([transcript, summary] + action_items)
+    skill = _route_skill(text_for_routing)
+
+    task = {
+        "recording_id": recording_id,
+        "event": event_type,
+        "skill": skill,
+        "title": recording.get("title", ""),
+        "summary": summary,
+        "action_items": action_items,
+        "transcript_snippet": transcript[:500] if transcript else "",
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    }
+
     conn = _get_db()
     try:
-        if _is_duplicate(conn, recording_id, event_type):
-            log.info("duplicate recording_id=%s event=%s — skipping", recording_id, event_type)
-            return JSONResponse({"status": "duplicate"})
-
-        # 4. Route
-        transcript: str = recording.get("transcript", "") or ""
-        summary: str = recording.get("summary", "") or ""
-        action_items: list[str] = [
-            ai.get("text", "") for ai in payload.get("actionItems", []) if ai.get("text")
-        ]
-        text_for_routing = " ".join([transcript, summary] + action_items)
-        skill = _route_skill(text_for_routing)
-
-        # 5. Enqueue
-        task = {
-            "recording_id": recording_id,
-            "event": event_type,
-            "skill": skill,
-            "title": recording.get("title", ""),
-            "summary": summary,
-            "action_items": action_items,
-            "transcript_snippet": transcript[:500] if transcript else "",
-            "received_at": datetime.now(timezone.utc).isoformat(),
-        }
-        _enqueue(task)
-
-        # 6. Persist dedup record
-        _record_event(conn, recording_id, event_type, payload)
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO events (id, event_type, received_at, payload) VALUES (?,?,?,?)",
+                (
+                    recording_id,
+                    event_type,
+                    datetime.now(timezone.utc).isoformat(),
+                    json.dumps(payload),
+                ),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                log.info("duplicate recording_id=%s event=%s — skipping", recording_id, event_type)
+                return JSONResponse({"status": "duplicate"})
+            _enqueue(task)
+        except Exception:
+            conn.rollback()
+            raise
+        conn.commit()
     finally:
         conn.close()
 
