@@ -103,7 +103,10 @@ def _infer_budget_read(w) -> tuple[str, int]:
 
 
 def _infer_budget_room(w) -> bool:
-    """Under _pocket_state_lock. True if another Haiku infer call is allowed this UTC hour."""
+    """True if another Haiku infer call is allowed this UTC hour.
+
+    Caller must hold ``pocket_state_lock`` when this races with ingest commits.
+    """
     if DRY_RUN or w.MAX_INFER_PER_RUN <= 0:
         return True
     _hour, n = _infer_budget_read(w)
@@ -111,7 +114,11 @@ def _infer_budget_room(w) -> bool:
 
 
 def _infer_budget_commit(w) -> None:
-    """Record one successful Haiku infer call for the current UTC hour."""
+    """Record one successful Haiku infer call for the current UTC hour.
+
+    Caller must hold ``pocket_state_lock`` — this mutates the hourly budget file
+    alongside seen.json / pending-triage.jsonl in the same critical section.
+    """
     if DRY_RUN or w.MAX_INFER_PER_RUN <= 0:
         return
     path = w.STATE_DIR / ".webhook_infer_hourly.json"
@@ -243,8 +250,9 @@ def main() -> int:
     bullets = recording.get("_bullets") or []
     context_base = context_md or ("; ".join(bullets) if bullets else recording["title"])
 
-    rows: list[dict] = []
-    watcher_seen_keys: list[str] = []
+    rows: list[tuple[dict, str | None]] = []
+    wh_infer = f"wh-infer:{rid}"
+    infer_eligible = False
 
     with _pocket_state_lock(w):
         seen = w.load_seen()
@@ -264,25 +272,24 @@ def main() -> int:
             if row_id in seen or row_id in emitted_action_ids:
                 continue
             emitted_action_ids.add(row_id)
-            rows.append({
-                "id": row_id,
-                "kind": "action_item",
-                "title": ai["title"],
-                "context": (context_base or "")[:500],
-                "priority": "medium",
-                "due": ai.get("due"),
-                "recording_id": rid,
-                "source": "pocket-webhook",
-                "confidence": 1.0,  # HeyPocket explicitly extracted it
-                "captured_at": w.now_iso(),
-            })
-            if watcher_key:
-                watcher_seen_keys.append(watcher_key)
+            rows.append((
+                {
+                    "id": row_id,
+                    "kind": "action_item",
+                    "title": ai["title"],
+                    "context": (context_base or "")[:500],
+                    "priority": "medium",
+                    "due": ai.get("due"),
+                    "recording_id": rid,
+                    "source": "pocket-webhook",
+                    "confidence": 1.0,  # HeyPocket explicitly extracted it
+                    "captured_at": w.now_iso(),
+                },
+                watcher_key,
+            ))
 
-        # 2) Optional implicit-task pass — reuses the watcher's Haiku gate
-        #    (skips transcripts < 200 chars, honours POCKET_INFER_* env).
+        # 2) Optional implicit-task pass — eligibility only (Haiku runs outside lock).
         if INFER and (not DRY_RUN) and _would_infer_haiku(w, recording):
-            wh_infer = f"wh-infer:{rid}"
             if wh_infer not in seen:
                 if not _infer_budget_room(w):
                     log(
@@ -290,55 +297,76 @@ def main() -> int:
                         f"{w.MAX_INFER_PER_RUN}, POCKET_MAX_INFER_PER_RUN)"
                     )
                 else:
-                    try:
-                        inferred_list = list(w.infer_tasks_from_recording(recording))
-                    except Exception as e:  # noqa: BLE001 — inference must never block ingest
-                        log(f"implicit-task inference skipped ({type(e).__name__}: {e})")
-                    else:
-                        _infer_budget_commit(w)
-                        w._seen_add(seen, wh_infer)
-                        w.save_seen(seen)
-                        for idx, t in enumerate(inferred_list):
-                            row_id = f"inferred-{rid[:12]}-{idx}"
-                            if row_id in seen:
-                                continue
-                            rows.append({
-                                "id": row_id,
-                                "kind": "inferred",
-                                "title": t["title"],
-                                "context": t.get("context", ""),
-                                "priority": t.get("priority", "low"),
-                                "due": None,
-                                "recording_id": rid,
-                                "source": "pocket-webhook-inferred",
-                                "confidence": t.get("confidence", 0.0),
-                                "captured_at": w.now_iso(),
-                            })
+                    infer_eligible = True
 
-        if not rows:
+    inferred_list: list[dict] = []
+    infer_api_ok = False
+    if infer_eligible:
+        try:
+            inferred_list, infer_api_ok = w.infer_tasks_from_recording(recording)
+        except Exception as e:  # noqa: BLE001 — inference must never block ingest
+            log(f"implicit-task inference skipped ({type(e).__name__}: {e})")
+
+    if infer_api_ok:
+        for idx, t in enumerate(inferred_list):
+            row_id = f"inferred-{rid[:12]}-{idx}"
+            rows.append((
+                {
+                    "id": row_id,
+                    "kind": "inferred",
+                    "title": t["title"],
+                    "context": t.get("context", ""),
+                    "priority": t.get("priority", "low"),
+                    "due": None,
+                    "recording_id": rid,
+                    "source": "pocket-webhook-inferred",
+                    "confidence": t.get("confidence", 0.0),
+                    "captured_at": w.now_iso(),
+                },
+                None,
+            ))
+
+    if not rows:
+        log(f"event={event} rid={rid}: no new pending action items to queue")
+        return 0
+
+    if DRY_RUN:
+        for r, _wk in rows:
+            log(
+                f"(dry-run) would queue [{r['kind']}] "
+                f"{r['title'][:60]} (conf={r['confidence']})"
+            )
+        return 0
+
+    with _pocket_state_lock(w):
+        seen = w.load_seen()
+        to_write: list[tuple[dict, str | None]] = []
+        for r, wk in rows:
+            if r["id"] in seen:
+                continue
+            to_write.append((r, wk))
+
+        if not to_write:
             log(f"event={event} rid={rid}: no new pending action items to queue")
             return 0
 
-        if DRY_RUN:
-            for r in rows:
-                log(
-                    f"(dry-run) would queue [{r['kind']}] "
-                    f"{r['title'][:60]} (conf={r['confidence']})"
-                )
-            return 0
-
-        for r in rows:
-            w._seen_add(seen, r["id"])
-        for wk in watcher_seen_keys:
-            w._seen_add(seen, wk)
-        w.save_seen(seen)
-
         pending.parent.mkdir(parents=True, exist_ok=True)
         with pending.open("a") as f:
-            for r in rows:
+            for r, _wk in to_write:
                 f.write(json.dumps(r) + "\n")
 
-    log(f"event={event} rid={rid}: queued {len(rows)} row(s) for triage")
+        if infer_api_ok and infer_eligible:
+            _infer_budget_commit(w)
+            w._seen_add(seen, wh_infer)
+
+        for r, wk in to_write:
+            w._seen_add(seen, r["id"])
+            if wk:
+                w._seen_add(seen, wk)
+
+        w.save_seen(seen)
+
+    log(f"event={event} rid={rid}: queued {len(to_write)} row(s) for triage")
     return 0
 
 
