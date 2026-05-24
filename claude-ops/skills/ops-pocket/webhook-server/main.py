@@ -85,18 +85,20 @@ def _verify_signature(body: bytes, signature_header: str | None, ts_header: str 
     if not signature_header:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing signature")
 
-    # Timestamp guard
-    if ts_header:
-        try:
-            ts = int(ts_header)
-            age = abs(time.time() - ts)
-            if age > REPLAY_WINDOW:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=f"Timestamp outside replay window ({int(age)}s > {REPLAY_WINDOW}s)",
-                )
-        except ValueError:
-            pass  # Non-integer timestamp — skip age check, HMAC still validates
+    if not ts_header or not ts_header.strip():
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing timestamp")
+
+    try:
+        ts = int(ts_header.strip())
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid timestamp")
+
+    age = abs(time.time() - ts)
+    if age > REPLAY_WINDOW:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Timestamp outside replay window ({int(age)}s > {REPLAY_WINDOW}s)",
+        )
 
     expected = hmac.new(
         HMAC_SECRET.encode(),
@@ -222,26 +224,25 @@ async def webhook(
     conn = _get_db()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        try:
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO events (id, event_type, received_at, payload) VALUES (?,?,?,?)",
-                (
-                    recording_id,
-                    event_type,
-                    datetime.now(timezone.utc).isoformat(),
-                    json.dumps(payload),
-                ),
-            )
-            if cur.rowcount == 0:
-                conn.rollback()
-                log.info("duplicate recording_id=%s event=%s — skipping", recording_id, event_type)
-                return JSONResponse({"status": "duplicate"})
-            _enqueue(task)
-        except Exception:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO events (id, event_type, received_at, payload) VALUES (?,?,?,?)",
+            (
+                recording_id,
+                event_type,
+                datetime.now(timezone.utc).isoformat(),
+                json.dumps(payload),
+            ),
+        )
+        if cur.rowcount == 0:
             conn.rollback()
-            raise
+            log.info("duplicate recording_id=%s event=%s — skipping", recording_id, event_type)
+            return JSONResponse({"status": "duplicate"})
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
+    _enqueue(task)
     return JSONResponse({"status": "accepted", "skill": skill, "recording_id": recording_id})

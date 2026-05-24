@@ -222,9 +222,34 @@ def _dispatch_main() -> int:
     processed = 0
     errors = 0
 
+    try:
+        size = QUEUE_PATH.stat().st_size
+    except OSError as exc:
+        log.error("stat queue failed: %s", exc)
+        return 1
+
+    if cursor > size:
+        log.warning(
+            "cursor %d > queue size %d (queue truncated or replaced); resetting cursor to 0",
+            cursor,
+            size,
+        )
+        cursor = 0
+        new_cursor = 0
+
+    if cursor >= size:
+        log.info("cursor at EOF — nothing new (cursor=%d size=%d)", cursor, size)
+        return 0
+
     with QUEUE_PATH.open("rb") as f:
         f.seek(cursor)
-        for raw in f:
+        while True:
+            line_start = f.tell()
+            raw = f.readline()
+            if not raw:
+                break
+            if not raw.endswith(b"\n"):
+                break
             line_end = f.tell()
             line = raw.decode().strip()
             if not line:
@@ -233,7 +258,7 @@ def _dispatch_main() -> int:
             try:
                 task = json.loads(line)
             except json.JSONDecodeError as exc:
-                log.warning("bad JSONL line: %s", exc)
+                log.warning("bad JSONL line @offset=%d: %s", line_start, exc)
                 new_cursor = line_end
                 continue
 
