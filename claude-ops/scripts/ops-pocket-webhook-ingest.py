@@ -34,8 +34,9 @@ row carries a deterministic id and is deduped against `seen.json`, so repeated
 deliveries of the same recording never double-queue.
 
 Cost: pre-extracted action items cost zero LLM calls. The optional implicit-task
-pass reuses the watcher's Haiku gate (skips transcripts < 200 chars), so there
-is no unbounded spend.
+pass reuses the watcher's Haiku gate (skips transcripts < 200 chars) and the
+same POCKET_MAX_INFER_PER_RUN budget as a rolling per-UTC-hour cap (see
+.webhook_infer_hourly.json), so webhook bursts cannot exceed that Haiku rate.
 
 Env:
   POCKET_STATE_DIR            default ~/.claude/state/pocket (shared with watcher)
@@ -46,10 +47,13 @@ Env:
 """
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import json
 import os
 import sys
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -75,6 +79,67 @@ def log(msg: str) -> None:
     print(f"{LOG_PREFIX} {msg}", file=sys.stderr)
 
 
+@contextmanager
+def _pocket_state_lock(w):
+    """Serialize webhook ingest against itself and the watcher's seen/pending writes."""
+    if DRY_RUN:
+        yield
+        return
+    w.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = w.STATE_DIR / ".pocket-webhook-state.lock"
+    with open(lock_path, "a+b") as lock_f:
+        fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+
+
+def _infer_budget_read(w) -> tuple[str, int]:
+    """Current UTC hour bucket and Haiku infer count for that bucket."""
+    hour = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H")
+    path = w.STATE_DIR / ".webhook_infer_hourly.json"
+    rec: dict = {}
+    if path.exists():
+        try:
+            raw = json.loads(path.read_text())
+            if isinstance(raw, dict):
+                rec = raw
+        except json.JSONDecodeError:
+            rec = {}
+    if rec.get("hour") != hour:
+        return hour, 0
+    return hour, int(rec.get("n", 0))
+
+
+def _infer_budget_room(w) -> bool:
+    """Under _pocket_state_lock. True if another Haiku infer call is allowed this UTC hour."""
+    if DRY_RUN or w.MAX_INFER_PER_RUN <= 0:
+        return True
+    _hour, n = _infer_budget_read(w)
+    return n < w.MAX_INFER_PER_RUN
+
+
+def _infer_budget_commit(w) -> None:
+    """Record one successful Haiku infer call for the current UTC hour."""
+    if DRY_RUN or w.MAX_INFER_PER_RUN <= 0:
+        return
+    path = w.STATE_DIR / ".webhook_infer_hourly.json"
+    hour, n = _infer_budget_read(w)
+    path.write_text(json.dumps({"hour": hour, "n": n + 1}))
+
+
+def _would_infer_haiku(w, recording: dict) -> bool:
+    """Same preconditions as the watcher's would_infer (no network)."""
+    duration = recording.get("durationSec") or recording.get("duration") or 0
+    gate = w._transcript_for_infer_length_gate(recording)
+    if not w.INFER_TASKS:
+        return False
+    if duration and duration < w.INFER_MIN_SECS:
+        return False
+    return len(gate) >= 200
+
+
 def _load_watcher():
     """Import the sibling watcher module (hyphenated name → importlib by path)
     so we reuse its exact row sink, dedup set, id/slug helpers, and the Haiku
@@ -89,7 +154,7 @@ def _load_watcher():
     return mod
 
 
-def _read_envelope() -> dict:
+def _read_envelope() -> dict | None:
     raw = ""
     if len(sys.argv) > 1 and sys.argv[1] not in ("-", "--stdin"):
         raw = Path(sys.argv[1]).read_text()
@@ -99,7 +164,7 @@ def _read_envelope() -> dict:
         env = json.loads(raw or "{}")
     except json.JSONDecodeError as e:
         log(f"bad JSON envelope: {e}")
-        return {}
+        return None
     # Accept either the {ts,event,payload} journal envelope or a bare body.
     if isinstance(env, dict) and "payload" in env and "event" in env:
         return {"event": env.get("event", "unknown"), "payload": env.get("payload") or {}}
@@ -152,13 +217,23 @@ def _pending_action_items(payload: dict) -> list[dict]:
         if it.get("isCompleted") or it.get("is_completed") or it.get("status") == "DONE":
             continue
         title = (it.get("title") or "").strip()
-        if title:
-            out.append({"title": title, "due": it.get("dueDate"), "status": it.get("status")})
+        if not title:
+            continue
+        aid = it.get("id") or it.get("actionItemId")
+        aid_s = str(aid).strip() if aid else ""
+        out.append({
+            "title": title,
+            "due": it.get("dueDate"),
+            "status": it.get("status"),
+            "action_item_id": aid_s or None,
+        })
     return out
 
 
 def main() -> int:
     env = _read_envelope()
+    if env is None:
+        return 1
     event = env.get("event", "unknown")
     payload = env.get("payload") or {}
 
@@ -173,73 +248,105 @@ def main() -> int:
         log("no recording id in payload — nothing to queue")
         return 0
 
-    seen = w.load_seen()  # OrderedDict[str, None]; membership test works on keys
     pending = w.PENDING_TRIAGE
     context_md = (recording["summary"].get("text") or "").strip()
     bullets = recording.get("_bullets") or []
     context_base = context_md or ("; ".join(bullets) if bullets else recording["title"])
 
     rows: list[dict] = []
+    watcher_seen_keys: list[str] = []
 
-    # 1) HeyPocket pre-extracted action items — zero LLM cost.
-    for idx, ai in enumerate(_pending_action_items(payload)):
-        row_id = f"pocket-action-{rid[:16]}-{w.slugify(ai['title'], 24)}"
-        if row_id in seen:
-            continue
-        rows.append({
-            "id": row_id,
-            "kind": "action_item",
-            "title": ai["title"],
-            "context": (context_base or "")[:500],
-            "priority": "medium",
-            "due": ai.get("due"),
-            "recording_id": rid,
-            "source": "pocket-webhook",
-            "confidence": 1.0,  # HeyPocket explicitly extracted it
-            "captured_at": w.now_iso(),
-        })
+    with _pocket_state_lock(w):
+        seen = w.load_seen()
 
-    # 2) Optional implicit-task pass — reuses the watcher's Haiku gate
-    #    (skips transcripts < 200 chars, honours POCKET_INFER_* env).
-    if INFER:
-        try:
-            for idx, t in enumerate(w.infer_tasks_from_recording(recording)):
-                row_id = f"inferred-{rid[:12]}-{idx}"
-                if row_id in seen:
-                    continue
-                rows.append({
-                    "id": row_id,
-                    "kind": "inferred",
-                    "title": t["title"],
-                    "context": t.get("context", ""),
-                    "priority": t.get("priority", "low"),
-                    "due": None,
-                    "recording_id": rid,
-                    "source": "pocket-webhook-inferred",
-                    "confidence": t.get("confidence", 0.0),
-                    "captured_at": w.now_iso(),
-                })
-        except Exception as e:  # noqa: BLE001 — inference must never block ingest
-            log(f"implicit-task inference skipped ({type(e).__name__}: {e})")
+        emitted_action_ids: set[str] = set()
 
-    if not rows:
-        log(f"event={event} rid={rid}: no new pending action items to queue")
-        return 0
+        # 1) HeyPocket pre-extracted action items — zero LLM cost.
+        for idx, ai in enumerate(_pending_action_items(payload)):
+            aid = ai.get("action_item_id")
+            watcher_key = f"action:{aid}" if aid else None
+            if watcher_key and watcher_key in seen:
+                continue
+            if aid:
+                row_id = f"pocket-action-{aid}"
+            else:
+                row_id = f"pocket-action-{rid[:16]}-{idx}-{w.slugify(ai['title'], 40)}"
+            if row_id in seen or row_id in emitted_action_ids:
+                continue
+            emitted_action_ids.add(row_id)
+            rows.append({
+                "id": row_id,
+                "kind": "action_item",
+                "title": ai["title"],
+                "context": (context_base or "")[:500],
+                "priority": "medium",
+                "due": ai.get("due"),
+                "recording_id": rid,
+                "source": "pocket-webhook",
+                "confidence": 1.0,  # HeyPocket explicitly extracted it
+                "captured_at": w.now_iso(),
+            })
+            if watcher_key:
+                watcher_seen_keys.append(watcher_key)
 
-    if DRY_RUN:
+        # 2) Optional implicit-task pass — reuses the watcher's Haiku gate
+        #    (skips transcripts < 200 chars, honours POCKET_INFER_* env).
+        if INFER and (not DRY_RUN) and _would_infer_haiku(w, recording):
+            wh_infer = f"wh-infer:{rid}"
+            if wh_infer not in seen:
+                if not _infer_budget_room(w):
+                    log(
+                        "implicit-task inference skipped (hourly Haiku cap: "
+                        f"{w.MAX_INFER_PER_RUN}, POCKET_MAX_INFER_PER_RUN)"
+                    )
+                else:
+                    try:
+                        inferred_list = list(w.infer_tasks_from_recording(recording))
+                    except Exception as e:  # noqa: BLE001 — inference must never block ingest
+                        log(f"implicit-task inference skipped ({type(e).__name__}: {e})")
+                    else:
+                        _infer_budget_commit(w)
+                        w._seen_add(seen, wh_infer)
+                        for idx, t in enumerate(inferred_list):
+                            row_id = f"inferred-{rid[:12]}-{idx}"
+                            if row_id in seen:
+                                continue
+                            rows.append({
+                                "id": row_id,
+                                "kind": "inferred",
+                                "title": t["title"],
+                                "context": t.get("context", ""),
+                                "priority": t.get("priority", "low"),
+                                "due": None,
+                                "recording_id": rid,
+                                "source": "pocket-webhook-inferred",
+                                "confidence": t.get("confidence", 0.0),
+                                "captured_at": w.now_iso(),
+                            })
+
+        if not rows:
+            log(f"event={event} rid={rid}: no new pending action items to queue")
+            return 0
+
+        if DRY_RUN:
+            for r in rows:
+                log(
+                    f"(dry-run) would queue [{r['kind']}] "
+                    f"{r['title'][:60]} (conf={r['confidence']})"
+                )
+            return 0
+
         for r in rows:
-            log(f"(dry-run) would queue [{r['kind']}] {r['title'][:60]} (conf={r['confidence']})")
-        return 0
+            w._seen_add(seen, r["id"])
+        for wk in watcher_seen_keys:
+            w._seen_add(seen, wk)
+        w.save_seen(seen)
 
-    pending.parent.mkdir(parents=True, exist_ok=True)
-    with pending.open("a") as f:
-        for r in rows:
-            f.write(json.dumps(r) + "\n")
-    # Mark seen (watcher's helpers keep the cap/format identical) and persist,
-    # so retried at-least-once deliveries never re-queue the same items.
-    for r in rows:
-        w._seen_add(seen, r["id"])
-    w.save_seen(seen)
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        with pending.open("a") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+
     log(f"event={event} rid={rid}: queued {len(rows)} row(s) for triage")
     return 0
 

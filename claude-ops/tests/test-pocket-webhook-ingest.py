@@ -76,6 +76,7 @@ def main() -> int:
         r = rows[0]
         assert REQUIRED_FIELDS.issubset(r.keys()), f"missing fields: {REQUIRED_FIELDS - set(r.keys())}"
         assert r["recording_id"] == "rec_test_001"
+        assert r["id"] == "pocket-action-rec_test_001-0-ship_v2_by_friday"
         assert r["title"] == "Ship v2 by Friday"
         assert r["source"] == "pocket-webhook"
         assert r["due"] == "2026-05-29"
@@ -95,6 +96,21 @@ def main() -> int:
             n = len(pending2.read_text().splitlines()) if pending2.exists() else 0
             assert n == 0, f"memory-only event produced {n} rows (expected 0)"
             print("PASS: memory-only event (transcription.completed) → 0 triage rows")
+
+        # 4) invalid JSON envelope → non-zero exit (caller can retry).
+        with tempfile.TemporaryDirectory() as td3:
+            bad_path = Path(td3) / "bad.json"
+            bad_path.write_text("{not json")
+            env_bad = dict(os.environ)
+            env_bad["POCKET_STATE_DIR"] = str(Path(td3) / "state")
+            env_bad["POCKET_WEBHOOK_INFER"] = "0"
+            env_bad["GIGA_SYNC"] = "0"
+            proc_bad = subprocess.run(
+                [sys.executable, str(INGEST), str(bad_path)],
+                capture_output=True, text=True, env=env_bad, timeout=60,
+            )
+            assert proc_bad.returncode == 1, f"expected exit 1 for bad JSON, got {proc_bad.returncode}"
+        print("PASS: malformed JSON envelope exits 1")
 
     print("\nALL TESTS PASSED")
     return 0
