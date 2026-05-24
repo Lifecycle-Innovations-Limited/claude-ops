@@ -391,12 +391,7 @@ If only 3 channels are configured, "All channels" + 3 channel options = 4, fits 
 5. For chats where `last_is_from_me` is absent or null, fetch the thread as fallback:
    `mcp__whatsapp__list_messages` with `{chat_jid: "<JID>", limit: 20}` — check `is_from_me` on the **last element** of the returned array.
 
-6. Parse full message array — fields: `is_from_me`, `content`, `timestamp`, `sender`
-7. For EVERY chat, understand the conversation:
-   - Read ALL messages in order. Know which have `is_from_me: true` (user sent) vs `is_from_me: false` (contact sent)
-   - Understand what the conversation is about, what was discussed, what's pending
-   - Identify the user's tone and style in their sent messages
-8. Classify each chat (same direction rule as step 4 — use `last_is_from_me` on the chat object; only after the step 5 thread fallback use the last element's `is_from_me`):
+6. Classify each chat (same direction rule as step 4 — use `last_is_from_me` on the chat object; only after the step 5 thread fallback use the last element's `is_from_me`):
    - **NEEDS REPLY**: `last_is_from_me == 0`, or (fallback only) last thread message `is_from_me: false`
    - **WAITING**: `last_is_from_me == 1`, or (fallback only) last thread message `is_from_me: true`
    - **ARCHIVE**: Newsletters (`@newsletter` JIDs), dead group chats with no recent activity, one-word reactions, or concluded conversations. Bulk-archive these via `mcp__whatsapp__archive_chat {chat_jid, archive: true}` after user confirmation. If the call fails with `LTHash mismatch`, run `mcp__whatsapp__resync_app_state {name: "regular_low", full_sync: true}` first, then retry.
