@@ -25,11 +25,31 @@ Run all channel scans in parallel:
 
 ```bash
 # WhatsApp — ALL non-archived chats (not just unread)
-# WhatsApp via bridge MCP tools
-mcp__whatsapp__list_chats sort_by=last_active  # or via sqlite3 direct query
-# Then for each chat with recent activity (last 7 days):
-# mcp__whatsapp__list_messages chat_jid="<JID>" limit=5
-# Check FromMe on last message to classify NEEDS_REPLY vs WAITING
+# Step 1: list chats — the response includes last_is_from_me (int 0/1) and last_message_time (RFC3339+TZ string)
+mcp__whatsapp__list_chats sort_by=last_active
+
+# Step 2: for each chat active in last 7 days, resolve contact name and compute time_ago:
+#
+# NAME RESOLUTION — contacts.db is PRIMARY source; giga memory is fallback only.
+#   DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+#   sqlite3 "$DB" "SELECT name FROM contacts WHERE jid=? LIMIT 1;" "$JID"
+#   If empty → use the name field from list_chats response.
+#   Only consult giga memory (mcp__giga__evoke) when both DB lookup and list_chats name are empty.
+#
+# TIME_AGO — last_message_time is RFC3339 with timezone offset (e.g. "2026-05-24T14:55:06+02:00").
+#   Parse with full TZ awareness. In Python:
+#     from datetime import datetime, timezone
+#     dt = datetime.fromisoformat(last_message_time)   # preserves tz offset
+#     delta = datetime.now(timezone.utc) - dt.astimezone(timezone.utc)
+#   Never strip the timezone suffix before parsing — doing so causes wrong "now" delta.
+#
+# DIRECTION — use last_is_from_me from list_chats directly (do NOT re-derive from last message).
+#   last_is_from_me == 1  →  WAITING  (you sent last; no reply needed)
+#   last_is_from_me == 0  →  NEEDS_REPLY  (they sent last)
+#
+# For chats where last_is_from_me is absent or null, fall back to fetching the thread:
+#   mcp__whatsapp__list_messages chat_jid="<JID>" limit=5
+#   Check is_from_me on the LAST element of the returned array.
 ```
 
 ```bash

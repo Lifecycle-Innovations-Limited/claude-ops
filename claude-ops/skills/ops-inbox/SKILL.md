@@ -321,7 +321,7 @@ For each channel, detect availability at runtime:
 
 2. **For each channel, run a FULL scan** (not just unread):
    - **Email**: Search `in:inbox` (not `is:unread`) via `gog gmail search -a $GMAIL_ACCOUNT -j --results-only --no-input --max 30 "in:inbox"`. For each thread, read the last message to determine who sent it last. Check for DRAFT or SENT labels. **Before suggesting to send a draft, verify no reply was already sent in the thread.**
-   - **WhatsApp**: Call `mcp__whatsapp__list_chats {sort_by: "last_active"}` to get all chats. Filter to chats with `last_message_time` in the last 7 days. For each, fetch the FULL conversation via `mcp__whatsapp__list_messages {chat_jid, limit: 20}` (20 messages, not 5 — you need the full thread). Parse message array with fields `is_from_me`, `content`, `timestamp`, `sender`. Classify by last message `is_from_me` field.
+   - **WhatsApp**: Call `mcp__whatsapp__list_chats {sort_by: "last_active"}` to get all chats. Filter to chats with `last_message_time` in the last 7 days (`last_message_time` is RFC3339+TZ — parse with timezone awareness, never strip the offset). Resolve display name from contacts.db first (`SELECT name FROM contacts WHERE jid=?`), fall back to the chat's `name` field, and only call giga memory when both are empty. Classify direction using `last_is_from_me` on the chat object (`1` = WAITING, `0` = NEEDS_REPLY). Only fetch the full thread via `mcp__whatsapp__list_messages {chat_jid, limit: 20}` when `last_is_from_me` is absent/null or when building reply context for NEEDS_REPLY chats.
    - **Slack**: Search via Slack MCP tools. Check who sent last message in each thread.
    - **Telegram**: Use user-auth MCP (NOT bot API) to read recent conversations.
 
@@ -368,13 +368,35 @@ If only 3 channels are configured, "All channels" + 3 channel options = 4, fits 
 **Phase 1 — Classify:**
 1. Get all chats: `mcp__whatsapp__list_chats` with `{sort_by: "last_active"}`
 2. Filter to chats with `last_message_time` in the last 7 days
-3. For each, fetch the FULL recent conversation: `mcp__whatsapp__list_messages` with `{chat_jid: "<JID>", limit: 20}` — get 20 messages, NOT 5.
-4. Parse message array — fields: `is_from_me`, `content`, `timestamp`, `sender`
-5. For EVERY chat, understand the conversation:
+
+   **TIME_AGO — `last_message_time` is an RFC3339 string with timezone offset** (e.g. `"2026-05-24T14:55:06+02:00"`), NOT a unix epoch integer. Parse with full TZ awareness:
+   ```python
+   from datetime import datetime, timezone
+   dt = datetime.fromisoformat(last_message_time)   # preserves offset
+   delta = datetime.now(timezone.utc) - dt.astimezone(timezone.utc)
+   ```
+   Never strip the timezone suffix before parsing — that produces a naive datetime and wrong deltas.
+
+3. **NAME RESOLUTION — contacts.db is PRIMARY, giga memory is fallback only.**
+   ```bash
+   DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+   sqlite3 "$DB" "SELECT name FROM contacts WHERE jid='$JID' LIMIT 1;"
+   ```
+   Use the DB result as the display name. If the DB returns empty, fall back to the `name` field in the `list_chats` response. Only call `mcp__giga__evoke` when both are empty.
+
+4. **DIRECTION — classify from `last_is_from_me` on the chat object itself.** Do NOT re-derive from the last message in a fetched thread unless `last_is_from_me` is absent or null:
+   - `last_is_from_me == 1` → **WAITING** (you sent last; no reply needed)
+   - `last_is_from_me == 0` → **NEEDS REPLY** (they sent last)
+
+5. For chats where `last_is_from_me` is absent or null, fetch the thread as fallback:
+   `mcp__whatsapp__list_messages` with `{chat_jid: "<JID>", limit: 20}` — check `is_from_me` on the **last element** of the returned array.
+
+6. Parse full message array — fields: `is_from_me`, `content`, `timestamp`, `sender`
+7. For EVERY chat, understand the conversation:
    - Read ALL messages in order. Know which have `is_from_me: true` (user sent) vs `is_from_me: false` (contact sent)
    - Understand what the conversation is about, what was discussed, what's pending
    - Identify the user's tone and style in their sent messages
-6. Classify each chat:
+8. Classify each chat:
    - **NEEDS REPLY**: Last message has `is_from_me: false` (they sent last)
    - **WAITING**: Last message has `is_from_me: true` (you sent last)
    - **ARCHIVE**: Newsletters (`@newsletter` JIDs), dead group chats with no recent activity, one-word reactions, or concluded conversations. Bulk-archive these via `mcp__whatsapp__archive_chat {chat_jid, archive: true}` after user confirmation. If the call fails with `LTHash mismatch`, run `mcp__whatsapp__resync_app_state {name: "regular_low", full_sync: true}` first, then retry.
