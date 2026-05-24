@@ -177,7 +177,8 @@ function serve() {
     if (url === '/state.json') {
       file = fs.existsSync(OUT) ? OUT : path.join(UI_DIR, 'state.sample.json');
     } else {
-      file = path.join(UI_DIR, path.normalize(url).replace(/^(\.\.[/\\])+/, ''));
+      const rel = path.normalize(url).replace(/^(\.\.[/\\])+/, '').replace(/^[/\\]+/, '');
+      file = path.join(UI_DIR, rel);
     }
     if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end('not found'); }
     res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
