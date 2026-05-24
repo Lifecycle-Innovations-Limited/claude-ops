@@ -154,7 +154,7 @@ def _inline_attachments(body: str, attachments: list[str] | None) -> str:
             continue
         if expanded.lower().endswith((".md", ".txt", ".log", ".json")):
             try:
-                content = Path(expanded).read_text()[:20000]
+                content = Path(expanded).read_text(encoding="utf-8", errors="replace")[:20000]
                 extra.append(f"\n\n--- {os.path.basename(expanded)} ---\n{content}")
             except OSError:
                 extra.append(f"\n\n[attachment unreadable: {os.path.basename(expanded)}]")
