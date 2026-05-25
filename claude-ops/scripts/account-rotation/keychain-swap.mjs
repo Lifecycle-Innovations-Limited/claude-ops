@@ -4,6 +4,10 @@
  * Reuses the same `security` CLI approach as rotate.mjs but is self-contained
  * so importing it has no side effects (rotate.mjs has top-level CLI execution).
  *
+ * Platform:
+ *   macOS  — macOS security(1) Keychain
+ *   Linux  — file-based vault via vault-linux.mjs
+ *
  * Exports:
  *   - readCurrentToken()           → raw JSON string of active Claude credentials
  *   - writeCurrentToken(json)      → overwrite active Claude credentials
@@ -14,6 +18,10 @@
  */
 
 import { execFileSync, spawnSync } from 'child_process';
+
+const IS_LINUX = process.platform === 'linux';
+// Top-level await: pre-load vault on Linux so all exports stay synchronous.
+const _vault = IS_LINUX ? await import('./vault-linux.mjs') : null;
 
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const KEYCHAIN_ACCOUNT =
@@ -28,8 +36,13 @@ function tokenService(email, label) {
   return `${TOKEN_PREFIX}-${accountKey(email, label)}`;
 }
 
-function readSecurityEntry(svc, acct = KEYCHAIN_ACCOUNT) {
-  const result = spawnSync('security', ['find-generic-password', '-s', svc, '-a', acct, '-g'], {
+// ── Low-level read/write — platform-aware ────────────────────────────────────
+
+function readEntry(svc) {
+  if (IS_LINUX) {
+    return _vault.readEntry(svc);
+  }
+  const result = spawnSync('security', ['find-generic-password', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-g'], {
     timeout: 5000,
     encoding: 'utf8',
   });
@@ -39,31 +52,39 @@ function readSecurityEntry(svc, acct = KEYCHAIN_ACCOUNT) {
   return m[1].replace(/\\"/g, '"');
 }
 
-function writeSecurityEntry(json, svc, acct = KEYCHAIN_ACCOUNT) {
+function writeEntry(svc, json) {
+  if (IS_LINUX) {
+    _vault.writeEntry(svc, json);
+    return;
+  }
   try {
-    execFileSync('security', ['delete-generic-password', '-s', svc, '-a', acct], { stdio: 'ignore' });
+    execFileSync('security', ['delete-generic-password', '-s', svc, '-a', KEYCHAIN_ACCOUNT], { stdio: 'ignore' });
   } catch {
     /* not present, ignore */
   }
-  execFileSync('security', ['add-generic-password', '-s', svc, '-a', acct, '-w', json], { timeout: 5000 });
+  execFileSync('security', ['add-generic-password', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-w', json], {
+    timeout: 5000,
+  });
 }
 
+// ── Public exports ───────────────────────────────────────────────────────────
+
 export function readCurrentToken() {
-  const json = readSecurityEntry(KEYCHAIN_SERVICE);
-  if (!json) throw new Error(`No active Claude keychain entry (${KEYCHAIN_SERVICE})`);
+  const json = readEntry(KEYCHAIN_SERVICE);
+  if (!json) throw new Error(`No active Claude credential entry (${KEYCHAIN_SERVICE})`);
   return json;
 }
 
 export function writeCurrentToken(json) {
-  writeSecurityEntry(json, KEYCHAIN_SERVICE);
+  writeEntry(KEYCHAIN_SERVICE, json);
 }
 
 export function readStoredToken(email, label) {
-  return readSecurityEntry(tokenService(email, label));
+  return readEntry(tokenService(email, label));
 }
 
 /**
- * Swap the active keychain to the given email's stored token.
+ * Swap the active token to the given email's stored token.
  * Returns the previous (now-replaced) token JSON so the caller can restore it.
  * Throws if the target email has no stored token or it's malformed.
  */
