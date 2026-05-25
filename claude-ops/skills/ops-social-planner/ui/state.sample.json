@@ -1,0 +1,35 @@
+{
+  "generated_at": "2026-01-01T09:00:00.000Z",
+  "timezone": "UTC",
+  "_note": "Synthetic PII-free fixture so the UI renders without credentials. Live data is generated into $OPS_DATA_DIR/social-planner/state.json by `ops-social-planner collect` and is never committed.",
+  "engine_status": {
+    "typefully": { "ok": true, "count": 3 },
+    "upload-post": { "ok": true, "count": 4 },
+    "meta-ads": { "ok": false, "reason": "hook-pending" }
+  },
+  "identities": [
+    {
+      "id": "founder", "label": "Founder (personal)", "kind": "personal", "engine": "typefully", "status": "ok",
+      "channels": ["linkedin", "threads", "x"],
+      "items": [
+        { "id":"s1","channel":"x","kind":"post","type":"text","scheduled_at":"2026-01-02T07:00:00Z","title":"Build-in-public note","copy":"shipped a thing today. the hard part was never the code — it was deciding what to leave out.","rationale":"Education/credibility beat. Morning authority slot. X: hook-first.","media":[],"links":[],"char_count":98,"source":{"engine":"typefully","ref":"0","edit_url":"https://example.com/"} },
+        { "id":"s2","channel":"linkedin","kind":"post","type":"text","scheduled_at":"2026-01-02T15:00:00Z","title":"Long-form thesis","copy":"Everyone is racing to hire engineers. The best founders of the next decade won't be engineers at all — they'll be the people with taste.","rationale":"Education beat. Afternoon professional window. LinkedIn: long-form authority + soft CTA.","media":[],"links":[],"char_count":136,"source":{"engine":"typefully","ref":"0"} },
+        { "id":"s3","channel":"threads","kind":"post","type":"thread","scheduled_at":"2026-01-03T17:30:00Z","copy":"weird week.\n\n———\n\nanyone else living a double life right now?","rationale":"Education beat. Evening casual window. Threads: conversational.","media":[],"links":[],"char_count":58,"source":{"engine":"typefully","ref":"0"} }
+      ]
+    },
+    {
+      "id": "my-app", "label": "my-app", "kind": "project", "engine": "upload-post", "status": "ok",
+      "channels": ["instagram", "linkedin", "threads", "x"],
+      "items": [
+        { "id":"a1","channel":"instagram","kind":"post","type":"photo","scheduled_at":"2026-01-02T13:00:00Z","copy":"Something worth your attention is almost here. 🧡","rationale":"Pre-launch teaser. Midday window. Instagram: visual-first, link-in-bio.","media":[{"type":"image","url":"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='240'%3E%3Crect width='400' height='240' fill='%23161a23'/%3E%3Ctext x='50%25' y='50%25' fill='%239aa6b8' font-family='sans-serif' font-size='18' text-anchor='middle'%3Eteaser creative%3C/text%3E%3C/svg%3E","thumb":null}],"links":[],"char_count":47,"source":{"engine":"upload-post","ref":"job1"} },
+        { "id":"a2","channel":"x","kind":"post","type":"photo","scheduled_at":"2026-01-02T15:00:00Z","copy":"this week, that gap gets a whole lot smaller. 👀","rationale":"Pre-launch teaser. Afternoon window. X: hook-first.","media":[],"links":[],"char_count":47,"source":{"engine":"upload-post","ref":"job2"} },
+        { "id":"a3","channel":"instagram","kind":"post","type":"video","scheduled_at":"2026-01-04T13:00:00Z","copy":"It's here. Download now — link in bio.","rationale":"Launch beat. Midday window. Instagram: visual-first.","media":[{"type":"video","url":"","thumb":"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='240'%3E%3Crect width='400' height='240' fill='%2312151c'/%3E%3Ctext x='50%25' y='50%25' fill='%239aa6b8' font-family='sans-serif' font-size='18' text-anchor='middle'%3Elaunch reel%3C/text%3E%3C/svg%3E"}],"links":[],"char_count":38,"source":{"engine":"upload-post","ref":"job3"} },
+        { "id":"a4","channel":"linkedin","kind":"post","type":"text","scheduled_at":"2026-01-04T16:00:00Z","copy":"my-app is live. Stop guessing. Start understanding.\n\nhttps://example.com/app","rationale":"Launch beat. Afternoon professional window. LinkedIn: long-form.","media":[],"links":["https://example.com/app"],"char_count":74,"source":{"engine":"upload-post","ref":"job4"} }
+      ]
+    },
+    {
+      "id": "other-project", "label": "other-project", "kind": "project", "engine": null, "status": "unprovisioned",
+      "channels": [], "items": []
+    }
+  ]
+}
