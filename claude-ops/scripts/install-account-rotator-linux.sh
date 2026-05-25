@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME="claude-account-rotator"
 UNIT_FILE="$HOME/.config/systemd/user/${SERVICE_NAME}.service"
 DAEMON_SCRIPT="$SCRIPT_DIR/account-rotation/daemon.mjs"
-LOG_DIR="$SCRIPT_DIR/account-rotation"
+LOG_FILE="$SCRIPT_DIR/account-rotation/rotation.log"
 DRY_RUN=0
 
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
@@ -70,8 +70,8 @@ RestartSec=30
 TimeoutStopSec=10
 
 # Logs
-StandardOutput=append:${LOG_DIR}/account-rotation/rotation.log
-StandardError=append:${LOG_DIR}/account-rotation/rotation.log
+StandardOutput=append:${LOG_FILE}
+StandardError=append:${LOG_FILE}
 
 # Environment
 Environment=HOME=$HOME
