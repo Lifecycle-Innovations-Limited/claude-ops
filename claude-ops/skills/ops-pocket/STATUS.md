@@ -6,15 +6,23 @@ The pipeline turns voice memos recorded into Pocket (or any external memo source
 
 ## Pipeline overview
 
+Two triggers feed `pending-triage.jsonl` — a polling watcher (catch-up /
+backstop) and a real-time webhook ingest. Both append the **same** row schema;
+everything downstream of `pending-triage.jsonl` is identical.
+
 ```
- ┌─────────────────────────┐
- │ Pocket API              │
- └─────────┬───────────────┘
-           │ poll (cron)
-           ▼
- [1] ops-cron-pocket-watcher.py
-           │ writes pending-triage.jsonl
-           ▼
+ ┌─────────────────────────┐     ┌────────────────────────────────────┐
+ │ Pocket API              │     │ HeyPocket webhook (push, real-time) │
+ └─────────┬───────────────┘     │ POST https://<host>/webhook → HMAC  │
+           │ poll (cron ~5 min)  └────────────────────┬─────────────────┘
+           ▼                                          │ on-memory.sh "$EVENT" "$PAYLOAD"
+ [1] ops-cron-pocket-watcher.py        [1b] ops-pocket-webhook-ingest.py
+           │                                          │ (reuses watcher's row
+           │ writes pending-triage.jsonl              │  schema + Haiku gate)
+           └───────────────┬──────────────────────────┘
+                           ▼  (same canonical row schema)
+                    pending-triage.jsonl
+                           ▼
  [2] ops-pocket-triage.py            (Opus + extended thinking)
            │ ACT ⇒ tasks.jsonl
            │ SKIP ⇒ logged, discarded
@@ -47,6 +55,47 @@ The pipeline turns voice memos recorded into Pocket (or any external memo source
 ```
 
 `ops-pocket-whatsapp-bridge.py` is the **inbound** counterpart in the 7-script set — it polls the operator's own self-chat for replies that should be threaded back into the supervisor's async question/reply protocol. The notifier handles **outbound**; this script handles **inbound** (user replying to a question the supervisor asked).
+
+## Real-time webhook trigger (`ops-pocket-webhook-ingest.py`)
+
+`[1b]` is an alternate, push-based trigger that feeds the same
+`pending-triage.jsonl` as the cron watcher. It's for deployments where the
+provider (e.g. HeyPocket) can POST a webhook the instant a recording finishes
+processing — triage runs in seconds instead of waiting up to a poll interval.
+
+- The webhook receiver (a small FastAPI app, HMAC-verified) invokes a handler
+  script that pipes the `{ts,event,payload}` envelope to
+  `ops-pocket-webhook-ingest.py` **as a file arg** (file-arg avoids stdin
+  quirks with `sudo -u` / backgrounded subshells).
+- The ingest reuses the watcher's helpers via `importlib`
+  (`load_seen`/`_seen_add`/`save_seen`/`slugify`/`now_iso`/
+  `infer_tasks_from_recording`) so the row schema, dedup set, and Haiku gate
+  are identical to the polling path.
+- Pre-extracted action items cost zero LLM calls; the optional implicit-task
+  pass reuses the watcher's Haiku gate (`POCKET_WEBHOOK_INFER=0` disables it).
+- Idempotent: deterministic row ids deduped against `seen.json`, so
+  at-least-once webhook retries never double-queue.
+
+### Deploy on an always-online box (service mode)
+
+When the pipeline runs as a system service (e.g. on an always-online VM)
+rather than from an interactive login, **do not** point `POCKET_STATE_DIR` at
+a `0700` home directory — a service-spawned process (even after `sudo -u`)
+can be blocked from traversing it (SELinux home labeling / restrictive home
+perms). Use a neutral, service-readable state dir owned by the pipeline user,
+and set it for **both** the webhook handler and the cron/triage/supervisor
+units so they share one state dir:
+
+```bash
+# one-time
+sudo mkdir -p /var/lib/pocket-pipeline
+sudo chown <pipeline-user>:<pipeline-user> /var/lib/pocket-pipeline
+sudo chmod 755 /var/lib/pocket-pipeline
+export POCKET_STATE_DIR=/var/lib/pocket-pipeline
+```
+
+The webhook handler runs the ingest as the pipeline user (`sudo -u`) so every
+state file stays owned by that user and consistent with the cron watcher.
 
 ## Scripts (eight, including the install helper)
 
