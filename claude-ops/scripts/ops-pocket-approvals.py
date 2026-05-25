@@ -20,7 +20,7 @@ Requires the SES email backend in ops-pocket-email-bridge.py (send_email's
 `backend`/`ses_cfg` kwargs) — see the related "SES email backend" PR.
 """
 from __future__ import annotations
-import json, os, sys, time, subprocess
+import json, os, re, sys, time, subprocess
 from pathlib import Path
 
 STATE = Path(os.environ.get("POCKET_STATE_DIR", str(Path.home() / ".claude/state/pocket")))
@@ -107,6 +107,9 @@ def cmd_digest():
     prev=json.loads(NOTIFIED.read_text()).get("hash") if NOTIFIED.exists() else None
     if h==prev:
         log(f"digest: open set unchanged ({len(items)} items) — not re-emailing")
+        if not CODEMAP.exists():
+            CODEMAP.write_text(json.dumps(codemap, indent=2))
+            log("digest: wrote missing approval-codemap.json for unchanged open set")
         return 0
     ok,info,to=send_via_bridge(f"[Pocket] {len(items)} item(s) need approval", body)
     CODEMAP.write_text(json.dumps(codemap,indent=2))
@@ -118,7 +121,7 @@ def cmd_digest():
 def _gog_search_replies():
     """Find recent emails from the owner replying to approval digests."""
     try:
-        r=subprocess.run([GOG,"gmail","search","subject:[Pocket] newer_than:2d","--max","15","-j","--results-only","--no-input"],
+        r=subprocess.run([GOG,"gmail","search","from:me subject:[Pocket] newer_than:2d","--max","15","-j","--results-only","--no-input"],
                          capture_output=True,text=True,timeout=60,env=os.environ)
         if r.returncode!=0:
             log(f"gog search rc={r.returncode}: {r.stderr[:150]}"); return []
@@ -126,25 +129,33 @@ def _gog_search_replies():
     except Exception as e:
         log(f"gog search err {e}"); return []
 
-def _gog_body(msg_id):
+def _gog_body_and_subject(msg_id):
     try:
         r=subprocess.run([GOG,"gmail","get",msg_id,"-j","--no-input"],capture_output=True,text=True,timeout=60,env=os.environ)
         d=json.loads(r.stdout or "{}")
-        return (d.get("body") or d.get("snippet") or "")
-    except Exception: return ""
+        return (d.get("body") or d.get("snippet") or ""), (d.get("subject") or "")
+    except Exception: return "", ""
+
+def _is_digest_outbound_subject(subject):
+    """Sent digest uses '[Pocket] N item(s) need approval' without a Re: prefix; skip those."""
+    s = (subject or "").strip()
+    if re.match(r"(?i)^re:\s*", s):
+        return False
+    return re.match(r"^\[Pocket\]\s+\d+\s+item\(s\)\s+need\s+approval\s*$", s) is not None
 
 def cmd_replies():
     if not CODEMAP.exists(): log("replies: no codemap yet"); return 0
     codemap=json.loads(CODEMAP.read_text())
     res=_resolved_ids()
-    import re
     acted=0
     self_addr=json.loads(CFG.read_text()).get("self_address","")
     for m in _gog_search_replies():
         frm=(m.get("from") or "").lower()
         if not self_addr or self_addr.lower() not in frm:  # only the owner's own replies
             continue
-        body=_gog_body(m.get("id",""))
+        body, subj = _gog_body_and_subject(m.get("id", ""))
+        if _is_digest_outbound_subject(subj):
+            continue
         for mt in re.finditer(r"\b(APPROVE|REJECT)\s+([A-Za-z]\d+|[a-z0-9\-]{6,})\b", body, re.I):
             verb=mt.group(1).upper(); ref=mt.group(2)
             ent=codemap.get(ref) or codemap.get(ref.upper())
