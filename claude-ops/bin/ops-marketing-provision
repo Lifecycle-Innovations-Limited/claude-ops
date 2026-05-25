@@ -935,6 +935,10 @@ cmd_provision_google_ads() {
   [ "$hint" = "null" ] && hint=""
   # CLI flag wins over prefs hint
   [ -n "$arg_customer_id" ] && hint="$arg_customer_id"
+  # Explicit --customer-id must match accessible accounts (prefs hint may be stale and may fall through)
+  if [ -n "$arg_customer_id" ] && ! printf '%s\n' "$resource_names" | grep -qx "customers/${arg_customer_id}"; then
+    die "--customer-id ${arg_customer_id} is not in the accessible customers list"
+  fi
 
   # Direct ID hint: verify it's in the accessible list, accept it.
   if [ -n "$hint" ] && printf '%s\n' "$resource_names" | grep -qx "customers/${hint}"; then
@@ -993,7 +997,7 @@ cmd_provision_google_ads() {
 
     if [ "${#non_manager_ids[@]}" = "1" ]; then
       chosen_customer="${non_manager_ids[0]}"
-    elif [ -t 0 ] && [ -t 2 ]; then
+    elif [ -t 0 ] && [ -t 2 ] && [ "$OPS_MARKETING_BACKGROUND" != "1" ]; then
       # Interactive: prompt Sam to pick by ID
       printf 'Enter customer ID to use: ' >&2
       local picked=""
@@ -1005,6 +1009,31 @@ cmd_provision_google_ads() {
       fi
     else
       die "Multiple accessible customers and no --customer-id / --customer-name / prefs hint set. Re-run with --customer-id <id> or set marketing.projects.${project}.google_ads.customer_id_hint in prefs."
+    fi
+  fi
+
+  # Hint/name resolution skips the walk that discovers MCC login_customer — infer it here.
+  if [ -n "$chosen_customer" ] && [ -z "$login_customer" ]; then
+    if [ "$customer_count" = "1" ]; then
+      local info_hint_path is_manager_hint_path
+      info_hint_path=$(gads_get_customer_info "$chosen_customer" "$access_token" "$dev_token" 2>/dev/null || echo "{}")
+      is_manager_hint_path=$(printf '%s' "$info_hint_path" | jq -r '.results[0].customer.manager // false' 2>/dev/null)
+      if [ "$is_manager_hint_path" = "true" ]; then
+        login_customer="$chosen_customer"
+        log "  (sole accessible account is MCC manager: $chosen_customer)"
+      fi
+    else
+      while IFS= read -r rn; do
+        [ -z "$rn" ] && continue
+        local cid_lc info_lc is_manager_lc
+        cid_lc="${rn##customers/}"
+        info_lc=$(gads_get_customer_info "$cid_lc" "$access_token" "$dev_token" 2>/dev/null || echo "{}")
+        is_manager_lc=$(printf '%s' "$info_lc" | jq -r '.results[0].customer.manager // false' 2>/dev/null)
+        if [ "$is_manager_lc" = "true" ]; then
+          login_customer="$cid_lc"
+          break
+        fi
+      done <<< "$resource_names"
     fi
   fi
 
