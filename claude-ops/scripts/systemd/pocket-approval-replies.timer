@@ -1,0 +1,11 @@
+[Unit]
+Description=Run pocket-approval replies poller every 2 minutes
+Requires=pocket-approval-replies.service
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target
