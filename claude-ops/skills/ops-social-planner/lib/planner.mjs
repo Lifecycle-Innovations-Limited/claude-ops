@@ -6,6 +6,7 @@ import path from 'path';
 import http from 'http';
 import { execSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HOME = os.homedir();
 const PREFS_PATH = process.env.PREFS_PATH ||
@@ -437,20 +438,26 @@ async function collect() {
       status: res.ok ? 'ok' : (res.reason || 'error'), channels: [...new Set(res.items.map(i => i.channel))].sort(), items: res.items });
   }
 
-  // project brands
+  // project brands — organic posts (social.engine) + paid ads (meta/google, independent of organic engine)
   for (const [proj, cfg] of Object.entries(mk.projects || {})) {
     const s = cfg.social || {}; const eng = (s.engine && s.engine.primary) || null;
-    let res = { ok: false, items: [], status: s.engine && s.engine.status };
+    let postRes = { ok: false, items: [], status: s.engine && s.engine.status };
     if (eng === 'upload-post') {
       const up = s.engine.upload_post || {};
-      res = await fetchUploadPost(up.user || proj, resolveSecret(up.api_key_ref));
-    } else if (eng === 'meta-graph' || eng === 'meta-ads' || eng === 'google-ads') {
-      res = adHook(eng);
+      postRes = await fetchUploadPost(up.user || proj, resolveSecret(up.api_key_ref));
+    } else if (eng === 'typefully' && s.typefully_social_set_id) {
+      postRes = await fetchTypefully(s.typefully_social_set_id);
     }
-    if (eng) note(eng, res);
-    identities.push({ id: proj, label: proj, kind: 'project', engine: eng,
-      status: eng ? (res.ok ? 'ok' : (res.status || res.reason || 'error')) : 'unprovisioned',
-      channels: [...new Set(res.items.map(i => i.channel))].sort(), items: res.items });
+    if (eng) note(eng, postRes);
+    const meta = await fetchMetaAds(cfg); if (cfg.meta && cfg.meta.ad_account_id) note('meta-ads', meta);
+    const gads = await fetchGoogleAds(cfg); if (cfg.google_ads && cfg.google_ads.customer_id) note('google-ads', gads);
+    const items = [...postRes.items, ...meta.items, ...gads.items];
+    identities.push({
+      id: proj, label: proj, kind: 'project', engine: eng,
+      status: eng ? (postRes.ok ? 'ok' : (postRes.status || postRes.reason || 'error')) : 'unprovisioned',
+      ad_status: { 'meta-ads': meta.ok ? String(meta.count) : (meta.reason || '-'), 'google-ads': gads.ok ? String(gads.count) : (gads.reason || '-') },
+      channels: [...new Set(items.map(i => i.channel))].sort(), items,
+    });
   }
 
   const state = { generated_at: new Date().toISOString(), timezone: prefs.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
