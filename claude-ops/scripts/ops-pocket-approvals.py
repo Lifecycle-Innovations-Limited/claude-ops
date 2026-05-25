@@ -110,7 +110,8 @@ def cmd_digest():
         CODEMAP.write_text(json.dumps(codemap,indent=2)); return 0
     ok,info,to=send_via_bridge(f"[Pocket] {len(items)} item(s) need approval", body)
     CODEMAP.write_text(json.dumps(codemap,indent=2))
-    NOTIFIED.write_text(json.dumps({"hash":h,"ts":time.time(),"count":len(items)}))
+    if ok:
+        NOTIFIED.write_text(json.dumps({"hash":h,"ts":time.time(),"count":len(items)}))
     log(f"digest: emailed {len(items)} items to {to} ok={ok} info={info}")
     return 0 if ok else 1
 
@@ -154,7 +155,11 @@ def cmd_replies():
             if ent["id"] in res: continue  # already resolved
             if verb=="APPROVE":
                 task=ent["raw"].get("task",ent["raw"]) if isinstance(ent["raw"],dict) else {}
-                task=dict(task); task["id"]=ent["id"]; task.setdefault("kind","action_item")
+                task=dict(task); task["id"]=ent["id"]
+                if ent.get("bucket")=="DRAFT":
+                    task["kind"]="action_item"
+                else:
+                    task.setdefault("kind","action_item")
                 task["approved_at"]=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
                 open(TASKS,"a").write(json.dumps(task)+"\n")
                 open(RESOLVED,"a").write(json.dumps({"id":ent["id"],"decision":"APPROVE","ts":time.time()})+"\n")
