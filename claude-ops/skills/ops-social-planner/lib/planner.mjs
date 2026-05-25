@@ -142,11 +142,13 @@ async function fetchUploadPost(profile, key) {
 async function fetchMetaAds(cfg) {
   const m = cfg.meta || {};
   if (!m.ad_account_id) return { ok: false, reason: 'no ad account', items: [] };
+  const adAccountId = resolveSecret(m.ad_account_id);
+  if (!adAccountId) return { ok: false, reason: 'no ad account', items: [] };
   const token = resolveSecret(m.access_token);
   if (!token) return { ok: false, reason: 'no token', items: [] };
   const secret = resolveSecret(m.app_secret);
   const proof = secret ? crypto.createHmac('sha256', secret).update(token).digest('hex') : null;
-  const u = new URL(`https://graph.facebook.com/v21.0/${m.ad_account_id}/ads`);
+  const u = new URL(`https://graph.facebook.com/v21.0/${adAccountId}/ads`);
   u.searchParams.set('fields', 'name,effective_status,created_time,creative{title,body,thumbnail_url},adset{daily_budget,targeting{publisher_platforms}}');
   u.searchParams.set('limit', '50');
   u.searchParams.set('access_token', token);
@@ -176,6 +178,8 @@ async function fetchMetaAds(cfg) {
 async function fetchGoogleAds(cfg) {
   const g = cfg.google_ads || {};
   if (!g.customer_id) return { ok: false, reason: 'not configured', items: [] };
+  const custResolved = resolveSecret(g.customer_id);
+  if (!custResolved) return { ok: false, reason: 'not configured', items: [] };
   const devToken = resolveSecret(g.developer_token), cid = resolveSecret(g.client_id),
         csec = resolveSecret(g.client_secret), refresh = resolveSecret(g.refresh_token);
   if (!devToken || !cid || !csec || !refresh) return { ok: false, reason: 'missing oauth creds', items: [] };
@@ -189,9 +193,12 @@ async function fetchGoogleAds(cfg) {
     if (!tr.ok) return { ok: false, reason: 'oauth HTTP ' + tr.status, items: [] };
     access = (await tr.json()).access_token;
   } catch (e) { return { ok: false, reason: e.message, items: [] }; }
-  const cust = String(g.customer_id).replace(/-/g, '');
+  const cust = String(custResolved).replace(/-/g, '');
   const headers = { Authorization: 'Bearer ' + access, 'developer-token': devToken, 'Content-Type': 'application/json' };
-  if (g.login_customer_id) headers['login-customer-id'] = String(g.login_customer_id).replace(/-/g, '');
+  if (g.login_customer_id) {
+    const loginCust = resolveSecret(g.login_customer_id);
+    if (loginCust) headers['login-customer-id'] = String(loginCust).replace(/-/g, '');
+  }
   const query = "SELECT campaign.name, campaign.status, ad_group_ad.ad.responsive_search_ad.headlines, ad_group_ad.ad.final_urls FROM ad_group_ad WHERE campaign.status != 'REMOVED' LIMIT 50";
   let rows = [];
   try {
