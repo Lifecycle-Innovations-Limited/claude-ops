@@ -30,7 +30,12 @@ const LOG_PATH = join(__dirname, 'rotation.log');
 const PID_FILE = join(__dirname, '.daemon.pid');
 const ROTATE_SCRIPT = join(__dirname, 'rotate.mjs');
 
-// Keychain account name — must match rotate.mjs convention.
+// ── Platform ─────────────────────────────────────────────────────────────────
+const IS_LINUX = process.platform === 'linux';
+// Top-level await: pre-load vault on Linux so credential helpers stay synchronous.
+const _vault = IS_LINUX ? await import('./vault-linux.mjs') : null;
+
+// Keychain account name — must match rotate.mjs convention (macOS only).
 const KEYCHAIN_ACCOUNT =
   process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || process.env.LOGNAME || 'claude-ops';
 
@@ -60,15 +65,18 @@ function log(msg) {
 
 function notify(title, msg) {
   try {
-    // Use execFileSync to avoid shell interpretation of quotes in title/msg
-    execFileSync(
-      'osascript',
-      [
-        '-e',
-        `display notification "${msg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" with title "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
-      ],
-      { timeout: 5000 },
-    );
+    if (IS_LINUX) {
+      spawnSync('notify-send', [title, msg], { timeout: 3000 });
+    } else {
+      execFileSync(
+        'osascript',
+        [
+          '-e',
+          `display notification "${msg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" with title "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
+        ],
+        { timeout: 5000 },
+      );
+    }
   } catch {}
 }
 
@@ -134,6 +142,9 @@ function tokenExpired(json) {
 
 function readStoredToken(account) {
   const svc = `Claude-Rotation-${accountKey(account)}`;
+  if (IS_LINUX) {
+    try { return _vault.readEntry(svc); } catch { return null; }
+  }
   try {
     const result = spawnSync('security', ['find-generic-password', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-g'], {
       timeout: 5000,
@@ -148,6 +159,9 @@ function readStoredToken(account) {
 }
 
 function readActiveKeychainToken() {
+  if (IS_LINUX) {
+    try { return _vault.readEntry('Claude Code-credentials'); } catch { return null; }
+  }
   try {
     const r = spawnSync(
       'security',
@@ -321,20 +335,24 @@ async function shouldRotate(config, state) {
       log('[active-refresh] Active token expiring — attempting in-place refresh');
       const refreshed = await refreshSingleToken(account);
       if (refreshed) {
-        // Also update the active keychain so running sessions pick it up on next /login
+        // Also update the active credential store so running sessions pick it up on next /login
         try {
           const freshToken = readStoredToken(account);
           if (freshToken) {
             const svc = 'Claude Code-credentials';
-            execFileSync(
-              'security',
-              ['add-generic-password', '-U', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-w', freshToken],
-              { timeout: 5000 },
-            );
-            log('[active-refresh] Active keychain updated — sessions will auto-recover');
+            if (IS_LINUX) {
+              _vault.writeEntry(svc, freshToken);
+            } else {
+              execFileSync(
+                'security',
+                ['add-generic-password', '-U', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-w', freshToken],
+                { timeout: 5000 },
+              );
+            }
+            log('[active-refresh] Active credentials updated — sessions will auto-recover');
           }
         } catch (err) {
-          log(`[active-refresh] Keychain update failed: ${err.message?.substring(0, 60)}`);
+          log(`[active-refresh] Credential update failed: ${err.message?.substring(0, 60)}`);
         }
         return { should: false }; // Refreshed in-place, no rotation needed
       }
