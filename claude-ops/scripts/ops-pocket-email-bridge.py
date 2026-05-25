@@ -20,7 +20,12 @@ Config (~/.claude/state/pocket/email-config.json):
     "from_account": "you@example.com",
     "subject_prefix": "[Pocket]",
     "label": "Pocket",
-    "last_processed_id": ""        # auto-managed
+    "last_processed_id": "",       # auto-managed
+    # Outbound backend (default "gog"). Set "ses" on hosts with no gog auth
+    # but an IAM role allowing ses:SendEmail (e.g. an always-on EC2 box):
+    "backend": "gog",              # "gog" | "ses"
+    "region": "us-east-1",         # SES region (backend=ses)
+    "from": "alerts@example.com"   # verified SES sender (backend=ses)
   }
 
 Cron: every 1 minute.
@@ -133,12 +138,80 @@ def open_questions() -> list[dict]:
 # ── OUTBOUND ────────────────────────────────────────────────────────────────
 
 
-def send_email(to: str, subject: str, body: str, attachments: list[str] | None = None) -> tuple[bool, str]:
-    """Send via gog gmail send. Returns (ok, info).
+def _inline_attachments(body: str, attachments: list[str] | None) -> str:
+    """SES simple send is body-only (no MIME parts). Inline readable text
+    reports (.md/.txt) into the body so the notification still carries the
+    worker's output; binaries are noted, not attached."""
+    if not attachments:
+        return body
+    extra = []
+    for a in attachments:
+        if not a:
+            continue
+        expanded = os.path.expanduser(a)
+        if not os.path.isfile(expanded):
+            log(f"attachment missing, skipped: {a}")
+            continue
+        if expanded.lower().endswith((".md", ".txt", ".log", ".json")):
+            try:
+                content = Path(expanded).read_text(encoding="utf-8", errors="replace")[:20000]
+                extra.append(f"\n\n--- {os.path.basename(expanded)} ---\n{content}")
+            except OSError:
+                extra.append(f"\n\n[attachment unreadable: {os.path.basename(expanded)}]")
+        else:
+            extra.append(f"\n\n[binary attachment omitted: {os.path.basename(expanded)}]")
+    return body + "".join(extra)
 
-    attachments: list of file paths to attach (each is expanded with ~ and
-    silently skipped if missing — we never fail the whole send because of
-    a missing report file)."""
+
+def _send_via_ses(to: str, subject: str, body: str, ses_cfg: dict) -> tuple[bool, str]:
+    """Send via AWS SES (aws CLI shell-out — no boto3 dependency).
+
+    ses_cfg: {"region": ..., "from": "alerts@example.com"}. Recipient is
+    already locked to self by the caller. Used when the box has no gog auth
+    but an instance role with ses:SendEmail."""
+    region = ses_cfg.get("region", "us-east-1")
+    from_addr = ses_cfg.get("from", "")
+    if not from_addr:
+        return (False, "ses backend: no 'from' configured")
+    aws_bin = os.environ.get("AWS_BIN", "aws")
+    cmd = [
+        aws_bin, "ses", "send-email", "--region", region,
+        "--from", from_addr,
+        "--destination", f"ToAddresses={to}",
+        "--message", json.dumps({
+            "Subject": {"Data": subject, "Charset": "UTF-8"},
+            "Body": {"Text": {"Data": body, "Charset": "UTF-8"}},
+        }),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return (False, "ses timeout")
+    except FileNotFoundError:
+        return (False, f"aws binary not found: {aws_bin}")
+    except Exception as e:
+        return (False, f"{type(e).__name__}: {e}")
+    if proc.returncode != 0:
+        return (False, f"ses exit={proc.returncode}: {(proc.stderr or proc.stdout)[:200]}")
+    msg_id = ""
+    try:
+        msg_id = json.loads(proc.stdout or "{}").get("MessageId", "")
+    except json.JSONDecodeError:
+        pass
+    return (True, f"ses MessageId={msg_id}" if msg_id else "ses ok")
+
+
+def send_email(to: str, subject: str, body: str, attachments: list[str] | None = None,
+               backend: str = "gog", ses_cfg: dict | None = None) -> tuple[bool, str]:
+    """Send a self-notification. Returns (ok, info).
+
+    backend="gog" (default): `gog gmail send` with native attachments.
+    backend="ses": AWS SES via aws CLI (body-only; text reports inlined).
+    attachments: file paths (expanded with ~; missing ones skipped silently —
+    a missing report never fails the whole send)."""
+    if backend == "ses":
+        return _send_via_ses(to, subject, _inline_attachments(body, attachments), ses_cfg or {})
+
     cmd = [GOG_BIN, "gmail", "send",
            "--to", to,
            "--subject", subject,
@@ -170,6 +243,8 @@ def drain_outbound(cfg: dict) -> tuple[int, int, int]:
     (sent, failed, skipped)."""
     self_addr = cfg.get("self_address", "")
     prefix = cfg.get("subject_prefix", "[Pocket]")
+    backend = cfg.get("backend", "gog")
+    ses_cfg = {"region": cfg.get("region", "us-east-1"), "from": cfg.get("from", "")}
     if not self_addr or not QUEUE.exists():
         return (0, 0, 0)
     cursor = 0
@@ -228,7 +303,8 @@ def drain_outbound(cfg: dict) -> tuple[int, int, int]:
                 attachments = entry.get("attachments") or []
                 if not isinstance(attachments, list):
                     attachments = []
-                ok, info = send_email(to, subject[:200], body, attachments)
+                ok, info = send_email(to, subject[:200], body, attachments,
+                                      backend=backend, ses_cfg=ses_cfg)
                 if ok:
                     sent += 1
                     try:
