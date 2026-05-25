@@ -934,6 +934,7 @@ cmd_provision_google_ads() {
   hint=$(prefs_get_project_field "$project" "google_ads" "customer_id_hint" 2>/dev/null || true)
   [ "$hint" = "null" ] && hint=""
   # CLI flag wins over prefs hint
+  [ -n "$arg_customer_name" ] && [ -z "$arg_customer_id" ] && hint=""
   [ -n "$arg_customer_id" ] && hint="$arg_customer_id"
   # Explicit --customer-id must match accessible accounts (prefs hint may be stale and may fall through)
   if [ -n "$arg_customer_id" ] && ! printf '%s\n' "$resource_names" | grep -qx "customers/${arg_customer_id}"; then
