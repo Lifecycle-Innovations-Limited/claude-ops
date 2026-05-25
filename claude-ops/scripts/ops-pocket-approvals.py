@@ -103,11 +103,11 @@ def cmd_digest():
     body="\n".join(lines)
     # idempotency: skip if same open set already notified
     import hashlib
-    h=hashlib.sha256(json.dumps(sorted(c['id'] for c in codemap.values())).encode()).hexdigest()
+    h=hashlib.sha256(json.dumps([(it["id"], it["bucket"]) for it in items]).encode()).hexdigest()
     prev=json.loads(NOTIFIED.read_text()).get("hash") if NOTIFIED.exists() else None
     if h==prev:
         log(f"digest: open set unchanged ({len(items)} items) — not re-emailing")
-        CODEMAP.write_text(json.dumps(codemap,indent=2)); return 0
+        return 0
     ok,info,to=send_via_bridge(f"[Pocket] {len(items)} item(s) need approval", body)
     CODEMAP.write_text(json.dumps(codemap,indent=2))
     if ok:
