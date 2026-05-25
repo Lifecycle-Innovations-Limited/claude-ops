@@ -89,7 +89,7 @@ class PocketInferCapTest(unittest.TestCase):
 
     def _run_watcher_with_cap(self, n_recordings: int, cap: str) -> tuple[int, int, str]:
         """Invoke watcher.main() with N mocked recordings + cap. Returns
-        (haiku_call_count, seen_count, final_cursor)."""
+        (haiku_call_count, n_recordings_marked_seen, final_cursor)."""
         mod = _load_watcher(self.state_dir, self.memory_dir, cap)
         recordings = _make_recordings(n_recordings)
 
@@ -97,7 +97,7 @@ class PocketInferCapTest(unittest.TestCase):
 
         def fake_infer(rec):
             haiku_calls["n"] += 1
-            return []  # no inferred tasks; we only care about call count
+            return [], True  # no inferred tasks; we only care about call count
 
         def fake_call_tool(self_, tool_name, args, timeout=30):
             if tool_name == "search_pocket_conversations_timerange":
@@ -115,22 +115,26 @@ class PocketInferCapTest(unittest.TestCase):
         self.assertEqual(rc, 0, "watcher main() should exit 0")
 
         seen_path = self.state_dir / "seen.json"
-        seen = json.loads(seen_path.read_text()) if seen_path.exists() else []
+        seen_list = json.loads(seen_path.read_text()) if seen_path.exists() else []
+        n_rec_seen = sum(
+            1 for k in seen_list
+            if isinstance(k, str) and k.startswith("rec-")
+        )
         cursor_path = self.state_dir / "cursor.txt"
         cursor = cursor_path.read_text().strip() if cursor_path.exists() else ""
-        return haiku_calls["n"], len(seen), cursor
+        return haiku_calls["n"], n_rec_seen, cursor
 
     def test_cap_respected_under_50_recordings(self):
         """50 unseen recordings × cap=10 → exactly 10 Haiku calls, 10 seen."""
-        n_calls, n_seen, cursor = self._run_watcher_with_cap(50, "10")
+        n_calls, n_rec_seen, cursor = self._run_watcher_with_cap(50, "10")
         self.assertEqual(n_calls, 10, f"Haiku should fire exactly 10 times under cap=10, got {n_calls}")
-        self.assertEqual(n_seen, 10, f"seen.json should have exactly 10 entries, got {n_seen}")
+        self.assertEqual(n_rec_seen, 10, f"expected 10 recording ids in seen.json, got {n_rec_seen}")
 
     def test_cap_zero_disables_cap(self):
         """cap=0 → all 50 fire (counter-factual: without guard, money leaks)."""
-        n_calls, n_seen, _ = self._run_watcher_with_cap(50, "0")
+        n_calls, n_rec_seen, _ = self._run_watcher_with_cap(50, "0")
         self.assertEqual(n_calls, 50, f"cap=0 should disable cap; expected 50 calls, got {n_calls}")
-        self.assertEqual(n_seen, 50)
+        self.assertEqual(n_rec_seen, 50)
 
     def test_cap_hit_holds_cursor(self):
         """When cap is hit, cursor must NOT advance — else deferred recordings
@@ -150,7 +154,7 @@ class PocketInferCapTest(unittest.TestCase):
 
         with mock.patch.object(mod.MCPClient, "initialize", return_value=True), \
                 mock.patch.object(mod.MCPClient, "call_tool", new=fake_call_tool), \
-                mock.patch.object(mod, "infer_tasks_from_recording", new=lambda r: []), \
+                mock.patch.object(mod, "infer_tasks_from_recording", new=lambda r: ([], True)), \
                 mock.patch.object(mod, "write_memory", new=lambda rec, giga=None: None), \
                 mock.patch.object(mod, "resolve_api_key", return_value="pk_test"):
             rc = mod.main()
@@ -177,7 +181,7 @@ class PocketInferCapTest(unittest.TestCase):
 
         with mock.patch.object(mod.MCPClient, "initialize", return_value=True), \
                 mock.patch.object(mod.MCPClient, "call_tool", new=fake_call_tool), \
-                mock.patch.object(mod, "infer_tasks_from_recording", new=lambda r: []), \
+                mock.patch.object(mod, "infer_tasks_from_recording", new=lambda r: ([], True)), \
                 mock.patch.object(mod, "write_memory", new=lambda rec, giga=None: None), \
                 mock.patch.object(mod, "resolve_api_key", return_value="pk_test"):
             mod.main()
