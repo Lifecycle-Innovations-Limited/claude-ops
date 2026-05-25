@@ -6,6 +6,7 @@ import path from 'path';
 import http from 'http';
 import { execSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HOME = os.homedir();
 const PREFS_PATH = process.env.PREFS_PATH ||
@@ -137,7 +138,83 @@ async function fetchUploadPost(profile, key) {
   return { ok: true, count: items.length, items };
 }
 
-function adHook(engine) { return { ok: false, reason: 'hook-pending', status: 'hook-pending', items: [] }; }
+/* ---------- ad fetchers (real; honest empty when no creds / no campaigns) ---------- */
+async function fetchMetaAds(cfg) {
+  const m = cfg.meta || {};
+  if (!m.ad_account_id) return { ok: false, reason: 'no ad account', items: [] };
+  const token = resolveSecret(m.access_token);
+  if (!token) return { ok: false, reason: 'no token', items: [] };
+  const secret = resolveSecret(m.app_secret);
+  const proof = secret ? crypto.createHmac('sha256', secret).update(token).digest('hex') : null;
+  const u = new URL(`https://graph.facebook.com/v21.0/${m.ad_account_id}/ads`);
+  u.searchParams.set('fields', 'name,effective_status,created_time,creative{title,body,thumbnail_url},adset{daily_budget,targeting{publisher_platforms}}');
+  u.searchParams.set('limit', '50');
+  u.searchParams.set('access_token', token);
+  if (proof) u.searchParams.set('appsecret_proof', proof);
+  let r;
+  try { r = await fetch(u, { signal: AbortSignal.timeout(15000) }); }
+  catch (e) { return { ok: false, reason: e.message, items: [] }; }
+  if (!r.ok) { let msg = `HTTP ${r.status}`; try { msg = (await r.json()).error?.message || msg; } catch {} return { ok: false, reason: msg, items: [] }; }
+  const ads = (await r.json()).data || [];
+  const items = ads.map(a => {
+    const cr = a.creative || {};
+    const pp = a.adset?.targeting?.publisher_platforms || [];
+    let channel = pp.includes('instagram') && !pp.includes('facebook') ? 'instagram' : (pp[0] || 'facebook');
+    if (channel === 'audience_network' || channel === 'messenger') channel = 'meta';
+    const budget = a.adset?.daily_budget ? ' · $' + (a.adset.daily_budget / 100).toFixed(0) + '/day' : '';
+    const copy = [cr.title, cr.body].filter(Boolean).join('\n\n') || a.name;
+    return {
+      id: 'meta-' + a.id, channel, kind: 'ad', type: 'ad', scheduled_at: a.created_time || null,
+      ad_status: a.effective_status, copy,
+      rationale: 'Meta ad · ' + a.effective_status + budget + ' · placement: ' + (pp.join(', ') || 'auto') + '.',
+      media: cr.thumbnail_url ? [{ type: 'image', url: cr.thumbnail_url, thumb: cr.thumbnail_url }] : [],
+      links: [], char_count: copy.length, title: a.name, source: { engine: 'meta-ads', ref: a.id },
+    };
+  });
+  return { ok: true, count: items.length, items };
+}
+async function fetchGoogleAds(cfg) {
+  const g = cfg.google_ads || {};
+  if (!g.customer_id) return { ok: false, reason: 'not configured', items: [] };
+  const devToken = resolveSecret(g.developer_token), cid = resolveSecret(g.client_id),
+        csec = resolveSecret(g.client_secret), refresh = resolveSecret(g.refresh_token);
+  if (!devToken || !cid || !csec || !refresh) return { ok: false, reason: 'missing oauth creds', items: [] };
+  let access;
+  try {
+    const tr = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: cid, client_secret: csec, refresh_token: refresh, grant_type: 'refresh_token' }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!tr.ok) return { ok: false, reason: 'oauth HTTP ' + tr.status, items: [] };
+    access = (await tr.json()).access_token;
+  } catch (e) { return { ok: false, reason: e.message, items: [] }; }
+  const cust = String(g.customer_id).replace(/-/g, '');
+  const headers = { Authorization: 'Bearer ' + access, 'developer-token': devToken, 'Content-Type': 'application/json' };
+  if (g.login_customer_id) headers['login-customer-id'] = String(g.login_customer_id).replace(/-/g, '');
+  const query = "SELECT campaign.name, campaign.status, ad_group_ad.ad.responsive_search_ad.headlines, ad_group_ad.ad.final_urls FROM ad_group_ad WHERE campaign.status != 'REMOVED' LIMIT 50";
+  let rows = [];
+  try {
+    const r = await fetch('https://googleads.googleapis.com/v20/customers/' + cust + '/googleAds:searchStream', {
+      method: 'POST', headers, body: JSON.stringify({ query }), signal: AbortSignal.timeout(20000),
+    });
+    if (!r.ok) { let msg = 'HTTP ' + r.status; try { const j = await r.json(); msg = (j.error?.message || JSON.stringify(j)).slice(0, 160); } catch {} return { ok: false, reason: msg, items: [] }; }
+    const data = await r.json();
+    rows = (Array.isArray(data) ? data : [data]).flatMap(b => b.results || []);
+  } catch (e) { return { ok: false, reason: e.message, items: [] }; }
+  const items = rows.map((row, i) => {
+    const ad = row.adGroupAd?.ad || {};
+    const heads = (ad.responsiveSearchAd?.headlines || []).map(h => h.text).filter(Boolean);
+    const copy = heads.join(' · ') || row.campaign?.name || 'ad';
+    return {
+      id: 'gads-' + i, channel: 'google-search', kind: 'ad', type: 'ad', scheduled_at: null,
+      ad_status: row.campaign?.status, copy,
+      rationale: 'Google Ads · "' + (row.campaign?.name || '') + '" · ' + (row.campaign?.status || '') + '.',
+      media: [], links: ad.finalUrls || [], char_count: copy.length, title: row.campaign?.name, source: { engine: 'google-ads', ref: String(i) },
+    };
+  });
+  return { ok: true, count: items.length, items };
+}
 
 /* ---------- collect ---------- */
 async function collect() {
@@ -161,20 +238,26 @@ async function collect() {
       status: res.ok ? 'ok' : (res.reason || 'error'), channels: [...new Set(res.items.map(i => i.channel))].sort(), items: res.items });
   }
 
-  // project brands
+  // project brands — organic posts (social.engine) + paid ads (meta/google, independent of organic engine)
   for (const [proj, cfg] of Object.entries(mk.projects || {})) {
     const s = cfg.social || {}; const eng = (s.engine && s.engine.primary) || null;
-    let res = { ok: false, items: [], status: s.engine && s.engine.status };
+    let postRes = { ok: false, items: [], status: s.engine && s.engine.status };
     if (eng === 'upload-post') {
       const up = s.engine.upload_post || {};
-      res = await fetchUploadPost(up.user || proj, resolveSecret(up.api_key_ref));
-    } else if (eng === 'meta-graph' || eng === 'meta-ads' || eng === 'google-ads') {
-      res = adHook(eng);
+      postRes = await fetchUploadPost(up.user || proj, resolveSecret(up.api_key_ref));
+    } else if (eng === 'typefully' && s.typefully_social_set_id) {
+      postRes = await fetchTypefully(s.typefully_social_set_id);
     }
-    if (eng) note(eng, res);
-    identities.push({ id: proj, label: proj, kind: 'project', engine: eng,
-      status: eng ? (res.ok ? 'ok' : (res.status || res.reason || 'error')) : 'unprovisioned',
-      channels: [...new Set(res.items.map(i => i.channel))].sort(), items: res.items });
+    if (eng) note(eng, postRes);
+    const meta = await fetchMetaAds(cfg); if (cfg.meta && cfg.meta.ad_account_id) note('meta-ads', meta);
+    const gads = await fetchGoogleAds(cfg); if (cfg.google_ads && cfg.google_ads.customer_id) note('google-ads', gads);
+    const items = [...postRes.items, ...meta.items, ...gads.items];
+    identities.push({
+      id: proj, label: proj, kind: 'project', engine: eng,
+      status: eng ? (postRes.ok ? 'ok' : (postRes.status || postRes.reason || 'error')) : 'unprovisioned',
+      ad_status: { 'meta-ads': meta.ok ? String(meta.count) : (meta.reason || '-'), 'google-ads': gads.ok ? String(gads.count) : (gads.reason || '-') },
+      channels: [...new Set(items.map(i => i.channel))].sort(), items,
+    });
   }
 
   const state = { generated_at: new Date().toISOString(), timezone: prefs.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,

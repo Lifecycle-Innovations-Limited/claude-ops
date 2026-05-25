@@ -59,8 +59,8 @@ function renderChannels(){
 }
 function card(i,tz){
   const c=el('div',{className:'card'});
-  const w=fmtDate(i.scheduled_at,tz);
-  const when=el('div',{className:'when'}, el('span',{className:'date'},w.date), el('span',{className:'rel'},`${w.time} · ${w.rel}`), el('span',{className:`badge ${i.type||''}`}, i.type||'post'));
+  const w=i.scheduled_at?fmtDate(i.scheduled_at,tz):null;
+  const when=el('div',{className:'when'}, el('span',{className:'date'}, w?w.date:(i.ad_status||'active')), el('span',{className:'rel'}, w?`${w.time} · ${w.rel}`:'ongoing'), el('span',{className:`badge ${i.kind==='ad'?'video':(i.type||'')}`}, i.kind==='ad'?(i.ad_status||'ad'):(i.type||'post')));
   c.append(when);
   if(i.title) c.append(el('div',{className:'title'}, i.title));
   if(i.media&&i.media.length){ const m=i.media[0]; const md=el('div',{className:'media'}); if(m.thumb||m.url) md.append(el('img',{src:m.thumb||m.url,loading:'lazy',alt:''})); if(m.type==='video') md.append(el('span',{className:'vid-badge'},'▶ video')); c.append(md); }
