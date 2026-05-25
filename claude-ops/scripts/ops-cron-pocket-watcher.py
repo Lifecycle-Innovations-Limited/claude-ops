@@ -59,10 +59,12 @@ Giga sync (optional but on-by-default):
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 from collections import OrderedDict
+from contextlib import contextmanager
 import re
 import subprocess
 import sys
@@ -411,21 +413,24 @@ def _transcript_for_infer_length_gate(recording: dict) -> str:
     return transcript
 
 
-def infer_tasks_from_recording(recording: dict) -> list[dict]:
+def infer_tasks_from_recording(recording: dict) -> tuple[list[dict], bool]:
     """Call Haiku to extract implicit tasks from a recording's transcript.
 
-    Returns a list of {title, context, priority, confidence} dicts.
-    Filtered by INFER_CONFIDENCE threshold. Empty list if recording is too
-    short, no auth, or Haiku returns nothing actionable.
+    Returns ``(tasks, api_ok)`` where *tasks* is a list of
+    {title, context, priority, confidence} dicts (filtered by INFER_CONFIDENCE).
+    *api_ok* is True only when a Haiku HTTP request completed and the model
+    reply was parsed as a JSON array (possibly empty after filtering) — so
+    callers can persist dedupe markers and infer-budget without treating transport
+    or parse failures as a successful empty extraction.
     """
     if not INFER_TASKS:
-        return []
+        return [], True
     duration = recording.get("durationSec") or recording.get("duration") or 0
     if duration and duration < INFER_MIN_SECS:
-        return []
+        return [], True
     transcript = _transcript_for_infer_length_gate(recording)
     if len(transcript) < 200:
-        return []
+        return [], True
 
     summary = recording.get("summary") or {}
     if isinstance(summary, dict):
@@ -436,7 +441,7 @@ def infer_tasks_from_recording(recording: dict) -> list[dict]:
     auth_header, extras = _resolve_anthropic_auth()
     if not auth_header and not (extras or {}).get("_apikey"):
         log("infer: no Anthropic auth — skipping implicit-task extraction")
-        return []
+        return [], False
 
     system_prompt = (
         "You extract implicit actionable tasks from a voice-memo transcript. "
@@ -484,10 +489,10 @@ def infer_tasks_from_recording(recording: dict) -> list[dict]:
     except urlerr.HTTPError as e:
         err = e.read().decode("utf-8", errors="replace")[:200] if e.fp else ""
         log(f"infer: Haiku HTTP {e.code}: {err}")
-        return []
+        return [], False
     except Exception as e:
         log(f"infer: Haiku call failed: {type(e).__name__}: {e}")
-        return []
+        return [], False
 
     text = ""
     for block in body.get("content", []):
@@ -503,9 +508,9 @@ def infer_tasks_from_recording(recording: dict) -> list[dict]:
         items = json.loads(text)
     except json.JSONDecodeError:
         log(f"infer: bad JSON from Haiku: {text[:200]}")
-        return []
+        return [], False
     if not isinstance(items, list):
-        return []
+        return [], False
     out = []
     for it in items:
         if not isinstance(it, dict):
@@ -522,7 +527,7 @@ def infer_tasks_from_recording(recording: dict) -> list[dict]:
             "priority": (it.get("priority") or "low").lower(),
             "confidence": conf,
         })
-    return out
+    return out, True
 
 
 # ── Giga client (reuses mcp-remote OAuth token cache) ────────────────────────
@@ -621,6 +626,22 @@ class GigaClient:
 
 
 # ── State ────────────────────────────────────────────────────────────────────
+@contextmanager
+def pocket_state_lock() -> None:
+    """Serialize updates to seen.json and pending-triage.jsonl (watcher + webhook)."""
+    if DRY_RUN:
+        yield
+        return
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = STATE_DIR / ".pocket-webhook-state.lock"
+    with open(lock_path, "a+b") as lock_f:
+        fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+
+
 def load_cursor() -> str:
     if CURSOR_FILE.exists():
         return CURSOR_FILE.read_text().strip()
@@ -796,6 +817,15 @@ def _on_search_outage_resolved() -> None:
 def slugify(text: str, maxlen: int = 60) -> str:
     s = re.sub(r"[^a-zA-Z0-9]+", "_", (text or "").lower()).strip("_")
     return (s or "untitled")[:maxlen]
+
+
+def actionitem_webhook_triage_dedupe_key(recording_id: str, title: str) -> str | None:
+    """Matches ops-pocket-webhook-ingest keys for action items without MCP ids."""
+    rid = (recording_id or "").strip()
+    tit = (title or "").strip()
+    if not rid or not tit:
+        return None
+    return f"action-todo:{rid}:{slugify(tit, 40)}"
 
 
 def write_memory(recording: dict, giga: "GigaClient | None" = None) -> Path | None:
@@ -974,9 +1004,7 @@ def main() -> int:
 
     api_key = resolve_api_key()
     cursor = load_cursor()
-    seen = load_seen()
     run_started = now_iso()
-    log(f"cursor={cursor} seen={len(seen)}")
 
     client = MCPClient(MCP_URL, api_key)
     if not client.initialize():
@@ -992,7 +1020,13 @@ def main() -> int:
             log("giga sync disabled (init failed)")
             giga = None
 
-    # 1) Pull recordings since cursor
+    with pocket_state_lock():
+        seen = load_seen()
+        log(f"cursor={cursor} seen={len(seen)}")
+
+    # 1) Pull recordings since cursor (MCP + Haiku outside pocket_state_lock so
+    # webhook ingest can make progress; seen/pending updates are short critical
+    # sections below).
     new_memories = 0
     new_recordings: list[str] = []
     recordings_page_cap_hit = False
@@ -1029,81 +1063,107 @@ def main() -> int:
             break
         for rec in recordings:
             rid = rec.get("id") or rec.get("recordingId") or ""
-            if not rid or rid in seen:
-                continue
-            # Skip very short, transcript-less recordings (likely noise)
-            duration = rec.get("durationSec") or rec.get("duration") or 0
-            transcript = rec.get("transcript") or ""
-            segs = rec.get("transcriptSegments") or []
-            has_content = bool(transcript or segs)
-            if duration and duration < 20 and not has_content:
-                log(f"skip noise recording {rid} (dur={duration}s, no transcript)")
-                _seen_add(seen, rid)
-                continue
+            would_infer = False
+            wh_infer = ""
+            infer_done_elsewhere = False
+            run_infer = False
 
-            # Money-leak guard: if a Haiku inference would fire for THIS
-            # recording and we've already hit the per-run cap, STOP the loop
-            # entirely — do NOT write_memory and do NOT mark seen, so the
-            # recording rolls over to the next run untouched. We pre-check
-            # the same gating logic infer_tasks_from_recording uses so we
-            # don't artificially skip recordings that wouldn't trigger Haiku
-            # anyway (too-short, INFER_TASKS=0, etc).
-            gate_transcript = _transcript_for_infer_length_gate(rec)
-            would_infer = (
-                INFER_TASKS
-                and (not duration or duration >= INFER_MIN_SECS)
-                and len(gate_transcript) >= 200
-            )
-            if (
-                MAX_INFER_PER_RUN > 0
-                and would_infer
-                and infer_calls >= MAX_INFER_PER_RUN
-            ):
-                log(
-                    f"infer cap hit: {infer_calls}/{MAX_INFER_PER_RUN} Haiku "
-                    f"calls this run — deferring recording {rid} to next run"
+            with pocket_state_lock():
+                seen = load_seen()
+                if not rid or rid in seen:
+                    continue
+                # Skip very short, transcript-less recordings (likely noise)
+                duration = rec.get("durationSec") or rec.get("duration") or 0
+                transcript = rec.get("transcript") or ""
+                segs = rec.get("transcriptSegments") or []
+                has_content = bool(transcript or segs)
+                if duration and duration < 20 and not has_content:
+                    log(f"skip noise recording {rid} (dur={duration}s, no transcript)")
+                    _seen_add(seen, rid)
+                    save_seen(seen)
+                    continue
+
+                # Money-leak guard: if a Haiku inference would fire for THIS
+                # recording and we've already hit the per-run cap, STOP the loop
+                # entirely — do NOT write_memory and do NOT mark seen, so the
+                # recording rolls over to the next run untouched. We pre-check
+                # the same gating logic infer_tasks_from_recording uses so we
+                # don't artificially skip recordings that wouldn't trigger Haiku
+                # anyway (too-short, INFER_TASKS=0, etc).
+                gate_transcript = _transcript_for_infer_length_gate(rec)
+                would_infer = (
+                    INFER_TASKS
+                    and (not duration or duration >= INFER_MIN_SECS)
+                    and len(gate_transcript) >= 200
                 )
-                cap_hit = True
-                break
+                wh_infer = f"wh-infer:{rid}"
+                infer_done_elsewhere = wh_infer in seen
+                if (
+                    MAX_INFER_PER_RUN > 0
+                    and would_infer
+                    and infer_calls >= MAX_INFER_PER_RUN
+                ):
+                    log(
+                        f"infer cap hit: {infer_calls}/{MAX_INFER_PER_RUN} Haiku "
+                        f"calls this run — deferring recording {rid} to next run"
+                    )
+                    cap_hit = True
+                    break
+
+                if would_infer and not infer_done_elsewhere:
+                    _seen_add(seen, wh_infer)
+                    save_seen(seen)
+                    run_infer = True
 
             write_memory(rec, giga=giga)
-            new_memories += 1
-            new_recordings.append(rid)
-            _seen_add(seen, rid)
 
-            # Implicit-task inference (Haiku) — only on substantive recordings
-            inferred = infer_tasks_from_recording(rec)
-            if would_infer:
+            if infer_done_elsewhere:
+                inferred: list[dict] = []
+                infer_api_ok = True
+            else:
+                inferred, infer_api_ok = infer_tasks_from_recording(rec)
+            if would_infer and not infer_done_elsewhere and run_infer:
                 infer_calls += 1
-            for idx, t in enumerate(inferred):
-                inferred_id = f"inferred-{rid[:12]}-{idx}"
-                if inferred_id in seen:
-                    continue
-                payload = {
-                    "id": inferred_id,
-                    "kind": "inferred",
-                    "title": t["title"],
-                    "context": t["context"],
-                    "priority": t["priority"],
-                    "due": None,
-                    "recording_id": rid,
-                    "source": "pocket-haiku-inferred",
-                    "confidence": t["confidence"],
-                    "captured_at": now_iso(),
-                }
-                if DRY_RUN:
-                    log(f"(dry-run) would queue inferred task for triage: {t['title'][:60]} (conf={t['confidence']:.2f})")
-                else:
-                    # Inferred tasks go to pending-triage.jsonl, NOT directly to
-                    # the live tasks.jsonl. The Opus triage agent must classify
-                    # them (ACT / DRAFT / DROP / ASK) before any can reach the
-                    # supervisor. This is the mandated safety guardrail:
-                    # no autonomous work without a verdict.
-                    PENDING_TRIAGE.parent.mkdir(parents=True, exist_ok=True)
-                    with PENDING_TRIAGE.open("a") as f:
-                        f.write(json.dumps(payload) + "\n")
-                    log(f"queued for triage: {t['title'][:60]} (conf={t['confidence']:.2f})")
-                _seen_add(seen, inferred_id)
+
+            with pocket_state_lock():
+                seen = load_seen()
+                if run_infer and not infer_api_ok:
+                    seen.pop(wh_infer, None)
+                if rid not in seen:
+                    _seen_add(seen, rid)
+                    new_memories += 1
+                    new_recordings.append(rid)
+                for idx, t in enumerate(inferred):
+                    inferred_id = f"inferred-{rid[:12]}-{idx}"
+                    if inferred_id in seen:
+                        continue
+                    payload = {
+                        "id": inferred_id,
+                        "kind": "inferred",
+                        "title": t["title"],
+                        "context": t["context"],
+                        "priority": t["priority"],
+                        "due": None,
+                        "recording_id": rid,
+                        "source": "pocket-haiku-inferred",
+                        "confidence": t["confidence"],
+                        "captured_at": now_iso(),
+                    }
+                    if DRY_RUN:
+                        log(f"(dry-run) would queue inferred task for triage: {t['title'][:60]} (conf={t['confidence']:.2f})")
+                    else:
+                        # Inferred tasks go to pending-triage.jsonl, NOT directly to
+                        # the live tasks.jsonl. The Opus triage agent must classify
+                        # them (ACT / DRAFT / DROP / ASK) before any can reach the
+                        # supervisor. This is the mandated safety guardrail:
+                        # no autonomous work without a verdict.
+                        PENDING_TRIAGE.parent.mkdir(parents=True, exist_ok=True)
+                        with PENDING_TRIAGE.open("a") as f:
+                            f.write(json.dumps(payload) + "\n")
+                        log(f"queued for triage: {t['title'][:60]} (conf={t['confidence']:.2f})")
+                    _seen_add(seen, inferred_id)
+                save_seen(seen)
+
         if cap_hit:
             break
         if meta.get("hasMore") and meta.get("nextRecordingDateBeforeExclusive"):
@@ -1133,11 +1193,23 @@ def main() -> int:
             if not iid:
                 continue
             seen_key = f"action:{iid}"
-            if seen_key in seen:
-                continue
+            rec_id = str(item.get("recordingId") or item.get("recording_id") or "").strip()
+            title = (item.get("title") or item.get("label") or "").strip()
+            webhook_triage_key = actionitem_webhook_triage_dedupe_key(rec_id, title)
+            with pocket_state_lock():
+                seen = load_seen()
+                if seen_key in seen:
+                    continue
+                if webhook_triage_key and webhook_triage_key in seen:
+                    continue
             route_actionitem(item, giga=giga)
-            new_tasks += 1
-            _seen_add(seen, seen_key)
+            with pocket_state_lock():
+                seen = load_seen()
+                if seen_key in seen:
+                    continue
+                new_tasks += 1
+                _seen_add(seen, seen_key)
+                save_seen(seen)
 
     # 3) Optional consolidate pass (Giga merges adjacent neurons)
     if giga and giga.ok and GIGA_CONSOLIDATE and (new_memories + new_tasks) > 0:
@@ -1151,11 +1223,11 @@ def main() -> int:
     # 4) Advance cursor & persist.
     # Do not advance if either the Haiku-inference cap or pagination cap was hit —
     # both mean there are deferred recordings that need the same window next run.
-    if cap_hit:
-        log(f"cap hit: holding cursor at {cursor} (not advancing to {run_started})")
-    elif not recordings_page_cap_hit:
-        save_cursor(run_started)
-    save_seen(seen)
+    with pocket_state_lock():
+        if cap_hit:
+            log(f"cap hit: holding cursor at {cursor} (not advancing to {run_started})")
+        elif not recordings_page_cap_hit:
+            save_cursor(run_started)
 
     if giga and giga.ok and not giga_flush_ok:
         giga_status = "flush_failed"
