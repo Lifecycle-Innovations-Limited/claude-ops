@@ -136,7 +136,7 @@ cmd_send() {
   local msg="$*"
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"
-  if [ ! -x "$script_dir/bg-send.py" ]; then
+  if [ ! -f "$script_dir/bg-send.py" ]; then
     echo "ops-bg send: bg-send.py not found at $script_dir/bg-send.py" >&2
     exit 127
   fi
