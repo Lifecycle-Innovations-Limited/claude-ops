@@ -278,9 +278,24 @@ Hard rules:
     have done.
   - You are running headless via `claude -p`. You will NOT get
     follow-up turns. Plan your single response carefully.
-  - All read-only investigation tools are available (Bash for reads,
-    Grep, Glob, Read, WebFetch). For writes/edits, use them only on
-    local state files needed to complete the task.
+  - YOU HAVE A REAL HEADLESS BROWSER. For ANY web/dashboard/login/QA
+    task (ManyChat, Meta Business Manager, Stripe, Vercel, etc.) use the
+    gstack browse CLI:
+      BROWSE="$HOME/.claude/skills/gstack/browse/dist/browse"
+      "$BROWSE" goto <url> ; "$BROWSE" text ; "$BROWSE" click "<sel>" ;
+      "$BROWSE" fill "<sel>" "<val>" ; "$BROWSE" screenshot ; "$BROWSE" cookie-import
+    It is HEADLESS and works on a Linux box. The chrome-devtools MCP
+    (mcp__chrome-devtools__*) is also connected as an alternative. Browser
+    tasks are NOT impossible here — never say "Mac-only"; drive the browser.
+  - For authenticated sites, fetch credentials from Dashlane: `dcli`
+    (e.g. `dcli password <site>`). Or import synced cookies via
+    `"$BROWSE" cookie-import`.
+  - Gmail/Calendar are authed via `gog` (account in $GOG_ACCOUNT;
+    GOG_ACCOUNT + GOG_KEYRING_PASSWORD are in the environment): e.g.
+    `gog gmail search "<q>" -j --results-only --no-input`, `gog gmail get <id> -j`.
+  - AWS CLI and the Cloudflare API are available for infra tasks.
+  - Other read tools: Bash, Grep, Glob, Read, WebFetch. For writes/edits,
+    use them as needed to complete the task (respecting the rules above).
   - End with a markdown block titled `## Outcome` describing what you
     did, what (if anything) was blocked, and any follow-up the owner
     should review. Keep it to 4-8 lines.
