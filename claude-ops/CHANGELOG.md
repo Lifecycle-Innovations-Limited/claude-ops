@@ -4,7 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.11.3] — 2026-05-25
+
 ### Added
+
+- **`ops-bg send <id> "<msg>"`** (#349) — inject a user message into a running `claude --bg` session without attaching its TUI. Useful when a backgrounded session is blocked on an `AskUserQuestion` and you already know the answer, when an orchestrator wants to nudge / ack / close a shipped session from automation, or as a non-UI escape hatch when the dashboard's "awaiting input" panel breaks.
+  - `claude-ops/scripts/bg-send.py` — talks to the supervisor's UNIX control socket at `/tmp/cc-daemon-<uid>/<sha8>/control.sock` (instance dir discovered from `~/.claude/daemon/roster.json`) and issues a newline-delimited JSON `{"proto":1,"op":"reply","short":"<8 hex chars>","text":"..."}\n` message. Protocol reverse-engineered from claude `2.1.150`.
+  - `claude-ops/bin/ops-bg send` — thin shell wrapper that shells out to the helper. Aliases: `reply`, `msg`.
 
 - **`/ops:desktop` skill + `desktop-act` MCP wiring** — autonomous desktop + browser control surfaced as a first-class ops command. Acquires a noVNC desktop session, takes screenshots, clicks, types, scrolls, and runs the autonomous `act()` loop driven by the bundled `claude-agent-sdk` (OAuth via Claude Max, no Anthropic API key). Cross-platform launcher (Linux full / macOS / Windows partial).
 - **`mcp-servers/desktop-act-launcher.py`** — pure-Python cross-platform launcher. Resolves an installed `desktop-act` companion in (1) `$DESKTOP_ACT_COMMAND`, (2) `$DESKTOP_ACT_HOME`, (3) `$CLAUDE_CONFIG_DIR/plugins/marketplaces/desktop-act`, (4) the per-OS Claude config dir, (5) the per-user cache (`$XDG_CACHE_HOME` on Linux, `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows). If none exist it `git clone`s `$DESKTOP_ACT_REPO` (default Lifecycle-Innovations-Limited/desktop-act), bootstraps a venv, `pip install -r requirements.txt`, then `execv`s the runner. Falls back to a clear error message — never hangs the MCP host.
