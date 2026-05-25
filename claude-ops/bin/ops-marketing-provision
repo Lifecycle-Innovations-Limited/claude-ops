@@ -6,7 +6,7 @@
 #                         [--display-name <name>] [--industry SHOPPING|TECHNOLOGY]
 #   provision-gsc         --project <key> [--site sc-domain:<d>|https://<d>/]
 #   provision-instagram   --project <key> [--force]
-#   provision-google-ads  --project <key> [--skip-if-pending]
+#   provision-google-ads  --project <key> [--skip-if-pending] [--customer-id <id>|--customer-name <pattern>]
 #   provision-all         --project <key> | --all-projects
 #   status                --project <key> [--json]
 #   --help
@@ -772,12 +772,14 @@ gads_scan_credential() {
 #   Step D: customer ID resolution (auto-MCC detection)
 # ---------------------------------------------------------------------------
 cmd_provision_google_ads() {
-  local project="" skip_if_pending=0
+  local project="" skip_if_pending=0 arg_customer_id="" arg_customer_name=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --project)         project="${2:-}"; shift ;;
       --skip-if-pending) skip_if_pending=1 ;;
+      --customer-id)     arg_customer_id="${2:-}"; shift ;;
+      --customer-name)   arg_customer_name="${2:-}"; shift ;;
       *) die "Unknown argument to provision-google-ads: $1" ;;
     esac
     shift
@@ -919,13 +921,47 @@ cmd_provision_google_ads() {
   resource_names=$(printf '%s' "$accessible" | jq -r '.resourceNames[]? // empty' 2>/dev/null)
   [ -n "$resource_names" ] || die "No accessible customers — $(printf '%s' "$accessible" | jq -r '.error.message // "unknown error"')"
 
-  # Single account: auto-select. Multiple: log all and pick first non-manager.
-  local customer_count chosen_customer login_customer=""
+  # Single account: auto-select. Multiple: prefer flag/hint, else prompt or pick first non-manager.
+  # IMPORTANT: init chosen_customer="" — required by `set -u` since downstream `[ -z "$chosen_customer" ]`
+  # checks fire before any assignment in the multi-account loop (e.g. when all accounts are managers).
+  local customer_count chosen_customer="" login_customer=""
   customer_count=$(printf '%s\n' "$resource_names" | wc -l | tr -d ' ')
   log "Accessible customers ($customer_count):"
   printf '%s\n' "$resource_names" | sed 's/^/  - /' >&2
 
-  if [ "$customer_count" = "1" ]; then
+  # Resolve hint from prefs (cron-safe: set once, run unattended thereafter)
+  local hint=""
+  hint=$(prefs_get_project_field "$project" "google_ads" "customer_id_hint" 2>/dev/null || true)
+  [ "$hint" = "null" ] && hint=""
+  # CLI flag wins over prefs hint
+  [ -n "$arg_customer_id" ] && hint="$arg_customer_id"
+
+  # Direct ID hint: verify it's in the accessible list, accept it.
+  if [ -n "$hint" ] && printf '%s\n' "$resource_names" | grep -qx "customers/${hint}"; then
+    chosen_customer="$hint"
+    log "Using customer ID from hint/flag: $chosen_customer"
+  fi
+
+  # Name pattern (flag): substring match on descriptive_name across accessible accounts.
+  if [ -z "$chosen_customer" ] && [ -n "$arg_customer_name" ]; then
+    while IFS= read -r rn; do
+      [ -z "$rn" ] && continue
+      local cid_n info_n name_n
+      cid_n="${rn##customers/}"
+      info_n=$(gads_get_customer_info "$cid_n" "$access_token" "$dev_token" 2>/dev/null || echo "{}")
+      name_n=$(printf '%s' "$info_n" | jq -r '.results[0].customer.descriptiveName // ""' 2>/dev/null)
+      if printf '%s' "$name_n" | grep -qiF -- "$arg_customer_name"; then
+        chosen_customer="$cid_n"
+        log "Name match \"$arg_customer_name\" -> $name_n ($cid_n)"
+        break
+      fi
+    done <<< "$resource_names"
+    [ -z "$chosen_customer" ] && die "No accessible customer matched name pattern: $arg_customer_name"
+  fi
+
+  if [ -n "$chosen_customer" ]; then
+    : # already resolved; skip auto/interactive selection below
+  elif [ "$customer_count" = "1" ]; then
     local rn_single cid_single info_resp_single is_manager_single
     rn_single=$(printf '%s\n' "$resource_names" | head -n1)
     cid_single="${rn_single##customers/}"
@@ -937,21 +973,39 @@ cmd_provision_google_ads() {
     fi
     chosen_customer="$cid_single"
   else
-    # Walk accounts, find first non-manager. Manager accounts become login_customer_id.
+    # Walk accounts: classify manager vs non-manager, capture first MCC as login_customer.
+    local non_manager_ids=()
     while IFS= read -r rn; do
       [ -z "$rn" ] && continue
-      local cid info_resp is_manager
+      local cid info_resp is_manager name_d
       cid="${rn##customers/}"
       info_resp=$(gads_get_customer_info "$cid" "$access_token" "$dev_token" 2>/dev/null || echo "{}")
       is_manager=$(printf '%s' "$info_resp" | jq -r '.results[0].customer.manager // false' 2>/dev/null)
-      if [ "$is_manager" = "true" ] && [ -z "$login_customer" ]; then
-        login_customer="$cid"
-        log "  (MCC manager: $cid)"
-      elif [ "$is_manager" = "false" ] && [ -z "$chosen_customer" ]; then
-        chosen_customer="$cid"
+      name_d=$(printf '%s' "$info_resp" | jq -r '.results[0].customer.descriptiveName // "(unknown)"' 2>/dev/null)
+      if [ "$is_manager" = "true" ]; then
+        [ -z "$login_customer" ] && login_customer="$cid"
+        log "  [manager] $cid — $name_d"
+      else
+        non_manager_ids+=("$cid")
+        log "  [account] $cid — $name_d"
       fi
     done <<< "$resource_names"
-    [ -z "$chosen_customer" ] && chosen_customer=$(printf '%s\n' "$resource_names" | head -n1 | sed 's#^customers/##')
+
+    if [ "${#non_manager_ids[@]}" = "1" ]; then
+      chosen_customer="${non_manager_ids[0]}"
+    elif [ -t 0 ] && [ -t 2 ]; then
+      # Interactive: prompt Sam to pick by ID
+      printf 'Enter customer ID to use: ' >&2
+      local picked=""
+      read -r picked </dev/tty
+      if [ -n "$picked" ] && printf '%s\n' "$resource_names" | grep -qx "customers/${picked}"; then
+        chosen_customer="$picked"
+      else
+        die "Invalid selection: $picked (not in accessible list)"
+      fi
+    else
+      die "Multiple accessible customers and no --customer-id / --customer-name / prefs hint set. Re-run with --customer-id <id> or set marketing.projects.${project}.google_ads.customer_id_hint in prefs."
+    fi
   fi
 
   log "Selected customer: $chosen_customer${login_customer:+ (login-customer-id: $login_customer)}"
