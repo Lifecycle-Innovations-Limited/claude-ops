@@ -1,0 +1,20 @@
+[Unit]
+Description=Pocket Approvals — email the owner pending ASK/DRAFT items (digest)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER__
+Group=__USER__
+WorkingDirectory=__HOME__
+# Doppler service token injects GOG_KEYRING_PASSWORD + GOG_ACCOUNT (same as
+# pocket-email-bridge.service). Digest sends via the email-bridge SES backend.
+LoadCredential=doppler-token:/etc/pocket/doppler-token
+Environment=HOME=__HOME__
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=POCKET_STATE_DIR=__HOME__/.claude/state/pocket
+Environment=POCKET_GOG_BIN=/usr/local/bin/gog
+ExecStart=/bin/bash -c 'DOPPLER_TOKEN=$(cat $CREDENTIALS_DIRECTORY/doppler-token) /usr/local/bin/doppler run --silent -- __HOME__/.venv-pocket/bin/python3 __PLUGIN_ROOT__/scripts/ops-pocket-approvals.py --digest'
+StandardOutput=append:__HOME__/.claude/state/pocket/approvals.log
+StandardError=append:__HOME__/.claude/state/pocket/approvals-stderr.log
