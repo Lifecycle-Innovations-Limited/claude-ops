@@ -44,6 +44,12 @@ import { tmpdir } from 'os';
 import { createHmac } from 'node:crypto';
 import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS } from './ai-brain.mjs';
 
+// ── Platform: Linux uses file-based vault; macOS uses security(1) keychain ───
+const IS_LINUX = process.platform === 'linux';
+// Top-level await: pre-load vault synchronously at module init so all
+// readKeychain/writeKeychain calls below can use it without being async.
+let _linuxVault = IS_LINUX ? await import('./vault-linux.mjs') : null;
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
 const STATE_PATH = join(__dirname, 'state.json');
@@ -59,8 +65,12 @@ const KEYCHAIN_ACCOUNT =
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── Bootstrap: verify dependencies ───────────────────────────────────────────
-// The only browser driver is Playwright-over-CDP to Chrome or Chrome Beta
-// (never Comet — reserved for user, never Chromium — bundled browser banned).
+// macOS: Playwright-over-CDP to Chrome or Chrome Beta (never Comet/bundled Chromium).
+// Linux: Playwright headless Chromium (no real Chrome required).
+function _hasCmd(bin) {
+  return spawnSync('which', [bin], { timeout: 2000 }).status === 0;
+}
+
 function ensureMCPServersAndTools() {
   const actions = [];
   const earlyLog = (m) => {
@@ -69,41 +79,46 @@ function ensureMCPServersAndTools() {
     } catch {}
   };
 
-  // 1. Chrome or Chrome Beta binary (Comet is off-limits)
-  const realChromes = [
-    '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta',
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  ];
-  const foundChrome = realChromes.find((p) => existsSync(p));
-  if (foundChrome) {
-    actions.push(`chrome-binary: ${foundChrome.split('/').pop()}`);
+  if (IS_LINUX) {
+    // Linux: headless Chromium via Playwright — no real Chrome binary needed
+    actions.push('platform: linux — headless Chromium mode');
+    if (_hasCmd('npx')) {
+      actions.push('playwright: available via npx');
+    } else {
+      actions.push('playwright: WARNING — npx not found; browser fallback may fail');
+    }
   } else {
-    actions.push('chrome-binary: WARNING — no Chrome/Chrome Beta found');
+    // macOS: require real Chrome/Chrome Beta binary + CDP
+    const realChromes = [
+      '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta',
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    ];
+    const foundChrome = realChromes.find((p) => existsSync(p));
+    if (foundChrome) {
+      actions.push(`chrome-binary: ${foundChrome.split('/').pop()}`);
+    } else {
+      actions.push('chrome-binary: WARNING — no Chrome/Chrome Beta found');
+    }
+
+    // Chrome CDP port 9222 — probe (driver will launch Chrome if needed)
+    const cdpProbe = spawnSync('curl', ['-sf', 'http://localhost:9222/json/version'], { timeout: 1500 });
+    if (cdpProbe.status === 0) {
+      actions.push('chrome-cdp: reachable on :9222');
+    } else {
+      actions.push('chrome-cdp: not reachable (driver will launch Chrome)');
+    }
+
+    // security(1) keychain — required for token writes on macOS
+    if (!_hasCmd('security')) {
+      actions.push('security(1): MISSING — keychain writes will fail');
+    }
   }
 
-  // 2. Chrome CDP port 9222 — probe (driver will launch Chrome if needed)
-  try {
-    execSync(`curl -sf http://localhost:9222/json/version >/dev/null 2>&1`, {
-      timeout: 1500,
-    });
-    actions.push('chrome-cdp: reachable on :9222');
-  } catch {
-    actions.push('chrome-cdp: not reachable (driver will launch Chrome)');
-  }
-
-  // 3. dcli (Dashlane) — required for primary token path
-  try {
-    execSync(`command -v dcli >/dev/null 2>&1`, { timeout: 1000 });
+  // dcli (Dashlane) — primary token path on both platforms
+  if (_hasCmd('dcli')) {
     actions.push('dcli: available');
-  } catch {
-    actions.push('dcli: MISSING — primary token path will fail');
-  }
-
-  // 4. security (macOS keychain) — required for token writes
-  try {
-    execSync(`command -v security >/dev/null 2>&1`, { timeout: 1000 });
-  } catch {
-    actions.push('security(1): MISSING — keychain writes will fail');
+  } else {
+    actions.push('dcli: MISSING — primary token path will fall back to browser');
   }
 
   for (const a of actions) earlyLog(a);
@@ -127,15 +142,20 @@ function log(msg) {
 
 function notify(title, msg) {
   try {
-    // Use execFileSync to avoid shell interpretation of quotes in title/msg
-    execFileSync(
-      'osascript',
-      [
-        '-e',
-        `display notification "${msg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" with title "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
-      ],
-      { timeout: 5000 },
-    );
+    if (IS_LINUX) {
+      // notify-send (libnotify) — no-op if display is unavailable (e.g. headless server)
+      spawnSync('notify-send', [title, msg], { timeout: 3000 });
+    } else {
+      // Use execFileSync to avoid shell interpretation of quotes in title/msg
+      execFileSync(
+        'osascript',
+        [
+          '-e',
+          `display notification "${msg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" with title "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
+        ],
+        { timeout: 5000 },
+      );
+    }
   } catch {}
 }
 
@@ -427,9 +447,17 @@ function pickNextAccount(config, state, liveUtil = {}, opts = {}) {
   return null;
 }
 
-// ── Keychain ─────────────────────────────────────────────────────────────────
+// ── Keychain / vault ──────────────────────────────────────────────────────────
+// macOS: security(1) Keychain.  Linux: file-based vault (vault-linux.mjs).
 
 function readKeychain(svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
+  if (IS_LINUX) {
+    const vault = _linuxVault;
+    if (!vault) throw new Error('vault-linux not loaded yet');
+    const json = vault.readEntry(svc);
+    if (!json) throw new Error(`No vault entry for ${svc}`);
+    return json;
+  }
   const result = spawnSync('security', ['find-generic-password', '-s', svc, '-a', acct, '-g'], {
     timeout: 5000,
     encoding: 'utf8',
@@ -441,6 +469,12 @@ function readKeychain(svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
 }
 
 function writeKeychain(json, svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
+  if (IS_LINUX) {
+    const vault = _linuxVault;
+    if (!vault) throw new Error('vault-linux not loaded yet');
+    vault.writeEntry(svc, json);
+    return;
+  }
   try {
     execFileSync('security', ['delete-generic-password', '-s', svc, '-a', acct], {
       stdio: 'ignore',
@@ -1083,12 +1117,20 @@ function isAppRunning(appName) {
 }
 
 function gracefullyQuitApp(appName) {
-  try {
-    execSync(`osascript -e 'tell application "${appName}" to quit' 2>/dev/null`, { timeout: 8000 });
-    // Wait up to 5s for it to actually quit
+  if (IS_LINUX) {
+    // No AppleScript on Linux — send SIGTERM and wait
+    spawnSync('pkill', ['-f', appName], { timeout: 3000 });
     for (let i = 0; i < 10; i++) {
       if (!isAppRunning(appName)) return true;
-      execSync('sleep 0.5');
+      spawnSync('sleep', ['0.5']);
+    }
+    return false;
+  }
+  try {
+    execFileSync('osascript', ['-e', `tell application "${appName}" to quit`], { timeout: 8000 });
+    for (let i = 0; i < 10; i++) {
+      if (!isAppRunning(appName)) return true;
+      spawnSync('sleep', ['0.5']);
     }
   } catch {}
   return false;
@@ -1097,6 +1139,34 @@ function gracefullyQuitApp(appName) {
 async function makePlaywrightDriver() {
   const { chromium } = await import('playwright');
 
+  // ── Linux: headless Chromium (no real Chrome on servers) ─────────────────
+  if (IS_LINUX) {
+    log('[playwright] Linux mode — launching headless Chromium');
+    const profileDir = join(__dirname, '.chromium-linux-profile');
+    const browser = await chromium.launchPersistentContext(profileDir, {
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-background-networking',
+        '--disable-component-update',
+        '--disable-default-apps',
+        '--disable-sync',
+        '--disable-notifications',
+      ],
+    });
+    const page = browser.pages()[0] || (await browser.newPage());
+    return buildPageDriver(
+      'playwright-linux',
+      page,
+      async () => { try { await browser.close(); } catch {} },
+      browser,
+    );
+  }
+
+  // ── macOS: attach to real Chrome via CDP ──────────────────────────────────
   // 1. Try attaching to already-running Chrome on CDP
   let attached = await tryConnectCDP(chromium);
   let weSpawnedChrome = false;
