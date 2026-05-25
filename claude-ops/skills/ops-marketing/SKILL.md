@@ -339,6 +339,8 @@ Separate from paid ad creative gen. All outputs are **drafts only** — nothing 
 
 All generators **refuse to run if `brand.voice` is absent** — no defaults are substituted.
 
+**Identity separation (social) — non-negotiable.** Every social generator and post is **project-scoped**: it publishes to that project's own brand channels via `marketing.projects.<project>.social.engine`, **never** to the owner's personal/founder handle. The personal/founder identity (`marketing.social_identities.personal.*`, a Typefully set) is reserved for personal posts and is **never** a fallback for a project. A project whose `social.engine.primary == null` (status `unprovisioned`) **fails closed** — no post, and it never borrows the personal set or another project's channels. For `upload-post` brands, always pass the project's `brand_targeting` IDs so brand-admin personal OAuth lands on the brand page, never a personal feed. Full routing logic: `/ops-socials` → "Resolve the IDENTITY before anything else". No cross-posting between projects.
+
 Output paths: `${OPS_DATA_DIR}/content/{landing,blog,email,social}/<project>/`
 
 To enable a daemon service, set `enabled: true` in `daemon-services.default.json` or via `/ops:setup marketing`.
