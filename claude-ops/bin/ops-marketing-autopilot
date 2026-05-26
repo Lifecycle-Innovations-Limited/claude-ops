@@ -1736,6 +1736,12 @@ canary_gate_unpause() {
     report "- canary gate: HOLD — AppsFlyer state file missing installs_7d key"
     return 0
   fi
+  local af_status
+  af_status="$(jq -r '._status // empty' "$af_f" 2>/dev/null || true)"
+  if [ "$af_status" = "not_configured" ]; then
+    report "- canary gate: HOLD — AppsFlyer not configured (no real Pull API state)"
+    return 0
+  fi
   report "- canary gate: AppsFlyer installs_7d=${af_installs} OK"
 
   # ── Condition 3: Amplitude funnel non-zero ────────────────────────────────
@@ -2957,6 +2963,9 @@ for proj in "${PROJECTS[@]}"; do
   REPORT="${REPORT_DIR}/${proj}-${TODAY}.md"
   : > "$REPORT"
   MUTATIONS=0; ESCALATED=0; META_FATIGUE=0
+  # Per-project Meta auth — never reuse token/proof from another project or a skipped meta pass.
+  META_TOKEN=""
+  META_PROOF=""
   CREATED_CAMPAIGNS=0; CREATED_AUDIENCES=0; CREATED_BUDGET_USD=0
   _CREATE_OBJ_PROJ="$proj"
   export _CREATE_OBJ_PROJ
