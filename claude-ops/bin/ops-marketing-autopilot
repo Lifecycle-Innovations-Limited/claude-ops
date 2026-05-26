@@ -1355,6 +1355,10 @@ gather_revenuecat_revenue() {
   local resp
   resp="$(curl -sS --max-time 15 -H "Authorization: Bearer ${api_key}" \
     "https://api.revenuecat.com/v2/projects/${project_id}/metrics/overview" 2>/dev/null || echo '{}')"
+  if ! printf '%s' "$resp" | jq -e '(.metrics | type == "array")' >/dev/null 2>&1; then
+    report "- revenuecat: overview response missing metrics (transient error or auth) — keeping existing snapshot → ${out##*/}"
+    return 0
+  fi
   # The v2 overview returns .metrics[] keyed by .id. Pull revenue + the conversion
   # ladder (subscriptions/trials/new customers) so the reward can switch from the
   # pre-launch proxy ladder to true revenue the moment trials begin converting.

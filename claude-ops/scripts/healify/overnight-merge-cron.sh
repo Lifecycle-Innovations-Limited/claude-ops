@@ -67,8 +67,18 @@ for pr in prs:
     author = (pr.get("author") or {}).get("login", "")
     head = pr.get("headRefName", "")
     number = pr["number"]
-    is_sync = (base == "main" and head == "dev")
-    is_owned = author in ALLOWED_AUTHORS
+    is_sync = base == "main" and (
+        head == "dev"
+        or head.startswith("sync(dev")
+        or head.startswith("sync/dev")
+    )
+    is_owned = author in ALLOWED_AUTHORS and (
+        head.startswith("fix/")
+        or head.startswith("feat/")
+        or head.startswith("chore/")
+        or head.startswith("sync(")
+        or head.startswith("sync/dev")
+    )
     if is_sync or is_owned:
         print(f"{number}\t{head}\t{author}")
     else:
