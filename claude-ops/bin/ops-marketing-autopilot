@@ -1644,14 +1644,14 @@ destination_guard() {
 # canary_gate_unpause <project>
 #
 # Flips EXACTLY ONE paused ad set to ACTIVE only when ALL conditions are met:
-#   1. destination_guard passes for the ad set's configured destination URL
+#   1. destination_guard passes for a candidate ad creative's destination URL
 #   2. AppsFlyer state file present + non-empty (installs_7d key exists)
 #   3. Amplitude funnel_total_7d > 0
 #   4. Meta account_status=1 (active)
 #
 # Hard caps:
 #   - Ad set daily_budget ≤ 500 cents ($5.00 USD)
-#   - Total active daily_budget across ALL campaign_ids ≤ cap (max $50 from prefs)
+#   - Total active daily_budget across ALL campaign_ids ≤ autopilot.daily_spend_cap_usd
 #
 # Rate-floor + single-fire guard:
 #   - Uses a per-project lock dir (atomic mkdir, no flock needed on macOS)
@@ -1661,7 +1661,22 @@ destination_guard() {
 #
 CANARY_RATE_FLOOR_SECS="${CANARY_RATE_FLOOR_SECS:-82800}"
 CANARY_ADSET_CAP_CENTS=500     # $5.00 — HARD CAP per ad set (minor units)
-CANARY_TOTAL_CAP_USD=50        # $50.00 — HARD CAP total active budget
+
+# canary_first_ad_destination_link <project> <ad_set_id>
+# Prints the first non-empty destination URL from an ad's creative (Graph link fields).
+canary_first_ad_destination_link() {
+  local proj="$1" asid="$2"
+  local ads_json
+  ads_json="$(meta_get "${asid}/ads?fields=creative{link_url,object_story_spec}&limit=50" "$proj" 2>/dev/null || echo '{}')"
+  printf '%s' "$ads_json" | jq -r '
+    [.data[]?
+      | (.creative // {})
+      | (.link_url // empty),
+        (.object_story_spec.link_data.link // empty)
+      | select(. != null and . != "")
+    ] | first // empty
+  ' 2>/dev/null || true
+}
 
 canary_gate_unpause() {
   local proj="$1"
@@ -1735,9 +1750,8 @@ canary_gate_unpause() {
   fi
   report "- canary gate: Amplitude funnel_total_7d=${amp_total} OK"
 
-  # ── Condition 4: Destination guard — verify base is real (non-placeholder) ──
-  # We check the base URL only for placeholder/blocked-domain; per-ad links
-  # (built via build_paid_destination) carry the full af param set.
+  # ── Condition 4: Prefs destination base — non-placeholder, not a blocked bare domain.
+  # Per-ad/creative links are validated with destination_guard before unpausing.
   local dest_base
   dest_base="$(jq -r --arg p "$proj" \
     '.marketing.projects[$p].paid.destination.required_base // empty' "$PREFS" 2>/dev/null)"
@@ -1760,7 +1774,15 @@ canary_gate_unpause() {
     report "- canary gate: HOLD — required_base contains a blocked domain"
     return 0
   fi
-  report "- canary gate: destination_guard PASS (base=${dest_base})"
+  report "- canary gate: required_base OK (prefs base=${dest_base})"
+
+  # ── Project total budget cap (same as process_meta pre-flight) ─────────────
+  local canary_total_cap_usd
+  canary_total_cap_usd="$(ap_get "$proj" '.daily_spend_cap_usd')"; canary_total_cap_usd="${canary_total_cap_usd:-0}"
+  if ! awk "BEGIN{exit !(${canary_total_cap_usd:-0} > 0)}" 2>/dev/null; then
+    report "- canary gate: HOLD — daily_spend_cap_usd missing or invalid"
+    return 0
+  fi
 
   # ── All conditions met: find and unpause exactly ONE qualifying ad set ─────
   # Qualifying: status=PAUSED, daily_budget ≤ CANARY_ADSET_CAP_CENTS
@@ -1789,12 +1811,13 @@ canary_gate_unpause() {
     fi
   done
 
-  if awk "BEGIN{exit !(${current_active_usd:-0} >= ${CANARY_TOTAL_CAP_USD})}"; then
-    report "- canary gate: HOLD — total active budget \$${current_active_usd} already at/above \$${CANARY_TOTAL_CAP_USD} cap"
+  if awk "BEGIN{exit !(${current_active_usd:-0} >= ${canary_total_cap_usd})}"; then
+    report "- canary gate: HOLD — total active budget \$${current_active_usd} already at/above \$${canary_total_cap_usd} cap (daily_spend_cap_usd)"
     return 0
   fi
 
-  # Find a candidate: PAUSED ad set with daily_budget ≤ CANARY_ADSET_CAP_CENTS
+  # Find a candidate: PAUSED ad set with daily_budget ≤ CANARY_ADSET_CAP_CENTS,
+  # post-unpause Σ budget ≤ daily_spend_cap_usd, and destination_guard on creative link.
   local unpause_asid="" unpause_asname="" unpause_budget_cents=0
   for _gcid in "${_GATE_CIDS[@]}"; do
     local _paused_sets
@@ -1803,44 +1826,66 @@ canary_gate_unpause() {
       [ -z "$_asid" ] && continue
       [ -z "$_asdb" ] || [ "$_asdb" = "null" ] && continue
       # Budget cap check: must be ≤ CANARY_ADSET_CAP_CENTS
-      if awk -v b="$_asdb" -v cap="$CANARY_ADSET_CAP_CENTS" 'BEGIN{exit !(b <= cap)}'; then
-        unpause_asid="$_asid"
-        unpause_asname="$_asname"
-        unpause_budget_cents="$_asdb"
-        break 2
+      if ! awk -v b="$_asdb" -v cap="$CANARY_ADSET_CAP_CENTS" 'BEGIN{exit !(b <= cap)}'; then
+        continue
       fi
+      local _post_total_usd
+      _post_total_usd="$(awk "BEGIN{printf \"%.2f\", ${current_active_usd}+${_asdb}/100}")"
+      if awk "BEGIN{exit !(${_post_total_usd} > ${canary_total_cap_usd})}"; then
+        continue
+      fi
+      local _ad_link
+      _ad_link="$(canary_first_ad_destination_link "$proj" "$_asid")"
+      if [ -z "$_ad_link" ]; then
+        continue
+      fi
+      if ! destination_guard "$proj" "$_ad_link"; then
+        report "- canary gate: skipping ad set '${_asname}' (${_asid}) — destination_guard failed for creative link"
+        continue
+      fi
+      unpause_asid="$_asid"
+      unpause_asname="$_asname"
+      unpause_budget_cents="$_asdb"
+      break 2
     done < <(printf '%s' "$_paused_sets" | jq -r \
       '.data[]? | select(.effective_status=="PAUSED" or .status=="PAUSED") | select(.daily_budget != null) | [.id,.name,.daily_budget] | @tsv' \
       2>/dev/null || true)
   done
 
   if [ -z "$unpause_asid" ]; then
-    report "- canary gate: no qualifying PAUSED ad set found (budget ≤ \$$(awk "BEGIN{printf \"%.2f\", ${CANARY_ADSET_CAP_CENTS}/100}") and status=PAUSED)"
+    report "- canary gate: no qualifying PAUSED ad set (budget ≤ \$$(awk "BEGIN{printf \"%.2f\", ${CANARY_ADSET_CAP_CENTS}/100}")/day, under daily cap, destination_guard on creative link)"
     return 0
   fi
 
   local budget_usd; budget_usd="$(awk "BEGIN{printf \"%.2f\", ${unpause_budget_cents}/100}")"
   local post_total_usd; post_total_usd="$(awk "BEGIN{printf \"%.2f\", ${current_active_usd}+${unpause_budget_cents}/100}")"
 
-  # Final hard-cap re-check before mutation
-  if awk "BEGIN{exit !(${post_total_usd} > ${CANARY_TOTAL_CAP_USD})}"; then
-    report "- canary gate: HOLD — post-unpause total \$${post_total_usd} would exceed \$${CANARY_TOTAL_CAP_USD} cap"
+  report "- canary gate: ALL conditions met — unpausing ad set '${unpause_asname}' (${unpause_asid}), budget \$${budget_usd}/day"
+  report "  post-unpause active total: \$${post_total_usd} (cap: \$${canary_total_cap_usd} daily_spend_cap_usd)"
+
+  if [ "$DRY_RUN" = "1" ]; then
+    mutate "canary-unpause ad set ${unpause_asid} (${unpause_asname}) \$${budget_usd}/day" \
+      -X POST "${GRAPH}/${unpause_asid}" \
+      -d "status=ACTIVE" \
+      -d "access_token=${META_TOKEN}" \
+      ${META_PROOF:+-d "appsecret_proof=${META_PROOF}"}
     return 0
   fi
 
-  report "- canary gate: ALL conditions met — unpausing ad set '${unpause_asname}' (${unpause_asid}), budget \$${budget_usd}/day"
-  report "  post-unpause active total: \$${post_total_usd} (cap: \$${CANARY_TOTAL_CAP_USD})"
-
-  mutate "canary-unpause ad set ${unpause_asid} (${unpause_asname}) \$${budget_usd}/day" \
-    -X POST "${GRAPH}/${unpause_asid}" \
+  MUTATIONS=$((MUTATIONS+1))
+  report "- [EXEC] canary-unpause ad set ${unpause_asid} (${unpause_asname}) \$${budget_usd}/day"
+  log "[EXEC] canary-unpause ad set ${unpause_asid} (${unpause_asname}) \$${budget_usd}/day"
+  local _cg_unpause_resp
+  _cg_unpause_resp="$(curl -gsS --max-time 15 -X POST "${GRAPH}/${unpause_asid}" \
     -d "status=ACTIVE" \
     -d "access_token=${META_TOKEN}" \
-    ${META_PROOF:+-d "appsecret_proof=${META_PROOF}"}
-
-  if [ "$DRY_RUN" = "0" ]; then
-    # Record fired_at timestamp (rate-floor enforcement)
+    ${META_PROOF:+-d "appsecret_proof=${META_PROOF}"} 2>/dev/null || echo '{}')"
+  if printf '%s' "$_cg_unpause_resp" | jq -e '(if .error then false else true end) and ((.success == true) or ((.id // "") != ""))' >/dev/null 2>&1; then
     printf '%s' "$now_ts" > "$fired_at_file"
     log "canary_gate_unpause: unpaused ${unpause_asid} for proj=${proj} at ts=${now_ts}"
+  else
+    report "- canary gate: unpause API failed — $(printf '%s' "$_cg_unpause_resp" | jq -c 'if .error then .error else . end' 2>/dev/null || echo 'empty/invalid response')"
+    log "canary_gate_unpause: unpause FAILED for ${unpause_asid} proj=${proj} resp=${_cg_unpause_resp}"
   fi
 }
 

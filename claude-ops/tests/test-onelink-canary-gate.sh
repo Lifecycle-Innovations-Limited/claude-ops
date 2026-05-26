@@ -3,7 +3,7 @@
 #   1. build_paid_destination — OneLink URL + url_tags assembly + utm_validate
 #   2. destination_guard      — blocks bare domains, passes valid OneLink URLs
 #   3. canary_gate_unpause    — fires ≤1 unpause per interval under N concurrent
-#      invocations AND enforces ≤$5/day per ad set + ≤$50/day total
+#      invocations AND enforces ≤$5/day per ad set + Σ active ≤ daily_spend_cap_usd
 #
 # Hermetic: fake curl shim, no network, no real Meta/AppsFlyer/Amplitude calls.
 # Rule NEVER LEAK MONEY: no gate => the PR is invalid (asserted in test 11).
@@ -56,6 +56,10 @@ case "\$url" in
   *fields=daily_budget*) echo '{"daily_budget":"${budget_cents}"}' ;;
   */adsets*)
     echo '{"data":[{"id":"ASID1","name":"canary-adset","status":"PAUSED","effective_status":"PAUSED","daily_budget":"${budget_cents}"}]}' ;;
+  */ads*)
+    echo '{"data":[{"creative":{"link_url":"https://example.onelink.me/abc123?af_xp=custom&pid=facebook_int&c=recovery&af_adset=athlete&af_ad=hook1"}}]}' ;;
+  *v23.0/ASID1*)
+    echo '{"success":true}' ;;
   *) echo '{}' ;;
 esac
 exit 0
@@ -163,6 +167,10 @@ chan_cred() {
   resolve_cred "$(jq -r --arg p "$proj" --arg c "$channel" --arg f "$field" \
     '.marketing.projects[$p][$c][$f] // empty' "${PREFS}" 2>/dev/null)"
 }
+ap_get() {
+  local p="$1" path="$2"
+  jq -r --arg p "$p" ".marketing.projects[\$p].autopilot${path} // empty" "${PREFS}" 2>/dev/null || true
+}
 
 # ── build_paid_destination ────────────────────────────────────────────────────
 build_paid_destination() {
@@ -247,7 +255,20 @@ destination_guard() {
 # ── canary_gate_unpause ───────────────────────────────────────────────────────
 CANARY_RATE_FLOOR_SECS="${CANARY_RATE_FLOOR_SECS:-82800}"
 CANARY_ADSET_CAP_CENTS=500
-CANARY_TOTAL_CAP_USD=50
+
+canary_first_ad_destination_link() {
+  local proj="$1" asid="$2"
+  local ads_json
+  ads_json="$(meta_get "${asid}/ads?fields=creative{link_url,object_story_spec}&limit=50" "$proj" 2>/dev/null || echo '{}')"
+  printf '%s' "$ads_json" | jq -r '
+    [.data[]?
+      | (.creative // {})
+      | (.link_url // empty),
+        (.object_story_spec.link_data.link // empty)
+      | select(. != null and . != "")
+    ] | first // empty
+  ' 2>/dev/null || true
+}
 
 canary_gate_unpause() {
   local proj="$1"
@@ -282,7 +303,7 @@ canary_gate_unpause() {
   local meta_acct; meta_acct="$(chan_cred "$proj" meta ad_account_id)"
   if [ -n "$meta_acct" ] && [ -n "${META_TOKEN:-}" ]; then
     local acct_resp
-    acct_resp="$(meta_get "${meta_acct}?fields=account_status")"
+    acct_resp="$(meta_get "${meta_acct}?fields=account_status" "$proj")"
     acct_status="$(printf '%s' "$acct_resp" | jq -r '.account_status // 0' 2>/dev/null || echo 0)"
   fi
   if [ "$acct_status" != "1" ]; then
@@ -317,10 +338,7 @@ canary_gate_unpause() {
   fi
   report "- canary gate: Amplitude funnel_total_7d=${amp_total} OK"
 
-  # Condition 4: Destination guard — verify the configured base is a real (non-placeholder)
-  # OneLink URL. We validate the base itself (no af params required on the base URL;
-  # params are injected per-ad via build_paid_destination). The guard just confirms
-  # the base is non-empty, non-placeholder, and not a blocked bare domain.
+  # Condition 4: Prefs destination base — non-placeholder, not a blocked bare domain.
   local dest_base
   dest_base="$(jq -r --arg p "$proj" \
     '.marketing.projects[$p].paid.destination.required_base // empty' "${PREFS}" 2>/dev/null)"
@@ -328,7 +346,6 @@ canary_gate_unpause() {
     report "- canary gate: HOLD — paid.destination.required_base is placeholder or absent"
     return 0
   fi
-  # Check that the base is not a blocked bare domain (sans af params requirement)
   local blocked_list_cg
   blocked_list_cg="$(jq -r --arg p "$proj" \
     '.marketing.projects[$p].paid.destination._blocked_destinations // [] | .[]' "${PREFS}" 2>/dev/null || true)"
@@ -343,76 +360,110 @@ canary_gate_unpause() {
     report "- canary gate: HOLD — required_base contains a blocked domain"
     return 0
   fi
-  report "- canary gate: destination_guard PASS (base=${dest_base})"
+  report "- canary gate: required_base OK (prefs base=${dest_base})"
 
-  # Find qualifying PAUSED ad set with daily_budget ≤ CANARY_ADSET_CAP_CENTS
-  local _gate_cids
-  mapfile -t _gate_cids < <(jq -r --arg p "$proj" \
-    '.marketing.projects[$p].autopilot.campaign_ids.meta[]? // empty' "${PREFS}" 2>/dev/null)
-
-  if [ "${#_gate_cids[@]}" -eq 0 ]; then
-    report "- canary gate: no campaign_ids.meta — cannot unpause"
+  local canary_total_cap_usd
+  canary_total_cap_usd="$(ap_get "$proj" '.daily_spend_cap_usd')"; canary_total_cap_usd="${canary_total_cap_usd:-0}"
+  if ! awk "BEGIN{exit !(${canary_total_cap_usd:-0} > 0)}" 2>/dev/null; then
+    report "- canary gate: HOLD — daily_spend_cap_usd missing or invalid"
     return 0
   fi
 
-  # Sum current active budget (cap guard)
+  mapfile -t _GATE_CIDS < <(jq -r --arg p "$proj" \
+    '.marketing.projects[$p].autopilot.campaign_ids.meta[]? // empty' "${PREFS}" 2>/dev/null)
+
+  if [ "${#_GATE_CIDS[@]}" -eq 0 ]; then
+    report "- canary gate: no campaign_ids.meta configured — cannot unpause"
+    return 0
+  fi
+
   local current_active_usd=0
-  for _gcid in "${_gate_cids[@]}"; do
+  for _gcid in "${_GATE_CIDS[@]}"; do
     local _camp_data
-    _camp_data="$(meta_get "${_gcid}?fields=daily_budget")"
+    _camp_data="$(meta_get "${_gcid}?fields=daily_budget" "$proj" 2>/dev/null || echo '{}')"
     local _cdb; _cdb="$(printf '%s' "$_camp_data" | jq -r '.daily_budget // empty' 2>/dev/null)"
     if [ -n "$_cdb" ] && [ "$_cdb" != "null" ]; then
       current_active_usd="$(awk "BEGIN{printf \"%.2f\", ${current_active_usd}+${_cdb}/100}")"
+    else
+      local _as_data
+      _as_data="$(meta_get "${_gcid}/adsets?fields=daily_budget,effective_status&limit=200" "$proj" 2>/dev/null || echo '{}')"
+      local _as_sum
+      _as_sum="$(printf '%s' "$_as_data" | jq '[.data[]? | select(.effective_status=="ACTIVE") | (.daily_budget|tonumber? // 0)] | add // 0' 2>/dev/null || echo 0)"
+      current_active_usd="$(awk "BEGIN{printf \"%.2f\", ${current_active_usd}+${_as_sum}/100}")"
     fi
   done
 
-  if awk "BEGIN{exit !(${current_active_usd:-0} >= ${CANARY_TOTAL_CAP_USD})}"; then
-    report "- canary gate: HOLD — total active \$${current_active_usd} at/above \$${CANARY_TOTAL_CAP_USD} cap"
+  if awk "BEGIN{exit !(${current_active_usd:-0} >= ${canary_total_cap_usd})}"; then
+    report "- canary gate: HOLD — total active budget \$${current_active_usd} already at/above \$${canary_total_cap_usd} cap (daily_spend_cap_usd)"
     return 0
   fi
 
   local unpause_asid="" unpause_asname="" unpause_budget_cents=0
-  for _gcid in "${_gate_cids[@]}"; do
+  for _gcid in "${_GATE_CIDS[@]}"; do
     local _paused_sets
-    _paused_sets="$(meta_get "${_gcid}/adsets?fields=id,name,status,daily_budget,effective_status&limit=200")"
+    _paused_sets="$(meta_get "${_gcid}/adsets?fields=id,name,status,daily_budget,effective_status&limit=200" "$proj" 2>/dev/null || echo '{}')"
     while IFS=$'\t' read -r _asid _asname _asdb; do
       [ -z "$_asid" ] && continue
       [ -z "$_asdb" ] || [ "$_asdb" = "null" ] && continue
-      if awk -v b="$_asdb" -v cap="$CANARY_ADSET_CAP_CENTS" 'BEGIN{exit !(b <= cap)}'; then
-        unpause_asid="$_asid"
-        unpause_asname="$_asname"
-        unpause_budget_cents="$_asdb"
-        break 2
+      if ! awk -v b="$_asdb" -v cap="$CANARY_ADSET_CAP_CENTS" 'BEGIN{exit !(b <= cap)}'; then
+        continue
       fi
+      local _post_total_usd
+      _post_total_usd="$(awk "BEGIN{printf \"%.2f\", ${current_active_usd}+${_asdb}/100}")"
+      if awk "BEGIN{exit !(${_post_total_usd} > ${canary_total_cap_usd})}"; then
+        continue
+      fi
+      local _ad_link
+      _ad_link="$(canary_first_ad_destination_link "$proj" "$_asid")"
+      if [ -z "$_ad_link" ]; then
+        continue
+      fi
+      if ! destination_guard "$proj" "$_ad_link"; then
+        report "- canary gate: skipping ad set '${_asname}' (${_asid}) — destination_guard failed for creative link"
+        continue
+      fi
+      unpause_asid="$_asid"
+      unpause_asname="$_asname"
+      unpause_budget_cents="$_asdb"
+      break 2
     done < <(printf '%s' "$_paused_sets" | jq -r \
       '.data[]? | select(.effective_status=="PAUSED" or .status=="PAUSED") | select(.daily_budget != null) | [.id,.name,.daily_budget] | @tsv' \
       2>/dev/null || true)
   done
 
   if [ -z "$unpause_asid" ]; then
-    report "- canary gate: no qualifying PAUSED ad set (budget ≤ \$$(awk "BEGIN{printf \"%.2f\", ${CANARY_ADSET_CAP_CENTS}/100}") and status=PAUSED)"
+    report "- canary gate: no qualifying PAUSED ad set (budget ≤ \$$(awk "BEGIN{printf \"%.2f\", ${CANARY_ADSET_CAP_CENTS}/100}")/day, under daily cap, destination_guard on creative link)"
     return 0
   fi
 
   local budget_usd; budget_usd="$(awk "BEGIN{printf \"%.2f\", ${unpause_budget_cents}/100}")"
   local post_total_usd; post_total_usd="$(awk "BEGIN{printf \"%.2f\", ${current_active_usd}+${unpause_budget_cents}/100}")"
 
-  if awk "BEGIN{exit !(${post_total_usd} > ${CANARY_TOTAL_CAP_USD})}"; then
-    report "- canary gate: HOLD — post-unpause total \$${post_total_usd} exceeds \$${CANARY_TOTAL_CAP_USD} cap"
+  report "- canary gate: ALL conditions met — unpausing ad set '${unpause_asname}' (${unpause_asid}), budget \$${budget_usd}/day"
+  report "  post-unpause active total: \$${post_total_usd} (cap: \$${canary_total_cap_usd} daily_spend_cap_usd)"
+
+  if [ "${DRY_RUN}" = "1" ]; then
+    mutate "canary-unpause ad set ${unpause_asid} (${unpause_asname}) \$${budget_usd}/day" \
+      -X POST "${GRAPH}/${unpause_asid}" \
+      -d "status=ACTIVE" \
+      -d "access_token=${META_TOKEN}"
     return 0
   fi
 
-  report "- canary gate: ALL conditions met — unpausing '${unpause_asname}' (${unpause_asid}) \$${budget_usd}/day"
-  report "  post-unpause total: \$${post_total_usd} (cap: \$${CANARY_TOTAL_CAP_USD})"
-
-  mutate "canary-unpause ad set ${unpause_asid} (${unpause_asname}) \$${budget_usd}/day" \
-    -X POST "${GRAPH}/${unpause_asid}" \
+  MUTATIONS=$((MUTATIONS+1))
+  report "- [EXEC] canary-unpause ad set ${unpause_asid} (${unpause_asname}) \$${budget_usd}/day"
+  log "[EXEC] canary-unpause ad set ${unpause_asid} (${unpause_asname}) \$${budget_usd}/day"
+  local _cg_unpause_resp
+  _cg_unpause_resp="$(curl -gsS --max-time 15 -X POST "${GRAPH}/${unpause_asid}" \
     -d "status=ACTIVE" \
-    -d "access_token=${META_TOKEN}"
-
-  if [ "${DRY_RUN}" = "0" ]; then
+    -d "access_token=${META_TOKEN}" \
+    2>/dev/null || echo '{}')"
+  if printf '%s' "$_cg_unpause_resp" | jq -e '(if .error then false else true end) and ((.success == true) or ((.id // "") != ""))' >/dev/null 2>&1; then
     printf '%s' "$now_ts" > "$fired_at_file"
     log "canary_gate_unpause: unpaused ${unpause_asid} proj=${proj} ts=${now_ts}"
+  else
+    report "- canary gate: unpause API failed — $(printf '%s' "$_cg_unpause_resp" | jq -c 'if .error then .error else . end' 2>/dev/null || echo 'empty/invalid response')"
+    log "canary_gate_unpause: unpause FAILED for ${unpause_asid} proj=${proj} resp=${_cg_unpause_resp}"
   fi
 }
 
