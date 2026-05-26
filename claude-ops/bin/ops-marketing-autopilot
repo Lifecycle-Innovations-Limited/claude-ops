@@ -809,26 +809,39 @@ process_meta() {
     local ads insights live_count
     ads="$(meta_get "${cid}/ads?fields=id,name,effective_status&limit=200")"
     live_count="$(echo "$ads" | jq '[.data[]? | select(.effective_status=="ACTIVE")] | length' 2>/dev/null || echo 0)"
-    insights="$(meta_get "${cid}/insights?level=ad&date_preset=last_7d&fields=ad_id,spend,impressions,ctr,frequency,actions&limit=200")"
+    insights="$(meta_get "${cid}/insights?level=ad&date_preset=last_7d&fields=ad_id,spend,impressions,ctr,frequency,actions,action_values&limit=200")"
 
     # Capture KPI rows for kpi.jsonl
     if [ -n "$insights" ] && [ "$insights" != "{}" ]; then
       local _ts; _ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       while IFS= read -r row; do
         [ -z "$row" ] && continue
-        local _ad_id _spend _impr _ctr _leads _cpl
+        local _ad_id _spend _impr _ctr _leads _cpl _lc _lpv _inst _pv
         _ad_id="$(printf '%s' "$row" | jq -r '.ad_id // empty' 2>/dev/null || true)"
         _spend="$(printf '%s' "$row" | jq -r '.spend // "0"' 2>/dev/null || echo 0)"
         _impr="$(printf '%s' "$row" | jq -r '.impressions // "0"' 2>/dev/null || echo 0)"
         _ctr="$(printf '%s' "$row" | jq -r '.ctr // "0"' 2>/dev/null || echo 0)"
         _leads="$(printf '%s' "$row" | jq -r '[.actions[]? | select(.action_type|test("lead|purchase")) | (.value|tonumber? // 0)] | add // 0' 2>/dev/null || echo 0)"
+        # Upper-funnel proxy signals (harvested from the same insights call — zero extra API).
+        # Used by the launch-aware reward ladder before revenue (trials/subs) starts flowing.
+        _lc="$(printf '%s' "$row" | jq -r '[.actions[]? | select(.action_type|test("link_click")) | (.value|tonumber? // 0)] | add // 0' 2>/dev/null || echo 0)"
+        _lpv="$(printf '%s' "$row" | jq -r '[.actions[]? | select(.action_type|test("landing_page_view")) | (.value|tonumber? // 0)] | add // 0' 2>/dev/null || echo 0)"
+        _inst="$(printf '%s' "$row" | jq -r '[.actions[]? | select(.action_type|test("mobile_app_install|app_install|omni_app_install")) | (.value|tonumber? // 0)] | add // 0' 2>/dev/null || echo 0)"
+        # Real Meta-attributed purchase value (action_values) — was never written before,
+        # so the bandit's `.purchase_value` read was always 0. This fixes that.
+        _pv="$(printf '%s' "$row" | jq -r '[.action_values[]? | select(.action_type|test("purchase")) | (.value|tonumber? // 0)] | add // 0' 2>/dev/null || echo 0)"
+        case "$_lc"   in ''|*[!0-9.]*) _lc=0;;   esac
+        case "$_lpv"  in ''|*[!0-9.]*) _lpv=0;;  esac
+        case "$_inst" in ''|*[!0-9.]*) _inst=0;; esac
+        case "$_pv"   in ''|*[!0-9.]*) _pv=0;;   esac
         _cpl="$(awk "BEGIN{print ($_leads+0>0) ? $_spend/$_leads : 0}")"
         [ -n "$_ad_id" ] && _kpi_rows="${_kpi_rows}
 $(jq -n \
   --arg ts "$_ts" --arg proj "$proj" --arg ad_id "$_ad_id" \
   --argjson spend "$_spend" --argjson impr "$_impr" --argjson ctr "$_ctr" \
-  --argjson cpl "$_cpl" \
-  '{ts:$ts,project:$proj,ad_id:$ad_id,spend:$spend,impressions:$impr,ctr:$ctr,cpl:$cpl}' 2>/dev/null || true)"
+  --argjson cpl "$_cpl" --argjson leads "$_leads" \
+  --argjson lc "$_lc" --argjson lpv "$_lpv" --argjson inst "$_inst" --argjson pv "$_pv" \
+  '{ts:$ts,project:$proj,ad_id:$ad_id,spend:$spend,impressions:$impr,ctr:$ctr,cpl:$cpl,leads:$leads,link_click:$lc,landing_page_view:$lpv,app_install:$inst,purchase_value:$pv}' 2>/dev/null || true)"
       done < <(printf '%s' "$insights" | jq -c '.data[]? // empty' 2>/dev/null || true)
     fi
 
@@ -1339,22 +1352,163 @@ gather_revenuecat_revenue() {
     printf '%s' '{"revenuecat_revenue_7d":0,"revenuecat_revenue_28d":0,"_dry_run":true}' > "$out"
     return 0
   fi
-  local resp rev28
+  local resp
   resp="$(curl -sS --max-time 15 -H "Authorization: Bearer ${api_key}" \
     "https://api.revenuecat.com/v2/projects/${project_id}/metrics/overview" 2>/dev/null || echo '{}')"
-  # Overview returns a metrics array; the realized-revenue metric id is "revenue"
-  # (trailing-28-days, USD). Match liberally in case the id label shifts.
-  rev28="$(printf '%s' "$resp" | jq -r '
-    (.metrics // []) | map(select((.id // "") | test("^revenue$|revenue_28|last_28.*revenue"; "i"))) | (.[0].value // 0)
-  ' 2>/dev/null || echo 0)"
-  [ -z "$rev28" ] && rev28=0
+  if ! printf '%s' "$resp" | jq -e '(.metrics | type == "array")' >/dev/null 2>&1; then
+    report "- revenuecat: overview response missing metrics (transient error or auth) — keeping existing snapshot → ${out##*/}"
+    return 0
+  fi
+  # The v2 overview returns .metrics[] keyed by .id. Pull revenue + the conversion
+  # ladder (subscriptions/trials/new customers) so the reward can switch from the
+  # pre-launch proxy ladder to true revenue the moment trials begin converting.
+  #   revenue / mrr — USD (28d / current) · active_subscriptions / active_trials — current counts
+  #   new_customers / active_users — 28d.
+  local parsed
+  parsed="$(printf '%s' "$resp" | jq -c '
+    (.metrics // []) as $m |
+    def val($id): ($m | map(select((.id // "")==$id)) | (.[0].value // 0));
+    {
+      revenuecat_revenue_28d:          (val("revenue")),
+      revenuecat_mrr:                  (val("mrr")),
+      revenuecat_active_subscriptions: (val("active_subscriptions")),
+      revenuecat_active_trials:        (val("active_trials")),
+      revenuecat_new_customers_28d:    (val("new_customers")),
+      revenuecat_active_users_28d:     (val("active_users"))
+    }' 2>/dev/null || echo '{}')"
+  [ -z "$parsed" ] && parsed='{}'
+  local rev28 mrr subs trials newc
+  rev28="$(printf '%s' "$parsed" | jq -r '.revenuecat_revenue_28d // 0' 2>/dev/null || echo 0)"
   case "$rev28" in ''|*[!0-9.]*) rev28=0;; esac
+  mrr="$(printf '%s' "$parsed" | jq -r '.revenuecat_mrr // 0' 2>/dev/null || echo 0)"
+  subs="$(printf '%s' "$parsed" | jq -r '.revenuecat_active_subscriptions // 0' 2>/dev/null || echo 0)"
+  trials="$(printf '%s' "$parsed" | jq -r '.revenuecat_active_trials // 0' 2>/dev/null || echo 0)"
+  newc="$(printf '%s' "$parsed" | jq -r '.revenuecat_new_customers_28d // 0' 2>/dev/null || echo 0)"
   local rev7
   rev7="$(awk -v r="${rev28:-0}" 'BEGIN{ printf "%.2f", (r+0)/4.0 }')"
-  jq -nc --arg r7 "$rev7" --arg r28 "$rev28" \
-    '{revenuecat_revenue_7d:($r7|tonumber),revenuecat_revenue_28d:($r28|tonumber),_window:"28d_realized/4_est"}' \
-    > "$out" 2>/dev/null || printf '%s' '{"revenuecat_revenue_7d":0,"revenuecat_revenue_28d":0}' > "$out"
-  report "- revenuecat: \$${rev7} revenue 7d-est (\$${rev28} realized 28d ÷4) → ${out##*/}"
+  printf '%s' "$parsed" | jq -c --arg r7 "$rev7" \
+    '. + {revenuecat_revenue_7d:($r7|tonumber),_window:"28d_realized/4_est"}' > "$out" 2>/dev/null \
+    || printf '%s' '{"revenuecat_revenue_7d":0,"revenuecat_revenue_28d":0}' > "$out"
+  report "- revenuecat: \$${rev7} rev 7d-est (\$${rev28} 28d) · MRR \$${mrr} · ${subs} active sub(s) · ${trials} trial(s) · ${newc} new cust 28d → ${out##*/}"
+}
+
+# gather_appsflyer <project>
+# AppsFlyer is the install + in-app-event ground truth for mobile apps. Web pixels
+# never see installs; for an app the paid-acquisition signal lives here. Pulls the
+# partners_report (CSV) for the trailing 7d, summing installs by media source and
+# splitting paid (non-Organic) vs organic, plus the registration/login in-app events.
+# Only runs for projects with an `.appsflyer` block + resolvable app_id; degrades to 0.
+gather_appsflyer() {
+  local proj="$1"
+  local out="${STATE_DIR}/${proj}-appsflyer.json"
+  local has_block
+  has_block="$(jq -r --arg p "$proj" '.marketing.projects[$p].appsflyer // empty | if . == null then "" else "1" end' "$PREFS" 2>/dev/null)"
+  # Drop stale JSON when AppsFlyer is not configured — otherwise proxy rewards still
+  # read a leftover file (af_paid_inst / af_reg).
+  [ -z "$has_block" ] && { rm -f "$out"; return 0; }
+  local api_key app_id
+  api_key="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].appsflyer.api_key // empty' "$PREFS" 2>/dev/null)")"
+  app_id="$(jq -r --arg p "$proj" '.marketing.projects[$p].appsflyer.app_id // empty' "$PREFS" 2>/dev/null)"
+  if [ -z "$api_key" ] || [ -z "$app_id" ]; then
+    report "- appsflyer: api_key/app_id not configured — skipped (paid-install signal not counted)"
+    printf '%s' '{"installs_7d":0,"paid_installs_7d":0,"organic_installs_7d":0,"registrations_7d":0,"_note":"not_configured"}' > "$out"
+    return 0
+  fi
+  if [ "$DRY_RUN" = "1" ]; then
+    report "- [DRY] would query AppsFlyer partners_report (app=${app_id}) — installs by source 7d"
+    printf '%s' '{"installs_7d":0,"paid_installs_7d":0,"organic_installs_7d":0,"registrations_7d":0,"_dry_run":true}' > "$out"
+    return 0
+  fi
+  local from to
+  from="$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo '')"
+  to="$(date +%Y-%m-%d)"
+  local csv
+  csv="$(curl -sS --max-time 25 -H "authorization: Bearer ${api_key}" -H "accept: text/csv" \
+    "https://hq1.appsflyer.com/api/agg-data/export/app/${app_id}/partners_report/v5?from=${from}&to=${to}" 2>/dev/null || echo '')"
+  # Parse CSV: header row carries column names; find Media Source / Installs / af_complete_registration.
+  # We sum installs across rows, classify Organic vs paid, and total registrations.
+  local parsed
+  parsed="$(printf '%s' "$csv" | awk -F',' '
+    NR==1 {
+      for (i=1;i<=NF;i++) {
+        h=$i; gsub(/^[ \t"]+|[ \t"]+$/,"",h);
+        if (h ~ /^Media Source/)            ms=i;
+        else if (h=="Installs")             ins=i;
+        else if (h ~ /complete_registration/ && h ~ /Unique/) reg=i;
+      }
+      next
+    }
+    {
+      src=$ms; gsub(/^[ \t"]+|[ \t"]+$/,"",src);
+      iv=$ins+0; rv=(reg?$reg+0:0);
+      tot+=iv; regtot+=rv;
+      if (tolower(src) ~ /organic/) org+=iv; else paid+=iv;
+    }
+    END {
+      printf "{\"installs_7d\":%d,\"paid_installs_7d\":%d,\"organic_installs_7d\":%d,\"registrations_7d\":%d}", tot+0, paid+0, org+0, regtot+0
+    }' 2>/dev/null || echo '')"
+  case "$parsed" in '{'*'}') : ;; *) parsed='{"installs_7d":0,"paid_installs_7d":0,"organic_installs_7d":0,"registrations_7d":0,"_note":"parse_failed"}';; esac
+  printf '%s' "$parsed" > "$out"
+  local ins paid org reg
+  ins="$(jq -r '.installs_7d // 0' "$out" 2>/dev/null || echo 0)"
+  paid="$(jq -r '.paid_installs_7d // 0' "$out" 2>/dev/null || echo 0)"
+  org="$(jq -r '.organic_installs_7d // 0' "$out" 2>/dev/null || echo 0)"
+  reg="$(jq -r '.registrations_7d // 0' "$out" 2>/dev/null || echo 0)"
+  report "- appsflyer: ${ins} install(s) 7d (${paid} paid / ${org} organic) · ${reg} registration(s) → ${out##*/}"
+}
+
+# gather_amplitude <project>
+# Amplitude is the product-intent funnel (onboarding, paywall_view, trial_start, etc).
+# These are the highest-fidelity pre-revenue signals — they tell us which creatives
+# drive people who actually reach the paywall, not just install. Uses the Dashboard
+# REST API (basic-auth api_key:secret_key). Requires BOTH keys; the ingestion-only
+# AMPLITUDE_API_KEY is insufficient, so this degrades to 0 until a secret key exists.
+gather_amplitude() {
+  local proj="$1"
+  local out="${STATE_DIR}/${proj}-amplitude.json"
+  local has_block
+  has_block="$(jq -r --arg p "$proj" '.marketing.projects[$p].amplitude // empty | if . == null then "" else "1" end' "$PREFS" 2>/dev/null)"
+  # Drop stale JSON when Amplitude is not configured — otherwise proxy rewards still
+  # read a leftover file (amp_total / intent ladder).
+  [ -z "$has_block" ] && { rm -f "$out"; return 0; }
+  local api_key secret_key zone base events
+  api_key="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].amplitude.api_key // empty' "$PREFS" 2>/dev/null)")"
+  secret_key="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].amplitude.secret_key // empty' "$PREFS" 2>/dev/null)")"
+  zone="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].amplitude.server_zone // "US"' "$PREFS" 2>/dev/null)")"
+  # The funnel events to count (overridable per project); each maps to a proxy weight.
+  events="$(jq -rc --arg p "$proj" '.marketing.projects[$p].amplitude.funnel_events // ["paywall_view","onboarding_complete","trial_start"]' "$PREFS" 2>/dev/null || echo '["paywall_view","onboarding_complete","trial_start"]')"
+  if [ -z "$api_key" ] || [ -z "$secret_key" ]; then
+    report "- amplitude: secret_key missing — intent funnel dark (ingestion key alone can't query Dashboard API; provision a Secret Key)"
+    printf '%s' '{"_note":"secret_key_missing","events":{}}' > "$out"
+    return 0
+  fi
+  if [ "$DRY_RUN" = "1" ]; then
+    report "- [DRY] would query Amplitude segmentation for funnel events (zone=${zone})"
+    printf '%s' '{"events":{},"_dry_run":true}' > "$out"
+    return 0
+  fi
+  case "$zone" in
+    EU|eu) base="https://analytics.eu.amplitude.com/api/2" ;;
+    *)     base="https://amplitude.com/api/2" ;;
+  esac
+  local start end
+  start="$(date -v-7d +%Y%m%d 2>/dev/null || date -d '7 days ago' +%Y%m%d 2>/dev/null || echo '')"
+  end="$(date +%Y%m%d)"
+  local agg='{}'
+  while IFS= read -r ev; do
+    [ -z "$ev" ] && continue
+    local e_enc resp val
+    e_enc="$(printf '%s' "{\"event_type\":\"${ev}\"}" | jq -sRr @uri 2>/dev/null || printf '%s' "{\"event_type\":\"${ev}\"}")"
+    resp="$(curl -sS --max-time 20 -u "${api_key}:${secret_key}" \
+      "${base}/events/segmentation?e=${e_enc}&start=${start}&end=${end}&m=totals" 2>/dev/null || echo '{}')"
+    val="$(printf '%s' "$resp" | jq -r '.data.seriesCollapsed[0][0].value // 0' 2>/dev/null || echo 0)"
+    case "$val" in ''|*[!0-9.]*) val=0;; esac
+    agg="$(printf '%s' "$agg" | jq -c --arg k "$ev" --argjson v "${val:-0}" '.[$k]=$v' 2>/dev/null || echo "$agg")"
+  done < <(printf '%s' "$events" | jq -r '.[]?' 2>/dev/null || true)
+  jq -nc --argjson ev "$agg" '{events:$ev,_window:"7d"}' > "$out" 2>/dev/null || printf '%s' '{"events":{}}' > "$out"
+  local summary
+  summary="$(printf '%s' "$agg" | jq -r 'to_entries | map("\(.key)=\(.value)") | join(", ")' 2>/dev/null || echo '')"
+  report "- amplitude: intent funnel 7d → ${summary:-no events} → ${out##*/}"
 }
 
 # stripe_revenue_for_ad <project> <ad_id>
@@ -1383,7 +1537,12 @@ surface_perf_signals() {
   local revcat_f="${STATE_DIR}/${proj}-revenuecat.json"
   if [ -f "$stripe_f" ] && [ -f "$kpi_ledger" ]; then
     local meta_spend_7d stripe_rev_7d revcat_rev_7d combined_rev_7d gt_roas
-    meta_spend_7d="$(tail -n 2000 "$kpi_ledger" 2>/dev/null | jq -sr '[.[].spend // 0] | add // 0' 2>/dev/null || echo 0)"
+    local _cut36; _cut36="$(date -u -v-36H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '36 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+    # 7d spend = sum of the LATEST snapshot per live ad (each kpi row already carries the
+    # ad's trailing-7d spend), restricted to ads seen in the last 36h. Summing the raw
+    # ledger tail double-counts (one row per ad per pass) → that was the phantom ~$535
+    # that produced "ROAS 0.04" + false runaway escalations. This reads the true ~7d spend.
+    meta_spend_7d="$(tail -n 800 "$kpi_ledger" 2>/dev/null | jq -sr --arg cut "$_cut36" '[ .[] | select(($cut=="") or ((.ts//"")>=$cut)) ] | group_by(.ad_id) | map(max_by(.ts // "")) | [.[].spend // 0] | add // 0' 2>/dev/null || echo 0)"
     stripe_rev_7d="$(jq -r '.total_revenue_7d // 0' "$stripe_f" 2>/dev/null || echo 0)"
     revcat_rev_7d="$( [ -f "$revcat_f" ] && jq -r '.revenuecat_revenue_7d // 0' "$revcat_f" 2>/dev/null || echo 0 )"
     [ -z "$revcat_rev_7d" ] && revcat_rev_7d=0
@@ -1419,7 +1578,8 @@ surface_perf_signals() {
     klv_rev="$(jq -r '.placed_order_revenue_7d // 0' "$klv_f" 2>/dev/null || echo 0)"
     threshold="${OPS_KLAVIYO_REVENUE_RATIO_FLAG:-0.5}"
     if [ -f "$kpi_ledger" ]; then
-      meta_spend="$(tail -n 2000 "$kpi_ledger" 2>/dev/null | jq -sr '[.[].spend // 0] | add // 0' 2>/dev/null || echo 0)"
+      local _cut36k; _cut36k="$(date -u -v-36H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '36 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+      meta_spend="$(tail -n 800 "$kpi_ledger" 2>/dev/null | jq -sr --arg cut "$_cut36k" '[ .[] | select(($cut=="") or ((.ts//"")>=$cut)) ] | group_by(.ad_id) | map(max_by(.ts // "")) | [.[].spend // 0] | add // 0' 2>/dev/null || echo 0)"
       ratio="$(awk -v k="${klv_rev:-0}" -v s="${meta_spend:-0}" \
         'BEGIN{ if (s+0>0) printf "%.2f", k/s; else print 0 }')"
       if awk "BEGIN{exit !(${ratio:-0} > ${threshold:-0.5})}"; then
@@ -1457,59 +1617,122 @@ apply_calibration_and_bandit() {
   local calibrator="${state_dir}/calibrator.json"
   local ledger="${state_dir}/creatives.jsonl"
   local min_live; min_live="$(ap_get "$proj" '.min_live_creatives')"; min_live="${min_live:-2}"
-  local bandit_source="${OPS_BANDIT_SOURCE:-blended}"  # ga4|meta|blended
+  # Reward source resolution. Precedence: env override → project autopilot.reward.mode →
+  # auto (app projects with a revenuecat/appsflyer block default to ios_blended; web-only
+  # projects stay on the legacy blended/meta+ga4 reward → zero regression).
+  local reward_mode; reward_mode="$(ap_get "$proj" '.reward.mode')"
+  local bandit_source="${OPS_BANDIT_SOURCE:-${reward_mode}}"
+  if [ -z "$bandit_source" ]; then
+    if jq -e --arg p "$proj" '.marketing.projects[$p] | (has("revenuecat") or has("appsflyer"))' "$PREFS" >/dev/null 2>&1; then
+      bandit_source="ios_blended"
+    else
+      bandit_source="blended"
+    fi
+  fi
+  # Proxy-ladder weights (pre-revenue). Higher = more valuable signal. Trial-start ≫ install ≫ click.
+  local pw_install pw_reg pw_intent pw_minst pw_click pw_lead
+  pw_install="$(ap_get "$proj" '.reward.proxy_weights.paid_install')"; pw_install="${pw_install:-1.0}"
+  pw_reg="$(ap_get "$proj"     '.reward.proxy_weights.registration')"; pw_reg="${pw_reg:-2.0}"
+  pw_intent="$(ap_get "$proj"  '.reward.proxy_weights.intent')";       pw_intent="${pw_intent:-3.0}"
+  pw_minst="$(ap_get "$proj"   '.reward.proxy_weights.meta_install')"; pw_minst="${pw_minst:-1.0}"
+  pw_click="$(ap_get "$proj"   '.reward.proxy_weights.link_click')";   pw_click="${pw_click:-0.05}"
+  pw_lead="$(ap_get "$proj"    '.reward.proxy_weights.lead')";         pw_lead="${pw_lead:-1.0}"
 
   report ""
   report "### Calibrator + Bandit selection"
   report "- bandit reward source: ${bandit_source}"
 
-  # ── Blended reward: meta purchase_value + ga4 revenue (per-ad average) ─────
-  # Reads ${STATE_DIR}/${proj}-ga4-conversions.json (written by gather_ga4_conversions)
-  # and the kpi.jsonl meta rows; appends a 'bandit_reward' event per ad to the
-  # creatives.jsonl ledger so downstream tools (calibrator + dashboards) can
-  # train/visualize. Replaces pure-Meta reward when bandit_source != "meta".
+  # ── Launch-aware multi-signal reward ───────────────────────────────────────
+  # Blends every ground-truth source for a mobile app: Meta purchase_value (per-ad,
+  # direct), GA4 + RevenueCat + Stripe revenue (project-level, allocated per-ad by
+  # spend share). When NO revenue is flowing yet (pre-launch / pre-monetization),
+  # the bandit would otherwise sit at reward=0 forever, so we fall back to an
+  # upper-funnel PROXY LADDER — paid installs + registrations (AppsFlyer), paywall/
+  # onboarding intent (Amplitude), and per-ad app_install/link_click/lead (Meta).
+  # This gives the optimizer a real gradient during warming, then auto-switches to
+  # revenue the moment trials convert. A 'bandit_reward' row per ad is appended to
+  # creatives.jsonl for the calibrator + dashboards. (bandit_source=meta → legacy.)
   local ga4_conv_f="${STATE_DIR}/${proj}-ga4-conversions.json"
   local kpi_ledger="${state_dir}/kpi.jsonl"
   if [ -f "$kpi_ledger" ] && [ "$DRY_RUN" = "0" ] && [ "$bandit_source" != "meta" ]; then
-    local ga4_total_rev=0
-    if [ -f "$ga4_conv_f" ]; then
-      ga4_total_rev="$(jq -r '[(.rows // [])[] | .revenue] | add // 0' "$ga4_conv_f" 2>/dev/null || echo 0)"
+    # Project-level signal totals (each gatherer wrote its own state file).
+    local ga4_total_rev=0 rc_rev=0 rc_trials=0 rc_subs=0 af_paid_inst=0 af_reg=0 amp_total=0 stripe_total=0
+    [ -f "$ga4_conv_f" ] && ga4_total_rev="$(jq -r '[(.rows // [])[] | .revenue] | add // 0' "$ga4_conv_f" 2>/dev/null || echo 0)"
+    local rc_f="${STATE_DIR}/${proj}-revenuecat.json"
+    local af_f="${STATE_DIR}/${proj}-appsflyer.json"
+    local amp_f="${STATE_DIR}/${proj}-amplitude.json"
+    local stripe_f2="${STATE_DIR}/${proj}-stripe.json"
+    [ -f "$rc_f" ]      && rc_rev="$(jq -r '.revenuecat_revenue_7d // 0' "$rc_f" 2>/dev/null || echo 0)"
+    [ -f "$rc_f" ]      && rc_trials="$(jq -r '.revenuecat_active_trials // 0' "$rc_f" 2>/dev/null || echo 0)"
+    [ -f "$rc_f" ]      && rc_subs="$(jq -r '.revenuecat_active_subscriptions // 0' "$rc_f" 2>/dev/null || echo 0)"
+    [ -f "$af_f" ]      && af_paid_inst="$(jq -r '.paid_installs_7d // 0' "$af_f" 2>/dev/null || echo 0)"
+    [ -f "$af_f" ]      && af_reg="$(jq -r '.registrations_7d // 0' "$af_f" 2>/dev/null || echo 0)"
+    [ -f "$amp_f" ]     && amp_total="$(jq -r '[.events[]? // 0] | add // 0' "$amp_f" 2>/dev/null || echo 0)"
+    [ -f "$stripe_f2" ] && stripe_total="$(jq -r '.total_revenue_7d // 0' "$stripe_f2" 2>/dev/null || echo 0)"
+    for _v in ga4_total_rev rc_rev rc_trials rc_subs af_paid_inst af_reg amp_total stripe_total; do
+      eval "case \"\${$_v}\" in ''|*[!0-9.]*) $_v=0;; esac"
+    done
+    # Revenue flowing anywhere? Decides revenue-mode vs proxy-ladder.
+    local rev_total
+    rev_total="$(awk -v a="$ga4_total_rev" -v b="$rc_rev" -v c="$stripe_total" 'BEGIN{printf "%.4f",(a+0)+(b+0)+(c+0)}')"
+    local reward_kind; reward_kind="$(awk -v r="$rev_total" 'BEGIN{print (r+0>0)?"revenue":"proxy"}')"
+    # Pre-launch gate: web/Stripe/GA4 noise must NOT flip an app to revenue-mode before it
+    # actually monetizes. While reward.prelaunch=true, stay on the proxy ladder until the
+    # app's OWN revenue signal appears (RevenueCat revenue/trials/subs > 0) — auto-clears at launch.
+    local _prelaunch; _prelaunch="$(ap_get "$proj" '.reward.prelaunch')"
+    if [ "$_prelaunch" = "true" ] && awk -v a="$rc_rev" -v b="$rc_trials" -v c="$rc_subs" 'BEGIN{exit !((a+0)==0 && (b+0)==0 && (c+0)==0)}'; then
+      reward_kind="proxy"
     fi
-    # Get most-recent meta KPI row per ad (last 24h)
+
+    # Most-recent KPI row per ad, restricted to the last 36h so stale/retired ad_ids
+    # drop out of the bandit (fixes the "ledger tracks dead ads" pollution).
+    local cutoff; cutoff="$(date -u -v-36H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '36 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
     local recent_kpi
-    recent_kpi="$(tail -n 500 "$kpi_ledger" 2>/dev/null | jq -sc 'group_by(.ad_id) | map(max_by(.ts // ""))' 2>/dev/null || echo '[]')"
-    local n_ads
-    n_ads="$(printf '%s' "$recent_kpi" | jq 'length' 2>/dev/null || echo 0)"
+    recent_kpi="$(tail -n 800 "$kpi_ledger" 2>/dev/null | jq -sc --arg cut "$cutoff" \
+      '[ .[] | select(($cut=="") or ((.ts // "") >= $cut)) ] | group_by(.ad_id) | map(max_by(.ts // ""))' 2>/dev/null || echo '[]')"
+    local n_ads; n_ads="$(printf '%s' "$recent_kpi" | jq 'length' 2>/dev/null || echo 0)"
     if [ "${n_ads:-0}" -gt 0 ]; then
-      # Allocate ga4 revenue proportionally to meta spend (per-ad) — best linear
-      # attribution we can do without UTM-tagged per-ad GA4 dims.
       local total_meta_spend
       total_meta_spend="$(printf '%s' "$recent_kpi" | jq -r '[.[].spend // 0] | add // 0' 2>/dev/null || echo 0)"
       local ts_now; ts_now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       while IFS= read -r row; do
         [ -z "$row" ] && continue
-        local ad_id _spend _leads meta_rev ga4_share blended
+        local ad_id _spend _leads _lc _minst meta_rev share ga4_share rev_blend proxy reward
         ad_id="$(printf '%s' "$row" | jq -r '.ad_id // empty' 2>/dev/null || true)"
         _spend="$(printf '%s' "$row" | jq -r '.spend // 0' 2>/dev/null || echo 0)"
         _leads="$(printf '%s' "$row" | jq -r '.leads // 0' 2>/dev/null || echo 0)"
+        _lc="$(printf '%s' "$row" | jq -r '.link_click // 0' 2>/dev/null || echo 0)"
+        _minst="$(printf '%s' "$row" | jq -r '.app_install // 0' 2>/dev/null || echo 0)"
         meta_rev="$(printf '%s' "$row" | jq -r '.purchase_value // 0' 2>/dev/null || echo 0)"
-        ga4_share="$(awk -v g="${ga4_total_rev:-0}" -v s="${_spend:-0}" -v t="${total_meta_spend:-0}" \
-          'BEGIN{ if (t+0>0) printf "%.4f", (g*s)/t; else print 0 }')"
+        share="$(awk -v s="${_spend:-0}" -v t="${total_meta_spend:-0}" 'BEGIN{ if (t+0>0) printf "%.6f", (s+0)/(t+0); else print 0 }')"
+        ga4_share="$(awk -v g="$ga4_total_rev" -v sh="$share" 'BEGIN{ printf "%.4f", (g+0)*(sh+0) }')"
+        # Per-ad revenue blend = direct Meta purchase + spend-share of GA4/RC/Stripe revenue.
+        rev_blend="$(awk -v m="$meta_rev" -v g="$ga4_total_rev" -v rc="$rc_rev" -v st="$stripe_total" -v sh="$share" \
+          'BEGIN{ printf "%.4f", (m+0) + ((g+0)+(rc+0)+(st+0))*(sh+0) }')"
+        # Pre-revenue proxy ladder = weighted upper-funnel (project-level allocated by share + per-ad direct).
+        proxy="$(awk -v wi="$pw_install" -v wr="$pw_reg" -v win="$pw_intent" -v wm="$pw_minst" -v wc="$pw_click" -v wl="$pw_lead" \
+          -v inst="$af_paid_inst" -v reg="$af_reg" -v intent="$amp_total" -v sh="$share" -v minst="$_minst" -v lc="$_lc" -v lead="$_leads" \
+          'BEGIN{ printf "%.4f", wi*(inst+0)*(sh+0) + wr*(reg+0)*(sh+0) + win*(intent+0)*(sh+0) + wm*(minst+0) + wc*(lc+0) + wl*(lead+0) }')"
         case "$bandit_source" in
-          ga4)     blended="$ga4_share" ;;
+          ga4)        reward="$(awk -v g="$ga4_total_rev" -v sh="$share" 'BEGIN{printf "%.4f",(g+0)*(sh+0)}')"; reward_kind="ga4" ;;
+          revenuecat) reward="$(awk -v rc="$rc_rev" -v sh="$share" 'BEGIN{printf "%.4f",(rc+0)*(sh+0)}')"; reward_kind="revenuecat" ;;
+          appsflyer)  reward="$(awk -v i="$af_paid_inst" -v sh="$share" 'BEGIN{printf "%.4f",(i+0)*(sh+0)}')"; reward_kind="appsflyer" ;;
+          amplitude)  reward="$(awk -v a="$amp_total" -v sh="$share" 'BEGIN{printf "%.4f",(a+0)*(sh+0)}')"; reward_kind="amplitude" ;;
           blended)
-            blended="$(awk -v m="${meta_rev:-0}" -v g="${ga4_share:-0}" \
+            # Web default: legacy Meta purchase_value + GA4 spend-share average (pre–multi-signal).
+            reward="$(awk -v m="${meta_rev:-0}" -v g="${ga4_share:-0}" \
               'BEGIN{ if (m+0>0 && g+0>0) printf "%.4f", (m+g)/2.0; else if (m+0>0) print m; else print g }')"
+            reward_kind="blended"
             ;;
-          *)       blended="$meta_rev" ;;
+          *)          if [ "$reward_kind" = "revenue" ]; then reward="$rev_blend"; else reward="$proxy"; fi ;;
         esac
         [ -n "$ad_id" ] && printf '%s\n' "$(jq -n \
-          --arg ts "$ts_now" --arg p "$proj" --arg a "$ad_id" \
-          --arg src "$bandit_source" \
-          --argjson meta "${meta_rev:-0}" --argjson ga4 "${ga4_share:-0}" --argjson blend "${blended:-0}" \
-          '{ts:$ts,project:$p,event:"bandit_reward",ad_id:$a,source:$src,meta_revenue:$meta,ga4_revenue:$ga4,reward:$blend}')" >> "$ledger"
+          --arg ts "$ts_now" --arg p "$proj" --arg a "$ad_id" --arg src "$bandit_source" --arg kind "$reward_kind" \
+          --argjson meta "${meta_rev:-0}" --argjson rev "${rev_blend:-0}" --argjson proxy "${proxy:-0}" --argjson reward "${reward:-0}" \
+          '{ts:$ts,project:$p,event:"bandit_reward",ad_id:$a,source:$src,reward_kind:$kind,meta_revenue:$meta,revenue_blend:$rev,proxy_score:$proxy,reward:$reward}')" >> "$ledger"
       done < <(printf '%s' "$recent_kpi" | jq -c '.[]?' 2>/dev/null || true)
-      report "- bandit reward: appended ${n_ads} blended row(s) (ga4_total=\$${ga4_total_rev}, meta_spend=\$${total_meta_spend})"
+      report "- bandit reward: appended ${n_ads} ${reward_kind} row(s) (rev_total=\$${rev_total}, rc_trials=${rc_trials}, rc_subs=${rc_subs}, af_paid_inst=${af_paid_inst}, amp_intent=${amp_total}, meta_spend=\$${total_meta_spend})"
+      [ "$reward_kind" = "proxy" ] && report "  - pre-revenue PROXY mode: optimizing on installs/registrations/intent until trials convert (weights install=${pw_install} reg=${pw_reg} intent=${pw_intent} click=${pw_click})"
     fi
   fi
 
@@ -2436,6 +2659,8 @@ for proj in "${PROJECTS[@]}"; do
     gather_klaviyo_metrics "$proj"
     gather_stripe_revenue "$proj"
     gather_revenuecat_revenue "$proj"
+    gather_appsflyer      "$proj"
+    gather_amplitude      "$proj"
     surface_perf_signals  "$proj"
 
     apply_calibration_and_bandit "$proj"
