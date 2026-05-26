@@ -143,7 +143,11 @@ function tokenExpired(json) {
 function readStoredToken(account) {
   const svc = `Claude-Rotation-${accountKey(account)}`;
   if (IS_LINUX) {
-    try { return _vault.readEntry(svc); } catch { return null; }
+    try {
+      return _vault.readEntry(svc);
+    } catch {
+      return null;
+    }
   }
   try {
     const result = spawnSync('security', ['find-generic-password', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-g'], {
@@ -160,7 +164,11 @@ function readStoredToken(account) {
 
 function readActiveKeychainToken() {
   if (IS_LINUX) {
-    try { return _vault.readEntry('Claude Code-credentials'); } catch { return null; }
+    try {
+      return _vault.readEntry('Claude Code-credentials');
+    } catch {
+      return null;
+    }
   }
   try {
     const r = spawnSync(
