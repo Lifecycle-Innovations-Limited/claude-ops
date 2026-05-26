@@ -1403,13 +1403,15 @@ gather_appsflyer() {
   local out="${STATE_DIR}/${proj}-appsflyer.json"
   local has_block
   has_block="$(jq -r --arg p "$proj" '.marketing.projects[$p].appsflyer // empty | if . == null then "" else "1" end' "$PREFS" 2>/dev/null)"
-  [ -z "$has_block" ] && return 0
+  # Drop stale JSON when AppsFlyer is not configured — otherwise proxy rewards still
+  # read a leftover file (af_paid_inst / af_reg).
+  [ -z "$has_block" ] && { rm -f "$out"; return 0; }
   local api_key app_id
   api_key="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].appsflyer.api_key // empty' "$PREFS" 2>/dev/null)")"
   app_id="$(jq -r --arg p "$proj" '.marketing.projects[$p].appsflyer.app_id // empty' "$PREFS" 2>/dev/null)"
   if [ -z "$api_key" ] || [ -z "$app_id" ]; then
     report "- appsflyer: api_key/app_id not configured — skipped (paid-install signal not counted)"
-    [ -f "$out" ] || printf '%s' '{"installs_7d":0,"paid_installs_7d":0,"organic_installs_7d":0,"registrations_7d":0,"_note":"not_configured"}' > "$out"
+    printf '%s' '{"installs_7d":0,"paid_installs_7d":0,"organic_installs_7d":0,"registrations_7d":0,"_note":"not_configured"}' > "$out"
     return 0
   fi
   if [ "$DRY_RUN" = "1" ]; then
@@ -1466,7 +1468,9 @@ gather_amplitude() {
   local out="${STATE_DIR}/${proj}-amplitude.json"
   local has_block
   has_block="$(jq -r --arg p "$proj" '.marketing.projects[$p].amplitude // empty | if . == null then "" else "1" end' "$PREFS" 2>/dev/null)"
-  [ -z "$has_block" ] && return 0
+  # Drop stale JSON when Amplitude is not configured — otherwise proxy rewards still
+  # read a leftover file (amp_total / intent ladder).
+  [ -z "$has_block" ] && { rm -f "$out"; return 0; }
   local api_key secret_key zone base events
   api_key="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].amplitude.api_key // empty' "$PREFS" 2>/dev/null)")"
   secret_key="$(resolve_cred "$(jq -r --arg p "$proj" '.marketing.projects[$p].amplitude.secret_key // empty' "$PREFS" 2>/dev/null)")"
@@ -1475,7 +1479,7 @@ gather_amplitude() {
   events="$(jq -rc --arg p "$proj" '.marketing.projects[$p].amplitude.funnel_events // ["paywall_view","onboarding_complete","trial_start"]' "$PREFS" 2>/dev/null || echo '["paywall_view","onboarding_complete","trial_start"]')"
   if [ -z "$api_key" ] || [ -z "$secret_key" ]; then
     report "- amplitude: secret_key missing — intent funnel dark (ingestion key alone can't query Dashboard API; provision a Secret Key)"
-    [ -f "$out" ] || printf '%s' '{"_note":"secret_key_missing","events":{}}' > "$out"
+    printf '%s' '{"_note":"secret_key_missing","events":{}}' > "$out"
     return 0
   fi
   if [ "$DRY_RUN" = "1" ]; then
