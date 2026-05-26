@@ -54,16 +54,18 @@ for pr in prs:
         continue
     if pr.get("mergeable") != "MERGEABLE":
         continue
-    rollup = (pr["commits"]["nodes"][0]["commit"].get("statusCheckRollup") or {})
-    ci = rollup.get("state", "SUCCESS")
+    rollup = pr["commits"]["nodes"][0]["commit"].get("statusCheckRollup")
+    if not rollup or not isinstance(rollup, dict):
+        continue
+    ci = rollup.get("state")
+    if ci not in ("SUCCESS", "NEUTRAL", "SKIPPED"):
+        continue
     # Note: BLOCKED mergeStateStatus (review_required) IS admin-mergeable,
     # so we don't filter on mergeStateStatus. We only require:
     #   - mergeable=MERGEABLE (filtered above)
     #   - CI green
     # --admin bypasses required-reviewer rules. Confirmed manually 2026-05-21
     # on PRs #3885, #3889 (mergeStateStatus=BLOCKED, --admin merged fine).
-    if ci not in ("SUCCESS", "NEUTRAL", "SKIPPED"):
-        continue
     author = (pr.get("author") or {}).get("login", "")
     head = pr.get("headRefName", "")
     number = pr["number"]

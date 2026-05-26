@@ -1697,7 +1697,7 @@ apply_calibration_and_bandit() {
       local ts_now; ts_now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       while IFS= read -r row; do
         [ -z "$row" ] && continue
-        local ad_id _spend _leads _lc _minst meta_rev share rev_blend proxy reward
+        local ad_id _spend _leads _lc _minst meta_rev share ga4_share rev_blend proxy reward
         ad_id="$(printf '%s' "$row" | jq -r '.ad_id // empty' 2>/dev/null || true)"
         _spend="$(printf '%s' "$row" | jq -r '.spend // 0' 2>/dev/null || echo 0)"
         _leads="$(printf '%s' "$row" | jq -r '.leads // 0' 2>/dev/null || echo 0)"
@@ -1705,6 +1705,7 @@ apply_calibration_and_bandit() {
         _minst="$(printf '%s' "$row" | jq -r '.app_install // 0' 2>/dev/null || echo 0)"
         meta_rev="$(printf '%s' "$row" | jq -r '.purchase_value // 0' 2>/dev/null || echo 0)"
         share="$(awk -v s="${_spend:-0}" -v t="${total_meta_spend:-0}" 'BEGIN{ if (t+0>0) printf "%.6f", (s+0)/(t+0); else print 0 }')"
+        ga4_share="$(awk -v g="$ga4_total_rev" -v sh="$share" 'BEGIN{ printf "%.4f", (g+0)*(sh+0) }')"
         # Per-ad revenue blend = direct Meta purchase + spend-share of GA4/RC/Stripe revenue.
         rev_blend="$(awk -v m="$meta_rev" -v g="$ga4_total_rev" -v rc="$rc_rev" -v st="$stripe_total" -v sh="$share" \
           'BEGIN{ printf "%.4f", (m+0) + ((g+0)+(rc+0)+(st+0))*(sh+0) }')"
@@ -1717,6 +1718,12 @@ apply_calibration_and_bandit() {
           revenuecat) reward="$(awk -v rc="$rc_rev" -v sh="$share" 'BEGIN{printf "%.4f",(rc+0)*(sh+0)}')"; reward_kind="revenuecat" ;;
           appsflyer)  reward="$(awk -v i="$af_paid_inst" -v sh="$share" 'BEGIN{printf "%.4f",(i+0)*(sh+0)}')"; reward_kind="appsflyer" ;;
           amplitude)  reward="$(awk -v a="$amp_total" -v sh="$share" 'BEGIN{printf "%.4f",(a+0)*(sh+0)}')"; reward_kind="amplitude" ;;
+          blended)
+            # Web default: legacy Meta purchase_value + GA4 spend-share average (pre–multi-signal).
+            reward="$(awk -v m="${meta_rev:-0}" -v g="${ga4_share:-0}" \
+              'BEGIN{ if (m+0>0 && g+0>0) printf "%.4f", (m+g)/2.0; else if (m+0>0) print m; else print g }')"
+            reward_kind="blended"
+            ;;
           *)          if [ "$reward_kind" = "revenue" ]; then reward="$rev_blend"; else reward="$proxy"; fi ;;
         esac
         [ -n "$ad_id" ] && printf '%s\n' "$(jq -n \
