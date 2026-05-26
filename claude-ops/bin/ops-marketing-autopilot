@@ -1521,6 +1521,329 @@ stripe_revenue_for_ad() {
   jq -r --arg a "$ad_id" '(.by_ad_id[$a].revenue // 0)' "$f" 2>/dev/null || printf '0'
 }
 
+# ── Phase 3: OneLink/UTM injection + destination guard ────────────────────────
+
+# build_paid_destination <project> <persona> <hook> <theme>
+# Returns two lines:
+#   Line 1: full OneLink URL with af_xp/pid/c/af_adset/af_ad params
+#   Line 2: url_tags string for Meta ad_creative (web UTM parity)
+# Validates via utm_validate (utm_source=meta, utm_medium=paid, utm_campaign=<theme>).
+# Echoes empty + returns 1 if OneLink base is unconfigured (PLACEHOLDER present) or
+# utm_validate fails.
+build_paid_destination() {
+  local proj="$1" persona="$2" hook="$3" theme="$4"
+
+  local onelink_base
+  onelink_base="$(jq -r --arg p "$proj" \
+    '.marketing.projects[$p].appsflyer.onelink.base_url // empty' "$PREFS" 2>/dev/null)"
+  if [ -z "$onelink_base" ] || [ "$onelink_base" = "null" ] \
+     || printf '%s' "$onelink_base" | grep -q 'PLACEHOLDER'; then
+    log "build_paid_destination: OneLink base_url not yet configured for ${proj} (placeholder)"
+    return 1
+  fi
+
+  # URL-encode persona and hook (replace spaces with +, strip problematic chars)
+  local enc_persona enc_hook enc_theme
+  enc_persona="$(printf '%s' "$persona" | tr ' ' '+' | tr -cd 'a-zA-Z0-9+._-')"
+  enc_hook="$(printf '%s' "$hook" | tr ' ' '+' | tr -cd 'a-zA-Z0-9+._-')"
+  enc_theme="$(printf '%s' "$theme" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
+
+  # Validate utm_campaign = <theme>_v1_YYYYMMDD
+  local utm_campaign; utm_campaign="${enc_theme}_v1_$(date +%Y%m%d)"
+  if ! utm_validate "meta" "paid" "$utm_campaign" 2>/dev/null; then
+    log "build_paid_destination: utm_validate failed for theme '${theme}' (campaign='${utm_campaign}')"
+    return 1
+  fi
+
+  # Assemble separator (? or &) depending on existing query string in base
+  local sep="?"
+  case "$onelink_base" in *\?*) sep="&";; esac
+
+  local onelink_url="${onelink_base}${sep}af_xp=custom&pid=facebook_int&c=${enc_theme}&af_adset=${enc_persona}&af_ad=${enc_hook}"
+  local url_tags="utm_source=meta&utm_medium=paid&utm_campaign=${utm_campaign}&utm_content=${enc_persona}__${enc_hook}"
+
+  printf '%s\n%s\n' "$onelink_url" "$url_tags"
+  return 0
+}
+
+# destination_guard <project> <link>
+# Returns 0 (pass) when link is a valid OneLink URL with all required af params.
+# Returns 1 (BLOCK) when link points at a blocked bare domain or is missing required params.
+# Always logs the decision.
+destination_guard() {
+  local proj="$1" link="${2:-}"
+
+  if [ -z "$link" ]; then
+    log "destination_guard: empty link — BLOCK"
+    return 1
+  fi
+
+  # Load required_base + blocked list from prefs
+  local req_base
+  req_base="$(jq -r --arg p "$proj" \
+    '.marketing.projects[$p].paid.destination.required_base // empty' "$PREFS" 2>/dev/null)"
+
+  # Load blocked destinations array
+  local blocked_list
+  blocked_list="$(jq -r --arg p "$proj" \
+    '.marketing.projects[$p].paid.destination._blocked_destinations // [] | .[]' "$PREFS" 2>/dev/null || true)"
+
+  # 1. Check blocked bare domains — block if link contains blocked domain but lacks the onelink base
+  while IFS= read -r blocked; do
+    [ -z "$blocked" ] && continue
+    case "$link" in
+      *"$blocked"*)
+        # It references a blocked domain. Is it ALSO routed through a OneLink base?
+        if [ -n "$req_base" ] && ! printf '%s' "$req_base" | grep -q 'PLACEHOLDER'; then
+          case "$link" in
+            "${req_base}"*) : ;; # starts with the configured OneLink base — still check params
+            *) log "destination_guard: BLOCK — link contains blocked domain '${blocked}' without OneLink base: ${link}"
+               return 1 ;;
+          esac
+        else
+          # OneLink not yet configured — blocked domains are always blocked
+          log "destination_guard: BLOCK — link contains blocked domain '${blocked}' and OneLink not configured: ${link}"
+          return 1
+        fi
+        ;;
+    esac
+  done <<< "$blocked_list"
+
+  # 2. If a real (non-placeholder) OneLink base is configured, link must start with it
+  if [ -n "$req_base" ] && ! printf '%s' "$req_base" | grep -q 'PLACEHOLDER'; then
+    case "$link" in
+      "${req_base}"*) : ;;
+      *)
+        log "destination_guard: BLOCK — link does not start with required OneLink base: ${link}"
+        return 1
+        ;;
+    esac
+
+    # 3. Required af params must all be present in the link
+    local required_params
+    required_params="$(jq -r --arg p "$proj" \
+      '.marketing.projects[$p].paid.destination.required_af_params // [] | .[]' "$PREFS" 2>/dev/null || true)"
+    while IFS= read -r param; do
+      [ -z "$param" ] && continue
+      case "$link" in
+        *"${param}="*) : ;;
+        *)
+          log "destination_guard: BLOCK — link missing required af param '${param}': ${link}"
+          return 1
+          ;;
+      esac
+    done <<< "$required_params"
+  fi
+
+  log "destination_guard: PASS — ${link}"
+  return 0
+}
+
+# ── Phase 6: Auto-unpause canary gate ─────────────────────────────────────────
+#
+# canary_gate_unpause <project>
+#
+# Flips EXACTLY ONE paused ad set to ACTIVE only when ALL conditions are met:
+#   1. destination_guard passes for the ad set's configured destination URL
+#   2. AppsFlyer state file present + non-empty (installs_7d key exists)
+#   3. Amplitude funnel_total_7d > 0
+#   4. Meta account_status=1 (active)
+#
+# Hard caps:
+#   - Ad set daily_budget ≤ 500 cents ($5.00 USD)
+#   - Total active daily_budget across ALL campaign_ids ≤ cap (max $50 from prefs)
+#
+# Rate-floor + single-fire guard:
+#   - Uses a per-project lock dir (atomic mkdir, no flock needed on macOS)
+#   - Rate floor: at most 1 unpause per CANARY_RATE_FLOOR_SECS (default 82800 = 23h)
+#   - Respects DRY_RUN=1 (logs [DRY], no mutations)
+#   - Respects ESCALATED=1 (skip)
+#
+CANARY_RATE_FLOOR_SECS="${CANARY_RATE_FLOOR_SECS:-82800}"
+CANARY_ADSET_CAP_CENTS=500     # $5.00 — HARD CAP per ad set (minor units)
+CANARY_TOTAL_CAP_USD=50        # $50.00 — HARD CAP total active budget
+
+canary_gate_unpause() {
+  local proj="$1"
+  [ "${ESCALATED:-0}" = "1" ] && return 0
+
+  # ── Rate-floor + leader-election (atomic mkdir, idempotent) ──────────────
+  local lock_dir="${STATE_DIR}/${proj}-canary.lock"
+  local fired_at_file="${STATE_DIR}/${proj}-canary.fired_at"
+  local now_ts; now_ts="$(date +%s)"
+
+  # Check time since last unpause (rate-floor)
+  if [ -f "$fired_at_file" ]; then
+    local last_fired; last_fired="$(cat "$fired_at_file" 2>/dev/null || echo 0)"
+    local elapsed; elapsed=$((now_ts - last_fired))
+    if [ "$elapsed" -lt "$CANARY_RATE_FLOOR_SECS" ]; then
+      local remaining; remaining=$((CANARY_RATE_FLOOR_SECS - elapsed))
+      report "- canary gate: rate-floor active — last unpause ${elapsed}s ago (floor=${CANARY_RATE_FLOOR_SECS}s, ${remaining}s remaining)"
+      return 0
+    fi
+  fi
+
+  # Atomic single-leader acquisition (mkdir is atomic on POSIX + macOS, no flock needed)
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    report "- canary gate: another process holds the lock — skipping this pass"
+    return 0
+  fi
+  # Ensure lock is released on exit (success or error)
+  # shellcheck disable=SC2064
+  trap "rmdir '${lock_dir}' 2>/dev/null || true" RETURN
+
+  report ""
+  report "### Canary Gate (auto-unpause)"
+
+  # ── Condition 1: Meta account_status=1 ───────────────────────────────────
+  local acct_status=0
+  local meta_acct; meta_acct="$(chan_cred "$proj" meta ad_account_id)"
+  if [ -n "$meta_acct" ] && [ -n "${META_TOKEN:-}" ]; then
+    local acct_resp
+    acct_resp="$(meta_get "${meta_acct}?fields=account_status" "$proj")"
+    acct_status="$(printf '%s' "$acct_resp" | jq -r '.account_status // 0' 2>/dev/null || echo 0)"
+  fi
+  if [ "$acct_status" != "1" ]; then
+    report "- canary gate: HOLD — Meta account_status=${acct_status} (need 1)"
+    return 0
+  fi
+  report "- canary gate: account_status=1 OK"
+
+  # ── Condition 2: AppsFlyer state file present + non-empty ─────────────────
+  local af_f="${STATE_DIR}/${proj}-appsflyer.json"
+  if [ ! -s "$af_f" ]; then
+    report "- canary gate: HOLD — AppsFlyer state file absent or empty (${af_f##*/})"
+    return 0
+  fi
+  local af_installs
+  af_installs="$(jq -r '.installs_7d // empty' "$af_f" 2>/dev/null || true)"
+  if [ -z "$af_installs" ]; then
+    report "- canary gate: HOLD — AppsFlyer state file missing installs_7d key"
+    return 0
+  fi
+  report "- canary gate: AppsFlyer installs_7d=${af_installs} OK"
+
+  # ── Condition 3: Amplitude funnel non-zero ────────────────────────────────
+  local amp_f="${STATE_DIR}/${proj}-amplitude.json"
+  local amp_total=0
+  if [ -f "$amp_f" ]; then
+    amp_total="$(jq -r '.funnel_total_7d // 0' "$amp_f" 2>/dev/null || echo 0)"
+  fi
+  if ! awk "BEGIN{exit !(${amp_total:-0} > 0)}" 2>/dev/null; then
+    report "- canary gate: HOLD — Amplitude funnel_total_7d=${amp_total} (need >0)"
+    return 0
+  fi
+  report "- canary gate: Amplitude funnel_total_7d=${amp_total} OK"
+
+  # ── Condition 4: Destination guard — verify base is real (non-placeholder) ──
+  # We check the base URL only for placeholder/blocked-domain; per-ad links
+  # (built via build_paid_destination) carry the full af param set.
+  local dest_base
+  dest_base="$(jq -r --arg p "$proj" \
+    '.marketing.projects[$p].paid.destination.required_base // empty' "$PREFS" 2>/dev/null)"
+  if [ -z "$dest_base" ] || printf '%s' "$dest_base" | grep -q 'PLACEHOLDER'; then
+    report "- canary gate: HOLD — paid.destination.required_base is placeholder or absent"
+    return 0
+  fi
+  # Verify the base is not itself a blocked bare domain
+  local _blocked_list_cg
+  _blocked_list_cg="$(jq -r --arg p "$proj" \
+    '.marketing.projects[$p].paid.destination._blocked_destinations // [] | .[]' "$PREFS" 2>/dev/null || true)"
+  local _dest_blocked=0
+  while IFS= read -r _blocked; do
+    [ -z "$_blocked" ] && continue
+    case "$dest_base" in
+      *"$_blocked"*) _dest_blocked=1; break ;;
+    esac
+  done <<< "$_blocked_list_cg"
+  if [ "$_dest_blocked" = "1" ]; then
+    report "- canary gate: HOLD — required_base contains a blocked domain"
+    return 0
+  fi
+  report "- canary gate: destination_guard PASS (base=${dest_base})"
+
+  # ── All conditions met: find and unpause exactly ONE qualifying ad set ─────
+  # Qualifying: status=PAUSED, daily_budget ≤ CANARY_ADSET_CAP_CENTS
+  mapfile -t _GATE_CIDS < <(jq -r --arg p "$proj" \
+    '.marketing.projects[$p].autopilot.campaign_ids.meta[]? // empty' "$PREFS" 2>/dev/null)
+
+  if [ "${#_GATE_CIDS[@]}" -eq 0 ]; then
+    report "- canary gate: no campaign_ids.meta configured — cannot unpause"
+    return 0
+  fi
+
+  # Sum current active daily_budget across all campaigns (cap guard)
+  local current_active_usd=0
+  for _gcid in "${_GATE_CIDS[@]}"; do
+    local _camp_data
+    _camp_data="$(meta_get "${_gcid}?fields=daily_budget" "$proj" 2>/dev/null || echo '{}')"
+    local _cdb; _cdb="$(printf '%s' "$_camp_data" | jq -r '.daily_budget // empty' 2>/dev/null)"
+    if [ -n "$_cdb" ] && [ "$_cdb" != "null" ]; then
+      current_active_usd="$(awk "BEGIN{printf \"%.2f\", ${current_active_usd}+${_cdb}/100}")"
+    else
+      local _as_data
+      _as_data="$(meta_get "${_gcid}/adsets?fields=daily_budget,effective_status&limit=200" "$proj" 2>/dev/null || echo '{}')"
+      local _as_sum
+      _as_sum="$(printf '%s' "$_as_data" | jq '[.data[]? | select(.effective_status=="ACTIVE") | (.daily_budget|tonumber? // 0)] | add // 0' 2>/dev/null || echo 0)"
+      current_active_usd="$(awk "BEGIN{printf \"%.2f\", ${current_active_usd}+${_as_sum}/100}")"
+    fi
+  done
+
+  if awk "BEGIN{exit !(${current_active_usd:-0} >= ${CANARY_TOTAL_CAP_USD})}"; then
+    report "- canary gate: HOLD — total active budget \$${current_active_usd} already at/above \$${CANARY_TOTAL_CAP_USD} cap"
+    return 0
+  fi
+
+  # Find a candidate: PAUSED ad set with daily_budget ≤ CANARY_ADSET_CAP_CENTS
+  local unpause_asid="" unpause_asname="" unpause_budget_cents=0
+  for _gcid in "${_GATE_CIDS[@]}"; do
+    local _paused_sets
+    _paused_sets="$(meta_get "${_gcid}/adsets?fields=id,name,status,daily_budget,effective_status&limit=200" "$proj" 2>/dev/null || echo '{}')"
+    while IFS=$'\t' read -r _asid _asname _asdb; do
+      [ -z "$_asid" ] && continue
+      [ -z "$_asdb" ] || [ "$_asdb" = "null" ] && continue
+      # Budget cap check: must be ≤ CANARY_ADSET_CAP_CENTS
+      if awk -v b="$_asdb" -v cap="$CANARY_ADSET_CAP_CENTS" 'BEGIN{exit !(b <= cap)}'; then
+        unpause_asid="$_asid"
+        unpause_asname="$_asname"
+        unpause_budget_cents="$_asdb"
+        break 2
+      fi
+    done < <(printf '%s' "$_paused_sets" | jq -r \
+      '.data[]? | select(.effective_status=="PAUSED" or .status=="PAUSED") | select(.daily_budget != null) | [.id,.name,.daily_budget] | @tsv' \
+      2>/dev/null || true)
+  done
+
+  if [ -z "$unpause_asid" ]; then
+    report "- canary gate: no qualifying PAUSED ad set found (budget ≤ \$$(awk "BEGIN{printf \"%.2f\", ${CANARY_ADSET_CAP_CENTS}/100}") and status=PAUSED)"
+    return 0
+  fi
+
+  local budget_usd; budget_usd="$(awk "BEGIN{printf \"%.2f\", ${unpause_budget_cents}/100}")"
+  local post_total_usd; post_total_usd="$(awk "BEGIN{printf \"%.2f\", ${current_active_usd}+${unpause_budget_cents}/100}")"
+
+  # Final hard-cap re-check before mutation
+  if awk "BEGIN{exit !(${post_total_usd} > ${CANARY_TOTAL_CAP_USD})}"; then
+    report "- canary gate: HOLD — post-unpause total \$${post_total_usd} would exceed \$${CANARY_TOTAL_CAP_USD} cap"
+    return 0
+  fi
+
+  report "- canary gate: ALL conditions met — unpausing ad set '${unpause_asname}' (${unpause_asid}), budget \$${budget_usd}/day"
+  report "  post-unpause active total: \$${post_total_usd} (cap: \$${CANARY_TOTAL_CAP_USD})"
+
+  mutate "canary-unpause ad set ${unpause_asid} (${unpause_asname}) \$${budget_usd}/day" \
+    -X POST "${GRAPH}/${unpause_asid}" \
+    -d "status=ACTIVE" \
+    -d "access_token=${META_TOKEN}" \
+    ${META_PROOF:+-d "appsecret_proof=${META_PROOF}"}
+
+  if [ "$DRY_RUN" = "0" ]; then
+    # Record fired_at timestamp (rate-floor enforcement)
+    printf '%s' "$now_ts" > "$fired_at_file"
+    log "canary_gate_unpause: unpaused ${unpause_asid} for proj=${proj} at ts=${now_ts}"
+  fi
+}
+
 # surface_perf_signals <project>
 # Renders top GSC rescue/hook entries + Klaviyo underweight flag into the report.
 surface_perf_signals() {
@@ -2665,6 +2988,9 @@ for proj in "${PROJECTS[@]}"; do
 
     apply_calibration_and_bandit "$proj"
     delegate_claude "$proj"
+
+    # P6: auto-unpause canary gate (runs after bandit, guarded by rate-floor + caps)
+    canary_gate_unpause "$proj"
   fi
 
   report ""
