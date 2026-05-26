@@ -1161,7 +1161,11 @@ async function makePlaywrightDriver() {
     return buildPageDriver(
       'playwright-linux',
       page,
-      async () => { try { await browser.close(); } catch {} },
+      async () => {
+        try {
+          await browser.close();
+        } catch {}
+      },
       browser,
     );
   }
