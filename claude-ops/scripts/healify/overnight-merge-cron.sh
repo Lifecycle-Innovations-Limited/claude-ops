@@ -40,12 +40,12 @@ merge_ready_prs() {
             commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}' \
     -f owner="$owner" -f repo="$repo" -f base="$base" 2>/dev/null || echo '{}')
 
-  echo "$nodes" | BASE="$base" python3 <<'PYEOF' | while IFS=$'\t' read -r pr head author; do
+  BASE="$base" NODES_JSON="$nodes" python3 <<'PYEOF' | while IFS=$'\t' read -r pr head author; do
 import json, os, sys
 ALLOWED_AUTHORS = {"samrenders", "auroracapital"}
 base = os.environ["BASE"]
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(os.environ["NODES_JSON"])
     prs = d["data"]["repository"]["pullRequests"]["nodes"]
 except Exception:
     sys.exit(0)
