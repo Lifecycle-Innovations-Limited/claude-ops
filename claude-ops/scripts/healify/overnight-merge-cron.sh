@@ -40,12 +40,12 @@ merge_ready_prs() {
             commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}' \
     -f owner="$owner" -f repo="$repo" -f base="$base" 2>/dev/null || echo '{}')
 
-  echo "$nodes" | BASE="$base" python3 <<'PYEOF' | while IFS=$'\t' read -r pr head author; do
+  NODES="$nodes" BASE="$base" python3 <<'PYEOF' | while IFS=$'\t' read -r pr head author; do
 import json, os, sys
 ALLOWED_AUTHORS = {"samrenders", "auroracapital"}
 base = os.environ["BASE"]
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(os.environ["NODES"])
     prs = d["data"]["repository"]["pullRequests"]["nodes"]
 except Exception:
     sys.exit(0)
@@ -105,11 +105,11 @@ ensure_sync_pr() {
         repository(owner:$o,name:$r){
           pullRequests(states:OPEN,baseRefName:"main",headRefName:"dev",first:1){
             nodes{number}}}}' -f o="$owner" -f r="$repo" \
-      --jq '.data.repository.pullRequests.nodes[0].number // empty' 2>/dev/null)
+      --jq '.data.repository.pullRequests.nodes[0].number // empty' 2>/dev/null || echo "")
     if [[ -z "$sync_pr" ]]; then
       echo "  → opening dev→main sync PR for $repo"
       local repo_node_id
-      repo_node_id=$(gh api graphql -f query='query($o:String!,$r:String!){repository(owner:$o,name:$r){id}}' -f o="$owner" -f r="$repo" --jq '.data.repository.id')
+      repo_node_id=$(gh api graphql -f query='query($o:String!,$r:String!){repository(owner:$o,name:$r){id}}' -f o="$owner" -f r="$repo" --jq '.data.repository.id' 2>/dev/null || echo "")
       gh api graphql -f query='
         mutation($repo:ID!,$title:String!){
           createPullRequest(input:{repositoryId:$repo,baseRefName:"main",headRefName:"dev",title:$title,body:"Overnight automated sync."}){
