@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.11.5] — 2026-05-27
+
+### Fixed
+
+- **Rotation works headless on Linux (browser-auth)** — `rotate.mjs` gains Brave as a real-Chromium Tier-2 browser on aarch64 Linux (no ARM Chrome ships) in `REAL_BROWSERS` + the bootstrap scan; `gracefullyQuitApp` Linux `pkill -TERM` branch; the Tier-2 spawn uses a real `1280x800` viewport on Linux (the macOS `1x1` hide trick collapses claude.ai's responsive layout so the submit button is unclickable on Xvnc) + `--no-sandbox`; `pollGmailForMagicLink` reads each pool account's OWN inbox via `gog --account` (no Gmail-forwarding dependency); and the magic-link path fails the account cleanly on timeout instead of stalling on Google OAuth push-2FA. Preserves the 2.11.4 private-first selection + extra-usage exclusion.
+
 ## [2.11.4] — 2026-05-27
 
 ### Fixed
