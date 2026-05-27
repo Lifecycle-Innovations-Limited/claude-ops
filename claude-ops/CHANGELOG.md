@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.11.4] — 2026-05-27
+
+### Fixed
+
+- **Rotation prefers PRIVATE accounts over TEAMS/org accounts** — `scripts/account-rotation/rotate.mjs` account selection now treats team-ness (accounts carrying `orgName`/`orgUuid`) as the PRIMARY sort key and utilization as secondary, so a personal Max account is always chosen over an org/Teams account when viable. Org accounts route through claude.ai's org chooser + Google Workspace push-2FA, which headless browser auth cannot clear — picking one on raw utilization (e.g. a low-util Teams account) caused rotation to stall on 2FA and fail. A team account is now only ever selected when no private account is viable.
+
 ### Added
 
 - **`ops-telegram-bot-send`** — lightweight bot-token push to the operator's own Telegram chat, the companion to the user-account MCP server. Reads `TELEGRAM_BOT_TOKEN` + `TELEGRAM_OWNER_ID` from env or `preferences.json .channels.telegram.*` (zero hardcoded ids, Rule 0). Default recipient is the operator; `--to <chat_id>` overrides; `OPS_DRY_RUN=1` previews without sending.
