@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`ops-telegram-bot-send`** — lightweight bot-token push to the operator's own Telegram chat, the companion to the user-account MCP server. Reads `TELEGRAM_BOT_TOKEN` + `TELEGRAM_OWNER_ID` from env or `preferences.json .channels.telegram.*` (zero hardcoded ids, Rule 0). Default recipient is the operator; `--to <chat_id>` overrides; `OPS_DRY_RUN=1` previews without sending.
+  - For users who want notifications / bidirectional comms without the interactive gram.js phone+code login: provision a @BotFather token, `/start` the bot, grab the numeric chat id from @userinfobot, set the two values, done.
+  - `docs/telegram-bot-send.md` documents setup and the **self-channel exception** for `block-outbound-comms.py` — sends to the operator's own chat are operational self-notifications and skip the approval token (mirroring the existing email / WhatsApp / iMessage self-channel exceptions), while third-party Telegram sends stay gated under Rule 6.
+
 ## [2.11.3] — 2026-05-25
 
 ### Added
