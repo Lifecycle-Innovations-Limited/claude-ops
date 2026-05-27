@@ -1,0 +1,28 @@
+# Render deployment manifest for ops-pocket Layer 2 webhook receiver.
+# Deploy: connect this repo to Render, point to this file.
+# Persistent disk mounts at /data (SQLite + JSONL queue survive redeploys).
+
+services:
+  - type: web
+    name: pocket-webhook-layer2
+    runtime: docker
+    dockerfilePath: ./claude-ops/skills/ops-pocket/webhook-server/Dockerfile
+    dockerContext: ./claude-ops/skills/ops-pocket/webhook-server
+    region: frankfurt  # co-located with dev-sandbox-fra for latency parity
+    plan: starter       # $7/mo — free tier has no persistent disk
+    disk:
+      name: pocket-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: POCKET_HMAC_SECRET
+        sync: false       # set manually in Render dashboard (never commit)
+      - key: POCKET_WEBHOOK_URL
+        fromService:
+          type: web
+          name: pocket-webhook-layer2
+          property: host
+      - key: LOG_LEVEL
+        value: INFO
+    healthCheckPath: /health
+    autoDeploy: true
