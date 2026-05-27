@@ -79,25 +79,23 @@ function ensureMCPServersAndTools() {
     } catch {}
   };
 
-  if (IS_LINUX) {
-    // Linux: headless Chromium via Playwright — no real Chrome binary needed
-    actions.push('platform: linux — headless Chromium mode');
-    if (_hasCmd('npx')) {
-      actions.push('playwright: available via npx');
-    } else {
-      actions.push('playwright: WARNING — npx not found; browser fallback may fail');
-    }
-  } else {
-    // macOS: require real Chrome/Chrome Beta binary + CDP
+  {
+    // Real Chromium-family binary scan.
+    // Mac: Chrome Beta / Chrome. Linux aarch64 (no ARM Chrome): Brave is the real-Chromium
+    // analog. Google ships no ARM64 Chrome; Brave is what's installed on arm64 Linux boxes.
     const realChromes = [
       '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta',
       '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/usr/bin/brave-browser-stable',
+      '/usr/bin/brave-browser',
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/google-chrome',
     ];
     const foundChrome = realChromes.find((p) => existsSync(p));
     if (foundChrome) {
       actions.push(`chrome-binary: ${foundChrome.split('/').pop()}`);
     } else {
-      actions.push('chrome-binary: WARNING — no Chrome/Chrome Beta found');
+      actions.push('chrome-binary: WARNING — no real Chromium-family browser found (Tier-2 CDP will be skipped)');
     }
 
     // Chrome CDP port 9222 — probe (driver will launch Chrome if needed)
@@ -1073,11 +1071,21 @@ function extractText(result) {
 // rotation logs into Google accounts from scratch using dcli passwords + TOTP.
 // Comet = user's browser (never touch). Chrome = user's browser (never touch).
 const REAL_BROWSERS = [
+  // macOS — Chrome Beta with dcli (primary Mac path)
   {
     name: 'Google Chrome Beta',
     bin: '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta',
     profile: join(__dirname, '.chrome-beta-automation'),
     appName: 'Google Chrome Beta',
+  },
+  // Linux aarch64 — Google Chrome has no ARM build; Brave is the closest real-Chromium
+  // analog. Same CDP + persistent-profile flow as Mac. First run per account needs an
+  // interactive VNC sign-in to establish device trust; subsequent runs reuse the session.
+  {
+    name: 'Brave Browser',
+    bin: '/usr/bin/brave-browser-stable',
+    profile: join(__dirname, '.brave-automation'),
+    appName: 'brave-browser-stable',
   },
 ];
 
@@ -1132,17 +1140,21 @@ function isAppRunning(appName) {
 }
 
 function gracefullyQuitApp(appName) {
-  if (IS_LINUX) {
-    // No AppleScript on Linux — send SIGTERM and wait
-    spawnSync('pkill', ['-f', appName], { timeout: 3000 });
-    for (let i = 0; i < 10; i++) {
-      if (!isAppRunning(appName)) return true;
-      spawnSync('sleep', ['0.5']);
-    }
-    return false;
-  }
   try {
-    execFileSync('osascript', ['-e', `tell application "${appName}" to quit`], { timeout: 8000 });
+    if (!IS_LINUX) {
+      // macOS: AppleScript graceful quit
+      execFileSync('osascript', ['-e', `tell application "${appName}" to quit`], { timeout: 8000 });
+    } else {
+      // Linux: SIGTERM by process-name match (same pattern isAppRunning uses).
+      // execFileSync avoids shell injection; pkill non-zero (no match) is fine.
+      try {
+        execFileSync('pkill', ['-TERM', '-f', appName.replace(/ /g, '.')], {
+          timeout: 8000,
+          stdio: 'ignore',
+        });
+      } catch {}
+    }
+    // Wait up to 5s for it to actually quit
     for (let i = 0; i < 10; i++) {
       if (!isAppRunning(appName)) return true;
       spawnSync('sleep', ['0.5']);
@@ -1154,95 +1166,108 @@ function gracefullyQuitApp(appName) {
 async function makePlaywrightDriver() {
   const { chromium } = await import('playwright');
 
-  // ── Linux: headless Chromium (no real Chrome on servers) ─────────────────
-  if (IS_LINUX) {
-    log('[playwright] Linux mode — launching headless Chromium');
-    const profileDir = join(__dirname, '.chromium-linux-profile');
-    const browser = await chromium.launchPersistentContext(profileDir, {
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-background-networking',
-        '--disable-component-update',
-        '--disable-default-apps',
-        '--disable-sync',
-        '--disable-notifications',
-      ],
-    });
-    const page = browser.pages()[0] || (await browser.newPage());
-    return buildPageDriver(
-      'playwright-linux',
-      page,
-      async () => {
-        try {
-          await browser.close();
-        } catch {}
-      },
-      browser,
-    );
-  }
-
-  // ── macOS: attach to real Chrome via CDP ──────────────────────────────────
-  // 1. Try attaching to already-running Chrome on CDP
+  // Tier 1: attach to an already-running Chrome on CDP :9222 (cheapest).
   let attached = await tryConnectCDP(chromium);
   let weSpawnedChrome = false;
   let spawnedProfile = null;
 
   if (!attached) {
+    // Tier 2: spawn real browser (Chrome Beta on macOS, Brave on Linux aarch64)
+    // with CDP + isolated profile, if installed.
     const browser = findRealBrowser();
-    if (!browser) throw new Error('No Comet / Chrome Beta / Chrome binary found');
+    if (browser) {
+      ensureSymlinkedProfile(browser);
 
-    // 2. Ensure symlinked profile exists (Chrome CDP requires non-default user-data-dir)
-    ensureSymlinkedProfile(browser);
+      // Quit any running instance holding the profile files.
+      if (isAppRunning(browser.appName)) {
+        log(`[playwright] ${browser.name} running — quitting to release profile files...`);
+        gracefullyQuitApp(browser.appName);
+        await sleep(1500);
+        try {
+          execFileSync('pkill', ['-f', browser.appName], { timeout: 3000, stdio: 'ignore' });
+        } catch {}
+        await sleep(500);
+      }
 
-    // 3. Quit any running Chrome Beta that might be holding the real profile
-    //    (the symlinked profile shares Cookies/LoginData files with the real one).
-    if (isAppRunning(browser.appName)) {
-      log(`[playwright] ${browser.name} running — quitting to release profile files...`);
-      gracefullyQuitApp(browser.appName);
-      await sleep(1500);
-      // Force kill if still alive
-      try {
-        execSync(`pkill -f "${browser.appName}.app/Contents/MacOS"`);
-      } catch {}
-      await sleep(500);
+      // Launch visible (NOT headless — Cloudflare blocks headless Chrome).
+      // macOS: 1x1 off-screen so the window doesn't pollute the daily desktop.
+      // Linux (Xvnc): the X server itself is invisible behind VNC, and 1x1 makes
+      // claude.ai's responsive layout collapse so the submit button isn't clickable —
+      // use a normal viewport instead.
+      const hideArgs = IS_LINUX
+        ? ['--window-size=1280,800']
+        : ['--window-position=9000,9000', '--window-size=1,1'];
+      log(`[playwright] Launching ${browser.name} (${IS_LINUX ? '1280x800 on DISPLAY=' + (process.env.DISPLAY || '<unset>') : 'hidden 1x1 off-screen'}) with CDP :${CDP_PORT}...`);
+      spawn(
+        browser.bin,
+        [
+          `--remote-debugging-port=${CDP_PORT}`,
+          `--user-data-dir=${browser.profile}`,
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-background-networking',
+          '--disable-component-update',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--disable-notifications',
+          ...hideArgs,
+          ...(IS_LINUX ? ['--no-sandbox'] : []),
+        ],
+        { detached: true, stdio: 'ignore' },
+      ).unref();
+      weSpawnedChrome = true;
+      spawnedProfile = browser.profile;
+
+      // Poll CDP until it comes up
+      for (let i = 0; i < 30; i++) {
+        await sleep(500);
+        attached = await tryConnectCDP(chromium);
+        if (attached) break;
+      }
+      if (!attached) {
+        log(`[playwright] ${browser.name} CDP didn't come up on :${CDP_PORT} within 15s — falling back to bundled Chromium`);
+      }
+    } else {
+      log('[playwright] No real browser binary found — falling back to bundled Chromium');
     }
+  }
 
-    // 4. Launch visible (NOT headless — Cloudflare blocks headless Chrome)
-    //    Positioned off-screen + 1x1 size so the window is effectively invisible
-    //    even on multi-monitor / retina setups where 3000,3000 clamps onto a display.
-    log(`[playwright] Launching ${browser.name} hidden (1x1 off-screen) with CDP :${CDP_PORT}...`);
-    spawn(
-      browser.bin,
-      [
-        `--remote-debugging-port=${CDP_PORT}`,
-        `--user-data-dir=${browser.profile}`,
-        '--no-first-run',
-        '--no-default-browser-check',
+  // Tier 3: Playwright's bundled Chromium with an isolated persistent profile.
+  // On Linux: headful via DISPLAY (Xvfb/Xvnc). On macOS: headful off-screen.
+  const CHROMIUM_FALLBACK_PROFILE = join(__dirname, '.chromium-automation');
+  let bundledCtx = null;
+  if (!attached) {
+    if (!existsSync(CHROMIUM_FALLBACK_PROFILE)) {
+      execSync(`mkdir -p "${CHROMIUM_FALLBACK_PROFILE}"`, { timeout: 2000 });
+    }
+    log(`[playwright] Launching bundled Chromium (persistent profile: ${CHROMIUM_FALLBACK_PROFILE})...`);
+    const linuxChromiumArgs = IS_LINUX
+      ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+      : [];
+    if (IS_LINUX) {
+      log(`[playwright] Linux: headful via DISPLAY=${process.env.DISPLAY || '<unset>'} (Xvfb) + --no-sandbox`);
+    }
+    bundledCtx = await chromium.launchPersistentContext(CHROMIUM_FALLBACK_PROFILE, {
+      headless: false,
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
+      args: [
         '--disable-blink-features=AutomationControlled',
         '--disable-background-networking',
         '--disable-component-update',
         '--disable-default-apps',
         '--disable-sync',
         '--disable-notifications',
+        '--no-first-run',
+        '--no-default-browser-check',
         '--window-position=9000,9000',
         '--window-size=1,1',
+        ...linuxChromiumArgs,
       ],
-      { detached: true, stdio: 'ignore' },
-    ).unref();
-    weSpawnedChrome = true;
-    spawnedProfile = browser.profile;
-
-    // 4. Poll CDP until it comes up
-    for (let i = 0; i < 30; i++) {
-      await sleep(500);
-      attached = await tryConnectCDP(chromium);
-      if (attached) break;
-    }
-    if (!attached) throw new Error(`CDP didn't come up on :${CDP_PORT} within 15s`);
+    });
+    const page = bundledCtx.pages()[0] || (await bundledCtx.newPage());
+    attached = { browser: null, ctx: bundledCtx, page };
+    log('[playwright] Attached to bundled Chromium');
   }
 
   const { browser: pwBrowser, ctx, page } = attached;
@@ -1250,10 +1275,16 @@ async function makePlaywrightDriver() {
     'playwright',
     page,
     async () => {
+      if (bundledCtx) {
+        try {
+          await bundledCtx.close();
+        } catch {}
+        return;
+      }
       try {
-        await pwBrowser.close();
+        if (pwBrowser) await pwBrowser.close();
       } catch {}
-      // Kill Chrome Beta if WE spawned it — don't leave zombie Chromes
+      // Kill the real browser if WE spawned it — don't leave zombies
       if (weSpawnedChrome && spawnedProfile) {
         try {
           execSync(`pkill -f "${spawnedProfile}"`, { timeout: 5000 });
@@ -1493,7 +1524,11 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
   // Anchor to "now" so we never accept a magic-link email older than this call.
   const requestedAt = Math.floor(Date.now() / 1000);
   const targetLower = accountEmail.toLowerCase();
-  log(`[magic-link] Polling Gmail for login email to ${accountEmail} (max ${maxWaitMs / 1000}s)...`);
+  // Read the account's OWN inbox via gog --account (gog has service-account access
+  // to the pool mailboxes). The link lands there instantly — no Gmail forwarding
+  // required (forwards proved unreliable: some accounts don't forward).
+  const acctArgs = ['--account', accountEmail];
+  log(`[magic-link] Polling ${accountEmail} inbox (via gog --account) for login email (max ${maxWaitMs / 1000}s)...`);
 
   // Track skipped (stale/wrong-target) thread IDs so we don't re-evaluate them every poll
   const seenSkip = new Set();
@@ -1503,7 +1538,7 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
       // Pull up to 10 recent matches so a stale top-result doesn't block us.
       const searchResult = execFileSync(
         'gog',
-        ['gmail', 'search', 'subject:"Secure link to log in to Claude" newer_than:5m', '--max', '10', '-j'],
+        ['gmail', 'search', ...acctArgs, 'subject:"Secure link to log in to Claude" newer_than:5m', '--max', '10', '-j'],
         { timeout: 15_000, stdio: ['ignore', 'pipe', 'pipe'] },
       )
         .toString()
@@ -1519,7 +1554,7 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
         if (!/^[A-Za-z0-9_-]+$/.test(threadIdRaw)) continue;
         if (seenSkip.has(threadIdRaw)) continue;
 
-        const threadJson = execFileSync('gog', ['gmail', 'read', threadIdRaw, '-j'], {
+        const threadJson = execFileSync('gog', ['gmail', 'read', ...acctArgs, threadIdRaw, '-j'], {
           timeout: 15_000,
           stdio: ['ignore', 'pipe', 'pipe'],
         }).toString();
@@ -2162,7 +2197,11 @@ async function runAuthFlow(driver, account) {
             }
             continue;
           }
-          log(`[magic-link] No magic link found in Gmail — falling through to Google OAuth`);
+          // Magic-link only — Google OAuth fallback is intentionally disabled:
+          // headless boxes have no device trust, dcli can't clear 2FA, and the
+          // password-fill path stalls on push-2FA. Fail this account and move on.
+          log(`[magic-link] No magic link found in Gmail — failing account (Google OAuth fallback disabled by config).`);
+          throw new Error(`magic-link timeout for ${account.email} (Google OAuth disabled)`);
         }
       }
     }
