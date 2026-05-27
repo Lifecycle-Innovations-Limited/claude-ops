@@ -1,4 +1,17 @@
-### 3a — Telegram (user-auth via ops-telegram-autolink)
+### 3a — Telegram
+
+**Two paths available:**
+
+| Path | Auth cost | Reads DMs | Sends to you | Best for |
+|---|---|---|---|---|
+| **User-account** (this section) | phone + 2 login codes + optional 2FA | yes | yes | `/ops-inbox telegram`, bidirectional |
+| **Bot token** (`bin/ops-telegram-bot-send`) | paste one token from @BotFather | no | yes | one-way push notifications, low setup cost |
+
+If all you need is for ops skills to **push notifications to your phone** (briefings, fire alerts, rotation results), the bot-token path is simpler — see [`docs/telegram-bot-send.md`](../../../../docs/telegram-bot-send.md) and skip to step 3n (notifications). Come back here only if you need `/ops-inbox telegram` inbox triage.
+
+---
+
+#### 3a (continued) — User-account via ops-telegram-autolink
 
 **Always ask before starting the Telegram flow** — even when the user selected "all channels". Use `AskUserQuestion`:
 

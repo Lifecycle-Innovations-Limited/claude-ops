@@ -1,10 +1,13 @@
 # claude-ops
 
-> **v2.2.0** — Autonomy Layer · Deploy Auto-Fix · Safety Hooks · Specialist Agents · Recap Marquee · Multi-Account Rotator · Multi-Workspace Slack · ops-ci Current-State Filter · Credentials Audit · 35 Skills · 18 Agents
+> **v2.11.5** — Autonomy Layer · Deploy Auto-Fix · Safety Hooks · Specialist Agents · Recap Marquee · Multi-Account Rotator · Multi-Workspace Slack · Telegram Bot Push · Linux Headless Browser-Auth · 35 Skills · 18 Agents
 
-## What's new in v2.2.0
+## What's new in v2.11.5
 
-- **v2.2.0** — Audit fixes: plugin validation (install unblocked), deploy-fix test suite (45/45 passing), `set -e` safety, account-rotation stdin handling. See [CHANGELOG.md](CHANGELOG.md#220--2026-05-16) for the full list.
+- **v2.11.5** — Linux headless browser-auth for the account rotator (Brave Tier-2, Xvnc 1280×800, per-account `gog`, magic-link-only). See [CHANGELOG.md](CHANGELOG.md) for the full list.
+- **v2.11.4** — Account rotator prefers personal accounts over TEAMS/org accounts to avoid org-chooser + Google push-2FA stalls.
+- **v2.11.3** — [`bin/ops-telegram-bot-send`](docs/telegram-bot-send.md): bot-token push to the operator's own Telegram chat. Lower-cost alternative to the user-account MCP path for one-way notifications. Includes the `block-outbound-comms.py` self-channel exception.
+- Older: **v2.2.0** — Audit fixes: plugin validation (install unblocked), deploy-fix test suite (45/45 passing), `set -e` safety, account-rotation stdin handling. See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 A Claude Code plugin that turns Claude into a business operating system **and** an autonomy layer. Run `/ops` for the interactive command center — pixel-art dashboard with instant hotkey access to morning briefings, inbox, fires, deploys, revenue, and YOLO mode. Or just keep working — v2's hooks watch every merge, every build, every commit, every push, and every agent dispatch in the background.
 
