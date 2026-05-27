@@ -68,7 +68,12 @@ for pr in prs:
     head = pr.get("headRefName", "")
     number = pr["number"]
     is_sync = (base == "main" and head == "dev")
-    is_owned = author in ALLOWED_AUTHORS
+    is_owned = author in ALLOWED_AUTHORS and (
+        head.startswith("fix/")
+        or head.startswith("feat/")
+        or head.startswith("chore/")
+        or head.startswith("sync(")
+    )
     if is_sync or is_owned:
         print(f"{number}\t{head}\t{author}")
     else:
