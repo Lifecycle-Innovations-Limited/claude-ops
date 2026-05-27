@@ -58,8 +58,13 @@ env var isn't set), so you don't have to export secrets globally.
 
 ## How to choose a sink
 
-- **Most users →** Telegram. You already set up a Telegram bot to use
-  `/ops:comms`, so this is zero extra work.
+- **Most users →** Telegram bot. Configure `TELEGRAM_BOT_TOKEN` +
+  `TELEGRAM_OWNER_ID` (one token from @BotFather — see
+  [`docs/telegram-bot-send.md`](telegram-bot-send.md)) and this sink is live
+  immediately. `bin/ops-telegram-bot-send` handles the actual delivery; the
+  fires-watcher calls it automatically once both env vars are set. This is
+  separate from the user-account MCP path (`ops-telegram-autolink`) — you do
+  not need a personal-account session to receive fire alerts.
 - **No account, free →** ntfy.sh. Pick a random topic name like
   `claude-ops-fires-<random>`, subscribe from the ntfy mobile app, done.
 - **Premium iOS/Android →** Pushover. ~$5 one-time per platform, fastest and
