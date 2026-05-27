@@ -1,5 +1,13 @@
 {
   "mcpServers": {
+    "telegram-channel": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/telegram-server/channel-mcp.mjs"],
+      "env": {
+        "TELEGRAM_BOT_TOKEN": "${user_config.telegram_bot_token}",
+        "TELEGRAM_OWNER_ID": "${user_config.telegram_owner_id}"
+      }
+    },
     "telegram": {
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/telegram-server/index.js"],
