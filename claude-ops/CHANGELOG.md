@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.11.6] — 2026-05-27
+
+### Added
+
+- **Telegram `claude/channel` MCP — inbound DMs push straight into the session (iMessage-grade)** — new `telegram-server/channel-mcp.mjs`: a stdio MCP server declaring `capabilities: { 'claude/channel': {} }` that long-polls the bot `getUpdates` and, for each new message from `TELEGRAM_OWNER_ID` (owner-allowlisted, prompt-injection-aware), emits `notifications/claude/channel` — injecting the DM into the active session as a turn, exactly like the iMessage channel. Replaces the fragile shell-poller relay: offset is persisted atomically to `~/.claude/channels/telegram/offset.json` (`offset = lastUpdateId + 1`, never freezes/replays). The old `ops-message-listener.sh` Telegram branch is gated behind `OPS_DISABLE_TG_POLLER` to avoid two-consumer getUpdates contention. Registered via `.mcp.json` `telegram-channel`.
+
 ## [2.11.5] — 2026-05-27
 
 ### Fixed

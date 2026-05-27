@@ -1194,10 +1194,10 @@ async function makePlaywrightDriver() {
       // Linux (Xvnc): the X server itself is invisible behind VNC, and 1x1 makes
       // claude.ai's responsive layout collapse so the submit button isn't clickable —
       // use a normal viewport instead.
-      const hideArgs = IS_LINUX
-        ? ['--window-size=1280,800']
-        : ['--window-position=9000,9000', '--window-size=1,1'];
-      log(`[playwright] Launching ${browser.name} (${IS_LINUX ? '1280x800 on DISPLAY=' + (process.env.DISPLAY || '<unset>') : 'hidden 1x1 off-screen'}) with CDP :${CDP_PORT}...`);
+      const hideArgs = IS_LINUX ? ['--window-size=1280,800'] : ['--window-position=9000,9000', '--window-size=1,1'];
+      log(
+        `[playwright] Launching ${browser.name} (${IS_LINUX ? '1280x800 on DISPLAY=' + (process.env.DISPLAY || '<unset>') : 'hidden 1x1 off-screen'}) with CDP :${CDP_PORT}...`,
+      );
       spawn(
         browser.bin,
         [
@@ -1226,7 +1226,9 @@ async function makePlaywrightDriver() {
         if (attached) break;
       }
       if (!attached) {
-        log(`[playwright] ${browser.name} CDP didn't come up on :${CDP_PORT} within 15s — falling back to bundled Chromium`);
+        log(
+          `[playwright] ${browser.name} CDP didn't come up on :${CDP_PORT} within 15s — falling back to bundled Chromium`,
+        );
       }
     } else {
       log('[playwright] No real browser binary found — falling back to bundled Chromium');
@@ -1242,9 +1244,7 @@ async function makePlaywrightDriver() {
       execSync(`mkdir -p "${CHROMIUM_FALLBACK_PROFILE}"`, { timeout: 2000 });
     }
     log(`[playwright] Launching bundled Chromium (persistent profile: ${CHROMIUM_FALLBACK_PROFILE})...`);
-    const linuxChromiumArgs = IS_LINUX
-      ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-      : [];
+    const linuxChromiumArgs = IS_LINUX ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] : [];
     if (IS_LINUX) {
       log(`[playwright] Linux: headful via DISPLAY=${process.env.DISPLAY || '<unset>'} (Xvfb) + --no-sandbox`);
     }
@@ -1538,7 +1538,15 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
       // Pull up to 10 recent matches so a stale top-result doesn't block us.
       const searchResult = execFileSync(
         'gog',
-        ['gmail', 'search', ...acctArgs, 'subject:"Secure link to log in to Claude" newer_than:5m', '--max', '10', '-j'],
+        [
+          'gmail',
+          'search',
+          ...acctArgs,
+          'subject:"Secure link to log in to Claude" newer_than:5m',
+          '--max',
+          '10',
+          '-j',
+        ],
         { timeout: 15_000, stdio: ['ignore', 'pipe', 'pipe'] },
       )
         .toString()
@@ -2200,7 +2208,9 @@ async function runAuthFlow(driver, account) {
           // Magic-link only — Google OAuth fallback is intentionally disabled:
           // headless boxes have no device trust, dcli can't clear 2FA, and the
           // password-fill path stalls on push-2FA. Fail this account and move on.
-          log(`[magic-link] No magic link found in Gmail — failing account (Google OAuth fallback disabled by config).`);
+          log(
+            `[magic-link] No magic link found in Gmail — failing account (Google OAuth fallback disabled by config).`,
+          );
           throw new Error(`magic-link timeout for ${account.email} (Google OAuth disabled)`);
         }
       }

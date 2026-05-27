@@ -118,8 +118,23 @@ print(json.dumps(filtered))
 }
 
 # ── Poll Telegram ─────────────────────────────────────────────────────────
+# DEPRECATED: Telegram polling is now handled by the telegram-channel MCP server
+# (telegram-server/channel-mcp.mjs). Two simultaneous consumers of getUpdates
+# on the same bot token steal each other's updates (Telegram delivers each
+# update to exactly ONE long-poller — the 409 / offset-contention bug).
+#
+# This branch exits immediately when OPS_DISABLE_TG_POLLER=1 (default going
+# forward). Set that flag in Doppler or your shell env when the channel MCP
+# is registered. WhatsApp polling in this listener is unaffected.
 poll_telegram() {
   local since_update_id="${1:-0}"
+
+  # Gate: skip if the channel MCP is taking over Telegram polling.
+  if [[ "${OPS_DISABLE_TG_POLLER:-0}" == "1" ]]; then
+    echo "[]"
+    return
+  fi
+
   local tg_token="${TELEGRAM_BOT_TOKEN:-}"
 
   if [[ -z "$tg_token" ]]; then
