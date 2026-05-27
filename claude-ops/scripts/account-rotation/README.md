@@ -16,7 +16,7 @@ session can keep working without a manual `/login`.
 This is **off by default**. It requires:
 
 1. Multiple Claude Max accounts you legitimately own.
-2. macOS (uses the system keychain + `launchd` for the background daemon).
+2. macOS (uses the system keychain + `launchd` for the background daemon) **or Linux** (see [Linux setup](#linux-setup) below).
 3. Node 20+ (already required by the plugin).
 4. Optional: Playwright (installed on first browser-fallback use), Dashlane CLI (`dcli`) for credential reads.
 
@@ -90,6 +90,64 @@ launchctl unload ~/Library/LaunchAgents/com.claude-ops.account-rotation.plist
 ```
 
 And toggle `account_rotation_enabled` off in plugin settings.
+
+## Account selection — private-first (v2.11.4)
+
+When multiple accounts are eligible to rotate into, `rotate.mjs` prefers
+**personal/private** accounts over **TEAMS/org** accounts (those with `orgName`
+or `orgUuid` set). Org accounts hit claude.ai's organisation chooser page and
+may trigger Google Workspace push-2FA that headless browser auth cannot clear,
+causing the rotation to stall.
+
+Rule: an account is treated as an org account if it has a non-empty `orgName`
+**or** `orgUuid`. Personal accounts are selected first; org accounts are used
+only when no personal account has sufficient remaining quota.
+
+To opt an account out of this preference (e.g. an org account you know works
+headlessly), add `"preferEvenIfOrg": true` to its config entry.
+
+## Linux setup (v2.11.5)
+
+The browser-auth fallback now works headlessly on aarch64/x86-64 Linux. Extra
+requirements beyond the base list above:
+
+1. **Brave browser** — acts as the Tier-2 real-Chromium fallback (no ARM Chrome
+   builds exist). Install via your distro's package manager or
+   `brave.com/linux/`:
+
+   ```bash
+   # Debian/Ubuntu
+   sudo apt-get install -y brave-browser
+   # Fedora/RHEL
+   sudo dnf install -y brave-browser
+   ```
+
+2. **Xvnc / virtual display** — the auth flow requires a real display
+   (`DISPLAY` must be set). Start a virtual framebuffer before running the
+   rotator daemon:
+
+   ```bash
+   Xvnc :1 -geometry 1280x800 -depth 24 &
+   export DISPLAY=:1
+   ```
+
+   The 1280×800 viewport is required — narrower viewports (e.g. 1×1) break
+   claude.ai's layout and stall the login flow.
+
+3. **Per-account `gog` service accounts** — magic-link auth reads each
+   account's own inbox using `gog --account <email>`. Add a service account
+   for every rotation email:
+
+   ```bash
+   gog auth add you@example.com --services gmail
+   ```
+
+   No Gmail-forwarding setup is needed; `gog` reads each inbox directly.
+
+4. **Magic-link only** — on Linux the rotator uses magic-link login exclusively
+   (no Google OAuth). This avoids Google Workspace push-2FA which cannot be
+   cleared in a headless session. Accounts that require Google OAuth and cannot
+   receive a Claude magic-link email are not supported on Linux.
 
 ## Safety notes
 
