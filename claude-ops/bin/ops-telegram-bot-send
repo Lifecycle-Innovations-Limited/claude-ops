@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# ops-telegram-bot-send — push a Telegram message to the operator's OWN chat
+# via the Bot API. This is the lightweight, operator-self companion to the
+# user-account MCP server (telegram-server/index.js): the MCP path reads DMs
+# and powers /ops-inbox; this path only ever pushes notifications to YOU.
+#
+# Why a bot, not the user account: a bot token is trivial to provision
+# (@BotFather), needs no phone/2FA login flow, and can only message users who
+# have already /start-ed the bot — so it is the natural channel for one-way
+# operator notifications (fleet check-ins, briefings, fire alerts, rotation
+# results) and for the inbound→outbound round-trip when paired with the
+# polling listener (ops-message-listener.sh).
+#
+# Credentials resolved from env or preferences.json — zero hardcoded values
+# (Rule 0). Nothing here is account-specific; every deployment supplies its
+# own token + chat id.
+#
+#   TELEGRAM_BOT_TOKEN   bot token from @BotFather (e.g. 123456789:AA...)
+#   TELEGRAM_OWNER_ID    numeric chat id of the operator (from @userinfobot)
+#
+# Both also fall back to preferences.json .channels.telegram.{bot_token,owner_id}.
+#
+# Usage:
+#   ops-telegram-bot-send "your message"        # message as arg
+#   echo "your message" | ops-telegram-bot-send  # message on stdin
+#   ops-telegram-bot-send --to <chat_id> "msg"   # override recipient (still gated, see below)
+#
+# Outbound-comms gate (Rule 6): this script shells out to the Telegram Bot API,
+# which a personal `block-outbound-comms.py` hook will block by default. Because
+# the DEFAULT recipient is the operator's own chat, sends to TELEGRAM_OWNER_ID
+# are operational self-notifications, not human-to-human comms. Add the
+# self-channel exception documented in docs/telegram-bot-send.md so sends to
+# your own chat skip the approval token while third-party chats stay gated.
+#
+#   OPS_DRY_RUN=1   Print the planned request (token redacted) and exit 0.
+set -euo pipefail
+
+DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PREFS="$DATA_DIR/preferences.json"
+
+prefs_get() {
+  # $1 = jq path expression; prints value or empty
+  [ -f "$PREFS" ] || return 0
+  jq -r "${1} // empty" "$PREFS" 2>/dev/null || true
+}
+
+TOKEN="${TELEGRAM_BOT_TOKEN:-$(prefs_get '.channels.telegram.bot_token')}"
+OWNER="${TELEGRAM_OWNER_ID:-$(prefs_get '.channels.telegram.owner_id')}"
+
+# Optional --to override (e.g. a group the operator owns). Parsed before body.
+TO="$OWNER"
+if [ "${1:-}" = "--to" ]; then
+  TO="${2:-}"
+  shift 2
+fi
+
+if [ -z "$TOKEN" ]; then
+  echo "ops-telegram-bot-send: no TELEGRAM_BOT_TOKEN (env or preferences.json .channels.telegram.bot_token)" >&2
+  echo "  See docs/telegram-bot-send.md for setup." >&2
+  exit 2
+fi
+if [ -z "$TO" ]; then
+  echo "ops-telegram-bot-send: no recipient — set TELEGRAM_OWNER_ID or pass --to <chat_id>" >&2
+  exit 2
+fi
+
+# Message body: positional arg wins, else stdin.
+TEXT="${1:-}"
+if [ -z "$TEXT" ] && [ ! -t 0 ]; then
+  TEXT="$(cat)"
+fi
+if [ -z "$TEXT" ]; then
+  echo "ops-telegram-bot-send: empty message (pass as arg or pipe on stdin)" >&2
+  exit 2
+fi
+
+if [ "${OPS_DRY_RUN:-}" = "1" ]; then
+  echo "[dry-run] POST https://api.telegram.org/bot<redacted>/sendMessage"
+  echo "[dry-run]   chat_id=$TO"
+  echo "[dry-run]   text=${TEXT}"
+  exit 0
+fi
+
+curl -sS -X POST \
+  "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+  --data-urlencode "chat_id=${TO}" \
+  --data-urlencode "text=${TEXT}" \
+  --data-urlencode "parse_mode=Markdown" \
+  --data-urlencode "disable_web_page_preview=true" \
+  | jq -e '.ok == true' >/dev/null \
+  && echo "✓ sent to ${TO}" \
+  || { echo "ops-telegram-bot-send: send failed (check token / chat_id / that the recipient has /start-ed the bot)" >&2; exit 1; }
