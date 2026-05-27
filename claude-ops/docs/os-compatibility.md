@@ -167,7 +167,21 @@ Backend names: `security`, `secret-tool`, `wincred`, `keytar`, `enc-json`, `plai
 
 **Verify:** `bash scripts/ops-daemon.sh --os` echoes the detected OS; `--help` lists every flag.
 
-## Browser automation
+## Account rotator browser-auth on Linux (v2.11.5)
+
+The multi-account rotator's browser fallback now works headlessly on aarch64
+and x86-64 Linux. Key differences from the macOS path:
+
+| | macOS | Linux (headless) |
+|---|---|---|
+| Browser | Chrome (real, headed) | Brave (Tier-2 real-Chromium; no ARM Chrome builds) |
+| Display | native | Xvnc virtual display — `DISPLAY=:1`, 1280×800 |
+| Auth method | magic-link or Google OAuth | magic-link only (Google push-2FA not clearable headlessly) |
+| Inbox reads | forwarded to default Gmail account | `gog --account <email>` per-account (no forwarding required) |
+
+Full setup steps are in `scripts/account-rotation/README.md §Linux setup`.
+
+## Browser automation (general)
 
 `bin/ops-slack-autolink.mjs` (and any future browser-driven setup) uses `lib/os-detect.mjs::browserProfileDirs()` to discover Chrome / Chromium / Brave / Arc profile directories that actually exist on the host:
 
