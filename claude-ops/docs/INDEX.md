@@ -31,6 +31,7 @@
 | [`marketplace-submissions.md`](marketplace-submissions.md) | Publishing your own plugin to the same marketplace. |
 | [`memories-system.md`](memories-system.md) | The cross-session memory system used by agents. |
 | [`notifications.md`](notifications.md) | Notification channel setup (macos/ntfy/pushover/discord/telegram). |
+| [`telegram-bot-send.md`](telegram-bot-send.md) | Bot-token push to the operator's own Telegram chat + the outbound-hook self-channel exception. |
 | [`os-compatibility.md`](os-compatibility.md) | macOS / Linux / WSL feature matrix. |
 
 ## External
