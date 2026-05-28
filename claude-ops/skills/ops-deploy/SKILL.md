@@ -223,16 +223,15 @@ WebFetch(url: "https://api.vercel.com/v6/deployments?projectId=<id>&limit=5", he
 
 ## Ledger Integration
 
-**CLAIM_KEY:** `deploy:<project>:<env>:<YYYY-MM-DDTHH-MM>` (e.g. `deploy:healify-api:production:2026-05-28T09-00`)
+**CLAIM_KEY:** `deploy:<project>:<env>` (e.g. `deploy:my-api:production`)
 
-Keyed on project + environment + wall-clock window (truncated to the minute) so
-back-to-back deploys of the same project within the same minute are deduplicated.
+Keyed on project + environment so concurrent deploys of the same target are blocked
+for the full claim TTL (30 minutes).
 
 ### Pre-flight skip-check
 
 ```bash
-DEPLOY_TS=$(date +%Y-%m-%dT%H-%M)
-CLAIM_KEY="deploy:<project>:<env>:${DEPLOY_TS}"
+CLAIM_KEY="deploy:<project>:<env>"
 ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
 ```
 

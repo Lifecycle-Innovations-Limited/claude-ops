@@ -341,7 +341,7 @@ Use `WebFetch` to pull Grafana dashboards, Sentry event details, or AWS status p
 
 ## Ledger Integration
 
-**CLAIM_KEY:** `yolo:session:<YYYY-MM-DDTHH-MM>` — one claim per YOLO session window.
+**CLAIM_KEY:** `yolo:session` — one active YOLO session at a time (stable key for concurrency).
 
 Individual actions within the session (merges, fixes, deploys) each write their own
 typed claim via the relevant skill's ledger pattern (see `ops-merge`, `ops-fires`,
@@ -351,8 +351,8 @@ typed claim via the relevant skill's ledger pattern (see `ops-merge`, `ops-fires
 
 ```bash
 SESSION_TS=$(date +%Y-%m-%dT%H-%M)
-CLAIM_KEY="yolo:session:${SESSION_TS}"
-ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
+CLAIM_KEY="yolo:session"
+ledger query --claim-key "$CLAIM_KEY" --since=-PT4H
 ```
 
 If another YOLO session is `in_progress`, surface it before starting a new one —
