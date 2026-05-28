@@ -2189,6 +2189,10 @@ async function runAuthFlow(driver, account) {
             throw new Error(`magic-link timeout for ${account.email} (Google OAuth disabled on Linux)`);
           }
           log(`[magic-link] No magic link found in Gmail — falling through to Google OAuth`);
+          try {
+            await driver.goto(driver._authUrl || 'https://claude.ai/login');
+          } catch {}
+          await sleep(3000);
         }
       }
     }
