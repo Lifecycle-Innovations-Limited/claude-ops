@@ -165,13 +165,13 @@ def match_rule(rules: list[dict], task: dict) -> dict | None:
     """Return first matching rule or None. Case-insensitive via re.IGNORECASE
     (never lowercase the pattern — that breaks word-boundary anchors like \\b)."""
     hay = (
-        task.get("title", "")
+        (task.get("title") or "")
         + "\n"
-        + task.get("context", "")
+        + (task.get("context") or "")
         + "\n"
-        + task.get("summary", "")
+        + (task.get("summary") or "")
         + "\n"
-        + task.get("transcript", "")
+        + (task.get("transcript") or "")
     )
     for r in rules:
         for pat in r.get("match_any", []):
@@ -215,7 +215,6 @@ def main() -> int:
 
     if DRY_RUN:
         promoted, parked, kept = partition_review(rules, park_rules, REVIEW.read_text())
-        review_was = len(kept) + len(promoted) + len(parked)
         if parked:
             log(f"parked {len(parked)} item(s) — owned elsewhere, not promoting")
         if promoted:
