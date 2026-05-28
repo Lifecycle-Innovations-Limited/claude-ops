@@ -409,6 +409,21 @@ function pickNextAccount(config, state, liveUtil = {}, opts = {}) {
   const excludeKey = (a) =>
     a.disabled === true || accountKey(a) === activeKey || (!allowExtraUsage && hasExtraUsageEnabled(a));
 
+  // Prefer PRIVATE (personal) accounts over TEAMS/org accounts. Org accounts
+  // (those carrying orgName/orgUuid) route through claude.ai's org chooser and
+  // Google Workspace push-2FA, which headless browser auth cannot clear — so a
+  // team account that wins on raw utilization still fails to rotate. Treat
+  // team-ness as the PRIMARY sort key (private first), utilization secondary,
+  // so a team account is only ever picked when no private account is viable.
+  const isTeamAccount = (a) =>
+    !!(a.orgUuid || (a.orgName && String(a.orgName).toLowerCase() !== String(a.email || '').toLowerCase()));
+  const byPrivateThenScore = (a, b) => {
+    const ta = isTeamAccount(a) ? 1 : 0;
+    const tb = isTeamAccount(b) ? 1 : 0;
+    if (ta !== tb) return ta - tb; // private (0) before team (1)
+    return score(a) - score(b);
+  };
+
   // Separate normal and low-priority, excluding current active + extra-usage accounts
   const normal = config.accounts.filter((a) => a.priority !== 'low' && !excludeKey(a));
   const low = config.accounts.filter((a) => a.priority === 'low' && !excludeKey(a));
@@ -422,8 +437,8 @@ function pickNextAccount(config, state, liveUtil = {}, opts = {}) {
     for (const candidates of [fresh, exhausted]) {
       const viable = candidates.filter((a) => score(a) < UTIL_HARD_BLOCK);
       const blocked = candidates.filter((a) => score(a) >= UTIL_HARD_BLOCK);
-      const sorted = [...viable].sort((a, b) => score(a) - score(b));
-      const pool2 = sorted.length ? sorted : [...blocked].sort((a, b) => score(a) - score(b));
+      const sorted = [...viable].sort(byPrivateThenScore);
+      const pool2 = sorted.length ? sorted : [...blocked].sort(byPrivateThenScore);
 
       if (pool2.length > 0) {
         const best = pool2[0];
