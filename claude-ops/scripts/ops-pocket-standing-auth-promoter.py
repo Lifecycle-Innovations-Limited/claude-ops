@@ -211,7 +211,6 @@ def main() -> int:
     park_rules = load_park_rules()
     if not rules:
         log("no standing-auth rules configured")
-        return 0
 
     if DRY_RUN:
         promoted, parked, kept = partition_review(rules, park_rules, REVIEW.read_text())
