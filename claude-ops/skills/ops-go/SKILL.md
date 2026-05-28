@@ -283,3 +283,42 @@ When `gog calendar` fails, use `WebFetch` with the Google Calendar API as fallba
 ```
 WebFetch(url: "https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=<today>T00:00:00Z&timeMax=<today>T23:59:59Z")
 ```
+
+---
+
+## Ledger Integration
+
+**CLAIM_KEY:** `daily-brief:<YYYY-MM-DD>` (e.g. `daily-brief:2026-05-28`)
+
+### Pre-flight skip-check
+
+Before generating the briefing, check whether one was already produced today:
+
+```bash
+BRIEF_DATE=$(date +%Y-%m-%d)
+CLAIM_KEY="daily-brief:${BRIEF_DATE}"
+ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
+```
+
+If the query returns a `done` or `in_progress` entry, surface it to the user
+("Briefing already ran today at HH:MM — rerun?") instead of re-fetching all sources.
+
+### Claim + resolve
+
+```bash
+# Claim at briefing start
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "file" \
+  --status "in_progress" \
+  --title "Morning briefing ${BRIEF_DATE}" \
+  --ttl-sec 86400
+
+# Resolve after briefing is presented to the user
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "file" \
+  --status "done" \
+  --title "Morning briefing ${BRIEF_DATE}" \
+  --context "N fires, N PRs, N unread"
+```
