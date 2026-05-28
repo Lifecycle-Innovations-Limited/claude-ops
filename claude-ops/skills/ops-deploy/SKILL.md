@@ -218,3 +218,43 @@ When Vercel MCP tools are unavailable, use `WebFetch` with the Vercel API direct
 ```
 WebFetch(url: "https://api.vercel.com/v6/deployments?projectId=<id>&limit=5", headers: {"Authorization": "Bearer $VERCEL_TOKEN"})
 ```
+
+---
+
+## Ledger Integration
+
+**CLAIM_KEY:** `deploy:<project>:<env>:<YYYY-MM-DDTHH-MM>` (e.g. `deploy:healify-api:production:2026-05-28T09-00`)
+
+Keyed on project + environment + wall-clock window (truncated to the minute) so
+back-to-back deploys of the same project within the same minute are deduplicated.
+
+### Pre-flight skip-check
+
+```bash
+DEPLOY_TS=$(date +%Y-%m-%dT%H-%M)
+CLAIM_KEY="deploy:<project>:<env>:${DEPLOY_TS}"
+ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
+```
+
+If `in_progress` exists, a concurrent deploy is already running — abort and surface
+to the user. If `done` exists within the last hour, confirm before re-deploying.
+
+### Claim + resolve
+
+```bash
+# Claim when deploy pipeline starts
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "file" \
+  --status "in_progress" \
+  --title "Deploy: <project> → <env>" \
+  --ttl-sec 1800
+
+# Resolve after deploy completes or fails
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "file" \
+  --status "done" \
+  --title "Deploy: <project> → <env>" \
+  --context "succeeded|failed: <reason>"
+```

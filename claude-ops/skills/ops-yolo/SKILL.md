@@ -336,3 +336,44 @@ When YOLO dispatches fix agents or triggers deploys, use `Monitor` to stream CI 
 ### WebFetch/WebSearch — enrichment
 
 Use `WebFetch` to pull Grafana dashboards, Sentry event details, or AWS status pages when MCPs are unavailable. Use `WebSearch` to find context on production errors (e.g., known AWS outages).
+
+---
+
+## Ledger Integration
+
+**CLAIM_KEY:** `yolo:session:<YYYY-MM-DDTHH-MM>` — one claim per YOLO session window.
+
+Individual actions within the session (merges, fixes, deploys) each write their own
+typed claim via the relevant skill's ledger pattern (see `ops-merge`, `ops-fires`,
+`ops-deploy`). The session-level key tracks the overall autonomous run.
+
+### Pre-flight skip-check
+
+```bash
+SESSION_TS=$(date +%Y-%m-%dT%H-%M)
+CLAIM_KEY="yolo:session:${SESSION_TS}"
+ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
+```
+
+If another YOLO session is `in_progress`, surface it before starting a new one —
+two autonomous sessions running concurrently will conflict on shared resources.
+
+### Claim + resolve
+
+```bash
+# Claim at YOLO session start
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "file" \
+  --status "in_progress" \
+  --title "YOLO session ${SESSION_TS}" \
+  --ttl-sec 14400
+
+# Resolve at session end with summary
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "file" \
+  --status "done" \
+  --title "YOLO session ${SESSION_TS}" \
+  --context "N fires fixed, N PRs merged, N deploys triggered"
+```
