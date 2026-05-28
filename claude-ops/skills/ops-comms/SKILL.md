@@ -292,3 +292,42 @@ AskUserQuestion call 2 (only if "More..."):
 If all channels are configured, that's 6+ options — always batch. If only 3 channels are configured, "Read X" + "Read Y" + "Read Z" + "Send a message" = 4, fits in one call. The `voice` channel is configured iff `preferences.json` → `channels.voice` is present OR `default_channels` contains `"voice"`.
 
 Execute the selected action.
+
+---
+
+## Ledger Integration
+
+**CLAIM_KEY by channel and message unit:**
+- Slack thread: `slack:thread:<channel>:<ts>`
+- WhatsApp message: `slack:thread:wa:<jid>:<ts>` (reuse slack: namespace for threads)
+- Outbound draft (no inbound thread): `comms:draft:<channel>:<YYYY-MM-DDTHH-MM>`
+
+### Pre-flight skip-check
+
+```bash
+CLAIM_KEY="slack:thread:<channel>:<ts>"   # adjust per channel
+ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
+```
+
+Skip any message/thread where a `done` or `in_progress` entry exists. Surface
+`awaiting_sam` entries as "draft already staged — resend or edit?"
+
+### Claim + resolve
+
+```bash
+# Claim before drafting
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "draft" \
+  --status "in_progress" \
+  --title "Comms: <channel> — <brief description>" \
+  --ttl-sec 3600
+
+# After user approves + send fires
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "send" \
+  --status "done" \
+  --title "Comms: <channel> — <brief description>" \
+  --context "sent via <channel>"
+```

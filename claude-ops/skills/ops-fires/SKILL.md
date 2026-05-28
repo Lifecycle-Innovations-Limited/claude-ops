@@ -291,3 +291,43 @@ The ops-daemon surfaces two additional fire categories in `daemon-health.json`:
 
 `/ops:fires` lists both alongside Sentry / infra / CI issues. Push notifications are dispatched by the daemon on the first crossing of the threshold — not re-sent until the next day (credentials) or window rollover (rate limits).
 
+---
+
+## Ledger Integration
+
+**CLAIM_KEY:** `sentry:issue:<short_id>` (e.g. `sentry:issue:HEALIFY-1A2B`)
+
+For non-Sentry fires (infra, CI, credential expiry), use:
+- CI failure: `ci:run:<repo>:<run_id>`
+- Credential expiry: `credential:expiry:<service>`
+
+### Pre-flight skip-check
+
+```bash
+CLAIM_KEY="sentry:issue:<short_id>"
+ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
+```
+
+If `in_progress` or `done` exists, skip the issue. If `awaiting_sam` exists, surface
+it as "fix already staged — needs your decision."
+
+### Claim + resolve
+
+```bash
+# Claim when beginning to investigate/fix
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "fix" \
+  --status "in_progress" \
+  --title "Fire: <issue title>" \
+  --ttl-sec 7200
+
+# Resolve after fix is applied or escalated
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "fix" \
+  --status "done" \
+  --title "Fire: <issue title>" \
+  --context "fixed: <brief resolution> | escalated: <reason>"
+```
+
