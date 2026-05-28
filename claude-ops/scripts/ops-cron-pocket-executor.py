@@ -330,14 +330,27 @@ def spawn_worker(task: dict) -> dict | None:
     stderr_path = WORKER_LOGS / f"{worker_id}.err.log"
     prompt = build_worker_prompt(task)
 
-    cmd = [CLAUDE_BIN, "--dangerously-skip-permissions",
-           "--model", WORKER_MODEL, "-p", prompt]
+    # 2026-05-25: switched from `claude -p` (one-shot headless) to
+    # `claude --bg ... -p PROMPT` so workers appear in `claude agents`, are
+    # steerable via SendMessage, survive terminal disconnects, and Sam can
+    # attach/inspect live. Prompt MUST be passed as -p argument; stdin is
+    # ignored by --bg (would leave the session idle with "(send a prompt)").
     env = os.environ.copy()
     env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "0"
+    # Display name shown in `claude agents` list — short, categorical, NOT the
+    # full prompt. Sam corrected 2026-05-25: name field ≠ prompt field.
+    display_name = f"pocket: {(task.get('title') or task_id)[:60]}"
+    cmd = [CLAUDE_BIN, "--dangerously-skip-permissions", "--bg",
+           "--name", display_name,
+           "--effort", "high",
+           "--model", WORKER_MODEL,
+           "--add-dir", str(EXEC_CWD),
+           "-p", prompt]
 
     try:
         out_f = stdout_path.open("w")
         err_f = stderr_path.open("w")
+        # claude --bg returns immediately with session id on stdout, then detaches.
         proc = subprocess.Popen(
             cmd,
             cwd=str(EXEC_CWD),
@@ -347,6 +360,21 @@ def spawn_worker(task: dict) -> dict | None:
             stderr=err_f,
             start_new_session=True,
         )
+        # Wait briefly for it to detach + write its session id, then keep going.
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        # Parse session id from stdout (claude --bg prints `backgrounded · <hex8>`).
+        bg_session_id = None
+        try:
+            head = stdout_path.read_text()[:512]
+            import re as _re
+            m = _re.search(r"backgrounded[^a-f0-9]+([a-f0-9]{8,})", head)
+            if m:
+                bg_session_id = m.group(1)
+        except Exception:
+            pass
     except OSError as e:
         log(f"spawn failed for {task_id}: {e}")
         return None
@@ -361,6 +389,8 @@ def spawn_worker(task: dict) -> dict | None:
         "stdout": str(stdout_path),
         "stderr": str(stderr_path),
         "model": WORKER_MODEL,
+        "bg_session_id": bg_session_id,  # for SendMessage / claude attach
+        "spawn_mode": "claude-bg",
     }
     append_jsonl(SPAWN_LEDGER, {
         "ts": record["started_at"],
@@ -369,15 +399,50 @@ def spawn_worker(task: dict) -> dict | None:
         "pocket_task_id": task_id,
         "title": record["title"],
         "model": WORKER_MODEL,
+        "bg_session_id": bg_session_id,
+        "spawn_mode": "claude-bg",
     })
-    log(f"spawned {worker_id} pid={proc.pid} task={task_id}")
+    log(f"spawned {worker_id} pid={proc.pid} task={task_id} bg_session={bg_session_id or 'unknown'}")
     return record
 
+
+
+def _claude_agents_status_map() -> dict[str, str] | None:
+    """Returns {sessionId: status} for all claude --bg sessions visible to the
+    daemon. None if the query failed (never raises — reap must keep working)."""
+    try:
+        out = subprocess.run(
+            [CLAUDE_BIN, "agents", "--json"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=10,
+        )
+        if out.returncode != 0:
+            return None
+        d = json.loads(out.stdout or "[]")
+        sessions = d if isinstance(d, list) else d.get("sessions", []) or []
+        return {s.get("sessionId", ""): s.get("status", "?") for s in sessions if s.get("sessionId")}
+    except Exception:
+        return None
+
+
+def _bg_session_done(bg_session_id: str | None, agents_map: dict[str, str] | None) -> bool:
+    """A claude --bg session is 'done' when its session id no longer appears in
+    `claude agents --json` (daemon evicts completed sessions) OR status is
+    'completed'/'stopped'. Returns False if we have no session id or the daemon
+    query failed (can't tell)."""
+    if not bg_session_id or agents_map is None:
+        return False
+    full_key = next((k for k in agents_map if k.startswith(bg_session_id)), None)
+    if full_key is None:
+        return True
+    return agents_map.get(full_key, "?") in ("completed", "stopped", "done")
 
 def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
     """Check each in-flight worker. If exited, write done.json receipt
     and remove from registry. If past deadline, SIGTERM. Returns
     (completed_count, killed_count)."""
+    # Invalidate cached agents map at start of each reap pass.
+    reap_workers.__dict__.pop("_agents_map", None)
     completed = 0
     killed = 0
     now = int(time.time())
@@ -387,21 +452,73 @@ def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
         if not pid:
             del in_flight[worker_id]
             continue
-        alive = pid_alive(pid)
-        if alive and now > rec.get("deadline_epoch", now + 1):
-            log(f"worker {worker_id} pid={pid} timed out — SIGTERM")
-            try:
-                os.killpg(os.getpgid(pid), signal.SIGTERM)
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
-            killed += 1
-            continue
-        if alive:
-            continue
+        # For claude --bg workers, the spawned PID is just the shim that
+        # handed off to claude-daemon — it exits ~5s after spawn. PID-alive
+        # is meaningless. Use `claude agents --json` to query real session state.
+        bg_session_id = rec.get("bg_session_id")
+        spawn_mode = rec.get("spawn_mode", "")
+        if spawn_mode == "claude-bg":
+            # PID-alive is meaningless for bg workers; never fall through to legacy.
+            if not bg_session_id:
+                if now > rec.get("deadline_epoch", now + 1):
+                    log(f"worker {worker_id} claude-bg missing session id — timed out")
+                    killed += 1
+                    del in_flight[worker_id]
+                continue
+            # Lazy-init the agents map per reap pass.
+            if "_agents_map" not in reap_workers.__dict__:
+                reap_workers._agents_map = _claude_agents_status_map()
+            agents_map = reap_workers._agents_map
+            if not _bg_session_done(bg_session_id, agents_map):
+                # Still in-flight or daemon unreachable. Apply deadline timeout.
+                if now > rec.get("deadline_epoch", now + 1):
+                    log(f"worker {worker_id} bg={bg_session_id} timed out — stopping session")
+                    try:
+                        subprocess.run([CLAUDE_BIN, "stop", bg_session_id],
+                                       stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+                    except Exception:
+                        pass
+                    killed += 1
+                    continue
+                continue
+            # session disappeared from agents list → completed. Fall through to receipt.
+        else:
+            # Legacy claude -p path — PID check.
+            alive = pid_alive(pid)
+            if alive and now > rec.get("deadline_epoch", now + 1):
+                log(f"worker {worker_id} pid={pid} timed out — SIGTERM")
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGTERM)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+                killed += 1
+                continue
+            if alive:
+                continue
         task_id = rec.get("pocket_task_id", "unknown")
         stdout_path = Path(rec.get("stdout", ""))
         summary = ""
-        if stdout_path.exists():
+        # For claude --bg workers, the shim stdout is uninteresting (just session
+        # banner). Pull the real conversation output from `claude logs <session>`.
+        bg_session_id = rec.get("bg_session_id")
+        spawn_mode = rec.get("spawn_mode", "")
+        if spawn_mode == "claude-bg" and bg_session_id:
+            # Daemon takes a few seconds to flush session output after stop.
+            # Retry up to 3× with backoff before giving up.
+            for attempt in range(3):
+                try:
+                    logs = subprocess.run(
+                        [CLAUDE_BIN, "logs", bg_session_id],
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    if logs.returncode == 0 and len(logs.stdout.strip()) > 200:
+                        summary = logs.stdout[-4000:]
+                        break
+                except Exception as e:
+                    log(f"claude logs fetch failed for {bg_session_id} (attempt {attempt+1}): {e}")
+                time.sleep(2 * (attempt + 1))  # 2s, 4s, 6s
+        if not summary and stdout_path.exists():
             try:
                 txt = stdout_path.read_text()
                 summary = txt[-4000:]
