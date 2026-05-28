@@ -234,3 +234,42 @@ Use `WebSearch` to find known solutions for recurring errors (e.g., "AWS RDS con
 ### LSP — code navigation for fix agents
 
 When dispatching fix agents, use `LSP` to find symbol definitions, references, and call hierarchies. This helps agents navigate unfamiliar codebases faster than grep.
+
+---
+
+## Ledger Integration
+
+**CLAIM_KEY by issue type:**
+- Sentry: `sentry:issue:<short_id>`
+- GitHub issue: `gh:pr:<owner>/<repo>#<number>` (reused for issues when no PR exists)
+- Infra alert: `ci:run:<repo>:<run_id>`
+
+### Pre-flight skip-check
+
+```bash
+CLAIM_KEY="sentry:issue:<short_id>"   # adjust per issue type
+ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
+```
+
+Skip issues with `in_progress` or `done`. Present `awaiting_sam` issues at the
+top of the triage board as "needs your decision."
+
+### Claim + resolve
+
+```bash
+# Claim when opening a triage pass on an issue
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "fix" \
+  --status "in_progress" \
+  --title "Triage: <issue title>" \
+  --ttl-sec 7200
+
+# Resolve after fix dispatched or issue escalated
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "fix" \
+  --status "done" \
+  --title "Triage: <issue title>" \
+  --context "fix dispatched|escalated|snoozed: <reason>"
+```
