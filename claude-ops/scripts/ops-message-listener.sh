@@ -59,7 +59,8 @@ json.dump(data, open('$STATE_FILE', 'w'))
 # ── Append messages to queue ──────────────────────────────────────────────
 append_to_queue() {
   local new_msgs_json="$1"
-  python3 -c "
+  # Pass JSON via stdin to avoid triple-quote shell injection (Bugbot issue #14328751/1).
+  printf '%s' "$new_msgs_json" | python3 -c "
 import json, sys
 from datetime import datetime, timezone
 
@@ -69,7 +70,7 @@ try:
 except:
     queue = {'messages': [], 'last_updated': None}
 
-new_msgs = json.loads('''$new_msgs_json''')
+new_msgs = json.load(sys.stdin)
 # Dedup by message id
 existing_ids = {m.get('id') for m in queue['messages']}
 added = 0
@@ -229,7 +230,7 @@ print(max(ts) if ts else '$WA_LAST_SEEN')
   if [[ "$TG_COUNT" -gt 0 ]]; then
     ADDED=$(append_to_queue "$TG_MSGS")
     log "Telegram: $TG_COUNT new messages (queued $ADDED, dispatching to $TG_TARGET_SESSION)"
-    dispatch_telegram "$TG_MSGS"
+    dispatch_telegram "$TG_MSGS" || true
     TG_LAST_UPDATE_ID=$(echo "$TG_MSGS" | python3 -c "
 import json, sys
 msgs = json.load(sys.stdin)
