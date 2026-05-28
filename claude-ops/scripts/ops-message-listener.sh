@@ -91,18 +91,18 @@ print(added)
 # ── Dispatch Telegram messages to target session ───────────────────────────
 dispatch_telegram() {
   local new_msgs_json="$1"
-  python3 -c "
+  printf '%s' "$new_msgs_json" | python3 -c "
 import json, sys
-msgs = json.loads('''$new_msgs_json''')
+msgs = json.load(sys.stdin)
 for msg in msgs:
     from_user = msg.get('from', 'unknown')
-    text = msg.get('text', '')
+    text = msg.get('text', '').replace('\n', '\\\\n')
     print(f'telegram:{from_user}:{text}')
-" 2>/dev/null | while read dispatch_line; do
+" 2>/dev/null | while IFS= read -r dispatch_line; do
     if [[ -n "$dispatch_line" ]]; then
       ops-bg send "$TG_TARGET_SESSION" "$dispatch_line" 2>/dev/null || log "dispatch failed: $dispatch_line"
     fi
-  done
+  done || true
 }
 
 # ── Poll WhatsApp ─────────────────────────────────────────────────────────

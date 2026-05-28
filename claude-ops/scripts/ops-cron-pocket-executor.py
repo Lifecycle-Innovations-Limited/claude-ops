@@ -340,7 +340,7 @@ def spawn_worker(task: dict) -> dict | None:
     # Display name shown in `claude agents` list — short, categorical, NOT the
     # full prompt. Sam corrected 2026-05-25: name field ≠ prompt field.
     display_name = f"pocket: {(task.get('title') or task_id)[:60]}"
-    cmd = [CLAUDE_BIN, "--bg",
+    cmd = [CLAUDE_BIN, "--dangerously-skip-permissions", "--bg",
            "--name", display_name,
            "--effort", "high",
            "--model", WORKER_MODEL,
@@ -437,11 +437,11 @@ def _bg_session_done(bg_session_id: str | None, agents_map: dict[str, str]) -> b
     return agents_map.get(full_key, "?") in ("completed", "stopped", "done")
 
 def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
-    # Invalidate cached agents map at start of each reap pass.
-    reap_workers.__dict__.pop("_agents_map", None)
     """Check each in-flight worker. If exited, write done.json receipt
     and remove from registry. If past deadline, SIGTERM. Returns
     (completed_count, killed_count)."""
+    # Invalidate cached agents map at start of each reap pass.
+    reap_workers.__dict__.pop("_agents_map", None)
     completed = 0
     killed = 0
     now = int(time.time())
