@@ -407,9 +407,9 @@ def spawn_worker(task: dict) -> dict | None:
 
 
 
-def _claude_agents_status_map() -> dict[str, str]:
+def _claude_agents_status_map() -> dict[str, str] | None:
     """Returns {sessionId: status} for all claude --bg sessions visible to the
-    daemon. Empty dict on failure (never raises — reap must keep working)."""
+    daemon. None if the query failed (never raises — reap must keep working)."""
     try:
         out = subprocess.run(
             [CLAUDE_BIN, "agents", "--json"],
@@ -417,19 +417,20 @@ def _claude_agents_status_map() -> dict[str, str]:
             capture_output=True, text=True, timeout=10,
         )
         if out.returncode != 0:
-            return {}
+            return None
         d = json.loads(out.stdout or "[]")
         sessions = d if isinstance(d, list) else d.get("sessions", []) or []
         return {s.get("sessionId", ""): s.get("status", "?") for s in sessions if s.get("sessionId")}
     except Exception:
-        return {}
+        return None
 
 
-def _bg_session_done(bg_session_id: str | None, agents_map: dict[str, str]) -> bool:
+def _bg_session_done(bg_session_id: str | None, agents_map: dict[str, str] | None) -> bool:
     """A claude --bg session is 'done' when its session id no longer appears in
     `claude agents --json` (daemon evicts completed sessions) OR status is
-    'completed'/'stopped'. Returns False if we have no session id (can't tell)."""
-    if not bg_session_id:
+    'completed'/'stopped'. Returns False if we have no session id or the daemon
+    query failed (can't tell)."""
+    if not bg_session_id or agents_map is None:
         return False
     full_key = next((k for k in agents_map if k.startswith(bg_session_id)), None)
     if full_key is None:
@@ -456,13 +457,19 @@ def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
         # is meaningless. Use `claude agents --json` to query real session state.
         bg_session_id = rec.get("bg_session_id")
         spawn_mode = rec.get("spawn_mode", "")
-        if spawn_mode == "claude-bg" and bg_session_id:
+        if spawn_mode == "claude-bg":
+            # PID-alive is meaningless for bg workers; never fall through to legacy.
+            if not bg_session_id:
+                if now > rec.get("deadline_epoch", now + 1):
+                    log(f"worker {worker_id} claude-bg missing session id — timed out")
+                    killed += 1
+                continue
             # Lazy-init the agents map per reap pass.
             if "_agents_map" not in reap_workers.__dict__:
                 reap_workers._agents_map = _claude_agents_status_map()
             agents_map = reap_workers._agents_map
             if not _bg_session_done(bg_session_id, agents_map):
-                # Still in-flight or daemon stopped responding. Apply deadline timeout.
+                # Still in-flight or daemon unreachable. Apply deadline timeout.
                 if now > rec.get("deadline_epoch", now + 1):
                     log(f"worker {worker_id} bg={bg_session_id} timed out — stopping session")
                     try:
