@@ -21,10 +21,12 @@ Env:
 """
 
 from __future__ import annotations
+import importlib.util
 import json, os, re, sys
 from pathlib import Path
 from datetime import datetime, timezone
 
+SCRIPT_DIR = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", "/var/lib/pocket-pipeline"))
 REVIEW = STATE_DIR / "review.jsonl"
 TASKS = STATE_DIR / "tasks.jsonl"
@@ -107,6 +109,17 @@ def load_park_rules() -> list[dict]:
         return []
 
 
+def _load_watcher():
+    """Reuse watcher's seen.json helpers and pocket_state_lock (shared state dir)."""
+    path = SCRIPT_DIR / "ops-cron-pocket-watcher.py"
+    spec = importlib.util.spec_from_file_location("ops_cron_pocket_watcher", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load watcher module at {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def match_rule(rules: list[dict], task: dict) -> dict | None:
     hay = (
         task.get("title", "")
@@ -137,7 +150,6 @@ def main() -> int:
         log("no standing-auth rules configured")
         return 0
 
-    review_rows = []
     promoted = []
     parked = []
     kept = []
@@ -161,10 +173,41 @@ def main() -> int:
         else:
             kept.append(line)
 
-    # Log parked items (kept OUT of both review re-queue and executor).
-    if parked:
-        log(f"parked {len(parked)} item(s) — owned elsewhere, not promoting")
-        if not DRY_RUN:
+    review_was = len(kept) + len(promoted) + len(parked)
+
+    if DRY_RUN:
+        if parked:
+            log(f"parked {len(parked)} item(s) — owned elsewhere, not promoting")
+        if promoted:
+            log(f"promoting {len(promoted)} ASK→ACT under standing-auth rules")
+            for t, m in promoted:
+                log(
+                    f"  (dry-run) PROMOTE id={t.get('id')} rule={m['id']} title={t.get('title', '')[:60]}"
+                )
+        elif not parked:
+            log("0 promoted (no matches)")
+        return 0
+
+    w = _load_watcher()
+    with w.pocket_state_lock():
+        seen = w.load_seen()
+        fresh_promoted: list[tuple[dict, dict]] = []
+        already_promoted: list[tuple[dict, dict]] = []
+        for t, m in promoted:
+            tid = t.get("id")
+            if isinstance(tid, str) and tid and tid in seen:
+                already_promoted.append((t, m))
+            else:
+                fresh_promoted.append((t, m))
+        if already_promoted:
+            log(
+                f"skip {len(already_promoted)} already-promoted id(s) in seen.json "
+                "(crash recovery)"
+            )
+
+        # Log parked items (kept OUT of both review re-queue and executor).
+        if parked:
+            log(f"parked {len(parked)} item(s) — owned elsewhere, not promoting")
             with PARKED.open("a") as pf:
                 for t, m in parked:
                     pf.write(
@@ -179,7 +222,6 @@ def main() -> int:
                         )
                         + "\n"
                     )
-            # Also drop a resolved-audit row so the digest stops surfacing it.
             with RESOLVED.open("a") as rf:
                 for t, m in parked:
                     rf.write(
@@ -196,60 +238,52 @@ def main() -> int:
                         + "\n"
                     )
 
-    if not promoted:
-        # Even with no promotions, if we parked items we must rewrite review.jsonl
-        # to drop them (kept[] already excludes parked rows).
-        if parked and not DRY_RUN:
-            with REVIEW.open("w") as f:
-                for l in kept:
-                    f.write(l + "\n")
-            log(f"0 promoted; {len(parked)} parked + removed from review")
-        else:
-            log("0 promoted (no matches)")
-        return 0
+        if not promoted:
+            if parked:
+                with REVIEW.open("w") as f:
+                    for l in kept:
+                        f.write(l + "\n")
+                log(f"0 promoted; {len(parked)} parked + removed from review")
+            else:
+                log("0 promoted (no matches)")
+            return 0
 
-    log(f"promoting {len(promoted)} ASK→ACT under standing-auth rules")
+        if fresh_promoted:
+            log(f"promoting {len(fresh_promoted)} ASK→ACT under standing-auth rules")
+            TASKS.parent.mkdir(parents=True, exist_ok=True)
+            with TASKS.open("a") as f:
+                for t, m in fresh_promoted:
+                    t["verdict"] = "ACT"
+                    t["promoted_by"] = "standing-auth-promoter"
+                    t["promoted_rule"] = m["id"]
+                    t["promoted_at"] = now_iso()
+                    f.write(json.dumps(t) + "\n")
+                    log(f"  → tasks.jsonl id={t.get('id')} rule={m['id']}")
+                    tid = t.get("id")
+                    if isinstance(tid, str) and tid:
+                        w._seen_add(seen, tid)
+                        w.save_seen(seen)
 
-    if DRY_RUN:
-        for t, m in promoted:
-            log(
-                f"  (dry-run) PROMOTE id={t.get('id')} rule={m['id']} title={t.get('title', '')[:60]}"
-            )
-        return 0
+            with RESOLVED.open("a") as f:
+                for t, m in fresh_promoted:
+                    f.write(
+                        json.dumps(
+                            {
+                                "id": t.get("id"),
+                                "resolved_at": now_iso(),
+                                "verdict": "auto-approve",
+                                "resolver": "standing-auth-promoter",
+                                "rule_id": m["id"],
+                                "reason": m.get("reason", ""),
+                            }
+                        )
+                        + "\n"
+                    )
 
-    # 1) Append promoted to tasks.jsonl (executor will spawn workers)
-    TASKS.parent.mkdir(parents=True, exist_ok=True)
-    with TASKS.open("a") as f:
-        for t, m in promoted:
-            t["verdict"] = "ACT"
-            t["promoted_by"] = "standing-auth-promoter"
-            t["promoted_rule"] = m["id"]
-            t["promoted_at"] = now_iso()
-            f.write(json.dumps(t) + "\n")
-            log(f"  → tasks.jsonl id={t.get('id')} rule={m['id']}")
-
-    # 2) Append audit to approval-resolved.jsonl
-    with RESOLVED.open("a") as f:
-        for t, m in promoted:
-            f.write(
-                json.dumps(
-                    {
-                        "id": t.get("id"),
-                        "resolved_at": now_iso(),
-                        "verdict": "auto-approve",
-                        "resolver": "standing-auth-promoter",
-                        "rule_id": m["id"],
-                        "reason": m.get("reason", ""),
-                    }
-                )
-                + "\n"
-            )
-
-    # 3) Rewrite review.jsonl without promoted rows
-    with REVIEW.open("w") as f:
-        for l in kept:
-            f.write(l + "\n")
-    log(f"review.jsonl now has {len(kept)} rows (was {len(kept) + len(promoted)})")
+        with REVIEW.open("w") as f:
+            for l in kept:
+                f.write(l + "\n")
+        log(f"review.jsonl now has {len(kept)} rows (was {review_was})")
     return 0
 
 
