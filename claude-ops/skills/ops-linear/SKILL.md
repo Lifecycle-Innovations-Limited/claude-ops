@@ -158,3 +158,39 @@ When Linear MCP tools hit quota limits or fail, fall back to `WebFetch` with the
 ```
 WebFetch(url: "https://api.linear.app/graphql", method: "POST", headers: {"Authorization": "$LINEAR_API_KEY"}, body: '{"query":"{ issues(filter: {cycle: {id: {eq: \"<id>\"}}}}) { nodes { id title state { name } } } }"}')
 ```
+
+---
+
+## Ledger Integration
+
+**CLAIM_KEY:** `linear:issue:<identifier>` (e.g. `linear:issue:HEA-123`)
+
+### Pre-flight skip-check
+
+```bash
+CLAIM_KEY="linear:issue:<identifier>"
+ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
+```
+
+If `in_progress` or `done` exists, skip — another session or Perplexity already
+acted on this issue. Surface `awaiting_sam` entries as "update already staged."
+
+### Claim + resolve
+
+```bash
+# Claim when creating, updating, or triaging a Linear issue
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "file" \
+  --status "in_progress" \
+  --title "Linear: <identifier> — <title>" \
+  --ttl-sec 3600
+
+# Resolve after Linear state is updated
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "file" \
+  --status "done" \
+  --title "Linear: <identifier> — <title>" \
+  --context "status→<new_state> | assignee→<assignee>"
+```
