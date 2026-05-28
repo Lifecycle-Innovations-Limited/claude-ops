@@ -10,9 +10,10 @@ LOG_DIR="$DATA_DIR/logs"
 LOG="$LOG_DIR/message-listener.log"
 QUEUE_FILE="$DATA_DIR/inbox-queue.json"
 HEALTH_FILE="$DATA_DIR/listener-health.txt"
-STATE_FILE="$DATA_DIR/listener-state.json"
+STATE_FILE="$DATA_DIR/tg-orchestrator-state.json"
 BRIDGE_DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
 POLL_INTERVAL="${OPS_LISTENER_POLL_INTERVAL:-60}"
+TG_TARGET_SESSION="${TELEGRAM_TARGET_SESSION:-ebfd4ba2}"
 
 mkdir -p "$LOG_DIR" "$DATA_DIR"
 
@@ -35,19 +36,22 @@ load_state() {
 import json, os
 f = '$STATE_FILE'
 if os.path.exists(f):
-    data = json.load(open(f))
+    try:
+        data = json.load(open(f))
+        offset = data.get('offset', 0)
+        print(str(offset))
+    except:
+        print('0')
 else:
-    data = {'wa_last_seen': None, 'tg_last_seen': None}
-print(data.get('wa_last_seen') or '')
-print(data.get('tg_last_seen') or '')
-" 2>/dev/null || printf '\n\n'
+    print('0')
+" 2>/dev/null || echo '0'
 }
 
 save_state() {
-  local wa_ts="$1" tg_ts="$2"
+  local tg_offset="$1"
   python3 -c "
 import json
-data = {'wa_last_seen': '$wa_ts', 'tg_last_seen': '$tg_ts'}
+data = {'offset': int($tg_offset)}
 json.dump(data, open('$STATE_FILE', 'w'))
 " 2>/dev/null || true
 }
@@ -55,7 +59,8 @@ json.dump(data, open('$STATE_FILE', 'w'))
 # ── Append messages to queue ──────────────────────────────────────────────
 append_to_queue() {
   local new_msgs_json="$1"
-  python3 -c "
+  # Pass JSON via stdin to avoid triple-quote shell injection (Bugbot issue #14328751/1).
+  printf '%s' "$new_msgs_json" | python3 -c "
 import json, sys
 from datetime import datetime, timezone
 
@@ -65,7 +70,7 @@ try:
 except:
     queue = {'messages': [], 'last_updated': None}
 
-new_msgs = json.loads('''$new_msgs_json''')
+new_msgs = json.load(sys.stdin)
 # Dedup by message id
 existing_ids = {m.get('id') for m in queue['messages']}
 added = 0
@@ -82,6 +87,23 @@ queue['last_updated'] = datetime.now(timezone.utc).isoformat()
 json.dump(queue, open(queue_file, 'w'), indent=2)
 print(added)
 " 2>/dev/null || echo 0
+}
+
+# ── Dispatch Telegram messages to target session ───────────────────────────
+dispatch_telegram() {
+  local new_msgs_json="$1"
+  printf '%s' "$new_msgs_json" | python3 -c "
+import json, sys
+msgs = json.load(sys.stdin)
+for msg in msgs:
+    from_user = msg.get('from', 'unknown')
+    text = msg.get('text', '').replace('\n', '\\\\n')
+    print(f'telegram:{from_user}:{text}')
+" 2>/dev/null | while IFS= read -r dispatch_line; do
+    if [[ -n "$dispatch_line" ]]; then
+      ops-bg send "$TG_TARGET_SESSION" "$dispatch_line" 2>/dev/null || log "dispatch failed: $dispatch_line"
+    fi
+  done || true
 }
 
 # ── Poll WhatsApp ─────────────────────────────────────────────────────────
@@ -118,23 +140,8 @@ print(json.dumps(filtered))
 }
 
 # ── Poll Telegram ─────────────────────────────────────────────────────────
-# DEPRECATED: Telegram polling is now handled by the telegram-channel MCP server
-# (telegram-server/channel-mcp.mjs). Two simultaneous consumers of getUpdates
-# on the same bot token steal each other's updates (Telegram delivers each
-# update to exactly ONE long-poller — the 409 / offset-contention bug).
-#
-# This branch exits immediately when OPS_DISABLE_TG_POLLER=1 (default going
-# forward). Set that flag in Doppler or your shell env when the channel MCP
-# is registered. WhatsApp polling in this listener is unaffected.
 poll_telegram() {
   local since_update_id="${1:-0}"
-
-  # Gate: skip if the channel MCP is taking over Telegram polling.
-  if [[ "${OPS_DISABLE_TG_POLLER:-0}" == "1" ]]; then
-    echo "[]"
-    return
-  fi
-
   local tg_token="${TELEGRAM_BOT_TOKEN:-}"
 
   if [[ -z "$tg_token" ]]; then
@@ -187,14 +194,13 @@ log "START: ops-message-listener polling every ${POLL_INTERVAL}s"
 write_health "polling" "starting"
 
 # Load initial state
-read -r WA_LAST_SEEN TG_LAST_UPDATE_ID <<< "$(load_state | tr '\n' ' ')"
-WA_LAST_SEEN="${WA_LAST_SEEN:-}"
+TG_LAST_UPDATE_ID=$(load_state)
 TG_LAST_UPDATE_ID="${TG_LAST_UPDATE_ID:-0}"
 
+log "Loaded Telegram offset: $TG_LAST_UPDATE_ID"
+
 # Bootstrap WA since: use 2 minutes ago on first run
-if [[ -z "$WA_LAST_SEEN" ]]; then
-  WA_LAST_SEEN=$(date -u -v-2M "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "2 minutes ago" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u "+%Y-%m-%dT%H:%M:%SZ")
-fi
+WA_LAST_SEEN=$(date -u -d "2 minutes ago" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u "+%Y-%m-%dT%H:%M:%SZ")
 
 POLL_COUNT=0
 while true; do
@@ -223,7 +229,8 @@ print(max(ts) if ts else '$WA_LAST_SEEN')
 
   if [[ "$TG_COUNT" -gt 0 ]]; then
     ADDED=$(append_to_queue "$TG_MSGS")
-    log "Telegram: $TG_COUNT new messages (queued $ADDED)"
+    log "Telegram: $TG_COUNT new messages (queued $ADDED, dispatching to $TG_TARGET_SESSION)"
+    dispatch_telegram "$TG_MSGS" || true
     TG_LAST_UPDATE_ID=$(echo "$TG_MSGS" | python3 -c "
 import json, sys
 msgs = json.load(sys.stdin)
@@ -233,13 +240,13 @@ print(max(ids) if ids else $TG_LAST_UPDATE_ID)
   fi
 
   # ── Save state ──────────────────────────────────────────────────────────
-  save_state "$WA_LAST_SEEN" "$TG_LAST_UPDATE_ID"
+  save_state "$TG_LAST_UPDATE_ID"
 
   # ── Write health ──────────────────────────────────────────────────────
   write_health "polling" "poll=$POLL_COUNT wa_new=$WA_COUNT tg_new=$TG_COUNT ts=$POLL_TS"
 
   if [[ $(( POLL_COUNT % 10 )) -eq 0 ]]; then
-    log "Heartbeat: poll #$POLL_COUNT — wa_seen=$WA_LAST_SEEN tg_offset=$TG_LAST_UPDATE_ID"
+    log "Heartbeat: poll #$POLL_COUNT — tg_offset=$TG_LAST_UPDATE_ID"
   fi
 
   sleep "$POLL_INTERVAL"
