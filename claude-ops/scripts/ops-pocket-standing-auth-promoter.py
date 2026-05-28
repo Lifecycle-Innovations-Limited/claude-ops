@@ -22,9 +22,18 @@ Env:
 
 from __future__ import annotations
 import importlib.util
-import json, os, re, sys
+import json, os, re, sys, tempfile
 from pathlib import Path
 from datetime import datetime, timezone
+
+# ── Mobile / SSH detection ────────────────────────────────────────────────────
+_IS_MOBILE: bool = bool(
+    os.environ.get("SSH_CONNECTION")
+    or os.environ.get("SSH_CLIENT")
+    or os.environ.get("SSH_TTY")
+    or os.environ.get("OPS_MOBILE") == "1"
+    or (os.environ.get("COLUMNS", "").isdigit() and int(os.environ["COLUMNS"]) < 80)
+)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 HOME = Path(os.path.expanduser("~"))
@@ -41,7 +50,12 @@ DRY_RUN = os.environ.get("POCKET_DRY_RUN") == "1"
 
 
 def log(msg: str) -> None:
-    print(f"{LOG_PREFIX} {msg}", file=sys.stderr)
+    """Log to stderr, suppressing banners/colors in mobile/SSH mode."""
+    if _IS_MOBILE:
+        # Mobile mode: plain, prefix-free, one line
+        print(msg, file=sys.stderr)
+    else:
+        print(f"{LOG_PREFIX} {msg}", file=sys.stderr)
 
 
 def now_iso() -> str:
@@ -148,6 +162,8 @@ def partition_review(
 
 
 def match_rule(rules: list[dict], task: dict) -> dict | None:
+    """Return first matching rule or None. Case-insensitive via re.IGNORECASE
+    (never lowercase the pattern — that breaks word-boundary anchors like \\b)."""
     hay = (
         task.get("title", "")
         + "\n"
@@ -156,15 +172,35 @@ def match_rule(rules: list[dict], task: dict) -> dict | None:
         + task.get("summary", "")
         + "\n"
         + task.get("transcript", "")
-    ).lower()
+    )
     for r in rules:
         for pat in r.get("match_any", []):
             try:
-                if re.search(pat.lower(), hay):
+                if re.search(pat, hay, re.IGNORECASE):
                     return r
             except re.error:
                 continue
     return None
+
+
+def _atomic_write_review(lines: list[str]) -> None:
+    """Atomically rewrite review.jsonl using a temp file + rename to avoid
+    data loss if the process crashes mid-write (fixes Bugbot atomic-RMW issue)."""
+    REVIEW.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=REVIEW.parent, prefix=".review-tmp-", suffix=".jsonl"
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            for line in lines:
+                f.write(line + "\n")
+        os.replace(tmp_path, REVIEW)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def main() -> int:
@@ -178,9 +214,7 @@ def main() -> int:
         return 0
 
     if DRY_RUN:
-        promoted, parked, kept = partition_review(
-            rules, park_rules, REVIEW.read_text()
-        )
+        promoted, parked, kept = partition_review(rules, park_rules, REVIEW.read_text())
         review_was = len(kept) + len(promoted) + len(parked)
         if parked:
             log(f"parked {len(parked)} item(s) — owned elsewhere, not promoting")
@@ -196,9 +230,7 @@ def main() -> int:
 
     w = _load_watcher()
     with w.pocket_state_lock():
-        promoted, parked, kept = partition_review(
-            rules, park_rules, REVIEW.read_text()
-        )
+        promoted, parked, kept = partition_review(rules, park_rules, REVIEW.read_text())
         review_was = len(kept) + len(promoted) + len(parked)
         seen = w.load_seen()
         fresh_promoted: list[tuple[dict, dict]] = []
@@ -250,9 +282,7 @@ def main() -> int:
 
         if not promoted:
             if parked:
-                with REVIEW.open("w") as f:
-                    for l in kept:
-                        f.write(l + "\n")
+                _atomic_write_review(kept)
                 log(f"0 promoted; {len(parked)} parked + removed from review")
             else:
                 log("0 promoted (no matches)")
@@ -290,9 +320,7 @@ def main() -> int:
                         + "\n"
                     )
 
-        with REVIEW.open("w") as f:
-            for l in kept:
-                f.write(l + "\n")
+        _atomic_write_review(kept)
         log(f"review.jsonl now has {len(kept)} rows (was {review_was})")
     return 0
 
