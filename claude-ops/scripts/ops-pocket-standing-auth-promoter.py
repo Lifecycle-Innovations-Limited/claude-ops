@@ -16,7 +16,7 @@ The original ASK row is preserved in approval-resolved.jsonl with verdict=
 Idempotent: tracks promoted task ids in seen.json (shared with watcher).
 
 Env:
-  POCKET_STATE_DIR     default /var/lib/pocket-pipeline
+  POCKET_STATE_DIR     default ~/.claude/state/pocket
   POCKET_DRY_RUN=1     log decisions, don't mutate files
 """
 
@@ -27,7 +27,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", "/var/lib/pocket-pipeline"))
+HOME = Path(os.path.expanduser("~"))
+STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", HOME / ".claude/state/pocket"))
 REVIEW = STATE_DIR / "review.jsonl"
 TASKS = STATE_DIR / "tasks.jsonl"
 RESOLVED = STATE_DIR / "approval-resolved.jsonl"
@@ -120,6 +121,32 @@ def _load_watcher():
     return mod
 
 
+def partition_review(
+    rules: list[dict], park_rules: list[dict], review_text: str
+) -> tuple[list[tuple[dict, dict]], list[tuple[dict, dict]], list[str]]:
+    promoted: list[tuple[dict, dict]] = []
+    parked: list[tuple[dict, dict]] = []
+    kept: list[str] = []
+    for line in review_text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            t = json.loads(line)
+        except json.JSONDecodeError:
+            kept.append(line)
+            continue
+        park_match = match_rule(park_rules, t)
+        if park_match:
+            parked.append((t, park_match))
+            continue
+        match = match_rule(rules, t)
+        if match:
+            promoted.append((t, match))
+        else:
+            kept.append(line)
+    return promoted, parked, kept
+
+
 def match_rule(rules: list[dict], task: dict) -> dict | None:
     hay = (
         task.get("title", "")
@@ -150,32 +177,11 @@ def main() -> int:
         log("no standing-auth rules configured")
         return 0
 
-    promoted = []
-    parked = []
-    kept = []
-
-    for line in REVIEW.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            t = json.loads(line)
-        except json.JSONDecodeError:
-            kept.append(line)
-            continue
-        # PARK beats PROMOTE — owned by another principal, keep out of executor.
-        park_match = match_rule(park_rules, t)
-        if park_match:
-            parked.append((t, park_match))
-            continue
-        match = match_rule(rules, t)
-        if match:
-            promoted.append((t, match))
-        else:
-            kept.append(line)
-
-    review_was = len(kept) + len(promoted) + len(parked)
-
     if DRY_RUN:
+        promoted, parked, kept = partition_review(
+            rules, park_rules, REVIEW.read_text()
+        )
+        review_was = len(kept) + len(promoted) + len(parked)
         if parked:
             log(f"parked {len(parked)} item(s) — owned elsewhere, not promoting")
         if promoted:
@@ -190,6 +196,10 @@ def main() -> int:
 
     w = _load_watcher()
     with w.pocket_state_lock():
+        promoted, parked, kept = partition_review(
+            rules, park_rules, REVIEW.read_text()
+        )
+        review_was = len(kept) + len(promoted) + len(parked)
         seen = w.load_seen()
         fresh_promoted: list[tuple[dict, dict]] = []
         already_promoted: list[tuple[dict, dict]] = []
