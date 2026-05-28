@@ -463,6 +463,7 @@ def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
                 if now > rec.get("deadline_epoch", now + 1):
                     log(f"worker {worker_id} claude-bg missing session id — timed out")
                     killed += 1
+                    del in_flight[worker_id]
                 continue
             # Lazy-init the agents map per reap pass.
             if "_agents_map" not in reap_workers.__dict__:
