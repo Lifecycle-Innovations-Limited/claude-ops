@@ -867,3 +867,50 @@ After processing, offer to schedule recurring inbox checks via `AskUserQuestion`
   [Schedule inbox check every 2 hours]  [Schedule morning + evening]  [No schedule]
 ```
 Use `CronCreate` if selected. Show existing schedules with `CronList`.
+
+---
+
+## Ledger Integration
+
+**CLAIM_KEY per thread:** `gmail:thread:<thread_id>`
+
+Gmail threads are the primary unit. Each thread gets its own claim so parallel
+agents or Perplexity don't process the same thread twice.
+
+### Pre-flight skip-check (per thread)
+
+```bash
+CLAIM_KEY="gmail:thread:<thread_id>"
+ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
+```
+
+Skip threads where the query returns `in_progress` or `done`. Surface `awaiting_sam`
+entries to the user as "already drafted — approve or rework?"
+
+### Claim + resolve (per thread)
+
+```bash
+# Claim before drafting a reply
+ledger write \
+  --claim-key "gmail:thread:<thread_id>" \
+  --kind "draft" \
+  --status "in_progress" \
+  --title "Reply: <subject>" \
+  --ttl-sec 7200
+
+# Resolve after draft is shown to user
+ledger write \
+  --claim-key "gmail:thread:<thread_id>" \
+  --kind "draft" \
+  --status "awaiting_sam" \
+  --title "Reply: <subject>" \
+  --context "Draft staged — awaiting approval"
+
+# Resolve after user sends or skips
+ledger write \
+  --claim-key "gmail:thread:<thread_id>" \
+  --kind "draft" \
+  --status "done" \
+  --title "Reply: <subject>" \
+  --context "sent|skipped"
+```

@@ -501,3 +501,39 @@ Create a `TaskCreate` for the overall merge pipeline and individual tasks per PR
 ### WebSearch — CI failure context
 
 When a fixer agent encounters an obscure CI failure, use `WebSearch` to find known issues (e.g., npm registry outages, GitHub Actions incidents, flaky test patterns).
+
+---
+
+## Ledger Integration
+
+**CLAIM_KEY:** `gh:pr:<owner>/<repo>#<number>` (e.g. `gh:pr:your-org/your-repo#42`)
+
+### Pre-flight skip-check
+
+```bash
+CLAIM_KEY="gh:pr:<owner>/<repo>#<number>"
+ledger query --claim-key "$CLAIM_KEY" --since=-PT24H
+```
+
+If `done` exists, the PR was already merged or closed this session — skip. If
+`in_progress` exists from another agent, do not attempt a concurrent merge.
+
+### Claim + resolve
+
+```bash
+# Claim when beginning CI fix or merge flow for a PR
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "merge" \
+  --status "in_progress" \
+  --title "Merge: <repo>#<number> — <PR title>" \
+  --ttl-sec 3600
+
+# Resolve after merge completes or is skipped
+ledger write \
+  --claim-key "$CLAIM_KEY" \
+  --kind "merge" \
+  --status "done" \
+  --title "Merge: <repo>#<number> — <PR title>" \
+  --context "merged|skipped: <reason>"
+```
