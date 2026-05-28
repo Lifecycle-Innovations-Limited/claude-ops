@@ -2163,6 +2163,13 @@ async function runAuthFlow(driver, account) {
             }
             continue;
           }
+          if (IS_LINUX) {
+            // Headless Linux has no device trust; Google OAuth stalls on push-2FA.
+            log(
+              `[magic-link] No magic link found in Gmail — failing account (Google OAuth unavailable on headless Linux).`,
+            );
+            throw new Error(`magic-link timeout for ${account.email} (Google OAuth disabled on Linux)`);
+          }
           log(`[magic-link] No magic link found in Gmail — falling through to Google OAuth`);
         }
       }
