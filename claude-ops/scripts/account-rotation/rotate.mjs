@@ -1177,7 +1177,11 @@ async function makePlaywrightDriver() {
     return buildPageDriver(
       'playwright-linux',
       page,
-      async () => { try { await browser.close(); } catch {} },
+      async () => {
+        try {
+          await browser.close();
+        } catch {}
+      },
       browser,
     );
   }
@@ -1502,7 +1506,17 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
       const gogEnv = { ...process.env, GOG_KEYRING_PASSWORD: process.env.GOG_KEYRING_PASSWORD || '' };
       const searchResult = execFileSync(
         'gog',
-        ['--account', accountEmail, 'gmail', 'search', 'subject:"Secure link to log in to Claude" newer_than:5m', '--max', '10', '-j', '--no-input'],
+        [
+          '--account',
+          accountEmail,
+          'gmail',
+          'search',
+          'subject:"Secure link to log in to Claude" newer_than:5m',
+          '--max',
+          '10',
+          '-j',
+          '--no-input',
+        ],
         { timeout: 15_000, stdio: ['ignore', 'pipe', 'pipe'], env: gogEnv },
       )
         .toString()
@@ -1518,11 +1532,15 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
         if (!/^[A-Za-z0-9_-]+$/.test(threadIdRaw)) continue;
         if (seenSkip.has(threadIdRaw)) continue;
 
-        const threadJson = execFileSync('gog', ['--account', accountEmail, 'gmail', 'thread', 'get', threadIdRaw, '-j', '--no-input'], {
-          timeout: 15_000,
-          stdio: ['ignore', 'pipe', 'pipe'],
-          env: gogEnv,
-        }).toString();
+        const threadJson = execFileSync(
+          'gog',
+          ['--account', accountEmail, 'gmail', 'thread', 'get', threadIdRaw, '-j', '--no-input'],
+          {
+            timeout: 15_000,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: gogEnv,
+          },
+        ).toString();
 
         const parsed = JSON.parse(threadJson);
         // gog gmail thread get returns { messages: [...] } directly (not nested under .thread)
