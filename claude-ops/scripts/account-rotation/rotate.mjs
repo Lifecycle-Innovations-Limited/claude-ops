@@ -142,6 +142,20 @@ function notify(title, msg) {
 function readConfig() {
   return JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
 }
+
+// All accounts' Claude login emails forward to ONE Gmail inbox, so every
+// magic-link poll queries that single account. Resolve it from env or the
+// gitignored data-dir config — never hardcode a real address in the public
+// repo (Rule 0). Returns '' if unconfigured (gog then errors visibly).
+function magicLinkInbox() {
+  if ((process.env.CLAUDE_ROT_GMAIL_ACCOUNT || '').trim()) return process.env.CLAUDE_ROT_GMAIL_ACCOUNT.trim();
+  if ((process.env.GOG_ACCOUNT || '').trim()) return process.env.GOG_ACCOUNT.trim();
+  try {
+    return (readConfig().magicLinkGmailAccount || '').trim();
+  } catch {
+    return '';
+  }
+}
 function readState() {
   try {
     return JSON.parse(readFileSync(STATE_PATH, 'utf8'));
@@ -617,16 +631,34 @@ async function swapToken(account) {
     const current = readKeychain();
     const currentParsed = JSON.parse(current);
     const newParsed = JSON.parse(token);
-    if (currentParsed.mcpOAuth && Object.keys(currentParsed.mcpOAuth).length > 0) {
-      // Merge: keep current mcpOAuth, only swap claudeAiOauth
+    // Unconditional merge: vault tokens have mcpOAuth:{} stripped by design.
+    // The previous Object.keys>0 guard was self-reinforcing — once a wipe wrote
+    // mcpOAuth:{}, the next rotation read empty and skipped the merge, wiping
+    // again forever. Result: every rotation forced browser reauth for every
+    // OAuth MCP server (giga/Amplitude/higgsfield) on the next CC launch.
+    if (currentParsed.mcpOAuth) {
       newParsed.mcpOAuth = { ...newParsed.mcpOAuth, ...currentParsed.mcpOAuth };
       writeKeychain(JSON.stringify(newParsed));
-      log('[primary] Preserved mcpOAuth from previous session');
+      log('[primary] Wrote token (mcpOAuth merged from current session)');
       return true;
     }
   } catch {}
 
-  writeKeychain(token);
+  // Defensive fallback: catch path or falsy currentParsed.mcpOAuth lands here.
+  // Re-attempt the merge once more before writing — without this, a transient
+  // read/parse error wipes mcpOAuth and forces every MCP OAuth server to reauth.
+  let outToken = token;
+  try {
+    const cur = readKeychain();
+    const cp = JSON.parse(cur);
+    if (cp.mcpOAuth && Object.keys(cp.mcpOAuth).length > 0) {
+      const np = JSON.parse(token);
+      np.mcpOAuth = { ...np.mcpOAuth, ...cp.mcpOAuth };
+      outToken = JSON.stringify(np);
+      log('[primary] mcpOAuth preserved via fallback merge');
+    }
+  } catch {}
+  writeKeychain(outToken);
   return true;
 }
 
@@ -1409,12 +1441,20 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
   // Track skipped (stale/wrong-target) thread IDs so we don't re-evaluate them every poll
   const seenSkip = new Set();
 
+  // gog requires an explicit --account in daemon/launchd env. All Claude login
+  // emails forward to one inbox, so we always query that single account.
+  const inbox = magicLinkInbox();
+  const acctArgs = inbox ? ['--account', inbox] : [];
+  if (!inbox) {
+    log(`[magic-link] WARNING: no Gmail inbox configured (set CLAUDE_ROT_GMAIL_ACCOUNT or config.magicLinkGmailAccount)`);
+  }
+
   while (Date.now() - startTime < maxWaitMs) {
     try {
       // Pull up to 10 recent matches so a stale top-result doesn't block us.
       const searchResult = execFileSync(
         'gog',
-        ['gmail', 'search', 'subject:"Secure link to log in to Claude" newer_than:5m', '--max', '10', '-j'],
+        ['gmail', 'search', 'subject:"Secure link to log in to Claude" newer_than:5m', '--max', '10', '-j', ...acctArgs],
         { timeout: 15_000, stdio: ['ignore', 'pipe', 'pipe'] },
       )
         .toString()
@@ -1430,7 +1470,7 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
         if (!/^[A-Za-z0-9_-]+$/.test(threadIdRaw)) continue;
         if (seenSkip.has(threadIdRaw)) continue;
 
-        const threadJson = execFileSync('gog', ['gmail', 'read', threadIdRaw, '-j'], {
+        const threadJson = execFileSync('gog', ['gmail', 'read', threadIdRaw, '-j', ...acctArgs], {
           timeout: 15_000,
           stdio: ['ignore', 'pipe', 'pipe'],
         }).toString();
@@ -1994,88 +2034,89 @@ async function runAuthFlow(driver, account) {
       await sleep(500);
     }
 
-    // Claude.ai login → Magic link path (when account.useMagicLink is set)
-    // The email input is always visible on /login — no button click needed first.
-    if (account.useMagicLink && url.includes('claude.ai/login')) {
-      // Fill the email input directly
+    // Claude.ai login → Magic link is the ONLY auth path (quickest; no
+    // password/TOTP). Every failure fails THIS driver (return false) and we
+    // never fall through to Google OAuth.
+    if (url.includes('claude.ai/login')) {
+      // Fill the email input directly (always visible on /login).
       const filled = await driver.fillInput('[data-testid="email"], #email, input[type="email"]', account.email);
-      if (filled) {
-        log(`[magic-link] Filled email: ${account.email}`);
-        await sleep(500);
-        // Click the "Continue with email" submit button (data-testid="continue")
-        const submitted = await driver.findAndClick([
-          '[data-testid="continue"]',
-          'button[type="submit"]:has-text("Continue with email")',
-          'button:has-text("Continue with email")',
-        ]);
-        if (submitted) {
-          log(`[magic-link] Submitted email — magic link should be sent`);
-          await sleep(3000);
-
-          // Poll Gmail for the magic link
-          const magicLink = await pollGmailForMagicLink(account.email);
-          if (magicLink) {
-            if (magicLink.startsWith('code:')) {
-              const code = magicLink.replace('code:', '');
-              log(`[magic-link] Entering verification code: ${code}`);
-              await driver.fillInput(
-                'input[type="text"], input[type="number"], input[name="code"], input[placeholder*="code" i]',
-                code,
-              );
-              await driver.findAndClick(['Continue', 'Verify', 'Submit', 'button[type="submit"]']);
-            } else {
-              log(`[magic-link] Navigating to login link`);
-              await driver.goto(magicLink);
-            }
-            await sleep(4000);
-            // After magic link login, session is now valid — re-navigate to authUrl
-            // so the OAuth flow can complete (org chooser → authorize → callback)
-            if (driver._authUrl) {
-              // For multi-org accounts (same email, multiple workspaces like
-              // user-personal vs user-team), force an explicit org
-              // pick BEFORE hitting /oauth/authorize. Otherwise claude.ai uses
-              // the "last active" org silently, and both sibling vaults end up
-              // holding the same org's token.
-              const isMultiOrg =
-                account.label && account.orgName && account.orgName.toLowerCase() !== account.email.toLowerCase();
-              if (isMultiOrg) {
-                log(
-                  `[magic-link] Multi-org account — forcing org pick for "${account.orgName}" via claude.ai/home detour`,
-                );
-                try {
-                  await driver.goto('https://claude.ai/home');
-                } catch {}
-                await sleep(3500);
-                // Try to click the configured orgName if a chooser is showing.
-                // The broadened org-chooser logic in the main loop will also
-                // pick this up on the next iteration, but an immediate attempt
-                // here short-circuits silently-skipped cases.
-                const picked = await driver.findAndClick([
-                  `button:has-text("${account.orgName}")`,
-                  `[role="button"]:has-text("${account.orgName}")`,
-                  `text="${account.orgName}"`,
-                  account.orgName,
-                ]);
-                if (picked) {
-                  log(`[magic-link] Pre-selected org "${account.orgName}" before OAuth`);
-                  await sleep(2500);
-                } else {
-                  log(
-                    `[magic-link] No immediate match for "${account.orgName}" — will rely on org-chooser loop / ai-brain`,
-                  );
-                }
-              }
-              log(`[magic-link] Re-navigating to OAuth authorize URL`);
-              try {
-                await driver.goto(driver._authUrl);
-              } catch {}
-              await sleep(3000);
-            }
-            continue;
-          }
-          log(`[magic-link] No magic link found in Gmail — falling through to Google OAuth`);
-        }
+      if (!filled) {
+        log(`[magic-link] Could not find email input on /login — magic-link-only, failing driver`);
+        return false;
       }
+      log(`[magic-link] Filled email: ${account.email}`);
+      await sleep(500);
+      // Click the "Continue with email" submit button (data-testid="continue")
+      const submitted = await driver.findAndClick([
+        '[data-testid="continue"]',
+        'button[type="submit"]:has-text("Continue with email")',
+        'button:has-text("Continue with email")',
+      ]);
+      if (!submitted) {
+        log(`[magic-link] Could not click "Continue with email" — magic-link-only, failing driver`);
+        return false;
+      }
+      log(`[magic-link] Submitted email — magic link should be sent`);
+      await sleep(3000);
+
+      // Poll Gmail (single forwarding inbox) for the magic link / code.
+      const magicLink = await pollGmailForMagicLink(account.email);
+      if (!magicLink) {
+        log(`[magic-link] No magic link found in Gmail — magic-link-only, failing driver (no Google fallback)`);
+        return false;
+      }
+      if (magicLink.startsWith('code:')) {
+        const code = magicLink.replace('code:', '');
+        log(`[magic-link] Entering verification code: ${code}`);
+        await driver.fillInput(
+          'input[type="text"], input[type="number"], input[name="code"], input[placeholder*="code" i]',
+          code,
+        );
+        await driver.findAndClick(['Continue', 'Verify', 'Submit', 'button[type="submit"]']);
+      } else {
+        log(`[magic-link] Navigating to login link`);
+        await driver.goto(magicLink);
+      }
+      await sleep(4000);
+      // After magic link login, session is now valid — re-navigate to authUrl
+      // so the OAuth flow can complete (org chooser → authorize → callback)
+      if (driver._authUrl) {
+        // For multi-org accounts (same email, multiple workspaces like
+        // user-personal vs user-team), force an explicit org pick BEFORE
+        // hitting /oauth/authorize. Otherwise claude.ai uses the "last active"
+        // org silently, and both sibling vaults end up holding the same token.
+        const isMultiOrg =
+          account.label && account.orgName && account.orgName.toLowerCase() !== account.email.toLowerCase();
+        if (isMultiOrg) {
+          log(
+            `[magic-link] Multi-org account — forcing org pick for "${account.orgName}" via claude.ai/home detour`,
+          );
+          try {
+            await driver.goto('https://claude.ai/home');
+          } catch {}
+          await sleep(3500);
+          const picked = await driver.findAndClick([
+            `button:has-text("${account.orgName}")`,
+            `[role="button"]:has-text("${account.orgName}")`,
+            `text="${account.orgName}"`,
+            account.orgName,
+          ]);
+          if (picked) {
+            log(`[magic-link] Pre-selected org "${account.orgName}" before OAuth`);
+            await sleep(2500);
+          } else {
+            log(
+              `[magic-link] No immediate match for "${account.orgName}" — will rely on org-chooser loop / ai-brain`,
+            );
+          }
+        }
+        log(`[magic-link] Re-navigating to OAuth authorize URL`);
+        try {
+          await driver.goto(driver._authUrl);
+        } catch {}
+        await sleep(3000);
+      }
+      continue;
     }
 
     // Claude.ai login → Continue with Google (button has data-testid="login-with-google")
@@ -2746,8 +2787,21 @@ async function rotate(targetEmail, opts = {}) {
             if (prevAccount) {
               const prevToken = readStoredToken(prevAccount);
               if (prevToken) {
-                writeKeychain(prevToken);
-                log(`Reverted keychain to previous account ${prevKey}`);
+                // prevToken came from vault (mcpOAuth:{} stripped by design).
+                // Merge in current active keychain's mcpOAuth before rollback,
+                // otherwise this revert wipes giga/Amplitude/higgsfield OAuth.
+                let outToken = prevToken;
+                try {
+                  const cur = readKeychain();
+                  const cp = JSON.parse(cur);
+                  if (cp.mcpOAuth && Object.keys(cp.mcpOAuth).length > 0) {
+                    const np = JSON.parse(prevToken);
+                    np.mcpOAuth = { ...np.mcpOAuth, ...cp.mcpOAuth };
+                    outToken = JSON.stringify(np);
+                  }
+                } catch {}
+                writeKeychain(outToken);
+                log(`Reverted keychain to previous account ${prevKey} (mcpOAuth preserved)`);
               }
             }
             return false;
