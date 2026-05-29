@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily email-cos status heartbeat — default 08:00 local time
+
+[Timer]
+# Adjust timezone to match your local timezone.
+OnCalendar=*-*-* 08:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
