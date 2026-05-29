@@ -79,7 +79,6 @@ for pr in prs:
     else:
         print(f"SKIP\t{number}\thead={head}\tauthor={author}", file=sys.stderr)
 PYEOF
-    [[ "$pr" == "SKIP" ]] && continue
     [[ -z "$pr" ]] && continue
     local style="--squash"
     [[ "$base" == "main" ]] && style="--merge"
