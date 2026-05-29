@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.12.0] — 2026-05-29
+
 ### Added
 - **WhatsApp bridge: Linux (systemd-user) install path.** `scripts/install-whatsapp-bridge-linux.sh` clones lharries/whatsapp-mcp, applies the in-repo claude-ops patches (`scripts/whatsapp/apply-patches.py`), drops three systemd-user units (`whatsapp-bridge.service`, `whatsapp-backfill.service`, `whatsapp-backfill.timer`), and pairs via the bridge's pairing-code flow. Idempotent — re-running is safe and only applies missing patches.
 - **`POST /api/backfill` REST endpoint** on the bridge (patch). Lets the claude-ops daemon, a 2h systemd timer, or `curl` trigger a fresh history backfill without restarting the bridge. Returns `{"success":true,"message":"backfill requested"}` when connected; 503 otherwise.
