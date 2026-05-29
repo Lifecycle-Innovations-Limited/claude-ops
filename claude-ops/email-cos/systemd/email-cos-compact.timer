@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly email-cos compaction — default Sunday 04:30
+
+[Timer]
+OnCalendar=Sun *-*-* 04:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
