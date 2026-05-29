@@ -20,6 +20,8 @@
     "extraUsageSafetyMargin": 0.75,
     "note": "Max 20x defaults: ~220K tokens / ~900 messages per 5h window. extraUsageSafetyMargin: accounts with paid overage enabled rotate at 75% of their threshold to avoid incurring charges."
   },
+  "magicLinkGmailAccount": "shared-inbox@example.com",
+  "_magicLinkGmailAccount_note": "Single Gmail inbox that ALL accounts' Claude magic-link login emails forward to. The rotator polls only this inbox (via gog --account) for every account's link, then disambiguates by target email. Leave unset to poll each account's own mailbox. Real value belongs in the gitignored override config or CLAUDE_ROT_GMAIL_ACCOUNT / GOG_ACCOUNT env, never here.",
   "toolUseThreshold": 800,
   "maxHoursPerAccount": 4,
   "autoRotate": true,
