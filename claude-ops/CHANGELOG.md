@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.12.0] — 2026-05-29
+
+### Added
+
+- **pocket-env-broker — peer-authenticated secrets broker for restricted pocket workers.** Restricted background workers (which no longer inherit the orchestrator's secret env, per 2.11.9) can now request a *specific allowlisted* secret at runtime via the `pocket-env <VAR>` client, instead of all-or-nothing. The broker (`scripts/pocket-env-broker.py`, runs as the privileged orchestrator user) listens on a unix socket, authenticates the caller with SO_PEERCRED (must be the worker uid), checks a **default-deny** allowlist (`env-broker-policy.json`), returns the value over the socket only (never to disk), and audits every grant/deny. Ships with the client, policy + systemd templates, docs, and tests; the pocket executor forwards the broker socket path + task/worker ids to workers.
+
+
 ## [2.11.9] — 2026-05-29
 
 ### Security
