@@ -327,6 +327,18 @@ def build_worker_prompt(task: dict) -> str:
     )
 
 
+def _pocket_notify(event: str, message: str, severity: str = "medium") -> None:
+    """Emit a pocket notification event (best-effort, never blocks the tick).
+    Routing/channels/timing are decided by ops-pocket-notify from preferences."""
+    try:
+        subprocess.run(
+            ["ops-pocket-notify", event, message, "--severity", severity],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=20, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def spawn_worker(task: dict) -> dict | None:
     """Spawn a `claude -p` subprocess for the task. Returns in-flight
     record on success, None on failure."""
@@ -430,6 +442,7 @@ def spawn_worker(task: dict) -> dict | None:
         "spawn_mode": "claude-bg",
     })
     log(f"spawned {worker_id} pid={proc.pid} task={task_id} bg_session={bg_session_id or 'unknown'}")
+    _pocket_notify("worker.spawned", f"worker started for {task_id}: {(task.get('title') or '')[:80]}")
     return record
 
 
@@ -489,6 +502,7 @@ def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
             if not bg_session_id:
                 if now > rec.get("deadline_epoch", now + 1):
                     log(f"worker {worker_id} claude-bg missing session id — timed out")
+                    _pocket_notify("worker.failed", f"worker {worker_id} timed out (no session id)", "high")
                     killed += 1
                     del in_flight[worker_id]
                 continue
@@ -500,6 +514,7 @@ def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
                 # Still in-flight or daemon unreachable. Apply deadline timeout.
                 if now > rec.get("deadline_epoch", now + 1):
                     log(f"worker {worker_id} bg={bg_session_id} timed out — stopping session")
+                    _pocket_notify("worker.failed", f"worker {worker_id} timed out and was stopped", "high")
                     try:
                         subprocess.run([CLAUDE_BIN, "stop", bg_session_id],
                                        stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
