@@ -71,6 +71,9 @@ to stderr.
 | `POCKET_ENV_BROKER_AUDIT` | `$POCKET_STATE_DIR/env-broker-audit.log` | broker |
 | `POCKET_STATE_DIR` | `/var/lib/pocket-pipeline` | broker + client |
 | `POCKET_WORKER_USER` | `pocket-worker` | broker (uid to authorize) |
+| `POCKET_ENV_BROKER_HEALTH` | `$POCKET_STATE_DIR/env-broker-health.json` | broker (metrics snapshot) |
+| `POCKET_ENV_BROKER_NOTIFY_CMD` | _(unset — off)_ | broker (alert command; alert text appended as final arg) |
+| `POCKET_ENV_BROKER_NOTIFY_COOLDOWN` | `300` | broker (per-event rate-limit, seconds) |
 
 ## Security notes
 
@@ -95,6 +98,15 @@ The broker is observable at three levels:
    rejections** (a non-worker uid attempting to pull secrets — a probing signal).
 3. **Audit + logs** — `env-broker-audit.log` (every grant/deny, append-only JSON)
    and the daemon's structured stderr via `journalctl -u pocket-env-broker`.
+4. **Push notifications (opt-in)** — set `POCKET_ENV_BROKER_NOTIFY_CMD` to a
+   command (e.g. a Telegram self-send helper) and the broker fires it with an
+   alert message on a **uid rejection** or a **not-allowed denial** — the
+   prompt-injection probing signals. Rate-limited per event by
+   `POCKET_ENV_BROKER_NOTIFY_COOLDOWN` (default 300s) so it can't spam. The
+   command receives the alert text as its final argument; delivery is best-effort
+   and never blocks request handling. Because the broker runs as the orchestrator
+   user, wiring this to the operator's own chat is an operational self-notification
+   (exempt from the per-message outbound-comms approval gate).
 
 The health snapshot carries an `anomaly: true` flag whenever denials or uid
 rejections have occurred, so downstream monitors can alert on it without parsing

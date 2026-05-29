@@ -37,11 +37,14 @@ from __future__ import annotations
 import json
 import os
 import pwd
+import shlex
 import signal
 import socket
 import struct
+import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,6 +67,17 @@ HEALTH_PATH = Path(
 )
 WORKER_USER = os.environ.get("POCKET_WORKER_USER", "pocket-worker").strip()
 MAX_REQUEST_BYTES = 4096
+
+# Optional push notifications on security-relevant events. Opt-in: set
+# POCKET_ENV_BROKER_NOTIFY_CMD to a command (e.g. a Telegram self-send helper);
+# the broker appends the alert text as a final argument and runs it best-effort
+# when a uid-rejection or a not-allowed denial occurs. Rate-limited per
+# (decision,var,uid) by POCKET_ENV_BROKER_NOTIFY_COOLDOWN seconds to avoid spam.
+# Default unset = no notifications (status/dashboard/audit still work).
+NOTIFY_CMD = os.environ.get("POCKET_ENV_BROKER_NOTIFY_CMD", "").strip()
+NOTIFY_COOLDOWN = int(os.environ.get("POCKET_ENV_BROKER_NOTIFY_COOLDOWN", "300"))
+NOTIFY_DECISIONS = {"not_allowed_uid", "not_allowed"}
+_NOTIFY_STATE: dict[str, float] = {}  # dedupe key -> last-sent monotonic time
 
 # In-memory observability counters, snapshotted to HEALTH_PATH after each request
 # so `ops-status` / `pocket-env-broker --status` can surface broker activity and
@@ -106,6 +120,36 @@ def record_metric(uid: int, var: str, decision: str) -> None:
             del _METRICS["recent_denials"][20:]
         snapshot = _health_snapshot_locked()
     _write_health(snapshot)
+    maybe_notify(uid, var, decision)
+
+
+def maybe_notify(uid: int, var: str, decision: str) -> None:
+    """Fire the configured notify command on a security-relevant event,
+    rate-limited per (decision,var,uid). Best-effort: never let a notify failure
+    affect request handling."""
+    if not NOTIFY_CMD or decision not in NOTIFY_DECISIONS:
+        return
+    key = f"{decision}:{var}:{uid}"
+    now = time.monotonic()
+    with _METRICS_LOCK:
+        last = _NOTIFY_STATE.get(key, 0.0)
+        if now - last < NOTIFY_COOLDOWN:
+            return
+        _NOTIFY_STATE[key] = now
+    if decision == "not_allowed_uid":
+        msg = f"⚠ pocket-env-broker: BLOCKED secret request from non-worker uid={uid} (var={var or '?'})"
+    else:
+        msg = f"⚠ pocket-env-broker: DENIED non-allowlisted secret '{var}' requested by uid={uid}"
+    try:
+        subprocess.run(
+            shlex.split(NOTIFY_CMD) + [msg],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"notify failed: {e}")
 
 
 def _health_snapshot_locked() -> dict:

@@ -39,11 +39,17 @@ SOCK="$TMP/env-broker.sock"
 POLICY="$TMP/policy.json"
 AUDIT="$TMP/audit.log"
 HEALTH="$TMP/health.json"
+NOTIFY_LOG="$TMP/notify.log"
+NOTIFY_STUB="$TMP/notify.sh"
+# Stub notify command: appends the final arg (the alert message) to NOTIFY_LOG.
+printf '%s\n' '#!/usr/bin/env bash' 'echo "${!#}" >> "'"$NOTIFY_LOG"'"' >"$NOTIFY_STUB"
+chmod +x "$NOTIFY_STUB"
 printf '%s\n' '{"allow":["FOO_OK"]}' >"$POLICY"
 
 start_broker() { # $1 = worker user to authorize
   POCKET_ENV_BROKER_SOCK="$SOCK" POCKET_ENV_BROKER_POLICY="$POLICY" \
     POCKET_ENV_BROKER_AUDIT="$AUDIT" POCKET_ENV_BROKER_HEALTH="$HEALTH" \
+    POCKET_ENV_BROKER_NOTIFY_CMD="bash $NOTIFY_STUB" POCKET_ENV_BROKER_NOTIFY_COOLDOWN="0" \
     POCKET_WORKER_USER="$1" \
     FOO_OK="the-secret-value" BAR_SECRET="should-not-leak" \
     "$PY" "$BROKER" &
@@ -111,6 +117,19 @@ if echo "$STAT" | grep -q '"granted": 1' && echo "$STAT" | grep -q '"uid_rejecte
   ok "--status reports granted/denied counters"
 else
   err "--status" "unexpected: $STAT"
+fi
+
+# notifications: a denial fires the notify command; a grant does not
+sleep 0.5 # notify runs after the response is sent
+if [[ -f "$NOTIFY_LOG" ]] && grep -q "BAR_SECRET" "$NOTIFY_LOG"; then
+  ok "notify command fired on denial"
+else
+  err "notify on denial" "no alert for BAR_SECRET: $(cat "$NOTIFY_LOG" 2>/dev/null)"
+fi
+if grep -q "FOO_OK" "$NOTIFY_LOG" 2>/dev/null; then
+  err "notify on grant" "grant should NOT notify, but FOO_OK appeared in alerts"
+else
+  ok "grant does not fire a notification"
 fi
 
 kill "$BROKER_PID" 2>/dev/null
