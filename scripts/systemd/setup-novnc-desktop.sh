@@ -38,7 +38,10 @@ fi
 
 # 3. install + enable the user service
 mkdir -p "$USER_UNIT_DIR"
-install -m 0644 "$UNIT_SRC" "$USER_UNIT_DIR/novnc.service"
+sed -e "s/0.0.0.0:6080/0.0.0.0:${NOVNC_PORT}/" \
+    -e "s/localhost:5901/localhost:${VNC_PORT}/" \
+    "$UNIT_SRC" >"$USER_UNIT_DIR/novnc.service"
+chmod 0644 "$USER_UNIT_DIR/novnc.service"
 systemctl --user daemon-reload
 systemctl --user enable --now novnc.service
 log "novnc.service: $(systemctl --user is-enabled novnc.service) / $(systemctl --user is-active novnc.service)"
@@ -78,11 +81,14 @@ if command -v gsettings >/dev/null 2>&1; then
   fi
 fi
 
+TS_IP="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+[ -n "$TS_IP" ] || TS_IP='<tailscale-ip>'
+
 cat <<EOF
 
 [novnc-setup] done.
   Local:    http://localhost:${NOVNC_PORT}/vnc.html
-  Tailnet:  http://\$(tailscale ip -4 | head -1):${NOVNC_PORT}/vnc.html
+  Tailnet:  http://${TS_IP}:${NOVNC_PORT}/vnc.html
   HTTPS:    https://<magicdns-name>/vnc.html  (if tailscale serve succeeded)
   VNC pw:   set with  printf '%s\\n' '<pw>' | vncpasswd -f > ~/.vnc/passwd
 EOF
