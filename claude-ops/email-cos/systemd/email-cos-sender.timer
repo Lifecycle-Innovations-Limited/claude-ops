@@ -1,0 +1,10 @@
+[Unit]
+Description=Send approved email replies — default every 3 min
+
+[Timer]
+OnBootSec=7min
+OnUnitInactiveSec=3min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

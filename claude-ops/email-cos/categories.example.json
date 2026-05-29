@@ -1,0 +1,49 @@
+{
+  "_comment": "Copy to ~/.config/email-cos/categories.json and customise. The sweep prompt reads this file at runtime and injects the category list, so you can add, remove, or rename categories without editing any script.",
+  "categories": [
+    {
+      "name": "Legal",
+      "description": "Lawyers, insurance, complaints, liability, regulatory correspondence",
+      "sender_keywords": ["legalfirm.example.com", "insurance.example.com"],
+      "subject_keywords": ["liability", "complaint", "dossier", "claim", "insurance"],
+      "action": "reminder_only",
+      "no_autodraft": true
+    },
+    {
+      "name": "Finance",
+      "description": "Banking, invoices, payments, cash-flow calculations",
+      "sender_keywords": ["bank.example.com", "accounting.example.com"],
+      "subject_keywords": ["invoice", "payment", "cash flow", "calculation"],
+      "action": "reminder_only",
+      "no_autodraft": true
+    },
+    {
+      "name": "Work",
+      "description": "Primary business / project correspondence",
+      "sender_keywords": ["@yourcompany.com", "partner.example.com"],
+      "subject_keywords": ["project", "proposal", "contract", "milestone"],
+      "action": "draft_reply",
+      "no_autodraft": false
+    },
+    {
+      "name": "Personal",
+      "description": "Real humans writing about personal matters",
+      "sender_keywords": [],
+      "subject_keywords": [],
+      "action": "draft_reply",
+      "no_autodraft": false,
+      "fallback": true
+    },
+    {
+      "name": "Junk",
+      "description": "Newsletters, promotions, marketing, automated no-reply notifications. NEVER mark Junk if it is Legal, Finance, or from a real human.",
+      "sender_keywords": ["newsletter@", "noreply@", "marketing@", "mailer@"],
+      "subject_keywords": ["unsubscribe", "verification code", "is your code"],
+      "action": "archive",
+      "no_autodraft": true
+    }
+  ],
+  "junk_gmail_categories": ["CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS"],
+  "keep_always_senders": ["docusign.com"],
+  "self_addresses": ["your.address@gmail.com", "you@yourdomain.com"]
+}

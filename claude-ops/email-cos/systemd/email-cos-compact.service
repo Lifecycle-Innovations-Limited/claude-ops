@@ -1,0 +1,7 @@
+[Unit]
+Description=email-cos log/ledger compaction
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/email-cos/config.sh
+ExecStart=%h/.local/share/email-cos/email-cos-compact.sh

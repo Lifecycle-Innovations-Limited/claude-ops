@@ -1,0 +1,7 @@
+[Unit]
+Description=Email chief-of-staff daily status heartbeat
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/email-cos/config.sh
+ExecStart=%h/.local/share/email-cos/email-cos-status.sh --tg
