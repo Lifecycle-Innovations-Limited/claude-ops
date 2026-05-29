@@ -252,6 +252,29 @@ if has_cmd claude && has_cmd jq; then
   fi
 fi
 
+# ─── 7c. Pocket env-broker ─────────────────────────────────────────────────
+# Secrets broker for restricted pocket workers. Surfaces request counts and
+# flags denials / uid-rejections (a prompt-injection probing signal).
+BROKER_STATE="not-configured"
+BROKER_REQ=0
+BROKER_DENIED=0
+BROKER_UID_REJ=0
+BROKER_HEALTH="${POCKET_STATE_DIR:-/var/lib/pocket-pipeline}/env-broker-health.json"
+if [ -f "$BROKER_HEALTH" ]; then
+  if has_cmd jq && jq empty "$BROKER_HEALTH" >/dev/null 2>&1; then
+    BROKER_REQ="$(jq -r '.totals.requests // 0' "$BROKER_HEALTH" 2>/dev/null || echo 0)"
+    BROKER_DENIED="$(jq -r '.totals.denied // 0' "$BROKER_HEALTH" 2>/dev/null || echo 0)"
+    BROKER_UID_REJ="$(jq -r '.totals.uid_rejected // 0' "$BROKER_HEALTH" 2>/dev/null || echo 0)"
+    if [ "$BROKER_UID_REJ" -gt 0 ]; then
+      BROKER_STATE="anomaly"
+    else
+      BROKER_STATE="ok"
+    fi
+  else
+    BROKER_STATE="unhealthy"
+  fi
+fi
+
 # ─── 8. Registry ────────────────────────────────────────────────────────────
 REGISTRY_STATE="missing"
 REGISTRY_COUNT=0
@@ -363,6 +386,14 @@ render_pretty() {
     running)     printf ' Claude bg    ✓ %s session(s) (interactive: %s)\n' "$CC_BG_COUNT" "$CC_BG_INTERACTIVE" ;;
     unreachable) printf ' Claude bg    ✗ supervisor unreachable — run: claude respawn --all\n' ;;
     *)           printf ' Claude bg    ○ idle (interactive: %s)\n' "$CC_BG_INTERACTIVE" ;;
+  esac
+
+  # Pocket env-broker (secrets broker for restricted workers)
+  case "$BROKER_STATE" in
+    ok)       printf ' Env-broker   ✓ %s reqs, %s denied\n' "$BROKER_REQ" "$BROKER_DENIED" ;;
+    anomaly)  printf ' Env-broker   ⚠ %s uid-rejections! (%s reqs) — check env-broker-audit.log\n' "$BROKER_UID_REJ" "$BROKER_REQ" ;;
+    unhealthy)printf ' Env-broker   ✗ invalid env-broker-health.json\n' ;;
+    *)        printf ' Env-broker   ○ not running\n' ;;
   esac
 
   # Registry
