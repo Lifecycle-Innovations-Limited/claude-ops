@@ -56,13 +56,11 @@ def _db():
 
 def _seen(key: str) -> bool:
     with _db() as conn:
-        cur = conn.execute("SELECT 1 FROM seen WHERE id = ?", (key,))
-        if cur.fetchone():
-            return True
-        conn.execute(
-            "INSERT INTO seen (id, ts) VALUES (?, ?)", (key, int(time.time()))
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO seen (id, ts) VALUES (?, ?)",
+            (key, int(time.time())),
         )
-    return False
+        return cur.rowcount == 0
 
 
 def _verify_signature(secret: str, timestamp: str, raw_body: bytes, sig: str) -> bool:

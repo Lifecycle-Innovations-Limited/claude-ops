@@ -7,6 +7,7 @@
 set -euo pipefail
 
 EVENT="${1:-unknown}"
+EVENT_JSON="$(printf '%s' "$EVENT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()), end="")')"
 PAYLOAD="$(cat || true)"
 [ -n "$PAYLOAD" ] || PAYLOAD="{}"
 LOG_DIR="/var/log/pocket-webhook"
@@ -18,7 +19,7 @@ EPOCH="$(date -u +%s%N)"
 mkdir -p "$LOG_DIR" "$JOURNAL_DIR" "$QUEUE_TMP"
 
 # Append-only journal entry (one JSON-line per event)
-printf '{"ts":"%s","event":"%s","payload":%s}\n' "$TS" "$EVENT" "$PAYLOAD" \
+printf '{"ts":"%s","event":%s,"payload":%s}\n' "$TS" "$EVENT_JSON" "$PAYLOAD" \
   >> "$JOURNAL_DIR/events.jsonl"
 
 # Per-event copy for easy inspection
@@ -37,7 +38,7 @@ logger -t pocket-webhook "event=$EVENT bytes=${#PAYLOAD}"
 POCKET_STATE_DIR="${POCKET_STATE_DIR:-/var/lib/pocket-pipeline}"
 INGEST="/opt/pocket-mcp/pipeline/ops-pocket-webhook-ingest.py"
 ENVFILE="$QUEUE_TMP/${EPOCH}-${EVENT}.json"
-printf '{"ts":"%s","event":"%s","payload":%s}' "$TS" "$EVENT" "$PAYLOAD" > "$ENVFILE"
+printf '{"ts":"%s","event":%s,"payload":%s}' "$TS" "$EVENT_JSON" "$PAYLOAD" > "$ENVFILE"
 chmod 644 "$ENVFILE" 2>/dev/null || true
 if [ -f "$INGEST" ]; then
   (
