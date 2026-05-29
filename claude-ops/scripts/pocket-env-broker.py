@@ -57,8 +57,81 @@ POLICY_PATH = Path(
 AUDIT_PATH = Path(
     os.environ.get("POCKET_ENV_BROKER_AUDIT", str(STATE_DIR / "env-broker-audit.log"))
 )
+HEALTH_PATH = Path(
+    os.environ.get(
+        "POCKET_ENV_BROKER_HEALTH", str(STATE_DIR / "env-broker-health.json")
+    )
+)
 WORKER_USER = os.environ.get("POCKET_WORKER_USER", "pocket-worker").strip()
 MAX_REQUEST_BYTES = 4096
+
+# In-memory observability counters, snapshotted to HEALTH_PATH after each request
+# so `ops-status` / `pocket-env-broker --status` can surface broker activity and
+# flag anomalies (denials, uid rejections) instead of leaving them in a log.
+_METRICS_LOCK = threading.Lock()
+_METRICS = {
+    "started_at": None,
+    "last_request_ts": None,
+    "totals": {
+        "requests": 0,
+        "granted": 0,
+        "denied": 0,
+        "unknown_var": 0,
+        "uid_rejected": 0,
+    },
+    "by_var": {},
+    "recent_denials": [],  # last 20 non-granted decisions, newest first
+}
+_DECISION_TO_COUNTER = {
+    "granted": "granted",
+    "not_allowed": "denied",
+    "bad_request": "denied",
+    "unknown_var": "unknown_var",
+    "not_allowed_uid": "uid_rejected",
+}
+
+
+def record_metric(uid: int, var: str, decision: str) -> None:
+    with _METRICS_LOCK:
+        t = _METRICS["totals"]
+        t["requests"] += 1
+        t[_DECISION_TO_COUNTER.get(decision, "denied")] += 1
+        bv = _METRICS["by_var"].setdefault(var or "<none>", {"granted": 0, "denied": 0})
+        bv["granted" if decision == "granted" else "denied"] += 1
+        _METRICS["last_request_ts"] = now_iso()
+        if decision != "granted":
+            _METRICS["recent_denials"].insert(
+                0, {"ts": now_iso(), "uid": uid, "var": var, "decision": decision}
+            )
+            del _METRICS["recent_denials"][20:]
+        snapshot = _health_snapshot_locked()
+    _write_health(snapshot)
+
+
+def _health_snapshot_locked() -> dict:
+    t = _METRICS["totals"]
+    # "anomaly" flags the security-relevant signals worth surfacing/alerting on.
+    anomaly = t["uid_rejected"] > 0 or t["denied"] > 0
+    return {
+        "status": "ok",
+        "anomaly": anomaly,
+        "started_at": _METRICS["started_at"],
+        "last_request_ts": _METRICS["last_request_ts"],
+        "totals": dict(t),
+        "by_var": {k: dict(v) for k, v in _METRICS["by_var"].items()},
+        "recent_denials": list(_METRICS["recent_denials"]),
+        "updated_at": now_iso(),
+    }
+
+
+def _write_health(snapshot: dict) -> None:
+    try:
+        HEALTH_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = HEALTH_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(snapshot, indent=2))
+        tmp.replace(HEALTH_PATH)
+    except OSError as e:
+        log(f"health write failed: {e}")
 
 
 def now_iso() -> str:
@@ -144,6 +217,7 @@ def handle(conn: socket.socket, want_uid: int | None) -> None:
                     "decision": "not_allowed_uid",
                 }
             )
+            record_metric(uid, var, "not_allowed_uid")
             conn.sendall(
                 json.dumps({"ok": False, "error": "not_allowed_uid"}).encode() + b"\n"
             )
@@ -159,6 +233,7 @@ def handle(conn: socket.socket, want_uid: int | None) -> None:
                 "decision": reason,
             }
         )
+        record_metric(uid, var, reason)
         if ok:
             conn.sendall(json.dumps({"ok": True, "value": value}).encode() + b"\n")
         else:
@@ -189,6 +264,9 @@ def serve() -> int:
     # user via group/ACL) AND by SO_PEERCRED at the application layer.
     os.chmod(SOCK_PATH, 0o660)
     srv.listen(16)
+    with _METRICS_LOCK:
+        _METRICS["started_at"] = now_iso()
+        _write_health(_health_snapshot_locked())
     log(f"listening on {SOCK_PATH} (grant uid={want_uid}, policy={POLICY_PATH})")
 
     stop = threading.Event()
@@ -219,5 +297,39 @@ def serve() -> int:
     return 0
 
 
+def print_status(as_json: bool) -> int:
+    """Read the health snapshot and print it. Observability entry point used by
+    `pocket-env-broker --status` and surfaced by ops-status."""
+    try:
+        snap = json.loads(HEALTH_PATH.read_text())
+    except (OSError, json.JSONDecodeError):
+        print(
+            json.dumps({"status": "down", "reason": "no health file"})
+            if as_json
+            else "pocket-env-broker: DOWN (no health file — broker not running?)"
+        )
+        return 1
+    if as_json:
+        print(json.dumps(snap))
+        return 0
+    t = snap.get("totals", {})
+    flag = "  ⚠ ANOMALY" if snap.get("anomaly") else ""
+    print(f"pocket-env-broker: {snap.get('status', '?')}{flag}")
+    print(
+        f"  started {snap.get('started_at')} · last req {snap.get('last_request_ts') or '(none)'}"
+    )
+    print(
+        f"  requests={t.get('requests', 0)} granted={t.get('granted', 0)} "
+        f"denied={t.get('denied', 0)} unknown={t.get('unknown_var', 0)} uid_rejected={t.get('uid_rejected', 0)}"
+    )
+    for d in snap.get("recent_denials", [])[:5]:
+        print(
+            f"  denied: {d.get('ts')} uid={d.get('uid')} var={d.get('var')} ({d.get('decision')})"
+        )
+    return 0
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--status":
+        sys.exit(print_status(as_json="--json" in sys.argv[2:]))
     sys.exit(serve())

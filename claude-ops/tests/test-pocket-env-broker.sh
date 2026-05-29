@@ -38,11 +38,13 @@ trap cleanup EXIT
 SOCK="$TMP/env-broker.sock"
 POLICY="$TMP/policy.json"
 AUDIT="$TMP/audit.log"
+HEALTH="$TMP/health.json"
 printf '%s\n' '{"allow":["FOO_OK"]}' >"$POLICY"
 
 start_broker() { # $1 = worker user to authorize
   POCKET_ENV_BROKER_SOCK="$SOCK" POCKET_ENV_BROKER_POLICY="$POLICY" \
-    POCKET_ENV_BROKER_AUDIT="$AUDIT" POCKET_WORKER_USER="$1" \
+    POCKET_ENV_BROKER_AUDIT="$AUDIT" POCKET_ENV_BROKER_HEALTH="$HEALTH" \
+    POCKET_WORKER_USER="$1" \
     FOO_OK="the-secret-value" BAR_SECRET="should-not-leak" \
     "$PY" "$BROKER" &
   BROKER_PID=$!
@@ -94,6 +96,21 @@ if grep -q '"decision": "granted"' "$AUDIT" && grep -q '"decision": "not_allowed
   ok "audit log records granted + denied decisions"
 else
   err "audit log" "missing expected decision records: $(cat "$AUDIT" 2>/dev/null)"
+fi
+
+# observability: health file written with counters, anomaly flagged on denial
+if [[ -f "$HEALTH" ]] && grep -q '"requests"' "$HEALTH" && grep -q '"anomaly": true' "$HEALTH"; then
+  ok "health file written with counters + anomaly flag"
+else
+  err "health file" "missing/incomplete: $(cat "$HEALTH" 2>/dev/null)"
+fi
+
+# --status reader reports the metrics
+STAT="$(POCKET_ENV_BROKER_HEALTH="$HEALTH" "$PY" "$BROKER" --status --json 2>/dev/null)"
+if echo "$STAT" | grep -q '"granted": 1' && echo "$STAT" | grep -q '"uid_rejected"'; then
+  ok "--status reports granted/denied counters"
+else
+  err "--status" "unexpected: $STAT"
 fi
 
 kill "$BROKER_PID" 2>/dev/null

@@ -80,3 +80,22 @@ to stderr.
 - The socket is `0660`; provisioning grants the worker user connect access via
   group or ACL. Even if a third user could connect, `SO_PEERCRED` denies them.
 - Review `env-broker-audit.log` to see exactly which secrets workers have pulled.
+
+## Observability
+
+The broker is observable at three levels:
+
+1. **Live status** — `pocket-env-broker --status` (add `--json` for machine output)
+   prints request counters (`requests / granted / denied / unknown_var /
+   uid_rejected`), last-request time, and the most recent denials. Backed by a
+   metrics snapshot the broker rewrites after every request at
+   `env-broker-health.json` (`POCKET_ENV_BROKER_HEALTH`).
+2. **Ops dashboard** — `/ops:ops-status` shows an `Env-broker` line with request
+   and denial counts, and raises a `⚠` anomaly when there are any **uid
+   rejections** (a non-worker uid attempting to pull secrets — a probing signal).
+3. **Audit + logs** — `env-broker-audit.log` (every grant/deny, append-only JSON)
+   and the daemon's structured stderr via `journalctl -u pocket-env-broker`.
+
+The health snapshot carries an `anomaly: true` flag whenever denials or uid
+rejections have occurred, so downstream monitors can alert on it without parsing
+counters themselves.
