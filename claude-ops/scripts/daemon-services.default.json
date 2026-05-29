@@ -15,10 +15,19 @@
     },
     "whatsapp-bridge": {
       "enabled": true,
-      "command": "launchctl kickstart -k gui/$UID/com.${USER}.whatsapp-bridge",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/lib/whatsapp-bridge-up.sh",
       "health_check": "lsof -i :8080 | grep LISTEN",
       "restart_delay": 60,
-      "max_restarts": 10
+      "max_restarts": 10,
+      "_note": "Cross-platform bridge starter. Looks at uname: macOS → launchctl kickstart gui/$UID/com.${USER}.whatsapp-bridge ; Linux → systemctl --user restart whatsapp-bridge.service. Install via `bash scripts/install-whatsapp-bridge-linux.sh --wa-phone <E.164>` on Linux hosts; on macOS the legacy launchctl plist still applies. Bridge source: github.com/lharries/whatsapp-mcp (with claude-ops patches applied by install script — see scripts/whatsapp/apply-patches.py)."
+    },
+    "whatsapp-backfill": {
+      "enabled": true,
+      "command": "curl -fsS -m 30 -X POST http://127.0.0.1:8080/api/backfill",
+      "cron": "0 */2 * * *",
+      "restart_delay": 0,
+      "max_restarts": 3,
+      "_note": "On-demand WhatsApp history backfill — POSTs to the bridge's /api/backfill endpoint added by claude-ops patches. Idempotent (whatsmeow dedups by message ID). On Linux installs the systemd timer `whatsapp-backfill.timer` (installed by the install script) is the primary trigger; this daemon entry is the fallback for hosts using the cron-driven claude-ops-daemon. Bridge auto-backfills 5s after every Connected event regardless."
     },
     "memory-extractor": {
       "enabled": true,

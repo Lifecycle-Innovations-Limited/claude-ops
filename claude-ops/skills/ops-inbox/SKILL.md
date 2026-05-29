@@ -68,7 +68,8 @@ If you find yourself reaching for any `wacli ...` shell command, stop and use th
 | Full-text search        | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}`              | `wacli messages search`   |
 | Resolve a contact       | `mcp__whatsapp__search_contacts {query: "<name>"}`                        | `wacli contacts`          |
 | Send a reply (after approval) | `mcp__whatsapp__send_message {recipient: "<JID>", message: "<text>"}` | `wacli send`              |
-| Health check            | `lsof -i :8080 \| grep LISTEN` + `launchctl list com.${USER}.whatsapp-bridge` | `wacli doctor` / `~/.wacli/.health` |
+| Health check            | `lsof -i :8080 \| grep LISTEN` + (macOS) `launchctl print "gui/$(id -u)/com.${USER}.whatsapp-bridge"` / (Linux) `systemctl --user is-active whatsapp-bridge.service` | `wacli doctor` / `~/.wacli/.health` |
+| Trigger history backfill | `curl -fsS -X POST http://127.0.0.1:8080/api/backfill` (claude-ops patch — runs per-chat against the 50 most-recent chats; bridge also auto-backfills 5s after every Connected event) | — |
 
 **Rationale:** the bridge exposes a typed MCP surface, returns consistent JSON shapes (`is_from_me`, `content`, `timestamp`, `sender`), supports FTS5 search natively, and avoids store-lock contention with the wacli keepalive daemon. Mixing the two surfaces caused inconsistent state in past sessions.
 
@@ -119,32 +120,58 @@ Before executing, load available context:
 
 ### whatsapp-bridge (WhatsApp — mcp__whatsapp__*)
 
-**Bridge health** — check bridge is running before any WhatsApp operation:
+**Bridge health** — check bridge is running before any WhatsApp operation. Same `lsof` probe across platforms; supervisor command differs:
+
 ```bash
-lsof -i :8080 | grep LISTEN   # bridge listens on :8080
-launchctl print "gui/$(id -u)/com.${USER}.whatsapp-bridge" 2>&1 | head -3  # check launchd status (use print, NOT list — list only shows already-loaded services)
+lsof -i :8080 | grep LISTEN   # bridge listens on :8080 (same on macOS + Linux)
+
+# macOS — launchd:
+launchctl print "gui/$(id -u)/com.${USER}.whatsapp-bridge" 2>&1 | head -3   # use print, NOT list — list only shows already-loaded services
+
+# Linux — systemd-user (installed by scripts/install-whatsapp-bridge-linux.sh):
+systemctl --user is-active whatsapp-bridge.service
+journalctl --user -u whatsapp-bridge.service -n 10 --no-pager
 ```
 
-If bridge is not running, use this **robust restart recipe** (handles the "service not loaded" case that breaks bare `kickstart`):
+**One-line cross-platform restart** — use the in-repo wrapper when you don't want to branch on uname yourself:
 
+```bash
+bash "$CLAUDE_PLUGIN_ROOT/scripts/lib/whatsapp-bridge-up.sh"
+```
+
+It restarts via launchctl on Darwin and `systemctl --user` on Linux, then waits up to 5s for `:8080` to come up.
+
+If you need the raw recipes:
+
+**macOS** (handles the "service not loaded" case that breaks bare `kickstart`):
 ```bash
 LABEL="com.${USER}.whatsapp-bridge"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 TARGET="gui/$(id -u)/${LABEL}"
-
-# 1) If kickstart fails with "Could not find service", load the plist first.
 if ! launchctl kickstart -k "$TARGET" 2>/dev/null; then
   [ -f "$PLIST" ] && launchctl load -w "$PLIST"
   sleep 2
   launchctl kickstart -k "$TARGET" 2>/dev/null || true
 fi
-
-# 2) Verify it's actually listening.
 sleep 5
-lsof -i :8080 | grep -q LISTEN && echo "bridge up" || echo "bridge FAILED — check $HOME/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log"
+lsof -i :8080 | grep -q LISTEN && echo "bridge up" || echo "bridge FAILED — check ~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log"
 ```
 
-**Why this matters:** bare `launchctl kickstart -k gui/$UID/<label>` exits with `Could not find service` if the LaunchAgent isn't loaded (common after reboot, plist edits, or when the daemon hasn't auto-registered). Always quote the target string and fall back to `launchctl load -w` before retrying.
+**Linux** (systemd-user — the install script's standard path):
+```bash
+systemctl --user daemon-reload
+systemctl --user restart whatsapp-bridge.service
+sleep 5
+lsof -i :8080 | grep -q LISTEN && echo "bridge up" || journalctl --user -u whatsapp-bridge.service -n 30 --no-pager
+```
+
+**Why the macOS recipe matters:** bare `launchctl kickstart -k gui/$UID/<label>` exits with `Could not find service` if the LaunchAgent isn't loaded (common after reboot, plist edits, or when the daemon hasn't auto-registered). Always quote the target string and fall back to `launchctl load -w` before retrying.
+
+**First-time Linux install** — if the bridge isn't installed yet on a Linux host:
+```bash
+bash "$CLAUDE_PLUGIN_ROOT/scripts/install-whatsapp-bridge-linux.sh" --wa-phone <E.164>
+```
+This clones lharries/whatsapp-mcp into `~/.local/share/whatsapp-mcp`, applies the in-repo claude-ops patches (Fix A/B pair-phone hardening, auto-backfill on Connected, `POST /api/backfill` REST endpoint, crash-safe `requestHistorySync`, Python LID↔phone↔contact resolver), drops three systemd-user units (`whatsapp-bridge.service`, `whatsapp-backfill.service`, `whatsapp-backfill.timer`), enables linger, and emits the pairing code via `journalctl --user -u whatsapp-bridge -f`. Idempotent: re-running is safe and updates patches in place.
 
 **MCP tools** (use these instead of any wacli CLI command):
 
