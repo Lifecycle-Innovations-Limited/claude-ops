@@ -1,0 +1,4 @@
+{
+  "_comment": "pocket-env-broker allowlist. DEFAULT-DENY: only variable names listed in 'allow' are grantable to a worker, and only if the broker's own environment actually holds a value for them. Copy to $POCKET_STATE_DIR/env-broker-policy.json and edit. NEVER add high-blast-radius secrets here (AWS keys, SSH material, Doppler service tokens) — those should stay out of worker reach entirely. Every request (granted or denied) is recorded in env-broker-audit.log.",
+  "allow": ["GOG_ACCOUNT"]
+}
