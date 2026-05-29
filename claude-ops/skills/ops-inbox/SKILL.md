@@ -335,13 +335,30 @@ the main session** using the per-channel sections below. Stage every reply one-a
 under Rule 6 (one draft → `AskUserQuestion` / approval word → send → next). The workflow
 gave you *what* needs a reply and the `chatId` to reach it; it never sent anything.
 
-**Fallback when `Workflow` is unavailable** (older harness): if
-`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, use **Agent Teams** — one
-`Agent(team_name="inbox-channels", name="<channel>-scanner")` per *available* channel, each
-read-only, reporting classified results back; you can then steer ("focus email first") and
-process replies as they land. If neither is available, scan channels sequentially in the
-main session. Every fallback keeps the same **read-only + Rule 6** constraints — scanners
-never send.
+### Fallback — Agent Teams support
+
+When the `Workflow` tool is unavailable (older harness) but
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, fall back to **Agent Teams** for the
+"all channels" path — same read-only fan-out, just without the Workflow harness. Set up one
+read-only scanner teammate per *available* channel:
+
+```
+TeamCreate("inbox-channels")
+Agent(team_name="inbox-channels", name="whatsapp-scanner", ...)   # READ-ONLY
+Agent(team_name="inbox-channels", name="email-scanner", ...)      # READ-ONLY
+Agent(team_name="inbox-channels", name="slack-scanner", ...)      # READ-ONLY
+Agent(team_name="inbox-channels", name="telegram-scanner", ...)   # READ-ONLY
+```
+
+Each teammate scans its channel and reports classified results back; you can steer
+("focus email first") and process replies as they land. Agent Teams' advantage over the
+Workflow path is mid-flight steering and shared context (one scanner can flag a message
+referencing another channel). If neither `Workflow` nor Agent Teams is available, scan
+channels sequentially in the main session.
+
+**Every fallback keeps the same read-only + Rule 6 constraints** — each scanner teammate's
+prompt MUST say *"You are READ-ONLY. Do NOT send any outbound messages. Return drafts to the
+orchestrator who stages them one-by-one."* Sending stays in the main session, always.
 
 ## Pre-gathered data
 
