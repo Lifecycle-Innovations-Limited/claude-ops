@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Thin wrapper so `ops-pocket-notify` is on PATH; the implementation is Python.
+exec python3 "$(dirname "$0")/../scripts/ops-pocket-notify.py" "$@"
