@@ -7,6 +7,7 @@ import logging
 import os
 import sqlite3
 import subprocess
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -179,10 +180,19 @@ async def webhook(
         )
         proc.stdin.write(json.dumps(payload).encode("utf-8"))
         proc.stdin.close()
+        threading.Thread(target=proc.wait, daemon=True).start()
     except Exception as e:
-        _release(dedup_key)
+        try:
+            _release(dedup_key)
+        except Exception as release_err:
+            log.error(
+                "dedup release failed for event=%s rec=%s: %s",
+                event,
+                rec_id,
+                release_err,
+            )
         log.error(
-            "handler dispatch failed for event=%s rec=%s: %s — released dedup claim",
+            "handler dispatch failed for event=%s rec=%s: %s",
             event,
             rec_id,
             e,
