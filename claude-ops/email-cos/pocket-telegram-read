@@ -1,0 +1,71 @@
+#!/usr/bin/env node
+// pocket-telegram-read — read recent messages from a Telegram dialog via MTProto.
+// Separate API from bot getUpdates, so no offset conflict with other listeners.
+//
+// Usage:  pocket-telegram-read <peer> [limit]
+//   peer  = "me" (Saved Messages) | @username | numeric id
+// Output: JSON {ok, messages:[{id, out, text, date}]}  (out=true => sent by owner)
+//
+// Required env:
+//   TELEGRAM_API_ID    — from my.telegram.org
+//   TELEGRAM_API_HASH  — from my.telegram.org
+//   TELEGRAM_SESSION   — MTProto StringSession (generated on first auth)
+//   EMAIL_COS_TG_ENABLE — must be "true" or script exits cleanly
+//
+// The telegram-server node_modules path is resolved from the claude-ops plugin
+// installation. Override with TELEGRAM_NM env var if the plugin is installed elsewhere.
+import fs from 'node:fs';
+import path from 'node:path';
+
+// Load ~/.mcp-secrets.env if present (makes it runnable outside systemd).
+const ENV_FILE = process.env.HOME + '/.mcp-secrets.env';
+if (fs.existsSync(ENV_FILE)) {
+  for (const line of fs.readFileSync(ENV_FILE, 'utf8').split('\n')) {
+    const m = line.match(/^([A-Z_]+)=(.*)$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
+  }
+}
+
+if ((process.env.EMAIL_COS_TG_ENABLE || 'false').toLowerCase() !== 'true') {
+  console.log(JSON.stringify({ ok: true, messages: [], skipped: 'channel_disabled' }));
+  process.exit(0);
+}
+
+// Resolve telegram node_modules — prefer TELEGRAM_NM override, then auto-detect.
+const NM = process.env.TELEGRAM_NM ||
+  (fs.existsSync(process.env.HOME + '/.claude/plugins/marketplaces/ops-marketplace/claude-ops/telegram-server/node_modules')
+    ? process.env.HOME + '/.claude/plugins/marketplaces/ops-marketplace/claude-ops/telegram-server/node_modules'
+    : path.join(path.dirname(new URL(import.meta.url).pathname), '../telegram-server/node_modules'));
+
+process.env.NODE_PATH = NM;
+const { createRequire } = await import('node:module');
+const req = createRequire(NM + '/');
+const { TelegramClient } = req('telegram');
+const { StringSession } = req('telegram/sessions/index.js');
+
+const [, , peerArg, limitArg] = process.argv;
+const peer = peerArg || (process.env.EMAIL_COS_TG_BOT_USERNAME || 'me');
+const limit = parseInt(limitArg || '15', 10);
+const apiId = parseInt(process.env.TELEGRAM_API_ID, 10);
+const apiHash = process.env.TELEGRAM_API_HASH;
+const sess = process.env.TELEGRAM_SESSION;
+
+if (!apiId || !apiHash || !sess) {
+  console.error(JSON.stringify({ ok: false, error: 'missing TELEGRAM_* env' }));
+  process.exit(2);
+}
+
+const client = new TelegramClient(new StringSession(sess), apiId, apiHash, { connectionRetries: 2 });
+try {
+  await client.connect();
+  let target = peer;
+  if (peer === 'me') { const me = await client.getMe(); target = me.id; }
+  const msgs = await client.getMessages(target, { limit });
+  const out = msgs.map(m => ({ id: m.id, out: !!m.out, text: m.message || '', date: m.date }));
+  console.log(JSON.stringify({ ok: true, messages: out }));
+  await client.disconnect();
+  process.exit(0);
+} catch (e) {
+  console.error(JSON.stringify({ ok: false, error: String(e.message || e) }));
+  process.exit(1);
+}
