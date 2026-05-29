@@ -176,6 +176,21 @@ function notify(title, msg) {
 function readConfig() {
   return JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
 }
+
+// All accounts' Claude login emails forward to ONE Gmail inbox, so every
+// magic-link poll queries that single account rather than each account's own
+// mailbox. Resolve it from env or the gitignored override config — never
+// hardcode a real address in the public repo (Rule 0). Returns '' if
+// unconfigured, in which case callers fall back to the per-account mailbox.
+function magicLinkInbox() {
+  if ((process.env.CLAUDE_ROT_GMAIL_ACCOUNT || '').trim()) return process.env.CLAUDE_ROT_GMAIL_ACCOUNT.trim();
+  if ((process.env.GOG_ACCOUNT || '').trim()) return process.env.GOG_ACCOUNT.trim();
+  try {
+    return (readConfig().magicLinkGmailAccount || '').trim();
+  } catch {
+    return '';
+  }
+}
 function readState() {
   try {
     return JSON.parse(readFileSync(STATE_PATH, 'utf8'));
@@ -680,16 +695,34 @@ async function swapToken(account) {
     const current = readKeychain();
     const currentParsed = JSON.parse(current);
     const newParsed = JSON.parse(token);
-    if (currentParsed.mcpOAuth && Object.keys(currentParsed.mcpOAuth).length > 0) {
-      // Merge: keep current mcpOAuth, only swap claudeAiOauth
+    // Unconditional merge: vault tokens ship mcpOAuth:{} by design (stripped at
+    // save time). The previous `Object.keys > 0` guard was self-reinforcing —
+    // once a wipe wrote mcpOAuth:{}, the next rotation read empty, skipped the
+    // merge, and wiped again forever, forcing every OAuth MCP server
+    // (giga/Amplitude/higgsfield) to browser-reauth on the next CC launch.
+    if (currentParsed.mcpOAuth) {
       newParsed.mcpOAuth = { ...newParsed.mcpOAuth, ...currentParsed.mcpOAuth };
       writeKeychain(JSON.stringify(newParsed));
-      log('[primary] Preserved mcpOAuth from previous session');
+      log('[primary] Wrote token (mcpOAuth merged from current session)');
       return true;
     }
   } catch {}
 
-  writeKeychain(token);
+  // Defensive fallback: catch path or falsy currentParsed.mcpOAuth lands here.
+  // Re-attempt the merge once before writing so a transient read/parse error
+  // doesn't wipe mcpOAuth and force every MCP OAuth server to reauth.
+  let outToken = token;
+  try {
+    const cur = readKeychain();
+    const cp = JSON.parse(cur);
+    if (cp.mcpOAuth && Object.keys(cp.mcpOAuth).length > 0) {
+      const np = JSON.parse(token);
+      np.mcpOAuth = { ...np.mcpOAuth, ...cp.mcpOAuth };
+      outToken = JSON.stringify(np);
+      log('[primary] mcpOAuth preserved via fallback merge');
+    }
+  } catch {}
+  writeKeychain(outToken);
   return true;
 }
 
@@ -1513,6 +1546,15 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
   // Track skipped (stale/wrong-target) thread IDs so we don't re-evaluate them every poll
   const seenSkip = new Set();
 
+  // All accounts forward their Claude login emails to one inbox; query that
+  // single account. Falls back to the per-account mailbox if unconfigured.
+  // The per-link target-email check below still disambiguates which link
+  // belongs to the account being rotated, so a shared inbox is safe.
+  const inbox = magicLinkInbox() || accountEmail;
+  if (inbox !== accountEmail) {
+    log(`[magic-link] Using shared forwarding inbox for ${accountEmail}'s link`);
+  }
+
   while (Date.now() - startTime < maxWaitMs) {
     try {
       // Pull up to 10 recent matches so a stale top-result doesn't block us.
@@ -1522,7 +1564,7 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
         'gog',
         [
           '--account',
-          accountEmail,
+          inbox,
           'gmail',
           'search',
           'subject:"Secure link to log in to Claude" newer_than:5m',
@@ -1548,7 +1590,7 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
 
         const threadJson = execFileSync(
           'gog',
-          ['--account', accountEmail, 'gmail', 'thread', 'get', threadIdRaw, '-j', '--no-input'],
+          ['--account', inbox, 'gmail', 'thread', 'get', threadIdRaw, '-j', '--no-input'],
           {
             timeout: 15_000,
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -2195,18 +2237,11 @@ async function runAuthFlow(driver, account) {
             }
             continue;
           }
-          if (IS_LINUX) {
-            // Headless Linux has no device trust; Google OAuth stalls on push-2FA.
-            log(
-              `[magic-link] No magic link found in Gmail — failing account (Google OAuth unavailable on headless Linux).`,
-            );
-            throw new Error(`magic-link timeout for ${account.email} (Google OAuth disabled on Linux)`);
-          }
-          log(`[magic-link] No magic link found in Gmail — falling through to Google OAuth`);
-          try {
-            await driver.goto(driver._authUrl || 'https://claude.ai/login');
-          } catch {}
-          await sleep(3000);
+          // Magic-link is the ONLY auth method on every platform — never fall
+          // through to Google OAuth (it stalls on push-2FA and the user wants
+          // magic-link only). Fail the account so the missing link surfaces.
+          log(`[magic-link] No magic link found in Gmail — failing account (magic-link-only, no Google fallback).`);
+          throw new Error(`magic-link timeout for ${account.email} (magic-link-only)`);
         }
       }
     }
@@ -2879,8 +2914,21 @@ async function rotate(targetEmail, opts = {}) {
             if (prevAccount) {
               const prevToken = readStoredToken(prevAccount);
               if (prevToken) {
-                writeKeychain(prevToken);
-                log(`Reverted keychain to previous account ${prevKey}`);
+                // prevToken came from the vault (mcpOAuth:{} stripped by design).
+                // Merge the current active keychain's mcpOAuth before rollback,
+                // otherwise this revert wipes giga/Amplitude/higgsfield OAuth.
+                let outToken = prevToken;
+                try {
+                  const cur = readKeychain();
+                  const cp = JSON.parse(cur);
+                  if (cp.mcpOAuth && Object.keys(cp.mcpOAuth).length > 0) {
+                    const np = JSON.parse(prevToken);
+                    np.mcpOAuth = { ...np.mcpOAuth, ...cp.mcpOAuth };
+                    outToken = JSON.stringify(np);
+                  }
+                } catch {}
+                writeKeychain(outToken);
+                log(`Reverted keychain to previous account ${prevKey} (mcpOAuth preserved)`);
               }
             }
             return false;
