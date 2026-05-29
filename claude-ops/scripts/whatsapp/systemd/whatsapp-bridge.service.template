@@ -1,0 +1,22 @@
+[Unit]
+Description=WhatsApp Bridge (whatsmeow / lharries/whatsapp-mcp) for ops-inbox MCP
+Documentation=https://github.com/lharries/whatsapp-mcp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/whatsapp-mcp/whatsapp-bridge
+ExecStart=%h/.local/share/whatsapp-mcp/whatsapp-bridge/whatsapp-bridge
+# Replaced at install time with the operator's E.164 number (no '+', no spaces).
+Environment=WA_PHONE=__WA_PHONE__
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=whatsapp-bridge
+# 3-min pairing window can keep the process busy with no output; don't kill it.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
