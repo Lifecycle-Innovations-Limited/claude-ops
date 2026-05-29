@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""pocket-env — worker-side client for the pocket-env-broker.
+
+A restricted pocket worker requests a single allowlisted secret from the
+supervising orchestrator and prints its value to stdout (nothing else), so it can
+be captured in a shell assignment:
+
+    TOKEN=$(pocket-env GOG_KEYRING_PASSWORD)
+
+Exit codes:
+    0  granted — value printed to stdout
+    1  denied / not allowed / unknown var
+    2  usage or transport error (broker unreachable)
+
+The value is printed with no trailing newline so command substitution captures it
+exactly. Denial reasons go to stderr.
+
+Env:
+    POCKET_ENV_BROKER_SOCK   socket path (default $POCKET_STATE_DIR/env-broker.sock)
+    POCKET_STATE_DIR         base dir    (default /var/lib/pocket-pipeline)
+    POCKET_TASK_ID           optional, included in the audit record
+    POCKET_WORKER_ID         optional, included in the audit record
+"""
+from __future__ import annotations
+
+import json
+import os
+import socket
+import sys
+
+STATE_DIR = os.environ.get("POCKET_STATE_DIR", "/var/lib/pocket-pipeline")
+SOCK_PATH = os.environ.get("POCKET_ENV_BROKER_SOCK", os.path.join(STATE_DIR, "env-broker.sock"))
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2 or argv[1] in ("-h", "--help"):
+        print("usage: pocket-env <VAR_NAME>", file=sys.stderr)
+        return 2
+    var = argv[1].strip()
+    req = {
+        "var": var,
+        "task_id": os.environ.get("POCKET_TASK_ID", ""),
+        "worker_id": os.environ.get("POCKET_WORKER_ID", ""),
+    }
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(5)
+        s.connect(SOCK_PATH)
+        s.sendall(json.dumps(req).encode() + b"\n")
+        raw = s.recv(65536)
+        s.close()
+    except OSError as e:
+        print(f"pocket-env: broker unreachable at {SOCK_PATH}: {e}", file=sys.stderr)
+        return 2
+    try:
+        resp = json.loads(raw.decode("utf-8").strip() or "{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        print("pocket-env: malformed broker response", file=sys.stderr)
+        return 2
+    if resp.get("ok"):
+        sys.stdout.write(resp.get("value", ""))
+        sys.stdout.flush()
+        return 0
+    print(f"pocket-env: DENIED ({resp.get('error', 'denied')}) for {var}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

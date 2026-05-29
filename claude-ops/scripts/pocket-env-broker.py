@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""pocket-env-broker — peer-authenticated secrets broker for restricted pocket workers.
+
+The pocket executor spawns autonomous `claude --bg` workers as a restricted unix
+user (POCKET_WORKER_USER, e.g. `pocket-worker`) that deliberately does NOT inherit
+the orchestrator's secret environment. This broker lets such a worker request a
+*specific* allowlisted secret at runtime, instead of getting all-or-nothing.
+
+Design:
+  • Runs as the privileged orchestrator user (the one that has the secrets in its
+    environment — launched via the same env wrapper as the executor).
+  • Listens on a unix-domain socket. Secrets are returned over the socket only —
+    they never touch disk.
+  • Every connection is peer-authenticated with SO_PEERCRED: the caller's uid MUST
+    equal the worker user's uid, otherwise the request is denied.
+  • A default-deny allowlist (env-broker-policy.json → {"allow": [...]}) decides
+    which variable names are grantable. Values come from this process's own
+    environment (so the deployment populates them the same way the executor's
+    secrets are populated — e.g. sourcing ~/.mcp-secrets.env in the env wrapper).
+  • Every request (granted or denied) is appended to an audit log.
+
+Protocol (line-delimited JSON over the socket):
+  request : {"var": "GOG_ACCOUNT", "task_id": "...", "worker_id": "..."}\n
+  reply   : {"ok": true,  "value": "..."}\n
+            {"ok": false, "error": "denied|unknown_var|not_allowed_uid|bad_request"}\n
+
+Env:
+  POCKET_ENV_BROKER_SOCK    socket path (default $POCKET_STATE_DIR/env-broker.sock)
+  POCKET_ENV_BROKER_POLICY  policy json   (default $POCKET_STATE_DIR/env-broker-policy.json)
+  POCKET_ENV_BROKER_AUDIT   audit log     (default $POCKET_STATE_DIR/env-broker-audit.log)
+  POCKET_STATE_DIR          base dir      (default /var/lib/pocket-pipeline)
+  POCKET_WORKER_USER        unix user allowed to request (default pocket-worker)
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import pwd
+import shlex
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", "/var/lib/pocket-pipeline"))
+SOCK_PATH = Path(
+    os.environ.get("POCKET_ENV_BROKER_SOCK", str(STATE_DIR / "env-broker.sock"))
+)
+POLICY_PATH = Path(
+    os.environ.get(
+        "POCKET_ENV_BROKER_POLICY", str(STATE_DIR / "env-broker-policy.json")
+    )
+)
+AUDIT_PATH = Path(
+    os.environ.get("POCKET_ENV_BROKER_AUDIT", str(STATE_DIR / "env-broker-audit.log"))
+)
+HEALTH_PATH = Path(
+    os.environ.get(
+        "POCKET_ENV_BROKER_HEALTH", str(STATE_DIR / "env-broker-health.json")
+    )
+)
+WORKER_USER = os.environ.get("POCKET_WORKER_USER", "pocket-worker").strip()
+MAX_REQUEST_BYTES = 4096
+
+# Optional push notifications on security-relevant events. Opt-in: set
+# POCKET_ENV_BROKER_NOTIFY_CMD to a command (e.g. a Telegram self-send helper);
+# the broker appends the alert text as a final argument and runs it best-effort
+# when a uid-rejection or a not-allowed denial occurs. Rate-limited per
+# (decision,var,uid) by POCKET_ENV_BROKER_NOTIFY_COOLDOWN seconds to avoid spam.
+# Default unset = no notifications (status/dashboard/audit still work).
+NOTIFY_CMD = os.environ.get("POCKET_ENV_BROKER_NOTIFY_CMD", "").strip()
+NOTIFY_COOLDOWN = int(os.environ.get("POCKET_ENV_BROKER_NOTIFY_COOLDOWN", "300"))
+NOTIFY_DECISIONS = {"not_allowed_uid", "not_allowed"}
+_NOTIFY_STATE: dict[str, float] = {}  # dedupe key -> last-sent monotonic time
+
+# In-memory observability counters, snapshotted to HEALTH_PATH after each request
+# so `ops-status` / `pocket-env-broker --status` can surface broker activity and
+# flag anomalies (denials, uid rejections) instead of leaving them in a log.
+_METRICS_LOCK = threading.Lock()
+_METRICS = {
+    "started_at": None,
+    "last_request_ts": None,
+    "totals": {
+        "requests": 0,
+        "granted": 0,
+        "denied": 0,
+        "unknown_var": 0,
+        "uid_rejected": 0,
+    },
+    "by_var": {},
+    "recent_denials": [],  # last 20 non-granted decisions, newest first
+}
+_DECISION_TO_COUNTER = {
+    "granted": "granted",
+    "not_allowed": "denied",
+    "bad_request": "denied",
+    "unknown_var": "unknown_var",
+    "not_allowed_uid": "uid_rejected",
+}
+
+
+def record_metric(uid: int, var: str, decision: str) -> None:
+    with _METRICS_LOCK:
+        t = _METRICS["totals"]
+        t["requests"] += 1
+        t[_DECISION_TO_COUNTER.get(decision, "denied")] += 1
+        bv = _METRICS["by_var"].setdefault(var or "<none>", {"granted": 0, "denied": 0})
+        bv["granted" if decision == "granted" else "denied"] += 1
+        _METRICS["last_request_ts"] = now_iso()
+        if decision != "granted":
+            _METRICS["recent_denials"].insert(
+                0, {"ts": now_iso(), "uid": uid, "var": var, "decision": decision}
+            )
+            del _METRICS["recent_denials"][20:]
+        snapshot = _health_snapshot_locked()
+    _write_health(snapshot)
+    maybe_notify(uid, var, decision)
+
+
+def maybe_notify(uid: int, var: str, decision: str) -> None:
+    """Fire the configured notify command on a security-relevant event,
+    rate-limited per (decision,var,uid). Best-effort: never let a notify failure
+    affect request handling."""
+    if not NOTIFY_CMD or decision not in NOTIFY_DECISIONS:
+        return
+    key = f"{decision}:{var}:{uid}"
+    now = time.monotonic()
+    with _METRICS_LOCK:
+        last = _NOTIFY_STATE.get(key, 0.0)
+        if now - last < NOTIFY_COOLDOWN:
+            return
+        _NOTIFY_STATE[key] = now
+    if decision == "not_allowed_uid":
+        msg = f"⚠ pocket-env-broker: BLOCKED secret request from non-worker uid={uid} (var={var or '?'})"
+    else:
+        msg = f"⚠ pocket-env-broker: DENIED non-allowlisted secret '{var}' requested by uid={uid}"
+    try:
+        subprocess.run(
+            shlex.split(NOTIFY_CMD) + [msg],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"notify failed: {e}")
+
+
+def _health_snapshot_locked() -> dict:
+    t = _METRICS["totals"]
+    # "anomaly" flags the security-relevant signals worth surfacing/alerting on.
+    anomaly = t["uid_rejected"] > 0 or t["denied"] > 0
+    return {
+        "status": "ok",
+        "anomaly": anomaly,
+        "started_at": _METRICS["started_at"],
+        "last_request_ts": _METRICS["last_request_ts"],
+        "totals": dict(t),
+        "by_var": {k: dict(v) for k, v in _METRICS["by_var"].items()},
+        "recent_denials": list(_METRICS["recent_denials"]),
+        "updated_at": now_iso(),
+    }
+
+
+def _write_health(snapshot: dict) -> None:
+    try:
+        HEALTH_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = HEALTH_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(snapshot, indent=2))
+        tmp.replace(HEALTH_PATH)
+    except OSError as e:
+        log(f"health write failed: {e}")
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def log(msg: str) -> None:
+    print(f"{now_iso()} [pocket-env-broker] {msg}", file=sys.stderr, flush=True)
+
+
+def allowed_uid() -> int | None:
+    """Resolve the uid the worker user runs as. None if the user does not exist."""
+    try:
+        return pwd.getpwnam(WORKER_USER).pw_uid
+    except KeyError:
+        return None
+
+
+def load_policy() -> set[str]:
+    """Return the set of grantable variable names. Default-deny: missing/broken
+    policy yields an empty allowlist (deny everything)."""
+    try:
+        data = json.loads(POLICY_PATH.read_text())
+        allow = data.get("allow", [])
+        return {str(v) for v in allow if isinstance(v, str)}
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return set()
+
+
+def audit(record: dict) -> None:
+    record = {"ts": now_iso(), **record}
+    try:
+        AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with AUDIT_PATH.open("a") as f:
+            f.write(json.dumps(record) + "\n")
+    except OSError as e:
+        log(f"audit write failed: {e}")
+
+
+def peer_uid(conn: socket.socket) -> int:
+    """Read the connected peer's uid via SO_PEERCRED (Linux). Raises on failure."""
+    creds = conn.getsockopt(
+        socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+    )
+    _pid, uid, _gid = struct.unpack("3i", creds)
+    return uid
+
+
+def decide(var: str, policy: set[str]) -> tuple[bool, str | None, str]:
+    """Pure policy decision. Returns (ok, value_or_None, reason)."""
+    if not var:
+        return False, None, "bad_request"
+    if var not in policy:
+        return False, None, "not_allowed"
+    value = os.environ.get(var)
+    if value is None:
+        # In the allowlist but the broker has no such value in its environment.
+        return False, None, "unknown_var"
+    return True, value, "granted"
+
+
+def handle(conn: socket.socket, want_uid: int | None) -> None:
+    try:
+        conn.settimeout(5)
+        # Peer authentication first — reject any caller that is not the worker user.
+        uid = peer_uid(conn)
+        raw = conn.recv(MAX_REQUEST_BYTES)
+        try:
+            req = json.loads(raw.decode("utf-8").strip() or "{}")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            req = {}
+        var = str(req.get("var", "")).strip()
+        task_id = str(req.get("task_id", ""))[:128]
+        worker_id = str(req.get("worker_id", ""))[:128]
+
+        if want_uid is None or uid != want_uid:
+            audit(
+                {
+                    "uid": uid,
+                    "var": var,
+                    "task_id": task_id,
+                    "worker_id": worker_id,
+                    "decision": "not_allowed_uid",
+                }
+            )
+            record_metric(uid, var, "not_allowed_uid")
+            conn.sendall(
+                json.dumps({"ok": False, "error": "not_allowed_uid"}).encode() + b"\n"
+            )
+            return
+
+        ok, value, reason = decide(var, load_policy())
+        audit(
+            {
+                "uid": uid,
+                "var": var,
+                "task_id": task_id,
+                "worker_id": worker_id,
+                "decision": reason,
+            }
+        )
+        record_metric(uid, var, reason)
+        if ok:
+            conn.sendall(json.dumps({"ok": True, "value": value}).encode() + b"\n")
+        else:
+            conn.sendall(json.dumps({"ok": False, "error": reason}).encode() + b"\n")
+    except (OSError, socket.timeout) as e:
+        log(f"connection error: {e}")
+    finally:
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+
+def serve() -> int:
+    want_uid = allowed_uid()
+    if want_uid is None:
+        log(
+            f"worker user {WORKER_USER!r} does not exist — every request will be denied"
+        )
+
+    SOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if SOCK_PATH.exists():
+        SOCK_PATH.unlink()
+
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(str(SOCK_PATH))
+    # 0660: connect is gated by filesystem perms (provisioning grants the worker
+    # user via group/ACL) AND by SO_PEERCRED at the application layer.
+    os.chmod(SOCK_PATH, 0o660)
+    srv.listen(16)
+    with _METRICS_LOCK:
+        _METRICS["started_at"] = now_iso()
+        _write_health(_health_snapshot_locked())
+    log(f"listening on {SOCK_PATH} (grant uid={want_uid}, policy={POLICY_PATH})")
+
+    stop = threading.Event()
+
+    def _shutdown(*_):
+        stop.set()
+        try:
+            srv.close()
+        except OSError:
+            pass
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    while not stop.is_set():
+        try:
+            conn, _ = srv.accept()
+        except OSError:
+            break
+        threading.Thread(target=handle, args=(conn, want_uid), daemon=True).start()
+
+    try:
+        if SOCK_PATH.exists():
+            SOCK_PATH.unlink()
+    except OSError:
+        pass
+    log("stopped")
+    return 0
+
+
+def print_status(as_json: bool) -> int:
+    """Read the health snapshot and print it. Observability entry point used by
+    `pocket-env-broker --status` and surfaced by ops-status."""
+    try:
+        snap = json.loads(HEALTH_PATH.read_text())
+    except (OSError, json.JSONDecodeError):
+        print(
+            json.dumps({"status": "down", "reason": "no health file"})
+            if as_json
+            else "pocket-env-broker: DOWN (no health file — broker not running?)"
+        )
+        return 1
+    if as_json:
+        print(json.dumps(snap))
+        return 0
+    t = snap.get("totals", {})
+    flag = "  ⚠ ANOMALY" if snap.get("anomaly") else ""
+    print(f"pocket-env-broker: {snap.get('status', '?')}{flag}")
+    print(
+        f"  started {snap.get('started_at')} · last req {snap.get('last_request_ts') or '(none)'}"
+    )
+    print(
+        f"  requests={t.get('requests', 0)} granted={t.get('granted', 0)} "
+        f"denied={t.get('denied', 0)} unknown={t.get('unknown_var', 0)} uid_rejected={t.get('uid_rejected', 0)}"
+    )
+    for d in snap.get("recent_denials", [])[:5]:
+        print(
+            f"  denied: {d.get('ts')} uid={d.get('uid')} var={d.get('var')} ({d.get('decision')})"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--status":
+        sys.exit(print_status(as_json="--json" in sys.argv[2:]))
+    sys.exit(serve())
