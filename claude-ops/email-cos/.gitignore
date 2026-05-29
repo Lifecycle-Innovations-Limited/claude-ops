@@ -1,5 +1,5 @@
 # Local config — never committed (contains real account IDs, JIDs, chat IDs, etc.)
-config.sh
+/config.sh
 categories.json
 
 # Runtime state / ledgers
