@@ -58,7 +58,8 @@ LOG_PREFIX = "[ops-pocket-triage]"
 # === Phase 2 hook: decision log =====================================
 try:
     import importlib.util as _ilu
-    _dec_spec = _ilu.spec_from_file_location("_pkt_decisions", "/opt/pocket-mcp/pipeline/ops-pocket-decisions.py")
+    _SCRIPTS = Path(os.environ.get("POCKET_SCRIPTS_DIR", str(Path(__file__).resolve().parent)))
+    _dec_spec = _ilu.spec_from_file_location("_pkt_decisions", _SCRIPTS / "ops-pocket-decisions.py")
     _dec_mod = _ilu.module_from_spec(_dec_spec)
     _dec_spec.loader.exec_module(_dec_mod)
 except Exception as _e:
@@ -406,7 +407,7 @@ def main() -> int:
             "decision": decision,
             "routed_to": verdict,
         })
-        if _dec_mod:
+        if _dec_mod and not DRY_RUN:
             try:
                 _dec_mod.write_decision(_dec_mod.make(
                     event_type=task.get("source", "triage"),
