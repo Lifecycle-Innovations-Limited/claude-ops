@@ -227,26 +227,119 @@ sqlite3 "$DB" "SELECT jid, name, phone FROM contacts WHERE name LIKE '%<name>%' 
 ---
 
 
-## Agent Teams support
+## Scan engine — parallel Workflow fan-out (primary)
 
-If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when processing "all channels" mode. This enables:
-- Channel agents run in parallel but can share context (e.g., WhatsApp agent finds a message referencing an email thread → email agent can prioritize it)
-- You can steer agents: "skip WhatsApp for now, focus on email first"
-- Agents report completion per-channel so you can process replies as they come in
+When scanning more than one channel (the "all channels" path, or any multi-channel
+selection), use the **`Workflow` tool** to fan out one **read-only** scanner agent per
+*available* channel, then synthesize. This replaces the old sequential / fire-and-forget
+scan: channels are scanned concurrently, each returns structured classified results, and
+wall-clock collapses to the slowest single channel instead of the sum of all of them.
 
-**Team setup** (only when flag is enabled, "all channels" mode):
+**Hard constraints (these override convenience — they are how this stays Rule-6-safe):**
+
+- **Read-only scanners — Rule 6.** Every scanner agent's prompt MUST state, verbatim in
+  spirit: *"You are READ-ONLY. Do NOT send, archive, mark-read, or mutate anything. Only
+  read / search and classify. Return structured results."* Scanners get only read/search
+  tools. **All sending stays in the main session**, one draft → one approval → one send.
+  The workflow NEVER sends, archives, or mutates — it only reads and classifies.
+- **Detect availability FIRST.** Only fan out a scanner for a channel that already passed
+  the per-channel checks in "Channel availability + fallback". Never spawn a scanner for an
+  unconfigured / unreachable channel — it burns a turn and produces a misleading
+  "unreachable" row. Build the workflow's channel list from the channels you confirmed up.
+- **No `AskUserQuestion` inside the workflow.** Presentation, reply drafting, approval,
+  archive, and the Cron offer all happen back in the main session *after* the workflow
+  returns. Workflow agents cannot gate sends, so they must never try.
+- **Each scanner loads its own MCP tools** via `ToolSearch select:...` before use, and
+  honours the documented reconnect handshake (WhatsApp 3× at 5s, iMessage 5s→15s) before
+  reporting a channel unreachable. Never fabricate conversations.
+
+**Canonical scan workflow.** Pass the available channels in via `args` (the orchestrator
+builds the list from the detected-available channels), so the script body stays stable:
+
+```js
+Workflow({
+  args: [
+    // ONE entry per channel detected as AVAILABLE. Build select/steps from the
+    // per-channel reference sections below. Examples:
+    { key: 'email',    select: 'select:mcp__gog__gmail_search,mcp__gog__gmail_read_thread,mcp__gog__gmail_labels',
+      steps: 'gmail_search "in:inbox newer_than:7d"; for threads that may need a reply, read the last message to find who sent it last.' },
+    { key: 'slack',    select: 'select:mcp__slack__conversations_unreads,mcp__slack__channels_list,mcp__slack__conversations_history,mcp__slack__conversations_replies',
+      steps: 'conversations_unreads to find unread DMs/channels; read latest via history/replies.' },
+    { key: 'whatsapp', select: 'select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__get_chat',
+      steps: 'list_chats {sort_by:"last_active"}; classify by last_is_from_me; only fetch thread when null.' },
+    { key: 'imessage', select: 'select:mcp__plugin_imessage_imessage__chat_messages',
+      steps: 'chat_messages {limit:30} (omit chat_guid); classify each thread by who sent the LAST message. Capture the chat_id GUID from each header.' },
+    { key: 'telegram', select: 'select:mcp__plugin_ops_telegram__list_dialogs,mcp__plugin_ops_telegram__get_messages,mcp__plugin_ops_telegram__search_messages',
+      steps: 'list_dialogs (last 7d); get_messages for dialogs with pending activity.' },
+  ],
+  script: `
+export const meta = {
+  name: 'ops-inbox-scan',
+  description: 'Read-only parallel scan + classify of all available comms channels',
+  phases: [{ title: 'Scan' }, { title: 'Synthesize' }],
+}
+
+const SCAN_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  required: ['channel', 'reachable', 'conversations'],
+  properties: {
+    channel:     { type: 'string' },
+    reachable:   { type: 'boolean', description: 'true ONLY if tools were actually called and returned data' },
+    note:        { type: 'string',  description: 'tools called, or the exact error if unreachable' },
+    conversations: { type: 'array', items: {
+      type: 'object', additionalProperties: false,
+      required: ['who', 'summary', 'status'],
+      properties: {
+        who:           { type: 'string' },
+        summary:       { type: 'string', description: 'one line: what is pending' },
+        status:        { type: 'string', enum: ['NEEDS_REPLY', 'WAITING', 'HANDLED', 'FYI'] },
+        chatId:        { type: 'string', description: 'JID / chat GUID / threadId needed to reply — capture it now' },
+        lastMessageAt: { type: 'string' },
+      },
+    }},
+  },
+}
+
+phase('Scan')
+const scans = (await parallel(args.map(c => () =>
+  agent(
+    \`READ-ONLY inbox scanner for the "\${c.key}" channel. You MUST NOT send, archive, \` +
+    \`mark-read, or mutate anything — read / search ONLY.\\n\` +
+    \`STEP 1: run ToolSearch with query exactly "\${c.select}" to load the tool schemas.\\n\` +
+    \`STEP 2: \${c.steps}\\n\` +
+    \`Classify each conversation NEEDS_REPLY / WAITING / HANDLED / FYI by who sent the LAST \` +
+    \`message. Capture chatId for each (needed later to reply). Cover ~last 7 days plus \` +
+    \`anything clearly still open. Retry the documented reconnect handshake before reporting \` +
+    \`reachable=false. Never fabricate conversations.\`,
+    { label: \`scan:\${c.key}\`, phase: 'Scan', schema: SCAN_SCHEMA }
+  )
+))).filter(Boolean)
+
+phase('Synthesize')
+return await agent(
+  \`Per-channel read-only scan results as JSON:\\n\${JSON.stringify(scans, null, 2)}\\n\\n\` +
+  \`Return ONLY structured JSON with buckets: needsReply[], waiting[], fyi[], unreachable[]. \` +
+  \`Each item: {channel, who, summary, chatId, lastMessageAt}. Order needsReply most-urgent \` +
+  \`first. Do NOT draft replies — that happens in the main session under the per-message gate.\`,
+  { label: 'synthesize', phase: 'Synthesize',
+    schema: { type: 'object', additionalProperties: true } }
+)
+`,
+})
 ```
-TeamCreate("inbox-channels")
-Agent(team_name="inbox-channels", name="whatsapp-scanner", ...)
-Agent(team_name="inbox-channels", name="email-scanner", ...)
-Agent(team_name="inbox-channels", name="slack-scanner", ...)
-Agent(team_name="inbox-channels", name="telegram-scanner", ...)
-Agent(team_name="inbox-channels", name="notion-scanner", ...)
-```
 
-Each agent scans its channel and reports back classified results. You then process NEEDS_REPLY items across all channels in priority order.
+After the workflow returns the synthesized buckets, proceed to **presentation + reply in
+the main session** using the per-channel sections below. Stage every reply one-at-a-time
+under Rule 6 (one draft → `AskUserQuestion` / approval word → send → next). The workflow
+gave you *what* needs a reply and the `chatId` to reach it; it never sent anything.
 
-If the flag is NOT set, process channels sequentially or use fire-and-forget subagents.
+**Fallback when `Workflow` is unavailable** (older harness): if
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, use **Agent Teams** — one
+`Agent(team_name="inbox-channels", name="<channel>-scanner")` per *available* channel, each
+read-only, reporting classified results back; you can then steer ("focus email first") and
+process replies as they land. If neither is available, scan channels sequentially in the
+main session. Every fallback keeps the same **read-only + Rule 6** constraints — scanners
+never send.
 
 ## Pre-gathered data
 
@@ -353,7 +446,7 @@ For each channel, detect availability at runtime:
 
 1. **Parse pre-gathered data** for initial counts (unread is just a starting signal).
 
-2. **For each channel, run a FULL scan** (not just unread):
+2. **For each channel, run a FULL scan** (not just unread). Drive this via the **Scan engine** above — a parallel `Workflow` fan-out of read-only scanners (Agent Teams / sequential as the documented fallback). The per-channel detail below defines what each scanner reads and how the main session presents results and replies:
    - **Email**: Search `in:inbox` (not `is:unread`) via `gog gmail search -a $GMAIL_ACCOUNT -j --results-only --no-input --max 30 "in:inbox"`. For each thread, read the last message to determine who sent it last. Check for DRAFT or SENT labels. **Before suggesting to send a draft, verify no reply was already sent in the thread.**
    - **WhatsApp**: Call `mcp__whatsapp__list_chats {sort_by: "last_active"}` to get all chats. Filter to chats with `last_message_time` in the last 7 days (`last_message_time` is RFC3339+TZ — parse with timezone awareness, never strip the offset). Resolve display name from contacts.db first (`SELECT name FROM contacts WHERE jid=?`), fall back to the chat's `name` field, and only call giga memory when both are empty. Classify direction using `last_is_from_me` on the chat object (`1` = WAITING, `0` = NEEDS_REPLY). Only fetch the full thread via `mcp__whatsapp__list_messages {chat_jid, limit: 20}` when `last_is_from_me` is absent/null or when building reply context for NEEDS_REPLY chats.
    - **iMessage**: Call `mcp__plugin_imessage_imessage__chat_messages {limit: 30}` (omit `chat_guid` to pull every allowlisted thread at once). Output is rendered text, not JSON: each thread is labelled `DM`/`Group` with its participant list, then timestamped messages oldest-first. Sent-by-you messages are marked (`Me:` / `→`); inbound messages carry the sender handle. Classify each thread by who sent the LAST message — same NEEDS_REPLY / WAITING / FYI logic as WhatsApp.
