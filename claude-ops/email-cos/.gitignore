@@ -1,0 +1,21 @@
+# Local config — never committed (contains real account IDs, JIDs, chat IDs, etc.)
+/config.sh
+categories.json
+
+# Runtime state / ledgers
+state/
+*.ledger
+seen_sweep.txt
+approve-seen.txt
+metrics.jsonl
+digest.txt
+audit.log
+sender.out
+orch.out
+sweep.out
+linear-queue.jsonl
+pending.d/
+
+# Derived / generated
+*.pyc
+__pycache__/
