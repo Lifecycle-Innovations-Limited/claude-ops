@@ -1,4 +1,20 @@
 # Changelog
+## 2.14.0 — 2026-05-29
+
+### Added
+- **`/ops:ops-aws-audit`** — read-only, account-agnostic AWS audit skill. A single
+  self-contained `scripts/ops-aws-audit.sh` that uses the caller's credential
+  chain and **auto-discovers all enabled regions** for a full-account sweep.
+  Severity-ranked findings (CRITICAL→LOW) in `report.md` + machine-readable
+  `findings.json`, and a pixel-art terminal summary on completion. Covers IAM
+  (root key/MFA, stale keys, Access Analyzer), EC2/EBS (unattached/gp2/unencrypted
+  volumes, idle EIPs, world-open security groups incl. all-traffic), RDS
+  (unencrypted/public, orphaned snapshots — Aurora-aware), S3 (account BPA,
+  encryption, lifecycle), CloudWatch retention, Lambda EOL runtimes,
+  GuardDuty/Security Hub/Cost Anomaly/Compute Optimizer enrollment, and
+  per-service cost deltas. No mutations; cleanup stays human-gated.
+- `scripts/install-aws-audit-cron.sh` — optional daily `systemd --user` timer.
+
 
 All notable changes to this project will be documented in this file.
 
