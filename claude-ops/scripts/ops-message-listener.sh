@@ -57,53 +57,76 @@ json.dump(data, open('$STATE_FILE', 'w'))
 }
 
 # ── Append messages to queue ──────────────────────────────────────────────
+# SECURITY: JSON payload piped via stdin (NEVER interpolated into source) to prevent
+# Python code injection from untrusted Telegram/WhatsApp message content.
 append_to_queue() {
   local new_msgs_json="$1"
-  # Pass JSON via stdin to avoid triple-quote shell injection (Bugbot issue #14328751/1).
-  printf '%s' "$new_msgs_json" | python3 -c "
-import json, sys
+  QUEUE_FILE="$QUEUE_FILE" printf '%s' "$new_msgs_json" | python3 -c "
+import json, os, sys
 from datetime import datetime, timezone
 
-queue_file = '$QUEUE_FILE'
+queue_file = os.environ['QUEUE_FILE']
 try:
-    queue = json.load(open(queue_file))
-except:
+    with open(queue_file) as f:
+        queue = json.load(f)
+except Exception:
     queue = {'messages': [], 'last_updated': None}
 
-new_msgs = json.load(sys.stdin)
-# Dedup by message id
+try:
+    new_msgs = json.load(sys.stdin)
+except Exception:
+    new_msgs = []
+
+if not isinstance(new_msgs, list):
+    new_msgs = []
+
 existing_ids = {m.get('id') for m in queue['messages']}
 added = 0
 for msg in new_msgs:
+    if not isinstance(msg, dict):
+        continue
     if msg.get('id') not in existing_ids:
         queue['messages'].append(msg)
         existing_ids.add(msg.get('id'))
         added += 1
 
-# Keep last 200 messages max
 queue['messages'] = queue['messages'][-200:]
 queue['last_updated'] = datetime.now(timezone.utc).isoformat()
 
-json.dump(queue, open(queue_file, 'w'), indent=2)
+with open(queue_file, 'w') as f:
+    json.dump(queue, f, indent=2)
 print(added)
 " 2>/dev/null || echo 0
 }
 
 # ── Dispatch Telegram messages to target session ───────────────────────────
+# SECURITY: JSON piped via stdin; output is NUL-delimited so newlines in message
+# text cannot smuggle additional dispatch lines or arguments.
 dispatch_telegram() {
   local new_msgs_json="$1"
   printf '%s' "$new_msgs_json" | python3 -c "
-import json, sys
-msgs = json.load(sys.stdin)
+import json, sys, re
+try:
+    msgs = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if not isinstance(msgs, list):
+    sys.exit(0)
+MAX_LEN = 4000
+SAFE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
 for msg in msgs:
-    from_user = msg.get('from', 'unknown')
-    text = msg.get('text', '').replace('\n', '\\\\n')
-    print(f'telegram:{from_user}:{text}')
-" 2>/dev/null | while IFS= read -r dispatch_line; do
-    if [[ -n "$dispatch_line" ]]; then
-      ops-bg send "$TG_TARGET_SESSION" "$dispatch_line" 2>/dev/null || log "dispatch failed: $dispatch_line"
+    if not isinstance(msg, dict):
+        continue
+    from_user = str(msg.get('from', 'unknown'))[:64]
+    text = str(msg.get('text', ''))[:MAX_LEN]
+    from_user = SAFE.sub('', from_user).replace('\x00', '')
+    text = SAFE.sub('', text).replace('\x00', '')
+    sys.stdout.write(f'telegram:{from_user}:{text}\x00')
+" 2>/dev/null | while IFS= read -r -d '' dispatch_line; do
+    if [[ -n "$dispatch_line" && ${#dispatch_line} -lt 8192 ]]; then
+      ops-bg send "$TG_TARGET_SESSION" "$dispatch_line" 2>/dev/null || log "dispatch failed (len=${#dispatch_line})"
     fi
-  done || true
+  done
 }
 
 # ── Poll WhatsApp ─────────────────────────────────────────────────────────
