@@ -1,0 +1,7 @@
+[Unit]
+Description=email-cos approval reply reader (Gmail + Slack + Telegram)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/email-cos/email-cos-approve.sh
+TimeoutStartSec=180

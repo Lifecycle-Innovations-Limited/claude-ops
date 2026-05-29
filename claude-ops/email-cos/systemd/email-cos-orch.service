@@ -1,0 +1,10 @@
+[Unit]
+Description=Email chief-of-staff L2 orchestrator (Opus enrich+draft+remind)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=15
+EnvironmentFile=-%h/.config/email-cos/config.sh
+ExecStart=%h/.local/share/email-cos/email-cos-orch.sh
+TimeoutStartSec=1200

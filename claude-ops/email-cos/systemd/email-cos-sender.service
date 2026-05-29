@@ -1,0 +1,8 @@
+[Unit]
+Description=email-cos approved-reply sender (gog, hook-exempt)
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/email-cos/config.sh
+ExecStart=%h/.local/share/email-cos/email-cos-sender.sh
+TimeoutStartSec=180

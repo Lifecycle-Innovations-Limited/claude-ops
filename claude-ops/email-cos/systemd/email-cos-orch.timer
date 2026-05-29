@@ -1,0 +1,10 @@
+[Unit]
+Description=L2 email orchestrator — default every 20 min
+
+[Timer]
+OnBootSec=8min
+OnUnitInactiveSec=20min
+AccuracySec=60s
+
+[Install]
+WantedBy=timers.target
