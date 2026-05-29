@@ -350,6 +350,9 @@ def spawn_worker(task: dict) -> dict | None:
     # ignored by --bg (would leave the session idle with "(send a prompt)").
     env = os.environ.copy()
     env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "0"
+    # Identify the worker to the env-broker audit log (pocket-env client reads these).
+    env["POCKET_TASK_ID"] = str(task_id)
+    env["POCKET_WORKER_ID"] = worker_id
     if WORKER_USER and WORKER_CLAUDE_CONFIG_DIR:
         # Point the restricted worker at a Claude config dir it can read.
         env["CLAUDE_CONFIG_DIR"] = WORKER_CLAUDE_CONFIG_DIR
@@ -368,7 +371,7 @@ def spawn_worker(task: dict) -> dict | None:
         # rather than hanging); `-H` sets HOME to the worker user's home so Claude
         # writes session state there; --preserve-env carries only the vars the
         # worker needs, dropping the executor user's secrets from the environment.
-        _preserve = "PATH,CLAUDE_CONFIG_DIR,CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,ANTHROPIC_API_KEY,POCKET_WORKER_MODEL"
+        _preserve = "PATH,CLAUDE_CONFIG_DIR,CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,ANTHROPIC_API_KEY,POCKET_WORKER_MODEL,POCKET_ENV_BROKER_SOCK,POCKET_STATE_DIR,POCKET_TASK_ID,POCKET_WORKER_ID"
         cmd = ["sudo", "-n", "-H", "-u", WORKER_USER, f"--preserve-env={_preserve}", "--", *cmd]
 
     try:

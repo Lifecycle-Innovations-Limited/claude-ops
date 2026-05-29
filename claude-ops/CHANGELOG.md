@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.12.0] — 2026-05-29
+
+### Added
+
+- **pocket-env-broker — peer-authenticated secrets broker for restricted pocket workers.** Restricted background workers (which no longer inherit the orchestrator's secret env, per 2.11.9) can now request a *specific allowlisted* secret at runtime via the `pocket-env <VAR>` client, instead of all-or-nothing. The broker (`scripts/pocket-env-broker.py`, runs as the privileged orchestrator user) listens on a unix socket, authenticates the caller with SO_PEERCRED (must be the worker uid), checks a **default-deny** allowlist (`env-broker-policy.json`), returns the value over the socket only (never to disk), and audits every grant/deny. Ships with the client, policy + systemd templates, docs, and tests; the pocket executor forwards the broker socket path + task/worker ids to workers.
+- **Env-broker observability.** The broker keeps a metrics snapshot (`env-broker-health.json`: request/grant/deny/uid-rejection counters, recent denials, `anomaly` flag), exposes `pocket-env-broker --status [--json]`, and surfaces an `Env-broker` line in `/ops:ops-status` that raises a `⚠` anomaly on any uid rejection (a prompt-injection probing signal).
+- **Env-broker push notifications (opt-in).** Set `POCKET_ENV_BROKER_NOTIFY_CMD` (+ `POCKET_ENV_BROKER_NOTIFY_COOLDOWN`, default 300s) and the broker fires that command with an alert on uid rejections / not-allowed denials — rate-limited, best-effort, never blocking request handling. Wired to the operator's own chat it is a self-notification (outbound-comms-gate exempt).
+
+
 ## [2.11.9] — 2026-05-29
 
 ### Security
