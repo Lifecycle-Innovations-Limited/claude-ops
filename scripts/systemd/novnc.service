@@ -1,0 +1,16 @@
+[Unit]
+Description=noVNC websockify proxy (HTTP/WebSocket -> local VNC :5901)
+Documentation=https://github.com/Lifecycle-Innovations-Limited/claude-ops/blob/main/scripts/systemd/README-novnc-vnc.md
+After=graphical-session.target network-online.target
+
+[Service]
+Type=simple
+# Serves the noVNC web client and bridges WebSocket <-> the local TigerVNC
+# server on :5901 (display :1). Bound to 0.0.0.0 so it is reachable over the
+# Tailscale interface; the box has no public IP, so this is tailnet-only.
+ExecStart=/usr/bin/python3 -m websockify --web %h/noVNC 0.0.0.0:6080 localhost:5901
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
