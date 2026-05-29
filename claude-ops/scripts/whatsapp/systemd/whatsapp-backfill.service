@@ -1,0 +1,15 @@
+[Unit]
+Description=WhatsApp history backfill — POSTs /api/backfill to the bridge (oneshot)
+Documentation=https://github.com/lharries/whatsapp-mcp
+After=whatsapp-bridge.service
+Requires=whatsapp-bridge.service
+PartOf=whatsapp-bridge.service
+
+[Service]
+Type=oneshot
+# Allow the bridge a moment to be ready (up to 10s) before we POST.
+ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5; do ss -ltn 2>/dev/null | grep -q ":8080" && exit 0; sleep 2; done; exit 0'
+ExecStart=/usr/bin/curl -fsS -m 30 -X POST -o /dev/null -w "wa-backfill HTTP %%{http_code}\n" http://127.0.0.1:8080/api/backfill
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=whatsapp-backfill
