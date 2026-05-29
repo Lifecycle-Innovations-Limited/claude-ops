@@ -1,0 +1,10 @@
+[Unit]
+Description=Poll for approval replies — default every 3 min
+
+[Timer]
+OnBootSec=6min
+OnUnitInactiveSec=3min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

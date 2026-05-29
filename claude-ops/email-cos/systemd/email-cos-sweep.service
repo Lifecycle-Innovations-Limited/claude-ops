@@ -1,0 +1,10 @@
+[Unit]
+Description=Email chief-of-staff L1 sweep (Haiku classify/label/archive)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=10
+EnvironmentFile=-%h/.config/email-cos/config.sh
+ExecStart=%h/.local/share/email-cos/email-cos-sweep.sh
+TimeoutStartSec=600
