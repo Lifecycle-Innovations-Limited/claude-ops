@@ -1,3 +1,7 @@
 #!/usr/bin/env bash
 # Thin wrapper so `ops-pocket-notify` is on PATH; the implementation is Python.
-exec python3 "$(dirname "$0")/../scripts/ops-pocket-notify.py" "$@"
+# Resolve symlinks (readlink -f) so PATH-symlinked invocations still locate the
+# script — `dirname "$0"` alone resolves relative to the symlink's dir, not the
+# real file, which breaks `../scripts/...`.
+SELF="$(readlink -f "$0")"
+exec python3 "$(dirname "$SELF")/../scripts/ops-pocket-notify.py" "$@"
