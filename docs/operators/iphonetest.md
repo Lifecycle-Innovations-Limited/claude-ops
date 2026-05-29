@@ -10,7 +10,9 @@ and every Appium-extension surprise that has been observed live.
 - Driver script: `healify/scripts/devicefarm/iphonetest.py` → hands off to
   `tunnel.py` for `--mode tunnel`. This guide documents the **JSON-RPC surface
   of `tunnel.py` as it exists today**, verified against
-  [`tunnel.py`](https://github.com/Lifecycle-Innovations-Limited/healify/blob/main/scripts/devicefarm/tunnel.py).
+  [`tunnel.py @ 22cf0cac`](https://github.com/Lifecycle-Innovations-Limited/healify/blob/22cf0cac5d9b88d066b4badd94b59d480be5285e/scripts/devicefarm/tunnel.py)
+  (healify [PR #6174](https://github.com/Lifecycle-Innovations-Limited/healify/pull/6174),
+  merged 2026-05-29). When the surface drifts, update this file and re-pin the SHA.
 - Device Farm API surface:
   [`CreateRemoteAccessSession`](https://docs.aws.amazon.com/devicefarm/latest/APIReference/API_CreateRemoteAccessSession.html).
 - Appium driver: `appium-xcuitest-driver` —
@@ -112,7 +114,8 @@ python3 scripts/devicefarm/stop-session.py --all-active
 ## 4. JSON-RPC command catalogue
 
 `tunnel.py --json` reads one JSON object per stdin line and writes one JSON
-response per stdout line. The full handlers dict from `tunnel.py:jsonrpc`:
+response per stdout line. The full handlers dict from `tunnel.py:jsonrpc`
+(quoted verbatim from healify@`22cf0cac5d9b88d066b4badd94b59d480be5285e`):
 
 ```python
 handlers: dict[str, Any] = {
@@ -125,6 +128,7 @@ handlers: dict[str, Any] = {
     "swipe": _swipe,
     "type": lambda m: t.type_text(m["text"], submit=bool(m.get("submit", False))),
     "press": lambda m: t.press(m["button"]),
+    "launch_app": lambda m: t.launch_app(m.get("bundle_id")),
     "wait": lambda m: time.sleep(float(m["seconds"])),
     "status": lambda m: t.status(),
     "stop": _stop,
@@ -229,14 +233,31 @@ Both compile down to `mobile: dragFromToForDuration` on the driver.
 
 ### `type`
 
-Send keys to the focused element. `submit: true` appends a newline.
+Send keys to whichever field is focused. `submit: true` appends a newline
+(send-keys `"\n"` on the focused element) after the text lands.
 
 ```json
 {"cmd":"type","text":"hello Anna","submit":false}
 ```
 
-Internally this dispatches `mobile: keys` — which the Device Farm-bundled
-xcuitest driver **does not expose** on the WDA endpoint. See gotcha §6.1.
+Since healify@`22cf0cac5d9b88d066b4badd94b59d480be5285e`, `type_text` cascades
+through the same four strategies `explore.py:execute_action` uses, in this
+order (verbatim from `tunnel.py:Tunnel.type_text`):
+
+1. Focused element (`AppiumBy.IOS_PREDICATE, "hasKeyboardFocus == 1"`) →
+   `set_value(text)`
+2. Same focused element → `send_keys(text)`
+3. First-visible TextField or SecureTextField (predicate
+   `(type == 'XCUIElementTypeTextField' OR type == 'XCUIElementTypeSecureTextField') AND visible == 1`,
+   sorted top-left first) → tap, then `set_value`, falling back to
+   `send_keys` on `set_value` failure
+4. `mobile: keys` (last resort — usually fails on Device Farm; kept for
+   local Appium / simulator hosts)
+
+The first three strategies are why **`type` now works on app-rendered Healify
+UI without first having to focus the field manually** — see the matrix in §5
+and gotcha §6.1 for what's still broken (iOS Springboard / Spotlight system
+search fields).
 
 ### `press`
 
@@ -246,6 +267,66 @@ Hardware-button press. Valid values:
 ```json
 {"cmd":"press","button":"home"}
 ```
+
+### `launch_app`
+
+Launch (or bring to foreground) an app by bundle id. Device Farm does NOT
+auto-launch the freshly-installed IPA after `start` — the device lands on
+Springboard. This command is the canonical recovery; call it once right
+after `start`. Added in healify [PR #6174](https://github.com/Lifecycle-Innovations-Limited/healify/pull/6174)
+(merged 2026-05-29, SHA `22cf0cac5d9b88d066b4badd94b59d480be5285e`).
+
+Explicit bundle id form:
+
+```json
+{"cmd":"launch_app","bundle_id":"com.staging.healify"}
+```
+
+Auto-resolve form (`bundle_id` omitted — `tunnel.py` reads the IPA's
+`package_name` field out of the upload metadata Device Farm holds against
+the `app_arn` cached at `start` time, via
+`df.get_upload(arn=app_arn)["upload"]["metadata"]["package_name"]`):
+
+```json
+{"cmd":"launch_app"}
+```
+
+Response on success:
+
+```json
+{"ok":true,"bundle_id":"com.staging.healify","method":"activateApp"}
+```
+
+`method` is `activateApp` when `mobile: activateApp` succeeds, or `launchApp`
+when `tunnel.py` falls back to the older `mobile: launchApp` (kept for older
+Appium driver builds). Quoted verbatim from `tunnel.py:Tunnel.launch_app`:
+
+```python
+try:
+    self.driver.execute_script("mobile: activateApp", {"bundleId": bundle})
+    return {"ok": True, "bundle_id": bundle, "method": "activateApp"}
+except Exception as exc_activate:
+    try:
+        self.driver.execute_script("mobile: launchApp", {"bundleId": bundle})
+        return {"ok": True, "bundle_id": bundle, "method": "launchApp"}
+    except Exception as exc_launch:
+        return {
+            "ok": False,
+            "error": f"activateApp: {exc_activate!r} | launchApp: {exc_launch!r}",
+        }
+```
+
+Error paths:
+
+- Called before `start` (no Appium driver yet):
+  `{"ok": false, "error": "session not started"}`.
+- No `bundle_id` and no cached `app_arn`:
+  `{"ok": false, "error": "no bundle_id provided and no app_arn cached on the session"}`.
+- IPA upload metadata is missing or has no `package_name`:
+  `{"ok": false, "error": "upload metadata has no \`package_name\`; pass bundle_id explicitly"}`
+  (or a sibling error covering "no metadata" / "metadata is not valid JSON").
+- Both `mobile: activateApp` and `mobile: launchApp` throw:
+  `{"ok": false, "error": "activateApp: <repr> | launchApp: <repr>"}`.
 
 ### `wait`
 
@@ -295,8 +376,9 @@ Response on clean stop: `{"ok":true,"quit":true}`. On stop failure:
 ## 5. What works vs. what's broken on Device Farm
 
 Behavior observed live on iPhone 17 Pro / iOS 26.3.1 driving Healify staging
-(2026-05-29). The Appium driver bundled in Device Farm's managed Appium server
-lags upstream `appium-xcuitest-driver` v11.7.4
+(2026-05-29, against healify@`22cf0cac5d9b88d066b4badd94b59d480be5285e`). The
+Appium driver bundled in Device Farm's managed Appium server lags upstream
+`appium-xcuitest-driver` v11.7.4
 ([reference](https://appium.github.io/appium-xcuitest-driver/latest/reference/execute-methods/)),
 which is why some `mobile:` extensions the docs list are not actually
 exposed at the WDA endpoint.
@@ -305,9 +387,10 @@ exposed at the WDA endpoint.
 |---|---|---|
 | `tap` (coords) | ✓ | ✓ |
 | `tap_text` | ✓ (every interactive Healify element ships an accessibility label per `figma-design-system.md`) | ✗ — Springboard / Spotlight system controls (Cancel, search field, App-Library labels) often have no label exposed to WDA's predicate matcher |
-| `type` | ✓ for app-rendered text fields with proper accessibility labels (focused-element `set_value` / `send_keys` fallback path inside the driver kicks in) | ✗ — returns `Unhandled endpoint: /wda/element/0/keyboardInput` for the iOS Spotlight / App-Library search field (DF's bundled driver does not expose `mobile: keys`) |
+| `type` | ✓ — the 4-strategy fallback (focused element → `set_value`/`send_keys`, then first-visible TextField/SecureTextField, then `mobile: keys`) lands on any field with `hasKeyboardFocus == 1` OR any visible TextField, with no operator-side pre-focusing required | ✗ — iOS Springboard / Spotlight / App-Library search fields are not exposed in the active app's accessibility tree, so the predicate-based fallbacks find nothing and `mobile: keys` returns `Unhandled endpoint: /wda/element/0/keyboardInput` on DF |
 | `swipe` (both forms) | ✓ | ✓ |
 | `press` | ✓ | ✓ |
+| `launch_app` | ✓ — `mobile: activateApp` succeeds against the staging bundle id; `mobile: launchApp` fallback covers older driver builds | n/a (operates on installed-app bundle ids, not system UI) |
 | `screenshot` / `tap` (coords) | ✓ | ✓ — **always usable as the last-resort fallback** |
 
 ## 6. Workarounds catalog
@@ -315,28 +398,34 @@ exposed at the WDA endpoint.
 Each of these has been hit live; treat the workaround as the primary path
 when you recognise the symptom.
 
-### 6.1 `type` returns `Unhandled endpoint: /wda/element/0/keyboardInput`
+### 6.1 `type` returns `Unhandled endpoint: /wda/element/0/keyboardInput` (system UI only)
 
 **Symptom:** `{"cmd":"type","text":"healify"}` against the iOS Spotlight /
 App-Library system search field comes back as
 `{"ok":false,"error":"Unhandled endpoint: /wda/element/0/keyboardInput"}`.
 
 **Cause:** Device Farm's bundled `appium-xcuitest-driver` does **not** expose
-`mobile: keys` (the extension `tunnel.py:Tunnel.type_text` dispatches). Even
-though upstream v11.7.4 documents `mobile: keys`, the managed Appium server
-on DF is older / stripped.
+`mobile: keys` (the strategy-4 last resort `tunnel.py:Tunnel.type_text`
+dispatches when nothing earlier matches). Even though upstream v11.7.4
+documents `mobile: keys`, the managed Appium server on DF is older /
+stripped. Springboard / Spotlight / App-Library search fields aren't exposed
+in the active app's accessibility tree, so strategies 1–3 (focused element +
+first-visible TextField) find nothing and the cascade tumbles into
+strategy 4 — which fails.
 
-**Workaround for app text fields:** the driver's internal fallback to
-focused-element `set_value` / `send_keys` works as long as the field has a
-proper accessibility label. Focus the field first with `tap_text` (or `tap`
-with coords) then re-issue `type`. This is how Healify staging text inputs
-accept input.
+**App-rendered Healify UI: `type` just works now.** Since healify@`22cf0cac`,
+`tunnel.py:Tunnel.type_text` cascades through the same four strategies
+`explore.py:execute_action` uses (focused-element `set_value` →
+focused-element `send_keys` → first-visible TextField/SecureTextField with
+tap + `set_value`/`send_keys` → `mobile: keys`). You do **not** need to
+pre-focus the field with `tap_text` first — strategy 3 finds the topmost
+visible TextField on its own. See §4 `type` for the verbatim cascade.
 
 **Workaround for iOS system text fields (Spotlight, App Library, Settings
-search):** `type` is unusable here. Instead, tap each on-screen keyboard
-letter individually by coordinate (read them off the screenshot), or skip
-the system search entirely and reach the app via the App-Library route in
-§6.3.
+search):** `type` is still unusable here. Instead, tap each on-screen
+keyboard letter individually by coordinate (read them off the screenshot),
+or skip the system search entirely and reach the app via `launch_app`
+(§6.3) — which is now the canonical recovery.
 
 ### 6.2 `tap_text` returns `No element matched text 'Cancel'`
 
@@ -366,31 +455,30 @@ the screenshot shows the iOS home screen — not the Healify app.
 **Cause:** `tunnel.py` installs the IPA on session start (`appArn` is passed
 to `create_remote_access_session`), but the Device Farm runtime does **not**
 auto-launch it. The bundle is on the device — it's just sitting in App
-Library → Recently Added. There is no `cmd` in `tunnel.py` today that
-invokes `mobile: launchApp` / `mobile: activateApp` with the staging bundle
-id, even though
-[both extensions exist upstream](https://appium.github.io/appium-xcuitest-driver/latest/reference/execute-methods/).
+Library → Recently Added.
 
-**Workaround:** swipe left to App Library, tap "Recently Added" by coords,
-find the Healify icon.
+**Canonical fix (since healify@`22cf0cac`):** issue `launch_app` once. Either
+form works:
 
 ```bash
-./tx.sh '{"cmd":"screenshot","path":"home.png"}'
-./tx.sh '{"cmd":"swipe","direction":"left"}'          # → today view → app library
-./tx.sh '{"cmd":"swipe","direction":"left"}'
-./tx.sh '{"cmd":"screenshot","path":"app-library.png"}'
-# Read app-library.png, find "Recently Added" stack
-./tx.sh '{"cmd":"tap","x":<x>,"y":<y>}'
-./tx.sh '{"cmd":"screenshot","path":"recently-added.png"}'
-# Tap Healify icon
-./tx.sh '{"cmd":"tap","x":<x>,"y":<y>}'
+# Explicit bundle id (recommended — no extra metadata round-trip)
+./tx.sh '{"cmd":"launch_app","bundle_id":"com.staging.healify"}'
+
+# Auto-resolve from IPA upload metadata (tunnel.py reads `package_name`
+# off the `app_arn` cached at `start` time)
+./tx.sh '{"cmd":"launch_app"}'
 ```
 
-**Followup:** a single-line addition of a `launch_app` / `activate_app` JSON
-command in `tunnel.py` (dispatching `mobile: activateApp` with
-`bundleId="com.staging.healify"`) would eliminate this dance. File against
-healify under `scripts/devicefarm` — pure additive change. Until that lands,
-the App-Library route is the recipe.
+Expect `{"ok":true,"bundle_id":"com.staging.healify","method":"activateApp"}`.
+On older Appium driver builds the response will be
+`...,"method":"launchApp"` — same outcome, fallback path. See §4 `launch_app`
+for the full error catalogue.
+
+**Fallback (if `launch_app` itself fails):** swipe left to App Library, tap
+"Recently Added" by coords, find the Healify icon (one-liner pattern:
+`swipe left → swipe left → screenshot → tap "Recently Added" → screenshot →
+tap Healify icon`). Useful when `activateApp` and `launchApp` both throw
+and you need a screenshot-driven recovery while you file the bug.
 
 ### 6.4 Picker auto-selection (iPhone 17 Pro / iOS 26.3.1)
 
@@ -554,24 +642,23 @@ command.
 ```bash
 TX="$TMP/tx.sh"
 
-# 1. Take a baseline screenshot
+# 1. `start` already ran when /iphonetest launched the tunnel — device
+#    is reserved but sitting on Springboard.
+
+# 2. Launch the app (canonical recovery, since healify@22cf0cac).
+#    Bundle id is optional — tunnel.py resolves it from IPA metadata
+#    when omitted.
+"$TX" '{"cmd":"launch_app","bundle_id":"com.staging.healify"}'
+# → expect {"ok":true,"bundle_id":"com.staging.healify","method":"activateApp"}.
+
+# 3. Take a baseline screenshot of the app's first screen
+"$TX" '{"cmd":"wait","seconds":1}'
 "$TX" '{"cmd":"screenshot","path":"'"$TMP"'/01.png"}'
-# → Read 01.png. iOS home screen — app not auto-launched (gotcha §6.3).
-
-# 2. Swipe to App Library
-"$TX" '{"cmd":"swipe","direction":"left"}'
-"$TX" '{"cmd":"swipe","direction":"left"}'
-"$TX" '{"cmd":"screenshot","path":"'"$TMP"'/02.png"}'
-
-# 3. Tap Healify icon (coords read from 02.png)
-"$TX" '{"cmd":"tap","x":120,"y":240}'
-"$TX" '{"cmd":"wait","seconds":2}'
-"$TX" '{"cmd":"screenshot","path":"'"$TMP"'/03.png"}'
 
 # 4. Sign in
 "$TX" '{"cmd":"tap_text","text":"Continue with Apple"}'
 "$TX" '{"cmd":"wait","seconds":3}'
-"$TX" '{"cmd":"screenshot","path":"'"$TMP"'/04.png"}'
+"$TX" '{"cmd":"screenshot","path":"'"$TMP"'/02.png"}'
 
 # 5. Onwards — one screenshot per turn, one decision per turn
 
@@ -613,18 +700,20 @@ When you hit one of these in the field, file in the healify repo and link
 back to this guide. Do **not** patch them in the same PR that ships this
 doc — keep the doc PR pure.
 
-- **`launch_app` / `activate_app` JSON command in `tunnel.py`.** Wraps
-  `mobile: activateApp` with `bundleId="com.staging.healify"` (or the
-  resolved production bundle id). Eliminates the App-Library workaround
-  in §6.3. One-line handler addition.
 - **`mobile: keys` fallback for system text fields.** Either add a
   per-key tap-coords helper for the iOS on-screen keyboard, or document
   that Healify tests should never depend on driving Spotlight / App-Library
-  search.
+  search. `launch_app` (shipped in healify@`22cf0cac`) removed the most
+  common reason an operator needed to drive system search at all, but
+  Settings flows still hit it.
 - **Document the bundled Appium driver version on Device Farm.** A
   `mobile: getEnv` probe at session-start would let `tunnel.py` log the
   WDA build version into `status` so future operators don't re-discover
   the upstream-vs-bundled drift from scratch.
+- ~~**`launch_app` / `activate_app` JSON command in `tunnel.py`.**~~
+  Shipped in healify [PR #6174](https://github.com/Lifecycle-Innovations-Limited/healify/pull/6174)
+  (merged 2026-05-29, SHA `22cf0cac5d9b88d066b4badd94b59d480be5285e`). See
+  §4 `launch_app` and §6.3.
 
 Open these as healify GitHub issues, link from
 `healify/.claude/commands/iphonetest.md`, and reference back here.
@@ -632,5 +721,7 @@ Open these as healify GitHub issues, link from
 ---
 
 Last verified live: 2026-05-29 on iPhone 17 Pro / iOS 26.3.1 against
-Healify staging IPA. When anything in §5 / §6 changes, update this file and
-the upstream slash-command in the same PR-pair.
+Healify staging IPA, pinned to healify@`22cf0cac5d9b88d066b4badd94b59d480be5285e`
+(`scripts/devicefarm/tunnel.py`, healify PR #6174). When anything in §4 / §5 /
+§6 changes, update this file, re-pin the SHA, and update the upstream
+slash-command in the same PR-pair.
