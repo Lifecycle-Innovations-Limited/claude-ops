@@ -317,6 +317,8 @@ const scans = (await parallel(args.map(c => () =>
 
 phase('Synthesize')
 return await agent(
+  \`You are READ-ONLY. Do NOT send, archive, mark-read, or mutate anything — only merge \` +
+  \`and order the data below.\\n\` +
   \`Per-channel read-only scan results as JSON:\\n\${JSON.stringify(scans, null, 2)}\\n\\n\` +
   \`Return ONLY structured JSON with buckets: needsReply[], waiting[], fyi[], unreachable[]. \` +
   \`Each item: {channel, who, summary, chatId, lastMessageAt}. Order needsReply most-urgent \` +
