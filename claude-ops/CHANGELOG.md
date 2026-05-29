@@ -1,4 +1,22 @@
 # Changelog
+
+## 2.16.0 — 2026-05-29
+
+### Added
+- **Pocket decision-log module** (`scripts/ops-pocket-decisions.py`) — append-only,
+  UTC-bucketed audit trail of triage ACT/ASK decisions, consumed by `ops-pocket-triage.py`
+  via a portable `POCKET_SCRIPTS_DIR` loader (symlink-safe; no hardcoded `/opt` path).
+- **Pocket webhook receiver** (`scripts/webhook-receiver/`) — `app.py` (signed-webhook
+  ingest → handler handoff), `on-memory.sh` (journal + per-event dispatch), README.
+
+### Security / Hardening (PR #369 review fixes)
+- Webhook receiver claims dedup **after** successful handoff and **releases the claim +
+  returns 500** on dispatch failure — prevents permanent loss of a recording on transient errors.
+- Auth fails **closed** (503) when no signing secret is configured (was fail-open).
+- Replay check accepts second- or millisecond-epoch timestamps (prevents total-ingestion 401 outage).
+- `on-memory.sh` sanitizes the event name before any file path (post-auth path-traversal fix).
+- `seen` dedup table + webhook journal pruned/rotated (bounded disk); decision-log load failure now logged, not swallowed.
+
 ## 2.14.0 — 2026-05-29
 
 ### Added
