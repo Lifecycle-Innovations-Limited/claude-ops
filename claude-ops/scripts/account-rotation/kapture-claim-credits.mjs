@@ -70,7 +70,19 @@ import {
 } from './ledger.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, 'config.json');
+// Config resolution (Rule 0): prefer the gitignored override in the plugin data
+// dir (where setup-account.mjs writes real accounts), fall back to the local
+// gitignored config.json, then the shipped empty config.example.json.
+const ROTATION_DATA_DIR =
+  process.env.CLAUDE_PLUGIN_DATA_DIR || join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
+const CONFIG_OVERRIDE = join(ROTATION_DATA_DIR, 'account-rotation-config.json');
+const CONFIG_LOCAL = join(__dirname, 'config.json');
+const CONFIG_EXAMPLE = join(__dirname, 'config.example.json');
+const CONFIG_PATH = existsSync(CONFIG_OVERRIDE)
+  ? CONFIG_OVERRIDE
+  : existsSync(CONFIG_LOCAL)
+    ? CONFIG_LOCAL
+    : CONFIG_EXAMPLE;
 const LEDGER_PATH = join(homedir(), '.claude', 'credits-ledger.json');
 const RECEIPTS_DIR = join(homedir(), '.claude', 'credits-ledger-receipts');
 

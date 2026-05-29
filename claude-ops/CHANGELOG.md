@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.11.8] — 2026-05-29
+
+### Security
+
+- **Account-rotation config: stop tracking `config.json`; readers prefer the gitignored override.** `rotate.mjs` and `kapture-claim-credits.mjs` now resolve the rotation config from `$CLAUDE_PLUGIN_DATA_DIR/account-rotation-config.json` (where `setup-account.mjs` already writes real accounts), falling back to a local gitignored `config.json` and then the shipped empty `config.example.json`. `config.json` is `git rm --cached`'d so real emails can never land in a tracked file (it was already in `.gitignore` but remained tracked). No data was ever leaked to the remote — the committed `config.json` was always the empty default; this closes the accidental-commit footgun.
+
+
 ## [2.11.7] — 2026-05-29
 
 ### Added
