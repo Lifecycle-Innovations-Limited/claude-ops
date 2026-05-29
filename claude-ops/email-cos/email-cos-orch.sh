@@ -42,8 +42,15 @@ print(tmpl)
 ")
 
 : > "$SD/orch.out"
+# Run headless with a MINIMAL MCP config (enrichment servers only, e.g. gbrain +
+# tavily) — loading the full env's MCP defs blows the model context. Point
+# EMAIL_COS_ORCH_MCP_CONFIG at a JSON file with just the servers the orchestrator
+# needs; unset/missing => no MCP (drafts from thread context only).
+_ORCH_MCP="${EMAIL_COS_ORCH_MCP_CONFIG:-}"
+if [ -z "$_ORCH_MCP" ] || [ ! -f "$_ORCH_MCP" ]; then _ORCH_MCP='{"mcpServers":{}}'; fi
 printf '%s' "$RENDERED_PROMPT" | \
-  claude --print --model "$EMAIL_COS_ORCH_MODEL" --dangerously-skip-permissions >> "$SD/orch.out" 2>&1
+  claude --print --model "$EMAIL_COS_ORCH_MODEL" --dangerously-skip-permissions \
+    --strict-mcp-config --mcp-config "$_ORCH_MCP" >> "$SD/orch.out" 2>&1
 rc=$?
 secs=$(( $(date +%s) - start ))
 echo "{\"ts\":\"$ts\",\"tier\":\"orch\",\"exit\":$rc,\"secs\":$secs}" >> "$SD/metrics.jsonl"

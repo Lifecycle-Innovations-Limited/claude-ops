@@ -138,6 +138,11 @@ def interpret(reply_text, codemap):
         [
             "claude",
             "--print",
+            # NL interpretation is pure text reasoning — run with NO MCP servers
+            # so the full env's tool defs don't blow the model context.
+            "--strict-mcp-config",
+            "--mcp-config",
+            '{"mcpServers":{}}',
             "--model",
             NL_MODEL,
             "--dangerously-skip-permissions",

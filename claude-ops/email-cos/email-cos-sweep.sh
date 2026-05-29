@@ -71,8 +71,11 @@ print(tmpl)
 ")
 
 : > "$SD/sweep.out"
+# Run headless with NO MCP servers — otherwise the full env's MCP tool defs blow
+# the model context ("Prompt is too long"). Sweep only needs Bash (gog).
 printf '%s' "$RENDERED_PROMPT" | \
-  claude --print --model "$EMAIL_COS_SWEEP_MODEL" --dangerously-skip-permissions >> "$SD/sweep.out" 2>&1
+  claude --print --model "$EMAIL_COS_SWEEP_MODEL" --dangerously-skip-permissions \
+    --strict-mcp-config --mcp-config '{"mcpServers":{}}' --allowedTools Bash >> "$SD/sweep.out" 2>&1
 rc=$?
 secs=$(( $(date +%s) - start ))
 echo "{\"ts\":\"$ts\",\"tier\":\"sweep\",\"exit\":$rc,\"secs\":$secs,\"new\":$new}" >> "$SD/metrics.jsonl"

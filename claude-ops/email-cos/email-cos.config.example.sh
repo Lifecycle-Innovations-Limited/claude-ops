@@ -29,6 +29,11 @@ EMAIL_COS_ORCH_MODEL="claude-opus-4-5"
 
 # Natural-language approval interpreter (haiku-class recommended).
 EMAIL_COS_NL_MODEL="claude-haiku-4-5-20251001"
+# Optional: path to a JSON file with ONLY the enrichment MCP servers the
+# orchestrator needs (e.g. gbrain + tavily). Headless agents must NOT load the
+# full MCP env or the model context overflows. Empty => orchestrator runs with
+# no MCP (drafts from thread context only).
+EMAIL_COS_ORCH_MCP_CONFIG=""
 
 # ── Caps ─────────────────────────────────────────────────────────────────────
 
