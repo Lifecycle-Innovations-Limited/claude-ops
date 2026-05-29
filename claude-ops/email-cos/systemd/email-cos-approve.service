@@ -3,6 +3,5 @@ Description=email-cos approval reply reader (Gmail + Slack + Telegram)
 
 [Service]
 Type=oneshot
-EnvironmentFile=-%h/.config/email-cos/config.sh
-ExecStart=/usr/bin/python3 %h/.local/share/email-cos/email-cos-approve-agent.py
+ExecStart=%h/.local/share/email-cos/email-cos-approve.sh
 TimeoutStartSec=180

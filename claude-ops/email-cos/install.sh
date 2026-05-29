@@ -32,6 +32,7 @@ for f in \
   email-cos-sender.sh \
   email-cos-sender.py \
   email-cos-approve-agent.py \
+  email-cos-approve.sh \
   email-cos-notify.sh \
   email-cos-slack.sh \
   email-cos-status.sh \
@@ -57,6 +58,8 @@ echo "Installing systemd units to $UNIT_DIR ..."
 for unit in "$SCRIPT_DIR/systemd/"*; do
   cp "$unit" "$UNIT_DIR/"
 done
+# Reload BEFORE enabling so upgrade-in-place picks up changed unit definitions.
+systemctl --user daemon-reload
 
 # ── 4. Config file ────────────────────────────────────────────────────────────
 if [ ! -f "$CONFIG_FILE" ]; then
