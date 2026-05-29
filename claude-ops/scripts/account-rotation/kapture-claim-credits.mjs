@@ -74,8 +74,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // dir (where setup-account.mjs writes real accounts), fall back to the local
 // gitignored config.json, then the shipped empty config.example.json.
 const ROTATION_DATA_DIR =
-  process.env.CLAUDE_PLUGIN_DATA_DIR ||
-  join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
+  process.env.CLAUDE_PLUGIN_DATA_DIR || join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
 const CONFIG_OVERRIDE = join(ROTATION_DATA_DIR, 'account-rotation-config.json');
 const CONFIG_LOCAL = join(__dirname, 'config.json');
 const CONFIG_EXAMPLE = join(__dirname, 'config.example.json');
