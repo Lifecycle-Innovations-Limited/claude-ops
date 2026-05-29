@@ -1,5 +1,5 @@
-from __future__ import annotations
 #!/usr/bin/env python3
+from __future__ import annotations
 """ops-pocket-decisions — append-only decision log for the Pocket pipeline.
 
 Every classification decision (triage ACT/DRAFT/DROP/ASK, and every
@@ -13,7 +13,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", "/var/lib/pocket-pipeline"))
+HOME = Path(os.path.expanduser("~"))
+STATE_DIR = Path(os.environ.get("POCKET_STATE_DIR", HOME / ".claude/state/pocket"))
 DECISIONS_DIR = STATE_DIR / "decisions"
 
 
