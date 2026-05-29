@@ -1,0 +1,37 @@
+# pocket-env-broker — peer-authenticated secrets broker for restricted pocket workers.
+# Template: copy to a systemd unit dir, fill the <PLACEHOLDERS>, then enable.
+#   system : /etc/systemd/system/pocket-env-broker.service   (sudo systemctl ...)
+#   user   : ~/.config/systemd/user/pocket-env-broker.service (systemctl --user ...)
+#
+# The broker must run as the PRIVILEGED orchestrator user (the one whose env holds
+# the secrets) — NOT as the restricted worker user. It loads grantable values from
+# its own environment, so it is launched through the same env wrapper that
+# populates the executor's secrets (e.g. an EnvironmentFile or a wrapper that
+# sources ~/.mcp-secrets.env). Keep it a long-running daemon (Type=simple) so it
+# can answer worker requests with low latency.
+
+[Unit]
+Description=pocket-env-broker (secrets broker for restricted pocket workers)
+After=network.target
+
+[Service]
+Type=simple
+User=<ORCHESTRATOR_USER>
+# Populate the grantable secrets into the broker's environment. Use ONE of:
+#   EnvironmentFile=<PATH_TO_SECRETS_ENV_FILE>
+# or an ExecStart wrapper that sources them before exec'ing the broker.
+EnvironmentFile=-<PATH_TO_SECRETS_ENV_FILE>
+Environment=POCKET_STATE_DIR=<POCKET_STATE_DIR>
+Environment=POCKET_WORKER_USER=<WORKER_USER>
+ExecStart=<PYTHON_BIN> <REPO>/claude-ops/scripts/pocket-env-broker.py
+Restart=on-failure
+RestartSec=5
+# Hardening — the broker handles secrets; keep its own footprint minimal.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=<POCKET_STATE_DIR>
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
