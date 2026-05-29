@@ -1,4 +1,5 @@
 """Pocket webhook receiver — verifies HMAC, dedupes, hands off to local executor."""
+
 import hashlib
 import hmac
 import json
@@ -18,6 +19,10 @@ DEDUP_DB = "/var/lib/pocket-webhook/seen.db"
 HANDLER = "/opt/pocket-mcp/on-memory.sh"
 SECRET_FILE = "/etc/pocket-webhook/secret"
 MAX_SKEW_SEC = 300  # 5 min replay window
+# Keep dedup claims long enough to cover Pocket retries, but bound disk growth.
+SEEN_RETENTION_SEC = 7 * 24 * 3600  # 7 days
+# Below this magnitude a Unix timestamp is plainly seconds, not milliseconds.
+_TS_MS_THRESHOLD = 10_000_000_000
 
 Path(LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
 Path(DEDUP_DB).parent.mkdir(parents=True, exist_ok=True)
@@ -45,8 +50,7 @@ def _db():
     conn = sqlite3.connect(DEDUP_DB, timeout=5.0)
     try:
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS seen ("
-            "id TEXT PRIMARY KEY, ts INTEGER NOT NULL)"
+            "CREATE TABLE IF NOT EXISTS seen (id TEXT PRIMARY KEY, ts INTEGER NOT NULL)"
         )
         yield conn
         conn.commit()
@@ -55,19 +59,33 @@ def _db():
 
 
 def _seen(key: str) -> bool:
+    """Atomically CLAIM a dedup key. Returns True if it was already claimed.
+
+    The INSERT OR IGNORE is the claim — it also guards against concurrent
+    duplicate requests. A claim must be released (see _release) if the
+    downstream handoff fails, otherwise a transient dispatch failure would
+    permanently drop the event (at-most-once instead of at-least-once).
+    """
     with _db() as conn:
+        now = int(time.time())
+        # Bound table growth: drop claims older than the retention window.
+        conn.execute("DELETE FROM seen WHERE ts < ?", (now - SEEN_RETENTION_SEC,))
         cur = conn.execute(
             "INSERT OR IGNORE INTO seen (id, ts) VALUES (?, ?)",
-            (key, int(time.time())),
+            (key, now),
         )
         return cur.rowcount == 0
 
 
+def _release(key: str) -> None:
+    """Release a previously claimed dedup key so the event can be retried."""
+    with _db() as conn:
+        conn.execute("DELETE FROM seen WHERE id = ?", (key,))
+
+
 def _verify_signature(secret: str, timestamp: str, raw_body: bytes, sig: str) -> bool:
     msg = f"{timestamp}.".encode("utf-8") + raw_body
-    expected = hmac.new(
-        secret.encode("utf-8"), msg, hashlib.sha256
-    ).hexdigest()
+    expected = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
     # Pocket may send raw hex or "sha256=<hex>"; accept both
     candidates = [expected, f"sha256={expected}"]
     return any(hmac.compare_digest(c, sig) for c in candidates)
@@ -80,7 +98,8 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"ok": True, "secret_loaded": _read_secret() is not None}
+    # Do not disclose secret-configuration posture to unauthenticated callers.
+    return {"ok": True}
 
 
 @app.post("/webhook")
@@ -98,11 +117,14 @@ async def webhook(
             log.warning("missing signature headers")
             raise HTTPException(status_code=401, detail="missing signature headers")
 
-        # Replay protection — timestamp is Unix milliseconds per Pocket docs
+        # Replay protection. Pocket docs say milliseconds, but it has also sent
+        # seconds in the wild — accept both (signature still uses the raw string,
+        # so this only affects the skew check, never verification).
         try:
-            ts_ms = int(x_heypocket_timestamp)
+            ts_raw = int(x_heypocket_timestamp)
         except ValueError:
             raise HTTPException(status_code=400, detail="bad timestamp")
+        ts_ms = ts_raw if ts_raw >= _TS_MS_THRESHOLD else ts_raw * 1000
         now_ms = int(time.time() * 1000)
         if abs(now_ms - ts_ms) > MAX_SKEW_SEC * 1000:
             log.warning("timestamp skew %sms", now_ms - ts_ms)
@@ -114,10 +136,13 @@ async def webhook(
             log.warning("signature mismatch")
             raise HTTPException(status_code=401, detail="invalid signature")
     else:
-        log.warning(
-            "POCKET_WEBHOOK_SECRET not configured at %s — accepting unsigned (DEV)",
+        # Fail closed: this service runs as root and is reachable externally.
+        # An absent/empty secret must NOT degrade into accepting unsigned input.
+        log.error(
+            "POCKET_WEBHOOK_SECRET not configured at %s — refusing request",
             SECRET_FILE,
         )
+        raise HTTPException(status_code=503, detail="webhook secret not configured")
 
     # Parse payload
     try:
@@ -141,7 +166,9 @@ async def webhook(
 
     log.info("event=%s rec=%s bytes=%d", event, rec_id, len(raw))
 
-    # Hand off async to executor — never block the 200
+    # Hand off to the executor. We CLAIMED dedup_key above; if dispatch fails we
+    # must release the claim and return a non-2xx so Pocket retries — otherwise
+    # the recording is lost forever (the claim would dedupe every retry).
     try:
         proc = subprocess.Popen(
             [HANDLER, event],
@@ -150,14 +177,16 @@ async def webhook(
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        try:
-            proc.stdin.write(json.dumps(payload).encode("utf-8"))
-            proc.stdin.close()
-        except BrokenPipeError:
-            log.error("handler stdin pipe broke for event=%s rec=%s", event, rec_id)
-    except FileNotFoundError:
-        log.error("handler not found at %s", HANDLER)
-    except Exception as e:  # pragma: no cover
-        log.exception("handler dispatch failed: %s", e)
+        proc.stdin.write(json.dumps(payload).encode("utf-8"))
+        proc.stdin.close()
+    except Exception as e:
+        _release(dedup_key)
+        log.error(
+            "handler dispatch failed for event=%s rec=%s: %s — released dedup claim",
+            event,
+            rec_id,
+            e,
+        )
+        raise HTTPException(status_code=500, detail="handler dispatch failed")
 
     return JSONResponse({"ok": True, "event": event, "id": rec_id}, status_code=200)

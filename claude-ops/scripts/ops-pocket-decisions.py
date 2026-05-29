@@ -7,6 +7,7 @@ Pocket reviewed even when it decided not to act.
 
 Path: <POCKET_STATE_DIR>/decisions/YYYY-MM-DD.jsonl
 """
+
 from __future__ import annotations
 import json
 import os
@@ -20,21 +21,33 @@ DECISIONS_DIR = STATE_DIR / "decisions"
 
 def write_decision(d: dict) -> None:
     DECISIONS_DIR.mkdir(parents=True, exist_ok=True)
-    ts = d.get("ts") or datetime.now(timezone.utc).astimezone().isoformat()
+    # UTC to stay consistent with the webhook journal (date -u); the date bucket
+    # below slices ts[:10], so a local tz would split a UTC day across two files.
+    ts = d.get("ts") or datetime.now(timezone.utc).isoformat()
     d["ts"] = ts
     date = ts[:10]
     with open(DECISIONS_DIR / f"{date}.jsonl", "a") as f:
         f.write(json.dumps(d) + "\n")
 
 
-def make(event_type: str, recording_id: str = "", title: str = "",
-         summary_excerpt: str = "", classification: str = "REVIEWED",
-         confidence: float = 1.0, reasoning: str = "",
-         action_taken: str | None = None, downstream_agent_id: str | None = None,
-         notion_page_id: str | None = None, notion_page_url: str | None = None,
-         is_long: bool = False, model: str = "", payload_bytes: int = 0) -> dict:
+def make(
+    event_type: str,
+    recording_id: str = "",
+    title: str = "",
+    summary_excerpt: str = "",
+    classification: str = "REVIEWED",
+    confidence: float = 1.0,
+    reasoning: str = "",
+    action_taken: str | None = None,
+    downstream_agent_id: str | None = None,
+    notion_page_id: str | None = None,
+    notion_page_url: str | None = None,
+    is_long: bool = False,
+    model: str = "",
+    payload_bytes: int = 0,
+) -> dict:
     return {
-        "ts": datetime.now(timezone.utc).astimezone().isoformat(),
+        "ts": datetime.now(timezone.utc).isoformat(),
         "recording_id": recording_id,
         "event_type": event_type,
         "title": title,

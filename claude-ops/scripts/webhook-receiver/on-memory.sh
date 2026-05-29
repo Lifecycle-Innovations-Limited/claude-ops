@@ -8,6 +8,11 @@ set -euo pipefail
 
 EVENT="${1:-unknown}"
 EVENT_JSON="$(printf '%s' "$EVENT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()), end="")')"
+# Event name is attacker-controlled (comes from the webhook payload). Sanitize
+# it before it ever touches a filesystem path — strip anything outside a safe
+# charset and cap length, so it cannot traverse out of the journal dir.
+SAFE_EVENT="$(printf '%s' "$EVENT" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-64)"
+[ -n "$SAFE_EVENT" ] || SAFE_EVENT="unknown"
 PAYLOAD="$(cat || true)"
 [ -n "$PAYLOAD" ] || PAYLOAD="{}"
 LOG_DIR="/var/log/pocket-webhook"
@@ -22,8 +27,15 @@ mkdir -p "$LOG_DIR" "$JOURNAL_DIR" "$QUEUE_TMP"
 printf '{"ts":"%s","event":%s,"payload":%s}\n' "$TS" "$EVENT_JSON" "$PAYLOAD" \
   >> "$JOURNAL_DIR/events.jsonl"
 
-# Per-event copy for easy inspection
-printf '%s\n' "$PAYLOAD" > "$JOURNAL_DIR/${EPOCH}-${EVENT}.json"
+# Per-event copy for easy inspection (sanitized name — never raw $EVENT in a path)
+printf '%s\n' "$PAYLOAD" > "$JOURNAL_DIR/${EPOCH}-${SAFE_EVENT}.json"
+
+# Bound disk: prune per-event journal files older than 7 days, rotate the
+# append-only log at 50MB. Lock-free and best-effort — must never break ingest.
+find "$JOURNAL_DIR" -maxdepth 1 -name '*.json' -type f -mtime +7 -delete 2>/dev/null || true
+if [ "$(stat -c%s "$JOURNAL_DIR/events.jsonl" 2>/dev/null || echo 0)" -gt 52428800 ]; then
+  mv -f "$JOURNAL_DIR/events.jsonl" "$JOURNAL_DIR/events.jsonl.1" 2>/dev/null || true
+fi
 
 # systemd journal trace
 logger -t pocket-webhook "event=$EVENT bytes=${#PAYLOAD}"
@@ -37,7 +49,7 @@ logger -t pocket-webhook "event=$EVENT bytes=${#PAYLOAD}"
 # the durable record regardless.
 POCKET_STATE_DIR="${POCKET_STATE_DIR:-/var/lib/pocket-pipeline}"
 INGEST="/opt/pocket-mcp/pipeline/ops-pocket-webhook-ingest.py"
-ENVFILE="$QUEUE_TMP/${EPOCH}-${EVENT}.json"
+ENVFILE="$QUEUE_TMP/${EPOCH}-${SAFE_EVENT}.json"
 printf '{"ts":"%s","event":%s,"payload":%s}' "$TS" "$EVENT_JSON" "$PAYLOAD" > "$ENVFILE"
 chmod 644 "$ENVFILE" 2>/dev/null || true
 if [ -f "$INGEST" ]; then

@@ -1,10 +1,12 @@
-# Pocket webhook receiver (deployed-only backup)
+# Pocket webhook receiver (version-controlled source)
 
 These two files run the **front door** of the Pocket pipeline on
-`dev-sandbox-fra` and were previously **deployed only** to `/opt/pocket-mcp/`
-with no copy in git. They are version-controlled here so the deployment is
-reproducible. This directory is a faithful backup — filenames are preserved
-because `app.py` references its handler by the absolute deployed path.
+`dev-sandbox-fra`. They were previously **deployed only** to `/opt/pocket-mcp/`
+with no copy in git; this directory is now the version-controlled **source of
+truth** and the deployed copies should be (re)deployed from here via the steps
+below. Filenames are preserved because `app.py` references its handler by the
+absolute deployed path. The deployed `/opt/pocket-mcp/` copies may lag this
+source until the next deploy — re-run the deploy steps after changes.
 
 | File | Deployed path | Role |
 |---|---|---|
@@ -25,5 +27,8 @@ sudo systemctl restart pocket-webhook.service
 - handler at `/opt/pocket-mcp/on-memory.sh`
 - writable `/var/log/pocket-webhook/` and `/var/lib/pocket-webhook/`
 
-> Backup captured 2026-05-29 from the live `/opt/pocket-mcp/` deployment
-> (verified byte-identical to the running files at capture time).
+> Originally captured 2026-05-29 from the live `/opt/pocket-mcp/` deployment.
+> This source has since received review-hardening fixes (fail-closed auth,
+> dedup-claim release on dispatch failure, path-sanitized journal names,
+> seconds/ms timestamp handling, journal retention) and may differ from the
+> currently-running files until redeployed via the steps above.

@@ -41,6 +41,7 @@ Files (under POCKET_STATE_DIR):
   review.jsonl          OUT — ASK queue for Sam
   triage-decisions.jsonl OUT — full audit of every decision + thinking
 """
+
 from __future__ import annotations
 
 import json
@@ -58,12 +59,24 @@ LOG_PREFIX = "[ops-pocket-triage]"
 # === Phase 2 hook: decision log =====================================
 try:
     import importlib.util as _ilu
-    _SCRIPTS = Path(os.environ.get("POCKET_SCRIPTS_DIR", str(Path(__file__).resolve().parent)))
-    _dec_spec = _ilu.spec_from_file_location("_pkt_decisions", _SCRIPTS / "ops-pocket-decisions.py")
+
+    _SCRIPTS = Path(
+        os.environ.get("POCKET_SCRIPTS_DIR", str(Path(__file__).resolve().parent))
+    )
+    _dec_spec = _ilu.spec_from_file_location(
+        "_pkt_decisions", _SCRIPTS / "ops-pocket-decisions.py"
+    )
     _dec_mod = _ilu.module_from_spec(_dec_spec)
     _dec_spec.loader.exec_module(_dec_mod)
 except Exception as _e:
     _dec_mod = None
+    # Don't crash triage if the decision log can't load, but DO signal it —
+    # silent loss of the audit trail should be visible to the operator.
+    print(
+        f"WARN ops-pocket-triage: decision log unavailable ({_e!r}); "
+        "decisions will NOT be audited this run",
+        file=sys.stderr,
+    )
 # ====================================================================
 
 HOME = Path(os.path.expanduser("~"))
@@ -78,10 +91,12 @@ HOME = Path(os.path.expanduser("~"))
 # This file is in user state and must NOT be committed to source control.
 # If the file is missing, generic placeholders are used (no crash).
 # ---------------------------------------------------------------------------
-_USER_CONTEXT_PATH = Path(os.environ.get(
-    "POCKET_USER_CONTEXT",
-    HOME / ".claude/state/pocket/user-context.json",
-))
+_USER_CONTEXT_PATH = Path(
+    os.environ.get(
+        "POCKET_USER_CONTEXT",
+        HOME / ".claude/state/pocket/user-context.json",
+    )
+)
 try:
     _ctx = json.loads(_USER_CONTEXT_PATH.read_text())
     _OWNER_NAME: str = _ctx.get("owner_name") or "the user"
@@ -206,7 +221,9 @@ def triage_one(task: dict) -> dict:
     than Opus so this rarely fires at all."""
     decision = _triage_once(task)
     if RETRY_ON_RATE_LIMIT and _is_rate_limited(decision):
-        log(f"rate-limited on first attempt; backing off {RATE_LIMIT_BACKOFF_SECS}s then retrying once")
+        log(
+            f"rate-limited on first attempt; backing off {RATE_LIMIT_BACKOFF_SECS}s then retrying once"
+        )
         time.sleep(RATE_LIMIT_BACKOFF_SECS)
         retry = _triage_once(task)
         retry["_retried_after_rate_limit"] = True
@@ -225,41 +242,56 @@ def _triage_once(task: dict) -> dict:
         f"{SYSTEM_PROMPT}\n\n"
         f"---\n\n"
         f"Candidate inferred task to triage:\n\n"
-        f"Title: {task.get('title','(none)')}\n"
-        f"Priority hint: {task.get('priority','(none)')}\n"
-        f"Confidence (from Haiku inference): {task.get('confidence','(none)')}\n"
-        f"Context from recording: {task.get('context','(none)')}\n"
-        f"Source recording id: {task.get('recording_id','(none)')}\n"
-        f"Captured at: {task.get('captured_at','(none)')}\n\n"
+        f"Title: {task.get('title', '(none)')}\n"
+        f"Priority hint: {task.get('priority', '(none)')}\n"
+        f"Confidence (from Haiku inference): {task.get('confidence', '(none)')}\n"
+        f"Context from recording: {task.get('context', '(none)')}\n"
+        f"Source recording id: {task.get('recording_id', '(none)')}\n"
+        f"Captured at: {task.get('captured_at', '(none)')}\n\n"
         f"Think carefully then output ONLY the JSON object — no prose, no markdown fences."
     )
 
     claude_bin = os.environ.get("POCKET_CLAUDE_BIN", str(HOME / ".local/bin/claude"))
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-    cmd = [claude_bin, "--dangerously-skip-permissions",
-           "--model", MODEL, "-p", user_msg]
+    cmd = [
+        claude_bin,
+        "--dangerously-skip-permissions",
+        "--model",
+        MODEL,
+        "-p",
+        user_msg,
+    ]
     try:
         proc = subprocess.run(
-            cmd, env=env, capture_output=True, text=True, timeout=180,
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
         )
     except subprocess.TimeoutExpired:
         return {
-            "verdict": "ASK", "confidence": 0.0,
+            "verdict": "ASK",
+            "confidence": 0.0,
             "reasoning": "claude -p timed out after 180s; defaulted to ASK.",
-            "scoped_task_description": "", "concerns": ["timeout"],
+            "scoped_task_description": "",
+            "concerns": ["timeout"],
             "_error": "timeout",
         }
     except Exception as e:
         return {
-            "verdict": "ASK", "confidence": 0.0,
+            "verdict": "ASK",
+            "confidence": 0.0,
             "reasoning": f"claude -p invocation failed: {type(e).__name__}; defaulted to ASK.",
-            "scoped_task_description": "", "concerns": [str(e)[:160]],
+            "scoped_task_description": "",
+            "concerns": [str(e)[:160]],
             "_error": "spawn_failed",
         }
 
     if proc.returncode != 0:
         return {
-            "verdict": "ASK", "confidence": 0.0,
+            "verdict": "ASK",
+            "confidence": 0.0,
             "reasoning": f"claude -p exited {proc.returncode}; defaulted to ASK.",
             "scoped_task_description": "",
             "concerns": [proc.stderr.strip()[:160] or proc.stdout.strip()[:160]],
@@ -271,6 +303,7 @@ def _triage_once(task: dict) -> dict:
     # Strip markdown fences if any
     if text_out.startswith("```"):
         import re as _re
+
         text_out = _re.sub(r"^```(?:json)?\s*", "", text_out)
         text_out = _re.sub(r"\s*```$", "", text_out)
 
@@ -279,9 +312,11 @@ def _triage_once(task: dict) -> dict:
     except json.JSONDecodeError:
         log(f"Opus returned bad JSON: {text_out[:200]}")
         decision = {
-            "verdict": "ASK", "confidence": 0.0,
+            "verdict": "ASK",
+            "confidence": 0.0,
             "reasoning": "Opus output unparseable; defaulting to ASK.",
-            "scoped_task_description": "", "concerns": [f"bad json: {text_out[:80]}"],
+            "scoped_task_description": "",
+            "concerns": [f"bad json: {text_out[:80]}"],
         }
     decision["_thinking"] = thinking_text.strip()[:4000]
     decision["_model"] = MODEL
@@ -305,8 +340,12 @@ def _id_already_routed(task_id: str) -> str | None:
     """
     if not task_id:
         return None
-    for label, p in (("TASKS", TASKS), ("DRAFTS", DRAFTS),
-                     ("DROPPED", DROPPED), ("REVIEW", REVIEW)):
+    for label, p in (
+        ("TASKS", TASKS),
+        ("DRAFTS", DRAFTS),
+        ("DROPPED", DROPPED),
+        ("REVIEW", REVIEW),
+    ):
         if not p.exists():
             continue
         try:
@@ -347,7 +386,9 @@ def route(task: dict, decision: dict) -> str:
     if verdict == "ACT":
         # Promote: use scoped description if provided, keep original context
         if decision.get("scoped_task_description"):
-            routed["title"] = decision["scoped_task_description"][:140] or routed.get("title")
+            routed["title"] = decision["scoped_task_description"][:140] or routed.get(
+                "title"
+            )
         routed["kind"] = "task"  # supervisor treats these like manual tasks
         routed["promoted_from"] = "inferred"
         append_jsonl(TASKS, routed)
@@ -399,27 +440,34 @@ def main() -> int:
         decision = triage_one(task)
         verdict = route(task, decision)
         counts[verdict] = counts.get(verdict, 0) + 1
-        log(f"[{i}/{len(tasks)}] verdict={verdict} conf={decision.get('confidence')} — {decision.get('reasoning','')[:120]}")
+        log(
+            f"[{i}/{len(tasks)}] verdict={verdict} conf={decision.get('confidence')} — {decision.get('reasoning', '')[:120]}"
+        )
         # Audit log every decision with full thinking
-        append_jsonl(AUDIT, {
-            "ts": now_iso(),
-            "task": task,
-            "decision": decision,
-            "routed_to": verdict,
-        })
+        append_jsonl(
+            AUDIT,
+            {
+                "ts": now_iso(),
+                "task": task,
+                "decision": decision,
+                "routed_to": verdict,
+            },
+        )
         if _dec_mod and not DRY_RUN:
             try:
-                _dec_mod.write_decision(_dec_mod.make(
-                    event_type=task.get("source", "triage"),
-                    recording_id=task.get("recording_id", ""),
-                    title=task.get("title") or task.get("recording_title", ""),
-                    summary_excerpt=task.get("context", "") or "",
-                    classification=verdict,
-                    confidence=float(decision.get("confidence", 0) or 0),
-                    reasoning=str(decision.get("reasoning", ""))[:1500],
-                    action_taken=verdict,
-                    model=MODEL,
-                ))
+                _dec_mod.write_decision(
+                    _dec_mod.make(
+                        event_type=task.get("source", "triage"),
+                        recording_id=task.get("recording_id", ""),
+                        title=task.get("title") or task.get("recording_title", ""),
+                        summary_excerpt=task.get("context", "") or "",
+                        classification=verdict,
+                        confidence=float(decision.get("confidence", 0) or 0),
+                        reasoning=str(decision.get("reasoning", ""))[:1500],
+                        action_taken=verdict,
+                        model=MODEL,
+                    )
+                )
             except Exception as _e:
                 log(f"decision log skip: {_e}")
 
