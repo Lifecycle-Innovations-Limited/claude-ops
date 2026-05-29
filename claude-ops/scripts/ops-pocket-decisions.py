@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 """ops-pocket-decisions — append-only decision log for the Pocket pipeline.
 
 Every classification decision (triage ACT/DRAFT/DROP/ASK, and every
@@ -8,6 +7,7 @@ Pocket reviewed even when it decided not to act.
 
 Path: <POCKET_STATE_DIR>/decisions/YYYY-MM-DD.jsonl
 """
+from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
