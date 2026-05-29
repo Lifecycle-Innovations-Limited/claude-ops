@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **WhatsApp bridge: Linux (systemd-user) install path.** `scripts/install-whatsapp-bridge-linux.sh` clones lharries/whatsapp-mcp, applies the in-repo claude-ops patches (`scripts/whatsapp/apply-patches.py`), drops three systemd-user units (`whatsapp-bridge.service`, `whatsapp-backfill.service`, `whatsapp-backfill.timer`), and pairs via the bridge's pairing-code flow. Idempotent — re-running is safe and only applies missing patches.
+- **`POST /api/backfill` REST endpoint** on the bridge (patch). Lets the claude-ops daemon, a 2h systemd timer, or `curl` trigger a fresh history backfill without restarting the bridge. Returns `{"success":true,"message":"backfill requested"}` when connected; 503 otherwise.
+- **Auto-backfill on `events.Connected`** (patch). Every reconnect fires `requestHistorySync` 5s after Connected — replaces the previous "manual backfill only" behaviour. Idempotent; whatsmeow dedups by message ID.
+- **Cross-platform `whatsapp-bridge` daemon entry** in `scripts/daemon-services.default.json` via `scripts/lib/whatsapp-bridge-up.sh` wrapper that branches `launchctl` (macOS) / `systemctl --user` (Linux). Replaces the previous launchctl-only `command`.
+- **`whatsapp-backfill` daemon entry** (cron `0 */2 * * *`) — fallback trigger for hosts without the systemd timer.
+- **Python MCP server (`whatsapp.py`) LID/contact resolver** (patch). `get_sender_name` now resolves via `whatsmeow_contacts.full_name/push_name/business_name` and `whatsmeow_lid_map` from the bridge's `whatsapp.db`, instead of relying on the macOS-only `contacts` table populated by Contacts.app. Group senders in `@lid` form now resolve to their real names on Linux.
+
+### Fixed
+- **`PairPhone` silent hang** in lharries/whatsapp-mcp (patch). Two fixes per the upstream whatsmeow godoc: (Fix A) `time.Sleep(3 * time.Second)` between `client.Connect()` and `client.PairPhone(...)` so the noise handshake completes; (Fix B) `context.WithTimeout(..., 3*time.Minute)` on `PairPhone` so an internal hang is recoverable instead of leaving the process zombied with no PairSuccess and no Timeout error.
+- **`requestHistorySync` SIGSEGV** (patch). whatsmeow's `BuildHistorySyncRequest(nil, count)` panics because it dereferences `.Chat`/`.ID`/`.Timestamp` on the nil first arg (`send.go:572`). Rewritten to open `messages.db` read-only, pick the 50 most-recently-active chats, and anchor against each chat's oldest stored message — also more efficient than a global request.
+
 ## [2.11.6] — 2026-05-27
 
 ### Added

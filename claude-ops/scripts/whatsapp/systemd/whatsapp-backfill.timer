@@ -1,0 +1,14 @@
+[Unit]
+Description=Trigger WhatsApp backfill every 2h + on boot (claude-ops integration)
+Documentation=https://github.com/lharries/whatsapp-mcp
+
+[Timer]
+# First fire 90s after boot/session start (lets the bridge connect first), then every 2h.
+OnBootSec=90s
+OnUnitActiveSec=2h
+AccuracySec=30s
+Persistent=true
+Unit=whatsapp-backfill.service
+
+[Install]
+WantedBy=timers.target
