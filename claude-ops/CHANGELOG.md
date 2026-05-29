@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.13.0] — 2026-05-29
+
+### Added
+
+- **Config-driven pocket notifications (`ops-pocket-notify`) — interactive setup of which events, which channels, when.** Pocket components emit an *event id*; the new `bin/ops-pocket-notify` dispatcher decides routing from `preferences.json → pocket.notifications`: per-event channels (telegram/email/whatsapp/slack via the existing senders + out-queue), plus a **full per-event schedule** — cooldown, quiet-hours, active-days, and severity escalation (high bypasses windows). New events are **off by default**. `/ops:ops-settings → Configure notifications` walks each event interactively (channels + schedule + dry-run test-send) and writes the prefs; `docs/pocket-notifications.md` documents the schema + event taxonomy. The executor emits `worker.spawned` / `worker.failed`, and the env-broker's notify hook points at the dispatcher. `--dry-run --json` resolves routing without sending (used by setup + tests).
+
+
 ## [2.12.0] — 2026-05-29
 
 ### Added
