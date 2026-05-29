@@ -20,6 +20,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.14.1] — 2026-05-29
+
+### Fixed
+
+- **`ops-pocket-notify` wrapper resolves symlinks.** The `bin/ops-pocket-notify` bash wrapper computed the Python script path from `dirname "$0"`, which resolves relative to a PATH symlink's directory rather than the real file — so invoking it via a `~/.local/bin` symlink failed to find `../scripts/ops-pocket-notify.py`. Now `readlink -f`s itself first. Also syncs `package.json` (had drifted to 2.13.0) to the plugin version.
+
+
 ## [2.13.0] — 2026-05-29
 
 ### Added
