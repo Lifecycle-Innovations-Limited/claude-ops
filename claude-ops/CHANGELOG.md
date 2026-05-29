@@ -4,7 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.11.7] — 2026-05-29
+
 ### Added
+
 - **WhatsApp bridge: Linux (systemd-user) install path.** `scripts/install-whatsapp-bridge-linux.sh` clones lharries/whatsapp-mcp, applies the in-repo claude-ops patches (`scripts/whatsapp/apply-patches.py`), drops three systemd-user units (`whatsapp-bridge.service`, `whatsapp-backfill.service`, `whatsapp-backfill.timer`), and pairs via the bridge's pairing-code flow. Idempotent — re-running is safe and only applies missing patches.
 - **`POST /api/backfill` REST endpoint** on the bridge (patch). Lets the claude-ops daemon, a 2h systemd timer, or `curl` trigger a fresh history backfill without restarting the bridge. Returns `{"success":true,"message":"backfill requested"}` when connected; 503 otherwise.
 - **Auto-backfill on `events.Connected`** (patch). Every reconnect fires `requestHistorySync` 5s after Connected — replaces the previous "manual backfill only" behaviour. Idempotent; whatsmeow dedups by message ID.
@@ -13,8 +16,14 @@ All notable changes to this project will be documented in this file.
 - **Python MCP server (`whatsapp.py`) LID/contact resolver** (patch). `get_sender_name` now resolves via `whatsmeow_contacts.full_name/push_name/business_name` and `whatsmeow_lid_map` from the bridge's `whatsapp.db`, instead of relying on the macOS-only `contacts` table populated by Contacts.app. Group senders in `@lid` form now resolve to their real names on Linux.
 
 ### Fixed
+
 - **`PairPhone` silent hang** in lharries/whatsapp-mcp (patch). Two fixes per the upstream whatsmeow godoc: (Fix A) `time.Sleep(3 * time.Second)` between `client.Connect()` and `client.PairPhone(...)` so the noise handshake completes; (Fix B) `context.WithTimeout(..., 3*time.Minute)` on `PairPhone` so an internal hang is recoverable instead of leaving the process zombied with no PairSuccess and no Timeout error.
 - **`requestHistorySync` SIGSEGV** (patch). whatsmeow's `BuildHistorySyncRequest(nil, count)` panics because it dereferences `.Chat`/`.ID`/`.Timestamp` on the nil first arg (`send.go:572`). Rewritten to open `messages.db` read-only, pick the 50 most-recently-active chats, and anchor against each chat's oldest stored message — also more efficient than a global request.
+
+### Changed
+
+- **`/ops-inbox` multi-channel scan is now a parallel `Workflow` fan-out** — the scan/classify phase spawns one **read-only** scanner agent per *available* channel concurrently (via the `Workflow` tool), each returning structured classified results (NEEDS_REPLY / WAITING / HANDLED / FYI + the `chatId` needed to reply), then a synthesizer merges them into prioritized buckets. Wall-clock collapses from sum-of-channels to slowest-single-channel. Rule 6 is preserved end-to-end: scanners are explicitly read-only (never send/archive/mutate) and **all** reply drafting, approval, and sending stay in the main session under the one-draft→one-approval→one-send gate; channels are availability-detected first so no scanner is spawned for an unconfigured channel. Agent Teams and sequential scan are retained as documented fallbacks for older harnesses under the same constraints.
+
 
 ## [2.11.6] — 2026-05-27
 
