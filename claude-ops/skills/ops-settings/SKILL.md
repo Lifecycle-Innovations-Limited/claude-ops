@@ -256,6 +256,60 @@ F="$HOME/.claude/state/pocket/email-config.json"
 jq --arg v "$NEW_ADDR" '.self_address = $v | .from_account = $v' "$F" > "${F}.tmp" && mv "${F}.tmp" "$F"
 ```
 
+### Configure notifications (per-event)
+
+Fine-grained, per-event routing for the whole pocket module, dispatched by
+`ops-pocket-notify` and stored in `preferences.json → pocket.notifications`
+(schema + event list: `docs/pocket-notifications.md`). This is the interactive
+"which notifications, which channels, when" surface.
+
+1. **Pick the event to configure.** The event list can exceed 4, so paginate per
+   Rule 1 (`AskUserQuestion`, ≤4 options, `[More events…]` to advance):
+
+   ```
+   Which pocket event?
+     [env-broker.uid-rejected (security)]  [env-broker.denied]  [worker.failed]  [More events…]
+   ```
+   Page 2: `[worker.completed] [worker.spawned] [queue.stuck] [More events…]`,
+   page 3: `[daemon.down] [Done]`.
+
+2. **Pick channels for that event** (multi-select, ≤4 — only offer channels that
+   are configured per `View status` above):
+
+   ```
+   Notify on <event> via: (multi-select)
+     [Telegram]  [Email]  [WhatsApp]  [Slack]
+   ```
+
+3. **Set the schedule** for that event (one `AskUserQuestion` each, as needed):
+   - Severity: `[low] [medium] [high]` (high bypasses quiet hours).
+   - Cooldown: `[60s] [5 min] [30 min] [No limit]`.
+   - Quiet hours: `[22:00–08:00] [None] [Custom…]`.
+   - Active days: `[Every day] [Weekdays] [Custom…]`.
+
+4. **Write it** to `preferences.json` (create the path if absent):
+
+   ```bash
+   PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+   tmp="$(mktemp)"
+   jq --arg ev "$EVENT" --argjson chans "$CHANNELS_JSON" --arg sev "$SEVERITY" \
+      --argjson cooldown "$COOLDOWN" \
+      '.pocket.notifications.events[$ev] = {channels: $chans, severity: $sev, schedule: {cooldown: $cooldown}}' \
+      "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
+   ```
+   (Merge `quiet_hours` / `active_days` into `.schedule` the same way when set.)
+
+5. **Test-send** the event so the operator confirms routing without waiting for a
+   real trigger:
+
+   ```bash
+   ops-pocket-notify "$EVENT" "test notification from /ops:setup" --severity "$SEVERITY" --dry-run --json
+   ```
+   Show the `fired` channels (or the `suppressed` reason). Offer a real send
+   (drop `--dry-run`) for the chosen event so they see it land on the device.
+
+Repeat from step 1 for the next event, or `[Done]`.
+
 ### Force a fresh Pocket pull
 
 Run the watcher directly (picks up POCKET_API_KEY from keychain/env):
