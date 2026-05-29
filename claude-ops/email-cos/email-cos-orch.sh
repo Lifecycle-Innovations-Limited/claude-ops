@@ -37,7 +37,7 @@ tmpl=pathlib.Path('$PROMPT_TEMPLATE').read_text()
 tmpl=tmpl.replace('{{EMAIL_COS_ACCOUNT}}', os.environ.get('EMAIL_COS_ACCOUNT',''))
 tmpl=tmpl.replace('{{EMAIL_COS_STATE_DIR}}', os.environ.get('EMAIL_COS_STATE_DIR',''))
 tmpl=tmpl.replace('{{EMAIL_COS_POCKET_STATE_DIR}}', os.environ.get('EMAIL_COS_POCKET_STATE_DIR','/var/lib/pocket-pipeline'))
-tmpl=tmpl.replace('{{ICLOUD_REMINDER_SCRIPT}}', os.path.join(os.path.dirname('$_SCRIPT_DIR'), 'email-cos', 'icloud-reminder.sh'))
+tmpl=tmpl.replace('{{ICLOUD_REMINDER_SCRIPT}}', os.path.join('$_SCRIPT_DIR', 'icloud-reminder.sh'))
 print(tmpl)
 ")
 

@@ -60,12 +60,13 @@ if [ ! -f "$PROMPT_TEMPLATE" ]; then
   PROMPT_TEMPLATE="$_SCRIPT_DIR/prompts/sweep.prompt"
 fi
 
+export EMAIL_COS_CATEGORY_LIST="$CAT_LIST"
 RENDERED_PROMPT=$(python3 -c "
 import pathlib, os
 tmpl=pathlib.Path('$PROMPT_TEMPLATE').read_text()
 tmpl=tmpl.replace('{{EMAIL_COS_ACCOUNT}}', os.environ.get('EMAIL_COS_ACCOUNT',''))
 tmpl=tmpl.replace('{{EMAIL_COS_STATE_DIR}}', os.environ.get('EMAIL_COS_STATE_DIR',''))
-tmpl=tmpl.replace('{{CATEGORY_LIST}}', '''$CAT_LIST''')
+tmpl=tmpl.replace('{{CATEGORY_LIST}}', os.environ.get('EMAIL_COS_CATEGORY_LIST',''))
 print(tmpl)
 ")
 
