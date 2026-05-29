@@ -66,6 +66,19 @@ WORKER_MODEL = os.environ.get("POCKET_WORKER_MODEL", "claude-sonnet-4-6")
 WORKER_TIMEOUT = int(os.environ.get("POCKET_WORKER_TIMEOUT", "1800"))
 DRY_RUN = os.environ.get("POCKET_EXEC_DRY_RUN") == "1"
 
+# Least-privilege worker isolation (security hardening). When POCKET_WORKER_USER
+# is set, each `claude --bg` worker is launched as that restricted unix user via
+# `sudo -n` instead of inheriting the executor user's full privileges. This caps
+# the blast radius of a prompt-injected/auto-promoted task: the worker can only
+# touch what that user is granted (e.g. ~/Projects), not the executor's secrets,
+# cloud creds, or SSH keys. Default empty = unchanged behaviour (runs as the
+# executor user). When set, the deployment must also provide a NOPASSWD sudoers
+# entry (<executor-user> -> POCKET_WORKER_USER; `sudo -n` fails loudly rather
+# than prompting if missing) and a Claude config dir the worker can read, pointed
+# to via POCKET_WORKER_CLAUDE_CONFIG_DIR (passed as CLAUDE_CONFIG_DIR).
+WORKER_USER = os.environ.get("POCKET_WORKER_USER", "").strip()
+WORKER_CLAUDE_CONFIG_DIR = os.environ.get("POCKET_WORKER_CLAUDE_CONFIG_DIR", "").strip()
+
 DURABLE_LOG = STATE_DIR / "tasks.jsonl"
 CURSOR_FILE = STATE_DIR / "supervisor-cursor.txt"
 SPAWN_LEDGER = STATE_DIR / "spawn-ledger.jsonl"
@@ -337,6 +350,9 @@ def spawn_worker(task: dict) -> dict | None:
     # ignored by --bg (would leave the session idle with "(send a prompt)").
     env = os.environ.copy()
     env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "0"
+    if WORKER_USER and WORKER_CLAUDE_CONFIG_DIR:
+        # Point the restricted worker at a Claude config dir it can read.
+        env["CLAUDE_CONFIG_DIR"] = WORKER_CLAUDE_CONFIG_DIR
     # Display name shown in `claude agents` list — short, categorical, NOT the
     # full prompt. Sam corrected 2026-05-25: name field ≠ prompt field.
     display_name = f"pocket: {(task.get('title') or task_id)[:60]}"
@@ -346,6 +362,14 @@ def spawn_worker(task: dict) -> dict | None:
            "--model", WORKER_MODEL,
            "--add-dir", str(EXEC_CWD),
            "-p", prompt]
+    if WORKER_USER and WORKER_USER != (os.environ.get("USER") or ""):
+        # Drop privileges: run the worker as the restricted POCKET_WORKER_USER.
+        # `sudo -n` is non-interactive (fails loudly if NOPASSWD sudoers is missing
+        # rather than hanging); `-H` sets HOME to the worker user's home so Claude
+        # writes session state there; --preserve-env carries only the vars the
+        # worker needs, dropping the executor user's secrets from the environment.
+        _preserve = "PATH,CLAUDE_CONFIG_DIR,CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,ANTHROPIC_API_KEY,POCKET_WORKER_MODEL"
+        cmd = ["sudo", "-n", "-H", "-u", WORKER_USER, f"--preserve-env={_preserve}", "--", *cmd]
 
     try:
         out_f = stdout_path.open("w")

@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.11.9] — 2026-05-29
+
+### Security
+
+- **Pocket executor: optional least-privilege worker isolation (`POCKET_WORKER_USER`).** `ops-cron-pocket-executor.py` can now launch each `claude --bg` worker as a restricted unix user via `sudo -n -H -u <user>` instead of inheriting the executor user's full privileges, capping the blast radius of a prompt-injected or auto-promoted task. Opt-in: set `POCKET_WORKER_USER` (and optionally `POCKET_WORKER_CLAUDE_CONFIG_DIR` to point the worker at a readable Claude config). Default unset = unchanged behaviour. `--dangerously-skip-permissions` is retained (required for unattended `--bg` workers) but is now bounded by the worker user's FS/network grants rather than running with the executor's full access.
+
+
 ## [2.11.8] — 2026-05-29
 
 ### Security
