@@ -46,6 +46,7 @@ done
 # Copy the lib and prompts directories.
 cp -r "$SCRIPT_DIR/lib" "$INSTALL_DIR/"
 cp -r "$SCRIPT_DIR/prompts" "$INSTALL_DIR/"
+cp "$SCRIPT_DIR/package.json" "$INSTALL_DIR/package.json"
 
 # Copy example categories if no user categories exist yet.
 if [ ! -f "$CONFIG_DIR/categories.json" ]; then
@@ -100,12 +101,8 @@ else
     systemctl --user enable --now email-cos-status.timer && echo "  enabled: email-cos-status.timer" || true
   fi
 
-  # Approve-agent — enable if any reply channel is configured.
-  if [ "${EMAIL_COS_TG_ENABLE:-false}" = "true" ] \
-      || [ "${EMAIL_COS_SLACK_ENABLE:-false}" = "true" ] \
-      || [ -n "${EMAIL_COS_ACCOUNT:-}" ]; then
-    systemctl --user enable --now email-cos-approve.timer && echo "  enabled: email-cos-approve.timer" || true
-  fi
+  # Approve-agent — Gmail reply channel is available whenever account is set.
+  systemctl --user enable --now email-cos-approve.timer && echo "  enabled: email-cos-approve.timer" || true
 fi
 
 # ── 6. Reload ─────────────────────────────────────────────────────────────────
