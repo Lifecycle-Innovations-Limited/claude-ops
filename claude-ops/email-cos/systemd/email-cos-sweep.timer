@@ -1,0 +1,11 @@
+[Unit]
+Description=L1 email sweep — default every 10 min (tune OnUnitInactiveSec)
+
+[Timer]
+# First run 3 min after boot, then every 10 min of inactivity.
+OnBootSec=3min
+OnUnitInactiveSec=10min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
