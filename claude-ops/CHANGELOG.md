@@ -20,6 +20,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.15.0] — 2026-05-29
+
+### Added
+
+- **Triage decision-log hook** — `ops-pocket-triage.py` now records each triage decision (event type, confidence, reasoning) via `/opt/pocket-mcp/pipeline/ops-pocket-decisions.py` when present (try/except-guarded, no-op if absent), building an audit trail for downstream reporting.
+
+### Changed
+
+- **`ops-message-listener.sh` input hardening** — defense-in-depth on the dispatch path: env-var isolation for `QUEUE_FILE` (no shell interpolation), JSON load guarded by try/except + isinstance, per-message bounds (`MAX_LEN=4000`, sender ≤64), control-char stripping, and **NUL-delimited** dispatch output so newlines in message text can't smuggle extra dispatch lines. Merged on top of origin's existing stdin-piping fix; keeps the `|| true` call-site resilience.
+
+_(Ports two patches that had been applied directly on the deploy box into the repo, so the live checkout can track main cleanly.)_
+
+
 ## [2.14.1] — 2026-05-29
 
 ### Fixed
