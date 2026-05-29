@@ -54,6 +54,17 @@ from urllib import error as urlerr
 from urllib import request as urlreq
 
 LOG_PREFIX = "[ops-pocket-triage]"
+
+# === Phase 2 hook: decision log =====================================
+try:
+    import importlib.util as _ilu
+    _dec_spec = _ilu.spec_from_file_location("_pkt_decisions", "/opt/pocket-mcp/pipeline/ops-pocket-decisions.py")
+    _dec_mod = _ilu.module_from_spec(_dec_spec)
+    _dec_spec.loader.exec_module(_dec_mod)
+except Exception as _e:
+    _dec_mod = None
+# ====================================================================
+
 HOME = Path(os.path.expanduser("~"))
 
 # ---------------------------------------------------------------------------
@@ -395,6 +406,21 @@ def main() -> int:
             "decision": decision,
             "routed_to": verdict,
         })
+        if _dec_mod:
+            try:
+                _dec_mod.write_decision(_dec_mod.make(
+                    event_type=task.get("source", "triage"),
+                    recording_id=task.get("recording_id", ""),
+                    title=task.get("title") or task.get("recording_title", ""),
+                    summary_excerpt=task.get("context", "") or "",
+                    classification=verdict,
+                    confidence=float(decision.get("confidence", 0) or 0),
+                    reasoning=str(decision.get("reasoning", ""))[:1500],
+                    action_taken=verdict,
+                    model=MODEL,
+                ))
+            except Exception as _e:
+                log(f"decision log skip: {_e}")
 
     # Drop only the snapshot we read; bytes appended during triage are kept.
     if not DRY_RUN:
