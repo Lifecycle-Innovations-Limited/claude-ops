@@ -40,7 +40,7 @@ import {
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync, execFileSync, spawnSync, spawn } from 'child_process';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { createHmac } from 'node:crypto';
 import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS } from './ai-brain.mjs';
 
@@ -51,7 +51,22 @@ const IS_LINUX = process.platform === 'linux';
 let _linuxVault = IS_LINUX ? await import('./vault-linux.mjs') : null;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, 'config.json');
+// Config resolution (Rule 0): real accounts live in the gitignored plugin data
+// dir (where setup-account.mjs writes them); the in-repo config.json is
+// gitignored + untracked and used only as a local fallback; config.example.json
+// is the shipped empty template. Preferring the override keeps the read path in
+// sync with the write path and prevents real emails landing in a tracked file.
+const ROTATION_DATA_DIR =
+  process.env.CLAUDE_PLUGIN_DATA_DIR ||
+  join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
+const CONFIG_OVERRIDE = join(ROTATION_DATA_DIR, 'account-rotation-config.json');
+const CONFIG_LOCAL = join(__dirname, 'config.json');
+const CONFIG_EXAMPLE = join(__dirname, 'config.example.json');
+const CONFIG_PATH = existsSync(CONFIG_OVERRIDE)
+  ? CONFIG_OVERRIDE
+  : existsSync(CONFIG_LOCAL)
+    ? CONFIG_LOCAL
+    : CONFIG_EXAMPLE;
 const STATE_PATH = join(__dirname, 'state.json');
 const LOCK_PATH = join(__dirname, '.rotating');
 const LOG_PATH = join(__dirname, 'rotation.log');
