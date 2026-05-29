@@ -15,7 +15,7 @@
 set -euo pipefail
 
 VNC_DISPLAY="${VNC_DISPLAY:-1}"
-VNC_PORT="${VNC_PORT:-5901}"
+VNC_PORT="${VNC_PORT:-$((5900 + VNC_DISPLAY))}"
 NOVNC_PORT="${NOVNC_PORT:-6080}"
 NOVNC_DIR="${NOVNC_DIR:-$HOME/noVNC}"
 UNIT_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/novnc.service"
@@ -38,7 +38,9 @@ fi
 
 # 3. install + enable the user service
 mkdir -p "$USER_UNIT_DIR"
-install -m 0644 "$UNIT_SRC" "$USER_UNIT_DIR/novnc.service"
+sed -e "s/__NOVNC_PORT__/${NOVNC_PORT}/g" -e "s/__VNC_PORT__/${VNC_PORT}/g" \
+  "$UNIT_SRC" >"$USER_UNIT_DIR/novnc.service"
+chmod 0644 "$USER_UNIT_DIR/novnc.service"
 systemctl --user daemon-reload
 systemctl --user enable --now novnc.service
 log "novnc.service: $(systemctl --user is-enabled novnc.service) / $(systemctl --user is-active novnc.service)"
