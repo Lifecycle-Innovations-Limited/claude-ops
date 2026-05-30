@@ -1,3 +1,10 @@
 config.json
 .chromium-linux-profile/
 .chrome-beta-automation/
+
+# runtime artifacts — never commit (live PIDs / session state / rotation backups)
+.daemon.pid
+.rotating
+state.json
+*.bak.*
+*.bak-*
