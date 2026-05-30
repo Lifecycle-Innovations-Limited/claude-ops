@@ -4,6 +4,8 @@ A two-tier, approval-gated email automation system that runs as systemd user tim
 
 Every channel is optional. The system works on Gmail alone.
 
+> **Channels are consolidated to ONE wire by default.** The default + recommended approval surface is the **Telegram inline buttons** (tap ✅/❌ to approve/reject, with tap feedback and failure alerts on the same bot). Slack, WhatsApp, and iCloud are **opt-in and OFF by default** — enable them only via their respective `EMAIL_COS_*_ENABLE=true` flags.
+
 ## Architecture
 
 ```
