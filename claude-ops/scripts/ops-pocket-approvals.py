@@ -318,6 +318,13 @@ _RE_CLASSIC = re.compile(r"\b(APPROVE|REJECT)\s+([A-Za-z]\d+|[a-z0-9\-]{6,})\b",
 # Choice: optional "APPROVE " prefix, then code, then colon-or-space, then letter.
 # Captured groups: (opt_approve, code, letter)
 _RE_CHOICE = re.compile(r"(?:APPROVE\s+)?([A-Za-z]\d+)[:\s]+([a-z])\b", re.I)
+_RE_DIGEST_CHOICE_EXAMPLE = re.compile(r"\(e\.g\.[\s:]*$", re.I)
+
+
+def _choice_match_is_digest_example(body: str, mt: re.Match) -> bool:
+    """True when the match is inside a digest '(e.g. CODE letter)' example in quoted text."""
+    prefix = body[max(0, mt.start() - 24) : mt.start()]
+    return _RE_DIGEST_CHOICE_EXAMPLE.search(prefix) is not None
 
 
 def _resolve_code(codemap: dict, ref: str):
@@ -352,6 +359,8 @@ def cmd_replies():
 
         # --- Choice replies first (higher specificity) ---
         for mt in _RE_CHOICE.finditer(body):
+            if _choice_match_is_digest_example(body, mt):
+                continue
             ref = mt.group(1)
             letter = mt.group(2).lower()
             ent = _resolve_code(codemap, ref)
