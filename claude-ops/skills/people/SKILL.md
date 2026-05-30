@@ -53,9 +53,9 @@ Apple Contacts is source of truth. Notion "People" database is the working layer
 
 ## Behavior
 
-- First run will ask Sam to confirm `relationship_strength` for top ~30 contacts
+- First run will ask owner to confirm `relationship_strength` for top ~30 contacts
 - Subsequent runs are silent unless something new is inferred
-- Birthdays without years get treated as recurring annual; first detection asks Sam to confirm before storing
+- Birthdays without years get treated as recurring annual; first detection asks owner to confirm before storing
 
 ## Ledger writes
 

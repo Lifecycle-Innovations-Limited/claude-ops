@@ -23,8 +23,8 @@ The "before-bed brief." Counterpart to `/ops:go` (morning).
 
 ## Behavior
 
-- Runs in claude-ops when Sam is at the Mac
-- Runs in Perplexity when Sam isn't (Perplexity reads the same Notion ledger)
+- Runs in claude-ops when owner is at the Mac
+- Runs in Perplexity when owner isn't (Perplexity reads the same Notion ledger)
 - Both systems write a ledger entry `kind=nudge`, `brand=OPS`, `claim_key=tonight:YYYY-MM-DD`
   so they don't both fire
 - Push notification only if section 5 has unresolved items OR section 3 has anyone

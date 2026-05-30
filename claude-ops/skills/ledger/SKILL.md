@@ -1,6 +1,6 @@
 ---
 name: ledger
-description: Inspect the shared Ops Ledger — what's awaiting Sam, what was handled autonomously, what claude-ops or Perplexity did in the last 24h. Always the single source of truth between the two systems.
+description: Inspect the shared Ops Ledger — what's awaiting owner, what was handled autonomously, what claude-ops or Perplexity did in the last 24h. Always the single source of truth between the two systems.
 allowed-tools:
   - Bash
 ---
@@ -16,7 +16,7 @@ Stored at `~/.claude-ops/ledger.jsonl` and mirrored to Notion DB "Ops Ledger".
 # Default: human digest of last 24h
 /ops:ledger
 
-# What needs Sam's attention right now?
+# What needs owner's attention right now?
 /ops:ledger awaiting
 
 # What did Perplexity do while I was at the gym?
@@ -29,7 +29,7 @@ Stored at `~/.claude-ops/ledger.jsonl` and mirrored to Notion DB "Ops Ledger".
 ## Behavior
 
 Wraps `~/.claude-ops/bin/ledger` (the CLI from this skill). Always reports:
-1. Awaiting Sam (top of digest, sorted newest first)
+1. Awaiting owner (top of digest, sorted newest first)
 2. Drafted by either system (needs send / merge / approve)
 3. Done autonomously in last 24h, grouped by source (claude-ops, Perplexity)
 4. Skipped or expired claims
