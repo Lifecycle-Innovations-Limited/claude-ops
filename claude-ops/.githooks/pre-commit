@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — PII guard
+#
+# Blocks commits that add real email addresses or absolute home-dir paths with
+# usernames. Also reads optional local denylist from .githooks/pii-denylist.local
+# (one ERE regex per line; that file is gitignored so you can add your exact
+# name/handle without committing it to the public repo).
+#
+# Activation (run once per clone):
+#   git config core.hooksPath .githooks
+#
+# To override for a deliberate exception:
+#   git commit --no-verify
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+LOCAL_DENYLIST="$REPO_ROOT/.githooks/pii-denylist.local"
+
+# --- patterns checked against ADDED lines only ---
+
+# (a) Real email addresses — anything not on the safe-domain allowlist.
+# Allowlist: example.com, example.org, noreply, users.noreply.github.com, anthropic.com
+EMAIL_REGEX='[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+SAFE_EMAIL_REGEX='@(example\.com|example\.org|.*noreply.*|anthropic\.com)$'
+
+# (b) Absolute home paths with a literal username component.
+# Allow: /home/ec2-user, $HOME, ~, /Users/<user>, /home/<user> (literal placeholder text)
+HOME_PATH_REGEX='/(Users|home)/[A-Za-z0-9._-]+'
+SAFE_HOME_REGEX='/(Users|home)/(ec2-user|<user>|<[A-Za-z_-]+>)\b'
+
+found=0
+
+check_line() {
+  local file="$1" linenum="$2" content="$3"
+
+  # (a) email check
+  while IFS= read -r match; do
+    [[ -z "$match" ]] && continue
+    if ! echo "$match" | grep -qiE "$SAFE_EMAIL_REGEX"; then
+      echo "PII guard: $file:$linenum — email address: $match"
+      found=1
+    fi
+  done < <(echo "$content" | grep -oE "$EMAIL_REGEX" || true)
+
+  # (b) home-path check
+  while IFS= read -r match; do
+    [[ -z "$match" ]] && continue
+    if ! echo "$match" | grep -qE "$SAFE_HOME_REGEX"; then
+      echo "PII guard: $file:$linenum — home path: $match"
+      found=1
+    fi
+  done < <(echo "$content" | grep -oE "$HOME_PATH_REGEX" || true)
+
+  # (c) local denylist (gitignored, not committed)
+  if [[ -f "$LOCAL_DENYLIST" ]]; then
+    while IFS= read -r pattern; do
+      [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+      if echo "$content" | grep -qE "$pattern" 2>/dev/null; then
+        echo "PII guard: $file:$linenum — matched local denylist pattern: $pattern"
+        found=1
+      fi
+    done < "$LOCAL_DENYLIST"
+  fi
+}
+
+# Parse git diff --cached: only look at added lines (+) in tracked files
+current_file=""
+linenum=0
+
+while IFS= read -r raw; do
+  # diff --git a/... b/...
+  if [[ "$raw" =~ ^diff\ --git\ a/.+\ b/(.+)$ ]]; then
+    current_file="${BASH_REMATCH[1]}"
+    linenum=0
+    continue
+  fi
+  # @@ -old +new,count @@
+  if [[ "$raw" =~ ^\+\+\+\ b/(.+)$ ]]; then
+    current_file="${BASH_REMATCH[1]}"
+    linenum=0
+    continue
+  fi
+  if [[ "$raw" =~ ^@@.*\+([0-9]+) ]]; then
+    linenum=$(( ${BASH_REMATCH[1]} - 1 ))
+    continue
+  fi
+  # Added line
+  if [[ "$raw" == +* && "$raw" != "+++"* ]]; then
+    linenum=$(( linenum + 1 ))
+    content="${raw:1}"  # strip leading +
+    [[ -n "$current_file" ]] && check_line "$current_file" "$linenum" "$content"
+    continue
+  fi
+  # Context or removed line — still advance line counter for + side
+  if [[ "$raw" == " "* ]]; then
+    linenum=$(( linenum + 1 ))
+  fi
+done < <(git diff --cached --unified=0 2>/dev/null)
+
+if [[ "$found" -ne 0 ]]; then
+  echo ""
+  echo "PII guard: commit blocked. Use placeholders/env vars, or \`git commit --no-verify\` to override."
+  exit 1
+fi
+
+exit 0
