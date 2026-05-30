@@ -54,7 +54,7 @@ run_migrations() {
     if [[ -f "$legacy_user_plist" && "$legacy_user_plist" != "$plist_dst" ]]; then
       launchctl unload "$legacy_user_plist" 2>/dev/null || true
       rm -f "$legacy_user_plist" 2>/dev/null || true
-      log "  ok: removed legacy com.user whatsapp-bridge LaunchAgent"
+      log "  ok: removed legacy com.<user> whatsapp-bridge LaunchAgent"
     fi
     local plist_src="$PLUGIN_ROOT/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
     if [[ -f "$plist_src" ]] && [[ ! -f "$plist_dst" || "$plist_src" -nt "$plist_dst" ]]; then
