@@ -62,3 +62,6 @@ __pycache__/
 
 # GCP / Google ADC credentials — never committed; live in ~/.gcp/
 *.json.bak-ga4-*
+
+# Local PII denylist — gitignored so users can add personal handles without committing them
+.githooks/pii-denylist.local

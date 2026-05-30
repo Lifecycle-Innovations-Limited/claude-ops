@@ -721,8 +721,8 @@ The two main read commands return DIFFERENT envelopes — agents have repeatedly
 **Canonical thread-classification recipe** (copy-paste-safe, handles empty/error threads gracefully):
 
 ```python
-import json, subprocess
-USER_ADDRS = ['user', 'user@example.com', 'user@example.com']  # adapt per user
+import json, os, subprocess
+USER_ADDRS = [a for a in os.environ.get('OPS_USER_ADDRS', '').split(',') if a]  # set OPS_USER_ADDRS=you@example.com,you@work.com
 
 def classify_thread(thread_id):
     r = subprocess.run(['gog','gmail','thread','get',thread_id,'-j'],
