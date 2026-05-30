@@ -37,6 +37,8 @@ for f in \
   email-cos-slack.sh \
   email-cos-status.sh \
   email-cos-compact.sh \
+  email-cos-tg-approve.py \
+  email-cos-tg-process.sh \
   icloud-reminder.sh \
   pocket-telegram-read; do
   cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/$f"
@@ -103,6 +105,12 @@ else
 
   # Approve-agent — Gmail reply channel is available whenever account is set.
   systemctl --user enable --now email-cos-approve.timer && echo "  enabled: email-cos-approve.timer" || true
+
+  # Telegram inline-button approval processor — enable when TG chat is configured.
+  if [ "${EMAIL_COS_TG_ENABLE:-false}" = "true" ] \
+      && [ -n "${EMAIL_COS_TG_CHAT_ID:-}" ]; then
+    systemctl --user enable --now email-cos-tg-process.timer && echo "  enabled: email-cos-tg-process.timer" || true
+  fi
 fi
 
 # ── 6. Reload ─────────────────────────────────────────────────────────────────

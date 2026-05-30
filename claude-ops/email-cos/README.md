@@ -93,6 +93,50 @@ Common auth issues:
 
 Known limit: Telegram approval requires a live MTProto session. If the session is expired, only Gmail and Slack approval paths are active.
 
+#### Telegram inline-button approvals
+
+An alternative approval path that requires no text replies — each digest item is posted as a Telegram message with tappable ✅ / ❌ buttons (or a) / b) / c) for multi-option items). Tapping a button immediately promotes the decision to `tasks.jsonl`.
+
+**How it works:**
+
+```
+pocket digest → email-cos-tg-approve.py send
+                  posts one button message per open ASK to Telegram
+                  writes tg-callmap.json (short_id → full item)
+                      │
+user taps ✅/❌/a/b/c in Telegram
+                      │
+ops-message-listener (getUpdates owner)
+  tees callback_query → $POCKET_STATE_DIR/tg-callbacks.jsonl
+  advances offset via tg-maxoffset (so callbacks are not re-fetched)
+                      │
+email-cos-tg-process.timer (~60s)
+  email-cos-tg-approve.py process
+    drains tg-callbacks.jsonl
+    promotes APPROVE → tasks.jsonl / REJECT → approval-resolved.jsonl
+    answers the callback (toast notification in Telegram)
+    edits the message to show the result (freezes buttons)
+```
+
+**Dependency on the message-listener tee:** The listener script (`scripts/ops-message-listener.sh`) owns the bot's `getUpdates` long-poll. A second `getUpdates` poller for the same token would conflict and cause updates to be delivered to only one. The listener tees `callback_query` updates to `tg-callbacks.jsonl` so `email-cos-tg-approve.py process` can drain them without competing. This means the button system only works when `ops-message-listener` is running as the sole `getUpdates` consumer for the bot.
+
+**Setup:**
+
+```sh
+EMAIL_COS_TG_ENABLE="true"
+EMAIL_COS_TG_CHAT_ID="123456789"       # numeric ID — find via @userinfobot
+# EMAIL_COS_APPROVAL_BOT_TOKEN=""      # defaults to TELEGRAM_BOT_TOKEN
+# EMAIL_COS_APPROVALS_PY=""            # defaults to scripts/ops-pocket-approvals.py
+```
+
+After configuring, re-run `install.sh` — it will enable `email-cos-tg-process.timer` automatically when `EMAIL_COS_TG_ENABLE=true` and `EMAIL_COS_TG_CHAT_ID` are both set.
+
+To post button messages manually: `~/.local/share/email-cos/email-cos-tg-approve.py send`
+
+To drain callbacks manually: `~/.local/share/email-cos/email-cos-tg-process.sh`
+
+**Same-bot caveat:** Buttons are sent by the same bot token that the message-listener uses for `getUpdates`. Using a different bot token for button messages would require that bot to also own `getUpdates`, creating a conflict. Keep `EMAIL_COS_APPROVAL_BOT_TOKEN` unset (inherits `TELEGRAM_BOT_TOKEN`) unless you have explicitly set up the listener to use a different token for its polling.
+
 #### WhatsApp
 
 Outbound confirmation only (no inbound approval reads — WhatsApp self-chat reply-read is not supported).
@@ -173,6 +217,7 @@ The `"fallback": true` category catches everything not matched by prior rules.
 | email-cos-compact | weekly Sun 04:30 | EMAIL_COS_ACCOUNT set |
 | email-cos-approve | every 3 min | any channel + account |
 | email-cos-status | daily 08:00 | TG or Slack enabled |
+| email-cos-tg-process | every ~60s | EMAIL_COS_TG_ENABLE=true + TG_CHAT_ID set |
 
 Check timer health: `systemctl --user list-timers 'email-cos*'`
 
