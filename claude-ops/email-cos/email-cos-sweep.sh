@@ -73,10 +73,12 @@ print(tmpl)
 : > "$SD/sweep.out"
 # Run headless with NO MCP servers — otherwise the full env's MCP tool defs blow
 # the model context ("Prompt is too long"). Sweep only needs Bash (gog).
+rc=0
+# `|| rc=$?` keeps `set -e`/`pipefail` from aborting before the metrics line
+# below runs. Under pipefail the pipeline status is claude's exit code.
 printf '%s' "$RENDERED_PROMPT" | \
   claude --print --model "$EMAIL_COS_SWEEP_MODEL" --dangerously-skip-permissions \
-    --strict-mcp-config --mcp-config '{"mcpServers":{}}' --allowedTools Bash >> "$SD/sweep.out" 2>&1
-rc=$?
+    --strict-mcp-config --mcp-config '{"mcpServers":{}}' --allowedTools Bash >> "$SD/sweep.out" 2>&1 || rc=$?
 secs=$(( $(date +%s) - start ))
 echo "{\"ts\":\"$ts\",\"tier\":\"sweep\",\"exit\":$rc,\"secs\":$secs,\"new\":$new}" >> "$SD/metrics.jsonl"
 
