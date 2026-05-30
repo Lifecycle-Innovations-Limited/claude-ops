@@ -182,8 +182,31 @@ data = json.load(sys.stdin)
 if not data.get('ok'):
     print('[]')
     sys.exit(0)
+import os as _os
+_sd = _os.environ.get('POCKET_STATE_DIR', '/var/lib/pocket-pipeline')
 filtered = []
+_maxuid = 0
 for upd in data.get('result', []):
+    _uid = upd.get('update_id', 0)
+    if _uid > _maxuid:
+        _maxuid = _uid
+    # Tee inline-button taps (callback_query) to a handoff file for the pocket
+    # approval processor, then skip — this bot's getUpdates is owned here.
+    cb = upd.get('callback_query')
+    if cb:
+        try:
+            _cbm = cb.get('message') or {}
+            with open(_os.path.join(_sd, 'tg-callbacks.jsonl'), 'a') as _f:
+                _f.write(json.dumps({
+                    'id': cb.get('id'),
+                    'data': cb.get('data', ''),
+                    'message_id': _cbm.get('message_id'),
+                    'chat_id': (_cbm.get('chat') or {}).get('id'),
+                    'update_id': _uid,
+                }) + '\n')
+        except Exception:
+            pass
+        continue
     msg = upd.get('message', {})
     sender = msg.get('from', {})
     # Skip owner's own messages (add TELEGRAM_OWNER_ID to env to filter by user_id)
@@ -200,6 +223,14 @@ for upd in data.get('result', []):
             'update_id': upd.get('update_id', 0),
             'raw': msg
         })
+# Persist the max update_id seen (incl. callbacks) so the offset advances past
+# callback-only polls — otherwise the listener re-fetches them forever.
+try:
+    if _maxuid:
+        with open(_os.path.join(_sd, 'tg-maxoffset'), 'w') as _f:
+            _f.write(str(_maxuid))
+except Exception:
+    pass
 print(json.dumps(filtered))
 " 2>/dev/null || echo "[]"
 }
@@ -260,6 +291,13 @@ msgs = json.load(sys.stdin)
 ids = [m.get('update_id', 0) for m in msgs]
 print(max(ids) if ids else $TG_LAST_UPDATE_ID)
 " 2>/dev/null || echo "$TG_LAST_UPDATE_ID")
+  fi
+
+  # Advance the offset past callback_query updates tee'd to the handoff file,
+  # so callback-only polls don't get re-fetched forever.
+  _CBMAX=$(cat "${POCKET_STATE_DIR:-/var/lib/pocket-pipeline}/tg-maxoffset" 2>/dev/null || echo 0)
+  if [[ "${_CBMAX:-0}" =~ ^[0-9]+$ ]] && [[ "$_CBMAX" -gt "${TG_LAST_UPDATE_ID:-0}" ]]; then
+    TG_LAST_UPDATE_ID="$_CBMAX"
   fi
 
   # ── Save state ──────────────────────────────────────────────────────────

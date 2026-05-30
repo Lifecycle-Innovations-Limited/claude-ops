@@ -1,0 +1,8 @@
+[Unit]
+Description=Drain Telegram approval button taps ~every 60s
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=60s
+AccuracySec=15s
+[Install]
+WantedBy=timers.target
