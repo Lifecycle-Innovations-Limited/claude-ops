@@ -4,6 +4,7 @@ description: Sync Apple Contacts to Notion 'People' database. Track last_contact
 allowed-tools:
   - Bash
   - Read
+  - AskUserQuestion
 ---
 
 # /ops:people
