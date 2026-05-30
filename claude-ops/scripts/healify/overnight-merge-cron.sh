@@ -28,7 +28,7 @@ merge_ready_prs() {
   # GraphQL: list open PRs with author + branch info. Allowlist applied below.
   # Only auto-merge:
   #   (a) PRs whose head ref starts with `sync(dev` or `sync/dev` (dev→main sync PRs WE opened), OR
-  #   (b) PRs authored by the loop owner (samrenders) AND head branch starts with `fix/` or `feat/` or `chore/` or `sync(`.
+  #   (b) PRs authored by the loop owner (the configured loop owner) AND head branch starts with `fix/` or `feat/` or `chore/` or `sync(`.
   # Skip everything else — humans review.
   local nodes
   nodes=$(gh api graphql -f query='
@@ -42,7 +42,7 @@ merge_ready_prs() {
 
   BASE="$base" NODES_JSON="$nodes" python3 <<'PYEOF' | while IFS=$'\t' read -r pr head author; do
 import json, os, sys
-ALLOWED_AUTHORS = {"samrenders", "auroracapital"}
+ALLOWED_AUTHORS = set(filter(None, os.environ.get("OPS_ALLOWED_AUTHORS", "").split(",")))  # e.g. OPS_ALLOWED_AUTHORS=user1,user2
 base = os.environ["BASE"]
 try:
     d = json.loads(os.environ["NODES_JSON"])
