@@ -61,7 +61,7 @@ json.dump(data, open('$STATE_FILE', 'w'))
 # Python code injection from untrusted Telegram/WhatsApp message content.
 append_to_queue() {
   local new_msgs_json="$1"
-  QUEUE_FILE="$QUEUE_FILE" printf '%s' "$new_msgs_json" | python3 -c "
+  printf '%s' "$new_msgs_json" | QUEUE_FILE="$QUEUE_FILE" python3 -c "
 import json, os, sys
 from datetime import datetime, timezone
 
