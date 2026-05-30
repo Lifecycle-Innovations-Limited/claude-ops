@@ -182,8 +182,16 @@ Return STRICT JSON, no markdown, no prose outside the JSON:
   "confidence": 0.0-1.0,
   "reasoning": "<2-4 sentence summary of why — distill your extended thinking>",
   "scoped_task_description": "<if ACT: a tightened, executable version of the task; if DRAFT: what the draft should cover; else: empty>",
-  "concerns": ["<any specific risks the executing agent should know>"]
+  "concerns": ["<any specific risks the executing agent should know>"],
+  "action_preview": "<ASK only — one concrete sentence: what will happen if the owner approves this item. E.g. 'Creates a GitHub issue in your-org/your-repo with the given title and assigns it to you.' Leave empty string for non-ASK verdicts.>",
+  "decision_question": "<ASK only, and only when the item is a genuine multi-choice decision — the single question being decided. E.g. 'Which environment should this deploy target?' Leave empty string when it is a simple yes/no.>",
+  "options": [
+    {{"key": "a", "label": "<concrete option text — what choosing this means>"}},
+    {{"key": "b", "label": "<concrete option text>"}}
+  ]
 }}
+
+For the options array: include 2–4 options only when decision_question is non-empty. Use keys a/b/c/d in order. When the item is a plain yes/no ASK, set options to an empty array []. Non-ASK verdicts must also set options to [].
 
 Owner context (NEVER assume otherwise):
   • Owner name: {owner_name}
@@ -383,6 +391,24 @@ def route(task: dict, decision: dict) -> str:
         "model": decision.get("_model"),
         "decided_at": now_iso(),
     }
+    # Populate decision-digest fields on ASK records so the approval digest can
+    # show the owner exactly what approving does and, for multi-choice items,
+    # enumerate the options. These fields are optional — old records without them
+    # render as plain yes/no items (backward-compatible).
+    if verdict == "ASK":
+        ap = (decision.get("action_preview") or "").strip()
+        dq = (decision.get("decision_question") or "").strip()
+        opts = decision.get("options") or []
+        if ap:
+            routed["action_preview"] = ap
+        if dq:
+            routed["decision_question"] = dq
+        if opts and isinstance(opts, list):
+            routed["options"] = [
+                {"key": str(o.get("key", "")).lower(), "label": str(o.get("label", ""))}
+                for o in opts
+                if o.get("key") and o.get("label")
+            ]
     if verdict == "ACT":
         # Promote: use scoped description if provided, keep original context
         if decision.get("scoped_task_description"):
