@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # email-cos-notify.sh "<text>"
-# Fans out a notification to every ENABLED channel (Telegram, Slack).
-# WhatsApp confirmation is handled by email-cos-approve-agent.py directly.
+# Telegram-only by default: notifications go to ONE wire — the Telegram bot.
+# Slack/WhatsApp/iCloud are opt-in and OFF by default (see README). The Slack
+# fan-out is gated behind EMAIL_COS_SLACK_ENABLE=true. WhatsApp confirmation is
+# handled by email-cos-approve-agent.py directly (also opt-in).
 # Each channel is silently skipped when not configured or token absent.
 set -euo pipefail
 
@@ -22,7 +24,9 @@ if [ "${EMAIL_COS_TG_ENABLE:-false}" = "true" ] \
     --data-urlencode "text=$MSG" || true
 fi
 
-# ── Slack ─────────────────────────────────────────────────────────────────────
+# ── Slack (opt-in, OFF by default) ────────────────────────────────────────────
+# Telegram is the single default wire. Slack fan-out only fires when explicitly
+# enabled via EMAIL_COS_SLACK_ENABLE=true.
 if [ "${EMAIL_COS_SLACK_ENABLE:-false}" = "true" ]; then
   "$_SCRIPT_DIR/email-cos-slack.sh" post "$MSG" >/dev/null 2>&1 || true
 fi
