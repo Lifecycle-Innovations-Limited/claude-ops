@@ -1,0 +1,6 @@
+[Unit]
+Description=email-cos Telegram approval-callback processor
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/email-cos/email-cos-tg-process.sh
+TimeoutStartSec=120
