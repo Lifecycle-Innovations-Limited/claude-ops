@@ -60,19 +60,38 @@ EOF
     exit 0
 fi
 
-# --- Pattern 2: tight gh loops (single-digit sleep = under 10s) ---
-# Catches: `while true; do gh ...; sleep 5; done` style polls (not sleep 10+).
-if echo "$CMD_ONELINE" | grep -qE '(^|[^[:alnum:]_])(while|until|for)([^[:alnum:]_]|$).*gh[[:space:]]+(api|pr|run|issue)' && \
-   echo "$CMD_ONELINE" | grep -qE 'sleep[[:space:]]+[0-9]([[:space:];]|$)'; then
-    emit_pre_tool_deny <<'EOF'
-BLOCKED: tight gh polling loop (sleep < 10s) detected.
+# --- Pattern 2: gh polling loops with sleep < 25s ---
+# Catches ANY while/until/for loop calling `gh api|pr|run|issue|search` whose smallest
+# sleep interval is under 25s — including deploy-watch loops:
+#   until [ -n "$(gh run list --workflow=… )" ]; do sleep 15; done
+# `gh run list|view` is the same REST drain as `gh pr …`; "waiting for my deploy" is NOT
+# an exemption. The minimum sleep is parsed numerically so two-digit evasions (sleep 15,
+# sleep 20, sleep 24) are caught — the old single-digit-only regex let these through.
+# (2026-05-30: a sleep-15 `gh run list` deploy-watch loop drove REST to 0/5000.)
+if echo "$CMD_ONELINE" | grep -qE '(^|[^[:alnum:]_])(while|until|for)([^[:alnum:]_]|$).*gh[[:space:]]+(api|pr|run|issue|search)'; then
+    # Extract every `sleep N` interval and take the minimum; a loop with sleep 30 AND
+    # sleep 15 is judged by its tightest phase (15).
+    MIN_SLEEP=$(echo "$CMD_ONELINE" | grep -oE 'sleep[[:space:]]+[0-9]+' | grep -oE '[0-9]+' | sort -n | head -1)
+    # No explicit sleep in a gh loop = unbounded hammer → treat as 0.
+    [ -z "$MIN_SLEEP" ] && MIN_SLEEP=0
+    if [ "$MIN_SLEEP" -lt 25 ]; then
+        emit_pre_tool_deny <<EOF
+BLOCKED: gh polling loop with sleep ${MIN_SLEEP}s (< 25s) detected.
 
 The 5000/hr REST quota is shared across this session, background daemons, the overnight
-sync cron, and any other gh process. A loop at sleep 5 burns 720 calls/hr — easy to OOM-cache.
+sync cron, and every other gh process. A loop at sleep 15 burns ~240 calls/hr and stacks
+with siblings — one such loop drove REST to 0/5000 on 2026-05-30, blocking prod tooling.
 
-Bump to `sleep 30` (or use Monitor tool — handles ≥25s naturally).
+This covers deploy-watch loops too: \`until gh run list/view … ; do sleep <25; done\` is
+forbidden. Waiting on an Actions deploy is NOT an exemption.
+
+Fix: bump to \`sleep 30\`+ (run_in_background) or use the Monitor tool (handles ≥25s natively).
+For multi-PR/run state, prefer ONE GraphQL query (separate 5000/hr bucket).
+
+Source: ~/Projects/claude-ops/claude-ops/hooks/gh-watch-guard.sh
 EOF
-    exit 0
+        exit 0
+    fi
 fi
 
 exit 0
