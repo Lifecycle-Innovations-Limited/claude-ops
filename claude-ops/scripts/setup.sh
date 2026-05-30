@@ -54,9 +54,12 @@ for tool in "${MISSING[@]}"; do
   echo "  ✗ ops: $tool not found — run /ops:setup to configure"
 done
 
-# Check registry
-REGISTRY="$SCRIPT_DIR/registry.json"
-if [ ! -f "$REGISTRY" ]; then
+# Check registry. The canonical registry lives in the plugin DATA dir
+# (CLAUDE_PLUGIN_DATA_DIR), which survives plugin upgrades; the cached copy
+# under $SCRIPT_DIR is wiped on every upgrade. Accept either location so a
+# valid data-dir registry doesn't trigger a false "no registry" warning.
+REGISTRY_DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+if [ ! -f "$SCRIPT_DIR/registry.json" ] && [ ! -f "$REGISTRY_DATA_DIR/registry.json" ]; then
   echo "  ✗ ops: no project registry — run /ops:setup to create one"
 fi
 
