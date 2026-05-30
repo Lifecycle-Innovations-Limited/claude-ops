@@ -88,10 +88,14 @@ def promote(ent, decision):
 
 
 def confirm(msg):
-    """Fan out confirmation to all enabled channels."""
+    """Confirm over the default wire (Telegram, via email-cos-notify.sh).
+
+    WhatsApp is opt-in and OFF by default — the bridge POST only fires when
+    EMAIL_COS_WA_ENABLE=="true" (Telegram-only otherwise).
+    """
     notify_script = _SCRIPT_DIR / "email-cos-notify.sh"
     subprocess.run([str(notify_script), msg], capture_output=True, timeout=20)
-    if WA_ENABLE and WA_JID:
+    if os.environ.get("EMAIL_COS_WA_ENABLE") == "true" and WA_JID:
         subprocess.run(
             [
                 "curl",
