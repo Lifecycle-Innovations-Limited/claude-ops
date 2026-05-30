@@ -52,11 +52,24 @@ EMAIL_COS_REMIND_CAP_RUN="12"
 
 EMAIL_COS_TG_ENABLE="false"
 
-# Numeric Telegram chat ID to receive notifications (your user ID or a group/channel).
+# Numeric Telegram chat ID to receive notifications AND inline-button approvals.
+# Find yours: message @userinfobot in Telegram; it replies with your numeric ID.
+# Required for inline-button approvals — if unset, email-cos-tg-approve.py exits cleanly.
 EMAIL_COS_TG_CHAT_ID="YOUR_TELEGRAM_CHAT_ID"
 
 # @username of the Telegram bot used for outbound notifications.
 EMAIL_COS_TG_BOT_USERNAME="YourTelegramBotUsername"
+
+# Bot token for sending inline-button approval messages.
+# Usually the same bot as TELEGRAM_BOT_TOKEN (already set in ~/.mcp-secrets.env or Doppler).
+# Set here only if you need a different bot for approvals.
+# EMAIL_COS_APPROVAL_BOT_TOKEN=""
+
+# Path to ops-pocket-approvals.py — the script that reads open ASK items and
+# promotes decisions to tasks.jsonl. The default resolves relative to the
+# email-cos package directory (../../scripts/ops-pocket-approvals.py), which is
+# correct after install. Override if your pocket pipeline lives elsewhere.
+# EMAIL_COS_APPROVALS_PY="/path/to/scripts/ops-pocket-approvals.py"
 
 # ── Channel: WhatsApp ────────────────────────────────────────────────────────
 # Requires a running whatsapp-bridge (default: http://localhost:8080).
