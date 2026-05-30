@@ -1,7 +1,7 @@
 #!/bin/bash
 # PreToolUse advisory — fires when an agent is about to ASK THE USER for a
 # credential (auth stall). Injects the credential-source search order so the
-# agent exhausts local vaults BEFORE bothering Sam.
+# agent exhausts local vaults BEFORE bothering the owner.
 #
 # Trigger: AskUserQuestion whose text mentions a credential keyword
 #          (password, token, api key, secret, credential, ssh, login,
@@ -37,15 +37,15 @@ if printf '%s' "$BLOB" | grep -qE '(password|passphrase|credential|api[ _-]?key|
   python3 - <<'PY'
 import json
 msg = (
-  "AUTH-STALL CHECK — you are about to ask Sam for a credential. "
-  "Sam's rule: exhaust local credential sources FIRST, in this order, before prompting:\n"
+  "AUTH-STALL CHECK — you are about to ask the owner for a credential. "
+  "Owner rule: exhaust local credential sources FIRST, in this order, before prompting:\n"
   "  1. dcli (Dashlane — the master vault, has ALL accounts incl. device/SSH/router pw):\n"
   "       dcli password --output json <query>   |   dcli password --output json ''   |   dcli note --output json   |   dcli otp <query>\n"
   "  2. Doppler:   doppler secrets   /   doppler secrets get <NAME> --plain\n"
   "  3. macOS keychain:   security find-generic-password -s <svc> -w   /   security find-internet-password -s <host> -w\n"
   "  4. Env vars:   env | grep -i <name>\n"
   "  5. Filesystem scan:   ~/.secrets, ~/.config, repo .env*, ~/.aws, ~/.ssh\n"
-  "Only ask Sam if ALL of the above miss. (2026-05-26: ~1h lost on UniFi SSH before checking dcli.)"
+  "Only ask the owner if ALL of the above miss. (2026-05-26: ~1h lost on UniFi SSH before checking dcli.)"
 )
 print(json.dumps({
   "hookSpecificOutput": {
