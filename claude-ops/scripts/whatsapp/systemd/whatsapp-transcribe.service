@@ -7,6 +7,8 @@ PartOf=whatsapp-bridge.service
 
 [Service]
 Type=oneshot
+# Batch may run many Whisper calls; disable the default ~90s start timeout.
+TimeoutStartSec=0
 # OPENAI_API_KEY (and other secrets) for the metered Whisper API.
 EnvironmentFile=%h/.config/systemd/env/mcp-secrets.env
 # Wait up to 10s for the bridge :8080 before downloading media.
