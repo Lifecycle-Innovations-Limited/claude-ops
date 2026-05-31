@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.18.10] - 2026-05-31
+
+### Changed
+### Fixed
+- Doppler MCP no longer fails to connect by default. Added `mcp-servers/doppler-launcher.sh`, which resolves `DOPPLER_TOKEN` (pasted config → inherited env → `doppler configure get token`) and never exports an empty token, so the server stops being force-failed when `doppler_token` is left blank (#422).
+
+
 ## [Unreleased]
 
 ### Fixed
