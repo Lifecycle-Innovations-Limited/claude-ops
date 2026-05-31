@@ -56,7 +56,13 @@ CALLMAP = STATE / "tg-callmap.json"              # sid -> entry (button messages
 CODEMAP = STATE / "approval-codemap.json"        # A1/D1 -> entry (freeform refs)
 TASKS = STATE / "tasks.jsonl"
 RESOLVED = STATE / "approval-resolved.jsonl"
+HOLDS = STATE / "approval-holds.jsonl"           # actions held by the validation guard
 LOG = STATE / "responder.log"
+
+# Pre-promotion validation guard: outbound message kinds get a staleness/rule check
+# before they are committed to tasks.jsonl. social_publish is excluded (an explicit
+# publish, not a message). Disable with POCKET_VALIDATE_ACTIONS=0.
+VALIDATE_KINDS = {"send_message", "email_reply"}
 
 TOKEN = os.environ.get("EMAIL_COS_APPROVAL_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT = os.environ.get("EMAIL_COS_TG_CHAT_ID", "")
@@ -150,6 +156,8 @@ def open_items():
 _RE_CLASSIC = re.compile(r"\b(APPROVE|REJECT)\s+([A-Za-z]\d+|[a-z0-9\-]{6,})\b", re.I)
 _RE_CHOICE = re.compile(r"(?:APPROVE\s+)?([A-Za-z]\d+)[:\s]+([a-z])\b", re.I)
 _RE_DIGEST_CHOICE_EXAMPLE = re.compile(r"\(e\.g\.[\s:]*$", re.I)
+# Force-override: re-promote a guard-held action, bypassing validation.
+_RE_FORCE = re.compile(r"\bforce\s+([A-Za-z]\d+|[a-z0-9\-]{6,})\b", re.I)
 
 
 def _choice_match_is_digest_example(body: str, mt: re.Match) -> bool:
@@ -285,6 +293,130 @@ def _resolve_claude_bin():
     return shutil.which("claude")
 
 
+# ---------------------------------------------------------------------------
+# Pre-promotion validation guard (staleness + standing-rule check)
+# ---------------------------------------------------------------------------
+def _is_outbound(ent):
+    """True for outbound message actions that should be validated before sending."""
+    raw = ent.get("raw") if isinstance(ent.get("raw"), dict) else {}
+    kind = ent.get("kind") or (raw.get("kind") if isinstance(raw, dict) else None)
+    return kind in VALIDATE_KINDS or (isinstance(raw, dict) and bool(raw.get("email_reply")))
+
+
+def _code_for_id(item_id):
+    """Best-effort A/D code lookup from the codemap (for the force-override hint)."""
+    try:
+        cm = json.loads(CODEMAP.read_text()) if CODEMAP.exists() else {}
+        for code, ent in cm.items():
+            if ent.get("id") == item_id:
+                return code
+    except Exception:
+        pass
+    return ""
+
+
+def _load_approval_rules():
+    """The owner's standing rules for whether an approved action should still fire.
+    Read from POCKET_APPROVAL_RULES or ~/.config/email-cos/approval-rules.md if present;
+    otherwise a generic built-in rubric (no personal data)."""
+    p = os.environ.get("POCKET_APPROVAL_RULES") or os.path.expanduser(
+        "~/.config/email-cos/approval-rules.md"
+    )
+    if os.path.exists(p):
+        try:
+            return open(p).read()[:4000]
+        except OSError:
+            pass
+    return (
+        "- HOLD if the request appears already handled, resolved, or superseded "
+        "(e.g. a meeting was already scheduled/accepted, the thread already has a "
+        "later reply, the task is now obsolete).\n"
+        "- HOLD if the action commits to a specific time/date on the owner's behalf "
+        "unless the owner clearly set that time — scheduling is usually delegated.\n"
+        "- HOLD if the action contradicts a more recent message or event in the context.\n"
+        "- Otherwise PROCEED."
+    )
+
+
+def _gather_action_context(ent):
+    """Best-effort recent-activity bundle for the action's thread/recipient via gog.
+    Returns '' if gog is unavailable or anything fails (validator then defaults proceed)."""
+    raw = ent.get("raw") if isinstance(ent.get("raw"), dict) else {}
+    er = raw.get("email_reply") or {}
+    to = (er.get("to") or "").strip()
+    subj = (er.get("subject") or ent.get("title") or "").replace("Re:", "").strip()
+    gog = shutil.which("gog") or os.path.expanduser("~/.local/bin/gog")
+    if not (gog and os.path.exists(gog)):
+        return ""
+    clauses = []
+    if to:
+        clauses.append(f"(from:{to} OR to:{to})")
+    if subj:
+        clauses.append(f"subject:({subj[:60]})")
+    if not clauses:
+        return ""
+    query = " OR ".join(clauses) + " newer_than:14d"
+    try:
+        r = subprocess.run(
+            [gog, "gmail", "search", query, "--max", "10", "-j", "--results-only", "--no-input"],
+            capture_output=True, text=True, timeout=45, env=os.environ,
+        )
+        rows = json.loads(r.stdout or "[]")
+    except Exception:
+        return ""
+    bits = []
+    for m in rows[:10]:
+        bits.append(
+            f"- [{m.get('date','')}] {(m.get('from') or '')[:40]} | {(m.get('subject') or '')[:75]}"
+        )
+    return "\n".join(bits)
+
+
+def _validate_action(ent):
+    """Return (ok, reason). ok=False => HOLD. Degrades to (True, '') on any failure —
+    the guard never blocks an approval because of its own error."""
+    cb = _resolve_claude_bin()
+    if not cb:
+        return True, ""
+    raw = ent.get("raw") if isinstance(ent.get("raw"), dict) else {}
+    er = raw.get("email_reply") or {}
+    action = {
+        "kind": ent.get("kind"),
+        "to": er.get("to"),
+        "subject": er.get("subject") or ent.get("title"),
+        "body": (er.get("body") or "")[:1500],
+    }
+    ctx = _gather_action_context(ent)
+    rules = _load_approval_rules()
+    model = os.environ.get("POCKET_RESPONDER_MODEL", "claude-haiku-4-5")
+    prompt = (
+        "You are a pre-send guard for an action the owner already approved. Decide "
+        "PROCEED (send it) or HOLD (it looks stale, already handled, or breaks a rule). "
+        'Output ONLY JSON: {"decision":"proceed"|"hold","reason":"<short>"}.\n\n'
+        f"OWNER RULES:\n{rules}\n\n"
+        f"PROPOSED ACTION:\n{json.dumps(action, ensure_ascii=False)}\n\n"
+        f"RECENT CONTEXT (thread + related activity; may be empty):\n{ctx or '(none available)'}\n\n"
+        "If context is empty or unclear, default to proceed. JSON:"
+    )
+    try:
+        r = subprocess.run([cb, "-p", prompt, "--model", model],
+                           capture_output=True, text=True, timeout=90, env=os.environ)
+        out = (r.stdout or "").strip()
+    except Exception as e:
+        log(f"validate: invocation error {e} — proceeding")
+        return True, ""
+    mt = re.search(r"\{.*\}", out, re.S)
+    if not mt:
+        return True, ""
+    try:
+        d = json.loads(mt.group(0))
+    except Exception:
+        return True, ""
+    if (d.get("decision") or "").strip().lower() == "hold":
+        return False, (d.get("reason") or "looks already handled / stale")[:200]
+    return True, ""
+
+
 def _publish_social(ent):
     """Publish a staged Typefully draft. Returns (ok, info)."""
     raw = ent.get("raw") if isinstance(ent.get("raw"), dict) else {}
@@ -312,9 +444,10 @@ def _publish_social(ent):
         return False, str(e)[:200]
 
 
-def _apply_decision(ent, decision, option=None):
+def _apply_decision(ent, decision, option=None, force=False):
     """Write the canonical sinks for one decision. Returns a short toast string.
-    decision in {APPROVE, REJECT, CHOOSE}. Branches on kind=social_publish."""
+    decision in {APPROVE, REJECT, CHOOSE}. Branches on kind=social_publish.
+    force=True bypasses the pre-promotion validation guard."""
     iid = ent["id"]
     kind = ent.get("kind") or (ent.get("raw") or {}).get("kind") if isinstance(ent.get("raw"), dict) else ent.get("kind")
 
@@ -324,6 +457,27 @@ def _apply_decision(ent, decision, option=None):
             log(f"REJECT social {iid} — draft left unpublished")
             return "❌ Rejected — draft left unpublished."
         return "❌ Rejected."
+
+    # Pre-promotion validation guard: before committing an outbound action, check it is
+    # still valid (not already handled, not rule-breaking). HOLD instead of promoting;
+    # the owner overrides with `force <code>`. Skipped when forced/disabled/non-outbound.
+    if (not force and _is_outbound(ent)
+            and os.environ.get("POCKET_VALIDATE_ACTIONS", "1") != "0"):
+        ok, reason = _validate_action(ent)
+        if not ok:
+            open(RESOLVED, "a").write(
+                json.dumps({"id": iid, "decision": "HELD", "reason": reason, "ts": time.time()}) + "\n"
+            )
+            try:
+                open(HOLDS, "a").write(
+                    json.dumps({"id": iid, "kind": kind, "reason": reason, "ts": time.time()}) + "\n"
+                )
+            except OSError:
+                pass
+            log(f"HELD {iid}: {reason}")
+            code = _code_for_id(iid)
+            hint = f"force {code}" if code else "force <code>"
+            return f"⚠️ Held — {reason}\nReply `{hint}` to send anyway."
 
     if kind == "social_publish":
         ok, info = _publish_social(ent)
@@ -461,6 +615,21 @@ def _handle_text(ev, codemap, callmap, resolved, seen):
     acted = 0
     handled_ids: set[str] = set()
     matched_any = False
+
+    # --- Force override: re-promote a guard-held action, bypassing validation. ---
+    forced = False
+    for mt in _RE_FORCE.finditer(body):
+        ent = _resolve_code(codemap, mt.group(1))
+        if not ent:
+            continue
+        forced = True
+        toast = _apply_decision(ent, "APPROVE", force=True)
+        resolved.add(ent["id"]); handled_ids.add(ent["id"]); acted += 1
+        _, cment = _callmap_entry_for_id(callmap, ent["id"])
+        _freeze(cment, toast)
+        _send(f"{toast}  (forced {mt.group(1)})")
+    if forced:
+        return acted
 
     # --- Fast-path: choice replies first (higher specificity), then classic. ---
     for mt in _RE_CHOICE.finditer(body):
