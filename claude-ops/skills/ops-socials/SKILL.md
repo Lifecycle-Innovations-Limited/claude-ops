@@ -228,7 +228,7 @@ Per-tweet drill-down on impressions/engagement: `mcp__x-mcp__get_metrics({ id })
 
 ### "Show me the autopilot status" / "/ops-socials healify" / owner-autopilot read-out
 ```bash
-[ -n "$OPS_SOCIAL_AUTOPILOT_CMD" ] && bash -c "$OPS_SOCIAL_AUTOPILOT_CMD" || echo "no autopilot wired — set OPS_SOCIAL_AUTOPILOT_CMD in your env or $PREFS_PATH/preferences.json"
+if [ -n "$OPS_SOCIAL_AUTOPILOT_CMD" ]; then bash -c "$OPS_SOCIAL_AUTOPILOT_CMD"; else echo "no autopilot wired — set OPS_SOCIAL_AUTOPILOT_CMD in your env or $PREFS_PATH/preferences.json"; fi
 ```
 Returns per-channel state: connected, queue depth, recent fires, next action. Read-only.
 
