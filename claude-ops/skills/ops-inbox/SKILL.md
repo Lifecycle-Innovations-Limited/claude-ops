@@ -280,7 +280,7 @@ Workflow({
     // ONE entry per channel detected as AVAILABLE. Build select/steps from the
     // per-channel reference sections below. Examples:
     { key: 'email',    select: 'select:mcp__gog__gmail_search,mcp__gog__gmail_read_thread,mcp__gog__gmail_labels',
-      steps: 'gmail_search "in:inbox newer_than:7d"; for threads that may need a reply, read the last message to find who sent it last.' },
+      steps: 'gmail_search "in:inbox newer_than:7d"; labels+from on the search envelope are first-pass only — before any NEEDS_REPLY, gog gmail thread get per candidate and clear the FULL-THREAD AWARENESS GATE (full thread both directions, 2-sentence arc, reconcile SENT).' },
     { key: 'slack',    select: 'select:mcp__slack__conversations_unreads,mcp__slack__channels_list,mcp__slack__conversations_history,mcp__slack__conversations_replies',
       steps: 'conversations_unreads to find unread DMs/channels; read latest via history/replies.' },
     { key: 'whatsapp', select: 'select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__get_chat',
@@ -579,9 +579,9 @@ The per-channel classify/draft steps below (WhatsApp, iMessage, email) all refer
 5. For chats where `last_is_from_me` is absent or null, fetch the thread as fallback:
    `mcp__whatsapp__list_messages` with `{chat_jid: "<JID>", limit: 25}` — read BOTH directions (capture `is_from_me=1` rows and `[voice]` transcripts), not just the **last element** of the returned array.
 
-6. Classify each chat (same direction rule as step 4 — use `last_is_from_me` on the chat object; only after the step 5 thread fallback use the last element's `is_from_me`):
-   - **NEEDS REPLY**: `last_is_from_me == 0`, or (fallback only) last thread message `is_from_me: false`
-   - **WAITING**: `last_is_from_me == 1`, or (fallback only) last thread message `is_from_me: true`
+6. Assign provisional buckets only (same direction signals as step 4 — use `last_is_from_me` on the chat object; only after the step 5 thread fallback use the last element's `is_from_me`). **Do not confirm NEEDS REPLY here** — step 7 clears the FULL-THREAD AWARENESS GATE first:
+   - **NEEDS REPLY candidate**: `last_is_from_me == 0`, or (fallback only) last thread message `is_from_me: false`
+   - **WAITING** (provisional): `last_is_from_me == 1`, or (fallback only) last thread message `is_from_me: true`
    - **ARCHIVE**: Newsletters (`@newsletter` JIDs), dead group chats with no recent activity, one-word reactions, or concluded conversations. Bulk-archive these via `mcp__whatsapp__archive_chat {chat_jid, archive: true}` after user confirmation. If the call fails with `LTHash mismatch`, run `mcp__whatsapp__resync_app_state {name: "regular_low", full_sync: true}` first, then retry.
 
 7. **Cross-thread answered-elsewhere check (BOTH DIRECTIONS — scan Sam's own sent messages).** Before presenting any chat as NEEDS REPLY, verify it has not already been answered in another channel or in a later message within the same thread that the `last_is_from_me` flag missed. This is the most common source of false NEEDS_REPLY:
@@ -792,11 +792,11 @@ def classify_thread(thread_id):
     return 'HANDLED'
 ```
 
-**Fast-path classification without per-thread fetch** — for the 80% case, the `gog gmail search` envelope is enough: each element already has `labels` (which is `labelIds` from the last message) and `from`. Skip the `thread get` round-trip for triage and only fetch the full thread when you need to draft a reply or summarize the conversation arc.
+**Search-envelope first pass (provisional only)** — `gog gmail search` returns `labels` and `from` from the last message for a quick bucket (`WAITING` vs **NEEDS REPLY candidate**). This does NOT satisfy the FULL-THREAD AWARENESS GATE and must NOT confirm NEEDS_REPLY. For every candidate, call `gog gmail thread get` and clear the gate (full thread both directions, 2-sentence arc, reconcile the user's own SENT messages) before presenting the thread.
 
 **Phase 1 — Classify:**
 1. Search `in:inbox` (NOT `is:unread`) via `gog gmail search -a $GMAIL_ACCOUNT -j --results-only --no-input --max 30 "in:inbox"`
-2. **For triage:** classify directly from the search envelope using `labels` + `from` (fast-path above). Only call `gog gmail thread get` for items the user opens or that need a draft.
+2. **For triage:** use `labels` + `from` on the search envelope only as a first pass to tag NEEDS REPLY candidates vs WAITING. For every candidate, call `gog gmail thread get` and clear the FULL-THREAD AWARENESS GATE before confirming NEEDS_REPLY or surfacing the thread.
 3. **For drafting:** read the FULL thread via `gog gmail thread get -a $GMAIL_ACCOUNT <threadId> -j` and parse using the canonical recipe — remember messages are at `thread.messages[]`, NOT at the top level.
 4. Check the last message's `From` header and `labelIds` (SENT, DRAFT)
 4. Classify — clear the **FULL-THREAD AWARENESS GATE** above (read the full thread both directions, write the 2-sentence arc, reconcile the user's own SENT messages — including replies sent from another client that may not show as the thread's last message) before confirming any NEEDS_REPLY:
