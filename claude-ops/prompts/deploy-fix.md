@@ -54,7 +54,7 @@ You are running headless inside a Claude Code session with full claude-ops tooli
 
 6. **Commit with `--no-verify`** (project hooks are bugged per Sam's CLAUDE.md). Co-author trailer: `Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>`.
 
-7. **Push + open PR** targeting `{{BASE}}`:
+7. **Push + open a DRAFT PR** targeting `{{BASE}}` using `gh pr create --draft`:
    - Title: `fix(deploy): <one-line root cause>`
    - Body: link to the failed run, the diagnosed root cause, the change rationale, the gate results.
 
@@ -70,6 +70,8 @@ You are running headless inside a Claude Code session with full claude-ops tooli
 - **NEVER call `/ops:ops-yolo`, `/ops:ops-orchestrate`, or anything that fans out parallel work.** You have one job.
 - **NEVER send outbound comms** (email, Slack, WhatsApp) — read-only on those surfaces.
 - **NEVER ship unrelated dependency upgrades.** If a transitive bump is needed, pin to the exact required version only.
+- **NEVER trigger builds or workflows** — no `gh workflow run`, no `eas build`, no deploy/release commands.
+- **NEVER promote to prod/main.** You open a DRAFT PR and stop; merge & promotion are owned by the human / fleet supervisor.
 
 # Scope
 
