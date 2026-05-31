@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.18.8 — 2026-05-31
+
+### Fixed
+- **WhatsApp: guard fts5 triggers behind a bridge-binary capability probe (#419).**
+  `whatsapp-bridge-migrate.sh` created `messages_fts` fts5 triggers via the system
+  sqlite3 CLI (which has fts5), so creation always succeeded — but the triggers fire
+  on the **Go bridge's own inserts** using the bridge binary's embedded sqlite. A
+  binary built without fts5 (old binary, `--skip-build`, or a CGO build missing
+  `-tags sqlite_fts5`) then failed **every** insert with `no such module: fts5`,
+  silently dropping messages (live + backfilled). Observed 2026-05-31: a pre-rebuild
+  bridge dropped an entire midday conversation window. The migrate now probes
+  `BRIDGE_BIN` for fts5 and only installs triggers when the binary can satisfy them;
+  otherwise it drops any leftover fts schema (search → LIKE fallback, storage
+  protected). `WHATSAPP_BRIDGE_BIN` env override added.
+
 ## 2.18.7 — 2026-05-31
 
 ### Fixed
