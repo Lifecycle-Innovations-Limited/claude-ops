@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# ops-inbox-autosync — UserPromptSubmit hook.
+#
+# Fires a recent-conversation WhatsApp backfill + contacts-link in the BACKGROUND
+# whenever ANY ops inbox command is invoked (/ops:ops-inbox, /ops:ops-comms,
+# /ops:ops-go, /ops:ops-next, or the bare /ops:ops router). Non-blocking and
+# throttled (max 1 run / 60s) so it never stacks. Silent: emits nothing into the
+# prompt context.
+#
+# - backfill: POST /api/backfill (50 most-active chats) — pulls recent history
+# - link:     link_contacts.py — populates messages.db.contacts from the
+#             whatsmeow store so <pn>@s.whatsapp.net AND <lid>@lid resolve to names
+set -uo pipefail
+
+INPUT="$(cat 2>/dev/null || true)"
+PROMPT="$(printf '%s' "$INPUT" | python3 -c 'import sys,json
+try:
+    print(json.load(sys.stdin).get("prompt",""))
+except Exception:
+    print("")' 2>/dev/null || true)"
+
+# Only act on ops inbox-family commands.
+printf '%s' "$PROMPT" | grep -Eq '/ops:ops($|[[:space:]])|/ops:ops-inbox|/ops:ops-comms|/ops:ops-go|/ops:ops-next' || exit 0
+
+# Throttle to avoid stacking (max 1 run / 60s). Fail-open if guard lib absent.
+if [ -f "$HOME/.claude/scripts/lib/once.sh" ]; then
+  # shellcheck disable=SC1090
+  source "$HOME/.claude/scripts/lib/once.sh"
+  claude_once ops-inbox-autosync 60 || exit 0
+fi
+
+BR="${WHATSAPP_BRIDGE_DIR:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
+if lsof -i :8080 2>/dev/null | grep -q LISTEN; then
+  (
+    curl -fsS -m 10 -X POST http://127.0.0.1:8080/api/backfill >/dev/null 2>&1
+    [ -f "$BR/link_contacts.py" ] && python3 "$BR/link_contacts.py" >/dev/null 2>&1
+  ) >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+fi
+exit 0

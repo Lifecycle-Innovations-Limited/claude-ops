@@ -245,13 +245,31 @@ def cmd_digest():
             log("digest: wrote missing approval-codemap.json for unchanged open set")
         return 0
 
-    ok, info, to = send_via_bridge(f"[Pocket] {len(items)} item(s) need approval", body)
+    # Honour email-config "enabled": when false, suppress the email send but STILL
+    # write CODEMAP + NOTIFIED so the phone-channel fanout (Telegram, etc.) keeps
+    # firing off the state change. (Sam 2026-05-30: email Pocket digest off, Telegram kept.)
+    try:
+        email_enabled = bool(json.loads(CFG.read_text()).get("enabled", True))
+    except Exception:
+        email_enabled = True
+    if email_enabled:
+        ok, info, to = send_via_bridge(
+            f"[Pocket] {len(items)} item(s) need approval", body
+        )
+    else:
+        ok, info, to = (
+            True,
+            "email disabled — state updated for phone fanout only",
+            "(email off)",
+        )
     CODEMAP.write_text(json.dumps(codemap, indent=2))
     if ok:
         NOTIFIED.write_text(
             json.dumps({"hash": h, "ts": time.time(), "count": len(items)})
         )
-    log(f"digest: emailed {len(items)} items to {to} ok={ok} info={info}")
+    log(
+        f"digest: {'emailed' if email_enabled else 'state-only (email off)'} {len(items)} items to {to} ok={ok} info={info}"
+    )
     return 0 if ok else 1
 
 
