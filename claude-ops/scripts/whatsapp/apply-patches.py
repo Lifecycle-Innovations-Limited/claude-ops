@@ -29,6 +29,20 @@ Patches included:
           (single source of truth). Fixes the 30+ pydantic validation errors on
           list_chats, list_messages, search_contacts, get_chat, get_contact_chats,
           get_direct_chat_by_contact, get_last_interaction, get_message_context.
+  Fix F — POST /api/archive endpoint: implement archive/unarchive via
+          whatsmeow's appstate.BuildArchive + client.SendAppState. Body:
+          {"chat_jid":"...","archive":true}. On LTHash mismatch, auto-heals
+          by clearing the stale patch rows and retrying once (Fix G below).
+  Fix G — Auto-heal LTHash corruption: when any app-state op returns an error
+          wrapping appstate.ErrMismatchingLTHash, delete the stale version/MAC
+          rows for that patch name from whatsapp.db and re-request a full_sync
+          from version 0 (max 2 attempts, never loops). Identity/session/
+          pre_key tables are never touched.
+  Fix H — Persist archive state: idempotent ALTER TABLE to add an `archived`
+          INTEGER NOT NULL DEFAULT 0 column to the chats table in messages.db.
+          Subscribes to *events.Archive and UPSERT-updates the flag. Makes
+          inbox = WHERE archived=0 directly queryable without hitting the
+          bridge's app-state layer on every scan.
 
 Every patch is gated on a sentinel string so re-running is a no-op.
 
@@ -560,6 +574,228 @@ def get_sender_name(sender_jid: str) -> str:"""
 PY_SHAPE_SENTINEL = "claude-ops Fix E: serialization helpers + WAL-mode DB open"
 
 
+# ─── main.go Fix H: idempotent chats.archived migration + SetArchived helper ──
+# The chats table only has (jid, name, last_message_time). Without an `archived`
+# column the ops-inbox skill can't query "inbox = non-archived" without a live
+# app-state round-trip. This patch:
+#   1. adds an idempotent ALTER TABLE in NewMessageStore (guarded by PRAGMA table_info)
+#   2. adds a SetArchivedStatus(*sql.DB, jid, bool) helper used by Fix F
+#   3. subscribes to *events.Archive inside the event handler to keep the flag current
+# The archived column migration is spliced in just before `return &MessageStore{db: db}, nil`.
+CHATS_SCHEMA_MIGRATION_NEEDLE = """\treturn &MessageStore{db: db}, nil
+}"""
+
+CHATS_SCHEMA_MIGRATION_REPLACEMENT = """\t// claude-ops Fix H: idempotent migration — add `archived` column if absent.
+\t// Uses PRAGMA table_info so it is safe to run on every startup against an
+\t// existing DB that was created before this patch (ALTER TABLE fails if the
+\t// column already exists; the PRAGMA guard prevents that).
+\tvar colExists int
+\t_ = db.QueryRow(
+\t\t`SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='archived'`,
+\t).Scan(&colExists)
+\tif colExists == 0 {
+\t\tif _, err := db.Exec(`ALTER TABLE chats ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`); err != nil {
+\t\t\tdb.Close()
+\t\t\treturn nil, fmt.Errorf("failed to add archived column: %v", err)
+\t\t}
+\t}
+
+\treturn &MessageStore{db: db}, nil
+}
+
+// SetArchivedStatus persists the WhatsApp archive flag for a chat into messages.db.
+// Called by the /api/archive handler (Fix F) and the *events.Archive subscriber (Fix H).
+// claude-ops Fix H.
+func (store *MessageStore) SetArchivedStatus(jid string, archived bool) error {
+\tarchVal := 0
+\tif archived {
+\t\tarchVal = 1
+\t}
+\t_, err := store.db.Exec(
+\t\t`INSERT INTO chats (jid, archived) VALUES (?, ?)
+\t\t ON CONFLICT(jid) DO UPDATE SET archived=excluded.archived`,
+\t\tjid, archVal,
+\t)
+\treturn err
+}"""
+
+CHATS_SCHEMA_MIGRATION_SENTINEL = "claude-ops Fix H: idempotent migration"
+
+# ─── main.go Fix H: subscribe to *events.Archive in the event handler ──────
+# Keeps messages.db.chats.archived in sync when WhatsApp pushes app-state
+# archive mutations from another device (phone or Web).
+ARCHIVE_EVENT_NEEDLE = """\t\tcase *events.LoggedOut:
+\t\t\tlogger.Warnf(\"Device logged out, re-pair via WhatsApp app\")
+\t\t}
+\t})"""
+
+ARCHIVE_EVENT_REPLACEMENT = """\t\tcase *events.Archive:
+\t\t\t// claude-ops Fix H: mirror app-state archive changes into messages.db so
+\t\t\t// the inbox query (WHERE archived=0) stays accurate without a live
+\t\t\t// app-state round-trip.
+\t\t\tif err := messageStore.SetArchivedStatus(v.JID.String(), v.Action.GetArchived()); err != nil {
+\t\t\t\tlogger.Warnf("Fix H: failed to persist archive status for %s: %v", v.JID, err)
+\t\t\t}
+
+\t\tcase *events.LoggedOut:
+\t\t\tlogger.Warnf(\"Device logged out, re-pair via WhatsApp app\")
+\t\t}
+\t})"""
+
+ARCHIVE_EVENT_SENTINEL = "claude-ops Fix H: mirror app-state archive changes"
+
+# ─── main.go Fix G: healLTHash helper ────────────────────────────────────────
+# When whatsmeow returns an error wrapping ErrMismatchingLTHash it means the
+# local app-state snapshot is corrupt/stale. The only safe recovery is:
+#   1. delete the stale version+MAC rows for that patch name from whatsapp.db
+#      (DO NOT touch sync_keys, identity, or session tables — those force re-pair)
+#   2. call FetchAppState with fullSync=true, version 0 to re-download from server
+# This is injected as a standalone helper right before startRESTServer.
+HEAL_LTHASH_NEEDLE = """// Start a REST API server to expose the WhatsApp client functionality
+func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int) {"""
+
+HEAL_LTHASH_REPLACEMENT = """// healLTHash recovers from an ErrMismatchingLTHash app-state corruption by
+// deleting the stale snapshot rows for patchName from whatsapp.db and triggering
+// a fresh full_sync from version 0. Returns nil when the resync succeeds or the
+// error is not an LTHash mismatch (caller should not retry in that case).
+//
+// SAFE: only whatsmeow_app_state_version and whatsmeow_app_state_mutation_macs
+// rows for the named patch are deleted. sync_keys, identity, sessions, pre_keys,
+// and sender_keys are never touched — deleting those forces a re-pair.
+//
+// claude-ops Fix G.
+func healLTHash(ctx context.Context, client *whatsmeow.Client, patchName appstate.WAPatchName) error {
+\tconst maxAttempts = 2
+\tfor attempt := 1; attempt <= maxAttempts; attempt++ {
+\t\t// Open whatsapp.db directly to wipe the stale snapshot rows.
+\t\twdb, err := sql.Open("sqlite3", "file:store/whatsapp.db?_foreign_keys=on")
+\t\tif err != nil {
+\t\t\treturn fmt.Errorf("healLTHash: open whatsapp.db: %w", err)
+\t\t}
+\t\tjid := ""
+\t\tif client.Store != nil && client.Store.ID != nil {
+\t\t\tjid = client.Store.ID.String()
+\t\t}
+\t\t_, _ = wdb.ExecContext(ctx,
+\t\t\t`DELETE FROM whatsmeow_app_state_version WHERE jid=? AND name=?`, jid, string(patchName))
+\t\t_, _ = wdb.ExecContext(ctx,
+\t\t\t`DELETE FROM whatsmeow_app_state_mutation_macs WHERE jid=? AND name=?`, jid, string(patchName))
+\t\twdb.Close()
+
+\t\t// Re-fetch from version 0 (fullSync=true, onlyIfNotSynced=false).
+\t\terr = client.FetchAppState(ctx, patchName, true, false)
+\t\tif err == nil {
+\t\t\treturn nil
+\t\t}
+\t\t// Only retry on another LTHash mismatch; any other error is permanent.
+\t\tif !strings.Contains(err.Error(), "mismatching LTHash") {
+\t\t\treturn err
+\t\t}
+\t\tif attempt < maxAttempts {
+\t\t\ttime.Sleep(2 * time.Second)
+\t\t}
+\t}
+\treturn fmt.Errorf("healLTHash: still failing after %d attempts", maxAttempts)
+}
+
+// Start a REST API server to expose the WhatsApp client functionality
+func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int) {"""
+
+HEAL_LTHASH_SENTINEL = "claude-ops Fix G."
+
+# ─── main.go Fix F: POST /api/archive endpoint ───────────────────────────────
+# Inserts the /api/archive handler just before the "Run server in goroutine" block.
+# Uses whatsmeow appstate.BuildArchive + client.SendAppState (the correct path for
+# companion-device archive mutations — not FetchAppState, which is read-only).
+# On LTHash mismatch, calls healLTHash then retries once.
+# Also UPSERTs the archived flag into messages.db via messageStore.SetArchivedStatus.
+ARCHIVE_ENDPOINT_NEEDLE = """\t// Run server in a goroutine so it doesn't block
+\tgo func() {
+\t\tif err := http.ListenAndServe(serverAddr, nil); err != nil {
+\t\t\tfmt.Printf(\"REST API server error: %v\\n\", err)
+\t\t}
+\t}()
+}"""
+
+ARCHIVE_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix F: POST /api/archive — archive or unarchive a chat.
+\t// Body: {"chat_jid":"<JID>","archive":true}
+\t// Uses whatsmeow's appstate.BuildArchive + client.SendAppState which is the
+\t// correct companion-device path. On LTHash mismatch, auto-heals via Fix G
+\t// and retries once so callers never need to manually resync first.
+\thttp.HandleFunc(\"/api/archive\", func(w http.ResponseWriter, r *http.Request) {
+\t\tif r.Method != http.MethodPost {
+\t\t\thttp.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+\t\t\treturn
+\t\t}
+\t\tw.Header().Set("Content-Type", "application/json")
+\t\tif !client.IsConnected() {
+\t\t\tw.WriteHeader(http.StatusServiceUnavailable)
+\t\t\tfmt.Fprintln(w, `{"success":false,"message":"client not connected"}`)
+\t\t\treturn
+\t\t}
+\t\tvar req struct {
+\t\t\tChatJID string `json:"chat_jid"`
+\t\t\tArchive bool   `json:"archive"`
+\t\t}
+\t\tif err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ChatJID == "" {
+\t\t\tw.WriteHeader(http.StatusBadRequest)
+\t\t\tfmt.Fprintln(w, `{"success":false,"message":"chat_jid required"}`)
+\t\t\treturn
+\t\t}
+\t\ttargetJID, err := types.ParseJID(req.ChatJID)
+\t\tif err != nil {
+\t\t\tw.WriteHeader(http.StatusBadRequest)
+\t\t\tfmt.Fprintf(w, `{"success":false,"message":"invalid chat_jid: %s"}`, err.Error())
+\t\t\treturn
+\t\t}
+
+\t\t// Look up the last message timestamp for this chat so WhatsApp clients
+\t\t// display the archive state correctly in the chat list.
+\t\tvar lastMsgTime time.Time
+\t\t_ = messageStore.db.QueryRow(
+\t\t\t`SELECT timestamp FROM messages WHERE chat_jid=? ORDER BY timestamp DESC LIMIT 1`,
+\t\t\treq.ChatJID,
+\t\t).Scan(&lastMsgTime)
+
+\t\tpatch := appstate.BuildArchive(targetJID, req.Archive, lastMsgTime, nil)
+\t\tctx := r.Context()
+
+\t\tdo := func() error {
+\t\t\treturn client.SendAppState(ctx, patch)
+\t\t}
+\t\terr = do()
+\t\tif err != nil && strings.Contains(err.Error(), "mismatching LTHash") {
+\t\t\t// Auto-heal the stale snapshot then retry once (Fix G).
+\t\t\tif healErr := healLTHash(ctx, client, appstate.WAPatchRegularLow); healErr != nil {
+\t\t\t\tw.WriteHeader(http.StatusConflict)
+\t\t\t\tfmt.Fprintf(w, `{"success":false,"message":"LTHash heal failed: %s"}`, healErr.Error())
+\t\t\t\treturn
+\t\t\t}
+\t\t\terr = do()
+\t\t}
+\t\tif err != nil {
+\t\t\tw.WriteHeader(http.StatusInternalServerError)
+\t\t\tfmt.Fprintf(w, `{"success":false,"message":%q}`, err.Error())
+\t\t\treturn
+\t\t}
+
+\t\t// Persist the flag locally so the inbox query is immediately consistent.
+\t\t_ = messageStore.SetArchivedStatus(req.ChatJID, req.Archive)
+
+\t\tfmt.Fprintf(w, `{"success":true,"message":"chat %s archived=%v"}`, req.ChatJID, req.Archive)
+\t})
+
+\t// Run server in a goroutine so it doesn't block
+\tgo func() {
+\t\tif err := http.ListenAndServe(serverAddr, nil); err != nil {
+\t\t\tfmt.Printf("REST API server error: %v\\n", err)
+\t\t}
+\t}()
+}"""
+
+ARCHIVE_ENDPOINT_SENTINEL = "claude-ops Fix F: POST /api/archive"
+
+
 def replace_idempotent(
     p: pathlib.Path, needle: str, replacement: str, sentinel: str, label: str
 ) -> bool:
@@ -673,6 +909,34 @@ def main() -> int:
         RESYNC_ENDPOINT_REPLACEMENT,
         RESYNC_ENDPOINT_SENTINEL,
         "Fix D: POST /api/resync_app_state endpoint",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        CHATS_SCHEMA_MIGRATION_NEEDLE,
+        CHATS_SCHEMA_MIGRATION_REPLACEMENT,
+        CHATS_SCHEMA_MIGRATION_SENTINEL,
+        "Fix H: chats.archived column migration + SetArchivedStatus helper",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        ARCHIVE_EVENT_NEEDLE,
+        ARCHIVE_EVENT_REPLACEMENT,
+        ARCHIVE_EVENT_SENTINEL,
+        "Fix H: subscribe *events.Archive to persist archive flag",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        HEAL_LTHASH_NEEDLE,
+        HEAL_LTHASH_REPLACEMENT,
+        HEAL_LTHASH_SENTINEL,
+        "Fix G: healLTHash auto-recovery helper",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        ARCHIVE_ENDPOINT_NEEDLE,
+        ARCHIVE_ENDPOINT_REPLACEMENT,
+        ARCHIVE_ENDPOINT_SENTINEL,
+        "Fix F: POST /api/archive endpoint",
     )
 
     print("  whatsapp.py:")
