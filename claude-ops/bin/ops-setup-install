@@ -150,7 +150,7 @@ install_special() {
       return 2 ;;
     whatsapp-bridge)
       # whatsapp-bridge is installed as part of whatsapp-mcp
-      echo "○ whatsapp-bridge install: git clone https://github.com/Lifecycle-Innovations-Limited/whatsapp-mcp ~/.local/share/whatsapp-mcp && cd ~/.local/share/whatsapp-mcp/whatsapp-bridge && go build -o whatsapp-bridge ." >&2
+      echo "○ whatsapp-bridge install: git clone https://github.com/Lifecycle-Innovations-Limited/whatsapp-mcp ~/.local/share/whatsapp-mcp && cd ~/.local/share/whatsapp-mcp/whatsapp-bridge && go build -tags \"sqlite_fts5\" -o whatsapp-bridge ." >&2
       return 2 ;;
     brew)
       # Homebrew has its own bootstrap installer.
