@@ -47,8 +47,9 @@ All POST, JSON body. Source: `whatsapp-bridge/main.go`.
 | `POST /api/send` | `{"recipient":"<JID>","message":"<text>"}` | `{success,message}` | Send a text. `recipient` is a full JID (`<phone>@s.whatsapp.net`, `<lid>@lid`, or `<id>@g.us`). |
 | `POST /api/download` | `{"message_id":"…","chat_jid":"…"}` | media bytes / path | Fetch media for a message. |
 | `POST /api/backfill` | (none) | `{success:"backfill requested"}` | Request history sync for the ~50 most-active chats. Also auto-runs 5s after each `Connected`. |
-| `POST /api/resync_app_state` | `{"name":"regular_low","full_sync":true}` | `{success,message}` | Force app-state (archive/mute/pin/contacts) resync. **Often fails LTHash — see blocker below.** |
-| `POST /api/archive` | `{"chat_jid":"<JID>","archive":true}` | `{success,message}` | Archive / unarchive (`archive:false`). Writes `chats.archived` AND pushes a `regular_low` app-state mutation. **Blocked when app-state is desynced — see blocker.** |
+| `POST /api/resync_app_state` | `{"name":"regular_low","full_sync":true}` | `{success,message}` | Force app-state resync from existing patches. **Cannot fix a fatally-corrupt patch chain — use `/api/recover_app_state`.** |
+| `POST /api/recover_app_state` | `{"name":"regular_low"}` | `{success,message}` | **Fatal recovery** for an unverifiable collection (`mismatching LTHash`). Asks the PRIMARY device for an unencrypted snapshot (`BuildAppStateRecoveryRequest`→`SendPeerMessage`); whatsmeow's `handleAppStateRecovery` rebuilds it, bypassing broken patches. **Phone must be online.** This is the ONLY thing that unblocks archive when LTHash is fatally desynced. |
+| `POST /api/archive` | `{"chat_jid":"<JID>","archive":true}` | `{success,message}` | Archive / unarchive (`archive:false`). Writes `chats.archived` AND pushes a `regular_low` app-state mutation. If it 409s LTHash, run `/api/recover_app_state` once (phone online), then it works. |
 
 There is **no** delete/mark-read/group-admin endpoint. There is no `/api/health` — probe `/` (404 = alive).
 
@@ -98,14 +99,18 @@ and the DB are still fully usable.
 
 ## Known blockers + heals
 
-- **App-state LTHash mismatch (archive / mute / pin / resync 409).** `POST /api/archive` returns
-  `409 conflict updating app state (regular_low)`, and `resync_app_state` returns
-  `failed to verify patch vNNN: mismatching LTHash`. The whatsmeow client can't verify the server's
-  `regular_low` patch chain. **Clearing the local snapshot does NOT fix it** (the server patches
-  themselves fail verification on re-fetch). The reliable heal is a **phone-side action: toggle archive
-  on ANY one chat from your phone** (archive then unarchive) — that emits a fresh app-state mutation the
-  bridge can resync from. Until then, archive is unavailable on every surface (REST and MCP). Setting
-  `chats.archived=1` locally is possible but does NOT propagate to the phone and diverges state — avoid.
+- **App-state LTHash mismatch (archive / mute / pin / resync 409) → FIXED via `/api/recover_app_state`.**
+  `POST /api/archive` returns `409 conflict updating app state (regular_low)` and `resync_app_state`
+  returns `failed to verify patch vNNN: mismatching LTHash` (whatsmeow [#382](https://github.com/tulir/whatsmeow/issues/382)/[#858](https://github.com/tulir/whatsmeow/issues/858)).
+  The whatsmeow client can't verify the server's `regular_low` patch chain. **Clearing the local
+  snapshot does NOT fix it, and a single phone archive-toggle does NOT fully heal it** — the server
+  patch chain itself fails verification on re-fetch. **The fix: `POST /api/recover_app_state` with the
+  phone online** — it requests a fresh unencrypted snapshot from the primary device and rebuilds the
+  collection from scratch (bypassing the broken patches), restoring `regular_low` to a clean version.
+  After it lands, archive works on every surface. (Do NOT hand-set `chats.archived=1` — it diverges
+  from the phone and can hide future inbound; archive through the bridge instead.) Note: archive is a
+  per-chat lid/phone-aware op — archive the actual `chat_jid` of the active chat, not a contacts-table
+  JID, which may differ from the live `@lid` chat.
 
 - **fts5 "no such module: fts5" → silent message loss.** If `messages.db` has `messages_fts` triggers
   but the bridge binary lacks fts5, every insert fails and messages (incl. your own phone-sends) are

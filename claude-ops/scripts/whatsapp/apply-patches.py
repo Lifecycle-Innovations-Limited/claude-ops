@@ -490,6 +490,61 @@ RESYNC_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix D: POST /api/resync_app_sta
 
 RESYNC_ENDPOINT_SENTINEL = "claude-ops Fix D: POST /api/resync_app_state"
 
+# ─── main.go Fix I: POST /api/recover_app_state REST endpoint ─────────────────
+# Recovers a FATALLY corrupt app-state collection. When the server's patch chain
+# is unverifiable ("failed to verify patch vNNN: mismatching LTHash", whatsmeow
+# #382/#858) neither /api/archive nor /api/resync_app_state can apply or re-fetch
+# it — clearing the local snapshot doesn't help because the server snapshot itself
+# fails the LTHash check. whatsmeow's only real recovery is to ask the PRIMARY
+# device for an unencrypted copy: BuildAppStateRecoveryRequest -> SendPeerMessage.
+# The phone replies with a PEER_DATA_OPERATION_RESPONSE that whatsmeow's
+# handleAppStateRecovery (auto-wired in message.go) uses to rebuild the collection
+# from scratch, bypassing the broken patches. After it lands, archive works.
+# Applies AFTER Fix D (anchors on the goroutine block Fix D re-emits).
+RECOVER_ENDPOINT_NEEDLE = RESYNC_ENDPOINT_NEEDLE
+RECOVER_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix I: POST /api/recover_app_state — recover a FATALLY corrupt
+\t// app-state collection whose server patch chain is unverifiable (LTHash
+\t// mismatch, whatsmeow #382/#858). Asks the user's PRIMARY device for an
+\t// unencrypted snapshot; whatsmeow's handleAppStateRecovery rebuilds from it.
+\t// The phone MUST be online to respond. Body: {"name":"regular_low"} (default).
+\thttp.HandleFunc(\"/api/recover_app_state\", func(w http.ResponseWriter, r *http.Request) {
+\t\tif r.Method != http.MethodPost {
+\t\t\thttp.Error(w, \"Method not allowed\", http.StatusMethodNotAllowed)
+\t\t\treturn
+\t\t}
+\t\tw.Header().Set(\"Content-Type\", \"application/json\")
+\t\tif !client.IsConnected() {
+\t\t\tw.WriteHeader(http.StatusServiceUnavailable)
+\t\t\tfmt.Fprintln(w, `{\"success\":false,\"message\":\"client not connected\"}`)
+\t\t\treturn
+\t\t}
+\t\tvar req struct {
+\t\t\tName string `json:\"name\"`
+\t\t}
+\t\treq.Name = \"regular_low\"
+\t\tif err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+\t\t\tif req.Name == \"\" {
+\t\t\t\treq.Name = \"regular_low\"
+\t\t\t}
+\t\t}
+\t\tmsg := whatsmeow.BuildAppStateRecoveryRequest(appstate.WAPatchName(req.Name))
+\t\tif _, err := client.SendPeerMessage(context.Background(), msg); err != nil {
+\t\t\tw.WriteHeader(http.StatusInternalServerError)
+\t\t\tfmt.Fprintf(w, `{\"success\":false,\"message\":%q}`, err.Error())
+\t\t\treturn
+\t\t}
+\t\tfmt.Fprintf(w, `{\"success\":true,\"message\":\"recovery request sent to primary device for %s — it returns a fresh snapshot in a few seconds (phone must be online), then archive works\"}`, req.Name)
+\t})
+
+\t// Run server in a goroutine so it doesn't block
+\tgo func() {
+\t\tif err := http.ListenAndServe(serverAddr, nil); err != nil {
+\t\t\tfmt.Printf(\"REST API server error: %v\\n\", err)
+\t\t}
+\t}()
+}"""
+RECOVER_ENDPOINT_SENTINEL = "claude-ops Fix I: POST /api/recover_app_state"
+
 # ─── main.go Fix D (Connected): auto-resync regular_low on startup ────────────
 CONNECTED_RESYNC_NEEDLE = """\t\tcase *events.Connected:
 \t\t\tlogger.Infof(\"Connected to WhatsApp\")
@@ -1119,6 +1174,14 @@ def main() -> int:
         RESYNC_ENDPOINT_REPLACEMENT,
         RESYNC_ENDPOINT_SENTINEL,
         "Fix D: POST /api/resync_app_state endpoint",
+    )
+    # Fix I must run AFTER Fix D — it anchors on the goroutine block Fix D re-emits.
+    changed_go |= replace_idempotent(
+        main_go,
+        RECOVER_ENDPOINT_NEEDLE,
+        RECOVER_ENDPOINT_REPLACEMENT,
+        RECOVER_ENDPOINT_SENTINEL,
+        "Fix I: POST /api/recover_app_state endpoint (LTHash fatal recovery)",
     )
     changed_go |= replace_idempotent(
         main_go,
