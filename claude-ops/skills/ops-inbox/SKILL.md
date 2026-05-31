@@ -206,13 +206,24 @@ This clones lharries/whatsapp-mcp into `~/.local/share/whatsapp-mcp`, applies th
 
 **Bulk archive non-actionable WA chats** — for newsletters, dead group chats, one-word reactions, etc.:
 ```bash
+DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
 for jid in "<NEWSLETTER_JID>@newsletter" "<GROUP_JID>@g.us" "<CONTACT_PHONE>@s.whatsapp.net"; do
   curl -s -X POST http://localhost:8080/api/archive \
     -H 'Content-Type: application/json' \
     -d "{\"chat_jid\":\"$jid\",\"archive\":true}"
 done
+# The /api/archive endpoint auto-heals LTHash corruption internally (Fix G) and
+# immediately UPSERTs archived=1 into messages.db so the inbox query reflects it.
+# If you still get HTTP 409, the heal failed — run resync manually as a last resort:
+# curl -s -X POST http://localhost:8080/api/resync_app_state -d '{"name":"regular_low","full_sync":true}'
 ```
-If you get `409 conflict / LTHash mismatch`, run resync first: `curl -s -X POST http://localhost:8080/api/resync_app_state -d '{"name":"regular_low","full_sync":true}'`.
+**Archive state is locally queryable** (Fix H — bridge persists `archived` flag in `chats` table):
+```bash
+# Inbox = all non-archived chats:
+sqlite3 "$DB" "SELECT jid, name, last_message_time FROM chats WHERE archived=0 ORDER BY last_message_time DESC;"
+# Confirm a specific chat was archived:
+sqlite3 "$DB" "SELECT jid, archived FROM chats WHERE jid='<JID>';"
+```
 
 **Full-text search** — use `mcp__whatsapp__list_messages` with a `query` param (backed by FTS5 after running `scripts/whatsapp-bridge-migrate.sh`):
 ```bash
@@ -554,8 +565,17 @@ The per-channel classify/draft steps below (WhatsApp, iMessage, email) all refer
 ### WhatsApp (FULL SCAN + DEEP CONTEXT)
 
 **Phase 1 — Classify:**
-1. Get all chats: `mcp__whatsapp__list_chats` with `{sort_by: "last_active"}`
-2. Filter to chats with `last_message_time` in the last 7 days
+1. Get all **non-archived** chats. The bridge now persists archive state locally (Fix H), so the inbox working set is chats where `archived=0`:
+   ```bash
+   DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+   # Paginate: fetch all non-archived chats ordered by last activity.
+   # Do NOT hard-truncate to 7 days — archived chats are excluded by the column,
+   # so this returns the full real inbox regardless of age.
+   sqlite3 "$DB" "SELECT jid, name, last_message_time FROM chats WHERE archived=0 ORDER BY last_message_time DESC;"
+   ```
+   When the MCP tool is used instead (`mcp__whatsapp__list_chats {sort_by:"last_active"}`), filter client-side by `archived != 1` on the returned objects. The MCP server exposes the `archived` field from the `chats` table once the column exists.
+
+   **7-day recency is a secondary signal, not a hard cutoff.** Apply it to deprioritise very old non-archived chats when there are many, but never use it to silently drop chats from the working set — an unanswered message from 10 days ago is still actionable.
 
    **TIME_AGO — `last_message_time` is an RFC3339 string with timezone offset** (e.g. `"2026-05-24T14:55:06+02:00"`), NOT a unix epoch integer. Parse with full TZ awareness:
    ```python
@@ -582,7 +602,7 @@ The per-channel classify/draft steps below (WhatsApp, iMessage, email) all refer
 6. Assign provisional buckets only (same direction signals as step 4 — use `last_is_from_me` on the chat object; only after the step 5 thread fallback use the last element's `is_from_me`). **Do not confirm NEEDS REPLY here** — step 7 clears the FULL-THREAD AWARENESS GATE first:
    - **NEEDS REPLY candidate**: `last_is_from_me == 0`, or (fallback only) last thread message `is_from_me: false`
    - **WAITING** (provisional): `last_is_from_me == 1`, or (fallback only) last thread message `is_from_me: true`
-   - **ARCHIVE**: Newsletters (`@newsletter` JIDs), dead group chats with no recent activity, one-word reactions, or concluded conversations. Bulk-archive these via `mcp__whatsapp__archive_chat {chat_jid, archive: true}` after user confirmation. If the call fails with `LTHash mismatch`, run `mcp__whatsapp__resync_app_state {name: "regular_low", full_sync: true}` first, then retry.
+   - **ARCHIVE**: Newsletters (`@newsletter` JIDs), dead group chats with no recent activity, one-word reactions, or concluded conversations. Bulk-archive these via `mcp__whatsapp__archive_chat {chat_jid, archive: true}` after user confirmation. The bridge's `/api/archive` endpoint (Fix F) auto-heals LTHash corruption internally and retries once — you no longer need to manually run `resync_app_state` first. If it still returns `409 conflict`, run `mcp__whatsapp__resync_app_state {name: "regular_low", full_sync: true}` as a fallback then retry.
 
 7. **Cross-thread answered-elsewhere check (BOTH DIRECTIONS — scan Sam's own sent messages).** Before presenting any chat as NEEDS REPLY, verify it has not already been answered in another channel or in a later message within the same thread that the `last_is_from_me` flag missed. This is the most common source of false NEEDS_REPLY:
    - **Same-thread recheck**: when `last_is_from_me == 0`, call `mcp__whatsapp__list_messages {chat_jid, limit: 25}` and scan ALL of them (capturing `is_from_me=1` rows and `[voice]` transcripts) for `is_from_me: true` after the inbound message — if one exists, reclassify as WAITING. This is part of clearing the FULL-THREAD AWARENESS GATE, not an optional extra.
