@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.17.0 — 2026-05-30
+
+### Added
+- **`/ops:people`** — Apple Contacts → Notion People DB sync; relationship cadence
+  tracking (birthdays, anniversaries, overdue-outreach nudges). No PII stored in-repo.
+- **`/ops:ledger`** — shared Ops Ledger interface (claude-ops ↔ Perplexity source of truth).
+- **`/ops:tonight`** — evening tomorrow-brief: calendar prep status, birthdays,
+  overdue outreach, top-3 priorities, unresolved decisions.
+- **`hooks/auth-stall-guard.sh`** — advisory PreToolUse guard that injects the
+  credential-source search order when an agent is about to ask the user for a
+  credential. Advisory only (never blocks); staged but not yet wired into `hooks.json`.
+- **ops-socials** — auto-consume post-performance learnings before composing
+  personal/founder Typefully drafts (biases tone/format toward what the data shows works).
+
 ## 2.16.0 — 2026-05-29
 
 ### Added
