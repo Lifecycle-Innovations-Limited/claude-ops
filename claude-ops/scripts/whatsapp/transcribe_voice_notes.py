@@ -39,7 +39,6 @@ DB = os.path.expanduser(
 BRIDGE = "http://127.0.0.1:8080/api/download"
 LOCKDIR = "/tmp/.wa-transcribe.lock"
 PIDFILE = os.path.join(LOCKDIR, "pid")
-FAIL_MARKER = "[voice] (transcription unavailable)"
 
 
 def _pid_alive(pid):
@@ -75,15 +74,6 @@ def acquire_lock():
     with open(PIDFILE, "w") as f:
         f.write(str(os.getpid()))
     return True
-
-
-def mark_unavailable(con, mid, jid):
-    con.execute(
-        "UPDATE messages SET content=? WHERE id=? AND chat_jid=? "
-        "AND (content='' OR content IS NULL)",
-        (FAIL_MARKER, mid, jid),
-    )
-    con.commit()
 
 
 def download(msg_id, chat_jid):
@@ -164,13 +154,11 @@ def main():
                 path = download(mid, jid)
                 if not path or not os.path.exists(path):
                     fail += 1
-                    mark_unavailable(con, mid, jid)
                     print(f"  [{i}] {mid[:8]} download-fail", flush=True)
                     continue
                 text = transcribe(path, key)
                 if not text:
                     fail += 1
-                    mark_unavailable(con, mid, jid)
                     print(f"  [{i}] {mid[:8]} transcribe-fail", flush=True)
                     continue
                 con.execute(
@@ -183,7 +171,6 @@ def main():
                 print(f"  [{i}] {mid[:8]} ({'me' if mine else 'them'}) ok", flush=True)
             except Exception as e:
                 fail += 1
-                mark_unavailable(con, mid, jid)
                 print(f"  [{i}] {mid[:8]} err {e}", flush=True)
             time.sleep(0.2)
         con.close()
