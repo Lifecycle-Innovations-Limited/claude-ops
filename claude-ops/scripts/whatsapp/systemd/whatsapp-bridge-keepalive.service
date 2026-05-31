@@ -1,0 +1,7 @@
+[Unit]
+Description=WhatsApp bridge keepalive (hang-detection so phone-sends always sync)
+After=whatsapp-bridge.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/wa-bridge-keepalive.sh
