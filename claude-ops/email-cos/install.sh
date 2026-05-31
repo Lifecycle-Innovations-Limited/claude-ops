@@ -39,11 +39,18 @@ for f in \
   email-cos-compact.sh \
   email-cos-tg-approve.py \
   email-cos-tg-process.sh \
+  pocket-responder.py \
+  pocket-responder-run.sh \
   icloud-reminder.sh \
   pocket-telegram-read; do
   cp "$SCRIPT_DIR/$f" "$INSTALL_DIR/$f"
   chmod +x "$INSTALL_DIR/$f"
 done
+
+# ~/bin symlinks for manual invocation (pocket-responder send|process).
+mkdir -p "$HOME/bin"
+ln -sf "$INSTALL_DIR/pocket-responder.py" "$HOME/bin/pocket-responder.py"
+ln -sf "$INSTALL_DIR/pocket-responder-run.sh" "$HOME/bin/pocket-responder-run.sh"
 
 # Copy the lib and prompts directories.
 cp -r "$SCRIPT_DIR/lib" "$INSTALL_DIR/"
@@ -106,10 +113,19 @@ else
   # Approve-agent — Gmail reply channel is available whenever account is set.
   systemctl --user enable --now email-cos-approve.timer && echo "  enabled: email-cos-approve.timer" || true
 
-  # Telegram inline-button approval processor — enable when TG chat is configured.
+  # Canonical Pocket/social approval responder — the single consumer of bot input
+  # (button taps + freeform text + LLM mapping) and sole writer of decisions; also
+  # publishes social drafts on approve. Supersedes the callback-only tg-process.
+  # Enable when the TG chat is configured.
   if [ "${EMAIL_COS_TG_ENABLE:-false}" = "true" ] \
       && [ -n "${EMAIL_COS_TG_CHAT_ID:-}" ]; then
-    systemctl --user enable --now email-cos-tg-process.timer && echo "  enabled: email-cos-tg-process.timer" || true
+    # Retire the legacy callback-only processor — folded into pocket-responder.
+    systemctl --user disable --now email-cos-tg-process.timer 2>/dev/null \
+      && echo "  disabled (folded into pocket-responder): email-cos-tg-process.timer" || true
+    systemctl --user enable --now pocket-responder-send.timer \
+      && echo "  enabled: pocket-responder-send.timer" || true
+    systemctl --user enable --now pocket-responder-process.timer \
+      && echo "  enabled: pocket-responder-process.timer" || true
   fi
 fi
 

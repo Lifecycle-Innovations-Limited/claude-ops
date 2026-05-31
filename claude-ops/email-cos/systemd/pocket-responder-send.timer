@@ -1,0 +1,8 @@
+[Unit]
+Description=Post Pocket/social approval buttons for new open ASKs ~every 3min
+[Timer]
+OnBootSec=90s
+OnUnitInactiveSec=180s
+AccuracySec=30s
+[Install]
+WantedBy=timers.target

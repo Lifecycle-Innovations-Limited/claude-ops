@@ -19,6 +19,20 @@ mkdir -p "$LOG_DIR" "$DATA_DIR"
 
 log() { printf '%s [listener] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" | tee -a "$LOG"; }
 
+# ── Pocket/social approval responder inbox ────────────────────────────────
+# Tee owner-chat button taps AND freeform text to a single normalized inbox that
+# pocket-responder.py drains (taps + text + LLM mapping + social publish). Owner
+# chat id comes from env or the email-cos config — NEVER hardcoded. When unset,
+# the responder tee is skipped (no behavioural change for non-responder installs).
+RESPONDER_STATE_DIR="${POCKET_STATE_DIR:-/var/lib/pocket-pipeline}"
+if [[ -z "${RESPONDER_OWNER_CHAT_ID:-}" && -f "$HOME/.config/email-cos/config.sh" ]]; then
+  RESPONDER_OWNER_CHAT_ID="$( . "$HOME/.config/email-cos/config.sh" 2>/dev/null; printf '%s' "${EMAIL_COS_TG_CHAT_ID:-}" )"
+fi
+RESPONDER_OWNER_CHAT_ID="${RESPONDER_OWNER_CHAT_ID:-${TELEGRAM_OWNER_ID:-}}"
+export RESPONDER_OWNER_CHAT_ID
+export RESPONDER_INBOX="$RESPONDER_STATE_DIR/responder-inbox.jsonl"
+export POCKET_STATE_DIR="$RESPONDER_STATE_DIR"
+
 write_health() {
   local status="$1" detail="${2:-}"
   printf 'status=%s\ntimestamp=%s\ndetail=%s\n' \
@@ -182,8 +196,21 @@ data = json.load(sys.stdin)
 if not data.get('ok'):
     print('[]')
     sys.exit(0)
-import os as _os
+import os as _os, time as _time
 _sd = _os.environ.get('POCKET_STATE_DIR', '/var/lib/pocket-pipeline')
+_owner = _os.environ.get('RESPONDER_OWNER_CHAT_ID', '')
+_rinbox = _os.environ.get('RESPONDER_INBOX', '')
+
+def _tee_responder(rec):
+    # Append a normalized event to the canonical responder inbox (taps + text).
+    if not _rinbox:
+        return
+    try:
+        with open(_rinbox, 'a') as _f:
+            _f.write(json.dumps(rec) + '\n')
+    except Exception:
+        pass
+
 filtered = []
 _maxuid = 0
 for upd in data.get('result', []):
@@ -194,23 +221,40 @@ for upd in data.get('result', []):
     # approval processor, then skip — this bot's getUpdates is owned here.
     cb = upd.get('callback_query')
     if cb:
+        _cbm = cb.get('message') or {}
+        _cbchat = (_cbm.get('chat') or {}).get('id')
         try:
-            _cbm = cb.get('message') or {}
             with open(_os.path.join(_sd, 'tg-callbacks.jsonl'), 'a') as _f:
                 _f.write(json.dumps({
                     'id': cb.get('id'),
                     'data': cb.get('data', ''),
                     'message_id': _cbm.get('message_id'),
-                    'chat_id': (_cbm.get('chat') or {}).get('id'),
+                    'chat_id': _cbchat,
                     'update_id': _uid,
                 }) + '\n')
         except Exception:
             pass
+        # Canonical responder inbox: owner-chat taps (or all if owner unset).
+        if not _owner or str(_cbchat) == _owner:
+            _tee_responder({
+                'type': 'tap', 'id': cb.get('id'), 'data': cb.get('data', ''),
+                'message_id': _cbm.get('message_id'), 'chat_id': _cbchat,
+                'update_id': _uid, 'ts': int(_time.time()),
+            })
         continue
     msg = upd.get('message', {})
     sender = msg.get('from', {})
+    _mchat = (msg.get('chat') or {}).get('id')
+    _text = msg.get('text', '')
+    # Canonical responder inbox: the owner's freeform text becomes approval input.
+    if _owner and _text and str(_mchat) == _owner:
+        _tee_responder({
+            'type': 'text', 'message_id': msg.get('message_id'),
+            'chat_id': _mchat, 'text': _text, 'update_id': _uid,
+            'ts': int(_time.time()),
+        })
     # Skip owner's own messages (add TELEGRAM_OWNER_ID to env to filter by user_id)
-    owner_id = '${TELEGRAM_OWNER_ID:-}'
+    owner_id = _owner or '${TELEGRAM_OWNER_ID:-}'
     if owner_id and str(sender.get('id', '')) == owner_id:
         continue
     if msg:

@@ -1,0 +1,6 @@
+[Unit]
+Description=Pocket/social approval responder — post tappable button messages for open ASKs
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/email-cos/pocket-responder-run.sh send
+TimeoutStartSec=120
