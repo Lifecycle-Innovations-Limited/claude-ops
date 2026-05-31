@@ -19,10 +19,10 @@
       }
     },
     "doppler": {
-      "command": "npx",
-      "args": ["-y", "-p", "@dopplerhq/mcp-server", "doppler-mcp"],
+      "command": "bash",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-servers/doppler-launcher.sh"],
       "env": {
-        "DOPPLER_TOKEN": "${user_config.doppler_token}"
+        "DOPPLER_TOKEN_CONFIG": "${user_config.doppler_token}"
       }
     },
     "desktop-act": {
