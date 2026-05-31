@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Doppler MCP no longer fails by default.** The server was wired with `DOPPLER_TOKEN: "${user_config.doppler_token}"`, and the `doppler_token` config defaults to `""` — so a blank value was passed to `npx doppler-mcp` as `DOPPLER_TOKEN=""`, clobbering any inherited token and forcing a "Not authenticated" exit (MCP showed "Failed to connect" on every box without a pasted token). The config description's promise — "leave blank — runtime resolves automatically" — was never actually implemented. Added `mcp-servers/doppler-launcher.sh`, which resolves the token from the pasted config value → inherited `DOPPLER_TOKEN` → `doppler configure get token` (a prior `doppler login`), and crucially never exports an empty `DOPPLER_TOKEN`. When no token resolves, the server starts with the var unset so it can use its own `doppler login` store instead of being force-failed.
+
 ## [2.18.9] - 2026-05-31
 
 ### Added
