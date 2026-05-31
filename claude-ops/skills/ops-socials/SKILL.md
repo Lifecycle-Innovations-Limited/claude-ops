@@ -102,6 +102,7 @@ In every recipe below, treat the literal string `$SOCIAL_SET_ID` as a placeholde
 | **Schedule** | Typefully with `schedule_date: "next-free-slot"` or ISO | `mcp__typefully__typefully_get_queue` to inspect |
 | **Analytics** (own posts) | `mcp__typefully__typefully_list_social_set_analytics_posts` (or `mcp__x-mcp__get_metrics` per tweet) | replies excluded by default |
 | **LinkedIn org mention** | `mcp__typefully__typefully_linkedin_resolve_linkedin_organization_from_url` → `@[Name](urn:li:organization:ID)` | paste into draft body |
+| **Owner autopilot status** | shell out to `$OPS_SOCIAL_AUTOPILOT_CMD` (user-configured path to an owner-specific status script that returns per-channel state) | example: `OPS_SOCIAL_AUTOPILOT_CMD=~/tools/<owner>-social-autopilot/status.py` |
 
 ## Hard rules
 
@@ -224,6 +225,13 @@ Per-tweet drill-down on impressions/engagement: `mcp__x-mcp__get_metrics({ id })
 ### "Publish a markdown article to X" — not the safe path
 
 `x-article-publisher-skill` automates X's web UI via Playwright. Hard rule 3 forbids that from this router. Instead: stage a Typefully draft that's a hook + summary + a link to the full piece (your blog, Substack, static page). If you genuinely need a native X Article, publish it manually in the X client.
+
+### "Show me the autopilot status" / "/ops-socials healify" / owner-autopilot read-out
+```bash
+[ -n "$OPS_SOCIAL_AUTOPILOT_CMD" ] && bash -c "$OPS_SOCIAL_AUTOPILOT_CMD" || echo "no autopilot wired — set OPS_SOCIAL_AUTOPILOT_CMD in your env or $PREFS_PATH/preferences.json"
+```
+Returns per-channel state: connected, queue depth, recent fires, next action. Read-only.
+
 
 ## Pre-flight check (run when troubleshooting)
 
