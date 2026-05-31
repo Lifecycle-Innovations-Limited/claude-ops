@@ -143,6 +143,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.18.6] - 2026-05-31
+
+### Changed
+fix(whatsapp-bridge): build with -tags sqlite_fts5 so the bridge's SQLite has the fts5 module — fixes silent message-storage failure where every INSERT hit the messages_fts triggers and failed with "no such module: fts5". ops-autofix now verifies binary fts5 capability before running the migration (PR #412).
+
+
 ## [2.18.5] - 2026-05-31
 
 ### Added
