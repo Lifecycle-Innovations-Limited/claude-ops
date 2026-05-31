@@ -113,6 +113,11 @@ mkdir -p "$HOME/bin"
 cp "$SCRIPT_DIR/../bin/wa-inbox-fresh.sh" "$HOME/bin/wa-inbox-fresh.sh"
 chmod +x "$HOME/bin/wa-inbox-fresh.sh"
 
+# ─── Ship wa-bridge-keepalive.sh (hang-detection so phone-sends always sync) ──
+echo "▶ Installing wa-bridge-keepalive.sh → ~/bin (uptime watchdog)"
+cp "$SCRIPT_DIR/../bin/wa-bridge-keepalive.sh" "$HOME/bin/wa-bridge-keepalive.sh"
+chmod +x "$HOME/bin/wa-bridge-keepalive.sh"
+
 # ─── Bump Go deps + build ────────────────────────────────────────────────────
 if [ "$SKIP_BUILD" -ne 1 ]; then
   echo "▶ Bumping Go deps + building bridge"
@@ -154,6 +159,12 @@ if [ "$WITH_BACKFILL_TIMER" -eq 1 ]; then
   cp "$WA_ASSETS/systemd/whatsapp-backfill.timer"   "$SYSTEMD_DIR/"
 fi
 
+# Keepalive watchdog: Restart=always catches crashes; this catches HANGS (socket
+# dead, process alive) which would silently drop phone-originated own-sends that
+# whatsmeow can never re-fetch. Always installed.
+cp "$WA_ASSETS/systemd/whatsapp-bridge-keepalive.service" "$SYSTEMD_DIR/"
+cp "$WA_ASSETS/systemd/whatsapp-bridge-keepalive.timer"   "$SYSTEMD_DIR/"
+
 if [ "$WITH_TRANSCRIBE_TIMER" -eq 1 ]; then
   sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" \
       "$WA_ASSETS/systemd/whatsapp-transcribe.service" \
@@ -184,6 +195,7 @@ echo "▶ Reloading systemd + starting services"
 loginctl enable-linger "$USER" 2>/dev/null || true   # survive logout
 systemctl --user daemon-reload
 systemctl --user enable --now whatsapp-bridge.service
+systemctl --user enable --now whatsapp-bridge-keepalive.timer
 if [ "$WITH_BACKFILL_TIMER" -eq 1 ]; then
   systemctl --user enable --now whatsapp-backfill.timer
 fi
