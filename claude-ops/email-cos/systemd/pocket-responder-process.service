@@ -1,0 +1,6 @@
+[Unit]
+Description=Pocket/social approval responder — drain responder-inbox (taps + freeform text)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/email-cos/pocket-responder-run.sh process
+TimeoutStartSec=120
