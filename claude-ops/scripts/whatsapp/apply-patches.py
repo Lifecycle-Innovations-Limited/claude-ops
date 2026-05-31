@@ -552,21 +552,21 @@ CONNECTED_RESYNC_NEEDLE = """\t\tcase *events.Connected:
 
 CONNECTED_RESYNC_REPLACEMENT = """\t\tcase *events.Connected:
 \t\t\tlogger.Infof(\"Connected to WhatsApp\")
-\t\t\t// claude-ops Fix D: force a full resync of the regular_low app-state patch
-\t\t\t// on every connect. Clears LTHash mismatch errors that fire when the local
-\t\t\t// snapshot is stale. Non-fatal if it fails (message delivery unaffected).
-\t\t\tgo func(c *whatsmeow.Client) {
-\t\t\t\ttime.Sleep(3 * time.Second)
-\t\t\t\tlogger.Infof(\"Auto-resync: fetching fresh regular_low app-state snapshot\")
-\t\t\t\tif err := c.FetchAppState(context.Background(), \"regular_low\", true, false); err != nil {
-\t\t\t\t\tlogger.Debugf(\"regular_low app-state resync: %v (non-fatal)\", err)
-\t\t\t\t} else {
-\t\t\t\t\tlogger.Infof(\"regular_low app-state resync complete\")
-\t\t\t\t}
-\t\t\t}(client)
+\t\t\t// claude-ops Fix I: do NOT auto-touch regular_low app-state on connect.
+\t\t\t// The previous handler ran FetchAppState(regular_low, fullSync=true), which
+\t\t\t// DELETED the local snapshot and re-fetched the server's broken patch chain
+\t\t\t// (\"failed to verify patch vNNN: mismatching LTHash\", whatsmeow #382/#858),
+\t\t\t// re-corrupting it on EVERY connect and undoing any recovery. Auto-requesting
+\t\t\t// recovery on connect is also wrong — it overwrites a good in-sync snapshot
+\t\t\t// with the phone's low-version recovery baseline, so the next archive mutation
+\t\t\t// conflicts with the server head (409). Correct behaviour: leave regular_low
+\t\t\t// untouched and recover ON DEMAND via POST /api/recover_app_state only when an
+\t\t\t// archive/mute/pin op actually fails with LTHash.
 \t\t\t// claude-ops: auto-trigger a deep history backfill on every Connected event."""
 
-CONNECTED_RESYNC_SENTINEL = "claude-ops Fix D: force a full resync of the regular_low"
+CONNECTED_RESYNC_SENTINEL = (
+    "claude-ops Fix I: do NOT auto-touch regular_low app-state on connect"
+)
 
 # ─── whatsapp.py Fix E: WAL-mode _open_db + dict serialisation helpers ────────
 # The MCP server returned raw dataclass objects where FastMCP expected dicts,
@@ -1166,7 +1166,7 @@ def main() -> int:
         CONNECTED_RESYNC_NEEDLE,
         CONNECTED_RESYNC_REPLACEMENT,
         CONNECTED_RESYNC_SENTINEL,
-        "Fix D: auto-resync regular_low on Connected event",
+        "Fix I: no destructive auto-resync on Connected (recover on demand)",
     )
     changed_go |= replace_idempotent(
         main_go,
