@@ -143,6 +143,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.18.5] - 2026-05-31
+
+### Added
+- `bin/ops-release` — reusable one-shot release tool: bumps plugin.json + marketplace.json (registry) + CHANGELOG in lockstep, opens a PR to main, optionally squash-merges and tags `vX.Y.Z`. See `RELEASE.md`.
+- `RELEASE.md` — release process documentation.
+
+### Changed
+- ops-bg: `dispatch` now defaults the fleet/background agent working dir to `~/Projects` (override via `$OPSBG_DIR` or `--cwd`) and `cd`s into it before exec, so fleet agents start at the workspace root instead of an arbitrary repo (#410).
+
+
 ## [Unreleased]
 
 ## [2.15.0] — 2026-05-29
