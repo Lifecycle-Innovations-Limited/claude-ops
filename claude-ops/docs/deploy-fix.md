@@ -256,6 +256,46 @@ No. The fixer creates a new branch (`fix/auto-deploy-<sha>`) and opens a PR. You
 
 ---
 
+## Fleet coexistence
+
+The deploy-fix subsystem runs cleanly alongside the `claude --bg` agent fleet. Four config keys govern the integration:
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `max_concurrent_fixers` | number | `3` | Global cap on simultaneously-running fixer processes. Dispatch returns rc=6 when the cap is reached. |
+| `respect_fleet_claims` | boolean | `true` | Skip dispatch (rc=7) when `~/.claude/state/fleet-tui.json` shows an active fleet agent (`running`/`in_progress`/`working`/`active`) already working on the same repo. Missing/unparseable file = no claim = proceed. |
+| `register_in_fleet_census` | boolean | `true` | Append launch + completion entries to the sidecar (see below). |
+| `max_fixes_per_hour` | number | `3` | Per-repo hourly budget (existing; listed here for completeness). |
+
+**Dispatch return-code map:**
+
+| rc | Meaning |
+|----|---------|
+| 0 | Dispatched successfully |
+| 2 | Single-flight lock held (same repo+kind already running) |
+| 3 | Hourly budget exhausted |
+| 4 | Agent definition file missing |
+| 5 | `claude` binary not on PATH |
+| 6 | Global concurrency cap (`max_concurrent_fixers`) reached |
+| 7 | Fleet agent already active on this repo |
+
+**Census sidecar** — `~/.claude/state/deploy-fix-active.jsonl`
+
+One JSON line appended per event (APPEND-only, never clobbered):
+
+```json
+{"id":"<lock-epoch>","name":"deploy-fix:<owner/repo>","status":"running","repo":"<owner/repo>","branch":"deploy-fix","source":"deploy-fix","pid":<n>,"started":"<iso8601>"}
+{"id":"<lock-epoch>","name":"deploy-fix:<owner/repo>","status":"done",  "repo":"<owner/repo>","branch":"deploy-fix","source":"deploy-fix","ended":"<iso8601>"}
+```
+
+Consumers take the latest entry per `id` (running → done). The `source` field is always `"deploy-fix"` so the fleet TUI can distinguish these from `claude --bg` sessions.
+
+> **NOTE:** To surface these in the fleet TUI, have `~/bin/fleet-tui-census.sh` merge `deploy-fix-active.jsonl` (source=deploy-fix) — separate local change.
+
+**Autonomy boundary:** the fixer is fully autonomous up to opening a **draft PR**. It never merges, never triggers builds (`gh workflow run`, `eas build`), never promotes to prod/main. Merge and promotion remain owned by the human / fleet supervisor.
+
+---
+
 ## See also
 
 - [`docs/agents.md`](agents.md) — pre-installed specialist agents (deploy-fixer + build-fixer live here).
