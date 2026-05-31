@@ -187,6 +187,7 @@ dispatch_fix_agent() {
   #
   # Return codes:
   #   0  dispatched successfully
+  #   1  background fixer failed to start (budget rolled back)
   #   2  single-flight lock already held (same repo+kind already in flight)
   #   3  hourly budget exhausted for this repo
   #   4  agent definition file not found (misconfiguration)
@@ -222,21 +223,32 @@ dispatch_fix_agent() {
     lock_release "$lock_id"
     return 6
   fi
-  local _lock_safe _pidfile
+  local _lock_safe
   _lock_safe=$(printf '%s' "$lock_id" | tr '/: ' '---')
-  _pidfile="$_active_dir/${_lock_safe}-$$.pid"
-  echo $$ > "$_pidfile"
+  local _pidfile="$_active_dir/${_lock_safe}.pid"
+
+  # Build brief and resolve repo from KEY=VAL pairs before fleet dedup.
+  local brief="Context for this fix:"
+  local kv k v
+  local _census_branch="deploy-fix"
+  local _census_repo_kv=""
+  for kv in "$@"; do
+    k="${kv%%=*}"
+    v="${kv#*=}"
+    case "$k" in
+      BRANCH) _census_branch="$v" ;;
+      BASE) _census_branch="$v" ;;
+      REPO) _census_repo_kv="$v" ;;
+    esac
+    brief="$brief"$'\n'"$k: $v"
+  done
+  local _fix_repo="${DEPLOY_FIX_REPO:-}"
+  [ -z "$_fix_repo" ] && _fix_repo="${_census_repo_kv:-}"
+  [ -z "$_fix_repo" ] && _fix_repo="$slug"
 
   # --- Fleet-claim dedup (rc=7) ---
   local _fleet_file="$HOME/.claude/state/fleet-tui.json"
-  if [ "$(config respect_fleet_claims true)" = "true" ] && [ -f "$_fleet_file" ]; then
-    if ! command -v jq >/dev/null 2>&1; then
-      notify "Fleet dedup blocked" "fleet-tui.json present but jq missing — skipping dispatch for $slug"
-      rm -f "$_pidfile"
-      lock_release "$lock_id"
-      return 7
-    fi
-    local _fix_repo="${DEPLOY_FIX_REPO:-}"
+  if [ "$(config respect_fleet_claims true)" = "true" ] && [ -f "$_fleet_file" ] && command -v jq >/dev/null 2>&1; then
     local _repo_bare="${_fix_repo#*/}"
     local _fleet_active
     _fleet_active=$(jq -r --arg full "$_fix_repo" --arg bare "$_repo_bare" '
@@ -248,7 +260,6 @@ dispatch_fix_agent() {
     ' "$_fleet_file" 2>/dev/null || echo "0")
     if [ "${_fleet_active:-0}" -gt 0 ] 2>/dev/null; then
       notify "Fleet agent active" "fleet agent already working on $_fix_repo — deploy-fixer skipped"
-      rm -f "$_pidfile"
       lock_release "$lock_id"
       return 7
     fi
@@ -264,37 +275,18 @@ dispatch_fix_agent() {
   # If the agent file is absent, treat as misconfiguration: release the lock
   # and surface rc=4 so callers can fall back to manual notification.
   if [ ! -f "$PLUGIN_ROOT/agents/$agent_name.md" ]; then
-    rm -f "$_pidfile"
     lock_release "$lock_id"
     return 4
   fi
-
-  # Build the brief from KEY=VAL pairs. One pair per line so downstream parsers
-  # (and the test mock) can match on `REPO: owner/repo` etc.
-  local brief="Context for this fix:"
-  local kv k v
-  local _census_branch="deploy-fix"
-  local _census_repo_kv=""
-  for kv in "$@"; do
-    k="${kv%%=*}"
-    v="${kv#*=}"
-    case "$k" in
-      BRANCH) _census_branch="$v" ;;
-      BASE) _census_branch="$v" ;;
-      REPO) _census_repo_kv="$v" ;;
-    esac
-    brief="$brief"$'\n'"$k: $v"
-  done
 
   local fix_log="$LOGS_DIR/fix-${lock_id}-$(date +%s).log"
   local danger_flag="--permission-mode acceptEdits"
   [ "$(config allow_dangerous false)" = "true" ] && danger_flag="--dangerously-skip-permissions"
 
-  command -v claude >/dev/null || { rm -f "$_pidfile"; lock_release "$lock_id"; return 5; }
+  command -v claude >/dev/null || { lock_release "$lock_id"; return 5; }
 
   if ! budget_check_increment "$slug"; then
     notify "Auto-fix budget exhausted" "$slug hit hourly cap — manual intervention needed"
-    rm -f "$_pidfile"
     lock_release "$lock_id"
     return 3
   fi
@@ -303,8 +295,7 @@ dispatch_fix_agent() {
   # on $PLUGIN_ROOT being exported (it may not be in all caller environments).
   local _invoker="$PLUGIN_ROOT/scripts/lib/claude-invoke.sh"
 
-  local _fix_repo_for_sidecar="${DEPLOY_FIX_REPO:-}"
-  [ -z "$_fix_repo_for_sidecar" ] && _fix_repo_for_sidecar="${_census_repo_kv:-unknown}"
+  local _fix_repo_for_sidecar="$_fix_repo"
   local _epoch
   _epoch=$(date +%s)
   local _sidecar_dir="$HOME/.claude/state"
@@ -345,7 +336,6 @@ dispatch_fix_agent() {
     if [ "$_bn" -gt 0 ] 2>/dev/null; then
       echo $((_bn - 1)) > "$_budget_f"
     fi
-    rm -f "$_pidfile"
     lock_release "$lock_id"
     return 1
   fi

@@ -93,6 +93,7 @@ if [ "$CONCLUSION" != "success" ]; then
       0) log "fixer dispatched → $fix_log" ;;
       2) log "fixer skipped — already in flight for $SLUG-deploy" ;;
       3) log "fixer skipped — hourly budget exhausted" ;;
+      1) log "fixer failed — background process did not start" ;;
       6) log "fixer skipped — global concurrency cap ($(config max_concurrent_fixers 3) active)" ;;
       7) log "fixer skipped — fleet agent already active on $REPO" ;;
       *) log "fixer dispatch failed — exit code $_dfa_rc" ;;
@@ -122,9 +123,10 @@ if [ "$HTTP" != "200" ]; then
     _dfa_rc=$?
     case $_dfa_rc in
       0) : ;;
+      1) log "health fixer failed — background process did not start" ;;
       6) log "health fixer skipped — global concurrency cap ($(config max_concurrent_fixers 3) active)" ;;
       7) log "health fixer skipped — fleet agent already active on $REPO" ;;
-      *) : ;;
+      *) log "health fixer dispatch failed — exit code $_dfa_rc" ;;
     esac
   fi
   exit 1
