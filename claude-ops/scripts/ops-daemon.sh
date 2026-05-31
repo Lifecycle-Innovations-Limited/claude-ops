@@ -1359,29 +1359,15 @@ Unit=claude-ops.service
 WantedBy=timers.target
 EOF
 
-  # wacli-keepalive: persistent service (Restart=always) — no timer needed.
-  cat > "$unit_dir/claude-ops-wacli-keepalive.service" <<EOF
-[Unit]
-Description=claude-ops wacli keepalive
-After=default.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/env bash $OPS_KEEPALIVE_SCRIPT
-Restart=always
-RestartSec=60
-StandardOutput=append:$LOG_DIR/wacli-launchd-stdout.log
-StandardError=append:$LOG_DIR/wacli-launchd-stderr.log
-Environment=HOME=$HOME
-
-[Install]
-WantedBy=default.target
-EOF
+  # wacli-keepalive was decommissioned in v2.0.3 — on Linux the WhatsApp stream
+  # is owned by whatsapp-bridge.service (whatsmeow/Baileys MCP). Do NOT write or
+  # enable claude-ops-wacli-keepalive.service here: it is masked on existing
+  # installs, and re-enabling a masked unit spams the journal with
+  # "Failed to enable unit ... is masked" on every daemon tick.
 
   systemctl --user daemon-reload
   systemctl --user enable --now claude-ops.timer
-  systemctl --user enable --now claude-ops-wacli-keepalive.service || true
-  log "INSTALL(systemd): enabled claude-ops.timer + claude-ops-wacli-keepalive.service"
+  log "INSTALL(systemd): enabled claude-ops.timer"
 }
 
 uninstall_daemon_systemd() {
@@ -1570,15 +1556,7 @@ _ensure_all_services_systemd() {
   command -v systemctl >/dev/null 2>&1 || return 0
   local repaired=0
 
-  # Check wacli-keepalive systemd unit
-  if ! systemctl --user is-active claude-ops-wacli-keepalive.service &>/dev/null; then
-    log "ENSURE: claude-ops-wacli-keepalive.service not active — restarting"
-    systemctl --user restart claude-ops-wacli-keepalive.service 2>/dev/null || {
-      # Unit may not exist — trigger full install
-      install_daemon_systemd
-    }
-    (( repaired++ )) || true
-  fi
+  # wacli-keepalive intentionally omitted — decommissioned (see install_daemon_systemd).
 
   # Check timer
   if ! systemctl --user is-active claude-ops.timer &>/dev/null; then
