@@ -1,5 +1,38 @@
 # Changelog
 
+## 2.18.3 — 2026-05-31
+
+### Added
+- **WhatsApp voice-note auto-transcription.** New `scripts/whatsapp/transcribe_voice_notes.py`
+  finds incoming voice notes (`media_type='audio'`, empty `content`), downloads them via the
+  bridge `/api/download`, transcribes with OpenAI `whisper-1`, and writes `[voice] <text>`
+  back into `messages.content` — **only** where content is still empty, so it never clobbers
+  real text and is fully idempotent. Run by a new `whatsapp-transcribe.{service,timer}`
+  (systemd-user, every 10 min + 2 min after boot), so voice notes appear in `ops-inbox`
+  scans exactly like text. Cost-safe: `mkdir`-based single-instance lock, `--max` per-run
+  cap on the metered Whisper API, and idempotent updates (never re-bills a row).
+- **Pre-scan freshness gate** `bin/wa-inbox-fresh.sh`, installed to `~/bin`. `ops-inbox` runs
+  it FIRST in every WhatsApp scan: it connection-probes the bridge with **curl** (not
+  `ss | grep :8080`, which mis-resolves 8080 to the service name `webcache` and would bounce
+  a healthy bridge), forces a backfill, triggers transcription, waits (bounded ~32s) for the
+  store to settle, and prints a freshness report — only restarting the bridge if the curl
+  probe genuinely fails twice. Exit 2 signals an unrecoverable bridge so callers never
+  classify against a stale store.
+
+### Changed
+- `scripts/install-whatsapp-bridge-linux.sh` now also ships the voice-note transcriber and
+  the freshness gate, drops + enables the `whatsapp-transcribe.{service,timer}` units (reading
+  `OPENAI_API_KEY` from `~/.config/systemd/env/mcp-secrets.env`), and adds a
+  `--no-transcribe-timer` opt-out.
+- `skills/ops-inbox/SKILL.md` step-0 documents the freshness gate (run first) and that voice
+  notes are first-class (`[voice] …` bodies), alongside the existing backfill + contacts-link
+  auto-sync.
+
+> Folds in the bridge-side fixes already on `main` as of 2.18.x — outbound `/api/send`
+> persistence, the `resync_app_state` endpoint, MCP dict serialisation (#404), and the
+> WhatsApp autosync + LID contacts-link (#403) — and layers voice transcription + the
+> freshness gate on top.
+
 ## 2.18.1 — 2026-05-31
 
 ### Added
