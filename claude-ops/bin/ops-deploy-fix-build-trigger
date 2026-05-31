@@ -70,6 +70,10 @@ if [ "$(config auto_dispatch_fixer true)" != "true" ]; then
   exit 0
 fi
 
+if [ -n "$repo_org" ]; then
+  export DEPLOY_FIX_REPO="${repo_org}/${repo_slug}"
+fi
+
 set +e
 fix_log=$(dispatch_fix_agent "build-fixer" "$repo_slug-build" \
   "COMMAND=$cmd" "REPO_PATH=$repo_path" "BRANCH=$branch" "LOGS=$last_lines")
@@ -88,5 +92,7 @@ case $dispatch_status in
 JSON
     ;;
   2|3) notify "Auto-fix skipped" "$repo_slug — already in flight or budget exhausted" ;;
+  6) notify "Auto-fix skipped" "$repo_slug — global concurrency cap reached" ;;
+  7) notify "Auto-fix skipped" "$repo_slug — fleet agent already active on this repo" ;;
 esac
 exit 0

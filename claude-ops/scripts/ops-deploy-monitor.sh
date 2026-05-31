@@ -93,8 +93,8 @@ if [ "$CONCLUSION" != "success" ]; then
       0) log "fixer dispatched → $fix_log" ;;
       2) log "fixer skipped — already in flight for $SLUG-deploy" ;;
       3) log "fixer skipped — hourly budget exhausted" ;;
-      6) log "fixer skipped — global concurrency cap ($(config max_concurrent_fixers 3) active)"; notify "Fixer cap" "$REPO #$PR — concurrency cap reached, skipping" ;;
-      7) log "fixer skipped — fleet agent already active on $REPO"; notify "Fleet dedup" "$REPO #$PR — fleet agent already active, deploy-fixer skipped" ;;
+      6) log "fixer skipped — global concurrency cap ($(config max_concurrent_fixers 3) active)" ;;
+      7) log "fixer skipped — fleet agent already active on $REPO" ;;
       *) log "fixer dispatch failed — exit code $_dfa_rc" ;;
     esac
   else

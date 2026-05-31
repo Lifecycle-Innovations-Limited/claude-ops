@@ -204,12 +204,12 @@ dispatch_fix_agent() {
   # --- Global concurrency cap (rc=6) ---
   local _active_dir="$STATE_DIR/active"
   mkdir -p "$_active_dir"
-  # Prune stale pidfiles whose process is no longer alive.
+  # Prune stale pidfiles whose process is no longer alive (or invalid/empty).
   for _pf in "$_active_dir"/*.pid; do
     [ -f "$_pf" ] || continue
     local _ppid
-    _ppid=$(cat "$_pf" 2>/dev/null || true)
-    if [ -n "$_ppid" ] && ! kill -0 "$_ppid" 2>/dev/null; then
+    _ppid=$(tr -d '[:space:]' < "$_pf" 2>/dev/null || true)
+    if [ -z "$_ppid" ] || ! kill -0 "$_ppid" 2>/dev/null; then
       rm -f "$_pf"
     fi
   done
@@ -229,7 +229,13 @@ dispatch_fix_agent() {
 
   # --- Fleet-claim dedup (rc=7) ---
   local _fleet_file="$HOME/.claude/state/fleet-tui.json"
-  if [ "$(config respect_fleet_claims true)" = "true" ] && [ -f "$_fleet_file" ] && command -v jq >/dev/null 2>&1; then
+  if [ "$(config respect_fleet_claims true)" = "true" ] && [ -f "$_fleet_file" ]; then
+    if ! command -v jq >/dev/null 2>&1; then
+      notify "Fleet dedup blocked" "fleet-tui.json present but jq missing — skipping dispatch for $slug"
+      rm -f "$_pidfile"
+      lock_release "$lock_id"
+      return 7
+    fi
     local _fix_repo="${DEPLOY_FIX_REPO:-}"
     local _repo_bare="${_fix_repo#*/}"
     local _fleet_active
@@ -267,9 +273,16 @@ dispatch_fix_agent() {
   # (and the test mock) can match on `REPO: owner/repo` etc.
   local brief="Context for this fix:"
   local kv k v
+  local _census_branch="deploy-fix"
+  local _census_repo_kv=""
   for kv in "$@"; do
     k="${kv%%=*}"
     v="${kv#*=}"
+    case "$k" in
+      BRANCH) _census_branch="$v" ;;
+      BASE) _census_branch="$v" ;;
+      REPO) _census_repo_kv="$v" ;;
+    esac
     brief="$brief"$'\n'"$k: $v"
   done
 
@@ -290,28 +303,15 @@ dispatch_fix_agent() {
   # on $PLUGIN_ROOT being exported (it may not be in all caller environments).
   local _invoker="$PLUGIN_ROOT/scripts/lib/claude-invoke.sh"
 
-  local _fix_repo_for_sidecar="${DEPLOY_FIX_REPO:-unknown}"
+  local _fix_repo_for_sidecar="${DEPLOY_FIX_REPO:-}"
+  [ -z "$_fix_repo_for_sidecar" ] && _fix_repo_for_sidecar="${_census_repo_kv:-unknown}"
   local _epoch
   _epoch=$(date +%s)
-  local _started_iso
-  _started_iso=$(date -u +%FT%TZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
   local _sidecar_dir="$HOME/.claude/state"
   local _sidecar_file="$_sidecar_dir/deploy-fix-active.jsonl"
   local _census_id="${_lock_safe}-${_epoch}"
   local _register_census
   _register_census=$(config register_in_fleet_census true)
-
-  # Fleet census sidecar — "running" before background work so it always precedes "done".
-  if [ "$_register_census" = "true" ]; then
-    mkdir -p "$_sidecar_dir"
-    touch "$_sidecar_file"
-    jq -nc \
-      --arg id "$_census_id" \
-      --arg repo "$_fix_repo_for_sidecar" \
-      --arg started "$_started_iso" \
-      '{id:$id,name:("deploy-fix:"+$repo),status:"running",repo:$repo,branch:"deploy-fix",source:"deploy-fix",started:$started}' \
-      >> "$_sidecar_file" 2>/dev/null || true
-  fi
 
   nohup bash -c "
     _census_done=0
@@ -324,8 +324,9 @@ dispatch_fix_agent() {
         printf '%s\n' \"\$(jq -nc \
           --arg id '$_census_id' \
           --arg repo '$_fix_repo_for_sidecar' \
+          --arg branch '$_census_branch' \
           --arg ended \"\$_ended_iso\" \
-          '{id:\$id,name:\"deploy-fix:\"+\$repo,status:\"done\",repo:\$repo,branch:\"deploy-fix\",source:\"deploy-fix\",ended:\$ended}' \
+          '{id:\$id,name:\"deploy-fix:\"+\$repo,status:\"done\",repo:\$repo,branch:\$branch,source:\"deploy-fix\",ended:\$ended}' \
           2>/dev/null || true)\" >> '$_sidecar_file' 2>/dev/null || true
       fi
     }
@@ -336,7 +337,35 @@ dispatch_fix_agent() {
   local _bg_pid=$!
   disown 2>/dev/null || true
 
+  if [ -z "$_bg_pid" ] || ! kill -0 "$_bg_pid" 2>/dev/null; then
+    local _hour _budget_f _bn
+    _hour=$(date +%Y%m%d-%H)
+    _budget_f="$STATE_DIR/budget-$slug-$_hour"
+    _bn=$(cat "$_budget_f" 2>/dev/null || echo 0)
+    if [ "$_bn" -gt 0 ] 2>/dev/null; then
+      echo $((_bn - 1)) > "$_budget_f"
+    fi
+    rm -f "$_pidfile"
+    lock_release "$lock_id"
+    return 1
+  fi
+
   echo "$_bg_pid" > "$_pidfile"
+
+  if [ "$_register_census" = "true" ] && command -v jq >/dev/null 2>&1; then
+    local _started_iso
+    _started_iso=$(date -u +%FT%TZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+    mkdir -p "$_sidecar_dir"
+    touch "$_sidecar_file"
+    jq -nc \
+      --arg id "$_census_id" \
+      --arg repo "$_fix_repo_for_sidecar" \
+      --arg branch "$_census_branch" \
+      --argjson pid "$_bg_pid" \
+      --arg started "$_started_iso" \
+      '{id:$id,name:("deploy-fix:"+$repo),status:"running",repo:$repo,branch:$branch,source:"deploy-fix",pid:$pid,started:$started}' \
+      >> "$_sidecar_file" 2>/dev/null || true
+  fi
 
   echo "$fix_log"
   return 0
