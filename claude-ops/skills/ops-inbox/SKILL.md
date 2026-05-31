@@ -478,7 +478,7 @@ For each channel, detect availability at runtime:
    - **MCP tool-load handshake**: when both layers are up but `mcp__whatsapp__*` tools aren't listed yet, the SSE handshake is still in flight. Retry `ToolSearch select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__send_message,mcp__whatsapp__archive_chat,mcp__whatsapp__get_chat,mcp__whatsapp__resync_app_state` **up to 3 times with 5s spacing** before declaring unavailable. Never report "WhatsApp MCP not available" while :8080 AND :8090 are both LISTEN — that is a transient handshake, not a configuration failure.
    - **Proxy fd exhaustion** (`EMFILE / Too many open files` in `~/.claude/mcp-proxy/logs/proxy.err.log`): mcp-proxy's `--stateless` mode spawns a new subprocess per SSE connection. macOS launchd's default `maxfiles=256` runs out quickly. Symptom: SSE endpoint resets with `Connection reset by peer` and many stale `whatsapp-mcp-server main.py` zombies linger (`ps aux | grep whatsapp-mcp-server`). Fix: ensure `~/Library/LaunchAgents/com.${USER}.mcp-proxy.plist` has `SoftResourceLimits.NumberOfFiles=4096` + `HardResourceLimits.NumberOfFiles=8192`, then `launchctl unload ~/Library/LaunchAgents/com.${USER}.mcp-proxy.plist && pkill -f whatsapp-mcp-server/.venv && launchctl load -w ~/Library/LaunchAgents/com.${USER}.mcp-proxy.plist`. After restart, Claude's MCP client typically needs a new session to re-handshake; surface this to the user.
    - **QR re-pair**: only if :8080 is up but the bridge itself rejects calls (`/api/health` returns auth error, or messages return 401), check `~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log` for QR pairing prompts.
-   - **Headless / no-MCP-transport fallback (EC2, Linux dev-sandbox, any box where Claude-in-Chrome/Kapture are unreachable) — DO NOT declare WhatsApp unavailable.** If `:8080` is LISTEN and `store/messages.db` exists but `mcp__whatsapp__*` never loads after the 3× retry, the WhatsApp MCP server simply isn't registered in *this* Claude session — the bridge is healthy and the data is right there. **Scan READ-ONLY by querying `messages.db` directly** (`chats`, `messages`, `contacts`, `messages_fts`): full NEEDS_REPLY/WAITING classification (`last_is_from_me` ≈ last message's `is_from_me`), name resolution (`contacts` table, populated by the step-0 `link_contacts.py`), and thread reads all work offline. **Apply the lid↔phone identity merge here too** — `ATTACH store/whatsapp.db` and join `whatsmeow_lid_map` so a person's `<lid>@lid` and `<pn>@s.whatsapp.net` chats are classified as ONE merged thread (see the FULL-THREAD AWARENESS GATE), else the DB scan double-counts and fragments history exactly like the MCP path. Only *sending* needs a live transport — use `mcp__whatsapp__send_message` if it loaded, else `curl -X POST http://127.0.0.1:8080/api/send -d '{"recipient":"<jid>","message":"<text>"}'` — still under the Rule-6 one-draft→one-approval gate. **Never report "bridge not installed / WhatsApp unavailable" while `:8080` is LISTEN and the DB has rows** — that is a misdiagnosis; classify from the DB instead.
+   - **Headless / no-MCP-transport fallback (EC2, Linux dev-sandbox, any box where Claude-in-Chrome/Kapture are unreachable) — DO NOT declare WhatsApp unavailable.** If `:8080` is LISTEN and `store/messages.db` exists but `mcp__whatsapp__*` never loads after the 3× retry, the WhatsApp MCP server simply isn't registered in *this* Claude session — the bridge is healthy and the data is right there. **Scan READ-ONLY by querying `messages.db` directly** (`chats`, `messages`, `contacts`, `messages_fts`): NEEDS_REPLY/WAITING from each person's **merged** thread — union both JIDs' `messages` by `timestamp` and classify on the true last row's `is_from_me` (never per-chat `chats.last_is_from_me`; see FULL-THREAD AWARENESS GATE step 1), plus name resolution via `contacts` (populated by step-0 `link_contacts.py`) and thread reads offline. **Merge lid↔phone before classifying** — `whatsmeow_lid_map` when `whatsapp.db` attaches, else `contacts.phone` (same gate recipe). Only *sending* needs a live transport — use `mcp__whatsapp__send_message` if it loaded, else `curl -X POST http://127.0.0.1:8080/api/send -d '{"recipient":"<jid>","message":"<text>"}'` — still under the Rule-6 one-draft→one-approval gate. **Never report "bridge not installed / WhatsApp unavailable" while `:8080` is LISTEN and the DB has rows** — that is a misdiagnosis; classify from the DB instead.
    - **User prompt** (only after ALL the above fail — i.e. `:8080` genuinely down AND no usable `messages.db`): `AskUserQuestion` with `[Restart bridge]`, `[Restart mcp-proxy]`, `[Skip WhatsApp]`.
 3. **Slack**: Read the derived `channels.slack` object from pre-gathered `bin/ops-unread` data (it resolves each `token_env` and reports per-workspace `available`; do NOT read raw `preferences.json → slack_workspaces[]` directly — that array has no `available` flag).
    - **Multi-workspace** (`"multi_workspace": true`): iterate the `workspaces` array. For each `available: true` entry, scan via `mcp__claude_ai_Slack__*` if the MCP token matches, or via direct curl. To resolve the token for direct curl, validate `token_env` matches `^[A-Za-z_][A-Za-z0-9_]*$` before `${!token_env}` indirect expansion. Aggregate results; label each message block with the workspace name.
@@ -556,13 +556,43 @@ Per thread, you MUST:
      ```bash
      BR="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store"
      sqlite3 "$BR/messages.db" "ATTACH '$BR/whatsapp.db' AS wa;
-       WITH map AS (SELECT lid||'@lid' AS lid_jid, pn||'@s.whatsapp.net' AS pn_jid FROM wa.whatsmeow_lid_map),
-            pair AS (SELECT lid_jid, pn_jid FROM map WHERE lid_jid='<CHAT_JID>' OR pn_jid='<CHAT_JID>')
+       WITH seed AS (SELECT '<CHAT_JID>' AS chat_jid),
+            seed_phone AS (
+              SELECT COALESCE(
+                (SELECT phone FROM contacts WHERE jid = (SELECT chat_jid FROM seed)),
+                CASE WHEN (SELECT chat_jid FROM seed) GLOB '*@s.whatsapp.net'
+                  THEN replace((SELECT chat_jid FROM seed), '@s.whatsapp.net', '') END
+              ) AS pn
+            ),
+            map_pair AS (
+              SELECT lid||'@lid' AS lid_jid, pn||'@s.whatsapp.net' AS pn_jid
+              FROM wa.whatsmeow_lid_map
+              WHERE lid||'@lid' = (SELECT chat_jid FROM seed) OR pn||'@s.whatsapp.net' = (SELECT chat_jid FROM seed)
+            ),
+            contact_pair AS (
+              SELECT
+                COALESCE(
+                  CASE WHEN (SELECT chat_jid FROM seed) GLOB '*@lid' THEN (SELECT chat_jid FROM seed) END,
+                  (SELECT jid FROM contacts WHERE phone = (SELECT pn FROM seed_phone) AND jid GLOB '*@lid' LIMIT 1)
+                ) AS lid_jid,
+                COALESCE(
+                  CASE WHEN (SELECT chat_jid FROM seed) GLOB '*@s.whatsapp.net' THEN (SELECT chat_jid FROM seed) END,
+                  (SELECT pn FROM seed_phone) || '@s.whatsapp.net'
+                ) AS pn_jid
+              WHERE (SELECT pn FROM seed_phone) IS NOT NULL AND trim((SELECT pn FROM seed_phone)) != ''
+            ),
+            pair AS (
+              SELECT lid_jid, pn_jid FROM map_pair
+              UNION ALL
+              SELECT lid_jid, pn_jid FROM contact_pair
+              WHERE NOT EXISTS (SELECT 1 FROM map_pair) AND lid_jid IS NOT NULL AND pn_jid IS NOT NULL
+            )
        SELECT is_from_me, content, timestamp, chat_jid FROM messages
        WHERE chat_jid IN (SELECT lid_jid FROM pair UNION SELECT pn_jid FROM pair)
           OR (NOT EXISTS (SELECT 1 FROM pair) AND chat_jid='<CHAT_JID>')
        ORDER BY timestamp;"
      ```
+     If `ATTACH` fails, run the same query against `messages.db` only — omit `map_pair` and let `pair` be `SELECT lid_jid, pn_jid FROM contact_pair WHERE lid_jid IS NOT NULL AND pn_jid IS NOT NULL`.
 
 2. **Read ≥20 messages in BOTH directions before classifying.** Fetch at least 20 messages including BOTH inbound AND the user's own outbound (`is_from_me` / SENT / `Me:`), INCLUDING any `[voice]` transcripts. Never read only the last message, the last-direction flag, or a shallow window. The `last_is_from_me` / last-sender first pass is ONLY a first pass — it does not satisfy this gate. On WhatsApp, fetch/read the merged thread from step 1 (both JIDs), not one chat alone.
 
