@@ -9,11 +9,13 @@ PartOf=whatsapp-bridge.service
 Type=oneshot
 # Batch may run many Whisper calls; disable the default ~90s start timeout.
 TimeoutStartSec=0
+# Relative media paths from /api/download resolve against the bridge cwd.
+WorkingDirectory=__INSTALL_DIR__/whatsapp-bridge
 # OPENAI_API_KEY (and other secrets) for the metered Whisper API.
-EnvironmentFile=%h/.config/systemd/env/mcp-secrets.env
+EnvironmentFile=-%h/.config/systemd/env/mcp-secrets.env
 # Wait up to 10s for the bridge :8080 before downloading media.
 ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5; do ss -ltn 2>/dev/null | grep -q ":8080" && exit 0; sleep 2; done; exit 0'
-ExecStart=/usr/bin/python3 %h/.local/share/whatsapp-mcp/transcriber/transcribe_voice_notes.py --days 2 --max 80
+ExecStart=/usr/bin/python3 __INSTALL_DIR__/transcriber/transcribe_voice_notes.py --days 2 --max 80
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=whatsapp-transcribe
