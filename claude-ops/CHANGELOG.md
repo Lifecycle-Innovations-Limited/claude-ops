@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.18.0 — 2026-05-31
+
+### Added
+- **`pocket-responder`** — one canonical approval responder for the Pocket pipeline
+  and social drafts. A single consumer of bot input and single writer of decisions:
+  - **Button taps** (`✅ Approve` / `❌ Reject` / `a)`/`b)` choices),
+  - **Freeform text** — a regex fast-path (`approve A1`, `A2 b`, `reject A3`) plus an
+    optional LLM mapper (`claude-haiku-4-5`) for natural language (`"approve the
+    second one"`); low-confidence inputs ask to disambiguate rather than guess,
+  - **`social_publish` ASKs** — on approve, publishes a staged draft via the
+    Typefully skill (tap-to-publish), so a social drafter can stage a draft and the
+    owner approves it from one chat surface.
+  - `send` posts one tappable message per open ASK (idempotent, capped) and writes the
+    A/D codemap so taps and text resolve to the same items; `process` drains a single
+    normalized inbox (`responder-inbox.jsonl`). Self-contained — no dependency on
+    `ops-pocket-approvals.py` internals.
+  - New systemd user units `pocket-responder-send.{service,timer}` +
+    `pocket-responder-process.{service,timer}`; wired into `email-cos/install.sh`
+    (enabled when `EMAIL_COS_TG_ENABLE=true` + `EMAIL_COS_TG_CHAT_ID` set).
+
+### Changed
+- `scripts/ops-message-listener.sh` now tees owner-chat button taps **and** freeform
+  text to `responder-inbox.jsonl` for the responder. Owner chat id comes from
+  `RESPONDER_OWNER_CHAT_ID` / `EMAIL_COS_TG_CHAT_ID` / `TELEGRAM_OWNER_ID` (env/config,
+  never hardcoded); the tee is a no-op when unset.
+- `email-cos/install.sh` enables `pocket-responder-*` timers and retires the
+  callback-only `email-cos-tg-process.timer` (folded into the responder).
+
 ## 2.17.0 — 2026-05-30
 
 ### Added
