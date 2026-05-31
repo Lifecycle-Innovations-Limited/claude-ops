@@ -200,11 +200,6 @@ dispatch_fix_agent() {
     return 2  # already in flight
   fi
   local slug="${lock_id%%:*}"
-  if ! budget_check_increment "$slug"; then
-    notify "Auto-fix budget exhausted" "$slug hit hourly cap — manual intervention needed"
-    lock_release "$lock_id"
-    return 3
-  fi
 
   # --- Global concurrency cap (rc=6) ---
   local _active_dir="$STATE_DIR/active"
@@ -227,6 +222,10 @@ dispatch_fix_agent() {
     lock_release "$lock_id"
     return 6
   fi
+  local _lock_safe _pidfile
+  _lock_safe=$(printf '%s' "$lock_id" | tr '/: ' '---')
+  _pidfile="$_active_dir/${_lock_safe}-$$.pid"
+  echo $$ > "$_pidfile"
 
   # --- Fleet-claim dedup (rc=7) ---
   local _fleet_file="$HOME/.claude/state/fleet-tui.json"
@@ -237,12 +236,13 @@ dispatch_fix_agent() {
     _fleet_active=$(jq -r --arg full "$_fix_repo" --arg bare "$_repo_bare" '
       .agents // [] |
       map(select(
-        (.status | ascii_downcase | test("running|in_progress|working|active")) and
+        (.status | ascii_downcase | test("^(running|in_progress|working|active)$")) and
         (.repo == $full or .repo == $bare)
       )) | length
     ' "$_fleet_file" 2>/dev/null || echo "0")
     if [ "${_fleet_active:-0}" -gt 0 ] 2>/dev/null; then
       notify "Fleet agent active" "fleet agent already working on $_fix_repo — deploy-fixer skipped"
+      rm -f "$_pidfile"
       lock_release "$lock_id"
       return 7
     fi
@@ -258,6 +258,7 @@ dispatch_fix_agent() {
   # If the agent file is absent, treat as misconfiguration: release the lock
   # and surface rc=4 so callers can fall back to manual notification.
   if [ ! -f "$PLUGIN_ROOT/agents/$agent_name.md" ]; then
+    rm -f "$_pidfile"
     lock_release "$lock_id"
     return 4
   fi
@@ -276,16 +277,19 @@ dispatch_fix_agent() {
   local danger_flag="--permission-mode acceptEdits"
   [ "$(config allow_dangerous false)" = "true" ] && danger_flag="--dangerously-skip-permissions"
 
-  command -v claude >/dev/null || { lock_release "$lock_id"; return 5; }
+  command -v claude >/dev/null || { rm -f "$_pidfile"; lock_release "$lock_id"; return 5; }
+
+  if ! budget_check_increment "$slug"; then
+    notify "Auto-fix budget exhausted" "$slug hit hourly cap — manual intervention needed"
+    rm -f "$_pidfile"
+    lock_release "$lock_id"
+    return 3
+  fi
 
   # Capture invoker path so the nohup subshell can source it without relying
   # on $PLUGIN_ROOT being exported (it may not be in all caller environments).
   local _invoker="$PLUGIN_ROOT/scripts/lib/claude-invoke.sh"
 
-  # Register active pidfile BEFORE the nohup so the count is accurate.
-  # Sanitize lock_id for use as a filename (replace / and : with -).
-  local _lock_safe
-  _lock_safe=$(printf '%s' "$lock_id" | tr '/: ' '---')
   local _fix_repo_for_sidecar="${DEPLOY_FIX_REPO:-unknown}"
   local _epoch
   _epoch=$(date +%s)
@@ -293,40 +297,46 @@ dispatch_fix_agent() {
   _started_iso=$(date -u +%FT%TZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
   local _sidecar_dir="$HOME/.claude/state"
   local _sidecar_file="$_sidecar_dir/deploy-fix-active.jsonl"
+  local _census_id="${_lock_safe}-${_epoch}"
+  local _register_census
+  _register_census=$(config register_in_fleet_census true)
+
+  # Fleet census sidecar — "running" before background work so it always precedes "done".
+  if [ "$_register_census" = "true" ]; then
+    mkdir -p "$_sidecar_dir"
+    touch "$_sidecar_file"
+    jq -nc \
+      --arg id "$_census_id" \
+      --arg repo "$_fix_repo_for_sidecar" \
+      --arg started "$_started_iso" \
+      '{id:$id,name:("deploy-fix:"+$repo),status:"running",repo:$repo,branch:"deploy-fix",source:"deploy-fix",started:$started}' \
+      >> "$_sidecar_file" 2>/dev/null || true
+  fi
 
   nohup bash -c "
+    _census_done=0
+    _on_exit() {
+      rm -f '$_pidfile'
+      rm -f '$STATE_DIR/lock-$lock_id'
+      if [ '$_register_census' = 'true' ] && [ \"\$_census_done\" = 0 ]; then
+        _census_done=1
+        _ended_iso=\$(date -u +%FT%TZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+        printf '%s\n' \"\$(jq -nc \
+          --arg id '$_census_id' \
+          --arg repo '$_fix_repo_for_sidecar' \
+          --arg ended \"\$_ended_iso\" \
+          '{id:\$id,name:\"deploy-fix:\"+\$repo,status:\"done\",repo:\$repo,branch:\"deploy-fix\",source:\"deploy-fix\",ended:\$ended}' \
+          2>/dev/null || true)\" >> '$_sidecar_file' 2>/dev/null || true
+      fi
+    }
+    trap _on_exit EXIT
     . '$_invoker'
     printf '%s' \"\$1\" | claude_invoke -p --agent $agent_name $danger_flag --no-session-persistence > '$fix_log' 2>&1
-    _ended_iso=\$(date -u +%FT%TZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
-    rm -f '$STATE_DIR/lock-$lock_id'
-    rm -f '$_active_dir/${_lock_safe}-\$\$.pid'
-    if [ '$(config register_in_fleet_census true)' = 'true' ]; then
-      printf '%s\n' \"\$(jq -nc \
-        --arg id '${_lock_safe}-${_epoch}' \
-        --arg repo '$_fix_repo_for_sidecar' \
-        --arg ended \"\$_ended_iso\" \
-        '{id:\$id,name:\"deploy-fix:\"+\$repo,status:\"done\",repo:\$repo,branch:\"deploy-fix\",source:\"deploy-fix\",ended:\$ended}' \
-        2>/dev/null || true)\" >> '$_sidecar_file' 2>/dev/null || true
-    fi
   " _ "$brief" </dev/null >/dev/null 2>&1 &
   local _bg_pid=$!
   disown 2>/dev/null || true
 
-  # Write pidfile now that we have the background PID.
-  echo "$_bg_pid" > "$_active_dir/${_lock_safe}-${_bg_pid}.pid"
-
-  # Fleet census sidecar — "running" entry on launch.
-  if [ "$(config register_in_fleet_census true)" = "true" ]; then
-    mkdir -p "$_sidecar_dir"
-    touch "$_sidecar_file"
-    jq -nc \
-      --arg id "${_lock_safe}-${_epoch}" \
-      --arg repo "$_fix_repo_for_sidecar" \
-      --arg started "$_started_iso" \
-      --argjson pid "$_bg_pid" \
-      '{id:$id,name:("deploy-fix:"+$repo),status:"running",repo:$repo,branch:"deploy-fix",source:"deploy-fix",pid:$pid,started:$started}' \
-      >> "$_sidecar_file" 2>/dev/null || true
-  fi
+  echo "$_bg_pid" > "$_pidfile"
 
   echo "$fix_log"
   return 0
