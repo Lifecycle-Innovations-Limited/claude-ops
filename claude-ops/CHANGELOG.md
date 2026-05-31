@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.17.0 — 2026-05-30
+
+### Added
+- **FLOW unification layer** (`/flow`) — one entrypoint over the three overlapping
+  command systems (gstack dev-lifecycle, GSD `.planning/` phase machine, claude-ops
+  `/ops:*`). Router/facade only — does NOT merge codebases; all three stay installed
+  and self-updating, `/flow` delegates to the single canonical command per stage.
+  - `skills/flow/SKILL.md` — the `/flow` router (keyword→canonical), mirrors the
+    `/ops:ops` routing-table pattern.
+  - `skills/flow/FLOW.md` — canonical lifecycle map (single source of truth):
+    ideate→spec→plan→design→build→review→test→ship→deploy→monitor→retro, plus the
+    **project-mode vs ad-hoc-mode** rule (repo `.planning/` state picks the
+    abstraction level: GSD phase machine vs gstack stateless lifecycle).
+  - `bin/flow-state` — "you are here" detector (mode + GSD phase + open PRs);
+    GitHub-quota-safe (single non-watch `gh` call), `--json` for machines.
+  - `docs/flow-guide.md` — user guide.
+
 ## 2.16.0 — 2026-05-29
 
 ### Added
