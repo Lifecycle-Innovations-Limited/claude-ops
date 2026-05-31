@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.18.9] - 2026-05-31
+
+### Added
+- `bin/ops-release` now bumps **package.json** (the `claude-ops-bin` npm package) in lockstep with plugin.json + the marketplace registry, so all version files stay in sync. Auto-detects package.json under `claude-ops/` or the repo root.
+
+### Fixed
+- Reconciled `claude-ops/package.json` version (was stuck at 2.15.0 because the prior release path never touched it) up to the current plugin version.
+
+### Changed
+- `RELEASE.md` documents the 4 version-bearing files and the package.json lockstep.
+
 ## 2.18.8 — 2026-05-31
 
 ### Fixed
@@ -169,14 +180,12 @@
   per-service cost deltas. No mutations; cleanup stays human-gated.
 - `scripts/install-aws-audit-cron.sh` — optional daily `systemd --user` timer.
 
-
 All notable changes to this project will be documented in this file.
 
 ## [2.18.6] - 2026-05-31
 
 ### Changed
 fix(whatsapp-bridge): build with -tags sqlite_fts5 so the bridge's SQLite has the fts5 module — fixes silent message-storage failure where every INSERT hit the messages_fts triggers and failed with "no such module: fts5". ops-autofix now verifies binary fts5 capability before running the migration (PR #412).
-
 
 ## [2.18.5] - 2026-05-31
 
@@ -186,7 +195,6 @@ fix(whatsapp-bridge): build with -tags sqlite_fts5 so the bridge's SQLite has th
 
 ### Changed
 - ops-bg: `dispatch` now defaults the fleet/background agent working dir to `~/Projects` (override via `$OPSBG_DIR` or `--cwd`) and `cd`s into it before exec, so fleet agents start at the workspace root instead of an arbitrary repo (#410).
-
 
 ## [Unreleased]
 
@@ -202,20 +210,17 @@ fix(whatsapp-bridge): build with -tags sqlite_fts5 so the bridge's SQLite has th
 
 _(Ports two patches that had been applied directly on the deploy box into the repo, so the live checkout can track main cleanly.)_
 
-
 ## [2.14.1] — 2026-05-29
 
 ### Fixed
 
 - **`ops-pocket-notify` wrapper resolves symlinks.** The `bin/ops-pocket-notify` bash wrapper computed the Python script path from `dirname "$0"`, which resolves relative to a PATH symlink's directory rather than the real file — so invoking it via a `~/.local/bin` symlink failed to find `../scripts/ops-pocket-notify.py`. Now `readlink -f`s itself first. Also syncs `package.json` (had drifted to 2.13.0) to the plugin version.
 
-
 ## [2.13.0] — 2026-05-29
 
 ### Added
 
 - **Config-driven pocket notifications (`ops-pocket-notify`) — interactive setup of which events, which channels, when.** Pocket components emit an *event id*; the new `bin/ops-pocket-notify` dispatcher decides routing from `preferences.json → pocket.notifications`: per-event channels (telegram/email/whatsapp/slack via the existing senders + out-queue), plus a **full per-event schedule** — cooldown, quiet-hours, active-days, and severity escalation (high bypasses windows). New events are **off by default**. `/ops:ops-settings → Configure notifications` walks each event interactively (channels + schedule + dry-run test-send) and writes the prefs; `docs/pocket-notifications.md` documents the schema + event taxonomy. The executor emits `worker.spawned` / `worker.failed`, and the env-broker's notify hook points at the dispatcher. `--dry-run --json` resolves routing without sending (used by setup + tests).
-
 
 ## [2.12.0] — 2026-05-29
 
@@ -225,20 +230,17 @@ _(Ports two patches that had been applied directly on the deploy box into the re
 - **Env-broker observability.** The broker keeps a metrics snapshot (`env-broker-health.json`: request/grant/deny/uid-rejection counters, recent denials, `anomaly` flag), exposes `pocket-env-broker --status [--json]`, and surfaces an `Env-broker` line in `/ops:ops-status` that raises a `⚠` anomaly on any uid rejection (a prompt-injection probing signal).
 - **Env-broker push notifications (opt-in).** Set `POCKET_ENV_BROKER_NOTIFY_CMD` (+ `POCKET_ENV_BROKER_NOTIFY_COOLDOWN`, default 300s) and the broker fires that command with an alert on uid rejections / not-allowed denials — rate-limited, best-effort, never blocking request handling. Wired to the operator's own chat it is a self-notification (outbound-comms-gate exempt).
 
-
 ## [2.11.9] — 2026-05-29
 
 ### Security
 
 - **Pocket executor: optional least-privilege worker isolation (`POCKET_WORKER_USER`).** `ops-cron-pocket-executor.py` can now launch each `claude --bg` worker as a restricted unix user via `sudo -n -H -u <user>` instead of inheriting the executor user's full privileges, capping the blast radius of a prompt-injected or auto-promoted task. Opt-in: set `POCKET_WORKER_USER` (and optionally `POCKET_WORKER_CLAUDE_CONFIG_DIR` to point the worker at a readable Claude config). Default unset = unchanged behaviour. `--dangerously-skip-permissions` is retained (required for unattended `--bg` workers) but is now bounded by the worker user's FS/network grants rather than running with the executor's full access.
 
-
 ## [2.11.8] — 2026-05-29
 
 ### Security
 
 - **Account-rotation config: stop tracking `config.json`; readers prefer the gitignored override.** `rotate.mjs` and `kapture-claim-credits.mjs` now resolve the rotation config from `$CLAUDE_PLUGIN_DATA_DIR/account-rotation-config.json` (where `setup-account.mjs` already writes real accounts), falling back to a local gitignored `config.json` and then the shipped empty `config.example.json`. `config.json` is `git rm --cached`'d so real emails can never land in a tracked file (it was already in `.gitignore` but remained tracked). No data was ever leaked to the remote — the committed `config.json` was always the empty default; this closes the accidental-commit footgun.
-
 
 ## [2.11.7] — 2026-05-29
 
@@ -259,7 +261,6 @@ _(Ports two patches that had been applied directly on the deploy box into the re
 ### Changed
 
 - **`/ops-inbox` multi-channel scan is now a parallel `Workflow` fan-out** — the scan/classify phase spawns one **read-only** scanner agent per *available* channel concurrently (via the `Workflow` tool), each returning structured classified results (NEEDS_REPLY / WAITING / HANDLED / FYI + the `chatId` needed to reply), then a synthesizer merges them into prioritized buckets. Wall-clock collapses from sum-of-channels to slowest-single-channel. Rule 6 is preserved end-to-end: scanners are explicitly read-only (never send/archive/mutate) and **all** reply drafting, approval, and sending stay in the main session under the one-draft→one-approval→one-send gate; channels are availability-detected first so no scanner is spawned for an unconfigured channel. Agent Teams and sequential scan are retained as documented fallbacks for older harnesses under the same constraints.
-
 
 ## [2.11.6] — 2026-05-27
 
@@ -481,7 +482,6 @@ Builds on v2.6.0 (`/ops:marketing <project>` point-and-go).
 ### Tests
 
 107 tests passing across 6 test files: `test-ad-spend-aggregator.sh` (18), `test-stripe-revenue.sh` (6), `test-sentry-crash.sh` (2), `test-marketing-kpis.sh` (36), `test-ops-marketing-link-prewarm.sh` (15), `test-ops-marketing-auth-prewarm.sh` (1), plus all existing `test-ops-marketing-provision.sh` (11). Zero secrets leaked (`test-no-secrets.sh` 14/14 green).
-
 
 ## [2.6.0] — 2026-05-19
 
