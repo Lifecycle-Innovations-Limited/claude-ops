@@ -295,7 +295,7 @@ Workflow({
     { key: 'slack',    select: 'select:mcp__slack__conversations_unreads,mcp__slack__channels_list,mcp__slack__conversations_history,mcp__slack__conversations_replies',
       steps: 'conversations_unreads to find unread DMs/channels; read latest via history/replies.' },
     { key: 'whatsapp', select: 'select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__get_chat',
-      steps: 'list_chats {sort_by:"last_active"}; last_is_from_me is ONLY a first pass. FIRST merge each person lid<->phone chats into one conversation via whatsmeow_lid_map (store/whatsapp.db) so a contact is not double-counted as NEEDS_REPLY on @lid and WAITING on the phone JID. Then, before any NEEDS_REPLY, clear the FULL-THREAD AWARENESS GATE: list_messages {chat_jid, limit: 25} on the MERGED thread reading BOTH directions including is_from_me=1 rows and [voice] transcripts, write the 2-sentence arc summary, and reconcile the user own sends that may be missing from the store. Never classify from the last message alone.' },
+      steps: 'list_chats {sort_by:"last_active"}; last_is_from_me is ONLY a first pass. FIRST merge each person lid<->phone chats into one conversation via whatsmeow_lid_map (store/whatsapp.db) so a contact is not double-counted as NEEDS_REPLY on @lid and WAITING on the phone JID. Then, before any NEEDS_REPLY, clear the FULL-THREAD AWARENESS GATE: list_messages {chat_jid, limit: 25} for EACH mapped JID (or the DB union recipe), merge by timestamp, read BOTH directions including is_from_me=1 rows and [voice] transcripts, write the 2-sentence arc summary, and reconcile the user own sends that may be missing from the store. Never classify from the last message alone.' },
     { key: 'imessage', select: 'select:mcp__plugin_imessage_imessage__chat_messages',
       steps: 'chat_messages {limit:30} (omit chat_guid); classify each thread by who sent the LAST message. Capture the chat_id GUID from each header.' },
     { key: 'telegram', select: 'select:mcp__plugin_ops_telegram__list_dialogs,mcp__plugin_ops_telegram__get_messages,mcp__plugin_ops_telegram__search_messages',
@@ -547,33 +547,35 @@ If only 3 channels are configured, "All channels" + 3 channel options = 4, fits 
 
 Per thread, you MUST:
 
-1. **Read ≥20 messages in BOTH directions before classifying.** Fetch at least 20 messages including BOTH inbound AND the user's own outbound (`is_from_me` / SENT / `Me:`), INCLUDING any `[voice]` transcripts. Never read only the last message, the last-direction flag, or a shallow window. The `last_is_from_me` / last-sender first pass is ONLY a first pass — it does not satisfy this gate.
+1. **Collapse the same person's lid↔phone chats into ONE conversation (WhatsApp only — BLOCKING, do this BEFORE steps 2–3).** Skip on non-WhatsApp channels. whatsmeow stores the same human as TWO separate chats: a `<lid>@lid` chat and a `<pn>@s.whatsapp.net` chat. A naïve per-JID scan therefore counts one person twice — routinely as **NEEDS_REPLY on one JID and WAITING on the other simultaneously** — inflates the counts, mis-prioritises, and reads only HALF the history, so you draft off a fragmented arc. This is a guaranteed every-run defect, not operator carelessness. Before classifying ANY WhatsApp chat you MUST map its JID to the person and merge:
+   - The authoritative map is `whatsmeow_lid_map (lid PRIMARY KEY, pn UNIQUE)` in `store/whatsapp.db`. The `contacts.phone` column in `messages.db` (populated by `link_contacts.py`) is the fallback when the map is unreachable.
+   - Treat both JIDs as ONE thread: take the UNION of their messages, sort by `timestamp`, and classify on the TRUE last message of the merged thread. Steps 2–5 below apply to this merged thread, not a single JID.
+   - Reply to whichever JID the person is **currently active on** (usually the `@lid` chat for recent conversations); note the `<pn>` so a phone-sent reply on the other JID is reconciled, not re-flagged.
+   - MCP path: call `mcp__whatsapp__list_messages {chat_jid, limit: 25}` for **each** mapped JID (`@lid` and `@s.whatsapp.net`), merge results by timestamp. `list_messages` is per-chat — one call cannot cover both.
+   - DB recipe (works on the headless/no-MCP path too; substitute `<CHAT_JID>` with whichever JID you started from — `@lid` or phone):
+     ```bash
+     BR="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store"
+     sqlite3 "$BR/messages.db" "ATTACH '$BR/whatsapp.db' AS wa;
+       WITH map AS (SELECT lid||'@lid' AS lid_jid, pn||'@s.whatsapp.net' AS pn_jid FROM wa.whatsmeow_lid_map),
+            pair AS (SELECT lid_jid, pn_jid FROM map WHERE lid_jid='<CHAT_JID>' OR pn_jid='<CHAT_JID>')
+       SELECT is_from_me, content, timestamp, chat_jid FROM messages
+       WHERE chat_jid IN (SELECT lid_jid FROM pair UNION SELECT pn_jid FROM pair)
+          OR (NOT EXISTS (SELECT 1 FROM pair) AND chat_jid='<CHAT_JID>')
+       ORDER BY timestamp;"
+     ```
 
-2. **Reconcile outbound the store may be missing.** The user often replies from their phone or by voice, and historic sends weren't always persisted. Before trusting "they sent last", check:
+2. **Read ≥20 messages in BOTH directions before classifying.** Fetch at least 20 messages including BOTH inbound AND the user's own outbound (`is_from_me` / SENT / `Me:`), INCLUDING any `[voice]` transcripts. Never read only the last message, the last-direction flag, or a shallow window. The `last_is_from_me` / last-sender first pass is ONLY a first pass — it does not satisfy this gate. On WhatsApp, fetch/read the merged thread from step 1 (both JIDs), not one chat alone.
+
+3. **Reconcile outbound the store may be missing.** The user often replies from their phone or by voice, and historic sends weren't always persisted. Before trusting "they sent last", check:
    - **`[voice]` transcripts** — a `[voice] …` body is the sender's words; read it as a real message in both directions.
    - **The bridge send-log** — `journalctl --user -u whatsapp-bridge.service --no-pager | grep "Received request to send message"` surfaces outbound `/api/send` calls that pre-#404 were NOT written to `messages.db`. If the user sent there, the thread is answered.
    - **The SAME contact's sends in OTHER threads/groups and other channels** — the user may have answered the same person in a group, on a secondary number, or via email/iMessage. Search the contact/topic across threads and channels (`mcp__whatsapp__list_messages {query, limit: 25}`, cross-channel search).
 
-2b. **Collapse the same person's lid↔phone chats into ONE conversation (WhatsApp identity merge — BLOCKING).** whatsmeow stores the same human as TWO separate chats: a `<lid>@lid` chat and a `<pn>@s.whatsapp.net` chat. A naïve per-JID scan therefore counts one person twice — routinely as **NEEDS_REPLY on one JID and WAITING on the other simultaneously** — inflates the counts, mis-prioritises, and reads only HALF the history, so you draft off a fragmented arc. This is a guaranteed every-run defect, not operator carelessness. Before classifying ANY WhatsApp chat you MUST map its JID to the person and merge:
-   - The authoritative map is `whatsmeow_lid_map (lid PRIMARY KEY, pn UNIQUE)` in `store/whatsapp.db`. The `contacts.phone` column in `messages.db` (populated by `link_contacts.py`) is the fallback when the map is unreachable.
-   - Treat both JIDs as ONE thread: take the UNION of their messages, sort by `timestamp`, and classify on the TRUE last message of the merged thread. Read the merged history for the 2-sentence arc and for reply context.
-   - Reply to whichever JID the person is **currently active on** (usually the `@lid` chat for recent conversations); note the `<pn>` so a phone-sent reply on the other JID is reconciled, not re-flagged.
-   - DB recipe (works on the headless/no-MCP path too):
-     ```bash
-     BR="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store"
-     sqlite3 "$BR/messages.db" "ATTACH '$BR/whatsapp.db' AS wa;
-       WITH map AS (SELECT lid||'@lid' AS lid_jid, pn||'@s.whatsapp.net' AS pn_jid FROM wa.whatsmeow_lid_map)
-       SELECT is_from_me, content, timestamp, chat_jid FROM messages
-       WHERE chat_jid IN (SELECT lid_jid FROM map WHERE pn_jid='<PHONE_JID>')
-          OR chat_jid='<PHONE_JID>'
-       ORDER BY timestamp;"
-     ```
+4. **Write a 2-sentence conversation-arc summary proving comprehension** — who said what, and what is actually pending right now. If you cannot write it, you have NOT read enough: read more messages; do NOT classify.
 
-3. **Write a 2-sentence conversation-arc summary proving comprehension** — who said what, and what is actually pending right now. If you cannot write it, you have NOT read enough: read more messages; do NOT classify.
+5. **Mark NEEDS_REPLY ONLY if the last INBOUND message is genuinely unanswered** after steps 2–4. If the user already replied ANYWHERE — including phone-sent or voice messages that may be ABSENT from the companion store — it is WAITING or HANDLED, never NEEDS_REPLY. **Trust the user's word over the store**: if the user says they answered, they answered, even if the store doesn't show it.
 
-4. **Mark NEEDS_REPLY ONLY if the last INBOUND message is genuinely unanswered** after steps 1–3. If the user already replied ANYWHERE — including phone-sent or voice messages that may be ABSENT from the companion store — it is WAITING or HANDLED, never NEEDS_REPLY. **Trust the user's word over the store**: if the user says they answered, they answered, even if the store doesn't show it.
-
-5. **This is a scan-correctness invariant, not a suggestion.** A NEEDS_REPLY produced without the 2-sentence arc summary is a scan bug. Do not present it.
+6. **This is a scan-correctness invariant, not a suggestion.** A NEEDS_REPLY produced without the 2-sentence arc summary is a scan bug. Do not present it.
 
 The per-channel classify/draft steps below (WhatsApp, iMessage, email) all reference this gate — clearing it is a precondition, not an optional enrichment pass.
 
