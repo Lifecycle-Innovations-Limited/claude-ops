@@ -4,12 +4,12 @@
 #
 #   1. ensure the whatsmeow bridge is up + connected (restart if :8080 is dead)
 #   2. force a history backfill (POST /api/backfill)
-#   3. fill any new voice notes with transcripts (whatsapp-transcribe.service)
-#   4. wait (bounded) for the store's newest message to settle
+#   3. wait (bounded) for the store's newest message to settle
+#   4. queue voice transcription (async; does not block on Whisper)
 #   5. print a FRESHNESS report so the caller never classifies blind
 #
 # Exit 0 = store is as-fresh-as-this-bridge-can-be (report printed).
-# Exit 2 = bridge unreachable and could not be recovered (do NOT trust the store).
+# Exit 2 = bridge unreachable or messages store unreadable (do NOT trust the store).
 #
 # HARD LIMIT (state it, don't hide it): messages YOU send from your PHONE may not
 # replicate to a companion bridge — WhatsApp's multi-device protocol does not
@@ -43,16 +43,21 @@ if journalctl --user -u whatsapp-bridge.service -n 40 --no-pager 2>/dev/null \
   log "wa-fresh: bridge connected ✓"
 fi
 
-before=$(sqlite3 "$DB" "SELECT COALESCE(datetime(MAX(timestamp)),'1970-01-01') FROM messages;" 2>/dev/null)
+if [ ! -r "$DB" ]; then
+  log "wa-fresh: ERROR messages store missing or unreadable at $DB — do not trust it"
+  exit 2
+fi
+
+before=$(sqlite3 "$DB" "SELECT COALESCE(datetime(MAX(timestamp)),'1970-01-01') FROM messages;") || {
+  log "wa-fresh: ERROR cannot read messages store at $DB — do not trust it"
+  exit 2
+}
 
 # 2. force backfill
 code=$(curl -fsS -m 20 -X POST -o /dev/null -w "%{http_code}" "$BRIDGE/api/backfill" 2>/dev/null || echo "ERR")
 log "wa-fresh: backfill → HTTP ${code}"
 
-# 3. transcribe any freshly-synced voice notes (idempotent, lock-guarded)
-systemctl --user start whatsapp-transcribe.service 2>/dev/null && log "wa-fresh: voice transcription triggered"
-
-# 4. bounded wait for the store to settle
+# 3. bounded wait for the store to settle (after backfill, before transcription)
 new=0
 for i in $(seq 1 "$WAIT_TICKS"); do
   sleep 4
@@ -60,9 +65,19 @@ for i in $(seq 1 "$WAIT_TICKS"); do
   [ "${cnt:-0}" -gt 0 ] && { new=$cnt; break; }
 done
 
+# 4. transcribe voice notes synced during backfill (async — gate stays bounded)
+if systemctl --user start --no-block whatsapp-transcribe.service 2>/dev/null; then
+  log "wa-fresh: voice transcription queued"
+else
+  log "wa-fresh: voice transcription not started"
+fi
+
 # 5. freshness report
-after=$(sqlite3 "$DB" "SELECT COALESCE(datetime(MAX(timestamp)),'?') FROM messages;" 2>/dev/null)
-age_min=$(sqlite3 "$DB" "SELECT CAST((julianday('now')-julianday(MAX(timestamp)))*1440 AS INT) FROM messages;" 2>/dev/null)
+after=$(sqlite3 "$DB" "SELECT COALESCE(datetime(MAX(timestamp)),'?') FROM messages;") || {
+  log "wa-fresh: ERROR cannot read messages store at $DB — do not trust it"
+  exit 2
+}
+age_min=$(sqlite3 "$DB" "SELECT CAST((julianday('now')-julianday(MAX(timestamp)))*1440 AS INT) FROM messages;") || age_min=""
 log "wa-fresh: newest message = ${after} (${age_min:-?} min old) | new rows this cycle = ${new}"
 if [ "${age_min:-9999}" -gt 120 ]; then
   log "wa-fresh: WARNING newest message is >2h old — store may be lagging; treat 'last-sender' classification with caution"
