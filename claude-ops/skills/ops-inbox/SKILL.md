@@ -79,15 +79,21 @@ If you find yourself reaching for any `wacli ...` shell command, stop and use th
 
 Before executing, load available context:
 
-0. **Auto-sync WhatsApp in the background (DEFAULT — every invocation)** — the FIRST thing this skill does, before any scan or menu, is fire a recent-conversation history backfill **and** a contacts-link in the background, non-blocking. The backfill pulls recent messages for the 50 most-active chats; the link populates `messages.db.contacts` from the whatsmeow session store so both `<pn>@s.whatsapp.net` and `<lid>@lid` chat JIDs resolve to names (without it the `contacts` table is empty and LID-format chats show raw phone numbers). Both are idempotent and safe to run every time:
+0. **Auto-sync WhatsApp in the background (DEFAULT — every invocation)** — the FIRST thing this skill does, before any scan or menu, is guarantee the store is fresh, then fire a recent-conversation history backfill **and** a contacts-link in the background, non-blocking.
+
+   **0a. Freshness gate (run FIRST, blocking, bounded).** Before classifying anything, run `~/bin/wa-inbox-fresh.sh` (shipped by `scripts/install-whatsapp-bridge-linux.sh`). It probes the bridge with a real **curl connection probe** (`curl -s -m4 http://127.0.0.1:8080/`), forces a backfill, triggers voice-note transcription, and waits (bounded ~32s) for the newest message to settle, then prints a FRESHNESS report (`newest message = … (N min old)`). It **only restarts the bridge if the curl probe genuinely fails twice** — do NOT gate liveness on `ss | grep :8080`, because `ss` renders port 8080 as the service name `webcache`, so the grep never matches and you'd needlessly bounce a healthy bridge. Exit 2 means the bridge is down and unrecoverable → the store is STALE, do not trust last-sender classification.
+
+   **0b. Background backfill + contacts-link** (idempotent, safe every time). The backfill pulls recent messages for the 50 most-active chats; the link populates `messages.db.contacts` from the whatsmeow session store so both `<pn>@s.whatsapp.net` and `<lid>@lid` chat JIDs resolve to names (without it the `contacts` table is empty and LID-format chats show raw phone numbers):
    ```bash
    BR="${WHATSAPP_BRIDGE_DIR:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
-   if lsof -i :8080 2>/dev/null | grep -q LISTEN; then
+   if curl -s -o /dev/null -m 4 http://127.0.0.1:8080/ 2>/dev/null; then
      curl -fsS -m 10 -X POST http://127.0.0.1:8080/api/backfill >/dev/null 2>&1 &   # recent-conversation backfill
      [ -f "$BR/link_contacts.py" ] && python3 "$BR/link_contacts.py" >/dev/null 2>&1 &  # contacts link (phone + LID aliases)
    fi
    ```
    Kick this off, then continue with the steps below while it runs — give the link ~2s before name-resolving chats. `link_contacts.py` resolves names via `whatsmeow_contacts` + `whatsmeow_lid_map` (name preference: full_name → first_name → push_name → business_name). It ships via `scripts/install-whatsapp-bridge-linux.sh` into the bridge dir; recreate it from `whatsmeow_contacts`/`whatsmeow_lid_map` if absent.
+
+   **0c. Voice notes are first-class.** Incoming voice notes (`media_type='audio'`, empty `content`) are auto-transcribed into `content` as `[voice] <text>` by the `whatsapp-transcribe.timer` (systemd-user, every 10 min, OpenAI `whisper-1`) — and `wa-inbox-fresh.sh` triggers a transcribe pass on every scan. So a voice note shows up in NEEDS_REPLY / thread scans exactly like a text message; treat a `[voice] …` body as the sender's words. Transcription is idempotent (only ever fills empty audio rows, never clobbers real text) and capped per run, so it never re-bills or stacks.
 
 1. **Self-heal plugin version pin** — if any `${CLAUDE_PLUGIN_DATA_DIR}` file or `~/.claude/plugins/installed_plugins.json` references a `cache/ops-marketplace/ops/X.Y.Z/` path that no longer exists on disk, downstream hooks (`stop-all.sh`, `ops-post-session-cleanup`) emit `Plugin directory does not exist`. Resolve before scanning:
    ```bash
@@ -181,7 +187,7 @@ lsof -i :8080 | grep -q LISTEN && echo "bridge up" || journalctl --user -u whats
 ```bash
 bash "$CLAUDE_PLUGIN_ROOT/scripts/install-whatsapp-bridge-linux.sh" --wa-phone <E.164>
 ```
-This clones lharries/whatsapp-mcp into `~/.local/share/whatsapp-mcp`, applies the in-repo claude-ops patches (Fix A/B pair-phone hardening, auto-backfill on Connected, `POST /api/backfill` REST endpoint, crash-safe `requestHistorySync`, Python LID↔phone↔contact resolver), drops three systemd-user units (`whatsapp-bridge.service`, `whatsapp-backfill.service`, `whatsapp-backfill.timer`), enables linger, and emits the pairing code via `journalctl --user -u whatsapp-bridge -f`. Idempotent: re-running is safe and updates patches in place.
+This clones lharries/whatsapp-mcp into `~/.local/share/whatsapp-mcp`, applies the in-repo claude-ops patches (Fix A/B pair-phone hardening, auto-backfill on Connected, `POST /api/backfill` REST endpoint, crash-safe `requestHistorySync`, Python LID↔phone↔contact resolver), drops the systemd-user units (`whatsapp-bridge.service`, `whatsapp-backfill.{service,timer}`, `whatsapp-transcribe.{service,timer}`), installs the voice-note transcriber (`transcriber/transcribe_voice_notes.py`) and the pre-scan freshness gate (`~/bin/wa-inbox-fresh.sh`), enables linger, and emits the pairing code via `journalctl --user -u whatsapp-bridge -f`. Idempotent: re-running is safe and updates patches in place. Pass `--no-transcribe-timer` to skip voice-note transcription. The transcribe service reads `OPENAI_API_KEY` from `~/.config/systemd/env/mcp-secrets.env`.
 
 **MCP tools** (use these instead of any wacli CLI command):
 
