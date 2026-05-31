@@ -20,6 +20,8 @@
 #   --reset-session        Delete whatsapp.db so a fresh pair code is
 #                          generated (you'll need to scan with the phone)
 #   --no-backfill-timer    Drop only the bridge unit, skip the 2h timer
+#   --no-transcribe-timer  Skip the 10-min voice-note transcription timer
+#                          (voice notes won't be auto-transcribed into content)
 
 set -euo pipefail
 
@@ -32,6 +34,7 @@ INSTALL_DIR="$INSTALL_DIR_DEFAULT"
 SKIP_BUILD=0
 RESET_SESSION=0
 WITH_BACKFILL_TIMER=1
+WITH_TRANSCRIBE_TIMER=1
 
 # Source-tree dir (where this script lives in claude-ops checkout)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,6 +52,7 @@ while (("$#")); do
     --skip-build)          SKIP_BUILD=1; shift ;;
     --reset-session)       RESET_SESSION=1; shift ;;
     --no-backfill-timer)   WITH_BACKFILL_TIMER=0; shift ;;
+    --no-transcribe-timer) WITH_TRANSCRIBE_TIMER=0; shift ;;
     -h|--help)             usage 0 ;;
     *) echo "unknown flag: $1" >&2; usage 1 ;;
   esac
@@ -76,6 +80,7 @@ echo "▶ claude-ops WhatsApp bridge install"
 echo "  install dir: $INSTALL_DIR"
 echo "  wa-phone:    $WA_PHONE"
 echo "  backfill timer: $([ "$WITH_BACKFILL_TIMER" -eq 1 ] && echo on || echo off)"
+echo "  transcribe timer: $([ "$WITH_TRANSCRIBE_TIMER" -eq 1 ] && echo on || echo off)"
 
 # ─── Clone / refresh upstream ────────────────────────────────────────────────
 mkdir -p "$(dirname "$INSTALL_DIR")"
@@ -95,6 +100,18 @@ python3 "$WA_ASSETS/apply-patches.py" --install-dir "$INSTALL_DIR"
 echo "▶ Installing link_contacts.py (contacts link: phone + LID aliases)"
 cp "$WA_ASSETS/link_contacts.py" "$INSTALL_DIR/whatsapp-bridge/link_contacts.py"
 chmod +x "$INSTALL_DIR/whatsapp-bridge/link_contacts.py"
+
+# ─── Ship voice-note transcriber (whatsapp-transcribe.timer runs it) ──────────
+echo "▶ Installing transcribe_voice_notes.py (Whisper voice-note → content)"
+mkdir -p "$INSTALL_DIR/transcriber"
+cp "$WA_ASSETS/transcribe_voice_notes.py" "$INSTALL_DIR/transcriber/transcribe_voice_notes.py"
+chmod +x "$INSTALL_DIR/transcriber/transcribe_voice_notes.py"
+
+# ─── Ship wa-inbox-fresh.sh (pre-scan freshness gate, run FIRST by ops-inbox) ─
+echo "▶ Installing wa-inbox-fresh.sh → ~/bin (pre-scan freshness gate)"
+mkdir -p "$HOME/bin"
+cp "$SCRIPT_DIR/../bin/wa-inbox-fresh.sh" "$HOME/bin/wa-inbox-fresh.sh"
+chmod +x "$HOME/bin/wa-inbox-fresh.sh"
 
 # ─── Bump Go deps + build ────────────────────────────────────────────────────
 if [ "$SKIP_BUILD" -ne 1 ]; then
@@ -133,6 +150,16 @@ if [ "$WITH_BACKFILL_TIMER" -eq 1 ]; then
   cp "$WA_ASSETS/systemd/whatsapp-backfill.timer"   "$SYSTEMD_DIR/"
 fi
 
+if [ "$WITH_TRANSCRIBE_TIMER" -eq 1 ]; then
+  cp "$WA_ASSETS/systemd/whatsapp-transcribe.service" "$SYSTEMD_DIR/"
+  cp "$WA_ASSETS/systemd/whatsapp-transcribe.timer"   "$SYSTEMD_DIR/"
+  # The transcribe service reads OPENAI_API_KEY from this EnvironmentFile.
+  if [ ! -f "$HOME/.config/systemd/env/mcp-secrets.env" ]; then
+    echo "  NOTE: ~/.config/systemd/env/mcp-secrets.env not found — the transcribe"
+    echo "        service needs OPENAI_API_KEY there (KEY=value lines) to run."
+  fi
+fi
+
 # ─── Disable deprecated wacli daemon if present ──────────────────────────────
 if systemctl --user list-unit-files claude-ops-wacli-keepalive.service 2>/dev/null | grep -q wacli-keepalive; then
   echo "▶ Disabling deprecated claude-ops-wacli-keepalive.service (replaced by systemd-managed bridge)"
@@ -153,6 +180,9 @@ systemctl --user daemon-reload
 systemctl --user enable --now whatsapp-bridge.service
 if [ "$WITH_BACKFILL_TIMER" -eq 1 ]; then
   systemctl --user enable --now whatsapp-backfill.timer
+fi
+if [ "$WITH_TRANSCRIBE_TIMER" -eq 1 ]; then
+  systemctl --user enable --now whatsapp-transcribe.timer
 fi
 
 # ─── Surface the pairing code if present ─────────────────────────────────────
@@ -182,5 +212,7 @@ fi
 echo ""
 echo "▶ Status reference:"
 echo "    systemctl --user status whatsapp-bridge.service"
-echo "    systemctl --user list-timers whatsapp-backfill.timer"
-echo "    curl -fsS -X POST http://127.0.0.1:8080/api/backfill   # on-demand"
+echo "    systemctl --user list-timers whatsapp-backfill.timer whatsapp-transcribe.timer"
+echo "    curl -fsS -X POST http://127.0.0.1:8080/api/backfill   # on-demand backfill"
+echo "    systemctl --user start whatsapp-transcribe.service     # on-demand transcribe"
+echo "    ~/bin/wa-inbox-fresh.sh                                 # pre-scan freshness gate"
