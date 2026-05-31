@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.18.11] - 2026-05-31
+
+### Changed
+WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated own-sends always sync
+
+
 ## [2.18.10] - 2026-05-31
 
 ### Changed
