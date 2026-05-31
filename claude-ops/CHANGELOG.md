@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.18.12] - 2026-05-31
+
+### Added
+- **WhatsApp `POST /api/recover_app_state` — fatal LTHash app-state recovery (#427, Fix I).**
+  When the server's `regular_low` patch chain is unverifiable (`failed to verify patch vNNN:
+  mismatching LTHash`, whatsmeow #382/#858), archive/mute/pin 409 and neither resync, clearing
+  the local snapshot, nor a single phone toggle heals it. The new endpoint requests a fresh
+  unencrypted snapshot from the primary device (`BuildAppStateRecoveryRequest`→`SendPeerMessage`);
+  whatsmeow's `handleAppStateRecovery` rebuilds the collection from scratch, bypassing the broken
+  patches. Phone must be online. Verified end-to-end: `regular_low` rebuilt v621→v622, archive
+  then succeeded.
+
 ## [2.18.11] - 2026-05-31
 
 ### Changed
