@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.18.13] - 2026-05-31
+
+### Fixed
+- **WhatsApp: stop destructive `regular_low` auto-resync on Connected (#431).** The bridge
+  ran `FetchAppState(regular_low, fullSync=true)` 3s after every connect, which on a fatally
+  desynced collection (whatsmeow #382/#858) deleted the local snapshot and re-fetched the
+  broken server patch chain — re-corrupting it on every restart and undoing `/api/recover_app_state`
+  recovery. Now leaves `regular_low` untouched on connect; recover on demand only.
+
 ## [2.18.12] - 2026-05-31
 
 ### Added
