@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.18.7 — 2026-05-31
+
+### Fixed
+- **ops-inbox: WhatsApp lid↔phone identity merge (#415).** whatsmeow stores the same
+  person as two chats — `<lid>@lid` and `<pn>@s.whatsapp.net` — and the classifier scanned
+  per-JID with no merge, so every run double-counted contacts (routinely **NEEDS_REPLY on
+  one JID and WAITING on the other at once**), inflated counts, mis-prioritised, and read
+  only half the person's history → drafts off a fragmented arc. Added a **blocking
+  identity-merge step** to the FULL-THREAD AWARENESS GATE: map each JID via
+  `whatsmeow_lid_map` (`store/whatsapp.db`; `contacts.phone` fallback), union both JIDs,
+  sort by timestamp, classify on the merged thread's true last message, and read merged
+  history for the arc + reply context. Also wired into the headless DB-fallback path and the
+  parallel scan-engine WhatsApp steps. Recipe validated against the live store.
+
 ## 2.18.3 — 2026-05-31
 
 ### Added
