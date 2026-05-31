@@ -56,6 +56,13 @@ before=$(sqlite3 "$DB" "SELECT COALESCE(datetime(MAX(timestamp)),'1970-01-01') F
 # 2. force backfill
 code=$(curl -fsS -m 20 -X POST -o /dev/null -w "%{http_code}" "$BRIDGE/api/backfill" 2>/dev/null || echo "ERR")
 log "wa-fresh: backfill → HTTP ${code}"
+case "$code" in
+  2*) ;;
+  *)
+    log "wa-fresh: ERROR backfill failed (HTTP ${code}) — store may be stale, do not trust it"
+    exit 2
+    ;;
+esac
 
 # 3. bounded wait for the store to settle (after backfill, before transcription)
 new=0

@@ -151,7 +151,9 @@ if [ "$WITH_BACKFILL_TIMER" -eq 1 ]; then
 fi
 
 if [ "$WITH_TRANSCRIBE_TIMER" -eq 1 ]; then
-  cp "$WA_ASSETS/systemd/whatsapp-transcribe.service" "$SYSTEMD_DIR/"
+  sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" \
+      "$WA_ASSETS/systemd/whatsapp-transcribe.service" \
+      > "$SYSTEMD_DIR/whatsapp-transcribe.service"
   cp "$WA_ASSETS/systemd/whatsapp-transcribe.timer"   "$SYSTEMD_DIR/"
   # The transcribe service reads OPENAI_API_KEY from this EnvironmentFile.
   if [ ! -f "$HOME/.config/systemd/env/mcp-secrets.env" ]; then
