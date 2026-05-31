@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# flow-state — "you are here" on the FLOW lifecycle.
+#
+# Detects mode (PROJECT vs AD-HOC) from the current repo's .planning/ dir,
+# surfaces the current GSD phase, open PRs, and deploy hints, so `/flow` with
+# no args can show the user where they are and what the next canonical stage is.
+#
+# Read by skills/flow/SKILL.md. Self-contained, fast, and GitHub-quota-safe:
+# exactly ONE non-watching `gh` call, never in a loop (per the GitHub-API rule).
+#
+# Usage: flow-state [--json] [path]
+#   path  repo to inspect (default: cwd)
+
+set -uo pipefail   # not -e: best-effort probes must not abort the report
+
+JSON=0
+TARGET="$PWD"
+for arg in "$@"; do
+  case "$arg" in
+    --json) JSON=1 ;;
+    *) [ -d "$arg" ] && TARGET="$arg" ;;
+  esac
+done
+
+cd "$TARGET" 2>/dev/null || true
+
+# --- git root + mode ---------------------------------------------------------
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+MODE="AD-HOC"
+PHASE=""
+PHASE_FILE=""
+PLANNING=""
+
+if [ -n "$ROOT" ] && [ -d "$ROOT/.planning" ]; then
+  MODE="PROJECT"
+  PLANNING="$ROOT/.planning"
+  # current phase: prefer STATE.md frontmatter `phase:` / `current_phase:`,
+  # else the highest-numbered phase dir.
+  if [ -f "$PLANNING/STATE.md" ]; then
+    PHASE_FILE="$PLANNING/STATE.md"
+    PHASE="$(awk -F': *' '
+      /^phase:/        { gsub(/["'"'"']/,"",$2); p=$2 }
+      /^current_phase:/{ gsub(/["'"'"']/,"",$2); p=$2 }
+      END { print p }' "$PLANNING/STATE.md" 2>/dev/null)"
+  fi
+  if [ -z "$PHASE" ]; then
+    PHASE="$(ls -d "$PLANNING"/phase-* "$PLANNING"/*/ 2>/dev/null | grep -Eo 'phase-[0-9.]+' | sort -V | tail -1)"
+  fi
+fi
+
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '-')"
+DIRTY=0
+if [ -n "$ROOT" ]; then
+  git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null || DIRTY=1
+fi
+
+# --- open PRs (single quota-safe call) --------------------------------------
+PRS="?"
+if command -v gh >/dev/null 2>&1 && [ -n "$ROOT" ]; then
+  PRS="$(gh pr list --state open --json number --jq 'length' 2>/dev/null || echo '?')"
+fi
+
+# --- suggested next stage ----------------------------------------------------
+if [ "$MODE" = "PROJECT" ]; then
+  NEXT="resume GSD phase → /flow build  (then review · test · ship)"
+else
+  NEXT="/flow spec → plan → build → review → test → ship"
+fi
+
+# --- output ------------------------------------------------------------------
+if [ "$JSON" -eq 1 ]; then
+  printf '{"mode":"%s","root":"%s","branch":"%s","dirty":%s,"phase":"%s","planning":"%s","open_prs":"%s"}\n' \
+    "$MODE" "${ROOT:-}" "$BRANCH" "$DIRTY" "${PHASE:-}" "${PLANNING:-}" "$PRS"
+  exit 0
+fi
+
+echo "MODE=$MODE"
+echo "ROOT=${ROOT:-<not a git repo>}"
+echo "BRANCH=$BRANCH$([ "$DIRTY" -eq 1 ] && echo ' (uncommitted changes)')"
+[ "$MODE" = "PROJECT" ] && echo "PHASE=${PHASE:-<no phase recorded>}"
+[ -n "$PLANNING" ] && echo "PLANNING=$PLANNING"
+echo "OPEN_PRS=$PRS"
+echo "NEXT=$NEXT"
