@@ -22,14 +22,24 @@ WAIT_TICKS="${WA_FRESH_WAIT_TICKS:-8}"   # ×4s ≈ 32s max wait
 
 log() { printf '%s\n' "$*"; }
 
-# 1. bridge up?  Liveness = a real TCP/HTTP connection to :8080 (curl exit 7 =
-# connection refused). Do NOT use `ss | grep :8080` — ss resolves 8080 to the
-# service name "webcache", so the grep never matches and we'd bounce a healthy
-# bridge. Only restart when the connection probe genuinely fails twice.
-alive() { curl -s -o /dev/null -m 4 "$BRIDGE/" >/dev/null 2>&1; }   # exit 0 even on 404; nonzero only if not listening
-if ! { alive || { sleep 2; alive; }; }; then
-  log "wa-fresh: bridge :8080 not responding — restarting…"
+# 1. bridge up?  Liveness = a real TCP/HTTP connection to :8080.
+# curl exit 7 = connection refused (not listening); exit 0 even on 404.
+# Do NOT use `ss | grep :8080` — ss renders port 8080 as the service name
+# "webcache" so the grep never matches and would bounce a healthy bridge.
+#
+# Restart gate: only restart when BOTH consecutive probes fail (1s apart).
+# Previously the bridge was bounced 4× in 6 min because a single slow probe
+# (bridge still starting up) triggered a restart loop. The fix: fail-fast
+# probe × 2 with a 1s gap; only then restart; then wait up to 20s for it to
+# come back up before declaring dead.
+alive() { curl -s -o /dev/null -m 4 "$BRIDGE/" >/dev/null 2>&1; }
+probe_dead() { ! alive && { sleep 1; ! alive; }; }   # two consecutive failures = truly dead
+
+if probe_dead; then
+  log "wa-fresh: bridge :8080 not responding (2 consecutive probes failed) — restarting…"
   systemctl --user restart whatsapp-bridge.service 2>/dev/null
+  # Wait up to 20 s for the bridge to come back (it needs a few seconds to
+  # open the SQLite store and establish the WhatsApp websocket).
   for i in $(seq 1 10); do sleep 2; alive && break; done
 fi
 if ! alive; then

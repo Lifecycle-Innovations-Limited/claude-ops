@@ -10,8 +10,10 @@ WorkingDirectory=%h/.local/share/whatsapp-mcp/whatsapp-bridge
 ExecStart=%h/.local/share/whatsapp-mcp/whatsapp-bridge/whatsapp-bridge
 # Replaced at install time with the operator's E.164 number (no '+', no spaces).
 Environment=WA_PHONE=__WA_PHONE__
-Restart=on-failure
-RestartSec=5s
+# always restart: WhatsApp never backfills phone-sent messages from offline periods,
+# so maximum uptime = minimum send gaps. on-failure was too conservative.
+Restart=always
+RestartSec=10s
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=whatsapp-bridge
