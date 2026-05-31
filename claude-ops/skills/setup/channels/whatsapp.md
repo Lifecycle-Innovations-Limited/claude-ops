@@ -17,7 +17,7 @@ If binary missing: ask `AskUserQuestion`: `[Show install docs]`, `[Skip WhatsApp
 ```
 whatsapp-bridge (whatsmeow) is not installed. Install:
   git clone https://github.com/lharries/whatsapp-mcp ~/.local/share/whatsapp-mcp
-  cd ~/.local/share/whatsapp-mcp/whatsapp-bridge && go build -o whatsapp-bridge .
+  cd ~/.local/share/whatsapp-mcp/whatsapp-bridge && go build -tags "sqlite_fts5" -o whatsapp-bridge .
   mkdir -p ~/.local/share/whatsapp-mcp/whatsapp-bridge/logs
 ```
 
