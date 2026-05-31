@@ -43,6 +43,13 @@ Patches included:
           Subscribes to *events.Archive and UPSERT-updates the flag. Makes
           inbox = WHERE archived=0 directly queryable without hitting the
           bridge's app-state layer on every scan.
+  Fix I — Preserve archived on StoreChat: the original StoreChat used
+          `INSERT OR REPLACE INTO chats (jid, name, last_message_time)`, and
+          REPLACE deletes+reinserts the row — silently resetting the `archived`
+          column (Fix H) back to its DEFAULT (0) on every chat update (i.e. every
+          new message). Archived chats wrongly resurfaced in the inbox. Replaced
+          with an UPSERT (ON CONFLICT(jid) DO UPDATE) that touches only name and
+          last_message_time, leaving `archived` untouched.
 
 Every patch is gated on a sentinel string so re-running is a no-op.
 
@@ -795,6 +802,36 @@ ARCHIVE_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix F: POST /api/archive — a
 
 ARCHIVE_ENDPOINT_SENTINEL = "claude-ops Fix F: POST /api/archive"
 
+# ─── main.go Fix I: preserve archived column on StoreChat ─────────────────────
+# StoreChat used `INSERT OR REPLACE INTO chats (jid, name, last_message_time)`.
+# REPLACE is delete+reinsert, so the `archived` column (added by Fix H) was
+# silently reset to its DEFAULT (0) on every chat update — i.e. every inbound
+# message un-archived the chat in messages.db, making archived chats resurface
+# in the inbox. Swap to an UPSERT that updates only name + last_message_time and
+# leaves `archived` (and any future columns) untouched.
+STORECHAT_PRESERVE_NEEDLE = """func (store *MessageStore) StoreChat(jid, name string, lastMessageTime time.Time) error {
+\t_, err := store.db.Exec(
+\t\t"INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)",
+\t\tjid, name, lastMessageTime,
+\t)
+\treturn err
+}"""
+
+STORECHAT_PRESERVE_REPLACEMENT = """func (store *MessageStore) StoreChat(jid, name string, lastMessageTime time.Time) error {
+\t// claude-ops Fix I: UPSERT instead of INSERT OR REPLACE. REPLACE is
+\t// delete+reinsert, which resets the `archived` column (Fix H) to its DEFAULT
+\t// (0) on every chat update. ON CONFLICT(jid) DO UPDATE touches only the two
+\t// columns we actually own here, preserving `archived` (and any future column).
+\t_, err := store.db.Exec(
+\t\t`INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)
+\t\t ON CONFLICT(jid) DO UPDATE SET name=excluded.name, last_message_time=excluded.last_message_time`,
+\t\tjid, name, lastMessageTime,
+\t)
+\treturn err
+}"""
+
+STORECHAT_PRESERVE_SENTINEL = "claude-ops Fix I"
+
 
 def replace_idempotent(
     p: pathlib.Path, needle: str, replacement: str, sentinel: str, label: str
@@ -923,6 +960,13 @@ def main() -> int:
         ARCHIVE_EVENT_REPLACEMENT,
         ARCHIVE_EVENT_SENTINEL,
         "Fix H: subscribe *events.Archive to persist archive flag",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        STORECHAT_PRESERVE_NEEDLE,
+        STORECHAT_PRESERVE_REPLACEMENT,
+        STORECHAT_PRESERVE_SENTINEL,
+        "Fix I: StoreChat UPSERT preserves archived column",
     )
     changed_go |= replace_idempotent(
         main_go,
