@@ -120,7 +120,11 @@ if [ "$SKIP_BUILD" -ne 1 ]; then
   go get -u go.mau.fi/whatsmeow@latest
   go get -u ./...
   go mod tidy
-  go build -o whatsapp-bridge .
+  # -tags sqlite_fts5 is REQUIRED: ops-inbox search + whatsapp-bridge-migrate.sh
+  # add an fts5 virtual table & triggers on messages.db. The bridge's own
+  # mattn/go-sqlite3 must therefore have the fts5 module, or every message
+  # INSERT fails with "no such module: fts5" and the bridge stores nothing.
+  go build -tags "sqlite_fts5" -o whatsapp-bridge .
   popd >/dev/null
 fi
 
