@@ -61,6 +61,9 @@ This router serves two **strictly separated** classes of identity. Posting to th
 **Resolution algorithm — run at the start of every flow:**
 
 ```
+intent is owner autopilot status (`healify`, "show me the autopilot status", `/ops-socials healify`, owner-autopilot read-out)?
+├─ YES → skip project/personal identity resolution; run the Owner autopilot status recipe below (read-only). `healify` here is NOT a project name.
+└─ NO  → continue
 intent mentions / implies a named project (project arg, product name, "post for <project>")?
 ├─ YES → read marketing.projects.<project>.social.engine from $PREFS_PATH/preferences.json
 │        ├─ engine.primary == "upload-post" → publish via mcp__upload-post__* with engine.upload_post.user.
