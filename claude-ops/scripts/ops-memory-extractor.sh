@@ -82,6 +82,31 @@ resolve_auth() {
   OPS_AUTH_EXTRA_HEADERS=()
 
   # ─ Try Claude Code OAuth first ─
+  # Linux: the OAuth blob lives in ~/.claude/.credentials.json (no macOS Keychain).
+  local creds_file="${HOME}/.claude/.credentials.json"
+  if [[ -r "${creds_file}" ]]; then
+    local ftoken
+    ftoken=$(python3 -c "
+import json, sys, time
+try:
+    d = json.load(open('${creds_file}'))
+    o = d.get('claudeAiOauth') or {}
+    tok = o.get('accessToken') or ''
+    exp = o.get('expiresAt') or 0
+    if tok and exp > int(time.time() * 1000) + 60000:
+        print(tok)
+except Exception:
+    pass
+" 2>/dev/null || true)
+    if [[ -n "${ftoken}" ]]; then
+      OPS_AUTH_HEADER="Authorization: Bearer ${ftoken}"
+      OPS_AUTH_MODE="oauth"
+      OPS_AUTH_EXTRA_HEADERS=(-H "anthropic-beta: oauth-2025-04-20")
+      log "Auth: Claude Code OAuth (~/.claude/.credentials.json — subscription, no per-token billing)"
+      return 0
+    fi
+  fi
+
   if command -v security &>/dev/null; then
     local blob token
     blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)
