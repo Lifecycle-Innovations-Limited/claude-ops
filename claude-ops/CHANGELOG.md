@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.18.1 — 2026-05-31
+
+### Added
+- **Pre-promotion validation guard in `pocket-responder`.** When an *outbound* action
+  (`send_message` / `email_reply`) is approved, the responder now runs a staleness +
+  standing-rule check **before** committing it to `tasks.jsonl`. It gathers recent
+  thread/related activity (via `gog`, best-effort) and asks an LLM (`claude-haiku-4-5`)
+  whether the action is still valid against the owner's rules. If it looks already
+  handled, superseded, or rule-breaking (e.g. a meeting was already scheduled/accepted,
+  or the draft commits to a time that should be delegated), it **HOLDS** instead of
+  promoting — logging `approval-holds.jsonl` and replying with the reason + a
+  `force <code>` override. Owner stays in control; the agent no longer fires
+  obviously-stale approved actions.
+  - Rules come from `POCKET_APPROVAL_RULES` / `~/.config/email-cos/approval-rules.md`
+    (see `email-cos/approval-rules.example.md`), with a generic built-in fallback.
+  - `force <code>` re-promotes a held action, bypassing the guard.
+  - Degrades safely: disabled with `POCKET_VALIDATE_ACTIONS=0`; never blocks on its own
+    error (missing LLM/`gog` → proceed); skips non-outbound and `social_publish` items.
+
 ## 2.18.0 — 2026-05-31
 
 ### Added
