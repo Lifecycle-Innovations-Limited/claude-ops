@@ -91,6 +91,11 @@ fi
 echo "▶ Applying source patches"
 python3 "$WA_ASSETS/apply-patches.py" --install-dir "$INSTALL_DIR"
 
+# ─── Ship contacts-link helper (ops-inbox auto-syncs it on every invocation) ──
+echo "▶ Installing link_contacts.py (contacts link: phone + LID aliases)"
+cp "$WA_ASSETS/link_contacts.py" "$INSTALL_DIR/whatsapp-bridge/link_contacts.py"
+chmod +x "$INSTALL_DIR/whatsapp-bridge/link_contacts.py"
+
 # ─── Bump Go deps + build ────────────────────────────────────────────────────
 if [ "$SKIP_BUILD" -ne 1 ]; then
   echo "▶ Bumping Go deps + building bridge"
