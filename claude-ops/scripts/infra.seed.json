@@ -1,0 +1,8 @@
+{
+  "_comment": "Template for $OPS_DATA_DIR/infra.json. Copy to the data dir and edit. ops-infra reads ecs_clusters from here (durable across the GSD registry sync + plugin upgrades). 'region' is optional and applied to all aws ecs calls.",
+  "region": "us-east-1",
+  "ecs_clusters": [
+    "your-production-cluster",
+    "your-staging-cluster"
+  ]
+}
