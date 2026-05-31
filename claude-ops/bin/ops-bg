@@ -63,7 +63,7 @@ SUB="$1"; shift
 cmd_dispatch() {
   local model="opus"
   local effort="high"
-  local add_dir="$PWD"
+  local add_dir="${OPSBG_DIR:-$HOME/Projects}"
   local agent=""
   local extra=()
   while [ $# -gt 0 ]; do
@@ -88,6 +88,7 @@ cmd_dispatch() {
   fi
   args+=("$prompt")
   args+=("${extra[@]}")
+  cd "$add_dir" 2>/dev/null || true   # start fleet agents in default workdir
   exec "$CLAUDE_BIN" "${args[@]}"
 }
 
