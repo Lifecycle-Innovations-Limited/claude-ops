@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# ops-release — cut a new claude-ops plugin release.
+#
+# Single source of truth for releasing the `ops` plugin. It keeps the three
+# version-bearing files in lockstep, writes a CHANGELOG entry, and ships the
+# bump through the normal branch → PR → main flow (no direct push to main).
+#
+# What it touches (the "registry + marketplace + version" the release needs):
+#   1. claude-ops/.claude-plugin/plugin.json      .version
+#   2. .claude-plugin/marketplace.json (repo root) .plugins[name==ops].version   <- the marketplace registry
+#   3. claude-ops/CHANGELOG.md                      new "## [X.Y.Z] - DATE" section
+#
+# Flow:
+#   fetch → isolated worktree off origin/main → bump all 3 files → commit
+#   → push → open PR to main → (optional) squash-merge --admin → (optional) tag vX.Y.Z
+#
+# Usage:
+#   ops-release [--type patch|minor|major] [--version X.Y.Z]
+#               [--notes "markdown body for the changelog"]
+#               [--no-merge] [--no-tag] [--dry-run] [-h|--help]
+#
+# Defaults: --type patch, auto squash-merge, tag vX.Y.Z.
+# Examples:
+#   ops-release                        # patch bump, auto-merge + tag
+#   ops-release --type minor           # minor bump
+#   ops-release --version 3.0.0        # explicit version
+#   ops-release --no-merge             # open the PR, leave it for review
+#   ops-release --dry-run              # show what would change, touch nothing
+#
+# After a release lands, refresh the local install:
+#   /plugin marketplace update ops-marketplace   (then update the `ops` plugin)
+#
+set -euo pipefail
+
+# ----- locate repo + files (script lives at <repo>/claude-ops/bin/ops-release) -----
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"          # <repo>/claude-ops
+REPO_ROOT="$(cd "$PLUGIN_DIR/.." && pwd)"           # <repo>
+PLUGIN_JSON="$PLUGIN_DIR/.claude-plugin/plugin.json"
+MARKETPLACE_JSON="$REPO_ROOT/.claude-plugin/marketplace.json"
+CHANGELOG="$PLUGIN_DIR/CHANGELOG.md"
+PLUGIN_NAME="ops"                                   # name in marketplace.json .plugins[]
+GH_REPO="Lifecycle-Innovations-Limited/claude-ops"
+
+bump_type="patch"; explicit_ver=""; notes=""; do_merge=1; do_tag=1; dry_run=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --type)    bump_type="$2"; shift 2 ;;
+    --version) explicit_ver="$2"; shift 2 ;;
+    --notes)   notes="$2"; shift 2 ;;
+    --no-merge) do_merge=0; shift ;;
+    --no-tag)   do_tag=0; shift ;;
+    --dry-run)  dry_run=1; shift ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    *) echo "ops-release: unknown arg '$1'" >&2; exit 2 ;;
+  esac
+done
+
+command -v jq >/dev/null || { echo "ops-release: jq required" >&2; exit 127; }
+command -v gh >/dev/null || { echo "ops-release: gh required" >&2; exit 127; }
+[ -f "$PLUGIN_JSON" ] || { echo "ops-release: not found: $PLUGIN_JSON" >&2; exit 1; }
+[ -f "$MARKETPLACE_JSON" ] || { echo "ops-release: not found: $MARKETPLACE_JSON" >&2; exit 1; }
+
+CUR="$(jq -r '.version' "$PLUGIN_JSON")"
+[[ "$CUR" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ops-release: current version '$CUR' is not semver" >&2; exit 1; }
+
+if [ -n "$explicit_ver" ]; then
+  NEW="$explicit_ver"
+else
+  IFS='.' read -r MA MI PA <<<"$CUR"
+  case "$bump_type" in
+    major) MA=$((MA+1)); MI=0; PA=0 ;;
+    minor) MI=$((MI+1)); PA=0 ;;
+    patch) PA=$((PA+1)) ;;
+    *) echo "ops-release: --type must be major|minor|patch" >&2; exit 2 ;;
+  esac
+  NEW="$MA.$MI.$PA"
+fi
+[[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ops-release: target version '$NEW' is not semver" >&2; exit 1; }
+[ "$NEW" != "$CUR" ] || { echo "ops-release: target equals current ($CUR); nothing to do" >&2; exit 1; }
+
+REL_DATE="$(date +%F)"
+echo "ops-release: $CUR -> $NEW  (type=$bump_type, date=$REL_DATE)"
+
+# ----- changelog body: explicit --notes, else commit subjects since last CHANGELOG bump -----
+if [ -z "$notes" ]; then
+  prev_marker="$(git -C "$REPO_ROOT" log -1 --format=%H -- "$CHANGELOG" 2>/dev/null || true)"
+  if [ -n "$prev_marker" ]; then
+    commits="$(git -C "$REPO_ROOT" log --no-merges --format='- %s' "$prev_marker"..HEAD 2>/dev/null || true)"
+  fi
+  notes="${commits:-- (no notes provided)}"
+fi
+changelog_section=$'## ['"$NEW"$'] - '"$REL_DATE"$'\n\n### Changed\n'"$notes"$'\n'
+
+if [ "$dry_run" -eq 1 ]; then
+  echo "--- DRY RUN: would set version $CUR -> $NEW in:"
+  echo "    $PLUGIN_JSON"
+  echo "    $MARKETPLACE_JSON (.plugins[name==$PLUGIN_NAME].version)"
+  echo "--- would prepend to $CHANGELOG:"
+  printf '%s\n' "$changelog_section"
+  echo "--- would: branch release/v$NEW -> PR to main$([ "$do_merge" -eq 1 ] && echo ' -> squash-merge --admin')$([ "$do_tag" -eq 1 ] && echo " -> tag v$NEW")"
+  exit 0
+fi
+
+# ----- isolated worktree off origin/main (never touch the shared main checkout) -----
+git -C "$REPO_ROOT" fetch origin --quiet
+BR="release/v$NEW"
+WT="$REPO_ROOT/.worktrees/$BR"
+git -C "$REPO_ROOT" worktree remove --force "$WT" 2>/dev/null || true
+git -C "$REPO_ROOT" branch -D "$BR" 2>/dev/null || true
+git -C "$REPO_ROOT" worktree add "$WT" -b "$BR" origin/main >/dev/null
+cleanup() { git -C "$REPO_ROOT" worktree remove --force "$WT" 2>/dev/null || true; }
+trap cleanup EXIT
+
+wPLUGIN="$WT/claude-ops/.claude-plugin/plugin.json"
+wMKT="$WT/.claude-plugin/marketplace.json"
+wCL="$WT/claude-ops/CHANGELOG.md"
+
+# 1+2. bump version in plugin.json and the marketplace registry
+tmp="$(mktemp)"; jq --arg v "$NEW" '.version=$v' "$wPLUGIN" >"$tmp" && mv "$tmp" "$wPLUGIN"
+tmp="$(mktemp)"; jq --arg v "$NEW" --arg n "$PLUGIN_NAME" '(.plugins[] | select(.name==$n).version)=$v' "$wMKT" >"$tmp" && mv "$tmp" "$wMKT"
+jq empty "$wPLUGIN" && jq empty "$wMKT" || { echo "ops-release: produced invalid JSON" >&2; exit 1; }
+
+# 3. prepend CHANGELOG section before the first existing "## [" entry
+awk -v sec="$changelog_section" '
+  !done && /^## \[/ { print sec; print ""; done=1 }
+  { print }
+  END { if (!done) { print ""; print sec } }
+' "$wCL" >"$wCL.tmp" && mv "$wCL.tmp" "$wCL"
+
+echo "ops-release: bumped plugin.json + marketplace.json + CHANGELOG.md"
+
+# ----- commit, push, PR -----
+git -C "$WT" add -A
+git -C "$WT" commit --no-verify -m "release: v$NEW" >/dev/null
+git -C "$WT" push -u origin "$BR" >/dev/null 2>&1
+PR_BODY="$(printf 'Release **v%s** (was %s).\n\n- plugin.json + marketplace.json (registry) bumped\n- CHANGELOG updated\n\n%s\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)' "$NEW" "$CUR" "$notes")"
+PR_URL="$(gh pr create --repo "$GH_REPO" --base main --head "$BR" --title "release: v$NEW" --body "$PR_BODY")"
+echo "ops-release: opened $PR_URL"
+
+if [ "$do_merge" -eq 1 ]; then
+  gh pr merge "$PR_URL" --repo "$GH_REPO" --squash --admin --delete-branch
+  echo "ops-release: merged v$NEW to main"
+  if [ "$do_tag" -eq 1 ]; then
+    git -C "$REPO_ROOT" fetch origin --quiet
+    git -C "$REPO_ROOT" tag -a "v$NEW" -m "claude-ops v$NEW" origin/main 2>/dev/null || git -C "$REPO_ROOT" tag "v$NEW" origin/main
+    git -C "$REPO_ROOT" push origin "v$NEW"
+    echo "ops-release: tagged v$NEW"
+  fi
+  echo "ops-release: done. Refresh local install with: /plugin marketplace update ops-marketplace"
+else
+  echo "ops-release: PR left open for review (use: gh pr merge $PR_URL --squash --admin)"
+fi
