@@ -63,7 +63,7 @@ SUB="$1"; shift
 cmd_dispatch() {
   local model="opus"
   local effort="high"
-  local add_dir="$PWD"
+  local add_dir="${OPSBG_DIR:-$HOME/Projects}"
   local agent=""
   local extra=()
   while [ $# -gt 0 ]; do
@@ -82,12 +82,18 @@ cmd_dispatch() {
     exit 2
   fi
   local prompt="$*"
+  if [ ! -d "$add_dir" ]; then
+    echo "ops-bg dispatch: workdir does not exist: $add_dir" >&2
+    exit 2
+  fi
+  add_dir="$(cd "$add_dir" && pwd)"
   local -a args=(--bg --model "$model" --effort "$effort" --add-dir "$add_dir")
   if [ -n "$agent" ]; then
     args+=(--agent "$agent")
   fi
   args+=("$prompt")
   args+=("${extra[@]}")
+  cd "$add_dir"   # start fleet agents in default workdir
   exec "$CLAUDE_BIN" "${args[@]}"
 }
 
