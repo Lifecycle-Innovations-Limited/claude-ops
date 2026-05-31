@@ -61,6 +61,9 @@ This router serves two **strictly separated** classes of identity. Posting to th
 **Resolution algorithm — run at the start of every flow:**
 
 ```
+intent is owner autopilot status (`healify`, "show me the autopilot status", `/ops-socials healify`, owner-autopilot read-out)?
+├─ YES → skip project/personal identity resolution; run the Owner autopilot status recipe below (read-only). `healify` here is NOT a project name.
+└─ NO  → continue
 intent mentions / implies a named project (project arg, product name, "post for <project>")?
 ├─ YES → read marketing.projects.<project>.social.engine from $PREFS_PATH/preferences.json
 │        ├─ engine.primary == "upload-post" → publish via mcp__upload-post__* with engine.upload_post.user.
@@ -102,6 +105,7 @@ In every recipe below, treat the literal string `$SOCIAL_SET_ID` as a placeholde
 | **Schedule** | Typefully with `schedule_date: "next-free-slot"` or ISO | `mcp__typefully__typefully_get_queue` to inspect |
 | **Analytics** (own posts) | `mcp__typefully__typefully_list_social_set_analytics_posts` (or `mcp__x-mcp__get_metrics` per tweet) | replies excluded by default |
 | **LinkedIn org mention** | `mcp__typefully__typefully_linkedin_resolve_linkedin_organization_from_url` → `@[Name](urn:li:organization:ID)` | paste into draft body |
+| **Owner autopilot status** | shell out via `bash -c` to resolved `$OPS_SOCIAL_AUTOPILOT_CMD` (full shell command to an owner-specific status script) | env: `OPS_SOCIAL_AUTOPILOT_CMD='python3 $HOME/tools/<owner>-social-autopilot/status.py'`; prefs: `ops_social.autopilot_cmd` in `$PREFS_PATH/preferences.json` |
 
 ## Hard rules
 
@@ -224,6 +228,18 @@ Per-tweet drill-down on impressions/engagement: `mcp__x-mcp__get_metrics({ id })
 ### "Publish a markdown article to X" — not the safe path
 
 `x-article-publisher-skill` automates X's web UI via Playwright. Hard rule 3 forbids that from this router. Instead: stage a Typefully draft that's a hook + summary + a link to the full piece (your blog, Substack, static page). If you genuinely need a native X Article, publish it manually in the X client.
+
+### "Show me the autopilot status" / "/ops-socials healify" / owner-autopilot read-out
+Resolve the command in this order: (1) `$OPS_SOCIAL_AUTOPILOT_CMD` if set; (2) `$PREFS_PATH/preferences.json` → `ops_social.autopilot_cmd`. The value must be a **full shell command** (e.g. `python3 $HOME/tools/<owner>-social-autopilot/status.py`), not a bare `.py` path — the recipe runs it via `bash -c`.
+```bash
+CMD="${OPS_SOCIAL_AUTOPILOT_CMD:-}"
+if [ -z "$CMD" ] && [ -f "$PREFS_PATH/preferences.json" ] && command -v jq >/dev/null 2>&1; then
+  CMD="$(jq -r '.ops_social.autopilot_cmd // empty' "$PREFS_PATH/preferences.json" 2>/dev/null)"
+fi
+if [ -n "$CMD" ]; then bash -c "$CMD"; else echo "no autopilot wired — set OPS_SOCIAL_AUTOPILOT_CMD or ops_social.autopilot_cmd in $PREFS_PATH/preferences.json"; fi
+```
+Returns per-channel state: connected, queue depth, recent fires, next action. Read-only.
+
 
 ## Pre-flight check (run when troubleshooting)
 
