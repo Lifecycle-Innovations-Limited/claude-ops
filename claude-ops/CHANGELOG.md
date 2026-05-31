@@ -27,6 +27,16 @@
 - `skills/ops-inbox/SKILL.md` step-0 documents the freshness gate (run first) and that voice
   notes are first-class (`[voice] …` bodies), alongside the existing backfill + contacts-link
   auto-sync.
+- **Full-thread-awareness gate (blocking, every channel, every session)** in
+  `skills/ops-inbox/SKILL.md`. A new mandatory section forces, per thread before any
+  NEEDS_REPLY or draft: read ≥25 messages in BOTH directions (incl. `is_from_me=1` rows and
+  `[voice]` transcripts), reconcile outbound the store may miss (voice transcripts, the
+  bridge `/api/send` log, the same contact's sends in other threads/channels), and write a
+  2-sentence conversation-arc summary. `last_is_from_me` is now explicitly a first pass only;
+  shallow both-direction reads bumped 20→25 / 5→25. Fixes the recurring fresh-session failure
+  of re-flagging threads the user already answered (incl. phone-sent messages absent from the
+  store) and drafting off shallow context. Depends on the freshness gate + voice transcription
+  having run first so the store is complete.
 
 > Folds in the bridge-side fixes already on `main` as of 2.18.x — outbound `/api/send`
 > persistence, the `resync_app_state` endpoint, MCP dict serialisation (#404), and the
