@@ -3,6 +3,12 @@
 ## [2.18.11] - 2026-05-31
 
 ### Changed
+WhatsApp /api/recover_app_state (#427) — fatal LTHash app-state recovery via primary-device snapshot; unblocks archive
+
+
+## [2.18.11] - 2026-05-31
+
+### Changed
 WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated own-sends always sync
 
 
