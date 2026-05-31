@@ -288,6 +288,16 @@ After push (every classification):
 
 DO NOT call `gh pr merge` under any circumstances. Your job ends at "CI is green
 on the pushed SHA." The orchestrator will independently verify and merge.
+
+DO NOT file a tracking issue for a CI failure you could not fix — in ANY repo.
+No `gh issue create`, no `github.rest.issues.create`, no cross-repo issue. If you
+cannot get CI green, return the structured failure in your JSON result and STOP;
+the orchestrator decides what happens next. (Rationale: emergent issue-filing on
+unfixable CI produced 17+ duplicate `[TEAM] CI failure on PR #N` issues — one per
+failing check, zero dedup, cross-posted into the wrong repo. A fixer's only valid
+outputs are a pushed green SHA or a structured failure report — never an issue.)
+If a tracking issue is ever genuinely wanted, that is the orchestrator's call and
+it MUST first `gh issue list --search "PR #<n> in:title" --state open` to dedup.
 ```
 
 Use `model: "haiku"` for fixer agents (matches agent definition default).
