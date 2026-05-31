@@ -1,0 +1,10 @@
+[Unit]
+Description=Run whatsapp-bridge keepalive every 60s
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
