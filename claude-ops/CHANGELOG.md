@@ -3,6 +3,12 @@
 ## [2.18.11] - 2026-05-31
 
 ### Changed
+WhatsApp /api/recover_app_state (#427) — fatal LTHash app-state recovery via primary-device snapshot; unblocks archive after a fatal patch-chain desync
+
+
+## [2.18.11] - 2026-05-31
+
+### Changed
 WhatsApp /api/recover_app_state (#427) — fatal LTHash app-state recovery via primary-device snapshot; unblocks archive
 
 
