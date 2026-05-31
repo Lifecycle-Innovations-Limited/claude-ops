@@ -83,15 +83,19 @@ if [ "$CONCLUSION" != "success" ]; then
   notify "Deploy failed" "$REPO #$PR → $BASE: $CONCLUSION"
 
   if [ "$(config auto_dispatch_fixer true)" = "true" ]; then
+    export DEPLOY_FIX_REPO="$REPO"
     fix_log=$(dispatch_fix_agent "deploy-fixer" "$SLUG-deploy" \
       "REPO=$REPO" "PR=$PR" "BASE=$BASE" "SHA=$SHA" "RUN_ID=$RUN_ID" \
       "SUMMARY=deploy workflow #$RUN_ID concluded $CONCLUSION" \
       "LOGS=$failed_log")
-    case $? in
+    _dfa_rc=$?
+    case $_dfa_rc in
       0) log "fixer dispatched → $fix_log" ;;
       2) log "fixer skipped — already in flight for $SLUG-deploy" ;;
       3) log "fixer skipped — hourly budget exhausted" ;;
-      *) log "fixer dispatch failed — exit code $?" ;;
+      6) log "fixer skipped — global concurrency cap ($(config max_concurrent_fixers 3) active)"; notify "Fixer cap" "$REPO #$PR — concurrency cap reached, skipping" ;;
+      7) log "fixer skipped — fleet agent already active on $REPO"; notify "Fleet dedup" "$REPO #$PR — fleet agent already active, deploy-fixer skipped" ;;
+      *) log "fixer dispatch failed — exit code $_dfa_rc" ;;
     esac
   else
     log "auto_dispatch_fixer=false — notification only"
@@ -110,10 +114,18 @@ if [ "$HTTP" != "200" ]; then
   fire "service $URL → HTTP $HTTP after deploy"
   notify "Service unhealthy" "$REPO $BASE: $URL → HTTP $HTTP"
   if [ "$(config auto_dispatch_fixer true)" = "true" ]; then
+    export DEPLOY_FIX_REPO="$REPO"
     dispatch_fix_agent "deploy-fixer" "$SLUG-health" \
       "REPO=$REPO" "PR=$PR" "BASE=$BASE" "SHA=$SHA" "RUN_ID=$RUN_ID" \
       "SUMMARY=service health URL $URL returned HTTP $HTTP" \
       "LOGS=(no workflow logs — health check failure)" >/dev/null
+    _dfa_rc=$?
+    case $_dfa_rc in
+      0) : ;;
+      6) log "health fixer skipped — global concurrency cap ($(config max_concurrent_fixers 3) active)" ;;
+      7) log "health fixer skipped — fleet agent already active on $REPO" ;;
+      *) : ;;
+    esac
   fi
   exit 1
 fi

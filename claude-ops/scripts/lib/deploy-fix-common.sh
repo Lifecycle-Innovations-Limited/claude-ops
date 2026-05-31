@@ -184,6 +184,15 @@ dispatch_fix_agent() {
   # $2 = lock_id, $3.. = context KEY=VAL pairs that become "KEY: VAL" lines in the brief.
   # Legacy callers passed prompt template paths like "build-fix.md" / "deploy-fix.md";
   # those are remapped to the new agent names so the contract change is transparent.
+  #
+  # Return codes:
+  #   0  dispatched successfully
+  #   2  single-flight lock already held (same repo+kind already in flight)
+  #   3  hourly budget exhausted for this repo
+  #   4  agent definition file not found (misconfiguration)
+  #   5  `claude` binary not on PATH
+  #   6  global concurrency cap reached (max_concurrent_fixers)
+  #   7  fleet agent already active on this repo (respect_fleet_claims)
   local agent_name="$1"
   local lock_id="$2"
   shift 2
@@ -195,6 +204,48 @@ dispatch_fix_agent() {
     notify "Auto-fix budget exhausted" "$slug hit hourly cap — manual intervention needed"
     lock_release "$lock_id"
     return 3
+  fi
+
+  # --- Global concurrency cap (rc=6) ---
+  local _active_dir="$STATE_DIR/active"
+  mkdir -p "$_active_dir"
+  # Prune stale pidfiles whose process is no longer alive.
+  for _pf in "$_active_dir"/*.pid; do
+    [ -f "$_pf" ] || continue
+    local _ppid
+    _ppid=$(cat "$_pf" 2>/dev/null || true)
+    if [ -n "$_ppid" ] && ! kill -0 "$_ppid" 2>/dev/null; then
+      rm -f "$_pf"
+    fi
+  done
+  local _live_count
+  _live_count=$(find "$_active_dir" -maxdepth 1 -name '*.pid' 2>/dev/null | wc -l | tr -d ' ')
+  local _max_concurrent
+  _max_concurrent=$(config max_concurrent_fixers 3)
+  if [ "$_live_count" -ge "$_max_concurrent" ]; then
+    notify "Fixer concurrency cap" "global cap of $_max_concurrent reached — skipping dispatch for $slug"
+    lock_release "$lock_id"
+    return 6
+  fi
+
+  # --- Fleet-claim dedup (rc=7) ---
+  local _fleet_file="$HOME/.claude/state/fleet-tui.json"
+  if [ "$(config respect_fleet_claims true)" = "true" ] && [ -f "$_fleet_file" ] && command -v jq >/dev/null 2>&1; then
+    local _fix_repo="${DEPLOY_FIX_REPO:-}"
+    local _repo_bare="${_fix_repo#*/}"
+    local _fleet_active
+    _fleet_active=$(jq -r --arg full "$_fix_repo" --arg bare "$_repo_bare" '
+      .agents // [] |
+      map(select(
+        (.status | ascii_downcase | test("running|in_progress|working|active")) and
+        (.repo == $full or .repo == $bare)
+      )) | length
+    ' "$_fleet_file" 2>/dev/null || echo "0")
+    if [ "${_fleet_active:-0}" -gt 0 ] 2>/dev/null; then
+      notify "Fleet agent active" "fleet agent already working on $_fix_repo — deploy-fixer skipped"
+      lock_release "$lock_id"
+      return 7
+    fi
   fi
 
   # Legacy → new contract mapping.
@@ -231,12 +282,52 @@ dispatch_fix_agent() {
   # on $PLUGIN_ROOT being exported (it may not be in all caller environments).
   local _invoker="$PLUGIN_ROOT/scripts/lib/claude-invoke.sh"
 
+  # Register active pidfile BEFORE the nohup so the count is accurate.
+  # Sanitize lock_id for use as a filename (replace / and : with -).
+  local _lock_safe
+  _lock_safe=$(printf '%s' "$lock_id" | tr '/: ' '---')
+  local _fix_repo_for_sidecar="${DEPLOY_FIX_REPO:-unknown}"
+  local _epoch
+  _epoch=$(date +%s)
+  local _started_iso
+  _started_iso=$(date -u +%FT%TZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+  local _sidecar_dir="$HOME/.claude/state"
+  local _sidecar_file="$_sidecar_dir/deploy-fix-active.jsonl"
+
   nohup bash -c "
     . '$_invoker'
     printf '%s' \"\$1\" | claude_invoke -p --agent $agent_name $danger_flag --no-session-persistence > '$fix_log' 2>&1
+    _ended_iso=\$(date -u +%FT%TZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
     rm -f '$STATE_DIR/lock-$lock_id'
+    rm -f '$_active_dir/${_lock_safe}-\$\$.pid'
+    if [ '$(config register_in_fleet_census true)' = 'true' ]; then
+      printf '%s\n' \"\$(jq -nc \
+        --arg id '${_lock_safe}-${_epoch}' \
+        --arg repo '$_fix_repo_for_sidecar' \
+        --arg ended \"\$_ended_iso\" \
+        '{id:\$id,name:\"deploy-fix:\"+\$repo,status:\"done\",repo:\$repo,branch:\"deploy-fix\",source:\"deploy-fix\",ended:\$ended}' \
+        2>/dev/null || true)\" >> '$_sidecar_file' 2>/dev/null || true
+    fi
   " _ "$brief" </dev/null >/dev/null 2>&1 &
+  local _bg_pid=$!
   disown 2>/dev/null || true
+
+  # Write pidfile now that we have the background PID.
+  echo "$_bg_pid" > "$_active_dir/${_lock_safe}-${_bg_pid}.pid"
+
+  # Fleet census sidecar — "running" entry on launch.
+  if [ "$(config register_in_fleet_census true)" = "true" ]; then
+    mkdir -p "$_sidecar_dir"
+    touch "$_sidecar_file"
+    jq -nc \
+      --arg id "${_lock_safe}-${_epoch}" \
+      --arg repo "$_fix_repo_for_sidecar" \
+      --arg started "$_started_iso" \
+      --argjson pid "$_bg_pid" \
+      '{id:$id,name:("deploy-fix:"+$repo),status:"running",repo:$repo,branch:"deploy-fix",source:"deploy-fix",pid:$pid,started:$started}' \
+      >> "$_sidecar_file" 2>/dev/null || true
+  fi
+
   echo "$fix_log"
   return 0
 }
