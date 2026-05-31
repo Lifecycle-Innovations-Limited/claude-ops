@@ -16,6 +16,8 @@ set -euo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BRIDGE_DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+# The Go bridge binary whose embedded sqlite must ALSO support fts5 — see Step 1 guard.
+BRIDGE_BIN="${WHATSAPP_BRIDGE_BIN:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/whatsapp-bridge}"
 DRY_RUN=0
 VERBOSE=0
 
@@ -64,38 +66,78 @@ query_sql() {
 # ── Step 1: FTS5 virtual table ────────────────────────────────────────────────
 log "Step 1: Checking FTS5 index..."
 
-FTS_EXISTS=$(query_sql "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts';" 2>/dev/null || echo "0")
-if [[ "$FTS_EXISTS" == "1" ]]; then
-  log "  messages_fts already exists — skipping table creation."
-else
-  log "  Creating messages_fts FTS5 virtual table..."
-  run_sql "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-    content,
-    content='messages',
-    content_rowid='rowid'
-  );"
-  log "  Backfilling FTS index from existing messages..."
-  run_sql "INSERT INTO messages_fts(rowid, content)
-    SELECT rowid, content FROM messages WHERE content IS NOT NULL AND content != '';"
+# ── fts5 CAPABILITY GUARD (storage-integrity invariant) ───────────────────────
+# The fts triggers below are created via the SYSTEM sqlite3 CLI, which almost
+# always has fts5 — so creation SUCCEEDS regardless. But the triggers fire on the
+# GO BRIDGE's OWN inserts, using the bridge binary's EMBEDDED sqlite. If that
+# binary was built WITHOUT fts5 (e.g. an old binary, a `--skip-build` install, or
+# a CGO build that dropped `-tags sqlite_fts5`), every bridge insert fires the
+# AFTER INSERT trigger → `no such module: fts5` → the whole INSERT fails →
+# messages are SILENTLY DROPPED (live AND backfilled). This guard makes the two
+# halves agree: only install fts triggers when the bridge binary can satisfy
+# them; otherwise DROP any leftover fts schema so storage is never bricked.
+# (mattn/go-sqlite3 built with -DSQLITE_ENABLE_FTS5 links the fts5 C source, so
+# `strings` on the binary is a reliable capability probe.)
+BRIDGE_HAS_FTS5="unknown"
+if command -v strings &>/dev/null && [[ -f "$BRIDGE_BIN" ]]; then
+  # NB: use `grep -c` (reads ALL input), NOT `grep -q`. Under `set -o pipefail`,
+  # `grep -q` closes the pipe on first match → `strings` dies with SIGPIPE → the
+  # pipeline reports failure → false "no fts5". `grep -c` drains strings fully.
+  fts5_hits=$(strings "$BRIDGE_BIN" 2>/dev/null | grep -ci 'fts5' || true)
+  if [[ "${fts5_hits:-0}" -gt 0 ]]; then
+    BRIDGE_HAS_FTS5="yes"
+  else
+    BRIDGE_HAS_FTS5="no"
+  fi
 fi
 
-# Always ensure triggers exist (idempotent — handles partial failure recovery)
-log "  Ensuring FTS triggers exist..."
-run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_insert
-  AFTER INSERT ON messages BEGIN
-    INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
-  END;"
-  run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_update
-  AFTER UPDATE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-    INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
-  END;"
-  run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_delete
-  AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-  END;"
+if [[ "$BRIDGE_HAS_FTS5" == "no" ]]; then
+  log "  ⚠ Bridge binary at $BRIDGE_BIN was built WITHOUT fts5."
+  log "  ⚠ Installing fts triggers would brick ALL message storage (no such module: fts5)."
+  log "  → Protecting storage: dropping any existing messages_fts triggers + virtual table."
+  log "  → Search will use the LIKE fallback until the bridge is rebuilt with -tags sqlite_fts5"
+  log "    (CGO_ENABLED=1 go build -tags sqlite_fts5 -o whatsapp-bridge .)."
+  run_sql "DROP TRIGGER IF EXISTS messages_fts_insert;
+           DROP TRIGGER IF EXISTS messages_fts_update;
+           DROP TRIGGER IF EXISTS messages_fts_delete;
+           DROP TABLE   IF EXISTS messages_fts;"
+  log "  Step 1 complete (fts disabled — storage protected)."
+else
+  [[ "$BRIDGE_HAS_FTS5" == "unknown" ]] && log "  (bridge binary not found / strings unavailable — cannot probe fts5; proceeding)"
 
-log "  FTS5 index and triggers verified."
+  FTS_EXISTS=$(query_sql "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts';" 2>/dev/null || echo "0")
+  if [[ "$FTS_EXISTS" == "1" ]]; then
+    log "  messages_fts already exists — skipping table creation."
+  else
+    log "  Creating messages_fts FTS5 virtual table..."
+    run_sql "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+      content,
+      content='messages',
+      content_rowid='rowid'
+    );"
+    log "  Backfilling FTS index from existing messages..."
+    run_sql "INSERT INTO messages_fts(rowid, content)
+      SELECT rowid, content FROM messages WHERE content IS NOT NULL AND content != '';"
+  fi
+
+  # Always ensure triggers exist (idempotent — handles partial failure recovery)
+  log "  Ensuring FTS triggers exist..."
+  run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_insert
+    AFTER INSERT ON messages BEGIN
+      INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+    END;"
+  run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_update
+    AFTER UPDATE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+      INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+    END;"
+  run_sql "CREATE TRIGGER IF NOT EXISTS messages_fts_delete
+    AFTER DELETE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+    END;"
+
+  log "  FTS5 index and triggers verified."
+fi
 
 # ── Step 2: contacts table ────────────────────────────────────────────────────
 log "Step 2: Checking contacts table..."
