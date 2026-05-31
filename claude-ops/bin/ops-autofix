@@ -88,7 +88,28 @@ fix_bridge_fts() {
     return
   fi
 
-  # Run bridge schema migration to add FTS5 index (sqlite built-in, no rebuild needed)
+  # The bridge binary (mattn/go-sqlite3) MUST be compiled with the `sqlite_fts5`
+  # build tag. Without it, the FTS triggers added by the migration make EVERY
+  # message INSERT fail with "no such module: fts5" and the bridge silently
+  # stores nothing. So guarantee the binary is fts5-capable BEFORE adding triggers.
+  BRIDGE_BIN="$(dirname "$(dirname "$BRIDGE_DB")")/whatsapp-bridge"
+  if [ -f "$BRIDGE_BIN" ] && ! grep -qa "fts5" "$BRIDGE_BIN" 2>/dev/null; then
+    if command -v go >/dev/null 2>&1; then
+      if ( cd "$(dirname "$BRIDGE_BIN")" && CGO_ENABLED=1 go build -tags "sqlite_fts5" -o whatsapp-bridge . ) 2>/dev/null; then
+        systemctl --user restart whatsapp-bridge.service 2>/dev/null || true
+        log_fix "bridge-fts: rebuilt bridge binary with -tags sqlite_fts5 (was missing fts5 module)"
+      else
+        log_fail "bridge-fts: binary lacks fts5 and rebuild failed — skipping migration (triggers would break message storage)"
+        return
+      fi
+    else
+      log_fail "bridge-fts: binary lacks fts5 and go toolchain not found — skipping migration (triggers would break message storage)"
+      return
+    fi
+  fi
+
+  # Run bridge schema migration to add the FTS5 index + triggers (the binary is
+  # now guaranteed fts5-capable above, so the triggers won't break inserts).
   MIGRATE="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")/..}/scripts/whatsapp-bridge-migrate.sh"
   if bash "$MIGRATE" 2>/dev/null; then
     FTS_AFTER=$(sqlite3 "$BRIDGE_DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts';" 2>/dev/null || echo "0")
