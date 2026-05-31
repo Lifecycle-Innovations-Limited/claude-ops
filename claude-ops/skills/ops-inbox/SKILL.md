@@ -336,8 +336,9 @@ const scans = (await parallel(args.map(c => () =>
     \`mark-read, or mutate anything — read / search ONLY.\\n\` +
     \`STEP 1: run ToolSearch with query exactly "\${c.select}" to load the tool schemas.\\n\` +
     \`STEP 2: \${c.steps}\\n\` +
-    \`Classify each conversation NEEDS_REPLY / WAITING / HANDLED / FYI by who sent the LAST \` +
-    \`message. Capture chatId for each (needed later to reply). Cover ~last 7 days plus \` +
+    \`Classify each conversation NEEDS_REPLY / WAITING / HANDLED / FYI exactly as STEP 2 \` +
+    \`directs (including merged-thread / full-thread rules where specified). Capture chatId \` +
+    \`for each (needed later to reply). Cover ~last 7 days plus \` +
     \`anything clearly still open. Retry the documented reconnect handshake before reporting \` +
     \`reachable=false. Never fabricate conversations.\`,
     { label: \`scan:\${c.key}\`, phase: 'Scan', schema: SCAN_SCHEMA }
