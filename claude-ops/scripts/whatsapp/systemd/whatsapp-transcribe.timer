@@ -1,0 +1,14 @@
+[Unit]
+Description=Transcribe new WhatsApp voice notes every 10 min + on boot (ops-inbox integration)
+Documentation=https://github.com/lharries/whatsapp-mcp
+
+[Timer]
+# First fire 2 min after boot/session start (after the bridge connects), then every 10 min.
+OnBootSec=2min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Persistent=true
+Unit=whatsapp-transcribe.service
+
+[Install]
+WantedBy=timers.target
