@@ -43,6 +43,19 @@ Patches included:
           Subscribes to *events.Archive and UPSERT-updates the flag. Makes
           inbox = WHERE archived=0 directly queryable without hitting the
           bridge's app-state layer on every scan.
+  Fix I — Preserve archived on StoreChat: the original StoreChat used
+          `INSERT OR REPLACE INTO chats (jid, name, last_message_time)`, and
+          REPLACE deletes+reinserts the row — silently resetting the `archived`
+          column (Fix H) back to its DEFAULT (0) on every chat update (i.e. every
+          new message). Archived chats wrongly resurfaced in the inbox. Replaced
+          with an UPSERT (ON CONFLICT(jid) DO UPDATE) that touches only name and
+          last_message_time, leaving `archived` untouched.
+  Fix J — list_chats: expose archived status and filter it out by default.
+          Adds `chats.archived` to SELECT, an `include_archived: bool = False`
+          param (when False appends `chats.archived = 0` to WHERE), maps the
+          column into the Chat dataclass and _chat_to_dict output as `archived`
+          bool. Ops-inbox and other callers see only active chats by default;
+          pass include_archived=True to recover the old behaviour.
 
 Every patch is gated on a sentinel string so re-running is a no-op.
 
@@ -574,6 +587,173 @@ def get_sender_name(sender_jid: str) -> str:"""
 PY_SHAPE_SENTINEL = "claude-ops Fix E: serialization helpers + WAL-mode DB open"
 
 
+# ─── whatsapp.py Fix J: list_chats exposes archived + excludes by default ──────
+# The chats table has an `archived` column (added by Fix H in main.go) but
+# list_chats never selected it, so archived chats were returned indistinguishably
+# from active ones. Fix J:
+#   1. Adds `archived` field to the Chat dataclass (defaulting False —
+#      backwards-compatible; callers that don't read it are unaffected).
+#   2. Adds `chats.archived` to the SELECT column list (new 7th positional col).
+#   3. Maps chat_data[6] → Chat.archived in the row→Chat constructor call.
+#   4. Adds `archived` key to _chat_to_dict output.
+#   5. Adds `include_archived: bool = False` param to list_chats; when False,
+#      prepends `chats.archived = 0` to the WHERE clause so archived chats are
+#      excluded unless explicitly requested.
+
+# --- 1. Chat dataclass: add archived field ---
+PY_CHAT_DATACLASS_NEEDLE = """@dataclass
+class Chat:
+    jid: str
+    name: Optional[str]
+    last_message_time: Optional[datetime]
+    last_message: Optional[str] = None
+    last_sender: Optional[str] = None
+    last_is_from_me: Optional[bool] = None"""
+
+PY_CHAT_DATACLASS_REPLACEMENT = """@dataclass
+class Chat:
+    jid: str
+    name: Optional[str]
+    last_message_time: Optional[datetime]
+    last_message: Optional[str] = None
+    last_sender: Optional[str] = None
+    last_is_from_me: Optional[bool] = None
+    archived: bool = False  # claude-ops Fix J: exposed from chats.archived column"""
+
+PY_CHAT_DATACLASS_SENTINEL = "claude-ops Fix J: exposed from chats.archived column"
+
+# --- 2. _chat_to_dict: add archived key ---
+PY_CHAT_TO_DICT_NEEDLE = """        "is_group": chat.is_group,
+    }
+
+
+def _contact_to_dict"""
+
+PY_CHAT_TO_DICT_REPLACEMENT = """        "is_group": chat.is_group,
+        "archived": bool(chat.archived),  # claude-ops Fix J
+    }
+
+
+def _contact_to_dict"""
+
+PY_CHAT_TO_DICT_SENTINEL = '"archived": bool(chat.archived),  # claude-ops Fix J'
+
+# --- 3. list_chats SELECT: add chats.archived column ---
+PY_LIST_CHATS_SELECT_NEEDLE = """            SELECT
+                chats.jid,
+                chats.name,
+                chats.last_message_time,
+                messages.content as last_message,
+                messages.sender as last_sender,
+                messages.is_from_me as last_is_from_me
+            FROM chats"""
+
+PY_LIST_CHATS_SELECT_REPLACEMENT = """            SELECT
+                chats.jid,
+                chats.name,
+                chats.last_message_time,
+                messages.content as last_message,
+                messages.sender as last_sender,
+                messages.is_from_me as last_is_from_me,
+                chats.archived
+            FROM chats"""
+
+PY_LIST_CHATS_SELECT_SENTINEL = "chats.archived\n            FROM chats"
+
+# --- 4. list_chats signature + archived WHERE filter ---
+PY_LIST_CHATS_SIG_NEEDLE = """def list_chats(
+    query: Optional[str] = None,
+    limit: int = 20,
+    page: int = 0,
+    include_last_message: bool = True,
+    sort_by: str = "last_active",
+) -> List[Chat]:
+    \"\"\"Get chats matching the specified criteria.\"\"\"
+    try:
+        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        cursor = conn.cursor()
+
+        # Build base query
+        query_parts = ["""
+
+PY_LIST_CHATS_SIG_REPLACEMENT = """def list_chats(
+    query: Optional[str] = None,
+    limit: int = 20,
+    page: int = 0,
+    include_last_message: bool = True,
+    sort_by: str = "last_active",
+    include_archived: bool = False,  # claude-ops Fix J: exclude archived by default
+) -> List[Chat]:
+    \"\"\"Get chats matching the specified criteria.\"\"\"
+    try:
+        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        cursor = conn.cursor()
+
+        # Build base query
+        query_parts = ["""
+
+PY_LIST_CHATS_SIG_SENTINEL = "claude-ops Fix J: exclude archived by default"
+
+# --- 5. list_chats WHERE: inject archived=0 filter ---
+PY_LIST_CHATS_WHERE_NEEDLE = """        where_clauses = []
+        params = []
+
+        if query:
+            where_clauses.append(
+                "(LOWER(chats.name) LIKE LOWER(?) OR chats.jid LIKE ?)"
+            )
+            params.extend([f"%{query}%", f"%{query}%"])
+
+        if where_clauses:
+            query_parts.append("WHERE " + " AND ".join(where_clauses))"""
+
+PY_LIST_CHATS_WHERE_REPLACEMENT = """        where_clauses = []
+        params = []
+
+        # claude-ops Fix J: filter archived unless caller opts in
+        if not include_archived:
+            where_clauses.append("chats.archived = 0")
+
+        if query:
+            where_clauses.append(
+                "(LOWER(chats.name) LIKE LOWER(?) OR chats.jid LIKE ?)"
+            )
+            params.extend([f"%{query}%", f"%{query}%"])
+
+        if where_clauses:
+            query_parts.append("WHERE " + " AND ".join(where_clauses))"""
+
+PY_LIST_CHATS_WHERE_SENTINEL = "claude-ops Fix J: filter archived unless caller opts in"
+
+# --- 6. list_chats row mapping: read chat_data[6] as archived ---
+PY_LIST_CHATS_ROW_NEEDLE = """            chat = Chat(
+                jid=chat_data[0],
+                name=chat_data[1],
+                last_message_time=datetime.fromisoformat(chat_data[2])
+                if chat_data[2]
+                else None,
+                last_message=chat_data[3],
+                last_sender=chat_data[4],
+                last_is_from_me=chat_data[5],
+            )"""
+
+PY_LIST_CHATS_ROW_REPLACEMENT = """            chat = Chat(
+                jid=chat_data[0],
+                name=chat_data[1],
+                last_message_time=datetime.fromisoformat(chat_data[2])
+                if chat_data[2]
+                else None,
+                last_message=chat_data[3],
+                last_sender=chat_data[4],
+                last_is_from_me=chat_data[5],
+                archived=bool(chat_data[6]) if len(chat_data) > 6 else False,  # claude-ops Fix J
+            )"""
+
+PY_LIST_CHATS_ROW_SENTINEL = (
+    "archived=bool(chat_data[6]) if len(chat_data) > 6 else False,  # claude-ops Fix J"
+)
+
+
 # ─── main.go Fix H: idempotent chats.archived migration + SetArchived helper ──
 # The chats table only has (jid, name, last_message_time). Without an `archived`
 # column the ops-inbox skill can't query "inbox = non-archived" without a live
@@ -795,6 +975,36 @@ ARCHIVE_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix F: POST /api/archive — a
 
 ARCHIVE_ENDPOINT_SENTINEL = "claude-ops Fix F: POST /api/archive"
 
+# ─── main.go Fix I: preserve archived column on StoreChat ─────────────────────
+# StoreChat used `INSERT OR REPLACE INTO chats (jid, name, last_message_time)`.
+# REPLACE is delete+reinsert, so the `archived` column (added by Fix H) was
+# silently reset to its DEFAULT (0) on every chat update — i.e. every inbound
+# message un-archived the chat in messages.db, making archived chats resurface
+# in the inbox. Swap to an UPSERT that updates only name + last_message_time and
+# leaves `archived` (and any future columns) untouched.
+STORECHAT_PRESERVE_NEEDLE = """func (store *MessageStore) StoreChat(jid, name string, lastMessageTime time.Time) error {
+\t_, err := store.db.Exec(
+\t\t"INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)",
+\t\tjid, name, lastMessageTime,
+\t)
+\treturn err
+}"""
+
+STORECHAT_PRESERVE_REPLACEMENT = """func (store *MessageStore) StoreChat(jid, name string, lastMessageTime time.Time) error {
+\t// claude-ops Fix I: UPSERT instead of INSERT OR REPLACE. REPLACE is
+\t// delete+reinsert, which resets the `archived` column (Fix H) to its DEFAULT
+\t// (0) on every chat update. ON CONFLICT(jid) DO UPDATE touches only the two
+\t// columns we actually own here, preserving `archived` (and any future column).
+\t_, err := store.db.Exec(
+\t\t`INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)
+\t\t ON CONFLICT(jid) DO UPDATE SET name=excluded.name, last_message_time=excluded.last_message_time`,
+\t\tjid, name, lastMessageTime,
+\t)
+\treturn err
+}"""
+
+STORECHAT_PRESERVE_SENTINEL = "claude-ops Fix I"
+
 
 def replace_idempotent(
     p: pathlib.Path, needle: str, replacement: str, sentinel: str, label: str
@@ -926,6 +1136,13 @@ def main() -> int:
     )
     changed_go |= replace_idempotent(
         main_go,
+        STORECHAT_PRESERVE_NEEDLE,
+        STORECHAT_PRESERVE_REPLACEMENT,
+        STORECHAT_PRESERVE_SENTINEL,
+        "Fix I: StoreChat UPSERT preserves archived column",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
         HEAL_LTHASH_NEEDLE,
         HEAL_LTHASH_REPLACEMENT,
         HEAL_LTHASH_SENTINEL,
@@ -953,6 +1170,48 @@ def main() -> int:
         PY_SHAPE_REPLACEMENT,
         PY_SHAPE_SENTINEL,
         "Fix E: WAL _open_db + dict serialisation helpers",
+    )
+    changed_py |= replace_idempotent(
+        whatsapp_py,
+        PY_CHAT_DATACLASS_NEEDLE,
+        PY_CHAT_DATACLASS_REPLACEMENT,
+        PY_CHAT_DATACLASS_SENTINEL,
+        "Fix J: Chat dataclass archived field",
+    )
+    changed_py |= replace_idempotent(
+        whatsapp_py,
+        PY_CHAT_TO_DICT_NEEDLE,
+        PY_CHAT_TO_DICT_REPLACEMENT,
+        PY_CHAT_TO_DICT_SENTINEL,
+        "Fix J: _chat_to_dict archived key",
+    )
+    changed_py |= replace_idempotent(
+        whatsapp_py,
+        PY_LIST_CHATS_SELECT_NEEDLE,
+        PY_LIST_CHATS_SELECT_REPLACEMENT,
+        PY_LIST_CHATS_SELECT_SENTINEL,
+        "Fix J: list_chats SELECT chats.archived",
+    )
+    changed_py |= replace_idempotent(
+        whatsapp_py,
+        PY_LIST_CHATS_SIG_NEEDLE,
+        PY_LIST_CHATS_SIG_REPLACEMENT,
+        PY_LIST_CHATS_SIG_SENTINEL,
+        "Fix J: list_chats include_archived param",
+    )
+    changed_py |= replace_idempotent(
+        whatsapp_py,
+        PY_LIST_CHATS_WHERE_NEEDLE,
+        PY_LIST_CHATS_WHERE_REPLACEMENT,
+        PY_LIST_CHATS_WHERE_SENTINEL,
+        "Fix J: list_chats archived WHERE filter",
+    )
+    changed_py |= replace_idempotent(
+        whatsapp_py,
+        PY_LIST_CHATS_ROW_NEEDLE,
+        PY_LIST_CHATS_ROW_REPLACEMENT,
+        PY_LIST_CHATS_ROW_SENTINEL,
+        "Fix J: list_chats row→Chat archived mapping",
     )
 
     if changed_go:
