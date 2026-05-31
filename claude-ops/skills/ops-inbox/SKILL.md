@@ -83,6 +83,8 @@ Before executing, load available context:
 
    **0a. Freshness gate (run FIRST, blocking, bounded).** Before classifying anything, run `~/bin/wa-inbox-fresh.sh` (shipped by `scripts/install-whatsapp-bridge-linux.sh`). It probes the bridge with a real **curl connection probe** (`curl -s -m4 http://127.0.0.1:8080/`), forces a backfill, triggers voice-note transcription, and waits (bounded ~32s) for the newest message to settle, then prints a FRESHNESS report (`newest message = … (N min old)`). It **only restarts the bridge if the curl probe genuinely fails twice** — do NOT gate liveness on `ss | grep :8080`, because `ss` renders port 8080 as the service name `webcache`, so the grep never matches and you'd needlessly bounce a healthy bridge. Exit 2 means the bridge is down and unrecoverable → the store is STALE, do not trust last-sender classification.
 
+   **The FULL-THREAD AWARENESS GATE (in "Processing each channel") depends on this step having run first.** That gate's "read both directions incl. `[voice]`" only works once `wa-inbox-fresh.sh` (freshness + backfill) and the voice-note transcription pass (step 0c) have completed and the store has settled — otherwise outbound rows and `[voice]` bodies are still missing and the gate reads an incomplete thread.
+
    **0b. Background backfill + contacts-link** (idempotent, safe every time). The backfill pulls recent messages for the 50 most-active chats; the link populates `messages.db.contacts` from the whatsmeow session store so both `<pn>@s.whatsapp.net` and `<lid>@lid` chat JIDs resolve to names (without it the `contacts` table is empty and LID-format chats show raw phone numbers):
    ```bash
    BR="${WHATSAPP_BRIDGE_DIR:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
@@ -282,7 +284,7 @@ Workflow({
     { key: 'slack',    select: 'select:mcp__slack__conversations_unreads,mcp__slack__channels_list,mcp__slack__conversations_history,mcp__slack__conversations_replies',
       steps: 'conversations_unreads to find unread DMs/channels; read latest via history/replies.' },
     { key: 'whatsapp', select: 'select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__get_chat',
-      steps: 'list_chats {sort_by:"last_active"}; classify by last_is_from_me; only fetch thread when null.' },
+      steps: 'list_chats {sort_by:"last_active"}; last_is_from_me is ONLY a first pass. Before any NEEDS_REPLY, clear the FULL-THREAD AWARENESS GATE: list_messages {chat_jid, limit: 25} reading BOTH directions including is_from_me=1 rows and [voice] transcripts, write the 2-sentence arc summary, and reconcile the user own sends that may be missing from the store. Never classify from the last message alone.' },
     { key: 'imessage', select: 'select:mcp__plugin_imessage_imessage__chat_messages',
       steps: 'chat_messages {limit:30} (omit chat_guid); classify each thread by who sent the LAST message. Capture the chat_id GUID from each header.' },
     { key: 'telegram', select: 'select:mcp__plugin_ops_telegram__list_dialogs,mcp__plugin_ops_telegram__get_messages,mcp__plugin_ops_telegram__search_messages',
@@ -484,7 +486,7 @@ For each channel, detect availability at runtime:
 
 2. **For each channel, run a FULL scan** (not just unread). Drive this via the **Scan engine** above — a parallel `Workflow` fan-out of read-only scanners (Agent Teams / sequential as the documented fallback). The per-channel detail below defines what each scanner reads and how the main session presents results and replies:
    - **Email**: Search `in:inbox` (not `is:unread`) via `gog gmail search -a $GMAIL_ACCOUNT -j --results-only --no-input --max 30 "in:inbox"`. For each thread, read the last message to determine who sent it last. Check for DRAFT or SENT labels. **Before suggesting to send a draft, verify no reply was already sent in the thread.**
-   - **WhatsApp**: Call `mcp__whatsapp__list_chats {sort_by: "last_active"}` to get all chats. Filter to chats with `last_message_time` in the last 7 days (`last_message_time` is RFC3339+TZ — parse with timezone awareness, never strip the offset). Resolve display name from contacts.db first (`SELECT name FROM contacts WHERE jid=?`), fall back to the chat's `name` field, and only call giga memory when both are empty. Classify direction using `last_is_from_me` on the chat object (`1` = WAITING, `0` = NEEDS_REPLY). Only fetch the full thread via `mcp__whatsapp__list_messages {chat_jid, limit: 20}` when `last_is_from_me` is absent/null or when building reply context for NEEDS_REPLY chats.
+   - **WhatsApp**: Call `mcp__whatsapp__list_chats {sort_by: "last_active"}` to get all chats. Filter to chats with `last_message_time` in the last 7 days (`last_message_time` is RFC3339+TZ — parse with timezone awareness, never strip the offset). Resolve display name from contacts.db first (`SELECT name FROM contacts WHERE jid=?`), fall back to the chat's `name` field, and only call giga memory when both are empty. Use `last_is_from_me` on the chat object (`1` = WAITING, `0` = NEEDS_REPLY) ONLY as a first pass — it does NOT finalise a classification. Before marking any chat NEEDS_REPLY you MUST clear the **FULL-THREAD AWARENESS GATE** above: fetch `mcp__whatsapp__list_messages {chat_jid, limit: 25}` reading BOTH directions (capture `is_from_me=1` rows AND `[voice]` transcripts), write the 2-sentence arc summary, and reconcile the user's own sends that may be missing from the store.
    - **iMessage**: Call `mcp__plugin_imessage_imessage__chat_messages {limit: 30}` (omit `chat_guid` to pull every allowlisted thread at once). Output is rendered text, not JSON: each thread is labelled `DM`/`Group` with its participant list, then timestamped messages oldest-first. Sent-by-you messages are marked (`Me:` / `→`); inbound messages carry the sender handle. Classify each thread by who sent the LAST message — same NEEDS_REPLY / WAITING / FYI logic as WhatsApp.
    - **Slack**: Search via Slack MCP tools. Check who sent last message in each thread.
    - **Telegram**: Use user-auth MCP (NOT bot API) to read recent conversations.
@@ -528,6 +530,27 @@ If only 3 channels are configured, "All channels" + 3 channel options = 4, fits 
 
 ## Processing each channel
 
+### FULL-THREAD AWARENESS GATE (BLOCKING — every channel, every session)
+
+**This gate is non-skippable and runs PER THREAD, BEFORE any NEEDS_REPLY classification or any draft, on EVERY channel (WhatsApp, iMessage, email, Slack, Telegram, Notion, Discord) in EVERY fresh session.** It exists because the single most common recurring failure is a fresh session classifying a thread NEEDS_REPLY from the last message / last-direction flag alone and drafting off shallow context — re-flagging threads the user already answered, missing the user's own sends, and replying off a misread arc. The data is now complete (voice notes auto-transcribed as `[voice] …`; the bridge persists `/api/send` per #404; the freshness gate runs first) but completeness is worthless if you don't actually read it.
+
+Per thread, you MUST:
+
+1. **Read ≥20 messages in BOTH directions before classifying.** Fetch at least 20 messages including BOTH inbound AND the user's own outbound (`is_from_me` / SENT / `Me:`), INCLUDING any `[voice]` transcripts. Never read only the last message, the last-direction flag, or a shallow window. The `last_is_from_me` / last-sender first pass is ONLY a first pass — it does not satisfy this gate.
+
+2. **Reconcile outbound the store may be missing.** The user often replies from their phone or by voice, and historic sends weren't always persisted. Before trusting "they sent last", check:
+   - **`[voice]` transcripts** — a `[voice] …` body is the sender's words; read it as a real message in both directions.
+   - **The bridge send-log** — `journalctl --user -u whatsapp-bridge.service --no-pager | grep "Received request to send message"` surfaces outbound `/api/send` calls that pre-#404 were NOT written to `messages.db`. If the user sent there, the thread is answered.
+   - **The SAME contact's sends in OTHER threads/groups and other channels** — the user may have answered the same person in a group, on a secondary number, or via email/iMessage. Search the contact/topic across threads and channels (`mcp__whatsapp__list_messages {query, limit: 25}`, cross-channel search).
+
+3. **Write a 2-sentence conversation-arc summary proving comprehension** — who said what, and what is actually pending right now. If you cannot write it, you have NOT read enough: read more messages; do NOT classify.
+
+4. **Mark NEEDS_REPLY ONLY if the last INBOUND message is genuinely unanswered** after steps 1–3. If the user already replied ANYWHERE — including phone-sent or voice messages that may be ABSENT from the companion store — it is WAITING or HANDLED, never NEEDS_REPLY. **Trust the user's word over the store**: if the user says they answered, they answered, even if the store doesn't show it.
+
+5. **This is a scan-correctness invariant, not a suggestion.** A NEEDS_REPLY produced without the 2-sentence arc summary is a scan bug. Do not present it.
+
+The per-channel classify/draft steps below (WhatsApp, iMessage, email) all reference this gate — clearing it is a precondition, not an optional enrichment pass.
+
 ### WhatsApp (FULL SCAN + DEEP CONTEXT)
 
 **Phase 1 — Classify:**
@@ -549,12 +572,12 @@ If only 3 channels are configured, "All channels" + 3 channel options = 4, fits 
    ```
    Use the DB result as the display name. If the DB returns empty, fall back to the `name` field in the `list_chats` response. Only call `mcp__giga__evoke` when both are empty.
 
-4. **DIRECTION — classify from `last_is_from_me` on the chat object itself.** Do NOT re-derive from the last message in a fetched thread unless `last_is_from_me` is absent or null:
-   - `last_is_from_me == 1` → **WAITING** (you sent last; no reply needed)
-   - `last_is_from_me == 0` → **NEEDS REPLY** (they sent last)
+4. **DIRECTION — `last_is_from_me` is the FIRST PASS ONLY.** Read it off the chat object for a quick provisional bucket, but it NEVER finalises a NEEDS_REPLY — the **FULL-THREAD AWARENESS GATE** above is mandatory before any chat is presented as NEEDS_REPLY:
+   - `last_is_from_me == 1` → provisionally **WAITING** (you sent last; no reply needed)
+   - `last_is_from_me == 0` → provisional **NEEDS REPLY** candidate — must clear the gate (read ≥25 both directions incl. `[voice]`, write the 2-sentence arc, reconcile the user's own sends) before it is confirmed.
 
 5. For chats where `last_is_from_me` is absent or null, fetch the thread as fallback:
-   `mcp__whatsapp__list_messages` with `{chat_jid: "<JID>", limit: 20}` — check `is_from_me` on the **last element** of the returned array.
+   `mcp__whatsapp__list_messages` with `{chat_jid: "<JID>", limit: 25}` — read BOTH directions (capture `is_from_me=1` rows and `[voice]` transcripts), not just the **last element** of the returned array.
 
 6. Classify each chat (same direction rule as step 4 — use `last_is_from_me` on the chat object; only after the step 5 thread fallback use the last element's `is_from_me`):
    - **NEEDS REPLY**: `last_is_from_me == 0`, or (fallback only) last thread message `is_from_me: false`
@@ -562,7 +585,7 @@ If only 3 channels are configured, "All channels" + 3 channel options = 4, fits 
    - **ARCHIVE**: Newsletters (`@newsletter` JIDs), dead group chats with no recent activity, one-word reactions, or concluded conversations. Bulk-archive these via `mcp__whatsapp__archive_chat {chat_jid, archive: true}` after user confirmation. If the call fails with `LTHash mismatch`, run `mcp__whatsapp__resync_app_state {name: "regular_low", full_sync: true}` first, then retry.
 
 7. **Cross-thread answered-elsewhere check (BOTH DIRECTIONS — scan Sam's own sent messages).** Before presenting any chat as NEEDS REPLY, verify it has not already been answered in another channel or in a later message within the same thread that the `last_is_from_me` flag missed. This is the most common source of false NEEDS_REPLY:
-   - **Same-thread recheck**: when `last_is_from_me == 0` but the chat has been active recently, call `mcp__whatsapp__list_messages {chat_jid, limit: 5}` and scan ALL five messages for `is_from_me: true` after the inbound message — if one exists, reclassify as WAITING.
+   - **Same-thread recheck**: when `last_is_from_me == 0`, call `mcp__whatsapp__list_messages {chat_jid, limit: 25}` and scan ALL of them (capturing `is_from_me=1` rows and `[voice]` transcripts) for `is_from_me: true` after the inbound message — if one exists, reclassify as WAITING. This is part of clearing the FULL-THREAD AWARENESS GATE, not an optional extra.
    - **Cross-thread outbound check**: for a NEEDS REPLY candidate, search Sam's own sent messages across ALL threads: `mcp__whatsapp__list_messages {query: "<contact_name_or_topic>", limit: 10}` and check `is_from_me: true` entries — if Sam sent a reply on a different JID (e.g. replied in a group that includes the same person, or via a secondary number) after the inbound timestamp, reclassify as HANDLED.
    - **DB fallback** (when MCP tools unavailable): `SELECT m.is_from_me, m.timestamp FROM messages m WHERE m.chat_jid != '<this_jid>' AND m.is_from_me=1 AND m.timestamp > <inbound_ts> AND m.body LIKE '%<keyword>%' LIMIT 5` — a hit reclassifies as HANDLED.
    - **Never surface a NEEDS REPLY that Sam already answered** — a scan that misses Sam's own outbound reply is a misdiagnosis that wastes attention.
@@ -622,7 +645,7 @@ Reply via: `mcp__whatsapp__send_message` with `{recipient: "<JID>", message: "<m
 | Operation | Tool / Command |
 |-----------|---------------|
 | List chats | `mcp__whatsapp__list_chats {sort_by: "last_active"}` |
-| Read messages | `mcp__whatsapp__list_messages {chat_jid, limit: 20}` |
+| Read messages (both directions, incl. `[voice]`) | `mcp__whatsapp__list_messages {chat_jid, limit: 25}` |
 | Search messages (FTS) | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}` |
 | Find contact | `mcp__whatsapp__search_contacts {query: "<name>"}` |
 | Send message | `mcp__whatsapp__send_message {recipient, message}` |
@@ -654,9 +677,9 @@ iMessage is a **first-class channel, exactly like WhatsApp**: scannable for repl
    - Read all messages in order. Know which are from the user vs from the contact.
    - Understand what it's about, what was discussed, what's pending.
    - Note the user's tone/style and language (NL/EN) in their sent messages.
-4. Classify each thread:
-   - **NEEDS REPLY**: the LAST message is inbound (the contact sent last).
-   - **WAITING**: the LAST message is from the user (they sent last) — no action needed.
+4. Classify each thread — the last-message direction is a FIRST PASS only; clear the **FULL-THREAD AWARENESS GATE** above (read ≥20 both directions, write the 2-sentence arc, reconcile the user's own sends across channels) before confirming any NEEDS_REPLY:
+   - **NEEDS REPLY**: the last INBOUND message is genuinely unanswered after the gate. If the user already replied anywhere (including phone-sent messages absent from `chat.db`), it is WAITING/HANDLED.
+   - **WAITING**: the user sent last (or already answered elsewhere) — no action needed.
    - **FYI**: notifications, automated/2FA-code texts, one-word reactions, concluded threads. iMessage has no archive API in this plugin, so FYI items are simply not surfaced for reply — never attempt to "archive" an iMessage thread.
 
 **Phase 2 — Build context for NEEDS REPLY threads (run in parallel):**
@@ -776,9 +799,9 @@ def classify_thread(thread_id):
 2. **For triage:** classify directly from the search envelope using `labels` + `from` (fast-path above). Only call `gog gmail thread get` for items the user opens or that need a draft.
 3. **For drafting:** read the FULL thread via `gog gmail thread get -a $GMAIL_ACCOUNT <threadId> -j` and parse using the canonical recipe — remember messages are at `thread.messages[]`, NOT at the top level.
 4. Check the last message's `From` header and `labelIds` (SENT, DRAFT)
-4. Classify:
-   - **NEEDS REPLY**: Last sender is NOT you AND no unsent draft exists → action needed
-   - **WAITING**: Last sender IS you (SENT label) → waiting for response
+4. Classify — clear the **FULL-THREAD AWARENESS GATE** above (read the full thread both directions, write the 2-sentence arc, reconcile the user's own SENT messages — including replies sent from another client that may not show as the thread's last message) before confirming any NEEDS_REPLY:
+   - **NEEDS REPLY**: Last sender is NOT you AND no unsent draft exists AND the user has not already replied anywhere → action needed
+   - **WAITING**: Last sender IS you (SENT label) or you already answered → waiting for response
    - **DRAFT**: Unsent draft exists → verify no reply already sent, then offer to send
    - **FYI**: Newsletters, automated notifications, receipts → bulk archive
 
