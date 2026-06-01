@@ -96,7 +96,14 @@ fix_bridge_fts() {
   if [ -f "$BRIDGE_BIN" ] && ! grep -qa "fts5" "$BRIDGE_BIN" 2>/dev/null; then
     if command -v go >/dev/null 2>&1; then
       if ( cd "$(dirname "$BRIDGE_BIN")" && CGO_ENABLED=1 go build -tags "sqlite_fts5" -o whatsapp-bridge . ) 2>/dev/null; then
+        # This restart is mandatory (the freshly-built binary must be loaded) and rare
+        # (only when the binary lacks fts5), so we don't floor-SKIP it — but we DO stamp
+        # the shared cross-caller restart floor afterwards so other callers
+        # (wa-bridge-keepalive.sh, wa-inbox-fresh.sh, whatsapp-bridge-up.sh) back off for
+        # 180s and don't pile on. whatsmeow can't re-fetch phone-sent messages on
+        # reconnect, so coordinated restarts prevent dropping the user's own sends.
         systemctl --user restart whatsapp-bridge.service 2>/dev/null || true
+        date +%s > "$HOME/.claude/.once.whatsapp-bridge-restart.last" 2>/dev/null || true
         log_fix "bridge-fts: rebuilt bridge binary with -tags sqlite_fts5 (was missing fts5 module)"
       else
         log_fail "bridge-fts: binary lacks fts5 and rebuild failed — skipping migration (triggers would break message storage)"
