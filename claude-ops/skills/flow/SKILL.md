@@ -9,9 +9,32 @@ allowed-tools:
   - Glob
   - Skill
   - Agent
+  - TeamCreate
+  - SendMessage
 effort: medium
 maxTurns: 20
 ---
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when a
+lifecycle stage fans out into parallel, coordinated work (e.g. build + test +
+review running together, or a multi-repo ship). This enables:
+- Stage agents share context mid-flight (the test agent surfaces a regression →
+  the build agent pivots before review starts)
+- You can steer priorities in real time ("land the API change first, then docs")
+- Agents report progress as each stage completes, so you sequence the merge
+
+**Team setup** (only when the flag is enabled, and only for genuinely parallel stages):
+```
+TeamCreate("flow-lifecycle")
+Agent(team_name="flow-lifecycle", name="stage-build", ...)
+Agent(team_name="flow-lifecycle", name="stage-test", ...)
+```
+Steer with `SendMessage` / `broadcast`; share work via `TaskCreate`/`TaskUpdate`.
+
+If the flag is NOT set, fall back to standard fire-and-forget subagents (the
+default), or just route the stage to its single canonical command inline.
 
 ## Runtime Context
 
