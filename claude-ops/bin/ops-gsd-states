@@ -46,7 +46,11 @@ frontmatter_value() {
   ' "$file"
 }
 
-jq -r '.projects[] | select(.gsd == true) | .paths[]' "$REGISTRY" 2>/dev/null \
+# Schema-tolerant: registry.json now carries the GSD project schema (no .gsd /
+# .paths[] fields). Treat every GSD-tracked project as a match (the registry is
+# GSD-only) and fall back from .paths[] to .path so we read the single path key
+# the current schema actually provides.
+jq -r '.projects[] | select(.gsd == true or .has_roadmap == true or (has("phase") and (.phase // "") != "")) | (.paths // [.path]) | .[]?' "$REGISTRY" 2>/dev/null \
 | while IFS= read -r raw; do
     [ -z "$raw" ] && continue
     expanded=$(expand_path "$raw")
