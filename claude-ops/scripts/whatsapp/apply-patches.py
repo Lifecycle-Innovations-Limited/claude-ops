@@ -809,6 +809,92 @@ PY_LIST_CHATS_ROW_SENTINEL = (
 )
 
 
+# ─── Fix K: wire /api/recover_app_state into the MCP server ───────────────────
+# The bridge exposes POST /api/recover_app_state (Fix I) but upstream's MCP server
+# only had resync_app_state. These three patches add the recover_app_state MCP tool
+# (whatsapp-mcp-server/main.py import + @mcp.tool wrapper) and its bridge-call helper
+# (whatsapp-mcp-server/whatsapp.py), so the fatal-recovery path is reachable as
+# mcp__whatsapp__recover_app_state, not just via raw curl.
+MCP_IMPORT_NEEDLE = """    resync_app_state as whatsapp_resync_app_state,
+)"""
+MCP_IMPORT_REPLACEMENT = """    resync_app_state as whatsapp_resync_app_state,
+    recover_app_state as whatsapp_recover_app_state,  # claude-ops Fix K
+)"""
+MCP_IMPORT_SENTINEL = "recover_app_state as whatsapp_recover_app_state"
+
+MCP_TOOL_NEEDLE = """    success, message = whatsapp_resync_app_state(name, full_sync)
+    return {"success": success, "message": message}
+
+
+@mcp.tool()
+def archive_chat(chat_jid: str, archive: bool = True) -> Dict[str, Any]:"""
+MCP_TOOL_REPLACEMENT = """    success, message = whatsapp_resync_app_state(name, full_sync)
+    return {"success": success, "message": message}
+
+
+@mcp.tool()
+def recover_app_state(name: str = "regular_low") -> Dict[str, Any]:
+    \"\"\"Fatal-recovery for a corrupt WhatsApp app-state collection (claude-ops Fix K).
+
+    Use when archive_chat / resync_app_state keep failing with a "mismatching
+    LTHash" / 409 conflict that resync cannot fix — the server's patch chain is
+    unverifiable (whatsmeow #382/#858). This asks the user's PRIMARY device for a
+    fresh unencrypted snapshot and rebuilds the collection from scratch, bypassing
+    the broken patches. The phone MUST be online; allow a few seconds, then retry
+    archive_chat.
+
+    Args:
+        name: Patch name to recover (default regular_low — holds archive/mute/pin).
+    \"\"\"
+    success, message = whatsapp_recover_app_state(name)
+    return {"success": success, "message": message}
+
+
+@mcp.tool()
+def archive_chat(chat_jid: str, archive: bool = True) -> Dict[str, Any]:"""
+MCP_TOOL_SENTINEL = (
+    'def recover_app_state(name: str = "regular_low") -> Dict[str, Any]:'
+)
+
+MCP_HELPER_NEEDLE = """        return False, f"Error: HTTP {response.status_code} - {response.text}"
+    except requests.RequestException as e:
+        return False, f"Request error: {e}"
+    except Exception as e:
+        return False, f"Unexpected error: {e}"
+
+
+def archive_chat(chat_jid: str, archive: bool = True) -> Tuple[bool, str]:"""
+MCP_HELPER_REPLACEMENT = """        return False, f"Error: HTTP {response.status_code} - {response.text}"
+    except requests.RequestException as e:
+        return False, f"Request error: {e}"
+    except Exception as e:
+        return False, f"Unexpected error: {e}"
+
+
+def recover_app_state(name: str = "regular_low") -> Tuple[bool, str]:
+    \"\"\"Fatal-recovery for a corrupt app-state collection whose server patch chain
+    is unverifiable (mismatching LTHash that resync_app_state cannot fix). Asks the
+    primary device for a fresh unencrypted snapshot; the phone must be online.
+    claude-ops Fix K.\"\"\"
+    try:
+        url = f"{WHATSAPP_API_BASE_URL}/recover_app_state"
+        response = requests.post(url, json={"name": name})
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("success", False), result.get(
+                "message", "Unknown response"
+            )
+        return False, f"Error: HTTP {response.status_code} - {response.text}"
+    except requests.RequestException as e:
+        return False, f"Request error: {e}"
+    except Exception as e:
+        return False, f"Unexpected error: {e}"
+
+
+def archive_chat(chat_jid: str, archive: bool = True) -> Tuple[bool, str]:"""
+MCP_HELPER_SENTINEL = "claude-ops Fix K"
+
+
 # ─── main.go Fix H: idempotent chats.archived migration + SetArchived helper ──
 # The chats table only has (jid, name, last_message_time). Without an `archived`
 # column the ops-inbox skill can't query "inbox = non-archived" without a live
@@ -1095,8 +1181,9 @@ def main() -> int:
 
     main_go = args.install_dir / "whatsapp-bridge" / "main.go"
     whatsapp_py = args.install_dir / "whatsapp-mcp-server" / "whatsapp.py"
+    server_main_py = args.install_dir / "whatsapp-mcp-server" / "main.py"
 
-    for p in (main_go, whatsapp_py):
+    for p in (main_go, whatsapp_py, server_main_py):
         if not p.is_file():
             print(f"ERROR: expected file does not exist: {p}", file=sys.stderr)
             return 1
@@ -1276,6 +1363,33 @@ def main() -> int:
         PY_LIST_CHATS_ROW_SENTINEL,
         "Fix J: list_chats row→Chat archived mapping",
     )
+    # Fix K: recover_app_state bridge-call helper (whatsapp.py)
+    changed_py |= replace_idempotent(
+        whatsapp_py,
+        MCP_HELPER_NEEDLE,
+        MCP_HELPER_REPLACEMENT,
+        MCP_HELPER_SENTINEL,
+        "Fix K: recover_app_state helper (whatsapp.py)",
+    )
+
+    changed_server_main = False
+    print("  whatsapp-mcp-server/main.py:")
+    # Fix K: recover_app_state MCP tool (import alias + @mcp.tool wrapper)
+    changed_server_main |= replace_idempotent(
+        server_main_py,
+        MCP_IMPORT_NEEDLE,
+        MCP_IMPORT_REPLACEMENT,
+        MCP_IMPORT_SENTINEL,
+        "Fix K: recover_app_state import alias (main.py)",
+    )
+    changed_server_main |= replace_idempotent(
+        server_main_py,
+        MCP_TOOL_NEEDLE,
+        MCP_TOOL_REPLACEMENT,
+        MCP_TOOL_SENTINEL,
+        "Fix K: recover_app_state MCP tool (main.py)",
+    )
+    changed_py = changed_py or changed_server_main
 
     if changed_go:
         print("  main.go changed — caller should `go build` the bridge")
