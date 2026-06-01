@@ -215,7 +215,9 @@ scan_repo() {
 SEM=0
 while IFS= read -r project; do
   PROJECT_PATH=$(echo "$project" | jq -r '.path // empty')
-  REPOS=$(echo "$project" | jq -r '.repos[]? // empty')
+  # Schema-tolerant: GSD registry has no .repos[]; derive owner/repo from .remote_url.
+  # Prefer explicit .repos[] when present (partner-template shape), else parse remote_url.
+  REPOS=$(echo "$project" | jq -r '(.repos[]? ) // (if (.remote_url//"")!="" then (.remote_url|sub("\\.git$";"")|sub("^https?://github.com/";"")|sub("^git@github.com:";"")) else empty end)')
   [ -z "$REPOS" ] && continue
 
   for repo in $REPOS; do
@@ -224,7 +226,9 @@ while IFS= read -r project; do
     # Resolve path: if project has multiple repos assume <project_path>/<repo-name>;
     # otherwise use project_path itself.
     REPO_NAME=$(echo "$repo" | awk -F/ '{print $2}')
-    NUM_REPOS=$(echo "$project" | jq '.repos | length')
+    # Schema-tolerant: GSD registry has no .repos; count the same derivation
+    # used above (explicit .repos[] else single derived-from-remote_url repo).
+    NUM_REPOS=$(echo "$project" | jq '[ (.repos[]? ) // (if (.remote_url//"")!="" then (.remote_url|sub("\\.git$";"")|sub("^https?://github.com/";"")|sub("^git@github.com:";"")) else empty end) ] | length')
     if [ "$NUM_REPOS" -gt 1 ] && [ -d "$PROJECT_PATH/$REPO_NAME" ]; then
       REPO_PATH="$PROJECT_PATH/$REPO_NAME"
     else
