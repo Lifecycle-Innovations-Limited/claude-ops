@@ -256,13 +256,75 @@ sqlite3 "$DB" "SELECT jid, name, phone FROM contacts WHERE name LIKE '%<name>%' 
 ---
 
 
-## Scan engine — parallel Workflow fan-out (primary)
+## Scan engine — offline script first (primary), Workflow only for what it can't reach
 
-When scanning more than one channel (the "all channels" path, or any multi-channel
-selection), use the **`Workflow` tool** to fan out one **read-only** scanner agent per
-*available* channel, then synthesize. This replaces the old sequential / fire-and-forget
-scan: channels are scanned concurrently, each returns structured classified results, and
-wall-clock collapses to the slowest single channel instead of the sum of all of them.
+**Run `bin/ops-inbox-scan` FIRST. It is the primary scan engine.** It classifies the two
+heaviest channels — WhatsApp (direct read of the whatsmeow sqlite store) and Email (one
+`gog gmail search`) — deterministically, in-process, in well under a second, emitting compact
+JSON. No subagents, no MCP, near-zero tokens.
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --pretty            # both channels
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --whatsapp-only     # WA only
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --days 14           # wider window
+```
+
+**Why this exists:** the multi-channel scan used to fan out one Workflow subagent per
+channel. A single real run burned **~330k subagent tokens / 5 agents / ~130s** to do work
+that, for WhatsApp, is a sqlite read, and for Email, a CLI call. The script does the same
+classification (and *better* — it merges each person's lid↔phone chats into one
+conversation and resolves real names from `contacts`) for free. Reserve agent fan-out for
+genuine reasoning, not for reading a database.
+
+`ops-inbox-scan` output (always valid JSON, even on partial failure):
+
+```jsonc
+{
+  "generated_at": "…", "window_days": 7,
+  "whatsapp": {
+    "needs_reply": [ { "who", "jid", "alt_jids", "last_message_at", "age_min",
+                       "last_from_me", "preview":[{from_me,text}] } ],
+    "waiting":  [ … ],   // you sent last — no action
+    "groups":   [ … ],   // group chats w/ recent activity + preview — YOU scan these
+                         // for @mentions / a direct question before any NEEDS_REPLY
+    "fyi":      [ … ]    // newsletters / broadcasts
+  },
+  "email": { "reachable": true, "needs_reply":[…], "waiting":[…], "fyi":[…] },
+  "counts": { … }, "notes": [ … ]
+}
+```
+
+**What the script does NOT do — and what you do next, in the MAIN session (no subagents):**
+
+1. **Slack** — one `mcp__slack__conversations_unreads {include_messages:true}` call. One
+   round-trip; a subagent is pure overhead. Skip entirely if prefs show 0 workspaces.
+2. **Telegram** — one `mcp__plugin_ops_telegram__list_dialogs` call (skip the
+   `@SamCloudDevBot` / Pocket ops bot dialog — that's automation). Skip if unconfigured.
+3. **FULL-THREAD AWARENESS GATE on the few NEEDS_REPLY candidates** — the script's WhatsApp
+   buckets are merged-thread, last-direction-correct *first passes*; its `groups` entries
+   are explicitly un-classified. Its email `needs_reply` is an envelope first pass. Before
+   you draft ANY reply, clear the gate per "Processing each channel": for the handful of
+   candidates, read the full thread both directions (incl. `[voice]`), write the 2-sentence
+   arc, reconcile the user's own phone-sent messages, and demote anything already answered.
+   You are now doing deep reads on ~3 threads, not scanning hundreds — that is the whole
+   point of the split: cheap script-side triage, expensive reasoning only where it pays.
+
+**When to fall back to the Workflow fan-out below (the exception, not the default):** only
+when the script genuinely can't cover a channel that has real volume needing per-thread
+*reasoning* — e.g. a Slack/Telegram backlog of dozens of human threads to classify, an
+iMessage host (macOS) the script doesn't read, or the WhatsApp store is down and you must
+classify via live MCP. For the common case (WA + email + a glance at Slack/Telegram), the
+script + a couple of inline MCP calls replaces the entire fan-out.
+
+---
+
+### Workflow fan-out (FALLBACK — only per the "when to fall back" note above)
+
+When the script can't reach a channel that has real per-thread volume, use the **`Workflow`
+tool** to fan out one **read-only** scanner agent per *such* channel, then synthesize.
+Channels are scanned concurrently and wall-clock collapses to the slowest single channel.
+**Do not run this for channels the script already covered** — that re-burns the tokens this
+engine exists to save.
 
 **Hard constraints (these override convenience — they are how this stays Rule-6-safe):**
 
@@ -330,7 +392,10 @@ const SCAN_SCHEMA = {
 }
 
 phase('Scan')
-const scans = (await parallel(args.map(c => () =>
+// args can arrive as a JSON string (harness serialization) — parse defensively
+// so the fan-out never dies with "args.map is not a function".
+const CHANNELS = (typeof args === 'string' ? JSON.parse(args) : args) || []
+const scans = (await parallel(CHANNELS.map(c => () =>
   agent(
     \`READ-ONLY inbox scanner for the "\${c.key}" channel. You MUST NOT send, archive, \` +
     \`mark-read, or mutate anything — read / search ONLY.\\n\` +
@@ -496,7 +561,7 @@ For each channel, detect availability at runtime:
 
 1. **Parse pre-gathered data** for initial counts (unread is just a starting signal).
 
-2. **For each channel, run a FULL scan** (not just unread). Drive this via the **Scan engine** above — a parallel `Workflow` fan-out of read-only scanners (Agent Teams / sequential as the documented fallback). The per-channel detail below defines what each scanner reads and how the main session presents results and replies:
+2. **For each channel, run a FULL scan** (not just unread). Drive this via the **Scan engine** above: run `bin/ops-inbox-scan` FIRST (offline WhatsApp + Email classify, near-zero tokens), then one inline `mcp__slack__conversations_unreads` and one `mcp__plugin_ops_telegram__list_dialogs` call for those channels — NO subagents. Fall back to the `Workflow` fan-out only for a channel with real per-thread volume the script can't reach (see "when to fall back"). The per-channel detail below defines what each reader covers and how the main session presents results and replies:
    - **Email**: Search `in:inbox` (not `is:unread`) via `gog gmail search -a $GMAIL_ACCOUNT -j --results-only --no-input --max 30 "in:inbox"`. For each thread, read the last message to determine who sent it last. Check for DRAFT or SENT labels. **Before suggesting to send a draft, verify no reply was already sent in the thread.**
    - **WhatsApp**: Call `mcp__whatsapp__list_chats {sort_by: "last_active"}` to get all chats. Filter to chats with `last_message_time` in the last 7 days (`last_message_time` is RFC3339+TZ — parse with timezone awareness, never strip the offset). Resolve display name from contacts.db first (`SELECT name FROM contacts WHERE jid=?`), fall back to the chat's `name` field, and only call giga memory when both are empty. Use `last_is_from_me` on the chat object (`1` = WAITING, `0` = NEEDS_REPLY) ONLY as a first pass — it does NOT finalise a classification. Before marking any chat NEEDS_REPLY you MUST clear the **FULL-THREAD AWARENESS GATE** above: fetch `mcp__whatsapp__list_messages {chat_jid, limit: 25}` reading BOTH directions (capture `is_from_me=1` rows AND `[voice]` transcripts), write the 2-sentence arc summary, and reconcile the user's own sends that may be missing from the store.
    - **iMessage**: Call `mcp__plugin_imessage_imessage__chat_messages {limit: 30}` (omit `chat_guid` to pull every allowlisted thread at once). Output is rendered text, not JSON: each thread is labelled `DM`/`Group` with its participant list, then timestamped messages oldest-first. Sent-by-you messages are marked (`Me:` / `→`); inbound messages carry the sender handle. Classify each thread by who sent the LAST message — same NEEDS_REPLY / WAITING / FYI logic as WhatsApp.
