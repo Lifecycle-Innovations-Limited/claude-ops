@@ -108,6 +108,43 @@ section_hdr() {
 
 no_data() { p "  ${DIM2}(no data)${RST}"; }
 
+# ── Display-width-aware box rows ───────────────────────────────────────────
+# Boxed sections (hero, quick-actions) must pad each line to a fixed visible
+# width so the right border lands in the same column on every line. Hand-spaced
+# padding drifts the moment a line contains an emoji or wide char (rendered as
+# 2 cols), producing a ragged right edge. vislen() computes true display width
+# (ANSI SGR stripped, East-Asian Wide / emoji = 2 cols); boxrow() pads to it.
+BOX_INNER=62   # visible columns between the box borders ('═'×62 / '─'×62)
+
+vislen() {
+  local s="$1" out="" pre rest ch i len w=0 code esc=$'\033'
+  while [[ "$s" == *"${esc}["* ]]; do      # strip CSI … m (SGR colour) runs
+    pre="${s%%"${esc}["*}"; rest="${s#*"${esc}["}"
+    out+="$pre"; s="${rest#*m}"
+  done
+  out+="$s"; len=${#out}
+  for (( i=0; i<len; i++ )); do
+    ch="${out:i:1}"; printf -v code '%d' "'$ch" 2>/dev/null || code=63
+    if (( code==0xFE0F || code==0x200D )); then continue; fi   # VS16 / ZWJ = 0
+    if (( (code>=0x1100&&code<=0x115F)||(code>=0x2E80&&code<=0xA4CF)|| \
+          (code>=0xAC00&&code<=0xD7A3)||(code>=0xF900&&code<=0xFAFF)|| \
+          (code>=0xFE30&&code<=0xFE4F)||(code>=0xFF00&&code<=0xFF60)|| \
+          (code>=0xFFE0&&code<=0xFFE6)||(code>=0x1F000)|| \
+          (code>=0x2600&&code<=0x27BF)||(code>=0x2B00&&code<=0x2BFF) )); then
+      (( w+=2 ))
+    else
+      (( w+=1 ))
+    fi
+  done
+  printf '%d' "$w"
+}
+
+boxrow() {   # $1=inner content (ANSI ok), $2=left border, $3=right border
+  local content="$1" left="$2" right="$3" w pad
+  w=$(vislen "$content"); pad=$(( BOX_INNER - w )); (( pad<0 )) && pad=0
+  sp "${left}${content}$(printf '%*s' "$pad" '')${right}"
+}
+
 # Age helper: seconds → human string
 age_human() {
   local secs="${1:-0}"
@@ -627,15 +664,15 @@ render_section_hero() {
   # Gradient block header — ▓▒░ shadow effect on border
   sp "${DIMX}  ╔${BG_DARK}══════════════════════════════════════════════════════════════${RST}${DIMX}╗░${RST}"
   sp "${DIMX}  ║${RST}                                                              ${DIMX}║░${RST}"
-  sp "${DIMX}  ║${RST}  ${BCYN} ██████╗ ██████╗ ███████╗    ██████╗  █████╗ ███████╗${RST}  ${DIMX}║░${RST}"
-  sp "${DIMX}  ║${RST}  ${CYN}██╔═══██╗██╔══██╗██╔════╝    ██╔══██╗██╔══██╗██╔════╝${RST}  ${DIMX}║░${RST}"
-  sp "${DIMX}  ║${RST}  ${CYN}██║   ██║██████╔╝███████╗    ██║  ██║███████║███████╗${RST}   ${DIMX}║░${RST}"
-  sp "${DIMX}  ║${RST}  ${BLU}██║   ██║██╔═══╝ ╚════██║    ██║  ██║██╔══██║╚════██║${RST}   ${DIMX}║░${RST}"
-  sp "${DIMX}  ║${RST}  ${VIO}╚██████╔╝██║     ███████║    ██████╔╝██║  ██║███████║${RST}   ${DIMX}║░${RST}"
-  sp "${DIMX}  ║${RST}  ${BVIO} ╚═════╝ ╚═╝     ╚══════╝    ╚═════╝ ╚═╝  ╚═╝╚══════╝${RST}  ${DIMX}║░${RST}"
+  boxrow "  ${BCYN} ██████╗ ██████╗ ███████╗    ██████╗  █████╗ ███████╗${RST}" "${DIMX}  ║${RST}" "${DIMX}║░${RST}"
+  boxrow "  ${CYN}██╔═══██╗██╔══██╗██╔════╝    ██╔══██╗██╔══██╗██╔════╝${RST}" "${DIMX}  ║${RST}" "${DIMX}║░${RST}"
+  boxrow "  ${CYN}██║   ██║██████╔╝███████╗    ██║  ██║███████║███████╗${RST}" "${DIMX}  ║${RST}" "${DIMX}║░${RST}"
+  boxrow "  ${BLU}██║   ██║██╔═══╝ ╚════██║    ██║  ██║██╔══██║╚════██║${RST}" "${DIMX}  ║${RST}" "${DIMX}║░${RST}"
+  boxrow "  ${VIO}╚██████╔╝██║     ███████║    ██████╔╝██║  ██║███████║${RST}" "${DIMX}  ║${RST}" "${DIMX}║░${RST}"
+  boxrow "  ${BVIO} ╚═════╝ ╚═╝     ╚══════╝    ╚═════╝ ╚═╝  ╚═╝╚══════╝${RST}" "${DIMX}  ║${RST}" "${DIMX}║░${RST}"
   sp "${DIMX}  ║${RST}                                                              ${DIMX}║░${RST}"
-  sp "${DIMX}  ║${RST}  ${BWHT}COMMAND CENTER${RST}  ${DIMX}⚡ live business OS · all systems · one glance${RST}  ${DIMX}║░${RST}"
-  sp "${DIMX}  ║${RST}  ${DIM2}${NOW}  ${DAY}${RST}                                        ${DIMX}║░${RST}"
+  boxrow "  ${BWHT}COMMAND CENTER${RST}  ${DIMX}⚡ live business OS · one glance${RST}" "${DIMX}  ║${RST}" "${DIMX}║░${RST}"
+  boxrow "  ${DIM2}${NOW}  ${DAY}${RST}" "${DIMX}  ║${RST}" "${DIMX}║░${RST}"
   sp "${DIMX}  ╚${BG_DARK}══════════════════════════════════════════════════════════════${RST}${DIMX}╝░${RST}"
   sp "   ${DIMX}░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░${RST}"
   p ""
@@ -1290,22 +1327,22 @@ render_section_actions() {
 
   p ""
   sp "  ${DIMX}┌──────────────────────────────────────────────────────────────┐${RST}"
-  sp "  ${DIMX}│${RST}   ${BWHT}QUICK ACTIONS${RST}                       ${BWHT}INTEL${RST}               ${DIMX}│${RST}"
+  boxrow "   ${BWHT}QUICK ACTIONS${RST}                       ${BWHT}INTEL${RST}" "  ${DIMX}│${RST}" "${DIMX}│${RST}"
   sp "  ${DIMX}│${RST}                                                              ${DIMX}│${RST}"
-  sp "  ${DIMX}│${RST}   ${BCYN}1${RST} ${WHT}Morning briefing${RST}              ${BCYN}6${RST} ${WHT}Revenue & costs${RST}     ${DIMX}│${RST}"
-  sp "  ${DIMX}│${RST}   ${BCYN}2${RST} ${WHT}Inbox zero${RST}                    ${BCYN}7${RST} ${WHT}Linear sprint${RST}       ${DIMX}│${RST}"
-  sp "  ${DIMX}│${RST}   ${BCYN}3${RST} ${WHT}Fire check${RST}                    ${BCYN}8${RST} ${WHT}Deploy status${RST}       ${DIMX}│${RST}"
-  sp "  ${DIMX}│${RST}   ${BCYN}4${RST} ${WHT}Project dashboard${RST}             ${BCYN}9${RST} ${WHT}Triage issues${RST}       ${DIMX}│${RST}"
-  sp "  ${DIMX}│${RST}   ${BCYN}5${RST} ${WHT}What's next?${RST}                  ${BCYN}0${RST} ${WHT}System speedup${RST}      ${DIMX}│${RST}"
+  boxrow "   ${BCYN}1${RST} ${WHT}Morning briefing${RST}              ${BCYN}6${RST} ${WHT}Revenue & costs${RST}" "  ${DIMX}│${RST}" "${DIMX}│${RST}"
+  boxrow "   ${BCYN}2${RST} ${WHT}Inbox zero${RST}                    ${BCYN}7${RST} ${WHT}Linear sprint${RST}" "  ${DIMX}│${RST}" "${DIMX}│${RST}"
+  boxrow "   ${BCYN}3${RST} ${WHT}Fire check${RST}                    ${BCYN}8${RST} ${WHT}Deploy status${RST}" "  ${DIMX}│${RST}" "${DIMX}│${RST}"
+  boxrow "   ${BCYN}4${RST} ${WHT}Project dashboard${RST}             ${BCYN}9${RST} ${WHT}Triage issues${RST}" "  ${DIMX}│${RST}" "${DIMX}│${RST}"
+  boxrow "   ${BCYN}5${RST} ${WHT}What's next?${RST}                  ${BCYN}0${RST} ${WHT}System speedup${RST}" "  ${DIMX}│${RST}" "${DIMX}│${RST}"
   sp "  ${DIMX}│${RST}                                                              ${DIMX}│${RST}"
-  sp "  ${DIMX}│${RST}   ${BWHT}POWER${RST}                            ${BWHT}COMMS${RST}               ${DIMX}│${RST}"
+  boxrow "   ${BWHT}POWER${RST}                            ${BWHT}COMMS${RST}" "  ${DIMX}│${RST}" "${DIMX}│${RST}"
   sp "  ${DIMX}│${RST}                                                              ${DIMX}│${RST}"
-  sp "  ${DIMX}│${RST}   ${BMAG}a${RST} ${WHT}YOLO mode${RST}  ${YOLO_IND}   ${BCYN}d${RST} ${WHT}Send message${RST}   ${DIMX}│${RST}"
-  sp "  ${DIMX}│${RST}   ${BMAG}b${RST} ${WHT}Auto-merge PRs${RST}                ${BCYN}e${RST} ${WHT}C-suite reports${RST}     ${DIMX}│${RST}"
-  sp "  ${DIMX}│${RST}   ${BMAG}c${RST} ${WHT}Setup wizard${RST}                                       ${DIMX}│${RST}"
+  boxrow "   ${BMAG}a${RST} ${WHT}YOLO mode${RST}  ${YOLO_IND}   ${BCYN}d${RST} ${WHT}Send message${RST}" "  ${DIMX}│${RST}" "${DIMX}│${RST}"
+  boxrow "   ${BMAG}b${RST} ${WHT}Auto-merge PRs${RST}                ${BCYN}e${RST} ${WHT}C-suite reports${RST}" "  ${DIMX}│${RST}" "${DIMX}│${RST}"
+  boxrow "   ${BMAG}c${RST} ${WHT}Setup wizard${RST}" "  ${DIMX}│${RST}" "${DIMX}│${RST}"
   sp "  ${DIMX}│${RST}                                                              ${DIMX}│${RST}"
   sp "  ${DIMX}├──────────────────────────────────────────────────────────────┤${RST}"
-  sp "  ${DIMX}│${RST}   ${BYLW}f${RST} ${WHT}Settings${RST}      ${BYLW}g${RST} ${WHT}Share${RST}      ${BYLW}h${RST} ${WHT}FAQ/Help${RST}   ${DIM2}q exit${RST}     ${DIMX}│${RST}"
+  boxrow "   ${BYLW}f${RST} ${WHT}Settings${RST}      ${BYLW}g${RST} ${WHT}Share${RST}      ${BYLW}h${RST} ${WHT}FAQ/Help${RST}   ${DIM2}q exit${RST}" "  ${DIMX}│${RST}" "${DIMX}│${RST}"
   sp "  ${DIMX}└──────────────────────────────────────────────────────────────┘${RST}"
   p ""
 }
