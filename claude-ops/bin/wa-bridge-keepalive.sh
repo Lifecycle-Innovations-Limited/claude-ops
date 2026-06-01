@@ -31,5 +31,21 @@ if probe; then exit 0; fi
 state=$(systemctl --user show "$UNIT" -p ActiveState --value 2>/dev/null || echo unknown)
 if [ "$state" = "activating" ]; then exit 0; fi
 
+# Shared cross-caller restart floor — same stamp file claude_once uses for the key
+# "whatsapp-bridge-restart" (wa-inbox-fresh.sh writes it). Read/write the stamp
+# DIRECTLY here: a 2nd claude_once call would clobber the self-throttle's EXIT trap
+# (bash allows one EXIT trap) and orphan wa-bridge-keepalive.lock, self-disabling the
+# watchdog until the 60-min stale-reclaim. A stamp-only floor auto-expires at 180s and
+# can never self-block, which is what keepalive needs. One restart / 180s across this
+# script + wa-inbox-fresh.sh + whatsapp-bridge-up.sh.
+FLOOR_STAMP="$HOME/.claude/.once.whatsapp-bridge-restart.last"
+if [ -f "$FLOOR_STAMP" ]; then
+  last=$(cat "$FLOOR_STAMP" 2>/dev/null || echo 0)
+  if [ $(( $(date +%s) - ${last:-0} )) -lt 180 ]; then
+    logger -t wa-bridge-keepalive 'restart floor active (<180s) — skip'
+    exit 0
+  fi
+fi
 logger -t wa-bridge-keepalive "bridge unresponsive on $PROBE (state=$state) — restarting $UNIT"
 systemctl --user restart "$UNIT"
+date +%s > "$FLOOR_STAMP" 2>/dev/null
