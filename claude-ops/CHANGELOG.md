@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.19.0] - 2026-06-01
+
+### Changed
+- feat(ops-update): one-command local plugin upgrade with prune + version-rewrite (#450)
+- fix(ops-dash): align box right-borders via display-width-aware padding (#449)
+
+
 ## [2.18.20] - 2026-06-01
 
 ### Changed
