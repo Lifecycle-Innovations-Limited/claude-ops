@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.18.15] - 2026-06-01
+
+### Changed
+CI: fix two pre-existing red suites blocking the merge gate. test-hooks.sh — add UserPromptSubmit + PreCompact to the valid hook-event allowlist (UserPromptSubmit is a real Claude Code event declared in hooks.json). test-agent-teams.sh — add Agent Teams boilerplate to the `flow` skill (TeamCreate + SendMessage in allowed-tools, '## Agent Teams support' section with flag check + example + fallback), matching every other agent-spawning skill. Full CI green for the first time.
+
+
 ## [2.18.14] - 2026-06-01
 
 ### Changed
