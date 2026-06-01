@@ -186,12 +186,12 @@ Return STRICT JSON, no markdown, no prose outside the JSON:
   "action_preview": "<ASK only — one concrete sentence: what will happen if the owner approves this item. E.g. 'Creates a GitHub issue in your-org/your-repo with the given title and assigns it to you.' Leave empty string for non-ASK verdicts.>",
   "decision_question": "<ASK only, and only when the item is a genuine multi-choice decision — the single question being decided. E.g. 'Which environment should this deploy target?' Leave empty string when it is a simple yes/no.>",
   "options": [
-    {{"key": "a", "label": "<concrete option text — what choosing this means>"}},
+    {{"key": "a", "label": "<concrete option text — what choosing this means>", "recommended": true}},
     {{"key": "b", "label": "<concrete option text>"}}
   ]
 }}
 
-For the options array: include 2–4 options only when decision_question is non-empty. Use keys a/b/c/d in order. When the item is a plain yes/no ASK, set options to an empty array []. Non-ASK verdicts must also set options to [].
+For the options array: include 2–4 options only when decision_question is non-empty. Use keys a/b/c/d in order. Mark exactly ONE option with "recommended": true — your best-guess answer (shown with a ⭐ in the approval UI); omit the key on the others. When the item is a plain yes/no ASK, set options to an empty array []. Non-ASK verdicts must also set options to [].
 
 Owner context (NEVER assume otherwise):
   • Owner name: {owner_name}
@@ -405,7 +405,12 @@ def route(task: dict, decision: dict) -> str:
             routed["decision_question"] = dq
         if opts and isinstance(opts, list):
             routed["options"] = [
-                {"key": str(o.get("key", "")).lower(), "label": str(o.get("label", ""))}
+                {
+                    "key": str(o.get("key", "")).lower(),
+                    "label": str(o.get("label", "")),
+                    # Carry the recommended flag through so the approval UI can ⭐ it.
+                    **({"recommended": True} if o.get("recommended") else {}),
+                }
                 for o in opts
                 if o.get("key") and o.get("label")
             ]
