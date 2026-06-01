@@ -20,6 +20,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-path.sh"
+. "${SCRIPT_DIR}/../lib/registry-resolve.sh"
 
 if [ ! -f "$REGISTRY" ]; then
   echo '{"error":"registry.json not found"}' && exit 1
@@ -29,7 +30,8 @@ if ! command -v gh &>/dev/null; then
   echo '{"error":"gh CLI not found","failures":[]}' && exit 0
 fi
 
-REPOS=$(jq -r '[.projects[].repos[]] | unique | .[]' "$REGISTRY")
+# schema-tolerant: GSD registry has no .repos[]; resolver derives slugs from .remote_url (dedup)
+REPOS=$(ops_registry_repos "$REGISTRY")
 MODE="${OPS_CI_MODE:-current}"
 TRACKED_BRANCHES=("main" "dev" "master")
 

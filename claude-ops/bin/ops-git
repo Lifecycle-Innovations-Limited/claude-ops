@@ -6,6 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-path.sh"
+. "${SCRIPT_DIR}/../lib/registry-resolve.sh"
 
 if [ ! -f "$REGISTRY" ]; then
   echo '{"error":"registry.json not found"}' && exit 1
@@ -21,14 +22,19 @@ trap 'rm -rf "$TMPDIR_OPS"' EXIT
 # Extract project count
 PROJECT_COUNT=$(jq '.projects | length' "$REGISTRY")
 
-# Process each project in parallel
+# Process each project in parallel.
+# Schema-tolerant: alias/paths resolved via lib/registry-resolve.sh so the
+# loop works against either the GSD project schema (.name/.path) or the
+# partner template schema (.alias/.paths[]). Temp files are keyed by index
+# to avoid collisions when two projects resolve to the same alias.
 for i in $(seq 0 $((PROJECT_COUNT - 1))); do
-  ALIAS=$(jq -r ".projects[$i].alias" "$REGISTRY")
-  PATHS_JSON=$(jq -c ".projects[$i].paths" "$REGISTRY")
+  ALIAS=$(ops_registry_alias "$REGISTRY" "$i")
+  PATHS_JSON=$(ops_registry_paths "$REGISTRY" "$i")
+  [ -z "$PATHS_JSON" ] && PATHS_JSON='[]'
 
   (
     RESULTS="[]"
-    for path_raw in $(echo "$PATHS_JSON" | jq -r '.[]'); do
+    for path_raw in $(echo "$PATHS_JSON" | jq -r '.[]' 2>/dev/null); do
       path=$(expand_path "$path_raw")
       [ ! -d "$path/.git" ] && continue
 
@@ -44,19 +50,31 @@ for i in $(seq 0 $((PROJECT_COUNT - 1))); do
         '. + [{"repo":$p,"branch":$b,"last_commit":$lc,"last_date":$ld,"uncommitted":($u|tonumber),"ahead":($a|tonumber)}]')
     done
 
-    echo "$RESULTS" > "$TMPDIR_OPS/$ALIAS.json"
+    # Only emit projects that resolved to at least one real git repo
+    if [ "$RESULTS" != "[]" ]; then
+      jq -n --arg a "$ALIAS" --argjson r "$RESULTS" '{alias:$a, repos:$r}' \
+        > "$TMPDIR_OPS/$i.json"
+    fi
   ) &
 done
 wait
 
-# Assemble final JSON
+# Assemble final JSON — keyed by alias; duplicate aliases get an index suffix
+# so no project silently overwrites another.
 echo -n '{'
 first=true
+declare -A seen_alias
 for f in "$TMPDIR_OPS"/*.json; do
   [ ! -f "$f" ] && continue
-  alias=$(basename "$f" .json)
+  alias=$(jq -r '.alias' "$f")
+  if [ -n "${seen_alias[$alias]:-}" ]; then
+    seen_alias[$alias]=$((seen_alias[$alias] + 1))
+    alias="${alias}-${seen_alias[$alias]}"
+  else
+    seen_alias[$alias]=1
+  fi
   [ "$first" = true ] && first=false || echo -n ','
-  echo -n "\"$alias\":"
-  cat "$f"
+  printf '%s:' "$(jq -n --arg a "$alias" '$a')"
+  jq -c '.repos' "$f"
 done
 echo '}'
