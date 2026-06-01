@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.18.16] - 2026-06-01
+
+### Changed
+Ship Fix K: recover_app_state MCP tool canonicalized in apply-patches (15th mcp__whatsapp__* tool); ENDPOINTS.md updated
+
+
 ## [2.18.15] - 2026-06-01
 
 ### Changed
