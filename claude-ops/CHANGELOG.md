@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.19.2] - 2026-06-01
+
+### Changed
+feat(ops-release): register /ops:ops-release slash command (#455); fix(whatsapp): canonicalize 180s restart-floor in wa-inbox-fresh + wa-bridge-keepalive so it survives reinstall (#454)
+
+
 ## [2.19.1] - 2026-06-01
 
 ### Changed
