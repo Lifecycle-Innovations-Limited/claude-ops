@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.18.14] - 2026-06-01
+
+### Changed
+Fix /ops:ops-go briefing empty Git/PRs/Infra/GSD sections — registry.json schema collision (GSD project schema vs old partner-template schema). New lib/registry-resolve.sh (null-guarded readers: repos from .remote_url, paths from .path, alias fallback) adopted by ops-git/ops-prs/ops-ci/ops-merge-scan/ops-dash; ops-merge-salvage-scan uses object-level derivation; ops-gsd-states matches the GSD-only registry (fixes empty GSD State); ops-infra reads ECS clusters from durable $OPS_DATA_DIR/infra.json (survives the twice-daily GSD sync + upgrades) with optional region. Audited all 20 registry consumers; 15 already tolerant/unrelated, no behavior change.
+
+
 ## [2.18.13] - 2026-05-31
 
 ### Fixed
