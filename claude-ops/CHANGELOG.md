@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.18.17] - 2026-06-01
+
+### Changed
+Fix L: WhatsApp bridge phone-online prerequisite gate (recover/archive 503 when offline) + archive auto-retry on 409 conflict + recovery-with-backfill-on-alive
+
+
 ## [2.18.16] - 2026-06-01
 
 ### Changed
