@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.18.20] - 2026-06-01
+
+### Changed
+ops-inbox: offline scan engine replaces the ~330k-token agent fan-out.
+
+(The ops-inbox-scan feature landed on main after the sibling v2.18.19 release tag was cut, so it ships here as 2.18.20.)
+
+- bin/ops-inbox-scan: deterministic read-only classifier — WhatsApp (whatsmeow sqlite, lid<->phone merge into one conversation, names from contacts, mode=ro WAL-safe, archived=0 filter / no recency cutoff) + Email (gog gmail search envelope first-pass + no-reply-sender heuristic). ~0.9s, near-zero tokens.
+- ops-inbox SKILL.md: bin/ops-inbox-scan is now the PRIMARY scan engine; the Workflow fan-out is demoted to a fallback for channels with real per-thread volume the script can't reach. Slack + Telegram become one light inline MCP call each (no subagent).
+- Fix the fan-out's 'args.map is not a function' crash via defensive JSON.parse.
+
+Net: the common WhatsApp + email + glance case drops from 5 agents / ~330k tokens / ~130s to a sub-second script + a couple of inline calls.
+
+
 ## [2.18.19] - 2026-06-01
 
 ### Changed
