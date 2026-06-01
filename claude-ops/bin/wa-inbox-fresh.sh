@@ -32,15 +32,36 @@ log() { printf '%s\n' "$*"; }
 # (bridge still starting up) triggered a restart loop. The fix: fail-fast
 # probe × 2 with a 1s gap; only then restart; then wait up to 20s for it to
 # come back up before declaring dead.
-alive() { curl -s -o /dev/null -m 4 "$BRIDGE/" >/dev/null 2>&1; }
+alive() { curl -s -o /dev/null -m 10 "$BRIDGE/" >/dev/null 2>&1; }
 probe_dead() { ! alive && { sleep 1; ! alive; }; }   # two consecutive failures = truly dead
 
 if probe_dead; then
-  log "wa-fresh: bridge :8080 not responding (2 consecutive probes failed) — restarting…"
-  systemctl --user restart whatsapp-bridge.service 2>/dev/null
-  # Wait up to 20 s for the bridge to come back (it needs a few seconds to
-  # open the SQLite store and establish the WhatsApp websocket).
-  for i in $(seq 1 10); do sleep 2; alive && break; done
+  # Startup-grace gate: if the bridge (re)started <120s ago it is almost certainly
+  # mid-reconnect (opening the SQLite store + WhatsApp websocket), and a probe that
+  # fails here would re-trigger a restart → reconnect → probe-fail loop. Skip.
+  started=$(systemctl --user show whatsapp-bridge.service -p ActiveEnterTimestampMonotonic --value 2>/dev/null)
+  now=$(awk '{print int($1*1000000)}' /proc/uptime)
+  if [ -n "$started" ] && [ "$started" -gt 0 ] && [ $(( now - started )) -lt 120000000 ]; then
+    log "wa-fresh: bridge started <120s ago — skip restart (reconnect in progress)"
+  else
+    # Shared cross-caller restart floor: the SAME stamp every other restart caller
+    # uses (wa-bridge-keepalive.sh, whatsapp-bridge-up.sh). One restart / 180s max,
+    # no matter how many parallel agents invoke this script. claude_once is a one-shot
+    # guard (not a recurring loop), allowed under the cost rule.
+    do_restart=1
+    if [ -r "$HOME/.claude/scripts/lib/once.sh" ]; then
+      # shellcheck disable=SC1091
+      . "$HOME/.claude/scripts/lib/once.sh"
+      claude_once whatsapp-bridge-restart 180 || { log "wa-fresh: another caller restarted bridge <180s ago — skip"; do_restart=0; }
+    fi
+    if [ "$do_restart" = 1 ]; then
+      log "wa-fresh: bridge :8080 not responding (2 consecutive probes failed) — restarting…"
+      systemctl --user restart whatsapp-bridge.service 2>/dev/null
+      # Wait up to 20 s for the bridge to come back (it needs a few seconds to
+      # open the SQLite store and establish the WhatsApp websocket).
+      for i in $(seq 1 10); do sleep 2; alive && break; done
+    fi
+  fi
 fi
 if ! alive; then
   log "wa-fresh: ERROR bridge still down after restart — store is STALE, do not trust it"
