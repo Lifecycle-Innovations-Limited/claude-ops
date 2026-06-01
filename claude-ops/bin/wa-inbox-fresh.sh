@@ -35,6 +35,7 @@ log() { printf '%s\n' "$*"; }
 alive() { curl -s -o /dev/null -m 10 "$BRIDGE/" >/dev/null 2>&1; }
 probe_dead() { ! alive && { sleep 1; ! alive; }; }   # two consecutive failures = truly dead
 
+bridge_restarted=0
 if probe_dead; then
   # Startup-grace gate: if the bridge (re)started <120s ago it is almost certainly
   # mid-reconnect (opening the SQLite store + WhatsApp websocket), and a probe that
@@ -55,16 +56,21 @@ if probe_dead; then
       claude_once whatsapp-bridge-restart 180 || { log "wa-fresh: another caller restarted bridge <180s ago — skip"; do_restart=0; }
     fi
     if [ "$do_restart" = 1 ]; then
+      bridge_restarted=1
       log "wa-fresh: bridge :8080 not responding (2 consecutive probes failed) — restarting…"
       systemctl --user restart whatsapp-bridge.service 2>/dev/null
-      # Wait up to 20 s for the bridge to come back (it needs a few seconds to
-      # open the SQLite store and establish the WhatsApp websocket).
-      for i in $(seq 1 10); do sleep 2; alive && break; done
     fi
   fi
+  # Wait up to 20 s for the bridge to come back (it needs a few seconds to
+  # open the SQLite store and establish the WhatsApp websocket).
+  for i in $(seq 1 10); do sleep 2; alive && break; done
 fi
 if ! alive; then
-  log "wa-fresh: ERROR bridge still down after restart — store is STALE, do not trust it"
+  if [ "$bridge_restarted" = 1 ]; then
+    log "wa-fresh: ERROR bridge still down after restart — store is STALE, do not trust it"
+  else
+    log "wa-fresh: ERROR bridge still down — store is STALE, do not trust it"
+  fi
   exit 2
 fi
 
