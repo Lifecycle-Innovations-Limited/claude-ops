@@ -122,8 +122,11 @@ def _norm(item):
     return (
         t.get("id") or item.get("id"),
         t.get("kind") or item.get("kind", "action_item"),
-        (t.get("title") or item.get("title") or "")[:120],
-        (t.get("context") or item.get("context") or "")[:600],
+        (t.get("title") or item.get("title") or "")[:140],
+        # Keep generous context here; cmd_send() does the final Telegram-fit
+        # truncation. The old 600-char cap silently amputated long ASKs
+        # (email drafts, voice-memo action items) before they were ever rendered.
+        (t.get("context") or item.get("context") or "")[:6000],
         t,
     )
 
@@ -174,6 +177,36 @@ def _resolve_code(codemap: dict, ref: str):
 
 def _sid(item_id):
     return "i" + hashlib.sha1(item_id.encode()).hexdigest()[:10]
+
+
+def _recommended_key(it, opts):
+    """Recommended option key for an ASK, if any: a per-option `recommended:true`
+    first, then a top-level recommended_option/recommended_key (also checked in raw
+    + raw.triage). '' if none. Backward-compatible — producers that don't set it
+    just get no star."""
+    for o in opts or []:
+        if isinstance(o, dict) and o.get("recommended"):
+            return str(o.get("key") or "")
+    raw = it.get("raw") if isinstance(it.get("raw"), dict) else {}
+    tri = raw.get("triage") if isinstance(raw.get("triage"), dict) else {}
+    for src in (it, raw, tri):
+        if isinstance(src, dict) and (src.get("recommended_option") or src.get("recommended_key")):
+            return str(src.get("recommended_option") or src.get("recommended_key"))
+    return ""
+
+
+# Words signalling "change this before it goes out" rather than a plain yes. Used
+# to block the footgun where a freeform reply like "send but say Friday" on an
+# outbound email ASK gets mis-mapped to a bare APPROVE and the UNEDITED draft is
+# sent to a third party. Edit-then-send re-drafting is not wired yet.
+_RE_EDIT_INTENT = re.compile(
+    r"\b(change|instead|edit|reword|rewrite|replace|revise|adjust|tweak|shorter|"
+    r"longer|add that|mention|leave out|take out|remove the|make it|don'?t say|"
+    r"say that|reslant|soften|reschedule to)\b", re.I)
+
+
+def _edit_intent(body):
+    return bool(_RE_EDIT_INTENT.search(body or ""))
 
 
 # ---------------------------------------------------------------------------
@@ -239,22 +272,36 @@ def cmd_send():
         sid = _sid(iid)
         opts = it.get("options") or []
         ap = it.get("action_preview") or ""
-        title = (it.get("title") or "")[:120]
-        ctx = _truncate_words(it.get("ctx") or "", 500)
+        dq = it.get("decision_question") or ""
+        kind = it.get("kind") or ""
+        title = (it.get("title") or "")[:140]
+        # Give the body the bulk of Telegram's 4096-char budget; the old 500-char
+        # cut amputated long ASKs (full email drafts, voice-memo action items).
+        ctx = _truncate_words(it.get("ctx") or "", 3200)
+        rk = _recommended_key(it, opts)
         text = f"*{title}*\n{ctx}"
+        if dq:
+            text += f"\n\n❓ *{dq}*"
         if ap:
             text += f"\n\n→ *Approve =* {ap}"
         if opts:
-            rows = [
-                [{"text": f"{o['key']}) {o['label'][:40]}", "callback_data": f"po:{sid}:{o['key']}"}]
-                for o in opts
-            ]
-            rows.append([{"text": "❌ Reject", "callback_data": f"pr:{sid}"}])
+            rows = []
+            for o in opts:
+                star = "⭐ " if rk and str(o.get("key", "")).lower() == rk.lower() else ""
+                rows.append([{"text": f"{star}{o['key']}) {o['label'][:38]}", "callback_data": f"po:{sid}:{o['key']}"}])
+            rows.append([{"text": "❌ None / reject", "callback_data": f"pr:{sid}"}])
+            if rk:
+                text += f"\n\n⭐ _= recommended ({rk})_"
         else:
             rows = [[
                 {"text": "✅ Approve", "callback_data": f"pa:{sid}"},
                 {"text": "❌ Reject", "callback_data": f"pr:{sid}"},
             ]]
+        # Advertise freeform reply — but NOT on outbound message kinds, where a
+        # freeform "send but change X" would mis-map to a bare APPROVE and silently
+        # send the unedited draft to a third party (also guarded in _handle_text).
+        if kind not in VALIDATE_KINDS:
+            text += "\n\n💬 _Or just reply in your own words — e.g. “do b”, “skip this one”, or your own instruction._"
         r = _api("sendMessage", {
             "chat_id": CHAT, "text": text[:3800], "parse_mode": "Markdown",
             "reply_markup": {"inline_keyboard": rows},
@@ -665,6 +712,11 @@ def _handle_text(ev, codemap, callmap, resolved, seen):
         if verb == "APPROVE" and (ent.get("options") or []):
             _send(f"`{ref}` is a choice item — reply e.g. `{ref} a`.")
             continue
+        if verb == "APPROVE" and _is_outbound(ent) and _edit_intent(body):
+            _send(f"`{ref}` looks like an *edit*, not a plain approve — I won't send the "
+                  f"original draft as-is. Tap ✅ Approve (or reply `approve {ref}`) to send "
+                  f"it unchanged, or `reject {ref}` to skip. _(Edit-then-send for emails isn't wired yet.)_")
+            continue
         toast = _apply_decision(ent, "APPROVE" if verb == "APPROVE" else "REJECT")
         resolved.add(tid); handled_ids.add(tid); acted += 1
         _, cment = _callmap_entry_for_id(callmap, tid)
@@ -706,6 +758,11 @@ def _handle_text(ev, codemap, callmap, resolved, seen):
                 continue
             toast = _apply_decision(ent, "CHOOSE", option=option)
         else:
+            if dec == "approve" and _is_outbound(ent) and _edit_intent(body):
+                _send(f"That looks like an *edit* of “{ent.get('title','')[:50]}”, not a plain "
+                      f"approve — I won't send the original draft as-is. Tap ✅ Approve to send it "
+                      f"unchanged, or reply `reject` to skip. _(Edit-then-send for emails isn't wired yet.)_")
+                continue
             toast = _apply_decision(ent, dec.upper())
         resolved.add(tid); handled_ids.add(tid); acted += 1
         _, cment = _callmap_entry_for_id(callmap, tid)
