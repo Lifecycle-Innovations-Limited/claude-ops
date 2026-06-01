@@ -8,6 +8,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_DIR="${CLAUDE_PLUGIN_ROOT:-${SCRIPT_DIR}/..}"
 OPS_PLUGIN_ROOT_FALLBACK="$PLUGIN_DIR" . "${PLUGIN_DIR}/lib/registry-path.sh"
+# Schema-tolerant registry reads (GSD project schema has no .repos[]; derive from .remote_url)
+. "${PLUGIN_DIR}/lib/registry-resolve.sh"
 PREFS="${OPS_DATA_DIR}/preferences.json"
 
 # Optional: scope to a single repo
@@ -25,7 +27,8 @@ fi
 if [ -n "$FILTER_REPO" ]; then
   REPOS="$FILTER_REPO"
 else
-  REPOS=$(jq -r '[.projects[].repos[]] | unique | .[]' "$REGISTRY")
+  # Schema-tolerant: GSD schema lacks .repos[]; resolver derives slugs from .repos[] or .remote_url (dedup)
+  REPOS=$(ops_registry_repos "$REGISTRY")
 fi
 
 # Approved PR author logins (owner + bots). Configured in preferences.json
