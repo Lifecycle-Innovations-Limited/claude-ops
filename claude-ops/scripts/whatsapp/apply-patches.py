@@ -56,6 +56,16 @@ Patches included:
           column into the Chat dataclass and _chat_to_dict output as `archived`
           bool. Ops-inbox and other callers see only active chats by default;
           pass include_archived=True to recover the old behaviour.
+  Fix K — recover_app_state MCP tool: wires the /api/recover_app_state bridge
+          endpoint into the Python MCP server (whatsapp.py helper + main.py
+          import alias + @mcp.tool()) so mcp__whatsapp__recover_app_state exists.
+  Fix L — phone-online prerequisite + auto-retry + backfill-on-alive: adds the
+          phoneOnline() gate (IsConnected && IsLoggedIn) to /api/recover_app_state
+          and /api/archive so they fail fast instead of returning a misleading
+          success when the link is down; adds sendRecoveryAndBackfill() (recovery
+          peer-message + history backfill while alive); and escalates /api/archive
+          on a server 409 "conflict" (not just local LTHash mismatch) to a
+          recovery + bounded auto-retry so callers never need a manual recover->retry.
 
 Every patch is gated on a sentinel string so re-running is a no-op.
 
@@ -513,9 +523,12 @@ RECOVER_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix I: POST /api/recover_app_s
 \t\t\treturn
 \t\t}
 \t\tw.Header().Set(\"Content-Type\", \"application/json\")
-\t\tif !client.IsConnected() {
+\t\t// claude-ops Fix L: phone-online prerequisite. A recovery peer-message only
+\t\t// reaches the primary device if the bridge has a live, authenticated link;
+\t\t// otherwise it silently goes nowhere and the caller is misled by success:true.
+\t\tif !phoneOnline(client) {
 \t\t\tw.WriteHeader(http.StatusServiceUnavailable)
-\t\t\tfmt.Fprintln(w, `{\"success\":false,\"message\":\"client not connected\"}`)
+\t\t\tfmt.Fprintln(w, `{\"success\":false,\"message\":\"phone offline: bridge not connected/logged in — reconnect the phone, then retry recover\"}`)
 \t\t\treturn
 \t\t}
 \t\tvar req struct {
@@ -527,13 +540,13 @@ RECOVER_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix I: POST /api/recover_app_s
 \t\t\t\treq.Name = \"regular_low\"
 \t\t\t}
 \t\t}
-\t\tmsg := whatsmeow.BuildAppStateRecoveryRequest(appstate.WAPatchName(req.Name))
-\t\tif _, err := client.SendPeerMessage(context.Background(), msg); err != nil {
+\t\t// claude-ops Fix L: dispatch recovery AND fire a history backfill while alive.
+\t\tif err := sendRecoveryAndBackfill(client, appstate.WAPatchName(req.Name)); err != nil {
 \t\t\tw.WriteHeader(http.StatusInternalServerError)
 \t\t\tfmt.Fprintf(w, `{\"success\":false,\"message\":%q}`, err.Error())
 \t\t\treturn
 \t\t}
-\t\tfmt.Fprintf(w, `{\"success\":true,\"message\":\"recovery request sent to primary device for %s — it returns a fresh snapshot in a few seconds (phone must be online), then archive works\"}`, req.Name)
+\t\tfmt.Fprintf(w, `{\"success\":true,\"message\":\"recovery + backfill dispatched for %s (phone online) — snapshot auto-applies in a few seconds, then archive works\"}`, req.Name)
 \t})
 
 \t// Run server in a goroutine so it doesn't block
@@ -1019,6 +1032,31 @@ func healLTHash(ctx context.Context, client *whatsmeow.Client, patchName appstat
 \treturn fmt.Errorf("healLTHash: still failing after %d attempts", maxAttempts)
 }
 
+// claude-ops Fix L: phoneOnline reports whether the bridge has a live, authenticated
+// link to WhatsApp — the prerequisite for any app-state mutation (archive) or recovery
+// peer-message to actually reach the primary device. whatsmeow exposes no direct
+// "is my phone awake" signal, so this is the strongest reliable gate: IsConnected
+// (websocket up) AND IsLoggedIn (device paired). Without it, recover_app_state would
+// return success:true while the peer-message goes nowhere and a later archive 409s.
+func phoneOnline(client *whatsmeow.Client) bool {
+\treturn client.IsConnected() && client.IsLoggedIn()
+}
+
+// claude-ops Fix L: sendRecoveryAndBackfill asks the primary device for a fresh
+// app-state snapshot (BuildAppStateRecoveryRequest -> SendPeerMessage) and, now that
+// the link is alive, fires a history backfill so the message store stops drifting.
+// Returns an error only if the peer-message could not be dispatched; the snapshot
+// itself is applied asynchronously by whatsmeow's handleAppStateRecovery when the
+// phone answers, so callers that need the applied state must poll/retry.
+func sendRecoveryAndBackfill(client *whatsmeow.Client, patchName appstate.WAPatchName) error {
+\tmsg := whatsmeow.BuildAppStateRecoveryRequest(patchName)
+\tif _, err := client.SendPeerMessage(context.Background(), msg); err != nil {
+\t\treturn err
+\t}
+\tgo requestHistorySync(client) // backfill on alive — refresh history while the link is up
+\treturn nil
+}
+
 // Start a REST API server to expose the WhatsApp client functionality
 func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int) {"""
 
@@ -1049,9 +1087,10 @@ ARCHIVE_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix F: POST /api/archive — a
 \t\t\treturn
 \t\t}
 \t\tw.Header().Set("Content-Type", "application/json")
-\t\tif !client.IsConnected() {
+\t\t// claude-ops Fix L: phone-online prerequisite for the app-state mutation.
+\t\tif !phoneOnline(client) {
 \t\t\tw.WriteHeader(http.StatusServiceUnavailable)
-\t\t\tfmt.Fprintln(w, `{"success":false,"message":"client not connected"}`)
+\t\t\tfmt.Fprintln(w, `{"success":false,"message":"phone offline: bridge not connected/logged in — reconnect the phone, then retry archive"}`)
 \t\t\treturn
 \t\t}
 \t\tvar req struct {
@@ -1085,14 +1124,43 @@ ARCHIVE_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix F: POST /api/archive — a
 \t\t\treturn client.SendAppState(ctx, patch)
 \t\t}
 \t\terr = do()
-\t\tif err != nil && strings.Contains(err.Error(), "mismatching LTHash") {
-\t\t\t// Auto-heal the stale snapshot then retry once (Fix G).
-\t\t\tif healErr := healLTHash(ctx, client, appstate.WAPatchRegularLow); healErr != nil {
-\t\t\t\tw.WriteHeader(http.StatusConflict)
-\t\t\t\tfmt.Fprintf(w, `{"success":false,"message":"LTHash heal failed: %s"}`, healErr.Error())
-\t\t\t\treturn
+\t\t// claude-ops Fix L: treat both a local LTHash mismatch and a server-side 409
+\t\t// "conflict" (a churned/diverged regular_low version) as auto-recoverable.
+\t\tneedsHeal := func(e error) bool {
+\t\t\tif e == nil {
+\t\t\t\treturn false
 \t\t\t}
-\t\t\terr = do()
+\t\t\ts := e.Error()
+\t\t\treturn strings.Contains(s, "mismatching LTHash") ||
+\t\t\t\tstrings.Contains(s, "conflict") ||
+\t\t\t\tstrings.Contains(s, "code=\\"409\\"")
+\t\t}
+\t\tif needsHeal(err) {
+\t\t\t// Auto-heal the stale local snapshot then retry once (Fix G).
+\t\t\tif healErr := healLTHash(ctx, client, appstate.WAPatchRegularLow); healErr != nil {
+\t\t\t\t// claude-ops Fix L: local heal failed → the SERVER patch chain is
+\t\t\t\t// unverifiable. Escalate to a primary-device recovery (peer-message)
+\t\t\t\t// + backfill, then auto-retry the archive with bounded backoff while
+\t\t\t\t// the phone's fresh snapshot lands. No manual recover->retry needed.
+\t\t\t\tif recErr := sendRecoveryAndBackfill(client, appstate.WAPatchRegularLow); recErr != nil {
+\t\t\t\t\tw.WriteHeader(http.StatusConflict)
+\t\t\t\t\tfmt.Fprintf(w, `{"success":false,"message":"LTHash heal failed and recovery dispatch failed: %s"}`, recErr.Error())
+\t\t\t\t\treturn
+\t\t\t\t}
+\t\t\t\tfor attempt := 1; attempt <= 4; attempt++ {
+\t\t\t\t\ttime.Sleep(time.Duration(attempt*2) * time.Second)
+\t\t\t\t\tif err = do(); err == nil {
+\t\t\t\t\t\tbreak
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t\tif err != nil {
+\t\t\t\t\tw.WriteHeader(http.StatusConflict)
+\t\t\t\t\tfmt.Fprintf(w, `{"success":false,"message":"recovery dispatched but snapshot not yet applied (phone may be slow/offline) — retry archive shortly: %s"}`, err.Error())
+\t\t\t\t\treturn
+\t\t\t\t}
+\t\t\t} else {
+\t\t\t\terr = do()
+\t\t\t}
 \t\t}
 \t\tif err != nil {
 \t\t\tw.WriteHeader(http.StatusInternalServerError)
