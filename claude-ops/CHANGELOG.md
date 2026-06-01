@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.19.1] - 2026-06-01
+
+### Changed
+fix(whatsapp): honor shared restart-floor in bridge-up + ops-autofix to stop restart churn that dropped phone-sent messages (#452)
+
+
 ## [2.19.0] - 2026-06-01
 
 ### Changed
