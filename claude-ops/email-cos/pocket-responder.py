@@ -210,6 +210,20 @@ def _edit_intent(body):
     return bool(_RE_EDIT_INTENT.search(body or ""))
 
 
+def _classic_approve_clause(body, ent, codemap):
+    """Matched `approve <ref>` token for ent, if any — not the full Telegram reply."""
+    tid = ent.get("id")
+    if not tid:
+        return ""
+    for mt in _RE_CLASSIC.finditer(body or ""):
+        if mt.group(1).upper() != "APPROVE":
+            continue
+        e = _resolve_code(codemap, mt.group(2))
+        if e and e.get("id") == tid:
+            return mt.group(0)
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Telegram API
 # ---------------------------------------------------------------------------
@@ -713,7 +727,7 @@ def _handle_text(ev, codemap, callmap, resolved, seen):
         if verb == "APPROVE" and (ent.get("options") or []):
             _send(f"`{ref}` is a choice item — reply e.g. `{ref} a`.")
             continue
-        if verb == "APPROVE" and _is_outbound(ent) and _edit_intent(body):
+        if verb == "APPROVE" and _is_outbound(ent) and _edit_intent(mt.group(0)):
             _send(f"`{ref}` looks like an *edit*, not a plain approve — I won't send the "
                   f"original draft as-is. Tap ✅ Approve (or reply `approve {ref}`) to send "
                   f"it unchanged, or `reject {ref}` to skip. _(Edit-then-send for emails isn't wired yet.)_")
@@ -759,7 +773,8 @@ def _handle_text(ev, codemap, callmap, resolved, seen):
                 continue
             toast = _apply_decision(ent, "CHOOSE", option=option)
         else:
-            if dec == "approve" and _is_outbound(ent) and _edit_intent(body):
+            clause = _classic_approve_clause(body, ent, codemap) or body
+            if dec == "approve" and _is_outbound(ent) and _edit_intent(clause):
                 _send(f"That looks like an *edit* of “{ent.get('title','')[:50]}”, not a plain "
                       f"approve — I won't send the original draft as-is. Tap ✅ Approve to send it "
                       f"unchanged, or reply `reject` to skip. _(Edit-then-send for emails isn't wired yet.)_")
