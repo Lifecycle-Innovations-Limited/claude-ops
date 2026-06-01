@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# ops-ship — one command: merge every open PR, then publish a new version.
+#
+# The full release chain in a single shot:
+#   1. SWEEP   — admin squash-merge every OPEN, non-draft PR targeting the base
+#                branch (default: main), overriding required checks/reviews.
+#   2. RELEASE — run bin/ops-release (bump plugin.json + marketplace.json registry
+#                + package.json + CHANGELOG, open release PR, admin-merge, tag vX.Y.Z).
+#   3. UPDATE  — (optional) run the installed ops-update to pull the new version
+#                onto this box. Skip with --no-update.
+#
+#   ops-ship [--type patch|minor|major] [--version X.Y.Z] [--notes "changelog body"]
+#            [--base BRANCH] [--no-update] [--dry-run] [-h|--help]
+#
+# Defaults: --base main, --type patch, auto-merge all non-draft PRs (admin override),
+# then release + update. --notes defaults to a list of the merged PR titles.
+#
+# Must run from a REPO CHECKOUT (needs .claude-plugin/marketplace.json above the bin),
+# NOT the plugin cache — same constraint as ops-release.
+#
+# REST note: the PR sweep and ops-release both use the `gh` CLI (GitHub REST). If the
+# REST quota is exhausted (HTTP 403 rate-limit), wait for the reset window — this
+# script does not silently partial-apply: a failed merge aborts before the release.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"           # <repo>/claude-ops
+REPO_ROOT="$(cd "$PLUGIN_DIR/.." && pwd)"            # <repo>
+MARKETPLACE_JSON="$REPO_ROOT/.claude-plugin/marketplace.json"
+RELEASE_BIN="$PLUGIN_DIR/bin/ops-release"
+
+if [ ! -f "$MARKETPLACE_JSON" ]; then
+  echo "ops-ship: $MARKETPLACE_JSON not found — run this from a repo CHECKOUT, not the plugin cache." >&2
+  exit 1
+fi
+if [ ! -x "$RELEASE_BIN" ]; then
+  echo "ops-ship: $RELEASE_BIN not found/executable." >&2
+  exit 1
+fi
+command -v gh >/dev/null 2>&1 || { echo "ops-ship: gh CLI required." >&2; exit 1; }
+
+BASE="main"; bump_type="patch"; version=""; notes=""; dry=0; do_update=1
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --type)      bump_type="$2"; shift 2 ;;
+    --version)   version="$2"; shift 2 ;;
+    --notes)     notes="$2"; shift 2 ;;
+    --base)      BASE="$2"; shift 2 ;;
+    --no-update) do_update=0; shift ;;
+    --dry-run)   dry=1; shift ;;
+    -h|--help)   sed -n '2,30p' "$0"; exit 0 ;;
+    *) echo "ops-ship: unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+if [ "$BASE" != "main" ]; then
+  echo "ops-ship: --base must be 'main' (ops-release always publishes to main)." >&2
+  exit 2
+fi
+
+cd "$REPO_ROOT"
+DRYTAG=""; [ "$dry" = 1 ] && DRYTAG=" (DRY RUN)"
+echo "ops-ship$DRYTAG — sweep open PRs on '$BASE' -> release -> update"
+
+# ── 1. Sweep: enumerate open, non-draft PRs targeting the base branch ─────────
+echo "── 1/3  Open PRs targeting '$BASE' (non-draft)"
+_pr_lines="$(gh api --paginate "repos/{owner}/{repo}/pulls?state=open&base=${BASE}&sort=created&direction=asc&per_page=100" \
+  --jq '.[] | select(.draft == false) | "\(.number)\t\(.title)\t\(.head.ref)"')" \
+  || { echo "ops-ship: gh pr list failed — aborting (check gh auth / rate limits)." >&2; exit 1; }
+PRS=()
+if [ -n "$_pr_lines" ]; then
+  mapfile -t PRS <<< "${_pr_lines}"
+fi
+
+if [ "${#PRS[@]}" -eq 0 ]; then
+  echo "  no open non-draft PRs — nothing to merge; proceeding straight to release."
+else
+  for row in "${PRS[@]}"; do
+    n="${row%%	*}"; rest="${row#*	}"; title="${rest%%	*}"
+    echo "  #$n  $title"
+  done
+fi
+
+# Build default notes from the PR titles if the caller gave none.
+if [ -z "$notes" ] && [ "${#PRS[@]}" -gt 0 ]; then
+  notes="$(printf '%s\n' "${PRS[@]}" | awk -F'\t' '{printf "- %s (#%s)\n", $2, $1}')"
+fi
+
+if [ "$dry" = 1 ]; then
+  echo "  [dry-run] would admin-squash-merge the ${#PRS[@]} PR(s) above (override required checks/reviews)."
+  echo "── 2/3  Release (delegating to ops-release --dry-run)"
+  "$RELEASE_BIN" --type "$bump_type" ${version:+--version "$version"} ${notes:+--notes "$notes"} --dry-run
+  echo "── 3/3  Update"
+  if [ "$do_update" = 1 ]; then echo "  [dry-run] would run ops-update to pull the new version onto this box."; else echo "  skipped (--no-update)"; fi
+  echo "! DRY RUN — nothing changed. Re-run without --dry-run to apply."
+  exit 0
+fi
+
+# ── Apply: merge each PR (admin override = bypass required checks/reviews) ─────
+merged=0
+for row in "${PRS[@]:-}"; do
+  [ -z "${row:-}" ] && continue
+  n="${row%%	*}"
+  echo "  merging #$n (admin override)…"
+  if gh pr merge "$n" --admin --squash --delete-branch 2>&1 | sed 's/^/    /'; then
+    merged=$((merged+1))
+  else
+    echo "ops-ship: merge of #$n FAILED — aborting before release (no partial ship)." >&2
+    exit 1
+  fi
+done
+[ "${#PRS[@]}" -gt 0 ] && echo "  merged $merged/${#PRS[@]} PR(s)."
+
+# ── 2. Release ────────────────────────────────────────────────────────────────
+echo "── 2/3  Release"
+"$RELEASE_BIN" --type "$bump_type" ${version:+--version "$version"} ${notes:+--notes "$notes"}
+
+# ── 3. Update (pull onto this box) ─────────────────────────────────────────────
+echo "── 3/3  Update"
+if [ "$do_update" = 1 ]; then
+  UPDATE_BIN="$(ls "$HOME"/.claude/plugins/cache/ops-marketplace/ops/*/bin/ops-update 2>/dev/null | sort -V | tail -1 || true)"
+  if [ -n "$UPDATE_BIN" ] && [ -x "$UPDATE_BIN" ]; then
+    if ! "$UPDATE_BIN"; then
+      echo "  ops-update failed (release already published) — run /ops:ops-update manually." >&2
+    fi
+  else
+    echo "  ops-update not found in cache — run /ops:ops-update manually to pull the release."
+  fi
+else
+  echo "  skipped (--no-update) — run /ops:ops-update to pull the release onto this box."
+fi
+
+echo "✓ ops-ship complete. Restart Claude Code (or /reload-plugins) to load the new version."
