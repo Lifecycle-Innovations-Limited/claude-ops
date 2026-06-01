@@ -69,7 +69,7 @@ export OIS_GMAIL_ACCOUNT="$GMAIL_ACCOUNT" OIS_PRETTY="$PRETTY"
 GMAIL_JSON_FILE=""
 GMAIL_ERR=""
 if [ "$DO_EMAIL" = 1 ]; then
-  GMAIL_JSON_FILE="$(mktemp "${TMPDIR:-/tmp}/ois-gmail.XXXXXX.json")"
+  GMAIL_JSON_FILE="$(mktemp "${TMPDIR:-/tmp}/ois-gmail.XXXXXX")"
   trap 'rm -f "$GMAIL_JSON_FILE"' EXIT
   ACCT_ARGS=()
   [ -n "$GMAIL_ACCOUNT" ] && ACCT_ARGS=(-a "$GMAIL_ACCOUNT")
@@ -288,6 +288,16 @@ def scan_whatsapp():
     return out
 
 # ------------------------------------------------------------------- Email ----
+def from_email_addr(header):
+    """Bare address from a From header (exact match; avoids substring false positives)."""
+    if not header:
+        return ""
+    m = re.search(r"<([^>]+)>", header)
+    if m:
+        return m.group(1).lower().strip()
+    m = re.search(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}", header.lower())
+    return m.group(0) if m else header.lower().strip()
+
 def scan_email():
     res = {"account": ACCT or "(gog default account)",
            "needs_reply": [], "waiting": [], "fyi": [], "reachable": True}
@@ -317,7 +327,7 @@ def scan_email():
             "date": r.get("date"),
             "labels": labels,
         }
-        is_sent_last = ("SENT" in labels) or (self_addr and self_addr in frm)
+        is_sent_last = ("SENT" in labels) or (self_addr and self_addr == from_email_addr(frm))
         promo = any(l in labels for l in ("CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL",
                                           "CATEGORY_UPDATES", "CATEGORY_FORUMS"))
         # Conservative no-reply / automated-sender heuristic: route obvious
