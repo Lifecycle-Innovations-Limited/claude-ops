@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.18.19] - 2026-06-01
+
+### Changed
+Ship bin/ops-home snapshot producer (Homey Pro: power, alarms, presence, devices) so ops-go/ops-fires Home section resolves instead of 'home probe failed'. Project-aware ops-marketing-dash with owner-level channels.marketing Doppler-ref cred tier so the briefing Marketing section resolves Healify GA4/Meta/Klaviyo. (Code merged via #443 without a version bump; this cuts the actual release.)
+
+
 ## [2.18.18] - 2026-06-01
 
 ### Changed
