@@ -39,15 +39,45 @@ if [ -z "$PROJECT" ] && [ -f "$PREFS" ]; then
   PROJECT="$(jq -r '.marketing.default_project // empty' "$PREFS" 2>/dev/null || true)"
 fi
 
-# Credential resolution — three-tier:
-#   1. Project config in preferences.json (NEW, primary)
+# Read a Doppler-ref from preferences.json channels.marketing.<channel>.<key_field>.
+# This is the OWNER-LEVEL marketing schema (channels.marketing.*) — distinct from
+# the project-scoped marketing.projects.<project>.* schema that prefs_get reads.
+# The channel block names a Doppler SECRET via a *_key field plus doppler_project
+# + config, e.g.:
+#   channels.marketing.klaviyo = {doppler_project, config, key: "BRIGHT_KLAVIYO_TOKEN"}
+#   channels.marketing.meta    = {doppler_project, config, system_user_token_key: "..."}
+# Key names may carry a @project suffix (e.g. "VITE_GA4_MEASUREMENT_ID@my-project-web")
+# which overrides doppler_project for that single secret.
+# $1=channel  $2=key_field  -> resolved secret value (empty if unresolvable).
+prefs_marketing_cred() {
+  [ -f "$PREFS" ] || return 0
+  local channel="$1" key_field="$2" keyname dproj dcfg realkey suffixproj
+  keyname="$(jq -r --arg c "$channel" --arg f "$key_field" \
+    '.channels.marketing[$c][$f] // empty' "$PREFS" 2>/dev/null)"
+  [ -z "$keyname" ] && return 0
+  dproj="$(jq -r --arg c "$channel" '.channels.marketing[$c].doppler_project // empty' "$PREFS" 2>/dev/null)"
+  dcfg="$(jq -r --arg c "$channel" '.channels.marketing[$c].config // empty' "$PREFS" 2>/dev/null)"
+  realkey="${keyname%@*}"
+  suffixproj="${keyname#*@}"
+  [ "$suffixproj" != "$keyname" ] && dproj="$suffixproj"
+  [ -z "$dproj" ] || [ -z "$realkey" ] && return 0
+  doppler secrets get "$realkey" --project "$dproj" --config "${dcfg:-prd}" --plain 2>/dev/null || true
+}
+
+# Credential resolution — four-tier:
+#   1. Project config in preferences.json marketing.projects.<p>.<c>.<f> (project mode)
 #   2. Flat env / `claude plugin config get` (legacy)
 #   3. Doppler with bare key name (legacy)
+#   4. channels.marketing.<channel>.<key_field> owner-level Doppler-ref (NEW) —
+#      this tier is what lets the morning briefing resolve creds that live in
+#      Doppler under the owner-level schema. Pass it via the 5th/6th args.
 get_cred() {
   local proj_channel="$1"  # e.g. "klaviyo.private_key"
   local env_var="$2"
   local plugin_key="$3"
   local doppler_key="${4:-}"
+  local cm_channel="${5:-}"   # channels.marketing.<channel>
+  local cm_keyfield="${6:-}"  # .<key_field> naming the Doppler secret
 
   local val=""
   if [ -n "$PROJECT" ]; then
@@ -60,22 +90,71 @@ get_cred() {
   if [ -z "$val" ] && [ -n "$doppler_key" ]; then
     val="$(doppler secrets get "$doppler_key" --plain 2>/dev/null || echo "")"
   fi
+  if [ -z "$val" ] && [ -n "$cm_channel" ] && [ -n "$cm_keyfield" ]; then
+    val="$(prefs_marketing_cred "$cm_channel" "$cm_keyfield")"
+  fi
   printf '%s' "$val"
 }
 
-KLAVIYO_KEY="$(get_cred 'klaviyo.private_key' KLAVIYO_PRIVATE_KEY klaviyo_private_key KLAVIYO_PRIVATE_KEY)"
-META_TOKEN="$(get_cred 'meta.access_token' META_ADS_TOKEN meta_ads_token META_ADS_TOKEN)"
-META_ACCOUNT="$(get_cred 'meta.ad_account_id' META_AD_ACCOUNT_ID meta_ad_account_id META_AD_ACCOUNT_ID)"
+# The 5th/6th args add the owner-level channels.marketing.<channel>.<key_field>
+# Doppler-ref fallback (see get_cred). This is the tier the morning briefing
+# relies on — My-Project's marketing creds live in Doppler under channels.marketing.
+KLAVIYO_KEY="$(get_cred 'klaviyo.private_key' KLAVIYO_PRIVATE_KEY klaviyo_private_key KLAVIYO_PRIVATE_KEY klaviyo key)"
+META_TOKEN="$(get_cred 'meta.access_token' META_ADS_TOKEN meta_ads_token META_ADS_TOKEN meta system_user_token_key)"
+# meta fallback_env names an env-resident token (META_MY-PROJECT_ACCESS_TOKEN) — try it last.
+if [ -z "$META_TOKEN" ]; then
+  _meta_fb="$(jq -r '.channels.marketing.meta.fallback_env // empty' "$PREFS" 2>/dev/null)"
+  [ -n "$_meta_fb" ] && META_TOKEN="${!_meta_fb:-}"
+fi
+META_ACCOUNT="$(get_cred 'meta.ad_account_id' META_AD_ACCOUNT_ID meta_ad_account_id META_AD_ACCOUNT_ID meta ad_account_id_key)"
+# GA4 property id: prefer the project-scoped tier, then the owner-level
+# channels.marketing.ga4.property_id (a literal id, not a Doppler ref).
 GA4_PROPERTY="$(get_cred 'ga4.property_id' GA4_PROPERTY_ID ga4_property_id)"
+if [ -z "$GA4_PROPERTY" ] && [ -f "$PREFS" ]; then
+  GA4_PROPERTY="$(jq -r '.channels.marketing.ga4.property_id // empty' "$PREFS" 2>/dev/null)"
+fi
+# GA4 read auth uses an SA key file (analytics.readonly). prefs names it under
+# channels.marketing.ga4.sa_json; export it so ga4_auth_token (ga4-data-api.sh)
+# picks it up. Expand a leading ~ to $HOME.
+if [ -z "${GA4_SERVICE_ACCOUNT_KEY_FILE:-}" ] && [ -f "$PREFS" ]; then
+  _ga4_sa="$(jq -r '.channels.marketing.ga4.sa_json // empty' "$PREFS" 2>/dev/null)"
+  [ -n "$_ga4_sa" ] && GA4_SERVICE_ACCOUNT_KEY_FILE="${_ga4_sa/#\~/$HOME}"
+  export GA4_SERVICE_ACCOUNT_KEY_FILE
+fi
 GSC_SITE="$(get_cred 'gsc.site_url' GOOGLE_SEARCH_CONSOLE_SITE google_search_console_site)"
-GADS_DEV_TOKEN="$(get_cred 'google_ads.developer_token' GOOGLE_ADS_DEVELOPER_TOKEN google_ads_developer_token)"
+GADS_DEV_TOKEN="$(get_cred 'google_ads.developer_token' GOOGLE_ADS_DEVELOPER_TOKEN google_ads_developer_token GOOGLE_ADS_DEVELOPER_TOKEN google_ads dev_token_key)"
 GADS_CLIENT_ID="${GOOGLE_ADS_CLIENT_ID:-$(claude plugin config get google_ads_client_id 2>/dev/null || echo "")}"
 GADS_CLIENT_SECRET="${GOOGLE_ADS_CLIENT_SECRET:-$(claude plugin config get google_ads_client_secret 2>/dev/null || echo "")}"
-GADS_REFRESH_TOKEN="$(get_cred 'google_ads.refresh_token' GOOGLE_ADS_REFRESH_TOKEN google_ads_refresh_token GOOGLE_ADS_REFRESH_TOKEN)"
+GADS_REFRESH_TOKEN="$(get_cred 'google_ads.refresh_token' GOOGLE_ADS_REFRESH_TOKEN google_ads_refresh_token GOOGLE_ADS_REFRESH_TOKEN google_ads refresh_token_key)"
 GADS_CUSTOMER_ID="$(get_cred 'google_ads.customer_id' GOOGLE_ADS_CUSTOMER_ID google_ads_customer_id)"
 GADS_LOGIN_CUSTOMER_ID="${GOOGLE_ADS_LOGIN_CUSTOMER_ID:-$(claude plugin config get google_ads_login_customer_id 2>/dev/null || echo "")}"
 INSTAGRAM_ACCOUNT_ID="$(get_cred 'instagram.account_id' INSTAGRAM_ACCOUNT_ID instagram_account_id)"
-META_APP_SECRET="$(get_cred 'meta.app_secret' META_APP_SECRET meta_app_secret META_APP_SECRET)"
+# Meta app secret enables appsecret_proof (required for system-user tokens).
+# prefs stores it under channels.marketing.meta.app_secret_key (Doppler ref);
+# also accept a bare META_MY-PROJECT_APP_SECRET @ claude-ops/prd as a known location.
+META_APP_SECRET="$(get_cred 'meta.app_secret' META_APP_SECRET meta_app_secret META_APP_SECRET meta app_secret_key)"
+if [ -z "$META_APP_SECRET" ]; then
+  META_APP_SECRET="$(doppler secrets get META_MY-PROJECT_APP_SECRET --project claude-ops --config prd --plain 2>/dev/null || echo "")"
+fi
+
+# Meta ad-account id: prefs carries only the Business Manager id (bm_id_key), not
+# an act_ id. If we have a token+secret but no ad account, resolve the first owned
+# ad account via the BM. Leaves META_ACCOUNT empty (meta insights null) on failure
+# — never fabricated.
+if [ -z "$META_ACCOUNT" ] && [ -n "$META_TOKEN" ] && [ -n "$META_APP_SECRET" ] && [ -f "$PREFS" ]; then
+  _bm_keyname="$(jq -r '.channels.marketing.meta.bm_id_key // empty' "$PREFS" 2>/dev/null)"
+  _bm_id=""
+  if [ -n "$_bm_keyname" ]; then
+    _bm_dproj="$(jq -r '.channels.marketing.meta.doppler_project // empty' "$PREFS" 2>/dev/null)"
+    _bm_dcfg="$(jq -r '.channels.marketing.meta.config // "prd"' "$PREFS" 2>/dev/null)"
+    _bm_id="$(doppler secrets get "$_bm_keyname" --project "${_bm_dproj:-my-project-marketing}" --config "${_bm_dcfg:-prd}" --plain 2>/dev/null || echo "")"
+  fi
+  if [ -n "$_bm_id" ]; then
+    _bm_proof="$(printf '%s' "$META_TOKEN" | openssl dgst -sha256 -hmac "$META_APP_SECRET" -hex 2>/dev/null | awk '{print $NF}')"
+    META_ACCOUNT="$(curl -gsS --max-time 8 "https://graph.facebook.com/v21.0/${_bm_id}/owned_ad_accounts?fields=id&limit=1&appsecret_proof=${_bm_proof}" \
+      -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null | jq -r '.data[0].id // empty' 2>/dev/null || echo "")"
+  fi
+fi
 
 # Compute appsecret_proof for projects that require it (Meta system-user tokens
 # and any project with app_secret configured). Empty string when no secret.
@@ -90,6 +169,12 @@ META_PROOF_QS=""
 
 # Strip dashes from customer ID (API requires no dashes)
 GADS_CUSTOMER_ID="${GADS_CUSTOMER_ID//-/}"
+
+# NOTE on remaining gaps (intentional, not bugs):
+#   GSC — needs a one-time SA grant on the Search Console property
+#         (gap gsc_api: AUTH_READY_GRANT_PENDING). Stays null until granted.
+#   Google Ads — resolves dev+refresh tokens but also needs client_id/secret +
+#         customer_id; if any are absent the channel returns null (expected).
 
 TODAY=$(date +%Y-%m-%d)
 
@@ -353,7 +438,7 @@ GADS_SPEND_RAW=$(echo "$GADS_DATA" | jq '[.[].results[]?.metrics.costMicros // "
 GADS_REV_RAW=$(echo "$GADS_DATA" | jq '[.[].results[]?.metrics.conversionsValue // "0" | tonumber] | add // 0' 2>/dev/null || echo "0")
 TOTAL_SPEND=$(awk "BEGIN { printf \"%.2f\", ${META_SPEND:-0} + ${GADS_SPEND_RAW:-0} }")
 TOTAL_REV=$(awk "BEGIN { printf \"%.2f\", ${META_REV:-0} + ${GADS_REV_RAW:-0} }")
-BLENDED_ROAS=$(awk "BEGIN { if (${TOTAL_SPEND:-0} > 0) printf \"%.2f\", ${TOTAL_REV:-0} / ${TOTAL_SPEND:-1}; else print \"0\" }")
+BLENDED_ROAS=$(awk -v s="${TOTAL_SPEND:-0}" -v v="${TOTAL_REV:-0}" 'BEGIN { s=s+0; v=v+0; if (s > 0) printf "%.2f", v/s; else print "0" }')
 
 # Compute marketing health score (0-100)
 # ROAS score (0-30)
