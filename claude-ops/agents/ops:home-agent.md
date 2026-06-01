@@ -29,15 +29,18 @@ The calling skill provides:
 
 ```bash
 PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+_save_HOMEY_LOCAL_URL="${HOMEY_LOCAL_URL-}"
+_save_HOMEY_LOCAL_TOKEN="${HOMEY_LOCAL_TOKEN-}"
+_save_HOMEY_ID="${HOMEY_ID-}"
 HOMEY_LOCAL_URL=$(jq -r '.home_automation.homey_local_url // empty' "$PREFS_PATH" 2>/dev/null)
 HOMEY_LOCAL_TOKEN=$(jq -r '.home_automation.homey_local_token // empty' "$PREFS_PATH" 2>/dev/null)
 HOMEY_CLOUD_TOKEN=$(jq -r '.home_automation.homey_cloud_token // empty' "$PREFS_PATH" 2>/dev/null)
 HOMEY_ID=$(jq -r '.home_automation.homey_id // empty' "$PREFS_PATH" 2>/dev/null)
 
-[ -z "$HOMEY_LOCAL_URL" ] && HOMEY_LOCAL_URL="${HOMEY_LOCAL_URL:-}"
-[ -z "$HOMEY_LOCAL_TOKEN" ] && HOMEY_LOCAL_TOKEN="${HOMEY_LOCAL_TOKEN:-}"
+[ -z "$HOMEY_LOCAL_URL" ] && HOMEY_LOCAL_URL="${_save_HOMEY_LOCAL_URL:-}"
+[ -z "$HOMEY_LOCAL_TOKEN" ] && HOMEY_LOCAL_TOKEN="${_save_HOMEY_LOCAL_TOKEN:-}"
 [ -z "$HOMEY_CLOUD_TOKEN" ] && HOMEY_CLOUD_TOKEN="${HOMEY_CLOUD_TOKEN:-${HOMEY_ACCESS_TOKEN:-}}"
-[ -z "$HOMEY_ID" ] && HOMEY_ID="${HOMEY_ID:-}"
+[ -z "$HOMEY_ID" ] && HOMEY_ID="${_save_HOMEY_ID:-}"
 ```
 
 If neither local nor cloud credentials resolve, return:
