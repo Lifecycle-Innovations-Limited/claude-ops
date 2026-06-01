@@ -200,9 +200,10 @@ def _recommended_key(it, opts):
 # outbound email ASK gets mis-mapped to a bare APPROVE and the UNEDITED draft is
 # sent to a third party. Edit-then-send re-drafting is not wired yet.
 _RE_EDIT_INTENT = re.compile(
-    r"\b(change|instead|edit|reword|rewrite|replace|revise|adjust|tweak|shorter|"
-    r"longer|add that|mention|leave out|take out|remove the|make it|don'?t say|"
-    r"say that|reslant|soften|reschedule to)\b", re.I)
+    r"\b(change|instead of|edit|reword|rewrite|replace|revise|adjust|tweak|shorter|"
+    r"longer|add that|mention|leave out|take out|remove the|"
+    r"make it (?:shorter|longer|clearer|more|less|sound|polite|formal|casual|better)|"
+    r"don'?t say|say that|reslant|soften|reschedule to)\b", re.I)
 
 
 def _edit_intent(body):
@@ -300,7 +301,7 @@ def cmd_send():
         # Advertise freeform reply — but NOT on outbound message kinds, where a
         # freeform "send but change X" would mis-map to a bare APPROVE and silently
         # send the unedited draft to a third party (also guarded in _handle_text).
-        if kind not in VALIDATE_KINDS:
+        if not _is_outbound(it):
             text += "\n\n💬 _Or just reply in your own words — e.g. “do b”, “skip this one”, or your own instruction._"
         r = _api("sendMessage", {
             "chat_id": CHAT, "text": text[:3800], "parse_mode": "Markdown",
