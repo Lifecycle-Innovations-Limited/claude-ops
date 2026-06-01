@@ -68,6 +68,7 @@ Source: `whatsapp-mcp-server/main.py`. Load with
 | `send_file` / `send_audio_message {recipient,media_path}` | → bridge | media send |
 | `download_media {message_id,chat_jid}` | → `POST /api/download` | media fetch |
 | `resync_app_state {name,full_sync}` | → `POST /api/resync_app_state` | same LTHash caveat |
+| `recover_app_state {name}` | → `POST /api/recover_app_state` | **fatal LTHash recovery** — phone must be online; the ONLY thing that unblocks a 409-desynced archive |
 | `archive_chat {chat_jid,archive}` | → `POST /api/archive` | same app-state blocker |
 
 **Every MCP write maps 1:1 to a bridge REST endpoint.** The MCP gives you nothing the REST API can't —
