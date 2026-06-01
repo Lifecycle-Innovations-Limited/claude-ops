@@ -53,15 +53,22 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+if [ "$BASE" != "main" ]; then
+  echo "ops-ship: --base must be 'main' (ops-release always publishes to main)." >&2
+  exit 2
+fi
+
 cd "$REPO_ROOT"
 DRYTAG=""; [ "$dry" = 1 ] && DRYTAG=" (DRY RUN)"
 echo "ops-ship$DRYTAG — sweep open PRs on '$BASE' -> release -> update"
 
 # ── 1. Sweep: enumerate open, non-draft PRs targeting the base branch ─────────
 echo "── 1/3  Open PRs targeting '$BASE' (non-draft)"
-mapfile -t PRS < <(gh pr list --base "$BASE" --state open --limit 100 \
+_pr_lines="$(gh pr list --base "$BASE" --state open --limit 100 \
   --json number,title,isDraft,headRefName \
-  --jq '.[] | select(.isDraft|not) | "\(.number)\t\(.title)\t\(.headRefName)"' 2>/dev/null || true)
+  --jq '.[] | select(.isDraft|not) | "\(.number)\t\(.title)\t\(.headRefName)"')" \
+  || { echo "ops-ship: gh pr list failed — aborting (check gh auth / rate limits)." >&2; exit 1; }
+mapfile -t PRS <<< "${_pr_lines}"
 
 if [ "${#PRS[@]}" -eq 0 ]; then
   echo "  no open non-draft PRs — nothing to merge; proceeding straight to release."

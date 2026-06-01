@@ -90,7 +90,7 @@ tag and the reload reminder. Surface the final line verbatim:
 | `--type patch\|minor\|major` | Semver bump for the release (default `patch`). |
 | `--version X.Y.Z` | Exact target version instead of bumping. |
 | `--notes "…"` | CHANGELOG body. Defaults to a bullet list of the merged PR titles. |
-| `--base BRANCH` | Base branch to sweep + release (default `main`). |
+| `--base BRANCH` | Base branch for the PR sweep only (must be `main`; `ops-release` always publishes to `main`). |
 | `--no-update` | Don't run `ops-update` afterwards (publish only). |
 | `--dry-run` | Report only — list PRs + the bump, change nothing. Always run this first. |
 
