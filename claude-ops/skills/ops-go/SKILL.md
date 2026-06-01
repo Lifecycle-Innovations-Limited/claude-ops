@@ -101,10 +101,20 @@ that case the briefing falls back to the per-source data below.
 ${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh snapshot 2>/dev/null || echo "{}"
 ```
 
-When this snapshot is non-empty, prefer it for the burn/runway/anomaly
-lines in the briefing. The per-source `Infrastructure` and AWS Cost
-Explorer sections below are kept as a fallback when the dashboard is
-unreachable.
+**Interpreting the snapshot — two different empty states, do NOT conflate:**
+
+1. **`{}` or unreachable** → `FINOPS_DASHBOARD_URL` / `FINOPS_OPS_API_TOKEN`
+   genuinely unset (or the dashboard is down). Report "FinOps creds unset" and
+   fall back to per-source AWS Cost Explorer / `Infrastructure` below.
+2. **Snapshot present (non-null `generated_at`) but `services_tracked: 0` and
+   all-zero `current_month_spend`/`revenue_snapshot`** → dashboard reachable +
+   authenticated, but its **ingest pipeline is unpopulated**. This is NOT a
+   creds problem — do NOT report "token unset". Say "FinOps dashboard reachable
+   but ingest empty" and fall back to per-source data for burn/revenue.
+
+When the snapshot has non-zero `services_tracked`, prefer it for the
+burn/runway/anomaly lines. The per-source `Infrastructure` and AWS Cost
+Explorer sections below are the fallback for both empty states above.
 
 ### Infrastructure
 
