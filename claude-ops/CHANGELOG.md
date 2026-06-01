@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.18.18] - 2026-06-01
+
+### Changed
+Bump Pocket webhook deps (fastapi 0.136.3, uvicorn 0.48.0); upgrade mcp-proxy to 0.12.0 on the box
+
+
 ## [2.18.17] - 2026-06-01
 
 ### Changed
