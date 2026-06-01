@@ -3,6 +3,18 @@
 ## [2.18.19] - 2026-06-01
 
 ### Changed
+Re-release of the ops-inbox offline scan engine (supersedes the orphaned v2.18.19 tag, which was cut at 01:30 from a commit predating bin/ops-inbox-scan).
+
+- bin/ops-inbox-scan: deterministic read-only classifier — WhatsApp (whatsmeow sqlite, lid<->phone merge, names from contacts, mode=ro WAL-safe, no recency cutoff) + Email (gog envelope first-pass). ~0.9s, near-zero tokens.
+- ops-inbox SKILL.md: script is the PRIMARY scan engine; Workflow fan-out demoted to fallback; Slack + Telegram = one inline MCP call each.
+- Fix the fan-out 'args.map is not a function' crash (defensive JSON.parse).
+
+Net: common WhatsApp + email + glance case drops from 5 agents / ~330k tokens / ~130s to a sub-second script + a couple of inline calls.
+
+
+## [2.18.19] - 2026-06-01
+
+### Changed
 ops-inbox: offline scan engine replaces the ~330k-token agent fan-out.
 
 - New bin/ops-inbox-scan: deterministic, read-only, in-process classifier for the two heaviest channels — WhatsApp (direct whatsmeow sqlite read; merges each person's lid<->phone chats into one conversation; classifies needs_reply/waiting/groups/fyi from the true merged-thread last message; resolves names from contacts; ~0.9s) and Email (gog gmail search envelope first-pass + no-reply-sender heuristic). Opens the live DB mode=ro (not immutable=1) so WAL-buffered freshest messages aren't skipped; no hard recency cutoff (archived=0 is the filter).
