@@ -1,0 +1,376 @@
+#!/usr/bin/env bash
+# ops-inbox-scan — offline, (near) zero-token inbox scan + classify.
+#
+# WHY: the /ops:ops-inbox "all channels" path used to fan out one subagent per
+# channel through the Workflow tool. A single run burned ~330k subagent tokens to
+# do work that is, for the two heaviest channels, just a sqlite read (WhatsApp)
+# and a CLI call (Gmail). This script does that classification deterministically
+# in the main process and prints compact JSON, so the skill reads a tiny result
+# instead of paying for 5 agent contexts.
+#
+# COVERS (offline, no MCP, no subagents):
+#   - WhatsApp  : reads the whatsmeow bridge sqlite store directly; merges each
+#                 person's lid<->phone chats into one conversation; classifies
+#                 NEEDS_REPLY / WAITING / FYI from the true last message.
+#   - Email     : `gog gmail search` envelope first-pass classify (NEEDS_REPLY /
+#                 WAITING / FYI). Deep per-thread reads stay in the skill, run
+#                 only for the handful of NEEDS_REPLY candidates before drafting.
+#
+# DOES NOT COVER (left to the skill as single, light inline MCP calls — NOT
+# subagents): Slack (one conversations_unreads call) and Telegram (one
+# list_dialogs call). Those are one round-trip each; a subagent is overkill.
+#
+# OUTPUT: one JSON object on stdout. Always valid JSON, even on partial failure.
+# READ-ONLY: opens every sqlite db in immutable/read-only mode; never sends,
+# archives, or mutates anything. All sending stays in the skill under Rule 6.
+#
+# FLAGS:
+#   --whatsapp-only / --email-only   limit to one channel
+#   --days N                         recency window (default 7)
+#   --gmail-account ADDR             override Gmail account (default: gog default)
+#   --pretty                         pretty-print JSON
+set -euo pipefail
+
+DAYS=7
+DO_WA=1
+DO_EMAIL=1
+GMAIL_ACCOUNT="${GMAIL_ACCOUNT:-}"
+PRETTY=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --whatsapp-only) DO_EMAIL=0 ;;
+    --email-only)    DO_WA=0 ;;
+    --days)          DAYS="${2:-7}"; shift ;;
+    --gmail-account) GMAIL_ACCOUNT="${2:-}"; shift ;;
+    --pretty)        PRETTY=1 ;;
+    -h|--help)
+      grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "ops-inbox-scan: unknown arg: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+WA_STORE="${WHATSAPP_BRIDGE_DIR:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}/store"
+WA_MSGDB="${WHATSAPP_BRIDGE_DB:-$WA_STORE/messages.db}"
+WA_WADB="$WA_STORE/whatsapp.db"
+
+# Resolve a default Gmail account from gog if not supplied (best-effort).
+if [ "$DO_EMAIL" = 1 ] && [ -z "$GMAIL_ACCOUNT" ]; then
+  GMAIL_ACCOUNT="$(gog whoami 2>/dev/null | head -1 | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+' || true)"
+fi
+
+export OIS_DAYS="$DAYS" OIS_DO_WA="$DO_WA" OIS_DO_EMAIL="$DO_EMAIL"
+export OIS_WA_MSGDB="$WA_MSGDB" OIS_WA_WADB="$WA_WADB"
+export OIS_GMAIL_ACCOUNT="$GMAIL_ACCOUNT" OIS_PRETTY="$PRETTY"
+
+# Gmail is fetched in bash (gog is a CLI) and handed to python via a temp file so
+# python never shells out. Empty file => python emits an "unreachable" note.
+GMAIL_JSON_FILE=""
+GMAIL_ERR=""
+if [ "$DO_EMAIL" = 1 ]; then
+  GMAIL_JSON_FILE="$(mktemp "${TMPDIR:-/tmp}/ois-gmail.XXXXXX")"
+  trap 'rm -f "$GMAIL_JSON_FILE"' EXIT
+  ACCT_ARGS=()
+  [ -n "$GMAIL_ACCOUNT" ] && ACCT_ARGS=(-a "$GMAIL_ACCOUNT")
+  if ! gog gmail search "${ACCT_ARGS[@]}" -j --results-only --no-input \
+        --max 30 "in:inbox newer_than:${DAYS}d" >"$GMAIL_JSON_FILE" 2>"${GMAIL_JSON_FILE}.err"; then
+    GMAIL_ERR="$(head -c 400 "${GMAIL_JSON_FILE}.err" 2>/dev/null | tr '\n' ' ')"
+    : >"$GMAIL_JSON_FILE"   # blank => unreachable
+  fi
+  rm -f "${GMAIL_JSON_FILE}.err" 2>/dev/null || true
+fi
+export OIS_GMAIL_JSON_FILE="$GMAIL_JSON_FILE" OIS_GMAIL_ERR="$GMAIL_ERR"
+
+python3 <<'PY'
+import os, sys, json, sqlite3, re
+from datetime import datetime, timezone
+
+DAYS      = int(os.environ.get("OIS_DAYS", "7"))
+DO_WA     = os.environ.get("OIS_DO_WA") == "1"
+DO_EMAIL  = os.environ.get("OIS_DO_EMAIL") == "1"
+MSGDB     = os.environ.get("OIS_WA_MSGDB", "")
+WADB      = os.environ.get("OIS_WA_WADB", "")
+ACCT      = os.environ.get("OIS_GMAIL_ACCOUNT", "")
+PRETTY    = os.environ.get("OIS_PRETTY") == "1"
+GMAIL_F   = os.environ.get("OIS_GMAIL_JSON_FILE", "")
+GMAIL_ERR = os.environ.get("OIS_GMAIL_ERR", "")
+
+now = datetime.now(timezone.utc)
+notes = []
+
+def age_min(ts_str):
+    if not ts_str:
+        return None
+    s = ts_str.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        # try trimming fractional seconds / odd offsets
+        try:
+            dt = datetime.fromisoformat(re.sub(r"\.\d+", "", s))
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int((now - dt.astimezone(timezone.utc)).total_seconds() // 60)
+
+def trunc(s, n=160):
+    s = (s or "").replace("\n", " ").strip()
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+# ---------------------------------------------------------------- WhatsApp ----
+def ro(path):
+    # mode=ro (NOT immutable=1): the bridge writes this DB live in WAL mode;
+    # immutable=1 skips the -wal file and would hide the freshest, uncheckpointed
+    # messages. mode=ro respects WAL + locking and never mutates.
+    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+
+def scan_whatsapp():
+    out = {"needs_reply": [], "waiting": [], "groups": [], "fyi": []}
+    if not os.path.exists(MSGDB):
+        notes.append(f"whatsapp: store not found ({MSGDB}) — bridge not installed?")
+        return out
+    con = ro(MSGDB)
+    con.row_factory = sqlite3.Row
+
+    # lid<->phone map: lid_jid -> pn_jid  (authoritative, from whatsmeow store)
+    lid2pn = {}
+    if os.path.exists(WADB):
+        try:
+            w = ro(WADB)
+            for lid, pn in w.execute("SELECT lid, pn FROM whatsmeow_lid_map"):
+                lid2pn[f"{lid}@lid"] = f"{pn}@s.whatsapp.net"
+            w.close()
+        except sqlite3.Error as e:
+            notes.append(f"whatsapp: lid_map unreadable ({e}); falling back to contacts.phone")
+
+    # contacts: jid -> name, and phone -> jids (fallback merge + name resolution)
+    name_by_jid, phone_by_jid, jids_by_phone = {}, {}, {}
+    try:
+        for jid, name, phone in con.execute(
+            "SELECT jid, name, phone FROM contacts"
+        ):
+            if name:
+                name_by_jid[jid] = name
+            if phone:
+                phone_by_jid[jid] = phone
+                jids_by_phone.setdefault(phone, set()).add(jid)
+    except sqlite3.Error:
+        pass
+
+    def canonical(jid):
+        # Prefer the phone JID as the canonical key so a person's lid + phone
+        # chats collapse to one conversation.
+        if jid in lid2pn:
+            return lid2pn[jid]
+        ph = phone_by_jid.get(jid)
+        if ph:
+            for cand in jids_by_phone.get(ph, ()):
+                if cand.endswith("@s.whatsapp.net"):
+                    return cand
+        return jid
+
+    # Pull non-archived chats (groups/newsletters separated below).
+    chats = list(con.execute(
+        "SELECT jid, name, last_message_time FROM chats "
+        "WHERE archived=0 ORDER BY last_message_time DESC"
+    ))
+
+    # Build merged DM groups keyed by canonical jid.
+    groups = {}   # canonical_jid -> {member_jids:set, name, latest_ts}
+    g_chats = []  # @g.us
+    n_chats = []  # @newsletter
+    for c in chats:
+        jid = c["jid"]
+        if jid.endswith("@g.us"):
+            g_chats.append(c); continue
+        if jid.endswith("@newsletter") or jid.endswith("@broadcast"):
+            n_chats.append(c); continue
+        key = canonical(jid)
+        g = groups.setdefault(key, {"members": set(), "name": None, "latest": None})
+        g["members"].add(jid)
+        g["members"].add(key)
+        nm = name_by_jid.get(jid) or (c["name"] if c["name"] and not c["name"][0].isdigit() else None)
+        if nm and not g["name"]:
+            g["name"] = nm
+        if c["last_message_time"] and (g["latest"] is None or c["last_message_time"] > g["latest"]):
+            g["latest"] = c["last_message_time"]
+
+    def last_msgs(jids, limit=6):
+        qs = ",".join("?" * len(jids))
+        rows = con.execute(
+            f"SELECT is_from_me, content, media_type, timestamp, sender "
+            f"FROM messages WHERE chat_jid IN ({qs}) "
+            f"ORDER BY timestamp DESC LIMIT ?",
+            (*jids, limit),
+        ).fetchall()
+        return rows  # newest first
+
+    # DM classification
+    for key, g in groups.items():
+        members = sorted(g["members"])
+        rows = last_msgs(members, 6)
+        if not rows:
+            continue
+        last = rows[0]
+        am = age_min(last["timestamp"])
+        # NO hard recency cutoff: archived=0 IS the working-set filter. An
+        # unanswered ask from 10 days ago is still actionable (per SKILL.md).
+        # Recency only sorts (below).
+        name = (g["name"]
+                or name_by_jid.get(key)
+                or re.sub(r"@.*$", "", key))
+        preview = []
+        for r in reversed(rows):  # oldest->newest for readability
+            body = r["content"]
+            if not body and r["media_type"]:
+                body = f"[{r['media_type']}]"
+            preview.append({
+                "from_me": bool(r["is_from_me"]),
+                "text": trunc(body, 140),
+            })
+        item = {
+            "who": name,
+            "jid": key,
+            "alt_jids": [j for j in members if j != key],
+            "last_message_at": last["timestamp"],
+            "age_min": am,
+            "last_from_me": bool(last["is_from_me"]),
+            "preview": preview,
+        }
+        if last["is_from_me"]:
+            out["waiting"].append(item)
+        else:
+            out["needs_reply"].append(item)
+
+    # Group chats — surface recent ones for the skill to scan for @mentions /
+    # direct questions. Provisional status from last-message direction only.
+    for c in g_chats:
+        rows = last_msgs([c["jid"]], 6)
+        if not rows:
+            continue
+        last = rows[0]
+        am = age_min(last["timestamp"])
+        preview = []
+        for r in reversed(rows):
+            body = r["content"] or (f"[{r['media_type']}]" if r["media_type"] else "")
+            preview.append({
+                "from_me": bool(r["is_from_me"]),
+                "sender": re.sub(r"@.*$", "", r["sender"] or ""),
+                "text": trunc(body, 140),
+            })
+        out["groups"].append({
+            "who": c["name"] or re.sub(r"@.*$", "", c["jid"]),
+            "jid": c["jid"],
+            "last_message_at": last["timestamp"],
+            "age_min": am,
+            "last_from_me": bool(last["is_from_me"]),
+            "preview": preview,
+            "note": "group — scan preview for @mention/direct question before NEEDS_REPLY",
+        })
+
+    # Newsletters/broadcasts are always FYI.
+    for c in n_chats:
+        am = age_min(c["last_message_time"])
+        out["fyi"].append({
+            "who": c["name"] or re.sub(r"@.*$", "", c["jid"]),
+            "jid": c["jid"],
+            "last_message_at": c["last_message_time"],
+            "age_min": am,
+            "reason": "newsletter/broadcast",
+        })
+
+    con.close()
+    # Stable ordering: most recent first within each bucket.
+    for b in ("needs_reply", "waiting", "groups", "fyi"):
+        out[b].sort(key=lambda x: x.get("age_min") if x.get("age_min") is not None else 1 << 30)
+    return out
+
+# ------------------------------------------------------------------- Email ----
+def from_email_addr(header):
+    """Bare address from a From header (exact match; avoids substring false positives)."""
+    if not header:
+        return ""
+    m = re.search(r"<([^>]+)>", header)
+    if m:
+        return m.group(1).lower().strip()
+    m = re.search(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}", header.lower())
+    return m.group(0) if m else header.lower().strip()
+
+def scan_email():
+    res = {"account": ACCT or "(gog default account)",
+           "needs_reply": [], "waiting": [], "fyi": [], "reachable": True}
+    if not GMAIL_F or not os.path.exists(GMAIL_F) or os.path.getsize(GMAIL_F) == 0:
+        res["reachable"] = False
+        res["note"] = "gmail unreachable: " + (GMAIL_ERR or "empty result from gog gmail search")
+        return res
+    try:
+        with open(GMAIL_F) as fh:
+            data = json.load(fh)
+    except (json.JSONDecodeError, OSError) as e:
+        res["reachable"] = False
+        res["note"] = f"gmail result unparseable: {e}"
+        return res
+    rows = data if isinstance(data, list) else data.get("results", data.get("threads", []))
+    self_addr = ACCT.lower()
+    for r in rows or []:
+        labels = r.get("labels") or r.get("labelIds") or []
+        labels = [str(l).upper() for l in labels]
+        frm = (r.get("from") or "").lower()
+        subj = r.get("subject") or "(no subject)"
+        tid = r.get("threadId") or r.get("id") or r.get("thread_id")
+        item = {
+            "who": r.get("from") or "(unknown)",
+            "subject": trunc(subj, 120),
+            "threadId": tid,
+            "date": r.get("date"),
+            "labels": labels,
+        }
+        is_sent_last = ("SENT" in labels) or (self_addr and self_addr == from_email_addr(frm))
+        promo = any(l in labels for l in ("CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL",
+                                          "CATEGORY_UPDATES", "CATEGORY_FORUMS"))
+        # Conservative no-reply / automated-sender heuristic: route obvious
+        # machine senders to FYI so they don't inflate needs_reply. Sender-address
+        # only — never subject keywords (those risk hiding real humans).
+        automated = bool(re.search(
+            r"(no[-_.]?reply|do[-_.]?not[-_.]?reply|notifications?@|alerts?@|"
+            r"mailer-daemon|postmaster@|@.*\.amazonses\.com|bounce)", frm))
+        if is_sent_last:
+            res["waiting"].append(item)
+        elif promo or automated:
+            res["fyi"].append(item)
+        else:
+            item["note"] = "first-pass (envelope) — deep-read thread before drafting"
+            res["needs_reply"].append(item)
+    return res
+
+# ------------------------------------------------------------------ assemble --
+result = {
+    "generated_at": now.isoformat(),
+    "window_days": DAYS,
+    "notes": notes,
+}
+if DO_WA:
+    result["whatsapp"] = scan_whatsapp()
+if DO_EMAIL:
+    result["email"] = scan_email()
+
+# Counts for a quick headline.
+def cnt(ch, bucket):
+    return len(result.get(ch, {}).get(bucket, []) or [])
+result["counts"] = {
+    "whatsapp": {b: cnt("whatsapp", b) for b in ("needs_reply", "waiting", "groups", "fyi")} if DO_WA else None,
+    "email":    {b: cnt("email", b) for b in ("needs_reply", "waiting", "fyi")} if DO_EMAIL else None,
+}
+result["notes"].append(
+    "Slack + Telegram NOT scanned here — the skill does one light inline MCP call each "
+    "(conversations_unreads / list_dialogs), no subagent."
+)
+result["notes"].append(
+    "WhatsApp store may lag phone-sent messages; confirm 'did I already reply?' with the human "
+    "for any NEEDS_REPLY before drafting (FULL-THREAD AWARENESS GATE)."
+)
+
+print(json.dumps(result, indent=2 if PRETTY else None, ensure_ascii=False))
+PY
