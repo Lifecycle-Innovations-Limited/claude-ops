@@ -3,6 +3,18 @@
 ## [2.18.19] - 2026-06-01
 
 ### Changed
+ops-inbox: offline scan engine replaces the ~330k-token agent fan-out.
+
+- New bin/ops-inbox-scan: deterministic, read-only, in-process classifier for the two heaviest channels — WhatsApp (direct whatsmeow sqlite read; merges each person's lid<->phone chats into one conversation; classifies needs_reply/waiting/groups/fyi from the true merged-thread last message; resolves names from contacts; ~0.9s) and Email (gog gmail search envelope first-pass + no-reply-sender heuristic). Opens the live DB mode=ro (not immutable=1) so WAL-buffered freshest messages aren't skipped; no hard recency cutoff (archived=0 is the filter).
+- ops-inbox SKILL.md: ops-inbox-scan is now the PRIMARY scan engine; the Workflow fan-out is demoted to a fallback for channels with real per-thread volume the script can't reach. Slack + Telegram become one light inline MCP call each (no subagent).
+- Fix the fan-out's 'args.map is not a function' crash via defensive JSON.parse (the harness can deliver args as a string).
+
+Net: the common WhatsApp + email + glance case drops from 5 agents / ~330k tokens / ~130s to a sub-second script + a couple of inline calls.
+
+
+## [2.18.19] - 2026-06-01
+
+### Changed
 Ship bin/ops-home snapshot producer (Homey Pro: power, alarms, presence, devices) so ops-go/ops-fires Home section resolves instead of 'home probe failed'. Project-aware ops-marketing-dash with owner-level channels.marketing Doppler-ref cred tier so the briefing Marketing section resolves My-Project GA4/Meta/Klaviyo. (Code merged via #443 without a version bump; this cuts the actual release.)
 
 
