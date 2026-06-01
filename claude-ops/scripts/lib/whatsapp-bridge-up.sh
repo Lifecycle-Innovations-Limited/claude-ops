@@ -25,7 +25,24 @@ case "$OS" in
     ;;
   Linux)
     if command -v systemctl >/dev/null && systemctl --user cat whatsapp-bridge.service >/dev/null 2>&1; then
-      systemctl --user restart whatsapp-bridge.service
+      # Shared cross-caller restart floor — the SAME stamp wa-bridge-keepalive.sh and
+      # wa-inbox-fresh.sh use ($HOME/.claude/.once.whatsapp-bridge-restart.last). One
+      # bridge restart / 180s max across ALL callers. whatsmeow CANNOT re-fetch your own
+      # phone-sent messages on reconnect, so each uncoordinated restart is a window where
+      # outbound you typed on your phone is dropped permanently. Without this floor,
+      # parallel ops health-checks calling this wrapper churn the bridge (observed: 4
+      # restarts in 1 second) and silently lose sends. If a restart happened <180s ago the
+      # bridge is already coming up — skip and let the wait loop below confirm :8080.
+      _wa_floor="$HOME/.claude/.once.whatsapp-bridge-restart.last"
+      _wa_skip=0
+      if [ -f "$_wa_floor" ]; then
+        _wa_last="$(cat "$_wa_floor" 2>/dev/null || echo 0)"
+        if [ "$(( $(date +%s) - ${_wa_last:-0} ))" -lt 180 ]; then _wa_skip=1; fi
+      fi
+      if [ "$_wa_skip" = 0 ]; then
+        systemctl --user restart whatsapp-bridge.service
+        date +%s > "$_wa_floor" 2>/dev/null || true
+      fi
     else
       echo "claude-ops/whatsapp-bridge-up: no whatsapp-bridge.service installed on this Linux host." >&2
       echo "Run: bash \$CLAUDE_PLUGIN_ROOT/scripts/install-whatsapp-bridge-linux.sh --wa-phone <E.164>" >&2
