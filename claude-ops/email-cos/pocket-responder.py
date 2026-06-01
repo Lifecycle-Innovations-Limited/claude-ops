@@ -203,7 +203,7 @@ _RE_EDIT_INTENT = re.compile(
     r"\b(change|instead of|edit|reword|rewrite|replace|revise|adjust|tweak|shorter|"
     r"longer|add that|mention|leave out|take out|remove the|"
     r"make it (?:shorter|longer|clearer|more|less|sound|polite|formal|casual|better)|"
-    r"don'?t say|say that|reslant|soften|reschedule to)\b", re.I)
+    r"don'?t say|say(?:\s+that)?|send but|reslant|soften|reschedule to)\b", re.I)
 
 
 def _edit_intent(body):
