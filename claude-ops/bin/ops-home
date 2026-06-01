@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# ops-home — smart-home (Homey Pro) probe for the morning briefing.
+#
+# The morning briefing (skills/ops-go/SKILL.md) and incident dashboard
+# (skills/ops-fires/SKILL.md) call:
+#     ${CLAUDE_PLUGIN_ROOT}/bin/ops-home snapshot
+# This binary previously DID NOT EXIST — only skills/ops-home/SKILL.md was
+# present — so every briefing hit file-not-found and rendered the fallback
+# {"configured":true,"error":"home probe failed"}. This script provides the
+# missing `snapshot` producer.
+#
+# Output (snapshot): a single JSON object the briefing renders into the HOME line:
+#   {"configured":bool, "power_w":num|null, "kwh_today":num|null,
+#    "alarms":{"active":int,"types":[...]}, "presence":null,
+#    "devices":{"total":int,"online":int}, "last_flow":obj|null,
+#    "homey_version":str}
+#
+# Cred resolution: env HOMEY_PRO_API_KEY, else Doppler
+# (project/config read from prefs channels.home, falling back to home_automation).
+# API base + Homey id are read from prefs channels.home; constructed from id if
+# only the id is present. All probes are non-fatal: a failed/absent endpoint maps
+# to null/0 so the briefing always receives parseable JSON.
+#
+# Verified live (fw 13.2.1, cloud proxy connect.athom.com):
+#   /manager/system        200
+#   /manager/energy/live   200  (power = .totalConsumed.W, NOT .totalPower)
+#   /manager/alarms/alarm  200  (OBJECT keyed by id, not an array)
+#   /manager/devices/device 200 (OBJECT keyed by id)
+#   /manager/flow/flow     200  (OBJECT keyed by id; .lastExecuted often null)
+#   /manager/energy/report 404  -> kwh_today null
+#   /manager/presence      404  -> presence null
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+OPS_PLUGIN_ROOT_FALLBACK="${SCRIPT_DIR}/.." . "${SCRIPT_DIR}/../lib/registry-path.sh"
+PREFS="${OPS_DATA_DIR}/preferences.json"
+
+CMD="${1:-snapshot}"
+
+emit() { printf '%s\n' "$1"; }
+
+# ---- resolve config from prefs (channels.home, then home_automation) ----
+H_DPROJ=""; H_DCFG=""; H_ID=""; H_BASE=""
+if [ -f "$PREFS" ]; then
+  H_DPROJ="$(jq -r '.channels.home.doppler_project // .home_automation.doppler_project // empty' "$PREFS" 2>/dev/null)"
+  H_DCFG="$(jq -r '.channels.home.config // .home_automation.config // empty' "$PREFS" 2>/dev/null)"
+  H_ID="$(jq -r '.channels.home.homey_pro_id // empty' "$PREFS" 2>/dev/null)"
+  H_BASE="$(jq -r '.channels.home.api_base // empty' "$PREFS" 2>/dev/null)"
+fi
+[ -z "$H_BASE" ] && [ -n "$H_ID" ] && H_BASE="https://${H_ID}.connect.athom.com/api"
+
+# ---- resolve API key: env first, then Doppler ----
+KEY="${HOMEY_PRO_API_KEY:-}"
+if [ -z "$KEY" ] && command -v doppler >/dev/null 2>&1 && [ -n "$H_DPROJ" ]; then
+  KEY="$(doppler secrets get HOMEY_PRO_API_KEY --project "$H_DPROJ" --config "${H_DCFG:-dev}" --plain 2>/dev/null || true)"
+fi
+
+if [ "$CMD" != "snapshot" ]; then
+  echo "usage: ops-home snapshot" >&2
+  exit 64
+fi
+
+# Not configured -> briefing omits the HOME section.
+if [ -z "$KEY" ] || [ -z "$H_BASE" ]; then
+  emit '{"configured":false}'
+  exit 0
+fi
+
+# homey_get <path> -> response body on HTTP 2xx, else empty string.
+homey_get() {
+  local path="$1" body code
+  body="$(curl -s --max-time 20 -o - -w '\n%{http_code}' \
+    -H "Authorization: Bearer ${KEY}" "${H_BASE}${path}" 2>/dev/null)" || { printf ''; return 0; }
+  code="${body##*$'\n'}"
+  body="${body%$'\n'*}"
+  if [ "$code" -ge 200 ] 2>/dev/null && [ "$code" -lt 300 ] 2>/dev/null; then
+    printf '%s' "$body"
+  else
+    printf ''
+  fi
+}
+
+# Reachability gate: /manager/system must answer 200.
+SYS="$(homey_get /manager/system)"
+SYS_VER="$(printf '%s' "$SYS" | jq -r '.homeyVersion // .softwareVersion // empty' 2>/dev/null || echo "")"
+if [ -z "$SYS" ]; then
+  emit '{"configured":true,"error":"home probe failed: system unreachable"}'
+  exit 0
+fi
+
+# Live power: .totalConsumed.W (NOT .totalPower).
+ENERGY="$(homey_get /manager/energy/live)"
+POWER_W="$(printf '%s' "$ENERGY" | jq -r '(.totalConsumed.W // .totalPower // empty)' 2>/dev/null || echo "")"
+if [ -n "$POWER_W" ]; then
+  POWER_W="$(awk "BEGIN{printf \"%.1f\", ${POWER_W}+0}" 2>/dev/null || echo "")"
+fi
+
+# Alarms: OBJECT keyed by id. Active = those with .active==true (handles object
+# or array form). Also collect active alarm names/types for severity.
+ALARMS="$(homey_get /manager/alarms/alarm)"
+ALARM_ACTIVE="$(printf '%s' "$ALARMS" | jq -r '[ (if type=="object" then .[] else .[]? end) | select(.active==true) ] | length' 2>/dev/null || echo 0)"
+ALARM_TYPES="$(printf '%s' "$ALARMS" | jq -c '[ (if type=="object" then .[] else .[]? end) | select(.active==true) | (.name // .type // "alarm") ]' 2>/dev/null || echo '[]')"
+[ -z "$ALARM_ACTIVE" ] && ALARM_ACTIVE=0
+[ -z "$ALARM_TYPES" ] && ALARM_TYPES='[]'
+
+# Devices: OBJECT keyed by id.
+DEVICES="$(homey_get /manager/devices/device)"
+DEV_TOTAL="$(printf '%s' "$DEVICES" | jq -r '[ (if type=="object" then .[] else .[]? end) ] | length' 2>/dev/null || echo 0)"
+DEV_ONLINE="$(printf '%s' "$DEVICES" | jq -r '[ (if type=="object" then .[] else .[]? end) | select(.available==true) ] | length' 2>/dev/null || echo 0)"
+[ -z "$DEV_TOTAL" ] && DEV_TOTAL=0
+[ -z "$DEV_ONLINE" ] && DEV_ONLINE=0
+
+# Flows: OBJECT keyed by id; pick most-recently-executed (null when none have run).
+FLOWS="$(homey_get /manager/flow/flow)"
+LAST_FLOW="$(printf '%s' "$FLOWS" | jq -c '[ (if type=="object" then .[] else .[]? end) | select(.lastExecuted != null) ] | sort_by(.lastExecuted) | reverse | (.[0] // null) | (if . == null then null else {name: (.name // "flow"), lastExecuted: .lastExecuted} end)' 2>/dev/null || echo 'null')"
+[ -z "$LAST_FLOW" ] && LAST_FLOW='null'
+
+# kwh_today + presence not available on this firmware (404) -> null.
+jq -n \
+  --argjson power "${POWER_W:-null}" \
+  --argjson alarms_active "${ALARM_ACTIVE:-0}" \
+  --argjson alarm_types "${ALARM_TYPES:-[]}" \
+  --argjson dev_total "${DEV_TOTAL:-0}" \
+  --argjson dev_online "${DEV_ONLINE:-0}" \
+  --argjson last_flow "${LAST_FLOW:-null}" \
+  --arg version "${SYS_VER}" \
+  '{
+    configured: true,
+    power_w: $power,
+    kwh_today: null,
+    alarms: {active: $alarms_active, types: $alarm_types},
+    presence: null,
+    devices: {total: $dev_total, online: $dev_online},
+    last_flow: $last_flow,
+    homey_version: (if $version == "" then null else $version end)
+  }'
