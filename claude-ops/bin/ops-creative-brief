@@ -26,7 +26,7 @@ BRAND=""
 PRODUCT=""
 AUDIENCE=""
 GOAL=""
-PROJECT="healify"
+PROJECT=""
 ENV_NAME="prd"
 NUM_SHOTS=5
 DRY_RUN=false
@@ -61,6 +61,11 @@ for f in BRAND PRODUCT AUDIENCE GOAL; do
   fi
 done
 
+if [ -z "$PROJECT" ]; then
+  printf '[ops-creative-brief] missing required --project=...\n' >&2
+  exit 1
+fi
+
 if [ "$ENV_NAME" != "prd" ] && [ "$ENV_NAME" != "dev" ]; then
   printf '[ops-creative-brief] --env must be prd or dev (got %s)\n' "$ENV_NAME" >&2
   exit 1
@@ -82,8 +87,8 @@ BRIEF_DIR="${OPS_CREATIVE_DIR:-$HOME/.creative-briefs}"
 RUN_DIR="${BRIEF_DIR}/${TS}"
 USAGE_LOG="${BRIEF_DIR}/.usage-${DAY}.log"
 RATE_FILE="${OPS_HIGGSFIELD_RATE_DIR:-/tmp}/.higgsfield-rate-${PROJECT}-${HOUR}"
-S3_BUCKET="${OPS_HIGGSFIELD_S3_BUCKET:-healify-marketing-creative}"
-DASHBOARD_REPO="${OPS_DASHBOARD_REPO:-Lifecycle-Innovations-Limited/healify-operating-dashboard}"
+S3_BUCKET="${OPS_HIGGSFIELD_S3_BUCKET:-}"
+DASHBOARD_REPO="${OPS_DASHBOARD_REPO:-}"
 
 mkdir -p "$RUN_DIR" "$BRIEF_DIR"
 
@@ -280,6 +285,10 @@ poll_until_done() {
 # ── S3 upload — refuse if bucket missing (don't auto-create) ────────────────
 ensure_s3_bucket() {
   if [ "$DRY_RUN" = "true" ]; then return 0; fi
+  if [ -z "$S3_BUCKET" ]; then
+    printf '[ops-creative-brief] set OPS_HIGGSFIELD_S3_BUCKET to your marketing assets bucket\n' >&2
+    return 1
+  fi
   if aws s3api head-bucket --bucket "$S3_BUCKET" 2>/dev/null; then
     return 0
   fi
@@ -436,6 +445,12 @@ fi
 
 if ! command -v gh >/dev/null 2>&1; then
   printf '[ops-creative-brief] gh CLI missing — skipping PR. Brief at %s\n' "$brief_md" >&2
+  exit 0
+fi
+
+if [ -z "$DASHBOARD_REPO" ]; then
+  printf '[ops-creative-brief] OPS_DASHBOARD_REPO unset — skipping PR. Brief at %s\n' "$brief_md" >&2
+  printf '[ops-creative-brief] set OPS_DASHBOARD_REPO=your-org/your-repo to open a dashboard PR\n' >&2
   exit 0
 fi
 

@@ -93,7 +93,7 @@ cmd_dispatch() {
     args+=(--agent "$agent")
   fi
   [ -n "$prompt" ] && args+=("$prompt")
-  args+=("${extra[@]}")
+  [ "${#extra[@]}" -gt 0 ] && args+=("${extra[@]}")
   cd "$add_dir"   # start fleet agents in default workdir
   exec "$CLAUDE_BIN" "${args[@]}"
 }
