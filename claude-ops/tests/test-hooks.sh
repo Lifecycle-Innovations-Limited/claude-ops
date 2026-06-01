@@ -101,7 +101,7 @@ fi
 echo ""
 echo "Checking hook event names..."
 
-valid_events=("SessionStart" "SessionEnd" "PreToolUse" "PostToolUse" "Stop" "SubagentStop" "Notification")
+valid_events=("SessionStart" "SessionEnd" "PreToolUse" "PostToolUse" "Stop" "SubagentStop" "Notification" "UserPromptSubmit" "PreCompact")
 
 if command -v jq &>/dev/null; then
   events=$(jq -r '.hooks | keys[]' "$HOOKS_FILE" 2>/dev/null || true)
