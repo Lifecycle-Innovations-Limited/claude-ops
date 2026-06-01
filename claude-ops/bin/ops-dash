@@ -7,6 +7,8 @@ set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "${PLUGIN_ROOT}/lib/registry-path.sh"
+# Schema-tolerant registry readers (GSD schema has no .repos[]/.paths[]/.gsd).
+. "${PLUGIN_ROOT}/lib/registry-resolve.sh"
 PREFS="${OPS_DATA_DIR}/preferences.json"
 
 # ── Mobile / SSH detection (Rule 7) ─────────────────────────────────────────
@@ -220,7 +222,9 @@ TOTAL_PROBES=13
   # CI fails: iterate registry repos with gh run list --repo (works outside git cwd)
   FAIL_COUNT=0
   if [ -f "$REGISTRY" ] && command -v gh &>/dev/null; then
-    REPOS=$(jq -r '[.projects[].repos[]?] | unique | .[]' "$REGISTRY" 2>/dev/null || true)
+    # Schema-tolerant: GSD registry has no .repos[]; derive slugs from .remote_url.
+    # `|| true` preserves set -e guard so the probe still touches done_ci on jq error.
+    REPOS=$(ops_registry_repos "$REGISTRY" || true)
     for repo in $REPOS; do
       C=$(gh run list --repo "$repo" --limit 10 --json conclusion 2>/dev/null \
         | jq '[.[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo "0")
@@ -247,10 +251,11 @@ TOTAL_PROBES=13
 # 4) Portfolio
 (
   if [ -f "$REGISTRY" ]; then
+    # Schema-tolerant: GSD registry uses .path/.branch; legacy used .paths[0]/.git.default_branch.
     jq -c '[.projects[] | {
       name,
-      path: (.paths[0] // ""),
-      branch: (.git.default_branch // "?"),
+      path: (.path // .paths[0] // ""),
+      branch: (.branch // .git.default_branch // "?"),
       repos: (.repos // [])
     }]' "$REGISTRY" 2>/dev/null > "$TMPDIR_DASH/portfolio.json" \
       || echo '[]' > "$TMPDIR_DASH/portfolio.json"
@@ -334,7 +339,9 @@ TOTAL_PROBES=13
     while IFS= read -r path_raw; do
       expanded="${path_raw/#\~/$HOME}"
       [ -f "$expanded/.planning/STATE.md" ] && GSD_ACTIVE=$((GSD_ACTIVE + 1))
-    done < <(jq -r '.projects[] | select(.gsd == true) | .paths[]' "$REGISTRY" 2>/dev/null || true)
+    # Schema-tolerant: GSD registry has no .gsd flag and no .paths[]; the file is
+    # GSD-only, so match every project with phase/roadmap and read .path (or .paths[]).
+    done < <(jq -r '.projects[] | select(.gsd == true or .has_roadmap == true or (has("phase") and ((.phase // "") != ""))) | (.paths // [.path]) | .[]?' "$REGISTRY" 2>/dev/null || true)
   fi
   echo "$GSD_ACTIVE" > "$TMPDIR_DASH/gsd"
   touch "$TMPDIR_DASH/done_gsd"
@@ -659,7 +666,8 @@ render_section_fires() {
     p "  ${BRED}🚨 ${CI_FAILS} CI failure(s) detected across registered repos${RST}"
     # Show failing runs per repo (using --repo flag, safe outside git cwd)
     if [ -f "$REGISTRY" ] && command -v gh &>/dev/null; then
-      jq -r '[.projects[].repos[]?] | unique | .[]' "$REGISTRY" 2>/dev/null \
+      # Schema-tolerant: derive repo slugs from GSD .remote_url when .repos[] absent.
+      ops_registry_repos "$REGISTRY" \
         | head -10 \
         | while IFS= read -r repo; do
             gh run list --repo "$repo" --limit 10 --json conclusion,name,headBranch 2>/dev/null \
