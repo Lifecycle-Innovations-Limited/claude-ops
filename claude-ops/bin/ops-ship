@@ -64,11 +64,13 @@ echo "ops-ship$DRYTAG — sweep open PRs on '$BASE' -> release -> update"
 
 # ── 1. Sweep: enumerate open, non-draft PRs targeting the base branch ─────────
 echo "── 1/3  Open PRs targeting '$BASE' (non-draft)"
-_pr_lines="$(gh pr list --base "$BASE" --state open --limit 100 \
-  --json number,title,isDraft,headRefName \
-  --jq '.[] | select(.isDraft|not) | "\(.number)\t\(.title)\t\(.headRefName)"')" \
+_pr_lines="$(gh api --paginate "repos/{owner}/{repo}/pulls?state=open&base=${BASE}&per_page=100" \
+  --jq '.[] | select(.draft == false) | "\(.number)\t\(.title)\t\(.head.ref)"')" \
   || { echo "ops-ship: gh pr list failed — aborting (check gh auth / rate limits)." >&2; exit 1; }
-mapfile -t PRS <<< "${_pr_lines}"
+PRS=()
+if [ -n "$_pr_lines" ]; then
+  mapfile -t PRS <<< "${_pr_lines}"
+fi
 
 if [ "${#PRS[@]}" -eq 0 ]; then
   echo "  no open non-draft PRs — nothing to merge; proceeding straight to release."
@@ -118,7 +120,9 @@ echo "── 3/3  Update"
 if [ "$do_update" = 1 ]; then
   UPDATE_BIN="$(ls "$HOME"/.claude/plugins/cache/ops-marketplace/ops/*/bin/ops-update 2>/dev/null | sort -V | tail -1 || true)"
   if [ -n "$UPDATE_BIN" ] && [ -x "$UPDATE_BIN" ]; then
-    "$UPDATE_BIN"
+    if ! "$UPDATE_BIN"; then
+      echo "  ops-update failed (release already published) — run /ops:ops-update manually." >&2
+    fi
   else
     echo "  ops-update not found in cache — run /ops:ops-update manually to pull the release."
   fi
