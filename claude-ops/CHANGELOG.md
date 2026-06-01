@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.19.3] - 2026-06-01
+
+### Added
+- feat(ops-ship): one-command sweep-merge-all-PRs → release → update (#457)
+
+
 ## [2.19.2] - 2026-06-01
 
 ### Changed
