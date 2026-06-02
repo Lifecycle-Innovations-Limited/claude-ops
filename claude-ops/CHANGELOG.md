@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.1] - 2026-06-02
+
+### Changed
+ops-inbox: fix gog archive/verify (raw not cached search); add open-tracking follow-up feature
+
+
 ## [2.20.0] - 2026-06-02
 
 ### Changed
