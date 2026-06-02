@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.20.0] - 2026-06-02
+
+### Changed
+### Added
+- Pocket/email-cos Telegram approvals now render A/B/C options with a ⭐ recommended pick, a decision-question header, and untruncated message bodies (full email drafts + voice-memo context) (#459).
+- Freeform email **edit → re-draft → re-stage**: replying to an email approval with edits (e.g. "change the date to Friday") re-drafts the body via LLM and re-stages a fresh approval ASK; the original draft is never auto-sent (#462).
+
+### Fixed
+- Every `claude -p` subprocess in pocket-responder (`_redraft_email`, `_llm_map`, `_validate_action`) was silently dying with "Prompt is too long" on context-heavy boxes — added MCP-isolation flags (`--strict-mcp-config --mcp-config '{}'`) so freeform natural-language approval mapping and the pre-send validation guard actually work, not just the regex fast-path (#462).
+
+
 ## [2.19.3] - 2026-06-01
 
 ### Added
