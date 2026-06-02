@@ -9,16 +9,18 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HOME = os.homedir();
-const PREFS_PATH = process.env.PREFS_PATH ||
-  path.join(HOME, '.claude/plugins/data/ops-ops-marketplace/preferences.json');
-const OPS_DATA_DIR = process.env.OPS_DATA_DIR ||
-  path.join(HOME, '.claude/plugins/data/ops-ops-marketplace');
+const PREFS_PATH =
+  process.env.PREFS_PATH || path.join(HOME, '.claude/plugins/data/ops-ops-marketplace/preferences.json');
+const OPS_DATA_DIR = process.env.OPS_DATA_DIR || path.join(HOME, '.claude/plugins/data/ops-ops-marketplace');
 const UI_DIR = path.join(__dirname, '..', 'ui');
 const OUT_DIR = path.join(OPS_DATA_DIR, 'social-planner');
 const args = process.argv.slice(2);
 const collectOnly = args.includes('--collect-only');
-const cmd = (args[0] && !args[0].startsWith('-')) ? args[0] : 'all';
-const flag = (n, d) => { const i = args.indexOf(n); return i >= 0 ? (args[i + 1] || true) : d; };
+const cmd = args[0] && !args[0].startsWith('-') ? args[0] : 'all';
+const flag = (n, d) => {
+  const i = args.indexOf(n);
+  return i >= 0 ? args[i + 1] || true : d;
+};
 const PORT = Number(flag('--port', process.env.OPS_PLANNER_PORT || 7937));
 const OUT = flag('--out', path.join(OUT_DIR, 'state.json'));
 
@@ -26,7 +28,8 @@ const OUT = flag('--out', path.join(OUT_DIR, 'state.json'));
 const readJSON = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
 const log = (...a) => console.error('[planner]', ...a);
 function resolveTypefullySocialSetId(p, prefs) {
-  if (p.typefully_social_set_id != null && String(p.typefully_social_set_id).trim() !== '') return String(p.typefully_social_set_id);
+  if (p.typefully_social_set_id != null && String(p.typefully_social_set_id).trim() !== '')
+    return String(p.typefully_social_set_id);
   const fromPrefs = prefs.typefully && prefs.typefully.default_social_set_id;
   if (fromPrefs != null && String(fromPrefs).trim() !== '') return String(fromPrefs);
   const cfgPath = path.join(HOME, '.config/typefully/config.json');
@@ -35,7 +38,9 @@ function resolveTypefullySocialSetId(p, prefs) {
     const j = readJSON(cfgPath);
     const d = j.default_social_set ?? j.defaultSocialSet;
     if (d != null && String(d).trim() !== '') return String(d);
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return null;
 }
 const URL_RE = /(https?:\/\/[^\s)]+)/g;
@@ -49,9 +54,15 @@ function resolveSecret(ref) {
     const [project, config, ...rest] = ref.slice(8).split('/');
     const name = rest.join('/');
     try {
-      return execSync(`doppler secrets get ${name} --project ${project} --config ${config} --plain`,
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
-    } catch { return process.env[name] || null; }
+      return (
+        execSync(`doppler secrets get ${name} --project ${project} --config ${config} --plain`, {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim() || null
+      );
+    } catch {
+      return process.env[name] || null;
+    }
   }
   return process.env[ref] || ref; // raw env name or literal
 }
@@ -60,25 +71,32 @@ function resolveSecret(ref) {
 function deriveRationale(channel, copy, scheduledAt) {
   const hour = new Date(scheduledAt).getUTCHours();
   const slot =
-    hour < 9 ? 'Morning authority slot — high feed reach before the workday (EU midday / US-east pre-open).' :
-    hour < 12 ? 'Late-morning build-in-public slot — steady weekday browsing.' :
-    hour < 14 ? 'Midday window — peak US-morning engagement.' :
-    hour < 17 ? 'Afternoon professional window — best for LinkedIn long-form.' :
-    'Evening casual window — conversational/Threads-friendly.';
-  const norm = {
-    x: 'X: hook-first, thread if it earns it.',
-    linkedin: 'LinkedIn: long-form authority + soft CTA.',
-    threads: 'Threads: casual, conversational, low-polish.',
-    instagram: 'Instagram: visual-first, link-in-bio CTA.',
-    reddit: 'Reddit: value-first, no hard sell.',
-    youtube: 'YouTube: SEO title + descriptive copy.',
-    google_business: 'Google Business: local discovery, plain CTA.',
-    facebook: 'Facebook: brand page, broad reach.',
-  }[channel] || `${channel}: platform-native.`;
+    hour < 9
+      ? 'Morning authority slot — high feed reach before the workday (EU midday / US-east pre-open).'
+      : hour < 12
+        ? 'Late-morning build-in-public slot — steady weekday browsing.'
+        : hour < 14
+          ? 'Midday window — peak US-morning engagement.'
+          : hour < 17
+            ? 'Afternoon professional window — best for LinkedIn long-form.'
+            : 'Evening casual window — conversational/Threads-friendly.';
+  const norm =
+    {
+      x: 'X: hook-first, thread if it earns it.',
+      linkedin: 'LinkedIn: long-form authority + soft CTA.',
+      threads: 'Threads: casual, conversational, low-polish.',
+      instagram: 'Instagram: visual-first, link-in-bio CTA.',
+      reddit: 'Reddit: value-first, no hard sell.',
+      youtube: 'YouTube: SEO title + descriptive copy.',
+      google_business: 'Google Business: local discovery, plain CTA.',
+      facebook: 'Facebook: brand page, broad reach.',
+    }[channel] || `${channel}: platform-native.`;
   const t = (copy || '').toLowerCase();
-  const seq = /(almost here|this week|coming|👀|something worth)/.test(t) ? 'Pre-launch teaser — builds anticipation ahead of the drop.'
-    : /(it'?s here|is here|is live|now live|download|link in bio|on the app store)/.test(t) ? 'Launch beat — conversion-focused, drives the install.'
-    : 'Education/credibility beat — deepens trust between launch pushes.';
+  const seq = /(almost here|this week|coming|👀|something worth)/.test(t)
+    ? 'Pre-launch teaser — builds anticipation ahead of the drop.'
+    : /(it'?s here|is here|is live|now live|download|link in bio|on the app store)/.test(t)
+      ? 'Launch beat — conversion-focused, drives the install.'
+      : 'Education/credibility beat — deepens trust between launch pushes.';
   return `${seq} ${slot} ${norm}`;
 }
 
@@ -89,25 +107,36 @@ async function fetchTypefully(setId) {
   const key = readJSON(cfgPath).apiKey;
   const base = process.env.TYPEFULLY_API_BASE || 'https://api.typefully.com/v2';
   const H = { Authorization: `Bearer ${key}` };
-  const list = await fetch(`${base}/social-sets/${setId}/drafts?status=scheduled&limit=50&order_by=scheduled_date`, { headers: H });
+  const list = await fetch(`${base}/social-sets/${setId}/drafts?status=scheduled&limit=50&order_by=scheduled_date`, {
+    headers: H,
+  });
   if (!list.ok) return { ok: false, reason: `HTTP ${list.status}`, items: [] };
   const drafts = (await list.json()).results || [];
   const items = [];
   for (const d of drafts) {
     let full = d;
-    try { const r = await fetch(`${base}/social-sets/${setId}/drafts/${d.id}?exclude_comment_markers=true`, { headers: H }); if (r.ok) full = await r.json(); } catch {}
+    try {
+      const r = await fetch(`${base}/social-sets/${setId}/drafts/${d.id}?exclude_comment_markers=true`, { headers: H });
+      if (r.ok) full = await r.json();
+    } catch {}
     const plats = full.platforms || {};
     for (const [channel, p] of Object.entries(plats)) {
       if (!p || !p.enabled) continue;
-      const posts = (p.posts || []).map(x => x.text).filter(Boolean);
+      const posts = (p.posts || []).map((x) => x.text).filter(Boolean);
       if (!posts.length) continue;
       const copy = posts.join('\n\n———\n\n');
       items.push({
-        id: `tf-${d.id}-${channel}`, channel, kind: 'post',
+        id: `tf-${d.id}-${channel}`,
+        channel,
+        kind: 'post',
         type: posts.length > 1 ? 'thread' : 'text',
-        scheduled_at: d.scheduled_date, copy, thread: posts.length > 1 ? posts : undefined,
+        scheduled_at: d.scheduled_date,
+        copy,
+        thread: posts.length > 1 ? posts : undefined,
         rationale: deriveRationale(channel, copy, d.scheduled_date),
-        media: [], links: extractLinks(copy), char_count: copy.length,
+        media: [],
+        links: extractLinks(copy),
+        char_count: copy.length,
         title: d.draft_title || null,
         source: { engine: 'typefully', ref: String(d.id), edit_url: d.private_url || null },
       });
@@ -118,23 +147,43 @@ async function fetchTypefully(setId) {
 
 async function fetchUploadPost(profile, key) {
   if (!key) return { ok: false, reason: 'no api key', items: [] };
-  const r = await fetch('https://api.upload-post.com/api/uploadposts/schedule', { headers: { Authorization: `Apikey ${key}` } });
+  const r = await fetch('https://api.upload-post.com/api/uploadposts/schedule', {
+    headers: { Authorization: `Apikey ${key}` },
+  });
   if (!r.ok) return { ok: false, reason: `HTTP ${r.status}`, items: [] };
   const data = await r.json();
-  const posts = (data.scheduled_posts || []).filter(p => !profile || p.profile_username === profile);
-  const items = posts.flatMap(p => (p.platforms || []).map(channel => {
-    const pc = (p.platform_content || {})[channel] || {};
-    const copy = [pc.title || p.title, pc.caption || p.caption, pc.description || p.description].filter(Boolean).join('\n\n');
-    const isVid = p.post_type === 'video';
-    return {
-      id: `up-${p.job_id}-${channel}`, channel, kind: 'post', type: p.post_type || 'photo',
-      scheduled_at: p.original_scheduled_str || p.scheduled_date, copy,
-      rationale: deriveRationale(channel, copy, p.original_scheduled_str || p.scheduled_date),
-      media: p.preview_url ? [{ type: isVid ? 'video' : 'image', url: p.preview_url, thumb: p.thumbnail_url || (isVid ? null : p.preview_url) }] : [],
-      links: extractLinks(copy), char_count: copy.length, title: null,
-      source: { engine: 'upload-post', ref: p.job_id },
-    };
-  }));
+  const posts = (data.scheduled_posts || []).filter((p) => !profile || p.profile_username === profile);
+  const items = posts.flatMap((p) =>
+    (p.platforms || []).map((channel) => {
+      const pc = (p.platform_content || {})[channel] || {};
+      const copy = [pc.title || p.title, pc.caption || p.caption, pc.description || p.description]
+        .filter(Boolean)
+        .join('\n\n');
+      const isVid = p.post_type === 'video';
+      return {
+        id: `up-${p.job_id}-${channel}`,
+        channel,
+        kind: 'post',
+        type: p.post_type || 'photo',
+        scheduled_at: p.original_scheduled_str || p.scheduled_date,
+        copy,
+        rationale: deriveRationale(channel, copy, p.original_scheduled_str || p.scheduled_date),
+        media: p.preview_url
+          ? [
+              {
+                type: isVid ? 'video' : 'image',
+                url: p.preview_url,
+                thumb: p.thumbnail_url || (isVid ? null : p.preview_url),
+              },
+            ]
+          : [],
+        links: extractLinks(copy),
+        char_count: copy.length,
+        title: null,
+        source: { engine: 'upload-post', ref: p.job_id },
+      };
+    }),
+  );
   return { ok: true, count: items.length, items };
 }
 
@@ -148,28 +197,48 @@ async function fetchMetaAds(cfg) {
   const secret = resolveSecret(m.app_secret);
   const proof = secret ? crypto.createHmac('sha256', secret).update(token).digest('hex') : null;
   const u = new URL(`https://graph.facebook.com/v21.0/${adAccountId}/ads`);
-  u.searchParams.set('fields', 'name,effective_status,created_time,creative{title,body,thumbnail_url},adset{daily_budget,targeting{publisher_platforms}}');
+  u.searchParams.set(
+    'fields',
+    'name,effective_status,created_time,creative{title,body,thumbnail_url},adset{daily_budget,targeting{publisher_platforms}}',
+  );
   u.searchParams.set('limit', '50');
   u.searchParams.set('access_token', token);
   if (proof) u.searchParams.set('appsecret_proof', proof);
   let r;
-  try { r = await fetch(u, { signal: AbortSignal.timeout(15000) }); }
-  catch (e) { return { ok: false, reason: e.message, items: [] }; }
-  if (!r.ok) { let msg = `HTTP ${r.status}`; try { msg = (await r.json()).error?.message || msg; } catch {} return { ok: false, reason: msg, items: [] }; }
+  try {
+    r = await fetch(u, { signal: AbortSignal.timeout(15000) });
+  } catch (e) {
+    return { ok: false, reason: e.message, items: [] };
+  }
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`;
+    try {
+      msg = (await r.json()).error?.message || msg;
+    } catch {}
+    return { ok: false, reason: msg, items: [] };
+  }
   const ads = (await r.json()).data || [];
-  const items = ads.map(a => {
+  const items = ads.map((a) => {
     const cr = a.creative || {};
     const pp = a.adset?.targeting?.publisher_platforms || [];
-    let channel = pp.includes('instagram') && !pp.includes('facebook') ? 'instagram' : (pp[0] || 'facebook');
+    let channel = pp.includes('instagram') && !pp.includes('facebook') ? 'instagram' : pp[0] || 'facebook';
     if (channel === 'audience_network' || channel === 'messenger') channel = 'meta';
     const budget = a.adset?.daily_budget ? ' · $' + (a.adset.daily_budget / 100).toFixed(0) + '/day' : '';
     const copy = [cr.title, cr.body].filter(Boolean).join('\n\n') || a.name;
     return {
-      id: 'meta-' + a.id, channel, kind: 'ad', type: 'ad', scheduled_at: a.created_time || null,
-      ad_status: a.effective_status, copy,
+      id: 'meta-' + a.id,
+      channel,
+      kind: 'ad',
+      type: 'ad',
+      scheduled_at: a.created_time || null,
+      ad_status: a.effective_status,
+      copy,
       rationale: 'Meta ad · ' + a.effective_status + budget + ' · placement: ' + (pp.join(', ') || 'auto') + '.',
       media: cr.thumbnail_url ? [{ type: 'image', url: cr.thumbnail_url, thumb: cr.thumbnail_url }] : [],
-      links: [], char_count: copy.length, title: a.name, source: { engine: 'meta-ads', ref: a.id },
+      links: [],
+      char_count: copy.length,
+      title: a.name,
+      source: { engine: 'meta-ads', ref: a.id },
     };
   });
   return { ok: true, count: items.length, items };
@@ -178,42 +247,78 @@ async function fetchGoogleAds(cfg) {
   const g = cfg.google_ads || {};
   const customerId = resolveSecret(g.customer_id);
   if (!customerId) return { ok: false, reason: 'not configured', items: [] };
-  const devToken = resolveSecret(g.developer_token), cid = resolveSecret(g.client_id),
-        csec = resolveSecret(g.client_secret), refresh = resolveSecret(g.refresh_token);
+  const devToken = resolveSecret(g.developer_token),
+    cid = resolveSecret(g.client_id),
+    csec = resolveSecret(g.client_secret),
+    refresh = resolveSecret(g.refresh_token);
   if (!devToken || !cid || !csec || !refresh) return { ok: false, reason: 'missing oauth creds', items: [] };
   let access;
   try {
     const tr = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: cid, client_secret: csec, refresh_token: refresh, grant_type: 'refresh_token' }),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: cid,
+        client_secret: csec,
+        refresh_token: refresh,
+        grant_type: 'refresh_token',
+      }),
       signal: AbortSignal.timeout(15000),
     });
     if (!tr.ok) return { ok: false, reason: 'oauth HTTP ' + tr.status, items: [] };
     access = (await tr.json()).access_token;
-  } catch (e) { return { ok: false, reason: e.message, items: [] }; }
+  } catch (e) {
+    return { ok: false, reason: e.message, items: [] };
+  }
   const cust = String(customerId).replace(/-/g, '');
-  const headers = { Authorization: 'Bearer ' + access, 'developer-token': devToken, 'Content-Type': 'application/json' };
+  const headers = {
+    Authorization: 'Bearer ' + access,
+    'developer-token': devToken,
+    'Content-Type': 'application/json',
+  };
   const loginCustomerId = g.login_customer_id ? resolveSecret(g.login_customer_id) : null;
   if (loginCustomerId) headers['login-customer-id'] = String(loginCustomerId).replace(/-/g, '');
-  const query = "SELECT campaign.name, campaign.status, ad_group_ad.ad.responsive_search_ad.headlines, ad_group_ad.ad.final_urls FROM ad_group_ad WHERE campaign.status != 'REMOVED' LIMIT 50";
+  const query =
+    "SELECT campaign.name, campaign.status, ad_group_ad.ad.responsive_search_ad.headlines, ad_group_ad.ad.final_urls FROM ad_group_ad WHERE campaign.status != 'REMOVED' LIMIT 50";
   let rows = [];
   try {
     const r = await fetch('https://googleads.googleapis.com/v20/customers/' + cust + '/googleAds:searchStream', {
-      method: 'POST', headers, body: JSON.stringify({ query }), signal: AbortSignal.timeout(20000),
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ query }),
+      signal: AbortSignal.timeout(20000),
     });
-    if (!r.ok) { let msg = 'HTTP ' + r.status; try { const j = await r.json(); msg = (j.error?.message || JSON.stringify(j)).slice(0, 160); } catch {} return { ok: false, reason: msg, items: [] }; }
+    if (!r.ok) {
+      let msg = 'HTTP ' + r.status;
+      try {
+        const j = await r.json();
+        msg = (j.error?.message || JSON.stringify(j)).slice(0, 160);
+      } catch {}
+      return { ok: false, reason: msg, items: [] };
+    }
     const data = await r.json();
-    rows = (Array.isArray(data) ? data : [data]).flatMap(b => b.results || []);
-  } catch (e) { return { ok: false, reason: e.message, items: [] }; }
+    rows = (Array.isArray(data) ? data : [data]).flatMap((b) => b.results || []);
+  } catch (e) {
+    return { ok: false, reason: e.message, items: [] };
+  }
   const items = rows.map((row, i) => {
     const ad = row.adGroupAd?.ad || {};
-    const heads = (ad.responsiveSearchAd?.headlines || []).map(h => h.text).filter(Boolean);
+    const heads = (ad.responsiveSearchAd?.headlines || []).map((h) => h.text).filter(Boolean);
     const copy = heads.join(' · ') || row.campaign?.name || 'ad';
     return {
-      id: 'gads-' + i, channel: 'google-search', kind: 'ad', type: 'ad', scheduled_at: null,
-      ad_status: row.campaign?.status, copy,
+      id: 'gads-' + i,
+      channel: 'google-search',
+      kind: 'ad',
+      type: 'ad',
+      scheduled_at: null,
+      ad_status: row.campaign?.status,
+      copy,
       rationale: 'Google Ads · "' + (row.campaign?.name || '') + '" · ' + (row.campaign?.status || '') + '.',
-      media: [], links: ad.finalUrls || [], char_count: copy.length, title: row.campaign?.name, source: { engine: 'google-ads', ref: String(i) },
+      media: [],
+      links: ad.finalUrls || [],
+      char_count: copy.length,
+      title: row.campaign?.name,
+      source: { engine: 'google-ads', ref: String(i) },
     };
   });
   return { ok: true, count: items.length, items };
@@ -225,7 +330,13 @@ async function collect() {
   const mk = prefs.marketing || {};
   const engineStatus = {};
   const identities = [];
-  const note = (eng, res) => { const s = engineStatus[eng] || { ok: false, count: 0 }; s.ok = s.ok || res.ok; s.count += res.count || 0; if (res.reason) s.reason = res.reason; engineStatus[eng] = s; };
+  const note = (eng, res) => {
+    const s = engineStatus[eng] || { ok: false, count: 0 };
+    s.ok = s.ok || res.ok;
+    s.count += res.count || 0;
+    if (res.reason) s.reason = res.reason;
+    engineStatus[eng] = s;
+  };
 
   // personal identities
   for (const [id, p] of Object.entries((mk.social_identities && mk.social_identities.personal) || {})) {
@@ -237,13 +348,21 @@ async function collect() {
     }
     const engKey = engine === 'typefully' ? 'typefully' : engine;
     note(engKey, res);
-    identities.push({ id, label: (p.aka && p.aka.join(' / ')) || id, kind: 'personal', engine,
-      status: res.ok ? 'ok' : (res.reason || 'error'), channels: [...new Set(res.items.map(i => i.channel))].sort(), items: res.items });
+    identities.push({
+      id,
+      label: (p.aka && p.aka.join(' / ')) || id,
+      kind: 'personal',
+      engine,
+      status: res.ok ? 'ok' : res.reason || 'error',
+      channels: [...new Set(res.items.map((i) => i.channel))].sort(),
+      items: res.items,
+    });
   }
 
   // project brands — organic posts (social.engine) + paid ads (meta/google, independent of organic engine)
   for (const [proj, cfg] of Object.entries(mk.projects || {})) {
-    const s = cfg.social || {}; const eng = (s.engine && s.engine.primary) || null;
+    const s = cfg.social || {};
+    const eng = (s.engine && s.engine.primary) || null;
     let postRes = { ok: false, items: [], status: s.engine && s.engine.status };
     if (eng === 'upload-post') {
       const up = s.engine.upload_post || {};
@@ -252,19 +371,32 @@ async function collect() {
       postRes = await fetchTypefully(s.typefully_social_set_id);
     }
     if (eng) note(eng, postRes);
-    const meta = await fetchMetaAds(cfg); if (cfg.meta && cfg.meta.ad_account_id) note('meta-ads', meta);
-    const gads = await fetchGoogleAds(cfg); if (cfg.google_ads && cfg.google_ads.customer_id) note('google-ads', gads);
+    const meta = await fetchMetaAds(cfg);
+    if (cfg.meta && cfg.meta.ad_account_id) note('meta-ads', meta);
+    const gads = await fetchGoogleAds(cfg);
+    if (cfg.google_ads && cfg.google_ads.customer_id) note('google-ads', gads);
     const items = [...postRes.items, ...meta.items, ...gads.items];
     identities.push({
-      id: proj, label: proj, kind: 'project', engine: eng,
-      status: eng ? (postRes.ok ? 'ok' : (postRes.status || postRes.reason || 'error')) : 'unprovisioned',
-      ad_status: { 'meta-ads': meta.ok ? String(meta.count) : (meta.reason || '-'), 'google-ads': gads.ok ? String(gads.count) : (gads.reason || '-') },
-      channels: [...new Set(items.map(i => i.channel))].sort(), items,
+      id: proj,
+      label: proj,
+      kind: 'project',
+      engine: eng,
+      status: eng ? (postRes.ok ? 'ok' : postRes.status || postRes.reason || 'error') : 'unprovisioned',
+      ad_status: {
+        'meta-ads': meta.ok ? String(meta.count) : meta.reason || '-',
+        'google-ads': gads.ok ? String(gads.count) : gads.reason || '-',
+      },
+      channels: [...new Set(items.map((i) => i.channel))].sort(),
+      items,
     });
   }
 
-  const state = { generated_at: new Date().toISOString(), timezone: prefs.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
-    engine_status: engineStatus, identities };
+  const state = {
+    generated_at: new Date().toISOString(),
+    timezone: prefs.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+    engine_status: engineStatus,
+    identities,
+  };
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, JSON.stringify(state, null, 2));
   const total = identities.reduce((n, i) => n + i.items.length, 0);
@@ -273,7 +405,13 @@ async function collect() {
 }
 
 /* ---------- serve ---------- */
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' };
+const MIME = {
+  '.html': 'text/html',
+  '.js': 'text/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.svg': 'image/svg+xml',
+};
 function serve() {
   const srv = http.createServer((req, res) => {
     let url = decodeURIComponent(req.url.split('?')[0]);
@@ -282,11 +420,20 @@ function serve() {
     if (url === '/state.json') {
       file = fs.existsSync(OUT) ? OUT : path.join(UI_DIR, 'state.sample.json');
     } else {
-      const rel = path.normalize(url).replace(/^(\.\.[/\\])+/, '').replace(/^[/\\]+/, '');
+      const rel = path
+        .normalize(url)
+        .replace(/^(\.\.[/\\])+/, '')
+        .replace(/^[/\\]+/, '');
       file = path.join(UI_DIR, rel);
     }
-    if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end('not found'); }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+    if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+      res.writeHead(404);
+      return res.end('not found');
+    }
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
+      'Cache-Control': 'no-store',
+    });
     fs.createReadStream(file).pipe(res);
   });
   srv.listen(PORT, '127.0.0.1', () => {
@@ -294,7 +441,9 @@ function serve() {
     log(`serving ${u}`);
     console.log(u);
     if (cmd !== 'serve' && flag('--no-open', false) === false) {
-      try { spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [u], { stdio: 'ignore', detached: true }).unref(); } catch {}
+      try {
+        spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [u], { stdio: 'ignore', detached: true }).unref();
+      } catch {}
     }
   });
 }
@@ -304,5 +453,8 @@ function serve() {
     if (cmd === 'collect' || cmd === 'all' || collectOnly) await collect();
     if (!collectOnly && (cmd === 'serve' || cmd === 'open' || cmd === 'all')) serve();
     else if (!collectOnly) process.exit(0);
-  } catch (e) { log('ERROR', e.message); process.exit(1); }
+  } catch (e) {
+    log('ERROR', e.message);
+    process.exit(1);
+  }
 })();
