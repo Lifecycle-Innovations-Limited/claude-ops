@@ -190,7 +190,6 @@ async function fetchUploadPost(profile, key) {
 /* ---------- ad fetchers (real; honest empty when no creds / no campaigns) ---------- */
 async function fetchMetaAds(cfg) {
   const m = cfg.meta || {};
-  if (!m.ad_account_id) return { ok: false, reason: 'no ad account', items: [] };
   const adAccountId = resolveSecret(m.ad_account_id);
   if (!adAccountId) return { ok: false, reason: 'no ad account', items: [] };
   const token = resolveSecret(m.access_token);
@@ -246,9 +245,8 @@ async function fetchMetaAds(cfg) {
 }
 async function fetchGoogleAds(cfg) {
   const g = cfg.google_ads || {};
-  if (!g.customer_id) return { ok: false, reason: 'not configured', items: [] };
-  const custResolved = resolveSecret(g.customer_id);
-  if (!custResolved) return { ok: false, reason: 'not configured', items: [] };
+  const customerId = resolveSecret(g.customer_id);
+  if (!customerId) return { ok: false, reason: 'not configured', items: [] };
   const devToken = resolveSecret(g.developer_token),
     cid = resolveSecret(g.client_id),
     csec = resolveSecret(g.client_secret),
@@ -272,16 +270,14 @@ async function fetchGoogleAds(cfg) {
   } catch (e) {
     return { ok: false, reason: e.message, items: [] };
   }
-  const cust = String(custResolved).replace(/-/g, '');
+  const cust = String(customerId).replace(/-/g, '');
   const headers = {
     Authorization: 'Bearer ' + access,
     'developer-token': devToken,
     'Content-Type': 'application/json',
   };
-  if (g.login_customer_id) {
-    const loginCust = resolveSecret(g.login_customer_id);
-    if (loginCust) headers['login-customer-id'] = String(loginCust).replace(/-/g, '');
-  }
+  const loginCustomerId = g.login_customer_id ? resolveSecret(g.login_customer_id) : null;
+  if (loginCustomerId) headers['login-customer-id'] = String(loginCustomerId).replace(/-/g, '');
   const query =
     "SELECT campaign.name, campaign.status, ad_group_ad.ad.responsive_search_ad.headlines, ad_group_ad.ad.final_urls FROM ad_group_ad WHERE campaign.status != 'REMOVED' LIMIT 50";
   let rows = [];
