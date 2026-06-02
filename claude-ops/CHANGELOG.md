@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.5] - 2026-06-02
+
+### Changed
+ops-inbox: act on finance/legal/personal threads instead of surface-only (PR #472)
+
+
 ## [2.20.4] - 2026-06-02
 
 ### Changed
