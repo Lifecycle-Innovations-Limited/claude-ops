@@ -246,12 +246,23 @@ sqlite3 "$DB" "SELECT jid, name, phone FROM contacts WHERE name LIKE '%<name>%' 
 | `gog gmail search "in:inbox" --max 50 -j --results-only --no-input` | Full inbox scan | JSON array of threads |
 | `gog gmail thread get <threadId> -j` | Get full thread with all messages | Full message JSON |
 | `gog gmail get <messageId> -j` | Get single message | Message JSON |
-| `gog gmail archive <messageId> ... --no-input --force` | Archive messages (remove from inbox) | Archive result |
+| `gog gmail raw <messageId>` | Dump lossless raw Gmail API JSON — includes authoritative `labelIds` | Raw message JSON |
+| `gog gmail archive <messageId> [<messageId>...] --force` | **Archive** — removes the INBOX label (dedicated archive action; `--force`/`-y` skips confirm; add `--no-input` for CI) | Archive result |
 | `gog gmail archive --query "<gmail-query>" --max N --force` | Archive by query | Archive result |
+| `gog gmail messages modify <messageId> --add <LABEL> --remove <LABEL>` | Edit labels only (NOT archive — use the `archive` subcommand above for that) | Labels result |
 | `gog gmail send --to "<email>" --subject "<subj>" --body "<body>"` | Send email | Send result |
 | `gog gmail send --reply-to-message-id <msgId> --reply-all --body "text"` | Reply all | Send result |
+| `gog gmail send --to "<email>" --subject "<subj>" --body "<body>" --track` | Send with open-tracking pixel (requires tracking setup — see Open Tracking section) | Send result + tracking-id |
+| `gog gmail track status` | Show tracking configuration status | configured: true/false |
+| `gog gmail track opens [<tracking-id>] --since <duration> --to <email> -j` | Query email opens for a tracking-id (or all recent opens) | JSON array of open events |
 | `gog gmail mark-read <messageId> ... --no-input` | Mark as read | Result |
 | `gog gmail labels list -j` | List all labels | Labels JSON |
+
+**Known trap — archive verification:** do NOT verify an archive with `gog gmail search "in:inbox"`. That search result is **cached/stale** and keeps returning already-archived messages, making archive look like it failed when it succeeded. Verify the live label state instead:
+```bash
+gog gmail raw <messageId> | python3 -c "import json,sys; d=json.load(sys.stdin); print('INBOX' in d.get('labelIds',[]))"
+# False = archived successfully. gog gmail get -j does NOT reliably populate labelIds; use raw.
+```
 
 ---
 
@@ -1002,7 +1013,70 @@ Archive N FYI/newsletter emails?
   [Archive all N]  [Review each]  [Skip]
 ```
 
-Draft replies via `gog gmail send`. Archive via `gog gmail archive <messageId> ... --no-input --force`.
+Draft replies via `gog gmail send`. Archive via `gog gmail archive <messageId> [<messageId>...] --force --no-input`.
+
+> **Known trap — post-archive re-scan:** after archiving FYI messages, do NOT immediately re-run `gog gmail search "in:inbox"` to confirm — that search is cached/stale and will still return the archived messages, falsely suggesting archive failed. Trust the archive command's exit 0 as success. If you must verify a specific message, use `gog gmail raw <messageId>` and check that `"INBOX"` is absent from the `labelIds` array.
+
+### Open Tracking — WAITING bucket enrichment (opt-in)
+
+**What it does:** when sending a reply from ops-inbox, you can optionally add a tracking pixel (`--track`). On subsequent inbox runs, the WAITING bucket shows which sent emails have been opened by the recipient, so you know who to nudge.
+
+**Setup prerequisite (one-time, not automated here):** tracking requires deploying a Cloudflare Worker via `gog gmail track setup --deploy`. Check current status with `gog gmail track status` (field `configured: true/false`). If not configured, tracking is silently unavailable — `--track` is silently ignored by `gog gmail send` when the tracking backend isn't set up, so it is safe to always pass but produces no data until configured.
+
+**Sending with tracking (opt-in, only on Sam-approved sends, Rule-6 gate still applies):**
+```bash
+# Stage the send (per Rule 6: show full draft first, get approval, then send)
+gog gmail send \
+  --to "recipient@example.com" \
+  --reply-to-message-id <msgId> \
+  --body "reply text" \
+  --track                    # injects tracking pixel
+# Capture the tracking-id from the output — it is NOT the Gmail message-id.
+# The output includes a line like: tracking_id=<opaque-id>
+# Store this: TRACKING_ID=<opaque-id>  THREAD_ID=<threadId>
+```
+
+The `--track-split` flag sends tracked messages separately per recipient (one tracking-id per recipient); use only when sending to multiple recipients and per-recipient open tracking is needed.
+
+**Querying opens in the WAITING bucket (on subsequent inbox runs):**
+```bash
+# All opens in the last 7 days:
+gog gmail track opens --since 7d -j
+
+# Opens for a specific sent email (using the tracking-id captured at send time):
+gog gmail track opens <tracking-id> -j
+```
+
+**Joining opens to WAITING threads:** the `gog gmail track opens` output returns open events keyed by `tracking-id`. Because `tracking-id` is an opaque token (not the Gmail message-id), you MUST capture it at send time and store the `tracking-id → thread-id` mapping — for example in a local scratchfile or the ops-memories `topics_active.md` for that contact.
+
+**How it slots into the WAITING presentation:** on each inbox run, for every WAITING email thread, check whether a captured tracking-id exists for that thread's last sent message. If it does, run `gog gmail track opens <tracking-id> -j --since 7d` and surface the result inline:
+
+```
+📧 EMAIL — WAITING
+━━━ 1. [Recipient] — [Subject] ━━━
+ Sent: [date]  |  Open status: opened 2× (last: 3h ago) [NUDGE CANDIDATE]
+ Thread: [what you're waiting for]
+
+ [Nudge — draft follow-up]  [Mark resolved]  [Skip]
+```
+
+If no opens after N days (configurable, suggested 3d), surface:
+```
+ Open status: not opened after 3 days [NUDGE CANDIDATE]
+```
+
+If tracking-id was never captured (send predates this feature or was sent without `--track`), omit the open-status line entirely — never show "unknown".
+
+**Rule-6 compliance:** tracking is only enabled on sends that Sam already approved through the normal draft-show-approve-send gate. Never auto-send a tracked follow-up — always stage the nudge draft and go through the gate.
+
+**OPT-IN gate:** surface the `--track` option in the send-approval `AskUserQuestion` as an addendum, not a default:
+```
+Reply to [Sender] — [Subject]:
+  "[drafted reply]"
+
+  [Send]  [Send + track opens]  [Edit]  [Skip]
+```
+Only pass `--track` when "Send + track opens" is chosen. Never silently add tracking.
 
 ### Slack (multi-workspace)
 
