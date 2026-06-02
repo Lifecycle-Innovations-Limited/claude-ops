@@ -23,6 +23,8 @@
 #       "window_days": 7,
 #       "total": 42,
 #       "high": [{"timestamp":"…","competitor":"…","source":"…","severity":"high","snippet":"…"}, ...],
+#       "med": [{"timestamp":"…","competitor":"…","source":"…","severity":"med","snippet":"…"}, ...],
+#       "low": [{"timestamp":"…","competitor":"…","source":"…","severity":"low","snippet":"…"}, ...],
 #       "med_count": 18,
 #       "low_count": 22
 #     },
@@ -141,9 +143,15 @@ competitor_context() {
   brands_array=$(echo "$by_brand" | jq -c 'keys')
 
   # High-severity events (full objects, capped at 20 most recent)
-  local high_events
+  local high_events med_events low_events
   high_events=$(echo "$events_json" | jq -c '
     [ .[] | select(.severity == "high") ] | sort_by(.timestamp) | reverse | .[0:20]
+  ')
+  med_events=$(echo "$events_json" | jq -c '
+    [ .[] | select(.severity == "med") ] | sort_by(.timestamp) | reverse
+  ')
+  low_events=$(echo "$events_json" | jq -c '
+    [ .[] | select(.severity == "low") ] | sort_by(.timestamp) | reverse
   ')
 
   # Counts
@@ -157,6 +165,8 @@ competitor_context() {
     --argjson brands "$brands_array" \
     --argjson by_brand "$by_brand" \
     --argjson high "$high_events" \
+    --argjson med_events "$med_events" \
+    --argjson low_events "$low_events" \
     --argjson total "$total" \
     --argjson med "$med_count" \
     --argjson low "$low_count" \
@@ -171,6 +181,8 @@ competitor_context() {
         window_days: $window,
         total: $total,
         high: $high,
+        med: $med_events,
+        low: $low_events,
         med_count: $med,
         low_count: $low
       },
