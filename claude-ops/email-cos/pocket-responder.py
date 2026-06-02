@@ -224,6 +224,92 @@ def _classic_approve_clause(body, ent, codemap):
     return ""
 
 
+# Edit-then-send: a freeform reply with edit intent on an outbound email ASK
+# re-drafts the body via LLM and RE-STAGES it as a fresh approval ASK. The
+# revision is NEVER auto-sent — the owner approves the revised draft. Revisions
+# are capped to avoid loops; _revisions_staged tells cmd_process to post the new
+# ASK immediately instead of waiting for the next send tick.
+_REDRAFT_MAX_REVISIONS = 5
+_revisions_staged = []
+
+
+def _redraft_email(er, orig_body, instruction):
+    """Re-draft an email reply body per the owner's instruction. '' on failure."""
+    cb = _resolve_claude_bin()
+    if not cb:
+        return ""
+    model = os.environ.get("POCKET_REDRAFT_MODEL") or os.environ.get(
+        "POCKET_RESPONDER_MODEL", "claude-haiku-4-5"
+    )
+    prompt = (
+        "You revise a DRAFT email reply per the owner's instruction. Output ONLY JSON: "
+        '{"body":"<full revised reply>"}.\n'
+        "Rules: keep the owner's voice and the draft's language; apply ONLY what the "
+        "instruction asks and preserve everything else; keep it a complete, send-ready "
+        "reply (greeting + body + sign-off). NEVER invent commitments, numbers, dates, "
+        "prices, or facts not in the current draft or the instruction.\n\n"
+        f"RECIPIENT: {er.get('to','')}\nSUBJECT: {er.get('subject','')}\n\n"
+        f"CURRENT DRAFT:\n{orig_body}\n\nOWNER INSTRUCTION:\n{instruction}\n\nJSON:"
+    )
+    try:
+        r = subprocess.run([cb, "-p", prompt, "--model", model, *_CLAUDE_FLAGS],
+                           capture_output=True, text=True, timeout=120, env=os.environ)
+        out = (r.stdout or "").strip()
+    except Exception as e:
+        log(f"redraft: invocation failed: {e}")
+        return ""
+    mt = re.search(r"\{.*\}", out, re.S)
+    if not mt:
+        return ""
+    try:
+        d = json.loads(mt.group(0))
+    except Exception:
+        return ""
+    return (d.get("body") or "").strip()
+
+
+def _restage_revision(ent, instruction):
+    """Re-draft an outbound email ASK per `instruction`, append a fresh ASK to
+    review.jsonl, and resolve the original as REVISED so it is never sent. Returns
+    the new ASK id, or None to let the caller fall back (decline)."""
+    iid = ent["id"]
+    raw = ent.get("raw") if isinstance(ent.get("raw"), dict) else {}
+    er = dict(raw.get("email_reply") or {})
+    orig = er.get("body") or ""
+    if not orig:
+        return None
+    base = re.sub(r"-rev\d+$", "", iid)
+    existing = {r.get("id") for r in _load_jsonl(REVIEW)}
+    n = 1
+    while f"{base}-rev{n}" in existing:
+        n += 1
+    if n > _REDRAFT_MAX_REVISIONS:
+        return None
+    new_body = _redraft_email(er, orig, instruction)
+    if not new_body or new_body.strip() == orig.strip():
+        return None
+    new_id = f"{base}-rev{n}"
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    er["body"] = new_body
+    new_rec = {
+        "id": new_id, "kind": "send_message",
+        "source": raw.get("source", "email-triage"),
+        "title": (raw.get("title") or ent.get("title") or "")[:120],
+        "action_preview": f"Sends this REVISED reply to {er.get('to','')} — exactly as written.",
+        "context": f"REVISED per your note: \u201c{instruction[:200]}\u201d\n\nPROPOSED REPLY (revised):\n{new_body}",
+        "confidence": 1.0, "captured_at": now,
+        "triage": {"verdict": "ASK", "confidence": 1.0,
+                   "reasoning": f"Revision of {iid} per owner note.", "decided_at": now},
+        "email_reply": er, "revised_from": iid,
+    }
+    open(REVIEW, "a").write(json.dumps(new_rec) + "\n")
+    open(RESOLVED, "a").write(json.dumps(
+        {"id": iid, "decision": "REVISED", "revised_to": new_id, "ts": time.time()}) + "\n")
+    _revisions_staged.append(new_id)
+    log(f"REVISED {iid} -> {new_id} (per: {instruction[:60]!r})")
+    return new_id
+
+
 # ---------------------------------------------------------------------------
 # Telegram API
 # ---------------------------------------------------------------------------
@@ -315,7 +401,9 @@ def cmd_send():
         # Advertise freeform reply — but NOT on outbound message kinds, where a
         # freeform "send but change X" would mis-map to a bare APPROVE and silently
         # send the unedited draft to a third party (also guarded in _handle_text).
-        if not _is_outbound(it):
+        if _is_outbound(it):
+            text += "\n\n💬 _Or reply with edits (e.g. “change the date to Friday”) — I'll re-draft and re-stage for approval; the original is never auto-sent._"
+        else:
             text += "\n\n💬 _Or just reply in your own words — e.g. “do b”, “skip this one”, or your own instruction._"
         r = _api("sendMessage", {
             "chat_id": CHAT, "text": text[:3800], "parse_mode": "Markdown",
@@ -340,6 +428,15 @@ def cmd_send():
 # ---------------------------------------------------------------------------
 # decision application (shared by taps + text)
 # ---------------------------------------------------------------------------
+# Flags that isolate every `claude -p` subprocess below from this box's heavy
+# session context (full MCP set + global CLAUDE.md). Without them each call dies
+# with "Prompt is too long" (same workaround email-cos-orch.sh uses); headless =>
+# skip permission prompts. POCKET_CLAUDE_FLAGS overrides (space-separated).
+_CLAUDE_FLAGS = (os.environ.get("POCKET_CLAUDE_FLAGS").split() if os.environ.get("POCKET_CLAUDE_FLAGS")
+                 else ["--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+                       "--dangerously-skip-permissions"])
+
+
 def _resolve_claude_bin():
     b = os.environ.get("POCKET_CLAUDE_BIN")
     if b and os.path.exists(b):
@@ -461,7 +558,7 @@ def _validate_action(ent):
         "If context is empty or unclear, default to proceed. JSON:"
     )
     try:
-        r = subprocess.run([cb, "-p", prompt, "--model", model],
+        r = subprocess.run([cb, "-p", prompt, "--model", model, *_CLAUDE_FLAGS],
                            capture_output=True, text=True, timeout=90, env=os.environ)
         out = (r.stdout or "").strip()
     except Exception as e:
@@ -609,16 +706,19 @@ def _llm_map(codemap, message):
     prompt = (
         "You map a person's freeform approval message to decisions on a fixed list "
         "of pending items. Output ONLY a JSON array, no prose.\n\n"
-        "Each element: {\"code\": \"A1\", \"decision\": \"approve\"|\"reject\"|\"choose\", "
+        "Each element: {\"code\": \"A1\", \"decision\": \"approve\"|\"reject\"|\"choose\"|\"revise\", "
         "\"option\": \"a\" (only for choose), \"confidence\": 0.0-1.0}.\n"
         "Rules: only reference codes from the list. If the message clearly targets "
         "several items (\"reject all the music ones\"), emit one element each. If you "
         "are not confident which item is meant, return [] (do NOT guess). For yes/no "
-        "items use approve|reject; for items with options use choose + the option key.\n\n"
+        "items use approve|reject; for items with options use choose + the option key. "
+        "If the message asks to CHANGE / edit / reword a draft before it goes out "
+        "(e.g. \"send but say Friday\", \"make it warmer\"), use decision \"revise\" "
+        "on that item — do NOT use approve.\n\n"
         f"PENDING ITEMS:\n{catalog}\n\nMESSAGE:\n{message}\n\nJSON:"
     )
     try:
-        r = subprocess.run([cb, "-p", prompt, "--model", model],
+        r = subprocess.run([cb, "-p", prompt, "--model", model, *_CLAUDE_FLAGS],
                            capture_output=True, text=True, timeout=90, env=os.environ)
         out = (r.stdout or "").strip()
     except Exception as e:
@@ -728,9 +828,16 @@ def _handle_text(ev, codemap, callmap, resolved, seen):
             _send(f"`{ref}` is a choice item — reply e.g. `{ref} a`.")
             continue
         if verb == "APPROVE" and _is_outbound(ent) and _edit_intent(mt.group(0)):
-            _send(f"`{ref}` looks like an *edit*, not a plain approve — I won't send the "
-                  f"original draft as-is. Tap ✅ Approve (or reply `approve {ref}`) to send "
-                  f"it unchanged, or `reject {ref}` to skip. _(Edit-then-send for emails isn't wired yet.)_")
+            new_id = _restage_revision(ent, body)
+            if new_id:
+                resolved.add(tid); handled_ids.add(tid); acted += 1
+                _, cment = _callmap_entry_for_id(callmap, tid)
+                _freeze(cment, "✍️ Revising per your note — new draft coming for approval.")
+                _send(f"✍️ Revising `{ref}` per your note — re-drafted and staged ({new_id}); "
+                      f"sending it to you for approval now. (Original NOT sent.)")
+            else:
+                _send(f"`{ref}` reads like an edit but I couldn't re-draft it (or nothing "
+                      f"changed). Tap ✅ Approve to send the original, or `reject {ref}` to skip.")
             continue
         toast = _apply_decision(ent, "APPROVE" if verb == "APPROVE" else "REJECT")
         resolved.add(tid); handled_ids.add(tid); acted += 1
@@ -755,7 +862,7 @@ def _handle_text(ev, codemap, callmap, resolved, seen):
         except (TypeError, ValueError):
             conf = 0.0
         ent = _resolve_code(codemap, code) if code else None
-        if ent and dec in ("approve", "reject", "choose") and conf >= thresh:
+        if ent and dec in ("approve", "reject", "choose", "revise") and conf >= thresh:
             confident.append((ent, dec, dd.get("option")))
     if not confident:
         _send(
@@ -767,6 +874,22 @@ def _handle_text(ev, codemap, callmap, resolved, seen):
         tid = ent["id"]
         if tid in resolved or tid in handled_ids:
             continue
+        if dec == "revise":
+            if not _is_outbound(ent):
+                _send(f"I can only re-draft email replies — \u201c{ent.get('title','')[:50]}\u201d "
+                      f"isn't one. Reply `approve`, `reject`, or an option instead.")
+                continue
+            new_id = _restage_revision(ent, body)
+            if new_id:
+                resolved.add(tid); handled_ids.add(tid); acted += 1
+                _, cment = _callmap_entry_for_id(callmap, tid)
+                _freeze(cment, "\u270d\ufe0f Revising per your note — new draft coming for approval.")
+                _send(f"\u270d\ufe0f Revised \u201c{ent.get('title','')[:50]}\u201d per your note — "
+                      f"staged {new_id}; sending it to you for approval now. (Original NOT sent.)")
+            else:
+                _send(f"I read that as an edit to \u201c{ent.get('title','')[:50]}\u201d but couldn't "
+                      f"re-draft it (or nothing changed). Tap \u2705 Approve to send the original, or `reject`.")
+            continue
         if dec == "choose":
             if not option:
                 _send(f"`{ent.get('title','')[:50]}` needs an option letter.")
@@ -775,9 +898,16 @@ def _handle_text(ev, codemap, callmap, resolved, seen):
         else:
             clause = _classic_approve_clause(body, ent, codemap) or body
             if dec == "approve" and _is_outbound(ent) and _edit_intent(clause):
-                _send(f"That looks like an *edit* of “{ent.get('title','')[:50]}”, not a plain "
-                      f"approve — I won't send the original draft as-is. Tap ✅ Approve to send it "
-                      f"unchanged, or reply `reject` to skip. _(Edit-then-send for emails isn't wired yet.)_")
+                new_id = _restage_revision(ent, body)
+                if new_id:
+                    resolved.add(tid); handled_ids.add(tid); acted += 1
+                    _, cment = _callmap_entry_for_id(callmap, tid)
+                    _freeze(cment, "✍️ Revising per your note — new draft coming for approval.")
+                    _send(f"✍️ Revised “{ent.get('title','')[:50]}” per your note — staged {new_id}; "
+                          f"sending it to you for approval now. (Original NOT sent.)")
+                else:
+                    _send(f"That reads like an edit but I couldn't re-draft it (or nothing "
+                          f"changed). Tap ✅ Approve to send the original, or reply `reject`.")
                 continue
             toast = _apply_decision(ent, dec.upper())
         resolved.add(tid); handled_ids.add(tid); acted += 1
@@ -811,6 +941,13 @@ def cmd_process():
             acted += _handle_text(ev, codemap, callmap, resolved, seen)
     INBOX_SEEN.write_text("\n".join(sorted(seen)) + "\n")
     log(f"process: acted={acted}")
+    # Post any re-drafted revision ASKs to Telegram now (not next send tick).
+    if _revisions_staged:
+        log(f"process: staged {len(_revisions_staged)} revision(s) -> sending now")
+        try:
+            cmd_send()
+        except Exception as e:
+            log(f"process: revision send failed: {e}")
     print(f"processed inbox; acted={acted}")
 
 
