@@ -44,9 +44,15 @@ cmd_dashboard() {
   if [[ "$MOBILE" -eq 1 ]]; then
     printf '%s' "$ctx" | jq -r '
       .brands[] as $b |
+      (.by_brand[$b] // {}) as $bd |
+      (($bd.competitors // []) | map(ascii_downcase)) as $comp_lc |
+      (.events.high | map(select(((.competitor // "") | ascii_downcase) as $c |
+        ($comp_lc | index($c)) != null))) as $high |
+      (.events.med | map(select(((.competitor // "") | ascii_downcase) as $c |
+        ($comp_lc | index($c)) != null))) as $med |
       ($b + ": " +
-        ((.events.high | map(select(.competitor)) | length) | tostring) + " alerts  " +
-        (.events.med_count | tostring) + " med  last " +
+        ($high | length | tostring) + " alerts  " +
+        ($med | length | tostring) + " med  last " +
         (.by_brand[$b].last_run // "never"))
     '
     printf '%s' "$ctx" | jq -r '"queues: imm=" + (.queues.immediate_pending|tostring) + " daily=" + (.queues.daily_pending|tostring)'
@@ -63,11 +69,19 @@ cmd_dashboard() {
   echo "TRACKED BRANDS ($n_brands)"
   printf '%s' "$ctx" | jq -r '
     .brands[] as $b |
+    (.by_brand[$b] // {}) as $bd |
+    (($bd.competitors // []) | map(ascii_downcase)) as $comp_lc |
+    (.events.high | map(select(((.competitor // "") | ascii_downcase) as $c |
+      ($comp_lc | index($c)) != null))) as $high |
+    (.events.med | map(select(((.competitor // "") | ascii_downcase) as $c |
+      ($comp_lc | index($c)) != null))) as $med |
+    (.events.low | map(select(((.competitor // "") | ascii_downcase) as $c |
+      ($comp_lc | index($c)) != null))) as $low |
     ("  " + ($b | .[0:20]) + "\t" +
       "last " + (.by_brand[$b].last_run // "never")[0:10] + "  " +
-      (.events.high | map(select(.competitor)) | length | tostring) + " alerts  " +
-      (.events.med_count | tostring) + " med  " +
-      (.events.low_count | tostring) + " low")
+      ($high | length | tostring) + " alerts  " +
+      ($med | length | tostring) + " med  " +
+      ($low | length | tostring) + " low")
   ' | expand -t 24
 
   echo ""
@@ -126,7 +140,7 @@ cmd_brand() {
   echo ""
   echo "SIGNAL BREAKDOWN (30d)"
   printf '%s' "$ctx" | jq -r '
-    (.events.high + []) | group_by(.competitor)[] |
+    (.events.high + .events.med) | group_by(.competitor)[] |
     "  " + (.[0].competitor | .[0:20]) +
     "\thigh: " + ([.[] | select(.severity=="high")] | length | tostring) +
     "  med: " + ([.[] | select(.severity=="med")] | length | tostring)
