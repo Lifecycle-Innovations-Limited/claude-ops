@@ -425,6 +425,20 @@
       "sensitive": true,
       "default": ""
     },
+    "telegram_bot_token": {
+      "title": "Telegram Bot Token",
+      "description": "Bot token for outbound notifications + channel-mcp DM polling. From @BotFather. If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "telegram_owner_id": {
+      "title": "Telegram Owner Chat ID",
+      "description": "Your personal Telegram chat ID (numeric). DMs and fire alerts are sent to this ID. Run /ops:setup telegram to auto-detect.",
+      "type": "string",
+      "sensitive": false,
+      "default": ""
+    },
     "discord_bot_token": {
       "title": "Discord Bot Token",
       "description": "Bot token from Discord Developer Portal — used for channel reads and DMs. Prefer Doppler reference. If already configured via /ops:setup or stored in keychain/Doppler, leave blank — runtime resolves automatically.",
