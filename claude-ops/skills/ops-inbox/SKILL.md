@@ -484,6 +484,17 @@ All channel credentials come from env vars or CLI auth — no hardcoded secrets.
 | `NOTION_MCP_ENABLED`| `false`     | Set `true` when Notion MCP integration is configured |
 | `WHATSAPP_BRIDGE_DB`| `~/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db` | Bridge messages DB path |
 
+## Core principle: INBOX ZERO (the goal of this skill — NON-NEGOTIABLE)
+
+**The success metric of `/ops:ops-inbox` is an EMPTY inbox on EVERY channel — not "surfaced the NEEDS_REPLY".** Every conversation that no longer needs the user's eyes, action, or reaction MUST be archived in the same run. This is mandatory, not a nicety:
+
+1. **Archive everything that isn't a live action item.** FYI/noise/newsletters/bot channels, concluded threads, courtesy closes, reaction-only tails — and **WAITING** (you-sent-last) too. Archiving is reversible and WhatsApp/email **auto-resurface a chat the instant a new message lands**, so archiving WAITING loses nothing. The only things left visible after a run are: (a) genuine open **NEEDS_REPLY**, and (b) actionable **finance / legal / personal** items — NEVER auto-archive those; surface them.
+2. **After you reply to anyone, IMMEDIATELY archive that chat** — reply→archive is one atomic step. Never leave a just-answered thread sitting in the list.
+3. **`include_context: true` is the HARD DEFAULT on every `list_messages` read.** Never pass `false` — you must always see the surrounding thread to understand what a message is about before classifying or drafting.
+4. **Verify the bridge is FULLY up before trusting any classification** — run `wa-inbox-fresh.sh`, confirm the systemd unit is `active` and `:8080` LISTEN, and do a real read. A stale store mis-classifies last-sender.
+5. **Don't ask per-archive** once this rule is in play — the user wants efficiency. Archive the DONE set, then report the archived COUNT in one line and keep only the KEEP set visible.
+6. **WhatsApp archive heal:** the bridge `/api/archive` can **hang / 409 with `LTHash mismatch`** when app-state desyncs. The reliable heal is a **one-time phone archive-then-unarchive on any single chat** (re-authors `regular_low` app-state keys) — after that, batch-archive succeeds (verified). Surface that one-step ask to the user when archive blocks; don't abandon inbox-zero.
+
 ## Core principle: FULL INBOX SCAN
 
 Do NOT just check unread. Scan the FULL recent inbox for each channel and classify every conversation:
@@ -789,7 +800,7 @@ Reply via: `mcp__whatsapp__send_message` with `{recipient: "<JID>", message: "<m
 | Operation | Tool / Command |
 |-----------|---------------|
 | List chats | `mcp__whatsapp__list_chats {sort_by: "last_active"}` |
-| Read messages (both directions, incl. `[voice]`) | `mcp__whatsapp__list_messages {chat_jid, limit: 25}` |
+| Read messages (both directions, incl. `[voice]`) | `mcp__whatsapp__list_messages {chat_jid, limit: 25, include_context: true}` — `include_context: true` is the HARD DEFAULT, never `false` |
 | Search messages (FTS) | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}` |
 | Find contact | `mcp__whatsapp__search_contacts {query: "<name>"}` |
 | Send message | `mcp__whatsapp__send_message {recipient, message}` |
