@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.6] - 2026-06-02
+
+### Changed
+whatsapp-mcp: self-installing archive_chat via healing /api/archive (Fix M, PR #475); email: account-safe gog-reply helper (PR #474)
+
+
 ## [Unreleased]
 
 ### Fixed
