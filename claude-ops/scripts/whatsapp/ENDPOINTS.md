@@ -38,6 +38,22 @@ and the **decision rule for MCP vs direct REST vs direct sqlite**.
 | MCP proxy :8090 | `ss -ltn \| grep :8090` + `curl -sS -m3 http://127.0.0.1:8090/servers/whatsapp/sse \| head -1` | If :8090 down, `mcp__whatsapp__*` will never load even though the bridge is healthy. |
 | systemd | `systemctl --user is-active whatsapp-bridge.service` | `Restart=always`; `whatsapp-bridge-keepalive.timer` (60s) catches hangs. |
 
+## Pairing / login (Fix A/B)
+
+On a fresh, unpaired install the bridge links to the primary device. Upstream
+`lharries/whatsapp-mcp` is now **QR-only**. The claude-ops patcher (Fix A/B)
+re-introduces **phone-number (pairing-code) linking** for headless EC2 use:
+
+- Set `WA_PHONE=<international digits, no +>` → the bridge calls
+  `client.PairPhone(...)` and prints a pairing code to enter in WhatsApp.
+- Leave `WA_PHONE` unset → upstream's QR-scan loop runs unchanged.
+
+**API-drift note (2026-06):** the pinned whatsmeow `PairPhone` lost its
+`context.Context` parameter, so Fix B's old `context.WithTimeout` deadline can no
+longer be passed into the call. The 3-minute hang-bound is preserved by racing
+`PairPhone` in a goroutine against a `time.After(3*time.Minute)` watchdog; Fix A's
+godoc-endorsed 3s post-`Connect` sleep is retained.
+
 ## Bridge REST endpoints (direct API, `http://127.0.0.1:8080`)
 
 All POST, JSON body. Source: `whatsapp-bridge/main.go`.
@@ -48,7 +64,7 @@ All POST, JSON body. Source: `whatsapp-bridge/main.go`.
 | `POST /api/download` | `{"message_id":"…","chat_jid":"…"}` | media bytes / path | Fetch media for a message. |
 | `POST /api/backfill` | (none) | `{success:"backfill requested"}` | Request history sync for the ~50 most-active chats. Also auto-runs 5s after each `Connected`. |
 | `POST /api/resync_app_state` | `{"name":"regular_low","full_sync":true}` | `{success,message}` | Force app-state resync from existing patches. **Cannot fix a fatally-corrupt patch chain — use `/api/recover_app_state`.** |
-| `POST /api/recover_app_state` | `{"name":"regular_low"}` | `{success,message}` | **Fatal recovery** for an unverifiable collection (`mismatching LTHash`). Asks the PRIMARY device for an unencrypted snapshot (`BuildAppStateRecoveryRequest`→`SendPeerMessage`); whatsmeow's `handleAppStateRecovery` rebuilds it, bypassing broken patches, and a history backfill fires while the link is alive (Fix L). **Phone-online gated (Fix L):** returns `503 phone offline` if the bridge isn't connected+logged-in, instead of a misleading `success:true`. The ONLY thing that unblocks archive when LTHash is fatally desynced. |
+| `POST /api/recover_app_state` | `{"name":"regular_low"}` | `{success,message}` | Recovery for a corrupt collection (`mismatching LTHash`). **API-DRIFT DEGRADE (2026-06):** the pinned whatsmeow (`v0.0.0-20250318233852`) **removed** the public primary-device peer-recovery path — `BuildAppStateRecoveryRequest` is gone and `SendPeerMessage` is now only an unexported `DangerousInternals()` method — so this endpoint **no longer asks the phone for an unencrypted snapshot**. It now does a best-effort **full server-side resync** (`FetchAppState(name, fullSync=true)`) + a history backfill while the link is alive (Fix L). This re-applies the server's patch chain but **cannot bypass a server chain that is itself unverifiable** (a truly fatal #382/#858 corruption is no longer auto-recoverable from the bridge on this whatsmeow). **Phone-online gated (Fix L):** returns `503 phone offline` if the bridge isn't connected+logged-in. To restore true peer-recovery, pin a whatsmeow that still exports `BuildAppStateRecoveryRequest`/`SendPeerMessage`. |
 | `POST /api/archive` | `{"chat_jid":"<JID>","archive":true}` | `{success,message}` | Archive / unarchive (`archive:false`). Writes `chats.archived` AND pushes a `regular_low` app-state mutation. **Phone-online gated + auto-recovering (Fix L):** on a local LTHash mismatch OR a server `409 conflict` it auto-heals, then escalates to `recover_app_state` + a bounded retry (~20s) so callers never need a manual recover→retry. Still returns `503 phone offline` if the link is down. |
 
 There is **no** delete/mark-read/group-admin endpoint. There is no `/api/health` — probe `/` (404 = alive).
