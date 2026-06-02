@@ -88,6 +88,17 @@ it's a typed wrapper. So the MCP can never succeed where the REST endpoint fails
 > is idempotent against both a pristine upstream clone and an already-patched live tree (sentinels key on
 > the function defs, not a marker, so reruns never duplicate).
 
+> **Patcher re-anchoring (Fix E / Fix H subscriber / Fix J).** The `list_chats` `archived` filter and
+> the bridge's `*events.Archive` subscriber (the two pieces that keep `messages.db.chats.archived`
+> accurate, so `archive_chat` and the inbox-zero `WHERE archived=0` query stay consistent) are installed
+> by `apply-patches.py` Fix J + Fix H. Their splice anchors had bit-rotted against current upstream
+> (whitespace reflow, dropped trailing commas, a changed `events.LoggedOut` log string), so a fresh
+> reinstall silently skipped them. They are now re-anchored to minimal stable tokens (`def get_sender_name`,
+> `case *events.LoggedOut:`, `…last_is_from_me\n FROM chats`, etc.) and the Fix E / Fix J-row sentinels
+> key on the inserted content's invariant (`def _open_db(`, `archived=bool(chat_data[6])`) so they no-op
+> on the live tree (patched by an older patcher with differently-worded comments) rather than duplicating
+> the helper. Runtime behaviour is unchanged — only the insertion is made robust.
+
 ## Decision rule — MCP vs direct REST vs direct sqlite
 
 1. **READS / classification (list chats, read threads, who-sent-last, search, name resolution)**
