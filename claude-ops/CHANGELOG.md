@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.2] - 2026-06-02
+
+### Changed
+- fix(ops-inbox): seed merged DM groups with lid twins from whatsmeow_lid_map (#466)
+
+
 ## [2.20.1] - 2026-06-02
 
 ### Changed
