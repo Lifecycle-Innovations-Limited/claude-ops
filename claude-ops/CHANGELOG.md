@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.3] - 2026-06-02
+
+### Changed
+add telegram_bot_token/owner_id to plugin userConfig schema (telegram-channel MCP); bump yolo maxTurns 20→35
+
+
 ## [2.20.2] - 2026-06-02
 
 ### Changed
