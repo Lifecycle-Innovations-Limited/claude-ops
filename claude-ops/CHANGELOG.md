@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- fix(whatsapp-mcp): apply-patches.py Fix M makes the `archive_chat` + `resync_app_state` MCP surface self-contained — current upstream lharries/whatsapp-mcp ships none of it, so a fresh reinstall left the MCP server with no working `archive_chat`. The MCP tool now durably routes through the healing `POST /api/archive` endpoint (auto-recovers LTHash 409s, whatsmeow #382/#858) instead of a raw app-state mutation. Idempotent against both pristine upstream and already-patched live trees (no duplicate defs on rerun). ENDPOINTS.md documents the heal routing.
+
+
 ## [2.20.5] - 2026-06-02
 
 ### Changed
