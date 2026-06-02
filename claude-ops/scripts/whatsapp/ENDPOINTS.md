@@ -69,10 +69,24 @@ Source: `whatsapp-mcp-server/main.py`. Load with
 | `download_media {message_id,chat_jid}` | → `POST /api/download` | media fetch |
 | `resync_app_state {name,full_sync}` | → `POST /api/resync_app_state` | same LTHash caveat |
 | `recover_app_state {name}` | → `POST /api/recover_app_state` | **fatal LTHash recovery** — phone must be online; the ONLY thing that unblocks a 409-desynced archive |
-| `archive_chat {chat_jid,archive}` | → `POST /api/archive` | same app-state blocker |
+| `archive_chat {chat_jid,archive}` | → `POST /api/archive` | routes through the **healing** REST endpoint (Fix M); same app-state blocker only when the phone is offline |
 
 **Every MCP write maps 1:1 to a bridge REST endpoint.** The MCP gives you nothing the REST API can't —
 it's a typed wrapper. So the MCP can never succeed where the REST endpoint fails (e.g. archive).
+
+> **`archive_chat` heal routing (Fix M).** `mcp__whatsapp__archive_chat` (and `resync_app_state`)
+> deliberately POST to the bridge's `POST /api/archive` (resp. `/api/resync_app_state`) endpoint —
+> **never** a raw whatsmeow app-state mutation. `/api/archive` is the **heal source of truth**: on an
+> `ErrMismatchingLTHash` / `409 conflict` against a corrupt `regular_low` patch chain (whatsmeow
+> #382/#858, e.g. versions v228/v621/v643) it auto-recovers (resync → recover-via-primary-device →
+> bounded retry, Fix G/L) and only then UPSERTs `chats.archived` into `messages.db`. Routing the MCP
+> tool through this endpoint means every MCP archive gets the same heal as raw `curl`, so archiving
+> works going forward instead of dead-ending on a 409. **Durability:** `scripts/whatsapp/apply-patches.py`
+> Fix M installs this archive/resync MCP surface (helpers in `whatsapp.py`, import aliases + `@mcp.tool`
+> wrappers in `main.py`) self-contained — current upstream `lharries/whatsapp-mcp` ships none of it, so
+> without Fix M a fresh reinstall would leave the MCP server with no working `archive_chat` at all. Fix M
+> is idempotent against both a pristine upstream clone and an already-patched live tree (sentinels key on
+> the function defs, not a marker, so reruns never duplicate).
 
 ## Decision rule — MCP vs direct REST vs direct sqlite
 
