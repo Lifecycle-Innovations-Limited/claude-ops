@@ -145,6 +145,15 @@ def scan_whatsapp():
         except sqlite3.Error as e:
             notes.append(f"whatsapp: lid_map unreadable ({e}); falling back to contacts.phone")
 
+    # Reverse map: phone_jid -> [lid_jids]. Used to seed merged groups with BOTH
+    # twins even when one twin's `chats` row is absent/stale at scan time (backfill
+    # timing). Without this a live @lid conversation can be missed while only the
+    # stale phone twin surfaces — the lid blind-spot. last_msgs() reads `messages`
+    # directly, so adding the twin as a member catches the live side regardless.
+    pn2lids = {}
+    for _l, _p in lid2pn.items():
+        pn2lids.setdefault(_p, []).append(_l)
+
     # contacts: jid -> name, and phone -> jids (fallback merge + name resolution)
     name_by_jid, phone_by_jid, jids_by_phone = {}, {}, {}
     try:
@@ -191,6 +200,10 @@ def scan_whatsapp():
         g = groups.setdefault(key, {"members": set(), "name": None, "latest": None})
         g["members"].add(jid)
         g["members"].add(key)
+        # Always include the phone key's lid twin(s), even if their chats row is
+        # missing/stale this scan — so the merged thread sees the live side.
+        for _lt in pn2lids.get(key, ()):
+            g["members"].add(_lt)
         nm = name_by_jid.get(jid) or (c["name"] if c["name"] and not c["name"][0].isdigit() else None)
         if nm and not g["name"]:
             g["name"] = nm
