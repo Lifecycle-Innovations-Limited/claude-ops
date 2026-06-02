@@ -828,9 +828,11 @@ PY_LIST_CHATS_ROW_SENTINEL = (
 # (whatsapp-mcp-server/main.py import + @mcp.tool wrapper) and its bridge-call helper
 # (whatsapp-mcp-server/whatsapp.py), so the fatal-recovery path is reachable as
 # mcp__whatsapp__recover_app_state, not just via raw curl.
-MCP_IMPORT_NEEDLE = """    resync_app_state as whatsapp_resync_app_state,
+# Anchors on the resync alias line that Fix M installs (note the trailing Fix M
+# comment — Fix M always runs first, so this is the line actually present).
+MCP_IMPORT_NEEDLE = """    resync_app_state as whatsapp_resync_app_state,  # claude-ops Fix M
 )"""
-MCP_IMPORT_REPLACEMENT = """    resync_app_state as whatsapp_resync_app_state,
+MCP_IMPORT_REPLACEMENT = """    resync_app_state as whatsapp_resync_app_state,  # claude-ops Fix M
     recover_app_state as whatsapp_recover_app_state,  # claude-ops Fix K
 )"""
 MCP_IMPORT_SENTINEL = "recover_app_state as whatsapp_recover_app_state"
@@ -1215,6 +1217,148 @@ STORECHAT_PRESERVE_REPLACEMENT = """func (store *MessageStore) StoreChat(jid, na
 STORECHAT_PRESERVE_SENTINEL = "claude-ops Fix I"
 
 
+# ─── Fix M: self-contained archive_chat + resync_app_state MCP surface ────────
+# WHY: Fix F adds the bridge's POST /api/archive endpoint (which heals an
+# ErrMismatchingLTHash / 409 corruption internally via Fix G, then UPSERTs
+# chats.archived), and Fix K wires recover_app_state into the MCP server. But the
+# MCP-side archive_chat + resync_app_state helpers/tools were assumed to already
+# exist in upstream (the Fix K splices anchor on them). Current upstream
+# lharries/whatsapp-mcp ships NEITHER, so a fresh `git clone` + apply-patches
+# leaves the MCP server with no archive_chat tool at all — archiving only works
+# via raw curl to :8080. Fix M makes the whole surface self-installing: it appends
+# the REST-routed helpers to whatsapp.py and the import aliases + @mcp.tool
+# wrappers to main.py, so mcp__whatsapp__archive_chat always routes through the
+# healing /api/archive endpoint (never the raw app-state mutation that 409s on
+# corrupt regular_low patch chains — whatsmeow #382/#858). Idempotent via sentinel.
+#
+# These run BEFORE the Fix K splices in main(), guaranteeing archive_chat /
+# resync_app_state exist for Fix K's recover_app_state anchors even on pristine
+# upstream. On an already-patched tree the sentinels short-circuit (no dup defs).
+# Sentinel keys on the helper *existing at all* (def present), not on a Fix-M
+# marker — so this is a no-op on ANY tree that already has archive_chat, whether
+# patched by Fix M (fresh upstream) or by the pre-Fix-M hand-patch path (live
+# install). Without this, a rerun on an already-patched live tree would append a
+# DUPLICATE archive_chat/resync_app_state (the installer promises rerun-safe).
+MCP_ARCHIVE_HELPER_SENTINEL = (
+    "def archive_chat(chat_jid: str, archive: bool = True) -> Tuple[bool, str]:"
+)
+MCP_ARCHIVE_HELPER_BLOCK = '''
+
+def resync_app_state(
+    name: str = "regular_low", full_sync: bool = True
+) -> Tuple[bool, str]:
+    """Force a full resync of an app-state patch type via the bridge REST API.
+    Use when archive/mute/pin operations fail with an LTHash mismatch (server/local
+    app-state desync). claude-ops Fix M: resync_app_state helper."""
+    try:
+        url = f"{WHATSAPP_API_BASE_URL}/resync_app_state"
+        response = requests.post(url, json={"name": name, "full_sync": full_sync})
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("success", False), result.get(
+                "message", "Unknown response"
+            )
+        return False, f"Error: HTTP {response.status_code} - {response.text}"
+    except requests.RequestException as e:
+        return False, f"Request error: {e}"
+    except Exception as e:
+        return False, f"Unexpected error: {e}"
+
+
+def archive_chat(chat_jid: str, archive: bool = True) -> Tuple[bool, str]:
+    """Archive or unarchive a WhatsApp chat via the bridge's healing REST endpoint.
+
+    Routes through POST /api/archive (NOT a raw whatsmeow app-state mutation). The
+    bridge handler auto-heals an ErrMismatchingLTHash / HTTP 409 corruption of the
+    regular_low patch chain (claude-ops Fix G — resync/recover-then-retry) and then
+    UPSERTs chats.archived in store/messages.db, so this works even when the raw
+    app-state path would 409 (whatsmeow #382/#858). Unarchive (archive=False) takes
+    the same healed path. claude-ops Fix M: archive_chat helper."""
+    try:
+        if not chat_jid:
+            return False, "chat_jid must be provided"
+        url = f"{WHATSAPP_API_BASE_URL}/archive"
+        response = requests.post(url, json={"chat_jid": chat_jid, "archive": archive})
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("success", False), result.get(
+                "message", "Unknown response"
+            )
+        return False, f"Error: HTTP {response.status_code} - {response.text}"
+    except requests.RequestException as e:
+        return False, f"Request error: {e}"
+    except json.JSONDecodeError:
+        return False, f"Error parsing response: {response.text}"
+    except Exception as e:
+        return False, f"Unexpected error: {e}"
+'''
+
+# main.py import-alias splice. Anchors on the upstream import block's final entry
+# (download_media), which is stable across upstream revisions. Adds archive_chat +
+# resync_app_state aliases (recover_app_state stays Fix K's job, slotted after).
+MCP_ARCHIVE_IMPORT_NEEDLE = """    download_media as whatsapp_download_media
+)"""
+MCP_ARCHIVE_IMPORT_REPLACEMENT = """    download_media as whatsapp_download_media,
+    archive_chat as whatsapp_archive_chat,  # claude-ops Fix M
+    resync_app_state as whatsapp_resync_app_state,  # claude-ops Fix M
+)"""
+# Keys on the import alias existing (either path adds it, with or without the Fix M
+# comment) so it no-ops on the live already-patched tree as well as a Fix-M one.
+MCP_ARCHIVE_IMPORT_SENTINEL = "archive_chat as whatsapp_archive_chat"
+
+# main.py @mcp.tool wrappers, spliced in just before the trailing __main__ guard so
+# that guard stays last. FastMCP registers tools on import.
+# Keys on the archive_chat @mcp.tool def existing (Dict return = the tool wrapper,
+# distinct from the Tuple-returning helper in whatsapp.py) so it no-ops on any tree
+# that already exposes the tool — fresh Fix-M or live hand-patched — never dup.
+MCP_ARCHIVE_TOOLS_SENTINEL = (
+    "def archive_chat(chat_jid: str, archive: bool = True) -> Dict[str, Any]:"
+)
+MCP_ARCHIVE_TOOLS_NEEDLE = """if __name__ == "__main__":
+    # Initialize and run the server
+    mcp.run(transport='stdio')"""
+MCP_ARCHIVE_TOOLS_REPLACEMENT = '''@mcp.tool()
+def resync_app_state(name: str = "regular_low", full_sync: bool = True) -> Dict[str, Any]:
+    """Force a full WhatsApp app-state resync (claude-ops Fix M).
+
+    Use when archive_chat / mute / pin fail with a "mismatching LTHash" / 409
+    conflict (server/local app-state desync). Routes through the bridge's
+    /api/resync_app_state endpoint. If resync alone does not clear the conflict,
+    use recover_app_state (fatal recovery via the primary device).
+
+    Args:
+        name: Patch name. One of: regular_low (default, holds archive/mute/pin),
+              regular, critical_block, critical_unblock_low.
+        full_sync: When True (default) request a full resync from version 0.
+    """
+    success, message = whatsapp_resync_app_state(name, full_sync)
+    return {"success": success, "message": message}
+
+
+@mcp.tool()
+def archive_chat(chat_jid: str, archive: bool = True) -> Dict[str, Any]:
+    """Archive or unarchive a WhatsApp chat (claude-ops Fix M: archive_chat tool).
+
+    Archiving hides the chat from the main list (and unpins it); it does not delete
+    messages or affect delivery — the chat returns when a new message arrives or on
+    unarchive. Routes through the bridge's healing POST /api/archive endpoint, which
+    auto-recovers from an ErrMismatchingLTHash / 409 corruption of the regular_low
+    patch chain (whatsmeow #382/#858) and persists chats.archived in messages.db, so
+    this succeeds where the raw whatsmeow app-state mutation would 409.
+
+    Args:
+        chat_jid: The chat JID (e.g. "123@s.whatsapp.net" or "123@g.us").
+        archive: True to archive (default), False to unarchive (same healed path).
+    """
+    success, message = whatsapp_archive_chat(chat_jid, archive)
+    return {"success": success, "message": message}
+
+
+if __name__ == "__main__":
+    # Initialize and run the server
+    mcp.run(transport='stdio')'''
+
+
 def replace_idempotent(
     p: pathlib.Path, needle: str, replacement: str, sentinel: str, label: str
 ) -> bool:
@@ -1231,6 +1375,26 @@ def replace_idempotent(
         )
         return False
     p.write_text(text.replace(needle, replacement, 1))
+    print(f"  [ok]   {label}: applied")
+    return True
+
+
+def append_idempotent(p: pathlib.Path, block: str, sentinel: str, label: str) -> bool:
+    """Append `block` to the end of a file unless `sentinel` is already present.
+
+    Unlike replace_idempotent this needs no needle — it self-installs even on a
+    pristine upstream checkout that lacks the surrounding context a splice would
+    anchor on. Used by Fix M to make the archive/resync MCP surface self-contained
+    so a fresh `git clone` of lharries/whatsapp-mcp + this patcher yields a working
+    archive_chat tool that routes through the healing /api/archive endpoint, rather
+    than silently no-opping when upstream changes shape.
+    """
+    text = p.read_text()
+    if sentinel in text:
+        print(f"  [skip] {label}: already applied")
+        return False
+    sep = "" if text.endswith("\n") else "\n"
+    p.write_text(text + sep + block)
     print(f"  [ok]   {label}: applied")
     return True
 
@@ -1431,6 +1595,17 @@ def main() -> int:
         PY_LIST_CHATS_ROW_SENTINEL,
         "Fix J: list_chats row→Chat archived mapping",
     )
+    # Fix M: self-contained archive_chat + resync_app_state helpers (whatsapp.py).
+    # MUST run before the Fix K helper splice — Fix K's MCP_HELPER_NEEDLE anchors on
+    # the archive_chat def that this block installs. On pristine upstream this is the
+    # only thing that creates archive_chat at all; on an already-patched tree the
+    # sentinel short-circuits so no duplicate def is appended.
+    changed_py |= append_idempotent(
+        whatsapp_py,
+        MCP_ARCHIVE_HELPER_BLOCK,
+        MCP_ARCHIVE_HELPER_SENTINEL,
+        "Fix M: archive_chat + resync_app_state helpers (whatsapp.py)",
+    )
     # Fix K: recover_app_state bridge-call helper (whatsapp.py)
     changed_py |= replace_idempotent(
         whatsapp_py,
@@ -1442,6 +1617,26 @@ def main() -> int:
 
     changed_server_main = False
     print("  whatsapp-mcp-server/main.py:")
+    # Fix M: archive_chat + resync_app_state import aliases (main.py). MUST run before
+    # the Fix K import splice — Fix K's MCP_IMPORT_NEEDLE anchors on the
+    # `resync_app_state as whatsapp_resync_app_state,` line this block installs.
+    changed_server_main |= replace_idempotent(
+        server_main_py,
+        MCP_ARCHIVE_IMPORT_NEEDLE,
+        MCP_ARCHIVE_IMPORT_REPLACEMENT,
+        MCP_ARCHIVE_IMPORT_SENTINEL,
+        "Fix M: archive_chat + resync import aliases (main.py)",
+    )
+    # Fix M: archive_chat + resync_app_state @mcp.tool wrappers (main.py). MUST run
+    # before the Fix K tool splice — Fix K's MCP_TOOL_NEEDLE anchors on the
+    # resync_app_state tool body this block installs.
+    changed_server_main |= replace_idempotent(
+        server_main_py,
+        MCP_ARCHIVE_TOOLS_NEEDLE,
+        MCP_ARCHIVE_TOOLS_REPLACEMENT,
+        MCP_ARCHIVE_TOOLS_SENTINEL,
+        "Fix M: archive_chat + resync_app_state MCP tools (main.py)",
+    )
     # Fix K: recover_app_state MCP tool (import alias + @mcp.tool wrapper)
     changed_server_main |= replace_idempotent(
         server_main_py,
