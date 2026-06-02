@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.4] - 2026-06-02
+
+### Changed
+ops-inbox: INBOX ZERO is now the mandate — archive everything not actionable (incl. WAITING, auto-resurfaces), auto-archive immediately after replying, include_context:true hard default on every read, verify bridge fully up first, and the verified phone archive-toggle heal for the /api/archive LTHash hang.
+
+
 ## [2.20.3] - 2026-06-02
 
 ### Changed
