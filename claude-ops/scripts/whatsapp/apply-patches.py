@@ -83,8 +83,53 @@ import sys
 
 REPO_DIR_DEFAULT = pathlib.Path.home() / ".local/share/whatsapp-mcp"
 
-# ─── main.go: PairPhone race (Fix A + Fix B) ─────────────────────────────────
-PAIR_NEEDLE = """\t\t// No ID stored — pairing-code mode (PairPhone)
+# ─── main.go: phone-number pairing path (Fix A + Fix B) ──────────────────────
+# API DRIFT PORT (2026-06): upstream lharries/whatsapp-mcp switched its login path
+# to QR-code ONLY — there is no PairPhone call to anchor on anymore (the old
+# PAIR_NEEDLE referenced a `// No ID stored — pairing-code mode (PairPhone)` block
+# that no longer exists). However the pinned whatsmeow
+# (v0.0.0-20250318233852-06705625cf82) STILL exports Client.PairPhone, so per the
+# task's "prefer phone-pair when supported" we RE-INTRODUCE the phone-number
+# pairing path into upstream's QR-only block rather than dropping the behaviour.
+#
+# Two further drifts handled here vs. the old fix:
+#   • PairPhone lost its leading context.Context parameter. Current signature is
+#       PairPhone(phone string, showPushNotification bool, clientType PairClientType,
+#                 clientDisplayName string) (string, error)
+#     so Fix B can no longer pass a context deadline INTO the call. We preserve Fix
+#     B's INTENT (PairPhone must not hang forever) by running it in a goroutine and
+#     racing it against a 3-minute watchdog timer — equivalent bounding without the
+#     removed ctx arg.
+#   • The needle now matches upstream's real QR-only block (GetQRChannel + the QR
+#     print loop). When WA_PHONE is set we take the pairing-code path; otherwise we
+#     fall through to upstream's QR loop unchanged.
+PAIR_NEEDLE = """\tif client.Store.ID == nil {
+\t\t// No ID stored, this is a new client, need to pair with phone
+\t\tqrChan, _ := client.GetQRChannel(context.Background())
+\t\terr = client.Connect()
+\t\tif err != nil {
+\t\t\tlogger.Errorf(\"Failed to connect: %v\", err)
+\t\t\treturn
+\t\t}
+
+\t\t// Print QR code for pairing with phone
+\t\tfor evt := range qrChan {
+\t\t\tif evt.Event == \"code\" {
+\t\t\t\tfmt.Println(\"\\nScan this QR code with your WhatsApp app:\")
+\t\t\t\tqrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+\t\t\t} else if evt.Event == \"success\" {
+\t\t\t\tconnected <- true
+\t\t\t\tbreak
+\t\t\t}
+\t\t}"""
+
+PAIR_REPLACEMENT = """\tif client.Store.ID == nil {
+\t\t// No ID stored, this is a new client, need to pair with phone.
+\t\t// claude-ops Fix A/B: when WA_PHONE is set, prefer phone-number (pairing-code)
+\t\t// linking over QR — the bridge runs headless on EC2 where nobody can scan a QR.
+\t\t// We still open the QR channel first because whatsmeow requires it (and the
+\t\t// godoc says to wait for the first QR event before calling PairPhone).
+\t\tqrChan, _ := client.GetQRChannel(context.Background())
 \t\terr = client.Connect()
 \t\tif err != nil {
 \t\t\tlogger.Errorf(\"Failed to connect: %v\", err)
@@ -92,35 +137,62 @@ PAIR_NEEDLE = """\t\t// No ID stored — pairing-code mode (PairPhone)
 \t\t}
 
 \t\tphone := os.Getenv(\"WA_PHONE\")
-\t\tif phone == \"\" {
-\t\t\tphone = \"31614446458\"
-\t\t}
-\t\tcode, perr := client.PairPhone(context.Background(), phone, true, whatsmeow.PairClientChrome, \"Chrome (Linux)\")"""
+\t\tif phone != \"\" {
+\t\t\t// claude-ops Fix A: per whatsmeow PairPhone godoc — wait for the
+\t\t\t// websocket+noise handshake to complete before requesting a pair code,
+\t\t\t// otherwise PairPhone silently hangs on the IQ response (no PairSuccess,
+\t\t\t// no error). Sleeping ~3s after Connect is the godoc-endorsed gate.
+\t\t\ttime.Sleep(3 * time.Second)
+\t\t\t// claude-ops Fix B: current whatsmeow PairPhone has NO context parameter
+\t\t\t// (signature: PairPhone(phone, showPushNotification, clientType,
+\t\t\t// clientDisplayName)), so we can no longer pass a deadline into the call.
+\t\t\t// Preserve Fix B's intent — an internal PairPhone hang must be recoverable —
+\t\t\t// by racing the call against a 3-minute watchdog instead of a ctx deadline.
+\t\t\ttype pairResult struct {
+\t\t\t\tcode string
+\t\t\t\terr  error
+\t\t\t}
+\t\t\tpairCh := make(chan pairResult, 1)
+\t\t\tgo func() {
+\t\t\t\tc, perr := client.PairPhone(phone, true, whatsmeow.PairClientChrome, \"Chrome (Linux)\")
+\t\t\t\tpairCh <- pairResult{code: c, err: perr}
+\t\t\t}()
+\t\t\tselect {
+\t\t\tcase pr := <-pairCh:
+\t\t\t\tif pr.err != nil {
+\t\t\t\t\tlogger.Errorf(\"Failed to pair phone %s: %v\", phone, pr.err)
+\t\t\t\t\treturn
+\t\t\t\t}
+\t\t\t\tfmt.Printf(\"\\nEnter this pairing code in WhatsApp on %s: %s\\n\", phone, pr.code)
+\t\t\tcase <-time.After(3 * time.Minute):
+\t\t\t\tlogger.Errorf(\"Timeout requesting pairing code for %s\", phone)
+\t\t\t\treturn
+\t\t\t}
+\t\t\t// Drain the QR channel so the goroutine inside whatsmeow doesn't block;
+\t\t\t// the *events.PairSuccess that lands when the user enters the code drives
+\t\t\t// the Connected handler. We still watch for the success event below.
+\t\t\tgo func() {
+\t\t\t\tfor evt := range qrChan {
+\t\t\t\t\tif evt.Event == \"success\" {
+\t\t\t\t\t\tconnected <- true
+\t\t\t\t\t\treturn
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t}()
+\t\t} else {
+\t\t\t// No WA_PHONE — fall back to upstream's QR pairing loop unchanged.
+\t\t\tfor evt := range qrChan {
+\t\t\t\tif evt.Event == \"code\" {
+\t\t\t\t\tfmt.Println(\"\\nScan this QR code with your WhatsApp app:\")
+\t\t\t\t\tqrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+\t\t\t\t} else if evt.Event == \"success\" {
+\t\t\t\t\tconnected <- true
+\t\t\t\t\tbreak
+\t\t\t\t}
+\t\t\t}
+\t\t}"""
 
-PAIR_REPLACEMENT = """\t\t// No ID stored — pairing-code mode (PairPhone)
-\t\terr = client.Connect()
-\t\tif err != nil {
-\t\t\tlogger.Errorf(\"Failed to connect: %v\", err)
-\t\t\treturn
-\t\t}
-
-\t\t// claude-ops Fix A: per whatsmeow PairPhone godoc — wait for the websocket+noise
-\t\t// handshake to complete before requesting a pair code, otherwise PairPhone
-\t\t// silently hangs on the IQ response (no PairSuccess, no error).
-\t\ttime.Sleep(3 * time.Second)
-
-\t\tphone := os.Getenv(\"WA_PHONE\")
-\t\tif phone == \"\" {
-\t\t\tphone = \"31614446458\"
-\t\t}
-\t\t// claude-ops Fix B: bound PairPhone with a real deadline. context.Background() has
-\t\t// no deadline, so an internal hang in PairPhone is unrecoverable; with a
-\t\t// deadline the call returns and we hit the outer select watchdog.
-\t\tpairCtx, pairCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-\t\tdefer pairCancel()
-\t\tcode, perr := client.PairPhone(pairCtx, phone, true, whatsmeow.PairClientChrome, \"Chrome (Linux)\")"""
-
-PAIR_SENTINEL = "per whatsmeow PairPhone godoc"
+PAIR_SENTINEL = "claude-ops Fix A/B: when WA_PHONE is set"
 
 # ─── main.go: auto-backfill on Connected ─────────────────────────────────────
 AUTO_BACKFILL_NEEDLE = """\t\tcase *events.Connected:
@@ -482,7 +554,10 @@ RESYNC_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix D: POST /api/resync_app_sta
 \t\t\t\treq.Name = \"regular_low\"
 \t\t\t}
 \t\t}
-\t\tif err := client.FetchAppState(context.Background(), appstate.WAPatchName(req.Name), req.FullSync, false); err != nil {
+\t\t// claude-ops API-drift port (2026-06): current whatsmeow FetchAppState has NO
+\t\t// context.Context parameter — signature is FetchAppState(name, fullSync,
+\t\t// onlyIfNotSynced). Dropped the leading context.Background() arg.
+\t\tif err := client.FetchAppState(appstate.WAPatchName(req.Name), req.FullSync, false); err != nil {
 \t\t\tw.WriteHeader(http.StatusInternalServerError)
 \t\t\tfmt.Fprintf(w, `{\"success\":false,\"message\":%q}`, err.Error())
 \t\t\treturn
@@ -1015,7 +1090,9 @@ func healLTHash(ctx context.Context, client *whatsmeow.Client, patchName appstat
 \t\twdb.Close()
 
 \t\t// Re-fetch from version 0 (fullSync=true, onlyIfNotSynced=false).
-\t\terr = client.FetchAppState(ctx, patchName, true, false)
+\t\t// claude-ops API-drift port (2026-06): FetchAppState dropped its ctx param.
+\t\t// (ctx is still used above for the wdb.ExecContext snapshot-row deletes.)
+\t\terr = client.FetchAppState(patchName, true, false)
 \t\tif err == nil {
 \t\t\treturn nil
 \t\t}
@@ -1040,15 +1117,38 @@ func phoneOnline(client *whatsmeow.Client) bool {
 \treturn client.IsConnected() && client.IsLoggedIn()
 }
 
-// claude-ops Fix L: sendRecoveryAndBackfill asks the primary device for a fresh
-// app-state snapshot (BuildAppStateRecoveryRequest -> SendPeerMessage) and, now that
-// the link is alive, fires a history backfill so the message store stops drifting.
-// Returns an error only if the peer-message could not be dispatched; the snapshot
-// itself is applied asynchronously by whatsmeow's handleAppStateRecovery when the
-// phone answers, so callers that need the applied state must poll/retry.
+// claude-ops Fix L: sendRecoveryAndBackfill recovers a corrupt app-state collection
+// and fires a history backfill while the link is alive.
+//
+// API-DRIFT DEGRADE (2026-06): the original implementation asked the PRIMARY device
+// for a fresh unencrypted snapshot via whatsmeow.BuildAppStateRecoveryRequest ->
+// client.SendPeerMessage, which BYPASSED a broken server patch chain (mismatching
+// LTHash, whatsmeow #382/#858). BOTH of those APIs were REMOVED from the public
+// whatsmeow surface in the pinned version (v0.0.0-20250318233852-06705625cf82):
+// BuildAppStateRecoveryRequest no longer exists, and SendPeerMessage is now only an
+// unexported method reachable via client.DangerousInternals(). There is no
+// supported public replacement for primary-device peer-recovery in this version.
+//
+// Closest correct equivalent without reaching into Dangerous internals: a full
+// server-side resync (FetchAppState fullSync=true), i.e. the same primitive
+// healLTHash already uses. IMPORTANT BEHAVIOUR CHANGE: this can re-fetch and
+// re-apply the server's patch chain, but it CANNOT bypass a server chain that is
+// itself unverifiable — so a truly fatal #382/#858 corruption is no longer
+// auto-recoverable from the bridge on this whatsmeow version. We log that loudly,
+// attempt the resync as a best effort, and still fire the backfill. Documented in
+// the PR body + CHANGELOG so the owner can decide whether to pin a whatsmeow that
+// still exposes peer-recovery or accept resync-only semantics.
 func sendRecoveryAndBackfill(client *whatsmeow.Client, patchName appstate.WAPatchName) error {
-\tmsg := whatsmeow.BuildAppStateRecoveryRequest(patchName)
-\tif _, err := client.SendPeerMessage(context.Background(), msg); err != nil {
+\tfmt.Printf(
+\t\t"Fix L: primary-device app-state recovery (peer-message) is unavailable on this "+
+\t\t\t"whatsmeow version; falling back to a best-effort full server resync of %s "+
+\t\t\t"(cannot bypass an unverifiable server patch chain — see whatsmeow #382/#858)\\n",
+\t\tstring(patchName),
+\t)
+\t// Best-effort full server-side resync. Errors are non-fatal here — the caller
+\t// (archive auto-retry / recover endpoint) reports its own outcome.
+\tif err := client.FetchAppState(patchName, true, false); err != nil {
+\t\tfmt.Printf("Fix L: best-effort resync of %s failed: %v\\n", string(patchName), err)
 \t\treturn err
 \t}
 \tgo requestHistorySync(client) // backfill on alive — refresh history while the link is up
@@ -1119,7 +1219,11 @@ ARCHIVE_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix F: POST /api/archive — a
 \t\tctx := r.Context()
 
 \t\tdo := func() error {
-\t\t\treturn client.SendAppState(ctx, patch)
+\t\t\t// claude-ops API-drift port (2026-06): current whatsmeow SendAppState has NO
+\t\t\t// context.Context parameter — signature is SendAppState(patch
+\t\t\t// appstate.PatchInfo). Dropped the leading ctx arg. (ctx is still used below
+\t\t\t// for healLTHash.)
+\t\t\treturn client.SendAppState(patch)
 \t\t}
 \t\terr = do()
 \t\t// claude-ops Fix L: treat both a local LTHash mismatch and a server-side 409
