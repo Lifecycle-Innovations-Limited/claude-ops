@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.8] - 2026-06-02
+
+### Changed
+whatsapp-mcp: port apply-patches.py Fix A/B pairing + C/D/F/G/L to current upstream whatsmeow API (go build/vet clean); recover_app_state now resync-only (peer-recovery API removed upstream) (PR #479)
+
+
 ## [2.20.7] - 2026-06-02
 
 ### Changed
