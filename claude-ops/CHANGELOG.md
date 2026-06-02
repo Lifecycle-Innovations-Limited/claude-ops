@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.7] - 2026-06-02
+
+### Changed
+whatsapp-mcp: re-anchor apply-patches.py Fix E/H/J against current upstream + move sentinels onto invariant content (PR #477)
+
+
 ## [2.20.6] - 2026-06-02
 
 ### Changed
