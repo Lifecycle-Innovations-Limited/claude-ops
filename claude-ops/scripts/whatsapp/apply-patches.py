@@ -586,23 +586,15 @@ CONNECTED_RESYNC_SENTINEL = (
 # causing 30+ pydantic validation errors on every list_chats / list_messages
 # call. This patch adds _open_db (WAL mode, read-only) and _*_to_dict helpers,
 # then all public functions return dicts/list-of-dicts.
-PY_SHAPE_NEEDLE = """@dataclass
-class MessageContext:
-    message: Message
-    before: List[Message]
-    after: List[Message]
+# claude-ops Fix E: re-anchored to the `get_sender_name` def alone (was a
+# 6-line MessageContext block that depended on upstream's exact blank-line
+# count between the dataclass and the def — upstream collapsed two blanks to
+# one and broke the splice). Anchoring on the function signature and PREPENDING
+# the helper block drops the adjacency/blank-line dependency entirely while
+# inserting byte-identical content. Idempotent via PY_SHAPE_SENTINEL.
+PY_SHAPE_NEEDLE = """def get_sender_name(sender_jid: str) -> str:"""
 
-
-def get_sender_name(sender_jid: str) -> str:"""
-
-PY_SHAPE_REPLACEMENT = """@dataclass
-class MessageContext:
-    message: Message
-    before: List[Message]
-    after: List[Message]
-
-
-# claude-ops Fix E: serialization helpers + WAL-mode DB open.
+PY_SHAPE_REPLACEMENT = """# claude-ops Fix E: serialization helpers + WAL-mode DB open.
 # All public tool functions return plain dicts so FastMCP can validate them.
 def _open_db(path: str, read_only: bool = True):
     \"\"\"Open SQLite in WAL mode: reads see bridge's latest committed state without
@@ -652,7 +644,13 @@ def _contact_to_dict(contact) -> dict:
 
 def get_sender_name(sender_jid: str) -> str:"""
 
-PY_SHAPE_SENTINEL = "claude-ops Fix E: serialization helpers + WAL-mode DB open"
+# Sentinel keys on the inserted helper's defining line (`def _open_db(`) rather
+# than the comment text. The live install was hand/older-patcher-patched with a
+# differently-worded Fix E comment but the SAME _open_db helper; keying on the
+# comment string would miss it and DUPLICATE the helper. `def _open_db(` is the
+# stable invariant present in any Fix-E-patched tree (matches the def with or
+# without a return-type annotation).
+PY_SHAPE_SENTINEL = "def _open_db("
 
 
 # ─── whatsapp.py Fix J: list_chats exposes archived + excludes by default ──────
@@ -707,119 +705,116 @@ def _contact_to_dict"""
 PY_CHAT_TO_DICT_SENTINEL = '"archived": bool(chat.archived),  # claude-ops Fix J'
 
 # --- 3. list_chats SELECT: add chats.archived column ---
-PY_LIST_CHATS_SELECT_NEEDLE = """            SELECT
-                chats.jid,
-                chats.name,
-                chats.last_message_time,
-                messages.content as last_message,
-                messages.sender as last_sender,
-                messages.is_from_me as last_is_from_me
+# claude-ops Fix J SELECT: re-anchored to the last SELECT column + `FROM chats`
+# (was the whole 7-line SELECT block, which broke on a trailing space after the
+# `SELECT` keyword in current upstream). `...last_is_from_me\n            FROM chats`
+# is unique to list_chats (the `is_from_me as last_is_from_me` token alone is not).
+# Appends `chats.archived` as the final column — byte-identical effect.
+PY_LIST_CHATS_SELECT_NEEDLE = """                messages.is_from_me as last_is_from_me
             FROM chats"""
 
-PY_LIST_CHATS_SELECT_REPLACEMENT = """            SELECT
-                chats.jid,
-                chats.name,
-                chats.last_message_time,
-                messages.content as last_message,
-                messages.sender as last_sender,
-                messages.is_from_me as last_is_from_me,
+PY_LIST_CHATS_SELECT_REPLACEMENT = """                messages.is_from_me as last_is_from_me,
                 chats.archived
             FROM chats"""
 
 PY_LIST_CHATS_SELECT_SENTINEL = "chats.archived\n            FROM chats"
 
 # --- 4. list_chats signature + archived WHERE filter ---
-PY_LIST_CHATS_SIG_NEEDLE = """def list_chats(
-    query: Optional[str] = None,
-    limit: int = 20,
-    page: int = 0,
-    include_last_message: bool = True,
-    sort_by: str = "last_active",
-) -> List[Chat]:
-    \"\"\"Get chats matching the specified criteria.\"\"\"
-    try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
-        cursor = conn.cursor()
+# claude-ops Fix J sig: re-anchored to the last param + `) -> List[Chat]:` (was
+# the full def + body preamble, which broke because upstream's last param has no
+# trailing comma — `sort_by: str = "last_active"` not `...,` — and the blank-line
+# whitespace between `cursor()` and `# Build base query` differs). This 2-line
+# anchor is unique and inserts `include_archived` as a new keyword arg, replacing
+# the no-comma last param with comma + new param. Byte-identical signature effect.
+PY_LIST_CHATS_SIG_NEEDLE = """    sort_by: str = "last_active"
+) -> List[Chat]:"""
 
-        # Build base query
-        query_parts = ["""
-
-PY_LIST_CHATS_SIG_REPLACEMENT = """def list_chats(
-    query: Optional[str] = None,
-    limit: int = 20,
-    page: int = 0,
-    include_last_message: bool = True,
-    sort_by: str = "last_active",
+PY_LIST_CHATS_SIG_REPLACEMENT = """    sort_by: str = "last_active",
     include_archived: bool = False,  # claude-ops Fix J: exclude archived by default
-) -> List[Chat]:
-    \"\"\"Get chats matching the specified criteria.\"\"\"
-    try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
-        cursor = conn.cursor()
-
-        # Build base query
-        query_parts = ["""
+) -> List[Chat]:"""
 
 PY_LIST_CHATS_SIG_SENTINEL = "claude-ops Fix J: exclude archived by default"
 
 # --- 5. list_chats WHERE: inject archived=0 filter ---
-PY_LIST_CHATS_WHERE_NEEDLE = """        where_clauses = []
-        params = []
+# claude-ops Fix J WHERE: re-anchored to `where_clauses = []` + the unique
+# list_chats `chats.name LIKE` query clause (the prior needle reproduced the
+# blank-line whitespace between `where_clauses = []` and `if query:`, which
+# upstream emits with trailing spaces). `where_clauses = []`/`params = []` also
+# appears in list_messages, so the anchor INCLUDES the chats.name LIKE append —
+# unique to list_chats — and INjects the archived filter right after the list
+# initialisers. `replace(..., 1)` + this list_chats-only token = correct target.
+PY_LIST_CHATS_WHERE_NEEDLE = (
+    "        where_clauses = []\n"
+    "        params = []\n"
+    "        \n"
+    "        if query:\n"
+    '            where_clauses.append("(LOWER(chats.name) LIKE LOWER(?) OR chats.jid LIKE ?)")'
+)
 
-        if query:
-            where_clauses.append(
-                "(LOWER(chats.name) LIKE LOWER(?) OR chats.jid LIKE ?)"
-            )
-            params.extend([f"%{query}%", f"%{query}%"])
-
-        if where_clauses:
-            query_parts.append("WHERE " + " AND ".join(where_clauses))"""
-
-PY_LIST_CHATS_WHERE_REPLACEMENT = """        where_clauses = []
-        params = []
-
-        # claude-ops Fix J: filter archived unless caller opts in
-        if not include_archived:
-            where_clauses.append("chats.archived = 0")
-
-        if query:
-            where_clauses.append(
-                "(LOWER(chats.name) LIKE LOWER(?) OR chats.jid LIKE ?)"
-            )
-            params.extend([f"%{query}%", f"%{query}%"])
-
-        if where_clauses:
-            query_parts.append("WHERE " + " AND ".join(where_clauses))"""
+PY_LIST_CHATS_WHERE_REPLACEMENT = (
+    "        where_clauses = []\n"
+    "        params = []\n"
+    "\n"
+    "        # claude-ops Fix J: filter archived unless caller opts in\n"
+    "        if not include_archived:\n"
+    '            where_clauses.append("chats.archived = 0")\n'
+    "        \n"
+    "        if query:\n"
+    '            where_clauses.append("(LOWER(chats.name) LIKE LOWER(?) OR chats.jid LIKE ?)")'
+)
 
 PY_LIST_CHATS_WHERE_SENTINEL = "claude-ops Fix J: filter archived unless caller opts in"
 
 # --- 6. list_chats row mapping: read chat_data[6] as archived ---
-PY_LIST_CHATS_ROW_NEEDLE = """            chat = Chat(
-                jid=chat_data[0],
-                name=chat_data[1],
-                last_message_time=datetime.fromisoformat(chat_data[2])
-                if chat_data[2]
-                else None,
-                last_message=chat_data[3],
-                last_sender=chat_data[4],
-                last_is_from_me=chat_data[5],
-            )"""
-
-PY_LIST_CHATS_ROW_REPLACEMENT = """            chat = Chat(
-                jid=chat_data[0],
-                name=chat_data[1],
-                last_message_time=datetime.fromisoformat(chat_data[2])
-                if chat_data[2]
-                else None,
-                last_message=chat_data[3],
-                last_sender=chat_data[4],
-                last_is_from_me=chat_data[5],
-                archived=bool(chat_data[6]) if len(chat_data) > 6 else False,  # claude-ops Fix J
-            )"""
-
-PY_LIST_CHATS_ROW_SENTINEL = (
-    "archived=bool(chat_data[6]) if len(chat_data) > 6 else False,  # claude-ops Fix J"
+# claude-ops Fix J row-mapping: re-anchored to the list_chats `cursor.execute(
+# " ".join(query_parts), ...)` + fetchall preamble that precedes the Chat()
+# construction. The Chat() block itself is byte-identical to the one in
+# get_contact_chats, so the bare constructor is NOT a unique anchor (replace(...,1)
+# would hit whichever appears first). The `" ".join(query_parts)` execute call is
+# unique to list_chats. Upstream also reflowed last_message_time onto one line and
+# dropped the trailing comma on the last arg — both folded into this anchor.
+# Built with explicit "\\n" joins so the blank line between fetchall() and
+# `result = []` carries upstream's exact 8-space indentation (`        `) — an
+# editor would silently strip it, re-breaking the anchor.
+PY_LIST_CHATS_ROW_NEEDLE = (
+    '        cursor.execute(" ".join(query_parts), tuple(params))\n'
+    "        chats = cursor.fetchall()\n"
+    "        \n"
+    "        result = []\n"
+    "        for chat_data in chats:\n"
+    "            chat = Chat(\n"
+    "                jid=chat_data[0],\n"
+    "                name=chat_data[1],\n"
+    "                last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,\n"
+    "                last_message=chat_data[3],\n"
+    "                last_sender=chat_data[4],\n"
+    "                last_is_from_me=chat_data[5]\n"
+    "            )"
 )
+
+PY_LIST_CHATS_ROW_REPLACEMENT = (
+    '        cursor.execute(" ".join(query_parts), tuple(params))\n'
+    "        chats = cursor.fetchall()\n"
+    "        \n"
+    "        result = []\n"
+    "        for chat_data in chats:\n"
+    "            chat = Chat(\n"
+    "                jid=chat_data[0],\n"
+    "                name=chat_data[1],\n"
+    "                last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,\n"
+    "                last_message=chat_data[3],\n"
+    "                last_sender=chat_data[4],\n"
+    "                last_is_from_me=chat_data[5],\n"
+    "                archived=bool(chat_data[6]) if len(chat_data) > 6 else False,  # claude-ops Fix J\n"
+    "            )"
+)
+
+# Sentinel keys on the inserted kwarg `archived=bool(chat_data[6])` rather than the
+# full one-line expression: the live install carries the SAME mapping but black
+# reflowed it across three lines, so matching the one-liner would miss it and the
+# splice would report a spurious needle-not-found (harmless — replace fails clean —
+# but noisy). The bare kwarg is the stable invariant of the inserted content.
+PY_LIST_CHATS_ROW_SENTINEL = "archived=bool(chat_data[6])"
 
 
 # ─── Fix K: wire /api/recover_app_state into the MCP server ───────────────────
@@ -960,10 +955,14 @@ CHATS_SCHEMA_MIGRATION_SENTINEL = "claude-ops Fix H: idempotent migration"
 # ─── main.go Fix H: subscribe to *events.Archive in the event handler ──────
 # Keeps messages.db.chats.archived in sync when WhatsApp pushes app-state
 # archive mutations from another device (phone or Web).
-ARCHIVE_EVENT_NEEDLE = """\t\tcase *events.LoggedOut:
-\t\t\tlogger.Warnf(\"Device logged out, re-pair via WhatsApp app\")
-\t\t}
-\t})"""
+# claude-ops Fix H subscriber: re-anchored to `case *events.LoggedOut:` alone.
+# The previous needle also pinned the LoggedOut log string ("Device logged out,
+# re-pair via WhatsApp app"), which upstream changed to "...please scan QR code
+# to log in again", breaking the splice. The bare `case *events.LoggedOut:` line
+# is stable, and PREPENDING the *events.Archive case before it inserts the same
+# byte-identical subscriber. `v` is bound by `switch v := evt.(type)` upstream.
+# Idempotent via ARCHIVE_EVENT_SENTINEL.
+ARCHIVE_EVENT_NEEDLE = """\t\tcase *events.LoggedOut:"""
 
 ARCHIVE_EVENT_REPLACEMENT = """\t\tcase *events.Archive:
 \t\t\t// claude-ops Fix H: mirror app-state archive changes into messages.db so
@@ -973,10 +972,7 @@ ARCHIVE_EVENT_REPLACEMENT = """\t\tcase *events.Archive:
 \t\t\t\tlogger.Warnf("Fix H: failed to persist archive status for %s: %v", v.JID, err)
 \t\t\t}
 
-\t\tcase *events.LoggedOut:
-\t\t\tlogger.Warnf(\"Device logged out, re-pair via WhatsApp app\")
-\t\t}
-\t})"""
+\t\tcase *events.LoggedOut:"""
 
 ARCHIVE_EVENT_SENTINEL = "claude-ops Fix H: mirror app-state archive changes"
 
