@@ -72,16 +72,17 @@ cmd_dispatch() {
       --effort)  effort="$2"; shift 2 ;;
       --cwd|--add-dir) add_dir="$2"; shift 2 ;;
       --agent)   agent="$2"; shift 2 ;;
-      --) shift; extra+=("$@"); break ;;
+      --) shift; extra+=("$@"); set --; break ;;
       --help|-h) USAGE 0 ;;
       *) break ;;
     esac
   done
-  if [ $# -lt 1 ]; then
+  if [ $# -lt 1 ] && [ ${#extra[@]} -eq 0 ]; then
     echo "ops-bg dispatch: missing <prompt>" >&2
     exit 2
   fi
-  local prompt="$*"
+  local prompt=""
+  [ $# -ge 1 ] && prompt="$*"
   if [ ! -d "$add_dir" ]; then
     echo "ops-bg dispatch: workdir does not exist: $add_dir" >&2
     exit 2
@@ -91,8 +92,8 @@ cmd_dispatch() {
   if [ -n "$agent" ]; then
     args+=(--agent "$agent")
   fi
-  args+=("$prompt")
-  args+=("${extra[@]}")
+  [ -n "$prompt" ] && args+=("$prompt")
+  [ "${#extra[@]}" -gt 0 ] && args+=("${extra[@]}")
   cd "$add_dir"   # start fleet agents in default workdir
   exec "$CLAUDE_BIN" "${args[@]}"
 }
