@@ -24,7 +24,7 @@ ops_registry_repos() {
         elif (.remote_url // "") != "" then
           ( .remote_url
             | sub("^git@github.com:"; "")
-            | sub("^https?://github.com/"; "")
+            | sub("^https?://([^@/]+@)?github.com/"; "")
             | sub("\\.git$"; "") )
         else empty end
     ]
