@@ -109,7 +109,12 @@ except Exception:
 
   if command -v security &>/dev/null; then
     local blob token
-    blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)
+    # Scope to the current user's account first: the keychain can hold multiple
+    # "Claude Code-credentials" items (e.g. an mcpOAuth-only blob under another
+    # account), and an unscoped lookup returns whichever matches first — which
+    # may lack claudeAiOauth even when a valid token exists under $USER.
+    blob=$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null || true)
+    [[ -z "${blob}" ]] && blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)
     if [[ -n "${blob}" ]]; then
       token=$(printf '%s' "${blob}" | python3 -c "
 import json, sys, time

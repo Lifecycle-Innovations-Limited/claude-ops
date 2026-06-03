@@ -79,7 +79,9 @@ fi
 # the daemon also auto-corrects every 2min, but this surfaces it during manual
 # rotation). Don't block on failure; just log.
 {
-  LIVE_TOK=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('claudeAiOauth',{}).get('accessToken',''))" 2>/dev/null)
+  # Scope to $USER: the keychain can hold multiple "Claude Code-credentials"
+  # items and an unscoped lookup may return an mcpOAuth-only blob first.
+  LIVE_TOK=$( (security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null || security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null) | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('claudeAiOauth',{}).get('accessToken',''))" 2>/dev/null)
   STATE_ACCT=$(python3 -c "import json; print(json.load(open('$DIR/state.json')).get('activeAccount',''))" 2>/dev/null)
   if [ -n "$LIVE_TOK" ] && [ -n "$STATE_ACCT" ]; then
     LIVE_ACCT=$(curl -s -m 4 -H "Authorization: Bearer $LIVE_TOK" -H "anthropic-beta: oauth-2025-04-20" https://api.anthropic.com/api/oauth/profile 2>/dev/null | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('account',{}).get('email',''))" 2>/dev/null)
