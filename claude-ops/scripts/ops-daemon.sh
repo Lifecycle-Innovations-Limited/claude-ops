@@ -111,6 +111,7 @@ declare -A SERVICE_LAST_SUCCESS   # service name → ISO-8601 UTC of last clean 
 declare -A SERVICE_ERROR_COUNT    # service name → cumulative errors since daemon start
 declare -A SERVICE_LAST_ERROR     # service name → last error message (truncated)
 declare -A SERVICE_NOTIFIED_CRASH # service name → set to 1 after persistent-failure notify (deduped)
+declare -A SERVICE_HEALTHCHECK_CMD # service name → cached config `health_check` liveness probe
 RESTART_COOLDOWN=1800  # Reset restart counter after 30 min of stability
 ACTION_NEEDED="null"
 
@@ -145,6 +146,43 @@ for name, cfg in data.get('services', {}).items():
     if cfg.get('enabled', False):
         print(name)
 " 2>/dev/null || true
+}
+
+# Return the configured command-based liveness probe for a service, if any
+# (cached for the daemon's lifetime — the config is static at runtime).
+# When a service defines `health_check`, that probe — not the tracked PID —
+# is authoritative for liveness. This matters for services whose `command` is
+# an ephemeral launcher wrapper that exits the moment the real, externally
+# supervised process is confirmed up: e.g. whatsapp-bridge-up.sh returns as
+# soon as :8080 is LISTENing under whatsapp-bridge.service. Tracking that
+# already-exited wrapper PID otherwise caused a perpetual false dead→restart
+# churn (HEALTH: ... is dead → RESTART attempt N/10) for a perfectly healthy
+# systemd-owned bridge, eventually tripping max_restarts + a false crash alert.
+_service_health_cmd() {
+  local name="$1"
+  if [[ -z "${SERVICE_HEALTHCHECK_CMD[$name]+set}" ]]; then
+    # Probe the config directly (not via get_service_field, whose `|| true`
+    # masks parse failure). Cache ONLY on a clean parse: a transient python3
+    # spawn / JSON-decode failure (e.g. config mid-rewrite) must not get cached
+    # as "no health_check" — that would permanently disable the probe and
+    # silently revert the service to the churny PID-liveness path. A genuine
+    # empty result (service has no health_check) parses cleanly and is cached.
+    local val
+    if val=$(python3 -c "
+import json, sys
+data = json.load(open('$SERVICES_CONFIG'))
+v = data.get('services', {}).get('$name', {}).get('health_check', '')
+sys.stdout.write(v if v is not None else '')
+" 2>/dev/null); then
+      SERVICE_HEALTHCHECK_CMD[$name]="$val"
+    else
+      # Transient failure — return empty for this round WITHOUT caching; retry
+      # on the next loop so the probe self-heals once the config is readable.
+      printf ''
+      return 0
+    fi
+  fi
+  printf '%s' "${SERVICE_HEALTHCHECK_CMD[$name]}"
 }
 
 # ── Cron helpers ─────────────────────────────────────────────────────────
@@ -255,13 +293,37 @@ check_health() {
   health_path=$(get_service_field "$name" "health_file")
   health_path="${health_path/#\~/$HOME}"
 
-  # Check if PID is alive
-  local pid="${SERVICE_PIDS[$name]:-}"
-  if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
-    log "HEALTH: $name pid=$pid is dead"
-    SERVICE_STATUS["$name"]="dead"
-    SERVICE_PIDS["$name"]=""
-    return 1
+  # Liveness check. A configured `health_check` command (e.g. probing :8080)
+  # is authoritative and overrides PID tracking: services launched via an
+  # ephemeral wrapper (whatsapp-bridge-up.sh) leave a PID that exits the moment
+  # the real systemd/launchd-owned process is up, so tracking it would falsely
+  # report "dead" on every loop and churn restarts.
+  local health_cmd
+  health_cmd=$(_service_health_cmd "$name")
+  if [[ -n "$health_cmd" ]]; then
+    if eval "$health_cmd" >/dev/null 2>&1; then
+      # Real process is up; the ephemeral launcher PID is no longer meaningful.
+      SERVICE_PIDS["$name"]=""
+      SERVICE_STATUS["$name"]="running"
+      SERVICE_LAST_HEALTH["$name"]="ok"
+      if [[ -n "${SERVICE_NOTIFIED_CRASH[$name]:-}" ]]; then
+        unset "SERVICE_NOTIFIED_CRASH[$name]"
+      fi
+    else
+      log "HEALTH: $name health_check failed ($health_cmd) — treating as dead"
+      SERVICE_STATUS["$name"]="dead"
+      SERVICE_PIDS["$name"]=""
+      return 1
+    fi
+  else
+    # Legacy PID-liveness check (services with no health_check probe).
+    local pid="${SERVICE_PIDS[$name]:-}"
+    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+      log "HEALTH: $name pid=$pid is dead"
+      SERVICE_STATUS["$name"]="dead"
+      SERVICE_PIDS["$name"]=""
+      return 1
+    fi
   fi
 
   # Read health file if present
@@ -388,7 +450,15 @@ print(json.dumps(sys.argv[1]))
       services_json+="\"$name\": {\"status\": \"$status\", \"next_run\": \"$next_iso\", \"last_run\": \"$last_iso\", \"latency_ms\": $latency_ms, \"last_success\": \"$last_success\", \"error_count\": $error_count, \"last_error\": $last_error_json}"
     else
       local pid_val
-      if [[ "$pid" == "null" ]] || [[ -z "$pid" ]]; then
+      local hc_cmd
+      hc_cmd=$(_service_health_cmd "$name")
+      if [[ -n "$hc_cmd" ]]; then
+        # Command-supervised service: liveness was already determined by
+        # check_health via the configured probe. The tracked PID is an
+        # ephemeral launcher and not meaningful — report status as-is with a
+        # null pid; do NOT downgrade running→dead on a dead wrapper PID.
+        pid_val="null"
+      elif [[ "$pid" == "null" ]] || [[ -z "$pid" ]]; then
         pid_val="null"
         # No PID tracked — status cannot be "running"
         if [[ "$status" == "running" ]]; then
