@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.20.12] - 2026-06-03
+
+### Changed
+ops-rotate-setup: delegate OAuth capture to rotate.mjs (Turnstile-capable browser-driver cascade) and write the consumed `Claude-Rotation-<key>`/`$USER` keychain schema; rewrite setup-account.mjs as a thin wrapper over `rotate.mjs --setup --only=<email> --auto --skip-valid`; update SKILL.md token-check, keychain references, and failure modes to match. The prior implementation launched a fresh Playwright Chromium (blocked by Cloudflare Turnstile, so the magic link was never sent) and wrote a sessionKey cookie under a keychain coordinate no consumer reads.
+
+### Fixed
+ops-release: CHANGELOG prepend now passes the multi-line section to awk via a temp file (`getline`), fixing the `awk: newline in string` error that silently skipped the changelog entry when `--notes` spanned multiple lines.
+
 ## [2.20.11] - 2026-06-03
 
 ### Changed
