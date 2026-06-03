@@ -5,8 +5,8 @@
 # THE BUG THIS PREVENTS
 # ---------------------
 # A Gmail reply via `gog gmail send --reply-to-message-id <ID>` 404s when the
-# message-ID was scanned from one account (e.g. sam.renders@gmail.com) but the
-# send defaults to a DIFFERENT account (e.g. sam@samfeldt.com): the same thread
+# message-ID was scanned from one account (e.g. your scanning mailbox) but the
+# send defaults to a DIFFERENT account (e.g. your sending mailbox): the same thread
 # carries different message/thread IDs per account.
 #
 # Worse: EVERY `gog gmail send` attempt — even one that 404s or trips a bad flag
@@ -98,7 +98,7 @@ discover_accounts() {
     return 0
   fi
   gog auth list -j 2>/dev/null | python3 -c '
-import sys, json
+import os, sys, json
 seen, out = set(), []
 try:
     d = json.load(sys.stdin)
@@ -113,9 +113,10 @@ try:
                 seen.add(email); out.append(email)
 except Exception:
     pass
-# Always try the two known mailboxes on this box.
-for e in ("sam@samfeldt.com", "sam.renders@gmail.com"):
-    if e not in seen:
+# Always also probe any extra mailboxes named in $GOG_EXTRA_ACCOUNTS
+# (comma/space separated) — keeps personal addresses out of source.
+for e in os.environ.get("GOG_EXTRA_ACCOUNTS", "").replace(",", " ").split():
+    if e and e not in seen:
         seen.add(e); out.append(e)
 print("\n".join(out))
 ' 2>/dev/null
