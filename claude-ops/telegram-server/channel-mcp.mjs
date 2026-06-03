@@ -82,31 +82,36 @@ function loadSecretsEnv() {
 const secretsEnv = loadSecretsEnv();
 
 function thisSessionIsLeader() {
+  // FAIL OPEN by default: the leader-gate is an opt-in fleet feature. A plain
+  // claude-ops install (no fleet supervisor) or a non-Linux host (no /proc) must
+  // poll normally — the gate only LOCKS OUT a session when it can positively prove
+  // a *different* live session leads. Anything it can't prove → poll.
+  let marker;
   try {
-    const marker = readFileSync(join(homedir(), '.claude', 'state', 'fleet-supervisor.leader'), 'utf8');
-    const m = marker.match(/pid:(\d+)/);
-    if (!m) return false;
-    const leaderPid = m[1];
-    let pid = String(process.pid);
-    for (let i = 0; i < 8; i++) {
-      if (pid === leaderPid) return true;
-      let stat;
-      try {
-        stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-      } catch {
-        return false;
-      }
-      const after = stat
-        .slice(stat.lastIndexOf(')') + 2)
-        .trim()
-        .split(/\s+/);
-      pid = after[1];
-      if (!pid || pid === '0' || pid === '1') return false;
-    }
-    return false;
+    marker = readFileSync(join(homedir(), '.claude', 'state', 'fleet-supervisor.leader'), 'utf8');
   } catch {
-    return false;
+    return true; // no fleet marker → not a managed fleet → poll normally
   }
+  const m = marker.match(/pid:(\d+)/);
+  if (!m) return true; // marker without a pid → can't enforce → poll
+  const leaderPid = m[1];
+  let pid = String(process.pid);
+  for (let i = 0; i < 64; i++) {
+    if (pid === leaderPid) return true; // this process is in the leader's tree
+    let stat;
+    try {
+      stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    } catch {
+      return true; // /proc unreadable (non-Linux / process gone) → can't prove → poll
+    }
+    const after = stat
+      .slice(stat.lastIndexOf(')') + 2)
+      .trim()
+      .split(/\s+/);
+    pid = after[1];
+    if (!pid || pid === '0' || pid === '1') return false; // reached init: NOT the leader's tree
+  }
+  return false; // ran out of hops without matching → treat as non-leader
 }
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || prefs.bot_token || secretsEnv.TELEGRAM_BOT_TOKEN || '';
