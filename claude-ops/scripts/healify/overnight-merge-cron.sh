@@ -25,6 +25,22 @@ fi
 
 merge_ready_prs() {
   local owner=$1 repo=$2 base=$3
+  # BASE-HEALTH GATE (2026-06-03): never pile PRs onto a base whose own CI is red.
+  # Individually-green PRs can combine into a broken base; once red, --admin-merging
+  # more PRs onto it only compounds the breakage. Gate on the base HEAD rollup.
+  local base_state
+  base_state=$(gh api graphql -f query='
+    query($o:String!,$r:String!,$b:String!){
+      repository(owner:$o,name:$r){
+        ref(qualifiedName:$b){target{... on Commit{statusCheckRollup{state}}}}}}' \
+    -f o="$owner" -f r="$repo" -f b="refs/heads/$base" \
+    --jq '.data.repository.ref.target.statusCheckRollup.state // "NONE"' 2>/dev/null || echo NONE)
+  if [[ "$base_state" == "FAILURE" || "$base_state" == "ERROR" ]]; then
+    echo "  ⛔ BASE $owner/$repo:$base CI rollup=$base_state — HALTING merges to this base this cycle (would compound a broken base)"
+    mkdir -p ~/.claude/logs 2>/dev/null || true
+    touch ~/.claude/logs/healify-overnight-BASE-RED-"$repo"-"$base".flag 2>/dev/null || true
+    return
+  fi
   # GraphQL: list open PRs with author + branch info. Allowlist applied below.
   # Only auto-merge:
   #   (a) PRs whose head ref starts with `sync(dev` or `sync/dev` (dev→main sync PRs WE opened), OR
