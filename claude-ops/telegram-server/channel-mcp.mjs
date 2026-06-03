@@ -66,8 +66,57 @@ function loadPreferences() {
 
 const prefs = loadPreferences();
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || prefs.bot_token || '';
-const OWNER_ID_STR = process.env.TELEGRAM_OWNER_ID || String(prefs.owner_id ?? '');
+function loadSecretsEnv() {
+  try {
+    const raw = readFileSync(join(homedir(), '.mcp-secrets.env'), 'utf8');
+    const out = {};
+    for (const line of raw.split('\n')) {
+      const m = line.match(/^\s*(?:export\s+)?(TELEGRAM_BOT_TOKEN|TELEGRAM_OWNER_ID)\s*=\s*(.+?)\s*$/);
+      if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, '');
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+const secretsEnv = loadSecretsEnv();
+
+function thisSessionIsLeader() {
+  // FAIL OPEN by default: the leader-gate is an opt-in fleet feature. A plain
+  // claude-ops install (no fleet supervisor) or a non-Linux host (no /proc) must
+  // poll normally — the gate only LOCKS OUT a session when it can positively prove
+  // a *different* live session leads. Anything it can't prove → poll.
+  let marker;
+  try {
+    marker = readFileSync(join(homedir(), '.claude', 'state', 'fleet-supervisor.leader'), 'utf8');
+  } catch {
+    return true; // no fleet marker → not a managed fleet → poll normally
+  }
+  const m = marker.match(/pid:(\d+)/);
+  if (!m) return true; // marker without a pid → can't enforce → poll
+  const leaderPid = m[1];
+  let pid = String(process.pid);
+  for (let i = 0; i < 64; i++) {
+    if (pid === leaderPid) return true; // this process is in the leader's tree
+    let stat;
+    try {
+      stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    } catch {
+      return true; // /proc unreadable (non-Linux / process gone) → can't prove → poll
+    }
+    const after = stat
+      .slice(stat.lastIndexOf(')') + 2)
+      .trim()
+      .split(/\s+/);
+    pid = after[1];
+    if (!pid || pid === '0' || pid === '1') return false; // reached init: NOT the leader's tree
+  }
+  return false; // ran out of hops without matching → treat as non-leader
+}
+
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || prefs.bot_token || secretsEnv.TELEGRAM_BOT_TOKEN || '';
+const OWNER_ID_STR =
+  process.env.TELEGRAM_OWNER_ID || (prefs.owner_id ? String(prefs.owner_id) : '') || secretsEnv.TELEGRAM_OWNER_ID || '';
 const OWNER_ID = OWNER_ID_STR ? parseInt(OWNER_ID_STR, 10) : 0;
 const POLL_TIMEOUT = parseInt(process.env.TELEGRAM_POLL_TIMEOUT || '25', 10);
 
@@ -175,6 +224,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
   if (!BOT_TOKEN) {
     return { content: [{ type: 'text', text: 'TELEGRAM_BOT_TOKEN not configured' }], isError: true };
+  }
+  if (!thisSessionIsLeader()) {
+    return {
+      content: [
+        { type: 'text', text: 'not the fleet-orchestrator leader — refusing to send (Telegram is leader-exclusive)' },
+      ],
+      isError: true,
+    };
   }
   try {
     const result = await sendMessage(chatId, text);
@@ -337,8 +394,15 @@ async function poll() {
     setTimeout(poll, 30_000).unref();
     return;
   }
+  if (!thisSessionIsLeader()) {
+    setTimeout(poll, 15_000).unref();
+    return;
+  }
 
   try {
+    try {
+      writeFileSync(join(STATE_DIR, 'channel.alive'), String(Date.now()));
+    } catch {}
     // offset = lastUpdateId + 1 tells Telegram to skip everything ≤ lastUpdateId.
     // This is the key correctness property: offset NEVER freezes at 0 after
     // the first batch, because we update lastUpdateId = MAX(update_id) seen
