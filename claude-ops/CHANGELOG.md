@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.11] - 2026-06-03
+
+### Changed
+Stop ops-daemon falsely churning whatsapp-bridge. check_health/write_daemon_health now honor the configured `health_check` probe (e.g. `lsof -i :8080`) as authoritative liveness instead of tracking the ephemeral launcher-wrapper PID that exits as soon as the systemd-owned bridge is up — eliminating perpetual 'HEALTH: whatsapp-bridge is dead → RESTART' log spam, inflated restart counters and false max_restarts crash alerts for a healthy bridge. The probe-command lookup caches only on a clean parse so a transient config-read failure can't permanently disable it. Services without a `health_check` keep the legacy PID-liveness behavior.
+
+
 ## [2.20.9] - 2026-06-03
 
 ### Changed
