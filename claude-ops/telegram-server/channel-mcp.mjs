@@ -91,8 +91,15 @@ function thisSessionIsLeader() {
     for (let i = 0; i < 8; i++) {
       if (pid === leaderPid) return true;
       let stat;
-      try { stat = readFileSync(`/proc/${pid}/stat`, 'utf8'); } catch { return false; }
-      const after = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+      try {
+        stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      } catch {
+        return false;
+      }
+      const after = stat
+        .slice(stat.lastIndexOf(')') + 2)
+        .trim()
+        .split(/\s+/);
       pid = after[1];
       if (!pid || pid === '0' || pid === '1') return false;
     }
@@ -215,7 +222,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
   if (!thisSessionIsLeader()) {
     return {
-      content: [{ type: 'text', text: 'not the fleet-orchestrator leader — refusing to send (Telegram is leader-exclusive)' }],
+      content: [
+        { type: 'text', text: 'not the fleet-orchestrator leader — refusing to send (Telegram is leader-exclusive)' },
+      ],
       isError: true,
     };
   }
@@ -386,7 +395,9 @@ async function poll() {
   }
 
   try {
-    try { writeFileSync(join(STATE_DIR, 'channel.alive'), String(Date.now())); } catch {}
+    try {
+      writeFileSync(join(STATE_DIR, 'channel.alive'), String(Date.now()));
+    } catch {}
     // offset = lastUpdateId + 1 tells Telegram to skip everything ≤ lastUpdateId.
     // This is the key correctness property: offset NEVER freezes at 0 after
     // the first batch, because we update lastUpdateId = MAX(update_id) seen
