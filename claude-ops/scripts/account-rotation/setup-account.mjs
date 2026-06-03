@@ -1,53 +1,59 @@
 #!/usr/bin/env node
-// setup-account.mjs — Standalone OAuth init for a single Claude account.
+// setup-account.mjs — OAuth init for a single Claude account in the rotator.
 //
-// Walks a magic-link login flow against claude.ai using Playwright, extracts
-// the session token from cookies, verifies the token against api.anthropic.com,
-// and writes it to the OS keychain via lib/credential-store.sh as
-// `Claude-Rotation-<account_id>`. Does NOT touch the active rotation state.
+// Thin wrapper around the proven rotate.mjs setup flow. It:
+//   1. Upserts the account into the user config (gitignored override).
+//   2. Delegates the OAuth capture to `rotate.mjs --setup --only=<email>
+//      --auto --skip-valid`, which drives the browser-driver cascade
+//      (CDP-attach to a real Chrome → spawn Chrome with a real profile →
+//      bundled Chromium), polls Gmail for the magic link via `gog`, verifies
+//      the token, and writes it to the keychain under the SAME schema the
+//      daemon/rotator consume: service `Claude-Rotation-<key>`, account
+//      `$USER` (or $CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT), value
+//      `{ "claudeAiOauth": { "accessToken": ... } }`.
+//
+// Why delegate instead of re-implementing the browser flow here: a freshly
+// launched Playwright Chromium is blocked by claude.ai's Cloudflare Turnstile
+// (the magic link is never sent), and a hand-rolled web-cookie capture writes a
+// credential shape (sessionKey cookie) that NO consumer in this repo reads.
+// rotate.mjs already solves both correctly — this wrapper just feeds it one
+// account and reports a machine-readable result.
 //
 // Usage:
 //   node setup-account.mjs --email user@example.com [--display "Personal"] \
 //                          [--plan max] [--account-id <slug>] [--no-headless]
 //
-// Note: when the parallel account-rotation source lands, this file should be
-// folded into rotate.mjs as a `--setup-account <email>` mode, calling shared
-// keychain/verification helpers from there. Until then this file is callable
-// standalone.
+// --gmail-poll / --no-headless are accepted for backward compatibility but are
+// no-ops: rotate.mjs --auto always polls Gmail and manages its own browser.
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(__dirname, '..', '..');
-const CRED_STORE = resolve(REPO_ROOT, 'lib', 'credential-store.sh');
-const CONFIG_USER = join(
-  homedir(),
-  '.claude',
-  'plugins',
-  'data',
-  'ops-ops-marketplace',
-  'account-rotation-config.json',
-);
+const ROTATE_SCRIPT = resolve(__dirname, 'rotate.mjs');
+const ROTATION_DATA_DIR =
+  process.env.CLAUDE_PLUGIN_DATA_DIR || join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
+const CONFIG_USER = join(ROTATION_DATA_DIR, 'account-rotation-config.json');
 const CONFIG_REPO = resolve(__dirname, 'config.json');
 const LOG_DIR = join(homedir(), '.claude', 'logs', 'account-rotation');
 
 function parseArgs(argv) {
-  const out = { headless: true, plan: 'max' };
+  const out = { plan: 'max' };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--email') out.email = argv[++i];
     else if (a === '--display') out.display = argv[++i];
     else if (a === '--plan') out.plan = argv[++i];
     else if (a === '--account-id') out.accountId = argv[++i];
-    else if (a === '--no-headless') out.headless = false;
-    else if (a === '--gmail-poll') out.gmailPoll = true;
-    else if (a === '--help' || a === '-h') {
+    else if (a === '--label') out.label = argv[++i];
+    else if (a === '--no-headless' || a === '--gmail-poll') {
+      /* accepted for backward compat — no-op (rotate.mjs --auto handles both) */
+    } else if (a === '--help' || a === '-h') {
       console.log(
-        'usage: setup-account.mjs --email <addr> [--display <name>] [--plan pro|max] [--account-id <slug>] [--no-headless] [--gmail-poll]',
+        'usage: setup-account.mjs --email <addr> [--display <name>] [--plan pro|max] [--account-id <slug>] [--label <key>]',
       );
       process.exit(0);
     }
@@ -88,221 +94,53 @@ function loadConfig() {
 }
 
 function saveConfig(cfg) {
-  const path = CONFIG_USER;
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(cfg, null, 2));
+  mkdirSync(dirname(CONFIG_USER), { recursive: true });
+  writeFileSync(CONFIG_USER, JSON.stringify(cfg, null, 2));
 }
 
+// Write the account into the user-override config (never the committed repo
+// default — Rule 0). rotate.mjs reads this same file via its USER_CONFIG_PATH
+// preference, so the --only=<email> filter below will find it.
 function upsertAccount(args) {
   const cfg = loadConfig();
   cfg.accounts = cfg.accounts || [];
-  const existing = cfg.accounts.find((a) => a.id === args.accountId);
+  const existing = cfg.accounts.find((a) => a.id === args.accountId || a.email === args.email);
   if (existing) {
     existing.email = args.email;
     existing.display = args.display;
     existing.plan = args.plan;
+    if (args.label) existing.label = args.label;
   } else {
-    cfg.accounts.push({
+    const acct = {
       id: args.accountId,
       email: args.email,
       display: args.display,
       plan: args.plan,
       added: new Date().toISOString(),
-    });
+    };
+    if (args.label) acct.label = args.label;
+    cfg.accounts.push(acct);
   }
   saveConfig(cfg);
-  log(`config upserted: ${args.accountId} -> ${CONFIG_USER}`);
+  log(`config upserted: ${args.accountId} (${args.email}) -> ${CONFIG_USER}`);
 }
 
-function credSet(service, account, secret) {
-  const r = spawnSync('bash', [CRED_STORE, 'set-stdin', service, account], {
-    input: secret,
-    encoding: 'utf8',
+// Delegate the actual OAuth capture to rotate.mjs's proven setup flow.
+// --skip-valid: no-op if a valid token already exists for this account.
+// --auto: fully automated (browser cascade + Gmail magic-link polling).
+function runRotateSetup(email) {
+  return new Promise((resolveExit) => {
+    log(`delegating OAuth to rotate.mjs --setup --only=${email} --auto --skip-valid`);
+    const child = spawn(process.execPath, [ROTATE_SCRIPT, '--setup', `--only=${email}`, '--auto', '--skip-valid'], {
+      // Child progress must not land on stdout — callers parse a single JSON line there.
+      stdio: ['ignore', process.stderr, 'inherit'],
+    });
+    child.on('exit', (code) => resolveExit(code ?? 1));
+    child.on('error', (e) => {
+      log(`failed to spawn rotate.mjs: ${e.message}`);
+      resolveExit(1);
+    });
   });
-  if (r.status !== 0) {
-    log(`credential-store set failed: ${r.stderr}`);
-    return false;
-  }
-  return true;
-}
-
-function credGet(service, account) {
-  const r = spawnSync('bash', [CRED_STORE, 'get', service, account], {
-    encoding: 'utf8',
-  });
-  if (r.status !== 0) return null;
-  return r.stdout.trim() || null;
-}
-
-async function ensurePlaywright() {
-  try {
-    await import('playwright');
-    return true;
-  } catch {
-    log('installing playwright (one-time)...');
-    const r = spawnSync('npm', ['install', '--no-save', 'playwright@^1.52.0'], {
-      cwd: REPO_ROOT,
-      stdio: 'inherit',
-    });
-    if (r.status !== 0) {
-      log('playwright install failed');
-      return false;
-    }
-    spawnSync('npx', ['playwright', 'install', 'chromium'], {
-      cwd: REPO_ROOT,
-      stdio: 'inherit',
-    });
-    return true;
-  }
-}
-
-async function pollGmailForMagicLink(toEmail, sinceTs) {
-  // Best-effort: use `gog` if available. Returns the link URL or null.
-  const probe = spawnSync('which', ['gog'], { encoding: 'utf8' });
-  if (probe.status !== 0) {
-    log('gog CLI not installed — falling back to manual confirmation');
-    return null;
-  }
-  const deadline = Date.now() + 5 * 60 * 1000; // 5 min
-  while (Date.now() < deadline) {
-    const r = spawnSync(
-      'gog',
-      [
-        'gmail',
-        'search',
-        `to:${toEmail} from:noreply@anthropic.com after:${Math.floor(sinceTs / 1000)} subject:"sign in"`,
-        '--max',
-        '3',
-        '-j',
-        '--results-only',
-        '--no-input',
-      ],
-      { encoding: 'utf8', timeout: 15000 },
-    );
-    if (r.status === 0 && r.stdout.trim()) {
-      try {
-        const threads = JSON.parse(r.stdout);
-        const first = Array.isArray(threads) ? threads[0] : null;
-        if (first?.id) {
-          const t = spawnSync('gog', ['gmail', 'thread', 'get', first.id, '-j'], { encoding: 'utf8', timeout: 15000 });
-          if (t.status === 0) {
-            const m = t.stdout.match(/https:\/\/claude\.ai\/(?:magic-link|verify|login)[^\s"'<>]+/);
-            if (m) return m[0];
-          }
-        }
-      } catch {}
-    }
-    await new Promise((r) => setTimeout(r, 5000));
-  }
-  return null;
-}
-
-async function runOAuth(args) {
-  const ok = await ensurePlaywright();
-  if (!ok) return null;
-  const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: args.headless });
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
-
-  log('navigating to claude.ai/login');
-  await page.goto('https://claude.ai/login', { waitUntil: 'domcontentloaded' });
-
-  log(`filling email: ${args.email}`);
-  // Selector is best-effort — Anthropic's login form may change.
-  let emailSubmitted = true;
-  try {
-    await page.fill('input[type="email"], input[name="email"]', args.email, {
-      timeout: 15000,
-    });
-    await page.click('button[type="submit"], button:has-text("Continue")', {
-      timeout: 5000,
-    });
-  } catch (e) {
-    log(`email entry failed: ${e.message}`);
-    emailSubmitted = false;
-  }
-
-  if (!emailSubmitted && args.headless) {
-    log('aborting: email step failed in headless mode (no manual recovery)');
-    await browser.close();
-    return null;
-  }
-
-  const sinceTs = Date.now();
-  log('magic-link sent — waiting for completion...');
-  if (args.gmailPoll) {
-    const link = await pollGmailForMagicLink(args.email, sinceTs);
-    if (link) {
-      log(`got magic link from gmail — navigating`);
-      await page.goto(link, { waitUntil: 'domcontentloaded' });
-    } else {
-      log('gmail poll timed out — waiting for manual click');
-    }
-  }
-
-  // Poll for 2FA indicators while waiting for the post-login app shell.
-  // This emits a log line the SKILL.md contract expects so the operator
-  // can relay a TOTP code via AskUserQuestion.
-  let twoFaLogged = false;
-  const twoFaPoll = setInterval(async () => {
-    if (twoFaLogged) return;
-    try {
-      const has2FA = await page.evaluate(() => {
-        const text = (document.body?.innerText || '').toLowerCase();
-        return (
-          text.includes('two-factor') ||
-          text.includes('2fa') ||
-          text.includes('verification code') ||
-          text.includes('authenticator') ||
-          text.includes('one-time') ||
-          !!document.querySelector('input[autocomplete="one-time-code"]')
-        );
-      });
-      if (has2FA) {
-        twoFaLogged = true;
-        log('2FA prompt detected');
-      }
-    } catch {
-      /* page may have navigated — ignore */
-    }
-  }, 3000);
-  // Wait for the post-login app shell. 10 min ceiling for 2FA / manual click.
-  try {
-    await page.waitForURL(/claude\.ai\/(?:chats?|new|projects)/, {
-      timeout: 10 * 60 * 1000,
-    });
-  } catch (e) {
-    clearInterval(twoFaPoll);
-    log(`login did not complete in time: ${e.message}`);
-    await browser.close();
-    return null;
-  }
-  clearInterval(twoFaPoll);
-
-  const cookies = await ctx.cookies('https://claude.ai');
-  const session = cookies.find((c) => c.name === 'sessionKey' || c.name === '__Secure-next-auth.session-token');
-  await browser.close();
-  if (!session) {
-    log('no session cookie found after login');
-    return null;
-  }
-  return { name: session.name, value: session.value };
-}
-
-async function verifyToken(session) {
-  // Minimal probe — the rotation system uses this token to mint API requests
-  // via the Claude Code OAuth bridge. We just check that claude.ai accepts it.
-  const { name, value } = session;
-  try {
-    const res = await fetch('https://claude.ai/api/organizations', {
-      headers: { Cookie: `${name}=${value}` },
-    });
-    return res.ok;
-  } catch (e) {
-    log(`verify error: ${e.message}`);
-    return false;
-  }
 }
 
 async function main() {
@@ -310,38 +148,16 @@ async function main() {
   ensureLogDir();
   log(`starting setup for ${args.email} (id=${args.accountId}, plan=${args.plan})`);
 
-  const existingToken = credGet('Claude-Rotation', args.accountId);
-  if (existingToken) {
-    log(`keychain entry already present for ${args.accountId} — skipping OAuth`);
-    upsertAccount(args);
-    console.log(JSON.stringify({ ok: true, accountId: args.accountId, skipped: true }));
-    return;
-  }
-
-  const session = await runOAuth(args);
-  if (!session) {
-    console.log(JSON.stringify({ ok: false, accountId: args.accountId, error: 'oauth_failed' }));
-    process.exit(1);
-  }
-
-  const verified = await verifyToken(session);
-  if (!verified) {
-    console.log(JSON.stringify({ ok: false, accountId: args.accountId, error: 'verify_failed' }));
-    process.exit(1);
-  }
-
-  const stored = credSet(
-    'Claude-Rotation',
-    args.accountId,
-    JSON.stringify({ cookieName: session.name, token: session.value }),
-  );
-  if (!stored) {
-    console.log(JSON.stringify({ ok: false, accountId: args.accountId, error: 'keychain_write_failed' }));
-    process.exit(1);
-  }
-
+  // Persist the account first so rotate.mjs's config read picks it up.
   upsertAccount(args);
-  log(`✓ ${args.accountId} initialized`);
+
+  const code = await runRotateSetup(args.email);
+  if (code !== 0) {
+    console.log(JSON.stringify({ ok: false, accountId: args.accountId, email: args.email, error: 'oauth_failed' }));
+    process.exit(1);
+  }
+
+  log(`✓ ${args.accountId} initialized (token written to Claude-Rotation-<key> by rotate.mjs)`);
   console.log(JSON.stringify({ ok: true, accountId: args.accountId, email: args.email }));
 }
 
