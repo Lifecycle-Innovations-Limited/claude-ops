@@ -108,14 +108,19 @@ except Exception:
   fi
 
   if command -v security &>/dev/null; then
-    local blob token
+    local blob token _kc_acct
     # Scope to the current user's account first: the keychain can hold multiple
     # "Claude Code-credentials" items (e.g. an mcpOAuth-only blob under another
     # account), and an unscoped lookup returns whichever matches first — which
     # may lack claudeAiOauth even when a valid token exists under $USER.
-    blob=$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null || true)
-    [[ -z "${blob}" ]] && blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)
-    if [[ -n "${blob}" ]]; then
+    token=""
+    for _kc_acct in "$USER" ""; do
+      if [[ -n "${_kc_acct}" ]]; then
+        blob=$(security find-generic-password -s "Claude Code-credentials" -a "${_kc_acct}" -w 2>/dev/null || true)
+      else
+        blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)
+      fi
+      [[ -z "${blob}" ]] && continue
       token=$(printf '%s' "${blob}" | python3 -c "
 import json, sys, time
 try:
@@ -129,13 +134,14 @@ try:
 except Exception:
     pass
 " 2>/dev/null || true)
-      if [[ -n "${token}" ]]; then
-        OPS_AUTH_HEADER="Authorization: Bearer ${token}"
-        OPS_AUTH_MODE="oauth"
-        OPS_AUTH_EXTRA_HEADERS=(-H "anthropic-beta: oauth-2025-04-20")
-        log "Auth: Claude Code OAuth (subscription — no per-token billing)"
-        return 0
-      fi
+      [[ -n "${token}" ]] && break
+    done
+    if [[ -n "${token}" ]]; then
+      OPS_AUTH_HEADER="Authorization: Bearer ${token}"
+      OPS_AUTH_MODE="oauth"
+      OPS_AUTH_EXTRA_HEADERS=(-H "anthropic-beta: oauth-2025-04-20")
+      log "Auth: Claude Code OAuth (subscription — no per-token billing)"
+      return 0
     fi
   fi
 
