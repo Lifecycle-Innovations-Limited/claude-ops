@@ -8,8 +8,8 @@ sending to the wrong account or burning the outbound-comms approval token**.
 ### The bug it prevents
 
 Replying with `gog gmail send --reply-to-message-id <ID>` **404s** when the
-message-ID was scanned from one Gmail account (e.g. `user@example.com`) but
-the send defaults to a **different** account (e.g. `user@example.com`) — the same
+message-ID was scanned from one Gmail account (e.g. account A) but
+the send defaults to a **different** account (e.g. account B) — the same
 thread has different message/thread IDs per account.
 
 Worse: **every** `gog gmail send` attempt — even one that errors on a 404 or a bad
@@ -43,7 +43,7 @@ gog-reply.sh --to <email> --body <text> \
 | `--subject <subj>` | Subject. If omitted, derived as `Re: <original subject>`. |
 | `--match-from <email>` | From-address used to find the thread. Defaults to `--to`. |
 | `--match-subject <text>` | Substring to disambiguate the thread. Optional. |
-| `--account <acct>` | Pin a gog account. If omitted, **auto-discovers** (enumerates oauth gmail accounts via `gog auth list`, always also probing `user@example.com` and `user@example.com`). |
+| `--account <acct>` | Pin a gog account. If omitted, **auto-discovers** (enumerates oauth gmail accounts via `gog auth list`, always also probing any accounts in `$GOG_EXTRA_ACCOUNTS`). |
 | `--dry-run` | Resolve and print the account / threadId / message-id / to / subject / body, then exit 0 without sending. |
 
 ### Exit codes
@@ -75,6 +75,6 @@ gog-reply.sh --to user@example.com --body "On it, thanks." --dry-run
 # Pin an account + disambiguate by subject, then actually reply.
 gog-reply.sh --to client@example.com \
   --match-subject "invoice" \
-  --account user@example.com \
+  --account <your-account> \
   --body "Attached, let me know if anything's off."
 ```
