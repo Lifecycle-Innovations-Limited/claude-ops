@@ -132,7 +132,8 @@ function runRotateSetup(email) {
   return new Promise((resolveExit) => {
     log(`delegating OAuth to rotate.mjs --setup --only=${email} --auto --skip-valid`);
     const child = spawn(process.execPath, [ROTATE_SCRIPT, '--setup', `--only=${email}`, '--auto', '--skip-valid'], {
-      stdio: ['ignore', 'inherit', 'inherit'],
+      // Child progress must not land on stdout — callers parse a single JSON line there.
+      stdio: ['ignore', process.stderr, 'inherit'],
     });
     child.on('exit', (code) => resolveExit(code ?? 1));
     child.on('error', (e) => {
