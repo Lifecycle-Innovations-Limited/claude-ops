@@ -134,12 +134,17 @@ if [ -n "$PACKAGE_REL" ] && [ -f "$WT/$PACKAGE_REL" ]; then
   jq empty "$WT/$PACKAGE_REL" || { echo "ops-release: produced invalid $PACKAGE_REL" >&2; exit 1; }
 fi
 
-# 4. prepend CHANGELOG section before the first existing "## [" entry
-awk -v sec="$changelog_section" '
-  !done && /^## [0-9[]/ { print sec; print ""; done=1 }
+# 4. prepend CHANGELOG section before the first existing "## [" entry.
+# The section is multi-line; pass it via a temp file (awk -v mangles embedded
+# newlines → "awk: newline in string"), reading it with getline at the insert.
+sec_file="$(mktemp)"; printf '%s\n' "$changelog_section" >"$sec_file"
+awk -v secfile="$sec_file" '
+  function emit_sec(  line) { while ((getline line < secfile) > 0) print line; print "" }
+  !done && /^## [0-9[]/ { emit_sec(); done=1 }
   { print }
-  END { if (!done) { print ""; print sec } }
+  END { if (!done) { print ""; emit_sec() } }
 ' "$wCL" >"$wCL.tmp" && mv "$wCL.tmp" "$wCL"
+rm -f "$sec_file"
 
 echo "ops-release: bumped plugin.json + marketplace.json$([ -n "$PACKAGE_REL" ] && echo " + $PACKAGE_REL") + CHANGELOG.md"
 
