@@ -131,11 +131,9 @@ function upsertAccount(args) {
 function runRotateSetup(email) {
   return new Promise((resolveExit) => {
     log(`delegating OAuth to rotate.mjs --setup --only=${email} --auto --skip-valid`);
-    const child = spawn(
-      process.execPath,
-      [ROTATE_SCRIPT, '--setup', `--only=${email}`, '--auto', '--skip-valid'],
-      { stdio: ['ignore', 'inherit', 'inherit'] },
-    );
+    const child = spawn(process.execPath, [ROTATE_SCRIPT, '--setup', `--only=${email}`, '--auto', '--skip-valid'], {
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
     child.on('exit', (code) => resolveExit(code ?? 1));
     child.on('error', (e) => {
       log(`failed to spawn rotate.mjs: ${e.message}`);
@@ -154,9 +152,7 @@ async function main() {
 
   const code = await runRotateSetup(args.email);
   if (code !== 0) {
-    console.log(
-      JSON.stringify({ ok: false, accountId: args.accountId, email: args.email, error: 'oauth_failed' }),
-    );
+    console.log(JSON.stringify({ ok: false, accountId: args.accountId, email: args.email, error: 'oauth_failed' }));
     process.exit(1);
   }
 
