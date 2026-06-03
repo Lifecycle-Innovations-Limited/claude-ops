@@ -1,6 +1,6 @@
 ---
 name: ops-rotate-setup
-description: Interactive OAuth init wizard for the multi-account Claude rotator. Walks through every account in the rotation config, runs the Playwright magic-link flow for any account missing a keychain token, and writes verified tokens to `Claude-Rotation-<account_id>`. Re-runnable any time. Standalone alias of the same step inside `/ops:setup`.
+description: Interactive OAuth init wizard for the multi-account Claude rotator. Walks through every account in the rotation config and, for any account missing a valid keychain token, delegates to the proven `rotate.mjs` magic-link flow (browser-driver cascade + Gmail polling), which writes the verified OAuth token to `Claude-Rotation-<key>` (key = account label or email, keychain account `$USER`). Re-runnable any time. Standalone alias of the same step inside `/ops:setup`.
 argument-hint: "[--all|--account <email>|--add]"
 allowed-tools:
   - Bash
@@ -14,9 +14,20 @@ maxTurns: 25
 
 Initialize OAuth tokens for the multi-account Claude rotator system (the
 `account-rotation` daemon). For each configured account that does not already
-have a keychain entry `Claude-Rotation-<account_id>`, run the Playwright magic-
-link login flow against `claude.ai`, capture the session cookie, verify it,
-and write it to the OS keychain via `lib/credential-store.sh`.
+have a valid keychain token, delegate to `rotate.mjs --setup --only=<email>
+--auto --skip-valid`, which drives the browser-driver cascade (CDP-attach to a
+real Chrome → spawn Chrome with a real profile → bundled Chromium), polls Gmail
+for the magic link via `gog`, verifies the token, and writes it to the OS
+keychain under the schema the daemon/rotator consume: service
+`Claude-Rotation-<key>` (key = account `label` or `email`), keychain account
+`$USER` (override with `$CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT`), value
+`{ "claudeAiOauth": { "accessToken": ... } }`.
+
+> Why delegate: a freshly launched Playwright Chromium is blocked by
+> claude.ai's Cloudflare Turnstile (the magic link is never sent), and a
+> hand-rolled web-cookie capture writes a credential shape no consumer reads.
+> `rotate.mjs` solves both correctly, so `setup-account.mjs` is a thin wrapper
+> around it.
 
 Use this skill when:
 - You ran `/ops:setup` and skipped the account-rotation step
@@ -30,8 +41,9 @@ Use this skill when:
   display name come from runtime user input only.
 - **Rule 1**: Max 4 options per `AskUserQuestion`. Paginate at 4 with
   `[More...]` bridges when listing accounts.
-- **Rule 4**: Background by default. The Playwright OAuth flow is long-running;
-  always launch it with `run_in_background: true` and tail the log.
+- **Rule 4**: Background by default. The OAuth flow (rotate.mjs browser cascade
+  + Gmail polling) is long-running; always launch it with
+  `run_in_background: true` and tail the log.
 - Never auto-enable `account_rotation_enabled` after init. The user flips that
   switch from `/plugins` settings.
 
@@ -60,7 +72,7 @@ No Claude accounts are configured for the rotator yet. Add some now?
 ```
 
 - `[Help]`: print one-paragraph explainer (rotator purpose, where keychain entries live, how `/plugins` toggles `account_rotation_enabled`) and exit.
-- `[Use existing keychain]`: print "Looking for `Claude-Rotation-*` entries..." and run `bash $CRED_STORE backends 2>/dev/null && for id in $(jq -r '.accounts[].id' "$CFG" 2>/dev/null); do bash $CRED_STORE get "Claude-Rotation" "$id" >/dev/null 2>&1 && echo "✓ $id" || echo "✗ $id"; done || echo "(no backends available — re-run with [Add now])"`. Exit.
+- `[Use existing keychain]`: print "Looking for `Claude-Rotation-*` entries..." and run `CRED="${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh"; ACCT="${CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT:-$USER}"; bash "$CRED" backends 2>/dev/null && jq -r '.accounts[] | (.label // .email)' "$CFG" 2>/dev/null | while read -r key; do bash "$CRED" get "Claude-Rotation-$key" "$ACCT" >/dev/null 2>&1 && echo "✓ $key" || echo "✗ $key"; done || echo "(no backends available — re-run with [Add now])"`. Exit.
 - `[Skip]`: exit.
 - `[Add now]`: enter the **add loop** below.
 
@@ -97,20 +109,24 @@ jq --argjson new "$NEW_ACCOUNTS_JSON" \
 
 ## Step 3 — Token check
 
-For each account in the merged config, check the keychain:
+For each account in the merged config, check the keychain under the consumed
+schema (service `Claude-Rotation-<key>`, account `$USER`):
 
 ```bash
 CRED="${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh"
-for id in $(jq -r '.accounts[].id' "$USER_CFG"); do
-  if bash "$CRED" get "Claude-Rotation" "$id" >/dev/null 2>&1; then
-    echo "✓ $id"
+ACCT="${CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT:-$USER}"
+jq -r '.accounts[] | (.label // .email)' "$USER_CFG" | while read -r key; do
+  if bash "$CRED" get "Claude-Rotation-$key" "$ACCT" >/dev/null 2>&1; then
+    echo "✓ $key"
   else
-    echo "✗ $id (needs OAuth)"
+    echo "✗ $key (needs OAuth)"
   fi
 done
 ```
 
 If every account is `✓`, print a success line and jump to **Step 5 — Summary**.
+(`rotate.mjs --setup ... --skip-valid` also re-checks token validity itself, so
+a stale-but-present entry is re-captured during Step 4.)
 
 ## Step 4 — OAuth init loop
 
@@ -132,18 +148,23 @@ echo "PID=$! LOG=$LOG"
 
 - Launch with `run_in_background: true`.
 - Use `Monitor` (or `Read` of the log file) to surface progress lines.
-- The script:
-  1. Opens Playwright Chromium
-  2. Navigates to `claude.ai/login`, fills email, submits magic-link
-  3. Polls Gmail via `gog` (best-effort) OR waits up to 10 minutes for the user to click the link manually
-  4. Captures `sessionKey` or `__Secure-next-auth.session-token` cookie
-  5. Verifies via `GET claude.ai/api/organizations`
-  6. Writes to keychain as `Claude-Rotation-<account_id>` via `credential-store.sh`
-- **2FA / TOTP**: the script polls the page for two-factor prompts every 3 seconds.
-  If it detects one it logs `2FA prompt detected` to stderr. When you see that
-  line in the log, ask the user via `AskUserQuestion` to provide the TOTP code.
-  In **headless** mode the code cannot be typed into the browser — re-run the
-  account with `--no-headless` so the user can complete 2FA interactively.
+- `setup-account.mjs` upserts the account into `$USER_CFG`, then delegates to
+  `rotate.mjs --setup --only=<email> --auto --skip-valid`, which:
+  1. Skips immediately if a valid token already exists (`--skip-valid`).
+  2. Runs the browser-driver cascade: attach to a real Chrome on CDP `:9222`
+     (passes Cloudflare Turnstile) → else spawn Chrome with a real profile →
+     else bundled Chromium.
+  3. Submits the email and polls Gmail via `gog` for the magic link, then
+     completes login (handling the org chooser).
+  4. Verifies the token against `api.anthropic.com/api/oauth/usage`.
+  5. Writes it to the keychain as `Claude-Rotation-<key>` (account `$USER`),
+     value `{ "claudeAiOauth": { "accessToken": ... } }`.
+- It emits a single-line JSON result: `{"ok":true,"accountId":...,"email":...}`
+  on success, or `{"ok":false,...,"error":"oauth_failed"}` on failure.
+- **2FA / Google SSO**: some accounts (Google Workspace domains) require an
+  interactive Google verification that automation cannot complete unattended.
+  If `rotate.mjs` logs a 2FA / verification prompt or times out, surface the log
+  to the user and let them complete the login in the cascade's visible Chrome.
   Do NOT attempt to auto-solve 2FA.
 
 After each account completes (success or failure):
@@ -169,7 +190,7 @@ If success and no more accounts remain, jump to **Step 5**.
    ✗ <id> (failed — re-run /ops:rotate-setup --account <email>)
 
  Config: ~/.claude/plugins/data/ops-ops-marketplace/account-rotation-config.json
- Keychain: Claude-Rotation-<id>
+ Keychain: Claude-Rotation-<key> (account: $USER)  ·  key = label or email
 
  To enable automatic rotation, open /plugins → claude-ops → settings and
  toggle "Multi-account Claude rotator" (account_rotation_enabled).
@@ -189,9 +210,8 @@ to the user, made explicitly through the plugin settings UI.
 
 | Symptom | Cause | Action |
 |---|---|---|
-| `playwright install failed` | npm offline / sandbox | Run `npx playwright install chromium` via Bash tool, then retry |
-| `oauth_failed` | login form selector changed | Open log, surface the page URL at failure, suggest `--no-headless` retry |
-| `verify_failed` | session cookie captured but rejected | Re-run; likely transient |
-| `keychain_write_failed` | no backend available | Run `bash $CRED backends` and surface options |
-| `no session cookie` | login flow blocked by 2FA | Re-run with `--no-headless` so user can complete in-browser |
-| `2FA prompt detected` + timeout | 2FA required in headless mode | Re-run with `--no-headless`; prompt user for TOTP via `AskUserQuestion` |
+| `oauth_failed` (rotate.mjs exit ≠ 0) | login did not complete — Turnstile, Google SSO/2FA, or timeout | Open `$LOG` + `rotation.log`; if the cascade is waiting on a visible Chrome, let the user finish login there, then re-run |
+| `playwright install failed` | npm offline / sandbox | Run `npx playwright install chromium` in `${CLAUDE_PLUGIN_ROOT}/scripts/account-rotation`, then retry |
+| token still `✗` after success | account `label`/`email` mismatch vs config | Confirm the config `key` (`label // email`) matches the `Claude-Rotation-<key>` service name |
+| no CDP browser available | no Chrome on `:9222` and none installed | rotate.mjs falls back to bundled Chromium, which Turnstile may block — install/launch Chrome so the cascade can attach |
+| Google SSO / 2FA prompt | Workspace-domain account needs interactive Google login | Let the user complete login in the cascade's visible Chrome; do NOT auto-solve 2FA |
