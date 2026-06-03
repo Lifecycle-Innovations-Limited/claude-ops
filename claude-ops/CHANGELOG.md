@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.9] - 2026-06-03
+
+### Changed
+Telegram channel-mcp leader-exclusive poll+reply gate (#481): only the fleet-orchestrator leader session consumes the bot, preventing multi-session getUpdates contention; fails open for non-fleet / non-Linux installs so default single-session behavior is preserved.
+
+
 ## [2.20.8] - 2026-06-02
 
 ### Changed
