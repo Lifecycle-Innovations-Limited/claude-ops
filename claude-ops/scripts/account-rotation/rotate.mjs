@@ -3219,6 +3219,11 @@ async function setup() {
     }
   }
   console.log(`\nSetup done. Run \`node rotate.mjs --audit-billing\` anytime to re-check.\n`);
+
+  if (filter && accounts.length === 0) return false;
+  if (results.some((r) => !r.ok)) return false;
+  if (filter && results.length === 0) return false;
+  return true;
 }
 
 // ── Status ────────────────────────────────────────────────────────────────────
@@ -3339,7 +3344,7 @@ function captureCmd(targetEmail = null) {
 const args = process.argv.slice(2);
 
 if (args.includes('--setup')) {
-  await setup();
+  process.exit((await setup()) ? 0 : 1);
 } else if (args.includes('--utilization')) {
   // Live utilization query for all accounts
   const config = readConfig();

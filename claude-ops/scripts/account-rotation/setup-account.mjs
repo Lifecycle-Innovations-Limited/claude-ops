@@ -34,14 +34,9 @@ import { homedir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROTATE_SCRIPT = resolve(__dirname, 'rotate.mjs');
-const CONFIG_USER = join(
-  homedir(),
-  '.claude',
-  'plugins',
-  'data',
-  'ops-ops-marketplace',
-  'account-rotation-config.json',
-);
+const ROTATION_DATA_DIR =
+  process.env.CLAUDE_PLUGIN_DATA_DIR || join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
+const CONFIG_USER = join(ROTATION_DATA_DIR, 'account-rotation-config.json');
 const CONFIG_REPO = resolve(__dirname, 'config.json');
 const LOG_DIR = join(homedir(), '.claude', 'logs', 'account-rotation');
 
