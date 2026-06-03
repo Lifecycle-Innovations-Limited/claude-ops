@@ -161,7 +161,26 @@ for name, cfg in data.get('services', {}).items():
 _service_health_cmd() {
   local name="$1"
   if [[ -z "${SERVICE_HEALTHCHECK_CMD[$name]+set}" ]]; then
-    SERVICE_HEALTHCHECK_CMD[$name]=$(get_service_field "$name" "health_check")
+    # Probe the config directly (not via get_service_field, whose `|| true`
+    # masks parse failure). Cache ONLY on a clean parse: a transient python3
+    # spawn / JSON-decode failure (e.g. config mid-rewrite) must not get cached
+    # as "no health_check" — that would permanently disable the probe and
+    # silently revert the service to the churny PID-liveness path. A genuine
+    # empty result (service has no health_check) parses cleanly and is cached.
+    local val
+    if val=$(python3 -c "
+import json, sys
+data = json.load(open('$SERVICES_CONFIG'))
+v = data.get('services', {}).get('$name', {}).get('health_check', '')
+sys.stdout.write(v if v is not None else '')
+" 2>/dev/null); then
+      SERVICE_HEALTHCHECK_CMD[$name]="$val"
+    else
+      # Transient failure — return empty for this round WITHOUT caching; retry
+      # on the next loop so the probe self-heals once the config is readable.
+      printf ''
+      return 0
+    fi
   fi
   printf '%s' "${SERVICE_HEALTHCHECK_CMD[$name]}"
 }
