@@ -15,9 +15,10 @@ Resolution order:
        If absent and ``DESKTOP_ACT_REPO`` is set, we ``git clone`` it,
        bootstrap a venv, ``pip install -r requirements.txt``, then exec.
 
-Linux is the only platform with full desktop automation today; macOS and
-Windows currently surface a clear "not supported yet" message so the
-launcher fails loudly instead of hanging the MCP host.
+Linux (X11/Xvnc) and macOS (screencapture + cliclick) both have native
+desktop-automation backends and bootstrap/exec identically. Windows has no
+native backend yet, so on Windows the launcher surfaces a clear message if it
+cannot locate or bootstrap a server, instead of hanging the MCP host.
 """
 
 from __future__ import annotations
@@ -182,7 +183,7 @@ def _bootstrap() -> Path | None:
     if not _have("git") or not (_have("python3") or _have("python")):
         print(
             "[desktop-act-launcher] git + python3 are required to auto-install desktop-act.\n"
-            "  macOS:   brew install git python\n"
+            "  macOS:   brew install git python cliclick  # cliclick drives mouse/keyboard; screencapture is built in\n"
             "  Linux:   sudo apt install -y git python3 python3-venv  # or your distro's equivalent\n"
             "  Windows: install Git + Python 3.11+ from python.org",
             file=sys.stderr,
@@ -285,12 +286,11 @@ def main() -> int:
 
     if runner is None:
         sysname = _system()
-        if sysname != "linux":
+        if sysname == "windows":
             print(
-                f"[desktop-act-launcher] desktop-act has full desktop-automation support on Linux today; "
-                f"{sysname} support is partial. The MCP server may still expose Kapture / chrome-devtools / "
-                f"Playwright tools but native X11 calls will no-op. Set DESKTOP_ACT_COMMAND to a custom "
-                f"build to override.",
+                "[desktop-act-launcher] desktop-act has native desktop-automation backends on "
+                "Linux (X11/Xvnc) and macOS (screencapture + cliclick); Windows has no native "
+                "backend yet. Set DESKTOP_ACT_COMMAND to a custom build to override.",
                 file=sys.stderr,
             )
         print(
