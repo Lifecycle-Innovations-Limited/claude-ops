@@ -245,7 +245,7 @@ if [ -f "$PLUGIN_JSON" ] && command -v jq >/dev/null 2>&1; then
       done
 
       if [ "$ALL_COVERED_BY_GLOBAL" = true ]; then
-        INFO+=("unconfigured_sensitive_keys: Sensitive user config values not set in plugin: $(IFS=,; echo "${MCP_REFERENCED_SENSITIVE[*]}"), but a separate working MCP server provides equivalent functionality.")
+        : # Covered by a working global MCP server — intentionally unconfigured, non-actionable. Suppress.
       else
         WARNINGS+=("unconfigured_sensitive_keys: Sensitive user config values not set: $(IFS=,; echo "${MCP_REFERENCED_SENSITIVE[*]}"). MCP servers depending on these will fail. Run /ops:setup to configure.")
       fi
@@ -297,7 +297,7 @@ if command -v jq >/dev/null 2>&1; then
       WARNINGS+=("kapture_transport_proxy: Kapture is routed through mcp-proxy (found in ~/.claude/mcp-proxy/servers.json) but not present as a direct stdio entry in ~/.claude.json. The proxy SSE layer causes mcp__kapture__* tools to silently drop. Move kapture to a direct stdio entry in ~/.claude.json. See: https://github.com/Lifecycle-Innovations-Limited/claude-ops/issues/206")
       ;;
     unconfigured)
-      INFO+=("kapture_not_configured: Kapture MCP is not configured. To enable browser automation (Kapture), add a stdio entry in ~/.claude.json. See: https://github.com/Lifecycle-Innovations-Limited/claude-ops/issues/206")
+      : # Kapture is RETIRED (2026-05-24 doctrine) — browser automation is gstack /browse only. Do not nag to add it.
       ;;
   esac
 fi
@@ -654,10 +654,12 @@ else
       DOW_FIELD=$(echo "$CRON_EXPR" | awk '{if (NF>=5) print $5; else print "*"}')
       if echo "$MINUTE_FIELD" | grep -qE '^\*/([0-9]+)$'; then
         CRON_INTERVAL=$(echo "$MINUTE_FIELD" | grep -oE '[0-9]+')
+        # Alert only after a full cycle is genuinely missed (2x interval) so scheduler
+        # jitter or a brief daemon restart delaying one run isn't a false positive.
         if [ "$CRON_INTERVAL" -le 10 ]; then
-          STALE_THRESHOLD=5
+          STALE_THRESHOLD=10
         else
-          STALE_THRESHOLD="$CRON_INTERVAL"
+          STALE_THRESHOLD=$(( CRON_INTERVAL * 2 ))
         fi
       elif echo "$HOUR_FIELD" | grep -qE '^\*/([0-9]+)$'; then
         CRON_HOURS=$(echo "$HOUR_FIELD" | grep -oE '[0-9]+')
