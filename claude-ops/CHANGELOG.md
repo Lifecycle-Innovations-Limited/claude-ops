@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.20.14] - 2026-06-04
+
+### Changed
+fix(ops-doctor): suppress non-actionable INFO for keys covered by global MCP; remove retired Kapture nag; widen stale-threshold to 2x interval to eliminate jitter false positives
+
+
 ## [2.20.13] - 2026-06-04
 
 ### Changed
