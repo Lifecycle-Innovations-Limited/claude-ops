@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.20.13] - 2026-06-04
+
+### Changed
+- salvage-scan: single-instance lock, hard timeout, bounded gh calls, nice priority (#494)
+- desktop-act-launcher: document macOS as a first-class native backend (#493)
+- scope Claude Code-credentials keychain lookup to $USER account (#492)
+- add Claude Code GitHub Action workflow (#491)
+
+
 ## [2.20.12] - 2026-06-03
 
 ### Changed
