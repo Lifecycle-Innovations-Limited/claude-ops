@@ -5,11 +5,172 @@
 #
 # Output: single JSON document consumed by /ops:merge Phase 0 (Salvage).
 # Used by /ops:merge to find and finish all loose local work BEFORE the PR merge pipeline runs.
+#
+# SAFETY (added 2026-06-04 after the 13-process load-48 CPU-avalanche incident):
+#   1. Single-instance lock — a 2nd concurrent invocation exits immediately (no stacking).
+#      During /ops:merge under /loop, re-invocations stacked 13 deep on 2026-06-03 ~18:00
+#      and drove Mac load 27→48. The lock guarantees one scan at a time.
+#   2. Hard self-deadline — the whole scan is wrapped in `timeout` (default 600s). It can
+#      never hang indefinitely; on timeout it emits valid partial JSON (exit 0) so the
+#      caller's parser never breaks.
+#   3. Bounded external calls — every network-touching git/gh call (fetch, gh pr list) has a
+#      per-call timeout so a single hung remote can't wedge the whole walk. No raw filesystem
+#      walks: scope is strictly the registry `path` roots and their registered git worktrees.
+#   4. nice -n 19 — the scan runs at lowest CPU priority so even a slow run never starves the box.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_DIR="${CLAUDE_PLUGIN_ROOT:-${SCRIPT_DIR}/..}"
+
+# ---------------------------------------------------------------------------
+# Tunables (env-overridable). Keep absolute ceilings so a slow remote or a huge
+# worktree set can never produce an unbounded run.
+# ---------------------------------------------------------------------------
+SALVAGE_DEADLINE="${OPS_SALVAGE_DEADLINE:-600}"   # hard wall-clock cap for the whole scan (s)
+SALVAGE_NET_TIMEOUT="${OPS_SALVAGE_NET_TIMEOUT:-20}"  # per network call (git fetch / gh) (s)
+SALVAGE_GIT_TIMEOUT="${OPS_SALVAGE_GIT_TIMEOUT:-10}"  # per local git query (s)
+SALVAGE_MAX_PARALLEL="${OPS_SALVAGE_MAX_PARALLEL:-8}" # simultaneous repo scans
+SALVAGE_MAX_WORKTREES="${OPS_SALVAGE_MAX_WORKTREES:-50}"  # per-repo worktree cap
+SALVAGE_MAX_BRANCHES="${OPS_SALVAGE_MAX_BRANCHES:-80}"    # per-repo local-branch cap
+
+# ---------------------------------------------------------------------------
+# Single-instance lock — self-contained atomic mkdir lock (macOS has no flock,
+# and this binary ships to machines without the user's ~/.claude/scripts/lib).
+# A 2nd concurrent invocation prints a valid (empty) JSON document and exits 0,
+# so the caller's `|| echo '{"repos":[],...}'` fallback is never even needed and
+# the contract holds.
+#
+# Stale-lock recovery has TWO independent triggers, so a SIGKILL'd prior run can
+# never wedge all future scans, yet a legitimately-running scan is never stolen:
+#   (a) PID liveness — if the PID recorded in the lock is no longer alive, the
+#       holder died (the EXIT trap never fired, e.g. SIGKILL / load-48 reap), so
+#       reclaim immediately regardless of age. This is the fast, correct path.
+#   (b) Age fallback — if the PID file is missing/unreadable (older box, racey
+#       write), reclaim once the lock dir is older than 45 minutes (well beyond
+#       the 600s deadline + timeout grace, so a live scan is never reclaimed).
+# ---------------------------------------------------------------------------
+LOCK_DIR="${TMPDIR:-/tmp}/.ops-merge-salvage-scan.lock"
+SALVAGE_STALE_MIN="${OPS_SALVAGE_STALE_MIN:-45}"   # age-based stale reclaim (minutes)
+_have_lock=0
+_lock_holder_dead() {
+  # True if the lock's recorded PID is gone (or unreadable AND the dir is old).
+  local holder
+  holder=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")
+  if [ -n "$holder" ] && [ "$holder" -eq "$holder" ] 2>/dev/null; then
+    # We have a numeric PID — authoritative. Dead iff kill -0 fails.
+    kill -0 "$holder" 2>/dev/null && return 1 || return 0
+  fi
+  # No readable PID — fall back to age (>SALVAGE_STALE_MIN minutes old).
+  [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +"$SALVAGE_STALE_MIN" 2>/dev/null)" ]
+}
+_acquire_lock() {
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    _have_lock=1
+    echo $$ > "$LOCK_DIR/pid" 2>/dev/null || true
+    return 0
+  fi
+  # Lock exists. Reclaim only if the holder is provably dead (PID gone) or the
+  # lock is older than the age ceiling. Re-check after rm via a fresh mkdir so
+  # two racing reclaimers can't both win (mkdir is the atomic arbiter).
+  if _lock_holder_dead; then
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      _have_lock=1
+      echo $$ > "$LOCK_DIR/pid" 2>/dev/null || true
+      return 0
+    fi
+  fi
+  return 1
+}
+_release_lock() { [ "$_have_lock" = "1" ] && rm -rf "$LOCK_DIR" 2>/dev/null || true; }
+
+# Detect a `timeout` binary up front — used both for the hard self-deadline
+# re-exec (below) and for the per-call bounded helpers (_net/_git).
+_timeout_bin=""
+if command -v timeout >/dev/null 2>&1; then _timeout_bin="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then _timeout_bin="gtimeout"; fi
+
+# The lock is acquired ONCE, by the top-level (parent) invocation only. The
+# timeout-wrapped child re-exec inherits OPS_SALVAGE_CHILD=1 and must NOT try to
+# re-acquire (the parent already holds it) — otherwise the child would always see
+# "already-running". The parent's EXIT trap is the single owner that releases it.
+if [ "${OPS_SALVAGE_CHILD:-0}" != "1" ]; then
+  if ! _acquire_lock; then
+    # Another scan is already running. Exit immediately — never stack.
+    echo '{"repos":[],"skipped":"already-running","scanned_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
+    exit 0
+  fi
+  trap '_release_lock' EXIT INT TERM
+fi
+
+# ---------------------------------------------------------------------------
+# Hard self-deadline. Re-exec the real body under `timeout` so the entire scan
+# is wall-clock bounded. We hold the lock across the re-exec via OPS_SALVAGE_CHILD
+# so the child does NOT try to re-lock (and so the parent's EXIT trap is the one
+# that releases). On timeout (124) we still emit a valid document below.
+# ---------------------------------------------------------------------------
+if [ "${OPS_SALVAGE_CHILD:-0}" != "1" ] && [ -n "$_timeout_bin" ]; then
+  out_file="$LOCK_DIR/out"
+  set +e
+  OPS_SALVAGE_CHILD=1 "$_timeout_bin" -k 5 "$SALVAGE_DEADLINE" "$0" "$@" > "$out_file" 2>/dev/null
+  rc=$?
+  set -e
+  # The body writes its document in a single trailing `echo` AFTER `wait`, so a
+  # child killed mid-scan leaves a TRUNCATED buffer (repo fragments with no
+  # wrapping `{"repos":[ … ]}`). Never `cat` an unvalidated buffer — feed it to
+  # `jq` and only forward it if it parses as a complete JSON object. Otherwise
+  # emit a clean, schema-valid fallback so the caller's parser never chokes.
+  if [ "$rc" -eq 0 ] && [ -s "$out_file" ] && jq -e . "$out_file" >/dev/null 2>&1; then
+    cat "$out_file"
+  elif [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+    # Hit the hard deadline (124 = timeout, 137 = SIGKILL after -k grace).
+    echo '{"repos":[],"error":"salvage-scan timed out after '"$SALVAGE_DEADLINE"'s","scanned_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
+  else
+    # Child failed for another reason, or produced invalid/partial JSON.
+    echo '{"repos":[],"error":"salvage-scan failed (rc='"$rc"')","scanned_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
+  fi
+  exit 0
+fi
+# If we get here we are either the timeout-wrapped child, or `timeout` is
+# unavailable (older box). In the no-timeout fallback we still run the body but
+# every external call remains individually bounded (see _net / _git helpers).
+
+# Lower CPU priority — even a slow scan must never starve the box (incident: load 48).
+command -v renice >/dev/null 2>&1 && renice -n 19 -p $$ >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
+# Bounded-call helpers. `timeout`/`gtimeout` when available; otherwise a portable
+# background-kill shim so a hung network call can never block forever even on a
+# box without coreutils `timeout`.
+# ---------------------------------------------------------------------------
+_run_bounded() {
+  local secs="$1"; shift
+  if [ -n "$_timeout_bin" ]; then
+    "$_timeout_bin" -k 2 "$secs" "$@"
+    return $?
+  fi
+  # Fallback: run in background, kill if it overruns.
+  "$@" &
+  local pid=$!
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    [ "$waited" -ge "$secs" ] && { kill -TERM "$pid" 2>/dev/null; sleep 1; kill -KILL "$pid" 2>/dev/null; break; }
+    sleep 1; waited=$((waited + 1))
+  done
+  wait "$pid" 2>/dev/null
+  return $?
+}
+_net() { _run_bounded "$SALVAGE_NET_TIMEOUT" "$@"; }   # network-touching calls
+_git() { _run_bounded "$SALVAGE_GIT_TIMEOUT" git "$@"; } # local git queries
+
+# Wall-clock start for the in-process soft deadline. This is the ONLY deadline on
+# boxes that lack a `timeout` binary (where the hard re-exec above is skipped):
+# the project loop below breaks once SALVAGE_DEADLINE is exceeded and emits the
+# partial results gathered so far, so the scan can never run unbounded.
+SCAN_START=$(date +%s)
+_past_deadline() { [ $(( $(date +%s) - SCAN_START )) -ge "$SALVAGE_DEADLINE" ]; }
+
 OPS_PLUGIN_ROOT_FALLBACK="$PLUGIN_DIR" . "${PLUGIN_DIR}/lib/registry-path.sh"
 
 FILTER_REPO="${1:-}"
@@ -29,7 +190,7 @@ fi
 PROJECTS_JSON=$(jq -c '.projects // []' "$REGISTRY")
 
 TMPDIR_OPS=$(mktemp -d)
-trap 'rm -rf "$TMPDIR_OPS"' EXIT
+trap 'rm -rf "$TMPDIR_OPS"; _release_lock' EXIT INT TERM
 
 scan_repo() {
   local repo_slug="$1"      # owner/name
@@ -42,68 +203,85 @@ scan_repo() {
   fi
 
   # --- Working tree state -------------------------------------------------
-  local current_branch dirty staged stashed unpushed ahead behind
-  current_branch=$(git -C "$repo_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "DETACHED")
-  dirty=$(git -C "$repo_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-  staged=$(git -C "$repo_path" diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')
-  stashed=$(git -C "$repo_path" stash list 2>/dev/null | wc -l | tr -d ' ')
+  local current_branch dirty staged stashed unpushed
+  current_branch=$(_git -C "$repo_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "DETACHED")
+  dirty=$(_git -C "$repo_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  staged=$(_git -C "$repo_path" diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')
+  stashed=$(_git -C "$repo_path" stash list 2>/dev/null | wc -l | tr -d ' ')
 
-  # Fetch quietly so ahead/behind are accurate. Skip on failure (offline / no remote).
-  git -C "$repo_path" fetch --quiet origin 2>/dev/null || true
+  # Fetch quietly so ahead/behind are accurate. Bounded by SALVAGE_NET_TIMEOUT so
+  # a single hung remote can't wedge the walk. Skip on failure (offline/no remote).
+  _net git -C "$repo_path" fetch --quiet origin 2>/dev/null || true
 
   # Detect default integration branches (dev preferred, fallback main/master).
   local has_dev has_main integration_branch
-  has_dev=$(git -C "$repo_path" rev-parse --verify --quiet origin/dev >/dev/null 2>&1 && echo "true" || echo "false")
-  has_main=$(git -C "$repo_path" rev-parse --verify --quiet origin/main >/dev/null 2>&1 && echo "true" || echo "false")
+  has_dev=$(_git -C "$repo_path" rev-parse --verify --quiet origin/dev >/dev/null 2>&1 && echo "true" || echo "false")
+  has_main=$(_git -C "$repo_path" rev-parse --verify --quiet origin/main >/dev/null 2>&1 && echo "true" || echo "false")
   if [ "$has_dev" = "true" ]; then
     integration_branch="dev"
   elif [ "$has_main" = "true" ]; then
     integration_branch="main"
   else
-    integration_branch=$(git -C "$repo_path" rev-parse --abbrev-ref --symbolic-full-name 'HEAD@{upstream}' 2>/dev/null | sed 's|^origin/||' || echo "main")
+    integration_branch=$(_git -C "$repo_path" rev-parse --abbrev-ref --symbolic-full-name 'HEAD@{upstream}' 2>/dev/null | sed 's|^origin/||' || echo "main")
   fi
 
   # Unpushed commits on current branch (relative to its upstream, if any).
-  unpushed=$(git -C "$repo_path" log '@{u}..' --oneline 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+  unpushed=$(_git -C "$repo_path" log '@{u}..' --oneline 2>/dev/null | wc -l | tr -d ' ' || echo 0)
 
   # --- Local branches not on integration branch ---------------------------
   # Branches whose tip is NOT an ancestor of origin/<integration_branch> AND
-  # which differ from main/dev/master themselves.
+  # which differ from main/dev/master themselves. Capped at SALVAGE_MAX_BRANCHES.
   local LOCAL_BRANCHES BRANCHES_JSON
-  LOCAL_BRANCHES=$(git -C "$repo_path" for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null)
+  LOCAL_BRANCHES=$(_git -C "$repo_path" for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null | head -n "$SALVAGE_MAX_BRANCHES")
   BRANCHES_JSON="[]"
   if [ -n "$LOCAL_BRANCHES" ]; then
     BRANCHES_JSON=$(
       while IFS= read -r br; do
         [ -z "$br" ] && continue
-        case "$br" in dev|main|master) continue ;; esac
+        # Stop the per-branch network sweep once over budget — one repo with
+        # hundreds of branches must not blow the whole-scan deadline.
+        if _past_deadline; then break; fi
+        # NB: use `if`, NOT `case` — bash 3.2 (stock macOS /bin/bash, and the
+        # shebang is `/usr/bin/env bash`) cannot parse `case ... ;; esac` inside a
+        # `while` loop inside `$( … )` command substitution. `if` is portable.
+        if [ "$br" = "dev" ] || [ "$br" = "main" ] || [ "$br" = "master" ]; then
+          continue
+        fi
 
         local tip integrated has_remote has_pr pr_number ahead_int
-        tip=$(git -C "$repo_path" rev-parse "$br" 2>/dev/null || echo "")
+        tip=$(_git -C "$repo_path" rev-parse "$br" 2>/dev/null || echo "")
         [ -z "$tip" ] && continue
 
-        if git -C "$repo_path" merge-base --is-ancestor "$tip" "origin/$integration_branch" 2>/dev/null; then
+        if _git -C "$repo_path" merge-base --is-ancestor "$tip" "origin/$integration_branch" 2>/dev/null; then
           integrated="true"
         else
           integrated="false"
         fi
 
         # Is the branch pushed to origin?
-        if git -C "$repo_path" rev-parse --verify --quiet "origin/$br" >/dev/null 2>&1; then
+        if _git -C "$repo_path" rev-parse --verify --quiet "origin/$br" >/dev/null 2>&1; then
           has_remote="true"
         else
           has_remote="false"
         fi
 
-        # Open PR for this branch? (cheap check via gh — already authed).
-        pr_number=$(gh pr list --repo "$repo_slug" --head "$br" --state open --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
-        if [ -n "$pr_number" ]; then
-          has_pr="true"
-        else
-          has_pr="false"
+        # Open PR for this branch? Each `gh pr list` is a network round-trip (~1s);
+        # a repo with hundreds of stale local branches would otherwise serialize
+        # hundreds of them and dominate the scan (the 2026-06-03 hang: 118 branches
+        # × 1s ≈ 2min for ONE repo). Skip the lookup when the answer is already
+        # determined locally — it can ONLY be false in these cases, so the output
+        # contract is unchanged:
+        #   • not pushed to origin → there can be no PR for it.
+        #   • already integrated (ancestor of integration branch) → classified
+        #     `branch-already-merged` regardless of PR; the PR number is unused.
+        has_pr="false"
+        pr_number=""
+        if [ "$has_remote" = "true" ] && [ "$integrated" = "false" ]; then
+          pr_number=$(_net gh pr list --repo "$repo_slug" --head "$br" --state open --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          [ -n "$pr_number" ] && has_pr="true"
         fi
 
-        ahead_int=$(git -C "$repo_path" rev-list --count "origin/$integration_branch..$br" 2>/dev/null || echo 0)
+        ahead_int=$(_git -C "$repo_path" rev-list --count "origin/$integration_branch..$br" 2>/dev/null || echo 0)
 
         jq -n \
           --arg name "$br" \
@@ -123,26 +301,29 @@ scan_repo() {
   #   worktree <path>
   #   HEAD <sha>
   #   branch refs/heads/<name>  (or "detached")
+  # Capped at SALVAGE_MAX_WORKTREES. This is the ONLY directory enumeration the
+  # scan performs — it is git's own worktree registry, never a filesystem walk.
   local WORKTREES_JSON
   WORKTREES_JSON=$(
-    git -C "$repo_path" worktree list --porcelain 2>/dev/null \
+    _git -C "$repo_path" worktree list --porcelain 2>/dev/null \
       | awk 'BEGIN{path="";sha="";branch=""}
              /^worktree /{if(path!=""){print path"|"sha"|"branch}; path=substr($0,10); sha=""; branch=""}
              /^HEAD /{sha=substr($0,6)}
              /^branch /{branch=substr($0,8); sub("refs/heads/","",branch)}
              /^detached/{branch="DETACHED"}
              END{if(path!=""){print path"|"sha"|"branch}}' \
+      | head -n "$SALVAGE_MAX_WORKTREES" \
       | while IFS='|' read -r wt_path wt_sha wt_branch; do
           [ -z "$wt_path" ] && continue
           # Skip the primary working tree (we report it separately as repo state).
           if [ "$wt_path" = "$repo_path" ]; then continue; fi
 
           local wt_dirty wt_unpushed wt_has_pr wt_pr
-          wt_dirty=$(git -C "$wt_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+          wt_dirty=$(_git -C "$wt_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
           wt_unpushed=0
           if [ "$wt_branch" != "DETACHED" ] && [ -n "$wt_branch" ]; then
-            wt_unpushed=$(git -C "$wt_path" log '@{u}..' --oneline 2>/dev/null | wc -l | tr -d ' ' || echo 0)
-            wt_pr=$(gh pr list --repo "$repo_slug" --head "$wt_branch" --state open --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+            wt_unpushed=$(_git -C "$wt_path" log '@{u}..' --oneline 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+            wt_pr=$(_net gh pr list --repo "$repo_slug" --head "$wt_branch" --state open --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
             [ -n "$wt_pr" ] && wt_has_pr="true" || wt_has_pr="false"
           else
             wt_has_pr="false"
@@ -209,11 +390,15 @@ scan_repo() {
     }' > "$TMPDIR_OPS/$safe_name.json"
 }
 
-# Iterate projects → repos in parallel (cap at 8 simultaneous git fetches).
-# Use process substitution so the loop runs in the main shell; a pipeline would
-# subshell the while-loop and orphan background jobs from the final wait.
+# Iterate projects → repos in parallel (cap at SALVAGE_MAX_PARALLEL simultaneous
+# git fetches). Use process substitution so the loop runs in the main shell; a
+# pipeline would subshell the while-loop and orphan background jobs from `wait`.
 SEM=0
 while IFS= read -r project; do
+  # Soft deadline guard (the real ceiling when `timeout` is unavailable). Stop
+  # launching new repo scans once we're out of budget; already-dispatched scans
+  # are reaped by `wait` below and their partial output is still assembled.
+  if _past_deadline; then break; fi
   PROJECT_PATH=$(echo "$project" | jq -r '.path // empty')
   # Schema-tolerant: GSD registry has no .repos[]; derive owner/repo from .remote_url.
   # Prefer explicit .repos[] when present (partner-template shape), else parse remote_url.
@@ -240,7 +425,7 @@ while IFS= read -r project; do
     scan_repo "$repo" "$REPO_PATH" &
 
     SEM=$((SEM + 1))
-    if [ "$SEM" -ge 8 ]; then
+    if [ "$SEM" -ge "$SALVAGE_MAX_PARALLEL" ]; then
       wait
       SEM=0
     fi
