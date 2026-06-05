@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.23.0] - 2026-06-05
+
+### Changed
+First-class WhatsApp media enrichment (video/image/document via vision+whisper) + bridge media-retry self-heal for 403/404/410 (Fix M), whatsmeow API-drift sync (Fix N + A/B/D/F/G/I ctx), and pinned whatsmeow in the installer to fix the @latest broken-build.
+
+
 ## [2.22.0] - 2026-06-05
 
 ### Changed
