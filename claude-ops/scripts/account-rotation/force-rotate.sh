@@ -121,13 +121,17 @@ run_with_watchdog() {
 
 # Fast path: refresh-token rotation, no browser. Works whenever a candidate
 # account has a non-expired refresh token — which is the common case.
-echo "→ Trying fast path (--no-browser --force)..."
-if run_with_watchdog node "$DIR/rotate.mjs" --force --no-browser --session ${TARGET_ARG[@]+"${TARGET_ARG[@]}"}; then
+# --reload-agents: after the keychain swap, sequentially respawn running bg
+# agents so they pick up the new token (≤4 agents, 15s stagger, orchestrator
+# and bare spares skipped). Watchdog extended to 420s (360s base + 60s stagger).
+WATCHDOG_SECONDS="${FORCE_ROTATE_TIMEOUT:-420}"
+echo "→ Trying fast path (--no-browser --force --reload-agents)..."
+if run_with_watchdog node "$DIR/rotate.mjs" --force --no-browser --reload-agents --session ${TARGET_ARG[@]+"${TARGET_ARG[@]}"}; then
   FAST_OK=1
 else
   FAST_OK=0
   echo "⚠  Fast path failed — falling back to browser OAuth"
-  run_with_watchdog node "$DIR/rotate.mjs" --force --session ${TARGET_ARG[@]+"${TARGET_ARG[@]}"}
+  run_with_watchdog node "$DIR/rotate.mjs" --force --reload-agents --session ${TARGET_ARG[@]+"${TARGET_ARG[@]}"}
 fi
 
 # Show new status
@@ -135,12 +139,12 @@ echo ""
 node "$DIR/rotate.mjs" --status 2>&1 | head -40
 
 # macOS notification
-osascript -e 'display notification "Account rotated — restart Claude Code session" with title "Claude Rotation"' 2>/dev/null
+osascript -e 'display notification "Account rotated — running agents reloaded onto new token" with title "Claude Rotation"' 2>/dev/null
 
 echo ""
 if [ "$FAST_OK" -eq 1 ]; then
-  echo "✅ Done (fast path). Start a new Claude Code session to use the fresh account."
+  echo "✅ Done (fast path). Running bg agents reloaded onto new token."
 else
-  echo "✅ Done (browser fallback). Start a new Claude Code session to use the fresh account."
+  echo "✅ Done (browser fallback). Running bg agents reloaded onto new token."
 fi
-echo "   (Running sessions may still use the old token — exit and re-enter)"
+echo "   (Up to 4 agents respawned; any remainder will be picked up on next rotation pass.)"
