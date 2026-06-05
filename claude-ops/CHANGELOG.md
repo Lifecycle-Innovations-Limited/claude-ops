@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.22.0] - 2026-06-05
+
+### Changed
+- ops-inbox: seed merged DM groups with lid twins from whatsmeow_lid_map (#504)
+- ops: add telegram_bot_token/owner_id to plugin schema; bump yolo agent turns (#503)
+- deps: bump hono (#499)
+- dispatch: strip ANTHROPIC_API_KEY from all claude agent spawns (#497)
+
+
 ## [2.21.0] - 2026-06-05
 
 ### Changed
