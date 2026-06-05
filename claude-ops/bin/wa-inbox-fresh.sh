@@ -116,6 +116,13 @@ else
   log "wa-fresh: voice transcription not started"
 fi
 
+# 4b. enrich video/image/document media (async — vision+whisper; never silently dropped)
+if systemctl --user start --no-block whatsapp-enrich.service 2>/dev/null; then
+  log "wa-fresh: media enrichment queued"
+else
+  log "wa-fresh: media enrichment not started"
+fi
+
 # 5. freshness report
 after=$(sqlite3 "$DB" "SELECT COALESCE(datetime(MAX(timestamp)),'?') FROM messages;") || {
   log "wa-fresh: ERROR cannot read messages store at $DB — do not trust it"
