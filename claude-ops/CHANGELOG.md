@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.21.0] - 2026-06-05
+
+### Changed
+ops-inbox: autonomous WhatsApp refresh + send-log reconciliation on every scan. ops-inbox-scan now blocks (bounded) on a backfill+settle so classification reads a converged store, and reconciles the bridge outbound-send journal to auto-demote NEEDS_REPLY threads already answered via /api/send or a phone send not yet in the store. Closes the race where the background autosync hook left the scan reading stale data.
+
+
 ## [2.20.14] - 2026-06-04
 
 ### Changed
