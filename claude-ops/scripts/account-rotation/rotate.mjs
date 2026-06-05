@@ -3171,10 +3171,10 @@ async function reloadRunningAgents(opts = {}) {
       continue;
     }
 
-    // Skip bare bg-spares: name matches sessionId[:8] — these are empty/spare
-    // sessions that have no meaningful conversation to preserve.
-    if (name === shortId) {
-      log(`[reload-agents] Skipping bare spare (${shortId})`);
+    // Skip bare bg-spares (name === sessionId[:8]) and unnamed/just-spawned
+    // sessions (empty name) — neither has a meaningful conversation to reload.
+    if (!name || name === shortId) {
+      log(`[reload-agents] Skipping bare/unnamed spare (${shortId})`);
       continue;
     }
 
