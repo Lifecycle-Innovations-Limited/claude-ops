@@ -22,6 +22,8 @@
 #   --no-backfill-timer    Drop only the bridge unit, skip the 2h timer
 #   --no-transcribe-timer  Skip the 10-min voice-note transcription timer
 #                          (voice notes won't be auto-transcribed into content)
+#   --no-enrich-timer      Skip the 10-min media enrichment timer
+#                          (video/image/document won't be auto-described)
 
 set -euo pipefail
 
@@ -35,6 +37,7 @@ SKIP_BUILD=0
 RESET_SESSION=0
 WITH_BACKFILL_TIMER=1
 WITH_TRANSCRIBE_TIMER=1
+WITH_ENRICH_TIMER=1
 
 # Source-tree dir (where this script lives in claude-ops checkout)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -53,6 +56,7 @@ while (("$#")); do
     --reset-session)       RESET_SESSION=1; shift ;;
     --no-backfill-timer)   WITH_BACKFILL_TIMER=0; shift ;;
     --no-transcribe-timer) WITH_TRANSCRIBE_TIMER=0; shift ;;
+    --no-enrich-timer)     WITH_ENRICH_TIMER=0; shift ;;
     -h|--help)             usage 0 ;;
     *) echo "unknown flag: $1" >&2; usage 1 ;;
   esac
@@ -81,6 +85,7 @@ echo "  install dir: $INSTALL_DIR"
 echo "  wa-phone:    $WA_PHONE"
 echo "  backfill timer: $([ "$WITH_BACKFILL_TIMER" -eq 1 ] && echo on || echo off)"
 echo "  transcribe timer: $([ "$WITH_TRANSCRIBE_TIMER" -eq 1 ] && echo on || echo off)"
+echo "  enrich timer: $([ "$WITH_ENRICH_TIMER" -eq 1 ] && echo on || echo off)"
 
 # ─── Clone / refresh upstream ────────────────────────────────────────────────
 mkdir -p "$(dirname "$INSTALL_DIR")"
@@ -107,6 +112,11 @@ mkdir -p "$INSTALL_DIR/transcriber"
 cp "$WA_ASSETS/transcribe_voice_notes.py" "$INSTALL_DIR/transcriber/transcribe_voice_notes.py"
 chmod +x "$INSTALL_DIR/transcriber/transcribe_voice_notes.py"
 
+# ─── Ship media enricher (whatsapp-enrich.timer runs it) ─────────────────────
+echo "▶ Installing enrich_media.py (vision+Whisper video/image/document → content)"
+cp "$WA_ASSETS/enrich_media.py" "$INSTALL_DIR/transcriber/enrich_media.py"
+chmod +x "$INSTALL_DIR/transcriber/enrich_media.py"
+
 # ─── Ship wa-inbox-fresh.sh (pre-scan freshness gate, run FIRST by ops-inbox) ─
 echo "▶ Installing wa-inbox-fresh.sh → ~/bin (pre-scan freshness gate)"
 mkdir -p "$HOME/bin"
@@ -122,8 +132,11 @@ chmod +x "$HOME/bin/wa-bridge-keepalive.sh"
 if [ "$SKIP_BUILD" -ne 1 ]; then
   echo "▶ Bumping Go deps + building bridge"
   pushd "$INSTALL_DIR/whatsapp-bridge" >/dev/null
-  go get -u go.mau.fi/whatsmeow@latest
-  go get -u ./...
+  # Pin whatsmeow to the known-good rev — whatsmeow has rapid API churn (context
+  # params added/removed between releases) that breaks the claude-ops source patches.
+  # Do NOT change to @latest without re-verifying all patches compile. (2026-06)
+  go get go.mau.fi/whatsmeow@v0.0.0-20260604191253-256f4d77fbd4
+  go get ./...
   go mod tidy
   # -tags sqlite_fts5 is REQUIRED: ops-inbox search + whatsapp-bridge-migrate.sh
   # add an fts5 virtual table & triggers on messages.db. The bridge's own
@@ -177,6 +190,18 @@ if [ "$WITH_TRANSCRIBE_TIMER" -eq 1 ]; then
   fi
 fi
 
+if [ "$WITH_ENRICH_TIMER" -eq 1 ]; then
+  sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" \
+      "$WA_ASSETS/systemd/whatsapp-enrich.service" \
+      > "$SYSTEMD_DIR/whatsapp-enrich.service"
+  cp "$WA_ASSETS/systemd/whatsapp-enrich.timer"   "$SYSTEMD_DIR/"
+  # The enrich service reads OPENAI_API_KEY from this EnvironmentFile.
+  if [ ! -f "$HOME/.config/systemd/env/mcp-secrets.env" ]; then
+    echo "  NOTE: ~/.config/systemd/env/mcp-secrets.env not found — the enrich"
+    echo "        service needs OPENAI_API_KEY there (KEY=value lines) to run."
+  fi
+fi
+
 # ─── Disable deprecated wacli daemon if present ──────────────────────────────
 if systemctl --user list-unit-files claude-ops-wacli-keepalive.service 2>/dev/null | grep -q wacli-keepalive; then
   echo "▶ Disabling deprecated claude-ops-wacli-keepalive.service (replaced by systemd-managed bridge)"
@@ -201,6 +226,9 @@ if [ "$WITH_BACKFILL_TIMER" -eq 1 ]; then
 fi
 if [ "$WITH_TRANSCRIBE_TIMER" -eq 1 ]; then
   systemctl --user enable --now whatsapp-transcribe.timer
+fi
+if [ "$WITH_ENRICH_TIMER" -eq 1 ]; then
+  systemctl --user enable --now whatsapp-enrich.timer
 fi
 
 # ─── Surface the pairing code if present ─────────────────────────────────────
@@ -230,7 +258,8 @@ fi
 echo ""
 echo "▶ Status reference:"
 echo "    systemctl --user status whatsapp-bridge.service"
-echo "    systemctl --user list-timers whatsapp-backfill.timer whatsapp-transcribe.timer"
+echo "    systemctl --user list-timers whatsapp-backfill.timer whatsapp-transcribe.timer whatsapp-enrich.timer"
 echo "    curl -fsS -X POST http://127.0.0.1:8080/api/backfill   # on-demand backfill"
 echo "    systemctl --user start whatsapp-transcribe.service     # on-demand transcribe"
+echo "    systemctl --user start whatsapp-enrich.service         # on-demand media enrich"
 echo "    ~/bin/wa-inbox-fresh.sh                                 # pre-scan freshness gate"
