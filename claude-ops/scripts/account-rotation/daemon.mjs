@@ -534,15 +534,23 @@ async function doRotation(reason) {
   try {
     // --no-browser: no Chrome, no API calls (works when rate limited)
     // --to: daemon controls which account to rotate to (pre-validated token)
+    // --reload-agents: after the keychain swap, sequentially respawn running bg
+    //   agents so they pick up the new token. Sequential + 15s stagger; max 4
+    //   agents per invocation (anti-stampede). Adds up to ~60s of wall time on
+    //   top of the keychain swap — timeout raised to 200s to accommodate.
     // NO --session: keychain swap only. Background rotation must not inject /login
     // into running sessions — that interrupts active work. When sessions hit the wall
     // they show "not logged in" — user runs /login → instant success because the fresh
     // token is already in the keychain.
-    const result = execFileSync(process.execPath, [ROTATE_SCRIPT, '--no-browser', '--to', targetKey], {
-      cwd: __dirname,
-      timeout: 120_000, // keychain swap only — no session restarts
-      env: { ...process.env, NODE_NO_WARNINGS: '1' },
-    }).toString();
+    const result = execFileSync(
+      process.execPath,
+      [ROTATE_SCRIPT, '--no-browser', '--to', targetKey, '--reload-agents'],
+      {
+        cwd: __dirname,
+        timeout: 200_000, // 120s swap + up to 4×15s stagger = ~180s; 200s gives headroom
+        env: { ...process.env, NODE_NO_WARNINGS: '1' },
+      },
+    ).toString();
     log(`Rotation result: ${result.substring(0, 200)}`);
   } catch (err) {
     log(`Rotation failed: ${err.message}`);
