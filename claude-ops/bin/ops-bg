@@ -21,6 +21,8 @@
 #   --model      opus
 #   --effort     high
 #   --add-dir    $PWD
+#   --name       (optional) name shown in `claude agents` / fleet TUI for the bg session
+#   --agent      (optional) specialized agent persona
 #
 # Examples:
 #   ops-bg dispatch "audit Healify repos for cost-leak gaps"
@@ -39,7 +41,7 @@ CLAUDE_BIN="${CLAUDE_BIN:-}"
 if [ -z "$CLAUDE_BIN" ]; then
   for candidate in \
     "$HOME/.local/bin/claude" \
-    "/opt/homebrew/bin/claude" \
+    "$HOME/.local/bin/claude" \
     "/usr/local/bin/claude"; do
     if [ -x "$candidate" ]; then
       CLAUDE_BIN="$candidate"
@@ -63,8 +65,9 @@ SUB="$1"; shift
 cmd_dispatch() {
   local model="opus"
   local effort="high"
-  local add_dir="${OPSBG_DIR:-$HOME/Projects}"
+  local add_dir="$PWD"
   local agent=""
+  local name=""
   local extra=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -72,29 +75,28 @@ cmd_dispatch() {
       --effort)  effort="$2"; shift 2 ;;
       --cwd|--add-dir) add_dir="$2"; shift 2 ;;
       --agent)   agent="$2"; shift 2 ;;
-      --) shift; extra+=("$@"); set --; break ;;
+      --name)    name="$2"; shift 2 ;;
+      --) shift; extra+=("$@"); break ;;
       --help|-h) USAGE 0 ;;
       *) break ;;
     esac
   done
-  if [ $# -lt 1 ] && [ ${#extra[@]} -eq 0 ]; then
+  if [ $# -lt 1 ]; then
     echo "ops-bg dispatch: missing <prompt>" >&2
     exit 2
   fi
-  local prompt=""
-  [ $# -ge 1 ] && prompt="$*"
-  if [ ! -d "$add_dir" ]; then
-    echo "ops-bg dispatch: workdir does not exist: $add_dir" >&2
-    exit 2
-  fi
-  add_dir="$(cd "$add_dir" && pwd)"
+  local prompt="$*"
   local -a args=(--bg --model "$model" --effort "$effort" --add-dir "$add_dir")
+  if [ -n "$name" ]; then
+    args=(--bg --name "$name" --model "$model" --effort "$effort" --add-dir "$add_dir")
+  fi
   if [ -n "$agent" ]; then
     args+=(--agent "$agent")
   fi
-  [ -n "$prompt" ] && args+=("$prompt")
-  [ "${#extra[@]}" -gt 0 ] && args+=("${extra[@]}")
-  cd "$add_dir"   # start fleet agents in default workdir
+  args+=("$prompt")
+  args+=("${extra[@]}")
+  # Never let agents inherit the API key — force OAuth (subscription) auth.
+  unset ANTHROPIC_API_KEY
   exec "$CLAUDE_BIN" "${args[@]}"
 }
 

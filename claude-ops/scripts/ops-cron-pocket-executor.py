@@ -43,6 +43,7 @@ Env:
   POCKET_WORKER_TIMEOUT   seconds, default 1800 (30 min)
   POCKET_EXEC_DRY_RUN=1   inspect only, no spawns / no writes.
 """
+
 from __future__ import annotations
 
 import json
@@ -94,7 +95,13 @@ SUPERVISOR_HEALTH = STATE_DIR / ".supervisor-health"
 EXECUTOR_HEALTH = STATE_DIR / ".executor-health"
 LOG_FILE = STATE_DIR / "executor.log"
 
-OUTBOUND_KINDS = {"send_message", "draft_email", "send_file", "send_sms", "send_whatsapp"}
+OUTBOUND_KINDS = {
+    "send_message",
+    "draft_email",
+    "send_file",
+    "send_sms",
+    "send_whatsapp",
+}
 
 
 def now_iso() -> str:
@@ -112,7 +119,9 @@ def log(msg: str) -> None:
         pass
 
 
-def write_health(target: Path, status: str, msg: str = "", extra: dict | None = None) -> None:
+def write_health(
+    target: Path, status: str, msg: str = "", extra: dict | None = None
+) -> None:
     payload = {"status": status, "message": msg, "last_run": now_iso()}
     if extra:
         payload.update(extra)
@@ -230,7 +239,14 @@ def process_replies() -> int:
     processed = 0
     for r in new_replies:
         qid = r["id"]
-        q = next((qq for qq in questions if qq.get("id") == qid and qq.get("status") == "open"), None)
+        q = next(
+            (
+                qq
+                for qq in questions
+                if qq.get("id") == qid and qq.get("status") == "open"
+            ),
+            None,
+        )
         if not q:
             log(f"reply for unknown/closed qid {qid} — archiving")
             append_jsonl(REPLIES_ARCHIVE, r)
@@ -239,16 +255,25 @@ def process_replies() -> int:
         worker = q.get("from_worker", "")
         if worker:
             worker_inbox = STATE_DIR / "worker-inboxes" / f"{worker}.jsonl"
-            append_jsonl(worker_inbox, {
-                "ts": now_iso(),
-                "from": "supervisor",
-                "qid": qid,
+            append_jsonl(
+                worker_inbox,
+                {
+                    "ts": now_iso(),
+                    "from": "supervisor",
+                    "qid": qid,
+                    "answer": r.get("answer", ""),
+                    "via": r.get("via", ""),
+                },
+            )
+        append_jsonl(
+            ANSWERED,
+            {
+                **q,
+                "status": "answered",
                 "answer": r.get("answer", ""),
-                "via": r.get("via", ""),
-            })
-        append_jsonl(ANSWERED, {**q, "status": "answered",
-                                "answer": r.get("answer", ""),
-                                "answered_at": now_iso()})
+                "answered_at": now_iso(),
+            },
+        )
         append_jsonl(REPLIES_ARCHIVE, r)
         answered_ids.add(qid)
         processed += 1
@@ -258,7 +283,9 @@ def process_replies() -> int:
         try:
             remaining = [q for q in questions if q.get("id") not in answered_ids]
             QUESTIONS.write_text(
-                ("\n".join(json.dumps(q) for q in remaining) + "\n") if remaining else ""
+                ("\n".join(json.dumps(q) for q in remaining) + "\n")
+                if remaining
+                else ""
             )
             REPLIES.write_text("")
         except OSError as e:
@@ -333,7 +360,10 @@ def _pocket_notify(event: str, message: str, severity: str = "medium") -> None:
     try:
         subprocess.run(
             ["ops-pocket-notify", event, message, "--severity", severity],
-            stdin=subprocess.DEVNULL, capture_output=True, timeout=20, check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=20,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         pass
@@ -371,20 +401,38 @@ def spawn_worker(task: dict) -> dict | None:
     # Display name shown in `claude agents` list — short, categorical, NOT the
     # full prompt. Sam corrected 2026-05-25: name field ≠ prompt field.
     display_name = f"pocket: {(task.get('title') or task_id)[:60]}"
-    cmd = [CLAUDE_BIN, "--dangerously-skip-permissions", "--bg",
-           "--name", display_name,
-           "--effort", "high",
-           "--model", WORKER_MODEL,
-           "--add-dir", str(EXEC_CWD),
-           "-p", prompt]
+    cmd = [
+        CLAUDE_BIN,
+        "--dangerously-skip-permissions",
+        "--bg",
+        "--name",
+        display_name,
+        "--effort",
+        "high",
+        "--model",
+        WORKER_MODEL,
+        "--add-dir",
+        str(EXEC_CWD),
+        "-p",
+        prompt,
+    ]
     if WORKER_USER and WORKER_USER != (os.environ.get("USER") or ""):
         # Drop privileges: run the worker as the restricted POCKET_WORKER_USER.
         # `sudo -n` is non-interactive (fails loudly if NOPASSWD sudoers is missing
         # rather than hanging); `-H` sets HOME to the worker user's home so Claude
         # writes session state there; --preserve-env carries only the vars the
         # worker needs, dropping the executor user's secrets from the environment.
-        _preserve = "PATH,CLAUDE_CONFIG_DIR,CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,ANTHROPIC_API_KEY,POCKET_WORKER_MODEL,POCKET_ENV_BROKER_SOCK,POCKET_STATE_DIR,POCKET_TASK_ID,POCKET_WORKER_ID"
-        cmd = ["sudo", "-n", "-H", "-u", WORKER_USER, f"--preserve-env={_preserve}", "--", *cmd]
+        _preserve = "PATH,CLAUDE_CONFIG_DIR,CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS,POCKET_WORKER_MODEL,POCKET_ENV_BROKER_SOCK,POCKET_STATE_DIR,POCKET_TASK_ID,POCKET_WORKER_ID"
+        cmd = [
+            "sudo",
+            "-n",
+            "-H",
+            "-u",
+            WORKER_USER,
+            f"--preserve-env={_preserve}",
+            "--",
+            *cmd,
+        ]
 
     try:
         out_f = stdout_path.open("w")
@@ -409,6 +457,7 @@ def spawn_worker(task: dict) -> dict | None:
         try:
             head = stdout_path.read_text()[:512]
             import re as _re
+
             m = _re.search(r"backgrounded[^a-f0-9]+([a-f0-9]{8,})", head)
             if m:
                 bg_session_id = m.group(1)
@@ -431,20 +480,27 @@ def spawn_worker(task: dict) -> dict | None:
         "bg_session_id": bg_session_id,  # for SendMessage / claude attach
         "spawn_mode": "claude-bg",
     }
-    append_jsonl(SPAWN_LEDGER, {
-        "ts": record["started_at"],
-        "worker": worker_id,
-        "pid": proc.pid,
-        "pocket_task_id": task_id,
-        "title": record["title"],
-        "model": WORKER_MODEL,
-        "bg_session_id": bg_session_id,
-        "spawn_mode": "claude-bg",
-    })
-    log(f"spawned {worker_id} pid={proc.pid} task={task_id} bg_session={bg_session_id or 'unknown'}")
-    _pocket_notify("worker.spawned", f"worker started for {task_id}: {(task.get('title') or '')[:80]}")
+    append_jsonl(
+        SPAWN_LEDGER,
+        {
+            "ts": record["started_at"],
+            "worker": worker_id,
+            "pid": proc.pid,
+            "pocket_task_id": task_id,
+            "title": record["title"],
+            "model": WORKER_MODEL,
+            "bg_session_id": bg_session_id,
+            "spawn_mode": "claude-bg",
+        },
+    )
+    log(
+        f"spawned {worker_id} pid={proc.pid} task={task_id} bg_session={bg_session_id or 'unknown'}"
+    )
+    _pocket_notify(
+        "worker.spawned",
+        f"worker started for {task_id}: {(task.get('title') or '')[:80]}",
+    )
     return record
-
 
 
 def _claude_agents_status_map() -> dict[str, str] | None:
@@ -454,18 +510,26 @@ def _claude_agents_status_map() -> dict[str, str] | None:
         out = subprocess.run(
             [CLAUDE_BIN, "agents", "--json"],
             stdin=subprocess.DEVNULL,
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if out.returncode != 0:
             return None
         d = json.loads(out.stdout or "[]")
         sessions = d if isinstance(d, list) else d.get("sessions", []) or []
-        return {s.get("sessionId", ""): s.get("status", "?") for s in sessions if s.get("sessionId")}
+        return {
+            s.get("sessionId", ""): s.get("status", "?")
+            for s in sessions
+            if s.get("sessionId")
+        }
     except Exception:
         return None
 
 
-def _bg_session_done(bg_session_id: str | None, agents_map: dict[str, str] | None) -> bool:
+def _bg_session_done(
+    bg_session_id: str | None, agents_map: dict[str, str] | None
+) -> bool:
     """A claude --bg session is 'done' when its session id no longer appears in
     `claude agents --json` (daemon evicts completed sessions) OR status is
     'completed'/'stopped'. Returns False if we have no session id or the daemon
@@ -476,6 +540,7 @@ def _bg_session_done(bg_session_id: str | None, agents_map: dict[str, str] | Non
     if full_key is None:
         return True
     return agents_map.get(full_key, "?") in ("completed", "stopped", "done")
+
 
 def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
     """Check each in-flight worker. If exited, write done.json receipt
@@ -502,7 +567,11 @@ def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
             if not bg_session_id:
                 if now > rec.get("deadline_epoch", now + 1):
                     log(f"worker {worker_id} claude-bg missing session id — timed out")
-                    _pocket_notify("worker.failed", f"worker {worker_id} timed out (no session id)", "high")
+                    _pocket_notify(
+                        "worker.failed",
+                        f"worker {worker_id} timed out (no session id)",
+                        "high",
+                    )
                     killed += 1
                     del in_flight[worker_id]
                 continue
@@ -513,11 +582,21 @@ def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
             if not _bg_session_done(bg_session_id, agents_map):
                 # Still in-flight or daemon unreachable. Apply deadline timeout.
                 if now > rec.get("deadline_epoch", now + 1):
-                    log(f"worker {worker_id} bg={bg_session_id} timed out — stopping session")
-                    _pocket_notify("worker.failed", f"worker {worker_id} timed out and was stopped", "high")
+                    log(
+                        f"worker {worker_id} bg={bg_session_id} timed out — stopping session"
+                    )
+                    _pocket_notify(
+                        "worker.failed",
+                        f"worker {worker_id} timed out and was stopped",
+                        "high",
+                    )
                     try:
-                        subprocess.run([CLAUDE_BIN, "stop", bg_session_id],
-                                       stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+                        subprocess.run(
+                            [CLAUDE_BIN, "stop", bg_session_id],
+                            stdin=subprocess.DEVNULL,
+                            capture_output=True,
+                            timeout=10,
+                        )
                     except Exception:
                         pass
                     killed += 1
@@ -552,13 +631,17 @@ def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
                     logs = subprocess.run(
                         [CLAUDE_BIN, "logs", bg_session_id],
                         stdin=subprocess.DEVNULL,
-                        capture_output=True, text=True, timeout=15,
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
                     )
                     if logs.returncode == 0 and len(logs.stdout.strip()) > 200:
                         summary = logs.stdout[-4000:]
                         break
                 except Exception as e:
-                    log(f"claude logs fetch failed for {bg_session_id} (attempt {attempt+1}): {e}")
+                    log(
+                        f"claude logs fetch failed for {bg_session_id} (attempt {attempt + 1}): {e}"
+                    )
                 time.sleep(2 * (attempt + 1))  # 2s, 4s, 6s
         if not summary and stdout_path.exists():
             try:
@@ -578,7 +661,9 @@ def reap_workers(in_flight: dict[str, dict]) -> tuple[int, int]:
         }
         try:
             RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-            (RESULTS_DIR / f"{task_id}.done.json").write_text(json.dumps(receipt, indent=2))
+            (RESULTS_DIR / f"{task_id}.done.json").write_text(
+                json.dumps(receipt, indent=2)
+            )
         except OSError as e:
             log(f"failed to write receipt for {task_id}: {e}")
         log(f"reaped {worker_id} task={task_id}")
