@@ -143,18 +143,15 @@ PAIR_REPLACEMENT = """\tif client.Store.ID == nil {
 \t\t\t// otherwise PairPhone silently hangs on the IQ response (no PairSuccess,
 \t\t\t// no error). Sleeping ~3s after Connect is the godoc-endorsed gate.
 \t\t\ttime.Sleep(3 * time.Second)
-\t\t\t// claude-ops Fix B: current whatsmeow PairPhone has NO context parameter
-\t\t\t// (signature: PairPhone(phone, showPushNotification, clientType,
-\t\t\t// clientDisplayName)), so we can no longer pass a deadline into the call.
-\t\t\t// Preserve Fix B's intent — an internal PairPhone hang must be recoverable —
-\t\t\t// by racing the call against a 3-minute watchdog instead of a ctx deadline.
+\t\t\t// claude-ops Fix B: wrap PairPhone with a 3-min context deadline.
+\t\t\t// PairPhone now takes context as first parameter.
 \t\t\ttype pairResult struct {
 \t\t\t\tcode string
 \t\t\t\terr  error
 \t\t\t}
 \t\t\tpairCh := make(chan pairResult, 1)
 \t\t\tgo func() {
-\t\t\t\tc, perr := client.PairPhone(phone, true, whatsmeow.PairClientChrome, \"Chrome (Linux)\")
+\t\t\t\tpairCtx, pairCancel := context.WithTimeout(context.Background(), 3*time.Minute)\n\t\t\t\tdefer pairCancel()\n\t\t\t\tc, perr := client.PairPhone(pairCtx, phone, true, whatsmeow.PairClientChrome, \"Chrome (Linux)\")
 \t\t\t\tpairCh <- pairResult{code: c, err: perr}
 \t\t\t}()
 \t\t\tselect {
@@ -554,10 +551,7 @@ RESYNC_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix D: POST /api/resync_app_sta
 \t\t\t\treq.Name = \"regular_low\"
 \t\t\t}
 \t\t}
-\t\t// claude-ops API-drift port (2026-06): current whatsmeow FetchAppState has NO
-\t\t// context.Context parameter — signature is FetchAppState(name, fullSync,
-\t\t// onlyIfNotSynced). Dropped the leading context.Background() arg.
-\t\tif err := client.FetchAppState(appstate.WAPatchName(req.Name), req.FullSync, false); err != nil {
+\t\t\t\tif err := client.FetchAppState(context.Background(), appstate.WAPatchName(req.Name), req.FullSync, false); err != nil {
 \t\t\tw.WriteHeader(http.StatusInternalServerError)
 \t\t\tfmt.Fprintf(w, `{\"success\":false,\"message\":%q}`, err.Error())
 \t\t\treturn
@@ -1090,9 +1084,7 @@ func healLTHash(ctx context.Context, client *whatsmeow.Client, patchName appstat
 \t\twdb.Close()
 
 \t\t// Re-fetch from version 0 (fullSync=true, onlyIfNotSynced=false).
-\t\t// claude-ops API-drift port (2026-06): FetchAppState dropped its ctx param.
-\t\t// (ctx is still used above for the wdb.ExecContext snapshot-row deletes.)
-\t\terr = client.FetchAppState(patchName, true, false)
+\t\t\t\terr = client.FetchAppState(ctx, patchName, true, false)
 \t\tif err == nil {
 \t\t\treturn nil
 \t\t}
@@ -1147,7 +1139,7 @@ func sendRecoveryAndBackfill(client *whatsmeow.Client, patchName appstate.WAPatc
 \t)
 \t// Best-effort full server-side resync. Errors are non-fatal here — the caller
 \t// (archive auto-retry / recover endpoint) reports its own outcome.
-\tif err := client.FetchAppState(patchName, true, false); err != nil {
+\tif err := client.FetchAppState(context.Background(), patchName, true, false); err != nil {
 \t\tfmt.Printf("Fix L: best-effort resync of %s failed: %v\\n", string(patchName), err)
 \t\treturn err
 \t}
@@ -1219,11 +1211,7 @@ ARCHIVE_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix F: POST /api/archive — a
 \t\tctx := r.Context()
 
 \t\tdo := func() error {
-\t\t\t// claude-ops API-drift port (2026-06): current whatsmeow SendAppState has NO
-\t\t\t// context.Context parameter — signature is SendAppState(patch
-\t\t\t// appstate.PatchInfo). Dropped the leading ctx arg. (ctx is still used below
-\t\t\t// for healLTHash.)
-\t\t\treturn client.SendAppState(patch)
+\t\t\t\t\t\treturn client.SendAppState(ctx, patch)
 \t\t}
 \t\terr = do()
 \t\t// claude-ops Fix L: treat both a local LTHash mismatch and a server-side 409
@@ -1459,6 +1447,216 @@ if __name__ == "__main__":
     mcp.run(transport='stdio')'''
 
 
+# ─── main.go Fix N: ctx-drift — add context.Background() to upstream call sites ─
+# whatsmeow added context.Context parameters to sqlstore.New, GetFirstDevice,
+# GetGroupInfo, and GetContact. These are pristine upstream call sites not covered
+# by any other fix replacement block; patch them with targeted single-line swaps.
+
+CTX_SQLSTORE_NEEDLE = '\tcontainer, err := sqlstore.New("sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)\n'
+CTX_SQLSTORE_REPLACEMENT = '\tcontainer, err := sqlstore.New(context.Background(), "sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)\n'
+CTX_SQLSTORE_SENTINEL = "sqlstore.New(context.Background(),"
+
+CTX_GETFIRSTDEVICE_NEEDLE = "\tdeviceStore, err := container.GetFirstDevice()\n"
+CTX_GETFIRSTDEVICE_REPLACEMENT = (
+    "\tdeviceStore, err := container.GetFirstDevice(context.Background())\n"
+)
+CTX_GETFIRSTDEVICE_SENTINEL = "container.GetFirstDevice(context.Background())"
+
+CTX_GETGROUPINFO_NEEDLE = "\t\t\tgroupInfo, err := client.GetGroupInfo(jid)\n"
+CTX_GETGROUPINFO_REPLACEMENT = (
+    "\t\t\tgroupInfo, err := client.GetGroupInfo(context.Background(), jid)\n"
+)
+CTX_GETGROUPINFO_SENTINEL = "client.GetGroupInfo(context.Background(),"
+
+CTX_GETCONTACT_NEEDLE = "\t\tcontact, err := client.Store.Contacts.GetContact(jid)\n"
+CTX_GETCONTACT_REPLACEMENT = (
+    "\t\tcontact, err := client.Store.Contacts.GetContact(context.Background(), jid)\n"
+)
+CTX_GETCONTACT_SENTINEL = "client.Store.Contacts.GetContact(context.Background(),"
+
+
+# ─── main.go Fix M: media-retry fallback on 403/404/410 ──────────────────────
+# WhatsApp returns HTTP 403/404/410 when a media's directPath has gone stale
+# server-side. whatsmeow treats those as terminal, so larger media silently
+# drops. The documented recovery is SendMediaRetryReceipt: ask the sender's phone
+# to re-upload, yielding a FRESH directPath. Four hunks, each anchored on UPSTREAM
+# code so they apply on a pristine lharries/whatsapp-mcp clone:
+#   M1: imports — add "sync" (retry registry mutex)
+#   M2: imports — add waMmsRetry proto (decrypt the retry notification result)
+#   M3: insert the media-retry registry + downloadWithRetry() before downloadMedia()
+#   M4: route the download through downloadWithRetry()
+#   M5: deliver *events.MediaRetry to the blocked downloader
+
+# M1 — "sync" import (anchor on the pristine "strings" import line).
+MEDIA_RETRY_SYNC_IMPORT_NEEDLE = '\t"strings"\n\t"syscall"\n'
+MEDIA_RETRY_SYNC_IMPORT_REPLACEMENT = '\t"strings"\n\t"sync"\n\t"syscall"\n'
+MEDIA_RETRY_SYNC_IMPORT_SENTINEL = '\t"sync"\n\t"syscall"\n'
+
+# M2 — waMmsRetry proto import (anchor on the pristine types/events import line).
+MEDIA_RETRY_PROTO_IMPORT_NEEDLE = '\t"go.mau.fi/whatsmeow/types/events"\n'
+MEDIA_RETRY_PROTO_IMPORT_REPLACEMENT = (
+    '\t"go.mau.fi/whatsmeow/types/events"\n'
+    '\twaMmsRetry "go.mau.fi/whatsmeow/proto/waMmsRetry"\n'
+)
+MEDIA_RETRY_PROTO_IMPORT_SENTINEL = 'waMmsRetry "go.mau.fi/whatsmeow/proto/waMmsRetry"'
+
+# M3 — the registry + downloadWithRetry() helper, inserted right before
+# downloadMedia(). Anchors on the pristine downloadMedia signature.
+MEDIA_RETRY_BLOCK_NEEDLE = "func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, messageID, chatJID string) (bool, string, string, string, error) {"
+MEDIA_RETRY_BLOCK_REPLACEMENT = """// --- claude-ops Fix M: media-retry fallback ---------------------------------
+// WhatsApp returns HTTP 403/404/410 when a media's directPath has gone stale
+// server-side (common for larger media, or media that failed its at-receipt
+// download). whatsmeow treats those as terminal. The documented recovery is
+// SendMediaRetryReceipt: ask the sender's phone to re-upload, which yields a
+// FRESH directPath we can download from. This registry lets the synchronous
+// download path block on the async *events.MediaRetry response.
+var (
+\tmediaRetryMu    sync.Mutex
+\tmediaRetryChans = map[string][]chan *events.MediaRetry{}
+)
+
+func registerMediaRetry(messageID string) chan *events.MediaRetry {
+\tch := make(chan *events.MediaRetry, 1)
+\tmediaRetryMu.Lock()
+\tmediaRetryChans[messageID] = append(mediaRetryChans[messageID], ch)
+\tmediaRetryMu.Unlock()
+\treturn ch
+}
+
+func deliverMediaRetry(evt *events.MediaRetry) {
+\tmediaRetryMu.Lock()
+\tchans := mediaRetryChans[evt.MessageID]
+\tmediaRetryMu.Unlock()
+\tfor _, ch := range chans {
+\t\tselect {
+\t\tcase ch <- evt:
+\t\tdefault:
+\t\t}
+\t}
+}
+
+func unregisterMediaRetry(messageID string, ch chan *events.MediaRetry) {
+\tmediaRetryMu.Lock()
+\tdefer mediaRetryMu.Unlock()
+\twaiters := mediaRetryChans[messageID]
+\tfor i, w := range waiters {
+\t\tif w == ch {
+\t\t\tmediaRetryChans[messageID] = append(waiters[:i], waiters[i+1:]...)
+\t\t\tbreak
+\t\t}
+\t}
+\tif len(mediaRetryChans[messageID]) == 0 {
+\t\tdelete(mediaRetryChans, messageID)
+\t}
+}
+
+// downloadWithRetry calls client.Download; on a 403/404/410 it asks the sender's
+// phone to re-upload (SendMediaRetryReceipt), waits for the fresh directPath, and
+// retries once. Any other error (or a failed retry) is returned to the caller.
+func downloadWithRetry(client *whatsmeow.Client, messageStore *MessageStore, messageID, chatJID string, downloader *MediaDownloader) ([]byte, error) {
+\tdata, err := client.Download(context.Background(), downloader)
+\tif err == nil {
+\t\treturn data, nil
+\t}
+\tes := err.Error()
+\tif !(strings.Contains(es, "403") || strings.Contains(es, "404") || strings.Contains(es, "410")) {
+\t\treturn nil, err
+\t}
+
+\t// Reconstruct enough MessageInfo for the retry receipt.
+\tvar senderStr string
+\tvar ts int64
+\tvar fromMe bool
+\t_ = messageStore.db.QueryRow(
+\t\t"SELECT COALESCE(sender,''), CAST(strftime('%s', timestamp) AS INTEGER), is_from_me FROM messages WHERE id = ? AND chat_jid = ?",
+\t\tmessageID, chatJID,
+\t).Scan(&senderStr, &ts, &fromMe)
+
+\tchat, perr := types.ParseJID(chatJID)
+\tif perr != nil {
+\t\treturn nil, fmt.Errorf("media-retry: bad chat jid %q: %v (orig: %w)", chatJID, perr, err)
+\t}
+\tvar sender types.JID
+\tswitch {
+\tcase fromMe && client.Store.ID != nil:
+\t\tsender = *client.Store.ID
+\tcase senderStr != "":
+\t\tif strings.Contains(senderStr, "@") {
+\t\t\tsender, _ = types.ParseJID(senderStr)
+\t\t} else if chat.Server == types.GroupServer {
+\t\t\tsender = types.NewJID(senderStr, types.DefaultUserServer)
+\t\t} else {
+\t\t\tsender = types.NewJID(senderStr, chat.Server)
+\t\t}
+\tdefault:
+\t\tsender = chat
+\t}
+\tinfo := &types.MessageInfo{
+\t\tID:        messageID,
+\t\tTimestamp: time.Unix(ts, 0),
+\t\tMessageSource: types.MessageSource{
+\t\t\tChat:     chat,
+\t\t\tSender:   sender,
+\t\t\tIsFromMe: fromMe,
+\t\t\tIsGroup:  chat.Server == types.GroupServer,
+\t\t},
+\t}
+
+\tch := registerMediaRetry(messageID)
+\tdefer unregisterMediaRetry(messageID, ch)
+
+\tfmt.Printf("Media download hit %s for %s — requesting re-upload via media-retry...\\n", es, messageID)
+\tif rerr := client.SendMediaRetryReceipt(context.Background(), info, downloader.MediaKey); rerr != nil {
+\t\treturn nil, fmt.Errorf("media-retry receipt failed: %v (orig: %w)", rerr, err)
+\t}
+
+\tselect {
+\tcase evt := <-ch:
+\t\tnotif, derr := whatsmeow.DecryptMediaRetryNotification(evt, downloader.MediaKey)
+\t\tif derr != nil {
+\t\t\treturn nil, fmt.Errorf("media-retry decrypt failed: %v (orig: %w)", derr, err)
+\t\t}
+\t\tif notif.GetResult() != waMmsRetry.MediaRetryNotification_SUCCESS {
+\t\t\treturn nil, fmt.Errorf("media-retry not successful: %s (orig: %w)", notif.GetResult().String(), err)
+\t\t}
+\t\tdownloader.DirectPath = notif.GetDirectPath()
+\t\tdownloader.URL = ""
+\t\tfmt.Printf("Media-retry returned fresh directPath for %s — retrying download...\\n", messageID)
+\t\treturn client.Download(context.Background(), downloader)
+\tcase <-time.After(30 * time.Second):
+\t\treturn nil, fmt.Errorf("media-retry timed out after 30s (orig: %w)", err)
+\t}
+}
+
+func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, messageID, chatJID string) (bool, string, string, string, error) {"""
+MEDIA_RETRY_BLOCK_SENTINEL = "claude-ops Fix M: media-retry fallback"
+
+# M4 — route downloadMedia's actual download through downloadWithRetry.
+# Pristine upstream calls the OLD one-arg client.Download(downloader); whatsmeow
+# @latest (which the installer `go get -u`s) takes (context, downloader), and
+# downloadWithRetry uses the two-arg form. Anchor on the pristine one-arg line.
+MEDIA_RETRY_CALL_NEEDLE = "\tmediaData, err := client.Download(downloader)"
+MEDIA_RETRY_CALL_REPLACEMENT = "\t// media-retry fallback on 403/404/410 (claude-ops Fix M)\n\tmediaData, err := downloadWithRetry(client, messageStore, messageID, chatJID, downloader)"
+MEDIA_RETRY_CALL_SENTINEL = "mediaData, err := downloadWithRetry(client, messageStore"
+
+# M5 — deliver *events.MediaRetry to the blocked downloader (anchor on the
+# pristine HistorySync case in the AddEventHandler switch).
+MEDIA_RETRY_EVENT_NEEDLE = """\t\tcase *events.HistorySync:
+\t\t\t// Process history sync events
+\t\t\thandleHistorySync(client, messageStore, v, logger)
+"""
+MEDIA_RETRY_EVENT_REPLACEMENT = """\t\tcase *events.HistorySync:
+\t\t\t// Process history sync events
+\t\t\thandleHistorySync(client, messageStore, v, logger)
+
+\t\tcase *events.MediaRetry:
+\t\t\t// Deliver re-upload notifications to any download blocked on a 403/404/410
+\t\t\t// (claude-ops Fix M — media-retry fallback).
+\t\t\tdeliverMediaRetry(v)
+"""
+MEDIA_RETRY_EVENT_SENTINEL = "claude-ops Fix M — media-retry fallback"
+
+
 def replace_idempotent(
     p: pathlib.Path, needle: str, replacement: str, sentinel: str, label: str
 ) -> bool:
@@ -1636,6 +1834,69 @@ def main() -> int:
         ARCHIVE_ENDPOINT_REPLACEMENT,
         ARCHIVE_ENDPOINT_SENTINEL,
         "Fix F: POST /api/archive endpoint",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        CTX_SQLSTORE_NEEDLE,
+        CTX_SQLSTORE_REPLACEMENT,
+        CTX_SQLSTORE_SENTINEL,
+        "Fix N: sqlstore.New ctx arg",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        CTX_GETFIRSTDEVICE_NEEDLE,
+        CTX_GETFIRSTDEVICE_REPLACEMENT,
+        CTX_GETFIRSTDEVICE_SENTINEL,
+        "Fix N: GetFirstDevice ctx arg",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        CTX_GETGROUPINFO_NEEDLE,
+        CTX_GETGROUPINFO_REPLACEMENT,
+        CTX_GETGROUPINFO_SENTINEL,
+        "Fix N: GetGroupInfo ctx arg",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        CTX_GETCONTACT_NEEDLE,
+        CTX_GETCONTACT_REPLACEMENT,
+        CTX_GETCONTACT_SENTINEL,
+        "Fix N: GetContact ctx arg",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        MEDIA_RETRY_SYNC_IMPORT_NEEDLE,
+        MEDIA_RETRY_SYNC_IMPORT_REPLACEMENT,
+        MEDIA_RETRY_SYNC_IMPORT_SENTINEL,
+        'Fix M: add "sync" import (media-retry registry)',
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        MEDIA_RETRY_PROTO_IMPORT_NEEDLE,
+        MEDIA_RETRY_PROTO_IMPORT_REPLACEMENT,
+        MEDIA_RETRY_PROTO_IMPORT_SENTINEL,
+        "Fix M: add waMmsRetry proto import",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        MEDIA_RETRY_BLOCK_NEEDLE,
+        MEDIA_RETRY_BLOCK_REPLACEMENT,
+        MEDIA_RETRY_BLOCK_SENTINEL,
+        "Fix M: media-retry registry + downloadWithRetry()",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        MEDIA_RETRY_CALL_NEEDLE,
+        MEDIA_RETRY_CALL_REPLACEMENT,
+        MEDIA_RETRY_CALL_SENTINEL,
+        "Fix M: route downloadMedia through downloadWithRetry()",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        MEDIA_RETRY_EVENT_NEEDLE,
+        MEDIA_RETRY_EVENT_REPLACEMENT,
+        MEDIA_RETRY_EVENT_SENTINEL,
+        "Fix M: deliver *events.MediaRetry to blocked downloader",
     )
 
     print("  whatsapp.py:")
