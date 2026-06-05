@@ -1,0 +1,21 @@
+[Unit]
+Description=WhatsApp media enricher — fills empty video/image/document rows with vision+Whisper descriptions (oneshot)
+Documentation=https://github.com/lharries/whatsapp-mcp
+After=whatsapp-bridge.service
+Requires=whatsapp-bridge.service
+PartOf=whatsapp-bridge.service
+
+[Service]
+Type=oneshot
+# Batch may run many vision/Whisper calls; disable the default ~90s start timeout.
+TimeoutStartSec=0
+# Relative media paths from /api/download resolve against the bridge cwd.
+WorkingDirectory=__INSTALL_DIR__/whatsapp-bridge
+# OPENAI_API_KEY (and other secrets) for the metered vision/Whisper API.
+EnvironmentFile=-%h/.config/systemd/env/mcp-secrets.env
+# Wait up to 10s for the bridge :8080 before downloading media.
+ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5; do ss -ltn 2>/dev/null | grep -q ":8080" && exit 0; sleep 2; done; exit 0'
+ExecStart=/usr/bin/python3 __INSTALL_DIR__/transcriber/enrich_media.py --types video,image,document --days 2 --max 40
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=whatsapp-enrich

@@ -1,0 +1,14 @@
+[Unit]
+Description=Enrich new WhatsApp video/image/document media every 10 min + on boot (ops-inbox integration)
+Documentation=https://github.com/lharries/whatsapp-mcp
+
+[Timer]
+# First fire 3 min after boot/session start (after the bridge connects + backfills), then every 10 min.
+OnBootSec=3min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Persistent=true
+Unit=whatsapp-enrich.service
+
+[Install]
+WantedBy=timers.target
