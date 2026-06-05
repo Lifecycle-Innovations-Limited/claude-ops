@@ -329,7 +329,8 @@ def cmd_send():
     resolved = _resolved_ids()
     cap = int(os.environ.get("COS_TG_SEND_CAP", "8"))
     callmap = json.loads(CALLMAP.read_text()) if CALLMAP.exists() else {}
-    already = {v.get("id") for v in callmap.values()}
+    # Only items with a real Telegram message were delivered; failed sends must retry.
+    already = {v.get("id") for v in callmap.values() if v.get("message_id")}
 
     # (Re)build the A/D codemap over the FULL open set (stable order) so freeform
     # "approve A3" / "A3 b" resolve even for items whose button was sent earlier.
@@ -407,6 +408,9 @@ def cmd_send():
             "chat_id": CHAT, "text": text[:3800], "parse_mode": "Markdown",
             "reply_markup": {"inline_keyboard": rows},
         })
+        if not r.get("ok"):
+            log(f"send: sendMessage failed for {iid}: {r.get('error') or r}")
+            continue
         mid = (r.get("result") or {}).get("message_id")
         raw = it.get("raw") if isinstance(it.get("raw"), dict) else {}
         callmap[sid] = {
@@ -414,12 +418,9 @@ def cmd_send():
             "raw": it.get("raw"), "options": opts, "message_id": mid, "title": title,
             "social_set": raw.get("social_set"), "typefully_draft_id": raw.get("typefully_draft_id"),
         }
-        if r.get("ok"):
-            sent += 1
-            if iid in staged_set:
-                revision_posted.add(iid)
-        else:
-            log(f"send: sendMessage failed for {iid}: {r.get('error') or r}")
+        sent += 1
+        if iid in staged_set:
+            revision_posted.add(iid)
     unsent_revisions = staged_set - revision_posted
     for uid in unsent_revisions:
         _revisions_staged.append(uid)
