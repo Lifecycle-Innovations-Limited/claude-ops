@@ -1512,22 +1512,22 @@ MEDIA_RETRY_BLOCK_REPLACEMENT = """// --- claude-ops Fix M: media-retry fallback
 // download path block on the async *events.MediaRetry response.
 var (
 \tmediaRetryMu    sync.Mutex
-\tmediaRetryChans = map[string]chan *events.MediaRetry{}
+\tmediaRetryChans = map[string][]chan *events.MediaRetry{}
 )
 
 func registerMediaRetry(messageID string) chan *events.MediaRetry {
 \tch := make(chan *events.MediaRetry, 1)
 \tmediaRetryMu.Lock()
-\tmediaRetryChans[messageID] = ch
+\tmediaRetryChans[messageID] = append(mediaRetryChans[messageID], ch)
 \tmediaRetryMu.Unlock()
 \treturn ch
 }
 
 func deliverMediaRetry(evt *events.MediaRetry) {
 \tmediaRetryMu.Lock()
-\tch, ok := mediaRetryChans[evt.MessageID]
+\tchans := mediaRetryChans[evt.MessageID]
 \tmediaRetryMu.Unlock()
-\tif ok {
+\tfor _, ch := range chans {
 \t\tselect {
 \t\tcase ch <- evt:
 \t\tdefault:
@@ -1535,10 +1535,19 @@ func deliverMediaRetry(evt *events.MediaRetry) {
 \t}
 }
 
-func unregisterMediaRetry(messageID string) {
+func unregisterMediaRetry(messageID string, ch chan *events.MediaRetry) {
 \tmediaRetryMu.Lock()
-\tdelete(mediaRetryChans, messageID)
-\tmediaRetryMu.Unlock()
+\tdefer mediaRetryMu.Unlock()
+\twaiters := mediaRetryChans[messageID]
+\tfor i, w := range waiters {
+\t\tif w == ch {
+\t\t\tmediaRetryChans[messageID] = append(waiters[:i], waiters[i+1:]...)
+\t\t\tbreak
+\t\t}
+\t}
+\tif len(mediaRetryChans[messageID]) == 0 {
+\t\tdelete(mediaRetryChans, messageID)
+\t}
 }
 
 // downloadWithRetry calls client.Download; on a 403/404/410 it asks the sender's
@@ -1572,7 +1581,13 @@ func downloadWithRetry(client *whatsmeow.Client, messageStore *MessageStore, mes
 \tcase fromMe && client.Store.ID != nil:
 \t\tsender = *client.Store.ID
 \tcase senderStr != "":
-\t\tsender = types.NewJID(senderStr, chat.Server)
+\t\tif strings.Contains(senderStr, "@") {
+\t\t\tsender, _ = types.ParseJID(senderStr)
+\t\t} else if chat.Server == types.GroupServer {
+\t\t\tsender = types.NewJID(senderStr, types.DefaultUserServer)
+\t\t} else {
+\t\t\tsender = types.NewJID(senderStr, chat.Server)
+\t\t}
 \tdefault:
 \t\tsender = chat
 \t}
@@ -1588,7 +1603,7 @@ func downloadWithRetry(client *whatsmeow.Client, messageStore *MessageStore, mes
 \t}
 
 \tch := registerMediaRetry(messageID)
-\tdefer unregisterMediaRetry(messageID)
+\tdefer unregisterMediaRetry(messageID, ch)
 
 \tfmt.Printf("Media download hit %s for %s — requesting re-upload via media-retry...\\n", es, messageID)
 \tif rerr := client.SendMediaRetryReceipt(context.Background(), info, downloader.MediaKey); rerr != nil {
