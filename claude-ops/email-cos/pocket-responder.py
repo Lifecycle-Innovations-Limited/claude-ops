@@ -348,6 +348,14 @@ def cmd_send():
         }
     CODEMAP.write_text(json.dumps(codemap, indent=2))
 
+    staged = list(_revisions_staged)
+    if staged:
+        staged_set = set(staged)
+        items = [it for it in items if it["id"] in staged_set] + [
+            it for it in items if it["id"] not in staged_set
+        ]
+        _revisions_staged.clear()
+
     sent = 0
     for it in items:
         if sent >= cap:
@@ -832,6 +840,33 @@ def _handle_text(ev, codemap, callmap, resolved, seen):
 
     if matched_any:
         return acted
+
+    # --- Fast-path: freeform edit on the sole open outbound ASK (no code / LLM). ---
+    if _edit_intent(body):
+        outbound = []
+        seen_ob: set[str] = set()
+        for ent in codemap.values():
+            tid = ent.get("id")
+            if not tid or tid in resolved or tid in handled_ids or tid in seen_ob:
+                continue
+            if not _is_outbound(ent):
+                continue
+            seen_ob.add(tid)
+            outbound.append(ent)
+        if len(outbound) == 1:
+            ent = outbound[0]
+            tid = ent["id"]
+            new_id = _restage_revision(ent, body)
+            if new_id:
+                resolved.add(tid); handled_ids.add(tid); acted += 1
+                _, cment = _callmap_entry_for_id(callmap, tid)
+                _freeze(cment, "✍️ Revising per your note — new draft coming for approval.")
+                _send(f"✍️ Revised “{ent.get('title','')[:50]}” per your note — staged {new_id}; "
+                      f"sending it to you for approval now. (Original NOT sent.)")
+            else:
+                _send(f"I read that as an edit to “{ent.get('title','')[:50]}” but couldn't "
+                      f"re-draft it (or nothing changed). Tap ✅ Approve to send the original, or `reject`.")
+            return acted
 
     # --- LLM fallback for natural language ("approve the Duetti one"). ---
     decisions = _llm_map(codemap, body)
