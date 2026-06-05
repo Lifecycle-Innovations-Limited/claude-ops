@@ -206,7 +206,10 @@ _RE_EDIT_INTENT = re.compile(
 
 
 def _edit_intent(body):
-    return bool(_RE_EDIT_INTENT.search(body or ""))
+    # Strip negated phrases that contain edit tokens but mean approval, e.g.
+    # "no change needed, approve" or "we no longer need to wait".
+    t = re.sub(r"\bno (change|longer)\b", "", body or "", flags=re.I)
+    return bool(_RE_EDIT_INTENT.search(t))
 
 
 # Edit-then-send: a freeform reply with edit intent on an outbound email ASK
@@ -322,7 +325,7 @@ def cmd_send():
     if not items:
         log("send: no open items")
         print("no open items")
-        return
+        return set()
     resolved = _resolved_ids()
     cap = int(os.environ.get("COS_TG_SEND_CAP", "8"))
     callmap = json.loads(CALLMAP.read_text()) if CALLMAP.exists() else {}
@@ -348,6 +351,7 @@ def cmd_send():
         }
     CODEMAP.write_text(json.dumps(codemap, indent=2))
 
+    staged_set = set()
     staged = list(_revisions_staged)
     if staged:
         staged_set = set(staged)
@@ -357,10 +361,11 @@ def cmd_send():
         _revisions_staged.clear()
 
     sent = 0
+    revision_posted = set()
     for it in items:
-        if sent >= cap:
-            break
         iid = it["id"]
+        if sent >= cap and iid not in staged_set:
+            break
         if iid in resolved or iid in already:
             continue
         sid = _sid(iid)
@@ -411,11 +416,17 @@ def cmd_send():
         }
         if r.get("ok"):
             sent += 1
+            if iid in staged_set:
+                revision_posted.add(iid)
         else:
             log(f"send: sendMessage failed for {iid}: {r.get('error') or r}")
+    unsent_revisions = staged_set - revision_posted
+    for uid in unsent_revisions:
+        _revisions_staged.append(uid)
     CALLMAP.write_text(json.dumps(callmap, indent=0))
     log(f"send: sent {sent} button message(s); callmap={len(callmap)} codemap={len(codemap)}")
     print(f"sent {sent} button message(s); callmap={len(callmap)}")
+    return unsent_revisions
 
 
 # ---------------------------------------------------------------------------
@@ -962,11 +973,19 @@ def cmd_process():
     log(f"process: acted={acted}")
     # Post any re-drafted revision ASKs to Telegram now (not next send tick).
     if _revisions_staged:
-        log(f"process: staged {len(_revisions_staged)} revision(s) -> sending now")
+        want = list(_revisions_staged)
+        log(f"process: staged {len(want)} revision(s) -> sending now")
         try:
-            cmd_send()
+            unsent = cmd_send()
         except Exception as e:
             log(f"process: revision send failed: {e}")
+            _send(f"⚠️ Couldn't post the revised draft(s) to Telegram ({e}). "
+                  f"They're staged in review and will retry on the next send tick.")
+        else:
+            if unsent:
+                ids = ", ".join(sorted(unsent)[:5])
+                _send(f"⚠️ Some revised draft(s) didn't post to Telegram yet ({ids}). "
+                      f"They'll retry on the next send tick.")
     print(f"processed inbox; acted={acted}")
 
 
