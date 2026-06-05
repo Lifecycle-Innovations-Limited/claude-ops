@@ -3056,7 +3056,212 @@ async function rotate(targetEmail, opts = {}) {
       await refreshRunningSession(account, opts.noBrowser);
     }
   }
+
+  // Post-rotation: reload running bg agents onto the new token.
+  // Gated on opts.reloadAgents (set via --reload-agents CLI flag or daemon call)
+  // so that existing callers that don't pass the flag retain their current
+  // behavior unchanged. The stagger adds up to 4 × 15 s = 60 s of extra wall
+  // time — callers must account for this in their timeout budgets.
+  if (opts.reloadAgents) {
+    if (dryRun) {
+      log('[DRY-RUN] Would reload running bg agents onto new token');
+    } else {
+      await reloadRunningAgents({ initiatorSessionId: opts.initiatorSessionId });
+    }
+  }
+
   return verified;
+}
+
+// ── Reload running bg agents after rotation ───────────────────────────────────
+//
+// After a successful keychain swap, already-running `claude --bg` agents keep
+// using their in-memory (now stale) OAuth token. `claude respawn <shortId>`
+// restarts a bg session keeping its conversation intact and re-reads auth from
+// the keychain — this is the mechanism that makes a running agent adopt the
+// new token.
+//
+// Anti-stampede guarantees:
+//   - Hard cap: at most RESPAWN_CAP agents per invocation (default 4).
+//   - Sequential: agents are respawned one at a time (no parallel fan-out).
+//   - Stagger: RESPAWN_STAGGER_MS sleep between each respawn.
+//   - Skips orchestrator (keepalive owns it), bare spares (name===sessionId[:8]),
+//     and the session that initiated the rotation (opts.initiatorSessionId).
+//   - jobId divergence: if resolve-jobid.sh exists, resolve sessionId→jobId
+//     before respawn. "No job matching" is non-fatal — log + continue.
+//   - Fully guarded: if `claude agents` fails → log + no-op. Rotation success
+//     never depends on this step.
+//
+// opts.initiatorSessionId — short (8-char) or full sessionId of the session
+//   that triggered the rotation; skipped to avoid respawning our own caller.
+// opts.dryRun — log selections but skip actual respawn calls (for harness testing).
+async function reloadRunningAgents(opts = {}) {
+  const RESPAWN_CAP = 4; // hard anti-stampede cap per invocation
+  const RESPAWN_STAGGER_MS = 15_000; // ≥15s between each respawn (memory rule)
+  const RESPAWN_TIMEOUT_MS = 60_000; // per-respawn timeout
+  const dryRun = opts.dryRun === true;
+
+  const RESOLVE_JOBID = join(homedir(), '.claude', 'scripts', 'resolve-jobid.sh');
+  const resolveJobIdAvailable = existsSync(RESOLVE_JOBID);
+
+  // Resolve the claude binary path once (execFileSync: no shell).
+  let claudeBin = 'claude';
+  try {
+    claudeBin = execFileSync('which', ['claude'], { encoding: 'utf8', timeout: 5000 }).trim() || 'claude';
+  } catch {}
+
+  log(`[reload-agents] Starting post-rotation agent reload...${dryRun ? ' (DRY-RUN)' : ''}`);
+
+  // 1. Enumerate running bg agents with a hard timeout.
+  // Use execFileSync (no shell) so the args are passed directly to the binary —
+  // avoids shell-injection risk and the stderr redirect (2>/dev/null) is handled
+  // by capturing stderr separately instead.
+  let agents;
+  try {
+    const raw = execFileSync(claudeBin, ['agents', '--json'], {
+      timeout: 15_000,
+      encoding: 'utf8',
+      // Swallow stderr (e.g. update notices) so JSON parse doesn't choke on it.
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    if (!raw) {
+      log('[reload-agents] `claude agents --json` returned empty — no-op');
+      return;
+    }
+    // Handle both bare array and {sessions|agents:[]} wrapper shapes.
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      agents = parsed;
+    } else if (Array.isArray(parsed?.sessions)) {
+      agents = parsed.sessions;
+    } else if (Array.isArray(parsed?.agents)) {
+      agents = parsed.agents;
+    } else {
+      log('[reload-agents] Unexpected `claude agents --json` shape — no-op');
+      return;
+    }
+  } catch (e) {
+    log(`[reload-agents] Failed to list agents (non-fatal): ${e.message?.slice(0, 80)} — no-op`);
+    return;
+  }
+
+  if (!agents.length) {
+    log('[reload-agents] No running bg agents — no-op');
+    return;
+  }
+
+  // 2. Select candidates to respawn.
+  const initiatorShort = opts.initiatorSessionId
+    ? (opts.initiatorSessionId.length === 8 ? opts.initiatorSessionId : opts.initiatorSessionId.slice(0, 8))
+    : null;
+
+  const candidates = [];
+  const deferred = [];
+
+  for (const agent of agents) {
+    const sessionId = agent.sessionId || '';
+    const shortId = sessionId.slice(0, 8);
+    const name = (agent.name || '').trim();
+    const status = (agent.status || '').toLowerCase();
+
+    // Skip orchestrator — the 60s keepalive owns it; respawning it from inside
+    // rotation risks a fight.
+    if (name === 'orchestrator') {
+      log(`[reload-agents] Skipping orchestrator (${shortId})`);
+      continue;
+    }
+
+    // Skip bare bg-spares: name matches sessionId[:8] — these are empty/spare
+    // sessions that have no meaningful conversation to preserve.
+    if (name === shortId) {
+      log(`[reload-agents] Skipping bare spare (${shortId})`);
+      continue;
+    }
+
+    // Skip the session that triggered this rotation (avoid respawning our caller).
+    if (initiatorShort && shortId === initiatorShort) {
+      log(`[reload-agents] Skipping initiator session (${shortId})`);
+      continue;
+    }
+
+    // Include all remaining background agents (both busy + idle can be stale).
+    if (candidates.length < RESPAWN_CAP) {
+      candidates.push({ sessionId, shortId, name, status });
+    } else {
+      deferred.push({ sessionId, shortId, name, status });
+    }
+  }
+
+  if (!candidates.length) {
+    log('[reload-agents] No eligible agents to respawn — no-op');
+    return;
+  }
+
+  if (deferred.length) {
+    log(
+      `[reload-agents] ${deferred.length} agent(s) deferred (cap=${RESPAWN_CAP}): ` +
+        deferred.map((a) => `${a.shortId}(${a.name})`).join(', ') +
+        ' — daemon next-pass / next rotation will pick them up',
+    );
+  }
+
+  log(`[reload-agents] Respawning ${candidates.length} agent(s): ${candidates.map((a) => `${a.shortId}(${a.name})`).join(', ')}`);
+
+  // 3. Sequential respawn with stagger.
+  for (let i = 0; i < candidates.length; i++) {
+    const { sessionId, shortId, name, status } = candidates[i];
+
+    // Resolve jobId if possible (sessionId and jobId diverge — see memory note
+    // bg-session-addressing-by-jobid). Use jobId for respawn; fall back to shortId.
+    // execFileSync with argument array: no shell, no injection risk.
+    let respawnId = shortId;
+    if (resolveJobIdAvailable) {
+      try {
+        const resolved = execFileSync('bash', [RESOLVE_JOBID, shortId], {
+          timeout: 5000,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }).trim();
+        if (resolved) {
+          log(`[reload-agents] ${shortId}(${name}) jobId resolved: ${resolved}`);
+          respawnId = resolved;
+        }
+      } catch {
+        // resolve-jobid.sh exits non-zero when no match — fall back to shortId
+        log(`[reload-agents] ${shortId}(${name}): jobId resolution failed — using shortId`);
+      }
+    }
+
+    log(`[reload-agents] ${dryRun ? '[DRY-RUN] Would respawn' : 'Respawning'} ${shortId}(${name}) [status=${status}] via id=${respawnId}...`);
+    if (!dryRun) {
+      try {
+        // execFileSync: no shell — respawnId is passed as a literal argument.
+        const out = execFileSync(claudeBin, ['respawn', respawnId], {
+          timeout: RESPAWN_TIMEOUT_MS,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }).trim();
+        log(`[reload-agents] Respawn ${shortId}(${name}): ${out.slice(0, 120)}`);
+      } catch (e) {
+        const msg = (e.stdout || e.stderr || e.message || '').slice(0, 120);
+        // "No job matching" is non-fatal — keepalive will catch stragglers.
+        log(`[reload-agents] Respawn ${shortId}(${name}) non-fatal error: ${msg} — continuing`);
+      }
+    }
+
+    // Stagger: sleep between respawns to avoid stampede. Skip after the last one.
+    // In dry-run mode we skip the actual sleep so the harness exits quickly.
+    if (i < candidates.length - 1) {
+      if (dryRun) {
+        log(`[reload-agents] [DRY-RUN] Would wait ${RESPAWN_STAGGER_MS / 1000}s before next respawn`);
+      } else {
+        log(`[reload-agents] Waiting ${RESPAWN_STAGGER_MS / 1000}s before next respawn...`);
+        await sleep(RESPAWN_STAGGER_MS);
+      }
+    }
+  }
+
+  log(`[reload-agents] Done.${dryRun ? ' [DRY-RUN]' : ''} ${candidates.length} respawn(s) ${dryRun ? 'selected' : 'issued'}. ${deferred.length} deferred.`);
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
@@ -3428,6 +3633,21 @@ if (args.includes('--setup')) {
   const dryRun = args.includes('--dry-run');
   const magicLink = args.includes('--magic-link');
   const allowExtraUsage = args.includes('--allow-extra-usage');
+  // --reload-agents: after a successful rotation, respawn running bg agents so
+  // they pick up the new token from the keychain. Opt-in so existing callers
+  // that don't pass the flag retain their current behaviour unchanged.
+  const reloadAgents = args.includes('--reload-agents');
+  // --reload-agents-dry-run: parse+select logic only; no actual respawns. Used
+  // for harness testing of the candidate-selection logic.
+  const reloadAgentsDryRun = args.includes('--reload-agents-dry-run');
+
+  if (reloadAgentsDryRun) {
+    // Standalone dry-run: enumerate agents, print selection decisions, exit.
+    log('[reload-agents-dry-run] Running candidate-selection harness...');
+    await reloadRunningAgents({ dryRun: true });
+    process.exit(0);
+  }
+
   if (dryRun) log('DRY RUN MODE — no changes will be made');
   if (force) {
     log('Force mode — bypassing lock and killing any competing rotations');
@@ -3450,6 +3670,7 @@ if (args.includes('--setup')) {
       dryRun,
       magicLink,
       allowExtraUsage,
+      reloadAgents,
     });
     process.exit(ok ? 0 : 1);
   } catch (err) {
