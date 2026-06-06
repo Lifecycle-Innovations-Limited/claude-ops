@@ -223,7 +223,7 @@ How would you like to run setup?
 
 If the user selects "Set up everything", select ALL sections across all batches and run them in order (Step 2 → 2b → 2c → 3 → 4 → 5 → 5b → 6 → 6.5 → 7), skipping any already fully configured. Within each step, use the "Configure all" fast-path where available.
 
-If the user selects "Re-run a specific section", use sequential `AskUserQuestion` calls (paginated 4 options per page per Rule 1) to let the user pick from the section names (cli, daemon, channels, mcp, registry, prefs, deploy-fix, env, ecom, mktg, voice, revenue), then jump directly to that step. The `deploy-fix` section routes to Step 6.5.
+If the user selects "Re-run a specific section", use sequential `AskUserQuestion` calls (paginated 4 options per page per Rule 1) to let the user pick from the section names (cli, daemon, channels, mcp, registry, prefs, deploy-fix, env, ecom, mktg, voice, revenue, network), then jump directly to that step. The `deploy-fix` section routes to Step 6.5; `network` routes to Step 3q-network.
 
 If the user selects "Pick sections", proceed with the batched selection below.
 
@@ -881,6 +881,70 @@ jq --arg url "$HOMEY_LOCAL_URL" \
 ```
 
 Print: `✓ Home automation — Homey Pro configured (local: $HOMEY_LOCAL_URL)`
+
+---
+
+### 3q-network — UniFi Network (Site Manager + local console)
+
+Scout for credentials in background (RULE ZERO):
+
+```bash
+# Run all scouts simultaneously — run_in_background: true on each
+printenv UNIFI_SITE_MANAGER_API_KEY UNIFI_LOCAL_GATEWAY_URL UNIFI_LOCAL_API_KEY UNIFI_PROTECT_URL UNIFI_PROTECT_API_KEY 2>/dev/null
+doppler secrets --project unifi --config prd --json 2>/dev/null | jq -r 'to_entries[] | select(.key|test("UNIFI";"i")) | "\(.key)=(present)"'
+security find-generic-password -s "unifi-site-manager-key" -w 2>/dev/null
+security find-generic-password -s "unifi-local-key" -w 2>/dev/null
+security find-generic-password -s "unifi-protect-key" -w 2>/dev/null
+```
+
+If any scout returns a non-empty value, pre-fill it as the default; present found values alongside `[Use found value]` / `[Paste manually]` / `[Skip this surface]`.
+
+**Optional surfaces** (any subset may be configured — ask per surface, Rule 3):
+
+1. **Site Manager (cloud)** — `UNIFI_SITE_MANAGER_API_KEY` from unifi.ui.com → Settings → Control Plane → Integrations → Create API Key.
+2. **Network (local)** — `UNIFI_LOCAL_GATEWAY_URL` (e.g. `https://192.168.1.1`) + `UNIFI_LOCAL_API_KEY` from the Network app → Settings → Control Plane → Integrations.
+3. **Protect (local)** — `UNIFI_PROTECT_URL` (defaults to gateway URL) + `UNIFI_PROTECT_API_KEY` from Protect → Settings → Control Plane → Integrations (or reuse the OS key).
+
+Discover the console on the LAN when gateway URL is unknown:
+
+```bash
+for ip in 192.168.1.1 192.168.0.1 10.0.0.1; do curl -sk --max-time 2 "https://$ip" -o /dev/null -w "$ip → %{http_code}\n" 2>/dev/null; done
+```
+
+**Validate** each acquired credential before saving (smoke test, RULE ZERO):
+
+```bash
+# Site Manager
+curl -s --max-time 15 -H "X-API-Key: $UNIFI_SM_KEY" https://api.ui.com/v1/hosts | jq -e '.data' >/dev/null
+# Network (self-signed cert ⇒ -k)
+curl -sk --max-time 12 -H "X-API-Key: $UNIFI_LOCAL_KEY" "${UNIFI_LOCAL_URL}/proxy/network/integration/v1/sites" | jq -e '.data' >/dev/null
+# Protect
+curl -sk --max-time 12 -H "X-API-Key: $UNIFI_PROTECT_KEY" "${UNIFI_PROTECT_URL}/proxy/protect/integration/v1/meta/info" | jq -e '.version' >/dev/null
+```
+
+401/403 → key invalid; re-prompt via `AskUserQuestion` (`[Paste new key]`, `[Skip this surface]`).
+
+**Save** to `$PREFS_PATH` via `jq` (merge — omit empty fields, keep existing values for skipped surfaces):
+
+```bash
+jq --arg sm "${UNIFI_SM_KEY:-}" \
+   --arg url "${UNIFI_LOCAL_URL:-}" \
+   --arg lk "${UNIFI_LOCAL_KEY:-}" \
+   --arg pu "${UNIFI_PROTECT_URL:-}" \
+   --arg pk "${UNIFI_PROTECT_KEY:-}" \
+   '.home_network = ((.home_network // {}) + {
+     unifi_site_manager_api_key: (if $sm != "" then $sm else (.home_network.unifi_site_manager_api_key // "") end),
+     unifi_local_gateway_url: (if $url != "" then $url else (.home_network.unifi_local_gateway_url // "") end),
+     unifi_local_api_key: (if $lk != "" then $lk else (.home_network.unifi_local_api_key // "") end),
+     unifi_protect_url: (if $pu != "" then $pu else (.home_network.unifi_protect_url // "") end),
+     unifi_protect_api_key: (if $pk != "" then $pk else (.home_network.unifi_protect_api_key // "") end)
+   })' \
+   "$PREFS_PATH" > "$PREFS_PATH.tmp" && mv "$PREFS_PATH.tmp" "$PREFS_PATH"
+```
+
+Print: `✓ UniFi network — configured (site-manager: ${UNIFI_SM_KEY:+yes}${UNIFI_SM_KEY:-no} · local: ${UNIFI_LOCAL_URL:-—} · protect: ${UNIFI_PROTECT_URL:-—})`
+
+> **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-unifi/SKILL.md` for full operational instructions, API reference, and troubleshooting.
 
 ---
 
