@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.24.0] - 2026-06-06
+
+### Changed
+Add /ops:ops-ar A&R command + ar-producer agent (Opus): runs the audio-ar stack (BPM/key/loudness/structure, stems, CLAP mood/genre/hit-lean, Whisper lyrics, Cyanite/Music.ai pro layer) and delivers verdict cards. Modes: single track, batch, full Gmail-inbox demo sweep; emails the full verdict with direct listen links (Rule 6 gated).
+
+
 ## [2.23.1] - 2026-06-06
 
 ### Changed
