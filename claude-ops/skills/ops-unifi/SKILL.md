@@ -226,7 +226,7 @@ One-screen network dashboard. Probe Site Manager (hosts/devices/ISP), Network (d
 ```bash
 # Site Manager fleet view (skip surface when key missing)
 [ -n "$UNIFI_SM_KEY" ] && sm_call "/v1/hosts" | jq '{hosts: ([.data // [] | .[] | {name:.reportedState.hostname, model:.reportedState.hardware.shortname, state:.reportedState.state}])}'
-[ -n "$UNIFI_SM_KEY" ] && sm_call "/v1/devices" | jq '{fleet_devices: ([.data // [] | .[] | (.devices // []) | length] | add // 0)}'
+[ -n "$UNIFI_SM_KEY" ] && sm_call "/v1/devices" | jq '{fleet_devices: ([.data // [] | length])}'
 
 # Local network (skip surface when creds missing)
 if [ -n "$UNIFI_LOCAL_URL" ] && [ -n "$UNIFI_LOCAL_KEY" ]; then
@@ -425,6 +425,7 @@ Signals scored:
 5. **Protect** — any camera `state != CONNECTED`, NVR storage `> 90%`, or expected-recording camera not recording → *surveillance gap*.
 
 ```bash
+SITE=$(net_call "/sites" | jq -r '.data[0].id // .data[0].internalReference // empty')
 # Pull the three inputs in parallel (or via the Agent Team)
 sm_call "/v1/isp-metrics/1h"            > /tmp/unifi_isp.json &
 net_call "/sites/${SITE}/devices"       > /tmp/unifi_dev.json &
