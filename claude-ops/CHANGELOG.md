@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.23.1] - 2026-06-06
+
+### Changed
+Balanced model strategy for gstack skills and ops commands
+
+
 ## [2.23.0] - 2026-06-05
 
 ### Changed
