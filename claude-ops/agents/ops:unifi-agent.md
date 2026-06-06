@@ -45,6 +45,22 @@ UNIFI_PROTECT_KEY=$(jq -r '.home_network.unifi_protect_api_key // empty' "$PREFS
 [ -z "$UNIFI_LOCAL_KEY" ]   && UNIFI_LOCAL_KEY="${UNIFI_LOCAL_API_KEY:-}"
 [ -z "$UNIFI_PROTECT_URL" ] && UNIFI_PROTECT_URL="${UNIFI_PROTECT_URL:-$UNIFI_LOCAL_URL}"
 [ -z "$UNIFI_PROTECT_KEY" ] && UNIFI_PROTECT_KEY="${UNIFI_PROTECT_API_KEY:-$UNIFI_LOCAL_KEY}"
+
+# Doppler fallback (project: unifi)
+if command -v doppler &>/dev/null; then
+  [ -z "$UNIFI_SM_KEY" ]    && UNIFI_SM_KEY=$(doppler secrets get UNIFI_SITE_MANAGER_API_KEY --project unifi --plain 2>/dev/null)
+  [ -z "$UNIFI_LOCAL_URL" ] && UNIFI_LOCAL_URL=$(doppler secrets get UNIFI_LOCAL_GATEWAY_URL --project unifi --plain 2>/dev/null)
+  [ -z "$UNIFI_LOCAL_KEY" ] && UNIFI_LOCAL_KEY=$(doppler secrets get UNIFI_LOCAL_API_KEY --project unifi --plain 2>/dev/null)
+  [ -z "$UNIFI_PROTECT_KEY" ] && UNIFI_PROTECT_KEY=$(doppler secrets get UNIFI_PROTECT_API_KEY --project unifi --plain 2>/dev/null)
+fi
+
+# Keychain fallback (macOS)
+[ -z "$UNIFI_SM_KEY" ]    && UNIFI_SM_KEY=$(security find-generic-password -s "unifi-site-manager-key" -w 2>/dev/null)
+[ -z "$UNIFI_LOCAL_KEY" ] && UNIFI_LOCAL_KEY=$(security find-generic-password -s "unifi-local-key" -w 2>/dev/null)
+[ -z "$UNIFI_PROTECT_KEY" ] && UNIFI_PROTECT_KEY=$(security find-generic-password -s "unifi-protect-key" -w 2>/dev/null)
+
+[ -z "$UNIFI_PROTECT_URL" ] && UNIFI_PROTECT_URL="$UNIFI_LOCAL_URL"
+[ -z "$UNIFI_PROTECT_KEY" ] && UNIFI_PROTECT_KEY="$UNIFI_LOCAL_KEY"
 ```
 
 If the credentials for the requested scope do not resolve, return:

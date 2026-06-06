@@ -40,7 +40,7 @@ Before executing, load available context:
    - `home_network.unifi_protect_url` — Protect host (often same as gateway); defaults to gateway URL
    - `home_network.unifi_protect_api_key` — Protect Integration API key (defaults to local key if unset — one UniFi OS key often works for both)
 
-2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
+2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/daemon-health.json`
    - If `action_needed` is not null → surface it before running any UniFi operations
    - On any auth/connectivity failure in this skill, write `action_needed` back to daemon-health.json
 
@@ -119,7 +119,11 @@ Real-time: WebSocket `wss://${UNIFI_PROTECT_URL#https://}/proxy/protect/integrat
 Resolve UniFi credentials in this order (userConfig → env → Doppler → keychain). The three surfaces are independent — any subset may be configured; the skill degrades gracefully and only runs the surfaces it has keys for.
 
 ```bash
-PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+PLUGIN_DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PREFS_PATH="${PLUGIN_DATA_DIR}/preferences.json"
+
+# Capture shell-exported protect host before prefs load overwrites UNIFI_PROTECT_URL
+_ENV_UNIFI_PROTECT_URL="${UNIFI_PROTECT_URL:-}"
 
 # 1. Plugin userConfig (preferences.json → home_network.*)
 UNIFI_SM_KEY=$(jq -r '.home_network.unifi_site_manager_api_key // empty' "$PREFS_PATH" 2>/dev/null)
@@ -132,7 +136,7 @@ UNIFI_PROTECT_KEY=$(jq -r '.home_network.unifi_protect_api_key // empty' "$PREFS
 [ -n "$UNIFI_SM_KEY" ]      || UNIFI_SM_KEY="${UNIFI_SITE_MANAGER_API_KEY:-${UNIFI_SM_KEY:-}}"
 [ -n "$UNIFI_LOCAL_URL" ]   || UNIFI_LOCAL_URL="${UNIFI_LOCAL_GATEWAY_URL:-${UNIFI_LOCAL_URL:-}}"
 [ -n "$UNIFI_LOCAL_KEY" ]   || UNIFI_LOCAL_KEY="${UNIFI_LOCAL_API_KEY:-${UNIFI_LOCAL_KEY:-}}"
-[ -n "$UNIFI_PROTECT_URL" ] || UNIFI_PROTECT_URL="${UNIFI_PROTECT_URL:-}"
+[ -n "$UNIFI_PROTECT_URL" ] || UNIFI_PROTECT_URL="${_ENV_UNIFI_PROTECT_URL:-}"
 [ -n "$UNIFI_PROTECT_KEY" ] || UNIFI_PROTECT_KEY="${UNIFI_PROTECT_API_KEY:-${UNIFI_PROTECT_KEY:-}}"
 
 # 3. Doppler fallback (project: unifi)
@@ -153,13 +157,13 @@ fi
 [ -z "$UNIFI_PROTECT_KEY" ] && UNIFI_PROTECT_KEY="$UNIFI_LOCAL_KEY"
 ```
 
-If **none** of (`UNIFI_SM_KEY`) nor (`UNIFI_LOCAL_URL` + `UNIFI_LOCAL_KEY`) is resolvable, tell the user and exit gracefully:
+Unless the argument is `setup`, `configure`, `init`, or `token`, if **none** of (`UNIFI_SM_KEY`), (`UNIFI_LOCAL_URL` + `UNIFI_LOCAL_KEY`), nor (`UNIFI_PROTECT_URL` + `UNIFI_PROTECT_KEY`) is resolvable, tell the user and exit gracefully:
 
 ```
 No UniFi credentials configured. Run /ops:setup --section network to configure your UniFi Site Manager and/or local console API keys.
 ```
 
-Write `action_needed: "configure_unifi"` to `daemon-health.json` and exit.
+Write `action_needed: "configure_unifi"` to `${PLUGIN_DATA_DIR}/daemon-health.json` and exit.
 
 Set helpers used by all phases below:
 
@@ -223,17 +227,19 @@ Pick the first site automatically when a surface needs a `siteId` and only one s
 One-screen network dashboard. Probe Site Manager (hosts/devices/ISP), Network (devices/clients), and Protect (cameras) in parallel — separate Bash calls or the Agent Team in **Agent Teams support** below — then render.
 
 ```bash
-# Site Manager fleet view
-sm_call "/v1/hosts" | jq '{hosts: ([.data // [] | .[] | {name:.reportedState.hostname, model:.reportedState.hardware.shortname, state:.reportedState.state}])}'
-sm_call "/v1/devices" | jq '{fleet_devices: ([.data // [] | .[].devices // [] ] | add | length)}'
+# Site Manager fleet view (skip surface when key missing)
+[ -n "$UNIFI_SM_KEY" ] && sm_call "/v1/hosts" | jq '{hosts: ([.data // [] | .[] | {name:.reportedState.hostname, model:.reportedState.hardware.shortname, state:.reportedState.state}])}'
+[ -n "$UNIFI_SM_KEY" ] && sm_call "/v1/devices" | jq '{fleet_devices: ([.data // [] | length])}'
 
-# Local network
-SITE=$(net_call "/sites" | jq -r '.data[0].id // .data[0].internalReference // empty')
-net_call "/sites/${SITE}/devices" | jq '{net_devices: (.data|length), online: ([.data[]|select(.state=="ONLINE")]|length)}'
-net_call "/sites/${SITE}/clients" | jq '{clients: (.data|length)}'
+# Local network (skip surface when creds missing)
+if [ -n "$UNIFI_LOCAL_URL" ] && [ -n "$UNIFI_LOCAL_KEY" ]; then
+  SITE=$(net_call "/sites" | jq -r '.data[0].id // .data[0].internalReference // empty')
+  net_call "/sites/${SITE}/devices" | jq '{net_devices: (.data|length), online: ([.data[]|select(.state=="ONLINE")]|length)}'
+  net_call "/sites/${SITE}/clients" | jq '{clients: (.data|length)}'
+fi
 
-# Protect
-pro_call "/cameras" | jq '{cameras: length, recording: ([.[]|select(.isRecording==true)]|length), offline: ([.[]|select(.state!="CONNECTED")]|length)}'
+# Protect (skip surface when creds missing)
+[ -n "$UNIFI_PROTECT_URL" ] && [ -n "$UNIFI_PROTECT_KEY" ] && pro_call "/cameras" | jq '{cameras: length, recording: ([.[]|select(.isRecording==true)]|length), offline: ([.[]|select(.state!="CONNECTED")]|length)}'
 ```
 
 Desktop render:
@@ -422,6 +428,7 @@ Signals scored:
 5. **Protect** — any camera `state != CONNECTED`, NVR storage `> 90%`, or expected-recording camera not recording → *surveillance gap*.
 
 ```bash
+SITE=$(net_call "/sites" | jq -r '.data[0].id // .data[0].internalReference // empty')
 # Pull the three inputs in parallel (or via the Agent Team)
 sm_call "/v1/isp-metrics/1h"            > /tmp/unifi_isp.json &
 net_call "/sites/${SITE}/devices"       > /tmp/unifi_dev.json &
@@ -485,7 +492,7 @@ If the wizard is unavailable, run inline discovery (background per Rule 4):
 
 ```bash
 # 1. Env vars
-printenv UNIFI_SITE_MANAGER_API_KEY UNIFI_LOCAL_GATEWAY_URL UNIFI_LOCAL_API_KEY UNIFI_PROTECT_API_KEY 2>/dev/null
+printenv UNIFI_SITE_MANAGER_API_KEY UNIFI_LOCAL_GATEWAY_URL UNIFI_LOCAL_API_KEY UNIFI_PROTECT_URL UNIFI_PROTECT_API_KEY 2>/dev/null
 # 2. Shell profiles
 grep -hE 'UNIFI_' ~/.zshrc ~/.bashrc ~/.envrc ~/.mcp-secrets.env 2>/dev/null | grep -v '^#'
 # 3. Doppler
@@ -512,6 +519,27 @@ net_call "/sites" | jq -e '.data' >/dev/null && echo "network OK"
 # Protect
 pro_call "/meta/info" | jq -e '.version' >/dev/null && echo "protect OK"
 ```
+
+After each surface passes its smoke test, merge verified values into `$PREFS_PATH` (omit empty fields — keep existing prefs for skipped surfaces):
+
+```bash
+mkdir -p "$(dirname "$PREFS_PATH")"
+jq --arg sm "${UNIFI_SM_KEY:-}" \
+   --arg url "${UNIFI_LOCAL_URL:-}" \
+   --arg lk "${UNIFI_LOCAL_KEY:-}" \
+   --arg pu "${UNIFI_PROTECT_URL:-}" \
+   --arg pk "${UNIFI_PROTECT_KEY:-}" \
+   '.home_network = ((.home_network // {}) + {
+     unifi_site_manager_api_key: (if $sm != "" then $sm else (.home_network.unifi_site_manager_api_key // "") end),
+     unifi_local_gateway_url: (if $url != "" then $url else (.home_network.unifi_local_gateway_url // "") end),
+     unifi_local_api_key: (if $lk != "" then $lk else (.home_network.unifi_local_api_key // "") end),
+     unifi_protect_url: (if $pu != "" then $pu else (.home_network.unifi_protect_url // "") end),
+     unifi_protect_api_key: (if $pk != "" then $pk else (.home_network.unifi_protect_api_key // "") end)
+   })' \
+   "$PREFS_PATH" > "$PREFS_PATH.tmp" && mv "$PREFS_PATH.tmp" "$PREFS_PATH"
+```
+
+Clear `action_needed` in `daemon-health.json` when at least one surface is configured.
 
 401/403 → key invalid; re-prompt via `AskUserQuestion` (`[Paste new key]`, `[Skip this surface]`).
 
@@ -556,7 +584,7 @@ After the main output, evaluate cross-channel triggers (suggestions only — nev
 | jq missing | Print raw JSON, suggest installing jq. |
 | No credentials at all | Exit gracefully with `/ops:setup --section network`. |
 
-Audit every state-changing call (device RESTART, client BLOCK/UNBLOCK, camera PATCH, voucher create/revoke) to `${CLAUDE_PLUGIN_DATA_DIR}/ops-unifi-audit.log` with timestamp, action, target id, and result.
+Audit every state-changing call (device RESTART, client BLOCK/UNBLOCK, camera PATCH, voucher create/revoke) to `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/ops-unifi-audit.log` with timestamp, action, target id, and result.
 
 ---
 
