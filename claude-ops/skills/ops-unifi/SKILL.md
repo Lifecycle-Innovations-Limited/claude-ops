@@ -122,6 +122,9 @@ Resolve UniFi credentials in this order (userConfig → env → Doppler → keyc
 PLUGIN_DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 PREFS_PATH="${PLUGIN_DATA_DIR}/preferences.json"
 
+# Capture shell-exported protect host before prefs load overwrites UNIFI_PROTECT_URL
+_ENV_UNIFI_PROTECT_URL="${UNIFI_PROTECT_URL:-}"
+
 # 1. Plugin userConfig (preferences.json → home_network.*)
 UNIFI_SM_KEY=$(jq -r '.home_network.unifi_site_manager_api_key // empty' "$PREFS_PATH" 2>/dev/null)
 UNIFI_LOCAL_URL=$(jq -r '.home_network.unifi_local_gateway_url // empty' "$PREFS_PATH" 2>/dev/null)
@@ -133,7 +136,7 @@ UNIFI_PROTECT_KEY=$(jq -r '.home_network.unifi_protect_api_key // empty' "$PREFS
 [ -n "$UNIFI_SM_KEY" ]      || UNIFI_SM_KEY="${UNIFI_SITE_MANAGER_API_KEY:-${UNIFI_SM_KEY:-}}"
 [ -n "$UNIFI_LOCAL_URL" ]   || UNIFI_LOCAL_URL="${UNIFI_LOCAL_GATEWAY_URL:-${UNIFI_LOCAL_URL:-}}"
 [ -n "$UNIFI_LOCAL_KEY" ]   || UNIFI_LOCAL_KEY="${UNIFI_LOCAL_API_KEY:-${UNIFI_LOCAL_KEY:-}}"
-[ -n "$UNIFI_PROTECT_URL" ] || UNIFI_PROTECT_URL="${UNIFI_PROTECT_URL:-}"
+[ -n "$UNIFI_PROTECT_URL" ] || UNIFI_PROTECT_URL="${_ENV_UNIFI_PROTECT_URL:-}"
 [ -n "$UNIFI_PROTECT_KEY" ] || UNIFI_PROTECT_KEY="${UNIFI_PROTECT_API_KEY:-${UNIFI_PROTECT_KEY:-}}"
 
 # 3. Doppler fallback (project: unifi)
@@ -489,7 +492,7 @@ If the wizard is unavailable, run inline discovery (background per Rule 4):
 
 ```bash
 # 1. Env vars
-printenv UNIFI_SITE_MANAGER_API_KEY UNIFI_LOCAL_GATEWAY_URL UNIFI_LOCAL_API_KEY UNIFI_PROTECT_API_KEY 2>/dev/null
+printenv UNIFI_SITE_MANAGER_API_KEY UNIFI_LOCAL_GATEWAY_URL UNIFI_LOCAL_API_KEY UNIFI_PROTECT_URL UNIFI_PROTECT_API_KEY 2>/dev/null
 # 2. Shell profiles
 grep -hE 'UNIFI_' ~/.zshrc ~/.bashrc ~/.envrc ~/.mcp-secrets.env 2>/dev/null | grep -v '^#'
 # 3. Doppler
@@ -516,6 +519,27 @@ net_call "/sites" | jq -e '.data' >/dev/null && echo "network OK"
 # Protect
 pro_call "/meta/info" | jq -e '.version' >/dev/null && echo "protect OK"
 ```
+
+After each surface passes its smoke test, merge verified values into `$PREFS_PATH` (omit empty fields — keep existing prefs for skipped surfaces):
+
+```bash
+mkdir -p "$(dirname "$PREFS_PATH")"
+jq --arg sm "${UNIFI_SM_KEY:-}" \
+   --arg url "${UNIFI_LOCAL_URL:-}" \
+   --arg lk "${UNIFI_LOCAL_KEY:-}" \
+   --arg pu "${UNIFI_PROTECT_URL:-}" \
+   --arg pk "${UNIFI_PROTECT_KEY:-}" \
+   '.home_network = ((.home_network // {}) + {
+     unifi_site_manager_api_key: (if $sm != "" then $sm else (.home_network.unifi_site_manager_api_key // "") end),
+     unifi_local_gateway_url: (if $url != "" then $url else (.home_network.unifi_local_gateway_url // "") end),
+     unifi_local_api_key: (if $lk != "" then $lk else (.home_network.unifi_local_api_key // "") end),
+     unifi_protect_url: (if $pu != "" then $pu else (.home_network.unifi_protect_url // "") end),
+     unifi_protect_api_key: (if $pk != "" then $pk else (.home_network.unifi_protect_api_key // "") end)
+   })' \
+   "$PREFS_PATH" > "$PREFS_PATH.tmp" && mv "$PREFS_PATH.tmp" "$PREFS_PATH"
+```
+
+Clear `action_needed` in `daemon-health.json` when at least one surface is configured.
 
 401/403 → key invalid; re-prompt via `AskUserQuestion` (`[Paste new key]`, `[Skip this surface]`).
 
