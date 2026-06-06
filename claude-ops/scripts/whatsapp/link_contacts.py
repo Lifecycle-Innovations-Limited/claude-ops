@@ -77,6 +77,46 @@ def main():
             )
             lid_upserts += 1
     msg.commit()
+    # Backfill chats.name from contacts (direct jid + via lid_map both directions)
+    # so chat rows never display raw numbers when a name is known. Idempotent.
+    cur.execute(f"ATTACH '{WA_DB}' AS wa")
+    chat_names_fixed = 0
+    for sql in (
+        # direct: contact row for this exact jid
+        """UPDATE chats SET name = (
+             SELECT c.name FROM contacts c
+             WHERE c.jid = chats.jid AND c.name <> '' AND c.name NOT GLOB '[0-9]*')
+           WHERE (name IS NULL OR name='' OR name GLOB '[0-9]*')
+             AND jid NOT LIKE '%@g.us' AND jid NOT LIKE '%@newsletter'
+             AND EXISTS (SELECT 1 FROM contacts c WHERE c.jid = chats.jid
+                         AND c.name <> '' AND c.name NOT GLOB '[0-9]*')""",
+        # lid chat -> phone contact name
+        """UPDATE chats SET name = (
+             SELECT c.name FROM wa.whatsmeow_lid_map m
+             JOIN contacts c ON c.jid = m.pn||'@s.whatsapp.net'
+             WHERE m.lid||'@lid' = chats.jid AND c.name <> '' AND c.name NOT GLOB '[0-9]*')
+           WHERE (name IS NULL OR name='' OR name GLOB '[0-9]*') AND jid LIKE '%@lid'
+             AND EXISTS (SELECT 1 FROM wa.whatsmeow_lid_map m
+                         JOIN contacts c ON c.jid = m.pn||'@s.whatsapp.net'
+                         WHERE m.lid||'@lid' = chats.jid
+                           AND c.name <> '' AND c.name NOT GLOB '[0-9]*')""",
+        # phone chat -> lid contact name
+        """UPDATE chats SET name = (
+             SELECT c.name FROM wa.whatsmeow_lid_map m
+             JOIN contacts c ON c.jid = m.lid||'@lid'
+             WHERE m.pn||'@s.whatsapp.net' = chats.jid AND c.name <> '' AND c.name NOT GLOB '[0-9]*')
+           WHERE (name IS NULL OR name='' OR name GLOB '[0-9]*') AND jid LIKE '%@s.whatsapp.net'
+             AND EXISTS (SELECT 1 FROM wa.whatsmeow_lid_map m
+                         JOIN contacts c ON c.jid = m.lid||'@lid'
+                         WHERE m.pn||'@s.whatsapp.net' = chats.jid
+                           AND c.name <> '' AND c.name NOT GLOB '[0-9]*')""",
+    ):
+        try:
+            cur.execute(sql)
+            chat_names_fixed += cur.rowcount if cur.rowcount > 0 else 0
+        except sqlite3.OperationalError:
+            pass
+    msg.commit()
     total = cur.execute(
         "SELECT count(*) FROM contacts WHERE name IS NOT NULL AND name<>''"
     ).fetchone()[0]
@@ -87,6 +127,7 @@ def main():
                 "ok": True,
                 "phone_contacts": upserts,
                 "lid_aliases": lid_upserts,
+                "chat_names_fixed": chat_names_fixed,
                 "named_total": total,
             }
         )
