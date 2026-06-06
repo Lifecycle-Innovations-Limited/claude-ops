@@ -3152,7 +3152,9 @@ async function reloadRunningAgents(opts = {}) {
 
   // 2. Select candidates to respawn.
   const initiatorShort = opts.initiatorSessionId
-    ? (opts.initiatorSessionId.length === 8 ? opts.initiatorSessionId : opts.initiatorSessionId.slice(0, 8))
+    ? opts.initiatorSessionId.length === 8
+      ? opts.initiatorSessionId
+      : opts.initiatorSessionId.slice(0, 8)
     : null;
 
   const candidates = [];
@@ -3205,7 +3207,9 @@ async function reloadRunningAgents(opts = {}) {
     );
   }
 
-  log(`[reload-agents] Respawning ${candidates.length} agent(s): ${candidates.map((a) => `${a.shortId}(${a.name})`).join(', ')}`);
+  log(
+    `[reload-agents] Respawning ${candidates.length} agent(s): ${candidates.map((a) => `${a.shortId}(${a.name})`).join(', ')}`,
+  );
 
   // 3. Sequential respawn with stagger.
   for (let i = 0; i < candidates.length; i++) {
@@ -3232,7 +3236,9 @@ async function reloadRunningAgents(opts = {}) {
       }
     }
 
-    log(`[reload-agents] ${dryRun ? '[DRY-RUN] Would respawn' : 'Respawning'} ${shortId}(${name}) [status=${status}] via id=${respawnId}...`);
+    log(
+      `[reload-agents] ${dryRun ? '[DRY-RUN] Would respawn' : 'Respawning'} ${shortId}(${name}) [status=${status}] via id=${respawnId}...`,
+    );
     if (!dryRun) {
       try {
         // execFileSync: no shell — respawnId is passed as a literal argument.
@@ -3261,7 +3267,9 @@ async function reloadRunningAgents(opts = {}) {
     }
   }
 
-  log(`[reload-agents] Done.${dryRun ? ' [DRY-RUN]' : ''} ${candidates.length} respawn(s) ${dryRun ? 'selected' : 'issued'}. ${deferred.length} deferred.`);
+  log(
+    `[reload-agents] Done.${dryRun ? ' [DRY-RUN]' : ''} ${candidates.length} respawn(s) ${dryRun ? 'selected' : 'issued'}. ${deferred.length} deferred.`,
+  );
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
