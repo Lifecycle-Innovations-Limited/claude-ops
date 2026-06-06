@@ -37,6 +37,7 @@ If `$ARGUMENTS` contains a specific section name, jump straight to that section:
 | `marketing`, `klaviyo`, `ads`, `meta`, `ga4` | Step 3j |
 | `google-ads`, `gads` | Step 3j (Google Ads) |
 | `voice`, `bland`, `elevenlabs`, `tts`  | Step 3k |
+| `network`, `unifi`                     | Step 3q-network |
 | `mcp`                                  | Step 4  |
 | `registry`, `projects`                 | Step 5  |
 | `daemon`, `background`                 | Step 5b |
