@@ -1769,16 +1769,41 @@ FIXN_PROJECT_REPLACEMENT = (
     '\t\tname := GetChatName(client, messageStore, jid, chatJID, conversation, "", logger)\n\n'
     "\t\t// claude-ops Fix O: project the phone's authoritative archive flag from the\n"
     "\t\t// HistorySync payload onto chats.archived, bypassing the broken regular_low\n"
-    "\t\t// app-state (#382/#858). Guard on a present flag, and only touch rows that are\n"
+    "\t\t// app-state (#382/#858). Guard on a present flag. Archive/mark-up uses\n"
+    "\t\t// SetArchivedStatus (UPSERT); metadata-only unarchive UPDATEs an existing row\n"
+    "\t\t// so bare archived=0 chats are never spawned for unknown empty conversations.\n"
+    "\t\tif conversation.Archived != nil {\n"
+    "\t\t\tif conversation.GetArchived() || len(conversation.Messages) > 0 {\n"
+    "\t\t\t\t_ = messageStore.SetArchivedStatus(chatJID, *conversation.Archived)\n"
+    "\t\t\t} else {\n"
+    "\t\t\t\t_, _ = messageStore.db.Exec(`UPDATE chats SET archived=0 WHERE jid=? AND archived<>0`, chatJID)\n"
+    "\t\t\t}\n"
+    "\t\t}\n"
+)
+FIXN_PROJECT_SENTINEL = (
+    "claude-ops Fix O: project the phone's authoritative archive flag from the"
+)
+# Fix-up for installs that already applied the pre-fix projection guard.
+FIXN_PROJECT_FIXUP_NEEDLE = (
     "\t\t// either archived (safe to upsert) or message-bearing (StoreChat creates them),\n"
     "\t\t// so we never spawn bare archived=0 rows for empty conversations.\n"
     "\t\tif conversation.Archived != nil && (conversation.GetArchived() || len(conversation.Messages) > 0) {\n"
     "\t\t\t_ = messageStore.SetArchivedStatus(chatJID, *conversation.Archived)\n"
     "\t\t}\n"
 )
-FIXN_PROJECT_SENTINEL = (
-    "claude-ops Fix O: project the phone's authoritative archive flag from the"
+FIXN_PROJECT_FIXUP_REPLACEMENT = (
+    "\t\t// either archived (UPSERT) or message-bearing (StoreChat creates them).\n"
+    "\t\t// Metadata-only unarchive UPDATEs an existing row so bare archived=0 chats\n"
+    "\t\t// are never spawned for unknown empty conversations.\n"
+    "\t\tif conversation.Archived != nil {\n"
+    "\t\t\tif conversation.GetArchived() || len(conversation.Messages) > 0 {\n"
+    "\t\t\t\t_ = messageStore.SetArchivedStatus(chatJID, *conversation.Archived)\n"
+    "\t\t\t} else {\n"
+    "\t\t\t\t_, _ = messageStore.db.Exec(`UPDATE chats SET archived=0 WHERE jid=? AND archived<>0`, chatJID)\n"
+    "\t\t\t}\n"
+    "\t\t}\n"
 )
+FIXN_PROJECT_FIXUP_SENTINEL = "Metadata-only unarchive UPDATEs an existing row"
 
 
 def main() -> int:
@@ -2009,6 +2034,13 @@ def main() -> int:
         FIXN_PROJECT_REPLACEMENT,
         FIXN_PROJECT_SENTINEL,
         "Fix O: project HistorySync archive flag onto chats.archived",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXN_PROJECT_FIXUP_NEEDLE,
+        FIXN_PROJECT_FIXUP_REPLACEMENT,
+        FIXN_PROJECT_FIXUP_SENTINEL,
+        "Fix O: metadata-only unarchive on existing chats",
     )
 
     print("  whatsapp.py:")
