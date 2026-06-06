@@ -13,7 +13,17 @@
     "heavy_reasoning": {
       "models": ["claude-opus-4-8"],
       "cost": "high",
-      "skills": ["review", "qa", "investigate", "spec", "ship", "design-review", "plan-ceo-review", "plan-eng-review", "autoplan"]
+      "skills": [
+        "review",
+        "qa",
+        "investigate",
+        "spec",
+        "ship",
+        "design-review",
+        "plan-ceo-review",
+        "plan-eng-review",
+        "autoplan"
+      ]
     },
     "balanced_reasoning": {
       "models": ["claude-sonnet-4-6"],
