@@ -77,6 +77,13 @@ Patches included:
           re-pair delivers) the conversation list is complete, so the column is reset and
           re-marked exactly to the phone's archived set. This is what makes ops-inbox see
           the full + current inbox on every run without depending on regular_low.
+  Fix P — maximum history on (re-)pair: upstream pairs with RequireFullSync=false and
+          small history-sync limits, so a fresh pair only backfills a recent window.
+          Fix P sets store.DeviceProps.RequireFullSync=true and maxes the history-sync
+          config (FullSyncDaysLimit ~10y, size/quota 100GB) before the client is built,
+          so the phone ships the deepest full-history snapshot it has on the next pair —
+          feeding handleHistorySync and the Fix O projection with as much real data as
+          possible. Effective on the NEXT pair only.
 
 Every patch is gated on a sentinel string so re-running is a no-op.
 
@@ -1806,6 +1813,48 @@ FIXN_PROJECT_FIXUP_REPLACEMENT = (
 FIXN_PROJECT_FIXUP_SENTINEL = "Metadata-only unarchive UPDATEs an existing row"
 
 
+# ─── main.go Fix P: request maximum history on (re-)pair ──────────────────────
+# store.DeviceProps is whatsmeow's global registration payload, read when a device
+# pairs. Upstream defaults to RequireFullSync=false + StorageQuotaMb=10240 with nil
+# day/size limits, so a fresh pair only backfills a small recent window. Fix P flips
+# RequireFullSync on and maxes every limit, so the phone ships the deepest full-
+# history snapshot it has (years of conversations) on the next pair — feeding
+# handleHistorySync and the Fix O archive projection with as much real data as
+# possible. Only takes effect on the NEXT pair (payload is sent at pairing time).
+
+# 1. imports: the non-sqlstore store pkg (for DeviceProps) + waCompanionReg (config type).
+FIXP_IMPORT_NEEDLE = '\t"go.mau.fi/whatsmeow/store/sqlstore"\n'
+FIXP_IMPORT_REPLACEMENT = (
+    '\twaCompanionReg "go.mau.fi/whatsmeow/proto/waCompanionReg" // claude-ops Fix P: history-sync config\n'
+    '\t"go.mau.fi/whatsmeow/store"\n'
+    '\t"go.mau.fi/whatsmeow/store/sqlstore"\n'
+)
+FIXP_IMPORT_SENTINEL = 'waCompanionReg "go.mau.fi/whatsmeow/proto/waCompanionReg"'
+
+# 2. set DeviceProps before the client is created (stable anchor).
+FIXP_PROPS_NEEDLE = (
+    "\t// Create client instance\n\tclient := whatsmeow.NewClient(deviceStore, logger)"
+)
+FIXP_PROPS_REPLACEMENT = (
+    "\t// claude-ops Fix P: request the MAXIMUM history WhatsApp will ship on (re-)pair.\n"
+    "\t// store.DeviceProps is the global registration payload read when the device pairs.\n"
+    "\t// Upstream defaults to RequireFullSync=false + StorageQuotaMb=10240 with nil day\n"
+    "\t// limits, so a fresh pair only backfills a small recent window. Flip RequireFullSync\n"
+    "\t// on and raise every limit so the phone sends the deepest full-history snapshot it\n"
+    "\t// has, feeding handleHistorySync + the Fix O archive projection. Effective on the\n"
+    "\t// NEXT pair only (the payload is sent at pairing).\n"
+    "\tstore.DeviceProps.RequireFullSync = proto.Bool(true)\n"
+    "\tstore.DeviceProps.HistorySyncConfig = &waCompanionReg.DeviceProps_HistorySyncConfig{\n"
+    "\t\tFullSyncDaysLimit:   proto.Uint32(3650),   // ~10 years\n"
+    "\t\tFullSyncSizeMbLimit: proto.Uint32(102400), // 100 GB\n"
+    "\t\tStorageQuotaMb:      proto.Uint32(102400),\n"
+    "\t}\n"
+    '\tlogger.Infof("claude-ops Fix P: RequireFullSync=true, full-sync limits maxed (10y / 100GB) — deepest history on next pair")\n\n'
+    "\t// Create client instance\n\tclient := whatsmeow.NewClient(deviceStore, logger)"
+)
+FIXP_PROPS_SENTINEL = "claude-ops Fix P: request the MAXIMUM history"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -2041,6 +2090,20 @@ def main() -> int:
         FIXN_PROJECT_FIXUP_REPLACEMENT,
         FIXN_PROJECT_FIXUP_SENTINEL,
         "Fix O: metadata-only unarchive on existing chats",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXP_IMPORT_NEEDLE,
+        FIXP_IMPORT_REPLACEMENT,
+        FIXP_IMPORT_SENTINEL,
+        "Fix P: import store + waCompanionReg (history-sync config)",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXP_PROPS_NEEDLE,
+        FIXP_PROPS_REPLACEMENT,
+        FIXP_PROPS_SENTINEL,
+        "Fix P: RequireFullSync + max history limits on pair",
     )
 
     print("  whatsapp.py:")
