@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.26.0] - 2026-06-06
+
+### Changed
+Add /ops:ops-unifi UniFi network command center + ops:unifi-agent probe agent. Curl-native control across all three official UniFi APIs — Site Manager (cloud api.ui.com: hosts, sites, devices, ISP/WAN metrics, SD-WAN), Network Integration (local proxy/network/integration/v1: devices, clients, restart, block/unblock, vouchers, live stats), and Protect Integration (local proxy/protect/integration/v1: cameras, NVR, snapshot, settings). Includes a predict mode that cross-correlates ISP metrics + device stats + camera state to flag WAN degradation, AP stress, weak-RF clients, and surveillance gaps. Adds a /ops:setup network wizard section; all state-changing actions Rule-5 gated, outbound alerts Rule-6 gated.
+
+
 ## [2.25.0] - 2026-06-06
 
 ### Changed
