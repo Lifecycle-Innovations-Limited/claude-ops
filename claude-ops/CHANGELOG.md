@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.25.0] - 2026-06-06
+
+### Changed
+WhatsApp ops-inbox: project the HistorySync per-conversation archive flag onto chats.archived so the inbox view mirrors the phone independent of the chronically-corrupt regular_low app-state (Fix O); request maximum history on (re-)pair via RequireFullSync + maxed history-sync limits (Fix P).
+
+
 ## [2.24.0] - 2026-06-06
 
 ### Changed
