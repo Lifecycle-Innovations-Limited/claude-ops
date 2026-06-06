@@ -1,0 +1,78 @@
+{
+  "version": "1.0",
+  "date_generated": "2026-06-06T07:03:00Z",
+  "strategy": "balanced-claude-only",
+  "notes": "Balanced model selection across Claude tiers (Opus→Sonnet→Haiku). GPT + Gemini unreliable on this EC2 box. Provider fallback: Claude only.",
+  "defaults": {
+    "primary_model": "claude-opus-4-8",
+    "fallback_model": "claude-sonnet-4-6",
+    "fast_tier_model": "claude-haiku-4-5",
+    "provider_only": "claude"
+  },
+  "skill_tier_mapping": {
+    "heavy_reasoning": {
+      "models": ["claude-opus-4-8"],
+      "cost": "high",
+      "skills": [
+        "review",
+        "qa",
+        "investigate",
+        "spec",
+        "ship",
+        "design-review",
+        "plan-ceo-review",
+        "plan-eng-review",
+        "autoplan"
+      ]
+    },
+    "balanced_reasoning": {
+      "models": ["claude-sonnet-4-6"],
+      "cost": "medium",
+      "skills": ["land-and-deploy", "canary", "health", "cso"]
+    },
+    "fast_lightweight": {
+      "models": ["claude-haiku-4-5"],
+      "cost": "low",
+      "skills": ["browse", "scrape", "setup-browser-cookies", "context-save", "context-restore", "skillify"]
+    }
+  },
+  "ops_overrides": {
+    "ops-fires": {
+      "model": "claude-opus-4-8",
+      "reason": "High-stakes incident triage, needs strong reasoning"
+    },
+    "ops-triage": {
+      "model": "claude-opus-4-8",
+      "reason": "Multi-issue cross-platform analysis"
+    },
+    "ops-deploy": {
+      "model": "claude-sonnet-4-6",
+      "reason": "Status aggregation, decision-making"
+    },
+    "ops-monitor": {
+      "model": "claude-sonnet-4-6",
+      "reason": "Health checks, straightforward logic"
+    },
+    "ops-comms": {
+      "model": "claude-sonnet-4-6",
+      "reason": "Message composition, routing logic"
+    },
+    "ops-go": {
+      "model": "claude-opus-4-8",
+      "reason": "Strategic morning briefing, synthesis"
+    }
+  },
+  "benchmarks": {
+    "2026-06-06-code-review": {
+      "file": "~/.gstack/benchmarks/20260606-065819-code-review.json",
+      "winner": "claude-opus-4-8",
+      "speed_ratio_vs_gemini": 7.2
+    },
+    "2026-06-06-spec-generation": {
+      "latency_s": 35.9,
+      "tokens": "22190→825",
+      "cost": 0.51,
+      "model": "claude-opus-4-8"
+    }
+  }
+}
