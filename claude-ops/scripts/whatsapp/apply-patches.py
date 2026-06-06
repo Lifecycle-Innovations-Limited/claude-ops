@@ -1733,7 +1733,7 @@ FIXN_RESET_NEEDLE = (
     "// Close the database connection\nfunc (store *MessageStore) Close() error {"
 )
 FIXN_RESET_REPLACEMENT = """// claude-ops Fix O: ResetAllArchived clears the archived flag on every chat.
-// Used before reprojecting a FULL/INITIAL_BOOTSTRAP HistorySync, whose conversation
+// Used before reprojecting an INITIAL_BOOTSTRAP HistorySync, whose conversation
 // list is authoritative+complete — so chats.archived ends up mirroring the phone
 // exactly (the per-conversation projection re-marks only the truly-archived set).
 func (store *MessageStore) ResetAllArchived() error {
@@ -1745,22 +1745,22 @@ func (store *MessageStore) ResetAllArchived() error {
 func (store *MessageStore) Close() error {"""
 FIXN_RESET_SENTINEL = "func (store *MessageStore) ResetAllArchived()"
 
-# 3. reset-on-FULL/INITIAL at the top of handleHistorySync (anchor on the Printf).
+# 3. reset-on-INITIAL_BOOTSTRAP at the top of handleHistorySync (anchor on the Printf).
 FIXN_RESET_CALL_NEEDLE = '\tfmt.Printf("Received history sync event with %d conversations\\n", len(historySync.Data.Conversations))\n'
 FIXN_RESET_CALL_REPLACEMENT = (
     '\tfmt.Printf("Received history sync event with %d conversations\\n", len(historySync.Data.Conversations))\n\n'
-    "\t// claude-ops Fix O: on a FULL or INITIAL_BOOTSTRAP history sync the conversation\n"
-    "\t// list is authoritative and complete (this is what a re-pair delivers), so reset\n"
-    "\t// chats.archived first; the per-conversation projection below then re-marks exactly\n"
-    "\t// the phone's archived set — the one reliable path to a fully-correct inbox view.\n"
-    "\tif st := historySync.Data.GetSyncType(); st == waHistorySync.HistorySync_FULL || st == waHistorySync.HistorySync_INITIAL_BOOTSTRAP {\n"
+    "\t// claude-ops Fix O: on INITIAL_BOOTSTRAP the conversation list is authoritative\n"
+    "\t// and complete (first blob after re-pair); reset chats.archived first, then the\n"
+    "\t// per-conversation projection below re-marks exactly the phone's archived set.\n"
+    "\t// FULL sync is incremental (subset of chats per blob) — do not reset globally.\n"
+    "\tif st := historySync.Data.GetSyncType(); st == waHistorySync.HistorySync_INITIAL_BOOTSTRAP {\n"
     "\t\tif err := messageStore.ResetAllArchived(); err != nil {\n"
     '\t\t\tlogger.Warnf("claude-ops Fix O: ResetAllArchived failed: %v", err)\n'
     "\t\t}\n"
     "\t}\n"
 )
 FIXN_RESET_CALL_SENTINEL = (
-    "claude-ops Fix O: on a FULL or INITIAL_BOOTSTRAP history sync"
+    "claude-ops Fix O: on INITIAL_BOOTSTRAP the conversation list is authoritative"
 )
 
 # 4. per-conversation projection (anchor on the GetChatName line, stable upstream).
@@ -2001,7 +2001,7 @@ def main() -> int:
         FIXN_RESET_CALL_NEEDLE,
         FIXN_RESET_CALL_REPLACEMENT,
         FIXN_RESET_CALL_SENTINEL,
-        "Fix O: reset chats.archived on FULL/INITIAL history sync",
+        "Fix O: reset chats.archived on INITIAL_BOOTSTRAP history sync",
     )
     changed_go |= replace_idempotent(
         main_go,
