@@ -66,6 +66,24 @@ Patches included:
           peer-message + history backfill while alive); and escalates /api/archive
           on a server 409 "conflict" (not just local LTHash mismatch) to a
           recovery + bounded auto-retry so callers never need a manual recover->retry.
+  Fix O — HistorySync -> chats.archived authoritative projection: the regular_low
+          app-state (archive/pin/mute) is chronically LTHash-corrupt on many accounts
+          (whatsmeow #382/#518/#858), so neither the live *events.Archive subscriber
+          (Fix H) nor /api/archive can keep chats.archived in step with the phone, and
+          the inbox view silently drifts (archived chats hidden / un-archived chats not
+          resurfacing). Fix O reads the authoritative per-conversation Archived flag out
+          of the HistorySync payload — a channel that bypasses the broken app-state — and
+          projects it onto chats.archived. On a FULL/INITIAL_BOOTSTRAP sync (what a
+          re-pair delivers) the conversation list is complete, so the column is reset and
+          re-marked exactly to the phone's archived set. This is what makes ops-inbox see
+          the full + current inbox on every run without depending on regular_low.
+  Fix P — maximum history on (re-)pair: upstream pairs with RequireFullSync=false and
+          small history-sync limits, so a fresh pair only backfills a recent window.
+          Fix P sets store.DeviceProps.RequireFullSync=true and maxes the history-sync
+          config (FullSyncDaysLimit ~10y, size/quota 100GB) before the client is built,
+          so the phone ships the deepest full-history snapshot it has on the next pair —
+          feeding handleHistorySync and the Fix O projection with as much real data as
+          possible. Effective on the NEXT pair only.
 
 Every patch is gated on a sentinel string so re-running is a no-op.
 
@@ -1697,6 +1715,146 @@ def append_idempotent(p: pathlib.Path, block: str, sentinel: str, label: str) ->
     return True
 
 
+# ─── main.go Fix O: HistorySync → chats.archived authoritative projection ─────
+# The regular_low app-state collection (archive/pin/mute) is chronically corrupt
+# on many accounts (whatsmeow #382/#518/#858 — "mismatching LTHash"), so neither
+# the live *events.Archive subscriber (Fix H) nor /api/archive can keep
+# chats.archived in step with the phone. The HistorySync payload, however, carries
+# each conversation's authoritative `Archived` flag (waHistorySync.Conversation.
+# Archived) — a channel that completely bypasses the broken app-state. Fix O
+# projects that flag onto chats.archived so the inbox view (WHERE archived=0)
+# tracks the phone. On a FULL/INITIAL_BOOTSTRAP sync (what a re-pair delivers) the
+# conversation list is authoritative+complete, so the column is reset first and
+# then re-marked exactly to the phone's archived set.
+
+# 1. import the waHistorySync proto package (for the sync-type constants).
+FIXN_IMPORT_NEEDLE = '\t"go.mau.fi/whatsmeow/types"\n'
+FIXN_IMPORT_REPLACEMENT = (
+    '\t"go.mau.fi/whatsmeow/types"\n'
+    '\twaHistorySync "go.mau.fi/whatsmeow/proto/waHistorySync" // claude-ops Fix O\n'
+)
+FIXN_IMPORT_SENTINEL = 'waHistorySync "go.mau.fi/whatsmeow/proto/waHistorySync"'
+
+# 2. ResetAllArchived helper, spliced in before the Close method (stable anchor).
+FIXN_RESET_NEEDLE = (
+    "// Close the database connection\nfunc (store *MessageStore) Close() error {"
+)
+FIXN_RESET_REPLACEMENT = """// claude-ops Fix O: ResetAllArchived clears the archived flag on every chat.
+// Used before reprojecting an INITIAL_BOOTSTRAP HistorySync, whose conversation
+// list is authoritative+complete — so chats.archived ends up mirroring the phone
+// exactly (the per-conversation projection re-marks only the truly-archived set).
+func (store *MessageStore) ResetAllArchived() error {
+\t_, err := store.db.Exec(`UPDATE chats SET archived=0 WHERE archived<>0`)
+\treturn err
+}
+
+// Close the database connection
+func (store *MessageStore) Close() error {"""
+FIXN_RESET_SENTINEL = "func (store *MessageStore) ResetAllArchived()"
+
+# 3. reset-on-INITIAL_BOOTSTRAP at the top of handleHistorySync (anchor on the Printf).
+FIXN_RESET_CALL_NEEDLE = '\tfmt.Printf("Received history sync event with %d conversations\\n", len(historySync.Data.Conversations))\n'
+FIXN_RESET_CALL_REPLACEMENT = (
+    '\tfmt.Printf("Received history sync event with %d conversations\\n", len(historySync.Data.Conversations))\n\n'
+    "\t// claude-ops Fix O: on INITIAL_BOOTSTRAP the conversation list is authoritative\n"
+    "\t// and complete (first blob after re-pair); reset chats.archived first, then the\n"
+    "\t// per-conversation projection below re-marks exactly the phone's archived set.\n"
+    "\t// FULL sync is incremental (subset of chats per blob) — do not reset globally.\n"
+    "\tif st := historySync.Data.GetSyncType(); st == waHistorySync.HistorySync_INITIAL_BOOTSTRAP {\n"
+    "\t\tif err := messageStore.ResetAllArchived(); err != nil {\n"
+    '\t\t\tlogger.Warnf("claude-ops Fix O: ResetAllArchived failed: %v", err)\n'
+    "\t\t}\n"
+    "\t}\n"
+)
+FIXN_RESET_CALL_SENTINEL = (
+    "claude-ops Fix O: on INITIAL_BOOTSTRAP the conversation list is authoritative"
+)
+
+# 4. per-conversation projection (anchor on the GetChatName line, stable upstream).
+FIXN_PROJECT_NEEDLE = '\t\tname := GetChatName(client, messageStore, jid, chatJID, conversation, "", logger)\n'
+FIXN_PROJECT_REPLACEMENT = (
+    '\t\tname := GetChatName(client, messageStore, jid, chatJID, conversation, "", logger)\n\n'
+    "\t\t// claude-ops Fix O: project the phone's authoritative archive flag from the\n"
+    "\t\t// HistorySync payload onto chats.archived, bypassing the broken regular_low\n"
+    "\t\t// app-state (#382/#858). Guard on a present flag. Archive/mark-up uses\n"
+    "\t\t// SetArchivedStatus (UPSERT); metadata-only unarchive UPDATEs an existing row\n"
+    "\t\t// so bare archived=0 chats are never spawned for unknown empty conversations.\n"
+    "\t\tif conversation.Archived != nil {\n"
+    "\t\t\tif conversation.GetArchived() || len(conversation.Messages) > 0 {\n"
+    "\t\t\t\t_ = messageStore.SetArchivedStatus(chatJID, *conversation.Archived)\n"
+    "\t\t\t} else {\n"
+    "\t\t\t\t_, _ = messageStore.db.Exec(`UPDATE chats SET archived=0 WHERE jid=? AND archived<>0`, chatJID)\n"
+    "\t\t\t}\n"
+    "\t\t}\n"
+)
+FIXN_PROJECT_SENTINEL = (
+    "claude-ops Fix O: project the phone's authoritative archive flag from the"
+)
+# Fix-up for installs that already applied the pre-fix projection guard.
+FIXN_PROJECT_FIXUP_NEEDLE = (
+    "\t\t// either archived (safe to upsert) or message-bearing (StoreChat creates them),\n"
+    "\t\t// so we never spawn bare archived=0 rows for empty conversations.\n"
+    "\t\tif conversation.Archived != nil && (conversation.GetArchived() || len(conversation.Messages) > 0) {\n"
+    "\t\t\t_ = messageStore.SetArchivedStatus(chatJID, *conversation.Archived)\n"
+    "\t\t}\n"
+)
+FIXN_PROJECT_FIXUP_REPLACEMENT = (
+    "\t\t// either archived (UPSERT) or message-bearing (StoreChat creates them).\n"
+    "\t\t// Metadata-only unarchive UPDATEs an existing row so bare archived=0 chats\n"
+    "\t\t// are never spawned for unknown empty conversations.\n"
+    "\t\tif conversation.Archived != nil {\n"
+    "\t\t\tif conversation.GetArchived() || len(conversation.Messages) > 0 {\n"
+    "\t\t\t\t_ = messageStore.SetArchivedStatus(chatJID, *conversation.Archived)\n"
+    "\t\t\t} else {\n"
+    "\t\t\t\t_, _ = messageStore.db.Exec(`UPDATE chats SET archived=0 WHERE jid=? AND archived<>0`, chatJID)\n"
+    "\t\t\t}\n"
+    "\t\t}\n"
+)
+FIXN_PROJECT_FIXUP_SENTINEL = "Metadata-only unarchive UPDATEs an existing row"
+
+
+# ─── main.go Fix P: request maximum history on (re-)pair ──────────────────────
+# store.DeviceProps is whatsmeow's global registration payload, read when a device
+# pairs. Upstream defaults to RequireFullSync=false + StorageQuotaMb=10240 with nil
+# day/size limits, so a fresh pair only backfills a small recent window. Fix P flips
+# RequireFullSync on and maxes every limit, so the phone ships the deepest full-
+# history snapshot it has (years of conversations) on the next pair — feeding
+# handleHistorySync and the Fix O archive projection with as much real data as
+# possible. Only takes effect on the NEXT pair (payload is sent at pairing time).
+
+# 1. imports: the non-sqlstore store pkg (for DeviceProps) + waCompanionReg (config type).
+FIXP_IMPORT_NEEDLE = '\t"go.mau.fi/whatsmeow/store/sqlstore"\n'
+FIXP_IMPORT_REPLACEMENT = (
+    '\twaCompanionReg "go.mau.fi/whatsmeow/proto/waCompanionReg" // claude-ops Fix P: history-sync config\n'
+    '\t"go.mau.fi/whatsmeow/store"\n'
+    '\t"go.mau.fi/whatsmeow/store/sqlstore"\n'
+)
+FIXP_IMPORT_SENTINEL = 'waCompanionReg "go.mau.fi/whatsmeow/proto/waCompanionReg"'
+
+# 2. set DeviceProps before the client is created (stable anchor).
+FIXP_PROPS_NEEDLE = (
+    "\t// Create client instance\n\tclient := whatsmeow.NewClient(deviceStore, logger)"
+)
+FIXP_PROPS_REPLACEMENT = (
+    "\t// claude-ops Fix P: request the MAXIMUM history WhatsApp will ship on (re-)pair.\n"
+    "\t// store.DeviceProps is the global registration payload read when the device pairs.\n"
+    "\t// Upstream defaults to RequireFullSync=false + StorageQuotaMb=10240 with nil day\n"
+    "\t// limits, so a fresh pair only backfills a small recent window. Flip RequireFullSync\n"
+    "\t// on and raise every limit so the phone sends the deepest full-history snapshot it\n"
+    "\t// has, feeding handleHistorySync + the Fix O archive projection. Effective on the\n"
+    "\t// NEXT pair only (the payload is sent at pairing).\n"
+    "\tstore.DeviceProps.RequireFullSync = proto.Bool(true)\n"
+    "\tstore.DeviceProps.HistorySyncConfig = &waCompanionReg.DeviceProps_HistorySyncConfig{\n"
+    "\t\tFullSyncDaysLimit:   proto.Uint32(3650),   // ~10 years\n"
+    "\t\tFullSyncSizeMbLimit: proto.Uint32(102400), // 100 GB\n"
+    "\t\tStorageQuotaMb:      proto.Uint32(102400),\n"
+    "\t}\n"
+    '\tlogger.Infof("claude-ops Fix P: RequireFullSync=true, full-sync limits maxed (10y / 100GB) — deepest history on next pair")\n\n'
+    "\t// Create client instance\n\tclient := whatsmeow.NewClient(deviceStore, logger)"
+)
+FIXP_PROPS_SENTINEL = "claude-ops Fix P: request the MAXIMUM history"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -1897,6 +2055,55 @@ def main() -> int:
         MEDIA_RETRY_EVENT_REPLACEMENT,
         MEDIA_RETRY_EVENT_SENTINEL,
         "Fix M: deliver *events.MediaRetry to blocked downloader",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXN_IMPORT_NEEDLE,
+        FIXN_IMPORT_REPLACEMENT,
+        FIXN_IMPORT_SENTINEL,
+        "Fix O: import waHistorySync proto (sync-type constants)",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXN_RESET_NEEDLE,
+        FIXN_RESET_REPLACEMENT,
+        FIXN_RESET_SENTINEL,
+        "Fix O: ResetAllArchived helper",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXN_RESET_CALL_NEEDLE,
+        FIXN_RESET_CALL_REPLACEMENT,
+        FIXN_RESET_CALL_SENTINEL,
+        "Fix O: reset chats.archived on INITIAL_BOOTSTRAP history sync",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXN_PROJECT_NEEDLE,
+        FIXN_PROJECT_REPLACEMENT,
+        FIXN_PROJECT_SENTINEL,
+        "Fix O: project HistorySync archive flag onto chats.archived",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXN_PROJECT_FIXUP_NEEDLE,
+        FIXN_PROJECT_FIXUP_REPLACEMENT,
+        FIXN_PROJECT_FIXUP_SENTINEL,
+        "Fix O: metadata-only unarchive on existing chats",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXP_IMPORT_NEEDLE,
+        FIXP_IMPORT_REPLACEMENT,
+        FIXP_IMPORT_SENTINEL,
+        "Fix P: import store + waCompanionReg (history-sync config)",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXP_PROPS_NEEDLE,
+        FIXP_PROPS_REPLACEMENT,
+        FIXP_PROPS_SENTINEL,
+        "Fix P: RequireFullSync + max history limits on pair",
     )
 
     print("  whatsapp.py:")
