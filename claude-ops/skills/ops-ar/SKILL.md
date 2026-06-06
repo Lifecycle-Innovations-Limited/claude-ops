@@ -9,12 +9,30 @@ allowed-tools:
   - Grep
   - Glob
   - Agent
+  - TeamCreate
+  - SendMessage
   - AskUserQuestion
   - WebSearch
 effort: high
 ---
 
 # /ops:ops-ar — A&R Command
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when A&R'ing a batch or a full inbox sweep — one ar-producer teammate per track, in waves of ≤2 (stem separation is CPU-heavy; check `nproc`/`uptime` first), coordinating in real time. This enables:
+- Teammates share cross-track context (a recurring mix flaw or reference act spotted on track 1 informs the verdict on track 3)
+- You can steer mid-sweep: "rank the dance-pop demos first, hold the ballads"
+- Each verdict card streams back as its track finishes, so you assemble the ranked summary as results land
+
+**Team setup** (only when flag is enabled, batch/inbox mode):
+```
+TeamCreate("ar-panel")
+Agent(team_name="ar-panel", name="ar-[track-slug]", ...)
+```
+Steer with `SendMessage` / `broadcast`.
+
+If the flag is NOT set, fall back to standard fire-and-forget subagents (one ar-producer Agent per track, in waves of ≤2).
 
 A&R the given record(s) like a pop/dance-hit label owner + master producer. The deliverable is always the full A&R card per track:
 
