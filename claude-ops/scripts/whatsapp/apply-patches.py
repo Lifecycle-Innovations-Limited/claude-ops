@@ -1946,6 +1946,7 @@ func syncAppStateThenReady(client *whatsmeow.Client) {
 \tif client == nil {
 \t\treturn
 \t}
+\tsetAppStateReady(false)
 \tif err := client.FetchAppState(context.Background(), appstate.WAPatchRegularLow, true, false); err != nil {
 \t\tfmt.Printf("Fix Q: regular_low app-state sync failed (archive gated until it succeeds): %v\\n", err)
 \t\treturn
