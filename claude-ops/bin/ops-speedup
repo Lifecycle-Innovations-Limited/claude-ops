@@ -326,7 +326,7 @@ run_parallel_scan() {
 # Protected processes — never kill, never demote
 # Spotlight stack (mds/mdworker) + iCloud/App Store sync (bird/cloudd/akd/itunescloudd/appstoreagent/storeagent/storeaccountd/commerce/storedownloadd/identityservicesd/apsd) must stay at normal priority.
 # Demoting them via taskpolicy -b starves CloudKit/StoreKit traffic and surfaces as "Cannot Connect" in App Store / iCloud / iCloud Drive sync stalls.
-PROTECTED_RE="kernel_task|launchd|WindowServer|loginwindow|Finder|SystemUIServer|Dock|systemd|init|sshd|ssh|mosh|bash|zsh|fish|tmux|screen|cursor|Cursor|comet|Comet|Shortwave|shortwave|claude|Claude|node|npm|python|Xcode|xcodebuild|mds|mds_stores|mdworker|mdworker_shared|mdbulkimport|Spotlight|bird|cloudd|akd|itunescloudd|appstoreagent|storeagent|storeaccountd|storedownloadd|commerce|identityservicesd|apsd|nsurlsessiond|fmfd|callservicesd|imagent|softwareupdated|nsurlstoraged|trustd|networkd|symptomsd|locationd|dasd|powerd"
+PROTECTED_RE="kernel_task|launchd|WindowServer|loginwindow|Finder|SystemUIServer|Dock|systemd|init|sshd|ssh|mosh|bash|zsh|fish|tmux|screen|cursor|Cursor|comet|Comet|Shortwave|shortwave|claude|Claude|node|npm|python|Xcode|xcodebuild|mds|mds_stores|mdworker|mdworker_shared|mdbulkimport|Spotlight|bird|cloudd|akd|itunescloudd|appstoreagent|storeagent|storeaccountd|storedownloadd|commerce|identityservicesd|apsd|nsurlsessiond|fmfd|callservicesd|imagent|softwareupdated|nsurlstoraged|trustd|networkd|symptomsd|locationd|dasd|powerd|Supercharge|supercharge"
 
 # Safe to demote to background priority (not kill).
 # Excludes: bird/cloudd (iCloud/CloudKit), identityservicesd (iMessage/FaceTime/iCloud auth) — demoting these breaks App Store + iCloud sync.
