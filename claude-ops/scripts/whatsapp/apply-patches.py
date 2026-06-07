@@ -107,12 +107,44 @@ Patches included:
           then runs a full FetchAppState(fullSync=true) to re-pull the server's
           authoritative state onto a clean baseline. Without discard_local the
           handler behaves exactly as before (plain full resync).
+  Fix T — skip-and-continue past unverifiable LTHash patches: the server's
+          regular_low patch chain may contain one or more patches that fail
+          LTHash verification regardless of local state ("failed to verify patch
+          vNNN: mismatching LTHash" — whatsmeow #382/#858/#1176). These bad
+          patches repeat on EVERY incremental notification sync, so the bridge
+          is permanently wedged even after re-pair. Fix T adds
+          syncAppStateSkipBad() which wraps FetchAppState in a bounded retry
+          loop: on each ErrMismatchingLTHash it parses the failing version N
+          from the error string, writes version N with a zeroed hash directly
+          into whatsmeow_app_state_version, clears all mutation MACs for the
+          collection (so the fresh fetch starts from a clean LTHash accumulator),
+          and retries FetchAppState from the new cursor — effectively skipping
+          the bad patch and applying all subsequent valid patches. Up to 30
+          bad patches are skipped per call. syncAppStateThenReady() is updated
+          to use syncAppStateSkipBad() so the on-connect sync no longer wedges
+          on bad patches. /api/resync_app_state gains a skip_bad=true query
+          param / JSON field that calls syncAppStateSkipBad() directly, allowing
+          the currently-wedged bridge to self-heal without a re-pair or binary
+          swap.
   Fix S — wa-inbox-fresh.sh app-state freshness wait: before ops-inbox performs
           any archive mutation it polls GET /api/app_state_status and waits up to
           ~30s for ready:true, so the first post-re-pair archive is never fired
           against an unsynced LTHash. Best-effort: an old bridge without the
           endpoint (404/curl failure) is treated as ready so ops-inbox never hard-
           fails on a stale bridge.
+  Fix T — skip-and-continue past unverifiable LTHash patches (the durable fix
+          for a permanently-wedged bridge without re-pair): the server's
+          regular_low patch chain may contain patches that fail LTHash
+          verification regardless of local state, causing every incremental
+          notification sync to abort. Fix T adds syncAppStateSkipBad() which
+          wraps FetchAppState in a bounded retry loop (up to 30 skips): on each
+          ErrMismatchingLTHash failure it advances the stored version cursor
+          past the failing patch (writing the version with a zero hash, clearing
+          mutation MACs), then retries. syncAppStateThenReady() is updated to
+          use this loop so the on-connect sync never permanently wedges.
+          /api/resync_app_state?skip_bad=true (or JSON skip_bad:true) calls
+          syncAppStateSkipBad() directly to heal an already-wedged bridge
+          without a restart or re-pair.
 
 Every patch is gated on a sentinel string so re-running is a no-op.
 
@@ -1676,7 +1708,11 @@ func downloadWithRetry(client *whatsmeow.Client, messageStore *MessageStore, mes
 }
 
 func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, messageID, chatJID string) (bool, string, string, string, error) {"""
-MEDIA_RETRY_BLOCK_SENTINEL = "claude-ops Fix M: media-retry fallback"
+# Broaden sentinel to cover the old "Fix I" variant already present on live installs
+# (live bridge has "claude-ops Fix I: media-retry fallback" comment from a prior
+# hand-patch; re-running apply-patches would have missed it and appended a duplicate).
+# Keying on `func downloadWithRetry` — present in any variant of the block.
+MEDIA_RETRY_BLOCK_SENTINEL = "func downloadWithRetry("
 
 # M4 — route downloadMedia's actual download through downloadWithRetry.
 # Pristine upstream calls the OLD one-arg client.Download(downloader); whatsmeow
@@ -1701,7 +1737,8 @@ MEDIA_RETRY_EVENT_REPLACEMENT = """\t\tcase *events.HistorySync:
 \t\t\t// (claude-ops Fix M — media-retry fallback).
 \t\t\tdeliverMediaRetry(v)
 """
-MEDIA_RETRY_EVENT_SENTINEL = "claude-ops Fix M — media-retry fallback"
+# Broadened to cover "Fix I" comment in old live-install variant.
+MEDIA_RETRY_EVENT_SENTINEL = "case *events.MediaRetry:"
 
 
 def replace_idempotent(
@@ -2093,6 +2130,218 @@ FIXR_READY_REPLACEMENT = """\t\t// claude-ops Fix R: resync succeeded — regula
 FIXR_READY_SENTINEL = "claude-ops Fix R: resync succeeded"
 
 
+# ─── main.go Fix T: skip-and-continue past unverifiable LTHash patches ─────────
+# When the server's regular_low patch chain contains patches whose LTHash MAC
+# cannot be verified ("failed to verify patch vNNN: mismatching LTHash") every
+# incremental notification sync aborts at the same patch — a permanent wedge.
+# Re-pair downloads the same server chain and hits the same bad patch, so the
+# bridge is wedged again within seconds of pairing. Fix T adds:
+#
+#   skipLTHashPatch(ctx, client, name, failingVersion):
+#     Bumps the local version cursor past failingVersion by writing version
+#     failingVersion with a zero LTHash directly into whatsmeow_app_state_version,
+#     then clears all mutation MACs for the collection from
+#     whatsmeow_app_state_mutation_macs (so the next FetchAppState accumulates
+#     a fresh LTHash from version failingVersion onward rather than inheriting a
+#     now-wrong accumulator). Identity/session/pre_key tables are never touched.
+#
+#   syncAppStateSkipBad(ctx, client, name):
+#     Calls FetchAppState(name, false, false) in a bounded retry loop. On each
+#     "mismatching LTHash" failure it calls skipLTHashPatch to advance past the
+#     bad patch and retries. Up to 30 bad patches are skipped; any other error
+#     is returned immediately. On success appStateReady is set true.
+#
+#   syncAppStateThenReady (existing Fix Q helper) is replaced to call
+#   syncAppStateSkipBad so the on-connect sync no longer wedges.
+#
+#   /api/resync_app_state gains skip_bad=true (query param OR JSON body) which
+#   calls syncAppStateSkipBad directly so the currently-wedged bridge can
+#   self-heal via a single curl without a restart or re-pair.
+#
+# API note: both client.FetchAppState and client.Store.AppState.PutAppStateVersion
+# / DeleteAppStateMutationMACs are available and exercised by existing fixes.
+# For the DB write in skipLTHashPatch we use a direct SQL connection (same
+# pattern as healLTHash / Fix G) to avoid whatsmeow's appStateSyncLock — the
+# lock is already held when FetchAppState is running, but skipLTHashPatch is
+# called OUTSIDE FetchAppState (after it returns an error), so there is no
+# re-entrancy issue.
+
+# T1: replace syncAppStateThenReady to call syncAppStateSkipBad, and insert
+# skipLTHashPatch + syncAppStateSkipBad before it.
+# Anchor: the existing syncAppStateThenReady body (installed by Fix Q). On a
+# Fix-Q-patched tree this is byte-identical; sentinel gates on the new helper.
+FIXT_SYNC_NEEDLE = """// syncAppStateThenReady runs a full FetchAppState(regular_low) and flips the
+// readiness flag once it returns successfully. Safe to call on every Connected;
+// onlyIfNotSynced=false forces a fetch but whatsmeow no-ops cheaply when already
+// in sync. Best-effort: on error we leave appStateReady false so the next connect
+// retries (and /api/resync_app_state?discard_local=true remains the manual heal).
+func syncAppStateThenReady(client *whatsmeow.Client) {
+\tif client == nil {
+\t\treturn
+\t}
+\tsetAppStateReady(false)
+\tif err := client.FetchAppState(context.Background(), appstate.WAPatchRegularLow, true, false); err != nil {
+\t\tfmt.Printf("Fix Q: regular_low app-state sync failed (archive gated until it succeeds): %v\\n", err)
+\t\treturn
+\t}
+\tsetAppStateReady(true)
+\tfmt.Println("Fix Q: regular_low app-state synced — archive mutations enabled")
+}"""
+
+FIXT_SYNC_REPLACEMENT = """// skipLTHashPatch advances the local regular_low cursor past failingVersion so
+// the next FetchAppState fetches patches from failingVersion+1 onward.
+// It writes version=failingVersion with a zero hash into whatsmeow_app_state_version
+// and clears all mutation MACs for the collection so the LTHash accumulator
+// starts fresh. Safe: only version+MAC rows are touched; identity/session/
+// pre_key tables are never modified. claude-ops Fix T.
+func skipLTHashPatch(client *whatsmeow.Client, patchName appstate.WAPatchName, failingVersion uint64) error {
+\twdb, err := sql.Open("sqlite3", "file:store/whatsapp.db?_foreign_keys=on")
+\tif err != nil {
+\t\treturn fmt.Errorf("skipLTHashPatch: open whatsapp.db: %w", err)
+\t}
+\tdefer wdb.Close()
+\tjid := ""
+\tif client.Store != nil && client.Store.ID != nil {
+\t\tjid = client.Store.ID.String()
+\t}
+\t// Write version=failingVersion with a zeroed 128-byte hash. This tells
+\t// FetchAppState to fetch patches from failingVersion+1 onward and accumulate
+\t// a fresh LTHash (no longer chained off the bad patch's unverifiable state).
+\tzeroHash := make([]byte, 128)
+\t_, err = wdb.Exec(
+\t\t`INSERT INTO whatsmeow_app_state_version (jid, name, version, hash) VALUES (?, ?, ?, ?)
+\t\t ON CONFLICT(jid, name) DO UPDATE SET version=excluded.version, hash=excluded.hash`,
+\t\tjid, string(patchName), failingVersion, zeroHash,
+\t)
+\tif err != nil {
+\t\treturn fmt.Errorf("skipLTHashPatch: write version %d: %w", failingVersion, err)
+\t}
+\t// Clear all mutation MACs so the LTHash accumulator starts clean from this
+\t// version (stale MACs from earlier patches would corrupt the new accumulation).
+\t_, err = wdb.Exec(
+\t\t`DELETE FROM whatsmeow_app_state_mutation_macs WHERE jid=? AND name=?`,
+\t\tjid, string(patchName),
+\t)
+\tif err != nil {
+\t\treturn fmt.Errorf("skipLTHashPatch: clear MACs: %w", err)
+\t}
+\tfmt.Printf("Fix T: skipped bad patch v%d for %s — cursor bumped, MACs cleared\\n", failingVersion, patchName)
+\treturn nil
+}
+
+// syncAppStateSkipBad fetches app-state patches for name, automatically skipping
+// any patch that fails LTHash verification (up to maxSkips times). This is the
+// durable fix for server-side bad patches (whatsmeow #382/#858/#1176): instead of
+// aborting the entire sync on one unverifiable patch, we advance past it and apply
+// all subsequent valid patches. On success appStateReady is set true.
+// claude-ops Fix T.
+func syncAppStateSkipBad(client *whatsmeow.Client, patchName appstate.WAPatchName) error {
+\tif client == nil {
+\t\treturn fmt.Errorf("syncAppStateSkipBad: client is nil")
+\t}
+\tconst maxSkips = 30
+\tskipped := 0
+\tfor {
+\t\terr := client.FetchAppState(context.Background(), patchName, false, false)
+\t\tif err == nil {
+\t\t\tfmt.Printf("Fix T: %s sync complete (skipped %d bad patch(es))\\n", patchName, skipped)
+\t\t\treturn nil
+\t\t}
+\t\terrStr := err.Error()
+\t\tif !strings.Contains(errStr, "mismatching LTHash") {
+\t\t\treturn err // non-LTHash error: propagate immediately
+\t\t}
+\t\tif skipped >= maxSkips {
+\t\t\treturn fmt.Errorf("Fix T: aborted after skipping %d bad patches — still failing: %w", maxSkips, err)
+\t\t}
+\t\t// Parse the failing version number from the error string.
+\t\t// Error format: "...failed to verify patch vNNN: mismatching LTHash"
+\t\tvar failingVersion uint64
+\t\tif _, parseErr := fmt.Sscanf(errStr[strings.LastIndex(errStr, "patch v")+len("patch v"):], "%d", &failingVersion); parseErr != nil {
+\t\t\treturn fmt.Errorf("Fix T: couldn't parse failing version from %q: %w", errStr, err)
+\t\t}
+\t\tif skipErr := skipLTHashPatch(client, patchName, failingVersion); skipErr != nil {
+\t\t\treturn fmt.Errorf("Fix T: skip failed: %v (original: %w)", skipErr, err)
+\t\t}
+\t\tskipped++
+\t}
+}
+
+// syncAppStateThenReady runs a full regular_low sync using the skip-bad-patch
+// loop (Fix T) and flips appStateReady once it returns. Safe to call on every
+// Connected. Best-effort: on error appStateReady stays false so the next connect
+// retries. claude-ops Fix Q updated by Fix T.
+func syncAppStateThenReady(client *whatsmeow.Client) {
+\tif client == nil {
+\t\treturn
+\t}
+\tsetAppStateReady(false)
+\tif err := syncAppStateSkipBad(client, appstate.WAPatchRegularLow); err != nil {
+\t\tfmt.Printf("Fix Q/T: regular_low app-state sync failed (archive gated until it succeeds): %v\\n", err)
+\t\treturn
+\t}
+\tsetAppStateReady(true)
+\tfmt.Println("Fix Q/T: regular_low app-state synced — archive mutations enabled")
+}"""
+
+FIXT_SYNC_SENTINEL = "claude-ops Fix T."
+
+# T2: add skip_bad field to /api/resync_app_state request struct and wire it to
+# syncAppStateSkipBad. Anchors on the Fix R discard_local struct block (always
+# present after Fix R runs). Inserts SkipBad field + handler block after the
+# existing DiscardLocal block. MUST run after Fix R.
+FIXT_RESYNC_NEEDLE = """\t\tvar req struct {
+\t\t\tName         string `json:\"name\"`
+\t\t\tFullSync     bool   `json:\"full_sync\"`
+\t\t\tDiscardLocal bool   `json:\"discard_local\"`
+\t\t}
+\t\treq.Name = \"regular_low\"
+\t\treq.FullSync = true
+\t\tif err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+\t\t\tif req.Name == \"\" {
+\t\t\t\treq.Name = \"regular_low\"
+\t\t\t}
+\t\t}
+\t\t// claude-ops Fix R: discard_local=true (query param OR JSON body) drops the"""
+
+FIXT_RESYNC_REPLACEMENT = """\t\tvar req struct {
+\t\t\tName         string `json:\"name\"`
+\t\t\tFullSync     bool   `json:\"full_sync\"`
+\t\t\tDiscardLocal bool   `json:\"discard_local\"`
+\t\t\tSkipBad      bool   `json:\"skip_bad\"`
+\t\t}
+\t\treq.Name = \"regular_low\"
+\t\treq.FullSync = true
+\t\tif err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+\t\t\tif req.Name == \"\" {
+\t\t\t\treq.Name = \"regular_low\"
+\t\t\t}
+\t\t}
+\t\t// claude-ops Fix T: skip_bad=true (query param OR JSON body) calls
+\t\t// syncAppStateSkipBad which fetches patches skipping any unverifiable ones
+\t\t// (mismatching LTHash — whatsmeow #382/#858/#1176). Use to heal a permanently
+\t\t// wedged bridge without a restart or re-pair.
+\t\tif r.URL.Query().Get(\"skip_bad\") == \"true\" {
+\t\t\treq.SkipBad = true
+\t\t}
+\t\tif req.SkipBad {
+\t\t\tsetAppStateReady(false)
+\t\t\tif err := syncAppStateSkipBad(client, appstate.WAPatchName(req.Name)); err != nil {
+\t\t\t\tw.WriteHeader(http.StatusInternalServerError)
+\t\t\t\tfmt.Fprintf(w, `{\"success\":false,\"message\":%q}`, err.Error())
+\t\t\t\treturn
+\t\t\t}
+\t\t\tif req.Name == \"regular_low\" {
+\t\t\t\tsetAppStateReady(true)
+\t\t\t}
+\t\t\tfmt.Fprintf(w, `{\"success\":true,\"message\":\"app-state %s resynced (bad patches skipped)\"}`, req.Name)
+\t\t\treturn
+\t\t}
+\t\t// claude-ops Fix R: discard_local=true (query param OR JSON body) drops the"""
+
+FIXT_RESYNC_SENTINEL = "claude-ops Fix T: skip_bad=true"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -2281,6 +2530,23 @@ def main() -> int:
         FIXR_READY_REPLACEMENT,
         FIXR_READY_SENTINEL,
         "Fix R: re-arm readiness after successful resync",
+    )
+    # Fix T: skip-and-continue past unverifiable LTHash patches. MUST run after
+    # Fix Q (FIXQ_STATE_REPLACEMENT installed syncAppStateThenReady to anchor on)
+    # and after Fix R (T2 anchors inside the Fix R struct block).
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXT_SYNC_NEEDLE,
+        FIXT_SYNC_REPLACEMENT,
+        FIXT_SYNC_SENTINEL,
+        "Fix T: skipLTHashPatch + syncAppStateSkipBad + updated syncAppStateThenReady",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXT_RESYNC_NEEDLE,
+        FIXT_RESYNC_REPLACEMENT,
+        FIXT_RESYNC_SENTINEL,
+        "Fix T: /api/resync_app_state skip_bad=true mode",
     )
     changed_go |= replace_idempotent(
         main_go,
