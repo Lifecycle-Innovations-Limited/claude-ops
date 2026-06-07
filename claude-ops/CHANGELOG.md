@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.26.5] - 2026-06-07
+
+### Changed
+Security hardening: independent pii-gate CI job + owner-PII checks in test-no-secrets.sh (home paths, webmail/brand emails, AWS ARN account ids, phone numbers) so personal data can never land in this public repo again (#530); gitleaks false-positives allowlisted so secret-scan CI is genuinely green/enforcing (#532).
+
+
 ## [2.26.4] - 2026-06-07
 
 ### Changed
