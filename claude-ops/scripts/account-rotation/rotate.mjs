@@ -2480,6 +2480,18 @@ function findClaudeSessions() {
       }
     } catch {}
 
+    // Load session state files to detect bg sessions (kind: 'bg')
+    const sessionStateDir = join(homedir(), '.claude', 'sessions');
+    const bgPids = new Set();
+    try {
+      for (const f of readdirSync(sessionStateDir).filter((f) => f.endsWith('.json'))) {
+        try {
+          const s = JSON.parse(readFileSync(join(sessionStateDir, f), 'utf8'));
+          if (s.kind === 'bg' && s.pid) bgPids.add(s.pid);
+        } catch {}
+      }
+    } catch {}
+
     for (const line of psOut.split('\n')) {
       const match = line.trim().match(/^(\d+)\s+(ttys?\d+)\s+(.+)$/);
       if (!match) continue;
@@ -2488,7 +2500,8 @@ function findClaudeSessions() {
       const resumeMatch = args.match(/--resume\s+(\S+)/);
       const resumeId = resumeMatch ? resumeMatch[1] : null;
       const pane = ttyMap[tty] || null;
-      sessions.push({ pid: parseInt(pid), tty, pane, resumeId, args });
+      const isBg = bgPids.has(parseInt(pid));
+      sessions.push({ pid: parseInt(pid), tty, pane, resumeId, args, isBg });
     }
   } catch (e) {
     log(`[session] Failed to enumerate sessions: ${e.message.substring(0, 80)}`);
@@ -2571,13 +2584,14 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
 
   if (sessions.length === 0) {
     log('[session] No running Claude Code sessions found');
-    return;
   }
 
-  // Tag each session with its owning terminal app. We only have a reliable
-  // AppleScript injection path for tmux + iTerm2. For Ghostty/Terminal/others,
-  // writing to the raw TTY shows as OUTPUT (garbles the live display) and
-  // `tell application "iTerm2"` would spuriously *launch* iTerm2 — so we skip.
+  // Tag each session with its owning terminal app.
+  // Injection paths (in priority order):
+  //   1. tmux pane — most reliable, works from any terminal including Ghostty
+  //   2. iTerm2 AppleScript — for non-tmux iTerm2 sessions
+  //   3. claude --resume --print /login — for bg sessions (no TTY) or any
+  //      session that has a resumeId but no reachable TTY
   for (const s of sessions) {
     if (!s.pane && s.pid) s.terminal = detectTerminalForPid(s.pid);
   }
@@ -2585,42 +2599,80 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
   const sendKeys = (s, txt) => {
     if (s.pane) return sendKeysToPane(s.pane, txt);
     if (s.terminal === 'iTerm2' && s.tty) return sendKeysToITerm(s.tty, txt);
-    // Ghostty, Terminal.app, Alacritty, WezTerm, kitty, unknown: skip.
-    // Raw TTY write would render "/login" as on-screen output text, not
-    // stdin — corrupting the session without triggering the re-auth.
+    // Ghostty, Terminal.app, Alacritty, WezTerm, kitty, unknown: fall through
+    // to resume-path below; raw TTY write garbles the display.
     return false;
   };
 
-  // Reachable = tmux pane OR known-good terminal (iTerm2). Everyone else
-  // is logged + skipped so we never pop a visual window or garble Ghostty.
-  const reachable = sessions.filter((s) => s.pane || (s.terminal === 'iTerm2' && s.tty));
-  const skipped = sessions.filter((s) => !s.pane && s.terminal && s.terminal !== 'iTerm2');
-  for (const s of skipped) {
-    log(
-      `[session] Skipping PID ${s.pid} (${s.terminal}) — no safe inject path; token-refresh daemon keeps keys fresh so restart isn't required`,
-    );
+  // Resume path: sessions that have a --resume UUID can receive /login via
+  // `claude --resume <uuid> --print /login`. Works for claude --bg sessions
+  // (no TTY, detached) and Ghostty / non-tmux sessions where AppleScript is unavailable.
+  async function sendViaResume(s) {
+    if (!s.resumeId) return false;
+    try {
+      spawnSync('claude', ['--resume', s.resumeId, '--print', '/login'],
+        { timeout: 15_000, stdio: 'ignore' }
+      );
+      return true;
+    } catch {
+      return false;
+    }
   }
-  if (reachable.length === 0) {
-    log(`[session] Found ${sessions.length} sessions but none have a reachable TTY`);
+
+  const reachable = sessions.filter((s) => s.pane || (s.terminal === 'iTerm2' && s.tty));
+  const resumable = sessions.filter((s) => !s.pane && !(s.terminal === 'iTerm2' && s.tty) && s.resumeId);
+  const unreachable = sessions.filter((s) => !s.pane && !(s.terminal === 'iTerm2' && s.tty) && !s.resumeId);
+
+  for (const s of unreachable) {
+    log(`[session] Skipping PID ${s.pid} (${s.terminal || 'unknown'}) — no tmux pane, no iTerm2, no resumeId`);
+  }
+
+  const totalActionable = reachable.length + resumable.length;
+  if (totalActionable === 0 && sessions.length > 0) {
+    log(`[session] Found ${sessions.length} session(s) but none have a reachable inject path`);
+  } else if (sessions.length === 0) {
     return;
   }
 
-  log(`[session] Injecting /login into ${reachable.length} session(s):`);
-  for (const s of reachable) {
-    log(`  PID ${s.pid} ${s.pane ? 'pane=' + s.pane : 'tty=' + s.tty}`);
+  if (reachable.length > 0) {
+    log(`[session] Injecting /login into ${reachable.length} TTY-reachable session(s):`);
+    for (const s of reachable) {
+      log(`  PID ${s.pid} ${s.pane ? 'pane=' + s.pane : 'tty=' + s.tty}`);
+    }
   }
 
   // Keychain was already swapped to the fresh account's valid token.
   // /login re-reads the keychain → picks up the new token → "Login successful" instantly.
-  // No /exit, no process restart, no OAuth browser flow needed (token is already valid).
-  // Stagger slightly to avoid all sessions hitting the API at the exact same millisecond.
   for (const s of reachable) {
     if (sendKeys(s, '/login')) {
       log(`[session] Sent /login to PID ${s.pid} (${s.pane || s.tty})`);
     } else {
-      log(`[session] Failed to inject /login to PID ${s.pid} (${s.pane || s.tty})`);
+      log(`[session] Failed TTY inject for PID ${s.pid} — trying resume path`);
+      if (s.resumeId) {
+        const ok = await sendViaResume(s);
+        log(`[session] Resume fallback for PID ${s.pid}: ${ok ? 'ok' : 'failed'}`);
+      }
     }
-    await sleep(500); // 500ms stagger between sessions
+    await sleep(500);
+  }
+
+  // Non-tmux sessions with a resumeId (non-bg interactive sessions in Ghostty etc):
+  // use claude --resume --print /login.
+  // NOTE: claude --bg daemon sessions auto-reauth within 30s via Claude Code's
+  // keychain poll cycle — the CLI blocks --resume --print on them anyway.
+  const resumableInteractive = resumable.filter((s) => !s.isBg);
+  const resumableBg = resumable.filter((s) => s.isBg);
+  for (const s of resumableBg) {
+    log(`[session] PID ${s.pid} is a bg session — will auto-reauth via 30s keychain poll (no action needed)`);
+  }
+  if (resumableInteractive.length > 0) {
+    log(`[session] Sending /login via --resume to ${resumableInteractive.length} non-tmux interactive session(s):`);
+    for (const s of resumableInteractive) {
+      log(`  PID ${s.pid} resumeId=${s.resumeId} terminal=${s.terminal || 'unknown'}`);
+      const ok = await sendViaResume(s);
+      log(`[session] Resume /login for PID ${s.pid}: ${ok ? 'ok' : 'failed'}`);
+      await sleep(500);
+    }
   }
 
   // If Claude relaunches trigger an OAuth browser window (token expired mid-rotation),
@@ -3051,7 +3103,7 @@ async function rotate(targetEmail, opts = {}) {
 
   if (opts.session) {
     if (dryRun) {
-      log('[DRY-RUN] Would restart running Claude sessions with --continue and send resume prompt');
+      log('[DRY-RUN] Would inject /login into reachable running sessions (tmux/iTerm2) + resume-path for non-tmux interactive sessions');
     } else {
       await refreshRunningSession(account, opts.noBrowser);
     }
