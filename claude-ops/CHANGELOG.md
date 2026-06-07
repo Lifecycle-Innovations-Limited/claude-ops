@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.26.3] - 2026-06-07
+
+### Changed
+Account rotation now re-auths live TTY sessions (tmux/iTerm2 /login injection + resume-path for non-tmux interactive sessions like Ghostty) in addition to respawning detached bg agents (#527). Protect Supercharge from /speedup demotion; gitignore .gstack/.
+
+
 ## [2.26.2] - 2026-06-07
 
 ### Changed
