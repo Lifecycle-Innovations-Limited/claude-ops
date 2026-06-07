@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.26.2] - 2026-06-07
+
+### Changed
+fix(daemon): Linux/systemd status detection in ops-daemon-manager (installed/running/pid now correct on systemd --user hosts, not just macOS launchd); real whatsapp-bridge PID reporting via optional registry pid_probe field (reporting-only, never fed into liveness/restart path).
+
+
 ## [2.26.1] - 2026-06-07
 
 ### Changed
