@@ -50,10 +50,16 @@ jobs:
       - name: Run gitleaks
         run: ./gitleaks detect --source . --config claude-ops/.gitleaks.toml --verbose
 
-      # Blocking gate against personal data (PII) reaching this PUBLIC repo:
-      # contributor usernames, home paths, personal emails, AWS account IDs, phone
-      # numbers. Catches the class that previously leaked into history (2026-06-07).
-      - name: PII / personal-data gate
+  # Dedicated, INDEPENDENT gate against personal data (PII) reaching this PUBLIC
+  # repo — contributor usernames, home paths, personal emails, AWS account IDs,
+  # phone numbers. Runs with no `needs:` so it executes on every PR regardless of
+  # the secret-scan job's state. Catches the class that leaked into history
+  # (scrubbed 2026-06-07).
+  pii-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: PII / personal-data scan
         run: bash claude-ops/tests/test-no-secrets.sh
 
   test-suite:
