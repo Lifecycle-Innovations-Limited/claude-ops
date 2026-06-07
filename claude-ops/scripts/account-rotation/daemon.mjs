@@ -534,20 +534,23 @@ async function doRotation(reason) {
   try {
     // --no-browser: no Chrome, no API calls (works when rate limited)
     // --to: daemon controls which account to rotate to (pre-validated token)
-    // --reload-agents: after the keychain swap, sequentially respawn running bg
-    //   agents so they pick up the new token. Sequential + 15s stagger; max 4
-    //   agents per invocation (anti-stampede). Adds up to ~60s of wall time on
-    //   top of the keychain swap — timeout raised to 200s to accommodate.
-    // NO --session: keychain swap only. Background rotation must not inject /login
-    // into running sessions — that interrupts active work. When sessions hit the wall
-    // they show "not logged in" — user runs /login → instant success because the fresh
-    // token is already in the keychain.
+    // Two re-auth strategies, targeting DISJOINT session classes (best practice:
+    // detached headless sessions cannot be steered via `--resume --print`, so they
+    // must be respawned; live TTY sessions can take a direct /login injection):
+    //   --reload-agents → sequentially respawn running *detached* bg agents (no TTY,
+    //     no human mid-keystroke) onto the fresh token. Sequential + 15s stagger;
+    //     max 4/invocation (anti-stampede).
+    //   --session → inject /login into live TTY-reachable sessions (tmux panes +
+    //     iTerm2) plus a best-effort resume-path for non-tmux interactive sessions,
+    //     so they re-auth immediately instead of failing at the auth wall.
+    // refreshRunningSession explicitly skips bg sessions (they auto-reauth via the
+    // 30s keychain poll), so the two flags never double-act on the same session.
     const result = execFileSync(
       process.execPath,
-      [ROTATE_SCRIPT, '--no-browser', '--to', targetKey, '--reload-agents'],
+      [ROTATE_SCRIPT, '--no-browser', '--to', targetKey, '--reload-agents', '--session'],
       {
         cwd: __dirname,
-        timeout: 200_000, // 120s swap + up to 4×15s stagger = ~180s; 200s gives headroom
+        timeout: 240_000, // 120s swap + up to 4×15s reload stagger + session inject; headroom
         env: { ...process.env, NODE_NO_WARNINGS: '1' },
       },
     ).toString();
