@@ -455,9 +455,26 @@ print(json.dumps(sys.argv[1]))
       if [[ -n "$hc_cmd" ]]; then
         # Command-supervised service: liveness was already determined by
         # check_health via the configured probe. The tracked PID is an
-        # ephemeral launcher and not meaningful — report status as-is with a
-        # null pid; do NOT downgrade running→dead on a dead wrapper PID.
+        # ephemeral launcher and not meaningful — never use it for liveness or
+        # downgrade running→dead on a dead wrapper PID.
+        #
+        # For OBSERVABILITY only, if the service registry defines a `pid_probe`
+        # command, resolve the REAL externally-supervised PID (e.g. the process
+        # LISTENing on the bridge port, owned by whatsapp-bridge.service) and
+        # report it. This is strictly reporting — it is never fed back into the
+        # restart/liveness path, so it cannot reintroduce the false-dead churn.
         pid_val="null"
+        if [[ "$status" == "running" ]]; then
+          local pid_probe_cmd real_pid
+          pid_probe_cmd=$(get_service_field "$name" "pid_probe")
+          if [[ -n "$pid_probe_cmd" ]]; then
+            if real_pid=$(eval "$pid_probe_cmd" 2>/dev/null | head -1 | tr -dc '0-9' | head -c 12); then
+              if [[ -n "$real_pid" ]] && kill -0 "$real_pid" 2>/dev/null; then
+                pid_val="$real_pid"
+              fi
+            fi
+          fi
+        fi
       elif [[ "$pid" == "null" ]] || [[ -z "$pid" ]]; then
         pid_val="null"
         # No PID tracked — status cannot be "running"
