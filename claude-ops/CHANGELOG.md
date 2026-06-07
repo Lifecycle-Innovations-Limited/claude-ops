@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.26.1] - 2026-06-07
+
+### Changed
+fix(whatsapp): durable post-re-pair app-state LTHash prevention — readiness gate on /api/archive (HTTP 425 until regular_low synced), new /api/app_state_status, discard_local resync to heal corruption without a phone tap, and wa-inbox-fresh freshness wait (#521). feat(whatsapp): auto-backfill chat display names in link_contacts.py so LID/phone chats never show raw numbers (#520).
+
+
 ## [2.26.0] - 2026-06-06
 
 ### Changed
