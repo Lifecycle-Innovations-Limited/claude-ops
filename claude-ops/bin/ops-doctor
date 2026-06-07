@@ -341,19 +341,25 @@ fi
 # --- 5e. Pocket health probe ---
 POCKET_STATE_DIR="$HOME/.claude/state/pocket"
 POCKET_CONFIGURED=false
+POCKET_DISABLED=false
 if [ -f "$PREFS" ] && command -v jq >/dev/null 2>&1; then
-  jq -e '.pocket.enabled == true' "$PREFS" >/dev/null 2>&1 && POCKET_CONFIGURED=true
+  jq -e '.pocket.enabled == true'  "$PREFS" >/dev/null 2>&1 && POCKET_CONFIGURED=true
+  # Explicit opt-out wins: if pocket.enabled is set to false, never warn about it.
+  jq -e '.pocket.enabled == false' "$PREFS" >/dev/null 2>&1 && POCKET_DISABLED=true
 fi
-# Also probe if any health/config file already exists (partial install)
+# Also treat pocket as active if a service has actually registered a health file.
+# NOTE: config JSONs (whatsapp-config.json / email-config.json) are written by
+# setup and may linger after pocket is turned off — they do NOT imply the daemon
+# should be running, so they must NOT flip POCKET_CONFIGURED (false-positive source).
 for _pf in \
   "$POCKET_STATE_DIR/.activity-notifier-health" \
   "$POCKET_STATE_DIR/.out-queue-health" \
   "$POCKET_STATE_DIR/.email-bridge-health" \
-  "$POCKET_STATE_DIR/.whatsapp-bridge-health" \
-  "$POCKET_STATE_DIR/whatsapp-config.json" \
-  "$POCKET_STATE_DIR/email-config.json"; do
+  "$POCKET_STATE_DIR/.whatsapp-bridge-health"; do
   [ -f "$_pf" ] && POCKET_CONFIGURED=true && break
 done
+# Explicit disable overrides any inferred-active signal.
+[ "$POCKET_DISABLED" = true ] && POCKET_CONFIGURED=false
 
 if [ "$POCKET_CONFIGURED" = true ]; then
   NOW=$(date +%s)
@@ -429,7 +435,12 @@ if [ "$POCKET_CONFIGURED" = true ]; then
   if [ -f "$POCKET_STATE_DIR/email-config.json" ]; then
     EM_EN=$(jq -r '.enabled // "true"' "$POCKET_STATE_DIR/email-config.json" 2>/dev/null || echo "true")
     if [ "$EM_EN" != "false" ] && command -v gog >/dev/null 2>&1; then
-      if ! gog auth status 2>&1 | grep -qi "authenticated\|logged in\|active"; then
+      # `gog auth status` does not print the word "authenticated"; it emits
+      # key<TAB>value lines. The authoritative signal is `credentials_exists true`
+      # alongside a non-empty `account`. (Old grep for "authenticated|logged in|
+      # active" never matched and always false-warned.)
+      GOG_STATUS=$(gog auth status 2>&1 || true)
+      if ! printf '%s\n' "$GOG_STATUS" | grep -qE '^credentials_exists[[:space:]]+true'; then
         WARNINGS+=("pocket_email_auth: gog gmail not authenticated — email notifications will fail. Run: gog auth add <email> --services gmail")
       fi
     fi
