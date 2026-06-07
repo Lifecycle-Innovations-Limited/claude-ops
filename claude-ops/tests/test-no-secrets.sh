@@ -21,6 +21,8 @@ echo ""
 EXCLUDE_DIRS=(
   "node_modules"
   ".git"
+  ".claude"
+  ".worktrees"
   "tests"
 )
 
@@ -105,6 +107,39 @@ scan_pattern "AWS secret access keys" '(?i)aws.{0,20}secret.{0,20}[A-Za-z0-9/+=]
 
 # Generic high-entropy tokens with common prefixes
 scan_pattern "org_ prefixed tokens (often API keys)" 'org_[a-zA-Z0-9]{20,}'
+
+# === Owner / personal PII (added 2026-06-07) ===
+# This class — a contributor's macOS username, personal email addresses, home
+# paths, and an internal AWS account id — leaked into history before there was a
+# gate for it. These checks fail CI if any of it reappears in the tree.
+# Allowlists keep generic placeholders (user, <user>, $HOME, runner) and the
+# project's own public maintainer contact (info@lifecycleinnovations.limited).
+
+# macOS home-directory paths with a real-looking username
+scan_pattern "macOS home paths (/Users/<name>)" '/Users/[a-z][a-zA-Z0-9_.-]+' \
+  '/Users/(user|username|users|you|your[-_]?user|runner|shared|example|admin)([/"'\''[:space:]]|$)|/Users/[<$\{]'
+
+# Linux home-directory paths with a real-looking username
+scan_pattern "Linux home paths (/home/<name>)" '/home/[a-z][a-zA-Z0-9_.-]+/' \
+  '/home/(user|username|users|you|your[-_]?user|runner|ubuntu|ec2-user|ops|node|app|shared|example)/|/home/[<$\{]'
+
+# Personal / webmail email addresses
+scan_pattern "personal webmail addresses" \
+  '[a-zA-Z0-9._%+-]+@(gmail|yahoo|hotmail|outlook|icloud|proton|protonmail|hey)\.(com|net|org|me)' \
+  '@(example|test|localhost|noreply|anthropic)\.|\b(your|your\.address|youremail|someone|somebody|you|me|name|firstname|lastname|user|username|first\.last)@'
+
+# Owner brand-domain personal emails (the specific domains that leaked)
+scan_pattern "owner brand-domain emails" \
+  '[a-zA-Z0-9._%+-]+@(account-a|account-main|account-records|example)\.[a-z.]+'
+
+# AWS account IDs embedded in ARNs (12 digits)
+scan_pattern "AWS account IDs (ARN context)" \
+  'arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:[0-9]{12}:' \
+  '(:000000000000:|:123456789012:)'
+
+# International phone numbers (allow reserved example ranges: 555-xxxx, 1234567, all-zero)
+scan_pattern "phone numbers (+<cc><digits>)" '\+[1-9][0-9]{1,3}[ -]?[0-9]{6,14}' \
+  '(555[0-9]{4}|1234567|\+1234567890|\+0000000000|\+15551234567|\+1[ -]?555)'
 
 # --- Tests-only narrow sweep ---
 # We allow regex literals + assembled patterns in tests/ but flag anything that
