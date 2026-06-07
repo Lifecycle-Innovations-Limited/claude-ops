@@ -84,6 +84,35 @@ Patches included:
           so the phone ships the deepest full-history snapshot it has on the next pair —
           feeding handleHistorySync and the Fix O projection with as much real data as
           possible. Effective on the NEXT pair only.
+  Fix Q — app-state readiness gate (the durable re-pair LTHash-corruption fix):
+          after a fresh re-pair the regular_low app-state collection (archive/
+          pin/mute) is NOT fully synced yet, so the very first /api/archive
+          mutation builds a patch on top of an empty/partial local LTHash baseline.
+          The server rejects it ("mismatching LTHash") and — worse — the failed
+          half-applied mutation leaves the local collection diverged so neither
+          /api/archive nor /api/resync_app_state can heal it without a manual
+          phone tap. Fix Q closes that window: on the first *events.Connected it
+          fires a full FetchAppState(regular_low) in the background and only then
+          flips a mutex-guarded `appStateReady` flag. /api/archive rejects with
+          HTTP 425 (Too Early) + {"error":"app_state_not_ready"} until the flag is
+          set, so an archive is NEVER attempted against an unsynced LTHash. Adds a
+          tiny GET /api/app_state_status -> {"ready":bool} so callers (ops-inbox)
+          can wait for readiness before mutating.
+  Fix R — /api/resync_app_state discard_local mode: heals an ALREADY-corrupted
+          regular_low LTHash WITHOUT a phone tap. When the request carries
+          discard_local=true (query param or JSON body) the handler first wipes the
+          local app-state version + mutation-MAC rows for the collection from
+          whatsmeow.db (dropping the diverged local LTHash baseline — the same SAFE
+          row set Fix G clears, never touching identity/session/pre_key tables),
+          then runs a full FetchAppState(fullSync=true) to re-pull the server's
+          authoritative state onto a clean baseline. Without discard_local the
+          handler behaves exactly as before (plain full resync).
+  Fix S — wa-inbox-fresh.sh app-state freshness wait: before ops-inbox performs
+          any archive mutation it polls GET /api/app_state_status and waits up to
+          ~30s for ready:true, so the first post-re-pair archive is never fired
+          against an unsynced LTHash. Best-effort: an old bridge without the
+          endpoint (404/curl failure) is treated as ready so ops-inbox never hard-
+          fails on a stale bridge.
 
 Every patch is gated on a sentinel string so re-running is a no-op.
 
@@ -1855,6 +1884,215 @@ FIXP_PROPS_REPLACEMENT = (
 FIXP_PROPS_SENTINEL = "claude-ops Fix P: request the MAXIMUM history"
 
 
+# ─── main.go Fix Q: app-state readiness gate + full-sync-on-connect ────────────
+# THE durable fix for the post-re-pair LTHash corruption. Three spliced parts:
+#   Q1 — a global mutex-guarded `appStateReady` flag + helpers + a tiny
+#        GET /api/app_state_status endpoint, all injected as a standalone block
+#        right before startRESTServer (same anchor Fix G uses). The status endpoint
+#        chains on the same goroutine block the other endpoints re-emit.
+#   Q2 — on *events.Connected, kick a background FetchAppState(regular_low,
+#        fullSync=true) and flip appStateReady true ONLY after it returns, so the
+#        local LTHash baseline is fully in sync before any archive is attempted.
+#   Q3 — /api/archive rejects with HTTP 425 + {"error":"app_state_not_ready"} until
+#        the flag is set.
+#
+# whatsmeow API used (all already exercised by Fixes D/F/G in this file, so the
+# signatures are verified against the pinned version v0.0.0-20250318233852-...):
+#   client.FetchAppState(ctx, appstate.WAPatchRegularLow, fullSync=true, onlyIfNotSynced=false)
+#   appstate.WAPatchRegularLow
+#
+# Q1: globals + helpers + status endpoint, injected before startRESTServer. The
+# status endpoint itself is appended via the goroutine-block chain inside the
+# helper text so it lands inside startRESTServer's handler-registration region —
+# but registering an http.HandleFunc from a free function is awkward, so instead
+# the status endpoint is spliced separately (FIXQ_STATUS_*) on the goroutine needle
+# and the readiness state lives in package-level vars defined here.
+FIXQ_STATE_NEEDLE = (
+    """// healLTHash recovers from an ErrMismatchingLTHash app-state corruption by"""
+)
+FIXQ_STATE_REPLACEMENT = """// claude-ops Fix Q: app-state readiness state. After a FRESH re-pair the
+// regular_low collection (archive/pin/mute) is not fully synced yet, so the first
+// archive mutation would build a patch on an empty/partial local LTHash baseline
+// and the server rejects it ("mismatching LTHash") — corrupting the collection so
+// it can only be healed with a manual phone tap. We gate archive mutations on a
+// full FetchAppState(regular_low) completing first (markAppStateReady below).
+var (
+\tappStateReadyMu sync.RWMutex
+\tappStateReady   bool
+)
+
+// appStateIsReady reports whether the regular_low app-state has completed its
+// post-connect full sync, so archive mutations can be built on a valid LTHash.
+func appStateIsReady() bool {
+\tappStateReadyMu.RLock()
+\tdefer appStateReadyMu.RUnlock()
+\treturn appStateReady
+}
+
+// setAppStateReady records the readiness flag (true once the regular_low full
+// sync has landed).
+func setAppStateReady(v bool) {
+\tappStateReadyMu.Lock()
+\tappStateReady = v
+\tappStateReadyMu.Unlock()
+}
+
+// syncAppStateThenReady runs a full FetchAppState(regular_low) and flips the
+// readiness flag once it returns successfully. Safe to call on every Connected;
+// onlyIfNotSynced=false forces a fetch but whatsmeow no-ops cheaply when already
+// in sync. Best-effort: on error we leave appStateReady false so the next connect
+// retries (and /api/resync_app_state?discard_local=true remains the manual heal).
+func syncAppStateThenReady(client *whatsmeow.Client) {
+\tif client == nil {
+\t\treturn
+\t}
+\tsetAppStateReady(false)
+\tif err := client.FetchAppState(context.Background(), appstate.WAPatchRegularLow, true, false); err != nil {
+\t\tfmt.Printf("Fix Q: regular_low app-state sync failed (archive gated until it succeeds): %v\\n", err)
+\t\treturn
+\t}
+\tsetAppStateReady(true)
+\tfmt.Println("Fix Q: regular_low app-state synced — archive mutations enabled")
+}
+
+// healLTHash recovers from an ErrMismatchingLTHash app-state corruption by"""
+FIXQ_STATE_SENTINEL = "claude-ops Fix Q: app-state readiness state"
+
+# Q1b: GET /api/app_state_status — chains on the goroutine block the other
+# endpoints re-emit. Returns {"ready":bool} so ops-inbox can wait for readiness.
+FIXQ_STATUS_NEEDLE = RESYNC_ENDPOINT_NEEDLE
+FIXQ_STATUS_REPLACEMENT = """\t// claude-ops Fix Q: GET /api/app_state_status — {"ready":bool}. Lets callers
+\t// (ops-inbox / wa-inbox-fresh.sh) wait for the regular_low full sync to land
+\t// before issuing the first post-re-pair archive, avoiding LTHash corruption.
+\thttp.HandleFunc(\"/api/app_state_status\", func(w http.ResponseWriter, r *http.Request) {
+\t\tw.Header().Set(\"Content-Type\", \"application/json\")
+\t\tfmt.Fprintf(w, `{\"ready\":%v}`, appStateIsReady())
+\t})
+
+\t// Run server in a goroutine so it doesn't block
+\tgo func() {
+\t\tif err := http.ListenAndServe(serverAddr, nil); err != nil {
+\t\t\tfmt.Printf(\"REST API server error: %v\\n\", err)
+\t\t}
+\t}()
+}"""
+FIXQ_STATUS_SENTINEL = "claude-ops Fix Q: GET /api/app_state_status"
+
+# Q2: kick the full regular_low sync on Connected and flip readiness when done.
+# Anchors on the closing two lines of the auto-backfill goroutine
+# (`requestHistorySync(c)` + `}(client)`) — byte-identical across patcher
+# generations (the `logger.Infof("Auto-backfill: ...")` line drifted across
+# versions, so it is deliberately NOT part of the anchor). Inserts the new
+# goroutine right after the backfill goroutine closes.
+FIXQ_CONNECT_NEEDLE = """\t\t\t\trequestHistorySync(c)
+\t\t\t}(client)
+"""
+FIXQ_CONNECT_REPLACEMENT = """\t\t\t\trequestHistorySync(c)
+\t\t\t}(client)
+\t\t\t// claude-ops Fix Q: full regular_low app-state sync on connect, then flip
+\t\t\t// appStateReady. Until this lands, /api/archive returns 425 so no archive
+\t\t\t// mutation is built on an unsynced LTHash baseline (the re-pair corruption).
+\t\t\tgo syncAppStateThenReady(client)
+"""
+FIXQ_CONNECT_SENTINEL = "claude-ops Fix Q: full regular_low app-state sync on connect"
+
+# Q3: readiness gate at the top of the /api/archive handler. Inserts the 425 check
+# right before the Fix L phone-online prerequisite comment (stable, emitted by
+# ARCHIVE_ENDPOINT_REPLACEMENT).
+FIXQ_GATE_NEEDLE = """\t\tw.Header().Set(\"Content-Type\", \"application/json\")
+\t\t// claude-ops Fix L: phone-online prerequisite for the app-state mutation.
+\t\tif !phoneOnline(client) {"""
+FIXQ_GATE_REPLACEMENT = """\t\tw.Header().Set(\"Content-Type\", \"application/json\")
+\t\t// claude-ops Fix Q: app-state readiness gate. Reject archive mutations until
+\t\t// the post-connect regular_low full sync has landed, so we never build a patch
+\t\t// on an unsynced LTHash baseline (the fresh-re-pair corruption). 425 Too Early.
+\t\tif !appStateIsReady() {
+\t\t\tw.WriteHeader(http.StatusTooEarly)
+\t\t\tfmt.Fprintln(w, `{\"success\":false,\"error\":\"app_state_not_ready\",\"message\":\"regular_low app-state still syncing after (re-)pair — retry shortly or POST /api/resync_app_state\"}`)
+\t\t\treturn
+\t\t}
+\t\t// claude-ops Fix L: phone-online prerequisite for the app-state mutation.
+\t\tif !phoneOnline(client) {"""
+FIXQ_GATE_SENTINEL = "claude-ops Fix Q: app-state readiness gate"
+
+
+# ─── main.go Fix R: /api/resync_app_state discard_local mode ───────────────────
+# Heals an ALREADY-corrupted regular_low LTHash WITHOUT a phone tap. When the
+# request carries discard_local=true (query param or JSON body) the handler wipes
+# the local app-state version + mutation-MAC rows for the collection (dropping the
+# diverged local LTHash baseline — the SAME safe row set Fix G clears, never
+# touching identity/session/pre_key tables) BEFORE the FetchAppState, so the
+# server's authoritative state re-pulls onto a clean baseline. Without the flag the
+# handler is unchanged (plain full resync). Replaces the body of the Fix D handler.
+# Anchored on the struct+default+decode block, which is byte-identical across
+# patcher generations (the FetchAppState line's indentation drifted, so it is NOT
+# part of the anchor). The DiscardLocal field is added to the struct and the
+# discard logic is spliced right after the decode `}`, before the FetchAppState.
+FIXR_DISCARD_NEEDLE = """\t\tvar req struct {
+\t\t\tName     string `json:\"name\"`
+\t\t\tFullSync bool   `json:\"full_sync\"`
+\t\t}
+\t\treq.Name = \"regular_low\"
+\t\treq.FullSync = true
+\t\tif err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+\t\t\tif req.Name == \"\" {
+\t\t\t\treq.Name = \"regular_low\"
+\t\t\t}
+\t\t}
+"""
+FIXR_DISCARD_REPLACEMENT = """\t\tvar req struct {
+\t\t\tName         string `json:\"name\"`
+\t\t\tFullSync     bool   `json:\"full_sync\"`
+\t\t\tDiscardLocal bool   `json:\"discard_local\"`
+\t\t}
+\t\treq.Name = \"regular_low\"
+\t\treq.FullSync = true
+\t\tif err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+\t\t\tif req.Name == \"\" {
+\t\t\t\treq.Name = \"regular_low\"
+\t\t\t}
+\t\t}
+\t\t// claude-ops Fix R: discard_local=true (query param OR JSON body) drops the
+\t\t// diverged local LTHash baseline for this collection before re-fetching, so an
+\t\t// already-corrupted regular_low heals without a manual phone tap. Wipes only the
+\t\t// version + mutation-MAC rows (same SAFE set as Fix G's healLTHash); identity,
+\t\t// session, and pre_key tables are never touched.
+\t\tif r.URL.Query().Get(\"discard_local\") == \"true\" {
+\t\t\treq.DiscardLocal = true
+\t\t}
+\t\tif req.DiscardLocal {
+\t\t\treq.FullSync = true
+\t\t\twdb, derr := sql.Open(\"sqlite3\", \"file:store/whatsapp.db?_foreign_keys=on\")
+\t\t\tif derr != nil {
+\t\t\t\tw.WriteHeader(http.StatusInternalServerError)
+\t\t\t\tfmt.Fprintf(w, `{\"success\":false,\"message\":\"discard_local: open whatsapp.db: %s\"}`, derr.Error())
+\t\t\t\treturn
+\t\t\t}
+\t\t\tjid := \"\"
+\t\t\tif client.Store != nil && client.Store.ID != nil {
+\t\t\t\tjid = client.Store.ID.String()
+\t\t\t}
+\t\t\t_, _ = wdb.Exec(`DELETE FROM whatsmeow_app_state_version WHERE jid=? AND name=?`, jid, req.Name)
+\t\t\t_, _ = wdb.Exec(`DELETE FROM whatsmeow_app_state_mutation_macs WHERE jid=? AND name=?`, jid, req.Name)
+\t\t\twdb.Close()
+\t\t\t// A clean local baseline means archive will be unsafe until the re-fetch lands;
+\t\t\t// drop readiness so the gate (Fix Q) re-arms, then the resync below re-enables it.
+\t\t\tsetAppStateReady(false)
+\t\t}
+"""
+FIXR_DISCARD_SENTINEL = "claude-ops Fix R: discard_local=true"
+
+# Fix R follow-up: re-arm readiness after a successful resync (so discard_local
+# leaves the gate open again). Anchors on the Fix D success line.
+FIXR_READY_NEEDLE = """\t\tfmt.Fprintf(w, `{\"success\":true,\"message\":\"app-state %s resynced\"}`, req.Name)"""
+FIXR_READY_REPLACEMENT = """\t\t// claude-ops Fix R: resync succeeded — regular_low baseline is valid again.
+\t\tif req.Name == \"regular_low\" {
+\t\t\tsetAppStateReady(true)
+\t\t}
+\t\tfmt.Fprintf(w, `{\"success\":true,\"message\":\"app-state %s resynced\"}`, req.Name)"""
+FIXR_READY_SENTINEL = "claude-ops Fix R: resync succeeded"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -1992,6 +2230,57 @@ def main() -> int:
         ARCHIVE_ENDPOINT_REPLACEMENT,
         ARCHIVE_ENDPOINT_SENTINEL,
         "Fix F: POST /api/archive endpoint",
+    )
+    # Fix Q: readiness state + helpers. Anchors on Fix G's healLTHash — MUST run
+    # after Fix G (healLTHash) so the anchor exists.
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXQ_STATE_NEEDLE,
+        FIXQ_STATE_REPLACEMENT,
+        FIXQ_STATE_SENTINEL,
+        "Fix Q: appStateReady state + syncAppStateThenReady helper",
+    )
+    # Fix Q: GET /api/app_state_status — chains on the goroutine block the other
+    # endpoints re-emit.
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXQ_STATUS_NEEDLE,
+        FIXQ_STATUS_REPLACEMENT,
+        FIXQ_STATUS_SENTINEL,
+        "Fix Q: GET /api/app_state_status endpoint",
+    )
+    # Fix Q: full regular_low sync on connect → flip appStateReady.
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXQ_CONNECT_NEEDLE,
+        FIXQ_CONNECT_REPLACEMENT,
+        FIXQ_CONNECT_SENTINEL,
+        "Fix Q: full app-state sync on Connected + readiness flip",
+    )
+    # Fix Q: 425 readiness gate at the top of /api/archive — MUST run after Fix F
+    # (the archive handler it anchors inside is emitted by Fix F).
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXQ_GATE_NEEDLE,
+        FIXQ_GATE_REPLACEMENT,
+        FIXQ_GATE_SENTINEL,
+        "Fix Q: /api/archive 425 app-state readiness gate",
+    )
+    # Fix R: discard_local mode in /api/resync_app_state — MUST run after Fix D
+    # (modifies the Fix D handler body) and after Fix Q state (uses setAppStateReady).
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXR_DISCARD_NEEDLE,
+        FIXR_DISCARD_REPLACEMENT,
+        FIXR_DISCARD_SENTINEL,
+        "Fix R: /api/resync_app_state discard_local mode",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXR_READY_NEEDLE,
+        FIXR_READY_REPLACEMENT,
+        FIXR_READY_SENTINEL,
+        "Fix R: re-arm readiness after successful resync",
     )
     changed_go |= replace_idempotent(
         main_go,
