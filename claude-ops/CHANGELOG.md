@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.26.4] - 2026-06-07
+
+### Changed
+WhatsApp bridge: Fix T skips unverifiable LTHash app-state patches instead of wedging archive sync (ends the re-pair treadmill); Fix U reconciles chats.archived from whatsmeow_chat_settings so the box mirrors the phone with no re-pair. New endpoints: /api/resync_app_state?skip_bad=true, /api/reconcile_archived.
+
+
 ## [2.26.3] - 2026-06-07
 
 ### Changed
