@@ -17,6 +17,7 @@
       "enabled": true,
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/lib/whatsapp-bridge-up.sh",
       "health_check": "lsof -i :8080 | grep LISTEN",
+      "pid_probe": "lsof -ti :8080 -sTCP:LISTEN 2>/dev/null | head -1",
       "restart_delay": 60,
       "max_restarts": 10,
       "_note": "Cross-platform bridge starter. Looks at uname: macOS → launchctl kickstart gui/$UID/com.${USER}.whatsapp-bridge ; Linux → systemctl --user restart whatsapp-bridge.service. Install via `bash scripts/install-whatsapp-bridge-linux.sh --wa-phone <E.164>` on Linux hosts; on macOS the legacy launchctl plist still applies. Bridge source: github.com/lharries/whatsapp-mcp (with claude-ops patches applied by install script — see scripts/whatsapp/apply-patches.py)."
