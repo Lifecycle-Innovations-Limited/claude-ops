@@ -368,6 +368,35 @@ cmd_status() {
         fi
       fi
       ;;
+    linux|wsl)
+      # The daemon runs as a systemd --user unit here, not a launchd plist, so
+      # the plist-based detection above never fires. Probe the unit instead:
+      #   installed  = unit file exists (loaded by systemd)
+      #   running    = unit is active + MainPID is alive
+      #   script_path= ExecStart's ops-daemon.sh path (the live source path)
+      #   version_match = that script path still exists on disk (Linux's analog
+      #                   of "plist points at current version"; systemd tracks
+      #                   whatever ExecStart points at, so staleness = missing file)
+      local unit="claude-ops-daemon.service"
+      if systemctl --user cat "$unit" >/dev/null 2>&1; then
+        installed=true
+        local exec_path
+        exec_path="$(systemctl --user show -p ExecStart --value "$unit" 2>/dev/null \
+          | grep -oE '/[^ ]*ops-daemon\.sh' | head -1)"
+        if [[ -n "$exec_path" ]]; then
+          script_path="$exec_path"
+          [[ -f "$exec_path" ]] && plist_version_match=true
+        fi
+        if systemctl --user is-active "$unit" >/dev/null 2>&1; then
+          local p
+          p="$(systemctl --user show -p MainPID --value "$unit" 2>/dev/null || echo 0)"
+          if [[ -n "$p" ]] && [[ "$p" != "0" ]] && kill -0 "$p" 2>/dev/null; then
+            pid="$p"
+            running=true
+          fi
+        fi
+      fi
+      ;;
   esac
 
   if [[ -f "$HEALTH_FILE" ]]; then
