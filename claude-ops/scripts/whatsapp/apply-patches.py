@@ -1761,6 +1761,22 @@ def replace_idempotent(
     return True
 
 
+def replace_if_present(
+    p: pathlib.Path, needle: str, replacement: str, sentinel: str, label: str
+) -> bool:
+    """Like replace_idempotent but no-ops quietly when needle is absent."""
+    text = p.read_text()
+    if sentinel in text:
+        print(f"  [skip] {label}: already applied")
+        return False
+    if needle not in text:
+        print(f"  [skip] {label}: not needed")
+        return False
+    p.write_text(text.replace(needle, replacement, 1))
+    print(f"  [ok]   {label}: applied")
+    return True
+
+
 def append_idempotent(p: pathlib.Path, block: str, sentinel: str, label: str) -> bool:
     """Append `block` to the end of a file unless `sentinel` is already present.
 
@@ -2286,10 +2302,12 @@ func syncAppStateThenReady(client *whatsmeow.Client) {
 
 FIXT_SYNC_SENTINEL = "claude-ops Fix T."
 
-# T2: add skip_bad field to /api/resync_app_state request struct and wire it to
-# syncAppStateSkipBad. Anchors on the Fix R discard_local struct block (always
-# present after Fix R runs). Inserts SkipBad field + handler block after the
-# existing DiscardLocal block. MUST run after Fix R.
+# T2: add skip_bad field to /api/resync_app_state request struct (T2a) and wire
+# the handler after discard_local (T2b). discard_local MUST run before skip_bad so
+# both flags can be combined (wipe diverged local baseline, then skip bad patches).
+# T2a anchors on the Fix R discard_local struct block. T2b anchors after the Fix R
+# discard_local handler. T2c reorders installs that got the buggy T2 ordering.
+# MUST run after Fix R.
 FIXT_RESYNC_NEEDLE = """\t\tvar req struct {
 \t\t\tName         string `json:\"name\"`
 \t\t\tFullSync     bool   `json:\"full_sync\"`
@@ -2317,7 +2335,46 @@ FIXT_RESYNC_REPLACEMENT = """\t\tvar req struct {
 \t\t\t\treq.Name = \"regular_low\"
 \t\t\t}
 \t\t}
-\t\t// claude-ops Fix T: skip_bad=true (query param OR JSON body) calls
+\t\t// claude-ops Fix R: discard_local=true (query param OR JSON body) drops the"""
+
+FIXT_RESYNC_SENTINEL = 'SkipBad      bool   `json:"skip_bad"`'
+
+FIXT_SKIP_BAD_HANDLER = """\t\t// claude-ops Fix T: skip_bad=true (query param OR JSON body) calls
+\t\t// syncAppStateSkipBad which fetches patches skipping any unverifiable ones
+\t\t// (mismatching LTHash — whatsmeow #382/#858/#1176). Use to heal a permanently
+\t\t// wedged bridge without a restart or re-pair. Runs after discard_local so both
+\t\t// flags can be combined.
+\t\tif r.URL.Query().Get(\"skip_bad\") == \"true\" {
+\t\t\treq.SkipBad = true
+\t\t}
+\t\tif req.SkipBad {
+\t\t\tsetAppStateReady(false)
+\t\t\tif err := syncAppStateSkipBad(client, appstate.WAPatchName(req.Name)); err != nil {
+\t\t\t\tw.WriteHeader(http.StatusInternalServerError)
+\t\t\t\tfmt.Fprintf(w, `{\"success\":false,\"message\":%q}`, err.Error())
+\t\t\t\treturn
+\t\t\t}
+\t\t\tif req.Name == \"regular_low\" {
+\t\t\t\tsetAppStateReady(true)
+\t\t\t}
+\t\t\tfmt.Fprintf(w, `{\"success\":true,\"message\":\"app-state %s resynced (bad patches skipped)\"}`, req.Name)
+\t\t\treturn
+\t\t}
+"""
+
+FIXT_RESYNC_HANDLER_NEEDLE = """\t\t\tsetAppStateReady(false)
+\t\t}
+\t\t\t\tif err := client.FetchAppState(context.Background(), appstate.WAPatchName(req.Name), req.FullSync, false); err != nil {"""
+
+FIXT_RESYNC_HANDLER_REPLACEMENT = """\t\t\tsetAppStateReady(false)
+\t\t}
+""" + FIXT_SKIP_BAD_HANDLER + """\t\t\t\tif err := client.FetchAppState(context.Background(), appstate.WAPatchName(req.Name), req.FullSync, false); err != nil {"""
+
+FIXT_RESYNC_HANDLER_SENTINEL = "claude-ops Fix T: skip_bad=true"
+
+# T2c: reorder skip_bad before discard_local (buggy first T2 cut) to discard_local
+# then skip_bad. No-op once T2b applied or on fresh installs with correct order.
+FIXT_RESYNC_ORDER_NEEDLE = """\t\t// claude-ops Fix T: skip_bad=true (query param OR JSON body) calls
 \t\t// syncAppStateSkipBad which fetches patches skipping any unverifiable ones
 \t\t// (mismatching LTHash — whatsmeow #382/#858/#1176). Use to heal a permanently
 \t\t// wedged bridge without a restart or re-pair.
@@ -2337,9 +2394,65 @@ FIXT_RESYNC_REPLACEMENT = """\t\tvar req struct {
 \t\t\tfmt.Fprintf(w, `{\"success\":true,\"message\":\"app-state %s resynced (bad patches skipped)\"}`, req.Name)
 \t\t\treturn
 \t\t}
-\t\t// claude-ops Fix R: discard_local=true (query param OR JSON body) drops the"""
+\t\t// claude-ops Fix R: discard_local=true (query param OR JSON body) drops the
+\t\t// diverged local LTHash baseline for this collection before re-fetching, so an
+\t\t// already-corrupted regular_low heals without a manual phone tap. Wipes only the
+\t\t// version + mutation-MAC rows (same SAFE set as Fix G's healLTHash); identity,
+\t\t// session, and pre_key tables are never touched.
+\t\tif r.URL.Query().Get(\"discard_local\") == \"true\" {
+\t\t\treq.DiscardLocal = true
+\t\t}
+\t\tif req.DiscardLocal {
+\t\t\treq.FullSync = true
+\t\t\twdb, derr := sql.Open(\"sqlite3\", \"file:store/whatsapp.db?_foreign_keys=on\")
+\t\t\tif derr != nil {
+\t\t\t\tw.WriteHeader(http.StatusInternalServerError)
+\t\t\t\tfmt.Fprintf(w, `{\"success\":false,\"message\":\"discard_local: open whatsapp.db: %s\"}`, derr.Error())
+\t\t\t\treturn
+\t\t\t}
+\t\t\tjid := \"\"
+\t\t\tif client.Store != nil && client.Store.ID != nil {
+\t\t\t\tjid = client.Store.ID.String()
+\t\t\t}
+\t\t\t_, _ = wdb.Exec(`DELETE FROM whatsmeow_app_state_version WHERE jid=? AND name=?`, jid, req.Name)
+\t\t\t_, _ = wdb.Exec(`DELETE FROM whatsmeow_app_state_mutation_macs WHERE jid=? AND name=?`, jid, req.Name)
+\t\t\twdb.Close()
+\t\t\t// A clean local baseline means archive will be unsafe until the re-fetch lands;
+\t\t\t// drop readiness so the gate (Fix Q) re-arms, then the resync below re-enables it.
+\t\t\tsetAppStateReady(false)
+\t\t}"""
 
-FIXT_RESYNC_SENTINEL = "claude-ops Fix T: skip_bad=true"
+FIXT_RESYNC_ORDER_REPLACEMENT = """\t\t// claude-ops Fix R: discard_local=true (query param OR JSON body) drops the
+\t\t// diverged local LTHash baseline for this collection before re-fetching, so an
+\t\t// already-corrupted regular_low heals without a manual phone tap. Wipes only the
+\t\t// version + mutation-MAC rows (same SAFE set as Fix G's healLTHash); identity,
+\t\t// session, and pre_key tables are never touched.
+\t\tif r.URL.Query().Get(\"discard_local\") == \"true\" {
+\t\t\treq.DiscardLocal = true
+\t\t}
+\t\tif req.DiscardLocal {
+\t\t\treq.FullSync = true
+\t\t\twdb, derr := sql.Open(\"sqlite3\", \"file:store/whatsapp.db?_foreign_keys=on\")
+\t\t\tif derr != nil {
+\t\t\t\tw.WriteHeader(http.StatusInternalServerError)
+\t\t\t\tfmt.Fprintf(w, `{\"success\":false,\"message\":\"discard_local: open whatsapp.db: %s\"}`, derr.Error())
+\t\t\t\treturn
+\t\t\t}
+\t\t\tjid := \"\"
+\t\t\tif client.Store != nil && client.Store.ID != nil {
+\t\t\t\tjid = client.Store.ID.String()
+\t\t\t}
+\t\t\t_, _ = wdb.Exec(`DELETE FROM whatsmeow_app_state_version WHERE jid=? AND name=?`, jid, req.Name)
+\t\t\t_, _ = wdb.Exec(`DELETE FROM whatsmeow_app_state_mutation_macs WHERE jid=? AND name=?`, jid, req.Name)
+\t\t\twdb.Close()
+\t\t\t// A clean local baseline means archive will be unsafe until the re-fetch lands;
+\t\t\t// drop readiness so the gate (Fix Q) re-arms, then the resync below re-enables it.
+\t\t\tsetAppStateReady(false)
+\t\t}
+""" + FIXT_SKIP_BAD_HANDLER + """\t\t// claude-ops Fix T: skip_bad after discard_local
+"""
+
+FIXT_RESYNC_ORDER_SENTINEL = "claude-ops Fix T: skip_bad after discard_local"
 
 
 def main() -> int:
@@ -2546,7 +2659,21 @@ def main() -> int:
         FIXT_RESYNC_NEEDLE,
         FIXT_RESYNC_REPLACEMENT,
         FIXT_RESYNC_SENTINEL,
-        "Fix T: /api/resync_app_state skip_bad=true mode",
+        "Fix T: /api/resync_app_state skip_bad struct field",
+    )
+    changed_go |= replace_if_present(
+        main_go,
+        FIXT_RESYNC_ORDER_NEEDLE,
+        FIXT_RESYNC_ORDER_REPLACEMENT,
+        FIXT_RESYNC_ORDER_SENTINEL,
+        "Fix T: reorder skip_bad after discard_local",
+    )
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXT_RESYNC_HANDLER_NEEDLE,
+        FIXT_RESYNC_HANDLER_REPLACEMENT,
+        FIXT_RESYNC_HANDLER_SENTINEL,
+        "Fix T: /api/resync_app_state skip_bad=true handler",
     )
     changed_go |= replace_idempotent(
         main_go,
