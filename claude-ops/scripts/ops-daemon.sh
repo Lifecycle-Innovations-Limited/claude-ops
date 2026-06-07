@@ -468,9 +468,10 @@ print(json.dumps(sys.argv[1]))
           local pid_probe_cmd real_pid
           pid_probe_cmd=$(get_service_field "$name" "pid_probe")
           if [[ -n "$pid_probe_cmd" ]]; then
-            real_pid=$(eval "$pid_probe_cmd" 2>/dev/null | head -1 | tr -dc '0-9' | head -c 12)
-            if [[ -n "$real_pid" ]] && kill -0 "$real_pid" 2>/dev/null; then
-              pid_val="$real_pid"
+            if real_pid=$(eval "$pid_probe_cmd" 2>/dev/null | head -1 | tr -dc '0-9' | head -c 12); then
+              if [[ -n "$real_pid" ]] && kill -0 "$real_pid" 2>/dev/null; then
+                pid_val="$real_pid"
+              fi
             fi
           fi
         fi
