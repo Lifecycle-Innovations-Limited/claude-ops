@@ -50,6 +50,12 @@ jobs:
       - name: Run gitleaks
         run: ./gitleaks detect --source . --config claude-ops/.gitleaks.toml --verbose
 
+      # Blocking gate against personal data (PII) reaching this PUBLIC repo:
+      # contributor usernames, home paths, personal emails, AWS account IDs, phone
+      # numbers. Catches the class that previously leaked into history (2026-06-07).
+      - name: PII / personal-data gate
+        run: bash claude-ops/tests/test-no-secrets.sh
+
   test-suite:
     runs-on: ${{ matrix.os }}
     needs: lint-and-check
