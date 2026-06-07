@@ -109,6 +109,41 @@ for i in $(seq 1 "$WAIT_TICKS"); do
   [ "${cnt:-0}" -gt 0 ] && { new=$cnt; break; }
 done
 
+# 3b. app-state readiness wait (claude-ops bridge Fix Q). After a FRESH re-pair the
+# regular_low app-state (archive/pin/mute) is not fully synced yet, so the first
+# archive mutation ops-inbox issues would be built on an unsynced LTHash baseline —
+# the bridge rejects it (HTTP 425 "app_state_not_ready") and a half-applied mutation
+# corrupts the collection (needs a manual phone tap to heal). Poll the bridge's
+# GET /api/app_state_status and wait up to ~30s for {"ready":true} before any
+# archive runs. BEST-EFFORT: an old bridge without the endpoint (404 / curl failure)
+# is treated as ready so ops-inbox never hard-fails on a stale bridge.
+appstate_ready_wait() {
+  local ticks="${WA_APPSTATE_WAIT_TICKS:-15}"   # ×2s ≈ 30s max
+  local body http
+  for _ in $(seq 1 "$ticks"); do
+    # -w appends the HTTP code after the body so we can branch on both.
+    body=$(curl -sS -m 5 -w '|%{http_code}' "$BRIDGE/api/app_state_status" 2>/dev/null) || body="|000"
+    http="${body##*|}"
+    case "$http" in
+      404|000)
+        # endpoint absent (old bridge) or unreachable → cannot gate; proceed.
+        log "wa-fresh: app_state_status unavailable (HTTP ${http}) — old bridge, proceeding (best-effort)"
+        return 0
+        ;;
+    esac
+    case "${body%|*}" in
+      *'"ready":true'*)
+        log "wa-fresh: app-state ready ✓"
+        return 0
+        ;;
+    esac
+    sleep 2
+  done
+  log "wa-fresh: WARNING app-state not ready after wait — archive mutations may be deferred (HTTP 425); will heal via /api/resync_app_state"
+  return 0
+}
+appstate_ready_wait
+
 # 4. transcribe voice notes synced during backfill (async — gate stays bounded)
 if systemctl --user start --no-block whatsapp-transcribe.service 2>/dev/null; then
   log "wa-fresh: voice transcription queued"
