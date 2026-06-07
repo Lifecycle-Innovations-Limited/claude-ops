@@ -126,6 +126,16 @@ Patches included:
           param / JSON field that calls syncAppStateSkipBad() directly, allowing
           the currently-wedged bridge to self-heal without a re-pair or binary
           swap.
+  Fix U — no-re-pair archive reconcile: POST /api/reconcile_archived rebuilds
+          chats.archived in messages.db to match the phone's authoritative
+          archive state without re-pairing. Sequence: ResetAllArchived() zeros
+          the column; client.EmitAppStateEventsOnFullSync is set true so the
+          subsequent full app-state fetch fires *events.Archive synchronously
+          for every archived chat; Fix H's SetArchivedStatus subscriber writes
+          each one into chats.archived; EmitAppStateEventsOnFullSync is
+          restored to false after. Uses syncAppStateSkipBad (Fix T) to handle
+          any bad patches in the chain. Idempotent: running twice yields the
+          same counts. Returns {"archived_count":N,"non_archived_count":M}.
   Fix S — wa-inbox-fresh.sh app-state freshness wait: before ops-inbox performs
           any archive mutation it polls GET /api/app_state_status and waits up to
           ~30s for ready:true, so the first post-re-pair archive is never fired
@@ -2164,7 +2174,7 @@ FIXR_READY_SENTINEL = "claude-ops Fix R: resync succeeded"
 #   syncAppStateSkipBad(ctx, client, name):
 #     Calls FetchAppState(name, false, false) in a bounded retry loop. On each
 #     "mismatching LTHash" failure it calls skipLTHashPatch to advance past the
-#     bad patch and retries. Up to 30 bad patches are skipped; any other error
+#     bad patch and retries. Up to 200 bad patches are skipped; any other error
 #     is returned immediately. On success appStateReady is set true.
 #
 #   syncAppStateThenReady (existing Fix Q helper) is replaced to call
@@ -2255,7 +2265,7 @@ func syncAppStateSkipBad(client *whatsmeow.Client, patchName appstate.WAPatchNam
 \tif client == nil {
 \t\treturn fmt.Errorf("syncAppStateSkipBad: client is nil")
 \t}
-\tconst maxSkips = 30
+\tconst maxSkips = 200
 \tskipped := 0
 \tfor {
 \t\terr := client.FetchAppState(context.Background(), patchName, false, false)
@@ -2453,6 +2463,127 @@ FIXT_RESYNC_ORDER_REPLACEMENT = """\t\t// claude-ops Fix R: discard_local=true (
 """
 
 FIXT_RESYNC_ORDER_SENTINEL = "claude-ops Fix T: skip_bad after discard_local"
+
+
+# ─── main.go Fix U: POST /api/reconcile_archived ───────────────────────────────
+# Rebuilds chats.archived to match the phone's archive state WITHOUT a re-pair or
+# server round-trip.
+#
+# Problem: after a full app-state resync with skip_bad, whatsmeow's DecodePatches
+# aborts at the first bad LTHash patch, discarding mutations from all valid patches
+# in the same batch. chats.archived in messages.db ends up stale/zeroed.
+#
+# Root cause of event-based approaches: FetchAppState returns the mutations ONLY
+# when DecodePatches succeeds for the entire batch. When bad patches (v899-v1032)
+# are in the same batch as valid ones, the entire batch is discarded.
+#
+# Solution: whatsmeow maintains whatsmeow_chat_settings.archived (in whatsapp.db)
+# independently from DecodePatches — it is populated from the app-state SNAPSHOT
+# (delivered before incremental patches) via applyAppStatePatches → collectEventsToDispatch
+# → dispatchAppState which writes to the DB directly. The snapshot pre-dates the
+# bad patch range (v898) so it always has the correct archive state.
+#
+# Fix U exposes POST /api/reconcile_archived which:
+#   1. Opens whatsapp.db (read-only) and reads all (chat_jid, archived) rows from
+#      whatsmeow_chat_settings for the connected device's JID.
+#   2. For each row, calls SetArchivedStatus(chatJID, archived) to sync messages.db.
+#   3. Returns {"success":true,"archived_count":N,"non_archived_count":M,"synced":S}.
+#
+# No server contact required. No re-pair. Idempotent: running twice yields identical
+# counts because whatsmeow_chat_settings is the stable source of truth.
+#
+# Anchor: the app_state_status handler + goroutine block (the final block in
+# startRESTServer). Inserts the reconcile handler immediately before the goroutine.
+# MUST run after Fix Q (status handler must exist).
+
+FIXU_RECONCILE_NEEDLE = """\t// claude-ops Fix Q: GET /api/app_state_status — {"ready":bool}. Lets callers
+\t// (ops-inbox / wa-inbox-fresh.sh) wait for the regular_low full sync to land
+\t// before issuing the first post-re-pair archive, avoiding LTHash corruption.
+\thttp.HandleFunc(\"/api/app_state_status\", func(w http.ResponseWriter, r *http.Request) {
+\t\tw.Header().Set(\"Content-Type\", \"application/json\")
+\t\tfmt.Fprintf(w, `{\"ready\":%v}`, appStateIsReady())
+\t})
+
+\t// Run server in a goroutine so it doesn't block"""
+
+FIXU_RECONCILE_REPLACEMENT = """\t// claude-ops Fix Q: GET /api/app_state_status — {"ready":bool}. Lets callers
+\t// (ops-inbox / wa-inbox-fresh.sh) wait for the regular_low full sync to land
+\t// before issuing the first post-re-pair archive, avoiding LTHash corruption.
+\thttp.HandleFunc(\"/api/app_state_status\", func(w http.ResponseWriter, r *http.Request) {
+\t\tw.Header().Set(\"Content-Type\", \"application/json\")
+\t\tfmt.Fprintf(w, `{\"ready\":%v}`, appStateIsReady())
+\t})
+
+\t// claude-ops Fix U: POST /api/reconcile_archived — rebuild chats.archived in
+\t// messages.db to match the phone's archive state without a re-pair or server
+\t// round-trip. whatsmeow maintains whatsmeow_chat_settings.archived (in whatsapp.db)
+\t// from the app-state snapshot which IS correctly populated even when incremental
+\t// patches have LTHash errors (the snapshot pre-dates the bad patch range). We
+\t// simply copy that authoritative source into messages.db.chats.archived. Sequence:
+\t//   1. Open whatsapp.db and read all (chat_jid, archived) rows from
+\t//      whatsmeow_chat_settings where our_jid matches the connected device.
+\t//   2. For each row, call SetArchivedStatus to sync messages.db.
+\t//   3. Return archived/non-archived counts.
+\t// No server contact, no re-pair, idempotent.
+\thttp.HandleFunc(\"/api/reconcile_archived\", func(w http.ResponseWriter, r *http.Request) {
+\t\tif r.Method != http.MethodPost {
+\t\t\thttp.Error(w, \"Method not allowed\", http.StatusMethodNotAllowed)
+\t\t\treturn
+\t\t}
+\t\tw.Header().Set(\"Content-Type\", \"application/json\")
+\t\t// Determine our JID for the whatsapp.db query.
+\t\tourJID := \"\"
+\t\tif client.Store != nil && client.Store.ID != nil {
+\t\t\tourJID = client.Store.ID.String()
+\t\t}
+\t\t// Step 1: open whatsapp.db and read chat settings.
+\t\twdb, err := sql.Open(\"sqlite3\", \"file:store/whatsapp.db?_foreign_keys=on&mode=ro\")
+\t\tif err != nil {
+\t\t\tw.WriteHeader(http.StatusInternalServerError)
+\t\t\tfmt.Fprintf(w, `{\"success\":false,\"message\":\"open whatsapp.db: %s\"}`, err.Error())
+\t\t\treturn
+\t\t}
+\t\tdefer wdb.Close()
+\t\trows, err := wdb.Query(
+\t\t\t`SELECT chat_jid, archived FROM whatsmeow_chat_settings WHERE our_jid=?`, ourJID)
+\t\tif err != nil {
+\t\t\tw.WriteHeader(http.StatusInternalServerError)
+\t\t\tfmt.Fprintf(w, `{\"success\":false,\"message\":\"query chat_settings: %s\"}`, err.Error())
+\t\t\treturn
+\t\t}
+\t\tdefer rows.Close()
+\t\t// Step 2: sync each chat's archive flag into messages.db.
+\t\tvar updated, errors int
+\t\tfor rows.Next() {
+\t\t\tvar chatJID string
+\t\t\tvar archived bool
+\t\t\tif err := rows.Scan(&chatJID, &archived); err != nil {
+\t\t\t\terrors++
+\t\t\t\tcontinue
+\t\t\t}
+\t\t\tif err := messageStore.SetArchivedStatus(chatJID, archived); err != nil {
+\t\t\t\tfmt.Printf(\"Fix U: SetArchivedStatus(%s, %v) error: %v\\n\", chatJID, archived, err)
+\t\t\t\terrors++
+\t\t\t} else {
+\t\t\t\tupdated++
+\t\t\t}
+\t\t}
+\t\tif err := rows.Err(); err != nil {
+\t\t\tfmt.Printf(\"Fix U: rows iteration error: %v\\n\", err)
+\t\t}
+\t\tfmt.Printf(\"Fix U: reconcile complete — updated %d chats, %d errors\\n\", updated, errors)
+\t\t// Step 3: report counts.
+\t\tvar archivedCount, nonArchivedCount int
+\t\t_ = messageStore.db.QueryRow(`SELECT COUNT(*) FROM chats WHERE archived=1`).Scan(&archivedCount)
+\t\t_ = messageStore.db.QueryRow(`SELECT COUNT(*) FROM chats WHERE archived=0`).Scan(&nonArchivedCount)
+\t\tfmt.Fprintf(w,
+\t\t\t`{\"success\":true,\"message\":\"chats.archived reconciled from whatsmeow_chat_settings\",\"archived_count\":%d,\"non_archived_count\":%d,\"synced\":%d,\"errors\":%d}`,
+\t\t\tarchivedCount, nonArchivedCount, updated, errors,
+\t\t)
+\t})
+
+\t// Run server in a goroutine so it doesn't block"""
+FIXU_RECONCILE_SENTINEL = "claude-ops Fix U: POST /api/reconcile_archived"
 
 
 def main() -> int:
@@ -2674,6 +2805,15 @@ def main() -> int:
         FIXT_RESYNC_HANDLER_REPLACEMENT,
         FIXT_RESYNC_HANDLER_SENTINEL,
         "Fix T: /api/resync_app_state skip_bad=true handler",
+    )
+    # Fix U: POST /api/reconcile_archived. MUST run after Fix Q (anchors on the
+    # app_state_status handler) and Fix T (uses syncAppStateSkipBad).
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXU_RECONCILE_NEEDLE,
+        FIXU_RECONCILE_REPLACEMENT,
+        FIXU_RECONCILE_SENTINEL,
+        "Fix U: POST /api/reconcile_archived endpoint",
     )
     changed_go |= replace_idempotent(
         main_go,
