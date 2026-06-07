@@ -2520,10 +2520,11 @@ FIXU_RECONCILE_REPLACEMENT = """\t// claude-ops Fix Q: GET /api/app_state_status
 \t// from the app-state snapshot which IS correctly populated even when incremental
 \t// patches have LTHash errors (the snapshot pre-dates the bad patch range). We
 \t// simply copy that authoritative source into messages.db.chats.archived. Sequence:
-\t//   1. Open whatsapp.db and read all (chat_jid, archived) rows from
+\t//   1. ResetAllArchived() clears stale flags (whatsapp.db stores only explicit settings).
+\t//   2. Open whatsapp.db and read all (chat_jid, archived) rows from
 \t//      whatsmeow_chat_settings where our_jid matches the connected device.
-\t//   2. For each row, call SetArchivedStatus to sync messages.db.
-\t//   3. Return archived/non-archived counts.
+\t//   3. For each row, call SetArchivedStatus to sync messages.db.
+\t//   4. Return archived/non-archived counts.
 \t// No server contact, no re-pair, idempotent.
 \thttp.HandleFunc(\"/api/reconcile_archived\", func(w http.ResponseWriter, r *http.Request) {
 \t\tif r.Method != http.MethodPost {
@@ -2536,7 +2537,13 @@ FIXU_RECONCILE_REPLACEMENT = """\t// claude-ops Fix Q: GET /api/app_state_status
 \t\tif client.Store != nil && client.Store.ID != nil {
 \t\t\tourJID = client.Store.ID.String()
 \t\t}
-\t\t// Step 1: open whatsapp.db and read chat settings.
+\t\t// Step 1: clear stale archived flags (whatsapp.db only stores explicit settings).
+\t\tif err := messageStore.ResetAllArchived(); err != nil {
+\t\t\tw.WriteHeader(http.StatusInternalServerError)
+\t\t\tfmt.Fprintf(w, `{\"success\":false,\"message\":\"ResetAllArchived: %s\"}`, err.Error())
+\t\t\treturn
+\t\t}
+\t\t// Step 2: open whatsapp.db and read chat settings.
 \t\twdb, err := sql.Open(\"sqlite3\", \"file:store/whatsapp.db?_foreign_keys=on&mode=ro\")
 \t\tif err != nil {
 \t\t\tw.WriteHeader(http.StatusInternalServerError)
@@ -2552,7 +2559,7 @@ FIXU_RECONCILE_REPLACEMENT = """\t// claude-ops Fix Q: GET /api/app_state_status
 \t\t\treturn
 \t\t}
 \t\tdefer rows.Close()
-\t\t// Step 2: sync each chat's archive flag into messages.db.
+\t\t// Step 3: sync each chat's archive flag into messages.db.
 \t\tvar updated, errors int
 \t\tfor rows.Next() {
 \t\t\tvar chatJID string
@@ -2572,7 +2579,7 @@ FIXU_RECONCILE_REPLACEMENT = """\t// claude-ops Fix Q: GET /api/app_state_status
 \t\t\tfmt.Printf(\"Fix U: rows iteration error: %v\\n\", err)
 \t\t}
 \t\tfmt.Printf(\"Fix U: reconcile complete — updated %d chats, %d errors\\n\", updated, errors)
-\t\t// Step 3: report counts.
+\t\t// Step 4: report counts.
 \t\tvar archivedCount, nonArchivedCount int
 \t\t_ = messageStore.db.QueryRow(`SELECT COUNT(*) FROM chats WHERE archived=1`).Scan(&archivedCount)
 \t\t_ = messageStore.db.QueryRow(`SELECT COUNT(*) FROM chats WHERE archived=0`).Scan(&nonArchivedCount)
