@@ -124,6 +124,7 @@ allowlist.paths = [
   '''CHANGELOG\.md$''',
   '''CONFIGURATION\.md$''',
   '''docs/''',
+  '''\.gitleaks\.toml$''',
 ]
 allowlist.regexes = [
   '''\+15551234567''',

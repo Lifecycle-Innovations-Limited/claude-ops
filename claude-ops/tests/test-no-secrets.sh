@@ -139,7 +139,7 @@ scan_pattern "AWS account IDs (ARN context)" \
 
 # International phone numbers (allow reserved example ranges: 555-xxxx, 1234567, all-zero)
 scan_pattern "phone numbers (+<cc><digits>)" '\+[1-9][0-9]{1,3}[ -]?[0-9]{6,14}' \
-  '(555[0-9]{4}|1234567|\+1234567890|\+0000000000|\+15551234567|\+1[ -]?555)'
+  '(555[0-9]{4}|1234567|\+1234567890|\+0000000000|\+15551234567|\+10000000000|\+1[ -]?555)'
 
 # --- Tests-only narrow sweep ---
 # We allow regex literals + assembled patterns in tests/ but flag anything that
