@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.27.0] - 2026-06-08
+
+### Changed
+feat(ops): Windsor.ai live marketing/analytics data source — 325+ connectors (Meta Ads, Google Ads, GA4, TikTok, LinkedIn, …) for /ops:marketing, /ops:socials, /ops:ecom, /ops:dash, via MCP (OAuth) or REST (#534). fix(account-rotation): jitter the post-rotation fan-out — random jitter on the respawn stagger (#536) and the /login session-inject cadence (#538) so a freshly-rotated account isn't hit by a synchronized first-call burst. fix(scripts): content + SEO generators work under macOS bash 3.2 / printf leading-dash (#535). docs: README rotation anti-stampede + Windsor.ai notes (#539).
+
+
 ## [2.26.5] - 2026-06-07
 
 ### Changed
