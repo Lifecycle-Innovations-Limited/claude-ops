@@ -154,7 +154,7 @@ You are a conversion-focused copywriter specializing in landing page hero sectio
 Generate exactly 3 distinct landing-page hero copy variants for the product described below.
 Each variant must contain:
 - headline: 6-10 words, punchy, benefit-led
-- subhead: 1-2 sentences expanding the headline's promise (max 25 words)
+- subhead: 1-2 sentences expanding the promise of the headline (max 25 words)
 - cta: 2-5 word call-to-action button text
 </task>
 <constraints>
@@ -222,7 +222,7 @@ if m:
     printf '**Brand voice:** %s\n' "$brand_voice"
     printf '**Product:** %s\n' "$brand_product"
     printf '**Target persona:** %s\n\n' "$target_persona"
-    printf '---\n\n'
+    printf '%s\n\n' '---'
     printf '%s' "$variants_json" | jq -r '.variants[] | "## Variant \(.id)\n\n**Headline:** \(.headline)\n\n**Subhead:** \(.subhead)\n\n**CTA:** \(.cta)\n\n---\n"' 2>/dev/null || true
   } > "$out_file"
 

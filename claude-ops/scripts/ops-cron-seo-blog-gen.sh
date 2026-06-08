@@ -65,6 +65,22 @@ _gsc_token() {
   printf '%s' "$tok"
 }
 
+# ── GSC: resolve quota project for ADC user creds ────────────────────────────
+# User ADC credentials require a quota project header (x-goog-user-project) for
+# the Search Console API. Prefer an explicit env var, then the quota_project_id
+# recorded in the ADC file, then gcloud config.
+_gsc_quota_project() {
+  if [ -n "${GOOGLE_CLOUD_QUOTA_PROJECT:-}" ]; then
+    printf '%s' "$GOOGLE_CLOUD_QUOTA_PROJECT"; return
+  fi
+  local adc="${HOME}/.config/gcloud/application_default_credentials.json"
+  if [ -f "$adc" ]; then
+    local qp; qp="$(jq -r '.quota_project_id // empty' "$adc" 2>/dev/null)"
+    [ -n "$qp" ] && { printf '%s' "$qp"; return; }
+  fi
+  gcloud config get-value billing/quota_project 2>/dev/null | grep -v '^(unset)$' || true
+}
+
 # ── GSC: pull search analytics ────────────────────────────────────────────────
 _gsc_top_queries() {
   local site_url="$1"
@@ -92,11 +108,16 @@ _gsc_top_queries() {
       dataState: "final"
     }')"
 
+  local quota_proj quota_hdr=()
+  quota_proj="$(_gsc_quota_project)"
+  [ -n "$quota_proj" ] && quota_hdr=(-H "x-goog-user-project: ${quota_proj}")
+
   local resp
   resp="$(curl -gsS --max-time 30 \
     -X POST \
     "https://searchconsole.googleapis.com/webmasters/v3/sites/${site_enc}/searchAnalytics/query" \
     -H "Authorization: Bearer ${access_token}" \
+    "${quota_hdr[@]}" \
     -H "Content-Type: application/json" \
     -d "$payload" 2>/dev/null || echo '{}')"
 

@@ -81,7 +81,7 @@ COMPETITOR_COUNT=$(printf '%s' "$GROUPED" | jq 'length' 2>/dev/null || echo 0)
   printf '# %s Competitor Intel — Daily Roll-up\n' "$BRAND_NAME"
   printf '**Date:** %s  \n' "$(TZ="$REPORT_TIMEZONE" date '+%a %d %b %Y %H:%M %Z')"
   printf '**Signals:** %s med-severity events across %s competitor(s)\n\n' "$EVENT_COUNT" "$COMPETITOR_COUNT"
-  printf '---\n\n'
+  printf '%s\n\n' '---'
 
   if [[ "$COMPETITOR_COUNT" -eq 0 ]]; then
     printf '_No med-severity signals in queue._\n'
