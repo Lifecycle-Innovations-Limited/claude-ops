@@ -47,8 +47,9 @@ v2 turns claude-ops from a *briefing + comms surface* into an **autonomy layer f
 | Pre-installed specialist agents + silent `general-purpose` → specialist routing | (transparent) | [agents.md](claude-ops/docs/agents.md) |
 | Universal safety hooks: secret-scan, `rm -rf` anchor block, `main` push warn | (always-on) | [safety-hooks.md](claude-ops/docs/safety-hooks.md) |
 | Recap marquee — multi-session digest in tmux `status-right` / `statusLine` | [`/ops:recap`](claude-ops/skills/ops-recap/SKILL.md) | [recap.md](claude-ops/docs/recap.md) |
-| Multi-account Claude Max rotator with launchd daemon + AI-brain | [`/ops:rotate`](claude-ops/skills/ops-rotate/SKILL.md), [`/ops:rotate-setup`](claude-ops/skills/ops-rotate-setup/SKILL.md) | [CHANGELOG](claude-ops/CHANGELOG.md#6-multi-account-claude-max-rotator) |
+| Multi-account Claude Max rotator with launchd daemon + AI-brain (jittered post-rotation respawn + `/login` re-auth so a freshly-rotated account isn't hit by a synchronized first-call burst) | [`/ops:rotate`](claude-ops/skills/ops-rotate/SKILL.md), [`/ops:rotate-setup`](claude-ops/skills/ops-rotate-setup/SKILL.md) | [CHANGELOG](claude-ops/CHANGELOG.md#6-multi-account-claude-max-rotator) |
 | Periodic Task* tracking nudge | (PostToolUse hook) | [CHANGELOG](claude-ops/CHANGELOG.md#4-universal-task-tracking-nudge) |
+| Windsor.ai live marketing data source for ops dashboards, marketing, socials & ecom | [`/ops:marketing`](claude-ops/skills/ops-marketing/SKILL.md) | [windsor-ai.md](docs/integrations/windsor-ai.md) |
 
 ### Quick start for the auto-fix subsystem
 
