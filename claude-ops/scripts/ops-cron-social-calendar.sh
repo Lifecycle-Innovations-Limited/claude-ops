@@ -136,7 +136,7 @@ SYSTEM
 Brand name: ${brand_name}
 Brand voice: ${brand_voice}
 Product: ${brand_product}
-This week's content context (reference where relevant): ${week_content}
+Content context for this week (reference where relevant): ${week_content}
 </context>
 <user_input>
 Generate ${count} ${platform} posts.
