@@ -2580,6 +2580,13 @@ function detectTerminalForPid(pid) {
 
 async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // /login is injected into each reachable session in sequence. Space the injects
+  // by a base gap + random jitter so N sessions don't all re-read the keychain and
+  // fire their first call onto the freshly-rotated account in the same instant.
+  // Env-overridable; jitter=0 keeps the legacy fixed 500ms cadence.
+  const INJECT_BASE_MS = Math.max(0, Number(process.env.CLAUDE_SESSION_INJECT_MS ?? 500));
+  const INJECT_JITTER_MS = Math.max(0, Number(process.env.CLAUDE_SESSION_INJECT_JITTER_MS ?? 1_000));
+  const injectGap = () => INJECT_BASE_MS + Math.floor(Math.random() * (INJECT_JITTER_MS + 1));
   const sessions = findClaudeSessions();
 
   if (sessions.length === 0) {
@@ -2651,7 +2658,7 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
         log(`[session] Resume fallback for PID ${s.pid}: ${ok ? 'ok' : 'failed'}`);
       }
     }
-    await sleep(500);
+    await sleep(injectGap());
   }
 
   // Non-tmux sessions with a resumeId (non-bg interactive sessions in Ghostty etc):
@@ -2669,7 +2676,7 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
       log(`  PID ${s.pid} resumeId=${s.resumeId} terminal=${s.terminal || 'unknown'}`);
       const ok = await sendViaResume(s);
       log(`[session] Resume /login for PID ${s.pid}: ${ok ? 'ok' : 'failed'}`);
-      await sleep(500);
+      await sleep(injectGap());
     }
   }
 
