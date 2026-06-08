@@ -2741,3 +2741,12 @@ All five are **disabled by default**. Enable order:
 4. Enable `marketing-autopilot` — first run will be a forced dry-run regardless of `autonomy_level`.
 5. Enable `marketing-autopilot-calibrate` after ≥7 days of autopilot data.
 6. Enable `marketing-health-check` as a weekly safety net once the above are stable.
+
+## Windsor.ai (optional live data)
+
+If Windsor.ai is connected (`mcp__*Windsor*__*` or a `windsor_api_key`), use it as the
+live cross-channel source for paid + analytics: ROAS/CAC/AOV trend (today vs 7d vs 30d), Meta vs Google return, budget shifts, and leaking campaigns (drill down per campaign via the MCP).
+Map accounts per project via `registry.json` → `.projects[].windsor`. Prefer **blended
+ROAS** (store/analytics revenue ÷ total ad spend) over platform-reported ROAS. See
+[docs/integrations/windsor-ai.md](../../../docs/integrations/windsor-ai.md) for the full playbook (REST + MCP modes,
+registry mapping, analysis mandate, and caveats).
