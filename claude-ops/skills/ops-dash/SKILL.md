@@ -394,3 +394,12 @@ If the dashboard script outputs `DASH_RENDER_FAILED` or the preferences file doe
 ```
 
 Then invoke `/ops:setup` directly.
+
+## Windsor.ai (optional live data)
+
+If Windsor.ai is connected (`mcp__*Windsor*__*` or a `windsor_api_key`), use it as the
+live cross-channel source for all live KPIs (spend, ROAS, CAC, sessions, social reach) for the command-center tiles, flagging deviations vs 7d/30d.
+Map accounts per project via `registry.json` → `.projects[].windsor`. Prefer **blended
+ROAS** (store/analytics revenue ÷ total ad spend) over platform-reported ROAS. See
+[docs/integrations/windsor-ai.md](../../../docs/integrations/windsor-ai.md) for the full playbook (REST + MCP modes,
+registry mapping, analysis mandate, and caveats).
