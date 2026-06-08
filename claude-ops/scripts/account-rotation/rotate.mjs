@@ -2610,9 +2610,7 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
   async function sendViaResume(s) {
     if (!s.resumeId) return false;
     try {
-      spawnSync('claude', ['--resume', s.resumeId, '--print', '/login'],
-        { timeout: 15_000, stdio: 'ignore' }
-      );
+      spawnSync('claude', ['--resume', s.resumeId, '--print', '/login'], { timeout: 15_000, stdio: 'ignore' });
       return true;
     } catch {
       return false;
@@ -3103,7 +3101,9 @@ async function rotate(targetEmail, opts = {}) {
 
   if (opts.session) {
     if (dryRun) {
-      log('[DRY-RUN] Would inject /login into reachable running sessions (tmux/iTerm2) + resume-path for non-tmux interactive sessions');
+      log(
+        '[DRY-RUN] Would inject /login into reachable running sessions (tmux/iTerm2) + resume-path for non-tmux interactive sessions',
+      );
     } else {
       await refreshRunningSession(account, opts.noBrowser);
     }
@@ -3321,7 +3321,9 @@ async function reloadRunningAgents(opts = {}) {
       if (dryRun) {
         log(`[reload-agents] [DRY-RUN] Would wait ~${(waitMs / 1000).toFixed(1)}s before next respawn`);
       } else {
-        log(`[reload-agents] Waiting ${(waitMs / 1000).toFixed(1)}s (base ${RESPAWN_STAGGER_MS / 1000}s + jitter) before next respawn...`);
+        log(
+          `[reload-agents] Waiting ${(waitMs / 1000).toFixed(1)}s (base ${RESPAWN_STAGGER_MS / 1000}s + jitter) before next respawn...`,
+        );
         await sleep(waitMs);
       }
     }
