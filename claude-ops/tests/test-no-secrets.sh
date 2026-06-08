@@ -26,10 +26,21 @@ EXCLUDE_DIRS=(
   "tests"
 )
 
+# Individual files to exclude. `.gitleaks.toml` is the secrets-scanner's OWN
+# allowlist/regex config — it intentionally carries secret-shaped placeholder
+# patterns (e.g. an all-zeros sample phone number) that must NOT be flagged by
+# our own PII gate, exactly as `tests/` is excluded above.
+EXCLUDE_FILES=(
+  ".gitleaks.toml"
+)
+
 build_exclude_args() {
   local args=()
   for d in "${EXCLUDE_DIRS[@]}"; do
     args+=("--exclude-dir=$d")
+  done
+  for f in "${EXCLUDE_FILES[@]}"; do
+    args+=("--exclude=$f")
   done
   echo "${args[@]}"
 }
@@ -139,7 +150,7 @@ scan_pattern "AWS account IDs (ARN context)" \
 
 # International phone numbers (allow reserved example ranges: 555-xxxx, 1234567, all-zero)
 scan_pattern "phone numbers (+<cc><digits>)" '\+[1-9][0-9]{1,3}[ -]?[0-9]{6,14}' \
-  '(555[0-9]{4}|1234567|\+1234567890|\+0000000000|\+15551234567|\+1[ -]?555)'
+  '(555[0-9]{4}|1234567|\+1234567890|\+0000000000|\+10000000000|\+15551234567|\+1[ -]?555)'
 
 # --- Tests-only narrow sweep ---
 # We allow regex literals + assembled patterns in tests/ but flag anything that
