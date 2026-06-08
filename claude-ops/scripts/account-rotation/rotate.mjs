@@ -2610,9 +2610,7 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
   async function sendViaResume(s) {
     if (!s.resumeId) return false;
     try {
-      spawnSync('claude', ['--resume', s.resumeId, '--print', '/login'],
-        { timeout: 15_000, stdio: 'ignore' }
-      );
+      spawnSync('claude', ['--resume', s.resumeId, '--print', '/login'], { timeout: 15_000, stdio: 'ignore' });
       return true;
     } catch {
       return false;
@@ -3103,7 +3101,9 @@ async function rotate(targetEmail, opts = {}) {
 
   if (opts.session) {
     if (dryRun) {
-      log('[DRY-RUN] Would inject /login into reachable running sessions (tmux/iTerm2) + resume-path for non-tmux interactive sessions');
+      log(
+        '[DRY-RUN] Would inject /login into reachable running sessions (tmux/iTerm2) + resume-path for non-tmux interactive sessions',
+      );
     } else {
       await refreshRunningSession(account, opts.noBrowser);
     }
@@ -3136,7 +3136,10 @@ async function rotate(targetEmail, opts = {}) {
 // Anti-stampede guarantees:
 //   - Hard cap: at most RESPAWN_CAP agents per invocation (default 4).
 //   - Sequential: agents are respawned one at a time (no parallel fan-out).
-//   - Stagger: RESPAWN_STAGGER_MS sleep between each respawn.
+//   - Stagger: RESPAWN_STAGGER_MS + random jitter (≤RESPAWN_JITTER_MS) between
+//     each respawn, so re-exec'd agents don't re-issue their first calls onto the
+//     freshly-rotated account in a deterministic lockstep (jitter de-correlates the
+//     onset from other rotation-time staggers — e.g. the /login session inject).
 //   - Skips orchestrator (keepalive owns it), bare spares (name===sessionId[:8]),
 //     and the session that initiated the rotation (opts.initiatorSessionId).
 //   - jobId divergence: if resolve-jobid.sh exists, resolve sessionId→jobId
@@ -3150,6 +3153,9 @@ async function rotate(targetEmail, opts = {}) {
 async function reloadRunningAgents(opts = {}) {
   const RESPAWN_CAP = 4; // hard anti-stampede cap per invocation
   const RESPAWN_STAGGER_MS = 15_000; // ≥15s between each respawn (memory rule)
+  // Added random jitter on top of the fixed stagger so N respawns don't onset in
+  // lockstep onto the just-rotated account. Env-overridable for ops tuning; 0 = off.
+  const RESPAWN_JITTER_MS = Math.max(0, Number(process.env.CLAUDE_RESPAWN_JITTER_MS ?? 5_000));
   const RESPAWN_TIMEOUT_MS = 60_000; // per-respawn timeout
   const dryRun = opts.dryRun === true;
 
@@ -3308,13 +3314,17 @@ async function reloadRunningAgents(opts = {}) {
     }
 
     // Stagger: sleep between respawns to avoid stampede. Skip after the last one.
-    // In dry-run mode we skip the actual sleep so the harness exits quickly.
+    // Base stagger + random jitter so onsets don't align. In dry-run mode we skip
+    // the actual sleep so the harness exits quickly.
     if (i < candidates.length - 1) {
+      const waitMs = RESPAWN_STAGGER_MS + Math.floor(Math.random() * (RESPAWN_JITTER_MS + 1));
       if (dryRun) {
-        log(`[reload-agents] [DRY-RUN] Would wait ${RESPAWN_STAGGER_MS / 1000}s before next respawn`);
+        log(`[reload-agents] [DRY-RUN] Would wait ~${(waitMs / 1000).toFixed(1)}s before next respawn`);
       } else {
-        log(`[reload-agents] Waiting ${RESPAWN_STAGGER_MS / 1000}s before next respawn...`);
-        await sleep(RESPAWN_STAGGER_MS);
+        log(
+          `[reload-agents] Waiting ${(waitMs / 1000).toFixed(1)}s (base ${RESPAWN_STAGGER_MS / 1000}s + jitter) before next respawn...`,
+        );
+        await sleep(waitMs);
       }
     }
   }
