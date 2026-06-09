@@ -298,10 +298,17 @@ def scan_whatsapp():
                     return cand
         return jid
 
-    # Pull non-archived chats (groups/newsletters separated below).
+    # Working set: non-archived OR any chat with activity in the recency window.
+    # The local `archived` flag has been observed mass-corrupted (every chat
+    # flagged archived=1, including live two-way threads), which silently blinds
+    # the scan into a false "inbox zero". Falling back to recency guarantees a
+    # corrupt flag can NEVER hide an actively-conversing chat; genuinely-archived
+    # OLD chats (no msgs in the window) still stay hidden. (2026-06-09 fix.)
     chats = list(con.execute(
         "SELECT jid, name, last_message_time FROM chats "
-        "WHERE archived=0 ORDER BY last_message_time DESC"
+        "WHERE archived=0 OR last_message_time >= datetime('now', ?) "
+        "ORDER BY last_message_time DESC",
+        (f"-{DAYS} days",)
     ))
 
     # Build merged DM groups keyed by canonical jid.
