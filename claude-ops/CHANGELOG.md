@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.27.1] - 2026-06-09
+
+### Changed
+fix(whatsapp): /api/archive now re-pulls the recovered regular_low snapshot between 409-conflict retries so inbox archiving converges without a manual recover→retry; fails fast on a persistently unverifiable server chain instead of burning repeated full-snapshot resyncs (NEVER-LEAK guard) (Fix V, #541).
+
+
 ## [2.27.0] - 2026-06-08
 
 ### Changed
