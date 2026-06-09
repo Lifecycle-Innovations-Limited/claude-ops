@@ -1326,15 +1326,50 @@ ARCHIVE_ENDPOINT_REPLACEMENT = """\t// claude-ops Fix F: POST /api/archive — a
 \t\t\t\t\tfmt.Fprintf(w, `{"success":false,"message":"LTHash heal failed and recovery dispatch failed: %s"}`, recErr.Error())
 \t\t\t\t\treturn
 \t\t\t\t}
-\t\t\t\tfor attempt := 1; attempt <= 4; attempt++ {
-\t\t\t\t\ttime.Sleep(time.Duration(attempt*2) * time.Second)
+\t\t\t\t// claude-ops Fix V: the recovery peer-message makes the phone re-send the
+\t\t\t\t// regular_low snapshot ASYNCHRONOUSLY. Blindly re-calling SendAppState
+\t\t\t\t// against the still-stale local cache fails on every attempt until that
+\t\t\t\t// fresh snapshot is processed — which is why the old short blind loop
+\t\t\t\t// returned 409 and forced a manual recover->retry. Each retry must first
+\t\t\t\t// RE-PULL the server's freshly-recovered patch chain (healLTHash =
+\t\t\t\t// FetchAppState) before re-attempting the mutation, with a larger bounded
+\t\t\t\t// budget (~60s, capped backoff) so callers converge without any manual step.
+\t\t\t\t//
+\t\t\t\t// FAIL-FAST on the unfixable class (NEVER-LEAK guard): healLTHash does a
+\t\t\t\t// destructive local wipe + FetchAppState(fullSync=true, from v0). When the
+\t\t\t\t// SERVER patch chain is genuinely unverifiable (persistent corruption),
+\t\t\t\t// every re-pull FAILS and re-pulling 8x cannot help — it is pure
+\t\t\t\t// cost/latency burn (repeated full-snapshot wipes). So: keep retrying only
+\t\t\t\t// while the re-pull SUCCEEDS (transient case — snapshot still landing); if
+\t\t\t\t// healLTHash itself keeps failing, bail after 2 such failures and let the
+\t\t\t\t// caller resync/re-pair rather than burning the remaining attempts.
+\t\t\t\thealFails := 0
+\t\t\t\tfor attempt := 1; attempt <= 8; attempt++ {
+\t\t\t\t\tbackoff := time.Duration(attempt*2) * time.Second
+\t\t\t\t\tif backoff > 10*time.Second {
+\t\t\t\t\t\tbackoff = 10 * time.Second
+\t\t\t\t\t}
+\t\t\t\t\ttime.Sleep(backoff)
+\t\t\t\t\t// Re-pull the phone's recovered snapshot so the retry writes against
+\t\t\t\t\t// the new patch chain, not the stale cache that caused the 409.
+\t\t\t\t\tif hErr := healLTHash(ctx, client, appstate.WAPatchRegularLow); hErr != nil {
+\t\t\t\t\t\t// Re-pull failed → server chain still unverifiable. Don't burn the
+\t\t\t\t\t\t// remaining destructive fullSync passes on a state re-pulling can't fix.
+\t\t\t\t\t\thealFails++
+\t\t\t\t\t\tif healFails >= 2 {
+\t\t\t\t\t\t\terr = hErr
+\t\t\t\t\t\t\tbreak
+\t\t\t\t\t\t}
+\t\t\t\t\t\tcontinue
+\t\t\t\t\t}
+\t\t\t\t\thealFails = 0
 \t\t\t\t\tif err = do(); err == nil {
 \t\t\t\t\t\tbreak
 \t\t\t\t\t}
 \t\t\t\t}
 \t\t\t\tif err != nil {
 \t\t\t\t\tw.WriteHeader(http.StatusConflict)
-\t\t\t\t\tfmt.Fprintf(w, `{"success":false,"message":"recovery dispatched but snapshot not yet applied (phone may be slow/offline) — retry archive shortly: %s"}`, err.Error())
+\t\t\t\t\tfmt.Fprintf(w, `{"success":false,"message":"app-state recovery could not produce a verifiable regular_low snapshot (persistent server-side corruption — resync/re-pair needed, not a transient retry): %s"}`, err.Error())
 \t\t\t\t\treturn
 \t\t\t\t}
 \t\t\t} else {
@@ -2376,9 +2411,13 @@ FIXT_RESYNC_HANDLER_NEEDLE = """\t\t\tsetAppStateReady(false)
 \t\t}
 \t\t\t\tif err := client.FetchAppState(context.Background(), appstate.WAPatchName(req.Name), req.FullSync, false); err != nil {"""
 
-FIXT_RESYNC_HANDLER_REPLACEMENT = """\t\t\tsetAppStateReady(false)
+FIXT_RESYNC_HANDLER_REPLACEMENT = (
+    """\t\t\tsetAppStateReady(false)
 \t\t}
-""" + FIXT_SKIP_BAD_HANDLER + """\t\t\t\tif err := client.FetchAppState(context.Background(), appstate.WAPatchName(req.Name), req.FullSync, false); err != nil {"""
+"""
+    + FIXT_SKIP_BAD_HANDLER
+    + """\t\t\t\tif err := client.FetchAppState(context.Background(), appstate.WAPatchName(req.Name), req.FullSync, false); err != nil {"""
+)
 
 FIXT_RESYNC_HANDLER_SENTINEL = "claude-ops Fix T: skip_bad=true"
 
@@ -2432,7 +2471,8 @@ FIXT_RESYNC_ORDER_NEEDLE = """\t\t// claude-ops Fix T: skip_bad=true (query para
 \t\t\tsetAppStateReady(false)
 \t\t}"""
 
-FIXT_RESYNC_ORDER_REPLACEMENT = """\t\t// claude-ops Fix R: discard_local=true (query param OR JSON body) drops the
+FIXT_RESYNC_ORDER_REPLACEMENT = (
+    """\t\t// claude-ops Fix R: discard_local=true (query param OR JSON body) drops the
 \t\t// diverged local LTHash baseline for this collection before re-fetching, so an
 \t\t// already-corrupted regular_low heals without a manual phone tap. Wipes only the
 \t\t// version + mutation-MAC rows (same SAFE set as Fix G's healLTHash); identity,
@@ -2459,8 +2499,11 @@ FIXT_RESYNC_ORDER_REPLACEMENT = """\t\t// claude-ops Fix R: discard_local=true (
 \t\t\t// drop readiness so the gate (Fix Q) re-arms, then the resync below re-enables it.
 \t\t\tsetAppStateReady(false)
 \t\t}
-""" + FIXT_SKIP_BAD_HANDLER + """\t\t// claude-ops Fix T: skip_bad after discard_local
 """
+    + FIXT_SKIP_BAD_HANDLER
+    + """\t\t// claude-ops Fix T: skip_bad after discard_local
+"""
+)
 
 FIXT_RESYNC_ORDER_SENTINEL = "claude-ops Fix T: skip_bad after discard_local"
 
