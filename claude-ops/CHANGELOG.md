@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.27.2] - 2026-06-09
+
+### Changed
+ops-inbox-scan: treat WhatsApp as remote-only when no local store — signal the orchestrator to scan via live MCP (mcp__whatsapp__*) instead of reporting empty buckets as 'no messages'. Prevents stale/de-paired local stores from producing phantom needs_reply and duplicate sends.
+
+
 ## [2.27.1] - 2026-06-09
 
 ### Changed
