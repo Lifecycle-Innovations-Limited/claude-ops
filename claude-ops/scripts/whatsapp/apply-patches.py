@@ -2264,6 +2264,106 @@ func syncAppStateThenReady(client *whatsmeow.Client) {
 \tfmt.Println("Fix Q: regular_low app-state synced — archive mutations enabled")
 }"""
 
+# Upgrade anchor: the Fix T replacement block already on production bridges. Fix V
+# changed the sentinel to isSkippablePatchErr but left FIXT_SYNC_NEEDLE on the
+# pre-Fix-T syncAppStateThenReady, so re-running the patcher on a Fix-T install
+# neither skipped nor replaced. replace_if_present on this needle upgrades in place.
+FIXT_SYNC_FIXT_NEEDLE = """// skipLTHashPatch advances the local regular_low cursor past failingVersion so
+// the next FetchAppState fetches patches from failingVersion+1 onward.
+// It writes version=failingVersion with a zero hash into whatsmeow_app_state_version
+// and clears all mutation MACs for the collection so the LTHash accumulator
+// starts fresh. Safe: only version+MAC rows are touched; identity/session/
+// pre_key tables are never modified. claude-ops Fix T.
+func skipLTHashPatch(client *whatsmeow.Client, patchName appstate.WAPatchName, failingVersion uint64) error {
+\twdb, err := sql.Open("sqlite3", "file:store/whatsapp.db?_foreign_keys=on")
+\tif err != nil {
+\t\treturn fmt.Errorf("skipLTHashPatch: open whatsapp.db: %w", err)
+\t}
+\tdefer wdb.Close()
+\tjid := ""
+\tif client.Store != nil && client.Store.ID != nil {
+\t\tjid = client.Store.ID.String()
+\t}
+\t// Write version=failingVersion with a zeroed 128-byte hash. This tells
+\t// FetchAppState to fetch patches from failingVersion+1 onward and accumulate
+\t// a fresh LTHash (no longer chained off the bad patch's unverifiable state).
+\tzeroHash := make([]byte, 128)
+\t_, err = wdb.Exec(
+\t\t`INSERT INTO whatsmeow_app_state_version (jid, name, version, hash) VALUES (?, ?, ?, ?)
+\t\t ON CONFLICT(jid, name) DO UPDATE SET version=excluded.version, hash=excluded.hash`,
+\t\tjid, string(patchName), failingVersion, zeroHash,
+\t)
+\tif err != nil {
+\t\treturn fmt.Errorf("skipLTHashPatch: write version %d: %w", failingVersion, err)
+\t}
+\t// Clear all mutation MACs so the LTHash accumulator starts clean from this
+\t// version (stale MACs from earlier patches would corrupt the new accumulation).
+\t_, err = wdb.Exec(
+\t\t`DELETE FROM whatsmeow_app_state_mutation_macs WHERE jid=? AND name=?`,
+\t\tjid, string(patchName),
+\t)
+\tif err != nil {
+\t\treturn fmt.Errorf("skipLTHashPatch: clear MACs: %w", err)
+\t}
+\tfmt.Printf("Fix T: skipped bad patch v%d for %s — cursor bumped, MACs cleared\\n", failingVersion, patchName)
+\treturn nil
+}
+
+// syncAppStateSkipBad fetches app-state patches for name, automatically skipping
+// any patch that fails LTHash verification (up to maxSkips times). This is the
+// durable fix for server-side bad patches (whatsmeow #382/#858/#1176): instead of
+// aborting the entire sync on one unverifiable patch, we advance past it and apply
+// all subsequent valid patches. On success appStateReady is set true.
+// claude-ops Fix T.
+func syncAppStateSkipBad(client *whatsmeow.Client, patchName appstate.WAPatchName) error {
+\tif client == nil {
+\t\treturn fmt.Errorf("syncAppStateSkipBad: client is nil")
+\t}
+\tconst maxSkips = 200
+\tskipped := 0
+\tfor {
+\t\terr := client.FetchAppState(context.Background(), patchName, false, false)
+\t\tif err == nil {
+\t\t\tfmt.Printf("Fix T: %s sync complete (skipped %d bad patch(es))\\n", patchName, skipped)
+\t\t\treturn nil
+\t\t}
+\t\terrStr := err.Error()
+\t\tif !strings.Contains(errStr, "mismatching LTHash") {
+\t\t\treturn err // non-LTHash error: propagate immediately
+\t\t}
+\t\tif skipped >= maxSkips {
+\t\t\treturn fmt.Errorf("Fix T: aborted after skipping %d bad patches — still failing: %w", maxSkips, err)
+\t\t}
+\t\t// Parse the failing version number from the error string.
+\t\t// Error format: "...failed to verify patch vNNN: mismatching LTHash"
+\t\tvar failingVersion uint64
+\t\tif _, parseErr := fmt.Sscanf(errStr[strings.LastIndex(errStr, "patch v")+len("patch v"):], "%d", &failingVersion); parseErr != nil {
+\t\t\treturn fmt.Errorf("Fix T: couldn't parse failing version from %q: %w", errStr, err)
+\t\t}
+\t\tif skipErr := skipLTHashPatch(client, patchName, failingVersion); skipErr != nil {
+\t\t\treturn fmt.Errorf("Fix T: skip failed: %v (original: %w)", skipErr, err)
+\t\t}
+\t\tskipped++
+\t}
+}
+
+// syncAppStateThenReady runs a full regular_low sync using the skip-bad-patch
+// loop (Fix T) and flips appStateReady once it returns. Safe to call on every
+// Connected. Best-effort: on error appStateReady stays false so the next connect
+// retries. claude-ops Fix Q updated by Fix T.
+func syncAppStateThenReady(client *whatsmeow.Client) {
+\tif client == nil {
+\t\treturn
+\t}
+\tsetAppStateReady(false)
+\tif err := syncAppStateSkipBad(client, appstate.WAPatchRegularLow); err != nil {
+\t\tfmt.Printf("Fix Q/T: regular_low app-state sync failed (archive gated until it succeeds): %v\\n", err)
+\t\treturn
+\t}
+\tsetAppStateReady(true)
+\tfmt.Println("Fix Q/T: regular_low app-state synced — archive mutations enabled")
+}"""
+
 FIXT_SYNC_REPLACEMENT = """// skipLTHashPatch advances the local regular_low cursor past failingVersion so
 // the next FetchAppState fetches patches from failingVersion+1 onward.
 // It writes version=failingVersion with a zero hash into whatsmeow_app_state_version
@@ -2304,6 +2404,11 @@ func skipLTHashPatch(client *whatsmeow.Client, patchName appstate.WAPatchName, f
 \tfmt.Printf("Fix T: skipped bad patch v%d for %s — cursor bumped, MACs cleared\\n", failingVersion, patchName)
 \treturn nil
 }
+
+var (
+\tsyncKeyPollerMu      sync.Mutex
+\tsyncKeyPollerRunning bool
+)
 
 // isSkippablePatchErr returns true when the error means "this specific patch
 // version cannot be verified — advance the cursor past it and retry." Two cases:
@@ -2386,7 +2491,19 @@ func syncAppStateThenReady(client *whatsmeow.Client) {
 \t\t// waits for the phone to deliver them then retries.
 \t\tif strings.Contains(err.Error(), "didn't find app state key") ||
 \t\t\tstrings.Contains(err.Error(), "Fix T: aborted") {
+\t\t\tsyncKeyPollerMu.Lock()
+\t\t\tif syncKeyPollerRunning {
+\t\t\t\tsyncKeyPollerMu.Unlock()
+\t\t\t\treturn
+\t\t\t}
+\t\t\tsyncKeyPollerRunning = true
+\t\t\tsyncKeyPollerMu.Unlock()
 \t\t\tgo func() {
+\t\t\t\tdefer func() {
+\t\t\t\t\tsyncKeyPollerMu.Lock()
+\t\t\t\t\tsyncKeyPollerRunning = false
+\t\t\t\t\tsyncKeyPollerMu.Unlock()
+\t\t\t\t}()
 \t\t\t\tfmt.Println("Fix V: sync-key poller started — will retry regular_low sync when keys arrive")
 \t\t\t\twdbPath := "file:store/whatsapp.db?_foreign_keys=on&mode=ro"
 \t\t\t\tdeadline := time.Now().Add(10 * time.Minute)
@@ -2916,9 +3033,18 @@ def main() -> int:
         FIXR_READY_SENTINEL,
         "Fix R: re-arm readiness after successful resync",
     )
-    # Fix T: skip-and-continue past unverifiable LTHash patches. MUST run after
+    # Fix T/V: skip-and-continue past unverifiable LTHash patches. MUST run after
     # Fix Q (FIXQ_STATE_REPLACEMENT installed syncAppStateThenReady to anchor on)
     # and after Fix R (T2 anchors inside the Fix R struct block).
+    # Upgrade path first: production bridges already on Fix T lack the Fix Q needle
+    # but have FIXT_SYNC_FIXT_NEEDLE; without this, Fix V never lands on them.
+    changed_go |= replace_if_present(
+        main_go,
+        FIXT_SYNC_FIXT_NEEDLE,
+        FIXT_SYNC_REPLACEMENT,
+        FIXT_SYNC_SENTINEL,
+        "Fix V: upgrade Fix T install (missing-key skip + key poller)",
+    )
     changed_go |= replace_idempotent(
         main_go,
         FIXT_SYNC_NEEDLE,
