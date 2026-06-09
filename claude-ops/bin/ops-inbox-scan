@@ -234,7 +234,20 @@ def ro(path):
 def scan_whatsapp():
     out = {"needs_reply": [], "waiting": [], "groups": [], "fyi": []}
     if not os.path.exists(MSGDB):
-        notes.append(f"whatsapp: store not found ({MSGDB}) — bridge not installed?")
+        # No local WhatsApp store. Treat WhatsApp as REMOTE-ONLY: the canonical
+        # bridge may run on a remote host, reached via the live MCP tools
+        # (mcp__whatsapp__*). An absent local sqlite store must NOT be read as
+        # "no messages" — signal the orchestrator to scan WhatsApp via live MCP.
+        out["reachable"] = False
+        out["source"] = "remote"
+        out["scan_via"] = "live-mcp"
+        notes.append(
+            "whatsapp: no local store — scan via the LIVE MCP tools "
+            "(mcp__whatsapp__list_chats / list_messages), which read the canonical "
+            "bridge. Do NOT treat these empty buckets as 'no messages'. WA replies are "
+            "DRAFT-ONLY: never auto-send based on store state (the store can lag "
+            "phone-sent messages)."
+        )
         return out
     con = ro(MSGDB)
     con.row_factory = sqlite3.Row
