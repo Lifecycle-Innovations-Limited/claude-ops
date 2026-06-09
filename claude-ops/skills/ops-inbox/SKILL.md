@@ -210,7 +210,7 @@ This clones lharries/whatsapp-mcp into `~/.local/share/whatsapp-mcp`, applies th
 | `mcp__whatsapp__get_chat` | `{chat_jid}` | Chat metadata |
 | `mcp__whatsapp__get_message_context` | `{chat_jid, message_id}` | Message context window |
 | `mcp__whatsapp__archive_chat` | `{chat_jid, archive: true}` | Archive (or unarchive with `archive: false`) a chat — sends app-state mutation via whatsmeow |
-| `mcp__whatsapp__resync_app_state` | `{name: "regular_low", full_sync: true}` | Force full app-state resync — run when archive fails with `LTHash mismatch` (server/local desync) |
+| `mcp__whatsapp__resync_app_state` | `{name: "regular_low", full_sync: true, skip_bad: true}` | Force full app-state resync — run when archive fails with `LTHash mismatch` (server/local desync) |
 
 **Bulk archive non-actionable WA chats** — for newsletters, dead group chats, one-word reactions, etc.:
 ```bash
@@ -223,7 +223,7 @@ done
 # The /api/archive endpoint auto-heals LTHash corruption internally (Fix G) and
 # immediately UPSERTs archived=1 into messages.db so the inbox query reflects it.
 # If you still get HTTP 409, the heal failed — run resync manually as a last resort:
-# curl -s -X POST http://localhost:8080/api/resync_app_state -d '{"name":"regular_low","full_sync":true}'
+# curl -s -X POST http://localhost:8080/api/resync_app_state -d '{"name":"regular_low","full_sync":true,"skip_bad":true}'
 ```
 **Archive state is locally queryable** (Fix H — bridge persists `archived` flag in `chats` table):
 ```bash
@@ -745,7 +745,7 @@ The per-channel classify/draft steps below (WhatsApp, iMessage, email) all refer
 6. Assign provisional buckets only (same direction signals as step 4 — use `last_is_from_me` on the chat object; only after the step 5 thread fallback use the last element's `is_from_me`). **Do not confirm NEEDS REPLY here** — step 7 clears the FULL-THREAD AWARENESS GATE first:
    - **NEEDS REPLY candidate**: `last_is_from_me == 0`, or (fallback only) last thread message `is_from_me: false`
    - **WAITING** (provisional): `last_is_from_me == 1`, or (fallback only) last thread message `is_from_me: true`
-   - **ARCHIVE**: Newsletters (`@newsletter` JIDs), dead group chats with no recent activity, one-word reactions, or concluded conversations. Bulk-archive these via `mcp__whatsapp__archive_chat {chat_jid, archive: true}` after user confirmation. The bridge's `/api/archive` endpoint (Fix F) auto-heals LTHash corruption internally and retries once — you no longer need to manually run `resync_app_state` first. If it still returns `409 conflict`, run `mcp__whatsapp__resync_app_state {name: "regular_low", full_sync: true}` as a fallback then retry.
+   - **ARCHIVE**: Newsletters (`@newsletter` JIDs), dead group chats with no recent activity, one-word reactions, or concluded conversations. Bulk-archive these via `mcp__whatsapp__archive_chat {chat_jid, archive: true}` after user confirmation. The bridge's `/api/archive` endpoint (Fix F) auto-heals LTHash corruption internally and retries once — you no longer need to manually run `resync_app_state` first. If it still returns `409 conflict`, run `mcp__whatsapp__resync_app_state {name: "regular_low", full_sync: true, skip_bad: true}` as a fallback (skip_bad skips server-side patches that fail LTHash verification — without it a wedged chain re-fails on the same patch forever) then retry.
 
 7. **Cross-thread answered-elsewhere check (BOTH DIRECTIONS — scan Sam's own sent messages).** Before presenting any chat as NEEDS REPLY, verify it has not already been answered in another channel or in a later message within the same thread that the `last_is_from_me` flag missed. This is the most common source of false NEEDS_REPLY:
    - **Same-thread recheck**: when `last_is_from_me == 0`, call `mcp__whatsapp__list_messages {chat_jid, limit: 25}` and scan ALL of them (capturing `is_from_me=1` rows and `[voice]` transcripts) for `is_from_me: true` after the inbound message — if one exists, reclassify as WAITING. This is part of clearing the FULL-THREAD AWARENESS GATE, not an optional extra.

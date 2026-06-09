@@ -2392,6 +2392,14 @@ FIXT_SKIP_BAD_HANDLER = """\t\t// claude-ops Fix T: skip_bad=true (query param O
 \t\tif r.URL.Query().Get(\"skip_bad\") == \"true\" {
 \t\t\treq.SkipBad = true
 \t\t}
+\t\t// Fix T2d: a full_sync resync IS the heal operation - strict-verify full sync
+\t\t// just re-fails on the same unverifiable server-side patches (observed 2026-06-09:
+\t\t// heal loop wedged on \"failed to verify patch v1132: mismatching LTHash\" because
+\t\t// the documented heal omitted skip_bad). Default skip_bad=true for full_sync
+\t\t// unless explicitly skip_bad=false.
+\t\tif req.FullSync && r.URL.Query().Get(\"skip_bad\") != \"false\" {
+\t\t\treq.SkipBad = true
+\t\t}
 \t\tif req.SkipBad {
 \t\t\tsetAppStateReady(false)
 \t\t\tif err := syncAppStateSkipBad(client, appstate.WAPatchName(req.Name)); err != nil {
