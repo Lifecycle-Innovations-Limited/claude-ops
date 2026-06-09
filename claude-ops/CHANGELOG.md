@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.27.3] - 2026-06-09
+
+### Changed
+WhatsApp inbox-scan resilience: corrupt archived flag can no longer blind the scan (recency fallback, #545); full_sync resync defaults skip_bad=true so wedged LTHash chains self-heal, ops-inbox heal recipes updated (#546).
+
+
 ## [2.27.2] - 2026-06-09
 
 ### Changed
