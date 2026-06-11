@@ -24,7 +24,7 @@
 #
 # Source of truth: ~/Projects/claude-ops/claude-ops/claude-ops/scripts/gh-orphan-killer.sh
 
-set -euo pipefail
+set -uo pipefail
 
 MODE="loop"
 if [ "${1:-}" = "--once" ]; then
