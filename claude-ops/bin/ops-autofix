@@ -102,7 +102,16 @@ fix_bridge_fts() {
         # (wa-bridge-keepalive.sh, wa-inbox-fresh.sh, whatsapp-bridge-up.sh) back off for
         # 180s and don't pile on. whatsmeow can't re-fetch phone-sent messages on
         # reconnect, so coordinated restarts prevent dropping the user's own sends.
-        systemctl --user restart whatsapp-bridge.service 2>/dev/null || true
+        if $IS_MACOS; then
+          TARGET="gui/$(id -u)/com.${USER}.whatsapp-bridge"
+          if ! launchctl kickstart -k "$TARGET" 2>/dev/null; then
+            PLIST="$HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
+            [ -f "$PLIST" ] && launchctl load -w "$PLIST" 2>/dev/null || true
+            launchctl kickstart -k "$TARGET" 2>/dev/null || true
+          fi
+        else
+          systemctl --user restart whatsapp-bridge.service 2>/dev/null || true
+        fi
         date +%s > "$HOME/.claude/.once.whatsapp-bridge-restart.last" 2>/dev/null || true
         log_fix "bridge-fts: rebuilt bridge binary with -tags sqlite_fts5 (was missing fts5 module)"
       else
