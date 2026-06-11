@@ -501,8 +501,7 @@ async function shouldRotate(config, state) {
     //      session via keychain swap; Claude Code re-reads keychain per
     //      request). If not confirmed hot → silently discard.
     const taggedEmail = rl.utilization?.account_email;
-    const isMismatched =
-      taggedEmail && !utilizationTagMatchesActive(taggedEmail, state.activeAccount, config.accounts);
+    const isMismatched = taggedEmail && !utilizationTagMatchesActive(taggedEmail, state.activeAccount, config.accounts);
     const probeAccount = isMismatched
       ? resolveAccountFromUtilizationTag(taggedEmail, config, state.activeAccount)
       : getActiveAccount(config, state.activeAccount);
