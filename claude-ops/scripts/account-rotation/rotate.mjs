@@ -3469,17 +3469,6 @@ function detectTerminalForPid(pid) {
 async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  // Daemon-hosted `claude --bg` sessions never appear in findClaudeSessions()
-  // (no own TTY-bearing process matching the enum) and can't receive /login
-  // injection. Respawn them via the supervisor so they reload the swapped
-  // keychain — idle/waiting immediately, busy deferred to the daemon sweep.
-  try {
-    const { respawned, deferred } = respawnBgSessions(log);
-    if (respawned || deferred) log(`[session] bg fleet: ${respawned} respawned, ${deferred} deferred (busy)`);
-  } catch (e) {
-    log(`[session] bg respawn pass skipped: ${e.message?.slice(0, 80)}`);
-  }
-
   const sessions = findClaudeSessions();
 
   if (sessions.length === 0) {
@@ -4037,6 +4026,18 @@ async function rotate(targetEmail, opts = {}) {
       }
     } catch (e) {
       log(`[hot-swap] skipped: ${e.message?.slice(0, 80)}`);
+    }
+  }
+
+  // Daemon-hosted `claude --bg` sessions have no TTY for /login injection and
+  // don't register in the pidfile SIGHUP path — respawn after every successful
+  // rotation (including daemon --no-browser without --session).
+  if (ok && !dryRun) {
+    try {
+      const { respawned, deferred } = respawnBgSessions(log);
+      if (respawned || deferred) log(`[bg-respawn] fleet: ${respawned} respawned, ${deferred} deferred (busy)`);
+    } catch (e) {
+      log(`[bg-respawn] pass skipped: ${e.message?.slice(0, 80)}`);
     }
   }
 
