@@ -158,16 +158,30 @@ else
   log "wa-fresh: media enrichment not started"
 fi
 
+# 5b. Mac ground-truth cross-check — AUTOMATIC when the store looks stale.
+# Reads the Mac WhatsApp.app ChatStorage over Tailscale SSH (Cloudflare-tunnel
+# fallback via wa-mac-transport.sh). Read-only, bounded, never fatal.
+mac_ground_truth() {
+  local script
+  script="$(dirname "$0")/wa-mac-latest.sh"
+  [ -x "$script" ] || script="$HOME/bin/wa-mac-latest.sh"
+  [ -x "$script" ] || { log "wa-fresh: mac cross-check skipped (wa-mac-latest.sh not installed)"; return 0; }
+  log "wa-fresh: MAC GROUND TRUTH (latest 10 from WhatsApp.app store):"
+  WA_MAC_QUIET=1 timeout 50 "$script" --recent 10 2>/dev/null | sed 's/^/wa-fresh:   /' || \
+    log "wa-fresh: mac cross-check unavailable (Mac unreachable over tailscale + cloudflare)"
+}
+
 # 5. freshness report
 after=$(sqlite3 "$DB" "SELECT COALESCE(datetime(MAX(timestamp)),'?') FROM messages;") || {
   log "wa-fresh: ERROR cannot read messages store at $DB — do not trust it"
+  mac_ground_truth
   exit 2
 }
 age_min=$(sqlite3 "$DB" "SELECT CAST((julianday('now')-julianday(MAX(timestamp)))*1440 AS INT) FROM messages;") || age_min=""
 log "wa-fresh: newest message = ${after} (${age_min:-?} min old) | new rows this cycle = ${new}"
 if [ "${age_min:-9999}" -gt 120 ]; then
   log "wa-fresh: WARNING newest message is >2h old — store may be lagging; treat 'last-sender' classification with caution"
-  log "wa-fresh: store may be lagging — cross-check Mac ground truth: bin/wa-mac-latest.sh --recent"
+  mac_ground_truth
 fi
 log "wa-fresh: NOTE phone-sent messages may be absent — confirm 'did I reply?' with the human, not this store"
 exit 0
