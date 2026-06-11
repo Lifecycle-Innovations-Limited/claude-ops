@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.27.4] - 2026-06-11
+
+### Changed
+WA bridge Fix V: tolerate missing sync keys in LTHash skip loop, 300ms throttle (dodges 429 rate-overlimit), key-arrival poller; default skip_bad=true on full_sync resync. Verified end-to-end 2026-06-10: poisoned regular_low chain healed, archive writes propagate to phone (31/31). Upstream: tulir/whatsmeow#1171.
+
+
 ## [2.27.3] - 2026-06-09
 
 ### Changed
