@@ -3387,31 +3387,31 @@ def main() -> int:
     if not (changed_go or changed_py):
         print("All patches already applied; nothing to do.")
 
-    # ── --build: rebuild the bridge binary when any Go file changed ──────────
+    # ── --build: rebuild the bridge binary from current patched sources ──────
     build_ok = False
     if args.build:
-        if not changed_go:
-            print("  --build: no Go files changed — skipping build.")
-            build_ok = True  # treat as success so --restart can still fire
-        else:
-            import subprocess
+        import subprocess
 
-            bridge_dir = args.install_dir / "whatsapp-bridge"
+        bridge_dir = args.install_dir / "whatsapp-bridge"
+        if not changed_go:
+            print("  --build: patches already applied; rebuilding from current sources.")
+        print(
+            "  --build: running `CGO_ENABLED=1 go build -tags sqlite_fts5 "
+            f"-o whatsapp-bridge .` in {bridge_dir} ..."
+        )
+        result = subprocess.run(
+            ["go", "build", "-tags", "sqlite_fts5", "-o", "whatsapp-bridge", "."],
+            cwd=bridge_dir,
+            env={**os.environ, "CGO_ENABLED": "1"},
+        )
+        if result.returncode != 0:
             print(
-                f"  --build: running `go build -o whatsapp-bridge .` in {bridge_dir} ..."
+                f"  --build: FAILED (exit {result.returncode}) — fix compilation errors above",
+                file=sys.stderr,
             )
-            result = subprocess.run(
-                ["go", "build", "-o", "whatsapp-bridge", "."],
-                cwd=bridge_dir,
-            )
-            if result.returncode != 0:
-                print(
-                    f"  --build: FAILED (exit {result.returncode}) — fix compilation errors above",
-                    file=sys.stderr,
-                )
-                return result.returncode
-            print("  --build: OK — whatsapp-bridge binary rebuilt.")
-            build_ok = True
+            return result.returncode
+        print("  --build: OK — whatsapp-bridge binary rebuilt.")
+        build_ok = True
     elif changed_go:
         print(
             "  NOTE: main.go changed but --build was not passed.  Run with --build to "
