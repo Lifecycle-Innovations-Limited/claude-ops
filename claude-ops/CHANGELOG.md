@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.28.0] - 2026-06-11
+
+### Changed
+ops-inbox: Mac WhatsApp.app ChatStorage fallback for bridge-miss recovery (read-only reader + freshness-gate hint).
+
+
 ## [2.27.4] - 2026-06-11
 
 ### Changed
