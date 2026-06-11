@@ -89,7 +89,11 @@ export function listLiveBgSessions() {
       const pid = Number(s.pid) || 0;
       if (!pidAlive(pid)) continue;
       if (pid === process.pid || pid === process.ppid) continue; // never respawn ourselves
-      const id = s.id || f.replace(/\.json$/, '');
+      // Session-state files are PID-named, but `claude respawn` needs the job/
+      // session id, NOT the PID. Resolve from file CONTENT (OS-agnostic, no
+      // reliance on the PID filename): prefer jobId (short id in the fleet UI),
+      // then full sessionId, then any explicit id; filename is last-resort only.
+      const id = s.jobId || s.sessionId || s.id || f.replace(/\.json$/, '');
       out.push({ id, pid, status: s.status || 'unknown' });
     } catch {}
   }

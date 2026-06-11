@@ -43,7 +43,7 @@ import { persistBedrockClaudeSettings } from './claude-settings-mode.mjs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync, execFileSync, spawnSync, spawn } from 'child_process';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { createHmac } from 'node:crypto';
 import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS, scrapeBillingState } from './ai-brain.mjs';
 import { destinationUtilHardBlock } from './rotation-policy.mjs';
