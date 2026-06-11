@@ -9,6 +9,8 @@ allowed-tools:
   - Grep
   - Glob
   - Agent
+  - TeamCreate
+  - SendMessage
   - AskUserQuestion
   - WebSearch
 effort: high
@@ -76,3 +78,18 @@ Pull every demo/song from the user's Gmail inbox and A&R them all:
 
 ## Fallback
 If `mcp__audio-ar__*` is unavailable, run the stack directly via Bash from `$AUDIO_AR_HOME` (`venv/bin/python analyze.py <file>`, `clap_score.py`, `transcribe.py`, `pro_apis.py`). Never fabricate analysis — if nothing ran, say so.
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when dispatching multiple ar-producer agents in batch or inbox-sweep mode. This enables:
+- Agents share partial findings in real time (e.g., one agent finds a stem issue → others adjust their verdict framing accordingly)
+- You can steer mid-sweep: "prioritize the demo from sender X first"
+- Progress is visible per track as agents report back
+
+**Team setup** (only when flag is enabled, batch/inbox dispatch phase):
+```
+TeamCreate("ar-batch")
+Agent(team_name="ar-batch", name="ar-[track-slug]", ...)
+```
+
+If the flag is NOT set, use standard parallel subagents (fire-and-forget, waves of ≤2).
