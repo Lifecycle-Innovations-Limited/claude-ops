@@ -98,13 +98,18 @@ for t in "${TARGETS[@]}"; do
   if [ -z "$name" ]; then echo "  MISS  $t (no Mac chat found)"; fail=$((fail+1)); continue; fi
   if [ "$arch" = "1" ]; then echo "  SKIP  $name (already archived on Mac)"; skip=$((skip+1)); continue; fi
   if [ "$DRY" = 1 ]; then echo "  DRY   $name"; ok=$((ok+1)); continue; fi
-  if run_archive_ui "$name" >/dev/null 2>&1; then
+  ui_err=""
+  if ui_err=$(run_archive_ui "$name" 2>&1 >/dev/null); then
     sleep 1
     v=$(wa_mac_ssh "sqlite3 \"$DB\" \"SELECT COALESCE(ZARCHIVED,0) FROM ZWACHATSESSION WHERE ZPARTNERNAME='$(printf '%s' "$name" | sed "s/'/''/g")' ORDER BY ZLASTMESSAGEDATE DESC LIMIT 1;\"" 2>/dev/null || echo "?")
     if [ "$v" = "1" ]; then echo "  OK    $name (verified ZARCHIVED=1)"; else echo "  OK?   $name (UI action done, ZARCHIVED=$v — verify visually)"; fi
     ok=$((ok+1))
   else
-    echo "  FAIL  $name (remote AppleScript error — check Accessibility permission for sshd on the Mac)"
+    if [ -n "$ui_err" ]; then
+      echo "  FAIL  $name ($ui_err)"
+    else
+      echo "  FAIL  $name (remote AppleScript error — check Accessibility permission for sshd on the Mac)"
+    fi
     fail=$((fail+1))
   fi
   sleep "$PACE"
