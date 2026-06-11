@@ -14,8 +14,8 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
-LOCAL_DENYLIST="$REPO_ROOT/.githooks/pii-denylist.local"
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOCAL_DENYLIST="$HOOK_DIR/pii-denylist.local"
 
 # --- patterns checked against ADDED lines only ---
 
