@@ -10,6 +10,12 @@
  *
  * Auto-rotates to the most cooled-down account when any threshold is hit.
  *
+ * Rotation path: `node rotate.mjs --no-browser --to <key>` only (keychain swap,
+ * no browser). That path does not invoke ai-brain.mjs. Full ai-brain (Bedrock
+ * Converse, stall recovery, optional Context7 + web research, billing scrape)
+ * runs inside `rotate.mjs` when a browser OAuth flow is used — e.g. force-rotate.sh
+ * after fast path fails, `node rotate.mjs --magic-link --force --to …`, or setup --auto.
+ *
  * Usage:
  *   node daemon.mjs           # Run in foreground
  *   node daemon.mjs --bg      # Daemonize
@@ -17,11 +23,32 @@
  *   node daemon.mjs --status  # Show daemon status
  */
 
-import { readFileSync, writeFileSync, existsSync, unlinkSync, appendFileSync, statSync } from 'fs';
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  unlinkSync,
+  appendFileSync,
+  statSync,
+} from 'fs';
+import {
+  persistBedrockClaudeSettings,
+  clearHardcodedModelsForOAuthClaudeSettings,
+} from './claude-settings-mode.mjs';
+import {
+  destinationUtilHardBlock,
+  DAEMON_SAFE_5H_PCT,
+  DAEMON_SAFE_7D_PCT,
+  DAEMON_RELAXED_BAR,
+  isDaemonRotationViable,
+  isLiveUtilOk,
+  liveUtilMax,
+} from './rotation-policy.mjs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { execFileSync, spawn, spawnSync } from 'child_process';
+import { execSync, execFileSync, spawn, spawnSync } from 'child_process';
 import { tmpdir } from 'os';
+import { applyAccountLeases, writeLease } from './account-leases.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
@@ -30,20 +57,60 @@ const LOG_PATH = join(__dirname, 'rotation.log');
 const PID_FILE = join(__dirname, '.daemon.pid');
 const ROTATE_SCRIPT = join(__dirname, 'rotate.mjs');
 
-// ── Platform ─────────────────────────────────────────────────────────────────
-const IS_LINUX = process.platform === 'linux';
-// Top-level await: pre-load vault on Linux so credential helpers stay synchronous.
-const _vault = IS_LINUX ? await import('./vault-linux.mjs') : null;
-
-// Keychain account name — must match rotate.mjs convention (macOS only).
+// Keychain account name — must match rotate.mjs convention.
 const KEYCHAIN_ACCOUNT =
   process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || process.env.LOGNAME || 'claude-ops';
 
-const POLL_INTERVAL = 15_000; // Check every 15s — fast enough to catch hook-triggered 429 signals (fireAt = now+15s)
+const RECOVERY_STATUS_PATH = join(__dirname, '.bedrock-recovery-status.json');
+const USAGE_PROBE_CONCURRENCY = 3;
+const BEDROCK_RECOVERY_MIN_INTERVAL_MS = 25_000;
+const BEDROCK_RECOVERY_DEFAULT_INTERVAL_MS = 50_000;
+const BEDROCK_RECOVERY_MAX_INTERVAL_MS = 180_000;
+
+function writeRecoveryStatus(payload) {
+  try {
+    writeFileSync(RECOVERY_STATUS_PATH, JSON.stringify({ ...payload, written_at: new Date().toISOString() }, null, 2));
+  } catch {}
+}
 const RATE_LIMIT_COOLDOWN = 10_000; // 10s after rate limit before rotating
+const POLL_INTERVAL = 30_000; // 30s main-loop tick
 const POST_ROTATION_BLACKOUT = 180_000; // 3min after rotation: ignore ALL triggers
+// Hard anti-thrash cap: file-driven rotations limited to 1 per 2min. Explicit
+// 429 / 401 hooks bypass this (those are real-time signals from a tool failure
+// and cannot be stale). Without this, .rate-limits.json poisoning by stale-token
+// sessions caused 30+ rotations/hour against a cool active account (2026-05-06).
+const FILE_ROTATION_MIN_INTERVAL = 120_000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ── Exhausted-account park map ────────────────────────────────────────────────
+// Prevents rescue-loop thrashing on accounts stuck at >=95% for the full reset
+// window. Maps accountKey → epoch-ms timestamp before which the account is
+// "parked" (skipped for rescue). Reset automatically when the window resets.
+// In-memory only — intentionally resets on daemon restart so stale parks don't
+// persist across a full reset cycle.
+const PARK_THRESHOLD_PCT = 95; // park when max(5h,7d) >= this
+const _parkedUntil = new Map(); // accountKey → epoch-ms
+
+function isParked(key) {
+  const until = _parkedUntil.get(key);
+  if (!until) return false;
+  if (Date.now() >= until) {
+    _parkedUntil.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function parkAccount(key, resetEpochSec, reason) {
+  // Park until reset time, with a 2-min buffer so the first poll after reset
+  // re-probes rather than immediately triggering. If no reset info, park for
+  // 10 minutes as a conservative fallback.
+  const resetMs = resetEpochSec ? resetEpochSec * 1000 + 2 * 60_000 : Date.now() + 10 * 60_000;
+  _parkedUntil.set(key, resetMs);
+  const minsUntil = Math.ceil((resetMs - Date.now()) / 60_000);
+  log(`[park] ${key} parked for ${minsUntil}min (${reason})`);
+}
 
 const MAX_LOG_SIZE = 50_000; // 50KB — ~500 lines, enough for debugging
 function log(msg) {
@@ -68,32 +135,67 @@ function notify(title, msg) {
     if (IS_LINUX) {
       spawnSync('notify-send', [title, msg], { timeout: 3000 });
     } else {
-      execFileSync(
-        'osascript',
-        [
-          '-e',
-          `display notification "${msg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" with title "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
-        ],
-        { timeout: 5000 },
-      );
+      const escaped = msg.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      const titleEsc = title.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      spawnSync('osascript', ['-e', `display notification "${escaped}" with title "${titleEsc}"`], { timeout: 5000 });
     }
   } catch {}
 }
 
+// Cross-machine account leases (Sam 2026-06-06): NOT a static per-machine split.
+// Both machines may use ALL accounts; the only constraint is the same account is
+// never ACTIVE on both at once. readConfig() drops accounts a FOREIGN host holds
+// a fresh lease on; the loop heartbeats THIS machine's active-account lease.
+// Never drop our own active key. Fail-open. Mirror of rotate.mjs. See
+// account-leases.mjs for the S3 store + TTL semantics.
 function readConfig() {
-  return JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
-}
-function readState() {
+  const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+  let keepKey = null;
   try {
-    return JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+    const st = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+    keepKey = st.activeAccount || null;
+  } catch {}
+  return applyAccountLeases(config, { keepKey, log: (m) => { try { log(m); } catch {} } });
+}
+// Legacy account-key renames: old label → new canonical key.
+// Applied once per readState() call to keep state.json consistent as labels evolve.
+// Safe to run repeatedly (no-op when the old key doesn't exist).
+const STATE_KEY_MIGRATIONS = {
+  'account-personal': 'account-main', // label changed: personal org is now just "account-main"
+};
+
+function readState() {
+  let state;
+  try {
+    state = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
   } catch {
-    return {
-      activeAccount: null,
-      accounts: {},
-      toolUses: 0,
-      totalRotations: 0,
-    };
+    return { activeAccount: null, accounts: {}, toolUses: 0, totalRotations: 0 };
   }
+  // Apply key migrations: rename stale keys to canonical keys.
+  let migrated = false;
+  if (state.accounts) {
+    for (const [oldKey, newKey] of Object.entries(STATE_KEY_MIGRATIONS)) {
+      if (state.accounts[oldKey] && !state.accounts[newKey]) {
+        state.accounts[newKey] = state.accounts[oldKey];
+        delete state.accounts[oldKey];
+        migrated = true;
+        log(`[state-migration] renamed account key "${oldKey}" → "${newKey}"`);
+      } else if (state.accounts[oldKey]) {
+        // Both exist — drop the stale key, keep the newer canonical one.
+        delete state.accounts[oldKey];
+        migrated = true;
+        log(`[state-migration] dropped stale key "${oldKey}" (canonical "${newKey}" already exists)`);
+      }
+    }
+    if (state.activeAccount && STATE_KEY_MIGRATIONS[state.activeAccount]) {
+      state.activeAccount = STATE_KEY_MIGRATIONS[state.activeAccount];
+      migrated = true;
+    }
+  }
+  if (migrated) {
+    try { writeFileSync(STATE_PATH, JSON.stringify(state, null, 2)); } catch {}
+  }
+  return state;
 }
 
 // ── Account cooldown tracking ───────────────────────────────────────────────
@@ -140,21 +242,29 @@ function tokenExpired(json) {
   }
 }
 
+// Linux backend: tokens live in ~/.claude/.credentials.json keyed by service
+// name (mirrors rotate.mjs _linuxReadCred). The macOS `security` keychain only
+// exists on Darwin — without this branch every probe returned null tokens and
+// logged "skipped N expired-token" for all accounts on EC2.
+const IS_LINUX = process.platform === 'linux';
+const LINUX_CRED_PATH = join(process.env.HOME || '', '.claude', '.credentials.json');
+
 function readStoredToken(account) {
   const svc = `Claude-Rotation-${accountKey(account)}`;
   if (IS_LINUX) {
     try {
-      return _vault.readEntry(svc);
+      const store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
+      const val = store[svc];
+      if (!val) return null;
+      return typeof val === 'string' ? val : JSON.stringify(val);
     } catch {
       return null;
     }
   }
   try {
-    const result = spawnSync('security', ['find-generic-password', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-g'], {
+    const out = execSync(`security find-generic-password -s "${svc}" -a "${KEYCHAIN_ACCOUNT}" -g 2>&1`, {
       timeout: 5000,
-      encoding: 'utf8',
-    });
-    const out = (result.stdout || '') + (result.stderr || '');
+    }).toString();
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
@@ -165,18 +275,17 @@ function readStoredToken(account) {
 function readActiveKeychainToken() {
   if (IS_LINUX) {
     try {
-      return _vault.readEntry('Claude Code-credentials');
+      const store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
+      if (!store.claudeAiOauth) return null;
+      return JSON.stringify({ claudeAiOauth: store.claudeAiOauth, mcpOAuth: store.mcpOAuth || {} });
     } catch {
       return null;
     }
   }
   try {
-    const r = spawnSync(
-      'security',
-      ['find-generic-password', '-s', 'Claude Code-credentials', '-a', KEYCHAIN_ACCOUNT, '-g'],
-      { encoding: 'utf8', timeout: 5000 },
-    );
-    const out = `${r.stdout || ''}${r.stderr || ''}`;
+    const out = execSync('security find-generic-password -s "Claude Code-credentials" -g 2>&1', {
+      timeout: 5000,
+    }).toString();
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
@@ -220,7 +329,7 @@ async function detectLiveAccountFromVault(config) {
     const matches = config.accounts.filter((a) => a.email.toLowerCase() === liveEmail);
     if (matches.length === 1) return accountKey(matches[0]);
     if (matches.length > 1) {
-      // Multiple labels for same email (e.g. user-personal vs -team).
+      // Multiple labels for same email (e.g. account-main vs account-team).
       // Use orgName from profile to disambiguate.
       const orgName = body?.organization?.name?.toLowerCase() || '';
       const byOrg = matches.find((a) => (a.orgName || '').toLowerCase() === orgName);
@@ -235,7 +344,7 @@ async function detectLiveAccountFromVault(config) {
 // ── Real utilization from Anthropic (via statusline export) ──────────────────
 
 const RATE_LIMITS_FILE = join(__dirname, '.rate-limits.json');
-const UTILIZATION_ROTATE_THRESHOLD = 80; // Rotate at 80% — with 8+ concurrent sessions burning tokens fast, 95% was too late (hit 100% between statusline updates)
+const UTILIZATION_ROTATE_THRESHOLD = 95; // Rotate when near exhaustion
 
 function readRealUtilization() {
   try {
@@ -243,6 +352,17 @@ function readRealUtilization() {
     const data = JSON.parse(readFileSync(RATE_LIMITS_FILE, 'utf8'));
     const age = Date.now() - data.ts * 1000;
     if (age > 5 * 60_000) return null; // Stale (>5min) — session may be dead
+    // Anti-thrash A: discard reads that predate the most recent rotation (+60s
+    // buffer for statusline render lag) BUT ONLY when the file's tagged
+    // account matches the active. A mismatched-tag write (from a parallel
+    // session on a different account) is independently valid and must pass
+    // through so we can rescue that session before it 429s — see shouldRotate.
+    try {
+      const st = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+      const lastRotMs = st.lastRotation ? new Date(st.lastRotation).getTime() : 0;
+      const tagMatchesActive = !data.account_email || data.account_email === st.activeAccount;
+      if (tagMatchesActive && lastRotMs && data.ts * 1000 < lastRotMs + 60_000) return null;
+    } catch {}
     return data;
   } catch {
     return null;
@@ -313,9 +433,113 @@ function getActiveAccount(config, activeKey) {
 const AUTH_ERROR_FILE = join(tmpdir(), 'claude-auth-error.json');
 
 async function shouldRotate(config, state) {
+  // 0. Browser pin: claude-in-chrome requires CLI account == claude.ai login.
+  // While the PreToolUse hook holds a fresh .browser-pin sentinel, never rotate
+  // away — it would break the extension pairing mid-use. Short TTL (refreshed
+  // per browser tool call) bounds the window where a hot account can't rotate.
+  try {
+    const pinPath = join(__dirname, '.browser-pin');
+    if (existsSync(pinPath)) {
+      const pin = JSON.parse(readFileSync(pinPath, 'utf8'));
+      if (pin?.until && Date.now() < pin.until) {
+        return { should: false, reason: `browser-pinned to ${pin.email}` };
+      }
+      // Pin TTL lapsed — restore the pre-pin oauthAccount/chromeExtension
+      // blocks in ~/.claude.json so terminal Claude Code returns to the prior
+      // identity before any keychain swap below. Fire-and-forget; the daemon
+      // does not need to await the restore to make a rotation decision.
+      try {
+        const rotateScript = join(__dirname, 'rotate.mjs');
+        spawn('node', [rotateScript, '--release-browser-pin'], {
+          detached: true,
+          stdio: 'ignore',
+        }).unref();
+        log(`[browser-pin] TTL lapsed (was pinned to ${pin?.email || 'unknown'}) — release dispatched`);
+      } catch {}
+    }
+  } catch {}
+
   // 1. Real utilization from statusline (PRIMARY signal for rotation)
   const rl = checkRateLimited();
-  if (rl.limited) return { should: true, reason: `Rate limited: ${rl.reason}` };
+  if (rl.limited) {
+    // Anti-thrash A: confirm the trigger against the account that the
+    // statusline write was actually tagged for. Two paths:
+    //   1. Tag matches active (or absent) → verify active's live util.
+    //      If active is fine, file is stale/poisoned — skip + unlink.
+    //   2. Tag is a DIFFERENT account → that's a parallel Claude Code
+    //      session reporting its own saturation. Live-probe THAT account
+    //      via vault token. If confirmed hot → rotate (rescues the hot
+    //      session via keychain swap; Claude Code re-reads keychain per
+    //      request). If not confirmed hot → silently discard.
+    const taggedEmail = rl.utilization?.account_email;
+    const isMismatched = taggedEmail && taggedEmail !== state.activeAccount;
+    const probeAccount = isMismatched
+      ? config.accounts.find((a) => a.email === taggedEmail) || getActiveAccount(config, state.activeAccount)
+      : getActiveAccount(config, state.activeAccount);
+    if (probeAccount) {
+      const probeKey = accountKey(probeAccount);
+
+      // Park check: if this account is already known-exhausted and parked until
+      // its reset window, skip the rescue entirely — don't re-probe live API
+      // every 30s just to confirm it's still at 100%.
+      if (isParked(probeKey)) {
+        const until = _parkedUntil.get(probeKey);
+        const minsLeft = Math.ceil((until - Date.now()) / 60_000);
+        log(`[park] ${probeKey} is parked for ${minsLeft}min more — suppressing rescue trigger`);
+        return { should: false };
+      }
+
+      const live = await queryLiveUtilization(probeAccount);
+      if (live.ok) {
+        const triggered7d = /7d utilization/.test(rl.reason);
+        const triggered5h = /5h utilization/.test(rl.reason);
+        const overProbed =
+          (triggered5h && live.pct5h >= UTILIZATION_ROTATE_THRESHOLD) ||
+          (triggered7d && live.pct7d >= UTILIZATION_ROTATE_THRESHOLD);
+        if (!overProbed) {
+          if (!isMismatched) {
+            log(
+              `[anti-thrash] file says ${rl.reason} but active ${state.activeAccount} live 5h=${live.pct5h}% 7d=${live.pct7d}% — skipping (stale .rate-limits.json)`,
+            );
+            try { unlinkSync(RATE_LIMITS_FILE); } catch {}
+          }
+          // Mismatched + not hot = just a low-util parallel session; silent skip.
+          return { should: false };
+        }
+        if (isMismatched) {
+          // If the mismatched account is fully exhausted (>=PARK_THRESHOLD_PCT),
+          // park it so we don't rescue-loop on every 30s tick. The keychain
+          // swap won't help — there's nowhere to rotate TO for that session.
+          const liveMax = Math.max(live.pct5h, live.pct7d);
+          if (liveMax >= PARK_THRESHOLD_PCT) {
+            // Prefer the 5h reset (shorter) so the park clears as soon as possible.
+            const resetEpoch = live.reset5h || live.reset7d || null;
+            parkAccount(probeKey, resetEpoch,
+              `live ${liveMax.toFixed(0)}% >= ${PARK_THRESHOLD_PCT}% exhausted (5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}%)`);
+            return { should: false };
+          }
+          log(
+            `[multi-session] parallel session on ${probeKey} (${taggedEmail}) is hot (live 5h=${live.pct5h}% 7d=${live.pct7d}%) — rotating keychain to rescue`,
+          );
+        }
+      }
+    }
+    // Anti-thrash B: hard rate-cap on UTILIZATION-driven rotations regardless
+    // of verification outcome (covers live-query failures). Explicit 429
+    // signals from the rate-limit-detector hook bypass — they're real-time
+    // ground truth and cannot be poisoned by a stale-token session.
+    const isUtilizationTrigger = /utilization/.test(rl.reason);
+    if (isUtilizationTrigger) {
+      const lastRotMs = state.lastRotation ? new Date(state.lastRotation).getTime() : 0;
+      const sinceLast = Date.now() - lastRotMs;
+      if (lastRotMs && sinceLast < FILE_ROTATION_MIN_INTERVAL) {
+        const remaining = Math.ceil((FILE_ROTATION_MIN_INTERVAL - sinceLast) / 1000);
+        log(`[anti-thrash] utilization-rotation cap: skipping "${rl.reason}" (last rotation ${Math.floor(sinceLast / 1000)}s ago, ${remaining}s until cap clears)`);
+        return { should: false };
+      }
+    }
+    return { should: true, reason: `Rate limited: ${rl.reason}` };
+  }
 
   // 2. Auth error signal (401) from PostToolUseFailure hook
   try {
@@ -343,24 +567,51 @@ async function shouldRotate(config, state) {
       log('[active-refresh] Active token expiring — attempting in-place refresh');
       const refreshed = await refreshSingleToken(account);
       if (refreshed) {
-        // Also update the active credential store so running sessions pick it up on next /login
+        // Also update the active keychain so running sessions pick it up on next /login
+        // Merge mcpOAuth from the current active keychain before overwriting — vault
+        // tokens have mcpOAuth:{} stripped by design; without this merge the active
+        // keychain loses all MCP OAuth tokens (giga, Amplitude, higgsfield) on every
+        // in-place refresh, forcing CC to re-auth them on the next session launch.
         try {
           const freshToken = readStoredToken(account);
           if (freshToken) {
             const svc = 'Claude Code-credentials';
+            let tokenToWrite = freshToken;
+            try {
+              // Use readActiveKeychainToken() — already platform-aware (macOS
+              // security(1) on darwin, file vault on Linux). Avoids require()
+              // which is not available in ESM modules.
+              const currentRaw = readActiveKeychainToken();
+              if (currentRaw) {
+                const currentParsed = JSON.parse(currentRaw);
+                const freshParsed = JSON.parse(freshToken);
+                if (currentParsed.mcpOAuth) {
+                  freshParsed.mcpOAuth = { ...freshParsed.mcpOAuth, ...currentParsed.mcpOAuth };
+                }
+                tokenToWrite = JSON.stringify(freshParsed);
+              }
+            } catch (_mergeErr) { /* merge failed — fall through to raw write */ }
+            // Write via platform-aware path: Linux credentials file or macOS keychain.
             if (IS_LINUX) {
-              _vault.writeEntry(svc, freshToken);
+              // On Linux the active token lives in LINUX_CRED_PATH as a flat
+              // JSON object. Merge the updated token into it preserving any
+              // other fields (mcpOAuth, etc.) already present in the file.
+              try {
+                let existing = {};
+                try { existing = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8')); } catch {}
+                const merged = { ...existing, ...JSON.parse(tokenToWrite) };
+                writeFileSync(LINUX_CRED_PATH, JSON.stringify(merged, null, 2), { mode: 0o600 });
+              } catch (_writeErr) { /* non-fatal — best-effort */ }
             } else {
-              execFileSync(
-                'security',
-                ['add-generic-password', '-U', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-w', freshToken],
-                { timeout: 5000 },
-              );
+              // macOS: use spawnSync (no shell, no injection) instead of execSync.
+              spawnSync('security', ['add-generic-password', '-U', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-w', tokenToWrite], {
+                timeout: 5000,
+              });
             }
-            log('[active-refresh] Active credentials updated — sessions will auto-recover');
+            log('[active-refresh] Active keychain updated with mcpOAuth preserved — sessions will auto-recover');
           }
         } catch (err) {
-          log(`[active-refresh] Credential update failed: ${err.message?.substring(0, 60)}`);
+          log(`[active-refresh] Keychain update failed: ${err.message?.substring(0, 60)}`);
         }
         return { should: false }; // Refreshed in-place, no rotation needed
       }
@@ -374,14 +625,16 @@ async function shouldRotate(config, state) {
 
 // ── Execute rotation ──────────────────────────────────────────────────────────
 
-// Fetch live 5h/7d utilization for one account (no cache). Returns
-// {pct5h, pct7d} or null on failure. Cheap — single GET, 4s timeout.
+// Fetch live 5h/7d utilization for one account. Returns:
+//   { ok: true, pct5h, pct7d, reset5h, reset7d } | { ok: false, rateLimited?: true }
+// reset* fields are epoch seconds for the window reset; null when the API
+// omits resets_at (e.g. fresh windows below reporting threshold).
 async function queryLiveUtilization(account) {
   try {
     const tokenJson = readStoredToken(account);
-    if (!tokenJson) return null;
+    if (!tokenJson) return { ok: false };
     const accessToken = JSON.parse(tokenJson)?.claudeAiOauth?.accessToken;
-    if (!accessToken) return null;
+    if (!accessToken) return { ok: false };
     const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
       method: 'GET',
       headers: {
@@ -390,22 +643,33 @@ async function queryLiveUtilization(account) {
       },
       signal: AbortSignal.timeout(4000),
     });
-    if (!res.ok) return null;
+    if (res.status === 429) return { ok: false, rateLimited: true };
+    if (!res.ok) return { ok: false };
     const data = await res.json();
+    // resets_at comes back as ISO 8601 string — convert to epoch seconds so
+    // it matches state.accounts[].lastUtilization.reset format (numeric)
+    // used by accountCooldownStatus and findValidRotationTarget.
+    const toEpoch = (v) => {
+      if (v == null) return null;
+      if (typeof v === 'number') return v;
+      const parsed = Date.parse(v);
+      return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
+    };
     return {
-      pct5h: data?.five_hour?.utilization || 0,
-      pct7d: data?.seven_day?.utilization || 0,
+      ok: true,
+      pct5h: data?.five_hour?.utilization ?? 0,
+      pct7d: data?.seven_day?.utilization ?? 0,
+      reset5h: toEpoch(data?.five_hour?.resets_at),
+      reset7d: toEpoch(data?.seven_day?.resets_at),
     };
   } catch {
-    return null;
+    return { ok: false };
   }
 }
 
 async function findValidRotationTarget(config, state) {
   const now = Date.now();
   const activeKey = state.activeAccount;
-  const SAFE_UTIL_5H_PCT = 70; // 5h window is what we rotate around — strict
-  const SAFE_UTIL_7D_PCT = 95; // 7d resets weekly — only hard-skip if truly capped
 
   // Build candidate list: all accounts except the active one AND disabled ones.
   const candidates = config.accounts.filter((a) => accountKey(a) !== activeKey && a.disabled !== true);
@@ -452,14 +716,17 @@ async function findValidRotationTarget(config, state) {
     // Live util check — never rotate to a high-utilization account.
     // The cached snapshot may be stale (e.g. lic had pct:0 but live was 100%).
     const live = await queryLiveUtilization(account);
-    if (live) {
-      const max = Math.max(live.pct5h, live.pct7d);
-      const tooHot5h = live.pct5h >= SAFE_UTIL_5H_PCT;
-      const tooHot7d = live.pct7d >= SAFE_UTIL_7D_PCT;
+    if (live?.rateLimited) {
+      log(`[pre-rotate] ${key}: usage API 429 — skipping this candidate this pass`);
+    }
+    if (isLiveUtilOk(live)) {
+      const max = liveUtilMax(live);
+      const tooHot5h = live.pct5h >= DAEMON_SAFE_5H_PCT;
+      const tooHot7d = live.pct7d >= DAEMON_SAFE_7D_PCT;
       if (tooHot5h || tooHot7d) {
         const reason = tooHot5h
-          ? `5h ${live.pct5h.toFixed(0)}% >= ${SAFE_UTIL_5H_PCT}%`
-          : `7d ${live.pct7d.toFixed(0)}% >= ${SAFE_UTIL_7D_PCT}%`;
+          ? `5h ${live.pct5h.toFixed(0)}% >= ${DAEMON_SAFE_5H_PCT}%`
+          : `7d ${live.pct7d.toFixed(0)}% >= ${DAEMON_SAFE_7D_PCT}%`;
         log(
           `[pre-rotate] ${key}: live util 5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}% — skipping (${reason})`,
         );
@@ -475,13 +742,157 @@ async function findValidRotationTarget(config, state) {
       }
       log(`[pre-rotate] ${key}: live util 5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}% — OK`);
     } else {
-      log(`[pre-rotate] ${key}: live util query failed — accepting anyway`);
+      // Live query failed (Anthropic 429 or network). DO NOT accept blindly —
+      // that's how we picked an exhausted account and bricked Sam's session.
+      // Fall back to cached util; refuse if cached is unknown OR >=90%.
+      const cached = state.accounts?.[key]?.lastUtilization;
+      const cachedPct = cached?.pct;
+      const cachedAge = cached?.ts ? (now - cached.ts) / 60_000 : Infinity;
+      if (cachedPct == null) {
+        log(`[pre-rotate] ${key}: live query FAILED + no cache — REFUSING`);
+        continue;
+      }
+      if (cachedPct >= 90) {
+        log(
+          `[pre-rotate] ${key}: live query FAILED + cached ${cachedPct.toFixed(0)}% (${cachedAge.toFixed(0)}min old) — REFUSING`,
+        );
+        continue;
+      }
+      if (cachedAge > 30) {
+        log(
+          `[pre-rotate] ${key}: live query FAILED + cache stale (${cachedAge.toFixed(0)}min) — REFUSING (safety)`,
+        );
+        continue;
+      }
+      log(
+        `[pre-rotate] ${key}: live query failed but cached ${cachedPct.toFixed(0)}% (${cachedAge.toFixed(0)}min old) — accepting`,
+      );
     }
 
     return account;
   }
 
+  // SECOND PASS: strict bar (70%/95%) excluded everyone. Try a relaxed bar
+  // (94%/94%) so we still rotate to "warm but not exhausted" rather than
+  // stalling. Only Bedrock fallback when even the relaxed bar fails.
+  log('[pre-rotate] strict-bar pass empty — trying relaxed (sub-95%) bar');
+  for (const account of candidates) {
+    const key = accountKey(account);
+    const tokenJson = readStoredToken(account);
+    if (!tokenJson) continue;
+    const live = await queryLiveUtilization(account);
+    if (!isLiveUtilOk(live)) continue;
+    const max = liveUtilMax(live);
+    if (max < DAEMON_RELAXED_BAR) {
+      log(`[pre-rotate-relaxed] ${key}: 5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}% — accepting`);
+      return account;
+    }
+  }
   return null; // No valid candidate found
+}
+
+// Exhaustion check across ALL non-active, non-disabled accounts.
+// Two acceptance modes:
+//   1. LIVE-confirmed: every candidate live-queried >= 95% (preferred).
+//   2. CACHED-evidence: when API is throttling us (live fails) BUT every
+//      candidate has fresh (<15min) cached util >= 95% AND a recent rate-limit
+//      signal exists, we accept cached evidence — refusing to fall back when
+//      Anthropic API is dead would just leave Sam stuck.
+async function allCandidatesExhausted(config, state) {
+  const EXHAUSTED_THRESHOLD = 95;
+  const now = Date.now();
+  const activeKey = state.activeAccount;
+  const candidates = config.accounts.filter((a) => accountKey(a) !== activeKey && a.disabled !== true);
+  if (candidates.length === 0) return false;
+
+  let liveOk = true;
+  let allLiveExhausted = true;
+  for (const a of candidates) {
+    const live = await queryLiveUtilization(a);
+    if (!isLiveUtilOk(live)) {
+      liveOk = false;
+      break;
+    }
+    if (Math.max(live.pct5h, live.pct7d) < EXHAUSTED_THRESHOLD) {
+      allLiveExhausted = false;
+      break;
+    }
+  }
+  if (liveOk && allLiveExhausted) return true;
+
+  // CACHED fallback: only when we have recent rate-limit evidence
+  let recentRateLimit = false;
+  try {
+    if (existsSync(RATE_LIMITS_FILE)) {
+      const rl = JSON.parse(readFileSync(RATE_LIMITS_FILE, 'utf8'));
+      const age = now - new Date(rl.timestamp || rl.ts || 0).getTime();
+      if (age < 5 * 60_000) recentRateLimit = true;
+    }
+  } catch {}
+  if (!recentRateLimit) return false;
+
+  // All cached >=95% AND fresh? Then we're truly stuck.
+  for (const a of candidates) {
+    const cached = state.accounts?.[accountKey(a)]?.lastUtilization;
+    if (!cached?.pct || !cached?.ts) return false;
+    if (now - cached.ts > 15 * 60_000) return false;
+    if (cached.pct < EXHAUSTED_THRESHOLD) return false;
+  }
+  log('[allCandidatesExhausted] cached-evidence path: live unreachable but cached + rate-limit signal confirm exhaustion');
+  return true;
+}
+
+// Activate Bedrock fallback from inside daemon. Probes AWS reachability,
+// writes the sentinel + sends a desktop notification. Returns true on success.
+function activateBedrockFallbackFromDaemon(reason) {
+  // disabled 2026-05-08 — Max plan handles this, see audit ($600-1.2k/mo bleed via Bedrock)
+  // Set CLAUDE_DISABLE_BEDROCK_FALLBACK=0 in launchd plist to re-enable.
+  if (process.env.CLAUDE_DISABLE_BEDROCK_FALLBACK !== '0') {
+    log(`[bedrock-fallback] BLOCKED by CLAUDE_DISABLE_BEDROCK_FALLBACK (reason was: ${reason})`);
+    notify('Bedrock Fallback BLOCKED', 'Kill-switch active — Max-only mode. Wait for reset window or rotate manually.');
+    return false;
+  }
+  const region = process.env.AWS_BEDROCK_REGION || 'us-east-1';
+  try {
+    execFileSync('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
+      stdio: 'pipe',
+      timeout: 5000,
+    });
+    execFileSync('aws', ['bedrock', 'list-inference-profiles', '--region', region, '--max-results', '1'], {
+      stdio: 'pipe',
+      timeout: 6000,
+    });
+  } catch (e) {
+    log(`[bedrock-fallback] AWS unreachable: ${(e.message || '').slice(0, 80)}`);
+    notify('Bedrock Fallback FAILED', 'aws sts/bedrock unreachable — manual intervention needed');
+    return false;
+  }
+  try {
+    const sentinel = join(process.env.HOME || '', '.claude', '.bedrock-fallback.json');
+    const payload = {
+      activated_at: new Date().toISOString(),
+      reason,
+      region,
+      available: true,
+      activated_by: 'daemon',
+    };
+    writeFileSync(sentinel, JSON.stringify(payload, null, 2));
+    try {
+      persistBedrockClaudeSettings(region);
+      log(`[bedrock-fallback] settings.json → Bedrock env (${region})`);
+    } catch (e) {
+      log(`[bedrock-fallback] settings persist failed: ${e.message?.slice(0, 80)}`);
+    }
+    log(`[bedrock-fallback] ACTIVATED region=${region} reason=${reason}`);
+    notify(
+      'Bedrock Fallback Active',
+      `Max rotation stuck — settings.json → Bedrock (${region}). New shells pick it up; optional: source use-bedrock.sh`,
+    );
+    return true;
+  } catch (e) {
+    log(`[bedrock-fallback] write error: ${e.message?.slice(0, 80)}`);
+    return false;
+  }
 }
 
 async function doRotation(reason) {
@@ -522,8 +933,40 @@ async function doRotation(reason) {
   const target = await findValidRotationTarget(config, state);
 
   if (!target) {
-    log('ROTATION ABORTED: no candidate has a valid or refreshable token');
-    notify('Account Rotation', 'ABORTED — all candidate tokens expired/invalid');
+    log('ROTATION ABORTED: no viable Max target after pre-rotate (util bars, tokens, or live query refusals)');
+    // Live-confirm exhaustion before flipping to Bedrock — Sam's rule.
+    const exhausted = await allCandidatesExhausted(config, state);
+    if (exhausted) {
+      log('All candidates LIVE-CONFIRMED exhausted (>=95%) — engaging Bedrock fallback');
+      activateBedrockFallbackFromDaemon(`auto_rotation: ${reason}`);
+      return;
+    }
+    // Same as rotate.mjs --force: destination cap stuck (e.g. every non-active >=90%)
+    // leaves OAuth tokens valid but no swap target — daemon must flip Bedrock without manual rotate-magic.
+    let rec = null;
+    try {
+      const r = spawnSync(process.execPath, [ROTATE_SCRIPT, '--recommend', '--json'], {
+        cwd: __dirname,
+        encoding: 'utf8',
+        maxBuffer: 2_000_000,
+        env: { ...process.env, NODE_NO_WARNINGS: '1' },
+        timeout: 90_000,
+      });
+      if (r.stdout?.trim()) {
+        rec = JSON.parse(r.stdout.trim());
+      }
+    } catch (e) {
+      log(`[bedrock-eval] --recommend --json parse/exec failed: ${(e.message || '').slice(0, 100)}`);
+    }
+    if (rec && (rec.destinationCapStuck === true || rec.allExhausted === true)) {
+      const label = rec.allExhausted ? 'allExhausted' : 'destinationCapStuck';
+      log(
+        `[bedrock-eval] recommend JSON confirms ${label} (destCap=${rec.destinationMaxUtilPercent ?? '?'}) — engaging Bedrock fallback`,
+      );
+      activateBedrockFallbackFromDaemon(`auto_rotation_${label}: ${reason}`);
+      return;
+    }
+    notify('Account Rotation', 'ABORTED — no Max headroom; Bedrock not confirmed (check tokens / live util queries)');
     return;
   }
 
@@ -534,26 +977,16 @@ async function doRotation(reason) {
   try {
     // --no-browser: no Chrome, no API calls (works when rate limited)
     // --to: daemon controls which account to rotate to (pre-validated token)
-    // Two re-auth strategies, targeting DISJOINT session classes (best practice:
-    // detached headless sessions cannot be steered via `--resume --print`, so they
-    // must be respawned; live TTY sessions can take a direct /login injection):
-    //   --reload-agents → sequentially respawn running *detached* bg agents (no TTY,
-    //     no human mid-keystroke) onto the fresh token. Sequential + 15s stagger;
-    //     max 4/invocation (anti-stampede).
-    //   --session → inject /login into live TTY-reachable sessions (tmux panes +
-    //     iTerm2) plus a best-effort resume-path for non-tmux interactive sessions,
-    //     so they re-auth immediately instead of failing at the auth wall.
-    // refreshRunningSession explicitly skips bg sessions (they auto-reauth via the
-    // 30s keychain poll), so the two flags never double-act on the same session.
-    const result = execFileSync(
-      process.execPath,
-      [ROTATE_SCRIPT, '--no-browser', '--to', targetKey, '--reload-agents', '--session'],
-      {
-        cwd: __dirname,
-        timeout: 240_000, // 120s swap + up to 4×15s reload stagger + session inject; headroom
-        env: { ...process.env, NODE_NO_WARNINGS: '1' },
-      },
-    ).toString();
+    // NO --session: keychain swap only. Background rotation must NEVER inject /login
+    // into running sessions — that interrupts active work. Sessions pick up the new
+    // token on next 401 (auto-retry) or when the user voluntarily runs /login.
+    // execFileSync (not execSync) — no shell, no injection risk on targetKey.
+    const result = execFileSync('node', [ROTATE_SCRIPT, '--no-browser', '--to', targetKey], {
+      cwd: __dirname,
+      timeout: 120_000, // 2min — keychain swap is fast; no per-session injection
+      env: { ...process.env, NODE_NO_WARNINGS: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).toString();
     log(`Rotation result: ${result.substring(0, 200)}`);
   } catch (err) {
     log(`Rotation failed: ${err.message}`);
@@ -561,11 +994,50 @@ async function doRotation(reason) {
   }
 }
 
-// ── Token refresh (vault entries) ───────────────────────────────────────────
-// In-place refresh via OAuth; invoked from shouldRotate / findValidRotationTarget.
+// ── Auto-sync: detect if live auth drifted from state ────────────────────────
+
+function syncDriftedState(state, config, lastRotatedAt = 0) {
+  // After a rotation, `claude auth status` still returns the OLD session's email
+  // until the user restarts Claude Code. Don't undo the rotation by "correcting"
+  // state back to the stale live email — wait for the blackout to pass.
+  // Use the shared state.lastRotation (written by rotate.mjs) so duplicate daemon
+  // instances both respect the blackout, even if one of them didn't do the rotation.
+  const stateLastRotation = state.lastRotation ? new Date(state.lastRotation).getTime() : 0;
+  const effectiveLastRotation = Math.max(lastRotatedAt, stateLastRotation);
+  if (effectiveLastRotation && Date.now() - effectiveLastRotation < POST_ROTATION_BLACKOUT) return false;
+
+  try {
+    const liveAuth = execSync('claude auth status 2>&1', {
+      timeout: 5_000,
+    }).toString();
+    const liveEmail = JSON.parse(liveAuth)?.email;
+    if (!liveEmail) return false;
+
+    const liveKey = config.accounts.find((a) => a.email === liveEmail);
+    if (!liveKey) return false;
+
+    const liveAccountKey = accountKey(liveKey);
+    if (state.activeAccount !== liveAccountKey) {
+      log(
+        `⚠️ DRIFT DETECTED: state says ${state.activeAccount || 'none'}, live auth is ${liveAccountKey} — syncing state`,
+      );
+      state.activeAccount = liveAccountKey;
+      writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+      return true; // Drift was corrected
+    }
+  } catch {}
+  return false;
+}
+
+// ── Dynamic token refresh ────────────────────────────────────────────────────
+// Instead of a fixed hourly launchd job refreshing all accounts, refresh
+// on-demand: when utilization is climbing (50%+), pre-refresh candidate
+// accounts so they're ready for rotation. Also refresh any token within
+// 1h of expiry regardless of utilization.
 
 const TOKEN_ENDPOINT = 'https://platform.claude.com/v1/oauth/token';
-const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'; // gitleaks:allow — public OAuth client ID, not a secret
+const REFRESH_URGENCY_MS = 1 * 3_600_000; // Refresh if <1h remaining
 
 function parseTokenExpiry(tokenJson) {
   try {
@@ -600,7 +1072,6 @@ async function refreshSingleToken(account) {
         refresh_token: refreshToken,
         client_id: OAUTH_CLIENT_ID,
       }),
-      signal: AbortSignal.timeout(5000),
     });
     const body = await res.json();
     if (!res.ok || !body.access_token) return false;
@@ -610,14 +1081,24 @@ async function refreshSingleToken(account) {
     if (body.refresh_token) parsed.claudeAiOauth.refreshToken = body.refresh_token;
     parsed.claudeAiOauth.expiresAt = body.expires_in ? Date.now() + body.expires_in * 1000 : Date.now() + 8 * 3_600_000;
 
-    // Save back to vault
+    // Save back to vault — platform-aware (Linux: credentials file; macOS: Keychain)
     const svc = `Claude-Rotation-${key}`;
-    // Use execFileSync to avoid shell-escaping issues with JSON tokens
-    execFileSync(
-      'security',
-      ['add-generic-password', '-U', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-w', JSON.stringify(parsed)],
-      { timeout: 5000 },
-    );
+    const tokenStr = JSON.stringify(parsed);
+    if (IS_LINUX) {
+      try {
+        let store = {};
+        try { store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8')); } catch {}
+        store[svc] = tokenStr;
+        writeFileSync(LINUX_CRED_PATH, JSON.stringify(store, null, 2), { mode: 0o600 });
+      } catch (writeErr) {
+        throw new Error(`Linux vault write failed: ${writeErr.message}`);
+      }
+    } else {
+      // Use spawnSync (no shell) to avoid injection risk on tokenStr.
+      spawnSync('security', ['add-generic-password', '-U', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-w', tokenStr], {
+        timeout: 5000,
+      });
+    }
     log(
       `[refresh] ${key}: refreshed (${((parsed.claudeAiOauth.expiresAt - Date.now()) / 3_600_000).toFixed(1)}h remaining)`,
     );
@@ -628,15 +1109,262 @@ async function refreshSingleToken(account) {
   }
 }
 
+async function dynamicRefresh(config, state) {
+  const now = Date.now();
+  const real = readRealUtilization();
+  const pct5h = real?.five_hour?.pct || 0;
+
+  for (const account of config.accounts) {
+    const key = accountKey(account);
+    if (key === state.activeAccount) continue; // Don't refresh active account mid-session
+
+    const tokenJson = readStoredToken(account);
+    if (!tokenJson) continue;
+    const expiry = parseTokenExpiry(tokenJson);
+    const remaining = expiry - now;
+
+    // Refresh if: token expiring within 1h, OR utilization >50% and token <3h
+    const urgent = remaining > 0 && remaining < REFRESH_URGENCY_MS;
+    const preemptive = pct5h >= 50 && remaining > 0 && remaining < 3 * 3_600_000;
+
+    if (urgent || preemptive) {
+      await refreshSingleToken(account);
+      await sleep(2000); // Don't hammer the token endpoint
+    }
+  }
+}
+
+/** Lowest cached util + reset-window first — fastest path to a cooled account. */
+function prioritizeAccountsForRecovery(state, accounts) {
+  const now = Date.now();
+  return [...accounts].sort((a, b) => {
+    const ua = state.accounts?.[accountKey(a)]?.lastUtilization;
+    const ub = state.accounts?.[accountKey(b)]?.lastUtilization;
+    const ra = ua?.pct == null ? 999 : ua.pct;
+    const rb = ub?.pct == null ? 999 : ub.pct;
+    if (ra !== rb) return ra - rb;
+    const wA = ua?.reset && ua.reset * 1000 < now ? 0 : 1;
+    const wB = ub?.reset && ub.reset * 1000 < now ? 0 : 1;
+    if (wA !== wB) return wA - wB;
+    return (ua?.ts ?? 0) - (ub?.ts ?? 0);
+  });
+}
+
+/**
+ * When Bedrock sentinel exists: probe prioritized accounts (parallel batches),
+ * same viability bars as pre-rotate. Adaptive interval + 429 backoff.
+ */
+async function maybeRecoverOAuthFromBedrock(config, state, sentinelPath, ctx) {
+  const now = Date.now();
+  if (now < ctx.backoffUntil) {
+    writeRecoveryStatus({ phase: 'backoff', until: ctx.backoffUntil });
+    return { didRecover: false };
+  }
+  if (now - ctx.lastCheck < ctx.intervalMs) return { didRecover: false };
+  ctx.lastCheck = now;
+
+  const withTokens = config.accounts
+    .filter((a) => a.disabled !== true)
+    .filter((a) => {
+      const t = readStoredToken(a);
+      return t && !tokenExpired(t);
+    });
+  if (withTokens.length === 0) {
+    log('[bedrock-recovery] no non-expired vault tokens — skip probe batch');
+    writeRecoveryStatus({ phase: 'no_tokens', probed: [] });
+    ctx.intervalMs = Math.min(BEDROCK_RECOVERY_MAX_INTERVAL_MS, Math.floor((ctx.intervalMs || 60_000) * 1.12));
+    return { didRecover: false };
+  }
+
+  const ordered = prioritizeAccountsForRecovery(state, withTokens);
+  const maxAccounts = Math.min(ordered.length, 8);
+  const cap = Math.max(1, Math.min(ctx.concurrency || USAGE_PROBE_CONCURRENCY, USAGE_PROBE_CONCURRENCY));
+  let saw429 = false;
+  /** @type {{ key: string, ok?: boolean, rateLimited?: boolean }[]} */
+  const rows = [];
+  let maxLiveUtil = 0;
+
+  for (let i = 0; i < maxAccounts; i += cap) {
+    const slice = ordered.slice(i, i + cap);
+    const results = await Promise.all(
+      slice.map(async (acct) => {
+        const live = await queryLiveUtilization(acct);
+        return { acct, live };
+      }),
+    );
+    for (const { acct, live } of results) {
+      const probeKey = accountKey(acct);
+      if (live?.rateLimited) saw429 = true;
+      rows.push({ key: probeKey, ok: isLiveUtilOk(live), rateLimited: live?.rateLimited === true });
+      if (isLiveUtilOk(live)) {
+        const max = liveUtilMax(live);
+        maxLiveUtil = Math.max(maxLiveUtil, max);
+        state.accounts = state.accounts || {};
+        state.accounts[probeKey] = state.accounts[probeKey] || {};
+        state.accounts[probeKey].lastUtilization = { pct: max, reset: null, ts: Date.now() };
+        log(`[bedrock-recovery] probe ${probeKey}: 5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}%`);
+        if (isDaemonRotationViable(live)) {
+          const tokenJson = readStoredToken(acct);
+          if (tokenJson && !tokenExpired(tokenJson)) {
+            log(
+              `[bedrock-recovery] ${probeKey} viable (daemon 5h<${DAEMON_SAFE_5H_PCT}% & 7d<${DAEMON_SAFE_7D_PCT}%) — exiting Bedrock fallback`,
+            );
+            try {
+              unlinkSync(sentinelPath);
+            } catch {}
+            try {
+              clearHardcodedModelsForOAuthClaudeSettings();
+              log('[bedrock-recovery] settings.json → OAuth (hardcoded models cleared)');
+            } catch (e) {
+              log(`[bedrock-recovery] settings clear failed: ${e.message?.slice(0, 80)}`);
+            }
+            notify(
+              'OAuth Restored',
+              `${probeKey} has Max headroom — settings.json OAuth; Bedrock shells: source use-oauth.sh`,
+            );
+            try {
+              writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+            } catch {}
+            if (state.activeAccount !== probeKey) {
+              await doRotation(`bedrock-recovery: ${probeKey} viable Max headroom`);
+            }
+            ctx.intervalMs = BEDROCK_RECOVERY_DEFAULT_INTERVAL_MS;
+            ctx.concurrency = USAGE_PROBE_CONCURRENCY;
+            ctx.backoffUntil = 0;
+            writeRecoveryStatus({ phase: 'recovered', account: probeKey, probed: rows });
+            return { didRecover: true };
+          }
+          log(`[bedrock-recovery] ${probeKey} util OK but token missing/expired — staying on Bedrock`);
+        }
+      }
+    }
+    if (i + cap < maxAccounts) await sleep(90 + Math.floor(Math.random() * 110));
+  }
+
+  try {
+    writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+  } catch {}
+
+  if (saw429) {
+    ctx.backoffUntil = Date.now() + 50_000;
+    ctx.concurrency = 1;
+    log('[bedrock-recovery] usage API 429 — backoff 50s, concurrency=1 next cycle');
+  } else {
+    ctx.concurrency = USAGE_PROBE_CONCURRENCY;
+    ctx.backoffUntil = 0;
+  }
+
+  let nextMs = BEDROCK_RECOVERY_DEFAULT_INTERVAL_MS;
+  if (maxLiveUtil >= 95) nextMs = 140_000;
+  else if (maxLiveUtil >= 85) nextMs = 72_000;
+  else if (maxLiveUtil > 0 && maxLiveUtil < 72) nextMs = 38_000;
+
+  try {
+    const st = statSync(sentinelPath);
+    if (now - st.mtimeMs < 3 * 60_000) nextMs = Math.min(nextMs, 42_000);
+  } catch {}
+
+  ctx.intervalMs = Math.max(BEDROCK_RECOVERY_MIN_INTERVAL_MS, Math.min(BEDROCK_RECOVERY_MAX_INTERVAL_MS, nextMs));
+
+  writeRecoveryStatus({
+    phase: 'watching',
+    next_interval_ms: ctx.intervalMs,
+    max_live_util_batch: maxLiveUtil,
+    dest_cap: destinationUtilHardBlock(config),
+    probed: rows,
+  });
+  return { didRecover: false };
+}
+
+// ── Periodic fleet-wide live-util probe ──────────────────────────────────────
+// Keeps state.accounts[*].lastUtilization fresh for ALL accounts so the
+// cooldown status report and findValidRotationTarget candidate sort have
+// recent data. Sequential to avoid parallel keychain + API hits.
+async function runFullProbe(config, state) {
+  const start = Date.now();
+  let probed = 0;
+  let updated = 0;
+  let skippedExpired = 0;
+  try {
+    for (const a of config.accounts) {
+      const key = accountKey(a);
+      if (key === state.activeAccount) continue; // active already covered by shouldRotate path
+      probed += 1;
+      const tokenJson = readStoredToken(a);
+      if (!tokenJson || tokenExpired(tokenJson)) {
+        skippedExpired += 1;
+        continue;
+      }
+      const live = await queryLiveUtilization(a);
+      if (!live?.ok) continue;
+      // Pick the higher-util window's reset epoch — that's the one that
+      // gates next-rotate eligibility. Falls back to whichever has a reset.
+      const pct5h = live.pct5h || 0;
+      const pct7d = live.pct7d || 0;
+      const pct = Math.max(pct5h, pct7d);
+      const reset = pct5h >= pct7d ? (live.reset5h ?? live.reset7d ?? null) : (live.reset7d ?? live.reset5h ?? null);
+      state.accounts = state.accounts || {};
+      state.accounts[key] = state.accounts[key] || {};
+      state.accounts[key].lastUtilization = { pct, reset, ts: Date.now() };
+      updated += 1;
+    }
+    // Compute and persist the next-rotation candidate for statusline display.
+    // Pick the lowest-util non-active account with a non-expired vault token.
+    try {
+      let bestKey = null;
+      let bestEmail = null;
+      let bestPct = Infinity;
+      for (const a of config.accounts) {
+        const k = accountKey(a);
+        if (k === state.activeAccount) continue;
+        if (a.disabled === true) continue;
+        const tok = readStoredToken(a);
+        if (!tok || tokenExpired(tok)) continue;
+        const u = state.accounts?.[k]?.lastUtilization;
+        const p = u?.pct ?? 0;
+        if (p < bestPct) {
+          bestPct = p;
+          bestKey = k;
+          bestEmail = a.email;
+        }
+      }
+      if (bestKey) {
+        writeFileSync(
+          join(__dirname, '.next-rotation-target.json'),
+          JSON.stringify({ key: bestKey, email: bestEmail, pct: bestPct, ts: Date.now() }),
+        );
+      }
+    } catch {}
+    try {
+      writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+    } catch {}
+    log(
+      `[periodic-probe] probed ${probed} accounts in ${Date.now() - start}ms (updated ${updated} snapshots, skipped ${skippedExpired} expired-token)`,
+    );
+  } catch (err) {
+    log(`[periodic-probe] error: ${err.message?.substring(0, 120)}`);
+  }
+}
+
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 async function mainLoop() {
-  log('Daemon started (v3 — on-demand token refresh)');
-  notify('Claude Rotation Daemon', 'Monitoring usage — on-demand refresh');
+  log('Daemon started (v4 — recovery: prioritized usage probes, adaptive interval, 429 backoff)');
+  notify('Claude Rotation Daemon', 'Monitoring usage — dynamic refresh');
 
   let lastRotatedAt = 0; // track when we last rotated
   let lastStatusLog = 0; // periodic status logging
+  let lastLeaseBeat = 0; // cross-machine lease heartbeat (S3)
+  let lastRefreshCheck = 0; // dynamic refresh check
   let lastDriftCheck = 0; // cheap vault-based drift detection
+  let lastFullProbe = 0; // periodic fleet-wide live-util snapshot refresh
+  const FULL_PROBE_INTERVAL = 5 * 60_000;
+  const bedrockRecCtx = {
+    lastCheck: 0,
+    intervalMs: BEDROCK_RECOVERY_DEFAULT_INTERVAL_MS,
+    backoffUntil: 0,
+    concurrency: USAGE_PROBE_CONCURRENCY,
+  };
 
   while (true) {
     try {
@@ -652,6 +1380,14 @@ async function mainLoop() {
       if (Date.now() - lastStatusLog > 300_000) {
         log(`Account cooldown status:\n${accountCooldownStatus(state)}`);
         lastStatusLog = Date.now();
+      }
+
+      // Cross-machine lease heartbeat (every 3 min, << 2h TTL): refresh THIS
+      // machine's claim on its active account so the other machine keeps
+      // excluding it. Best-effort / fail-open (S3 down => no-op). (Sam 2026-06-06)
+      if (state.activeAccount && Date.now() - lastLeaseBeat > 180_000) {
+        lastLeaseBeat = Date.now();
+        try { writeLease(state.activeAccount, (m) => log(m)); } catch {}
       }
 
       // Drift detection — every 2 min, find the actual live account.
@@ -679,12 +1415,30 @@ async function mainLoop() {
       // findValidRotationTarget refreshes candidates lazily). Avoids keychain
       // churn that was disconnecting HTTP MCP sessions every 5 min.
 
+      // Periodic fleet-wide live-util probe (every 5 min). Side-channel
+      // snapshot refresh only — does NOT trigger rotation. Keeps the cooldown
+      // status report accurate and feeds findValidRotationTarget's pre-sort.
+      if (Date.now() - lastFullProbe >= FULL_PROBE_INTERVAL) {
+        await runFullProbe(config, state);
+        lastFullProbe = Date.now();
+      }
+
+      const sentinelPath = join(process.env.HOME || '', '.claude', '.bedrock-fallback.json');
+      if (existsSync(sentinelPath)) {
+        const { didRecover } = await maybeRecoverOAuthFromBedrock(config, state, sentinelPath, bedrockRecCtx);
+        if (didRecover) lastRotatedAt = Date.now();
+      } else {
+        bedrockRecCtx.intervalMs = BEDROCK_RECOVERY_DEFAULT_INTERVAL_MS;
+        bedrockRecCtx.backoffUntil = 0;
+        bedrockRecCtx.concurrency = USAGE_PROBE_CONCURRENCY;
+      }
+
       const { should, reason } = await shouldRotate(config, state);
 
       // Post-rotation blackout: ALL rotation triggers are suppressed for 90s
       // after any rotation. `claude auth status` returns stale data during this
       // window, which causes drift detection → re-rotation thrashing loops.
-      const stateLastRotation = state.lastRotation ? new Date(state.lastRotation).getTime() : 0;
+      const stateLastRotation = readState().lastRotation ? new Date(readState().lastRotation).getTime() : 0;
       const effectiveLastRotated = Math.max(lastRotatedAt, stateLastRotation);
       const inBlackout = effectiveLastRotated && Date.now() - effectiveLastRotated < POST_ROTATION_BLACKOUT;
 
