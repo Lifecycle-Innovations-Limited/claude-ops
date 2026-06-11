@@ -501,7 +501,25 @@ All channel credentials come from env vars or CLI auth — no hardcoded secrets.
 3. **`include_context: true` is the HARD DEFAULT on every `list_messages` read.** Never pass `false` — you must always see the surrounding thread to understand what a message is about before classifying or drafting.
 4. **Verify the bridge is FULLY up before trusting any classification** — run `wa-inbox-fresh.sh`, confirm the systemd unit is `active` and `:8080` LISTEN, and do a real read. A stale store mis-classifies last-sender.
 5. **Don't ask per-archive** once this rule is in play — the user wants efficiency. Archive the DONE set, then report the archived COUNT in one line and keep only the KEEP set visible.
-6. **WhatsApp archive heal:** the bridge `/api/archive` can **hang / 409 with `LTHash mismatch`** when app-state desyncs. The reliable heal is a **one-time phone archive-then-unarchive on any single chat** (re-authors `regular_low` app-state keys) — after that, batch-archive succeeds (verified). Surface that one-step ask to the user when archive blocks; don't abandon inbox-zero.
+6. **WhatsApp archive heal:** the bridge `/api/archive` can **hang / 409 with `LTHash mismatch`** when app-state desyncs. Escalation ladder (try each in order, stop when archive succeeds):
+
+   **Tier 1 — transient desync** (most common): run `mcp__whatsapp__resync_app_state {name:"regular_low", full_sync:true, skip_bad:true}`, wait ~5s, retry archive. `skip_bad:true` skips server-side patches that permanently fail LTHash verification; without it the loop re-fails on the same patch.
+
+   **Tier 2 — still failing after resync**: POST `/api/reconcile_archived` to rebuild `chats.archived` from the phone's authoritative state without re-pairing. Returns `{"archived_count":N,"non_archived_count":M}`. Then retry archives.
+
+   **Tier 3 — massively poisoned chain** (verified 2026-06-10, 31/31 batch archives at ≥2 s pacing):
+   - Stop bridge. In `store/whatsapp.db` run:
+     ```sql
+     DELETE FROM whatsmeow_app_state_sync_keys;
+     DELETE FROM whatsmeow_app_state_version;
+     DELETE FROM whatsmeow_app_state_mutation_macs;
+     ```
+   - Phone must be online. Start bridge — it requests fresh keys; phone reissues them (~114 observed).
+   - Ensure Fix T + Fix V patches applied + bridge **rebuilt** (`apply-patches.py --build`) + restarted (`--restart` or `systemctl --user restart whatsapp-bridge.service`). Without the rebuild the running binary lacks the skip loop.
+   - Expect one 429 rate-overlimit pause (~15–20 min) mid skip-loop; it resumes automatically. Success log: `"regular_low sync complete (skipped N bad patches)"` → `"archive mutations enabled"`.
+   - Upstream: tulir/whatsmeow#1171 (SkipBrokenAppStatePatches). When merged, Fix T + Fix V can be retired.
+
+   Surface the appropriate tier to the user when archive blocks; don't abandon inbox-zero.
 
 ## Core principle: FULL INBOX SCAN
 
