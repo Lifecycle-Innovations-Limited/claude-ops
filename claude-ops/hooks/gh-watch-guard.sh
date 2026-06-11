@@ -74,6 +74,12 @@ loop_is_rate_limit_only() {
     if echo "$CMD_ONELINE" | grep -qE 'gh[[:space:]]+(pr|run|issue|search)[[:space:]]|graphql|/(repos|commits|pulls|issues|actions|search)/|pullRequest|mergePullRequest'; then
         return 1
     fi
+    # `gh api` spends quota unless every invocation targets /rate_limit.
+    if echo "$CMD_ONELINE" | grep -qE 'gh[[:space:]]+api'; then
+        if echo "$CMD_ONELINE" | grep -oE 'gh[[:space:]]+api[^;|&)]+' | grep -qvE '(rate_limit|/rate_limit)'; then
+            return 1
+        fi
+    fi
     return 0
 }
 

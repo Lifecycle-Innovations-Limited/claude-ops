@@ -146,13 +146,20 @@ sweep() {
     # ── hard excludes ──
     cmd ~ /gh-orphan-killer|gh-watch-guard/        { next }   # the killer/guard itself
     cmd ~ /[ \/]awk |[ \/]grep |[ \/]ps / || cmd ~ /awk$|grep$|ps$/ { next }  # the pipeline
-    cmd ~ /rate_limit/                              { next }   # quota-exempt pollers
+    # rate_limit-only pollers are quota-exempt (mirrors gh-watch-guard); do not skip
+    # when the same cmdline also spends quota (graphql/gh api/etc).
+    cmd ~ /rate_limit/ \
+      && cmd !~ /api\.github\.com\/(graphql|repos|commits|pulls|issues|actions|search)/ \
+      && cmd !~ /pullRequest|mergePullRequest/ \
+      && cmd !~ /gh +(pr|run|issue|search)/ \
+      && (cmd !~ /gh +api/ || cmd ~ /gh +api[^;|&]*(rate_limit|\/rate_limit)/) \
+      { next }
     cmd ~ /do-release/                              { next }   # release waiters
     cmd ~ /(^|\/)(claude|node|python[0-9.]*|mcp)([ \/]|$)/ { next }  # not shells
     # only target real shells running the loop
     cmd !~ /(^|\/)(bash|sh|dash|zsh)([ \/]|$)/      { next }
     # ── github signal ──
-    github = (cmd ~ /api\.github\.com/) || (cmd ~ /(^|[^[:alnum:]_])gh([ ].*[ ](pr|run|api)[ ])/)
+    github = (cmd ~ /api\.github\.com/) || (cmd ~ /gh +(api|pr|run|issue|search)/)
     github != 1 { next }
     # ── loop + sleep signal ──
     hasloop  = (cmd ~ /(^|[^[:alnum:]_])(for|while|until|seq)([^[:alnum:]_]|$)/)
