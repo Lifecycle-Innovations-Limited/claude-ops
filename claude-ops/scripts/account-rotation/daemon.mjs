@@ -23,18 +23,8 @@
  *   node daemon.mjs --status  # Show daemon status
  */
 
-import {
-  readFileSync,
-  writeFileSync,
-  existsSync,
-  unlinkSync,
-  appendFileSync,
-  statSync,
-} from 'fs';
-import {
-  persistBedrockClaudeSettings,
-  clearHardcodedModelsForOAuthClaudeSettings,
-} from './claude-settings-mode.mjs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync, appendFileSync, statSync } from 'fs';
+import { persistBedrockClaudeSettings, clearHardcodedModelsForOAuthClaudeSettings } from './claude-settings-mode.mjs';
 import {
   destinationUtilHardBlock,
   DAEMON_SAFE_5H_PCT,
@@ -155,7 +145,14 @@ function readConfig() {
     const st = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
     keepKey = st.activeAccount || null;
   } catch {}
-  return applyAccountLeases(config, { keepKey, log: (m) => { try { log(m); } catch {} } });
+  return applyAccountLeases(config, {
+    keepKey,
+    log: (m) => {
+      try {
+        log(m);
+      } catch {}
+    },
+  });
 }
 // Legacy account-key renames: old label → new canonical key.
 // Applied once per readState() call to keep state.json consistent as labels evolve.
@@ -193,7 +190,9 @@ function readState() {
     }
   }
   if (migrated) {
-    try { writeFileSync(STATE_PATH, JSON.stringify(state, null, 2)); } catch {}
+    try {
+      writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+    } catch {}
   }
   return state;
 }
@@ -532,7 +531,9 @@ async function shouldRotate(config, state) {
             log(
               `[anti-thrash] file says ${rl.reason} but active ${state.activeAccount} live 5h=${live.pct5h}% 7d=${live.pct7d}% — skipping (stale .rate-limits.json)`,
             );
-            try { unlinkSync(RATE_LIMITS_FILE); } catch {}
+            try {
+              unlinkSync(RATE_LIMITS_FILE);
+            } catch {}
           }
           // Mismatched + not hot = just a low-util parallel session; silent skip.
           return { should: false };
@@ -545,8 +546,11 @@ async function shouldRotate(config, state) {
           if (liveMax >= PARK_THRESHOLD_PCT) {
             // Prefer the 5h reset (shorter) so the park clears as soon as possible.
             const resetEpoch = live.reset5h || live.reset7d || null;
-            parkAccount(probeKey, resetEpoch,
-              `live ${liveMax.toFixed(0)}% >= ${PARK_THRESHOLD_PCT}% exhausted (5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}%)`);
+            parkAccount(
+              probeKey,
+              resetEpoch,
+              `live ${liveMax.toFixed(0)}% >= ${PARK_THRESHOLD_PCT}% exhausted (5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}%)`,
+            );
             return { should: false };
           }
           log(
@@ -565,7 +569,9 @@ async function shouldRotate(config, state) {
       const sinceLast = Date.now() - lastRotMs;
       if (lastRotMs && sinceLast < FILE_ROTATION_MIN_INTERVAL) {
         const remaining = Math.ceil((FILE_ROTATION_MIN_INTERVAL - sinceLast) / 1000);
-        log(`[anti-thrash] utilization-rotation cap: skipping "${rl.reason}" (last rotation ${Math.floor(sinceLast / 1000)}s ago, ${remaining}s until cap clears)`);
+        log(
+          `[anti-thrash] utilization-rotation cap: skipping "${rl.reason}" (last rotation ${Math.floor(sinceLast / 1000)}s ago, ${remaining}s until cap clears)`,
+        );
         return { should: false };
       }
     }
@@ -621,7 +627,9 @@ async function shouldRotate(config, state) {
                 }
                 tokenToWrite = JSON.stringify(freshParsed);
               }
-            } catch (_mergeErr) { /* merge failed — fall through to raw write */ }
+            } catch (_mergeErr) {
+              /* merge failed — fall through to raw write */
+            }
             // Write via platform-aware path: Linux credentials file or macOS keychain.
             if (IS_LINUX) {
               // On Linux the active token lives in LINUX_CRED_PATH as a flat
@@ -629,15 +637,23 @@ async function shouldRotate(config, state) {
               // other fields (mcpOAuth, etc.) already present in the file.
               try {
                 let existing = {};
-                try { existing = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8')); } catch {}
+                try {
+                  existing = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
+                } catch {}
                 const merged = { ...existing, ...JSON.parse(tokenToWrite) };
                 writeFileSync(LINUX_CRED_PATH, JSON.stringify(merged, null, 2), { mode: 0o600 });
-              } catch (_writeErr) { /* non-fatal — best-effort */ }
+              } catch (_writeErr) {
+                /* non-fatal — best-effort */
+              }
             } else {
               // macOS: use spawnSync (no shell, no injection) instead of execSync.
-              spawnSync('security', ['add-generic-password', '-U', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-w', tokenToWrite], {
-                timeout: 5000,
-              });
+              spawnSync(
+                'security',
+                ['add-generic-password', '-U', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-w', tokenToWrite],
+                {
+                  timeout: 5000,
+                },
+              );
             }
             log('[active-refresh] Active keychain updated with mcpOAuth preserved — sessions will auto-recover');
           }
@@ -791,9 +807,7 @@ async function findValidRotationTarget(config, state) {
         continue;
       }
       if (cachedAge > 30) {
-        log(
-          `[pre-rotate] ${key}: live query FAILED + cache stale (${cachedAge.toFixed(0)}min) — REFUSING (safety)`,
-        );
+        log(`[pre-rotate] ${key}: live query FAILED + cache stale (${cachedAge.toFixed(0)}min) — REFUSING (safety)`);
         continue;
       }
       log(
@@ -871,7 +885,9 @@ async function allCandidatesExhausted(config, state) {
     if (now - cached.ts > 15 * 60_000) return false;
     if (cached.pct < EXHAUSTED_THRESHOLD) return false;
   }
-  log('[allCandidatesExhausted] cached-evidence path: live unreachable but cached + rate-limit signal confirm exhaustion');
+  log(
+    '[allCandidatesExhausted] cached-evidence path: live unreachable but cached + rate-limit signal confirm exhaustion',
+  );
   return true;
 }
 
@@ -1120,7 +1136,9 @@ async function refreshSingleToken(account) {
     if (IS_LINUX) {
       try {
         let store = {};
-        try { store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8')); } catch {}
+        try {
+          store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
+        } catch {}
         store[svc] = tokenStr;
         writeFileSync(LINUX_CRED_PATH, JSON.stringify(store, null, 2), { mode: 0o600 });
       } catch (writeErr) {
@@ -1420,7 +1438,9 @@ async function mainLoop() {
       // excluding it. Best-effort / fail-open (S3 down => no-op). (Sam 2026-06-06)
       if (state.activeAccount && Date.now() - lastLeaseBeat > 180_000) {
         lastLeaseBeat = Date.now();
-        try { writeLease(state.activeAccount, (m) => log(m)); } catch {}
+        try {
+          writeLease(state.activeAccount, (m) => log(m));
+        } catch {}
       }
 
       // Drift detection — every 2 min, find the actual live account.

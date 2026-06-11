@@ -71,7 +71,10 @@ function pruneLeases(leases) {
       // Also check if the pid is still alive
       let alive = false;
       if (entry.pid) {
-        try { process.kill(entry.pid, 0); alive = true; } catch {}
+        try {
+          process.kill(entry.pid, 0);
+          alive = true;
+        } catch {}
       }
       if (!alive) {
         delete leases[sid];
@@ -292,7 +295,10 @@ export function listSessionLeases() {
     const ageMins = ((now - (entry.ts || 0)) / 60_000).toFixed(1);
     let alive = false;
     if (entry.pid) {
-      try { process.kill(entry.pid, 0); alive = true; } catch {}
+      try {
+        process.kill(entry.pid, 0);
+        alive = true;
+      } catch {}
     }
     result.push({
       sessionId: sid,

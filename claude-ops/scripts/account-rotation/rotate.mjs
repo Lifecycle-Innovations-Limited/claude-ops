@@ -170,7 +170,14 @@ function readConfig() {
     const st = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
     keepKey = st.activeAccount || null;
   } catch {}
-  return applyAccountLeases(config, { keepKey, log: (m) => { try { log(m); } catch {} } });
+  return applyAccountLeases(config, {
+    keepKey,
+    log: (m) => {
+      try {
+        log(m);
+      } catch {}
+    },
+  });
 }
 
 // All accounts' Claude login emails forward to ONE Gmail inbox, so every
@@ -215,7 +222,10 @@ function readState() {
     }
   }
   if (migrated) {
-    try { writeFileSync(STATE_PATH + '.tmp.' + process.pid, JSON.stringify(state, null, 2)); renameSync(STATE_PATH + '.tmp.' + process.pid, STATE_PATH); } catch {}
+    try {
+      writeFileSync(STATE_PATH + '.tmp.' + process.pid, JSON.stringify(state, null, 2));
+      renameSync(STATE_PATH + '.tmp.' + process.pid, STATE_PATH);
+    } catch {}
   }
   return state;
 }
@@ -543,12 +553,8 @@ function pickNextAccount(config, state, liveUtil = {}) {
   // Empty when allowExtraUsage (they already live in the pools above). Tried after
   // every non-EU pool, so an overage account is only ever picked when nothing else
   // is viable — better a paid token than a fully stalled session on an exhausted key.
-  const euNormal = config.accounts.filter(
-    (a) => a.priority !== 'low' && !excludeKey(a) && blockExtra(a),
-  );
-  const euLow = config.accounts.filter(
-    (a) => a.priority === 'low' && !excludeKey(a) && blockExtra(a),
-  );
+  const euNormal = config.accounts.filter((a) => a.priority !== 'low' && !excludeKey(a) && blockExtra(a));
+  const euLow = config.accounts.filter((a) => a.priority === 'low' && !excludeKey(a) && blockExtra(a));
 
   // Hard refusal for rotation *destination*: max(5h,7d) must stay below this.
   // Default 95 (matches EXHAUSTED for Bedrock). Lower with
@@ -563,7 +569,7 @@ function pickNextAccount(config, state, liveUtil = {}) {
       // Per-account destination cap: an account may set `maxUtilPercent` in config to be
       // refused as a rotation target at a STRICTER threshold than the global UTIL_HARD_BLOCK.
       // min() ensures it can only tighten, never loosen, the global hard block.
-      // (Sam 2026-05-30: never rotate TO / use sam@example.com once it's ≥50% on max(5h,7d).)
+      // An account may set maxUtilPercent to cap it stricter than the global block (e.g. ≥50%).
       const capFor = (a) => Math.min(UTIL_HARD_BLOCK, a.maxUtilPercent ?? Infinity);
       const viable = candidates.filter((a) => score(a) < capFor(a));
       // Primary key: utilization score (freshest first). Tie-breaker: when two
@@ -667,10 +673,7 @@ function recommendAccount(config, state, liveUtil) {
       return Math.max(u.five_hour_pct, u.seven_day_pct) >= EXHAUSTED_THRESHOLD;
     });
   const destinationCapStuck =
-    !pick &&
-    !onlyActiveViable &&
-    !allExhausted &&
-    allNonActiveLiveConfirmedOverDestinationCap(config, state, liveUtil);
+    !pick && !onlyActiveViable && !allExhausted && allNonActiveLiveConfirmedOverDestinationCap(config, state, liveUtil);
   return { pick, allExhausted, allHaveLive, onlyActiveViable, destinationCapStuck };
 }
 
@@ -735,10 +738,7 @@ async function activateBedrockFallback(reason, dryRun = false) {
       log(`⚠ settings.json Bedrock persist failed: ${(e.message || e).toString().slice(0, 120)}`);
     }
     log(`✅ BEDROCK FALLBACK ACTIVATED region=${region} reason=${reason}`);
-    notify(
-      'Bedrock Fallback Active',
-      `All Anthropic accounts exhausted — switched to Bedrock (${region}).`,
-    );
+    notify('Bedrock Fallback Active', `All Anthropic accounts exhausted — switched to Bedrock (${region}).`);
     console.log('');
     console.log('━━━ BEDROCK FALLBACK ACTIVE ━━━');
     console.log(`Reason : ${reason}`);
@@ -772,16 +772,24 @@ function _linuxReadCred(svc) {
 
 function _linuxWriteCred(svc, json) {
   let store = {};
-  try { store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8')); } catch {}
+  try {
+    store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
+  } catch {}
   if (svc === KEYCHAIN_SERVICE) {
     // Main slot: merge claudeAiOauth only, preserve mcpOAuth
     try {
       const incoming = JSON.parse(json);
       store.claudeAiOauth = incoming.claudeAiOauth || incoming;
-    } catch { store[svc] = json; }
+    } catch {
+      store[svc] = json;
+    }
   } else {
     // Per-account vault slot
-    try { store[svc] = JSON.parse(json); } catch { store[svc] = json; }
+    try {
+      store[svc] = JSON.parse(json);
+    } catch {
+      store[svc] = json;
+    }
   }
   writeFileSync(LINUX_CRED_PATH, JSON.stringify(store, null, 2), { mode: 0o600 });
 }
@@ -878,7 +886,9 @@ function hasStoredToken(account) {
 // retries its handshake.
 
 function ensureSnapshotsDir() {
-  try { mkdirSync(OAUTH_SNAPSHOTS_DIR, { recursive: true }); } catch {}
+  try {
+    mkdirSync(OAUTH_SNAPSHOTS_DIR, { recursive: true });
+  } catch {}
 }
 
 function snapshotPathFor(key) {
@@ -926,13 +936,7 @@ function isChromeProfileRunning(profileDir) {
   }
 }
 
-const CHROME_PROFILES_BASE = join(
-  process.env.HOME || '',
-  'Library',
-  'Application Support',
-  'Google',
-  'Chrome',
-);
+const CHROME_PROFILES_BASE = join(process.env.HOME || '', 'Library', 'Application Support', 'Google', 'Chrome');
 
 function chromeProfilePath(profileDir) {
   return join(CHROME_PROFILES_BASE, profileDir);
@@ -1010,10 +1014,10 @@ function writeChromeLocalStateAtomic(obj) {
 }
 
 // Human-friendly display name from an accountKey. Best-effort:
-//   `support@my-project.example.com`            → `My-Project Support`
-//   `info@example.com`         → `Example`
-//   `account-main`                    → `Account-Main`
-//   `sam@account-main.foundation`     → `Account-Main Foundation`
+//   `support@example.ai`            → `Example Support`
+//   `info@myorg.nl`                 → `Myorg`
+//   `team-label`                    → `Team-Label`
+//   `user@example.foundation`       → `Example Foundation`
 function displayNameFor(account) {
   const key = accountKey(account);
   if (account.displayName) return account.displayName;
@@ -1022,9 +1026,9 @@ function displayNameFor(account) {
   }
   const [local, domain] = key.split('@');
   const domainParts = (domain || '').split('.');
-  // For sam@example.com → "Account-A"
-  // For info@example.com → "Example"
-  // For support@my-project.example.com → "My-Project Support"
+  // For user@example.com → "Example"
+  // For info@myorg.nl → "Myorg"
+  // For support@example.ai → "Example Support"
   const orgRaw = domainParts[0] || '';
   // CamelCase split of org: "example" → "Example"
   const org = orgRaw
@@ -1037,7 +1041,7 @@ function displayNameFor(account) {
     return `${org} ${local.charAt(0).toUpperCase() + local.slice(1)}`;
   }
   // For personal mailboxes (sam@…), use Org only if org is meaningful, else email local
-  return org || (local.charAt(0).toUpperCase() + local.slice(1));
+  return org || local.charAt(0).toUpperCase() + local.slice(1);
 }
 
 function launchChromeProfile(profileDir, url) {
@@ -1075,8 +1079,12 @@ function readClaudeJson() {
 function writeClaudeJsonAtomic(obj) {
   const tmp = `${CLAUDE_JSON_PATH}.tmp.${process.pid}.${Date.now()}`;
   writeFileSync(tmp, JSON.stringify(obj, null, 2));
-  try { renameSync(tmp, CLAUDE_JSON_PATH); } catch (e) {
-    try { unlinkSync(tmp); } catch {}
+  try {
+    renameSync(tmp, CLAUDE_JSON_PATH);
+  } catch (e) {
+    try {
+      unlinkSync(tmp);
+    } catch {}
     throw e;
   }
 }
@@ -1129,7 +1137,9 @@ function captureOauthSnapshot(accountEmail) {
 function loadOauthSnapshot(accountKeyOrEmail) {
   const direct = snapshotPathFor(accountKeyOrEmail);
   if (existsSync(direct)) {
-    try { return JSON.parse(readFileSync(direct, 'utf8')); } catch {}
+    try {
+      return JSON.parse(readFileSync(direct, 'utf8'));
+    } catch {}
   }
   // Fallback: resolve via config (label↔email)
   const cfg = readConfig();
@@ -1141,7 +1151,9 @@ function loadOauthSnapshot(accountKeyOrEmail) {
   if (acct) {
     const alt = snapshotPathFor(accountKey(acct));
     if (existsSync(alt)) {
-      try { return JSON.parse(readFileSync(alt, 'utf8')); } catch {}
+      try {
+        return JSON.parse(readFileSync(alt, 'utf8'));
+      } catch {}
     }
   }
   return null;
@@ -1184,7 +1196,9 @@ function restoreOauthBlocksFromBackup() {
     const backup = JSON.parse(readFileSync(BROWSER_PIN_BACKUP_PATH, 'utf8'));
     const applied = applyOauthSnapshotToClaudeJson({ blocks: backup.blocks });
     if (applied) log(`[oauth-snapshot] restored backup oauthAccount=${backup.email}`);
-    try { unlinkSync(BROWSER_PIN_BACKUP_PATH); } catch {}
+    try {
+      unlinkSync(BROWSER_PIN_BACKUP_PATH);
+    } catch {}
     return applied;
   } catch (e) {
     log(`[oauth-snapshot] backup restore failed: ${e.message?.slice(0, 100)}`);
@@ -1325,7 +1339,9 @@ async function refreshExpiredStoredToken(account, tokenJson) {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok || !body.access_token) {
-      log(`[refresh] ${accountKey(account)}: refresh_token grant failed — ${body?.error?.message || `HTTP ${res.status}`}`);
+      log(
+        `[refresh] ${accountKey(account)}: refresh_token grant failed — ${body?.error?.message || `HTTP ${res.status}`}`,
+      );
       return null;
     }
     const updated = {
@@ -1375,7 +1391,13 @@ async function swapToken(account) {
       const swapConfig = readConfig();
       const sourceAccount = swapConfig.accounts.find((a) => accountKey(a) === sourceKey);
       if (sourceAccount) {
-        const currentJson = (() => { try { return readKeychain(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT); } catch { return null; } })();
+        const currentJson = (() => {
+          try {
+            return readKeychain(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
+          } catch {
+            return null;
+          }
+        })();
         if (currentJson && currentJson.includes('claudeAiOauth')) {
           try {
             const parsed = JSON.parse(currentJson);
@@ -1959,7 +1981,9 @@ async function makePlaywrightDriver() {
         if (attached) break;
       }
       if (!attached) {
-        log(`[playwright] Chrome Beta CDP didn't come up on :${CDP_PORT} within 15s — falling back to bundled Chromium`);
+        log(
+          `[playwright] Chrome Beta CDP didn't come up on :${CDP_PORT} within 15s — falling back to bundled Chromium`,
+        );
       }
     } else {
       log('[playwright] No Chrome Beta / Chrome binary found — falling back to bundled Chromium');
@@ -2259,7 +2283,9 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
   const inbox = magicLinkInbox();
   const acctArgs = inbox ? ['--account', inbox] : [];
   if (!inbox) {
-    log(`[magic-link] WARNING: no Gmail inbox configured (set CLAUDE_ROT_GMAIL_ACCOUNT or config.magicLinkGmailAccount)`);
+    log(
+      `[magic-link] WARNING: no Gmail inbox configured (set CLAUDE_ROT_GMAIL_ACCOUNT or config.magicLinkGmailAccount)`,
+    );
   }
 
   while (Date.now() - startTime < maxWaitMs) {
@@ -2267,7 +2293,15 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
       // Pull up to 10 recent matches so a stale top-result doesn't block us.
       const searchResult = execFileSync(
         'gog',
-        ['gmail', 'search', 'subject:"Secure link to log in to Claude" newer_than:5m', '--max', '10', '-j', ...acctArgs],
+        [
+          'gmail',
+          'search',
+          'subject:"Secure link to log in to Claude" newer_than:5m',
+          '--max',
+          '10',
+          '-j',
+          ...acctArgs,
+        ],
         { timeout: 15_000, stdio: ['ignore', 'pipe', 'pipe'] },
       )
         .toString()
@@ -2496,7 +2530,11 @@ async function runAuthFlow(driver, account) {
     // stall detector, otherwise AI-brain burns multiple decisions waiting for a
     // verification code that the deterministic Gmail poller can resolve or fail.
     if (account.useMagicLink && url.includes('claude.ai')) {
-      if (await handleClaudeMagicLinkEmailPrompt(url.includes('/oauth/authorize') ? 'OAuth page rendered login prompt' : 'Login prompt')) {
+      if (
+        await handleClaudeMagicLinkEmailPrompt(
+          url.includes('/oauth/authorize') ? 'OAuth page rendered login prompt' : 'Login prompt',
+        )
+      ) {
         stallCount = 0;
         continue;
       }
@@ -2941,7 +2979,10 @@ async function runAuthFlow(driver, account) {
         // the authorize page. If we're on /oauth/code/success or any non-claude.ai
         // URL, auth is done — stop hunting for a button that no longer exists.
         const currentUrl = await driver.currentUrl().catch(() => '');
-        if (currentUrl.includes('/oauth/code/success') || (currentUrl && !currentUrl.includes('claude.ai') && !currentUrl.includes('claude.com'))) {
+        if (
+          currentUrl.includes('/oauth/code/success') ||
+          (currentUrl && !currentUrl.includes('claude.ai') && !currentUrl.includes('claude.com'))
+        ) {
           log(`Auth already succeeded — URL moved to ${currentUrl.substring(0, 80)}`);
           authorized = true;
           break;
@@ -3072,7 +3113,9 @@ async function runAuthFlow(driver, account) {
             }
             continue;
           }
-          log(`[magic-link] No magic link found in Gmail — magic-link-only, will re-poll next step (no Google fallback)`);
+          log(
+            `[magic-link] No magic link found in Gmail — magic-link-only, will re-poll next step (no Google fallback)`,
+          );
         }
       }
     }
@@ -3277,10 +3320,9 @@ function findClaudeSessions() {
     // `grep -` (empty pattern) at the end of the pipeline caused the whole
     // execSync to throw "Command failed" on every call.
     // ps -eo pid,args works identically on macOS (BSD) and Linux (GNU).
-    const psOut = execSync(
-      `ps -eo pid,args | grep -E '[c]laude.*--dangerously-skip-permissions' | grep -v 'grep'`,
-      { timeout: 5000 },
-    )
+    const psOut = execSync(`ps -eo pid,args | grep -E '[c]laude.*--dangerously-skip-permissions' | grep -v 'grep'`, {
+      timeout: 5000,
+    })
       .toString()
       .trim();
     if (!psOut) return sessions;
@@ -3524,16 +3566,16 @@ async function rotate(targetEmail, opts = {}) {
       };
     }
   }
-  try { writeState(state); } catch {}
+  try {
+    writeState(state);
+  } catch {}
   const bedrockOnExhausted = opts.bedrockOnExhausted !== false; // default ON
 
   if (!targetEmail) {
     const { pick, allExhausted, onlyActiveViable, destinationCapStuck } = recommendAccount(config, state, liveUtil);
     if (!pick) {
       if (onlyActiveViable) {
-        log(
-          'Rotation skipped — already on the only viable Max account (API headroom; other accounts exhausted).',
-        );
+        log('Rotation skipped — already on the only viable Max account (API headroom; other accounts exhausted).');
         return true;
       }
       if (allExhausted || destinationCapStuck) {
@@ -3544,10 +3586,11 @@ async function rotate(targetEmail, opts = {}) {
             `Every live-confirmed non-active account is ≥${destinationUtilHardBlock(config)}% max(5h,7d) — no rotation target; engaging Bedrock fallback`,
           );
         }
-        if (bedrockOnExhausted) await activateBedrockFallback(
-          allExhausted ? 'all_accounts_exhausted_picker_null' : 'destination_cap_no_headroom',
-          dryRun,
-        );
+        if (bedrockOnExhausted)
+          await activateBedrockFallback(
+            allExhausted ? 'all_accounts_exhausted_picker_null' : 'destination_cap_no_headroom',
+            dryRun,
+          );
       } else {
         log('No account available (see utilization / query logs above)');
       }
@@ -3878,7 +3921,11 @@ async function rotate(targetEmail, opts = {}) {
 
   // Claim the cross-machine lease for the account we just activated so the other
   // machine's rotation excludes it. Best-effort / fail-open. Skip on dry-run.
-  if (!dryRun) { try { writeLease(key, (m) => log(m)); } catch {} }
+  if (!dryRun) {
+    try {
+      writeLease(key, (m) => log(m));
+    } catch {}
+  }
 
   notify('Claude Account Rotation', `${verified ? '✓' : '⚠'} Now using ${key}`);
 
@@ -4029,7 +4076,9 @@ async function setup() {
     }
 
     if (magicLinkMode && account.autoAuthDisabled === true && !filter) {
-      console.log(`⏭  Skipped: automated reauth disabled (${account.autoAuthDisabledReason || 'manual reauth required'}).`);
+      console.log(
+        `⏭  Skipped: automated reauth disabled (${account.autoAuthDisabledReason || 'manual reauth required'}).`,
+      );
       results.push({ key, ok: true, skipped: true, reason: 'auto-auth-disabled' });
       continue;
     }
@@ -4107,7 +4156,9 @@ async function setup() {
         // rotation would never save a single account whenever the profile API
         // is throttled (which is common mid-rotation).
         if (token && token.includes('claudeAiOauth') && !tokenExpired(token)) {
-          console.log(`⚠  Identity unverified (${profErr || 'no email'}) — token valid & unexpired, saving with caveat.`);
+          console.log(
+            `⚠  Identity unverified (${profErr || 'no email'}) — token valid & unexpired, saving with caveat.`,
+          );
         } else {
           console.error(`\n❌ Verify failed (${profErr || 'no email'}) and token invalid/expired. Skipping save.`);
           results.push({ key, ok: false, reason: `verify-failed:${profErr || 'no-email'}` });
@@ -4490,7 +4541,7 @@ if (args.includes('--setup')) {
   }
   // Exit codes: 0 = viable pick available, 2 = Bedrock path (exhausted or destination-cap stuck),
   // 3 = no viable pick but not confirmed for Bedrock (some queries failed — investigate).
-  process.exit(pick || onlyActiveViable ? 0 : (allExhausted || destinationCapStuck ? 2 : 3));
+  process.exit(pick || onlyActiveViable ? 0 : allExhausted || destinationCapStuck ? 2 : 3);
 } else if (args.includes('--status')) {
   await showStatus();
 } else if (args.includes('--capture')) {
@@ -4513,9 +4564,7 @@ if (args.includes('--setup')) {
     email = acct?.email || null;
   } catch {}
   if (!email) {
-    email =
-      process.env.CLAUDE_PIN_BROWSER_DEFAULT ||
-      (readConfig().accounts[0]?.email ?? null);
+    email = process.env.CLAUDE_PIN_BROWSER_DEFAULT || (readConfig().accounts[0]?.email ?? null);
   }
   if (!email) {
     log('[pin-browser-active] no resolvable active account — skipping');
@@ -4560,7 +4609,9 @@ if (args.includes('--setup')) {
           writeState(st);
           log(`[pin-browser] CLI pinned to ${accountKey(acct)}`);
         } else {
-          log(`[pin-browser] swapToken false for ${accountKey(acct)} (vault token missing/expired) — likely already active; pinning anyway`);
+          log(
+            `[pin-browser] swapToken false for ${accountKey(acct)} (vault token missing/expired) — likely already active; pinning anyway`,
+          );
         }
         // Sync .claude.json oauthAccount/chromeExtension blocks to match.
         const targetKey = accountKey(acct);
@@ -4610,7 +4661,10 @@ if (args.includes('--setup')) {
     }
     // Always (re)write the freeze sentinel so the daemon won't rotate away while
     // the browser bridge is in use. The hook refreshes this on every tool call.
-    writeFileSync(BROWSER_PIN_PATH, JSON.stringify({ email: pinEmail, until: Date.now() + ttlSec * 1000, ts: Date.now() }));
+    writeFileSync(
+      BROWSER_PIN_PATH,
+      JSON.stringify({ email: pinEmail, until: Date.now() + ttlSec * 1000, ts: Date.now() }),
+    );
   } catch (e) {
     log(`[pin-browser] error (non-fatal): ${(e.message || e).toString().slice(0, 120)}`);
   }
@@ -4624,7 +4678,9 @@ if (args.includes('--setup')) {
       restoreOauthBlocksFromBackup();
     }
     if (existsSync(BROWSER_PIN_PATH)) {
-      try { unlinkSync(BROWSER_PIN_PATH); } catch {}
+      try {
+        unlinkSync(BROWSER_PIN_PATH);
+      } catch {}
     }
   } catch (e) {
     log(`[release-browser-pin] error (non-fatal): ${(e.message || e).toString().slice(0, 120)}`);
@@ -4705,7 +4761,9 @@ if (args.includes('--setup')) {
       continue;
     }
     let pf;
-    try { pf = JSON.parse(probe.stdout); } catch (e) {
+    try {
+      pf = JSON.parse(probe.stdout);
+    } catch (e) {
       console.error(`[skip] ${acct.email}: /oauth/profile non-JSON response`);
       failCount++;
       continue;
@@ -4767,7 +4825,10 @@ if (args.includes('--setup')) {
   // per-account profile gets a clear display name + distinct theme color in
   // Chrome's profile picker. Chrome must be QUIT first — it rewrites Local
   // State on shutdown, clobbering changes made while it is running.
-  if (isChromeProfileRunning('ClaudeCode') || readdirSync(CHROME_PROFILES_BASE).some((d) => d.startsWith('ClaudeCode') && isChromeProfileRunning(d))) {
+  if (
+    isChromeProfileRunning('ClaudeCode') ||
+    readdirSync(CHROME_PROFILES_BASE).some((d) => d.startsWith('ClaudeCode') && isChromeProfileRunning(d))
+  ) {
     console.error('[colorize] Chrome is running with a ClaudeCode profile. Quit all of them first:');
     console.error('  pkill -f "profile-directory=ClaudeCode"');
     process.exit(2);
