@@ -39,6 +39,7 @@ import { fileURLToPath } from 'url';
 import { execSync, execFileSync, spawn, spawnSync } from 'child_process';
 import { tmpdir } from 'os';
 import { applyAccountLeases, writeLease } from './account-leases.mjs';
+import { sweepDeferredRespawns } from './bg-respawn.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
@@ -1408,6 +1409,7 @@ async function mainLoop() {
   let lastRefreshCheck = 0; // dynamic refresh check
   let lastDriftCheck = 0; // cheap vault-based drift detection
   let lastFullProbe = 0; // periodic fleet-wide live-util snapshot refresh
+  let lastRespawnSweep = 0; // deferred bg-session respawn retry (busy at rotation time)
   const FULL_PROBE_INTERVAL = 5 * 60_000;
   const bedrockRecCtx = {
     lastCheck: 0,
@@ -1448,6 +1450,19 @@ async function mainLoop() {
       //    its own token and the live no longer matches any vault.
       // Self-heals when state.json disagrees with the actual active account
       // (crashed rotation, manual /login, leftover lock).
+      // Deferred bg-session respawn sweep (every 2 min): sessions that were
+      // busy at rotation time get respawned once they go idle, or force-
+      // respawned after 90 min so they never wedge on an expired token.
+      if (Date.now() - lastRespawnSweep > 120_000) {
+        lastRespawnSweep = Date.now();
+        try {
+          const handled = sweepDeferredRespawns((m) => log(m));
+          if (handled > 0) log(`[bg-respawn] sweep refreshed ${handled} deferred bg session(s)`);
+        } catch (e) {
+          log(`[bg-respawn] sweep error: ${e.message?.substring(0, 80)}`);
+        }
+      }
+
       if (Date.now() - lastDriftCheck > 120_000) {
         lastDriftCheck = Date.now();
         const stateLastRotation2 = state.lastRotation ? new Date(state.lastRotation).getTime() : 0;
