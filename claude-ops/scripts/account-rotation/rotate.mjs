@@ -48,6 +48,7 @@ import { createHmac } from 'node:crypto';
 import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS, scrapeBillingState } from './ai-brain.mjs';
 import { destinationUtilHardBlock } from './rotation-policy.mjs';
 import { applyAccountLeases, writeLease } from './account-leases.mjs';
+import { respawnBgSessions } from './bg-respawn.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
@@ -3320,11 +3321,31 @@ function findClaudeSessions() {
     // `grep -` (empty pattern) at the end of the pipeline caused the whole
     // execSync to throw "Command failed" on every call.
     // ps -eo pid,args works identically on macOS (BSD) and Linux (GNU).
-    const psOut = execSync(`ps -eo pid,args | grep -E '[c]laude.*--dangerously-skip-permissions' | grep -v 'grep'`, {
+    //
+    // Match ANY claude CLI process, not just `--dangerously-skip-permissions`
+    // ones — plain interactive sessions, `claude --resume`, and headless
+    // `claude -p` runs all hold tokens that go stale after rotation (observed
+    // 2026-06-11: live agent sessions were invisible to this enum and wedged
+    // on the expired outgoing token). The first ps token must BE the claude
+    // binary — matching `claude` anywhere in args would false-positive on
+    // `tail -f .../claude/...log`, `node .../account-rotation/daemon.mjs`, etc.
+    // Utility invocations (daemon supervisor, respawn/attach/logs/agents, mcp)
+    // are excluded here; daemon-hosted bg sessions are refreshed separately
+    // via respawnBgSessions() (they have no TTY to inject /login into).
+    const psRaw = execSync(`ps -eo pid,args | grep -E '[c]laude' | grep -v 'grep'`, {
       timeout: 5000,
     })
       .toString()
       .trim();
+    const CLAUDE_CMD_RE = /^(?:\S*\/)?claude(?:\s|$)/;
+    const UTILITY_SUBCMD_RE = /^(?:\S*\/)?claude\s+(?:daemon|respawn|attach|logs|agents|mcp|doctor|update|config)\b/;
+    const psOut = psRaw
+      .split('\n')
+      .filter((line) => {
+        const args = line.trim().replace(/^\d+\s+/, '');
+        return CLAUDE_CMD_RE.test(args) && !UTILITY_SUBCMD_RE.test(args);
+      })
+      .join('\n');
     if (!psOut) return sessions;
 
     // Build pid→tty map from tmux (best-effort; tty used only for tmux pane lookup)
@@ -3447,6 +3468,7 @@ function detectTerminalForPid(pid) {
 
 async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
   const sessions = findClaudeSessions();
 
   if (sessions.length === 0) {
@@ -4004,6 +4026,18 @@ async function rotate(targetEmail, opts = {}) {
       }
     } catch (e) {
       log(`[hot-swap] skipped: ${e.message?.slice(0, 80)}`);
+    }
+  }
+
+  // Daemon-hosted `claude --bg` sessions have no TTY for /login injection and
+  // don't register in the pidfile SIGHUP path — respawn after every successful
+  // rotation (including daemon --no-browser without --session).
+  if (ok && !dryRun) {
+    try {
+      const { respawned, deferred } = respawnBgSessions(log);
+      if (respawned || deferred) log(`[bg-respawn] fleet: ${respawned} respawned, ${deferred} deferred (busy)`);
+    } catch (e) {
+      log(`[bg-respawn] pass skipped: ${e.message?.slice(0, 80)}`);
     }
   }
 
