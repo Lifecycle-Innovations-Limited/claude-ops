@@ -201,8 +201,8 @@ cmd_add_url() {
   [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Cancelled."; exit 0; }
 
   local tmp; tmp=$(mktemp)
-  jq --arg brand "$brand" --arg comp "$comp" --arg kind "$kind" --arg url "$url" '
-    .competitor_intel.urls[$brand][$comp][$kind] = $url
+  jq --arg comp "$comp" --arg kind "$kind" --arg url "$url" '
+    .competitor_intel.urls[$comp][$kind] = $url
   ' "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
   echo "Saved to preferences.json."
 }
