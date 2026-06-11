@@ -1,0 +1,12 @@
+[Unit]
+Description=Sweep for stale/orphaned GitHub-API poll loops every 3 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=3min
+Unit=gh-orphan-killer.service
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
