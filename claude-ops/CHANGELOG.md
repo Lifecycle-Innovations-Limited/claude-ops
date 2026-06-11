@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.29.0] - 2026-06-11
+
+### Changed
+ops-inbox: Mac WhatsApp.app fallback suite — Tier-4 archive via Mac app (bypasses server-side 429), automatic Mac ground-truth cross-check in the freshness gate, and Tailscale→Cloudflare-tunnel SSH transport chain (wa-mac-transport.sh + setup-wa-mac-cf-tunnel.sh) (#560)
+
+
 ## [2.28.0] - 2026-06-11
 
 ### Changed
