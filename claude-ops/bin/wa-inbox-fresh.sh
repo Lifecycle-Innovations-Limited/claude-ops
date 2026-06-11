@@ -22,6 +22,22 @@ WAIT_TICKS="${WA_FRESH_WAIT_TICKS:-8}"   # ×4s ≈ 32s max wait
 
 log() { printf '%s\n' "$*"; }
 
+# Mac ground-truth cross-check — AUTOMATIC when the store looks stale.
+# Reads the Mac WhatsApp.app ChatStorage over Tailscale SSH (Cloudflare-tunnel
+# fallback via wa-mac-transport.sh). Read-only, bounded, never fatal.
+mac_ground_truth() {
+  local script mac_out
+  script="$(dirname "$0")/wa-mac-latest.sh"
+  [ -x "$script" ] || script="$HOME/bin/wa-mac-latest.sh"
+  [ -x "$script" ] || { log "wa-fresh: mac cross-check skipped (wa-mac-latest.sh not installed)"; return 0; }
+  log "wa-fresh: MAC GROUND TRUTH (latest 10 from WhatsApp.app store):"
+  if mac_out=$(WA_MAC_QUIET=1 timeout 50 "$script" --recent 10 2>/dev/null); then
+    printf '%s\n' "$mac_out" | sed 's/^/wa-fresh:   /'
+  else
+    log "wa-fresh: mac cross-check unavailable (Mac unreachable over tailscale + cloudflare)"
+  fi
+}
+
 # 1. bridge up?  Liveness = a real TCP/HTTP connection to :8080.
 # curl exit 7 = connection refused (not listening); exit 0 even on 404.
 # Do NOT use `ss | grep :8080` — ss renders port 8080 as the service name
@@ -71,6 +87,7 @@ if ! alive; then
   else
     log "wa-fresh: ERROR bridge still down — store is STALE, do not trust it"
   fi
+  mac_ground_truth
   exit 2
 fi
 
@@ -82,11 +99,13 @@ fi
 
 if [ ! -r "$DB" ]; then
   log "wa-fresh: ERROR messages store missing or unreadable at $DB — do not trust it"
+  mac_ground_truth
   exit 2
 fi
 
 before=$(sqlite3 "$DB" "SELECT COALESCE(datetime(MAX(timestamp)),'1970-01-01') FROM messages;") || {
   log "wa-fresh: ERROR cannot read messages store at $DB — do not trust it"
+  mac_ground_truth
   exit 2
 }
 
@@ -97,6 +116,7 @@ case "$code" in
   2*) ;;
   *)
     log "wa-fresh: ERROR backfill failed (HTTP ${code}) — store may be stale, do not trust it"
+    mac_ground_truth
     exit 2
     ;;
 esac
@@ -157,19 +177,6 @@ if systemctl --user start --no-block whatsapp-enrich.service 2>/dev/null; then
 else
   log "wa-fresh: media enrichment not started"
 fi
-
-# 5b. Mac ground-truth cross-check — AUTOMATIC when the store looks stale.
-# Reads the Mac WhatsApp.app ChatStorage over Tailscale SSH (Cloudflare-tunnel
-# fallback via wa-mac-transport.sh). Read-only, bounded, never fatal.
-mac_ground_truth() {
-  local script
-  script="$(dirname "$0")/wa-mac-latest.sh"
-  [ -x "$script" ] || script="$HOME/bin/wa-mac-latest.sh"
-  [ -x "$script" ] || { log "wa-fresh: mac cross-check skipped (wa-mac-latest.sh not installed)"; return 0; }
-  log "wa-fresh: MAC GROUND TRUTH (latest 10 from WhatsApp.app store):"
-  WA_MAC_QUIET=1 timeout 50 "$script" --recent 10 2>/dev/null | sed 's/^/wa-fresh:   /' || \
-    log "wa-fresh: mac cross-check unavailable (Mac unreachable over tailscale + cloudflare)"
-}
 
 # 5. freshness report
 after=$(sqlite3 "$DB" "SELECT COALESCE(datetime(MAX(timestamp)),'?') FROM messages;") || {

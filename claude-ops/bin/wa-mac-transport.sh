@@ -26,22 +26,27 @@ WA_MAC_TRANSPORT="none"
 WA_MAC_SSH_ARGS=()
 
 _wa_mac_common_opts=(-o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=accept-new)
+_wa_mac_ssh_opts=()
+if [ -n "${WA_MAC_SSH_OPTS:-}" ]; then
+  # shellcheck disable=SC2206
+  _wa_mac_ssh_opts=(${WA_MAC_SSH_OPTS})
+fi
 
 wa_mac_resolve() {
   # 1. Tailscale / direct SSH
   if [ -n "$WA_MAC_TS_TARGET" ] && \
-     ssh "${_wa_mac_common_opts[@]}" ${WA_MAC_SSH_OPTS:-} "$WA_MAC_TS_TARGET" true 2>/dev/null; then
+     ssh "${_wa_mac_common_opts[@]}" "${_wa_mac_ssh_opts[@]}" "$WA_MAC_TS_TARGET" true 2>/dev/null; then
     WA_MAC_TRANSPORT="tailscale"
-    WA_MAC_SSH_ARGS=("${_wa_mac_common_opts[@]}" "$WA_MAC_TS_TARGET")
+    WA_MAC_SSH_ARGS=("${_wa_mac_common_opts[@]}" "${_wa_mac_ssh_opts[@]}" "$WA_MAC_TS_TARGET")
     return 0
   fi
   # 2. Cloudflare tunnel SSH (cloudflared access ssh)
   if [ -n "$WA_MAC_CF_HOST" ] && [ -n "$WA_MAC_CF_USER" ] && command -v cloudflared >/dev/null 2>&1; then
     local proxy="cloudflared access ssh --hostname $WA_MAC_CF_HOST"
     if ssh "${_wa_mac_common_opts[@]}" -o ProxyCommand="$proxy" \
-         ${WA_MAC_SSH_OPTS:-} "${WA_MAC_CF_USER}@${WA_MAC_CF_HOST}" true 2>/dev/null; then
+         "${_wa_mac_ssh_opts[@]}" "${WA_MAC_CF_USER}@${WA_MAC_CF_HOST}" true 2>/dev/null; then
       WA_MAC_TRANSPORT="cloudflare"
-      WA_MAC_SSH_ARGS=("${_wa_mac_common_opts[@]}" -o ProxyCommand="$proxy" "${WA_MAC_CF_USER}@${WA_MAC_CF_HOST}")
+      WA_MAC_SSH_ARGS=("${_wa_mac_common_opts[@]}" -o ProxyCommand="$proxy" "${_wa_mac_ssh_opts[@]}" "${WA_MAC_CF_USER}@${WA_MAC_CF_HOST}")
       return 0
     fi
   fi
