@@ -231,6 +231,29 @@ function accountKey(a) {
   return a.label || a.email;
 }
 
+// account_email in .rate-limits.json is usually an email, while state.activeAccount
+// is the canonical key (label || email). Match both forms.
+function utilizationTagMatchesActive(tag, activeKey, accounts) {
+  if (!tag) return true;
+  if (tag === activeKey) return true;
+  const active = accounts.find((a) => accountKey(a) === activeKey);
+  return !!(active && tag === active.email);
+}
+
+function resolveAccountFromUtilizationTag(tag, config, activeKey) {
+  if (!tag) return getActiveAccount(config, activeKey);
+  const byKey = config.accounts.find((a) => accountKey(a) === tag);
+  if (byKey) return byKey;
+  const matches = config.accounts.filter((a) => a.email === tag);
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    const notActive = matches.find((a) => accountKey(a) !== activeKey);
+    if (notActive) return notActive;
+    return matches[0];
+  }
+  return getActiveAccount(config, activeKey);
+}
+
 function tokenExpired(json) {
   try {
     const exp = JSON.parse(json)?.claudeAiOauth?.expiresAt;
@@ -283,9 +306,12 @@ function readActiveKeychainToken() {
     }
   }
   try {
-    const out = execSync('security find-generic-password -s "Claude Code-credentials" -g 2>&1', {
-      timeout: 5000,
-    }).toString();
+    const out = execSync(
+      `security find-generic-password -s "Claude Code-credentials" -a "${KEYCHAIN_ACCOUNT}" -g 2>&1`,
+      {
+        timeout: 5000,
+      },
+    ).toString();
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
@@ -360,7 +386,11 @@ function readRealUtilization() {
     try {
       const st = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
       const lastRotMs = st.lastRotation ? new Date(st.lastRotation).getTime() : 0;
-      const tagMatchesActive = !data.account_email || data.account_email === st.activeAccount;
+      let accounts = [];
+      try {
+        accounts = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).accounts || [];
+      } catch {}
+      const tagMatchesActive = utilizationTagMatchesActive(data.account_email, st.activeAccount, accounts);
       if (tagMatchesActive && lastRotMs && data.ts * 1000 < lastRotMs + 60_000) return null;
     } catch {}
     return data;
@@ -472,9 +502,10 @@ async function shouldRotate(config, state) {
     //      session via keychain swap; Claude Code re-reads keychain per
     //      request). If not confirmed hot → silently discard.
     const taggedEmail = rl.utilization?.account_email;
-    const isMismatched = taggedEmail && taggedEmail !== state.activeAccount;
+    const isMismatched =
+      taggedEmail && !utilizationTagMatchesActive(taggedEmail, state.activeAccount, config.accounts);
     const probeAccount = isMismatched
-      ? config.accounts.find((a) => a.email === taggedEmail) || getActiveAccount(config, state.activeAccount)
+      ? resolveAccountFromUtilizationTag(taggedEmail, config, state.activeAccount)
       : getActiveAccount(config, state.activeAccount);
     if (probeAccount) {
       const probeKey = accountKey(probeAccount);
@@ -718,6 +749,7 @@ async function findValidRotationTarget(config, state) {
     const live = await queryLiveUtilization(account);
     if (live?.rateLimited) {
       log(`[pre-rotate] ${key}: usage API 429 — skipping this candidate this pass`);
+      continue;
     }
     if (isLiveUtilOk(live)) {
       const max = liveUtilMax(live);
@@ -825,7 +857,8 @@ async function allCandidatesExhausted(config, state) {
   try {
     if (existsSync(RATE_LIMITS_FILE)) {
       const rl = JSON.parse(readFileSync(RATE_LIMITS_FILE, 'utf8'));
-      const age = now - new Date(rl.timestamp || rl.ts || 0).getTime();
+      const rlMs = rl.timestamp ? new Date(rl.timestamp).getTime() : (rl.ts || 0) * 1000;
+      const age = now - rlMs;
       if (age < 5 * 60_000) recentRateLimit = true;
     }
   } catch {}
