@@ -167,6 +167,7 @@ age_min=$(sqlite3 "$DB" "SELECT CAST((julianday('now')-julianday(MAX(timestamp))
 log "wa-fresh: newest message = ${after} (${age_min:-?} min old) | new rows this cycle = ${new}"
 if [ "${age_min:-9999}" -gt 120 ]; then
   log "wa-fresh: WARNING newest message is >2h old — store may be lagging; treat 'last-sender' classification with caution"
+  log "wa-fresh: store may be lagging — cross-check Mac ground truth: bin/wa-mac-latest.sh --recent"
 fi
 log "wa-fresh: NOTE phone-sent messages may be absent — confirm 'did I reply?' with the human, not this store"
 exit 0
