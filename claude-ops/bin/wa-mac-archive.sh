@@ -44,6 +44,9 @@ echo "wa-mac-archive: transport=$WA_MAC_TRANSPORT, targets=${#TARGETS[@]}, pace=
 # via the fallback list). Runs inside the Aqua session via launchctl asuser.
 run_archive_ui() { # $1 = partner display name
   local name="$1"
+  # The UI automation runs REMOTELY on the Mac — require the remote host to be
+  # Darwin before driving it (also satisfies the macOS-only-tool lint guard).
+  if [ "${WA_MAC_REMOTE_OS:=$(wa_mac_ssh uname 2>/dev/null)}" = "Darwin" ]; then
   wa_mac_ssh 'cat > /tmp/wa_archive.scpt && UID_N=$(id -u) && sudo -n launchctl asuser "$UID_N" sudo -u "$(whoami)" osascript /tmp/wa_archive.scpt' <<EOF
 on run
   set chatName to "$(printf '%s' "$name" | sed 's/"/\\"/g')"
@@ -81,6 +84,10 @@ on run
   end tell
 end run
 EOF
+  else
+    echo "remote host is not Darwin — refusing UI automation" >&2
+    return 1
+  fi
 }
 
 ok=0; fail=0; skip=0
@@ -97,7 +104,7 @@ for t in "${TARGETS[@]}"; do
     if [ "$v" = "1" ]; then echo "  OK    $name (verified ZARCHIVED=1)"; else echo "  OK?   $name (UI action done, ZARCHIVED=$v — verify visually)"; fi
     ok=$((ok+1))
   else
-    echo "  FAIL  $name (UI automation error — check Accessibility permission for sshd/osascript)"
+    echo "  FAIL  $name (remote AppleScript error — check Accessibility permission for sshd on the Mac)"
     fail=$((fail+1))
   fi
   sleep "$PACE"
