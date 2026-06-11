@@ -171,11 +171,59 @@ Patches included:
           syncAppStateSkipBad so appStateReady flips without requiring a restart
           or manual /api/resync_app_state call. Poller gives up after 10 min.
 
+VERIFIED end-to-end heal sequence for a massively poisoned regular_low chain
+(2026-06-10, validated 31/31 batch archives at >=2 s pacing):
+
+  STEP 1 — Wipe stale sync keys (nuclear option for severe key corruption).
+    Stop the bridge, then in store/whatsapp.db run:
+      DELETE FROM whatsmeow_app_state_sync_keys;
+      DELETE FROM whatsmeow_app_state_version;
+      DELETE FROM whatsmeow_app_state_mutation_macs;
+    The phone MUST be online. Start the bridge — whatsmeow auto-requests fresh
+    keys; the phone reissues them (~114 observed). Wait for "new app state keys
+    received" in the bridge log before proceeding.
+
+  STEP 2 — Ensure Fix T + Fix V patches applied and bridge binary rebuilt.
+    Run this script, then rebuild and restart (use --build --restart, or:
+      cd ~/.local/share/whatsapp-mcp/whatsapp-bridge
+      go build -o whatsapp-bridge .
+      systemctl --user restart whatsapp-bridge.service   # Linux
+    Without the rebuild the running binary does not have Fix T + Fix V; the
+    skip loop will NOT run and the bridge stays wedged.
+
+  STEP 3 — Skip loop runs automatically on connect.
+    syncAppStateThenReady (Fix Q + Fix T + Fix V) fires on *events.Connected.
+    Watch logs for "skipping bad patch vNNN" lines. Expect one 429 rate-overlimit
+    pause (~15-20 min) mid-loop when the IQ budget is exhausted; the loop
+    resumes automatically after the cooldown (Fix V throttle + poller).
+    Success indicators:
+      "regular_low sync complete (skipped N bad patches)"
+      "archive mutations enabled"
+
+  STEP 4 — Verify archive works.
+    curl -s -X POST http://localhost:8080/api/archive \
+      -H 'Content-Type: application/json' \
+      -d '{"chat_jid":"<JID>","archive":true}'
+    Should return {"success":true,...}. If you need to reconcile existing archived
+    state without re-pairing:
+    curl -s -X POST http://localhost:8080/api/reconcile_archived
+    Returns {"archived_count":N,"non_archived_count":M}.
+
+  Upstream: tulir/whatsmeow#1171 (SkipBrokenAppStatePatches opt-in). If/when
+  merged, the bridge can adopt the upstream flag and retire Fix T + Fix V.
+
 Every patch is gated on a sentinel string so re-running is a no-op.
 
 Usage:
-  apply-patches.py [--install-dir PATH]
+  apply-patches.py [--install-dir PATH] [--build] [--restart]
     --install-dir  Defaults to ~/.local/share/whatsapp-mcp
+    --build        After patching, run `go build -o whatsapp-bridge .` in the
+                   bridge dir when any .go file changed.  Exits non-zero on
+                   build failure.  No-op when no Go files changed.
+    --restart      After a successful --build, restart the whatsapp-bridge
+                   service.  Linux: systemctl --user restart whatsapp-bridge.service.
+                   macOS: launchctl kickstart -k with load-w fallback.  No-op
+                   when --build was not requested or the build failed.
 """
 
 from __future__ import annotations
@@ -2854,6 +2902,25 @@ def main() -> int:
         default=REPO_DIR_DEFAULT,
         help="lharries/whatsapp-mcp install root (default: ~/.local/share/whatsapp-mcp)",
     )
+    ap.add_argument(
+        "--build",
+        action="store_true",
+        default=False,
+        help=(
+            "When any .go file changed, run `go build -o whatsapp-bridge .` in the "
+            "bridge dir.  Exits non-zero on build failure.  No-op when no Go files changed."
+        ),
+    )
+    ap.add_argument(
+        "--restart",
+        action="store_true",
+        default=False,
+        help=(
+            "After a successful --build, restart whatsapp-bridge.service "
+            "(Linux: systemctl --user; macOS: launchctl kickstart with load-w fallback).  "
+            "No-op when --build was not passed or the build failed."
+        ),
+    )
     args = ap.parse_args()
 
     main_go = args.install_dir / "whatsapp-bridge" / "main.go"
@@ -3312,13 +3379,110 @@ def main() -> int:
     changed_py = changed_py or changed_server_main
 
     if changed_go:
-        print("  main.go changed — caller should `go build` the bridge")
+        print("  main.go changed — bridge binary needs to be rebuilt")
     if changed_py:
         print(
             "  whatsapp.py changed — restart the MCP server (mcp-proxy.service) to load"
         )
     if not (changed_go or changed_py):
         print("All patches already applied; nothing to do.")
+
+    # ── --build: rebuild the bridge binary from current patched sources ──────
+    build_ok = False
+    if args.build:
+        import subprocess
+
+        bridge_dir = args.install_dir / "whatsapp-bridge"
+        if not changed_go:
+            print("  --build: patches already applied; rebuilding from current sources.")
+        print(
+            "  --build: running `CGO_ENABLED=1 go build -tags sqlite_fts5 "
+            f"-o whatsapp-bridge .` in {bridge_dir} ..."
+        )
+        result = subprocess.run(
+            ["go", "build", "-tags", "sqlite_fts5", "-o", "whatsapp-bridge", "."],
+            cwd=bridge_dir,
+            env={**os.environ, "CGO_ENABLED": "1"},
+        )
+        if result.returncode != 0:
+            print(
+                f"  --build: FAILED (exit {result.returncode}) — fix compilation errors above",
+                file=sys.stderr,
+            )
+            return result.returncode
+        print("  --build: OK — whatsapp-bridge binary rebuilt.")
+        build_ok = True
+    elif changed_go:
+        print(
+            "  NOTE: main.go changed but --build was not passed.  Run with --build to "
+            "rebuild, or manually: cd ~/.local/share/whatsapp-mcp/whatsapp-bridge && "
+            "go build -o whatsapp-bridge ."
+        )
+
+    # ── --restart: restart the service after a successful build ──────────────
+    if args.restart:
+        if not args.build:
+            print(
+                "  --restart: ignored — pass --build together with --restart to rebuild "
+                "and then restart.",
+                file=sys.stderr,
+            )
+        elif not build_ok:
+            print("  --restart: skipped — build did not succeed.", file=sys.stderr)
+        else:
+            import platform
+            import subprocess
+
+            print("  --restart: restarting whatsapp-bridge service ...")
+            if platform.system() == "Darwin":
+                # macOS: launchctl kickstart; fall back to load -w if not loaded yet.
+                label = f"com.{os.environ.get('USER', 'user')}.whatsapp-bridge"
+                uid = os.getuid()
+                target = f"gui/{uid}/{label}"
+                r = subprocess.run(
+                    ["launchctl", "kickstart", "-k", target],
+                    capture_output=True,
+                )
+                if r.returncode != 0:
+                    plist = (
+                        pathlib.Path.home()
+                        / "Library"
+                        / "LaunchAgents"
+                        / f"{label}.plist"
+                    )
+                    if plist.exists():
+                        subprocess.run(["launchctl", "load", "-w", str(plist)])
+                        r2 = subprocess.run(
+                            ["launchctl", "kickstart", "-k", target],
+                            capture_output=True,
+                        )
+                        if r2.returncode != 0:
+                            print(
+                                f"  --restart: launchctl kickstart failed: "
+                                f"{r2.stderr.decode().strip()}",
+                                file=sys.stderr,
+                            )
+                            return r2.returncode
+                    else:
+                        print(
+                            f"  --restart: plist not found at {plist}; "
+                            "start the service manually.",
+                            file=sys.stderr,
+                        )
+                        return 1
+            else:
+                # Linux (systemd --user)
+                r = subprocess.run(
+                    ["systemctl", "--user", "restart", "whatsapp-bridge.service"]
+                )
+                if r.returncode != 0:
+                    print(
+                        f"  --restart: systemctl restart failed (exit {r.returncode})",
+                        file=sys.stderr,
+                    )
+                    return r.returncode
+            print("  --restart: whatsapp-bridge.service restarted.")
+
     return 0
 
 
