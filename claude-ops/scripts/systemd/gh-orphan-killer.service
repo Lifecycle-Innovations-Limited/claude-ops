@@ -1,0 +1,10 @@
+[Unit]
+Description=gh-orphan-killer — single sweep reaping stale/orphaned GitHub-API poll loops
+Documentation=https://github.com/Lifecycle-Innovations-Limited/claude-ops
+
+[Service]
+Type=oneshot
+# __KILLER_PATH__ is substituted by install-gh-orphan-killer.sh to the committed
+# repo path (e.g. ~/Projects/claude-ops/claude-ops/claude-ops/scripts/gh-orphan-killer.sh).
+ExecStart=/bin/bash __KILLER_PATH__ --once
+Nice=10
