@@ -74,11 +74,16 @@ export function readAllLeases(log = () => {}) {
   if (!LEASE_BUCKET) return leases; // unconfigured → single-machine mode
   try {
     const ls = runAws([
-      's3api', 'list-objects-v2',
-      '--bucket', LEASE_BUCKET,
-      '--prefix', LEASE_PREFIX,
-      '--region', LEASE_REGION,
-      '--output', 'json',
+      's3api',
+      'list-objects-v2',
+      '--bucket',
+      LEASE_BUCKET,
+      '--prefix',
+      LEASE_PREFIX,
+      '--region',
+      LEASE_REGION,
+      '--output',
+      'json',
     ]);
     if (ls.status !== 0) {
       if (ls.stderr) log(`[lease] list failed (fail-open): ${ls.stderr.trim().split('\n')[0]}`);
@@ -88,10 +93,7 @@ export function readAllLeases(log = () => {}) {
     for (const obj of parsed.Contents || []) {
       const k = obj.Key;
       if (!k || !k.endsWith('.json')) continue;
-      const got = runAws([
-        's3', 'cp', `s3://${LEASE_BUCKET}/${k}`, '-',
-        '--region', LEASE_REGION,
-      ]);
+      const got = runAws(['s3', 'cp', `s3://${LEASE_BUCKET}/${k}`, '-', '--region', LEASE_REGION]);
       if (got.status !== 0) continue;
       try {
         const body = JSON.parse(got.stdout);
@@ -132,11 +134,19 @@ export function writeLease(accountKey, log = () => {}) {
   try {
     const me = selfHost();
     const body = JSON.stringify({ host: me, account: accountKey, ts: Date.now() });
-    const put = runAws([
-      's3', 'cp', '-', `s3://${LEASE_BUCKET}/${keyFor(accountKey)}`,
-      '--region', LEASE_REGION,
-      '--content-type', 'application/json',
-    ], { input: body });
+    const put = runAws(
+      [
+        's3',
+        'cp',
+        '-',
+        `s3://${LEASE_BUCKET}/${keyFor(accountKey)}`,
+        '--region',
+        LEASE_REGION,
+        '--content-type',
+        'application/json',
+      ],
+      { input: body },
+    );
     if (put.status !== 0) {
       if (put.stderr) log(`[lease] write ${accountKey} failed (non-fatal): ${put.stderr.trim().split('\n')[0]}`);
       return false;
@@ -146,10 +156,7 @@ export function writeLease(accountKey, log = () => {}) {
       const all = readAllLeases(log);
       for (const [acct, { host }] of all) {
         if (host === me && acct !== accountKey) {
-          const del = runAws([
-            's3', 'rm', `s3://${LEASE_BUCKET}/${keyFor(acct)}`,
-            '--region', LEASE_REGION,
-          ]);
+          const del = runAws(['s3', 'rm', `s3://${LEASE_BUCKET}/${keyFor(acct)}`, '--region', LEASE_REGION]);
           if (del.status === 0) log(`[lease] cleared stale own-lease for ${acct}`);
         }
       }
@@ -168,9 +175,7 @@ export function applyAccountLeases(config, { keepKey = null, log = () => {} } = 
     const blocked = foreignActiveKeys(log);
     if (!blocked.size) return config;
     const keyOf = (a) => a.label || a.email;
-    config.accounts = config.accounts.filter(
-      (a) => keyOf(a) === keepKey || !blocked.has(keyOf(a)),
-    );
+    config.accounts = config.accounts.filter((a) => keyOf(a) === keepKey || !blocked.has(keyOf(a)));
     log(`[lease] excluding foreign-active accounts: ${[...blocked].join(', ')}`);
   } catch (e) {
     log(`[lease] applyAccountLeases error (fail-open): ${e.message}`);

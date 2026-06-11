@@ -178,7 +178,9 @@ export function sweepDeferredRespawns(log = () => {}) {
     })();
     if (s.status !== 'busy' || deferredAgo > BUSY_FORCE_AFTER_MS) {
       if (s.status === 'busy') {
-        log(`[bg-respawn] ${id} still busy after ${Math.round(deferredAgo / 60000)}min — force-respawning before token expiry`);
+        log(
+          `[bg-respawn] ${id} still busy after ${Math.round(deferredAgo / 60000)}min — force-respawning before token expiry`,
+        );
       }
       if (doRespawn(s, log)) handled++;
     }
