@@ -24,7 +24,7 @@
  *   node rotate.mjs --capture                 # save current active token (print for Dashlane)
  *   node rotate.mjs --session                 # also send /login to running iTerm2 session
  *   node rotate.mjs --magic-link --to <email> # re-auth via email magic link (no Google OAuth)
- *   node rotate.mjs --allow-extra-usage       # BYPASS extra_usage billing guard (opt-in only)
+ *   Note: --allow-extra-usage is ignored if passed (legacy); extra_usage is per-org in Claude console only.
  */
 
 import {
@@ -36,39 +36,28 @@ import {
   chmodSync,
   readdirSync,
   renameSync,
+  mkdirSync,
+  statSync,
 } from 'fs';
+import { persistBedrockClaudeSettings } from './claude-settings-mode.mjs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync, execFileSync, spawnSync, spawn } from 'child_process';
-import { tmpdir, homedir } from 'os';
+import { tmpdir } from 'os';
 import { createHmac } from 'node:crypto';
-import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS } from './ai-brain.mjs';
-
-// ── Platform: Linux uses file-based vault; macOS uses security(1) keychain ───
-const IS_LINUX = process.platform === 'linux';
-// Top-level await: pre-load vault synchronously at module init so all
-// readKeychain/writeKeychain calls below can use it without being async.
-let _linuxVault = IS_LINUX ? await import('./vault-linux.mjs') : null;
+import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS, scrapeBillingState } from './ai-brain.mjs';
+import { destinationUtilHardBlock } from './rotation-policy.mjs';
+import { applyAccountLeases, writeLease } from './account-leases.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// Config resolution (Rule 0): real accounts live in the gitignored plugin data
-// dir (where setup-account.mjs writes them); the in-repo config.json is
-// gitignored + untracked and used only as a local fallback; config.example.json
-// is the shipped empty template. Preferring the override keeps the read path in
-// sync with the write path and prevents real emails landing in a tracked file.
-const ROTATION_DATA_DIR =
-  process.env.CLAUDE_PLUGIN_DATA_DIR || join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
-const CONFIG_OVERRIDE = join(ROTATION_DATA_DIR, 'account-rotation-config.json');
-const CONFIG_LOCAL = join(__dirname, 'config.json');
-const CONFIG_EXAMPLE = join(__dirname, 'config.example.json');
-const CONFIG_PATH = existsSync(CONFIG_OVERRIDE)
-  ? CONFIG_OVERRIDE
-  : existsSync(CONFIG_LOCAL)
-    ? CONFIG_LOCAL
-    : CONFIG_EXAMPLE;
+const CONFIG_PATH = join(__dirname, 'config.json');
 const STATE_PATH = join(__dirname, 'state.json');
 const LOCK_PATH = join(__dirname, '.rotating');
 const LOG_PATH = join(__dirname, 'rotation.log');
+const OAUTH_SNAPSHOTS_DIR = join(__dirname, 'oauth-snapshots');
+const BROWSER_PIN_PATH = join(__dirname, '.browser-pin');
+const BROWSER_PIN_BACKUP_PATH = join(__dirname, '.browser-pin-backup.json');
+const CLAUDE_JSON_PATH = join(process.env.HOME || '', '.claude.json');
 
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 // Use the OS username so multiple users on the same Mac don't collide on
@@ -79,12 +68,14 @@ const KEYCHAIN_ACCOUNT =
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── Bootstrap: verify dependencies ───────────────────────────────────────────
-// macOS: Playwright-over-CDP to Chrome or Chrome Beta (never Comet/bundled Chromium).
-// Linux: Playwright headless Chromium (no real Chrome required).
-function _hasCmd(bin) {
-  return spawnSync('which', [bin], { timeout: 2000 }).status === 0;
-}
-
+// Browser driver tiers (Playwright):
+//   1. CDP-attach to an already-running Chrome on :9222
+//   2. Spawn Chrome Beta with an isolated automation profile (preferred — has
+//      real-Chrome network stack so claude.ai/Google don't flag it)
+//   3. Fallback: Playwright's bundled Chromium with launchPersistentContext on
+//      an ISOLATED profile dir (used when no Chrome/Chrome Beta binary, or when
+//      Chrome Beta launch fails). Never depends on / touches Sam's daily Chrome
+//      or Comet — Comet stays reserved for the user.
 function ensureMCPServersAndTools() {
   const actions = [];
   const earlyLog = (m) => {
@@ -93,46 +84,48 @@ function ensureMCPServersAndTools() {
     } catch {}
   };
 
-  if (IS_LINUX) {
-    // Linux: headless Chromium via Playwright — no real Chrome binary needed
-    actions.push('platform: linux — headless Chromium mode');
-    if (_hasCmd('npx')) {
-      actions.push('playwright: available via npx');
-    } else {
-      actions.push('playwright: WARNING — npx not found; browser fallback may fail');
-    }
+  // 1. Chrome or Chrome Beta binary (Comet is off-limits)
+  const realChromes = [
+    '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  ];
+  const foundChrome = realChromes.find((p) => existsSync(p));
+  if (foundChrome) {
+    actions.push(`chrome-binary: ${foundChrome.split('/').pop()}`);
   } else {
-    // macOS: require real Chrome/Chrome Beta binary + CDP
-    const realChromes = [
-      '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta',
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    ];
-    const foundChrome = realChromes.find((p) => existsSync(p));
-    if (foundChrome) {
-      actions.push(`chrome-binary: ${foundChrome.split('/').pop()}`);
-    } else {
-      actions.push('chrome-binary: WARNING — no Chrome/Chrome Beta found');
-    }
-
-    // Chrome CDP port 9222 — probe (driver will launch Chrome if needed)
-    const cdpProbe = spawnSync('curl', ['-sf', 'http://localhost:9222/json/version'], { timeout: 1500 });
-    if (cdpProbe.status === 0) {
-      actions.push('chrome-cdp: reachable on :9222');
-    } else {
-      actions.push('chrome-cdp: not reachable (driver will launch Chrome)');
-    }
-
-    // security(1) keychain — required for token writes on macOS
-    if (!_hasCmd('security')) {
-      actions.push('security(1): MISSING — keychain writes will fail');
-    }
+    actions.push('chrome-binary: WARNING — no Chrome/Chrome Beta found');
   }
 
-  // dcli (Dashlane) — primary token path on both platforms
-  if (_hasCmd('dcli')) {
+  // 2. Chrome CDP port 9222 — probe (driver will launch Chrome if needed)
+  try {
+    execSync(`curl -sf http://localhost:9222/json/version >/dev/null 2>&1`, {
+      timeout: 1500,
+    });
+    actions.push('chrome-cdp: reachable on :9222');
+  } catch {
+    actions.push('chrome-cdp: not reachable (driver will launch Chrome)');
+  }
+
+  // 3. dcli (Dashlane) — required for primary token path
+  try {
+    execSync(`command -v dcli >/dev/null 2>&1`, { timeout: 1000 });
     actions.push('dcli: available');
+  } catch {
+    actions.push('dcli: MISSING — primary token path will fail');
+  }
+
+  // 4. security (macOS keychain) — required for token writes ON MACOS ONLY.
+  // On Linux the token store is the file-based ~/.claude/.credentials.json
+  // (see _linuxWriteCred / IS_LINUX), so a missing `security` binary is benign
+  // here — don't emit a misleading warning. (Sam 2026-06-06: box-local separation.)
+  if (process.platform === 'darwin') {
+    try {
+      execSync(`command -v security >/dev/null 2>&1`, { timeout: 1000 });
+    } catch {
+      actions.push('security(1): MISSING — keychain writes will fail');
+    }
   } else {
-    actions.push('dcli: MISSING — primary token path will fall back to browser');
+    actions.push('token-store: file (~/.claude/.credentials.json) — Linux, keychain not required');
   }
 
   for (const a of actions) earlyLog(a);
@@ -140,7 +133,11 @@ function ensureMCPServersAndTools() {
 
 // Unconditional warmup: every rotate.mjs run starts its MCP servers + tools FIRST.
 // Skip only for --help (where nothing runs downstream).
-if (!process.argv.slice(2).includes('--help') && !process.argv.slice(2).includes('--no-browser')) {
+if (
+  !process.argv.slice(2).includes('--help') &&
+  !process.argv.slice(2).includes('--no-browser') &&
+  !process.argv.slice(2).includes('--pin-browser')
+) {
   ensureMCPServersAndTools();
 }
 
@@ -156,32 +153,35 @@ function log(msg) {
 
 function notify(title, msg) {
   try {
-    if (IS_LINUX) {
-      // notify-send (libnotify) — no-op if display is unavailable (e.g. headless server)
-      spawnSync('notify-send', [title, msg], { timeout: 3000 });
-    } else {
-      // Use execFileSync to avoid shell interpretation of quotes in title/msg
-      execFileSync(
-        'osascript',
-        [
-          '-e',
-          `display notification "${msg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" with title "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
-        ],
-        { timeout: 5000 },
-      );
-    }
+    execSync(`osascript -e 'display notification "${msg.replace(/"/g, '\\"')}" with title "${title}"'`);
   } catch {}
 }
 
+// Cross-machine account leases (Sam 2026-06-06): NOT a static per-machine split.
+// Both machines may use ALL accounts; the only constraint is that the same
+// account is never ACTIVE on both at once. readConfig() drops accounts a FOREIGN
+// host currently holds a fresh lease on. We never drop the account we're
+// staying on (the live/tracked active key) so a heartbeat-write can refresh it.
+// Fail-open: lease store unreachable => no exclusion. See account-leases.mjs.
 function readConfig() {
-  return JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+  const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+  let keepKey = null;
+  try {
+    const st = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+    keepKey = st.activeAccount || null;
+  } catch {}
+  return applyAccountLeases(config, {
+    keepKey,
+    log: (m) => {
+      try {
+        log(m);
+      } catch {}
+    },
+  });
 }
 
 // All accounts' Claude login emails forward to ONE Gmail inbox, so every
-// magic-link poll queries that single account rather than each account's own
-// mailbox. Resolve it from env or the gitignored override config — never
-// hardcode a real address in the public repo (Rule 0). Returns '' if
-// unconfigured, in which case callers fall back to the per-account mailbox.
+// magic-link poll queries that single account. Resolve it from env or config.
 function magicLinkInbox() {
   if ((process.env.CLAUDE_ROT_GMAIL_ACCOUNT || '').trim()) return process.env.CLAUDE_ROT_GMAIL_ACCOUNT.trim();
   if ((process.env.GOG_ACCOUNT || '').trim()) return process.env.GOG_ACCOUNT.trim();
@@ -191,17 +191,43 @@ function magicLinkInbox() {
     return '';
   }
 }
+// Legacy account-key renames: old label → new canonical key.
+// Keep in sync with daemon.mjs STATE_KEY_MIGRATIONS.
+const STATE_KEY_MIGRATIONS = {
+  'account-personal': 'account-main',
+};
+
 function readState() {
+  let state;
   try {
-    return JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+    state = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
   } catch {
-    return {
-      activeAccount: null,
-      accounts: {},
-      toolUses: 0,
-      totalRotations: 0,
-    };
+    return { activeAccount: null, accounts: {}, toolUses: 0, totalRotations: 0 };
   }
+  let migrated = false;
+  if (state.accounts) {
+    for (const [oldKey, newKey] of Object.entries(STATE_KEY_MIGRATIONS)) {
+      if (state.accounts[oldKey] && !state.accounts[newKey]) {
+        state.accounts[newKey] = state.accounts[oldKey];
+        delete state.accounts[oldKey];
+        migrated = true;
+      } else if (state.accounts[oldKey]) {
+        delete state.accounts[oldKey];
+        migrated = true;
+      }
+    }
+    if (state.activeAccount && STATE_KEY_MIGRATIONS[state.activeAccount]) {
+      state.activeAccount = STATE_KEY_MIGRATIONS[state.activeAccount];
+      migrated = true;
+    }
+  }
+  if (migrated) {
+    try {
+      writeFileSync(STATE_PATH + '.tmp.' + process.pid, JSON.stringify(state, null, 2));
+      renameSync(STATE_PATH + '.tmp.' + process.pid, STATE_PATH);
+    } catch {}
+  }
+  return state;
 }
 function writeState(s, dryRun = false) {
   if (dryRun) {
@@ -268,6 +294,39 @@ function accountKey(a) {
   return a.label || a.email;
 }
 
+/** After OAuth completes in the same Playwright session, scrape console billing into state. */
+async function maybeScrapeBillingAfterOAuth(driver, account, log) {
+  if (process.env.CLAUDE_ROTATOR_SKIP_BILLING_SCRAPE === '1') return;
+  const page = driver?._page;
+  if (!page || typeof page.goto !== 'function') return;
+  const key = accountKey(account);
+  try {
+    log(`[billing-scrape] console billing for ${key}...`);
+    const billing = await scrapeBillingState(page, (m) => log(m));
+    if (!billing) return;
+    const state = readState();
+    state.accounts[key] = state.accounts[key] || {};
+    const prev = state.accounts[key].lastBilling || {};
+    state.accounts[key].lastBilling = {
+      ...prev,
+      credits_usd: billing.credits_usd,
+      auto_reload_enabled: billing.auto_reload_enabled,
+      extra_usage_enabled:
+        billing.extra_usage_enabled !== null && billing.extra_usage_enabled !== undefined
+          ? billing.extra_usage_enabled === true
+          : prev.extra_usage_enabled,
+      ts: Date.now(),
+      source: 'console_scrape',
+    };
+    writeState(state);
+    log(
+      `[billing-scrape] merged credits=${billing.credits_usd} auto_reload=${billing.auto_reload_enabled} extra_usage=${billing.extra_usage_enabled}`,
+    );
+  } catch (e) {
+    log(`[billing-scrape] error: ${String(e.message || e).slice(0, 100)}`);
+  }
+}
+
 // ── Live utilization query ────────────────────────────────────────────────────
 
 // Query all accounts in parallel — best-effort, uses cached fallback.
@@ -292,12 +351,12 @@ async function queryAllUtilization(config) {
         const res = await fetch(url, {
           method: 'GET',
           headers,
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(10000),
         });
         // Retry once on 429 — happens transiently right after token refresh
         // or when multiple accounts query in parallel
         if (res.status === 429 && attempt < 2) {
-          await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
           return fetchWithRetry(url, attempt + 1);
         }
         return res;
@@ -333,13 +392,13 @@ async function queryAllUtilization(config) {
     }
   }
 
-  // Stagger account queries by 150ms to avoid bursting /oauth/usage endpoint,
+  // Stagger account queries by 250ms to avoid bursting /oauth/usage endpoint,
   // which otherwise 429s on ~5-7 parallel requests from the same IP.
   const results = await Promise.allSettled(
     config.accounts
       .filter((a) => a.disabled !== true)
       .map(async (a, idx) => {
-        if (idx > 0) await new Promise((r) => setTimeout(r, 150 * idx));
+        if (idx > 0) await new Promise((r) => setTimeout(r, 250 * idx));
         return { key: accountKey(a), util: await queryAccount(a) };
       }),
   );
@@ -352,22 +411,53 @@ async function queryAllUtilization(config) {
   return map;
 }
 
+function currentActiveIsOnlyViableTarget(config, state, liveUtil) {
+  const activeKey = state.activeAccount;
+  if (!activeKey) return false;
+  const activeAcc = config.accounts.find((a) => accountKey(a) === activeKey);
+  if (!activeAcc || activeAcc.disabled === true) return false;
+  const key = accountKey(activeAcc);
+  const live = liveUtil[key];
+  const u5 = live?.five_hour_pct;
+  const u7 = live?.seven_day_pct;
+  if (u5 == null || u7 == null) return false;
+  const cap = destinationUtilHardBlock(config);
+  return Math.max(u5, u7) < cap;
+}
+
 // liveUtil: optional map from queryAllUtilization() — key → { five_hour_pct, ... }
-function pickNextAccount(config, state, liveUtil = {}, opts = {}) {
+function pickNextAccount(config, state, liveUtil = {}) {
   const activeKey = state.activeAccount;
   const windowMs = (config.rateLimits?.windowHours || 5) * 3_600_000;
   const now = Date.now();
 
-  // Hard block: account has Anthropic-side extra-usage (pay-per-use overage) enabled.
-  // Rotating to such an account risks credit-card charges when the weekly cap is hit.
-  // Override with opts.allowExtraUsage=true (CLI flag --allow-extra-usage) only when
-  // the user has explicitly opted in for this run.
-  const allowExtraUsage = opts.allowExtraUsage === true;
+  // extra_usage is informational only — manage pay-per-use per org in the Claude console;
+  // it does not affect who we can rotate to.
   function hasExtraUsageEnabled(a) {
     const key = accountKey(a);
+    // Per-account safe override (Sam 2026-06-11): when auto-reload/auto-billing is
+    // OFF on the org, extra_usage cannot leak money — at 0 credits Claude simply
+    // stops, it does NOT pay-per-use. Such accounts are first-class rotation
+    // targets, not last-resort EU-pool. Honors the config `extraUsageSafeOverride`
+    // field (previously declared but never wired).
+    if (a.extraUsageSafeOverride === true) return false;
     const live = liveUtil[key];
-    return live && live.extra_usage_enabled === true;
+    if (live && live.extra_usage_enabled === true) return true;
+    // Fallback to last-known extra_usage state from state.json
+    const cached = state.accounts?.[key]?.lastBilling?.extra_usage_enabled;
+    if (cached === true) return true;
+    return false;
   }
+
+  // Money-leak guard (Sam doctrine): by default NEVER rotate to an account with
+  // Anthropic-side extra_usage (pay-per-use overage) enabled — when its weekly cap
+  // is hit, further tokens silently bill the card. Opt out for a single run with
+  // --allow-extra-usage or ALLOW_EXTRA_USAGE=1. EU accounts remain reachable only
+  // as an absolute last resort (see euNormal/euLow pools below) so rotation never
+  // bricks when every non-EU account is exhausted.
+  const allowExtraUsage =
+    process.argv.slice(2).includes('--allow-extra-usage') || process.env.ALLOW_EXTRA_USAGE === '1';
+  const blockExtra = (a) => !allowExtraUsage && hasExtraUsageEnabled(a);
 
   // Check if an account's quota window has been exhausted (local tool-use tracking)
   function isExhausted(a) {
@@ -412,65 +502,97 @@ function pickNextAccount(config, state, liveUtil = {}, opts = {}) {
     return null;
   }
 
-  // Score: max of (5h, 7d) — an account is only viable if BOTH windows have
-  // headroom. Both unknown → 50 (neutral). Partial data → 100 (never treat a
-  // missing window as 0%). Lower is better.
+  // Score: max of (5h, 7d) — both windows must be known or we penalize heavily.
+  // Never treat a missing window as 0%: old bug was max(0, null→0)=0, so an account
+  // with live 7d=100% but a transient live miss became "best" pick via stale 5h cache.
   function score(a) {
     const u5 = getUtil5h(a);
     const u7 = getUtil7d(a);
+    // If both unknown, return 50 (middle of the pack)
     if (u5 === null && u7 === null) return 50;
-    if (u5 === null || u7 === null) return 100;
+    // If one is unknown, use the known one instead of penalizing at 100.
+    // This fixes the "query_failed blocks rotation" issue for transient API misses.
+    if (u5 === null) return u7;
+    if (u7 === null) return u5;
     return Math.max(u5, u7);
   }
 
-  // Log + hard-exclude accounts with extra_usage enabled (pay-per-use overage billing).
-  // These are the accounts that silently charge your credit card when the weekly cap
-  // is exceeded. Unless --allow-extra-usage was passed, we refuse to rotate to them.
   const extraUsageAccounts = config.accounts.filter(hasExtraUsageEnabled);
   if (extraUsageAccounts.length > 0) {
     log(
       `⚠  EXTRA USAGE ENABLED on ${extraUsageAccounts.length} account(s): ${extraUsageAccounts
         .map((a) => accountKey(a))
-        .join(', ')} — these can incur overage charges. Disable at console.anthropic.com/settings/billing.`,
+        .join(', ')} — overage billing possible; ${
+        allowExtraUsage
+          ? 'rotation NOT blocked (--allow-extra-usage set)'
+          : 'excluded as rotation targets by default (pass --allow-extra-usage to override)'
+      }. Disable per org at console.anthropic.com/settings/billing.`,
     );
   }
 
-  const excludeKey = (a) =>
-    a.disabled === true || accountKey(a) === activeKey || (!allowExtraUsage && hasExtraUsageEnabled(a));
+  const excludeKey = (a) => a.disabled === true || accountKey(a) === activeKey;
 
-  // Prefer PRIVATE (personal) accounts over TEAMS/org accounts. Org accounts
-  // (those carrying orgName/orgUuid) route through claude.ai's org chooser and
-  // Google Workspace push-2FA, which headless browser auth cannot clear — so a
-  // team account that wins on raw utilization still fails to rotate. Treat
-  // team-ness as the PRIMARY sort key (private first), utilization secondary,
-  // so a team account is only ever picked when no private account is viable.
-  const isTeamAccount = (a) =>
-    !!(a.orgUuid || (a.orgName && String(a.orgName).toLowerCase() !== String(a.email || '').toLowerCase()));
-  const byPrivateThenScore = (a, b) => {
-    const ta = isTeamAccount(a) ? 1 : 0;
-    const tb = isTeamAccount(b) ? 1 : 0;
-    if (ta !== tb) return ta - tb; // private (0) before team (1)
-    return score(a) - score(b);
-  };
+  // Separate refreshable accounts from accounts that are usable today but cannot
+  // be unattended-reauthenticated when their stored token dies. Manual-reauth
+  // accounts stay as a fallback, but should not win just because they are at 0%
+  // while other healthy refreshable accounts have headroom.
+  const refreshableNormal = config.accounts.filter(
+    (a) => a.priority !== 'low' && a.autoAuthDisabled !== true && !excludeKey(a) && !blockExtra(a),
+  );
+  const refreshableLow = config.accounts.filter(
+    (a) => a.priority === 'low' && a.autoAuthDisabled !== true && !excludeKey(a) && !blockExtra(a),
+  );
+  const manualReauthNormal = config.accounts.filter(
+    (a) => a.priority !== 'low' && a.autoAuthDisabled === true && !excludeKey(a) && !blockExtra(a),
+  );
+  const manualReauthLow = config.accounts.filter(
+    (a) => a.priority === 'low' && a.autoAuthDisabled === true && !excludeKey(a) && !blockExtra(a),
+  );
 
-  // Separate normal and low-priority, excluding current active + extra-usage accounts
-  const normal = config.accounts.filter((a) => a.priority !== 'low' && !excludeKey(a));
-  const low = config.accounts.filter((a) => a.priority === 'low' && !excludeKey(a));
+  // Absolute last-resort pools: accounts blocked ONLY because extra_usage is on.
+  // Empty when allowExtraUsage (they already live in the pools above). Tried after
+  // every non-EU pool, so an overage account is only ever picked when nothing else
+  // is viable — better a paid token than a fully stalled session on an exhausted key.
+  const euNormal = config.accounts.filter((a) => a.priority !== 'low' && !excludeKey(a) && blockExtra(a));
+  const euLow = config.accounts.filter((a) => a.priority === 'low' && !excludeKey(a) && blockExtra(a));
 
-  const UTIL_HARD_BLOCK = 90; // Skip accounts at/above this util% if possible
+  // Hard refusal for rotation *destination*: max(5h,7d) must stay below this.
+  // Default 95 (matches EXHAUSTED for Bedrock). Lower with
+  // rateLimits.destinationMaxUtilPercent (e.g. 90) if 90% 5h still feels empty in practice.
+  const UTIL_HARD_BLOCK = destinationUtilHardBlock(config);
 
-  for (const pool of [normal, low]) {
+  for (const pool of [refreshableNormal, refreshableLow, manualReauthNormal, manualReauthLow, euNormal, euLow]) {
     const fresh = pool.filter((a) => !isExhausted(a));
     const exhausted = pool.filter((a) => isExhausted(a));
 
     for (const candidates of [fresh, exhausted]) {
-      const viable = candidates.filter((a) => score(a) < UTIL_HARD_BLOCK);
-      const blocked = candidates.filter((a) => score(a) >= UTIL_HARD_BLOCK);
-      const sorted = [...viable].sort(byPrivateThenScore);
-      const pool2 = sorted.length ? sorted : [...blocked].sort(byPrivateThenScore);
+      // Per-account destination cap: an account may set `maxUtilPercent` in config to be
+      // refused as a rotation target at a STRICTER threshold than the global UTIL_HARD_BLOCK.
+      // min() ensures it can only tighten, never loosen, the global hard block.
+      // An account may set maxUtilPercent to cap it stricter than the global block (e.g. ≥50%).
+      const capFor = (a) => Math.min(UTIL_HARD_BLOCK, a.maxUtilPercent ?? Infinity);
+      const viable = candidates.filter((a) => score(a) < capFor(a));
+      // Primary key: utilization score (freshest first). Tie-breaker: when two
+      // accounts are within TIE_EPSILON percentage points of each other, prefer
+      // the least-recently-active (LRU) one. Without this, a pool of equally-low
+      // accounts (e.g. two tied at 3% 7d) ping-pongs forever — the active one is
+      // excluded, so the other is always "the minimum", and repeated /rotate just
+      // swaps the same pair. LRU spreads load across the whole low-util pool.
+      const TIE_EPSILON = 5;
+      const lastActiveMs = (a) => {
+        const la = state.accounts?.[accountKey(a)]?.lastActive;
+        const t = la ? new Date(la).getTime() : 0;
+        return Number.isFinite(t) ? t : 0;
+      };
+      const sorted = [...viable].sort((a, b) => {
+        const d = score(a) - score(b);
+        if (Math.abs(d) >= TIE_EPSILON) return d;
+        // Within the tie band: oldest lastActive (smallest ms) wins.
+        return lastActiveMs(a) - lastActiveMs(b);
+      });
 
-      if (pool2.length > 0) {
-        const best = pool2[0];
+      if (sorted.length > 0) {
+        const best = sorted[0];
         const u5 = getUtil5h(best);
         const u7 = getUtil7d(best);
         const src = liveUtil[accountKey(best)]
@@ -478,29 +600,213 @@ function pickNextAccount(config, state, liveUtil = {}, opts = {}) {
           : state.accounts[accountKey(best)]?.lastUtilization
             ? 'cached'
             : 'unknown';
-        const utilStr = ` 5h=${u5 ?? '?'}% 7d=${u7 ?? '?'}% [${src}]`;
-        if (score(best) >= UTIL_HARD_BLOCK) {
-          log(`WARNING: All candidates near limit — rotating to ${accountKey(best)}${utilStr}`);
-        } else {
-          log(`Picked ${accountKey(best)}${utilStr}`);
+        const reauthNote = best.autoAuthDisabled === true ? ', manual-reauth fallback' : '';
+        if (blockExtra(best)) {
+          log(
+            `⚠  LAST-RESORT: only viable target ${accountKey(best)} has extra_usage ON — rotating to it may incur paid overage (every non-overage account is exhausted/excluded). Disable extra_usage in the console to avoid this.`,
+          );
         }
+        log(`Picked ${accountKey(best)} 5h=${u5 ?? '?'}% 7d=${u7 ?? '?'}% [${src}${reauthNote}]`);
         return best;
       }
     }
   }
+  // Already on the only account with API headroom (non-active pool is empty of viable targets).
+  if (activeKey && currentActiveIsOnlyViableTarget(config, state, liveUtil)) {
+    const aa = config.accounts.find((a) => accountKey(a) === activeKey);
+    const u5 = aa ? getUtil5h(aa) : null;
+    const u7 = aa ? getUtil7d(aa) : null;
+    log(
+      `Only viable Max account is already active (${activeKey}, 5h=${u5 ?? '?'}% 7d=${u7 ?? '?'}%) — no rotation target (others exceed ${UTIL_HARD_BLOCK}% max(5h,7d) destination cap or tool-window exhausted).`,
+    );
+    return null;
+  }
+  // All non-active candidates exceed UTIL_HARD_BLOCK — refuse to pick. Caller handles
+  // Bedrock fallback. Sam's rule: never rotate to an account that will
+  // immediately say token-limit-reached.
+  log(
+    `All non-active candidates score ≥${UTIL_HARD_BLOCK}% max(5h,7d) (or pool empty) — refusing to pick (use Bedrock fallback)`,
+  );
   return null;
 }
 
-// ── Keychain / vault ──────────────────────────────────────────────────────────
-// macOS: security(1) Keychain.  Linux: file-based vault (vault-linux.mjs).
+// ── Smart recommend / Bedrock fallback ────────────────────────────────────────
+// "Will immediately say token-limit-reached" guard. Anything at/above this
+// 5h or 7d util is refused as a rotation target.
+const EXHAUSTED_THRESHOLD = 95;
+
+/** True when every non-active account with complete live util is at/above destination cap (no swap target). */
+function allNonActiveLiveConfirmedOverDestinationCap(config, state, liveUtil) {
+  const destCap = destinationUtilHardBlock(config);
+  const activeKey = state.activeAccount;
+  const others = config.accounts.filter((a) => a.disabled !== true && accountKey(a) !== activeKey);
+  if (others.length === 0) return false;
+  let nConfirmed = 0;
+  for (const a of others) {
+    const u = liveUtil[accountKey(a)];
+    if (!u || u.five_hour_pct == null || u.seven_day_pct == null) continue;
+    nConfirmed++;
+    if (Math.max(u.five_hour_pct, u.seven_day_pct) < destCap) return false;
+  }
+  return nConfirmed > 0;
+}
+
+// Returns { pick, allExhausted, allHaveLive, onlyActiveViable, destinationCapStuck } using LIVE util only.
+// allExhausted is true ONLY when every viable candidate has live data AND
+// max(5h,7d) >= EXHAUSTED_THRESHOLD. Per Sam's rule: never assume exhaustion
+// from cached / unknown data — Bedrock fallback must be live-confirmed.
+function recommendAccount(config, state, liveUtil) {
+  const candidates = config.accounts.filter((a) => a.disabled !== true);
+  const pick = pickNextAccount(config, state, liveUtil);
+  const onlyActiveViable = !pick && currentActiveIsOnlyViableTarget(config, state, liveUtil);
+  const allHaveLive =
+    candidates.length > 0 &&
+    candidates.every((a) => {
+      const u = liveUtil[accountKey(a)];
+      return u && u.five_hour_pct != null && u.seven_day_pct != null;
+    });
+  const allExhausted =
+    !onlyActiveViable &&
+    allHaveLive &&
+    candidates.every((a) => {
+      const u = liveUtil[accountKey(a)];
+      return Math.max(u.five_hour_pct, u.seven_day_pct) >= EXHAUSTED_THRESHOLD;
+    });
+  const destinationCapStuck =
+    !pick && !onlyActiveViable && !allExhausted && allNonActiveLiveConfirmedOverDestinationCap(config, state, liveUtil);
+  return { pick, allExhausted, allHaveLive, onlyActiveViable, destinationCapStuck };
+}
+
+// True if AWS Bedrock is reachable (sts + bedrock list).
+function checkBedrockAvailable(region) {
+  const reg = region || process.env.AWS_BEDROCK_REGION || 'us-east-1';
+  try {
+    execFileSync('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
+      stdio: 'pipe',
+      timeout: 5000,
+    });
+    execFileSync('aws', ['bedrock', 'list-inference-profiles', '--region', reg, '--max-results', '1'], {
+      stdio: 'pipe',
+      timeout: 6000,
+    });
+    return { ok: true, region: reg };
+  } catch (e) {
+    return { ok: false, region: reg, error: (e.message || '').slice(0, 120) };
+  }
+}
+
+// Activate Bedrock fallback. Writes a sentinel + prints source instructions.
+// Cannot mutate env of an already-running session — user must start a new
+// one with `source ~/.claude/scripts/account-rotation/use-bedrock.sh`.
+async function activateBedrockFallback(reason, dryRun = false) {
+  const region = process.env.AWS_BEDROCK_REGION || 'us-east-1';
+  const result = checkBedrockAvailable(region);
+  const sentinel = join(process.env.HOME || '', '.claude', '.bedrock-fallback.json');
+  if (dryRun) {
+    log(
+      `[DRY-RUN] Bedrock fallback branch taken (reason=${reason} region=${region} aws_ok=${result.ok}) — no sentinel/settings writes`,
+    );
+    if (!result.ok) {
+      log(`[DRY-RUN] AWS probe failed: ${result.error || 'unknown'}`);
+    } else {
+      log(`[DRY-RUN] Would write ${sentinel} + persistBedrockClaudeSettings(${region})`);
+    }
+    console.log('');
+    console.log('━━━ [DRY-RUN] BEDROCK FALLBACK (no files written) ━━━');
+    console.log(`Reason : ${reason}`);
+    console.log(`Region : ${region}`);
+    console.log(`AWS    : ${result.ok ? 'reachable' : 'NOT reachable'}`);
+    if (result.error) console.log(`Detail : ${result.error}`);
+    console.log('');
+    return result.ok;
+  }
+  const payload = {
+    activated_at: new Date().toISOString(),
+    reason,
+    region,
+    available: result.ok,
+    error: result.error || null,
+  };
+  try {
+    writeFileSync(sentinel, JSON.stringify(payload, null, 2));
+  } catch {}
+  if (result.ok) {
+    try {
+      persistBedrockClaudeSettings(region);
+      log(`✅ settings.json → Bedrock env (${region})`);
+    } catch (e) {
+      log(`⚠ settings.json Bedrock persist failed: ${(e.message || e).toString().slice(0, 120)}`);
+    }
+    log(`✅ BEDROCK FALLBACK ACTIVATED region=${region} reason=${reason}`);
+    notify('Bedrock Fallback Active', `All Anthropic accounts exhausted — switched to Bedrock (${region}).`);
+    console.log('');
+    console.log('━━━ BEDROCK FALLBACK ACTIVE ━━━');
+    console.log(`Reason : ${reason}`);
+    console.log(`Region : ${region}`);
+    console.log('Use it : source ~/.claude/scripts/account-rotation/use-bedrock.sh');
+    console.log(`Clear  : rm ${sentinel}`);
+    console.log('');
+  } else {
+    log(`❌ Bedrock fallback FAILED reason=${reason} aws_error=${result.error}`);
+    notify('Bedrock Fallback FAILED', `aws sts/bedrock unreachable in ${region} — manual intervention needed`);
+  }
+  return result.ok;
+}
+
+// ── Keychain ─────────────────────────────────────────────────────────────────
+
+// Linux fallback: ~/.claude/.credentials.json keyed by service name
+const LINUX_CRED_PATH = join(process.env.HOME || '', '.claude', '.credentials.json');
+const IS_LINUX = process.platform === 'linux';
+
+function _linuxReadCred(svc) {
+  try {
+    const store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
+    const val = store[svc];
+    if (!val) throw new Error(`No entry for ${svc}`);
+    return typeof val === 'string' ? val : JSON.stringify(val);
+  } catch (e) {
+    throw new Error(`No Linux cred entry ${svc}: ${e.message}`);
+  }
+}
+
+function _linuxWriteCred(svc, json) {
+  let store = {};
+  try {
+    store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
+  } catch {}
+  if (svc === KEYCHAIN_SERVICE) {
+    // Main slot: merge claudeAiOauth only, preserve mcpOAuth
+    try {
+      const incoming = JSON.parse(json);
+      store.claudeAiOauth = incoming.claudeAiOauth || incoming;
+    } catch {
+      store[svc] = json;
+    }
+  } else {
+    // Per-account vault slot
+    try {
+      store[svc] = JSON.parse(json);
+    } catch {
+      store[svc] = json;
+    }
+  }
+  writeFileSync(LINUX_CRED_PATH, JSON.stringify(store, null, 2), { mode: 0o600 });
+}
 
 function readKeychain(svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
   if (IS_LINUX) {
-    const vault = _linuxVault;
-    if (!vault) throw new Error('vault-linux not loaded yet');
-    const json = vault.readEntry(svc);
-    if (!json) throw new Error(`No vault entry for ${svc}`);
-    return json;
+    if (svc === KEYCHAIN_SERVICE) {
+      // Main slot: return full credentials JSON
+      try {
+        const store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
+        if (!store.claudeAiOauth) throw new Error('No claudeAiOauth in credentials');
+        return JSON.stringify({ claudeAiOauth: store.claudeAiOauth, mcpOAuth: store.mcpOAuth || {} });
+      } catch (e) {
+        throw new Error(`No Linux cred entry ${svc}: ${e.message}`);
+      }
+    }
+    return _linuxReadCred(svc);
   }
   const result = spawnSync('security', ['find-generic-password', '-s', svc, '-a', acct, '-g'], {
     timeout: 5000,
@@ -514,9 +820,7 @@ function readKeychain(svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
 
 function writeKeychain(json, svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
   if (IS_LINUX) {
-    const vault = _linuxVault;
-    if (!vault) throw new Error('vault-linux not loaded yet');
-    vault.writeEntry(svc, json);
+    _linuxWriteCred(svc, json);
     return;
   }
   try {
@@ -563,6 +867,341 @@ function hasStoredToken(account) {
     readKeychain(tokenService(account));
     return true;
   } catch {
+    return false;
+  }
+}
+
+// ── OAuth snapshots (chrome-bridge sync) ─────────────────────────────────────
+//
+// `~/.claude.json` carries an `oauthAccount` block + `chromeExtension` pairing
+// block that Claude Code uses to identify "who am I?" to the browser-extension
+// bridge. The bridge refuses to connect when claude.ai (in the paired Chrome
+// profile) is logged in as account A but Claude Code's oauthAccount says B.
+//
+// `swapToken()` only rotates the macOS keychain entry — it does NOT touch
+// `.claude.json`, so terminal rotation leaves the chrome-bridge auth stale.
+// Snapshots capture each account's `oauthAccount` + `chromeExtension` blocks
+// (one file per accountKey under `oauth-snapshots/`) so `--pin-browser` can
+// atomically swap both keychain AND `.claude.json` blocks before the extension
+// retries its handshake.
+
+function ensureSnapshotsDir() {
+  try {
+    mkdirSync(OAUTH_SNAPSHOTS_DIR, { recursive: true });
+  } catch {}
+}
+
+function snapshotPathFor(key) {
+  // Sanitize for filesystem: replace any path-hostile chars
+  const safe = String(key).replace(/[/\\\0]/g, '_');
+  return join(OAUTH_SNAPSHOTS_DIR, `${safe}.json`);
+}
+
+// Per-account Chrome profile name. One profile per account keeps each account
+// signed into claude.ai independently and lets each profile own its own
+// extension pairing (pairedDeviceId). Pin-browser swaps `.claude.json`
+// chromeExtension to the snapshot's deviceId; only the matching profile's
+// extension service worker will then authenticate against the CLI bridge.
+function chromeProfileDirFor(accountKey) {
+  // Chrome profile dir names tolerate most chars but we keep them shell-clean.
+  const safe = String(accountKey)
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+  return `ClaudeCode-${safe || 'unknown'}`;
+}
+
+function isChromeProfileRunning(profileDir) {
+  // Exact dir match — `profile-directory=ClaudeCode` must NOT match the longer
+  // `profile-directory=ClaudeCode-support-my-project.example.com`. Chrome appends the dir
+  // name and then a space (next CLI flag) or EOL. We parse the pgrep output
+  // and check the full arg.
+  try {
+    const out = spawnSync('pgrep', ['-fl', `profile-directory=${profileDir}`], {
+      encoding: 'utf8',
+      timeout: 3000,
+    });
+    const lines = (out.stdout || '').split('\n').filter(Boolean);
+    const needle = `profile-directory=${profileDir}`;
+    return lines.some((line) => {
+      const idx = line.indexOf(needle);
+      if (idx < 0) return false;
+      const tail = line.charAt(idx + needle.length);
+      // Match only when the next char is whitespace, end-of-string, or a
+      // shell-quote — not when it's part of a longer profile name.
+      return tail === '' || tail === ' ' || tail === '\t' || tail === '"' || tail === "'";
+    });
+  } catch {
+    return false;
+  }
+}
+
+const CHROME_PROFILES_BASE = join(process.env.HOME || '', 'Library', 'Application Support', 'Google', 'Chrome');
+
+function chromeProfilePath(profileDir) {
+  return join(CHROME_PROFILES_BASE, profileDir);
+}
+
+function isChromeProfileBootstrapped(profileDir) {
+  return existsSync(chromeProfilePath(profileDir));
+}
+
+// Clone an existing Chrome profile dir (extension + cookies + bookmarks
+// preserved). Caller is responsible for ensuring Chrome isn't running against
+// the source profile at clone time — otherwise leveldb/Network state may be
+// captured mid-write and corrupt the destination.
+function cloneChromeProfile(srcProfileDir, dstProfileDir) {
+  const src = chromeProfilePath(srcProfileDir);
+  const dst = chromeProfilePath(dstProfileDir);
+  if (!existsSync(src)) {
+    log(`[chrome-profile] clone source missing: ${src}`);
+    return { ok: false, reason: 'src-missing' };
+  }
+  if (existsSync(dst)) {
+    return { ok: true, reason: 'already-exists' };
+  }
+  // Refuse to clone while the source profile is in use — leveldb corruption.
+  if (isChromeProfileRunning(srcProfileDir)) {
+    return { ok: false, reason: 'src-running' };
+  }
+  const cp = spawnSync('cp', ['-R', src, dst], { timeout: 120_000 });
+  if (cp.status !== 0) {
+    log(`[chrome-profile] cp -R failed (exit ${cp.status}): ${(cp.stderr || '').toString().slice(0, 200)}`);
+    return { ok: false, reason: 'cp-failed' };
+  }
+  return { ok: existsSync(dst), reason: 'cloned' };
+}
+
+const CHROME_LOCAL_STATE_PATH = join(CHROME_PROFILES_BASE, 'Local State');
+
+// Hand-picked, visually distinct Chrome theme colors. The numeric form is
+// Chrome's signed-int packed sRGB used in `profile.info_cache.<dir>.profile_highlight_color`.
+// Hex shown for human-readability; converted via colorIntFromHex().
+const PROFILE_COLOR_PALETTE = [
+  { name: 'Cyan', hex: '#00ACC1' },
+  { name: 'Indigo', hex: '#3949AB' },
+  { name: 'Pink', hex: '#D81B60' },
+  { name: 'Green', hex: '#43A047' },
+  { name: 'Orange', hex: '#F4511E' },
+  { name: 'Purple', hex: '#8E24AA' },
+  { name: 'Teal', hex: '#00897B' },
+  { name: 'Red', hex: '#E53935' },
+  { name: 'Blue', hex: '#1E88E5' },
+];
+
+function colorIntFromHex(hex) {
+  const h = hex.replace('#', '');
+  // Chrome stores as 0xFF<R><G><B> (alpha=255), then interprets via int32 signed.
+  const argb = 0xff000000 | parseInt(h, 16);
+  // Convert to signed int32 the way Chrome serializes it
+  return argb | 0;
+}
+
+function readChromeLocalState() {
+  if (!existsSync(CHROME_LOCAL_STATE_PATH)) return null;
+  try {
+    return JSON.parse(readFileSync(CHROME_LOCAL_STATE_PATH, 'utf8'));
+  } catch (e) {
+    log(`[chrome-localstate] parse failed: ${e.message?.slice(0, 100)}`);
+    return null;
+  }
+}
+
+function writeChromeLocalStateAtomic(obj) {
+  const tmp = `${CHROME_LOCAL_STATE_PATH}.tmp.${process.pid}.${Date.now()}`;
+  writeFileSync(tmp, JSON.stringify(obj, null, 2));
+  renameSync(tmp, CHROME_LOCAL_STATE_PATH);
+}
+
+// Human-friendly display name from an accountKey. Best-effort:
+//   `support@example.ai`            → `Example Support`
+//   `info@myorg.nl`                 → `Myorg`
+//   `team-label`                    → `Team-Label`
+//   `user@example.foundation`       → `Example Foundation`
+function displayNameFor(account) {
+  const key = accountKey(account);
+  if (account.displayName) return account.displayName;
+  if (!key.includes('@')) {
+    return key.charAt(0).toUpperCase() + key.slice(1);
+  }
+  const [local, domain] = key.split('@');
+  const domainParts = (domain || '').split('.');
+  // For user@example.com → "Example"
+  // For info@myorg.nl → "Myorg"
+  // For support@example.ai → "Example Support"
+  const orgRaw = domainParts[0] || '';
+  // CamelCase split of org: "example" → "Example"
+  const org = orgRaw
+    .replace(/[-_]+/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/(^|\s)\S/g, (s) => s.toUpperCase());
+  // For info@/support@/sales@ etc., prefix the local part as a role suffix
+  const roleLocals = new Set(['info', 'support', 'sales', 'hello', 'team', 'admin', 'help']);
+  if (roleLocals.has(local.toLowerCase())) {
+    return `${org} ${local.charAt(0).toUpperCase() + local.slice(1)}`;
+  }
+  // For personal mailboxes (sam@…), use Org only if org is meaningful, else email local
+  return org || local.charAt(0).toUpperCase() + local.slice(1);
+}
+
+function launchChromeProfile(profileDir, url) {
+  // Use macOS `open -na` to launch a fresh Chrome instance bound to the named
+  // profile. Multiple Chrome instances on different profile-directories
+  // coexist; each gets its own extension service-worker scope.
+  try {
+    const args = [
+      '-na',
+      'Google Chrome',
+      '--args',
+      `--profile-directory=${profileDir}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+    ];
+    if (url) args.push(url);
+    spawnSync('open', args, { timeout: 8000 });
+    return true;
+  } catch (e) {
+    log(`[chrome-profile] launch failed for ${profileDir}: ${e.message?.slice(0, 100)}`);
+    return false;
+  }
+}
+
+function readClaudeJson() {
+  if (!existsSync(CLAUDE_JSON_PATH)) return null;
+  try {
+    return JSON.parse(readFileSync(CLAUDE_JSON_PATH, 'utf8'));
+  } catch (e) {
+    log(`[oauth-snapshot] failed to parse ~/.claude.json: ${e.message?.slice(0, 100)}`);
+    return null;
+  }
+}
+
+function writeClaudeJsonAtomic(obj) {
+  const tmp = `${CLAUDE_JSON_PATH}.tmp.${process.pid}.${Date.now()}`;
+  writeFileSync(tmp, JSON.stringify(obj, null, 2));
+  try {
+    renameSync(tmp, CLAUDE_JSON_PATH);
+  } catch (e) {
+    try {
+      unlinkSync(tmp);
+    } catch {}
+    throw e;
+  }
+}
+
+function extractOauthBlocks(claudeJson) {
+  if (!claudeJson) return null;
+  return {
+    oauthAccount: claudeJson.oauthAccount || null,
+    chromeExtension: claudeJson.chromeExtension || null,
+  };
+}
+
+function captureOauthSnapshot(accountEmail) {
+  ensureSnapshotsDir();
+  const cj = readClaudeJson();
+  if (!cj) {
+    log(`[oauth-snapshot] cannot capture: ~/.claude.json missing/unreadable`);
+    return false;
+  }
+  const blocks = extractOauthBlocks(cj);
+  if (!blocks?.oauthAccount?.emailAddress) {
+    log(`[oauth-snapshot] cannot capture: no oauthAccount.emailAddress in ~/.claude.json`);
+    return false;
+  }
+  const currentEmail = blocks.oauthAccount.emailAddress.toLowerCase();
+  const wantedEmail = (accountEmail || '').toLowerCase();
+  if (wantedEmail && currentEmail !== wantedEmail) {
+    log(
+      `[oauth-snapshot] refuse capture: ~/.claude.json oauthAccount=${currentEmail} but caller asked to capture for ${wantedEmail}. Restart Claude Code while CLI keychain is on ${wantedEmail} to refresh oauthAccount, then re-run --capture-oauth-snapshot.`,
+    );
+    return false;
+  }
+  // Always key the snapshot file by the .claude.json email — that's the truth.
+  const cfg = readConfig();
+  const matched = cfg.accounts.find((a) => (a.email || '').toLowerCase() === currentEmail);
+  const key = matched ? accountKey(matched) : currentEmail;
+  const out = snapshotPathFor(key);
+  const payload = {
+    capturedAt: new Date().toISOString(),
+    accountKey: key,
+    email: currentEmail,
+    chromeProfileDir: chromeProfileDirFor(key),
+    blocks,
+  };
+  writeFileSync(out, JSON.stringify(payload, null, 2));
+  log(`[oauth-snapshot] captured ${key} → ${out}`);
+  return true;
+}
+
+function loadOauthSnapshot(accountKeyOrEmail) {
+  const direct = snapshotPathFor(accountKeyOrEmail);
+  if (existsSync(direct)) {
+    try {
+      return JSON.parse(readFileSync(direct, 'utf8'));
+    } catch {}
+  }
+  // Fallback: resolve via config (label↔email)
+  const cfg = readConfig();
+  const acct = cfg.accounts.find(
+    (a) =>
+      (a.email || '').toLowerCase() === String(accountKeyOrEmail).toLowerCase() ||
+      (a.label || '').toLowerCase() === String(accountKeyOrEmail).toLowerCase(),
+  );
+  if (acct) {
+    const alt = snapshotPathFor(accountKey(acct));
+    if (existsSync(alt)) {
+      try {
+        return JSON.parse(readFileSync(alt, 'utf8'));
+      } catch {}
+    }
+  }
+  return null;
+}
+
+function applyOauthSnapshotToClaudeJson(snapshot) {
+  if (!snapshot?.blocks) return false;
+  const cj = readClaudeJson();
+  if (!cj) return false;
+  let changed = false;
+  if (snapshot.blocks.oauthAccount) {
+    cj.oauthAccount = snapshot.blocks.oauthAccount;
+    changed = true;
+  }
+  if (snapshot.blocks.chromeExtension) {
+    cj.chromeExtension = snapshot.blocks.chromeExtension;
+    changed = true;
+  }
+  if (changed) writeClaudeJsonAtomic(cj);
+  return changed;
+}
+
+function backupCurrentOauthBlocks() {
+  const cj = readClaudeJson();
+  if (!cj) return false;
+  const blocks = extractOauthBlocks(cj);
+  if (!blocks?.oauthAccount?.emailAddress) return false;
+  const payload = {
+    backedUpAt: new Date().toISOString(),
+    email: blocks.oauthAccount.emailAddress,
+    blocks,
+  };
+  writeFileSync(BROWSER_PIN_BACKUP_PATH, JSON.stringify(payload, null, 2));
+  return true;
+}
+
+function restoreOauthBlocksFromBackup() {
+  if (!existsSync(BROWSER_PIN_BACKUP_PATH)) return false;
+  try {
+    const backup = JSON.parse(readFileSync(BROWSER_PIN_BACKUP_PATH, 'utf8'));
+    const applied = applyOauthSnapshotToClaudeJson({ blocks: backup.blocks });
+    if (applied) log(`[oauth-snapshot] restored backup oauthAccount=${backup.email}`);
+    try {
+      unlinkSync(BROWSER_PIN_BACKUP_PATH);
+    } catch {}
+    return applied;
+  } catch (e) {
+    log(`[oauth-snapshot] backup restore failed: ${e.message?.slice(0, 100)}`);
     return false;
   }
 }
@@ -677,40 +1316,130 @@ function readLatestSMSCode({ maxAgeSec = 300 } = {}) {
 
 // ── PRIMARY: local keychain token swap ───────────────────────────────────────
 
+// OAuth refresh_token grant — same client/endpoint as refresh-tokens.mjs.
+// Critical on headless Linux: the browser-OAuth fallback can never complete
+// there, so an expired vault token must be refreshable in-process or the
+// rotation dies ("Cascade exhausted: All browser drivers failed").
+const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+const OAUTH_TOKEN_ENDPOINT = 'https://platform.claude.com/v1/oauth/token';
+
+async function refreshExpiredStoredToken(account, tokenJson) {
+  try {
+    const parsed = JSON.parse(tokenJson);
+    const o = parsed?.claudeAiOauth;
+    if (!o?.refreshToken) return null;
+    const res = await fetch(OAUTH_TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: o.refreshToken,
+        client_id: OAUTH_CLIENT_ID,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.access_token) {
+      log(
+        `[refresh] ${accountKey(account)}: refresh_token grant failed — ${body?.error?.message || `HTTP ${res.status}`}`,
+      );
+      return null;
+    }
+    const updated = {
+      claudeAiOauth: {
+        accessToken: body.access_token,
+        refreshToken: body.refresh_token || o.refreshToken,
+        expiresAt: body.expires_in ? Date.now() + body.expires_in * 1000 : Date.now() + 8 * 3_600_000,
+        scopes: o.scopes || [],
+        subscriptionType: body.subscription_type || o.subscriptionType,
+        rateLimitTier: body.rate_limit_tier || o.rateLimitTier,
+      },
+      mcpOAuth: {},
+    };
+    const json = JSON.stringify(updated);
+    writeStoredToken(account, json);
+    return json;
+  } catch (e) {
+    log(`[refresh] ${accountKey(account)}: refresh error — ${e.message?.slice(0, 100)}`);
+    return null;
+  }
+}
+
 async function swapToken(account) {
-  const token = readStoredToken(account);
+  let token = readStoredToken(account);
   if (!token) {
     log('[primary] No stored token — need browser fallback');
     return false;
   }
   if (tokenExpired(token)) {
-    log('[primary] Token expired — need browser fallback');
-    return false;
+    const refreshed = await refreshExpiredStoredToken(account, token);
+    if (refreshed) {
+      token = refreshed;
+      log('[primary] Expired token renewed via refresh_token grant');
+    } else {
+      log('[primary] Token expired and refresh failed — need browser fallback');
+      return false;
+    }
   }
   log(`[primary] Swapping active keychain for ${accountKey(account)}...`);
 
-  // Preserve mcpOAuth from current active token (Figma, Shake etc.)
-  // so MCP connectors don't break on account swap
+  // Save-back: preserve any silent OAuth refresh Claude Code performed mid-session
+  // by writing the current main-slot token back to the source account's vault entry.
+  try {
+    const swapState = readState();
+    const sourceKey = swapState.activeAccount;
+    if (sourceKey && sourceKey !== accountKey(account)) {
+      const swapConfig = readConfig();
+      const sourceAccount = swapConfig.accounts.find((a) => accountKey(a) === sourceKey);
+      if (sourceAccount) {
+        const currentJson = (() => {
+          try {
+            return readKeychain(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
+          } catch {
+            return null;
+          }
+        })();
+        if (currentJson && currentJson.includes('claudeAiOauth')) {
+          try {
+            const parsed = JSON.parse(currentJson);
+            const clean = JSON.stringify({ claudeAiOauth: parsed.claudeAiOauth, mcpOAuth: {} });
+            writeKeychain(clean, tokenService(sourceAccount));
+            log(`[save-back] preserved current token for ${sourceKey}`);
+          } catch (e) {
+            log(`[save-back] skipped: parse/write error — ${e.message?.slice(0, 80)}`);
+          }
+        } else {
+          log(`[save-back] skipped: no claudeAiOauth in current main slot`);
+        }
+      } else {
+        log(`[save-back] skipped: source account ${sourceKey} not found in config`);
+      }
+    } else if (!sourceKey) {
+      log(`[save-back] skipped: no active account tracked in state`);
+    }
+  } catch (e) {
+    log(`[save-back] skipped: ${e.message?.slice(0, 80)}`);
+  }
+
+  // Preserve mcpOAuth from current active token (giga, Amplitude, higgsfield etc.)
+  // Always merge — even if current mcpOAuth appears empty it may be populated by CC
+  // between writes; the guard Object.keys>0 caused silent wipes when a prior rotation
+  // had already zeroed the field.
   try {
     const current = readKeychain();
     const currentParsed = JSON.parse(current);
     const newParsed = JSON.parse(token);
-    // Unconditional merge: vault tokens ship mcpOAuth:{} by design (stripped at
-    // save time). The previous `Object.keys > 0` guard was self-reinforcing —
-    // once a wipe wrote mcpOAuth:{}, the next rotation read empty, skipped the
-    // merge, and wiped again forever, forcing every OAuth MCP server
-    // (giga/Amplitude/higgsfield) to browser-reauth on the next CC launch.
     if (currentParsed.mcpOAuth) {
+      // Unconditional merge: keep all current mcpOAuth entries, only swap claudeAiOauth
       newParsed.mcpOAuth = { ...newParsed.mcpOAuth, ...currentParsed.mcpOAuth };
-      writeKeychain(JSON.stringify(newParsed));
-      log('[primary] Wrote token (mcpOAuth merged from current session)');
-      return true;
     }
+    writeKeychain(JSON.stringify(newParsed));
+    log('[primary] Wrote token (mcpOAuth merged from current session)');
+    return true;
   } catch {}
 
   // Defensive fallback: catch path or falsy currentParsed.mcpOAuth lands here.
-  // Re-attempt the merge once before writing so a transient read/parse error
-  // doesn't wipe mcpOAuth and force every MCP OAuth server to reauth.
+  // Re-attempt the merge once more before writing — without this, a transient
+  // read/parse error wipes mcpOAuth and forces every MCP OAuth server to reauth.
   let outToken = token;
   try {
     const cur = readKeychain();
@@ -933,7 +1662,7 @@ async function makeKaptureDriver() {
         }
         const clean = t
           .replace(/button:has-text\("?([^"]+)"?\)/g, '$1')
-          .replace(/['"]/g, '')
+          .replace(/"/g, '')
           .trim();
         const escaped = clean.replace(/'/g, "\\'");
         const xpaths = [
@@ -1049,7 +1778,7 @@ async function makeKaptureDriver() {
               for (const t of texts) {
                 const clean = t
                   .replace(/button:has-text\("?([^"]+)"?\)/g, '$1')
-                  .replace(/['"]/g, '')
+                  .replace(/"/g, '')
                   .trim();
                 const xpaths = [
                   `//*[normalize-space(text())='${clean}']`,
@@ -1105,15 +1834,14 @@ function extractText(result) {
   return JSON.stringify(result);
 }
 
-// ─── Driver 2: Playwright attached to REAL Chrome via CDP ───────────────────
-// Attaches to the user's real Chrome/Comet profile (with all Google logins).
-// Strategy:
+// ─── Driver 2: Playwright (CDP → Chrome Beta → bundled Chromium) ────────────
+// Tiered strategy — never touches Sam's daily Chrome / Comet profile:
 //   1. If CDP is already up on :9222 → attach directly
-//   2. Else: gracefully quit Chrome, relaunch with CDP + the real user profile
-//   3. NEVER uses bundled Chromium, NEVER uses a separate profile dir
-//
-// The real user profile has all Google accounts signed in, so claude.ai's
-// OAuth account picker shows all of them.
+//   2. Else: spawn Chrome Beta (REAL_BROWSERS) with an ISOLATED automation
+//      profile (.chrome-beta-automation) and CDP enabled
+//   3. Fallback: Playwright's bundled Chromium via launchPersistentContext on
+//      its own ISOLATED profile (.chromium-automation). Used when no Chrome
+//      Beta binary is found, or its launch fails.
 
 // Chrome Beta ONLY — dedicated automation browser.
 // Uses an ISOLATED profile (not linked to Chrome Beta's default). Starts empty;
@@ -1179,118 +1907,116 @@ function isAppRunning(appName) {
 }
 
 function gracefullyQuitApp(appName) {
-  if (IS_LINUX) {
-    // No AppleScript on Linux — send SIGTERM and wait
-    spawnSync('pkill', ['-f', appName], { timeout: 3000 });
-    for (let i = 0; i < 10; i++) {
-      if (!isAppRunning(appName)) return true;
-      spawnSync('sleep', ['0.5']);
-    }
-    return false;
-  }
   try {
-    execFileSync('osascript', ['-e', `tell application "${appName}" to quit`], { timeout: 8000 });
+    execSync(`osascript -e 'tell application "${appName}" to quit' 2>/dev/null`, { timeout: 8000 });
+    // Wait up to 5s for it to actually quit
     for (let i = 0; i < 10; i++) {
       if (!isAppRunning(appName)) return true;
-      spawnSync('sleep', ['0.5']);
+      execSync('sleep 0.5');
     }
   } catch {}
   return false;
 }
 
+// Isolated profile dir for the bundled-Chromium fallback. Distinct from
+// .chrome-beta-automation so the two tiers can coexist without stepping on each
+// other's Cookies/LoginData files.
+const CHROMIUM_FALLBACK_PROFILE = join(__dirname, '.chromium-automation');
+
 async function makePlaywrightDriver() {
   const { chromium } = await import('playwright');
 
-  // ── Linux: headless Chromium (no real Chrome on servers) ─────────────────
-  if (IS_LINUX) {
-    log('[playwright] Linux mode — launching headless Chromium');
-    const profileDir = join(__dirname, '.chromium-linux-profile');
-    const browser = await chromium.launchPersistentContext(profileDir, {
-      headless: true,
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-background-networking',
-        '--disable-component-update',
-        '--disable-default-apps',
-        '--disable-sync',
-        '--disable-notifications',
-      ],
-    });
-    const page = browser.pages()[0] || (await browser.newPage());
-    return buildPageDriver(
-      'playwright-linux',
-      page,
-      async () => {
-        try {
-          await browser.close();
-        } catch {}
-      },
-      browser,
-    );
-  }
-
-  // ── macOS: attach to real Chrome via CDP ──────────────────────────────────
-  // 1. Try attaching to already-running Chrome on CDP
+  // Tier 1: attach to an already-running Chrome on CDP :9222 (cheapest).
   let attached = await tryConnectCDP(chromium);
   let weSpawnedChrome = false;
   let spawnedProfile = null;
 
   if (!attached) {
+    // Tier 2: spawn Chrome Beta with CDP + isolated profile, if installed.
     const browser = findRealBrowser();
-    if (!browser) throw new Error('No Comet / Chrome Beta / Chrome binary found');
+    if (browser) {
+      ensureSymlinkedProfile(browser);
 
-    // 2. Ensure symlinked profile exists (Chrome CDP requires non-default user-data-dir)
-    ensureSymlinkedProfile(browser);
+      // Quit any running Chrome Beta holding the profile files
+      // (the symlinked profile shares Cookies/LoginData files with the real one).
+      if (isAppRunning(browser.appName)) {
+        log(`[playwright] ${browser.name} running — quitting to release profile files...`);
+        gracefullyQuitApp(browser.appName);
+        await sleep(1500);
+        try {
+          execSync(`pkill -f "${browser.appName}.app/Contents/MacOS"`);
+        } catch {}
+        await sleep(500);
+      }
 
-    // 3. Quit any running Chrome Beta that might be holding the real profile
-    //    (the symlinked profile shares Cookies/LoginData files with the real one).
-    if (isAppRunning(browser.appName)) {
-      log(`[playwright] ${browser.name} running — quitting to release profile files...`);
-      gracefullyQuitApp(browser.appName);
-      await sleep(1500);
-      // Force kill if still alive
-      try {
-        execSync(`pkill -f "${browser.appName}.app/Contents/MacOS"`);
-      } catch {}
-      await sleep(500);
+      // Launch visible (NOT headless — Cloudflare blocks headless Chrome).
+      // Off-screen + 1x1 so the window is effectively invisible on multi-monitor/retina
+      // setups where 3000,3000 can clamp back onto a display.
+      log(`[playwright] Launching ${browser.name} hidden (1x1 off-screen) with CDP :${CDP_PORT}...`);
+      spawn(
+        browser.bin,
+        [
+          `--remote-debugging-port=${CDP_PORT}`,
+          `--user-data-dir=${browser.profile}`,
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-background-networking',
+          '--disable-component-update',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--disable-notifications',
+          '--window-position=9000,9000',
+          '--window-size=1,1',
+        ],
+        { detached: true, stdio: 'ignore' },
+      ).unref();
+      weSpawnedChrome = true;
+      spawnedProfile = browser.profile;
+
+      // Poll CDP until it comes up
+      for (let i = 0; i < 30; i++) {
+        await sleep(500);
+        attached = await tryConnectCDP(chromium);
+        if (attached) break;
+      }
+      if (!attached) {
+        log(
+          `[playwright] Chrome Beta CDP didn't come up on :${CDP_PORT} within 15s — falling back to bundled Chromium`,
+        );
+      }
+    } else {
+      log('[playwright] No Chrome Beta / Chrome binary found — falling back to bundled Chromium');
     }
+  }
 
-    // 4. Launch visible (NOT headless — Cloudflare blocks headless Chrome)
-    //    Positioned off-screen + 1x1 size so the window is effectively invisible
-    //    even on multi-monitor / retina setups where 3000,3000 clamps onto a display.
-    log(`[playwright] Launching ${browser.name} hidden (1x1 off-screen) with CDP :${CDP_PORT}...`);
-    spawn(
-      browser.bin,
-      [
-        `--remote-debugging-port=${CDP_PORT}`,
-        `--user-data-dir=${browser.profile}`,
-        '--no-first-run',
-        '--no-default-browser-check',
+  // Tier 3: Playwright's bundled Chromium with an isolated persistent profile.
+  // launchPersistentContext returns a BrowserContext directly (no Browser handle);
+  // the close-fn below handles both shapes.
+  let bundledCtx = null;
+  if (!attached) {
+    if (!existsSync(CHROMIUM_FALLBACK_PROFILE)) {
+      execSync(`mkdir -p "${CHROMIUM_FALLBACK_PROFILE}"`, { timeout: 2000 });
+    }
+    log(`[playwright] Launching bundled Chromium (persistent profile: ${CHROMIUM_FALLBACK_PROFILE})...`);
+    bundledCtx = await chromium.launchPersistentContext(CHROMIUM_FALLBACK_PROFILE, {
+      headless: false,
+      args: [
         '--disable-blink-features=AutomationControlled',
         '--disable-background-networking',
         '--disable-component-update',
         '--disable-default-apps',
         '--disable-sync',
         '--disable-notifications',
+        '--no-first-run',
+        '--no-default-browser-check',
         '--window-position=9000,9000',
         '--window-size=1,1',
       ],
-      { detached: true, stdio: 'ignore' },
-    ).unref();
-    weSpawnedChrome = true;
-    spawnedProfile = browser.profile;
-
-    // 4. Poll CDP until it comes up
-    for (let i = 0; i < 30; i++) {
-      await sleep(500);
-      attached = await tryConnectCDP(chromium);
-      if (attached) break;
-    }
-    if (!attached) throw new Error(`CDP didn't come up on :${CDP_PORT} within 15s`);
+    });
+    const page = bundledCtx.pages()[0] || (await bundledCtx.newPage());
+    attached = { browser: null, ctx: bundledCtx, page };
+    log('[playwright] Attached to bundled Chromium');
   }
 
   const { browser: pwBrowser, ctx, page } = attached;
@@ -1298,8 +2024,14 @@ async function makePlaywrightDriver() {
     'playwright',
     page,
     async () => {
+      if (bundledCtx) {
+        try {
+          await bundledCtx.close();
+        } catch {}
+        return;
+      }
       try {
-        await pwBrowser.close();
+        if (pwBrowser) await pwBrowser.close();
       } catch {}
       // Kill Chrome Beta if WE spawned it — don't leave zombie Chromes
       if (weSpawnedChrome && spawnedProfile) {
@@ -1360,7 +2092,7 @@ async function makeChromeJXADriver() {
       for (const t of texts) {
         const clean = t
           .replace(/button:has-text\("?([^"]+)"?\)/g, '$1')
-          .replace(/['"]/g, '')
+          .replace(/"/g, '')
           .trim();
         try {
           const r = jxaJs(
@@ -1455,7 +2187,7 @@ function buildPageDriver(name, page, closeFn, ctx) {
         // and ARIA roles (Google 2FA pages use <li> for options, not <button>)
         const clean = t
           .replace(/button:has-text\("?([^"]+)"?\)/g, '$1')
-          .replace(/['"]/g, '')
+          .replace(/"/g, '')
           .trim();
         try {
           // Try each element type individually so we don't get strict-mode violations
@@ -1546,34 +2278,31 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
   // Track skipped (stale/wrong-target) thread IDs so we don't re-evaluate them every poll
   const seenSkip = new Set();
 
-  // All accounts forward their Claude login emails to one inbox; query that
-  // single account. Falls back to the per-account mailbox if unconfigured.
-  // The per-link target-email check below still disambiguates which link
-  // belongs to the account being rotated, so a shared inbox is safe.
-  const inbox = magicLinkInbox() || accountEmail;
-  if (inbox !== accountEmail) {
-    log(`[magic-link] Using shared forwarding inbox for ${accountEmail}'s link`);
+  // gog requires an explicit --account in daemon/launchd env. All Claude login
+  // emails forward to one inbox, so we always query that single account.
+  const inbox = magicLinkInbox();
+  const acctArgs = inbox ? ['--account', inbox] : [];
+  if (!inbox) {
+    log(
+      `[magic-link] WARNING: no Gmail inbox configured (set CLAUDE_ROT_GMAIL_ACCOUNT or config.magicLinkGmailAccount)`,
+    );
   }
 
   while (Date.now() - startTime < maxWaitMs) {
     try {
       // Pull up to 10 recent matches so a stale top-result doesn't block us.
-      // Use --account so we search the correct inbox, not the default gog account.
-      const gogEnv = { ...process.env, GOG_KEYRING_PASSWORD: process.env.GOG_KEYRING_PASSWORD || '' };
       const searchResult = execFileSync(
         'gog',
         [
-          '--account',
-          inbox,
           'gmail',
           'search',
           'subject:"Secure link to log in to Claude" newer_than:5m',
           '--max',
           '10',
           '-j',
-          '--no-input',
+          ...acctArgs,
         ],
-        { timeout: 15_000, stdio: ['ignore', 'pipe', 'pipe'], env: gogEnv },
+        { timeout: 15_000, stdio: ['ignore', 'pipe', 'pipe'] },
       )
         .toString()
         .trim();
@@ -1588,19 +2317,13 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
         if (!/^[A-Za-z0-9_-]+$/.test(threadIdRaw)) continue;
         if (seenSkip.has(threadIdRaw)) continue;
 
-        const threadJson = execFileSync(
-          'gog',
-          ['--account', inbox, 'gmail', 'thread', 'get', threadIdRaw, '-j', '--no-input'],
-          {
-            timeout: 15_000,
-            stdio: ['ignore', 'pipe', 'pipe'],
-            env: gogEnv,
-          },
-        ).toString();
+        const threadJson = execFileSync('gog', ['gmail', 'read', threadIdRaw, '-j', ...acctArgs], {
+          timeout: 15_000,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }).toString();
 
         const parsed = JSON.parse(threadJson);
-        // gog gmail thread get returns { messages: [...] } directly (not nested under .thread)
-        const messages = parsed?.messages || parsed?.thread?.messages || [];
+        const messages = parsed?.thread?.messages || [];
 
         // Reject any message older than our requestedAt (stale link from prior call)
         const msgTimes = messages.map((m) => parseInt(m.internalDate || '0', 10) / 1000).filter((t) => t > 0);
@@ -1700,10 +2423,132 @@ async function runAuthFlow(driver, account) {
   const aiBrainHistory = [];
   const aiBrainEnabled = driver._page && process.env.CLAUDE_ROTATOR_DISABLE_AI_BRAIN !== '1';
 
+  async function finishMagicLinkLogin(magicLink) {
+    if (!magicLink) return false;
+    if (magicLink.startsWith('code:')) {
+      const code = magicLink.replace('code:', '');
+      log(`[magic-link] Entering verification code: ${code}`);
+      await driver.fillInput(
+        'input[type="text"], input[type="number"], input[name="code"], input[placeholder*="code" i]',
+        code,
+      );
+      await driver.findAndClick(['Continue', 'Verify', 'Submit', 'button[type="submit"]']);
+    } else {
+      log(`[magic-link] Navigating to login link`);
+      await driver.goto(magicLink);
+    }
+    await sleep(4000);
+    // After magic link login, session is now valid — re-navigate to authUrl
+    // so the OAuth flow can complete (org chooser → authorize → callback)
+    if (driver._authUrl) {
+      // For multi-org accounts (same email, multiple workspaces like
+      // user-personal vs user-team), force an explicit org
+      // pick BEFORE hitting /oauth/authorize. Otherwise claude.ai uses
+      // the "last active" org silently, and both sibling vaults end up
+      // holding the same org's token.
+      const isMultiOrg =
+        account.label && account.orgName && account.orgName.toLowerCase() !== account.email.toLowerCase();
+      if (isMultiOrg) {
+        log(`[magic-link] Multi-org account — forcing org pick for "${account.orgName}" via claude.ai/home detour`);
+        try {
+          await driver.goto('https://claude.ai/home');
+        } catch {}
+        await sleep(3500);
+        // Try to click the configured orgName if a chooser is showing.
+        // The broadened org-chooser logic in the main loop will also
+        // pick this up on the next iteration, but an immediate attempt
+        // here short-circuits silently-skipped cases.
+        const picked = await driver.findAndClick([
+          `button:has-text("${account.orgName}")`,
+          `[role="button"]:has-text("${account.orgName}")`,
+          `text="${account.orgName}"`,
+          account.orgName,
+        ]);
+        if (picked) {
+          log(`[magic-link] Pre-selected org "${account.orgName}" before OAuth`);
+          await sleep(2500);
+        } else {
+          log(`[magic-link] No immediate match for "${account.orgName}" — will rely on org-chooser loop / ai-brain`);
+        }
+      }
+      log(`[magic-link] Re-navigating to OAuth authorize URL`);
+      try {
+        await driver.goto(driver._authUrl);
+      } catch {}
+      await sleep(3000);
+    }
+    return true;
+  }
+
+  async function handleClaudeMagicLinkEmailPrompt(reason) {
+    if (!account.useMagicLink) return false;
+    const filled = await driver.fillInput('[data-testid="email"], #email, input[type="email"]', account.email);
+    if (!filled) return false;
+    log(`[magic-link] ${reason ? `${reason} — ` : ''}Filled email: ${account.email}`);
+    await sleep(500);
+    const submitted = await driver.findAndClick([
+      '[data-testid="continue"]',
+      'button[data-testid="continue"]',
+      'button[type="submit"]:has-text("Continue with email")',
+      'button:has-text("Continue with email")',
+      'button:has-text("Continue")',
+    ]);
+    if (!submitted) return false;
+    log(`[magic-link] Submitted email — magic link should be sent`);
+    await sleep(3000);
+
+    const magicLink = await pollGmailForMagicLink(account.email);
+    if (await finishMagicLinkLogin(magicLink)) return true;
+
+    log(`[magic-link] No magic link found in Gmail — magic-link-only, no Google fallback`);
+    return false;
+  }
+
+  async function isClaudeLoginCodePage() {
+    if (!driver.readPageText) return false;
+    try {
+      const text = (await driver.readPageText()).toLowerCase();
+      return (
+        text.includes('verification code') ||
+        text.includes('enter the code') ||
+        text.includes('check your email') ||
+        text.includes('we sent') ||
+        text.includes('code sent')
+      );
+    } catch {
+      return false;
+    }
+  }
+
   for (let step = 0; step < 20; step++) {
     await sleep(2500);
     const url = await driver.currentUrl().catch(() => '');
     log(`Step ${step} [${driver.name}]: ${url.substring(0, 100)}`);
+
+    // Claude sometimes renders the email login form while preserving the
+    // /oauth/authorize URL. Handle known Claude auth prompts before the generic
+    // stall detector, otherwise AI-brain burns multiple decisions waiting for a
+    // verification code that the deterministic Gmail poller can resolve or fail.
+    if (account.useMagicLink && url.includes('claude.ai')) {
+      if (
+        await handleClaudeMagicLinkEmailPrompt(
+          url.includes('/oauth/authorize') ? 'OAuth page rendered login prompt' : 'Login prompt',
+        )
+      ) {
+        stallCount = 0;
+        continue;
+      }
+      if (url.includes('/login') && (await isClaudeLoginCodePage())) {
+        log(`[magic-link] Claude login is waiting for an email verification code; polling Gmail once before aborting`);
+        const magicLink = await pollGmailForMagicLink(account.email, 30_000);
+        if (await finishMagicLinkLogin(magicLink)) {
+          stallCount = 0;
+          continue;
+        }
+        log(`[magic-link] Verification-code page could not be completed automatically for ${account.email}`);
+        return false;
+      }
+    }
 
     // Stall check — run BEFORE the URL pattern dispatcher so an unknown
     // challenge page gets escalated to the AI brain. Skip on the very first
@@ -2065,49 +2910,80 @@ async function runAuthFlow(driver, account) {
       oauthPath = new URL(url).pathname;
     } catch {}
     if (oauthPath.includes('/oauth/authorize') || (oauthPath.endsWith('/authorize') && url.includes('claude'))) {
-      // Step 1: Read page to verify "Logged in as <correct email>"
-      let pageText = '';
-      if (driver.readPageText) {
-        try {
-          pageText = (await driver.readPageText()).toLowerCase();
-        } catch {}
-      }
-
-      const hasCorrectAccount = pageText && pageText.includes(account.email.toLowerCase());
-      const hasAnyOtherEmail = pageText && /[\w.+-]+@[\w.-]+\.\w+/.test(pageText) && !hasCorrectAccount;
-
-      // If we can't read the page OR we see the wrong account, force switch
-      if (!pageText || hasAnyOtherEmail) {
-        log(`Page text: ${pageText ? 'wrong account' : 'unreadable'} — clicking Switch account / Logout`);
-        const switched = await driver.findAndClick([
-          'Switch account',
-          'Log out',
-          'Logout',
-          'Sign out',
-          'Use another account',
-        ]);
-        if (switched) {
-          await sleep(3000);
-          continue;
+      // Magic-link route: we authenticated via a single-use link delivered to
+      // account.email's inbox, so the session on this page is guaranteed to be
+      // the right account. Skip the readPageText "verify" dance — it failed to
+      // read DOM ~50% of the time and triggered useless Switch-account/Logout
+      // detours that broke the flow. Just go click Authorize.
+      if (account.useMagicLink) {
+        log(`[magic-link] On /oauth/authorize — proceeding straight to Authorize`);
+      } else {
+        // Step 1: Read page to verify "Logged in as <correct email>"
+        let pageText = '';
+        if (driver.readPageText) {
+          try {
+            pageText = (await driver.readPageText()).toLowerCase();
+          } catch {}
         }
-        // Couldn't find switch button — the page may already be the account chooser
-        // Try clicking the email we want directly
-        const picked = await driver.findAndClick([account.email]);
-        if (picked) {
-          await sleep(3000);
-          continue;
+
+        const hasCorrectAccount = pageText && pageText.includes(account.email.toLowerCase());
+        const hasAnyOtherEmail = pageText && /[\w.+-]+@[\w.-]+\.\w+/.test(pageText) && !hasCorrectAccount;
+
+        // If we can't read the page OR we see the wrong account, force switch
+        if (!pageText || hasAnyOtherEmail) {
+          log(`Page text: ${pageText ? 'wrong account' : 'unreadable'} — clicking Switch account / Logout`);
+          const switched = await driver.findAndClick([
+            'Switch account',
+            'Log out',
+            'Logout',
+            'Sign out',
+            'Use another account',
+          ]);
+          if (switched) {
+            await sleep(3000);
+            continue;
+          }
+          // Couldn't find switch button — the page may already be the account chooser
+          // Try clicking the email we want directly
+          const picked = await driver.findAndClick([account.email]);
+          if (picked) {
+            await sleep(3000);
+            continue;
+          }
+          // Last resort: log and click authorize anyway (may fail)
+          log(`WARNING: Could not verify account — clicking Authorize blind`);
+        } else if (hasCorrectAccount) {
+          log(`Correct account confirmed: ${account.email}`);
         }
-        // Last resort: log and click authorize anyway (may fail)
-        log(`WARNING: Could not verify account — clicking Authorize blind`);
-      } else if (hasCorrectAccount) {
-        log(`Correct account confirmed: ${account.email}`);
       }
 
       // Step 2: Click Authorize — wait for button to become enabled (up to 30s)
       let authorized = false;
       for (let wait = 0; wait < 6; wait++) {
-        if (await driver.findAndClick(['Authorize', 'Allow', 'Approve', 'Accept'])) {
+        if (
+          await driver.findAndClick([
+            '[data-testid="continue"]',
+            'button[data-testid="continue"]',
+            'Authorize',
+            'Allow',
+            'Approve',
+            'Accept',
+            'Continue',
+          ])
+        ) {
           log('Clicked Authorize');
+          authorized = true;
+          break;
+        }
+        // Check if the prior click (or magic-link) already navigated us off
+        // the authorize page. If we're on /oauth/code/success or any non-claude.ai
+        // URL, auth is done — stop hunting for a button that no longer exists.
+        const currentUrl = await driver.currentUrl().catch(() => '');
+        if (
+          currentUrl.includes('/oauth/code/success') ||
+          (currentUrl && !currentUrl.includes('claude.ai') && !currentUrl.includes('claude.com'))
+        ) {
+          log(`Auth already succeeded — URL moved to ${currentUrl.substring(0, 80)}`);
           authorized = true;
           break;
         }
@@ -2121,8 +2997,8 @@ async function runAuthFlow(driver, account) {
       }
       log('Authorize button still not clickable after 30s — escalating to ai-brain');
       // Fast-path ai-brain escalation: don't wait for stall detector to catch up
-      // on the next loop iter. The page is stuck on OAuth authorize and Haiku
-      // can usually pick the right org/continue button immediately.
+      // on the next loop iter. The page is stuck on OAuth authorize — Bedrock
+      // vision + optional Context7 / web research picks the next action.
       if (aiBrainEnabled && aiBrainHistory.length < AI_BRAIN_MAX_DECISIONS) {
         const action = await askAIBrain({
           page: driver._page,
@@ -2237,36 +3113,17 @@ async function runAuthFlow(driver, account) {
             }
             continue;
           }
-          // Magic-link is the ONLY auth method on every platform — never fall
-          // through to Google OAuth (it stalls on push-2FA and the user wants
-          // magic-link only). Fail the account so the missing link surfaces.
-          log(`[magic-link] No magic link found in Gmail — failing account (magic-link-only, no Google fallback).`);
-          throw new Error(`magic-link timeout for ${account.email} (magic-link-only)`);
+          log(
+            `[magic-link] No magic link found in Gmail — magic-link-only, will re-poll next step (no Google fallback)`,
+          );
         }
       }
     }
 
-    // Claude.ai login → Continue with Google (button has data-testid="login-with-google")
-    const popupP = driver.waitForPopup ? driver.waitForPopup(15_000) : Promise.resolve(null);
-    if (
-      await driver.findAndClick(['[data-testid="login-with-google"]', 'Continue with Google', 'Sign in with Google'])
-    ) {
-      const popup = await popupP;
-      if (popup) {
-        // Kapture popup is already a full driver; Playwright returns a raw Page
-        const pd = popup.name ? popup : buildPageDriver(driver.name + '-popup', popup, () => {}, null);
-        await runAuthFlow(pd, account);
-        if (popup.waitForEvent) {
-          await popup.waitForEvent('close', { timeout: 30_000 }).catch(() => {});
-        }
-      }
-      continue;
-    }
-
-    // Email input
-    if (await driver.fillInput('#identifierId, input[type="email"]', account.email)) {
-      await driver.findAndClick(['Next', '#identifierNext button']);
-    }
+    // Google OAuth is DISABLED — magic-link is the only auth method. We never
+    // click "Continue with Google" or drive accounts.google.com. If the magic
+    // link could not be completed above, keep looping (re-poll Gmail) until the
+    // step budget is exhausted, then fail this driver.
   }
 
   // Loop exhausted — final AI-brain attempt before giving up. Some flows
@@ -2275,11 +3132,7 @@ async function runAuthFlow(driver, account) {
   if (aiBrainEnabled && aiBrainHistory.length < AI_BRAIN_MAX_DECISIONS) {
     const url = await driver.currentUrl().catch(() => '');
     log(`[ai-brain] loop exhausted — final rescue attempt`);
-    // Snapshot remaining budget before the loop — aiBrainHistory grows each
-    // iteration, so re-evaluating inside the condition would shrink the bound
-    // twice as fast (once from rescue++, once from the growing length).
-    const rescueBudget = Math.min(3, AI_BRAIN_MAX_DECISIONS - aiBrainHistory.length);
-    for (let rescue = 0; rescue < rescueBudget; rescue++) {
+    for (let rescue = 0; rescue < AI_BRAIN_MAX_DECISIONS - aiBrainHistory.length && rescue < 3; rescue++) {
       const action = await askAIBrain({
         page: driver._page,
         account,
@@ -2419,6 +3272,10 @@ async function browserOAuthFallback(account) {
       }
       success = await runAuthFlow(driver, account);
 
+      if (success) {
+        await maybeScrapeBillingAfterOAuth(driver, account, log);
+      }
+
       if (!success) {
         log(`[${driver._driverName}] runAuthFlow returned false — trying next driver`);
         failed.add(driver._driverName);
@@ -2458,25 +3315,33 @@ async function browserOAuthFallback(account) {
 function findClaudeSessions() {
   const sessions = [];
   try {
-    const psOut = execSync(
-      `ps -eo pid,tty,args | grep -E '[c]laude.*--dangerously' | grep -v 'mcp ' | grep -v '\\-p '`,
-      { timeout: 5000 },
-    )
+    // Use pid,args only — no tty column. On macOS, background processes show
+    // tty as "??" which never matches the ttys?\d+ pattern, and the old
+    // `grep -` (empty pattern) at the end of the pipeline caused the whole
+    // execSync to throw "Command failed" on every call.
+    // ps -eo pid,args works identically on macOS (BSD) and Linux (GNU).
+    const psOut = execSync(`ps -eo pid,args | grep -E '[c]laude.*--dangerously-skip-permissions' | grep -v 'grep'`, {
+      timeout: 5000,
+    })
       .toString()
       .trim();
     if (!psOut) return sessions;
 
-    const ttyMap = {};
+    // Build pid→tty map from tmux (best-effort; tty used only for tmux pane lookup)
+    const ttyByPid = {};
     try {
       const paneOut = execSync(
-        `tmux list-panes -a -F '#{pane_tty}|#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null`,
+        `tmux list-panes -a -F '#{pane_pid}|#{pane_tty}|#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null`,
         { timeout: 3000 },
       )
         .toString()
         .trim();
       for (const line of paneOut.split('\n')) {
-        const [tty, pane] = line.split('|');
-        if (tty && pane) ttyMap[tty] = pane;
+        const parts = line.split('|');
+        if (parts.length >= 3) {
+          const [panePid, tty, pane] = parts;
+          if (panePid && tty && pane) ttyByPid[panePid.trim()] = { tty: tty.trim(), pane: pane.trim() };
+        }
       }
     } catch {}
 
@@ -2487,20 +3352,22 @@ function findClaudeSessions() {
       for (const f of readdirSync(sessionStateDir).filter((f) => f.endsWith('.json'))) {
         try {
           const s = JSON.parse(readFileSync(join(sessionStateDir, f), 'utf8'));
-          if (s.kind === 'bg' && s.pid) bgPids.add(s.pid);
+          if (s.kind === 'bg' && s.pid) bgPids.add(String(s.pid));
         } catch {}
       }
     } catch {}
 
     for (const line of psOut.split('\n')) {
-      const match = line.trim().match(/^(\d+)\s+(ttys?\d+)\s+(.+)$/);
+      // Format: "  <pid> <args...>"
+      const match = line.trim().match(/^(\d+)\s+(.+)$/);
       if (!match) continue;
-      const [, pid, ttyShort, args] = match;
-      const tty = `/dev/${ttyShort}`;
+      const [, pid, args] = match;
+      const tmux = ttyByPid[pid] || null;
+      const tty = tmux?.tty || null;
+      const pane = tmux?.pane || null;
       const resumeMatch = args.match(/--resume\s+(\S+)/);
       const resumeId = resumeMatch ? resumeMatch[1] : null;
-      const pane = ttyMap[tty] || null;
-      const isBg = bgPids.has(parseInt(pid));
+      const isBg = bgPids.has(pid);
       sessions.push({ pid: parseInt(pid), tty, pane, resumeId, args, isBg });
     }
   } catch (e) {
@@ -2580,25 +3447,17 @@ function detectTerminalForPid(pid) {
 
 async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  // /login is injected into each reachable session in sequence. Space the injects
-  // by a base gap + random jitter so N sessions don't all re-read the keychain and
-  // fire their first call onto the freshly-rotated account in the same instant.
-  // Env-overridable; jitter=0 keeps the legacy fixed 500ms cadence.
-  const INJECT_BASE_MS = Math.max(0, Number(process.env.CLAUDE_SESSION_INJECT_MS ?? 500));
-  const INJECT_JITTER_MS = Math.max(0, Number(process.env.CLAUDE_SESSION_INJECT_JITTER_MS ?? 1_000));
-  const injectGap = () => INJECT_BASE_MS + Math.floor(Math.random() * (INJECT_JITTER_MS + 1));
   const sessions = findClaudeSessions();
 
   if (sessions.length === 0) {
     log('[session] No running Claude Code sessions found');
+    return;
   }
 
-  // Tag each session with its owning terminal app.
-  // Injection paths (in priority order):
-  //   1. tmux pane — most reliable, works from any terminal including Ghostty
-  //   2. iTerm2 AppleScript — for non-tmux iTerm2 sessions
-  //   3. claude --resume --print /login — for bg sessions (no TTY) or any
-  //      session that has a resumeId but no reachable TTY
+  // Tag each session with its owning terminal app. We only have a reliable
+  // AppleScript injection path for tmux + iTerm2. For Ghostty/Terminal/others,
+  // writing to the raw TTY shows as OUTPUT (garbles the live display) and
+  // `tell application "iTerm2"` would spuriously *launch* iTerm2 — so we skip.
   for (const s of sessions) {
     if (!s.pane && s.pid) s.terminal = detectTerminalForPid(s.pid);
   }
@@ -2606,78 +3465,42 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
   const sendKeys = (s, txt) => {
     if (s.pane) return sendKeysToPane(s.pane, txt);
     if (s.terminal === 'iTerm2' && s.tty) return sendKeysToITerm(s.tty, txt);
-    // Ghostty, Terminal.app, Alacritty, WezTerm, kitty, unknown: fall through
-    // to resume-path below; raw TTY write garbles the display.
+    // Ghostty, Terminal.app, Alacritty, WezTerm, kitty, unknown: skip.
+    // Raw TTY write would render "/login" as on-screen output text, not
+    // stdin — corrupting the session without triggering the re-auth.
     return false;
   };
 
-  // Resume path: sessions that have a --resume UUID can receive /login via
-  // `claude --resume <uuid> --print /login`. Works for claude --bg sessions
-  // (no TTY, detached) and Ghostty / non-tmux sessions where AppleScript is unavailable.
-  async function sendViaResume(s) {
-    if (!s.resumeId) return false;
-    try {
-      spawnSync('claude', ['--resume', s.resumeId, '--print', '/login'], { timeout: 15_000, stdio: 'ignore' });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
+  // Reachable = tmux pane OR known-good terminal (iTerm2). Everyone else
+  // is logged + skipped so we never pop a visual window or garble Ghostty.
   const reachable = sessions.filter((s) => s.pane || (s.terminal === 'iTerm2' && s.tty));
-  const resumable = sessions.filter((s) => !s.pane && !(s.terminal === 'iTerm2' && s.tty) && s.resumeId);
-  const unreachable = sessions.filter((s) => !s.pane && !(s.terminal === 'iTerm2' && s.tty) && !s.resumeId);
-
-  for (const s of unreachable) {
-    log(`[session] Skipping PID ${s.pid} (${s.terminal || 'unknown'}) — no tmux pane, no iTerm2, no resumeId`);
+  const skipped = sessions.filter((s) => !s.pane && s.terminal && s.terminal !== 'iTerm2');
+  for (const s of skipped) {
+    log(
+      `[session] Skipping PID ${s.pid} (${s.terminal}) — no safe inject path; token-refresh daemon keeps keys fresh so restart isn't required`,
+    );
   }
-
-  const totalActionable = reachable.length + resumable.length;
-  if (totalActionable === 0 && sessions.length > 0) {
-    log(`[session] Found ${sessions.length} session(s) but none have a reachable inject path`);
-  } else if (sessions.length === 0) {
+  if (reachable.length === 0) {
+    log(`[session] Found ${sessions.length} sessions but none have a reachable TTY`);
     return;
   }
 
-  if (reachable.length > 0) {
-    log(`[session] Injecting /login into ${reachable.length} TTY-reachable session(s):`);
-    for (const s of reachable) {
-      log(`  PID ${s.pid} ${s.pane ? 'pane=' + s.pane : 'tty=' + s.tty}`);
-    }
+  log(`[session] Injecting /login into ${reachable.length} session(s):`);
+  for (const s of reachable) {
+    log(`  PID ${s.pid} ${s.pane ? 'pane=' + s.pane : 'tty=' + s.tty}`);
   }
 
   // Keychain was already swapped to the fresh account's valid token.
   // /login re-reads the keychain → picks up the new token → "Login successful" instantly.
+  // No /exit, no process restart, no OAuth browser flow needed (token is already valid).
+  // Stagger slightly to avoid all sessions hitting the API at the exact same millisecond.
   for (const s of reachable) {
     if (sendKeys(s, '/login')) {
       log(`[session] Sent /login to PID ${s.pid} (${s.pane || s.tty})`);
     } else {
-      log(`[session] Failed TTY inject for PID ${s.pid} — trying resume path`);
-      if (s.resumeId) {
-        const ok = await sendViaResume(s);
-        log(`[session] Resume fallback for PID ${s.pid}: ${ok ? 'ok' : 'failed'}`);
-      }
+      log(`[session] Failed to inject /login to PID ${s.pid} (${s.pane || s.tty})`);
     }
-    await sleep(injectGap());
-  }
-
-  // Non-tmux sessions with a resumeId (non-bg interactive sessions in Ghostty etc):
-  // use claude --resume --print /login.
-  // NOTE: claude --bg daemon sessions auto-reauth within 30s via Claude Code's
-  // keychain poll cycle — the CLI blocks --resume --print on them anyway.
-  const resumableInteractive = resumable.filter((s) => !s.isBg);
-  const resumableBg = resumable.filter((s) => s.isBg);
-  for (const s of resumableBg) {
-    log(`[session] PID ${s.pid} is a bg session — will auto-reauth via 30s keychain poll (no action needed)`);
-  }
-  if (resumableInteractive.length > 0) {
-    log(`[session] Sending /login via --resume to ${resumableInteractive.length} non-tmux interactive session(s):`);
-    for (const s of resumableInteractive) {
-      log(`  PID ${s.pid} resumeId=${s.resumeId} terminal=${s.terminal || 'unknown'}`);
-      const ok = await sendViaResume(s);
-      log(`[session] Resume /login for PID ${s.pid}: ${ok ? 'ok' : 'failed'}`);
-      await sleep(injectGap());
-    }
+    await sleep(500); // 500ms stagger between sessions
   }
 
   // If Claude relaunches trigger an OAuth browser window (token expired mid-rotation),
@@ -2692,7 +3515,10 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
         const url = await driver.currentUrl().catch(() => '');
         if (url && (url.includes('oauth') || url.includes('authorize') || url.includes('claude.ai/login'))) {
           log(`[session] Detected post-restart OAuth page (${url.substring(0, 60)}) — driving flow`);
-          if (rotatedAccount) await runAuthFlow(driver, rotatedAccount);
+          if (rotatedAccount) {
+            const authOk = await runAuthFlow(driver, rotatedAccount);
+            if (authOk) await maybeScrapeBillingAfterOAuth(driver, rotatedAccount, log);
+          }
         }
         try {
           await driver.close?.();
@@ -2713,76 +3539,109 @@ async function rotate(targetEmail, opts = {}) {
   const state = readState();
   const dryRun = opts.dryRun || false;
 
-  if (!targetEmail) {
-    // Query live utilization for all accounts before picking — best-effort, ~2s
-    log('Querying live utilization for all accounts...');
-    const liveUtil = await queryAllUtilization(config);
-    const utilSummary = Object.entries(liveUtil)
-      .map(([k, v]) => `${k}:5h=${v.five_hour_pct}%/7d=${v.seven_day_pct}%`)
-      .join(', ');
-    if (utilSummary) log(`Live util: ${utilSummary}`);
-    // Snapshot live data into state for future daemon decisions
-    for (const [key, util] of Object.entries(liveUtil)) {
-      state.accounts[key] = state.accounts[key] || {};
-      state.accounts[key].lastUtilization = {
-        pct: util.five_hour_pct,
-        reset: util.resets_at_5h ? Math.floor(new Date(util.resets_at_5h).getTime() / 1000) : null,
+  // ALWAYS query live util — needed for picker (no target) AND for
+  // target-validation (with --to). This is the safety net that makes sure
+  // we never rotate to an account that will immediately say "token-limit".
+  log('Querying live utilization for all accounts...');
+  const liveUtil = await queryAllUtilization(config);
+  const utilSummary = Object.entries(liveUtil)
+    .map(([k, v]) => `${k}:5h=${v.five_hour_pct}%/7d=${v.seven_day_pct}%`)
+    .join(', ');
+  if (utilSummary) log(`Live util: ${utilSummary}`);
+  // Snapshot live data into state for future daemon decisions.
+  // Includes BOTH 5h util AND extra_usage_enabled — the latter is sticky-true
+  // so EU accounts stay refused even when subsequent live queries fail.
+  for (const [key, util] of Object.entries(liveUtil)) {
+    state.accounts[key] = state.accounts[key] || {};
+    state.accounts[key].lastUtilization = {
+      pct: util.five_hour_pct,
+      reset: util.resets_at_5h ? Math.floor(new Date(util.resets_at_5h).getTime() / 1000) : null,
+      ts: Date.now(),
+    };
+    if (util.extra_usage_enabled !== null && util.extra_usage_enabled !== undefined) {
+      state.accounts[key].lastBilling = {
+        extra_usage_enabled: util.extra_usage_enabled === true,
+        billing_type: util.billing_type || null,
         ts: Date.now(),
       };
     }
-    writeState(state, dryRun);
-    const next = pickNextAccount(config, state, liveUtil, {
-      allowExtraUsage: opts.allowExtraUsage === true,
-    });
-    if (!next) {
-      log('No account available (all excluded — extra_usage enabled?)');
+  }
+  try {
+    writeState(state);
+  } catch {}
+  const bedrockOnExhausted = opts.bedrockOnExhausted !== false; // default ON
+
+  if (!targetEmail) {
+    const { pick, allExhausted, onlyActiveViable, destinationCapStuck } = recommendAccount(config, state, liveUtil);
+    if (!pick) {
+      if (onlyActiveViable) {
+        log('Rotation skipped — already on the only viable Max account (API headroom; other accounts exhausted).');
+        return true;
+      }
+      if (allExhausted || destinationCapStuck) {
+        if (allExhausted) {
+          log('All accounts live-confirmed EXHAUSTED — engaging Bedrock fallback');
+        } else {
+          log(
+            `Every live-confirmed non-active account is ≥${destinationUtilHardBlock(config)}% max(5h,7d) — no rotation target; engaging Bedrock fallback`,
+          );
+        }
+        if (bedrockOnExhausted)
+          await activateBedrockFallback(
+            allExhausted ? 'all_accounts_exhausted_picker_null' : 'destination_cap_no_headroom',
+            dryRun,
+          );
+      } else {
+        log('No account available (see utilization / query logs above)');
+      }
       return false;
     }
-    targetEmail = accountKey(next);
-  }
-
-  // Hard safety gate: even when the user passes --to <email> explicitly,
-  // refuse to activate a Max account where the Anthropic org has
-  // has_extra_usage_enabled=true (overage billing). Requires --allow-extra-usage
-  // to bypass.
-  try {
-    if (!opts.allowExtraUsage) {
-      const target = config.accounts.find((a) => accountKey(a) === targetEmail || a.email === targetEmail);
-      if (target) {
-        const tokenJson = readStoredToken(target);
-        if (tokenJson) {
-          const parsed = JSON.parse(tokenJson);
-          const accessToken = parsed?.claudeAiOauth?.accessToken;
-          if (accessToken) {
-            const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
-              method: 'GET',
-              headers: {
-                Authorization: `Bearer ${accessToken}`,
-                'anthropic-beta': 'oauth-2025-04-20',
-                'Content-Type': 'application/json',
-              },
-              signal: AbortSignal.timeout(5000),
-            });
-            if (res.ok) {
-              const prof = await res.json();
-              const euEnabled = prof?.organization?.has_extra_usage_enabled === true;
-              if (euEnabled) {
-                log(
-                  `REFUSED: target ${targetEmail} has extra_usage enabled (pay-per-use). Pass --allow-extra-usage to override.`,
-                );
-                notify(
-                  'Rotation BLOCKED',
-                  `${targetEmail}: extra_usage enabled — would risk credit-card overage. Disable at console.anthropic.com/settings/billing`,
-                );
-                return false;
-              }
-            }
+    targetEmail = accountKey(pick);
+  } else {
+    // Target validation: refuse exhausted API targets unless overridden.
+    const targetAcct =
+      config.accounts.find((a) => accountKey(a) === targetEmail) ||
+      config.accounts.find((a) => a.email === targetEmail);
+    if (targetAcct) {
+      const tKey = accountKey(targetAcct);
+      const tu = liveUtil[tKey];
+      const targetExhausted =
+        tu &&
+        tu.five_hour_pct != null &&
+        tu.seven_day_pct != null &&
+        Math.max(tu.five_hour_pct, tu.seven_day_pct) >= EXHAUSTED_THRESHOLD;
+      if (targetExhausted && !opts.allowExhausted) {
+        log(
+          `⚠  --to ${targetEmail} is EXHAUSTED (5h=${tu.five_hour_pct}% 7d=${tu.seven_day_pct}%) — auto-falling back to picker`,
+        );
+        const { pick, allExhausted, onlyActiveViable, destinationCapStuck } = recommendAccount(config, state, liveUtil);
+        if (!pick) {
+          if (onlyActiveViable) {
+            log('Rotation skipped — already on the only viable Max account.');
+            return true;
           }
+          if (allExhausted || destinationCapStuck) {
+            if (allExhausted) log('No alternative — all accounts exhausted');
+            else {
+              log(
+                `No alternative under destination cap (${destinationUtilHardBlock(config)}%) — engaging Bedrock fallback`,
+              );
+            }
+            if (bedrockOnExhausted) {
+              await activateBedrockFallback(
+                allExhausted ? 'target_and_all_others_exhausted' : 'destination_cap_after_exhausted_target',
+                dryRun,
+              );
+            }
+          } else {
+            log('No alternative — see utilization / query logs above');
+          }
+          return false;
         }
+        targetEmail = accountKey(pick);
+        log(`→ Picker chose ${targetEmail} instead`);
       }
     }
-  } catch (e) {
-    log(`Extra-usage preflight error (non-fatal): ${e.message?.slice(0, 80)}`);
   }
 
   // Find by label first, then by email
@@ -2792,7 +3651,10 @@ async function rotate(targetEmail, opts = {}) {
     log(`Account ${targetEmail} not in config`);
     return false;
   }
-  if (opts.magicLink) account.useMagicLink = true;
+  // Magic-link is the ONLY supported auth method for every account/path
+  // (quickest; all login emails forward to one inbox). opts.magicLink is now
+  // implied — we never fall through to Google OAuth.
+  account.useMagicLink = true;
   const key = accountKey(account);
 
   log(`=== ROTATING: ${state.activeAccount || 'none'} → ${key} (${account.email}) ===`);
@@ -2937,70 +3799,6 @@ async function rotate(targetEmail, opts = {}) {
     return false;
   }
 
-  // POST-SWAP BILLING SAFETY CHECK
-  // The fresh token is now in the active keychain. Query /api/oauth/profile to
-  // verify has_extra_usage_enabled=false. If true, revert the swap by restoring
-  // the previous account's token — this prevents silent credit-card overages.
-  if (!opts.allowExtraUsage && !dryRun) {
-    try {
-      const freshJson = readKeychain();
-      const fresh = JSON.parse(freshJson);
-      const freshToken = fresh?.claudeAiOauth?.accessToken;
-      if (freshToken) {
-        const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${freshToken}`,
-            'anthropic-beta': 'oauth-2025-04-20',
-            'Content-Type': 'application/json',
-          },
-          signal: AbortSignal.timeout(5000),
-        });
-        if (res.ok) {
-          const prof = await res.json();
-          const euOn = prof?.organization?.has_extra_usage_enabled === true;
-          if (euOn) {
-            log(`POST-SWAP BLOCK: ${targetEmail} has extra_usage=ON (overage billing). Reverting swap.`);
-            notify(
-              'Rotation REVERTED',
-              `${targetEmail}: extra_usage enabled — charges would hit your card. Rollback in progress.`,
-            );
-            // Revert: restore previous account's stored token to active slot
-            const prevKey = state.activeAccount;
-            const prevAccount = prevKey ? config.accounts.find((a) => accountKey(a) === prevKey) : null;
-            if (prevAccount) {
-              const prevToken = readStoredToken(prevAccount);
-              if (prevToken) {
-                // prevToken came from the vault (mcpOAuth:{} stripped by design).
-                // Merge the current active keychain's mcpOAuth before rollback,
-                // otherwise this revert wipes giga/Amplitude/higgsfield OAuth.
-                let outToken = prevToken;
-                try {
-                  const cur = readKeychain();
-                  const cp = JSON.parse(cur);
-                  if (cp.mcpOAuth && Object.keys(cp.mcpOAuth).length > 0) {
-                    const np = JSON.parse(prevToken);
-                    np.mcpOAuth = { ...np.mcpOAuth, ...cp.mcpOAuth };
-                    outToken = JSON.stringify(np);
-                  }
-                } catch {}
-                writeKeychain(outToken);
-                log(`Reverted keychain to previous account ${prevKey} (mcpOAuth preserved)`);
-              }
-            }
-            return false;
-          }
-        } else {
-          log(
-            `POST-SWAP profile check returned ${res.status} — unable to verify extra_usage; proceeding (fail-open for transient errors)`,
-          );
-        }
-      }
-    } catch (e) {
-      log(`POST-SWAP billing check error (non-fatal): ${e.message?.slice(0, 80)}`);
-    }
-  }
-
   // Verify by reading back what's now in the active keychain
   let verified = false;
   try {
@@ -3010,12 +3808,28 @@ async function rotate(targetEmail, opts = {}) {
     // Guard against empty `stored` — substring("", 20, 80) === "" and
     // active.includes("") is always true, which would spuriously verify.
     if (stored && stored.length > 80 && active.includes(stored.substring(20, 80))) verified = true;
-    // Browser fallback: verify via CLI (skip in --no-browser mode — API may be rate limited)
+    // Fallback: verify via /oauth/profile (skip in --no-browser mode — API may
+    // be rate limited). `claude auth status` no longer returns email on
+    // Claude Code >=2.1.144, so it can't be used for identity here.
     if (!verified && !opts.noBrowser) {
-      const out = execSync('claude auth status 2>&1', {
-        timeout: 10_000,
-      }).toString();
-      verified = out.includes(account.email);
+      try {
+        const accessToken = JSON.parse(active)?.claudeAiOauth?.accessToken;
+        if (accessToken) {
+          const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'anthropic-beta': 'oauth-2025-04-20',
+            },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (res.ok) {
+            const prof = await res.json();
+            const liveEmail = prof?.account?.email || '';
+            verified = liveEmail.toLowerCase() === account.email.toLowerCase();
+          }
+        }
+      } catch {}
     }
   } catch {}
   log(`Rotation ${verified ? 'VERIFIED' : 'UNVERIFIED'}: ${key} (${account.email})`);
@@ -3098,247 +3912,109 @@ async function rotate(targetEmail, opts = {}) {
     target.windowToolUses = 0;
   }
   // else: keep existing window data (cumulative uses carry over)
+  const sourceKeyForHotSwap = state.activeAccount;
   state.activeAccount = key;
   state.toolUses = 0;
   state.lastRotation = now;
   state.totalRotations = (state.totalRotations || 0) + 1;
   writeState(state, dryRun);
 
+  // Claim the cross-machine lease for the account we just activated so the other
+  // machine's rotation excludes it. Best-effort / fail-open. Skip on dry-run.
+  if (!dryRun) {
+    try {
+      writeLease(key, (m) => log(m));
+    } catch {}
+  }
+
   notify('Claude Account Rotation', `${verified ? '✓' : '⚠'} Now using ${key}`);
+
+  // SIGHUP hot-swap: signal running Claude Code sessions on the rotated-FROM account
+  // to reload their keychain (Claude Code catches SIGHUP and re-execs, ~1s restart).
+  if (ok && sourceKeyForHotSwap && !dryRun) {
+    try {
+      const sourceAccountForSwap = config.accounts.find((a) => accountKey(a) === sourceKeyForHotSwap);
+      const sourceEmail = sourceAccountForSwap?.email;
+      if (sourceEmail) {
+        const pidFile = `/tmp/claude-pids-${sourceEmail}`;
+        if (existsSync(pidFile)) {
+          const pids = readFileSync(pidFile, 'utf8')
+            .split('\n')
+            .map((l) => parseInt(l.trim(), 10))
+            .filter((p) => !isNaN(p) && p > 0);
+          // Confirm each pid is actually a live Claude Code process before SIGHUP.
+          // kill(pid,0) only proves the pid EXISTS — on Linux pids recycle fast, so a
+          // stale pidfile entry can point at an unrelated reused pid, and SIGHUP's
+          // default disposition is terminate. Verify via /proc/<pid>/cmdline (Linux)
+          // or `ps` (fallback) that the command is `claude`, and prune dead/stale
+          // entries so the pidfile self-heals and "signaled N" can't overcount.
+          const isClaudePid = (pid) => {
+            let cmd = '';
+            try {
+              cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ');
+            } catch {
+              try {
+                cmd = execFileSync('ps', ['-o', 'args=', '-p', String(pid)], { timeout: 2000 }).toString();
+              } catch {
+                return false;
+              }
+            }
+            return /(^|\/)claude(\s|$)/.test(cmd) || cmd.includes('claude ');
+          };
+          let signaled = 0;
+          const livePids = [];
+          for (const pid of pids) {
+            if (pid === process.pid || pid === process.ppid) continue;
+            try {
+              process.kill(pid, 0); // exists?
+            } catch {
+              continue; // dead → drop from pidfile
+            }
+            if (!isClaudePid(pid)) continue; // alive but NOT claude (recycled pid) → never SIGHUP
+            // Busy-session hold: a session orchestrating in-flight subagents can place
+            // /tmp/claude-hotswap-hold-<pid> to opt out of SIGHUP — re-exec would kill
+            // its in-process agents (observed 2026-06-06: rotation churn killed 4 agent
+            // fleets mid-task). Holds auto-expire after 6h (stale holds must never block
+            // token reloads forever). Held pids stay in the pidfile for future rotations.
+            try {
+              const hold = statSync(`/tmp/claude-hotswap-hold-${pid}`);
+              if (Date.now() - hold.mtimeMs < 6 * 3600 * 1000) {
+                log(`[hot-swap] skipping pid ${pid} — busy hold present`);
+                livePids.push(pid);
+                continue;
+              }
+            } catch {}
+            try {
+              process.kill(pid, 'SIGHUP');
+              signaled++;
+              livePids.push(pid);
+            } catch {}
+          }
+          // Self-heal the pidfile: keep only confirmed-live Claude pids, else remove it.
+          try {
+            if (livePids.length > 0) writeFileSync(pidFile, `${livePids.join('\n')}\n`);
+            else unlinkSync(pidFile);
+          } catch {}
+          if (signaled > 0) {
+            log(`[hot-swap] signaled ${signaled} Claude session(s) on ${sourceEmail} to reload after rotation`);
+          } else {
+            log(`[hot-swap] no live Claude sessions to signal on ${sourceEmail} (pruned stale pidfile)`);
+          }
+        }
+      }
+    } catch (e) {
+      log(`[hot-swap] skipped: ${e.message?.slice(0, 80)}`);
+    }
+  }
 
   if (opts.session) {
     if (dryRun) {
-      log(
-        '[DRY-RUN] Would inject /login into reachable running sessions (tmux/iTerm2) + resume-path for non-tmux interactive sessions',
-      );
+      log('[DRY-RUN] Would restart running Claude sessions with --continue and send resume prompt');
     } else {
       await refreshRunningSession(account, opts.noBrowser);
     }
   }
-
-  // Post-rotation: reload running bg agents onto the new token.
-  // Gated on opts.reloadAgents (set via --reload-agents CLI flag or daemon call)
-  // so that existing callers that don't pass the flag retain their current
-  // behavior unchanged. The stagger adds up to 4 × 15 s = 60 s of extra wall
-  // time — callers must account for this in their timeout budgets.
-  if (opts.reloadAgents) {
-    if (dryRun) {
-      log('[DRY-RUN] Would reload running bg agents onto new token');
-    } else {
-      await reloadRunningAgents({ initiatorSessionId: opts.initiatorSessionId });
-    }
-  }
-
   return verified;
-}
-
-// ── Reload running bg agents after rotation ───────────────────────────────────
-//
-// After a successful keychain swap, already-running `claude --bg` agents keep
-// using their in-memory (now stale) OAuth token. `claude respawn <shortId>`
-// restarts a bg session keeping its conversation intact and re-reads auth from
-// the keychain — this is the mechanism that makes a running agent adopt the
-// new token.
-//
-// Anti-stampede guarantees:
-//   - Hard cap: at most RESPAWN_CAP agents per invocation (default 4).
-//   - Sequential: agents are respawned one at a time (no parallel fan-out).
-//   - Stagger: RESPAWN_STAGGER_MS + random jitter (≤RESPAWN_JITTER_MS) between
-//     each respawn, so re-exec'd agents don't re-issue their first calls onto the
-//     freshly-rotated account in a deterministic lockstep (jitter de-correlates the
-//     onset from other rotation-time staggers — e.g. the /login session inject).
-//   - Skips orchestrator (keepalive owns it), bare spares (name===sessionId[:8]),
-//     and the session that initiated the rotation (opts.initiatorSessionId).
-//   - jobId divergence: if resolve-jobid.sh exists, resolve sessionId→jobId
-//     before respawn. "No job matching" is non-fatal — log + continue.
-//   - Fully guarded: if `claude agents` fails → log + no-op. Rotation success
-//     never depends on this step.
-//
-// opts.initiatorSessionId — short (8-char) or full sessionId of the session
-//   that triggered the rotation; skipped to avoid respawning our own caller.
-// opts.dryRun — log selections but skip actual respawn calls (for harness testing).
-async function reloadRunningAgents(opts = {}) {
-  const RESPAWN_CAP = 4; // hard anti-stampede cap per invocation
-  const RESPAWN_STAGGER_MS = 15_000; // ≥15s between each respawn (memory rule)
-  // Added random jitter on top of the fixed stagger so N respawns don't onset in
-  // lockstep onto the just-rotated account. Env-overridable for ops tuning; 0 = off.
-  const RESPAWN_JITTER_MS = Math.max(0, Number(process.env.CLAUDE_RESPAWN_JITTER_MS ?? 5_000));
-  const RESPAWN_TIMEOUT_MS = 60_000; // per-respawn timeout
-  const dryRun = opts.dryRun === true;
-
-  const RESOLVE_JOBID = join(homedir(), '.claude', 'scripts', 'resolve-jobid.sh');
-  const resolveJobIdAvailable = existsSync(RESOLVE_JOBID);
-
-  // Resolve the claude binary path once (execFileSync: no shell).
-  let claudeBin = 'claude';
-  try {
-    claudeBin = execFileSync('which', ['claude'], { encoding: 'utf8', timeout: 5000 }).trim() || 'claude';
-  } catch {}
-
-  log(`[reload-agents] Starting post-rotation agent reload...${dryRun ? ' (DRY-RUN)' : ''}`);
-
-  // 1. Enumerate running bg agents with a hard timeout.
-  // Use execFileSync (no shell) so the args are passed directly to the binary —
-  // avoids shell-injection risk and the stderr redirect (2>/dev/null) is handled
-  // by capturing stderr separately instead.
-  let agents;
-  try {
-    const raw = execFileSync(claudeBin, ['agents', '--json'], {
-      timeout: 15_000,
-      encoding: 'utf8',
-      // Swallow stderr (e.g. update notices) so JSON parse doesn't choke on it.
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
-    if (!raw) {
-      log('[reload-agents] `claude agents --json` returned empty — no-op');
-      return;
-    }
-    // Handle both bare array and {sessions|agents:[]} wrapper shapes.
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      agents = parsed;
-    } else if (Array.isArray(parsed?.sessions)) {
-      agents = parsed.sessions;
-    } else if (Array.isArray(parsed?.agents)) {
-      agents = parsed.agents;
-    } else {
-      log('[reload-agents] Unexpected `claude agents --json` shape — no-op');
-      return;
-    }
-  } catch (e) {
-    log(`[reload-agents] Failed to list agents (non-fatal): ${e.message?.slice(0, 80)} — no-op`);
-    return;
-  }
-
-  if (!agents.length) {
-    log('[reload-agents] No running bg agents — no-op');
-    return;
-  }
-
-  // 2. Select candidates to respawn.
-  const initiatorShort = opts.initiatorSessionId
-    ? opts.initiatorSessionId.length === 8
-      ? opts.initiatorSessionId
-      : opts.initiatorSessionId.slice(0, 8)
-    : null;
-
-  const candidates = [];
-  const deferred = [];
-
-  for (const agent of agents) {
-    const sessionId = agent.sessionId || '';
-    const shortId = sessionId.slice(0, 8);
-    const name = (agent.name || '').trim();
-    const status = (agent.status || '').toLowerCase();
-
-    // Skip orchestrator — the 60s keepalive owns it; respawning it from inside
-    // rotation risks a fight.
-    if (name === 'orchestrator') {
-      log(`[reload-agents] Skipping orchestrator (${shortId})`);
-      continue;
-    }
-
-    // Skip bare bg-spares (name === sessionId[:8]) and unnamed/just-spawned
-    // sessions (empty name) — neither has a meaningful conversation to reload.
-    if (!name || name === shortId) {
-      log(`[reload-agents] Skipping bare/unnamed spare (${shortId})`);
-      continue;
-    }
-
-    // Skip the session that triggered this rotation (avoid respawning our caller).
-    if (initiatorShort && shortId === initiatorShort) {
-      log(`[reload-agents] Skipping initiator session (${shortId})`);
-      continue;
-    }
-
-    // Include all remaining background agents (both busy + idle can be stale).
-    if (candidates.length < RESPAWN_CAP) {
-      candidates.push({ sessionId, shortId, name, status });
-    } else {
-      deferred.push({ sessionId, shortId, name, status });
-    }
-  }
-
-  if (!candidates.length) {
-    log('[reload-agents] No eligible agents to respawn — no-op');
-    return;
-  }
-
-  if (deferred.length) {
-    log(
-      `[reload-agents] ${deferred.length} agent(s) deferred (cap=${RESPAWN_CAP}): ` +
-        deferred.map((a) => `${a.shortId}(${a.name})`).join(', ') +
-        ' — daemon next-pass / next rotation will pick them up',
-    );
-  }
-
-  log(
-    `[reload-agents] Respawning ${candidates.length} agent(s): ${candidates.map((a) => `${a.shortId}(${a.name})`).join(', ')}`,
-  );
-
-  // 3. Sequential respawn with stagger.
-  for (let i = 0; i < candidates.length; i++) {
-    const { sessionId, shortId, name, status } = candidates[i];
-
-    // Resolve jobId if possible (sessionId and jobId diverge — see memory note
-    // bg-session-addressing-by-jobid). Use jobId for respawn; fall back to shortId.
-    // execFileSync with argument array: no shell, no injection risk.
-    let respawnId = shortId;
-    if (resolveJobIdAvailable) {
-      try {
-        const resolved = execFileSync('bash', [RESOLVE_JOBID, shortId], {
-          timeout: 5000,
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'pipe'],
-        }).trim();
-        if (resolved) {
-          log(`[reload-agents] ${shortId}(${name}) jobId resolved: ${resolved}`);
-          respawnId = resolved;
-        }
-      } catch {
-        // resolve-jobid.sh exits non-zero when no match — fall back to shortId
-        log(`[reload-agents] ${shortId}(${name}): jobId resolution failed — using shortId`);
-      }
-    }
-
-    log(
-      `[reload-agents] ${dryRun ? '[DRY-RUN] Would respawn' : 'Respawning'} ${shortId}(${name}) [status=${status}] via id=${respawnId}...`,
-    );
-    if (!dryRun) {
-      try {
-        // execFileSync: no shell — respawnId is passed as a literal argument.
-        const out = execFileSync(claudeBin, ['respawn', respawnId], {
-          timeout: RESPAWN_TIMEOUT_MS,
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'pipe'],
-        }).trim();
-        log(`[reload-agents] Respawn ${shortId}(${name}): ${out.slice(0, 120)}`);
-      } catch (e) {
-        const msg = (e.stdout || e.stderr || e.message || '').slice(0, 120);
-        // "No job matching" is non-fatal — keepalive will catch stragglers.
-        log(`[reload-agents] Respawn ${shortId}(${name}) non-fatal error: ${msg} — continuing`);
-      }
-    }
-
-    // Stagger: sleep between respawns to avoid stampede. Skip after the last one.
-    // Base stagger + random jitter so onsets don't align. In dry-run mode we skip
-    // the actual sleep so the harness exits quickly.
-    if (i < candidates.length - 1) {
-      const waitMs = RESPAWN_STAGGER_MS + Math.floor(Math.random() * (RESPAWN_JITTER_MS + 1));
-      if (dryRun) {
-        log(`[reload-agents] [DRY-RUN] Would wait ~${(waitMs / 1000).toFixed(1)}s before next respawn`);
-      } else {
-        log(
-          `[reload-agents] Waiting ${(waitMs / 1000).toFixed(1)}s (base ${RESPAWN_STAGGER_MS / 1000}s + jitter) before next respawn...`,
-        );
-        await sleep(waitMs);
-      }
-    }
-  }
-
-  log(
-    `[reload-agents] Done.${dryRun ? ' [DRY-RUN]' : ''} ${candidates.length} respawn(s) ${dryRun ? 'selected' : 'issued'}. ${deferred.length} deferred.`,
-  );
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
@@ -3399,6 +4075,14 @@ async function setup() {
       } catch {}
     }
 
+    if (magicLinkMode && account.autoAuthDisabled === true && !filter) {
+      console.log(
+        `⏭  Skipped: automated reauth disabled (${account.autoAuthDisabledReason || 'manual reauth required'}).`,
+      );
+      results.push({ key, ok: true, skipped: true, reason: 'auto-auth-disabled' });
+      continue;
+    }
+
     let oauthOk = true;
     if (magicLinkMode) {
       // Fully automated: claude auth login subprocess + browser driver cascade
@@ -3424,17 +4108,64 @@ async function setup() {
       await new Promise((r) => child.on('exit', r));
     }
 
-    // Verify the login succeeded and matches the expected account
+    // Verify the login succeeded and matches the expected account.
+    // NOTE: Claude Code >=2.1.144 returns {email:null,orgId:null,orgName:null}
+    // from `claude auth status` even when logged in, so it can no longer be
+    // used for identity verification. Verify against the freshly-written
+    // keychain token via the OAuth profile API instead, which still returns
+    // the real account email.
     try {
-      const status = JSON.parse(execSync('claude auth status 2>&1', { timeout: 10_000 }).toString());
-      if (status.email !== account.email) {
-        console.error(`\n❌ MISMATCH: expected ${account.email}, got ${status.email}. Skipping save.`);
-        results.push({ key, ok: false, reason: `mismatch:${status.email}` });
-        continue;
-      }
-      console.log(`✅ Verified: ${status.email}`);
-      // Save to vault (strip mcpOAuth to keep vault clean)
       const token = readKeychain();
+      let liveEmail = null;
+      let profErr = null;
+      try {
+        const accessToken = JSON.parse(token)?.claudeAiOauth?.accessToken;
+        if (accessToken) {
+          const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'anthropic-beta': 'oauth-2025-04-20',
+              'Content-Type': 'application/json',
+            },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (res.ok) {
+            const prof = await res.json();
+            liveEmail = prof?.account?.email ?? null;
+          } else {
+            profErr = `profile HTTP ${res.status}`;
+          }
+        } else {
+          profErr = 'no accessToken in keychain';
+        }
+      } catch (e) {
+        profErr = String(e.message || e).slice(0, 80);
+      }
+
+      if (liveEmail) {
+        if (liveEmail.toLowerCase() !== account.email.toLowerCase()) {
+          console.error(`\n❌ MISMATCH: expected ${account.email}, got ${liveEmail}. Skipping save.`);
+          results.push({ key, ok: false, reason: `mismatch:${liveEmail}` });
+          continue;
+        }
+        console.log(`✅ Verified: ${liveEmail}`);
+      } else {
+        // Profile fetch failed (rate limit / transient). Fail-open ONLY if the
+        // keychain token is structurally valid and unexpired — otherwise the
+        // rotation would never save a single account whenever the profile API
+        // is throttled (which is common mid-rotation).
+        if (token && token.includes('claudeAiOauth') && !tokenExpired(token)) {
+          console.log(
+            `⚠  Identity unverified (${profErr || 'no email'}) — token valid & unexpired, saving with caveat.`,
+          );
+        } else {
+          console.error(`\n❌ Verify failed (${profErr || 'no email'}) and token invalid/expired. Skipping save.`);
+          results.push({ key, ok: false, reason: `verify-failed:${profErr || 'no-email'}` });
+          continue;
+        }
+      }
+      // Save to vault (strip mcpOAuth to keep vault clean)
       try {
         const parsed = JSON.parse(token);
         const clean = { claudeAiOauth: parsed.claudeAiOauth, mcpOAuth: {} };
@@ -3501,24 +4232,33 @@ async function setup() {
     }
   }
   console.log(`\nSetup done. Run \`node rotate.mjs --audit-billing\` anytime to re-check.\n`);
-
-  if (filter && accounts.length === 0) return false;
-  if (results.some((r) => !r.ok)) return false;
-  if (filter && results.length === 0) return false;
-  return true;
 }
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
-function showStatus() {
+async function showStatus() {
   const config = readConfig();
   const state = readState();
+  // `claude auth status` no longer returns email on CC >=2.1.144 — derive
+  // from the live keychain token via /oauth/profile instead.
   let liveEmail = null;
   try {
-    const m = execSync('claude auth status 2>&1', { timeout: 10_000 })
-      .toString()
-      .match(/"email":\s*"([^"]+)"/);
-    if (m) liveEmail = m[1];
+    const tok = readKeychain();
+    const accessToken = JSON.parse(tok)?.claudeAiOauth?.accessToken;
+    if (accessToken) {
+      const res = await fetch('https://api.anthropic.com/api/oauth/profile', {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'anthropic-beta': 'oauth-2025-04-20',
+        },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) {
+        const prof = await res.json();
+        liveEmail = prof?.account?.email || null;
+      }
+    }
   } catch {}
 
   const since = (d) => {
@@ -3541,14 +4281,10 @@ function showStatus() {
     }
   } catch {}
 
-  // Determine if the mismatch is expected (rotation just ran, session hasn't reloaded)
-  const recentRotation = state.lastRotation ? Date.now() - new Date(state.lastRotation).getTime() < 90_000 : false;
-  const mismatch =
-    liveEmail &&
-    state.activeAccount &&
-    !state.activeAccount.startsWith(liveEmail) &&
-    !liveEmail.startsWith(state.activeAccount);
-  const liveNote = mismatch && recentRotation ? ' (stale session — restart Claude Code to apply)' : '';
+  // Statusline must not depend on Claude Code restart. Token swap is keychain-level;
+  // any live/tracked mismatch is surfaced silently via the two separate lines below —
+  // no prescriptive "restart Claude Code" nag in the statusline.
+  const liveNote = '';
 
   console.log('\n=== Claude Account Rotation ===\n');
   console.log(`Live auth:       ${liveEmail || 'unknown'}${liveNote}`);
@@ -3626,7 +4362,7 @@ function captureCmd(targetEmail = null) {
 const args = process.argv.slice(2);
 
 if (args.includes('--setup')) {
-  process.exit((await setup()) ? 0 : 1);
+  await setup();
 } else if (args.includes('--utilization')) {
   // Live utilization query for all accounts
   const config = readConfig();
@@ -3695,12 +4431,562 @@ if (args.includes('--setup')) {
     console.log(`\n⚠  Disable extra_usage at https://console.anthropic.com/settings/billing for each risky account.`);
   }
   console.log('');
+} else if (args.includes('--recommend') || args.includes('--pick')) {
+  // Live-query all accounts and print the recommended next account WITHOUT
+  // swapping. Used as preflight by force-rotate.sh / rotate-magic / daemon-log.
+  const config = readConfig();
+  const state = readState();
+  const json = args.includes('--json');
+  if (!json) console.log('Querying live utilization for recommendation...');
+  const liveUtil = await queryAllUtilization(config);
+  const destCap = destinationUtilHardBlock(config);
+  const { pick, allExhausted, allHaveLive, onlyActiveViable, destinationCapStuck } = recommendAccount(
+    config,
+    state,
+    liveUtil,
+  );
+  const accountsOut = {};
+  for (const a of config.accounts) {
+    if (a.disabled === true) continue;
+    const k = accountKey(a);
+    const u = liveUtil[k];
+    if (!u) {
+      accountsOut[k] = { error: 'query_failed' };
+      continue;
+    }
+    const worst = Math.max(u.five_hour_pct ?? 0, u.seven_day_pct ?? 0);
+    accountsOut[k] = {
+      five_hour: u.five_hour_pct,
+      seven_day: u.seven_day_pct,
+      extra_usage: u.extra_usage_enabled,
+      worst,
+      viable: worst < destCap,
+      destination_cap_pct: destCap,
+      resets_at_5h: u.resets_at_5h,
+    };
+  }
+  // Bedrock readiness probe (fast — ~2s), only when needed
+  let bedrock = null;
+  if (allExhausted || destinationCapStuck) {
+    bedrock = checkBedrockAvailable();
+  }
+  const out = {
+    activeAccount: state.activeAccount || null,
+    pick: pick ? accountKey(pick) : null,
+    pick_email: pick ? pick.email : null,
+    allExhausted,
+    allHaveLive,
+    onlyActiveViable,
+    destinationCapStuck,
+    destinationMaxUtilPercent: destCap,
+    bedrock_ready: bedrock ? bedrock.ok : null,
+    bedrock_region: bedrock ? bedrock.region : null,
+    accounts: accountsOut,
+  };
+  if (json) {
+    console.log(JSON.stringify(out, null, 2));
+  } else {
+    console.log('');
+    console.log(
+      `Active: <${out.activeAccount || '(none)'}>  ·  rotation targets need max(5h,7d) < ${destCap}% (see rateLimits.destinationMaxUtilPercent; Bedrock exhaustion is still ≥${EXHAUSTED_THRESHOLD}%)`,
+    );
+    for (const [k, v] of Object.entries(accountsOut)) {
+      if (v.error) {
+        console.log(`  ❌ <${k}>: ${v.error}`);
+        continue;
+      }
+      let icon;
+      if (v.extra_usage === true) icon = '💳';
+      else if (v.worst >= EXHAUSTED_THRESHOLD) icon = '🔴';
+      else if (!v.viable) icon = '🟡';
+      else if (v.worst >= 70) icon = '🟡';
+      else icon = '🟢';
+      const tags = [];
+      if (v.extra_usage === true) tags.push('EU-ON');
+      if (v.worst >= EXHAUSTED_THRESHOLD) tags.push('EXHAUSTED');
+      else if (!v.viable) tags.push(`≥${destCap}%cap`);
+      const tag = tags.length ? ' ' + tags.join(' ') : '';
+      const star = k === out.activeAccount ? ' ◀ active' : '';
+      console.log(`  ${icon} <${k}>: 5h=${v.five_hour ?? '?'}% 7d=${v.seven_day ?? '?'}%${tag}${star}`);
+    }
+    console.log('');
+    if (allExhausted) {
+      console.log(`⚠  ALL ACCOUNTS EXHAUSTED (live-confirmed, threshold ${EXHAUSTED_THRESHOLD}%)`);
+      if (bedrock?.ok) {
+        console.log(`✅ Bedrock fallback READY in ${bedrock.region}`);
+        console.log('   Next session: source ~/.claude/scripts/account-rotation/use-bedrock.sh');
+      } else {
+        console.log(`❌ Bedrock NOT reachable: ${bedrock?.error || 'unknown'}`);
+      }
+    } else if (destinationCapStuck) {
+      console.log(
+        `⚠  STUCK: every live-confirmed non-active account is ≥${destCap}% — no Max rotation target (Bedrock or lower destinationMaxUtilPercent).`,
+      );
+      if (bedrock?.ok) {
+        console.log(`✅ Bedrock fallback READY in ${bedrock.region}`);
+        console.log('   Next rotation: will activate Bedrock; then source use-bedrock.sh in new shells.');
+      } else {
+        console.log(`❌ Bedrock NOT reachable: ${bedrock?.error || 'unknown'}`);
+      }
+    } else if (out.onlyActiveViable) {
+      console.log(
+        `→ Already optimal: only account under ${destCap}% destination cap is active (${out.activeAccount || '?'}) — stay put.`,
+      );
+    } else if (out.pick) {
+      console.log(`→ Recommended: ${out.pick}`);
+    } else {
+      console.log('→ No viable account (all API-exhausted or missing utilization data)');
+    }
+    console.log('');
+  }
+  // Exit codes: 0 = viable pick available, 2 = Bedrock path (exhausted or destination-cap stuck),
+  // 3 = no viable pick but not confirmed for Bedrock (some queries failed — investigate).
+  process.exit(pick || onlyActiveViable ? 0 : allExhausted || destinationCapStuck ? 2 : 3);
 } else if (args.includes('--status')) {
-  showStatus();
+  await showStatus();
 } else if (args.includes('--capture')) {
   const capToIdx = args.indexOf('--to');
   const captureTo = capToIdx !== -1 && args[capToIdx + 1] ? args[capToIdx + 1] : null;
   captureCmd(captureTo);
+} else if (args.includes('--pin-browser-active')) {
+  // Resolve the currently-active rotating account from state.json and delegate
+  // to --pin-browser. This is what the PreToolUse hook calls so the chrome
+  // bridge follows wherever rotation lands, instead of being hardcoded to a
+  // single account. Falls back to a default (env CLAUDE_PIN_BROWSER_DEFAULT or
+  // first config account) when state is empty/unreadable.
+  const ttlIdx = args.indexOf('--ttl');
+  const ttlSec = ttlIdx !== -1 && args[ttlIdx + 1] ? parseInt(args[ttlIdx + 1], 10) : 600;
+  let email = null;
+  try {
+    const st = readState();
+    const cfg = readConfig();
+    const acct = cfg.accounts.find((a) => accountKey(a) === st.activeAccount);
+    email = acct?.email || null;
+  } catch {}
+  if (!email) {
+    email = process.env.CLAUDE_PIN_BROWSER_DEFAULT || (readConfig().accounts[0]?.email ?? null);
+  }
+  if (!email) {
+    log('[pin-browser-active] no resolvable active account — skipping');
+    process.exit(0);
+  }
+  // Re-dispatch into the --pin-browser branch by spawning ourselves. Cleaner
+  // than refactoring the whole branch into a function for now; cost is one
+  // extra fork. Stays best-effort/silent like the original hook contract.
+  const child = spawnSync(
+    process.execPath,
+    [join(__dirname, 'rotate.mjs'), '--pin-browser', email, '--ttl', String(ttlSec)],
+    { stdio: 'ignore', timeout: 30_000 },
+  );
+  process.exit(child.status || 0);
+} else if (args.includes('--pin-browser')) {
+  // Pin the active CLI keychain to the browser-extension account and freeze the
+  // daemon briefly. claude-in-chrome requires CLI account == claude.ai login, so
+  // while the bridge is in use the CLI must stay on the extension's account.
+  // Invoked by the PreToolUse hook on mcp__claude-in-chrome__*. Best-effort and
+  // fast: never throws, always exits 0 so it can't block the browser tool call.
+  //
+  // Sync ~/.claude.json oauthAccount + chromeExtension blocks to match the
+  // pinned account so the chrome bridge handshake succeeds — see snapshot
+  // helpers above. Existing pre-pin blocks are backed up to
+  // `.browser-pin-backup.json` and restored on `--release-browser-pin` (called
+  // by the daemon once the pin TTL lapses).
+  const pinIdx = args.indexOf('--pin-browser');
+  const pinEmail = args[pinIdx + 1];
+  const ttlIdx = args.indexOf('--ttl');
+  const ttlSec = ttlIdx !== -1 && args[ttlIdx + 1] ? parseInt(args[ttlIdx + 1], 10) : 300;
+  try {
+    const cfg = readConfig();
+    const acct = cfg.accounts.find((a) => (a.email || '').toLowerCase() === (pinEmail || '').toLowerCase());
+    if (!acct) {
+      log(`[pin-browser] no account matching ${pinEmail} — writing pin sentinel only`);
+    } else if (acquireLock()) {
+      try {
+        const swapped = await swapToken(acct);
+        if (swapped) {
+          const st = readState();
+          st.activeAccount = accountKey(acct);
+          writeState(st);
+          log(`[pin-browser] CLI pinned to ${accountKey(acct)}`);
+        } else {
+          log(
+            `[pin-browser] swapToken false for ${accountKey(acct)} (vault token missing/expired) — likely already active; pinning anyway`,
+          );
+        }
+        // Sync .claude.json oauthAccount/chromeExtension blocks to match.
+        const targetKey = accountKey(acct);
+        const snapshot = loadOauthSnapshot(targetKey) || loadOauthSnapshot(acct.email);
+        const cj = readClaudeJson();
+        const currentEmail = cj?.oauthAccount?.emailAddress?.toLowerCase() || null;
+        const wantEmail = (acct.email || '').toLowerCase();
+        if (currentEmail === wantEmail) {
+          // Already in sync — opportunistically capture as snapshot baseline if missing.
+          if (!snapshot) {
+            captureOauthSnapshot(acct.email);
+          }
+          log(`[pin-browser] .claude.json oauthAccount already=${currentEmail} — no swap needed`);
+        } else if (snapshot) {
+          // Back up the outgoing blocks once per pin window (don't clobber existing backup).
+          if (!existsSync(BROWSER_PIN_BACKUP_PATH)) backupCurrentOauthBlocks();
+          const applied = applyOauthSnapshotToClaudeJson(snapshot);
+          if (applied) {
+            log(
+              `[pin-browser] .claude.json oauthAccount swapped ${currentEmail || 'unknown'} → ${wantEmail}. Restart Claude Code session to apply (chrome bridge reads on startup).`,
+            );
+          } else {
+            log(`[pin-browser] snapshot found but apply failed for ${wantEmail}`);
+          }
+          // Ensure the matching Chrome profile is running so its extension
+          // service worker is alive and can authenticate against the swapped
+          // pairedDeviceId. No-op if already running.
+          const profileDir = snapshot.chromeProfileDir || chromeProfileDirFor(targetKey);
+          if (profileDir && !isChromeProfileRunning(profileDir)) {
+            // Navigate to claude.ai/chrome to wake the extension service
+            // worker — it only establishes the native-messaging bridge to
+            // Claude Code when this page loads. Without it, the extension
+            // is installed but dormant and the bridge reports "not connected".
+            launchChromeProfile(profileDir, 'https://claude.ai/chrome');
+            log(`[pin-browser] launched Chrome profile ${profileDir} for ${wantEmail} (@ claude.ai/chrome)`);
+          }
+        } else {
+          log(
+            `[pin-browser] WARNING: no oauth-snapshot for ${targetKey}. Chrome bridge will fail until you: (1) restart Claude Code while keychain is on ${wantEmail}, (2) run: node ${join(__dirname, 'rotate.mjs')} --capture-oauth-snapshot ${wantEmail}`,
+          );
+        }
+      } finally {
+        releaseLock();
+      }
+    } else {
+      log('[pin-browser] rotation lock busy — skipping swap, still writing pin sentinel');
+    }
+    // Always (re)write the freeze sentinel so the daemon won't rotate away while
+    // the browser bridge is in use. The hook refreshes this on every tool call.
+    writeFileSync(
+      BROWSER_PIN_PATH,
+      JSON.stringify({ email: pinEmail, until: Date.now() + ttlSec * 1000, ts: Date.now() }),
+    );
+  } catch (e) {
+    log(`[pin-browser] error (non-fatal): ${(e.message || e).toString().slice(0, 120)}`);
+  }
+  process.exit(0);
+} else if (args.includes('--release-browser-pin')) {
+  // Restore pre-pin ~/.claude.json oauthAccount/chromeExtension blocks. Called by
+  // the daemon once the .browser-pin sentinel's TTL expires. Idempotent: if no
+  // backup exists, exits 0 silently.
+  try {
+    if (existsSync(BROWSER_PIN_BACKUP_PATH)) {
+      restoreOauthBlocksFromBackup();
+    }
+    if (existsSync(BROWSER_PIN_PATH)) {
+      try {
+        unlinkSync(BROWSER_PIN_PATH);
+      } catch {}
+    }
+  } catch (e) {
+    log(`[release-browser-pin] error (non-fatal): ${(e.message || e).toString().slice(0, 120)}`);
+  }
+  process.exit(0);
+} else if (args.includes('--build-snapshot-from-api')) {
+  // Construct an oauth-snapshot for an account using its stored vault token
+  // plus `https://api.anthropic.com/api/oauth/profile`. This bypasses the
+  // Claude Code session restart that --capture-oauth-snapshot requires — the
+  // snapshot is built directly from API metadata. The resulting snapshot is
+  // ready to be applied by --pin-browser the next time rotation lands here.
+  //
+  //   node rotate.mjs --build-snapshot-from-api <email>
+  //   node rotate.mjs --build-snapshot-from-api --all
+  const isAll = args.includes('--all');
+  const idx = args.indexOf('--build-snapshot-from-api');
+  const wantedEmail = !isAll && args[idx + 1] && !args[idx + 1].startsWith('--') ? args[idx + 1] : null;
+  if (!isAll && !wantedEmail) {
+    console.error('Usage: rotate.mjs --build-snapshot-from-api <email>');
+    console.error('       rotate.mjs --build-snapshot-from-api --all');
+    process.exit(2);
+  }
+  const cfg = readConfig();
+  const targets = isAll
+    ? cfg.accounts
+    : cfg.accounts.filter((a) => (a.email || '').toLowerCase() === wantedEmail.toLowerCase());
+  if (!targets.length) {
+    console.error(`No account matching ${wantedEmail}`);
+    process.exit(2);
+  }
+  ensureSnapshotsDir();
+  // Seed chromeExtension from current ~/.claude.json — all clones share the
+  // inherited pairedDeviceId until each profile re-Links. Acceptable for
+  // single-account-at-a-time rotation; multi-account simultaneous bridge
+  // requires per-profile Link clicks.
+  const seedCj = readClaudeJson();
+  const seedExt =
+    seedCj?.chromeExtension && seedCj.chromeExtension.pairedDeviceId
+      ? seedCj.chromeExtension
+      : { pairedDeviceId: '', pairedDeviceName: 'ClaudeCode' };
+  let okCount = 0;
+  let failCount = 0;
+  for (const acct of targets) {
+    const key = accountKey(acct);
+    const tokenJson = readStoredToken(acct);
+    if (!tokenJson) {
+      console.error(`[skip] ${acct.email}: no vault token in keychain`);
+      failCount++;
+      continue;
+    }
+    let accessToken = null;
+    try {
+      accessToken = JSON.parse(tokenJson)?.claudeAiOauth?.accessToken;
+    } catch {}
+    if (!accessToken) {
+      console.error(`[skip] ${acct.email}: vault token has no accessToken`);
+      failCount++;
+      continue;
+    }
+    // Probe /oauth/profile
+    const probe = spawnSync(
+      'curl',
+      [
+        '-sS',
+        '--max-time',
+        '12',
+        '-H',
+        `Authorization: Bearer ${accessToken}`,
+        '-H',
+        'anthropic-beta: oauth-2025-04-20',
+        'https://api.anthropic.com/api/oauth/profile',
+      ],
+      { encoding: 'utf8' },
+    );
+    if (probe.status !== 0 || !probe.stdout) {
+      console.error(`[skip] ${acct.email}: /oauth/profile failed (curl exit ${probe.status})`);
+      failCount++;
+      continue;
+    }
+    let pf;
+    try {
+      pf = JSON.parse(probe.stdout);
+    } catch (e) {
+      console.error(`[skip] ${acct.email}: /oauth/profile non-JSON response`);
+      failCount++;
+      continue;
+    }
+    if (!pf.account?.uuid || !pf.organization?.uuid) {
+      console.error(`[skip] ${acct.email}: /oauth/profile missing account/org UUID (token rejected?)`);
+      failCount++;
+      continue;
+    }
+    const a = pf.account;
+    const o = pf.organization;
+    const snapshot = {
+      capturedAt: new Date().toISOString(),
+      accountKey: key,
+      email: a.email,
+      chromeProfileDir: chromeProfileDirFor(key),
+      blocks: {
+        oauthAccount: {
+          accountUuid: a.uuid,
+          emailAddress: a.email,
+          organizationUuid: o.uuid,
+          hasExtraUsageEnabled: !!o.has_extra_usage_enabled,
+          billingType: o.billing_type || null,
+          accountCreatedAt: a.created_at || null,
+          subscriptionCreatedAt: o.subscription_created_at || null,
+          ccOnboardingFlags: o.cc_onboarding_flags || {},
+          claudeCodeTrialEndsAt: o.claude_code_trial_ends_at || null,
+          claudeCodeTrialDurationDays: o.claude_code_trial_duration_days || null,
+          seatTier: o.seat_tier || null,
+          organizationRole: 'admin',
+          workspaceRole: null,
+          organizationName: o.name || null,
+          organizationType: o.organization_type || null,
+          organizationRateLimitTier: o.rate_limit_tier || null,
+          userRateLimitTier: null,
+        },
+        chromeExtension: seedExt,
+      },
+    };
+    const out = snapshotPathFor(key);
+    writeFileSync(out, JSON.stringify(snapshot, null, 2));
+    console.error(`[ok] ${acct.email.padEnd(38)} → ${out.replace(process.env.HOME || '', '~')}`);
+    okCount++;
+  }
+  console.error(`\nDone: ${okCount} captured, ${failCount} skipped`);
+  process.exit(failCount > 0 && okCount === 0 ? 1 : 0);
+} else if (args.includes('--capture-oauth-snapshot')) {
+  // Manually capture the current ~/.claude.json oauthAccount + chromeExtension
+  // blocks under a snapshot keyed by accountKey. Requires the CLI keychain +
+  // .claude.json to be in sync (i.e. you just restarted Claude Code with the
+  // target account live). Pass --capture-oauth-snapshot <email> to require a
+  // match, or pass no arg to capture whatever .claude.json currently holds.
+  const idx = args.indexOf('--capture-oauth-snapshot');
+  const wantedEmail = args[idx + 1] && !args[idx + 1].startsWith('--') ? args[idx + 1] : null;
+  const ok = captureOauthSnapshot(wantedEmail);
+  process.exit(ok ? 0 : 1);
+} else if (args.includes('--colorize-chrome-profiles')) {
+  // Patch ~/Library/Application Support/Google/Chrome/Local State so each
+  // per-account profile gets a clear display name + distinct theme color in
+  // Chrome's profile picker. Chrome must be QUIT first — it rewrites Local
+  // State on shutdown, clobbering changes made while it is running.
+  if (
+    isChromeProfileRunning('ClaudeCode') ||
+    readdirSync(CHROME_PROFILES_BASE).some((d) => d.startsWith('ClaudeCode') && isChromeProfileRunning(d))
+  ) {
+    console.error('[colorize] Chrome is running with a ClaudeCode profile. Quit all of them first:');
+    console.error('  pkill -f "profile-directory=ClaudeCode"');
+    process.exit(2);
+  }
+  const ls = readChromeLocalState();
+  if (!ls) {
+    console.error(`[colorize] cannot read ${CHROME_LOCAL_STATE_PATH}`);
+    process.exit(2);
+  }
+  ls.profile = ls.profile || {};
+  ls.profile.info_cache = ls.profile.info_cache || {};
+  const cfg = readConfig();
+  let touched = 0;
+  cfg.accounts.forEach((acct, i) => {
+    const dir = chromeProfileDirFor(accountKey(acct));
+    if (!isChromeProfileBootstrapped(dir)) return;
+    const palette = PROFILE_COLOR_PALETTE[i % PROFILE_COLOR_PALETTE.length];
+    const name = displayNameFor(acct);
+    const entry = ls.profile.info_cache[dir] || {};
+    entry.name = name;
+    entry.shortcut_name = name;
+    entry.gaia_name = name;
+    entry.user_name = acct.email;
+    entry.profile_highlight_color = colorIntFromHex(palette.hex);
+    entry.is_using_default_name = false;
+    entry.is_using_default_avatar = false;
+    // Use Chrome's built-in flat-color avatar set; index 26+ are the modern set
+    entry.avatar_icon = `chrome://theme/IDR_PROFILE_AVATAR_${26 + (i % 24)}`;
+    ls.profile.info_cache[dir] = entry;
+    touched++;
+    console.error(`[colorize] ${dir.padEnd(50)} → "${name}" (${palette.name} ${palette.hex})`);
+  });
+  if (touched > 0) writeChromeLocalStateAtomic(ls);
+  console.error(`[colorize] patched ${touched} profile entries in Local State`);
+  process.exit(0);
+} else if (args.includes('--bootstrap-chrome-profile') || args.includes('--bootstrap-all-chrome-profiles')) {
+  // Per-account Chrome profile bootstrap. Two modes:
+  //
+  //   --bootstrap-chrome-profile <email>     — one account
+  //   --bootstrap-all-chrome-profiles        — every account in config.json
+  //
+  // Each per-account profile is cloned from a source profile (default
+  // `ClaudeCode`, override with `--clone-from <dir>`) so the Claude extension
+  // is pre-installed and Sam doesn't have to redo browser setup. After clone,
+  // each profile is launched against claude.ai/chrome so Sam can sign out of
+  // the inherited account, sign in as the target account, and click Link to
+  // pair. A capture step (--capture-oauth-snapshot) then snapshots the new
+  // pairing for use by --pin-browser.
+  const isAll = args.includes('--bootstrap-all-chrome-profiles');
+  const cloneFromIdx = args.indexOf('--clone-from');
+  const cloneFromArg =
+    cloneFromIdx !== -1 && args[cloneFromIdx + 1] && !args[cloneFromIdx + 1].startsWith('--')
+      ? args[cloneFromIdx + 1]
+      : 'ClaudeCode';
+  const cfg = readConfig();
+  let targets;
+  if (isAll) {
+    targets = cfg.accounts.slice();
+  } else {
+    const idx = args.indexOf('--bootstrap-chrome-profile');
+    const targetEmail = args[idx + 1] && !args[idx + 1].startsWith('--') ? args[idx + 1] : null;
+    if (!targetEmail) {
+      console.error('Usage: rotate.mjs --bootstrap-chrome-profile <email>');
+      console.error('       rotate.mjs --bootstrap-all-chrome-profiles [--clone-from <dir>]');
+      process.exit(2);
+    }
+    const acct = cfg.accounts.find((a) => (a.email || '').toLowerCase() === targetEmail.toLowerCase());
+    if (!acct) {
+      console.error(`No account matching ${targetEmail} in config.json`);
+      process.exit(2);
+    }
+    targets = [acct];
+  }
+  // Refuse to proceed if the clone source is currently running — leveldb of
+  // a running Chrome is unsafe to copy and produces a corrupt clone.
+  if (isChromeProfileRunning(cloneFromArg)) {
+    console.error(
+      `[bootstrap-chrome-profile] source profile "${cloneFromArg}" is currently RUNNING.\n` +
+        'Cloning a live profile corrupts leveldb. Quit that Chrome window first, then re-run:\n' +
+        `  pkill -f "profile-directory=${cloneFromArg}"  &&  node ${join(__dirname, 'rotate.mjs')} ${args.join(' ')}`,
+    );
+    process.exit(2);
+  }
+  if (!isChromeProfileBootstrapped(cloneFromArg)) {
+    console.error(
+      `[bootstrap-chrome-profile] source profile "${cloneFromArg}" does not exist at ${chromeProfilePath(cloneFromArg)}`,
+    );
+    process.exit(2);
+  }
+  // Phase 1: clone (no launches yet — Chrome must stay quit while we patch Local State)
+  const results = [];
+  for (const acct of targets) {
+    const key = accountKey(acct);
+    const profileDir = chromeProfileDirFor(key);
+    let cloneStatus = { ok: true, reason: 'existed' };
+    if (!isChromeProfileBootstrapped(profileDir)) {
+      console.error(`[bootstrap] cloning ${cloneFromArg} → ${profileDir} (${acct.email})...`);
+      cloneStatus = cloneChromeProfile(cloneFromArg, profileDir);
+      if (!cloneStatus.ok) {
+        console.error(`[bootstrap] FAILED to clone for ${acct.email}: ${cloneStatus.reason}`);
+        results.push({ email: acct.email, profileDir, clone: cloneStatus.reason, launched: false });
+        continue;
+      }
+    } else {
+      console.error(`[bootstrap] profile ${profileDir} already exists — skipping clone`);
+    }
+    results.push({ email: acct.email, profileDir, clone: cloneStatus.reason, launched: false });
+  }
+  // Phase 2: colorize Local State (display name + theme color + avatar per profile)
+  try {
+    const ls = readChromeLocalState();
+    if (ls) {
+      ls.profile = ls.profile || {};
+      ls.profile.info_cache = ls.profile.info_cache || {};
+      cfg.accounts.forEach((acct, i) => {
+        const dir = chromeProfileDirFor(accountKey(acct));
+        if (!isChromeProfileBootstrapped(dir)) return;
+        const palette = PROFILE_COLOR_PALETTE[i % PROFILE_COLOR_PALETTE.length];
+        const name = displayNameFor(acct);
+        const entry = ls.profile.info_cache[dir] || {};
+        entry.name = name;
+        entry.shortcut_name = name;
+        entry.gaia_name = name;
+        entry.user_name = acct.email;
+        entry.profile_highlight_color = colorIntFromHex(palette.hex);
+        entry.is_using_default_name = false;
+        entry.is_using_default_avatar = false;
+        entry.avatar_icon = `chrome://theme/IDR_PROFILE_AVATAR_${26 + (i % 24)}`;
+        ls.profile.info_cache[dir] = entry;
+        console.error(`[colorize] ${dir.padEnd(50)} → "${name}" (${palette.name})`);
+      });
+      writeChromeLocalStateAtomic(ls);
+    }
+  } catch (e) {
+    console.error(`[colorize] non-fatal: ${(e.message || e).toString().slice(0, 120)}`);
+  }
+  // Phase 3: launch each cloned profile so user can finish manual sign-in
+  for (const r of results) {
+    if (r.clone === 'cp-failed' || r.clone === 'src-running' || r.clone === 'src-missing') continue;
+    r.launched = launchChromeProfile(r.profileDir, 'https://claude.ai/chrome');
+  }
+  console.error('');
+  console.error('─── Bootstrap summary ───────────────────────────────────────────────────');
+  for (const r of results) {
+    console.error(
+      `  ${r.email.padEnd(38)} profile=${r.profileDir.padEnd(40)} clone=${r.clone.padEnd(10)} launched=${r.launched}`,
+    );
+  }
+  console.error('');
+  console.error('─── Manual finalization (per profile) ───────────────────────────────────');
+  console.error('In each Chrome window that opened:');
+  console.error('  1. Sign out of the inherited claude.ai session');
+  console.error('  2. Sign in as the matching account email');
+  console.error('  3. Click "Link" on claude.ai/chrome to re-pair the extension');
+  console.error('  4. Back in terminal: restart Claude Code while CLI is on that account,');
+  console.error('     then run: rotate.mjs --capture-oauth-snapshot <email>');
+  console.error('─────────────────────────────────────────────────────────────────────────');
+  process.exit(0);
 } else {
   const toIdx = args.indexOf('--to');
   const target = toIdx !== -1 ? args[toIdx + 1] : null;
@@ -3709,22 +4995,8 @@ if (args.includes('--setup')) {
   const force = args.includes('--force');
   const dryRun = args.includes('--dry-run');
   const magicLink = args.includes('--magic-link');
-  const allowExtraUsage = args.includes('--allow-extra-usage');
-  // --reload-agents: after a successful rotation, respawn running bg agents so
-  // they pick up the new token from the keychain. Opt-in so existing callers
-  // that don't pass the flag retain their current behaviour unchanged.
-  const reloadAgents = args.includes('--reload-agents');
-  // --reload-agents-dry-run: parse+select logic only; no actual respawns. Used
-  // for harness testing of the candidate-selection logic.
-  const reloadAgentsDryRun = args.includes('--reload-agents-dry-run');
-
-  if (reloadAgentsDryRun) {
-    // Standalone dry-run: enumerate agents, print selection decisions, exit.
-    log('[reload-agents-dry-run] Running candidate-selection harness...');
-    await reloadRunningAgents({ dryRun: true });
-    process.exit(0);
-  }
-
+  const allowExhausted = args.includes('--allow-exhausted');
+  const bedrockOnExhausted = !args.includes('--no-bedrock-fallback');
   if (dryRun) log('DRY RUN MODE — no changes will be made');
   if (force) {
     log('Force mode — bypassing lock and killing any competing rotations');
@@ -3746,8 +5018,8 @@ if (args.includes('--setup')) {
       noBrowser,
       dryRun,
       magicLink,
-      allowExtraUsage,
-      reloadAgents,
+      allowExhausted,
+      bedrockOnExhausted,
     });
     process.exit(ok ? 0 : 1);
   } catch (err) {
