@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# ops-resume — reopen recently-closed Claude Code sessions, one per Ghostty tab.
+#
+# For every recent session transcript in ~/.claude/projects it opens a new
+# Ghostty tab (via cmd+t) and types `cd <cwd> && claude --resume <sessionId>`,
+# so each session resumes in its own tab — from whatever directory or repo it
+# was originally running in.
+#
+# Default: every session touched in the last 60 minutes, from ANY directory.
+#
+# Usage:
+#   ops-resume                 # all sessions from the last 60 min, any dir
+#   ops-resume -m 30           # last 30 minutes
+#   ops-resume -H 6            # last 6 hours
+#   ops-resume -n 8            # cap at 8 tabs (newest first)
+#   ops-resume --here          # only sessions whose cwd == current directory
+#   ops-resume --dry-run       # list what would open, open nothing
+#
+# Env overrides:
+#   OPS_RESUME_MINUTES (60)   lookback window in minutes
+#   OPS_RESUME_MAX (20)       safety cap on number of tabs
+#   OPS_RESUME_MIN_AGE_SEC (45)  skip sessions touched more recently than this
+#                                (avoids reopening the session you're in right now)
+
+set -uo pipefail
+
+PROJECTS_ROOT="$HOME/.claude/projects"
+MINUTES="${OPS_RESUME_MINUTES:-60}"
+MAX="${OPS_RESUME_MAX:-20}"
+MIN_AGE_SEC="${OPS_RESUME_MIN_AGE_SEC:-45}"
+DRY=0
+HERE=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -m|--minutes) MINUTES="$2"; shift 2 ;;
+    -H|--hours)   MINUTES=$(( $2 * 60 )); shift 2 ;;
+    -n|--max)     MAX="$2"; shift 2 ;;
+    --dry-run)    DRY=1; shift ;;
+    --here)       HERE=1; shift ;;
+    -h|--help)    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+[ "$(uname -s)" = "Darwin" ] || { echo "ops-resume currently supports macOS + Ghostty only." >&2; exit 1; }
+[ -d "$PROJECTS_ROOT" ] || { echo "No sessions directory at $PROJECTS_ROOT." >&2; exit 1; }
+command -v ghostty >/dev/null 2>&1 || [ -d /Applications/Ghostty.app ] || {
+  echo "Ghostty not found. Install it from https://ghostty.org first." >&2; exit 1; }
+
+NOW=$(date +%s)
+CUTOFF_OLD=$(( NOW - MINUTES * 60 ))   # don't go older than this
+CUTOFF_NEW=$(( NOW - MIN_AGE_SEC ))    # don't grab sessions that are still live
+HEREDIR="$PWD"
+
+# Collect candidates: jsonl whose mtime is within (CUTOFF_OLD, CUTOFF_NEW], newest
+# first. We filter on stat(1) mtime rather than `find -newermt @epoch`, because the
+# @epoch form is GNU-only and BSD/macOS find rejects it.
+# Output line: <mtime>\t<sessionId>\t<cwd>
+candidates=()
+while IFS= read -r line; do
+  candidates+=("$line")
+done < <(
+  find "$PROJECTS_ROOT" -name '*.jsonl' -type f 2>/dev/null \
+  | while IFS= read -r f; do
+      mtime=$(stat -f %m "$f" 2>/dev/null) || continue
+      [ "$mtime" -gt "$CUTOFF_OLD" ] || continue   # too old
+      [ "$mtime" -le "$CUTOFF_NEW" ] || continue   # too fresh (still live)
+      sid=$(basename "$f" .jsonl)
+      # Only real interactive sessions have UUID filenames; this skips subagent
+      # transcripts (agent-*), workflow journals, and other non-resumable jsonl.
+      [[ "$sid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || continue
+      lines=$(wc -l < "$f" 2>/dev/null | tr -d ' '); lines=${lines:-0}
+      [ "$lines" -lt 3 ] && continue               # skip empty / junk sessions
+      cwd=$(grep -m1 -o '"cwd":"[^"]*"' "$f" 2>/dev/null | sed 's/"cwd":"//; s/"$//')
+      [ -n "$cwd" ] || cwd="$HOME"
+      printf '%s\t%s\t%s\n' "$mtime" "$sid" "$cwd"
+    done \
+  | sort -rn
+)
+
+# Apply --here filter + MAX cap.
+selected=()
+truncated=0
+for line in "${candidates[@]}"; do
+  IFS=$'\t' read -r mtime sid cwd <<< "$line"
+  if [ "$HERE" -eq 1 ] && [ "$cwd" != "$HEREDIR" ]; then continue; fi
+  if [ "${#selected[@]}" -ge "$MAX" ]; then truncated=1; break; fi
+  selected+=("$line")
+done
+
+if [ "${#selected[@]}" -eq 0 ]; then
+  echo "No recent sessions found (last ${MINUTES} min, older than ${MIN_AGE_SEC}s)."
+  exit 0
+fi
+
+echo "Sessions to resume (${#selected[@]}):"
+for line in "${selected[@]}"; do
+  IFS=$'\t' read -r mtime sid cwd <<< "$line"
+  ago=$(( (NOW - mtime) / 60 ))
+  printf '  • %s  (%dm ago)  %s\n' "${sid:0:8}" "$ago" "$cwd"
+done
+[ "$truncated" -eq 1 ] && echo "  … more matched; capped at ${MAX} (raise with -n / OPS_RESUME_MAX)."
+
+if [ "$DRY" -eq 1 ]; then
+  echo "(--dry-run: nothing opened)"
+  exit 0
+fi
+
+# Make sure Ghostty is running, then bring it to the front.
+if ! pgrep -x ghostty >/dev/null 2>&1; then
+  open -a Ghostty
+  sleep 1.2
+fi
+osascript -e 'tell application "Ghostty" to activate' >/dev/null 2>&1 || true
+sleep 0.3
+
+# Escape a string for an AppleScript double-quoted literal.
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+opened=0
+for line in "${selected[@]}"; do
+  IFS=$'\t' read -r mtime sid cwd <<< "$line"
+  cmd="cd \"$cwd\" && claude --resume $sid"
+  cmd_esc="$(esc "$cmd")"
+  osascript <<APPLESCRIPT
+tell application "Ghostty" to activate
+delay 0.25
+tell application "System Events"
+  keystroke "t" using command down
+  delay 0.45
+  keystroke "$cmd_esc"
+  delay 0.1
+  key code 36
+end tell
+APPLESCRIPT
+  opened=$(( opened + 1 ))
+  sleep 0.5
+done
+
+echo "✓ Opened ${opened} tab(s) in Ghostty."
