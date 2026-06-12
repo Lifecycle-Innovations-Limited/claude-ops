@@ -142,8 +142,20 @@ if (
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
+// Strip anything that looks like an OAuth token / bearer secret before it can
+// reach a log sink (console or rotation.log). Operational logs only need the
+// account email/label, never the credential material — this scrubs accidental
+// leakage of token bytes that flow through error messages or oauthAccount blobs.
+function redactSecrets(s) {
+  return String(s)
+    .replace(/sk-ant-[A-Za-z0-9_-]+/g, 'sk-ant-***')
+    .replace(/\bey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+/g, '***jwt***')
+    .replace(/"?accessToken"?\s*[:=]\s*"?[A-Za-z0-9._-]{20,}"?/gi, 'accessToken:***')
+    .replace(/"?refreshToken"?\s*[:=]\s*"?[A-Za-z0-9._-]{20,}"?/gi, 'refreshToken:***');
+}
+
 function log(msg) {
-  const line = `[${new Date().toISOString()}] ${msg}`;
+  const line = `[${new Date().toISOString()}] ${redactSecrets(msg)}`;
   console.error(line);
   try {
     appendFileSync(LOG_PATH, line + '\n');
@@ -152,7 +164,10 @@ function log(msg) {
 
 function notify(title, msg) {
   try {
-    execSync(`osascript -e 'display notification "${msg.replace(/"/g, '\\"')}" with title "${title}"'`);
+    // execFileSync (no shell) — title/msg cannot break out into a shell command.
+    // Escape only for the AppleScript string literal (backslash + double-quote).
+    const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    execFileSync('osascript', ['-e', `display notification "${esc(msg)}" with title "${esc(title)}"`]);
   } catch {}
 }
 
@@ -4233,11 +4248,11 @@ async function setup() {
       console.log(`✅ Saved to vault: ${tokenService(account)}`);
       results.push({ key, ok: true });
     } catch (e) {
-      console.error(`❌ Error: ${e.message}`);
+      console.error(redactSecrets(`❌ Error: ${e.message}`));
       results.push({
         key,
         ok: false,
-        reason: String(e.message || e).slice(0, 80),
+        reason: redactSecrets(String(e.message || e)).slice(0, 80),
       });
     }
   }
@@ -4248,7 +4263,7 @@ async function setup() {
   const failCount = results.length - okCount;
   for (const r of results) {
     const icon = r.ok ? (r.skipped ? '⏭ ' : '✅') : '❌';
-    console.log(`  ${icon} ${r.key}${r.reason ? `  (${r.reason})` : ''}`);
+    console.log(redactSecrets(`  ${icon} ${r.key}${r.reason ? `  (${r.reason})` : ''}`));
   }
   console.log(`\n${okCount}/${results.length} captured${failCount ? `, ${failCount} failed` : ''}.`);
 
@@ -4409,7 +4424,7 @@ function captureCmd(targetEmail = null) {
     console.log(`✓ Token captured and saved to keychain: ${tokenService(account)}`);
     console.log(`  Account: ${account.email}${account.label ? ' [' + account.label + ']' : ''}`);
   } catch (e) {
-    console.error(e.message);
+    console.error(redactSecrets(e.message));
     process.exit(1);
   }
 }

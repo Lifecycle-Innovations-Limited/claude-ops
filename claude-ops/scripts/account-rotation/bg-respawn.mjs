@@ -19,14 +19,23 @@
 //
 // Used by rotate.mjs (post-rotation) and daemon.mjs (periodic deferred sweep).
 
-import { readFileSync, readdirSync, writeFileSync, unlinkSync, statSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, writeFileSync, unlinkSync, statSync, existsSync, mkdirSync } from 'fs';
 import { execFileSync, execSync } from 'child_process';
 import { join } from 'path';
 import { homedir } from 'os';
 
 const SESSIONS_DIR = join(homedir(), '.claude', 'sessions');
-const RESPAWNED_MARKER = (id) => `/tmp/claude-rotation-respawned-${id}`;
-const DEFERRED_MARKER = (id) => `/tmp/claude-respawn-deferred-${id}`;
+// Markers live in a user-private dir (0700), not the world-writable OS temp dir,
+// to avoid symlink/predictable-name attacks on the shared /tmp.
+const MARKER_DIR = join(homedir(), '.claude', 'rotation-markers');
+function ensureMarkerDir() {
+  try {
+    mkdirSync(MARKER_DIR, { recursive: true, mode: 0o700 });
+  } catch {}
+}
+const DEFERRED_PREFIX = 'claude-respawn-deferred-';
+const RESPAWNED_MARKER = (id) => join(MARKER_DIR, `claude-rotation-respawned-${id}`);
+const DEFERRED_MARKER = (id) => join(MARKER_DIR, `${DEFERRED_PREFIX}${id}`);
 const RESPAWN_THROTTLE_MS = 10 * 60_000; // never respawn the same session twice in 10 min
 const BUSY_FORCE_AFTER_MS = 90 * 60_000; // busy this long after rotation → respawn anyway
 
@@ -109,7 +118,8 @@ function doRespawn(session, log) {
     try {
       process.kill(session.pid, 'SIGTERM');
       try {
-        writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()));
+        ensureMarkerDir();
+        writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()), { mode: 0o600 });
       } catch {}
       try {
         unlinkSync(DEFERRED_MARKER(session.id));
@@ -124,7 +134,8 @@ function doRespawn(session, log) {
   try {
     execFileSync(claudeBin(), ['respawn', String(session.id)], { timeout: 30_000, stdio: 'pipe' });
     try {
-      writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()));
+      ensureMarkerDir();
+      writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()), { mode: 0o600 });
     } catch {}
     try {
       unlinkSync(DEFERRED_MARKER(session.id));
@@ -156,7 +167,9 @@ export function respawnBgSessions(log = () => {}) {
     }
     if (s.status === 'busy') {
       try {
-        if (!existsSync(DEFERRED_MARKER(s.id))) writeFileSync(DEFERRED_MARKER(s.id), String(Date.now()));
+        ensureMarkerDir();
+        if (!existsSync(DEFERRED_MARKER(s.id)))
+          writeFileSync(DEFERRED_MARKER(s.id), String(Date.now()), { mode: 0o600 });
       } catch {}
       deferred++;
       log(`[bg-respawn] ${s.id} busy — deferred (daemon sweep will retry, force after 90min)`);
@@ -175,7 +188,7 @@ export function respawnBgSessions(log = () => {}) {
 export function sweepDeferredRespawns(log = () => {}) {
   let markers = [];
   try {
-    markers = readdirSync('/tmp').filter((f) => f.startsWith('claude-respawn-deferred-'));
+    markers = readdirSync(MARKER_DIR).filter((f) => f.startsWith(DEFERRED_PREFIX));
   } catch {
     return 0;
   }
@@ -183,8 +196,8 @@ export function sweepDeferredRespawns(log = () => {}) {
   const live = new Map(listLiveBgSessions().map((s) => [String(s.id), s]));
   let handled = 0;
   for (const m of markers) {
-    const id = m.replace('claude-respawn-deferred-', '');
-    const markerPath = `/tmp/${m}`;
+    const id = m.replace(DEFERRED_PREFIX, '');
+    const markerPath = join(MARKER_DIR, m);
     const s = live.get(id);
     if (!s) {
       // session exited or state file gone — nothing to refresh

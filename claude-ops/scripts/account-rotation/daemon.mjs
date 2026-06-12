@@ -285,9 +285,12 @@ function readStoredToken(account) {
     }
   }
   try {
-    const out = execSync(`security find-generic-password -s "${svc}" -a "${VAULT_KEYCHAIN_ACCOUNT}" -g 2>&1`, {
+    // spawnSync (no shell) — svc/account can't break out into a shell command.
+    // `security -g` prints "password: ..." on stderr, so read both streams.
+    const r = spawnSync('security', ['find-generic-password', '-s', svc, '-a', VAULT_KEYCHAIN_ACCOUNT, '-g'], {
       timeout: 5000,
-    }).toString();
+    });
+    const out = `${r.stdout?.toString() || ''}${r.stderr?.toString() || ''}`;
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
