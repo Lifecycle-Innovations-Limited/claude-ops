@@ -134,9 +134,8 @@ function notify(title, msg) {
 
 // Legacy account-key renames: old label → new canonical key.
 // Applied once per readState() call to keep state.json consistent as labels evolve.
-// Safe to run repeatedly (no-op when the old key doesn't exist).
 const STATE_KEY_MIGRATIONS = {
-  'heartfeldt-personal': 'heartfeldt', // label changed: personal org is now just "heartfeldt"
+  'old-label': 'new-label', // placeholder: replace with real migration mappings as needed
 };
 
 function migrateStateKey(key) {
@@ -289,9 +288,10 @@ function readStoredToken(account) {
     }
   }
   try {
-    const out = execSync(`security find-generic-password -s "${svc}" -a "${KEYCHAIN_ACCOUNT}" -g 2>&1`, {
+    const result = spawnSync('security', ['find-generic-password', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-g'], {
       timeout: 5000,
-    }).toString();
+    });
+    const out = result.stderr.toString() + result.stdout.toString();
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
@@ -310,12 +310,12 @@ function readActiveKeychainToken() {
     }
   }
   try {
-    const out = execSync(
-      `security find-generic-password -s "Claude Code-credentials" -a "${KEYCHAIN_ACCOUNT}" -g 2>&1`,
-      {
-        timeout: 5000,
-      },
-    ).toString();
+    const result = spawnSync(
+      'security',
+      ['find-generic-password', '-s', 'Claude Code-credentials', '-a', KEYCHAIN_ACCOUNT, '-g'],
+      { timeout: 5000 },
+    );
+    const out = result.stderr.toString() + result.stdout.toString();
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
