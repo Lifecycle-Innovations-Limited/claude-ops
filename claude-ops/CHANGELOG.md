@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.29.1] - 2026-06-12
+
+### Changed
+- fix(ops): cross-platform gh-orphan-killer for curl/api.github.com poll loops + live installer (#558)
+- fix(wa-mac-archive): owner-idle gate + precise Archive-chat matching + focus restore (#562)
+
+
 ## [2.29.0] - 2026-06-11
 
 ### Changed
