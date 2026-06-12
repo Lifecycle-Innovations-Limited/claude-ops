@@ -50,17 +50,22 @@ echo "wa-mac-archive: transport=$WA_MAC_TRANSPORT, targets=${#TARGETS[@]}, pace=
 
 # Owner-idle gate — never steal the screen from an active user.
 idle_secs() {
-  wa_mac_ssh "ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ {print int(\$NF/1000000000); exit}'" 2>/dev/null || echo 0
+  wa_mac_ssh "ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ {print int(\$NF/1000000000); exit}'" 2>/dev/null || true
 }
-if [ "$DRY" = 0 ] && [ "$FORCE" = 0 ]; then
-  idle=$(idle_secs); idle="${idle:-0}"
+check_idle_gate() {
+  [ "$DRY" = 0 ] && [ "$FORCE" = 0 ] || return 0
+  idle=$(idle_secs)
+  if [ -z "$idle" ]; then
+    echo "wa-mac-archive: WARN — could not read HID idle time; proceeding" >&2
+    return 0
+  fi
   if [ "$idle" -lt "$IDLE_MIN" ]; then
     echo "wa-mac-archive: REFUSED — owner active at the Mac (idle ${idle}s < ${IDLE_MIN}s)." >&2
     echo "wa-mac-archive: retry when idle, lower WA_MAC_IDLE_MIN, or pass --force (visible takeover)." >&2
     exit 75
   fi
   echo "wa-mac-archive: idle gate passed (owner idle ${idle}s)"
-fi
+}
 
 # AppleScript runner: opens the chat via in-app search, then clicks the menu-bar
 # item whose name contains "Archive" (locale-robust: NL "Archiveer" also matches
@@ -77,40 +82,47 @@ on run
   tell application "System Events"
     set prevApp to name of first process whose frontmost is true
   end tell
-  tell application "WhatsApp" to activate
-  delay 1.2
-  tell application "System Events"
-    tell process "WhatsApp"
-      keystroke "f" using {command down}
-      delay 0.6
-      keystroke chatName
-      delay 1.4
-      key code 125 -- down: first search result
-      delay 0.4
-      key code 36  -- return: open chat
-      delay 1.0
-      -- click the "Archive chat" menu item — EXACT-prefix match per locale,
-      -- and never an item that merely contains "Archive" (e.g. the "Archived"
-      -- folder navigation item, which the v1 matcher hit by mistake).
-      set archived to false
-      repeat with mb in menu bar items of menu bar 1
-        try
-          repeat with mi in menu items of menu 1 of mb
-            set t to (name of mi as text)
-            ignoring case
-              if (t starts with "Archive chat") or (t starts with "Archiveer chat") or (t starts with "Chat archivieren") then
-                click mi
-                set archived to true
-                exit repeat
-              end if
-            end ignoring
-          end repeat
-        end try
-        if archived then exit repeat
-      end repeat
-      key code 53 -- esc: clear search state
+  set archived to false
+  try
+    tell application "WhatsApp" to activate
+    delay 1.2
+    tell application "System Events"
+      tell process "WhatsApp"
+        keystroke "f" using {command down}
+        delay 0.6
+        keystroke chatName
+        delay 1.4
+        key code 125 -- down: first search result
+        delay 0.4
+        key code 36  -- return: open chat
+        delay 1.0
+        -- click the "Archive chat" menu item — EXACT-prefix match per locale,
+        -- and never an item that merely contains "Archive" (e.g. the "Archived"
+        -- folder navigation item, which the v1 matcher hit by mistake).
+        repeat with mb in menu bar items of menu bar 1
+          try
+            repeat with mi in menu items of menu 1 of mb
+              set t to (name of mi as text)
+              ignoring case
+                if (t starts with "Archive chat") or (t starts with "Archiveer chat") or (t starts with "Chat archivieren") then
+                  click mi
+                  set archived to true
+                  exit repeat
+                end if
+              end ignoring
+            end repeat
+          end try
+          if archived then exit repeat
+        end repeat
+        key code 53 -- esc: clear search state
+      end tell
     end tell
-  end tell
+  on error errMsg number errNum
+    try
+      if prevApp is not "WhatsApp" then tell application prevApp to activate
+    end try
+    error errMsg number errNum
+  end try
   -- restore whatever the user had frontmost
   try
     if prevApp is not "WhatsApp" then tell application prevApp to activate
@@ -132,6 +144,7 @@ for t in "${TARGETS[@]}"; do
   if [ -z "$name" ]; then echo "  MISS  $t (no Mac chat found)"; fail=$((fail+1)); continue; fi
   if [ "$arch" = "1" ]; then echo "  SKIP  $name (already archived on Mac)"; skip=$((skip+1)); continue; fi
   if [ "$DRY" = 1 ]; then echo "  DRY   $name"; ok=$((ok+1)); continue; fi
+  check_idle_gate
   ui_err=""
   if ui_err=$(run_archive_ui "$name" 2>&1 >/dev/null); then
     sleep 1
