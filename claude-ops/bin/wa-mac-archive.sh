@@ -16,21 +16,30 @@
 #   wa-mac-archive.sh --jid <pn@s.whatsapp.net>           archive one chat by JID
 #   wa-mac-archive.sh --batch <file>                      one JID-or-name per line
 #   add --dry-run to resolve + report without touching the UI
+#   add --force   to bypass the owner-idle gate (USE SPARINGLY — takes over the screen)
+#
+# OWNER-IDLE GATE: UI automation drives the visible WhatsApp.app, stealing focus
+# from whoever is at the Mac. By default this script REFUSES to run unless the
+# Mac's HID input has been idle ≥ WA_MAC_IDLE_MIN seconds (default 600). It also
+# restores the previously-frontmost app when done.
 #
 # Transport: wa-mac-transport.sh (Tailscale first, Cloudflare tunnel fallback).
-# Env: WA_MAC_SSH / WA_MAC_CF_HOST (see wa-mac-transport.sh), WA_MAC_PACE (s, default 4)
+# Env: WA_MAC_SSH / WA_MAC_CF_HOST (see wa-mac-transport.sh), WA_MAC_PACE (s,
+#      default 4), WA_MAC_IDLE_MIN (s, default 600)
 set -euo pipefail
 # shellcheck source=wa-mac-transport.sh
 . "$(dirname "${BASH_SOURCE[0]}")/wa-mac-transport.sh" 2>/dev/null || . "$HOME/bin/wa-mac-transport.sh"
 
 DB='$HOME/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite'
 PACE="${WA_MAC_PACE:-4}"
-DRY=0; TARGETS=()
+IDLE_MIN="${WA_MAC_IDLE_MIN:-600}"
+DRY=0; FORCE=0; TARGETS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --contact|--jid) TARGETS+=("${2:?}"); shift ;;
     --batch) while IFS= read -r l; do [ -n "$l" ] && TARGETS+=("$l"); done < "${2:?}"; shift ;;
     --dry-run) DRY=1 ;;
+    --force) FORCE=1 ;;
     *) echo "unknown arg: $1" >&2; exit 64 ;;
   esac; shift
 done
@@ -38,6 +47,20 @@ done
 
 wa_mac_resolve || { echo "wa-mac-archive: Mac unreachable (tailscale + cloudflare)" >&2; exit 7; }
 echo "wa-mac-archive: transport=$WA_MAC_TRANSPORT, targets=${#TARGETS[@]}, pace=${PACE}s"
+
+# Owner-idle gate — never steal the screen from an active user.
+idle_secs() {
+  wa_mac_ssh "ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ {print int(\$NF/1000000000); exit}'" 2>/dev/null || echo 0
+}
+if [ "$DRY" = 0 ] && [ "$FORCE" = 0 ]; then
+  idle=$(idle_secs); idle="${idle:-0}"
+  if [ "$idle" -lt "$IDLE_MIN" ]; then
+    echo "wa-mac-archive: REFUSED — owner active at the Mac (idle ${idle}s < ${IDLE_MIN}s)." >&2
+    echo "wa-mac-archive: retry when idle, lower WA_MAC_IDLE_MIN, or pass --force (visible takeover)." >&2
+    exit 75
+  fi
+  echo "wa-mac-archive: idle gate passed (owner idle ${idle}s)"
+fi
 
 # AppleScript runner: opens the chat via in-app search, then clicks the menu-bar
 # item whose name contains "Archive" (locale-robust: NL "Archiveer" also matches
@@ -50,6 +73,10 @@ run_archive_ui() { # $1 = partner display name
   wa_mac_ssh 'cat > /tmp/wa_archive.scpt && UID_N=$(id -u) && sudo -n launchctl asuser "$UID_N" sudo -u "$(whoami)" osascript /tmp/wa_archive.scpt' <<EOF
 on run
   set chatName to "$(printf '%s' "$name" | sed 's/"/\\"/g')"
+  -- remember the user's frontmost app so we can hand focus straight back
+  tell application "System Events"
+    set prevApp to name of first process whose frontmost is true
+  end tell
   tell application "WhatsApp" to activate
   delay 1.2
   tell application "System Events"
@@ -62,26 +89,33 @@ on run
       delay 0.4
       key code 36  -- return: open chat
       delay 1.0
-      -- find an Archive menu item anywhere in the menu bar (EN/NL/DE/etc.)
+      -- click the "Archive chat" menu item — EXACT-prefix match per locale,
+      -- and never an item that merely contains "Archive" (e.g. the "Archived"
+      -- folder navigation item, which the v1 matcher hit by mistake).
       set archived to false
       repeat with mb in menu bar items of menu bar 1
         try
           repeat with mi in menu items of menu 1 of mb
             set t to (name of mi as text)
-            if t contains "Archive" or t contains "Archiveer" or t contains "Archivier" then
-              click mi
-              set archived to true
-              exit repeat
-            end if
+            ignoring case
+              if (t starts with "Archive chat") or (t starts with "Archiveer chat") or (t starts with "Chat archivieren") then
+                click mi
+                set archived to true
+                exit repeat
+              end if
+            end ignoring
           end repeat
         end try
         if archived then exit repeat
       end repeat
-      -- clear search state
-      key code 53 -- esc
-      if not archived then error "no Archive menu item found for " & chatName
+      key code 53 -- esc: clear search state
     end tell
   end tell
+  -- restore whatever the user had frontmost
+  try
+    if prevApp is not "WhatsApp" then tell application prevApp to activate
+  end try
+  if not archived then error "no 'Archive chat' menu item found for " & chatName
 end run
 EOF
   else
