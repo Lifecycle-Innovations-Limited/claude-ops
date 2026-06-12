@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.29.1] - 2026-06-12
+
+### Changed
+- fix(ops): cross-platform gh-orphan-killer for curl/api.github.com poll loops + live installer (#558)
+- fix(wa-mac-archive): owner-idle gate + precise Archive-chat matching + focus restore (#562)
+
+
+## [2.29.0] - 2026-06-11
+
+### Changed
+ops-inbox: Mac WhatsApp.app fallback suite — Tier-4 archive via Mac app (bypasses server-side 429), automatic Mac ground-truth cross-check in the freshness gate, and Tailscale→Cloudflare-tunnel SSH transport chain (wa-mac-transport.sh + setup-wa-mac-cf-tunnel.sh) (#560)
+
+
+## [2.28.0] - 2026-06-11
+
+### Changed
+ops-inbox: Mac WhatsApp.app ChatStorage fallback for bridge-miss recovery (read-only reader + freshness-gate hint).
+
+
 ## [2.27.4] - 2026-06-11
 
 ### Changed

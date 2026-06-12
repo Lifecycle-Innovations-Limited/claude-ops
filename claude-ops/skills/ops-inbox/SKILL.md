@@ -27,6 +27,8 @@ allowed-tools:
   # (no MCP entry needed for those).
   - mcp__claude_ai_Slack__slack_search_public_and_private
   - mcp__claude_ai_Slack__slack_read_channel
+  - mcp__claude_ai_Slack__slack_list_channels
+  - mcp__claude_ai_Slack__channels_list
   # Telegram: user-auth MCP tools added when configured
   # Notion: MCP tools (claude.ai integration or self-hosted)
   - mcp__claude_ai_Notion__notion-search
@@ -82,6 +84,17 @@ Before executing, load available context:
 0. **Auto-sync WhatsApp in the background (DEFAULT — every invocation)** — the FIRST thing this skill does, before any scan or menu, is guarantee the store is fresh, then fire a recent-conversation history backfill **and** a contacts-link in the background, non-blocking.
 
    **0a. Freshness gate (run FIRST, blocking, bounded).** Before classifying anything, run `~/bin/wa-inbox-fresh.sh` (shipped by `scripts/install-whatsapp-bridge-linux.sh`). It probes the bridge with a real **curl connection probe** (`curl -s -m4 http://127.0.0.1:8080/`), forces a backfill, triggers voice-note transcription, and waits (bounded ~32s) for the newest message to settle, then prints a FRESHNESS report (`newest message = … (N min old)`). It **only restarts the bridge if the curl probe genuinely fails twice** — do NOT gate liveness on `ss | grep :8080`, because `ss` renders port 8080 as the service name `webcache`, so the grep never matches and you'd needlessly bounce a healthy bridge. Exit 2 means the bridge is down and unrecoverable → the store is STALE, do not trust last-sender classification.
+
+### Mac WhatsApp.app fallback (bridge-miss recovery)
+
+The whatsmeow bridge can **silently miss inbound messages** when its history/app-state sync lags — most often on `@lid` chats (e.g. 2026-06-11 it missed a reply from a contact that the Mac WhatsApp.app had). The Mac app keeps an **unencrypted** local Core Data store at `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite`, readable over Tailscale SSH, so it is a reliable ground-truth backstop.
+
+- **When it runs AUTOMATICALLY:** `wa-inbox-fresh.sh` now invokes the Mac cross-check itself whenever the bridge store looks stale — on exit 2 (store unreadable) or when the newest message is >2h old, it prints a `MAC GROUND TRUTH` block (latest 10 messages from the Mac app store) inline in the freshness report. No orchestration needed.
+- **When to use manually:** a contact's *known* reply is missing from the bridge (common on `@lid` chats) — cross-check before classifying that thread as "no reply".
+- **Command:** `bin/wa-mac-latest.sh --contact <name|number> [N]` (also `--recent [N]`, `--since "YYYY-MM-DD HH:MM"`, add `--json` for machine-readable output). It reads `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite` over SSH. Schema: `ZWAMESSAGE` (`ZTEXT`, `ZISFROMME`, `ZMESSAGEDATE` = seconds since 2001-01-01) joined to `ZWACHATSESSION` (`ZPARTNERNAME`, `ZCONTACTJID`).
+- **Transport chain (`bin/wa-mac-transport.sh`, shared by all wa-mac-* scripts):** ① Tailscale/direct SSH (`WA_MAC_SSH=user@host`) → ② Cloudflare-tunnel SSH (`WA_MAC_CF_HOST=ssh-mac.example.com`, via `cloudflared access ssh` ProxyCommand) when Tailscale is down. One-time wiring: `scripts/setup-wa-mac-cf-tunnel.sh` (installs cloudflared locally + the Mac LaunchDaemon from a remotely-managed tunnel token, then verifies end-to-end). Both env vars live in the shell profile, never in the repo.
+- **READ-ONLY ground truth for reads.** The reader never writes and never sends. Sends still go through the whatsmeow bridge (`mcp__whatsapp__send_message`) under the Rule-6 outbound-approval gate — the Mac store is only consulted to confirm what actually arrived. The ONLY write-capable Mac surface is `wa-mac-archive.sh` (archive-only, see Tier 4 of the archive ladder).
+- **Why no Linux-native alternative:** there is no official WhatsApp Linux desktop app; the third-party Flatpak clients (`whatsapp-for-linux`, ZapZap) are Electron WhatsApp-Web wrappers that need a GUI, consume a linked-device slot, and store data in encrypted IndexedDB (not a queryable SQLite) — so the Mac `ChatStorage.sqlite` is the preferred backstop.
 
    **The FULL-THREAD AWARENESS GATE (in "Processing each channel") depends on this step having run first.** That gate's "read both directions incl. `[voice]`" only works once `wa-inbox-fresh.sh` (freshness + backfill) and the voice-note transcription pass (step 0c) have completed and the store has settled — otherwise outbound rows and `[voice]` bodies are still missing and the gate reads an incomplete thread.
 
@@ -518,6 +531,12 @@ All channel credentials come from env vars or CLI auth — no hardcoded secrets.
    - Ensure Fix T + Fix V patches applied + bridge **rebuilt** (`apply-patches.py --build`) + restarted (`--restart` or `systemctl --user restart whatsapp-bridge.service`). Without the rebuild the running binary lacks the skip loop.
    - Expect one 429 rate-overlimit pause (~15–20 min) mid skip-loop; it resumes automatically. Success log: `"regular_low sync complete (skipped N bad patches)"` → `"archive mutations enabled"`.
    - Upstream: tulir/whatsmeow#1171 (SkipBrokenAppStatePatches). When merged, Fix T + Fix V can be retired.
+
+   **Tier 4 — server-side rate-limit (429 `rate-overlimit`) or tiers 1–3 exhausted**: WhatsApp's servers are throttling app-state fetches for the account, so NO bridge-side mutation can land (this is server-side; resync retries just re-429). Bypass the bridge entirely and archive via the REAL Mac WhatsApp.app:
+   ```bash
+   bin/wa-mac-archive.sh --batch <file-with-one-jid-or-name-per-line>   # or --contact "<name>" / --jid <pn@s.whatsapp.net>
+   ```
+   The Mac app is a first-class client — its archive mutations sync server-side to the phone and propagate back to the bridge once its app-state heals. The script is **archive-only** (scope-guarded; it can never send or delete), resolves chats from the Mac `ChatStorage.sqlite`, drives the app via AppleScript UI automation in the Aqua session, verifies `ZARCHIVED=1` per chat, and paces (default 4s). Transport = `wa-mac-transport.sh` (Tailscale → Cloudflare tunnel). Map `@lid` JIDs to phone JIDs or names first (the scan JSON carries both). Requires the Mac online on either transport + Accessibility permission for the SSH-launched osascript; on failure it reports per-chat `FAIL` — fall back to waiting out the 429 (15–60 min) and retry Tier 1.
 
    Surface the appropriate tier to the user when archive blocks; don't abandon inbox-zero.
 

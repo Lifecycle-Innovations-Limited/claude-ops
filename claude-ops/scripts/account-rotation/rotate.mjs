@@ -43,11 +43,12 @@ import { persistBedrockClaudeSettings } from './claude-settings-mode.mjs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync, execFileSync, spawnSync, spawn } from 'child_process';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { createHmac } from 'node:crypto';
 import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS, scrapeBillingState } from './ai-brain.mjs';
 import { destinationUtilHardBlock } from './rotation-policy.mjs';
 import { applyAccountLeases, writeLease } from './account-leases.mjs';
+import { respawnBgSessions } from './bg-respawn.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
@@ -60,10 +61,8 @@ const BROWSER_PIN_BACKUP_PATH = join(__dirname, '.browser-pin-backup.json');
 const CLAUDE_JSON_PATH = join(process.env.HOME || '', '.claude.json');
 
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
-// Use the OS username so multiple users on the same Mac don't collide on
-// keychain entries. Override with CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT if needed.
-const KEYCHAIN_ACCOUNT =
-  process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || process.env.LOGNAME || 'claude-ops';
+const ACTIVE_KEYCHAIN_ACCOUNT = 'unknown';
+const VAULT_KEYCHAIN_ACCOUNT = process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || 'claude-ops';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -143,8 +142,20 @@ if (
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
+// Strip anything that looks like an OAuth token / bearer secret before it can
+// reach a log sink (console or rotation.log). Operational logs only need the
+// account email/label, never the credential material — this scrubs accidental
+// leakage of token bytes that flow through error messages or oauthAccount blobs.
+function redactSecrets(s) {
+  return String(s)
+    .replace(/sk-ant-[A-Za-z0-9_-]+/g, 'sk-ant-***')
+    .replace(/\bey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+/g, '***jwt***')
+    .replace(/"?accessToken"?\s*[:=]\s*"?[A-Za-z0-9._-]{20,}"?/gi, 'accessToken:***')
+    .replace(/"?refreshToken"?\s*[:=]\s*"?[A-Za-z0-9._-]{20,}"?/gi, 'refreshToken:***');
+}
+
 function log(msg) {
-  const line = `[${new Date().toISOString()}] ${msg}`;
+  const line = `[${new Date().toISOString()}] ${redactSecrets(msg)}`;
   console.error(line);
   try {
     appendFileSync(LOG_PATH, line + '\n');
@@ -153,7 +164,10 @@ function log(msg) {
 
 function notify(title, msg) {
   try {
-    execSync(`osascript -e 'display notification "${msg.replace(/"/g, '\\"')}" with title "${title}"'`);
+    // execFileSync (no shell) — title/msg cannot break out into a shell command.
+    // Escape only for the AppleScript string literal (backslash + double-quote).
+    const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    execFileSync('osascript', ['-e', `display notification "${esc(msg)}" with title "${esc(title)}"`]);
   } catch {}
 }
 
@@ -695,6 +709,19 @@ function checkBedrockAvailable(region) {
   }
 }
 
+function stopClaudeDaemon() {
+  log('[daemon-stop] Stopping Claude daemon...');
+  try {
+    const result = execSync('claude daemon stop --any', {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' },
+    });
+    log(`[daemon-stop] Daemon stop success: ${result.trim()}`);
+  } catch (err) {
+    log(`[daemon-stop] Daemon stop failed: ${err.message}`);
+  }
+}
+
 // Activate Bedrock fallback. Writes a sentinel + prints source instructions.
 // Cannot mutate env of an already-running session — user must start a new
 // one with `source ~/.claude/scripts/account-rotation/use-bedrock.sh`.
@@ -736,6 +763,11 @@ async function activateBedrockFallback(reason, dryRun = false) {
       log(`✅ settings.json → Bedrock env (${region})`);
     } catch (e) {
       log(`⚠ settings.json Bedrock persist failed: ${(e.message || e).toString().slice(0, 120)}`);
+    }
+    try {
+      stopClaudeDaemon();
+    } catch (e) {
+      log(`⚠ stopClaudeDaemon failed: ${e.message}`);
     }
     log(`✅ BEDROCK FALLBACK ACTIVATED region=${region} reason=${reason}`);
     notify('Bedrock Fallback Active', `All Anthropic accounts exhausted — switched to Bedrock (${region}).`);
@@ -794,7 +826,10 @@ function _linuxWriteCred(svc, json) {
   writeFileSync(LINUX_CRED_PATH, JSON.stringify(store, null, 2), { mode: 0o600 });
 }
 
-function readKeychain(svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
+function readKeychain(
+  svc = KEYCHAIN_SERVICE,
+  acct = svc === KEYCHAIN_SERVICE ? ACTIVE_KEYCHAIN_ACCOUNT : VAULT_KEYCHAIN_ACCOUNT,
+) {
   if (IS_LINUX) {
     if (svc === KEYCHAIN_SERVICE) {
       // Main slot: return full credentials JSON
@@ -818,7 +853,11 @@ function readKeychain(svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
   return m[1].replace(/\\"/g, '"');
 }
 
-function writeKeychain(json, svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
+function writeKeychain(
+  json,
+  svc = KEYCHAIN_SERVICE,
+  acct = svc === KEYCHAIN_SERVICE ? ACTIVE_KEYCHAIN_ACCOUNT : VAULT_KEYCHAIN_ACCOUNT,
+) {
   if (IS_LINUX) {
     _linuxWriteCred(svc, json);
     return;
@@ -1393,7 +1432,7 @@ async function swapToken(account) {
       if (sourceAccount) {
         const currentJson = (() => {
           try {
-            return readKeychain(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
+            return readKeychain(KEYCHAIN_SERVICE, ACTIVE_KEYCHAIN_ACCOUNT);
           } catch {
             return null;
           }
@@ -3320,11 +3359,31 @@ function findClaudeSessions() {
     // `grep -` (empty pattern) at the end of the pipeline caused the whole
     // execSync to throw "Command failed" on every call.
     // ps -eo pid,args works identically on macOS (BSD) and Linux (GNU).
-    const psOut = execSync(`ps -eo pid,args | grep -E '[c]laude.*--dangerously-skip-permissions' | grep -v 'grep'`, {
+    //
+    // Match ANY claude CLI process, not just `--dangerously-skip-permissions`
+    // ones — plain interactive sessions, `claude --resume`, and headless
+    // `claude -p` runs all hold tokens that go stale after rotation (observed
+    // 2026-06-11: live agent sessions were invisible to this enum and wedged
+    // on the expired outgoing token). The first ps token must BE the claude
+    // binary — matching `claude` anywhere in args would false-positive on
+    // `tail -f .../claude/...log`, `node .../account-rotation/daemon.mjs`, etc.
+    // Utility invocations (daemon supervisor, respawn/attach/logs/agents, mcp)
+    // are excluded here; daemon-hosted bg sessions are refreshed separately
+    // via respawnBgSessions() (they have no TTY to inject /login into).
+    const psRaw = execSync(`ps -eo pid,args | grep -E '[c]laude' | grep -v 'grep'`, {
       timeout: 5000,
     })
       .toString()
       .trim();
+    const CLAUDE_CMD_RE = /^(?:\S*\/)?claude(?:\s|$)/;
+    const UTILITY_SUBCMD_RE = /^(?:\S*\/)?claude\s+(?:daemon|respawn|attach|logs|agents|mcp|doctor|update|config)\b/;
+    const psOut = psRaw
+      .split('\n')
+      .filter((line) => {
+        const args = line.trim().replace(/^\d+\s+/, '');
+        return CLAUDE_CMD_RE.test(args) && !UTILITY_SUBCMD_RE.test(args);
+      })
+      .join('\n');
     if (!psOut) return sessions;
 
     // Build pid→tty map from tmux (best-effort; tty used only for tmux pane lookup)
@@ -3447,6 +3506,7 @@ function detectTerminalForPid(pid) {
 
 async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
   const sessions = findClaudeSessions();
 
   if (sessions.length === 0) {
@@ -3997,13 +4057,25 @@ async function rotate(targetEmail, opts = {}) {
           } catch {}
           if (signaled > 0) {
             log(`[hot-swap] signaled ${signaled} Claude session(s) on ${sourceEmail} to reload after rotation`);
-          } else {
+          } else if (pids.length > 0) {
             log(`[hot-swap] no live Claude sessions to signal on ${sourceEmail} (pruned stale pidfile)`);
           }
         }
       }
     } catch (e) {
       log(`[hot-swap] skipped: ${e.message?.slice(0, 80)}`);
+    }
+  }
+
+  // Daemon-hosted `claude --bg` sessions have no TTY for /login injection and
+  // don't register in the pidfile SIGHUP path — respawn after every successful
+  // rotation (including daemon --no-browser without --session).
+  if (ok && !dryRun) {
+    try {
+      const { respawned, deferred } = respawnBgSessions(log);
+      if (respawned || deferred) log(`[bg-respawn] fleet: ${respawned} respawned, ${deferred} deferred (busy)`);
+    } catch (e) {
+      log(`[bg-respawn] pass skipped: ${e.message?.slice(0, 80)}`);
     }
   }
 
@@ -4176,11 +4248,11 @@ async function setup() {
       console.log(`✅ Saved to vault: ${tokenService(account)}`);
       results.push({ key, ok: true });
     } catch (e) {
-      console.error(`❌ Error: ${e.message}`);
+      console.error(redactSecrets(`❌ Error: ${e.message}`));
       results.push({
         key,
         ok: false,
-        reason: String(e.message || e).slice(0, 80),
+        reason: redactSecrets(String(e.message || e)).slice(0, 80),
       });
     }
   }
@@ -4191,7 +4263,7 @@ async function setup() {
   const failCount = results.length - okCount;
   for (const r of results) {
     const icon = r.ok ? (r.skipped ? '⏭ ' : '✅') : '❌';
-    console.log(`  ${icon} ${r.key}${r.reason ? `  (${r.reason})` : ''}`);
+    console.log(redactSecrets(`  ${icon} ${r.key}${r.reason ? `  (${r.reason})` : ''}`));
   }
   console.log(`\n${okCount}/${results.length} captured${failCount ? `, ${failCount} failed` : ''}.`);
 
@@ -4352,7 +4424,7 @@ function captureCmd(targetEmail = null) {
     console.log(`✓ Token captured and saved to keychain: ${tokenService(account)}`);
     console.log(`  Account: ${account.email}${account.label ? ' [' + account.label + ']' : ''}`);
   } catch (e) {
-    console.error(e.message);
+    console.error(redactSecrets(e.message));
     process.exit(1);
   }
 }

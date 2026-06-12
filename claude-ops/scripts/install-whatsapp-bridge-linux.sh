@@ -123,6 +123,13 @@ mkdir -p "$HOME/bin"
 cp "$SCRIPT_DIR/../bin/wa-inbox-fresh.sh" "$HOME/bin/wa-inbox-fresh.sh"
 chmod +x "$HOME/bin/wa-inbox-fresh.sh"
 
+# ─── Ship Mac ground-truth fallback suite (reader + Tier-4 archiver + transport) ─
+echo "▶ Installing wa-mac-{transport,latest,archive}.sh → ~/bin (Mac WhatsApp.app fallback)"
+for f in wa-mac-transport.sh wa-mac-latest.sh wa-mac-archive.sh; do
+  cp "$SCRIPT_DIR/../bin/$f" "$HOME/bin/$f"
+  chmod +x "$HOME/bin/$f"
+done
+
 # ─── Ship wa-bridge-keepalive.sh (hang-detection so phone-sends always sync) ──
 echo "▶ Installing wa-bridge-keepalive.sh → ~/bin (uptime watchdog)"
 cp "$SCRIPT_DIR/../bin/wa-bridge-keepalive.sh" "$HOME/bin/wa-bridge-keepalive.sh"
