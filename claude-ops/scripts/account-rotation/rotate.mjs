@@ -194,7 +194,7 @@ function magicLinkInbox() {
 // Legacy account-key renames: old label → new canonical key.
 // Keep in sync with daemon.mjs STATE_KEY_MIGRATIONS.
 const STATE_KEY_MIGRATIONS = {
-  'old-label': 'new-label',
+  'heartfeldt-personal': 'heartfeldt',
 };
 
 function readState() {

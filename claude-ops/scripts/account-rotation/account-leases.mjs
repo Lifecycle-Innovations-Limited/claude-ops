@@ -6,7 +6,7 @@
 // must NEVER be ACTIVE on both machines concurrently.
 //
 // Coordination store: a small private S3 object per account.
-//   bucket: claude-account-leases  (us-east-1, all public access
+//   bucket: claude-account-leases-410126241301  (us-east-1, all public access
 //           blocked, SSE-AES256). Override via CLAUDE_LEASE_BUCKET.
 //   key:    leases/<accountKey>.json   (one object per account → no
 //           read-modify-write races between machines)
@@ -35,7 +35,7 @@
 import { spawnSync } from 'child_process';
 import { hostname } from 'os';
 
-const LEASE_BUCKET = process.env.CLAUDE_LEASE_BUCKET || 'claude-account-leases';
+const LEASE_BUCKET = process.env.CLAUDE_LEASE_BUCKET || 'claude-account-leases-410126241301';
 const LEASE_PREFIX = 'leases/';
 const LEASE_REGION = process.env.CLAUDE_LEASE_REGION || 'us-east-1';
 // Daemon heartbeats every loop (seconds–minutes); 2h TTL tolerates pauses,
