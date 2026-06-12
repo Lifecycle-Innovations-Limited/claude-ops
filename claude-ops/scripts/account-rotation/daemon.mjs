@@ -826,6 +826,14 @@ async function findValidRotationTarget(config, state) {
     const key = accountKey(account);
     const tokenJson = readStoredToken(account);
     if (!tokenJson) continue;
+
+    const expiry = parseTokenExpiry(tokenJson);
+    const isExpired = expiry > 0 && now > expiry - 5 * 60_000;
+    if (isExpired) {
+      const refreshed = await refreshSingleToken(account);
+      if (!refreshed) continue;
+    }
+
     const live = await queryLiveUtilization(account);
     if (!isLiveUtilOk(live)) continue;
     const max = liveUtilMax(live);
@@ -896,7 +904,7 @@ function stopClaudeDaemon() {
   try {
     const result = execSync('claude daemon stop --any', {
       encoding: 'utf8',
-      env: { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' }
+      env: { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' },
     });
     log(`[daemon-stop] Daemon stop success: ${result.trim()}`);
   } catch (err) {
@@ -1048,7 +1056,7 @@ async function doRotation(reason) {
     // into running sessions — that interrupts active work. Sessions pick up the new
     // token on next 401 (auto-retry) or when the user voluntarily runs /login.
     // execFileSync (not execSync) — no shell, no injection risk on targetKey.
-    const result = execFileSync('node', [ROTATE_SCRIPT, '--no-browser', '--to', targetKey], {
+    const result = execFileSync(process.execPath, [ROTATE_SCRIPT, '--no-browser', '--to', targetKey], {
       cwd: __dirname,
       timeout: 120_000, // 2min — keychain swap is fast; no per-session injection
       env: { ...process.env, NODE_NO_WARNINGS: '1' },
@@ -1139,6 +1147,7 @@ async function refreshSingleToken(account) {
         refresh_token: refreshToken,
         client_id: OAUTH_CLIENT_ID,
       }),
+      signal: AbortSignal.timeout(5000),
     });
     const body = await res.json();
     if (!res.ok || !body.access_token) return false;
@@ -1164,9 +1173,15 @@ async function refreshSingleToken(account) {
       }
     } else {
       // Use spawnSync (no shell) to avoid injection risk on tokenStr.
-      spawnSync('security', ['add-generic-password', '-U', '-s', svc, '-a', VAULT_KEYCHAIN_ACCOUNT, '-w', tokenStr], {
-        timeout: 5000,
-      });
+      const kcResult = spawnSync(
+        'security',
+        ['add-generic-password', '-U', '-s', svc, '-a', VAULT_KEYCHAIN_ACCOUNT, '-w', tokenStr],
+        { timeout: 5000 },
+      );
+      if (kcResult.error || kcResult.status !== 0) {
+        const msg = kcResult.error?.message || kcResult.stderr?.toString() || `security exit ${kcResult.status}`;
+        throw new Error(`Keychain write failed: ${msg}`);
+      }
     }
     log(
       `[refresh] ${key}: refreshed (${((parsed.claudeAiOauth.expiresAt - Date.now()) / 3_600_000).toFixed(1)}h remaining)`,
