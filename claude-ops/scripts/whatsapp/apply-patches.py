@@ -2983,8 +2983,13 @@ FIXW_MARKREAD_REPLACEMENT = """\t// claude-ops Fix W: POST /api/markread — mar
 \t\t\tfor _, row := range rows {
 \t\t\t\tbySender[row.sender] = append(bySender[row.sender], row.id)
 \t\t\t}
-\t\t\tfor senderUser, ids := range bySender {
-\t\t\t\tsenderJID := types.NewJID(senderUser, types.DefaultUserServer)
+\t\t\tfor senderStr, ids := range bySender {
+\t\t\t\tvar senderJID types.JID
+\t\t\t\tif strings.Contains(senderStr, "@") {
+\t\t\t\t\tsenderJID, _ = types.ParseJID(senderStr)
+\t\t\t\t} else {
+\t\t\t\t\tsenderJID = types.NewJID(senderStr, types.DefaultUserServer)
+\t\t\t\t}
 \t\t\t\tmsgIDs := make([]types.MessageID, len(ids))
 \t\t\t\tfor i, id := range ids {
 \t\t\t\t\tmsgIDs[i] = types.MessageID(id)
@@ -3100,12 +3105,10 @@ def reconcile_archived():
 FIXW_PY_HELPERS_SENTINEL = "claude-ops Fix W: mark_read, backfill, app_state_status, reconcile_archived helpers"
 
 # ─── main.py Fix W: imports for new helpers ───────────────────────────────────
-FIXW_MAIN_IMPORT_NEEDLE = """    recover_app_state as whatsapp_recover_app_state,
-    get_unread_messages as whatsapp_get_unread_messages,
+FIXW_MAIN_IMPORT_NEEDLE = """    recover_app_state as whatsapp_recover_app_state,  # claude-ops Fix K
 )"""
 
-FIXW_MAIN_IMPORT_REPLACEMENT = """    recover_app_state as whatsapp_recover_app_state,
-    get_unread_messages as whatsapp_get_unread_messages,
+FIXW_MAIN_IMPORT_REPLACEMENT = """    recover_app_state as whatsapp_recover_app_state,  # claude-ops Fix K
     mark_read as whatsapp_mark_read,
     trigger_backfill as whatsapp_trigger_backfill,
     get_app_state_status as whatsapp_get_app_state_status,
@@ -3116,7 +3119,8 @@ FIXW_MAIN_IMPORT_SENTINEL = "mark_read as whatsapp_mark_read,"
 
 # ─── main.py Fix W: four new @mcp.tool() wrappers ────────────────────────────
 FIXW_MAIN_TOOLS_NEEDLE = """if __name__ == "__main__":
-    mcp.run(transport="stdio")"""
+    # Initialize and run the server
+    mcp.run(transport='stdio')"""
 
 FIXW_MAIN_TOOLS_REPLACEMENT = '''# claude-ops Fix W: additional bridge API surface as MCP tools
 
