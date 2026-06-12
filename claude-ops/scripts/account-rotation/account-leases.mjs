@@ -1,12 +1,12 @@
 // ── Cross-machine account LEASES ─────────────────────────────────────────────
 //
-// Owner 2026-06-06 (supersedes the static machine-pool split): BOTH machines (the
-// Mac and the EC2 box) keep their OWN rotation logic/daemon and
+// Sam 2026-06-06 (supersedes the static machine-pool split): BOTH machines (the
+// Mac and this EC2 box, dev-sandbox-fra) keep their OWN rotation logic/daemon and
 // may use ALL accounts. The ONLY cross-machine constraint is: the same account
 // must NEVER be ACTIVE on both machines concurrently.
 //
 // Coordination store: a small private S3 object per account.
-//   bucket: claude-account-leases-<ACCOUNT_ID>  (us-east-1, all public access
+//   bucket: claude-account-leases-410126241301  (us-east-1, all public access
 //           blocked, SSE-AES256). Override via CLAUDE_LEASE_BUCKET.
 //   key:    leases/<accountKey>.json   (one object per account → no
 //           read-modify-write races between machines)
@@ -29,15 +29,13 @@
 // so a stale/broken AWS_PROFILE in the parent shell can't break it — both the
 // EC2 IAM user and the Mac's default creds resolve correctly). For coordination
 // to be MUTUAL, the Mac needs (a) this same rotate.mjs/daemon.mjs version and
-// (b) working AWS creds for the AWS account. Until the Mac is updated, EC2
+// (b) working AWS creds for account 410126241301. Until the Mac is updated, EC2
 // honoring leases is one-sided but harmless (EC2 yields; Mac is unaware).
 
 import { spawnSync } from 'child_process';
 import { hostname } from 'os';
 
-// No default bucket in the public repo — set CLAUDE_LEASE_BUCKET to your
-// private S3 bucket. Empty → every lease op fails open (single-machine mode).
-const LEASE_BUCKET = process.env.CLAUDE_LEASE_BUCKET || '';
+const LEASE_BUCKET = process.env.CLAUDE_LEASE_BUCKET || 'claude-account-leases-410126241301';
 const LEASE_PREFIX = 'leases/';
 const LEASE_REGION = process.env.CLAUDE_LEASE_REGION || 'us-east-1';
 // Daemon heartbeats every loop (seconds–minutes); 2h TTL tolerates pauses,
@@ -71,7 +69,6 @@ function runAws(args, { input } = {}) {
 // Fails open: any error → empty map (no exclusions).
 export function readAllLeases(log = () => {}) {
   const leases = new Map();
-  if (!LEASE_BUCKET) return leases; // unconfigured → single-machine mode
   try {
     const ls = runAws([
       's3api',
@@ -130,7 +127,6 @@ export function foreignActiveKeys(log = () => {}) {
 // Deletes stale leases from this host for other accounts so the other machine
 // doesn't exclude accounts we're no longer using.
 export function writeLease(accountKey, log = () => {}) {
-  if (!LEASE_BUCKET) return; // unconfigured → single-machine mode
   try {
     const me = selfHost();
     const body = JSON.stringify({ host: me, account: accountKey, ts: Date.now() });
