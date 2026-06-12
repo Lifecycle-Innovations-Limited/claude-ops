@@ -129,10 +129,18 @@ const childEnv = { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: accessToken };
 // Ensure the child does NOT inherit our sentinel (avoid nested routing)
 delete childEnv.CLAUDE_SESSION_ROUTING;
 
-const result = spawnSync(claudeBin, claudeArgs, {
-  env: childEnv,
-  stdio: 'inherit',
-});
+let result;
+try {
+  result = spawnSync(claudeBin, claudeArgs, {
+    env: childEnv,
+    stdio: 'inherit',
+  });
+} catch (e) {
+  try {
+    releaseSessionLease(sessionId);
+  } catch {}
+  process.exit(1);
+}
 
 // Release lease on exit (best-effort)
 try {

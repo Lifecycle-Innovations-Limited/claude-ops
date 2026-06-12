@@ -125,7 +125,7 @@ sessions then pile onto the new account simultaneously.
 
 ### Architecture
 
-```
+```text
 session-leases.json  ← persistent lease map: { sessionId → { accountKey, ts, pid } }
 
 pickAccountForSession(sessionId, config, state)
