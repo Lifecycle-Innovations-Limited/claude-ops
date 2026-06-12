@@ -19,7 +19,7 @@
 //
 // Used by rotate.mjs (post-rotation) and daemon.mjs (periodic deferred sweep).
 
-import { readFileSync, readdirSync, writeFileSync, unlinkSync, statSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, readdirSync, writeFileSync, unlinkSync, statSync, existsSync, mkdirSync, renameSync } from 'fs';
 import { execFileSync, execSync } from 'child_process';
 import { join } from 'path';
 import { homedir } from 'os';
@@ -33,9 +33,29 @@ function ensureMarkerDir() {
     mkdirSync(MARKER_DIR, { recursive: true, mode: 0o700 });
   } catch {}
 }
+const LEGACY_TMP_DIR = '/tmp';
 const DEFERRED_PREFIX = 'claude-respawn-deferred-';
 const RESPAWNED_MARKER = (id) => join(MARKER_DIR, `claude-rotation-respawned-${id}`);
 const DEFERRED_MARKER = (id) => join(MARKER_DIR, `${DEFERRED_PREFIX}${id}`);
+
+/** Move deferred markers left under /tmp by pre-upgrade daemons into MARKER_DIR. */
+function migrateLegacyDeferredMarkers() {
+  ensureMarkerDir();
+  let legacy = [];
+  try {
+    legacy = readdirSync(LEGACY_TMP_DIR).filter((f) => f.startsWith(DEFERRED_PREFIX));
+  } catch {
+    return;
+  }
+  for (const f of legacy) {
+    const from = join(LEGACY_TMP_DIR, f);
+    const to = join(MARKER_DIR, f);
+    try {
+      if (existsSync(to)) unlinkSync(from);
+      else renameSync(from, to);
+    } catch {}
+  }
+}
 const RESPAWN_THROTTLE_MS = 10 * 60_000; // never respawn the same session twice in 10 min
 const BUSY_FORCE_AFTER_MS = 90 * 60_000; // busy this long after rotation → respawn anyway
 
@@ -186,6 +206,7 @@ export function respawnBgSessions(log = () => {}) {
  * BUSY_FORCE_AFTER_MS, and clears markers for sessions that exited.
  */
 export function sweepDeferredRespawns(log = () => {}) {
+  migrateLegacyDeferredMarkers();
   let markers = [];
   try {
     markers = readdirSync(MARKER_DIR).filter((f) => f.startsWith(DEFERRED_PREFIX));
