@@ -52,7 +52,9 @@ echo "wa-mac-archive: transport=$WA_MAC_TRANSPORT, targets=${#TARGETS[@]}, pace=
 idle_secs() {
   wa_mac_ssh "ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ {print int(\$NF/1000000000); exit}'" 2>/dev/null || echo 0
 }
+_IDLE_GATE_DONE=0
 check_idle_gate() {
+  [ "$_IDLE_GATE_DONE" = 1 ] && return 0
   [ "$DRY" = 0 ] && [ "$FORCE" = 0 ] || return 0
   idle=$(idle_secs); idle="${idle:-0}"
   if [ "$idle" -lt "$IDLE_MIN" ]; then
@@ -61,6 +63,7 @@ check_idle_gate() {
     exit 75
   fi
   echo "wa-mac-archive: idle gate passed (owner idle ${idle}s)"
+  _IDLE_GATE_DONE=1
 }
 
 # AppleScript runner: opens the chat via in-app search, then clicks the menu-bar
@@ -132,8 +135,6 @@ EOF
   fi
 }
 
-check_idle_gate
-
 ok=0; fail=0; skip=0
 for t in "${TARGETS[@]}"; do
   q=$(printf '%s' "$t" | sed "s/'/''/g")
@@ -142,6 +143,7 @@ for t in "${TARGETS[@]}"; do
   if [ -z "$name" ]; then echo "  MISS  $t (no Mac chat found)"; fail=$((fail+1)); continue; fi
   if [ "$arch" = "1" ]; then echo "  SKIP  $name (already archived on Mac)"; skip=$((skip+1)); continue; fi
   if [ "$DRY" = 1 ]; then echo "  DRY   $name"; ok=$((ok+1)); continue; fi
+  check_idle_gate
   ui_err=""
   if ui_err=$(run_archive_ui "$name" 2>&1 >/dev/null); then
     sleep 1
