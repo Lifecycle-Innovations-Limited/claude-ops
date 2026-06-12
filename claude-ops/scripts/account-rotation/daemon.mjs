@@ -132,6 +132,17 @@ function notify(title, msg) {
   } catch {}
 }
 
+// Legacy account-key renames: old label → new canonical key.
+// Applied once per readState() call to keep state.json consistent as labels evolve.
+// Safe to run repeatedly (no-op when the old key doesn't exist).
+const STATE_KEY_MIGRATIONS = {
+  'account-personal': 'account-main', // label changed: personal org is now just "account-main"
+};
+
+function migrateStateKey(key) {
+  return key && STATE_KEY_MIGRATIONS[key] ? STATE_KEY_MIGRATIONS[key] : key;
+}
+
 // Cross-machine account leases (Sam 2026-06-06): NOT a static per-machine split.
 // Both machines may use ALL accounts; the only constraint is the same account is
 // never ACTIVE on both at once. readConfig() drops accounts a FOREIGN host holds
@@ -143,7 +154,7 @@ function readConfig() {
   let keepKey = null;
   try {
     const st = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
-    keepKey = st.activeAccount || null;
+    keepKey = migrateStateKey(st.activeAccount || null);
   } catch {}
   return applyAccountLeases(config, {
     keepKey,
@@ -154,12 +165,6 @@ function readConfig() {
     },
   });
 }
-// Legacy account-key renames: old label → new canonical key.
-// Applied once per readState() call to keep state.json consistent as labels evolve.
-// Safe to run repeatedly (no-op when the old key doesn't exist).
-const STATE_KEY_MIGRATIONS = {
-  'account-personal': 'account-main', // label changed: personal org is now just "account-main"
-};
 
 function readState() {
   let state;
@@ -1120,6 +1125,7 @@ async function refreshSingleToken(account) {
         refresh_token: refreshToken,
         client_id: OAUTH_CLIENT_ID,
       }),
+      signal: AbortSignal.timeout(5000),
     });
     const body = await res.json();
     if (!res.ok || !body.access_token) return false;

@@ -30,6 +30,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
+import { applyAccountLeases } from './account-leases.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -72,6 +73,8 @@ try {
   log(`Failed to read config/state (${e.message}) — falling back to global keychain`);
   fallback();
 }
+
+applyAccountLeases(config, { log });
 
 // Import router dynamically (same dir as this shim in repo; ROTATION_DIR in production)
 let pickAccountForSession, recordSessionLease, releaseSessionLease;
