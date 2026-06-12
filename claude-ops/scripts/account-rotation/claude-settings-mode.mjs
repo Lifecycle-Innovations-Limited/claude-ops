@@ -107,7 +107,11 @@ function sonnetRank(inferenceProfileId) {
 function haikuRank(inferenceProfileId) {
   let m = inferenceProfileId.match(/\.anthropic\.claude-haiku-(\d+)-(\d+)-(\d{8})/);
   if (m) {
-    return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
+    return [
+      parseInt(m[1], 10),
+      parseInt(m[2], 10),
+      parseInt(m[3], 10),
+    ];
   }
   m = inferenceProfileId.match(/\.anthropic\.claude-3-5-haiku-(\d{8})/);
   if (m) return [3, 5, parseInt(m[1], 10)];
@@ -130,9 +134,18 @@ function candidatesWithPrefix(profiles, prefix, predicate) {
 }
 
 function pickLatestSonnet(profiles, prefix) {
-  const c = candidatesWithPrefix(profiles, prefix, (id) => id.includes('.anthropic.claude-sonnet-'));
+  const c = candidatesWithPrefix(
+    profiles,
+    prefix,
+    (id) => id.includes('.anthropic.claude-sonnet-'),
+  );
   if (!c.length) return null;
-  c.sort((x, y) => rankCompareDesc(sonnetRank(x.inferenceProfileId), sonnetRank(y.inferenceProfileId)));
+  c.sort((x, y) =>
+    rankCompareDesc(
+      sonnetRank(x.inferenceProfileId),
+      sonnetRank(y.inferenceProfileId),
+    ),
+  );
   return c[0].inferenceProfileId;
 }
 
@@ -143,7 +156,9 @@ function pickLatestHaiku(profiles, prefix) {
     return false;
   });
   if (!c.length) return null;
-  c.sort((x, y) => rankCompareDesc(haikuRank(x.inferenceProfileId), haikuRank(y.inferenceProfileId)));
+  c.sort((x, y) =>
+    rankCompareDesc(haikuRank(x.inferenceProfileId), haikuRank(y.inferenceProfileId)),
+  );
   return c[0].inferenceProfileId;
 }
 
@@ -211,7 +226,6 @@ export function clearHardcodedModelsForOAuthClaudeSettings() {
   for (const k of [
     'CLAUDE_CODE_USE_BEDROCK',
     'AWS_BEDROCK_REGION',
-    'AWS_REGION',
     'ANTHROPIC_API_KEY',
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_BASE_URL',
