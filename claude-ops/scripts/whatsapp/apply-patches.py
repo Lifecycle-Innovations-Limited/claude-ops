@@ -3177,7 +3177,8 @@ def reconcile_archived() -> dict:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")'''
+    # Initialize and run the server
+    mcp.run(transport='stdio')'''
 
 FIXW_MAIN_TOOLS_SENTINEL = (
     "claude-ops Fix W: additional bridge API surface as MCP tools"
