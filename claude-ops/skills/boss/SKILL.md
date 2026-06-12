@@ -43,7 +43,7 @@ For each non-spare agent decide ONE bucket. Verify externally before trusting a 
 
 - **WORKING** — actively progressing → leave alone.
 - **DONE-VERIFIED-LIVE** — goal met AND PR'd + QA'd + verified + LIVE in prod → **ARCHIVE**
-  (`node "$AGENT_DASH"` control archive, or `claude rm <id>` / `ops-bg rm`). Logs to
+  (`node "$AGENT_DASH" archive <id> --yes`, or `claude rm <id>` / `ops-bg rm`). Logs to
   `~/.claude/state/agent-archive.jsonl` so Sam knows it's finished + out of the fleet.
 - **COMPLETED-UNVERIFIED** — claims done but NOT proven live (no PR, CI red, not deployed,
   QA not run) → **RESPAWN**, do NOT archive (Sam directive 2026-06-12). Respawn with a brief
