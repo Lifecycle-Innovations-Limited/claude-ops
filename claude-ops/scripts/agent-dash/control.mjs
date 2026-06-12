@@ -29,8 +29,8 @@ export function findAgent(snapshot, idOrName) {
     snapshot.agents.find((a) => a.sessionId === q) ||
     snapshot.agents.find((a) => String(a.pid) === q) ||
     snapshot.agents.find((a) => a.name === q) ||
-    snapshot.agents.find((a) => a.name.startsWith(q)) ||
     snapshot.agents.find((a) => a.id.startsWith(q)) ||
+    snapshot.agents.find((a) => a.name.startsWith(q)) ||
     null
   );
 }
