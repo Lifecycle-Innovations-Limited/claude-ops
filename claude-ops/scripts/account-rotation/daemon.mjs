@@ -49,8 +49,8 @@ const PID_FILE = join(__dirname, '.daemon.pid');
 const ROTATE_SCRIPT = join(__dirname, 'rotate.mjs');
 
 // Keychain account name — must match rotate.mjs convention.
-const KEYCHAIN_ACCOUNT =
-  process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || process.env.LOGNAME || 'claude-ops';
+const ACTIVE_KEYCHAIN_ACCOUNT = 'unknown';
+const VAULT_KEYCHAIN_ACCOUNT = process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || 'claude-ops';
 
 const RECOVERY_STATUS_PATH = join(__dirname, '.bedrock-recovery-status.json');
 const USAGE_PROBE_CONCURRENCY = 3;
@@ -285,9 +285,12 @@ function readStoredToken(account) {
     }
   }
   try {
-    const out = execSync(`security find-generic-password -s "${svc}" -a "${KEYCHAIN_ACCOUNT}" -g 2>&1`, {
+    // spawnSync (no shell) — svc/account can't break out into a shell command.
+    // `security -g` prints "password: ..." on stderr, so read both streams.
+    const r = spawnSync('security', ['find-generic-password', '-s', svc, '-a', VAULT_KEYCHAIN_ACCOUNT, '-g'], {
       timeout: 5000,
-    }).toString();
+    });
+    const out = `${r.stdout?.toString() || ''}${r.stderr?.toString() || ''}`;
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
@@ -307,7 +310,7 @@ function readActiveKeychainToken() {
   }
   try {
     const out = execSync(
-      `security find-generic-password -s "Claude Code-credentials" -a "${KEYCHAIN_ACCOUNT}" -g 2>&1`,
+      `security find-generic-password -s "Claude Code-credentials" -a "${ACTIVE_KEYCHAIN_ACCOUNT}" -g 2>&1`,
       {
         timeout: 5000,
       },
@@ -512,7 +515,7 @@ async function shouldRotate(config, state) {
       // Park check: if this account is already known-exhausted and parked until
       // its reset window, skip the rescue entirely — don't re-probe live API
       // every 30s just to confirm it's still at 100%.
-      if (isParked(probeKey)) {
+      if (isParked(probeKey) && isMismatched) {
         const until = _parkedUntil.get(probeKey);
         const minsLeft = Math.ceil((until - Date.now()) / 60_000);
         log(`[park] ${probeKey} is parked for ${minsLeft}min more — suppressing rescue trigger`);
@@ -649,7 +652,7 @@ async function shouldRotate(config, state) {
               // macOS: use spawnSync (no shell, no injection) instead of execSync.
               spawnSync(
                 'security',
-                ['add-generic-password', '-U', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-w', tokenToWrite],
+                ['add-generic-password', '-U', '-s', svc, '-a', ACTIVE_KEYCHAIN_ACCOUNT, '-w', tokenToWrite],
                 {
                   timeout: 5000,
                 },
@@ -826,6 +829,14 @@ async function findValidRotationTarget(config, state) {
     const key = accountKey(account);
     const tokenJson = readStoredToken(account);
     if (!tokenJson) continue;
+
+    const expiry = parseTokenExpiry(tokenJson);
+    const isExpired = expiry > 0 && now > expiry - 5 * 60_000;
+    if (isExpired) {
+      const refreshed = await refreshSingleToken(account);
+      if (!refreshed) continue;
+    }
+
     const live = await queryLiveUtilization(account);
     if (!isLiveUtilOk(live)) continue;
     const max = liveUtilMax(live);
@@ -891,6 +902,19 @@ async function allCandidatesExhausted(config, state) {
   return true;
 }
 
+function stopClaudeDaemon() {
+  log('[daemon-stop] Stopping Claude daemon to clear cached environment...');
+  try {
+    const result = execSync('claude daemon stop --any', {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' },
+    });
+    log(`[daemon-stop] Daemon stop success: ${result.trim()}`);
+  } catch (err) {
+    log(`[daemon-stop] Daemon stop failed: ${err.message}`);
+  }
+}
+
 // Activate Bedrock fallback from inside daemon. Probes AWS reachability,
 // writes the sentinel + sends a desktop notification. Returns true on success.
 function activateBedrockFallbackFromDaemon(reason) {
@@ -931,6 +955,11 @@ function activateBedrockFallbackFromDaemon(reason) {
       log(`[bedrock-fallback] settings.json → Bedrock env (${region})`);
     } catch (e) {
       log(`[bedrock-fallback] settings persist failed: ${e.message?.slice(0, 80)}`);
+    }
+    try {
+      stopClaudeDaemon();
+    } catch (e) {
+      log(`[bedrock-fallback] stopClaudeDaemon failed: ${e.message}`);
     }
     log(`[bedrock-fallback] ACTIVATED region=${region} reason=${reason}`);
     notify(
@@ -1030,7 +1059,7 @@ async function doRotation(reason) {
     // into running sessions — that interrupts active work. Sessions pick up the new
     // token on next 401 (auto-retry) or when the user voluntarily runs /login.
     // execFileSync (not execSync) — no shell, no injection risk on targetKey.
-    const result = execFileSync('node', [ROTATE_SCRIPT, '--no-browser', '--to', targetKey], {
+    const result = execFileSync(process.execPath, [ROTATE_SCRIPT, '--no-browser', '--to', targetKey], {
       cwd: __dirname,
       timeout: 120_000, // 2min — keychain swap is fast; no per-session injection
       env: { ...process.env, NODE_NO_WARNINGS: '1' },
@@ -1146,9 +1175,15 @@ async function refreshSingleToken(account) {
       }
     } else {
       // Use spawnSync (no shell) to avoid injection risk on tokenStr.
-      spawnSync('security', ['add-generic-password', '-U', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-w', tokenStr], {
-        timeout: 5000,
-      });
+      const kcResult = spawnSync(
+        'security',
+        ['add-generic-password', '-U', '-s', svc, '-a', VAULT_KEYCHAIN_ACCOUNT, '-w', tokenStr],
+        { timeout: 5000 },
+      );
+      if (kcResult.error || kcResult.status !== 0) {
+        const msg = kcResult.error?.message || kcResult.stderr?.toString() || `security exit ${kcResult.status}`;
+        throw new Error(`Keychain write failed: ${msg}`);
+      }
     }
     log(
       `[refresh] ${key}: refreshed (${((parsed.claudeAiOauth.expiresAt - Date.now()) / 3_600_000).toFixed(1)}h remaining)`,
@@ -1268,6 +1303,11 @@ async function maybeRecoverOAuthFromBedrock(config, state, sentinelPath, ctx) {
               log('[bedrock-recovery] settings.json → OAuth (hardcoded models cleared)');
             } catch (e) {
               log(`[bedrock-recovery] settings clear failed: ${e.message?.slice(0, 80)}`);
+            }
+            try {
+              stopClaudeDaemon();
+            } catch (e) {
+              log(`[bedrock-recovery] stopClaudeDaemon failed: ${e.message}`);
             }
             notify(
               'OAuth Restored',
