@@ -135,7 +135,7 @@ function notify(title, msg) {
 // Legacy account-key renames: old label → new canonical key.
 // Applied once per readState() call to keep state.json consistent as labels evolve.
 const STATE_KEY_MIGRATIONS = {
-  'old-label': 'new-label', // placeholder: replace with real migration mappings as needed
+  'account-personal': 'account-main', // label changed: personal org is now just "account-main"
 };
 
 function migrateStateKey(key) {
