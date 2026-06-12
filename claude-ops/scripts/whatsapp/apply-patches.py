@@ -2891,6 +2891,299 @@ FIXU_RECONCILE_REPLACEMENT = """\t// claude-ops Fix Q: GET /api/app_state_status
 \t// Run server in a goroutine so it doesn't block"""
 FIXU_RECONCILE_SENTINEL = "claude-ops Fix U: POST /api/reconcile_archived"
 
+# ─── main.go Fix W: POST /api/markread — send WhatsApp read receipts ──────────
+# Marks the most-recent inbound messages in a chat as read via client.MarkRead.
+# For group chats messages are batched per-sender (whatsmeow requires the
+# participant JID). For 1:1 chats sender = chat JID. Also zeros local
+# unread_count. Body: {"chat_jid":"<JID>","message_ids":[...optional]}.
+# Returns: {"success":true,"marked":N}.
+# Anchors on the unread_count endpoint comment (unique in startRESTServer).
+FIXW_MARKREAD_NEEDLE = """\t// GET /api/chats/unread — return chats with unread_count > 0 ordered by last_message_time desc."""
+
+FIXW_MARKREAD_REPLACEMENT = """\t// claude-ops Fix W: POST /api/markread — mark recent inbound messages in a chat
+\t// as read via whatsmeow's client.MarkRead. Body: {"chat_jid":"<JID>","message_ids":[...optional]}.
+\t// For group chats (@g.us) messages are batched per-sender since whatsmeow requires
+\t// the sender participant JID. For 1:1 chats sender=chat JID.
+\t// Falls back gracefully if no inbound messages exist.
+\thttp.HandleFunc("/api/markread", func(w http.ResponseWriter, r *http.Request) {
+\t\tif r.Method != http.MethodPost {
+\t\t\thttp.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+\t\t\treturn
+\t\t}
+\t\tw.Header().Set("Content-Type", "application/json")
+\t\tif !client.IsConnected() {
+\t\t\tw.WriteHeader(http.StatusServiceUnavailable)
+\t\t\tfmt.Fprintln(w, `{"success":false,"error":"client not connected"}`)
+\t\t\treturn
+\t\t}
+\t\tvar req struct {
+\t\t\tChatJID    string   `json:"chat_jid"`
+\t\t\tMessageIDs []string `json:"message_ids"`
+\t\t}
+\t\tif err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ChatJID == "" {
+\t\t\tw.WriteHeader(http.StatusBadRequest)
+\t\t\tfmt.Fprintln(w, `{"success":false,"error":"chat_jid required"}`)
+\t\t\treturn
+\t\t}
+\t\tchatJID, err := types.ParseJID(req.ChatJID)
+\t\tif err != nil {
+\t\t\tw.WriteHeader(http.StatusBadRequest)
+\t\t\tfmt.Fprintf(w, `{"success":false,"error":"invalid chat_jid: %s"}`, err.Error())
+\t\t\treturn
+\t\t}
+\t\tisGroup := chatJID.Server == types.GroupServer
+
+\t\t// If caller didn't specify message IDs, look up the 25 most-recent inbound ones.
+\t\ttype msgRow struct {
+\t\t\tid     string
+\t\t\tsender string
+\t\t}
+\t\tvar rows []msgRow
+\t\tif len(req.MessageIDs) == 0 {
+\t\t\tdbRows, qerr := messageStore.db.Query(
+\t\t\t\t`SELECT id, sender FROM messages WHERE chat_jid=? AND is_from_me=0 ORDER BY timestamp DESC LIMIT 25`,
+\t\t\t\treq.ChatJID,
+\t\t\t)
+\t\t\tif qerr != nil {
+\t\t\t\tw.WriteHeader(http.StatusInternalServerError)
+\t\t\t\tfmt.Fprintf(w, `{"success":false,"error":"db query: %s"}`, qerr.Error())
+\t\t\t\treturn
+\t\t\t}
+\t\t\tdefer dbRows.Close()
+\t\t\tfor dbRows.Next() {
+\t\t\t\tvar row msgRow
+\t\t\t\tif scanErr := dbRows.Scan(&row.id, &row.sender); scanErr == nil {
+\t\t\t\t\trows = append(rows, row)
+\t\t\t\t}
+\t\t\t}
+\t\t} else {
+\t\t\t// Caller supplied message IDs — look up their senders.
+\t\t\tfor _, id := range req.MessageIDs {
+\t\t\t\tvar sender string
+\t\t\t\t_ = messageStore.db.QueryRow(
+\t\t\t\t\t`SELECT sender FROM messages WHERE id=? AND chat_jid=? LIMIT 1`,
+\t\t\t\t\tid, req.ChatJID,
+\t\t\t\t).Scan(&sender)
+\t\t\t\trows = append(rows, msgRow{id: id, sender: sender})
+\t\t\t}
+\t\t}
+
+\t\tif len(rows) == 0 {
+\t\t\tfmt.Fprintln(w, `{"success":true,"marked":0,"message":"no inbound messages found"}`)
+\t\t\treturn
+\t\t}
+
+\t\tnow := time.Now()
+\t\tmarked := 0
+\t\tvar markErr error
+
+\t\tif isGroup {
+\t\t\t// Group: batch by sender — whatsmeow requires per-participant MarkRead.
+\t\t\tbySender := map[string][]string{}
+\t\t\tfor _, row := range rows {
+\t\t\t\tbySender[row.sender] = append(bySender[row.sender], row.id)
+\t\t\t}
+\t\t\tfor senderStr, ids := range bySender {
+\t\t\t\tvar senderJID types.JID
+\t\t\t\tif strings.Contains(senderStr, "@") {
+\t\t\t\t\tsenderJID, _ = types.ParseJID(senderStr)
+\t\t\t\t} else {
+\t\t\t\t\tsenderJID = types.NewJID(senderStr, types.DefaultUserServer)
+\t\t\t\t}
+\t\t\t\tmsgIDs := make([]types.MessageID, len(ids))
+\t\t\t\tfor i, id := range ids {
+\t\t\t\t\tmsgIDs[i] = types.MessageID(id)
+\t\t\t\t}
+\t\t\t\tif err := client.MarkRead(context.Background(), msgIDs, now, chatJID, senderJID); err != nil {
+\t\t\t\t\tmarkErr = err
+\t\t\t\t} else {
+\t\t\t\t\tmarked += len(ids)
+\t\t\t\t}
+\t\t\t}
+\t\t} else {
+\t\t\t// 1:1 chat: sender = chat JID.
+\t\t\tmsgIDs := make([]types.MessageID, len(rows))
+\t\t\tfor i, row := range rows {
+\t\t\t\tmsgIDs[i] = types.MessageID(row.id)
+\t\t\t}
+\t\t\tif err := client.MarkRead(context.Background(), msgIDs, now, chatJID, chatJID); err != nil {
+\t\t\t\tmarkErr = err
+\t\t\t} else {
+\t\t\t\tmarked = len(rows)
+\t\t\t}
+\t\t}
+
+\t\t// Also zero the local unread_count regardless of MarkRead outcome.
+\t\t_ = messageStore.MarkChatAsRead(req.ChatJID)
+
+\t\tif markErr != nil && marked == 0 {
+\t\t\tw.WriteHeader(http.StatusInternalServerError)
+\t\t\tfmt.Fprintf(w, `{"success":false,"error":"MarkRead failed: %s"}`, markErr.Error())
+\t\t\treturn
+\t\t}
+\t\tfmt.Fprintf(w, `{"success":true,"marked":%d}`, marked)
+\t})
+
+\t// GET /api/chats/unread — return chats with unread_count > 0 ordered by last_message_time desc."""
+
+FIXW_MARKREAD_SENTINEL = "claude-ops Fix W: POST /api/markread"
+
+# ─── whatsapp.py Fix W: mark_read + backfill + app_state_status + reconcile ───
+# Appended as a block to whatsapp.py (no needle needed — idempotent via sentinel).
+FIXW_PY_HELPERS_BLOCK = '''
+
+# claude-ops Fix W: mark_read, backfill, app_state_status, reconcile_archived helpers
+
+
+def mark_read(chat_jid: str, message_ids=None):
+    """Mark recent inbound messages in a chat as read via the bridge /api/markread endpoint.
+
+    Returns (success, message, marked_count).
+    """
+    try:
+        if not chat_jid:
+            return False, "chat_jid must be provided", 0
+        url = f"{WHATSAPP_API_BASE_URL}/markread"
+        payload = {"chat_jid": chat_jid}
+        if message_ids:
+            payload["message_ids"] = message_ids
+        response = requests.post(url, json=payload)
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("success", False), result.get("message", ""), result.get("marked", 0)
+        return False, f"Error: HTTP {response.status_code} - {response.text}", 0
+    except requests.RequestException as e:
+        return False, f"Request error: {e}", 0
+    except Exception as e:
+        return False, f"Unexpected error: {e}", 0
+
+
+def trigger_backfill():
+    """Request an on-demand history backfill from the bridge."""
+    try:
+        url = f"{WHATSAPP_API_BASE_URL}/backfill"
+        response = requests.post(url)
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("success", False), result.get("message", "Unknown response")
+        return False, f"Error: HTTP {response.status_code} - {response.text}"
+    except requests.RequestException as e:
+        return False, f"Request error: {e}"
+    except Exception as e:
+        return False, f"Unexpected error: {e}"
+
+
+def get_app_state_status():
+    """Return the bridge app-state readiness status (GET /api/app_state_status)."""
+    try:
+        url = f"{WHATSAPP_API_BASE_URL}/app_state_status"
+        response = requests.get(url)
+        if response.status_code == 200:
+            return response.json()
+        return {"ready": False, "error": f"HTTP {response.status_code}"}
+    except requests.RequestException as e:
+        return {"ready": False, "error": f"Request error: {e}"}
+    except Exception as e:
+        return {"ready": False, "error": f"Unexpected error: {e}"}
+
+
+def reconcile_archived():
+    """Reconcile chats.archived in messages.db from whatsmeow_chat_settings."""
+    try:
+        url = f"{WHATSAPP_API_BASE_URL}/reconcile_archived"
+        response = requests.post(url)
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("success", False), result.get("message", "Unknown response")
+        return False, f"Error: HTTP {response.status_code} - {response.text}"
+    except requests.RequestException as e:
+        return False, f"Request error: {e}"
+    except Exception as e:
+        return False, f"Unexpected error: {e}"
+'''
+
+FIXW_PY_HELPERS_SENTINEL = "claude-ops Fix W: mark_read, backfill, app_state_status, reconcile_archived helpers"
+
+# ─── main.py Fix W: imports for new helpers ───────────────────────────────────
+FIXW_MAIN_IMPORT_NEEDLE = """    recover_app_state as whatsapp_recover_app_state,  # claude-ops Fix K
+)"""
+
+FIXW_MAIN_IMPORT_REPLACEMENT = """    recover_app_state as whatsapp_recover_app_state,  # claude-ops Fix K
+    mark_read as whatsapp_mark_read,
+    trigger_backfill as whatsapp_trigger_backfill,
+    get_app_state_status as whatsapp_get_app_state_status,
+    reconcile_archived as whatsapp_reconcile_archived,
+)"""
+
+FIXW_MAIN_IMPORT_SENTINEL = "mark_read as whatsapp_mark_read,"
+
+# ─── main.py Fix W: four new @mcp.tool() wrappers ────────────────────────────
+FIXW_MAIN_TOOLS_NEEDLE = """if __name__ == "__main__":
+    # Initialize and run the server
+    mcp.run(transport='stdio')"""
+
+FIXW_MAIN_TOOLS_REPLACEMENT = '''# claude-ops Fix W: additional bridge API surface as MCP tools
+
+
+@mcp.tool()
+def mark_read(
+    chat_jid: str, message_ids=None
+) -> dict:
+    """Mark recent inbound messages in a WhatsApp chat as read.
+
+    Sends WhatsApp read receipts for up to 25 recent inbound messages in the chat.
+    Also zeroes the local unread_count in the bridge DB.
+
+    Args:
+        chat_jid: The JID of the chat (e.g. "123@s.whatsapp.net" or "123@g.us")
+        message_ids: Optional list of specific message IDs to mark read.
+                     If omitted, the 25 most-recent inbound messages are used.
+    """
+    success, message, marked = whatsapp_mark_read(chat_jid, message_ids)
+    return {"success": success, "message": message, "marked": marked}
+
+
+@mcp.tool()
+def trigger_backfill() -> dict:
+    """Request an on-demand WhatsApp history backfill from the bridge.
+
+    The bridge will request older messages for the 50 most-recently-active chats.
+    Useful after a gap in connectivity to refresh message history.
+    """
+    success, message = whatsapp_trigger_backfill()
+    return {"success": success, "message": message}
+
+
+@mcp.tool()
+def get_app_state_status() -> dict:
+    """Check whether the WhatsApp bridge\'s app-state (archive/mute/pin) is ready.
+
+    Returns {"ready": bool}. When ready is false, archive_chat will return HTTP 425
+    (Too Early) — wait and retry. Typically takes a few seconds after bridge start.
+    """
+    return whatsapp_get_app_state_status()
+
+
+@mcp.tool()
+def reconcile_archived() -> dict:
+    """Reconcile the bridge\'s local archived-chat state against the phone\'s authoritative source.
+
+    Reads whatsmeow_chat_settings (populated from history sync) and copies the archived
+    flag for every chat into messages.db. No re-pair or server round-trip required.
+    Idempotent. Use after a fresh pair or when inbox view seems stale.
+    """
+    success, message = whatsapp_reconcile_archived()
+    return {"success": success, "message": message}
+
+
+if __name__ == "__main__":
+    # Initialize and run the server
+    mcp.run(transport='stdio')'''
+
+FIXW_MAIN_TOOLS_SENTINEL = (
+    "claude-ops Fix W: additional bridge API surface as MCP tools"
+)
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(
@@ -3149,6 +3442,15 @@ def main() -> int:
         FIXU_RECONCILE_SENTINEL,
         "Fix U: POST /api/reconcile_archived endpoint",
     )
+    # Fix W: POST /api/markread — WhatsApp read-receipt endpoint.
+    # Anchors on /api/chats/unread comment (unique in startRESTServer).
+    changed_go |= replace_idempotent(
+        main_go,
+        FIXW_MARKREAD_NEEDLE,
+        FIXW_MARKREAD_REPLACEMENT,
+        FIXW_MARKREAD_SENTINEL,
+        "Fix W: POST /api/markread endpoint",
+    )
     changed_go |= replace_idempotent(
         main_go,
         CTX_SQLSTORE_NEEDLE,
@@ -3376,6 +3678,30 @@ def main() -> int:
         MCP_TOOL_SENTINEL,
         "Fix K: recover_app_state MCP tool (main.py)",
     )
+    # Fix W: mark_read + backfill + app_state_status + reconcile_archived helpers
+    # whatsapp.py: appended block (idempotent via sentinel).
+    changed_py |= append_idempotent(
+        whatsapp_py,
+        FIXW_PY_HELPERS_BLOCK,
+        FIXW_PY_HELPERS_SENTINEL,
+        "Fix W: mark_read/backfill/app_state_status/reconcile helpers (whatsapp.py)",
+    )
+    # main.py: import aliases for the four new helpers.
+    changed_server_main |= replace_idempotent(
+        server_main_py,
+        FIXW_MAIN_IMPORT_NEEDLE,
+        FIXW_MAIN_IMPORT_REPLACEMENT,
+        FIXW_MAIN_IMPORT_SENTINEL,
+        "Fix W: mark_read/backfill/status/reconcile import aliases (main.py)",
+    )
+    # main.py: four new @mcp.tool() wrappers before if __name__ == "__main__".
+    changed_server_main |= replace_idempotent(
+        server_main_py,
+        FIXW_MAIN_TOOLS_NEEDLE,
+        FIXW_MAIN_TOOLS_REPLACEMENT,
+        FIXW_MAIN_TOOLS_SENTINEL,
+        "Fix W: mark_read/backfill/status/reconcile MCP tools (main.py)",
+    )
     changed_py = changed_py or changed_server_main
 
     if changed_go:
@@ -3394,7 +3720,9 @@ def main() -> int:
 
         bridge_dir = args.install_dir / "whatsapp-bridge"
         if not changed_go:
-            print("  --build: patches already applied; rebuilding from current sources.")
+            print(
+                "  --build: patches already applied; rebuilding from current sources."
+            )
         print(
             "  --build: running `CGO_ENABLED=1 go build -tags sqlite_fts5 "
             f"-o whatsapp-bridge .` in {bridge_dir} ..."
