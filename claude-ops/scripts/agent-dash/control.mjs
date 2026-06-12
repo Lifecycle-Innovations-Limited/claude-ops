@@ -5,12 +5,21 @@
 
 import { spawnSync, execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
 const HOME = homedir();
 const ARCHIVE_LOG = join(HOME, '.claude', 'state', 'agent-archive.jsonl');
-const FRA_PRIMARY = (process.env.AGENT_DASH_FRA_HOSTS || 'fra-direct,dev-sandbox-fra-cf').split(',')[0].trim();
+const REMOTE_CACHE = join(HOME, '.claude', 'state', 'agent-dash-remote-cache.json');
+const FRA_HOSTS = (process.env.AGENT_DASH_FRA_HOSTS || 'fra-direct,dev-sandbox-fra-cf').split(',');
+
+function fraSshHost() {
+  try {
+    const host = JSON.parse(readFileSync(REMOTE_CACHE, 'utf8'))?.meta?.source?.trim();
+    if (host) return host;
+  } catch { /* use default */ }
+  return FRA_HOSTS[0].trim();
+}
 const OPS_BG = process.env.OPS_BG_BIN || `${HOME}/Projects/claude-ops/claude-ops/bin/ops-bg`;
 
 export function findAgent(snapshot, idOrName) {
@@ -20,6 +29,7 @@ export function findAgent(snapshot, idOrName) {
     snapshot.agents.find((a) => a.sessionId === q) ||
     snapshot.agents.find((a) => String(a.pid) === q) ||
     snapshot.agents.find((a) => a.name === q) ||
+    snapshot.agents.find((a) => a.name.startsWith(q)) ||
     snapshot.agents.find((a) => a.id.startsWith(q)) ||
     null
   );
@@ -52,7 +62,7 @@ function runCapture(cmd, args, opts = {}) {
 function remote(shell, tty = false) {
   const flags = ['-o', 'ConnectTimeout=8', '-o', 'BatchMode=yes'];
   if (tty) flags.unshift('-t');
-  return ['ssh', [...flags, FRA_PRIMARY, shell]];
+  return ['ssh', [...flags, fraSshHost(), shell]];
 }
 
 // --- ATTACH ----------------------------------------------------------------
@@ -140,7 +150,7 @@ export function kill(a) {
 // --- ARCHIVE ---------------------------------------------------------------
 // claude rm <id> (removes session + worktree) + append a record to the archive log.
 export function archive(a) {
-  let res = { ok: true, msg: '' };
+  let res;
   if (a.type === 'claude') {
     if (a.host === 'fra') {
       res = (() => { const r = runCapture(...remote(`CLAUDE_NO_TMUX=1 claude rm ${a.id}`)); return { ok: r.ok, msg: r.ok ? `rm ${a.id} on fra` : r.err }; })();
@@ -148,7 +158,10 @@ export function archive(a) {
       const r = runCapture(claudeBin(), ['rm', a.id]);
       res = { ok: r.ok, msg: r.ok ? `rm ${a.id}` : (r.err || r.out) };
     }
+  } else {
+    res = kill(a);
   }
+  if (!res.ok) return res;
   try {
     if (!existsSync(dirname(ARCHIVE_LOG))) mkdirSync(dirname(ARCHIVE_LOG), { recursive: true });
     appendFileSync(ARCHIVE_LOG, JSON.stringify({

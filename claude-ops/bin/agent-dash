@@ -197,7 +197,7 @@ if (wantTUI) {
     const name = key?.name;
     if (key?.ctrl && name === 'c') return quit();
     if (name === 'q') return quit();
-    if (name === 'up' || name === 'k') { selected = Math.max(0, selected - 1); draw(); return; }
+    if (name === 'up') { selected = Math.max(0, selected - 1); draw(); return; }
     if (name === 'down' || name === 'j') { selected = Math.min(indexMap.length - 1, selected + 1); draw(); return; }
     if (name === 'g') { selected = 0; draw(); return; }
     if (name === 'G') { selected = indexMap.length - 1; draw(); return; }

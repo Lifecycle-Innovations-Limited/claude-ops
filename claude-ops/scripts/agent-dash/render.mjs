@@ -135,7 +135,7 @@ export function renderDashboard(snapshot, { width = 100, selectedIdx = 0, status
 export function hotkeyBar() {
   const k = (key, lbl) => `${C.bold}${C.cyan}${key}${C.reset}${C.gray}${lbl}${C.reset}`;
   return [
-    k('↑↓/jk', ' move'),
+    k('↑↓/j', ' move'),
     k(' a', 'ttach'),
     k(' s', 'teer'),
     k(' r', 'evive'),
