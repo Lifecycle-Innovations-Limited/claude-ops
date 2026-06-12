@@ -15,7 +15,7 @@ The audio-ar MCP tools are your ears-on-the-meters. The user trusts data + taste
 
 1. **Resolve the file.** You'll get a local path or a URL/Dropbox/YouTube link as input.
    - Local file → use directly.
-   - URL → `mkdir -p ~/.claude/jobs/ops-ar/tmp/` and download there with `curl -sL -o <file> "<url>"` (append `&dl=1` for Dropbox); for YouTube use `yt-dlp -x --audio-format mp3` if available.
+   - URL → `mkdir -p ~/.claude/jobs/ops-ar/tmp/` and download there with `curl -sL -o <file> "<url>"` (for Dropbox: append `?dl=1`, or `&dl=1` if the URL already has query parameters); for YouTube use `yt-dlp -x --audio-format mp3` if available.
 2. **Run the analysis — ALWAYS the full pass.** Prefer `full_ar_report(path, deep=True)` for the one-shot: it now returns technical analysis, **waveform + full-spectrum spectrogram PNG paths**, **per-stem analysis** (each AI-separated stem analyzed on its own), the isolated-vocal topline, and CLAP. Then go deeper as needed with `analyze_track`, `mood_score`, `render_visuals`, `analyze_stems`, `separate_stems`. If Cyanite/Music.ai keys are live and a call is worth a slot, use `cyanite_analyze` for pro tags (free tier = 5/mo — spend only when it adds real signal).
 
    **ALWAYS do these two things — they're mandatory, not optional:**

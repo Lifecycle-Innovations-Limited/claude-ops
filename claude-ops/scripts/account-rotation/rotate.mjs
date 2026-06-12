@@ -699,7 +699,7 @@ function stopClaudeDaemon() {
   try {
     const result = execSync('claude daemon stop --any', {
       encoding: 'utf8',
-      env: { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' }
+      env: { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' },
     });
     log(`[daemon-stop] Daemon stop success: ${result.trim()}`);
   } catch (err) {
@@ -811,7 +811,10 @@ function _linuxWriteCred(svc, json) {
   writeFileSync(LINUX_CRED_PATH, JSON.stringify(store, null, 2), { mode: 0o600 });
 }
 
-function readKeychain(svc = KEYCHAIN_SERVICE, acct = svc === KEYCHAIN_SERVICE ? ACTIVE_KEYCHAIN_ACCOUNT : VAULT_KEYCHAIN_ACCOUNT) {
+function readKeychain(
+  svc = KEYCHAIN_SERVICE,
+  acct = svc === KEYCHAIN_SERVICE ? ACTIVE_KEYCHAIN_ACCOUNT : VAULT_KEYCHAIN_ACCOUNT,
+) {
   if (IS_LINUX) {
     if (svc === KEYCHAIN_SERVICE) {
       // Main slot: return full credentials JSON
@@ -835,7 +838,11 @@ function readKeychain(svc = KEYCHAIN_SERVICE, acct = svc === KEYCHAIN_SERVICE ? 
   return m[1].replace(/\\"/g, '"');
 }
 
-function writeKeychain(json, svc = KEYCHAIN_SERVICE, acct = svc === KEYCHAIN_SERVICE ? ACTIVE_KEYCHAIN_ACCOUNT : VAULT_KEYCHAIN_ACCOUNT) {
+function writeKeychain(
+  json,
+  svc = KEYCHAIN_SERVICE,
+  acct = svc === KEYCHAIN_SERVICE ? ACTIVE_KEYCHAIN_ACCOUNT : VAULT_KEYCHAIN_ACCOUNT,
+) {
   if (IS_LINUX) {
     _linuxWriteCred(svc, json);
     return;

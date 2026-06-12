@@ -1147,7 +1147,6 @@ async function refreshSingleToken(account) {
         refresh_token: refreshToken,
         client_id: OAUTH_CLIENT_ID,
       }),
-      signal: AbortSignal.timeout(5000),
     });
     const body = await res.json();
     if (!res.ok || !body.access_token) return false;

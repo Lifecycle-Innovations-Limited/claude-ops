@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.29.0] - 2026-06-11
+
+### Changed
+ops-inbox: Mac WhatsApp.app fallback suite — Tier-4 archive via Mac app (bypasses server-side 429), automatic Mac ground-truth cross-check in the freshness gate, and Tailscale→Cloudflare-tunnel SSH transport chain (wa-mac-transport.sh + setup-wa-mac-cf-tunnel.sh) (#560)
+
+
+## [2.28.0] - 2026-06-11
+
+### Changed
+ops-inbox: Mac WhatsApp.app ChatStorage fallback for bridge-miss recovery (read-only reader + freshness-gate hint).
+
+
+## [2.27.4] - 2026-06-11
+
+### Changed
+WA bridge Fix V: tolerate missing sync keys in LTHash skip loop, 300ms throttle (dodges 429 rate-overlimit), key-arrival poller; default skip_bad=true on full_sync resync. Verified end-to-end 2026-06-10: poisoned regular_low chain healed, archive writes propagate to phone (31/31). Upstream: tulir/whatsmeow#1171.
+
+
 ## [2.27.3] - 2026-06-09
 
 ### Changed

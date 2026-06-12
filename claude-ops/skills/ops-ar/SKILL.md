@@ -18,22 +18,6 @@ effort: high
 
 # /ops:ops-ar — A&R Command
 
-## Agent Teams support
-
-If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when A&R'ing a batch or a full inbox sweep — one ar-producer teammate per track, in waves of ≤2 (stem separation is CPU-heavy; check `nproc`/`uptime` first), coordinating in real time. This enables:
-- Teammates share cross-track context (a recurring mix flaw or reference act spotted on track 1 informs the verdict on track 3)
-- You can steer mid-sweep: "rank the dance-pop demos first, hold the ballads"
-- Each verdict card streams back as its track finishes, so you assemble the ranked summary as results land
-
-**Team setup** (only when flag is enabled, batch/inbox mode):
-```
-TeamCreate("ar-panel")
-Agent(team_name="ar-panel", name="ar-[track-slug]", ...)
-```
-Steer with `SendMessage` / `broadcast`.
-
-If the flag is NOT set, fall back to standard fire-and-forget subagents (one ar-producer Agent per track, in waves of ≤2).
-
 A&R the given record(s) like a pop/dance-hit label owner + master producer. The deliverable is always the full A&R card per track:
 
 **VERDICT (hit/10 + sign / develop / pass) → WHAT'S WORKING → WHAT'S HOLDING IT BACK → THE PLAN (producer moves) → REFERENCE & POSITIONING → NEXT.**
@@ -70,7 +54,7 @@ A&R multiple local paths or URLs in one invocation:
 ### 3. Inbox sweep — `/ops:ops-ar inbox [from <sender> ...]`
 Pull every demo/song from the user's Gmail inbox and A&R them all:
 1. **Find demos:** `gog gmail search 'has:attachment (filename:mp3 OR filename:wav OR filename:m4a OR filename:aiff OR filename:flac OR filename:ogg OR filename:aac)'` (add `from:` filters if senders given). Confirm scope with the user if the set is large (>10 threads).
-2. **Download attachments to disk** without flooding context: per thread, `gog gmail thread get <tid> -j` → message ids from `.thread.messages[]` (`{downloaded, thread: {messages: [...]}}` envelope — NOT top-level `messages`; see `/ops-inbox` gog JSON shapes table) → `gog gmail raw <mid> -j` piped to `jq` for audio parts (filename + attachmentId) → `gog gmail attachment <mid> <aid> --out <dir>/<label>__<file>`. Also grep text parts for external links (postal.music, disco.ac, wetransfer, dropbox) — flag link-only demos that need a login as NOT ANALYZED and tell the user to request a file re-send.
+2. **Download attachments to disk** without flooding context: per thread, `gog gmail thread get <tid> -j` → message ids from `thread.messages[].id` (envelope `{downloaded, thread: {messages: [...]}}` — NOT top-level `messages`) → `gog gmail raw <mid> -j` piped to `jq` for audio parts (filename + attachmentId) → `gog gmail attachment <mid> <aid> --out <dir>/<label>__<file>`. Also grep text parts for external links (postal.music, disco.ac, wetransfer, dropbox) — flag link-only demos that need a login as NOT ANALYZED and tell the user to request a file re-send.
 3. **Dedupe** by md5 (forwarded demos repeat across threads).
 4. **Analyze per track** — spawn **ar-producer** (Opus) per deduped demo, in waves of ≤2 (stem separation is CPU-heavy; check `nproc`/`uptime` first). Same subagent MCP rule as single-track mode (include the full `ToolSearch select:mcp__audio-ar__...` list). Relay each agent's full A&R card back verbatim.
 5. **Summarize** — compile a ranked verdict table from the per-track cards.
@@ -94,3 +78,18 @@ Pull every demo/song from the user's Gmail inbox and A&R them all:
 
 ## Fallback
 If `mcp__audio-ar__*` is unavailable, run the stack directly via Bash from `$AUDIO_AR_HOME` (`venv/bin/python analyze.py <file>`, `clap_score.py`, `transcribe.py`, `pro_apis.py`). Never fabricate analysis — if nothing ran, say so.
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when dispatching multiple ar-producer agents in batch or inbox-sweep mode. This enables:
+- Agents share partial findings in real time (e.g., one agent finds a stem issue → others adjust their verdict framing accordingly)
+- You can steer mid-sweep: "prioritize the demo from sender X first"
+- Progress is visible per track as agents report back
+
+**Team setup** (only when flag is enabled, batch/inbox dispatch phase):
+```
+TeamCreate("ar-batch")
+Agent(team_name="ar-batch", name="ar-[track-slug]", ...)
+```
+
+If the flag is NOT set, use standard parallel subagents (fire-and-forget, waves of ≤2).
