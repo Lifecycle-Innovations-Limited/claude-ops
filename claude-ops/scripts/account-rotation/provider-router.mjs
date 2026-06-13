@@ -32,6 +32,7 @@
 
 import http from 'node:http';
 import https from 'node:https';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -41,6 +42,9 @@ const CRED_PATH = join(HOME, '.claude', '.credentials.json');
 const ROUTE_PATH = join(HOME, '.claude', '.provider-route.json');
 const OAUTH_BETA = 'oauth-2025-04-20';
 const UPSTREAM_OAUTH = { host: 'api.anthropic.com', port: 443 };
+const IS_LINUX = process.platform === 'linux';
+const KEYCHAIN_ACCOUNT =
+  process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || process.env.LOGNAME || 'claude-ops';
 
 function log(...a) {
   process.stdout.write(`[provider-router] ${new Date().toISOString()} ${a.join(' ')}\n`);
@@ -49,31 +53,65 @@ function log(...a) {
 /** Read the control file fresh on every request (this is what makes swaps hot). */
 function readRoute() {
   try {
-    return JSON.parse(readFileSync(ROUTE_PATH, 'utf8'));
+    const route = JSON.parse(readFileSync(ROUTE_PATH, 'utf8'));
+    if (route && typeof route === 'object' && !Array.isArray(route)) return route;
   } catch {
-    return { mode: 'oauth' }; // default: active OAuth account
+    /* fall through to default */
   }
+  return { mode: 'oauth' }; // default: active OAuth account
+}
+
+function readKeychainEntry(service) {
+  try {
+    const r = spawnSync('security', ['find-generic-password', '-s', service, '-a', KEYCHAIN_ACCOUNT, '-g'], {
+      timeout: 5000,
+      encoding: 'utf8',
+    });
+    const out = (r.stdout || '') + (r.stderr || '');
+    const m = out.match(/^password: "?(.*?)"?$/m);
+    return m ? m[1].replace(/\\"/g, '"') : null;
+  } catch {
+    return null;
+  }
+}
+
+function readVaultTokenEntry(accountKey) {
+  const svc = `Claude-Rotation-${accountKey}`;
+  if (IS_LINUX) {
+    try {
+      const store = JSON.parse(readFileSync(CRED_PATH, 'utf8'));
+      const val = store[svc];
+      if (!val) return null;
+      return typeof val === 'string' ? val : JSON.stringify(val);
+    } catch {
+      return null;
+    }
+  }
+  return readKeychainEntry(svc);
+}
+
+function readActiveTokenEntry() {
+  if (IS_LINUX) {
+    try {
+      const store = JSON.parse(readFileSync(CRED_PATH, 'utf8'));
+      if (!store.claudeAiOauth) return null;
+      return JSON.stringify({ claudeAiOauth: store.claudeAiOauth, mcpOAuth: store.mcpOAuth || {} });
+    } catch {
+      return null;
+    }
+  }
+  return readKeychainEntry('Claude Code-credentials');
 }
 
 /** Resolve an OAuth accessToken for the chosen account (or the active one). */
 function resolveOAuthToken(account) {
-  let store;
-  try {
-    store = JSON.parse(readFileSync(CRED_PATH, 'utf8'));
-  } catch (e) {
-    return { error: `cred read failed: ${e.message}` };
+  const entryJson = account ? readVaultTokenEntry(account) : readActiveTokenEntry();
+  if (!entryJson) {
+    return { error: account ? `no token for account "${account}"` : 'no active claudeAiOauth token' };
   }
-  // Explicit account → per-account vault entry "Claude-Rotation-<key>"
-  if (account) {
-    const entry = store[`Claude-Rotation-${account}`];
-    const tok = parseTok(entry);
-    if (tok?.accessToken) return { token: tok.accessToken, source: account };
-    return { error: `no token for account "${account}"` };
-  }
-  // Default → the live active OAuth entry
-  const active = store.claudeAiOauth;
-  if (active?.accessToken) return { token: active.accessToken, source: 'active' };
-  return { error: 'no active claudeAiOauth token' };
+  const tok = parseTok(entryJson);
+  if (tok?.accessToken) return { token: tok.accessToken, source: account || 'active' };
+  return { error: account ? `no token for account "${account}"` : 'no active claudeAiOauth token' };
 }
 
 function parseTok(entry) {
@@ -140,6 +178,10 @@ const server = http.createServer((req, res) => {
       },
     );
     upReq.on('error', (e) => {
+      if (res.headersSent) {
+        log(`upstream error after headers sent: ${e.message}`);
+        return;
+      }
       res.writeHead(502, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ type: 'error', error: { type: 'upstream', message: e.message } }));
       log(`502 upstream ${e.message}`);
