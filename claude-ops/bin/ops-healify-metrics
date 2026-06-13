@@ -47,7 +47,7 @@ fetch_ecs() {
   local services_json="[]"
 
   if ! command -v aws &>/dev/null; then
-    printf '{"error":"aws CLI not found"}' > "$out"; return
+    printf '{"ecs_error":"aws CLI not found"}' > "$out"; return
   fi
 
   local clusters
@@ -61,31 +61,54 @@ fetch_ecs() {
   local all_services="[]"
   while IFS= read -r cluster_arn; do
     [[ -z "$cluster_arn" ]] && continue
-    local svc_arns
-    svc_arns=$(aws ecs list-services --cluster "$cluster_arn" --region "$ECS_REGION" \
-      --output json 2>/dev/null | jq -r '.serviceArns[]?' || true)
+    local svc_arns="" next_token=""
+    while true; do
+      local list_json
+      if [[ -n "$next_token" ]]; then
+        list_json=$(aws ecs list-services --cluster "$cluster_arn" --region "$ECS_REGION" \
+          --starting-token "$next_token" --output json 2>/dev/null || echo '{}')
+      else
+        list_json=$(aws ecs list-services --cluster "$cluster_arn" --region "$ECS_REGION" \
+          --output json 2>/dev/null || echo '{}')
+      fi
+      local page_arns
+      page_arns=$(echo "$list_json" | jq -r '.serviceArns[]?' || true)
+      if [[ -n "$page_arns" ]]; then
+        svc_arns="${svc_arns}${page_arns}"$'\n'
+      fi
+      next_token=$(echo "$list_json" | jq -r '.nextToken // empty' 2>/dev/null || true)
+      [[ -z "$next_token" ]] && break
+    done
     [[ -z "$svc_arns" ]] && continue
 
-    # Describe up to 10 services at once (API limit)
-    local svc_array
-    svc_array=$(printf '%s\n' "$svc_arns" | head -10 | jq -Rsc 'split("\n") | map(select(. != ""))')
+    local -a arns=()
+    while IFS= read -r arn; do
+      [[ -z "$arn" ]] && continue
+      arns+=("$arn")
+    done <<< "$svc_arns"
 
-    local desc
-    desc=$(aws ecs describe-services \
-      --cluster "$cluster_arn" \
-      --services $(printf '%s\n' "$svc_arns" | head -10 | tr '\n' ' ') \
-      --region "$ECS_REGION" \
-      --output json 2>/dev/null || echo '{"services":[]}')
+    local idx=0
+    while [[ $idx -lt ${#arns[@]} ]]; do
+      local batch=("${arns[@]:idx:10}")
+      idx=$((idx + 10))
 
-    local batch
-    batch=$(echo "$desc" | jq '[.services[]? | {
-      name: (.serviceName // "unknown"),
-      running: (.runningCount // 0),
-      desired: (.desiredCount // 0),
-      status: (.status // "UNKNOWN")
-    }]' 2>/dev/null || echo "[]")
+      local desc
+      desc=$(aws ecs describe-services \
+        --cluster "$cluster_arn" \
+        --services "${batch[@]}" \
+        --region "$ECS_REGION" \
+        --output json 2>/dev/null || echo '{"services":[]}')
 
-    all_services=$(echo "$all_services $batch" | jq -s 'add // []' 2>/dev/null || echo "[]")
+      local batch_json
+      batch_json=$(echo "$desc" | jq '[.services[]? | {
+        name: (.serviceName // "unknown"),
+        running: (.runningCount // 0),
+        desired: (.desiredCount // 0),
+        status: (.status // "UNKNOWN")
+      }]' 2>/dev/null || echo "[]")
+
+      all_services=$(echo "$all_services $batch_json" | jq -s 'add // []' 2>/dev/null || echo "[]")
+    done
   done <<< "$clusters"
 
   printf '{"ecs":%s}' "$all_services" > "$out"
@@ -140,7 +163,7 @@ raw_sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
 
 print(f"{signing_input}.{b64url(raw_sig)}")
 PYEOF
-)
+) || true
 
   if [[ -z "$token" || "$token" == KEY_ERROR* ]]; then
     printf '{"testflight":{"error":"JWT signing failed"}}' > "$out"
@@ -159,9 +182,9 @@ PYEOF
     2>/dev/null || echo '{}')
 
   local installs_7d installs_today
-  installs_7d=$(echo "$response" | jq '[.data[]?.attributes?.inviteCount? // 0] | add // 0' 2>/dev/null || echo 0)
+  installs_7d=$(echo "$response" | jq '[.data[]?.attributes?.installCount? // 0] | add // 0' 2>/dev/null || echo 0)
   installs_today=$(echo "$response" | \
-    jq --arg d "$today" '[.data[]? | select(.attributes.date? == $d) | .attributes.inviteCount? // 0] | add // 0' \
+    jq --arg d "$today" '[.data[]? | select(.attributes.date? == $d) | .attributes.installCount? // 0] | add // 0' \
     2>/dev/null || echo 0)
 
   printf '{"testflight":{"installs_7d":%s,"installs_today":%s}}' "$installs_7d" "$installs_today" > "$out"
@@ -206,7 +229,7 @@ r, s = decode_dss_signature(sig)
 raw_sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
 print(f"{signing_input}.{b64url(raw_sig)}")
 PYEOF
-)
+) || true
 
   if [[ -z "$token" ]]; then
     printf '{"asc":{"error":"JWT signing failed"}}' > "$out"
