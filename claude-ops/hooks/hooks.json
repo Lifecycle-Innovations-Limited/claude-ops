@@ -55,8 +55,7 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-suggest-specialized-agent 2>/dev/null || true",
-            "timeout": 1,
-            "async": true
+            "timeout": 1
           }
         ]
       }
@@ -69,14 +68,12 @@
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-deploy-fix-merge-trigger 2>/dev/null || true",
             "timeout": 1,
-            "async": true,
             "if": "Bash(gh pr merge *)"
           },
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-deploy-fix-build-trigger 2>/dev/null || true",
-            "timeout": 1,
-            "async": true,
+            "timeout": 5,
             "if": "Bash(npm run build:*)"
           }
         ]
