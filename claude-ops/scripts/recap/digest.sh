@@ -63,6 +63,25 @@ done
 
 [ -z "$sessions" ] && [ -z "$history" ] && [ -z "$shell_activity" ] && exit 0
 
+# Block D: Healify pre-launch metrics snapshot (from cache — no fetch here)
+healify_snap=""
+if [ -f /tmp/ops-healify-metrics.json ]; then
+  hm_age=$(( now - $(stat -c %Y /tmp/ops-healify-metrics.json 2>/dev/null || stat -f %m /tmp/ops-healify-metrics.json 2>/dev/null || echo 0) ))
+  if [ "$hm_age" -lt 900 ]; then  # only include if <15min old
+    _ecs_ok=$(jq '[.ecs[]? | select(.running == .desired and .running > 0)] | length' /tmp/ops-healify-metrics.json 2>/dev/null || echo 0)
+    _ecs_tot=$(jq '.ecs | length' /tmp/ops-healify-metrics.json 2>/dev/null || echo 0)
+    _tf_today=$(jq -r '.testflight.installs_today? // ""' /tmp/ops-healify-metrics.json 2>/dev/null || echo "")
+    _asc=$(jq -r '.asc.state? // ""' /tmp/ops-healify-metrics.json 2>/dev/null || echo "")
+    _vis=$(jq -r '.website.visitors_7d? // ""' /tmp/ops-healify-metrics.json 2>/dev/null || echo "")
+    _parts=""
+    [ -n "$_ecs_tot" ] && [ "$_ecs_tot" -gt 0 ] && _parts="ECS: ${_ecs_ok}/${_ecs_tot}"
+    [ -n "$_tf_today" ] && _parts="${_parts:+$_parts | }TF: ${_tf_today} today"
+    [ -n "$_asc" ]      && _parts="${_parts:+$_parts | }ASC: ${_asc}"
+    [ -n "$_vis" ]      && _parts="${_parts:+$_parts | }healify.ai: ${_vis} vis"
+    [ -n "$_parts" ] && healify_snap="$_parts"
+  fi
+fi
+
 prompt="You are a newsroom ticker compressing the activity of multiple parallel Claude Code coding sessions AND the user's interactive shell sessions into ONE rolling headline.
 
 PRIOR HEADLINES (oldest → newest, each line a previous digest):
@@ -73,6 +92,9 @@ ${sessions:-(none)}
 
 USER SHELL ACTIVITY (raw recent commands across non-Claude zsh sessions, format: HH:MM:SS|cwd|command):
 ${shell_activity:-(none)}
+
+HEALIFY PRE-LAUNCH METRICS (recent cache):
+${healify_snap:-(none)}
 
 Produce ONE single line (max 240 chars) describing the CURRENT state of work, weighted heavily toward the most-recent activity (last 1-2 headlines + current session activity + last few shell commands). DROP themes from older headlines that are no longer mentioned in current activity — assume they are resolved or no longer relevant. Only carry forward an older theme if there is concrete evidence in the current activity that it is still in flight. Translate raw shell commands into plain English (e.g., 'ssh into bastion', 'inspecting prod logs', 'running tests'). Plain English ticker style. No bullets, no quotes, no preface, no markdown."
 

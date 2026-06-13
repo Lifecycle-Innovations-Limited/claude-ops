@@ -924,32 +924,104 @@ render_section_portfolio() {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# SECTION 6 — REVENUE & COSTS  (MRR + Shopify only — FinOps lives in its own block)
+# SECTION 6 — HEALIFY  (pre-launch metrics: ECS · TestFlight · ASC · website)
 # ════════════════════════════════════════════════════════════════════════════
-render_section_revenue() {
-  section_hdr "💰" "REVENUE & COSTS"
+render_section_healify() {
+  section_hdr "🚀" "HEALIFY  (pre-launch metrics)"
 
-  FINOPS_CONFIGURED=$(echo "$REVENUE_JSON" | jq -r '.configured // false' 2>/dev/null || echo "false")
+  local HM_FILE="/tmp/ops-healify-metrics.json"
+  local HM_JSON="{}"
+  if [[ -f "$HM_FILE" ]]; then
+    HM_JSON=$(cat "$HM_FILE" 2>/dev/null || echo "{}")
+  fi
 
-  if [[ "$FINOPS_CONFIGURED" != "true" ]]; then
-    p "  ${DIM2}MRR data not available — FinOps dashboard not configured.${RST}"
+  # — ECS service health ——————————————————————————————————————————————————
+  local ecs_line=""
+  local ecs_count
+  ecs_count=$(echo "$HM_JSON" | jq '.ecs | length' 2>/dev/null || echo 0)
+  if [[ "$ecs_count" -gt 0 ]]; then
+    while IFS= read -r svc_json; do
+      local name running desired
+      name=$(echo "$svc_json" | jq -r '.name' 2>/dev/null || echo "?")
+      running=$(echo "$svc_json" | jq -r '.running' 2>/dev/null || echo 0)
+      desired=$(echo "$svc_json" | jq -r '.desired' 2>/dev/null || echo 0)
+      local icon
+      if [[ "$running" -eq 0 ]]; then
+        icon="${BRED}✗${RST}"
+      elif [[ "$running" -eq "$desired" && "$desired" -gt 0 ]]; then
+        icon="${BGRN}✓${RST}"
+      else
+        icon="${BYLW}~${RST}"
+      fi
+      # Short name: strip cluster prefix, keep last segment
+      local short_name
+      short_name=$(echo "$name" | sed 's/.*-\([a-z0-9-]*\)$/\1/' 2>/dev/null || echo "$name")
+      ecs_line="${ecs_line}  ${icon} ${DIM2}${short_name}${RST}"
+    done < <(echo "$HM_JSON" | jq -c '.ecs[]?' 2>/dev/null || true)
+  fi
+
+  if [[ -n "$ecs_line" ]]; then
+    p "  🖥  ${BWHT}ECS${RST}${ecs_line}"
   else
-    # MRR sparkline from time series if available
-    MRR_SERIES=$(echo "$REVENUE_JSON" | jq -r '.mrr_series[]? // empty' 2>/dev/null | tr '\n' ' ' || echo "")
-    if [[ -n "$MRR_SERIES" ]]; then
-      MRR_SPARK=$(sparkline $MRR_SERIES 2>/dev/null || echo "")
-      p "  💰 ${BWHT}MRR${RST}  ${BCYN}\$${MRR}${RST}  ${BGRN}${MRR_SPARK}${RST}  ${DIM2}${MRR_TREND}${RST}"
+    local ecs_err
+    ecs_err=$(echo "$HM_JSON" | jq -r '.ecs_error? // ""' 2>/dev/null || echo "")
+    if [[ -n "$ecs_err" ]]; then
+      p "  🖥  ${BWHT}ECS${RST}  ${BRED}${ecs_err}${RST}"
     else
-      p "  💰 ${BWHT}MRR${RST}  ${BCYN}\$${MRR}${RST}  ${DIM2}${MRR_TREND}${RST}"
+      p "  🖥  ${BWHT}ECS${RST}  ${DIM2}(run ops-healify-metrics to populate)${RST}"
     fi
   fi
 
-  SHOPIFY_HEALTHY=$(echo "$EXTERNAL_JSON" | jq '[.[] | select(.source=="shopify_admin" and .status=="healthy")] | length' 2>/dev/null || echo "0")
-  SHOPIFY_TOTAL=$(echo "$EXTERNAL_JSON" | jq '[.[] | select(.source | startswith("shopify"))] | length' 2>/dev/null || echo "0")
-  if [[ "$SHOPIFY_TOTAL" -gt 0 ]]; then
-    STATUS_ICON="🟢"
-    [[ "$SHOPIFY_HEALTHY" -lt "$SHOPIFY_TOTAL" ]] && STATUS_ICON="🟡"
-    p "  🛒 ${BWHT}Shopify${RST}  ${STATUS_ICON} ${SHOPIFY_HEALTHY}/${SHOPIFY_TOTAL} stores healthy"
+  # — TestFlight ————————————————————————————————————————————————————————————
+  local tf_7d tf_today tf_err
+  tf_7d=$(echo "$HM_JSON"    | jq -r '.testflight.installs_7d?  // ""' 2>/dev/null || echo "")
+  tf_today=$(echo "$HM_JSON" | jq -r '.testflight.installs_today? // ""' 2>/dev/null || echo "")
+  tf_err=$(echo "$HM_JSON"   | jq -r '.testflight.error? // ""' 2>/dev/null || echo "")
+
+  if [[ -n "$tf_7d" ]]; then
+    p "  ✈️   ${BWHT}TestFlight${RST}  ${BCYN}7d:${RST} ${BWHT}${tf_7d}${RST}  ${BCYN}today:${RST} ${BWHT}${tf_today}${RST}"
+  elif [[ -n "$tf_err" ]]; then
+    p "  ✈️   ${BWHT}TestFlight${RST}  ${DIM2}${tf_err}${RST}"
+  else
+    p "  ✈️   ${BWHT}TestFlight${RST}  ${DIM2}(no data)${RST}"
+  fi
+
+  # — ASC app state ————————————————————————————————————————————————————————
+  local asc_state asc_ver asc_err
+  asc_state=$(echo "$HM_JSON" | jq -r '.asc.state?   // ""' 2>/dev/null || echo "")
+  asc_ver=$(echo "$HM_JSON"   | jq -r '.asc.version? // ""' 2>/dev/null || echo "")
+  asc_err=$(echo "$HM_JSON"   | jq -r '.asc.error?   // ""' 2>/dev/null || echo "")
+
+  if [[ -n "$asc_state" ]]; then
+    local asc_icon
+    case "$asc_state" in
+      IN_REVIEW)               asc_icon="⏳" ;;
+      READY_FOR_REVIEW)        asc_icon="📬" ;;
+      WAITING_FOR_REVIEW)      asc_icon="📬" ;;
+      READY_FOR_SALE)          asc_icon="✅" ;;
+      REJECTED)                asc_icon="${BRED}❌${RST}" ;;
+      DEVELOPER_REJECTED)      asc_icon="${BRED}❌${RST}" ;;
+      *)                       asc_icon="○" ;;
+    esac
+    p "  🍎  ${BWHT}ASC${RST}  ${asc_icon} ${BCYN}${asc_state}${RST}  ${DIM2}${asc_ver}${RST}"
+  elif [[ -n "$asc_err" ]]; then
+    p "  🍎  ${BWHT}ASC${RST}  ${DIM2}${asc_err}${RST}"
+  else
+    p "  🍎  ${BWHT}ASC${RST}  ${DIM2}(no data)${RST}"
+  fi
+
+  # — Website visitors ————————————————————————————————————————————————————
+  local web_vis web_pv web_err
+  web_vis=$(echo "$HM_JSON" | jq -r '.website.visitors_7d?  // ""' 2>/dev/null || echo "")
+  web_pv=$(echo "$HM_JSON"  | jq -r '.website.pageviews_7d? // ""' 2>/dev/null || echo "")
+  web_err=$(echo "$HM_JSON" | jq -r '.website.error?        // ""' 2>/dev/null || echo "")
+
+  if [[ -n "$web_vis" ]]; then
+    p "  🌐  ${BWHT}healify.ai${RST}  ${BCYN}visitors 7d:${RST} ${BWHT}${web_vis}${RST}  ${BCYN}pageviews:${RST} ${BWHT}${web_pv}${RST}"
+  elif [[ -n "$web_err" ]]; then
+    p "  🌐  ${BWHT}healify.ai${RST}  ${DIM2}${web_err}${RST}"
+  else
+    p "  🌐  ${BWHT}healify.ai${RST}  ${DIM2}(no data)${RST}"
   fi
 
   p ""
@@ -1366,7 +1438,7 @@ render_section_calendar
 render_section_inbox
 render_section_prs
 render_section_portfolio
-render_section_revenue
+render_section_healify
 render_section_finops
 render_section_marketing
 render_section_linear

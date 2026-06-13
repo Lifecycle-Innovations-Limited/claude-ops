@@ -1,0 +1,311 @@
+#!/usr/bin/env bash
+# ops-healify-metrics — Healify pre-launch metrics fetcher
+# Fetches ECS health, TestFlight installs, ASC app state, and website visitors.
+# Writes merged JSON to /tmp/ops-healify-metrics.json with 10-min cache.
+# Usage: ops-healify-metrics [--force]
+
+set -euo pipefail
+
+CACHE=/tmp/ops-healify-metrics.json
+CACHE_TTL=600  # 10 minutes
+FORCE=0
+
+for arg in "$@"; do
+  [[ "$arg" == "--force" ]] && FORCE=1
+done
+
+# Check cache freshness
+if [[ "$FORCE" -eq 0 && -f "$CACHE" ]]; then
+  age=$(( $(date +%s) - $(stat -c %Y "$CACHE" 2>/dev/null || stat -f %m "$CACHE" 2>/dev/null || echo 0) ))
+  if [[ "$age" -lt "$CACHE_TTL" ]]; then
+    cat "$CACHE"
+    exit 0
+  fi
+fi
+
+# Load credentials — never commit real values
+SECRETS_FILE="${HOME}/.mcp-secrets.env"
+if [[ -f "$SECRETS_FILE" ]]; then
+  # shellcheck disable=SC1090
+  set +u; source "$SECRETS_FILE"; set -u
+fi
+
+ECS_REGION="${ECS_REGION:-us-east-1}"
+ASC_APP_ID="${ASC_APP_ID:-6743893583}"
+
+# ── Temp files for parallel fetches ──────────────────────────────────────────
+TMP_ECS=$(mktemp /tmp/hm-ecs.XXXXXX)
+TMP_TF=$(mktemp /tmp/hm-tf.XXXXXX)
+TMP_ASC=$(mktemp /tmp/hm-asc.XXXXXX)
+TMP_WEB=$(mktemp /tmp/hm-web.XXXXXX)
+cleanup() { rm -f "$TMP_ECS" "$TMP_TF" "$TMP_ASC" "$TMP_WEB"; }
+trap cleanup EXIT
+
+# ── A. ECS service health ─────────────────────────────────────────────────────
+fetch_ecs() {
+  local out="$1"
+  local services_json="[]"
+
+  if ! command -v aws &>/dev/null; then
+    printf '{"error":"aws CLI not found"}' > "$out"; return
+  fi
+
+  local clusters
+  clusters=$(aws ecs list-clusters --region "$ECS_REGION" --output json 2>/dev/null \
+    | jq -r '.clusterArns[]?' || true)
+
+  if [[ -z "$clusters" ]]; then
+    printf '{"ecs":[]}' > "$out"; return
+  fi
+
+  local all_services="[]"
+  while IFS= read -r cluster_arn; do
+    [[ -z "$cluster_arn" ]] && continue
+    local svc_arns
+    svc_arns=$(aws ecs list-services --cluster "$cluster_arn" --region "$ECS_REGION" \
+      --output json 2>/dev/null | jq -r '.serviceArns[]?' || true)
+    [[ -z "$svc_arns" ]] && continue
+
+    # Describe up to 10 services at once (API limit)
+    local svc_array
+    svc_array=$(printf '%s\n' "$svc_arns" | head -10 | jq -Rsc 'split("\n") | map(select(. != ""))')
+
+    local desc
+    desc=$(aws ecs describe-services \
+      --cluster "$cluster_arn" \
+      --services $(printf '%s\n' "$svc_arns" | head -10 | tr '\n' ' ') \
+      --region "$ECS_REGION" \
+      --output json 2>/dev/null || echo '{"services":[]}')
+
+    local batch
+    batch=$(echo "$desc" | jq '[.services[]? | {
+      name: (.serviceName // "unknown"),
+      running: (.runningCount // 0),
+      desired: (.desiredCount // 0),
+      status: (.status // "UNKNOWN")
+    }]' 2>/dev/null || echo "[]")
+
+    all_services=$(echo "$all_services $batch" | jq -s 'add // []' 2>/dev/null || echo "[]")
+  done <<< "$clusters"
+
+  printf '{"ecs":%s}' "$all_services" > "$out"
+}
+
+# ── B. TestFlight installs (last 7d) via ASC API ──────────────────────────────
+fetch_testflight() {
+  local out="$1"
+
+  local key_id="${FASTLANE_ASC_API_KEY_ID:-}"
+  local issuer_id="${FASTLANE_ASC_API_KEY_ISSUER_ID:-}"
+  local p8_b64="${FASTLANE_ASC_API_KEY_P8_BASE64:-}"
+
+  if [[ -z "$key_id" || -z "$issuer_id" || -z "$p8_b64" ]]; then
+    printf '{"testflight":{"error":"ASC credentials not configured — set FASTLANE_ASC_API_KEY_ID, FASTLANE_ASC_API_KEY_ISSUER_ID, FASTLANE_ASC_API_KEY_P8_BASE64"}}' > "$out"
+    return
+  fi
+
+  local token
+  token=$(python3 - "$key_id" "$issuer_id" "$p8_b64" 2>/dev/null <<'PYEOF'
+import sys, base64, time, json
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import ec, padding
+from cryptography.hazmat.backends import default_backend
+
+key_id, issuer_id, p8_b64 = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# Decode P8 key
+try:
+    p8_pem = base64.b64decode(p8_b64)
+    private_key = serialization.load_pem_private_key(p8_pem, password=None, backend=default_backend())
+except Exception as e:
+    print(f"KEY_ERROR:{e}", file=sys.stderr)
+    sys.exit(1)
+
+now = int(time.time())
+header = {"alg": "ES256", "kid": key_id, "typ": "JWT"}
+payload = {"iss": issuer_id, "iat": now, "exp": now + 1200, "aud": "appstoreconnect-v1"}
+
+def b64url(data):
+    if isinstance(data, dict):
+        data = json.dumps(data, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+signing_input = f"{b64url(header)}.{b64url(payload)}"
+sig = private_key.sign(signing_input.encode(), ec.ECDSA(hashes.SHA256()))
+
+# DER -> (r, s) raw 64-byte signature for ES256
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+r, s = decode_dss_signature(sig)
+raw_sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+
+print(f"{signing_input}.{b64url(raw_sig)}")
+PYEOF
+)
+
+  if [[ -z "$token" || "$token" == KEY_ERROR* ]]; then
+    printf '{"testflight":{"error":"JWT signing failed"}}' > "$out"
+    return
+  fi
+
+  local from_date
+  from_date=$(date -d "7 days ago" +%Y-%m-%d 2>/dev/null || date -v-7d +%Y-%m-%d 2>/dev/null || date +%Y-%m-%d)
+  local today
+  today=$(date +%Y-%m-%d)
+
+  local response
+  response=$(curl -sf --max-time 15 \
+    -H "Authorization: Bearer $token" \
+    "https://api.appstoreconnect.apple.com/v1/betaTesterMetrics?filter[apps]=${ASC_APP_ID}&granularity=DAY&limit=7" \
+    2>/dev/null || echo '{}')
+
+  local installs_7d installs_today
+  installs_7d=$(echo "$response" | jq '[.data[]?.attributes?.inviteCount? // 0] | add // 0' 2>/dev/null || echo 0)
+  installs_today=$(echo "$response" | \
+    jq --arg d "$today" '[.data[]? | select(.attributes.date? == $d) | .attributes.inviteCount? // 0] | add // 0' \
+    2>/dev/null || echo 0)
+
+  printf '{"testflight":{"installs_7d":%s,"installs_today":%s}}' "$installs_7d" "$installs_today" > "$out"
+}
+
+# ── C. ASC app review state ───────────────────────────────────────────────────
+fetch_asc_state() {
+  local out="$1"
+
+  local key_id="${FASTLANE_ASC_API_KEY_ID:-}"
+  local issuer_id="${FASTLANE_ASC_API_KEY_ISSUER_ID:-}"
+  local p8_b64="${FASTLANE_ASC_API_KEY_P8_BASE64:-}"
+
+  if [[ -z "$key_id" || -z "$issuer_id" || -z "$p8_b64" ]]; then
+    printf '{"asc":{"error":"ASC credentials not configured"}}' > "$out"
+    return
+  fi
+
+  local token
+  token=$(python3 - "$key_id" "$issuer_id" "$p8_b64" 2>/dev/null <<'PYEOF'
+import sys, base64, time, json
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+key_id, issuer_id, p8_b64 = sys.argv[1], sys.argv[2], sys.argv[3]
+p8_pem = base64.b64decode(p8_b64)
+private_key = serialization.load_pem_private_key(p8_pem, password=None, backend=default_backend())
+now = int(time.time())
+header = {"alg": "ES256", "kid": key_id, "typ": "JWT"}
+payload = {"iss": issuer_id, "iat": now, "exp": now + 1200, "aud": "appstoreconnect-v1"}
+
+def b64url(data):
+    if isinstance(data, dict):
+        data = json.dumps(data, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+signing_input = f"{b64url(header)}.{b64url(payload)}"
+sig = private_key.sign(signing_input.encode(), ec.ECDSA(hashes.SHA256()))
+r, s = decode_dss_signature(sig)
+raw_sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+print(f"{signing_input}.{b64url(raw_sig)}")
+PYEOF
+)
+
+  if [[ -z "$token" ]]; then
+    printf '{"asc":{"error":"JWT signing failed"}}' > "$out"
+    return
+  fi
+
+  local response
+  response=$(curl -sf --max-time 15 \
+    -H "Authorization: Bearer $token" \
+    "https://api.appstoreconnect.apple.com/v1/apps/${ASC_APP_ID}/appStoreVersions?filter[platform]=IOS&limit=1" \
+    2>/dev/null || echo '{}')
+
+  local state version
+  state=$(echo "$response" | jq -r '.data[0].attributes.appStoreState? // "UNKNOWN"' 2>/dev/null || echo "UNKNOWN")
+  version=$(echo "$response" | jq -r '.data[0].attributes.versionString? // "?"' 2>/dev/null || echo "?")
+
+  printf '{"asc":{"state":"%s","version":"%s"}}' "$state" "$version" > "$out"
+}
+
+# ── D. Website visitors via Vercel Analytics ──────────────────────────────────
+fetch_vercel() {
+  local out="$1"
+
+  local token="${VERCEL_API_TOKEN:-}"
+  if [[ -z "$token" ]]; then
+    printf '{"website":{"error":"VERCEL_API_TOKEN not set"}}' > "$out"
+    return
+  fi
+
+  # Find the healify project
+  local projects
+  projects=$(curl -sf --max-time 15 \
+    -H "Authorization: Bearer $token" \
+    "https://api.vercel.com/v9/projects?limit=20" \
+    2>/dev/null || echo '{}')
+
+  local project_id
+  project_id=$(echo "$projects" | jq -r '
+    (.projects // .)?
+    | .[]?
+    | select(
+        (.name // "" | ascii_downcase | contains("healify")) or
+        ((.alias // [])[]? | ascii_downcase | contains("healify.ai"))
+      )
+    | .id
+    ' 2>/dev/null | head -1 || true)
+
+  if [[ -z "$project_id" ]]; then
+    printf '{"website":{"error":"healify project not found in Vercel"}}' > "$out"
+    return
+  fi
+
+  local now_ms seven_days_ago_ms
+  now_ms=$(( $(date +%s) * 1000 ))
+  seven_days_ago_ms=$(( now_ms - 7 * 24 * 3600 * 1000 ))
+
+  local stats
+  stats=$(curl -sf --max-time 15 \
+    -H "Authorization: Bearer $token" \
+    "https://vercel.com/api/web/insights/stats?projectId=${project_id}&from=${seven_days_ago_ms}&to=${now_ms}&environment=production" \
+    2>/dev/null || echo '{}')
+
+  local visitors pageviews
+  visitors=$(echo "$stats" | jq -r '.data.uniqueVisitors? // .visitors? // .data?.visitors? // 0' 2>/dev/null || echo 0)
+  pageviews=$(echo "$stats" | jq -r '.data.pageviews? // .data?.pageViews? // 0' 2>/dev/null || echo 0)
+
+  printf '{"website":{"visitors_7d":%s,"pageviews_7d":%s}}' "$visitors" "$pageviews" > "$out"
+}
+
+# ── Run all fetches in parallel ───────────────────────────────────────────────
+fetch_ecs     "$TMP_ECS"  &
+PID_ECS=$!
+fetch_testflight "$TMP_TF" &
+PID_TF=$!
+fetch_asc_state  "$TMP_ASC" &
+PID_ASC=$!
+fetch_vercel     "$TMP_WEB" &
+PID_WEB=$!
+
+wait "$PID_ECS"  || true
+wait "$PID_TF"   || true
+wait "$PID_ASC"  || true
+wait "$PID_WEB"  || true
+
+# ── Merge and write ───────────────────────────────────────────────────────────
+ECS_DATA=$(cat "$TMP_ECS"  2>/dev/null || echo '{"ecs":[]}')
+TF_DATA=$(cat  "$TMP_TF"   2>/dev/null || echo '{"testflight":{"error":"fetch failed"}}')
+ASC_DATA=$(cat "$TMP_ASC"  2>/dev/null || echo '{"asc":{"error":"fetch failed"}}')
+WEB_DATA=$(cat "$TMP_WEB"  2>/dev/null || echo '{"website":{"error":"fetch failed"}}')
+
+MERGED=$(jq -s '
+  reduce .[] as $item ({}; . * $item)
+  | .fetched_at = now | .fetched_at = (.fetched_at | todate)
+' \
+  <(echo "$ECS_DATA") \
+  <(echo "$TF_DATA") \
+  <(echo "$ASC_DATA") \
+  <(echo "$WEB_DATA") \
+  2>/dev/null || echo '{"error":"merge failed"}')
+
+printf '%s\n' "$MERGED" > "$CACHE"
+printf '%s\n' "$MERGED"

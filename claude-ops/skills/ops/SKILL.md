@@ -39,6 +39,7 @@ Route `$ARGUMENTS` to the correct ops skill:
 | next, priority, what                          | `/ops-next`             |
 | triage, issues                                | `/ops-triage`           |
 | linear, sprint, board                         | `/ops-linear`           |
+| healify, ios, testflight, asc, appstore        | `ops-healify-metrics --force` then print JSON |
 | revenue, money, mrr, costs                    | `/ops-revenue`          |
 | deploy, ship                                  | `/ops-deploy`           |
 | merge, prs, ship-prs                          | `/ops-merge $ARGUMENTS` |
