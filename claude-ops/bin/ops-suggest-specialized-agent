@@ -1,25 +1,15 @@
 #!/usr/bin/env bash
-# ops-suggest-specialized-agent — PreToolUse hook on Agent (silent + autonomous).
-#
-# When subagent_type=general-purpose:
-#   1. Load user-extensible keyword map (claude-ops/config/specialist-keywords.example.json
-#      with override at ~/.claude/plugins/data/ops-ops-marketplace/specialist-keywords.json).
-#   2. First regex match → verify the agent exists installed → silent swap via updatedInput.
-#   3. No match → fire-and-forget Haiku drafts a new ~/.claude/agents/<name>.md.
-#      Current call proceeds as general-purpose (no block).
+# ops-suggest-specialized-agent — PreToolUse hook (silent + autonomous, backgrounded).
+# Fast-return on disabled or non-general-purpose agents.
 set -e
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 . "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh" 2>/dev/null || { config() { echo "${2:-}"; }; }
-# Route claude invocations through the credit-pool wrapper when
-# CLAUDE_OPS_USE_CREDIT_POOL=1; otherwise calls claude directly.
-# shellcheck source=../scripts/lib/claude-invoke.sh
-. "$PLUGIN_ROOT/scripts/lib/claude-invoke.sh"
 
 [ "$(config suggest_specialized_agents true)" = "false" ] && exit 0
 
 INPUT=$(cat)
-subagent_type=$(printf '%s' "$INPUT" | jq -r '.tool_input.subagent_type // ""' 2>/dev/null)
-[ "$subagent_type" != "general-purpose" ] && exit 0
+subagent_type=$(printf '%s' "$INPUT" | jq -r '.tool_input.subagent_type // ""' 2>/dev/null || true)
+[ "$subagent_type" = "general-purpose" ] || exit 0
 
 prompt=$(printf '%s' "$INPUT" | jq -r '.tool_input.prompt // ""' 2>/dev/null)
 description=$(printf '%s' "$INPUT" | jq -r '.tool_input.description // ""' 2>/dev/null)
