@@ -141,12 +141,17 @@ function ensureMCPServersAndTools() {
   for (const a of actions) earlyLog(a);
 }
 
-// Unconditional warmup: every rotate.mjs run starts its MCP servers + tools FIRST.
-// Skip only for --help (where nothing runs downstream).
+// Warmup: rotate.mjs starts its MCP servers + tools (and emits the [bootstrap]
+// dependency diagnostics) FIRST. Skip for --help and for read-only commands
+// (--status/--utilization/--audit-billing/--recommend/--pick) that never touch
+// a browser — there the Chrome-not-found warning is pure noise.
+const READ_ONLY_FLAGS = ['--status', '--utilization', '--audit-billing', '--recommend', '--pick'];
+const _argvSlice = process.argv.slice(2);
 if (
-  !process.argv.slice(2).includes('--help') &&
-  !process.argv.slice(2).includes('--no-browser') &&
-  !process.argv.slice(2).includes('--pin-browser')
+  !_argvSlice.includes('--help') &&
+  !_argvSlice.includes('--no-browser') &&
+  !_argvSlice.includes('--pin-browser') &&
+  !READ_ONLY_FLAGS.some((f) => _argvSlice.includes(f))
 ) {
   ensureMCPServersAndTools();
 }
@@ -4443,6 +4448,122 @@ function captureCmd(targetEmail = null) {
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
+
+// Canonical flag allowlist. A tool that mutates live auth state must reject
+// unknown flags instead of silently falling through to the default rotation
+// path (where e.g. `--help` or a typo would rotate the account). Value-taking
+// flags (--to <email>, --ttl <n>, ...) are listed here; their *values* are
+// skipped by the validator below. --only=<key> is matched by prefix.
+const KNOWN_FLAGS = new Set([
+  '--help',
+  '--status',
+  '--utilization',
+  '--audit-billing',
+  '--recommend',
+  '--pick',
+  '--json',
+  '--setup',
+  '--auto',
+  '--skip-valid',
+  '--capture',
+  '--magic-link',
+  '--session',
+  '--no-browser',
+  '--force',
+  '--dry-run',
+  '--allow-exhausted',
+  '--no-bedrock-fallback',
+  '--allow-extra-usage', // legacy no-op, accepted for back-compat
+  '--pin-browser',
+  '--pin-browser-active',
+  '--release-browser-pin',
+  '--build-snapshot-from-api',
+  '--capture-oauth-snapshot',
+  '--colorize-chrome-profiles',
+  '--bootstrap-chrome-profile',
+  '--bootstrap-all-chrome-profiles',
+  '--all',
+  '--clone-from',
+  '--to',
+  '--ttl',
+]);
+// Flags that consume the following argv token as their value — that token is
+// not itself a flag and must be skipped during validation.
+const VALUE_FLAGS = new Set([
+  '--to',
+  '--ttl',
+  '--clone-from',
+  '--capture-oauth-snapshot',
+  '--build-snapshot-from-api',
+  '--bootstrap-chrome-profile',
+  '--pin-browser',
+]);
+
+function printUsage() {
+  console.log(`Claude Max Account Rotation
+
+Usage:
+  node rotate.mjs                            auto-rotate to lowest-utilization account
+  node rotate.mjs --to <email>               rotate to a specific account
+  node rotate.mjs --status                   show tracked state (read-only)
+  node rotate.mjs --utilization              live 5h/7d utilization per account (read-only)
+  node rotate.mjs --audit-billing            per-account extra_usage / overage audit (read-only)
+  node rotate.mjs --recommend [--json]       print the account the picker would choose (read-only)
+  node rotate.mjs --setup                    interactive: claude auth login per account
+  node rotate.mjs --setup --auto             automated magic-link + browser cascade, all accounts
+  node rotate.mjs --setup --auto --skip-valid  skip accounts whose vault token is still alive
+  node rotate.mjs --setup --only=<key>       re-capture a single account
+  node rotate.mjs --capture                  print the current active token (for Dashlane)
+  node rotate.mjs --magic-link --to <email>  re-auth via email magic link (no Google OAuth)
+
+Rotation modifiers:
+  --force                bypass the lock and kill competing rotations
+  --dry-run              report what would happen, change nothing
+  --session              also send /login to a running terminal session
+  --no-browser           fast path only; fail instead of opening a browser
+  --allow-exhausted      rotate even to an account over its util cap
+  --no-bedrock-fallback  do not fall back to Bedrock when all accounts are exhausted
+
+Run with no flags to auto-rotate. Unknown flags are rejected (this tool mutates
+live auth state, so a typo must never silently trigger a rotation).`);
+}
+
+// Validate flags BEFORE dispatch. Reject unknowns rather than letting them fall
+// through to the default rotation branch.
+{
+  const unknown = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a.startsWith('--')) continue; // a value or positional, not a flag
+    if (a.startsWith('--only=')) continue; // --only=<key>
+    if (!KNOWN_FLAGS.has(a)) {
+      unknown.push(a);
+      continue;
+    }
+    if (VALUE_FLAGS.has(a)) i++; // skip this flag's value token
+  }
+  if (args.includes('--help')) {
+    printUsage();
+    process.exit(0);
+  }
+  if (unknown.length) {
+    console.error(`Unknown flag(s): ${unknown.join(', ')}`);
+    console.error('Run `node rotate.mjs --help` for usage. No rotation performed.');
+    process.exit(2);
+  }
+  // Value-taking flags must actually receive a value. `--to` with no argument
+  // previously fell through to the default branch and silently auto-rotated.
+  for (const vf of VALUE_FLAGS) {
+    const idx = args.indexOf(vf);
+    if (idx === -1) continue;
+    const val = args[idx + 1];
+    if (val === undefined || val.startsWith('--')) {
+      console.error(`Flag ${vf} requires a value (got: ${val === undefined ? 'nothing' : val}).`);
+      console.error('Run `node rotate.mjs --help` for usage. No rotation performed.');
+      process.exit(2);
+    }
+  }
+}
 
 if (args.includes('--setup')) {
   await setup();
