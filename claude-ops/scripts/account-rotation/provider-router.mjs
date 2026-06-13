@@ -43,6 +43,7 @@ const ROUTE_PATH = join(HOME, '.claude', '.provider-route.json');
 const OAUTH_BETA = 'oauth-2025-04-20';
 const UPSTREAM_OAUTH = { host: 'api.anthropic.com', port: 443 };
 const IS_LINUX = process.platform === 'linux';
+const ACTIVE_KEYCHAIN_ACCOUNT = 'unknown';
 const KEYCHAIN_ACCOUNT =
   process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || process.env.LOGNAME || 'claude-ops';
 
@@ -61,9 +62,9 @@ function readRoute() {
   return { mode: 'oauth' }; // default: active OAuth account
 }
 
-function readKeychainEntry(service) {
+function readKeychainEntry(service, account = KEYCHAIN_ACCOUNT) {
   try {
-    const r = spawnSync('security', ['find-generic-password', '-s', service, '-a', KEYCHAIN_ACCOUNT, '-g'], {
+    const r = spawnSync('security', ['find-generic-password', '-s', service, '-a', account, '-g'], {
       timeout: 5000,
       encoding: 'utf8',
     });
@@ -100,7 +101,7 @@ function readActiveTokenEntry() {
       return null;
     }
   }
-  return readKeychainEntry('Claude Code-credentials');
+  return readKeychainEntry('Claude Code-credentials', ACTIVE_KEYCHAIN_ACCOUNT);
 }
 
 /** Resolve an OAuth accessToken for the chosen account (or the active one). */
