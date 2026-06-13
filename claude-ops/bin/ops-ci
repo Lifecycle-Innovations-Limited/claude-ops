@@ -3,18 +3,24 @@
 #
 # Returns workflows where the LATEST run on a tracked branch (main/dev/master)
 # is currently failing. Stale failures that have since been fixed by a newer
-# successful run are excluded — this prevents downstream consumers
-# (ops-fires, ops-go) from dispatching fix agents to already-resolved fires
-# and burning tokens.
+# successful run are excluded — checkSuites on HEAD commit already gives the
+# current-state signal directly.
 #
-# Algorithm per repo:
-#   1. Pull last 30 runs (any branch, any conclusion) — survey workflows in play
-#   2. Extract distinct workflow names from those runs
-#   3. For each workflow × tracked branch (main, dev, master), fetch latest run
-#   4. Emit only entries where conclusion == "failure"
+# Default mode uses a single GitHub GraphQL call (separate 5000/hr bucket,
+# never touches REST) to batch all repos × branches in one round-trip.
+# This replaces the previous per-repo × per-workflow × per-branch REST loops
+# that consumed dozens of gh-run-list calls per invocation (~2+ REST calls per
+# workflow per repo per branch).
 #
-# Override: OPS_CI_MODE=legacy reverts to "any failure in last 24h" (slower
-# but matches pre-1.7.x behaviour). Default is "current-state".
+# Algorithm (GraphQL / default "current" mode):
+#   1. Build one aliased GraphQL query covering ALL registry repos × 3 branches
+#   2. For each repo/branch, inspect checkSuites on the HEAD commit
+#   3. Collect suites where conclusion == FAILURE and workflowRun is present
+#   4. Emit {repos_with_failures:[{repo, failures:[{name,workflowName,headBranch,
+#      createdAt,conclusion,event}]}]} — same schema as before
+#
+# Override: OPS_CI_MODE=legacy reverts to per-repo REST scan (slower, pre-1.7.x
+# behaviour). Default is "current".
 
 set -euo pipefail
 
@@ -38,44 +44,111 @@ TRACKED_BRANCHES=("main" "dev" "master")
 TMPDIR_OPS=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_OPS"' EXIT
 
-# ─── Per-repo scan ──────────────────────────────────────────────────────────
-scan_repo_current() {
-  local repo="$1"
-  local safe_name
-  safe_name=$(echo "$repo" | tr '/' '_')
+# ─── GraphQL current-state scan (default) ───────────────────────────────────
+# Builds one aliased query covering every GitHub repo × every tracked branch,
+# then emits per-repo failure JSON. Non-GitHub entries (file:// paths, etc.)
+# are silently skipped. Repos the token cannot access return null data → skipped.
 
-  # Survey workflows in recent activity (last 30 runs across all branches)
-  local recent_workflows
-  recent_workflows=$(gh run list --repo "$repo" --limit 30 \
-    --json name,workflowName 2>/dev/null \
-    | jq -r '[.[] | (.workflowName // .name)] | unique | .[]' 2>/dev/null || true)
+scan_all_graphql() {
+  # Build the repo list as a JSON array for jq processing
+  local repos_json="[]"
+  local i=0
+  local repo_index_json="[]"   # [{idx, repo}] for alias→slug mapping
 
-  [ -z "$recent_workflows" ] && return 0
+  while IFS= read -r repo; do
+    [ -z "$repo" ] && continue
+    # Skip non-GitHub slugs (file:// local paths can leak into the registry)
+    case "$repo" in
+      file://*|/*) continue ;;
+    esac
+    repos_json=$(printf '%s' "$repos_json" | jq --arg r "$repo" --argjson i "$i" '. + [{"idx":$i,"repo":$r}]')
+    i=$((i + 1))
+  done <<< "$REPOS"
 
-  local failures="[]"
-  while IFS= read -r workflow; do
-    [ -z "$workflow" ] && continue
-    for branch in "${TRACKED_BRANCHES[@]}"; do
-      # Latest run for this workflow + branch
-      local latest
-      latest=$(gh run list --repo "$repo" --workflow "$workflow" --branch "$branch" --limit 1 \
-        --json name,headBranch,createdAt,conclusion,event,workflowName 2>/dev/null || echo '[]')
-
-      # Skip if no run, or latest is success/skipped/cancelled/in_progress
-      local conclusion
-      conclusion=$(echo "$latest" | jq -r '.[0].conclusion // empty' 2>/dev/null)
-      [ "$conclusion" != "failure" ] && continue
-
-      # Append to failures array
-      failures=$(echo "$failures" | jq --argjson new "$latest" '. + $new')
-    done
-  done <<< "$recent_workflows"
-
-  if [ "$(echo "$failures" | jq 'length')" -gt 0 ]; then
-    echo "{\"repo\":\"$repo\",\"failures\":$failures}" > "$TMPDIR_OPS/$safe_name.json"
+  local repo_count
+  repo_count=$(printf '%s' "$repos_json" | jq 'length')
+  if [ "$repo_count" -eq 0 ]; then
+    echo '{"repos_with_failures":[]}'
+    return
   fi
+
+  # Build the GraphQL query string.
+  # Each repo becomes alias r<N>; each branch becomes a named field.
+  # branch_frag is the repeated ref(…){…} fragment, inlined per branch.
+  local branch_frag=""
+  for branch in "${TRACKED_BRANCHES[@]}"; do
+    branch_frag+="${branch}: ref(qualifiedName: \"refs/heads/${branch}\") { target { ... on Commit { checkSuites(first: 50) { nodes { status conclusion workflowRun { workflow { name } event createdAt databaseId } } } } } } "
+  done
+
+  local query="{ "
+  while IFS= read -r entry; do
+    local idx owner name repo_slug
+    idx=$(printf '%s' "$entry" | jq -r '.idx')
+    repo_slug=$(printf '%s' "$entry" | jq -r '.repo')
+    owner="${repo_slug%%/*}"
+    name="${repo_slug#*/}"
+    query+="r${idx}: repository(owner: \"${owner}\", name: \"${name}\") { ${branch_frag}} "
+  done < <(printf '%s' "$repos_json" | jq -c '.[]')
+  query+="}"
+
+  # Fire the single GraphQL call
+  local gql_result
+  gql_result=$(gh api graphql -f query="$query" 2>/dev/null || echo '{}')
+
+  # Extract data (errors from NOT_FOUND/private repos are tolerated — those keys
+  # will simply have null values which the jq below skips gracefully)
+  local gql_data
+  gql_data=$(printf '%s' "$gql_result" | jq '.data // {}')
+
+  # For each repo alias, collect FAILURE suites → write per-repo JSON file
+  while IFS= read -r entry; do
+    local idx repo_slug owner safe_name alias
+    idx=$(printf '%s' "$entry" | jq -r '.idx')
+    repo_slug=$(printf '%s' "$entry" | jq -r '.repo')
+    safe_name=$(printf '%s' "$repo_slug" | tr '/' '_')
+    alias="r${idx}"
+
+    # Extract failures across all tracked branches.
+    # GraphQL conclusion is uppercase (FAILURE); normalize to lowercase for schema compat.
+    # checkSuites on HEAD can contain multiple runs of the same workflow (re-runs, schedules).
+    # Deduplicate: keep only the LATEST run per (workflowName, branch) — matching REST
+    # `--limit 1` semantics. Sort by createdAt desc, then unique_by(workflowName+branch).
+    local failures
+    failures=$(printf '%s' "$gql_data" | jq --arg alias "$alias" '
+      .[$alias] // {} |
+      [ to_entries[] |
+        . as {key: $branch, value: $bdata} |
+        if $bdata == null or $bdata.target == null then empty
+        else
+          ($bdata.target.checkSuites.nodes // [])[] |
+          select(
+            .workflowRun != null and
+            (.conclusion // "") == "FAILURE"
+          ) |
+          {
+            name:         .workflowRun.workflow.name,
+            workflowName: .workflowRun.workflow.name,
+            headBranch:   $branch,
+            createdAt:    .workflowRun.createdAt,
+            conclusion:   "failure",
+            event:        .workflowRun.event
+          }
+        end
+      ]
+      | sort_by(.createdAt) | reverse
+      | unique_by([.workflowName, .headBranch])
+    ' 2>/dev/null || echo '[]')
+
+    local fcount
+    fcount=$(printf '%s' "$failures" | jq 'length' 2>/dev/null || echo 0)
+    if [ "$fcount" -gt 0 ]; then
+      printf '{"repo":"%s","failures":%s}' "$repo_slug" "$failures" \
+        > "$TMPDIR_OPS/${safe_name}.json"
+    fi
+  done < <(printf '%s' "$repos_json" | jq -c '.[]')
 }
 
+# ─── Legacy REST scan (OPS_CI_MODE=legacy) ──────────────────────────────────
 scan_repo_legacy() {
   local repo="$1"
   local safe_name
@@ -90,17 +163,18 @@ scan_repo_legacy() {
   fi
 }
 
-for repo in $REPOS; do
-  (
-    if [ "$MODE" = "legacy" ]; then
-      scan_repo_legacy "$repo"
-    else
-      scan_repo_current "$repo"
-    fi
-  ) &
-done
-wait
+# ─── Dispatch ────────────────────────────────────────────────────────────────
+if [ "$MODE" = "legacy" ]; then
+  for repo in $REPOS; do
+    ( scan_repo_legacy "$repo" ) &
+  done
+  wait
+else
+  # Single GraphQL call — no background jobs needed
+  scan_all_graphql
+fi
 
+# ─── Emit output ─────────────────────────────────────────────────────────────
 echo -n '{"repos_with_failures":['
 first=true
 for f in "$TMPDIR_OPS"/*.json; do
