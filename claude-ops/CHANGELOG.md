@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.30.1] - 2026-06-13
+
+### Changed
+feat(rotation): SDK-credit quota-fallback tier; async hooks for faster startup; bg-respawn + rotate.mjs reliability improvements
+
+
 ## [2.29.1] - 2026-06-12
 
 ### Changed
