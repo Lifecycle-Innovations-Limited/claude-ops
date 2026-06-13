@@ -1,11 +1,5 @@
 # Changelog
 
-## [2.30.0] - 2026-06-12
-
-### Changed
-feat(whatsapp): /api/markread + full bridge API surface in MCP (mark_read, trigger_backfill, get_app_state_status, reconcile_archived)
-
-
 ## [2.29.1] - 2026-06-12
 
 ### Changed
