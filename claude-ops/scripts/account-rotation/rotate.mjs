@@ -4493,8 +4493,6 @@ const VALUE_FLAGS = new Set([
   '--to',
   '--ttl',
   '--clone-from',
-  '--capture-oauth-snapshot',
-  '--build-snapshot-from-api',
   '--bootstrap-chrome-profile',
   '--pin-browser',
 ]);
