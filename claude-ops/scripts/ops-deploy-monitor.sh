@@ -6,8 +6,11 @@
 # Single-flight via lock; budget-capped per repo per hour; transient detection.
 set -u
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-. "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh"
 
+# Single-instance guard - prevent stacking on rapid spawns
+source "$HOME/.claude/scripts/lib/once.sh"
+REPO="${1:?usage: $0 <owner/repo> <pr_number>}"
+claude_once "deploy-monitor-$REPO-${2:-0}" 300 || exit 0
 REPO="${1:?usage: $0 <owner/repo> <pr_number>}"
 PR="${2:?usage: $0 <owner/repo> <pr_number>}"
 SLUG=$(repo_slug_safe "$REPO")

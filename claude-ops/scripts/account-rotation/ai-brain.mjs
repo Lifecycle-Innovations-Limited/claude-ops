@@ -93,6 +93,77 @@ function resolveApiKey() {
   return null;
 }
 
+// ── AWS Bedrock detection ─────────────────────────────────────────────────────
+function canUseBedrock() {
+  // Bedrock is available if AWS CLI is installed and caller-identity works
+  try {
+    execFileSync('aws', ['sts', 'get-caller-identity'], {
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function askViaBedrock(model, content, log) {
+  // Map claude-haiku-4-5 → anthropic.claude-3-5-haiku-20241022-v1:0
+  const bedrockModelMap = {
+    'claude-haiku-4-5': 'us.anthropic.claude-3-5-haiku-20241022-v2:0',
+    'claude-sonnet-4-5': 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+    'claude-opus-4-8': 'us.anthropic.claude-opus-4-8-20250514-v1:0',
+    'claude-3-5-sonnet-20241022': 'us.anthropic.claude-3-5-sonnet-20241022-v2:0',
+    'claude-3-5-haiku-20241022': 'us.anthropic.claude-3-5-haiku-20241022-v2:0',
+  };
+  const bedrockModel = bedrockModelMap[model] || 'us.anthropic.claude-3-5-haiku-20241022-v2:0';
+  const region = process.env.AWS_BEDROCK_REGION || 'us-east-1';
+
+  const payload = {
+    anthropic_version: 'bedrock-2023-05-31',
+    max_tokens: 400,
+    messages: [{ role: 'user', content }],
+  };
+
+  try {
+    const result = execFileSync(
+      'aws',
+      [
+        'bedrock-runtime',
+        'invoke-model',
+        '--model-id',
+        bedrockModel,
+        '--region',
+        region,
+        '--body',
+        JSON.stringify(payload),
+        '/dev/stdout',
+      ],
+      {
+        timeout: REQUEST_TIMEOUT_MS,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        maxBuffer: 2 * 1024 * 1024,
+      },
+    );
+    const data = JSON.parse(result.toString());
+    const text = (data?.content || [])
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text || '')
+      .join(' ');
+    const parsed = parseActionJson(text);
+    if (parsed && parsed.action) {
+      log(`bedrock → ${parsed.action} ${parsed.reason || ''}`);
+      return parsed;
+    }
+    log(`bedrock returned unparseable: ${String(text).slice(0, 120)}`);
+    return { action: 'abort', reason: 'bedrock_unparseable' };
+  } catch (e) {
+    const msg = String(e.message || e).slice(0, 160);
+    log(`bedrock error: ${msg}`);
+    return { action: 'abort', reason: `bedrock_error: ${msg.slice(0, 80)}` };
+  }
+}
+
 // ── Snapshot: screenshot + structured DOM summary ────────────────────────────
 async function snapshotPage(page) {
   let screenshotB64 = null;
@@ -230,10 +301,13 @@ function parseActionJson(text) {
 export async function askAIBrain({ page, account, history, stallReason, logger }) {
   const log = logger || ((m) => console.error(`[ai-brain] ${m}`));
   const apiKey = resolveApiKey();
-  if (!apiKey) {
-    log('no ANTHROPIC_API_KEY available (env, Doppler, keychain all empty)');
+  const useBedrock = !apiKey && canUseBedrock();
+
+  if (!apiKey && !useBedrock) {
+    log('no ANTHROPIC_API_KEY available (env, Doppler, keychain all empty) and AWS Bedrock not available');
     return { action: 'abort', reason: 'no_api_key' };
   }
+
   const attempt = history.length + 1;
   if (attempt > MAX_DECISIONS) {
     return { action: 'abort', reason: `decision_cap_${MAX_DECISIONS}` };
@@ -255,6 +329,12 @@ export async function askAIBrain({ page, account, history, stallReason, logger }
   content.push({ type: 'text', text: prompt });
 
   const model = process.env.CLAUDE_ROTATOR_BRAIN_MODEL || DEFAULT_MODEL;
+
+  if (useBedrock) {
+    log(`asking ${model} via AWS Bedrock (attempt ${attempt}/${MAX_DECISIONS}) — stall: ${stallReason}`);
+    return askViaBedrock(model, content, log);
+  }
+
   log(`asking ${model} (attempt ${attempt}/${MAX_DECISIONS}) — stall: ${stallReason}`);
 
   try {
@@ -336,6 +416,70 @@ export async function executeAIAction(driver, action, { googlePassword } = {}) {
     }
   } catch {
     return false;
+  }
+}
+
+// ── Best-effort post-OAuth billing scrape ────────────────────────────────────
+// Reads the authenticated claude.ai billing settings page and pulls a coarse
+// billing snapshot { credits_usd, auto_reload_enabled, extra_usage_enabled }.
+// Purely optional telemetry: the authoritative billing signal already comes from
+// the /oauth/usage + /oauth/profile API path in rotate.mjs. This scrape only
+// enriches state.accounts[key].lastBilling. It MUST NEVER throw — any failure
+// (no page, navigation block, unparseable DOM) resolves to null, which the
+// caller treats as "skip the merge".
+const BILLING_URL = 'https://platform.claude.com/settings/billing';
+
+export async function scrapeBillingState(page, log = () => {}) {
+  if (!page || typeof page.goto !== 'function') return null;
+  if (!isAllowedGotoUrl(BILLING_URL)) return null;
+  try {
+    await page.goto(BILLING_URL, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+    // Settle async billing widgets; ignore networkidle timeout on chatty pages.
+    try {
+      await page.waitForLoadState('networkidle', { timeout: 8_000 });
+    } catch {}
+
+    const text = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
+    if (!text || text.length < 8) return null;
+
+    // credits_usd — first dollar amount near a "credit"/"balance" mention.
+    let credits_usd = null;
+    const creditLine = text
+      .split('\n')
+      .find((l) => /credit|balance/i.test(l) && /\$\s?\d/.test(l));
+    const dollarMatch = (creditLine || '').match(/\$\s?([\d,]+(?:\.\d{1,2})?)/);
+    if (dollarMatch) {
+      const n = parseFloat(dollarMatch[1].replace(/,/g, ''));
+      if (Number.isFinite(n)) credits_usd = n;
+    }
+
+    // auto_reload_enabled — explicit on/off copy near "auto reload".
+    let auto_reload_enabled = null;
+    const reloadMatch = text.match(/auto[\s-]?reload[^\n]*?\b(on|off|enabled|disabled)\b/i);
+    if (reloadMatch) {
+      auto_reload_enabled = /on|enabled/i.test(reloadMatch[1]);
+    }
+
+    // extra_usage_enabled — "extra usage" / "overage" on/off copy.
+    let extra_usage_enabled = null;
+    const extraMatch = text.match(
+      /(?:extra usage|overage)[^\n]*?\b(on|off|enabled|disabled)\b/i,
+    );
+    if (extraMatch) {
+      extra_usage_enabled = /on|enabled/i.test(extraMatch[1]);
+    }
+
+    // Nothing parsed → return null rather than an empty object.
+    if (credits_usd === null && auto_reload_enabled === null && extra_usage_enabled === null) {
+      return null;
+    }
+    log(
+      `[scrape-billing] credits=${credits_usd} auto_reload=${auto_reload_enabled} extra_usage=${extra_usage_enabled}`,
+    );
+    return { credits_usd, auto_reload_enabled, extra_usage_enabled };
+  } catch (e) {
+    log(`[scrape-billing] skipped: ${String(e.message || e).slice(0, 100)}`);
+    return null;
   }
 }
 
