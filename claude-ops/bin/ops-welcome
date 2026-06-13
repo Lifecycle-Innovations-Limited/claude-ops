@@ -7,26 +7,22 @@ set -euo pipefail
 PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
 [ ! -f "$PREFS" ] || exit 0
 
-# --- Color setup (degrade gracefully) ---
-if [[ -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
-  RST=$'\033[0m'
-  BOLD=$'\033[1m'
-  DIM=$'\033[2m'
-  CYN=$'\033[36m'
-  GRN=$'\033[32m'
-  YLW=$'\033[33m'
-  WHT=$'\033[37m'
-  BCYN=$'\033[1;36m'
-  BGRN=$'\033[1;32m'
-  BWHT=$'\033[1;37m'
+# Degrade gracefully on dumb terminals or when async
+if [[ -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" && -t 1 ]]; then
+  RST=$'\033[0m' BOLD=$'\033[1m' DIM=$'\033[2m' CYN=$'\033[36m' GRN=$'\033[32m'
+  YLW=$'\033[33m' WHT=$'\033[37m' BCYN=$'\033[1;36m' BGRN=$'\033[1;32m' BWHT=$'\033[1;37m'
 else
   RST="" BOLD="" DIM="" CYN="" GRN="" YLW="" WHT="" BCYN="" BGRN="" BWHT=""
 fi
 
-# --- Helpers ---
-D=0.025  # delay between lines
+# Fast path on async (no TTY → skip animation)
+[[ ! -t 1 ]] && {
+  printf "%b" "${BWHT}CLI initialized${RST} — run ${BCYN}/ops:setup${RST} or ${BCYN}/ops:go${RST}\n"
+  exit 0
+}
+
+D=0.025
 p() { printf '%s\n' "$1"; sleep "$D"; }
-dp() { sleep "${2:-0.08}"; printf '%s\n' "$1"; }
 
 # --- Blank line spacer ---
 p ""

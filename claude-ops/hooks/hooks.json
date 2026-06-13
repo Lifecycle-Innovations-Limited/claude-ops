@@ -6,7 +6,8 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-inbox-autosync 2>/dev/null || true",
-            "timeout": 5
+            "timeout": 1,
+            "async": true
           }
         ]
       }
@@ -16,19 +17,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-welcome 2>/dev/null || true"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-welcome 2>/dev/null || true",
+            "async": true
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh 2>/dev/null | grep '\u2717' | head -3 || true"
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh 2>/dev/null | grep '\u2717' | head -3 || true",
+            "async": true
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon-manager.sh ensure-current --plugin-root ${CLAUDE_PLUGIN_ROOT} 2>/dev/null || true"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon-manager.sh ensure-current --plugin-root ${CLAUDE_PLUGIN_ROOT} 2>/dev/null || true",
+            "async": true
           },
           {
             "type": "command",
-            "command": "CLAUDE_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT} bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-post-update-migrate 2>/dev/null || true"
+            "command": "CLAUDE_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT} bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-post-update-migrate 2>/dev/null || true",
+            "async": true
           }
         ]
       }
@@ -39,7 +44,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-pretool-whatsapp-bridge-health \"$TOOL_INPUT\" 2>/dev/null || true"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-pretool-whatsapp-bridge-health \"$TOOL_INPUT\" 2>/dev/null || true",
+            "async": true
           }
         ]
       },
@@ -49,7 +55,7 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-suggest-specialized-agent 2>/dev/null || true",
-            "timeout": 3
+            "timeout": 1
           }
         ]
       }
@@ -61,7 +67,7 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-deploy-fix-merge-trigger 2>/dev/null || true",
-            "timeout": 5,
+            "timeout": 1,
             "if": "Bash(gh pr merge *)"
           },
           {
@@ -78,7 +84,7 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-task-reminder 2>/dev/null || true",
-            "timeout": 3
+            "timeout": 2
           }
         ]
       }
