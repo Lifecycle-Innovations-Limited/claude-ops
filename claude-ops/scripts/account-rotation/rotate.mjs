@@ -51,7 +51,18 @@ import { applyAccountLeases, writeLease } from './account-leases.mjs';
 import { respawnBgSessions } from './bg-respawn.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, 'config.json');
+// Account config lives in the gitignored user data dir (written by
+// setup-account.mjs, Rule 0: no real account data in the committed repo).
+// Prefer it; fall back to the committed repo default at __dirname/config.json.
+const CONFIG_USER_PATH = join(
+  process.env.CLAUDE_PLUGIN_DATA_DIR ||
+    join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace'),
+  'account-rotation-config.json',
+);
+const CONFIG_REPO_PATH = join(__dirname, 'config.json');
+const CONFIG_PATH =
+  process.env.CLAUDE_ROTATOR_CONFIG ||
+  (existsSync(CONFIG_USER_PATH) ? CONFIG_USER_PATH : CONFIG_REPO_PATH);
 const STATE_PATH = join(__dirname, 'state.json');
 const LOCK_PATH = join(__dirname, '.rotating');
 const LOG_PATH = join(__dirname, 'rotation.log');
