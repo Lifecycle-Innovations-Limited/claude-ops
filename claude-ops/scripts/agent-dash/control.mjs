@@ -17,7 +17,9 @@ function fraSshHost() {
   try {
     const host = JSON.parse(readFileSync(REMOTE_CACHE, 'utf8'))?.meta?.source?.trim();
     if (host) return host;
-  } catch { /* use default */ }
+  } catch {
+    /* use default */
+  }
   return FRA_HOSTS[0].trim();
 }
 const OPS_BG = process.env.OPS_BG_BIN || `${HOME}/Projects/claude-ops/claude-ops/bin/ops-bg`;
@@ -51,7 +53,11 @@ function runForeground(cmd, args) {
 // Run a non-interactive command, capture output. { ok, out, err }
 function runCapture(cmd, args, opts = {}) {
   try {
-    const out = execFileSync(cmd, args, { encoding: 'utf8', timeout: opts.timeout || 20000, stdio: ['ignore', 'pipe', 'pipe'] });
+    const out = execFileSync(cmd, args, {
+      encoding: 'utf8',
+      timeout: opts.timeout || 20000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     return { ok: true, out: out.trim(), err: '' };
   } catch (e) {
     return { ok: false, out: (e.stdout || '').toString().trim(), err: (e.stderr || e.message || '').toString().trim() };
@@ -78,10 +84,15 @@ export function attach(a) {
   }
   if (a.type === 'agy') {
     const sub = `agy --conversation ${a.sessionId}`;
-    if (a.host === 'fra') { const [c, args] = remote(sub, true); return runForeground(c, args); }
+    if (a.host === 'fra') {
+      const [c, args] = remote(sub, true);
+      return runForeground(c, args);
+    }
     return runForeground('agy', ['--conversation', a.sessionId]);
   }
-  process.stderr.write(`attach: ${a.type} has no attach surface (pid ${a.pid}). Use tmux attach if it runs in a pane.\n`);
+  process.stderr.write(
+    `attach: ${a.type} has no attach surface (pid ${a.pid}). Use tmux attach if it runs in a pane.\n`,
+  );
   return 2;
 }
 
@@ -96,7 +107,7 @@ export function steer(a, message) {
       return { ok: r.ok, msg: r.ok ? `steered ${a.id} on fra` : r.err };
     }
     const r = runCapture(OPS_BG, ['send', a.id, message]);
-    return { ok: r.ok, msg: r.ok ? `steered ${a.id}` : (r.err || r.out) };
+    return { ok: r.ok, msg: r.ok ? `steered ${a.id}` : r.err || r.out };
   }
   if (a.type === 'agy') {
     return { ok: false, msg: 'agy has no live-steer; use revive (--conversation) to resume interactively' };
@@ -110,7 +121,10 @@ export function steer(a, message) {
 export function revive(a) {
   if (a.type === 'claude') {
     if (a.host === 'fra') {
-      const [c, args] = remote(`CLAUDE_NO_TMUX=1 claude attach ${a.id} || CLAUDE_NO_TMUX=1 claude -r ${a.sessionId}`, true);
+      const [c, args] = remote(
+        `CLAUDE_NO_TMUX=1 claude attach ${a.id} || CLAUDE_NO_TMUX=1 claude -r ${a.sessionId}`,
+        true,
+      );
       return runForeground(c, args);
     }
     const code = runForeground(claudeBin(), ['attach', a.id]);
@@ -118,7 +132,10 @@ export function revive(a) {
     return code;
   }
   if (a.type === 'agy') {
-    if (a.host === 'fra') { const [c, args] = remote(`agy --conversation ${a.sessionId}`, true); return runForeground(c, args); }
+    if (a.host === 'fra') {
+      const [c, args] = remote(`agy --conversation ${a.sessionId}`, true);
+      return runForeground(c, args);
+    }
     return runForeground('agy', ['--conversation', a.sessionId]);
   }
   process.stderr.write(`revive: no resume surface for ${a.type}\n`);
@@ -133,7 +150,7 @@ export function kill(a) {
       return { ok: r.ok, msg: r.ok ? `stopped ${a.id} on fra` : r.err };
     }
     const r = runCapture(claudeBin(), ['stop', a.id]);
-    return { ok: r.ok, msg: r.ok ? `stopped ${a.id}` : (r.err || r.out) };
+    return { ok: r.ok, msg: r.ok ? `stopped ${a.id}` : r.err || r.out };
   }
   // procs / agy: kill by pid
   if (a.pid) {
@@ -141,8 +158,12 @@ export function kill(a) {
       const r = runCapture(...remote(`kill ${a.pid}`));
       return { ok: r.ok, msg: r.ok ? `killed pid ${a.pid} on fra` : r.err };
     }
-    try { process.kill(a.pid); return { ok: true, msg: `killed pid ${a.pid}` }; }
-    catch (e) { return { ok: false, msg: e.message }; }
+    try {
+      process.kill(a.pid);
+      return { ok: true, msg: `killed pid ${a.pid}` };
+    } catch (e) {
+      return { ok: false, msg: e.message };
+    }
   }
   return { ok: false, msg: `nothing to kill for ${a.type} (no pid/session)` };
 }
@@ -153,10 +174,13 @@ export function archive(a) {
   let res;
   if (a.type === 'claude') {
     if (a.host === 'fra') {
-      res = (() => { const r = runCapture(...remote(`CLAUDE_NO_TMUX=1 claude rm ${a.id}`)); return { ok: r.ok, msg: r.ok ? `rm ${a.id} on fra` : r.err }; })();
+      res = (() => {
+        const r = runCapture(...remote(`CLAUDE_NO_TMUX=1 claude rm ${a.id}`));
+        return { ok: r.ok, msg: r.ok ? `rm ${a.id} on fra` : r.err };
+      })();
     } else {
       const r = runCapture(claudeBin(), ['rm', a.id]);
-      res = { ok: r.ok, msg: r.ok ? `rm ${a.id}` : (r.err || r.out) };
+      res = { ok: r.ok, msg: r.ok ? `rm ${a.id}` : r.err || r.out };
     }
   } else {
     res = kill(a);
@@ -164,15 +188,28 @@ export function archive(a) {
   if (!res.ok) return res;
   try {
     if (!existsSync(dirname(ARCHIVE_LOG))) mkdirSync(dirname(ARCHIVE_LOG), { recursive: true });
-    appendFileSync(ARCHIVE_LOG, JSON.stringify({
-      ts: new Date().toISOString(), id: a.id, sessionId: a.sessionId, name: a.name,
-      type: a.type, host: a.host, cwd: a.cwd, lastStatus: a.status,
-    }) + '\n');
-  } catch (e) { res.msg += ` (archive-log: ${e.message})`; }
+    appendFileSync(
+      ARCHIVE_LOG,
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        id: a.id,
+        sessionId: a.sessionId,
+        name: a.name,
+        type: a.type,
+        host: a.host,
+        cwd: a.cwd,
+        lastStatus: a.status,
+      }) + '\n',
+    );
+  } catch (e) {
+    res.msg += ` (archive-log: ${e.message})`;
+  }
   return res;
 }
 
 // shell-quote a single arg for remote ssh command strings
-function shq(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
+function shq(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
 
 export const ACTIONS = { attach, steer, revive, kill, archive };

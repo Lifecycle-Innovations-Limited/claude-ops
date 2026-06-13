@@ -31,7 +31,9 @@ function readCache() {
   try {
     const c = JSON.parse(readFileSync(REMOTE_CACHE, 'utf8'));
     if (c && Array.isArray(c.agents)) return c;
-  } catch { /* none */ }
+  } catch {
+    /* none */
+  }
   return null;
 }
 
@@ -39,11 +41,15 @@ function writeCache(agents, meta) {
   try {
     if (!existsSync(STATE_DIR)) mkdirSync(STATE_DIR, { recursive: true });
     writeFileSync(REMOTE_CACHE, JSON.stringify({ agents, meta, ts: nowTs() }));
-  } catch { /* best effort */ }
+  } catch {
+    /* best effort */
+  }
 }
 
 // nowTs avoids Date.now() (banned in workflow scripts; fine here but keep one source)
-function nowTs() { return Date.now(); }
+function nowTs() {
+  return Date.now();
+}
 
 // --- local -----------------------------------------------------------------
 
@@ -87,7 +93,9 @@ export function collectRemote({ force = false } = {}) {
   }
 
   let probeSrc;
-  try { probeSrc = readFileSync(PROBE, 'utf8'); } catch {
+  try {
+    probeSrc = readFileSync(PROBE, 'utf8');
+  } catch {
     return { agents: cache?.agents || [], stale: true, source: 'no-probe', cached: !!cache };
   }
 
@@ -96,7 +104,9 @@ export function collectRemote({ force = false } = {}) {
       const agents = probeRemoteHost(h.trim(), probeSrc);
       writeCache(agents, { source: h.trim() });
       return { agents, stale: false, source: h.trim(), cached: false };
-    } catch { /* try next host */ }
+    } catch {
+      /* try next host */
+    }
   }
 
   // all FRA hosts failed — serve last-known cache, flagged stale

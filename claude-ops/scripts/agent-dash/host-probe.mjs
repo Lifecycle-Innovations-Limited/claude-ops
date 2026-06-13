@@ -23,7 +23,12 @@ const WORKING_MS = 120 * 1000; // transcript activity within 2min => actively wo
 
 function pidAlive(pid) {
   if (!pid) return false;
-  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -69,7 +74,13 @@ function tailLines(path, maxBytes = 96 * 1024) {
   } catch {
     return [];
   } finally {
-    if (fd !== undefined) { try { closeSync(fd); } catch { /* ignore */ } }
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
   }
 }
 
@@ -84,7 +95,9 @@ function deriveFromTranscript(path) {
     try {
       const ts = JSON.parse(lines[i]).timestamp;
       if (ts) out.lastActivity = new Date(ts).getTime();
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
 
   // Walk backward for the most recent meaningful action; detect an
@@ -95,7 +108,11 @@ function deriveFromTranscript(path) {
 
   for (let i = lines.length - 1; i >= 0; i--) {
     let ev;
-    try { ev = JSON.parse(lines[i]); } catch { continue; }
+    try {
+      ev = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
     const msg = ev.message || ev;
     const role = msg.role || ev.type;
     const content = msg.content;
@@ -113,7 +130,9 @@ function deriveFromTranscript(path) {
             try {
               const q = block.input?.questions?.[0]?.question || block.input?.plan;
               if (q && !askText) askText = firstLine(q);
-            } catch { /* skip */ }
+            } catch {
+              /* skip */
+            }
           }
           if (!out.doing) out.doing = `→ ${name}`;
         }
@@ -133,7 +152,8 @@ function deriveFromTranscript(path) {
     out.decision = askText || 'awaiting user decision';
   }
   // any tool_use without a tool_result = work in flight (used for stuck detection)
-  out.pendingToolUse = [...satisfiedToolUseIds].length < lines.length && hasUnsatisfiedToolUse(lines, satisfiedToolUseIds);
+  out.pendingToolUse =
+    [...satisfiedToolUseIds].length < lines.length && hasUnsatisfiedToolUse(lines, satisfiedToolUseIds);
   return out;
 }
 
@@ -141,7 +161,11 @@ function deriveFromTranscript(path) {
 function hasUnsatisfiedToolUse(lines, satisfied) {
   for (let i = lines.length - 1; i >= 0; i--) {
     let ev;
-    try { ev = JSON.parse(lines[i]); } catch { continue; }
+    try {
+      ev = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
     const msg = ev.message || ev;
     const content = msg.content;
     if (!Array.isArray(content)) continue;
@@ -174,7 +198,11 @@ function probeClaude() {
   const rosterPath = join(HOME, '.claude', 'daemon', 'roster.json');
   if (!existsSync(rosterPath)) return [];
   let roster;
-  try { roster = JSON.parse(readFileSync(rosterPath, 'utf8')); } catch { return []; }
+  try {
+    roster = JSON.parse(readFileSync(rosterPath, 'utf8'));
+  } catch {
+    return [];
+  }
   const workers = roster.workers || {};
 
   return Object.entries(workers).map(([short, w]) => {
@@ -212,7 +240,8 @@ function probeClaude() {
     }
 
     const idleFor = rec.lastActivity ? NOW - rec.lastActivity : Infinity;
-    if (!alive) rec.status = 'zombie';            // roster entry, dead pid
+    if (!alive)
+      rec.status = 'zombie'; // roster entry, dead pid
     else if (rec.needs_user) rec.status = 'needs-sam';
     else if (pending && idleFor > STUCK_MS) rec.status = 'stuck';
     else if (idleFor < WORKING_MS) rec.status = 'working';
@@ -233,14 +262,20 @@ function probeAgy(psLines) {
   let dbs = [];
   try {
     dbs = readdirSync(convDir).filter((f) => f.endsWith('.db'));
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 
   // surface only the few most-recently-touched conversations to avoid noise
   const ranked = dbs
     .map((f) => {
       const p = join(convDir, f);
       let mt = 0;
-      try { mt = statSync(p).mtimeMs; } catch { /* skip */ }
+      try {
+        mt = statSync(p).mtimeMs;
+      } catch {
+        /* skip */
+      }
       return { uuid: f.replace(/\.db$/, ''), mtime: mt };
     })
     .sort((a, b) => b.mtime - a.mtime)
@@ -314,9 +349,21 @@ function main() {
   const all = [];
   // one shared process snapshot for agy-liveness + other-agent detection
   const psLines = sh('ps -eo pid,command 2>/dev/null || ps awwxo pid,command', 5000).split('\n').filter(Boolean);
-  try { all.push(...probeClaude()); } catch { /* degrade */ }
-  try { all.push(...probeAgy(psLines)); } catch { /* degrade */ }
-  try { all.push(...probeProcs(psLines)); } catch { /* degrade */ }
+  try {
+    all.push(...probeClaude());
+  } catch {
+    /* degrade */
+  }
+  try {
+    all.push(...probeAgy(psLines));
+  } catch {
+    /* degrade */
+  }
+  try {
+    all.push(...probeProcs(psLines));
+  } catch {
+    /* degrade */
+  }
   process.stdout.write(JSON.stringify(all));
 }
 

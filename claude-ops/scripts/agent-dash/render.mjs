@@ -2,26 +2,41 @@
 // and returns ANSI strings. Raw escape codes (no deps), statusline-style.
 
 const C = {
-  reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m',
-  red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', blue: '\x1b[34m',
-  magenta: '\x1b[35m', cyan: '\x1b[36m', white: '\x1b[37m', gray: '\x1b[90m',
-  brightYellow: '\x1b[93m', brightRed: '\x1b[91m', brightGreen: '\x1b[92m',
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  dim: '\x1b[2m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  magenta: '\x1b[35m',
+  cyan: '\x1b[36m',
+  white: '\x1b[37m',
+  gray: '\x1b[90m',
+  brightYellow: '\x1b[93m',
+  brightRed: '\x1b[91m',
+  brightGreen: '\x1b[92m',
   invert: '\x1b[7m',
 };
 
 // status → { dot, color, label }
 const STATUS = {
-  working:    { dot: '●', color: C.green,        label: 'working'  },
-  idle:       { dot: '○', color: C.gray,         label: 'idle'     },
-  'needs-sam':{ dot: '◆', color: C.brightYellow, label: 'NEEDS YOU'},
-  blocked:    { dot: '■', color: C.magenta,      label: 'blocked'  },
-  stuck:      { dot: '▲', color: C.yellow,       label: 'stuck'    },
-  dead:       { dot: '✕', color: C.brightRed,    label: 'dead'     },
-  zombie:     { dot: '☠', color: C.red + C.dim,  label: 'zombie'   },
+  working: { dot: '●', color: C.green, label: 'working' },
+  idle: { dot: '○', color: C.gray, label: 'idle' },
+  'needs-sam': { dot: '◆', color: C.brightYellow, label: 'NEEDS YOU' },
+  blocked: { dot: '■', color: C.magenta, label: 'blocked' },
+  stuck: { dot: '▲', color: C.yellow, label: 'stuck' },
+  dead: { dot: '✕', color: C.brightRed, label: 'dead' },
+  zombie: { dot: '☠', color: C.red + C.dim, label: 'zombie' },
 };
 
 const TYPE_GLYPH = {
-  claude: 'cc', agy: 'agy', codex: 'cdx', cursor: 'cur', openclaw: 'ocl', other: '·',
+  claude: 'cc',
+  agy: 'agy',
+  codex: 'cdx',
+  cursor: 'cur',
+  openclaw: 'ocl',
+  other: '·',
 };
 
 export const STATUS_ORDER = ['needs-sam', 'blocked', 'stuck', 'working', 'idle', 'zombie', 'dead'];
@@ -62,7 +77,10 @@ function row(a, width, selected) {
   const dot = `${st.color}${st.dot}${C.reset}${sel}`;
   const statusLbl = `${st.color}${pad(st.label, 9)}${C.reset}${sel}`;
   const name = pad(a.name || a.id, 18);
-  const doing = a.needs_user && a.decision ? `${C.brightYellow}? ${a.decision}${C.reset}${sel}` : (a.doing || `${C.gray}—${C.reset}${sel}`);
+  const doing =
+    a.needs_user && a.decision
+      ? `${C.brightYellow}? ${a.decision}${C.reset}${sel}`
+      : a.doing || `${C.gray}—${C.reset}${sel}`;
   const age = pad(ageStr(a.lastActivity), 4);
 
   let line;
@@ -79,7 +97,9 @@ function row(a, width, selected) {
 }
 
 // width of a string ignoring ANSI codes
-function stripWidth(s) { return s.replace(/\x1b\[[0-9;]*m/g, ''); }
+function stripWidth(s) {
+  return s.replace(/\x1b\[[0-9;]*m/g, '');
+}
 function truncAnsi(s, n) {
   // crude: if visible length exceeds n, slice the visible text
   const vis = stripWidth(s);
@@ -93,21 +113,27 @@ export function renderDashboard(snapshot, { width = 100, selectedIdx = 0, status
   const total = agents.length;
   const needs = agents.filter((a) => a.status === 'needs-sam').length;
   const fra = snapshot.hosts?.fra || {};
-  const fraTag = fra.stale ? `${C.red}stale${C.reset}` : fra.cached ? `${C.gray}cached${C.reset}` : `${C.green}live${C.reset}`;
+  const fraTag = fra.stale
+    ? `${C.red}stale${C.reset}`
+    : fra.cached
+      ? `${C.gray}cached${C.reset}`
+      : `${C.green}live${C.reset}`;
 
   // header
   lines.push(
     `${C.bold}${C.cyan}AGENT-DASH${C.reset}  ${C.bold}${total}${C.reset} agents` +
-    `  ${C.dim}·${C.reset} mac ${snapshot.hosts?.mac?.count ?? 0}` +
-    `  ${C.dim}·${C.reset} fra ${fra.count ?? 0} (${fraTag})` +
-    (needs ? `  ${C.brightYellow}${C.bold}◆ ${needs} need you${C.reset}` : '') +
-    `  ${C.gray}${new Date(snapshot.ts).toLocaleTimeString()}${C.reset}`,
+      `  ${C.dim}·${C.reset} mac ${snapshot.hosts?.mac?.count ?? 0}` +
+      `  ${C.dim}·${C.reset} fra ${fra.count ?? 0} (${fraTag})` +
+      (needs ? `  ${C.brightYellow}${C.bold}◆ ${needs} need you${C.reset}` : '') +
+      `  ${C.gray}${new Date(snapshot.ts).toLocaleTimeString()}${C.reset}`,
   );
   lines.push(`${C.gray}${'─'.repeat(Math.min(width, 120))}${C.reset}`);
 
   // group by host
   const byHost = {};
-  agents.forEach((a, i) => { (byHost[a.host] ||= []).push({ a, i }); });
+  agents.forEach((a, i) => {
+    (byHost[a.host] ||= []).push({ a, i });
+  });
   const hostOrder = ['mac', 'fra', ...Object.keys(byHost).filter((h) => h !== 'mac' && h !== 'fra')];
 
   let flat = 0;
