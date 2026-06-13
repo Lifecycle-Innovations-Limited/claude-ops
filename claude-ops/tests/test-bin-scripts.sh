@@ -14,11 +14,18 @@ fail=0
 ok()   { echo "  PASS: $1"; pass=$((pass+1)); }
 err()  { echo "  FAIL: $1"; fail=$((fail+1)); }
 
-# Collect all bin scripts (skip .mjs and non-executables that are node/python)
+# Collect all bin scripts (skip .mjs and non-bash interpreters like node/python)
 script_files=()
 while IFS= read -r -d '' f; do
   # Skip .mjs node scripts — they're valid but not bash
   [[ "$f" == *.mjs ]] && continue
+  # Skip non-bash scripts by shebang (node/python entry points live in bin/ too,
+  # e.g. bin/agent-dash uses #!/usr/bin/env node). The bash-only shebang and
+  # lint checks below only apply to shell scripts.
+  first_line=$(head -1 "$f" 2>/dev/null || true)
+  if echo "$first_line" | grep -qE "^#!.*(node|python)"; then
+    continue
+  fi
   script_files+=("$f")
 done < <(find "$BIN_DIR" -maxdepth 1 -type f -print0 2>/dev/null)
 
