@@ -97,32 +97,37 @@ cmd_dispatch() {
   args+=("${extra[@]}")
   # Never let agents inherit the API key — force OAuth (subscription) auth.
   unset ANTHROPIC_API_KEY
+  # Doppler-wrap the launch (unless the caller already provisioned the env):
+  # raw `claude --bg` launches skip secret injection, so the session's MCP
+  # servers start credential-less and silently fail auth. Project/config match
+  # the orchestrator keepalive spawn. Override with OPS_BG_ENV_PROVISIONED=1
+  # or OPS_BG_NO_DOPPLER=1.
+  DOPPLER_BIN="${DOPPLER_BIN:-/opt/homebrew/bin/doppler}"
+  if [ -z "${OPS_BG_ENV_PROVISIONED:-}" ] && [ -z "${OPS_BG_NO_DOPPLER:-}" ] && [ -x "$DOPPLER_BIN" ]; then
+    exec env OPS_BG_ENV_PROVISIONED=1 "$DOPPLER_BIN" run -p mcp-servers -c dev -- "$CLAUDE_BIN" "${args[@]}"
+  fi
   exec "$CLAUDE_BIN" "${args[@]}"
 }
 
 cmd_list() {
-  local fmt="pretty"
-  if [ "${1:-}" = "--json" ]; then fmt="json"; fi
+  # Pure pass-through to the native fleet introspection (2026-06-12 shrink):
+  # `claude agents --json` carries native id/state fields since 2.1.169 —
+  # no custom roster parsing needed. `--all` includes completed sessions.
+  if [ "${1:-}" = "--json" ]; then
+    shift
+    exec "$CLAUDE_BIN" agents --json "$@"
+  fi
+  if [ "${1:-}" = "--all" ]; then
+    exec "$CLAUDE_BIN" agents --json --all
+  fi
   local raw
   raw="$("$CLAUDE_BIN" agents --json 2>/dev/null || echo '')"
   if [ -z "$raw" ]; then
     echo "ops-bg: claude agents --json returned empty (supervisor unreachable?)" >&2
     return 1
   fi
-  if [ "$fmt" = "json" ]; then
-    echo "$raw" | jq '[.[] | select(.kind == "background")]'
-    return
-  fi
   command -v jq >/dev/null 2>&1 || { echo "$raw"; return; }
-  local n
-  n=$(echo "$raw" | jq '[.[] | select(.kind == "background")] | length')
-  printf 'background sessions: %s\n' "$n"
-  if [ "$n" -gt 0 ]; then
-    echo "$raw" | jq -r '
-      .[] | select(.kind == "background")
-      | "  \(.sessionId[0:8])  \(.status)  pid=\(.pid)  cwd=\(.cwd)"
-    '
-  fi
+  echo "$raw" | jq -r '.[] | "  \(.sessionId[0:8])  \(.status // .state // "-")  \(.name // "-")  \(.cwd // "-")"'
 }
 
 cmd_status() {
