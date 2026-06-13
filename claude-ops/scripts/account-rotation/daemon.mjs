@@ -1531,7 +1531,22 @@ async function mainLoop() {
       }
 
       const sentinelPath = join(process.env.HOME || '', '.claude', '.bedrock-fallback.json');
-      if (existsSync(sentinelPath)) {
+      // Effective-Bedrock detection: settings.json can be flipped to Bedrock
+      // WITHOUT writing the sentinel (use-bedrock.sh, release-session routing,
+      // manual edits). In that case the metered Bedrock provider stays active
+      // but the recovery probe below never runs, stranding the box on paid
+      // tokens even when OAuth accounts have headroom. Treat USE_BEDROCK=1 in
+      // settings.json as an equivalent recovery trigger so we always probe
+      // back to free OAuth.
+      let settingsBedrock = false;
+      try {
+        const sp = join(process.env.HOME || '', '.claude', 'settings.json');
+        if (existsSync(sp)) {
+          const senv = JSON.parse(readFileSync(sp, 'utf8'))?.env || {};
+          settingsBedrock = senv.CLAUDE_CODE_USE_BEDROCK === '1' || senv.CLAUDE_CODE_USE_BEDROCK === 1;
+        }
+      } catch {}
+      if (existsSync(sentinelPath) || settingsBedrock) {
         const { didRecover } = await maybeRecoverOAuthFromBedrock(config, state, sentinelPath, bedrockRecCtx);
         if (didRecover) lastRotatedAt = Date.now();
       } else {
