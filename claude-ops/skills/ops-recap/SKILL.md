@@ -176,13 +176,11 @@ set -g status-right '#('"${PLUGIN_ROOT}"'/scripts/recap/marquee.sh) #[fg=#a6e3a1
 set -g status-interval 2
 TMUX
 
-````
-
 5. Reload if tmux is running:
 
 ```bash
 tmux info >/dev/null 2>&1 && tmux source-file "$TMUX_CONF" 2>/dev/null
-````
+```
 
 ### `configure` — statusLine fallback (no tmux, or in addition to tmux)
 
