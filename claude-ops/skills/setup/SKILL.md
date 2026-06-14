@@ -223,7 +223,7 @@ How would you like to run setup?
 
 If the user selects "Set up everything", select ALL sections across all batches and run them in order (Step 2 → 2b → 2c → 3 → 4 → 5 → 5b → 6 → 6.5 → 7), skipping any already fully configured. Within each step, use the "Configure all" fast-path where available.
 
-If the user selects "Re-run a specific section", use sequential `AskUserQuestion` calls (paginated 4 options per page per Rule 1) to let the user pick from the section names (cli, daemon, channels, mcp, registry, prefs, deploy-fix, env, ecom, mktg, voice, revenue, network), then jump directly to that step. The `deploy-fix` section routes to Step 6.5; `network` routes to Step 3q-network.
+If the user selects "Re-run a specific section", use sequential `AskUserQuestion` calls (paginated 4 options per page per Rule 1) to let the user pick from the section names (cli, daemon, statusline, channels, mcp, registry, prefs, deploy-fix, env, ecom, mktg, voice, revenue, network), then jump directly to that step. The `deploy-fix` section routes to Step 6.5; `network` routes to Step 3q-network.
 
 If the user selects "Pick sections", proceed with the batched selection below.
 
@@ -707,6 +707,174 @@ Print:
 ✓ Recap marquee — daemon installed (com.claude-ops.recap-daemon).
   Tmux status-right wired (or skipped per your choice).
   Manage anytime: /ops:recap status | tail | configure | restart
+```
+
+Continue to Step 2e.
+
+---
+
+## Step 2e — Statusline Cockpit (if selected)
+
+Configures the Claude Code `statusLine` setting — a 3-line terminal cockpit showing context-window health, quota gauges, git branch, fleet state, sys metrics, and per-project ops badges.
+
+**Rule Zero**: every Bash call in this step MUST use `run_in_background: true`.
+
+### Step 2e.1 — Resolve paths (run_in_background: true)
+
+```bash
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1)}"
+RENDERER_SRC="${PLUGIN_ROOT}templates/statusline/statusline-command.sh"
+RENDERER_DST="$HOME/.claude/statusline-command.sh"
+SETTINGS_FILE="$HOME/.claude/settings.json"
+CFG_DST="$HOME/.claude/statusline.config.json"
+SUGGEST_BIN="${PLUGIN_ROOT}bin/ops-statusline-suggest"
+THEMES_FILE="${PLUGIN_ROOT}templates/statusline/themes.json"
+```
+
+If `RENDERER_SRC` does not exist, print:
+```
+○ Statusline template not found at expected plugin path. Skipping statusline step.
+  (Re-run /ops:setup after updating the plugin: ops-statusline-suggest should be at
+   ${PLUGIN_ROOT}bin/ops-statusline-suggest)
+```
+Then skip the rest of this step and continue to Step 3.
+
+### Step 2e.2 — Ask preset (max 4 options per Rule 1)
+
+Use `AskUserQuestion`:
+
+```
+Configure the Claude Code cockpit statusline?
+  [Yes — cockpit (full color, gauges, per-project badges)]
+  [Yes — minimal (essentials, low noise)]
+  [Yes — full (all metrics, widest gauges)]
+  [Skip — configure later with /ops:statusline config]
+```
+
+On Skip: write `statusline.enabled = false` to `$PREFS_PATH` and continue to Step 3.
+
+Set `CHOSEN_PRESET` from the user's choice (`cockpit`, `minimal`, or `full`).
+
+### Step 2e.3 — Ask theme (max 4 options per Rule 1)
+
+Use `AskUserQuestion`:
+
+```
+Which color theme?
+  [cockpit — rich color, graded gauges (Default)]
+  [minimal — two shades, no color grading]
+  [nord — cool blues and greens]
+  [mono — bold only, no color]
+```
+
+Set `CHOSEN_THEME`.
+
+### Step 2e.4 — Run registry auto-suggest (run_in_background: true)
+
+```bash
+SUGGESTED=$("$SUGGEST_BIN" --preset "$CHOSEN_PRESET" --theme "$CHOSEN_THEME" 2>/tmp/ops-statusline-suggest.log)
+PROJ_COUNT=$(printf '%s' "$SUGGESTED" | jq -r '._detected.projects_found // 0' 2>/dev/null || echo 0)
+```
+
+Print detection summary: `Detected $PROJ_COUNT projects from registry.`
+
+### Step 2e.5 — Install renderer (run_in_background: true)
+
+```bash
+cp "$RENDERER_SRC" "$RENDERER_DST"
+chmod +x "$RENDERER_DST"
+```
+
+Validate: `[ -x "$RENDERER_DST" ] && echo "✓ Renderer installed at $RENDERER_DST"`
+
+### Step 2e.6 — Write config (run_in_background: true)
+
+```bash
+TMP=$(mktemp)
+printf '%s\n' "$SUGGESTED" | jq 'del(._comment, ._detected)
+  | . + {"_comment": "Configured by /ops:setup on '"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'."}' > "$TMP"
+mv "$TMP" "$CFG_DST"
+jq . "$CFG_DST" >/dev/null 2>&1 && echo "✓ Config written" || echo "✗ Config JSON invalid"
+```
+
+### Step 2e.7 — Merge settings.json statusLine (run_in_background: true)
+
+**IMPORTANT**: use `jq` to *merge* — never clobber the entire settings.json.
+
+```bash
+STATUSLINE_CMD_STR="\$HOME/.claude/statusline-command.sh"
+
+if [ ! -f "$SETTINGS_FILE" ]; then
+  # H5: write to tempfile then atomic mv — Claude Code reads settings.json every frame
+  TMP=$(mktemp)
+  jq -n --arg cmd "$STATUSLINE_CMD_STR" '{"statusLine": {"command": $cmd}}' > "$TMP" \
+    && mv "$TMP" "$SETTINGS_FILE"
+else
+  EXISTING=$(jq -r '.statusLine.command // empty' "$SETTINGS_FILE" 2>/dev/null)
+  if [ -n "$EXISTING" ]; then
+    # statusLine already set — ask whether to overwrite
+    echo "existing_statusline=$EXISTING"
+  else
+    # H5: backup existing file, then atomic write via tmp
+    cp "$SETTINGS_FILE" "${SETTINGS_FILE}.bak" 2>/dev/null || true
+    TMP=$(mktemp)
+    jq --arg cmd "$STATUSLINE_CMD_STR" '.statusLine = {"command": $cmd}' "$SETTINGS_FILE" > "$TMP" \
+      && mv "$TMP" "$SETTINGS_FILE"
+    echo "✓ statusLine wired in ~/.claude/settings.json"
+  fi
+fi
+```
+
+If `existing_statusline` is non-empty, use `AskUserQuestion`:
+```
+~/.claude/settings.json already has a statusLine.command. Overwrite?
+  [Yes — replace with the cockpit renderer]
+  [No — keep existing and skip]
+```
+On Yes: run the merge above with the new command.
+On No: skip the merge and note `statusline.settings_wired = false`.
+
+### Step 2e.8 — Quick preview (run_in_background: true)
+
+```bash
+PAYLOAD='{"model":{"display_name":"Claude Sonnet"},"rate_limits":{"five_hour":{"used_percentage":30}},"context_window":{"used_percentage":20},"cost":{"total_cost_usd":0.05}}'
+printf '%s' "$PAYLOAD" | COLUMNS=100 "$RENDERER_DST" 2>/dev/null
+```
+
+Print between ruler lines so the user sees the cockpit preview inline.
+
+If the render fails (exit non-zero or empty output), print a non-fatal note:
+```
+○ Preview failed — renderer may need Claude Code restart to load new settings.json.
+  Manage with: /ops:statusline preview | doctor | config
+```
+
+### Step 2e.9 — Persist preferences (run_in_background: true)
+
+```bash
+jq -n \
+  --arg preset "$CHOSEN_PRESET" \
+  --arg theme "$CHOSEN_THEME" \
+  --argjson proj_count "$PROJ_COUNT" \
+  '{
+    "statusline": {
+      "enabled": true,
+      "preset": $preset,
+      "theme": $theme,
+      "projects_detected": $proj_count,
+      "renderer": "~/.claude/statusline-command.sh",
+      "config": "~/.claude/statusline.config.json"
+    }
+  }' | jq -s '.[0] * .[1]' "$PREFS_PATH" - > /tmp/prefs-sl-merge.json \
+    && mv /tmp/prefs-sl-merge.json "$PREFS_PATH" \
+    && echo "✓ Preferences saved"
+```
+
+Print summary:
+```
+✓ Statusline cockpit configured (preset=$CHOSEN_PRESET, theme=$CHOSEN_THEME, projects=$PROJ_COUNT).
+  Restart Claude Code to activate the statusLine in your terminal.
+  Manage anytime: /ops:statusline preview | config | theme | doctor | reset
 ```
 
 Continue to Step 3.

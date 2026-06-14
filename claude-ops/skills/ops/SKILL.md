@@ -54,6 +54,7 @@ Route `$ARGUMENTS` to the correct ops skill:
 | orchestrate, subagents, agents, dispatch, run | `/ops:ops-orchestrate $ARGUMENTS` |
 | secret-sync, secrets, doppler-sync, drift     | `/ops:ops-secret-sync $ARGUMENTS` |
 | home, homey, lights, flow, scene, energy, climate, presence, alarm, smart-home, iot, thermostat, dim, door, lock | `/ops:ops-home $ARGUMENTS` |
+| statusline, status-line, cockpit                                                                                    | `/ops:statusline $ARGUMENTS` |
 
 If `$ARGUMENTS` is empty, launch the interactive dashboard: invoke `/ops:ops-dash` directly.
 
