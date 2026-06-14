@@ -34,5 +34,10 @@ if [ -f "$LOG" ] && [ "$(wc -c < "$LOG" 2>/dev/null || echo 0)" -gt 2097152 ]; t
   mv "$LOG" "$LOG.1"
 fi
 
+# A transient node failure (e.g. CRS login timeout under a 529 storm) is logged
+# but must NOT surface as a launchd job failure — the next tick recovers. Always
+# exit 0 so launchctl status stays clean; real errors are in the log.
 CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" CLAUDE_PLUGIN_DATA_DIR="$DATA_DIR" \
-  "$NODE" "$SELF_DIR/crs-priority-daemon.mjs" "$@" >> "$LOG" 2>&1
+  "$NODE" "$SELF_DIR/crs-priority-daemon.mjs" "$@" >> "$LOG" 2>&1 || \
+  echo "$(date -u +%H:%M:%S) [crs-priority] tick failed (transient — see above); recovering next tick" >> "$LOG"
+exit 0
