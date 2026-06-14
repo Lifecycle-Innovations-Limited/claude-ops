@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.30.5] - 2026-06-14
+
+### Changed
+Fix ops-update step-6 version-path rewrite on macOS/BSD: `sed -i -E` consumed `-E` as the -i backup suffix (extended regex off → `\1` undefined → silent rewrite failure). Switched to a portable temp-file rewrite that works on BSD + GNU sed.
+
+
 ## [2.30.4] - 2026-06-14
 
 ### Changed
