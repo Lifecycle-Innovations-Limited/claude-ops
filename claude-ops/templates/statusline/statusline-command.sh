@@ -90,6 +90,8 @@ CFG_fleet_cache=1
 CFG_sys_cpu=1
 CFG_sys_ram=1
 CFG_sys_disk=1
+CFG_sys_publish_peer=1
+CFG_sys_show_peer=1
 
 if [ -n "$_cfg_file" ]; then
   eval $(jq -r '
@@ -103,7 +105,9 @@ if [ -n "$_cfg_file" ]; then
     @sh "CFG_fleet_cache=\(if .fleet.show_cache_ttl == false then 0 else 1 end)",
     @sh "CFG_sys_cpu=\(if .sys_metrics.show_cpu  == false then 0 else 1 end)",
     @sh "CFG_sys_ram=\(if .sys_metrics.show_ram  == false then 0 else 1 end)",
-    @sh "CFG_sys_disk=\(if .sys_metrics.show_disk == false then 0 else 1 end)"
+    @sh "CFG_sys_disk=\(if .sys_metrics.show_disk == false then 0 else 1 end)",
+    @sh "CFG_sys_publish_peer=\(if .sys_metrics.publish_peer == false then 0 else 1 end)",
+    @sh "CFG_sys_show_peer=\(if .sys_metrics.show_peer == false then 0 else 1 end)"
   ' "$_cfg_file" 2>/dev/null) 2>/dev/null || true
 fi
 
@@ -542,6 +546,67 @@ load_warn=""
 disk_warn=""
 [ "$disk_pct" -ge 90 ] && disk_warn="${T_danger}💾 ${disk_pct}%${R}"
 
+# ── Peer system-metrics publish/read ─────────────────────────────────────────
+# Publish: write this machine's metrics to ~/.claude/.sysinfo/<short-hostname>.json
+# at most once per 10s (async, never blocks render).
+# Read: any OTHER *.json in that dir = peer; render compact badge on line 2.
+# Cross-machine transport reuses the existing rsync/tailscale sync of ~/.claude/
+# — no new transport is built here.
+_sysinfo_dir="${HOME}/.claude/.sysinfo"
+peer_badge=""
+if [ "$CFG_sys_publish_peer" = "1" ]; then
+  mkdir -p "$_sysinfo_dir" 2>/dev/null
+  _self_file="${_sysinfo_dir}/${host}.json"
+  _self_age=$(( now - $(mtime "$_self_file") ))
+  if [ "$_self_age" -ge 10 ]; then
+    # Non-blocking background write — gather values already computed above.
+    ( printf '{"host":"%s","cpu_pct":%s,"ram_free_g":%s,"load1":"%s","df_free_g":%s,"ts":%s}\n' \
+        "${host}" "${cpu_pct:-0}" "${ram_free_g:-0}" "${load1:-0}" "${df_free_g:-0}" "${now}" \
+        > "${_self_file}.tmp" 2>/dev/null \
+      && mv "${_self_file}.tmp" "$_self_file" 2>/dev/null ) >/dev/null 2>&1 &
+  fi
+fi
+
+if [ "$CFG_sys_show_peer" = "1" ]; then
+  _peer_file=""; _peer_host=""
+  for _f in "${_sysinfo_dir}"/*.json; do
+    [ -e "$_f" ] || continue
+    _fn=$(basename "$_f" .json)
+    [ "$_fn" = "$host" ] && continue
+    # Take the most-recently-modified peer file if multiple exist
+    if [ -z "$_peer_file" ] || [ $(mtime "$_f") -gt $(mtime "$_peer_file") ]; then
+      _peer_file="$_f"; _peer_host="$_fn"
+    fi
+  done
+  if [ -n "$_peer_file" ]; then
+    _peer_age=$(( now - $(mtime "$_peer_file") ))
+    _stale_sec=300  # >5min = stale
+    if [ "$_peer_age" -ge "$_stale_sec" ]; then
+      # Greyed stale badge
+      peer_badge="${T_dim}${_peer_host} stale${R}"
+    else
+      # Parse peer JSON — one jq call
+      eval $(jq -r '
+        @sh "p_cpu=\(.cpu_pct // 0)",
+        @sh "p_ram=\(.ram_free_g // 0)",
+        @sh "p_df=\(.df_free_g // 0)",
+        @sh "p_load=\(.load1 // "0")"
+      ' "$_peer_file" 2>/dev/null) 2>/dev/null || true
+      # Color-grade: red if load > ncpu (ncpu unknown for peer, use 8 as safe default)
+      _p_cpu_int=${p_cpu%%.*}; case "$_p_cpu_int" in *[!0-9]*|'') _p_cpu_int=0;; esac
+      _p_ram_int=${p_ram%%.*}; case "$_p_ram_int" in *[!0-9]*|'') _p_ram_int=0;; esac
+      _p_load_int=${p_load%%.*}; case "$_p_load_int" in *[!0-9]*|'') _p_load_int=0;; esac
+      _p_cpu_col="$T_dim"
+      [ "$_p_cpu_int" -ge 90 ] && _p_cpu_col="$T_danger"
+      _p_ram_col="$T_dim"
+      [ "$_p_ram_int" -lt 2 ] && _p_ram_col="$T_danger"
+      _p_load_col="$T_dim"
+      [ "$_p_load_int" -gt 8 ] && _p_load_col="$T_danger"
+      peer_badge="${T_dim}${_peer_host}${R} ${_p_cpu_col}cpu${p_cpu}%${R} ${_p_ram_col}ram${p_ram}G${R} ${T_dim}df${p_df}G${R}"
+    fi
+  fi
+fi
+
 # ── Slow-cache (60s TTL): global ops badges read from daemon output files ─────
 slow_cache="/tmp/claude-statusline-slow-${uid}"
 if [ -s "$slow_cache" ] && [ $(( now - $(mtime "$slow_cache") )) -lt 60 ]; then
@@ -785,7 +850,7 @@ else
   fi
   line2=$(pack_line "$cols" "$loc_badge" "$model_part" "$git_part" "$tasks_part" \
     "${agents_part}" "${proj_slot}" "${line2_fleet}" "${sys_part}" \
-    "${load_warn}" "${disk_warn}" "${carousel_slot}")
+    "${peer_badge}" "${load_warn}" "${disk_warn}" "${carousel_slot}")
 fi
 
 # ── Output ────────────────────────────────────────────────────────────────────

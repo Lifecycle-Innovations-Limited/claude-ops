@@ -1,0 +1,12 @@
+{
+  "workspace": { "current_dir": "/home/user/projects/myapp" },
+  "model": { "display_name": "Claude Opus 4.8 (1M context)" },
+  "rate_limits": {
+    "five_hour":  { "used_percentage": 91, "resets_at": 9999999999 },
+    "seven_day":  { "used_percentage": 85, "resets_at": 9999999999 }
+  },
+  "context_window": { "used_percentage": 93 },
+  "cost": { "total_cost_usd": 2.50, "total_lines_added": 0, "total_lines_removed": 0 },
+  "session_id": "test-session-danger",
+  "transcript_path": ""
+}

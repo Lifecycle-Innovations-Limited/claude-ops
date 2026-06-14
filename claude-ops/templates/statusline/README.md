@@ -75,7 +75,10 @@ Resolved in this order (first match wins):
     "show_ram":           true,
     "show_disk":          true,
     "show_load_warning":  true,
-    "show_disk_warning":  true
+    "show_disk_warning":  true,
+    // Peer metrics sync (multi-machine: Mac + EC2)
+    "publish_peer":       true,  // write ~/.claude/.sysinfo/<hostname>.json on each render (throttled to 10s)
+    "show_peer":          true   // read sibling *.json files and show compact peer badge on line 2
   },
 
   // What to include in the rotating carousel slot on line 2
@@ -144,6 +147,32 @@ Line 3 (per-project, rotates every 15s):
 Every line is packed greedily left-to-right with ` │ ` dividers. Segments that
 don't fit are silently dropped — nothing is ever truncated mid-segment. On narrow
 terminals (`$COLUMNS < 80`) line 2 collapses to a single rotating metric.
+
+## Peer system-metrics sync
+
+When `sys_metrics.publish_peer` is `true` (default), each render writes this
+machine's CPU, RAM, load, and disk metrics to:
+
+```
+~/.claude/.sysinfo/<short-hostname>.json
+```
+
+The write is async and throttled — the file is only rewritten when it is older
+than 10 seconds, so the render path is never blocked.
+
+When `sys_metrics.show_peer` is `true` (default), the renderer reads any
+**other** `*.json` files in that directory (i.e. the peer machine) and shows a
+compact badge on line 2:
+
+```
+ams cpu8% ram12G df88G         # fresh — color-graded (red if load>8 or ram<2G)
+ams stale                      # greyed when peer file is older than 5 minutes
+```
+
+**Cross-machine transport** reuses the existing `~/.claude/` rsync / Tailscale
+sync (`com.sam.gbrain-fra-push` or equivalent). No new transport is built — the
+sync daemon copies `~/.claude/.sysinfo/` along with the rest of `~/.claude/`.
+Each machine publishes its own file; the peer's file arrives via rsync.
 
 ## Performance
 

@@ -28,7 +28,9 @@
     "show_ram":  true,
     "show_disk": true,
     "show_load_warning": true,
-    "show_disk_warning": true
+    "show_disk_warning": true,
+    "publish_peer": true,
+    "show_peer":   true
   },
 
   "carousel_pool": ["cost", "lines", "global_ops"],
