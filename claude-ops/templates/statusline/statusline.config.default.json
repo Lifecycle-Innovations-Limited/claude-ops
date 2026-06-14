@@ -1,0 +1,37 @@
+{
+  "_comment": "Default statusline config — generic cockpit preset. Copy to ~/.claude/statusline.config.json and customise. All fields are optional; omitted fields fall back to these defaults.",
+
+  "theme": "cockpit",
+
+  "gauge_width": {
+    "ctx":   10,
+    "quota":  8
+  },
+
+  "carousel_interval_sec": 15,
+
+  "widgets": {
+    "line1": ["ctx_gauge", "quota_gauge", "pace_badge", "cache_badge", "plan_badge", "account_arrow"],
+    "line2": ["location", "model", "git_branch", "tasks", "fleet", "sys_metrics", "carousel"],
+    "line3": ["project_rotate"]
+  },
+
+  "fleet": {
+    "show_bg_agents":   true,
+    "show_rotation":    true,
+    "show_sdk_fallback":true,
+    "show_cache_ttl":   true
+  },
+
+  "sys_metrics": {
+    "show_cpu":  true,
+    "show_ram":  true,
+    "show_disk": true,
+    "show_load_warning": true,
+    "show_disk_warning": true
+  },
+
+  "carousel_pool": ["cost", "lines", "global_ops"],
+
+  "projects": []
+}
