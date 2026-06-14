@@ -153,7 +153,7 @@ _themes_file="$(dirname "$0")/themes.json"
 # Do NOT hardcode 38;5;N for text/label/empty-track roles (breaks on light terminals).
 T_ok="32"; T_warn="33"; T_danger="91"; T_dim="90"
 T_acc="36"; T_acc2="35"
-T_gauge_ok="32"; T_gauge_warn="33"; T_gauge_hot="33"; T_gauge_crit="91"
+T_gauge_ok="32"; T_gauge_warn="33"; T_gauge_hot="38;5;208"; T_gauge_crit="91"
 T_gauge_empty="90"
 T_loc_remote="1;7;31"; T_loc_home="1;7"
 
@@ -168,7 +168,7 @@ if [ -f "$_themes_file" ]; then
     @sh "T_acc2=\(.accent2 // "35")",
     @sh "T_gauge_ok=\(.gauge_ok // "32")",
     @sh "T_gauge_warn=\(.gauge_warn // "33")",
-    @sh "T_gauge_hot=\(.gauge_hot // "33")",
+    @sh "T_gauge_hot=\(.gauge_hot // "38;5;208")",
     @sh "T_gauge_crit=\(.gauge_crit // "91")",
     @sh "T_gauge_empty=\(.gauge_empty // "90")",
     @sh "T_loc_remote=\(.loc_remote // "1;7;31")",
