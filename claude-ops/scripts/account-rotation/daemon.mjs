@@ -41,6 +41,7 @@ import { tmpdir } from 'os';
 import { applyAccountLeases, writeLease } from './account-leases.mjs';
 import { sweepDeferredRespawns, listLiveBgSessions, doRespawn, isLoopSession } from './bg-respawn.mjs';
 import { pickAccountForSession, recordSessionLease, readLeases, writeLeases } from './session-router.mjs';
+import { sweepBedrockSessions, verifyBedrockSwaps } from './bedrock-watchdog.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
@@ -1604,6 +1605,9 @@ async function mainLoop() {
   let lastDriftCheck = 0; // cheap vault-based drift detection
   let lastFullProbe = 0; // periodic fleet-wide live-util snapshot refresh
   let lastRespawnSweep = 0; // deferred bg-session respawn retry (busy at rotation time)
+  let lastBedrockSweep = 0; // force-swap real Bedrock sessions → OAuth (no defer)
+  let pendingBedrockVerify = []; // PIDs swapped last sweep, verified next sweep
+  const BEDROCK_SWEEP_INTERVAL = 45_000; // ~45s — metered bleed must stop fast
   const FULL_PROBE_INTERVAL = 5 * 60_000;
   const bedrockRecCtx = {
     lastCheck: 0,
@@ -1654,6 +1658,30 @@ async function mainLoop() {
           if (handled > 0) log(`[bg-respawn] sweep refreshed ${handled} deferred bg session(s)`);
         } catch (e) {
           log(`[bg-respawn] sweep error: ${e.message?.substring(0, 80)}`);
+        }
+      }
+
+      // Bedrock force-swap watchdog (~45s): any session ACTUALLY running on
+      // metered Bedrock (CLAUDE_CODE_USE_BEDROCK=1 in its /proc environ) is
+      // force-swapped to OAuth immediately whenever a usable token exists — NO
+      // 90-min defer for busy/loop sessions (metered bleed overrides loop
+      // preservation). Next sweep verifies the previously-swapped PIDs are off
+      // Bedrock (env + best-effort network corroboration). (Sam 2026-06-14)
+      if (Date.now() - lastBedrockSweep > BEDROCK_SWEEP_INTERVAL) {
+        lastBedrockSweep = Date.now();
+        try {
+          if (pendingBedrockVerify.length) {
+            verifyBedrockSwaps(pendingBedrockVerify, (m) => log(m));
+            pendingBedrockVerify = [];
+          }
+          const { swapped, scanned, swappedPids } = sweepBedrockSessions(config, state, (m) => log(m));
+          if (swapped > 0) {
+            log(`[bedrock-watchdog] force-swapped ${swapped}/${scanned} Bedrock session(s) → OAuth`);
+            lastRotatedAt = Date.now();
+          }
+          pendingBedrockVerify = swappedPids;
+        } catch (e) {
+          log(`[bedrock-watchdog] sweep error: ${e.message?.substring(0, 100)}`);
         }
       }
 
