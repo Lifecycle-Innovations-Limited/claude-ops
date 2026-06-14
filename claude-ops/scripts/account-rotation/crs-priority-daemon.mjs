@@ -166,6 +166,27 @@ function decide(accts) {
     const final = decisions.filter((d) => d.desired && !d.rl && !d.overloaded).length;
     if (final < FLOOR) log(`WARNING: only ${final} usable account(s) (< floor ${FLOOR}) — pool is capacity-constrained`);
   }
+
+  // DEDUP — accounts sharing an organizationUuid are the SAME claude.ai quota pool
+  // (e.g. two CRS pool entries for one account). Leaving both schedulable makes CRS
+  // double-load that single account → it saturates twice as fast. Keep only ONE
+  // schedulable per uuid (healthiest: sw=allowed, then lowest known util); force the
+  // rest off. Team-vs-personal seats have DIFFERENT uuids, so they are NOT deduped.
+  const byUuid = {};
+  for (const d of decisions) {
+    const uuid = d.a.subscriptionInfo?.organizationUuid;
+    if (!uuid || !d.desired) continue;
+    (byUuid[uuid] ||= []).push(d);
+  }
+  for (const [uuid, group] of Object.entries(byUuid)) {
+    if (group.length < 2) continue;
+    const unum = (d) => (typeof d.u5 === 'number' ? d.u5 : 50);
+    group.sort((x, y) => (x.sw === 'allowed' ? 0 : 1) - (y.sw === 'allowed' ? 0 : 1) || unum(x) - unum(y));
+    for (const d of group.slice(1)) {
+      d.desired = false;
+      d.reason = `dedup: same org ${uuid.slice(0, 8)} as ${group[0].a.name} (one quota pool)`;
+    }
+  }
   return decisions;
 }
 
