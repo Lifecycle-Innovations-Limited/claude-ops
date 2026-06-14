@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.30.4] - 2026-06-14
+
+### Changed
+telegram channel-mcp: env-templated single-owner leader gate (PID -> DEVBOT_TELEGRAM_OWNER) with TELEGRAM_CHANNEL_POLL opt-out; fix ops-deploy-monitor missing deploy-fix-common source; prettier account-rotation scripts
+
+
 ## [2.30.3] - 2026-06-14
 
 ### Changed
