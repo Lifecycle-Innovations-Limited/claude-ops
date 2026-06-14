@@ -24,7 +24,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, unlinkSync, appendFileSync, statSync } from 'fs';
-import { persistBedrockClaudeSettings, clearHardcodedModelsForOAuthClaudeSettings } from './claude-settings-mode.mjs';
+import { persistBedrockClaudeSettings, clearHardcodedModelsForOAuthClaudeSettings, resolveWorkingAwsEnv } from './claude-settings-mode.mjs';
 import {
   destinationUtilHardBlock,
   DAEMON_SAFE_5H_PCT,
@@ -39,7 +39,9 @@ import { fileURLToPath } from 'url';
 import { execSync, execFileSync, spawn, spawnSync } from 'child_process';
 import { tmpdir } from 'os';
 import { applyAccountLeases, writeLease } from './account-leases.mjs';
-import { sweepDeferredRespawns } from './bg-respawn.mjs';
+import { sweepDeferredRespawns, listLiveBgSessions, doRespawn, isLoopSession } from './bg-respawn.mjs';
+import { pickAccountForSession, recordSessionLease, readLeases, writeLeases } from './session-router.mjs';
+import { sweepBedrockSessions, verifyBedrockSwaps } from './bedrock-watchdog.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
@@ -49,7 +51,7 @@ const PID_FILE = join(__dirname, '.daemon.pid');
 const ROTATE_SCRIPT = join(__dirname, 'rotate.mjs');
 
 // Keychain account name — must match rotate.mjs convention.
-const ACTIVE_KEYCHAIN_ACCOUNT = 'unknown';
+const ACTIVE_KEYCHAIN_ACCOUNT = process.env.USER || 'unknown';
 const VAULT_KEYCHAIN_ACCOUNT = process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || 'claude-ops';
 
 const RECOVERY_STATUS_PATH = join(__dirname, '.bedrock-recovery-status.json');
@@ -285,17 +287,31 @@ function readStoredToken(account) {
     }
   }
   try {
-    // spawnSync (no shell) — svc/account can't break out into a shell command.
-    // `security -g` prints "password: ..." on stderr, so read both streams.
-    const r = spawnSync('security', ['find-generic-password', '-s', svc, '-a', VAULT_KEYCHAIN_ACCOUNT, '-g'], {
+    const out = execSync(`security find-generic-password -s "${svc}" -a "${VAULT_KEYCHAIN_ACCOUNT}" -g 2>&1`, {
       timeout: 5000,
-    });
-    const out = `${r.stdout?.toString() || ''}${r.stderr?.toString() || ''}`;
+    }).toString();
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
     return null;
   }
+}
+
+function deleteStoredToken(account) {
+  const svc = `Claude-Rotation-${accountKey(account)}`;
+  if (IS_LINUX) {
+    try {
+      const store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
+      delete store[svc];
+      writeFileSync(LINUX_CRED_PATH, JSON.stringify(store, null, 2), { mode: 0o600 });
+    } catch {}
+    return;
+  }
+  try {
+    execFileSync('security', ['delete-generic-password', '-s', svc, '-a', VAULT_KEYCHAIN_ACCOUNT], {
+      stdio: 'ignore',
+    });
+  } catch {}
 }
 
 function readActiveKeychainToken() {
@@ -657,6 +673,19 @@ async function shouldRotate(config, state) {
                   timeout: 5000,
                 },
               );
+              // macOS: Claude Code ≥2.1 reads the ACTIVE credential from the FILE
+              // ~/.claude/.credentials.json, NOT the keychain. Mirror the refreshed
+              // active token into the file (merge to preserve other fields) so new
+              // sessions pick it up. Without this the keychain write above is
+              // invisible to claude. (root-caused 2026-06-12)
+              try {
+                let fileStore = {};
+                try { fileStore = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8')); } catch {}
+                const incoming = JSON.parse(tokenToWrite);
+                fileStore.claudeAiOauth = incoming.claudeAiOauth || incoming;
+                if (incoming.mcpOAuth) fileStore.mcpOAuth = incoming.mcpOAuth;
+                writeFileSync(LINUX_CRED_PATH, JSON.stringify(fileStore, null, 2), { mode: 0o600 });
+              } catch (_fileErr) { /* best-effort */ }
             }
             log('[active-refresh] Active keychain updated with mcpOAuth preserved — sessions will auto-recover');
           }
@@ -693,6 +722,11 @@ async function queryLiveUtilization(account) {
       },
       signal: AbortSignal.timeout(4000),
     });
+    if (res.status === 401) {
+      log(`[daemon-query] Account ${account.email} returned 401 (Unauthorized) — invalidating token`);
+      deleteStoredToken(account);
+      return { ok: false, authFailed: true };
+    }
     if (res.status === 429) return { ok: false, rateLimited: true };
     if (!res.ok) return { ok: false };
     const data = await res.json();
@@ -770,6 +804,10 @@ async function findValidRotationTarget(config, state) {
       log(`[pre-rotate] ${key}: usage API 429 — skipping this candidate this pass`);
       continue;
     }
+    if (live?.authFailed) {
+      log(`[pre-rotate] ${key}: auth failed (401) — skipping this candidate this pass`);
+      continue;
+    }
     if (isLiveUtilOk(live)) {
       const max = liveUtilMax(live);
       const tooHot5h = live.pct5h >= DAEMON_SAFE_5H_PCT;
@@ -833,8 +871,13 @@ async function findValidRotationTarget(config, state) {
     const expiry = parseTokenExpiry(tokenJson);
     const isExpired = expiry > 0 && now > expiry - 5 * 60_000;
     if (isExpired) {
+      log(`[pre-rotate-relaxed] ${key}: token expired/expiring — attempting refresh`);
       const refreshed = await refreshSingleToken(account);
-      if (!refreshed) continue;
+      if (!refreshed) {
+        log(`[pre-rotate-relaxed] ${key}: refresh FAILED — skipping`);
+        continue;
+      }
+      log(`[pre-rotate-relaxed] ${key}: refresh succeeded`);
     }
 
     const live = await queryLiveUtilization(account);
@@ -907,7 +950,7 @@ function stopClaudeDaemon() {
   try {
     const result = execSync('claude daemon stop --any', {
       encoding: 'utf8',
-      env: { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' },
+      env: { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' }
     });
     log(`[daemon-stop] Daemon stop success: ${result.trim()}`);
   } catch (err) {
@@ -927,13 +970,16 @@ function activateBedrockFallbackFromDaemon(reason) {
   }
   const region = process.env.AWS_BEDROCK_REGION || 'us-east-1';
   try {
+    const aws = resolveWorkingAwsEnv(region);
     execFileSync('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
       stdio: 'pipe',
       timeout: 5000,
+      env: aws.env,
     });
     execFileSync('aws', ['bedrock', 'list-inference-profiles', '--region', region, '--max-results', '1'], {
       stdio: 'pipe',
       timeout: 6000,
+      env: aws.env,
     });
   } catch (e) {
     log(`[bedrock-fallback] AWS unreachable: ${(e.message || '').slice(0, 80)}`);
@@ -1059,7 +1105,7 @@ async function doRotation(reason) {
     // into running sessions — that interrupts active work. Sessions pick up the new
     // token on next 401 (auto-retry) or when the user voluntarily runs /login.
     // execFileSync (not execSync) — no shell, no injection risk on targetKey.
-    const result = execFileSync(process.execPath, [ROTATE_SCRIPT, '--no-browser', '--to', targetKey], {
+    const result = execFileSync('node', [ROTATE_SCRIPT, '--no-browser', '--to', targetKey], {
       cwd: __dirname,
       timeout: 120_000, // 2min — keychain swap is fast; no per-session injection
       env: { ...process.env, NODE_NO_WARNINGS: '1' },
@@ -1181,8 +1227,11 @@ async function refreshSingleToken(account) {
         { timeout: 5000 },
       );
       if (kcResult.error || kcResult.status !== 0) {
-        const msg = kcResult.error?.message || kcResult.stderr?.toString() || `security exit ${kcResult.status}`;
-        throw new Error(`Keychain write failed: ${msg}`);
+        const detail =
+          kcResult.stderr?.toString()?.trim() ||
+          kcResult.error?.message ||
+          `exit ${kcResult.status}`;
+        throw new Error(`Keychain write failed: ${detail}`);
       }
     }
     log(
@@ -1304,6 +1353,26 @@ async function maybeRecoverOAuthFromBedrock(config, state, sentinelPath, ctx) {
             } catch (e) {
               log(`[bedrock-recovery] settings clear failed: ${e.message?.slice(0, 80)}`);
             }
+            // Purge stale `bedrock`-keyed session leases. Without this, bg-respawn.mjs
+            // keeps reading lease.accountKey === 'bedrock' and re-injecting
+            // CLAUDE_CODE_USE_BEDROCK on every respawn forever — sessions stay stranded
+            // on metered Bedrock long after OAuth headroom returns. (2026-06-14: 9 sessions
+            // still pinned to bedrock 17h post-recovery; Sam: "Bedrock should never be in
+            // use if any OAuth account has tokens available.") Drop the leases so the next
+            // respawn falls through to OAuth token injection.
+            try {
+              const leases = readLeases();
+              let purged = 0;
+              for (const [sid, entry] of Object.entries(leases)) {
+                if (entry?.accountKey === 'bedrock') { delete leases[sid]; purged++; }
+              }
+              if (purged > 0) {
+                writeLeases(leases);
+                log(`[bedrock-recovery] purged ${purged} stale bedrock lease(s) → respawns will use OAuth`);
+              }
+            } catch (e) {
+              log(`[bedrock-recovery] bedrock-lease purge failed: ${e.message?.slice(0, 80)}`);
+            }
             try {
               stopClaudeDaemon();
             } catch (e) {
@@ -1379,7 +1448,7 @@ async function runFullProbe(config, state) {
   try {
     for (const a of config.accounts) {
       const key = accountKey(a);
-      if (key === state.activeAccount) continue; // active already covered by shouldRotate path
+      const isActive = key === state.activeAccount;
       probed += 1;
       const tokenJson = readStoredToken(a);
       if (!tokenJson || tokenExpired(tokenJson)) {
@@ -1398,6 +1467,33 @@ async function runFullProbe(config, state) {
       state.accounts[key] = state.accounts[key] || {};
       state.accounts[key].lastUtilization = { pct, reset, ts: Date.now() };
       updated += 1;
+      // Active-account self-trigger: shouldRotate only live-probes the active
+      // account when a statusline session has already written .rate-limits.json.
+      // Headless/subagent-only workloads never write it, so an active account
+      // could sit at a 100% weekly cap while every subagent dispatch failed
+      // (bit us 2026-06-12). When the probe sees the active account over the
+      // rotation threshold and no fresh trigger file exists, file one in the
+      // statusline format — the normal shouldRotate path (with its anti-thrash
+      // guards) then performs the rotation on the next tick.
+      if (isActive && pct >= UTILIZATION_ROTATE_THRESHOLD) {
+        try {
+          if (!readRealUtilization()) {
+            writeFileSync(
+              RATE_LIMITS_FILE,
+              JSON.stringify({
+                ts: Math.floor(Date.now() / 1000),
+                account_email: a.email,
+                five_hour: { pct: pct5h, reset: live.reset5h ?? null },
+                seven_day: { pct: pct7d, reset: live.reset7d ?? null },
+                source: 'daemon-active-probe',
+              }),
+            );
+            log(
+              `[active-probe] active ${key} over threshold (5h=${pct5h.toFixed(0)}% 7d=${pct7d.toFixed(0)}% >= ${UTILIZATION_ROTATE_THRESHOLD}%) — filed rotation trigger`,
+            );
+          }
+        } catch {}
+      }
     }
     // Compute and persist the next-rotation candidate for statusline display.
     // Pick the lowest-util non-active account with a non-expired vault token.
@@ -1437,6 +1533,87 @@ async function runFullProbe(config, state) {
   }
 }
 
+async function checkSessionLeaseRotations(config, state) {
+  const sessions = listLiveBgSessions();
+  if (sessions.length === 0) return;
+
+  const leases = readLeases();
+  
+  for (const s of sessions) {
+    const lease = leases[s.id];
+    
+    // Case 1: Session has no lease assigned yet
+    if (!lease) {
+      const newKey = pickAccountForSession(s.id, config, state);
+      if (newKey) {
+        log(`[session-router] Session ${s.id} has no lease. Assigning to ${newKey}`);
+        recordSessionLease(s.id, newKey, s.pid);
+        if (s.status !== 'busy' && !isLoopSession(s.id)) {
+          doRespawn(s, log);
+        } else {
+          try {
+            const marker = `/tmp/claude-respawn-deferred-${s.id}`;
+            if (!existsSync(marker)) writeFileSync(marker, String(Date.now()));
+            log(`[session-router] Session ${s.id} is ${s.status === 'busy' ? 'busy' : 'a /loop session'} — deferred respawn (sweep handles it).`);
+          } catch {}
+        }
+        return; // Rotate/respawn at most one session per tick to stagger
+      }
+      continue;
+    }
+
+    // Case 2: Session has a lease, check if its account is exhausted or if it is on bedrock
+    const currentKey = lease.accountKey;
+    if (currentKey === 'bedrock') {
+      // Check if a Max account has cooled down and is now viable
+      const newKey = pickAccountForSession(s.id, config, state);
+      if (newKey && newKey !== 'bedrock') {
+        log(`[session-router] Max account available. Migrating session ${s.id} off Bedrock to ${newKey}`);
+        recordSessionLease(s.id, newKey, s.pid);
+        if (s.status !== 'busy' && !isLoopSession(s.id)) {
+          doRespawn(s, log);
+        } else {
+          try {
+            const marker = `/tmp/claude-respawn-deferred-${s.id}`;
+            if (!existsSync(marker)) writeFileSync(marker, String(Date.now()));
+          } catch {}
+        }
+        return; // Rotate at most one session per tick to stagger
+      }
+      continue;
+    }
+
+    const acct = config.accounts.find(a => accountKey(a) === currentKey);
+    if (!acct) continue;
+
+    const cached = state.accounts?.[currentKey]?.lastUtilization;
+    const util = cached?.pct ?? 0;
+    const maxUtil = acct.maxUtilPercent || config.rateLimits.destinationMaxUtilPercent;
+
+    // We no longer guess utilization based on active lease count.
+    // Instead, we rely strictly on the live metrics fetched from Claude API by the usage probe.
+    if (util >= maxUtil) {
+      log(`[session-router] Session ${s.id} leased account ${currentKey} ACTUAL utilization is exhausted (${util}% >= ${maxUtil}%). Rotating.`);
+      const newKey = pickAccountForSession(s.id, config, state);
+      if (newKey && newKey !== currentKey) {
+        log(`[session-router] Swapping lease for session ${s.id}: ${currentKey} -> ${newKey}`);
+        recordSessionLease(s.id, newKey, s.pid);
+        
+        if (s.status !== 'busy' && !isLoopSession(s.id)) {
+          doRespawn(s, log);
+        } else {
+          try {
+            const marker = `/tmp/claude-respawn-deferred-${s.id}`;
+            if (!existsSync(marker)) writeFileSync(marker, String(Date.now()));
+            log(`[session-router] Session ${s.id} is busy or looping. Deferred rotation to idle state.`);
+          } catch {}
+        }
+        return; // Rotate at most one session per tick to stagger
+      }
+    }
+  }
+}
+
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 async function mainLoop() {
@@ -1446,10 +1623,13 @@ async function mainLoop() {
   let lastRotatedAt = 0; // track when we last rotated
   let lastStatusLog = 0; // periodic status logging
   let lastLeaseBeat = 0; // cross-machine lease heartbeat (S3)
-  let lastRefreshCheck = 0; // dynamic refresh check
+  const lastRefreshCheck = 0; // dynamic refresh check
   let lastDriftCheck = 0; // cheap vault-based drift detection
   let lastFullProbe = 0; // periodic fleet-wide live-util snapshot refresh
   let lastRespawnSweep = 0; // deferred bg-session respawn retry (busy at rotation time)
+  let lastBedrockSweep = 0; // force-swap real Bedrock sessions → OAuth (no defer)
+  let pendingBedrockVerify = []; // PIDs swapped last sweep, verified next sweep
+  const BEDROCK_SWEEP_INTERVAL = 45_000; // ~45s — metered bleed must stop fast
   const FULL_PROBE_INTERVAL = 5 * 60_000;
   const bedrockRecCtx = {
     lastCheck: 0,
@@ -1503,6 +1683,30 @@ async function mainLoop() {
         }
       }
 
+      // Bedrock force-swap watchdog (~45s): any session ACTUALLY running on
+      // metered Bedrock (CLAUDE_CODE_USE_BEDROCK=1 in its /proc environ) is
+      // force-swapped to OAuth immediately whenever a usable token exists — NO
+      // 90-min defer for busy/loop sessions (metered bleed overrides loop
+      // preservation). Next sweep verifies the previously-swapped PIDs are off
+      // Bedrock (env + best-effort network corroboration). (Sam 2026-06-14)
+      if (Date.now() - lastBedrockSweep > BEDROCK_SWEEP_INTERVAL) {
+        lastBedrockSweep = Date.now();
+        try {
+          if (pendingBedrockVerify.length) {
+            verifyBedrockSwaps(pendingBedrockVerify, (m) => log(m));
+            pendingBedrockVerify = [];
+          }
+          const { swapped, scanned, swappedPids } = sweepBedrockSessions(config, state, (m) => log(m));
+          if (swapped > 0) {
+            log(`[bedrock-watchdog] force-swapped ${swapped}/${scanned} Bedrock session(s) → OAuth`);
+            lastRotatedAt = Date.now();
+          }
+          pendingBedrockVerify = swappedPids;
+        } catch (e) {
+          log(`[bedrock-watchdog] sweep error: ${e.message?.substring(0, 100)}`);
+        }
+      }
+
       if (Date.now() - lastDriftCheck > 120_000) {
         lastDriftCheck = Date.now();
         const stateLastRotation2 = state.lastRotation ? new Date(state.lastRotation).getTime() : 0;
@@ -1532,12 +1736,12 @@ async function mainLoop() {
 
       const sentinelPath = join(process.env.HOME || '', '.claude', '.bedrock-fallback.json');
       // Effective-Bedrock detection: settings.json can be flipped to Bedrock
-      // WITHOUT writing the sentinel (use-bedrock.sh, release-session routing,
+      // WITHOUT writing the sentinel (use-bedrock.sh, app-releaser routing,
       // manual edits). In that case the metered Bedrock provider stays active
       // but the recovery probe below never runs, stranding the box on paid
       // tokens even when OAuth accounts have headroom. Treat USE_BEDROCK=1 in
       // settings.json as an equivalent recovery trigger so we always probe
-      // back to free OAuth.
+      // back to free OAuth. (2026-06-13: stuck on Bedrock 19h post-recovery.)
       let settingsBedrock = false;
       try {
         const sp = join(process.env.HOME || '', '.claude', 'settings.json');
@@ -1571,6 +1775,8 @@ async function mainLoop() {
         await doRotation(reason);
         lastRotatedAt = Date.now();
         await sleep(RATE_LIMIT_COOLDOWN);
+      } else {
+        await checkSessionLeaseRotations(config, state);
       }
     } catch (err) {
       log(`Daemon error: ${err.message}`);
