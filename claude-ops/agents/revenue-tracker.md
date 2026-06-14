@@ -12,7 +12,7 @@ disallowedTools:
   - Edit
   - Agent
 memory: project
-initialPrompt: "Pull live revenue from Stripe + RevenueCat, query AWS costs, check credit balances, and cross-reference project revenue. Return financial snapshot."
+initialPrompt: 'Pull live revenue from Stripe + RevenueCat, query AWS costs, check credit balances, and cross-reference project revenue. Return financial snapshot.'
 ---
 
 # REVENUE TRACKER AGENT
@@ -254,9 +254,7 @@ Use this only if BOTH `STRIPE_SECRET_KEY` and `REVENUECAT_API_KEY` are unset and
       "expires": null,
       "note": "check AWS console"
     },
-    "top_cost_drivers": [
-      { "service": "[name]", "cost": 0.0, "trend": "up|down|stable" }
-    ]
+    "top_cost_drivers": [{ "service": "[name]", "cost": 0.0, "trend": "up|down|stable" }]
   },
   "runway": {
     "burn_rate_monthly": 0.0,

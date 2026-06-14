@@ -3,219 +3,227 @@
 ## [2.32.0] - 2026-06-14
 
 ### Added
-CRS relay-pool auto-prioritization: a new `crs-priority` daemon (opt-in, off by default) that manages per-account `schedulable` flags on a claude-relay-service pool from live signals (`sessionWindowStatus` + rate-limit + overload, with `claudeUsage` utilization as a fresh-only secondary), so the relay avoids near-maxed accounts and re-enables them on recovery — the relay-pool analogue of the keychain rotator. Hysteresis bands prevent flapping; a floor guarantees the pool never starves itself; stale/absent usage never drives a re-enable. Ships `scripts/account-rotation/crs-priority-daemon.{mjs,sh}`, a `templates/com.claude-ops.crs-priority.plist` launchd template + `scripts/install-crs-priority-agent.sh` installer (120s cadence, single-flight locked), a `crs` config block, and wires `/ops:rotate crs|crs-tick` (status/manual tick) + an `/ops:rotate-setup --crs` install step. Admin password resolves from `$CRS_ADMIN_PASSWORD` or the credential store (`CRS-Admin-<adminUser>`), never config.
 
+- CRS relay-pool auto-prioritization: a new `crs-priority` daemon (opt-in, off by default) that manages per-account `schedulable` flags on a claude-relay-service pool from live signals (`sessionWindowStatus` + rate-limit + overload, with `claudeUsage` utilization as a fresh-only secondary), so the relay avoids near-maxed accounts and re-enables them on recovery — the relay-pool analogue of the keychain rotator. Hysteresis bands prevent flapping; a floor guarantees the pool never starves itself; stale/absent usage never drives a re-enable. Ships `scripts/account-rotation/crs-priority-daemon.{mjs,sh}`, a `templates/com.claude-ops.crs-priority.plist` launchd template + `scripts/install-crs-priority-agent.sh` installer (120s cadence, single-flight locked), a `crs` config block, and wires `/ops:rotate crs|crs-tick` (status/manual tick) + an `/ops:rotate-setup --crs` install step. Admin password resolves from `$CRS_ADMIN_PASSWORD` or the credential store (`CRS-Admin-<adminUser>`), never config.
+- `ops-update`: a new step fast-forwards a linked local source checkout's `main` to `origin/main` after the cache upgrade, so a dev clone never silently drifts behind the published release. Safe by construction — it acts only when the checkout is on a clean `main` (never clobbering uncommitted WIP, a feature branch, or unpushed commits) and is a no-op when no checkout is present. New `--no-localsync` flag opts out.
+
+### Fixed
+
+- `ops-post-update-migrate`: rsync each new version into a stable `current/` directory and repoint `installed_plugins.json` at it, so Claude Code deleting the old versioned cache dir mid-session no longer triggers "Plugin directory does not exist" PostToolUse hook errors. All steps are non-fatal guards.
 
 ## [2.31.0] - 2026-06-14
 
 ### Changed
-Rotation: never use Bedrock while any OAuth (Claude Max) account has a usable token. Adds provider-env model/AWS-var scrub on provider swap (no more invalid Bedrock model id leaking into OAuth sessions), bedrock-lease purge on OAuth recovery, a live-session Bedrock force-swap watchdog (no defer for metered spend) with ss-based bedrock-runtime network scanner, and default-off post-swap continuation injection (PR #582).
 
+Rotation: never use Bedrock while any OAuth (Claude Max) account has a usable token. Adds provider-env model/AWS-var scrub on provider swap (no more invalid Bedrock model id leaking into OAuth sessions), bedrock-lease purge on OAuth recovery, a live-session Bedrock force-swap watchdog (no defer for metered spend) with ss-based bedrock-runtime network scanner, and default-off post-swap continuation injection (PR #582).
 
 ## [2.30.5] - 2026-06-14
 
 ### Changed
-Fix ops-update step-6 version-path rewrite on macOS/BSD: `sed -i -E` consumed `-E` as the -i backup suffix (extended regex off → `\1` undefined → silent rewrite failure). Switched to a portable temp-file rewrite that works on BSD + GNU sed.
 
+Fix ops-update step-6 version-path rewrite on macOS/BSD: `sed -i -E` consumed `-E` as the -i backup suffix (extended regex off → `\1` undefined → silent rewrite failure). Switched to a portable temp-file rewrite that works on BSD + GNU sed.
 
 ## [2.30.4] - 2026-06-14
 
 ### Changed
-telegram channel-mcp: env-templated single-owner leader gate (PID -> DEVBOT_TELEGRAM_OWNER) with TELEGRAM_CHANNEL_POLL opt-out; fix ops-deploy-monitor missing deploy-fix-common source; prettier account-rotation scripts
 
+telegram channel-mcp: env-templated single-owner leader gate (PID -> DEVBOT_TELEGRAM_OWNER) with TELEGRAM_CHANNEL_POLL opt-out; fix ops-deploy-monitor missing deploy-fix-common source; prettier account-rotation scripts
 
 ## [2.30.3] - 2026-06-14
 
 ### Changed
-Remove per-session stdio MCP servers (telegram, telegram-channel, doppler, desktop-act) from plugin .mcp.json — they loaded once per Claude session, multiplying processes across all live sessions. telegram was dead (empty creds); doppler + desktop-act relocated to on-demand (mcp-toggle). Daemon telegram-notification and doppler CLI secret-resolution paths are unaffected. MCP cost no longer scales with session count.
 
+Remove per-session stdio MCP servers (telegram, telegram-channel, doppler, desktop-act) from plugin .mcp.json — they loaded once per Claude session, multiplying processes across all live sessions. telegram was dead (empty creds); doppler + desktop-act relocated to on-demand (mcp-toggle). Daemon telegram-notification and doppler CLI secret-resolution paths are unaffected. MCP cost no longer scales with session count.
 
 ## [2.30.2] - 2026-06-14
 
 ### Changed
-Privacy/templating pass: scrubbed all personal data from source + history (generic placeholders), removed project-specific scripts. New: provider-router (hot per-request provider/account swap via ANTHROPIC_BASE_URL) + daemon Bedrock→OAuth drift self-heal.
 
+Privacy/templating pass: scrubbed all personal data from source + history (generic placeholders), removed project-specific scripts. New: provider-router (hot per-request provider/account swap via ANTHROPIC_BASE_URL) + daemon Bedrock→OAuth drift self-heal.
 
 ## [2.29.1] - 2026-06-12
 
 ### Changed
+
 - fix(ops): cross-platform gh-orphan-killer for curl/api.github.com poll loops + live installer (#558)
 - fix(wa-mac-archive): owner-idle gate + precise Archive-chat matching + focus restore (#562)
-
 
 ## [2.29.0] - 2026-06-11
 
 ### Changed
-ops-inbox: Mac WhatsApp.app fallback suite — Tier-4 archive via Mac app (bypasses server-side 429), automatic Mac ground-truth cross-check in the freshness gate, and Tailscale→Cloudflare-tunnel SSH transport chain (wa-mac-transport.sh + setup-wa-mac-cf-tunnel.sh) (#560)
 
+ops-inbox: Mac WhatsApp.app fallback suite — Tier-4 archive via Mac app (bypasses server-side 429), automatic Mac ground-truth cross-check in the freshness gate, and Tailscale→Cloudflare-tunnel SSH transport chain (wa-mac-transport.sh + setup-wa-mac-cf-tunnel.sh) (#560)
 
 ## [2.28.0] - 2026-06-11
 
 ### Changed
-ops-inbox: Mac WhatsApp.app ChatStorage fallback for bridge-miss recovery (read-only reader + freshness-gate hint).
 
+ops-inbox: Mac WhatsApp.app ChatStorage fallback for bridge-miss recovery (read-only reader + freshness-gate hint).
 
 ## [2.27.4] - 2026-06-11
 
 ### Changed
-WA bridge Fix V: tolerate missing sync keys in LTHash skip loop, 300ms throttle (dodges 429 rate-overlimit), key-arrival poller; default skip_bad=true on full_sync resync. Verified end-to-end 2026-06-10: poisoned regular_low chain healed, archive writes propagate to phone (31/31). Upstream: tulir/whatsmeow#1171.
 
+WA bridge Fix V: tolerate missing sync keys in LTHash skip loop, 300ms throttle (dodges 429 rate-overlimit), key-arrival poller; default skip_bad=true on full_sync resync. Verified end-to-end 2026-06-10: poisoned regular_low chain healed, archive writes propagate to phone (31/31). Upstream: tulir/whatsmeow#1171.
 
 ## [2.27.3] - 2026-06-09
 
 ### Changed
-WhatsApp inbox-scan resilience: corrupt archived flag can no longer blind the scan (recency fallback, #545); full_sync resync defaults skip_bad=true so wedged LTHash chains self-heal, ops-inbox heal recipes updated (#546).
 
+WhatsApp inbox-scan resilience: corrupt archived flag can no longer blind the scan (recency fallback, #545); full_sync resync defaults skip_bad=true so wedged LTHash chains self-heal, ops-inbox heal recipes updated (#546).
 
 ## [2.27.2] - 2026-06-09
 
 ### Changed
-ops-inbox-scan: treat WhatsApp as remote-only when no local store — signal the orchestrator to scan via live MCP (mcp__whatsapp__*) instead of reporting empty buckets as 'no messages'. Prevents stale/de-paired local stores from producing phantom needs_reply and duplicate sends.
 
+ops-inbox-scan: treat WhatsApp as remote-only when no local store — signal the orchestrator to scan via live MCP (mcp**whatsapp**\*) instead of reporting empty buckets as 'no messages'. Prevents stale/de-paired local stores from producing phantom needs_reply and duplicate sends.
 
 ## [2.27.1] - 2026-06-09
 
 ### Changed
-fix(whatsapp): /api/archive now re-pulls the recovered regular_low snapshot between 409-conflict retries so inbox archiving converges without a manual recover→retry; fails fast on a persistently unverifiable server chain instead of burning repeated full-snapshot resyncs (NEVER-LEAK guard) (Fix V, #541).
 
+fix(whatsapp): /api/archive now re-pulls the recovered regular_low snapshot between 409-conflict retries so inbox archiving converges without a manual recover→retry; fails fast on a persistently unverifiable server chain instead of burning repeated full-snapshot resyncs (NEVER-LEAK guard) (Fix V, #541).
 
 ## [2.27.0] - 2026-06-08
 
 ### Changed
-feat(ops): Windsor.ai live marketing/analytics data source — 325+ connectors (Meta Ads, Google Ads, GA4, TikTok, LinkedIn, …) for /ops:marketing, /ops:socials, /ops:ecom, /ops:dash, via MCP (OAuth) or REST (#534). fix(account-rotation): jitter the post-rotation fan-out — random jitter on the respawn stagger (#536) and the /login session-inject cadence (#538) so a freshly-rotated account isn't hit by a synchronized first-call burst. fix(scripts): content + SEO generators work under macOS bash 3.2 / printf leading-dash (#535). docs: README rotation anti-stampede + Windsor.ai notes (#539).
 
+feat(ops): Windsor.ai live marketing/analytics data source — 325+ connectors (Meta Ads, Google Ads, GA4, TikTok, LinkedIn, …) for /ops:marketing, /ops:socials, /ops:ecom, /ops:dash, via MCP (OAuth) or REST (#534). fix(account-rotation): jitter the post-rotation fan-out — random jitter on the respawn stagger (#536) and the /login session-inject cadence (#538) so a freshly-rotated account isn't hit by a synchronized first-call burst. fix(scripts): content + SEO generators work under macOS bash 3.2 / printf leading-dash (#535). docs: README rotation anti-stampede + Windsor.ai notes (#539).
 
 ## [2.26.5] - 2026-06-07
 
 ### Changed
-Security hardening: independent pii-gate CI job + owner-PII checks in test-no-secrets.sh (home paths, webmail/brand emails, AWS ARN account ids, phone numbers) so personal data can never land in this public repo again (#530); gitleaks false-positives allowlisted so secret-scan CI is genuinely green/enforcing (#532).
 
+Security hardening: independent pii-gate CI job + owner-PII checks in test-no-secrets.sh (home paths, webmail/brand emails, AWS ARN account ids, phone numbers) so personal data can never land in this public repo again (#530); gitleaks false-positives allowlisted so secret-scan CI is genuinely green/enforcing (#532).
 
 ## [2.26.4] - 2026-06-07
 
 ### Changed
-WhatsApp bridge: Fix T skips unverifiable LTHash app-state patches instead of wedging archive sync (ends the re-pair treadmill); Fix U reconciles chats.archived from whatsmeow_chat_settings so the box mirrors the phone with no re-pair. New endpoints: /api/resync_app_state?skip_bad=true, /api/reconcile_archived.
 
+WhatsApp bridge: Fix T skips unverifiable LTHash app-state patches instead of wedging archive sync (ends the re-pair treadmill); Fix U reconciles chats.archived from whatsmeow_chat_settings so the box mirrors the phone with no re-pair. New endpoints: /api/resync_app_state?skip_bad=true, /api/reconcile_archived.
 
 ## [2.26.3] - 2026-06-07
 
 ### Changed
-Account rotation now re-auths live TTY sessions (tmux/iTerm2 /login injection + resume-path for non-tmux interactive sessions like Ghostty) in addition to respawning detached bg agents (#527). Protect Supercharge from /speedup demotion; gitignore .gstack/.
 
+Account rotation now re-auths live TTY sessions (tmux/iTerm2 /login injection + resume-path for non-tmux interactive sessions like Ghostty) in addition to respawning detached bg agents (#527). Protect Supercharge from /speedup demotion; gitignore .gstack/.
 
 ## [2.26.2] - 2026-06-07
 
 ### Changed
-fix(daemon): Linux/systemd status detection in ops-daemon-manager (installed/running/pid now correct on systemd --user hosts, not just macOS launchd); real whatsapp-bridge PID reporting via optional registry pid_probe field (reporting-only, never fed into liveness/restart path).
 
+fix(daemon): Linux/systemd status detection in ops-daemon-manager (installed/running/pid now correct on systemd --user hosts, not just macOS launchd); real whatsapp-bridge PID reporting via optional registry pid_probe field (reporting-only, never fed into liveness/restart path).
 
 ## [2.26.1] - 2026-06-07
 
 ### Changed
-fix(whatsapp): durable post-re-pair app-state LTHash prevention — readiness gate on /api/archive (HTTP 425 until regular_low synced), new /api/app_state_status, discard_local resync to heal corruption without a phone tap, and wa-inbox-fresh freshness wait (#521). feat(whatsapp): auto-backfill chat display names in link_contacts.py so LID/phone chats never show raw numbers (#520).
 
+fix(whatsapp): durable post-re-pair app-state LTHash prevention — readiness gate on /api/archive (HTTP 425 until regular_low synced), new /api/app_state_status, discard_local resync to heal corruption without a phone tap, and wa-inbox-fresh freshness wait (#521). feat(whatsapp): auto-backfill chat display names in link_contacts.py so LID/phone chats never show raw numbers (#520).
 
 ## [2.26.0] - 2026-06-06
 
 ### Changed
-Add /ops:ops-unifi UniFi network command center + ops:unifi-agent probe agent. Curl-native control across all three official UniFi APIs — Site Manager (cloud api.ui.com: hosts, sites, devices, ISP/WAN metrics, SD-WAN), Network Integration (local proxy/network/integration/v1: devices, clients, restart, block/unblock, vouchers, live stats), and Protect Integration (local proxy/protect/integration/v1: cameras, NVR, snapshot, settings). Includes a predict mode that cross-correlates ISP metrics + device stats + camera state to flag WAN degradation, AP stress, weak-RF clients, and surveillance gaps. Adds a /ops:setup network wizard section; all state-changing actions Rule-5 gated, outbound alerts Rule-6 gated.
 
+Add /ops:ops-unifi UniFi network command center + ops:unifi-agent probe agent. Curl-native control across all three official UniFi APIs — Site Manager (cloud api.ui.com: hosts, sites, devices, ISP/WAN metrics, SD-WAN), Network Integration (local proxy/network/integration/v1: devices, clients, restart, block/unblock, vouchers, live stats), and Protect Integration (local proxy/protect/integration/v1: cameras, NVR, snapshot, settings). Includes a predict mode that cross-correlates ISP metrics + device stats + camera state to flag WAN degradation, AP stress, weak-RF clients, and surveillance gaps. Adds a /ops:setup network wizard section; all state-changing actions Rule-5 gated, outbound alerts Rule-6 gated.
 
 ## [2.25.0] - 2026-06-06
 
 ### Changed
-WhatsApp ops-inbox: project the HistorySync per-conversation archive flag onto chats.archived so the inbox view mirrors the phone independent of the chronically-corrupt regular_low app-state (Fix O); request maximum history on (re-)pair via RequireFullSync + maxed history-sync limits (Fix P).
 
+WhatsApp ops-inbox: project the HistorySync per-conversation archive flag onto chats.archived so the inbox view mirrors the phone independent of the chronically-corrupt regular_low app-state (Fix O); request maximum history on (re-)pair via RequireFullSync + maxed history-sync limits (Fix P).
 
 ## [2.24.0] - 2026-06-06
 
 ### Changed
-Add /ops:ops-ar A&R command + ar-producer agent (Opus): runs the audio-ar stack (BPM/key/loudness/structure, stems, CLAP mood/genre/hit-lean, Whisper lyrics, Cyanite/Music.ai pro layer) and delivers verdict cards. Modes: single track, batch, full Gmail-inbox demo sweep; emails the full verdict with direct listen links (Rule 6 gated).
 
+Add /ops:ops-ar A&R command + ar-producer agent (Opus): runs the audio-ar stack (BPM/key/loudness/structure, stems, CLAP mood/genre/hit-lean, Whisper lyrics, Cyanite/Music.ai pro layer) and delivers verdict cards. Modes: single track, batch, full Gmail-inbox demo sweep; emails the full verdict with direct listen links (Rule 6 gated).
 
 ## [2.23.1] - 2026-06-06
 
 ### Changed
-Balanced model strategy for gstack skills and ops commands
 
+Balanced model strategy for gstack skills and ops commands
 
 ## [2.23.0] - 2026-06-05
 
 ### Changed
-First-class WhatsApp media enrichment (video/image/document via vision+whisper) + bridge media-retry self-heal for 403/404/410 (Fix M), whatsmeow API-drift sync (Fix N + A/B/D/F/G/I ctx), and pinned whatsmeow in the installer to fix the @latest broken-build.
 
+First-class WhatsApp media enrichment (video/image/document via vision+whisper) + bridge media-retry self-heal for 403/404/410 (Fix M), whatsmeow API-drift sync (Fix N + A/B/D/F/G/I ctx), and pinned whatsmeow in the installer to fix the @latest broken-build.
 
 ## [2.22.0] - 2026-06-05
 
 ### Changed
+
 - ops-inbox: seed merged DM groups with lid twins from whatsmeow_lid_map (#504)
 - ops: add telegram_bot_token/owner_id to plugin schema; bump yolo agent turns (#503)
 - deps: bump hono (#499)
 - dispatch: strip ANTHROPIC_API_KEY from all claude agent spawns (#497)
 
-
 ## [2.21.0] - 2026-06-05
 
 ### Changed
-ops-inbox: autonomous WhatsApp refresh + send-log reconciliation on every scan. ops-inbox-scan now blocks (bounded) on a backfill+settle so classification reads a converged store, and reconciles the bridge outbound-send journal to auto-demote NEEDS_REPLY threads already answered via /api/send or a phone send not yet in the store. Closes the race where the background autosync hook left the scan reading stale data.
 
+ops-inbox: autonomous WhatsApp refresh + send-log reconciliation on every scan. ops-inbox-scan now blocks (bounded) on a backfill+settle so classification reads a converged store, and reconciles the bridge outbound-send journal to auto-demote NEEDS_REPLY threads already answered via /api/send or a phone send not yet in the store. Closes the race where the background autosync hook left the scan reading stale data.
 
 ## [2.20.14] - 2026-06-04
 
 ### Changed
-fix(ops-doctor): suppress non-actionable INFO for keys covered by global MCP; remove retired Kapture nag; widen stale-threshold to 2x interval to eliminate jitter false positives
 
+fix(ops-doctor): suppress non-actionable INFO for keys covered by global MCP; remove retired Kapture nag; widen stale-threshold to 2x interval to eliminate jitter false positives
 
 ## [2.20.13] - 2026-06-04
 
 ### Changed
+
 - salvage-scan: single-instance lock, hard timeout, bounded gh calls, nice priority (#494)
 - desktop-act-launcher: document macOS as a first-class native backend (#493)
 - scope Claude Code-credentials keychain lookup to $USER account (#492)
 - add Claude Code GitHub Action workflow (#491)
 
-
 ## [2.20.12] - 2026-06-03
 
 ### Changed
+
 ops-rotate-setup: delegate OAuth capture to rotate.mjs (Turnstile-capable browser-driver cascade) and write the consumed `Claude-Rotation-<key>`/`$USER` keychain schema; rewrite setup-account.mjs as a thin wrapper over `rotate.mjs --setup --only=<email> --auto --skip-valid`; update SKILL.md token-check, keychain references, and failure modes to match. The prior implementation launched a fresh Playwright Chromium (blocked by Cloudflare Turnstile, so the magic link was never sent) and wrote a sessionKey cookie under a keychain coordinate no consumer reads.
 
 ### Fixed
+
 ops-release: CHANGELOG prepend now passes the multi-line section to awk via a temp file (`getline`), fixing the `awk: newline in string` error that silently skipped the changelog entry when `--notes` spanned multiple lines.
 
 ## [2.20.11] - 2026-06-03
 
 ### Changed
-Stop ops-daemon falsely churning whatsapp-bridge. check_health/write_daemon_health now honor the configured `health_check` probe (e.g. `lsof -i :8080`) as authoritative liveness instead of tracking the ephemeral launcher-wrapper PID that exits as soon as the systemd-owned bridge is up — eliminating perpetual 'HEALTH: whatsapp-bridge is dead → RESTART' log spam, inflated restart counters and false max_restarts crash alerts for a healthy bridge. The probe-command lookup caches only on a clean parse so a transient config-read failure can't permanently disable it. Services without a `health_check` keep the legacy PID-liveness behavior.
 
+Stop ops-daemon falsely churning whatsapp-bridge. check_health/write_daemon_health now honor the configured `health_check` probe (e.g. `lsof -i :8080`) as authoritative liveness instead of tracking the ephemeral launcher-wrapper PID that exits as soon as the systemd-owned bridge is up — eliminating perpetual 'HEALTH: whatsapp-bridge is dead → RESTART' log spam, inflated restart counters and false max_restarts crash alerts for a healthy bridge. The probe-command lookup caches only on a clean parse so a transient config-read failure can't permanently disable it. Services without a `health_check` keep the legacy PID-liveness behavior.
 
 ## [2.20.9] - 2026-06-03
 
 ### Changed
-Telegram channel-mcp leader-exclusive poll+reply gate (#481): only the fleet-orchestrator leader session consumes the bot, preventing multi-session getUpdates contention; fails open for non-fleet / non-Linux installs so default single-session behavior is preserved.
 
+Telegram channel-mcp leader-exclusive poll+reply gate (#481): only the fleet-orchestrator leader session consumes the bot, preventing multi-session getUpdates contention; fails open for non-fleet / non-Linux installs so default single-session behavior is preserved.
 
 ## [2.20.8] - 2026-06-02
 
 ### Changed
-whatsapp-mcp: port apply-patches.py Fix A/B pairing + C/D/F/G/L to current upstream whatsmeow API (go build/vet clean); recover_app_state now resync-only (peer-recovery API removed upstream) (PR #479)
 
+whatsapp-mcp: port apply-patches.py Fix A/B pairing + C/D/F/G/L to current upstream whatsmeow API (go build/vet clean); recover_app_state now resync-only (peer-recovery API removed upstream) (PR #479)
 
 ## [2.20.7] - 2026-06-02
 
 ### Changed
-whatsapp-mcp: re-anchor apply-patches.py Fix E/H/J against current upstream + move sentinels onto invariant content (PR #477)
 
+whatsapp-mcp: re-anchor apply-patches.py Fix E/H/J against current upstream + move sentinels onto invariant content (PR #477)
 
 ## [2.20.6] - 2026-06-02
 
 ### Changed
-whatsapp-mcp: self-installing archive_chat via healing /api/archive (Fix M, PR #475); email: account-safe gog-reply helper (PR #474)
 
+whatsapp-mcp: self-installing archive_chat via healing /api/archive (Fix M, PR #475); email: account-safe gog-reply helper (PR #474)
 
 ## [Unreleased]
 
 ### Fixed
+
 - fix(whatsapp-mcp): port apply-patches.py Fix A/B (pairing) and Fix C/D (`FetchAppState`) to the current upstream + pinned-whatsmeow API — these were genuine API/behaviour drift, not anchor bit-rot, so a fresh reinstall failed to apply and/or failed to compile (`go build`/`go vet` errored). Verified signatures against whatsmeow `v0.0.0-20250318233852-06705625cf82` via `go doc`/source. Changes:
   - **Fix A/B (pairing):** upstream switched to **QR-only** login (no `PairPhone` call to anchor on). `Client.PairPhone` still exists in the pinned whatsmeow, so per "prefer phone-pair when supported" the patcher now **re-introduces phone-number (pairing-code) linking** into upstream's QR block — `WA_PHONE` set → pairing code; unset → QR loop unchanged. `PairPhone` also **lost its `context.Context` parameter** (`PairPhone(phone, showPushNotification, clientType, clientDisplayName)`), so Fix B's old `context.WithTimeout` deadline can't be passed in; the 3-minute hang-bound is preserved by racing `PairPhone` in a goroutine against a `time.After` watchdog. Fix A's 3s post-`Connect` sleep retained. New sentinel keys on inserted-content invariant. Also dropped the old hardcoded fallback phone number (now `os.Getenv("WA_PHONE")` only).
   - **Fix C/D + F/G (`FetchAppState`/`SendAppState`):** current whatsmeow **dropped the `context.Context` first arg** from `FetchAppState(name, fullSync, onlyIfNotSynced)` and `SendAppState(patch)` — `go vet` reported "too many arguments". Updated all four call sites (Fix D resync endpoint, Fix G `healLTHash`, Fix F `/api/archive`). Fix C (`StoreMessage`/`StoreChat` outbound persistence) already matched upstream and is unchanged.
@@ -224,76 +232,78 @@ whatsapp-mcp: self-installing archive_chat via healing /api/archive (Fix M, PR #
 - fix(whatsapp-mcp): apply-patches.py Fix M makes the `archive_chat` + `resync_app_state` MCP surface self-contained — current upstream lharries/whatsapp-mcp ships none of it, so a fresh reinstall left the MCP server with no working `archive_chat`. The MCP tool now durably routes through the healing `POST /api/archive` endpoint (auto-recovers LTHash 409s, whatsmeow #382/#858) instead of a raw app-state mutation. Idempotent against both pristine upstream and already-patched live trees (no duplicate defs on rerun). ENDPOINTS.md documents the heal routing.
 - fix(whatsapp-mcp): re-anchor apply-patches.py Fix E, Fix H (`*events.Archive` subscriber) and Fix J (`list_chats` archived filter) against current upstream. Their needles had bit-rotted — upstream reflowed whitespace (collapsed a blank line before `get_sender_name`, trailing space after the `SELECT` keyword, blank-line indentation in `list_chats`), dropped trailing commas (last `list_chats` param, last `Chat()` kwarg) and changed the `events.LoggedOut` log string — so a fresh reinstall silently skipped all three (`needle not found`), leaving the bridge with no archive-event subscriber and the MCP server with no `archived` column/filter. Re-anchored each splice to a minimal stable nearby token (e.g. `def get_sender_name`, `case *events.LoggedOut:`, `…last_is_from_me\n            FROM chats`) and moved the Fix E / Fix J-row sentinels onto the inserted content's invariant (`def _open_db(`, `archived=bool(chat_data[6])`) so they no-op on the older-patcher-patched live tree instead of duplicating the helper. Inserted content (runtime behaviour) is unchanged. Verified: fresh upstream → all apply once; rerun → all skip; live-tree copy → no duplicate insertions; gofmt + py_compile clean. (Out of scope, flagged: Fix A/B PairPhone and Fix C/D no longer match upstream either — upstream switched to QR pairing and changed `FetchAppState`/send shapes; those are behaviour/API drifts, not just bit-rot.)
 
-
 ## [2.20.5] - 2026-06-02
 
 ### Changed
-ops-inbox: act on finance/legal/personal threads instead of surface-only (PR #472)
 
+ops-inbox: act on finance/legal/personal threads instead of surface-only (PR #472)
 
 ## [2.20.4] - 2026-06-02
 
 ### Changed
-ops-inbox: INBOX ZERO is now the mandate — archive everything not actionable (incl. WAITING, auto-resurfaces), auto-archive immediately after replying, include_context:true hard default on every read, verify bridge fully up first, and the verified phone archive-toggle heal for the /api/archive LTHash hang.
 
+ops-inbox: INBOX ZERO is now the mandate — archive everything not actionable (incl. WAITING, auto-resurfaces), auto-archive immediately after replying, include_context:true hard default on every read, verify bridge fully up first, and the verified phone archive-toggle heal for the /api/archive LTHash hang.
 
 ## [2.20.3] - 2026-06-02
 
 ### Changed
-add telegram_bot_token/owner_id to plugin userConfig schema (telegram-channel MCP); bump yolo maxTurns 20→35
 
+add telegram_bot_token/owner_id to plugin userConfig schema (telegram-channel MCP); bump yolo maxTurns 20→35
 
 ## [2.20.2] - 2026-06-02
 
 ### Changed
-- fix(ops-inbox): seed merged DM groups with lid twins from whatsmeow_lid_map (#466)
 
+- fix(ops-inbox): seed merged DM groups with lid twins from whatsmeow_lid_map (#466)
 
 ## [2.20.1] - 2026-06-02
 
 ### Changed
-ops-inbox: fix gog archive/verify (raw not cached search); add open-tracking follow-up feature
 
+ops-inbox: fix gog archive/verify (raw not cached search); add open-tracking follow-up feature
 
 ## [2.20.0] - 2026-06-02
 
 ### Changed
+
 ### Added
+
 - Pocket/email-cos Telegram approvals now render A/B/C options with a ⭐ recommended pick, a decision-question header, and untruncated message bodies (full email drafts + voice-memo context) (#459).
 - Freeform email **edit → re-draft → re-stage**: replying to an email approval with edits (e.g. "change the date to Friday") re-drafts the body via LLM and re-stages a fresh approval ASK; the original draft is never auto-sent (#462).
 
 ### Fixed
-- Every `claude -p` subprocess in pocket-responder (`_redraft_email`, `_llm_map`, `_validate_action`) was silently dying with "Prompt is too long" on context-heavy boxes — added MCP-isolation flags (`--strict-mcp-config --mcp-config '{}'`) so freeform natural-language approval mapping and the pre-send validation guard actually work, not just the regex fast-path (#462).
 
+- Every `claude -p` subprocess in pocket-responder (`_redraft_email`, `_llm_map`, `_validate_action`) was silently dying with "Prompt is too long" on context-heavy boxes — added MCP-isolation flags (`--strict-mcp-config --mcp-config '{}'`) so freeform natural-language approval mapping and the pre-send validation guard actually work, not just the regex fast-path (#462).
 
 ## [2.19.3] - 2026-06-01
 
 ### Added
-- feat(ops-ship): one-command sweep-merge-all-PRs → release → update (#457)
 
+- feat(ops-ship): one-command sweep-merge-all-PRs → release → update (#457)
 
 ## [2.19.2] - 2026-06-01
 
 ### Changed
-feat(ops-release): register /ops:ops-release slash command (#455); fix(whatsapp): canonicalize 180s restart-floor in wa-inbox-fresh + wa-bridge-keepalive so it survives reinstall (#454)
 
+feat(ops-release): register /ops:ops-release slash command (#455); fix(whatsapp): canonicalize 180s restart-floor in wa-inbox-fresh + wa-bridge-keepalive so it survives reinstall (#454)
 
 ## [2.19.1] - 2026-06-01
 
 ### Changed
-fix(whatsapp): honor shared restart-floor in bridge-up + ops-autofix to stop restart churn that dropped phone-sent messages (#452)
 
+fix(whatsapp): honor shared restart-floor in bridge-up + ops-autofix to stop restart churn that dropped phone-sent messages (#452)
 
 ## [2.19.0] - 2026-06-01
 
 ### Changed
+
 - feat(ops-update): one-command local plugin upgrade with prune + version-rewrite (#450)
 - fix(ops-dash): align box right-borders via display-width-aware padding (#449)
-
 
 ## [2.18.20] - 2026-06-01
 
 ### Changed
+
 ops-inbox: offline scan engine replaces the ~330k-token agent fan-out.
 
 (The ops-inbox-scan feature landed on main after the sibling v2.18.19 release tag was cut, so it ships here as 2.18.20.)
@@ -304,10 +314,10 @@ ops-inbox: offline scan engine replaces the ~330k-token agent fan-out.
 
 Net: the common WhatsApp + email + glance case drops from 5 agents / ~330k tokens / ~130s to a sub-second script + a couple of inline calls.
 
-
 ## [2.18.19] - 2026-06-01
 
 ### Changed
+
 Re-release of the ops-inbox offline scan engine (supersedes the orphaned v2.18.19 tag, which was cut at 01:30 from a commit predating bin/ops-inbox-scan).
 
 - bin/ops-inbox-scan: deterministic read-only classifier — WhatsApp (whatsmeow sqlite, lid<->phone merge, names from contacts, mode=ro WAL-safe, no recency cutoff) + Email (gog envelope first-pass). ~0.9s, near-zero tokens.
@@ -316,10 +326,10 @@ Re-release of the ops-inbox offline scan engine (supersedes the orphaned v2.18.1
 
 Net: common WhatsApp + email + glance case drops from 5 agents / ~330k tokens / ~130s to a sub-second script + a couple of inline calls.
 
-
 ## [2.18.19] - 2026-06-01
 
 ### Changed
+
 ops-inbox: offline scan engine replaces the ~330k-token agent fan-out.
 
 - New bin/ops-inbox-scan: deterministic, read-only, in-process classifier for the two heaviest channels — WhatsApp (direct whatsmeow sqlite read; merges each person's lid<->phone chats into one conversation; classifies needs_reply/waiting/groups/fyi from the true merged-thread last message; resolves names from contacts; ~0.9s) and Email (gog gmail search envelope first-pass + no-reply-sender heuristic). Opens the live DB mode=ro (not immutable=1) so WAL-buffered freshest messages aren't skipped; no hard recency cutoff (archived=0 is the filter).
@@ -328,46 +338,46 @@ ops-inbox: offline scan engine replaces the ~330k-token agent fan-out.
 
 Net: the common WhatsApp + email + glance case drops from 5 agents / ~330k tokens / ~130s to a sub-second script + a couple of inline calls.
 
-
 ## [2.18.19] - 2026-06-01
 
 ### Changed
-Ship bin/ops-home snapshot producer (Homey Pro: power, alarms, presence, devices) so ops-go/ops-fires Home section resolves instead of 'home probe failed'. Project-aware ops-marketing-dash with owner-level channels.marketing Doppler-ref cred tier so the briefing Marketing section resolves My-Project GA4/Meta/Klaviyo. (Code merged via #443 without a version bump; this cuts the actual release.)
 
+Ship bin/ops-home snapshot producer (Homey Pro: power, alarms, presence, devices) so ops-go/ops-fires Home section resolves instead of 'home probe failed'. Project-aware ops-marketing-dash with owner-level channels.marketing Doppler-ref cred tier so the briefing Marketing section resolves My-Project GA4/Meta/Klaviyo. (Code merged via #443 without a version bump; this cuts the actual release.)
 
 ## [2.18.18] - 2026-06-01
 
 ### Changed
-Bump Pocket webhook deps (fastapi 0.136.3, uvicorn 0.48.0); upgrade mcp-proxy to 0.12.0 on the box
 
+Bump Pocket webhook deps (fastapi 0.136.3, uvicorn 0.48.0); upgrade mcp-proxy to 0.12.0 on the box
 
 ## [2.18.17] - 2026-06-01
 
 ### Changed
-Fix L: WhatsApp bridge phone-online prerequisite gate (recover/archive 503 when offline) + archive auto-retry on 409 conflict + recovery-with-backfill-on-alive
 
+Fix L: WhatsApp bridge phone-online prerequisite gate (recover/archive 503 when offline) + archive auto-retry on 409 conflict + recovery-with-backfill-on-alive
 
 ## [2.18.16] - 2026-06-01
 
 ### Changed
-Ship Fix K: recover_app_state MCP tool canonicalized in apply-patches (15th mcp__whatsapp__* tool); ENDPOINTS.md updated
 
+Ship Fix K: recover_app_state MCP tool canonicalized in apply-patches (15th mcp**whatsapp**\* tool); ENDPOINTS.md updated
 
 ## [2.18.15] - 2026-06-01
 
 ### Changed
-CI: fix two pre-existing red suites blocking the merge gate. test-hooks.sh — add UserPromptSubmit + PreCompact to the valid hook-event allowlist (UserPromptSubmit is a real Claude Code event declared in hooks.json). test-agent-teams.sh — add Agent Teams boilerplate to the `flow` skill (TeamCreate + SendMessage in allowed-tools, '## Agent Teams support' section with flag check + example + fallback), matching every other agent-spawning skill. Full CI green for the first time.
 
+CI: fix two pre-existing red suites blocking the merge gate. test-hooks.sh — add UserPromptSubmit + PreCompact to the valid hook-event allowlist (UserPromptSubmit is a real Claude Code event declared in hooks.json). test-agent-teams.sh — add Agent Teams boilerplate to the `flow` skill (TeamCreate + SendMessage in allowed-tools, '## Agent Teams support' section with flag check + example + fallback), matching every other agent-spawning skill. Full CI green for the first time.
 
 ## [2.18.14] - 2026-06-01
 
 ### Changed
-Fix /ops:ops-go briefing empty Git/PRs/Infra/GSD sections — registry.json schema collision (GSD project schema vs old partner-template schema). New lib/registry-resolve.sh (null-guarded readers: repos from .remote_url, paths from .path, alias fallback) adopted by ops-git/ops-prs/ops-ci/ops-merge-scan/ops-dash; ops-merge-salvage-scan uses object-level derivation; ops-gsd-states matches the GSD-only registry (fixes empty GSD State); ops-infra reads ECS clusters from durable $OPS_DATA_DIR/infra.json (survives the twice-daily GSD sync + upgrades) with optional region. Audited all 20 registry consumers; 15 already tolerant/unrelated, no behavior change.
 
+Fix /ops:ops-go briefing empty Git/PRs/Infra/GSD sections — registry.json schema collision (GSD project schema vs old partner-template schema). New lib/registry-resolve.sh (null-guarded readers: repos from .remote_url, paths from .path, alias fallback) adopted by ops-git/ops-prs/ops-ci/ops-merge-scan/ops-dash; ops-merge-salvage-scan uses object-level derivation; ops-gsd-states matches the GSD-only registry (fixes empty GSD State); ops-infra reads ECS clusters from durable $OPS_DATA_DIR/infra.json (survives the twice-daily GSD sync + upgrades) with optional region. Audited all 20 registry consumers; 15 already tolerant/unrelated, no behavior change.
 
 ## [2.18.13] - 2026-05-31
 
 ### Fixed
+
 - **WhatsApp: stop destructive `regular_low` auto-resync on Connected (#431).** The bridge
   ran `FetchAppState(regular_low, fullSync=true)` 3s after every connect, which on a fatally
   desynced collection (whatsmeow #382/#858) deleted the local snapshot and re-fetched the
@@ -377,9 +387,10 @@ Fix /ops:ops-go briefing empty Git/PRs/Infra/GSD sections — registry.json sche
 ## [2.18.12] - 2026-05-31
 
 ### Added
+
 - **WhatsApp `POST /api/recover_app_state` — fatal LTHash app-state recovery (#427, Fix I).**
   When the server's `regular_low` patch chain is unverifiable (`failed to verify patch vNNN:
-  mismatching LTHash`, whatsmeow #382/#858), archive/mute/pin 409 and neither resync, clearing
+mismatching LTHash`, whatsmeow #382/#858), archive/mute/pin 409 and neither resync, clearing
   the local snapshot, nor a single phone toggle heals it. The new endpoint requests a fresh
   unencrypted snapshot from the primary device (`BuildAppStateRecoveryRequest`→`SendPeerMessage`);
   whatsmeow's `handleAppStateRecovery` rebuilds the collection from scratch, bypassing the broken
@@ -389,47 +400,53 @@ Fix /ops:ops-go briefing empty Git/PRs/Infra/GSD sections — registry.json sche
 ## [2.18.11] - 2026-05-31
 
 ### Changed
+
 WhatsApp /api/recover_app_state (#427) — fatal LTHash app-state recovery via primary-device snapshot; unblocks archive after a fatal patch-chain desync
 
-
 ## [2.18.11] - 2026-05-31
 
 ### Changed
+
 WhatsApp /api/recover_app_state (#427) — fatal LTHash app-state recovery via primary-device snapshot; unblocks archive
 
-
 ## [2.18.11] - 2026-05-31
 
 ### Changed
-WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated own-sends always sync
 
+WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated own-sends always sync
 
 ## [2.18.10] - 2026-05-31
 
 ### Changed
-### Fixed
-- Doppler MCP no longer fails to connect by default. Added `mcp-servers/doppler-launcher.sh`, which resolves `DOPPLER_TOKEN` (pasted config → inherited env → `doppler configure get token`) and never exports an empty token, so the server stops being force-failed when `doppler_token` is left blank (#422).
 
+### Fixed
+
+- Doppler MCP no longer fails to connect by default. Added `mcp-servers/doppler-launcher.sh`, which resolves `DOPPLER_TOKEN` (pasted config → inherited env → `doppler configure get token`) and never exports an empty token, so the server stops being force-failed when `doppler_token` is left blank (#422).
 
 ## [Unreleased]
 
 ### Fixed
+
 - **Doppler MCP no longer fails by default.** The server was wired with `DOPPLER_TOKEN: "${user_config.doppler_token}"`, and the `doppler_token` config defaults to `""` — so a blank value was passed to `npx doppler-mcp` as `DOPPLER_TOKEN=""`, clobbering any inherited token and forcing a "Not authenticated" exit (MCP showed "Failed to connect" on every box without a pasted token). The config description's promise — "leave blank — runtime resolves automatically" — was never actually implemented. Added `mcp-servers/doppler-launcher.sh`, which resolves the token from the pasted config value → inherited `DOPPLER_TOKEN` → `doppler configure get token` (a prior `doppler login`), and crucially never exports an empty `DOPPLER_TOKEN`. When no token resolves, the server starts with the var unset so it can use its own `doppler login` store instead of being force-failed.
 
 ## [2.18.9] - 2026-05-31
 
 ### Added
+
 - `bin/ops-release` now bumps **package.json** (the `claude-ops-bin` npm package) in lockstep with plugin.json + the marketplace registry, so all version files stay in sync. Auto-detects package.json under `claude-ops/` or the repo root.
 
 ### Fixed
+
 - Reconciled `claude-ops/package.json` version (was stuck at 2.15.0 because the prior release path never touched it) up to the current plugin version.
 
 ### Changed
+
 - `RELEASE.md` documents the 4 version-bearing files and the package.json lockstep.
 
 ## 2.18.8 — 2026-05-31
 
 ### Fixed
+
 - **WhatsApp: guard fts5 triggers behind a bridge-binary capability probe (#419).**
   `whatsapp-bridge-migrate.sh` created `messages_fts` fts5 triggers via the system
   sqlite3 CLI (which has fts5), so creation always succeeded — but the triggers fire
@@ -445,6 +462,7 @@ WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated
 ## 2.18.7 — 2026-05-31
 
 ### Fixed
+
 - **ops-inbox: WhatsApp lid↔phone identity merge (#415).** whatsmeow stores the same
   person as two chats — `<lid>@lid` and `<pn>@s.whatsapp.net` — and the classifier scanned
   per-JID with no merge, so every run double-counted contacts (routinely **NEEDS_REPLY on
@@ -459,6 +477,7 @@ WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated
 ## 2.18.3 — 2026-05-31
 
 ### Added
+
 - **WhatsApp voice-note auto-transcription.** New `scripts/whatsapp/transcribe_voice_notes.py`
   finds incoming voice notes (`media_type='audio'`, empty `content`), downloads them via the
   bridge `/api/download`, transcribes with OpenAI `whisper-1`, and writes `[voice] <text>`
@@ -476,6 +495,7 @@ WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated
   classify against a stale store.
 
 ### Changed
+
 - `scripts/install-whatsapp-bridge-linux.sh` now also ships the voice-note transcriber and
   the freshness gate, drops + enables the `whatsapp-transcribe.{service,timer}` units (reading
   `OPENAI_API_KEY` from `~/.config/systemd/env/mcp-secrets.env`), and adds a
@@ -502,7 +522,8 @@ WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated
 ## 2.18.1 — 2026-05-31
 
 ### Added
-- **Pre-promotion validation guard in `pocket-responder`.** When an *outbound* action
+
+- **Pre-promotion validation guard in `pocket-responder`.** When an _outbound_ action
   (`send_message` / `email_reply`) is approved, the responder now runs a staleness +
   standing-rule check **before** committing it to `tasks.jsonl`. It gathers recent
   thread/related activity (via `gog`, best-effort) and asks an LLM (`claude-haiku-4-5`)
@@ -521,12 +542,13 @@ WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated
 ## 2.18.0 — 2026-05-31
 
 ### Added
+
 - **`pocket-responder`** — one canonical approval responder for the Pocket pipeline
   and social drafts. A single consumer of bot input and single writer of decisions:
   - **Button taps** (`✅ Approve` / `❌ Reject` / `a)`/`b)` choices),
   - **Freeform text** — a regex fast-path (`approve A1`, `A2 b`, `reject A3`) plus an
     optional LLM mapper (`claude-haiku-4-5`) for natural language (`"approve the
-    second one"`); low-confidence inputs ask to disambiguate rather than guess,
+second one"`); low-confidence inputs ask to disambiguate rather than guess,
   - **`social_publish` ASKs** — on approve, publishes a staged draft via the
     Typefully skill (tap-to-publish), so a social drafter can stage a draft and the
     owner approves it from one chat surface.
@@ -539,6 +561,7 @@ WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated
     (enabled when `EMAIL_COS_TG_ENABLE=true` + `EMAIL_COS_TG_CHAT_ID` set).
 
 ### Changed
+
 - `scripts/ops-message-listener.sh` now tees owner-chat button taps **and** freeform
   text to `responder-inbox.jsonl` for the responder. Owner chat id comes from
   `RESPONDER_OWNER_CHAT_ID` / `EMAIL_COS_TG_CHAT_ID` / `TELEGRAM_OWNER_ID` (env/config,
@@ -549,6 +572,7 @@ WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated
 ## 2.17.0 — 2026-05-30
 
 ### Added
+
 - **FLOW unification layer** (`/flow`) — one entrypoint over the three overlapping
   command systems (gstack dev-lifecycle, GSD `.planning/` phase machine, claude-ops
   `/ops:*`). Router/facade only — does NOT merge codebases; all three stay installed
@@ -566,6 +590,7 @@ WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated
 ## 2.16.0 — 2026-05-29
 
 ### Added
+
 - **Pocket decision-log module** (`scripts/ops-pocket-decisions.py`) — append-only,
   UTC-bucketed audit trail of triage ACT/ASK decisions, consumed by `ops-pocket-triage.py`
   via a portable `POCKET_SCRIPTS_DIR` loader (symlink-safe; no hardcoded `/opt` path).
@@ -573,6 +598,7 @@ WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated
   ingest → handler handoff), `on-memory.sh` (journal + per-event dispatch), README.
 
 ### Security / Hardening (PR #369 review fixes)
+
 - Webhook receiver claims dedup **after** successful handoff and **releases the claim +
   returns 500** on dispatch failure — prevents permanent loss of a recording on transient errors.
 - Auth fails **closed** (503) when no signing secret is configured (was fail-open).
@@ -583,6 +609,7 @@ WhatsApp bridge keepalive watchdog (#424) — hang-detection so phone-originated
 ## 2.14.0 — 2026-05-29
 
 ### Added
+
 - **`/ops:ops-aws-audit`** — read-only, account-agnostic AWS audit skill. A single
   self-contained `scripts/ops-aws-audit.sh` that uses the caller's credential
   chain and **auto-discovers all enabled regions** for a full-account sweep.
@@ -601,15 +628,18 @@ All notable changes to this project will be documented in this file.
 ## [2.18.6] - 2026-05-31
 
 ### Changed
+
 fix(whatsapp-bridge): build with -tags sqlite_fts5 so the bridge's SQLite has the fts5 module — fixes silent message-storage failure where every INSERT hit the messages_fts triggers and failed with "no such module: fts5". ops-autofix now verifies binary fts5 capability before running the migration (PR #412).
 
 ## [2.18.5] - 2026-05-31
 
 ### Added
+
 - `bin/ops-release` — reusable one-shot release tool: bumps plugin.json + marketplace.json (registry) + CHANGELOG in lockstep, opens a PR to main, optionally squash-merges and tags `vX.Y.Z`. See `RELEASE.md`.
 - `RELEASE.md` — release process documentation.
 
 ### Changed
+
 - ops-bg: `dispatch` now defaults the fleet/background agent working dir to `~/Projects` (override via `$OPSBG_DIR` or `--cwd`) and `cd`s into it before exec, so fleet agents start at the workspace root instead of an arbitrary repo (#410).
 
 ## [Unreleased]
@@ -636,13 +666,13 @@ _(Ports two patches that had been applied directly on the deploy box into the re
 
 ### Added
 
-- **Config-driven pocket notifications (`ops-pocket-notify`) — interactive setup of which events, which channels, when.** Pocket components emit an *event id*; the new `bin/ops-pocket-notify` dispatcher decides routing from `preferences.json → pocket.notifications`: per-event channels (telegram/email/whatsapp/slack via the existing senders + out-queue), plus a **full per-event schedule** — cooldown, quiet-hours, active-days, and severity escalation (high bypasses windows). New events are **off by default**. `/ops:ops-settings → Configure notifications` walks each event interactively (channels + schedule + dry-run test-send) and writes the prefs; `docs/pocket-notifications.md` documents the schema + event taxonomy. The executor emits `worker.spawned` / `worker.failed`, and the env-broker's notify hook points at the dispatcher. `--dry-run --json` resolves routing without sending (used by setup + tests).
+- **Config-driven pocket notifications (`ops-pocket-notify`) — interactive setup of which events, which channels, when.** Pocket components emit an _event id_; the new `bin/ops-pocket-notify` dispatcher decides routing from `preferences.json → pocket.notifications`: per-event channels (telegram/email/whatsapp/slack via the existing senders + out-queue), plus a **full per-event schedule** — cooldown, quiet-hours, active-days, and severity escalation (high bypasses windows). New events are **off by default**. `/ops:ops-settings → Configure notifications` walks each event interactively (channels + schedule + dry-run test-send) and writes the prefs; `docs/pocket-notifications.md` documents the schema + event taxonomy. The executor emits `worker.spawned` / `worker.failed`, and the env-broker's notify hook points at the dispatcher. `--dry-run --json` resolves routing without sending (used by setup + tests).
 
 ## [2.12.0] — 2026-05-29
 
 ### Added
 
-- **pocket-env-broker — peer-authenticated secrets broker for restricted pocket workers.** Restricted background workers (which no longer inherit the orchestrator's secret env, per 2.11.9) can now request a *specific allowlisted* secret at runtime via the `pocket-env <VAR>` client, instead of all-or-nothing. The broker (`scripts/pocket-env-broker.py`, runs as the privileged orchestrator user) listens on a unix socket, authenticates the caller with SO_PEERCRED (must be the worker uid), checks a **default-deny** allowlist (`env-broker-policy.json`), returns the value over the socket only (never to disk), and audits every grant/deny. Ships with the client, policy + systemd templates, docs, and tests; the pocket executor forwards the broker socket path + task/worker ids to workers.
+- **pocket-env-broker — peer-authenticated secrets broker for restricted pocket workers.** Restricted background workers (which no longer inherit the orchestrator's secret env, per 2.11.9) can now request a _specific allowlisted_ secret at runtime via the `pocket-env <VAR>` client, instead of all-or-nothing. The broker (`scripts/pocket-env-broker.py`, runs as the privileged orchestrator user) listens on a unix socket, authenticates the caller with SO_PEERCRED (must be the worker uid), checks a **default-deny** allowlist (`env-broker-policy.json`), returns the value over the socket only (never to disk), and audits every grant/deny. Ships with the client, policy + systemd templates, docs, and tests; the pocket executor forwards the broker socket path + task/worker ids to workers.
 - **Env-broker observability.** The broker keeps a metrics snapshot (`env-broker-health.json`: request/grant/deny/uid-rejection counters, recent denials, `anomaly` flag), exposes `pocket-env-broker --status [--json]`, and surfaces an `Env-broker` line in `/ops:ops-status` that raises a `⚠` anomaly on any uid rejection (a prompt-injection probing signal).
 - **Env-broker push notifications (opt-in).** Set `POCKET_ENV_BROKER_NOTIFY_CMD` (+ `POCKET_ENV_BROKER_NOTIFY_COOLDOWN`, default 300s) and the broker fires that command with an alert on uid rejections / not-allowed denials — rate-limited, best-effort, never blocking request handling. Wired to the operator's own chat it is a self-notification (outbound-comms-gate exempt).
 
@@ -676,7 +706,7 @@ _(Ports two patches that had been applied directly on the deploy box into the re
 
 ### Changed
 
-- **`/ops-inbox` multi-channel scan is now a parallel `Workflow` fan-out** — the scan/classify phase spawns one **read-only** scanner agent per *available* channel concurrently (via the `Workflow` tool), each returning structured classified results (NEEDS_REPLY / WAITING / HANDLED / FYI + the `chatId` needed to reply), then a synthesizer merges them into prioritized buckets. Wall-clock collapses from sum-of-channels to slowest-single-channel. Rule 6 is preserved end-to-end: scanners are explicitly read-only (never send/archive/mutate) and **all** reply drafting, approval, and sending stay in the main session under the one-draft→one-approval→one-send gate; channels are availability-detected first so no scanner is spawned for an unconfigured channel. Agent Teams and sequential scan are retained as documented fallbacks for older harnesses under the same constraints.
+- **`/ops-inbox` multi-channel scan is now a parallel `Workflow` fan-out** — the scan/classify phase spawns one **read-only** scanner agent per _available_ channel concurrently (via the `Workflow` tool), each returning structured classified results (NEEDS_REPLY / WAITING / HANDLED / FYI + the `chatId` needed to reply), then a synthesizer merges them into prioritized buckets. Wall-clock collapses from sum-of-channels to slowest-single-channel. Rule 6 is preserved end-to-end: scanners are explicitly read-only (never send/archive/mutate) and **all** reply drafting, approval, and sending stay in the main session under the one-draft→one-approval→one-send gate; channels are availability-detected first so no scanner is spawned for an unconfigured channel. Agent Teams and sequential scan are retained as documented fallbacks for older harnesses under the same constraints.
 
 ## [2.11.6] — 2026-05-27
 
@@ -751,7 +781,7 @@ First-class Linux parity for the background daemon, plus two cross-platform fixe
 
 ### Fixed
 
-- **`bin/ops-doctor` GNU `stat` crash** — `_pocket_health_check` used `stat -f '%m' || stat -c '%Y'`. On GNU coreutils `-f` means *filesystem stat* (not BSD's *format string*), so the first invocation succeeds with multi-line FS info and the fallback never fires. `MTIME` then becomes a multi-line blob and `$(( NOW - MTIME ))` parses words like `File:` as variable names under `set -u`. Flipped to try `-c '%Y'` first and defensively trim `MTIME` to its first numeric token.
+- **`bin/ops-doctor` GNU `stat` crash** — `_pocket_health_check` used `stat -f '%m' || stat -c '%Y'`. On GNU coreutils `-f` means _filesystem stat_ (not BSD's _format string_), so the first invocation succeeds with multi-line FS info and the fallback never fires. `MTIME` then becomes a multi-line blob and `$(( NOW - MTIME ))` parses words like `File:` as variable names under `set -u`. Flipped to try `-c '%Y'` first and defensively trim `MTIME` to its first numeric token.
 - **`bin/ops-doctor` false-positive flood for `unconfigured_sensitive_keys`** — used to warn about every one of the ~29 `sensitive: true` user-config keys declared in `plugin.json` (Datadog, NewRelic, Pushover, ntfy, Discord bot, 7 shipping carriers, etc.), even when no MCP server or skill referenced them. Now: collects env-var names from every `.mcp.json` and `~/.claude.json` mcpServers env block, filters `SENSITIVE_KEYS` to only those actually used, and skips the rest silently.
 
 ### Verified on
@@ -952,7 +982,9 @@ Seven PRs (#258, #260, #261, #256, #257, #262, #263) complete the arc from v2.4/
 4. **Multi-sink notify** — populate `marketing.notify.sinks` array in `preferences.json` with any combination of `["telegram", "slack", "email", "whatsapp"]`. Legacy per-project `notify_sink: "telegram"` string still works as a single-sink fallback and does not need migration.
 
 ## [2.5.0] — 2026-05-18
+
 ### Added
+
 - **Autopilot Studio — the autonomous self-optimizing marketing agent.** Extends v2.4.0's pause-sweep autopilot into a closed compounding loop: give it a website + a spend cap + a few settings, and it researches, generates, pre-analyzes, launches, measures, and self-optimizes — bounded and auditable.
   - **Autonomy as a per-project configurable level** (`marketing.projects.*.autopilot.autonomy_level`): `create_once` (default — = the shipped spend-safety doctrine verbatim: campaign/audience/budget creation is staged under "Requires human action" until a one-time `$STATE_DIR/<project>.create-ok` token unlocks the autonomous daily loop), `sandbox` (creation allowed only when every `envelope` assert passes — `objective_allowlist`, `geo_allowlist`, `max_campaigns`, `max_new_audiences`, post-create Σ budget ≤ `max_daily_budget_usd` ≤ `daily_spend_cap_usd`), `unrestricted` (cap-bounded only; explicitly overrides the default guardrail). `envelope.kill_switch` hard-stops all creation. New `create_object()` gate, sibling of `mutate()`; all object-creation API calls isolated to one auditable gated region.
   - **Creative pre-analysis brain (`scripts/lib/creative/`)** — Tier 0 deterministic (ffmpeg/ffprobe keyframes + tesseract-or-Gemini-Flash OCR; **hard-fails garbled on-asset text**), Tier 1 Gemini 3.1 Pro multimodal (native video+audio) / Gemini Flash + copy compliance via Claude Opus 4.7, Tier 2 Opus 4.7 judge → `PASS|BLOCK|REVISE` + 0–100 prior (hard BLOCK on hallucination/policy), optional Neurons ensemble (off by default). Only a clean asset deploys PAUSED, then bandit swap-in.
@@ -963,7 +995,9 @@ Seven PRs (#258, #260, #261, #256, #257, #262, #263) complete the arc from v2.4/
 - **Spend-safety unchanged and unconditional:** no `daily_spend_cap_usd` ⇒ refuse; cap pre-flight, runaway `amount_spent` abort, pause-only-down to `min_live_creatives`, first-run/`--dry-run` forced dry, kill_switch, and the metered-gen ceiling all hold regardless of `autonomy_level`. The default (`create_once`) is the v2.4.0 doctrine verbatim — operators consciously opt up; the guardrail is never silently removed.
 
 ## [2.4.0] — 2026-05-18
+
 ### Added
+
 - **Autonomous ad management ("autopilot") for `/ops:marketing`.** Productizes the per-project autonomous ad optimizer into a reusable, config-driven capability — daily Meta + Google Ads optimization bounded by a mandatory per-project spend cap.
   - `bin/ops-marketing-autopilot` — iterates `marketing.projects.*` where `autopilot.enabled`. Per project/channel: hard cap pre-flight, deterministic worst-first pause sweep (keeps ≥ `min_live_creatives` live), creative-fatigue detection. All money-touching logic is bash (no LLM in the path); creative regeneration + frame hallucination audit + weekly synthesis are delegated to a credit-pool-gated headless `claude_invoke` pass with a self-contained prompt built from project config. Flags: `--dry-run`, `--project`, `--channel`.
   - `scripts/ops-cron-marketing-autopilot.sh` — thin daemon wrapper.
@@ -973,7 +1007,9 @@ Seven PRs (#258, #260, #261, #256, #257, #262, #263) complete the arc from v2.4/
 - **Spend-safety (NEVER LEAK MONEY + Rule 5):** no `daily_spend_cap_usd` ⇒ refuse + escalate; Σ campaign budget > cap or runaway `amount_spent` ⇒ abort + escalation note, zero mutations. Autopilot may only pause/swap/regenerate creatives — budget raises, campaign/audience creation, and objective changes are written as human-action recommendations, never executed. `--dry-run` + first install run forced dry.
 
 ## [2.3.2] — 2026-05-17
+
 ### Changed
+
 - **Docs/wiki/metadata sync for v2.3.x.** Producer side (v2.3.0) and consumer side (v2.3.1) shipped without doc surface updates; v2.3.2 catches everything up.
   - `README.md`: new "Competitor Intelligence (v2.3)" section with pipeline overview, signal-source matrix, consumer integrations, config schema, cost model. Daemon-services list now reflects `competitor-intel` (Mon 10:00), `competitor-alert` (every 10 min), and `competitor-daily` (17:00). `/ops:competitors` added to the skills table. Skill count bumped 30 → 36.
   - `claude-ops/docs/daemon-guide.md`: 3 competitor cron services listed with correct cadence + purpose.
@@ -983,7 +1019,9 @@ Seven PRs (#258, #260, #261, #256, #257, #262, #263) complete the arc from v2.4/
   - Skill count drift fixed: `plugin.json` + `marketplace.json` descriptions now say "36 skills, 18 agents" (was "35 skills") to reflect the new `/ops:competitors` skill.
 
 ## [2.3.1] — 2026-05-17
+
 ### Added
+
 - **Competitor-intel outputs now consumed across the plugin.** v2.3.0 shipped the producer side (signal collectors, severity routing, weekly synthesis). v2.3.1 wires the consumer side so the data actually shows up where decisions get made:
 
   **Shared context lib** (`scripts/lib/competitor/context.sh`, 292 lines):
@@ -1012,7 +1050,9 @@ Seven PRs (#258, #260, #261, #256, #257, #262, #263) complete the arc from v2.4/
   - Mobile-aware rendering, no external deps beyond curl + jq.
 
 ## [2.3.0] — 2026-05-17
+
 ### Added
+
 - **Competitor-intel v2.3 — full pipeline redesign with 5 signal sources, severity-tiered routing, and append-only event log.** Goes from "weekly Tavily dump + Sonnet synth" to a real CI system that rivals Crayon/Klue/Kompyte's signal breadth at $0 incremental cost.
 
   **New signal collectors** (`scripts/lib/competitor/`, all bash + jq + curl, no extra deps):
@@ -1041,34 +1081,47 @@ Seven PRs (#258, #260, #261, #256, #257, #262, #263) complete the arc from v2.4/
   **Cost model at 10-brand scale**: ~13 Tavily calls/wk total (cached discovery), ~320k Sonnet tokens/mo on Max-OAuth — $0 incremental.
 
 ## [2.2.5] — 2026-05-17
+
 ### Fixed
+
 - **`competitor-intel` LLM synth dropped to raw Tavily fallback when output didn't include `---REPORT---` marker.** Sonnet was producing valid strategic deltas but the strict marker check threw them away. Three-strategy JSON extraction now: (1) fenced ` ```json ` block, (2) bare `{"competitors":[...]}` regex anywhere in output, (3) bullet-list scrape from "NEW entrants" / "Competitor moves" sections. Report extraction now falls back to stripping JSON blocks from full synthesis instead of dropping to raw Tavily dump.
 - **Weekly reports invisible without Telegram bot configured.** Cron now writes every report to `$DATA_DIR/reports/competitor-intel/YYYY-MM-DD_<brand>.md` and maintains a `latest-<brand>.md` symlink. Telegram push is now additive — disk write happens unconditionally, even when bot creds are missing.
 
 ## [2.2.4] — 2026-05-17
+
 ### Fixed
+
 - **Daemon silent crash-loop under launchd.** `scripts/ops-daemon.sh` included `com.claude-ops.daemon` in its own `EXPECTED_SERVICES` self-healing list. On startup the ENSURE loop read its own previous launchctl `exit=1` status (a normal post-install state), called `launchctl kickstart "gui/$UID/com.claude-ops.daemon"`, received SIGTERM, and respawned every ~30s via launchd's `ThrottleInterval`. Net effect: no `daemon-health.json` refresh, no service supervision, no message-listener, but `launchctl list` showed the entry registered with exit=1, no PID. Removed `com.claude-ops.daemon` from `EXPECTED_SERVICES` (launchd's `KeepAlive=true` already handles auto-restart). Also removed the decommissioned `com.claude-ops.wacli-keepalive` entry — it was a v2.0.3 leftover whose plist no longer ships, causing noisy "cannot repair — missing bash or source plist" log entries every monitor cycle. `install_daemon_launchd()` cleaned up to stop trying to install the non-existent wacli plist. (#241)
 
 ## [2.2.3] — 2026-05-17
+
 ### Fixed
+
 - **Doppler MCP server failed to connect on every reload.** Plugin's `.mcp.json` invoked `npx -y @dopplerhq/mcp-server` which tries to run a binary matching the package name. The actual bin is `doppler-mcp` (`bin: { "doppler-mcp": "bin/doppler-mcp" }`), so npx couldn't find a command and exited with `command not found`. Switched to `npx -y -p @dopplerhq/mcp-server doppler-mcp` form which explicitly names the binary, eliminating the `Failed to connect` error from `/reload-plugins`.
 
 ## [2.2.2] — 2026-05-16
+
 ### Changed
+
 - **`competitor-intel` cron rewritten as self-discovering LLM-driven analyzer.** Previous version posted Telegram digests from 2 hardcoded queries (`COMPETITOR_A_QUERY`, `COMPETITOR_B_QUERY`, `BRAND_QUERY`) that `/ops:setup` never collected — every Monday at 10am the cron broadcast placeholder garbage like `"competitor-a reviews 2026"`. New pipeline: Tavily discovery pass auto-surfaces the current competitor landscape for `{brand_name}` in `{category}`; diffs against persisted `competitor_state.json` to flag NEW entrants week-over-week; runs per-competitor news searches (pricing/launches/funding/layoffs, last 7d); brand-mention pass; Sonnet synthesis (`claude_invoke`, ~5–10k tokens/week against Max-OAuth, no API billing) produces a one-page strategic delta with NEW entrants / competitor moves / brand signal / threats & opportunities. Graceful degradation: missing `TAVILY_API_KEY` → SKIP and exit 0; missing `claude_invoke` or empty LLM response → raw Tavily fallback. (#237)
 - **`/ops:setup` gates `competitor-intel` per Rule 3.** Step 5b-i now asks `[Configure now]` / `[Skip — disable]` instead of always-enabling. Configure path collects 2 free-text values (`brand_name`, `category`) — system auto-discovers competitors instead of hardcoding them. Skip path sets `enabled: false` in `daemon-services.json`. (#234, #237)
 
 ### Schema
+
 - `preferences.json` `.competitor_intel` shape changed:
   - **Before:** `{competitor_a_query, competitor_b_query, brand_query, report_timezone}`
   - **After:** `{brand_name, category, max_competitors, report_timezone}` (cron auto-discovers; state persisted at `$DATA_DIR/competitor_state.json`)
 
 ## [2.2.1] — 2026-05-16
+
 ### Fixed
+
 - **Plugin load error: `marketplace.json` rejected by validator.** Removed unsupported `screenshots` key from `.claude-plugin/marketplace.json`. `claude plugin validate` was reporting `Unrecognized key: "screenshots"` and the Claude Code loader surfaced this as an error on `/reload-plugins`.
 
 ## [2.2.0] — 2026-05-16
+
 ### Fixed
+
 - **Plugin installation blocked by unsupported `enum` keys in `plugin.json`.** Claude Code's plugin validator rejects `enum` as an unrecognized key in userConfig fields. Removed `enum` from 7 fields (`fix_model`, `max_fixes_per_hour`, `watcher_timeout_seconds`, `notify_channel`, `task_reminder_threshold`, `aws_region`, `doppler_config`) and moved allowed values into descriptions.
 - **`ops-package` SKILL.md YAML frontmatter parse error.** Unquoted colon in description field caused YAML parse failure, silently dropping all frontmatter metadata at runtime. Wrapped in quotes.
 - **Version number alignment.** Synchronized version across `plugin.json` (was 2.0.6), `package.json` (was 1.7.2), and `marketplace.json` (was 2.0.6) to 2.2.0.
@@ -1129,10 +1182,12 @@ Seven PRs (#258, #260, #261, #256, #257, #262, #263) complete the arc from v2.4/
 ### Rollback
 
 WhatsApp supports 4 linked devices. Re-link wacli at any time:
+
 ```bash
 wacli auth   # scan QR
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.claude-ops.wacli-keepalive.plist
 ```
+
 History from before rollback won't be in new wacli store, but bridge keeps running independently — no message loss.
 
 ---
@@ -1143,7 +1198,7 @@ History from before rollback won't be in new wacli store, but bridge keeps runni
 
 ### Headline
 
-v2.0 turns claude-ops from a *briefing + comms surface* into an **autonomy layer** for Claude Code itself. It now:
+v2.0 turns claude-ops from a _briefing + comms surface_ into an **autonomy layer** for Claude Code itself. It now:
 
 1. Watches every `gh pr merge` you run, follows the deploy workflow, audits service health + verifies the served commit, and dispatches a Haiku **deploy-fixer** if anything goes wrong (PR #158).
 2. Watches every `npm run build:*`, parses the failure, and dispatches a Haiku **build-fixer** (PR #158).
@@ -1192,7 +1247,7 @@ Three PreToolUse:Bash hooks. Always-on by design; per-hook escape via `permissio
 - **`bin/ops-warn-mainpush`** — fires `permissionDecision: ask` when the user runs `git push` and the current branch is `main`/`master`/`prod`/`production`.
 - **Deep dive**: [`docs/safety-hooks.md`](docs/safety-hooks.md).
 
-#### 4. Universal Task* tracking nudge (PR #163)
+#### 4. Universal Task\* tracking nudge (PR #163)
 
 - **`bin/ops-task-reminder`** — PostToolUse `*` hook. Increments a session-scoped counter on every non-Task tool call. When the counter exceeds `task_reminder_threshold` (default `10`), emits a single `additionalContext` line nudging Claude to use `TaskCreate` / `TaskUpdate` / `TaskList`. Counter resets when any `Task*` tool fires.
 - **userConfig**: `task_reminder_enabled` (default `true`), `task_reminder_threshold` (default `10`, range `3..50`).
@@ -1210,7 +1265,7 @@ Three PreToolUse:Bash hooks. Always-on by design; per-hook escape via `permissio
 #### 6. Multi-account Claude Max rotator — `/ops:rotate` + `/ops:rotate-setup` (PR #160)
 
 - **`scripts/account-rotation/rotate.mjs`** — swaps the `Claude Code-credentials` keychain entry to the next configured account.
-- **`scripts/account-rotation/daemon.mjs`** — launchd-managed; polls each account's usage every N minutes and rotates *before* hitting the cap.
+- **`scripts/account-rotation/daemon.mjs`** — launchd-managed; polls each account's usage every N minutes and rotates _before_ hitting the cap.
 - **`scripts/account-rotation/ai-brain.mjs`** — Haiku-powered heuristic that decides which account to rotate to based on remaining quota + recent usage trajectory.
 - **`scripts/account-rotation/setup-account.mjs`** — OAuth init for one account.
 - **`scripts/account-rotation/force-rotate.sh`** — manual override.
@@ -1501,7 +1556,7 @@ See [`docs/migrating-from-v1.md`](docs/migrating-from-v1.md) for the full v1 →
 - **`templates/nestjs-api/`** — Full NestJS API template with JWT auth, BullMQ queues, Prisma, Fastify, health endpoint, multi-stage Dockerfile.
 - **`templates/nextjs-saas/`** — Full Next.js SaaS App Router template with Auth.js v5, Stripe billing, Prisma, Tailwind, shadcn/ui.
 - **`@claude-ops/sdk`** — npm package with TypeScript types (SkillManifest, AgentManifest, PluginManifest, HooksConfig) and `create-ops-skill` CLI scaffolder for third-party skill authors.
-- **Automated release pipeline** — GitHub Actions workflow triggered on v* tag push, parses CHANGELOG, creates GitHub Release.
+- **Automated release pipeline** — GitHub Actions workflow triggered on v\* tag push, parses CHANGELOG, creates GitHub Release.
 - **Ubuntu 24.04 CI** — Full test suite runs on both ubuntu-latest and ubuntu-24.04.
 - **Merge conflict resolution** — `/ops:merge` now auto-rebases on `origin/main`; on failure offers accept-theirs / accept-ours / manual / skip.
 - **CLAUDE.md plugin rules** — Plugin-root `CLAUDE.md` with two hard rules enforced across all skills: (1) max 4 options per `AskUserQuestion` call (schema limit), (2) never delegate CLI commands to the user — run via Bash tool instead (exception: `wacli auth` QR code).

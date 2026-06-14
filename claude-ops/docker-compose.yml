@@ -20,47 +20,47 @@ services:
     hostname: claude-ops
     tty: true
     stdin_open: true
-    restart: "no"
+    restart: 'no'
 
     # Keep the default ENTRYPOINT (/bin/bash -l). Use `docker compose exec`
     # for follow-up shells so the original TTY stays attached.
-    command: ["-l"]
+    command: ['-l']
 
     environment:
       # LLM providers
-      OPENAI_API_KEY:      "${OPENAI_API_KEY:-}"
-      ANTHROPIC_API_KEY:   "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: '${OPENAI_API_KEY:-}'
+      ANTHROPIC_API_KEY: '${ANTHROPIC_API_KEY:-}'
 
       # Source hosting
-      GITHUB_TOKEN:        "${GITHUB_TOKEN:-}"
+      GITHUB_TOKEN: '${GITHUB_TOKEN:-}'
 
       # Secret manager
-      DOPPLER_TOKEN:       "${DOPPLER_TOKEN:-}"
+      DOPPLER_TOKEN: '${DOPPLER_TOKEN:-}'
 
       # Billing / payments
-      STRIPE_SECRET_KEY:   "${STRIPE_SECRET_KEY:-}"
-      REVENUECAT_API_KEY:  "${REVENUECAT_API_KEY:-}"
+      STRIPE_SECRET_KEY: '${STRIPE_SECRET_KEY:-}'
+      REVENUECAT_API_KEY: '${REVENUECAT_API_KEY:-}'
 
       # Observability
-      DATADOG_API_KEY:     "${DATADOG_API_KEY:-}"
-      DATADOG_APP_KEY:     "${DATADOG_APP_KEY:-}"
-      NEWRELIC_API_KEY:    "${NEWRELIC_API_KEY:-}"
-      NEWRELIC_ACCOUNT_ID: "${NEWRELIC_ACCOUNT_ID:-}"
+      DATADOG_API_KEY: '${DATADOG_API_KEY:-}'
+      DATADOG_APP_KEY: '${DATADOG_APP_KEY:-}'
+      NEWRELIC_API_KEY: '${NEWRELIC_API_KEY:-}'
+      NEWRELIC_ACCOUNT_ID: '${NEWRELIC_ACCOUNT_ID:-}'
 
       # Marketing
-      KLAVIYO_PRIVATE_KEY: "${KLAVIYO_PRIVATE_KEY:-}"
+      KLAVIYO_PRIVATE_KEY: '${KLAVIYO_PRIVATE_KEY:-}'
 
     volumes:
       # Persist plugin data (preferences, cache, memory, plugin installs) on the host.
-      - "${HOME}/.claude:/home/ops/.claude:rw"
+      - '${HOME}/.claude:/home/ops/.claude:rw'
 
       # AWS credentials — read-only so the container can't clobber your host creds.
-      - "${HOME}/.aws:/home/ops/.aws:ro"
+      - '${HOME}/.aws:/home/ops/.aws:ro'
 
       # GitHub CLI auth — read-only for the same reason.
-      - "${HOME}/.config/gh:/home/ops/.config/gh:ro"
+      - '${HOME}/.config/gh:/home/ops/.config/gh:ro'
 
       # Project registry. Map ./registry.json on the host into the plugin tree
       # so edits survive container rebuilds. Create an empty file first if you
       # don't have one yet: `echo '{"projects":[]}' > registry.json`.
-      - "./registry.json:/opt/claude-ops/scripts/registry.json:rw"
+      - './registry.json:/opt/claude-ops/scripts/registry.json:rw'

@@ -2,7 +2,7 @@
 
 # Universal Safety Hooks
 
-*Three PreToolUse:Bash hooks that block the most common foot-guns: secrets in commits, `rm -rf` against anchor paths, and direct `git push` to `main`.*
+_Three PreToolUse:Bash hooks that block the most common foot-guns: secrets in commits, `rm -rf` against anchor paths, and direct `git push` to `main`._
 
 [![version](https://img.shields.io/badge/version-2.1.0-blue)](../CHANGELOG.md)
 [![hook](https://img.shields.io/badge/PreToolUse-Bash-6366f1)](.)
@@ -30,16 +30,16 @@ If you genuinely need to disable one, comment out the entry in `hooks/hooks.json
 
 **Patterns detected:**
 
-| Pattern | Match |
-|---------|-------|
-| AWS access key | `AKIA[0-9A-Z]{16}` |
-| AWS secret key | `aws_secret_access_key\s*=\s*["']?[A-Za-z0-9/+=]{40}` |
-| GitHub PAT | `ghp_[A-Za-z0-9]{36}` / `github_pat_[A-Za-z0-9_]{82}` |
-| Slack token | `xox[baprs]-[A-Za-z0-9-]{10,}` |
-| OpenAI API key | `sk-(proj-)?[A-Za-z0-9]{20,}` |
-| Anthropic API key | `sk-ant-[A-Za-z0-9_-]{20,}` |
-| Stripe live key | `sk_live_[A-Za-z0-9]{24,}` |
-| `.env` content | any staged `.env*` file (excluding `.env.example`, `.env.template`) |
+| Pattern                     | Match                                                                            |
+| --------------------------- | -------------------------------------------------------------------------------- |
+| AWS access key              | `AKIA[0-9A-Z]{16}`                                                               |
+| AWS secret key              | `aws_secret_access_key\s*=\s*["']?[A-Za-z0-9/+=]{40}`                            |
+| GitHub PAT                  | `ghp_[A-Za-z0-9]{36}` / `github_pat_[A-Za-z0-9_]{82}`                            |
+| Slack token                 | `xox[baprs]-[A-Za-z0-9-]{10,}`                                                   |
+| OpenAI API key              | `sk-(proj-)?[A-Za-z0-9]{20,}`                                                    |
+| Anthropic API key           | `sk-ant-[A-Za-z0-9_-]{20,}`                                                      |
+| Stripe live key             | `sk_live_[A-Za-z0-9]{24,}`                                                       |
+| `.env` content              | any staged `.env*` file (excluding `.env.example`, `.env.template`)              |
 | Generic high-entropy string | any 32+ char base64-ish run with `KEY` / `TOKEN` / `SECRET` in the variable name |
 
 **Override:** un-stage the offending file (`git restore --staged <path>`), or scrub the value. There's no env-var override; this is intentional.
@@ -53,7 +53,7 @@ If you genuinely need to disable one, comment out the entry in `hooks/hooks.json
 **Action:** Resolves each target via `realpath`/`readlink -f` (so symlinks don't sneak past). On any of these resolved targets, returns `permissionDecision: deny`:
 
 - `/`
-- `$HOME` / `~` (and any path that resolves *to* `$HOME`)
+- `$HOME` / `~` (and any path that resolves _to_ `$HOME`)
 - `..` and `.` (when CWD itself is `$HOME` or `/`)
 - Mount points listed in `/etc/fstab` (root-level only)
 

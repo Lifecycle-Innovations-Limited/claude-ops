@@ -6,12 +6,12 @@ if you only access the pocket UI over Tailscale.
 
 ## What's here
 
-| File | Purpose |
-|---|---|
-| `cloudflared.service` | Runs `cloudflared tunnel run --token …` with `Restart=always` so the daemon self-heals on crash or token reload. |
-| `cloudflared-watchdog.sh` | Detects the boot-time race where cloudflared starts before its v2 dashboard config arrives and gets stuck serving 503s with empty ingress. Restarts cloudflared when the running process's journal shows `No ingress rules` AND the dashboard has at least one configured hostname. |
-| `cloudflared-watchdog.service` | Oneshot wrapper that invokes the script. |
-| `cloudflared-watchdog.timer` | Runs the oneshot every 5 minutes (first fire 2 min after boot). |
+| File                           | Purpose                                                                                                                                                                                                                                                                             |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cloudflared.service`          | Runs `cloudflared tunnel run --token …` with `Restart=always` so the daemon self-heals on crash or token reload.                                                                                                                                                                    |
+| `cloudflared-watchdog.sh`      | Detects the boot-time race where cloudflared starts before its v2 dashboard config arrives and gets stuck serving 503s with empty ingress. Restarts cloudflared when the running process's journal shows `No ingress rules` AND the dashboard has at least one configured hostname. |
+| `cloudflared-watchdog.service` | Oneshot wrapper that invokes the script.                                                                                                                                                                                                                                            |
+| `cloudflared-watchdog.timer`   | Runs the oneshot every 5 minutes (first fire 2 min after boot).                                                                                                                                                                                                                     |
 
 ## Setup
 

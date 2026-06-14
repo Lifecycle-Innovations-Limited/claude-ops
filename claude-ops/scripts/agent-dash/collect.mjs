@@ -23,9 +23,13 @@ const STATE_DIR = join(HOME, '.claude', 'state');
 const REMOTE_CACHE = join(STATE_DIR, 'agent-dash-remote-cache.json');
 const REMOTE_TTL_MS = 30 * 1000;
 
-// FRA ssh targets, tried in order. dev-sandbox-fra-cf is the Cloudflare-Access
-// fallback when Tailscale/direct is down (see workspace CLAUDE.md).
-const FRA_HOSTS = (process.env.AGENT_DASH_FRA_HOSTS || 'fra-direct,dev-sandbox-fra-cf').split(',');
+// Remote ssh targets to scan, tried in order. Set AGENT_DASH_FRA_HOSTS
+// (comma-separated ssh host aliases) to point at your own remote box(es);
+// empty by default so the dashboard is local-only out of the box.
+const FRA_HOSTS = (process.env.AGENT_DASH_FRA_HOSTS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 function readCache() {
   try {

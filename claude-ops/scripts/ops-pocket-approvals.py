@@ -247,7 +247,7 @@ def cmd_digest():
 
     # Honour email-config "enabled": when false, suppress the email send but STILL
     # write CODEMAP + NOTIFIED so the phone-channel fanout (Telegram, etc.) keeps
-    # firing off the state change. (Sam 2026-05-30: email Pocket digest off, Telegram kept.)
+    # firing off the state change. ((2026-05-30): email Pocket digest off, Telegram kept.)
     try:
         email_enabled = bool(json.loads(CFG.read_text()).get("enabled", True))
     except Exception:

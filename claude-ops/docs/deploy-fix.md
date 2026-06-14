@@ -2,7 +2,7 @@
 
 # Deploy Auto-Fix Subsystem
 
-*Watches every `gh pr merge` and `npm run build:*` you run, verifies the deploy, and dispatches a Haiku fixer if anything fails.*
+_Watches every `gh pr merge` and `npm run build:_` you run, verifies the deploy, and dispatches a Haiku fixer if anything fails.\*
 
 [![version](https://img.shields.io/badge/version-2.1.0-blue)](../CHANGELOG.md)
 [![hook](https://img.shields.io/badge/PostToolUse-Bash-6366f1)](.)
@@ -92,26 +92,26 @@ The build-failure path is the same minus the deploy poll — it goes straight to
 
 ## Components
 
-| Path | Role |
-|------|------|
-| `hooks/hooks.json` | Wires both PostToolUse:Bash triggers + the `npm run build:*` `if` matcher. |
-| `bin/ops-deploy-fix-merge-trigger` | Hook handler for merges. Parses, gates, forks the monitor. |
-| `bin/ops-deploy-fix-build-trigger` | Hook handler for failing local builds. Same pattern, no deploy poll. |
-| `scripts/ops-deploy-monitor.sh` | Long-lived background watcher per merge. |
-| `scripts/lib/deploy-fix-common.sh` | Shared helpers — lock, budget, dedup, transient classifier, notify. |
-| `prompts/deploy-fix.md` | Headless `deploy-fixer` agent prompt template. |
-| `prompts/build-fix.md` | Headless `build-fixer` agent prompt template. |
-| `agents/deploy-fixer.md` | Pre-installed specialist agent. |
-| `agents/build-fixer.md` | Pre-installed specialist agent. |
-| `config/post-merge-services.example.json` | Plugin-default service registry. |
-| `skills/ops-deploy-fix/SKILL.md` | `/ops:deploy-fix` user-facing skill. |
-| `tests/test-deploy-fix-hooks.sh` | 39 assertions / 11 cases. |
+| Path                                      | Role                                                                       |
+| ----------------------------------------- | -------------------------------------------------------------------------- |
+| `hooks/hooks.json`                        | Wires both PostToolUse:Bash triggers + the `npm run build:*` `if` matcher. |
+| `bin/ops-deploy-fix-merge-trigger`        | Hook handler for merges. Parses, gates, forks the monitor.                 |
+| `bin/ops-deploy-fix-build-trigger`        | Hook handler for failing local builds. Same pattern, no deploy poll.       |
+| `scripts/ops-deploy-monitor.sh`           | Long-lived background watcher per merge.                                   |
+| `scripts/lib/deploy-fix-common.sh`        | Shared helpers — lock, budget, dedup, transient classifier, notify.        |
+| `prompts/deploy-fix.md`                   | Headless `deploy-fixer` agent prompt template.                             |
+| `prompts/build-fix.md`                    | Headless `build-fixer` agent prompt template.                              |
+| `agents/deploy-fixer.md`                  | Pre-installed specialist agent.                                            |
+| `agents/build-fixer.md`                   | Pre-installed specialist agent.                                            |
+| `config/post-merge-services.example.json` | Plugin-default service registry.                                           |
+| `skills/ops-deploy-fix/SKILL.md`          | `/ops:deploy-fix` user-facing skill.                                       |
+| `tests/test-deploy-fix-hooks.sh`          | 39 assertions / 11 cases.                                                  |
 
 ---
 
 ## Service registry
 
-The monitor needs to know *which* service the merged PR deploys to so it can hit the right `/health` and `/version` endpoints. The registry is layered:
+The monitor needs to know _which_ service the merged PR deploys to so it can hit the right `/health` and `/version` endpoints. The registry is layered:
 
 ```
 project   .claude/post-merge-services.json
@@ -174,14 +174,14 @@ The classifier is intentionally narrow — when in doubt, dispatch a real fixer.
 
 `notify_channel` userConfig (default `macos`):
 
-| Value | Mechanism |
-|-------|-----------|
-| `macos` | `osascript -e 'display notification ...'` |
-| `ntfy` | `curl -d "msg" ntfy.sh/<topic>` (set `ntfy_topic`) |
+| Value      | Mechanism                                                     |
+| ---------- | ------------------------------------------------------------- |
+| `macos`    | `osascript -e 'display notification ...'`                     |
+| `ntfy`     | `curl -d "msg" ntfy.sh/<topic>` (set `ntfy_topic`)            |
 | `pushover` | Pushover API (set `pushover_user_key` + `pushover_app_token`) |
-| `discord` | Discord webhook (set `discord_default_webhook_url`) |
-| `telegram` | Telegram MCP send (uses `telegram_notify_chat_id`) |
-| `none` | Silent — log only |
+| `discord`  | Discord webhook (set `discord_default_webhook_url`)           |
+| `telegram` | Telegram MCP send (uses `telegram_notify_chat_id`)            |
+| `none`     | Silent — log only                                             |
 
 All channels prefix the message with the repo + PR + run URL so you can jump straight to the failed run.
 
@@ -189,12 +189,12 @@ All channels prefix the message with the repo + PR + run URL so you can jump str
 
 ## `/ops:deploy-fix` skill
 
-| Subcommand | Purpose |
-|------------|---------|
-| `/ops:deploy-fix` | Live status — running monitors, today's history, budget remaining per repo. |
-| `/ops:deploy-fix tail <run-id>` | Stream the monitor log for a specific run. |
-| `/ops:deploy-fix configure` | Open the layered service registry in `$EDITOR`. |
-| `/ops:deploy-fix test` | Dry-run the merge-trigger hook against a synthetic merge — verifies registry, lock, budget logic without dispatching. |
+| Subcommand                      | Purpose                                                                                                               |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `/ops:deploy-fix`               | Live status — running monitors, today's history, budget remaining per repo.                                           |
+| `/ops:deploy-fix tail <run-id>` | Stream the monitor log for a specific run.                                                                            |
+| `/ops:deploy-fix configure`     | Open the layered service registry in `$EDITOR`.                                                                       |
+| `/ops:deploy-fix test`          | Dry-run the merge-trigger hook against a synthetic merge — verifies registry, lock, budget logic without dispatching. |
 
 ---
 
@@ -202,35 +202,37 @@ All channels prefix the message with the repo + PR + run URL so you can jump str
 
 All settings live under `userConfig` in `plugin.json` and are spacebar-toggleable in `/plugins` settings.
 
-| Key | Type | Default | Purpose |
-|-----|------|---------|---------|
-| `deploy_fix_enabled` | boolean | `true` | Master switch. |
-| `monitor_post_merge` | boolean | `true` | Watch `gh pr merge`. |
-| `monitor_build_failures` | boolean | `true` | Watch `npm run build:*`. |
-| `auto_dispatch_fixer` | boolean | `true` | Off = log + notify only. |
-| `allow_dangerous` | boolean | `false` | Pass `--dangerously-skip-permissions` to fixer. |
-| `auto_rerun_transients` | boolean | `true` | Auto-`gh run rerun` on classified blips. |
-| `audit_health_after_deploy` | boolean | `true` | `curl /health` after success. |
-| `verify_served_commit` | boolean | `true` | `curl /version` and compare SHA. |
-| `fix_model` | string | `haiku` | `haiku` / `sonnet` / `opus`. |
-| `max_fixes_per_hour` | number | `3` | Per-repo cap (0..20). |
-| `watcher_timeout_seconds` | number | `1800` | Max wait for deploy completion (60..7200). |
-| `registry_path` | file | `~/.claude/config/post-merge-services.json` | User registry. |
-| `repo_search_roots` | string | `~/Projects:~` | Where to find the repo on disk. |
-| `deploy_workflow_pattern` | string | `deploy\|Deploy\|build\|Build\|ECS\|cd\|CD` | Regex picking the deploy run. |
-| `notify_channel` | string | `macos` | `macos`/`ntfy`/`pushover`/`discord`/`telegram`/`none`. |
+| Key                         | Type    | Default                                     | Purpose                                                |
+| --------------------------- | ------- | ------------------------------------------- | ------------------------------------------------------ |
+| `deploy_fix_enabled`        | boolean | `true`                                      | Master switch.                                         |
+| `monitor_post_merge`        | boolean | `true`                                      | Watch `gh pr merge`.                                   |
+| `monitor_build_failures`    | boolean | `true`                                      | Watch `npm run build:*`.                               |
+| `auto_dispatch_fixer`       | boolean | `true`                                      | Off = log + notify only.                               |
+| `allow_dangerous`           | boolean | `false`                                     | Pass `--dangerously-skip-permissions` to fixer.        |
+| `auto_rerun_transients`     | boolean | `true`                                      | Auto-`gh run rerun` on classified blips.               |
+| `audit_health_after_deploy` | boolean | `true`                                      | `curl /health` after success.                          |
+| `verify_served_commit`      | boolean | `true`                                      | `curl /version` and compare SHA.                       |
+| `fix_model`                 | string  | `haiku`                                     | `haiku` / `sonnet` / `opus`.                           |
+| `max_fixes_per_hour`        | number  | `3`                                         | Per-repo cap (0..20).                                  |
+| `watcher_timeout_seconds`   | number  | `1800`                                      | Max wait for deploy completion (60..7200).             |
+| `registry_path`             | file    | `~/.claude/config/post-merge-services.json` | User registry.                                         |
+| `repo_search_roots`         | string  | `~/Projects:~`                              | Where to find the repo on disk.                        |
+| `deploy_workflow_pattern`   | string  | `deploy\|Deploy\|build\|Build\|ECS\|cd\|CD` | Regex picking the deploy run.                          |
+| `notify_channel`            | string  | `macos`                                     | `macos`/`ntfy`/`pushover`/`discord`/`telegram`/`none`. |
 
 ---
 
 ## Troubleshooting
 
 **No fixer dispatched after a failed merge.** Check in order:
+
 1. `/ops:deploy-fix` — is the master switch on? Budget exhausted?
 2. `tail -f $OPS_DATA_DIR/logs/deploy-monitor-*.log` — did the monitor start?
 3. `gh run list --repo <owner/repo> --limit 5` — did GH Actions actually emit a run matching `deploy_workflow_pattern`?
 4. Registry — does `<owner/repo>:<base>` exist? Without an entry, the monitor will only poll the workflow, not health/version.
 
 **Fixer keeps re-firing on the same failure.** Content-hash dedup looks at the last 4 KB of log. If your build always emits a unique trailer (timestamp, run-id), dedup misses. Either:
+
 - Add a `dedup_strip_pattern` to your registry entry (TODO — pending in v2.1), or
 - Lower `max_fixes_per_hour` to `1`.
 
@@ -260,24 +262,24 @@ No. The fixer creates a new branch (`fix/auto-deploy-<sha>`) and opens a PR. You
 
 The deploy-fix subsystem runs cleanly alongside the `claude --bg` agent fleet. Four config keys govern the integration:
 
-| Key | Type | Default | Purpose |
-|-----|------|---------|---------|
-| `max_concurrent_fixers` | number | `3` | Global cap on simultaneously-running fixer processes. Dispatch returns rc=6 when the cap is reached. |
-| `respect_fleet_claims` | boolean | `true` | Skip dispatch (rc=7) when `~/.claude/state/fleet-tui.json` shows an active fleet agent (`running`/`in_progress`/`working`/`active`) already working on the same repo. Missing/unparseable file = no claim = proceed. |
-| `register_in_fleet_census` | boolean | `true` | Append launch + completion entries to the sidecar (see below). |
-| `max_fixes_per_hour` | number | `3` | Per-repo hourly budget (existing; listed here for completeness). |
+| Key                        | Type    | Default | Purpose                                                                                                                                                                                                              |
+| -------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `max_concurrent_fixers`    | number  | `3`     | Global cap on simultaneously-running fixer processes. Dispatch returns rc=6 when the cap is reached.                                                                                                                 |
+| `respect_fleet_claims`     | boolean | `true`  | Skip dispatch (rc=7) when `~/.claude/state/fleet-tui.json` shows an active fleet agent (`running`/`in_progress`/`working`/`active`) already working on the same repo. Missing/unparseable file = no claim = proceed. |
+| `register_in_fleet_census` | boolean | `true`  | Append launch + completion entries to the sidecar (see below).                                                                                                                                                       |
+| `max_fixes_per_hour`       | number  | `3`     | Per-repo hourly budget (existing; listed here for completeness).                                                                                                                                                     |
 
 **Dispatch return-code map:**
 
-| rc | Meaning |
-|----|---------|
-| 0 | Dispatched successfully |
-| 2 | Single-flight lock held (same repo+kind already running) |
-| 3 | Hourly budget exhausted |
-| 4 | Agent definition file missing |
-| 5 | `claude` binary not on PATH |
-| 6 | Global concurrency cap (`max_concurrent_fixers`) reached |
-| 7 | Fleet agent already active on this repo |
+| rc  | Meaning                                                  |
+| --- | -------------------------------------------------------- |
+| 0   | Dispatched successfully                                  |
+| 2   | Single-flight lock held (same repo+kind already running) |
+| 3   | Hourly budget exhausted                                  |
+| 4   | Agent definition file missing                            |
+| 5   | `claude` binary not on PATH                              |
+| 6   | Global concurrency cap (`max_concurrent_fixers`) reached |
+| 7   | Fleet agent already active on this repo                  |
 
 **Census sidecar** — `~/.claude/state/deploy-fix-active.jsonl`
 

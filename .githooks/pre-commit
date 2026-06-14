@@ -67,6 +67,40 @@ check "Private/real IP addresses"   '\b(10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|
 # === Generic sensitive patterns ===
 check "password= or secret= values" '(password|secret|api_key|access_token)\s*[=:]\s*["\x27][^"\x27]{8,}'
 
+# === Bare AWS account IDs outside ARN context (account/bucket/aws prose) ===
+# Closes the gap where a real 12-digit id in a bucket name (e.g.
+# "my-leases-410126241301") or "account <id>" slipped past the ARN-context check.
+bare_acct=$(echo "$DIFF_ADDED" | grep -iE '(account|bucket|aws|arn)[^0-9]{0,40}[0-9]{12}([^0-9]|$)|[0-9]{12}[^0-9]{0,40}(account|bucket)' \
+  | grep -vE '123456789012|000000000000|111111111111|[0-9]{13}' | head -3 || true)
+if [[ -n "$bare_acct" ]]; then
+  echo -e "${RED}BLOCKED: bare AWS account ID (account/bucket context)${NC}"
+  echo "$bare_acct" | head -3
+  FAILED=1
+fi
+
+# === Operator identity denylist (OUT-OF-REPO; brand/personal/hostname terms) ===
+# A public hook cannot hardcode the operator's own identity terms (that list
+# would itself be the PII). Load them from a gitignored / out-of-repo source so
+# the hook blocks THIS operator's terms without ever committing them.
+#   $OPS_PII_DENYLIST_FILE, ./.pii-denylist, $HOME/.config/claude-ops/pii-denylist.txt
+#   or inline $OPS_PII_DENYLIST (comma/space/newline separated).
+deny_terms=""
+for cand in "${OPS_PII_DENYLIST_FILE:-}" ".pii-denylist" "claude-ops/.pii-denylist" \
+            "$HOME/.config/claude-ops/pii-denylist.txt"; do
+  [[ -n "$cand" && -f "$cand" ]] && { deny_terms="$(grep -vE '^\s*(#|$)' "$cand" 2>/dev/null || true)"; break; }
+done
+[[ -n "${OPS_PII_DENYLIST:-}" ]] && deny_terms="$deny_terms"$'\n'"$(echo "$OPS_PII_DENYLIST" | tr ',[:space:]' '\n\n')"
+deny_terms=$(echo "$deny_terms" | grep -vE '^\s*$' | sort -u || true)
+if [[ -n "$deny_terms" ]]; then
+  deny_alt=$(echo "$deny_terms" | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd '|' -)
+  deny_hits=$(echo "$DIFF_ADDED" | grep -iE "$deny_alt" | grep -vE '(example|placeholder|your[-_]|<[A-Z_]+>)' | head -3 || true)
+  if [[ -n "$deny_hits" ]]; then
+    echo -e "${RED}BLOCKED: operator identity term from denylist${NC}"
+    echo "$deny_hits" | head -3
+    FAILED=1
+  fi
+fi
+
 if [[ $FAILED -eq 1 ]]; then
   echo ""
   echo -e "${RED}Commit blocked — personal or sensitive data detected in a PUBLIC repo.${NC}"

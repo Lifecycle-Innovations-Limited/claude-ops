@@ -62,7 +62,9 @@ function loadConfig() {
     join(PLUGIN_ROOT, 'scripts', 'account-rotation', 'config.json'),
   ].filter(Boolean);
   for (const p of candidates) {
-    try { if (existsSync(p)) return { crs: {}, ...JSON.parse(readFileSync(p, 'utf8')) }; } catch {}
+    try {
+      if (existsSync(p)) return { crs: {}, ...JSON.parse(readFileSync(p, 'utf8')) };
+    } catch {}
   }
   return { crs: {} };
 }
@@ -91,7 +93,7 @@ function adminPassword() {
   } catch {}
   throw new Error(
     `CRS admin password unavailable — set $CRS_ADMIN_PASSWORD, or store it via:\n` +
-    `  bash "${join(PLUGIN_ROOT, 'lib', 'credential-store.sh')}" set CRS-Admin-${ADMIN_USER} "$USER" '<password>'`
+      `  bash "${join(PLUGIN_ROOT, 'lib', 'credential-store.sh')}" set CRS-Admin-${ADMIN_USER} "$USER" '<password>'`,
   );
 }
 
@@ -107,10 +109,22 @@ function readOauthToken(email) {
   const acct = process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || 'claude-ops';
   // try credential-store first (cross-platform), then macOS security directly
   for (const get of [
-    () => execFileSync('bash', [join(PLUGIN_ROOT, 'lib', 'credential-store.sh'), 'get', `${USAGE_TOKEN_SVC}${email}`, acct], { encoding: 'utf8' }),
-    () => execFileSync('security', ['find-generic-password', '-a', acct, '-s', `${USAGE_TOKEN_SVC}${email}`, '-w'], { encoding: 'utf8' }),
+    () =>
+      execFileSync(
+        'bash',
+        [join(PLUGIN_ROOT, 'lib', 'credential-store.sh'), 'get', `${USAGE_TOKEN_SVC}${email}`, acct],
+        { encoding: 'utf8' },
+      ),
+    () =>
+      execFileSync('security', ['find-generic-password', '-a', acct, '-s', `${USAGE_TOKEN_SVC}${email}`, '-w'], {
+        encoding: 'utf8',
+      }),
   ]) {
-    try { const j = JSON.parse(get().trim()); const t = j?.claudeAiOauth?.accessToken; if (t) return t; } catch {}
+    try {
+      const j = JSON.parse(get().trim());
+      const t = j?.claudeAiOauth?.accessToken;
+      if (t) return t;
+    } catch {}
   }
   return null;
 }
@@ -126,14 +140,21 @@ async function liveUsage(email) {
     if (!r.ok) return null; // 401 (stale token) / 429 → fall back to cache + sessionWindowStatus
     const d = await r.json();
     return { u5: d?.five_hour?.utilization ?? null, u7: d?.seven_day?.utilization ?? null };
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 // ── http ─────────────────────────────────────────────────────────────────────
 async function jfetch(path, opts = {}) {
   const r = await fetch(`${BASE}${path}`, opts);
   const txt = await r.text();
-  let body; try { body = JSON.parse(txt); } catch { body = txt; }
+  let body;
+  try {
+    body = JSON.parse(txt);
+  } catch {
+    body = txt;
+  }
   return { status: r.status, body };
 }
 
@@ -175,12 +196,24 @@ function decide(accts) {
     const utilBreach = fresh && ((u5 ?? 0) >= OFF_5H || (u7 ?? 0) >= OFF_7D || (u7o ?? 0) >= OFF_7D);
     const utilClear = !fresh || ((u5 ?? 0) < ON_5H && (u7 ?? 0) < ON_7D && (u7o ?? 0) < ON_7D);
 
-    let desired = cur, reason = 'hold', soft = false;
-    if (rl) { desired = false; reason = 'rate-limited'; }
-    else if (overloaded) { desired = false; reason = 'overloaded(529)'; }
-    else if (sw && WARN_STATUSES.has(sw)) { desired = false; reason = `sessionWindow=${sw}`; soft = true; }
-    else if (utilBreach) { desired = false; reason = `util 5h=${u5} 7d=${u7} 7dOpus=${u7o} ≥ off`; soft = true; }
-    else if ((sw === 'allowed' || sw === null) && utilClear) {
+    let desired = cur,
+      reason = 'hold',
+      soft = false;
+    if (rl) {
+      desired = false;
+      reason = 'rate-limited';
+    } else if (overloaded) {
+      desired = false;
+      reason = 'overloaded(529)';
+    } else if (sw && WARN_STATUSES.has(sw)) {
+      desired = false;
+      reason = `sessionWindow=${sw}`;
+      soft = true;
+    } else if (utilBreach) {
+      desired = false;
+      reason = `util 5h=${u5} 7d=${u7} 7dOpus=${u7o} ≥ off`;
+      soft = true;
+    } else if ((sw === 'allowed' || sw === null) && utilClear) {
       desired = true;
       reason = `healthy (sw=${sw ?? 'none'}${fresh ? `, 5h=${u5}` : ', usage stale/absent'})`;
     }
@@ -196,10 +229,13 @@ function decide(accts) {
       .sort((x, y) => unum(x) - unum(y));
     for (const d of revertable) {
       if (usable >= FLOOR) break;
-      d.desired = true; d.reason = `FLOOR(${FLOOR}): held schedulable despite ${d.reason}`; usable++;
+      d.desired = true;
+      d.reason = `FLOOR(${FLOOR}): held schedulable despite ${d.reason}`;
+      usable++;
     }
     const final = decisions.filter((d) => d.desired && !d.rl && !d.overloaded).length;
-    if (final < FLOOR) log(`WARNING: only ${final} usable account(s) (< floor ${FLOOR}) — pool is capacity-constrained`);
+    if (final < FLOOR)
+      log(`WARNING: only ${final} usable account(s) (< floor ${FLOOR}) — pool is capacity-constrained`);
   }
 
   // DEDUP — accounts sharing an organizationUuid are the SAME claude.ai quota pool
@@ -227,13 +263,23 @@ function decide(accts) {
 
 // ── main ─────────────────────────────────────────────────────────────────────
 async function main() {
-  if (C.enabled === false && !STATUS && !DRY) { log('crs.enabled=false — skipping tick'); return; }
+  if (C.enabled === false && !STATUS && !DRY) {
+    log('crs.enabled=false — skipping tick');
+    return;
+  }
   const auth = await login();
   const accts = await getAccounts(auth);
-  if (!accts.length) { log('no active claude accounts'); return; }
+  if (!accts.length) {
+    log('no active claude accounts');
+    return;
+  }
   // Authoritative quota: query Anthropic /oauth/usage directly per account (parallel,
   // read-only). Falls back to CRS cache + sessionWindowStatus when a token is absent/stale.
-  await Promise.all(accts.map(async (a) => { a._liveUsage = await liveUsage(a.subscriptionInfo?.email); }));
+  await Promise.all(
+    accts.map(async (a) => {
+      a._liveUsage = await liveUsage(a.subscriptionInfo?.email);
+    }),
+  );
   const liveN = accts.filter((a) => a._liveUsage).length;
   const decisions = decide(accts);
 
@@ -241,7 +287,9 @@ async function main() {
     console.log(`CRS pool @ ${BASE} — ${decisions.filter((d) => d.cur).length}/${decisions.length} schedulable`);
     for (const d of decisions.sort((a, b) => (a.cur === b.cur ? 0 : a.cur ? -1 : 1))) {
       const flags = [d.rl && 'RL', d.overloaded && 'OVERLOAD', d.sw].filter(Boolean).join(' ');
-      console.log(`  ${d.cur ? '●' : '○'} ${d.a.name.padEnd(26)} sched=${d.cur} 5h=${String(d.u5).padStart(3)}%  ${flags}`);
+      console.log(
+        `  ${d.cur ? '●' : '○'} ${d.a.name.padEnd(26)} sched=${d.cur} 5h=${String(d.u5).padStart(3)}%  ${flags}`,
+      );
     }
     return;
   }
@@ -250,15 +298,25 @@ async function main() {
   for (const d of decisions) {
     if (d.desired === d.cur) continue;
     changed++;
-    if (DRY) { log(`[dry] ${d.a.name}: ${d.cur}→${d.desired} (${d.reason})`); continue; }
+    if (DRY) {
+      log(`[dry] ${d.a.name}: ${d.cur}→${d.desired} (${d.reason})`);
+      continue;
+    }
     const put = await jfetch(`/admin/claude-accounts/${d.a.id}/toggle-schedulable`, {
-      method: 'PUT', headers: auth, body: JSON.stringify({ schedulable: d.desired }),
+      method: 'PUT',
+      headers: auth,
+      body: JSON.stringify({ schedulable: d.desired }),
     });
     log(`${d.a.name}: schedulable ${d.cur}→${d.desired} (${d.reason}) [HTTP ${put.status}]`);
   }
   const on = decisions.filter((d) => d.desired).map((d) => d.a.name);
   const off = decisions.filter((d) => !d.desired).map((d) => `${d.a.name}(${d.sw || (d.rl ? 'RL' : '?')})`);
-  log(`tick: ${changed} change(s). live-quota=${liveN}/${decisions.length} schedulable=${on.length} [${on.join(',')}] | off=[${off.join(',')}]`);
+  log(
+    `tick: ${changed} change(s). live-quota=${liveN}/${decisions.length} schedulable=${on.length} [${on.join(',')}] | off=[${off.join(',')}]`,
+  );
 }
 
-main().catch((e) => { log(`ERROR: ${e.message}`); process.exit(1); });
+main().catch((e) => {
+  log(`ERROR: ${e.message}`);
+  process.exit(1);
+});

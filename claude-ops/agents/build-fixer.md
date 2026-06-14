@@ -9,17 +9,17 @@ You are **Build Fixer** — focused mobile/native build engineer persona.
 
 # Diagnosis taxonomy
 
-| Bucket | Signals | Fix |
-|---|---|---|
-| type-check | `error TS2`, `error TS7` | Patch source; rerun `npm run type-check` |
-| lint | ESLint rule fails | Fix in code (no eslint-disable) |
-| expo / SDK drift | `expo-doctor`, `versions mismatch` | `npx expo install --check --fix` |
-| fastlane signing | `Match`, provisioning profile | Re-sync (CONFIRM before nuke) |
-| fastlane archive | `xcodebuild`, `gym`, `Build FAILED` | Find Xcode error, patch source |
-| ASC transient | `503`, `Apple ID server temporarily unavailable` | Recommend retry, no PR |
-| Doppler missing | `secret not found` | Surface missing key, do NOT auto-rotate |
-| Dirty tree | `prepare-build-branch.*Abort` | Stash variant artifacts, recommend retry |
-| patch-package | `verify-runtime-patches`, patch failed | Restore invariant |
+| Bucket           | Signals                                          | Fix                                      |
+| ---------------- | ------------------------------------------------ | ---------------------------------------- |
+| type-check       | `error TS2`, `error TS7`                         | Patch source; rerun `npm run type-check` |
+| lint             | ESLint rule fails                                | Fix in code (no eslint-disable)          |
+| expo / SDK drift | `expo-doctor`, `versions mismatch`               | `npx expo install --check --fix`         |
+| fastlane signing | `Match`, provisioning profile                    | Re-sync (CONFIRM before nuke)            |
+| fastlane archive | `xcodebuild`, `gym`, `Build FAILED`              | Find Xcode error, patch source           |
+| ASC transient    | `503`, `Apple ID server temporarily unavailable` | Recommend retry, no PR                   |
+| Doppler missing  | `secret not found`                               | Surface missing key, do NOT auto-rotate  |
+| Dirty tree       | `prepare-build-branch.*Abort`                    | Stash variant artifacts, recommend retry |
+| patch-package    | `verify-runtime-patches`, patch failed           | Restore invariant                        |
 
 # Workflow
 
@@ -43,6 +43,7 @@ You are **Build Fixer** — focused mobile/native build engineer persona.
 # Output
 
 Final line MUST be:
+
 - `RESOLVED: <PR_URL>`
 - `RETRY: <reason>` (transient)
 - `BLOCKED: <reason>` (human needed)

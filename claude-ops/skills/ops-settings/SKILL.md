@@ -1,7 +1,7 @@
 ---
 name: ops-settings
 description: Post-setup credential manager. Shows current integration status (configured/missing/expired) and lets you update individual credentials without re-running the full setup wizard. Runs a smoke test after each update.
-argument-hint: "[integration-name] [--status]"
+argument-hint: '[integration-name] [--status]'
 allowed-tools:
   - Bash
   - Read
@@ -67,13 +67,13 @@ Display as a table:
 
 For integrations with a cheap health check, run it to distinguish "configured but expired" from "configured and active":
 
-| Integration | Probe | Active signal |
-|-------------|-------|---------------|
-| Stripe | `curl -s -o /dev/null -w "%{http_code}" -u "${stripe_key}:" https://api.stripe.com/v1/balance` | 200 |
-| GitHub | `gh auth status 2>&1` | "Logged in" |
-| AWS | `aws sts get-caller-identity --output text 2>/dev/null` | exits 0 |
-| Linear | `cat "$PREFS" | jq -r .linear_team` | non-empty |
-| Doppler MCP | Check if DOPPLER_TOKEN is set and valid | Token present and MCP server responds |
+| Integration | Probe                                                                                          | Active signal                         |
+| ----------- | ---------------------------------------------------------------------------------------------- | ------------------------------------- | --------- |
+| Stripe      | `curl -s -o /dev/null -w "%{http_code}" -u "${stripe_key}:" https://api.stripe.com/v1/balance` | 200                                   |
+| GitHub      | `gh auth status 2>&1`                                                                          | "Logged in"                           |
+| AWS         | `aws sts get-caller-identity --output text 2>/dev/null`                                        | exits 0                               |
+| Linear      | `cat "$PREFS"                                                                                  | jq -r .linear_team`                   | non-empty |
+| Doppler MCP | Check if DOPPLER_TOKEN is set and valid                                                        | Token present and MCP server responds |
 
 Show `🔴 expired` if probe fails for a previously-configured key.
 
@@ -97,17 +97,17 @@ When a specific integration is selected (via argument or user pick from dashboar
 
 ## Smoke Tests
 
-| Integration | Smoke test command |
-|-------------|-------------------|
-| Stripe | `curl -s -u "${new_key}:" https://api.stripe.com/v1/balance \| jq .object` → must be "balance" |
-| RevenueCat | `curl -s -H "Authorization: Bearer ${new_key}" "https://api.revenuecat.com/v2/projects" \| jq '.items \| length'` → non-zero |
-| Telegram | `node ${CLAUDE_PLUGIN_ROOT}/telegram-server/index.js --health 2>&1` → "healthy" |
-| Slack | `curl -s -H "Authorization: Bearer ${new_token}" https://slack.com/api/auth.test \| jq .ok` → true |
-| Shopify | `curl -s -H "X-Shopify-Access-Token: ${new_token}" "https://${store_url}/admin/api/2024-01/shop.json" \| jq .shop.name` → non-null |
-| Klaviyo | `curl -s -H "Authorization: Klaviyo-API-Key ${new_key}" https://a.klaviyo.com/api/accounts/ \| jq '.data[0].id'` → non-null |
-| Datadog | `curl -s -H "DD-API-KEY: ${new_key}" https://api.datadoghq.com/api/v1/validate \| jq .valid` → true |
-| New Relic | `curl -s -H "Api-Key: ${new_key}" https://api.newrelic.com/v2/applications.json \| jq '.applications | length'` → numeric |
-| Doppler MCP | `npx -y @dopplerhq/mcp-server --help 2>&1` with DOPPLER_TOKEN set | exits 0 |
+| Integration | Smoke test command                                                                                                                 |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| Stripe      | `curl -s -u "${new_key}:" https://api.stripe.com/v1/balance \| jq .object` → must be "balance"                                     |
+| RevenueCat  | `curl -s -H "Authorization: Bearer ${new_key}" "https://api.revenuecat.com/v2/projects" \| jq '.items \| length'` → non-zero       |
+| Telegram    | `node ${CLAUDE_PLUGIN_ROOT}/telegram-server/index.js --health 2>&1` → "healthy"                                                    |
+| Slack       | `curl -s -H "Authorization: Bearer ${new_token}" https://slack.com/api/auth.test \| jq .ok` → true                                 |
+| Shopify     | `curl -s -H "X-Shopify-Access-Token: ${new_token}" "https://${store_url}/admin/api/2024-01/shop.json" \| jq .shop.name` → non-null |
+| Klaviyo     | `curl -s -H "Authorization: Klaviyo-API-Key ${new_key}" https://a.klaviyo.com/api/accounts/ \| jq '.data[0].id'` → non-null        |
+| Datadog     | `curl -s -H "DD-API-KEY: ${new_key}" https://api.datadoghq.com/api/v1/validate \| jq .valid` → true                                |
+| New Relic   | `curl -s -H "Api-Key: ${new_key}" https://api.newrelic.com/v2/applications.json \| jq '.applications                               | length'` → numeric |
+| Doppler MCP | `npx -y @dopplerhq/mcp-server --help 2>&1` with DOPPLER_TOKEN set                                                                  | exits 0            |
 
 ## Autopilot Studio (per-project)
 
@@ -270,6 +270,7 @@ Fine-grained, per-event routing for the whole pocket module, dispatched by
    Which pocket event?
      [env-broker.uid-rejected (security)]  [env-broker.denied]  [worker.failed]  [More events…]
    ```
+
    Page 2: `[worker.completed] [worker.spawned] [queue.stuck] [More events…]`,
    page 3: `[daemon.down] [Done]`.
 
@@ -297,6 +298,7 @@ Fine-grained, per-event routing for the whole pocket module, dispatched by
       '.pocket.notifications.events[$ev] = {channels: $chans, severity: $sev, schedule: {cooldown: $cooldown}}' \
       "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"
    ```
+
    (Merge `quiet_hours` / `active_days` into `.schedule` the same way when set.)
 
 5. **Test-send** the event so the operator confirms routing without waiting for a
@@ -305,6 +307,7 @@ Fine-grained, per-event routing for the whole pocket module, dispatched by
    ```bash
    ops-pocket-notify "$EVENT" "test notification from /ops:setup" --severity "$SEVERITY" --dry-run --json
    ```
+
    Show the `fired` channels (or the `suppressed` reason). Offer a real send
    (drop `--dry-run`) for the chosen event so they see it land on the device.
 
@@ -448,6 +451,7 @@ URL masking: replace all octets except the last with `•••`, e.g. `https://
 Token masking: show last 4 characters only, prefix with `••••••••••••`.
 
 If `home_automation` key is absent from `preferences.json`, show:
+
 ```
  Status:  ○ not configured — run /ops:setup --section home
 ```
@@ -460,9 +464,9 @@ When the user selects `[r] reconfigure`, route to `/ops:setup --section home` (i
 
 ## CLI/API Reference
 
-| Command | Purpose |
-|---------|---------|
-| `cat "$PREFS" \| jq 'keys'` | List all configured keys |
-| `jq --arg v "$V" --arg k "$K" '.[$k] = $v' "$PREFS"` | Update a single key |
-| `gh auth status` | Verify GitHub CLI auth |
-| `aws sts get-caller-identity` | Verify AWS auth |
+| Command                                              | Purpose                  |
+| ---------------------------------------------------- | ------------------------ |
+| `cat "$PREFS" \| jq 'keys'`                          | List all configured keys |
+| `jq --arg v "$V" --arg k "$K" '.[$k] = $v' "$PREFS"` | Update a single key      |
+| `gh auth status`                                     | Verify GitHub CLI auth   |
+| `aws sts get-caller-identity`                        | Verify AWS auth          |

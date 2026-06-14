@@ -7,7 +7,7 @@ into each provider once (Google, etc.), subsequent re-auths are zero-touch.
 
 Usage:
   ops-mcp-reauth.py <mcp-url>
-  ops-mcp-reauth.py --bootstrap   # opens a HEAD-FUL window so Sam can log in
+  ops-mcp-reauth.py --bootstrap   # opens a HEAD-FUL window so the owner can log in
                                   to each provider into the persistent profile
                                   ONE TIME. After that all reauths headless.
 

@@ -110,6 +110,7 @@ competitor_vertical_slice ceo
 This returns a JSON array of high-severity competitor events (new entrants, funding rounds, competitor product moves, page-diff signals). If the array is `[]`, skip this section — no signal to react to. Do not fabricate competitor data.
 
 Weave real signals into your strategic assessment:
+
 - New entrants or funding rounds → is the market heating up? reframe our defensibility narrative.
 - Competitor product moves → do they change our build priorities or positioning?
 - No signals → note that the competitive landscape was quiet this week.
@@ -140,6 +141,7 @@ Before stating that ANY external state is broken, missing, misconfigured, or wro
    If you cannot verify a claim (rate-limited, no creds, tool unavailable), do NOT assert it as fact. Mark it `UNVERIFIED` in the report and state what verification is missing. False fires erode trust faster than missed ones.
 
 **Forbidden output patterns:**
+
 - "X is missing in production" without a corresponding read confirming absence
 - "Y is broken / down / a fire" without checking the owning repo's git log for intentional state
 - "Config `<env>` is missing var Z" without first verifying that `<env>` config exists in the secret store

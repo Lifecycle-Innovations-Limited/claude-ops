@@ -1,7 +1,7 @@
 ---
 name: ops-gtm
 description: Go-to-market strategy planner. Generates a complete GTM plan across paid, unpaid, marketing, sales, and AI-automation channels for any project — and hands executable campaigns off to /marketing.
-argument-hint: "[plan|paid|unpaid|sales|automation|launch|brief|setup]"
+argument-hint: '[plan|paid|unpaid|sales|automation|launch|brief|setup]'
 allowed-tools:
   - Bash
   - Read
@@ -65,16 +65,16 @@ If the flag is NOT set, use standard fire-and-forget subagents with the same fou
 
 Route `$ARGUMENTS` to the correct section below:
 
-| Input | Action |
-|---|---|
-| (empty), plan | Full GTM plan across all four avenues |
-| paid | Paid acquisition deep-dive (Meta, Google, LinkedIn, TikTok, affiliates, sponsorships) |
-| unpaid | Organic deep-dive (SEO, content, community, PR, partnerships, referrals, lifecycle email) |
-| sales | Sales motion (outbound, inbound, PLG, channel / partner) |
-| automation | AI-automation playbook for GTM |
-| launch | 30/60/90 launch calendar + pre-flight checklist |
-| brief | One-page positioning brief (ICP, value prop, messaging pillars) |
-| setup | Configure default project, audience, budget tier, brand voice |
+| Input         | Action                                                                                    |
+| ------------- | ----------------------------------------------------------------------------------------- |
+| (empty), plan | Full GTM plan across all four avenues                                                     |
+| paid          | Paid acquisition deep-dive (Meta, Google, LinkedIn, TikTok, affiliates, sponsorships)     |
+| unpaid        | Organic deep-dive (SEO, content, community, PR, partnerships, referrals, lifecycle email) |
+| sales         | Sales motion (outbound, inbound, PLG, channel / partner)                                  |
+| automation    | AI-automation playbook for GTM                                                            |
+| launch        | 30/60/90 launch calendar + pre-flight checklist                                           |
+| brief         | One-page positioning brief (ICP, value prop, messaging pillars)                           |
+| setup         | Configure default project, audience, budget tier, brand voice                             |
 
 Arguments are free-form — treat `/gtm plan for my-project $2k/mo pre-launch` as equivalent to `plan` with intake values pre-filled.
 
@@ -108,52 +108,52 @@ This is the source-of-truth list the planner draws from. Each row: avenue → fi
 
 ### Paid
 
-| Channel | Fits | Cost profile | Execution |
-|---|---|---|---|
-| Meta Ads (Facebook + Instagram) | B2C, marketplace, broad consumer | $5–50 CPA typical | `/marketing ads` · `/marketing meta create-campaign` |
-| Google Ads — Search | High-intent buyers, existing demand | $1–30 CPC | `/marketing google-ads` |
-| Google Ads — Performance Max | E-comm with catalog | Blended CPA | `/marketing google-ads` |
-| YouTube Ads | Awareness at scale | $0.01–0.30 CPV | `/marketing google-ads` (video campaigns) |
-| LinkedIn Ads | B2B, ACV > $10k | $8–15 CPC, $50+ CPL | manual — LinkedIn Campaign Manager |
-| TikTok Ads | B2C, < 35 audience, creative-led | $1–10 CPC | manual — TikTok Ads Manager |
-| Reddit / X / Pinterest | Niche communities | Varies | manual |
-| Podcast sponsorships | Trust-driven, narrow ICP | $20–50 CPM | manual — direct sponsor deals |
-| Affiliate / partner program | Marketplace, SaaS with referral loop | Rev-share | manual — Rewardful / PartnerStack |
+| Channel                         | Fits                                 | Cost profile        | Execution                                            |
+| ------------------------------- | ------------------------------------ | ------------------- | ---------------------------------------------------- |
+| Meta Ads (Facebook + Instagram) | B2C, marketplace, broad consumer     | $5–50 CPA typical   | `/marketing ads` · `/marketing meta create-campaign` |
+| Google Ads — Search             | High-intent buyers, existing demand  | $1–30 CPC           | `/marketing google-ads`                              |
+| Google Ads — Performance Max    | E-comm with catalog                  | Blended CPA         | `/marketing google-ads`                              |
+| YouTube Ads                     | Awareness at scale                   | $0.01–0.30 CPV      | `/marketing google-ads` (video campaigns)            |
+| LinkedIn Ads                    | B2B, ACV > $10k                      | $8–15 CPC, $50+ CPL | manual — LinkedIn Campaign Manager                   |
+| TikTok Ads                      | B2C, < 35 audience, creative-led     | $1–10 CPC           | manual — TikTok Ads Manager                          |
+| Reddit / X / Pinterest          | Niche communities                    | Varies              | manual                                               |
+| Podcast sponsorships            | Trust-driven, narrow ICP             | $20–50 CPM          | manual — direct sponsor deals                        |
+| Affiliate / partner program     | Marketplace, SaaS with referral loop | Rev-share           | manual — Rewardful / PartnerStack                    |
 
 ### Unpaid (Organic)
 
-| Channel | Fits | Effort | Execution |
-|---|---|---|---|
-| Programmatic SEO | Dev tools, marketplaces, comparison queries | High upfront, compounding | `/marketing seo` (tracking) + manual content ops |
-| Topic-cluster SEO | Content-led SaaS, info-intent | Medium, 3–6mo to signal | `/marketing seo` |
-| Lifecycle email (welcome, nurture, winback) | Any with email capture | Medium, high leverage | `/marketing email` (Klaviyo flows) |
-| Instagram organic | Visual product, lifestyle | Medium, daily | `/marketing instagram` |
-| X / LinkedIn founder-led | B2B, dev tools, thought leadership | Daily, high-leverage | manual |
-| Community building (Discord / Slack / forum) | Dev tools, B2C with passion | High, ongoing | manual |
-| PR / launch pads (Product Hunt, HN, press) | Any at launch | Spiky | `/gtm launch` checklist + manual |
-| Partnerships / integrations | SaaS, marketplaces | Medium, compounding | manual |
-| Referral program | Any with product-led signup | Low eng cost, high leverage | manual — plug into lifecycle email |
+| Channel                                      | Fits                                        | Effort                      | Execution                                        |
+| -------------------------------------------- | ------------------------------------------- | --------------------------- | ------------------------------------------------ |
+| Programmatic SEO                             | Dev tools, marketplaces, comparison queries | High upfront, compounding   | `/marketing seo` (tracking) + manual content ops |
+| Topic-cluster SEO                            | Content-led SaaS, info-intent               | Medium, 3–6mo to signal     | `/marketing seo`                                 |
+| Lifecycle email (welcome, nurture, winback)  | Any with email capture                      | Medium, high leverage       | `/marketing email` (Klaviyo flows)               |
+| Instagram organic                            | Visual product, lifestyle                   | Medium, daily               | `/marketing instagram`                           |
+| X / LinkedIn founder-led                     | B2B, dev tools, thought leadership          | Daily, high-leverage        | manual                                           |
+| Community building (Discord / Slack / forum) | Dev tools, B2C with passion                 | High, ongoing               | manual                                           |
+| PR / launch pads (Product Hunt, HN, press)   | Any at launch                               | Spiky                       | `/gtm launch` checklist + manual                 |
+| Partnerships / integrations                  | SaaS, marketplaces                          | Medium, compounding         | manual                                           |
+| Referral program                             | Any with product-led signup                 | Low eng cost, high leverage | manual — plug into lifecycle email               |
 
 ### Sales
 
-| Motion | Fits | Execution |
-|---|---|---|
-| Outbound (cold email + LinkedIn) | B2B, ACV > $5k | `/gtm automation` (AI-personalized) + manual sending tool |
-| Inbound (demo form → AE) | B2B SaaS with pricing page | manual CRM + routing |
-| Product-Led Growth (self-serve) | Dev tools, horizontal SaaS | manual — instrument onboarding; `/marketing email` for lifecycle |
-| Channel / partner | Enterprise, vertical SaaS | manual — co-selling motion |
+| Motion                           | Fits                       | Execution                                                        |
+| -------------------------------- | -------------------------- | ---------------------------------------------------------------- |
+| Outbound (cold email + LinkedIn) | B2B, ACV > $5k             | `/gtm automation` (AI-personalized) + manual sending tool        |
+| Inbound (demo form → AE)         | B2B SaaS with pricing page | manual CRM + routing                                             |
+| Product-Led Growth (self-serve)  | Dev tools, horizontal SaaS | manual — instrument onboarding; `/marketing email` for lifecycle |
+| Channel / partner                | Enterprise, vertical SaaS  | manual — co-selling motion                                       |
 
 ### AI Automation
 
-| Recipe | What it does | Stack | Plugs into |
-|---|---|---|---|
-| AI cold-email personalization | LLM generates opener from enrichment data | Clay / Apollo + Claude | outbound sales |
-| Generative SEO clusters | LLM drafts topic-cluster outlines from seed keywords | Claude + GSC data | `/marketing seo` |
-| Lifecycle copy generator | Auto-draft Klaviyo flow emails per segment | Claude + Klaviyo data | `/marketing email` |
-| Ad creative variants | Bulk-generate Meta/Google ad copy A/B sets | Claude + `/marketing ads` insights | `/marketing meta create-campaign` · `/marketing google-ads` |
-| Support deflection | LLM answers tier-1 tickets from docs | Claude + help-center KB | manual — help desk |
-| Lead scoring | LLM scores inbound leads on ICP fit | Claude + CRM data | manual — CRM |
-| Content repurposing | Long-form → tweets, LinkedIn posts, newsletter | Claude | `/marketing instagram` · manual social |
+| Recipe                        | What it does                                         | Stack                              | Plugs into                                                  |
+| ----------------------------- | ---------------------------------------------------- | ---------------------------------- | ----------------------------------------------------------- |
+| AI cold-email personalization | LLM generates opener from enrichment data            | Clay / Apollo + Claude             | outbound sales                                              |
+| Generative SEO clusters       | LLM drafts topic-cluster outlines from seed keywords | Claude + GSC data                  | `/marketing seo`                                            |
+| Lifecycle copy generator      | Auto-draft Klaviyo flow emails per segment           | Claude + Klaviyo data              | `/marketing email`                                          |
+| Ad creative variants          | Bulk-generate Meta/Google ad copy A/B sets           | Claude + `/marketing ads` insights | `/marketing meta create-campaign` · `/marketing google-ads` |
+| Support deflection            | LLM answers tier-1 tickets from docs                 | Claude + help-center KB            | manual — help desk                                          |
+| Lead scoring                  | LLM scores inbound leads on ICP fit                  | Claude + CRM data                  | manual — CRM                                                |
+| Content repurposing           | Long-form → tweets, LinkedIn posts, newsletter       | Claude                             | `/marketing instagram` · manual social                      |
 
 ---
 

@@ -200,6 +200,7 @@ competitor_vertical_slice cfo
 This returns a JSON array of high-severity pricing competitor events (direct pricing page diffs, money-token signals). If the array is `[]`, skip this section — no signal to react to. Do not fabricate competitor data.
 
 Weave real signals into your financial analysis:
+
 - Competitor pricing drops → is our price-point still defensible? quantify revenue impact if we match.
 - Competitor funding rounds → extended competitive runway pressure — factor into burn/runway outlook.
 - No signals → note that no pricing moves were detected from direct competitors this week.
@@ -230,6 +231,7 @@ Before stating that ANY external state is broken, missing, misconfigured, or wro
    If you cannot verify a claim (rate-limited, no creds, tool unavailable), do NOT assert it as fact. Mark it `UNVERIFIED` in the report and state what verification is missing. False fires erode trust faster than missed ones.
 
 **Forbidden output patterns:**
+
 - "X is missing in production" without a corresponding read confirming absence
 - "Y is broken / down / a fire" without checking the owning repo's git log for intentional state
 - "Config `<env>` is missing var Z" without first verifying that `<env>` config exists in the secret store
@@ -240,6 +242,7 @@ When in doubt: verify, downgrade severity, or label `UNVERIFIED`. The orchestrat
 ## DESTRUCTIVE ACTION GUARDRAIL
 
 Before recommending deletion of ANY infrastructure or cancellation of ANY service:
+
 1. **Verify project status** — check registry entry, git log recency, active branches, .planning/ directory. A project with recent commits, active planning, or a completed v1.0 is NOT dead.
 2. **"Idle" ≠ "dead"** — a service scaled to 0 may be paused intentionally. Only recommend deletion if confirmed abandoned (no commits 30+ days, no planning, no active branches).
 3. **Flag all destructive recommendations** with `⚠️ REQUIRES CONFIRMATION` — the orchestrator will present each to the user via AskUserQuestion before execution.

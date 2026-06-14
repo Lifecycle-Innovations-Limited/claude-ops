@@ -12,11 +12,11 @@ Thanks for your interest in contributing!
 
 ## Branch Naming
 
-| Prefix | Use |
-|--------|-----|
+| Prefix  | Use                          |
+| ------- | ---------------------------- |
 | `feat/` | New features or integrations |
-| `fix/` | Bug fixes |
-| `docs/` | Documentation only changes |
+| `fix/`  | Bug fixes                    |
+| `docs/` | Documentation only changes   |
 
 Examples: `feat/stripe-integration`, `fix/auth-token-refresh`, `docs/setup-guide`
 

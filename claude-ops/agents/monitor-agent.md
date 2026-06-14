@@ -12,7 +12,7 @@ disallowedTools:
   - Edit
   - Agent
 memory: project
-initialPrompt: "Probe all configured monitoring backends (Datadog, New Relic, OTEL). Return structured JSON with per-service health, open alerts, error traces. Read-only only."
+initialPrompt: 'Probe all configured monitoring backends (Datadog, New Relic, OTEL). Return structured JSON with per-service health, open alerts, error traces. Read-only only.'
 ---
 
 # MONITOR AGENT

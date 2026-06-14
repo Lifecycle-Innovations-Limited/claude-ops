@@ -14,10 +14,10 @@ placeholders — every user supplies their own via the project registry.
 
 ## Two access modes
 
-| Mode | Use for | Auth | Cost |
-|---|---|---|---|
-| **MCP** (`mcp__*Windsor*__*`) | interactive drill-down inside an ops command — per-campaign / per-day / arbitrary fields | claude.ai OAuth, no key needed | runs in-session |
-| **REST** (`https://connectors.windsor.ai/<connector>`) | headless / cron pulls — feeding a cache, statusline, or dashboard with no model calls | `api_key` (one per Windsor account) | free, no model quota |
+| Mode                                                   | Use for                                                                                  | Auth                                | Cost                 |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------- | ----------------------------------- | -------------------- |
+| **MCP** (`mcp__*Windsor*__*`)                          | interactive drill-down inside an ops command — per-campaign / per-day / arbitrary fields | claude.ai OAuth, no key needed      | runs in-session      |
+| **REST** (`https://connectors.windsor.ai/<connector>`) | headless / cron pulls — feeding a cache, statusline, or dashboard with no model calls    | `api_key` (one per Windsor account) | free, no model quota |
 
 REST request shape:
 
@@ -48,14 +48,14 @@ numbers per project. Connector slugs are lowercase (`facebook` = Meta Ads,
     {
       "alias": "<your-project>",
       "windsor": {
-        "facebook":         "<meta_ad_account_id>",
-        "google_ads":       "<google_ads_account_id>",
+        "facebook": "<meta_ad_account_id>",
+        "google_ads": "<google_ads_account_id>",
         "googleanalytics4": "<ga4_property_id>",
-        "instagram":        "<ig_account_id>",
-        "searchconsole":    "sc-domain:<your-domain>"
-      }
-    }
-  ]
+        "instagram": "<ig_account_id>",
+        "searchconsole": "sc-domain:<your-domain>",
+      },
+    },
+  ],
 }
 ```
 
@@ -70,8 +70,8 @@ and `/ops:status` can see it:
   "mcp_server": "<windsor-mcp-server-id>",
   "credential_key": "windsor_api_key",
   "rest_base": "https://connectors.windsor.ai",
-  "read_tools":  ["get_connectors", "get_fields", "get_data", "get_options"],
-  "write_tools": ["list_actions", "execute_action"]
+  "read_tools": ["get_connectors", "get_fields", "get_data", "get_options"],
+  "write_tools": ["list_actions", "execute_action"],
 }
 ```
 

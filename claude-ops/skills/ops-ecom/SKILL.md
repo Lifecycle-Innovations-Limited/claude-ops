@@ -1,7 +1,7 @@
 ---
 name: ops-ecom
 description: Shopify store command center. Orders, inventory, fulfillment, analytics, and store health. Works with any Shopify store via Admin API.
-argument-hint: "[orders|inventory|fulfillment|health|products|customers|analytics|setup]"
+argument-hint: '[orders|inventory|fulfillment|health|products|customers|analytics|setup]'
 allowed-tools:
   - Bash
   - Read
@@ -37,33 +37,35 @@ Before executing, load available context:
 
 ### Shopify Admin REST API
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/admin/api/2024-10/shop.json` | GET | Store info and plan |
-| `/admin/api/2024-10/orders.json?status=any&limit=50` | GET | Recent orders |
-| `/admin/api/2024-10/products.json?limit=250` | GET | Product catalog |
-| `/admin/api/2024-10/customers.json?limit=50` | GET | Customer list |
-| `/admin/api/2024-10/themes.json` | GET | Theme list |
-| `/admin/api/2024-10/variants/${ID}.json` | PUT | Update variant price |
+| Endpoint                                             | Method | Description          |
+| ---------------------------------------------------- | ------ | -------------------- |
+| `/admin/api/2024-10/shop.json`                       | GET    | Store info and plan  |
+| `/admin/api/2024-10/orders.json?status=any&limit=50` | GET    | Recent orders        |
+| `/admin/api/2024-10/products.json?limit=250`         | GET    | Product catalog      |
+| `/admin/api/2024-10/customers.json?limit=50`         | GET    | Customer list        |
+| `/admin/api/2024-10/themes.json`                     | GET    | Theme list           |
+| `/admin/api/2024-10/variants/${ID}.json`             | PUT    | Update variant price |
 
 **Auth header**: `X-Shopify-Access-Token: ${SHOPIFY_TOKEN}`
 
 ### ShipBob API (optional)
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `https://api.shipbob.com/1.0/shipment?Status=Processing&PageSize=20` | GET | Pending shipments |
+| Endpoint                                                             | Method | Description       |
+| -------------------------------------------------------------------- | ------ | ----------------- |
+| `https://api.shipbob.com/1.0/shipment?Status=Processing&PageSize=20` | GET    | Pending shipments |
 
 **Auth header**: `Authorization: Bearer ${SHIPBOB_TOKEN}`
 
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when probing store data in parallel. This enables:
+
 - Agents share context and can coordinate mid-flight
 - You can steer priorities in real-time
 - Agents report progress as they complete
 
 **Team setup** (only when flag is enabled):
+
 ```
 TeamCreate("ecom-team")
 Agent(team_name="ecom-team", name="orders-scanner", prompt="Fetch recent orders, compute revenue for today/7d/30d")
@@ -104,6 +106,7 @@ fi
 If `$SHOPIFY_STORE` or `$SHOPIFY_TOKEN` is still empty after all resolution steps, route to **setup flow** below.
 
 Set base URLs:
+
 ```bash
 SHOPIFY_BASE="https://${SHOPIFY_STORE}/admin/api/2024-10"
 SHOPIFY_GQL="https://${SHOPIFY_STORE}/admin/api/2024-10/graphql.json"
@@ -114,17 +117,17 @@ SHOPIFY_AUTH="X-Shopify-Access-Token: ${SHOPIFY_TOKEN}"
 
 ## Phase 2 — Route by $ARGUMENTS
 
-| Input                                      | Action              |
-| ------------------------------------------ | ------------------- |
-| (empty)                                    | Show store summary  |
-| orders, order                              | Orders dashboard    |
-| inventory, stock, inv                      | Inventory levels    |
-| fulfillment, fulfill, shipbob, shipping    | Fulfillment status  |
-| health, check, status                      | Store health check  |
-| products, product, catalog                 | Products manager    |
-| customers, customer, crm                   | Customer stats      |
-| analytics, revenue, stats, metrics         | Analytics dashboard |
-| setup, configure, init, token              | Setup flow          |
+| Input                                   | Action              |
+| --------------------------------------- | ------------------- |
+| (empty)                                 | Show store summary  |
+| orders, order                           | Orders dashboard    |
+| inventory, stock, inv                   | Inventory levels    |
+| fulfillment, fulfill, shipbob, shipping | Fulfillment status  |
+| health, check, status                   | Store health check  |
+| products, product, catalog              | Products manager    |
+| customers, customer, crm                | Customer stats      |
+| analytics, revenue, stats, metrics      | Analytics dashboard |
+| setup, configure, init, token           | Setup flow          |
 
 ---
 
@@ -565,6 +568,7 @@ PRODUCT / PRICING CHANGES
 ```
 
 Mapping rules (apply per event in the JSON array):
+
 - `source == "appstore"` → APP RELEASES entry. Extract version, rating, and review count from `snippet` if present.
 - `source == "page-diff"` and `kind` matches `features` → PRODUCT / PRICING CHANGES entry, labelled as features change.
 - `source == "page-diff"` and `kind == "pricing"` → PRODUCT / PRICING CHANGES entry, labelled as pricing change with severity from `severity` field.

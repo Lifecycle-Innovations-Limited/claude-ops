@@ -1,7 +1,7 @@
 ---
 name: ops-competitors
-description: "Competitor-intel dashboard and management UI. Tracks brand signals, page-diff alerts, pricing changes, App Store moves, and weekly synthesis reports. Powered by the competitor-intel cron pipeline."
-argument-hint: "[brand-name|refresh [brand]|add-url <brand> <competitor> <kind> <url>|alerts|help]"
+description: 'Competitor-intel dashboard and management UI. Tracks brand signals, page-diff alerts, pricing changes, App Store moves, and weekly synthesis reports. Powered by the competitor-intel cron pipeline.'
+argument-hint: '[brand-name|refresh [brand]|add-url <brand> <competitor> <kind> <url>|alerts|help]'
 allowed-tools:
   - Bash
   - Read

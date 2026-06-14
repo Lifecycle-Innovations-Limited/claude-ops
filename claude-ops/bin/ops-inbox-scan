@@ -67,7 +67,7 @@ export OIS_GMAIL_ACCOUNT="$GMAIL_ACCOUNT" OIS_PRETTY="$PRETTY"
 BRIDGE_DIR="${WHATSAPP_BRIDGE_DIR:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
 
 # --------------------------------------------------------- refresh on load ----
-# Autonomous "always pull latest before classifying" pass (Sam directive
+# Autonomous "always pull latest before classifying" pass (owner directive
 # 2026-06-05: "ensure backfill and frontfill is fully done automatically when I
 # run /ops-inbox"). Best-effort + bounded — NEVER blocks the scan for long and
 # NEVER fails it. Only runs when the bridge is actually reachable on :8080.
@@ -99,7 +99,7 @@ fi
 
 # Send-log reconciliation feed: hand python the bridge's outbound-send journal so
 # it can demote NEEDS_REPLY threads already answered via /api/send or a
-# phone-originated send that hasn't landed in messages.db yet (Sam directive:
+# phone-originated send that hasn't landed in messages.db yet (owner directive:
 # "include all things I sent to all people"). Linux: systemd journal. macOS /
 # other: bridge log file. Best-effort; empty feed => reconciliation is a no-op.
 OIS_SENDLOG_FILE=""
@@ -180,7 +180,7 @@ def load_send_log():
       <epoch>.<frac> host whatsapp-bridge[pid]: ... Message sent to <JID>
     This lets the WhatsApp classifier demote a NEEDS_REPLY thread that was
     already answered via /api/send (or a phone send not yet in messages.db) —
-    Sam directive 2026-06-05 "include all things I sent to all people".
+    owner directive 2026-06-05 "include all things I sent to all people".
     Only epoch-stamped lines drive demotion; undated lines are ignored so we
     never demote a thread whose send actually predates the last inbound.
     """

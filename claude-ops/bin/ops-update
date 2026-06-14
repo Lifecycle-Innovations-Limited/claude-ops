@@ -14,21 +14,24 @@
 #   5. Prune EVERY old cache version everywhere      (keep only the new one)
 #   6. Rewrite stale version-pinned paths in live configs/scripts (never logs/history)
 #   7. Run per-version idempotent migrations         (ops-post-update-migrate)
-#   8. Report old→new + what changed, and how to apply (/reload-plugins or restart)
+#   8. Fast-forward a linked local source checkout's main → origin/main (if clean)
+#   9. Report old→new + what changed, and how to apply (/reload-plugins or restart)
 #
 # Canonical CLI per Claude Code docs:
 #   https://code.claude.com/docs/en/discover-plugins  (marketplace update / plugin update)
 #   A session restart (or /reload-plugins) is required for the new version to load.
 #
 # Usage:
-#   ops-update [--dry-run] [--force] [--to X.Y.Z] [--no-prune] [--no-patches] [--no-rewrite]
+#   ops-update [--dry-run] [--force] [--to X.Y.Z] [--no-prune] [--no-patches]
+#              [--no-rewrite] [--no-localsync]
 #
-#   --dry-run     show everything that would happen; change nothing
-#   --force       force-reinstall even if the CLI says "already at latest" (bug #61954)
-#   --to X.Y.Z    target a specific version instead of the marketplace's newest
-#   --no-prune    keep old cache versions
-#   --no-patches  skip the cache-patch reapply step
-#   --no-rewrite  skip the stale-version-path rewrite step
+#   --dry-run       show everything that would happen; change nothing
+#   --force         force-reinstall even if the CLI says "already at latest" (bug #61954)
+#   --to X.Y.Z      target a specific version instead of the marketplace's newest
+#   --no-prune      keep old cache versions
+#   --no-patches    skip the cache-patch reapply step
+#   --no-rewrite    skip the stale-version-path rewrite step
+#   --no-localsync  skip fast-forwarding a linked local source checkout's main
 #
 # Public repo: no personal data. All paths derive from $HOME / env. (Rule 0)
 
@@ -44,7 +47,7 @@ INSTALLED="$PLUGINS_DIR/installed_plugins.json"
 DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$PLUGINS_DIR/data/ops-${MARKETPLACE}}"
 THIS_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
-DRY=0; FORCE=0; PRUNE=1; PATCHES=1; REWRITE=1; TARGET=""
+DRY=0; FORCE=0; PRUNE=1; PATCHES=1; REWRITE=1; LOCALSYNC=1; TARGET=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY=1; shift ;;
@@ -53,7 +56,8 @@ while [[ $# -gt 0 ]]; do
     --no-prune) PRUNE=0; shift ;;
     --no-patches) PATCHES=0; shift ;;
     --no-rewrite) REWRITE=0; shift ;;
-    -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
+    --no-localsync) LOCALSYNC=0; shift ;;
+    -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
     *) echo "ops-update: unknown arg '$1'" >&2; exit 2 ;;
   esac
 done
@@ -81,7 +85,7 @@ say "${c_dim}ops-update — claude-ops local upgrade$([[ $DRY -eq 1 ]] && echo '
 say "current installed: ${CUR:-<none>}"
 
 # ── 1. Refresh marketplace catalogue ───────────────────────────────────────
-step "1/8  Refresh marketplace catalogue ($MARKETPLACE)"
+step "1/9  Refresh marketplace catalogue ($MARKETPLACE)"
 if [[ "$DRY" -eq 1 ]]; then
   say "  ${c_dim}[dry-run] claude plugin marketplace update $MARKETPLACE${c_rst}"
 else
@@ -94,7 +98,7 @@ else
 fi
 
 # ── 2. Resolve target version ──────────────────────────────────────────────
-step "2/8  Resolve target version"
+step "2/9  Resolve target version"
 if [[ -n "$TARGET" ]]; then
   NEW="$TARGET"
 else
@@ -107,7 +111,7 @@ if [[ "$CUR" == "$NEW" && "$FORCE" -eq 0 ]]; then
 fi
 
 # ── 3. Update the installed plugin ─────────────────────────────────────────
-step "3/8  Update installed plugin → $NEW"
+step "3/9  Update installed plugin → $NEW"
 if [[ "$DRY" -eq 1 ]]; then
   say "  ${c_dim}[dry-run] claude plugin update $PLUGIN@$MARKETPLACE${c_rst}"
   [[ "$FORCE" -eq 1 ]] && say "  ${c_dim}[dry-run] (force) rm -rf $CACHE_ROOT/$NEW && claude plugin install $PLUGIN@$MARKETPLACE${c_rst}"
@@ -123,7 +127,7 @@ fi
 NEW_CACHE="$CACHE_ROOT/$NEW"
 
 # ── 4. Reapply idempotent local cache patches ──────────────────────────────
-step "4/8  Reapply cache patches"
+step "4/9  Reapply cache patches"
 PATCH_DIR="$THIS_ROOT/scripts/cache-patches"
 if [[ "$PATCHES" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-patches)${c_rst}"
@@ -138,7 +142,7 @@ else
 fi
 
 # ── 5. Prune old cache versions everywhere ─────────────────────────────────
-step "5/8  Prune old cache versions"
+step "5/9  Prune old cache versions"
 if [[ "$PRUNE" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-prune)${c_rst}"
 else
@@ -157,7 +161,7 @@ fi
 # ── 6. Rewrite stale version-pinned paths in LIVE configs/scripts ──────────
 # Only touch live, editable configs that hardcode cache/<mp>/<plugin>/<OLDVER>/.
 # NEVER rewrite logs, memory notes, session transcripts, the cache, or the clone.
-step "6/8  Rewrite stale version-pinned paths → $NEW"
+step "6/9  Rewrite stale version-pinned paths → $NEW"
 if [[ "$REWRITE" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-rewrite)${c_rst}"
 else
@@ -200,7 +204,7 @@ else
 fi
 
 # ── 7. Per-version idempotent migrations ───────────────────────────────────
-step "7/8  Post-update migrations"
+step "7/9  Post-update migrations"
 MIGRATE="$NEW_CACHE/bin/ops-post-update-migrate"
 if [[ "$DRY" -eq 1 ]]; then
   say "  ${c_dim}[dry-run] CLAUDE_PLUGIN_ROOT=$NEW_CACHE $MIGRATE${c_rst}"
@@ -210,8 +214,49 @@ else
   say "  ${c_dim}no ops-post-update-migrate in new cache (skipped)${c_rst}"
 fi
 
-# ── 8. Report ──────────────────────────────────────────────────────────────
-step "8/8  Summary"
+# ── 8. Fast-forward a linked local source checkout ─────────────────────────
+# If a dev clone of the claude-ops repo lives under ~/Projects, bring its main
+# up to date with origin/main — but ONLY when it is safely on a clean main, so we
+# never clobber uncommitted WIP or a feature branch. Purely a developer
+# convenience; absence of a checkout is the common case and is a no-op.
+step "8/9  Sync linked local source checkout"
+if [[ "$LOCALSYNC" -eq 0 ]]; then
+  say "  ${c_dim}(skipped: --no-localsync)${c_rst}"
+else
+  localrepo=""
+  for d in "$HOME"/Projects/claude-ops-marketplace "$HOME"/Projects/claude-ops "$HOME"/Projects/*/claude-ops "$HOME"/Projects/claude-ops/claude-ops; do
+    case "$d" in *"/.worktrees/"*) continue ;; esac
+    [[ -f "$d/.claude-plugin/marketplace.json" ]] || continue
+    git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || continue
+    localrepo="$d"; break
+  done
+  if [[ -z "$localrepo" ]]; then
+    say "  ${c_dim}no linked local source checkout found (skipped)${c_rst}"
+  else
+    say "  found: $localrepo"
+    branch="$(git -C "$localrepo" symbolic-ref --short HEAD 2>/dev/null || echo DETACHED)"
+    dirty="$(git -C "$localrepo" status --porcelain 2>/dev/null | head -1)"
+    if [[ "$DRY" -eq 1 ]]; then
+      say "  ${c_dim}[dry-run] git -C $localrepo fetch origin main && merge --ff-only (if on clean main)${c_rst}"
+    elif [[ "$branch" != "main" ]]; then
+      warn "on branch '$branch' (not main) — leaving local checkout untouched"
+    elif [[ -n "$dirty" ]]; then
+      warn "uncommitted changes present — leaving local checkout untouched (commit/stash to sync)"
+    else
+      git -C "$localrepo" fetch origin main >/dev/null 2>&1 || warn "fetch origin failed (non-fatal)"
+      if ! git -C "$localrepo" merge-base --is-ancestor HEAD origin/main 2>/dev/null; then
+        warn "local main has commits not on origin/main — leaving untouched (push/rebase to sync)"
+      elif git -C "$localrepo" merge --ff-only origin/main >/dev/null 2>&1; then
+        ok "fast-forwarded local main → $(git -C "$localrepo" rev-parse --short HEAD)"
+      else
+        warn "fast-forward failed (non-fatal)"
+      fi
+    fi
+  fi
+fi
+
+# ── 9. Report ──────────────────────────────────────────────────────────────
+step "9/9  Summary"
 say "  plugin:   $PLUGIN@$MARKETPLACE"
 say "  version:  ${CUR:-<none>} → ${c_grn}$NEW${c_rst}"
 say "  cache:    $(ls -1 "$CACHE_ROOT" 2>/dev/null | grep -E '^[0-9]+\.' | tr '\n' ' ')"

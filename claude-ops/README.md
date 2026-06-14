@@ -19,17 +19,17 @@ Purely additive — no v1 behaviour changes by default. Full migration guide: [`
 
 ### v2 capability matrix
 
-| Subsystem | Trigger | Outcome | Skill | userConfig | Doc |
-|-----------|---------|---------|-------|------------|-----|
-| Post-merge deploy auto-fix | `gh pr merge *` | Watches deploy → audits `/health` → verifies `/version` SHA → dispatches Haiku `deploy-fixer` on failure | [`/ops:deploy-fix`](skills/ops-deploy-fix/SKILL.md) | `deploy_fix_enabled` (default `true`) + 14 more | [deploy-fix.md](docs/deploy-fix.md) |
-| Build-failure auto-fix | `npm run build:*` | Dispatches Haiku `build-fixer` on failure | (same skill) | `monitor_build_failures` (default `true`) | [deploy-fix.md](docs/deploy-fix.md) |
-| Specialized agent auto-suggestion | `Agent` tool with `subagent_type=general-purpose` | Silently swaps to matching specialist via `updatedInput` | (transparent) | `suggest_specialized_agents` (default `true`) | [agents.md](docs/agents.md) |
-| Secret-commit guard | `git commit *` | Denies commit when staged diff contains secrets | (always-on) | — | [safety-hooks.md](docs/safety-hooks.md) |
-| `rm -rf` anchor block | `rm -rf *` | Denies destructive paths (`/`, `~`, `$HOME`, `..`, `.`) | (always-on) | — | [safety-hooks.md](docs/safety-hooks.md) |
-| Direct main-push warning | `git push *` on `main`/`master`/`prod` | `permissionDecision: ask` to confirm | (always-on) | — | [safety-hooks.md](docs/safety-hooks.md) |
-| Task* tracking nudge | every Nth non-Task tool call | One-line `additionalContext` reminder | (transparent) | `task_reminder_enabled` (default `true`) | [CHANGELOG](CHANGELOG.md#4-universal-task-tracking-nudge) |
-| Recap marquee | every 30s | Multi-session digest in tmux `status-right` / `statusLine` | [`/ops:recap`](skills/ops-recap/SKILL.md) | `recap_marquee_enabled` (default `true`) | [recap.md](docs/recap.md) |
-| Multi-account Claude Max rotator | quota approaching cap | launchd daemon swaps `Claude Code-credentials` keychain entry to next account | [`/ops:rotate`](skills/ops-rotate/SKILL.md), [`/ops:rotate-setup`](skills/ops-rotate-setup/SKILL.md) | `account_rotation_enabled` (default `false` — opt-in) | [CHANGELOG](CHANGELOG.md#6-multi-account-claude-max-rotator) |
+| Subsystem                         | Trigger                                           | Outcome                                                                                                  | Skill                                                                                                | userConfig                                            | Doc                                                          |
+| --------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------ |
+| Post-merge deploy auto-fix        | `gh pr merge *`                                   | Watches deploy → audits `/health` → verifies `/version` SHA → dispatches Haiku `deploy-fixer` on failure | [`/ops:deploy-fix`](skills/ops-deploy-fix/SKILL.md)                                                  | `deploy_fix_enabled` (default `true`) + 14 more       | [deploy-fix.md](docs/deploy-fix.md)                          |
+| Build-failure auto-fix            | `npm run build:*`                                 | Dispatches Haiku `build-fixer` on failure                                                                | (same skill)                                                                                         | `monitor_build_failures` (default `true`)             | [deploy-fix.md](docs/deploy-fix.md)                          |
+| Specialized agent auto-suggestion | `Agent` tool with `subagent_type=general-purpose` | Silently swaps to matching specialist via `updatedInput`                                                 | (transparent)                                                                                        | `suggest_specialized_agents` (default `true`)         | [agents.md](docs/agents.md)                                  |
+| Secret-commit guard               | `git commit *`                                    | Denies commit when staged diff contains secrets                                                          | (always-on)                                                                                          | —                                                     | [safety-hooks.md](docs/safety-hooks.md)                      |
+| `rm -rf` anchor block             | `rm -rf *`                                        | Denies destructive paths (`/`, `~`, `$HOME`, `..`, `.`)                                                  | (always-on)                                                                                          | —                                                     | [safety-hooks.md](docs/safety-hooks.md)                      |
+| Direct main-push warning          | `git push *` on `main`/`master`/`prod`            | `permissionDecision: ask` to confirm                                                                     | (always-on)                                                                                          | —                                                     | [safety-hooks.md](docs/safety-hooks.md)                      |
+| Task\* tracking nudge             | every Nth non-Task tool call                      | One-line `additionalContext` reminder                                                                    | (transparent)                                                                                        | `task_reminder_enabled` (default `true`)              | [CHANGELOG](CHANGELOG.md#4-universal-task-tracking-nudge)    |
+| Recap marquee                     | every 30s                                         | Multi-session digest in tmux `status-right` / `statusLine`                                               | [`/ops:recap`](skills/ops-recap/SKILL.md)                                                            | `recap_marquee_enabled` (default `true`)              | [recap.md](docs/recap.md)                                    |
+| Multi-account Claude Max rotator  | quota approaching cap                             | launchd daemon swaps `Claude Code-credentials` keychain entry to next account                            | [`/ops:rotate`](skills/ops-rotate/SKILL.md), [`/ops:rotate-setup`](skills/ops-rotate-setup/SKILL.md) | `account_rotation_enabled` (default `false` — opt-in) | [CHANGELOG](CHANGELOG.md#6-multi-account-claude-max-rotator) |
 
 ### v2 quick start — deploy auto-fix in 60 seconds
 
@@ -56,43 +56,43 @@ Per-repo budget caps (default 3/hour), single-flight locks, content-hash dedup, 
 
 ## Features
 
-| Skill             | Description                                                                    |
-| ----------------- | ------------------------------------------------------------------------------ |
-| `/ops`            | Interactive command center dashboard (visual HQ)                               |
-| `/ops:dash`       | Same as `/ops` — pixel-art dashboard with hotkey navigation                    |
-| `/ops:setup`      | Interactive setup wizard — installs CLIs, configures channels, builds registry |
-| `/ops:go`         | Morning briefing — all systems in one dashboard                                |
-| `/ops:next`       | Priority-ordered next action (fires > comms > PRs > sprint > GSD)              |
-| `/ops:inbox`      | Inbox zero across WhatsApp, Email, Slack, Telegram, Notion                     |
-| `/ops:comms`      | Send/read messages across all channels                                         |
-| `/ops:projects`   | Portfolio dashboard — GSD phase, CI, PRs, dirty files                          |
-| `/ops:linear`     | Linear sprint board, issue management, GSD sync                                |
-| `/ops:triage`     | Cross-platform issue triage (Sentry + Linear + GitHub)                         |
-| `/ops:fires`      | Production incidents dashboard with agent dispatch                             |
-| `/ops:deploy`     | ECS + Vercel + GitHub Actions deploy status                                    |
-| `/ops:revenue`    | AWS costs, credits, revenue pipeline, runway                                   |
-| `/ops:merge`      | Auto-fix CI + merge all ready PRs                                              |
-| `/ops:speedup`    | Cross-platform system optimizer (macOS/Linux/WSL)                              |
-| `/ops:yolo`       | 4-agent C-suite analysis + autonomous mode                                     |
-| `/ops:ecom`       | E-commerce operations — Shopify orders, inventory, fulfillment, analytics      |
-| `/ops:marketing`  | Marketing analytics — email campaigns, ads (Meta/Google), SEO, social          |
-| `/ops:voice`      | Voice channel management — Bland AI calls, ElevenLabs TTS, Whisper transcribe  |
-| `/ops:orchestrate`| Autonomous multi-project work engine with parallel agents                      |
-| `/ops:gtm`        | Cross-channel go-to-market planner (paid/unpaid/sales/automation)              |
-| `/ops:package`    | Carrier-agnostic shipping (MyParcel/Sendcloud/DHL/PostNL/DPD/UPS/FedEx)        |
-| `/ops:whatsapp-biz`| WhatsApp Business catalog, product, and order operations                      |
-| `/ops:monitor`    | APM + metrics probe (Datadog/New Relic/OTEL)                                   |
-| `/ops:integrate`  | Connect new external services to the plugin partner registry                   |
-| `/ops:status`     | Current plugin + channel + daemon + registry health snapshot                   |
-| `/ops:settings`   | View/edit preferences, toggle features, rotate credentials                     |
-| `/ops:daemon`     | Start/stop/health for the launchd background daemon                            |
-| `/ops:doctor`     | Plugin config auto-diagnosis and repair                                        |
-| `/ops:uninstall`  | Clean removal — unload daemon, wipe cache, deregister marketplace              |
-| `/ops:deploy-fix` | **v2** — Status/tail/configure/test for the post-merge + build auto-fix subsystem |
-| `/ops:recap`      | **v2** — Status/tail/configure/restart for the multi-session recap marquee daemon |
-| `/ops:rotate`     | **v2** — Manually rotate the active Claude Max account                         |
-| `/ops:rotate-setup` | **v2** — Multi-account onboarding for the rotator                            |
-| `/ops:desktop`    | Autonomous desktop + browser control via the `desktop-act` MCP companion       |
+| Skill               | Description                                                                       |
+| ------------------- | --------------------------------------------------------------------------------- |
+| `/ops`              | Interactive command center dashboard (visual HQ)                                  |
+| `/ops:dash`         | Same as `/ops` — pixel-art dashboard with hotkey navigation                       |
+| `/ops:setup`        | Interactive setup wizard — installs CLIs, configures channels, builds registry    |
+| `/ops:go`           | Morning briefing — all systems in one dashboard                                   |
+| `/ops:next`         | Priority-ordered next action (fires > comms > PRs > sprint > GSD)                 |
+| `/ops:inbox`        | Inbox zero across WhatsApp, Email, Slack, Telegram, Notion                        |
+| `/ops:comms`        | Send/read messages across all channels                                            |
+| `/ops:projects`     | Portfolio dashboard — GSD phase, CI, PRs, dirty files                             |
+| `/ops:linear`       | Linear sprint board, issue management, GSD sync                                   |
+| `/ops:triage`       | Cross-platform issue triage (Sentry + Linear + GitHub)                            |
+| `/ops:fires`        | Production incidents dashboard with agent dispatch                                |
+| `/ops:deploy`       | ECS + Vercel + GitHub Actions deploy status                                       |
+| `/ops:revenue`      | AWS costs, credits, revenue pipeline, runway                                      |
+| `/ops:merge`        | Auto-fix CI + merge all ready PRs                                                 |
+| `/ops:speedup`      | Cross-platform system optimizer (macOS/Linux/WSL)                                 |
+| `/ops:yolo`         | 4-agent C-suite analysis + autonomous mode                                        |
+| `/ops:ecom`         | E-commerce operations — Shopify orders, inventory, fulfillment, analytics         |
+| `/ops:marketing`    | Marketing analytics — email campaigns, ads (Meta/Google), SEO, social             |
+| `/ops:voice`        | Voice channel management — Bland AI calls, ElevenLabs TTS, Whisper transcribe     |
+| `/ops:orchestrate`  | Autonomous multi-project work engine with parallel agents                         |
+| `/ops:gtm`          | Cross-channel go-to-market planner (paid/unpaid/sales/automation)                 |
+| `/ops:package`      | Carrier-agnostic shipping (MyParcel/Sendcloud/DHL/PostNL/DPD/UPS/FedEx)           |
+| `/ops:whatsapp-biz` | WhatsApp Business catalog, product, and order operations                          |
+| `/ops:monitor`      | APM + metrics probe (Datadog/New Relic/OTEL)                                      |
+| `/ops:integrate`    | Connect new external services to the plugin partner registry                      |
+| `/ops:status`       | Current plugin + channel + daemon + registry health snapshot                      |
+| `/ops:settings`     | View/edit preferences, toggle features, rotate credentials                        |
+| `/ops:daemon`       | Start/stop/health for the launchd background daemon                               |
+| `/ops:doctor`       | Plugin config auto-diagnosis and repair                                           |
+| `/ops:uninstall`    | Clean removal — unload daemon, wipe cache, deregister marketplace                 |
+| `/ops:deploy-fix`   | **v2** — Status/tail/configure/test for the post-merge + build auto-fix subsystem |
+| `/ops:recap`        | **v2** — Status/tail/configure/restart for the multi-session recap marquee daemon |
+| `/ops:rotate`       | **v2** — Manually rotate the active Claude Max account                            |
+| `/ops:rotate-setup` | **v2** — Multi-account onboarding for the rotator                                 |
+| `/ops:desktop`      | Autonomous desktop + browser control via the `desktop-act` MCP companion          |
 
 ### Dashboard hotkeys
 
@@ -119,21 +119,27 @@ The `/ops:dash` command center provides instant navigation:
 ## What's New in v1.7.0
 
 ### `/gtm` — cross-channel go-to-market planner
+
 New strategy layer on top of `/ops:marketing`. Intakes audience, positioning, constraints, and targets, then generates a full plan across paid, unpaid, sales, and AI-automation avenues. Plan items hand off to `/ops:marketing` sub-commands via the `Skill` tool so credential resolution and API calls stay single-sourced. Approval gates are enforced for every paid or outbound action.
 
 ### `/ops:projects` — portfolio dashboard
+
 Renders every project in your GSD registry with active phase, task count, dirty-file count, and open-PR status. Reads from `$OPS_DATA_DIR/registry.json` which is synced by the `gsd-registry-sync` daemon service every 5 minutes.
 
 ### `ops-speedup` v2 parity
+
 Full feature parity with the legacy v1 bash script: `--gpu` reports GPU + Neural Engine utilization via `powermetrics` (macOS), `--power` surfaces top energy consumers from `top -o pmem` / `ps -eo`, `--os-actions` performs cross-platform kernel_task / WindowServer restarts and launchd/systemd service masking behind an allowlist.
 
 ### `ops-memory-extractor` — Claude Code OAuth
+
 The background memory extractor now prefers the Claude Code OAuth token stored in macOS Keychain (`Claude Code-credentials`) over `ANTHROPIC_API_KEY`. Calls are billed against your Claude Max subscription instead of your API credit. The token is never exported to the shell environment, so parent terminal sessions stay unaffected. Falls back to `ANTHROPIC_API_KEY` (env → keychain → Doppler).
 
 ### Persistent WhatsApp follower
+
 `whatsapp-bridge` (Baileys) now manages WhatsApp connectivity via the `com.${USER}.whatsapp-bridge` LaunchAgent. Previously `whatsapp-bridge-keepalive.sh` kept `whatsapp-bridge --follow` alive — that daemon has been decommissioned (see `legacy/`). Which tore down the persistent connection every 5-20 minutes. Fixed via `INITIAL_BACKFILL_DELAY=30` plus a reentrant guard against overlapping sweeps.
 
 ### Full Plugin Feature Adoption
+
 - All 35 skills: `effort`, `maxTurns`, `disallowedTools`, `model` annotations
 - All 18 agents: `memory` (cross-session learning), `initialPrompt`, `isolation`
 - PreToolUse hooks for WhatsApp health checks and MCP auto-reconnect
@@ -153,35 +159,35 @@ The setup wizard (`/ops:setup`) walks through each one interactively. You choose
 
 #### CLI-only (no MCP alternative)
 
-| Tool | Auto-installed | What it does |
-|------|---------------|--------------|
-| `gh` (GitHub CLI) | Yes (Homebrew) | PRs, CI logs, issue triage, merge pipeline — used by 8+ skills |
-| `aws` (AWS CLI) | Yes (Homebrew) | ECS health, Cost Explorer, CloudWatch — used by ops-fires, ops-revenue, ops-deploy |
-| `whatsapp-bridge` (WhatsApp) | Bundled ([source](https://github.com/your-org/whatsapp-mcp)) | WhatsApp inbox, send/read, contact lookup via `mcp__whatsapp__*` tools |
-| Node.js 18+ | Yes (Homebrew) | Runs the bundled Telegram MCP server |
+| Tool                         | Auto-installed                                               | What it does                                                                       |
+| ---------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| `gh` (GitHub CLI)            | Yes (Homebrew)                                               | PRs, CI logs, issue triage, merge pipeline — used by 8+ skills                     |
+| `aws` (AWS CLI)              | Yes (Homebrew)                                               | ECS health, Cost Explorer, CloudWatch — used by ops-fires, ops-revenue, ops-deploy |
+| `whatsapp-bridge` (WhatsApp) | Bundled ([source](https://github.com/your-org/whatsapp-mcp)) | WhatsApp inbox, send/read, contact lookup via `mcp__whatsapp__*` tools             |
+| Node.js 18+                  | Yes (Homebrew)                                               | Runs the bundled Telegram MCP server                                               |
 
 #### MCP-only (no CLI needed)
 
-| MCP | Connected via | What it does |
-|-----|--------------|--------------|
+| MCP    | Connected via     | What it does                                                                                      |
+| ------ | ----------------- | ------------------------------------------------------------------------------------------------- |
 | Linear | OAuth (Claude.ai) | Sprint cycles, issues, projects — 12 tools across 6 skills. Fully covers all Linear functionality |
-| Vercel | OAuth (Claude.ai) | Deploy status, build logs, runtime logs. Read-only (deploys triggered via CI) |
+| Vercel | OAuth (Claude.ai) | Deploy status, build logs, runtime logs. Read-only (deploys triggered via CI)                     |
 
 #### Choose: MCP, CLI, or both
 
-| Integration | MCP path | CLI path | What you lose with MCP only |
-|-------------|----------|----------|----------------------------|
-| **Gmail** | Claude.ai OAuth — read threads, create drafts | `gog` CLI — full send, archive, label management | MCP **cannot send emails** (drafts only) and **cannot archive**. `/ops:inbox` autonomous mode requires `gog` |
-| **Google Calendar** | Claude.ai OAuth — list, create, RSVP, find free time | `gog cal` — read today's events | MCP has *more* features. `gog` is simpler for read-only briefing context. Either works |
-| **Slack** | Claude.ai OAuth — read, send, search | Local bot token via `ops-slack-autolink` | MCP has **quota limits**. Local token gives unlimited search + private channel access without bot membership |
-| **Sentry** | Claude.ai OAuth — issue search, triage, resolve | `sentry-cli` — releases, source maps, deploy tracking | Current skills only use search/triage (MCP is fine). CLI adds release management (not used yet) |
+| Integration         | MCP path                                             | CLI path                                              | What you lose with MCP only                                                                                  |
+| ------------------- | ---------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Gmail**           | Claude.ai OAuth — read threads, create drafts        | `gog` CLI — full send, archive, label management      | MCP **cannot send emails** (drafts only) and **cannot archive**. `/ops:inbox` autonomous mode requires `gog` |
+| **Google Calendar** | Claude.ai OAuth — list, create, RSVP, find free time | `gog cal` — read today's events                       | MCP has _more_ features. `gog` is simpler for read-only briefing context. Either works                       |
+| **Slack**           | Claude.ai OAuth — read, send, search                 | Local bot token via `ops-slack-autolink`              | MCP has **quota limits**. Local token gives unlimited search + private channel access without bot membership |
+| **Sentry**          | Claude.ai OAuth — issue search, triage, resolve      | `sentry-cli` — releases, source maps, deploy tracking | Current skills only use search/triage (MCP is fine). CLI adds release management (not used yet)              |
 
 #### Plugin-bundled
 
-| Integration | What it is | Setup |
-|-------------|-----------|-------|
-| Telegram MCP server | gram.js MTProto user-auth — reads your DMs (not a bot) | `/ops:setup telegram` — enter phone number + 2 verification codes, everything else is fully automated (app creation, session generation, keychain storage) |
-| [GSD](https://github.com/gsd-build/get-shit-done) | Project roadmap state in dashboards | Auto-detected. Skills degrade gracefully without it |
+| Integration                                       | What it is                                             | Setup                                                                                                                                                      |
+| ------------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Telegram MCP server                               | gram.js MTProto user-auth — reads your DMs (not a bot) | `/ops:setup telegram` — enter phone number + 2 verification codes, everything else is fully automated (app creation, session generation, keychain storage) |
+| [GSD](https://github.com/gsd-build/get-shit-done) | Project roadmap state in dashboards                    | Auto-detected. Skills degrade gracefully without it                                                                                                        |
 
 ## Installation
 
@@ -366,32 +372,33 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-infra 2>/dev/null || echo '{}'
 ```
 ````
 
-This runs shell scripts *before* the model context is loaded, so data is pre-gathered with zero extra latency.
+This runs shell scripts _before_ the model context is loaded, so data is pre-gathered with zero extra latency.
 
 ### Agent Files
 
-| Agent | Purpose |
-|-------|---------|
-| `agents/comms-scanner.md` | Background comms monitoring |
-| `agents/infra-monitor.md` | Infrastructure health monitoring |
-| `agents/project-scanner.md` | Project state analysis |
-| `agents/revenue-tracker.md` | Revenue and cost monitoring |
-| `agents/triage-agent.md` | Issue triage and fix dispatch (worktree-isolated) |
-| `agents/daemon-agent.md` | Daemon start/stop/health management |
-| `agents/doctor-agent.md` | Plugin config diagnosis and auto-repair |
-| `agents/memory-extractor.md` | Contact profile and context extraction (Haiku, prefers Claude Code OAuth) |
-| `agents/marketing-optimizer.md` | Parses marketing-dash output and proposes next-step campaigns |
-| `agents/monitor-agent.md` | APM/metrics probe (Datadog/New Relic/OTEL) |
-| `agents/yolo-ceo.md` | CEO perspective (Opus, high effort) |
-| `agents/yolo-cto.md` | CTO perspective |
-| `agents/yolo-cfo.md` | CFO perspective |
-| `agents/yolo-coo.md` | COO perspective |
+| Agent                           | Purpose                                                                   |
+| ------------------------------- | ------------------------------------------------------------------------- |
+| `agents/comms-scanner.md`       | Background comms monitoring                                               |
+| `agents/infra-monitor.md`       | Infrastructure health monitoring                                          |
+| `agents/project-scanner.md`     | Project state analysis                                                    |
+| `agents/revenue-tracker.md`     | Revenue and cost monitoring                                               |
+| `agents/triage-agent.md`        | Issue triage and fix dispatch (worktree-isolated)                         |
+| `agents/daemon-agent.md`        | Daemon start/stop/health management                                       |
+| `agents/doctor-agent.md`        | Plugin config diagnosis and auto-repair                                   |
+| `agents/memory-extractor.md`    | Contact profile and context extraction (Haiku, prefers Claude Code OAuth) |
+| `agents/marketing-optimizer.md` | Parses marketing-dash output and proposes next-step campaigns             |
+| `agents/monitor-agent.md`       | APM/metrics probe (Datadog/New Relic/OTEL)                                |
+| `agents/yolo-ceo.md`            | CEO perspective (Opus, high effort)                                       |
+| `agents/yolo-cto.md`            | CTO perspective                                                           |
+| `agents/yolo-cfo.md`            | CFO perspective                                                           |
+| `agents/yolo-coo.md`            | COO perspective                                                           |
 
 ### Telegram MCP Server
 
 The `telegram-server/` directory contains an MCP server built on [gram.js](https://gram.js.org) (MTProto) that authenticates as your personal Telegram account — **not** as a bot. This is a hard requirement for `/ops:inbox telegram` because the Bot API cannot read user DMs.
 
 Tools:
+
 - `list_dialogs` — list recent conversations (DMs, groups, channels)
 - `get_messages` — fetch messages from a specific chat
 - `send_message` — send a message to a chat

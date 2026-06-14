@@ -4,7 +4,7 @@
 Reads new entries from ~/.claude/state/pocket/supervisor-out-queue.jsonl,
 posts each to the Baileys bridge HTTP API (POST localhost:8080/api/send),
 tracks cursor to avoid replays. Self-chat alerts only — recipient is fixed
-to whatsapp-config.json's chat_jid (Sam's self-chat). Per-message; no batch.
+to whatsapp-config.json's chat_jid (the owner's self-chat). Per-message; no batch.
 
 Cron: every 1 minute.
 

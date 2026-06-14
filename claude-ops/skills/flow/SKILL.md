@@ -1,7 +1,7 @@
 ---
 name: flow
 description: ONE entrypoint for the whole dev lifecycle — ideate, spec, plan, design, build, review, test, ship, deploy, monitor, retro. Routes to the single canonical command per stage (gstack / GSD / claude-ops) and picks project-mode (GSD phase machine) vs ad-hoc-mode (gstack stateless) from repo `.planning/` state. Bare `/flow` prints the lifecycle map + your current "you are here" position.
-argument-hint: "[stage|intent] [args]"
+argument-hint: '[stage|intent] [args]'
 allowed-tools:
   - Bash
   - Read
@@ -20,17 +20,20 @@ maxTurns: 20
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when a
 lifecycle stage fans out into parallel, coordinated work (e.g. build + test +
 review running together, or a multi-repo ship). This enables:
+
 - Stage agents share context mid-flight (the test agent surfaces a regression →
   the build agent pivots before review starts)
 - You can steer priorities in real time ("land the API change first, then docs")
 - Agents report progress as each stage completes, so you sequence the merge
 
 **Team setup** (only when the flag is enabled, and only for genuinely parallel stages):
+
 ```
 TeamCreate("flow-lifecycle")
 Agent(team_name="flow-lifecycle", name="stage-build", ...)
 Agent(team_name="flow-lifecycle", name="stage-test", ...)
 ```
+
 Steer with `SendMessage` / `broadcast`; share work via `TaskCreate`/`TaskUpdate`.
 
 If the flag is NOT set, fall back to standard fire-and-forget subagents (the
@@ -65,29 +68,29 @@ to the canonical tool.
 
 Route `$ARGUMENTS` (first token = intent) using this table:
 
-| Intent keywords | Resolves to |
-| --- | --- |
-| (empty), map, here, where | print map (`Read FLOW.md`) + `bin/flow-state` output. **Stop — do not delegate.** |
-| ideate, brainstorm, office-hours | `/office-hours` |
-| hard-truths, yolo | `/ops:ops-yolo` |
-| spec, specify, scope, issue | `/spec $REST` |
-| plan, roadmap, phase-plan | **project** → `gsd-plan-phase`; **ad-hoc** → `/autoplan` |
-| ultraplan, deep-plan | `gsd-ultraplan-phase` |
-| design, ui, mockup, html | `/design-consultation $REST` |
-| build, execute, implement, code | **project** → `gsd-execute-phase`; **multi-project** → `gsd-master-orchestrator`; **ad-hoc** → direct edits in an isolated worktree |
-| review, code-review, cr | `/review` — **project** also runs `gsd-code-review` |
-| security, cso, sec-review | `/cso` |
-| test, qa | `/qa $REST` — **project** also runs `gsd-verify-work` |
-| ios-qa, ios-test | `/ios-qa` |
-| ship, land | **project** → `gsd-ship`; **ad-hoc single-repo** → `/ship`; **multi-repo salvage** → `/ops:ops-merge` |
-| deploy, release, rollout | `/ops:ops-deploy` then `/canary` |
-| canary | `/canary` |
-| monitor, fires, incidents | `/ops:ops-fires` |
-| status, health | `/ops:ops-status` |
-| retro, reflect | `/retro` |
-| learn | `/learn` |
-| ops, inbox, comms, marketing, finops, voice, home, daemon | `/ops:ops $ARGUMENTS` (hand the whole arg string to the ops sub-router) |
-| projects, portfolio | `/ops:ops-projects` |
+| Intent keywords                                           | Resolves to                                                                                                                         |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| (empty), map, here, where                                 | print map (`Read FLOW.md`) + `bin/flow-state` output. **Stop — do not delegate.**                                                   |
+| ideate, brainstorm, office-hours                          | `/office-hours`                                                                                                                     |
+| hard-truths, yolo                                         | `/ops:ops-yolo`                                                                                                                     |
+| spec, specify, scope, issue                               | `/spec $REST`                                                                                                                       |
+| plan, roadmap, phase-plan                                 | **project** → `gsd-plan-phase`; **ad-hoc** → `/autoplan`                                                                            |
+| ultraplan, deep-plan                                      | `gsd-ultraplan-phase`                                                                                                               |
+| design, ui, mockup, html                                  | `/design-consultation $REST`                                                                                                        |
+| build, execute, implement, code                           | **project** → `gsd-execute-phase`; **multi-project** → `gsd-master-orchestrator`; **ad-hoc** → direct edits in an isolated worktree |
+| review, code-review, cr                                   | `/review` — **project** also runs `gsd-code-review`                                                                                 |
+| security, cso, sec-review                                 | `/cso`                                                                                                                              |
+| test, qa                                                  | `/qa $REST` — **project** also runs `gsd-verify-work`                                                                               |
+| ios-qa, ios-test                                          | `/ios-qa`                                                                                                                           |
+| ship, land                                                | **project** → `gsd-ship`; **ad-hoc single-repo** → `/ship`; **multi-repo salvage** → `/ops:ops-merge`                               |
+| deploy, release, rollout                                  | `/ops:ops-deploy` then `/canary`                                                                                                    |
+| canary                                                    | `/canary`                                                                                                                           |
+| monitor, fires, incidents                                 | `/ops:ops-fires`                                                                                                                    |
+| status, health                                            | `/ops:ops-status`                                                                                                                   |
+| retro, reflect                                            | `/retro`                                                                                                                            |
+| learn                                                     | `/learn`                                                                                                                            |
+| ops, inbox, comms, marketing, finops, voice, home, daemon | `/ops:ops $ARGUMENTS` (hand the whole arg string to the ops sub-router)                                                             |
+| projects, portfolio                                       | `/ops:ops-projects`                                                                                                                 |
 
 ### Routing notes
 
@@ -101,7 +104,7 @@ Route `$ARGUMENTS` (first token = intent) using this table:
   the target skill's own `## CLI/API Reference` governs execution.
 - **Ambiguity**: if intent spans two stages, prefer the earliest unfulfilled
   stage for the current `flow-state` position.
-- **`ops` passthrough**: for any `ops*` intent, forward the *entire*
+- **`ops` passthrough**: for any `ops*` intent, forward the _entire_
   `$ARGUMENTS` to `/ops:ops` — it has its own sub-router; do not pre-parse it.
 
 ### Bare `/flow`

@@ -213,6 +213,7 @@ competitor_vertical_slice coo
 This returns a JSON array of high-severity hiring events from competitor Greenhouse/Lever job feeds. If the array is `[]`, skip this section — no signal to react to. Do not fabricate competitor data.
 
 Weave real signals into your operational assessment:
+
 - Competitor senior hires (VP Eng, Head of Product, etc.) → what are they betting on? does it signal a direction we should watch or match?
 - Competitor layoffs → poaching opportunity; flag specific skill pools if visible.
 - Volume hiring in a function → indicates a scaled operational push in that area.
@@ -244,6 +245,7 @@ Before stating that ANY external state is broken, missing, misconfigured, or wro
    If you cannot verify a claim (rate-limited, no creds, tool unavailable), do NOT assert it as fact. Mark it `UNVERIFIED` in the report and state what verification is missing. False fires erode trust faster than missed ones.
 
 **Forbidden output patterns:**
+
 - "X is missing in production" without a corresponding read confirming absence
 - "Y is broken / down / a fire" without checking the owning repo's git log for intentional state
 - "Config `<env>` is missing var Z" without first verifying that `<env>` config exists in the secret store
@@ -254,6 +256,7 @@ When in doubt: verify, downgrade severity, or label `UNVERIFIED`. The orchestrat
 ## DESTRUCTIVE ACTION GUARDRAIL
 
 Before recommending deletion, shutdown, or cleanup of ANY infrastructure:
+
 1. **Verify project status** — check git log recency, active branches, .planning/ directory, and registry entry before labeling anything as zombie/idle/abandoned
 2. **"Idle" ≠ "dead"** — a service with 0 tasks may be an active project paused between deployments or awaiting relaunch. Only flag as zombie if: no commits in 30+ days AND no active planning AND no active branches
 3. **Flag all destructive recommendations** with `⚠️ REQUIRES CONFIRMATION` — the orchestrator will present each to the user via AskUserQuestion before execution

@@ -39,17 +39,17 @@ Turn Claude Code into a complete business operating system — infrastructure he
 
 ## What's new in v2.0
 
-v2 turns claude-ops from a *briefing + comms surface* into an **autonomy layer for Claude Code itself.** Purely additive — no v1 behaviour changes by default. See [`claude-ops/CHANGELOG.md`](claude-ops/CHANGELOG.md#200--2026-04-26) and [`docs/migrating-from-v1.md`](claude-ops/docs/migrating-from-v1.md).
+v2 turns claude-ops from a _briefing + comms surface_ into an **autonomy layer for Claude Code itself.** Purely additive — no v1 behaviour changes by default. See [`claude-ops/CHANGELOG.md`](claude-ops/CHANGELOG.md#200--2026-04-26) and [`docs/migrating-from-v1.md`](claude-ops/docs/migrating-from-v1.md).
 
-| Capability | Skill | Doc |
-|------------|-------|-----|
-| Post-merge + build-failure auto-fix (PostToolUse hooks → headless Haiku fixer) | [`/ops:deploy-fix`](claude-ops/skills/ops-deploy-fix/SKILL.md) | [deploy-fix.md](claude-ops/docs/deploy-fix.md) |
-| Pre-installed specialist agents + silent `general-purpose` → specialist routing | (transparent) | [agents.md](claude-ops/docs/agents.md) |
-| Universal safety hooks: secret-scan, `rm -rf` anchor block, `main` push warn | (always-on) | [safety-hooks.md](claude-ops/docs/safety-hooks.md) |
-| Recap marquee — multi-session digest in tmux `status-right` / `statusLine` | [`/ops:recap`](claude-ops/skills/ops-recap/SKILL.md) | [recap.md](claude-ops/docs/recap.md) |
+| Capability                                                                                                                                                                                    | Skill                                                                                                                      | Doc                                                                     |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Post-merge + build-failure auto-fix (PostToolUse hooks → headless Haiku fixer)                                                                                                                | [`/ops:deploy-fix`](claude-ops/skills/ops-deploy-fix/SKILL.md)                                                             | [deploy-fix.md](claude-ops/docs/deploy-fix.md)                          |
+| Pre-installed specialist agents + silent `general-purpose` → specialist routing                                                                                                               | (transparent)                                                                                                              | [agents.md](claude-ops/docs/agents.md)                                  |
+| Universal safety hooks: secret-scan, `rm -rf` anchor block, `main` push warn                                                                                                                  | (always-on)                                                                                                                | [safety-hooks.md](claude-ops/docs/safety-hooks.md)                      |
+| Recap marquee — multi-session digest in tmux `status-right` / `statusLine`                                                                                                                    | [`/ops:recap`](claude-ops/skills/ops-recap/SKILL.md)                                                                       | [recap.md](claude-ops/docs/recap.md)                                    |
 | Multi-account Claude Max rotator with launchd daemon + AI-brain (jittered post-rotation respawn + `/login` re-auth so a freshly-rotated account isn't hit by a synchronized first-call burst) | [`/ops:rotate`](claude-ops/skills/ops-rotate/SKILL.md), [`/ops:rotate-setup`](claude-ops/skills/ops-rotate-setup/SKILL.md) | [CHANGELOG](claude-ops/CHANGELOG.md#6-multi-account-claude-max-rotator) |
-| Periodic Task* tracking nudge | (PostToolUse hook) | [CHANGELOG](claude-ops/CHANGELOG.md#4-universal-task-tracking-nudge) |
-| Windsor.ai live marketing data source for ops dashboards, marketing, socials & ecom | [`/ops:marketing`](claude-ops/skills/ops-marketing/SKILL.md) | [windsor-ai.md](docs/integrations/windsor-ai.md) |
+| Periodic Task\* tracking nudge                                                                                                                                                                | (PostToolUse hook)                                                                                                         | [CHANGELOG](claude-ops/CHANGELOG.md#4-universal-task-tracking-nudge)    |
+| Windsor.ai live marketing data source for ops dashboards, marketing, socials & ecom                                                                                                           | [`/ops:marketing`](claude-ops/skills/ops-marketing/SKILL.md)                                                               | [windsor-ai.md](docs/integrations/windsor-ai.md)                        |
 
 ### Quick start for the auto-fix subsystem
 
@@ -105,44 +105,44 @@ claude --plugin-dir ./claude-ops/claude-ops
 
 All 36 skills, grouped by category:
 
-| 🧭 Navigation | 📊 Daily Ops |
-|---|---|
-| `/ops` — pixel-art dashboard | `/ops:go` — morning briefing |
-| `/ops:dash` — same + hotkeys | `/ops:next` — priority next action |
-| `/ops:setup` — guided wizard | `/ops:inbox` — deep-context inbox zero |
-| `/ops:uninstall` — clean removal | `/ops:comms` — send/read any channel |
-|                                   | `/ops:merge` — autonomous PR pipeline |
+| 🧭 Navigation                    | 📊 Daily Ops                           |
+| -------------------------------- | -------------------------------------- |
+| `/ops` — pixel-art dashboard     | `/ops:go` — morning briefing           |
+| `/ops:dash` — same + hotkeys     | `/ops:next` — priority next action     |
+| `/ops:setup` — guided wizard     | `/ops:inbox` — deep-context inbox zero |
+| `/ops:uninstall` — clean removal | `/ops:comms` — send/read any channel   |
+|                                  | `/ops:merge` — autonomous PR pipeline  |
 
-| 🛠️ Project & Eng | 💰 Business |
-|---|---|
-| `/ops:projects` — **portfolio dashboard** | `/ops:revenue` — **Stripe + RevenueCat** + AWS |
-| `/ops:linear` — sprint board | `/ops:ecom` — Shopify operations |
-| `/ops:triage` — cross-platform issues | `/ops:marketing` — Klaviyo/Meta/GA4/GSC |
-| `/ops:fires` — incidents + **all AWS** | `/ops:gtm` — **cross-channel GTM planner** |
-| `/ops:deploy` — ECS/Vercel/Actions | `/ops:voice` — **native + Twilio + Bland + Zoom + smart `join`** |
-| `/ops:monitor` — Datadog/New Relic/OTEL | `/ops:package` — carrier-agnostic shipping |
-| `/ops:competitors` — **self-discovering competitor intel** (v2.3) | |
+| 🛠️ Project & Eng                                                  | 💰 Business                                                      |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `/ops:projects` — **portfolio dashboard**                         | `/ops:revenue` — **Stripe + RevenueCat** + AWS                   |
+| `/ops:linear` — sprint board                                      | `/ops:ecom` — Shopify operations                                 |
+| `/ops:triage` — cross-platform issues                             | `/ops:marketing` — Klaviyo/Meta/GA4/GSC                          |
+| `/ops:fires` — incidents + **all AWS**                            | `/ops:gtm` — **cross-channel GTM planner**                       |
+| `/ops:deploy` — ECS/Vercel/Actions                                | `/ops:voice` — **native + Twilio + Bland + Zoom + smart `join`** |
+| `/ops:monitor` — Datadog/New Relic/OTEL                           | `/ops:package` — carrier-agnostic shipping                       |
+| `/ops:competitors` — **self-discovering competitor intel** (v2.3) |                                                                  |
 
-| 🤖 Automation | 🧰 Maintenance |
-|---|---|
-| `/ops:orchestrate` — parallel engine | `/ops:speedup` — **GPU/ANE + power hogs + OS actions** |
-| `/ops:yolo` — 4 parallel C-suite agents | `/ops:doctor` — plugin auto-repair |
-| `/ops:integrate` — add external service | `/ops:daemon` — launchd background brain |
-| `/ops:whatsapp-biz` — catalog/orders | `/ops:status` — plugin + daemon health |
+| 🤖 Automation                           | 🧰 Maintenance                                         |
+| --------------------------------------- | ------------------------------------------------------ |
+| `/ops:orchestrate` — parallel engine    | `/ops:speedup` — **GPU/ANE + power hogs + OS actions** |
+| `/ops:yolo` — 4 parallel C-suite agents | `/ops:doctor` — plugin auto-repair                     |
+| `/ops:integrate` — add external service | `/ops:daemon` — launchd background brain               |
+| `/ops:whatsapp-biz` — catalog/orders    | `/ops:status` — plugin + daemon health                 |
 
 ### Voice / phone / video (v2.9)
 
 `/ops:voice` is a full voice surface — not just AI calls.
 
-| Subcommand | What it does |
-|---|---|
-| `phone <number>` | Native Phone.app dial via Continuity |
-| `facetime <handle> [--audio]` | FaceTime video or audio |
-| `zoom start\|join\|schedule` | Native Zoom + REST scheduling |
-| `join [--at now\|next]` | Auto-joins the current/next calendar meeting with smart AV defaults (cam/mic policy by attendee count, lid-state mic switching, Elgato auto-launch) |
-| `twilio-call`, `twilio-sms` | Programmatic outbound voice + SMS |
-| `bland-call` | AI agent phone call |
-| `tts`, `transcribe` | ElevenLabs TTS + Groq Whisper |
+| Subcommand                    | What it does                                                                                                                                        |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `phone <number>`              | Native Phone.app dial via Continuity                                                                                                                |
+| `facetime <handle> [--audio]` | FaceTime video or audio                                                                                                                             |
+| `zoom start\|join\|schedule`  | Native Zoom + REST scheduling                                                                                                                       |
+| `join [--at now\|next]`       | Auto-joins the current/next calendar meeting with smart AV defaults (cam/mic policy by attendee count, lid-state mic switching, Elgato auto-launch) |
+| `twilio-call`, `twilio-sms`   | Programmatic outbound voice + SMS                                                                                                                   |
+| `bland-call`                  | AI agent phone call                                                                                                                                 |
+| `tts`, `transcribe`           | ElevenLabs TTS + Groq Whisper                                                                                                                       |
 
 All outbound 1:1 channels (twilio, bland) go through the per-message approval gate (Rule 6).
 
@@ -193,34 +193,34 @@ flowchart TD
 
 Most integrations offer two paths — MCP (zero-config OAuth) or CLI (fuller feature set). The setup wizard lets you choose per-integration.
 
-| SERVICE | MCP | CLI | WHAT YOU LOSE WITHOUT CLI |
-|---|---|---|---|
-| GitHub | — | `gh` (auto) | EVERYTHING — CI logs, PR merge, triage all require `gh` |
-| AWS | — | `aws` (auto) | EVERYTHING — 17+ services probed by `infra-monitor` |
-| **Stripe** | — | **API key** | **Required for `/ops:revenue` MRR — web + desktop subs** |
-| **RevenueCat** | — | **API key + project ID** | **Required for mobile-app subscription MRR** |
-| Linear | OAuth via Claude.ai (12 tools) | — | Nothing — fully covered |
-| Vercel | OAuth via Claude.ai | — | Nothing — deploy status, build + runtime logs |
-| Slack | OAuth via Claude.ai | local bot token | MCP covers most. Token adds: unlimited search, private ch |
-| Gmail | OAuth (read) | `gog` (send+archive) | MCP = read-only. CLI = full autonomous inbox |
-| Calendar | OAuth via Claude.ai | `gog` (read-only) | MCP has more features — either works |
-| Sentry | OAuth via Claude.ai | `sentry-cli` | MCP covers triage. CLI adds source maps + releases |
-| WhatsApp | — | `wacli` | EVERYTHING — no MCP exists |
-| Telegram | — | bundled MCP server | EVERYTHING — plugin ships its own MTProto server |
-| Shopify | — | Admin API + template | Store ops, order mgmt, inventory via `/ops:ecom` |
-| Klaviyo | — | API key | Email/SMS campaigns via `/ops:marketing` |
-| Meta Ads | — | API token | Paid-social reporting via `/ops:marketing` |
-| GA4 | — | service account | Analytics via `/ops:marketing` |
-| GSC | — | service account | Search Console via `/ops:marketing` |
-| Bland AI | — | API key | Outbound voice via `/ops:voice` |
-| ElevenLabs | — | API key | TTS + cloning via `/ops:voice` |
-| Whisper | — | API key | Transcription via `/ops:voice` |
-| Twilio | — | API (Account SID + Auth Token) | Outbound voice + SMS via `/ops:voice twilio-*` |
-| Zoom | Server-to-Server OAuth | API token | Native start/join (no creds) + REST schedule via `/ops:voice zoom *` |
-| macOS Phone / FaceTime | — | URL schemes (`tel:`, `facetime://`, `facetime-audio://`) | Native via Continuity — no creds, no API |
-| Elgato Camera Hub | — | auto-launched if installed | Virtual camera setup for meetings via `/ops:voice join` |
-| GSD | — | auto-detected | Optional — roadmap state; degrades gracefully |
-| Doppler | `@dopplerhq/mcp-server` (MCP) | `doppler` CLI (fallback) | Secrets manager; MCP server provides direct tool access |
+| SERVICE                | MCP                            | CLI                                                      | WHAT YOU LOSE WITHOUT CLI                                            |
+| ---------------------- | ------------------------------ | -------------------------------------------------------- | -------------------------------------------------------------------- |
+| GitHub                 | —                              | `gh` (auto)                                              | EVERYTHING — CI logs, PR merge, triage all require `gh`              |
+| AWS                    | —                              | `aws` (auto)                                             | EVERYTHING — 17+ services probed by `infra-monitor`                  |
+| **Stripe**             | —                              | **API key**                                              | **Required for `/ops:revenue` MRR — web + desktop subs**             |
+| **RevenueCat**         | —                              | **API key + project ID**                                 | **Required for mobile-app subscription MRR**                         |
+| Linear                 | OAuth via Claude.ai (12 tools) | —                                                        | Nothing — fully covered                                              |
+| Vercel                 | OAuth via Claude.ai            | —                                                        | Nothing — deploy status, build + runtime logs                        |
+| Slack                  | OAuth via Claude.ai            | local bot token                                          | MCP covers most. Token adds: unlimited search, private ch            |
+| Gmail                  | OAuth (read)                   | `gog` (send+archive)                                     | MCP = read-only. CLI = full autonomous inbox                         |
+| Calendar               | OAuth via Claude.ai            | `gog` (read-only)                                        | MCP has more features — either works                                 |
+| Sentry                 | OAuth via Claude.ai            | `sentry-cli`                                             | MCP covers triage. CLI adds source maps + releases                   |
+| WhatsApp               | —                              | `wacli`                                                  | EVERYTHING — no MCP exists                                           |
+| Telegram               | —                              | bundled MCP server                                       | EVERYTHING — plugin ships its own MTProto server                     |
+| Shopify                | —                              | Admin API + template                                     | Store ops, order mgmt, inventory via `/ops:ecom`                     |
+| Klaviyo                | —                              | API key                                                  | Email/SMS campaigns via `/ops:marketing`                             |
+| Meta Ads               | —                              | API token                                                | Paid-social reporting via `/ops:marketing`                           |
+| GA4                    | —                              | service account                                          | Analytics via `/ops:marketing`                                       |
+| GSC                    | —                              | service account                                          | Search Console via `/ops:marketing`                                  |
+| Bland AI               | —                              | API key                                                  | Outbound voice via `/ops:voice`                                      |
+| ElevenLabs             | —                              | API key                                                  | TTS + cloning via `/ops:voice`                                       |
+| Whisper                | —                              | API key                                                  | Transcription via `/ops:voice`                                       |
+| Twilio                 | —                              | API (Account SID + Auth Token)                           | Outbound voice + SMS via `/ops:voice twilio-*`                       |
+| Zoom                   | Server-to-Server OAuth         | API token                                                | Native start/join (no creds) + REST schedule via `/ops:voice zoom *` |
+| macOS Phone / FaceTime | —                              | URL schemes (`tel:`, `facetime://`, `facetime-audio://`) | Native via Continuity — no creds, no API                             |
+| Elgato Camera Hub      | —                              | auto-launched if installed                               | Virtual camera setup for meetings via `/ops:voice join`              |
+| GSD                    | —                              | auto-detected                                            | Optional — roadmap state; degrades gracefully                        |
+| Doppler                | `@dopplerhq/mcp-server` (MCP)  | `doppler` CLI (fallback)                                 | Secrets manager; MCP server provides direct tool access              |
 
 > [!NOTE]
 > **`infra-monitor` now covers every AWS service you have IAM for** — ECS, EC2, RDS, Lambda, S3, CloudFront, ALB/NLB, API Gateway, SQS, SNS, DynamoDB, ElastiCache, Route 53, ACM, CloudWatch, Budgets, IAM. Probes run in parallel; services you can't access are silently skipped.
@@ -241,7 +241,7 @@ flowchart TB
     CC <--> D[ops-daemon<br/>launchd · 7 services]
 ```
 
-All skills use pre-execution shell blocks (`!` fences) that gather data *before* model context loads — zero extra latency, minimal token overhead. The `ops-daemon` pre-warms briefing data so `/ops:go` hits warm cache.
+All skills use pre-execution shell blocks (`!` fences) that gather data _before_ model context loads — zero extra latency, minimal token overhead. The `ops-daemon` pre-warms briefing data so `/ops:go` hits warm cache.
 
 > **Why the nested `claude-ops/claude-ops/` directory?** Claude Code's plugin marketplace system requires a two-level layout: the **repo root** acts as a marketplace container (with `.claude-plugin/marketplace.json` pointing `"source": "./claude-ops"`), while the **inner directory** is the actual plugin root (with `.claude-plugin/plugin.json`, skills, agents, etc.). This is how Claude Code resolves and caches plugins — it cannot be flattened.
 
@@ -283,24 +283,24 @@ SendMessage(to="fix-ecs", content="This is P0, prioritize over CI")
 
 **Without the flag:** Skills fall back to standard fire-and-forget subagents — still parallel, but no coordination or steering.
 
-| Skill | Team name | Agents |
-|-------|-----------|--------|
-| `/ops:go` | `go-team` | infra-scanner, inbox-scanner, pr-scanner, sprint-scanner |
-| `/ops:inbox` | `inbox-channels` | whatsapp-scanner, email-scanner, slack-scanner, telegram-scanner |
-| `/ops:merge` | `merge-fixers` | fixer-[repo] per failing PR |
-| `/ops:fires` | `fire-fixers` | fix-[service] per active incident |
-| `/ops:triage` | `triage-fixers` | fix-[issue-id] per active issue |
-| `/ops:yolo` | `yolo-csuite` | ceo, cto, cfo, coo |
-| `/ops:orchestrate` | `orchestrate-team` | per-project agents (hybrid auto-select) |
-| `/ops:monitor` | `monitor-probes` | datadog-probe, newrelic-probe, otel-probe |
-| `/ops:doctor` | `doctor-fixers` | fix-manifest, fix-permissions, fix-registry |
-| `/ops:marketing` | `marketing-team` | email-metrics, ads-metrics, analytics-metrics, seo-metrics |
-| `/ops:ecom` | `ecom-team` | orders-scanner, inventory-scanner, fulfillment-scanner |
-| `/ops:deploy` | `deploy-team` | ecs-checker, vercel-checker, ci-checker |
-| `/ops:projects` | `projects-team` | project-[alias] per registered project |
-| `/ops:dash` | `dash-team` | infra-loader, comms-loader, projects-loader, business-loader |
-| `/ops:next` | `next-team` | fires-checker, comms-checker, prs-checker, sprint-checker |
-| `setup` | `setup-hunters` | hunt-[service] per credential deep hunt |
+| Skill              | Team name          | Agents                                                           |
+| ------------------ | ------------------ | ---------------------------------------------------------------- |
+| `/ops:go`          | `go-team`          | infra-scanner, inbox-scanner, pr-scanner, sprint-scanner         |
+| `/ops:inbox`       | `inbox-channels`   | whatsapp-scanner, email-scanner, slack-scanner, telegram-scanner |
+| `/ops:merge`       | `merge-fixers`     | fixer-[repo] per failing PR                                      |
+| `/ops:fires`       | `fire-fixers`      | fix-[service] per active incident                                |
+| `/ops:triage`      | `triage-fixers`    | fix-[issue-id] per active issue                                  |
+| `/ops:yolo`        | `yolo-csuite`      | ceo, cto, cfo, coo                                               |
+| `/ops:orchestrate` | `orchestrate-team` | per-project agents (hybrid auto-select)                          |
+| `/ops:monitor`     | `monitor-probes`   | datadog-probe, newrelic-probe, otel-probe                        |
+| `/ops:doctor`      | `doctor-fixers`    | fix-manifest, fix-permissions, fix-registry                      |
+| `/ops:marketing`   | `marketing-team`   | email-metrics, ads-metrics, analytics-metrics, seo-metrics       |
+| `/ops:ecom`        | `ecom-team`        | orders-scanner, inventory-scanner, fulfillment-scanner           |
+| `/ops:deploy`      | `deploy-team`      | ecs-checker, vercel-checker, ci-checker                          |
+| `/ops:projects`    | `projects-team`    | project-[alias] per registered project                           |
+| `/ops:dash`        | `dash-team`        | infra-loader, comms-loader, projects-loader, business-loader     |
+| `/ops:next`        | `next-team`        | fires-checker, comms-checker, prs-checker, sprint-checker        |
+| `setup`            | `setup-hunters`    | hunt-[service] per credential deep hunt                          |
 
 **Compliance enforced by CI:** `tests/test-agent-teams.sh` audits every skill for Agent Teams support — any skill with `Agent` in its allowed-tools must have `TeamCreate`/`SendMessage`, a documentation section, the feature flag check, and a fallback path.
 
@@ -327,17 +327,18 @@ A self-discovering competitive-intelligence pipeline that goes well past "weekly
 
 **Where it shows up:**
 
-| Surface | What you see |
-|---|---|
-| `/ops:go` | `COMPETITOR` row: alerts count, last_run, top-3 event snippets |
-| `/ops:next` | Priority 2 (between fires + comms): `REACT: <competitor> <source> changed` |
-| `/ops:marketing` | PRICING MOVES + FUNDING + SENTIMENT section |
-| `/ops:ecom` | APP RELEASES + PRODUCT/PRICING CHANGES section |
-| `/ops:yolo` | CEO/CTO/CFO/COO agents each load role-specific vertical slice |
-| `/ops:competitors` | Dedicated dashboard + `bin/ops-competitors` CLI |
-| Disk | `$DATA_DIR/reports/competitor-intel/YYYY-MM-DD_<brand>.md` |
+| Surface            | What you see                                                               |
+| ------------------ | -------------------------------------------------------------------------- |
+| `/ops:go`          | `COMPETITOR` row: alerts count, last_run, top-3 event snippets             |
+| `/ops:next`        | Priority 2 (between fires + comms): `REACT: <competitor> <source> changed` |
+| `/ops:marketing`   | PRICING MOVES + FUNDING + SENTIMENT section                                |
+| `/ops:ecom`        | APP RELEASES + PRODUCT/PRICING CHANGES section                             |
+| `/ops:yolo`        | CEO/CTO/CFO/COO agents each load role-specific vertical slice              |
+| `/ops:competitors` | Dedicated dashboard + `bin/ops-competitors` CLI                            |
+| Disk               | `$DATA_DIR/reports/competitor-intel/YYYY-MM-DD_<brand>.md`                 |
 
 **Config** (`preferences.json .competitor_intel`):
+
 ```json
 {
   "brand_name": "My-Project",
@@ -367,12 +368,14 @@ A self-discovering competitive-intelligence pipeline that goes well past "weekly
 **Setup auto-scan sources (only during `/ops:setup`):** env, shell profiles, Doppler, 1Password, Dashlane, Bitwarden, macOS Keychain, Claude Code's `~/.claude.json`, Chrome history URL list (never page content), Slack Playwright profile (only if chosen).
 
 **The plugin does NOT:**
+
 - Phone home. No telemetry. No analytics. No crash reports.
 - Upload data to any third party you haven't configured.
 - Access clipboard, camera, microphone, or SSH keys.
 - Perform disk-wide scans — every scan is a targeted path.
 
 **Background daemon services (only those you enable):**
+
 - `briefing-pre-warm` every 2 min — parallel `ops-gather` for ECS/git/PRs/CI/unread. Local only.
 - `wacli-sync` continuous — WhatsApp Web protocol, same as standalone `wacli`.
 - `memory-extractor` every 30 min — Haiku summarizes local chats to `memories/`.

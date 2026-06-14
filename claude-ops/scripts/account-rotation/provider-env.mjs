@@ -7,7 +7,7 @@
 // AWS_* credentials in the env — those ids are invalid against the OAuth API and
 // the AWS vars keep the session pointed at metered Bedrock inference.
 //
-// Sam directive (2026-06-14): "Bedrock should never be in use if any /rotate
+// owner directive (2026-06-14): "Bedrock should never be in use if any /rotate
 // OAuth account has tokens available." On a successful OAuth swap the model
 // resets to the user's default subscription catalog (accepted: "auto reset to
 // default model").

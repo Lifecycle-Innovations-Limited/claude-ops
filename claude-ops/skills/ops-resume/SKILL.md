@@ -1,7 +1,7 @@
 ---
 name: ops-resume
 description: Reopen recently-closed Claude Code sessions, one per Ghostty tab. Finds recent session transcripts in ~/.claude/projects and resumes each in its own new tab via `claude --resume`, from the directory it was running in. macOS + Ghostty only.
-argument-hint: "[-m minutes | -H hours | -n max | --here | --dry-run]"
+argument-hint: '[-m minutes | -H hours | -n max | --here | --dry-run]'
 allowed-tools:
   - Bash
 ---
@@ -23,7 +23,7 @@ System Events, so Accessibility permission must be granted to the terminal runni
 
 1. Scans `~/.claude/projects/**/*.jsonl` and keeps files whose mtime is inside the
    lookback window (default 60 min) but older than `OPS_RESUME_MIN_AGE_SEC` (default
-   45s — so the session you are *currently* in is not reopened).
+   45s — so the session you are _currently_ in is not reopened).
 2. Keeps only real interactive sessions (UUID filenames); skips subagent transcripts
    (`agent-*`), workflow journals, and empty/junk sessions.
 3. Reads each session's original `cwd` from the transcript.
@@ -49,13 +49,13 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-resume $ARGUMENTS
 
 ### Flags
 
-| Flag | Meaning |
-|---|---|
-| `-m, --minutes N` | Lookback window in minutes (default 60) |
-| `-H, --hours N` | Lookback window in hours |
-| `-n, --max N` | Cap number of tabs (default 20, newest first) |
-| `--here` | Only sessions whose `cwd` == current directory |
-| `--dry-run` | List matches, open nothing |
+| Flag              | Meaning                                        |
+| ----------------- | ---------------------------------------------- |
+| `-m, --minutes N` | Lookback window in minutes (default 60)        |
+| `-H, --hours N`   | Lookback window in hours                       |
+| `-n, --max N`     | Cap number of tabs (default 20, newest first)  |
+| `--here`          | Only sessions whose `cwd` == current directory |
+| `--dry-run`       | List matches, open nothing                     |
 
 ### Env overrides
 

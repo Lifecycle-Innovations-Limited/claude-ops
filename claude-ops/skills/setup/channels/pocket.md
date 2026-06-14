@@ -28,6 +28,7 @@ Route accordingly. Do NOT proceed with Pocket setup until at least one channel i
 #### Step 3p.2 — Pocket API key
 
 The watcher script reads `POCKET_API_KEY` from three sources in order:
+
 1. `POCKET_API_KEY` environment variable
 2. macOS Keychain: service `POCKET_API_KEY`, account `ops-daemon`
 3. Doppler: key `POCKET_API_KEY`

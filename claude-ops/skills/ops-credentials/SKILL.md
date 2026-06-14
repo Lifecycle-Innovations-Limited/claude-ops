@@ -1,7 +1,7 @@
 ---
 name: ops-credentials
 description: Audit which integration credentials are configured. Scans shell env, ops preferences.json, Doppler, macOS Keychain, and Dashlane to report a configured-vs-missing table per service. Never displays raw values — always masks as first6•••last4. Use when you want to see which integrations have keys set up and which still need /ops:setup.
-argument-hint: "[--service <name>] [--json]"
+argument-hint: '[--service <name>] [--json]'
 allowed-tools:
   - Bash
   - Read
@@ -14,11 +14,11 @@ maxTurns: 5
 
 ## CLI/API Reference
 
-| Command | Output |
-|---------|--------|
-| `bin/ops-credentials` | Human table — configured + missing per service |
-| `bin/ops-credentials --json` | JSON array, one entry per credential |
-| `bin/ops-credentials --service stripe` | Filter to one integration |
+| Command                                | Output                                         |
+| -------------------------------------- | ---------------------------------------------- |
+| `bin/ops-credentials`                  | Human table — configured + missing per service |
+| `bin/ops-credentials --json`           | JSON array, one entry per credential           |
+| `bin/ops-credentials --service stripe` | Filter to one integration                      |
 
 The bin script is the source of truth. It scans these sources in order and reports the FIRST hit per credential:
 
@@ -59,14 +59,14 @@ Claude Code's plugin settings UI cannot introspect external credential stores. I
 
 ## Homey Pro (Home Automation)
 
-| Field | Value |
-|-------|-------|
-| Service name | Homey Pro |
-| Category | Home Automation |
-| Keys | `HOMEY_LOCAL_URL`, `HOMEY_LOCAL_TOKEN`, `HOMEY_CLOUD_TOKEN`, `HOMEY_ID` |
-| Storage | `$PREFS_PATH` → `.home_automation.homey_local_url`, `.homey_local_token`, `.homey_cloud_token`, `.homey_id` |
-| Required | `HOMEY_LOCAL_URL`, `HOMEY_LOCAL_TOKEN` |
-| Optional | `HOMEY_CLOUD_TOKEN` (off-LAN fallback), `HOMEY_ID` (cloud API only) |
+| Field        | Value                                                                                                       |
+| ------------ | ----------------------------------------------------------------------------------------------------------- |
+| Service name | Homey Pro                                                                                                   |
+| Category     | Home Automation                                                                                             |
+| Keys         | `HOMEY_LOCAL_URL`, `HOMEY_LOCAL_TOKEN`, `HOMEY_CLOUD_TOKEN`, `HOMEY_ID`                                     |
+| Storage      | `$PREFS_PATH` → `.home_automation.homey_local_url`, `.homey_local_token`, `.homey_cloud_token`, `.homey_id` |
+| Required     | `HOMEY_LOCAL_URL`, `HOMEY_LOCAL_TOKEN`                                                                      |
+| Optional     | `HOMEY_CLOUD_TOKEN` (off-LAN fallback), `HOMEY_ID` (cloud API only)                                         |
 
 **Rotation:** Revoke the current token at `https://my.homey.app/manager/tokens`, generate a new one, then rerun `/ops:setup --section home` to save the replacement.
 

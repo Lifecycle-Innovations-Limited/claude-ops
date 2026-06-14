@@ -1,7 +1,7 @@
 ---
 name: ops-deploy
 description: Deploy status across all projects. Shows ECS service versions, Vercel deployments, recent deploys, pending deploys, and CI/CD pipeline state.
-argument-hint: "[project-alias|ecs|vercel|all]"
+argument-hint: '[project-alias|ecs|vercel|all]'
 allowed-tools:
   - Bash
   - Read
@@ -50,31 +50,33 @@ Before executing, load available context:
 
 ### aws CLI
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `aws ecs list-clusters --output json` | All ECS clusters | `{clusterArns: [...]}` |
-| `aws ecs list-services --cluster <name> --output json` | Services in cluster | `{serviceArns: [...]}` |
-| `aws ecs describe-services --cluster <name> --services <arn> --output json` | Service health | `{services: [{serviceName, status, runningCount, desiredCount, pendingCount}]}` |
-| `aws logs tail /ecs/<service> --since 1h --format short` | ECS logs | Log lines |
+| Command                                                                     | Usage               | Output                                                                          |
+| --------------------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------- |
+| `aws ecs list-clusters --output json`                                       | All ECS clusters    | `{clusterArns: [...]}`                                                          |
+| `aws ecs list-services --cluster <name> --output json`                      | Services in cluster | `{serviceArns: [...]}`                                                          |
+| `aws ecs describe-services --cluster <name> --services <arn> --output json` | Service health      | `{services: [{serviceName, status, runningCount, desiredCount, pendingCount}]}` |
+| `aws logs tail /ecs/<service> --since 1h --format short`                    | ECS logs            | Log lines                                                                       |
 
 ### gh CLI (GitHub)
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `gh run list --repo <owner/repo> --limit 5 --json status,conclusion,name,headBranch,createdAt,databaseId` | CI runs | JSON array |
-| `gh run view <id> --repo <repo> --log-failed` | Failed CI logs | Log output |
-| `gh run watch <run-id> --repo <repo>` | Stream CI run | Live output (use with Monitor) |
+| Command                                                                                                   | Usage          | Output                         |
+| --------------------------------------------------------------------------------------------------------- | -------------- | ------------------------------ |
+| `gh run list --repo <owner/repo> --limit 5 --json status,conclusion,name,headBranch,createdAt,databaseId` | CI runs        | JSON array                     |
+| `gh run view <id> --repo <repo> --log-failed`                                                             | Failed CI logs | Log output                     |
+| `gh run watch <run-id> --repo <repo>`                                                                     | Stream CI run  | Live output (use with Monitor) |
 
 ---
 
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when checking deploy platforms in parallel. This enables:
+
 - Agents share context and can coordinate mid-flight
 - You can steer priorities in real-time
 - Agents report progress as they complete
 
 **Team setup** (only when flag is enabled):
+
 ```
 TeamCreate("deploy-team")
 Agent(team_name="deploy-team", name="ecs-checker", prompt="List all ECS clusters and describe service health, running/desired counts")
@@ -158,6 +160,7 @@ PENDING DEPLOYS (branch ready, not yet deployed)
 After rendering, use **batched AskUserQuestion calls** (max 4 options each). Only show actions relevant to the current state (e.g., skip "View logs for failing service" if nothing is failing). If <=4 relevant actions, use a single call. If >4, batch:
 
 AskUserQuestion call 1:
+
 ```
   [View logs for [failing service]]
   [Trigger manual deploy for [project]]
@@ -166,6 +169,7 @@ AskUserQuestion call 1:
 ```
 
 AskUserQuestion call 2 (only if "More actions..."):
+
 ```
   [Check Vercel [project] runtime logs]
   [Open GitHub Actions for [repo]]
@@ -192,6 +196,7 @@ Trigger deploy for [project]:
 ```
 
 **If user selects to view logs**, show the logs and use `AskUserQuestion`:
+
 ```
   [Dispatch fix agent for this failure]  [Redeploy]  [Back to dashboard]
 ```
@@ -203,9 +208,11 @@ Trigger deploy for [project]:
 ### Monitor — live deploy streaming
 
 When watching a deploy in progress, use `Monitor` to stream logs:
+
 ```
 Monitor(command: "gh run watch <run-id> --repo <repo>")
 ```
+
 For ECS deploys: `Monitor(command: "aws ecs wait services-stable --cluster <cluster> --services <service>")`
 
 ### Tasks — deploy tracking
@@ -215,6 +222,7 @@ Use `TaskCreate` per project being deployed. Update with `TaskUpdate` as deploys
 ### WebFetch — Vercel fallback
 
 When Vercel MCP tools are unavailable, use `WebFetch` with the Vercel API directly:
+
 ```
 WebFetch(url: "https://api.vercel.com/v6/deployments?projectId=<id>&limit=5", headers: {"Authorization": "Bearer $VERCEL_TOKEN"})
 ```

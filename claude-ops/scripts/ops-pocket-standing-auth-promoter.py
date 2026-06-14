@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""ops-pocket-standing-auth-promoter — auto-resolve ASKs Sam has pre-authorized.
+"""ops-pocket-standing-auth-promoter — auto-resolve ASKs the owner has pre-authorized.
 
-Sam's 2026-05-25 directive: "you may always auto nudge agents without my
+the owner's 2026-05-25 directive: "you may always auto nudge agents without my
 permission thats your mission" + "babysit pocket workers + nudge stalls. so
 sam has to do nothing but leave pocket notes".
 
@@ -67,7 +67,7 @@ def load_rules() -> list[dict]:
     [{"id":"nudge-agents","match_any":["nudge","monitor.*fleet","fleet.*agents"],"reason":"..."}]
     Match against title + context (case-insensitive)."""
     if not RULES.exists():
-        # Seed with Sam's initial standing auth — nudging the agent fleet.
+        # Seed with the owner's initial standing auth — nudging the agent fleet.
         default = [
             {
                 "id": "agent-nudge-and-fleet-supervision",
@@ -78,7 +78,7 @@ def load_rules() -> list[dict]:
                     r"\bagent.*list\b",
                     r"send.*messages.*(agents?|workers?|subagents?)",
                 ],
-                "reason": "Sam standing-authorized agent nudging/fleet supervision 2026-05-25",
+                "reason": "the owner standing-authorized agent nudging/fleet supervision 2026-05-25",
             },
         ]
         if not DRY_RUN:

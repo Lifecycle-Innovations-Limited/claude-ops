@@ -1,7 +1,7 @@
 ---
 name: ops-status
 description: Lightweight green/red status panel for every configured integration. No gather, no actions.
-argument-hint: "[--json]"
+argument-hint: '[--json]'
 allowed-tools:
   - Bash
   - Read
@@ -28,19 +28,19 @@ Both are consumed by the `bin/ops-status` script internally — this skill does 
 
 ### bin/ops-status
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `${CLAUDE_PLUGIN_ROOT}/bin/ops-status` | Render the pretty text panel | ASCII panel with one row per category |
-| `${CLAUDE_PLUGIN_ROOT}/bin/ops-status --json` | Machine-readable output | Flat JSON: `{clis, channels, mcps, commerce, voice, monitoring, daemon, registry, generated_at}` |
+| Command                                       | Usage                        | Output                                                                                           |
+| --------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------ |
+| `${CLAUDE_PLUGIN_ROOT}/bin/ops-status`        | Render the pretty text panel | ASCII panel with one row per category                                                            |
+| `${CLAUDE_PLUGIN_ROOT}/bin/ops-status --json` | Machine-readable output      | Flat JSON: `{clis, channels, mcps, commerce, voice, monitoring, daemon, registry, generated_at}` |
 
 Each integration resolves to one of four status strings:
 
-| Status | Meaning | Rendered as |
-|--------|---------|-------------|
-| `ok` | Installed / credentialed / running | `✓` |
-| `not-configured` | Known slot, no credential recorded | `○` |
-| `missing` | Required but not resolvable | `✗` |
-| `skipped` | User explicitly opted out via `/ops:setup` | `○` |
+| Status           | Meaning                                    | Rendered as |
+| ---------------- | ------------------------------------------ | ----------- |
+| `ok`             | Installed / credentialed / running         | `✓`         |
+| `not-configured` | Known slot, no credential recorded         | `○`         |
+| `missing`        | Required but not resolvable                | `✗`         |
+| `skipped`        | User explicitly opted out via `/ops:setup` | `○`         |
 
 The script is designed to run in **under 1 second** with no network calls.
 
@@ -83,26 +83,26 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-status $ARGUMENTS
 
 ```json
 {
-  "clis": {"gh": "ok", "aws": "ok", "jq": "ok", "node": "ok", "whatsapp-bridge": "missing"},
-  "channels": {"whatsapp": "ok", "slack": "ok", "telegram": "not-configured"},
-  "mcps": {"linear": "ok", "sentry": "ok", "vercel": "ok", "gmail": "not-configured"},
-  "commerce": {"shopify": "not-configured"},
+  "clis": { "gh": "ok", "aws": "ok", "jq": "ok", "node": "ok", "whatsapp-bridge": "missing" },
+  "channels": { "whatsapp": "ok", "slack": "ok", "telegram": "not-configured" },
+  "mcps": { "linear": "ok", "sentry": "ok", "vercel": "ok", "gmail": "not-configured" },
+  "commerce": { "shopify": "not-configured" },
   "voice": {},
-  "monitoring": {"datadog": "ok", "newrelic": "not-configured"},
-  "daemon": {"state": "ok", "services": 6, "last_sync": "2026-04-14T09:43:00Z"},
-  "registry": {"state": "ok", "projects": 3},
+  "monitoring": { "datadog": "ok", "newrelic": "not-configured" },
+  "daemon": { "state": "ok", "services": 6, "last_sync": "2026-04-14T09:43:00Z" },
+  "registry": { "state": "ok", "projects": 3 },
   "generated_at": "2026-04-14T09:45:12Z"
 }
 ```
 
 ## When to use this vs other skills
 
-| If you want... | Use |
-|----------------|-----|
+| If you want...                            | Use           |
+| ----------------------------------------- | ------------- |
 | A quick "is everything connected?" glance | `/ops:status` |
-| The full morning briefing with real data | `/ops:go` |
-| Deep diagnostics + auto-repair | `/ops:doctor` |
-| An interactive dashboard with hotkeys | `/ops:dash` |
+| The full morning briefing with real data  | `/ops:go`     |
+| Deep diagnostics + auto-repair            | `/ops:doctor` |
+| An interactive dashboard with hotkeys     | `/ops:dash`   |
 
 ## Integration with /ops:setup
 

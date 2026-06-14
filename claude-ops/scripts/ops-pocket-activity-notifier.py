@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ops-pocket-activity-notifier — Notify Sam on WhatsApp when pocket agents
+"""ops-pocket-activity-notifier — Notify the owner on WhatsApp when pocket agents
 pick up work and when they complete it.
 
 Watches two signals under ~/.claude/state/pocket/:

@@ -101,17 +101,17 @@ state file stays owned by that user and consistent with the cron watcher.
 
 All paths relative to `$CLAUDE_PLUGIN_ROOT/scripts/`.
 
-| # | Script                                | Role          | Runs as                       | Interval |
-|---|---------------------------------------|---------------|-------------------------------|----------|
-| 1 | `ops-cron-pocket-watcher.py`          | Watcher       | cron (user crontab)           | ~5 min   |
-| 2 | `ops-pocket-triage.py`                | Triage        | cron / on-demand              | ~5 min   |
-| 3 | `ops-cron-pocket-executor.py`         | Exec watchdog | cron                          | ~1 min   |
-| 3a | (supervisor)                         | Long-lived    | tmux window `pocket-exec:supervisor` | always |
-| 4 | `ops-pocket-activity-notifier.py`     | Notifier      | launchd LaunchAgent            | 60s     |
-| 5 | `ops-pocket-out-queue.py`             | WA bridge out | cron                          | 60s     |
-| 6 | `ops-pocket-email-bridge.py`          | Email bridge  | cron                          | 60s     |
-| 7 | `ops-pocket-whatsapp-bridge.py`       | WA bridge in  | cron                          | 60s     |
-|   | `install-pocket-notifier.sh`          | Installer     | one-shot                      | —       |
+| #   | Script                            | Role          | Runs as                              | Interval |
+| --- | --------------------------------- | ------------- | ------------------------------------ | -------- |
+| 1   | `ops-cron-pocket-watcher.py`      | Watcher       | cron (user crontab)                  | ~5 min   |
+| 2   | `ops-pocket-triage.py`            | Triage        | cron / on-demand                     | ~5 min   |
+| 3   | `ops-cron-pocket-executor.py`     | Exec watchdog | cron                                 | ~1 min   |
+| 3a  | (supervisor)                      | Long-lived    | tmux window `pocket-exec:supervisor` | always   |
+| 4   | `ops-pocket-activity-notifier.py` | Notifier      | launchd LaunchAgent                  | 60s      |
+| 5   | `ops-pocket-out-queue.py`         | WA bridge out | cron                                 | 60s      |
+| 6   | `ops-pocket-email-bridge.py`      | Email bridge  | cron                                 | 60s      |
+| 7   | `ops-pocket-whatsapp-bridge.py`   | WA bridge in  | cron                                 | 60s      |
+|     | `install-pocket-notifier.sh`      | Installer     | one-shot                             | —        |
 
 The 7-script set the SKILL.md is built around is: watcher, triage, executor, notifier, out-queue, email-bridge, whatsapp-bridge. The install helper is supporting infrastructure.
 
@@ -239,16 +239,16 @@ Every long-running component writes a one-line JSON health file each tick:
 
 ## Common failure modes
 
-| Symptom                                  | Most likely cause                                        | Fix                                                             |
-|------------------------------------------|----------------------------------------------------------|-----------------------------------------------------------------|
-| `whatsapp: disabled` in status           | `whatsapp-config.json` missing or `enabled: false`       | `/ops:pocket whatsapp on` (after `setup`)                       |
-| Notifier `error: tmux not found`         | tmux not on PATH for the launchd LaunchAgent             | Re-run `install-pocket-notifier.sh` after `brew install tmux`   |
-| out-queue `error: refusing — JID mismatch` | Queue row has a different `chat_jid` than config        | Inspect queue with `tail supervisor-out-queue.jsonl` — bad enqueue |
-| WA messages delivered, email not        | gog Gmail OAuth expired                                  | `gog auth status` then `gog auth add <addr> --services gmail`  |
-| `tmux=down` after `restart`              | `_idle` keepalive window died, supervisor never spawned  | `tmux kill-session -t pocket-exec` then re-run `restart`        |
-| Pending-triage growing, tasks not        | Triage cron never running, or Opus quota hit             | Check `run.log` for triage errors; manually run `ops-pocket-triage.py` |
-| Notifier never fires after worker done   | Worker wrote `.completed.json` but not `.done.json`      | Notifier handles both; check `.activity-notifier.seen-results`  |
-| Duplicate notifications                  | `.activity-notifier.seen-results` was wiped              | Don't delete it; rebuild via `--once` won't re-emit if cursor intact |
+| Symptom                                    | Most likely cause                                       | Fix                                                                    |
+| ------------------------------------------ | ------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `whatsapp: disabled` in status             | `whatsapp-config.json` missing or `enabled: false`      | `/ops:pocket whatsapp on` (after `setup`)                              |
+| Notifier `error: tmux not found`           | tmux not on PATH for the launchd LaunchAgent            | Re-run `install-pocket-notifier.sh` after `brew install tmux`          |
+| out-queue `error: refusing — JID mismatch` | Queue row has a different `chat_jid` than config        | Inspect queue with `tail supervisor-out-queue.jsonl` — bad enqueue     |
+| WA messages delivered, email not           | gog Gmail OAuth expired                                 | `gog auth status` then `gog auth add <addr> --services gmail`          |
+| `tmux=down` after `restart`                | `_idle` keepalive window died, supervisor never spawned | `tmux kill-session -t pocket-exec` then re-run `restart`               |
+| Pending-triage growing, tasks not          | Triage cron never running, or Opus quota hit            | Check `run.log` for triage errors; manually run `ops-pocket-triage.py` |
+| Notifier never fires after worker done     | Worker wrote `.completed.json` but not `.done.json`     | Notifier handles both; check `.activity-notifier.seen-results`         |
+| Duplicate notifications                    | `.activity-notifier.seen-results` was wiped             | Don't delete it; rebuild via `--once` won't re-emit if cursor intact   |
 
 ## Why this skill exists
 

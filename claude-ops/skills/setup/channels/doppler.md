@@ -18,15 +18,15 @@ Doppler CLI is not installed.
 
 Where the OS-specific command is:
 
-| OS                  | Install command                                                                     |
-|---------------------|-------------------------------------------------------------------------------------|
-| macOS / Linuxbrew   | `brew install dopplerhq/cli/doppler`                                                |
-| Debian / Ubuntu     | `curl -Ls https://cli.doppler.com/install.sh \| sudo sh`                            |
-| Fedora / RHEL       | `sudo rpm --import https://packages.doppler.com/public.key && sudo dnf install -y doppler` |
-| Arch Linux          | `yay -S doppler-cli`                                                                |
-| Alpine              | `apk add --no-cache doppler-cli`                                                    |
-| Windows (winget)    | `winget install Doppler.doppler`                                                    |
-| Windows (scoop)     | `scoop bucket add doppler https://github.com/DopplerHQ/scoop-doppler.git; scoop install doppler` |
+| OS                | Install command                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------------ |
+| macOS / Linuxbrew | `brew install dopplerhq/cli/doppler`                                                             |
+| Debian / Ubuntu   | `curl -Ls https://cli.doppler.com/install.sh \| sudo sh`                                         |
+| Fedora / RHEL     | `sudo rpm --import https://packages.doppler.com/public.key && sudo dnf install -y doppler`       |
+| Arch Linux        | `yay -S doppler-cli`                                                                             |
+| Alpine            | `apk add --no-cache doppler-cli`                                                                 |
+| Windows (winget)  | `winget install Doppler.doppler`                                                                 |
+| Windows (scoop)   | `scoop bucket add doppler https://github.com/DopplerHQ/scoop-doppler.git; scoop install doppler` |
 
 Run the chosen command in the background, capture stdout/stderr, and report success/failure. If the user skips, record `secrets_manager: "none"` in `$PREFS_PATH` and end this sub-flow.
 
@@ -128,10 +128,13 @@ After the CLI is configured and authenticated, offer to set up the official `@do
 1. **Check availability**: Run `npx -y @dopplerhq/mcp-server --help 2>&1` in the background. If it exits 0, the package is available.
 
 2. **Generate a service token**: If the user selected a project/config in Step 3g.3, generate a scoped token:
+
    ```bash
    doppler configs tokens create mcp-server-token --project <project> --config <config> --plain 2>/dev/null
    ```
+
    If the command fails or if no project/config was selected, ask:
+
    ```
    Doppler MCP Server needs a token. Options:
      [Generate from CLI (requires project/config)]
@@ -142,12 +145,15 @@ After the CLI is configured and authenticated, offer to set up the official `@do
 3. **Save token to userConfig**: Write the token to `doppler_token` in the plugin's `userConfig` (this feeds `.mcp.json` at runtime via `${user_config.doppler_token}`). Also save `doppler_project` and `doppler_config` if selected.
 
 4. **Smoke test**: Verify the MCP server can start:
+
    ```bash
    DOPPLER_TOKEN="<token>" timeout 10 npx -y @dopplerhq/mcp-server --help 2>&1
    ```
+
    If it exits 0, the server is functional.
 
 5. **Confirmation**:
+
    ```
    ✓ Doppler MCP Server configured — secrets accessible via MCP tools (mcp__doppler__*)
    ```
@@ -158,4 +164,3 @@ After the CLI is configured and authenticated, offer to set up the official `@do
    MCP tool calls (mcp__doppler__*) instead of shelling out to `doppler secrets get`.
    The Doppler CLI remains available as a fallback when the MCP server is unavailable.
    ```
-

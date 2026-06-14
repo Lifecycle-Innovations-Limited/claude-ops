@@ -2,11 +2,11 @@
 
 Background daemon + helpers that synthesize a one-line digest across all parallel Claude Code sessions and recent shell activity, written to `/tmp/claude-recap-digest`.
 
-| Script | Role |
-|--------|------|
-| `daemon.sh` | Long-lived loop — polls per-session recap inputs, calls `digest.sh` when stale, writes `/tmp/claude-recap-digest` |
-| `digest.sh` | Synthesizes the one-liner via `claude -p --model haiku` over recent sessions + tool-activity files |
-| `marquee.sh` | Tmux-side scroller (called from `status-right`) — reads the digest file and emits a windowed slice |
+| Script       | Role                                                                                                              |
+| ------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `daemon.sh`  | Long-lived loop — polls per-session recap inputs, calls `digest.sh` when stale, writes `/tmp/claude-recap-digest` |
+| `digest.sh`  | Synthesizes the one-liner via `claude -p --model haiku` over recent sessions + tool-activity files                |
+| `marquee.sh` | Tmux-side scroller (called from `status-right`) — reads the digest file and emits a windowed slice                |
 
 ## Display surfaces
 
@@ -37,7 +37,7 @@ When `command -v tmux` returns non-zero, `/ops:setup` Step 2d.3b (or `/ops:recap
 
 The merge is done with `jq` so any existing keys in `settings.json` are preserved. If a `statusLine` already exists, the user is asked whether to replace, append (chain commands so both render), or skip.
 
-This fallback path also works when tmux *is* installed — both surfaces will render the same digest.
+This fallback path also works when tmux _is_ installed — both surfaces will render the same digest.
 
 ### 3. No surface
 

@@ -13,13 +13,13 @@ PRs welcome from anyone. This document covers the branch strategy, protection ru
 
 `main` is protected by three layers of rulesets (repo-level + org-level):
 
-| Rule | Maintainer | External contributors |
-|---|---|---|
-| Direct push | Allowed | Blocked |
-| Force push | Blocked | Blocked |
-| Delete branch | Blocked | Blocked |
-| Merge PR without approval | Allowed | Requires 1 approval |
-| Unresolved review threads | Allowed | Blocked |
+| Rule                      | Maintainer | External contributors |
+| ------------------------- | ---------- | --------------------- |
+| Direct push               | Allowed    | Blocked               |
+| Force push                | Blocked    | Blocked               |
+| Delete branch             | Blocked    | Blocked               |
+| Merge PR without approval | Allowed    | Requires 1 approval   |
+| Unresolved review threads | Allowed    | Blocked               |
 
 These rules are enforced at both the repository and organization level and cannot be overridden by repository settings alone.
 

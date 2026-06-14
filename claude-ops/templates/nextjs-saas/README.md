@@ -39,17 +39,17 @@ The app will be available at `http://localhost:3000`.
 
 ## Environment Variables
 
-| Variable | Description |
-| -------- | ----------- |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key (`pk_test_...` / `pk_live_...`) |
-| `CLERK_SECRET_KEY` | Clerk secret key (`sk_test_...` / `sk_live_...`) |
-| `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | Path hosting `<SignIn />` (default `/login`) |
-| `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | Path hosting `<SignUp />` (default `/register`) |
-| `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | Post sign-in redirect when none is specified |
-| `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | Post sign-up redirect when none is specified |
-| `STRIPE_SECRET_KEY` | Stripe secret key (`sk_test_...` or `sk_live_...`) |
-| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret (`whsec_...`) |
+| Variable                                          | Description                                           |
+| ------------------------------------------------- | ----------------------------------------------------- |
+| `DATABASE_URL`                                    | PostgreSQL connection string                          |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`               | Clerk publishable key (`pk_test_...` / `pk_live_...`) |
+| `CLERK_SECRET_KEY`                                | Clerk secret key (`sk_test_...` / `sk_live_...`)      |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_URL`                   | Path hosting `<SignIn />` (default `/login`)          |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_URL`                   | Path hosting `<SignUp />` (default `/register`)       |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | Post sign-in redirect when none is specified          |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | Post sign-up redirect when none is specified          |
+| `STRIPE_SECRET_KEY`                               | Stripe secret key (`sk_test_...` or `sk_live_...`)    |
+| `STRIPE_WEBHOOK_SECRET`                           | Stripe webhook signing secret (`whsec_...`)           |
 
 Create a Clerk application at [dashboard.clerk.com](https://dashboard.clerk.com), copy the keys into `.env`, and add `http://localhost:3000` to allowed origins / redirect URLs as prompted in the Clerk dashboard.
 

@@ -36,25 +36,25 @@ gog-reply.sh --to <email> --body <text> \
   [--dry-run]
 ```
 
-| Flag | Meaning |
-|---|---|
-| `--to <email>` | Recipient. **Required.** |
-| `--body <text>` | Reply body (plain text). **Required.** |
-| `--subject <subj>` | Subject. If omitted, derived as `Re: <original subject>`. |
-| `--match-from <email>` | From-address used to find the thread. Defaults to `--to`. |
-| `--match-subject <text>` | Substring to disambiguate the thread. Optional. |
-| `--account <acct>` | Pin a gog account. If omitted, **auto-discovers** (enumerates oauth gmail accounts via `gog auth list`, always also probing any accounts in `$GOG_EXTRA_ACCOUNTS`). |
-| `--dry-run` | Resolve and print the account / threadId / message-id / to / subject / body, then exit 0 without sending. |
+| Flag                     | Meaning                                                                                                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--to <email>`           | Recipient. **Required.**                                                                                                                                            |
+| `--body <text>`          | Reply body (plain text). **Required.**                                                                                                                              |
+| `--subject <subj>`       | Subject. If omitted, derived as `Re: <original subject>`.                                                                                                           |
+| `--match-from <email>`   | From-address used to find the thread. Defaults to `--to`.                                                                                                           |
+| `--match-subject <text>` | Substring to disambiguate the thread. Optional.                                                                                                                     |
+| `--account <acct>`       | Pin a gog account. If omitted, **auto-discovers** (enumerates oauth gmail accounts via `gog auth list`, always also probing any accounts in `$GOG_EXTRA_ACCOUNTS`). |
+| `--dry-run`              | Resolve and print the account / threadId / message-id / to / subject / body, then exit 0 without sending.                                                           |
 
 ### Exit codes
 
-| Code | Meaning |
-|---|---|
-| `0` | Sent (or printed in `--dry-run`). |
-| `2` | Bad/missing arguments. |
-| `3` | No matching thread on any account — **no send attempted** (token preserved). |
-| `4` | Ambiguous match across multiple accounts — pin with `--account` (no send). |
-| `5` | The single send call failed. |
+| Code | Meaning                                                                      |
+| ---- | ---------------------------------------------------------------------------- |
+| `0`  | Sent (or printed in `--dry-run`).                                            |
+| `2`  | Bad/missing arguments.                                                       |
+| `3`  | No matching thread on any account — **no send attempted** (token preserved). |
+| `4`  | Ambiguous match across multiple accounts — pin with `--account` (no send).   |
+| `5`  | The single send call failed.                                                 |
 
 ### How it resolves
 

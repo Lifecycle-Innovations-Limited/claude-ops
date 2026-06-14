@@ -2,7 +2,7 @@
 <!--
   Daily Anthropic credit-pool digest cron (HEA-4047).
 
-  Schedule: every day, 09:00 local time (Europe/Amsterdam for Sam).
+  Schedule: every day, 09:00 local time (Europe/Amsterdam for the owner).
   Equivalent cron: 0 9 * * *
 
   The installer (scripts/install-daily-credit-digest.sh) substitutes

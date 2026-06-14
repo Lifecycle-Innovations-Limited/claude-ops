@@ -1,7 +1,7 @@
 ---
 name: ops-triage
 description: Cross-platform issue triage. Pulls from Sentry (MCP), Linear (MCP), GitHub Issues (gh). Cross-references against code to find already-fixed issues. Auto-resolves fixed ones. Dispatches agents for active issues.
-argument-hint: "[project-alias|sentry|linear|github|all]"
+argument-hint: '[project-alias|sentry|linear|github|all]'
 allowed-tools:
   - Bash
   - Read
@@ -32,11 +32,11 @@ maxTurns: 40
 ## Runtime Context
 
 Before triaging, load:
+
 1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read project registry for repo paths
 2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — ensure services healthy
 3. **Secrets**: Resolve via Doppler MCP (`mcp__doppler__*`) → env → Doppler CLI fallback → password manager: `SENTRY_AUTH_TOKEN`, `LINEAR_API_KEY`, `GITHUB_TOKEN`
 4. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/topics_active.md` for issue context
-
 
 # OPS ► CROSS-PLATFORM TRIAGE
 
@@ -44,36 +44,38 @@ Before triaging, load:
 
 ### gh CLI (GitHub)
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `gh issue list --state open --json number,title,body,labels,assignees,createdAt,url --limit 50` | Open issues | JSON array |
-| `gh issue list --repo <owner/repo> --state open --json number,title,labels,createdAt --limit 20` | Repo issues | JSON array |
-| `gh pr list --state merged --search "#<N>"` | PRs referencing issue | JSON array |
-| `gh issue close <N> --comment "<msg>"` | Close issue | Confirmation |
+| Command                                                                                          | Usage                 | Output       |
+| ------------------------------------------------------------------------------------------------ | --------------------- | ------------ |
+| `gh issue list --state open --json number,title,body,labels,assignees,createdAt,url --limit 50`  | Open issues           | JSON array   |
+| `gh issue list --repo <owner/repo> --state open --json number,title,labels,createdAt --limit 20` | Repo issues           | JSON array   |
+| `gh pr list --state merged --search "#<N>"`                                                      | PRs referencing issue | JSON array   |
+| `gh issue close <N> --comment "<msg>"`                                                           | Close issue           | Confirmation |
 
 ### sentry-cli / Sentry API
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `sentry-cli issues list --project <slug> --status unresolved` | Unresolved issues | Issue list |
+| Command                                                                                                                          | Usage                             | Output     |
+| -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | ---------- |
+| `sentry-cli issues list --project <slug> --status unresolved`                                                                    | Unresolved issues                 | Issue list |
 | `curl -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://sentry.io/api/0/projects/<org>/<proj>/issues/?query=is:unresolved"` | API fallback when MCP unavailable | JSON array |
 
 ### Linear GraphQL (fallback when MCP unavailable)
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ issues(filter: {state: {type: {in: [\"started\",\"unstarted\"]}}}) { nodes { id title state { name } priority assignee { name } } } }"}'` | Active issues | JSON |
+| Command                                                                                                                                                                                                                                                                        | Usage         | Output |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- | ------ |
+| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ issues(filter: {state: {type: {in: [\"started\",\"unstarted\"]}}}) { nodes { id title state { name } priority assignee { name } } } }"}'` | Active issues | JSON   |
 
 ---
 
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when dispatching fix agents for multiple issues. This enables:
+
 - Fix agents can share findings (e.g., agent fixing Sentry error discovers the same root cause as a Linear issue)
 - You can redirect agents if cross-referencing reveals duplicate issues
 - Agents report progress and you can prioritize which fix to merge first
 
 **Team setup** (only when flag is enabled, Phase 4 dispatch):
+
 ```
 TeamCreate("triage-fixers")
 Agent(team_name="triage-fixers", name="fix-[issue-id]", subagent_type="ops:triage-agent", ...)
@@ -180,6 +182,7 @@ ACTIVE ISSUES (needs work)
 Use **batched AskUserQuestion calls** (max 4 options each):
 
 AskUserQuestion call 1:
+
 ```
   [Dispatch agent for [top critical issue]]
   [Dispatch agent for [second issue]]
@@ -188,6 +191,7 @@ AskUserQuestion call 1:
 ```
 
 AskUserQuestion call 2 (only if "More..."):
+
 ```
   [Bulk-assign all HIGH to current sprint]
   [Done]
@@ -240,6 +244,7 @@ When dispatching fix agents, use `LSP` to find symbol definitions, references, a
 ## Ledger Integration
 
 **CLAIM_KEY by issue type:**
+
 - Sentry: `sentry:issue:<short_id>`
 - GitHub issue: `gh:pr:<owner>/<repo>#<number>` (reused for issues when no PR exists)
 - Infra alert: `ci:run:<repo>:<run_id>`

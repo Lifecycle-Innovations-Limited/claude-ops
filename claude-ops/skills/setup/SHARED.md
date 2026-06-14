@@ -39,6 +39,7 @@ esac
 ```
 
 Cascade for the package manager (pick the first one available):
+
 1. `brew` (macOS + Linuxbrew) — preferred on macOS.
 2. Native OS manager — `apt-get` (debian/ubuntu), `dnf` (fedora/rhel), `pacman` (arch), `zypper` (suse), `apk` (alpine).
 3. `winget` (Windows 10 1809+) → `scoop` → `choco` → build-from-source as last resort on Windows.
@@ -53,16 +54,16 @@ For the authoritative cross-OS detection logic, reuse `bin/ops-setup-detect` (wh
 
 Whenever a channel has a **browser-based OAuth flow** available, offer that first and put manual-token entry behind it as a fallback. OAuth is safer (scoped, revocable, no secrets in dotfiles), and usually faster for the user.
 
-| Channel        | OAuth path                                                 | Manual fallback                        |
-| -------------- | ---------------------------------------------------------- | -------------------------------------- |
-| Email (gog)    | `gog auth add <email> --services gmail,calendar,drive,contacts,docs,sheets` (browser) | n/a — gog is OAuth-only |
-| Calendar (gog) | same `gog auth add` with calendar in `--services`          | n/a                                    |
-| Slack          | `claude mcp add slack` (handles OAuth through Claude Code) | bot token via auto-scan + manual paste |
-| Linear         | `claude mcp add linear`                                    | API key                                |
-| Sentry         | `claude mcp add sentry`                                    | DSN / auth token                       |
-| Vercel         | `claude mcp add vercel`                                    | personal access token                  |
-| Telegram       | ❌ no OAuth (Bot API is token-only by design)              | auto-scan + manual paste (only option) |
-| WhatsApp       | QR pairing via `whatsapp-bridge auth` (similar UX to OAuth)          | n/a — paired sessions only             |
+| Channel        | OAuth path                                                                            | Manual fallback                        |
+| -------------- | ------------------------------------------------------------------------------------- | -------------------------------------- |
+| Email (gog)    | `gog auth add <email> --services gmail,calendar,drive,contacts,docs,sheets` (browser) | n/a — gog is OAuth-only                |
+| Calendar (gog) | same `gog auth add` with calendar in `--services`                                     | n/a                                    |
+| Slack          | `claude mcp add slack` (handles OAuth through Claude Code)                            | bot token via auto-scan + manual paste |
+| Linear         | `claude mcp add linear`                                                               | API key                                |
+| Sentry         | `claude mcp add sentry`                                                               | DSN / auth token                       |
+| Vercel         | `claude mcp add vercel`                                                               | personal access token                  |
+| Telegram       | ❌ no OAuth (Bot API is token-only by design)                                         | auto-scan + manual paste (only option) |
+| WhatsApp       | QR pairing via `whatsapp-bridge auth` (similar UX to OAuth)                           | n/a — paired sessions only             |
 
 When a channel supports OAuth, the default `AskUserQuestion` should lead with it:
 
@@ -137,18 +138,18 @@ For each variable name (e.g. `TELEGRAM_BOT_TOKEN`, `SHOPIFY_ACCESS_TOKEN`, `KLAV
 
 **Env var → service keyword mapping for auto-scan:**
 
-| Variable names | Service keyword (Dashlane/Keychain) |
-| --- | --- |
-| `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_ADMIN_TOKEN`, `SHOPIFY_STORE_URL` | `shopify` |
-| `KLAVIYO_API_KEY`, `KLAVIYO_PRIVATE_KEY` | `klaviyo` |
-| `META_ACCESS_TOKEN`, `FACEBOOK_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID` | `meta`, `facebook` |
-| `GA4_PROPERTY_ID`, `GA_MEASUREMENT_ID` | `google-analytics`, `ga4` |
-| `BLAND_AI_API_KEY`, `BLAND_API_KEY` | `bland-ai`, `bland` |
-| `ELEVENLABS_API_KEY` | `elevenlabs` |
-| `GROQ_API_KEY` | `groq` |
-| `SHIPBOB_ACCESS_TOKEN` | `shipbob` |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | `telegram` |
-| `SLACK_BOT_TOKEN`, `SLACK_MCP_XOXC_TOKEN` | `slack` |
+| Variable names                                                     | Service keyword (Dashlane/Keychain) |
+| ------------------------------------------------------------------ | ----------------------------------- |
+| `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_ADMIN_TOKEN`, `SHOPIFY_STORE_URL` | `shopify`                           |
+| `KLAVIYO_API_KEY`, `KLAVIYO_PRIVATE_KEY`                           | `klaviyo`                           |
+| `META_ACCESS_TOKEN`, `FACEBOOK_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID` | `meta`, `facebook`                  |
+| `GA4_PROPERTY_ID`, `GA_MEASUREMENT_ID`                             | `google-analytics`, `ga4`           |
+| `BLAND_AI_API_KEY`, `BLAND_API_KEY`                                | `bland-ai`, `bland`                 |
+| `ELEVENLABS_API_KEY`                                               | `elevenlabs`                        |
+| `GROQ_API_KEY`                                                     | `groq`                              |
+| `SHIPBOB_ACCESS_TOKEN`                                             | `shipbob`                           |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`       | `telegram`                          |
+| `SLACK_BOT_TOKEN`, `SLACK_MCP_XOXC_TOKEN`                          | `slack`                             |
 
 **Present the findings** with `AskUserQuestion` (**max 4 options per call**):
 
@@ -176,26 +177,26 @@ Rules for the prompt:
   [Skip this service]
 ```
 
-  - **"I have it"** → show instructions for where to find the credential in the service's dashboard, then accept free-text input.
-  - **"Deep hunt"** → spawn a Haiku subagent in the background with this mandate:
+- **"I have it"** → show instructions for where to find the credential in the service's dashboard, then accept free-text input.
+- **"Deep hunt"** → spawn a Haiku subagent in the background with this mandate:
 
-    ```
-    Find the <CREDENTIAL_NAME> for <SERVICE_NAME>. Search exhaustively:
-    1. All Doppler projects and configs (dev/stg/prd/ci)
-    2. All .env* files across ~/Projects/ recursively
-    3. macOS Keychain (security find-generic-password with various service name patterns)
-    4. Dashlane CLI (dcli password <service> + related keywords)
-    5. Chrome browser — navigate to <service_admin_url> via Kapture/Playwright MCP, log in if needed, and extract the credential from the settings page
-    6. All shell profile files (~/.zshrc, ~/.bashrc, ~/.zprofile, ~/.envrc, ~/.config/fish/*)
-    7. 1Password CLI (op item list --tags <service>) if available
-    8. AWS Secrets Manager / SSM Parameter Store if aws cli authenticated
+  ```
+  Find the <CREDENTIAL_NAME> for <SERVICE_NAME>. Search exhaustively:
+  1. All Doppler projects and configs (dev/stg/prd/ci)
+  2. All .env* files across ~/Projects/ recursively
+  3. macOS Keychain (security find-generic-password with various service name patterns)
+  4. Dashlane CLI (dcli password <service> + related keywords)
+  5. Chrome browser — navigate to <service_admin_url> via Kapture/Playwright MCP, log in if needed, and extract the credential from the settings page
+  6. All shell profile files (~/.zshrc, ~/.bashrc, ~/.zprofile, ~/.envrc, ~/.config/fish/*)
+  7. 1Password CLI (op item list --tags <service>) if available
+  8. AWS Secrets Manager / SSM Parameter Store if aws cli authenticated
 
-    Return the credential value if found, or a detailed report of everywhere you checked and what you found (partial matches, expired tokens, wrong-format values).
-    ```
+  Return the credential value if found, or a detailed report of everywhere you checked and what you found (partial matches, expired tokens, wrong-format values).
+  ```
 
-    Use `Agent(subagent_type: "general-purpose", model: "haiku")` with `run_in_background: true`. Continue to the next service while the hunt runs. When the agent returns, present findings to the user for confirmation.
+  Use `Agent(subagent_type: "general-purpose", model: "haiku")` with `run_in_background: true`. Continue to the next service while the hunt runs. When the agent returns, present findings to the user for confirmation.
 
-  - **"Skip"** → record as skipped in `$PREFS_PATH`, move on.
+- **"Skip"** → record as skipped in `$PREFS_PATH`, move on.
 
 **On selection**, use the chosen value as the source of truth and — with the user's consent — optionally propagate it back to the other sources (e.g. "Also update ~/.zshrc and Doppler to match?"). Default to NO for propagation unless the user opts in.
 

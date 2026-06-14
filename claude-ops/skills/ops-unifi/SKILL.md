@@ -1,7 +1,7 @@
 ---
 name: ops-unifi
 description: UniFi network command center. Full control across the three official UniFi APIs — Site Manager (cloud multi-site oversight), Network Integration (local per-console device/client control), and Protect Integration (cameras/NVR). Plus a predict mode that flags WAN/AP/client anomalies before they page you. Configure once via /ops:setup.
-argument-hint: "[status|sites|devices|clients|isp|sdwan|protect|snapshot|restart|block|predict|setup]"
+argument-hint: '[status|sites|devices|clients|isp|sdwan|protect|snapshot|restart|block|predict|setup]'
 allowed-tools:
   - Bash
   - Read
@@ -54,17 +54,17 @@ Base URL: `https://api.ui.com`
 Auth header: `X-API-Key: ${UNIFI_SM_KEY}`
 Key generation: **unifi.ui.com → (top-right account) → Settings → Control Plane → Integrations → Create API Key** (or developer.ui.com). Key is shown once — store it. Currently read-scoped for most keys; a 429 means you hit the rate limit (back off).
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/v1/hosts` | GET | List every UniFi OS console (host) on the account |
-| `/v1/hosts/{id}` | GET | One console: model, fw, IP, owner, state |
-| `/v1/sites` | GET | List all sites across all hosts |
-| `/v1/devices` | GET | List all adopted devices across all hosts |
-| `/v1/isp-metrics/{type}` | GET | ISP/WAN metrics, `type` = `5m` or `1h` (latency, downtime, throughput) |
-| `/v1/isp-metrics/{type}/query` | POST | Query ISP metrics for specific sites/time ranges |
-| `/v1/sd-wan-configs` | GET | List SD-WAN configurations |
-| `/v1/sd-wan-configs/{id}` | GET | SD-WAN config detail |
-| `/v1/sd-wan-configs/{id}/status` | GET | SD-WAN config deployment status |
+| Endpoint                         | Method | Description                                                            |
+| -------------------------------- | ------ | ---------------------------------------------------------------------- |
+| `/v1/hosts`                      | GET    | List every UniFi OS console (host) on the account                      |
+| `/v1/hosts/{id}`                 | GET    | One console: model, fw, IP, owner, state                               |
+| `/v1/sites`                      | GET    | List all sites across all hosts                                        |
+| `/v1/devices`                    | GET    | List all adopted devices across all hosts                              |
+| `/v1/isp-metrics/{type}`         | GET    | ISP/WAN metrics, `type` = `5m` or `1h` (latency, downtime, throughput) |
+| `/v1/isp-metrics/{type}/query`   | POST   | Query ISP metrics for specific sites/time ranges                       |
+| `/v1/sd-wan-configs`             | GET    | List SD-WAN configurations                                             |
+| `/v1/sd-wan-configs/{id}`        | GET    | SD-WAN config detail                                                   |
+| `/v1/sd-wan-configs/{id}/status` | GET    | SD-WAN config deployment status                                        |
 
 Pagination: responses carry `nextToken`; pass `?pageSize=N&nextToken=…`.
 
@@ -75,20 +75,20 @@ Auth header: `X-API-Key: ${UNIFI_LOCAL_KEY}`
 Key generation: **UniFi Network app → Settings → Control Plane → Integrations → Create API Key** (UniFi OS consoles only — UDM/UDR/UCG/UX/UDW/UCG-Ultra/UniFi OS Server; the legacy self-hosted Network app does **not** support API keys).
 TLS: local consoles use a self-signed cert → all curl calls use `-k`.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/info` | GET | Network application version + metadata |
-| `/sites` | GET | List sites on this console |
-| `/sites/{siteId}/devices` | GET | List adopted devices (APs, switches, gateways) |
-| `/sites/{siteId}/devices/{deviceId}` | GET | Device detail (uptime, fw, ports, radios) |
-| `/sites/{siteId}/devices/{deviceId}/statistics/latest` | GET | Latest device stats (throughput, CPU, mem, uplink) |
-| `/sites/{siteId}/devices/{deviceId}/actions` | POST | Device action — `{"action":"RESTART"}` |
-| `/sites/{siteId}/clients` | GET | Connected clients (wired + wireless) |
-| `/sites/{siteId}/clients/{clientId}` | GET | Client detail (IP, MAC, AP, signal, usage) |
-| `/sites/{siteId}/clients/{clientId}/actions` | POST | Client action — `{"action":"BLOCK"}` / `{"action":"UNBLOCK"}` |
-| `/sites/{siteId}/vouchers` | GET | Hotspot vouchers |
-| `/sites/{siteId}/vouchers` | POST | Create voucher(s) |
-| `/sites/{siteId}/vouchers/{voucherId}` | DELETE | Revoke a voucher |
+| Endpoint                                               | Method | Description                                                   |
+| ------------------------------------------------------ | ------ | ------------------------------------------------------------- |
+| `/info`                                                | GET    | Network application version + metadata                        |
+| `/sites`                                               | GET    | List sites on this console                                    |
+| `/sites/{siteId}/devices`                              | GET    | List adopted devices (APs, switches, gateways)                |
+| `/sites/{siteId}/devices/{deviceId}`                   | GET    | Device detail (uptime, fw, ports, radios)                     |
+| `/sites/{siteId}/devices/{deviceId}/statistics/latest` | GET    | Latest device stats (throughput, CPU, mem, uplink)            |
+| `/sites/{siteId}/devices/{deviceId}/actions`           | POST   | Device action — `{"action":"RESTART"}`                        |
+| `/sites/{siteId}/clients`                              | GET    | Connected clients (wired + wireless)                          |
+| `/sites/{siteId}/clients/{clientId}`                   | GET    | Client detail (IP, MAC, AP, signal, usage)                    |
+| `/sites/{siteId}/clients/{clientId}/actions`           | POST   | Client action — `{"action":"BLOCK"}` / `{"action":"UNBLOCK"}` |
+| `/sites/{siteId}/vouchers`                             | GET    | Hotspot vouchers                                              |
+| `/sites/{siteId}/vouchers`                             | POST   | Create voucher(s)                                             |
+| `/sites/{siteId}/vouchers/{voucherId}`                 | DELETE | Revoke a voucher                                              |
 
 ### C. Protect Integration API — LOCAL (cameras / NVR)
 
@@ -96,19 +96,19 @@ Base URL: `${UNIFI_PROTECT_URL}/proxy/protect/integration/v1`
 Auth header: `X-API-Key: ${UNIFI_PROTECT_KEY}`
 Key generation: **UniFi OS → Protect → Settings → Control Plane → Integrations → Create API Key** (or reuse the UniFi OS console key). `-k` for self-signed cert.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/meta/info` | GET | NVR + Protect application info/version |
-| `/nvrs` | GET | NVR(s) detail (storage, recording mode) |
-| `/cameras` | GET | List cameras |
-| `/cameras/{id}` | GET | Camera detail (state, fw, recording, motion zones) |
-| `/cameras/{id}` | PATCH | Update camera settings (partial JSON — only changed fields) |
-| `/cameras/{id}/snapshot?highQuality=true` | GET | JPEG snapshot (binary) |
-| `/cameras/{id}/rtsps-stream` | GET/POST | Retrieve / manage the RTSPS stream URL |
-| `/sensors` | GET | UniFi Protect sensors |
-| `/lights` | GET | Protect smart lights (`PATCH /lights/{id}` to control) |
-| `/chimes` | GET | Chimes (`PATCH /chimes/{id}`) |
-| `/viewers` | GET | Protect viewers (`PATCH /viewers/{id}` to change live view) |
+| Endpoint                                  | Method   | Description                                                 |
+| ----------------------------------------- | -------- | ----------------------------------------------------------- |
+| `/meta/info`                              | GET      | NVR + Protect application info/version                      |
+| `/nvrs`                                   | GET      | NVR(s) detail (storage, recording mode)                     |
+| `/cameras`                                | GET      | List cameras                                                |
+| `/cameras/{id}`                           | GET      | Camera detail (state, fw, recording, motion zones)          |
+| `/cameras/{id}`                           | PATCH    | Update camera settings (partial JSON — only changed fields) |
+| `/cameras/{id}/snapshot?highQuality=true` | GET      | JPEG snapshot (binary)                                      |
+| `/cameras/{id}/rtsps-stream`              | GET/POST | Retrieve / manage the RTSPS stream URL                      |
+| `/sensors`                                | GET      | UniFi Protect sensors                                       |
+| `/lights`                                 | GET      | Protect smart lights (`PATCH /lights/{id}` to control)      |
+| `/chimes`                                 | GET      | Chimes (`PATCH /chimes/{id}`)                               |
+| `/viewers`                                | GET      | Protect viewers (`PATCH /viewers/{id}` to change live view) |
 
 Real-time: WebSocket `wss://${UNIFI_PROTECT_URL#https://}/proxy/protect/integration/v1/subscribe/devices` (and `/subscribe/events`) streams state changes — used only for live-watch flows, not the default dashboard.
 
@@ -201,22 +201,22 @@ pro_call() {  # pro_call <path> [method] [body]
 
 ## Phase 2 — Route by argument
 
-| Input | Action |
-| ----- | ------ |
-| (empty)                                       | Cross-surface status dashboard |
-| status, dashboard                             | Cross-surface status dashboard |
-| sites, hosts, consoles                        | Site Manager: hosts + sites |
-| devices, device, aps, switches, gateway       | Network: devices per site |
-| clients, who, wifi, online                    | Network: clients |
-| isp, wan, internet, uptime, latency           | Site Manager: ISP/WAN metrics |
-| sdwan, sd-wan                                  | Site Manager: SD-WAN configs |
-| protect, cameras, camera, nvr, surveillance   | Protect: cameras + NVR |
-| snapshot <camera>                             | Protect: camera snapshot |
-| restart, reboot <device>                      | Network: device restart (CONFIRM — Rule 5) |
-| block <client> / unblock <client>             | Network: client block/unblock (CONFIRM — Rule 5) |
-| voucher [create\|list\|revoke]                | Network: hotspot vouchers |
-| predict, insights, anomaly, health            | Predict / insights (cross-surface anomaly scan) |
-| setup, configure, init, token                 | Setup flow |
+| Input                                       | Action                                           |
+| ------------------------------------------- | ------------------------------------------------ |
+| (empty)                                     | Cross-surface status dashboard                   |
+| status, dashboard                           | Cross-surface status dashboard                   |
+| sites, hosts, consoles                      | Site Manager: hosts + sites                      |
+| devices, device, aps, switches, gateway     | Network: devices per site                        |
+| clients, who, wifi, online                  | Network: clients                                 |
+| isp, wan, internet, uptime, latency         | Site Manager: ISP/WAN metrics                    |
+| sdwan, sd-wan                               | Site Manager: SD-WAN configs                     |
+| protect, cameras, camera, nvr, surveillance | Protect: cameras + NVR                           |
+| snapshot <camera>                           | Protect: camera snapshot                         |
+| restart, reboot <device>                    | Network: device restart (CONFIRM — Rule 5)       |
+| block <client> / unblock <client>           | Network: client block/unblock (CONFIRM — Rule 5) |
+| voucher [create\|list\|revoke]              | Network: hotspot vouchers                        |
+| predict, insights, anomaly, health          | Predict / insights (cross-surface anomaly scan)  |
+| setup, configure, init, token               | Setup flow                                       |
 
 Pick the first site automatically when a surface needs a `siteId` and only one site exists; otherwise present sites via `AskUserQuestion` (max 4, Rule 1) and let the user choose.
 
@@ -417,15 +417,15 @@ Create + revoke require `AskUserQuestion` confirmation.
 
 ## PREDICT / INSIGHTS (`predict`, `insights`, `anomaly`, `health`)
 
-Cross-surface anomaly scan that surfaces problems *before* they become outages. Pull ISP metrics (Site Manager), device stats (Network), and camera state (Protect), then score against simple thresholds and trailing baselines. Read-only — never changes state.
+Cross-surface anomaly scan that surfaces problems _before_ they become outages. Pull ISP metrics (Site Manager), device stats (Network), and camera state (Protect), then score against simple thresholds and trailing baselines. Read-only — never changes state.
 
 Signals scored:
 
-1. **WAN degradation** — `downtimeSec > 0` in the trailing window, `packetLossPct > 1`, or `avgLatencyMs > 1.5×` the site's 24h baseline → *WAN trending unhealthy*.
-2. **AP/switch flapping** — any device with `state` toggling or `uptimeSec` reset within the window (recent reboot), or CPU/mem `> 85%` sustained → *device under stress*.
-3. **Client RF health** — share of wireless clients with `signal < -72 dBm` or high retry rate > 20% → *coverage/interference risk in [zone/AP]*.
-4. **Uplink saturation** — any uplink at `> 90%` of negotiated speed sustained → *capacity ceiling near*.
-5. **Protect** — any camera `state != CONNECTED`, NVR storage `> 90%`, or expected-recording camera not recording → *surveillance gap*.
+1. **WAN degradation** — `downtimeSec > 0` in the trailing window, `packetLossPct > 1`, or `avgLatencyMs > 1.5×` the site's 24h baseline → _WAN trending unhealthy_.
+2. **AP/switch flapping** — any device with `state` toggling or `uptimeSec` reset within the window (recent reboot), or CPU/mem `> 85%` sustained → _device under stress_.
+3. **Client RF health** — share of wireless clients with `signal < -72 dBm` or high retry rate > 20% → _coverage/interference risk in [zone/AP]_.
+4. **Uplink saturation** — any uplink at `> 90%` of negotiated speed sustained → _capacity ceiling near_.
+5. **Protect** — any camera `state != CONNECTED`, NVR storage `> 90%`, or expected-recording camera not recording → _surveillance gap_.
 
 ```bash
 SITE=$(net_call "/sites" | jq -r '.data[0].id // .data[0].internalReference // empty')
@@ -573,16 +573,16 @@ After the main output, evaluate cross-channel triggers (suggestions only — nev
 
 ## Phase 4 — Error handling
 
-| Failure | Behavior |
-|---------|----------|
-| Site Manager 401 | Cloud key expired/invalid. Tell user to regenerate at unifi.ui.com. |
-| Site Manager 429 | Rate-limited. Back off; note "site-manager throttled" and use cached/local data. |
+| Failure                            | Behavior                                                                                                                            |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Site Manager 401                   | Cloud key expired/invalid. Tell user to regenerate at unifi.ui.com.                                                                 |
+| Site Manager 429                   | Rate-limited. Back off; note "site-manager throttled" and use cached/local data.                                                    |
 | Local connection refused / timeout | Console unreachable on LAN (off-site or wrong IP). Fall back to Site Manager for read-only fleet view; note `transport=cloud-only`. |
-| Local 401 | Network/Protect key invalid. Tell user to regenerate in the app. |
-| Protect 404 on integration paths | Protect Integration API not enabled / older firmware. Note "protect integration unavailable". |
-| All surfaces fail | Report which failed; write `action_needed: "unifi_unreachable"` to daemon-health; exit with banner. |
-| jq missing | Print raw JSON, suggest installing jq. |
-| No credentials at all | Exit gracefully with `/ops:setup --section network`. |
+| Local 401                          | Network/Protect key invalid. Tell user to regenerate in the app.                                                                    |
+| Protect 404 on integration paths   | Protect Integration API not enabled / older firmware. Note "protect integration unavailable".                                       |
+| All surfaces fail                  | Report which failed; write `action_needed: "unifi_unreachable"` to daemon-health; exit with banner.                                 |
+| jq missing                         | Print raw JSON, suggest installing jq.                                                                                              |
+| No credentials at all              | Exit gracefully with `/ops:setup --section network`.                                                                                |
 
 Audit every state-changing call (device RESTART, client BLOCK/UNBLOCK, camera PATCH, voucher create/revoke) to `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/ops-unifi-audit.log` with timestamp, action, target id, and result.
 

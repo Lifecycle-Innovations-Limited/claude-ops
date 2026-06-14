@@ -308,7 +308,7 @@ if (process.argv.includes('--selftest')) {
       update_id: 500001,
       message: {
         message_id: 42,
-        from: { id: mockOwnerId, username: 'owner', first_name: 'Sam' },
+        from: { id: mockOwnerId, username: 'owner', first_name: 'the owner' },
         chat: { id: mockOwnerId },
         text: 'Hello Claude',
         date: Math.floor(Date.now() / 1000),
