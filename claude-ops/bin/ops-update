@@ -182,8 +182,13 @@ else
     if [[ "$DRY" -eq 1 ]]; then
       say "  ${c_dim}[dry-run] would rewrite $f ($(echo "$olds" | tr '\n' ' ')→ $NEW)${c_rst}"; rewrote=$((rewrote+1)); return 0
     fi
-    sed -i -E "s#(cache/$MARKETPLACE/$PLUGIN/)[0-9]+\.[0-9]+\.[0-9]+#\1$NEW#g" "$f" \
-      && { ok "rewrote $f → $NEW"; rewrote=$((rewrote+1)); } || warn "rewrite failed: $f"
+    # Portable in-place rewrite — BSD sed treats `-i -E` as `-i` with suffix "-E"
+    # (extended-regex OFF → `\1` undefined). Use a temp file so it works on macOS + GNU.
+    if sed -E "s#(cache/$MARKETPLACE/$PLUGIN/)[0-9]+\.[0-9]+\.[0-9]+#\1$NEW#g" "$f" > "$f.optmp" 2>/dev/null && mv "$f.optmp" "$f"; then
+      ok "rewrote $f → $NEW"; rewrote=$((rewrote+1))
+    else
+      rm -f "$f.optmp" 2>/dev/null; warn "rewrite failed: $f"
+    fi
   }
   for d in "${SCAN_DIRS[@]}"; do
     [[ -d "$d" ]] || continue
