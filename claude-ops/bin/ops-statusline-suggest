@@ -1,0 +1,261 @@
+#!/bin/sh
+# ops-statusline-suggest — registry-driven statusline.config.json generator.
+#
+# Reads the ops partner registry and project list from preferences.json, detects
+# which integrations are actually configured (by checking env vars, plugin
+# settings, and prefs keys), then emits a recommended statusline.config.json
+# tailored to the user's configured stack.
+#
+# Usage:
+#   ops-statusline-suggest [--preset minimal|cockpit|full] [--theme <name>]
+#
+# Output: JSON on stdout, diagnostics on stderr.
+# Exit 0 on success. Uses only jq + POSIX sh — no network, no npm.
+
+set -e
+
+# ── Args ─────────────────────────────────────────────────────────────────────
+PRESET="cockpit"
+THEME="cockpit"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --preset) PRESET="$2"; shift 2 ;;
+    --theme)  THEME="$2";  shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+case "$PRESET" in
+  minimal|cockpit|full) ;;
+  *) echo "Unknown preset '$PRESET', defaulting to cockpit" >&2; PRESET="cockpit" ;;
+esac
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+PREFS_PATH="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/  2>/dev/null | sort -V | tail -1)}"
+
+# ── Detect configured integrations ────────────────────────────────────────────
+# Returns 0 (configured) or 1 (not configured) for each integration.
+# Detection order: preferences.json flag → env var → non-empty prefs value.
+is_configured() {
+  _svc="$1"
+  # Check *_enabled flag in prefs
+  _flag=$(jq -r --arg k "${_svc}_enabled" '.[$k] // false' "$PREFS_PATH" 2>/dev/null)
+  [ "$_flag" = "true" ] && return 0
+  # Check env var presence
+  _envkey=$(printf '%s' "$_svc" | tr '[:lower:]' '[:upper:]')
+  eval "_envval=\${${_envkey}_API_KEY:-}\${${_envkey}_SECRET_KEY:-}\${${_envkey}_TOKEN:-}"
+  [ -n "$_envval" ] && return 0
+  return 1
+}
+
+# Read prefs safely
+_prefs_exists=0
+[ -f "$PREFS_PATH" ] && _prefs_exists=1
+
+# ── Detect project registry ───────────────────────────────────────────────────
+_registry_file="${PLUGIN_ROOT}scripts/registry.json"
+[ ! -f "$_registry_file" ] && _registry_file="${HOME}/.claude/config/registry.json"
+
+_project_count=0
+_projects_json="[]"
+if [ -f "$_registry_file" ] 2>/dev/null; then
+  _project_count=$(jq '. | if type == "array" then length elif type == "object" then (.projects // [] | length) else 0 end' "$_registry_file" 2>/dev/null || echo 0) || true
+fi
+
+# Also check prefs for project list
+if [ "$_prefs_exists" = "1" ]; then
+  _prefs_proj=$(jq -r '(.projects // []) | length' "$PREFS_PATH" 2>/dev/null || echo 0) || true
+  [ "${_prefs_proj:-0}" -gt "${_project_count:-0}" ] && _project_count="$_prefs_proj" || true
+fi
+
+echo "Detected ${_project_count} projects in registry" >&2
+
+# ── Service detection ─────────────────────────────────────────────────────────
+# For each service, detect if it's configured and classify into widget categories.
+_has_stripe=0; _has_revenuecat=0; _has_shopify=0
+_has_ecs=0; _has_sentry=0; _has_linear=0
+_has_meta=0; _has_klaviyo=0; _has_ga4=0
+_has_spotify=0; _has_shipbob=0; _has_doppler=0
+
+if [ "$_prefs_exists" = "1" ]; then
+  _has_stripe=$(jq -r 'if (.stripe_enabled == true or (.stripe_secret_key // "") != "") then 1 else 0 end' "$PREFS_PATH" 2>/dev/null || echo 0)
+  _has_revenuecat=$(jq -r 'if (.revenuecat_enabled == true or (.revenuecat_api_key // "") != "") then 1 else 0 end' "$PREFS_PATH" 2>/dev/null || echo 0)
+  _has_shopify=$(jq -r 'if (.shopify_enabled == true or (.shopify_store_url // "") != "") then 1 else 0 end' "$PREFS_PATH" 2>/dev/null || echo 0)
+  _has_sentry=$(jq -r 'if (.sentry_enabled == true or (.sentry_org // "") != "") then 1 else 0 end' "$PREFS_PATH" 2>/dev/null || echo 0)
+  _has_linear=$(jq -r 'if (.linear_enabled == true or (.linear_team // "") != "") then 1 else 0 end' "$PREFS_PATH" 2>/dev/null || echo 0)
+  _has_meta=$(jq -r 'if (.meta_ads_enabled == true or (.meta_ads_token // "") != "") then 1 else 0 end' "$PREFS_PATH" 2>/dev/null || echo 0)
+  _has_klaviyo=$(jq -r 'if (.klaviyo_enabled == true or (.klaviyo_private_key // "") != "") then 1 else 0 end' "$PREFS_PATH" 2>/dev/null || echo 0)
+  _has_ga4=$(jq -r 'if (.ga4_enabled == true or ((.ga4_property_id // 0) > 0)) then 1 else 0 end' "$PREFS_PATH" 2>/dev/null || echo 0)
+  _has_doppler=$(jq -r 'if (.doppler_enabled == true or (.doppler_project // "") != "") then 1 else 0 end' "$PREFS_PATH" 2>/dev/null || echo 0)
+  _has_shipbob=$(jq -r 'if (.shipbob_enabled == true or (.shipbob_access_token // "") != "") then 1 else 0 end' "$PREFS_PATH" 2>/dev/null || echo 0)
+fi
+
+# Check env vars as fallback
+[ -n "${STRIPE_SECRET_KEY:-}${STRIPE_API_KEY:-}" ] && _has_stripe=1
+[ -n "${REVENUECAT_API_KEY:-}" ] && _has_revenuecat=1
+[ -n "${SHOPIFY_STORE_URL:-}${SHOPIFY_ADMIN_TOKEN:-}" ] && _has_shopify=1
+[ -n "${SENTRY_AUTH_TOKEN:-}${SENTRY_ORG:-}" ] && _has_sentry=1
+[ -n "${LINEAR_API_KEY:-}" ] && _has_linear=1
+[ -n "${META_ADS_TOKEN:-}${META_ACCESS_TOKEN:-}" ] && _has_meta=1
+[ -n "${KLAVIYO_PRIVATE_KEY:-}" ] && _has_klaviyo=1
+[ -n "${GA4_PROPERTY_ID:-}" ] && _has_ga4=1
+[ -n "${DOPPLER_TOKEN:-}" ] && _has_doppler=1
+
+# Check for ECS/AWS integration (aws CLI available and region configured)
+# C3: non-fatal — aws probe can fail (no creds, no network) without aborting the run
+command -v aws >/dev/null 2>&1 && aws sts get-caller-identity >/dev/null 2>&1 && _has_ecs=1 || true
+
+echo "Integrations detected: stripe=${_has_stripe} revenuecat=${_has_revenuecat} shopify=${_has_shopify} sentry=${_has_sentry} linear=${_has_linear} ecs=${_has_ecs} meta=${_has_meta} klaviyo=${_has_klaviyo} ga4=${_has_ga4}" >&2
+
+# ── Build projects array ──────────────────────────────────────────────────────
+# Read project registry and map each project to suggested badges based on stack.
+_projects_out="[]"
+
+_read_projects() {
+  # Try registry.json first
+  if [ -f "$_registry_file" ]; then
+    jq -r '
+      (if type == "array" then . elif type == "object" then (.projects // []) else [] end)
+      | .[] | "\(.alias // .name // .key // "unknown") \(.infra.platform // "unknown") \(.revenue.model // "unknown") \(.org // "")"
+    ' "$_registry_file" 2>/dev/null
+  fi
+}
+
+# Build project entries from registry
+_proj_entries=""
+_idx=0
+
+while IFS=' ' read -r _alias _platform _revenue_model _org; do
+  [ -z "$_alias" ] && continue
+  [ "$_idx" -ge 8 ] && break  # cap at 8 projects for readability
+
+  # Determine badge set from project type + configured integrations
+  _badges="[]"
+  _labels=""
+  _match=$(printf '%s' "$_alias" | tr '[:upper:]' '[:lower:]')
+
+  # ECS/infra badge (AWS platform)
+  case "$_platform" in aws|ecs|fargate)
+    [ "$_has_ecs" = "1" ] && _labels="${_labels}\"ecs\"," ;;
+  esac
+
+  # Revenue badges based on model
+  case "$_revenue_model" in
+    saas|subscription)
+      [ "$_has_stripe" = "1" ] && _labels="${_labels}\"mrr\","
+      [ "$_has_revenuecat" = "1" ] && _labels="${_labels}\"mobile_subs\","
+      ;;
+    marketplace|ecom*)
+      [ "$_has_shopify" = "1" ] && _labels="${_labels}\"orders\","
+      [ "$_has_stripe" = "1" ] && _labels="${_labels}\"revenue\","
+      ;;
+  esac
+
+  # Error tracking
+  [ "$_has_sentry" = "1" ] && _labels="${_labels}\"errors\","
+  # Issue tracking
+  [ "$_has_linear" = "1" ] && _labels="${_labels}\"issues\","
+
+  # Remove trailing comma and wrap as JSON array
+  _labels="${_labels%,}"
+  [ -z "$_labels" ] && _labels_json="[]" || _labels_json="[${_labels}]"
+
+  # H2: use jq to build the JSON entry so special chars in alias/match can't break it
+  _entry=$(jq -n --arg k "$_alias" --arg l "$_alias" --arg m "$_match" \
+    --argjson b "$_labels_json" \
+    '{"key":$k,"label":$l,"match":$m,"badges":$b}') || true
+
+  if [ -n "$_entry" ]; then
+    if [ -z "$_proj_entries" ]; then
+      _proj_entries="$_entry"
+    else
+      _proj_entries="${_proj_entries},${_entry}"
+    fi
+  fi
+
+  _idx=$(( _idx + 1 ))
+done << EOF
+$(_read_projects)
+EOF
+
+[ -n "$_proj_entries" ] && _projects_out="[${_proj_entries}]"
+
+# ── Preset-specific settings ──────────────────────────────────────────────────
+case "$PRESET" in
+  minimal)
+    _ctx_w=6; _quota_w=5; _carousel=15
+    _fleet_bg="false"; _fleet_rot="true"; _fleet_sdk="false"; _fleet_cache="false"
+    _sys_cpu="false"; _sys_ram="true"; _sys_disk="false"
+    _carousel_pool='["cost","global_ops"]'
+    ;;
+  full)
+    _ctx_w=12; _quota_w=10; _carousel=15
+    _fleet_bg="true"; _fleet_rot="true"; _fleet_sdk="true"; _fleet_cache="true"
+    _sys_cpu="true"; _sys_ram="true"; _sys_disk="true"
+    _carousel_pool='["cost","lines","global_ops"]'
+    ;;
+  cockpit|*)
+    _ctx_w=10; _quota_w=8; _carousel=15
+    _fleet_bg="true"; _fleet_rot="true"; _fleet_sdk="true"; _fleet_cache="true"
+    _sys_cpu="true"; _sys_ram="true"; _sys_disk="true"
+    _carousel_pool='["cost","lines","global_ops"]'
+    ;;
+esac
+
+# ── Emit config JSON ──────────────────────────────────────────────────────────
+cat <<JSONEOF
+{
+  "_comment": "Auto-generated by ops-statusline-suggest on $(date -u +%Y-%m-%dT%H:%M:%SZ). Edit freely — re-run /ops:statusline config to regenerate.",
+  "_detected": {
+    "preset": "${PRESET}",
+    "projects_found": ${_project_count},
+    "integrations": {
+      "stripe": $([ "$_has_stripe" = "1" ] && echo true || echo false),
+      "revenuecat": $([ "$_has_revenuecat" = "1" ] && echo true || echo false),
+      "shopify": $([ "$_has_shopify" = "1" ] && echo true || echo false),
+      "sentry": $([ "$_has_sentry" = "1" ] && echo true || echo false),
+      "linear": $([ "$_has_linear" = "1" ] && echo true || echo false),
+      "ecs_aws": $([ "$_has_ecs" = "1" ] && echo true || echo false),
+      "meta_ads": $([ "$_has_meta" = "1" ] && echo true || echo false),
+      "klaviyo": $([ "$_has_klaviyo" = "1" ] && echo true || echo false),
+      "ga4": $([ "$_has_ga4" = "1" ] && echo true || echo false)
+    }
+  },
+
+  "theme": "${THEME}",
+
+  "gauge_width": {
+    "ctx":   ${_ctx_w},
+    "quota": ${_quota_w}
+  },
+
+  "carousel_interval_sec": ${_carousel},
+
+  "widgets": {
+    "line1": ["ctx_gauge", "quota_gauge", "pace_badge", "cache_badge", "plan_badge", "account_arrow"],
+    "line2": ["location", "model", "git_branch", "tasks", "fleet", "sys_metrics", "carousel"],
+    "line3": ["project_rotate"]
+  },
+
+  "fleet": {
+    "show_bg_agents":    ${_fleet_bg},
+    "show_rotation":     ${_fleet_rot},
+    "show_sdk_fallback": ${_fleet_sdk},
+    "show_cache_ttl":    ${_fleet_cache}
+  },
+
+  "sys_metrics": {
+    "show_cpu":          ${_sys_cpu},
+    "show_ram":          ${_sys_ram},
+    "show_disk":         ${_sys_disk},
+    "show_load_warning": true,
+    "show_disk_warning": true
+  },
+
+  "carousel_pool": ${_carousel_pool},
+
+  "projects": ${_projects_out}
+}
+JSONEOF
