@@ -182,20 +182,26 @@ export function sweepBedrockSessions(config, state, log) {
     if (!bgSession) {
       // Bedrock claude PID with no resolvable bg-session record — can't respawn
       // it by id (could be a foreground/--resume host). Log loudly; skip.
-      log(`[bedrock-watchdog] pid ${sess.pid} on Bedrock but no bg-session id resolved — cannot force-swap (OAuth target=${target})`);
+      log(
+        `[bedrock-watchdog] pid ${sess.pid} on Bedrock but no bg-session id resolved — cannot force-swap (OAuth target=${target})`,
+      );
       continue;
     }
 
     if (hasHotSwapHold(sess.pid)) {
       // Honor the hold, but warn loudly — a held session is still bleeding Bedrock.
-      log(`[bedrock-watchdog] ⚠️ session ${bgSession.id} (pid ${sess.pid}) is hot-swap HELD but STILL ON METERED BEDROCK (OAuth target=${target} available) — leaving per hold marker, but money is bleeding`);
+      log(
+        `[bedrock-watchdog] ⚠️ session ${bgSession.id} (pid ${sess.pid}) is hot-swap HELD but STILL ON METERED BEDROCK (OAuth target=${target} available) — leaving per hold marker, but money is bleeding`,
+      );
       continue;
     }
 
     // FORCE swap now. Do NOT defer busy/loop sessions for Bedrock.
     try {
       recordSessionLease(bgSession.id, target, bgSession.pid);
-      log(`[bedrock-watchdog] FORCE-swapping ${bgSession.id} (pid ${sess.pid}, status ${bgSession.status}) Bedrock→OAuth ${target} (no defer — metered)`);
+      log(
+        `[bedrock-watchdog] FORCE-swapping ${bgSession.id} (pid ${sess.pid}, status ${bgSession.status}) Bedrock→OAuth ${target} (no defer — metered)`,
+      );
       doRespawn(bgSession, log);
       swapped++;
       swappedPids.push(sess.pid);
@@ -238,7 +244,9 @@ export function verifyBedrockSwaps(swappedPids, log) {
     const detail = net.available
       ? ` (live bedrock-runtime traffic on: ${[...net.pids].join(',') || 'none'})`
       : ' (network corroboration unavailable)';
-    log(`[bedrock-watchdog] post-swap VERIFY: ${stillBedrock.length} pid(s) still report USE_BEDROCK=1: ${stillBedrock.join(',')}${detail}`);
+    log(
+      `[bedrock-watchdog] post-swap VERIFY: ${stillBedrock.length} pid(s) still report USE_BEDROCK=1: ${stillBedrock.join(',')}${detail}`,
+    );
   } else if (swappedPids.length) {
     log(`[bedrock-watchdog] post-swap VERIFY: all ${swappedPids.length} swapped pid(s) off Bedrock`);
   }

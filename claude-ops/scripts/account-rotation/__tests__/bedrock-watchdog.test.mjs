@@ -12,11 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-  scanBedrockSessions,
-  scanBedrockNetwork,
-  verifyBedrockSwaps,
-} from '../bedrock-watchdog.mjs';
+import { scanBedrockSessions, scanBedrockNetwork, verifyBedrockSwaps } from '../bedrock-watchdog.mjs';
 
 test('scanBedrockSessions: never throws, returns an array', () => {
   const r = scanBedrockSessions();

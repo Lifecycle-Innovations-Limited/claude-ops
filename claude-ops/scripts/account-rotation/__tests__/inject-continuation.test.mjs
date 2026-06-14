@@ -19,6 +19,10 @@ test('injectContinuation: default-off is a no-op (no log, no throw)', () => {
   // test process the flag is unset, so this must short-circuit before any work.
   assert.equal(process.env.CLAUDE_ROTATION_INJECT_CONTINUATION, undefined);
   let logged = false;
-  assert.doesNotThrow(() => injectContinuation('unit-test-sid', () => { logged = true; }));
+  assert.doesNotThrow(() =>
+    injectContinuation('unit-test-sid', () => {
+      logged = true;
+    }),
+  );
   assert.equal(logged, false, 'must not log or do work when flag is off');
 });
