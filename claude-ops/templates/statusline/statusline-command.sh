@@ -172,12 +172,12 @@ R="${ESC}[0m"
 # ── Project list from config ──────────────────────────────────────────────────
 # Each project: { "key": "myapp", "label": "MyApp", "match": "myapp", "badges": ["ecs","orders"] }
 # Built-in default: empty (no per-project badges).
-CFG_proj_keys=""
+CFG_proj_slugs=""
 CFG_proj_count=0
 if [ -n "$_cfg_file" ]; then
   CFG_proj_count=$(jq -r '(.projects // []) | length' "$_cfg_file" 2>/dev/null || echo 0)
   if [ "${CFG_proj_count:-0}" -gt 0 ] 2>/dev/null; then
-    CFG_proj_keys=$(jq -r '(.projects // []) | map(.key) | join(" ")' "$_cfg_file" 2>/dev/null)
+    CFG_proj_slugs=$(jq -r '(.projects // []) | map(.key) | join(" ")' "$_cfg_file" 2>/dev/null)
   fi
 fi
 
@@ -674,7 +674,7 @@ else
   # Generic schema: { "badges": [ { "icon": "◉", "value": "3/3", "color": "ok|warn|danger|dim" } ] }
   proj_badges=""
   if [ "${CFG_proj_count:-0}" -gt 0 ] 2>/dev/null; then
-    for _pk in $CFG_proj_keys; do
+    for _pk in $CFG_proj_slugs; do
       _pbf="$ops_dir/project-${_pk}.json"
       if [ -s "$_pbf" ] && [ $(( now - $(mtime "$_pbf") )) -lt 7200 ]; then
         _label=$(jq -r '.label // ""' "$_pbf" 2>/dev/null)
@@ -762,7 +762,7 @@ cur_proj=""
 if [ "${CFG_proj_count:-0}" -gt 0 ] 2>/dev/null && [ -n "$_cfg_file" ]; then
   cwd_lc=$(printf '%s' "$cwd" | tr '[:upper:]' '[:lower:]')
   # Check each configured project's match substring
-  for _pk in $CFG_proj_keys; do
+  for _pk in $CFG_proj_slugs; do
     _match=$(jq -r --arg k "$_pk" '.projects[] | select(.key==$k) | .match // ""' "$_cfg_file" 2>/dev/null)
     case "$cwd_lc" in
       *"$_match"*) cur_proj="$_pk"; break ;;
