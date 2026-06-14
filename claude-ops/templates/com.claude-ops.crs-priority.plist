@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CRS account-priority daemon (claude-relay-service pool auto-prioritization).
+
+  Schedule: every 120s. Equivalent systemd: OnUnitActiveSec=120s.
+  The installer (scripts/install-crs-priority-agent.sh) substitutes
+  __WRAPPER_PATH__, __LOG_DIR__, __HOME__ and writes the rendered copy to
+  ~/Library/LaunchAgents/com.claude-ops.crs-priority.plist before:
+    launchctl bootstrap "gui/$(id -u)" <plist>
+
+  To uninstall:
+    launchctl bootout "gui/$(id -u)/com.claude-ops.crs-priority"
+    rm ~/Library/LaunchAgents/com.claude-ops.crs-priority.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.claude-ops.crs-priority</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__WRAPPER_PATH__</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>120</integer>
+
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/crs-priority-launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/crs-priority-launchd.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>NODE_NO_WARNINGS</key>
+    <string>1</string>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+</dict>
+</plist>

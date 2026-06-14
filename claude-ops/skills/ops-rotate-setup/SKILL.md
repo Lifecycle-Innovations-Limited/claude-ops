@@ -1,7 +1,7 @@
 ---
 name: ops-rotate-setup
 description: Interactive OAuth init wizard for the multi-account Claude rotator. Walks through every account in the rotation config and, for any account missing a valid keychain token, delegates to the proven `rotate.mjs` magic-link flow (browser-driver cascade + Gmail polling), which writes the verified OAuth token to `Claude-Rotation-<key>` (key = account label or email, keychain account `$USER`). Re-runnable any time. Standalone alias of the same step inside `/ops:setup`.
-argument-hint: "[--all|--account <email>|--add]"
+argument-hint: "[--all|--account <email>|--add|--crs]"
 allowed-tools:
   - Bash
   - Read
@@ -178,6 +178,62 @@ Result for <email>:
 
 If success and no more accounts remain, jump to **Step 5**.
 
+## Step 4.5 — CRS relay-pool priority daemon (optional)
+
+If the user runs a **claude-relay-service** (CRS) pool (load-balances Claude
+requests across many accounts at once, exposing a per-account `schedulable`
+flag), offer to install the **priority daemon** that auto-deprioritizes
+near-maxed accounts and re-enables them on recovery. This is independent of the
+keychain rotator above — skip it for keychain-only setups.
+
+`AskUserQuestion`:
+
+```
+Do you run a claude-relay-service (CRS) pool you want auto-prioritized?
+  [Yes — configure + install]   — set base URL + admin creds, install the 120s daemon
+  [Not now]                     — skip (you can run /ops:rotate-setup again later)
+  [What is this?]               — one-paragraph explainer, then re-ask
+```
+
+On **[Yes]**:
+
+1. **Base URL + admin user.** Ask for the CRS base URL (default
+   `http://127.0.0.1:3000`) and admin username (default `cradmin`). Write them
+   into the rotator config's `crs` block (create from `config.example.json` if
+   missing), and set `crs.enabled=true`:
+   ```bash
+   CFG="$USER_CFG"
+   jq --arg url "$CRS_URL" --arg u "$CRS_USER" \
+      '.crs = ((.crs // {}) + {enabled:true, baseUrl:$url, adminUser:$u})' \
+      "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+   ```
+2. **Admin password → credential store** (never written to config). Ask the user
+   to paste the CRS admin password, then:
+   ```bash
+   CRED="${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh"
+   ACCT="${CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT:-$USER}"
+   printf '%s' "$CRS_ADMIN_PW" | bash "$CRED" set-stdin "CRS-Admin-$CRS_USER" "$ACCT"
+   ```
+   (The CRS admin password is printed once in the container's
+   `data/init.json` — `adminUsername`/`adminPassword` — on first boot.)
+3. **Smoke-test before installing.** Confirm the creds + reachability with a
+   dry-run tick (no writes):
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/account-rotation/crs-priority-daemon.sh" --status
+   ```
+   If it errors (login failed / unreachable), surface the message and let the
+   user re-enter creds — do NOT install a broken daemon.
+4. **Install the timer** (background-friendly):
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-crs-priority-agent.sh"
+   ```
+   macOS → launchd every 120s (RunAtLoad fires the first tick). Linux → the
+   installer prints the equivalent systemd-timer snippet.
+
+Tuning (optional, `crs` block): `off5h`/`off7d` (deprioritize thresholds),
+`on5h`/`on7d` (re-enable thresholds, hysteresis), `floor` (min usable accounts),
+`freshMinutes` (max age of utilization data trusted for proactive deprioritize).
+
 ## Step 5 — Summary
 
 ```
@@ -191,11 +247,16 @@ If success and no more accounts remain, jump to **Step 5**.
 
  Config: ~/.claude/plugins/data/ops-ops-marketplace/account-rotation-config.json
  Keychain: Claude-Rotation-<key> (account: $USER)  ·  key = label or email
+ CRS priority daemon: ✓ installed (every 120s) | ✗ not configured
 
  To enable automatic rotation, open /plugins → claude-ops → settings and
  toggle "Multi-account Claude rotator" (account_rotation_enabled).
 ──────────────────────────────────────────────────────
 ```
+
+(Show the CRS line only if Step 4.5 ran. The CRS daemon is independent of the
+`account_rotation_enabled` toggle — it is gated by `crs.enabled` in config +
+whether its launchd/systemd timer is installed.)
 
 Exit. Do NOT auto-enable `account_rotation_enabled` — that decision belongs
 to the user, made explicitly through the plugin settings UI.
@@ -205,6 +266,7 @@ to the user, made explicitly through the plugin settings UI.
 - `--all` (default): full wizard as described above.
 - `--account <email>`: skip Step 2; only init the matching account.
 - `--add`: skip token check; jump straight to Step 2 add loop, then init.
+- `--crs`: jump straight to **Step 4.5** (configure + install the CRS priority daemon), skipping the keychain-account OAuth steps.
 
 ## Failure modes
 
@@ -215,3 +277,5 @@ to the user, made explicitly through the plugin settings UI.
 | token still `✗` after success | account `label`/`email` mismatch vs config | Confirm the config `key` (`label // email`) matches the `Claude-Rotation-<key>` service name |
 | no CDP browser available | no Chrome on `:9222` and none installed | rotate.mjs falls back to bundled Chromium, which Turnstile may block — install/launch Chrome so the cascade can attach |
 | Google SSO / 2FA prompt | Workspace-domain account needs interactive Google login | Let the user complete login in the cascade's visible Chrome; do NOT auto-solve 2FA |
+| CRS `--status` "login failed" | wrong admin user/password or CRS not reachable | Re-enter creds (Step 4.5); admin creds are in the CRS container `data/init.json`; verify `curl $CRS_URL/health` |
+| CRS daemon installed but no effect | `crs.enabled=false`, or all accounts already correctly flagged | Check `crs.enabled` in config; `tail logs/crs-priority.log`; a steady-state tick logs `0 change(s)` |
