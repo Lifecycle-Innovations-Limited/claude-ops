@@ -19,43 +19,38 @@
 //
 // Used by rotate.mjs (post-rotation) and daemon.mjs (periodic deferred sweep).
 
-import { readFileSync, readdirSync, writeFileSync, unlinkSync, statSync, existsSync, mkdirSync, renameSync } from 'fs';
+import {
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  unlinkSync,
+  statSync,
+  existsSync,
+  openSync,
+  readSync,
+  closeSync,
+} from 'fs';
 import { execFileSync, execSync } from 'child_process';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { homedir } from 'os';
+import { fileURLToPath } from 'url';
+import { getTokenForSession, extractAccessToken, readLeases, recordSessionLease } from './session-router.mjs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const CONFIG_PATH = join(__dirname, 'config.json');
+
+function readConfig() {
+  try {
+    return JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+  } catch {
+    return { accounts: [] };
+  }
+}
+
 
 const SESSIONS_DIR = join(homedir(), '.claude', 'sessions');
-// Markers live in a user-private dir (0700), not the world-writable OS temp dir,
-// to avoid symlink/predictable-name attacks on the shared /tmp.
-const MARKER_DIR = join(homedir(), '.claude', 'rotation-markers');
-function ensureMarkerDir() {
-  try {
-    mkdirSync(MARKER_DIR, { recursive: true, mode: 0o700 });
-  } catch {}
-}
-const LEGACY_TMP_DIR = '/tmp';
-const DEFERRED_PREFIX = 'claude-respawn-deferred-';
-const RESPAWNED_MARKER = (id) => join(MARKER_DIR, `claude-rotation-respawned-${id}`);
-const DEFERRED_MARKER = (id) => join(MARKER_DIR, `${DEFERRED_PREFIX}${id}`);
-
-/** Move deferred markers left under /tmp by pre-upgrade daemons into MARKER_DIR. */
-function migrateLegacyDeferredMarkers() {
-  ensureMarkerDir();
-  let legacy = [];
-  try {
-    legacy = readdirSync(LEGACY_TMP_DIR).filter((f) => f.startsWith(DEFERRED_PREFIX));
-  } catch {
-    return;
-  }
-  for (const f of legacy) {
-    const from = join(LEGACY_TMP_DIR, f);
-    const to = join(MARKER_DIR, f);
-    try {
-      if (existsSync(to)) unlinkSync(from);
-      else renameSync(from, to);
-    } catch {}
-  }
-}
+const RESPAWNED_MARKER = (id) => `/tmp/claude-rotation-respawned-${id}`;
+const DEFERRED_MARKER = (id) => `/tmp/claude-respawn-deferred-${id}`;
 const RESPAWN_THROTTLE_MS = 10 * 60_000; // never respawn the same session twice in 10 min
 const BUSY_FORCE_AFTER_MS = 90 * 60_000; // busy this long after rotation → respawn anyway
 
@@ -102,6 +97,49 @@ function markerFresh(path, maxAgeMs) {
   }
 }
 
+// /loop sessions are idle BY DESIGN between iterations, and their loop timer
+// (CronCreate/ScheduleWakeup) is session-only — a respawn wipes it and the
+// loop never fires again (observed 2026-06-12: logmonitor 41e6eaf0 killed
+// every ~10min by the idle-respawn pass, 15m loop never survived to fire).
+// Treat them like busy: defer, force-respawn only after BUSY_FORCE_AFTER_MS.
+export function isLoopSession(id) {
+  let st;
+  try {
+    st = JSON.parse(
+      readFileSync(join(homedir(), '.claude', 'jobs', String(id), 'state.json'), 'utf8'),
+    );
+  } catch {
+    return false;
+  }
+  if (/^\/loop\b/.test(st.detail || '')) return true;
+  // `detail` is the live narration line and gets overwritten — the durable
+  // signal is a /loop invocation (or autonomous-loop sentinel) in the
+  // transcript. Scan the tail only (loops re-arm near the end).
+  const transcript =
+    st.linkScanPath ||
+    (st.sessionId &&
+      join(
+        homedir(),
+        '.claude',
+        'projects',
+        String(st.cwd || st.originCwd || '').replace(/\//g, '-'),
+        `${st.sessionId}.jsonl`,
+      ));
+  if (!transcript || !existsSync(transcript)) return false;
+  try {
+    const size = statSync(transcript).size;
+    const TAIL = 1024 * 1024; // 1MB tail
+    const fd = openSync(transcript, 'r');
+    const buf = Buffer.alloc(Math.min(TAIL, size));
+    readSync(fd, buf, 0, buf.length, Math.max(0, size - buf.length));
+    closeSync(fd);
+    const tail = buf.toString('utf8');
+    return tail.includes('<<autonomous-loop') || tail.includes('<command-name>/loop</command-name>');
+  } catch {
+    return false;
+  }
+}
+
 /** Enumerate live daemon-hosted bg sessions from ~/.claude/sessions/*.json. */
 export function listLiveBgSessions() {
   const out = [];
@@ -129,7 +167,7 @@ export function listLiveBgSessions() {
   return out;
 }
 
-function doRespawn(session, log) {
+export function doRespawn(session, log) {
   const stateFile = join(homedir(), '.claude', 'jobs', String(session.id), 'state.json');
   if (!existsSync(stateFile)) {
     log(
@@ -138,8 +176,7 @@ function doRespawn(session, log) {
     try {
       process.kill(session.pid, 'SIGTERM');
       try {
-        ensureMarkerDir();
-        writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()), { mode: 0o600 });
+        writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()));
       } catch {}
       try {
         unlinkSync(DEFERRED_MARKER(session.id));
@@ -152,15 +189,71 @@ function doRespawn(session, log) {
   }
 
   try {
-    execFileSync(claudeBin(), ['respawn', String(session.id)], { timeout: 30_000, stdio: 'pipe' });
+    const childEnv = { ...process.env };
     try {
-      ensureMarkerDir();
-      writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()), { mode: 0o600 });
+      const config = readConfig();
+      const tokenJson = getTokenForSession(session.id, config);
+      const token = tokenJson ? extractAccessToken(tokenJson) : null;
+      if (token) {
+        childEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
+        delete childEnv.CLAUDE_CODE_USE_BEDROCK;
+        log(`[bg-respawn] Injecting CLAUDE_CODE_OAUTH_TOKEN for session ${session.id}`);
+      } else {
+        const leases = readLeases();
+        if (leases[session.id]?.accountKey === 'bedrock') {
+          childEnv.CLAUDE_CODE_USE_BEDROCK = "1";
+          childEnv.AWS_BEDROCK_REGION = "us-east-1";
+          childEnv.AWS_REGION = "us-east-1";
+          childEnv.ANTHROPIC_MODEL = "anthropic.claude-fable-5";
+          delete childEnv.CLAUDE_CODE_OAUTH_TOKEN;
+          log(`[bg-respawn] Injecting Bedrock Fallback variables for session ${session.id}`);
+        }
+      }
+    } catch (err) {
+      log(`[bg-respawn] Failed to retrieve session token: ${err.message}`);
+    }
+
+    execFileSync(claudeBin(), ['respawn', String(session.id)], {
+      timeout: 30_000,
+      stdio: 'pipe',
+      env: childEnv,
+    });
+    try {
+      writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()));
     } catch {}
     try {
       unlinkSync(DEFERRED_MARKER(session.id));
     } catch {}
     log(`[bg-respawn] respawned bg session ${session.id} (pid ${session.pid}, was ${session.status})`);
+
+    // Synchronously resolve new PID and update the lease
+    try {
+      const leases = readLeases();
+      const lease = leases[session.id];
+      if (lease) {
+        let newPid = null;
+        for (let i = 0; i < 20; i++) {
+          try {
+            execSync('sleep 0.5');
+          } catch {}
+          const live = listLiveBgSessions();
+          const found = live.find(ls => String(ls.id) === String(session.id));
+          if (found && found.pid !== session.pid) {
+            newPid = found.pid;
+            break;
+          }
+        }
+        if (newPid) {
+          log(`[bg-respawn] Updated lease for session ${session.id} with new PID ${newPid}`);
+          recordSessionLease(session.id, lease.accountKey, newPid);
+        } else {
+          log(`[bg-respawn] Warning: could not resolve new PID for session ${session.id}`);
+        }
+      }
+    } catch (err) {
+      log(`[bg-respawn] Error updating lease with new PID: ${err.message}`);
+    }
+
     return true;
   } catch (e) {
     log(`[bg-respawn] respawn ${session.id} failed: ${e.message?.slice(0, 80)}`);
@@ -185,14 +278,14 @@ export function respawnBgSessions(log = () => {}) {
       log(`[bg-respawn] ${s.id} respawned <10min ago — skipping`);
       continue;
     }
-    if (s.status === 'busy') {
+    if (s.status === 'busy' || isLoopSession(s.id)) {
       try {
-        ensureMarkerDir();
-        if (!existsSync(DEFERRED_MARKER(s.id)))
-          writeFileSync(DEFERRED_MARKER(s.id), String(Date.now()), { mode: 0o600 });
+        if (!existsSync(DEFERRED_MARKER(s.id))) writeFileSync(DEFERRED_MARKER(s.id), String(Date.now()));
       } catch {}
       deferred++;
-      log(`[bg-respawn] ${s.id} busy — deferred (daemon sweep will retry, force after 90min)`);
+      log(
+        `[bg-respawn] ${s.id} ${s.status === 'busy' ? 'busy' : 'has an armed /loop'} — deferred (daemon sweep will retry, force after 90min)`,
+      );
       continue;
     }
     if (doRespawn(s, log)) respawned++;
@@ -206,10 +299,9 @@ export function respawnBgSessions(log = () => {}) {
  * BUSY_FORCE_AFTER_MS, and clears markers for sessions that exited.
  */
 export function sweepDeferredRespawns(log = () => {}) {
-  migrateLegacyDeferredMarkers();
   let markers = [];
   try {
-    markers = readdirSync(MARKER_DIR).filter((f) => f.startsWith(DEFERRED_PREFIX));
+    markers = readdirSync('/tmp').filter((f) => f.startsWith('claude-respawn-deferred-'));
   } catch {
     return 0;
   }
@@ -217,8 +309,8 @@ export function sweepDeferredRespawns(log = () => {}) {
   const live = new Map(listLiveBgSessions().map((s) => [String(s.id), s]));
   let handled = 0;
   for (const m of markers) {
-    const id = m.replace(DEFERRED_PREFIX, '');
-    const markerPath = join(MARKER_DIR, m);
+    const id = m.replace('claude-respawn-deferred-', '');
+    const markerPath = `/tmp/${m}`;
     const s = live.get(id);
     if (!s) {
       // session exited or state file gone — nothing to refresh
@@ -234,10 +326,11 @@ export function sweepDeferredRespawns(log = () => {}) {
         return 0;
       }
     })();
-    if (s.status !== 'busy' || deferredAgo > BUSY_FORCE_AFTER_MS) {
-      if (s.status === 'busy') {
+    const protectedNow = s.status === 'busy' || isLoopSession(id);
+    if (!protectedNow || deferredAgo > BUSY_FORCE_AFTER_MS) {
+      if (protectedNow) {
         log(
-          `[bg-respawn] ${id} still busy after ${Math.round(deferredAgo / 60000)}min — force-respawning before token expiry`,
+          `[bg-respawn] ${id} still ${s.status === 'busy' ? 'busy' : 'looping'} after ${Math.round(deferredAgo / 60000)}min — force-respawning before token expiry`,
         );
       }
       if (doRespawn(s, log)) handled++;
