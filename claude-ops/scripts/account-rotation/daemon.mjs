@@ -867,6 +867,19 @@ async function findValidRotationTarget(config, state) {
     const key = accountKey(account);
     const tokenJson = readStoredToken(account);
     if (!tokenJson) continue;
+
+    const expiry = parseTokenExpiry(tokenJson);
+    const isExpired = expiry > 0 && now > expiry - 5 * 60_000;
+    if (isExpired) {
+      log(`[pre-rotate-relaxed] ${key}: token expired/expiring — attempting refresh`);
+      const refreshed = await refreshSingleToken(account);
+      if (!refreshed) {
+        log(`[pre-rotate-relaxed] ${key}: refresh FAILED — skipping`);
+        continue;
+      }
+      log(`[pre-rotate-relaxed] ${key}: refresh succeeded`);
+    }
+
     const live = await queryLiveUtilization(account);
     if (!isLiveUtilOk(live)) continue;
     const max = liveUtilMax(live);
@@ -1208,9 +1221,18 @@ async function refreshSingleToken(account) {
       }
     } else {
       // Use spawnSync (no shell) to avoid injection risk on tokenStr.
-      spawnSync('security', ['add-generic-password', '-U', '-s', svc, '-a', VAULT_KEYCHAIN_ACCOUNT, '-w', tokenStr], {
-        timeout: 5000,
-      });
+      const kcResult = spawnSync(
+        'security',
+        ['add-generic-password', '-U', '-s', svc, '-a', VAULT_KEYCHAIN_ACCOUNT, '-w', tokenStr],
+        { timeout: 5000 },
+      );
+      if (kcResult.error || kcResult.status !== 0) {
+        const detail =
+          kcResult.stderr?.toString()?.trim() ||
+          kcResult.error?.message ||
+          `exit ${kcResult.status}`;
+        throw new Error(`Keychain write failed: ${detail}`);
+      }
     }
     log(
       `[refresh] ${key}: refreshed (${((parsed.claudeAiOauth.expiresAt - Date.now()) / 3_600_000).toFixed(1)}h remaining)`,

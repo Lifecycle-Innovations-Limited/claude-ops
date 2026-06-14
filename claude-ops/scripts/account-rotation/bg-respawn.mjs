@@ -36,11 +36,19 @@ import { execFileSync, execSync } from 'child_process';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
-import { getTokenForSession, extractAccessToken, readLeases, recordSessionLease } from './session-router.mjs';
-import { applyOAuthEnv } from './provider-env.mjs';
+import {
+  getTokenForSession,
+  extractAccessToken,
+  readLeases,
+  recordSessionLease,
+  pickAccountForSession,
+  readVaultToken,
+} from './session-router.mjs';
+import { applyOAuthEnv, applyBedrockEnv, scrubBedrockEnv } from './provider-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
+const STATE_PATH = join(__dirname, 'state.json');
 
 function readConfig() {
   try {
@@ -48,6 +56,18 @@ function readConfig() {
   } catch {
     return { accounts: [] };
   }
+}
+
+function readState() {
+  try {
+    return JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+  } catch {
+    return { activeAccount: null, accounts: {} };
+  }
+}
+
+function accountKey(a) {
+  return a.label || a.email;
 }
 
 
@@ -249,8 +269,21 @@ export function doRespawn(session, log) {
     const childEnv = { ...process.env };
     try {
       const config = readConfig();
-      const tokenJson = getTokenForSession(session.id, config);
-      const token = tokenJson ? extractAccessToken(tokenJson) : null;
+      const state = readState();
+      // Re-resolve routing before respawn so stale bedrock leases and unleased
+      // sessions pick up OAuth after rotation instead of inheriting Bedrock env.
+      const routingKey = pickAccountForSession(session.id, config, state);
+      recordSessionLease(session.id, routingKey, session.pid);
+
+      let tokenJson = getTokenForSession(session.id, config);
+      let token = tokenJson ? extractAccessToken(tokenJson) : null;
+      if (!token && routingKey !== 'bedrock' && state.activeAccount) {
+        const active = config.accounts.find((a) => accountKey(a) === state.activeAccount);
+        if (active) {
+          tokenJson = readVaultToken(active);
+          token = tokenJson ? extractAccessToken(tokenJson) : null;
+        }
+      }
       if (token) {
         // Scrub ALL Bedrock vars (USE_BEDROCK, AWS_*, hardcoded ANTHROPIC_MODEL)
         // before setting the OAuth token. Leaving ANTHROPIC_MODEL=anthropic.claude-fable-5
@@ -258,16 +291,13 @@ export function doRespawn(session, log) {
         // for Bedrock. Model resets to the subscription default catalog.
         applyOAuthEnv(childEnv, token);
         log(`[bg-respawn] Injecting CLAUDE_CODE_OAUTH_TOKEN for session ${session.id} (Bedrock vars scrubbed)`);
+      } else if (routingKey === 'bedrock') {
+        applyBedrockEnv(childEnv);
+        log(`[bg-respawn] Injecting Bedrock fallback env for session ${session.id}`);
       } else {
-        const leases = readLeases();
-        if (leases[session.id]?.accountKey === 'bedrock') {
-          childEnv.CLAUDE_CODE_USE_BEDROCK = "1";
-          childEnv.AWS_BEDROCK_REGION = "us-east-1";
-          childEnv.AWS_REGION = "us-east-1";
-          childEnv.ANTHROPIC_MODEL = "anthropic.claude-fable-5";
-          delete childEnv.CLAUDE_CODE_OAUTH_TOKEN;
-          log(`[bg-respawn] Injecting Bedrock Fallback variables for session ${session.id}`);
-        }
+        scrubBedrockEnv(childEnv);
+        delete childEnv.CLAUDE_CODE_OAUTH_TOKEN;
+        log(`[bg-respawn] Scrubbed Bedrock vars for session ${session.id} (no per-session token)`);
       }
     } catch (err) {
       log(`[bg-respawn] Failed to retrieve session token: ${err.message}`);
