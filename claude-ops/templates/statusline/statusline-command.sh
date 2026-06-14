@@ -147,8 +147,8 @@ fi
 
 # ── Theme colors — one jq from themes.json bundled alongside this script ─────
 _themes_file="$(dirname "$0")/themes.json"
-T_ok="${ESC}[32m"; T_warn="${ESC}[33m"; T_danger="${ESC}[1;31m"; T_dim="${ESC}[38;5;245m"
-T_acc="${ESC}[36m"; T_acc2="${ESC}[35m"
+T_ok="32"; T_warn="33"; T_danger="1;31"; T_dim="38;5;245"
+T_acc="36"; T_acc2="35"
 T_gauge_ok="32"; T_gauge_warn="33"; T_gauge_hot="38;5;208"; T_gauge_crit="1;31"
 T_gauge_empty="38;5;236"
 T_loc_remote="1;97;41"; T_loc_home="1;97;44"
