@@ -2,8 +2,8 @@
   "workspace": { "current_dir": "/home/user/projects/myapp" },
   "model": { "display_name": "Claude Sonnet 4.6" },
   "rate_limits": {
-    "five_hour":  { "used_percentage": 45, "resets_at": 9999999999 },
-    "seven_day":  { "used_percentage": 20, "resets_at": 9999999999 }
+    "five_hour": { "used_percentage": 45, "resets_at": 9999999999 },
+    "seven_day": { "used_percentage": 20, "resets_at": 9999999999 }
   },
   "context_window": { "used_percentage": 30 },
   "cost": { "total_cost_usd": 0.12, "total_lines_added": 42, "total_lines_removed": 7 },

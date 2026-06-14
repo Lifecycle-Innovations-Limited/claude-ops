@@ -4,8 +4,8 @@
   "theme": "cockpit",
 
   "gauge_width": {
-    "ctx":   10,
-    "quota":  8
+    "ctx": 10,
+    "quota": 8
   },
 
   "carousel_interval_sec": 15,
@@ -17,20 +17,20 @@
   },
 
   "fleet": {
-    "show_bg_agents":   true,
-    "show_rotation":    true,
-    "show_sdk_fallback":true,
-    "show_cache_ttl":   true
+    "show_bg_agents": true,
+    "show_rotation": true,
+    "show_sdk_fallback": true,
+    "show_cache_ttl": true
   },
 
   "sys_metrics": {
-    "show_cpu":  true,
-    "show_ram":  true,
+    "show_cpu": true,
+    "show_ram": true,
     "show_disk": true,
     "show_load_warning": true,
     "show_disk_warning": true,
     "publish_peer": true,
-    "show_peer":   true
+    "show_peer": true
   },
 
   "carousel_pool": ["cost", "lines", "global_ops"],
