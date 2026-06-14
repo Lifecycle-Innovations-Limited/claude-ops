@@ -10,7 +10,7 @@
 #   - No line exceeds $COLUMNS visible characters (ANSI-stripped + emoji+1).
 #   - POSIX sh, BMP-safe glyphs (works over mosh/tmux/SSH).
 #   - Target <50ms warm render.
-#   - No Sam-specific data; all project config comes from statusline.config.json.
+#   - No user-specific data; all project config comes from statusline.config.json.
 
 LC_ALL=C; export LC_ALL
 ESC=$(printf '\033')

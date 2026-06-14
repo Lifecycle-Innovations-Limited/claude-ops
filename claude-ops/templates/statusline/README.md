@@ -169,8 +169,8 @@ ams cpu8% ram12G df88G         # fresh — color-graded (red if load>8 or ram<2G
 ams stale                      # greyed when peer file is older than 5 minutes
 ```
 
-**Cross-machine transport** reuses the existing `~/.claude/` rsync / Tailscale
-sync (`com.sam.gbrain-fra-push` or equivalent). No new transport is built — the
+**Cross-machine transport** reuses your existing `~/.claude/` rsync / Tailscale
+sync (a launchd/systemd timer or any folder-sync you already run). No new transport is built — the
 sync daemon copies `~/.claude/.sysinfo/` along with the rest of `~/.claude/`.
 Each machine publishes its own file; the peer's file arrives via rsync.
 

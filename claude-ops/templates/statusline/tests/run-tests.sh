@@ -311,11 +311,12 @@ echo "7. Project badge cycling (C1 guard)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 # Guards C1: with projects configured, line-3 must be non-empty and contain a
 # project label — proving SEP_PB is defined and proj_badges splits correctly.
-# The slow_cache is uid-keyed (/tmp/claude-statusline-slow-<uid>); we wipe it
-# before the test so the fresh-build path always runs (not the stale-cache hit path).
-
-_cycle_uid=$(id -u)
-_cycle_slow="/tmp/claude-statusline-slow-${_cycle_uid}"
+# Isolate the renderer's caches into a per-test dir via CLAUDE_STATUSLINE_CACHE_DIR
+# so this never races the live session's uid-keyed /tmp/claude-statusline-slow-<uid>
+# (shared-cache contamination was making this test flaky).
+_cycle_cache="$TMPDIR_BASE/cache_cycle"
+mkdir -p "$_cycle_cache"
+_cycle_slow="$_cycle_cache/claude-statusline-slow-$(id -u)"
 rm -f "$_cycle_slow" 2>/dev/null
 
 _OPS_CACHE="$TMPDIR_BASE/home_cycle/.claude/plugins/data/ops-ops-marketplace/cache"
@@ -343,7 +344,7 @@ cat > "$TMPDIR_BASE/home_cycle/.claude/statusline.config.json" <<'CFGEOF'
 }
 CFGEOF
 
-out_c=$(HOME="$TMPDIR_BASE/home_cycle" COLUMNS=160 sh "$SCRIPT" \
+out_c=$(HOME="$TMPDIR_BASE/home_cycle" CLAUDE_STATUSLINE_CACHE_DIR="$_cycle_cache" COLUMNS=160 sh "$SCRIPT" \
   < "$FIXTURES/input-basic.json" 2>/dev/null)
 # Note: $() strips trailing newlines; add \n so sed -n '3p' can match line 3
 line3_c=$(printf '%s\n' "$out_c" | sed -n '3p')
@@ -352,7 +353,7 @@ vis3_c=$(strip_ansi "$line3_c")
 # Wipe slow_cache again and render a second time — what we assert is: line3 is
 # non-empty and has a project label (proves SEP_PB defined + proj_badges split works).
 rm -f "$_cycle_slow" 2>/dev/null
-out_d=$(HOME="$TMPDIR_BASE/home_cycle" COLUMNS=160 sh "$SCRIPT" \
+out_d=$(HOME="$TMPDIR_BASE/home_cycle" CLAUDE_STATUSLINE_CACHE_DIR="$_cycle_cache" COLUMNS=160 sh "$SCRIPT" \
   < "$FIXTURES/input-basic.json" 2>/dev/null)
 line3_d=$(printf '%s\n' "$out_d" | sed -n '3p')
 vis3_d=$(strip_ansi "$line3_d")
