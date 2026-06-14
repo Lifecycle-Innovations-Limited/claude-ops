@@ -36,20 +36,22 @@ If `gog` is not on PATH, look at the detector's `mcp_configured` array for any e
    ```
 5. On "Install gog instead", print the OS-appropriate install command:
 
-   | OS            | Command                                                       |
-   |---------------|---------------------------------------------------------------|
-   | macOS / Linuxbrew | `brew install gogcli`                                     |
-   | Windows       | `winget install -e --id steipete.gogcli`                      |
-   | Arch Linux    | `yay -S gogcli`                                               |
-   | From source   | `git clone https://github.com/steipete/gogcli.git && cd gogcli && make` |
+   | OS                | Command                                                                 |
+   | ----------------- | ----------------------------------------------------------------------- |
+   | macOS / Linuxbrew | `brew install gogcli`                                                   |
+   | Windows           | `winget install -e --id steipete.gogcli`                                |
+   | Arch Linux        | `yay -S gogcli`                                                         |
+   | From source       | `git clone https://github.com/steipete/gogcli.git && cd gogcli && make` |
 
    Docs: <https://gogcli.sh/> · Repo: <https://github.com/steipete/gogcli>
 
    After install, authorise once per account:
+
    ```bash
    gog auth credentials /path/to/client_secret.json
    gog auth add you@example.com --services gmail,calendar,drive,contacts,docs,sheets
    ```
+
    Refresh tokens are stored in the OS keyring (Keychain on macOS, Secret Service / libsecret on Linux, Credential Manager on Windows). Then stop this sub-flow and wait for the user to re-run `/ops:setup email`.
 
 #### Neither available
@@ -61,4 +63,3 @@ If `gog` is not on PATH, look at the detector's `mcp_configured` array for any e
 7. Whatever the user picks, record the resulting state in `$PREFS_PATH` (either `channels.email = "gog"`, `channels.email = "mcp:<name>"`, or omit the key entirely).
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/SKILL.md` and `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration. The setup agent can load those files directly when it needs more depth than this wizard provides.
-

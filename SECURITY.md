@@ -8,11 +8,11 @@
 
 `claude-ops` follows semantic versioning. Security patches are backported one major version behind the current release.
 
-| Version | Supported          | Notes                                           |
-|---------|--------------------|-------------------------------------------------|
-| 0.8.x   | Yes (current)      | Active development; patches land here first.   |
-| 0.7.x   | Yes (backport)     | Security fixes only until 0.9.0 ships.         |
-| < 0.7   | No                 | Please upgrade.                                 |
+| Version | Supported      | Notes                                        |
+| ------- | -------------- | -------------------------------------------- |
+| 0.8.x   | Yes (current)  | Active development; patches land here first. |
+| 0.7.x   | Yes (backport) | Security fixes only until 0.9.0 ships.       |
+| < 0.7   | No             | Please upgrade.                              |
 
 ## Reporting a Vulnerability
 

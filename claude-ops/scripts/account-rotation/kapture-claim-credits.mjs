@@ -15,7 +15,7 @@
 //  fallbacks; verify them by hand on June 15 before flipping `--dry-run` off.
 //
 //  MANDATORY MANUAL VERIFICATION ON 2026-06-15 BEFORE LIVE RUN:
-//    1. Log into one Anthropic console account in Sam's Chrome.
+//    1. Log into one Anthropic console account in the owner's Chrome.
 //    2. Navigate to the credit-claim page (see CANDIDATE_BILLING_URLS below).
 //    3. Inspect the actual DOM for:
 //         - the "Claim $200 credit" button label/aria-label/data-attr
@@ -48,7 +48,7 @@
 //    --max-concurrency N             (Default 1.) Number of parallel claude -p
 //                                    sessions; >1 means multiple Kapture tabs
 //                                    in flight simultaneously. Keep at 1 unless
-//                                    you have verified Sam's Chrome can survive
+//                                    you have verified the owner's Chrome can survive
 //                                    parallel automation.
 //    --help                          Print this header.
 // ──────────────────────────────────────────────────────────────────────────────
@@ -206,11 +206,11 @@ function receiptPath(email) {
 
 function buildPrompt(email, screenshotTo) {
   // The prompt instructs a Claude Code session to drive Kapture. The session
-  // must have the Kapture MCP server enabled (it does, by default, in Sam's
+  // must have the Kapture MCP server enabled (it does, by default, in the owner's
   // setup). The session opens its OWN tab, never reuses, closes on exit.
   return [
     `You are a Kapture automation worker. Do not chat, narrate, or ask questions.`,
-    `Execute the following plan against Sam's daily Chrome via the Kapture MCP.`,
+    `Execute the following plan against the owner's daily Chrome via the Kapture MCP.`,
     ``,
     `TARGET ACCOUNT: ${email}`,
     `OUTPUT (must be the final line of your response, JSON, no other prose):`,
@@ -225,7 +225,7 @@ function buildPrompt(email, screenshotTo) {
     `   Match against "${email}". If wrong account is logged in, locate the account switcher`,
     `   (look for a "Switch account" menu item or sign-out link) and either switch in-app`,
     `   or sign out + sign in via Google OAuth (the Google session is already present in`,
-    `   Sam's Chrome, so the Google OAuth step is usually one click).`,
+    `   the owner's Chrome, so the Google OAuth step is usually one click).`,
     `4. On the billing page, look for "$200 Agent SDK credit" or similar copy.`,
     `   Try CLAIM_SELECTORS: ${JSON.stringify(CLAIM_SELECTORS)}.`,
     `   If none match, check ALREADY_CLAIMED_SELECTORS: ${JSON.stringify(ALREADY_CLAIMED_SELECTORS)}.`,
@@ -250,7 +250,7 @@ function buildPrompt(email, screenshotTo) {
 function invokeClaude(prompt) {
   // `claude -p` runs a one-shot Claude Code session. The MCP servers configured
   // in ~/.claude/ are inherited, so Kapture is available. We don't pass any
-  // model flag — defer to Sam's default profile.
+  // model flag — defer to the owner's default profile.
   // Use async spawn (not spawnSync) so parallel batches can run concurrent subprocesses.
   return new Promise((resolve) => {
     let settled = false;

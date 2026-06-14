@@ -2,13 +2,13 @@
 """ops-pocket-whatsapp-bridge — WhatsApp ↔ supervisor question/reply bridge.
 
 Inbound: polls the Baileys bridge SQLite DB for new messages in the
-designated "pocket" chat. Each new message from Sam is passed to `claude -p`
+designated "pocket" chat. Each new message from the owner is passed to `claude -p`
 along with the list of currently-open supervisor questions. Claude figures
-out which question Sam is replying to (if any) and extracts the answer in
+out which question the owner is replying to (if any) and extracts the answer in
 natural language. The structured result is appended to supervisor-replies.jsonl
 so the supervisor relays back to the asking worker on its next wake.
 
-This means Sam can reply naturally:
+This means the owner can reply naturally:
   "just do report only, don't auto-archive"
   "skip the kitchen one, audit gmail though"
   "yeah go ahead with option 2"
@@ -137,7 +137,7 @@ def open_questions() -> list[dict]:
 
 
 def parse_with_llm(body: str, opens: list[dict], parser_model: str) -> list[dict]:
-    """Use `claude -p` to interpret Sam's natural-language reply against the
+    """Use `claude -p` to interpret the owner's natural-language reply against the
     list of currently-open questions. Returns a list of {qid, answer, confidence}
     items (may be empty if Claude judged this message is not a reply at all).
     """
@@ -256,7 +256,7 @@ def main() -> int:
         return 3
 
     # Only inbound messages from this chat after the last_processed cursor.
-    # `is_from_me=1` are Sam's own replies (this bridge only listens to those).
+    # `is_from_me=1` are the owner's own replies (this bridge only listens to those).
     # We accept both ID-based and timestamp-based cursors.
     try:
         if last_id:

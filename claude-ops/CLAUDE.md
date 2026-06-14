@@ -7,6 +7,7 @@ These rules apply to ALL skills in this plugin. They are non-negotiable and over
 **This is a public open-source plugin.** Every file in this repo is visible to anyone on the internet.
 
 **NEVER commit:**
+
 - Real names, emails, phone numbers, or usernames (use "owner", "user@example.com", "+1234567890")
 - Real store URLs, project names, or org names (use "yourstore.myshopify.com", "my-project")
 - API keys, tokens, secrets, session strings, or chat IDs (use `<YOUR_TOKEN>`, `$ENV_VAR`)
@@ -14,6 +15,7 @@ These rules apply to ALL skills in this plugin. They are non-negotiable and over
 - Hardcoded paths like `/Users/username/...` (use `~` or `$HOME`)
 
 **All user-specific data belongs in:**
+
 - `$PREFS_PATH` (preferences.json in plugin data dir — never committed)
 - `scripts/registry.json` (gitignored)
 - Environment variables or Doppler secrets
@@ -35,6 +37,7 @@ Daemon scripts that invoke Claude (recap digest, deploy-fix fixer, agent-drafter
 The `AskUserQuestion` tool enforces a hard schema limit of `<=4` items in the `options` array. Passing more than 4 options causes an `InputValidationError` and the skill crashes.
 
 **Requirements:**
+
 - Never pass more than 4 options in a single `AskUserQuestion` call.
 - When a step lists >4 choices, apply this strategy:
   1. **Filter first** — remove items that are already configured, completed, or irrelevant to the current context. This alone often brings the count to <=4.
@@ -46,6 +49,7 @@ The `AskUserQuestion` tool enforces a hard schema limit of `<=4` items in the `o
 ## Rule 2 — Never delegate commands to the user
 
 When a skill says "tell the user to run X in a separate terminal" or "Run `command` in your terminal":
+
 - **Run it via the Bash tool instead** (backgrounded with `run_in_background: true` if it is long-running or interactive).
 - **OAuth flows** (`gog auth add <email> --services gmail,calendar,...`, `doppler login`, `op signin`): run via Bash with `run_in_background: true` — the browser will open automatically.
 - **Password manager unlock** (`bw unlock`, `dcli configure`): run via Bash tool directly.
@@ -70,6 +74,7 @@ During setup and configuration flows, NEVER silently skip a channel, service, or
 - Any `aws ... delete-*`, `aws ... stop-*`, `aws ... terminate-*` command
 
 **For analysis/report agents** (CTO, CFO, COO, CEO): When recommending infrastructure changes, always:
+
 1. Verify project status first — check for recent commits, active branches, planning directories, and registry status before labeling anything as "dead" or "archived"
 2. Distinguish "idle" (0 tasks but project is active) from "dead" (project abandoned, no commits in months, no planning)
 3. Flag all destructive recommendations with `⚠️ REQUIRES CONFIRMATION` so the orchestrator knows to ask
@@ -95,7 +100,7 @@ During `/ops:setup` and any skill's setup/configure flow, use `run_in_background
 
 4. **Never stack.** If you have 6 replies to send, that's 6 separate draft-show-approve-send cycles. Never "approve all 6", never "I'll fire them in order", never batch.
 
-5. **Subagents are not an escape hatch.** When spawning an `Agent` with access to send-tools (`mcp__gog__gmail_send`, `mcp__whatsapp__send_message`, Bash with `gog` / `curl resend.com` / etc), the subagent's prompt MUST explicitly say *"You are read-only. Do NOT send any outbound messages. Return drafts to the orchestrator who will stage them one-by-one."* For autonomous orchestration, prefer subagents with only read/search tools (`mcp__gog__gmail_search`, `gog gmail thread get`) so they physically cannot send.
+5. **Subagents are not an escape hatch.** When spawning an `Agent` with access to send-tools (`mcp__gog__gmail_send`, `mcp__whatsapp__send_message`, Bash with `gog` / `curl resend.com` / etc), the subagent's prompt MUST explicitly say _"You are read-only. Do NOT send any outbound messages. Return drafts to the orchestrator who will stage them one-by-one."_ For autonomous orchestration, prefer subagents with only read/search tools (`mcp__gog__gmail_search`, `gog gmail thread get`) so they physically cannot send.
 
 6. **MCP ≡ Bash ≡ API.** `mcp__gog__gmail_send` is the same gate as `gog gmail send` (Bash) is the same gate as `curl -X POST https://api.resend.com/emails` is the same gate as `mcp__whatsapp__send_message`. Surface doesn't matter — if it produces outbound comms, it needs its own per-message approval.
 
@@ -113,6 +118,7 @@ During `/ops:setup` and any skill's setup/configure flow, use `run_in_background
 ## Rule 7 — Mobile / SSH sessions: compact text, no tables
 
 **Detection — any of these = mobile mode:**
+
 - `$SSH_CONNECTION`, `$SSH_CLIENT`, or `$SSH_TTY` is set (user is on a remote terminal — likely Termius/iSH on a phone, or a tmux pane on a remote host)
 - `$OPS_MOBILE=1` (explicit override)
 - `$COLUMNS` < 80 (narrow terminal regardless of cause)
@@ -155,6 +161,7 @@ next: fix owner-a#N CI.
 That's the bar. If a skill can't compress to that shape, it's too verbose for mobile.
 
 **For shell scripts and binaries** (anything in `bin/` or `scripts/`):
+
 - Detect via `[[ -n "$SSH_CONNECTION$SSH_CLIENT$SSH_TTY" || "$OPS_MOBILE" == "1" ]]` and switch to a compact code path.
 - For URL opening, source `lib/opener.sh` and call `ops_open_url` — never call `open`/`xdg-open` directly.
 
@@ -163,9 +170,11 @@ That's the bar. If a skill can't compress to that shape, it's too verbose for mo
 ### gog (v0.12.0+)
 
 #### Top-level commands
+
 auth, gmail, calendar, contacts, drive, docs, slides, sheets, forms, tasks, keep, chat, people, appscript, config
 
 #### Gmail — Search & Read
+
 ```bash
 gog gmail search "<query>" --max N -j --results-only --no-input    # Search threads (Gmail query syntax)
 gog gmail thread get <threadId> -j                                  # Get full thread with all messages
@@ -173,6 +182,7 @@ gog gmail get <messageId> -j                                        # Get single
 ```
 
 #### Gmail — Actions
+
 ```bash
 gog gmail archive <messageId> ... --no-input --force               # Archive messages (remove from inbox)
 gog gmail archive --query "<gmail-query>" --max N --force           # Archive by query
@@ -182,6 +192,7 @@ gog gmail trash <messageId> ... --no-input --force                 # Move to tra
 ```
 
 #### Gmail — Send & Reply
+
 ```bash
 gog gmail send --to "user@example.com" --subject "subj" --body "text"                    # Send new email
 gog gmail send --to "a@b.com" --subject "Re: ..." --body "reply" --reply-to-message-id <msgId>  # Reply
@@ -190,6 +201,7 @@ gog gmail send --to "a@b.com" --subject "subj" --body "text" --attach /path/to/f
 ```
 
 #### Gmail — Labels & Drafts
+
 ```bash
 gog gmail labels list -j                                            # List all labels
 gog gmail labels modify <threadId> --add LABEL --remove LABEL       # Modify thread labels
@@ -199,6 +211,7 @@ gog gmail drafts create --to "user@example.com" --subject "subj" --body "text"
 ```
 
 #### Calendar
+
 ```bash
 gog calendar calendars -j                                           # List calendars
 gog calendar events --all --today -j --sort start                   # Today's events across ALL calendars (preferred)
@@ -209,6 +222,7 @@ gog calendar freebusy --from "2026-04-14T00:00:00Z" --to "2026-04-14T23:59:59Z" 
 ```
 
 #### Contacts / Drive / Tasks
+
 ```bash
 gog contacts search "name" -j                                       # Search contacts
 gog contacts list -j                                                # List all contacts
@@ -220,6 +234,7 @@ gog tasks list <tasklistId> -j                                      # List tasks
 ```
 
 #### Auth
+
 ```bash
 gog auth status                                                     # Check auth status
 gog auth add user@example.com --services gmail,calendar,drive,contacts,docs,sheets

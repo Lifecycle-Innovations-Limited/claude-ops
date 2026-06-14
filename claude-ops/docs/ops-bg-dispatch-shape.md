@@ -38,11 +38,11 @@ line in the prompt is **mandatory** to prevent this.
 
 ## Surface selection
 
-| Task type | Surface |
-|---|---|
-| bash script → run it → check result | `Bash` directly — no agent needed |
-| ≤30min, result needed back in THIS session | `Agent` tool (in-session subagent) |
-| >30min / overnight / fire-and-forget | `ops-bg dispatch` with heredoc + ignore-briefing line |
+| Task type                                  | Surface                                               |
+| ------------------------------------------ | ----------------------------------------------------- |
+| bash script → run it → check result        | `Bash` directly — no agent needed                     |
+| ≤30min, result needed back in THIS session | `Agent` tool (in-session subagent)                    |
+| >30min / overnight / fire-and-forget       | `ops-bg dispatch` with heredoc + ignore-briefing line |
 
 ## Incident: 2026-05-24
 

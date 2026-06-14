@@ -1,7 +1,7 @@
 ---
 name: ops-projects
-description: "Portfolio dashboard for all GSD-tracked projects. Scans ~/Projects and ~/gsd-workspaces for .planning/ directories, shows phase status, git state, blockers, and next actions for every project. Run /ops projects to see the full portfolio."
-argument-hint: "[project-alias|--sync|--refresh]"
+description: 'Portfolio dashboard for all GSD-tracked projects. Scans ~/Projects and ~/gsd-workspaces for .planning/ directories, shows phase status, git state, blockers, and next actions for every project. Run /ops projects to see the full portfolio.'
+argument-hint: '[project-alias|--sync|--refresh]'
 allowed-tools:
   - Bash
   - Read
@@ -20,10 +20,10 @@ disallowedTools:
 ## Runtime Context
 
 Before rendering, load:
+
 1. **Preferences**: `cat ${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `timezone`
 2. **Daemon health**: `cat ${OPS_DATA_DIR}/daemon-health.json` — show service status in dashboard footer
 3. **GSD registry**: `cat ${OPS_DATA_DIR}/registry.json` — primary project index (updated by daemon twice daily + on-demand with --sync)
-
 
 # OPS ► PROJECTS — GSD Portfolio Dashboard
 
@@ -99,6 +99,7 @@ Build the dashboard from `${OPS_DATA_DIR}/cache/projects_health.json` (fall back
 ```
 
 ### Status indicators (from `status` field, case-insensitive)
+
 - **executing** → 🟢
 - **paused / verifying / phase_complete** → 🟡
 - **human / uat / blocked / pending** → 🔴
@@ -162,9 +163,9 @@ Show "Refreshing..." while running, then present the full updated dashboard.
 
 ## CLI reference (for manual use)
 
-| Command | What it does |
-|---------|-------------|
-| `/ops projects` | Show full portfolio |
-| `/ops projects [alias]` | Deep-dive on one project |
-| `/ops projects --sync` | Force-refresh registry + show dashboard |
-| `/ops:setup registry` | Open registry setup (future) |
+| Command                 | What it does                            |
+| ----------------------- | --------------------------------------- |
+| `/ops projects`         | Show full portfolio                     |
+| `/ops projects [alias]` | Deep-dive on one project                |
+| `/ops projects --sync`  | Force-refresh registry + show dashboard |
+| `/ops:setup registry`   | Open registry setup (future)            |

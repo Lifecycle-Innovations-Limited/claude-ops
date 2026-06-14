@@ -14,11 +14,11 @@ thin router that picks the one canonical command per stage.
 
 `/flow` reads your repo state and picks the abstraction level:
 
-| Repo state | Mode | What runs |
-|---|---|---|
-| git root has `.planning/` | **PROJECT** | GSD phase machine; phases call gstack/ops tools as sub-steps |
-| no `.planning/` | **AD-HOC** | gstack stateless lifecycle (`/spec→build→/review→/qa→/ship`) |
-| any | **OPS** | `/ops:*` always available (inbox, fires, marketing, daemon, voice, finops) |
+| Repo state                | Mode        | What runs                                                                  |
+| ------------------------- | ----------- | -------------------------------------------------------------------------- |
+| git root has `.planning/` | **PROJECT** | GSD phase machine; phases call gstack/ops tools as sub-steps               |
+| no `.planning/`           | **AD-HOC**  | gstack stateless lifecycle (`/spec→build→/review→/qa→/ship`)               |
+| any                       | **OPS**     | `/ops:*` always available (inbox, fires, marketing, daemon, voice, finops) |
 
 You never choose the mode — the router does, from `bin/flow-state`.
 
@@ -56,6 +56,7 @@ that fixes model routing — when a description is unambiguous, the model picks 
 It's fully reversible; a later v2 can prune once `/flow` is trusted.
 
 Ownership boundaries that are now **sole-owner**:
+
 - **ops / comms / autonomy** → claude-ops `/ops:*`
 - **project-state** (phases, `.planning/`) → GSD; `/ops:ops-projects` is the read-only view
 - **browser** → gstack `/browse` (unchanged; safety-critical rules in CLAUDE.md)

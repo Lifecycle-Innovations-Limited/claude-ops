@@ -1,7 +1,7 @@
 ---
 name: ops-dash
 description: Interactive pixel-art command center dashboard. Visual business HQ with instant hotkey navigation to all ops commands, live status indicators, fire alerts, C-suite reports, settings, sharing, and FAQ.
-argument-hint: "[back|settings|share|faq]"
+argument-hint: '[back|settings|share|faq]'
 allowed-tools:
   - Bash
   - Read
@@ -40,15 +40,16 @@ Before rendering, load available context:
 
 ### bin/ops-dash
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `${CLAUDE_PLUGIN_ROOT}/bin/ops-dash` | Render hybrid live command center | 12-section live dashboard |
-| `${CLAUDE_PLUGIN_ROOT}/bin/ops-dash 2>/dev/null \|\| echo "DASH_RENDER_FAILED"` | Render with failure detection | Dashboard or `DASH_RENDER_FAILED` sentinel |
-| `OPS_MOBILE=1 ${CLAUDE_PLUGIN_ROOT}/bin/ops-dash` | Plain-text compact mode (SSH/mobile) | No ANSI boxes, single-line sections |
+| Command                                                                         | Usage                                | Output                                     |
+| ------------------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------ |
+| `${CLAUDE_PLUGIN_ROOT}/bin/ops-dash`                                            | Render hybrid live command center    | 12-section live dashboard                  |
+| `${CLAUDE_PLUGIN_ROOT}/bin/ops-dash 2>/dev/null \|\| echo "DASH_RENDER_FAILED"` | Render with failure detection        | Dashboard or `DASH_RENDER_FAILED` sentinel |
+| `OPS_MOBILE=1 ${CLAUDE_PLUGIN_ROOT}/bin/ops-dash`                               | Plain-text compact mode (SSH/mobile) | No ANSI boxes, single-line sections        |
 
 The bin script fires all 12 data probes in parallel (background subshells writing to a tmpdir), renders an animated loading bar while they run, then renders sections sequentially top-to-bottom. Each section degrades to `(no data)` if its probe fails — the script never crashes.
 
 **Live data rendered per section:**
+
 1. **HERO** — pixel-art logo (gradient cyan→violet), vitals strip: fires · unread · PRs · MRR · GSD active
 2. **FIRES** — CI failures across registry repos (via `gh run list --repo`)
 3. **INBOX** — WhatsApp `recent_chats`, Email `inbox_count`, Slack workspaces, Telegram, Notion
@@ -63,6 +64,7 @@ The bin script fires all 12 data probes in parallel (background subshells writin
 12. **QUICK ACTIONS** — keyboard shortcuts 1-9, 0, a-h (where `h` = smart-home if `home_automation` is configured in `$PREFS_PATH`; FAQ moves to `?`). Status indicator next to `h`: green if all Homey devices online and no alarms, yellow if any device offline, red if active critical alarm. Hidden entirely if `home_automation` is not configured.
 
 **Schema fixes vs previous version:**
+
 - Unread: was reading `.whatsapp.count` / `.email.count` (always 0). Now reads `.channels.whatsapp.recent_chats` / `.channels.email.inbox_count`.
 - PRs: was using `gh pr list` without `--repo` (fails outside git cwd). Now uses `gh api graphql` — works from any directory.
 
@@ -73,11 +75,13 @@ The skill reads `preferences.json` separately to check for warnings before invok
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when loading dashboard data in parallel. This enables:
+
 - Agents share context and can coordinate mid-flight
 - You can steer priorities in real-time
 - Agents report progress as they complete
 
 **Team setup** (only when flag is enabled):
+
 ```
 TeamCreate("dash-team")
 Agent(team_name="dash-team", name="infra-loader", prompt="Gather ECS health, Vercel status, and CI pipeline state")
@@ -104,28 +108,28 @@ Skip straight to AskUserQuestion for the next action — no preamble, no recap, 
 
 ## Routing table
 
-| Input | Route | Description |
-|-------|-------|-------------|
-| `1`, `go`, `morning`, `briefing` | `/ops:ops-go` | Morning briefing |
-| `2`, `inbox`, `unread`, `messages` | `/ops:ops-inbox` | Inbox zero |
-| `3`, `fires`, `incidents`, `down` | `/ops:ops-fires` | Fire check |
-| `4`, `projects`, `portfolio` | `/ops:ops-projects` | Project dashboard |
-| `5`, `next`, `priority`, `what` | `/ops:ops-next` | What's next |
-| `6`, `revenue`, `costs`, `money` | `/ops:ops-revenue` | Revenue & costs |
-| `7`, `linear`, `sprint`, `board` | `/ops:ops-linear` | Linear sprint |
-| `8`, `deploy`, `ship` | `/ops:ops-deploy` | Deploy status |
-| `9`, `triage`, `issues` | `/ops:ops-triage` | Triage issues |
-| `0`, `speedup`, `clean`, `optimize` | `/ops:ops-speedup` | System speedup |
-| `a`, `yolo` | `/ops:ops-yolo` | YOLO mode |
-| `b`, `merge`, `prs` | `/ops:ops-merge` | Auto-merge PRs |
-| `c`, `setup`, `configure` | `/ops:setup` | Setup wizard |
-| `d`, `send`, `comms` | `/ops:ops-comms` | Send message |
-| `e`, `report`, `csuite` | Read latest YOLO report | C-suite report |
-| `f`, `settings`, `prefs`, `config` | Settings sub-menu | Interactive config |
-| `g`, `share` | Share sub-menu | Share your setup |
-| `h`, `home`, `homey`, `house` | `/ops:ops-home` | Smart-home control (only if `home_automation` configured in `$PREFS_PATH`) |
-| `?`, `faq`, `help`, `wiki` | FAQ sub-menu | Help & FAQ |
-| `back`, `dash` | Re-render dashboard | Return to dash |
+| Input                               | Route                   | Description                                                                |
+| ----------------------------------- | ----------------------- | -------------------------------------------------------------------------- |
+| `1`, `go`, `morning`, `briefing`    | `/ops:ops-go`           | Morning briefing                                                           |
+| `2`, `inbox`, `unread`, `messages`  | `/ops:ops-inbox`        | Inbox zero                                                                 |
+| `3`, `fires`, `incidents`, `down`   | `/ops:ops-fires`        | Fire check                                                                 |
+| `4`, `projects`, `portfolio`        | `/ops:ops-projects`     | Project dashboard                                                          |
+| `5`, `next`, `priority`, `what`     | `/ops:ops-next`         | What's next                                                                |
+| `6`, `revenue`, `costs`, `money`    | `/ops:ops-revenue`      | Revenue & costs                                                            |
+| `7`, `linear`, `sprint`, `board`    | `/ops:ops-linear`       | Linear sprint                                                              |
+| `8`, `deploy`, `ship`               | `/ops:ops-deploy`       | Deploy status                                                              |
+| `9`, `triage`, `issues`             | `/ops:ops-triage`       | Triage issues                                                              |
+| `0`, `speedup`, `clean`, `optimize` | `/ops:ops-speedup`      | System speedup                                                             |
+| `a`, `yolo`                         | `/ops:ops-yolo`         | YOLO mode                                                                  |
+| `b`, `merge`, `prs`                 | `/ops:ops-merge`        | Auto-merge PRs                                                             |
+| `c`, `setup`, `configure`           | `/ops:setup`            | Setup wizard                                                               |
+| `d`, `send`, `comms`                | `/ops:ops-comms`        | Send message                                                               |
+| `e`, `report`, `csuite`             | Read latest YOLO report | C-suite report                                                             |
+| `f`, `settings`, `prefs`, `config`  | Settings sub-menu       | Interactive config                                                         |
+| `g`, `share`                        | Share sub-menu          | Share your setup                                                           |
+| `h`, `home`, `homey`, `house`       | `/ops:ops-home`         | Smart-home control (only if `home_automation` configured in `$PREFS_PATH`) |
+| `?`, `faq`, `help`, `wiki`          | FAQ sub-menu            | Help & FAQ                                                                 |
+| `back`, `dash`                      | Re-render dashboard     | Return to dash                                                             |
 
 ---
 
@@ -145,6 +149,7 @@ Display the C-suite header, then use **batched AskUserQuestion** (max 4 options 
 ```
 
 AskUserQuestion call 1:
+
 ```
   [CEO — Strategic analysis]
   [CTO — Technical health]
@@ -153,6 +158,7 @@ AskUserQuestion call 1:
 ```
 
 AskUserQuestion call 2 (only if "More..."):
+
 ```
   [COO — Operations review]
   [All — Full Hard Truths report]
@@ -200,6 +206,7 @@ Display the full settings menu as text (for reference), then use **batched AskUs
 ```
 
 Use AskUserQuestion (max 4 options):
+
 ```
 What would you like to configure?
   [Profile (name/timezone/style)]
@@ -215,6 +222,7 @@ On "Integrations & Projects": use AskUserQuestion with `[AWS/Sentry/Linear]`, `[
 For each option, use AskUserQuestion to get the new value, then write to preferences.json or registry.json.
 
 **Writing preferences:**
+
 ```bash
 PREFS="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json"
 # Read existing, merge update, write back
@@ -238,6 +246,7 @@ Display the share header, then use **batched AskUserQuestion** (max 4 options pe
 ```
 
 AskUserQuestion call 1:
+
 ```
   [Share on X (Twitter)]
   [Share via Slack]
@@ -246,6 +255,7 @@ AskUserQuestion call 1:
 ```
 
 AskUserQuestion call 2 (only if "More..."):
+
 ```
   [Copy to clipboard]
   [Export setup guide (markdown)]
@@ -255,6 +265,7 @@ AskUserQuestion call 2 (only if "More..."):
 ### Share content generation
 
 Generate a share-ready message. **Never include secrets, tokens, or private project names.** Only share:
+
 - Plugin version
 - Number of integrations configured
 - Number of projects managed
@@ -276,13 +287,13 @@ Try it: /plugin marketplace add ops-marketplace
 
 ### Share actions
 
-| Option | Action |
-|--------|--------|
+| Option    | Action                                                                                                             |
+| --------- | ------------------------------------------------------------------------------------------------------------------ |
 | X/Twitter | Copy text to clipboard + open `https://twitter.com/intent/tweet?text=...` via `open` (macOS) or `xdg-open` (Linux) |
-| Slack | Send via `/ops:ops-comms slack` with generated message |
-| Email | Draft via `gog gmail send` or copy to clipboard |
-| Clipboard | `pbcopy` (macOS) / `xclip -selection clipboard` (Linux) / `clip.exe` (WSL) |
-| Export | Write a `~/.claude-ops-setup.md` file with full (sanitized) setup guide for sharing with teammates |
+| Slack     | Send via `/ops:ops-comms slack` with generated message                                                             |
+| Email     | Draft via `gog gmail send` or copy to clipboard                                                                    |
+| Clipboard | `pbcopy` (macOS) / `xclip -selection clipboard` (Linux) / `clip.exe` (WSL)                                         |
+| Export    | Write a `~/.claude-ops-setup.md` file with full (sanitized) setup guide for sharing with teammates                 |
 
 ---
 
@@ -324,19 +335,19 @@ When user selects `?` (or `faq`/`help`/`wiki`):
 
 ### FAQ answers
 
-| # | Question | Answer |
-|---|----------|--------|
-| 1 | What is claude-ops? | Business operations OS for Claude Code. Manages inbox, fires, deploys, PRs, revenue, and can run your business autonomously via YOLO mode. |
-| 2 | Channel setup | Run `/ops:setup` — interactive wizard detects installed CLIs and walks you through each channel. |
-| 3 | YOLO mode | Spawns 4 AI agents (CEO, CTO, CFO, COO) to analyze your business. Type YOLO to hand over controls — it processes inbox, fixes fires, merges PRs, and advances GSD phases. |
-| 4 | Data collection | All data stays local. No telemetry. Registry and preferences are gitignored. Tokens stored in macOS keychain or env vars. |
-| 5 | Command reference | List all `/ops:*` commands with descriptions |
-| 6 | Shortcuts | `1-9, 0` for actions, `a-h` for power/comms/settings, `b` always goes back, `q` exits |
-| 7 | MCP disconnected | Wait 5s and retry (auto-reconnect hook). After 3 fails, falls back to CLI tools. |
-| 8 | WhatsApp | Check bridge liveness: `lsof -i :8080 | grep LISTEN`. If not running, prompt restart: `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`. Check `launchctl list com.${USER}.whatsapp-bridge` for status. If store locked: `kill $(pgrep whatsapp-bridge)`. |
-| 9 | Telegram | Needs user-auth (not bot). Run `/ops:setup` → Telegram section. API ID + hash from my.telegram.org. |
-| 10 | Unread | Channel must be configured in `/ops:setup`. Check `ops-unread` script output for errors. |
-| 11 | Smart-home (Homey) | Run `/ops:setup --section home` to configure Homey Pro. Once set, hotkey `h` and `/ops:ops-home` are routable. Status dot on the dashboard: green = all devices online + no alarms, yellow = device offline, red = active critical alarm. |
+| #   | Question            | Answer                                                                                                                                                                                                                                    |
+| --- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | What is claude-ops? | Business operations OS for Claude Code. Manages inbox, fires, deploys, PRs, revenue, and can run your business autonomously via YOLO mode.                                                                                                |
+| 2   | Channel setup       | Run `/ops:setup` — interactive wizard detects installed CLIs and walks you through each channel.                                                                                                                                          |
+| 3   | YOLO mode           | Spawns 4 AI agents (CEO, CTO, CFO, COO) to analyze your business. Type YOLO to hand over controls — it processes inbox, fixes fires, merges PRs, and advances GSD phases.                                                                 |
+| 4   | Data collection     | All data stays local. No telemetry. Registry and preferences are gitignored. Tokens stored in macOS keychain or env vars.                                                                                                                 |
+| 5   | Command reference   | List all `/ops:*` commands with descriptions                                                                                                                                                                                              |
+| 6   | Shortcuts           | `1-9, 0` for actions, `a-h` for power/comms/settings, `b` always goes back, `q` exits                                                                                                                                                     |
+| 7   | MCP disconnected    | Wait 5s and retry (auto-reconnect hook). After 3 fails, falls back to CLI tools.                                                                                                                                                          |
+| 8   | WhatsApp            | Check bridge liveness: `lsof -i :8080                                                                                                                                                                                                     | grep LISTEN`. If not running, prompt restart: `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`. Check `launchctl list com.${USER}.whatsapp-bridge`for status. If store locked:`kill $(pgrep whatsapp-bridge)`. |
+| 9   | Telegram            | Needs user-auth (not bot). Run `/ops:setup` → Telegram section. API ID + hash from my.telegram.org.                                                                                                                                       |
+| 10  | Unread              | Channel must be configured in `/ops:setup`. Check `ops-unread` script output for errors.                                                                                                                                                  |
+| 11  | Smart-home (Homey)  | Run `/ops:setup --section home` to configure Homey Pro. Once set, hotkey `h` and `/ops:ops-home` are routable. Status dot on the dashboard: green = all devices online + no alarms, yellow = device offline, red = active critical alarm. |
 
 For links (w, r, i): open in browser via `open` (macOS) or `xdg-open` (Linux).
 
@@ -351,6 +362,7 @@ After each FAQ answer, offer `b) Back to dashboard` or `h) Back to FAQ`.
 After ANY skill completes and returns control, **re-render the dashboard** by running the bin script again and re-entering the routing loop. This creates the "app within an app" experience — the user always comes back to the command center.
 
 To re-render:
+
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-dash 2>/dev/null
 ```

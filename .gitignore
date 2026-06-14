@@ -6,3 +6,6 @@ node_modules/
 *.log
 .worktrees/
 .gstack/
+
+# Operator PII denylist (out-of-repo, loaded by test-no-secrets.sh / pre-commit)
+.pii-denylist

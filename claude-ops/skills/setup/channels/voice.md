@@ -28,43 +28,50 @@ Cache these results — use them to pre-fill answers for each sub-step below. Ch
 
 Ask which voice services to configure via `AskUserQuestion` with `multiSelect: true`:
 
-| Option      | Header      | Description                                    |
-| ----------- | ----------- | ---------------------------------------------- |
-| Bland AI    | bland       | Outbound AI phone calls — API key              |
-| ElevenLabs  | elevenlabs  | Text-to-speech and voice cloning — API key     |
-| Groq        | groq        | Fast LLM inference (Whisper, LLaMA) — API key  |
+| Option     | Header     | Description                                   |
+| ---------- | ---------- | --------------------------------------------- |
+| Bland AI   | bland      | Outbound AI phone calls — API key             |
+| ElevenLabs | elevenlabs | Text-to-speech and voice cloning — API key    |
+| Groq       | groq       | Fast LLM inference (Whisper, LLaMA) — API key |
 
 #### Bland AI
 
 If `BLAND_AI_API_KEY` or `BLAND_API_KEY` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format. Only ask via free text if not found:
+
 ```
 Enter your Bland AI API Key:
   To find it: https://app.bland.ai → Settings → API Key
 ```
 
 Smoke test:
+
 ```bash
 curl -s -H "Authorization: $KEY" "https://api.bland.ai/v1/me" | jq '.user.id'
 ```
+
 Expect a non-null user ID.
 
 #### ElevenLabs
 
 If `ELEVENLABS_API_KEY` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format. Only ask via free text if not found:
+
 ```
 Enter your ElevenLabs API Key:
   To find it: https://elevenlabs.io → Profile (top-right) → API Key
 ```
 
 Smoke test:
+
 ```bash
 curl -s -H "xi-api-key: $KEY" "https://api.elevenlabs.io/v1/user" | jq '.subscription.tier'
 ```
+
 Expect a subscription tier string (e.g. `"free"`, `"starter"`).
 
 #### Groq
 
 If `GROQ_API_KEY` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format. Only ask via free text if not found:
+
 ```
 Enter your Groq API Key:
   To generate one: https://console.groq.com → API Keys → Create API Key
@@ -72,15 +79,18 @@ Enter your Groq API Key:
 ```
 
 Smoke test:
+
 ```bash
 curl -s -H "Authorization: Bearer $KEY" \
   "https://api.groq.com/openai/v1/models" | jq '.data | length'
 ```
+
 Expect a positive integer (number of available models).
 
 #### Save to preferences
 
 Write to `$PREFS_PATH` (merge):
+
 ```json
 {
   "voice": {
@@ -96,4 +106,3 @@ Same Doppler-reference pattern — prefer `doppler:KEY_NAME` over raw tokens whe
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-voice/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for voice integrations (Bland AI call flows, ElevenLabs TTS, Groq transcription). The setup agent can load that file directly when it needs more depth than this wizard provides.
 
 ---
-

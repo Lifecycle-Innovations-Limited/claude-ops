@@ -34,14 +34,14 @@ The watcher is **read-only** — it never mutates infrastructure (Rule 5).
 `ops-notify.sh` tries sinks in this order and fans out to **all** that are
 configured (there is no "pick one" — you get alerts everywhere you want them):
 
-| Priority | Sink              | Trigger env / pref                                                                  |
-| -------- | ----------------- | ----------------------------------------------------------------------------------- |
+| Priority | Sink              | Trigger env / pref                                                                      |
+| -------- | ----------------- | --------------------------------------------------------------------------------------- |
 | 1        | Telegram bot      | `$TELEGRAM_BOT_TOKEN` + `$TELEGRAM_NOTIFY_CHAT_ID` (falls back to `$TELEGRAM_OWNER_ID`) |
-| 2        | Discord webhook   | `$DISCORD_WEBHOOK_URL` (shared with `/ops:comms discord send`)                       |
-| 3        | ntfy.sh           | `$NTFY_TOPIC` (optionally `$NTFY_SERVER` for a self-hosted instance)                |
-| 4        | Pushover          | `$PUSHOVER_USER` + `$PUSHOVER_TOKEN`                                                |
-| 5        | macOS `osascript` | Local desktop notification (macOS only — guarded behind a Darwin check)             |
-| 6        | stderr log        | Always runs if nothing else is configured — written to `logs/ops-notify.log`        |
+| 2        | Discord webhook   | `$DISCORD_WEBHOOK_URL` (shared with `/ops:comms discord send`)                          |
+| 3        | ntfy.sh           | `$NTFY_TOPIC` (optionally `$NTFY_SERVER` for a self-hosted instance)                    |
+| 4        | Pushover          | `$PUSHOVER_USER` + `$PUSHOVER_TOKEN`                                                    |
+| 5        | macOS `osascript` | Local desktop notification (macOS only — guarded behind a Darwin check)                 |
+| 6        | stderr log        | Always runs if nothing else is configured — written to `logs/ops-notify.log`            |
 
 Every env var above also has a `$PREFS_PATH` fallback (the dispatch script
 reads `~/.claude/plugins/data/ops-ops-marketplace/preferences.json` when the
@@ -49,11 +49,11 @@ env var isn't set), so you don't have to export secrets globally.
 
 ### Severity-to-emoji mapping
 
-| Severity | Emoji | Notes                                  |
-| -------- | ----- | -------------------------------------- |
-| CRITICAL | 🔴    | Pushover priority `1`, ntfy priority `5` |
-| HIGH     | 🟠    | Pushover priority `1`, ntfy priority `4` |
-| MEDIUM   | 🟡    | Pushover priority `0`, ntfy priority `3` |
+| Severity | Emoji | Notes                                     |
+| -------- | ----- | ----------------------------------------- |
+| CRITICAL | 🔴    | Pushover priority `1`, ntfy priority `5`  |
+| HIGH     | 🟠    | Pushover priority `1`, ntfy priority `4`  |
+| MEDIUM   | 🟡    | Pushover priority `0`, ntfy priority `3`  |
 | LOW      | 🟢    | Pushover priority `-1`, ntfy priority `2` |
 
 ## How to choose a sink
@@ -96,6 +96,7 @@ To avoid waking you up every minute about the same fire:
   output; no "all clear" ping is sent (noise vs signal tradeoff).
 
 Fingerprints are stable across ticks:
+
 - Infra: `infra:<cluster>:<status>`
 - Sentry: `sentry:<issue_id>`
 

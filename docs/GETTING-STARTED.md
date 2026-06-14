@@ -1,4 +1,5 @@
 <!-- generated-by: gsd-doc-writer -->
+
 # Getting Started with claude-ops
 
 claude-ops v1.7.0 — Business Operating System for Claude Code. This guide takes you from zero to your first morning briefing in under five minutes.

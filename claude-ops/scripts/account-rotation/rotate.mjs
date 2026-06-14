@@ -82,7 +82,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 //      real-Chrome network stack so claude.ai/Google don't flag it)
 //   3. Fallback: Playwright's bundled Chromium with launchPersistentContext on
 //      an ISOLATED profile dir (used when no Chrome/Chrome Beta binary, or when
-//      Chrome Beta launch fails). Never depends on / touches Sam's daily Chrome
+//      Chrome Beta launch fails). Never depends on / touches the owner's daily Chrome
 //      or Comet — Comet stays reserved for the user.
 function ensureMCPServersAndTools() {
   const actions = [];
@@ -125,7 +125,7 @@ function ensureMCPServersAndTools() {
   // 4. security (macOS keychain) — required for token writes ON MACOS ONLY.
   // On Linux the token store is the file-based ~/.claude/.credentials.json
   // (see _linuxWriteCred / IS_LINUX), so a missing `security` binary is benign
-  // here — don't emit a misleading warning. (Sam 2026-06-06: box-local separation.)
+  // here — don't emit a misleading warning. ((2026-06-06): box-local separation.)
   if (process.platform === 'darwin') {
     try {
       execSync(`command -v security >/dev/null 2>&1`, { timeout: 1000 });
@@ -180,7 +180,7 @@ function notify(title, msg) {
   } catch {}
 }
 
-// Cross-machine account leases (Sam 2026-06-06): NOT a static per-machine split.
+// Cross-machine account leases ((2026-06-06)): NOT a static per-machine split.
 // Both machines may use ALL accounts; the only constraint is that the same
 // account is never ACTIVE on both at once. readConfig() drops accounts a FOREIGN
 // host currently holds a fresh lease on. We never drop the account we're
@@ -458,7 +458,7 @@ function pickNextAccount(config, state, liveUtil = {}) {
   // it does not affect who we can rotate to.
   function hasExtraUsageEnabled(a) {
     const key = accountKey(a);
-    // Per-account safe override (Sam 2026-06-11): when auto-reload/auto-billing is
+    // Per-account safe override ((2026-06-11)): when auto-reload/auto-billing is
     // OFF on the org, extra_usage cannot leak money — at 0 credits Claude simply
     // stops, it does NOT pay-per-use. Such accounts are first-class rotation
     // targets, not last-resort EU-pool. Honors the config `extraUsageSafeOverride`
@@ -472,7 +472,7 @@ function pickNextAccount(config, state, liveUtil = {}) {
     return false;
   }
 
-  // Money-leak guard (Sam doctrine): by default NEVER rotate to an account with
+  // Money-leak guard (owner doctrine): by default NEVER rotate to an account with
   // Anthropic-side extra_usage (pay-per-use overage) enabled — when its weekly cap
   // is hit, further tokens silently bill the card. Opt out for a single run with
   // --allow-extra-usage or ALLOW_EXTRA_USAGE=1. EU accounts remain reachable only
@@ -645,7 +645,7 @@ function pickNextAccount(config, state, liveUtil = {}) {
     return null;
   }
   // All non-active candidates exceed UTIL_HARD_BLOCK — refuse to pick. Caller handles
-  // Bedrock fallback. Sam's rule: never rotate to an account that will
+  // Bedrock fallback. the owner's rule: never rotate to an account that will
   // immediately say token-limit-reached.
   log(
     `All non-active candidates score ≥${UTIL_HARD_BLOCK}% max(5h,7d) (or pool empty) — refusing to pick (use Bedrock fallback)`,
@@ -676,7 +676,7 @@ function allNonActiveLiveConfirmedOverDestinationCap(config, state, liveUtil) {
 
 // Returns { pick, allExhausted, allHaveLive, onlyActiveViable, destinationCapStuck } using LIVE util only.
 // allExhausted is true ONLY when every viable candidate has live data AND
-// max(5h,7d) >= EXHAUSTED_THRESHOLD. Per Sam's rule: never assume exhaustion
+// max(5h,7d) >= EXHAUSTED_THRESHOLD. Per the owner's rule: never assume exhaustion
 // from cached / unknown data — Bedrock fallback must be live-confirmed.
 function recommendAccount(config, state, liveUtil) {
   const candidates = config.accounts.filter((a) => a.disabled !== true);
@@ -1883,7 +1883,7 @@ function extractText(result) {
 }
 
 // ─── Driver 2: Playwright (CDP → Chrome Beta → bundled Chromium) ────────────
-// Tiered strategy — never touches Sam's daily Chrome / Comet profile:
+// Tiered strategy — never touches the owner's daily Chrome / Comet profile:
 //   1. If CDP is already up on :9222 → attach directly
 //   2. Else: spawn Chrome Beta (REAL_BROWSERS) with an ISOLATED automation
 //      profile (.chrome-beta-automation) and CDP enabled
@@ -4953,8 +4953,8 @@ if (args.includes('--setup')) {
   //
   // Each per-account profile is cloned from a source profile (default
   // `ClaudeCode`, override with `--clone-from <dir>`) so the Claude extension
-  // is pre-installed and Sam doesn't have to redo browser setup. After clone,
-  // each profile is launched against claude.ai/chrome so Sam can sign out of
+  // is pre-installed and the owner doesn't have to redo browser setup. After clone,
+  // each profile is launched against claude.ai/chrome so the owner can sign out of
   // the inherited account, sign in as the target account, and click Link to
   // pair. A capture step (--capture-oauth-snapshot) then snapshots the new
   // pairing for use by --pin-browser.

@@ -45,11 +45,11 @@ The subsystem keeps HTTP MCP servers alive and authenticated without user interv
 
 All paths relative to `$CLAUDE_PLUGIN_ROOT/scripts/`.
 
-| # | Script                    | Role                     | Triggered by                      | Interval   |
-|---|---------------------------|--------------------------|-----------------------------------|------------|
-| 1 | `ops-mcp-watchdog.py`     | Probe + diff + notify    | cron, `/ops:mcp reconnect`        | */5 min    |
-| 2 | `ops-mcp-keepalive.sh`    | Proactive token refresh  | cron                              | */15 min   |
-| 3 | `ops-mcp-reauth.py`       | Playwright OAuth consent | watchdog (auto), `/ops:mcp reauth`| on-demand  |
+| #   | Script                 | Role                     | Triggered by                       | Interval  |
+| --- | ---------------------- | ------------------------ | ---------------------------------- | --------- |
+| 1   | `ops-mcp-watchdog.py`  | Probe + diff + notify    | cron, `/ops:mcp reconnect`         | \*/5 min  |
+| 2   | `ops-mcp-keepalive.sh` | Proactive token refresh  | cron                               | \*/15 min |
+| 3   | `ops-mcp-reauth.py`    | Playwright OAuth consent | watchdog (auto), `/ops:mcp reauth` | on-demand |
 
 ## Hook flow (CLAUDE.md MCP auto-reconnect doctrine)
 
@@ -84,15 +84,15 @@ The two layers are complementary: the hook handles transient in-session crashes;
 
 ## Server state classification
 
-| State              | Meaning                                                           | Auto-recovery |
-|--------------------|-------------------------------------------------------------------|---------------|
-| `healthy`          | JSON-RPC initialize returned valid result                         | N/A           |
-| `token_expired`    | 401 + refresh_token exists in tokens.json                         | Silent refresh |
-| `needs_bootstrap`  | 401 + no refresh_token (first-time or refresh expired)            | Playwright reauth |
-| `cloudflare_ua`    | 403 from Cloudflare bot challenge (change UA or use different path) | Manual       |
-| `unreachable`      | DNS failure or connection refused                                 | Wait / manual |
-| `server_error`     | 5xx from MCP server                                               | Wait          |
-| `weird_2xx`        | 200 but response was not a valid MCP init result                  | Check server  |
+| State             | Meaning                                                             | Auto-recovery     |
+| ----------------- | ------------------------------------------------------------------- | ----------------- |
+| `healthy`         | JSON-RPC initialize returned valid result                           | N/A               |
+| `token_expired`   | 401 + refresh_token exists in tokens.json                           | Silent refresh    |
+| `needs_bootstrap` | 401 + no refresh_token (first-time or refresh expired)              | Playwright reauth |
+| `cloudflare_ua`   | 403 from Cloudflare bot challenge (change UA or use different path) | Manual            |
+| `unreachable`     | DNS failure or connection refused                                   | Wait / manual     |
+| `server_error`    | 5xx from MCP server                                                 | Wait              |
+| `weird_2xx`       | 200 but response was not a valid MCP init result                    | Check server      |
 
 ## Token cache location
 
@@ -107,6 +107,7 @@ Servers listed in `API_KEY_MCPS` in `ops-mcp-watchdog.py` (currently: `pocketai`
 ## Notification behavior
 
 On new degradations (server was healthy on previous tick, now not):
+
 1. macOS notification via `osascript` (fires immediately, no config needed)
 2. WhatsApp message via `supervisor-out-queue.jsonl` (same queue as pocket notifier)
 
@@ -116,24 +117,24 @@ Notification can be suppressed with `MCP_WATCHDOG_NOTIFY=0`.
 
 ## Environment variables
 
-| Variable                    | Default | Effect                                              |
-|-----------------------------|---------|-----------------------------------------------------|
-| `MCP_WATCHDOG_AUTO_REFRESH` | `1`     | Attempt silent OAuth refresh on token_expired       |
-| `MCP_WATCHDOG_AUTO_REAUTH`  | `1`     | Invoke Playwright reauth on needs_bootstrap         |
-| `MCP_WATCHDOG_NOTIFY`       | `1`     | Send WhatsApp + macOS notifications on degradation  |
-| `MCP_WATCHDOG_PROBE_TIMEOUT`| `6`     | Per-server HTTP probe timeout in seconds            |
-| `MCP_KEEPALIVE_GRACE_MIN`   | `15`    | Refresh token if expiry < this many minutes away    |
-| `MCP_KEEPALIVE_URLS`        | (all)   | Space-separated URL list; overrides full scan       |
-| `MCP_REAUTH_HEADLESS`       | `1`     | Set to `0` to see the Playwright browser            |
-| `MCP_REAUTH_TIMEOUT`        | `90`    | Per-MCP consent flow timeout in seconds             |
+| Variable                     | Default | Effect                                             |
+| ---------------------------- | ------- | -------------------------------------------------- |
+| `MCP_WATCHDOG_AUTO_REFRESH`  | `1`     | Attempt silent OAuth refresh on token_expired      |
+| `MCP_WATCHDOG_AUTO_REAUTH`   | `1`     | Invoke Playwright reauth on needs_bootstrap        |
+| `MCP_WATCHDOG_NOTIFY`        | `1`     | Send WhatsApp + macOS notifications on degradation |
+| `MCP_WATCHDOG_PROBE_TIMEOUT` | `6`     | Per-server HTTP probe timeout in seconds           |
+| `MCP_KEEPALIVE_GRACE_MIN`    | `15`    | Refresh token if expiry < this many minutes away   |
+| `MCP_KEEPALIVE_URLS`         | (all)   | Space-separated URL list; overrides full scan      |
+| `MCP_REAUTH_HEADLESS`        | `1`     | Set to `0` to see the Playwright browser           |
+| `MCP_REAUTH_TIMEOUT`         | `90`    | Per-MCP consent flow timeout in seconds            |
 
 ## Common failure modes
 
-| Symptom | Likely cause | Remediation |
-|---------|-------------|-------------|
-| All servers `needs_bootstrap` after machine restart | mcp-remote token cache wiped or Keychain locked | `/ops:mcp reauth <name>` for each |
-| Server `token_expired` but auto-refresh fails | Provider rotated signing key or revoked refresh | `/ops:mcp reauth <name>` |
-| `cloudflare_ua` state | Cloudflare WAF blocking the watchdog's UA | Not auto-recoverable; use Claude Code directly |
-| `unreachable` for remote server | Network change, server down, or DNS failure | Check server status; wait and run `/ops:mcp reconnect` |
-| Playwright reauth exits 1 | Browser profile has no session for the OAuth provider | Run `python3 $CLAUDE_PLUGIN_ROOT/scripts/ops-mcp-reauth.py --bootstrap` once |
-| Watchdog health file stale > 15 min | Cron not registered or Python binary path wrong | `/ops:mcp restart` to re-register crontab |
+| Symptom                                             | Likely cause                                          | Remediation                                                                  |
+| --------------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------- |
+| All servers `needs_bootstrap` after machine restart | mcp-remote token cache wiped or Keychain locked       | `/ops:mcp reauth <name>` for each                                            |
+| Server `token_expired` but auto-refresh fails       | Provider rotated signing key or revoked refresh       | `/ops:mcp reauth <name>`                                                     |
+| `cloudflare_ua` state                               | Cloudflare WAF blocking the watchdog's UA             | Not auto-recoverable; use Claude Code directly                               |
+| `unreachable` for remote server                     | Network change, server down, or DNS failure           | Check server status; wait and run `/ops:mcp reconnect`                       |
+| Playwright reauth exits 1                           | Browser profile has no session for the OAuth provider | Run `python3 $CLAUDE_PLUGIN_ROOT/scripts/ops-mcp-reauth.py --bootstrap` once |
+| Watchdog health file stale > 15 min                 | Cron not registered or Python binary path wrong       | `/ops:mcp restart` to re-register crontab                                    |

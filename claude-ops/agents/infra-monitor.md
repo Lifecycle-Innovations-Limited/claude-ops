@@ -16,7 +16,7 @@ disallowedTools:
   - Edit
   - Agent
 memory: project
-initialPrompt: "Probe all accessible AWS services, Vercel, and GitHub Actions. Return structured JSON with per-service status and anomaly flags."
+initialPrompt: 'Probe all accessible AWS services, Vercel, and GitHub Actions. Return structured JSON with per-service status and anomaly flags.'
 ---
 
 # INFRA MONITOR AGENT
@@ -338,7 +338,25 @@ done
   "account": "[aws account id]",
   "region": "[aws region]",
   "overall_health": "healthy|degraded|critical",
-  "accessible_services": ["ec2", "ecs", "rds", "lambda", "s3", "cloudfront", "elbv2", "apigateway", "sqs", "sns", "dynamodb", "elasticache", "route53", "acm", "cloudwatch", "budgets", "iam"],
+  "accessible_services": [
+    "ec2",
+    "ecs",
+    "rds",
+    "lambda",
+    "s3",
+    "cloudfront",
+    "elbv2",
+    "apigateway",
+    "sqs",
+    "sns",
+    "dynamodb",
+    "elasticache",
+    "route53",
+    "acm",
+    "cloudwatch",
+    "budgets",
+    "iam"
+  ],
   "inaccessible": ["[service where CLI returned AccessDenied or errored]"],
   "services": {
     "ecs": {
@@ -360,22 +378,22 @@ done
         }
       ]
     },
-    "ec2":         { "running": 0, "stopped": 0, "other": 0, "unattached_volumes": 0, "anomalies": [] },
-    "rds":         { "instances": [], "anomalies": [] },
-    "lambda":      { "functions": [], "errors_last_hour": [], "anomalies": [] },
-    "s3":          { "buckets": [], "public_buckets": [], "anomalies": [] },
-    "cloudfront":  { "distributions": [], "anomalies": [] },
-    "elbv2":       { "load_balancers": [], "target_health": [], "anomalies": [] },
-    "apigateway":  { "apis": [], "anomalies": [] },
-    "sqs":         { "queues": [], "backlogs": [], "anomalies": [] },
-    "sns":         { "topic_count": 0, "anomalies": [] },
-    "dynamodb":    { "tables": [], "anomalies": [] },
+    "ec2": { "running": 0, "stopped": 0, "other": 0, "unattached_volumes": 0, "anomalies": [] },
+    "rds": { "instances": [], "anomalies": [] },
+    "lambda": { "functions": [], "errors_last_hour": [], "anomalies": [] },
+    "s3": { "buckets": [], "public_buckets": [], "anomalies": [] },
+    "cloudfront": { "distributions": [], "anomalies": [] },
+    "elbv2": { "load_balancers": [], "target_health": [], "anomalies": [] },
+    "apigateway": { "apis": [], "anomalies": [] },
+    "sqs": { "queues": [], "backlogs": [], "anomalies": [] },
+    "sns": { "topic_count": 0, "anomalies": [] },
+    "dynamodb": { "tables": [], "anomalies": [] },
     "elasticache": { "clusters": [], "anomalies": [] },
-    "route53":     { "zones": 0, "health_checks": [], "anomalies": [] },
-    "acm":         { "certificates": [], "expiring_soon": [], "anomalies": [] },
-    "cloudwatch":  { "in_alarm": 0, "alarms": [], "anomalies": [] },
-    "budgets":     { "budgets": [], "anomalies": [] },
-    "iam":         { "stale_access_keys": [], "anomalies": [] }
+    "route53": { "zones": 0, "health_checks": [], "anomalies": [] },
+    "acm": { "certificates": [], "expiring_soon": [], "anomalies": [] },
+    "cloudwatch": { "in_alarm": 0, "alarms": [], "anomalies": [] },
+    "budgets": { "budgets": [], "anomalies": [] },
+    "iam": { "stale_access_keys": [], "anomalies": [] }
   },
   "vercel": {
     "projects": [

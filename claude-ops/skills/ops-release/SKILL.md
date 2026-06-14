@@ -1,7 +1,7 @@
 ---
 name: ops-release
 description: Publish a new version of the claude-ops ("ops") plugin in one command — bump plugin.json + marketplace.json + package.json, prepend the CHANGELOG, open the release PR, admin squash-merge it to main, and tag vX.Y.Z. Use when shipping a fix/feature that has already merged to main and you want it published so /ops:ops-update can pull it down. This is the publish side; /ops:ops-update is the consume side.
-argument-hint: "[--type patch|minor|major] [--version X.Y.Z] [--notes \"changelog body\"] [--dry-run] [--no-merge] [--no-tag]"
+argument-hint: '[--type patch|minor|major] [--version X.Y.Z] [--notes "changelog body"] [--dry-run] [--no-merge] [--no-tag]'
 allowed-tools:
   - Bash
   - Read
@@ -88,14 +88,14 @@ tag. Surface the final line verbatim and then tell the user to pull it down:
 
 ## Flags
 
-| Flag | Effect |
-|------|--------|
-| `--type patch\|minor\|major` | Semver bump from the current version (default `patch`). |
-| `--version X.Y.Z` | Set an exact target version instead of bumping. |
-| `--notes "…"` | Markdown body prepended to the CHANGELOG under the new version. Quote it. |
-| `--dry-run` | Report only; change nothing. Always run this first. |
-| `--no-merge` | Open the release PR but do NOT admin-merge it (leave for manual review). |
-| `--no-tag` | Skip pushing the `vX.Y.Z` tag. |
+| Flag                         | Effect                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------- |
+| `--type patch\|minor\|major` | Semver bump from the current version (default `patch`).                   |
+| `--version X.Y.Z`            | Set an exact target version instead of bumping.                           |
+| `--notes "…"`                | Markdown body prepended to the CHANGELOG under the new version. Quote it. |
+| `--dry-run`                  | Report only; change nothing. Always run this first.                       |
+| `--no-merge`                 | Open the release PR but do NOT admin-merge it (leave for manual review).  |
+| `--no-tag`                   | Skip pushing the `vX.Y.Z` tag.                                            |
 
 ## What it touches
 

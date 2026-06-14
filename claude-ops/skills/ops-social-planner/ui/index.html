@@ -1,35 +1,38 @@
 <!doctype html>
 <html lang="en" data-theme="dark">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="dark light" />
-  <title>Ops Social Planner</title>
-  <link rel="stylesheet" href="./styles.css" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗓️</text></svg>" />
-</head>
-<body>
-  <header class="topbar">
-    <div class="row">
-      <div class="brand">
-        <h1>Ops Social Planner</h1>
-        <span class="sub" id="sub">loading…</span>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Ops Social Planner</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗓️</text></svg>"
+    />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="row">
+        <div class="brand">
+          <h1>Ops Social Planner</h1>
+          <span class="sub" id="sub">loading…</span>
+        </div>
+        <div class="meta" id="meta"></div>
+        <button class="icon-btn" id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
+        <button class="icon-btn" id="refresh" title="Reload state" aria-label="Reload">⟳</button>
       </div>
-      <div class="meta" id="meta"></div>
-      <button class="icon-btn" id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
-      <button class="icon-btn" id="refresh" title="Reload state" aria-label="Reload">⟳</button>
-    </div>
-    <div class="row">
-      <div class="segmented" id="identities" role="group" aria-label="Account / project"></div>
-      <div class="segmented" id="views" role="group" aria-label="View">
-        <button data-view="posts" aria-pressed="true">Posts <span class="pill" id="n-posts">0</span></button>
-        <button data-view="ads" aria-pressed="false">Ads <span class="pill" id="n-ads">0</span></button>
+      <div class="row">
+        <div class="segmented" id="identities" role="group" aria-label="Account / project"></div>
+        <div class="segmented" id="views" role="group" aria-label="View">
+          <button data-view="posts" aria-pressed="true">Posts <span class="pill" id="n-posts">0</span></button>
+          <button data-view="ads" aria-pressed="false">Ads <span class="pill" id="n-ads">0</span></button>
+        </div>
+        <input class="search" id="search" type="search" placeholder="Search copy…" aria-label="Search copy" />
       </div>
-      <input class="search" id="search" type="search" placeholder="Search copy…" aria-label="Search copy" />
-    </div>
-    <div class="row chips" id="channels" role="group" aria-label="Channels"></div>
-  </header>
-  <main class="board" id="board" aria-live="polite"></main>
-  <script type="module" src="./app.js"></script>
-</body>
+      <div class="row chips" id="channels" role="group" aria-label="Channels"></div>
+    </header>
+    <main class="board" id="board" aria-live="polite"></main>
+    <script type="module" src="./app.js"></script>
+  </body>
 </html>
