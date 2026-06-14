@@ -23,6 +23,16 @@
  *   TELEGRAM_STATE_DIR  — override ~/.claude/channels/telegram/
  *   TELEGRAM_POLL_TIMEOUT — long-poll timeout in seconds (default 25)
  *
+ * Fleet single-owner gate (env contract — no PID/proc/marker files):
+ *   DEVBOT_TELEGRAM_OWNER — the designated owner session exports it as '1'.
+ *     Unset/empty → plain single-session install → FAIL OPEN (poll normally).
+ *     '1' → this session owns Telegram. Any other value → a sibling owns it →
+ *     stand down. Durable across /ops:ops-update and portable to any OS.
+ *   TELEGRAM_CHANNEL_POLL — optional poll opt-out. '0' → do NOT poll getUpdates
+ *     even when leader (an external poller owns inbound); the leader-gated
+ *     reply/outbound tool stays available. Unset/anything-else → poll when
+ *     leader (default). Polling is never disabled by default.
+ *
  * Self-test (no network, no real token required):
  *   node telegram-server/channel-mcp.mjs --selftest
  *
@@ -81,37 +91,36 @@ function loadSecretsEnv() {
 }
 const secretsEnv = loadSecretsEnv();
 
+// ── Fleet single-owner gate (env contract) ──────────────────────────────────
+// Every Claude Code fleet session loads this plugin and would otherwise spawn a
+// channel-mcp polling Telegram getUpdates on the SAME bot token. Telegram
+// delivers each update to exactly ONE long-poller, so multiple consumers steal
+// each other's updates (409 conflict). The gate elects a single owner via a pure
+// env contract — no PID, no /proc walk, no marker files — so it is durable across
+// `/ops:ops-update`, portable to any OS, and not coupled to process trees.
+//
+// Two env vars govern the gate:
+//
+//   DEVBOT_TELEGRAM_OWNER — the single-owner election.
+//     • unset / empty  → plain single-session install (no fleet) → FAIL OPEN,
+//                         this session owns Telegram and polls normally.
+//     • '1'            → this session is the designated owner → poll + reply.
+//     • any other value→ a sibling session owns Telegram → stand down.
+//
+//   TELEGRAM_CHANNEL_POLL — optional poll opt-out (read at the poll site).
+//     • unset / anything but '0' → poll getUpdates when leader (default).
+//     • '0'                      → do NOT poll getUpdates even when leader (an
+//                                  external poller owns inbound); the leader-gated
+//                                  `reply`/outbound tool stays available.
 function thisSessionIsLeader() {
-  // FAIL OPEN by default: the leader-gate is an opt-in fleet feature. A plain
-  // claude-ops install (no fleet supervisor) or a non-Linux host (no /proc) must
-  // poll normally — the gate only LOCKS OUT a session when it can positively prove
-  // a *different* live session leads. Anything it can't prove → poll.
-  let marker;
-  try {
-    marker = readFileSync(join(homedir(), '.claude', 'state', 'fleet-supervisor.leader'), 'utf8');
-  } catch {
-    return true; // no fleet marker → not a managed fleet → poll normally
-  }
-  const m = marker.match(/pid:(\d+)/);
-  if (!m) return true; // marker without a pid → can't enforce → poll
-  const leaderPid = m[1];
-  let pid = String(process.pid);
-  for (let i = 0; i < 64; i++) {
-    if (pid === leaderPid) return true; // this process is in the leader's tree
-    let stat;
-    try {
-      stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    } catch {
-      return true; // /proc unreadable (non-Linux / process gone) → can't prove → poll
-    }
-    const after = stat
-      .slice(stat.lastIndexOf(')') + 2)
-      .trim()
-      .split(/\s+/);
-    pid = after[1];
-    if (!pid || pid === '0' || pid === '1') return false; // reached init: NOT the leader's tree
-  }
-  return false; // ran out of hops without matching → treat as non-leader
+  // Fleet single-owner gate — pure env, no PID/proc-tree/marker files.
+  // The designated owner session exports DEVBOT_TELEGRAM_OWNER=1. FAIL OPEN:
+  // when unset/empty this is a plain single-session install (no fleet) → poll
+  // normally. Any explicit value other than '1' means a sibling session owns
+  // Telegram → stand down.
+  const v = process.env.DEVBOT_TELEGRAM_OWNER;
+  if (v === undefined || v === '') return true;
+  return v === '1';
 }
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || prefs.bot_token || secretsEnv.TELEGRAM_BOT_TOKEN || '';
@@ -388,10 +397,23 @@ await mcp.connect(new StdioServerTransport());
 // Poll runs after MCP transport is up so notifications can be dispatched.
 let backoffMs = 0;
 
+// TELEGRAM_CHANNEL_POLL=0 disables getUpdates polling even when this session is
+// the leader (for setups where an external poller owns inbound). The
+// leader-gated reply/outbound tool stays available either way. Default (unset or
+// any value but '0') = poll when leader. Never disabled by default.
+const POLL_ENABLED = process.env.TELEGRAM_CHANNEL_POLL !== '0';
+
 async function poll() {
   if (shuttingDown) return;
   if (!BOT_TOKEN) {
     setTimeout(poll, 30_000).unref();
+    return;
+  }
+  if (!POLL_ENABLED) {
+    process.stderr.write(
+      'telegram-channel: TELEGRAM_CHANNEL_POLL=0 — getUpdates polling disabled (external poller owns inbound); ' +
+        'leader-gated reply tool stays available.\n',
+    );
     return;
   }
   if (!thisSessionIsLeader()) {

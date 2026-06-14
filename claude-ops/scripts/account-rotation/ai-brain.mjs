@@ -444,9 +444,7 @@ export async function scrapeBillingState(page, log = () => {}) {
 
     // credits_usd — first dollar amount near a "credit"/"balance" mention.
     let credits_usd = null;
-    const creditLine = text
-      .split('\n')
-      .find((l) => /credit|balance/i.test(l) && /\$\s?\d/.test(l));
+    const creditLine = text.split('\n').find((l) => /credit|balance/i.test(l) && /\$\s?\d/.test(l));
     const dollarMatch = (creditLine || '').match(/\$\s?([\d,]+(?:\.\d{1,2})?)/);
     if (dollarMatch) {
       const n = parseFloat(dollarMatch[1].replace(/,/g, ''));
@@ -462,9 +460,7 @@ export async function scrapeBillingState(page, log = () => {}) {
 
     // extra_usage_enabled — "extra usage" / "overage" on/off copy.
     let extra_usage_enabled = null;
-    const extraMatch = text.match(
-      /(?:extra usage|overage)[^\n]*?\b(on|off|enabled|disabled)\b/i,
-    );
+    const extraMatch = text.match(/(?:extra usage|overage)[^\n]*?\b(on|off|enabled|disabled)\b/i);
     if (extraMatch) {
       extra_usage_enabled = /on|enabled/i.test(extraMatch[1]);
     }

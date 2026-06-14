@@ -63,14 +63,18 @@ new_isolated_env() {
   TEST_STATE="$SUITE_TMP/$id/state"
   TEST_LOGS="$SUITE_TMP/$id/logs"
   TEST_BIN="$SUITE_TMP/$id/bin"
-  mkdir -p "$TEST_STATE" "$TEST_LOGS" "$TEST_BIN"
+  TEST_HOME="$SUITE_TMP/$id/home"
+  mkdir -p "$TEST_STATE" "$TEST_LOGS" "$TEST_BIN" "$TEST_HOME/.claude/scripts/lib"
   # Symlink mocks into a private bin so we control PATH ordering
   for m in gh claude curl terminal-notifier; do
     ln -sf "$MOCKS/$m" "$TEST_BIN/$m"
   done
+  # Provide mock once.sh so monitor tests don't rate-limit
+  ln -sf "$MOCKS/once.sh" "$TEST_HOME/.claude/scripts/lib/once.sh"
   export OPS_DEPLOY_FIX_STATE="$TEST_STATE"
   export OPS_DEPLOY_FIX_LOGS="$TEST_LOGS"
   export CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT"
+  export HOME="$TEST_HOME"
   export MOCK_GH_LOG_FILE="$TEST_LOGS/gh.log"
   export MOCK_CLAUDE_LOG="$TEST_LOGS/claude.log"
   export MOCK_CLAUDE_PROMPT_OUT="$TEST_LOGS/claude-prompt.txt"
