@@ -224,7 +224,7 @@ if [[ "$LOCALSYNC" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-localsync)${c_rst}"
 else
   localrepo=""
-  for d in "$HOME"/Projects/*/claude-ops "$HOME"/Projects/claude-ops/claude-ops; do
+  for d in "$HOME"/Projects/claude-ops-marketplace "$HOME"/Projects/claude-ops "$HOME"/Projects/*/claude-ops "$HOME"/Projects/claude-ops/claude-ops; do
     case "$d" in *"/.worktrees/"*) continue ;; esac
     [[ -f "$d/.claude-plugin/marketplace.json" ]] || continue
     git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || continue
