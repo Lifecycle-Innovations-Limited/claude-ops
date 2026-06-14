@@ -96,10 +96,16 @@ const server = http.createServer((req, res) => {
     if (route.mode === 'bedrock') {
       // PHASE 2 not yet implemented — fail loud rather than silently meter.
       res.writeHead(501, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({
-        type: 'error',
-        error: { type: 'not_implemented', message: 'router bedrock leg not yet built; set mode=oauth or use env-gated CLAUDE_CODE_USE_BEDROCK fallback' },
-      }));
+      res.end(
+        JSON.stringify({
+          type: 'error',
+          error: {
+            type: 'not_implemented',
+            message:
+              'router bedrock leg not yet built; set mode=oauth or use env-gated CLAUDE_CODE_USE_BEDROCK fallback',
+          },
+        }),
+      );
       log(`501 bedrock leg unimplemented (path ${req.url})`);
       return;
     }
@@ -121,7 +127,9 @@ const server = http.createServer((req, res) => {
     headers.authorization = `Bearer ${token}`;
     const betas = new Set(
       String(headers['anthropic-beta'] || '')
-        .split(',').map((s) => s.trim()).filter(Boolean),
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
     );
     betas.add(OAUTH_BETA);
     headers['anthropic-beta'] = [...betas].join(',');
