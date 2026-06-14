@@ -61,13 +61,13 @@ _registry_file="${PLUGIN_ROOT}scripts/registry.json"
 _project_count=0
 _projects_json="[]"
 if [ -f "$_registry_file" ] 2>/dev/null; then
-  _project_count=$(jq '. | if type == "array" then length elif type == "object" then (.projects // [] | length) else 0 end' "$_registry_file" 2>/dev/null || echo 0)
+  _project_count=$(jq '. | if type == "array" then length elif type == "object" then (.projects // [] | length) else 0 end' "$_registry_file" 2>/dev/null || echo 0) || true
 fi
 
 # Also check prefs for project list
 if [ "$_prefs_exists" = "1" ]; then
-  _prefs_proj=$(jq -r '(.projects // []) | length' "$PREFS_PATH" 2>/dev/null || echo 0)
-  [ "${_prefs_proj:-0}" -gt "${_project_count:-0}" ] && _project_count="$_prefs_proj"
+  _prefs_proj=$(jq -r '(.projects // []) | length' "$PREFS_PATH" 2>/dev/null || echo 0) || true
+  [ "${_prefs_proj:-0}" -gt "${_project_count:-0}" ] && _project_count="$_prefs_proj" || true
 fi
 
 echo "Detected ${_project_count} projects in registry" >&2
@@ -104,7 +104,8 @@ fi
 [ -n "${DOPPLER_TOKEN:-}" ] && _has_doppler=1
 
 # Check for ECS/AWS integration (aws CLI available and region configured)
-command -v aws >/dev/null 2>&1 && aws sts get-caller-identity >/dev/null 2>&1 && _has_ecs=1
+# C3: non-fatal — aws probe can fail (no creds, no network) without aborting the run
+command -v aws >/dev/null 2>&1 && aws sts get-caller-identity >/dev/null 2>&1 && _has_ecs=1 || true
 
 echo "Integrations detected: stripe=${_has_stripe} revenuecat=${_has_revenuecat} shopify=${_has_shopify} sentry=${_has_sentry} linear=${_has_linear} ecs=${_has_ecs} meta=${_has_meta} klaviyo=${_has_klaviyo} ga4=${_has_ga4}" >&2
 
@@ -157,12 +158,14 @@ while IFS=' ' read -r _alias _platform _revenue_model _org; do
   # Issue tracking
   [ "$_has_linear" = "1" ] && _labels="${_labels}\"issues\","
 
-  # Remove trailing comma
+  # Remove trailing comma and wrap as JSON array
   _labels="${_labels%,}"
-  [ -z "$_labels" ] && _labels=""
+  [ -z "$_labels" ] && _labels_json="[]" || _labels_json="[${_labels}]"
 
-  _entry=$(printf '{"key":"%s","label":"%s","match":"%s","badges":[%s]}' \
-    "$_alias" "$_alias" "$_match" "$_labels")
+  # H2: use jq to build the JSON entry so special chars in alias/match can't break it
+  _entry=$(jq -n --arg k "$_alias" --arg l "$_alias" --arg m "$_match" \
+    --argjson b "$_labels_json" \
+    '{"key":$k,"label":$l,"match":$m,"badges":$b}') || true
 
   if [ -z "$_proj_entries" ]; then
     _proj_entries="$_entry"

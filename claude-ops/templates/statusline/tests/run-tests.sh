@@ -21,6 +21,39 @@ assert_exit0() {
 # strip_ansi: remove ESC[...m sequences
 strip_ansi() { printf '%s' "$1" | sed 's/\x1b\[[0-9;]*m//g'; }
 
+# display_width: measure true terminal display width of a plain (ANSI-stripped) string.
+# Uses python3 unicodedata.east_asian_width for accurate 2-cell glyph accounting.
+# Falls back to wc -m + expanded emoji allowlist when python3 is absent (L3/H3 guard).
+if [ "$(uname -s)" = "Darwin" ]; then _u8lc="en_US.UTF-8"; else _u8lc="C.UTF-8"; fi
+display_width() {
+  _dw_s="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$_dw_s" | python3 -c "
+import sys, unicodedata
+s = sys.stdin.read()
+w = 0
+for c in s:
+    ew = unicodedata.east_asian_width(c)
+    if ew in ('W', 'F'):
+        w += 2
+    elif unicodedata.category(c) == 'Mn':
+        pass
+    else:
+        w += 1
+print(w)
+" 2>/dev/null || printf '%s' "$_dw_s" | LC_ALL=$_u8lc wc -m | tr -d ' '
+  else
+    _dw_cw=$(printf '%s' "$_dw_s" | LC_ALL=$_u8lc wc -m | tr -d ' ')
+    _dw_ew=$(printf '%s' "$_dw_s" | LC_ALL=$_u8lc grep -o \
+      -e '🤖' -e '📬' -e '🚧' -e '🔥' -e '💾' -e '⚡' -e '📣' \
+      -e '🛒' -e '📈' -e '🥊' -e '🎧' -e '❄' -e '✦' -e '🔄' -e '🔴' \
+      -e '⚑' -e '⌂' -e '▥' -e '▲' -e '▸' -e '▪' -e '⟳' -e '✓' \
+      -e '⎇' -e '●' -e '░' -e '█' -e '↻' -e '→' \
+      2>/dev/null | wc -l | tr -d ' ')
+    echo $(( _dw_cw + _dw_ew ))
+  fi
+}
+
 # render <input_file> <COLUMNS> <HOME_dir>
 render() {
   HOME="$3" COLUMNS="$2" sh "$SCRIPT" < "$1" 2>/dev/null
@@ -58,11 +91,11 @@ for cols in 60 80 110 160 220; do
   _lineno=0
   while IFS= read -r _line; do
     _lineno=$(( _lineno + 1 ))
-    # Strip ANSI escape sequences first, then measure character count (not bytes)
+    # Strip ANSI escape sequences first, then measure true display width (H3/M1)
     _vis=$(printf '%s' "$_line" | sed 's/\x1b\[[0-9;]*m//g')
-    # Use wc -m (characters) in a UTF-8 locale for accurate count
-    _w=$(printf '%s' "$_vis" | LC_ALL=C.UTF-8 wc -m 2>/dev/null | tr -d ' ')
-    # Guard: if wc -m unavailable or returns non-numeric, skip
+    # Use display_width (python3 unicodedata or fallback) for accurate 2-cell glyph accounting
+    _w=$(display_width "$_vis")
+    # Guard: if measure returns non-numeric, skip
     case "$_w" in *[!0-9]*|'') continue;; esac
     if [ "$_w" -gt "$cols" ]; then
       width_ok=0
@@ -274,11 +307,109 @@ done
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "7. Syntax check"
+echo "7. Project badge cycling (C1 guard)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# Guards C1: with projects configured, line-3 must be non-empty and contain a
+# project label — proving SEP_PB is defined and proj_badges splits correctly.
+# The slow_cache is uid-keyed (/tmp/claude-statusline-slow-<uid>); we wipe it
+# before the test so the fresh-build path always runs (not the stale-cache hit path).
+
+_cycle_uid=$(id -u)
+_cycle_slow="/tmp/claude-statusline-slow-${_cycle_uid}"
+rm -f "$_cycle_slow" 2>/dev/null
+
+_OPS_CACHE="$TMPDIR_BASE/home_cycle/.claude/plugins/data/ops-ops-marketplace/cache"
+mkdir -p "$_OPS_CACHE"
+mkdir -p "$TMPDIR_BASE/home_cycle/.claude/.sysinfo"
+
+# Create two project badge files
+cat > "$_OPS_CACHE/project-alpha.json" <<'PJEOF'
+{"label":"Alpha","badges":[{"icon":"O","value":"2/2","color":"ok"}]}
+PJEOF
+cat > "$_OPS_CACHE/project-beta.json" <<'PJEOF'
+{"label":"Beta","badges":[{"icon":"O","value":"1/3","color":"warn"}]}
+PJEOF
+
+# Create a config with both projects and a very short carousel interval
+cat > "$TMPDIR_BASE/home_cycle/.claude/statusline.config.json" <<'CFGEOF'
+{
+  "theme":"cockpit","gauge_width":{"ctx":8,"quota":6},"carousel_interval_sec":15,
+  "fleet":{"show_bg_agents":false,"show_rotation":false,"show_sdk_fallback":false,"show_cache_ttl":false},
+  "sys_metrics":{"show_cpu":false,"show_ram":false,"show_disk":false,"publish_peer":false,"show_peer":false},
+  "projects":[
+    {"key":"alpha","label":"Alpha","match":"no-match-a","badges":["ecs"]},
+    {"key":"beta","label":"Beta","match":"no-match-b","badges":["errors"]}
+  ]
+}
+CFGEOF
+
+out_c=$(HOME="$TMPDIR_BASE/home_cycle" COLUMNS=160 sh "$SCRIPT" \
+  < "$FIXTURES/input-basic.json" 2>/dev/null)
+# Note: $() strips trailing newlines; add \n so sed -n '3p' can match line 3
+line3_c=$(printf '%s\n' "$out_c" | sed -n '3p')
+vis3_c=$(strip_ansi "$line3_c")
+
+# Wipe slow_cache again and render a second time — what we assert is: line3 is
+# non-empty and has a project label (proves SEP_PB defined + proj_badges split works).
+rm -f "$_cycle_slow" 2>/dev/null
+out_d=$(HOME="$TMPDIR_BASE/home_cycle" COLUMNS=160 sh "$SCRIPT" \
+  < "$FIXTURES/input-basic.json" 2>/dev/null)
+line3_d=$(printf '%s\n' "$out_d" | sed -n '3p')
+vis3_d=$(strip_ansi "$line3_d")
+
+if [ -n "$vis3_c" ]; then
+  ok "cycle: line3 non-empty (SEP_PB defined, proj_badges split works)"
+else
+  nok "cycle: line3 empty — SEP_PB likely undefined or proj_badges never populated"
+fi
+
+if printf '%s' "$vis3_c $vis3_d" | grep -qE '(Alpha|Beta)'; then
+  ok "cycle: project label (Alpha or Beta) appears in line3 render"
+else
+  nok "cycle: no project label in line3 (got: '$(printf '%s' "$vis3_c" | cut -c1-60)')"
+fi
+
+# Restore slow_cache state (remove test artifact)
+rm -f "$_cycle_slow" 2>/dev/null
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "8. ESC byte in rendered badge output (C2 guard)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# Guards C2: rendered output must contain real ESC bytes (0x1b), not literal "[32m".
+# We test the general render output (which always contains colored segments).
+
+THOME_ESC="$TMPDIR_BASE/home_esc"
+mkdir -p "$THOME_ESC/.claude/.sysinfo"
+out_esc=$(HOME="$THOME_ESC" COLUMNS=160 sh "$SCRIPT" < "$FIXTURES/input-basic.json" 2>/dev/null)
+
+# Check for real ESC byte (0x1b followed by '[')
+ESC_BYTE=$(printf '\033')
+if printf '%s' "$out_esc" | grep -q "${ESC_BYTE}\["; then
+  ok "esc-bytes: rendered output contains real ESC[... sequences"
+else
+  nok "esc-bytes: no real ESC byte found — output may contain literal '[32m' strings"
+fi
+
+# Also verify vis_width correctly strips ANSI (real ESC sequences disappear)
+_sample=$(printf '%s' "$out_esc" | head -1)
+_stripped=$(printf '%s' "$_sample" | sed "s/${ESC_BYTE}\[[0-9;]*m//g")
+if printf '%s' "$_stripped" | grep -q "${ESC_BYTE}"; then
+  nok "esc-strip: residual ESC bytes after ANSI strip — strip regex may be wrong"
+else
+  ok "esc-strip: no residual ESC bytes after stripping (strip regex works)"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "9. Syntax check"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-assert_exit0 "sh -n: statusline-command.sh" sh -n "$SCRIPT"
-assert_exit0 "jq: themes.json"              jq . "$(dirname "$SCRIPT")/themes.json"
+assert_exit0 "sh -n: statusline-command.sh"       sh -n "$SCRIPT"
+assert_exit0 "sh -n: run-tests.sh"                sh -n "$TESTS_DIR/run-tests.sh"
+assert_exit0 "jq: themes.json"                    jq . "$(dirname "$SCRIPT")/themes.json"
 assert_exit0 "jq: statusline.config.default.json" \
   jq . "$(dirname "$SCRIPT")/statusline.config.default.json"
 

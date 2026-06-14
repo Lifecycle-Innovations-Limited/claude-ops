@@ -57,17 +57,39 @@ gauge() {
   GAUGE_BAR="${_b}${ESC}[0m"
 }
 
-# ── visible_width <string> → echoes char count (ANSI-stripped, emoji+1) ──────
-# Used to measure segments before packing them into a line.
+# ── visible_width <string> → echoes char count (ANSI-stripped, true display width) ──────
+# Uses python3 unicodedata for accurate 2-cell glyph accounting when available.
+# Falls back to wc -m + expanded emoji allowlist on plain POSIX environments.
 if [ "$(uname -s)" = "Darwin" ]; then _u8lc="en_US.UTF-8"; else _u8lc="C.UTF-8"; fi
 vis_width() {
   _s=$(printf '%s' "$1" | sed "s/${ESC}\[[0-9;]*m//g")
-  _cw=$(printf '%s' "$_s" | LC_ALL=$_u8lc wc -m | tr -d ' ')
-  # Each wide emoji costs an extra column (they render in 2 cells):
-  _ew=$(printf '%s' "$_s" | LC_ALL=$_u8lc grep -o -e '🤖' -e '📬' -e '🚧' -e '🔥' \
-    -e '💾' -e '⚡' -e '📣' -e '🛒' -e '📈' -e '🥊' -e '🎧' -e '❄' -e '✦' \
-    -e '🔄' -e '🔴' 2>/dev/null | wc -l | tr -d ' ')
-  echo $(( _cw + _ew ))
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$_s" | python3 -c "
+import sys, unicodedata
+s = sys.stdin.read()
+w = 0
+for c in s:
+    ew = unicodedata.east_asian_width(c)
+    if ew in ('W', 'F'):
+        w += 2
+    elif unicodedata.category(c) == 'Mn':
+        pass  # combining mark — zero width
+    else:
+        w += 1
+print(w)
+" 2>/dev/null || printf '%s' "$_s" | LC_ALL=$_u8lc wc -m | tr -d ' '
+  else
+    _cw=$(printf '%s' "$_s" | LC_ALL=$_u8lc wc -m | tr -d ' ')
+    # Each wide emoji/symbol costs an extra column (they render in 2 cells).
+    # Allowlist covers ALL non-ASCII glyphs the renderer can emit:
+    _ew=$(printf '%s' "$_s" | LC_ALL=$_u8lc grep -o \
+      -e '🤖' -e '📬' -e '🚧' -e '🔥' -e '💾' -e '⚡' -e '📣' \
+      -e '🛒' -e '📈' -e '🥊' -e '🎧' -e '❄' -e '✦' -e '🔄' -e '🔴' \
+      -e '⚑' -e '⌂' -e '▥' -e '▲' -e '▸' -e '▪' -e '⟳' -e '✓' \
+      -e '⎇' -e '●' -e '░' -e '█' -e '↻' -e '→' \
+      2>/dev/null | wc -l | tr -d ' ')
+    echo $(( _cw + _ew ))
+  fi
 }
 
 # ── Config load — single jq call, fall back to built-in defaults ──────────────
@@ -216,6 +238,8 @@ account_email=""; _sub=""; _method=""
   @sh "_sub=\(.subscriptionType // "")",
   @sh "_method=\(.authMethod // "")"
 ' "$auth_cache" 2>/dev/null)
+# Sanitize email for use in filenames: strip / and " to prevent path traversal / injection
+_email_safe=$(printf '%s' "$account_email" | tr -d '/"')
 
 # Billing mode
 billing_cache="/tmp/claude-billing-${session_id}"
@@ -247,16 +271,18 @@ acct_alias() {
 # ── Export rate limits for rotation daemon ────────────────────────────────────
 rot_dir="$HOME/.claude/scripts/account-rotation"
 if { [ -n "$rl_5h" ] || [ -n "$rl_7d" ]; } && [ -d "$rot_dir" ]; then
-  printf '{"five_hour":{"pct":%s,"reset":%s},"seven_day":{"pct":%s,"reset":%s},"account_email":"%s","ts":%s}\n' \
-    "${rl_5h:-0}" "${rl_5h_reset}" "${rl_7d:-0}" "${rl_7d_reset}" \
-    "${account_email}" "$now" \
+  jq -n \
+    --argjson fh "${rl_5h:-0}" --argjson fr "${rl_5h_reset:-0}" \
+    --argjson sh "${rl_7d:-0}" --argjson sr "${rl_7d_reset:-0}" \
+    --arg ae "${account_email}" --argjson ts "$now" \
+    '{"five_hour":{"pct":$fh,"reset":$fr},"seven_day":{"pct":$sh,"reset":$sr},"account_email":$ae,"ts":$ts}' \
     > "$rot_dir/.rate-limits.json" 2>/dev/null
 fi
 
 # Per-account session count (multi-session badge)
 sessions_n=0
 if [ -n "$account_email" ]; then
-  pid_file="/tmp/claude-pids-${account_email}"
+  pid_file="/tmp/claude-pids-${_email_safe}"
   new_content="$PPID"
   if [ -f "$pid_file" ]; then
     while IFS= read -r p; do
@@ -464,7 +490,7 @@ pace_badge=""
 if [ -n "$rl_5h" ] || [ -n "$rl_7d" ]; then
   q5=${rl_5h_int}; q7=${rl_7d_int}
   qpick=$q5; [ "$q7" -gt "$qpick" ] && qpick=$q7
-  burn_file="/tmp/claude-burn-${account_email:-default}"
+  burn_file="/tmp/claude-burn-${_email_safe:-default}"
   rate10=0
   if [ -s "$burn_file" ]; then
     IFS=' ' read -r prev_pct prev_ts < "$burn_file"
@@ -640,13 +666,14 @@ else
       _pbf="$ops_dir/project-${_pk}.json"
       if [ -s "$_pbf" ] && [ $(( now - $(mtime "$_pbf") )) -lt 7200 ]; then
         _label=$(jq -r '.label // ""' "$_pbf" 2>/dev/null)
+        # C2: jq emits a sentinel string; sed replaces it with the real ESC byte.
         _bdgs=$(jq -r '(.badges // []) | map(
-          if .color == "ok" then "[32m"
-          elif .color == "warn" then "[33m"
-          elif .color == "danger" then "[1;31m"
-          else "[38;5;245m" end
-          + (.icon // "") + " " + (.value // "") + "[0m"
-        ) | join(" ")' "$_pbf" 2>/dev/null)
+          (if .color == "ok" then "32"
+          elif .color == "warn" then "33"
+          elif .color == "danger" then "1;31"
+          else "38;5;245" end) as $c
+          | "ESC_PH[" + $c + "m" + (.icon // "") + " " + (.value // "") + "ESC_PH[0m"
+        ) | join(" ")' "$_pbf" 2>/dev/null | sed "s/ESC_PH/${ESC}/g")
         if [ -n "$_bdgs" ]; then
           _pgrp="${T_acc}${_label:-$_pk}${R} ${_bdgs}"
           proj_badges="${proj_badges}${_pgrp}${SEP_PB}"
@@ -666,13 +693,19 @@ if [ "$CFG_fleet_bg" = "1" ]; then
   bg_cache="/tmp/claude-bgcount-${uid}"
   bg_ttl=30
   bg_age=$(( now - $(mtime "$bg_cache") ))
-  bg_counts=$(async_cache "$bg_cache" "$bg_ttl" sh -c 'claude agents --json 2>/dev/null | python3 -c "
+  # M2: prefer python3 for JSON parsing; fall back to jq when python3 is absent.
+  if command -v python3 >/dev/null 2>&1; then
+    _bg_cmd='claude agents --json 2>/dev/null | python3 -c "
 import json,sys
 try:
     d=json.load(sys.stdin)
     print(len([a for a in d if a.get(\"status\")==\"running\"]), len(d))
 except Exception:
-    print(0,0)"')
+    print(0,0)"'
+  else
+    _bg_cmd='r=$(claude agents --json 2>/dev/null); total=$(printf "%s" "$r" | jq "length" 2>/dev/null || echo 0); running=$(printf "%s" "$r" | jq "[.[]|select(.status=="running")]|length" 2>/dev/null || echo 0); printf "%s %s" "$running" "$total"'
+  fi
+  bg_counts=$(async_cache "$bg_cache" "$bg_ttl" sh -c "$_bg_cmd")
   IFS=' ' read -r bg_running bg_total <<EOF
 $bg_counts
 EOF
@@ -725,8 +758,12 @@ if [ "${CFG_proj_count:-0}" -gt 0 ] 2>/dev/null && [ -n "$_cfg_file" ]; then
   done
 fi
 
-# ── SEP for carousel pool ─────────────────────────────────────────────────────
+# ── Separators ───────────────────────────────────────────────────────────────
+# SEP   (0x1F unit-separator) divides carousel pool entries.
+# SEP_PB (0x1D group-separator) divides per-project badge groups in proj_badges.
+# Both must be defined unconditionally — the slow_cache can be hit OR missed.
 SEP=$(printf '\037')
+SEP_PB=$(printf '\035')
 
 # ── Carousel pool (L2) ────────────────────────────────────────────────────────
 # Rotates every $CFG_carousel_sec seconds (epoch-based, sessions stay in sync).

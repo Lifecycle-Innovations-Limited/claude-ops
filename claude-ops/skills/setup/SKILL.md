@@ -805,16 +805,21 @@ jq . "$CFG_DST" >/dev/null 2>&1 && echo "✓ Config written" || echo "✗ Config
 STATUSLINE_CMD_STR="\$HOME/.claude/statusline-command.sh"
 
 if [ ! -f "$SETTINGS_FILE" ]; then
-  jq -n --arg cmd "$STATUSLINE_CMD_STR" '{"statusLine": {"command": $cmd}}' > "$SETTINGS_FILE"
+  # H5: write to tempfile then atomic mv — Claude Code reads settings.json every frame
+  TMP=$(mktemp)
+  jq -n --arg cmd "$STATUSLINE_CMD_STR" '{"statusLine": {"command": $cmd}}' > "$TMP" \
+    && mv "$TMP" "$SETTINGS_FILE"
 else
   EXISTING=$(jq -r '.statusLine.command // empty' "$SETTINGS_FILE" 2>/dev/null)
   if [ -n "$EXISTING" ]; then
     # statusLine already set — ask whether to overwrite
     echo "existing_statusline=$EXISTING"
   else
+    # H5: backup existing file, then atomic write via tmp
+    cp "$SETTINGS_FILE" "${SETTINGS_FILE}.bak" 2>/dev/null || true
     TMP=$(mktemp)
-    jq --arg cmd "$STATUSLINE_CMD_STR" '.statusLine = {"command": $cmd}' "$SETTINGS_FILE" > "$TMP"
-    mv "$TMP" "$SETTINGS_FILE"
+    jq --arg cmd "$STATUSLINE_CMD_STR" '.statusLine = {"command": $cmd}' "$SETTINGS_FILE" > "$TMP" \
+      && mv "$TMP" "$SETTINGS_FILE"
     echo "✓ statusLine wired in ~/.claude/settings.json"
   fi
 fi
