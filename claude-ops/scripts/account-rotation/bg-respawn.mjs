@@ -35,6 +35,7 @@ import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import { getTokenForSession, extractAccessToken, readLeases, recordSessionLease } from './session-router.mjs';
+import { applyOAuthEnv } from './provider-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
@@ -195,9 +196,12 @@ export function doRespawn(session, log) {
       const tokenJson = getTokenForSession(session.id, config);
       const token = tokenJson ? extractAccessToken(tokenJson) : null;
       if (token) {
-        childEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
-        delete childEnv.CLAUDE_CODE_USE_BEDROCK;
-        log(`[bg-respawn] Injecting CLAUDE_CODE_OAUTH_TOKEN for session ${session.id}`);
+        // Scrub ALL Bedrock vars (USE_BEDROCK, AWS_*, hardcoded ANTHROPIC_MODEL)
+        // before setting the OAuth token. Leaving ANTHROPIC_MODEL=anthropic.claude-fable-5
+        // or AWS_* in env makes the OAuth session emit invalid model ids / keep paying
+        // for Bedrock. Model resets to the subscription default catalog.
+        applyOAuthEnv(childEnv, token);
+        log(`[bg-respawn] Injecting CLAUDE_CODE_OAUTH_TOKEN for session ${session.id} (Bedrock vars scrubbed)`);
       } else {
         const leases = readLeases();
         if (leases[session.id]?.accountKey === 'bedrock') {

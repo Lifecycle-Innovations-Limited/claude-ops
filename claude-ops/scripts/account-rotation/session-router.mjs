@@ -39,6 +39,7 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { spawnSync, spawn } from "child_process";
+import { applyOAuthEnv, applyBedrockEnv } from "./provider-env.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LEASES_PATH = join(__dirname, "session-leases.json");
@@ -325,11 +326,7 @@ export function spawnWithAccount(args, config, state, opts = {}) {
   if (true) {
     const key = pickAccountForSession(sessionId, config, state);
     if (key === 'bedrock') {
-      childEnv.CLAUDE_CODE_USE_BEDROCK = "1";
-      childEnv.AWS_BEDROCK_REGION = "us-east-1";
-      childEnv.AWS_REGION = "us-east-1";
-      childEnv.ANTHROPIC_MODEL = "anthropic.claude-fable-5";
-      delete childEnv.CLAUDE_CODE_OAUTH_TOKEN;
+      applyBedrockEnv(childEnv);
       assignedKey = 'bedrock';
     } else if (key) {
       const account = config.accounts.find((a) => accountKey(a) === key);
@@ -337,7 +334,9 @@ export function spawnWithAccount(args, config, state, opts = {}) {
         const tokenJson = readVaultToken(account);
         const accessToken = tokenJson ? extractAccessToken(tokenJson) : null;
         if (accessToken) {
-          childEnv.CLAUDE_CODE_OAUTH_TOKEN = accessToken;
+          // Scrub Bedrock vars (incl. hardcoded ANTHROPIC_MODEL + AWS_*) before
+          // setting the OAuth token, so the session can't keep paying for Bedrock.
+          applyOAuthEnv(childEnv, accessToken);
           assignedKey = key;
         }
       }
