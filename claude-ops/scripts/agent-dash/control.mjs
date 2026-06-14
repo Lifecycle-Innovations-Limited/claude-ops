@@ -11,7 +11,12 @@ import { join, dirname } from 'node:path';
 const HOME = homedir();
 const ARCHIVE_LOG = join(HOME, '.claude', 'state', 'agent-archive.jsonl');
 const REMOTE_CACHE = join(HOME, '.claude', 'state', 'agent-dash-remote-cache.json');
-const FRA_HOSTS = (process.env.AGENT_DASH_FRA_HOSTS || 'fra-direct,dev-sandbox-fra-cf').split(',');
+// Remote ssh targets; set AGENT_DASH_FRA_HOSTS (comma-separated host aliases).
+// Empty by default → local-only.
+const FRA_HOSTS = (process.env.AGENT_DASH_FRA_HOSTS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 function fraSshHost() {
   try {

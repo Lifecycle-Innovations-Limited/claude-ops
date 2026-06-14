@@ -1,8 +1,8 @@
 # Persistent browser-based desktop (noVNC over Tailscale)
 
 Gives a headless box a GUI desktop you can reach from any browser on the tailnet —
-no VNC client, no SSH tunnel — and survives reboots. Built for `dev-sandbox-fra`
-but host-agnostic.
+no VNC client, no SSH tunnel — and survives reboots. Host-agnostic — works on
+any headless Linux box.
 
 ## Architecture
 

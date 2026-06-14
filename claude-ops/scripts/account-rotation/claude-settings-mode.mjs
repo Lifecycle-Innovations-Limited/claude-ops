@@ -30,7 +30,12 @@ function writeSettingsAtomic(s) {
   renameSync(tmp, p);
 }
 
-const AWS_PROFILE_CANDIDATES = ['default', 'ec2-user-cli', 'healify', 'workshop'];
+// Profiles to probe, in order. Override with AWS_PROFILE_CANDIDATES (comma-separated)
+// to add deployment-specific named profiles without editing source.
+const AWS_PROFILE_CANDIDATES = (process.env.AWS_PROFILE_CANDIDATES || 'default,ec2-user-cli')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 function awsProfileProbeEnv(profile, region = 'us-east-1') {
   const env = {

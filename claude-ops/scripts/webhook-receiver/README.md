@@ -1,7 +1,7 @@
 # Pocket webhook receiver (version-controlled source)
 
-These two files run the **front door** of the Pocket pipeline on
-`dev-sandbox-fra`. They were previously **deployed only** to `/opt/pocket-mcp/`
+These two files run the **front door** of the Pocket pipeline on your
+remote host. They were previously **deployed only** to `/opt/pocket-mcp/`
 with no copy in git; this directory is now the version-controlled **source of
 truth** and the deployed copies should be (re)deployed from here via the steps
 below. Filenames are preserved because `app.py` references its handler by the
