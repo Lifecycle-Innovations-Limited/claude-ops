@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.31.0] - 2026-06-14
+
+### Changed
+Rotation: never use Bedrock while any OAuth (Claude Max) account has a usable token. Adds provider-env model/AWS-var scrub on provider swap (no more invalid Bedrock model id leaking into OAuth sessions), bedrock-lease purge on OAuth recovery, a live-session Bedrock force-swap watchdog (no defer for metered spend) with ss-based bedrock-runtime network scanner, and default-off post-swap continuation injection (PR #582).
+
+
 ## [2.30.5] - 2026-06-14
 
 ### Changed
