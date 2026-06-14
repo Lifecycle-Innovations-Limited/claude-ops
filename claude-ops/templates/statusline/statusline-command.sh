@@ -147,28 +147,32 @@ fi
 
 # ── Theme colors — one jq from themes.json bundled alongside this script ─────
 _themes_file="$(dirname "$0")/themes.json"
-T_ok="32"; T_warn="33"; T_danger="1;31"; T_dim="38;5;245"
+# Theme-adaptive contrast contract: text/labels use terminal DEFAULT fg (39);
+# dim + gauge-empty use 90 (bright-black, works on light AND dark); accents/gauges
+# use NAMED ANSI (theme-mapped); badges use REVERSE video (7) for guaranteed contrast.
+# Do NOT hardcode 38;5;N for text/label/empty-track roles (breaks on light terminals).
+T_ok="32"; T_warn="33"; T_danger="91"; T_dim="90"
 T_acc="36"; T_acc2="35"
-T_gauge_ok="32"; T_gauge_warn="33"; T_gauge_hot="38;5;208"; T_gauge_crit="1;31"
-T_gauge_empty="38;5;236"
-T_loc_remote="1;97;41"; T_loc_home="1;97;44"
+T_gauge_ok="32"; T_gauge_warn="33"; T_gauge_hot="33"; T_gauge_crit="91"
+T_gauge_empty="90"
+T_loc_remote="1;7;31"; T_loc_home="1;7"
 
 if [ -f "$_themes_file" ]; then
   eval $(jq -r --arg t "$CFG_theme" '
     .[$t] // .cockpit |
     @sh "T_ok=\(.ok // "32")",
     @sh "T_warn=\(.warn // "33")",
-    @sh "T_danger=\(.danger // "1;31")",
-    @sh "T_dim=\(.dim // "38;5;245")",
+    @sh "T_danger=\(.danger // "91")",
+    @sh "T_dim=\(.dim // "90")",
     @sh "T_acc=\(.accent // "36")",
     @sh "T_acc2=\(.accent2 // "35")",
     @sh "T_gauge_ok=\(.gauge_ok // "32")",
     @sh "T_gauge_warn=\(.gauge_warn // "33")",
-    @sh "T_gauge_hot=\(.gauge_hot // "38;5;208")",
-    @sh "T_gauge_crit=\(.gauge_crit // "1;31")",
-    @sh "T_gauge_empty=\(.gauge_empty // "38;5;236")",
-    @sh "T_loc_remote=\(.loc_remote // "1;97;41")",
-    @sh "T_loc_home=\(.loc_home // "1;97;44")"
+    @sh "T_gauge_hot=\(.gauge_hot // "33")",
+    @sh "T_gauge_crit=\(.gauge_crit // "91")",
+    @sh "T_gauge_empty=\(.gauge_empty // "90")",
+    @sh "T_loc_remote=\(.loc_remote // "1;7;31")",
+    @sh "T_loc_home=\(.loc_home // "1;7")"
   ' "$_themes_file" 2>/dev/null) 2>/dev/null || true
 fi
 
