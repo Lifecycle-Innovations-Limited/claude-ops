@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.30.2] - 2026-06-14
+
+### Changed
+Privacy/templating pass: scrubbed all personal data from source + history (generic placeholders), removed project-specific scripts. New: provider-router (hot per-request provider/account swap via ANTHROPIC_BASE_URL) + daemon Bedrock→OAuth drift self-heal.
+
+
 ## [2.29.1] - 2026-06-12
 
 ### Changed
