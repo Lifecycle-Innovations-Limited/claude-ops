@@ -95,6 +95,40 @@ function adminPassword() {
   );
 }
 
+// ── authoritative per-account quota (api.anthropic.com/api/oauth/usage) ────────
+// CRS's cached claudeUsage is often null/stale, so for accurate prioritization we
+// read each account's OAuth token from the credential store and query Anthropic's
+// usage endpoint directly (read-only GET — does NOT rotate the token). Falls back
+// to the cache/sessionWindowStatus when no token / 401 / timeout. Tokens live at
+// `Claude-Rotation-<email>` (rotator schema); CRS account → token by subscription email.
+const USAGE_TOKEN_SVC = process.env.CRS_USAGE_TOKEN_PREFIX || 'Claude-Rotation-';
+function readOauthToken(email) {
+  if (!email) return null;
+  const acct = process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || 'claude-ops';
+  // try credential-store first (cross-platform), then macOS security directly
+  for (const get of [
+    () => execFileSync('bash', [join(PLUGIN_ROOT, 'lib', 'credential-store.sh'), 'get', `${USAGE_TOKEN_SVC}${email}`, acct], { encoding: 'utf8' }),
+    () => execFileSync('security', ['find-generic-password', '-a', acct, '-s', `${USAGE_TOKEN_SVC}${email}`, '-w'], { encoding: 'utf8' }),
+  ]) {
+    try { const j = JSON.parse(get().trim()); const t = j?.claudeAiOauth?.accessToken; if (t) return t; } catch {}
+  }
+  return null;
+}
+async function liveUsage(email) {
+  const token = readOauthToken(email);
+  if (!token) return null;
+  try {
+    const r = await fetch('https://api.anthropic.com/api/oauth/usage', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20' },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!r.ok) return null; // 401 (stale token) / 429 → fall back to cache + sessionWindowStatus
+    const d = await r.json();
+    return { u5: d?.five_hour?.utilization ?? null, u7: d?.seven_day?.utilization ?? null };
+  } catch { return null; }
+}
+
 // ── http ─────────────────────────────────────────────────────────────────────
 async function jfetch(path, opts = {}) {
   const r = await fetch(`${BASE}${path}`, opts);
@@ -127,11 +161,12 @@ function decide(accts) {
   const nowMs = Date.now();
   const decisions = accts.map((a) => {
     const cu = a.claudeUsage || {};
+    const lu = a._liveUsage; // authoritative direct-from-Anthropic /oauth/usage, or null
     const updMs = cu.updatedAt ? Date.parse(cu.updatedAt) : NaN;
-    const fresh = Number.isFinite(updMs) && (nowMs - updMs) / 60000 < FRESH_MIN;
-    const u5 = cu.fiveHour?.utilization;
-    const u7 = cu.sevenDay?.utilization;
-    const u7o = cu.sevenDayOpus?.utilization;
+    const fresh = !!lu || (Number.isFinite(updMs) && (nowMs - updMs) / 60000 < FRESH_MIN);
+    const u5 = lu?.u5 ?? cu.fiveHour?.utilization;
+    const u7 = lu?.u7 ?? cu.sevenDay?.utilization;
+    const u7o = cu.sevenDayOpus?.utilization; // oauth/usage doesn't split opus — keep cache
     const rl = !!a.rateLimitStatus?.isRateLimited || !!a.opusRateLimitStatus?.isRateLimited;
     const overloaded = !!a.overloadStatus?.isOverloaded;
     const sw = a.sessionWindow?.sessionWindowStatus || null;
@@ -196,6 +231,10 @@ async function main() {
   const auth = await login();
   const accts = await getAccounts(auth);
   if (!accts.length) { log('no active claude accounts'); return; }
+  // Authoritative quota: query Anthropic /oauth/usage directly per account (parallel,
+  // read-only). Falls back to CRS cache + sessionWindowStatus when a token is absent/stale.
+  await Promise.all(accts.map(async (a) => { a._liveUsage = await liveUsage(a.subscriptionInfo?.email); }));
+  const liveN = accts.filter((a) => a._liveUsage).length;
   const decisions = decide(accts);
 
   if (STATUS) {
@@ -219,7 +258,7 @@ async function main() {
   }
   const on = decisions.filter((d) => d.desired).map((d) => d.a.name);
   const off = decisions.filter((d) => !d.desired).map((d) => `${d.a.name}(${d.sw || (d.rl ? 'RL' : '?')})`);
-  log(`tick: ${changed} change(s). schedulable=${on.length} [${on.join(',')}] | off=[${off.join(',')}]`);
+  log(`tick: ${changed} change(s). live-quota=${liveN}/${decisions.length} schedulable=${on.length} [${on.join(',')}] | off=[${off.join(',')}]`);
 }
 
 main().catch((e) => { log(`ERROR: ${e.message}`); process.exit(1); });
