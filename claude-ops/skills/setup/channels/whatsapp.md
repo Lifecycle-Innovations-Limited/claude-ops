@@ -22,6 +22,7 @@ whatsapp-bridge (whatsmeow) is not installed. Install:
 ```
 
 If LaunchAgent not installed, install it from template. The template ships as `com.claude-ops.whatsapp-bridge.plist` with a `__USER__` Label placeholder; sed substitutes the running user so the installed plist's Label becomes `com.${USER}.whatsapp-bridge`:
+
 ```bash
 PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
 PLIST_DEST="$HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
@@ -86,9 +87,9 @@ Write `channels.whatsapp = "whatsapp-bridge"` to `$PREFS_PATH`.
 
 All ops skills that use WhatsApp must check `lsof -i :8080 | grep LISTEN` before MCP tool calls.
 If bridge is not running:
+
 1. Print: "WhatsApp bridge is not running."
 2. Use `AskUserQuestion`: `[Restart bridge]`, `[Skip WhatsApp]`.
 3. On restart: `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`, wait 5s.
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` and `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/SKILL.md` for full operational instructions.
-

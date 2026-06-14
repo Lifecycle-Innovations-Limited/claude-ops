@@ -4,13 +4,13 @@
 Bot API token. It is the lightweight companion to the user-account MCP server
 (`telegram-server/index.js`):
 
-| | User-account MCP (`mcp__…telegram…`) | Bot token (`ops-telegram-bot-send`) |
-|---|---|---|
-| Auth | phone + 2 login codes + optional 2FA → gram.js session | one token from @BotFather |
-| Reads your DMs | yes (powers `/ops-inbox telegram`) | no |
-| Pushes to you | yes | yes |
-| Setup cost | high (interactive login, rate-limited) | low (paste token + chat id) |
-| Best for | inbox triage | one-way notifications, bidirectional round-trip with the polling listener |
+|                | User-account MCP (`mcp__…telegram…`)                   | Bot token (`ops-telegram-bot-send`)                                       |
+| -------------- | ------------------------------------------------------ | ------------------------------------------------------------------------- |
+| Auth           | phone + 2 login codes + optional 2FA → gram.js session | one token from @BotFather                                                 |
+| Reads your DMs | yes (powers `/ops-inbox telegram`)                     | no                                                                        |
+| Pushes to you  | yes                                                    | yes                                                                       |
+| Setup cost     | high (interactive login, rate-limited)                 | low (paste token + chat id)                                               |
+| Best for       | inbox triage                                           | one-way notifications, bidirectional round-trip with the polling listener |
 
 If all you want is for ops skills (briefings, fire alerts, rotation results) to
 **reach your phone** — and to reply via the bot back into your session through
@@ -50,7 +50,7 @@ If all you want is for ops skills (briefings, fire alerts, rotation results) to
 
 This script calls the Telegram Bot API, which the reference
 `block-outbound-comms.py` PreToolUse hook blocks by default (the `Telegram bot`
-pattern). That is correct: sending to *other people* over Telegram is
+pattern). That is correct: sending to _other people_ over Telegram is
 human-to-human comms and must stay gated behind per-message approval.
 
 Sending to **your own** chat (`TELEGRAM_OWNER_ID`) is an operational

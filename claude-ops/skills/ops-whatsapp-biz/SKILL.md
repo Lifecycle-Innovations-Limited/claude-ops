@@ -1,7 +1,7 @@
 ---
 name: ops-whatsapp-biz
 description: WhatsApp Business Cloud API — send approved template messages at scale, manage templates with approval tracking, and integrate product catalogs. Separate from wacli personal WhatsApp.
-argument-hint: "[send-template|list-templates|create-template|check-template|catalog|setup]"
+argument-hint: '[send-template|list-templates|create-template|check-template|catalog|setup]'
 allowed-tools:
   - Bash
   - Read
@@ -50,14 +50,14 @@ and stop.
 
 Route `$ARGUMENTS`:
 
-| Input | Action |
-|---|---|
-| (empty), list-templates | List all templates with approval status |
-| send-template | Send an approved template message to one or more recipients |
-| create-template | Guided template creation wizard |
-| check-template \<NAME\> | Poll approval status for a specific template |
-| catalog | View and manage linked product catalog |
-| setup | Configure WhatsApp Business API credentials |
+| Input                   | Action                                                      |
+| ----------------------- | ----------------------------------------------------------- |
+| (empty), list-templates | List all templates with approval status                     |
+| send-template           | Send an approved template message to one or more recipients |
+| create-template         | Guided template creation wizard                             |
+| check-template \<NAME\> | Poll approval status for a specific template                |
+| catalog                 | View and manage linked product catalog                      |
+| setup                   | Configure WhatsApp Business API credentials                 |
 
 ---
 
@@ -123,7 +123,7 @@ fi
 SUCCESS=0; FAILED=0
 for PHONE in "${RECIPIENTS[@]}"; do
   PHONE=$(echo "$PHONE" | tr -d ' ')
-  
+
   RESP=$(curl -s -X POST "https://graph.facebook.com/v20.0/${WABA_PHONE_ID}/messages" \
     -H "Authorization: Bearer ${WABA_TOKEN}" \
     -H "Content-Type: application/json" \
@@ -137,7 +137,7 @@ for PHONE in "${RECIPIENTS[@]}"; do
         \"components\": ${TEMPLATE_COMPONENTS_JSON:-[]}
       }
     }")
-  
+
   MSG_ID=$(echo "$RESP" | jq -r '.messages[0].id // empty')
   if [ -n "$MSG_ID" ]; then
     SUCCESS=$((SUCCESS + 1))
@@ -156,17 +156,18 @@ echo "Sent: ${SUCCESS}/${RECIPIENT_COUNT} messages delivered"
 **Template components format** (build `TEMPLATE_COMPONENTS_JSON` from user input):
 
 For templates with header + body variables:
+
 ```json
 [
   {
     "type": "header",
-    "parameters": [{"type": "text", "text": "{{header_value}}"}]
+    "parameters": [{ "type": "text", "text": "{{header_value}}" }]
   },
   {
     "type": "body",
     "parameters": [
-      {"type": "text", "text": "{{var1}}"},
-      {"type": "text", "text": "{{var2}}"}
+      { "type": "text", "text": "{{var1}}" },
+      { "type": "text", "text": "{{var2}}" }
     ]
   }
 ]
@@ -347,6 +348,7 @@ claude plugin config get whatsapp_business_account_id 2>/dev/null && echo "✓ w
 1. AskUserQuestion: "Where do you have your WhatsApp Business credentials?" options `[Paste token now, Find in Meta dashboard, Skip]`
 
 **Where to find credentials in Meta:**
+
 - `WHATSAPP_BUSINESS_TOKEN`: Meta Developer Portal → Your App → WhatsApp → API Setup → Temporary access token (or generate a permanent System User token)
 - `WHATSAPP_PHONE_NUMBER_ID`: Same page → "From" phone number → Phone Number ID
 - `WHATSAPP_BUSINESS_ACCOUNT_ID`: Meta Business Manager → Business Settings → WhatsApp Accounts → Account ID
@@ -357,6 +359,7 @@ claude plugin config get whatsapp_business_account_id 2>/dev/null && echo "✓ w
    - Business Account ID (WABA ID)
 
 3. Save via plugin config:
+
 ```bash
 claude plugin config set whatsapp_business_token "$WABA_TOKEN"
 claude plugin config set whatsapp_phone_number_id "$WABA_PHONE_ID"
@@ -364,6 +367,7 @@ claude plugin config set whatsapp_business_account_id "$WABA_ACCOUNT_ID"
 ```
 
 4. Smoke test:
+
 ```bash
 TEST=$(curl -s "https://graph.facebook.com/v20.0/${WABA_PHONE_ID}" \
   -H "Authorization: Bearer ${WABA_TOKEN}")

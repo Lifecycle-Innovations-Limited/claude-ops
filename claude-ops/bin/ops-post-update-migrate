@@ -10,7 +10,8 @@
 set -euo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+PLUGINS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins"
+DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$PLUGINS_DIR/data/ops-ops-marketplace}"
 PLUGIN_JSON="$PLUGIN_ROOT/.claude-plugin/plugin.json"
 
 [[ -f "$PLUGIN_JSON" ]] || exit 0
@@ -19,14 +20,55 @@ VERSION=$(python3 -c "import json,sys; print(json.load(open('$PLUGIN_JSON'))['ve
 SENTINEL_DIR="$DATA_DIR/.migrated"
 SENTINEL="$SENTINEL_DIR/v${VERSION}"
 
-# Already migrated this version → exit fast (SessionStart hook fires every session)
-[[ -f "$SENTINEL" ]] && exit 0
-
 mkdir -p "$SENTINEL_DIR" 2>/dev/null || true
 LOG="$DATA_DIR/post-update-migrate.log"
 mkdir -p "$DATA_DIR" 2>/dev/null || true
 
 log() { printf "[%s] %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
+
+# Always refresh current/ + installPath — must run on every cache materialization,
+# including same-version force-reinstalls where the per-version sentinel already exists.
+refresh_current_directory() {
+  local cache_parent current_dir installed_json
+  cache_parent="$(dirname "$PLUGIN_ROOT")"
+  current_dir="$cache_parent/current"
+  installed_json="$PLUGINS_DIR/installed_plugins.json"
+
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete "$PLUGIN_ROOT/" "$current_dir/" 2>/dev/null \
+      && log "  ok: refreshed $current_dir via rsync" \
+      || log "  warn: rsync to current/ failed (non-fatal)"
+  else
+    mkdir -p "$current_dir"
+    cp -rp "$PLUGIN_ROOT/." "$current_dir/" 2>/dev/null \
+      && log "  ok: refreshed $current_dir via cp" \
+      || log "  warn: cp to current/ failed (non-fatal)"
+  fi
+
+  if [[ -f "$installed_json" ]]; then
+    python3 - "$installed_json" "$current_dir" <<'PYEOF' 2>/dev/null \
+      && log "  ok: patched installed_plugins.json → current" \
+      || log "  warn: installed_plugins.json patch failed (non-fatal)"
+import json, sys
+path, current = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    d = json.load(f)
+changed = False
+for e in d.get("plugins", {}).get("ops@ops-marketplace", []):
+    if e.get("scope") == "user" and e.get("installPath", "") != current:
+        e["installPath"] = current
+        changed = True
+if changed:
+    with open(path, "w") as f:
+        json.dump(d, f, indent=2)
+PYEOF
+  fi
+}
+
+refresh_current_directory
+
+# Already migrated this version → skip one-time migrations (SessionStart fires every session)
+[[ -f "$SENTINEL" ]] && exit 0
 
 run_migrations() {
   log "post-update-migrate START version=$VERSION plugin_root=$PLUGIN_ROOT"

@@ -3,7 +3,7 @@
 `ops-update` (step 4) runs every `*.sh` in this directory against the freshly
 materialised plugin cache, **in filename order**, after a plugin upgrade.
 
-Use this for fixes that must live on the box *before they are merged upstream*
+Use this for fixes that must live on the box _before they are merged upstream_
 — e.g. a hotfix to a `bin/` script or `SKILL.md` that the new cache version
 overwrites on every `claude plugin update`. Once the fix ships in a release,
 delete the patch here (the upstream version supersedes it).

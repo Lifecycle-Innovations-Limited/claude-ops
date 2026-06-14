@@ -20,6 +20,7 @@ Parse each result to classify as `authenticated`, `needs_unlock`, `not_installed
 Show only what was detected via `AskUserQuestion`. **Max 4 options per call.** Since macOS Keychain and Skip are always shown, you have room for at most 2 detected managers per call. If all 3 CLIs (1Password, Dashlane, Bitwarden) are installed, batch into two calls:
 
 **If <=2 CLI managers detected (common case — fits in one call):**
+
 ```
 Password managers found:
   [1Password — authenticated as <account>]
@@ -30,13 +31,16 @@ Password managers found:
 
 **If all 3 CLI managers detected (rare — batch into two calls):**
 Call 1:
+
 ```
   [1Password — authenticated as <account>]
   [Dashlane — needs unlock]
   [Bitwarden — <status>]
   [More options...]
 ```
+
 Call 2:
+
 ```
   [macOS Keychain — always available]
   [Skip — don't connect a password manager]
@@ -185,4 +189,3 @@ Add to the shortcuts table: `vault`, `password-manager`, `pm` → Step 3h
 > **Deep-dive:** no dedicated skill ships with the password manager integration — see `${CLAUDE_PLUGIN_ROOT}/docs/memories-system.md` (Runtime Context section) for how downstream skills resolve `password_manager` + related vault references from `$PREFS_PATH`. Privacy-and-security guidance lives in this SKILL.md (keychain-only storage of API hashes/session strings, `umask 077` for bridge files). The setup agent can load that file directly when it needs more depth than this wizard provides.
 
 ---
-

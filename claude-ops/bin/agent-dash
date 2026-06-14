@@ -29,7 +29,9 @@ const argv = process.argv.slice(2);
 const has = (f) => argv.includes(f);
 const positional = argv.filter((a) => !a.startsWith('--'));
 
-function termWidth() { return process.stdout.columns || 100; }
+function termWidth() {
+  return process.stdout.columns || 100;
+}
 
 // ------------------------------------------------------------------- subcommands
 const SUBCMDS = ['attach', 'steer', 'revive', 'kill', 'archive'];
@@ -37,7 +39,10 @@ if (SUBCMDS.includes(positional[0])) {
   const [cmd, id, ...rest] = positional;
   const snap = collect({});
   const a = ctrl.findAgent(snap, id);
-  if (!a) { console.error(`agent-dash: no agent matching "${id}"`); process.exit(1); }
+  if (!a) {
+    console.error(`agent-dash: no agent matching "${id}"`);
+    process.exit(1);
+  }
 
   if (cmd === 'attach') process.exit(ctrl.attach(a));
   if (cmd === 'revive') process.exit(ctrl.revive(a));
@@ -47,7 +52,10 @@ if (SUBCMDS.includes(positional[0])) {
     process.exit(r.ok ? 0 : 1);
   }
   if (cmd === 'kill' || cmd === 'archive') {
-    if (!has('--yes') && !has('-y')) { console.error(`Refusing to ${cmd} ${a.id} (${a.name}) without --yes.`); process.exit(2); }
+    if (!has('--yes') && !has('-y')) {
+      console.error(`Refusing to ${cmd} ${a.id} (${a.name}) without --yes.`);
+      process.exit(2);
+    }
     const r = ctrl[cmd](a);
     console.log(r.ok ? `${C.green}✓${C.reset} ${r.msg}` : `${C.red}✗${C.reset} ${r.msg}`);
     process.exit(r.ok ? 0 : 1);
@@ -74,7 +82,10 @@ if (!wantTUI) {
   draw();
   if (has('--watch')) {
     const timer = setInterval(draw, secs * 1000);
-    process.on('SIGINT', () => { clearInterval(timer); process.exit(0); });
+    process.on('SIGINT', () => {
+      clearInterval(timer);
+      process.exit(0);
+    });
   } else {
     process.exit(0);
   }
@@ -105,13 +116,20 @@ if (wantTUI) {
     busy = true;
     statusLine = `${C.gray}refreshing…${C.reset}`;
     draw();
-    try { snap = collect({ force }); } catch { /* keep old */ }
+    try {
+      snap = collect({ force });
+    } catch {
+      /* keep old */
+    }
     statusLine = '';
     busy = false;
     draw();
   }
 
-  function setStatus(s) { statusLine = s; draw(); }
+  function setStatus(s) {
+    statusLine = s;
+    draw();
+  }
 
   // suspend raw TUI, run a foreground action, then restore
   function withForeground(fn) {
@@ -119,7 +137,12 @@ if (wantTUI) {
     process.stdin.setRawMode(false);
     exitAlt();
     let code;
-    try { code = fn(); } catch (e) { code = 1; process.stderr.write(`${e.message}\n`); }
+    try {
+      code = fn();
+    } catch (e) {
+      code = 1;
+      process.stderr.write(`${e.message}\n`);
+    }
     enterAlt();
     process.stdin.setRawMode(true);
     startTimer();
@@ -134,7 +157,12 @@ if (wantTUI) {
       process.stdin.setRawMode(false);
       out.write('\x1b[2J\x1b[H' + question);
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      rl.question('', (ans) => { rl.close(); process.stdin.setRawMode(true); startTimer(); resolve(ans); });
+      rl.question('', (ans) => {
+        rl.close();
+        process.stdin.setRawMode(true);
+        startTimer();
+        resolve(ans);
+      });
     });
   }
 
@@ -146,24 +174,34 @@ if (wantTUI) {
   async function doAction(key) {
     const a = indexMap[selected];
     if (!a) return;
-    if (key === 'a') { withForeground(() => ctrl.attach(a)); return; }
-    if (key === 'r') { withForeground(() => ctrl.revive(a)); return; }
+    if (key === 'a') {
+      withForeground(() => ctrl.attach(a));
+      return;
+    }
+    if (key === 'r') {
+      withForeground(() => ctrl.revive(a));
+      return;
+    }
     if (key === 's') {
       const msg = await prompt(`${C.cyan}Steer ${a.name} (${a.id})${C.reset}\nMessage: `);
-      if (msg && msg.trim()) { const res = ctrl.steer(a, msg); setStatus(res.ok ? `${C.green}✓ ${res.msg}${C.reset}` : `${C.red}✗ ${res.msg}${C.reset}`); }
-      else draw();
+      if (msg && msg.trim()) {
+        const res = ctrl.steer(a, msg);
+        setStatus(res.ok ? `${C.green}✓ ${res.msg}${C.reset}` : `${C.red}✗ ${res.msg}${C.reset}`);
+      } else draw();
       return;
     }
     if (key === 'k') {
       if (await confirm(`Kill ${a.name} (${a.type} ${a.id} on ${a.host})?`)) {
-        const res = ctrl.kill(a); setStatus(res.ok ? `${C.green}✓ ${res.msg}${C.reset}` : `${C.red}✗ ${res.msg}${C.reset}`);
+        const res = ctrl.kill(a);
+        setStatus(res.ok ? `${C.green}✓ ${res.msg}${C.reset}` : `${C.red}✗ ${res.msg}${C.reset}`);
         setTimeout(() => refresh(true), 400);
       } else draw();
       return;
     }
     if (key === 'x') {
       if (await confirm(`Archive ${a.name} (${a.type} ${a.id} on ${a.host})? This removes the session.`)) {
-        const res = ctrl.archive(a); setStatus(res.ok ? `${C.green}✓ ${res.msg}${C.reset}` : `${C.red}✗ ${res.msg}${C.reset}`);
+        const res = ctrl.archive(a);
+        setStatus(res.ok ? `${C.green}✓ ${res.msg}${C.reset}` : `${C.red}✗ ${res.msg}${C.reset}`);
         setTimeout(() => refresh(true), 400);
       } else draw();
       return;
@@ -193,27 +231,63 @@ if (wantTUI) {
   let inDetails = false;
 
   function onKey(_str, key) {
-    if (inDetails) { inDetails = false; draw(); return; }
+    if (inDetails) {
+      inDetails = false;
+      draw();
+      return;
+    }
     const name = key?.name;
     if (key?.ctrl && name === 'c') return quit();
     if (name === 'q') return quit();
-    if (name === 'up') { selected = Math.max(0, selected - 1); draw(); return; }
-    if (name === 'down' || name === 'j') { selected = Math.min(indexMap.length - 1, selected + 1); draw(); return; }
-    if (name === 'g') { selected = 0; draw(); return; }
-    if (name === 'G') { selected = indexMap.length - 1; draw(); return; }
-    if (name === 'return') { inDetails = true; showDetails(); return; }
-    if (name === 'R') { refresh(true); return; }
-    if (['a', 's', 'r', 'k', 'x'].includes(name)) { doAction(name); return; }
+    if (name === 'up') {
+      selected = Math.max(0, selected - 1);
+      draw();
+      return;
+    }
+    if (name === 'down' || name === 'j') {
+      selected = Math.min(indexMap.length - 1, selected + 1);
+      draw();
+      return;
+    }
+    if (name === 'g') {
+      selected = 0;
+      draw();
+      return;
+    }
+    if (name === 'G') {
+      selected = indexMap.length - 1;
+      draw();
+      return;
+    }
+    if (name === 'return') {
+      inDetails = true;
+      showDetails();
+      return;
+    }
+    if (name === 'R') {
+      refresh(true);
+      return;
+    }
+    if (['a', 's', 'r', 'k', 'x'].includes(name)) {
+      doAction(name);
+      return;
+    }
   }
 
   function startTimer() {
     if (refreshTimer) clearInterval(refreshTimer);
-    refreshTimer = setInterval(() => { if (!inDetails) refresh(false); }, 15000);
+    refreshTimer = setInterval(() => {
+      if (!inDetails) refresh(false);
+    }, 15000);
   }
 
   function quit() {
     if (refreshTimer) clearInterval(refreshTimer);
-    try { process.stdin.setRawMode(false); } catch { /* ignore */ }
+    try {
+      process.stdin.setRawMode(false);
+    } catch {
+      /* ignore */
+    }
     exitAlt();
     process.exit(0);
   }
@@ -223,7 +297,9 @@ if (wantTUI) {
   readline.emitKeypressEvents(process.stdin);
   process.stdin.on('keypress', onKey);
   process.on('SIGTERM', quit);
-  process.stdout.on('resize', () => { if (!inDetails) draw(); });
+  process.stdout.on('resize', () => {
+    if (!inDetails) draw();
+  });
   draw();
   startTimer();
 }

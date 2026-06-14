@@ -1,28 +1,28 @@
-import { auth, currentUser } from '@clerk/nextjs/server'
-import { prisma } from './prisma'
+import { auth, currentUser } from '@clerk/nextjs/server';
+import { prisma } from './prisma';
 
 /** Ensures a Prisma User row exists for the signed-in Clerk user (used for Stripe metadata.userId). */
 export async function syncClerkUser() {
-  const { userId } = await auth()
+  const { userId } = await auth();
   if (!userId) {
-    return null
+    return null;
   }
 
-  const clerkUser = await currentUser()
+  const clerkUser = await currentUser();
   if (!clerkUser) {
-    return null
+    return null;
   }
 
   const primaryEmail =
     clerkUser.emailAddresses.find((e) => e.id === clerkUser.primaryEmailAddressId)?.emailAddress ??
-    clerkUser.emailAddresses[0]?.emailAddress
+    clerkUser.emailAddresses[0]?.emailAddress;
 
   if (!primaryEmail) {
-    return null
+    return null;
   }
 
-  const nameFromParts = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ')
-  const name = clerkUser.fullName ?? (nameFromParts || null)
+  const nameFromParts = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ');
+  const name = clerkUser.fullName ?? (nameFromParts || null);
 
   return prisma.user.upsert({
     where: { clerkUserId: userId },
@@ -37,5 +37,5 @@ export async function syncClerkUser() {
       name,
       image: clerkUser.imageUrl ?? null,
     },
-  })
+  });
 }

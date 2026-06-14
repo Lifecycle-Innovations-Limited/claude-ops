@@ -357,7 +357,7 @@ _pwsh() {
 }
 
 # Run a PowerShell command ELEVATED (UAC prompt fires once per call).
-# Use sparingly — Sam-style: prefer non-elevated where possible.
+# Use sparingly — owner-style: prefer non-elevated where possible.
 _pwsh_elevated() {
   if $IS_WINDOWS || $IS_WSL; then
     powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','$1' -Wait" 2>/dev/null

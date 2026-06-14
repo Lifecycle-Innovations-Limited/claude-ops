@@ -1,7 +1,7 @@
 ---
 name: ops-mcp
 description: MCP server health dashboard and reconnect control. Surfaces the watchdog + keepalive + reauth subsystem as a discoverable slash command. Routes — status, servers, reconnect, reauth, logs, restart, test.
-argument-hint: "[status|servers|reconnect [server]|reauth [server]|logs [N]|restart|test [server]]"
+argument-hint: '[status|servers|reconnect [server]|reauth [server]|logs [N]|restart|test [server]]'
 allowed-tools:
   - Bash
   - Read
@@ -35,15 +35,15 @@ If the watchdog state dir does not exist, the watchdog has never run — surface
 
 Parse `$ARGUMENTS` and route immediately. First token decides the route.
 
-| First arg               | Route                                                                         |
-| ----------------------- | ----------------------------------------------------------------------------- |
-| (empty) / `status`      | **Status dashboard** — watchdog health + per-server states + last tick        |
-| `servers`               | List all MCP servers from `~/.claude.json` with current state                 |
-| `reconnect [server]`    | Manually trigger watchdog reconnect for one server or all                     |
-| `reauth [server]`       | Invoke `ops-mcp-reauth.py` for the named server (Playwright OAuth flow)       |
-| `logs [N]`              | Tail N lines (default 50) of watchdog + keepalive logs                        |
-| `restart`               | Restart the watchdog (update crontab entry)                                   |
-| `test [server]`         | Fire a no-op MCP probe against one server to verify reachability              |
+| First arg            | Route                                                                   |
+| -------------------- | ----------------------------------------------------------------------- |
+| (empty) / `status`   | **Status dashboard** — watchdog health + per-server states + last tick  |
+| `servers`            | List all MCP servers from `~/.claude.json` with current state           |
+| `reconnect [server]` | Manually trigger watchdog reconnect for one server or all               |
+| `reauth [server]`    | Invoke `ops-mcp-reauth.py` for the named server (Playwright OAuth flow) |
+| `logs [N]`           | Tail N lines (default 50) of watchdog + keepalive logs                  |
+| `restart`            | Restart the watchdog (update crontab entry)                             |
+| `test [server]`      | Fire a no-op MCP probe against one server to verify reachability        |
 
 Anything else: print the routing table and exit.
 

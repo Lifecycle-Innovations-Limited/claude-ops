@@ -1,4 +1,5 @@
 <!-- generated-by: gsd-doc-writer -->
+
 # Development Guide
 
 This guide covers everything you need to contribute to claude-ops — from understanding the nested directory layout to adding new skills, agents, and bin scripts.
@@ -82,7 +83,7 @@ allowed-tools:
   - Grep
   - Glob
   - AskUserQuestion
-effort: low          # low | medium | high
+effort: low # low | medium | high
 maxTurns: 20
 ---
 
@@ -93,14 +94,14 @@ Skill body — instructions Claude follows when this slash command is invoked.
 
 **Key frontmatter fields:**
 
-| Field | Required | Notes |
-|---|---|---|
-| `name` | Yes | Must match the directory name exactly |
-| `description` | Yes | Shown in `/ops` dashboard |
-| `allowed-tools` | Yes | Allowlist of Claude tools the skill can use |
-| `effort` | No | `low` / `medium` / `high` — controls token budget hint |
-| `maxTurns` | No | Hard turn limit for the skill |
-| `argument-hint` | No | Displayed after the slash command in autocomplete |
+| Field           | Required | Notes                                                  |
+| --------------- | -------- | ------------------------------------------------------ |
+| `name`          | Yes      | Must match the directory name exactly                  |
+| `description`   | Yes      | Shown in `/ops` dashboard                              |
+| `allowed-tools` | Yes      | Allowlist of Claude tools the skill can use            |
+| `effort`        | No       | `low` / `medium` / `high` — controls token budget hint |
+| `maxTurns`      | No       | Hard turn limit for the skill                          |
+| `argument-hint` | No       | Displayed after the slash command in autocomplete      |
 
 After adding a skill, run `/reload-plugins` and verify it appears in `/ops`.
 
@@ -121,7 +122,7 @@ Agent `.md` format:
 ---
 name: my-agent
 description: What this agent does and when it is invoked.
-model: claude-sonnet-4-6      # claude-opus-4-6 | claude-sonnet-4-6 | claude-haiku-4-5
+model: claude-sonnet-4-6 # claude-opus-4-6 | claude-sonnet-4-6 | claude-haiku-4-5
 effort: medium
 maxTurns: 25
 tools:
@@ -132,7 +133,7 @@ disallowedTools:
   - Write
   - Edit
   - Agent
-memory: project               # project | user | none
+memory: project # project | user | none
 ---
 
 # MY AGENT
@@ -141,6 +142,7 @@ Agent instructions here.
 ```
 
 **Model selection convention:**
+
 - `claude-opus-4-6` — C-suite agents (`yolo-ceo`, `yolo-cfo`, `yolo-coo`, `yolo-cto`)
 - `claude-sonnet-4-6` — Scanner, monitor, and fix agents
 - `claude-haiku-4-5` — High-frequency lightweight agents (memory extraction)
@@ -233,11 +235,11 @@ Hooks are declared in `claude-ops/claude-ops/hooks/hooks.json`. Three event type
 }
 ```
 
-| Event | Matcher | Current use |
-|---|---|---|
-| `SessionStart` | (all) | Run `ops-welcome` banner + surface any setup health failures |
-| `PreToolUse` | `Bash` | Check wacli health before any Bash call |
-| `Stop` | (all) | Post-session cleanup |
+| Event          | Matcher | Current use                                                  |
+| -------------- | ------- | ------------------------------------------------------------ |
+| `SessionStart` | (all)   | Run `ops-welcome` banner + surface any setup health failures |
+| `PreToolUse`   | `Bash`  | Check wacli health before any Bash call                      |
+| `Stop`         | (all)   | Post-session cleanup                                         |
 
 Hook commands must always exit `0` (note the `|| true` suffix). A failing hook causes Claude Code to surface an error — never let hooks fail loudly.
 
@@ -249,14 +251,14 @@ The `$CLAUDE_PLUGIN_ROOT` environment variable is injected by Claude Code at run
 
 `claude-ops/claude-ops/CLAUDE.md` defines six rules that apply to every skill and agent. They cannot be overridden by individual skill instructions.
 
-| Rule | Name | Summary |
-|---|---|---|
-| Rule 0 | PUBLIC REPO — No personal data ever | Never commit real names, emails, tokens, org names, store URLs, or hardcoded paths. Use placeholders (`owner`, `user@example.com`, `<YOUR_TOKEN>`). Run `tests/test-no-secrets.sh` before every commit. |
-| Rule 1 | Max 4 options per AskUserQuestion | The `AskUserQuestion` tool enforces a hard limit of `<=4` items. Paginate larger lists at 4 per page using `[More options...]` as a bridge. |
-| Rule 2 | Never delegate commands to the user | Run all commands via the `Bash` tool. Use `run_in_background: true` for OAuth flows and long-running installs. The only exception is QR-based auth (`wacli auth`). |
-| Rule 3 | Never auto-skip channels or integrations | If auto-scan returns empty for a credential, always present an explicit `AskUserQuestion` with `[Paste manually]`, `[Deep hunt]`, `[Skip]`. Never silently skip. |
-| Rule 4 | Background by default during setup | Use `run_in_background: true` on every Bash call in setup flows unless the result is immediately needed for the next decision. |
-| Rule 5 | Destructive actions require per-action confirmation | Never execute `delete-*`, `stop-*`, `terminate-*`, force-push, or any infrastructure destruction without an explicit `AskUserQuestion` confirmation per action. |
+| Rule   | Name                                                | Summary                                                                                                                                                                                                 |
+| ------ | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rule 0 | PUBLIC REPO — No personal data ever                 | Never commit real names, emails, tokens, org names, store URLs, or hardcoded paths. Use placeholders (`owner`, `user@example.com`, `<YOUR_TOKEN>`). Run `tests/test-no-secrets.sh` before every commit. |
+| Rule 1 | Max 4 options per AskUserQuestion                   | The `AskUserQuestion` tool enforces a hard limit of `<=4` items. Paginate larger lists at 4 per page using `[More options...]` as a bridge.                                                             |
+| Rule 2 | Never delegate commands to the user                 | Run all commands via the `Bash` tool. Use `run_in_background: true` for OAuth flows and long-running installs. The only exception is QR-based auth (`wacli auth`).                                      |
+| Rule 3 | Never auto-skip channels or integrations            | If auto-scan returns empty for a credential, always present an explicit `AskUserQuestion` with `[Paste manually]`, `[Deep hunt]`, `[Skip]`. Never silently skip.                                        |
+| Rule 4 | Background by default during setup                  | Use `run_in_background: true` on every Bash call in setup flows unless the result is immediately needed for the next decision.                                                                          |
+| Rule 5 | Destructive actions require per-action confirmation | Never execute `delete-*`, `stop-*`, `terminate-*`, force-push, or any infrastructure destruction without an explicit `AskUserQuestion` confirmation per action.                                         |
 
 When writing a new skill or agent, verify each of these rules applies correctly before submitting a PR.
 
@@ -266,15 +268,15 @@ When writing a new skill or agent, verify each of these rules applies correctly 
 
 The plugin has no compilation step — all skills and agents are plain markdown. The `package.json` at `claude-ops/claude-ops/package.json` manages runtime dependencies for the `.mjs` autolink scripts only.
 
-| Command | What it does |
-|---|---|
-| `bash tests/run-all.sh` | Run all six test suites and report pass/fail |
-| `bash tests/test-no-secrets.sh` | Scan for leaked secrets, tokens, or personal data |
-| `bash tests/test-skills-lint.sh` | Lint all SKILL.md files for required frontmatter fields |
+| Command                          | What it does                                                  |
+| -------------------------------- | ------------------------------------------------------------- |
+| `bash tests/run-all.sh`          | Run all six test suites and report pass/fail                  |
+| `bash tests/test-no-secrets.sh`  | Scan for leaked secrets, tokens, or personal data             |
+| `bash tests/test-skills-lint.sh` | Lint all SKILL.md files for required frontmatter fields       |
 | `bash tests/test-bin-scripts.sh` | Validate bin scripts are executable and have correct shebangs |
-| `bash tests/test-hooks.sh` | Validate hooks.json structure |
-| `bash tests/test-claude-md.sh` | Verify CLAUDE.md contains all required rules |
-| `bash tests/test-template.sh` | Validate Shopify scaffolding template |
+| `bash tests/test-hooks.sh`       | Validate hooks.json structure                                 |
+| `bash tests/test-claude-md.sh`   | Verify CLAUDE.md contains all required rules                  |
+| `bash tests/test-template.sh`    | Validate Shopify scaffolding template                         |
 
 All commands run from the `claude-ops/claude-ops/` directory.
 
@@ -301,6 +303,7 @@ If `test-no-secrets.sh` fails, the commit must not proceed. This is enforced by 
 ## Coding Conventions
 
 **Shell scripts (`bin/`):**
+
 - Always start with `#!/usr/bin/env bash` and `set -euo pipefail`
 - Include a one-line comment after the shebang: `# ops-scriptname — what it does`
 - Emit JSON to stdout; emit errors to stderr (`2>/dev/null` at the call site silences them)
@@ -308,17 +311,20 @@ If `test-no-secrets.sh` fails, the commit must not proceed. This is enforced by 
 - Never hardcode paths; use `$HOME`, `~`, `$CLAUDE_PLUGIN_ROOT`, or `$CLAUDE_PLUGIN_DATA_DIR`
 
 **Skills (`skills/`):**
+
 - One skill per directory; one `SKILL.md` per skill directory
 - Frontmatter `name` must match directory name exactly
 - Never include personal data, real org names, store URLs, or tokens in examples (Rule 0)
 - Use pre-execution shell blocks (`!` fences) to gather data before model context loads — this is the primary token-saving pattern used across all 30 skills
 
 **Agents (`agents/`):**
+
 - Agents are read-only by default — add `Write` and `Edit` to `disallowedTools` unless the agent genuinely needs to write files
 - C-suite agents run on `claude-opus-4-6`; scanner and fix agents run on `claude-sonnet-4-6`
 - Agents must not call other agents (`Agent` in `disallowedTools`) to prevent recursive spawning
 
 **Secrets and credentials:**
+
 - Never committed to the repo
 - Stored in `$PREFS_PATH` (preferences.json, gitignored), `scripts/registry.json` (gitignored), Claude Code's encrypted `userConfig` (`~/.claude.json`), or the credential resolution chain: Doppler → 1Password/Dashlane/Bitwarden → macOS Keychain → env vars
 

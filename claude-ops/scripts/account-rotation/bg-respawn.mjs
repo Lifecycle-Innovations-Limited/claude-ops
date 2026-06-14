@@ -36,12 +36,7 @@ import { execFileSync, execSync } from 'child_process';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
-import {
-  extractAccessToken,
-  recordSessionLease,
-  pickAccountForSession,
-  readVaultToken,
-} from './session-router.mjs';
+import { extractAccessToken, recordSessionLease, pickAccountForSession, readVaultToken } from './session-router.mjs';
 import { applyOAuthEnv, applyBedrockEnv, scrubBedrockEnv } from './provider-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -67,7 +62,6 @@ function readState() {
 function accountKey(a) {
   return a.label || a.email;
 }
-
 
 const SESSIONS_DIR = join(homedir(), '.claude', 'sessions');
 const RESPAWNED_MARKER = (id) => `/tmp/claude-rotation-respawned-${id}`;
@@ -126,9 +120,7 @@ function markerFresh(path, maxAgeMs) {
 export function isLoopSession(id) {
   let st;
   try {
-    st = JSON.parse(
-      readFileSync(join(homedir(), '.claude', 'jobs', String(id), 'state.json'), 'utf8'),
-    );
+    st = JSON.parse(readFileSync(join(homedir(), '.claude', 'jobs', String(id), 'state.json'), 'utf8'));
   } catch {
     return false;
   }
@@ -327,7 +319,7 @@ export function doRespawn(session, log) {
             execSync('sleep 0.5');
           } catch {}
           const live = listLiveBgSessions();
-          const found = live.find(ls => String(ls.id) === String(session.id));
+          const found = live.find((ls) => String(ls.id) === String(session.id));
           if (found && found.pid !== session.pid) {
             newPid = found.pid;
             break;

@@ -1,7 +1,7 @@
 ---
 name: ops-home
 description: Smart home command center via Homey Pro. Devices, flows, scenes, energy, climate, presence, alarms. Works via Homey local API (preferred) + Athom cloud API fallback. Configure once via /ops:setup.
-argument-hint: "[status|devices|flow|scene|energy|climate|presence|alarm|setup]"
+argument-hint: '[status|devices|flow|scene|energy|climate|presence|alarm|setup]'
 allowed-tools:
   - Bash
   - Read
@@ -43,19 +43,19 @@ Before executing, load available context:
 
 Base URL: `${HOMEY_LOCAL_URL}` (e.g. `http://192.168.1.100`)
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/manager/devices/device` | GET | List all devices |
-| `/api/manager/devices/device/{id}` | GET | Get one device with capabilities |
-| `/api/manager/devices/device/{id}/capability/{capability}` | PUT | Set capability (onoff, dim, target_temperature, etc.) |
-| `/api/manager/flow/flow` | GET | List all flows |
-| `/api/manager/flow/flow/{id}/trigger` | POST | Run a flow |
-| `/api/manager/zones/zone` | GET | List zones (rooms) |
-| `/api/manager/energy/live` | GET | Live power draw (watts) |
-| `/api/manager/energy/report` | GET | Historical energy report (kWh) |
-| `/api/manager/presence` | GET | Presence status (who is home) |
-| `/api/manager/alarms/alarm` | GET | Active alarms (smoke, water, security) |
-| `/api/manager/system` | GET | Homey system info (firmware, name, uptime) |
+| Endpoint                                                   | Method | Description                                           |
+| ---------------------------------------------------------- | ------ | ----------------------------------------------------- |
+| `/api/manager/devices/device`                              | GET    | List all devices                                      |
+| `/api/manager/devices/device/{id}`                         | GET    | Get one device with capabilities                      |
+| `/api/manager/devices/device/{id}/capability/{capability}` | PUT    | Set capability (onoff, dim, target_temperature, etc.) |
+| `/api/manager/flow/flow`                                   | GET    | List all flows                                        |
+| `/api/manager/flow/flow/{id}/trigger`                      | POST   | Run a flow                                            |
+| `/api/manager/zones/zone`                                  | GET    | List zones (rooms)                                    |
+| `/api/manager/energy/live`                                 | GET    | Live power draw (watts)                               |
+| `/api/manager/energy/report`                               | GET    | Historical energy report (kWh)                        |
+| `/api/manager/presence`                                    | GET    | Presence status (who is home)                         |
+| `/api/manager/alarms/alarm`                                | GET    | Active alarms (smoke, water, security)                |
+| `/api/manager/system`                                      | GET    | Homey system info (firmware, name, uptime)            |
 
 **Auth header (local)**: `Authorization: Bearer ${HOMEY_LOCAL_TOKEN}`
 
@@ -63,16 +63,17 @@ Base URL: `${HOMEY_LOCAL_URL}` (e.g. `http://192.168.1.100`)
 
 Base URL: `https://api.athom.com`
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/v2/homey/${HOMEY_ID}/devices` | GET | Devices via cloud |
-| `/v2/homey/${HOMEY_ID}/flows` | GET | Flows via cloud |
-| `/v2/homey/${HOMEY_ID}/flows/{id}/trigger` | POST | Trigger a flow |
-| `/v2/homey/${HOMEY_ID}/zones` | GET | Zones via cloud |
+| Endpoint                                   | Method | Description       |
+| ------------------------------------------ | ------ | ----------------- |
+| `/v2/homey/${HOMEY_ID}/devices`            | GET    | Devices via cloud |
+| `/v2/homey/${HOMEY_ID}/flows`              | GET    | Flows via cloud   |
+| `/v2/homey/${HOMEY_ID}/flows/{id}/trigger` | POST   | Trigger a flow    |
+| `/v2/homey/${HOMEY_ID}/zones`              | GET    | Zones via cloud   |
 
 **Auth header (cloud)**: `Authorization: Bearer ${HOMEY_CLOUD_TOKEN}`
 
 ### Common capability strings (Homey)
+
 `onoff`, `dim` (0.0–1.0), `target_temperature`, `measure_temperature`, `measure_humidity`, `measure_power`, `meter_power`, `alarm_motion`, `alarm_smoke`, `alarm_water`, `alarm_contact`, `locked`, `windowcoverings_state`, `light_hue`, `light_saturation`, `volume_set`.
 
 ## Agent Teams support
@@ -177,19 +178,19 @@ homey_call() {
 
 ## Phase 2 — Route by $ARGUMENTS
 
-| Input                                     | Action                |
-| ----------------------------------------- | --------------------- |
-| (empty)                                   | Home status dashboard |
-| status, dashboard                         | Home status dashboard |
-| devices, device, lights, locks, sensors   | Devices manager       |
-| flow, flows                               | Trigger / list flows  |
-| scene, scenes                             | Trigger scene (alias) |
-| energy, power, kwh                        | Energy dashboard      |
-| climate, temp, thermostat, heating        | Climate manager       |
-| presence, who, home                       | Presence              |
-| alarm, alarms, arm, disarm, security      | Alarms / security     |
-| health, diagnose, outage                  | Health / outage scan  |
-| setup, configure, init, token             | Setup flow            |
+| Input                                   | Action                |
+| --------------------------------------- | --------------------- |
+| (empty)                                 | Home status dashboard |
+| status, dashboard                       | Home status dashboard |
+| devices, device, lights, locks, sensors | Devices manager       |
+| flow, flows                             | Trigger / list flows  |
+| scene, scenes                           | Trigger scene (alias) |
+| energy, power, kwh                      | Energy dashboard      |
+| climate, temp, thermostat, heating      | Climate manager       |
+| presence, who, home                     | Presence              |
+| alarm, alarms, arm, disarm, security    | Alarms / security     |
+| health, diagnose, outage                | Health / outage scan  |
+| setup, configure, init, token           | Setup flow            |
 
 ---
 
@@ -291,6 +292,7 @@ homey_call "/zones/zone" | jq '[.[] | {id: .id, name: .name}]'
 ```
 
 Apply filter from `$ARGUMENTS`:
+
 - `devices lights` → filter `class == "light"` or capability includes `dim`/`light_hue`
 - `devices locks` → filter `class == "lock"` or capability includes `locked`
 - `devices climate` → filter capability includes `target_temperature` or `measure_temperature`
@@ -650,6 +652,7 @@ Driver short-name: strip `homey:app:` prefix and dotted namespace (e.g. `homey:a
 - For drivers where `offline_pct <= 30`, list under a `partial outage` section only if `offline >= 2`.
 
 Likely-cause hints (keyed by driver namespace substring):
+
 - `plejd`, `hue`, `tradfri`, `lifx`, `tuya`, `smartthings`, `homekit` → `app credentials expired or app crashed. Fix: open Homey app → Apps → [app name] → reconfigure.`
 - `chromecast`, `sonos`, `airplay` → `media device dropped off network. Fix: power-cycle device + check Wi-Fi.`
 - `zwave`, `zigbee`, `433` → `radio congestion or hub-mesh issue. Fix: check Homey → Settings → Z-Wave/Zigbee mesh.`
@@ -767,14 +770,14 @@ These integrations are SUGGESTIONS shown in the action footer — never auto-exe
 
 ## Phase 4 — Error handling
 
-| Failure                                  | Behavior                                                          |
-|------------------------------------------|-------------------------------------------------------------------|
-| Local 401                                | Token expired. Tell user to run `/ops:setup --section home`.      |
-| Local connection refused / timeout       | Fall back to cloud API. Log "transport=cloud (local unreachable)".|
-| Cloud 401                                | Cloud token expired. Tell user to refresh via Athom OAuth.        |
-| Both local + cloud fail                  | Report which channel failed; write `action_needed: "homey_unreachable"` to daemon-health; exit with banner. |
-| jq missing                               | Print raw JSON, suggest `brew install jq`.                        |
-| No credentials at all                    | Exit gracefully with `/ops:setup --section home` instruction.     |
+| Failure                            | Behavior                                                                                                    |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Local 401                          | Token expired. Tell user to run `/ops:setup --section home`.                                                |
+| Local connection refused / timeout | Fall back to cloud API. Log "transport=cloud (local unreachable)".                                          |
+| Cloud 401                          | Cloud token expired. Tell user to refresh via Athom OAuth.                                                  |
+| Both local + cloud fail            | Report which channel failed; write `action_needed: "homey_unreachable"` to daemon-health; exit with banner. |
+| jq missing                         | Print raw JSON, suggest `brew install jq`.                                                                  |
+| No credentials at all              | Exit gracefully with `/ops:setup --section home` instruction.                                               |
 
 Audit log every state-changing call (PUT capability, POST flow trigger, arm/disarm) to `${CLAUDE_PLUGIN_DATA_DIR}/ops-home-audit.log` with timestamp, action, device/flow id, result.
 

@@ -1,7 +1,7 @@
 ---
 name: ops-go
 description: Token-efficient morning briefing. Pre-gathers all data via shell scripts, then presents a unified business dashboard with prioritized actions.
-argument-hint: "[project-alias]"
+argument-hint: '[project-alias]'
 allowed-tools:
   - Bash
   - Read
@@ -49,34 +49,37 @@ Before executing, load available context:
 
 ## CLI/API Reference
 
-### whatsapp-bridge (WhatsApp — mcp__whatsapp__*)
+### whatsapp-bridge (WhatsApp — mcp**whatsapp**\*)
 
 **Bridge health** — check before any WhatsApp operation:
+
 - Running: `lsof -i :8080 | grep LISTEN` → proceed
 - Not running → `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`, wait 5s
 
-| Tool | Params | Output |
-|------|--------|--------|
-| `mcp__whatsapp__list_chats` | `{sort_by: "last_active"}` | Array of chats with jid, name, last_message_time |
+| Tool                           | Params                     | Output                                            |
+| ------------------------------ | -------------------------- | ------------------------------------------------- |
+| `mcp__whatsapp__list_chats`    | `{sort_by: "last_active"}` | Array of chats with jid, name, last_message_time  |
 | `mcp__whatsapp__list_messages` | `{chat_jid, limit, query}` | Message array with is_from_me, content, timestamp |
 
 ### gog CLI (Gmail/Calendar)
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `gog calendar events --all --today --json --sort start` | Today's events across all calendars (sorted by start time) | Calendar events with `CalendarID` field for attribution |
-| `gog gmail search -j --results-only --no-input --max 30 "in:inbox"` | Search inbox | JSON array of threads |
+| Command                                                             | Usage                                                      | Output                                                  |
+| ------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------- |
+| `gog calendar events --all --today --json --sort start`             | Today's events across all calendars (sorted by start time) | Calendar events with `CalendarID` field for attribution |
+| `gog gmail search -j --results-only --no-input --max 30 "in:inbox"` | Search inbox                                               | JSON array of threads                                   |
 
 ---
 
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when gathering briefing data in parallel. This enables:
+
 - Agents share context and can coordinate mid-flight
 - You can steer priorities in real-time
 - Agents report progress as they complete
 
 **Team setup** (only when flag is enabled):
+
 ```
 TeamCreate("go-team")
 Agent(team_name="go-team", name="infra-scanner", prompt="Check ECS health, Vercel status, and CI failures across all clusters")
@@ -199,6 +202,7 @@ gog calendar events --all --today --json --sort start 2>/dev/null | head -60 || 
 Events include a `CalendarID` field (e.g. `work@example.com`, `personal@gmail.com`). When rendering the briefing, attribute each event with a short calendar label in parentheses — derive it from the CalendarID domain or summary (e.g. work account → `(work)`, personal Gmail → `(personal)`). Show total count + top 3 events sorted by start time with format: `HH:MM  Title (calendar)`.
 
 Fallback: if `gog` is unavailable and `GOOGLE_CALENDAR_IDS` env var is set (comma-separated calendar IDs), fetch each ID individually:
+
 ```
 for id in $(echo "$GOOGLE_CALENDAR_IDS" | tr ',' '\n'); do
   gog calendar events "$id" --today --json 2>/dev/null
@@ -282,14 +286,17 @@ After presenting the briefing, create a `TaskCreate` for each recommended priori
 ### Cron — scheduled briefings
 
 After the first briefing, offer to schedule recurring briefings via `AskUserQuestion`:
+
 ```
   [Schedule daily at 9am]  [Schedule weekday mornings]  [No schedule]
 ```
+
 Use `CronCreate` to set up the schedule. Show existing schedules with `CronList`.
 
 ### WebFetch — calendar enrichment
 
 When `gog calendar` fails, use `WebFetch` with the Google Calendar API as fallback:
+
 ```
 WebFetch(url: "https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=<today>T00:00:00Z&timeMax=<today>T23:59:59Z")
 ```

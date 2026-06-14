@@ -21,15 +21,15 @@ component  ──ops-pocket-notify <event> <msg> [--severity]──▶  dispatch
 
 ## Event taxonomy (whole module)
 
-| Event | Emitted by | When |
-|-------|-----------|------|
+| Event                     | Emitted by        | When                                                     |
+| ------------------------- | ----------------- | -------------------------------------------------------- |
 | `env-broker.uid-rejected` | pocket-env-broker | a non-worker uid tried to pull a secret (probing signal) |
-| `env-broker.denied` | pocket-env-broker | a worker requested a non-allowlisted secret |
-| `worker.spawned` | executor | a worker started |
-| `worker.completed` | executor | a worker finished successfully |
-| `worker.failed` | executor | a worker exited non-zero / timed out |
-| `queue.stuck` | watcher | the task queue stopped draining |
-| `daemon.down` | daemon manager | a pocket daemon is not running |
+| `env-broker.denied`       | pocket-env-broker | a worker requested a non-allowlisted secret              |
+| `worker.spawned`          | executor          | a worker started                                         |
+| `worker.completed`        | executor          | a worker finished successfully                           |
+| `worker.failed`           | executor          | a worker exited non-zero / timed out                     |
+| `queue.stuck`             | watcher           | the task queue stopped draining                          |
+| `daemon.down`             | daemon manager    | a pocket daemon is not running                           |
 
 New events are **off by default** (no channels) until opted in.
 
@@ -44,17 +44,19 @@ New events are **off by default** (no channels) until opted in.
       "defaults": { "channels": [], "severity": "medium" },
       "events": {
         "env-broker.uid-rejected": {
-          "channels": ["telegram"], "severity": "high",
+          "channels": ["telegram"],
+          "severity": "high",
           "schedule": { "cooldown": 60 }
         },
         "env-broker.denied": {
-          "channels": ["telegram"], "severity": "medium",
+          "channels": ["telegram"],
+          "severity": "medium",
           "schedule": { "cooldown": 300, "quiet_hours": { "start": "22:00", "end": "08:00" } }
         },
-        "worker.failed":    { "channels": ["email"],  "severity": "medium" },
+        "worker.failed": { "channels": ["email"], "severity": "medium" },
         "worker.completed": { "channels": [] },
-        "queue.stuck":      { "channels": ["telegram", "email"], "severity": "high" },
-        "daemon.down":      { "channels": ["telegram", "email"], "severity": "high" }
+        "queue.stuck": { "channels": ["telegram", "email"], "severity": "high" },
+        "daemon.down": { "channels": ["telegram", "email"], "severity": "high" }
       }
     }
   }
@@ -63,11 +65,11 @@ New events are **off by default** (no channels) until opted in.
 
 ### Per-event `schedule`
 
-| Key | Meaning |
-|-----|---------|
-| `cooldown` | seconds between sends for the same event (rate-limit) |
-| `quiet_hours` | `{start,end}` `HH:MM` window where the event is suppressed |
-| `active_days` | weekday ints `0=Mon..6=Sun`; absent/empty = every day |
+| Key                   | Meaning                                                             |
+| --------------------- | ------------------------------------------------------------------- |
+| `cooldown`            | seconds between sends for the same event (rate-limit)               |
+| `quiet_hours`         | `{start,end}` `HH:MM` window where the event is suppressed          |
+| `active_days`         | weekday ints `0=Mon..6=Sun`; absent/empty = every day               |
 | `escalate_severities` | severities that BYPASS quiet_hours/active_days (default `["high"]`) |
 
 So a `high`-severity probe always pages you, even at 3am; a `medium` "worker
@@ -75,12 +77,12 @@ completed" respects quiet hours and active days.
 
 ## Channels
 
-| Channel | Sent via |
-|---------|----------|
-| `telegram` | `ops-telegram-bot-send` (operator self-chat — outbound-gate exempt) |
-| `email` | enqueued to `supervisor-out-queue.jsonl` (drained by `ops-pocket-out-queue`) |
-| `whatsapp` | enqueued to the out-queue |
-| `slack` | enqueued to the out-queue |
+| Channel    | Sent via                                                                     |
+| ---------- | ---------------------------------------------------------------------------- |
+| `telegram` | `ops-telegram-bot-send` (operator self-chat — outbound-gate exempt)          |
+| `email`    | enqueued to `supervisor-out-queue.jsonl` (drained by `ops-pocket-out-queue`) |
+| `whatsapp` | enqueued to the out-queue                                                    |
+| `slack`    | enqueued to the out-queue                                                    |
 
 ## Usage / testing
 
@@ -90,12 +92,12 @@ ops-pocket-notify env-broker.uid-rejected "uid 1001 probed GOG_ACCOUNT" --severi
 ```
 
 `--dry-run --json` resolves the event against preferences and prints which
-channels *would* fire (and any suppression reason) without sending — used by the
+channels _would_ fire (and any suppression reason) without sending — used by the
 setup flow's **test-send** and by the test suite.
 
 ## Interactive setup
 
-`/ops:setup` → *pocket notifications* (and `/ops:ops-settings`) walks each event:
+`/ops:setup` → _pocket notifications_ (and `/ops:ops-settings`) walks each event:
 pick channels (≤4 per prompt, paginated), set the schedule (cooldown, quiet
 hours, active days, escalation), and fire a `--dry-run` preview. Writes
 `pocket.notifications` into `preferences.json`.

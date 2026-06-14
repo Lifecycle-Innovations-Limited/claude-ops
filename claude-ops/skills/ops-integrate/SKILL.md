@@ -1,7 +1,7 @@
 ---
 name: ops-integrate
 description: Add any SaaS API as a first-class integration. Provide the service name — ops-integrate discovers auth patterns, tests connectivity, and registers the API in your partner registry so it's available to other skills.
-argument-hint: "<service-name> [--url <base-url>] [--auth bearer|api-key|basic|oauth2] [--list]"
+argument-hint: '<service-name> [--url <base-url>] [--auth bearer|api-key|basic|oauth2] [--list]'
 allowed-tools:
   - Bash
   - Read
@@ -21,6 +21,7 @@ PARTNER_REGISTRY=$(jq '.partner_registry // {}' "$PREFS" 2>/dev/null || echo '{}
 ```
 
 Parse `$ARGUMENTS`:
+
 - Contains `--list` → run **List registered integrations** then exit
 - Otherwise → run **Onboarding flow** with the service name as first positional argument
 
@@ -48,6 +49,7 @@ If no integrations registered: `No integrations registered yet. Run /ops:integra
 ### Step 1 — Discover API details
 
 If `--url` not provided, use WebSearch to find:
+
 - Official API docs URL
 - Base API URL
 - Authentication pattern (bearer token / api-key header / basic auth / oauth2)
@@ -76,6 +78,7 @@ Paste your <service-name> <auth-type> credential (it will be stored locally only
 If "Paste now": collect credential via AskUserQuestion free-text. Derive key name: `<lowercase_service_name>_api_key`
 
 Write to preferences.json via atomic tmpfile swap:
+
 ```bash
 tmp=$(mktemp)
 jq --arg k "$KEY_NAME" --arg v "$CREDENTIAL" '.[$k] = $v' "$PREFS" > "$tmp" && mv "$tmp" "$PREFS"

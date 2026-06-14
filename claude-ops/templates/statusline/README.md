@@ -47,8 +47,8 @@ Resolved in this order (first match wins):
 
   // Gauge bar widths (number of fill characters)
   "gauge_width": {
-    "ctx":   10,   // context-window gauge
-    "quota":  8    // 5h / 7d quota gauges
+    "ctx": 10, // context-window gauge
+    "quota": 8, // 5h / 7d quota gauges
   },
 
   // How often the carousel slot and line-3 project cycle (seconds, epoch-based)
@@ -58,27 +58,27 @@ Resolved in this order (first match wins):
   "widgets": {
     "line1": ["ctx_gauge", "quota_gauge", "pace_badge", "cache_badge", "plan_badge", "account_arrow"],
     "line2": ["location", "model", "git_branch", "tasks", "fleet", "sys_metrics", "carousel"],
-    "line3": ["project_rotate"]
+    "line3": ["project_rotate"],
   },
 
   // Fleet badges (bg agents, rotation pool, SDK fallback, cache TTL countdown)
   "fleet": {
-    "show_bg_agents":    true,
-    "show_rotation":     true,
+    "show_bg_agents": true,
+    "show_rotation": true,
     "show_sdk_fallback": true,
-    "show_cache_ttl":    true
+    "show_cache_ttl": true,
   },
 
   // System metrics on line 2
   "sys_metrics": {
-    "show_cpu":           true,
-    "show_ram":           true,
-    "show_disk":          true,
-    "show_load_warning":  true,
-    "show_disk_warning":  true,
+    "show_cpu": true,
+    "show_ram": true,
+    "show_disk": true,
+    "show_load_warning": true,
+    "show_disk_warning": true,
     // Peer metrics sync (multi-machine: Mac + EC2)
-    "publish_peer":       true,  // write ~/.claude/.sysinfo/<hostname>.json on each render (throttled to 10s)
-    "show_peer":          true   // read sibling *.json files and show compact peer badge on line 2
+    "publish_peer": true, // write ~/.claude/.sysinfo/<hostname>.json on each render (throttled to 10s)
+    "show_peer": true, // read sibling *.json files and show compact peer badge on line 2
   },
 
   // What to include in the rotating carousel slot on line 2
@@ -87,15 +87,15 @@ Resolved in this order (first match wins):
   // Per-project badge groups for line 3 (empty = line 3 falls back to carousel)
   "projects": [
     {
-      "key":    "myapp",       // internal identifier
-      "label":  "MyApp",       // display label
-      "match":  "myapp",       // substring matched against cwd (lowercase)
-      "badges": ["ecs", "orders"]  // which metric badge types to show
+      "key": "myapp", // internal identifier
+      "label": "MyApp", // display label
+      "match": "myapp", // substring matched against cwd (lowercase)
+      "badges": ["ecs", "orders"], // which metric badge types to show
       // Badge data is read from:
       //   ~/.claude/plugins/data/ops-ops-marketplace/cache/project-<key>.json
       // Write that file from your own daemon or /ops:ops-go precompute step.
-    }
-  ]
+    },
+  ],
 }
 ```
 
@@ -119,12 +119,12 @@ The renderer reads `$ops_dir/project-<key>.json` (precomputed by your ops daemon
 
 Themes live in `themes.json` alongside this script. Available built-in themes:
 
-| Theme     | Description                                      |
-|-----------|--------------------------------------------------|
-| `cockpit` | Default — rich color, graded gauges              |
-| `minimal` | Two shades only — no color grading               |
-| `mono`    | Monochrome — bold for emphasis, no color at all  |
-| `nord`    | Nord palette — cool blues and muted tones        |
+| Theme     | Description                                     |
+| --------- | ----------------------------------------------- |
+| `cockpit` | Default — rich color, graded gauges             |
+| `minimal` | Two shades only — no color grading              |
+| `mono`    | Monochrome — bold for emphasis, no color at all |
+| `nord`    | Nord palette — cool blues and muted tones       |
 
 To add a custom theme, add a key to `themes.json` with the same semantic role fields
 and set `"theme": "<your-key>"` in your config.
@@ -144,7 +144,7 @@ Line 3 (per-project, rotates every 15s):
 
 ## Width handling
 
-Every line is packed greedily left-to-right with ` │ ` dividers. Segments that
+Every line is packed greedily left-to-right with `│` dividers. Segments that
 don't fit are silently dropped — nothing is ever truncated mid-segment. On narrow
 terminals (`$COLUMNS < 80`) line 2 collapses to a single rotating metric.
 

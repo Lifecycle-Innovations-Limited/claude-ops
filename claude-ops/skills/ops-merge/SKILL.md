@@ -1,7 +1,7 @@
 ---
 name: ops-merge
 description: Autonomous salvage + PR merge pipeline. FIRST scans every repo in every org for orphan worktrees, feature branches without PRs, uncommitted/staged/stashed work, and unpushed commits — dispatches subagents to finish/PR all loose local work. THEN scans all open PRs, dispatches fixers for CI/conflicts/reviews, and merges. Use --main to also sync dev↔main branches. Use --no-salvage to skip Phase 0 (PR-only mode). Use --salvage-only to stop after Phase 0.
-argument-hint: "[--main] [--repo org/repo] [--dry-run] [--no-salvage] [--salvage-only]"
+argument-hint: '[--main] [--repo org/repo] [--dry-run] [--no-salvage] [--salvage-only]'
 allowed-tools:
   - Bash
   - Read
@@ -25,10 +25,10 @@ maxTurns: 50
 ## Runtime Context
 
 Before executing, load:
+
 1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `timezone`, project registry
 2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — if `action_needed` set, surface to user
 3. **Secrets**: GitHub token: env `$GITHUB_TOKEN` → Doppler MCP (`mcp__doppler__*`) → `doppler secrets get GITHUB_TOKEN --plain` → password manager
-
 
 # OPS ► MERGE
 
@@ -36,28 +36,30 @@ Before executing, load:
 
 ### gh CLI (GitHub)
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `gh pr list --repo <owner/repo> --json number,title,state,headRefName,statusCheckRollup,reviewDecision,mergeable,isDraft` | List PRs with status | JSON array |
-| `gh pr view <n> --repo <repo> --json title,body,state,mergeable,reviews` | PR details | JSON |
-| `gh pr checks <n> --repo <repo>` | CI check status | Check list |
-| `gh pr merge <n> --repo <repo> --squash --admin` | Squash merge PR | Merge result |
-| `gh pr create --repo <repo> --title "<t>" --body "<b>" --base dev` | Create PR | PR URL |
-| `gh run list --repo <repo> --limit 5 --json conclusion,name,headBranch` | CI runs | JSON array |
-| `gh run view <id> --repo <repo> --log-failed` | Failed CI logs | Log output |
-| `gh run watch <run-id> --repo <repo>` | Stream CI run | Live output (use with Monitor) |
-| `gh api repos/<repo>/pulls/<n>/comments --jq '.[].body'` | PR review comments | Comment text |
+| Command                                                                                                                   | Usage                | Output                         |
+| ------------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------ |
+| `gh pr list --repo <owner/repo> --json number,title,state,headRefName,statusCheckRollup,reviewDecision,mergeable,isDraft` | List PRs with status | JSON array                     |
+| `gh pr view <n> --repo <repo> --json title,body,state,mergeable,reviews`                                                  | PR details           | JSON                           |
+| `gh pr checks <n> --repo <repo>`                                                                                          | CI check status      | Check list                     |
+| `gh pr merge <n> --repo <repo> --squash --admin`                                                                          | Squash merge PR      | Merge result                   |
+| `gh pr create --repo <repo> --title "<t>" --body "<b>" --base dev`                                                        | Create PR            | PR URL                         |
+| `gh run list --repo <repo> --limit 5 --json conclusion,name,headBranch`                                                   | CI runs              | JSON array                     |
+| `gh run view <id> --repo <repo> --log-failed`                                                                             | Failed CI logs       | Log output                     |
+| `gh run watch <run-id> --repo <repo>`                                                                                     | Stream CI run        | Live output (use with Monitor) |
+| `gh api repos/<repo>/pulls/<n>/comments --jq '.[].body'`                                                                  | PR review comments   | Comment text                   |
 
 ---
 
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** for fixer agents (Phase 3). This enables:
+
 - Steering fixers mid-flight if priorities change (e.g., a critical PR should be merged first)
 - Fixers can report blockers and you can redirect them without waiting for completion
 - Shared context: if fixer-A discovers a breaking change that affects fixer-B's PR, you can notify B
 
 **Team setup** (only when flag is enabled, Phase 3):
+
 ```
 TeamCreate("merge-fixers")
 Agent(team_name="merge-fixers", name="fixer-[repo]", ...)
@@ -103,14 +105,14 @@ From `$ARGUMENTS`:
 
 Parse the JSON returned by `ops-merge-salvage-scan`. For each repo with `has_salvage: true`, classify each finding into one of:
 
-| Finding                                                            | Classification             | Action                                                                                                |
-| ------------------------------------------------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Worktree with `dirty_files > 0` or `unpushed_commits > 0`          | `worktree-incomplete`      | Dispatch salvager: finish work in the worktree, commit, push, open PR if missing                      |
-| Worktree on a branch with `has_open_pr: false`                     | `worktree-orphan-pr`       | Dispatch salvager: confirm work is complete (lint/type/test gate), push if needed, open PR            |
-| Local branch with `integrated: false` and `has_open_pr: false`     | `branch-no-pr`             | Dispatch salvager: review state, push if unpushed, open PR targeting integration branch               |
-| Local branch with `integrated: true` and `has_open_pr: false`      | `branch-already-merged`    | Surface to user → `[Delete local branch]` / `[Keep]` (NEVER auto-delete — Safety Rails)               |
-| Main checkout: `dirty_files > 0` or `staged_files > 0` or stash >0 | `checkout-dirty`           | Surface to user → `[Stash & continue]` / `[Open salvage worktree]` / `[Skip]`. Never auto-discard.    |
-| Main checkout: `unpushed_commits > 0` on a non-integration branch  | `checkout-unpushed`        | Dispatch salvager: push the branch, open PR if missing                                                |
+| Finding                                                            | Classification          | Action                                                                                             |
+| ------------------------------------------------------------------ | ----------------------- | -------------------------------------------------------------------------------------------------- |
+| Worktree with `dirty_files > 0` or `unpushed_commits > 0`          | `worktree-incomplete`   | Dispatch salvager: finish work in the worktree, commit, push, open PR if missing                   |
+| Worktree on a branch with `has_open_pr: false`                     | `worktree-orphan-pr`    | Dispatch salvager: confirm work is complete (lint/type/test gate), push if needed, open PR         |
+| Local branch with `integrated: false` and `has_open_pr: false`     | `branch-no-pr`          | Dispatch salvager: review state, push if unpushed, open PR targeting integration branch            |
+| Local branch with `integrated: true` and `has_open_pr: false`      | `branch-already-merged` | Surface to user → `[Delete local branch]` / `[Keep]` (NEVER auto-delete — Safety Rails)            |
+| Main checkout: `dirty_files > 0` or `staged_files > 0` or stash >0 | `checkout-dirty`        | Surface to user → `[Stash & continue]` / `[Open salvage worktree]` / `[Skip]`. Never auto-discard. |
+| Main checkout: `unpushed_commits > 0` on a non-integration branch  | `checkout-unpushed`     | Dispatch salvager: push the branch, open PR if missing                                             |
 
 **Print the salvage queue:**
 
@@ -307,6 +309,7 @@ Use `model: "haiku"` for fixer agents (matches agent definition default).
 For each PR returned with `status: "conflict"` from a fixer agent:
 
 1. Display the conflict summary:
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  OPS ► MERGE — Conflict in <repo>#<number>
@@ -345,53 +348,64 @@ For each fixer's JSON report:
 1. **Parse the JSON.** If the agent didn't return parseable JSON, treat as failure — do not merge.
 
 2. **Verify push actually landed.** Read claimed `end_sha` from JSON. Run:
+
    ```bash
    ACTUAL_REMOTE_SHA=$(git ls-remote https://github.com/<repo>.git <branch> | awk '{print $1}')
    ```
+
    If `ACTUAL_REMOTE_SHA != end_sha`, the agent fabricated or its push failed silently. **Do not merge.** Mark as `verification_failed: push_sha_mismatch` and surface to user.
 
 3. **Verify the push is yours** (defense against bot-race overwrites). Compare `start_sha` claimed vs git log between start and end:
+
    ```bash
    git log --pretty=format:"%H %an %s" "$start_sha".."$end_sha" | head -10
    ```
+
    If author isn't us OR the diff is wildly different from what the agent reported, mark as `verification_failed: branch_overwritten_by_other_agent` and surface.
 
 4. **Verify CI independently.** Do NOT trust the agent's `ci_status` field. Run:
+
    ```bash
    gh pr view <pr> --repo <repo> --json statusCheckRollup,mergeable,mergeStateStatus
    ```
+
    Parse `statusCheckRollup`. All required checks must have `conclusion: SUCCESS`. `mergeable` must be `MERGEABLE`. `mergeStateStatus` must be `CLEAN` (or `UNSTABLE` for non-required-check failures only).
 
 5. **If all checks pass: orchestrator performs the merge.** The fixer never had merge authority. Run:
+
    ```bash
    gh pr merge <pr> --repo <repo> --squash --admin
    ```
 
 6. **Verify the merge actually landed.** Immediately after the merge call:
+
    ```bash
    gh pr view <pr> --repo <repo> --json state,mergedAt,mergeCommit
    ```
+
    `state` must be `MERGED`. `mergedAt` must be a timestamp within the last 60 seconds. `mergeCommit.oid` must exist. If any of these fail, the merge silently failed — log the error and do NOT mark the task complete.
 
 7. **Verify the merge SHA exists in the target branch.**
+
    ```bash
    git fetch origin <base-branch>
    git merge-base --is-ancestor <mergeCommit.oid> origin/<base-branch>
    ```
+
    Exit 0 = merge SHA is in the branch. Exit non-zero = false merge (rare but real — guard against it).
 
 8. **Only after steps 1-7 all pass, report success** with the verified merge SHA.
 
 #### Decision matrix after verification
 
-| Verification result | Action |
-|---------------------|--------|
-| All 7 checks pass | Orchestrator merges (step 5), verifies merge (steps 6-7), reports `✓ verified-merged` |
-| Push SHA mismatch | Mark `fabricated_or_push_failed`, surface fixer's claimed vs actual SHAs to user |
-| Branch overwritten by other bot | Mark `race_lost`, surface diff, ask user if re-dispatch or skip |
-| CI still red | Mark `ci_red`, surface failing checks, do NOT merge |
-| Merge call failed | Capture stderr, mark `merge_failed`, surface to user |
-| Merge call succeeded but mergedAt absent | Mark `silent_merge_failure`, escalate immediately |
+| Verification result                      | Action                                                                                |
+| ---------------------------------------- | ------------------------------------------------------------------------------------- |
+| All 7 checks pass                        | Orchestrator merges (step 5), verifies merge (steps 6-7), reports `✓ verified-merged` |
+| Push SHA mismatch                        | Mark `fabricated_or_push_failed`, surface fixer's claimed vs actual SHAs to user      |
+| Branch overwritten by other bot          | Mark `race_lost`, surface diff, ask user if re-dispatch or skip                       |
+| CI still red                             | Mark `ci_red`, surface failing checks, do NOT merge                                   |
+| Merge call failed                        | Capture stderr, mark `merge_failed`, surface to user                                  |
+| Merge call succeeded but mergedAt absent | Mark `silent_merge_failure`, escalate immediately                                     |
 
 #### Anti-fabrication red flags (always investigate)
 
@@ -409,12 +423,14 @@ For each repo that has separate `dev` and `main` branches:
 
 1. Check if dev is ahead of main: `git -C <path> log main..dev --oneline | head -5`
 2. If ahead, show the commits and use `AskUserQuestion`:
+
    ```
    [repo]: dev is N commits ahead of main:
      [commit list]
 
      [Create sync PR and merge]  [Create PR only — I'll review]  [Skip this repo]
    ```
+
 3. If confirmed: create sync PR: `gh pr create --repo <repo> --base main --head dev --title "chore: sync dev → main"`
 4. Wait for CI: `gh pr checks <sync-pr-number> --repo <repo> --watch` (background, max 10 min)
 5. If CI green: `gh pr merge <sync-pr-number> --repo <repo> --merge --admin` (merge commit, not squash)
@@ -499,9 +515,11 @@ During this command's execution, invoke the following superpower skills at the s
 ### Monitor — live CI watching
 
 When waiting for CI after a fixer pushes (Phase 3-4), use `Monitor` to stream the GitHub Actions run output instead of polling:
+
 ```
 Monitor(command: "gh run watch <run-id> --repo <repo>")
 ```
+
 This avoids sleep loops and gives real-time feedback on CI progress.
 
 ### Tasks — progress tracking

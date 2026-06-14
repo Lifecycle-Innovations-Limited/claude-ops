@@ -25,12 +25,12 @@ After the release lands, refresh the local install:
 
 ## What a release changes
 
-| File | Field | Role |
-|---|---|---|
-| `claude-ops/.claude-plugin/plugin.json` | `.version` | the plugin's own version |
-| `.claude-plugin/marketplace.json` (repo root) | `.plugins[name=="ops"].version` | the **marketplace registry** entry Claude Code reads |
-| `claude-ops/package.json` (auto-detected; or repo root) | `.version` | the `claude-ops-bin` npm package (bin-script runtime deps) |
-| `claude-ops/CHANGELOG.md` | new `## [X.Y.Z] - DATE` section | human-readable history (Keep a Changelog + SemVer) |
+| File                                                    | Field                           | Role                                                       |
+| ------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------- |
+| `claude-ops/.claude-plugin/plugin.json`                 | `.version`                      | the plugin's own version                                   |
+| `.claude-plugin/marketplace.json` (repo root)           | `.plugins[name=="ops"].version` | the **marketplace registry** entry Claude Code reads       |
+| `claude-ops/package.json` (auto-detected; or repo root) | `.version`                      | the `claude-ops-bin` npm package (bin-script runtime deps) |
+| `claude-ops/CHANGELOG.md`                               | new `## [X.Y.Z] - DATE` section | human-readable history (Keep a Changelog + SemVer)         |
 
 `ops-release` keeps all of these in sync — never bump them by hand, or the
 marketplace, package, and plugin disagree and installs resolve the wrong version.

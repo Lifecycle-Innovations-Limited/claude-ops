@@ -40,16 +40,17 @@ Cache these results. Also check `$PREFS_PATH` under `revenue.stripe.*` and `reve
 
 Ask which revenue integrations to configure via `AskUserQuestion` with `multiSelect: true`:
 
-| Option       | Header       | Description                                                    |
-| ------------ | ------------ | -------------------------------------------------------------- |
-| Stripe       | stripe       | SaaS revenue — secret key for MRR, charges, disputes           |
-| RevenueCat   | revenuecat   | Mobile subs — API key + project ID for mobile MRR              |
+| Option     | Header     | Description                                          |
+| ---------- | ---------- | ---------------------------------------------------- |
+| Stripe     | stripe     | SaaS revenue — secret key for MRR, charges, disputes |
+| RevenueCat | revenuecat | Mobile subs — API key + project ID for mobile MRR    |
 
 #### Stripe
 
 If `STRIPE_SECRET_KEY` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format with `[Use this value]` / `[Paste a different one]` / `[Skip]`.
 
 Per Rule 3 — if nothing was found, offer (≤4 options):
+
 ```
 No Stripe secret key found. How do you want to provide one?
   [Paste Stripe secret key manually]
@@ -71,6 +72,7 @@ Agent(
 While it runs, continue to the RevenueCat block. Return to Stripe when the agent reports results; present findings via `AskUserQuestion` (paginate to ≤4 per Rule 1).
 
 On `[Paste Stripe secret key manually]`:
+
 ```
 Enter your Stripe Secret Key:
   Format: sk_live_XXX  (production)  or  sk_test_XXX  (test mode)
@@ -79,9 +81,11 @@ Enter your Stripe Secret Key:
 ```
 
 Smoke test:
+
 ```bash
 curl -s -u "$STRIPE_SECRET_KEY:" "https://api.stripe.com/v1/balance" | jq '.available | length'
 ```
+
 Expect a non-zero integer. If `{"error": ...}`, show the message and re-ask.
 
 #### RevenueCat
@@ -89,6 +93,7 @@ Expect a non-zero integer. If `{"error": ...}`, show the message and re-ask.
 If `REVENUECAT_API_KEY` and `REVENUECAT_PROJECT_ID` were both found in the auto-scan, present them together with `[Use these values]` / `[Paste different ones]` / `[Skip]`.
 
 Per Rule 3 — if not found, offer:
+
 ```
 No RevenueCat credentials found. How do you want to provide them?
   [Paste RevenueCat API key manually]
@@ -108,6 +113,7 @@ Agent(
 ```
 
 On `[Paste RevenueCat API key manually]`:
+
 ```
 Enter your RevenueCat API Key:
   Find it: app.revenuecat.com → Project settings → API keys → Secret key
@@ -118,15 +124,18 @@ Enter your RevenueCat Project ID:
 ```
 
 Smoke test:
+
 ```bash
 curl -s -H "Authorization: Bearer $REVENUECAT_API_KEY" \
   "https://api.revenuecat.com/v2/projects/$REVENUECAT_PROJECT_ID/metrics/overview" | jq '.metrics // .object'
 ```
+
 Expect a numeric `mrr` or an object descriptor. If the response is `{"code": 7243, ...}` (auth error), re-ask.
 
 #### Save to preferences
 
 Write to `$PREFS_PATH` (merge):
+
 ```json
 {
   "revenue": {
@@ -148,4 +157,3 @@ Prefer a Doppler reference (`doppler:STRIPE_SECRET_KEY`, `doppler:REVENUECAT_API
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-revenue/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for revenue integrations (Stripe MRR/ARR queries, RevenueCat subscription metrics, registry fallbacks). The setup agent can load that file directly when it needs more depth than this wizard provides.
 
 ---
-

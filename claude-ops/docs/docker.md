@@ -6,14 +6,14 @@ This path is an **addition** to the v1.1.0 cross-OS flow (`lib/os-detect.sh` + `
 
 ## Why Docker
 
-| Scenario | Native | Docker |
-|---|---|---|
-| macOS workstation, brew OK | Native wins — Keychain integration is free | Docker works but loses Keychain |
-| Ubuntu desktop with `gnome-keyring` | Native wins — libsecret integration is free | Equivalent; pick whichever you prefer |
-| Linux server, no Homebrew, no desktop | Works but manual CLI installs | **Docker wins** — one image, all CLIs baked in |
-| CI runner (ephemeral, no state) | Works but cold-starts on every run | **Docker wins** — `docker run` caches layers |
-| Disposable dev env, try-before-buy | Leaves files on your host | **Docker wins** — `docker rm` wipes it |
-| Windows without WSL2 | Not supported (natively) | **Docker wins** — inherits Linux path |
+| Scenario                              | Native                                      | Docker                                         |
+| ------------------------------------- | ------------------------------------------- | ---------------------------------------------- |
+| macOS workstation, brew OK            | Native wins — Keychain integration is free  | Docker works but loses Keychain                |
+| Ubuntu desktop with `gnome-keyring`   | Native wins — libsecret integration is free | Equivalent; pick whichever you prefer          |
+| Linux server, no Homebrew, no desktop | Works but manual CLI installs               | **Docker wins** — one image, all CLIs baked in |
+| CI runner (ephemeral, no state)       | Works but cold-starts on every run          | **Docker wins** — `docker run` caches layers   |
+| Disposable dev env, try-before-buy    | Leaves files on your host                   | **Docker wins** — `docker rm` wipes it         |
+| Windows without WSL2                  | Not supported (natively)                    | **Docker wins** — inherits Linux path          |
 
 If none of those rows apply to you, stick with the native install — it's faster, has better credential-store integration, and can launch browser-based auth flows (Slack autolink, OAuth) without any extra wiring.
 
@@ -63,7 +63,7 @@ The compose file sets `restart: "no"` on purpose — this is a CLI container, no
 
 ```yaml
 volumes:
-  - "./registry.json:/opt/claude-ops/scripts/registry.json:rw"
+  - './registry.json:/opt/claude-ops/scripts/registry.json:rw'
 ```
 
 If you keep your registry elsewhere, override with a compose override file:
@@ -73,7 +73,7 @@ If you keep your registry elsewhere, override with a compose override file:
 services:
   claude-ops:
     volumes:
-      - "/path/to/your/registry.json:/opt/claude-ops/scripts/registry.json:rw"
+      - '/path/to/your/registry.json:/opt/claude-ops/scripts/registry.json:rw'
 ```
 
 ## Passing credentials
@@ -134,13 +134,13 @@ Or mount a host-installed binary: `-v /usr/local/bin/gogcli:/usr/local/bin/gogcl
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| `registry.json: permission denied` | Host file owned by your UID (≠1001); container runs as UID 1001 | `chown 1001:1001 registry.json` or mount with `:Z` on SELinux |
-| `secret-tool: cannot communicate with gnome-keyring` | No unlocked keyring in the container | Set `CLAUDE_OPS_CRED_BACKEND=enc-json` or start `gnome-keyring-daemon --unlock` manually |
-| `gh: the authenticated user has no access` | `~/.config/gh` mounted but the token file is missing a newline at EOF | `gh auth login` once on the host, then restart the container |
-| `aws: Unable to locate credentials` | `~/.aws` mounted ro but empty | `aws configure` once on the host |
-| Playwright fails to launch Chromium | No display | Mount X11 socket as shown above, or skip browser steps and paste tokens |
+| Symptom                                              | Cause                                                                 | Fix                                                                                      |
+| ---------------------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `registry.json: permission denied`                   | Host file owned by your UID (≠1001); container runs as UID 1001       | `chown 1001:1001 registry.json` or mount with `:Z` on SELinux                            |
+| `secret-tool: cannot communicate with gnome-keyring` | No unlocked keyring in the container                                  | Set `CLAUDE_OPS_CRED_BACKEND=enc-json` or start `gnome-keyring-daemon --unlock` manually |
+| `gh: the authenticated user has no access`           | `~/.config/gh` mounted but the token file is missing a newline at EOF | `gh auth login` once on the host, then restart the container                             |
+| `aws: Unable to locate credentials`                  | `~/.aws` mounted ro but empty                                         | `aws configure` once on the host                                                         |
+| Playwright fails to launch Chromium                  | No display                                                            | Mount X11 socket as shown above, or skip browser steps and paste tokens                  |
 
 ## CI use
 

@@ -3,14 +3,14 @@
 
 Reads pending-triage.jsonl, asks Opus (with extended thinking) for each item:
   "Is this something a Claude Code agent can safely execute autonomously
-  given Sam's known rules and the task's domain?"
+  given the owner's known rules and the task's domain?"
 
 Routes each task into one of four buckets:
 
   ACT    → tasks.jsonl   (supervisor will pick up, dispatch a worker)
   DRAFT  → drafts.jsonl  (outbound content; Rule 6 — per-message approval)
   DROP   → dropped.jsonl (personal / private / non-task / duplicate / silly)
-  ASK    → review.jsonl  (high-stakes or ambiguous; Sam must decide)
+  ASK    → review.jsonl  (high-stakes or ambiguous; the owner must decide)
 
 A reasoning trace (Opus's extended-thinking summary) is persisted for every
 decision so the call is auditable.
@@ -18,7 +18,7 @@ decision so the call is auditable.
 Safety doctrine — the model is told that "safe to ACT autonomously" means:
   • READ-ONLY by default (file scans, API health checks, log review, etc.)
   • State-mutating ops only when the mutation is local, reversible, scoped
-    to Sam's own infra, and not financial or identity-touching.
+    to the owner's own infra, and not financial or identity-touching.
   • NEVER autonomous: outbound comms, account creation, signing/auth flows,
     spending money, personal/family/household, anything involving someone
     else's consent.
@@ -38,7 +38,7 @@ Files (under POCKET_STATE_DIR):
   tasks.jsonl           OUT — ACT verdicts (append)
   drafts.jsonl          OUT — DRAFT verdicts (append)
   dropped.jsonl         OUT — DROP audit log (append)
-  review.jsonl          OUT — ASK queue for Sam
+  review.jsonl          OUT — ASK queue for the owner
   triage-decisions.jsonl OUT — full audit of every decision + thinking
 """
 

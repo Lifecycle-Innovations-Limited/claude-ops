@@ -13,6 +13,7 @@ allowed-tools:
 This skill is the operator console for the post-merge + build-failure auto-fix loop installed by `/ops:setup` Step 6.5a. The underlying daemons, hooks, and prompts live in `${CLAUDE_PLUGIN_ROOT}/scripts/`, `${CLAUDE_PLUGIN_ROOT}/hooks/`, and `${CLAUDE_PLUGIN_ROOT}/prompts/`. State lives in `~/.claude/state/ops-deploy-fix/`. Logs live in `~/.claude/logs/ops-deploy-fix/`.
 
 **Plugin rules apply (see `claude-ops/CLAUDE.md`).** In particular:
+
 - Rule 0 — never echo personal data (slugs are fine, but redact tokens, webhooks, emails)
 - Rule 1 — max 4 options per `AskUserQuestion`
 - Rule 4 — background by default during `configure`
@@ -33,12 +34,12 @@ The first positional argument selects the subcommand. If absent, present:
 
 Subcommands:
 
-| Subcommand   | Purpose                                                                  |
-| ------------ | ------------------------------------------------------------------------ |
-| `status`     | Dashboard of recent monitor runs, fixer dispatches, locks, budget        |
-| `tail`       | Follow the latest fixer log live                                         |
-| `configure`  | Re-run the wizard from `/ops:setup` Step 6.5a                            |
-| `test`       | Send a synthetic failure through the pipeline (dry-run, no real fix)     |
+| Subcommand  | Purpose                                                              |
+| ----------- | -------------------------------------------------------------------- |
+| `status`    | Dashboard of recent monitor runs, fixer dispatches, locks, budget    |
+| `tail`      | Follow the latest fixer log live                                     |
+| `configure` | Re-run the wizard from `/ops:setup` Step 6.5a                        |
+| `test`      | Send a synthetic failure through the pipeline (dry-run, no real fix) |
 
 ---
 
@@ -187,6 +188,7 @@ Synthetic dry-run through the pipeline. **No real fix dispatch — no agent runs
 Steps:
 
 1. Pre-flight check:
+
    ```bash
    PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
    [ -z "$PLUGIN_ROOT" ] && PLUGIN_ROOT=$(find ~/.claude -type d -name claude-ops 2>/dev/null | head -1)
@@ -195,6 +197,7 @@ Steps:
    ```
 
 2. Ask:
+
    ```
    What should the synthetic failure look like?
      [Build failure (npm run build:* exit 1)]
@@ -223,7 +226,7 @@ Steps:
    - Still incrementing the budget counter (so the test exercises the cap)
    - Logging `[DRY-RUN] would notify <channel>` instead of firing real `notify` (no actual outbound messages during test — Rule 6)
 
-   *If the trigger scripts don't yet support `--synthetic` / `OPS_DEPLOY_FIX_DRY_RUN`, surface that as a known TODO in the output and degrade to "would-have-dispatched" log-only.*
+   _If the trigger scripts don't yet support `--synthetic` / `OPS_DEPLOY_FIX_DRY_RUN`, surface that as a known TODO in the output and degrade to "would-have-dispatched" log-only._
 
 4. Print the resulting `would-dispatch-*.log` path and a one-line classification result (transient? dedup-hit? budget-exhausted? would-dispatch-template=`<file>`).
 

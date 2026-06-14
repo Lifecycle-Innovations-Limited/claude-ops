@@ -2,7 +2,7 @@
 
 # Recap Marquee Daemon
 
-*One-line situational awareness across every parallel Claude Code session, surfaced in tmux `status-right` or the Claude Code `statusLine`.*
+_One-line situational awareness across every parallel Claude Code session, surfaced in tmux `status-right` or the Claude Code `statusLine`._
 
 [![version](https://img.shields.io/badge/version-2.1.0-blue)](../CHANGELOG.md)
 [![daemon](https://img.shields.io/badge/runtime-launchd%20%2F%20systemd-6366f1)](.)
@@ -22,7 +22,7 @@ If you run several Claude Code sessions across worktrees, you lose track of whic
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-When something *fires* (a deploy-fix dispatched, a safety hook denied, a `/ops:fires` alert) it's flagged with `🔥` and bumped to the front of the line.
+When something _fires_ (a deploy-fix dispatched, a safety hook denied, a `/ops:fires` alert) it's flagged with `🔥` and bumped to the front of the line.
 
 ---
 
@@ -70,15 +70,15 @@ When something *fires* (a deploy-fix dispatched, a safety hook denied, a `/ops:f
 
 ## Components
 
-| Path | Role |
-|------|------|
-| `scripts/recap/daemon.sh` | Long-lived loop. Reads session jsonl tails, builds digest. |
-| `scripts/recap/digest.sh` | Synthesises the digest (active session count, latest action, fire flags). |
-| `scripts/recap/marquee.sh` | Formats one-line ANSI output for tmux/`statusLine`. |
-| `hooks/recap-capture.sh` | PostToolUse hook — captures Edit/Write/Bash payloads to per-session jsonl. |
-| `hooks/recap-tool-activity.sh` | PostToolUse `*` hook — heartbeat + tool-name log. |
-| `templates/com.claude-ops.recap-daemon.plist` | macOS launchd unit. |
-| `skills/ops-recap/SKILL.md` | `/ops:recap` user-facing skill. |
+| Path                                          | Role                                                                       |
+| --------------------------------------------- | -------------------------------------------------------------------------- |
+| `scripts/recap/daemon.sh`                     | Long-lived loop. Reads session jsonl tails, builds digest.                 |
+| `scripts/recap/digest.sh`                     | Synthesises the digest (active session count, latest action, fire flags).  |
+| `scripts/recap/marquee.sh`                    | Formats one-line ANSI output for tmux/`statusLine`.                        |
+| `hooks/recap-capture.sh`                      | PostToolUse hook — captures Edit/Write/Bash payloads to per-session jsonl. |
+| `hooks/recap-tool-activity.sh`                | PostToolUse `*` hook — heartbeat + tool-name log.                          |
+| `templates/com.claude-ops.recap-daemon.plist` | macOS launchd unit.                                                        |
+| `skills/ops-recap/SKILL.md`                   | `/ops:recap` user-facing skill.                                            |
 
 ---
 
@@ -130,22 +130,22 @@ For tmux integration, the same `set -g status-right …` line works on Linux.
 
 ## `/ops:recap` skill
 
-| Subcommand | Purpose |
-|------------|---------|
-| `/ops:recap` | Show today's digest as a multi-line summary (richer than the marquee). |
-| `/ops:recap status` | Daemon health, last digest age, active session count. |
-| `/ops:recap tail` | Tail the daemon log. |
-| `/ops:recap configure` | Open `~/.tmux.conf` / `settings.json` for manual tweaks. |
-| `/ops:recap restart` | `launchctl unload && load` (or `systemctl restart`). |
+| Subcommand             | Purpose                                                                |
+| ---------------------- | ---------------------------------------------------------------------- |
+| `/ops:recap`           | Show today's digest as a multi-line summary (richer than the marquee). |
+| `/ops:recap status`    | Daemon health, last digest age, active session count.                  |
+| `/ops:recap tail`      | Tail the daemon log.                                                   |
+| `/ops:recap configure` | Open `~/.tmux.conf` / `settings.json` for manual tweaks.               |
+| `/ops:recap restart`   | `launchctl unload && load` (or `systemctl restart`).                   |
 
 ---
 
 ## Configuration
 
-| Key | Type | Default | Purpose |
-|-----|------|---------|---------|
-| `recap_marquee_enabled` | boolean | `true` | Master switch. |
-| `recap_marquee_auto_configure_tmux` | boolean | `true` | Append marquee source to `~/.tmux.conf` during setup. |
+| Key                                 | Type    | Default | Purpose                                               |
+| ----------------------------------- | ------- | ------- | ----------------------------------------------------- |
+| `recap_marquee_enabled`             | boolean | `true`  | Master switch.                                        |
+| `recap_marquee_auto_configure_tmux` | boolean | `true`  | Append marquee source to `~/.tmux.conf` during setup. |
 
 Disable via `/plugins` settings; then `launchctl unload ~/Library/LaunchAgents/com.claude-ops.recap-daemon.plist` to stop the daemon.
 

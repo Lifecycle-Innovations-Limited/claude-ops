@@ -35,7 +35,7 @@ restricted worker (uid: pocket-worker)        orchestrator (privileged uid)
   backstop.
 - **Policy:** `env-broker-policy.json` → `{"allow": ["VAR", ...]}`. **Default-deny**
   — a missing or malformed policy grants nothing. A variable is only returned if
-  it is both in the allowlist *and* present in the broker's environment.
+  it is both in the allowlist _and_ present in the broker's environment.
 - **Secret source:** the broker's own process environment, populated the same way
   the executor's secrets are (e.g. an `EnvironmentFile` / a wrapper that sources
   `~/.mcp-secrets.env`). The broker never reads a secrets file itself.
@@ -44,12 +44,12 @@ restricted worker (uid: pocket-worker)        orchestrator (privileged uid)
 
 ## Components
 
-| File | Role |
-|------|------|
-| `scripts/pocket-env-broker.py` | the daemon (server) — runs as the orchestrator user |
-| `scripts/pocket-env` | worker-side client CLI — on the worker's PATH |
-| `scripts/env-broker-policy.example.json` | allowlist template (copy + edit) |
-| `scripts/systemd/pocket-env-broker.service.template` | systemd unit template |
+| File                                                 | Role                                                |
+| ---------------------------------------------------- | --------------------------------------------------- |
+| `scripts/pocket-env-broker.py`                       | the daemon (server) — runs as the orchestrator user |
+| `scripts/pocket-env`                                 | worker-side client CLI — on the worker's PATH       |
+| `scripts/env-broker-policy.example.json`             | allowlist template (copy + edit)                    |
+| `scripts/systemd/pocket-env-broker.service.template` | systemd unit template                               |
 
 ## Worker usage
 
@@ -64,16 +64,16 @@ to stderr.
 
 ## Configuration (env)
 
-| Variable | Default | Used by |
-|----------|---------|---------|
-| `POCKET_ENV_BROKER_SOCK` | `$POCKET_STATE_DIR/env-broker.sock` | broker + client |
-| `POCKET_ENV_BROKER_POLICY` | `$POCKET_STATE_DIR/env-broker-policy.json` | broker |
-| `POCKET_ENV_BROKER_AUDIT` | `$POCKET_STATE_DIR/env-broker-audit.log` | broker |
-| `POCKET_STATE_DIR` | `/var/lib/pocket-pipeline` | broker + client |
-| `POCKET_WORKER_USER` | `pocket-worker` | broker (uid to authorize) |
-| `POCKET_ENV_BROKER_HEALTH` | `$POCKET_STATE_DIR/env-broker-health.json` | broker (metrics snapshot) |
-| `POCKET_ENV_BROKER_NOTIFY_CMD` | _(unset — off)_ | broker (alert command; alert text appended as final arg) |
-| `POCKET_ENV_BROKER_NOTIFY_COOLDOWN` | `300` | broker (per-event rate-limit, seconds) |
+| Variable                            | Default                                    | Used by                                                  |
+| ----------------------------------- | ------------------------------------------ | -------------------------------------------------------- |
+| `POCKET_ENV_BROKER_SOCK`            | `$POCKET_STATE_DIR/env-broker.sock`        | broker + client                                          |
+| `POCKET_ENV_BROKER_POLICY`          | `$POCKET_STATE_DIR/env-broker-policy.json` | broker                                                   |
+| `POCKET_ENV_BROKER_AUDIT`           | `$POCKET_STATE_DIR/env-broker-audit.log`   | broker                                                   |
+| `POCKET_STATE_DIR`                  | `/var/lib/pocket-pipeline`                 | broker + client                                          |
+| `POCKET_WORKER_USER`                | `pocket-worker`                            | broker (uid to authorize)                                |
+| `POCKET_ENV_BROKER_HEALTH`          | `$POCKET_STATE_DIR/env-broker-health.json` | broker (metrics snapshot)                                |
+| `POCKET_ENV_BROKER_NOTIFY_CMD`      | _(unset — off)_                            | broker (alert command; alert text appended as final arg) |
+| `POCKET_ENV_BROKER_NOTIFY_COOLDOWN` | `300`                                      | broker (per-event rate-limit, seconds)                   |
 
 ## Security notes
 
@@ -90,7 +90,7 @@ The broker is observable at three levels:
 
 1. **Live status** — `pocket-env-broker --status` (add `--json` for machine output)
    prints request counters (`requests / granted / denied / unknown_var /
-   uid_rejected`), last-request time, and the most recent denials. Backed by a
+uid_rejected`), last-request time, and the most recent denials. Backed by a
    metrics snapshot the broker rewrites after every request at
    `env-broker-health.json` (`POCKET_ENV_BROKER_HEALTH`).
 2. **Ops dashboard** — `/ops:ops-status` shows an `Env-broker` line with request

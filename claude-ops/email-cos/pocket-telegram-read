@@ -32,8 +32,11 @@ if ((process.env.EMAIL_COS_TG_ENABLE || 'false').toLowerCase() !== 'true') {
 }
 
 // Resolve telegram node_modules — prefer TELEGRAM_NM override, then auto-detect.
-const NM = process.env.TELEGRAM_NM ||
-  (fs.existsSync(process.env.HOME + '/.claude/plugins/marketplaces/ops-marketplace/claude-ops/telegram-server/node_modules')
+const NM =
+  process.env.TELEGRAM_NM ||
+  (fs.existsSync(
+    process.env.HOME + '/.claude/plugins/marketplaces/ops-marketplace/claude-ops/telegram-server/node_modules',
+  )
     ? process.env.HOME + '/.claude/plugins/marketplaces/ops-marketplace/claude-ops/telegram-server/node_modules'
     : path.join(path.dirname(new URL(import.meta.url).pathname), '../telegram-server/node_modules'));
 
@@ -44,7 +47,7 @@ const { TelegramClient } = req('telegram');
 const { StringSession } = req('telegram/sessions/index.js');
 
 const [, , peerArg, limitArg] = process.argv;
-const peer = peerArg || (process.env.EMAIL_COS_TG_BOT_USERNAME || 'me');
+const peer = peerArg || process.env.EMAIL_COS_TG_BOT_USERNAME || 'me';
 const limit = parseInt(limitArg || '15', 10);
 const apiId = parseInt(process.env.TELEGRAM_API_ID, 10);
 const apiHash = process.env.TELEGRAM_API_HASH;
@@ -59,9 +62,12 @@ const client = new TelegramClient(new StringSession(sess), apiId, apiHash, { con
 try {
   await client.connect();
   let target = peer;
-  if (peer === 'me') { const me = await client.getMe(); target = me.id; }
+  if (peer === 'me') {
+    const me = await client.getMe();
+    target = me.id;
+  }
   const msgs = await client.getMessages(target, { limit });
-  const out = msgs.map(m => ({ id: m.id, out: !!m.out, text: m.message || '', date: m.date }));
+  const out = msgs.map((m) => ({ id: m.id, out: !!m.out, text: m.message || '', date: m.date }));
   console.log(JSON.stringify({ ok: true, messages: out }));
   await client.disconnect();
   process.exit(0);

@@ -1,7 +1,7 @@
 ---
 name: ops-revenue
 description: Revenue and costs tracker. AWS spend via aws ce, credits tracker, project revenue stages. Shows burn rate, runway estimate, credits expiring.
-argument-hint: "[costs|revenue|credits|runway|all]"
+argument-hint: '[costs|revenue|credits|runway|all]'
 allowed-tools:
   - Bash
   - Read
@@ -39,12 +39,12 @@ Before executing, load available context:
 
 ### aws CLI (Cost Explorer)
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `aws ce get-cost-and-usage --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --granularity MONTHLY --metrics "UnblendedCost" --group-by "Type=DIMENSION,Key=SERVICE" --output json` | Cost by service | Cost JSON |
-| `aws ce get-cost-and-usage --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --granularity MONTHLY --metrics "UnblendedCost" --output json` | Total cost | Cost JSON |
-| `aws ce get-cost-forecast --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --metric "UNBLENDED_COST" --granularity MONTHLY --output json` | End-of-month forecast | Forecast JSON |
-| `aws ce list-savings-plans-purchase-recommendation --output json` | Savings plan recommendations | JSON |
+| Command                                                                                                                                                                             | Usage                        | Output        |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ------------- |
+| `aws ce get-cost-and-usage --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --granularity MONTHLY --metrics "UnblendedCost" --group-by "Type=DIMENSION,Key=SERVICE" --output json` | Cost by service              | Cost JSON     |
+| `aws ce get-cost-and-usage --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --granularity MONTHLY --metrics "UnblendedCost" --output json`                                         | Total cost                   | Cost JSON     |
+| `aws ce get-cost-forecast --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --metric "UNBLENDED_COST" --granularity MONTHLY --output json`                                          | End-of-month forecast        | Forecast JSON |
+| `aws ce list-savings-plans-purchase-recommendation --output json`                                                                                                                   | Savings plan recommendations | JSON          |
 
 ---
 
@@ -180,6 +180,7 @@ RUNWAY ESTIMATE
 Use **batched AskUserQuestion calls** (max 4 options each):
 
 AskUserQuestion call 1:
+
 ```
   [Drill into AWS costs by service]
   [Show cost anomalies (spike detection)]
@@ -188,6 +189,7 @@ AskUserQuestion call 1:
 ```
 
 AskUserQuestion call 2 (only if "More..."):
+
 ```
   [Update project revenue stage]
   [Set budget alert]
@@ -218,6 +220,7 @@ When `aws ce` commands fail or return incomplete data, use `WebFetch` to query t
 ### Write — export reports
 
 When user selects "Export cost report" (option c), use `Write` to save the report as a dated file:
+
 ```
 Write(file_path: "/tmp/ops-revenue-[date].md", content: "[formatted report]")
 ```

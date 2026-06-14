@@ -32,31 +32,41 @@ The calling skill provides:
 ## Repair Procedures
 
 ### plugin_manifest_repository_type
+
 The `repository` field in `.claude-plugin/plugin.json` is an object but must be a string.
+
 - Read the file, extract the URL from `repository.url`, replace the object with the URL string.
 - Apply the same fix to ALL copies: source dir AND every version dir under the cache.
 
 ### plugin_manifest_invalid_json
+
 - Read the file, identify the JSON syntax error, fix it.
 - If unfixable, restore from git: `git checkout -- .claude-plugin/plugin.json`
 
-### plugin_manifest_missing_field_*
+### plugin*manifest_missing_field*\*
+
 - Read current plugin.json, add the missing field with a sensible default.
 
 ### bin_not_executable
+
 - `chmod +x` each listed script.
 
 ### skill_missing_definition
+
 - Log which skill dirs are missing SKILL.md. Do NOT create placeholder skills — just report them.
 
 ### agent_missing_frontmatter
+
 - Read the agent file, add proper YAML frontmatter based on file content.
 
 ### mcp_config_invalid_json
+
 - Read .mcp.json, fix JSON syntax. If unfixable, restore from git.
 
-### mcp_missing_user_config_*
+### mcp*missing_user_config*\*
+
 An MCP server references `${user_config.*}` variables that have no value configured.
+
 - Read the plugin's preferences.json (at `$CLAUDE_PLUGIN_DATA_DIR/preferences.json` or `~/.claude/plugins/data/ops-ops-marketplace/preferences.json`)
 - **First check `channels.*` section** for matching values using the key mapping (e.g. `telegram_api_id` ← `channels.telegram.api_id`). Auto-populate `user_config` from these if found.
 - **Second**: Check `user-config.json` at `${CLAUDE_PLUGIN_DATA_DIR:-~/.claude/plugins/data/ops-ops-marketplace}/user-config.json` — this file may have credentials written by a prior setup run.
@@ -68,7 +78,9 @@ An MCP server references `${user_config.*}` variables that have no value configu
 - This is the same issue Claude Code's native `/doctor` flags as "Missing required user configuration value"
 
 ### unconfigured_sensitive_keys
+
 Sensitive userConfig values (API keys, tokens) declared in plugin.json are not set.
+
 - **First**: Read preferences.json and check `channels.*` for matching values. Key mapping:
   - `telegram_api_id` ← `channels.telegram.api_id`
   - `telegram_api_hash` ← `channels.telegram.api_hash`
@@ -84,22 +96,29 @@ Sensitive userConfig values (API keys, tokens) declared in plugin.json are not s
 - If the diagnostic reports this as INFO (not a warning), it means a separate global MCP server already provides the same functionality — no action needed, just acknowledge.
 - Only report "needs manual configuration via /ops:setup" if the value cannot be found anywhere.
 
-### claude_mcp_unresolved_vars_*
+### claude*mcp_unresolved_vars*\*
+
 An MCP server in Claude Code's global config has unresolved `${...}` variable references.
+
 - Read the referenced config file and check if the variables should be replaced with actual values
 - If the server belongs to this plugin, ensure the plugin's userConfig is properly set
 
 ### registry_invalid_json
+
 - Backup the broken file, then restore from git or create a minimal `{"projects":[]}`.
 
 ### preferences_invalid_json
+
 - Backup the broken file, create a minimal `{}`.
 
 ### registry_missing
+
 - Create `scripts/registry.json` with `{"projects":[]}`. Ensure `scripts/` dir exists.
 
 ### Cache sync
+
 After fixing source files, sync fixes to ALL cached versions:
+
 ```bash
 for ver_dir in ~/.claude/plugins/cache/ops-marketplace/ops/*/; do
   cp "$PLUGIN_ROOT/.claude-plugin/plugin.json" "$ver_dir/.claude-plugin/plugin.json" 2>/dev/null || true

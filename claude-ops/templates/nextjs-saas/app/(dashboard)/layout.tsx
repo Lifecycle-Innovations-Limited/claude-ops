@@ -1,5 +1,5 @@
-import Link from 'next/link'
-import { UserButton } from '@clerk/nextjs'
+import Link from 'next/link';
+import { UserButton } from '@clerk/nextjs';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -10,21 +10,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <UserButton afterSignOutUrl="/" />
         </div>
         <nav className="mt-4 px-4">
-          <Link
-            href="/dashboard"
-            className="block rounded-lg px-4 py-2 text-gray-700 hover:bg-gray-100"
-          >
+          <Link href="/dashboard" className="block rounded-lg px-4 py-2 text-gray-700 hover:bg-gray-100">
             Dashboard
           </Link>
-          <Link
-            href="/dashboard/settings"
-            className="block rounded-lg px-4 py-2 text-gray-700 hover:bg-gray-100"
-          >
+          <Link href="/dashboard/settings" className="block rounded-lg px-4 py-2 text-gray-700 hover:bg-gray-100">
             Settings
           </Link>
         </nav>
       </aside>
       <main className="flex-1 overflow-auto p-8">{children}</main>
     </div>
-  )
+  );
 }

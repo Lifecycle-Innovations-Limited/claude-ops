@@ -6,17 +6,17 @@ The OS detection layer (`lib/os-detect.{sh,mjs}`), credential cascade (`lib/cred
 
 ## Supported hosts
 
-| OS | Tier | Pkg manager | Keyring backend | Daemon | Notes |
-|---|---|---|---|---|---|
-| **macOS 12+** | 1 | `brew` | `security` (Keychain) | `launchd` | All channels, all features. Native. |
-| **Ubuntu / Debian** | 1 | `apt-get` | `secret-tool` (libsecret) | `systemd --user` | Install `libsecret-tools` + `gnome-keyring` for secure storage. |
-| **Fedora / RHEL / Rocky / Alma** | 1 | `dnf` | `secret-tool` | `systemd --user` | `gnome-keyring` ships by default on most desktop spins. |
-| **Arch / Manjaro** | 2 | `pacman` (AUR via `yay`) | `secret-tool` | `systemd --user` | Some tools come from AUR (`gogcli`); install `yay` first. |
-| **openSUSE / SLES** | 2 | `zypper` | `secret-tool` | `systemd --user` | Less tested but the same flow as Fedora. |
-| **Alpine** | 2 | `apk` | `secret-tool` (if installed) | `openrc` (manual) | Headless deployments — no Slack browser autolink. |
-| **Windows 10/11 native** | 2 | `winget` → `scoop` → `choco` | `wincred` (write-only) | Task Scheduler | Use Git Bash or PowerShell. `cmdkey` cannot read passwords from the CLI; reads cascade through `keytar`/encrypted JSON. |
-| **WSL2** | 1 | `apt-get` (or distro of choice) | `secret-tool` (preferred) → `wincred` (fallback) | `systemd --user` | Inherits Linux. Browser profiles auto-discovered from `/mnt/c/Users/$USER/AppData/Local/...`. URL opens via `wslview` if installed. |
-| **Docker (any host)** | 1 | `apt-get` (Ubuntu 24.04 base) | `enc-json` (default) → `secret-tool` (if you unlock a keyring inside the container) | foreground loop (no init) | Turnkey image with Node 22, `gh`, `aws`, `doppler`, `jq`, `expect`, `libsecret-tools` pre-installed. See [`docker.md`](./docker.md) for quick-start, credential mounting, and limitations (no `launchd`/`systemd`, no browser automation without an X11 socket mount). |
+| OS                               | Tier | Pkg manager                     | Keyring backend                                                                     | Daemon                    | Notes                                                                                                                                                                                                                                                                  |
+| -------------------------------- | ---- | ------------------------------- | ----------------------------------------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **macOS 12+**                    | 1    | `brew`                          | `security` (Keychain)                                                               | `launchd`                 | All channels, all features. Native.                                                                                                                                                                                                                                    |
+| **Ubuntu / Debian**              | 1    | `apt-get`                       | `secret-tool` (libsecret)                                                           | `systemd --user`          | Install `libsecret-tools` + `gnome-keyring` for secure storage.                                                                                                                                                                                                        |
+| **Fedora / RHEL / Rocky / Alma** | 1    | `dnf`                           | `secret-tool`                                                                       | `systemd --user`          | `gnome-keyring` ships by default on most desktop spins.                                                                                                                                                                                                                |
+| **Arch / Manjaro**               | 2    | `pacman` (AUR via `yay`)        | `secret-tool`                                                                       | `systemd --user`          | Some tools come from AUR (`gogcli`); install `yay` first.                                                                                                                                                                                                              |
+| **openSUSE / SLES**              | 2    | `zypper`                        | `secret-tool`                                                                       | `systemd --user`          | Less tested but the same flow as Fedora.                                                                                                                                                                                                                               |
+| **Alpine**                       | 2    | `apk`                           | `secret-tool` (if installed)                                                        | `openrc` (manual)         | Headless deployments — no Slack browser autolink.                                                                                                                                                                                                                      |
+| **Windows 10/11 native**         | 2    | `winget` → `scoop` → `choco`    | `wincred` (write-only)                                                              | Task Scheduler            | Use Git Bash or PowerShell. `cmdkey` cannot read passwords from the CLI; reads cascade through `keytar`/encrypted JSON.                                                                                                                                                |
+| **WSL2**                         | 1    | `apt-get` (or distro of choice) | `secret-tool` (preferred) → `wincred` (fallback)                                    | `systemd --user`          | Inherits Linux. Browser profiles auto-discovered from `/mnt/c/Users/$USER/AppData/Local/...`. URL opens via `wslview` if installed.                                                                                                                                    |
+| **Docker (any host)**            | 1    | `apt-get` (Ubuntu 24.04 base)   | `enc-json` (default) → `secret-tool` (if you unlock a keyring inside the container) | foreground loop (no init) | Turnkey image with Node 22, `gh`, `aws`, `doppler`, `jq`, `expect`, `libsecret-tools` pre-installed. See [`docker.md`](./docker.md) for quick-start, credential mounting, and limitations (no `launchd`/`systemd`, no browser automation without an X11 socket mount). |
 
 > **Tier 1** = covered by CI (`.github/workflows/cross-os.yml` runs ubuntu-latest, macos-latest, windows-latest on every push; `.github/workflows/docker-build.yml` builds and smoke-tests the container image). **Tier 2** = supported but not in matrix.
 
@@ -37,14 +37,14 @@ bash bin/ops-setup-install --list-pkg-mgr
 
 ### Email — `gog` (a.k.a. `gogcli`)
 
-| OS | Command |
-|---|---|
-| macOS / Linuxbrew | `brew install gogcli` |
-| Debian / Ubuntu | `brew install gogcli` (Linuxbrew) — no native deb yet |
-| Fedora / RHEL | `brew install gogcli` (Linuxbrew) |
-| Arch / Manjaro | `yay -S gogcli` |
-| Windows | `winget install -e --id steipete.gogcli` |
-| Anywhere | `git clone https://github.com/steipete/gogcli.git && cd gogcli && make` |
+| OS                | Command                                                                 |
+| ----------------- | ----------------------------------------------------------------------- |
+| macOS / Linuxbrew | `brew install gogcli`                                                   |
+| Debian / Ubuntu   | `brew install gogcli` (Linuxbrew) — no native deb yet                   |
+| Fedora / RHEL     | `brew install gogcli` (Linuxbrew)                                       |
+| Arch / Manjaro    | `yay -S gogcli`                                                         |
+| Windows           | `winget install -e --id steipete.gogcli`                                |
+| Anywhere          | `git clone https://github.com/steipete/gogcli.git && cd gogcli && make` |
 
 After install: `gog auth credentials /path/to/client_secret.json && gog auth add you@example.com --services gmail,calendar,drive,contacts,docs,sheets`. Refresh tokens land in the OS keyring automatically (Keychain / Secret Service / Credential Manager). See [`gogcli.sh`](https://gogcli.sh/) for the full reference.
 
@@ -58,12 +58,12 @@ If `gog` isn't installed, the wizard falls back to the Google Calendar MCP conne
 
 The Slack MCP uses browser-session tokens (`xoxc` + `xoxd`) — no admin approval needed. Tokens are extracted via `bin/ops-slack-autolink.mjs` which:
 
-| OS | Browser-profile discovery | Auth flow |
-|---|---|---|
-| macOS | Chrome / Chromium / Brave / Arc under `~/Library/Application Support/...` | Playwright headed |
-| Linux | Chrome / Chromium / Brave under `~/.config/...` | Playwright headed (requires GUI) |
-| WSL2 | Linux paths plus `/mnt/c/Users/$USER/AppData/Local/Google/Chrome/User Data` | Playwright headed via WSLg or X server |
-| Windows | `%LOCALAPPDATA%\Google\Chrome\User Data` + Brave/Chromium variants | Playwright headed |
+| OS      | Browser-profile discovery                                                   | Auth flow                              |
+| ------- | --------------------------------------------------------------------------- | -------------------------------------- |
+| macOS   | Chrome / Chromium / Brave / Arc under `~/Library/Application Support/...`   | Playwright headed                      |
+| Linux   | Chrome / Chromium / Brave under `~/.config/...`                             | Playwright headed (requires GUI)       |
+| WSL2    | Linux paths plus `/mnt/c/Users/$USER/AppData/Local/Google/Chrome/User Data` | Playwright headed via WSLg or X server |
+| Windows | `%LOCALAPPDATA%\Google\Chrome\User Data` + Brave/Chromium variants          | Playwright headed                      |
 
 The autolink emits `{"type":"error","message":"no display available","headless_available":false}` when Playwright can't launch a headed Chromium (e.g. headless CI / SSH session). Run `/ops:setup slack` on a desktop machine in that case, or paste tokens manually.
 
@@ -75,36 +75,36 @@ Tokens are stored via the credential cascade (see below). Service names: `slack-
 
 ### WhatsApp — `whatsapp-bridge`
 
-| OS | Status | Notes |
-|---|---|---|
-| macOS | Tier 1 | `whatsapp-bridge` builds from source: `git clone … && go build -o /usr/local/bin/whatsapp-bridge ./cmd/whatsapp-bridge` |
-| Linux | Tier 1 | Same build flow; install Go first: `apt-get install -y golang` etc. |
-| WSL2 | Tier 1 | Same as Linux. |
-| Windows | Tier 3 | Build under WSL — native Windows builds untested. |
+| OS      | Status | Notes                                                                                                                   |
+| ------- | ------ | ----------------------------------------------------------------------------------------------------------------------- |
+| macOS   | Tier 1 | `whatsapp-bridge` builds from source: `git clone … && go build -o /usr/local/bin/whatsapp-bridge ./cmd/whatsapp-bridge` |
+| Linux   | Tier 1 | Same build flow; install Go first: `apt-get install -y golang` etc.                                                     |
+| WSL2    | Tier 1 | Same as Linux.                                                                                                          |
+| Windows | Tier 3 | Build under WSL — native Windows builds untested.                                                                       |
 
 ### Doppler
 
-| OS | Command |
-|---|---|
-| macOS / Linuxbrew | `brew install dopplerhq/cli/doppler` |
-| Debian / Ubuntu | `curl -Ls https://cli.doppler.com/install.sh \| sudo sh` |
-| Fedora / RHEL | `sudo rpm --import https://packages.doppler.com/public.key && sudo dnf install -y doppler` |
-| Arch | `yay -S doppler-cli` |
-| Alpine | `apk add --no-cache doppler-cli` |
-| Windows (winget) | `winget install Doppler.doppler` |
-| Windows (scoop) | `scoop bucket add doppler https://github.com/DopplerHQ/scoop-doppler.git; scoop install doppler` |
+| OS                | Command                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------------ |
+| macOS / Linuxbrew | `brew install dopplerhq/cli/doppler`                                                             |
+| Debian / Ubuntu   | `curl -Ls https://cli.doppler.com/install.sh \| sudo sh`                                         |
+| Fedora / RHEL     | `sudo rpm --import https://packages.doppler.com/public.key && sudo dnf install -y doppler`       |
+| Arch              | `yay -S doppler-cli`                                                                             |
+| Alpine            | `apk add --no-cache doppler-cli`                                                                 |
+| Windows (winget)  | `winget install Doppler.doppler`                                                                 |
+| Windows (scoop)   | `scoop bucket add doppler https://github.com/DopplerHQ/scoop-doppler.git; scoop install doppler` |
 
 ### Other CLIs
 
 `bin/ops-setup-install` ships a translation table covering `jq`, `git`, `gh`, `aws`, `node`, `expect`, `sentry-cli`. Where the package name differs across managers, the script picks the right one automatically:
 
-| Tool | brew | apt-get | dnf | pacman | zypper | apk | winget | scoop | choco |
-|---|---|---|---|---|---|---|---|---|---|
-| `jq`/`git`/`expect` | same | same | same | same | same | same | same | same | same |
-| `gh` | gh | gh | gh | github-cli | gh | gh | GitHub.cli | gh | gh |
-| `aws` | awscli | awscli | awscli | aws-cli | awscli | awscli | Amazon.AWSCLI | aws | awscli |
-| `node` | node | nodejs | nodejs | nodejs | nodejs | nodejs | OpenJS.NodeJS.LTS | nodejs-lts | nodejs-lts |
-| `sentry-cli` | sentry-cli | (npm i -g @sentry/cli) | (npm) | (npm) | (npm) | (npm) | (npm) | (npm) | (npm) |
+| Tool                | brew       | apt-get                | dnf    | pacman     | zypper | apk    | winget            | scoop      | choco      |
+| ------------------- | ---------- | ---------------------- | ------ | ---------- | ------ | ------ | ----------------- | ---------- | ---------- |
+| `jq`/`git`/`expect` | same       | same                   | same   | same       | same   | same   | same              | same       | same       |
+| `gh`                | gh         | gh                     | gh     | github-cli | gh     | gh     | GitHub.cli        | gh         | gh         |
+| `aws`               | awscli     | awscli                 | awscli | aws-cli    | awscli | awscli | Amazon.AWSCLI     | aws        | awscli     |
+| `node`              | node       | nodejs                 | nodejs | nodejs     | nodejs | nodejs | OpenJS.NodeJS.LTS | nodejs-lts | nodejs-lts |
+| `sentry-cli`        | sentry-cli | (npm i -g @sentry/cli) | (npm)  | (npm)      | (npm)  | (npm)  | (npm)             | (npm)      | (npm)      |
 
 Run `bash bin/ops-setup-install --json` to get a `[{tool, status}]` report (`status ∈ {present, installed, manual, failed}`) consumable by `/ops:setup` and `/ops:doctor`.
 
@@ -130,14 +130,14 @@ ops_cred_set   ──▶  │ 1. OS-native:  security  (macOS)             │
 
 **Backend selection per OS** (defaults; cascade still applies on miss):
 
-| OS | First backend | Notes |
-|---|---|---|
-| macOS | `security` | Native, full read+write. |
-| Linux (with libsecret) | `secret-tool` | Native, full read+write. Requires unlocked keyring. |
-| Linux (without libsecret) | `keytar` if installed → `enc-json` | Encrypted JSON works without any system service. |
-| Windows | `wincred` (write only) | Reads cascade through `keytar` → `enc-json`. PowerShell `CredentialManager` module would unlock native reads — TODO. |
-| WSL2 | `secret-tool` if linked → `wincred` (write only) | Either side, your choice. |
-| CI / locked keyring | `enc-json` | Master key via `$CLAUDE_OPS_MASTER_KEY`. |
+| OS                        | First backend                                    | Notes                                                                                                                |
+| ------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| macOS                     | `security`                                       | Native, full read+write.                                                                                             |
+| Linux (with libsecret)    | `secret-tool`                                    | Native, full read+write. Requires unlocked keyring.                                                                  |
+| Linux (without libsecret) | `keytar` if installed → `enc-json`               | Encrypted JSON works without any system service.                                                                     |
+| Windows                   | `wincred` (write only)                           | Reads cascade through `keytar` → `enc-json`. PowerShell `CredentialManager` module would unlock native reads — TODO. |
+| WSL2                      | `secret-tool` if linked → `wincred` (write only) | Either side, your choice.                                                                                            |
+| CI / locked keyring       | `enc-json`                                       | Master key via `$CLAUDE_OPS_MASTER_KEY`.                                                                             |
 
 **Override the cascade for testing:**
 
@@ -155,11 +155,11 @@ Backend names: `security`, `secret-tool`, `wincred`, `keytar`, `enc-json`, `plai
 
 `scripts/ops-daemon.sh` registers itself with the host's job scheduler via `bash scripts/ops-daemon.sh --install`. Detection routes through `ops_os`:
 
-| OS | Mechanism | Files written |
-|---|---|---|
-| macOS | `launchd` user agent | `~/Library/LaunchAgents/com.claude-ops.daemon.plist` + `…whatsapp-bridge-keepalive.plist` |
-| Linux / WSL2 | `systemd --user` unit + timer | `~/.config/systemd/user/claude-ops.service`, `claude-ops.timer`, `claude-ops-whatsapp-bridge-keepalive.service` |
-| Windows | Task Scheduler | `ClaudeOpsDaemon` task running `bash.exe scripts/ops-daemon.sh --run-once` every 5 min (falls back to `pwsh.exe` wrapper if Git Bash isn't on PATH) |
+| OS           | Mechanism                     | Files written                                                                                                                                       |
+| ------------ | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS        | `launchd` user agent          | `~/Library/LaunchAgents/com.claude-ops.daemon.plist` + `…whatsapp-bridge-keepalive.plist`                                                           |
+| Linux / WSL2 | `systemd --user` unit + timer | `~/.config/systemd/user/claude-ops.service`, `claude-ops.timer`, `claude-ops-whatsapp-bridge-keepalive.service`                                     |
+| Windows      | Task Scheduler                | `ClaudeOpsDaemon` task running `bash.exe scripts/ops-daemon.sh --run-once` every 5 min (falls back to `pwsh.exe` wrapper if Git Bash isn't on PATH) |
 
 **Cadence** is 5 minutes everywhere (`/SC MINUTE /MO 5` on Windows, `OnUnitActiveSec=5min` on systemd, throttled-loop on launchd).
 
@@ -172,11 +172,11 @@ Backend names: `security`, `secret-tool`, `wincred`, `keytar`, `enc-json`, `plai
 The multi-account rotator's browser fallback now works headlessly on aarch64
 and x86-64 Linux. Key differences from the macOS path:
 
-| | macOS | Linux (headless) |
-|---|---|---|
-| Browser | Chrome (real, headed) | Brave (Tier-2 real-Chromium; no ARM Chrome builds) |
-| Display | native | Xvnc virtual display — `DISPLAY=:1`, 1280×800 |
-| Auth method | magic-link or Google OAuth | magic-link only (Google push-2FA not clearable headlessly) |
+|             | macOS                              | Linux (headless)                                             |
+| ----------- | ---------------------------------- | ------------------------------------------------------------ |
+| Browser     | Chrome (real, headed)              | Brave (Tier-2 real-Chromium; no ARM Chrome builds)           |
+| Display     | native                             | Xvnc virtual display — `DISPLAY=:1`, 1280×800                |
+| Auth method | magic-link or Google OAuth         | magic-link only (Google push-2FA not clearable headlessly)   |
 | Inbox reads | forwarded to default Gmail account | `gog --account <email>` per-account (no forwarding required) |
 
 Full setup steps are in `scripts/account-rotation/README.md §Linux setup`.
@@ -185,12 +185,12 @@ Full setup steps are in `scripts/account-rotation/README.md §Linux setup`.
 
 `bin/ops-slack-autolink.mjs` (and any future browser-driven setup) uses `lib/os-detect.mjs::browserProfileDirs()` to discover Chrome / Chromium / Brave / Arc profile directories that actually exist on the host:
 
-| OS | Path roots scanned |
-|---|---|
-| macOS | `~/Library/Application Support/{Google/Chrome, Chromium, BraveSoftware/Brave-Browser, Arc/User Data}` |
-| Linux | `~/.config/{google-chrome, chromium, BraveSoftware/Brave-Browser}` |
-| WSL2 | Linux roots plus `/mnt/c/Users/$USER/AppData/Local/Google/Chrome/User Data` |
-| Windows | `%LOCALAPPDATA%\{Google\Chrome, Chromium, BraveSoftware\Brave-Browser}\User Data` |
+| OS      | Path roots scanned                                                                                    |
+| ------- | ----------------------------------------------------------------------------------------------------- |
+| macOS   | `~/Library/Application Support/{Google/Chrome, Chromium, BraveSoftware/Brave-Browser, Arc/User Data}` |
+| Linux   | `~/.config/{google-chrome, chromium, BraveSoftware/Brave-Browser}`                                    |
+| WSL2    | Linux roots plus `/mnt/c/Users/$USER/AppData/Local/Google/Chrome/User Data`                           |
+| Windows | `%LOCALAPPDATA%\{Google\Chrome, Chromium, BraveSoftware\Brave-Browser}\User Data`                     |
 
 The autolink picks the first existing Chrome-family profile by default; pass `--profile-dir <path>` to override. If no profile exists, it falls back to a fresh `$XDG_DATA_HOME/claude-ops/chromium-profile` directory.
 
@@ -200,12 +200,12 @@ When Playwright can't launch a headed Chromium (no display, missing system libs)
 
 `lib/opener.{sh,mjs}` provides `ops_open` / `ops_open_url` / `ops_open_dir`:
 
-| OS | Resolved opener |
-|---|---|
-| macOS | `open` |
-| Linux | `xdg-open` |
-| WSL2 | `wslview` (preferred — opens in Windows host browser) → `xdg-open` |
-| Windows | `cmd.exe /c start` |
+| OS      | Resolved opener                                                    |
+| ------- | ------------------------------------------------------------------ |
+| macOS   | `open`                                                             |
+| Linux   | `xdg-open`                                                         |
+| WSL2    | `wslview` (preferred — opens in Windows host browser) → `xdg-open` |
+| Windows | `cmd.exe /c start`                                                 |
 
 ```bash
 bash lib/opener.sh url https://example.com

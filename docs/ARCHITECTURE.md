@@ -1,4 +1,5 @@
 <!-- generated-by: gsd-doc-writer -->
+
 # Architecture
 
 claude-ops is a Claude Code plugin (v1.7.0) that installs as a business operating system on top of the Claude Code CLI. It exposes 30 slash-command skills that orchestrate 14 autonomous agents, a persistent background daemon, and a bundled Telegram MCP server. The primary inputs are tool calls from Claude Code sessions; the primary outputs are structured reports, drafted communications, and autonomous code/infrastructure actions executed via shell and API calls.
@@ -55,17 +56,17 @@ For communication skills (`/ops:inbox`, `/ops:comms`), a PreToolUse hook (`bin/o
 
 ## Key Abstractions
 
-| Abstraction | Location | Description |
-|-------------|----------|-------------|
-| `plugin.json` | `claude-ops/.claude-plugin/plugin.json` | Plugin manifest: name, version, `userConfig` schema (20 configurable keys), MCP server declarations |
-| `SKILL.md` | `claude-ops/skills/<name>/SKILL.md` | Each skill is a markdown prompt file loaded by Claude Code as a slash command |
-| Agent `.md` files | `claude-ops/agents/<name>.md` | Each agent is a markdown prompt file with frontmatter declaring model, effort, maxTurns, and memory scope |
-| `hooks.json` | `claude-ops/hooks/hooks.json` | Declares SessionStart, PreToolUse (Bash matcher), and Stop lifecycle hooks |
-| `registry.json` | `claude-ops/scripts/registry.json` | User-maintained project index with alias, repo, infra platform, revenue model, and GSD flag per project |
-| `ops-daemon.sh` | `claude-ops/scripts/ops-daemon.sh` | Shell supervisor for 7 persistent background services; managed via launchd |
-| `daemon-cache.json` | `~/.claude/plugins/data/.../daemon-cache.json` | Pre-warmed briefing data written by `briefing-pre-warm` every 2 min; read by `/ops:go` for <3s load |
-| `CLAUDE.md` | `claude-ops/CLAUDE.md` | Plugin-root rules (Rules 0–5) that override individual skill instructions for all agents |
-| Telegram MCP server | `claude-ops/telegram-server/index.js` | Node.js MCP server providing MTProto user-auth Telegram access (personal account, not bot API) |
+| Abstraction         | Location                                       | Description                                                                                               |
+| ------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `plugin.json`       | `claude-ops/.claude-plugin/plugin.json`        | Plugin manifest: name, version, `userConfig` schema (20 configurable keys), MCP server declarations       |
+| `SKILL.md`          | `claude-ops/skills/<name>/SKILL.md`            | Each skill is a markdown prompt file loaded by Claude Code as a slash command                             |
+| Agent `.md` files   | `claude-ops/agents/<name>.md`                  | Each agent is a markdown prompt file with frontmatter declaring model, effort, maxTurns, and memory scope |
+| `hooks.json`        | `claude-ops/hooks/hooks.json`                  | Declares SessionStart, PreToolUse (Bash matcher), and Stop lifecycle hooks                                |
+| `registry.json`     | `claude-ops/scripts/registry.json`             | User-maintained project index with alias, repo, infra platform, revenue model, and GSD flag per project   |
+| `ops-daemon.sh`     | `claude-ops/scripts/ops-daemon.sh`             | Shell supervisor for 7 persistent background services; managed via launchd                                |
+| `daemon-cache.json` | `~/.claude/plugins/data/.../daemon-cache.json` | Pre-warmed briefing data written by `briefing-pre-warm` every 2 min; read by `/ops:go` for <3s load       |
+| `CLAUDE.md`         | `claude-ops/CLAUDE.md`                         | Plugin-root rules (Rules 0–5) that override individual skill instructions for all agents                  |
+| Telegram MCP server | `claude-ops/telegram-server/index.js`          | Node.js MCP server providing MTProto user-auth Telegram access (personal account, not bot API)            |
 
 ---
 
@@ -105,15 +106,15 @@ claude-ops/
 
 The `ops-daemon` is a launchd-managed supervisor that runs 7 background services continuously:
 
-| Service | Cadence | Purpose |
-|---------|---------|---------|
-| `briefing-pre-warm` | every 2 min | Runs `bin/ops-gather` to keep `/ops:go` cache hot |
-| `wacli-sync` | persistent | Keeps WhatsApp connected via wacli, auto-reconnects |
-| `memory-extractor` | every 30 min | Spawns `memory-extractor` agent to refresh `memories/` |
-| `inbox-digest` | every 15 min | Pre-classifies communications across all channels |
-| `store-health` | every 10 min | Shopify orders and inventory polling (if configured) |
-| `competitor-intel` | hourly | Background market and competitor monitoring |
-| `message-listener` | persistent | Surfaces urgent patterns ("urgent", "ASAP", "fire", "down") |
+| Service             | Cadence      | Purpose                                                     |
+| ------------------- | ------------ | ----------------------------------------------------------- |
+| `briefing-pre-warm` | every 2 min  | Runs `bin/ops-gather` to keep `/ops:go` cache hot           |
+| `wacli-sync`        | persistent   | Keeps WhatsApp connected via wacli, auto-reconnects         |
+| `memory-extractor`  | every 30 min | Spawns `memory-extractor` agent to refresh `memories/`      |
+| `inbox-digest`      | every 15 min | Pre-classifies communications across all channels           |
+| `store-health`      | every 10 min | Shopify orders and inventory polling (if configured)        |
+| `competitor-intel`  | hourly       | Background market and competitor monitoring                 |
+| `message-listener`  | persistent   | Surfaces urgent patterns ("urgent", "ASAP", "fire", "down") |
 
 The daemon installs at setup Step 2c — deliberately early — so the briefing cache is pre-warmed while the user completes the remaining integration configuration steps.
 
@@ -121,11 +122,11 @@ The daemon installs at setup Step 2c — deliberately early — so the briefing 
 
 ## Agent Model Assignments
 
-| Agent class | Model | Use case |
-|-------------|-------|----------|
-| C-suite analysts (`yolo-ceo`, `yolo-cto`, `yolo-cfo`, `yolo-coo`) | `claude-opus-4-6` | High-depth strategic, technical, financial, operational analysis |
-| Scanner, fix, and daemon agents | `claude-sonnet-4-6` | Efficient read-scan-report loops and targeted code fixes |
-| `memory-extractor` | `claude-haiku-4-5-20251001` | High-frequency (every 30 min) low-cost contact extraction |
+| Agent class                                                       | Model                       | Use case                                                         |
+| ----------------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------- |
+| C-suite analysts (`yolo-ceo`, `yolo-cto`, `yolo-cfo`, `yolo-coo`) | `claude-opus-4-6`           | High-depth strategic, technical, financial, operational analysis |
+| Scanner, fix, and daemon agents                                   | `claude-sonnet-4-6`         | Efficient read-scan-report loops and targeted code fixes         |
+| `memory-extractor`                                                | `claude-haiku-4-5-20251001` | High-frequency (every 30 min) low-cost contact extraction        |
 
 ---
 

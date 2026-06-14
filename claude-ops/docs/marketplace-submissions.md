@@ -2,7 +2,7 @@
 
 # Marketplace Submissions
 
-*Tracking where claude-ops is listed (or pending listing) across the Claude plugin ecosystem*
+_Tracking where claude-ops is listed (or pending listing) across the Claude plugin ecosystem_
 
 [![version](https://img.shields.io/badge/version-2.1.0-blue)](../CHANGELOG.md)
 [![destinations](https://img.shields.io/badge/destinations-4-6366f1)](.)
@@ -16,12 +16,12 @@ This doc tracks where claude-ops is listed (or pending listing) across the Claud
 
 ## Status board
 
-| Marketplace | URL | Status | Version listed | Submission PR | Last updated |
-|---|---|---|---|---|---|
-| **Anthropic official** | platform.claude.com | unknown — needs manual check | … | … | … |
-| **Build With Claude** | buildwithclaude.com | unknown — needs manual check | … | #116 | … |
-| **AI Template Hub** | aitmpl.com | unknown — needs manual check | … | #518 | … |
-| **Claude Marketplaces** | claudemarketplaces.com | unknown — needs manual check | … | … | … |
+| Marketplace             | URL                    | Status                       | Version listed | Submission PR | Last updated |
+| ----------------------- | ---------------------- | ---------------------------- | -------------- | ------------- | ------------ |
+| **Anthropic official**  | platform.claude.com    | unknown — needs manual check | …              | …             | …            |
+| **Build With Claude**   | buildwithclaude.com    | unknown — needs manual check | …              | #116          | …            |
+| **AI Template Hub**     | aitmpl.com             | unknown — needs manual check | …              | #518          | …            |
+| **Claude Marketplaces** | claudemarketplaces.com | unknown — needs manual check | …              | …             | …            |
 
 Status values: `not-submitted` · `submitted` · `pending-review` · `listed` · `rejected` · `update-needed`.
 

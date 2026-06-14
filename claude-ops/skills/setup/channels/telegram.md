@@ -2,10 +2,10 @@
 
 **Two paths available:**
 
-| Path | Auth cost | Reads DMs | Sends to you | Best for |
-|---|---|---|---|---|
-| **User-account** (this section) | phone + 2 login codes + optional 2FA | yes | yes | `/ops-inbox telegram`, bidirectional |
-| **Bot token** (`bin/ops-telegram-bot-send`) | paste one token from @BotFather | no | yes | one-way push notifications, low setup cost |
+| Path                                        | Auth cost                            | Reads DMs | Sends to you | Best for                                   |
+| ------------------------------------------- | ------------------------------------ | --------- | ------------ | ------------------------------------------ |
+| **User-account** (this section)             | phone + 2 login codes + optional 2FA | yes       | yes          | `/ops-inbox telegram`, bidirectional       |
+| **Bot token** (`bin/ops-telegram-bot-send`) | paste one token from @BotFather      | no        | yes          | one-way push notifications, low setup cost |
 
 If all you need is for ops skills to **push notifications to your phone** (briefings, fire alerts, rotation results), the bot-token path is simpler — see [`docs/telegram-bot-send.md`](../../../../docs/telegram-bot-send.md) and skip to step 3n (notifications). Come back here only if you need `/ops-inbox telegram` inbox triage.
 
@@ -24,11 +24,13 @@ Set up Telegram personal account access?
 If the user skips, record `channels.telegram = "skipped"` in `$PREFS_PATH` and move on. Do NOT silently mark Telegram as unconfigured — the explicit skip prevents the status header from showing `○ telegram (no token)` as an action item on subsequent runs.
 
 **Rate-limit guard**: Before starting, check `$PREFS_PATH` for `channels.telegram` being an object with `.status == "rate_limited"` — use a type guard: `if (channels.telegram | type) == "object" and .channels.telegram.status == "rate_limited"` (jq: `if (.channels.telegram | type) == "object" then .channels.telegram.status else "skipped" end`). If `retry_after` is in the future, present the user with `AskUserQuestion`:
+
 ```
 Telegram is rate-limited until [time]. What would you like to do?
   [Wait and retry after cooldown — re-run /ops:setup telegram after [time]]
   [Skip Telegram for now]
 ```
+
 Do NOT attempt `send_password` during a rate-limit window — it will fail immediately and may extend the cooldown. If the user selects Skip, record the skip in `$PREFS_PATH` and move to the next channel.
 
 **Bots cannot read user DMs**, so `/ops-inbox telegram` requires a personal-account MCP. The plugin ships `bin/ops-telegram-autolink.mjs` which:
@@ -45,6 +47,7 @@ Sub-flow (only runs if user selected Yes above):
    a. **SSE-router check** — if `~/.claude.json mcpServers.telegram.type == "sse"`, probe the URL. A 200 response means the router holds auth and Telegram is already configured — tell the user `"✓ Telegram already configured (source: sse_router)"` and skip to step 8.
 
    b. **user-config.json** — check `${CLAUDE_PLUGIN_DATA_DIR:-~/.claude/plugins/data/ops-ops-marketplace}/user-config.json` for `telegram_api_id`, `telegram_api_hash`, `telegram_phone`, `telegram_session`.
+
    ```bash
    USER_CONFIG="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/user-config.json"
    if [ -f "$USER_CONFIG" ]; then
@@ -53,6 +56,7 @@ Sub-flow (only runs if user selected Yes above):
    ```
 
    c. **macOS keychain**:
+
    ```bash
    for svc in telegram-api-id telegram-api-hash telegram-phone telegram-session; do
      security find-generic-password -s "$svc" -w 2>/dev/null && echo "FOUND: $svc"
@@ -150,6 +154,7 @@ Sub-flow (only runs if user selected Yes above):
    ```
 
    Print:
+
    ```
    ✓ Telegram configured automatically.
      API ID:  [api_id]
@@ -167,4 +172,3 @@ Sub-flow (only runs if user selected Yes above):
 - If Telegram replies "Sorry, too many tries. Please try again later." your account is rate-limited for ~8 hours — the wizard cannot bypass this. Wait and retry.
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration. The setup agent can load that file directly when it needs more depth than this wizard provides.
-

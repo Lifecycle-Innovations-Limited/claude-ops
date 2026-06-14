@@ -22,21 +22,21 @@ Cache the results. Then **filter the option list to what isn't already configure
 
 Present via `AskUserQuestion` (≤4 options). Typical first batch:
 
-| Option                                | Header     | Description                                                                    |
-| ------------------------------------- | ---------- | ------------------------------------------------------------------------------ |
-| Use Telegram (recommended)            | telegram   | Reuse the bot you already configured in 3a. Zero extra setup.                  |
-| Configure ntfy.sh                     | ntfy       | Free, no account. Pick a random topic, install the app on your phone.          |
-| Configure Pushover                    | pushover   | ~$5 one-time. Highest-reliability mobile delivery with priority bypass for P0. |
-| Skip — poll with /ops:fires instead   | skip       | Leaves `fires-watcher` disabled. You'll keep asking for fires manually.        |
+| Option                              | Header   | Description                                                                    |
+| ----------------------------------- | -------- | ------------------------------------------------------------------------------ |
+| Use Telegram (recommended)          | telegram | Reuse the bot you already configured in 3a. Zero extra setup.                  |
+| Configure ntfy.sh                   | ntfy     | Free, no account. Pick a random topic, install the app on your phone.          |
+| Configure Pushover                  | pushover | ~$5 one-time. Highest-reliability mobile delivery with priority bypass for P0. |
+| Skip — poll with /ops:fires instead | skip     | Leaves `fires-watcher` disabled. You'll keep asking for fires manually.        |
 
 If Telegram's bot token + owner ID aren't already in `$PREFS_PATH`, swap `[Use Telegram]` for `[Configure Telegram bot — jump to 3a]` and re-enter 3a before returning here. Per Rule 3, don't silently skip — always offer an explicit `[Skip]`.
 
 For anyone who wants Discord on top (many users want both team + personal delivery), run a second `AskUserQuestion`:
 
-| Option                            | Header     | Description                                         |
-| --------------------------------- | ---------- | --------------------------------------------------- |
-| Also add Discord webhook          | discord    | Fan out to a #incidents channel in addition to X.   |
-| No — just the sink I picked       | done       | Single-sink setup.                                  |
+| Option                      | Header  | Description                                       |
+| --------------------------- | ------- | ------------------------------------------------- |
+| Also add Discord webhook    | discord | Fan out to a #incidents channel in addition to X. |
+| No — just the sink I picked | done    | Single-sink setup.                                |
 
 #### Per-sink capture
 
@@ -103,4 +103,3 @@ cat ~/.claude/plugins/data/ops-ops-marketplace/fires-watcher.health 2>/dev/null
 Expect `{"status": "ok", ...}` within 60 seconds.
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/docs/notifications.md`, `${CLAUDE_PLUGIN_ROOT}/scripts/ops-fires-watcher.sh`, and `${CLAUDE_PLUGIN_ROOT}/scripts/ops-notify.sh` for sink priority rationale, debounce rules, and a troubleshooting walk-through.
-

@@ -65,3 +65,6 @@ __pycache__/
 
 # Local PII denylist — gitignored so users can add personal handles without committing them
 .githooks/pii-denylist.local
+
+# Operator PII denylist (out-of-repo)
+.pii-denylist

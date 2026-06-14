@@ -48,15 +48,18 @@ grep -rhE 'myshopify\.com|SHOPIFY_STORE' ~/Projects/*/.env* 2>/dev/null | grep -
 **Important**: Do NOT report "No Shopify credentials found" until ALL scan sources have been checked. If tokens are missing but store URLs are found (e.g. from Chrome history or Dashlane), report: `"Found Shopify store(s): <stores>. No API token found — you'll need to create one."` and skip straight to Step 3i.3 (token) with the store URL pre-filled.
 
 If both `store_url` and `admin_token` are already found, show:
+
 ```
 ✓ Shopify — already configured (<store_url>)
   [Keep existing]  [Reconfigure]
 ```
+
 If the user keeps existing, skip to Step 3i.4. If reconfiguring or no values found, continue.
 
 #### Step 3i.2 — Shopify store URL
 
 If `SHOPIFY_STORE_URL` was found in the auto-scan, present it using the Universal Credential Auto-Scan prompt format. Only ask via free text if no value was found:
+
 ```
 Enter your Shopify store URL:
   Format: yourstore.myshopify.com
@@ -97,12 +100,15 @@ If `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_ADMIN_TOKEN`, or `SHOPIFY_ADMIN_API_ACCESS_T
 **Do NOT skip a store** just because no token was found — always attempt automation first. The user expects the wizard to handle credential generation, not just credential lookup.
 
 Save to `$PREFS_PATH` under `ecom.shopify`. Apply the Doppler-reference pattern — if Doppler is configured, run:
+
 ```bash
 doppler secrets set SHOPIFY_ADMIN_TOKEN="<token>" --project <project> --config <config>
 ```
+
 and store `"admin_token": "doppler:SHOPIFY_ADMIN_TOKEN"` in preferences instead of the raw token.
 
 Smoke test:
+
 ```bash
 STORE=$(jq -r '.ecom.shopify.store_url' "$PREFS_PATH")
 TOKEN=$(jq -r '.ecom.shopify.admin_token' "$PREFS_PATH")
@@ -113,11 +119,13 @@ fi
 curl -s -H "X-Shopify-Access-Token: $TOKEN" \
   "https://$STORE/admin/api/2024-10/shop.json" | jq '.shop.name'
 ```
+
 Expect a shop name string. If the response contains `errors` or `{"shop":null}`, show the error and ask the user to check the token scopes. Print `✓ Shopify — connected (<shop name>)`.
 
 #### Step 3i.4 — Dynamic ecommerce partners
 
 After Shopify is configured, ask via `AskUserQuestion` (free text):
+
 ```
 Do you use any other ecommerce tools you'd like to connect?
   Examples: ShipBob (fulfillment), Recharge (subscriptions), Yotpo (reviews),
@@ -137,18 +145,22 @@ If the user provides partner names, process each one in a loop:
 
 2. **Ask for each credential** via `AskUserQuestion` (one question per credential field), citing where to find it based on what the docs say. Example for ShipBob:
    Run the Universal Credential Auto-Scan for `SHIPBOB_ACCESS_TOKEN`, `SHIPBOB_API_TOKEN` before asking. If found, present with source attribution. Only prompt manually if not found:
+
    ```
    Enter your ShipBob Personal Access Token:
      To generate: ShipBob dashboard → Integrations → API → Personal Access Tokens → Create Token
    ```
 
 3. **Smoke test** using the auth endpoint discovered in step 1:
+
    ```bash
    curl -s -H "<auth_header>: $TOKEN" "<base_url>/<health_endpoint>" | jq '.<identity_field>'
    ```
+
    Show the result. If it fails, show the raw response and offer `[Re-enter credentials]` / `[Skip this partner]`.
 
 4. **Save to preferences** under `ecom.partners.<partner_slug>` where `partner_slug` is the lowercased, hyphenated partner name:
+
    ```json
    {
      "ecom": {
@@ -164,9 +176,11 @@ If the user provides partner names, process each one in a loop:
      }
    }
    ```
+
    Store actual secrets via Doppler (key: `<PARTNER_SLUG_UPPER>_API_TOKEN`) when Doppler is configured, else store inline. The `auth_pattern` and `api_base_url` fields are the memory that future `/ops:ecom` calls use to reach the partner — always populate them from the researched docs.
 
 5. **Print confirmation**:
+
    ```
    ✓ <Partner Name> — connected
    ```
@@ -175,19 +189,18 @@ If the user provides partner names, process each one in a loop:
 
 **Partners with known credential patterns** (use these directly without searching, but still verify with a smoke test):
 
-| Partner    | Auth header                              | Base URL                               | Health endpoint        |
-| ---------- | ---------------------------------------- | -------------------------------------- | ---------------------- |
-| ShipBob    | `Authorization: Bearer <token>`          | `https://api.shipbob.com/v1`           | `/user`                |
-| Recharge   | `X-Recharge-Access-Token: <token>`       | `https://api.rechargeapps.com/v1`      | `/shop`                |
-| Yotpo      | `X-Api-Key: <app_key>`                   | `https://api.yotpo.com`                | `/core/v3/stores/<id>` |
-| Shippo     | `Authorization: ShippoToken <token>`     | `https://api.goshippo.com`             | `/carrier_accounts`    |
-| Gorgias    | `Authorization: Basic <base64>`          | `https://<domain>.gorgias.com/api`     | `/account`             |
-| Loop       | `X-Authorization: <secret>`              | `https://api.loopreturns.com/api/v1`   | `/warehouse`           |
-| Attentive  | `Authorization: Bearer <token>`          | `https://api.attentivemobile.com/v1`   | `/me`                  |
+| Partner   | Auth header                          | Base URL                             | Health endpoint        |
+| --------- | ------------------------------------ | ------------------------------------ | ---------------------- |
+| ShipBob   | `Authorization: Bearer <token>`      | `https://api.shipbob.com/v1`         | `/user`                |
+| Recharge  | `X-Recharge-Access-Token: <token>`   | `https://api.rechargeapps.com/v1`    | `/shop`                |
+| Yotpo     | `X-Api-Key: <app_key>`               | `https://api.yotpo.com`              | `/core/v3/stores/<id>` |
+| Shippo    | `Authorization: ShippoToken <token>` | `https://api.goshippo.com`           | `/carrier_accounts`    |
+| Gorgias   | `Authorization: Basic <base64>`      | `https://<domain>.gorgias.com/api`   | `/account`             |
+| Loop      | `X-Authorization: <secret>`          | `https://api.loopreturns.com/api/v1` | `/warehouse`           |
+| Attentive | `Authorization: Bearer <token>`      | `https://api.attentivemobile.com/v1` | `/me`                  |
 
 For any partner not in this table, always web search for current auth docs before asking for credentials.
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-ecom/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for the ecommerce integration (multi-store Shopify, partner dispatching, store-health daemon). The setup agent can load that file directly when it needs more depth than this wizard provides.
 
 ---
-

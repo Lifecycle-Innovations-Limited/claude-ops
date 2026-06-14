@@ -58,4 +58,3 @@ Downstream skills (`/ops-go`, `/ops-next`, `/ops-fires`) read `channels.calendar
   So this section is not optional for users who want context-aware briefings.
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-go/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration (calendar context feeds `/ops:go` briefings). The setup agent can load that file directly when it needs more depth than this wizard provides.
-

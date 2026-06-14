@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ops-mcp-watchdog — Detect MCP server health, notify Sam on degradation.
+"""ops-mcp-watchdog — Detect MCP server health, notify the owner on degradation.
 
 Every cron tick:
   1. For each HTTP MCP in ~/.claude.json, probe with a JSON-RPC `initialize`

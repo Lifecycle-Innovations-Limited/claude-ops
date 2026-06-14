@@ -30,7 +30,12 @@ function writeSettingsAtomic(s) {
   renameSync(tmp, p);
 }
 
-const AWS_PROFILE_CANDIDATES = ['default', 'ec2-user-cli', 'healify', 'workshop'];
+// Profiles to probe, in order. Override with AWS_PROFILE_CANDIDATES (comma-separated)
+// to add deployment-specific named profiles without editing source.
+const AWS_PROFILE_CANDIDATES = (process.env.AWS_PROFILE_CANDIDATES || 'default,ec2-user-cli')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 function awsProfileProbeEnv(profile, region = 'us-east-1') {
   const env = {
@@ -54,7 +59,10 @@ export function resolveWorkingAwsEnv(region = 'us-east-1') {
       timeout: 5000,
       env: { ...process.env, AWS_REGION: region, AWS_DEFAULT_REGION: region },
     });
-    return { env: { ...process.env, AWS_REGION: region, AWS_DEFAULT_REGION: region }, profile: process.env.AWS_PROFILE || '' };
+    return {
+      env: { ...process.env, AWS_REGION: region, AWS_DEFAULT_REGION: region },
+      profile: process.env.AWS_PROFILE || '',
+    };
   } catch {}
   for (const profile of AWS_PROFILE_CANDIDATES) {
     const env = awsProfileProbeEnv(profile, region);
@@ -68,7 +76,10 @@ export function resolveWorkingAwsEnv(region = 'us-east-1') {
       return { env, profile };
     } catch {}
   }
-  return { env: { ...process.env, AWS_REGION: region, AWS_DEFAULT_REGION: region }, profile: process.env.AWS_PROFILE || '' };
+  return {
+    env: { ...process.env, AWS_REGION: region, AWS_DEFAULT_REGION: region },
+    profile: process.env.AWS_PROFILE || '',
+  };
 }
 
 function getFallbacksForPrefix(prefix) {
@@ -125,7 +136,7 @@ export function parseModelRank(inferenceProfileId) {
   const cleanId = inferenceProfileId.replace(/[-:]v\d+(:\d+)?$/i, '').replace(/v\d+$/i, '');
   const matches = cleanId.match(/\d+/g);
   if (!matches) return [0, 0, 0];
-  const nums = matches.map(n => parseInt(n, 10));
+  const nums = matches.map((n) => parseInt(n, 10));
   const major = nums[0];
   let minor = 0;
   let date = 0;
@@ -169,12 +180,7 @@ function candidatesWithPrefix(profiles, prefix, predicate) {
 function pickLatestModel(profiles, prefix, pattern, fallback) {
   const c = candidatesWithPrefix(profiles, prefix, (id) => pattern.test(id));
   if (!c.length) return fallback;
-  c.sort((x, y) =>
-    rankCompareDesc(
-      parseModelRank(x.inferenceProfileId),
-      parseModelRank(y.inferenceProfileId),
-    ),
-  );
+  c.sort((x, y) => rankCompareDesc(parseModelRank(x.inferenceProfileId), parseModelRank(y.inferenceProfileId)));
   return c[0].inferenceProfileId;
 }
 
@@ -199,7 +205,12 @@ export function resolveBedrockClaudeModelIds(region = 'us-east-1') {
   try {
     const profiles = listAllInferenceProfilesSync(region);
     const primary = pickLatestModel(profiles, prefix, /\.anthropic\.claude-sonnet-/, fallbacks.primary);
-    const small = pickLatestModel(profiles, prefix, /(\.anthropic\.claude-.*haiku|\.anthropic\.claude-3-.*haiku)/, fallbacks.small);
+    const small = pickLatestModel(
+      profiles,
+      prefix,
+      /(\.anthropic\.claude-.*haiku|\.anthropic\.claude-3-.*haiku)/,
+      fallbacks.small,
+    );
     const opus = pickLatestModel(profiles, prefix, /\.anthropic\.claude-opus-/, fallbacks.opus);
     const fable = pickLatestModel(profiles, prefix, /\.anthropic\.claude-fable-/, fallbacks.fable);
     return { primary, small, opus, fable, source: 'api' };

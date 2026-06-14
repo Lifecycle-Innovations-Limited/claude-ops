@@ -45,14 +45,14 @@ The skill walks you through:
 
 Each account entry:
 
-| Field                  | Required | Notes                                                                        |
-| ---------------------- | -------- | ---------------------------------------------------------------------------- |
-| `email`                | yes      | Login email for the Claude Max account.                                      |
-| `label`                | no       | Disambiguator if you have two configs for the same email (multi-org).        |
-| `orgName` / `orgUuid`  | no       | Workspace metadata for accounts in a Claude org.                             |
-| `dashlaneTokenPath`    | no       | If you store the token in Dashlane: `dl://<vault-name>/password`.            |
-| `extraUsageEnabled`    | no       | Set to `true` ONLY if the account has paid overage on. Triggers safety margin. |
-| `capacityMultiplier`   | no       | Override per-account threshold (default 1.0 = standard Max 20x quota).       |
+| Field                 | Required | Notes                                                                          |
+| --------------------- | -------- | ------------------------------------------------------------------------------ |
+| `email`               | yes      | Login email for the Claude Max account.                                        |
+| `label`               | no       | Disambiguator if you have two configs for the same email (multi-org).          |
+| `orgName` / `orgUuid` | no       | Workspace metadata for accounts in a Claude org.                               |
+| `dashlaneTokenPath`   | no       | If you store the token in Dashlane: `dl://<vault-name>/password`.              |
+| `extraUsageEnabled`   | no       | Set to `true` ONLY if the account has paid overage on. Triggers safety margin. |
+| `capacityMultiplier`  | no       | Override per-account threshold (default 1.0 = standard Max 20x quota).         |
 
 ## Keychain layout
 
@@ -65,13 +65,13 @@ Override the keychain account name via `CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT` if you 
 
 ## Files
 
-| File                  | Purpose                                                                |
-| --------------------- | ---------------------------------------------------------------------- |
+| File                  | Purpose                                                                   |
+| --------------------- | ------------------------------------------------------------------------- |
 | `rotate.mjs`          | Main rotation logic. CLI: `--status`, `--utilization`, `--to`, `--setup`. |
-| `daemon.mjs`          | launchd-managed monitor. Polls every 15s, rotates at 80% utilization.  |
-| `ai-brain.mjs`        | Claude Haiku fallback for unexpected OAuth pages.                      |
-| `force-rotate.sh`     | Out-of-band rotation when Claude Code is unreachable.                  |
-| `config.example.json` | Schema reference. Copy to `config.json` and populate.                  |
+| `daemon.mjs`          | launchd-managed monitor. Polls every 15s, rotates at 80% utilization.     |
+| `ai-brain.mjs`        | Claude Haiku fallback for unexpected OAuth pages.                         |
+| `force-rotate.sh`     | Out-of-band rotation when Claude Code is unreachable.                     |
+| `config.example.json` | Schema reference. Copy to `config.json` and populate.                     |
 
 ## Triggers
 

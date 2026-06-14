@@ -387,7 +387,7 @@ def spawn_worker(task: dict) -> dict | None:
 
     # 2026-05-25: switched from `claude -p` (one-shot headless) to
     # `claude --bg ... -p PROMPT` so workers appear in `claude agents`, are
-    # steerable via SendMessage, survive terminal disconnects, and Sam can
+    # steerable via SendMessage, survive terminal disconnects, and the owner can
     # attach/inspect live. Prompt MUST be passed as -p argument; stdin is
     # ignored by --bg (would leave the session idle with "(send a prompt)").
     env = os.environ.copy()
@@ -399,7 +399,7 @@ def spawn_worker(task: dict) -> dict | None:
         # Point the restricted worker at a Claude config dir it can read.
         env["CLAUDE_CONFIG_DIR"] = WORKER_CLAUDE_CONFIG_DIR
     # Display name shown in `claude agents` list — short, categorical, NOT the
-    # full prompt. Sam corrected 2026-05-25: name field ≠ prompt field.
+    # full prompt. the owner corrected 2026-05-25: name field ≠ prompt field.
     display_name = f"pocket: {(task.get('title') or task_id)[:60]}"
     cmd = [
         CLAUDE_BIN,

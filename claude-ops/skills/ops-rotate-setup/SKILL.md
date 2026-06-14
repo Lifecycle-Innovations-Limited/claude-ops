@@ -1,7 +1,7 @@
 ---
 name: ops-rotate-setup
 description: Interactive OAuth init wizard for the multi-account Claude rotator. Walks through every account in the rotation config and, for any account missing a valid keychain token, delegates to the proven `rotate.mjs` magic-link flow (browser-driver cascade + Gmail polling), which writes the verified OAuth token to `Claude-Rotation-<key>` (key = account label or email, keychain account `$USER`). Re-runnable any time. Standalone alias of the same step inside `/ops:setup`.
-argument-hint: "[--all|--account <email>|--add|--crs]"
+argument-hint: '[--all|--account <email>|--add|--crs]'
 allowed-tools:
   - Bash
   - Read
@@ -30,6 +30,7 @@ keychain under the schema the daemon/rotator consume: service
 > around it.
 
 Use this skill when:
+
 - You ran `/ops:setup` and skipped the account-rotation step
 - You added a new Claude account and need to wire it in
 - A keychain entry was rotated/expired and needs re-init
@@ -42,8 +43,8 @@ Use this skill when:
 - **Rule 1**: Max 4 options per `AskUserQuestion`. Paginate at 4 with
   `[More...]` bridges when listing accounts.
 - **Rule 4**: Background by default. The OAuth flow (rotate.mjs browser cascade
-  + Gmail polling) is long-running; always launch it with
-  `run_in_background: true` and tail the log.
+  - Gmail polling) is long-running; always launch it with
+    `run_in_background: true` and tail the log.
 - Never auto-enable `account_rotation_enabled` after init. The user flips that
   switch from `/plugins` settings.
 
@@ -270,12 +271,12 @@ to the user, made explicitly through the plugin settings UI.
 
 ## Failure modes
 
-| Symptom | Cause | Action |
-|---|---|---|
+| Symptom                              | Cause                                                          | Action                                                                                                                    |
+| ------------------------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `oauth_failed` (rotate.mjs exit ≠ 0) | login did not complete — Turnstile, Google SSO/2FA, or timeout | Open `$LOG` + `rotation.log`; if the cascade is waiting on a visible Chrome, let the user finish login there, then re-run |
-| `playwright install failed` | npm offline / sandbox | Run `npx playwright install chromium` in `${CLAUDE_PLUGIN_ROOT}/scripts/account-rotation`, then retry |
-| token still `✗` after success | account `label`/`email` mismatch vs config | Confirm the config `key` (`label // email`) matches the `Claude-Rotation-<key>` service name |
-| no CDP browser available | no Chrome on `:9222` and none installed | rotate.mjs falls back to bundled Chromium, which Turnstile may block — install/launch Chrome so the cascade can attach |
-| Google SSO / 2FA prompt | Workspace-domain account needs interactive Google login | Let the user complete login in the cascade's visible Chrome; do NOT auto-solve 2FA |
-| CRS `--status` "login failed" | wrong admin user/password or CRS not reachable | Re-enter creds (Step 4.5); admin creds are in the CRS container `data/init.json`; verify `curl $CRS_URL/health` |
-| CRS daemon installed but no effect | `crs.enabled=false`, or all accounts already correctly flagged | Check `crs.enabled` in config; `tail logs/crs-priority.log`; a steady-state tick logs `0 change(s)` |
+| `playwright install failed`          | npm offline / sandbox                                          | Run `npx playwright install chromium` in `${CLAUDE_PLUGIN_ROOT}/scripts/account-rotation`, then retry                     |
+| token still `✗` after success        | account `label`/`email` mismatch vs config                     | Confirm the config `key` (`label // email`) matches the `Claude-Rotation-<key>` service name                              |
+| no CDP browser available             | no Chrome on `:9222` and none installed                        | rotate.mjs falls back to bundled Chromium, which Turnstile may block — install/launch Chrome so the cascade can attach    |
+| Google SSO / 2FA prompt              | Workspace-domain account needs interactive Google login        | Let the user complete login in the cascade's visible Chrome; do NOT auto-solve 2FA                                        |
+| CRS `--status` "login failed"        | wrong admin user/password or CRS not reachable                 | Re-enter creds (Step 4.5); admin creds are in the CRS container `data/init.json`; verify `curl $CRS_URL/health`           |
+| CRS daemon installed but no effect   | `crs.enabled=false`, or all accounts already correctly flagged | Check `crs.enabled` in config; `tail logs/crs-priority.log`; a steady-state tick logs `0 change(s)`                       |

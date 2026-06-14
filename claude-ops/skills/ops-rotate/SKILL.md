@@ -1,7 +1,7 @@
 ---
 name: ops-rotate
 description: Multi-account Claude Max rotator. Status, manual rotation, account list, add-account wizard, and CRS relay-pool auto-prioritization. Requires account_rotation_enabled=true in plugin settings.
-argument-hint: "[status|rotate-now|list|add-account|crs|crs-tick]"
+argument-hint: '[status|rotate-now|list|add-account|crs|crs-tick]'
 allowed-tools:
   - Bash
   - Read
@@ -19,14 +19,14 @@ Manage the optional multi-account Claude Max rotator. Off by default — flip
 
 ## Subcommands
 
-| `$ARGUMENTS`   | Action                                                           |
-| -------------- | ---------------------------------------------------------------- |
-| (none) or `status` | Show current account, 5h%/7d%, total rotations, daemon health |
-| `rotate-now`   | Force rotation to the most-cooled candidate (or `--to <email>`) |
-| `list`         | List every configured account with token state + last util     |
-| `add-account`  | Interactive wizard: collect email, OAuth into rotator vault    |
-| `crs`          | Show the CRS relay-pool schedulable state + priority-daemon health |
-| `crs-tick`     | Run one CRS priority tick now (append `--dry-run` to preview, no writes) |
+| `$ARGUMENTS`       | Action                                                                   |
+| ------------------ | ------------------------------------------------------------------------ |
+| (none) or `status` | Show current account, 5h%/7d%, total rotations, daemon health            |
+| `rotate-now`       | Force rotation to the most-cooled candidate (or `--to <email>`)          |
+| `list`             | List every configured account with token state + last util               |
+| `add-account`      | Interactive wizard: collect email, OAuth into rotator vault              |
+| `crs`              | Show the CRS relay-pool schedulable state + priority-daemon health       |
+| `crs-tick`         | Run one CRS priority tick now (append `--dry-run` to preview, no writes) |
 
 ## Two rotation models
 
@@ -36,7 +36,7 @@ This skill manages **two complementary** account-management systems:
   sessions. One active claude.ai OAuth token in the keychain at a time; the daemon swaps
   to the coolest account when the active one heats up.
 - **CRS priority daemon** (`crs`/`crs-tick`) — for a **claude-relay-service** pool, which
-  load-balances across *many* accounts simultaneously. Instead of swapping one token, it
+  load-balances across _many_ accounts simultaneously. Instead of swapping one token, it
   toggles each account's `schedulable` flag from live utilization so the relay avoids
   near-maxed accounts and re-enables them on recovery. Off by default; see
   **ops-rotate-setup** to configure + install.

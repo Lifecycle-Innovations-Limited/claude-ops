@@ -21,29 +21,29 @@ If the daemon is not running, offer to start it: `launchctl bootstrap gui/$(id -
 
 If `$ARGUMENTS` contains a specific section name, jump straight to that section:
 
-| Argument                               | Go to   |
-| -------------------------------------- | ------- |
-| `cli`, `install`                       | Step 2  |
-| `channels`                             | Step 3  |
-| `telegram`                             | Step 3a |
-| `whatsapp`, `whatsapp-bridge`, `whatsapp-doctor` | Step 3b |
-| `email`                                | Step 3c |
-| `slack`                                | Step 3d |
-| `notion`                               | Step 3e |
-| `calendar`, `cal`                      | Step 3f |
-| `doppler`, `secrets`                   | Step 3g |
-| `vault`, `password-manager`, `pm`      | Step 3h |
-| `ecom`, `shopify`, `store`             | Step 3i |
-| `marketing`, `klaviyo`, `ads`, `meta`, `ga4` | Step 3j |
-| `google-ads`, `gads` | Step 3j (Google Ads) |
-| `voice`, `bland`, `elevenlabs`, `tts`  | Step 3k |
-| `network`, `unifi`                     | Step 3q-network |
-| `mcp`                                  | Step 4  |
-| `registry`, `projects`                 | Step 5  |
-| `daemon`, `background`                 | Step 5b |
-| `prefs`, `preferences`                 | Step 6  |
-| `env`, `shell`                         | Step 7  |
-| `deploy-fix`, `auto-fix`               | Step 6.5|
+| Argument                                         | Go to                |
+| ------------------------------------------------ | -------------------- |
+| `cli`, `install`                                 | Step 2               |
+| `channels`                                       | Step 3               |
+| `telegram`                                       | Step 3a              |
+| `whatsapp`, `whatsapp-bridge`, `whatsapp-doctor` | Step 3b              |
+| `email`                                          | Step 3c              |
+| `slack`                                          | Step 3d              |
+| `notion`                                         | Step 3e              |
+| `calendar`, `cal`                                | Step 3f              |
+| `doppler`, `secrets`                             | Step 3g              |
+| `vault`, `password-manager`, `pm`                | Step 3h              |
+| `ecom`, `shopify`, `store`                       | Step 3i              |
+| `marketing`, `klaviyo`, `ads`, `meta`, `ga4`     | Step 3j              |
+| `google-ads`, `gads`                             | Step 3j (Google Ads) |
+| `voice`, `bland`, `elevenlabs`, `tts`            | Step 3k              |
+| `network`, `unifi`                               | Step 3q-network      |
+| `mcp`                                            | Step 4               |
+| `registry`, `projects`                           | Step 5               |
+| `daemon`, `background`                           | Step 5b              |
+| `prefs`, `preferences`                           | Step 6               |
+| `env`, `shell`                                   | Step 7               |
+| `deploy-fix`, `auto-fix`                         | Step 6.5             |
 
 Empty argument → full wizard from Step 0.
 

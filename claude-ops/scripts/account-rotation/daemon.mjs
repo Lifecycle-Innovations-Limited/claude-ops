@@ -24,7 +24,11 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, unlinkSync, appendFileSync, statSync } from 'fs';
-import { persistBedrockClaudeSettings, clearHardcodedModelsForOAuthClaudeSettings, resolveWorkingAwsEnv } from './claude-settings-mode.mjs';
+import {
+  persistBedrockClaudeSettings,
+  clearHardcodedModelsForOAuthClaudeSettings,
+  resolveWorkingAwsEnv,
+} from './claude-settings-mode.mjs';
 import {
   destinationUtilHardBlock,
   DAEMON_SAFE_5H_PCT,
@@ -135,7 +139,7 @@ function notify(title, msg) {
   } catch {}
 }
 
-// Cross-machine account leases (Sam 2026-06-06): NOT a static per-machine split.
+// Cross-machine account leases ((2026-06-06)): NOT a static per-machine split.
 // Both machines may use ALL accounts; the only constraint is the same account is
 // never ACTIVE on both at once. readConfig() drops accounts a FOREIGN host holds
 // a fresh lease on; the loop heartbeats THIS machine's active-account lease.
@@ -680,12 +684,16 @@ async function shouldRotate(config, state) {
               // invisible to claude. (root-caused 2026-06-12)
               try {
                 let fileStore = {};
-                try { fileStore = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8')); } catch {}
+                try {
+                  fileStore = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
+                } catch {}
                 const incoming = JSON.parse(tokenToWrite);
                 fileStore.claudeAiOauth = incoming.claudeAiOauth || incoming;
                 if (incoming.mcpOAuth) fileStore.mcpOAuth = incoming.mcpOAuth;
                 writeFileSync(LINUX_CRED_PATH, JSON.stringify(fileStore, null, 2), { mode: 0o600 });
-              } catch (_fileErr) { /* best-effort */ }
+              } catch (_fileErr) {
+                /* best-effort */
+              }
             }
             log('[active-refresh] Active keychain updated with mcpOAuth preserved — sessions will auto-recover');
           }
@@ -832,7 +840,7 @@ async function findValidRotationTarget(config, state) {
       log(`[pre-rotate] ${key}: live util 5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}% — OK`);
     } else {
       // Live query failed (Anthropic 429 or network). DO NOT accept blindly —
-      // that's how we picked an exhausted account and bricked Sam's session.
+      // that's how we picked an exhausted account and bricked the owner's session.
       // Fall back to cached util; refuse if cached is unknown OR >=90%.
       const cached = state.accounts?.[key]?.lastUtilization;
       const cachedPct = cached?.pct;
@@ -897,7 +905,7 @@ async function findValidRotationTarget(config, state) {
 //   2. CACHED-evidence: when API is throttling us (live fails) BUT every
 //      candidate has fresh (<15min) cached util >= 95% AND a recent rate-limit
 //      signal exists, we accept cached evidence — refusing to fall back when
-//      Anthropic API is dead would just leave Sam stuck.
+//      Anthropic API is dead would just leave the owner stuck.
 async function allCandidatesExhausted(config, state) {
   const EXHAUSTED_THRESHOLD = 95;
   const now = Date.now();
@@ -950,7 +958,7 @@ function stopClaudeDaemon() {
   try {
     const result = execSync('claude daemon stop --any', {
       encoding: 'utf8',
-      env: { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' }
+      env: { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' },
     });
     log(`[daemon-stop] Daemon stop success: ${result.trim()}`);
   } catch (err) {
@@ -1058,7 +1066,7 @@ async function doRotation(reason) {
 
   if (!target) {
     log('ROTATION ABORTED: no viable Max target after pre-rotate (util bars, tokens, or live query refusals)');
-    // Live-confirm exhaustion before flipping to Bedrock — Sam's rule.
+    // Live-confirm exhaustion before flipping to Bedrock — the owner's rule.
     const exhausted = await allCandidatesExhausted(config, state);
     if (exhausted) {
       log('All candidates LIVE-CONFIRMED exhausted (>=95%) — engaging Bedrock fallback');
@@ -1227,10 +1235,7 @@ async function refreshSingleToken(account) {
         { timeout: 5000 },
       );
       if (kcResult.error || kcResult.status !== 0) {
-        const detail =
-          kcResult.stderr?.toString()?.trim() ||
-          kcResult.error?.message ||
-          `exit ${kcResult.status}`;
+        const detail = kcResult.stderr?.toString()?.trim() || kcResult.error?.message || `exit ${kcResult.status}`;
         throw new Error(`Keychain write failed: ${detail}`);
       }
     }
@@ -1357,14 +1362,17 @@ async function maybeRecoverOAuthFromBedrock(config, state, sentinelPath, ctx) {
             // keeps reading lease.accountKey === 'bedrock' and re-injecting
             // CLAUDE_CODE_USE_BEDROCK on every respawn forever — sessions stay stranded
             // on metered Bedrock long after OAuth headroom returns. (2026-06-14: 9 sessions
-            // still pinned to bedrock 17h post-recovery; Sam: "Bedrock should never be in
+            // still pinned to bedrock 17h post-recovery; the owner: "Bedrock should never be in
             // use if any OAuth account has tokens available.") Drop the leases so the next
             // respawn falls through to OAuth token injection.
             try {
               const leases = readLeases();
               let purged = 0;
               for (const [sid, entry] of Object.entries(leases)) {
-                if (entry?.accountKey === 'bedrock') { delete leases[sid]; purged++; }
+                if (entry?.accountKey === 'bedrock') {
+                  delete leases[sid];
+                  purged++;
+                }
               }
               if (purged > 0) {
                 writeLeases(leases);
@@ -1538,10 +1546,10 @@ async function checkSessionLeaseRotations(config, state) {
   if (sessions.length === 0) return;
 
   const leases = readLeases();
-  
+
   for (const s of sessions) {
     const lease = leases[s.id];
-    
+
     // Case 1: Session has no lease assigned yet
     if (!lease) {
       const newKey = pickAccountForSession(s.id, config, state);
@@ -1554,7 +1562,9 @@ async function checkSessionLeaseRotations(config, state) {
           try {
             const marker = `/tmp/claude-respawn-deferred-${s.id}`;
             if (!existsSync(marker)) writeFileSync(marker, String(Date.now()));
-            log(`[session-router] Session ${s.id} is ${s.status === 'busy' ? 'busy' : 'a /loop session'} — deferred respawn (sweep handles it).`);
+            log(
+              `[session-router] Session ${s.id} is ${s.status === 'busy' ? 'busy' : 'a /loop session'} — deferred respawn (sweep handles it).`,
+            );
           } catch {}
         }
         return; // Rotate/respawn at most one session per tick to stagger
@@ -1583,7 +1593,7 @@ async function checkSessionLeaseRotations(config, state) {
       continue;
     }
 
-    const acct = config.accounts.find(a => accountKey(a) === currentKey);
+    const acct = config.accounts.find((a) => accountKey(a) === currentKey);
     if (!acct) continue;
 
     const cached = state.accounts?.[currentKey]?.lastUtilization;
@@ -1593,12 +1603,14 @@ async function checkSessionLeaseRotations(config, state) {
     // We no longer guess utilization based on active lease count.
     // Instead, we rely strictly on the live metrics fetched from Claude API by the usage probe.
     if (util >= maxUtil) {
-      log(`[session-router] Session ${s.id} leased account ${currentKey} ACTUAL utilization is exhausted (${util}% >= ${maxUtil}%). Rotating.`);
+      log(
+        `[session-router] Session ${s.id} leased account ${currentKey} ACTUAL utilization is exhausted (${util}% >= ${maxUtil}%). Rotating.`,
+      );
       const newKey = pickAccountForSession(s.id, config, state);
       if (newKey && newKey !== currentKey) {
         log(`[session-router] Swapping lease for session ${s.id}: ${currentKey} -> ${newKey}`);
         recordSessionLease(s.id, newKey, s.pid);
-        
+
         if (s.status !== 'busy' && !isLoopSession(s.id)) {
           doRespawn(s, log);
         } else {
@@ -1656,7 +1668,7 @@ async function mainLoop() {
 
       // Cross-machine lease heartbeat (every 3 min, << 2h TTL): refresh THIS
       // machine's claim on its active account so the other machine keeps
-      // excluding it. Best-effort / fail-open (S3 down => no-op). (Sam 2026-06-06)
+      // excluding it. Best-effort / fail-open (S3 down => no-op). ((2026-06-06))
       if (state.activeAccount && Date.now() - lastLeaseBeat > 180_000) {
         lastLeaseBeat = Date.now();
         try {
@@ -1688,7 +1700,7 @@ async function mainLoop() {
       // force-swapped to OAuth immediately whenever a usable token exists — NO
       // 90-min defer for busy/loop sessions (metered bleed overrides loop
       // preservation). Next sweep verifies the previously-swapped PIDs are off
-      // Bedrock (env + best-effort network corroboration). (Sam 2026-06-14)
+      // Bedrock (env + best-effort network corroboration). ((2026-06-14))
       if (Date.now() - lastBedrockSweep > BEDROCK_SWEEP_INTERVAL) {
         lastBedrockSweep = Date.now();
         try {

@@ -1,7 +1,7 @@
 ---
 name: ops-fires
 description: Production incidents dashboard. Reads ECS health, Sentry errors, CI failures. Offers to dispatch fix agents for active fires.
-argument-hint: "[project-alias|all]"
+argument-hint: '[project-alias|all]'
 allowed-tools:
   - Bash
   - Read
@@ -34,6 +34,7 @@ Before executing, load available context:
    - If `action_needed` is not null → surface it immediately as a potential fire
 
 2. **Secrets**: AWS credentials are required for ECS/CloudWatch queries.
+
    ### Secret Resolution
    - First: check `$AWS_ACCESS_KEY_ID` / `$AWS_PROFILE` env vars
    - Then: `doppler secrets get AWS_ACCESS_KEY_ID --plain` (if `doppler` configured in prefs)
@@ -46,24 +47,24 @@ Before executing, load available context:
 
 ### aws CLI
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `aws ecs list-services --cluster <name> --query 'serviceArns'` | ECS services | ARN list |
-| `aws ecs describe-services --cluster <name> --services <arn> --query 'services[0].{status:status,running:runningCount,desired:desiredCount}'` | Service health | JSON |
-| `aws logs tail /ecs/<service> --since 1h --format short` | ECS logs | Log lines (use with Monitor for live) |
+| Command                                                                                                                                       | Usage          | Output                                |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ------------------------------------- |
+| `aws ecs list-services --cluster <name> --query 'serviceArns'`                                                                                | ECS services   | ARN list                              |
+| `aws ecs describe-services --cluster <name> --services <arn> --query 'services[0].{status:status,running:runningCount,desired:desiredCount}'` | Service health | JSON                                  |
+| `aws logs tail /ecs/<service> --since 1h --format short`                                                                                      | ECS logs       | Log lines (use with Monitor for live) |
 
 ### gh CLI (GitHub)
 
-| Command | Usage | Output |
-|---------|-------|--------|
+| Command                                                                     | Usage          | Output     |
+| --------------------------------------------------------------------------- | -------------- | ---------- |
 | `gh run list --limit 20 --json status,conclusion,name,headBranch,createdAt` | Recent CI runs | JSON array |
-| `gh run view <id> --repo <repo> --log-failed` | Failed CI logs | Log output |
+| `gh run view <id> --repo <repo> --log-failed`                               | Failed CI logs | Log output |
 
 ### sentry-cli / Sentry API
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `sentry-cli issues list --project <slug> --status unresolved` | Unresolved issues | Issue list |
+| Command                                                                                                                          | Usage                             | Output     |
+| -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | ---------- |
+| `sentry-cli issues list --project <slug> --status unresolved`                                                                    | Unresolved issues                 | Issue list |
 | `curl -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://sentry.io/api/0/projects/<org>/<proj>/issues/?query=is:unresolved"` | API fallback when MCP unavailable | JSON array |
 
 ---
@@ -71,11 +72,13 @@ Before executing, load available context:
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when dispatching multiple fix agents simultaneously. This enables:
+
 - Fix agents share findings (e.g., API agent discovers DB is the root cause → infra agent pivots to DB fix)
 - You can prioritize: "CRITICAL ECS issue first, then CI failures"
 - Real-time progress: agents report as they find root causes, you can merge fixes in optimal order
 
 **Team setup** (only when flag is enabled, dispatch phase):
+
 ```
 TeamCreate("fire-fixers")
 Agent(team_name="fire-fixers", name="fix-[service]", ...)
@@ -135,7 +138,7 @@ Analyze the pre-gathered data — including external projects. Then run parallel
    - Active critical alarm (smoke / water leak / security breach) → **P0 / CRITICAL** — cross-reference `/ops:ops-home alarm` for details.
    - Major device offline (gateway, hub, primary thermostat) → **P1 / HIGH**.
    - Energy spike > 3× 7-day baseline → **P2 / MEDIUM** — cross-reference `/ops:ops-home status`.
-   If snapshot returned `configured:false`, skip silently.
+     If snapshot returned `configured:false`, skip silently.
 
 Classify each issue by severity:
 
@@ -186,6 +189,7 @@ HOME (only if `home_automation` is configured)
 Use **batched AskUserQuestion calls** (max 4 options each). Only show relevant actions (e.g., skip dispatch options if no issues found):
 
 AskUserQuestion call 1:
+
 ```
   [Dispatch fix agent for [top critical issue]]
   [Dispatch fix agent for [second issue]]
@@ -194,6 +198,7 @@ AskUserQuestion call 1:
 ```
 
 AskUserQuestion call 2 (only if "More..."):
+
 ```
   [Open Sentry dashboard]
   [Open GitHub Actions]
@@ -236,7 +241,7 @@ Dispatch fix agent for: [issue title]
   Severity: [CRITICAL/HIGH/MEDIUM]
   Repo: [repo]
   Error: [brief description]
-  
+
   The agent will:
   - Investigate root cause in [repo]
   - Create feature branch with fix
@@ -263,6 +268,7 @@ If `$ARGUMENTS` contains a project alias, filter to that project's services only
 ### Monitor — live service health
 
 Use `Monitor` to stream ECS task logs or GitHub Actions runs when investigating fires:
+
 ```
 Monitor(command: "aws logs tail /ecs/<service> --follow --since 5m")
 ```
@@ -278,7 +284,6 @@ When diagnosing fires, use `WebFetch` to check AWS status page (`https://health.
 ### WebSearch — known outage patterns
 
 Use `WebSearch` to find if the error pattern matches a known AWS/infrastructure issue (e.g., "ECS task stopped CannotPullContainerError" → known ECR throttling).
-
 
 ---
 
@@ -298,6 +303,7 @@ The ops-daemon surfaces two additional fire categories in `daemon-health.json`:
 **CLAIM_KEY:** `sentry:issue:<short_id>` (e.g. `sentry:issue:MY-PROJECT-1A2B`)
 
 For non-Sentry fires (infra, CI, credential expiry), use:
+
 - CI failure: `ci:run:<repo>:<run_id>`
 - Credential expiry: `credential:expiry:<service>`
 
@@ -330,4 +336,3 @@ ledger write \
   --title "Fire: <issue title>" \
   --context "fixed: <brief resolution> | escalated: <reason>"
 ```
-

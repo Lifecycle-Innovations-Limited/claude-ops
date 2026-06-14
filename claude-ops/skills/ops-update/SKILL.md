@@ -1,7 +1,7 @@
 ---
 name: ops-update
 description: Upgrade the local claude-ops ("ops") plugin to the latest published version in one command — refresh the marketplace catalogue, update the installed plugin (with stale-cache force-reinstall fallback), reapply local cache patches, prune every old cache version, rewrite stale version-pinned paths, run per-version migrations, then prompt to reload. Use when the box is on an older plugin version, after a release, or when the cache looks stale.
-argument-hint: "[--dry-run|--force|--to X.Y.Z|--no-prune|--no-patches|--no-rewrite]"
+argument-hint: '[--dry-run|--force|--to X.Y.Z|--no-prune|--no-patches|--no-rewrite]'
 allowed-tools:
   - Bash
   - Read
@@ -67,14 +67,14 @@ Code constraint, not a failure.
 
 ## Flags
 
-| Flag | Effect |
-|------|--------|
-| `--dry-run` | Report only; change nothing. Always run this first. |
-| `--force` | Force-reinstall even when the CLI claims "already latest" (bug #61954). |
-| `--to X.Y.Z` | Target a specific version instead of the catalogue's newest. |
-| `--no-prune` | Keep old cache versions. |
-| `--no-patches` | Skip the cache-patch reapply step. |
-| `--no-rewrite` | Skip the stale-version-path rewrite step. |
+| Flag           | Effect                                                                  |
+| -------------- | ----------------------------------------------------------------------- |
+| `--dry-run`    | Report only; change nothing. Always run this first.                     |
+| `--force`      | Force-reinstall even when the CLI claims "already latest" (bug #61954). |
+| `--to X.Y.Z`   | Target a specific version instead of the catalogue's newest.            |
+| `--no-prune`   | Keep old cache versions.                                                |
+| `--no-patches` | Skip the cache-patch reapply step.                                      |
+| `--no-rewrite` | Skip the stale-version-path rewrite step.                               |
 
 ## Mobile / SSH (Rule 7)
 

@@ -79,11 +79,11 @@ pro_call() { curl -sk --max-time 12 -H "X-API-Key: ${UNIFI_PROTECT_KEY}" -H "Acc
 
 Route by `$SCOPE`:
 
-| SCOPE         | Calls |
-|---------------|-------|
-| site-manager  | `sm_call /v1/hosts`, `sm_call /v1/sites`, `sm_call /v1/devices`, `sm_call /v1/isp-metrics/1h` |
-| network       | `net_call /sites` → pick `SITE_ID` → `net_call /sites/$SITE_ID/devices`, `net_call /sites/$SITE_ID/clients` |
-| protect       | `pro_call /meta/info`, `pro_call /cameras`, `pro_call /nvrs` |
+| SCOPE        | Calls                                                                                                       |
+| ------------ | ----------------------------------------------------------------------------------------------------------- |
+| site-manager | `sm_call /v1/hosts`, `sm_call /v1/sites`, `sm_call /v1/devices`, `sm_call /v1/isp-metrics/1h`               |
+| network      | `net_call /sites` → pick `SITE_ID` → `net_call /sites/$SITE_ID/devices`, `net_call /sites/$SITE_ID/clients` |
+| protect      | `pro_call /meta/info`, `pro_call /cameras`, `pro_call /nvrs`                                                |
 
 Local consoles use a self-signed cert — always `-k`. Keep `--max-time` short so an off-LAN console fails fast.
 
@@ -103,6 +103,7 @@ Return a single JSON object on stdout:
 ```
 
 Per-scope summary examples:
+
 - `site-manager`: `"N hosts, M sites, K devices; WAN [healthy|degrading], latency Nms"`
 - `network`: `"N devices (M online), K clients"`
 - `protect`: `"N cameras (M recording, K offline), NVR storage P%"`

@@ -38,20 +38,20 @@ npm run start:dev
 
 ## Environment Variables
 
-| Variable       | Description                          | Example                                              |
-| -------------- | ------------------------------------ | ---------------------------------------------------- |
-| `DATABASE_URL` | PostgreSQL connection string         | `postgresql://postgres:postgres@localhost:5432/nestapp` |
-| `JWT_SECRET`   | Secret for signing JWT tokens (32+ chars) | `change-me-to-a-random-secret-32-chars-min`     |
-| `REDIS_HOST`   | Redis hostname                       | `localhost`                                          |
-| `PORT`         | HTTP port (default 3000)             | `3000`                                               |
+| Variable       | Description                               | Example                                                 |
+| -------------- | ----------------------------------------- | ------------------------------------------------------- |
+| `DATABASE_URL` | PostgreSQL connection string              | `postgresql://postgres:postgres@localhost:5432/nestapp` |
+| `JWT_SECRET`   | Secret for signing JWT tokens (32+ chars) | `change-me-to-a-random-secret-32-chars-min`             |
+| `REDIS_HOST`   | Redis hostname                            | `localhost`                                             |
+| `PORT`         | HTTP port (default 3000)                  | `3000`                                                  |
 
 ## API Endpoints
 
-| Method | Path             | Auth     | Description            |
-| ------ | ---------------- | -------- | ---------------------- |
-| POST   | `/auth/register` | None     | Create account, get JWT |
-| POST   | `/auth/login`    | None     | Login, get JWT          |
-| GET    | `/health`        | None     | Database liveness check |
+| Method | Path             | Auth | Description             |
+| ------ | ---------------- | ---- | ----------------------- |
+| POST   | `/auth/register` | None | Create account, get JWT |
+| POST   | `/auth/login`    | None | Login, get JWT          |
+| GET    | `/health`        | None | Database liveness check |
 
 ### Register
 

@@ -18,6 +18,7 @@ You are the marketing optimizer. Your job is to analyze ad performance across Me
 ### Input
 
 Read pre-gathered marketing data from the ops-marketing-dash script:
+
 ```bash
 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/ops-ops-marketplace}/bin/ops-marketing-dash" 2>/dev/null
 ```
@@ -39,6 +40,7 @@ Any channel the user has not configured will be JSON `null` rather than an objec
 If ops-marketing-dash data is unavailable, pull directly:
 
 **Meta Ads (last 7d):**
+
 ```bash
 META_TOKEN=$(claude plugin config get meta_ads_token 2>/dev/null || echo "$META_ADS_TOKEN")
 META_ACCOUNT=$(claude plugin config get meta_ad_account_id 2>/dev/null || echo "$META_AD_ACCOUNT_ID")
@@ -47,6 +49,7 @@ curl -s "https://graph.facebook.com/v20.0/${META_ACCOUNT}/insights?fields=spend,
 ```
 
 **Google Ads (last 7d):**
+
 ```bash
 # Use credentials from Credential Resolution in ops-marketing SKILL.md
 # GAQL query:
@@ -114,6 +117,7 @@ Note: All recommendations are advisory. Use /ops:marketing meta-manage or google
 ### Health Score Computation
 
 Score 0-100 based on:
+
 - Blended ROAS ≥ 3x: +30 | 1-3x: +15 | < 1x: +0
 - Platform diversification (both Meta + Google active): +20 | one platform: +10 | none: +0
 - No campaigns with CPA > 3x target: +20 | some: +10 | many: +0

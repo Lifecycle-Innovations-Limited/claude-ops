@@ -162,21 +162,21 @@ is set. The global keychain path is completely unaffected.
 
 ## Files Modified
 
-| File | Change |
-|---|---|
-| `rotate.mjs` | Bug 1: `findClaudeSessions()` ps command + parser. Naming: `STATE_KEY_MIGRATIONS` in `readState()`. |
-| `daemon.mjs` | Bug 2: `require()` → `readActiveKeychainToken()`. Bug 3: `_parkedUntil` park map + park logic in `shouldRotate()`. Bug 4: `notify()` Linux branch, `refreshSingleToken()` platform-aware vault write, `readState()` key migration. Bug 5: log line uses `probeKey` not raw email. |
-| `session-router.mjs` | NEW: per-session routing foundation (feature-flagged, no existing behavior changed). |
-| `NOTES-rotation-consistency.md` | This file. |
+| File                            | Change                                                                                                                                                                                                                                                                            |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rotate.mjs`                    | Bug 1: `findClaudeSessions()` ps command + parser. Naming: `STATE_KEY_MIGRATIONS` in `readState()`.                                                                                                                                                                               |
+| `daemon.mjs`                    | Bug 2: `require()` → `readActiveKeychainToken()`. Bug 3: `_parkedUntil` park map + park logic in `shouldRotate()`. Bug 4: `notify()` Linux branch, `refreshSingleToken()` platform-aware vault write, `readState()` key migration. Bug 5: log line uses `probeKey` not raw email. |
+| `session-router.mjs`            | NEW: per-session routing foundation (feature-flagged, no existing behavior changed).                                                                                                                                                                                              |
+| `NOTES-rotation-consistency.md` | This file.                                                                                                                                                                                                                                                                        |
 
 ## Deployed live vs branch-only
 
-| Fix | Live | Branch-only | Reason |
-|---|---|---|---|
-| Session enum fix | YES | — | Pure read-path fix, no auth risk |
-| `require()` ESM fix | YES | — | Bug fix, no auth risk |
-| Hot-loop park | YES | — | Read-path only, no keychain write |
-| Linux parity | YES | — | Guarded by `IS_LINUX`, no darwin change |
-| Naming consistency logs | YES | — | Log-only change |
-| State key migration | YES | — | Reads then re-writes state.json only |
-| Per-session routing | NO | YES | Needs live auth test to validate `CLAUDE_CODE_OAUTH_TOKEN` injection works with real sessions before enabling |
+| Fix                     | Live | Branch-only | Reason                                                                                                        |
+| ----------------------- | ---- | ----------- | ------------------------------------------------------------------------------------------------------------- |
+| Session enum fix        | YES  | —           | Pure read-path fix, no auth risk                                                                              |
+| `require()` ESM fix     | YES  | —           | Bug fix, no auth risk                                                                                         |
+| Hot-loop park           | YES  | —           | Read-path only, no keychain write                                                                             |
+| Linux parity            | YES  | —           | Guarded by `IS_LINUX`, no darwin change                                                                       |
+| Naming consistency logs | YES  | —           | Log-only change                                                                                               |
+| State key migration     | YES  | —           | Reads then re-writes state.json only                                                                          |
+| Per-session routing     | NO   | YES         | Needs live auth test to validate `CLAUDE_CODE_OAUTH_TOKEN` injection works with real sessions before enabling |

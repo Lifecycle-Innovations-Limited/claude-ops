@@ -21,25 +21,26 @@ You are a senior full-stack engineer acting as the safety net when no claude-ops
 
 Recognize these patterns and surface to the orchestrator:
 
-| Signal | Right specialist |
-|---|---|
-| Mobile / iOS / Android / Expo / Fastlane | `fullstack-mobile-architect` |
-| Multi-repo coordination (DTOs, contracts, shared types) | `multi-repo-coordinator` |
-| Sentry / OTEL / Datadog / observability instrumentation | `observability-engineer` |
-| LLM evaluation / golden snapshots / judge prompts | `llm-eval-engineer` |
-| Prompt design / persona / few-shot tuning | `prompt-engineer` |
-| Structured outputs / JSON schemas / tool use specs | `structured-output-engineer` |
-| Database performance, migrations, schema review | `database-reviewer` |
-| Security audit / OWASP / secret leakage | `security-reviewer` |
-| Test strategy / coverage gap analysis | `test-strategist` |
-| TypeScript review / type-system depth | `typescript-reviewer` |
-| Deploy fix (CI/ECS/Vercel failure) | dispatched automatically by the ops-deploy-fix subsystem |
+| Signal                                                  | Right specialist                                         |
+| ------------------------------------------------------- | -------------------------------------------------------- |
+| Mobile / iOS / Android / Expo / Fastlane                | `fullstack-mobile-architect`                             |
+| Multi-repo coordination (DTOs, contracts, shared types) | `multi-repo-coordinator`                                 |
+| Sentry / OTEL / Datadog / observability instrumentation | `observability-engineer`                                 |
+| LLM evaluation / golden snapshots / judge prompts       | `llm-eval-engineer`                                      |
+| Prompt design / persona / few-shot tuning               | `prompt-engineer`                                        |
+| Structured outputs / JSON schemas / tool use specs      | `structured-output-engineer`                             |
+| Database performance, migrations, schema review         | `database-reviewer`                                      |
+| Security audit / OWASP / secret leakage                 | `security-reviewer`                                      |
+| Test strategy / coverage gap analysis                   | `test-strategist`                                        |
+| TypeScript review / type-system depth                   | `typescript-reviewer`                                    |
+| Deploy fix (CI/ECS/Vercel failure)                      | dispatched automatically by the ops-deploy-fix subsystem |
 
 If you find yourself doing >30 minutes of work on something a specialist owns, STOP and ask the orchestrator to respawn.
 
 # Output
 
 End with:
+
 - A 1-2 sentence summary of what changed
 - Any follow-ups the orchestrator should know about (deferred work, surfaced bugs, related concerns)
 - The PR URL or commit SHA if applicable

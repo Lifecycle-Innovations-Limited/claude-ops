@@ -18,15 +18,15 @@ Tailscale IP 100.109.217.31).
 
 Seven services + timers managed by systemd as `ec2-user`:
 
-| Unit | Schedule | Purpose |
-|---|---|---|
-| `pocket-watcher` | every 5 min | polls Pocket AI MCP for new recordings |
-| `pocket-executor` | every 5 min | runs inferred tasks via Claude |
-| `pocket-out-queue` | every 2 min | drains out-queue to notification channels |
-| `pocket-activity-notifier` | every 5 min | sends WhatsApp/email on task events |
-| `pocket-email-bridge` | every 2 min | drains email out-queue |
-| `pocket-whatsapp-bridge` | every 2 min | drains WhatsApp out-queue |
-| `pocket-ops-ui` | always-on | Flask web UI on 127.0.0.1:7777 |
+| Unit                       | Schedule    | Purpose                                   |
+| -------------------------- | ----------- | ----------------------------------------- |
+| `pocket-watcher`           | every 5 min | polls Pocket AI MCP for new recordings    |
+| `pocket-executor`          | every 5 min | runs inferred tasks via Claude            |
+| `pocket-out-queue`         | every 2 min | drains out-queue to notification channels |
+| `pocket-activity-notifier` | every 5 min | sends WhatsApp/email on task events       |
+| `pocket-email-bridge`      | every 2 min | drains email out-queue                    |
+| `pocket-whatsapp-bridge`   | every 2 min | drains WhatsApp out-queue                 |
+| `pocket-ops-ui`            | always-on   | Flask web UI on 127.0.0.1:7777            |
 
 Unit templates live in `claude-ops/scripts/systemd/`. To reinstall after a
 plugin upgrade: `bash claude-ops/scripts/systemd/install-systemd-units.sh`.
@@ -45,16 +45,17 @@ delete; it holds task cursors, queue files, and notification history.
 
 ## Logs
 
-| Log | Path |
-|---|---|
-| ops-ui stdout | `$HOME/.claude/state/pocket/ops-ui.log` |
-| ops-ui stderr | `$HOME/.claude/state/pocket/ops-ui-stderr.log` |
-| pocket-watcher | `journalctl -u pocket-watcher` |
-| all units | `journalctl -u pocket-*` |
+| Log            | Path                                           |
+| -------------- | ---------------------------------------------- |
+| ops-ui stdout  | `$HOME/.claude/state/pocket/ops-ui.log`        |
+| ops-ui stderr  | `$HOME/.claude/state/pocket/ops-ui-stderr.log` |
+| pocket-watcher | `journalctl -u pocket-watcher`                 |
+| all units      | `journalctl -u pocket-*`                       |
 
 ## Mac cleanup
 
 No pocket processes should be running on the Mac. Verify:
+
 ```
 launchctl list | grep -iE "pocket|whatsapp-bridge"   # expect empty
 crontab -l | grep -iE "pocket|ops-cron-pocket"        # expect empty

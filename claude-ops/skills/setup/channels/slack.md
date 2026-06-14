@@ -22,6 +22,7 @@ Sub-flow:
    ```
 
    If `HTTP == 200`: report `"✓ Slack already configured (source: sse_router)"` and skip to step 5 (smoke test). If `HTTP != 200` but the type is `"sse"`, report the router as unreachable and ask:
+
    ```
    Slack SSE router at <url> returned HTTP <code>.
      [Retry / restart the SSE router daemon]
@@ -59,9 +60,11 @@ Sub-flow:
    - `[Fall back to manual paste]` → go to step 2 manual path.
 
 5. **Validate tokens.** Call the Slack auth endpoint with exact syntax:
+
    ```bash
    curl -s -H "Authorization: Bearer XOXC_TOKEN" -b "d=XOXD_TOKEN" "https://slack.com/api/auth.test"
    ```
+
    Expect `{"ok":true, "team_id":"T...", "user_id":"U...", "url":"https://<workspace>.slack.com/"}`. If `ok:false`, show the error and re-ask.
 
 6. **Persist — multi-workspace schema.**
@@ -71,40 +74,48 @@ Sub-flow:
    a. Ask the user for a short workspace name (e.g. `<workspace_a>`, `<workspace_b>`, `personal`). Use `AskUserQuestion` with free-text.
    b. Derive the env-var name automatically: `SLACK_BOT_TOKEN_<UPPERCASE_NAME>`. Validate the resulting identifier matches `^[A-Za-z_][A-Za-z0-9_]*$` (uppercase the name and substitute non-alphanumerics with `_` before validating). If validation fails, re-prompt for a name.
    c. **Persist the token to keychain (macOS) / libsecret (Linux) / Credential Manager (Windows)** via the Bash tool:
-      ```bash
-      # macOS
-      security add-generic-password -U -s "slack-<name>-token" -a "$USER" -w "$TOKEN"
-      # Linux (requires libsecret-tools)
-      echo -n "$TOKEN" | secret-tool store --label="slack-<name>-token" service slack-<name>-token account "$USER"
-      # Windows (PowerShell from WSL or native)
-      cmdkey /generic:slack-<name>-token /user:"$USER" /pass:"$TOKEN"
-      ```
+
+   ```bash
+   # macOS
+   security add-generic-password -U -s "slack-<name>-token" -a "$USER" -w "$TOKEN"
+   # Linux (requires libsecret-tools)
+   echo -n "$TOKEN" | secret-tool store --label="slack-<name>-token" service slack-<name>-token account "$USER"
+   # Windows (PowerShell from WSL or native)
+   cmdkey /generic:slack-<name>-token /user:"$USER" /pass:"$TOKEN"
+   ```
+
    d. **Persist to the user's shell profile** via the Bash tool (do not hand this back to the user — write the line into `~/.zshrc`/`~/.bashrc`/`~/.zprofile`/`~/.envrc` directly, idempotent):
-      ```bash
-      PROFILE="${ZDOTDIR:-$HOME}/.zshrc"
-      [ -f "$HOME/.zshrc" ] || PROFILE="$HOME/.bashrc"
-      LINE="export SLACK_BOT_TOKEN_<NAME>=\"\$(security find-generic-password -s slack-<name>-token -a \$USER -w 2>/dev/null)\""
-      grep -qF "SLACK_BOT_TOKEN_<NAME>" "$PROFILE" 2>/dev/null || printf '\n%s\n' "$LINE" >> "$PROFILE"
-      # Export into the current shell so the next steps see it
-      export SLACK_BOT_TOKEN_<NAME>="$TOKEN"
-      ```
-      For Windows users on PowerShell, append to `$PROFILE` with `Add-Content`.
+
+   ```bash
+   PROFILE="${ZDOTDIR:-$HOME}/.zshrc"
+   [ -f "$HOME/.zshrc" ] || PROFILE="$HOME/.bashrc"
+   LINE="export SLACK_BOT_TOKEN_<NAME>=\"\$(security find-generic-password -s slack-<name>-token -a \$USER -w 2>/dev/null)\""
+   grep -qF "SLACK_BOT_TOKEN_<NAME>" "$PROFILE" 2>/dev/null || printf '\n%s\n' "$LINE" >> "$PROFILE"
+   # Export into the current shell so the next steps see it
+   export SLACK_BOT_TOKEN_<NAME>="$TOKEN"
+   ```
+
+   For Windows users on PowerShell, append to `$PROFILE` with `Add-Content`.
 
    e. **Register the workspace token with the Slack MCP via `claude mcp add`** (this is Claude Code's official mechanism — the wizard runs it via Bash so the user doesn't touch a separate terminal):
-      ```bash
-      claude mcp add "slack-<name>" --transport stdio --env "SLACK_BOT_TOKEN=$TOKEN" \
-        -- npx -y slack-mcp-server@latest --transport stdio || \
-        echo "WARN: claude mcp add failed — workspace will use direct-curl fallback only"
-      ```
-      Capture the exit code. If it succeeds, set `kind` to `bot_token` (or `xoxc_with_cookie` for browser-session tokens with `d` cookie). If it fails, set `kind` to `bot_token_curl_only` so downstream skills know to use direct curl.
+
+   ```bash
+   claude mcp add "slack-<name>" --transport stdio --env "SLACK_BOT_TOKEN=$TOKEN" \
+     -- npx -y slack-mcp-server@latest --transport stdio || \
+     echo "WARN: claude mcp add failed — workspace will use direct-curl fallback only"
+   ```
+
+   Capture the exit code. If it succeeds, set `kind` to `bot_token` (or `xoxc_with_cookie` for browser-session tokens with `d` cookie). If it fails, set `kind` to `bot_token_curl_only` so downstream skills know to use direct curl.
 
    f. **Only after (c)–(e) succeed**, append the entry to `$PREFS_PATH` → `slack_workspaces[]` (atomic write via `jq` + `mv`):
-      ```bash
-      jq --arg name "<name>" --arg env "SLACK_BOT_TOKEN_<NAME>" --arg kind "$KIND" \
-        '.slack_workspaces = ((.slack_workspaces // []) + [{"name": $name, "token_env": $env, "kind": $kind}])' \
-        "$PREFS_PATH" > "${PREFS_PATH}.tmp" && mv "${PREFS_PATH}.tmp" "$PREFS_PATH"
-      ```
-      If any of (c)–(e) failed, **do not** append to `slack_workspaces[]` — surface the failure to the user via `AskUserQuestion`: `[Retry]` / `[Skip this workspace]` / `[Abort setup]`.
+
+   ```bash
+   jq --arg name "<name>" --arg env "SLACK_BOT_TOKEN_<NAME>" --arg kind "$KIND" \
+     '.slack_workspaces = ((.slack_workspaces // []) + [{"name": $name, "token_env": $env, "kind": $kind}])' \
+     "$PREFS_PATH" > "${PREFS_PATH}.tmp" && mv "${PREFS_PATH}.tmp" "$PREFS_PATH"
+   ```
+
+   If any of (c)–(e) failed, **do not** append to `slack_workspaces[]` — surface the failure to the user via `AskUserQuestion`: `[Retry]` / `[Skip this workspace]` / `[Abort setup]`.
 
    g. Also write the legacy compat key for backwards-compat: `channels.slack = {backend: "mcp:slack", team_id: "...", source: "...", status: "configured"}`.
 
@@ -123,6 +134,7 @@ Sub-flow:
 8. **Smoke test per workspace**: for each entry in `slack_workspaces[]`, resolve the token env var and call `auth.test`. The exact syntax depends on the token type:
 
    - **`bot_token` (`xoxb-…`)** or **user-app token (`xoxp-…`)** — pass via `Authorization: Bearer` only:
+
      ```bash
      curl -s -H "Authorization: Bearer ${TOKEN}" "https://slack.com/api/auth.test"
      ```
@@ -145,4 +157,3 @@ Sub-flow:
 - Slack's Terms of Service allow personal-session-token use for your own account. Do not use this flow to access accounts you don't own.
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` and `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/SKILL.md` for full operational instructions, CLI reference, and troubleshooting for this integration. The setup agent can load those files directly when it needs more depth than this wizard provides.
-

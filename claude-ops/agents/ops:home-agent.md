@@ -79,14 +79,14 @@ probe() {
 
 Route by `$SCOPE`:
 
-| SCOPE     | Local path                  | Cloud path        |
-|-----------|-----------------------------|-------------------|
-| devices   | `/devices/device`           | `/devices`        |
-| flows     | `/flow/flow`                | `/flows`          |
-| energy    | `/energy/live`              | `/energy/live`    |
-| presence  | `/presence`                 | `/presence`       |
-| alarms    | `/alarms/alarm`             | `/alarms`         |
-| zones     | `/zones/zone`               | `/zones`          |
+| SCOPE    | Local path        | Cloud path     |
+| -------- | ----------------- | -------------- |
+| devices  | `/devices/device` | `/devices`     |
+| flows    | `/flow/flow`      | `/flows`       |
+| energy   | `/energy/live`    | `/energy/live` |
+| presence | `/presence`       | `/presence`    |
+| alarms   | `/alarms/alarm`   | `/alarms`      |
+| zones    | `/zones/zone`     | `/zones`       |
 
 ## Phase 3 — Shape output
 
@@ -105,6 +105,7 @@ Return a single JSON object on stdout:
 ```
 
 Per-scope summary examples:
+
 - `devices`: `"N devices, M online, K offline (top zones: …)"`
 - `flows`: `"N flows, M enabled, last fired: <name> <age>"`
 - `energy`: `"<W> live, <kWh> today"`

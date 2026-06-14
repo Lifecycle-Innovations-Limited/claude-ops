@@ -1,7 +1,7 @@
 ---
 name: ops-daemon
 description: Check claude-ops background daemon end-to-end and auto-fix common issues. Detects stale plist paths after plugin upgrades, missing service commands, dead processes, corrupt health files, and bash version mismatches.
-argument-hint: "[check|fix|restart|status|uninstall]"
+argument-hint: '[check|fix|restart|status|uninstall]'
 allowed-tools:
   - Bash
   - Read
@@ -31,13 +31,13 @@ Diagnostic + auto-fix surface for the background `ops-daemon` process. Acts like
 
 ### bin/ops-daemon-manager.sh
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon-manager.sh status` | Emit JSON snapshot | `{os, installed, running, pid, plist_version_match, health_fresh, ...}` |
-| `${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon-manager.sh install` | First-time install (idempotent) | Writes plist, loads launchd |
-| `${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon-manager.sh upgrade` | Re-point plist at current PLUGIN_ROOT + reload | Fixes stale version paths |
-| `${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon-manager.sh restart` | Unload + reload without reconfiguring | Clears stuck state |
-| `${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon-manager.sh uninstall` | Stop + remove plist | Returns system to pre-install state |
+| Command                                                         | Usage                                          | Output                                                                  |
+| --------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------- |
+| `${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon-manager.sh status`    | Emit JSON snapshot                             | `{os, installed, running, pid, plist_version_match, health_fresh, ...}` |
+| `${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon-manager.sh install`   | First-time install (idempotent)                | Writes plist, loads launchd                                             |
+| `${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon-manager.sh upgrade`   | Re-point plist at current PLUGIN_ROOT + reload | Fixes stale version paths                                               |
+| `${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon-manager.sh restart`   | Unload + reload without reconfiguring          | Clears stuck state                                                      |
+| `${CLAUDE_PLUGIN_ROOT}/scripts/ops-daemon-manager.sh uninstall` | Stop + remove plist                            | Returns system to pre-install state                                     |
 
 Accepts `--plugin-root PATH` to override auto-detection and `--dry-run` to preview without side effects.
 
@@ -117,8 +117,8 @@ Override the seeded defaults by setting `rate_limit_quotas` in `${CLAUDE_PLUGIN_
 ```json
 {
   "rate_limit_quotas": {
-    "meta_ads": {"quota": 200, "window_seconds": 3600},
-    "klaviyo":  {"quota": 75,  "window_seconds": 60}
+    "meta_ads": { "quota": 200, "window_seconds": 3600 },
+    "klaviyo": { "quota": 75, "window_seconds": 60 }
   }
 }
 ```
@@ -138,13 +138,13 @@ The check is **entirely offline** — it never makes a network call. Warnings su
 
 Route on the first argument:
 
-| Argument | Action |
-|----------|--------|
-| `check` (default) | Run all diagnostics, print a colored report, exit 0 if green / 1 otherwise |
-| `fix` | Run `check`, then per detected issue ask the user for confirmation and apply the fix |
-| `restart` | Call `ops-daemon-manager.sh restart` |
-| `status` | Print the JSON output of `ops-daemon-manager.sh status` verbatim — consumed by other skills |
-| `uninstall` | Ask `[Uninstall]` / `[Cancel]` via `AskUserQuestion`, then call the manager |
+| Argument          | Action                                                                                      |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| `check` (default) | Run all diagnostics, print a colored report, exit 0 if green / 1 otherwise                  |
+| `fix`             | Run `check`, then per detected issue ask the user for confirmation and apply the fix        |
+| `restart`         | Call `ops-daemon-manager.sh restart`                                                        |
+| `status`          | Print the JSON output of `ops-daemon-manager.sh status` verbatim — consumed by other skills |
+| `uninstall`       | Ask `[Uninstall]` / `[Cancel]` via `AskUserQuestion`, then call the manager                 |
 
 ### Diagnostic checklist
 
@@ -169,17 +169,17 @@ Run each check and track results as `pass` / `fail` / `warn`:
 
 For each failed check, `fix` mode proposes a specific repair and asks the user with `AskUserQuestion` (**max 4 options** — always include `[Skip]`):
 
-| Failure | Fix | Destructive? |
-|---------|-----|--------------|
-| Plist stale version path | `ops-daemon-manager.sh upgrade` | Yes — unloads + reloads |
-| Plist missing | `ops-daemon-manager.sh install` | No |
-| Plist invalid XML | Regenerate via `install` (after backup) | Yes — overwrites |
-| Process dead but plist ok | `ops-daemon-manager.sh restart` | Yes — restarts |
-| Health file stale (>120s) | `ops-daemon-manager.sh restart` | Yes |
-| Service missing `command` | Merge from `scripts/daemon-services.example.json` into user's `daemon-services.json` after showing a diff | Yes — writes config |
-| Bash binary missing/<4 | `brew install bash` on macOS; on Linux check `$(command -v bash)` version; ask user to install | No (reports only) |
-| Zombie child processes | `kill <pid>` with per-process confirmation (Rule 5) | Yes |
-| Services config corrupt JSON | Restore from `scripts/daemon-services.default.json` after confirmation + backup | Yes |
+| Failure                      | Fix                                                                                                       | Destructive?            |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------- |
+| Plist stale version path     | `ops-daemon-manager.sh upgrade`                                                                           | Yes — unloads + reloads |
+| Plist missing                | `ops-daemon-manager.sh install`                                                                           | No                      |
+| Plist invalid XML            | Regenerate via `install` (after backup)                                                                   | Yes — overwrites        |
+| Process dead but plist ok    | `ops-daemon-manager.sh restart`                                                                           | Yes — restarts          |
+| Health file stale (>120s)    | `ops-daemon-manager.sh restart`                                                                           | Yes                     |
+| Service missing `command`    | Merge from `scripts/daemon-services.example.json` into user's `daemon-services.json` after showing a diff | Yes — writes config     |
+| Bash binary missing/<4       | `brew install bash` on macOS; on Linux check `$(command -v bash)` version; ask user to install            | No (reports only)       |
+| Zombie child processes       | `kill <pid>` with per-process confirmation (Rule 5)                                                       | Yes                     |
+| Services config corrupt JSON | Restore from `scripts/daemon-services.default.json` after confirmation + backup                           | Yes                     |
 
 **Never batch fixes.** Per Rule 5, each destructive action needs its own `AskUserQuestion` with `[Apply]` / `[Skip]` options.
 

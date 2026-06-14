@@ -1,7 +1,7 @@
 ---
 name: ops-comms
 description: Send and read messages across all channels. Routes based on arguments — whatsapp, email, slack, telegram, discord, notion, or natural language like "send [msg] to [contact]". WhatsApp via mcp__whatsapp__* (Baileys bridge).
-argument-hint: "[channel] | send [message] to [contact] | read [channel] | notion [search query]"
+argument-hint: '[channel] | send [message] to [contact] | read [channel] | notion [search query]'
 allowed-tools:
   - Bash
   - Read
@@ -48,34 +48,36 @@ Before executing, load available context:
 
 ## CLI/API Reference
 
-### whatsapp-bridge (WhatsApp — mcp__whatsapp__*)
+### whatsapp-bridge (WhatsApp — mcp**whatsapp**\*)
 
 **Bridge health** — check bridge is running before any WhatsApp operation:
+
 ```bash
 lsof -i :8080 | grep LISTEN
 launchctl list com.${USER}.whatsapp-bridge
 ```
+
 If not running: `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge`
 
-| Tool | Params | Output |
-|------|--------|--------|
-| `mcp__whatsapp__list_chats` | `{sort_by: "last_active"}` | Array of chats with jid, name, last_message_time |
-| `mcp__whatsapp__list_messages` | `{chat_jid, limit, query}` | Array of messages with is_from_me, content, timestamp, sender |
-| `mcp__whatsapp__search_contacts` | `{query}` | Contacts matching name or phone |
-| `mcp__whatsapp__send_message` | `{recipient, message}` | Send result |
-| `mcp__whatsapp__get_chat` | `{chat_jid}` | Chat metadata |
-| `mcp__whatsapp__get_message_context` | `{chat_jid, message_id}` | Message context window |
+| Tool                                 | Params                     | Output                                                        |
+| ------------------------------------ | -------------------------- | ------------------------------------------------------------- |
+| `mcp__whatsapp__list_chats`          | `{sort_by: "last_active"}` | Array of chats with jid, name, last_message_time              |
+| `mcp__whatsapp__list_messages`       | `{chat_jid, limit, query}` | Array of messages with is_from_me, content, timestamp, sender |
+| `mcp__whatsapp__search_contacts`     | `{query}`                  | Contacts matching name or phone                               |
+| `mcp__whatsapp__send_message`        | `{recipient, message}`     | Send result                                                   |
+| `mcp__whatsapp__get_chat`            | `{chat_jid}`               | Chat metadata                                                 |
+| `mcp__whatsapp__get_message_context` | `{chat_jid, message_id}`   | Message context window                                        |
 
 ### gog CLI (Gmail/Calendar)
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `gog gmail search "in:inbox" --max 50 -j --results-only --no-input` | Search inbox | JSON array of threads |
-| `gog gmail thread get <threadId> -j` | Get full thread with all messages | Full message JSON |
-| `gog gmail send --to "user@example.com" --subject "subj" --body "text"` | Send new email | Send result |
-| `gog gmail send --reply-to-message-id <msgId> --reply-all --body "text"` | Reply all | Send result |
-| `gog gmail send --to "a@b.com" --subject "subj" --body "text" --attach /path/file` | With attachment | Send result |
-| `gog gmail archive <messageId> ... --no-input --force` | Archive messages | Archive result |
+| Command                                                                            | Usage                             | Output                |
+| ---------------------------------------------------------------------------------- | --------------------------------- | --------------------- |
+| `gog gmail search "in:inbox" --max 50 -j --results-only --no-input`                | Search inbox                      | JSON array of threads |
+| `gog gmail thread get <threadId> -j`                                               | Get full thread with all messages | Full message JSON     |
+| `gog gmail send --to "user@example.com" --subject "subj" --body "text"`            | Send new email                    | Send result           |
+| `gog gmail send --reply-to-message-id <msgId> --reply-all --body "text"`           | Reply all                         | Send result           |
+| `gog gmail send --to "a@b.com" --subject "subj" --body "text" --attach /path/file` | With attachment                   | Send result           |
+| `gog gmail archive <messageId> ... --no-input --force`                             | Archive messages                  | Archive result        |
 
 ---
 
@@ -83,24 +85,25 @@ Parse `$ARGUMENTS` and route immediately:
 
 ## Routing table
 
-| Pattern       | Action                                                  |
-| ------------- | ------------------------------------------------------- |
-| `whatsapp`    | Show WhatsApp recent chats — offer to read or send      |
-| `email`       | Show recent email threads via Gmail MCP                 |
-| `slack`       | Show recent Slack activity                              |
-| `telegram`    | Show Telegram recent chats                              |
-| `discord`     | Show recent Discord channel activity (via bin/ops-discord) |
-| `notion`      | Search Notion workspace — pages, comments, tasks          |
-| `voice`       | Voice / phone / video — routes to `/ops:ops-voice` (bin/ops-voice) |
-| `call * `     | Native Phone.app call via `bin/ops-voice phone`           |
-| `facetime *`  | FaceTime audio/video via `bin/ops-voice facetime`         |
-| `zoom`        | Start an instant Zoom meeting via `bin/ops-voice zoom start` |
-| `send * to *` | Parse message and contact, determine best channel, send |
-| `read *`      | Read the specified channel or contact's messages        |
+| Pattern       | Action                                                                                                                                                         |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `whatsapp`    | Show WhatsApp recent chats — offer to read or send                                                                                                             |
+| `email`       | Show recent email threads via Gmail MCP                                                                                                                        |
+| `slack`       | Show recent Slack activity                                                                                                                                     |
+| `telegram`    | Show Telegram recent chats                                                                                                                                     |
+| `discord`     | Show recent Discord channel activity (via bin/ops-discord)                                                                                                     |
+| `notion`      | Search Notion workspace — pages, comments, tasks                                                                                                               |
+| `voice`       | Voice / phone / video — routes to `/ops:ops-voice` (bin/ops-voice)                                                                                             |
+| `call * `     | Native Phone.app call via `bin/ops-voice phone`                                                                                                                |
+| `facetime *`  | FaceTime audio/video via `bin/ops-voice facetime`                                                                                                              |
+| `zoom`        | Start an instant Zoom meeting via `bin/ops-voice zoom start`                                                                                                   |
+| `send * to *` | Parse message and contact, determine best channel, send                                                                                                        |
+| `read *`      | Read the specified channel or contact's messages                                                                                                               |
 | `home alarm`  | Pipe a Homey alarm event as a WhatsApp/Telegram alert — delegates to `/ops:ops-home alarm --notify` (only if `home_automation` is configured in `$PREFS_PATH`) |
-| (empty)       | Show channel picker menu                                |
+| (empty)       | Show channel picker menu                                                                                                                                       |
 
 Natural-language parsing:
+
 - `send "deploy done" to #general on discord` → `bin/ops-discord send general "deploy done"`.
 - `call <contact>` / `dial <contact>` / `phone <contact>` → resolve number, then `bin/ops-voice phone <E.164>`.
 - `facetime <contact>` (with optional `audio`) → `bin/ops-voice facetime <handle> [--audio]`.
@@ -135,6 +138,7 @@ If user picks "Edit message", use `AskUserQuestion` with free-text to get the re
 ### WhatsApp send
 
 **CRITICAL — READ BEFORE SENDING:** Before drafting ANY WhatsApp reply, you MUST:
+
 1. Read the full conversation: `mcp__whatsapp__list_messages {chat_jid: "<JID>", limit: 20}`
 2. Understand which messages have `is_from_me: true` (user sent) vs `is_from_me: false` (contact sent)
 3. Summarize what the conversation is about and what the contact is asking
@@ -155,6 +159,7 @@ Use `mcp__claude_ai_Slack__slack_send_message` with resolved channel/user ID.
 ### Email send (draft)
 
 Use `mcp__claude_ai_Gmail__create_draft` — always create draft first. Then use `AskUserQuestion`:
+
 ```
 Draft created for [recipient]:
   Subject: [subject]
@@ -181,6 +186,7 @@ Use `mcp__claude_ai_Gmail__search_threads` with `query: "in:inbox"` (NOT `is:unr
 **Slack (multi-workspace):**
 
 Read the **derived** `channels.slack.workspaces[]` object from the pre-gathered `bin/ops-unread` output (NOT the raw `preferences.json` → `slack_workspaces[]`, which has no `available` field — it only persists workspace metadata). The `bin/ops-unread` step resolves each workspace's `token_env` and emits `available: true|false` per entry. Iterate that array:
+
 - For each `available: true` entry, use `mcp__claude_ai_Slack__slack_search_public_and_private` with `query: "in:channel"` (NOT `is:unread`) if the MCP token matches, or direct curl for non-bound workspaces. To resolve the token for direct curl, the entry's `token_env` field is the **name** of the env var; validate it matches `^[A-Za-z_][A-Za-z0-9_]*$` before indirect expansion (`${!token_env}`) to avoid bash aborting on invalid identifiers.
 - Label results with the workspace name: `Slack/<workspace_a>`, `Slack/<workspace_b>`, etc.
 - **`channels.slack.multi_workspace == false` / legacy mode**: fall back to `mcp__claude_ai_Slack__slack_search_public_and_private` if `channels.slack.available == true`, otherwise report "Slack not configured".
@@ -194,6 +200,7 @@ Fall back to: `telegram-cli --exec "dialog_list" 2>/dev/null || echo "Telegram M
 
 **Notion:**
 Use `mcp__claude_ai_Notion__notion-search` with the user's query (or `query: ""` sorted by `last_edited_time` for general browsing). For each result:
+
 - Fetch full page content with `mcp__claude_ai_Notion__notion-fetch` using the page URL/ID from search results
 - Get comments with `mcp__claude_ai_Notion__notion-get-comments`
 - Show page title, database name, last editor, and recent comments
@@ -205,6 +212,7 @@ Use `mcp__claude_ai_Notion__notion-search` with the user's query (or `query: ""`
 Use `mcp__claude_ai_Notion__notion-create-comment` with the page ID to reply to a comment thread. For creating new pages in a database, use `mcp__claude_ai_Notion__notion-create-pages`.
 
 Always preview before commenting:
+
 ```
 Ready to comment on Notion page:
   Page: [page title]
@@ -275,6 +283,7 @@ Display the header, then use **batched AskUserQuestion calls** (max 4 options ea
 **Before presenting options**, read `${CLAUDE_PLUGIN_DATA_DIR}/preferences.json` and check which channels are configured. Only show configured channels. If <=4 total options (configured channels + "Send a message"), present in a single call. If >4, batch:
 
 AskUserQuestion call 1 — Read channels:
+
 ```
   [Read WhatsApp]
   [Read Email]
@@ -283,6 +292,7 @@ AskUserQuestion call 1 — Read channels:
 ```
 
 AskUserQuestion call 2 (only if "More..."):
+
 ```
   [Read Telegram]
   [Make a call (voice)]
@@ -298,6 +308,7 @@ Execute the selected action.
 ## Ledger Integration
 
 **CLAIM_KEY by channel and message unit:**
+
 - Slack thread: `slack:thread:<channel>:<ts>`
 - WhatsApp message: `slack:thread:wa:<jid>:<ts>` (reuse slack: namespace for threads)
 - Outbound draft (no inbound thread): `comms:draft:<channel>:<YYYY-MM-DDTHH-MM>`
