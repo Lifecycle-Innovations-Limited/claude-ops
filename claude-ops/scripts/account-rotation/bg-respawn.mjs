@@ -37,9 +37,7 @@ import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import {
-  getTokenForSession,
   extractAccessToken,
-  readLeases,
   recordSessionLease,
   pickAccountForSession,
   readVaultToken,
@@ -267,15 +265,19 @@ export function doRespawn(session, log) {
 
   try {
     const childEnv = { ...process.env };
+    let routingKey = null;
     try {
       const config = readConfig();
       const state = readState();
       // Re-resolve routing before respawn so stale bedrock leases and unleased
       // sessions pick up OAuth after rotation instead of inheriting Bedrock env.
-      const routingKey = pickAccountForSession(session.id, config, state);
-      recordSessionLease(session.id, routingKey, session.pid);
+      routingKey = pickAccountForSession(session.id, config, state);
 
-      let tokenJson = getTokenForSession(session.id, config);
+      let tokenJson = null;
+      if (routingKey && routingKey !== 'bedrock') {
+        const account = config.accounts.find((a) => accountKey(a) === routingKey);
+        if (account) tokenJson = readVaultToken(account);
+      }
       let token = tokenJson ? extractAccessToken(tokenJson) : null;
       if (!token && routingKey !== 'bedrock' && state.activeAccount) {
         const active = config.accounts.find((a) => accountKey(a) === state.activeAccount);
@@ -316,11 +318,9 @@ export function doRespawn(session, log) {
     } catch {}
     log(`[bg-respawn] respawned bg session ${session.id} (pid ${session.pid}, was ${session.status})`);
 
-    // Synchronously resolve new PID and update the lease
+    // Synchronously resolve new PID and persist the lease only after respawn succeeds
     try {
-      const leases = readLeases();
-      const lease = leases[session.id];
-      if (lease) {
+      if (routingKey) {
         let newPid = null;
         for (let i = 0; i < 20; i++) {
           try {
@@ -335,7 +335,7 @@ export function doRespawn(session, log) {
         }
         if (newPid) {
           log(`[bg-respawn] Updated lease for session ${session.id} with new PID ${newPid}`);
-          recordSessionLease(session.id, lease.accountKey, newPid);
+          recordSessionLease(session.id, routingKey, newPid);
           // F4: nudge the re-exec'd session to resume its task (default-off).
           // Only here, after the new pid is resolved (respawn has settled), and
           // only for sessions with saved state (spares returned earlier).
