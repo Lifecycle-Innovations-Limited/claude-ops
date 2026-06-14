@@ -25,7 +25,10 @@ function fraSshHost() {
   } catch {
     /* use default */
   }
-  return FRA_HOSTS[0].trim();
+  if (FRA_HOSTS.length === 0) {
+    throw new Error('no FRA ssh host configured (set AGENT_DASH_FRA_HOSTS)');
+  }
+  return FRA_HOSTS[0];
 }
 const OPS_BG = process.env.OPS_BG_BIN || `${HOME}/Projects/claude-ops/claude-ops/bin/ops-bg`;
 
