@@ -103,7 +103,7 @@ claude --plugin-dir ./claude-ops/claude-ops
 
 ## Commands
 
-All 36 skills, grouped by category:
+All 57 skills, grouped by category:
 
 | 🧭 Navigation                    | 📊 Daily Ops                           |
 | -------------------------------- | -------------------------------------- |
@@ -408,7 +408,7 @@ Just [Claude Code](https://claude.ai/code) 1.0+. Everything else is installed au
 - **`ops-memory-extractor` Claude Code OAuth support** — prefers the OAuth token stored in the macOS Keychain (`Claude Code-credentials`) so memory extraction is billed against the Claude Max subscription instead of the API credit. Falls back to `ANTHROPIC_API_KEY`. The OAuth token is never exported to the shell.
 - **Persistent WhatsApp `--follow`** — `wacli-keepalive.sh` no longer tears down the follower within 5-20 min of start. `INITIAL_BACKFILL_DELAY=30` lets the follower stabilize before the first `--once` sweep, and a reentrant guard prevents overlapping sweeps.
 - **MCP auto-reconnect** — `PreToolUse` hook kills and respawns any disconnected MCP server without user prompting.
-- **30 skills, 14 agents** — up from 21/12 in v0.6.0. Full list in [`claude-ops/README.md`](./claude-ops/README.md#features).
+- **57 skills, 21 agents** — up from 21/12 in v0.6.0. Full list in [`claude-ops/README.md`](./claude-ops/README.md#features).
 - **Models:** C-suite on **Opus 4.6**, scanners/monitors/fix agents on **Sonnet 4.6**, memory extractor on **Haiku 4.5**.
 
 ---
