@@ -118,6 +118,10 @@ CFG_sys_ram=1
 CFG_sys_disk=1
 CFG_sys_publish_peer=1
 CFG_sys_show_peer=1
+CFG_carousel_pool="cost lines global_ops"
+CFG_widgets_line1="ctx_gauge quota_gauge pace_badge cache_badge plan_badge account_arrow"
+CFG_widgets_line2="location model git_branch tasks fleet sys_metrics carousel"
+CFG_widgets_line3="project_rotate"
 
 if [ -n "$_cfg_file" ]; then
   eval $(jq -r '
@@ -135,6 +139,10 @@ if [ -n "$_cfg_file" ]; then
     @sh "CFG_sys_publish_peer=\(if .sys_metrics.publish_peer == false then 0 else 1 end)",
     @sh "CFG_sys_show_peer=\(if .sys_metrics.show_peer == false then 0 else 1 end)"
   ' "$_cfg_file" 2>/dev/null) 2>/dev/null || true
+  CFG_carousel_pool=$(jq -r '(.carousel_pool // ["cost","lines","global_ops"]) | join(" ")' "$_cfg_file" 2>/dev/null) || true
+  CFG_widgets_line1=$(jq -r '(.widgets.line1 // ["ctx_gauge","quota_gauge","pace_badge","cache_badge","plan_badge","account_arrow"]) | join(" ")' "$_cfg_file" 2>/dev/null) || true
+  CFG_widgets_line2=$(jq -r '(.widgets.line2 // ["location","model","git_branch","tasks","fleet","sys_metrics","carousel"]) | join(" ")' "$_cfg_file" 2>/dev/null) || true
+  CFG_widgets_line3=$(jq -r '(.widgets.line3 // ["project_rotate"]) | join(" ")' "$_cfg_file" 2>/dev/null) || true
 fi
 
 # ── Theme colors — one jq from themes.json bundled alongside this script ─────
@@ -750,9 +758,9 @@ if [ "$CFG_fleet_sdk" = "1" ]; then
   fi
 fi
 
-# Cache-refresh countdown
-if [ "$CFG_fleet_cache" = "1" ] && [ -n "$line2_fleet" ]; then
-  refresh_left=$(( ${bg_ttl:-30} - ${bg_age:-0} ))
+# Cache-refresh countdown (only when bg-agent cache is active)
+if [ "$CFG_fleet_cache" = "1" ] && [ "$CFG_fleet_bg" = "1" ] && [ -n "$line2_fleet" ]; then
+  refresh_left=$(( bg_ttl - bg_age ))
   [ "$refresh_left" -lt 0 ] && refresh_left=0
   line2_fleet="${line2_fleet} ${T_dim}↻${refresh_left}s${R}"
 fi
@@ -764,6 +772,7 @@ if [ "${CFG_proj_count:-0}" -gt 0 ] 2>/dev/null && [ -n "$_cfg_file" ]; then
   # Check each configured project's match substring
   for _pk in $CFG_proj_slugs; do
     _match=$(jq -r --arg k "$_pk" '.projects[] | select(.key==$k) | .match // ""' "$_cfg_file" 2>/dev/null)
+    [ -n "$_match" ] || continue
     case "$cwd_lc" in
       *"$_match"*) cur_proj="$_pk"; break ;;
     esac
@@ -773,17 +782,28 @@ fi
 # ── Carousel pool (L2) ────────────────────────────────────────────────────────
 # Rotates every $CFG_carousel_sec seconds (epoch-based, sessions stay in sync).
 cpool=""
-for x in "$cost_part" "$lines_part" "$rl_part"; do
-  [ -n "$x" ] && cpool="${cpool}${SEP}${x}"
+for _cp_item in $CFG_carousel_pool; do
+  _cp_seg=""
+  case "$_cp_item" in
+    cost)       _cp_seg="$cost_part" ;;
+    lines)      _cp_seg="$lines_part" ;;
+    global_ops) _cp_seg="$ops_global" ;;
+    rate_limit|rl|quota) _cp_seg="$rl_part" ;;
+  esac
+  [ -n "$_cp_seg" ] && cpool="${cpool}${SEP}${_cp_seg}"
 done
-[ -n "$ops_global" ] && cpool="${cpool}${SEP}${ops_global}"
 
 # Per-project badge groups NOT matching the current project go in carousel too
 if [ -n "$proj_badges" ]; then
   _oIFS=$IFS; IFS=$(printf '\035')
   set -f
   for _pg in $proj_badges; do
-    [ -n "$_pg" ] && cpool="${cpool}${SEP}${_pg}"
+    [ -z "$_pg" ] && continue
+    if [ -n "$cur_proj" ] && [ -n "$_cfg_file" ]; then
+      _plabel=$(jq -r --arg k "$cur_proj" '.projects[] | select(.key==$k) | .label // .key' "$_cfg_file" 2>/dev/null)
+      case "$_pg" in *"${_plabel:-$cur_proj}"*) continue ;; esac
+    fi
+    cpool="${cpool}${SEP}${_pg}"
   done
   set +f; IFS=$_oIFS
 fi
@@ -850,7 +870,18 @@ fi
 [ -z "$line3" ] && line3="$carousel_slot"
 
 # ── Assemble Line 1 (cockpit instruments) ────────────────────────────────────
-line1=$(pack_line "$cols" "$ctx_bar" "$quota_bar" "$pace_badge" "$cache_badge" "$plan_badge" "$account_arrow")
+set --
+for _w in $CFG_widgets_line1; do
+  case "$_w" in
+    ctx_gauge)     [ -n "$ctx_bar" ] && set -- "$@" "$ctx_bar" ;;
+    quota_gauge)   [ -n "$quota_bar" ] && set -- "$@" "$quota_bar" ;;
+    pace_badge)    [ -n "$pace_badge" ] && set -- "$@" "$pace_badge" ;;
+    cache_badge)   [ -n "$cache_badge" ] && set -- "$@" "$cache_badge" ;;
+    plan_badge)    [ -n "$plan_badge" ] && set -- "$@" "$plan_badge" ;;
+    account_arrow) [ -n "$account_arrow" ] && set -- "$@" "$account_arrow" ;;
+  esac
+done
+line1=$(pack_line "$cols" "$@")
 
 # ── Assemble Line 2 (session + system + fleet + carousel) ────────────────────
 if [ "$cols" -lt 80 ]; then
@@ -891,17 +922,41 @@ else
     done
     set +f; IFS=$_oIFS
   fi
-  line2=$(pack_line "$cols" "$loc_badge" "$model_part" "$git_part" "$tasks_part" \
-    "${agents_part}" "${proj_slot}" "${line2_fleet}" "${sys_part}" \
-    "${peer_badge}" "${load_warn}" "${disk_warn}" "${carousel_slot}")
+  set --
+  for _w in $CFG_widgets_line2; do
+    case "$_w" in
+      location)    [ -n "$loc_badge" ] && set -- "$@" "$loc_badge" ;;
+      model)       [ -n "$model_part" ] && set -- "$@" "$model_part" ;;
+      git_branch)  [ -n "$git_part" ] && set -- "$@" "$git_part" ;;
+      tasks)       [ -n "$tasks_part" ] && set -- "$@" "$tasks_part" ;;
+      fleet)
+        [ -n "$agents_part" ] && set -- "$@" "$agents_part"
+        [ -n "$proj_slot" ] && set -- "$@" "$proj_slot"
+        [ -n "$line2_fleet" ] && set -- "$@" "$line2_fleet"
+        ;;
+      sys_metrics)
+        [ -n "$sys_part" ] && set -- "$@" "$sys_part"
+        [ -n "$peer_badge" ] && set -- "$@" "$peer_badge"
+        [ -n "$load_warn" ] && set -- "$@" "$load_warn"
+        [ -n "$disk_warn" ] && set -- "$@" "$disk_warn"
+        ;;
+      carousel)    [ -n "$carousel_slot" ] && set -- "$@" "$carousel_slot" ;;
+    esac
+  done
+  line2=$(pack_line "$cols" "$@")
 fi
 
 # ── Output ────────────────────────────────────────────────────────────────────
 # Always emit line1 and line2 (guaranteed non-empty: at minimum the plan badge).
-# Line3: print when it carries project badge content (line3_is_proj=1), OR when it
-# is a carousel entry that differs from what line2 already shows (avoids repeating
-# the same slot on two lines when there are no configured projects).
-if [ "$line3_is_proj" = "1" ] || { [ -n "$line3" ] && [ "$line3" != "$carousel_slot" ]; }; then
+# Line3: print when it carries project badge content (line3_is_proj=1) not already
+# on line2, OR when it is a carousel entry that differs from what line2 already shows.
+_print_l3=0
+if [ "$line3_is_proj" = "1" ]; then
+  [ -n "$line3" ] && [ "$line3" != "${proj_slot:-}" ] && _print_l3=1
+elif [ -n "$line3" ] && [ "$line3" != "$carousel_slot" ]; then
+  _print_l3=1
+fi
+if [ "$_print_l3" = "1" ]; then
   line3_out=$(pack_line "$cols" "$line3")
   printf '%s\n%s\n%s' "$line1" "$line2" "$line3_out"
 else

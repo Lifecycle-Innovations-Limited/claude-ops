@@ -167,10 +167,12 @@ while IFS=' ' read -r _alias _platform _revenue_model _org; do
     --argjson b "$_labels_json" \
     '{"key":$k,"label":$l,"match":$m,"badges":$b}') || true
 
-  if [ -z "$_proj_entries" ]; then
-    _proj_entries="$_entry"
-  else
-    _proj_entries="${_proj_entries},${_entry}"
+  if [ -n "$_entry" ]; then
+    if [ -z "$_proj_entries" ]; then
+      _proj_entries="$_entry"
+    else
+      _proj_entries="${_proj_entries},${_entry}"
+    fi
   fi
 
   _idx=$(( _idx + 1 ))
