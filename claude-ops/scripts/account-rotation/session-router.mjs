@@ -35,51 +35,55 @@
  * time. It never touches the global "Claude Code-credentials" keychain entry.
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import { spawnSync, spawn } from 'child_process';
+import { readFileSync, writeFileSync, existsSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+import { spawnSync, spawn } from "child_process";
+import { applyOAuthEnv, applyBedrockEnv } from "./provider-env.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const LEASES_PATH = join(__dirname, 'session-leases.json');
-const IS_LINUX = process.platform === 'linux';
+const LEASES_PATH = join(__dirname, "session-leases.json");
+const IS_LINUX = process.platform === "linux";
 const LEASE_TTL_MS = 30 * 60_000; // 30 min — sessions that die without cleanup are GC'd
 
 // ── Lease store ───────────────────────────────────────────────────────────────
 
-function readLeases() {
+export function readLeases() {
   try {
-    return JSON.parse(readFileSync(LEASES_PATH, 'utf8'));
+    if (!existsSync(LEASES_PATH)) return {};
+    return JSON.parse(readFileSync(LEASES_PATH, "utf8"));
   } catch {
     return {};
   }
 }
 
-function writeLeases(leases) {
+export function writeLeases(leases) {
   try {
     writeFileSync(LEASES_PATH, JSON.stringify(leases, null, 2));
   } catch {}
 }
 
 /** Prune leases for dead/expired sessions. */
-function pruneLeases(leases) {
+export function pruneLeases(leases) {
   const now = Date.now();
   let pruned = false;
   for (const [sid, entry] of Object.entries(leases)) {
+    let alive = false;
+    if (entry.pid) {
+      try {
+        process.kill(entry.pid, 0);
+        alive = true;
+      } catch {}
+    }
+    
+    // PID-less lease fallback OR grace period for dead PIDs during respawn
     const age = now - (entry.ts || 0);
-    if (age > LEASE_TTL_MS) {
-      // Also check if the pid is still alive
-      let alive = false;
-      if (entry.pid) {
-        try {
-          process.kill(entry.pid, 0);
-          alive = true;
-        } catch {}
-      }
-      if (!alive) {
-        delete leases[sid];
-        pruned = true;
-      }
+    if (!alive && age <= (entry.pid ? 60000 : LEASE_TTL_MS)) {
+      alive = true;
+    }
+    if (!alive) {
+      delete leases[sid];
+      pruned = true;
     }
   }
   return pruned;
@@ -94,27 +98,37 @@ function accountKey(a) {
 // ── Vault token read — platform-aware ─────────────────────────────────────────
 
 const KEYCHAIN_ACCOUNT =
-  process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || process.env.LOGNAME || 'claude-ops';
-const LINUX_CRED_PATH = join(process.env.HOME || '', '.claude', '.credentials.json');
+  process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT ||
+  process.env.USER ||
+  "claude-ops";
+const LINUX_CRED_PATH = join(
+  process.env.HOME || "",
+  ".claude",
+  ".credentials.json",
+);
 
-function readVaultToken(account) {
+export function readVaultToken(account) {
   const svc = `Claude-Rotation-${accountKey(account)}`;
   if (IS_LINUX) {
     try {
-      const store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
+      const store = JSON.parse(readFileSync(LINUX_CRED_PATH, "utf8"));
       const val = store[svc];
       if (!val) return null;
-      return typeof val === 'string' ? val : JSON.stringify(val);
+      return typeof val === "string" ? val : JSON.stringify(val);
     } catch {
       return null;
     }
   }
   try {
-    const r = spawnSync('security', ['find-generic-password', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-g'], {
-      timeout: 5000,
-      encoding: 'utf8',
-    });
-    const out = (r.stdout || '') + (r.stderr || '');
+    const r = spawnSync(
+      "security",
+      ["find-generic-password", "-s", svc, "-a", KEYCHAIN_ACCOUNT, "-g"],
+      {
+        timeout: 5000,
+        encoding: "utf8",
+      },
+    );
+    const out = (r.stdout || "") + (r.stderr || "");
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
@@ -132,7 +146,7 @@ function tokenExpired(tokenJson) {
   }
 }
 
-function extractAccessToken(tokenJson) {
+export function extractAccessToken(tokenJson) {
   try {
     return JSON.parse(tokenJson)?.claudeAiOauth?.accessToken || null;
   } catch {
@@ -159,40 +173,92 @@ function extractAccessToken(tokenJson) {
  * @returns {string|null}     accountKey, or null to use global keychain
  */
 export function pickAccountForSession(sessionId, config, state) {
-  if (!process.env.CLAUDE_SESSION_ROUTING) return null; // feature-flagged off
-
+  // Always route if we're called
+  if (sessionId === 'app-releaser' || String(sessionId).includes('releaser')) return 'bedrock';
   const leases = readLeases();
-  pruneLeases(leases);
+  const pruned = pruneLeases(leases);
+  if (pruned) {
+    writeLeases(leases);
+  }
 
-  // Accounts currently leased to live sessions (other than this one being assigned)
-  const leasedKeys = new Set(
-    Object.entries(leases)
-      .filter(([sid]) => sid !== sessionId)
-      .map(([, entry]) => entry.accountKey),
-  );
+  // Count active leases per account key
+  const leaseCounts = {};
+  for (const a of config.accounts) {
+    leaseCounts[accountKey(a)] = 0;
+  }
+  for (const [sid, entry] of Object.entries(leases)) {
+    if (sid !== sessionId && leaseCounts[entry.accountKey] !== undefined) {
+      let alive = false;
+      if (entry.pid) {
+        try {
+          process.kill(entry.pid, 0);
+          alive = true;
+        } catch {}
+      }
+      if (alive) {
+        leaseCounts[entry.accountKey]++;
+      }
+    }
+  }
 
   const now = Date.now();
   let bestAccount = null;
+  let bestLeaseCount = Infinity;
   let bestUtil = Infinity;
+  const SORT_WEIGHT_PCT = 2; // Anti-dogpiling weight per active lease for selection sorting only
+  const MAX_CONCURRENT_PER_ACCOUNT = 2; // Strict limit to prevent Anthropic "session limit"
 
   for (const a of config.accounts) {
     if (a.disabled === true) continue;
     const key = accountKey(a);
-    if (leasedKeys.has(key)) continue; // already owned by another live session
 
     const tokenJson = readVaultToken(a);
     if (!tokenJson || tokenExpired(tokenJson)) continue;
 
-    // Prefer accounts with lower cached utilization
+    const leasesCount = leaseCounts[key] || 0;
+    
+    // STRICT CONCURRENCY CAP
+    if (leasesCount >= MAX_CONCURRENT_PER_ACCOUNT) continue;
+
     const cached = state.accounts?.[key]?.lastUtilization;
     const util = cached?.pct ?? 50; // unknown = assume 50%
-    if (util < bestUtil) {
-      bestUtil = util;
-      bestAccount = a;
+    const maxUtil = a.maxUtilPercent || config.rateLimits.destinationMaxUtilPercent;
+
+    // Only lease if ACTUAL utilization is strictly below the account's cap (e.g. 98% or 50% account cap)
+    if (util < maxUtil) {
+      // Add a tiny weight to the actual utilization to stagger concurrent spawns (anti-dogpiling)
+      const sortedUtil = util + (leasesCount * SORT_WEIGHT_PCT);
+      if (leasesCount < bestLeaseCount || (leasesCount === bestLeaseCount && sortedUtil < bestUtil)) {
+        bestLeaseCount = leasesCount;
+        bestUtil = sortedUtil;
+        bestAccount = a;
+      }
     }
   }
 
-  return bestAccount ? accountKey(bestAccount) : null;
+  if (bestAccount) return accountKey(bestAccount);
+
+  // Bedrock is METERED/paid. Sam directive (2026-06-14): "Bedrock should never be
+  // in use if any /rotate OAuth account has tokens available." The primary loop
+  // above can fall through to Bedrock when every account is over its util cap or
+  // at the concurrency cap — but a usable (non-expired) OAuth token is still
+  // strictly preferable to paying for Bedrock. Second pass: pick the OAuth account
+  // with the lowest known utilization that still has a valid token, ignoring the
+  // soft util/concurrency caps. Only return 'bedrock' if ZERO accounts have a
+  // usable token (true last resort).
+  let fallbackAccount = null;
+  let fallbackUtil = Infinity;
+  for (const a of config.accounts) {
+    if (a.disabled === true) continue;
+    const tokenJson = readVaultToken(a);
+    if (!tokenJson || tokenExpired(tokenJson)) continue;
+    const util = state.accounts?.[accountKey(a)]?.lastUtilization?.pct ?? 50;
+    if (util < fallbackUtil) {
+      fallbackUtil = util;
+      fallbackAccount = a;
+    }
+  }
+  return fallbackAccount ? accountKey(fallbackAccount) : 'bedrock';
 }
 
 /**
@@ -221,11 +287,12 @@ export function releaseSessionLease(sessionId) {
  * Returns null if no per-session lease exists (caller should use global keychain).
  */
 export function getTokenForSession(sessionId, config) {
-  if (!process.env.CLAUDE_SESSION_ROUTING) return null;
   const leases = readLeases();
   const lease = leases[sessionId];
   if (!lease) return null;
-  const account = config.accounts.find((a) => accountKey(a) === lease.accountKey);
+  const account = config.accounts.find(
+    (a) => accountKey(a) === lease.accountKey,
+  );
   if (!account) return null;
   return readVaultToken(account);
 }
@@ -249,35 +316,42 @@ export function getTokenForSession(sessionId, config) {
  * @returns {{ proc: ChildProcess, sessionId: string, accountKey: string|null }}
  */
 export function spawnWithAccount(args, config, state, opts = {}) {
-  const sessionId = opts.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sessionId =
+    opts.sessionId ||
+    `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const childEnv = { ...(opts.env || process.env) };
 
   let assignedKey = null;
 
-  if (process.env.CLAUDE_SESSION_ROUTING) {
+  if (true) {
     const key = pickAccountForSession(sessionId, config, state);
-    if (key) {
+    if (key === 'bedrock') {
+      applyBedrockEnv(childEnv);
+      assignedKey = 'bedrock';
+    } else if (key) {
       const account = config.accounts.find((a) => accountKey(a) === key);
       if (account) {
         const tokenJson = readVaultToken(account);
         const accessToken = tokenJson ? extractAccessToken(tokenJson) : null;
         if (accessToken) {
-          childEnv.CLAUDE_CODE_OAUTH_TOKEN = accessToken;
+          // Scrub Bedrock vars (incl. hardcoded ANTHROPIC_MODEL + AWS_*) before
+          // setting the OAuth token, so the session can't keep paying for Bedrock.
+          applyOAuthEnv(childEnv, accessToken);
           assignedKey = key;
         }
       }
     }
   }
 
-  const proc = spawn('claude', args, {
+  const proc = spawn("claude", args, {
     env: childEnv,
     detached: opts.detached ?? false,
-    stdio: opts.stdio ?? 'inherit',
+    stdio: opts.stdio ?? "inherit",
   });
 
   if (assignedKey) {
     recordSessionLease(sessionId, assignedKey, proc.pid);
-    proc.once('exit', () => releaseSessionLease(sessionId));
+    proc.once("exit", () => releaseSessionLease(sessionId));
   }
 
   return { proc, sessionId, accountKey: assignedKey };
@@ -289,6 +363,10 @@ export function spawnWithAccount(args, config, state, opts = {}) {
  */
 export function listSessionLeases() {
   const leases = readLeases();
+  const pruned = pruneLeases(leases);
+  if (pruned) {
+    writeLeases(leases);
+  }
   const now = Date.now();
   const result = [];
   for (const [sid, entry] of Object.entries(leases)) {
