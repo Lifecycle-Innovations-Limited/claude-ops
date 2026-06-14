@@ -29,6 +29,8 @@ import {
   openSync,
   readSync,
   closeSync,
+  mkdirSync,
+  rmSync,
 } from 'fs';
 import { execFileSync, execSync } from 'child_process';
 import { join, dirname } from 'path';
@@ -168,6 +170,60 @@ export function listLiveBgSessions() {
   return out;
 }
 
+// ── Post-swap continuation injection (F4) ───────────────────────────────────
+// `claude respawn <id>` re-execs a session with the transcript preserved but the
+// agent does NOT auto-resume its task — it just idles waiting for input. A
+// continuation turn nudges it to pick up where it left off.
+//
+// HAZARD: a `claude --resume <sid>` turn that overlaps the respawn (or another
+// --resume on the same sid) corrupts session state. We could NOT confirm a
+// fully corruption-safe mechanism in this environment, so per spec this is
+// DEFAULT-OFF behind CLAUDE_ROTATION_INJECT_CONTINUATION=1. When enabled we
+// guard three ways: (a) only after doRespawn has resolved the NEW pid (respawn
+// settled), (b) a per-sid lock dir so two daemons/ticks can't double-inject,
+// (c) a short settle delay. Even so, treat as experimental until a maintainer
+// validates it against a live fleet.
+const INJECT_CONTINUATION_ENABLED = process.env.CLAUDE_ROTATION_INJECT_CONTINUATION === '1';
+const CONTINUATION_PROMPT =
+  'Your session was hot-swapped from Bedrock to OAuth to stop metered spend. ' +
+  'Continue your previous work from where you left off.';
+
+/**
+ * Inject a one-shot continuation turn into a freshly-respawned session.
+ * No-op unless CLAUDE_ROTATION_INJECT_CONTINUATION=1. Per-sid lock prevents
+ * concurrent --resume (which corrupts state). Best-effort; never throws.
+ * @param {string} sid session/job id
+ * @param {(m:string)=>void} log
+ */
+export function injectContinuation(sid, log) {
+  if (!INJECT_CONTINUATION_ENABLED) return;
+  const lockDir = `/tmp/claude-continuation-lock-${sid}`;
+  try {
+    // Atomic mkdir lock — fails if another inject is already in flight for this sid.
+    mkdirSync(lockDir);
+  } catch {
+    log(`[bg-respawn] continuation inject for ${sid} skipped — lock held`);
+    return;
+  }
+  try {
+    // Brief settle so the re-exec'd session is fully attached before --resume.
+    try {
+      execSync('sleep 2');
+    } catch {}
+    execFileSync(claudeBin(), ['--resume', String(sid), CONTINUATION_PROMPT], {
+      timeout: 30_000,
+      stdio: 'ignore',
+    });
+    log(`[bg-respawn] injected continuation turn into ${sid}`);
+  } catch (e) {
+    log(`[bg-respawn] continuation inject for ${sid} failed: ${e.message?.slice(0, 80)}`);
+  } finally {
+    try {
+      rmSync(lockDir, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
 export function doRespawn(session, log) {
   const stateFile = join(homedir(), '.claude', 'jobs', String(session.id), 'state.json');
   if (!existsSync(stateFile)) {
@@ -250,6 +306,10 @@ export function doRespawn(session, log) {
         if (newPid) {
           log(`[bg-respawn] Updated lease for session ${session.id} with new PID ${newPid}`);
           recordSessionLease(session.id, lease.accountKey, newPid);
+          // F4: nudge the re-exec'd session to resume its task (default-off).
+          // Only here, after the new pid is resolved (respawn has settled), and
+          // only for sessions with saved state (spares returned earlier).
+          injectContinuation(session.id, log);
         } else {
           log(`[bg-respawn] Warning: could not resolve new PID for session ${session.id}`);
         }
