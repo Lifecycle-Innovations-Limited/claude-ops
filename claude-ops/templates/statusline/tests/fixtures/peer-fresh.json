@@ -1,0 +1,8 @@
+{
+  "host": "ams",
+  "cpu_pct": 8,
+  "ram_free_g": 12,
+  "load1": "0.5",
+  "df_free_g": 88,
+  "ts": 0
+}

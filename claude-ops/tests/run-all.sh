@@ -49,6 +49,7 @@ run_suite "$TESTS_DIR/test-safety-hooks.sh"
 run_suite "$TESTS_DIR/test-deploy-fix-hooks.sh"
 run_suite "$TESTS_DIR/test-cloudflare-dns-lib.sh"
 run_suite "$TESTS_DIR/test-ops-dns-provision.sh"
+run_suite "$TESTS_DIR/../templates/statusline/tests/run-tests.sh"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "SUMMARY"
