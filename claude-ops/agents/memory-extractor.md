@@ -21,13 +21,13 @@ for extraction, and writes/merges structured markdown memory files.
 
 ## File Types
 
-| File | Contents |
-|------|----------|
-| `contact_*.md` | Per-contact profile cards (one per person) |
-| `preferences.md` | User communication patterns, tone, scheduling |
-| `topics_active.md` | Ongoing conversations, pending decisions, deadlines |
-| `donts.md` | Things to avoid — extracted from corrections and complaints |
-| `.health` | JSON health status written after each run |
+| File               | Contents                                                    |
+| ------------------ | ----------------------------------------------------------- |
+| `contact_*.md`     | Per-contact profile cards (one per person)                  |
+| `preferences.md`   | User communication patterns, tone, scheduling               |
+| `topics_active.md` | Ongoing conversations, pending decisions, deadlines         |
+| `donts.md`         | Things to avoid — extracted from corrections and complaints |
+| `.health`          | JSON health status written after each run                   |
 
 ## How Skills Use This
 
@@ -85,15 +85,18 @@ confidence: 0.8
 ---
 
 ## Relationship
+
 - Professional contact
 - B2B contact for mobile app testing
 
 ## Communication Style
+
 - Professional, responsive
 - Prefers email
 - English only
 
 ## Recent Context
+
 - Negotiating BrowserStack App Automate deal for my-app
 - Last interaction: pricing discussion (Apr 13)
 ```

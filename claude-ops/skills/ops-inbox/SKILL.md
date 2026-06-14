@@ -1,7 +1,7 @@
 ---
 name: ops-inbox
 description: Full inbox management across all channels — WhatsApp (whatsmeow bridge via mcp__whatsapp__*), iMessage (chat.db reader + AppleScript send via mcp__plugin_imessage_imessage__*), Email (Gmail MCP), Slack (MCP), Telegram (user-auth MCP), Discord (webhook + REST read), Notion (MCP — comments, mentions, assigned tasks). Scans FULL inbox (not just unread), identifies messages needing replies, archives handled conversations.
-argument-hint: "[channel: whatsapp|imessage|email|slack|telegram|discord|notion|all]"
+argument-hint: '[channel: whatsapp|imessage|email|slack|telegram|discord|notion|all]'
 allowed-tools:
   - Bash
   - Read
@@ -63,15 +63,15 @@ For **all** WhatsApp operations in this skill (list chats, read messages, search
 
 If you find yourself reaching for any `wacli ...` shell command, stop and use the MCP tool with the same intent:
 
-| Intent                  | ✅ Use this                                                              | ❌ Do NOT use            |
-|-------------------------|--------------------------------------------------------------------------|---------------------------|
-| List recent chats       | `mcp__whatsapp__list_chats {sort_by: "last_active", limit: 25}`          | `wacli chats list`        |
-| Read full thread        | `mcp__whatsapp__list_messages {chat_jid, limit: 20}`                     | `wacli messages list`     |
-| Full-text search        | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}`              | `wacli messages search`   |
-| Resolve a contact       | `mcp__whatsapp__search_contacts {query: "<name>"}`                        | `wacli contacts`          |
-| Send a reply (after approval) | `mcp__whatsapp__send_message {recipient: "<JID>", message: "<text>"}` | `wacli send`              |
-| Health check            | `lsof -i :8080 \| grep LISTEN` + (macOS) `launchctl print "gui/$(id -u)/com.${USER}.whatsapp-bridge"` / (Linux) `systemctl --user is-active whatsapp-bridge.service` | `wacli doctor` / `~/.wacli/.health` |
-| Trigger history backfill | `curl -fsS -X POST http://127.0.0.1:8080/api/backfill` (claude-ops patch — runs per-chat against the 50 most-recent chats; bridge also auto-backfills 5s after every Connected event) | — |
+| Intent                        | ✅ Use this                                                                                                                                                                           | ❌ Do NOT use                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| List recent chats             | `mcp__whatsapp__list_chats {sort_by: "last_active", limit: 25}`                                                                                                                       | `wacli chats list`                  |
+| Read full thread              | `mcp__whatsapp__list_messages {chat_jid, limit: 20}`                                                                                                                                  | `wacli messages list`               |
+| Full-text search              | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}`                                                                                                                           | `wacli messages search`             |
+| Resolve a contact             | `mcp__whatsapp__search_contacts {query: "<name>"}`                                                                                                                                    | `wacli contacts`                    |
+| Send a reply (after approval) | `mcp__whatsapp__send_message {recipient: "<JID>", message: "<text>"}`                                                                                                                 | `wacli send`                        |
+| Health check                  | `lsof -i :8080 \| grep LISTEN` + (macOS) `launchctl print "gui/$(id -u)/com.${USER}.whatsapp-bridge"` / (Linux) `systemctl --user is-active whatsapp-bridge.service`                  | `wacli doctor` / `~/.wacli/.health` |
+| Trigger history backfill      | `curl -fsS -X POST http://127.0.0.1:8080/api/backfill` (claude-ops patch — runs per-chat against the 50 most-recent chats; bridge also auto-backfills 5s after every Connected event) | —                                   |
 
 **Rationale:** the bridge exposes a typed MCP surface, returns consistent JSON shapes (`is_from_me`, `content`, `timestamp`, `sender`), supports FTS5 search natively, and avoids store-lock contention with the wacli keepalive daemon. Mixing the two surfaces caused inconsistent state in past sessions.
 
@@ -90,35 +90,38 @@ Before executing, load available context:
 The whatsmeow bridge can **silently miss inbound messages** when its history/app-state sync lags — most often on `@lid` chats (e.g. 2026-06-11 it missed a reply from a contact that the Mac WhatsApp.app had). The Mac app keeps an **unencrypted** local Core Data store at `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite`, readable over Tailscale SSH, so it is a reliable ground-truth backstop.
 
 - **When it runs AUTOMATICALLY:** `wa-inbox-fresh.sh` now invokes the Mac cross-check itself whenever the bridge store looks stale — on exit 2 (store unreadable) or when the newest message is >2h old, it prints a `MAC GROUND TRUTH` block (latest 10 messages from the Mac app store) inline in the freshness report. No orchestration needed.
-- **When to use manually:** a contact's *known* reply is missing from the bridge (common on `@lid` chats) — cross-check before classifying that thread as "no reply".
+- **When to use manually:** a contact's _known_ reply is missing from the bridge (common on `@lid` chats) — cross-check before classifying that thread as "no reply".
 - **Command:** `bin/wa-mac-latest.sh --contact <name|number> [N]` (also `--recent [N]`, `--since "YYYY-MM-DD HH:MM"`, add `--json` for machine-readable output). It reads `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite` over SSH. Schema: `ZWAMESSAGE` (`ZTEXT`, `ZISFROMME`, `ZMESSAGEDATE` = seconds since 2001-01-01) joined to `ZWACHATSESSION` (`ZPARTNERNAME`, `ZCONTACTJID`).
-- **Transport chain (`bin/wa-mac-transport.sh`, shared by all wa-mac-* scripts):** ① Tailscale/direct SSH (`WA_MAC_SSH=user@host`) → ② Cloudflare-tunnel SSH (`WA_MAC_CF_HOST=ssh-mac.example.com`, via `cloudflared access ssh` ProxyCommand) when Tailscale is down. One-time wiring: `scripts/setup-wa-mac-cf-tunnel.sh` (installs cloudflared locally + the Mac LaunchDaemon from a remotely-managed tunnel token, then verifies end-to-end). Both env vars live in the shell profile, never in the repo.
+- **Transport chain (`bin/wa-mac-transport.sh`, shared by all wa-mac-\* scripts):** ① Tailscale/direct SSH (`WA_MAC_SSH=user@host`) → ② Cloudflare-tunnel SSH (`WA_MAC_CF_HOST=ssh-mac.example.com`, via `cloudflared access ssh` ProxyCommand) when Tailscale is down. One-time wiring: `scripts/setup-wa-mac-cf-tunnel.sh` (installs cloudflared locally + the Mac LaunchDaemon from a remotely-managed tunnel token, then verifies end-to-end). Both env vars live in the shell profile, never in the repo.
 - **READ-ONLY ground truth for reads.** The reader never writes and never sends. Sends still go through the whatsmeow bridge (`mcp__whatsapp__send_message`) under the Rule-6 outbound-approval gate — the Mac store is only consulted to confirm what actually arrived. The ONLY write-capable Mac surface is `wa-mac-archive.sh` (archive-only, see Tier 4 of the archive ladder).
 - **Why no Linux-native alternative:** there is no official WhatsApp Linux desktop app; the third-party Flatpak clients (`whatsapp-for-linux`, ZapZap) are Electron WhatsApp-Web wrappers that need a GUI, consume a linked-device slot, and store data in encrypted IndexedDB (not a queryable SQLite) — so the Mac `ChatStorage.sqlite` is the preferred backstop.
 
-   **The FULL-THREAD AWARENESS GATE (in "Processing each channel") depends on this step having run first.** That gate's "read both directions incl. `[voice]`" only works once `wa-inbox-fresh.sh` (freshness + backfill) and the voice-note transcription pass (step 0c) have completed and the store has settled — otherwise outbound rows and `[voice]` bodies are still missing and the gate reads an incomplete thread.
+  **The FULL-THREAD AWARENESS GATE (in "Processing each channel") depends on this step having run first.** That gate's "read both directions incl. `[voice]`" only works once `wa-inbox-fresh.sh` (freshness + backfill) and the voice-note transcription pass (step 0c) have completed and the store has settled — otherwise outbound rows and `[voice]` bodies are still missing and the gate reads an incomplete thread.
 
-   **0b. Background backfill + contacts-link** (idempotent, safe every time). The backfill pulls recent messages for the 50 most-active chats; the link populates `messages.db.contacts` from the whatsmeow session store so both `<pn>@s.whatsapp.net` and `<lid>@lid` chat JIDs resolve to names (without it the `contacts` table is empty and LID-format chats show raw phone numbers):
-   ```bash
-   BR="${WHATSAPP_BRIDGE_DIR:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
-   if curl -s -o /dev/null -m 4 http://127.0.0.1:8080/ 2>/dev/null; then
-     curl -fsS -m 10 -X POST http://127.0.0.1:8080/api/backfill >/dev/null 2>&1 &   # recent-conversation backfill
-     [ -f "$BR/link_contacts.py" ] && python3 "$BR/link_contacts.py" >/dev/null 2>&1 &  # contacts link (phone + LID aliases)
-   fi
-   ```
-   Kick this off, then continue with the steps below while it runs — give the link ~2s before name-resolving chats. `link_contacts.py` resolves names via `whatsmeow_contacts` + `whatsmeow_lid_map` (name preference: full_name → first_name → push_name → business_name). It ships via `scripts/install-whatsapp-bridge-linux.sh` into the bridge dir; recreate it from `whatsmeow_contacts`/`whatsmeow_lid_map` if absent.
+  **0b. Background backfill + contacts-link** (idempotent, safe every time). The backfill pulls recent messages for the 50 most-active chats; the link populates `messages.db.contacts` from the whatsmeow session store so both `<pn>@s.whatsapp.net` and `<lid>@lid` chat JIDs resolve to names (without it the `contacts` table is empty and LID-format chats show raw phone numbers):
 
-   **0c. Voice notes are first-class.** Incoming voice notes (`media_type='audio'`, empty `content`) are auto-transcribed into `content` as `[voice] <text>` by the `whatsapp-transcribe.timer` (systemd-user, every 10 min, OpenAI `whisper-1`) — and `wa-inbox-fresh.sh` triggers a transcribe pass on every scan. So a voice note shows up in NEEDS_REPLY / thread scans exactly like a text message; treat a `[voice] …` body as the sender's words. Transcription is idempotent (only ever fills empty audio rows, never clobbers real text) and capped per run, so it never re-bills or stacks.
+  ```bash
+  BR="${WHATSAPP_BRIDGE_DIR:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
+  if curl -s -o /dev/null -m 4 http://127.0.0.1:8080/ 2>/dev/null; then
+    curl -fsS -m 10 -X POST http://127.0.0.1:8080/api/backfill >/dev/null 2>&1 &   # recent-conversation backfill
+    [ -f "$BR/link_contacts.py" ] && python3 "$BR/link_contacts.py" >/dev/null 2>&1 &  # contacts link (phone + LID aliases)
+  fi
+  ```
 
-   **0c-bis. ALL media is now first-class, not just voice.** Beyond voice→`[voice]` (transcribe above), incoming **video / image / document** media (empty `content`) is auto-enriched into `content` as `[video] …` / `[image] …` / `[document] …` by `transcriber/enrich_media.py` (vision for stills/video frames + Whisper for any audio track) on the `whatsapp-enrich.timer` (systemd-user, every 10 min) — and `wa-inbox-fresh.sh` queues an enrich pass on every scan. So an image, clip, or PDF shows up in NEEDS_REPLY / thread scans with a real, readable body, exactly like text. Enrichment is idempotent (only fills empty media rows) and capped per run. The bridge also **self-heals media that 403/404/410s** (stale `directPath`, common for larger media) by asking the sender's phone to re-upload via `SendMediaRetryReceipt` (`apply-patches.py` Fix M), so large media never silently drops.
+  Kick this off, then continue with the steps below while it runs — give the link ~2s before name-resolving chats. `link_contacts.py` resolves names via `whatsmeow_contacts` + `whatsmeow_lid_map` (name preference: full_name → first_name → push_name → business_name). It ships via `scripts/install-whatsapp-bridge-linux.sh` into the bridge dir; recreate it from `whatsmeow_contacts`/`whatsmeow_lid_map` if absent.
 
-   **0d. The scan engine self-refreshes + self-reconciles on EVERY run — this is automatic, you do not orchestrate it.** `bin/ops-inbox-scan` (the primary classifier, step "Scan engine" below) now does the refresh/pull itself, BLOCKING and bounded, before it classifies — so the data is converged by the time you read its JSON, regardless of whether the background `ops-inbox-autosync` hook has finished. On each invocation the scan:
-   - **Refreshes (frontfill/backfill):** if the bridge is reachable on `:8080`, it fires `POST /api/backfill` + `link_contacts.py`, then **waits (bounded ~18s) for the newest stored message timestamp to stop advancing** so the classify pass reads a settled store. This is the blocking guarantee the background hook alone does NOT give. Skip with `OIS_NO_REFRESH=1` (set automatically on repeat calls in one session to avoid re-waiting).
-   - **Reconciles outbound sends (Sam directive 2026-06-05 "include all things I sent to all people"):** it reads the bridge's outbound-send journal (`journalctl --user -u whatsapp-bridge.service`, or the bridge log file on non-systemd hosts) into a `{recipient_jid → latest_send_epoch}` map, and **demotes any NEEDS_REPLY thread whose last inbound is older than a send to any of that person's JIDs** (`reconciled` flag set, moved to WAITING). This catches replies that went out via `/api/send` or a phone send that has not yet landed in `messages.db` — the single most common false-NEEDS_REPLY. Only epoch-stamped send lines drive demotion (a send that genuinely predates the inbound never demotes).
+  **0c. Voice notes are first-class.** Incoming voice notes (`media_type='audio'`, empty `content`) are auto-transcribed into `content` as `[voice] <text>` by the `whatsapp-transcribe.timer` (systemd-user, every 10 min, OpenAI `whisper-1`) — and `wa-inbox-fresh.sh` triggers a transcribe pass on every scan. So a voice note shows up in NEEDS_REPLY / thread scans exactly like a text message; treat a `[voice] …` body as the sender's words. Transcription is idempotent (only ever fills empty audio rows, never clobbers real text) and capped per run, so it never re-bills or stacks.
 
-   Net effect: running `/ops:ops-inbox` autonomously pulls the latest state AND folds in everything the user already sent, with **zero extra orchestration on your part** — just read the scan JSON. A `reconciled` field on a WAITING item means "already answered, reply not yet in the store"; never re-draft it. You still clear the FULL-THREAD AWARENESS GATE on whatever genuine NEEDS_REPLY candidates remain.
+  **0c-bis. ALL media is now first-class, not just voice.** Beyond voice→`[voice]` (transcribe above), incoming **video / image / document** media (empty `content`) is auto-enriched into `content` as `[video] …` / `[image] …` / `[document] …` by `transcriber/enrich_media.py` (vision for stills/video frames + Whisper for any audio track) on the `whatsapp-enrich.timer` (systemd-user, every 10 min) — and `wa-inbox-fresh.sh` queues an enrich pass on every scan. So an image, clip, or PDF shows up in NEEDS_REPLY / thread scans with a real, readable body, exactly like text. Enrichment is idempotent (only fills empty media rows) and capped per run. The bridge also **self-heals media that 403/404/410s** (stale `directPath`, common for larger media) by asking the sender's phone to re-upload via `SendMediaRetryReceipt` (`apply-patches.py` Fix M), so large media never silently drops.
+
+  **0d. The scan engine self-refreshes + self-reconciles on EVERY run — this is automatic, you do not orchestrate it.** `bin/ops-inbox-scan` (the primary classifier, step "Scan engine" below) now does the refresh/pull itself, BLOCKING and bounded, before it classifies — so the data is converged by the time you read its JSON, regardless of whether the background `ops-inbox-autosync` hook has finished. On each invocation the scan:
+  - **Refreshes (frontfill/backfill):** if the bridge is reachable on `:8080`, it fires `POST /api/backfill` + `link_contacts.py`, then **waits (bounded ~18s) for the newest stored message timestamp to stop advancing** so the classify pass reads a settled store. This is the blocking guarantee the background hook alone does NOT give. Skip with `OIS_NO_REFRESH=1` (set automatically on repeat calls in one session to avoid re-waiting).
+  - **Reconciles outbound sends (Sam directive 2026-06-05 "include all things I sent to all people"):** it reads the bridge's outbound-send journal (`journalctl --user -u whatsapp-bridge.service`, or the bridge log file on non-systemd hosts) into a `{recipient_jid → latest_send_epoch}` map, and **demotes any NEEDS_REPLY thread whose last inbound is older than a send to any of that person's JIDs** (`reconciled` flag set, moved to WAITING). This catches replies that went out via `/api/send` or a phone send that has not yet landed in `messages.db` — the single most common false-NEEDS_REPLY. Only epoch-stamped send lines drive demotion (a send that genuinely predates the inbound never demotes).
+
+  Net effect: running `/ops:ops-inbox` autonomously pulls the latest state AND folds in everything the user already sent, with **zero extra orchestration on your part** — just read the scan JSON. A `reconciled` field on a WAITING item means "already answered, reply not yet in the store"; never re-draft it. You still clear the FULL-THREAD AWARENESS GATE on whatever genuine NEEDS_REPLY candidates remain.
 
 1. **Self-heal plugin version pin** — if any `${CLAUDE_PLUGIN_DATA_DIR}` file or `~/.claude/plugins/installed_plugins.json` references a `cache/ops-marketplace/ops/X.Y.Z/` path that no longer exists on disk, downstream hooks (`stop-all.sh`, `ops-post-session-cleanup`) emit `Plugin directory does not exist`. Resolve before scanning:
+
    ```bash
    INSTALLED="$HOME/.claude/plugins/installed_plugins.json"
    CACHE_DIR="$HOME/.claude/plugins/cache/ops-marketplace/ops"
@@ -137,7 +140,8 @@ The whatsmeow bridge can **silently miss inbound messages** when its history/app
      bash "$HOME/.claude/scripts/hooks/ops-plugin-version-heal.sh"   # rewrites daemon-services.json + mcp-proxy/servers.json
    fi
    ```
-   The existing `ops-plugin-version-heal.sh` only rewrites *downstream* targets from `installed_plugins.json` (the source of truth). When the source itself is stale, the heal hook is a no-op — patch it first, then re-run the hook.
+
+   The existing `ops-plugin-version-heal.sh` only rewrites _downstream_ targets from `installed_plugins.json` (the source of truth). When the source itself is stale, the heal hook is a no-op — patch it first, then re-run the hook.
 
 2. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`
    - `default_channels` — which channels to scan by default
@@ -157,7 +161,7 @@ The whatsmeow bridge can **silently miss inbound messages** when its history/app
 
 ## CLI/API Reference
 
-### whatsapp-bridge (WhatsApp — mcp__whatsapp__*)
+### whatsapp-bridge (WhatsApp — mcp**whatsapp**\*)
 
 **Bridge health** — check bridge is running before any WhatsApp operation. Same `lsof` probe across platforms; supervisor command differs:
 
@@ -183,6 +187,7 @@ It restarts via launchctl on Darwin and `systemctl --user` on Linux, then waits 
 If you need the raw recipes:
 
 **macOS** (handles the "service not loaded" case that breaks bare `kickstart`):
+
 ```bash
 LABEL="com.${USER}.whatsapp-bridge"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
@@ -197,6 +202,7 @@ lsof -i :8080 | grep -q LISTEN && echo "bridge up" || echo "bridge FAILED — ch
 ```
 
 **Linux** (systemd-user — the install script's standard path):
+
 ```bash
 systemctl --user daemon-reload
 systemctl --user restart whatsapp-bridge.service
@@ -207,25 +213,28 @@ lsof -i :8080 | grep -q LISTEN && echo "bridge up" || journalctl --user -u whats
 **Why the macOS recipe matters:** bare `launchctl kickstart -k gui/$UID/<label>` exits with `Could not find service` if the LaunchAgent isn't loaded (common after reboot, plist edits, or when the daemon hasn't auto-registered). Always quote the target string and fall back to `launchctl load -w` before retrying.
 
 **First-time Linux install** — if the bridge isn't installed yet on a Linux host:
+
 ```bash
 bash "$CLAUDE_PLUGIN_ROOT/scripts/install-whatsapp-bridge-linux.sh" --wa-phone <E.164>
 ```
+
 This clones lharries/whatsapp-mcp into `~/.local/share/whatsapp-mcp`, applies the in-repo claude-ops patches (Fix A/B pair-phone hardening, auto-backfill on Connected, `POST /api/backfill` REST endpoint, crash-safe `requestHistorySync`, Python LID↔phone↔contact resolver), drops the systemd-user units (`whatsapp-bridge.service`, `whatsapp-backfill.{service,timer}`, `whatsapp-transcribe.{service,timer}`), installs the voice-note transcriber (`transcriber/transcribe_voice_notes.py`), the media enricher (`transcriber/enrich_media.py`, with `whatsapp-enrich.{service,timer}`) and the pre-scan freshness gate (`~/bin/wa-inbox-fresh.sh`), enables linger, and emits the pairing code via `journalctl --user -u whatsapp-bridge -f`. Idempotent: re-running is safe and updates patches in place. Pass `--no-transcribe-timer` to skip voice-note transcription, `--no-enrich-timer` to skip video/image/document enrichment. The transcribe and enrich services read `OPENAI_API_KEY` from `~/.config/systemd/env/mcp-secrets.env`. The media-retry self-heal (Fix M) is part of the bridge patch set, no extra flag.
 
 **MCP tools** (use these instead of any wacli CLI command):
 
-| Tool | Usage | Output |
-|------|-------|--------|
-| `mcp__whatsapp__list_chats` | `{sort_by: "last_active"}` | Array of chats with jid, name, last_message_time |
-| `mcp__whatsapp__list_messages` | `{chat_jid, limit, query}` | Array of messages with id, sender, content, timestamp, is_from_me |
-| `mcp__whatsapp__search_contacts` | `{query}` | Contacts matching name or phone |
-| `mcp__whatsapp__send_message` | `{recipient, message}` | Send result |
-| `mcp__whatsapp__get_chat` | `{chat_jid}` | Chat metadata |
-| `mcp__whatsapp__get_message_context` | `{chat_jid, message_id}` | Message context window |
-| `mcp__whatsapp__archive_chat` | `{chat_jid, archive: true}` | Archive (or unarchive with `archive: false`) a chat — sends app-state mutation via whatsmeow |
-| `mcp__whatsapp__resync_app_state` | `{name: "regular_low", full_sync: true, skip_bad: true}` | Force full app-state resync — run when archive fails with `LTHash mismatch` (server/local desync) |
+| Tool                                 | Usage                                                    | Output                                                                                            |
+| ------------------------------------ | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `mcp__whatsapp__list_chats`          | `{sort_by: "last_active"}`                               | Array of chats with jid, name, last_message_time                                                  |
+| `mcp__whatsapp__list_messages`       | `{chat_jid, limit, query}`                               | Array of messages with id, sender, content, timestamp, is_from_me                                 |
+| `mcp__whatsapp__search_contacts`     | `{query}`                                                | Contacts matching name or phone                                                                   |
+| `mcp__whatsapp__send_message`        | `{recipient, message}`                                   | Send result                                                                                       |
+| `mcp__whatsapp__get_chat`            | `{chat_jid}`                                             | Chat metadata                                                                                     |
+| `mcp__whatsapp__get_message_context` | `{chat_jid, message_id}`                                 | Message context window                                                                            |
+| `mcp__whatsapp__archive_chat`        | `{chat_jid, archive: true}`                              | Archive (or unarchive with `archive: false`) a chat — sends app-state mutation via whatsmeow      |
+| `mcp__whatsapp__resync_app_state`    | `{name: "regular_low", full_sync: true, skip_bad: true}` | Force full app-state resync — run when archive fails with `LTHash mismatch` (server/local desync) |
 
 **Bulk archive non-actionable WA chats** — for newsletters, dead group chats, one-word reactions, etc.:
+
 ```bash
 DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
 for jid in "<NEWSLETTER_JID>@newsletter" "<GROUP_JID>@g.us" "<CONTACT_PHONE>@s.whatsapp.net"; do
@@ -238,7 +247,9 @@ done
 # If you still get HTTP 409, the heal failed — run resync manually as a last resort:
 # curl -s -X POST http://localhost:8080/api/resync_app_state -d '{"name":"regular_low","full_sync":true,"skip_bad":true}'
 ```
+
 **Archive state is locally queryable** (Fix H — bridge persists `archived` flag in `chats` table):
+
 ```bash
 # Inbox = all non-archived chats:
 sqlite3 "$DB" "SELECT jid, name, last_message_time FROM chats WHERE archived=0 ORDER BY last_message_time DESC;"
@@ -247,6 +258,7 @@ sqlite3 "$DB" "SELECT jid, archived FROM chats WHERE jid='<JID>';"
 ```
 
 **Full-text search** — use `mcp__whatsapp__list_messages` with a `query` param (backed by FTS5 after running `scripts/whatsapp-bridge-migrate.sh`):
+
 ```bash
 # Direct sqlite3 FTS query (fallback when MCP unavailable):
 DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
@@ -254,6 +266,7 @@ sqlite3 "$DB" "SELECT chat_jid, sender, content, timestamp FROM messages WHERE r
 ```
 
 **Contact lookup** — use `mcp__whatsapp__search_contacts` or query contacts table directly:
+
 ```bash
 sqlite3 "$DB" "SELECT jid, name, phone FROM contacts WHERE name LIKE '%<name>%' COLLATE NOCASE LIMIT 10;"
 ```
@@ -262,31 +275,31 @@ sqlite3 "$DB" "SELECT jid, name, phone FROM contacts WHERE name LIKE '%<name>%' 
 
 ### gog CLI (Gmail/Calendar)
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `gog gmail search "in:inbox" --max 50 -j --results-only --no-input` | Full inbox scan | JSON array of threads |
-| `gog gmail thread get <threadId> -j` | Get full thread with all messages | Full message JSON |
-| `gog gmail get <messageId> -j` | Get single message | Message JSON |
-| `gog gmail raw <messageId>` | Dump lossless raw Gmail API JSON — includes authoritative `labelIds` | Raw message JSON |
-| `gog gmail archive <messageId> [<messageId>...] --force` | **Archive** — removes the INBOX label (dedicated archive action; `--force`/`-y` skips confirm; add `--no-input` for CI) | Archive result |
-| `gog gmail archive --query "<gmail-query>" --max N --force` | Archive by query | Archive result |
-| `gog gmail messages modify <messageId> --add <LABEL> --remove <LABEL>` | Edit labels only (NOT archive — use the `archive` subcommand above for that) | Labels result |
-| `gog gmail send --to "<email>" --subject "<subj>" --body "<body>"` | Send email | Send result |
-| `gog gmail send --reply-to-message-id <msgId> --reply-all --body "text"` | Reply all | Send result |
-| `gog gmail send --to "<email>" --subject "<subj>" --body "<body>" --track` | Send with open-tracking pixel (requires tracking setup — see Open Tracking section) | Send result + tracking-id |
-| `gog gmail track status` | Show tracking configuration status | configured: true/false |
-| `gog gmail track opens [<tracking-id>] --since <duration> --to <email> -j` | Query email opens for a tracking-id (or all recent opens) | JSON array of open events |
-| `gog gmail mark-read <messageId> ... --no-input` | Mark as read | Result |
-| `gog gmail labels list -j` | List all labels | Labels JSON |
+| Command                                                                    | Usage                                                                                                                   | Output                    |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| `gog gmail search "in:inbox" --max 50 -j --results-only --no-input`        | Full inbox scan                                                                                                         | JSON array of threads     |
+| `gog gmail thread get <threadId> -j`                                       | Get full thread with all messages                                                                                       | Full message JSON         |
+| `gog gmail get <messageId> -j`                                             | Get single message                                                                                                      | Message JSON              |
+| `gog gmail raw <messageId>`                                                | Dump lossless raw Gmail API JSON — includes authoritative `labelIds`                                                    | Raw message JSON          |
+| `gog gmail archive <messageId> [<messageId>...] --force`                   | **Archive** — removes the INBOX label (dedicated archive action; `--force`/`-y` skips confirm; add `--no-input` for CI) | Archive result            |
+| `gog gmail archive --query "<gmail-query>" --max N --force`                | Archive by query                                                                                                        | Archive result            |
+| `gog gmail messages modify <messageId> --add <LABEL> --remove <LABEL>`     | Edit labels only (NOT archive — use the `archive` subcommand above for that)                                            | Labels result             |
+| `gog gmail send --to "<email>" --subject "<subj>" --body "<body>"`         | Send email                                                                                                              | Send result               |
+| `gog gmail send --reply-to-message-id <msgId> --reply-all --body "text"`   | Reply all                                                                                                               | Send result               |
+| `gog gmail send --to "<email>" --subject "<subj>" --body "<body>" --track` | Send with open-tracking pixel (requires tracking setup — see Open Tracking section)                                     | Send result + tracking-id |
+| `gog gmail track status`                                                   | Show tracking configuration status                                                                                      | configured: true/false    |
+| `gog gmail track opens [<tracking-id>] --since <duration> --to <email> -j` | Query email opens for a tracking-id (or all recent opens)                                                               | JSON array of open events |
+| `gog gmail mark-read <messageId> ... --no-input`                           | Mark as read                                                                                                            | Result                    |
+| `gog gmail labels list -j`                                                 | List all labels                                                                                                         | Labels JSON               |
 
 **Known trap — archive verification:** do NOT verify an archive with `gog gmail search "in:inbox"`. That search result is **cached/stale** and keeps returning already-archived messages, making archive look like it failed when it succeeded. Verify the live label state instead:
+
 ```bash
 gog gmail raw <messageId> | python3 -c "import json,sys; d=json.load(sys.stdin); print('INBOX' in d.get('labelIds',[]))"
 # False = archived successfully. gog gmail get -j does NOT reliably populate labelIds; use raw.
 ```
 
 ---
-
 
 ## Scan engine — offline script first (primary), Workflow only for what it can't reach
 
@@ -304,7 +317,7 @@ JSON. No subagents, no MCP, near-zero tokens.
 **Why this exists:** the multi-channel scan used to fan out one Workflow subagent per
 channel. A single real run burned **~330k subagent tokens / 5 agents / ~130s** to do work
 that, for WhatsApp, is a sqlite read, and for Email, a CLI call. The script does the same
-classification (and *better* — it merges each person's lid↔phone chats into one
+classification (and _better_ — it merges each person's lid↔phone chats into one
 conversation and resolves real names from `contacts`) for free. Reserve agent fan-out for
 genuine reasoning, not for reading a database.
 
@@ -333,7 +346,7 @@ genuine reasoning, not for reading a database.
 2. **Telegram** — one `mcp__plugin_ops_telegram__list_dialogs` call (skip the
    `@SamCloudDevBot` / Pocket ops bot dialog — that's automation). Skip if unconfigured.
 3. **FULL-THREAD AWARENESS GATE on the few NEEDS_REPLY candidates** — the script's WhatsApp
-   buckets are merged-thread, last-direction-correct *first passes*; its `groups` entries
+   buckets are merged-thread, last-direction-correct _first passes_; its `groups` entries
    are explicitly un-classified. Its email `needs_reply` is an envelope first pass. Before
    you draft ANY reply, clear the gate per "Processing each channel": for the handful of
    candidates, read the full thread both directions (incl. `[voice]`), write the 2-sentence
@@ -343,7 +356,7 @@ genuine reasoning, not for reading a database.
 
 **When to fall back to the Workflow fan-out below (the exception, not the default):** only
 when the script genuinely can't cover a channel that has real volume needing per-thread
-*reasoning* — e.g. a Slack/Telegram backlog of dozens of human threads to classify, an
+_reasoning_ — e.g. a Slack/Telegram backlog of dozens of human threads to classify, an
 iMessage host (macOS) the script doesn't read, or the WhatsApp store is down and you must
 classify via live MCP. For the common case (WA + email + a glance at Slack/Telegram), the
 script + a couple of inline MCP calls replaces the entire fan-out.
@@ -353,7 +366,7 @@ script + a couple of inline MCP calls replaces the entire fan-out.
 ### Workflow fan-out (FALLBACK — only per the "when to fall back" note above)
 
 When the script can't reach a channel that has real per-thread volume, use the **`Workflow`
-tool** to fan out one **read-only** scanner agent per *such* channel, then synthesize.
+tool** to fan out one **read-only** scanner agent per _such_ channel, then synthesize.
 Channels are scanned concurrently and wall-clock collapses to the slowest single channel.
 **Do not run this for channels the script already covered** — that re-burns the tokens this
 engine exists to save.
@@ -361,8 +374,8 @@ engine exists to save.
 **Hard constraints (these override convenience — they are how this stays Rule-6-safe):**
 
 - **Read-only scanners — Rule 6.** Every scanner agent's prompt MUST state, verbatim in
-  spirit: *"You are READ-ONLY. Do NOT send, archive, mark-read, or mutate anything. Only
-  read / search and classify. Return structured results."* Scanners get only read/search
+  spirit: _"You are READ-ONLY. Do NOT send, archive, mark-read, or mutate anything. Only
+  read / search and classify. Return structured results."_ Scanners get only read/search
   tools. **All sending stays in the main session**, one draft → one approval → one send.
   The workflow NEVER sends, archives, or mutates — it only reads and classifies.
 - **Detect availability FIRST.** Only fan out a scanner for a channel that already passed
@@ -370,7 +383,7 @@ engine exists to save.
   unconfigured / unreachable channel — it burns a turn and produces a misleading
   "unreachable" row. Build the workflow's channel list from the channels you confirmed up.
 - **No `AskUserQuestion` inside the workflow.** Presentation, reply drafting, approval,
-  archive, and the Cron offer all happen back in the main session *after* the workflow
+  archive, and the Cron offer all happen back in the main session _after_ the workflow
   returns. Workflow agents cannot gate sends, so they must never try.
 - **Each scanner loads its own MCP tools** via `ToolSearch select:...` before use, and
   honours the documented reconnect handshake (WhatsApp 3× at 5s, iMessage 5s→15s) before
@@ -384,16 +397,37 @@ Workflow({
   args: [
     // ONE entry per channel detected as AVAILABLE. Build select/steps from the
     // per-channel reference sections below. Examples:
-    { key: 'email',    select: 'select:mcp__gog__gmail_search,mcp__gog__gmail_read_thread,mcp__gog__gmail_labels',
-      steps: 'gmail_search "in:inbox newer_than:7d"; labels+from on the search envelope are first-pass only — before any NEEDS_REPLY, gog gmail thread get per candidate and clear the FULL-THREAD AWARENESS GATE (full thread both directions, 2-sentence arc, reconcile SENT).' },
-    { key: 'slack',    select: 'select:mcp__slack__conversations_unreads,mcp__slack__channels_list,mcp__slack__conversations_history,mcp__slack__conversations_replies',
-      steps: 'conversations_unreads to find unread DMs/channels; read latest via history/replies.' },
-    { key: 'whatsapp', select: 'select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__get_chat',
-      steps: 'list_chats {sort_by:"last_active"}; last_is_from_me is ONLY a first pass. FIRST merge each person lid<->phone chats into one conversation via whatsmeow_lid_map (store/whatsapp.db) so a contact is not double-counted as NEEDS_REPLY on @lid and WAITING on the phone JID. Then, before any NEEDS_REPLY, clear the FULL-THREAD AWARENESS GATE: list_messages {chat_jid, limit: 25} for EACH mapped JID (or the DB union recipe), merge by timestamp, read BOTH directions including is_from_me=1 rows and [voice] transcripts, write the 2-sentence arc summary, and reconcile the user own sends that may be missing from the store. Never classify from the last message alone.' },
-    { key: 'imessage', select: 'select:mcp__plugin_imessage_imessage__chat_messages',
-      steps: 'chat_messages {limit:30} (omit chat_guid); classify each thread by who sent the LAST message. Capture the chat_id GUID from each header.' },
-    { key: 'telegram', select: 'select:mcp__plugin_ops_telegram__list_dialogs,mcp__plugin_ops_telegram__get_messages,mcp__plugin_ops_telegram__search_messages',
-      steps: 'list_dialogs (last 7d); get_messages for dialogs with pending activity.' },
+    {
+      key: 'email',
+      select: 'select:mcp__gog__gmail_search,mcp__gog__gmail_read_thread,mcp__gog__gmail_labels',
+      steps:
+        'gmail_search "in:inbox newer_than:7d"; labels+from on the search envelope are first-pass only — before any NEEDS_REPLY, gog gmail thread get per candidate and clear the FULL-THREAD AWARENESS GATE (full thread both directions, 2-sentence arc, reconcile SENT).',
+    },
+    {
+      key: 'slack',
+      select:
+        'select:mcp__slack__conversations_unreads,mcp__slack__channels_list,mcp__slack__conversations_history,mcp__slack__conversations_replies',
+      steps: 'conversations_unreads to find unread DMs/channels; read latest via history/replies.',
+    },
+    {
+      key: 'whatsapp',
+      select:
+        'select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__get_chat',
+      steps:
+        'list_chats {sort_by:"last_active"}; last_is_from_me is ONLY a first pass. FIRST merge each person lid<->phone chats into one conversation via whatsmeow_lid_map (store/whatsapp.db) so a contact is not double-counted as NEEDS_REPLY on @lid and WAITING on the phone JID. Then, before any NEEDS_REPLY, clear the FULL-THREAD AWARENESS GATE: list_messages {chat_jid, limit: 25} for EACH mapped JID (or the DB union recipe), merge by timestamp, read BOTH directions including is_from_me=1 rows and [voice] transcripts, write the 2-sentence arc summary, and reconcile the user own sends that may be missing from the store. Never classify from the last message alone.',
+    },
+    {
+      key: 'imessage',
+      select: 'select:mcp__plugin_imessage_imessage__chat_messages',
+      steps:
+        'chat_messages {limit:30} (omit chat_guid); classify each thread by who sent the LAST message. Capture the chat_id GUID from each header.',
+    },
+    {
+      key: 'telegram',
+      select:
+        'select:mcp__plugin_ops_telegram__list_dialogs,mcp__plugin_ops_telegram__get_messages,mcp__plugin_ops_telegram__search_messages',
+      steps: 'list_dialogs (last 7d); get_messages for dialogs with pending activity.',
+    },
   ],
   script: `
 export const meta = {
@@ -454,20 +488,20 @@ return await agent(
     schema: { type: 'object', additionalProperties: true } }
 )
 `,
-})
+});
 ```
 
 After the workflow returns the synthesized buckets, proceed to **presentation + reply in
 the main session** using the per-channel sections below. Stage every reply one-at-a-time
 under Rule 6 (one draft → `AskUserQuestion` / approval word → send → next). The workflow
-gave you *what* needs a reply and the `chatId` to reach it; it never sent anything.
+gave you _what_ needs a reply and the `chatId` to reach it; it never sent anything.
 
 ### Fallback — Agent Teams support
 
 When the `Workflow` tool is unavailable (older harness) but
 `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, fall back to **Agent Teams** for the
 "all channels" path — same read-only fan-out, just without the Workflow harness. Set up one
-read-only scanner teammate per *available* channel:
+read-only scanner teammate per _available_ channel:
 
 ```
 TeamCreate("inbox-channels")
@@ -484,8 +518,8 @@ referencing another channel). If neither `Workflow` nor Agent Teams is available
 channels sequentially in the main session.
 
 **Every fallback keeps the same read-only + Rule 6 constraints** — each scanner teammate's
-prompt MUST say *"You are READ-ONLY. Do NOT send any outbound messages. Return drafts to the
-orchestrator who stages them one-by-one."* Sending stays in the main session, always.
+prompt MUST say _"You are READ-ONLY. Do NOT send any outbound messages. Return drafts to the
+orchestrator who stages them one-by-one."_ Sending stays in the main session, always.
 
 ## Pre-gathered data
 
@@ -497,13 +531,13 @@ ${CLAUDE_PLUGIN_ROOT}/../../bin/ops-unread 2>/dev/null || echo '{}'
 
 All channel credentials come from env vars or CLI auth — no hardcoded secrets.
 
-| Variable            | Default     | Purpose                                              |
-| ------------------- | ----------- | ---------------------------------------------------- |
-| `GMAIL_ACCOUNT`     | auto-detect | Gmail account for `gog` CLI                          |
-| `SLACK_MCP_ENABLED` | `false`     | Set `true` when Slack MCP server is configured       |
-| `TELEGRAM_ENABLED`  | `false`     | Set `true` when Telegram user-auth MCP is configured |
-| `NOTION_MCP_ENABLED`| `false`     | Set `true` when Notion MCP integration is configured |
-| `WHATSAPP_BRIDGE_DB`| `~/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db` | Bridge messages DB path |
+| Variable             | Default                                                         | Purpose                                              |
+| -------------------- | --------------------------------------------------------------- | ---------------------------------------------------- |
+| `GMAIL_ACCOUNT`      | auto-detect                                                     | Gmail account for `gog` CLI                          |
+| `SLACK_MCP_ENABLED`  | `false`                                                         | Set `true` when Slack MCP server is configured       |
+| `TELEGRAM_ENABLED`   | `false`                                                         | Set `true` when Telegram user-auth MCP is configured |
+| `NOTION_MCP_ENABLED` | `false`                                                         | Set `true` when Notion MCP integration is configured |
+| `WHATSAPP_BRIDGE_DB` | `~/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db` | Bridge messages DB path                              |
 
 ## Core principle: INBOX ZERO (the goal of this skill — NON-NEGOTIABLE)
 
@@ -533,9 +567,11 @@ All channel credentials come from env vars or CLI auth — no hardcoded secrets.
    - Upstream: tulir/whatsmeow#1171 (SkipBrokenAppStatePatches). When merged, Fix T + Fix V can be retired.
 
    **Tier 4 — server-side rate-limit (429 `rate-overlimit`) or tiers 1–3 exhausted**: WhatsApp's servers are throttling app-state fetches for the account, so NO bridge-side mutation can land (this is server-side; resync retries just re-429). Bypass the bridge entirely and archive via the REAL Mac WhatsApp.app:
+
    ```bash
    bin/wa-mac-archive.sh --batch <file-with-one-jid-or-name-per-line>   # or --contact "<name>" / --jid <pn@s.whatsapp.net>
    ```
+
    The Mac app is a first-class client — its archive mutations sync server-side to the phone and propagate back to the bridge once its app-state heals. The script is **archive-only** (scope-guarded; it can never send or delete), resolves chats from the Mac `ChatStorage.sqlite`, drives the app via AppleScript UI automation in the Aqua session, verifies `ZARCHIVED=1` per chat, and paces (default 4s). Transport = `wa-mac-transport.sh` (Tailscale → Cloudflare tunnel). Map `@lid` JIDs to phone JIDs or names first (the scan JSON carries both). Requires the Mac online on either transport + Accessibility permission for the SSH-launched osascript; on failure it reports per-chat `FAIL` — fall back to waiting out the 429 (15–60 min) and retry Tier 1.
 
    Surface the appropriate tier to the user when archive blocks; don't abandon inbox-zero.
@@ -548,6 +584,7 @@ Do NOT just check unread. Scan the FULL recent inbox for each channel and classi
 
 **CRITICAL SAFETY RULE — NEVER SEND WITHOUT UNDERSTANDING:**
 Before drafting or sending ANY reply on ANY channel, you MUST have read the FULL conversation history (20+ messages) and PROVEN you understand it by summarizing:
+
 1. What the conversation is about
 2. What each party said (distinguish user messages from contact messages)
 3. What the contact is actually asking/saying in their last message
@@ -575,6 +612,7 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
 4. **ops-memories** (if available) — check `~/.claude/plugins/data/ops-ops-marketplace/memories/` for any stored context about this contact or topic
 
 **When presenting a NEEDS REPLY item:**
+
 ```
 ━━━ [Contact Name] — [Subject] ━━━
  Who: [role, company, relationship — from contact search]
@@ -582,13 +620,14 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
  Thread: [2-3 sentence summary of full conversation arc]
  Last msg: [full body of their last message]
  Context: [related threads/decisions/deadlines found]
- 
+
  Draft reply: "[contextually aware draft based on all above]"
- 
+
  [Send] [Edit] [Read full thread] [Skip]
 ```
 
 **When drafting replies:**
+
 - Use the full thread history to maintain conversation continuity
 - Reference specific points from their message
 - Match the contact's communication style (formal/casual, language)
@@ -611,7 +650,7 @@ For each channel, detect availability at runtime:
    - **MCP tool-load handshake**: when both layers are up but `mcp__whatsapp__*` tools aren't listed yet, the SSE handshake is still in flight. Retry `ToolSearch select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__send_message,mcp__whatsapp__archive_chat,mcp__whatsapp__get_chat,mcp__whatsapp__resync_app_state` **up to 3 times with 5s spacing** before declaring unavailable. Never report "WhatsApp MCP not available" while :8080 AND :8090 are both LISTEN — that is a transient handshake, not a configuration failure.
    - **Proxy fd exhaustion** (`EMFILE / Too many open files` in `~/.claude/mcp-proxy/logs/proxy.err.log`): mcp-proxy's `--stateless` mode spawns a new subprocess per SSE connection. macOS launchd's default `maxfiles=256` runs out quickly. Symptom: SSE endpoint resets with `Connection reset by peer` and many stale `whatsapp-mcp-server main.py` zombies linger (`ps aux | grep whatsapp-mcp-server`). Fix: ensure `~/Library/LaunchAgents/com.${USER}.mcp-proxy.plist` has `SoftResourceLimits.NumberOfFiles=4096` + `HardResourceLimits.NumberOfFiles=8192`, then `launchctl unload ~/Library/LaunchAgents/com.${USER}.mcp-proxy.plist && pkill -f whatsapp-mcp-server/.venv && launchctl load -w ~/Library/LaunchAgents/com.${USER}.mcp-proxy.plist`. After restart, Claude's MCP client typically needs a new session to re-handshake; surface this to the user.
    - **QR re-pair**: only if :8080 is up but the bridge itself rejects calls (`/api/health` returns auth error, or messages return 401), check `~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log` for QR pairing prompts.
-   - **Headless / no-MCP-transport fallback (EC2, Linux dev-sandbox, any box where Claude-in-Chrome/Kapture are unreachable) — DO NOT declare WhatsApp unavailable.** If `:8080` is LISTEN and `store/messages.db` exists but `mcp__whatsapp__*` never loads after the 3× retry, the WhatsApp MCP server simply isn't registered in *this* Claude session — the bridge is healthy and the data is right there. **Scan READ-ONLY by querying `messages.db` directly** (`chats`, `messages`, `contacts`, `messages_fts`): NEEDS_REPLY/WAITING from each person's **merged** thread — union both JIDs' `messages` by `timestamp` and classify on the true last row's `is_from_me` (never per-chat `chats.last_is_from_me`; see FULL-THREAD AWARENESS GATE step 1), plus name resolution via `contacts` (populated by step-0 `link_contacts.py`) and thread reads offline. **Merge lid↔phone before classifying** — `whatsmeow_lid_map` when `whatsapp.db` attaches, else `contacts.phone` (same gate recipe). Only *sending* needs a live transport — use `mcp__whatsapp__send_message` if it loaded, else `curl -X POST http://127.0.0.1:8080/api/send -d '{"recipient":"<jid>","message":"<text>"}'` — still under the Rule-6 one-draft→one-approval gate. **Never report "bridge not installed / WhatsApp unavailable" while `:8080` is LISTEN and the DB has rows** — that is a misdiagnosis; classify from the DB instead.
+   - **Headless / no-MCP-transport fallback (EC2, Linux dev-sandbox, any box where Claude-in-Chrome/Kapture are unreachable) — DO NOT declare WhatsApp unavailable.** If `:8080` is LISTEN and `store/messages.db` exists but `mcp__whatsapp__*` never loads after the 3× retry, the WhatsApp MCP server simply isn't registered in _this_ Claude session — the bridge is healthy and the data is right there. **Scan READ-ONLY by querying `messages.db` directly** (`chats`, `messages`, `contacts`, `messages_fts`): NEEDS_REPLY/WAITING from each person's **merged** thread — union both JIDs' `messages` by `timestamp` and classify on the true last row's `is_from_me` (never per-chat `chats.last_is_from_me`; see FULL-THREAD AWARENESS GATE step 1), plus name resolution via `contacts` (populated by step-0 `link_contacts.py`) and thread reads offline. **Merge lid↔phone before classifying** — `whatsmeow_lid_map` when `whatsapp.db` attaches, else `contacts.phone` (same gate recipe). Only _sending_ needs a live transport — use `mcp__whatsapp__send_message` if it loaded, else `curl -X POST http://127.0.0.1:8080/api/send -d '{"recipient":"<jid>","message":"<text>"}'` — still under the Rule-6 one-draft→one-approval gate. **Never report "bridge not installed / WhatsApp unavailable" while `:8080` is LISTEN and the DB has rows** — that is a misdiagnosis; classify from the DB instead.
    - **User prompt** (only after ALL the above fail — i.e. `:8080` genuinely down AND no usable `messages.db`): `AskUserQuestion` with `[Restart bridge]`, `[Restart mcp-proxy]`, `[Skip WhatsApp]`.
 3. **Slack**: Read the derived `channels.slack` object from pre-gathered `bin/ops-unread` data (it resolves each `token_env` and reports per-workspace `available`; do NOT read raw `preferences.json → slack_workspaces[]` directly — that array has no `available` flag).
    - **Multi-workspace** (`"multi_workspace": true`): iterate the `workspaces` array. For each `available: true` entry, scan via `mcp__claude_ai_Slack__*` if the MCP token matches, or via direct curl. To resolve the token for direct curl, validate `token_env` matches `^[A-Za-z_][A-Za-z0-9_]*$` before `${!token_env}` indirect expansion. Aggregate results; label each message block with the workspace name.
@@ -654,6 +693,7 @@ For each channel, detect availability at runtime:
 Use **batched AskUserQuestion calls** (max 4 options each). Only show channels that are configured and have messages. If <=4 total options, use a single call.
 
 AskUserQuestion call 1:
+
 ```
   [All channels (fastest — one pass)]
   [WhatsApp only]
@@ -662,6 +702,7 @@ AskUserQuestion call 1:
 ```
 
 AskUserQuestion call 2 (only if "More..."):
+
 ```
   [Slack only]
   [Telegram only]
@@ -745,7 +786,9 @@ The per-channel classify/draft steps below (WhatsApp, iMessage, email) all refer
 ### WhatsApp (FULL SCAN + DEEP CONTEXT)
 
 **Phase 1 — Classify:**
+
 1. Get all **non-archived** chats. The bridge now persists archive state locally (Fix H), so the inbox working set is chats where `archived=0`:
+
    ```bash
    DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
    # Paginate: fetch all non-archived chats ordered by last activity.
@@ -753,38 +796,43 @@ The per-channel classify/draft steps below (WhatsApp, iMessage, email) all refer
    # so this returns the full real inbox regardless of age.
    sqlite3 "$DB" "SELECT jid, name, last_message_time FROM chats WHERE archived=0 ORDER BY last_message_time DESC;"
    ```
+
    When the MCP tool is used instead (`mcp__whatsapp__list_chats {sort_by:"last_active"}`), filter client-side by `archived != 1` on the returned objects. The MCP server exposes the `archived` field from the `chats` table once the column exists.
 
    **7-day recency is a secondary signal, not a hard cutoff.** Apply it to deprioritise very old non-archived chats when there are many, but never use it to silently drop chats from the working set — an unanswered message from 10 days ago is still actionable.
 
    **TIME_AGO — `last_message_time` is an RFC3339 string with timezone offset** (e.g. `"2026-05-24T14:55:06+02:00"`), NOT a unix epoch integer. Parse with full TZ awareness:
+
    ```python
    from datetime import datetime, timezone
    dt = datetime.fromisoformat(last_message_time)   # preserves offset
    delta = datetime.now(timezone.utc) - dt.astimezone(timezone.utc)
    ```
+
    Never strip the timezone suffix before parsing — that produces a naive datetime and wrong deltas.
 
-3. **NAME RESOLUTION — contacts.db is PRIMARY, giga memory is fallback only.**
+2. **NAME RESOLUTION — contacts.db is PRIMARY, giga memory is fallback only.**
+
    ```bash
    DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
    sqlite3 "$DB" "SELECT name FROM contacts WHERE jid='$JID' LIMIT 1;"
    ```
+
    Use the DB result as the display name. If the DB returns empty, fall back to the `name` field in the `list_chats` response. Only call `mcp__giga__evoke` when both are empty.
 
-4. **DIRECTION — `last_is_from_me` is the FIRST PASS ONLY.** Read it off the chat object for a quick provisional bucket, but it NEVER finalises a NEEDS_REPLY — the **FULL-THREAD AWARENESS GATE** above is mandatory before any chat is presented as NEEDS_REPLY:
+3. **DIRECTION — `last_is_from_me` is the FIRST PASS ONLY.** Read it off the chat object for a quick provisional bucket, but it NEVER finalises a NEEDS_REPLY — the **FULL-THREAD AWARENESS GATE** above is mandatory before any chat is presented as NEEDS_REPLY:
    - `last_is_from_me == 1` → provisionally **WAITING** (you sent last; no reply needed)
    - `last_is_from_me == 0` → provisional **NEEDS REPLY** candidate — must clear the gate (read ≥25 both directions incl. `[voice]`, write the 2-sentence arc, reconcile the user's own sends) before it is confirmed.
 
-5. For chats where `last_is_from_me` is absent or null, fetch the thread as fallback:
+4. For chats where `last_is_from_me` is absent or null, fetch the thread as fallback:
    `mcp__whatsapp__list_messages` with `{chat_jid: "<JID>", limit: 25}` — read BOTH directions (capture `is_from_me=1` rows and `[voice]` transcripts), not just the **last element** of the returned array.
 
-6. Assign provisional buckets only (same direction signals as step 4 — use `last_is_from_me` on the chat object; only after the step 5 thread fallback use the last element's `is_from_me`). **Do not confirm NEEDS REPLY here** — step 7 clears the FULL-THREAD AWARENESS GATE first:
+5. Assign provisional buckets only (same direction signals as step 4 — use `last_is_from_me` on the chat object; only after the step 5 thread fallback use the last element's `is_from_me`). **Do not confirm NEEDS REPLY here** — step 7 clears the FULL-THREAD AWARENESS GATE first:
    - **NEEDS REPLY candidate**: `last_is_from_me == 0`, or (fallback only) last thread message `is_from_me: false`
    - **WAITING** (provisional): `last_is_from_me == 1`, or (fallback only) last thread message `is_from_me: true`
    - **ARCHIVE**: Newsletters (`@newsletter` JIDs), dead group chats with no recent activity, one-word reactions, or concluded conversations. Bulk-archive these via `mcp__whatsapp__archive_chat {chat_jid, archive: true}` after user confirmation. The bridge's `/api/archive` endpoint (Fix F) auto-heals LTHash corruption internally and retries once — you no longer need to manually run `resync_app_state` first. If it still returns `409 conflict`, run `mcp__whatsapp__resync_app_state {name: "regular_low", full_sync: true, skip_bad: true}` as a fallback (skip_bad skips server-side patches that fail LTHash verification — without it a wedged chain re-fails on the same patch forever) then retry.
 
-7. **Cross-thread answered-elsewhere check (BOTH DIRECTIONS — scan Sam's own sent messages).** Before presenting any chat as NEEDS REPLY, verify it has not already been answered in another channel or in a later message within the same thread that the `last_is_from_me` flag missed. This is the most common source of false NEEDS_REPLY:
+6. **Cross-thread answered-elsewhere check (BOTH DIRECTIONS — scan Sam's own sent messages).** Before presenting any chat as NEEDS REPLY, verify it has not already been answered in another channel or in a later message within the same thread that the `last_is_from_me` flag missed. This is the most common source of false NEEDS_REPLY:
    - **Same-thread recheck**: when `last_is_from_me == 0`, call `mcp__whatsapp__list_messages {chat_jid, limit: 25}` and scan ALL of them (capturing `is_from_me=1` rows and `[voice]` transcripts) for `is_from_me: true` after the inbound message — if one exists, reclassify as WAITING. This is part of clearing the FULL-THREAD AWARENESS GATE, not an optional extra.
    - **Cross-thread outbound check**: for a NEEDS REPLY candidate, search Sam's own sent messages across ALL threads: `mcp__whatsapp__list_messages {query: "<contact_name_or_topic>", limit: 10}` and check `is_from_me: true` entries — if Sam sent a reply on a different JID (e.g. replied in a group that includes the same person, or via a secondary number) after the inbound timestamp, reclassify as HANDLED.
    - **DB fallback** (when MCP tools unavailable): `SELECT m.is_from_me, m.timestamp FROM messages m WHERE m.chat_jid != '<this_jid>' AND m.is_from_me=1 AND m.timestamp > <inbound_ts> AND m.body LIKE '%<keyword>%' LIMIT 5` — a hit reclassifies as HANDLED.
@@ -792,6 +840,7 @@ The per-channel classify/draft steps below (WhatsApp, iMessage, email) all refer
 
 **Phase 2 — Build context for NEEDS REPLY chats (run in parallel):**
 For each NEEDS REPLY chat:
+
 1. **Full conversation summary** — read all 20 messages, summarize the arc: what was discussed, key decisions, open questions
 2. **Contact profile** — search for this person:
    - `mcp__whatsapp__list_messages` with `{query: "<contact_name>", limit: 10}` — mentions across chats
@@ -832,6 +881,7 @@ If "More...":
 Use `AskUserQuestion` for each NEEDS REPLY chat.
 
 **When drafting WhatsApp replies:**
+
 - Match the user's language (if they wrote Dutch to this contact, draft in Dutch)
 - Match the user's style (casual/formal, emoji usage, message length)
 - Reference specific points from the contact's message
@@ -842,20 +892,20 @@ Reply via: `mcp__whatsapp__send_message` with `{recipient: "<JID>", message: "<m
 
 **WhatsApp bridge reference:**
 
-| Operation | Tool / Command |
-|-----------|---------------|
-| List chats | `mcp__whatsapp__list_chats {sort_by: "last_active"}` |
-| Read messages (both directions, incl. `[voice]`) | `mcp__whatsapp__list_messages {chat_jid, limit: 25, include_context: true}` — `include_context: true` is the HARD DEFAULT, never `false` |
-| Search messages (FTS) | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}` |
-| Find contact | `mcp__whatsapp__search_contacts {query: "<name>"}` |
-| Send message | `mcp__whatsapp__send_message {recipient, message}` |
-| Chat metadata | `mcp__whatsapp__get_chat {chat_jid}` |
-| Message context | `mcp__whatsapp__get_message_context {chat_jid, message_id}` |
-| Check bridge (whatsmeow) | `lsof -i :8080 \| grep LISTEN` |
-| Check MCP proxy (Claude client transport) | `lsof -i :8090 \| grep LISTEN` + `curl -sS -m 3 http://127.0.0.1:8090/servers/whatsapp/sse \| head -1` |
-| Load WhatsApp MCP tool schemas | `ToolSearch select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__send_message,mcp__whatsapp__archive_chat,mcp__whatsapp__get_chat,mcp__whatsapp__resync_app_state` (retry 3× at 5s) |
-| Restart bridge | See robust restart recipe above (load-then-kickstart). Bare `launchctl kickstart` fails if the agent isn't loaded. |
-| Restart MCP proxy | `bash ~/.claude/scripts/hooks/ops-plugin-version-heal.sh` then re-check `${CLAUDE_PLUGIN_DATA_DIR}/daemon-services.json` |
+| Operation                                        | Tool / Command                                                                                                                                                                                                                             |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| List chats                                       | `mcp__whatsapp__list_chats {sort_by: "last_active"}`                                                                                                                                                                                       |
+| Read messages (both directions, incl. `[voice]`) | `mcp__whatsapp__list_messages {chat_jid, limit: 25, include_context: true}` — `include_context: true` is the HARD DEFAULT, never `false`                                                                                                   |
+| Search messages (FTS)                            | `mcp__whatsapp__list_messages {query: "<text>", limit: 20}`                                                                                                                                                                                |
+| Find contact                                     | `mcp__whatsapp__search_contacts {query: "<name>"}`                                                                                                                                                                                         |
+| Send message                                     | `mcp__whatsapp__send_message {recipient, message}`                                                                                                                                                                                         |
+| Chat metadata                                    | `mcp__whatsapp__get_chat {chat_jid}`                                                                                                                                                                                                       |
+| Message context                                  | `mcp__whatsapp__get_message_context {chat_jid, message_id}`                                                                                                                                                                                |
+| Check bridge (whatsmeow)                         | `lsof -i :8080 \| grep LISTEN`                                                                                                                                                                                                             |
+| Check MCP proxy (Claude client transport)        | `lsof -i :8090 \| grep LISTEN` + `curl -sS -m 3 http://127.0.0.1:8090/servers/whatsapp/sse \| head -1`                                                                                                                                     |
+| Load WhatsApp MCP tool schemas                   | `ToolSearch select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__send_message,mcp__whatsapp__archive_chat,mcp__whatsapp__get_chat,mcp__whatsapp__resync_app_state` (retry 3× at 5s) |
+| Restart bridge                                   | See robust restart recipe above (load-then-kickstart). Bare `launchctl kickstart` fails if the agent isn't loaded.                                                                                                                         |
+| Restart MCP proxy                                | `bash ~/.claude/scripts/hooks/ops-plugin-version-heal.sh` then re-check `${CLAUDE_PLUGIN_DATA_DIR}/daemon-services.json`                                                                                                                   |
 
 **Bridge troubleshooting:**
 
@@ -871,6 +921,7 @@ iMessage is a **first-class channel, exactly like WhatsApp**: scannable for repl
 **Transport — MCP only.** Use `mcp__plugin_imessage_imessage__chat_messages` to read and `mcp__plugin_imessage_imessage__reply` to send. Do NOT shell out to `sqlite3 ~/Library/Messages/chat.db` or raw `osascript` from this skill — the plugin already wraps both safely (allowlist gating on send, TCC-aware reads, text auto-chunking). Raw AppleScript sends bypass the allowlist and are reserved for the separate IMESSAGE LIFELINE path, not inbox triage.
 
 **Phase 1 — Classify:**
+
 1. Pull all allowlisted threads in one call: `mcp__plugin_imessage_imessage__chat_messages {limit: 30}` (omit `chat_guid` to read every allowlisted chat at once; pass a specific `chat_guid` to drill into one thread, `limit` max 500).
 2. The result is **rendered conversation text, not a JSON array**. Each block starts with a header labelling the thread `DM` or `Group` and its participant list, followed by timestamped messages oldest-first. Messages you sent are marked as from-you (e.g. `Me:` / `→`); inbound messages show the sender's handle (`+15551234567` or `someone@icloud.com`). The thread's `chat_id` (a GUID like `iMessage;-;+15551234567` or `iMessage;+;chat<digits>`) is printed in the header — capture it; you need it to reply.
 3. For EVERY thread, understand the conversation:
@@ -884,6 +935,7 @@ iMessage is a **first-class channel, exactly like WhatsApp**: scannable for repl
 
 **Phase 2 — Build context for NEEDS REPLY threads (run in parallel):**
 For each NEEDS REPLY thread:
+
 1. **Full conversation summary** — read the recent messages, summarize the arc: what was discussed, key decisions, open questions.
 2. **Contact profile** — search for this person across channels (the handle is a phone number or email, which cross-references cleanly):
    - `mcp__whatsapp__search_contacts {query: "<name or number>"}` — WhatsApp presence
@@ -918,6 +970,7 @@ For each NEEDS REPLY thread:
 Use `AskUserQuestion` for each NEEDS REPLY thread.
 
 **When drafting iMessage replies:**
+
 - Match the user's language (if they texted Dutch to this contact, draft in Dutch).
 - Match the user's style (casual/formal, emoji usage, message length).
 - Reference specific points from the contact's message.
@@ -928,6 +981,7 @@ Use `AskUserQuestion` for each NEEDS REPLY thread.
 Reply via `mcp__plugin_imessage_imessage__reply {chat_id: "<GUID from the thread header>", text: "<msg>"}`. The `chat_id` is the GUID, NOT a bare phone number — a bare number is rejected `"not allowlisted"`. Optionally attach files with `files: ["/abs/path.png"]` (sent as separate messages after the text).
 
 Outbound-approval applies by sender:
+
 - **Third parties (anyone other than the user):** this is covered 1:1 messaging under Rule 6 and the user's `block-outbound-comms.py` hook. Stage ONE draft, show the user the full message (`chat_id` + recipient + full body), get explicit per-message approval (`[Send]` via `AskUserQuestion`, or a plain-chat approval word), THEN call `reply`. The hook requires a single-use token at `/tmp/.claude-send-ok` (120s TTL, consumed on send); `--dangerously-skip-permissions` does NOT bypass it. Never batch — one token = one send.
 - **Sam-facing replies (texting the user themselves — self-chat / the user's own handle):** exempt from the per-message approval gate. These are status pings to the user, not outbound comms to a third party, so you may `reply` to the user's own chat directly. The user's working self-reply `chat_id` is recorded in the auto-memory note `imessage-sam-chat-id` (the GUID form — a bare number bounces, and delivery may surface on a different one of the user's linked handles than the one addressed). Use that note's verified `chat_id` rather than guessing; never hardcode a real number into this public skill.
 
@@ -935,14 +989,14 @@ Outbound-approval applies by sender:
 
 **iMessage plugin reference:**
 
-| Operation | Tool |
-|-----------|------|
-| Read all allowlisted threads | `mcp__plugin_imessage_imessage__chat_messages {limit: 30}` |
-| Read one thread | `mcp__plugin_imessage_imessage__chat_messages {chat_guid: "<GUID>", limit: 100}` |
-| Send reply (after approval for 3rd parties) | `mcp__plugin_imessage_imessage__reply {chat_id: "<GUID>", text: "<msg>"}` |
-| Send with attachment | `mcp__plugin_imessage_imessage__reply {chat_id: "<GUID>", text: "<msg>", files: ["/abs/path"]}` |
-| Load iMessage MCP tool schemas | `ToolSearch select:mcp__plugin_imessage_imessage__chat_messages,mcp__plugin_imessage_imessage__reply` |
-| Manage allowlist (USER runs this, never you) | `/imessage:access` (terminal) |
+| Operation                                    | Tool                                                                                                  |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Read all allowlisted threads                 | `mcp__plugin_imessage_imessage__chat_messages {limit: 30}`                                            |
+| Read one thread                              | `mcp__plugin_imessage_imessage__chat_messages {chat_guid: "<GUID>", limit: 100}`                      |
+| Send reply (after approval for 3rd parties)  | `mcp__plugin_imessage_imessage__reply {chat_id: "<GUID>", text: "<msg>"}`                             |
+| Send with attachment                         | `mcp__plugin_imessage_imessage__reply {chat_id: "<GUID>", text: "<msg>", files: ["/abs/path"]}`       |
+| Load iMessage MCP tool schemas               | `ToolSearch select:mcp__plugin_imessage_imessage__chat_messages,mcp__plugin_imessage_imessage__reply` |
+| Manage allowlist (USER runs this, never you) | `/imessage:access` (terminal)                                                                         |
 
 **iMessage troubleshooting:**
 
@@ -958,11 +1012,11 @@ Outbound-approval applies by sender:
 
 The two main read commands return DIFFERENT envelopes — agents have repeatedly written `payload.headers` parsers expecting the search shape and gotten `KeyError: 'value'` or `'payload'` on thread output:
 
-| Command | Top-level keys | Where messages live | Per-message shape |
-|---------|---------------|---------------------|-------------------|
-| `gog gmail search ... -j --results-only` | array of result objects | (each element IS a thread summary) | flat: `{id, date, from, subject, labels, messageCount}` |
-| `gog gmail thread get <id> -j` | `{downloaded, thread}` | `thread.messages[]` | full: `{id, labelIds, payload: {headers: [{name, value}, ...]}, ...}` |
-| `gog gmail get <messageId> -j` | full message envelope | (no nesting) | `{id, labelIds, payload: {headers}, ...}` |
+| Command                                  | Top-level keys          | Where messages live                | Per-message shape                                                     |
+| ---------------------------------------- | ----------------------- | ---------------------------------- | --------------------------------------------------------------------- |
+| `gog gmail search ... -j --results-only` | array of result objects | (each element IS a thread summary) | flat: `{id, date, from, subject, labels, messageCount}`               |
+| `gog gmail thread get <id> -j`           | `{downloaded, thread}`  | `thread.messages[]`                | full: `{id, labelIds, payload: {headers: [{name, value}, ...]}, ...}` |
+| `gog gmail get <messageId> -j`           | full message envelope   | (no nesting)                       | `{id, labelIds, payload: {headers}, ...}`                             |
 
 **Canonical thread-classification recipe** (copy-paste-safe, handles empty/error threads gracefully):
 
@@ -995,11 +1049,12 @@ def classify_thread(thread_id):
 **Search-envelope first pass (provisional only)** — `gog gmail search` returns `labels` and `from` from the last message for a quick bucket (`WAITING` vs **NEEDS REPLY candidate**). This does NOT satisfy the FULL-THREAD AWARENESS GATE and must NOT confirm NEEDS_REPLY. For every candidate, call `gog gmail thread get` and clear the gate (full thread both directions, 2-sentence arc, reconcile the user's own SENT messages) before presenting the thread.
 
 **Phase 1 — Classify:**
+
 1. Search `in:inbox` (NOT `is:unread`) via `gog gmail search -a $GMAIL_ACCOUNT -j --results-only --no-input --max 30 "in:inbox"`
 2. **For triage:** use `labels` + `from` on the search envelope only as a first pass to tag NEEDS REPLY candidates vs WAITING. For every candidate, call `gog gmail thread get` and clear the FULL-THREAD AWARENESS GATE before confirming NEEDS_REPLY or surfacing the thread.
 3. **For drafting:** read the FULL thread via `gog gmail thread get -a $GMAIL_ACCOUNT <threadId> -j` and parse using the canonical recipe — remember messages are at `thread.messages[]`, NOT at the top level.
 4. Check the last message's `From` header and `labelIds` (SENT, DRAFT)
-4. Classify — clear the **FULL-THREAD AWARENESS GATE** above (read the full thread both directions, write the 2-sentence arc, reconcile the user's own SENT messages — including replies sent from another client that may not show as the thread's last message) before confirming any NEEDS_REPLY:
+5. Classify — clear the **FULL-THREAD AWARENESS GATE** above (read the full thread both directions, write the 2-sentence arc, reconcile the user's own SENT messages — including replies sent from another client that may not show as the thread's last message) before confirming any NEEDS_REPLY:
    - **NEEDS REPLY**: Last sender is NOT you AND no unsent draft exists AND the user has not already replied anywhere → action needed
    - **WAITING**: Last sender IS you (SENT label) or you already answered → waiting for response
    - **DRAFT**: Unsent draft exists → verify no reply already sent, then offer to send
@@ -1007,6 +1062,7 @@ def classify_thread(thread_id):
 
 **Phase 2 — Build context for NEEDS REPLY items (run in parallel):**
 For each NEEDS REPLY thread, gather:
+
 1. **Full thread summary** — read every message in the thread, summarize the conversation arc (who said what, key decisions, open questions)
 2. **Contact profile** — for the sender:
    - `gog gmail search -j --results-only --no-input --max 10 "from:<sender_email>"` — their recent emails to you
@@ -1054,6 +1110,7 @@ If "More...":
 Use `AskUserQuestion` for each NEEDS REPLY email with options `[Read + Reply]` / `[Archive]` / `[Skip]`.
 
 When replying, draft the reply and use `AskUserQuestion` to confirm:
+
 ```
 Reply to [Sender] — [Subject]:
   "[drafted reply]"
@@ -1062,6 +1119,7 @@ Reply to [Sender] — [Subject]:
 ```
 
 For FYI bulk archive, use `AskUserQuestion`:
+
 ```
 Archive N FYI/newsletter emails?
   [list of subjects]
@@ -1080,6 +1138,7 @@ Draft replies via `gog gmail send`. Archive via `gog gmail archive <messageId> [
 **Setup prerequisite (one-time, not automated here):** tracking requires deploying a Cloudflare Worker via `gog gmail track setup --deploy`. Check current status with `gog gmail track status` (field `configured: true/false`). If not configured, tracking is silently unavailable — `--track` is silently ignored by `gog gmail send` when the tracking backend isn't set up, so it is safe to always pass but produces no data until configured.
 
 **Sending with tracking (opt-in, only on Sam-approved sends, Rule-6 gate still applies):**
+
 ```bash
 # Stage the send (per Rule 6: show full draft first, get approval, then send)
 gog gmail send \
@@ -1095,6 +1154,7 @@ gog gmail send \
 The `--track-split` flag sends tracked messages separately per recipient (one tracking-id per recipient); use only when sending to multiple recipients and per-recipient open tracking is needed.
 
 **Querying opens in the WAITING bucket (on subsequent inbox runs):**
+
 ```bash
 # All opens in the last 7 days:
 gog gmail track opens --since 7d -j
@@ -1117,6 +1177,7 @@ gog gmail track opens <tracking-id> -j
 ```
 
 If no opens after N days (configurable, suggested 3d), surface:
+
 ```
  Open status: not opened after 3 days [NUDGE CANDIDATE]
 ```
@@ -1126,12 +1187,14 @@ If tracking-id was never captured (send predates this feature or was sent withou
 **Rule-6 compliance:** tracking is only enabled on sends that Sam already approved through the normal draft-show-approve-send gate. Never auto-send a tracked follow-up — always stage the nudge draft and go through the gate.
 
 **OPT-IN gate:** surface the `--track` option in the send-approval `AskUserQuestion` as an addendum, not a default:
+
 ```
 Reply to [Sender] — [Subject]:
   "[drafted reply]"
 
   [Send]  [Send + track opens]  [Edit]  [Skip]
 ```
+
 Only pass `--track` when "Send + track opens" is chosen. Never silently add tracking.
 
 ### Slack (multi-workspace)
@@ -1192,6 +1255,7 @@ If no Telegram user-auth tool is available, report: "Telegram not configured —
 ### Notion (MCP — comments, mentions, assigned tasks)
 
 Notion serves as a knowledge base and task management channel. Unlike messaging channels, Notion "inbox" items are:
+
 - **Comments on pages you own or are mentioned in**
 - **Tasks assigned to you** in tracked databases
 - **Recently updated pages** in databases you monitor
@@ -1209,6 +1273,7 @@ Notion serves as a knowledge base and task management channel. Unlike messaging 
 **Phase 2 — Classify:**
 
 For each page with comments or mentions:
+
 - **NEEDS REPLY**: Someone commented/mentioned you and you haven't responded
 - **WAITING**: You commented last, waiting for others
 - **FYI**: Page updated but no direct mention or action needed
@@ -1245,16 +1310,19 @@ If "More...":
 Use `AskUserQuestion` for each NEEDS REPLY item.
 
 **When replying to Notion comments:**
+
 - Use `mcp__claude_ai_Notion__notion-create-comment` with the page ID and reply text
 - Match the formality of the original comment
 - Reference specific page content when relevant
 
 **When updating tasks:**
+
 - Use `mcp__claude_ai_Notion__notion-update-page` to change status, add notes
 - Only update properties the user explicitly approves
 
 **API fallback (when MCP is down):**
 If Notion MCP tools fail or are unavailable but `NOTION_API_KEY` is set, fall back to direct API:
+
 ```bash
 curl -s -H "Authorization: Bearer $NOTION_API_KEY" -H "Notion-Version: 2022-06-28" \
   -H "Content-Type: application/json" \
@@ -1311,9 +1379,11 @@ Use `TaskCreate` for each channel being processed. Update with `TaskUpdate` as m
 ### Cron — scheduled inbox checks
 
 After processing, offer to schedule recurring inbox checks via `AskUserQuestion`:
+
 ```
   [Schedule inbox check every 2 hours]  [Schedule morning + evening]  [No schedule]
 ```
+
 Use `CronCreate` if selected. Show existing schedules with `CronList`.
 
 ---

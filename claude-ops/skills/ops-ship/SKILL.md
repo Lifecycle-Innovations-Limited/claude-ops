@@ -1,7 +1,7 @@
 ---
 name: ops-ship
 description: One-command full release chain for the claude-ops ("ops") plugin — sweep and admin-merge every open PR, then publish a new version (bump plugin.json + marketplace.json registry + package.json + CHANGELOG, open release PR, admin-merge, tag), then pull it onto the box. Use when you have one or more merged-ready PRs and want to ship a new published version in a single step instead of merging PRs by hand and then releasing. Combines the PR sweep + /ops:ops-release + /ops:ops-update.
-argument-hint: "[--type patch|minor|major] [--version X.Y.Z] [--notes \"changelog body\"] [--base BRANCH] [--no-update] [--dry-run]"
+argument-hint: '[--type patch|minor|major] [--version X.Y.Z] [--notes "changelog body"] [--base BRANCH] [--no-update] [--dry-run]'
 allowed-tools:
   - Bash
   - Read
@@ -14,7 +14,7 @@ The whole release chain in a single shot:
 
 1. **Sweep** — admin squash-merge **every open, non-draft PR** targeting the base
    branch (default `main`), **overriding required checks/reviews** (`gh pr merge
-   --admin`). A failed merge aborts before the release — no partial ship.
+--admin`). A failed merge aborts before the release — no partial ship.
 2. **Release** — delegates to `bin/ops-release`: bump `plugin.json` +
    `marketplace.json` registry + `package.json` + `CHANGELOG`, open the release PR,
    admin-merge to `main`, tag `vX.Y.Z`.
@@ -85,14 +85,14 @@ tag and the reload reminder. Surface the final line verbatim:
 
 ## Flags
 
-| Flag | Effect |
-|------|--------|
-| `--type patch\|minor\|major` | Semver bump for the release (default `patch`). |
-| `--version X.Y.Z` | Exact target version instead of bumping. |
-| `--notes "…"` | CHANGELOG body. Defaults to a bullet list of the merged PR titles. |
-| `--base BRANCH` | Base branch for the PR sweep only (must be `main`; `ops-release` always publishes to `main`). |
-| `--no-update` | Don't run `ops-update` afterwards (publish only). |
-| `--dry-run` | Report only — list PRs + the bump, change nothing. Always run this first. |
+| Flag                         | Effect                                                                                        |
+| ---------------------------- | --------------------------------------------------------------------------------------------- |
+| `--type patch\|minor\|major` | Semver bump for the release (default `patch`).                                                |
+| `--version X.Y.Z`            | Exact target version instead of bumping.                                                      |
+| `--notes "…"`                | CHANGELOG body. Defaults to a bullet list of the merged PR titles.                            |
+| `--base BRANCH`              | Base branch for the PR sweep only (must be `main`; `ops-release` always publishes to `main`). |
+| `--no-update`                | Don't run `ops-update` afterwards (publish only).                                             |
+| `--dry-run`                  | Report only — list PRs + the bump, change nothing. Always run this first.                     |
 
 ## Notes
 

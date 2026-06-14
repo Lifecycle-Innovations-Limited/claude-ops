@@ -1,7 +1,7 @@
 ---
 name: ops-leadgen
 description: My-Project B2B wholesale leadgen review and send flow. Shows pending cold-email drafts from my-project-b2b-leadgen, lets you approve/skip each one, and fires approved drafts one-at-a-time via Rule-6-gated `my-project-leadgen send`. Never batches sends.
-argument-hint: "[review | send --draft-id N | usage | scrape | draft]"
+argument-hint: '[review | send --draft-id N | usage | scrape | draft]'
 allowed-tools:
   - Bash
   - Read
@@ -19,14 +19,14 @@ Wraps `my-project-leadgen` CLI for the daily leadgen review-and-send loop.
 
 ## Argument routing
 
-| Argument | Action |
-|---|---|
-| `review` (default) | Show pending drafts one-by-one, approve or skip |
-| `send --draft-id N` | Send a single approved draft (Rule-6 gated) |
-| `usage` | Print today's Apollo reveals + Apify runs |
-| `scrape [--limit N]` | Discover new NL HR contacts via Apollo |
-| `enrich` | Run Apify enrichment on unenriched leads |
-| `draft` | Generate Claude NL/EN drafts for undrafted leads |
+| Argument             | Action                                           |
+| -------------------- | ------------------------------------------------ |
+| `review` (default)   | Show pending drafts one-by-one, approve or skip  |
+| `send --draft-id N`  | Send a single approved draft (Rule-6 gated)      |
+| `usage`              | Print today's Apollo reveals + Apify runs        |
+| `scrape [--limit N]` | Discover new NL HR contacts via Apollo           |
+| `enrich`             | Run Apify enrichment on unenriched leads         |
+| `draft`              | Generate Claude NL/EN drafts for undrafted leads |
 
 ## Review + send flow (Rule 6)
 

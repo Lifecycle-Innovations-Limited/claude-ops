@@ -8,15 +8,15 @@ services:
     runtime: docker
     dockerfilePath: ./claude-ops/skills/ops-pocket/webhook-server/Dockerfile
     dockerContext: ./claude-ops/skills/ops-pocket/webhook-server
-    region: frankfurt  # co-located with dev-sandbox-fra for latency parity
-    plan: starter       # $7/mo — free tier has no persistent disk
+    region: frankfurt # co-located with dev-sandbox-fra for latency parity
+    plan: starter # $7/mo — free tier has no persistent disk
     disk:
       name: pocket-data
       mountPath: /data
       sizeGB: 1
     envVars:
       - key: POCKET_HMAC_SECRET
-        sync: false       # set manually in Render dashboard (never commit)
+        sync: false # set manually in Render dashboard (never commit)
       - key: POCKET_WEBHOOK_URL
         fromService:
           type: web

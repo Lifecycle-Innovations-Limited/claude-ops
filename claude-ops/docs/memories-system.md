@@ -2,7 +2,7 @@
 
 # Memories System
 
-*Persistent local context about people, projects, and your communication patterns — extracted from your chats, stored as markdown, never sent anywhere*
+_Persistent local context about people, projects, and your communication patterns — extracted from your chats, stored as markdown, never sent anywhere_
 
 [![version](https://img.shields.io/badge/version-2.1.0-blue)](../CHANGELOG.md)
 [![storage](https://img.shields.io/badge/storage-local%20markdown-22c55e)](.)
@@ -81,21 +81,25 @@ flowchart TB
 # John Smith
 
 ## Contact Info
+
 - WhatsApp: +15551234567
 - Email: john@acme.com
 - Company: Acme Corp
 
 ## Communication Preferences
+
 - Prefers WhatsApp over email
 - Responds quickly in the morning (PST)
 - Informal tone — uses first names, short messages
 
 ## Context
+
 - CEO of Acme Corp — potential enterprise customer
 - Last conversation: pricing discussion 2026-04-10
 - Waiting on: proposal we sent 2026-04-11
 
 ## Topics
+
 - my-app integration
 - enterprise pricing
 - Q2 budget approval
@@ -107,11 +111,13 @@ flowchart TB
 # Communication Preferences
 
 ## Style
+
 - Short, direct messages — no filler
 - Never start with "Hope you're well"
 - Sign off with first name only
 
 ## Defaults
+
 - Primary channel: WhatsApp
 - Calendar timezone: America/New_York
 - Working hours: 8am–7pm ET
@@ -123,11 +129,13 @@ flowchart TB
 # my-app
 
 ## Status
+
 - Phase 6.2 in progress — push notifications backend
 - Dev branch: feature/push-notifications
 - Last deploy: 2026-04-12 14:30 UTC
 
 ## Key Contacts
+
 - Alice (QA): alice@example.com
 - Bob (backend): bob@example.com
 ```
@@ -179,11 +187,11 @@ vim ~/.claude/plugins/data/ops-ops-marketplace/memories/contacts/john-smith.md
 
 The daemon triggers extraction when **any** of these conditions are met:
 
-| Trigger | Condition |
-|---------|-----------|
-| Time-based | 30 minutes elapsed since last run |
+| Trigger      | Condition                                                              |
+| ------------ | ---------------------------------------------------------------------- |
+| Time-based   | 30 minutes elapsed since last run                                      |
 | Volume-based | Message count in `~/.whatsapp-bridge/.health` increased by more than 5 |
-| Manual | `/ops:doctor --run-memory-extractor` |
+| Manual       | `/ops:doctor --run-memory-extractor`                                   |
 
 The extractor uses `claude-haiku-4-5-20251001` (fast + cheap) for all extraction work. It merges new information into existing profiles rather than overwriting, so context accumulates over time.
 

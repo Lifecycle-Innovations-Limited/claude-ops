@@ -29,6 +29,7 @@ Stored at `~/.claude-ops/ledger.jsonl` and mirrored to Notion DB "Ops Ledger".
 ## Behavior
 
 Wraps `~/.claude-ops/bin/ledger` (the CLI from this skill). Always reports:
+
 1. Awaiting owner (top of digest, sorted newest first)
 2. Drafted by either system (needs send / merge / approve)
 3. Done autonomously in last 24h, grouped by source (claude-ops, Perplexity)
@@ -37,13 +38,16 @@ Wraps `~/.claude-ops/bin/ledger` (the CLI from this skill). Always reports:
 ## Conventions every command in this plugin follows
 
 Before doing real work, run:
+
 ```bash
 ~/.claude-ops/bin/ledger query --claim-key "$CLAIM_KEY" --since -PT24H
 ```
+
 If result has any entry with `status in (in_progress, done, drafted, awaiting_sam)`,
 SKIP — the other system already handled it. Don't duplicate.
 
 After doing work:
+
 ```bash
 ~/.claude-ops/bin/ledger claim --claim-key "$CLAIM_KEY" --kind <kind> --brand <brand> \
   --title "<title>" --source claude-ops

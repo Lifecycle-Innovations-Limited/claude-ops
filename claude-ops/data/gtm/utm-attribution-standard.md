@@ -5,13 +5,13 @@ Validated at creation time by `scripts/lib/utm-validate.sh`.
 
 ## Required dimensions
 
-| Parameter       | Required | Notes                                                   |
-|-----------------|----------|---------------------------------------------------------|
-| `utm_source`    | yes      | Traffic origin: `meta`, `google`, `email`, `organic`   |
-| `utm_medium`    | yes      | Channel type: `cpc`, `social`, `newsletter`, `display` |
-| `utm_campaign`  | yes      | Must follow `{name}_{variant}_{date}` format            |
-| `utm_term`      | optional | Keyword (search campaigns only)                         |
-| `utm_content`   | optional | Creative/ad set identifier                              |
+| Parameter      | Required | Notes                                                  |
+| -------------- | -------- | ------------------------------------------------------ |
+| `utm_source`   | yes      | Traffic origin: `meta`, `google`, `email`, `organic`   |
+| `utm_medium`   | yes      | Channel type: `cpc`, `social`, `newsletter`, `display` |
+| `utm_campaign` | yes      | Must follow `{name}_{variant}_{date}` format           |
+| `utm_term`     | optional | Keyword (search campaigns only)                        |
+| `utm_content`  | optional | Creative/ad set identifier                             |
 
 ## Naming regex
 

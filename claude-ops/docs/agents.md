@@ -2,7 +2,7 @@
 
 # Specialized Agents
 
-*Pre-installed subagent personas + the auto-suggestion hook that routes `general-purpose` calls to the right specialist.*
+_Pre-installed subagent personas + the auto-suggestion hook that routes `general-purpose` calls to the right specialist._
 
 [![version](https://img.shields.io/badge/version-2.1.0-blue)](../CHANGELOG.md)
 [![agents](https://img.shields.io/badge/agents-18-8b5cf6)](.)
@@ -24,12 +24,12 @@ The swap is silent by design — Claude doesn't have to know to pick the right a
 
 ## Pre-installed specialists
 
-| Agent | File | Purpose | Used by |
-|-------|------|---------|---------|
-| `general-purpose` | [`agents/general-purpose.md`](../agents/general-purpose.md) | Local override of the default — restricted to research and read-only investigation. | Fallback when no specialist matches. |
-| `deploy-fixer` | [`agents/deploy-fixer.md`](../agents/deploy-fixer.md) | Single-shot SRE persona — diagnoses one failed deploy, opens one PR, exits. | Deploy auto-fix subsystem ([`docs/deploy-fix.md`](deploy-fix.md)). |
-| `build-fixer` | [`agents/build-fixer.md`](../agents/build-fixer.md) | TypeScript/bundler error fixer for local build failures. | Deploy auto-fix subsystem (build-trigger hook). |
-| `dependency-auditor` | [`agents/dependency-auditor.md`](../agents/dependency-auditor.md) | Runs `npm audit` / `pip-audit` / SCA equivalents and proposes minimal upgrades. | Manual dispatch + future scheduled cron. |
+| Agent                | File                                                              | Purpose                                                                             | Used by                                                            |
+| -------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `general-purpose`    | [`agents/general-purpose.md`](../agents/general-purpose.md)       | Local override of the default — restricted to research and read-only investigation. | Fallback when no specialist matches.                               |
+| `deploy-fixer`       | [`agents/deploy-fixer.md`](../agents/deploy-fixer.md)             | Single-shot SRE persona — diagnoses one failed deploy, opens one PR, exits.         | Deploy auto-fix subsystem ([`docs/deploy-fix.md`](deploy-fix.md)). |
+| `build-fixer`        | [`agents/build-fixer.md`](../agents/build-fixer.md)               | TypeScript/bundler error fixer for local build failures.                            | Deploy auto-fix subsystem (build-trigger hook).                    |
+| `dependency-auditor` | [`agents/dependency-auditor.md`](../agents/dependency-auditor.md) | Runs `npm audit` / `pip-audit` / SCA equivalents and proposes minimal upgrades.     | Manual dispatch + future scheduled cron.                           |
 
 The full v1 agent roster (scanners, fixers, C-suite analysts, daemon brain) is unchanged — see [`docs/agents-reference.md`](agents-reference.md).
 
@@ -113,9 +113,9 @@ You are a focused Rust compile-error fixer. ...
 
 ## Configuration
 
-| Key | Type | Default | Purpose |
-|-----|------|---------|---------|
-| `suggest_specialized_agents` | boolean | `true` | Master switch for the PreToolUse:Agent hook. |
+| Key                          | Type    | Default | Purpose                                      |
+| ---------------------------- | ------- | ------- | -------------------------------------------- |
+| `suggest_specialized_agents` | boolean | `true`  | Master switch for the PreToolUse:Agent hook. |
 
 Set to `false` in `/plugins` settings to restore v1 behavior (every `general-purpose` call passes through unchanged).
 

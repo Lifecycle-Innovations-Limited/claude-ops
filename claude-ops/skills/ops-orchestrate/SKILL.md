@@ -1,7 +1,7 @@
 ---
 name: ops-orchestrate
-description: "Autonomous multi-project orchestration engine. Audits all registered projects, structures work into dependency-wired tasks, dispatches parallel agents (subagents or Agent Teams), audits completions, and ships PRs. Registry-driven — works for any user with a configured project registry."
-argument-hint: "[--teams|--subagents|--hybrid|--dry-run|--project alias|--fires-only|--max-waves N]"
+description: 'Autonomous multi-project orchestration engine. Audits all registered projects, structures work into dependency-wired tasks, dispatches parallel agents (subagents or Agent Teams), audits completions, and ships PRs. Registry-driven — works for any user with a configured project registry.'
+argument-hint: '[--teams|--subagents|--hybrid|--dry-run|--project alias|--fires-only|--max-waves N]'
 allowed-tools:
   - Bash
   - Read
@@ -39,11 +39,11 @@ maxTurns: 100
 ## Runtime Context
 
 Before orchestrating, load:
+
 1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `timezone`, `yolo_enabled`, registry path
 2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — ensure all services healthy before dispatching
 3. **Secrets**: Resolve via env → Doppler → password manager: `GITHUB_TOKEN`, `SENTRY_AUTH_TOKEN`, `LINEAR_API_KEY`, `ANTHROPIC_API_KEY`
 4. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/topics_active.md` for priority context
-
 
 # OPS ► ORCHESTRATE — Autonomous Work Engine
 
@@ -51,32 +51,30 @@ Before orchestrating, load:
 
 ### gh CLI (GitHub)
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `gh pr list --state open --json number,title,statusCheckRollup,reviewDecision,mergeable,isDraft` | Open PRs with status | JSON array |
-| `gh pr view <n> --repo <repo> --json files,additions,deletions` | PR file diff summary | JSON |
-| `gh pr checks <n>` | CI check status | Check list |
-| `gh pr merge <n> --squash --admin` | Squash merge PR | Merge result |
-| `gh run list --repo <repo> --workflow "<workflow>" --limit 5 --json conclusion,headBranch` | CI runs for workflow | JSON array |
-| `gh run view <id> --repo <repo> --log-failed` | Failed CI logs | Log output |
-| `gh issue list --state open` | Open issues | JSON array |
+| Command                                                                                          | Usage                | Output       |
+| ------------------------------------------------------------------------------------------------ | -------------------- | ------------ |
+| `gh pr list --state open --json number,title,statusCheckRollup,reviewDecision,mergeable,isDraft` | Open PRs with status | JSON array   |
+| `gh pr view <n> --repo <repo> --json files,additions,deletions`                                  | PR file diff summary | JSON         |
+| `gh pr checks <n>`                                                                               | CI check status      | Check list   |
+| `gh pr merge <n> --squash --admin`                                                               | Squash merge PR      | Merge result |
+| `gh run list --repo <repo> --workflow "<workflow>" --limit 5 --json conclusion,headBranch`       | CI runs for workflow | JSON array   |
+| `gh run view <id> --repo <repo> --log-failed`                                                    | Failed CI logs       | Log output   |
+| `gh issue list --state open`                                                                     | Open issues          | JSON array   |
 
 ### sentry-cli / Sentry API
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `sentry-cli issues list --project <slug> --status unresolved` | Unresolved issues | Issue list |
-| `curl -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://sentry.io/api/0/projects/<org>/<proj>/issues/?query=is:unresolved"` | API fallback | JSON array |
+| Command                                                                                                                          | Usage             | Output     |
+| -------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ---------- |
+| `sentry-cli issues list --project <slug> --status unresolved`                                                                    | Unresolved issues | Issue list |
+| `curl -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://sentry.io/api/0/projects/<org>/<proj>/issues/?query=is:unresolved"` | API fallback      | JSON array |
 
 ### Linear GraphQL (fallback when MCP unavailable)
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ issues(filter: {state: {type: {in: [\"started\",\"unstarted\"]}}}) { nodes { id title state { name } priority assignee { name } } } }"}'` | Active issues | JSON |
+| Command                                                                                                                                                                                                                                                                        | Usage         | Output |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- | ------ |
+| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ issues(filter: {state: {type: {in: [\"started\",\"unstarted\"]}}}) { nodes { id title state { name } priority assignee { name } } } }"}'` | Active issues | JSON   |
 
 ---
-
-
 
 You are the **master orchestrator**. Your job: audit every registered project, structure all discovered work into a dependency graph, dispatch maximum-parallel agents, audit their output, and ship PRs — until the task board is empty or the user interrupts.
 
@@ -136,6 +134,7 @@ If `$ARGUMENTS` contains `--project <alias>`, use SCOPED mode for that alias reg
 ```
 
 If no flag is passed, use `AskUserQuestion`:
+
 ```
   [Subagents — fast & cheap]  [Agent Teams — steerable]  [Hybrid — auto-select]  [Dry run — plan only]
 ```
@@ -144,13 +143,13 @@ If no flag is passed, use `AskUserQuestion`:
 
 Tag each task during Phase 2:
 
-| Condition | Mode | Why |
-|-----------|------|-----|
-| Task touches 1 repo, no auth/payments/PII | `subagent` | Isolated, no coordination needed |
-| Task touches 2+ repos (API schema + consumer) | `team` | Teammates coordinate schema handoff |
-| Task touches auth, payments, PII, secrets | `team` | Security-reviewer teammate audits in real-time |
-| Task is read-only (audit, report, analysis) | `subagent` | No risk, no coordination |
-| Task depends on another in-flight task's output | `team` | SendMessage delivers output without re-dispatch |
+| Condition                                       | Mode       | Why                                             |
+| ----------------------------------------------- | ---------- | ----------------------------------------------- |
+| Task touches 1 repo, no auth/payments/PII       | `subagent` | Isolated, no coordination needed                |
+| Task touches 2+ repos (API schema + consumer)   | `team`     | Teammates coordinate schema handoff             |
+| Task touches auth, payments, PII, secrets       | `team`     | Security-reviewer teammate audits in real-time  |
+| Task is read-only (audit, report, analysis)     | `subagent` | No risk, no coordination                        |
+| Task depends on another in-flight task's output | `team`     | SendMessage delivers output without re-dispatch |
 
 ### Feature flag requirement for Agent Teams
 
@@ -184,6 +183,7 @@ For each project path, verify it exists on disk. Skip missing paths.
 Group projects into batches of ~8. Dispatch one audit subagent per batch (always subagents — audit is read-only, no steering needed):
 
 Each audit agent checks:
+
 - `git status --porcelain` — uncommitted changes
 - `git log origin/dev..HEAD --oneline` — unpushed commits
 - `gh pr list --state open --json number,title,statusCheckRollup,reviewDecision,mergeable,isDraft` — open PRs + CI
@@ -195,6 +195,7 @@ Each audit agent checks:
 ### 1c. Filter already-fixed failures
 
 Before creating tasks for CI failures:
+
 ```bash
 # If latest run on dev/main is success → skip (intermittent or already fixed)
 gh run list --repo <repo> --workflow "<workflow>" --limit 5 --json conclusion,headBranch \
@@ -217,6 +218,7 @@ Run these in parallel with the audit agents:
 ### 1e. Cross-reference against existing tasks
 
 `TaskList` — check current task board. Flag:
+
 - Tasks already done → mark `completed`
 - Tasks stale (root cause changed) → update description
 - New work not yet in TaskList → queue for Phase 2
@@ -228,6 +230,7 @@ Run these in parallel with the audit agents:
 ### 2a. Decompose into atomic tasks
 
 Each task should be:
+
 - **One PR max** (~2-4 hour scope)
 - **One repo only** (isolation for parallel execution)
 - **Clear acceptance criteria** (what "done" looks like)
@@ -259,6 +262,7 @@ TaskCreate({
 3. **Never serialize tasks that can run in parallel.** Three independent bug fixes in three repos = wave 0, all three, simultaneously.
 
 Common dependency patterns:
+
 - Deploy task → blocked by its implementation task
 - Phase N task → blocked by Phase N-1 completion
 - Consumer update → blocked by API schema change (cross-repo)
@@ -266,6 +270,7 @@ Common dependency patterns:
 - Main merge → blocked by dev merge
 
 **Anti-patterns to AVOID:**
+
 - ❌ Serializing independent single-repo fixes (they should be wave 0 parallel)
 - ❌ Making task B depend on task A just because A was discovered first
 - ❌ Waiting for all wave 0 to complete before starting ANY wave 1 (start wave 1 tasks as soon as their specific blockers clear)
@@ -275,7 +280,7 @@ Common dependency patterns:
 ```
 Wave 0: All tasks with ZERO dependencies → dispatch ALL simultaneously
 Wave 1: Tasks blocked only by wave 0 items → dispatch as each blocker clears
-Wave N: Cascade — but NEVER wait for the full wave to clear. 
+Wave N: Cascade — but NEVER wait for the full wave to clear.
         Start each task the MOMENT its specific blockers resolve.
 ```
 
@@ -290,6 +295,7 @@ Apply the decision matrix from above to tag each task as `subagent` or `team`.
 ### Subagent dispatch
 
 Rules:
+
 - **Max concurrent: 5 agents** (avoid overload)
 - **One repo per agent** (no concurrent edits to same path)
 - **Each agent gets a worktree** via `isolation: "worktree"`
@@ -323,18 +329,21 @@ Agent(team_name="wave-0-cross-repo", name="mobile-worker", model="sonnet", isola
 
 **File ownership (CRITICAL — prevents overwrites):**
 Each teammate prompt MUST include:
+
 ```
 Your files: src/api/auth.ts, src/middleware/*.ts, tests/auth/
 Do NOT edit: src/api/users.ts (owned by api-worker), src/frontend/ (owned by mobile-worker)
 ```
 
 **Mid-flight steering (the killer feature):**
+
 ```
 SendMessage(to="api-worker", content="Schema changed — DTO is now UserResponseV2. Update imports.")
 SendMessage(to="mobile-worker", content="API endpoint ready. New: POST /v2/users. Proceed with consumer.")
 ```
 
 **Cross-repo coordination pattern:**
+
 1. Spawn `api-worker` and `consumer-worker` on same team
 2. Wire dependency: consumer blocked by api
 3. When api-worker completes schema → `SendMessage` to consumer with the new types/endpoint
@@ -430,6 +439,7 @@ WHILE true:
 ### Completion criteria
 
 Do NOT stop until:
+
 - Every task is `completed`, `deleted`, or explicitly `blocked` on user input
 - All PRs merged (at minimum to dev)
 - All background processes terminated
@@ -441,6 +451,7 @@ Do NOT stop until:
 ## Reporting
 
 Between waves:
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  OPS ► ORCHESTRATE — Wave N | Mode: [subagents/teams/hybrid]
@@ -457,6 +468,7 @@ Between waves:
 ```
 
 Final report:
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  OPS ► ORCHESTRATION COMPLETE
@@ -486,18 +498,18 @@ Final report:
 
 ## Arguments
 
-| Flag | Effect |
-|------|--------|
-| (empty) | Full audit + execution, ask for mode |
-| `--subagents` | Force subagent mode (cheapest) |
-| `--teams` | Force Agent Teams mode (steerable, 3-7x cost) |
-| `--hybrid` | Auto-select per task (recommended) |
-| `--dry-run` | Phase 1+2 only, print plan, don't dispatch |
-| `--project <alias>` | Scope to one project |
-| `--fires-only` | Only P0 production-broken tasks |
-| `--no-main` | Stop at dev merge, never touch main |
-| `--max-waves N` | Cap at N waves then halt |
-| `--force` | Skip merge confirmations |
+| Flag                | Effect                                        |
+| ------------------- | --------------------------------------------- |
+| (empty)             | Full audit + execution, ask for mode          |
+| `--subagents`       | Force subagent mode (cheapest)                |
+| `--teams`           | Force Agent Teams mode (steerable, 3-7x cost) |
+| `--hybrid`          | Auto-select per task (recommended)            |
+| `--dry-run`         | Phase 1+2 only, print plan, don't dispatch    |
+| `--project <alias>` | Scope to one project                          |
+| `--fires-only`      | Only P0 production-broken tasks               |
+| `--no-main`         | Stop at dev merge, never touch main           |
+| `--max-waves N`     | Cap at N waves then halt                      |
+| `--force`           | Skip merge confirmations                      |
 
 ---
 

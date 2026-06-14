@@ -1,7 +1,7 @@
 ---
 name: ops-marketing
 description: Marketing command center. Email campaigns (Klaviyo), paid ads (Meta/Google), analytics (GA4), SEO, and social media metrics. One dashboard for all marketing channels.
-argument-hint: "<project> [email|ads|analytics|seo|social|campaigns|setup|autopilot ...]"
+argument-hint: '<project> [email|ads|analytics|seo|social|campaigns|setup|autopilot ...]'
 allowed-tools:
   - Bash
   - Read
@@ -24,18 +24,18 @@ maxTurns: 40
 
 `bin/ops-dns-provision` is the canonical DNS surface for any marketing project — it covers every record an end-to-end SaaS launch typically needs, all routed through `scripts/lib/cloudflare-dns.sh` for GET-first idempotency. Re-running is safe; `OPS_DRY_RUN=1` prints planned API calls without firing.
 
-| Subcommand | What it does |
-|------------|--------------|
-| `gsc <project> <domain>` | Google Search Console site verification — fetches token via `siteVerification/v1/token`, upserts TXT at apex, calls `webResource?verificationMethod=DNS_TXT` to verify. |
-| `meta-aem <project> <domain>` | Meta Aggregated Event Measurement — reads `verification_string` from `/me/owned_domains`, upserts `facebook-domain-verification=<token>` TXT at apex. |
-| `apple-pay <project> <domain>` | Two modes via `apple_pay.mode`: `static-file` (default — surfaces the `.well-known/apple-developer-merchantid-domain-association` deploy-hook path) or `stripe-dns` (Stripe `POST /v1/payment_method_domains`). |
-| `spf <project> <domain>` | Builds `v=spf1 include:... <policy>` from `.esp.spf_includes`, upserts merge-safely at apex (refuses to overwrite a foreign TXT lacking the `v=spf1` marker). |
-| `dkim <project> <domain>` | ESP-keyed off `.esp.provider`. Resend implemented (parses `records[]` from `POST /domains`, CNAME upserts). Postmark/SES stubbed. |
-| `dmarc <project> <domain>` | `_dmarc.<apex>` TXT with `v=DMARC1; p=<policy>; rua=<rua>`. Defaults: `policy=quarantine`, `rua=mailto:dmarc@<apex>`. |
-| `mx <project> <domain>` | Provider template keyed off `.inbound.provider`: `google-workspace` (smtp.google.com pri 1) / `resend-inbound` / `ses` (region from `.inbound.region`). |
-| `klaviyo-sending <project> <domain>` | Klaviyo dedicated sending domain — `POST /api/dedicated-sending-domains/`, CNAME upserts. |
-| `audit <project> [--json]` | Read-only — for each row, queries CF and reports `present` / `absent` / `conflicting`. |
-| `provision-all <project> [--skip <row,row>]` | Idempotent full sweep. |
+| Subcommand                                   | What it does                                                                                                                                                                                                    |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gsc <project> <domain>`                     | Google Search Console site verification — fetches token via `siteVerification/v1/token`, upserts TXT at apex, calls `webResource?verificationMethod=DNS_TXT` to verify.                                         |
+| `meta-aem <project> <domain>`                | Meta Aggregated Event Measurement — reads `verification_string` from `/me/owned_domains`, upserts `facebook-domain-verification=<token>` TXT at apex.                                                           |
+| `apple-pay <project> <domain>`               | Two modes via `apple_pay.mode`: `static-file` (default — surfaces the `.well-known/apple-developer-merchantid-domain-association` deploy-hook path) or `stripe-dns` (Stripe `POST /v1/payment_method_domains`). |
+| `spf <project> <domain>`                     | Builds `v=spf1 include:... <policy>` from `.esp.spf_includes`, upserts merge-safely at apex (refuses to overwrite a foreign TXT lacking the `v=spf1` marker).                                                   |
+| `dkim <project> <domain>`                    | ESP-keyed off `.esp.provider`. Resend implemented (parses `records[]` from `POST /domains`, CNAME upserts). Postmark/SES stubbed.                                                                               |
+| `dmarc <project> <domain>`                   | `_dmarc.<apex>` TXT with `v=DMARC1; p=<policy>; rua=<rua>`. Defaults: `policy=quarantine`, `rua=mailto:dmarc@<apex>`.                                                                                           |
+| `mx <project> <domain>`                      | Provider template keyed off `.inbound.provider`: `google-workspace` (smtp.google.com pri 1) / `resend-inbound` / `ses` (region from `.inbound.region`).                                                         |
+| `klaviyo-sending <project> <domain>`         | Klaviyo dedicated sending domain — `POST /api/dedicated-sending-domains/`, CNAME upserts.                                                                                                                       |
+| `audit <project> [--json]`                   | Read-only — for each row, queries CF and reports `present` / `absent` / `conflicting`.                                                                                                                          |
+| `provision-all <project> [--skip <row,row>]` | Idempotent full sweep.                                                                                                                                                                                          |
 
 **Auth**: `CLOUDFLARE_API_TOKEN` (Bearer, preferred) or `CLOUDFLARE_API_KEY` + `CLOUDFLARE_EMAIL` (Global key, fallback). Zone lookup: `GET /zones?name=<apex>` finds the zone ID. Record writes: GET-first by `name+type`, then PUT existing ID or POST new — never duplicate.
 
@@ -54,51 +54,51 @@ The new bin reads project-level config from `$PREFS_PATH` under `marketing.proje
 
         // Outbound email service provider (DKIM + SPF includes)
         "esp": {
-          "provider": "resend",                  // "resend" | "postmark" | "ses"
-          "credentials": "doppler:prd:RESEND_API_KEY",  // cred-ref: "env:VAR" | "doppler:CFG:KEY"
-          "spf_includes": ["_spf.resend.com", "_spf.klaviyo.com"],  // optional; sensible defaults applied
-          "spf_policy": "-all"                   // "-all" (strict) | "~all" (soft-fail)
+          "provider": "resend", // "resend" | "postmark" | "ses"
+          "credentials": "doppler:prd:RESEND_API_KEY", // cred-ref: "env:VAR" | "doppler:CFG:KEY"
+          "spf_includes": ["_spf.resend.com", "_spf.klaviyo.com"], // optional; sensible defaults applied
+          "spf_policy": "-all", // "-all" (strict) | "~all" (soft-fail)
         },
 
         // Inbound mail (MX)
         "inbound": {
-          "provider": "google-workspace",        // "google-workspace" | "resend-inbound" | "ses"
-          "region": "us-east-1"                  // only used by resend-inbound / ses
+          "provider": "google-workspace", // "google-workspace" | "resend-inbound" | "ses"
+          "region": "us-east-1", // only used by resend-inbound / ses
         },
 
         // DMARC policy
         "dmarc": {
-          "policy": "quarantine",                // "none" | "quarantine" | "reject"
-          "rua": "mailto:dmarc@example.com"      // defaults to mailto:dmarc@<apex>
+          "policy": "quarantine", // "none" | "quarantine" | "reject"
+          "rua": "mailto:dmarc@example.com", // defaults to mailto:dmarc@<apex>
         },
 
         // Optional Cloudflare account override (for accounts that own multiple zones)
         "dns": {
-          "cloudflare_account_id": "<your-cf-account-id>"
+          "cloudflare_account_id": "<your-cf-account-id>",
         },
 
         // Apple Pay domain registration
         "apple_pay": {
           "enabled": true,
-          "mode": "static-file"                  // default; "stripe-dns" registers via Stripe
+          "mode": "static-file", // default; "stripe-dns" registers via Stripe
         },
 
         // Cred-refs for individual rows
-        "stripe":  {
-          "secret_key":  "env:STRIPE_SECRET_KEY",  // legacy DNS provisioner key
-          "api_key":     "env:STRIPE_API_KEY",     // P3: used by ops-marketing-autopilot stripe ROAS gate
-          "account_id":  "acct_<id>"                // optional, only when calling on behalf of a connected acct
+        "stripe": {
+          "secret_key": "env:STRIPE_SECRET_KEY", // legacy DNS provisioner key
+          "api_key": "env:STRIPE_API_KEY", // P3: used by ops-marketing-autopilot stripe ROAS gate
+          "account_id": "acct_<id>", // optional, only when calling on behalf of a connected acct
         },
-        "meta":    { "access_token":   "env:META_ACCESS_TOKEN" },
+        "meta": { "access_token": "env:META_ACCESS_TOKEN" },
         "klaviyo": {
-          "private_key": "doppler:prd:KLAVIYO_API_KEY",  // legacy DNS row
-          "api_key":     "doppler:prd:KLAVIYO_API_KEY",  // P3: used by gather_klaviyo_metrics
-          "account_id":  "<klaviyo-account-id>",         // P3: optional
-          "sending_subdomain": "em.example.com"
-        }
-      }
-    }
-  }
+          "private_key": "doppler:prd:KLAVIYO_API_KEY", // legacy DNS row
+          "api_key": "doppler:prd:KLAVIYO_API_KEY", // P3: used by gather_klaviyo_metrics
+          "account_id": "<klaviyo-account-id>", // P3: optional
+          "sending_subdomain": "em.example.com",
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -108,20 +108,20 @@ Defaults are applied bash-side via `${var:-default}`, so all values are optional
 
 `bin/ops-marketing-autopilot` reads four perf-data sources per pass and persists them to `${OPS_DATA_DIR}/state/autopilot/<project>-{ga4-conversions,gsc-signal,klaviyo,stripe}.json`:
 
-| Source | Prefs path | Helper | Purpose |
-|---|---|---|---|
-| GA4 conversions | `marketing.projects.<key>.ga4.{property_id, sa_key_file_ref}` | `gather_ga4_conversions` | source/medium/campaign rows for the blended bandit reward |
-| GSC search | `marketing.projects.<key>.gsc.site_url` | `gather_gsc_signal` | rescue + ad-copy-hook candidate buckets |
-| Klaviyo | `marketing.projects.<key>.klaviyo.{api_key, account_id}` | `gather_klaviyo_metrics` | Placed Order revenue + flow inventory |
-| Stripe | `marketing.projects.<key>.stripe.{api_key, account_id}` | `gather_stripe_revenue` | UTM-attributed revenue per `source/medium/campaign` and per `ad_id` — ground-truth ROAS denominator + pause-rescue gate |
+| Source          | Prefs path                                                    | Helper                   | Purpose                                                                                                                 |
+| --------------- | ------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| GA4 conversions | `marketing.projects.<key>.ga4.{property_id, sa_key_file_ref}` | `gather_ga4_conversions` | source/medium/campaign rows for the blended bandit reward                                                               |
+| GSC search      | `marketing.projects.<key>.gsc.site_url`                       | `gather_gsc_signal`      | rescue + ad-copy-hook candidate buckets                                                                                 |
+| Klaviyo         | `marketing.projects.<key>.klaviyo.{api_key, account_id}`      | `gather_klaviyo_metrics` | Placed Order revenue + flow inventory                                                                                   |
+| Stripe          | `marketing.projects.<key>.stripe.{api_key, account_id}`       | `gather_stripe_revenue`  | UTM-attributed revenue per `source/medium/campaign` and per `ad_id` — ground-truth ROAS denominator + pause-rescue gate |
 
 Env knobs:
 
-| Env | Default | Effect |
-|---|---|---|
-| `OPS_BANDIT_SOURCE` | `blended` | `meta` → meta-only reward (legacy), `ga4` → GA4 attribution only, `blended` → `(meta + ga4)/2` |
-| `OPS_PAUSE_ROAS_FLOOR` | `1.0` | An ad with `stripe_revenue ≥ floor × meta_spend` is kept despite Meta CPL/CTR pause criteria |
-| `OPS_KLAVIYO_REVENUE_RATIO_FLAG` | `0.5` | When `klaviyo_revenue / paid_spend > flag`, surface "email channel underweighted" in the daily report (no auto-shift) |
+| Env                              | Default   | Effect                                                                                                                |
+| -------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------- |
+| `OPS_BANDIT_SOURCE`              | `blended` | `meta` → meta-only reward (legacy), `ga4` → GA4 attribution only, `blended` → `(meta + ga4)/2`                        |
+| `OPS_PAUSE_ROAS_FLOOR`           | `1.0`     | An ad with `stripe_revenue ≥ floor × meta_spend` is kept despite Meta CPL/CTR pause criteria                          |
+| `OPS_KLAVIYO_REVENUE_RATIO_FLAG` | `0.5`     | When `klaviyo_revenue / paid_spend > flag`, surface "email channel underweighted" in the daily report (no auto-shift) |
 
 UTM enforcement: every `create_object campaign …` call runs `utm_validate` (from `scripts/lib/utm-validate.sh`) on the derived `(utm_source, utm_medium, utm_campaign)` triple before any API mutation. Non-conforming names escalate + stage-only.
 
@@ -152,6 +152,7 @@ Run `/ops:marketing <project>` to point-and-go:
 4. If autopilot not yet enabled, enable: `ops-marketing-autopilot --project <project> --first-run-dry`
 
 Provision a brand-new project end-to-end:
+
 ```bash
 # One-shot: GA4 + GSC + Instagram + Google Ads — sequential, idempotent
 ops-marketing-provision provision-all --project <project>
@@ -174,6 +175,7 @@ ops-marketing-dash --project <project>
 `provision-instagram` requires `marketing.projects.<key>.meta.access_token` (and optional `meta.app_secret` for `appsecret_proof` signing — required when the app's "Require App Secret" setting is on, which is the default for all system-user tokens). The verb is fully idempotent: smoke-tests an existing `instagram.account_id` before making any API calls; pass `--force` to re-resolve.
 
 `provision-google-ads` is a 4-step flow (each step is a no-op if the credential already exists):
+
 1. **Developer token** — scans env + Doppler. If missing, writes a pending-state JSON at `${OPS_DATA_DIR}/state/marketing-provision/<project>-google-ads-pending.json` and exits 1. Apply at <https://ads.google.com/aw/apicenter> (24–48h approval) then re-run.
 2. **OAuth client** — scans env + Doppler. If missing, prints Cloud Console URL for creating a Desktop OAuth client.
 3. **Refresh token** — launches a localhost HTTP server on `:8080` (120s timeout), opens the Google consent URL, captures the auth code, exchanges for `refresh_token`, writes to Doppler as `GOOGLE_ADS_<PROJECT_UPPER>_REFRESH_TOKEN`.
@@ -201,49 +203,51 @@ Before executing, load available context:
 
 ### Klaviyo REST API
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `https://a.klaviyo.com/api/lists/?fields[list]=name,id,profile_count` | GET | All lists + subscriber counts |
-| `https://a.klaviyo.com/api/campaigns/?filter=equals(messages.channel,'email')&sort=-created_at` | GET | Recent campaigns |
-| `https://a.klaviyo.com/api/flows/?filter=equals(status,'live')` | GET | Active flows |
-| `https://a.klaviyo.com/api/metrics/` | GET | Available metrics |
+| Endpoint                                                                                        | Method | Description                   |
+| ----------------------------------------------------------------------------------------------- | ------ | ----------------------------- |
+| `https://a.klaviyo.com/api/lists/?fields[list]=name,id,profile_count`                           | GET    | All lists + subscriber counts |
+| `https://a.klaviyo.com/api/campaigns/?filter=equals(messages.channel,'email')&sort=-created_at` | GET    | Recent campaigns              |
+| `https://a.klaviyo.com/api/flows/?filter=equals(status,'live')`                                 | GET    | Active flows                  |
+| `https://a.klaviyo.com/api/metrics/`                                                            | GET    | Available metrics             |
 
 **Auth header**: `Authorization: Klaviyo-API-Key ${KLAVIYO_KEY}` | **Revision header**: `revision: 2024-10-15`
 
 ### Meta Graph API
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `https://graph.facebook.com/v18.0/${META_ACCOUNT}/insights?fields=spend,...&date_preset=last_7d` | GET | Account-level ad spend |
-| `https://graph.facebook.com/v18.0/${META_ACCOUNT}/campaigns?fields=name,status,insights{...}` | GET | Campaign breakdown |
-| `https://graph.facebook.com/v18.0/me/accounts?fields=instagram_business_account` | GET | Linked Instagram account |
+| Endpoint                                                                                         | Method | Description              |
+| ------------------------------------------------------------------------------------------------ | ------ | ------------------------ |
+| `https://graph.facebook.com/v18.0/${META_ACCOUNT}/insights?fields=spend,...&date_preset=last_7d` | GET    | Account-level ad spend   |
+| `https://graph.facebook.com/v18.0/${META_ACCOUNT}/campaigns?fields=name,status,insights{...}`    | GET    | Campaign breakdown       |
+| `https://graph.facebook.com/v18.0/me/accounts?fields=instagram_business_account`                 | GET    | Linked Instagram account |
 
 **Auth header**: `Authorization: Bearer ${META_TOKEN}`
 
 ### Google Analytics 4 (Data API)
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport` | POST | Run custom report |
+| Endpoint                                                                           | Method | Description       |
+| ---------------------------------------------------------------------------------- | ------ | ----------------- |
+| `https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport` | POST   | Run custom report |
 
 **Auth**: gcloud ADC — `GA4_TOKEN=$(gcloud auth application-default print-access-token)`
 
 ### Google Search Console
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `https://searchconsole.googleapis.com/webmasters/v3/sites/${GSC_SITE_ENCODED}/searchAnalytics/query` | POST | Search performance data |
+| Endpoint                                                                                             | Method | Description             |
+| ---------------------------------------------------------------------------------------------------- | ------ | ----------------------- |
+| `https://searchconsole.googleapis.com/webmasters/v3/sites/${GSC_SITE_ENCODED}/searchAnalytics/query` | POST   | Search performance data |
 
 **Auth**: Same gcloud ADC token as GA4
 
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when gathering channel data in parallel. This enables:
+
 - Agents share context and can coordinate mid-flight
 - You can steer priorities in real-time
 - Agents report progress as they complete
 
 **Team setup** (only when flag is enabled):
+
 ```
 TeamCreate("marketing-team")
 Agent(team_name="marketing-team", name="email-metrics", prompt="Pull Klaviyo subscriber counts, campaign stats, and flow metrics")
@@ -259,6 +263,7 @@ If the flag is NOT set, use standard fire-and-forget subagents.
 Resolve credentials in this order for each service:
 
 ### Klaviyo
+
 ```bash
 KLAVIYO_KEY="${KLAVIYO_PRIVATE_KEY:-$(claude plugin config get klaviyo_private_key 2>/dev/null)}"
 if [ -z "$KLAVIYO_KEY" ]; then
@@ -267,6 +272,7 @@ fi
 ```
 
 ### Meta Ads
+
 ```bash
 META_TOKEN="${META_ADS_TOKEN:-$(claude plugin config get meta_ads_token 2>/dev/null)}"
 META_ACCOUNT="${META_AD_ACCOUNT_ID:-$(claude plugin config get meta_ad_account_id 2>/dev/null)}"
@@ -276,6 +282,7 @@ fi
 ```
 
 ### GA4
+
 ```bash
 GA4_PROPERTY="${GA4_PROPERTY_ID:-$(claude plugin config get ga4_property_id 2>/dev/null)}"
 # GA4 uses gcloud application default credentials — check if configured:
@@ -283,6 +290,7 @@ gcloud auth application-default print-access-token 2>/dev/null
 ```
 
 ### Google Search Console
+
 ```bash
 GSC_SITE="${GOOGLE_SEARCH_CONSOLE_SITE:-$(claude plugin config get google_search_console_site 2>/dev/null)}"
 # Uses same gcloud ADC as GA4
@@ -330,12 +338,12 @@ fi
 
 Separate from paid ad creative gen. All outputs are **drafts only** — nothing auto-publishes or auto-sends (Rule 6).
 
-| Generator | CLI entry | Cron service | Enable flag |
-|---|---|---|---|
-| Landing-page hero variants | `ops-content-landing <project>` | — (on-demand) | `brand.voice` + `brand.product` + `brand.target_persona` + `source.url` in prefs |
-| SEO blog drafts | `ops-content-seo <project> [--dry-run]` | `content-seo-blog` (Mon 09:00 UTC) | `blog.enabled=true` + `gsc.site_url` + `brand.voice` |
-| Email drafts (Klaviyo flows + Resend) | `ops-content-email <project> [--dry-run]` | `content-email-draft` (Mon 10:00 UTC) | `email_marketing.enabled=true` + `brand.voice` |
-| Social calendar (LinkedIn + X + Instagram) | `ops-content-social <project> [--dry-run]` | `content-social-calendar` (Mon 11:00 UTC) | `social.enabled=true` + `brand.voice` |
+| Generator                                  | CLI entry                                  | Cron service                              | Enable flag                                                                      |
+| ------------------------------------------ | ------------------------------------------ | ----------------------------------------- | -------------------------------------------------------------------------------- |
+| Landing-page hero variants                 | `ops-content-landing <project>`            | — (on-demand)                             | `brand.voice` + `brand.product` + `brand.target_persona` + `source.url` in prefs |
+| SEO blog drafts                            | `ops-content-seo <project> [--dry-run]`    | `content-seo-blog` (Mon 09:00 UTC)        | `blog.enabled=true` + `gsc.site_url` + `brand.voice`                             |
+| Email drafts (Klaviyo flows + Resend)      | `ops-content-email <project> [--dry-run]`  | `content-email-draft` (Mon 10:00 UTC)     | `email_marketing.enabled=true` + `brand.voice`                                   |
+| Social calendar (LinkedIn + X + Instagram) | `ops-content-social <project> [--dry-run]` | `content-social-calendar` (Mon 11:00 UTC) | `social.enabled=true` + `brand.voice`                                            |
 
 All generators **refuse to run if `brand.voice` is absent** — no defaults are substituted.
 
@@ -354,39 +362,39 @@ If `<first-token>` matches a known verb below, route by verb. If it looks like a
 
 Route `$ARGUMENTS` to the correct section below:
 
-| Input | Action |
-|---|---|
-| (empty), dashboard, portfolio | Visual portfolio dashboard — all projects × all configured channels (Meta, Google Ads, GA4, GSC, Resend, SNS, IG, ShipBob, autopilot state). See ## dashboard section. |
-| portfolio --json | Machine-readable portfolio JSON (one row per project, full channel config) |
-| portfolio --project `<name>` | Full single-project config dump (every channel block) |
-| `<project>` | If `marketing.projects.<project>.autopilot.enabled == true` → run live autopilot pass for that project. Otherwise → run `bin/ops-marketing-provision provision-all --project <project>` then `bin/ops-marketing-autopilot --project <project> --dry-run` (see ## project entry-point section) |
-| email, klaviyo | Klaviyo email metrics |
-| ads, meta | Meta Ads performance (read-only overview) |
-| meta-manage, meta create-campaign, meta target, meta creative, meta rules, meta audiences, meta advantage | Meta Ads campaign management (see ## meta-manage section) |
-| google-ads, gads | Google Ads dashboard + campaign management (see ## google-ads section) |
-| analytics, ga4 | GA4 sessions + conversions |
-| ga4 realtime, ga4 funnel, ga4 cohort, ga4 audience, ga4 pivot | GA4 advanced analytics (see ## ga4-advanced section) |
-| seo, gsc | Search Console metrics |
-| social | Social media aggregator |
-| instagram, instagram post, instagram reel, instagram story, instagram insights, instagram demographics | Instagram publishing + insights (see ## instagram section) |
-| campaigns | Cross-channel campaign overview (all platforms) |
-| optimize | Cross-platform ad optimization agent |
-| `provision <project>` | Idempotent full sweep — provisions GA4, GSC, Instagram, Google Ads in order. Each step is no-op if already configured. Aliases: `provision-all <project>` |
-| `provision-instagram <project>` | Auto-resolves `instagram.account_id` from Meta token (uses `appsecret_proof` when `meta.app_secret` configured). |
-| `provision-google-ads <project>` | 4-step OAuth flow — developer token + OAuth client + refresh token (localhost callback :8080) + customer ID resolution with auto-MCC detection. |
-| `provision --all-projects` | Iterate every project in prefs, run `provision-all` per project. |
-| autopilot | Autonomous per-project daily ad management (see ## autopilot section) |
-| autopilot onboard `<url>` | Cold-start: scrape URL, derive strategy, scaffold/stage campaigns (see ## autopilot → Autonomous onboarding) |
-| `autopilot enable <project> [--cap <usd>]` | Enable autopilot for a project (see ## autopilot-enable section) |
-| `autopilot disable <project>` | Disable autopilot for a project (see ## autopilot-disable section) |
-| `autopilot run <project> [--dry-run]` | Run one autopilot pass directly (see ## autopilot-run section) |
-| `autopilot kill <project>` | Set kill_switch for a project (see ## autopilot-kill section) |
-| attribution | Unified attribution table (Meta + Google + Klaviyo + GA4) |
-| setup | Configure API keys |
-| `portfolio --live` | Live KPI rollup across all projects with non-zero spend or revenue |
-| `portfolio --kpis` | Just the KPI section, no config-state table |
-| `portfolio --prewarm-status` | Show what marketing creds exist in Doppler that aren't yet linked |
-| `<project> creative --brand=X --product=Y --audience=Z --goal=W [--num-shots=N --env=prd\|dev]` | Higgsfield brand asset generator. Drafts shot list, generates N images via Higgsfield API, uploads to S3, opens campaign-brief PR on my-project-operating-dashboard. See ## creative (Higgsfield) section. |
+| Input                                                                                                     | Action                                                                                                                                                                                                                                                                                        |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| (empty), dashboard, portfolio                                                                             | Visual portfolio dashboard — all projects × all configured channels (Meta, Google Ads, GA4, GSC, Resend, SNS, IG, ShipBob, autopilot state). See ## dashboard section.                                                                                                                        |
+| portfolio --json                                                                                          | Machine-readable portfolio JSON (one row per project, full channel config)                                                                                                                                                                                                                    |
+| portfolio --project `<name>`                                                                              | Full single-project config dump (every channel block)                                                                                                                                                                                                                                         |
+| `<project>`                                                                                               | If `marketing.projects.<project>.autopilot.enabled == true` → run live autopilot pass for that project. Otherwise → run `bin/ops-marketing-provision provision-all --project <project>` then `bin/ops-marketing-autopilot --project <project> --dry-run` (see ## project entry-point section) |
+| email, klaviyo                                                                                            | Klaviyo email metrics                                                                                                                                                                                                                                                                         |
+| ads, meta                                                                                                 | Meta Ads performance (read-only overview)                                                                                                                                                                                                                                                     |
+| meta-manage, meta create-campaign, meta target, meta creative, meta rules, meta audiences, meta advantage | Meta Ads campaign management (see ## meta-manage section)                                                                                                                                                                                                                                     |
+| google-ads, gads                                                                                          | Google Ads dashboard + campaign management (see ## google-ads section)                                                                                                                                                                                                                        |
+| analytics, ga4                                                                                            | GA4 sessions + conversions                                                                                                                                                                                                                                                                    |
+| ga4 realtime, ga4 funnel, ga4 cohort, ga4 audience, ga4 pivot                                             | GA4 advanced analytics (see ## ga4-advanced section)                                                                                                                                                                                                                                          |
+| seo, gsc                                                                                                  | Search Console metrics                                                                                                                                                                                                                                                                        |
+| social                                                                                                    | Social media aggregator                                                                                                                                                                                                                                                                       |
+| instagram, instagram post, instagram reel, instagram story, instagram insights, instagram demographics    | Instagram publishing + insights (see ## instagram section)                                                                                                                                                                                                                                    |
+| campaigns                                                                                                 | Cross-channel campaign overview (all platforms)                                                                                                                                                                                                                                               |
+| optimize                                                                                                  | Cross-platform ad optimization agent                                                                                                                                                                                                                                                          |
+| `provision <project>`                                                                                     | Idempotent full sweep — provisions GA4, GSC, Instagram, Google Ads in order. Each step is no-op if already configured. Aliases: `provision-all <project>`                                                                                                                                     |
+| `provision-instagram <project>`                                                                           | Auto-resolves `instagram.account_id` from Meta token (uses `appsecret_proof` when `meta.app_secret` configured).                                                                                                                                                                              |
+| `provision-google-ads <project>`                                                                          | 4-step OAuth flow — developer token + OAuth client + refresh token (localhost callback :8080) + customer ID resolution with auto-MCC detection.                                                                                                                                               |
+| `provision --all-projects`                                                                                | Iterate every project in prefs, run `provision-all` per project.                                                                                                                                                                                                                              |
+| autopilot                                                                                                 | Autonomous per-project daily ad management (see ## autopilot section)                                                                                                                                                                                                                         |
+| autopilot onboard `<url>`                                                                                 | Cold-start: scrape URL, derive strategy, scaffold/stage campaigns (see ## autopilot → Autonomous onboarding)                                                                                                                                                                                  |
+| `autopilot enable <project> [--cap <usd>]`                                                                | Enable autopilot for a project (see ## autopilot-enable section)                                                                                                                                                                                                                              |
+| `autopilot disable <project>`                                                                             | Disable autopilot for a project (see ## autopilot-disable section)                                                                                                                                                                                                                            |
+| `autopilot run <project> [--dry-run]`                                                                     | Run one autopilot pass directly (see ## autopilot-run section)                                                                                                                                                                                                                                |
+| `autopilot kill <project>`                                                                                | Set kill_switch for a project (see ## autopilot-kill section)                                                                                                                                                                                                                                 |
+| attribution                                                                                               | Unified attribution table (Meta + Google + Klaviyo + GA4)                                                                                                                                                                                                                                     |
+| setup                                                                                                     | Configure API keys                                                                                                                                                                                                                                                                            |
+| `portfolio --live`                                                                                        | Live KPI rollup across all projects with non-zero spend or revenue                                                                                                                                                                                                                            |
+| `portfolio --kpis`                                                                                        | Just the KPI section, no config-state table                                                                                                                                                                                                                                                   |
+| `portfolio --prewarm-status`                                                                              | Show what marketing creds exist in Doppler that aren't yet linked                                                                                                                                                                                                                             |
+| `<project> creative --brand=X --product=Y --audience=Z --goal=W [--num-shots=N --env=prd\|dev]`           | Higgsfield brand asset generator. Drafts shot list, generates N images via Higgsfield API, uploads to S3, opens campaign-brief PR on my-project-operating-dashboard. See ## creative (Higgsfield) section.                                                                                    |
 
 ---
 
@@ -421,7 +429,7 @@ Configs: `prd` and `dev`. Keychain mirrors: `security find-generic-password -a m
 ### Cost guardrails (NEVER LEAK MONEY)
 
 - **Plan:** Higgsfield Creator = $39/mo ≈ 1200 credits. Each generation = 5..15 credits.
-- **Rate floor:** hard ceiling of 5 generations/hour/project, enforced via `mkdir`-based lock on `${OPS_HIGGSFIELD_RATE_DIR:-/tmp}/.higgsfield-rate-<project>-<YYYYMMDDTHH>`. Slots are reserved atomically *before* any HTTP call. Override only with `OPS_HIGGSFIELD_RATE_LIMIT=N` and a documented reason.
+- **Rate floor:** hard ceiling of 5 generations/hour/project, enforced via `mkdir`-based lock on `${OPS_HIGGSFIELD_RATE_DIR:-/tmp}/.higgsfield-rate-<project>-<YYYYMMDDTHH>`. Slots are reserved atomically _before_ any HTTP call. Override only with `OPS_HIGGSFIELD_RATE_LIMIT=N` and a documented reason.
 - **FinOps usage log:** `~/.creative-briefs/.usage-<YYYY-MM-DD>.log` — one tab-separated line per kicked-off request (timestamp, project, model, request_id). Read by FinOps reconciliation.
 - **Concurrency test:** `tests/ops-creative-brief.test.sh` spawns 6 concurrent dry-run invocations and asserts `ok_count ≤ 5` and `ratelimited_count ≥ 1`.
 
@@ -477,6 +485,7 @@ OPS_MARKETING_DRY_RUN=1 ops-marketing-link-prewarm --project <name>
 Pull Klaviyo metrics for last 30 days.
 
 ### Subscriber count
+
 ```bash
 curl -s "https://a.klaviyo.com/api/lists/?fields[list]=name,id,profile_count" \
   -H "Authorization: Klaviyo-API-Key ${KLAVIYO_KEY}" \
@@ -484,6 +493,7 @@ curl -s "https://a.klaviyo.com/api/lists/?fields[list]=name,id,profile_count" \
 ```
 
 ### Recent campaigns (last 10)
+
 ```bash
 curl -s "https://a.klaviyo.com/api/campaigns/?filter=equals(messages.channel,'email')&sort=-created_at&page[size]=10&fields[campaign]=name,status,created_at,send_time" \
   -H "Authorization: Klaviyo-API-Key ${KLAVIYO_KEY}" \
@@ -491,6 +501,7 @@ curl -s "https://a.klaviyo.com/api/campaigns/?filter=equals(messages.channel,'em
 ```
 
 ### Flow metrics (active flows)
+
 ```bash
 curl -s "https://a.klaviyo.com/api/flows/?filter=equals(status,'live')&fields[flow]=name,status,created,trigger_type" \
   -H "Authorization: Klaviyo-API-Key ${KLAVIYO_KEY}" \
@@ -498,6 +509,7 @@ curl -s "https://a.klaviyo.com/api/flows/?filter=equals(status,'live')&fields[fl
 ```
 
 ### Key email metrics (opens, clicks, revenue via metric aggregates)
+
 ```bash
 # Get metric IDs first
 curl -s "https://a.klaviyo.com/api/metrics/" \
@@ -506,6 +518,7 @@ curl -s "https://a.klaviyo.com/api/metrics/" \
 ```
 
 ### Output format
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  EMAIL (KLAVIYO) — last 30d
@@ -526,27 +539,32 @@ curl -s "https://a.klaviyo.com/api/metrics/" \
 Pull Meta Ads insights for the configured ad account.
 
 ### Account-level spend (last 7 days)
+
 ```bash
 curl -s "https://graph.facebook.com/v18.0/${META_ACCOUNT}/insights?fields=spend,impressions,clicks,ctr,cpc,actions,action_values&date_preset=last_7d&level=account" \
   -H "Authorization: Bearer ${META_TOKEN}" | jq '{spend: .data[0].spend, impressions: .data[0].impressions, clicks: .data[0].clicks, ctr: .data[0].ctr, cpc: .data[0].cpc}'
 ```
 
 ### Campaign breakdown (last 7 days)
+
 ```bash
 curl -s "https://graph.facebook.com/v18.0/${META_ACCOUNT}/campaigns?fields=name,status,daily_budget,lifetime_budget,insights{spend,impressions,clicks,actions,action_values}&date_preset=last_7d" \
   -H "Authorization: Bearer ${META_TOKEN}" | jq '.data[] | {name: .name, status: .status, spend: .insights.data[0].spend}'
 ```
 
 ### ROAS calculation
+
 From `action_values` array: extract `action_type == "purchase"` value, divide by spend.
 
 ### Top performing ads (last 7d)
+
 ```bash
 curl -s "https://graph.facebook.com/v18.0/${META_ACCOUNT}/ads?fields=name,adset_id,insights{spend,impressions,clicks,actions,action_values,ctr,cpc}&date_preset=last_7d&limit=10" \
   -H "Authorization: Bearer ${META_TOKEN}" | jq '.data | sort_by(.insights.data[0].spend | tonumber) | reverse | .[0:5] | .[] | {name: .name, spend: .insights.data[0].spend, ctr: .insights.data[0].ctr}'
 ```
 
 ### Output format
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  META ADS — last 7d
@@ -575,14 +593,14 @@ Full Meta Ads campaign management. Uses same `META_TOKEN` and `META_ACCOUNT` cre
 
 Route `$ARGUMENTS` within meta-manage:
 
-| Input | Action |
-|---|---|
-| create-campaign | Create a new campaign (always PAUSED) |
-| target \<ADSET_ID\> | Configure ad set targeting |
-| creative \<CAMPAIGN_ID\> | Upload image + create ad with copy |
-| rules | List / create automation rules |
-| audiences | Create custom or lookalike audiences |
-| advantage | Create Advantage+ AI-optimized campaign |
+| Input                    | Action                                  |
+| ------------------------ | --------------------------------------- |
+| create-campaign          | Create a new campaign (always PAUSED)   |
+| target \<ADSET_ID\>      | Configure ad set targeting              |
+| creative \<CAMPAIGN_ID\> | Upload image + create ad with copy      |
+| rules                    | List / create automation rules          |
+| audiences                | Create custom or lookalike audiences    |
+| advantage                | Create Advantage+ AI-optimized campaign |
 
 ### create-campaign
 
@@ -715,6 +733,7 @@ Print: `Ad created (ID: <ID>, creative: <CREATIVE_ID>, status: PAUSED). Enable v
 List existing rules or create a new automation rule.
 
 **List rules:**
+
 ```bash
 curl -s "https://graph.facebook.com/v20.0/${META_ACCOUNT}/adrules_library?fields=name,status,evaluation_spec,execution_spec" \
   -H "Authorization: Bearer ${META_TOKEN}" | jq '.data[] | {id: .id, name: .name, status: .status}'
@@ -725,6 +744,7 @@ curl -s "https://graph.facebook.com/v20.0/${META_ACCOUNT}/adrules_library?fields
 1. Rule type: `[Pause low performers, Scale winners, Increase budget, Decrease budget]`
 
 For "Pause low performers":
+
 ```bash
 # Pause ads where CPA > $50 and spend > $20 in last 7 days
 curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/adrules_library" \
@@ -750,6 +770,7 @@ curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/adrules_librar
 ```
 
 For "Scale winners":
+
 ```bash
 # Increase budget 20% for ad sets with ROAS > 3x in last 7 days
 curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/adrules_library" \
@@ -781,9 +802,11 @@ Print: `Rule created (ID: <ID>). Runs semi-hourly and will auto-pause ads with C
 Create Custom Audience or Lookalike Audience.
 
 **Prompt via AskUserQuestion:**
+
 1. Audience type: `[Custom — website, Custom — customer list, Lookalike, Skip]`
 
 **Custom — website (Pixel-based):**
+
 ```bash
 curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/customaudiences" \
   -H "Authorization: Bearer ${META_TOKEN}" \
@@ -799,6 +822,7 @@ curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/customaudience
 Note: Replace `<PIXEL_ID>` with actual pixel ID from Meta Events Manager.
 
 **Lookalike Audience** (requires origin audience with min 100 matched profiles):
+
 ```bash
 # Prompt for origin audience ID via AskUserQuestion (free text)
 curl -s -X POST "https://graph.facebook.com/v20.0/${META_ACCOUNT}/customaudiences" \
@@ -823,6 +847,7 @@ Print: `Lookalike audience created (ID: <ID>). Typically takes 1-6 hours to popu
 Create an Advantage+ Shopping Campaign (AI-optimized).
 
 Collect via AskUserQuestion:
+
 1. Daily budget in dollars (free text)
 2. Campaign name (free text)
 
@@ -852,11 +877,13 @@ Print: `Advantage+ campaign "${CAMPAIGN_NAME}" created (ID: <ID>, status: PAUSED
 Pull GA4 data via the Data API using gcloud ADC.
 
 ### Get access token
+
 ```bash
 GA4_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
 ```
 
 ### Sessions + conversions (last 7d)
+
 ```bash
 curl -s -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport" \
   -H "Authorization: Bearer ${GA4_TOKEN}" \
@@ -875,6 +902,7 @@ curl -s -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PR
 ```
 
 ### Traffic sources (last 7d)
+
 ```bash
 curl -s -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport" \
   -H "Authorization: Bearer ${GA4_TOKEN}" \
@@ -889,6 +917,7 @@ curl -s -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PR
 ```
 
 ### Top pages (last 7d)
+
 ```bash
 curl -s -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY}:runReport" \
   -H "Authorization: Bearer ${GA4_TOKEN}" \
@@ -905,6 +934,7 @@ curl -s -X POST "https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PR
 If `GA4_TOKEN` is empty or gcloud not available, output: `GA4 not configured — run /ops:marketing setup or configure gcloud ADC`.
 
 ### Output format
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  ANALYTICS (GA4) — last 7d
@@ -932,13 +962,13 @@ Advanced GA4 analytics: realtime, funnel, cohort, audience export, and pivot rep
 
 Route `$ARGUMENTS` within ga4-advanced (matches `ga4 <sub>` pattern):
 
-| Input | Action |
-|---|---|
-| realtime | Active users right now (last 30 min) |
-| funnel | Conversion funnel with step visualization |
-| cohort | Cohort retention analysis by device |
-| audience | Async audience segment export |
-| pivot | Multi-dimensional pivot report |
+| Input    | Action                                    |
+| -------- | ----------------------------------------- |
+| realtime | Active users right now (last 30 min)      |
+| funnel   | Conversion funnel with step visualization |
+| cohort   | Cohort retention analysis by device       |
+| audience | Async audience segment export             |
+| pivot    | Multi-dimensional pivot report            |
 
 ### realtime
 
@@ -1123,7 +1153,7 @@ while [ $ATTEMPTS -lt 60 ]; do
     -H "Authorization: Bearer ${GA4_TOKEN}")
   STATE=$(echo "$STATUS_RESP" | jq -r '.state // "UNKNOWN"')
   PCT=$(echo "$STATUS_RESP" | jq -r '.percentageCompleted // 0')
-  
+
   if [ "$STATE" = "ACTIVE" ]; then break; fi
   if [ "$STATE" = "FAILED" ]; then
     echo "Export failed. Try again or check GA4 audience configuration."
@@ -1209,12 +1239,14 @@ echo "$RESULT" | jq -r '.rows[]? | [
 Pull Google Search Console data.
 
 ### Get access token (same gcloud ADC)
+
 ```bash
 GSC_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
 GSC_SITE_ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${GSC_SITE}', safe=''))" 2>/dev/null || echo "${GSC_SITE}" | sed 's|:|%3A|g; s|/|%2F|g')
 ```
 
 ### Search performance (last 28 days)
+
 ```bash
 curl -s -X POST "https://searchconsole.googleapis.com/webmasters/v3/sites/${GSC_SITE_ENCODED}/searchAnalytics/query" \
   -H "Authorization: Bearer ${GSC_TOKEN}" \
@@ -1228,6 +1260,7 @@ curl -s -X POST "https://searchconsole.googleapis.com/webmasters/v3/sites/${GSC_
 ```
 
 ### Top queries (last 28 days)
+
 ```bash
 curl -s -X POST "https://searchconsole.googleapis.com/webmasters/v3/sites/${GSC_SITE_ENCODED}/searchAnalytics/query" \
   -H "Authorization: Bearer ${GSC_TOKEN}" \
@@ -1242,6 +1275,7 @@ curl -s -X POST "https://searchconsole.googleapis.com/webmasters/v3/sites/${GSC_
 ```
 
 ### Top pages by clicks
+
 ```bash
 curl -s -X POST "https://searchconsole.googleapis.com/webmasters/v3/sites/${GSC_SITE_ENCODED}/searchAnalytics/query" \
   -H "Authorization: Bearer ${GSC_TOKEN}" \
@@ -1257,6 +1291,7 @@ curl -s -X POST "https://searchconsole.googleapis.com/webmasters/v3/sites/${GSC_
 If GSC not configured, output: `Search Console not configured — run /ops:marketing setup`.
 
 ### Output format
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  SEO (SEARCH CONSOLE) — last 28d
@@ -1281,6 +1316,7 @@ If GSC not configured, output: `Search Console not configured — run /ops:marke
 Aggregate available social media metrics. Check which are configured.
 
 ### Instagram (via Meta Graph API — same token as Meta Ads)
+
 ```bash
 # Get Instagram Business Account ID linked to the ad account
 curl -s "https://graph.facebook.com/v18.0/me/accounts?fields=instagram_business_account" \
@@ -1292,6 +1328,7 @@ curl -s "https://graph.facebook.com/v18.0/${IG_ACCOUNT_ID}?fields=followers_coun
 ```
 
 ### YouTube (if configured via gcloud)
+
 ```bash
 YT_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
 curl -s "https://www.googleapis.com/youtube/v3/channels?part=statistics&mine=true" \
@@ -1301,6 +1338,7 @@ curl -s "https://www.googleapis.com/youtube/v3/channels?part=statistics&mine=tru
 Show `[not configured]` for any unconfigured channels rather than failing.
 
 ### Output format
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  SOCIAL MEDIA
@@ -1317,6 +1355,7 @@ Show `[not configured]` for any unconfigured channels rather than failing.
 Instagram publishing and insights via Instagram Graph API (same `META_TOKEN` as Meta Ads).
 
 **Prerequisites:**
+
 - `META_TOKEN` configured (same as Meta Ads)
 - Instagram Business account linked to a Facebook Page
 - `IG_ACCOUNT_ID` resolved via: `curl "https://graph.facebook.com/v21.0/me/accounts?fields=instagram_business_account" -H "Authorization: Bearer ${META_TOKEN}"` → `data[0].instagram_business_account.id`
@@ -1324,6 +1363,7 @@ Instagram publishing and insights via Instagram Graph API (same `META_TOKEN` as 
 **Rate limit:** 200 API calls/hour per app. Demographics require 48h reporting delay. Media insights require account with >1,000 followers.
 
 **Resolve IG account ID at the start of every instagram invocation:**
+
 ```bash
 IG_ACCOUNT_ID=$(claude plugin config get instagram_account_id 2>/dev/null)
 if [ -z "$IG_ACCOUNT_ID" ]; then
@@ -1340,20 +1380,21 @@ fi
 
 Route `$ARGUMENTS` within instagram:
 
-| Input | Action |
-|---|---|
-| post \<IMAGE_URL\> | Publish image post to feed |
-| reel \<VIDEO_URL\> | Publish a Reel |
-| story \<IMAGE_URL\|VIDEO_URL\> | Publish a Story |
-| insights \<MEDIA_ID\> | Per-post metrics |
-| account-insights [days] | Account-level reach + impressions |
-| demographics | Audience age/gender/location |
+| Input                          | Action                            |
+| ------------------------------ | --------------------------------- |
+| post \<IMAGE_URL\>             | Publish image post to feed        |
+| reel \<VIDEO_URL\>             | Publish a Reel                    |
+| story \<IMAGE_URL\|VIDEO_URL\> | Publish a Story                   |
+| insights \<MEDIA_ID\>          | Per-post metrics                  |
+| account-insights [days]        | Account-level reach + impressions |
+| demographics                   | Audience age/gender/location      |
 
 ### post
 
 Publish an image post (two-step: create container → publish).
 
 Collect via AskUserQuestion:
+
 1. Image URL (publicly accessible HTTPS URL) — free text
 2. Caption — free text
 
@@ -1389,6 +1430,7 @@ fi
 Publish a Reel. Video must be an HTTPS URL (MP4, H.264, max 15 min, min 500px width).
 
 Collect via AskUserQuestion:
+
 1. Video URL (HTTPS) — free text
 2. Caption — free text
 
@@ -1438,6 +1480,7 @@ fi
 Publish a Story (image or video, 24h expiry).
 
 Collect via AskUserQuestion:
+
 1. Content URL (HTTPS image or video) — free text
 2. Content type: `[Image story, Video story]`
 
@@ -1562,14 +1605,14 @@ and stop.
 
 Route `$ARGUMENTS` within the google-ads section:
 
-| Input | Action |
-|---|---|
-| (empty), dashboard, overview | Campaign performance dashboard (last 7 days) |
-| search-terms, terms | Search Terms Report with negative keyword candidates (last 30 days) |
-| budget-recs, recommendations, recs | Budget optimization recommendations from Google |
-| campaigns, manage | Campaign management — list, create, pause, enable, adjust budget |
-| keywords, kw, keyword-planner | Keyword Planner — discover keywords with volume and bid data |
-| ad-groups, ag | Ad group management — list, create, add/remove keywords, adjust bids |
+| Input                              | Action                                                               |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| (empty), dashboard, overview       | Campaign performance dashboard (last 7 days)                         |
+| search-terms, terms                | Search Terms Report with negative keyword candidates (last 30 days)  |
+| budget-recs, recommendations, recs | Budget optimization recommendations from Google                      |
+| campaigns, manage                  | Campaign management — list, create, pause, enable, adjust budget     |
+| keywords, kw, keyword-planner      | Keyword Planner — discover keywords with volume and bid data         |
+| ad-groups, ag                      | Ad group management — list, create, add/remove keywords, adjust bids |
 
 ### Dashboard (default — no args, `dashboard`, `overview`)
 
@@ -1779,6 +1822,7 @@ curl -s -X POST \
 ```
 
 Output as table:
+
 ```
 | # | Campaign ID | Name | Status | Channel | Budget/day |
 ```
@@ -1786,6 +1830,7 @@ Output as table:
 **Create campaign** (`campaigns create`):
 
 Collect from user via AskUserQuestion (free text, one at a time):
+
 1. Campaign name
 2. Daily budget in dollars (convert to micros: `BUDGET_MICROS=$(awk "BEGIN {printf \"%d\", $DOLLARS * 1000000}")`)
 3. Channel type — AskUserQuestion with options: `[Search, Display, Shopping, Video]`
@@ -1794,6 +1839,7 @@ Collect from user via AskUserQuestion (free text, one at a time):
 Two-step mutate:
 
 Step 1 — Create budget:
+
 ```bash
 BUDGET_RESP=$(curl -s -X POST \
   "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/campaignBudgets:mutate" \
@@ -1811,6 +1857,7 @@ BUDGET_RESOURCE=$(echo "$BUDGET_RESP" | jq -r '.results[0].resourceName')
 ```
 
 Step 2 — Create campaign (always in PAUSED status for safety):
+
 ```bash
 curl -s -X POST \
   "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/campaigns:mutate" \
@@ -1882,6 +1929,7 @@ Print: `✓ Campaign <NAME> enabled.`
 **Adjust budget** (`campaigns budget <ID> <AMOUNT>`):
 
 First, fetch the campaign's current budget resource name:
+
 ```bash
 CAMPAIGN_DATA=$(curl -s -X POST \
   "https://googleads.googleapis.com/${GADS_API_VERSION}/customers/${GADS_CUSTOMER_ID}/googleAds:searchStream" \
@@ -1895,6 +1943,7 @@ CURRENT_BUDGET=$(awk "BEGIN { printf \"%.2f\", ${CURRENT_BUDGET_MICROS:-0} / 100
 Confirm via AskUserQuestion: `"Change budget from $<CURRENT> to $<NEW>/day?"` with options `[Confirm, Cancel]`.
 
 Then update:
+
 ```bash
 NEW_BUDGET_MICROS=$(awk "BEGIN {printf \"%d\", ${NEW_AMOUNT} * 1000000}")
 curl -s -X POST \
@@ -1967,6 +2016,7 @@ curl -s -X POST \
 ```
 
 Output:
+
 ```
 | # | Ad Group ID | Name | Status | CPC Bid |
 ```
@@ -1974,6 +2024,7 @@ Output:
 **Create ad group** (`ad-groups create <CAMPAIGN_ID>`):
 
 Collect via AskUserQuestion:
+
 1. Ad group name (free text)
 2. Default CPC bid in dollars (free text, convert to micros)
 
@@ -2007,6 +2058,7 @@ curl -s -X POST \
 ```
 
 Output:
+
 ```
 | # | Keyword | Match Type | CPC Bid | Status |
 ```
@@ -2014,6 +2066,7 @@ Output:
 **Add keyword to ad group** (`ad-groups add-keyword <AD_GROUP_ID>`):
 
 Collect via AskUserQuestion:
+
 1. Keyword text (free text)
 2. Match type — AskUserQuestion options: `[Broad, Phrase, Exact]`
    Map: `BROAD`, `PHRASE`, `EXACT`
@@ -2086,6 +2139,7 @@ Print: `✓ Keyword bid updated to $X.XX`
 Cross-channel campaign overview — unified view of active campaigns across all configured channels (Klaviyo, Meta Ads, Google Ads).
 
 Run in parallel:
+
 1. Klaviyo active campaigns (status: draft + scheduled + sending)
 2. Meta Ads active campaigns (status ACTIVE) — reuse `META_TOKEN` / `META_ACCOUNT`
 3. Google Ads active campaigns (status ENABLED) — reuse `GADS_*` credentials if configured
@@ -2112,6 +2166,7 @@ fi
 ```
 
 ### Output format
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  CROSS-CHANNEL CAMPAIGNS — active
@@ -2138,17 +2193,20 @@ For any channel not configured, show `[not configured — /ops:marketing setup]`
 Cross-platform ad optimization agent. Reads Meta + Google Ads data, computes blended ROAS, and recommends where to shift budget.
 
 Spawn the marketing optimizer agent:
+
 ```
 Agent(prompt="Run the marketing optimizer agent. Read ops-marketing-dash data for Meta Ads and Google Ads spend/conversions/ROAS. Compute blended ROAS across platforms. Identify the highest-ROAS platform. Recommend budget shifts with specific dollar amounts. List top 3 actions by expected impact. Use the marketing-optimizer.md agent instructions.", model="claude-sonnet-4-5")
 ```
 
 If Agent Teams are available (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`):
+
 ```
 TeamCreate("optimizer")
 Agent(team_name="optimizer", name="marketing-optimizer", prompt="You are the marketing optimizer. Read ops-marketing-dash pre-gathered data. Compute blended ROAS for Meta + Google. Recommend budget reallocation. Show unified attribution table.")
 ```
 
 ### Output format
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  AD OPTIMIZATION REPORT
@@ -2213,13 +2271,13 @@ Account IDs/tokens stay as existing cred-refs under `.meta` / `.google_ads`. The
 ### Spend-safety doctrine (NEVER LEAK MONEY + Rule 5)
 
 1. **No cap ⇒ no run.** A project without a positive `daily_spend_cap_usd` is refused outright — escalation note written, zero mutations, non-zero exit.
-2. **Cap pre-flight per channel** *before any mutation*: Σ campaign daily_budget (campaign-level CBO, else summed ACTIVE adset budgets / Google `campaign_budget.amount_micros`) must be ≤ cap. On exceed → treat as budget tamper: abort that project, escalation note, no mutations.
+2. **Cap pre-flight per channel** _before any mutation_: Σ campaign daily_budget (campaign-level CBO, else summed ACTIVE adset budgets / Google `campaign_budget.amount_micros`) must be ≤ cap. On exceed → treat as budget tamper: abort that project, escalation note, no mutations.
 3. **Runaway trajectory check:** lifetime `amount_spent` delta since last pass must be ≤ 1.5× cap. On exceed → abort + escalate.
 4. **Allowed mutations only:** pause underperformers, swap/rotate creatives, regenerate creatives. Pause heuristics: CPL > `pause_cpl_multiple` × adset-avg CPL after ≥ $10 spend, OR CTR < `pause_ctr_floor` after ≥ 1000 impressions. Candidates are paused worst-CPL-first and the sweep **stops before live creatives would drop below `min_live_creatives`**.
 5. **Never autonomous:** raising budgets, creating campaigns, creating/expanding audiences, changing objectives. If the data implies any of these, it is written to the report under **Recommendations (require human action)** — never executed.
 6. **Dry-run:** `--dry-run` and the **first install run** (no `.installed` marker) perform zero mutations — every intended action is logged `[DRY]` in the report so an operator reviews one full pass before it goes live.
 
-The `autonomy_level` and `envelope` settings (next section) layer **on top of** this numbered list — they govern only whether *creation* actions may execute autonomously. They never relax invariants 1–4 and 6: no-cap refusal, per-channel cap pre-flight, runaway-trajectory abort, pause-only-down to `min_live_creatives`, escalation, and the first-run/`--dry-run` forced-dry pass all hold **unconditionally at every level**.
+The `autonomy_level` and `envelope` settings (next section) layer **on top of** this numbered list — they govern only whether _creation_ actions may execute autonomously. They never relax invariants 1–4 and 6: no-cap refusal, per-channel cap pre-flight, runaway-trajectory abort, pause-only-down to `min_live_creatives`, escalation, and the first-run/`--dry-run` forced-dry pass all hold **unconditionally at every level**.
 
 ### Creative fatigue → regeneration
 
@@ -2235,7 +2293,7 @@ If `weekly_synthesis` is true and the pass runs on a Monday, a synthesis section
 
 ### Autonomy levels & envelope
 
-`autopilot.autonomy_level` selects how *creation* actions (new campaigns, new/expanded audiences, budget creation) are handled. The default is **`create_once`**, which equals the shipped spend-safety doctrine verbatim — the existing guardrail is never silently removed.
+`autopilot.autonomy_level` selects how _creation_ actions (new campaigns, new/expanded audiences, budget creation) are handled. The default is **`create_once`**, which equals the shipped spend-safety doctrine verbatim — the existing guardrail is never silently removed.
 
 - **`create_once`** (DEFAULT): creation actions are written to the report under a **"Requires human action"** heading and are **not executed**. A one-time approval token file `$OPS_DATA_DIR/state/autopilot/<project>.create-ok` unlocks creation; once present, the daily optimize/regen loop runs fully autonomously within the cap. This is identical to the shipped doctrine (invariant 5) — the safe default.
 - **`sandbox`**: creation is allowed **only if every `envelope` assertion passes**:
@@ -2244,7 +2302,7 @@ If `weekly_synthesis` is true and the pass runs on a Monday, a synthesis section
   - post-create Σ daily_budget ≤ `envelope.max_daily_budget_usd` ≤ `daily_spend_cap_usd`
   - campaigns ≤ `envelope.max_campaigns`
   - new audiences ≤ `envelope.max_new_audiences`
-  Any single miss ⇒ escalate, **zero action** (no partial creation).
+    Any single miss ⇒ escalate, **zero action** (no partial creation).
 - **`unrestricted`**: creation is allowed bounded **only** by `daily_spend_cap_usd` (still cap-preflighted, runaway-checked, and first-run forced-dry). This explicitly **overrides the default creation guardrail** — operators consciously opt up; document/communicate this in the status dashboard.
 - **`envelope.kill_switch: true`** ⇒ hard stop: stage-only, **zero mutations**, regardless of `autonomy_level`.
 
@@ -2437,13 +2495,13 @@ For a **live KPI pull** on a single project (Meta spend, GA4 sessions, GSC click
 
 Routing summary:
 
-| Input | Action |
-|---|---|
-| `/ops:marketing` (no args) | Portfolio: all projects × all channels (configured/enabled state) |
-| `/ops:marketing dashboard` | Same as no args |
-| `/ops:marketing <project>` | If autopilot enabled → live pass; else provision + dry-run + per-project KPI dash |
-| `/ops:marketing portfolio --json` | Machine-readable portfolio dump |
-| `/ops:marketing portfolio --project <name>` | Single-project full config dump |
+| Input                                       | Action                                                                            |
+| ------------------------------------------- | --------------------------------------------------------------------------------- |
+| `/ops:marketing` (no args)                  | Portfolio: all projects × all channels (configured/enabled state)                 |
+| `/ops:marketing dashboard`                  | Same as no args                                                                   |
+| `/ops:marketing <project>`                  | If autopilot enabled → live pass; else provision + dry-run + per-project KPI dash |
+| `/ops:marketing portfolio --json`           | Machine-readable portfolio dump                                                   |
+| `/ops:marketing portfolio --project <name>` | Single-project full config dump                                                   |
 
 The portfolio surfaces channels the per-project dash never showed: **Resend** (transactional/marketing email — `email_marketing.resend`), **AWS SNS** (push/SMS — `email_marketing.sns`), **ShipBob** (fulfillment — `shipbob`), **Meta Page/Business** (`meta.page_id`/`business_id`), and **GA4 Measurement Protocol** (`ga4.measurement_id`/`api_secret`). It also exposes per-project autopilot state (enabled / autonomy_level / cap_usd / kill_switch) at-a-glance — the kill-switch column is the answer to "which projects are stage-only right now".
 
@@ -2476,6 +2534,7 @@ SENTIMENT (Reddit / HN)
 ```
 
 Mapping rules (apply per event in the JSON array):
+
 - `source == "page-diff"` and `kind == "pricing"` → PRICING MOVES entry. Describe the direction (drop/increase) if inferable from snippet.
 - `snippet` matches `funding|raised|series [A-D]` (case-insensitive) → FUNDING / NEWS entry. Suggest a campaign counter-angle framing the competitor as an "established player" or "new entrant" as appropriate.
 - `source == "reddit"` or `source == "hn"` → SENTIMENT entry. Extract the core concern from `snippet` as a content opportunity.
@@ -2501,6 +2560,7 @@ Parse the JSON output and display:
 ```
 
 **Marketing Health Score computation** (0-100, shown at bottom of dashboard):
+
 - Blended ROAS ≥ 3x: +30 pts; 1-3x: +15 pts; < 1x: +0 pts
 - Email open rate ≥ 20%: +20 pts; 10-20%: +10 pts; < 10%: +0 pts
 - Channel diversity (3+ platforms active): +20 pts; 2 platforms: +10 pts; 1: +0 pts
@@ -2618,29 +2678,29 @@ Replaces per-project `autopilot.notify_sink`. On `ESCALATED=1` all sinks fire.
         // Telegram
         {
           "type": "telegram",
-          "ref": "doppler:claude-ops/prd/TELEGRAM_BOT_TOKEN",   // or "env:TELEGRAM_BOT_TOKEN"
-          "chat_ref": "doppler:claude-ops/prd/TELEGRAM_CHAT_ID" // optional; falls back to env
+          "ref": "doppler:claude-ops/prd/TELEGRAM_BOT_TOKEN", // or "env:TELEGRAM_BOT_TOKEN"
+          "chat_ref": "doppler:claude-ops/prd/TELEGRAM_CHAT_ID", // optional; falls back to env
         },
         // Slack incoming webhook
         {
           "type": "slack",
-          "ref": "doppler:claude-ops/prd/SLACK_AUTOPILOT_WEBHOOK"
+          "ref": "doppler:claude-ops/prd/SLACK_AUTOPILOT_WEBHOOK",
         },
         // Email via Resend
         {
           "type": "email",
           "ref": "doppler:claude-ops/prd/RESEND_API_KEY",
           "to": "owner@example.com",
-          "from": "autopilot@example.com"
+          "from": "autopilot@example.com",
         },
         // WhatsApp (daemon context: wacli send; Claude context: mcp__whatsapp)
         {
           "type": "whatsapp",
-          "to": "+1234567890"
-        }
-      ]
-    }
-  }
+          "to": "+1234567890",
+        },
+      ],
+    },
+  },
 }
 ```
 
@@ -2659,14 +2719,14 @@ Auto-refresh requires `app_id` and `app_secret` in addition to `access_token`:
     "projects": {
       "my-project": {
         "meta": {
-          "access_token":  "doppler:claude-ops/prd/META_MY_PROJECT_ACCESS_TOKEN",
+          "access_token": "doppler:claude-ops/prd/META_MY_PROJECT_ACCESS_TOKEN",
           "ad_account_id": "doppler:claude-ops/prd/META_MY_PROJECT_AD_ACCOUNT_ID",
-          "app_id":        "doppler:claude-ops/prd/META_MY_PROJECT_APP_ID",     // NEW — required for auto-refresh
-          "app_secret":    "doppler:claude-ops/prd/META_MY_PROJECT_APP_SECRET"  // NEW — required for auto-refresh
-        }
-      }
-    }
-  }
+          "app_id": "doppler:claude-ops/prd/META_MY_PROJECT_APP_ID", // NEW — required for auto-refresh
+          "app_secret": "doppler:claude-ops/prd/META_MY_PROJECT_APP_SECRET", // NEW — required for auto-refresh
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -2691,14 +2751,14 @@ a 190 error triggers a manual-rotation escalation instead. No existing behaviour
     "ts": "2026-01-01T08:00:00Z",
     "healthy": false,
     "checks": [
-      { "surface": "meta_token",     "healthy": true,  "issue": "" },
-      { "surface": "meta_account",   "healthy": false, "issue": "account_status=2" },
-      { "surface": "google_ads_oauth","healthy": true,  "issue": "" },
-      { "surface": "doppler_secrets","healthy": true,  "issue": "" },
-      { "surface": "ga4_sa_key",     "healthy": true,  "issue": "" },
-      { "surface": "gsc_auth",       "healthy": true,  "issue": "" }
-    ]
-  }
+      { "surface": "meta_token", "healthy": true, "issue": "" },
+      { "surface": "meta_account", "healthy": false, "issue": "account_status=2" },
+      { "surface": "google_ads_oauth", "healthy": true, "issue": "" },
+      { "surface": "doppler_secrets", "healthy": true, "issue": "" },
+      { "surface": "ga4_sa_key", "healthy": true, "issue": "" },
+      { "surface": "gsc_auth", "healthy": true, "issue": "" },
+    ],
+  },
 ]
 ```
 
@@ -2710,13 +2770,13 @@ a 190 error triggers a manual-rotation escalation instead. No existing behaviour
 
 Five cron wrapper scripts drive `bin/ops-marketing-autopilot` on schedule. They live in `${CLAUDE_PLUGIN_ROOT}/scripts/` and are registered as daemon-services entries (toggle via `/ops:settings` → Daemon Services):
 
-| Script | Daemon-service key | Schedule | Purpose |
-|--------|--------------------|----------|---------|
-| `ops-cron-marketing-autopilot.sh` | `marketing-autopilot` | Daily 08:00 UTC | Main daily ad-optimization pass (pause underperformers, regen fatigued creatives, cap pre-flight). First run is forced dry. |
-| `ops-cron-marketing-autopilot-calibrate.sh` | `marketing-autopilot-calibrate` | Monday 09:00 UTC | Self-learning calibration: joins pre-scores to realized KPIs, writes `calibrator.json` for the next daily pass. No metered calls. |
-| `ops-cron-marketing-prewarm.sh` | `marketing-prewarm` | Every 15 min | Pre-warms `/ops:marketing` credential and data cache so the dashboard opens instantly. Requires Klaviyo, Meta, GA4, GSC, Google Ads credentials. |
-| `ops-cron-marketing-auth-prewarm.sh` | `marketing-auth-prewarm` | Nightly 04:23 UTC | Scans Doppler + env + keychain for marketing creds; writes `marketing-auth-prewarm.json` so `/ops:marketing setup` can auto-link projects without per-credential prompts. |
-| `ops-cron-marketing-health-check.sh` | `marketing-health-check` | Sunday 08:00 UTC | Read-only weekly probe: Meta token TTL, Google Ads OAuth, ad account status, Doppler secret freshness, GA4 SA key, GSC site auth. Outputs per-project JSON to `reports/marketing-autopilot/`. No mutations. |
+| Script                                      | Daemon-service key              | Schedule          | Purpose                                                                                                                                                                                                     |
+| ------------------------------------------- | ------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ops-cron-marketing-autopilot.sh`           | `marketing-autopilot`           | Daily 08:00 UTC   | Main daily ad-optimization pass (pause underperformers, regen fatigued creatives, cap pre-flight). First run is forced dry.                                                                                 |
+| `ops-cron-marketing-autopilot-calibrate.sh` | `marketing-autopilot-calibrate` | Monday 09:00 UTC  | Self-learning calibration: joins pre-scores to realized KPIs, writes `calibrator.json` for the next daily pass. No metered calls.                                                                           |
+| `ops-cron-marketing-prewarm.sh`             | `marketing-prewarm`             | Every 15 min      | Pre-warms `/ops:marketing` credential and data cache so the dashboard opens instantly. Requires Klaviyo, Meta, GA4, GSC, Google Ads credentials.                                                            |
+| `ops-cron-marketing-auth-prewarm.sh`        | `marketing-auth-prewarm`        | Nightly 04:23 UTC | Scans Doppler + env + keychain for marketing creds; writes `marketing-auth-prewarm.json` so `/ops:marketing setup` can auto-link projects without per-credential prompts.                                   |
+| `ops-cron-marketing-health-check.sh`        | `marketing-health-check`        | Sunday 08:00 UTC  | Read-only weekly probe: Meta token TTL, Google Ads OAuth, ad account status, Doppler secret freshness, GA4 SA key, GSC site auth. Outputs per-project JSON to `reports/marketing-autopilot/`. No mutations. |
 
 ### Inspect last-run for a cron wrapper
 
@@ -2735,6 +2795,7 @@ tail -20 "$OPS_DATA_DIR/logs/marketing-health-check.log"
 Use `/ops:settings` → Daemon Services to enable or disable any of the five wrappers. Writes to the override file; never edits `daemon-services.default.json`.
 
 All five are **disabled by default**. Enable order:
+
 1. Configure credentials via `/ops:setup marketing`.
 2. Enable `marketing-prewarm` (optional but recommended — warms the cache).
 3. Enable `marketing-auth-prewarm` (nightly credential scan — low-cost, safe to enable early).

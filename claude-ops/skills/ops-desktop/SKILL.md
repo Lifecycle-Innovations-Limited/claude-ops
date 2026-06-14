@@ -49,13 +49,13 @@ Before any route runs, resolve:
 
 Parse `$ARGUMENTS` and route. First token decides:
 
-| First arg          | Route                                                                                 |
-| ------------------ | ------------------------------------------------------------------------------------- |
-| (empty) / `status` | Print MCP status, default noVNC URL, active sessions, and platform support note       |
-| `list`             | `mcp__desktop-act__list_desktops` — show pool state                                   |
-| `release <id>`     | `mcp__desktop-act__release_desktop(session_id)` — free a session                      |
-| `release-all`      | Release every session this skill has open this turn                                   |
-| anything else      | Treat as a **goal** — acquire → observe → drive → verify → release                    |
+| First arg          | Route                                                                           |
+| ------------------ | ------------------------------------------------------------------------------- |
+| (empty) / `status` | Print MCP status, default noVNC URL, active sessions, and platform support note |
+| `list`             | `mcp__desktop-act__list_desktops` — show pool state                             |
+| `release <id>`     | `mcp__desktop-act__release_desktop(session_id)` — free a session                |
+| `release-all`      | Release every session this skill has open this turn                             |
+| anything else      | Treat as a **goal** — acquire → observe → drive → verify → release              |
 
 Anything else: treat the whole argument string as the goal.
 
@@ -76,6 +76,7 @@ Anything else: treat the whole argument string as the goal.
 ```
 ToolSearch select:mcp__desktop-act__list_desktops
 ```
+
 Call it. Format as `session_id · display · vnc · last_used`. Linux only renders full info; macOS/Windows fall back to a "limited platform" note.
 
 ## Route — `release <id>` / `release-all`
@@ -172,11 +173,11 @@ Keep session abcd1234 alive for follow-up?
 
 ## Cross-platform notes
 
-| OS      | Status   | Notes                                                                 |
-| ------- | -------- | --------------------------------------------------------------------- |
-| Linux   | Full     | X11 + Xvnc + websockify + python-xlib. Multi-desktop pool live.       |
-| macOS   | Partial  | Server runs; native X11 calls no-op. Browser tools still work.        |
-| Windows | Partial  | Server runs via Python launcher. Native automation requires manual.   |
+| OS      | Status  | Notes                                                               |
+| ------- | ------- | ------------------------------------------------------------------- |
+| Linux   | Full    | X11 + Xvnc + websockify + python-xlib. Multi-desktop pool live.     |
+| macOS   | Partial | Server runs; native X11 calls no-op. Browser tools still work.      |
+| Windows | Partial | Server runs via Python launcher. Native automation requires manual. |
 
 On non-Linux platforms, prefer Kapture (`mcp__kapture__*`) or Playwright for browser-only tasks. The launcher prints a clear "limited platform" notice if it can't bring up a full session.
 

@@ -2,7 +2,7 @@
 
 # Migrating from v1.x → v2.0
 
-*claude-ops 2.0 is purely additive. No v1 behavior changes by default. This page exists so you know exactly what's new and how to opt out of anything you don't want.*
+_claude-ops 2.0 is purely additive. No v1 behavior changes by default. This page exists so you know exactly what's new and how to opt out of anything you don't want._
 
 [![version](https://img.shields.io/badge/version-2.0.0-blue)](../CHANGELOG.md)
 [![breaking](https://img.shields.io/badge/breaking%20changes-none-22c55e)](.)
@@ -27,17 +27,17 @@ That's it. Existing settings, registries, preferences, and daemon services are u
 
 ## What's actually new
 
-| Area | v1.8.1 | v2.0.0 |
-|------|--------|--------|
-| Skills | 30 | 33+ (added `/ops:deploy-fix`, `/ops:recap`, `/ops:rotate`, `/ops:rotate-setup`) |
-| Agents | 14 | 18 (added `general-purpose` override, `deploy-fixer`, `build-fixer`, `dependency-auditor`) |
-| PostToolUse:Bash hooks | 0 | 3 (deploy-fix-merge, deploy-fix-build, task-reminder) |
-| PreToolUse:Bash hooks | 1 (whatsapp-bridge-health) | 4 (+ secret-commit, no-rm-rf-anchor, warn-mainpush) |
-| PreToolUse:Agent hooks | 0 | 1 (specialized-agent suggestion) |
-| Daemons | 1 (ops-daemon, 7 services) | 3 (+ recap-daemon, account-rotation-daemon) |
-| `userConfig` toggles | ~25 string entries | 44 (19+ new booleans/numbers/file pickers) |
-| Wizard steps | 11 | 17 (+2d, 3o, 6.5a, 6.5b, 6.5c, 6.5d) |
-| Test files | 9 | 11 (+ test-deploy-fix-hooks, test-safety-hooks) |
+| Area                   | v1.8.1                     | v2.0.0                                                                                     |
+| ---------------------- | -------------------------- | ------------------------------------------------------------------------------------------ |
+| Skills                 | 30                         | 33+ (added `/ops:deploy-fix`, `/ops:recap`, `/ops:rotate`, `/ops:rotate-setup`)            |
+| Agents                 | 14                         | 18 (added `general-purpose` override, `deploy-fixer`, `build-fixer`, `dependency-auditor`) |
+| PostToolUse:Bash hooks | 0                          | 3 (deploy-fix-merge, deploy-fix-build, task-reminder)                                      |
+| PreToolUse:Bash hooks  | 1 (whatsapp-bridge-health) | 4 (+ secret-commit, no-rm-rf-anchor, warn-mainpush)                                        |
+| PreToolUse:Agent hooks | 0                          | 1 (specialized-agent suggestion)                                                           |
+| Daemons                | 1 (ops-daemon, 7 services) | 3 (+ recap-daemon, account-rotation-daemon)                                                |
+| `userConfig` toggles   | ~25 string entries         | 44 (19+ new booleans/numbers/file pickers)                                                 |
+| Wizard steps           | 11                         | 17 (+2d, 3o, 6.5a, 6.5b, 6.5c, 6.5d)                                                       |
+| Test files             | 9                          | 11 (+ test-deploy-fix-hooks, test-safety-hooks)                                            |
 
 ---
 
@@ -48,7 +48,7 @@ When you upgrade and run `/ops:setup`, these v2 features activate by default:
 - **Deploy auto-fix** (`deploy_fix_enabled: true`) — but only fires when you actually run `gh pr merge` or `npm run build:*` from inside a Claude Code session.
 - **Specialized agent suggestion** (`suggest_specialized_agents: true`) — silent; you'll only notice via the agent transcripts.
 - **Three safety hooks** — always on by design (see [`safety-hooks.md`](safety-hooks.md)).
-- **Task* tracking nudge** (`task_reminder_enabled: true`) — adds a one-line reminder to `additionalContext` after 10 non-Task tool calls.
+- **Task\* tracking nudge** (`task_reminder_enabled: true`) — adds a one-line reminder to `additionalContext` after 10 non-Task tool calls.
 - **Recap marquee** (`recap_marquee_enabled: true`) — daemon installs and runs; harmless if you don't have tmux.
 
 These features are **opt-out** by default:
@@ -61,13 +61,13 @@ These features are **opt-out** by default:
 
 Edit `/plugins` settings and toggle off:
 
-| To restore v1 | Set |
-|---------------|-----|
-| Default agent always = raw `general-purpose` | `suggest_specialized_agents: false` |
-| No post-merge watcher | `deploy_fix_enabled: false` |
-| No build-failure fixer | `monitor_build_failures: false` |
-| No task-tracking nudges | `task_reminder_enabled: false` |
-| No recap marquee | `recap_marquee_enabled: false` + `launchctl unload ~/Library/LaunchAgents/com.claude-ops.recap-daemon.plist` |
+| To restore v1                                | Set                                                                                                          |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Default agent always = raw `general-purpose` | `suggest_specialized_agents: false`                                                                          |
+| No post-merge watcher                        | `deploy_fix_enabled: false`                                                                                  |
+| No build-failure fixer                       | `monitor_build_failures: false`                                                                              |
+| No task-tracking nudges                      | `task_reminder_enabled: false`                                                                               |
+| No recap marquee                             | `recap_marquee_enabled: false` + `launchctl unload ~/Library/LaunchAgents/com.claude-ops.recap-daemon.plist` |
 
 To disable the three safety hooks (not recommended), comment out their entries in [`hooks/hooks.json`](../hooks/hooks.json) under `PreToolUse > Bash`.
 

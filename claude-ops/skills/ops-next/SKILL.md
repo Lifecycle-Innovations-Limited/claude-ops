@@ -1,7 +1,7 @@
 ---
 name: ops-next
 description: Business-level "what should I do next". Priority stack — fires > competitor alerts > unread comms > ready-to-merge PRs > Linear sprint > revenue-generating GSD work. Uses pre-gathered data and routes to the right skill.
-argument-hint: "[context]"
+argument-hint: '[context]'
 allowed-tools:
   - Bash
   - Read
@@ -24,11 +24,11 @@ maxTurns: 15
 ## Runtime Context
 
 Before advising, load:
+
 1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `primary_project`, `default_channels`
 2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — flag any action_needed as priority
 3. **Ops memories**: Check `${CLAUDE_PLUGIN_DATA_DIR}/memories/topics_active.md` for ongoing work context
 4. **Home automation**: If `home_automation` is configured in `$PREFS_PATH`, probe Homey via `/ops:ops-home status` for active alarms before composing the priority stack.
-
 
 # OPS ► NEXT ACTION
 
@@ -36,8 +36,8 @@ Before advising, load:
 
 ### gh CLI (GitHub)
 
-| Command | Usage | Output |
-|---------|-------|--------|
+| Command                                                                        | Usage                          | Output     |
+| ------------------------------------------------------------------------------ | ------------------------------ | ---------- |
 | `gh pr list --state open --json number,title,statusCheckRollup,reviewDecision` | Open PRs with CI/review status | JSON array |
 
 ---
@@ -45,11 +45,13 @@ Before advising, load:
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when gathering priority data in parallel. This enables:
+
 - Agents share context and can coordinate mid-flight
 - You can steer priorities in real-time
 - Agents report progress as they complete
 
 **Team setup** (only when flag is enabled):
+
 ```
 TeamCreate("next-team")
 Agent(team_name="next-team", name="fires-checker", prompt="Check infra health and CI for production fires")
@@ -122,6 +124,7 @@ If any fires exist → **recommend `/ops-fires` immediately**.
 ### Priority 1.5 — HOME ALARMS (only if `home_automation` is configured in `$PREFS_PATH`)
 
 Probe `/ops:ops-home status` for active alarms.
+
 - Critical home alarms (smoke, water leak, security breach) → **top priority — recommend `/ops:ops-home alarm` immediately, above all other fires**.
 - Energy anomalies (current draw > 3× 7-day baseline) → near-top, surface before competitor alerts.
 - Routine home tasks (presence changes, flow failures) → low priority — fold into Priority 6 tail.
@@ -132,6 +135,7 @@ If `home_automation` is NOT configured, skip this priority silently.
 
 Check the competitor alerts pre-gathered data (last 24h window).
 If `competitor_priority_items` returned lines (non-empty output):
+
 - Surface each as: `REACT: <competitor> <source> changed — see latest-<brand>.md`
 - Recommend the user open the latest report file (path from `competitor_context` → `by_brand.<brand>.latest_report`)
 - If high-severity alerts exist → **recommend addressing before comms**

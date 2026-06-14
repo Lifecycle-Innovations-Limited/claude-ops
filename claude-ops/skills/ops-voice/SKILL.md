@@ -1,7 +1,7 @@
 ---
 name: ops-voice
 description: Voice operations — native macOS Phone (Continuity), FaceTime, Zoom, Google Meet, WhatsApp call, Twilio voice + SMS, Bland AI agent calls, ElevenLabs TTS, Whisper transcription. All curl-based, no SDK deps.
-argument-hint: "[phone|facetime|zoom|meet|whatsapp-call|twilio-call|twilio-sms|bland-call|tts|transcribe|setup]"
+argument-hint: '[phone|facetime|zoom|meet|whatsapp-call|twilio-call|twilio-sms|bland-call|tts|transcribe|setup]'
 allowed-tools:
   - Bash
   - Read
@@ -116,7 +116,7 @@ bin/ops-voice join --dry-run --json
 **AV policy (smart heuristic):**
 
 | Attendees | Camera | Microphone |
-|-----------|--------|------------|
+| --------- | ------ | ---------- |
 | 1–2       | ON     | ON         |
 | 3–9       | ON     | MUTED      |
 | 10+       | OFF    | MUTED      |
@@ -130,6 +130,7 @@ bin/ops-voice join --dry-run --json
 ```
 
 **Mic source — lid state:**
+
 - **macOS** via `ioreg AppleClamshellState` → `Yes`=closed (external mic), `No`=open (MacBook mic).
 - **Linux** via `/proc/acpi/button/lid/*/state` → "open"/"closed".
 - **Other OS / unknown** → reports `default`; the meeting app uses whatever the system has selected.
@@ -137,6 +138,7 @@ bin/ops-voice join --dry-run --json
 Note: the script reports the policy and launches Camera Hub when present, but it does **not** programmatically flip Zoom/FaceTime/Meet in-app device settings — those apps remember the last-selected device, so flipping it once per app is permanent. (A future patch could AppleScript Zoom's preferences pane.)
 
 **Elgato Virtual Camera:** if Elgato Camera Hub is installed (any OS), it's launched before the meeting opens so the virtual cam is registered. Detection paths:
+
 - macOS: `/Applications/Elgato Camera Hub.app`, `~/Applications/Elgato Camera Hub.app`, `/Applications/Camera Hub.app`
 - Linux: `elgato-camera-hub` on PATH, or AppImage at `~/Applications/Elgato*CameraHub*.AppImage`
 - Windows/WSL: `${PROGRAMFILES}/Elgato/CameraHub/CameraHub.exe`
@@ -144,6 +146,7 @@ Note: the script reports the policy and launches Camera Hub when present, but it
 **Zoom URL rewriting:** when the picked event has a `https://zoom.us/j/<ID>?pwd=<PWD>` link, it's converted to `zoommtg://zoom.us/join?confno=<ID>&pwd=<PWD>` so the desktop app opens directly (no browser prompt). If `cam=off` from the policy, `&zc=0` is appended.
 
 **Dry-run output (text mode):**
+
 ```
 dry-run: would join "Weekly Sync" (meet, 3 attendees)
   url=https://meet.google.com/abc-defg-hij
@@ -273,13 +276,13 @@ ls /Applications/zoom.us.app \
 
 Validate found keys (in parallel):
 
-| Channel    | Probe                                                                              |
-|------------|------------------------------------------------------------------------------------|
-| Twilio     | `curl -u "$SID:$TOKEN" https://api.twilio.com/2010-04-01/Accounts/$SID.json`       |
-| Bland      | `curl -H "authorization: $KEY" https://api.bland.ai/v1/me`                         |
-| ElevenLabs | `curl -H "xi-api-key: $KEY" "https://api.elevenlabs.io/v1/voices?page_size=1"`     |
-| Groq       | `curl -H "Authorization: Bearer $KEY" https://api.groq.com/openai/v1/models`       |
-| Zoom       | `curl -H "Authorization: Bearer $TOKEN" https://api.zoom.us/v2/users/me`           |
+| Channel    | Probe                                                                          |
+| ---------- | ------------------------------------------------------------------------------ |
+| Twilio     | `curl -u "$SID:$TOKEN" https://api.twilio.com/2010-04-01/Accounts/$SID.json`   |
+| Bland      | `curl -H "authorization: $KEY" https://api.bland.ai/v1/me`                     |
+| ElevenLabs | `curl -H "xi-api-key: $KEY" "https://api.elevenlabs.io/v1/voices?page_size=1"` |
+| Groq       | `curl -H "Authorization: Bearer $KEY" https://api.groq.com/openai/v1/models`   |
+| Zoom       | `curl -H "Authorization: Bearer $TOKEN" https://api.zoom.us/v2/users/me`       |
 
 Report each as `[service] ✓ connected` or `[service] ✗ <error>`. **Rule 3 applies — never silently skip a channel.** For each unset service, present `AskUserQuestion` with `[Paste manually]` / `[Deep hunt — spawn agent]` / `[Skip]`.
 
@@ -290,10 +293,10 @@ Persist to `preferences.json`:
   "channels": {
     "voice": {
       "backend": "native+twilio+zoom+bland",
-      "native": {"phone": true, "facetime": true, "zoom": true},
-      "twilio": {"status": "configured", "from_number": "env:TWILIO_FROM_NUMBER"},
-      "bland":  {"status": "configured"},
-      "zoom":   {"status": "configured"}
+      "native": { "phone": true, "facetime": true, "zoom": true },
+      "twilio": { "status": "configured", "from_number": "env:TWILIO_FROM_NUMBER" },
+      "bland": { "status": "configured" },
+      "zoom": { "status": "configured" }
     }
   },
   "default_channels": ["whatsapp", "email", "telegram", "slack", "voice"]
@@ -306,13 +309,13 @@ Persist to `preferences.json`:
 
 Voice is wired into `/ops:comms` send-flow. The router resolves intent like:
 
-| User says                              | Resolves to                                |
-|----------------------------------------|--------------------------------------------|
-| `call <name>`                          | `ops-voice phone <number>`                 |
-| `facetime <name>`                      | `ops-voice facetime <handle>`              |
-| `start a zoom`                         | `ops-voice zoom start`                     |
-| `text <name> "..."`                    | `ops-voice twilio-sms ... "..."`           |
-| `have an AI call <name> and tell ...`  | `ops-voice bland-call <number> "..."`      |
+| User says                             | Resolves to                           |
+| ------------------------------------- | ------------------------------------- |
+| `call <name>`                         | `ops-voice phone <number>`            |
+| `facetime <name>`                     | `ops-voice facetime <handle>`         |
+| `start a zoom`                        | `ops-voice zoom start`                |
+| `text <name> "..."`                   | `ops-voice twilio-sms ... "..."`      |
+| `have an AI call <name> and tell ...` | `ops-voice bland-call <number> "..."` |
 
 Contact-number lookup uses the same contact resolver as WhatsApp (`mcp__whatsapp__search_contacts`) plus an optional `contacts.json` map in `preferences.json`.
 
@@ -321,6 +324,7 @@ Contact-number lookup uses the same contact resolver as WhatsApp (`mcp__whatsapp
 ## Mobile / SSH mode (Rule 7)
 
 When `$SSH_CONNECTION$SSH_CLIENT$SSH_TTY` is set or `$OPS_MOBILE=1`:
+
 - `bin/ops-voice` still works for API channels.
 - Native channels (`phone`, `facetime`, `zoom start|join`) require a local macOS session — the script returns a plain-text instruction to open the URL on the host instead of calling `open` directly. The script must source `lib/opener.sh` and use `ops_open_url` for URL handoff.
 

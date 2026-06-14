@@ -1,7 +1,7 @@
 ---
 name: boss
 description: Boss-mode command center over EVERY AI agent on the system — Claude bg, Antigravity (agy), Codex, Cursor, openclaw — across ALL hosts (local Mac + FRA EC2). Use when Sam types /boss or asks "what's the fleet doing / what needs me / boss view". Surfaces ONLY decisions and approvals to Sam as A/B/C/D options with a recommendation + full context; autonomously archives verified-live agents and respawns unverified-completed ones.
-argument-hint: "[--decisions | --full | --archive-sweep]"
+argument-hint: '[--decisions | --full | --archive-sweep]'
 allowed-tools:
   - Bash
   - Read
@@ -67,6 +67,7 @@ Keep it scannable. No walls of text.
 ## STEP 4 — Surface ONLY the decisions (A/B/C/D)
 
 For each BLOCKED-SAM-GATED item, present via **AskUserQuestion** as a real choice:
+
 - A short header (the agent + what's blocked).
 - 2–4 concrete options labelled, FIRST option = your **recommendation** (mark "(Recommended)").
 - Each option's description = what happens if chosen.
@@ -81,12 +82,14 @@ On Sam's answers: execute each immediately (route to the gated agent via steer/r
 approved action, etc.), then confirm one line each.
 
 ## Modes
+
 - `/boss` (default) — full pass: snapshot → triage → autonomous actions → dashboard → decisions.
 - `/boss --decisions` — skip the table; jump straight to the A/B/C/D decisions (fast check-in).
 - `/boss --full` — include spares + per-agent detail (deep look).
 - `/boss --archive-sweep` — only the archive/respawn triage (cleanup pass, no Sam ping unless gated).
 
 ## Cross-cutting rules
+
 - VERIFY before relay (gh/curl/file). Never tell Sam "X is live" without the external check.
 - ARCHIVE = finished + out of fleet (verified live). STOP/respawn = still in play. Never archive
   unverified work (Sam directive).

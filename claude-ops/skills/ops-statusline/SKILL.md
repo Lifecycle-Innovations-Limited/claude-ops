@@ -35,14 +35,14 @@ and per-project ops badges.
 
 Parse `$ARGUMENTS` and route:
 
-| Argument (first word) | Action |
-|-----------------------|--------|
-| `preview` or empty    | Render a sample output at current terminal width |
+| Argument (first word) | Action                                                   |
+| --------------------- | -------------------------------------------------------- |
+| `preview` or empty    | Render a sample output at current terminal width         |
 | `config`              | Re-run the wizard: preset, theme, projects, gauge widths |
-| `theme <name>`        | Switch theme in config |
-| `doctor`              | Validate config, settings.json wiring, renderer path |
-| `reset`               | Restore default config from template |
-| (anything else)       | Show help + current status |
+| `theme <name>`        | Switch theme in config                                   |
+| `doctor`              | Validate config, settings.json wiring, renderer path     |
+| `reset`               | Restore default config from template                     |
+| (anything else)       | Show help + current status                               |
 
 ---
 
@@ -93,6 +93,7 @@ Print the rendered output between ruler lines so the user sees the actual width 
 ```
 
 If rendering fails (exit non-zero), print:
+
 ```
 ○ Preview failed — renderer returned non-zero.
   Check: /ops:statusline doctor
@@ -121,6 +122,7 @@ INTEGRATIONS=$(printf '%s' "$SUGGESTED" | jq -r '._detected.integrations | to_en
 ```
 
 Print detection summary:
+
 ```
 Detected N projects · integrations: <list>
 ```
@@ -138,6 +140,7 @@ Which preset?
 ```
 
 Re-run suggest with chosen preset:
+
 ```bash
 SUGGESTED=$("$SUGGEST_BIN" --preset "$CHOSEN_PRESET" 2>/dev/null)
 ```
@@ -155,6 +158,7 @@ Which theme?
 ```
 
 Patch the suggested config with chosen theme:
+
 ```bash
 SUGGESTED=$(printf '%s' "$SUGGESTED" | jq --arg t "$CHOSEN_THEME" '.theme = $t')
 ```
@@ -169,6 +173,7 @@ mv "$TMP" "$STATUSLINE_CFG"
 ```
 
 Validate the written JSON:
+
 ```bash
 jq . "$STATUSLINE_CFG" >/dev/null 2>&1 && echo "✓ Config written to $STATUSLINE_CFG" || echo "✗ JSON validation failed"
 ```
@@ -176,6 +181,7 @@ jq . "$STATUSLINE_CFG" >/dev/null 2>&1 && echo "✓ Config written to $STATUSLIN
 ### Step 5 — Offer preview
 
 Use `AskUserQuestion`:
+
 ```
 Config saved. Preview now?
   [Yes — show preview]  [No — done]
@@ -195,11 +201,13 @@ NEW_THEME=$(printf '%s' "$NEW_THEME" | tr -d '[:space:]')
 ```
 
 Validate theme exists in themes.json:
+
 ```bash
 VALID=$(jq -e --arg t "$NEW_THEME" '.[$t] // empty' "$THEMES_FILE" 2>/dev/null)
 ```
 
 If invalid, list available themes and error:
+
 ```bash
 AVAILABLE=$(jq -r 'keys | join(", ")' "$THEMES_FILE" 2>/dev/null)
 echo "Unknown theme '$NEW_THEME'. Available: $AVAILABLE"
@@ -207,6 +215,7 @@ exit 1
 ```
 
 If valid, merge into existing config:
+
 ```bash
 TMP=$(mktemp)
 if [ -f "$STATUSLINE_CFG" ]; then
@@ -306,12 +315,14 @@ Print final verdict: **OK** (all checks pass) or **Issues found** (with remediat
 Restore `~/.claude/statusline.config.json` from the default template.
 
 Use `AskUserQuestion`:
+
 ```
 Reset statusline config to defaults?
   [Yes — overwrite ~/.claude/statusline.config.json]  [Cancel]
 ```
 
 On Yes:
+
 ```bash
 cp "${PLUGIN_ROOT}templates/statusline/statusline.config.default.json" "$STATUSLINE_CFG"
 echo "✓ Config reset to defaults"
@@ -323,22 +334,22 @@ Then run preview.
 
 ## CLI/API Reference
 
-| Command | Effect |
-|---------|--------|
-| `/ops:statusline preview` | Render sample output |
-| `/ops:statusline config` | Re-run wizard |
-| `/ops:statusline theme cockpit\|minimal\|mono\|nord` | Switch theme |
-| `/ops:statusline doctor` | Validate all components |
-| `/ops:statusline reset` | Restore default config |
+| Command                                              | Effect                  |
+| ---------------------------------------------------- | ----------------------- |
+| `/ops:statusline preview`                            | Render sample output    |
+| `/ops:statusline config`                             | Re-run wizard           |
+| `/ops:statusline theme cockpit\|minimal\|mono\|nord` | Switch theme            |
+| `/ops:statusline doctor`                             | Validate all components |
+| `/ops:statusline reset`                              | Restore default config  |
 
 ### Key files
 
-| File | Purpose |
-|------|---------|
-| `~/.claude/statusline-command.sh` | The renderer script |
-| `~/.claude/statusline.config.json` | User config (theme, widgets, projects) |
-| `~/.claude/settings.json` | Contains `.statusLine.command` wiring |
-| `${PLUGIN_ROOT}templates/statusline/statusline-command.sh` | Canonical renderer template |
-| `${PLUGIN_ROOT}templates/statusline/themes.json` | Available themes |
-| `${PLUGIN_ROOT}templates/statusline/statusline.config.default.json` | Default config |
-| `${PLUGIN_ROOT}bin/ops-statusline-suggest` | Registry-driven config generator |
+| File                                                                | Purpose                                |
+| ------------------------------------------------------------------- | -------------------------------------- |
+| `~/.claude/statusline-command.sh`                                   | The renderer script                    |
+| `~/.claude/statusline.config.json`                                  | User config (theme, widgets, projects) |
+| `~/.claude/settings.json`                                           | Contains `.statusLine.command` wiring  |
+| `${PLUGIN_ROOT}templates/statusline/statusline-command.sh`          | Canonical renderer template            |
+| `${PLUGIN_ROOT}templates/statusline/themes.json`                    | Available themes                       |
+| `${PLUGIN_ROOT}templates/statusline/statusline.config.default.json` | Default config                         |
+| `${PLUGIN_ROOT}bin/ops-statusline-suggest`                          | Registry-driven config generator       |

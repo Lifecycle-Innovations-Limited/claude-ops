@@ -24,7 +24,11 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, unlinkSync, appendFileSync, statSync } from 'fs';
-import { persistBedrockClaudeSettings, clearHardcodedModelsForOAuthClaudeSettings, resolveWorkingAwsEnv } from './claude-settings-mode.mjs';
+import {
+  persistBedrockClaudeSettings,
+  clearHardcodedModelsForOAuthClaudeSettings,
+  resolveWorkingAwsEnv,
+} from './claude-settings-mode.mjs';
 import {
   destinationUtilHardBlock,
   DAEMON_SAFE_5H_PCT,
@@ -680,12 +684,16 @@ async function shouldRotate(config, state) {
               // invisible to claude. (root-caused 2026-06-12)
               try {
                 let fileStore = {};
-                try { fileStore = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8')); } catch {}
+                try {
+                  fileStore = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
+                } catch {}
                 const incoming = JSON.parse(tokenToWrite);
                 fileStore.claudeAiOauth = incoming.claudeAiOauth || incoming;
                 if (incoming.mcpOAuth) fileStore.mcpOAuth = incoming.mcpOAuth;
                 writeFileSync(LINUX_CRED_PATH, JSON.stringify(fileStore, null, 2), { mode: 0o600 });
-              } catch (_fileErr) { /* best-effort */ }
+              } catch (_fileErr) {
+                /* best-effort */
+              }
             }
             log('[active-refresh] Active keychain updated with mcpOAuth preserved — sessions will auto-recover');
           }
@@ -950,7 +958,7 @@ function stopClaudeDaemon() {
   try {
     const result = execSync('claude daemon stop --any', {
       encoding: 'utf8',
-      env: { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' }
+      env: { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' },
     });
     log(`[daemon-stop] Daemon stop success: ${result.trim()}`);
   } catch (err) {
@@ -1227,10 +1235,7 @@ async function refreshSingleToken(account) {
         { timeout: 5000 },
       );
       if (kcResult.error || kcResult.status !== 0) {
-        const detail =
-          kcResult.stderr?.toString()?.trim() ||
-          kcResult.error?.message ||
-          `exit ${kcResult.status}`;
+        const detail = kcResult.stderr?.toString()?.trim() || kcResult.error?.message || `exit ${kcResult.status}`;
         throw new Error(`Keychain write failed: ${detail}`);
       }
     }
@@ -1364,7 +1369,10 @@ async function maybeRecoverOAuthFromBedrock(config, state, sentinelPath, ctx) {
               const leases = readLeases();
               let purged = 0;
               for (const [sid, entry] of Object.entries(leases)) {
-                if (entry?.accountKey === 'bedrock') { delete leases[sid]; purged++; }
+                if (entry?.accountKey === 'bedrock') {
+                  delete leases[sid];
+                  purged++;
+                }
               }
               if (purged > 0) {
                 writeLeases(leases);
@@ -1538,10 +1546,10 @@ async function checkSessionLeaseRotations(config, state) {
   if (sessions.length === 0) return;
 
   const leases = readLeases();
-  
+
   for (const s of sessions) {
     const lease = leases[s.id];
-    
+
     // Case 1: Session has no lease assigned yet
     if (!lease) {
       const newKey = pickAccountForSession(s.id, config, state);
@@ -1554,7 +1562,9 @@ async function checkSessionLeaseRotations(config, state) {
           try {
             const marker = `/tmp/claude-respawn-deferred-${s.id}`;
             if (!existsSync(marker)) writeFileSync(marker, String(Date.now()));
-            log(`[session-router] Session ${s.id} is ${s.status === 'busy' ? 'busy' : 'a /loop session'} — deferred respawn (sweep handles it).`);
+            log(
+              `[session-router] Session ${s.id} is ${s.status === 'busy' ? 'busy' : 'a /loop session'} — deferred respawn (sweep handles it).`,
+            );
           } catch {}
         }
         return; // Rotate/respawn at most one session per tick to stagger
@@ -1583,7 +1593,7 @@ async function checkSessionLeaseRotations(config, state) {
       continue;
     }
 
-    const acct = config.accounts.find(a => accountKey(a) === currentKey);
+    const acct = config.accounts.find((a) => accountKey(a) === currentKey);
     if (!acct) continue;
 
     const cached = state.accounts?.[currentKey]?.lastUtilization;
@@ -1593,12 +1603,14 @@ async function checkSessionLeaseRotations(config, state) {
     // We no longer guess utilization based on active lease count.
     // Instead, we rely strictly on the live metrics fetched from Claude API by the usage probe.
     if (util >= maxUtil) {
-      log(`[session-router] Session ${s.id} leased account ${currentKey} ACTUAL utilization is exhausted (${util}% >= ${maxUtil}%). Rotating.`);
+      log(
+        `[session-router] Session ${s.id} leased account ${currentKey} ACTUAL utilization is exhausted (${util}% >= ${maxUtil}%). Rotating.`,
+      );
       const newKey = pickAccountForSession(s.id, config, state);
       if (newKey && newKey !== currentKey) {
         log(`[session-router] Swapping lease for session ${s.id}: ${currentKey} -> ${newKey}`);
         recordSessionLease(s.id, newKey, s.pid);
-        
+
         if (s.status !== 'busy' && !isLoopSession(s.id)) {
           doRespawn(s, log);
         } else {

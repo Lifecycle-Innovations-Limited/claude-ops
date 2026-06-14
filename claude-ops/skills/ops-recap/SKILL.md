@@ -1,7 +1,7 @@
 ---
 name: ops-recap
 description: Manage the multi-session recap marquee daemon — a background process that synthesizes a one-line digest across all parallel Claude Code sessions and shell activity, displayed in tmux status-right. Subcommands status/tail/configure/restart.
-argument-hint: "[status|tail|configure|restart]"
+argument-hint: '[status|tail|configure|restart]'
 allowed-tools:
   - Bash
   - Read
@@ -18,17 +18,17 @@ The recap marquee is a launchd-managed daemon that aggregates per-session Claude
 
 **Files:**
 
-| Path | Role |
-|------|------|
-| `${CLAUDE_PLUGIN_ROOT}/scripts/recap/daemon.sh` | Background loop — polls inputs, calls digest.sh when stale |
-| `${CLAUDE_PLUGIN_ROOT}/scripts/recap/digest.sh` | Synthesizes one-line digest via `claude -p --model haiku` |
-| `${CLAUDE_PLUGIN_ROOT}/scripts/recap/marquee.sh` | Tmux-side scroller (called from `status-right`) |
-| `${CLAUDE_PLUGIN_ROOT}/hooks/recap-capture.sh` | Stop hook → writes `/tmp/claude-recap-<sid>` |
-| `${CLAUDE_PLUGIN_ROOT}/hooks/recap-tool-activity.sh` | PostToolUse hook → live activity per session |
-| `~/Library/LaunchAgents/com.claude-ops.recap-daemon.plist` | Launchd agent (macOS) |
-| `/tmp/claude-recap-digest` | Rolling one-liner (read by tmux + marquee.sh) |
-| `/tmp/claude-recap-daemon.log` | Daemon log (rotated at 500KB) |
-| `/tmp/claude-recap-digest.log` | Last 50 generated digests, chronological |
+| Path                                                       | Role                                                       |
+| ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `${CLAUDE_PLUGIN_ROOT}/scripts/recap/daemon.sh`            | Background loop — polls inputs, calls digest.sh when stale |
+| `${CLAUDE_PLUGIN_ROOT}/scripts/recap/digest.sh`            | Synthesizes one-line digest via `claude -p --model haiku`  |
+| `${CLAUDE_PLUGIN_ROOT}/scripts/recap/marquee.sh`           | Tmux-side scroller (called from `status-right`)            |
+| `${CLAUDE_PLUGIN_ROOT}/hooks/recap-capture.sh`             | Stop hook → writes `/tmp/claude-recap-<sid>`               |
+| `${CLAUDE_PLUGIN_ROOT}/hooks/recap-tool-activity.sh`       | PostToolUse hook → live activity per session               |
+| `~/Library/LaunchAgents/com.claude-ops.recap-daemon.plist` | Launchd agent (macOS)                                      |
+| `/tmp/claude-recap-digest`                                 | Rolling one-liner (read by tmux + marquee.sh)              |
+| `/tmp/claude-recap-daemon.log`                             | Daemon log (rotated at 500KB)                              |
+| `/tmp/claude-recap-digest.log`                             | Last 50 generated digests, chronological                   |
 
 ## Subcommand: `status` (default)
 
@@ -168,18 +168,21 @@ Walk the user through display-surface integration. Two surfaces are supported an
    ```bash
    PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1)}"
    cat >> "$TMUX_CONF" <<TMUX
+   ```
 
 # claude-ops recap marquee
+
 set -g status-right '#('"${PLUGIN_ROOT}"'/scripts/recap/marquee.sh) #[fg=#a6e3a1]%H:%M '
 set -g status-interval 2
 TMUX
-   ```
+
+````
 
 5. Reload if tmux is running:
 
-   ```bash
-   tmux info >/dev/null 2>&1 && tmux source-file "$TMUX_CONF" 2>/dev/null
-   ```
+```bash
+tmux info >/dev/null 2>&1 && tmux source-file "$TMUX_CONF" 2>/dev/null
+````
 
 ### `configure` — statusLine fallback (no tmux, or in addition to tmux)
 

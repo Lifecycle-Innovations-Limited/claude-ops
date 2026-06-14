@@ -32,12 +32,12 @@ GNOME idle screen-lock.
 
 ## Boot persistence — the four things that must be true
 
-| Layer | Unit / setting | Why |
-|---|---|---|
-| VNC server `:1` | `vncserver@:1.service` (system, **enabled**) | starts the X/GNOME desktop |
-| noVNC proxy `:6080` | `novnc.service` (**--user**, enabled, `Restart=always`) | bridges WS↔VNC + serves the web client |
-| user-service-without-login | `loginctl enable-linger $USER` | the `--user` unit starts at boot, no login needed |
-| HTTPS front | `tailscale serve --bg 6080` | config persists in tailscaled state across reboots |
+| Layer                      | Unit / setting                                          | Why                                                |
+| -------------------------- | ------------------------------------------------------- | -------------------------------------------------- |
+| VNC server `:1`            | `vncserver@:1.service` (system, **enabled**)            | starts the X/GNOME desktop                         |
+| noVNC proxy `:6080`        | `novnc.service` (**--user**, enabled, `Restart=always`) | bridges WS↔VNC + serves the web client             |
+| user-service-without-login | `loginctl enable-linger $USER`                          | the `--user` unit starts at boot, no login needed  |
+| HTTPS front                | `tailscale serve --bg 6080`                             | config persists in tailscaled state across reboots |
 
 If any one is missing the desktop won't come back after reboot. Verify:
 
@@ -50,8 +50,8 @@ sudo tailscale serve status                      # shows / -> 127.0.0.1:6080
 
 ## Access
 
-- Tailnet IP:  `http://<tailscale-ip>:6080/vnc.html`
-- MagicDNS:    `https://<host>.<tailnet>.ts.net/vnc.html` (via `tailscale serve`)
+- Tailnet IP: `http://<tailscale-ip>:6080/vnc.html`
+- MagicDNS: `https://<host>.<tailnet>.ts.net/vnc.html` (via `tailscale serve`)
 - Connect, enter the **VNC password**.
 
 The box has no public IP, so `0.0.0.0:6080` is effectively tailnet-only. Keep it
