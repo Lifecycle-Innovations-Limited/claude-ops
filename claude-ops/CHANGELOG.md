@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.30.3] - 2026-06-14
+
+### Changed
+Remove per-session stdio MCP servers (telegram, telegram-channel, doppler, desktop-act) from plugin .mcp.json — they loaded once per Claude session, multiplying processes across all live sessions. telegram was dead (empty creds); doppler + desktop-act relocated to on-demand (mcp-toggle). Daemon telegram-notification and doppler CLI secret-resolution paths are unaffected. MCP cost no longer scales with session count.
+
+
 ## [2.30.2] - 2026-06-14
 
 ### Changed
