@@ -3,7 +3,7 @@
 // The deferred-respawn sweep (bg-respawn.sweepDeferredRespawns) defers busy and
 // /loop sessions for up to BUSY_FORCE_AFTER_MS (~90 min) before force-respawning.
 // For OAuth→OAuth token refreshes that's fine. For a session bleeding METERED
-// Bedrock spend it's a 90-minute leak. Sam directive (2026-06-14): "Bedrock
+// Bedrock spend it's a 90-minute leak. owner directive (2026-06-14): "Bedrock
 // should never be in use if any /rotate OAuth account has tokens available."
 //
 // This watchdog detects sessions actually running inference on Bedrock (by

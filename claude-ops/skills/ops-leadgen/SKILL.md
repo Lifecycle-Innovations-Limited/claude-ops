@@ -39,7 +39,7 @@ Wraps `my-project-leadgen` CLI for the daily leadgen review-and-send loop.
 3. Ask: `[Send]` / `[Skip]` / `[Stop review]`
 4. On `[Send]`:
    a. Show complete draft one final time
-   b. Wait for Sam to type `ok` / `send` / `ship it` — this creates `/tmp/.claude-send-ok`
+   b. Wait for the owner to type `ok` / `send` / `ship it` — this creates `/tmp/.claude-send-ok`
    c. Run: `doppler run --project my-project-b2b-leadgen --config dev -- my-project-leadgen send --draft-id N`
    d. Confirm output shows `Sent OK. Gmail message ID: <id>`
 5. Move to the next draft only after the current one is fully resolved.
@@ -92,5 +92,5 @@ sqlite3 ~/Projects/my-project-b2b-leadgen/leads.db \
 
 Per CLAUDE.md Rule 6: every outbound send requires individual staging + approval.
 The `my-project-leadgen send` command physically blocks unless `/tmp/.claude-send-ok` exists.
-Sam creates this token by typing `ok` / `send it` / `ship it` in the chat.
+the owner creates this token by typing `ok` / `send it` / `ship it` in the chat.
 Token is one-shot — consumed on send. Next send needs a new approval.

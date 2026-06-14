@@ -439,7 +439,7 @@ Bucket: `s3://my-project-marketing-creative/<TS>/shot-N.<ext>`. The script **ref
 
 ### Outbound comms (Rule 6)
 
-This subcommand never sends an outbound message. The campaign brief lands as a **PR** on `my-project-operating-dashboard` for human review. Sam approves and merges manually.
+This subcommand never sends an outbound message. The campaign brief lands as a **PR** on `my-project-operating-dashboard` for human review. the owner approves and merges manually.
 
 ### Quick examples
 

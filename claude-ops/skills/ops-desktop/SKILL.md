@@ -94,7 +94,7 @@ For `release-all`, batch confirm once.
 
 ## Route — **goal** (default for free-form $ARGUMENTS)
 
-The autonomous loop. Use this when Sam types `/ops:desktop open the AWS console and screenshot the ECS cluster page`.
+The autonomous loop. Use this when the owner types `/ops:desktop open the AWS console and screenshot the ECS cluster page`.
 
 ### Step 1 — Acquire
 
@@ -185,7 +185,7 @@ On non-Linux platforms, prefer Kapture (`mcp__kapture__*`) or Playwright for bro
 
 - **Outbound comms** (Rule 6): if a goal involves sending email/messages/forms, stage the draft and ask before pressing Send. Per-message approval, never batch.
 - **Destructive UI clicks**: anything that says "Delete", "Terminate", "Force quit" routes through `AskUserQuestion` first per Rule 5.
-- **Credentials**: never type passwords into a goal string — leave it for Sam to fill in the live noVNC viewer.
+- **Credentials**: never type passwords into a goal string — leave it for the owner to fill in the live noVNC viewer.
 - **Session isolation**: each invocation of `/ops:desktop` gets its own `session_id`. Don't pass session IDs between concurrent agents or skills.
 
 ## Examples

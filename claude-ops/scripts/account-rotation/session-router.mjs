@@ -227,7 +227,7 @@ export function pickAccountForSession(sessionId, config, state) {
 
   if (bestAccount) return accountKey(bestAccount);
 
-  // Bedrock is METERED/paid. Sam directive (2026-06-14): "Bedrock should never be
+  // Bedrock is METERED/paid. owner directive (2026-06-14): "Bedrock should never be
   // in use if any /rotate OAuth account has tokens available." The primary loop
   // above can fall through to Bedrock when every account is over its util cap or
   // at the concurrency cap — but a usable (non-expired) OAuth token is still

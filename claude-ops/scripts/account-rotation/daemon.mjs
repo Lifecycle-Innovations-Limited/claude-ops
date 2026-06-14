@@ -139,7 +139,7 @@ function notify(title, msg) {
   } catch {}
 }
 
-// Cross-machine account leases (Sam 2026-06-06): NOT a static per-machine split.
+// Cross-machine account leases ((2026-06-06)): NOT a static per-machine split.
 // Both machines may use ALL accounts; the only constraint is the same account is
 // never ACTIVE on both at once. readConfig() drops accounts a FOREIGN host holds
 // a fresh lease on; the loop heartbeats THIS machine's active-account lease.
@@ -840,7 +840,7 @@ async function findValidRotationTarget(config, state) {
       log(`[pre-rotate] ${key}: live util 5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}% — OK`);
     } else {
       // Live query failed (Anthropic 429 or network). DO NOT accept blindly —
-      // that's how we picked an exhausted account and bricked Sam's session.
+      // that's how we picked an exhausted account and bricked the owner's session.
       // Fall back to cached util; refuse if cached is unknown OR >=90%.
       const cached = state.accounts?.[key]?.lastUtilization;
       const cachedPct = cached?.pct;
@@ -905,7 +905,7 @@ async function findValidRotationTarget(config, state) {
 //   2. CACHED-evidence: when API is throttling us (live fails) BUT every
 //      candidate has fresh (<15min) cached util >= 95% AND a recent rate-limit
 //      signal exists, we accept cached evidence — refusing to fall back when
-//      Anthropic API is dead would just leave Sam stuck.
+//      Anthropic API is dead would just leave the owner stuck.
 async function allCandidatesExhausted(config, state) {
   const EXHAUSTED_THRESHOLD = 95;
   const now = Date.now();
@@ -1066,7 +1066,7 @@ async function doRotation(reason) {
 
   if (!target) {
     log('ROTATION ABORTED: no viable Max target after pre-rotate (util bars, tokens, or live query refusals)');
-    // Live-confirm exhaustion before flipping to Bedrock — Sam's rule.
+    // Live-confirm exhaustion before flipping to Bedrock — the owner's rule.
     const exhausted = await allCandidatesExhausted(config, state);
     if (exhausted) {
       log('All candidates LIVE-CONFIRMED exhausted (>=95%) — engaging Bedrock fallback');
@@ -1362,7 +1362,7 @@ async function maybeRecoverOAuthFromBedrock(config, state, sentinelPath, ctx) {
             // keeps reading lease.accountKey === 'bedrock' and re-injecting
             // CLAUDE_CODE_USE_BEDROCK on every respawn forever — sessions stay stranded
             // on metered Bedrock long after OAuth headroom returns. (2026-06-14: 9 sessions
-            // still pinned to bedrock 17h post-recovery; Sam: "Bedrock should never be in
+            // still pinned to bedrock 17h post-recovery; the owner: "Bedrock should never be in
             // use if any OAuth account has tokens available.") Drop the leases so the next
             // respawn falls through to OAuth token injection.
             try {
@@ -1668,7 +1668,7 @@ async function mainLoop() {
 
       // Cross-machine lease heartbeat (every 3 min, << 2h TTL): refresh THIS
       // machine's claim on its active account so the other machine keeps
-      // excluding it. Best-effort / fail-open (S3 down => no-op). (Sam 2026-06-06)
+      // excluding it. Best-effort / fail-open (S3 down => no-op). ((2026-06-06))
       if (state.activeAccount && Date.now() - lastLeaseBeat > 180_000) {
         lastLeaseBeat = Date.now();
         try {
@@ -1700,7 +1700,7 @@ async function mainLoop() {
       // force-swapped to OAuth immediately whenever a usable token exists — NO
       // 90-min defer for busy/loop sessions (metered bleed overrides loop
       // preservation). Next sweep verifies the previously-swapped PIDs are off
-      // Bedrock (env + best-effort network corroboration). (Sam 2026-06-14)
+      // Bedrock (env + best-effort network corroboration). ((2026-06-14))
       if (Date.now() - lastBedrockSweep > BEDROCK_SWEEP_INTERVAL) {
         lastBedrockSweep = Date.now();
         try {

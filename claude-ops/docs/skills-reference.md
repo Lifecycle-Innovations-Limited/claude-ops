@@ -150,7 +150,7 @@ Autonomous PR merge pipeline. Dispatches subagents to fix CI, resolve conflicts,
 - `/ops:merge` — process all ready PRs
 - `/ops:merge --main` — also sync dev→main
 - `/ops:merge --dry-run` — preview only
-- `/ops:merge --repo Lifecycle-Innovations-Limited/my-app`
+- `/ops:merge --repo your-org/my-app`
 
 #### `/ops:merge` Flow
 

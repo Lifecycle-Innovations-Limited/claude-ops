@@ -52,7 +52,7 @@ You are running headless inside a Claude Code session with full claude-ops tooli
    - Python repos: `source .venv/bin/activate && pytest tests/ -x --ignore=tests/e2e`
    - other Node repos: `npm run type-check && npm run lint && npm test`
 
-6. **Commit with `--no-verify`** (project hooks are bugged per Sam's CLAUDE.md). Co-author trailer: `Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>`.
+6. **Commit with `--no-verify`** (project hooks are bugged per the owner's CLAUDE.md). Co-author trailer: `Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>`.
 
 7. **Push + open a DRAFT PR** targeting `{{BASE}}` using `gh pr create --draft`:
    - Title: `fix(deploy): <one-line root cause>`

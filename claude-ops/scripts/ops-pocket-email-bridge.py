@@ -8,7 +8,7 @@ Mirrors ops-pocket-whatsapp-bridge.py but on Gmail. Two duties:
      Each entry includes a question-id (qid) in the subject so replies can be
      correlated back via Gmail's threading.
 
-  2. INBOUND: poll Gmail for messages in a known label/thread set, parse Sam's
+  2. INBOUND: poll Gmail for messages in a known label/thread set, parse the owner's
      natural-language replies against the list of currently-open supervisor
      questions using `claude -p` (Sonnet 4.6), and append matched answers to
      supervisor-replies.jsonl — same downstream format as the WhatsApp bridge.
@@ -340,11 +340,11 @@ QID_SUBJECT_RE = re.compile(r"\[qid:([a-zA-Z0-9_-]{4,})\]")
 
 def fetch_recent_replies(cfg: dict) -> list[dict]:
     """Use gog gmail search to find recent messages in the configured label
-    that are NOT from self (so we only get Sam's replies, not echoes).
+    that are NOT from self (so we only get the owner's replies, not echoes).
     Returns list of {messageId, threadId, subject, body, ts, fromMe}.
     """
     label = cfg.get("label", "Pocket")
-    # Look for messages SENT BY Sam in the label, within last 24h.
+    # Look for messages SENT BY the owner in the label, within last 24h.
     query = f"label:{label} from:me newer_than:1d"
     try:
         proc = subprocess.run(
