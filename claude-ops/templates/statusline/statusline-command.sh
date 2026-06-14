@@ -17,6 +17,10 @@ ESC=$(printf '\033')
 input=$(cat)
 now=$(date +%s)
 uid=$(id -u)
+# Cache base — overridable so tests (and multi-tenant setups) can isolate caches
+# instead of colliding on the shared uid-keyed /tmp paths. Defaults to /tmp.
+CACHE_DIR="${CLAUDE_STATUSLINE_CACHE_DIR:-/tmp}"
+[ -d "$CACHE_DIR" ] || CACHE_DIR=/tmp
 
 # ── Portable mtime ────────────────────────────────────────────────────────────
 mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
@@ -221,7 +225,7 @@ case "$loc" in
 esac
 
 # ── Auth cache (async, 45s TTL) ───────────────────────────────────────────────
-auth_cache="/tmp/claude-authjson-${session_id}"
+auth_cache="${CACHE_DIR}/claude-authjson-${session_id}"
 auth_age=$(( now - $(mtime "$auth_cache") ))
 if [ ! -s "$auth_cache" ] || [ "$auth_age" -ge 45 ]; then
   _lk="${auth_cache}.lock"
@@ -242,7 +246,7 @@ account_email=""; _sub=""; _method=""
 _email_safe=$(printf '%s' "$account_email" | tr -d '/"')
 
 # Billing mode
-billing_cache="/tmp/claude-billing-${session_id}"
+billing_cache="${CACHE_DIR}/claude-billing-${session_id}"
 if [ "${CLAUDE_CODE_USE_BEDROCK:-}" = "1" ]; then
   sub_type="bedrock"
 elif [ -n "$_sub" ] && [ "$_sub" != "null" ]; then
@@ -282,7 +286,7 @@ fi
 # Per-account session count (multi-session badge)
 sessions_n=0
 if [ -n "$account_email" ]; then
-  pid_file="/tmp/claude-pids-${_email_safe}"
+  pid_file="${CACHE_DIR}/claude-pids-${_email_safe}"
   new_content="$PPID"
   if [ -f "$pid_file" ]; then
     while IFS= read -r p; do
@@ -298,7 +302,7 @@ fi
 # ── Git branch (async, 10s TTL) ───────────────────────────────────────────────
 git_part=""
 if [ -n "$cwd" ] && [ -d "$cwd" ]; then
-  git_cache="/tmp/claude-gitbranch-${uid}-$(printf '%s' "$cwd" | cksum | cut -d' ' -f1)"
+  git_cache="${CACHE_DIR}/claude-gitbranch-${uid}-$(printf '%s' "$cwd" | cksum | cut -d' ' -f1)"
   branch=$(async_cache "$git_cache" 10 git -C "$cwd" --no-optional-locks rev-parse --abbrev-ref HEAD)
   [ -n "$branch" ] && git_part="${T_acc}⎇${branch}${R}"
 fi
@@ -349,7 +353,7 @@ fi
 agents_n=0
 if [ -n "$session_id" ]; then
   agents_n=$( {
-    for taskdir in /tmp/claude-${uid}/*/"$session_id"/tasks; do
+    for taskdir in ${CACHE_DIR}/claude-${uid}/*/"$session_id"/tasks; do
       [ -d "$taskdir" ] || continue
       find "$taskdir" -maxdepth 1 -name 'a*.output' -mmin -5 2>/dev/null \
         | sed 's|.*/||; s|\.output$||'
@@ -402,7 +406,7 @@ if [ -n "$rl_5h" ] || [ -n "$rl_7d" ]; then
   esac
   # Next-rotation target (memoized 30s)
   next_label=""
-  next_cache="/tmp/claude-nexttarget-${uid}"
+  next_cache="${CACHE_DIR}/claude-nexttarget-${uid}"
   if [ -s "$next_cache" ] && [ $(( now - $(mtime "$next_cache") )) -lt 30 ]; then
     next_line=$(cat "$next_cache")
   else
@@ -490,7 +494,7 @@ pace_badge=""
 if [ -n "$rl_5h" ] || [ -n "$rl_7d" ]; then
   q5=${rl_5h_int}; q7=${rl_7d_int}
   qpick=$q5; [ "$q7" -gt "$qpick" ] && qpick=$q7
-  burn_file="/tmp/claude-burn-${_email_safe:-default}"
+  burn_file="${CACHE_DIR}/claude-burn-${_email_safe:-default}"
   rate10=0
   if [ -s "$burn_file" ]; then
     IFS=' ' read -r prev_pct prev_ts < "$burn_file"
@@ -633,8 +637,16 @@ if [ "$CFG_sys_show_peer" = "1" ]; then
   fi
 fi
 
+# ── Separators ───────────────────────────────────────────────────────────────
+# SEP   (0x1F unit-separator) divides carousel pool entries.
+# SEP_PB (0x1D group-separator) divides per-project badge groups in proj_badges.
+# Must be defined BEFORE the slow_cache block — the cache-miss path builds
+# proj_badges using SEP_PB, so it must exist at that point (not just on cache-hit).
+SEP=$(printf '\037')
+SEP_PB=$(printf '\035')
+
 # ── Slow-cache (60s TTL): global ops badges read from daemon output files ─────
-slow_cache="/tmp/claude-statusline-slow-${uid}"
+slow_cache="${CACHE_DIR}/claude-statusline-slow-${uid}"
 if [ -s "$slow_cache" ] && [ $(( now - $(mtime "$slow_cache") )) -lt 60 ]; then
   . "$slow_cache" 2>/dev/null
 else
@@ -690,7 +702,7 @@ fi
 # ── Fleet badges (L2) — bg agents, rotation, SDK fallback ────────────────────
 line2_fleet=""
 if [ "$CFG_fleet_bg" = "1" ]; then
-  bg_cache="/tmp/claude-bgcount-${uid}"
+  bg_cache="${CACHE_DIR}/claude-bgcount-${uid}"
   bg_ttl=30
   bg_age=$(( now - $(mtime "$bg_cache") ))
   # M2: prefer python3 for JSON parsing; fall back to jq when python3 is absent.
@@ -758,13 +770,6 @@ if [ "${CFG_proj_count:-0}" -gt 0 ] 2>/dev/null && [ -n "$_cfg_file" ]; then
   done
 fi
 
-# ── Separators ───────────────────────────────────────────────────────────────
-# SEP   (0x1F unit-separator) divides carousel pool entries.
-# SEP_PB (0x1D group-separator) divides per-project badge groups in proj_badges.
-# Both must be defined unconditionally — the slow_cache can be hit OR missed.
-SEP=$(printf '\037')
-SEP_PB=$(printf '\035')
-
 # ── Carousel pool (L2) ────────────────────────────────────────────────────────
 # Rotates every $CFG_carousel_sec seconds (epoch-based, sessions stay in sync).
 cpool=""
@@ -805,7 +810,7 @@ pack_line() {
   # $1 = max width; remaining args = segments (may be empty, skipped)
   _max=$1; shift
   _out=""; _used=0; _div="  ${T_dim}│${R}  "
-  _div_w=4  # "  |  " = 4 visible chars
+  _div_w=5  # "  │  " = 2 + 1 (│ U+2502, width=1) + 2 = 5 visible chars
   for _seg; do
     [ -z "$_seg" ] && continue
     _sw=$(vis_width "$_seg")
@@ -824,6 +829,7 @@ pack_line() {
 # ── Line 3 — per-project rotate ───────────────────────────────────────────────
 # One project per tick (15s), cycling through configured project badge groups.
 line3=""
+line3_is_proj=0  # 1 = came from proj_badges, 0 = carousel fallback
 if [ "${CFG_proj_count:-0}" -gt 0 ] 2>/dev/null && [ -n "$proj_badges" ]; then
   pn=0; _oIFS=$IFS; IFS=$(printf '\035')
   set -f
@@ -834,7 +840,7 @@ if [ "${CFG_proj_count:-0}" -gt 0 ] 2>/dev/null && [ -n "$proj_badges" ]; then
     _oIFS=$IFS; IFS=$(printf '\035'); set -f
     for _pg in $proj_badges; do
       [ -z "$_pg" ] && continue
-      [ "$pi" -eq "$pslot" ] && { line3="$_pg"; break; }
+      [ "$pi" -eq "$pslot" ] && { line3="$_pg"; line3_is_proj=1; break; }
       pi=$(( pi + 1 ))
     done
     set +f; IFS=$_oIFS
@@ -892,8 +898,10 @@ fi
 
 # ── Output ────────────────────────────────────────────────────────────────────
 # Always emit line1 and line2 (guaranteed non-empty: at minimum the plan badge).
-# Line3 only when it has content (project badges or carousel).
-if [ -n "$line3" ] && [ "$line3" != "$carousel_slot" ] 2>/dev/null; then
+# Line3: print when it carries project badge content (line3_is_proj=1), OR when it
+# is a carousel entry that differs from what line2 already shows (avoids repeating
+# the same slot on two lines when there are no configured projects).
+if [ "$line3_is_proj" = "1" ] || { [ -n "$line3" ] && [ "$line3" != "$carousel_slot" ]; }; then
   line3_out=$(pack_line "$cols" "$line3")
   printf '%s\n%s\n%s' "$line1" "$line2" "$line3_out"
 else
