@@ -2,15 +2,14 @@
 
 ## [2.32.0] - 2026-06-14
 
-### Changed
-
-feat(rotate): CRS relay-pool priority daemon — quota-aware account prioritization, utilization signals, exit-0 transient guard, launchd/systemd install script
-
-## [2.32.0] - 2026-06-14
-
 ### Added
 
-CRS relay-pool auto-prioritization: a new `crs-priority` daemon (opt-in, off by default) that manages per-account `schedulable` flags on a claude-relay-service pool from live signals (`sessionWindowStatus` + rate-limit + overload, with `claudeUsage` utilization as a fresh-only secondary), so the relay avoids near-maxed accounts and re-enables them on recovery — the relay-pool analogue of the keychain rotator. Hysteresis bands prevent flapping; a floor guarantees the pool never starves itself; stale/absent usage never drives a re-enable. Ships `scripts/account-rotation/crs-priority-daemon.{mjs,sh}`, a `templates/com.claude-ops.crs-priority.plist` launchd template + `scripts/install-crs-priority-agent.sh` installer (120s cadence, single-flight locked), a `crs` config block, and wires `/ops:rotate crs|crs-tick` (status/manual tick) + an `/ops:rotate-setup --crs` install step. Admin password resolves from `$CRS_ADMIN_PASSWORD` or the credential store (`CRS-Admin-<adminUser>`), never config.
+- CRS relay-pool auto-prioritization: a new `crs-priority` daemon (opt-in, off by default) that manages per-account `schedulable` flags on a claude-relay-service pool from live signals (`sessionWindowStatus` + rate-limit + overload, with `claudeUsage` utilization as a fresh-only secondary), so the relay avoids near-maxed accounts and re-enables them on recovery — the relay-pool analogue of the keychain rotator. Hysteresis bands prevent flapping; a floor guarantees the pool never starves itself; stale/absent usage never drives a re-enable. Ships `scripts/account-rotation/crs-priority-daemon.{mjs,sh}`, a `templates/com.claude-ops.crs-priority.plist` launchd template + `scripts/install-crs-priority-agent.sh` installer (120s cadence, single-flight locked), a `crs` config block, and wires `/ops:rotate crs|crs-tick` (status/manual tick) + an `/ops:rotate-setup --crs` install step. Admin password resolves from `$CRS_ADMIN_PASSWORD` or the credential store (`CRS-Admin-<adminUser>`), never config.
+- `ops-update`: a new step fast-forwards a linked local source checkout's `main` to `origin/main` after the cache upgrade, so a dev clone never silently drifts behind the published release. Safe by construction — it acts only when the checkout is on a clean `main` (never clobbering uncommitted WIP, a feature branch, or unpushed commits) and is a no-op when no checkout is present. New `--no-localsync` flag opts out.
+
+### Fixed
+
+- `ops-post-update-migrate`: rsync each new version into a stable `current/` directory and repoint `installed_plugins.json` at it, so Claude Code deleting the old versioned cache dir mid-session no longer triggers "Plugin directory does not exist" PostToolUse hook errors. All steps are non-fatal guards.
 
 ## [2.31.0] - 2026-06-14
 
