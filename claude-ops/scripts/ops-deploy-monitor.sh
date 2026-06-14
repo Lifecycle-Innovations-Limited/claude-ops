@@ -7,6 +7,10 @@
 set -u
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
+# Load deploy-fix library (provides lock_acquire, dispatch_fix_agent, config, etc.)
+# shellcheck disable=SC1091
+source "$PLUGIN_ROOT/scripts/lib/deploy-fix-common.sh"
+
 # Single-instance guard - prevent stacking on rapid spawns
 source "$HOME/.claude/scripts/lib/once.sh"
 REPO="${1:?usage: $0 <owner/repo> <pr_number>}"
