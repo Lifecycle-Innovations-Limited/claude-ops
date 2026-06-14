@@ -1,7 +1,7 @@
 ---
 name: ops-rotate
-description: Multi-account Claude Max rotator. Status, manual rotation, account list, add-account wizard. Requires account_rotation_enabled=true in plugin settings.
-argument-hint: "[status|rotate-now|list|add-account]"
+description: Multi-account Claude Max rotator. Status, manual rotation, account list, add-account wizard, and CRS relay-pool auto-prioritization. Requires account_rotation_enabled=true in plugin settings.
+argument-hint: "[status|rotate-now|list|add-account|crs|crs-tick]"
 allowed-tools:
   - Bash
   - Read
@@ -25,6 +25,21 @@ Manage the optional multi-account Claude Max rotator. Off by default — flip
 | `rotate-now`   | Force rotation to the most-cooled candidate (or `--to <email>`) |
 | `list`         | List every configured account with token state + last util     |
 | `add-account`  | Interactive wizard: collect email, OAuth into rotator vault    |
+| `crs`          | Show the CRS relay-pool schedulable state + priority-daemon health |
+| `crs-tick`     | Run one CRS priority tick now (append `--dry-run` to preview, no writes) |
+
+## Two rotation models
+
+This skill manages **two complementary** account-management systems:
+
+- **Keychain rotator** (`status`/`rotate-now`/`list`/`add-account`) — for **direct-auth**
+  sessions. One active claude.ai OAuth token in the keychain at a time; the daemon swaps
+  to the coolest account when the active one heats up.
+- **CRS priority daemon** (`crs`/`crs-tick`) — for a **claude-relay-service** pool, which
+  load-balances across *many* accounts simultaneously. Instead of swapping one token, it
+  toggles each account's `schedulable` flag from live utilization so the relay avoids
+  near-maxed accounts and re-enables them on recovery. Off by default; see
+  **ops-rotate-setup** to configure + install.
 
 ## Pre-flight (every invocation)
 
@@ -111,6 +126,42 @@ This is the only mutating subcommand. Walk the user through:
    done
    ```
 6. **Verify.** Run `status` subcommand inline.
+
+## crs (relay-pool status)
+
+Show the claude-relay-service pool's per-account schedulable state + the priority
+daemon's health. Read-only.
+
+```
+WRAP="$ROT_SRC/crs-priority-daemon.sh"
+bash "$WRAP" --status 2>&1 | head -40   # prints "● name sched=true 5h=NN%  <status>"
+launchctl list 2>/dev/null | grep com.claude-ops.crs-priority || echo "crs-priority daemon: not loaded"
+tail -n 5 "${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/logs/crs-priority.log" 2>/dev/null
+```
+
+Render a compact panel:
+
+```
+CRS POOL  (http://127.0.0.1:3000)
+  schedulable : 7 / 10
+  off         : canary-sponsors (rate-limited), pool-chairman (warning), pool-foundation (warning)
+  daemon      : ✓ running (every 120s)  |  ✗ not loaded — run /ops:rotate-setup
+```
+
+If CRS `/health` is unreachable, say so and point to ops-rotate-setup. If the daemon
+isn't loaded but `crs.enabled` is true, suggest `/ops:rotate-setup`.
+
+## crs-tick (run one tick now)
+
+Apply (or, with `--dry-run`, preview) one prioritization pass immediately — useful
+right after changing thresholds or to confirm the policy.
+
+```
+bash "$ROT_SRC/crs-priority-daemon.sh" ${ARGS:-}   # ARGS="--dry-run" to preview
+```
+
+This is the same code the launchd timer runs; the daemon only ever toggles
+`schedulable` (fully reversible) and never deletes or mutates account credentials.
 
 ## Optional npm dep
 

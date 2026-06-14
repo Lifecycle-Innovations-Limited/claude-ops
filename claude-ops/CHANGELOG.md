@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.32.0] - 2026-06-14
+
+### Added
+CRS relay-pool auto-prioritization: a new `crs-priority` daemon (opt-in, off by default) that manages per-account `schedulable` flags on a claude-relay-service pool from live signals (`sessionWindowStatus` + rate-limit + overload, with `claudeUsage` utilization as a fresh-only secondary), so the relay avoids near-maxed accounts and re-enables them on recovery — the relay-pool analogue of the keychain rotator. Hysteresis bands prevent flapping; a floor guarantees the pool never starves itself; stale/absent usage never drives a re-enable. Ships `scripts/account-rotation/crs-priority-daemon.{mjs,sh}`, a `templates/com.claude-ops.crs-priority.plist` launchd template + `scripts/install-crs-priority-agent.sh` installer (120s cadence, single-flight locked), a `crs` config block, and wires `/ops:rotate crs|crs-tick` (status/manual tick) + an `/ops:rotate-setup --crs` install step. Admin password resolves from `$CRS_ADMIN_PASSWORD` or the credential store (`CRS-Admin-<adminUser>`), never config.
+
+
 ## [2.31.0] - 2026-06-14
 
 ### Changed
