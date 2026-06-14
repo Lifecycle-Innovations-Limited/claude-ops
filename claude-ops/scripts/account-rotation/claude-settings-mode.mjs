@@ -30,9 +30,55 @@ function writeSettingsAtomic(s) {
   renameSync(tmp, p);
 }
 
-/** Pinned fallbacks when list-inference-profiles fails or returns nothing. */
-const BEDROCK_PRIMARY_FALLBACK = 'us.anthropic.claude-sonnet-4-6';
-const BEDROCK_SMALL_FALLBACK = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
+const AWS_PROFILE_CANDIDATES = ['default', 'ec2-user-cli', 'healify', 'workshop'];
+
+function awsProfileProbeEnv(profile, region = 'us-east-1') {
+  const env = {
+    ...process.env,
+    AWS_PROFILE: profile,
+    AWS_DEFAULT_PROFILE: profile,
+    AWS_REGION: region,
+    AWS_DEFAULT_REGION: region,
+  };
+  env.AWS_ACCESS_KEY_ID = '';
+  env.AWS_SECRET_ACCESS_KEY = '';
+  env.AWS_SESSION_TOKEN = '';
+  return env;
+}
+
+export function resolveWorkingAwsEnv(region = 'us-east-1') {
+  try {
+    execFileSync('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      timeout: 5000,
+      env: { ...process.env, AWS_REGION: region, AWS_DEFAULT_REGION: region },
+    });
+    return { env: { ...process.env, AWS_REGION: region, AWS_DEFAULT_REGION: region }, profile: process.env.AWS_PROFILE || '' };
+  } catch {}
+  for (const profile of AWS_PROFILE_CANDIDATES) {
+    const env = awsProfileProbeEnv(profile, region);
+    try {
+      execFileSync('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
+        encoding: 'utf8',
+        stdio: 'pipe',
+        timeout: 5000,
+        env,
+      });
+      return { env, profile };
+    } catch {}
+  }
+  return { env: { ...process.env, AWS_REGION: region, AWS_DEFAULT_REGION: region }, profile: process.env.AWS_PROFILE || '' };
+}
+
+function getFallbacksForPrefix(prefix) {
+  return {
+    primary: `${prefix}anthropic.claude-sonnet-4-6`,
+    small: `${prefix}anthropic.claude-haiku-4-5-20251001-v1:0`,
+    opus: `${prefix}anthropic.claude-opus-4-1-20250805-v1:0`,
+    fable: `${prefix}anthropic.claude-fable-5`,
+  };
+}
 
 /** Map AWS region to preferred cross-region inference profile prefix. */
 export function preferredInferencePrefix(awsRegion) {
@@ -47,6 +93,7 @@ export function preferredInferencePrefix(awsRegion) {
 function listAllInferenceProfilesSync(region) {
   const summaries = [];
   let startingToken;
+  const aws = resolveWorkingAwsEnv(region);
   for (;;) {
     const args = [
       'bedrock',
@@ -63,6 +110,7 @@ function listAllInferenceProfilesSync(region) {
       encoding: 'utf8',
       maxBuffer: 32 * 1024 * 1024,
       timeout: 60_000,
+      env: aws.env,
     });
     const data = JSON.parse(out);
     summaries.push(...(data.inferenceProfileSummaries || []));
@@ -70,6 +118,29 @@ function listAllInferenceProfilesSync(region) {
     if (!startingToken) break;
   }
   return summaries;
+}
+
+export function parseModelRank(inferenceProfileId) {
+  // Strip trailing version flags like -v1:0, :v1:0, or v1
+  const cleanId = inferenceProfileId.replace(/[-:]v\d+(:\d+)?$/i, '').replace(/v\d+$/i, '');
+  const matches = cleanId.match(/\d+/g);
+  if (!matches) return [0, 0, 0];
+  const nums = matches.map(n => parseInt(n, 10));
+  const major = nums[0];
+  let minor = 0;
+  let date = 0;
+  if (nums.length > 1) {
+    const last = nums[nums.length - 1];
+    if (last >= 20000000 && last <= 21000000) {
+      date = last;
+      if (nums.length === 3) {
+        minor = nums[1];
+      }
+    } else {
+      minor = nums[1];
+    }
+  }
+  return [major, minor, date];
 }
 
 function rankCompareDesc(ra, rb) {
@@ -80,40 +151,6 @@ function rankCompareDesc(ra, rb) {
     if (a !== b) return b - a;
   }
   return 0;
-}
-
-function sonnetRank(inferenceProfileId) {
-  const m = inferenceProfileId.match(/\.anthropic\.claude-sonnet-(.+)$/);
-  if (!m) return [-1];
-  const tail = m[1].replace(/-v\d+:\d+$/i, '');
-  // Order matters: `4-20250514` must not match as major-minor (second group YYYYMMDD).
-  let mm = tail.match(/^(\d+)-(\d+)-(\d{8})$/);
-  if (mm) {
-    return [parseInt(mm[1], 10), parseInt(mm[2], 10), parseInt(mm[3], 10)];
-  }
-  mm = tail.match(/^(\d+)-(\d{8})$/);
-  if (mm) return [parseInt(mm[1], 10), 0, parseInt(mm[2], 10)];
-  mm = tail.match(/^(\d+)-(\d+)$/);
-  if (mm) {
-    const second = mm[2];
-    if (/^\d{8}$/.test(second)) {
-      return [parseInt(mm[1], 10), 0, parseInt(second, 10)];
-    }
-    return [parseInt(mm[1], 10), parseInt(second, 10), 0];
-  }
-  return [0, 0, 0];
-}
-
-function haikuRank(inferenceProfileId) {
-  let m = inferenceProfileId.match(/\.anthropic\.claude-haiku-(\d+)-(\d+)-(\d{8})/);
-  if (m) {
-    return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
-  }
-  m = inferenceProfileId.match(/\.anthropic\.claude-3-5-haiku-(\d{8})/);
-  if (m) return [3, 5, parseInt(m[1], 10)];
-  m = inferenceProfileId.match(/\.anthropic\.claude-3-haiku-(\d{8})/);
-  if (m) return [3, 0, parseInt(m[1], 10)];
-  return [-1, 0, 0];
 }
 
 function isActiveSystem(p) {
@@ -129,56 +166,49 @@ function candidatesWithPrefix(profiles, prefix, predicate) {
   return active;
 }
 
-function pickLatestSonnet(profiles, prefix) {
-  const c = candidatesWithPrefix(profiles, prefix, (id) => id.includes('.anthropic.claude-sonnet-'));
-  if (!c.length) return null;
-  c.sort((x, y) => rankCompareDesc(sonnetRank(x.inferenceProfileId), sonnetRank(y.inferenceProfileId)));
-  return c[0].inferenceProfileId;
-}
-
-function pickLatestHaiku(profiles, prefix) {
-  const c = candidatesWithPrefix(profiles, prefix, (id) => {
-    if (id.includes('.anthropic.claude-haiku-')) return haikuRank(id)[0] >= 0;
-    if (id.includes('.anthropic.claude-3-') && id.includes('haiku')) return true;
-    return false;
-  });
-  if (!c.length) return null;
-  c.sort((x, y) => rankCompareDesc(haikuRank(x.inferenceProfileId), haikuRank(y.inferenceProfileId)));
+function pickLatestModel(profiles, prefix, pattern, fallback) {
+  const c = candidatesWithPrefix(profiles, prefix, (id) => pattern.test(id));
+  if (!c.length) return fallback;
+  c.sort((x, y) =>
+    rankCompareDesc(
+      parseModelRank(x.inferenceProfileId),
+      parseModelRank(y.inferenceProfileId),
+    ),
+  );
   return c[0].inferenceProfileId;
 }
 
 /**
- * Resolve latest Bedrock inference profile IDs for Claude Code (Sonnet + Haiku).
+ * Resolve latest Bedrock inference profile IDs for Claude Code (Sonnet, Haiku, Opus, Fable).
  * @param {string} region - AWS region for `list-inference-profiles` (e.g. us-east-1)
- * @returns {{ primary: string, small: string, source: 'api' | 'fallback', detail?: string }}
+ * @returns {{ primary: string, small: string, opus: string, fable: string, source: 'api' | 'fallback', detail?: string }}
  */
 export function resolveBedrockClaudeModelIds(region = 'us-east-1') {
+  const prefix = preferredInferencePrefix(region);
+  const fallbacks = getFallbacksForPrefix(prefix);
   if (process.env.BEDROCK_SKIP_RESOLVE === '1') {
     return {
-      primary: BEDROCK_PRIMARY_FALLBACK,
-      small: BEDROCK_SMALL_FALLBACK,
+      primary: fallbacks.primary,
+      small: fallbacks.small,
+      opus: fallbacks.opus,
+      fable: fallbacks.fable,
       source: 'fallback',
       detail: 'BEDROCK_SKIP_RESOLVE',
     };
   }
   try {
     const profiles = listAllInferenceProfilesSync(region);
-    const prefix = preferredInferencePrefix(region);
-    const primary = pickLatestSonnet(profiles, prefix);
-    const small = pickLatestHaiku(profiles, prefix);
-    if (primary && small) {
-      return { primary, small, source: 'api' };
-    }
-    return {
-      primary: primary || BEDROCK_PRIMARY_FALLBACK,
-      small: small || BEDROCK_SMALL_FALLBACK,
-      source: 'fallback',
-      detail: primary ? 'missing-haiku' : small ? 'missing-sonnet' : 'missing-both',
-    };
+    const primary = pickLatestModel(profiles, prefix, /\.anthropic\.claude-sonnet-/, fallbacks.primary);
+    const small = pickLatestModel(profiles, prefix, /(\.anthropic\.claude-.*haiku|\.anthropic\.claude-3-.*haiku)/, fallbacks.small);
+    const opus = pickLatestModel(profiles, prefix, /\.anthropic\.claude-opus-/, fallbacks.opus);
+    const fable = pickLatestModel(profiles, prefix, /\.anthropic\.claude-fable-/, fallbacks.fable);
+    return { primary, small, opus, fable, source: 'api' };
   } catch (e) {
     return {
-      primary: BEDROCK_PRIMARY_FALLBACK,
-      small: BEDROCK_SMALL_FALLBACK,
+      primary: fallbacks.primary,
+      small: fallbacks.small,
+      opus: fallbacks.opus,
+      fable: fallbacks.fable,
       source: 'fallback',
       detail: (e.message || String(e)).slice(0, 200),
     };
@@ -187,14 +217,27 @@ export function resolveBedrockClaudeModelIds(region = 'us-east-1') {
 
 /** Match use-bedrock.sh: Bedrock env + strip top-level model lists (OAuth catalog ids break Bedrock). */
 export function persistBedrockClaudeSettings(region = 'us-east-1') {
-  const { primary, small } = resolveBedrockClaudeModelIds(region);
+  const { primary, small, opus, fable } = resolveBedrockClaudeModelIds(region);
+  const aws = resolveWorkingAwsEnv(region);
   const s = readSettings();
   const env = s.env && typeof s.env === 'object' ? { ...s.env } : {};
   env.CLAUDE_CODE_USE_BEDROCK = '1';
   env.AWS_BEDROCK_REGION = region;
   env.AWS_REGION = region;
+  env.AWS_DEFAULT_REGION = region;
+  if (aws.profile) {
+    env.AWS_PROFILE = aws.profile;
+    env.AWS_DEFAULT_PROFILE = aws.profile;
+  }
+  env.AWS_ACCESS_KEY_ID = '';
+  env.AWS_SECRET_ACCESS_KEY = '';
+  env.AWS_SESSION_TOKEN = '';
   env.ANTHROPIC_MODEL = primary;
   env.ANTHROPIC_SMALL_FAST_MODEL = small;
+  env.ANTHROPIC_DEFAULT_SONNET_MODEL = primary;
+  env.ANTHROPIC_DEFAULT_HAIKU_MODEL = small;
+  env.ANTHROPIC_DEFAULT_OPUS_MODEL = opus;
+  env.ANTHROPIC_DEFAULT_FABLE_MODEL = fable;
   delete env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_AUTH_TOKEN;
   delete env.ANTHROPIC_BASE_URL;
@@ -217,6 +260,10 @@ export function clearHardcodedModelsForOAuthClaudeSettings() {
     'ANTHROPIC_BASE_URL',
     'ANTHROPIC_MODEL',
     'ANTHROPIC_SMALL_FAST_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL',
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    'ANTHROPIC_DEFAULT_FABLE_MODEL',
   ]) {
     delete env[k];
   }
