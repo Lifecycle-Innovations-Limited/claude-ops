@@ -1,0 +1,15 @@
+[Unit]
+Description=Claude Relay Service docker compose stack
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/crs
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down
+RemainAfterExit=yes
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

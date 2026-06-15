@@ -35,15 +35,15 @@
  * time. It never touches the global "Claude Code-credentials" keychain entry.
  */
 
-import { readFileSync, writeFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-import { spawnSync, spawn } from "child_process";
-import { applyOAuthEnv, applyBedrockEnv } from "./provider-env.mjs";
+import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { spawnSync, spawn } from 'child_process';
+import { applyOAuthEnv, applyBedrockEnv } from './provider-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const LEASES_PATH = join(__dirname, "session-leases.json");
-const IS_LINUX = process.platform === "linux";
+const LEASES_PATH = join(__dirname, 'session-leases.json');
+const IS_LINUX = process.platform === 'linux';
 const LEASE_TTL_MS = 30 * 60_000; // 30 min — sessions that die without cleanup are GC'd
 
 // ── Lease store ───────────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ const LEASE_TTL_MS = 30 * 60_000; // 30 min — sessions that die without cleanu
 export function readLeases() {
   try {
     if (!existsSync(LEASES_PATH)) return {};
-    return JSON.parse(readFileSync(LEASES_PATH, "utf8"));
+    return JSON.parse(readFileSync(LEASES_PATH, 'utf8'));
   } catch {
     return {};
   }
@@ -75,7 +75,7 @@ export function pruneLeases(leases) {
         alive = true;
       } catch {}
     }
-    
+
     // PID-less lease fallback OR grace period for dead PIDs during respawn
     const age = now - (entry.ts || 0);
     if (!alive && age <= (entry.pid ? 60000 : LEASE_TTL_MS)) {
@@ -97,38 +97,27 @@ function accountKey(a) {
 
 // ── Vault token read — platform-aware ─────────────────────────────────────────
 
-const KEYCHAIN_ACCOUNT =
-  process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT ||
-  process.env.USER ||
-  "claude-ops";
-const LINUX_CRED_PATH = join(
-  process.env.HOME || "",
-  ".claude",
-  ".credentials.json",
-);
+const KEYCHAIN_ACCOUNT = process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || 'claude-ops';
+const LINUX_CRED_PATH = join(process.env.HOME || '', '.claude', '.credentials.json');
 
 export function readVaultToken(account) {
   const svc = `Claude-Rotation-${accountKey(account)}`;
   if (IS_LINUX) {
     try {
-      const store = JSON.parse(readFileSync(LINUX_CRED_PATH, "utf8"));
+      const store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
       const val = store[svc];
       if (!val) return null;
-      return typeof val === "string" ? val : JSON.stringify(val);
+      return typeof val === 'string' ? val : JSON.stringify(val);
     } catch {
       return null;
     }
   }
   try {
-    const r = spawnSync(
-      "security",
-      ["find-generic-password", "-s", svc, "-a", KEYCHAIN_ACCOUNT, "-g"],
-      {
-        timeout: 5000,
-        encoding: "utf8",
-      },
-    );
-    const out = (r.stdout || "") + (r.stderr || "");
+    const r = spawnSync('security', ['find-generic-password', '-s', svc, '-a', KEYCHAIN_ACCOUNT, '-g'], {
+      timeout: 5000,
+      encoding: 'utf8',
+    });
+    const out = (r.stdout || '') + (r.stderr || '');
     const m = out.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
   } catch {
@@ -216,7 +205,7 @@ export function pickAccountForSession(sessionId, config, state) {
     if (!tokenJson || tokenExpired(tokenJson)) continue;
 
     const leasesCount = leaseCounts[key] || 0;
-    
+
     // STRICT CONCURRENCY CAP
     if (leasesCount >= MAX_CONCURRENT_PER_ACCOUNT) continue;
 
@@ -227,7 +216,7 @@ export function pickAccountForSession(sessionId, config, state) {
     // Only lease if ACTUAL utilization is strictly below the account's cap (e.g. 98% or 50% account cap)
     if (util < maxUtil) {
       // Add a tiny weight to the actual utilization to stagger concurrent spawns (anti-dogpiling)
-      const sortedUtil = util + (leasesCount * SORT_WEIGHT_PCT);
+      const sortedUtil = util + leasesCount * SORT_WEIGHT_PCT;
       if (leasesCount < bestLeaseCount || (leasesCount === bestLeaseCount && sortedUtil < bestUtil)) {
         bestLeaseCount = leasesCount;
         bestUtil = sortedUtil;
@@ -290,9 +279,7 @@ export function getTokenForSession(sessionId, config) {
   const leases = readLeases();
   const lease = leases[sessionId];
   if (!lease) return null;
-  const account = config.accounts.find(
-    (a) => accountKey(a) === lease.accountKey,
-  );
+  const account = config.accounts.find((a) => accountKey(a) === lease.accountKey);
   if (!account) return null;
   return readVaultToken(account);
 }
@@ -316,9 +303,7 @@ export function getTokenForSession(sessionId, config) {
  * @returns {{ proc: ChildProcess, sessionId: string, accountKey: string|null }}
  */
 export function spawnWithAccount(args, config, state, opts = {}) {
-  const sessionId =
-    opts.sessionId ||
-    `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sessionId = opts.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const childEnv = { ...(opts.env || process.env) };
 
   let assignedKey = null;
@@ -343,15 +328,15 @@ export function spawnWithAccount(args, config, state, opts = {}) {
     }
   }
 
-  const proc = spawn("claude", args, {
+  const proc = spawn('claude', args, {
     env: childEnv,
     detached: opts.detached ?? false,
-    stdio: opts.stdio ?? "inherit",
+    stdio: opts.stdio ?? 'inherit',
   });
 
   if (assignedKey) {
     recordSessionLease(sessionId, assignedKey, proc.pid);
-    proc.once("exit", () => releaseSessionLease(sessionId));
+    proc.once('exit', () => releaseSessionLease(sessionId));
   }
 
   return { proc, sessionId, accountKey: assignedKey };
