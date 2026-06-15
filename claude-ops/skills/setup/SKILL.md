@@ -183,7 +183,7 @@ Print a compact status header to the user, one line per category:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  OPS ► SETUP WIZARD
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- Shell:       zsh → ~/.zshrc
+ Shell:       <detected shell> → <detected profile_file>   (e.g. bash → ~/.bashrc, zsh → ~/.zshrc, fish → ~/.config/fish/config.fish)
  Core CLIs:   ✓ jq  ✓ git  ✓ gh  ✓ aws  ✓ node
  Channels:    ✓ bridge  ✓ gog  ○ telegram (no token)
  Secrets:     ✓ doppler (project: my-app, config: dev)
@@ -1749,9 +1749,11 @@ Then continue to Step 7.
 
 ## Step 7 — Shell env (if selected)
 
-1. Check whether `CLAUDE_PLUGIN_ROOT` is already exported in the profile file (grep for `CLAUDE_PLUGIN_ROOT`).
-2. If missing, **append it automatically** — this is a required step, not optional. Use `>>` (append, never overwrite). Print: `"✓ Added export CLAUDE_PLUGIN_ROOT=... to ~/.zshrc"`. Do NOT ask the user for permission — Rule 2 (never delegate commands to the user) applies here.
-3. Tell the user: `"Run 'source ~/.zshrc' or open a new terminal for it to take effect."` — this will show as an approval prompt in Claude's next tool call, which the user accepts normally.
+**Use the DETECTED shell profile, never a hardcoded `~/.zshrc`.** Resolve `PROFILE_FILE` from the Step 0b detector output (`profile_file` — `.bashrc` / `.zshrc` / `.config/fish/config.fish` / `.profile` per the user's actual `$SHELL`). A hardcoded `~/.zshrc` lands the export in a file bash/fish never sources (the original cross-OS bug).
+
+1. Check whether `CLAUDE_PLUGIN_ROOT` is already exported in `$PROFILE_FILE` (grep for `CLAUDE_PLUGIN_ROOT`).
+2. If missing, **append it automatically** — required, not optional. Use `>>` (append, never overwrite). Print: `"✓ Added export CLAUDE_PLUGIN_ROOT=... to $PROFILE_FILE"`. Do NOT ask permission — Rule 2 (never delegate commands to the user) applies. (fish syntax: write `set -gx CLAUDE_PLUGIN_ROOT …` into `config.fish` instead of `export`.)
+3. Tell the user: `"Run 'source $PROFILE_FILE' or open a new terminal for it to take effect."`
 
 ---
 

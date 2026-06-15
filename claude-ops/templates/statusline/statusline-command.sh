@@ -257,10 +257,23 @@ account_email=""; _sub=""; _method=""
 # Sanitize email for use in filenames: strip / and " to prevent path traversal / injection
 _email_safe=$(printf '%s' "$account_email" | tr -d '/"')
 
-# Billing mode
+# Billing mode. Bedrock env overrides; else derive from auth JSON; persist
+# positive results so the badge survives transient auth failures.
+# CRS-relay guard: a stale CLAUDE_CODE_USE_BEDROCK=1 can linger in the process
+# env even though the session actually routes through the CRS relay
+# (ANTHROPIC_BASE_URL -> 127.0.0.1 relay + a cr_ OAuth token = Max pool / oauth).
+# In that case the real provider is oauth, not Bedrock. We also force "max" and
+# overwrite any stale cache so a session that briefly cached "bedrock" at startup
+# (before relay routing settled) never keeps showing Bedrock.
 billing_cache="${CACHE_DIR}/claude-billing-${session_id}"
-if [ "${CLAUDE_CODE_USE_BEDROCK:-}" = "1" ]; then
+_is_crs_relay=""
+case "${CLAUDE_CODE_OAUTH_TOKEN:-}" in cr_*)
+  case "${ANTHROPIC_BASE_URL:-}" in *127.0.0.1:3005*|*127.0.0.1:3000*|*localhost:3005*) _is_crs_relay=1 ;; esac
+esac
+if [ "${CLAUDE_CODE_USE_BEDROCK:-}" = "1" ] && [ -z "$_is_crs_relay" ]; then
   sub_type="bedrock"
+elif [ -n "$_is_crs_relay" ]; then
+  sub_type="max"
 elif [ -n "$_sub" ] && [ "$_sub" != "null" ]; then
   sub_type="$_sub"
 elif [ "$_method" = "claude.ai" ]; then
