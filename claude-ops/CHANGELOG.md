@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.34.1] - 2026-06-15
+
+### Changed
+### Fixed
+- `ops-bg` now injects the CRS routing overlay (`--settings ~/.claude/crs-session-settings.json`) into every background session it spawns, so they inherit the sanctioned relay routing instead of going direct. Previously this was only patched in the installed plugin-cache copy and was lost on each plugin upgrade; it now lives in the canonical source. Includes a preflight that refuses to spawn on a half-set overlay or 401-rejected key. Opt out with `CRS_OVERLAY=""`.
+
+
 ## [2.34.0] - 2026-06-15
 
 ### Changed
