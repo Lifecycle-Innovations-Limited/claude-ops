@@ -110,11 +110,14 @@ echo "ops-release: $CUR -> $NEW  (type=$bump_type, date=$REL_DATE)"
 ai_used=0
 if [ -z "$notes" ]; then
   prev_marker="$(git -C "$REPO_ROOT" log -1 --format=%H -- "$CHANGELOG" 2>/dev/null || true)"
-  range=""; [ -n "$prev_marker" ] && range="$prev_marker..HEAD"
-  commits="$(git -C "$REPO_ROOT" log --no-merges --format='- %s' ${range:+$range} 2>/dev/null || true)"
+  commits=""; range=""
+  if [ -n "$prev_marker" ]; then
+    range="$prev_marker..HEAD"
+    commits="$(git -C "$REPO_ROOT" log --no-merges --format='- %s' "$range" 2>/dev/null || true)"
+  fi
   if [ "$do_ai" -eq 1 ] && command -v claude >/dev/null 2>&1 && [ -n "$commits" ]; then
     echo "ops-release: synthesizing changelog with AI (--no-ai to skip)…"
-    diffstat="$(git -C "$REPO_ROOT" diff --stat ${range:+$range} 2>/dev/null | tail -40 || true)"
+    diffstat="$(git -C "$REPO_ROOT" diff --stat "$range" 2>/dev/null | tail -40 || true)"
     ai_prompt="You are writing the CHANGELOG entry for v$NEW of 'claude-ops', a public open-source Claude Code plugin. Summarize the changes below into Keep-a-Changelog style markdown using only the relevant subset of these headings: '### Added', '### Changed', '### Fixed', '### Removed' (omit empty sections). Write tight, user-facing bullets grouped by theme — not one bullet per commit. Output ONLY the markdown section body (the ### headings and bullets); no '## [version]' header, no preamble, no code fences. Never include personal names, emails, paths under /Users or /home, tokens, or internal hostnames/URLs.
 
 Commits:
@@ -215,8 +218,8 @@ if [ "$do_merge" -eq 1 ]; then
     echo "ops-release: syncing wiki (--no-wiki to skip)…"
     wiki_tmp="$(mktemp -d)"
     if git clone --depth 1 "https://github.com/${GH_REPO}.wiki.git" "$wiki_tmp" >/dev/null 2>&1; then
-      SK=0; for d in "$REPO_ROOT"/claude-ops/skills/*/; do [ -f "$d/SKILL.md" ] && SK=$((SK+1)); done
-      AG=0; for f in "$REPO_ROOT"/claude-ops/agents/*.md; do [ -f "$f" ] && AG=$((AG+1)); done
+      SK=0; for d in "$WT"/claude-ops/skills/*/; do [ -f "$d/SKILL.md" ] && SK=$((SK+1)); done
+      AG=0; for f in "$WT"/claude-ops/agents/*.md; do [ -f "$f" ] && AG=$((AG+1)); done
       for page in "$wiki_tmp"/*.md; do
         [ -f "$page" ] || continue
         sed -E -i.bak \

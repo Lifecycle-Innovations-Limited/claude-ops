@@ -68,8 +68,8 @@ HEAD_E=(-e "s/([Aa]ll )[0-9]+ skills/\1${S} skills/g"
 apply "$PLUGIN_JSON" "${COUNT_E[@]}"
 apply "$MKT_JSON"    "${COUNT_E[@]}"
 
-# READMEs — count phrase + badges + headlines.
-apply "$REPO_ROOT/README.md" "${COUNT_E[@]}" "${BADGE_E[@]}" "${HEAD_E[@]}"
+# READMEs — badges + headlines (root README keeps historical "N skills, M agents" bullets frozen).
+apply "$REPO_ROOT/README.md" "${BADGE_E[@]}" "${HEAD_E[@]}"
 apply "$PLUGIN_DIR/README.md" "${COUNT_E[@]}" "${BADGE_E[@]}" "${HEAD_E[@]}"
 
 # Reference docs + index — badges + headlines.
