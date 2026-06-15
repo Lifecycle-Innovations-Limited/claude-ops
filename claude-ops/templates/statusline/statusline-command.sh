@@ -268,7 +268,7 @@ _email_safe=$(printf '%s' "$account_email" | tr -d '/"')
 billing_cache="${CACHE_DIR}/claude-billing-${session_id}"
 _is_crs_relay=""
 case "${CLAUDE_CODE_OAUTH_TOKEN:-}" in cr_*)
-  case "${ANTHROPIC_BASE_URL:-}" in *127.0.0.1:3005*|*127.0.0.1:3000*|*localhost:3005*) _is_crs_relay=1 ;; esac
+  case "${ANTHROPIC_BASE_URL:-}" in *127.0.0.1:3005*|*127.0.0.1:3000*|*localhost:3005*|*localhost:3000*) _is_crs_relay=1 ;; esac
 esac
 if [ "${CLAUDE_CODE_USE_BEDROCK:-}" = "1" ] && [ -z "$_is_crs_relay" ]; then
   sub_type="bedrock"

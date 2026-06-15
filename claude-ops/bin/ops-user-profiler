@@ -20,7 +20,11 @@ mkdir -p "$DATA" 2>/dev/null || true
 SCAN="$DATA/profile.scan.json"
 PREFILL="$DATA/profile.prefill.json"
 
-command -v jq >/dev/null 2>&1 || { echo '{"error":"jq-missing"}' > "$SCAN" 2>/dev/null; exit 0; }
+command -v jq >/dev/null 2>&1 || {
+  echo '{"error":"jq-missing"}' > "$SCAN" 2>/dev/null
+  echo '{}' > "$PREFILL" 2>/dev/null
+  exit 0
+}
 
 # ── minimal inline OS/shell/pkg detection (no dep on unmerged scripts/lib) ──
 case "$(uname -s 2>/dev/null)" in
@@ -70,7 +74,7 @@ case "$PERM_MODE" in
   *) AUTONOMY=careful ;;
 esac
 # installed hooks + plugins (names only) — what they've already wired up
-HOOKS=$(jq -r '[.hooks // {} | to_entries[] | .key] | @json' "$SETTINGS" 2>/dev/null)
+HOOKS=$(jq -c '[.hooks // {} | to_entries[] | .value[]? | .hooks[]? | .command? // empty | split("/") | last | sub("\\.sh$";"")] | map(select(length>0)) | unique' "$SETTINGS" 2>/dev/null)
 PLUGINS=$(ls -1 "$HOME/.claude/plugins/cache" 2>/dev/null | head -40 | jq -R . | jq -s 'map(select(length>0))' 2>/dev/null)
 EXISTING_PREFS="$DATA/preferences.json"
 PRIOR_VERBOSITY=$(jq -r '.briefing_verbosity // empty' "$EXISTING_PREFS" 2>/dev/null || echo "")

@@ -10,7 +10,10 @@ Check bridge binary exists and LaunchAgent is installed:
 
 ```bash
 ls ~/.local/share/whatsapp-mcp/whatsapp-bridge/whatsapp-bridge 2>/dev/null && echo "binary ok"
-launchctl list com.${USER}.whatsapp-bridge 2>/dev/null | head -3
+case "$(uname -s)" in
+  Darwin) launchctl list com.${USER}.whatsapp-bridge 2>/dev/null | head -3 ;;
+  Linux) systemctl --user status whatsapp-bridge --no-pager ;;
+esac
 lsof -i :8080 2>/dev/null | grep LISTEN
 ```
 
@@ -26,16 +29,26 @@ whatsapp-bridge (whatsmeow) is not installed. Install:
 If LaunchAgent not installed, install it from template. The template ships as `com.claude-ops.whatsapp-bridge.plist` with a `__USER__` Label placeholder; sed substitutes the running user so the installed plist's Label becomes `com.${USER}.whatsapp-bridge`:
 
 ```bash
-PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
-PLIST_DEST="$HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
-BRIDGE_DIR="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge"
-mkdir -p "$BRIDGE_DIR/logs"
-sed -e "s|__BRIDGE_BINARY_PATH__|$BRIDGE_DIR/whatsapp-bridge|g" \
-    -e "s|__BRIDGE_WORKING_DIR__|$BRIDGE_DIR|g" \
-    -e "s|__HOME__|$HOME|g" \
-    -e "s|__USER__|$USER|g" \
-    "$PLIST_TEMPLATE" > "$PLIST_DEST"
-launchctl bootstrap gui/$(id -u) "$PLIST_DEST"
+case "$(uname -s)" in
+  Darwin)
+    PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
+    PLIST_DEST="$HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
+    BRIDGE_DIR="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge"
+    mkdir -p "$BRIDGE_DIR/logs" "$HOME/Library/LaunchAgents"
+    sed -e "s|__BRIDGE_BINARY_PATH__|$BRIDGE_DIR/whatsapp-bridge|g" \
+        -e "s|__BRIDGE_WORKING_DIR__|$BRIDGE_DIR|g" \
+        -e "s|__HOME__|$HOME|g" \
+        -e "s|__USER__|$USER|g" \
+        "$PLIST_TEMPLATE" > "$PLIST_DEST"
+    launchctl bootstrap gui/$(id -u) "$PLIST_DEST"
+    ;;
+  Linux)
+    bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-whatsapp-bridge-linux.sh"
+    ;;
+  *)
+    echo "WhatsApp bridge auto-install is unsupported on this OS."
+    ;;
+esac
 ```
 
 #### Step 3b.2 — QR pairing (first run)

@@ -53,18 +53,21 @@ POCKET_API_KEY not found. Where would you like to get one?
 
 On "Open Pocket dev portal": run `bash "${CLAUDE_PLUGIN_ROOT}/lib/opener.sh" "https://public.heypocketai.com"` (or `open "https://public.heypocketai.com"` on macOS) then ask `AskUserQuestion`: `[Paste key now]` / `[Skip]`.
 
-Once a key is provided, save to macOS Keychain and shell profile:
+Once a key is provided, save it through the cross-OS credential store and expose
+it from the detected shell profile when needed:
 
 ```bash
-# Keychain (preferred — avoids env leakage in shell history)
-security add-generic-password -U \
-  -s POCKET_API_KEY -a ops-daemon \
-  -w "$POCKET_API_KEY"
+bash "${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh" set POCKET_API_KEY ops-daemon "$POCKET_API_KEY"
 
-# Also export in shell profile so the launchd plist inherits it via EnvironmentVariables
-PROFILE="${ZDOTDIR:-$HOME}/.zshrc"
+case "$(basename "${SHELL:-}")" in
+  zsh) PROFILE="${ZDOTDIR:-$HOME}/.zshrc" ;;
+  bash) PROFILE="$HOME/.bashrc" ;;
+  fish) PROFILE="$HOME/.config/fish/config.fish" ;;
+  *) PROFILE="$HOME/.profile" ;;
+esac
+
 grep -q "POCKET_API_KEY" "$PROFILE" 2>/dev/null || \
-  echo 'export POCKET_API_KEY="$(security find-generic-password -s POCKET_API_KEY -a ops-daemon -w 2>/dev/null)"' >> "$PROFILE"
+  echo 'export POCKET_API_KEY="$(bash "${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh" get POCKET_API_KEY ops-daemon 2>/dev/null)"' >> "$PROFILE"
 ```
 
 #### Step 3p.3 — Choose notification channels
@@ -150,18 +153,31 @@ jq -n \
   > "$HOME/.claude/state/pocket/email-config.json"
 ```
 
-#### Step 3p.6 — Install the launchd notifier
+#### Step 3p.6 — Install the notifier
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-pocket-notifier.sh"
+case "$(uname -s)" in
+  Darwin)
+    bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-pocket-notifier.sh"
+    ;;
+  Linux)
+    echo "Linux: wire ${CLAUDE_PLUGIN_ROOT}/scripts/ops-pocket-activity-notifier.py into systemd --user or cron at a 60s interval."
+    ;;
+  *)
+    echo "Pocket notifier auto-install is unsupported on this OS; run the notifier manually or skip this channel."
+    ;;
+esac
 ```
 
-This generates `~/Library/LaunchAgents/com.claude-ops.pocket-activity-notifier.plist` from the bundled template, resolves Python 3, substitutes paths, and bootstraps the agent. Idempotent — re-running re-bootstraps cleanly.
+On macOS this generates `~/Library/LaunchAgents/com.claude-ops.pocket-activity-notifier.plist` from the bundled template, resolves Python 3, substitutes paths, and bootstraps the agent. On Linux/WSL, use the printed `systemd --user` or cron wiring until a packaged Linux installer exists. Idempotent — re-running re-bootstraps cleanly.
 
 Verify the agent loaded:
 
 ```bash
-launchctl list | grep com.claude-ops.pocket-activity-notifier
+case "$(uname -s)" in
+  Darwin) launchctl list | grep com.claude-ops.pocket-activity-notifier ;;
+  Linux) systemctl --user status pocket-activity-notifier ;;
+esac
 ```
 
 If the grep returns nothing, surface the error via `AskUserQuestion`: `[Retry install]` / `[Skip]`.

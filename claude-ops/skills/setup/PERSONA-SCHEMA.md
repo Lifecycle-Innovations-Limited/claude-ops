@@ -7,7 +7,7 @@ This is **generic for any user** — every field is _discovered_ (git identity, 
 ## How it's populated (layered, highest-confidence wins)
 
 1. **Install-time local scan** — `bin/ops-user-profiler` → `profile.scan.json` (OS, shell, tooling present, MCPs configured, env vendor NAMES, Doppler project names, repo dir names, Claude-config style hints). Offline, no secrets, token-frugal.
-2. **Optional web enrichment** — after explicit user confirmation, `agents/user-profiler.md` (Haiku + WebSearch) consumes the scan, searches from the user's git email / name / GitHub account, and writes only unconfirmed suggestions to `profile.prefill.json` until the wizard review screen accepts them.
+2. **Optional web enrichment** — after an explicit `AskUserQuestion` consent step, `agents/user-profiler.md` (Haiku + WebSearch) consumes the scan, searches from the user's git email / name / GitHub account, and writes only unconfirmed suggestions to `profile.prefill.json` until the wizard review screen accepts them. If the user declines, setup must skip external lookups and continue with local-only signals.
 3. **Transcript mining** — scans `~/.claude/projects/**/*.jsonl` for recurring frustrations, style corrections ("be terse", "stop asking"), and tools/hooks/plugins in active use → `persona.signals`.
 4. **Wizard confirmations** — anything the user confirms or corrects in the GUI is written back with `source: "confirmed"` (highest trust).
 5. **Ongoing** — ops skills append observed signals over time (it's a living snapshot, not a one-time form).
