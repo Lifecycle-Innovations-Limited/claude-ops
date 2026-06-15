@@ -3,7 +3,7 @@ set -uo pipefail
 
 MODE="${1:---once}"
 SESSION="${AGENT_HUB_TMUX_SESSION:-agent-hub}"
-OPS_DATA="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+OPS_DATA="${OPS_DATA_DIR:-${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}}"
 OPS_PROJECTS="$OPS_DATA/cache/projects_health.json"
 KPI_CACHE="$HOME/.claude/state/statusline-kpi.json"
 INFRA_CACHE="$HOME/.cache/agent-hub/infra-health.json"
@@ -192,7 +192,7 @@ json_summary() {
     --argjson infra "$infra" \
     --argjson aws "$aws" \
     --argjson plugins "$plugins" \
-    --arg runtime "$runtime" \
+    --argjson runtime "$runtime" \
     '{projects:$projects,kpi:$kpi,infra:$infra,aws:$aws,plugins:$plugins,runtime:$runtime}'
 }
 
