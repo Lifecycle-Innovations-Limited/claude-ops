@@ -6,9 +6,12 @@ SESSION="${AGENT_HUB_TMUX_SESSION:-agent-hub}"
 OPS_DATA="${OPS_DATA_DIR:-${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}}"
 OPS_PROJECTS="$OPS_DATA/cache/projects_health.json"
 KPI_CACHE="$HOME/.claude/state/statusline-kpi.json"
+MARKETING_CACHE="$OPS_DATA/cache/marketing.json"
+ECOM_CACHE="$OPS_DATA/cache/ecom.json"
 INFRA_CACHE="$HOME/.cache/agent-hub/infra-health.json"
 AWS_CACHE="$HOME/.cache/agent-hub/aws-ecs-health.json"
 PLUGIN_CACHE="$HOME/.cache/agent-hub/plugin-inventory.json"
+BI_CACHE="$HOME/.cache/agent-hub/healify-bi.json"
 RUNTIME_CACHE="$HOME/.cache/agent-hub/fleet/runtime-health.txt"
 FLEET_STATUS="$HOME/.claude/state/fleet-status.json"
 FLEET_TUI="$HOME/.claude/state/fleet-tui.json"
@@ -16,6 +19,7 @@ HEALIFY_ROOT="${HEALIFY_ROOT:-$HOME/Projects/healify-workspace}"
 MAX_ROWS="${HEALIFY_DASH_ROWS:-18}"
 INTERVAL="${HEALIFY_DASH_INTERVAL:-15}"
 REFRESH="${HEALIFY_DASH_REFRESH:-0}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ "$MODE" == "--refresh" ]]; then
   REFRESH=1
@@ -57,6 +61,20 @@ cols() {
   ((c < 72)) && c=72
   ((c > 180)) && c=180
   echo "$c"
+}
+
+raw_cols() {
+  local c
+  c="$(tput cols 2>/dev/null || echo 100)"
+  [[ "$c" =~ ^[0-9]+$ ]] || c=100
+  echo "$c"
+}
+
+raw_lines() {
+  local l
+  l="$(tput lines 2>/dev/null || echo 40)"
+  [[ "$l" =~ ^[0-9]+$ ]] || l=40
+  echo "$l"
 }
 
 clip_width() {
@@ -148,6 +166,15 @@ refresh_caches() {
   fi
   if [[ -x "$HOME/.local/bin/agent-hub-health" ]]; then
     timeout 40 "$HOME/.local/bin/agent-hub-health" short >"$RUNTIME_CACHE" 2>/dev/null || true
+  fi
+  local bi_refresh="${HEALIFY_BI_REFRESH_CMD:-}"
+  if [[ -z "$bi_refresh" && -x "$SCRIPT_DIR/ops-healify-bi-refresh" ]]; then
+    bi_refresh="$SCRIPT_DIR/ops-healify-bi-refresh"
+  elif [[ -z "$bi_refresh" && -x "$HOME/.local/bin/healify-bi-refresh" ]]; then
+    bi_refresh="$HOME/.local/bin/healify-bi-refresh"
+  fi
+  if [[ -n "$bi_refresh" ]]; then
+    timeout 180 "$bi_refresh" >/dev/null 2>&1 || true
   fi
 }
 
@@ -282,6 +309,71 @@ business_kpis() {
     ][]' | pretty_table
 }
 
+marketing_table() {
+  {
+    printf 'METRIC|VALUE|STATUS|SOURCE\n'
+    jq_file "$MARKETING_CACHE" '{}' -r '
+      def s: if . == null then "-" else tostring end;
+      "GA4 users|" + (.ga4.users|s) + "|" + (.health_status // "-") + "|ops marketing cache",
+      "GA4 sessions|" + (.ga4.sessions|s) + "|" + (.health_status // "-") + "|ops marketing cache",
+      "GA4 conversions|" + (.ga4.conversions|s) + "|" + (.health_status // "-") + "|ops marketing cache",
+      "GSC clicks|" + (.gsc.clicks|s) + "|" + (.health_status // "-") + "|ops marketing cache",
+      "Meta spend|" + (.meta.spend|s) + "|" + (.health_status // "-") + "|ops marketing cache",
+      "Meta ROAS|" + (.meta.roas|s) + "|" + (.health_status // "-") + "|ops marketing cache",
+      "Blended ROAS|" + (.blended_roas|s) + "|" + (.health_status // "-") + "|ops marketing cache"'
+    jq_file "$ECOM_CACHE" '{}' -r '
+      def s: if . == null then "-" else tostring end;
+      "Orders today|" + (.orders_today|s) + "|cached|ecom cache",
+      "Revenue today|" + ((.currency // "") + " " + (.revenue_today|s)) + "|cached|ecom cache"'
+    jq_file "$BI_CACHE" '{}' -r '
+      def card($id): (.opdash.ops.cards // [] | map(select(.id==$id)) | .[0] // {});
+      def s: if . == null then "-" else tostring end;
+      (card("appsflyer")) as $af |
+      (card("appsflyer").metrics // {}) as $m |
+      "App installs 7d|" + ($m.installs|s) + "|" + ($af.status // "-") + "|AppsFlyer",
+      "Organic installs|" + ($m.organic|s) + "|" + ($af.status // "-") + "|AppsFlyer",
+      "Loyal users|" + ($m.loyalUsers|s) + "|" + ($af.status // "-") + "|AppsFlyer",
+      "UA cost|" + ($m.cost|s) + "|" + ($af.status // "-") + "|AppsFlyer",
+      "Amplitude active|" + (.opdash.amplitude.current.activeUsers|s) + "|" + (if .opdash.amplitude.ok then "ok" else "blocked" end) + "|Amplitude project " + (.opdash.amplitude.projectId // "-"),
+      "Amplitude new|" + (.opdash.amplitude.current.newUsers|s) + "|" + (if .opdash.amplitude.ok then "ok" else "blocked" end) + "|Amplitude project " + (.opdash.amplitude.projectId // "-")'
+  } | pretty_table
+}
+
+release_table() {
+  {
+    printf 'SURFACE|LATEST|STATE|DETAIL\n'
+    jq_file "$BI_CACHE" '{}' -r '
+      def s: if . == null then "-" else tostring end;
+      (.eas.builds[0] // {}) as $e |
+      "EAS iOS|" + (($e.appVersion|s) + " (" + ($e.appBuildVersion|s) + ")") + "|" + ($e.status|s) + "|" + (($e.distribution|s) + " · " + ($e.updatedAt|s)),
+      (.ascExtra.apps[]? | select(.appId=="6746675266") | .builds[0] // {}) as $p |
+      "ASC prod build|" + ($p.version|s) + "|" + ($p.processingState|s) + "|" + ("expired=" + ($p.expired|s) + " · " + ($p.uploadedDate|s)),
+      (.ascExtra.apps[]? | select(.appId=="6751717479") | .builds[0] // {}) as $st |
+      "ASC staging build|" + ($st.version|s) + "|" + ($st.processingState|s) + "|" + ("expired=" + ($st.expired|s) + " · " + ($st.uploadedDate|s)),
+      (.opdash.appstore.appDetails[]? | select(.appId=="6746675266") | .appStoreVersions[0] // {}) as $v |
+      "App Store version|" + ($v.versionString|s) + "|" + ($v.appStoreState|s) + "|production app",
+      (.opdash.appstore.appDetails[]? | select(.appId=="6751717479") | .appStoreVersions[0] // {}) as $sv |
+      "Beta store version|" + ($sv.versionString|s) + "|" + ($sv.appStoreState|s) + "|staging app",
+      (.ascExtra.apps[]? | select(.appId=="6746675266") | .reviews // {}) as $r |
+      "Reviews prod|" + (($r.avgRating|s) + " avg / " + ($r.count|s) + " reviews") + "|" + (($r.lowStars|s) + " low") + "|ASC customerReviews",
+      (.opdash.appstore.metrics // {}) as $m |
+      "App downloads|" + ($m.downloads|s) + "|" + (if $m.downloads == null then "blocked" else "ok" end) + "|ASC sales vendor number required"'
+  } | pretty_table
+}
+
+reliability_table() {
+  {
+    printf 'SOURCE|STATUS|METRIC|DETAIL\n'
+    jq_file "$BI_CACHE" '{}' -r '
+      def s: if . == null then "-" else tostring end;
+      (.sentry.projects[]? | "Sentry " + .project + "|" + (if .ok then "ok" else "warn" end) + "|" + (.unresolved|s) + " unresolved|" + (.note // "-")),
+      ((.opdash.ops.cards // [])[]? | select(.id=="betterstack") | "BetterStack|" + (.status // "-") + "|" + ((.metrics.up|s) + "/" + (.metrics.monitors|s) + " up") + "|" + ((.metrics.activeIncidents|s) + " active incidents")),
+      ((.opdash.ops.cards // [])[]? | select(.id=="linear") | "Linear|" + (.status // "-") + "|" + ((.metrics.p1|s) + " P1 / " + (.metrics.p2|s) + " P2") + "|" + ((.metrics.blockers|s) + " priority issues")),
+      ((.opdash.ops.cards // [])[]? | select(.id=="qa") | "Mobile QA|" + (.status // "-") + "|" + ((.metrics.live|s) + "/" + (.metrics.services|s) + " live") + "|" + (.note // "-")),
+      ((.opdash.ops.cards // [])[]? | select(.id=="api") | "API / AgentCore|" + (.status // "-") + "|" + ((.metrics.healthy|s) + "/" + (.metrics.endpoints|s) + " healthy") + "|operating-dashboard source")'
+  } | pretty_table
+}
+
 projects_table() {
   jq_file "$OPS_PROJECTS" '{"projects":[]}' --argjson max "$MAX_ROWS" -r '
     def clip($n): tostring | gsub("[\r\n\t]+";" ") | if length>$n then .[0:$n-1]+"..." else . end;
@@ -359,13 +451,166 @@ logs_panel() {
   done
 }
 
+metric_value() {
+  local key="$1"
+  case "$key" in
+    endpoints_ok) safe_jq "$INFRA_CACHE" '{"endpoints":[]}' '[.endpoints[]? | select((.project|ascii_downcase|test("healify|meditation")) and .status=="ok")] | length' ;;
+    endpoints_down) safe_jq "$INFRA_CACHE" '{"endpoints":[]}' '[.endpoints[]? | select((.project|ascii_downcase|test("healify|meditation")) and .status=="down")] | length' ;;
+    ecs_ok) safe_jq "$AWS_CACHE" '{"services":[]}' '[.services[]? | select((.project|ascii_downcase|test("healify|meditation")) and .status=="ok")] | length' ;;
+    blockers) safe_jq "$OPS_PROJECTS" '{"projects":[]}' '[.projects[]? | select((.name|ascii_downcase|test("healify|meditation")) and ((.blockers // "0"|tostring) != "0"))] | length' ;;
+    projects) safe_jq "$OPS_PROJECTS" '{"projects":[]}' '[.projects[]? | select(.name|ascii_downcase|test("healify|meditation"))] | length' ;;
+    plugins) safe_jq "$PLUGIN_CACHE" '{"claude_plugins":[]}' '.claude_plugins | length' ;;
+    skills) safe_jq "$PLUGIN_CACHE" '{"codex_skills":[]}' '.codex_skills | length' ;;
+    kpis) safe_jq "$PLUGIN_CACHE" '{"ops_kpi_caches":[]}' '.ops_kpi_caches | length' ;;
+    latest_build) jq_file "$BI_CACHE" '{}' -r '(.ascExtra.apps[]? | select(.appId=="6746675266") | .builds[0].version) // (.eas.builds[0].appBuildVersion // "-")' ;;
+    app_version) jq_file "$BI_CACHE" '{}' -r '(.opdash.appstore.appDetails[]? | select(.appId=="6746675266") | .appStoreVersions[0].versionString) // "-"' ;;
+    app_state) jq_file "$BI_CACHE" '{}' -r '(.opdash.appstore.appDetails[]? | select(.appId=="6746675266") | .appStoreVersions[0].appStoreState) // "-"' ;;
+    installs) safe_jq "$BI_CACHE" '{}' '((.opdash.ops.cards // [])[]? | select(.id=="appsflyer") | .metrics.installs) // "-"' ;;
+    sentry_mobile) safe_jq "$BI_CACHE" '{}' '(.sentry.projects[]? | select(.project=="healify-mobile") | .unresolved) // "-"' ;;
+    linear_p1) safe_jq "$BI_CACHE" '{}' '((.opdash.ops.cards // [])[]? | select(.id=="linear") | .metrics.p1) // "-"' ;;
+    reviews) safe_jq "$BI_CACHE" '{}' '(.ascExtra.apps[]? | select(.appId=="6746675266") | .reviews.count) // "-"' ;;
+  esac
+}
+
+compact_box() {
+  local title="$1" value="$2" detail="$3" width="$4"
+  printf '%s+%*s+%s\n' "$BORDER" "$((width - 2))" '' "$RESET" | tr ' ' '-'
+  printf '| %s%-*s%s |\n' "$DIM" "$((width - 4))" "$title" "$RESET"
+  printf '| %s%s%-*s%s |\n' "$BOLD" "$ORANGE" "$((width - 4))" "$value" "$RESET"
+  printf '| %-*s |\n' "$((width - 4))" "$detail"
+  printf '%s+%*s+%s\n' "$BORDER" "$((width - 2))" '' "$RESET" | tr ' ' '-'
+}
+
+compact_pair() {
+  local w left_title left_value left_detail right_title right_value right_detail
+  w="$1"
+  left_title="$2"; left_value="$3"; left_detail="$4"
+  right_title="$5"; right_value="$6"; right_detail="$7"
+  if (( w < 82 )); then
+    compact_box "$left_title" "$left_value" "$left_detail" "$w"
+    compact_box "$right_title" "$right_value" "$right_detail" "$w"
+    return
+  fi
+  local bw=$(((w - 3) / 2))
+  paste -d' ' \
+    <(compact_box "$left_title" "$left_value" "$left_detail" "$bw") \
+    <(compact_box "$right_title" "$right_value" "$right_detail" "$bw")
+}
+
+compact_logo() {
+  printf '%s%s' "$ORANGE" "$BOLD"
+  printf '██╗  ██╗███████╗ █████╗ ██╗     ██╗███████╗██╗   ██╗\n'
+  printf '███████║█████╗  ███████║██║     ██║█████╗   ╚████╔╝ \n'
+  printf '██║  ██║███████╗██║  ██║███████╗██║██║        ██║   \n'
+  printf '%s' "$RESET"
+}
+
+compact_kpis() {
+  jq_file "$KPI_CACHE" '{"projects":[]}' -r '
+    def fmt:
+      if . == null then "-"
+      elif type=="number" then
+        if . >= 1000000 then ((./1000000*10|round/10|tostring)+"M")
+        elif . >= 1000 then ((./1000*10|round/10|tostring)+"K")
+        else (.|tostring) end
+      else tostring end;
+    ((.projects // []) | map(select((.key // .label // "" | ascii_downcase) == "healify")) | .[0] // {}) as $h |
+    [
+      "IG followers|" + (($h.social.ig_followers // null)|fmt),
+      "IG reach|" + (($h.social.ig_reach // null)|fmt),
+      "Requests|" + (($h.social.active_req // null)|fmt),
+      "Ads|" + (($h.ads.health // "-")|tostring),
+      "Dev|" + (($h.dev.phase // "-")|tostring)
+    ][]' | column -t -s '|' | sed 's/^/  /' | clip_width "$(raw_cols)"
+}
+
+compact_risks() {
+  {
+    jq_file "$INFRA_CACHE" '{"endpoints":[]}' -r '
+      (.endpoints // [])
+      | map(select((.project|ascii_downcase|test("healify|meditation")) and .status!="ok"))
+      | .[:5]
+      | .[]
+      | "  " + .status + "  " + .project + " / " + .service + "  " + (.http|tostring)'
+    jq_file "$OPS_PROJECTS" '{"projects":[]}' -r '
+      (.projects // [])
+      | map(select((.name|ascii_downcase|test("healify|meditation")) and ((.blockers // "0"|tostring) != "0")))
+      | .[:4]
+      | .[]
+      | "  blocked  " + .name + "  " + (.next_action // "-" | tostring | gsub("[\r\n\t]+";" ") | .[0:48])'
+  } | sed '/^$/d' | sed -n '1,8p' | clip_width "$(raw_cols)"
+}
+
+compact_agents() {
+  if [[ -s "$RUNTIME_CACHE" ]]; then
+    sed -n '1,8p' "$RUNTIME_CACHE" | awk -F: '{printf "  %-10s %s\n",$1,$2}' | clip_width "$(raw_cols)"
+  else
+    printf '  runtime health cache missing\n'
+  fi
+}
+
+compact_bi() {
+  jq_file "$BI_CACHE" '{}' -r '
+    def s: if . == null then "-" else tostring end;
+    def card($id): (.opdash.ops.cards // [] | map(select(.id==$id)) | .[0] // {});
+    [
+      "ASC prod|" + ((.ascExtra.apps[]? | select(.appId=="6746675266") | .builds[0].version) // "-") + " · " + ((.ascExtra.apps[]? | select(.appId=="6746675266") | .builds[0].processingState) // "-"),
+      "Store|" + ((.opdash.appstore.appDetails[]? | select(.appId=="6746675266") | .appStoreVersions[0].versionString) // "-") + " · " + ((.opdash.appstore.appDetails[]? | select(.appId=="6746675266") | .appStoreVersions[0].appStoreState) // "-"),
+      "Installs|" + ((card("appsflyer").metrics.installs)|s) + "  organic " + ((card("appsflyer").metrics.organic)|s),
+      "Sentry mobile|" + ((.sentry.projects[]? | select(.project=="healify-mobile") | .unresolved)|s) + " unresolved",
+      "Linear|" + ((card("linear").metrics.p1)|s) + " P1 / " + ((card("linear").metrics.p2)|s) + " P2",
+      "Downloads|" + ((.opdash.appstore.metrics.downloads)|s) + " · vendor no. needed"
+    ][]' | column -t -s '|' | sed 's/^/  /' | clip_width "$(raw_cols)"
+}
+
+render_compact() {
+  local w now host endpoints_ok endpoints_down ecs_ok blockers projects plugins skills kpis
+  w="$(raw_cols)"
+  now="$(date -u '+%H:%M:%SZ')"
+  host="$(hostname -s 2>/dev/null || hostname)"
+  endpoints_ok="$(metric_value endpoints_ok)"
+  endpoints_down="$(metric_value endpoints_down)"
+  ecs_ok="$(metric_value ecs_ok)"
+  blockers="$(metric_value blockers)"
+  projects="$(metric_value projects)"
+  plugins="$(metric_value plugins)"
+  skills="$(metric_value skills)"
+  kpis="$(metric_value kpis)"
+
+  compact_logo
+  printf '%s%sHEALIFY.AI%s %s%s · %s · %s%s\n' "$BOLD" "$AMBER" "$RESET" "$DIM" "$now" "$host" "orange command center" "$RESET"
+  printf '%s' "$BORDER"; printf '%*s\n' "$w" '' | tr ' ' '-'; printf '%s' "$RESET"
+  compact_pair "$w" "App Store" "v$(metric_value app_version) / build $(metric_value latest_build)" "$(metric_value app_state) · $(metric_value reviews) reviews" "Growth" "$(metric_value installs) installs" "AppsFlyer 7d · downloads need vendor no."
+  compact_pair "$w" "Reliability" "$(metric_value sentry_mobile) mobile issues" "Sentry · $(metric_value linear_p1) Linear P1" "Infra" "$endpoints_ok OK / $endpoints_down down" "HTTP + health endpoints"
+  compact_pair "$w" "Execution" "$projects projects / $blockers blockers" "GSD + ops registry" "Intelligence" "$plugins plugins / $skills skills" "$kpis KPI caches"
+  printf '\n%s%sBI Snapshot%s\n' "$BOLD" "$ORANGE" "$RESET"
+  compact_bi
+  printf '\n%s%sBusiness KPIs%s\n' "$BOLD" "$ORANGE" "$RESET"
+  compact_kpis
+  printf '\n%s%sNeeds Attention%s\n' "$BOLD" "$ORANGE" "$RESET"
+  compact_risks
+  printf '\n%s%sAgents / MCPs%s\n' "$BOLD" "$ORANGE" "$RESET"
+  compact_agents
+  printf '\n%sKeys:%s Ctrl-a v Healify · Ctrl-a f Fleet · Ctrl-a d Doctor · hd --refresh\n' "$DIM" "$RESET"
+}
+
 render() {
   [[ "$REFRESH" == "1" ]] && refresh_caches
   [[ -t 1 ]] && clear
+  if (( $(raw_cols) < 100 || $(raw_lines) < 36 )); then
+    render_compact
+    return
+  fi
   hero
   cards
   section "Business KPIs"
   business_kpis
+  section "Marketing And Acquisition"
+  marketing_table
+  section "App Store, TestFlight, Reviews"
+  release_table
+  section "Reliability, QA, Work"
+  reliability_table
   section "Execution Portfolio"
   projects_table
   section "Infra And Deployments"
