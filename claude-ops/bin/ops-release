@@ -10,23 +10,34 @@
 #   2. .claude-plugin/marketplace.json (repo root)  .plugins[name==ops].version   <- the marketplace registry
 #   3. package.json (auto-detected: claude-ops/ or repo root)   .version
 #   4. claude-ops/CHANGELOG.md                       new "## [X.Y.Z] - DATE" section
+#                                                    (AI-written from the commit range — see --no-ai)
+#   5. docs counts/badges                            ops-sync-docs reconciles every skill/agent
+#                                                    count + version badge to the real tree (--no-docs)
+#   6. GitHub wiki                                   counts/version synced + a Release-Notes entry
+#                                                    pushed after merge (--no-wiki)
 #
 # Flow:
-#   fetch → isolated worktree off origin/main → bump all version files → commit
-#   → push → open PR to main → (optional) squash-merge --admin → (optional) tag vX.Y.Z
+#   fetch → isolated worktree off origin/main → bump version files → AI changelog
+#   → ops-sync-docs → commit → push → PR to main → (optional) squash-merge --admin
+#   → (optional) tag vX.Y.Z → (optional) wiki sync
 #
 # Usage:
 #   ops-release [--type patch|minor|major] [--version X.Y.Z]
 #               [--notes "markdown body for the changelog"]
+#               [--no-ai] [--no-docs] [--no-wiki]
 #               [--no-merge] [--no-tag] [--dry-run] [-h|--help]
 #
-# Defaults: --type patch, auto squash-merge, tag vX.Y.Z.
+# Defaults: --type patch, AI changelog, doc-count sync, auto squash-merge, tag,
+#           wiki sync. --notes overrides the AI changelog. --no-ai falls back to
+#           commit subjects.
 # Examples:
-#   ops-release                        # patch bump, auto-merge + tag
+#   ops-release                        # patch bump, AI changelog, docs+wiki sync, merge+tag
 #   ops-release --type minor           # minor bump
 #   ops-release --version 3.0.0        # explicit version
+#   ops-release --notes "..."          # hand-written changelog (skips AI)
+#   ops-release --no-ai --no-wiki      # commit-subject changelog, no wiki push
 #   ops-release --no-merge             # open the PR, leave it for review
-#   ops-release --dry-run              # show what would change, touch nothing
+#   ops-release --dry-run              # show what would change (incl. AI changelog), touch nothing
 #
 # After a release lands, refresh the local install:
 #   /plugin marketplace update ops-marketplace   (then update the `ops` plugin)
@@ -51,6 +62,7 @@ for cand in "claude-ops/package.json" "package.json"; do
 done
 
 bump_type="patch"; explicit_ver=""; notes=""; do_merge=1; do_tag=1; dry_run=0
+do_ai=1; do_docs=1; do_wiki=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --type)    bump_type="$2"; shift 2 ;;
@@ -58,8 +70,11 @@ while [ $# -gt 0 ]; do
     --notes)   notes="$2"; shift 2 ;;
     --no-merge) do_merge=0; shift ;;
     --no-tag)   do_tag=0; shift ;;
+    --no-ai)    do_ai=0; shift ;;
+    --no-docs)  do_docs=0; shift ;;
+    --no-wiki)  do_wiki=0; shift ;;
     --dry-run)  dry_run=1; shift ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
     *) echo "ops-release: unknown arg '$1'" >&2; exit 2 ;;
   esac
 done
@@ -90,15 +105,42 @@ fi
 REL_DATE="$(date +%F)"
 echo "ops-release: $CUR -> $NEW  (type=$bump_type, date=$REL_DATE)"
 
-# ----- changelog body: explicit --notes, else commit subjects since last CHANGELOG bump -----
+# ----- changelog body -----
+# Priority: explicit --notes  >  AI-synthesized (Keep a Changelog style)  >  commit subjects.
+ai_used=0
 if [ -z "$notes" ]; then
   prev_marker="$(git -C "$REPO_ROOT" log -1 --format=%H -- "$CHANGELOG" 2>/dev/null || true)"
+  commits=""; range=""
   if [ -n "$prev_marker" ]; then
-    commits="$(git -C "$REPO_ROOT" log --no-merges --format='- %s' "$prev_marker"..HEAD 2>/dev/null || true)"
+    range="$prev_marker..HEAD"
+    commits="$(git -C "$REPO_ROOT" log --no-merges --format='- %s' "$range" 2>/dev/null || true)"
   fi
-  notes="${commits:-- (no notes provided)}"
+  if [ "$do_ai" -eq 1 ] && command -v claude >/dev/null 2>&1 && [ -n "$commits" ]; then
+    echo "ops-release: synthesizing changelog with AI (--no-ai to skip)…"
+    diffstat="$(git -C "$REPO_ROOT" diff --stat "$range" 2>/dev/null | tail -40 || true)"
+    ai_prompt="You are writing the CHANGELOG entry for v$NEW of 'claude-ops', a public open-source Claude Code plugin. Summarize the changes below into Keep-a-Changelog style markdown using only the relevant subset of these headings: '### Added', '### Changed', '### Fixed', '### Removed' (omit empty sections). Write tight, user-facing bullets grouped by theme — not one bullet per commit. Output ONLY the markdown section body (the ### headings and bullets); no '## [version]' header, no preamble, no code fences. Never include personal names, emails, paths under /Users or /home, tokens, or internal hostnames/URLs.
+
+Commits:
+$commits
+
+Diffstat:
+$diffstat"
+    ai_out="$(printf '%s' "$ai_prompt" | claude -p 2>/dev/null || true)"
+    ai_out="$(printf '%s\n' "$ai_out" | sed -E '/^```/d')"   # strip any stray code fences
+    if printf '%s' "$ai_out" | grep -qE '^### (Added|Changed|Fixed|Removed)'; then
+      notes="$ai_out"; ai_used=1
+      echo "ops-release: AI changelog ready"
+    else
+      echo "ops-release: AI output unusable — falling back to commit subjects"
+    fi
+  fi
+  [ -z "$notes" ] && notes="${commits:-- (no notes provided)}"
 fi
-changelog_section=$'## ['"$NEW"$'] - '"$REL_DATE"$'\n\n### Changed\n'"$notes"$'\n'
+if [ "$ai_used" -eq 1 ]; then
+  changelog_section=$'## ['"$NEW"$'] - '"$REL_DATE"$'\n\n'"$notes"$'\n'
+else
+  changelog_section=$'## ['"$NEW"$'] - '"$REL_DATE"$'\n\n### Changed\n'"$notes"$'\n'
+fi
 
 if [ "$dry_run" -eq 1 ]; then
   echo "--- DRY RUN: would set version $CUR -> $NEW in:"
@@ -148,6 +190,11 @@ rm -f "$sec_file"
 
 echo "ops-release: bumped plugin.json + marketplace.json$([ -n "$PACKAGE_REL" ] && echo " + $PACKAGE_REL") + CHANGELOG.md"
 
+# 5. reconcile documentation counts/badges to the (now-bumped) tree — deterministic.
+if [ "$do_docs" -eq 1 ] && [ -x "$WT/claude-ops/bin/ops-sync-docs" ]; then
+  "$WT/claude-ops/bin/ops-sync-docs" "$WT" || echo "ops-release: ops-sync-docs returned non-zero (non-fatal)"
+fi
+
 # ----- commit, push, PR -----
 git -C "$WT" add -A
 git -C "$WT" commit --no-verify -m "release: v$NEW" >/dev/null
@@ -165,6 +212,45 @@ if [ "$do_merge" -eq 1 ]; then
     git -C "$REPO_ROOT" push origin "v$NEW"
     echo "ops-release: tagged v$NEW"
   fi
+
+  # ----- wiki: keep the GitHub wiki's counts/version in lockstep + log the release -----
+  if [ "$do_wiki" -eq 1 ]; then
+    echo "ops-release: syncing wiki (--no-wiki to skip)…"
+    wiki_tmp="$(mktemp -d)"
+    if git clone --depth 1 "https://github.com/${GH_REPO}.wiki.git" "$wiki_tmp" >/dev/null 2>&1; then
+      SK=0; for d in "$WT"/claude-ops/skills/*/; do [ -f "$d/SKILL.md" ] && SK=$((SK+1)); done
+      AG=0; for f in "$WT"/claude-ops/agents/*.md; do [ -f "$f" ] && AG=$((AG+1)); done
+      for page in "$wiki_tmp"/*.md; do
+        [ -f "$page" ] || continue
+        sed -E -i.bak \
+          -e "s/[0-9]+ skills, [0-9]+ agents/${SK} skills, ${AG} agents/g" \
+          -e "s/([Aa]ll )[0-9]+ skills/\1${SK} skills/g" \
+          -e "s/([Aa]ll )[0-9]+ agents/\1${AG} agents/g" \
+          -e "s#(badge/skills-)[0-9]+-#\1${SK}-#g" \
+          -e "s#(badge/agents-)[0-9]+-#\1${AG}-#g" \
+          -e "s#(badge/version-)[0-9][0-9.]*-#\1${NEW}-#g" "$page" 2>/dev/null || true
+        rm -f "$page.bak"
+      done
+      relpage="$wiki_tmp/Release-Notes.md"
+      { printf '## v%s — %s\n\n%s\n\n' "$NEW" "$REL_DATE" "$notes"; [ -f "$relpage" ] && cat "$relpage"; } >"$relpage.new" && mv "$relpage.new" "$relpage"
+      if [ -n "$(git -C "$wiki_tmp" status --porcelain)" ]; then
+        git -C "$wiki_tmp" add -A
+        git -C "$wiki_tmp" -c user.email="noreply@anthropic.com" -c user.name="ops-release" \
+          commit -m "wiki: sync to v$NEW (counts + release notes)" >/dev/null 2>&1 || true
+        if git -C "$wiki_tmp" push origin HEAD >/dev/null 2>&1; then
+          echo "ops-release: wiki synced to v$NEW"
+        else
+          echo "ops-release: wiki push failed (non-fatal — check write access)"
+        fi
+      else
+        echo "ops-release: wiki already in sync"
+      fi
+    else
+      echo "ops-release: wiki clone failed or no wiki yet (non-fatal)"
+    fi
+    rm -rf "$wiki_tmp"
+  fi
+
   echo "ops-release: done. Refresh local install with: /plugin marketplace update ops-marketplace"
 else
   echo "ops-release: PR left open for review (use: gh pr merge $PR_URL --squash --admin)"
