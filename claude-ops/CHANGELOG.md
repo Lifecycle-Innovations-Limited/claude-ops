@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.33.0] - 2026-06-15
+
+### Added
+- `ops-sync-docs` helper to reconcile documentation counts (now 57 commands / 21 agents) and keep the wiki in sync.
+- AI-generated changelog support in the release flow, with automatic doc-sync and wiki maintenance.
+
+### Fixed
+- Bedrock leak watchdog now catches runtime-injected and network-only Bedrock usage that previously slipped through.
+- Account rotation no longer falls back to Bedrock and preserves CRS routing across mode flips; box-live daemon behaviors are reconciled into the tracked daemon.
+- Stored OAuth tokens are invalidated on a 401 from `/oauth/usage`, preventing stale-credential loops.
+- CRS priority daemon health-gate now auto-detects the CRS host port instead of assuming a fixed one.
+- Post-update migration uses a stable `current/` directory, eliminating stale plugin-path errors after upgrades.
+
+
 ## [2.32.0] - 2026-06-14
 
 ### Added
