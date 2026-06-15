@@ -13,7 +13,7 @@
 // fatal, and the network corroboration layer (scanBedrockNetwork) degrades to
 // a graceful "unknown" rather than ever false-alarming.
 
-import { readFileSync, readdirSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, existsSync, writeFileSync, unlinkSync } from 'fs';
 import { execFileSync } from 'child_process';
 
 import { listLiveBgSessions, doRespawn } from './bg-respawn.mjs';
@@ -306,6 +306,28 @@ function buildPpidMap() {
   return m;
 }
 
+// ── Per-session offender flag (drives the PreToolUse bedrock-billing-guard) ────
+// The guard hook keys off `session_id.slice(0,8)`, which equals the bg-session
+// short id (jobId = first 8 hex of the session UUID). Writing this flag makes a
+// session MEASURED on Bedrock get a blocking error in its OWN loop (dismissable
+// only by explicit `echo BEDROCK-ACK`). Cleared once the session is swapped off.
+const OFFENDER_FLAG = (shortId) => `/tmp/claude-bedrock-offender-${shortId}`;
+function writeOffenderFlag(shortId, via) {
+  if (!shortId) return;
+  try {
+    writeFileSync(
+      OFFENDER_FLAG(shortId),
+      `measured via ${via || 'env'} by rotation watchdog — metered AWS Bedrock`,
+    );
+  } catch {}
+}
+function clearOffenderFlag(shortId) {
+  if (!shortId) return;
+  try {
+    unlinkSync(OFFENDER_FLAG(shortId));
+  } catch {}
+}
+
 /**
  * Is this session protected by a hot-swap hold marker?
  * (touch /tmp/claude-hotswap-hold-<pid> — see memory hotswap-hold-protection)
@@ -365,16 +387,24 @@ export function sweepBedrockSessions(config, state, log) {
   const swappedPids = [];
 
   for (const sess of sessions) {
+    const bgSession = byPid.get(sess.pid);
+
+    // Flag the MEASURED session so its own PreToolUse bedrock-billing-guard fires
+    // (the agent gets a blocking error it must explicitly ack). Written for every
+    // measured Bedrock session — including the no-OAuth last-resort case below,
+    // where the agent stays on Bedrock and must consciously acknowledge the spend.
+    if (bgSession) writeOffenderFlag(bgSession.id, sess.via);
+
     // Is an OAuth account actually available? pickAccountForSession returns
     // 'bedrock' only when ZERO accounts have a usable token (true last resort).
-    const sid = sess.sessionId || (byPid.get(sess.pid) && byPid.get(sess.pid).id) || `pid-${sess.pid}`;
+    const sid = sess.sessionId || (bgSession && bgSession.id) || `pid-${sess.pid}`;
     const target = pickAccountForSession(sid, config, state);
     if (!target || target === 'bedrock') {
-      // No OAuth headroom anywhere — Bedrock is the legitimate fallback. Leave it.
+      // No OAuth headroom anywhere — Bedrock is the legitimate fallback. Leave it
+      // (and leave the offender flag so the agent's guard makes it ack the spend).
       continue;
     }
 
-    const bgSession = byPid.get(sess.pid);
     if (!bgSession) {
       // Bedrock claude PID with no resolvable bg-session record — can't respawn
       // it by id (could be a foreground/--resume host). Log loudly; skip.
@@ -409,6 +439,10 @@ export function sweepBedrockSessions(config, state, log) {
         `[bedrock-watchdog] FORCE-swapping ${bgSession.id} (pid ${sess.pid}, status ${bgSession.status}, via ${viaDetail}) Bedrock→OAuth ${target} (no defer — metered)`,
       );
       doRespawn(bgSession, log);
+      // Swapped off Bedrock — clear the offender flag so the respawned (clean)
+      // session's guard hook stops blocking. (If the swap fails, the flag stays
+      // and the agent must ack.)
+      clearOffenderFlag(bgSession.id);
       swapped++;
       swappedPids.push(sess.pid);
     } catch (e) {
