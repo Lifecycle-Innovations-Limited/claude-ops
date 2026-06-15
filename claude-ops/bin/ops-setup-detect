@@ -147,7 +147,7 @@ if [ "$USE_CACHE" = true ] && [ -f "$PREFLIGHT/telegram.txt" ]; then
     # NOTE: never chain `grep -c` with `|| echo 0` — on zero matches grep prints
     # "0" AND exits 1, so the `||` ALSO fires, yielding "0\n0" which corrupts the
     # integer test below and the emitted JSON. Split assignment + default instead.
-    TELEGRAM_KEYS_FOUND=$(grep -c '=found' "$PREFLIGHT/telegram.txt" 2>/dev/null)
+    TELEGRAM_KEYS_FOUND=$(grep -c '=found' "$PREFLIGHT/telegram.txt" 2>/dev/null || true)
     TELEGRAM_KEYS_FOUND=${TELEGRAM_KEYS_FOUND:-0}
     if [ "$TELEGRAM_KEYS_FOUND" -eq 4 ]; then
       TELEGRAM_STATUS="configured"
