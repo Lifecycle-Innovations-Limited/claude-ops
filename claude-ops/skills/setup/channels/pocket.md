@@ -59,7 +59,15 @@ it from the detected shell profile when needed:
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh" set POCKET_API_KEY ops-daemon "$POCKET_API_KEY"
 
-PROFILE="${PROFILE_FILE:-$HOME/.profile}"
+PROFILE="${PROFILE_FILE:-}"
+if [ -z "$PROFILE" ]; then
+  case "$(basename "${SHELL:-/bin/sh}")" in
+    zsh)  PROFILE="${ZDOTDIR:-$HOME}/.zshrc" ;;
+    bash) PROFILE="$HOME/.bashrc" ;;
+    fish) PROFILE="$HOME/.config/fish/config.fish" ;;
+    *)    PROFILE="$HOME/.profile" ;;
+  esac
+fi
 
 if ! grep -q "POCKET_API_KEY" "$PROFILE" 2>/dev/null; then
   case "$PROFILE" in
@@ -164,6 +172,8 @@ case "$(uname -s)" in
     bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-pocket-notifier.sh"
     ;;
   Linux)
+    PYTHON3="$(command -v python3 || true)"
+    [ -z "$PYTHON3" ] && PYTHON3=/usr/bin/python3
     UNIT_DIR="$HOME/.config/systemd/user"
     mkdir -p "$UNIT_DIR"
     cat > "$UNIT_DIR/pocket-activity-notifier.service" <<SERVICE
@@ -174,7 +184,7 @@ Description=Pocket Activity Notifier
 Type=oneshot
 Environment=HOME=$HOME
 Environment=POCKET_STATE_DIR=$HOME/.claude/state/pocket
-ExecStart=$HOME/.venv-pocket/bin/python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ops-pocket-activity-notifier.py
+ExecStart=$PYTHON3 ${CLAUDE_PLUGIN_ROOT}/scripts/ops-pocket-activity-notifier.py
 SERVICE
     cat > "$UNIT_DIR/pocket-activity-notifier.timer" <<TIMER
 [Unit]
