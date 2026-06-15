@@ -18,10 +18,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import {
-  persistBedrockClaudeSettings,
-  clearHardcodedModelsForOAuthClaudeSettings,
-} from '../claude-settings-mode.mjs';
+import { persistBedrockClaudeSettings, clearHardcodedModelsForOAuthClaudeSettings } from '../claude-settings-mode.mjs';
 
 const CRS_BASE = 'http://127.0.0.1:3005/api';
 const CRS_TOKEN = 'cr_deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef';

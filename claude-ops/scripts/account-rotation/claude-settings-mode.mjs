@@ -31,9 +31,7 @@ function isCrsToken(t) {
 function detectCrsRouting(env) {
   const token = env.CLAUDE_CODE_OAUTH_TOKEN;
   const base = env.ANTHROPIC_BASE_URL;
-  return isCrsToken(token) && typeof base === 'string' && base.length > 0
-    ? { token, base }
-    : null;
+  return isCrsToken(token) && typeof base === 'string' && base.length > 0 ? { token, base } : null;
 }
 
 function readSettings() {
