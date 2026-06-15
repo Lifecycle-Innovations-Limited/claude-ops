@@ -124,46 +124,7 @@ run_migrations() {
     fi
   fi
 
-  # 4. Stable 'current/' directory — prevents "Plugin directory does not exist" errors
-  #    when Claude Code updates the plugin mid-session and deletes the old versioned dir.
-  {
-    local cache_parent current_dir
-    cache_parent="$(dirname "$PLUGIN_ROOT")"
-    current_dir="$cache_parent/current"
-
-    if command -v rsync >/dev/null 2>&1; then
-      rsync -a --delete "$PLUGIN_ROOT/" "$current_dir/" 2>/dev/null \
-        && log "  ok: refreshed $current_dir via rsync" \
-        || log "  warn: rsync to current/ failed (non-fatal)"
-    else
-      mkdir -p "$current_dir"
-      cp -rp "$PLUGIN_ROOT/." "$current_dir/" 2>/dev/null \
-        && log "  ok: refreshed $current_dir via cp" \
-        || log "  warn: cp to current/ failed (non-fatal)"
-    fi
-
-    local installed_json="$HOME/.claude/plugins/installed_plugins.json"
-    if [[ -f "$installed_json" ]]; then
-      python3 - "$installed_json" "$current_dir" <<'PYEOF' 2>/dev/null \
-        && log "  ok: patched installed_plugins.json → current" \
-        || log "  warn: installed_plugins.json patch failed (non-fatal)"
-import json, sys
-path, current = sys.argv[1], sys.argv[2]
-with open(path) as f:
-    d = json.load(f)
-changed = False
-for e in d.get("plugins", {}).get("ops@ops-marketplace", []):
-    if e.get("scope") == "user" and e.get("installPath", "") != current:
-        e["installPath"] = current
-        changed = True
-if changed:
-    with open(path, "w") as f:
-        json.dump(d, f, indent=2)
-PYEOF
-    fi
-  } || true
-
-  # 5. Add future migrations here. Pattern:
+  # 4. Add future migrations here. Pattern:
   #    if needs_migration; then
   #      run_idempotent_migration && log "  ok: <name>"
   #    fi
