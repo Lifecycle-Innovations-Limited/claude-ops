@@ -1,6 +1,8 @@
 ### 3b — WhatsApp (bridge health + QR pair)
 
-WhatsApp is handled exclusively by the whatsmeow `whatsapp-bridge` (managed by `com.${USER}.whatsapp-bridge` LaunchAgent — `${USER}` is your macOS username, expanded at install time so each user gets their own per-account bridge) and accessed via `mcp__whatsapp__*` tools.
+> **Cross-OS gate (read first):** the `launchctl` / `~/Library/LaunchAgents` steps below are **macOS-only**. Branch on `case "$(uname -s)" in Darwin) … ;; Linux) … ;; esac`. On **Linux**, the bridge is a `systemd --user` unit — install via `scripts/install-whatsapp-bridge-linux.sh` (do NOT run the launchctl commands); manage with `systemctl --user {status,restart} whatsapp-bridge`. On **WSL** use the systemd path if `systemctl --user` works, else run the bridge under `nohup`. Secrets use the cross-OS `credential-store.sh` (`secret-tool`/file on Linux), not macOS `security`.
+
+WhatsApp is handled by the whatsmeow `whatsapp-bridge` (macOS: `com.${USER}.whatsapp-bridge` LaunchAgent, `${USER}` expanded at install time; Linux: `whatsapp-bridge` systemd --user unit) and accessed via `mcp__whatsapp__*` tools.
 
 #### Step 3b.1 — Presence
 

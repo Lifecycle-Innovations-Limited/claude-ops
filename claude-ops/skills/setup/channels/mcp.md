@@ -57,10 +57,13 @@ Run this bootstrap once per machine, or after clearing the browser profile.
 
 ## 4. Verify API-key servers
 
-Servers in `API_KEY_MCPS` (currently `pocketai`) use a static Bearer key from macOS Keychain under service name `POCKET_API_KEY`, account `ops-daemon`. Confirm:
+Servers in `API_KEY_MCPS` (currently `pocketai`) use a static Bearer key stored via the cross-OS `credential-store.sh` under service name `POCKET_API_KEY`, account `ops-daemon`. Confirm (macOS uses `security`; Linux/WSL uses `secret-tool`/file backend — prefer the abstraction):
 
 ```bash
-security find-generic-password -s POCKET_API_KEY -a ops-daemon -w
+# Cross-OS (preferred):
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/lib/credential-store.sh" get POCKET_API_KEY ops-daemon
+# macOS-only fallback:
+# security find-generic-password -s POCKET_API_KEY -a ops-daemon -w
 ```
 
 If the key is missing, add it:

@@ -1,6 +1,8 @@
 ### 3p — Pocket (voice journal activity notifier)
 
-The Pocket subsystem watches your voice journal recordings via the Pocket AI MCP, infers tasks with Haiku, and sends activity notifications (task spawned / task done) to WhatsApp and/or email. This step installs the credential, writes the channel config files, registers the launchd notifier, and smoke-tests delivery.
+> **Cross-OS gate (read first):** the `launchctl` / `~/Library/LaunchAgents` notifier-install and the macOS `security` Keychain steps below are **macOS-only**. On **Linux/WSL**, register the notifier as a `systemd --user` timer/service and store `POCKET_API_KEY` via the cross-OS `credential-store.sh` (`secret-tool`/file backend) — never `security find-generic-password`. Branch on `case "$(uname -s)"`.
+
+The Pocket subsystem watches your voice journal recordings via the Pocket AI MCP, infers tasks with Haiku, and sends activity notifications (task spawned / task done) to WhatsApp and/or email. This step installs the credential, writes the channel config files, registers the notifier (launchd on macOS, systemd --user on Linux), and smoke-tests delivery.
 
 #### Step 3p.1 — Prerequisites
 
