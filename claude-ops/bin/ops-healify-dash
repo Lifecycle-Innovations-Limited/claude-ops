@@ -16,6 +16,9 @@ RUNTIME_CACHE="$HOME/.cache/agent-hub/fleet/runtime-health.txt"
 FLEET_STATUS="$HOME/.claude/state/fleet-status.json"
 FLEET_TUI="$HOME/.claude/state/fleet-tui.json"
 HEALIFY_ROOT="${HEALIFY_ROOT:-$HOME/Projects/healify-workspace}"
+ASC_PROD_APP_ID="${HEALIFY_ASC_PROD_APP_ID:-}"
+ASC_STAGING_APP_ID="${HEALIFY_ASC_STAGING_APP_ID:-}"
+SENTRY_MOBILE_PROJECT="${HEALIFY_SENTRY_MOBILE_PROJECT:-}"
 MAX_ROWS="${HEALIFY_DASH_ROWS:-18}"
 INTERVAL="${HEALIFY_DASH_INTERVAL:-15}"
 REFRESH="${HEALIFY_DASH_REFRESH:-0}"
@@ -344,19 +347,19 @@ marketing_table() {
 release_table() {
   {
     printf 'SURFACE|LATEST|STATE|DETAIL\n'
-    jq_file "$BI_CACHE" '{}' -r '
+    jq_file "$BI_CACHE" '{}' --arg prod "$ASC_PROD_APP_ID" --arg staging "$ASC_STAGING_APP_ID" -r '
       def s: if . == null then "-" else tostring end;
       (.eas.builds[0] // {}) as $e |
       "EAS iOS|" + (($e.appVersion|s) + " (" + ($e.appBuildVersion|s) + ")") + "|" + ($e.status|s) + "|" + (($e.distribution|s) + " · " + ($e.updatedAt|s)),
-      (.ascExtra.apps[]? | select(.appId=="6746675266") | .builds[0] // {}) as $p |
+      (.ascExtra.apps[]? | select(.appId==$prod) | .builds[0] // {}) as $p |
       "ASC prod build|" + ($p.version|s) + "|" + ($p.processingState|s) + "|" + ("expired=" + ($p.expired|s) + " · " + ($p.uploadedDate|s)),
-      (.ascExtra.apps[]? | select(.appId=="6751717479") | .builds[0] // {}) as $st |
+      (.ascExtra.apps[]? | select(.appId==$staging) | .builds[0] // {}) as $st |
       "ASC staging build|" + ($st.version|s) + "|" + ($st.processingState|s) + "|" + ("expired=" + ($st.expired|s) + " · " + ($st.uploadedDate|s)),
-      (.opdash.appstore.appDetails[]? | select(.appId=="6746675266") | .appStoreVersions[0] // {}) as $v |
+      (.opdash.appstore.appDetails[]? | select(.appId==$prod) | .appStoreVersions[0] // {}) as $v |
       "App Store version|" + ($v.versionString|s) + "|" + ($v.appStoreState|s) + "|production app",
-      (.opdash.appstore.appDetails[]? | select(.appId=="6751717479") | .appStoreVersions[0] // {}) as $sv |
+      (.opdash.appstore.appDetails[]? | select(.appId==$staging) | .appStoreVersions[0] // {}) as $sv |
       "Beta store version|" + ($sv.versionString|s) + "|" + ($sv.appStoreState|s) + "|staging app",
-      (.ascExtra.apps[]? | select(.appId=="6746675266") | .reviews // {}) as $r |
+      (.ascExtra.apps[]? | select(.appId==$prod) | .reviews // {}) as $r |
       "Reviews prod|" + (($r.avgRating|s) + " avg / " + ($r.count|s) + " reviews") + "|" + (($r.lowStars|s) + " low") + "|ASC customerReviews",
       (.opdash.appstore.metrics // {}) as $m |
       "App downloads|" + ($m.downloads|s) + "|" + (if $m.downloads == null then "blocked" else "ok" end) + "|ASC sales vendor number required"'
@@ -464,13 +467,13 @@ metric_value() {
     plugins) safe_jq "$PLUGIN_CACHE" '{"claude_plugins":[]}' '.claude_plugins | length' ;;
     skills) safe_jq "$PLUGIN_CACHE" '{"codex_skills":[]}' '.codex_skills | length' ;;
     kpis) safe_jq "$PLUGIN_CACHE" '{"ops_kpi_caches":[]}' '.ops_kpi_caches | length' ;;
-    latest_build) jq_file "$BI_CACHE" '{}' -r '(.ascExtra.apps[]? | select(.appId=="6746675266") | .builds[0].version) // (.eas.builds[0].appBuildVersion // "-")' ;;
-    app_version) jq_file "$BI_CACHE" '{}' -r '(.opdash.appstore.appDetails[]? | select(.appId=="6746675266") | .appStoreVersions[0].versionString) // "-"' ;;
-    app_state) jq_file "$BI_CACHE" '{}' -r '(.opdash.appstore.appDetails[]? | select(.appId=="6746675266") | .appStoreVersions[0].appStoreState) // "-"' ;;
+    latest_build) jq_file "$BI_CACHE" '{}' --arg prod "$ASC_PROD_APP_ID" -r '(.ascExtra.apps[]? | select(.appId==$prod) | .builds[0].version) // (.eas.builds[0].appBuildVersion // "-")' ;;
+    app_version) jq_file "$BI_CACHE" '{}' --arg prod "$ASC_PROD_APP_ID" -r '(.opdash.appstore.appDetails[]? | select(.appId==$prod) | .appStoreVersions[0].versionString) // "-"' ;;
+    app_state) jq_file "$BI_CACHE" '{}' --arg prod "$ASC_PROD_APP_ID" -r '(.opdash.appstore.appDetails[]? | select(.appId==$prod) | .appStoreVersions[0].appStoreState) // "-"' ;;
     installs) safe_jq "$BI_CACHE" '{}' '((.opdash.ops.cards // [])[]? | select(.id=="appsflyer") | .metrics.installs) // "-"' ;;
-    sentry_mobile) safe_jq "$BI_CACHE" '{}' '(.sentry.projects[]? | select(.project=="healify-mobile") | .unresolved) // "-"' ;;
+    sentry_mobile) jq_file "$BI_CACHE" '{}' --arg project "$SENTRY_MOBILE_PROJECT" -r '(.sentry.projects[]? | select(.project==$project) | .unresolved) // "-"' ;;
     linear_p1) safe_jq "$BI_CACHE" '{}' '((.opdash.ops.cards // [])[]? | select(.id=="linear") | .metrics.p1) // "-"' ;;
-    reviews) safe_jq "$BI_CACHE" '{}' '(.ascExtra.apps[]? | select(.appId=="6746675266") | .reviews.count) // "-"' ;;
+    reviews) jq_file "$BI_CACHE" '{}' --arg prod "$ASC_PROD_APP_ID" -r '(.ascExtra.apps[]? | select(.appId==$prod) | .reviews.count) // "-"' ;;
   esac
 }
 
@@ -552,14 +555,14 @@ compact_agents() {
 }
 
 compact_bi() {
-  jq_file "$BI_CACHE" '{}' -r '
+  jq_file "$BI_CACHE" '{}' --arg prod "$ASC_PROD_APP_ID" --arg project "$SENTRY_MOBILE_PROJECT" -r '
     def s: if . == null then "-" else tostring end;
     def card($id): (.opdash.ops.cards // [] | map(select(.id==$id)) | .[0] // {});
     [
-      "ASC prod|" + ((.ascExtra.apps[]? | select(.appId=="6746675266") | .builds[0].version) // "-") + " · " + ((.ascExtra.apps[]? | select(.appId=="6746675266") | .builds[0].processingState) // "-"),
-      "Store|" + ((.opdash.appstore.appDetails[]? | select(.appId=="6746675266") | .appStoreVersions[0].versionString) // "-") + " · " + ((.opdash.appstore.appDetails[]? | select(.appId=="6746675266") | .appStoreVersions[0].appStoreState) // "-"),
+      "ASC prod|" + ((.ascExtra.apps[]? | select(.appId==$prod) | .builds[0].version) // "-") + " · " + ((.ascExtra.apps[]? | select(.appId==$prod) | .builds[0].processingState) // "-"),
+      "Store|" + ((.opdash.appstore.appDetails[]? | select(.appId==$prod) | .appStoreVersions[0].versionString) // "-") + " · " + ((.opdash.appstore.appDetails[]? | select(.appId==$prod) | .appStoreVersions[0].appStoreState) // "-"),
       "Installs|" + ((card("appsflyer").metrics.installs)|s) + "  organic " + ((card("appsflyer").metrics.organic)|s),
-      "Sentry mobile|" + ((.sentry.projects[]? | select(.project=="healify-mobile") | .unresolved)|s) + " unresolved",
+      "Sentry mobile|" + ((.sentry.projects[]? | select(.project==$project) | .unresolved)|s) + " unresolved",
       "Linear|" + ((card("linear").metrics.p1)|s) + " P1 / " + ((card("linear").metrics.p2)|s) + " P2",
       "Downloads|" + ((.opdash.appstore.metrics.downloads)|s) + " · vendor no. needed"
     ][]' | column -t -s '|' | sed 's/^/  /' | clip_width "$(raw_cols)"
