@@ -41,7 +41,9 @@ function allow() {
 //   off   — no-op. For users who intentionally run Bedrock unrestricted.
 function guardMode() {
   const norm = (v) => {
-    const s = String(v || '').trim().toLowerCase();
+    const s = String(v || '')
+      .trim()
+      .toLowerCase();
     return s === 'off' || s === 'warn' || s === 'block' ? s : '';
   };
   const env = norm(process.env.CLAUDE_BEDROCK_GUARD);
