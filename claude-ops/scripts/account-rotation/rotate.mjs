@@ -743,6 +743,22 @@ function stopClaudeDaemon() {
 // Cannot mutate env of an already-running session — user must start a new
 // one with `source ~/.claude/scripts/account-rotation/use-bedrock.sh`.
 async function activateBedrockFallback(reason, dryRun = false) {
+  // Kill-switch — mirror daemon.mjs activateBedrockFallbackFromDaemon (disabled
+  // 2026-05-08, Max/CRS plan handles capacity; Bedrock is metered AWS = $600-1.2k/mo
+  // bleed). BLOCKED by default; set CLAUDE_DISABLE_BEDROCK_FALLBACK=0 to re-enable.
+  // Authoritative here regardless of caller so the rotate path can never silently
+  // flip a CRS/Max-routed box onto metered Bedrock (the bedrockOnExhausted opt
+  // defaults ON, unlike the daemon — this is the backstop).
+  if (process.env.CLAUDE_DISABLE_BEDROCK_FALLBACK !== '0') {
+    log(`[bedrock-fallback] BLOCKED by CLAUDE_DISABLE_BEDROCK_FALLBACK (reason was: ${reason})`);
+    if (!dryRun) {
+      notify(
+        'Bedrock Fallback BLOCKED',
+        'Kill-switch active — Max/CRS-only mode. Wait for reset window or rotate manually.',
+      );
+    }
+    return false;
+  }
   const region = process.env.AWS_BEDROCK_REGION || 'us-east-1';
   const result = checkBedrockAvailable(region);
   const sentinel = join(process.env.HOME || '', '.claude', '.bedrock-fallback.json');
