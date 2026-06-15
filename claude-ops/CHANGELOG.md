@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.34.0] - 2026-06-15
+
+### Changed
+Bedrock cost protection + fleet dashboard. Adds a configurable bedrock-billing-guard PreToolUse hook (block/warn/off) that halts any agent measured billing metered AWS Bedrock until explicit ack, plus offender-flag wiring in the rotation watchdog. Promotes the read-only fleet dashboard to /ops:ops-fleet with CRS-port/allowlist/429-529/session-count fixes.
+
+
 ## [2.33.0] - 2026-06-15
 
 ### Added
