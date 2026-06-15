@@ -390,6 +390,14 @@ async function queryAllUtilization(config) {
         fetchWithRetry('https://api.anthropic.com/api/oauth/profile'),
       ]);
 
+      // 401 = the stored token is revoked/expired. Drop it from the vault so we
+      // stop polling a dead token every tick and the next rotation re-acquires.
+      if (usageRes.status === 401) {
+        log(`[query] Account ${a.email || accountKey(a)} returned 401 on /oauth/usage — invalidating stored token`);
+        deleteStoredToken(a);
+        return null;
+      }
+
       if (!usageRes.ok) return null;
       const data = await usageRes.json();
       let extraUsageEnabled = null;
@@ -908,6 +916,29 @@ function readStoredToken(account) {
 
 function writeStoredToken(account, json) {
   writeKeychain(json, tokenService(account));
+}
+
+// Remove an account's stored OAuth token from the local vault (keychain entry
+// on macOS, the JSON cred store on Linux). Called when Anthropic returns 401 on
+// /oauth/usage — the token is revoked/expired, so polling it again just wastes a
+// round-trip and lets a dead account silently fail every tick. Dropping it forces
+// the next rotation to re-acquire a fresh token instead of retrying a dead one
+// forever. Best-effort: a missing entry is not an error.
+function deleteStoredToken(account) {
+  const svc = tokenService(account);
+  if (IS_LINUX) {
+    try {
+      const store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
+      delete store[svc];
+      writeFileSync(LINUX_CRED_PATH, JSON.stringify(store, null, 2), { mode: 0o600 });
+    } catch {}
+    return;
+  }
+  try {
+    execFileSync('security', ['delete-generic-password', '-s', svc, '-a', VAULT_KEYCHAIN_ACCOUNT], {
+      stdio: 'ignore',
+    });
+  } catch {}
 }
 
 function hasStoredToken(account) {
