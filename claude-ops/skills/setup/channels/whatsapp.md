@@ -6,7 +6,7 @@ WhatsApp is handled by the whatsmeow `whatsapp-bridge` (macOS: `com.${USER}.what
 
 #### Step 3b.1 — Presence
 
-Check bridge binary exists and LaunchAgent is installed:
+Check bridge binary exists and the platform service is installed:
 
 ```bash
 ls ~/.local/share/whatsapp-mcp/whatsapp-bridge/whatsapp-bridge 2>/dev/null && echo "binary ok"
@@ -43,7 +43,9 @@ case "$(uname -s)" in
     launchctl bootstrap gui/$(id -u) "$PLIST_DEST"
     ;;
   Linux)
-    bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-whatsapp-bridge-linux.sh"
+    # Ask for WA_PHONE first: digits-only E.164 without "+" (for example, 12025551234).
+    bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-whatsapp-bridge-linux.sh" --wa-phone "$WA_PHONE"
+    systemctl --user enable --now whatsapp-bridge.service
     ;;
   *)
     echo "WhatsApp bridge auto-install is unsupported on this OS."

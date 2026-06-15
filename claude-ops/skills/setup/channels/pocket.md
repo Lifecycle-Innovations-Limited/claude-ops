@@ -59,15 +59,18 @@ it from the detected shell profile when needed:
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh" set POCKET_API_KEY ops-daemon "$POCKET_API_KEY"
 
-case "$(basename "${SHELL:-}")" in
-  zsh) PROFILE="${ZDOTDIR:-$HOME}/.zshrc" ;;
-  bash) PROFILE="$HOME/.bashrc" ;;
-  fish) PROFILE="$HOME/.config/fish/config.fish" ;;
-  *) PROFILE="$HOME/.profile" ;;
-esac
+PROFILE="${PROFILE_FILE:-$HOME/.profile}"
 
-grep -q "POCKET_API_KEY" "$PROFILE" 2>/dev/null || \
-  echo 'export POCKET_API_KEY="$(bash "${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh" get POCKET_API_KEY ops-daemon 2>/dev/null)"' >> "$PROFILE"
+if ! grep -q "POCKET_API_KEY" "$PROFILE" 2>/dev/null; then
+  case "$PROFILE" in
+    *config.fish)
+      echo 'set -gx POCKET_API_KEY (bash "${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh" get POCKET_API_KEY ops-daemon 2>/dev/null)' >> "$PROFILE"
+      ;;
+    *)
+      echo 'export POCKET_API_KEY="$(bash "${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh" get POCKET_API_KEY ops-daemon 2>/dev/null)"' >> "$PROFILE"
+      ;;
+  esac
+fi
 ```
 
 #### Step 3p.3 — Choose notification channels
@@ -161,7 +164,32 @@ case "$(uname -s)" in
     bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-pocket-notifier.sh"
     ;;
   Linux)
-    echo "Linux: wire ${CLAUDE_PLUGIN_ROOT}/scripts/ops-pocket-activity-notifier.py into systemd --user or cron at a 60s interval."
+    UNIT_DIR="$HOME/.config/systemd/user"
+    mkdir -p "$UNIT_DIR"
+    cat > "$UNIT_DIR/pocket-activity-notifier.service" <<SERVICE
+[Unit]
+Description=Pocket Activity Notifier
+
+[Service]
+Type=oneshot
+Environment=HOME=$HOME
+Environment=POCKET_STATE_DIR=$HOME/.claude/state/pocket
+ExecStart=$HOME/.venv-pocket/bin/python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ops-pocket-activity-notifier.py
+SERVICE
+    cat > "$UNIT_DIR/pocket-activity-notifier.timer" <<TIMER
+[Unit]
+Description=Run Pocket Activity Notifier every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Unit=pocket-activity-notifier.service
+
+[Install]
+WantedBy=timers.target
+TIMER
+    systemctl --user daemon-reload
+    systemctl --user enable --now pocket-activity-notifier.timer
     ;;
   *)
     echo "Pocket notifier auto-install is unsupported on this OS; run the notifier manually or skip this channel."

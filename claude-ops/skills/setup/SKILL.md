@@ -1752,7 +1752,15 @@ Then continue to Step 7.
 **Use the DETECTED shell profile, never a hardcoded `~/.zshrc`.** Resolve `PROFILE_FILE` from the Step 0b detector output (`profile_file` — `.bashrc` / `.zshrc` / `.config/fish/config.fish` / `.profile` per the user's actual `$SHELL`). A hardcoded `~/.zshrc` lands the export in a file bash/fish never sources (the original cross-OS bug).
 
 1. Check whether `CLAUDE_PLUGIN_ROOT` is already exported in `$PROFILE_FILE` (grep for `CLAUDE_PLUGIN_ROOT`).
-2. If missing, **append it automatically** — required, not optional. Use `>>` (append, never overwrite). Print: `"✓ Added export CLAUDE_PLUGIN_ROOT=... to $PROFILE_FILE"`. Do NOT ask permission — Rule 2 (never delegate commands to the user) applies. (fish syntax: write `set -gx CLAUDE_PLUGIN_ROOT …` into `config.fish` instead of `export`.)
+2. If missing, **append it automatically** — required, not optional. Use `>>` (append, never overwrite). Do NOT ask permission — Rule 2 (never delegate commands to the user) applies. Branch on the detected profile before writing:
+   ```bash
+   if [[ "$PROFILE_FILE" == *config.fish ]]; then
+     echo "set -gx CLAUDE_PLUGIN_ROOT $CLAUDE_PLUGIN_ROOT" >> "$PROFILE_FILE"
+   else
+     echo "export CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PLUGIN_ROOT\"" >> "$PROFILE_FILE"
+   fi
+   ```
+   Print: `"✓ Added CLAUDE_PLUGIN_ROOT to $PROFILE_FILE"`.
 3. Tell the user: `"Run 'source $PROFILE_FILE' or open a new terminal for it to take effect."`
 
 ---
