@@ -11,7 +11,13 @@ DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketpla
 LOG_DIR="$DATA_DIR/logs"
 LOG="$LOG_DIR/crs-priority.log"
 NODE="${CRS_NODE_BIN:-$(command -v node || echo /opt/homebrew/bin/node)}"
-BASE="${CRS_BASE:-http://127.0.0.1:3000}"
+# CRS's container port (:3000) is published on the host at either :3000 or :3005
+# depending on the deploy (this fleet maps ...:3005->3000). Honor an explicit
+# CRS_BASE; otherwise probe the known candidates and pick the first that answers
+# /health, so a host port-mapping change can't silently freeze the daemon (it
+# used to default to :3000, get 000 against a :3005-mapped relay, and exit 0
+# every tick — priority scheduling dead until someone noticed).
+BASE="${CRS_BASE:-}"
 
 mkdir -p "$LOG_DIR"
 
@@ -27,7 +33,16 @@ fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 # Skip silently if CRS isn't reachable (don't spam the log while the relay is down).
-curl -sf -o /dev/null --max-time 5 "$BASE/health" || exit 0
+# Auto-detect the host port unless CRS_BASE was set explicitly.
+if [ -n "$BASE" ]; then
+  curl -sf -o /dev/null --max-time 5 "$BASE/health" || exit 0
+else
+  for cand in http://127.0.0.1:3005 http://127.0.0.1:3000; do
+    if curl -sf -o /dev/null --max-time 5 "$cand/health"; then BASE="$cand"; break; fi
+  done
+  [ -n "$BASE" ] || exit 0  # relay unreachable on every candidate
+fi
+export CRS_BASE="$BASE"  # hand the resolved base to the node tick
 
 # Rotate log past ~2MB.
 if [ -f "$LOG" ] && [ "$(wc -c < "$LOG" 2>/dev/null || echo 0)" -gt 2097152 ]; then

@@ -72,7 +72,10 @@ const cfg = loadConfig();
 const C = cfg.crs || {};
 const num = (v, d) => (v === undefined || v === null || v === '' || Number.isNaN(+v) ? d : +v);
 
-const BASE = process.env.CRS_BASE || C.baseUrl || 'http://127.0.0.1:3000';
+// CRS_BASE is normally exported by the .sh wrapper after it probes the live host
+// port (:3005 or :3000). config.json "crs".baseUrl overrides next; the literal is
+// only a last resort and matches this fleet's published port (...:3005->3000).
+const BASE = process.env.CRS_BASE || C.baseUrl || 'http://127.0.0.1:3005';
 const ADMIN_USER = process.env.CRS_ADMIN_USER || C.adminUser || 'cradmin';
 const OFF_5H = num(process.env.CRS_OFF_5H ?? C.off5h, 90);
 const OFF_7D = num(process.env.CRS_OFF_7D ?? C.off7d, 95);
