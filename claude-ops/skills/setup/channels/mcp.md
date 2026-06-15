@@ -61,7 +61,7 @@ Servers in `API_KEY_MCPS` (currently `pocketai`) use a static Bearer key stored 
 
 ```bash
 # Cross-OS (preferred):
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/lib/credential-store.sh" get POCKET_API_KEY ops-daemon
+bash "${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh" get POCKET_API_KEY ops-daemon
 # macOS-only fallback:
 # security find-generic-password -s POCKET_API_KEY -a ops-daemon -w
 ```
@@ -69,7 +69,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/lib/credential-store.sh" get POCKET_API_KEY 
 If the key is missing, add it:
 
 ```bash
-security add-generic-password -s POCKET_API_KEY -a ops-daemon -w "<key>"
+bash "${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh" set POCKET_API_KEY ops-daemon "<key>"
 ```
 
 ## 5. First health check
