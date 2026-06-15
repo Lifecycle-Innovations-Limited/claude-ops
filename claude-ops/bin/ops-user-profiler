@@ -74,7 +74,7 @@ case "$PERM_MODE" in
   *) AUTONOMY=careful ;;
 esac
 # installed hooks + plugins (names only) — what they've already wired up
-HOOKS=$(jq -c '[.hooks // {} | to_entries[] | .value[]? | .hooks[]? | .command? // empty | split("/") | last | sub("\\.sh$";"")] | map(select(length>0)) | unique' "$SETTINGS" 2>/dev/null)
+HOOKS=$(jq -c '[.hooks // {} | to_entries[] | .value[]? | .hooks[]? | .command? // empty | (match("/(?:bin|scripts)/([^/[:space:]]+)") | .captures[0].string // empty) | sub("\\.(sh|py)$";"")] | map(select(length>0)) | unique' "$SETTINGS" 2>/dev/null)
 PLUGINS=$(ls -1 "$HOME/.claude/plugins/cache" 2>/dev/null | head -40 | jq -R . | jq -s 'map(select(length>0))' 2>/dev/null)
 EXISTING_PREFS="$DATA/preferences.json"
 PRIOR_VERBOSITY=$(jq -r '.briefing_verbosity // empty' "$EXISTING_PREFS" 2>/dev/null || echo "")
