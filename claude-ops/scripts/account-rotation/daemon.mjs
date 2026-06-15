@@ -393,7 +393,10 @@ async function detectLiveAccountFromVault(config) {
 // ── Real utilization from Anthropic (via statusline export) ──────────────────
 
 const RATE_LIMITS_FILE = join(__dirname, '.rate-limits.json');
-const UTILIZATION_ROTATE_THRESHOLD = 95; // Rotate when near exhaustion
+const UTILIZATION_ROTATE_THRESHOLD = 90; // Rotate at 90% — 95%+ is always too late: Claude
+// surfaces its own limit warnings ~75%, and an in-flight session crossing ~95% is already
+// throttling before the daemon can rescue it. Destination viability bars (DAEMON_SAFE_*=95/94)
+// stay ABOVE this so there is always a cooler account to land on. (owner directive 2026-06-13.)
 
 function readRealUtilization() {
   try {
@@ -437,9 +440,9 @@ function checkRateLimited() {
         utilization: real,
       };
     }
-    // 7d weekly cap — also rotate at 80% (was 95%, but Claude itself surfaces
-    // the warning at ~75%, so 95% is too late and the active session sees
-    // "you've used X% of your weekly limit" before the daemon acts).
+    // 7d weekly cap — same 90% trigger (UTILIZATION_ROTATE_THRESHOLD). Claude surfaces
+    // its weekly-limit warning at ~75%, so anything ≥95% is too late: the active session
+    // sees "you've used X% of your weekly limit" before the daemon can act.
     if (pct7d >= UTILIZATION_ROTATE_THRESHOLD) {
       return {
         limited: true,
@@ -1257,6 +1260,9 @@ async function dynamicRefresh(config, state) {
   for (const account of config.accounts) {
     const key = accountKey(account);
     if (key === state.activeAccount) continue; // Don't refresh active account mid-session
+    if (account.disabled === true) continue; // hands-off: a disabled account is owned
+    // elsewhere (e.g. a CRS relay pool). Refreshing its OAuth token rotates the
+    // refresh token and INVALIDATES the copy CRS holds → CRS "Invalid API key" 401s.
 
     const tokenJson = readStoredToken(account);
     if (!tokenJson) continue;
