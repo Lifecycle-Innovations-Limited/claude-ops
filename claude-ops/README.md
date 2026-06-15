@@ -140,7 +140,7 @@ The background memory extractor now prefers the Claude Code OAuth token stored i
 
 ### Full Plugin Feature Adoption
 
-- All 57 skills: `effort`, `maxTurns`, `disallowedTools`, `model` annotations
+- All 58 skills: `effort`, `maxTurns`, `disallowedTools`, `model` annotations
 - All 21 agents: `memory` (cross-session learning), `initialPrompt`, `isolation`
 - PreToolUse hooks for WhatsApp health checks and MCP auto-reconnect
 - Runtime Context loading in every skill (preferences, daemon health, memories, secrets)

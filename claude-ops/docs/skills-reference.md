@@ -2,10 +2,10 @@
 
 # Skills Reference
 
-_All 57 skills available in claude-ops — your business operations command surface (v2.0 added `/ops:deploy-fix`, `/ops:recap`, `/ops:rotate`, `/ops:rotate-setup`; v2.0.6 added `/ops:credentials`; v2.0.8 added multi-workspace Slack)_
+_All 58 skills available in claude-ops — your business operations command surface (v2.0 added `/ops:deploy-fix`, `/ops:recap`, `/ops:rotate`, `/ops:rotate-setup`; v2.0.6 added `/ops:credentials`; v2.0.8 added multi-workspace Slack)_
 
-[![version](https://img.shields.io/badge/version-2.33.0-blue)](../CHANGELOG.md)
-[![skills](https://img.shields.io/badge/skills-57-8b5cf6)](.)
+[![version](https://img.shields.io/badge/version-2.34.0-blue)](../CHANGELOG.md)
+[![skills](https://img.shields.io/badge/skills-58-8b5cf6)](.)
 [![license](https://img.shields.io/badge/license-MIT-22c55e)](../LICENSE)
 [![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-f59e0b)](.)
 
