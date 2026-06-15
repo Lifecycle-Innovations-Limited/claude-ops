@@ -15,6 +15,27 @@ function claudeSettingsPath() {
   return join(process.env.HOME || '', '.claude', 'settings.json');
 }
 
+// ── CRS (Claude Relay Service) routing awareness ───────────────────────────────
+// When a box routes through CRS, ANTHROPIC_BASE_URL points at the local relay
+// (e.g. http://127.0.0.1:3005/api) and CLAUDE_CODE_OAUTH_TOKEN holds a static
+// `cr_…` relay token. Both must travel together — a `cr_` token with no base URL
+// 401s. The Bedrock/OAuth settings mutators below were written for the raw-OAuth /
+// Bedrock world and would silently strip ANTHROPIC_BASE_URL, stranding a CRS box.
+// These helpers detect that routing and snapshot/restore the pair so a mode flip
+// never breaks (or money-leaks past) a CRS-routed fleet.
+function isCrsToken(t) {
+  return typeof t === 'string' && t.startsWith('cr_');
+}
+
+/** True when settings.env is wired for CRS relay routing (cr_ token + base URL). */
+function detectCrsRouting(env) {
+  const token = env.CLAUDE_CODE_OAUTH_TOKEN;
+  const base = env.ANTHROPIC_BASE_URL;
+  return isCrsToken(token) && typeof base === 'string' && base.length > 0
+    ? { token, base }
+    : null;
+}
+
 function readSettings() {
   try {
     return JSON.parse(readFileSync(claudeSettingsPath(), 'utf8'));
@@ -228,6 +249,19 @@ export function resolveBedrockClaudeModelIds(region = 'us-east-1') {
 
 /** Match use-bedrock.sh: Bedrock env + strip top-level model lists (OAuth catalog ids break Bedrock). */
 export function persistBedrockClaudeSettings(region = 'us-east-1') {
+  const s0 = readSettings();
+  const env0 = s0.env && typeof s0.env === 'object' ? s0.env : {};
+  // Defense-in-depth behind the activateBedrockFallback kill-switch: a CRS-routed
+  // box must NEVER be flipped onto metered Bedrock — the free relay pool already
+  // multiplexes every Max account. Refuse loudly so callers' try/catch logs a
+  // failure instead of silently claiming "Bedrock active" + money-leaking.
+  // Override with CLAUDE_ALLOW_BEDROCK_OVER_CRS=1 if ever genuinely intended.
+  if (detectCrsRouting(env0) && process.env.CLAUDE_ALLOW_BEDROCK_OVER_CRS !== '1') {
+    throw new Error(
+      'refusing Bedrock flip: box is CRS-routed (cr_ token + ANTHROPIC_BASE_URL). ' +
+        'CRS pool already covers capacity; Bedrock is metered. Set CLAUDE_ALLOW_BEDROCK_OVER_CRS=1 to override.',
+    );
+  }
   const { primary, small, opus, fable } = resolveBedrockClaudeModelIds(region);
   const aws = resolveWorkingAwsEnv(region);
   const s = readSettings();
@@ -262,6 +296,12 @@ export function persistBedrockClaudeSettings(region = 'us-east-1') {
 export function clearHardcodedModelsForOAuthClaudeSettings() {
   const s = readSettings();
   const env = s.env && typeof s.env === 'object' ? { ...s.env } : {};
+  // Preserve CRS relay routing across the flip: a `cr_` token + ANTHROPIC_BASE_URL
+  // must survive together. The generic clear below strips ANTHROPIC_BASE_URL (it
+  // assumes raw OAuth, where base-url must be absent), which on a CRS box would
+  // leave the cr_ token pointing at api.anthropic.com → 401, killing the relay.
+  // Snapshot the pair before clearing, then restore it.
+  const crs = detectCrsRouting(env);
   for (const k of [
     'CLAUDE_CODE_USE_BEDROCK',
     'AWS_BEDROCK_REGION',
@@ -277,6 +317,11 @@ export function clearHardcodedModelsForOAuthClaudeSettings() {
     'ANTHROPIC_DEFAULT_FABLE_MODEL',
   ]) {
     delete env[k];
+  }
+  if (crs) {
+    // Restore the relay pair so the box keeps routing through CRS, not raw OAuth.
+    env.ANTHROPIC_BASE_URL = crs.base;
+    env.CLAUDE_CODE_OAUTH_TOKEN = crs.token;
   }
   s.env = env;
   delete s.model;
