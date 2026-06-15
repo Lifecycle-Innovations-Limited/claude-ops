@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# ops-sync-docs — keep documentation counts in lockstep with the actual tree.
+#
+# Counts the real skills (claude-ops/skills/<name>/SKILL.md) and agents
+# (claude-ops/agents/<name>.md), then rewrites every "<N> skills, <M> agents"
+# count, every shields.io skills/agents/version badge, and every "All <N> skills"
+# / "All <N> agents" headline so the published docs never drift from reality.
+#
+# Deterministic (no AI, no network) and idempotent: running it on an already
+# in-sync tree changes nothing. It rewrites ONLY current-state count tokens in
+# known files — never historical "up from X/Y" changelog prose (that phrasing
+# does not match the "All <N>" / "<N> skills, <M> agents" patterns).
+#
+# ops-release runs this automatically before cutting a release; run it standalone
+# after adding/removing a skill or agent:
+#   claude-ops/bin/ops-sync-docs [--dry-run] [<repo-root>]
+#
+# Public repo: no personal data. All paths derive from the script location. (Rule 0)
+
+set -euo pipefail
+
+DRY=0; ARG_ROOT=""
+for a in "$@"; do
+  case "$a" in
+    --dry-run) DRY=1 ;;
+    *) ARG_ROOT="$a" ;;
+  esac
+done
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${ARG_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"   # <repo>
+PLUGIN_DIR="$REPO_ROOT/claude-ops"
+PLUGIN_JSON="$PLUGIN_DIR/.claude-plugin/plugin.json"
+MKT_JSON="$REPO_ROOT/.claude-plugin/marketplace.json"
+
+command -v jq >/dev/null 2>&1 || { echo "ops-sync-docs: jq required" >&2; exit 1; }
+[[ -f "$PLUGIN_JSON" ]] || { echo "ops-sync-docs: plugin.json not found at $PLUGIN_JSON" >&2; exit 1; }
+
+# ----- ground truth from the tree -----
+S=0; for d in "$PLUGIN_DIR"/skills/*/; do [[ -f "$d/SKILL.md" ]] && S=$((S+1)); done
+A=0; for f in "$PLUGIN_DIR"/agents/*.md;  do [[ -f "$f" ]] && A=$((A+1)); done
+V="$(jq -r '.version' "$PLUGIN_JSON")"
+[[ "$S" -gt 0 && "$A" -gt 0 ]] || { echo "ops-sync-docs: refusing to write zero counts (S=$S A=$A)" >&2; exit 1; }
+echo "ops-sync-docs: tree = ${S} skills, ${A} agents, version ${V}"
+
+changed=0
+apply() {  # apply <file> <sed -e expr ...>
+  local f="$1"; shift
+  [[ -f "$f" ]] || return 0
+  local tmp; tmp="$(mktemp)"
+  sed -E "$@" "$f" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  if ! cmp -s "$f" "$tmp"; then
+    echo "  $([[ $DRY -eq 1 ]] && echo 'would update' || echo 'updated'): ${f#$REPO_ROOT/}"
+    changed=$((changed+1))
+    [[ $DRY -eq 1 ]] || cp "$tmp" "$f"
+  fi
+  rm -f "$tmp"
+}
+
+COUNT_E=(-e "s/[0-9]+ skills, [0-9]+ agents/${S} skills, ${A} agents/g")
+BADGE_E=(-e "s#(badge/skills-)[0-9]+-#\1${S}-#g"
+         -e "s#(badge/agents-)[0-9]+-#\1${A}-#g"
+         -e "s#(badge/version-)[0-9][0-9.]*-#\1${V}-#g")
+HEAD_E=(-e "s/([Aa]ll )[0-9]+ skills/\1${S} skills/g"
+        -e "s/([Aa]ll )[0-9]+ agents/\1${A} agents/g")
+
+# Authoritative metadata (registry + plugin manifest) — count phrase only.
+apply "$PLUGIN_JSON" "${COUNT_E[@]}"
+apply "$MKT_JSON"    "${COUNT_E[@]}"
+
+# READMEs — badges + headlines (root README keeps historical "N skills, M agents" bullets frozen).
+apply "$REPO_ROOT/README.md" "${BADGE_E[@]}" "${HEAD_E[@]}"
+apply "$PLUGIN_DIR/README.md" "${COUNT_E[@]}" "${BADGE_E[@]}" "${HEAD_E[@]}"
+
+# Reference docs + index — badges + headlines.
+apply "$PLUGIN_DIR/docs/skills-reference.md" "${BADGE_E[@]}" "${HEAD_E[@]}"
+apply "$PLUGIN_DIR/docs/agents-reference.md" "${BADGE_E[@]}" "${HEAD_E[@]}"
+apply "$PLUGIN_DIR/docs/INDEX.md"            "${HEAD_E[@]}"
+
+[[ "$changed" -eq 0 ]] && echo "  already in sync — nothing to do"
+echo "ops-sync-docs: done (${changed} file(s) $([[ $DRY -eq 1 ]] && echo 'would change' || echo 'changed'))"
+exit 0
