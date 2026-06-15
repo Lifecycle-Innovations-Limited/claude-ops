@@ -60,6 +60,7 @@ Per-repo budget caps (default 3/hour), single-flight locks, content-hash dedup, 
 | ------------------- | --------------------------------------------------------------------------------- |
 | `/ops`              | Interactive command center dashboard (visual HQ)                                  |
 | `/ops:dash`         | Same as `/ops` — pixel-art dashboard with hotkey navigation                       |
+| `ops-healify-dash`  | Dedicated Healify.ai KPI, infra, repo, agent, MCP, and plugin command center      |
 | `/ops:setup`        | Interactive setup wizard — installs CLIs, configures channels, builds registry    |
 | `/ops:go`           | Morning briefing — all systems in one dashboard                                   |
 | `/ops:next`         | Priority-ordered next action (fires > comms > PRs > sprint > GSD)                 |

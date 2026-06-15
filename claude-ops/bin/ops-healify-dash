@@ -1,0 +1,395 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+MODE="${1:---once}"
+SESSION="${AGENT_HUB_TMUX_SESSION:-agent-hub}"
+OPS_DATA="${OPS_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+OPS_PROJECTS="$OPS_DATA/cache/projects_health.json"
+KPI_CACHE="$HOME/.claude/state/statusline-kpi.json"
+INFRA_CACHE="$HOME/.cache/agent-hub/infra-health.json"
+AWS_CACHE="$HOME/.cache/agent-hub/aws-ecs-health.json"
+PLUGIN_CACHE="$HOME/.cache/agent-hub/plugin-inventory.json"
+RUNTIME_CACHE="$HOME/.cache/agent-hub/fleet/runtime-health.txt"
+FLEET_STATUS="$HOME/.claude/state/fleet-status.json"
+FLEET_TUI="$HOME/.claude/state/fleet-tui.json"
+HEALIFY_ROOT="${HEALIFY_ROOT:-$HOME/Projects/healify-workspace}"
+MAX_ROWS="${HEALIFY_DASH_ROWS:-18}"
+INTERVAL="${HEALIFY_DASH_INTERVAL:-15}"
+REFRESH="${HEALIFY_DASH_REFRESH:-0}"
+
+if [[ "$MODE" == "--refresh" ]]; then
+  REFRESH=1
+  MODE="--once"
+fi
+
+if [[ -t 1 ]]; then
+  BOLD=$'\033[1m'
+  DIM=$'\033[2m'
+  RESET=$'\033[0m'
+  ORANGE=$'\033[38;5;208m'
+  AMBER=$'\033[38;5;214m'
+  PEACH=$'\033[38;5;216m'
+  GREEN=$'\033[38;5;114m'
+  RED=$'\033[38;5;203m'
+  YELLOW=$'\033[38;5;220m'
+  BLUE=$'\033[38;5;75m'
+  BORDER=$'\033[38;5;238m'
+  TEXT=$'\033[38;5;252m'
+else
+  BOLD= DIM= RESET= ORANGE= AMBER= PEACH= GREEN= RED= YELLOW= BLUE= BORDER= TEXT=
+fi
+
+usage() {
+  cat <<'EOF'
+healify-dashboard [--once|--watch|--refresh|--json]
+
+Dedicated Healify.ai command center. Read-only by default.
+Sources: ops:projects, statusline KPI cache, live health endpoints, AWS ECS,
+agent runtime health, Claude/OpenClaw/Codex/Cursor readiness, plugin inventory,
+and local Healify git repos.
+EOF
+}
+
+cols() {
+  local c
+  c="$(tput cols 2>/dev/null || echo 100)"
+  [[ "$c" =~ ^[0-9]+$ ]] || c=100
+  ((c < 72)) && c=72
+  ((c > 180)) && c=180
+  echo "$c"
+}
+
+clip_width() {
+  awk -v n="${1:-$(cols)}" '{ gsub(/[[:cntrl:]]/, " "); if (length($0) > n) print substr($0, 1, n-1) "..."; else print }'
+}
+
+safe_jq() {
+  local file="$1" fallback="$2" filter="${3:-.}"
+  if [[ -s "$file" ]] && command -v jq >/dev/null 2>&1; then
+    jq -c "$filter" "$file" 2>/dev/null || printf '%s\n' "$fallback"
+  else
+    printf '%s\n' "$fallback"
+  fi
+}
+
+jq_file() {
+  local file="$1" fallback="$2"
+  shift 2
+  if [[ -s "$file" ]] && command -v jq >/dev/null 2>&1; then
+    jq "$@" "$file" 2>/dev/null || printf '%s\n' "$fallback"
+  elif command -v jq >/dev/null 2>&1; then
+    printf '%s\n' "$fallback" | jq "$@" 2>/dev/null || printf '%s\n' "$fallback"
+  else
+    printf '%s\n' "$fallback"
+  fi
+}
+
+mtime() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0
+}
+
+age() {
+  local f="$1" now mt d
+  [[ -s "$f" ]] || { printf 'missing'; return; }
+  now="$(date +%s)"
+  mt="$(mtime "$f")"
+  [[ "$mt" =~ ^[0-9]+$ ]] || { printf 'unknown'; return; }
+  d=$((now - mt))
+  if ((d < 120)); then printf '%ss' "$d"
+  elif ((d < 7200)); then printf '%sm' "$((d / 60))"
+  elif ((d < 172800)); then printf '%sh' "$((d / 3600))"
+  else printf '%sd' "$((d / 86400))"; fi
+}
+
+rule() {
+  printf '%s' "$BORDER"
+  printf '%*s\n' "$(cols)" '' | tr ' ' '-'
+  printf '%s' "$RESET"
+}
+
+section() {
+  printf '\n%s%s%s%s\n' "$BOLD" "$ORANGE" "$1" "$RESET"
+  rule
+}
+
+tone() {
+  case "${1,,}" in
+    ok|ready|connected|configured|healthy|active|passing|running|success) printf '%s%s%s' "$GREEN" "$1" "$RESET" ;;
+    warn|warning|paused|degraded|auth|auth-needed|stale|waiting) printf '%s%s%s' "$YELLOW" "$1" "$RESET" ;;
+    down|failed|error|blocked|critical|missing|unauthorized) printf '%s%s%s' "$RED" "$1" "$RESET" ;;
+    *) printf '%s%s%s' "$BLUE" "$1" "$RESET" ;;
+  esac
+}
+
+pretty_table() {
+  column -t -s '|' 2>/dev/null | clip_width "$(cols)"
+}
+
+spinner() {
+  [[ -t 1 ]] || return 0
+  local msg="$1" pid="$2" frames=("◒" "◐" "◓" "◑") i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    printf '\r%s%s %s%s' "$ORANGE" "${frames[$((i % 4))]}" "$msg" "$RESET" >&2
+    i=$((i + 1))
+    sleep 0.12
+  done
+  printf '\r%*s\r' 80 '' >&2
+}
+
+refresh_caches() {
+  if [[ -x "$HOME/.local/bin/agent-mcp-sync" ]]; then
+    timeout 20 "$HOME/.local/bin/agent-mcp-sync" >/dev/null 2>&1 || true
+  fi
+  if [[ -x "$HOME/.local/bin/agent-project-health" ]]; then
+    timeout 55 "$HOME/.local/bin/agent-project-health" --refresh-infra >/dev/null 2>&1 || true
+  fi
+  if [[ -x "$HOME/.local/bin/agent-plugin-insights" ]]; then
+    timeout 20 "$HOME/.local/bin/agent-plugin-insights" --refresh >/dev/null 2>&1 || true
+  fi
+  if [[ -x "$HOME/.local/bin/agent-hub-health" ]]; then
+    timeout 40 "$HOME/.local/bin/agent-hub-health" short >"$RUNTIME_CACHE" 2>/dev/null || true
+  fi
+}
+
+repo_rows() {
+  local roots=(
+    "$HEALIFY_ROOT/healify"
+    "$HEALIFY_ROOT/healify-api"
+    "$HEALIFY_ROOT/healify-agentcore"
+    "$HEALIFY_ROOT/healify-api-mcp"
+    "$HEALIFY_ROOT/healify-web"
+    "$HEALIFY_ROOT/healify-operating-dashboard"
+    "$HEALIFY_ROOT/repos/meditation-service"
+    "$HOME/Projects/meditation-service"
+  )
+  local seen="" root name branch dirty ahead behind last
+  printf 'REPO|BRANCH|DIRTY|AHEAD/BEHIND|LAST COMMIT\n'
+  for root in "${roots[@]}"; do
+    [[ -d "$root/.git" ]] || continue
+    name="$(basename "$root")"
+    [[ "$seen" == *"|$name|"* ]] && continue
+    seen="${seen}|$name|"
+    branch="$(git -C "$root" branch --show-current 2>/dev/null || echo '-')"
+    dirty="$(git -C "$root" status --porcelain 2>/dev/null | wc -l | awk '{print $1}')"
+    ahead="$(git -C "$root" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+    behind="$(git -C "$root" rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0)"
+    last="$(git -C "$root" log -1 --format='%cr %s' 2>/dev/null || echo '-')"
+    printf '%s|%s|%s|%s/%s|%s\n' "$name" "${branch:--}" "$dirty" "$ahead" "$behind" "$last"
+  done
+}
+
+json_summary() {
+  local projects kpi infra aws plugins runtime
+  projects="$(safe_jq "$OPS_PROJECTS" '{"projects":[],"summary":{}}')"
+  kpi="$(safe_jq "$KPI_CACHE" '{"projects":[]}')"
+  infra="$(safe_jq "$INFRA_CACHE" '{"endpoints":[]}')"
+  aws="$(safe_jq "$AWS_CACHE" '{"services":[]}')"
+  plugins="$(safe_jq "$PLUGIN_CACHE" '{"claude_plugins":[],"codex_skills":[],"ops_kpi_caches":[]}')"
+  runtime="$(sed -n '1,40p' "$RUNTIME_CACHE" 2>/dev/null | jq -Rs '.')"
+  jq -nc \
+    --argjson projects "$projects" \
+    --argjson kpi "$kpi" \
+    --argjson infra "$infra" \
+    --argjson aws "$aws" \
+    --argjson plugins "$plugins" \
+    --arg runtime "$runtime" \
+    '{projects:$projects,kpi:$kpi,infra:$infra,aws:$aws,plugins:$plugins,runtime:$runtime}'
+}
+
+pixel_logo() {
+  local o p w r
+  if [[ -t 1 ]]; then
+    o=$'\033[48;5;208m  \033[0m'
+    p=$'\033[48;5;204m  \033[0m'
+    w=$'\033[48;5;231m  \033[0m'
+    r=$'\033[48;5;209m  \033[0m'
+  else
+    o='OO'; p='PP'; w='WW'; r='RR'
+  fi
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$o" "$o" "$w" "$w" "$o" "$o" "$o" "$o" "$o" "$w" "$w" "$o" "$o" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$o" "$w" "$w" "$w" "$w" "$o" "$o" "$o" "$w" "$w" "$w" "$w" "$o" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$o" "$w" "$w" "$w" "$w" "$w" "$o" "$w" "$w" "$w" "$w" "$w" "$o" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$p" "$w" "$w" "$w" "$w" "$w" "$w" "$w" "$w" "$w" "$w" "$w" "$w" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$p" "$p" "$w" "$w" "$w" "$w" "$w" "$r" "$r" "$w" "$w" "$w" "$w" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$p" "$p" "$p" "$w" "$w" "$w" "$r" "$r" "$r" "$r" "$w" "$w" "$o" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$p" "$p" "$p" "$p" "$w" "$r" "$r" "$r" "$r" "$r" "$r" "$o" "$o" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$p" "$p" "$p" "$p" "$p" "$w" "$r" "$r" "$r" "$r" "$o" "$o" "$o" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$p" "$p" "$p" "$p" "$p" "$p" "$w" "$r" "$r" "$o" "$o" "$o" "$o" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$w" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$o" "$o" "$o" "$o" "$o" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$o" "$o" "$o" "$o" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$o" "$o" "$o" "$o" "$o" "$o"
+  printf '    %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$p" "$o" "$o" "$o" "$o" "$o"
+}
+
+hero() {
+  local now host load mem disk
+  now="$(date -u '+%Y-%m-%d %H:%M:%SZ')"
+  host="$(hostname -s 2>/dev/null || hostname)"
+  load="$(awk '{print $1","$2","$3}' /proc/loadavg 2>/dev/null || echo '-')"
+  mem="$(free -h 2>/dev/null | awk '/Mem:/ {print $3 "/" $2 " used"}' || echo '-')"
+  disk="$(df -h / 2>/dev/null | awk 'NR==2 {print $5 " used / " $4 " free"}' || echo '-')"
+  pixel_logo
+  printf '%s%sHEALIFY.AI COMMAND CENTER%s  %sread-only / orange dark mode%s\n' "$BOLD" "$AMBER" "$RESET" "$DIM" "$RESET"
+  printf '%s%s%s  host=%s  load=%s  ram=%s  disk=%s\n' "$TEXT" "$now" "$RESET" "$host" "$load" "$mem" "$disk"
+  rule
+}
+
+cards() {
+  local infra aws projects blockers plugins skills kpis agents_down
+  infra="$(safe_jq "$INFRA_CACHE" '{"endpoints":[]}' '[.endpoints[]? | select((.project|ascii_downcase|test("healify|meditation")) and .status=="ok")] | length')"
+  aws="$(safe_jq "$AWS_CACHE" '{"services":[]}' '[.services[]? | select((.project|ascii_downcase|test("healify|meditation")) and .status=="ok")] | length')"
+  projects="$(safe_jq "$OPS_PROJECTS" '{"projects":[]}' '[.projects[]? | select(.name|ascii_downcase|test("healify|meditation"))] | length')"
+  blockers="$(safe_jq "$OPS_PROJECTS" '{"projects":[]}' '[.projects[]? | select((.name|ascii_downcase|test("healify|meditation")) and ((.blockers // "0"|tostring) != "0"))] | length')"
+  plugins="$(safe_jq "$PLUGIN_CACHE" '{"claude_plugins":[]}' '.claude_plugins | length')"
+  skills="$(safe_jq "$PLUGIN_CACHE" '{"codex_skills":[]}' '.codex_skills | length')"
+  kpis="$(safe_jq "$PLUGIN_CACHE" '{"ops_kpi_caches":[]}' '.ops_kpi_caches | length')"
+  agents_down="$(grep -Eci 'auth-needed|failed|missing|unauthorized|error' "$RUNTIME_CACHE" 2>/dev/null || true)"
+  agents_down="${agents_down:-0}"
+  {
+    printf 'METRIC|VALUE|SOURCE|AGE\n'
+    printf 'Healify endpoints OK|%s|infra health|%s\n' "$infra" "$(age "$INFRA_CACHE")"
+    printf 'Healify ECS OK|%s|AWS ECS|%s\n' "$aws" "$(age "$AWS_CACHE")"
+    printf 'Healify projects|%s|ops:projects|%s\n' "$projects" "$(age "$OPS_PROJECTS")"
+    printf 'Project blockers|%s|gsd/ops registry|%s\n' "$blockers" "$(age "$OPS_PROJECTS")"
+    printf 'Claude plugins|%s|plugin inventory|%s\n' "$plugins" "$(age "$PLUGIN_CACHE")"
+    printf 'Codex skills|%s|plugin inventory|%s\n' "$skills" "$(age "$PLUGIN_CACHE")"
+    printf 'KPI caches|%s|ops daemon|%s\n' "$kpis" "$(age "$PLUGIN_CACHE")"
+    printf 'Agent warnings|%s|runtime health|%s\n' "$agents_down" "$(age "$RUNTIME_CACHE")"
+  } | pretty_table
+}
+
+business_kpis() {
+  jq_file "$KPI_CACHE" '{"projects":[]}' -r '
+    def fmt:
+      if . == null then "-"
+      elif type=="number" then
+        if . >= 1000000 then ((./1000000*10|round/10|tostring)+"M")
+        elif . >= 1000 then ((./1000*10|round/10|tostring)+"K")
+        else (.|tostring) end
+      else tostring end;
+    "KPI|VALUE|STATUS|DETAIL",
+    ((.projects // []) | map(select((.key // .label // "" | ascii_downcase) == "healify")) | .[0] // {}) as $h |
+    [
+      "Instagram followers|" + (($h.social.ig_followers // null)|fmt) + "|" + (($h.social.verdict // "-")|tostring) + "|Healify audience",
+      "Instagram reach|" + (($h.social.ig_reach // null)|fmt) + "|" + (($h.social.verdict // "-")|tostring) + "|Recent reach cache",
+      "Save rate|" + (($h.social.save_rate // null)|fmt) + "|" + (($h.social.verdict // "-")|tostring) + "|Content quality signal",
+      "Active requests|" + (($h.social.active_req // null)|fmt) + "|" + (($h.dev.phase // "-")|tostring) + "|Demand / backlog",
+      "Ads health|" + (($h.ads.health // "-")|tostring) + "|" + (($h.ads.health // "-")|tostring) + "|Marketing spend efficiency",
+      "Dev phase|" + (($h.dev.phase // "-")|tostring) + "|" + (($h.dev.phase // "-")|tostring) + "|Execution state"
+    ][]' | pretty_table
+}
+
+projects_table() {
+  jq_file "$OPS_PROJECTS" '{"projects":[]}' --argjson max "$MAX_ROWS" -r '
+    def clip($n): tostring | gsub("[\r\n\t]+";" ") | if length>$n then .[0:$n-1]+"..." else . end;
+    "PROJECT|STATUS|BLOCKERS|PHASE|NEXT ACTION",
+    ((.projects // [])
+      | map(select(.name|ascii_downcase|test("healify|meditation")))
+      | sort_by((.blockers // "0"|tonumber? // 0) * -1, .name)
+      | .[:$max]
+      | .[]
+      | [(.name // "-"),(.status // "-"),(.blockers // "0"|tostring),(.phase // "-"|tostring),(.next_action // "-"|clip(70))]
+      | join("|"))' | pretty_table
+}
+
+infra_table() {
+  {
+    printf 'PROJECT|SERVICE|TIER|STATUS|HTTP/RUN|LAT|URL\n'
+    jq_file "$INFRA_CACHE" '{"endpoints":[]}' --argjson max "$MAX_ROWS" -r '
+      (.endpoints // [])
+      | map(select(.project|ascii_downcase|test("healify|meditation")))
+      | sort_by(if .status=="down" then 0 elif .status=="warn" then 1 else 2 end, .project, .service)
+      | .[:$max]
+      | .[]
+      | [.project,.service,.tier,.status,.http,((.ms|tostring)+"ms"),.url]
+      | @tsv' | awk -F'\t' '{printf "%s|%s|%s|%s|%s|%s|%s\n",$1,$2,$3,$4,$5,$6,$7}'
+    jq_file "$AWS_CACHE" '{"services":[]}' --argjson max "$MAX_ROWS" -r '
+      (.services // [])
+      | map(select(.project|ascii_downcase|test("healify|meditation")))
+      | sort_by(if .status=="down" then 0 elif .status=="warn" then 1 else 2 end, .tier, .project)
+      | .[:$max]
+      | .[]
+      | [.project,.service,.tier,.status,.http,"-",.url]
+      | @tsv' | awk -F'\t' '{printf "%s|%s|%s|%s|%s|%s|%s\n",$1,$2,$3,$4,$5,$6,$7}'
+  } | pretty_table
+}
+
+agents_table() {
+  {
+    printf 'SOURCE|STATUS|DETAIL\n'
+    if [[ -s "$RUNTIME_CACHE" ]]; then
+      sed -n '1,30p' "$RUNTIME_CACHE" | awk -F: '{status=$2; sub(/^/,"",status); printf "%s|%s|%s\n",$1,(status ~ /ready|configured|ok/ ? "ok" : "warn"),status}'
+    else
+      printf 'runtime-health|missing|run agent-hub-health short\n'
+    fi
+    printf 'tmux|ok|%s windows in %s\n' "$(tmux list-windows -t "$SESSION" 2>/dev/null | wc -l | awk '{print $1}')" "$SESSION"
+    if command -v claude >/dev/null 2>&1; then
+      local c_total c_bad
+      c_total="$(timeout 12 claude agents --json --all 2>/dev/null | jq '[.[]? | select(.kind=="background")] | length' 2>/dev/null || echo '-')"
+      c_bad="$(timeout 12 claude agents --json --all 2>/dev/null | jq '[.[]? | select(.kind=="background" and (.state=="failed" or .state=="blocked"))] | length' 2>/dev/null || echo '-')"
+      printf 'claude-agents|ok|%s background, %s failed/blocked\n' "$c_total" "$c_bad"
+    fi
+  } | pretty_table
+}
+
+plugin_table() {
+  {
+    printf 'SURFACE|COUNT|USE IN HEALIFY DASHBOARD\n'
+    safe_jq "$PLUGIN_CACHE" '{"claude_plugins":[],"codex_skills":[],"ops_kpi_caches":[]}' '
+      "Claude plugins|" + ((.claude_plugins|length)|tostring) + "|connectors, business context, MCP capability map",
+      "Codex skills|" + ((.codex_skills|length)|tostring) + "|engineering execution map and review surfaces",
+      "Ops KPI caches|" + ((.ops_kpi_caches|length)|tostring) + "|revenue, social, marketing, project status caches"
+    ' | tr -d '"'
+  } | pretty_table
+}
+
+logs_panel() {
+  local log
+  for log in \
+    "$OPS_DATA/logs/ops-daemon.log" \
+    "$OPS_DATA/logs/mcp-watchdog.log" \
+    "$HOME/.claude/logs/agent-hub-watchdog.log" \
+    "$HOME/.claude/logs/agent-hub-revive.log"; do
+    [[ -s "$log" ]] || continue
+    printf '%s\n' "${log/#$HOME/~}"
+    tail -5 "$log" 2>/dev/null | sed 's/^/  /' | clip_width "$(cols)"
+  done
+}
+
+render() {
+  [[ "$REFRESH" == "1" ]] && refresh_caches
+  [[ -t 1 ]] && clear
+  hero
+  cards
+  section "Business KPIs"
+  business_kpis
+  section "Execution Portfolio"
+  projects_table
+  section "Infra And Deployments"
+  infra_table
+  section "Repos"
+  repo_rows | pretty_table
+  section "Agents, MCPs, CLIs"
+  agents_table
+  section "Plugin Surface"
+  plugin_table
+  section "Important Logs"
+  logs_panel
+  printf '\n%sCommands:%s hd --watch | hd --refresh | fleet | agent-hub-doctor --fix | agent-hub-ops menu\n' "$DIM" "$RESET"
+}
+
+case "$MODE" in
+  --once|"") render ;;
+  --watch)
+    while true; do
+      render || true
+      sleep "$INTERVAL"
+    done
+    ;;
+  --json) json_summary ;;
+  -h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac

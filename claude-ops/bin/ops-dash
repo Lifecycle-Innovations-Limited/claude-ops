@@ -11,6 +11,10 @@ PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "${PLUGIN_ROOT}/lib/registry-resolve.sh"
 PREFS="${OPS_DATA_DIR}/preferences.json"
 
+if [[ "${OPS_HEALIFY_DASH:-0}" == "1" && -x "${PLUGIN_ROOT}/bin/ops-healify-dash" ]]; then
+  exec "${PLUGIN_ROOT}/bin/ops-healify-dash" "$@"
+fi
+
 # ── Mobile / SSH detection (Rule 7) ─────────────────────────────────────────
 MOBILE_MODE=0
 if [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" || "${OPS_MOBILE:-}" == "1" ]]; then
