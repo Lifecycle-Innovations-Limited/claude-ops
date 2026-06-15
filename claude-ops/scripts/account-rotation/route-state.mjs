@@ -124,9 +124,19 @@ export function setRouteMode(mode, options = {}) {
   } else {
     next.bedrockConfirmation = null;
   }
-  const state = writeRouteState(next);
-  applyRouteToSettings(state, options);
-  return state;
+  const prev = readRouteState();
+  const merged = {
+    ...prev,
+    ...next,
+    updatedAt: nowIso(),
+    host: hostname(),
+  };
+  if (!ROUTE_MODES.has(merged.mode)) {
+    throw new Error(`invalid route mode: ${merged.mode}`);
+  }
+  applyRouteToSettings(merged, options);
+  writeJsonAtomic(STATE_PATH, merged);
+  return merged;
 }
 
 export function applyRouteToSettings(state = readRouteState(), options = {}) {
