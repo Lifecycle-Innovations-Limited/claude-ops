@@ -27,7 +27,7 @@ if command -v sentry-cli >/dev/null 2>&1; then
       out="$(timeout 25 sentry-cli issues list --org healify --project "$project" --query 'is:unresolved' 2>&1 || true)"
       if printf '%s' "$out" | grep -qi 'No issues found'; then
         jq -nc --arg project "$project" '{project:$project,ok:true,unresolved:0,highPriority:0,note:"No unresolved issues"}'
-      elif printf '%s' "$out" | grep -qi 'error\\|unauthorized\\|forbidden\\|not found'; then
+      elif printf '%s' "$out" | grep -qi 'error\|unauthorized\|forbidden\|not found'; then
         note="$(printf '%s' "$out" | sed -n '1,2p' | tr '\n' ' ' | sed 's/"/'\''/g')"
         jq -nc --arg project "$project" --arg note "$note" '{project:$project,ok:false,unresolved:null,highPriority:null,note:$note}'
       else
@@ -117,12 +117,23 @@ except Exception as exc:
 PY
 )"
 
-jq -nc \
+isjson() { printf '%s' "$1" | jq empty >/dev/null 2>&1; }
+isjson "$eas_json" || eas_json='{"ok":false,"note":"invalid EAS JSON","builds":[]}'
+isjson "$sentry_json" || sentry_json='{"ok":false,"note":"invalid Sentry JSON","projects":[]}'
+isjson "$opdash_json" || opdash_json='{"ok":false,"note":"invalid opdash JSON"}'
+isjson "$asc_extra_json" || asc_extra_json='{"ok":false,"note":"invalid ASC JSON","apps":[]}'
+
+if jq -nc \
   --arg generatedAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
   --argjson eas "$eas_json" \
   --argjson sentry "$sentry_json" \
   --argjson opdash "$opdash_json" \
   --argjson ascExtra "$asc_extra_json" \
-  '{generatedAt:$generatedAt,eas:$eas,sentry:$sentry,opdash:$opdash,ascExtra:$ascExtra}' >"$TMP"
-mv "$TMP" "$OUT"
-printf '%s\n' "$OUT"
+  '{generatedAt:$generatedAt,eas:$eas,sentry:$sentry,opdash:$opdash,ascExtra:$ascExtra}' >"$TMP"; then
+  mv "$TMP" "$OUT"
+  printf '%s\n' "$OUT"
+else
+  rm -f "$TMP"
+  printf 'healify-bi refresh: merge failed; keeping existing cache at %s\n' "$OUT" >&2
+  exit 1
+fi

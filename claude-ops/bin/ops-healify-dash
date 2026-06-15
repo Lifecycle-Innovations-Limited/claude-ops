@@ -334,8 +334,10 @@ marketing_table() {
       "Organic installs|" + ($m.organic|s) + "|" + ($af.status // "-") + "|AppsFlyer",
       "Loyal users|" + ($m.loyalUsers|s) + "|" + ($af.status // "-") + "|AppsFlyer",
       "UA cost|" + ($m.cost|s) + "|" + ($af.status // "-") + "|AppsFlyer",
-      "Amplitude active|" + (.opdash.amplitude.current.activeUsers|s) + "|" + (if .opdash.amplitude.ok then "ok" else "blocked" end) + "|Amplitude project " + (.opdash.amplitude.projectId // "-"),
-      "Amplitude new|" + (.opdash.amplitude.current.newUsers|s) + "|" + (if .opdash.amplitude.ok then "ok" else "blocked" end) + "|Amplitude project " + (.opdash.amplitude.projectId // "-")'
+      (.opdash.amplitude // {}) as $amp |
+      ($amp.current // {}) as $cur |
+      "Amplitude active|" + ($cur.activeUsers|s) + "|" + (if ($amp.ok // false) then "ok" else "blocked" end) + "|Amplitude project " + ($amp.projectId // "-"),
+      "Amplitude new|" + ($cur.newUsers|s) + "|" + (if ($amp.ok // false) then "ok" else "blocked" end) + "|Amplitude project " + ($amp.projectId // "-")'
   } | pretty_table
 }
 
