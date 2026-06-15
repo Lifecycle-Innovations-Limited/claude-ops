@@ -1,0 +1,364 @@
+#!/usr/bin/env bash
+# fleet-status.sh — polished fleet dashboard.
+# Unifies everything `claude agents --json`, `claude daemon status`, the daemon roster.json,
+# each session's job state.json, the rotation daemon state, and CRS expose — per session:
+#   token type (oauth/api/bedrock/crs) · CRS routing · agent type · effort/model · respawn-attempts
+#   · repo · uptime · last-update · last-write · leased account · live detail · last error.
+# Read-only. No mutation.  Usage: fleet-status.sh [--all] [--watch [secs]] [--no-color]
+set -uo pipefail
+
+CLAUDE_BIN="${CLAUDE_BIN:-/usr/local/bin/claude}"
+CRS_PORT="${CRS_PORT:-3005}"          # CRS (Claude Relay Service) listen port (3000 = legacy)
+AR="$HOME/.claude/scripts/account-rotation"
+PROJ="$HOME/.claude/projects/-Users-samrenders"
+EC2_CACHE="${FLEET_EC2_CACHE:-$HOME/.claude/state/fleet-ec2.json}"
+EC2_FETCH="$HOME/.claude/scripts/fleet-ec2-fetch.sh"
+EC2_TTL="${FLEET_EC2_TTL:-45}"        # cache freshness window (s)
+FLEET_EC2="${FLEET_EC2:-1}"           # include EC2 sessions (set --no-ec2 to disable)
+ALL=""; WATCH=""; WSECS="3"; ONCE=""
+for a in "$@"; do
+  case "$a" in
+    --all) ALL="--all";;
+    --watch|--tui) WATCH=1;;
+    --once|--snapshot|--no-watch) ONCE=1;;
+    --no-ec2) FLEET_EC2="";;
+    --ec2) FLEET_EC2=1;;
+    --no-color) export NO_COLOR=1;;
+    [0-9]*) WSECS="$a";;
+  esac
+done
+
+# Default to the live TUI when attached to a real terminal; fall back to a
+# one-shot snapshot otherwise (e.g. stdout captured by the /fleet slash command,
+# pipes, cron). --once forces snapshot; --tui/--watch forces the loop.
+if [ -z "$WATCH" ] && [ -z "$ONCE" ]; then
+  if [ -t 1 ] && [ -t 0 ]; then WATCH=1; fi
+fi
+[ -n "$ONCE" ] && WATCH=""
+
+# Adaptive width: fit the live terminal, clamped to a sane band.
+COLS="$(tput cols 2>/dev/null || echo 104)"
+[ "$COLS" -lt 90 ] 2>/dev/null && COLS=90
+[ "$COLS" -gt 140 ] 2>/dev/null && COLS=140
+export FLEET_W="$COLS"
+
+render() {
+  # Large blobs (fleet JSON, CRS docker logs) go through temp files, NOT env vars:
+  # exporting a multi-MB CRS log (529-storm) blows the exec arg/env limit → E2BIG
+  # ("Argument list too long"). --tail also bounds the log defensively.
+  local TMP; TMP="$(mktemp -d "${TMPDIR:-/tmp}/fleet.XXXXXX")"
+  $CLAUDE_BIN agents --json $ALL >"$TMP/fleet.json" 2>/dev/null
+  [ -s "$TMP/fleet.json" ] || printf '[]' >"$TMP/fleet.json"
+  DAEMON_STATUS="$($CLAUDE_BIN daemon status 2>/dev/null)"
+  CRS_HEALTH="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:${CRS_PORT}/health" 2>/dev/null)"
+  docker logs crs-claude-relay-1 --since 6m --tail 4000 >"$TMP/crs.log" 2>&1 || true
+  ROTOR_PID="$(pgrep -f 'account-rotation/daemon.mjs' | head -1)"
+  # EC2 fleet: read the cached snapshot instantly; refresh it in the BACKGROUND
+  # when stale so the TUI never blocks on the ~40s SSM round-trip. The fetcher
+  # self-guards (claude_once) against stacking concurrent refreshes.
+  if [ -n "$FLEET_EC2" ]; then
+    local ec2_age=999999
+    if [ -f "$EC2_CACHE" ]; then
+      ec2_age=$(( $(date +%s) - $(stat -c %Y "$EC2_CACHE" 2>/dev/null || stat -f %m "$EC2_CACHE" 2>/dev/null || echo 0) ))
+    fi
+    if [ "$ec2_age" -gt "$EC2_TTL" ] && [ -x "$EC2_FETCH" ]; then
+      ( "$EC2_FETCH" >/dev/null 2>&1 & ) >/dev/null 2>&1
+    fi
+    export EC2_CACHE_FILE="$EC2_CACHE" FLEET_EC2
+  else
+    export EC2_CACHE_FILE="" FLEET_EC2
+  fi
+  export FLEET_FILE="$TMP/fleet.json" CRS_LOG_FILE="$TMP/crs.log" DAEMON_STATUS CRS_HEALTH ROTOR_PID AR PROJ CRS_PORT
+  python3 - <<'PY'
+import json, os, re, subprocess, time, glob
+
+HOME=os.path.expanduser("~"); AR=os.environ["AR"]; PROJ=os.environ["PROJ"]; NOW=time.time()
+NC = bool(os.environ.get("NO_COLOR"))
+def c(code): return "" if NC else code
+R=c("\033[0m");B=c("\033[1m");D=c("\033[2m")
+GRN=c("\033[32m");YEL=c("\033[33m");MAG=c("\033[35m");CYN=c("\033[36m");RED=c("\033[31m");BLU=c("\033[34m")
+TOK={"oauth":GRN,"api":YEL,"bedrock":MAG,"crs":CYN}
+
+def sh(x):
+    try: return subprocess.run(x,shell=True,capture_output=True,text=True,timeout=15).stdout
+    except Exception: return ""
+
+def _readfile(env_key):
+    try: return open(os.environ.get(env_key,""),encoding="utf-8",errors="replace").read()
+    except Exception: return ""
+try: fleet=json.loads(_readfile("FLEET_FILE") or "[]")
+except Exception: fleet=[]
+dstat=os.environ.get("DAEMON_STATUS","")
+crs_health=os.environ.get("CRS_HEALTH",""); crs_log=_readfile("CRS_LOG_FILE")
+rotor_pid=os.environ.get("ROTOR_PID","").strip()
+
+# ---- EC2 (FRA) fleet snapshot (cached file; refreshed in background by the wrapper) ----
+ec2_on=bool(os.environ.get("FLEET_EC2"))
+ec2={}; ec2_info={}; ec2_age=None; ec2_fa=None; ec2_ok=False; ec2_err=""; ec2_daemon=""; ec2_n=0; ec2_inst=""
+if ec2_on:
+    try:
+        ec2=json.load(open(os.environ.get("EC2_CACHE_FILE","") or "/nonexistent"))
+        ec2_ok=bool(ec2.get("ok")); ec2_err=ec2.get("error",""); ec2_daemon=ec2.get("daemon","")
+        ec2_inst=ec2.get("instance","")
+        ec2_info=(ec2.get("info") or {})
+        fa=ec2.get("fetchedAt"); ec2_fa=fa
+        if fa: ec2_age=NOW-fa
+        agents_ec2=ec2.get("agents") or []; ec2_n=len(agents_ec2)
+        for a in agents_ec2:
+            a=dict(a); a["_host"]="fra"; fleet.append(a)
+    except FileNotFoundError:
+        ec2_err="no cache yet"
+    except Exception as e:
+        ec2_err=str(e)
+for a in fleet:
+    a.setdefault("_host","mac")
+
+# ---- CRS allowlist + log signals ----
+crs_allow=set(); crs_allow_all=False; crs_allow_except=[]
+try:
+    _al=json.load(open(f"{AR}/crs-allowlist.json"))
+    crs_allow=set(_al.get("sessions",[]) or [])
+    crs_allow_all=bool(_al.get("all"))
+    crs_allow_except=list(_al.get("except",[]) or [])
+except Exception: pass
+# allowlist label: ALL (minus except[]) when all:true, else count of explicit sessions.
+if crs_allow_all:
+    crs_allow_label=f"ALL-{len(crs_allow_except)}" if crs_allow_except else "ALL"
+else:
+    crs_allow_label=str(len(crs_allow))
+# Tighten 429/529 matching to genuine HTTP status occurrences, not bare-number substrings.
+_STATUS=r'(?:"status"\s*:\s*|status[=:]\s*|[\s\[(]|\bHTTP/\d(?:\.\d)?\s+)'
+crs_429=len(re.findall(_STATUS+r'429\b',crs_log,re.I))
+crs_529=len(re.findall(_STATUS+r'529\b',crs_log,re.I))+len(re.findall(r'overloaded',crs_log,re.I))
+crs_done=len(re.findall(r'Using proxy|relay.*success|✅',crs_log,re.I))
+acct_hits={}
+for m in re.findall(r'(pool-[a-z-]+|canary-[a-z]+)',crs_log): acct_hits[m]=acct_hits.get(m,0)+1
+
+# ---- rotation daemon account utilization ----
+accts={}
+try: accts=json.load(open(f"{AR}/state.json")).get("accounts",{})
+except Exception: pass
+
+# ---- daemon roster (per-worker: attempt, source, agent, isolation, cliVersion) ----
+roster={}
+try:
+    rj=json.load(open(f"{HOME}/.claude/daemon/roster.json"))
+    for w in (rj.get("workers") or []):
+        roster[w.get("sessionId","")[:8]]=w
+except Exception: pass
+
+# ---- session->account leases (rotation daemon log) ----
+lease={}
+for ln in sh(f"grep -hoE 'Session [0-9a-f]{{8}}.*(Assigning to|assigned to|token for) [a-zA-Z@._-]+' {AR}/daemon-launchd.log 2>/dev/null | tail -400").splitlines():
+    m=re.search(r'Session ([0-9a-f]{8}).*(?:Assigning to|assigned to|token for) ([a-zA-Z@._-]+)',ln)
+    if m: lease[m.group(1)]=m.group(2)
+
+# ---- helpers ----
+_ps={}
+def ps_cmd(pid):
+    if not pid: return ""
+    if pid not in _ps: _ps[pid]=sh(f"ps -ww -p {pid} -o command= 2>/dev/null").strip()
+    return _ps[pid]
+_sf={}
+def settings_env(pid):
+    cmd=ps_cmd(pid); files=[]
+    m=re.search(r'--settings(?:=|\s+)(\S+)',cmd)
+    if m: files.append(os.path.expanduser(m.group(1)))
+    files.append(f"{HOME}/.claude/settings.json"); env={}
+    for f in files:
+        if f not in _sf:
+            try: _sf[f]=json.load(open(f))
+            except Exception: _sf[f]={}
+        for k,v in (_sf[f].get("env") or {}).items(): env.setdefault(k,v)
+    return env,cmd
+CRS_PORT=str(os.environ.get("CRS_PORT","") or "3005").strip()
+CRS_PORTS=tuple(p for p in (CRS_PORT,"3000") if p)  # primary port + legacy :3000 alias
+def token_mode(pid):
+    env,cmd=settings_env(pid); base=str(env.get("ANTHROPIC_BASE_URL","") or ""); tok=str(env.get("CLAUDE_CODE_OAUTH_TOKEN","") or "")
+    if any(f":{p}" in base for p in CRS_PORTS) or tok.startswith("cr_") or "crs-session-settings" in cmd: return "crs"
+    if str(env.get("CLAUDE_CODE_USE_BEDROCK",""))=="1" or "use-bedrock" in cmd: return "bedrock"
+    if str(env.get("ANTHROPIC_API_KEY","")).startswith("sk-ant-"): return "api"
+    return "oauth"
+def ec2_token_mode(w):
+    # EC2 has no local ps/settings to inspect — infer from the session's job state.
+    # Bedrock model ids look like us.anthropic.claude-…/anthropic.claude-…; Max-OAuth
+    # aliases look like opus/haiku/sonnet/opus[1m].
+    if w.get("bedrock"): return "bedrock"
+    m=str(w.get("model") or "").lower()
+    if "anthropic.claude" in m or "bedrock" in m: return "bedrock"
+    return "oauth"
+def job_state(sid):
+    try: return json.load(open(f"{HOME}/.claude/jobs/{sid}/state.json"))
+    except Exception: return {}
+def jsonl_mtime(full):
+    if not full: return None
+    cs=glob.glob(f"{PROJ}/{full}*.jsonl") or glob.glob(f"{HOME}/.claude/projects/*/{full}*.jsonl")
+    try: return max(os.path.getmtime(x) for x in cs) if cs else None
+    except Exception: return None
+def last_error(full):
+    if not full: return ""
+    cs=glob.glob(f"{PROJ}/{full}*.jsonl") or glob.glob(f"{HOME}/.claude/projects/*/{full}*.jsonl")
+    if not cs: return ""
+    tail=sh(f"tail -c 60000 {max(cs,key=os.path.getmtime)!r} 2>/dev/null"); last=""
+    for line in tail.splitlines():
+        for pat,lbl in [("Usage credits","credits"),("Invalid API key","bad-key"),("temporarily limiting","529"),("Overloaded","529"),(r'"status":429',"429"),(r'"status":401',"401"),("rate.?limit","429")]:
+            if re.search(pat,line,re.I): last=lbl
+    return last
+def flagval(flags,k):
+    for i,f in enumerate(flags):
+        if f==k and i+1<len(flags): return flags[i+1]
+        if str(f).startswith(k+"="): return str(f).split("=",1)[1]
+    return ""
+def ago(ts):
+    if not ts: return "—"
+    d=max(0,int(NOW-ts))
+    if d<60: return f"{d}s"
+    if d<3600: return f"{d//60}m"
+    if d<86400: return f"{d//3600}h{(d%3600)//60}m"
+    return f"{d//86400}d{(d%86400)//3600}h"
+def iso_ago(s):
+    if not s: return "—"
+    try:
+        import datetime; return ago(datetime.datetime.fromisoformat(s.replace("Z","+00:00")).timestamp())
+    except Exception: return "—"
+def repo_of(cwd):
+    if not cwd: return "—"
+    return "~" if cwd==HOME else os.path.basename(cwd.rstrip("/"))
+
+# ---- daemon status parse ----
+def dval(key):
+    m=re.search(rf'^{key}:\s*(.+)$',dstat,re.M); return m.group(1).strip() if m else "?"
+d_pid=dval("pid"); d_ver=dval("version"); d_up=dval("uptime")
+m=re.search(r'bg workers:\s*(\d+) running.*?(\d+) in roster',dstat); d_work=f"{m.group(1)}/{m.group(2)}" if m else "?"
+m=re.search(r'roster\.json:\s*updated (.+?ago)',dstat); d_roster=m.group(1) if m else "?"
+sock="✓" if "control.sock: reachable" in dstat else "✗"
+origin="service" if "service" in dstat.lower() and "transient" not in dstat.lower() else ("transient" if "transient" in dstat else "?")
+try: d_up=ago(NOW-int(re.sub(r's$','',d_up)))
+except Exception: pass
+
+try: W=int(os.environ.get("FLEET_W") or 104)
+except Exception: W=104
+def bar(s): print(s)
+hb=f"{GRN}✓{R}" if crs_health=="200" else f"{RED}✗{crs_health or 'down'}{R}"
+rh=f"{GRN}✓ {rotor_pid}{R}" if rotor_pid else f"{RED}✗ down{R}"
+title=" FLEET DASHBOARD "; clock=f" {time.strftime('%Y-%m-%d %H:%M:%S')} "
+fill=W-len(title)-len(clock)
+print(f"{B}╔{title}{'═'*fill}{clock}╗{R}")
+print(f" {B}DAEMON{R}  pid {d_pid} · v{d_ver} · up {d_up} · {origin} · sock {sock} · workers {d_work} · roster {d_roster}")
+print(f" {B}CRS{R}     /health {hb} · allowlist {crs_allow_label} · 6m: done~{crs_done} {YEL}429:{crs_429}{R} {RED}529:{crs_529}{R} · keychain-swap {rh}")
+if ec2_on:
+    if ec2_ok:
+        m=re.search(r'(\d+) running.*?(\d+) in roster',ec2_daemon)
+        dw=f"workers {m.group(1)}/{m.group(2)} · " if m else ""
+        agestr=ago(ec2_fa)
+        stale=f" {YEL}(stale){R}" if (ec2_age is not None and ec2_age>120) else ""
+        print(f" {B}EC2 FRA{R} {GRN}✓{R} {ec2_n} sess · {dw}cache {agestr} ago{stale} {D}· {ec2_inst}{R}")
+    else:
+        print(f" {B}EC2 FRA{R} {RED}✗ {ec2_err or 'no cache'}{R} {D}(refreshing in background…){R}")
+print(f" {D}token {GRN}oauth{D}=Max  {YEL}api{D}=metered  {MAG}bedrock{D}=AWS  {CYN}crs{D}=relay→Max pool   crs: {CYN}▶{D}routing ●listed ·direct  {BLU}fra{D}=EC2 session{R}")
+print(f"{B}╚{'═'*(W)}╝{R}")
+
+# ---- group by state ----
+def skey(a):
+    o={"working":0,"busy":0,"waiting":1,"idle":2,"blocked":3}
+    return (o.get(a.get("state") or a.get("status"),4), a.get("name") or "z")
+counts={}
+for a in fleet:
+    k=a.get("state") or a.get("status") or "?"; counts[k]=counts.get(k,0)+1
+leg=f"  {GRN}●{R} working {counts.get('working',0)+counts.get('busy',0)}   {YEL}◐{R} waiting {counts.get('waiting',0)}   {D}○{R} idle {counts.get('idle',0)}   {RED}✗{R} blocked {counts.get('blocked',0)}   ({len(fleet)} total)"
+print(leg); print(f"{D}{'─'*W}{R}")
+ICON={"working":f"{GRN}●{R}","busy":f"{GRN}●{R}","waiting":f"{YEL}◐{R}","idle":f"{D}○{R}","blocked":f"{RED}✗{R}"}
+
+for a in sorted(fleet,key=skey):
+    sid=a.get("id") or a.get("sessionId","")[:8] or "?"; full=a.get("sessionId","")
+    # name is optional in `claude agents --json` — fall back to id/sessionId, never blank.
+    name=(a.get("name") or a.get("id") or a.get("sessionId") or "?")[:26]; kind="bg" if a.get("kind")=="background" else "int"
+    status=a.get("status","");state=a.get("state","")
+    sstr=f"{status}/{state}" if state and state!=status else (status or state or "—")
+    is_ec2=(a.get("_host")=="fra"); pid=a.get("pid","")
+    if is_ec2:
+        # EC2 rows: sourced from the cached snapshot (live agents + per-session info
+        # read from each EC2 session's jobs/<sid>/state.json). No local ps / transcript
+        # / account-lease over SSM, so those columns stay blank.
+        w=ec2_info.get(sid,{}); mode=ec2_token_mode(w); tcol=TOK.get(mode,"")
+        crsf=f"{D}·{R}"
+        mdl=w.get("model") or "·"; eff=w.get("effort") or "·"
+        chan="imsg" if w.get("chan") else ""; fan=w.get("fan") or 0
+        repo=repo_of(w.get("cwd") or a.get("cwd")); acct="—"; err=""
+        detail=(w.get("detail") or "").replace("\n"," ").strip()[:W-7]
+        up=iso_ago(w.get("createdAt")) if w.get("createdAt") else ago(a.get("startedAt",0)/1000 if a.get("startedAt") else 0)
+        upd=iso_ago(w.get("updatedAt")) if w.get("updatedAt") else "—"; lw="—"
+        att=None; src="ec2"; agent="claude"; iso=""
+    else:
+        mode=token_mode(pid); tcol=TOK.get(mode,"")
+        listed=(sid in crs_allow) or (crs_allow_all and sid not in crs_allow_except)
+        crsf=f"{CYN}▶{R}" if mode=="crs" else (f"{CYN}●{R}" if listed else f"{D}·{R}")
+        js=job_state(sid); flags=js.get("respawnFlags",[]) or []
+        eff=flagval(flags,"--effort") or "·"; mdl=flagval(flags,"--model") or "·"
+        chan="imsg" if any("imessage" in str(f) for f in flags) else ""
+        fan=len(js.get("fan") or []); repo=repo_of(js.get("cwd") or a.get("cwd"))
+        up=iso_ago(js.get("createdAt")) if js.get("createdAt") else ago(a.get("startedAt",0)/1000 if a.get("startedAt") else 0)
+        upd=iso_ago(js.get("updatedAt")); lw=ago(jsonl_mtime(full)); acct=lease.get(sid,"—")
+        w=roster.get(sid,{}); att=w.get("attempt"); src=(w.get("dispatch") or {}).get("source",""); agent=(w.get("dispatch") or {}).get("agent","") or "claude"; iso=(w.get("dispatch") or {}).get("isolation","")
+        detail=(js.get("detail") or "").replace("\n"," ").strip()[:W-7]; err=last_error(full)
+    dot=ICON.get(state,ICON.get(status,"·")); stshort=(state or status or "—")[:7]
+    def padr(s,n): s=str(s); return s[:n]+" "*max(0,n-len(s))
+    # tags (only when present, so the common case stays clean)
+    tags=[]
+    if is_ec2: tags.append(f"{BLU}fra{R}{D}")
+    if fan: tags.append(f"team:{fan}")
+    if chan: tags.append(f"{CYN}chan:{chan}{R}{D}")
+    if iso and iso!="none": tags.append(f"iso:{iso}")
+    if att: tags.append(f"{RED}att:{att}⚠{R}{D}" if att>=3 else f"att:{att}")
+    if acct and acct!="—": tags.append(f"@{acct}")
+    tagstr=("  "+"  ".join(tags)) if tags else ""
+    errbadge=f"  {RED}⚠ {err}{R}" if err else ""
+    # line 1 — identity row, aligned columns (name colored by token type)
+    print(f"{dot} {B}{sid}{R} {tcol}{padr(name,24)}{R} {crsf} {tcol}{mode:6}{R} {D}{padr(mdl+'/'+eff,11)} {padr(repo,13)}{tagstr}{R}{errbadge}")
+    # line 2 — compact meta + timing
+    print(f"   {D}{kind} · {stshort:7} · pid {pid:<6} · up {up} · idle {upd} · wrote {lw}{R}")
+    # line 3 — live detail (only when present)
+    if detail:
+        print(f"   {D}» {detail}{R}")
+print(f"{D}{'─'*W}{R}")
+
+# ---- account utilization ----
+print(f"{B}ACCOUNTS{R} {D}(keychain Max pool — util% · reset · last-active){R}")
+def reset_in(u):
+    r=u.get("reset");
+    if not r: return "—"
+    return f"in {ago(2*NOW-r)}" if r>NOW else "now"
+for email,info in sorted(accts.items(),key=lambda x:-(x[1].get("lastUtilization",{}).get("pct") or 0)):
+    u=info.get("lastUtilization",{}) or {}; pct=u.get("pct")
+    n=int((pct or 0)/10); col=RED if (pct or 0)>=90 else (YEL if (pct or 0)>=70 else GRN)
+    barv=f"{col}{'█'*n}{D}{'░'*(10-n)}{R}"
+    bill=(info.get("lastBilling",{}) or {}).get("billing_type","—"); extra=" +x" if (info.get("lastBilling",{}) or {}).get("extra_usage_enabled") else ""
+    print(f"  {email:34} {barv} {col}{str(pct if pct is not None else '—'):>3}%{R} {D}{reset_in(u):>9} · act {iso_ago(info.get('lastActive')):>6} · {bill}{extra}{R}")
+
+# ---- CRS proxy routing ----
+if acct_hits:
+    print(f"{B}CRS ROUTING{R} {D}(accounts used last 6m){R}")
+    line="  "+"  ".join(f"{CYN}{a}{R}{D}:{n}{R}" for a,n in sorted(acct_hits.items(),key=lambda x:-x[1]))
+    print(line)
+PY
+  rm -rf "$TMP"
+}
+
+if [ -n "$WATCH" ]; then
+  # Full-screen TUI: alternate screen buffer so the terminal is restored on exit,
+  # hidden cursor, and instant `q`-to-quit (refresh doubles as the keypress poll).
+  cleanup(){ tput rmcup 2>/dev/null; tput cnorm 2>/dev/null; stty echo 2>/dev/null; exit 0; }
+  trap cleanup INT TERM EXIT
+  tput smcup 2>/dev/null; tput civis 2>/dev/null; stty -echo 2>/dev/null
+  while true; do
+    out="$(render)"
+    tput cup 0 0 2>/dev/null; printf '%s' "$out"; tput ed 2>/dev/null
+    bar="  ${WSECS}s refresh · press q to quit"
+    printf '\n\033[2m%s\033[0m' "$bar"
+    # Wait WSECS for a keypress; q (or Q/Esc) exits immediately, else re-render.
+    read -rsn1 -t "$WSECS" key 2>/dev/null
+    case "$key" in q|Q|$'\e') cleanup;; esac
+  done
+else
+  render
+fi
