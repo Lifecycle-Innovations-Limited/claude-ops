@@ -115,3 +115,34 @@ bash claude-ops/tests/test-safety-hooks.sh
 - [`docs/deploy-fix.md`](deploy-fix.md) — auto-fix subsystem (independent of safety hooks).
 - [`docs/agents.md`](agents.md) — specialized agent system.
 - [`docs/INDEX.md`](INDEX.md) — full documentation index.
+
+## bedrock-billing-guard (PreToolUse) — metered-spend protection
+
+`hooks/bedrock-billing-guard.mjs` hard-stops any Claude session that is **measured
+to be billing AWS Bedrock** (metered per-token spend, not the Max/CRS account
+pool). It is the agent-facing complement to the rotation daemon's
+`scripts/account-rotation/bedrock-watchdog.mjs`, which detects + force-swaps such
+sessions off Bedrock within ~45s.
+
+**How it knows.** A PreToolUse hook runs as a child of the session's node process,
+so it inherits the live `process.env` — including a runtime-injected
+`CLAUDE_CODE_USE_BEDROCK=1` (the literal billing flag). That env var *is* the
+measurement; there is no false positive. It also honors a daemon-written offender
+flag (`/tmp/claude-bedrock-offender-<short-session-id>`) from the watchdog's
+network/env measurement.
+
+**Behavior — configurable via `CLAUDE_BEDROCK_GUARD`** (or `~/.claude/bedrock-guard.conf`):
+
+| mode | effect |
+|------|--------|
+| `block` (default) | Hard-block **every** tool call (exit 2) with a loud `$$$` error. Dismiss only by explicit acknowledgement: run `echo BEDROCK-ACK`. This is the only way to proceed while still on Bedrock (the legitimate no-OAuth last-resort case). |
+| `warn` | Never block — inject a one-line non-blocking warning into the agent's context on each tool call. |
+| `off` | No-op. For users who intentionally run **Bedrock unrestricted**. |
+
+When OAuth headroom exists, the watchdog respawns the session onto CRS/OAuth and
+clears the flag, so the block lifts on its own. The guard is **fail-open**: any
+error, missing input, or unexpected state allows the tool (a money guard must
+never wedge an innocent session).
+
+**Disable / make unrestricted:** set `CLAUDE_BEDROCK_GUARD=off` in the environment,
+or `echo off > ~/.claude/bedrock-guard.conf`.
