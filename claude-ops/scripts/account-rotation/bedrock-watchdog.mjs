@@ -312,16 +312,19 @@ function buildPpidMap() {
 // session MEASURED on Bedrock get a blocking error in its OWN loop (dismissable
 // only by explicit `echo BEDROCK-ACK`). Cleared once the session is swapped off.
 const OFFENDER_FLAG = (shortId) => `/tmp/claude-bedrock-offender-${shortId}`;
-function writeOffenderFlag(shortId, via) {
+function offenderShortId(sessionId) {
+  const s = String(sessionId || '');
+  return s ? s.slice(0, 8) : '';
+}
+function writeOffenderFlag(sessionId, via) {
+  const shortId = offenderShortId(sessionId);
   if (!shortId) return;
   try {
-    writeFileSync(
-      OFFENDER_FLAG(shortId),
-      `measured via ${via || 'env'} by rotation watchdog — metered AWS Bedrock`,
-    );
+    writeFileSync(OFFENDER_FLAG(shortId), `measured via ${via || 'env'} by rotation watchdog — metered AWS Bedrock`);
   } catch {}
 }
-function clearOffenderFlag(shortId) {
+function clearOffenderFlag(sessionId) {
+  const shortId = offenderShortId(sessionId);
   if (!shortId) return;
   try {
     unlinkSync(OFFENDER_FLAG(shortId));
@@ -438,13 +441,14 @@ export function sweepBedrockSessions(config, state, log) {
       log(
         `[bedrock-watchdog] FORCE-swapping ${bgSession.id} (pid ${sess.pid}, status ${bgSession.status}, via ${viaDetail}) Bedrock→OAuth ${target} (no defer — metered)`,
       );
-      doRespawn(bgSession, log);
-      // Swapped off Bedrock — clear the offender flag so the respawned (clean)
-      // session's guard hook stops blocking. (If the swap fails, the flag stays
-      // and the agent must ack.)
-      clearOffenderFlag(bgSession.id);
-      swapped++;
-      swappedPids.push(sess.pid);
+      if (doRespawn(bgSession, log)) {
+        // Swapped off Bedrock — clear the offender flag so the respawned (clean)
+        // session's guard hook stops blocking. (If the swap fails, the flag stays
+        // and the agent must ack.)
+        clearOffenderFlag(bgSession.id);
+        swapped++;
+        swappedPids.push(sess.pid);
+      }
     } catch (e) {
       log(`[bedrock-watchdog] force-swap of ${bgSession.id} failed: ${e.message?.slice(0, 100)}`);
     }
