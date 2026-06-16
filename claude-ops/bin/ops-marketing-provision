@@ -863,7 +863,7 @@ cmd_provision_google_ads() {
     local auth_url
     auth_url=$(gads_authorize_url "$client_id")
     log "Open: $auth_url"
-    log "(opens automatically — Sam should authorize on the consent screen)"
+    log "(opens automatically — the owner should authorize on the consent screen)"
 
     # Open + capture in parallel; capture writes the code to a temp file.
     local code_file
@@ -999,7 +999,7 @@ cmd_provision_google_ads() {
     if [ "${#non_manager_ids[@]}" = "1" ]; then
       chosen_customer="${non_manager_ids[0]}"
     elif [ -t 0 ] && [ -t 2 ] && [ "$OPS_MARKETING_BACKGROUND" != "1" ]; then
-      # Interactive: prompt Sam to pick by ID
+      # Interactive: prompt the owner to pick by ID
       printf 'Enter customer ID to use: ' >&2
       local picked=""
       read -r picked </dev/tty

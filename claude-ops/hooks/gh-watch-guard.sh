@@ -40,7 +40,7 @@ esac
 
 # --- Pattern 1: --watch flag on gh pr checks / gh run watch ---
 # `gh pr checks <PR> --watch` and `gh run watch` poll every 2-5s.
-# 5000 REST/hr ÷ 2s = exhausted in ~3 hours of one process. Sam saw this in production.
+# 5000 REST/hr ÷ 2s = exhausted in ~3 hours of one process. the owner saw this in production.
 if echo "$CMD_ONELINE" | grep -qE 'gh[[:space:]]+pr[[:space:]]+checks[[:space:]]+[^|]*--watch|gh[[:space:]]+run[[:space:]]+watch'; then
     emit_pre_tool_deny <<'EOF'
 BLOCKED: `gh ... --watch` polls every 2-5s and exhausts the 5000/hr REST quota.

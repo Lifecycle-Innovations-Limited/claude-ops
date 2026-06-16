@@ -1,7 +1,7 @@
 ---
 name: ops-aws-audit
 description: Read-only AWS account hygiene audit — security baseline, unused/orphaned resources, and cost optimization across all configured regions. Produces severity-ranked findings (CRITICAL→LOW) plus a machine-readable findings.json. Cleanup actions are always human-gated, never automatic. Use for cost reviews, security sweeps, recurring account hygiene, or "audit my AWS".
-argument-hint: "[--quiet] [--schedule] [region,region]"
+argument-hint: '[--quiet] [--schedule] [region,region]'
 allowed-tools:
   - Bash
   - Read
@@ -20,6 +20,7 @@ Runs `scripts/ops-aws-audit.sh` — a **read-only** sweep that never mutates AWS
 It inventories and analyses, then writes a severity-ranked report.
 
 Checks include (2026 baseline):
+
 - **IAM / credentials** — root access key + root MFA, access keys older than
   `AUDIT_KEY_AGE_DAYS` (default 90), console users without MFA, and whether an
   **IAM Access Analyzer (UNUSED_ACCESS)** is configured.
@@ -39,13 +40,13 @@ Checks include (2026 baseline):
 
 ## Configuration (env, all optional)
 
-| Var | Default | Meaning |
-|-----|---------|---------|
-| `AUDIT_PROFILE` | _(unset)_ | Named AWS profile. Unset ⇒ standard chain (env keys / instance role / SSO). |
-| `AUDIT_REGIONS` | `$AWS_REGION` or `us-east-1` | Comma-separated regions. |
-| `AUDIT_OUTPUT_DIR` | `~/.aws-audit-history/audit-<ts>` | Where reports land. |
-| `AUDIT_KEY_AGE_DAYS` | `90` | Active access-key age threshold. |
-| `AUDIT_COST_DAYS` | `7` | Cost comparison window. |
+| Var                  | Default                           | Meaning                                                                     |
+| -------------------- | --------------------------------- | --------------------------------------------------------------------------- |
+| `AUDIT_PROFILE`      | _(unset)_                         | Named AWS profile. Unset ⇒ standard chain (env keys / instance role / SSO). |
+| `AUDIT_REGIONS`      | `$AWS_REGION` or `us-east-1`      | Comma-separated regions.                                                    |
+| `AUDIT_OUTPUT_DIR`   | `~/.aws-audit-history/audit-<ts>` | Where reports land.                                                         |
+| `AUDIT_KEY_AGE_DAYS` | `90`                              | Active access-key age threshold.                                            |
+| `AUDIT_COST_DAYS`    | `7`                               | Cost comparison window.                                                     |
 
 ## How to run
 
@@ -82,6 +83,7 @@ claude --bg --name aws-audit -- bash "${CLAUDE_PLUGIN_ROOT}/scripts/ops-aws-audi
 ## Cleanup is human-gated (never automatic)
 
 This skill **only audits**. To act on a finding:
+
 1. Show the user the specific finding(s) and the exact `aws` command(s).
 2. Get explicit per-batch approval (`ok` / `yes` / `proceed`).
 3. For any deletion/rotation, snapshot state first; log resource IDs after.

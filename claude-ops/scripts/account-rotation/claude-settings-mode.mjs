@@ -1,16 +1,37 @@
 /**
  * Mutate ~/.claude/settings.json for OAuth vs Bedrock so Claude Code does not
  * keep stale hardcoded model IDs when switching modes (daemon + rotate paths).
- * Model selection is left to Claude Code / the provider default.
+ *
+ * Bedrock primary + small-fast IDs are resolved from `aws bedrock list-inference-profiles`
+ * when possible (latest Sonnet / Haiku by version rank); falls back to pinned defaults
+ * if AWS CLI fails. Set BEDROCK_SKIP_RESOLVE=1 to force defaults only.
  */
 
 import { readFileSync, writeFileSync, renameSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
-import { setRouteMode } from './route-state.mjs';
 
 function claudeSettingsPath() {
   return join(process.env.HOME || '', '.claude', 'settings.json');
+}
+
+// ── CRS (Claude Relay Service) routing awareness ───────────────────────────────
+// When a box routes through CRS, ANTHROPIC_BASE_URL points at the local relay
+// (e.g. http://127.0.0.1:3005/api) and CLAUDE_CODE_OAUTH_TOKEN holds a static
+// `cr_…` relay token. Both must travel together — a `cr_` token with no base URL
+// 401s. The Bedrock/OAuth settings mutators below were written for the raw-OAuth /
+// Bedrock world and would silently strip ANTHROPIC_BASE_URL, stranding a CRS box.
+// These helpers detect that routing and snapshot/restore the pair so a mode flip
+// never breaks (or money-leaks past) a CRS-routed fleet.
+function isCrsToken(t) {
+  return typeof t === 'string' && t.startsWith('cr_');
+}
+
+/** True when settings.env is wired for CRS relay routing (cr_ token + base URL). */
+function detectCrsRouting(env) {
+  const token = env.CLAUDE_CODE_OAUTH_TOKEN;
+  const base = env.ANTHROPIC_BASE_URL;
+  return isCrsToken(token) && typeof base === 'string' && base.length > 0 ? { token, base } : null;
 }
 
 function readSettings() {
@@ -28,12 +49,64 @@ function writeSettingsAtomic(s) {
   renameSync(tmp, p);
 }
 
+// Profiles to probe, in order. Override with AWS_PROFILE_CANDIDATES (comma-separated)
+// to add deployment-specific named profiles without editing source.
+const AWS_PROFILE_CANDIDATES = (process.env.AWS_PROFILE_CANDIDATES || 'default,ec2-user-cli')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+function awsProfileProbeEnv(profile, region = 'us-east-1') {
+  const env = {
+    ...process.env,
+    AWS_PROFILE: profile,
+    AWS_DEFAULT_PROFILE: profile,
+    AWS_REGION: region,
+    AWS_DEFAULT_REGION: region,
+  };
+  env.AWS_ACCESS_KEY_ID = '';
+  env.AWS_SECRET_ACCESS_KEY = '';
+  env.AWS_SESSION_TOKEN = '';
+  return env;
+}
+
+export function resolveWorkingAwsEnv(region = 'us-east-1') {
+  try {
+    execFileSync('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      timeout: 5000,
+      env: { ...process.env, AWS_REGION: region, AWS_DEFAULT_REGION: region },
+    });
+    return {
+      env: { ...process.env, AWS_REGION: region, AWS_DEFAULT_REGION: region },
+      profile: process.env.AWS_PROFILE || '',
+    };
+  } catch {}
+  for (const profile of AWS_PROFILE_CANDIDATES) {
+    const env = awsProfileProbeEnv(profile, region);
+    try {
+      execFileSync('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
+        encoding: 'utf8',
+        stdio: 'pipe',
+        timeout: 5000,
+        env,
+      });
+      return { env, profile };
+    } catch {}
+  }
+  return {
+    env: { ...process.env, AWS_REGION: region, AWS_DEFAULT_REGION: region },
+    profile: process.env.AWS_PROFILE || '',
+  };
+}
+
 function getFallbacksForPrefix(prefix) {
   return {
-    primary: '',
-    small: '',
-    opus: '',
-    fable: '',
+    primary: `${prefix}anthropic.claude-sonnet-4-6`,
+    small: `${prefix}anthropic.claude-haiku-4-5-20251001-v1:0`,
+    opus: `${prefix}anthropic.claude-opus-4-1-20250805-v1:0`,
+    fable: `${prefix}anthropic.claude-fable-5`,
   };
 }
 
@@ -50,6 +123,7 @@ export function preferredInferencePrefix(awsRegion) {
 function listAllInferenceProfilesSync(region) {
   const summaries = [];
   let startingToken;
+  const aws = resolveWorkingAwsEnv(region);
   for (;;) {
     const args = [
       'bedrock',
@@ -66,6 +140,7 @@ function listAllInferenceProfilesSync(region) {
       encoding: 'utf8',
       maxBuffer: 32 * 1024 * 1024,
       timeout: 60_000,
+      env: aws.env,
     });
     const data = JSON.parse(out);
     summaries.push(...(data.inferenceProfileSummaries || []));
@@ -172,19 +247,82 @@ export function resolveBedrockClaudeModelIds(region = 'us-east-1') {
 
 /** Match use-bedrock.sh: Bedrock env + strip top-level model lists (OAuth catalog ids break Bedrock). */
 export function persistBedrockClaudeSettings(region = 'us-east-1') {
-  return setRouteMode('bedrock-confirmed', {
-    reason: process.env.CLAUDE_BEDROCK_REASON || 'fallback',
-    confirmMetered: process.env.CLAUDE_CONFIRM_METERED_BEDROCK === '1',
-    ttlMinutes: Number.parseInt(process.env.CLAUDE_BEDROCK_CONFIRM_TTL_MINUTES || '60', 10),
-    region,
-    updatedBy: 'claude-settings-mode',
-  });
+  const s0 = readSettings();
+  const env0 = s0.env && typeof s0.env === 'object' ? s0.env : {};
+  // Defense-in-depth behind the activateBedrockFallback kill-switch: a CRS-routed
+  // box must NEVER be flipped onto metered Bedrock — the free relay pool already
+  // multiplexes every Max account. Refuse loudly so callers' try/catch logs a
+  // failure instead of silently claiming "Bedrock active" + money-leaking.
+  // Override with CLAUDE_ALLOW_BEDROCK_OVER_CRS=1 if ever genuinely intended.
+  if (detectCrsRouting(env0) && process.env.CLAUDE_ALLOW_BEDROCK_OVER_CRS !== '1') {
+    throw new Error(
+      'refusing Bedrock flip: box is CRS-routed (cr_ token + ANTHROPIC_BASE_URL). ' +
+        'CRS pool already covers capacity; Bedrock is metered. Set CLAUDE_ALLOW_BEDROCK_OVER_CRS=1 to override.',
+    );
+  }
+  const { primary, small, opus, fable } = resolveBedrockClaudeModelIds(region);
+  const aws = resolveWorkingAwsEnv(region);
+  const s = readSettings();
+  const env = s.env && typeof s.env === 'object' ? { ...s.env } : {};
+  env.CLAUDE_CODE_USE_BEDROCK = '1';
+  env.AWS_BEDROCK_REGION = region;
+  env.AWS_REGION = region;
+  env.AWS_DEFAULT_REGION = region;
+  if (aws.profile) {
+    env.AWS_PROFILE = aws.profile;
+    env.AWS_DEFAULT_PROFILE = aws.profile;
+  }
+  env.AWS_ACCESS_KEY_ID = '';
+  env.AWS_SECRET_ACCESS_KEY = '';
+  env.AWS_SESSION_TOKEN = '';
+  env.ANTHROPIC_MODEL = primary;
+  env.ANTHROPIC_SMALL_FAST_MODEL = small;
+  env.ANTHROPIC_DEFAULT_SONNET_MODEL = primary;
+  env.ANTHROPIC_DEFAULT_HAIKU_MODEL = small;
+  env.ANTHROPIC_DEFAULT_OPUS_MODEL = opus;
+  env.ANTHROPIC_DEFAULT_FABLE_MODEL = fable;
+  delete env.ANTHROPIC_API_KEY;
+  delete env.ANTHROPIC_AUTH_TOKEN;
+  delete env.ANTHROPIC_BASE_URL;
+  s.env = env;
+  delete s.model;
+  delete s.availableModels;
+  writeSettingsAtomic(s);
 }
 
 /** Match use-oauth.sh: no hardcoded models — Claude Code loads subscription catalog from API. */
 export function clearHardcodedModelsForOAuthClaudeSettings() {
-  return setRouteMode('crs-oauth', {
-    reason: process.env.CLAUDE_ROUTE_REASON || 'oauth-restored',
-    updatedBy: 'claude-settings-mode',
-  });
+  const s = readSettings();
+  const env = s.env && typeof s.env === 'object' ? { ...s.env } : {};
+  // Preserve CRS relay routing across the flip: a `cr_` token + ANTHROPIC_BASE_URL
+  // must survive together. The generic clear below strips ANTHROPIC_BASE_URL (it
+  // assumes raw OAuth, where base-url must be absent), which on a CRS box would
+  // leave the cr_ token pointing at api.anthropic.com → 401, killing the relay.
+  // Snapshot the pair before clearing, then restore it.
+  const crs = detectCrsRouting(env);
+  for (const k of [
+    'CLAUDE_CODE_USE_BEDROCK',
+    'AWS_BEDROCK_REGION',
+    'AWS_REGION',
+    'ANTHROPIC_API_KEY',
+    'ANTHROPIC_AUTH_TOKEN',
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_MODEL',
+    'ANTHROPIC_SMALL_FAST_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL',
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    'ANTHROPIC_DEFAULT_FABLE_MODEL',
+  ]) {
+    delete env[k];
+  }
+  if (crs) {
+    // Restore the relay pair so the box keeps routing through CRS, not raw OAuth.
+    env.ANTHROPIC_BASE_URL = crs.base;
+    env.CLAUDE_CODE_OAUTH_TOKEN = crs.token;
+  }
+  s.env = env;
+  delete s.model;
+  delete s.availableModels;
+  writeSettingsAtomic(s);
 }

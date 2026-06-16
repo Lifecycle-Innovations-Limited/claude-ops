@@ -1,7 +1,7 @@
 ---
 name: ops-secret-sync
 description: Detects and syncs Doppler→GitHub secrets drift. Compares last-updated timestamps between Doppler and GH repo secrets; flags stale GH secrets (>24h behind Doppler); confirms with user before writing any changes. Safe to run in CI or locally.
-argument-hint: "[--repo <owner/repo>] [--project <doppler-proj>] [--config <doppler-env>] [--dry-run]"
+argument-hint: '[--repo <owner/repo>] [--project <doppler-proj>] [--config <doppler-env>] [--dry-run]'
 allowed-tools:
   - Bash
   - AskUserQuestion
@@ -15,12 +15,12 @@ Detect GitHub secrets that are stale relative to Doppler. Confirm before syncing
 
 ## CLI/API Reference
 
-| Command | Purpose |
-|---------|---------|
-| `gh secret list --repo <owner/repo> --json name,updatedAt` | List GH repo secrets with timestamps |
-| `doppler secrets --project <proj> --config <env> --json` | List Doppler secrets with metadata |
-| `doppler secrets get <NAME> --project <proj> --config <env> --plain` | Fetch raw value for sync |
-| `gh secret set <NAME> --repo <owner/repo>` | Write secret to GH (reads stdin) |
+| Command                                                              | Purpose                              |
+| -------------------------------------------------------------------- | ------------------------------------ |
+| `gh secret list --repo <owner/repo> --json name,updatedAt`           | List GH repo secrets with timestamps |
+| `doppler secrets --project <proj> --config <env> --json`             | List Doppler secrets with metadata   |
+| `doppler secrets get <NAME> --project <proj> --config <env> --plain` | Fetch raw value for sync             |
+| `gh secret set <NAME> --repo <owner/repo>`                           | Write secret to GH (reads stdin)     |
 
 ---
 
@@ -62,11 +62,13 @@ doppler secrets --project <proj> --config <env> --json 2>/dev/null
 Parse outputs:
 
 **GH format** (array):
+
 ```json
 [{"name": "INNGEST_SIGNING_KEY", "updatedAt": "2026-04-23T09:12:00Z"}, ...]
 ```
 
 **Doppler format** (object keyed by name):
+
 ```json
 {
   "INNGEST_SIGNING_KEY": {"computed": "...", "note": "", "rawValue": "...", "updatedAt": "2026-04-23T10:00:00Z"},
@@ -189,11 +191,11 @@ If failures > 0: suggest `doppler run --project <proj> --config <env> -- gh secr
 
 This skill exists because of a common drift pattern:
 
-| Project | Secret | Situation |
-|---------|--------|-----------|
-| `<your-api>` | `INNGEST_SIGNING_KEY` | Rotated in Doppler — GH secret was 24 days stale, CI failures started after the grace period |
-| `<your-service>` | `CEREBRAS_API_KEY` | Added to Doppler, never propagated to GH secrets — CI gate failed |
-| `<your-service>` | `OPENROUTER_API_KEY` | Same pattern — GH missing, Doppler current |
+| Project          | Secret                | Situation                                                                                    |
+| ---------------- | --------------------- | -------------------------------------------------------------------------------------------- |
+| `<your-api>`     | `INNGEST_SIGNING_KEY` | Rotated in Doppler — GH secret was 24 days stale, CI failures started after the grace period |
+| `<your-service>` | `CEREBRAS_API_KEY`    | Added to Doppler, never propagated to GH secrets — CI gate failed                            |
+| `<your-service>` | `OPENROUTER_API_KEY`  | Same pattern — GH missing, Doppler current                                                   |
 
 Running `/ops:secret-sync --repo <your-org>/<your-api> --project <your-api> --config prd` would have surfaced `INNGEST_SIGNING_KEY` as DRIFTED before CI failed.
 

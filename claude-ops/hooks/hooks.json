@@ -63,6 +63,16 @@
             "async": true
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/bedrock-billing-guard.mjs",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [

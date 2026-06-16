@@ -121,4 +121,3 @@ Mirror the webhook to the flat `discord_webhook_url` key so `scripts/ops-notify.
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-comms/SKILL.md` (Discord send/read sections) and `${CLAUDE_PLUGIN_ROOT}/bin/ops-discord` for full operational instructions and subcommand reference.
 
 ---
-

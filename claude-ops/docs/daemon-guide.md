@@ -2,15 +2,15 @@
 
 # Daemon Guide
 
-*The unified background process manager that pre-warms briefings, syncs WhatsApp, extracts memories, and watches your fires — persistently, via launchd*
+_The unified background process manager that pre-warms briefings, syncs WhatsApp, extracts memories, and watches your fires — persistently, via launchd_
 
 [![version](https://img.shields.io/badge/version-2.1.0-blue)](../CHANGELOG.md)
 
 > [!NOTE]
 > v2.0 introduces two **additional** daemons alongside the v1 ops-daemon documented here: the **recap-daemon** ([`recap.md`](recap.md)) and the **account-rotation daemon** ([`CHANGELOG.md`](../CHANGELOG.md#6-multi-account-claude-max-rotator)). The ops-daemon described below is unchanged in v2.
-[![services](https://img.shields.io/badge/services-7-f59e0b)](.)
-[![launchd](https://img.shields.io/badge/runtime-launchd-6366f1)](.)
-[![pre--warm](https://img.shields.io/badge/pre--warm-every%202%20min-22c55e)](.)
+> [![services](https://img.shields.io/badge/services-7-f59e0b)](.)
+> [![launchd](https://img.shields.io/badge/runtime-launchd-6366f1)](.)
+> [![pre--warm](https://img.shields.io/badge/pre--warm-every%202%20min-22c55e)](.)
 
 </div>
 
@@ -27,17 +27,17 @@ The **ops-daemon** is a unified background process manager that runs persistentl
 
 The daemon supervises **seven** long-lived services:
 
-| Service | Cadence | Purpose |
-|---------|---------|---------|
-| `briefing-pre-warm` | every **2 min** | Runs `bin/ops-gather` to keep `/ops:go` cache hot |
-| `whatsapp-bridge-sync` | persistent | Keeps WhatsApp connected, auto-reconnects, backfills `@lid` chats |
-| `memory-extractor` | every 30 min | Spawns `memory-extractor` agent to refresh `memories/` |
-| `inbox-digest` | every 15 min | Pre-classifies comms across channels for `/ops:inbox` |
-| `store-health` | every 10 min | Shopify orders + inventory polling (if configured) |
-| `competitor-intel` | Mon 10:00 (TZ) | **v2.3**: weekly strategic synthesis. Tavily discovery (cached 30d) + 5 parallel signal collectors (Reddit/HN/AppStore/jobs/page-diff) + 7d events.jsonl window → Sonnet → `reports/competitor-intel/YYYY-MM-DD_<brand>.md` |
-| `competitor-alert` | every 10 min | **v2.3**: drains `queue/immediate.jsonl` (severity:high). Telegram push if configured + always appends to `alerts.log`. Heartbeats on empty queue |
-| `competitor-daily` | daily 17:00 (TZ) | **v2.3**: drains `queue/daily.jsonl` (severity:med). Groups by competitor, emits `daily-YYYY-MM-DD.md` roll-up + Telegram digest |
-| `message-listener` | persistent | Surfaces urgent patterns (your name, "urgent", "ASAP", "fire", "down") |
+| Service                | Cadence          | Purpose                                                                                                                                                                                                                     |
+| ---------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `briefing-pre-warm`    | every **2 min**  | Runs `bin/ops-gather` to keep `/ops:go` cache hot                                                                                                                                                                           |
+| `whatsapp-bridge-sync` | persistent       | Keeps WhatsApp connected, auto-reconnects, backfills `@lid` chats                                                                                                                                                           |
+| `memory-extractor`     | every 30 min     | Spawns `memory-extractor` agent to refresh `memories/`                                                                                                                                                                      |
+| `inbox-digest`         | every 15 min     | Pre-classifies comms across channels for `/ops:inbox`                                                                                                                                                                       |
+| `store-health`         | every 10 min     | Shopify orders + inventory polling (if configured)                                                                                                                                                                          |
+| `competitor-intel`     | Mon 10:00 (TZ)   | **v2.3**: weekly strategic synthesis. Tavily discovery (cached 30d) + 5 parallel signal collectors (Reddit/HN/AppStore/jobs/page-diff) + 7d events.jsonl window → Sonnet → `reports/competitor-intel/YYYY-MM-DD_<brand>.md` |
+| `competitor-alert`     | every 10 min     | **v2.3**: drains `queue/immediate.jsonl` (severity:high). Telegram push if configured + always appends to `alerts.log`. Heartbeats on empty queue                                                                           |
+| `competitor-daily`     | daily 17:00 (TZ) | **v2.3**: drains `queue/daily.jsonl` (severity:med). Groups by competitor, emits `daily-YYYY-MM-DD.md` roll-up + Telegram digest                                                                                            |
+| `message-listener`     | persistent       | Surfaces urgent patterns (your name, "urgent", "ASAP", "fire", "down")                                                                                                                                                      |
 
 > [!TIP]
 > The `briefing-pre-warm` service is what makes `/ops:go` feel instant. It runs `bin/ops-gather` every 2 minutes so the cache is always <2 min stale when you ask.
@@ -138,12 +138,12 @@ The daemon writes `~/.whatsapp-bridge/.health` on every successful whatsapp-brid
 }
 ```
 
-| Field | Meaning |
-|-------|---------|
-| `status` | `ok`, `degraded`, or `down` |
-| `last_sync` | ISO timestamp of last successful whatsapp-bridge poll |
-| `wacli_pid` | PID of the running whatsapp-bridge process |
-| `message_count` | Total messages in local DB |
+| Field           | Meaning                                               |
+| --------------- | ----------------------------------------------------- |
+| `status`        | `ok`, `degraded`, or `down`                           |
+| `last_sync`     | ISO timestamp of last successful whatsapp-bridge poll |
+| `wacli_pid`     | PID of the running whatsapp-bridge process            |
+| `message_count` | Total messages in local DB                            |
 
 > [!WARNING]
 > If `last_sync` is more than **10 minutes** ago, the PreToolUse hook surfaces a warning before any WhatsApp command. Running `/ops:doctor` will auto-restart the daemon if this happens.
@@ -153,6 +153,7 @@ The daemon writes `~/.whatsapp-bridge/.health` on every successful whatsapp-brid
 ## 🪝 PreToolUse Hook
 
 `hooks/whatsapp-health-check.sh` runs automatically before any `whatsapp-bridge` call. It checks the health file and either:
+
 - Proceeds silently if `status === ok` and `last_sync` is recent
 - Surfaces a warning with instructions to restart the daemon if degraded
 
@@ -163,6 +164,7 @@ The hook is registered in `.claude/settings.json` under `preToolUse`.
 ## 🧠 Brain Layer
 
 The daemon includes a lightweight brain layer (`bin/ops-brain`) that:
+
 - Pre-fetches briefing data every **2 minutes** via `briefing-pre-warm` and caches it to `~/.claude/plugins/data/.../daemon-cache.json`
 - Detects urgent message patterns (mentions of your name, "urgent", "ASAP", "fire", "down")
 - Writes urgent flags to the health file so `/ops:go` can surface them instantly
@@ -191,13 +193,13 @@ launchctl load ~/Library/LaunchAgents/com.claude-ops.daemon.plist
 
 Common issues:
 
-| Symptom | Likely cause | Fix |
-|---------|--------------|-----|
-| `whatsapp-bridge not connected` | Auth expired | `/ops:setup whatsapp` to re-authenticate |
-| `health file stale` | Daemon crashed | Check `/tmp/com.claude-ops.daemon.log`, restart via launchctl |
-| `memory extractor not running` | Missing Haiku API key | Configure in preferences or Doppler |
-| `briefing-pre-warm errors` | `bin/ops-gather` failing | Run `bin/ops-gather` manually to see the error, often a missing CLI |
-| `Step 5b keeps re-enabling stopped services` | Expected — reconciliation enables anything configured | Use `ops-daemon.sh disable <service>` to opt out |
+| Symptom                                      | Likely cause                                          | Fix                                                                 |
+| -------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------- |
+| `whatsapp-bridge not connected`              | Auth expired                                          | `/ops:setup whatsapp` to re-authenticate                            |
+| `health file stale`                          | Daemon crashed                                        | Check `/tmp/com.claude-ops.daemon.log`, restart via launchctl       |
+| `memory extractor not running`               | Missing Haiku API key                                 | Configure in preferences or Doppler                                 |
+| `briefing-pre-warm errors`                   | `bin/ops-gather` failing                              | Run `bin/ops-gather` manually to see the error, often a missing CLI |
+| `Step 5b keeps re-enabling stopped services` | Expected — reconciliation enables anything configured | Use `ops-daemon.sh disable <service>` to opt out                    |
 
 > [!CAUTION]
 > Don't manually delete `~/Library/LaunchAgents/com.claude-ops.daemon.plist` while the daemon is running — launchctl will leave orphan processes. Always `launchctl unload` first, then remove the plist.

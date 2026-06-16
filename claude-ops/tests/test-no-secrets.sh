@@ -137,6 +137,30 @@ scan_pattern "AWS account IDs (ARN context)" \
   'arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:[0-9]{12}:' \
   '(:000000000000:|:123456789012:)'
 
+# Bare AWS account IDs OUTSIDE ARN context — a real 12-digit id leaked in a
+# bucket name, "account <id>" prose, or a config value. Restricted to lines that
+# mention account/bucket/aws/arn so we don't flag every 12-digit number; allows
+# the canonical docs placeholders and all-zero. (Closes the gap where a real id
+# in `claude-account-leases-<id>` or `account <id>` slipped past the ARN check.)
+scan_pattern "bare AWS account IDs (account/bucket context)" \
+  '([Aa]ccount|[Bb]ucket|aws|AWS|arn).{0,40}\b[0-9]{12}\b|\b[0-9]{12}\b.{0,40}([Aa]ccount|[Bb]ucket)' \
+  '(123456789012|000000000000|111111111111|[0-9]{13,})'
+
+# App Store Connect account identifiers and numeric app IDs. These are not
+# secrets alone, but they identify a real app/account and must be supplied by
+# local env/config for this public plugin.
+scan_pattern "App Store Connect issuer UUID literals" \
+  '(APP_STORE_CONNECT_ISSUER_ID|ISSUER_ID|issuer).{0,80}[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' \
+  '(example|placeholder|00000000-0000-0000-0000-000000000000|<)'
+
+scan_pattern "App Store Connect numeric app ID literals" \
+  '(APP_STORE_CONNECT_APP_IDS|HEALIFY_ASC_[A-Z_]*APP_ID|APP_IDS|appId).{0,80}["'\''][0-9]{9,12}["'\'']' \
+  '(example|placeholder|<)'
+
+scan_pattern "hardcoded sentry-cli org values" \
+  'sentry-cli.{0,120}--org[ =]["'\'']?[A-Za-z0-9_-]+' \
+  '(SENTRY_ORG|example|placeholder|<)'
+
 # International phone numbers (allow reserved example ranges: 555-xxxx, 1234567, all-zero)
 scan_pattern "phone numbers (+<cc><digits>)" '\+[1-9][0-9]{1,3}[ -]?[0-9]{6,14}' \
   '(555[0-9]{4}|1234567|\+1234567890|\+0000000000|\+15551234567|\+10000000000|\+1[ -]?555)'
@@ -169,6 +193,53 @@ scan_tests_literal() {
 scan_tests_literal "Stripe sk_live_" 'sk_live_[a-zA-Z0-9]{24,}'
 scan_tests_literal "GitHub ghp_" 'ghp_[a-zA-Z0-9]{36,}'
 scan_tests_literal "Slack xoxb-" 'xoxb-[0-9]{10,}-[0-9]{10,}-[a-zA-Z0-9]{20,}'
+
+# --- Operator identity denylist (OUT-OF-REPO) ---
+# A public scanner cannot hardcode the operator's own brand names, personal
+# names, or private hostnames — that list would itself be the PII it's meant to
+# block. Instead, load denylist terms from a gitignored / out-of-repo file so
+# each operator can block THEIR identity terms without committing them.
+#
+# Sources (first found wins), one term per line, '#' comments allowed:
+#   $OPS_PII_DENYLIST_FILE
+#   ./.pii-denylist            (gitignored — repo-local, never committed)
+#   $HOME/.config/claude-ops/pii-denylist.txt
+# Or inline via $OPS_PII_DENYLIST (comma/space/newline separated).
+identity_denylist_check() {
+  local file="" terms=""
+  for cand in "${OPS_PII_DENYLIST_FILE:-}" "$PLUGIN_ROOT/.pii-denylist" \
+              "$PLUGIN_ROOT/../.pii-denylist" "$HOME/.config/claude-ops/pii-denylist.txt"; do
+    [[ -n "$cand" && -f "$cand" ]] && { file="$cand"; break; }
+  done
+  if [[ -n "$file" ]]; then
+    terms+=$'\n'"$(grep -vE '^\s*(#|$)' "$file" 2>/dev/null || true)"
+  fi
+  if [[ -n "${OPS_PII_DENYLIST:-}" ]]; then
+    terms+=$'\n'"$(echo "$OPS_PII_DENYLIST" | tr ',[:space:]' '\n\n')"
+  fi
+  terms=$(echo "$terms" | grep -vE '^\s*$' | sort -u || true)
+  if [[ -z "$terms" ]]; then
+    ok "operator identity denylist (none configured — set \$OPS_PII_DENYLIST or .pii-denylist to enable)"
+    return
+  fi
+  local alt
+  alt=$(echo "$terms" | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd '|' -)
+  local hits
+  hits=$(grep -riE "$alt" $EXCLUDE_ARGS \
+    --include="*.sh" --include="*.md" --include="*.json" --include="*.toml" \
+    --include="*.ts" --include="*.js" --include="*.mjs" --include="*.py" \
+    --include="*.yaml" --include="*.yml" --include="*.env" --include="*.txt" \
+    --include="*.prompt" --include="*.service" --include="*.plist" \
+    "$PLUGIN_ROOT" 2>/dev/null | grep -vE "(example|placeholder|your[-_]|<[A-Z_]+>)" || true)
+  if [[ -n "$hits" ]]; then
+    local count; count=$(echo "$hits" | wc -l | tr -d ' ')
+    err "operator identity term(s) leaked" "$count match(es) for configured denylist"
+    echo "$hits" | head -5 | sed 's/^/    /'
+  else
+    ok "no operator identity terms (denylist: $(echo "$terms" | wc -l | tr -d ' ') term(s))"
+  fi
+}
+identity_denylist_check
 
 echo ""
 echo "---"

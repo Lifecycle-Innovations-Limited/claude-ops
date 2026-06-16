@@ -21,6 +21,7 @@ If the user skips, record `channels.notion = "skipped"` in `$PREFS_PATH` and mov
 **Path A — Claude.ai integration (recommended):**
 
 If no existing integration detected, present `AskUserQuestion`:
+
 ```
 How would you like to connect Notion?
   [Claude.ai integration (Recommended) — add via claude.ai settings]
@@ -29,6 +30,7 @@ How would you like to connect Notion?
 ```
 
 For claude.ai integration:
+
 1. Tell the user: "Add Notion integration at claude.ai > Settings > Integrations > Notion. Authorize access to your workspace, then type 'done'."
 2. Use `AskUserQuestion`: `[Done — connected]`, `[Skip Notion]`
 3. On "Done", verify by testing `mcp__claude_ai_Notion__notion-search` with a simple query
@@ -55,6 +57,7 @@ For claude.ai integration:
 #### Verification
 
 Test the integration (run in background):
+
 ```bash
 # For claude.ai: integration auto-detected — test via MCP tool call
 # For self-hosted: verify API key works
@@ -73,4 +76,3 @@ fi
 4. Print: `✓ Notion — workspace connected via [source]`
 
 > **Deep-dive:** see `${CLAUDE_PLUGIN_ROOT}/skills/ops-inbox/CHANNELS.md` for full Notion MCP tool reference and troubleshooting.
-

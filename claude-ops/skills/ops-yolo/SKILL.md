@@ -1,7 +1,7 @@
 ---
 name: ops-yolo
 description: YOLO mode. Spawns 4 parallel C-suite agents (CEO, CTO, CFO, COO). Each analyzes the business from their perspective using ALL available data. Produces unfiltered Hard Truths report. After user types YOLO, autonomously runs the business for a day using /loop.
-argument-hint: "[YOLO|analyze|report]"
+argument-hint: '[YOLO|analyze|report]'
 allowed-tools:
   - Bash
   - Read
@@ -35,11 +35,11 @@ maxTurns: 50
 ## Runtime Context
 
 Before YOLO analysis, load:
+
 1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `owner`, `timezone`, `yolo_enabled`, all channel configs
 2. **Daemon health**: `cat ${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json` — all services must be healthy for comprehensive analysis
 3. **Secrets**: Resolve ALL keys via env → Doppler → password manager: GITHUB_TOKEN, SENTRY_AUTH_TOKEN, LINEAR_API_KEY, AWS_ACCESS_KEY_ID
 4. **Ops memories**: Load ALL files from `${CLAUDE_PLUGIN_DATA_DIR}/memories/` — contact profiles, preferences, topics, donts. YOLO agents need maximum context.
-
 
 # OPS ► YOLO MODE
 
@@ -47,28 +47,30 @@ Before YOLO analysis, load:
 
 ### aws CLI (Cost Explorer)
 
-| Command | Usage | Output |
-|---------|-------|--------|
+| Command                                                                                                                                     | Usage               | Output    |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------- |
 | `aws ce get-cost-and-usage --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --granularity MONTHLY --metrics "UnblendedCost" --output json` | Current month spend | Cost JSON |
 
 ### gh CLI (GitHub)
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `gh pr list --repo <owner/repo> --json number,title,statusCheckRollup,reviewDecision,mergeable,isDraft` | Open PRs with status | JSON array |
-| `gh pr merge <n> --repo <repo> --squash --admin` | Squash merge PR | Merge result |
-| `gh run list --limit 20 --json status,conclusion,name,headBranch,createdAt` | Recent CI runs | JSON array |
+| Command                                                                                                 | Usage                | Output       |
+| ------------------------------------------------------------------------------------------------------- | -------------------- | ------------ |
+| `gh pr list --repo <owner/repo> --json number,title,statusCheckRollup,reviewDecision,mergeable,isDraft` | Open PRs with status | JSON array   |
+| `gh pr merge <n> --repo <repo> --squash --admin`                                                        | Squash merge PR      | Merge result |
+| `gh run list --limit 20 --json status,conclusion,name,headBranch,createdAt`                             | Recent CI runs       | JSON array   |
 
 ---
 
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** instead of fire-and-forget subagents for the C-suite analysis (Phase 2). This enables:
+
 - Agents can share findings mid-analysis (CEO discovers a revenue blocker → CFO factors it into ROI)
 - You can steer agents if early findings change priorities
 - Agents coordinate on the consensus recommendation
 
 **Team setup** (only when flag is enabled):
+
 ```
 TeamCreate("yolo-csuite")
 Agent(team_name="yolo-csuite", name="ceo", subagent_type="ops:yolo-ceo", ...)
@@ -107,7 +109,8 @@ rm -f /tmp/ops-marketing-dash.cache /tmp/ops-external.cache /tmp/ops-infra.cache
 ```
 
 Each C-suite agent prompt MUST include this line verbatim:
-> "Use ONLY the pre-gathered data block in this prompt. Do NOT read prior /tmp/yolo-*/ files, do NOT reference cached reports, do NOT cite earlier session findings. This is a fresh-state run; report what is true RIGHT NOW."
+
+> "Use ONLY the pre-gathered data block in this prompt. Do NOT read prior /tmp/yolo-\*/ files, do NOT reference cached reports, do NOT cite earlier session findings. This is a fresh-state run; report what is true RIGHT NOW."
 
 ## Phase 1 — Pre-gather ALL data (live, never cached)
 
@@ -242,6 +245,7 @@ Uses `agents/yolo-coo.md`. Writes `/tmp/yolo-[session]/coo-analysis.md`.
 Use **batched AskUserQuestion calls** (max 4 options each):
 
 AskUserQuestion call 1:
+
 ```
   [Read CEO analysis]
   [Read CTO analysis]
@@ -250,6 +254,7 @@ AskUserQuestion call 1:
 ```
 
 AskUserQuestion call 2 (only if "More..."):
+
 ```
   [Read COO analysis]
   [Execute top recommendation now]
@@ -296,6 +301,7 @@ Run the selected steps in sequence, reporting after each step.
 - **Infrastructure changes**: For EVERY destructive infra action (delete ALB, stop RDS, disable Multi-AZ, purge images, etc.), present the specific action with context from the C-suite reports and ask `[Execute]` / `[Skip]` individually. NEVER batch destructive infra actions.
 
 **Report-driven execution**: When the user approves executing recommendations from the Hard Truths report:
+
 1. Read ALL C-suite analysis files (`/tmp/yolo-[session]/*.md`)
 2. Extract specific actionable items marked with `⚠️ REQUIRES CONFIRMATION`
 3. Present each action individually via `AskUserQuestion` with the exact command that will run, the expected outcome, and the source report (CTO/CFO/COO)
@@ -324,9 +330,11 @@ Before Phase 4 execution, use `EnterPlanMode` to present the full execution plan
 ### Cron — schedule daily YOLO
 
 After Phase 4 completes, offer to schedule recurring YOLO via `AskUserQuestion`:
+
 ```
   [Schedule daily YOLO at 9am]  [Schedule weekly Monday briefing]  [No schedule]
 ```
+
 Use `CronCreate` if selected. Use `CronList`/`CronDelete` to manage existing schedules.
 
 ### Monitor — live CI/deploy watching

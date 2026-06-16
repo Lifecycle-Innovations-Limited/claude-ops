@@ -1,7 +1,7 @@
 ---
 name: ops-linear
 description: Linear command center. Shows current sprint, creates/updates issues, manages priorities, syncs with GSD phases.
-argument-hint: "[sprint|create|update|sync|backlog|issue-id]"
+argument-hint: '[sprint|create|update|sync|backlog|issue-id]'
 allowed-tools:
   - Bash
   - Read
@@ -31,6 +31,7 @@ maxTurns: 30
 Before executing, load available context:
 
 1. **Secrets**: Linear API key required for MCP fallback queries.
+
    ### Secret Resolution
    - Check `$LINEAR_API_KEY` env var
    - Then: Doppler MCP tools (`mcp__doppler__*`) — if Doppler MCP server is configured
@@ -44,10 +45,10 @@ Before executing, load available context:
 
 ### Linear GraphQL (fallback when MCP unavailable)
 
-| Command | Usage | Output |
-|---------|-------|--------|
-| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ issues(filter: {state: {type: {in: [\"started\",\"unstarted\"]}}}) { nodes { id title state { name } priority assignee { name } } } }"}'` | Active issues | JSON |
-| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ cycles(filter: {isActive: {eq: true}}) { nodes { id number startsAt endsAt } } }"}'` | Current cycles | JSON |
+| Command                                                                                                                                                                                                                                                                        | Usage          | Output |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------- | ------ |
+| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ issues(filter: {state: {type: {in: [\"started\",\"unstarted\"]}}}) { nodes { id title state { name } priority assignee { name } } } }"}'` | Active issues  | JSON   |
+| `curl -X POST https://api.linear.app/graphql -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" -d '{"query":"{ cycles(filter: {isActive: {eq: true}}) { nodes { id number startsAt endsAt } } }"}'`                                                      | Current cycles | JSON   |
 
 ---
 
@@ -102,6 +103,7 @@ BLOCKED / CANCELLED
 Use **batched AskUserQuestion calls** (max 4 options each):
 
 AskUserQuestion call 1:
+
 ```
   [Create new issue]
   [Update issue status]
@@ -110,6 +112,7 @@ AskUserQuestion call 1:
 ```
 
 AskUserQuestion call 2 (only if "More..."):
+
 ```
   [View backlog]
   [Sync with GSD phases]
@@ -155,6 +158,7 @@ When the user starts working on a Linear issue, use `TaskCreate` to track it loc
 ### WebFetch — Linear API fallback
 
 When Linear MCP tools hit quota limits or fail, fall back to `WebFetch` with the Linear GraphQL API:
+
 ```
 WebFetch(url: "https://api.linear.app/graphql", method: "POST", headers: {"Authorization": "$LINEAR_API_KEY"}, body: '{"query":"{ issues(filter: {cycle: {id: {eq: \"<id>\"}}}}) { nodes { id title state { name } } } }"}')
 ```

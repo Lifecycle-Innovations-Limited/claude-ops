@@ -1,7 +1,7 @@
 ---
 name: ops-pocket
 description: Pocket voice-memo pipeline command center. Surfaces the watcher → triage → executor → notifier → bridges chain that turns Pocket-recorded voice memos into running Claude tasks, with WhatsApp + email notifications. Routes — status, setup, tasks, test, logs, restart, whatsapp on|off, email on|off.
-argument-hint: "[status|setup|tasks|test|logs [N]|restart|whatsapp on|off|email on|off]"
+argument-hint: '[status|setup|tasks|test|logs [N]|restart|whatsapp on|off|email on|off]'
 allowed-tools:
   - Bash
   - Read
@@ -33,16 +33,16 @@ If `$POCKET_STATE_DIR` does not exist on disk, the pipeline has never been boots
 
 Parse `$ARGUMENTS` and route immediately. First token decides the route.
 
-| First arg              | Route                                                                       |
-| ---------------------- | --------------------------------------------------------------------------- |
-| (empty) / `status`     | **Status dashboard** — daemon health + queue depths + cursors + counts      |
-| `setup`                | Delegate to `skills/setup/channels/pocket.md` if present; else inline steps |
-| `tasks`                | Pending + in-progress + recently-completed task list                        |
-| `test`                 | End-to-end synthetic completion test (covered below)                        |
-| `logs [N]`             | Tail N lines (default 50) of notifier + run + executor logs                 |
-| `restart`              | Kickstart launchd notifier + (re)spawn `pocket-exec` tmux supervisor        |
-| `whatsapp on` / `off`  | Toggle WhatsApp self-chat sink                                              |
-| `email on` / `off`     | Toggle email self-mail sink                                                 |
+| First arg             | Route                                                                       |
+| --------------------- | --------------------------------------------------------------------------- |
+| (empty) / `status`    | **Status dashboard** — daemon health + queue depths + cursors + counts      |
+| `setup`               | Delegate to `skills/setup/channels/pocket.md` if present; else inline steps |
+| `tasks`               | Pending + in-progress + recently-completed task list                        |
+| `test`                | End-to-end synthetic completion test (covered below)                        |
+| `logs [N]`            | Tail N lines (default 50) of notifier + run + executor logs                 |
+| `restart`             | Kickstart launchd notifier + (re)spawn `pocket-exec` tmux supervisor        |
+| `whatsapp on` / `off` | Toggle WhatsApp self-chat sink                                              |
+| `email on` / `off`    | Toggle email self-mail sink                                                 |
 
 Anything else: print the routing table and exit.
 

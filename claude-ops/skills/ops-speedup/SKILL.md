@@ -1,7 +1,7 @@
 ---
 name: ops-speedup
 description: Cross-platform, hardware-adaptive system optimizer. Auto-detects macOS / Linux / WSL / Windows (MINGW/Cygwin/MSYS2) and CPU/RAM/disk/GPU profile, then picks the right cleanup strategy. Scans reclaimable disk space, memory pressure, runaway processes, startup bloat, network issues. CleanMyMac built into Claude Code.
-argument-hint: "[scan|clean|deep|auto]"
+argument-hint: '[scan|clean|deep|auto]'
 allowed-tools:
   - Bash
   - Read
@@ -15,6 +15,7 @@ maxTurns: 30
 ## Runtime Context
 
 Before scanning, load:
+
 1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `timezone` for timestamps
 
 # OPS > SPEEDUP — System Optimizer
@@ -22,6 +23,7 @@ Before scanning, load:
 ## Architecture
 
 The `bin/ops-speedup` binary is the single source of truth for probes AND actions. This skill's job is to:
+
 1. Call the binary with the right flags based on user intent
 2. Parse the JSON
 3. Present a health score + cleanup report
@@ -30,16 +32,17 @@ The `bin/ops-speedup` binary is the single source of truth for probes AND action
 
 ## CLI Reference — `bin/ops-speedup`
 
-| Command | Purpose | Side effects |
-|---------|---------|--------------|
-| `ops-speedup` | Visual banner + hardware summary | None |
-| `ops-speedup --json` | Quick JSON diagnostics (disk/mem/net only) | None |
-| `ops-speedup --scan` | Full parallel probe: disk + mem + CPU hogs + power hogs + GPU/ANE + startup | None |
-| `ops-speedup --clean` | Safe cleanup: caches, tmp, logs, demote daemons, DNS flush, kernel tune | Non-destructive |
-| `ops-speedup --deep` | `--clean` + Trash, DerivedData, simulators, animation cuts, launch-agent kill | Removes files |
+| Command                    | Purpose                                                                                   | Side effects                         |
+| -------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------ |
+| `ops-speedup`              | Visual banner + hardware summary                                                          | None                                 |
+| `ops-speedup --json`       | Quick JSON diagnostics (disk/mem/net only)                                                | None                                 |
+| `ops-speedup --scan`       | Full parallel probe: disk + mem + CPU hogs + power hogs + GPU/ANE + startup               | None                                 |
+| `ops-speedup --clean`      | Safe cleanup: caches, tmp, logs, demote daemons, DNS flush, kernel tune                   | Non-destructive                      |
+| `ops-speedup --deep`       | `--clean` + Trash, DerivedData, simulators, animation cuts, launch-agent kill             | Removes files                        |
 | `ops-speedup --aggressive` | `--deep` + unload launch agents, docker `--volumes`, stale `node_modules` (>14d), TCP BBR | Potentially breaking — confirm first |
 
 All modes:
+
 - Auto-detect OS (macOS / Linux / WSL / Windows) and dispatch OS-specific ops
 - Idempotent — skip DerivedData/Metro/journal if last run was <1h ago
 - Write telemetry to `~/.ops-speedup/history.jsonl`
@@ -48,22 +51,22 @@ All modes:
 
 ## OS-specific capabilities
 
-| Capability | macOS | Linux | WSL | Windows |
-|------------|-------|-------|-----|---------|
-| Disk reclaimable scan | ✓ | ✓ | ✓ | limited |
-| Memory + swap | ✓ | ✓ | ✓ | limited |
-| CPU hog kill | ✓ | ✓ | ✓ | — |
-| Power/Energy Impact | ✓ (`top -stats power`) | ✓ (`powertop`) | — | — |
-| GPU/Neural Engine | ✓ (`powermetrics`) | ✓ (`nvidia-smi`) | — | — |
-| Launch agent offenders | ✓ | — | — | — |
-| systemd unit masking | — | ✓ | ✓ | — |
-| E-core demotion | ✓ (`taskpolicy -b`) | ✓ (`renice`+`ionice`) | ✓ | — |
-| UI animation cuts | ✓ | — | — | — |
-| Kernel tune (vnodes/somaxconn) | ✓ | ✓ | ✓ | — |
-| TCP BBR | — | ✓ (aggressive) | ✓ (aggressive) | — |
-| DNS flush | ✓ (dscacheutil) | ✓ (resolved) | ✓ (via Windows) | — |
-| Memory purge | ✓ (`purge`) | ✓ (drop_caches) | ✓ | — |
-| Stale build dir prune (>14d) | ✓ | ✓ | ✓ | — |
+| Capability                     | macOS                  | Linux                 | WSL             | Windows |
+| ------------------------------ | ---------------------- | --------------------- | --------------- | ------- |
+| Disk reclaimable scan          | ✓                      | ✓                     | ✓               | limited |
+| Memory + swap                  | ✓                      | ✓                     | ✓               | limited |
+| CPU hog kill                   | ✓                      | ✓                     | ✓               | —       |
+| Power/Energy Impact            | ✓ (`top -stats power`) | ✓ (`powertop`)        | —               | —       |
+| GPU/Neural Engine              | ✓ (`powermetrics`)     | ✓ (`nvidia-smi`)      | —               | —       |
+| Launch agent offenders         | ✓                      | —                     | —               | —       |
+| systemd unit masking           | —                      | ✓                     | ✓               | —       |
+| E-core demotion                | ✓ (`taskpolicy -b`)    | ✓ (`renice`+`ionice`) | ✓               | —       |
+| UI animation cuts              | ✓                      | —                     | —               | —       |
+| Kernel tune (vnodes/somaxconn) | ✓                      | ✓                     | ✓               | —       |
+| TCP BBR                        | —                      | ✓ (aggressive)        | ✓ (aggressive)  | —       |
+| DNS flush                      | ✓ (dscacheutil)        | ✓ (resolved)          | ✓ (via Windows) | —       |
+| Memory purge                   | ✓ (`purge`)            | ✓ (drop_caches)       | ✓               | —       |
+| Stale build dir prune (>14d)   | ✓                      | ✓                     | ✓               | —       |
 
 ## Phase 1 — Visual header
 
@@ -127,6 +130,7 @@ Parse the JSON and render:
 ```
 
 **Health score calculation:**
+
 - Start at 100
 - Disk > 90% used: -20
 - Disk > 80% used: -10
@@ -141,6 +145,7 @@ Parse the JSON and render:
 ## Phase 4 — Present cleanup choice (max 4 options per AskUserQuestion)
 
 AskUserQuestion call 1 — Cleanup scope:
+
 ```
   [Quick — caches, tmp, logs, DNS flush (~[N] GB)]
   [Deep — + Trash, DerivedData, simulators, animation cuts (~[N] GB)]
@@ -149,6 +154,7 @@ AskUserQuestion call 1 — Cleanup scope:
 ```
 
 AskUserQuestion call 2 (only if "More options..."):
+
 ```
   [Custom — pick categories]
   [Memory — kill top RAM hogs]
@@ -156,6 +162,7 @@ AskUserQuestion call 2 (only if "More options..."):
 ```
 
 AskUserQuestion call 3 (only if "Startup / Network / Skip..."):
+
 ```
   [Startup — review & disable launch agents / systemd units]
   [Network — flush DNS, tune TCP, BBR (aggressive)]
@@ -223,6 +230,7 @@ If user came from `/ops:dash`, offer `b) Back to dashboard`.
 ## Mode shortcuts
 
 If `$ARGUMENTS` is:
+
 - `scan` or empty — Phase 1-3 only (report, no cleanup)
 - `clean` — run `ops-speedup --clean` automatically (safe)
 - `deep` — run `ops-speedup --deep` automatically (after 1 confirmation)

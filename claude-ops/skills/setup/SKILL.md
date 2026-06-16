@@ -1,7 +1,7 @@
 ---
 name: setup
 description: Interactive setup wizard for the claude-ops plugin. Installs missing CLIs, configures env vars for each channel (Telegram, WhatsApp, Email, Slack, Notion, Linear, Sentry, Vercel), builds the project registry, and saves user preferences. Run once after installing the plugin or any time to reconfigure.
-argument-hint: "[section]"
+argument-hint: '[section]'
 allowed-tools:
   - Bash
   - Read
@@ -24,6 +24,7 @@ You are running an **interactive configuration wizard** for the `claude-ops` plu
 **RULE ZERO — EVERY BASH CALL USES `run_in_background: true`**
 
 This is non-negotiable. EVERY SINGLE Bash tool call in this entire setup wizard MUST set `run_in_background: true`. There are ZERO exceptions. This applies to:
+
 - Credential scans, CLI installs, OAuth flows, npm/brew installs
 - Daemon starts, daemon reloads, launchctl commands
 - Keychain writes, Doppler queries, Chrome history queries
@@ -73,11 +74,11 @@ The setup wizard accepts these flags (parsed from `$ARGUMENTS`):
 
 ### Profile → sections mapping
 
-| Profile | Sections enabled |
-|---------|------------------|
-| developer | 2 (CLIs), 2c (Daemon), 3g (Doppler), 3h (Vault), plus GitHub + AWS + Sentry + Linear integration paths |
-| founder | 2, 2c, 3a (Telegram), 3b (WhatsApp), 3c (Email), 3d (Slack), 3f (Calendar), 3g (Doppler), 3k-home (Home Automation), 3n (Notifications) |
-| marketer | 2, 2c, 3j (Marketing — Klaviyo/Meta Ads/GA4/GSC), 3i (Shopify), 3c (Email), 3g (Doppler) |
+| Profile   | Sections enabled                                                                                                                        |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| developer | 2 (CLIs), 2c (Daemon), 3g (Doppler), 3h (Vault), plus GitHub + AWS + Sentry + Linear integration paths                                  |
+| founder   | 2, 2c, 3a (Telegram), 3b (WhatsApp), 3c (Email), 3d (Slack), 3f (Calendar), 3g (Doppler), 3k-home (Home Automation), 3n (Notifications) |
+| marketer  | 2, 2c, 3j (Marketing — Klaviyo/Meta Ads/GA4/GSC), 3i (Shopify), 3c (Email), 3g (Doppler)                                                |
 
 ### Incremental re-setup
 
@@ -90,6 +91,7 @@ After every section completes (or is skipped), print a single line progress pane
     Progress: {configured}/{total} configured · {working} working · {pending} pending
 
 Where:
+
 - `configured` = sections where credentials are present in `preferences.json`.
 - `working` = configured sections whose most recent `/ops:status` smoke test returned green.
 - `pending` = sections the user selected but hasn't configured yet.
@@ -100,11 +102,13 @@ Where:
 ## Agent Teams support
 
 If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when multiple "Deep hunt" credential agents are needed simultaneously. This enables:
+
 - Credential scouts run in parallel across Doppler, keychains, browser profiles, and password managers
 - Agents share findings (e.g., Doppler agent finds a partial config → keychain agent knows to skip that service)
 - You can steer mid-hunt: "found the Telegram token, stop hunting for that one"
 
 **Team setup** (only when flag is enabled, multiple deep hunts triggered):
+
 ```
 TeamCreate("setup-hunters")
 Agent(team_name="setup-hunters", name="hunt-telegram", model="haiku", ...)
@@ -137,6 +141,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-setup-preflight &>/dev/null &
 ```
 
 **Preflight data**: All probe results are cached at `/tmp/ops-preflight/`. Before running ANY diagnostic command, check if the result already exists there:
+
 - CLI status: `cat /tmp/ops-preflight/clis.txt`
 - Slack: `cat /tmp/ops-preflight/slack.json`
 - Telegram: `cat /tmp/ops-preflight/telegram.txt`
@@ -178,7 +183,7 @@ Print a compact status header to the user, one line per category:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  OPS ► SETUP WIZARD
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- Shell:       zsh → ~/.zshrc
+ Shell:       <detected shell> → <detected profile_file>   (e.g. bash → ~/.bashrc, zsh → ~/.zshrc, fish → ~/.config/fish/config.fish)
  Core CLIs:   ✓ jq  ✓ git  ✓ gh  ✓ aws  ✓ node
  Channels:    ✓ bridge  ✓ gog  ○ telegram (no token)
  Secrets:     ✓ doppler (project: my-app, config: dev)
@@ -211,7 +216,6 @@ Fresh installs (no `preferences.json` at all) continue to see the full selector 
 
 **Otherwise:** proceed with the standard selector below.
 
-
 First, offer a quick "set up everything" option:
 
 ```
@@ -231,39 +235,39 @@ Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need 
 
 **Batch 1 — Core setup (run early so the daemon can pre-warm caches while you finish):**
 
-| Option             | Header   | Description                                                                   |
-| ------------------ | -------- | ----------------------------------------------------------------------------- |
-| Install CLIs       | cli      | Install missing command-line tools via Homebrew                               |
-| Background daemon  | daemon   | Install ops-daemon early — pre-warms briefing cache while remaining setup runs |
-| Configure MCPs      | mcp      | Enable Linear, Sentry, Vercel, Gmail MCP servers                              |
-| Build registry      | registry | Register projects Claude should manage                                        |
+| Option            | Header   | Description                                                                    |
+| ----------------- | -------- | ------------------------------------------------------------------------------ |
+| Install CLIs      | cli      | Install missing command-line tools via Homebrew                                |
+| Background daemon | daemon   | Install ops-daemon early — pre-warms briefing cache while remaining setup runs |
+| Configure MCPs    | mcp      | Enable Linear, Sentry, Vercel, Gmail MCP servers                               |
+| Build registry    | registry | Register projects Claude should manage                                         |
 
 **Batch 2 — Channels & plugins:**
 
-| Option             | Header   | Description                                                   |
-| ------------------ | -------- | ------------------------------------------------------------- |
-| Configure channels  | channels | Set tokens for Telegram, WhatsApp, Email, Slack               |
-| Companion plugins   | plugins  | Install GSD for project roadmap tracking                      |
-| Save preferences    | prefs    | Owner name, timezone, default priorities                      |
-| Shell env           | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile                  |
+| Option             | Header   | Description                                     |
+| ------------------ | -------- | ----------------------------------------------- |
+| Configure channels | channels | Set tokens for Telegram, WhatsApp, Email, Slack |
+| Companion plugins  | plugins  | Install GSD for project roadmap tracking        |
+| Save preferences   | prefs    | Owner name, timezone, default priorities        |
+| Shell env          | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile    |
 
 **Batch 3 — Extras (only show if not already configured):**
 
-| Option              | Header   | Description                                                   |
-| ------------------- | -------- | ------------------------------------------------------------- |
-| Configure ecommerce | ecom     | Set Shopify store URL + admin token, ShipBob                  |
-| Configure marketing | mktg     | Set Klaviyo, Meta Ads, GA4, Search Console keys               |
-| Configure voice     | voice    | Set Bland AI, ElevenLabs, Groq API keys                       |
-| Configure revenue   | revenue  | Set Stripe + RevenueCat keys for live MRR tracking            |
+| Option              | Header  | Description                                        |
+| ------------------- | ------- | -------------------------------------------------- |
+| Configure ecommerce | ecom    | Set Shopify store URL + admin token, ShipBob       |
+| Configure marketing | mktg    | Set Klaviyo, Meta Ads, GA4, Search Console keys    |
+| Configure voice     | voice   | Set Bland AI, ElevenLabs, Groq API keys            |
+| Configure revenue   | revenue | Set Stripe + RevenueCat keys for live MRR tracking |
 
 **Batch 4 — Auto-fix subsystem + auxiliary daemons:**
 
-| Option              | Header      | Description                                                       |
-| ------------------- | ----------- | ----------------------------------------------------------------- |
-| Deploy auto-fix     | deploy-fix  | Configure post-merge + build-failure auto-fix (Step 6.5a)         |
-| Recap marquee       | marquee     | tmux digest of parallel Claude sessions (Step 6.5b)               |
-| Task* reminder      | task-rem    | PostToolUse nudge to use TaskCreate/TaskUpdate (Step 6.5c)        |
-| Account rotation    | rotator     | Multi-account Claude rotator toggle (Step 6.5d)                   |
+| Option           | Header     | Description                                                |
+| ---------------- | ---------- | ---------------------------------------------------------- |
+| Deploy auto-fix  | deploy-fix | Configure post-merge + build-failure auto-fix (Step 6.5a)  |
+| Recap marquee    | marquee    | tmux digest of parallel Claude sessions (Step 6.5b)        |
+| Task\* reminder  | task-rem   | PostToolUse nudge to use TaskCreate/TaskUpdate (Step 6.5c) |
+| Account rotation | rotator    | Multi-account Claude rotator toggle (Step 6.5d)            |
 
 Present each batch as a separate `AskUserQuestion` call. Skip batches where all items are already green. Collect all selections across batches and run each selected section in order.
 
@@ -432,6 +436,7 @@ esac
   ```
 
   Write `daemon.enabled = false` and `daemon.skip_reason = "platform:wsl-no-systemd"` to `$PREFS_PATH` and continue.
+
 - **Windows** (native, `OS=windows`): the daemon is **not installed**. Print `○ Background daemon — not supported on native Windows. Use WSL or run ops-daemon.sh manually.` and continue.
 
 If `OS=macos`, check whether the daemon is already installed:
@@ -687,6 +692,7 @@ Write to `$PREFS_PATH`. Set both `"tmux_wired"` and `"statusline_wired"` dynamic
 
 - `"tmux_wired"`: `true` when tmux was installed and the user chose to wire `status-right` in Step 2d.3; `false` when tmux was missing, the user chose **Skip**, or **Show me the line**.
 - `"statusline_wired"`: `true` only after **Add to Claude Code statusLine** successfully merged recap into `~/.claude/settings.json` in Step 2d.3b; `false` after **Skip**, **Show me the JSON**, the nested **Skip** when an existing statusLine was detected, or if Step 2d.3b did not run (e.g. tmux-only path).
+
 ```json
 {
   "recap": {
@@ -732,11 +738,13 @@ THEMES_FILE="${PLUGIN_ROOT}templates/statusline/themes.json"
 ```
 
 If `RENDERER_SRC` does not exist, print:
+
 ```
 ○ Statusline template not found at expected plugin path. Skipping statusline step.
   (Re-run /ops:setup after updating the plugin: ops-statusline-suggest should be at
    ${PLUGIN_ROOT}bin/ops-statusline-suggest)
 ```
+
 Then skip the rest of this step and continue to Step 3.
 
 ### Step 2e.2 — Ask preset (max 4 options per Rule 1)
@@ -799,7 +807,7 @@ jq . "$CFG_DST" >/dev/null 2>&1 && echo "✓ Config written" || echo "✗ Config
 
 ### Step 2e.7 — Merge settings.json statusLine (run_in_background: true)
 
-**IMPORTANT**: use `jq` to *merge* — never clobber the entire settings.json.
+**IMPORTANT**: use `jq` to _merge_ — never clobber the entire settings.json.
 
 ```bash
 STATUSLINE_CMD_STR="\$HOME/.claude/statusline-command.sh"
@@ -826,11 +834,13 @@ fi
 ```
 
 If `existing_statusline` is non-empty, use `AskUserQuestion`:
+
 ```
 ~/.claude/settings.json already has a statusLine.command. Overwrite?
   [Yes — replace with the cockpit renderer]
   [No — keep existing and skip]
 ```
+
 On Yes: run the merge above with the new command.
 On No: skip the merge and note `statusline.settings_wired = false`.
 
@@ -844,6 +854,7 @@ printf '%s' "$PAYLOAD" | COLUMNS=100 "$RENDERER_DST" 2>/dev/null
 Print between ruler lines so the user sees the cockpit preview inline.
 
 If the render fails (exit non-zero or empty output), print a non-fatal note:
+
 ```
 ○ Preview failed — renderer may need Claude Code restart to load new settings.json.
   Manage with: /ops:statusline preview | doctor | config
@@ -871,6 +882,7 @@ jq -n \
 ```
 
 Print summary:
+
 ```
 ✓ Statusline cockpit configured (preset=$CHOSEN_PRESET, theme=$CHOSEN_THEME, projects=$PROJ_COUNT).
   Restart Claude Code to activate the statusLine in your terminal.
@@ -898,27 +910,27 @@ If the user selects "Pick individually", ask which channels using `AskUserQuesti
 
 **Batch 1 — Messaging:**
 
-| Option   | Header   | Description                                                             |
-| -------- | -------- | ----------------------------------------------------------------------- |
-| Telegram | telegram | Bot token + owner ID for `/ops-comms telegram`                          |
-| WhatsApp | whatsapp | bridge health check + QR pair + schema migration                         |
-| Email    | email    | gog CLI → Gmail MCP fallback for `/ops-inbox email`                     |
-| Slack    | slack    | Slack MCP server (managed by Claude Code)                               |
+| Option   | Header   | Description                                         |
+| -------- | -------- | --------------------------------------------------- |
+| Telegram | telegram | Bot token + owner ID for `/ops-comms telegram`      |
+| WhatsApp | whatsapp | bridge health check + QR pair + schema migration    |
+| Email    | email    | gog CLI → Gmail MCP fallback for `/ops-inbox email` |
+| Slack    | slack    | Slack MCP server (managed by Claude Code)           |
 
 **Batch 2 — Knowledge & Services:**
 
-| Option   | Header   | Description                                                             |
-| -------- | -------- | ----------------------------------------------------------------------- |
-| Notion   | notion   | Notion MCP — workspace search, comments, tasks, knowledge base          |
+| Option   | Header   | Description                                                                  |
+| -------- | -------- | ---------------------------------------------------------------------------- |
+| Notion   | notion   | Notion MCP — workspace search, comments, tasks, knowledge base               |
 | Calendar | calendar | gog calendar → Google Calendar MCP fallback — schedule context for briefings |
-| Doppler  | doppler  | Secrets manager — set default project + config for all ops skills       |
-| Vault    | vault    | Password manager — 1Password, Dashlane, Bitwarden, or macOS Keychain    |
+| Doppler  | doppler  | Secrets manager — set default project + config for all ops skills            |
+| Vault    | vault    | Password manager — 1Password, Dashlane, Bitwarden, or macOS Keychain         |
 
 **Batch 3 — Voice journal & integrations (show only if not already configured):**
 
-| Option   | Header   | Description                                                                    |
-| -------- | -------- | ------------------------------------------------------------------------------ |
-| Pocket   | pocket   | Voice journal notifier — POCKET_API_KEY + WhatsApp/email delivery + launchd agent |
+| Option | Header | Description                                                                       |
+| ------ | ------ | --------------------------------------------------------------------------------- |
+| Pocket | pocket | Voice journal notifier — POCKET_API_KEY + WhatsApp/email delivery + launchd agent |
 
 Present each batch as a separate `AskUserQuestion` call. Skip batches where all items are already configured. For each selected channel, run the matching sub-flow below.
 
@@ -1024,21 +1036,26 @@ If any scout returns a non-empty value, pre-fill it as the default; present foun
 **Optional:**
 
 Ask via one `AskUserQuestion` call:
+
 ```
 Configure optional Homey cloud credentials?
   [Yes — paste cloud token + Homey ID]
   [Skip optional fields]
 ```
+
 If yes, collect `HOMEY_CLOUD_TOKEN` (Athom OAuth token) and `HOMEY_ID` (hub ID) via two follow-up `AskUserQuestion` calls with `sensitive: true`.
 
 **Validate** (smoke test, RULE ZERO):
+
 ```bash
 curl -s -H "Authorization: Bearer $HOMEY_LOCAL_TOKEN" \
   "$HOMEY_LOCAL_URL/api/manager/system/system/info" 2>/dev/null
 ```
+
 Expect HTTP 200 with JSON containing `homeyVersion`. If the check fails, present `[Retry]` / `[Save anyway — LAN may be offline]` / `[Skip]` via `AskUserQuestion` (Rule 3 — never auto-skip).
 
 **Save** to `$PREFS_PATH` via `jq`:
+
 ```bash
 jq --arg url "$HOMEY_LOCAL_URL" \
    --arg lt "$HOMEY_LOCAL_TOKEN" \
@@ -1223,6 +1240,7 @@ jq --argjson new "$CONFIG_JSON" '.projects += [$new]' "$REG" > "$REG.tmp" && mv 
 ```
 
 **Status handling:**
+
 - `discovered` → register as-is.
 - `auth_expired` → surface a warning and route the user to `/ops:setup` for the affected channel before retrying.
 - `unreachable` → offer `[Register anyway (will show as unreachable in dashboards)]` / `[Skip]`.
@@ -1269,6 +1287,7 @@ After auto-discovery (or if the user selects "I'll enter projects manually"):
 By now, the daemon was already installed in Step 2c and has been pre-warming the briefing cache in the background while the user configured channels. This step adds **channel-dependent services** (`whatsapp-bridge`, `message-listener`, `inbox-digest`, `store-health`, `competitor-intel`) now that we know which channels and integrations are configured.
 
 **Skip conditions:**
+
 - If the user declined daemon install in Step 2c, skip this step entirely.
 - If `daemon.enabled != true` in `$PREFS_PATH`, skip.
 
@@ -1317,6 +1336,7 @@ Determine which services to enable based on what was configured in earlier steps
 - `message-listener` — include if WhatsApp or Telegram is configured (persistent poller)
 
 Build the services array programmatically (starting from the 2c baseline):
+
 ```bash
 SERVICES='["briefing-pre-warm","memory-extractor","inbox-digest","competitor-intel"]'
 PREFS=$(cat "$PREFS_PATH" 2>/dev/null || echo '{}')
@@ -1336,6 +1356,7 @@ echo "Services to enable: $SERVICES"
 ```
 
 Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with the existing config from Step 2c, preserving `briefing-pre-warm` and `memory-extractor`, and enabling the new channel-dependent services. **Every service MUST include a `command` field** — the daemon's `start_service()` skips any service without one. Use `${CLAUDE_PLUGIN_ROOT}` (resolved at runtime) for script paths. Each service entry should include:
+
 - `briefing-pre-warm`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/bin/ops-gather", "cron": "*/2 * * * *" }` — pre-warms /ops:go cache (installed in 2c)
 - `whatsapp-bridge`: `{ "enabled": true, "command": "launchctl kickstart -k gui/$UID/com.${USER}.whatsapp-bridge", "health_check": "lsof -i :8080 | grep LISTEN", "restart_delay": 60, "max_restarts": 10 }` — only if WhatsApp configured (matches `daemon-services.default.json`; bridge is owned by LaunchAgent, not a plugin script)
 - `memory-extractor`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-memory-extractor.sh", "health_file": "~/.claude/plugins/data/ops-ops-marketplace/memories/.health", "cron": "*/30 * * * *" }` — every 30 min (installed in 2c)
@@ -1377,6 +1398,7 @@ jq --arg brand "$BRAND" --arg cat "$CATEGORY" --arg tz "$TZ" \
 ```
 
 Now set `competitor-intel.enabled = true` in `daemon-services.json`.
+
 - `message-listener`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-message-listener.sh" }` — only if WhatsApp or Telegram configured
 
 After rewriting the services config, do a quick health check (foreground, <2s), then background the reload:
@@ -1415,6 +1437,7 @@ Collect these via `AskUserQuestion` — one question each. **Never auto-fill fro
 2. **Timezone** (single select — max 4 options per call, batch by region):
 
    First, detect the system timezone via `date +%Z` or `readlink /etc/localtime`. If detected, offer it as the first option:
+
    ```
    Select your timezone:
      [<detected timezone>]
@@ -1422,10 +1445,12 @@ Collect these via `AskUserQuestion` — one question each. **Never auto-fill fro
      [Europe/Asia/Oceania...]
      [Other — type it]
    ```
+
    If user picks "Americas...": `[America/New_York]`, `[America/Los_Angeles]`, `[America/Chicago]`, `[Back]`
    If user picks "Europe/Asia/Oceania...": `[Europe/London]`, `[Asia/Bangkok]`, `[Asia/Tokyo]`, `[Australia/Sydney]`
 
 3. **Briefing verbosity** (single select):
+
    ```
    How much detail do you want in briefings?
      [full]     — complete rundown of all channels, projects, and incidents
@@ -1434,11 +1459,13 @@ Collect these via `AskUserQuestion` — one question each. **Never auto-fill fro
    ```
 
 4. **Primary project** → **"All projects active in last 7 days" should be the first/default option.** Most users working across multiple projects want a unified briefing, not a single-project focus:
+
    ```
    Primary project for briefings?
      [All projects active in last 7 days]  ← default
      [Pick a specific project...]
    ```
+
    If "specific project", show registry aliases paginated at 3 per page + `[More...]`. Store `"primary_project": "all_active_7d"` for the default, or the specific alias.
 
 5. **YOLO mode** → select `[Yes — auto-approve low-risk actions]`, `[No — always confirm]`.
@@ -1479,7 +1506,7 @@ If the file already exists, **merge** — don't overwrite. Read with `jq`, apply
 
 ## Step 6.5 — Auto-fix subsystem + auxiliary daemons (if selected)
 
-This step configures four subsystems that ship with the plugin but stay opt-in: the deploy/build auto-fix loop, the recap marquee (tmux digest), the periodic Task* tool reminder, and the multi-account Claude rotator. All settings persist into `$PREFS_PATH` under the same keys declared in `.claude-plugin/plugin.json` `userConfig`, so the running daemons and hooks pick them up immediately.
+This step configures four subsystems that ship with the plugin but stay opt-in: the deploy/build auto-fix loop, the recap marquee (tmux digest), the periodic Task\* tool reminder, and the multi-account Claude rotator. All settings persist into `$PREFS_PATH` under the same keys declared in `.claude-plugin/plugin.json` `userConfig`, so the running daemons and hooks pick them up immediately.
 
 **Re-run guard (Rule 3 compliant).** Before each sub-flow, check `$PREFS_PATH` for an existing block. If found, show current state and ask:
 
@@ -1508,6 +1535,7 @@ Enable deploy auto-fix?
 ```
 
 Mapping:
+
 - `Yes — full autonomy` → `deploy_fix_enabled=true`, `auto_dispatch_fixer=true`
 - `Yes — notify only` → `deploy_fix_enabled=true`, `auto_dispatch_fixer=false`
 - `Skip` → `deploy_fix_enabled=false`, persist and jump to 6.5b
@@ -1665,7 +1693,7 @@ Enable recap marquee daemon? (one-line digest of all parallel Claude sessions in
 - `No` → both keys `false`.
 - `Skip` → leave defaults, mark `recap_marquee.deferred=true`.
 
-### 6.5c — Periodic Task* tool reminder
+### 6.5c — Periodic Task\* tool reminder
 
 ```
 Enable Task* tool reminder hook?
@@ -1721,9 +1749,19 @@ Then continue to Step 7.
 
 ## Step 7 — Shell env (if selected)
 
-1. Check whether `CLAUDE_PLUGIN_ROOT` is already exported in the profile file (grep for `CLAUDE_PLUGIN_ROOT`).
-2. If missing, **append it automatically** — this is a required step, not optional. Use `>>` (append, never overwrite). Print: `"✓ Added export CLAUDE_PLUGIN_ROOT=... to ~/.zshrc"`. Do NOT ask the user for permission — Rule 2 (never delegate commands to the user) applies here.
-3. Tell the user: `"Run 'source ~/.zshrc' or open a new terminal for it to take effect."` — this will show as an approval prompt in Claude's next tool call, which the user accepts normally.
+**Use the DETECTED shell profile, never a hardcoded `~/.zshrc`.** Resolve `PROFILE_FILE` from the Step 0b detector output (`profile_file` — `.bashrc` / `.zshrc` / `.config/fish/config.fish` / `.profile` per the user's actual `$SHELL`). A hardcoded `~/.zshrc` lands the export in a file bash/fish never sources (the original cross-OS bug).
+
+1. Check whether `CLAUDE_PLUGIN_ROOT` is already exported in `$PROFILE_FILE` (grep for `CLAUDE_PLUGIN_ROOT`).
+2. If missing, **append it automatically** — required, not optional. Use `>>` (append, never overwrite). Do NOT ask permission — Rule 2 (never delegate commands to the user) applies. Branch on the detected profile before writing:
+   ```bash
+   if [[ "$PROFILE_FILE" == *config.fish ]]; then
+     echo "set -gx CLAUDE_PLUGIN_ROOT $CLAUDE_PLUGIN_ROOT" >> "$PROFILE_FILE"
+   else
+     echo "export CLAUDE_PLUGIN_ROOT=\"$CLAUDE_PLUGIN_ROOT\"" >> "$PROFILE_FILE"
+   fi
+   ```
+   Print: `"✓ Added CLAUDE_PLUGIN_ROOT to $PROFILE_FILE"`.
+3. Tell the user: `"Run 'source $PROFILE_FILE' or open a new terminal for it to take effect."`
 
 ---
 

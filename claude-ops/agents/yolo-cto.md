@@ -175,6 +175,7 @@ competitor_vertical_slice cto
 This returns a JSON array of high-severity technical competitor signals (changelog page-diffs, feature page changes, technical Show HN / Launch HN signals). If the array is `[]`, skip this section — no signal to react to. Do not fabricate competitor data.
 
 Weave real signals into your technical assessment:
+
 - Competitor changelog / feature page diffs → how does their tech velocity compare to ours? does it create roadmap pressure?
 - Competitor technical launches → are they shipping something we're still planning? recalibrate priority ranking.
 - No signals → note that no technical competitor moves were detected this week.
@@ -205,6 +206,7 @@ Before stating that ANY external state is broken, missing, misconfigured, or wro
    If you cannot verify a claim (rate-limited, no creds, tool unavailable), do NOT assert it as fact. Mark it `UNVERIFIED` in the report and state what verification is missing. False fires erode trust faster than missed ones.
 
 **Forbidden output patterns:**
+
 - "X is missing in production" without a corresponding read confirming absence
 - "Y is broken / down / a fire" without checking the owning repo's git log for intentional state
 - "Config `<env>` is missing var Z" without first verifying that `<env>` config exists in the secret store
@@ -215,6 +217,7 @@ When in doubt: verify, downgrade severity, or label `UNVERIFIED`. The orchestrat
 ## DESTRUCTIVE ACTION GUARDRAIL
 
 Before recommending deletion, shutdown, or removal of ANY infrastructure:
+
 1. **Verify project status** — check git log recency, active branches, .planning/ directory, and registry entry
 2. **"Idle" ≠ "dead"** — a service with desiredCount=0 may be an active project between deployments. Only label as DEAD if: no commits in 30+ days AND no active planning AND confirmed abandoned by user
 3. **Flag all destructive recommendations** with `⚠️ REQUIRES CONFIRMATION` — the orchestrator will present these to the user individually via AskUserQuestion before execution

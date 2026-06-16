@@ -36,11 +36,11 @@ Source-of-truth: `my-project/.claude/commands/iphonetest.md`.
 
 ## 2. Modes
 
-| `--mode` | Shape | When to use |
-|---|---|---|
-| `tunnel` **(default since [PR #6172](https://github.com/your-org/my-project/pull/6172))** | Interactive REPL or JSON-RPC over stdio; one session held open across many commands | An operating Claude driving the device turn-by-turn |
-| `walkthrough` | Autonomous loop with the built-in My-Project-QA goal (visit every tab, screenshot each) | Smoke a fresh build |
-| `explore` | Autonomous loop with operator-supplied `--goal` | Single user-observable outcome, hands-off |
+| `--mode`                                                                                  | Shape                                                                                   | When to use                                         |
+| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `tunnel` **(default since [PR #6172](https://github.com/your-org/my-project/pull/6172))** | Interactive REPL or JSON-RPC over stdio; one session held open across many commands     | An operating Claude driving the device turn-by-turn |
+| `walkthrough`                                                                             | Autonomous loop with the built-in My-Project-QA goal (visit every tab, screenshot each) | Smoke a fresh build                                 |
+| `explore`                                                                                 | Autonomous loop with operator-supplied `--goal`                                         | Single user-observable outcome, hands-off           |
 
 > PR #6172 (merged 2026-05-29 17:48 UTC) flipped the default from `walkthrough`
 > to `tunnel`. Prior to that, you had to type `--mode tunnel` explicitly. Today,
@@ -66,8 +66,8 @@ only mode `tunnel.py` will ever request.
 Source quote from
 [`CreateRemoteAccessSession`](https://docs.aws.amazon.com/devicefarm/latest/APIReference/API_CreateRemoteAccessSession.html):
 
-> *This parameter has been deprecated. The interaction mode of the remote
-> access session. … Valid Values: `INTERACTIVE | NO_VIDEO | VIDEO_ONLY`.*
+> _This parameter has been deprecated. The interaction mode of the remote
+> access session. … Valid Values: `INTERACTIVE | NO_VIDEO | VIDEO_ONLY`._
 
 And the verbatim selection logic from `tunnel.py:Tunnel.start`:
 
@@ -151,13 +151,25 @@ tunnel`, the IPA ARN is already injected by the orchestrator — you usually do
 not call `start` yourself.
 
 ```json
-{"cmd":"start","app_arn":"arn:aws:devicefarm:us-west-2:...:upload/...","device_arn":"arn:aws:devicefarm:us-west-2::device/..."}
+{
+  "cmd": "start",
+  "app_arn": "arn:aws:devicefarm:us-west-2:...:upload/...",
+  "device_arn": "arn:aws:devicefarm:us-west-2::device/..."
+}
 ```
 
 Response:
 
 ```json
-{"ok":true,"session_arn":"arn:aws:devicefarm:...","device":"Apple iPhone 17 Pro","endpoint":"https://...","width":402,"height":874,"artifacts":"artifacts/devicefarm-tunnel/20260529-180000-abcd1234"}
+{
+  "ok": true,
+  "session_arn": "arn:aws:devicefarm:...",
+  "device": "Apple iPhone 17 Pro",
+  "endpoint": "https://...",
+  "width": 402,
+  "height": 874,
+  "artifacts": "artifacts/devicefarm-tunnel/20260529-180000-abcd1234"
+}
 ```
 
 `session_arn` and the screen dimensions are what you reference for the rest of
@@ -170,7 +182,7 @@ Capture a PNG. Default path is `artifacts/devicefarm-tunnel/<sess>/NNNN.png`
 filename you'll `Read` next turn.
 
 ```json
-{"cmd":"screenshot","path":"artifacts/iphonetest/run/step-01.png"}
+{ "cmd": "screenshot", "path": "artifacts/iphonetest/run/step-01.png" }
 ```
 
 Response: `{"ok":true,"path":"...","width":402,"height":874}`.
@@ -181,7 +193,7 @@ Tap at point coordinates. Coordinates are in **points** (matches `width` /
 `height` from `start` / `screenshot`), not pixels.
 
 ```json
-{"cmd":"tap","x":201,"y":612}
+{ "cmd": "tap", "x": 201, "y": 612 }
 ```
 
 ### `tap_text`
@@ -190,13 +202,17 @@ Find an element by accessibility label / name / value and tap its center.
 Tries exact predicate match first, then `CONTAINS`.
 
 ```json
-{"cmd":"tap_text","text":"Continue with Apple"}
+{ "cmd": "tap_text", "text": "Continue with Apple" }
 ```
 
 Response includes the matched predicate and rect:
 
 ```json
-{"ok":true,"matched":"label == \"Continue with Apple\" OR name == \"Continue with Apple\" OR value == \"Continue with Apple\"","rect":{"x":40,"y":596,"width":322,"height":56}}
+{
+  "ok": true,
+  "matched": "label == \"Continue with Apple\" OR name == \"Continue with Apple\" OR value == \"Continue with Apple\"",
+  "rect": { "x": 40, "y": 596, "width": 322, "height": 56 }
+}
 ```
 
 Quoted verbatim from `tunnel.py:Tunnel.tap_text`:
@@ -218,7 +234,7 @@ Two forms — direction (convenience) and coordinate (precise).
 Direction form (60% screen-distance swipe from center):
 
 ```json
-{"cmd":"swipe","direction":"up","duration_ms":400}
+{ "cmd": "swipe", "direction": "up", "duration_ms": 400 }
 ```
 
 `direction` ∈ `{up,down,left,right}`.
@@ -226,7 +242,14 @@ Direction form (60% screen-distance swipe from center):
 Coordinate form (raw drag):
 
 ```json
-{"cmd":"swipe","x1":201,"y1":700,"x2":201,"y2":200,"duration_ms":600}
+{
+  "cmd": "swipe",
+  "x1": 201,
+  "y1": 700,
+  "x2": 201,
+  "y2": 200,
+  "duration_ms": 600
+}
 ```
 
 Both compile down to `mobile: dragFromToForDuration` on the driver.
@@ -237,7 +260,7 @@ Send keys to whichever field is focused. `submit: true` appends a newline
 (send-keys `"\n"` on the focused element) after the text lands.
 
 ```json
-{"cmd":"type","text":"hello Anna","submit":false}
+{ "cmd": "type", "text": "hello Anna", "submit": false }
 ```
 
 Since my-project@`22cf0cac5d9b88d066b4badd94b59d480be5285e`, `type_text` cascades
@@ -265,7 +288,7 @@ Hardware-button press. Valid values:
 `home | lock | volumeup | volumedown`.
 
 ```json
-{"cmd":"press","button":"home"}
+{ "cmd": "press", "button": "home" }
 ```
 
 ### `launch_app`
@@ -279,7 +302,7 @@ after `start`. Added in my-project [PR #6174](https://github.com/your-org/my-pro
 Explicit bundle id form:
 
 ```json
-{"cmd":"launch_app","bundle_id":"com.staging.my-project"}
+{ "cmd": "launch_app", "bundle_id": "com.staging.my-project" }
 ```
 
 Auto-resolve form (`bundle_id` omitted — `tunnel.py` reads the IPA's
@@ -288,13 +311,13 @@ the `app_arn` cached at `start` time, via
 `df.get_upload(arn=app_arn)["upload"]["metadata"]["package_name"]`):
 
 ```json
-{"cmd":"launch_app"}
+{ "cmd": "launch_app" }
 ```
 
 Response on success:
 
 ```json
-{"ok":true,"bundle_id":"com.staging.my-project","method":"activateApp"}
+{ "ok": true, "bundle_id": "com.staging.my-project", "method": "activateApp" }
 ```
 
 `method` is `activateApp` when `mobile: activateApp` succeeds, or `launchApp`
@@ -334,7 +357,7 @@ Sleep without sending anything to the device. Use this to let an animation
 or network call settle before the next screenshot.
 
 ```json
-{"cmd":"wait","seconds":2}
+{ "cmd": "wait", "seconds": 2 }
 ```
 
 ### `status`
@@ -342,7 +365,7 @@ or network call settle before the next screenshot.
 Report session liveness, device name, elapsed seconds, and screen size.
 
 ```json
-{"cmd":"status"}
+{ "cmd": "status" }
 ```
 
 Response when running: `{"ok":true,"running":true,"session_arn":"...","device":"Apple iPhone 17 Pro","elapsed_sec":143,"width":402,"height":874,"artifacts":"artifacts/devicefarm-tunnel/..."}`.
@@ -356,7 +379,7 @@ the session may still be billing. Retry with
 `python3 scripts/devicefarm/stop-session.py --arn <arn>`.
 
 ```json
-{"cmd":"stop"}
+{ "cmd": "stop" }
 ```
 
 ### `quit` / `exit`
@@ -366,7 +389,7 @@ the client sees the actual outcome — a successful response means the device
 is no longer billing.
 
 ```json
-{"cmd":"quit"}
+{ "cmd": "quit" }
 ```
 
 Response on clean stop: `{"ok":true,"quit":true}`. On stop failure:
@@ -383,15 +406,15 @@ Appium driver bundled in Device Farm's managed Appium server lags upstream
 which is why some `mobile:` extensions the docs list are not actually
 exposed at the WDA endpoint.
 
-| `cmd` | App-rendered My-Project UI | iOS system UI (Springboard / Spotlight) |
-|---|---|---|
-| `tap` (coords) | ✓ | ✓ |
-| `tap_text` | ✓ (every interactive My-Project element ships an accessibility label per `figma-design-system.md`) | ✗ — Springboard / Spotlight system controls (Cancel, search field, App-Library labels) often have no label exposed to WDA's predicate matcher |
-| `type` | ✓ — the 4-strategy fallback (focused element → `set_value`/`send_keys`, then first-visible TextField/SecureTextField, then `mobile: keys`) lands on any field with `hasKeyboardFocus == 1` OR any visible TextField, with no operator-side pre-focusing required | ✗ — iOS Springboard / Spotlight / App-Library search fields are not exposed in the active app's accessibility tree, so the predicate-based fallbacks find nothing and `mobile: keys` returns `Unhandled endpoint: /wda/element/0/keyboardInput` on DF |
-| `swipe` (both forms) | ✓ | ✓ |
-| `press` | ✓ | ✓ |
-| `launch_app` | ✓ — `mobile: activateApp` succeeds against the staging bundle id; `mobile: launchApp` fallback covers older driver builds | n/a (operates on installed-app bundle ids, not system UI) |
-| `screenshot` / `tap` (coords) | ✓ | ✓ — **always usable as the last-resort fallback** |
+| `cmd`                         | App-rendered My-Project UI                                                                                                                                                                                                                                       | iOS system UI (Springboard / Spotlight)                                                                                                                                                                                                               |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tap` (coords)                | ✓                                                                                                                                                                                                                                                                | ✓                                                                                                                                                                                                                                                     |
+| `tap_text`                    | ✓ (every interactive My-Project element ships an accessibility label per `figma-design-system.md`)                                                                                                                                                               | ✗ — Springboard / Spotlight system controls (Cancel, search field, App-Library labels) often have no label exposed to WDA's predicate matcher                                                                                                         |
+| `type`                        | ✓ — the 4-strategy fallback (focused element → `set_value`/`send_keys`, then first-visible TextField/SecureTextField, then `mobile: keys`) lands on any field with `hasKeyboardFocus == 1` OR any visible TextField, with no operator-side pre-focusing required | ✗ — iOS Springboard / Spotlight / App-Library search fields are not exposed in the active app's accessibility tree, so the predicate-based fallbacks find nothing and `mobile: keys` returns `Unhandled endpoint: /wda/element/0/keyboardInput` on DF |
+| `swipe` (both forms)          | ✓                                                                                                                                                                                                                                                                | ✓                                                                                                                                                                                                                                                     |
+| `press`                       | ✓                                                                                                                                                                                                                                                                | ✓                                                                                                                                                                                                                                                     |
+| `launch_app`                  | ✓ — `mobile: activateApp` succeeds against the staging bundle id; `mobile: launchApp` fallback covers older driver builds                                                                                                                                        | n/a (operates on installed-app bundle ids, not system UI)                                                                                                                                                                                             |
+| `screenshot` / `tap` (coords) | ✓                                                                                                                                                                                                                                                                | ✓ — **always usable as the last-resort fallback**                                                                                                                                                                                                     |
 
 ## 6. Workarounds catalog
 
@@ -683,14 +706,14 @@ python3 ~/Projects/my-project-workspace/my-project/scripts/devicefarm/list-sessi
 
 ## 8. Cost model
 
-| Item | Cost | Notes |
-|---|---|---|
-| Metered iPhone time | ~$0.17 / device-minute | Charged from RUNNING until `stop_remote_access_session` returns |
-| Typical tunnel session | $1–3 per realistic walkthrough | ~6–18 minutes including app launch + sign-in + few flows |
-| `--print-only` | $0 | Resolves + uploads the IPA, never reserves a device |
-| Idle session during operator thinking | Yes, metered | Plan your next move before sending — but don't paralysis-by-analysis past a couple of minutes |
-| Auto-stop guarantee | `finally` + `SIGTERM` + `quit` handler | `tunnel.py:main._try_stop` returns False on stop failure, which raises the process exit code to 2 so CI / supervisors can alert. `kill -9` bypasses this — recover with §6.5 |
-| Bedrock tokens | Only in `walkthrough` / `explore` modes | `tunnel` mode has no LLM-per-turn cost; the operating Claude is the brain |
+| Item                                  | Cost                                    | Notes                                                                                                                                                                        |
+| ------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Metered iPhone time                   | ~$0.17 / device-minute                  | Charged from RUNNING until `stop_remote_access_session` returns                                                                                                              |
+| Typical tunnel session                | $1–3 per realistic walkthrough          | ~6–18 minutes including app launch + sign-in + few flows                                                                                                                     |
+| `--print-only`                        | $0                                      | Resolves + uploads the IPA, never reserves a device                                                                                                                          |
+| Idle session during operator thinking | Yes, metered                            | Plan your next move before sending — but don't paralysis-by-analysis past a couple of minutes                                                                                |
+| Auto-stop guarantee                   | `finally` + `SIGTERM` + `quit` handler  | `tunnel.py:main._try_stop` returns False on stop failure, which raises the process exit code to 2 so CI / supervisors can alert. `kill -9` bypasses this — recover with §6.5 |
+| Bedrock tokens                        | Only in `walkthrough` / `explore` modes | `tunnel` mode has no LLM-per-turn cost; the operating Claude is the brain                                                                                                    |
 
 The fundamental rule: **a session that never reaches `stop_remote_access_session` keeps billing.** Always end with `quit`, never `kill -9`, and run §6.5 if anything goes sideways.
 

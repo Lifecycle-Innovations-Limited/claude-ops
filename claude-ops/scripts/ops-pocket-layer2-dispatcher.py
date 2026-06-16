@@ -3,7 +3,7 @@
 
 Reads new rows from $POCKET_QUEUE_PATH (JSONL written by the Render webhook
 receiver, synced to this machine), dispatches a Claude subagent per task, then
-stages a WhatsApp/email notification draft for Sam's approval.
+stages a WhatsApp/email notification draft for the owner's approval.
 
 Designed to run from cron (every 5 min) or on-demand.  Uses the same
 once.sh-style lock pattern to prevent stacking.

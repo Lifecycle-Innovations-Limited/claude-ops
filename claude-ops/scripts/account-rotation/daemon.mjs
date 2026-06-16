@@ -24,8 +24,11 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, unlinkSync, appendFileSync, statSync } from 'fs';
-import { persistBedrockClaudeSettings, clearHardcodedModelsForOAuthClaudeSettings } from './claude-settings-mode.mjs';
-import { setRouteMode } from './route-state.mjs';
+import {
+  persistBedrockClaudeSettings,
+  clearHardcodedModelsForOAuthClaudeSettings,
+  resolveWorkingAwsEnv,
+} from './claude-settings-mode.mjs';
 import {
   destinationUtilHardBlock,
   DAEMON_SAFE_5H_PCT,
@@ -41,8 +44,8 @@ import { execSync, execFileSync, spawn, spawnSync } from 'child_process';
 import { tmpdir } from 'os';
 import { applyAccountLeases, writeLease } from './account-leases.mjs';
 import { sweepDeferredRespawns, listLiveBgSessions, doRespawn, isLoopSession } from './bg-respawn.mjs';
-import { pickAccountForSession, recordSessionLease, readLeases } from './session-router.mjs';
-import { checkFleetStuckAgents } from './fleet-recovery.mjs';
+import { pickAccountForSession, recordSessionLease, readLeases, writeLeases } from './session-router.mjs';
+import { sweepBedrockSessions, verifyBedrockSwaps } from './bedrock-watchdog.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
@@ -136,7 +139,7 @@ function notify(title, msg) {
   } catch {}
 }
 
-// Cross-machine account leases (Sam 2026-06-06): NOT a static per-machine split.
+// Cross-machine account leases ((2026-06-06)): NOT a static per-machine split.
 // Both machines may use ALL accounts; the only constraint is the same account is
 // never ACTIVE on both at once. readConfig() drops accounts a FOREIGN host holds
 // a fresh lease on; the loop heartbeats THIS machine's active-account lease.
@@ -162,7 +165,7 @@ function readConfig() {
 // Applied once per readState() call to keep state.json consistent as labels evolve.
 // Safe to run repeatedly (no-op when the old key doesn't exist).
 const STATE_KEY_MIGRATIONS = {
-  'heartfeldt-personal': 'heartfeldt', // label changed: personal org is now just "heartfeldt"
+  'account-personal': 'account-main', // label changed: personal org is now just "account-main"
 };
 
 function readState() {
@@ -375,7 +378,7 @@ async function detectLiveAccountFromVault(config) {
     const matches = config.accounts.filter((a) => a.email.toLowerCase() === liveEmail);
     if (matches.length === 1) return accountKey(matches[0]);
     if (matches.length > 1) {
-      // Multiple labels for same email (e.g. heartfeldt vs heartfeldt-team).
+      // Multiple labels for same email (e.g. account-main vs account-team).
       // Use orgName from profile to disambiguate.
       const orgName = body?.organization?.name?.toLowerCase() || '';
       const byOrg = matches.find((a) => (a.orgName || '').toLowerCase() === orgName);
@@ -393,7 +396,7 @@ const RATE_LIMITS_FILE = join(__dirname, '.rate-limits.json');
 const UTILIZATION_ROTATE_THRESHOLD = 90; // Rotate at 90% — 95%+ is always too late: Claude
 // surfaces its own limit warnings ~75%, and an in-flight session crossing ~95% is already
 // throttling before the daemon can rescue it. Destination viability bars (DAEMON_SAFE_*=95/94)
-// stay ABOVE this so there is always a cooler account to land on. (Sam directive 2026-06-13.)
+// stay ABOVE this so there is always a cooler account to land on. (owner directive 2026-06-13.)
 
 function readRealUtilization() {
   try {
@@ -840,7 +843,7 @@ async function findValidRotationTarget(config, state) {
       log(`[pre-rotate] ${key}: live util 5h=${live.pct5h.toFixed(0)}% 7d=${live.pct7d.toFixed(0)}% — OK`);
     } else {
       // Live query failed (Anthropic 429 or network). DO NOT accept blindly —
-      // that's how we picked an exhausted account and bricked Sam's session.
+      // that's how we picked an exhausted account and bricked the owner's session.
       // Fall back to cached util; refuse if cached is unknown OR >=90%.
       const cached = state.accounts?.[key]?.lastUtilization;
       const cachedPct = cached?.pct;
@@ -905,7 +908,7 @@ async function findValidRotationTarget(config, state) {
 //   2. CACHED-evidence: when API is throttling us (live fails) BUT every
 //      candidate has fresh (<15min) cached util >= 95% AND a recent rate-limit
 //      signal exists, we accept cached evidence — refusing to fall back when
-//      Anthropic API is dead would just leave Sam stuck.
+//      Anthropic API is dead would just leave the owner stuck.
 async function allCandidatesExhausted(config, state) {
   const EXHAUSTED_THRESHOLD = 95;
   const now = Date.now();
@@ -976,20 +979,18 @@ function activateBedrockFallbackFromDaemon(reason) {
     notify('Bedrock Fallback BLOCKED', 'Kill-switch active — Max-only mode. Wait for reset window or rotate manually.');
     return false;
   }
-  if (process.env.CLAUDE_CONFIRM_METERED_BEDROCK !== '1') {
-    log(`[bedrock-fallback] BLOCKED: Bedrock is metered AWS usage; reason=${reason}`);
-    notify('Bedrock Fallback Blocked', 'Bedrock is metered AWS usage. Confirm before switching from CRS OAuth.');
-    return false;
-  }
   const region = process.env.AWS_BEDROCK_REGION || 'us-east-1';
   try {
+    const aws = resolveWorkingAwsEnv(region);
     execFileSync('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
       stdio: 'pipe',
       timeout: 5000,
+      env: aws.env,
     });
     execFileSync('aws', ['bedrock', 'list-inference-profiles', '--region', region, '--max-results', '1'], {
       stdio: 'pipe',
       timeout: 6000,
+      env: aws.env,
     });
   } catch (e) {
     log(`[bedrock-fallback] AWS unreachable: ${(e.message || '').slice(0, 80)}`);
@@ -1007,16 +1008,6 @@ function activateBedrockFallbackFromDaemon(reason) {
     };
     writeFileSync(sentinel, JSON.stringify(payload, null, 2));
     try {
-      if (process.env.CLAUDE_CONFIRM_METERED_BEDROCK !== '1') {
-        setRouteMode('fail-closed', {
-          reason: `bedrock fallback requires confirmation: ${reason}`,
-          updatedBy: 'daemon.mjs',
-        });
-        log(`[bedrock-fallback] BLOCKED pending explicit metered-usage confirmation reason=${reason}`);
-        notify('Bedrock Fallback Blocked', 'Bedrock is metered AWS usage. Confirm with claude-stack before switching.');
-        return false;
-      }
-      process.env.CLAUDE_BEDROCK_REASON = reason;
       persistBedrockClaudeSettings(region);
       log(`[bedrock-fallback] settings.json → Bedrock env (${region})`);
     } catch (e) {
@@ -1078,7 +1069,7 @@ async function doRotation(reason) {
 
   if (!target) {
     log('ROTATION ABORTED: no viable Max target after pre-rotate (util bars, tokens, or live query refusals)');
-    // Live-confirm exhaustion before flipping to Bedrock — Sam's rule.
+    // Live-confirm exhaustion before flipping to Bedrock — the owner's rule.
     const exhausted = await allCandidatesExhausted(config, state);
     if (exhausted) {
       log('All candidates LIVE-CONFIRMED exhausted (>=95%) — engaging Bedrock fallback');
@@ -1121,17 +1112,13 @@ async function doRotation(reason) {
   try {
     // --no-browser: no Chrome, no API calls (works when rate limited)
     // --to: daemon controls which account to rotate to (pre-validated token)
-    // --session: ALSO rotate live sessions mid-flight (Sam directive 2026-06-13) —
-    // identical to the manual `/rotate --session` path. The keychain swap alone only
-    // helps NEW sessions / next-401 retry, which at the 90% trigger is already too late
-    // for the in-flight session. refreshRunningSession() injects `/login` into running
-    // sessions (tmux send-keys / iTerm2 + Ghostty via System Events keystroke), and
-    // `/login` re-reads the keychain → picks up the new token instantly, no restart.
-    // bg sessions (no TTY) are handled separately by respawnBgSessions().
+    // NO --session: keychain swap only. Background rotation must NEVER inject /login
+    // into running sessions — that interrupts active work. Sessions pick up the new
+    // token on next 401 (auto-retry) or when the user voluntarily runs /login.
     // execFileSync (not execSync) — no shell, no injection risk on targetKey.
-    const result = execFileSync('node', [ROTATE_SCRIPT, '--no-browser', '--session', '--to', targetKey], {
+    const result = execFileSync('node', [ROTATE_SCRIPT, '--no-browser', '--to', targetKey], {
       cwd: __dirname,
-      timeout: 150_000, // 2.5min — keychain swap is fast; +per-session /login injection
+      timeout: 120_000, // 2min — keychain swap is fast; no per-session injection
       env: { ...process.env, NODE_NO_WARNINGS: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     }).toString();
@@ -1144,7 +1131,7 @@ async function doRotation(reason) {
 
 // ── Auto-sync: detect if live auth drifted from state ────────────────────────
 
-function _syncDriftedState(state, config, lastRotatedAt = 0) {
+function syncDriftedState(state, config, lastRotatedAt = 0) {
   // After a rotation, `claude auth status` still returns the OLD session's email
   // until the user restarts Claude Code. Don't undo the rotation by "correcting"
   // state back to the stale live email — wait for the blackout to pass.
@@ -1251,10 +1238,7 @@ async function refreshSingleToken(account) {
         { timeout: 5000 },
       );
       if (kcResult.error || kcResult.status !== 0) {
-        const detail =
-          kcResult.stderr?.toString()?.trim() ||
-          kcResult.error?.message ||
-          `exit ${kcResult.status}`;
+        const detail = kcResult.stderr?.toString()?.trim() || kcResult.error?.message || `exit ${kcResult.status}`;
         throw new Error(`Keychain write failed: ${detail}`);
       }
     }
@@ -1268,7 +1252,7 @@ async function refreshSingleToken(account) {
   }
 }
 
-async function _dynamicRefresh(config, state) {
+async function dynamicRefresh(config, state) {
   const now = Date.now();
   const real = readRealUtilization();
   const pct5h = real?.five_hour?.pct || 0;
@@ -1372,15 +1356,37 @@ async function maybeRecoverOAuthFromBedrock(config, state, sentinelPath, ctx) {
               `[bedrock-recovery] ${probeKey} viable (daemon 5h<${DAEMON_SAFE_5H_PCT}% & 7d<${DAEMON_SAFE_7D_PCT}%) — exiting Bedrock fallback`,
             );
             try {
+              unlinkSync(sentinelPath);
+            } catch {}
+            try {
               clearHardcodedModelsForOAuthClaudeSettings();
               log('[bedrock-recovery] settings.json → OAuth (hardcoded models cleared)');
             } catch (e) {
               log(`[bedrock-recovery] settings clear failed: ${e.message?.slice(0, 80)}`);
-              continue;
             }
+            // Purge stale `bedrock`-keyed session leases. Without this, bg-respawn.mjs
+            // keeps reading lease.accountKey === 'bedrock' and re-injecting
+            // CLAUDE_CODE_USE_BEDROCK on every respawn forever — sessions stay stranded
+            // on metered Bedrock long after OAuth headroom returns. (2026-06-14: 9 sessions
+            // still pinned to bedrock 17h post-recovery; the owner: "Bedrock should never be in
+            // use if any OAuth account has tokens available.") Drop the leases so the next
+            // respawn falls through to OAuth token injection.
             try {
-              unlinkSync(sentinelPath);
-            } catch {}
+              const leases = readLeases();
+              let purged = 0;
+              for (const [sid, entry] of Object.entries(leases)) {
+                if (entry?.accountKey === 'bedrock') {
+                  delete leases[sid];
+                  purged++;
+                }
+              }
+              if (purged > 0) {
+                writeLeases(leases);
+                log(`[bedrock-recovery] purged ${purged} stale bedrock lease(s) → respawns will use OAuth`);
+              }
+            } catch (e) {
+              log(`[bedrock-recovery] bedrock-lease purge failed: ${e.message?.slice(0, 80)}`);
+            }
             try {
               stopClaudeDaemon();
             } catch (e) {
@@ -1562,7 +1568,9 @@ async function checkSessionLeaseRotations(config, state) {
           try {
             const marker = `/tmp/claude-respawn-deferred-${s.id}`;
             if (!existsSync(marker)) writeFileSync(marker, String(Date.now()));
-            log(`[session-router] Session ${s.id} is ${s.status === 'busy' ? 'busy' : 'a /loop session'} — deferred respawn (sweep handles it).`);
+            log(
+              `[session-router] Session ${s.id} is ${s.status === 'busy' ? 'busy' : 'a /loop session'} — deferred respawn (sweep handles it).`,
+            );
           } catch {}
         }
         return; // Rotate/respawn at most one session per tick to stagger
@@ -1633,10 +1641,13 @@ async function mainLoop() {
   let lastRotatedAt = 0; // track when we last rotated
   let lastStatusLog = 0; // periodic status logging
   let lastLeaseBeat = 0; // cross-machine lease heartbeat (S3)
-  const _lastRefreshCheck = 0; // dynamic refresh check
+  const lastRefreshCheck = 0; // dynamic refresh check
   let lastDriftCheck = 0; // cheap vault-based drift detection
   let lastFullProbe = 0; // periodic fleet-wide live-util snapshot refresh
   let lastRespawnSweep = 0; // deferred bg-session respawn retry (busy at rotation time)
+  let lastBedrockSweep = 0; // force-swap real Bedrock sessions → OAuth (no defer)
+  let pendingBedrockVerify = []; // PIDs swapped last sweep, verified next sweep
+  const BEDROCK_SWEEP_INTERVAL = 45_000; // ~45s — metered bleed must stop fast
   const FULL_PROBE_INTERVAL = 5 * 60_000;
   const bedrockRecCtx = {
     lastCheck: 0,
@@ -1655,20 +1666,6 @@ async function mainLoop() {
 
       const state = readState();
 
-      // Fleet stuck-agent auto-recovery (every tick): detect bg agents wedged on
-      // a session-limit popup (usage-limit → re-lease to coolest + neutralize +
-      // respawn) or a transient server-side 429 ("Server is temporarily limiting
-      // requests" — global, hits all accounts at once → respawn-with-backoff to
-      // retry). This is the only cure for a whole-fleet simultaneous flip, which
-      // by definition is NOT per-account quota. (Sam 2026-06-13)
-      if (process.env.CLAUDE_ENABLE_FLEET_RECOVERY === '1') {
-        try {
-          checkFleetStuckAgents(config, state, (m) => log(`[fleet-recover] ${m}`));
-        } catch (e) {
-          log(`[fleet-recover] error: ${e.message?.substring(0, 120)}`);
-        }
-      }
-
       // Periodic status log (every 5 min) — shows cooldown state for all accounts
       if (Date.now() - lastStatusLog > 300_000) {
         log(`Account cooldown status:\n${accountCooldownStatus(state)}`);
@@ -1677,7 +1674,7 @@ async function mainLoop() {
 
       // Cross-machine lease heartbeat (every 3 min, << 2h TTL): refresh THIS
       // machine's claim on its active account so the other machine keeps
-      // excluding it. Best-effort / fail-open (S3 down => no-op). (Sam 2026-06-06)
+      // excluding it. Best-effort / fail-open (S3 down => no-op). ((2026-06-06))
       if (state.activeAccount && Date.now() - lastLeaseBeat > 180_000) {
         lastLeaseBeat = Date.now();
         try {
@@ -1694,13 +1691,37 @@ async function mainLoop() {
       // Deferred bg-session respawn sweep (every 2 min): sessions that were
       // busy at rotation time get respawned once they go idle, or force-
       // respawned after 90 min so they never wedge on an expired token.
-      if (process.env.CLAUDE_ENABLE_BG_RESPAWN === '1' && Date.now() - lastRespawnSweep > 120_000) {
+      if (Date.now() - lastRespawnSweep > 120_000) {
         lastRespawnSweep = Date.now();
         try {
           const handled = sweepDeferredRespawns((m) => log(m));
           if (handled > 0) log(`[bg-respawn] sweep refreshed ${handled} deferred bg session(s)`);
         } catch (e) {
           log(`[bg-respawn] sweep error: ${e.message?.substring(0, 80)}`);
+        }
+      }
+
+      // Bedrock force-swap watchdog (~45s): any session ACTUALLY running on
+      // metered Bedrock (CLAUDE_CODE_USE_BEDROCK=1 in its /proc environ) is
+      // force-swapped to OAuth immediately whenever a usable token exists — NO
+      // 90-min defer for busy/loop sessions (metered bleed overrides loop
+      // preservation). Next sweep verifies the previously-swapped PIDs are off
+      // Bedrock (env + best-effort network corroboration). ((2026-06-14))
+      if (Date.now() - lastBedrockSweep > BEDROCK_SWEEP_INTERVAL) {
+        lastBedrockSweep = Date.now();
+        try {
+          if (pendingBedrockVerify.length) {
+            verifyBedrockSwaps(pendingBedrockVerify, (m) => log(m));
+            pendingBedrockVerify = [];
+          }
+          const { swapped, scanned, swappedPids } = sweepBedrockSessions(config, state, (m) => log(m));
+          if (swapped > 0) {
+            log(`[bedrock-watchdog] force-swapped ${swapped}/${scanned} Bedrock session(s) → OAuth`);
+            lastRotatedAt = Date.now();
+          }
+          pendingBedrockVerify = swappedPids;
+        } catch (e) {
+          log(`[bedrock-watchdog] sweep error: ${e.message?.substring(0, 100)}`);
         }
       }
 
@@ -1772,7 +1793,7 @@ async function mainLoop() {
         await doRotation(reason);
         lastRotatedAt = Date.now();
         await sleep(RATE_LIMIT_COOLDOWN);
-      } else if (process.env.CLAUDE_ENABLE_BG_SESSION_ROUTER === '1') {
+      } else {
         await checkSessionLeaseRotations(config, state);
       }
     } catch (err) {
@@ -1791,7 +1812,7 @@ if (args.includes('--stop')) {
   if (existsSync(PID_FILE)) {
     const pid = readFileSync(PID_FILE, 'utf8').trim();
     try {
-      process.kill(parseInt(pid, 10));
+      process.kill(parseInt(pid));
       log(`Stopped daemon (PID ${pid})`);
     } catch {}
     try {
@@ -1805,7 +1826,7 @@ if (args.includes('--stop')) {
   if (existsSync(PID_FILE)) {
     const pid = readFileSync(PID_FILE, 'utf8').trim();
     try {
-      process.kill(parseInt(pid, 10), 0); // Check if alive
+      process.kill(parseInt(pid), 0); // Check if alive
       console.log(`Daemon running (PID ${pid})`);
     } catch {
       console.log('Daemon PID file exists but process is dead');

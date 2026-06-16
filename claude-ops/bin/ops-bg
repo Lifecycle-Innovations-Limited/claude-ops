@@ -86,9 +86,23 @@ cmd_dispatch() {
     exit 2
   fi
   local prompt="$*"
-  local -a args=(--bg --model "$model" --effort "$effort" --add-dir "$add_dir")
+  # CRS routing: every bg session ops-bg spawns inherits the sanctioned overlay
+  # (ANTHROPIC_BASE_URL + CLAUDE_CODE_OAUTH_TOKEN). Preflight refuses to spawn if
+  # the overlay is half-set or the key is 401-rejected. Opt out with CRS_OVERLAY="".
+  local CRS_OVERLAY="${CRS_OVERLAY-$HOME/.claude/crs-session-settings.json}"
+  local -a crs_args=()
+  if [ -n "$CRS_OVERLAY" ]; then
+    if [ -x "$HOME/.claude/scripts/crs-overlay-preflight.sh" ]; then
+      if ! bash "$HOME/.claude/scripts/crs-overlay-preflight.sh" "$CRS_OVERLAY" >&2; then
+        echo "ops-bg: CRS overlay preflight failed — refusing to spawn" >&2
+        exit 1
+      fi
+    fi
+    crs_args=(--settings "$CRS_OVERLAY")
+  fi
+  local -a args=(--bg "${crs_args[@]}" --model "$model" --effort "$effort" --add-dir "$add_dir")
   if [ -n "$name" ]; then
-    args=(--bg --name "$name" --model "$model" --effort "$effort" --add-dir "$add_dir")
+    args=(--bg "${crs_args[@]}" --name "$name" --model "$model" --effort "$effort" --add-dir "$add_dir")
   fi
   if [ -n "$agent" ]; then
     args+=(--agent "$agent")

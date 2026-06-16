@@ -2,7 +2,7 @@
 """ops-pocket-decisions — append-only decision log for the Pocket pipeline.
 
 Every classification decision (triage ACT/DRAFT/DROP/ASK, and every
-ingest-time event-seen-but-no-triage) lands here so Sam can audit what
+ingest-time event-seen-but-no-triage) lands here so the owner can audit what
 Pocket reviewed even when it decided not to act.
 
 Path: <POCKET_STATE_DIR>/decisions/YYYY-MM-DD.jsonl

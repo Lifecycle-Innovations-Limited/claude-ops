@@ -69,6 +69,7 @@ EMAIL_COS_ACCOUNT="your.address@gmail.com"
 Auth: `gog auth add your.address@gmail.com --services gmail`
 
 Common auth issues:
+
 - `GOG_KEYRING_PASSWORD` not set: add it to `~/.mcp-secrets.env` (it is the password for gog's keychain).
 - Token expired: re-run `gog auth add ...` to refresh.
 - `--no-input` fails silently: ensure `GOG_KEYRING_PASSWORD` is exported before calling gog.
@@ -84,11 +85,13 @@ EMAIL_COS_TG_BOT_USERNAME="YourBot"   # @username of the bot (no @)
 ```
 
 Required env (in `~/.mcp-secrets.env` or Doppler):
+
 - `TELEGRAM_BOT_TOKEN` — from @BotFather
 - `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` — from my.telegram.org
 - `TELEGRAM_SESSION` — MTProto StringSession (generate once with gramjs)
 
 Common auth issues:
+
 - Bot not started: send `/start` to your bot before the first run.
 - MTProto session expired: regenerate `TELEGRAM_SESSION` with a one-time gramjs script (see telegram-server/README in this repo).
 - `approve-agent` reads the bot DM to get your replies. If the MTProto session is missing, Telegram approval still works via Gmail reply.
@@ -152,6 +155,7 @@ EMAIL_COS_WA_BRIDGE_URL="http://localhost:8080"
 Requires a running WhatsApp bridge (whatsapp-mcp or similar) paired to your number. Pair via the bridge's QR flow.
 
 Common auth issues:
+
 - Bridge not running: `systemctl --user status whatsapp-bridge`
 - JID format wrong: use `<countrycode><number>@s.whatsapp.net` (no + prefix, no spaces).
 - Bridge unpaired: re-scan QR.
@@ -169,12 +173,14 @@ EMAIL_COS_SLACK_DM_CHANNEL=""                # leave empty; auto-resolved on fir
 ```
 
 Required env (in `~/.mcp-secrets.env`):
+
 - `SLACK_MCP_XOXC` or `SLACK_MCP_XOXC_TOKEN` — xoxc- user token (from browser DevTools)
 - `SLACK_MCP_XOXD` or `SLACK_MCP_XOXD_TOKEN` — d= cookie value
 
 Common auth issues:
+
 - xoxc token expired: Slack browser-session tokens expire when you log out or Slack rotates them. Extract fresh values from browser DevTools → Application → Cookies (d=) and Network → any API call header (Authorization: xoxc-...).
-- Channel not resolving: if `conversations.open` returns empty, set `EMAIL_COS_SLACK_DM_CHANNEL` to your known D* channel ID directly.
+- Channel not resolving: if `conversations.open` returns empty, set `EMAIL_COS_SLACK_DM_CHANNEL` to your known D\* channel ID directly.
 
 #### iCloud Reminders
 
@@ -186,10 +192,12 @@ EMAIL_COS_ICLOUD_LIST_URL="https://pXX-caldav.icloud.com:443/NUMERICID/calendars
 ```
 
 Required env:
+
 - `ICLOUD_APPLE_ID` — your Apple ID email
 - `ICLOUD_APP_PW` — app-specific password (Settings → Apple ID → Passwords & Security → App-Specific Passwords). Never your main Apple password.
 
 Common auth issues:
+
 - HTTP 401: app-specific password revoked or wrong. Generate a new one.
 - HTTP 404: list URL is wrong. Find yours by navigating to iCloud web → Reminders → share a list → the URL contains your numeric ID and list UUID.
 
@@ -211,15 +219,15 @@ The `"fallback": true` category catches everything not matched by prior rules.
 
 ## Timers reference
 
-| Timer | Default cadence | Enabled when |
-|---|---|---|
-| email-cos-sweep | every 10 min | EMAIL_COS_ACCOUNT set |
-| email-cos-orch | every 20 min | EMAIL_COS_ACCOUNT set |
-| email-cos-sender | every 3 min | EMAIL_COS_ACCOUNT set |
-| email-cos-compact | weekly Sun 04:30 | EMAIL_COS_ACCOUNT set |
-| email-cos-approve | every 3 min | any channel + account |
-| email-cos-status | daily 08:00 | TG or Slack enabled |
-| email-cos-tg-process | every ~60s | EMAIL_COS_TG_ENABLE=true + TG_CHAT_ID set |
+| Timer                | Default cadence  | Enabled when                              |
+| -------------------- | ---------------- | ----------------------------------------- |
+| email-cos-sweep      | every 10 min     | EMAIL_COS_ACCOUNT set                     |
+| email-cos-orch       | every 20 min     | EMAIL_COS_ACCOUNT set                     |
+| email-cos-sender     | every 3 min      | EMAIL_COS_ACCOUNT set                     |
+| email-cos-compact    | weekly Sun 04:30 | EMAIL_COS_ACCOUNT set                     |
+| email-cos-approve    | every 3 min      | any channel + account                     |
+| email-cos-status     | daily 08:00      | TG or Slack enabled                       |
+| email-cos-tg-process | every ~60s       | EMAIL_COS_TG_ENABLE=true + TG_CHAT_ID set |
 
 Check timer health: `systemctl --user list-timers 'email-cos*'`
 
