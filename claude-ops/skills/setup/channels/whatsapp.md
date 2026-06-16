@@ -1,14 +1,19 @@
 ### 3b — WhatsApp (bridge health + QR pair)
 
-WhatsApp is handled exclusively by the whatsmeow `whatsapp-bridge` (managed by `com.${USER}.whatsapp-bridge` LaunchAgent — `${USER}` is your macOS username, expanded at install time so each user gets their own per-account bridge) and accessed via `mcp__whatsapp__*` tools.
+> **Cross-OS gate (read first):** the `launchctl` / `~/Library/LaunchAgents` steps below are **macOS-only**. Branch on `case "$(uname -s)" in Darwin) … ;; Linux) … ;; esac`. On **Linux**, the bridge is a `systemd --user` unit — install via `scripts/install-whatsapp-bridge-linux.sh` (do NOT run the launchctl commands); manage with `systemctl --user {status,restart} whatsapp-bridge`. On **WSL** use the systemd path if `systemctl --user` works, else run the bridge under `nohup`. Secrets use the cross-OS `credential-store.sh` (`secret-tool`/file on Linux), not macOS `security`.
+
+WhatsApp is handled by the whatsmeow `whatsapp-bridge` (macOS: `com.${USER}.whatsapp-bridge` LaunchAgent, `${USER}` expanded at install time; Linux: `whatsapp-bridge` systemd --user unit) and accessed via `mcp__whatsapp__*` tools.
 
 #### Step 3b.1 — Presence
 
-Check bridge binary exists and LaunchAgent is installed:
+Check bridge binary exists and the platform service is installed:
 
 ```bash
 ls ~/.local/share/whatsapp-mcp/whatsapp-bridge/whatsapp-bridge 2>/dev/null && echo "binary ok"
-launchctl list com.${USER}.whatsapp-bridge 2>/dev/null | head -3
+case "$(uname -s)" in
+  Darwin) launchctl list com.${USER}.whatsapp-bridge 2>/dev/null | head -3 ;;
+  Linux) systemctl --user status whatsapp-bridge --no-pager ;;
+esac
 lsof -i :8080 2>/dev/null | grep LISTEN
 ```
 
@@ -24,16 +29,28 @@ whatsapp-bridge (whatsmeow) is not installed. Install:
 If LaunchAgent not installed, install it from template. The template ships as `com.claude-ops.whatsapp-bridge.plist` with a `__USER__` Label placeholder; sed substitutes the running user so the installed plist's Label becomes `com.${USER}.whatsapp-bridge`:
 
 ```bash
-PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
-PLIST_DEST="$HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
-BRIDGE_DIR="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge"
-mkdir -p "$BRIDGE_DIR/logs"
-sed -e "s|__BRIDGE_BINARY_PATH__|$BRIDGE_DIR/whatsapp-bridge|g" \
-    -e "s|__BRIDGE_WORKING_DIR__|$BRIDGE_DIR|g" \
-    -e "s|__HOME__|$HOME|g" \
-    -e "s|__USER__|$USER|g" \
-    "$PLIST_TEMPLATE" > "$PLIST_DEST"
-launchctl bootstrap gui/$(id -u) "$PLIST_DEST"
+case "$(uname -s)" in
+  Darwin)
+    PLIST_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/assets/launchagents/com.claude-ops.whatsapp-bridge.plist"
+    PLIST_DEST="$HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
+    BRIDGE_DIR="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge"
+    mkdir -p "$BRIDGE_DIR/logs" "$HOME/Library/LaunchAgents"
+    sed -e "s|__BRIDGE_BINARY_PATH__|$BRIDGE_DIR/whatsapp-bridge|g" \
+        -e "s|__BRIDGE_WORKING_DIR__|$BRIDGE_DIR|g" \
+        -e "s|__HOME__|$HOME|g" \
+        -e "s|__USER__|$USER|g" \
+        "$PLIST_TEMPLATE" > "$PLIST_DEST"
+    launchctl bootstrap gui/$(id -u) "$PLIST_DEST"
+    ;;
+  Linux)
+    # Ask for WA_PHONE first: digits-only E.164 without "+" (for example, 12025551234).
+    bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-whatsapp-bridge-linux.sh" --wa-phone "$WA_PHONE"
+    systemctl --user enable --now whatsapp-bridge.service
+    ;;
+  *)
+    echo "WhatsApp bridge auto-install is unsupported on this OS."
+    ;;
+esac
 ```
 
 #### Step 3b.2 — QR pairing (first run)

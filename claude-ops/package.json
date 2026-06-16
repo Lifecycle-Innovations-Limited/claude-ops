@@ -15,5 +15,8 @@
     "input": "^1.0.1",
     "playwright": "^1.60.0",
     "telegram": "^2.26.22"
+  },
+  "devDependencies": {
+    "prettier": "^3.8.4"
   }
 }

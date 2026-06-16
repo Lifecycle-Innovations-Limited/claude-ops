@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+CACHE_DIR="${HEALIFY_BI_CACHE_DIR:-$HOME/.cache/agent-hub}"
+OUT="$CACHE_DIR/healify-bi.json"
+TMP="$OUT.tmp"
+HEALIFY_APP="${HEALIFY_APP_ROOT:-$HOME/Projects/healify-workspace/healify}"
+OPDASH="${HEALIFY_OPDASH_ROOT:-$HOME/Projects/healify-workspace/healify-operating-dashboard}"
+
+mkdir -p "$CACHE_DIR"
+
+eas_json='{"ok":false,"note":"EAS CLI unavailable or not authenticated","builds":[]}'
+if command -v eas >/dev/null 2>&1 && [[ -d "$HEALIFY_APP" ]]; then
+  eas_raw="$(cd "$HEALIFY_APP" && timeout 60 eas build:list --platform ios --limit 8 --json --non-interactive 2>/tmp/healify-eas.err || true)"
+  if printf '%s' "$eas_raw" | jq -e 'type=="array"' >/dev/null 2>&1; then
+    eas_json="$(printf '%s' "$eas_raw" | jq -c '{ok:true, builds:[.[] | {id,status,platform,profile,appVersion,appBuildVersion,createdAt,updatedAt,distribution}] }')"
+  else
+    eas_err="$(sed -n '1,4p' /tmp/healify-eas.err 2>/dev/null | tr '\n' ' ' | sed 's/"/'\''/g')"
+    eas_json="$(jq -nc --arg note "${eas_err:-EAS build list returned no JSON}" '{ok:false,note:$note,builds:[]}')"
+  fi
+fi
+
+sentry_json='{"ok":false,"note":"sentry-cli unavailable","projects":[]}'
+SENTRY_ORG="${SENTRY_ORG:-}"
+SENTRY_PROJECTS="${SENTRY_PROJECTS:-}"
+if command -v sentry-cli >/dev/null 2>&1 && [[ -n "$SENTRY_ORG" && -n "$SENTRY_PROJECTS" ]]; then
+  sentry_json="$(
+    IFS=',' read -ra projects <<< "$SENTRY_PROJECTS"
+    for project in "${projects[@]}"; do
+      project="${project//[[:space:]]/}"
+      [[ -n "$project" ]] || continue
+      out="$(timeout 25 sentry-cli issues list --org "$SENTRY_ORG" --project "$project" --query 'is:unresolved' 2>&1 || true)"
+      if printf '%s' "$out" | grep -qi 'No issues found'; then
+        jq -nc --arg project "$project" '{project:$project,ok:true,unresolved:0,highPriority:0,note:"No unresolved issues"}'
+      elif printf '%s' "$out" | grep -qi 'error\|unauthorized\|forbidden\|not found'; then
+        note="$(printf '%s' "$out" | sed -n '1,2p' | tr '\n' ' ' | sed 's/"/'\''/g')"
+        jq -nc --arg project "$project" --arg note "$note" '{project:$project,ok:false,unresolved:null,highPriority:null,note:$note}'
+      else
+        rows="$(printf '%s\n' "$out" | sed '/^$/d' | grep -Ev '^(Issue|ID|\\-)' | wc -l | awk '{print $1}')"
+        jq -nc --arg project "$project" --argjson rows "${rows:-0}" '{project:$project,ok:true,unresolved:$rows,highPriority:null,note:"issues listed by sentry-cli"}'
+      fi
+    done | jq -sc '{ok:true,projects:.}'
+  )"
+elif command -v sentry-cli >/dev/null 2>&1; then
+  sentry_json='{"ok":false,"note":"SENTRY_ORG and SENTRY_PROJECTS env vars required","projects":[]}'
+fi
+
+opdash_json='{"ok":false,"note":"operating dashboard source probe unavailable"}'
+if [[ -d "$OPDASH" ]] && command -v npx >/dev/null 2>&1; then
+  opdash_raw="$(
+    cd "$OPDASH" && timeout 120 npx tsx -e '
+      import { fetchAppStoreConnect } from "./server/sources/appstore";
+      import { fetchAmplitude } from "./server/sources/amplitude";
+      import { fetchOpsIntegrations } from "./server/sources/ops-integrations";
+      async function main() {
+        const out = { ok: true, generatedAt: new Date().toISOString(), appstore: await fetchAppStoreConnect(), amplitude: await fetchAmplitude(), ops: await fetchOpsIntegrations() };
+        console.log(JSON.stringify(out));
+      }
+      main().catch((e) => {
+        console.log(JSON.stringify({ ok: false, note: String(e?.message || e).slice(0, 400) }));
+      });
+    ' 2>/tmp/healify-opdash.err || true
+  )"
+  if printf '%s' "$opdash_raw" | jq -e 'type=="object"' >/dev/null 2>&1; then
+    opdash_json="$opdash_raw"
+  else
+    opdash_err="$(sed -n '1,4p' /tmp/healify-opdash.err 2>/dev/null | tr '\n' ' ' | sed 's/"/'\''/g')"
+    opdash_json="$(jq -nc --arg note "${opdash_err:-operating dashboard source probe returned no JSON}" '{ok:false,note:$note}')"
+  fi
+fi
+
+asc_extra_json="$(
+python3 - <<'PY'
+import json, os, sys, time, urllib.parse, urllib.request, urllib.error, ssl
+from datetime import datetime, timezone
+
+try:
+    import jwt
+except Exception as exc:
+    print(json.dumps({"ok": False, "note": f"PyJWT unavailable: {exc}", "apps": []}))
+    sys.exit(0)
+
+APP_IDS = [a.strip() for a in os.environ.get("APP_STORE_CONNECT_APP_IDS", "").split(",") if a.strip()]
+KEY_ID = os.environ.get("APP_STORE_CONNECT_API_KEY_ID") or os.environ.get("APP_STORE_CONNECT_KEY_ID") or ""
+ISSUER_ID = os.environ.get("APP_STORE_CONNECT_ISSUER_ID") or ""
+if not APP_IDS or not KEY_ID or not ISSUER_ID:
+    print(json.dumps({"ok": False, "note": "Set APP_STORE_CONNECT_APP_IDS, APP_STORE_CONNECT_API_KEY_ID, and APP_STORE_CONNECT_ISSUER_ID env vars", "apps": []}))
+    sys.exit(0)
+KEY_PATH = os.environ.get("APP_STORE_CONNECT_API_KEY_PATH") or os.path.expanduser(f"~/.fastlane/app_store_connect/AuthKey_{KEY_ID}.p8")
+
+def token():
+    if not os.path.exists(KEY_PATH):
+        raise FileNotFoundError("ASC key file missing")
+    with open(KEY_PATH) as f:
+        private_key = f.read()
+    now = int(time.time())
+    return jwt.encode({"iss": ISSUER_ID, "iat": now, "exp": now + 900, "aud": "appstoreconnect-v1"}, private_key, algorithm="ES256", headers={"kid": KEY_ID})
+
+def get(path, tok):
+    req = urllib.request.Request("https://api.appstoreconnect.apple.com" + path, headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=25, context=ssl.create_default_context()) as resp:
+        return json.loads(resp.read())
+
+def app_payload(app_id, tok):
+    out = {"appId": app_id}
+    try:
+        qs = urllib.parse.urlencode({"filter[app]": app_id, "sort": "-uploadedDate", "limit": "8", "fields[builds]": "version,uploadedDate,processingState,expired,usesNonExemptEncryption"})
+        data = get("/v1/builds?" + qs, tok)
+        out["builds"] = [{"id": b.get("id"), **(b.get("attributes") or {})} for b in data.get("data", [])]
+    except Exception as exc:
+        out["buildError"] = str(exc)[:220]
+    try:
+        qs = urllib.parse.urlencode({"sort": "-createdDate", "limit": "50", "fields[customerReviews]": "rating,title,body,createdDate,territory"})
+        data = get(f"/v1/apps/{app_id}/customerReviews?" + qs, tok)
+        reviews = [{"id": r.get("id"), **(r.get("attributes") or {})} for r in data.get("data", [])]
+        ratings = [r.get("rating") for r in reviews if isinstance(r.get("rating"), int)]
+        out["reviews"] = {"count": len(reviews), "avgRating": round(sum(ratings) / len(ratings), 2) if ratings else None, "lowStars": len([r for r in ratings if r <= 3]), "latest": reviews[:5]}
+    except Exception as exc:
+        out["reviewError"] = str(exc)[:220]
+    return out
+
+try:
+    tok = token()
+    print(json.dumps({"ok": True, "generatedAt": datetime.now(timezone.utc).isoformat(), "apps": [app_payload(a, tok) for a in APP_IDS]}))
+except Exception as exc:
+    print(json.dumps({"ok": False, "note": str(exc)[:220], "apps": []}))
+PY
+)"
+
+isjson() { printf '%s' "$1" | jq empty >/dev/null 2>&1; }
+isjson "$eas_json" || eas_json='{"ok":false,"note":"invalid EAS JSON","builds":[]}'
+isjson "$sentry_json" || sentry_json='{"ok":false,"note":"invalid Sentry JSON","projects":[]}'
+isjson "$opdash_json" || opdash_json='{"ok":false,"note":"invalid opdash JSON"}'
+isjson "$asc_extra_json" || asc_extra_json='{"ok":false,"note":"invalid ASC JSON","apps":[]}'
+
+if jq -nc \
+  --arg generatedAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+  --argjson eas "$eas_json" \
+  --argjson sentry "$sentry_json" \
+  --argjson opdash "$opdash_json" \
+  --argjson ascExtra "$asc_extra_json" \
+  '{generatedAt:$generatedAt,eas:$eas,sentry:$sentry,opdash:$opdash,ascExtra:$ascExtra}' >"$TMP"; then
+  mv "$TMP" "$OUT"
+  printf '%s\n' "$OUT"
+else
+  rm -f "$TMP"
+  printf 'healify-bi refresh: merge failed; keeping existing cache at %s\n' "$OUT" >&2
+  exit 1
+fi

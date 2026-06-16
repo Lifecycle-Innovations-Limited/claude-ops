@@ -1,6 +1,8 @@
 ### 3p — Pocket (voice journal activity notifier)
 
-The Pocket subsystem watches your voice journal recordings via the Pocket AI MCP, infers tasks with Haiku, and sends activity notifications (task spawned / task done) to WhatsApp and/or email. This step installs the credential, writes the channel config files, registers the launchd notifier, and smoke-tests delivery.
+> **Cross-OS gate (read first):** the `launchctl` / `~/Library/LaunchAgents` notifier-install and the macOS `security` Keychain steps below are **macOS-only**. On **Linux/WSL**, register the notifier as a `systemd --user` timer/service and store `POCKET_API_KEY` via the cross-OS `credential-store.sh` (`secret-tool`/file backend) — never `security find-generic-password`. Branch on `case "$(uname -s)"`.
+
+The Pocket subsystem watches your voice journal recordings via the Pocket AI MCP, infers tasks with Haiku, and sends activity notifications (task spawned / task done) to WhatsApp and/or email. This step installs the credential, writes the channel config files, registers the notifier (launchd on macOS, systemd --user on Linux), and smoke-tests delivery.
 
 #### Step 3p.1 — Prerequisites
 
@@ -51,18 +53,32 @@ POCKET_API_KEY not found. Where would you like to get one?
 
 On "Open Pocket dev portal": run `bash "${CLAUDE_PLUGIN_ROOT}/lib/opener.sh" "https://public.heypocketai.com"` (or `open "https://public.heypocketai.com"` on macOS) then ask `AskUserQuestion`: `[Paste key now]` / `[Skip]`.
 
-Once a key is provided, save to macOS Keychain and shell profile:
+Once a key is provided, save it through the cross-OS credential store and expose
+it from the detected shell profile when needed:
 
 ```bash
-# Keychain (preferred — avoids env leakage in shell history)
-security add-generic-password -U \
-  -s POCKET_API_KEY -a ops-daemon \
-  -w "$POCKET_API_KEY"
+bash "${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh" set POCKET_API_KEY ops-daemon "$POCKET_API_KEY"
 
-# Also export in shell profile so the launchd plist inherits it via EnvironmentVariables
-PROFILE="${ZDOTDIR:-$HOME}/.zshrc"
-grep -q "POCKET_API_KEY" "$PROFILE" 2>/dev/null || \
-  echo 'export POCKET_API_KEY="$(security find-generic-password -s POCKET_API_KEY -a ops-daemon -w 2>/dev/null)"' >> "$PROFILE"
+PROFILE="${PROFILE_FILE:-}"
+if [ -z "$PROFILE" ]; then
+  case "$(basename "${SHELL:-/bin/sh}")" in
+    zsh)  PROFILE="${ZDOTDIR:-$HOME}/.zshrc" ;;
+    bash) PROFILE="$HOME/.bashrc" ;;
+    fish) PROFILE="$HOME/.config/fish/config.fish" ;;
+    *)    PROFILE="$HOME/.profile" ;;
+  esac
+fi
+
+if ! grep -q "POCKET_API_KEY" "$PROFILE" 2>/dev/null; then
+  case "$PROFILE" in
+    *config.fish)
+      echo 'set -gx POCKET_API_KEY (bash "${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh" get POCKET_API_KEY ops-daemon 2>/dev/null)' >> "$PROFILE"
+      ;;
+    *)
+      echo 'export POCKET_API_KEY="$(bash "${CLAUDE_PLUGIN_ROOT}/lib/credential-store.sh" get POCKET_API_KEY ops-daemon 2>/dev/null)"' >> "$PROFILE"
+      ;;
+  esac
+fi
 ```
 
 #### Step 3p.3 — Choose notification channels
@@ -148,18 +164,58 @@ jq -n \
   > "$HOME/.claude/state/pocket/email-config.json"
 ```
 
-#### Step 3p.6 — Install the launchd notifier
+#### Step 3p.6 — Install the notifier
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-pocket-notifier.sh"
+case "$(uname -s)" in
+  Darwin)
+    bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-pocket-notifier.sh"
+    ;;
+  Linux)
+    PYTHON3="$(command -v python3 || true)"
+    [ -z "$PYTHON3" ] && PYTHON3=/usr/bin/python3
+    UNIT_DIR="$HOME/.config/systemd/user"
+    mkdir -p "$UNIT_DIR"
+    cat > "$UNIT_DIR/pocket-activity-notifier.service" <<SERVICE
+[Unit]
+Description=Pocket Activity Notifier
+
+[Service]
+Type=oneshot
+Environment=HOME=$HOME
+Environment=POCKET_STATE_DIR=$HOME/.claude/state/pocket
+ExecStart=$PYTHON3 ${CLAUDE_PLUGIN_ROOT}/scripts/ops-pocket-activity-notifier.py
+SERVICE
+    cat > "$UNIT_DIR/pocket-activity-notifier.timer" <<TIMER
+[Unit]
+Description=Run Pocket Activity Notifier every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Unit=pocket-activity-notifier.service
+
+[Install]
+WantedBy=timers.target
+TIMER
+    systemctl --user daemon-reload
+    systemctl --user enable --now pocket-activity-notifier.timer
+    ;;
+  *)
+    echo "Pocket notifier auto-install is unsupported on this OS; run the notifier manually or skip this channel."
+    ;;
+esac
 ```
 
-This generates `~/Library/LaunchAgents/com.claude-ops.pocket-activity-notifier.plist` from the bundled template, resolves Python 3, substitutes paths, and bootstraps the agent. Idempotent — re-running re-bootstraps cleanly.
+On macOS this generates `~/Library/LaunchAgents/com.claude-ops.pocket-activity-notifier.plist` from the bundled template, resolves Python 3, substitutes paths, and bootstraps the agent. On Linux/WSL, use the printed `systemd --user` or cron wiring until a packaged Linux installer exists. Idempotent — re-running re-bootstraps cleanly.
 
 Verify the agent loaded:
 
 ```bash
-launchctl list | grep com.claude-ops.pocket-activity-notifier
+case "$(uname -s)" in
+  Darwin) launchctl list | grep com.claude-ops.pocket-activity-notifier ;;
+  Linux) systemctl --user status pocket-activity-notifier ;;
+esac
 ```
 
 If the grep returns nothing, surface the error via `AskUserQuestion`: `[Retry install]` / `[Skip]`.
