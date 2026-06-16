@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# ops-user-profiler — surface-scrape the machine to pre-identify the user so the
+# setup wizard can CONFIRM ("Hey Sam, you're in Amsterdam — right?") instead of
+# interrogating. Writes a compact profile + a best-guess prefilled preferences
+# patch to the plugin data dir. Cross-OS, read-only, token-frugal (NO file dumps).
+#
+# Emits:
+#   $DATA/profile.scan.json       raw machine signals (identity hints, tooling, vendors, style)
+#   $DATA/profile.prefill.json    best-guess preferences patch (NOT merged — wizard reviews first)
+#
+# A second stage (agents/user-profiler.md, Haiku + WebSearch) consumes
+# profile.scan.json to enrich identity (name/location/occupation) via web search
+# and writes $DATA/profile.json. This script does the local, offline half only.
+#
+# Safe to run at postInstall, SessionStart (once-guarded), or on demand.
+set -uo pipefail
+
+DATA="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
+mkdir -p "$DATA" 2>/dev/null || true
+SCAN="$DATA/profile.scan.json"
+PREFILL="$DATA/profile.prefill.json"
+
+command -v jq >/dev/null 2>&1 || {
+  echo '{"error":"jq-missing"}' > "$SCAN" 2>/dev/null
+  echo '{}' > "$PREFILL" 2>/dev/null
+  exit 0
+}
+
+# ── minimal inline OS/shell/pkg detection (no dep on unmerged scripts/lib) ──
+case "$(uname -s 2>/dev/null)" in
+  Darwin) OS=macos ;;
+  Linux)  grep -qi microsoft /proc/version 2>/dev/null && OS=wsl || OS=linux ;;
+  MINGW*|MSYS*|CYGWIN*) OS=windows ;;
+  *) OS=unknown ;;
+esac
+PKG=none
+for p in brew dnf apt apt-get pacman zypper apk winget scoop choco; do
+  command -v "$p" >/dev/null 2>&1 && { PKG=$p; break; }
+done
+SH=$(basename "${SHELL:-/bin/sh}")
+case "$SH" in
+  zsh)  PROFILE="${ZDOTDIR:-$HOME}/.zshrc" ;;
+  bash) PROFILE="$HOME/.bashrc" ;;
+  fish) PROFILE="$HOME/.config/fish/config.fish" ;;
+  *)    PROFILE="$HOME/.profile" ;;
+esac
+
+# ── identity hints (NAMES/emails only, no secrets) ──────────────────────────
+GIT_NAME=$(git config --global user.name 2>/dev/null || echo "")
+GIT_EMAIL=$(git config --global user.email 2>/dev/null || echo "")
+GH_ACCT=$(gh auth status 2>&1 | grep -oE 'account [A-Za-z0-9_-]+' | head -1 | awk '{print $2}' || echo "")
+
+# ── installed CLI inventory (presence only) ─────────────────────────────────
+TOOLS_PRESENT=()
+TOOLS_REL="git gh aws gcloud doppler docker terraform node bun python3 go stripe shopify wrangler vercel supabase sentry-cli klaviyo twilio eas expo fastlane gog dcli"
+for t in $TOOLS_REL; do command -v "$t" >/dev/null 2>&1 && TOOLS_PRESENT+=("$t"); done
+TOOLS_JSON=$(printf '%s\n' "${TOOLS_PRESENT[@]:-}" | jq -R . | jq -s 'map(select(length>0))' 2>/dev/null)
+
+# ── configured MCP servers (names only) from ~/.claude.json ─────────────────
+MCP_JSON=$(jq -c '(.mcpServers // {}) | keys' "$HOME/.claude.json" 2>/dev/null)
+
+# ── working-STYLE signals from Claude config (verbosity/yolo/model/statusline) ─
+CLAUDE_MODEL=$(jq -r '.model // ""' "$HOME/.claude.json" 2>/dev/null || echo "")
+SETTINGS="$HOME/.claude/settings.json"
+HAS_STATUSLINE=$(jq -e '.statusLine' "$SETTINGS" >/dev/null 2>&1 && echo true || echo false)
+# autonomy signal: permissions.defaultMode + allow/deny list sizes → careful/auto/yolo
+PERM_MODE=$(jq -r '.permissions.defaultMode // ""' "$SETTINGS" 2>/dev/null || echo "")
+ALLOW_N=$(jq -r '(.permissions.allow // []) | length' "$SETTINGS" 2>/dev/null || echo 0)
+DENY_N=$(jq -r '(.permissions.deny // []) | length' "$SETTINGS" 2>/dev/null || echo 0)
+case "$PERM_MODE" in
+  bypassPermissions) AUTONOMY=yolo ;;
+  acceptEdits|dontAsk|auto) AUTONOMY=auto ;;
+  ""|default|plan) AUTONOMY=careful ;;
+  *) AUTONOMY=careful ;;
+esac
+# installed hooks + plugins (names only) — what they've already wired up
+HOOKS=$(jq -c '[.hooks // {} | to_entries[] | .value[]? | .hooks[]? | .command? // empty | (try (match("/(?:bin|scripts)/([^/[:space:]]+)") | .captures[0].string) // (split("/") | last) // empty) | sub("\\.(sh|py)$";"")] | map(select(length>0)) | unique' "$SETTINGS" 2>/dev/null)
+PLUGINS=$(ls -1 "$HOME/.claude/plugins/cache" 2>/dev/null | head -40 | jq -R . | jq -s 'map(select(length>0))' 2>/dev/null)
+EXISTING_PREFS="$DATA/preferences.json"
+PRIOR_VERBOSITY=$(jq -r '.briefing_verbosity // empty' "$EXISTING_PREFS" 2>/dev/null || echo "")
+PRIOR_YOLO=$(jq -r 'if (.yolo_enabled|type)=="boolean" then (.yolo_enabled|tostring) else empty end' "$EXISTING_PREFS" 2>/dev/null || echo "")
+
+# ── vendor/role signals from env var NAMES + repo dir names (no values) ─────
+# NOTE: never chain `... | jq` with `|| echo '[]'` inside $() — on a non-zero
+# pipe element the substitution emits BOTH the jq output AND the echo, yielding
+# two concatenated JSON values that corrupt --argjson. Let the isjson guards
+# below normalize instead (same class of bug as ops-setup-detect:147).
+ENV_VENDORS=$(env | grep -oiE '^(STRIPE|KLAVIYO|META|SHOPIFY|REVENUECAT|SENTRY|LINEAR|DATADOG|ELEVENLABS|GROQ|BLAND|TELEGRAM|DISCORD|SLACK|TWILIO|POSTNL|UPS|FEDEX|DPD|GA4|OPENAI|ANTHROPIC|GEMINI|COHERE)[A-Z_]*=' 2>/dev/null | sed -E 's/=.*//' | sort -u | jq -R . | jq -s 'map(select(length>0))' 2>/dev/null)
+REPO_DIRS=$(ls -1 "$HOME/Projects" 2>/dev/null | head -40 | jq -R . | jq -s 'map(select(length>0))' 2>/dev/null)
+
+# ── enrichment capabilities present (so the web-search agent uses what we HAVE) ──
+# Detect by env key NAME or configured MCP. Names only — never values.
+ENRICH=$(
+  { env | grep -oiE '^(TAVILY|FIRECRAWL|EXA|SERPAPI|PEOPLEDATALABS|PDL|APOLLO|PROXYCURL|LINKEDIN|CLEARBIT|HUNTER)[A-Z_]*=' 2>/dev/null | sed -E 's/=.*//';
+    jq -r '(.mcpServers // {}) | keys[]' "$HOME/.claude.json" 2>/dev/null | grep -iE 'tavily|firecrawl|exa|apollo|pdl|peopledata|linkedin|clearbit'; } \
+  | sort -u | jq -R . | jq -s 'map(select(length>0))' 2>/dev/null
+)
+
+# ── doppler project list (names only, headless-safe) ────────────────────────
+DOP_PROJECTS=$(DOPPLER_CONFIG_DIR="${DOPPLER_CONFIG_DIR:-$HOME/.doppler-headless}" doppler projects --json 2>/dev/null | jq -c 'map(.name)' 2>/dev/null)
+
+# ── guarantee every --argjson input is valid JSON (empty string aborts jq -n) ──
+isjson(){ printf '%s' "$1" | jq empty >/dev/null 2>&1; }
+isjson "$TOOLS_JSON"   || TOOLS_JSON='[]'
+isjson "$MCP_JSON"     || MCP_JSON='[]'
+isjson "$ENV_VENDORS"  || ENV_VENDORS='[]'
+isjson "$REPO_DIRS"    || REPO_DIRS='[]'
+isjson "$DOP_PROJECTS" || DOP_PROJECTS='[]'
+isjson "$HOOKS"        || HOOKS='[]'
+isjson "$PLUGINS"      || PLUGINS='[]'
+isjson "$ENRICH"       || ENRICH='[]'
+[ -n "${ALLOW_N:-}" ] && isjson "$ALLOW_N" || ALLOW_N=0
+[ -n "${DENY_N:-}" ]  && isjson "$DENY_N"  || DENY_N=0
+
+jq -n \
+  --arg os "$OS" --arg pkg "$PKG" --arg sh "$SH" --arg profile "$PROFILE" \
+  --arg gname "$GIT_NAME" --arg gemail "$GIT_EMAIL" --arg gh "$GH_ACCT" \
+  --arg model "$CLAUDE_MODEL" --arg statusline "$HAS_STATUSLINE" \
+  --arg pverb "$PRIOR_VERBOSITY" --arg pyolo "$PRIOR_YOLO" \
+  --arg autonomy "$AUTONOMY" --arg permmode "$PERM_MODE" \
+  --argjson allown "${ALLOW_N:-0}" --argjson denyn "${DENY_N:-0}" \
+  --argjson tools "$TOOLS_JSON" --argjson mcps "$MCP_JSON" \
+  --argjson envvendors "$ENV_VENDORS" --argjson repos "$REPO_DIRS" \
+  --argjson doppler "$DOP_PROJECTS" --argjson hooks "$HOOKS" \
+  --argjson plugins "$PLUGINS" --argjson enrich "$ENRICH" \
+  '{
+    schema: "ops-profile-scan/1",
+    host: { os: $os, pkg_mgr: $pkg, shell: $sh, profile_file: $profile },
+    identity_hints: { git_name: $gname, git_email: $gemail, gh_account: $gh },
+    style_hints: { claude_model: $model, has_statusline: ($statusline=="true"),
+                   prior_verbosity: $pverb, prior_yolo: $pyolo,
+                   autonomy: $autonomy, perm_mode: $permmode,
+                   allow_count: $allown, deny_count: $denyn },
+    tooling_present: $tools,
+    mcp_configured: $mcps,
+    hooks_installed: $hooks,
+    plugins_installed: $plugins,
+    enrichment_available: $enrich,
+    env_vendor_names: $envvendors,
+    doppler_projects: $doppler,
+    repo_dirs: $repos
+  }' > "$SCAN" 2>"${OPS_PROFILER_JQERR:-/dev/null}" || echo '{"error":"scan-failed"}' > "$SCAN"
+
+# ── best-guess prefill patch (style only; credentials resolved separately) ──
+# Conservative: only prefill what we can infer with high confidence.
+jq -n \
+  --arg os "$OS" \
+  --argjson scan "$(cat "$SCAN")" \
+  '{
+    schema: "ops-profile-prefill/1",
+    note: "Best-guess defaults — wizard MUST show review screen before applying.",
+    suggested: {
+      timezone: null,
+      owner: ($scan.identity_hints.git_name // null),
+      briefing_verbosity: (if ($scan.style_hints.prior_verbosity // "") != "" then $scan.style_hints.prior_verbosity else "compact" end),
+      autonomy: ($scan.style_hints.autonomy // "careful"),
+      yolo_enabled: ($scan.style_hints.autonomy == "yolo")
+    }
+  }' > "$PREFILL" 2>/dev/null || echo '{}' > "$PREFILL"
+
+echo "ops-user-profiler: wrote $SCAN + $PREFILL (os=$OS pkg=$PKG)"

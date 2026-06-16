@@ -146,6 +146,21 @@ scan_pattern "bare AWS account IDs (account/bucket context)" \
   '([Aa]ccount|[Bb]ucket|aws|AWS|arn).{0,40}\b[0-9]{12}\b|\b[0-9]{12}\b.{0,40}([Aa]ccount|[Bb]ucket)' \
   '(123456789012|000000000000|111111111111|[0-9]{13,})'
 
+# App Store Connect account identifiers and numeric app IDs. These are not
+# secrets alone, but they identify a real app/account and must be supplied by
+# local env/config for this public plugin.
+scan_pattern "App Store Connect issuer UUID literals" \
+  '(APP_STORE_CONNECT_ISSUER_ID|ISSUER_ID|issuer).{0,80}[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' \
+  '(example|placeholder|00000000-0000-0000-0000-000000000000|<)'
+
+scan_pattern "App Store Connect numeric app ID literals" \
+  '(APP_STORE_CONNECT_APP_IDS|HEALIFY_ASC_[A-Z_]*APP_ID|APP_IDS|appId).{0,80}["'\''][0-9]{9,12}["'\'']' \
+  '(example|placeholder|<)'
+
+scan_pattern "hardcoded sentry-cli org values" \
+  'sentry-cli.{0,120}--org[ =]["'\'']?[A-Za-z0-9_-]+' \
+  '(SENTRY_ORG|example|placeholder|<)'
+
 # International phone numbers (allow reserved example ranges: 555-xxxx, 1234567, all-zero)
 scan_pattern "phone numbers (+<cc><digits>)" '\+[1-9][0-9]{1,3}[ -]?[0-9]{6,14}' \
   '(555[0-9]{4}|1234567|\+1234567890|\+0000000000|\+15551234567|\+10000000000|\+1[ -]?555)'
