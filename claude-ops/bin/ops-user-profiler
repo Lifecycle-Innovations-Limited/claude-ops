@@ -159,3 +159,145 @@ jq -n \
   }' > "$PREFILL" 2>/dev/null || echo '{}' > "$PREFILL"
 
 echo "ops-user-profiler: wrote $SCAN + $PREFILL (os=$OS pkg=$PKG)"
+
+# ── persona merge write-back (R7: atomic + locked + confidence ladder) ──────
+# Merge a `.persona` block (ops-persona/1) INTO preferences.json without
+# clobbering higher-confidence data. Confidence ladder (highest wins):
+#   confirmed > user_config > web_enriched > scan_inferred
+# This profiler only ever produces scan_inferred / user_config-tier values, so
+# `confirmed` and web-enriched fields written by the wizard/enrichment agent are
+# never overwritten here. Siblings (partner_registry, channels, toggles, mined
+# persona subkeys) are preserved. Idempotent: re-running converges.
+PREFS="$DATA/preferences.json"
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
+
+EXIST_PREFS=$(cat "$PREFS" 2>/dev/null); isjson "$EXIST_PREFS" || EXIST_PREFS='{}'
+SCAN_JSON=$(cat "$SCAN" 2>/dev/null);   isjson "$SCAN_JSON"   || SCAN_JSON='{}'
+
+# Style values read from the user's OWN prior preferences are user_config-tier;
+# values inferred from Claude config alone are scan_inferred-tier.
+WS_SOURCE="claude-config"
+{ [ -n "$PRIOR_VERBOSITY" ] || [ -n "$PRIOR_YOLO" ]; } && WS_SOURCE="user_config"
+
+MERGED=$(jq -n \
+  --arg now "$NOW" \
+  --arg ws_source "$WS_SOURCE" \
+  --argjson prefs "$EXIST_PREFS" \
+  --argjson scan "$SCAN_JSON" '
+  # source → confidence rank (unknown source = 0, never wins)
+  def rank(s): ({confirmed:4,user_config:3,web_enriched:2,websearch:2,unconfirmed:2,
+                 scan_inferred:1,scan:1,git:1,"claude-config":1,transcript:1}[s]) // 0;
+  # keep existing section unless the incoming one is strictly higher confidence
+  def keep(e; i): if i==null then e
+                  elif e==null then i
+                  elif rank(e.source) >= rank(i.source) then e
+                  else i end;
+
+  # per-command familiarity signal (scan_inferred): "core" = always-relevant,
+  # "familiar" = a dependency the command needs is present, "new" = not seen yet.
+  def cmdspec: [
+    {cmd:"ops:setup",    needs:[]},
+    {cmd:"ops:go",       needs:[]},
+    {cmd:"ops:inbox",    needs:["whatsapp","slack","gog","telegram","discord"]},
+    {cmd:"ops:comms",    needs:["whatsapp","slack","gog","telegram"]},
+    {cmd:"ops:deploy",   needs:["gh","aws","vercel","docker"]},
+    {cmd:"ops:fires",    needs:["aws"]},
+    {cmd:"ops:monitor",  needs:["sentry","datadog"]},
+    {cmd:"ops:revenue",  needs:["stripe","revenuecat"]},
+    {cmd:"ops:marketing",needs:["meta","klaviyo","ga4"]},
+    {cmd:"ops:home",     needs:["homey"]},
+    {cmd:"ops:unifi",    needs:["unifi"]},
+    {cmd:"ops:release",  needs:["gh","eas","fastlane"]}
+  ];
+
+  ( (($scan.tooling_present // []) + ($scan.mcp_configured // []) +
+     ($scan.env_vendor_names // []) + ($scan.hooks_installed // []))
+    | map(ascii_downcase) ) as $present
+  | ( cmdspec | map(
+        { key: .cmd,
+          value: {
+            familiarity: ( if (.needs|length)==0 then "core"
+                           elif any(.needs[]; . as $n | $present | any(test($n))) then "familiar"
+                           else "new" end ),
+            source: "scan_inferred"
+          } }
+      ) | from_entries ) as $cmd_base
+  | ($cmd_base + (($prefs.persona.command_expertise // {})
+      | with_entries(select(rank(.value.source) > rank("scan_inferred"))))) as $command_expertise
+
+  | { display_name: ($scan.identity_hints.git_name // "Owner"),
+      full_name: null,
+      emails: ([$scan.identity_hints.git_email] | map(select(. != null and . != ""))),
+      gh_account: ($scan.identity_hints.gh_account // ""),
+      confidence: (if (($scan.identity_hints.git_name // "") != "") then "medium" else "low" end),
+      source: "git" } as $inc_identity
+
+  | { verbosity: ( ($scan.style_hints.prior_verbosity // "") | if . == "" then "compact" else . end ),
+      autonomy: ($scan.style_hints.autonomy // "careful"),
+      yolo_enabled: ( if ($scan.style_hints.prior_yolo // "") == "true" then true
+                       elif ($scan.style_hints.prior_yolo // "") == "false" then false
+                       else (($scan.style_hints.autonomy // "") == "yolo") end ),
+      preferred_model: ( ($scan.style_hints.claude_model // "")
+                         | if . == "" then null
+                           elif test("opus";"i") then "opus"
+                           elif test("haiku";"i") then "haiku"
+                           elif test("sonnet";"i") then "sonnet"
+                           else null end ),
+      tone: null,
+      source: $ws_source,
+      autonomy_evidence: ("perm_mode=" + ($scan.style_hints.perm_mode // "")
+                          + " allow=" + (($scan.style_hints.allow_count // 0)|tostring)
+                          + " deny="  + (($scan.style_hints.deny_count  // 0)|tostring)) } as $inc_ws
+
+  | { os: ($scan.host.os // "unknown"),
+      pkg_mgr: ($scan.host.pkg_mgr // "none"),
+      shell: ($scan.host.shell // "sh"),
+      profile_file: ($scan.host.profile_file // ""),
+      hooks_installed: ($scan.hooks_installed // []),
+      plugins_installed: ($scan.plugins_installed // []),
+      mcps_configured: ($scan.mcp_configured // []),
+      clis_present: ($scan.tooling_present // []) } as $inc_env
+
+  | ($prefs.persona // {}) as $e
+  | $prefs + { persona: (
+        $e
+        + { schema: "ops-persona/1", updated_at: $now }
+        + { identity:      keep($e.identity;      $inc_identity) }
+        + { working_style: keep($e.working_style; $inc_ws) }
+        + { environment:   $inc_env }
+        + { command_expertise: $command_expertise }
+      ) }
+  ' 2>"${OPS_PROFILER_JQERR:-/dev/null}")
+JQ_RC=$?
+
+if [ "$JQ_RC" -ne 0 ] || ! isjson "$MERGED"; then
+  echo "ops-user-profiler: persona merge produced invalid JSON (rc=$JQ_RC) — preferences.json left unchanged" >&2
+else
+  TMP=$(mktemp "$DATA/.preferences.XXXXXX.json" 2>/dev/null) || TMP=""
+  if [ -z "$TMP" ]; then
+    echo "ops-user-profiler: could not create temp file in $DATA — skipping persona write" >&2
+  else
+    printf '%s\n' "$MERGED" > "$TMP"
+    LOCK="$PREFS.lock"
+    _WROTE=0
+    if command -v flock >/dev/null 2>&1; then
+      ( flock -x 200; mv -f "$TMP" "$PREFS" ) 200>"$LOCK"
+      _WROTE=1
+    else
+      # mkdir-mutex fallback (mkdir is atomic on POSIX)
+      _tries=0
+      until mkdir "$PREFS.mutex" 2>/dev/null; do
+        _tries=$((_tries+1)); [ "$_tries" -ge 50 ] && break; sleep 0.1
+      done
+      if [ -d "$PREFS.mutex" ]; then
+        mv -f "$TMP" "$PREFS"
+        rmdir "$PREFS.mutex" 2>/dev/null || true
+        _WROTE=1
+      else
+        echo "ops-user-profiler: could not acquire preferences lock — skipping persona write" >&2
+      fi
+    fi
+    [ -f "$TMP" ] && rm -f "$TMP" 2>/dev/null || true
+    [ "$_WROTE" -eq 1 ] && echo "ops-user-profiler: merged .persona into $PREFS (ws_source=$WS_SOURCE)"
+  fi
+fi
