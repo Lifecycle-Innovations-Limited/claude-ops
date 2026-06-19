@@ -21,13 +21,18 @@ if command -v eas >/dev/null 2>&1 && [[ -d "$HEALIFY_APP" ]]; then
 fi
 
 sentry_json='{"ok":false,"note":"sentry-cli unavailable","projects":[]}'
-if command -v sentry-cli >/dev/null 2>&1; then
+SENTRY_ORG="${SENTRY_ORG:-}"
+SENTRY_PROJECTS="${SENTRY_PROJECTS:-}"
+if command -v sentry-cli >/dev/null 2>&1 && [[ -n "$SENTRY_ORG" && -n "$SENTRY_PROJECTS" ]]; then
   sentry_json="$(
-    for project in healify-api healify-mobile healify-admin; do
-      out="$(timeout 25 sentry-cli issues list --org healify --project "$project" --query 'is:unresolved' 2>&1 || true)"
+    IFS=',' read -ra projects <<< "$SENTRY_PROJECTS"
+    for project in "${projects[@]}"; do
+      project="${project//[[:space:]]/}"
+      [[ -n "$project" ]] || continue
+      out="$(timeout 25 sentry-cli issues list --org "$SENTRY_ORG" --project "$project" --query 'is:unresolved' 2>&1 || true)"
       if printf '%s' "$out" | grep -qi 'No issues found'; then
         jq -nc --arg project "$project" '{project:$project,ok:true,unresolved:0,highPriority:0,note:"No unresolved issues"}'
-      elif printf '%s' "$out" | grep -qi 'error\\|unauthorized\\|forbidden\\|not found'; then
+      elif printf '%s' "$out" | grep -Eqi 'error|unauthorized|forbidden|not found'; then
         note="$(printf '%s' "$out" | sed -n '1,2p' | tr '\n' ' ' | sed 's/"/'\''/g')"
         jq -nc --arg project "$project" --arg note "$note" '{project:$project,ok:false,unresolved:null,highPriority:null,note:$note}'
       else
@@ -36,6 +41,8 @@ if command -v sentry-cli >/dev/null 2>&1; then
       fi
     done | jq -sc '{ok:true,projects:.}'
   )"
+elif command -v sentry-cli >/dev/null 2>&1; then
+  sentry_json='{"ok":false,"note":"SENTRY_ORG and SENTRY_PROJECTS env vars required","projects":[]}'
 fi
 
 opdash_json='{"ok":false,"note":"operating dashboard source probe unavailable"}'
@@ -73,9 +80,12 @@ except Exception as exc:
     print(json.dumps({"ok": False, "note": f"PyJWT unavailable: {exc}", "apps": []}))
     sys.exit(0)
 
-APP_IDS = ["6746675266", "6751717479"]
-KEY_ID = os.environ.get("APP_STORE_CONNECT_API_KEY_ID") or os.environ.get("APP_STORE_CONNECT_KEY_ID") or "22C7Z973Z3"
-ISSUER_ID = os.environ.get("APP_STORE_CONNECT_ISSUER_ID") or "6a7e769c-e3f3-4198-b152-960c60a27295"
+APP_IDS = [a.strip() for a in os.environ.get("APP_STORE_CONNECT_APP_IDS", "").split(",") if a.strip()]
+KEY_ID = os.environ.get("APP_STORE_CONNECT_API_KEY_ID") or os.environ.get("APP_STORE_CONNECT_KEY_ID") or ""
+ISSUER_ID = os.environ.get("APP_STORE_CONNECT_ISSUER_ID") or ""
+if not APP_IDS or not KEY_ID or not ISSUER_ID:
+    print(json.dumps({"ok": False, "note": "Set APP_STORE_CONNECT_APP_IDS, APP_STORE_CONNECT_API_KEY_ID, and APP_STORE_CONNECT_ISSUER_ID env vars", "apps": []}))
+    sys.exit(0)
 KEY_PATH = os.environ.get("APP_STORE_CONNECT_API_KEY_PATH") or os.path.expanduser(f"~/.fastlane/app_store_connect/AuthKey_{KEY_ID}.p8")
 
 def token():
@@ -123,18 +133,18 @@ isjson "$sentry_json" || sentry_json='{"ok":false,"note":"invalid Sentry JSON","
 isjson "$opdash_json" || opdash_json='{"ok":false,"note":"invalid opdash JSON"}'
 isjson "$asc_extra_json" || asc_extra_json='{"ok":false,"note":"invalid ASC JSON","apps":[]}'
 
-jq -nc \
+
+if jq -nc \
   --arg generatedAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
   --argjson eas "$eas_json" \
   --argjson sentry "$sentry_json" \
   --argjson opdash "$opdash_json" \
   --argjson ascExtra "$asc_extra_json" \
-  '{generatedAt:$generatedAt,eas:$eas,sentry:$sentry,opdash:$opdash,ascExtra:$ascExtra}' >"$TMP"
-JQ_RC=$?
-if [ "$JQ_RC" -ne 0 ] || ! jq empty "$TMP" 2>/dev/null; then
+  '{generatedAt:$generatedAt,eas:$eas,sentry:$sentry,opdash:$opdash,ascExtra:$ascExtra}' >"$TMP"; then
+  mv "$TMP" "$OUT"
+  printf '%s\n' "$OUT"
+else
   rm -f "$TMP"
-  echo "ops-healify-bi-refresh: cache assembly failed (rc=$JQ_RC) — $OUT left unchanged" >&2
+  printf 'healify-bi refresh: merge failed; keeping existing cache at %s\n' "$OUT" >&2
   exit 1
 fi
-mv "$TMP" "$OUT"
-printf '%s\n' "$OUT"
