@@ -222,9 +222,8 @@ MERGED=$(jq -n \
             source: "scan_inferred"
           } }
       ) | from_entries ) as $cmd_base
-  | ( (($cmd_base | keys) + (($prefs.persona.command_expertise // {}) | keys) | unique)
-    | map(. as $k | { key: $k, value: keep($prefs.persona.command_expertise[$k]; $cmd_base[$k]) })
-    | from_entries ) as $command_expertise
+  | ($cmd_base + (($prefs.persona.command_expertise // {})
+      | with_entries(select(rank(.value.source) > rank("scan_inferred"))))) as $command_expertise
 
   | { display_name: ($scan.identity_hints.git_name // "Owner"),
       full_name: null,
@@ -280,8 +279,10 @@ else
   else
     printf '%s\n' "$MERGED" > "$TMP"
     LOCK="$PREFS.lock"
+    _WROTE=0
     if command -v flock >/dev/null 2>&1; then
       ( flock -x 200; mv -f "$TMP" "$PREFS" ) 200>"$LOCK"
+      _WROTE=1
     else
       # mkdir-mutex fallback (mkdir is atomic on POSIX)
       _tries=0
@@ -291,11 +292,12 @@ else
       if [ -d "$PREFS.mutex" ]; then
         mv -f "$TMP" "$PREFS"
         rmdir "$PREFS.mutex" 2>/dev/null || true
+        _WROTE=1
       else
         echo "ops-user-profiler: could not acquire preferences lock — skipping persona write" >&2
       fi
     fi
     [ -f "$TMP" ] && rm -f "$TMP" 2>/dev/null || true
-    echo "ops-user-profiler: merged .persona into $PREFS (ws_source=$WS_SOURCE)"
+    [ "$_WROTE" -eq 1 ] && echo "ops-user-profiler: merged .persona into $PREFS (ws_source=$WS_SOURCE)"
   fi
 fi
