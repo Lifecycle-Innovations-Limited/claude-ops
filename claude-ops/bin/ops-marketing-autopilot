@@ -1505,7 +1505,10 @@ gather_amplitude() {
     case "$val" in ''|*[!0-9.]*) val=0;; esac
     agg="$(printf '%s' "$agg" | jq -c --arg k "$ev" --argjson v "${val:-0}" '.[$k]=$v' 2>/dev/null || echo "$agg")"
   done < <(printf '%s' "$events" | jq -r '.[]?' 2>/dev/null || true)
-  jq -nc --argjson ev "$agg" '{events:$ev,_window:"7d"}' > "$out" 2>/dev/null || printf '%s' '{"events":{}}' > "$out"
+  # Emit funnel_total_7d (sum of all funnel-event counts) alongside the per-event
+  # breakdown. The canary auto-unpause gate reads .funnel_total_7d; without it the
+  # gate fell back to 0 and held campaigns paused forever despite real funnel signal.
+  jq -nc --argjson ev "$agg" '{events:$ev, funnel_total_7d: ([$ev[]?] | add // 0), _window:"7d"}' > "$out" 2>/dev/null || printf '%s' '{"events":{},"funnel_total_7d":0}' > "$out"
   local summary
   summary="$(printf '%s' "$agg" | jq -r 'to_entries | map("\(.key)=\(.value)") | join(", ")' 2>/dev/null || echo '')"
   report "- amplitude: intent funnel 7d → ${summary:-no events} → ${out##*/}"
@@ -1748,7 +1751,10 @@ canary_gate_unpause() {
   local amp_f="${STATE_DIR}/${proj}-amplitude.json"
   local amp_total=0
   if [ -f "$amp_f" ]; then
-    amp_total="$(jq -r '.funnel_total_7d // 0' "$amp_f" 2>/dev/null || echo 0)"
+    # Prefer the emitted funnel_total_7d; fall back to summing the per-event
+    # breakdown so already-cached files (written before this field existed) still
+    # pass the gate instead of reading a missing field as 0.
+    amp_total="$(jq -r '(.funnel_total_7d // ([.events[]?] | add) // 0)' "$amp_f" 2>/dev/null || echo 0)"
   fi
   if ! awk "BEGIN{exit !(${amp_total:-0} > 0)}" 2>/dev/null; then
     report "- canary gate: HOLD — Amplitude funnel_total_7d=${amp_total} (need >0)"
