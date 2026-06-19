@@ -125,6 +125,22 @@ h="$(kpi_health_score '{"roas":0,"cvr":0,"crash_free_rate":0.89,"ad_spend":0,"re
 score="$(echo "$h" | jq -r '.score')"
 [ "$score" = "0" ] && ok "health crash penalty floored at 0" || err "health crash floor: expected 0, got $score"
 
+# Idle: no activity at all, no crash signal → "Idle", NOT a false Critical.
+# (paused / €0-spend account is dormant, not failing)
+h="$(kpi_health_score '{"roas":0,"cvr":0,"ad_spend":0,"revenue":0}')"
+label="$(echo "$h" | jq -r '.label')"
+[ "$label" = "Idle" ] && ok "health Idle label for dormant account" || err "health Idle: expected Idle, got $label"
+
+# Idle guard must NOT swallow a real crash signal even with zero spend.
+h="$(kpi_health_score '{"roas":0,"cvr":0,"crash_free_rate":0.88,"ad_spend":0,"revenue":0}')"
+label="$(echo "$h" | jq -r '.label')"
+[ "$label" = "Critical" ] && ok "crash signal stays Critical despite no spend" || err "crash-not-idle: expected Critical, got $label"
+
+# Active-but-failing stays Critical: spend>0, ROAS<1 → burning money.
+h="$(kpi_health_score '{"roas":0.4,"cvr":0,"crash_free_rate":1,"ad_spend":200,"revenue":80}')"
+label="$(echo "$h" | jq -r '.label')"
+[ "$label" = "Critical" ] && ok "active unprofitable stays Critical" || err "active-unprofitable: expected Critical, got $label"
+
 # ---------------------------------------------------------------------------
 # kpi_compute_all
 # ---------------------------------------------------------------------------
