@@ -353,6 +353,23 @@ def _resolve_anthropic_auth() -> tuple[str, dict] | tuple[None, None]:
     credentials at ~/.claude/.credentials.json) so subscription users don't
     pay metered rates. Falls back to ANTHROPIC_API_KEY env / keychain.
     """
+    # CRS relay first — fleet-sanctioned path. Subscription OAuth tokens 401 on
+    # direct api.anthropic.com after a token rotation; route through the local CRS
+    # relay. token from $ANTHROPIC_AUTH_TOKEN or keychain service CRS_KEY.
+    crs_tok = os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
+    if not crs_tok:
+        try:
+            r = subprocess.run(
+                ["security", "find-generic-password", "-s", "CRS_KEY", "-w"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                crs_tok = r.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+    if crs_tok:
+        crs_base = os.environ.get("ANTHROPIC_BASE_URL", "http://127.0.0.1:3005/api").strip()
+        return (f"Bearer {crs_tok}", {"_base_url": crs_base})
     # Try Claude Code OAuth — macOS keychain
     try:
         blob = subprocess.run(
@@ -469,10 +486,11 @@ def infer_tasks_from_recording(recording: dict) -> tuple[list[dict], bool]:
     if auth_header:
         headers["Authorization"] = auth_header
         for k, v in (extras or {}).items():
-            if k != "_apikey":
+            if k not in ("_apikey", "_base_url"):
                 headers[k] = v
     else:
         headers["x-api-key"] = (extras or {}).get("_apikey", "")
+    _base_url = (extras or {}).get("_base_url", "https://api.anthropic.com")
 
     payload = {
         "model": "claude-haiku-4-5-20251001",
@@ -481,7 +499,7 @@ def infer_tasks_from_recording(recording: dict) -> tuple[list[dict], bool]:
         "messages": [{"role": "user", "content": user_msg}],
     }
     data = json.dumps(payload).encode("utf-8")
-    req = urlreq.Request("https://api.anthropic.com/v1/messages",
+    req = urlreq.Request(f"{_base_url}/v1/messages",
                          data=data, headers=headers, method="POST")
     try:
         with urlreq.urlopen(req, timeout=30) as resp:
