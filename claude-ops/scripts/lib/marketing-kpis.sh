@@ -117,7 +117,7 @@ kpi_health_score() {
   roas="$(echo "$data" | jq -r '.roas // 0' 2>/dev/null | tr -d '\n' || echo 0)"
   cvr="$(echo "$data" | jq -r '.cvr // 0' 2>/dev/null | tr -d '\n' || echo 0)"
   crash_free="$(echo "$data" | jq -r '.crash_free_rate // 1' 2>/dev/null | tr -d '\n' || echo 1)"
-  ad_spend="$(echo "$data" | jq -r '.ad_spend // 0' 2>/dev/null | tr -d '\n' || echo 0)"
+  ad_spend="$(echo "$data" | jq -r '((.ad_spend // 0) | tonumber) as $a | ((.spend // 0) | tonumber) as $s | if $a > 0 then $a else $s end' 2>/dev/null | tr -d '\n' || echo 0)"
   revenue="$(echo "$data" | jq -r '.revenue // 0' 2>/dev/null | tr -d '\n' || echo 0)"
 
   local score idle
