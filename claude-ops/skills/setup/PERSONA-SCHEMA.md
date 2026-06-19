@@ -71,6 +71,20 @@ This is **generic for any user** — every field is _discovered_ (git identity, 
       // worth installing, with why + how
       { "tool": "stripe", "why": "you have STRIPE_* keys but no stripe CLI", "install": "dnf install stripe" },
     ],
+    "command_expertise": {
+      // per ops:command familiarity signal — drives how much the wizard explains
+      // each command and which it surfaces first. Keyed by command id (no slash).
+      // familiarity: "core"     = always-relevant (ops:setup, ops:go) — never pruned
+      //              "familiar" = a dependency the command needs is present (CLI/MCP/
+      //                           env-vendor/hook detected) → user likely uses it
+      //              "new"      = no detected dependency → introduce it, don't assume
+      // source: confidence tier of THIS entry (see merge contract). The profiler
+      //         writes "scan_inferred"; the wizard upgrades to "confirmed" when the
+      //         user corrects/acknowledges it.
+      "ops:setup":   { "familiarity": "core",     "source": "scan_inferred" },
+      "ops:deploy":  { "familiarity": "familiar", "source": "scan_inferred" },
+      "ops:revenue": { "familiarity": "new",      "source": "scan_inferred" },
+    },
   },
 }
 ```
