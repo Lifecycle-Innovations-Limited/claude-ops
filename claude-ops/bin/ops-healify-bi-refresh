@@ -35,6 +35,8 @@ if command -v sentry-cli >/dev/null 2>&1 && [[ -n "$SENTRY_ORG" && -n "$SENTRY_P
       elif printf '%s' "$out" | grep -qi 'error\|unauthorized\|forbidden\|not found'; then
         note="$(printf '%s' "$out" | sed -n '1,2p' | tr '\n' ' ' | sed 's/"/'\''/g')"
         jq -nc --arg project "$project" --arg note "$note" '{project:$project,ok:false,unresolved:null,highPriority:null,note:$note}'
+      elif printf '%s' "$out" | grep -qi 'No issues found'; then
+        jq -nc --arg project "$project" '{project:$project,ok:true,unresolved:0,highPriority:0,note:"No unresolved issues"}'
       else
         rows="$(printf '%s\n' "$out" | sed '/^$/d' | grep -Ev '^(Issue|ID|\\-)' | wc -l | awk '{print $1}')"
         jq -nc --arg project "$project" --argjson rows "${rows:-0}" '{project:$project,ok:true,unresolved:$rows,highPriority:null,note:"issues listed by sentry-cli"}'
