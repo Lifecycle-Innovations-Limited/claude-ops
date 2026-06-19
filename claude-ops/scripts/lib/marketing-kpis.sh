@@ -98,13 +98,17 @@ kpi_ctr() {
 
 # ---------------------------------------------------------------------------
 # kpi_health_score <project_json>
-# Composite 0-100 score. Returns JSON: {"score":N,"label":"Healthy|Warning|Critical"}
+# Composite 0-100 score. Returns JSON: {"score":N,"label":"Healthy|Warning|Critical|Idle"}
 # Scoring:
 #   ROAS:   >=3 → +30, 1-3 → +15, else 0
 #   CVR:    >=2% → +20, 1-2% → +10, else 0
 #   Crash:  >=0.99 → +20, 0.95-0.99 → +10, <0.90 → -20, else 0
 #   Profit: revenue > ad_spend → +20
 #   Active: ad_spend > 0 → +10
+# Idle override: a dormant account (no spend, no revenue, no ROAS/CVR signal) with
+#   no crash problem is paused, not failing — label it "Idle" so €0-spend/paused
+#   accounts don't trip a false Critical alarm. A real crash signal
+#   (crash_free < 0.99) still routes through the Critical path.
 # ---------------------------------------------------------------------------
 kpi_health_score() {
   local data="${1:-{}}"
@@ -116,8 +120,11 @@ kpi_health_score() {
   ad_spend="$(echo "$data" | jq -r '.ad_spend // 0' 2>/dev/null | tr -d '\n' || echo 0)"
   revenue="$(echo "$data" | jq -r '.revenue // 0' 2>/dev/null | tr -d '\n' || echo 0)"
 
-  local score label
-  score="$(awk "BEGIN {
+  local score idle
+  # awk prints "<score> <idle-flag>": idle=1 when there is zero activity and no
+  # crash signal — i.e. nothing to judge, the account is simply dormant.
+  read -r score idle <<EOF
+$(awk "BEGIN {
     roas=$roas+0; cvr=$cvr+0; cf=$crash_free+0;
     spend=$ad_spend+0; rev=$revenue+0;
     s=0;
@@ -137,10 +144,16 @@ kpi_health_score() {
     if (spend > 0) s += 10;
     # Floor at 0
     if (s < 0) s = 0;
-    print s
-  }")"
+    # Idle: no spend, no revenue, no ROAS/CVR signal, and no crash problem.
+    idle = (spend == 0 && rev == 0 && roas == 0 && cvr == 0 && cf >= 0.99) ? 1 : 0;
+    print s, idle
+  }")
+EOF
 
-  if [ "$score" -ge 70 ] 2>/dev/null; then
+  local label
+  if [ "$idle" = "1" ] 2>/dev/null; then
+    label="Idle"
+  elif [ "$score" -ge 70 ] 2>/dev/null; then
     label="Healthy"
   elif [ "$score" -ge 40 ] 2>/dev/null; then
     label="Warning"
