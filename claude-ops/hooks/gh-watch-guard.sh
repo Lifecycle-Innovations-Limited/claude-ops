@@ -30,6 +30,19 @@ CMD=$(printf '%s' "$raw" | jq -r '(.tool_input.command // .command // empty)' 2>
 # Collapse newlines so --watch / tight-loop patterns cannot be evaded by splitting lines.
 CMD_ONELINE=$(printf '%s' "$CMD" | tr '\n\r' '  ')
 
+# Build a SCAN copy with echo/printf string-literal arguments blanked out, used ONLY
+# for the loop-detection patterns below. A `gh pr merge …` that appears purely as DATA
+# echoed/printed to stdout (test fixtures, JSON payloads, help text) is not an execution
+# and must not trip the loop guard — that was a real false-positive class. We do NOT strip
+# when the command also contains eval / bash -c / sh -c / zsh -c, because those EXECUTE
+# their quoted payload, so a loop hidden inside `bash -c "…"` must stay in full scrutiny.
+SCAN="$CMD_ONELINE"
+if ! echo "$CMD_ONELINE" | grep -qE '(^|[^[:alnum:]_])(eval|(ba|z)?sh[[:space:]]+-c)([^[:alnum:]_]|$)'; then
+    SCAN=$(printf '%s' "$CMD_ONELINE" \
+        | sed -E "s/(echo|printf)[[:space:]]+-[a-zA-Z]+[[:space:]]+/\1 /g" \
+        | sed -E "s/(echo|printf)[[:space:]]+'[^']*'/\1 /g; s/(echo|printf)[[:space:]]+\"[^\"]*\"/\1 /g")
+fi
+
 # Fast path: not a gh command AND not a direct api.github.com call, exit immediately.
 # (curl/wget poll loops hit api.github.com/graphql with no `gh` token — they must still
 #  reach Patterns 2-3 below, so don't short-circuit them out.)
@@ -41,7 +54,7 @@ esac
 # --- Pattern 1: --watch flag on gh pr checks / gh run watch ---
 # `gh pr checks <PR> --watch` and `gh run watch` poll every 2-5s.
 # 5000 REST/hr ÷ 2s = exhausted in ~3 hours of one process. the owner saw this in production.
-if echo "$CMD_ONELINE" | grep -qE 'gh[[:space:]]+pr[[:space:]]+checks[[:space:]]+[^|]*--watch|gh[[:space:]]+run[[:space:]]+watch'; then
+if echo "$SCAN" | grep -qE 'gh[[:space:]]+pr[[:space:]]+checks[[:space:]]+[^|]*--watch|gh[[:space:]]+run[[:space:]]+watch'; then
     emit_pre_tool_deny <<'EOF'
 BLOCKED: `gh ... --watch` polls every 2-5s and exhausts the 5000/hr REST quota.
 
@@ -90,7 +103,7 @@ loop_is_rate_limit_only() {
 # evaded with sleep 45 (≥25) and pinned REST to 0 for hours. The interval doesn't
 # matter — a long-lived gh loop is a leak; use the Monitor tool or a single
 # run_in_background `until` instead. Only a rate_limit-only loop is exempt.
-if echo "$CMD_ONELINE" | grep -qE '(^|[^[:alnum:]_])(while|until|for|seq)([^[:alnum:]_]|$).*gh[[:space:]]+(api|pr|run|issue|search)'; then
+if echo "$SCAN" | grep -qE '(^|[^[:alnum:]_])(while|until|for|seq)([^[:alnum:]_]|$).*gh[[:space:]]+(api|pr|run|issue|search)'; then
     if ! loop_is_rate_limit_only; then
         emit_pre_tool_deny <<'EOF'
 BLOCKED: gh polling loop detected (for/while/until + gh api|pr|run|issue|search).
@@ -120,9 +133,9 @@ fi
 # … do sleep 60; done` merge-watcher evaded BOTH prior patterns (no `gh`, sleep 60)
 # and helped pin the shared quota to 0. Block any such loop at ANY sleep interval.
 # Exempt: a loop whose only api.github.com touch is /rate_limit (quota-exempt).
-if echo "$CMD_ONELINE" | grep -qE '(^|[^[:alnum:]_])(while|until|for|seq)([^[:alnum:]_]|$)' \
-   && echo "$CMD_ONELINE" | grep -q 'api.github.com' \
-   && echo "$CMD_ONELINE" | grep -qE '(^|[^[:alnum:]_])sleep([^[:alnum:]_]|$)'; then
+if echo "$SCAN" | grep -qE '(^|[^[:alnum:]_])(while|until|for|seq)([^[:alnum:]_]|$)' \
+   && echo "$SCAN" | grep -q 'api.github.com' \
+   && echo "$SCAN" | grep -qE '(^|[^[:alnum:]_])sleep([^[:alnum:]_]|$)'; then
     # If every api.github.com reference is the rate_limit endpoint, allow it.
     if echo "$CMD_ONELINE" | grep -qE 'api\.github\.com/rate_limit' \
        && ! echo "$CMD_ONELINE" | grep -qE 'api\.github\.com/(graphql|repos|commits|pulls|issues|actions|search)|pullRequest|mergePullRequest'; then
