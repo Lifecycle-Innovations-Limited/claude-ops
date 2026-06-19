@@ -80,6 +80,24 @@ resolve_auth() {
   OPS_AUTH_HEADER=""
   OPS_AUTH_MODE=""
   OPS_AUTH_EXTRA_HEADERS=()
+  OPS_BASE_URL="${OPS_BASE_URL:-}"
+
+  # ─ CRS relay first ─ (fleet-sanctioned path; subscription OAuth tokens now 401
+  # on direct api.anthropic.com after a token rotation). base_url defaults to the
+  # local CRS relay; token from $ANTHROPIC_AUTH_TOKEN or keychain service CRS_KEY.
+  local _crs_base="${ANTHROPIC_BASE_URL:-http://127.0.0.1:3005/api}"
+  local _crs_tok="${ANTHROPIC_AUTH_TOKEN:-}"
+  if [[ -z "${_crs_tok}" ]] && command -v security &>/dev/null; then
+    _crs_tok=$(security find-generic-password -s CRS_KEY -w 2>/dev/null || true)
+  fi
+  if [[ -n "${_crs_tok}" ]]; then
+    OPS_BASE_URL="${_crs_base}"
+    OPS_AUTH_HEADER="Authorization: Bearer ${_crs_tok}"
+    OPS_AUTH_MODE="crs"
+    OPS_AUTH_EXTRA_HEADERS=()
+    log "Auth: CRS relay (${_crs_base})"
+    return 0
+  fi
 
   # ─ Try Claude Code OAuth first ─
   # Linux: the OAuth blob lives in ~/.claude/.credentials.json (no macOS Keychain).
@@ -336,7 +354,7 @@ EOF
   log "Calling Claude Haiku for extraction (auth: ${OPS_AUTH_MODE:-unknown})..."
   local http_status
   http_status=$(curl -s -o "${TMP_RESPONSE}" -w "%{http_code}" \
-    https://api.anthropic.com/v1/messages \
+    "${OPS_BASE_URL:-https://api.anthropic.com}/v1/messages" \
     -H "content-type: application/json" \
     -H "${OPS_AUTH_HEADER}" \
     -H "anthropic-version: 2023-06-01" \
