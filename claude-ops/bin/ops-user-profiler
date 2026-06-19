@@ -222,9 +222,9 @@ MERGED=$(jq -n \
             source: "scan_inferred"
           } }
       ) | from_entries ) as $cmd_base
-  | ( ($prefs.persona.command_expertise // {})
-      | with_entries(select(.value.source == "confirmed")) ) as $cmd_confirmed
-  | ( $cmd_base + $cmd_confirmed ) as $command_expertise
+  | ( (($cmd_base | keys) + (($prefs.persona.command_expertise // {}) | keys) | unique)
+    | map(. as $k | { key: $k, value: keep($prefs.persona.command_expertise[$k]; $cmd_base[$k]) })
+    | from_entries ) as $command_expertise
 
   | { display_name: ($scan.identity_hints.git_name // "Owner"),
       full_name: null,
@@ -235,7 +235,9 @@ MERGED=$(jq -n \
 
   | { verbosity: ( ($scan.style_hints.prior_verbosity // "") | if . == "" then "compact" else . end ),
       autonomy: ($scan.style_hints.autonomy // "careful"),
-      yolo_enabled: (($scan.style_hints.autonomy // "") == "yolo"),
+      yolo_enabled: ( if ($scan.style_hints.prior_yolo // "") == "true" then true
+                       elif ($scan.style_hints.prior_yolo // "") == "false" then false
+                       else (($scan.style_hints.autonomy // "") == "yolo") end ),
       preferred_model: ( ($scan.style_hints.claude_model // "")
                          | if . == "" then null
                            elif test("opus";"i") then "opus"
@@ -286,8 +288,12 @@ else
       until mkdir "$PREFS.mutex" 2>/dev/null; do
         _tries=$((_tries+1)); [ "$_tries" -ge 50 ] && break; sleep 0.1
       done
-      mv -f "$TMP" "$PREFS"
-      rmdir "$PREFS.mutex" 2>/dev/null || true
+      if [ -d "$PREFS.mutex" ]; then
+        mv -f "$TMP" "$PREFS"
+        rmdir "$PREFS.mutex" 2>/dev/null || true
+      else
+        echo "ops-user-profiler: could not acquire preferences lock — skipping persona write" >&2
+      fi
     fi
     [ -f "$TMP" ] && rm -f "$TMP" 2>/dev/null || true
     echo "ops-user-profiler: merged .persona into $PREFS (ws_source=$WS_SOURCE)"
