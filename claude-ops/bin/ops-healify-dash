@@ -88,6 +88,8 @@ safe_jq() {
   local file="$1" fallback="$2" filter="${3:-.}"
   if [[ -s "$file" ]] && command -v jq >/dev/null 2>&1; then
     jq -c "$filter" "$file" 2>/dev/null || printf '%s\n' "$fallback"
+  elif command -v jq >/dev/null 2>&1; then
+    printf '%s\n' "$fallback" | jq -c "$filter" 2>/dev/null || printf '%s\n' "$fallback"
   else
     printf '%s\n' "$fallback"
   fi
