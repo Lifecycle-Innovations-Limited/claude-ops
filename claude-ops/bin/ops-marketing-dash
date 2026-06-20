@@ -137,6 +137,32 @@ if [ -z "$META_APP_SECRET" ]; then
   META_APP_SECRET="$(doppler secrets get META_MY-PROJECT_APP_SECRET --project claude-ops --config prd --plain 2>/dev/null || echo "")"
 fi
 
+# Amplitude (product analytics: signups / new + active users). Dashboard REST API
+# uses HTTP Basic (api_key:secret_key). EU data-residency projects MUST hit
+# analytics.eu.amplitude.com; US hits amplitude.com (server_zone selects host).
+# Creds resolve from the project-scoped prefs tier first (doppler:healify/prd/…),
+# then env, then owner-level channels.marketing.amplitude.*_key Doppler refs.
+AMPLITUDE_API_KEY="$(get_cred 'amplitude.api_key' AMPLITUDE_API_KEY amplitude_api_key AMPLITUDE_API_KEY amplitude api_key_key)"
+AMPLITUDE_SECRET_KEY="$(get_cred 'amplitude.secret_key' AMPLITUDE_SECRET_KEY amplitude_secret_key AMPLITUDE_SECRET_KEY amplitude secret_key_key)"
+AMPLITUDE_ZONE="$(get_cred 'amplitude.server_zone' AMPLITUDE_SERVER_ZONE amplitude_server_zone AMPLITUDE_SERVER_ZONE amplitude server_zone_key)"
+[ -z "$AMPLITUDE_ZONE" ] && AMPLITUDE_ZONE="US"
+case "$AMPLITUDE_ZONE" in
+  [Ee][Uu]) AMPLITUDE_HOST="https://analytics.eu.amplitude.com" ;;
+  *)        AMPLITUDE_HOST="https://amplitude.com" ;;
+esac
+
+# AppsFlyer (app installs / downloads / install conversion rate). Aggregate Pull
+# API (daily_report v5) returns per-day Installs + Conversion Rate as CSV, auth via
+# Bearer V2 token. app_id is the store id (iOS: idNNNNNNNN, Android: package name).
+APPSFLYER_TOKEN="$(get_cred 'appsflyer.api_token' APPSFLYER_API_V2_TOKEN appsflyer_api_token APPSFLYER_API_V2_TOKEN appsflyer api_token_key)"
+APPSFLYER_APP_ID="$(get_cred 'appsflyer.app_id' APPSFLYER_APP_ID appsflyer_app_id APPSFLYER_APP_ID appsflyer app_id_key)"
+
+# RevenueCat (GROUND-TRUTH real app users: customers/subscriptions/MRR). v2 secret
+# key (sk_…) + project id. This is the authoritative "real people" source — it
+# counts actual app identities with store receipts, unlike Amplitude event counts.
+REVENUECAT_KEY="$(get_cred 'revenuecat.api_key' REVENUECAT_HEALIFY_API_KEY revenuecat_api_key REVENUECAT_HEALIFY_API_KEY revenuecat api_key_key)"
+REVENUECAT_PROJECT="$(get_cred 'revenuecat.project_id' REVENUECAT_PROJECT_ID revenuecat_project_id)"
+
 # Meta ad-account id: prefs carries only the Business Manager id (bm_id_key), not
 # an act_ id. If we have a token+secret but no ad account, resolve the first owned
 # ad account via the BM. Leaves META_ACCOUNT empty (meta insights null) on failure
@@ -238,6 +264,18 @@ gather_meta() {
   # Extract purchase count and revenue from actions/action_values
   PURCHASES=$(echo "$INSIGHTS" | jq -r '[.data[0].actions[]? | select(.action_type == "purchase") | .value] | first // "0"' 2>/dev/null || echo "0")
   PURCHASE_VALUE=$(echo "$INSIGHTS" | jq -r '[.data[0].action_values[]? | select(.action_type == "purchase") | .value] | first // "0"' 2>/dev/null || echo "0")
+  # Paid-funnel actions Meta directly attributes to this spend: link clicks that
+  # leave the platform, app installs, and registrations (signups). These are the
+  # ONLY downloads/signups truly caused by the ad — everything else is organic.
+  LINK_CLICKS=$(echo "$INSIGHTS" | jq -r '[.data[0].actions[]? | select(.action_type == "link_click") | .value] | first // "0"' 2>/dev/null || echo "0")
+  APP_INSTALLS=$(echo "$INSIGHTS" | jq -r '[.data[0].actions[]? | select(.action_type | test("mobile_app_install|app_install|omni_app_install")) | .value] | map(tonumber) | add // 0 | tostring' 2>/dev/null || echo "0")
+  REGISTRATIONS=$(echo "$INSIGHTS" | jq -r '[.data[0].actions[]? | select(.action_type | test("complete_registration")) | .value] | map(tonumber) | add // 0 | tostring' 2>/dev/null || echo "0")
+
+  # Account currency — Meta reports spend in the ad-account currency (Healify = USD,
+  # NOT EUR). Fetch once so the statusline labels spend with the real symbol instead
+  # of assuming €. Cheap single call; falls back to empty (renderer omits symbol).
+  CURRENCY=$(curl -gsS --max-time 5 "https://graph.facebook.com/v21.0/${META_ACCOUNT}?fields=currency${META_PROOF_QS}" \
+    -H "Authorization: Bearer ${META_TOKEN}" 2>/dev/null | jq -r '.currency // ""' 2>/dev/null || echo "")
 
   # ROAS = purchase_value / spend
   ROAS=$(awk "BEGIN {s=$SPEND+0; v=$PURCHASE_VALUE+0; if (s>0) printf \"%.2f\", v/s; else print \"0\"}")
@@ -246,11 +284,15 @@ gather_meta() {
     --arg spend "$SPEND" \
     --arg impressions "$IMPRESSIONS" \
     --arg clicks "$CLICKS" \
+    --arg link_clicks "$LINK_CLICKS" \
     --arg ctr "$CTR" \
     --arg purchases "$PURCHASES" \
+    --arg app_installs "$APP_INSTALLS" \
+    --arg registrations "$REGISTRATIONS" \
     --arg purchase_value "$PURCHASE_VALUE" \
+    --arg currency "$CURRENCY" \
     --arg roas "$ROAS" \
-    '{spend: $spend, impressions: $impressions, clicks: $clicks, ctr: $ctr, purchases: $purchases, purchase_value: $purchase_value, roas: $roas}'
+    '{spend: $spend, currency: $currency, impressions: $impressions, clicks: $clicks, link_clicks: $link_clicks, ctr: $ctr, purchases: $purchases, app_installs: $app_installs, registrations: $registrations, purchase_value: $purchase_value, roas: $roas}'
 }
 
 # --- GA4 ---
@@ -409,6 +451,98 @@ gather_google_ads() {
     2>/dev/null || echo "null"
 }
 
+# --- Amplitude (signups = new users; weekly active users; signup rate) ---
+# Dashboard REST API /api/2/users with m=new / m=active. i=30 over a 7-day window
+# collapses to ONE bucket so the series is a single total (no per-day double-count).
+gather_amplitude() {
+  if [ -z "$AMPLITUDE_API_KEY" ] || [ -z "$AMPLITUDE_SECRET_KEY" ]; then
+    echo "null"; return
+  fi
+  local S E NEW ACT SR NEW_RESP ACT_RESP
+  S=$(date -v-7d +%Y%m%d 2>/dev/null || date -d '7 days ago' +%Y%m%d 2>/dev/null || echo "")
+  E=$(date +%Y%m%d)
+  [ -z "$S" ] && { echo "null"; return; }
+  NEW_RESP=$(curl -gsS --max-time 8 -u "${AMPLITUDE_API_KEY}:${AMPLITUDE_SECRET_KEY}" \
+    "${AMPLITUDE_HOST}/api/2/users?start=${S}&end=${E}&m=new&i=30" 2>/dev/null)
+  ACT_RESP=$(curl -gsS --max-time 8 -u "${AMPLITUDE_API_KEY}:${AMPLITUDE_SECRET_KEY}" \
+    "${AMPLITUDE_HOST}/api/2/users?start=${S}&end=${E}&m=active&i=30" 2>/dev/null)
+  case "$NEW_RESP" in ''|'<'*) echo "null"; return;; esac
+  case "$ACT_RESP" in ''|'<'*) echo "null"; return;; esac
+  printf '%s' "$NEW_RESP" | jq -e '.data.series' >/dev/null 2>&1 || { echo "null"; return; }
+  printf '%s' "$ACT_RESP" | jq -e '.data.series' >/dev/null 2>&1 || { echo "null"; return; }
+  NEW=$(printf '%s' "$NEW_RESP" | jq -r '[.data.series[]?[]? // 0] | add // 0' 2>/dev/null)
+  ACT=$(printf '%s' "$ACT_RESP" | jq -r '[.data.series[]?[]? // 0] | add // 0' 2>/dev/null)
+  case "$NEW" in ''|*[!0-9]*) NEW=0;; esac
+  case "$ACT" in ''|*[!0-9]*) ACT=0;; esac
+  # signup_rate = share of weekly actives that are brand-new users.
+  SR=$(awk "BEGIN{a=$ACT+0;n=$NEW+0; if(a>0) printf \"%.1f\", (n/a)*100; else print \"0\"}")
+  jq -n --argjson new "$NEW" --argjson active "$ACT" --arg signup_rate "$SR" \
+    '{new_users:$new, active_users:$active, signup_rate:$signup_rate}'
+}
+
+# --- AppsFlyer (app downloads = installs; install conversion rate) ---
+# Aggregate Pull API daily_report v5 → CSV: Date,Agency,MediaSource,Campaign,
+# Impressions,Clicks,CTR,Installs,ConversionRate,Sessions,… Sum Installs (col 8)
+# and Clicks (col 6) over rows whose field count matches the header (skips rows
+# with embedded commas). install_cvr = installs/clicks (paid-attributed clicks).
+gather_appsflyer() {
+  if [ -z "$APPSFLYER_TOKEN" ] || [ -z "$APPSFLYER_APP_ID" ]; then
+    echo "null"; return
+  fi
+  local FROM TO CSV INSTALLS CLICKS PAID_CLICKS CVR
+  FROM=$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo "")
+  TO=$(date +%Y-%m-%d)
+  [ -z "$FROM" ] && { echo "null"; return; }
+  CSV=$(curl -gsS --max-time 18 -H "Authorization: Bearer ${APPSFLYER_TOKEN}" -H "accept: text/csv" \
+    "https://hq1.appsflyer.com/api/agg-data/export/app/${APPSFLYER_APP_ID}/daily_report/v5?from=${FROM}&to=${TO}" 2>/dev/null)
+  case "$CSV" in ''|'{'*|'<'*) echo "null"; return;; esac   # empty / JSON error / HTML
+  # Columns: 1 Date,2 Agency,3 Media Source(pid),4 Campaign,5 Impr,6 Clicks,7 CTR,
+  # 8 Installs,9 Conversion Rate,10 Sessions. Media Source "Organic" = not ad-driven.
+  INSTALLS=$(printf '%s' "$CSV" | awk -F, 'NR==1{n=NF;next} NF==n{v=$8; if(v=="N/A"||v=="")v=0; s+=v} END{print s+0}')
+  ORGANIC=$(printf '%s' "$CSV"  | awk -F, 'NR==1{n=NF;next} NF==n && $3=="Organic"{v=$8; if(v=="N/A"||v=="")v=0; s+=v} END{print s+0}')
+  PAID=$(printf '%s' "$CSV"     | awk -F, 'NR==1{n=NF;next} NF==n && $3!="Organic" && $3!="None"{v=$8; if(v=="N/A"||v=="")v=0; s+=v} END{print s+0}')
+  CLICKS=$(printf '%s' "$CSV"   | awk -F, 'NR==1{n=NF;next} NF==n{v=$6; if(v=="N/A"||v=="")v=0; s+=v} END{print s+0}')
+  PAID_CLICKS=$(printf '%s' "$CSV" | awk -F, 'NR==1{n=NF;next} NF==n && $3!="Organic" && $3!="None"{v=$6; if(v=="N/A"||v=="")v=0; s+=v} END{print s+0}')
+  case "$INSTALLS" in ''|*[!0-9]*) INSTALLS=0;; esac
+  case "$ORGANIC" in ''|*[!0-9]*) ORGANIC=0;; esac
+  case "$PAID" in ''|*[!0-9]*) PAID=0;; esac
+  case "$CLICKS" in ''|*[!0-9]*) CLICKS=0;; esac
+  case "$PAID_CLICKS" in ''|*[!0-9]*) PAID_CLICKS=0;; esac
+  # install_cvr = paid click→install rate. Only meaningful when there are enough
+  # attributed clicks to exceed installs; a near-all-organic app has paid_clicks≈0 which
+  # makes installs/clicks explode (>100%, nonsensical). Suppress to "0" in that case
+  # so the statusline omits it rather than showing a bogus 1000%+ figure.
+  CVR=$(awk "BEGIN{c=$PAID_CLICKS+0;i=$PAID+0; r=(c>0)?(i/c)*100:0; if(c>0 && r<=100) printf \"%.2f\", r; else print \"0\"}")
+  jq -n --argjson installs "$INSTALLS" --argjson organic_installs "$ORGANIC" \
+        --argjson paid_installs "$PAID" --argjson clicks "$CLICKS" --arg install_cvr "$CVR" \
+    '{installs:$installs, organic_installs:$organic_installs, paid_installs:$paid_installs, clicks:$clicks, install_cvr:$install_cvr}'
+}
+
+# --- RevenueCat (ground-truth real app users / subscriptions / MRR) ---
+# v2 overview metrics: active_subscriptions, active_trials, mrr, revenue,
+# new_customers, active_users. This is the canonical "real people" signal.
+gather_revenuecat() {
+  if [ -z "$REVENUECAT_KEY" ] || [ -z "$REVENUECAT_PROJECT" ]; then
+    echo "null"; return
+  fi
+  local OV
+  OV=$(curl -gsS --max-time 12 -H "Authorization: Bearer ${REVENUECAT_KEY}" \
+    "https://api.revenuecat.com/v2/projects/${REVENUECAT_PROJECT}/metrics/overview" 2>/dev/null)
+  case "$OV" in ''|'{"items"'*) ;; esac
+  printf '%s' "$OV" | jq -e '.metrics' >/dev/null 2>&1 || { echo "null"; return; }
+  # Pull each metric by id into a flat object (values are numbers).
+  printf '%s' "$OV" | jq '
+    (.metrics // []) | map({(.id): .value}) | add // {} |
+    {
+      new_customers:        (.new_customers // 0),
+      active_users:         (.active_users // 0),
+      active_subscriptions: (.active_subscriptions // 0),
+      active_trials:        (.active_trials // 0),
+      mrr:                  (.mrr // 0),
+      revenue:              (.revenue // 0)
+    }' 2>/dev/null || echo "null"
+}
+
 # Run all in parallel. VAR=$(fn) & does NOT propagate assignments to the parent
 # shell after `wait` (the assignment happens in the backgrounded subshell only),
 # so write each gatherer's stdout to a tempfile and read them back post-wait.
@@ -422,6 +556,9 @@ trap 'rm -rf "$TMPDIR_MD"' EXIT
 ( gather_gsc         > "$TMPDIR_MD/gsc.json"       ) &
 ( gather_google_ads  > "$TMPDIR_MD/google_ads.json") &
 ( gather_instagram   > "$TMPDIR_MD/instagram.json" ) &
+( gather_amplitude   > "$TMPDIR_MD/amplitude.json" ) &
+( gather_appsflyer   > "$TMPDIR_MD/appsflyer.json" ) &
+( gather_revenuecat  > "$TMPDIR_MD/revenuecat.json") &
 wait
 
 KLAVIYO_DATA=$(cat "$TMPDIR_MD/klaviyo.json"    2>/dev/null); KLAVIYO_DATA=${KLAVIYO_DATA:-null}
@@ -430,6 +567,9 @@ GA4_DATA=$(cat "$TMPDIR_MD/ga4.json"            2>/dev/null); GA4_DATA=${GA4_DAT
 GSC_DATA=$(cat "$TMPDIR_MD/gsc.json"            2>/dev/null); GSC_DATA=${GSC_DATA:-null}
 GADS_DATA=$(cat "$TMPDIR_MD/google_ads.json"    2>/dev/null); GADS_DATA=${GADS_DATA:-null}
 INSTAGRAM_DATA=$(cat "$TMPDIR_MD/instagram.json" 2>/dev/null); INSTAGRAM_DATA=${INSTAGRAM_DATA:-null}
+AMPLITUDE_DATA=$(cat "$TMPDIR_MD/amplitude.json" 2>/dev/null); AMPLITUDE_DATA=${AMPLITUDE_DATA:-null}
+APPSFLYER_DATA=$(cat "$TMPDIR_MD/appsflyer.json" 2>/dev/null); APPSFLYER_DATA=${APPSFLYER_DATA:-null}
+REVENUECAT_DATA=$(cat "$TMPDIR_MD/revenuecat.json" 2>/dev/null); REVENUECAT_DATA=${REVENUECAT_DATA:-null}
 
 # Compute blended ROAS across Meta + Google Ads
 META_SPEND=$(echo "$META_DATA" | jq -r '.spend // "0"' 2>/dev/null || echo "0")
@@ -482,8 +622,11 @@ jq -n \
   --argjson gsc "$GSC_DATA" \
   --argjson google_ads "$GADS_DATA" \
   --argjson instagram "$INSTAGRAM_DATA" \
+  --argjson amplitude "$AMPLITUDE_DATA" \
+  --argjson appsflyer "$APPSFLYER_DATA" \
+  --argjson revenuecat "$REVENUECAT_DATA" \
   --arg blended_roas "$BLENDED_ROAS" \
   --argjson health_score "$HEALTH_SCORE" \
   --arg health_status "$HEALTH_STATUS" \
   --arg date "$TODAY" \
-  '{date: $date, project: (if $project == "" then null else $project end), klaviyo: $klaviyo, meta: $meta, ga4: $ga4, gsc: $gsc, google_ads: $google_ads, instagram: $instagram, blended_roas: $blended_roas, health_score: $health_score, health_status: $health_status}'
+  '{date: $date, project: (if $project == "" then null else $project end), klaviyo: $klaviyo, meta: $meta, ga4: $ga4, gsc: $gsc, google_ads: $google_ads, instagram: $instagram, amplitude: $amplitude, appsflyer: $appsflyer, revenuecat: $revenuecat, blended_roas: $blended_roas, health_score: $health_score, health_status: $health_status}'
