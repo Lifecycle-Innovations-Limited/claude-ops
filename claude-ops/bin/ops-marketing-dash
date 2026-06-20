@@ -458,16 +458,20 @@ gather_amplitude() {
   if [ -z "$AMPLITUDE_API_KEY" ] || [ -z "$AMPLITUDE_SECRET_KEY" ]; then
     echo "null"; return
   fi
-  local S E NEW ACT SR
+  local S E NEW ACT SR NEW_RESP ACT_RESP
   S=$(date -v-7d +%Y%m%d 2>/dev/null || date -d '7 days ago' +%Y%m%d 2>/dev/null || echo "")
   E=$(date +%Y%m%d)
   [ -z "$S" ] && { echo "null"; return; }
-  NEW=$(curl -gsS --max-time 8 -u "${AMPLITUDE_API_KEY}:${AMPLITUDE_SECRET_KEY}" \
-    "${AMPLITUDE_HOST}/api/2/users?start=${S}&end=${E}&m=new&i=30" 2>/dev/null \
-    | jq -r '[.data.series[]?[]? // 0] | add // 0' 2>/dev/null || echo "0")
-  ACT=$(curl -gsS --max-time 8 -u "${AMPLITUDE_API_KEY}:${AMPLITUDE_SECRET_KEY}" \
-    "${AMPLITUDE_HOST}/api/2/users?start=${S}&end=${E}&m=active&i=30" 2>/dev/null \
-    | jq -r '[.data.series[]?[]? // 0] | add // 0' 2>/dev/null || echo "0")
+  NEW_RESP=$(curl -gsS --max-time 8 -u "${AMPLITUDE_API_KEY}:${AMPLITUDE_SECRET_KEY}" \
+    "${AMPLITUDE_HOST}/api/2/users?start=${S}&end=${E}&m=new&i=30" 2>/dev/null)
+  ACT_RESP=$(curl -gsS --max-time 8 -u "${AMPLITUDE_API_KEY}:${AMPLITUDE_SECRET_KEY}" \
+    "${AMPLITUDE_HOST}/api/2/users?start=${S}&end=${E}&m=active&i=30" 2>/dev/null)
+  case "$NEW_RESP" in ''|'<'*) echo "null"; return;; esac
+  case "$ACT_RESP" in ''|'<'*) echo "null"; return;; esac
+  printf '%s' "$NEW_RESP" | jq -e '.data.series' >/dev/null 2>&1 || { echo "null"; return; }
+  printf '%s' "$ACT_RESP" | jq -e '.data.series' >/dev/null 2>&1 || { echo "null"; return; }
+  NEW=$(printf '%s' "$NEW_RESP" | jq -r '[.data.series[]?[]? // 0] | add // 0' 2>/dev/null)
+  ACT=$(printf '%s' "$ACT_RESP" | jq -r '[.data.series[]?[]? // 0] | add // 0' 2>/dev/null)
   case "$NEW" in ''|*[!0-9]*) NEW=0;; esac
   case "$ACT" in ''|*[!0-9]*) ACT=0;; esac
   # signup_rate = share of weekly actives that are brand-new users.
@@ -485,7 +489,7 @@ gather_appsflyer() {
   if [ -z "$APPSFLYER_TOKEN" ] || [ -z "$APPSFLYER_APP_ID" ]; then
     echo "null"; return
   fi
-  local FROM TO CSV INSTALLS CLICKS CVR
+  local FROM TO CSV INSTALLS CLICKS PAID_CLICKS CVR
   FROM=$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo "")
   TO=$(date +%Y-%m-%d)
   [ -z "$FROM" ] && { echo "null"; return; }
@@ -498,15 +502,17 @@ gather_appsflyer() {
   ORGANIC=$(printf '%s' "$CSV"  | awk -F, 'NR==1{n=NF;next} NF==n && $3=="Organic"{v=$8; if(v=="N/A"||v=="")v=0; s+=v} END{print s+0}')
   PAID=$(printf '%s' "$CSV"     | awk -F, 'NR==1{n=NF;next} NF==n && $3!="Organic" && $3!="None"{v=$8; if(v=="N/A"||v=="")v=0; s+=v} END{print s+0}')
   CLICKS=$(printf '%s' "$CSV"   | awk -F, 'NR==1{n=NF;next} NF==n{v=$6; if(v=="N/A"||v=="")v=0; s+=v} END{print s+0}')
+  PAID_CLICKS=$(printf '%s' "$CSV" | awk -F, 'NR==1{n=NF;next} NF==n && $3!="Organic" && $3!="None"{v=$6; if(v=="N/A"||v=="")v=0; s+=v} END{print s+0}')
   case "$INSTALLS" in ''|*[!0-9]*) INSTALLS=0;; esac
   case "$ORGANIC" in ''|*[!0-9]*) ORGANIC=0;; esac
   case "$PAID" in ''|*[!0-9]*) PAID=0;; esac
   case "$CLICKS" in ''|*[!0-9]*) CLICKS=0;; esac
+  case "$PAID_CLICKS" in ''|*[!0-9]*) PAID_CLICKS=0;; esac
   # install_cvr = paid click→install rate. Only meaningful when there are enough
-  # attributed clicks to exceed installs; a near-all-organic app has clicks≈0 which
+  # attributed clicks to exceed installs; a near-all-organic app has paid_clicks≈0 which
   # makes installs/clicks explode (>100%, nonsensical). Suppress to "0" in that case
   # so the statusline omits it rather than showing a bogus 1000%+ figure.
-  CVR=$(awk "BEGIN{c=$CLICKS+0;i=$PAID+0; r=(c>0)?(i/c)*100:0; if(c>0 && r<=100) printf \"%.2f\", r; else print \"0\"}")
+  CVR=$(awk "BEGIN{c=$PAID_CLICKS+0;i=$PAID+0; r=(c>0)?(i/c)*100:0; if(c>0 && r<=100) printf \"%.2f\", r; else print \"0\"}")
   jq -n --argjson installs "$INSTALLS" --argjson organic_installs "$ORGANIC" \
         --argjson paid_installs "$PAID" --argjson clicks "$CLICKS" --arg install_cvr "$CVR" \
     '{installs:$installs, organic_installs:$organic_installs, paid_installs:$paid_installs, clicks:$clicks, install_cvr:$install_cvr}'
