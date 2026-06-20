@@ -278,7 +278,7 @@ cards() {
   plugins="$(safe_jq "$PLUGIN_CACHE" '{"claude_plugins":[]}' '.claude_plugins | length')"
   skills="$(safe_jq "$PLUGIN_CACHE" '{"codex_skills":[]}' '.codex_skills | length')"
   kpis="$(safe_jq "$PLUGIN_CACHE" '{"ops_kpi_caches":[]}' '.ops_kpi_caches | length')"
-  agents_down="$(grep -Eci 'auth-needed|failed|missing|unauthorized|error' "$RUNTIME_CACHE" 2>/dev/null || true)"
+  agents_down="$(grep -Eci 'auth-needed|failed|missing|unauthorized|\berror\b' "$RUNTIME_CACHE" 2>/dev/null || true)"
   agents_down="${agents_down:-0}"
   {
     printf 'METRIC|VALUE|SOURCE|AGE\n'
