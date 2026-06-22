@@ -4,10 +4,10 @@
 
 **Business Operating System for Claude Code**
 
-![Version](https://img.shields.io/badge/version-2.34.1-blue)
+![Version](https://img.shields.io/badge/version-2.35.0-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blueviolet.svg)
-![Skills](https://img.shields.io/badge/skills-58-success)
+![Skills](https://img.shields.io/badge/skills-59-success)
 ![Agents](https://img.shields.io/badge/agents-21-informational)
 ![Integrations](https://img.shields.io/badge/integrations-22-orange)
 ![Auto-fix](https://img.shields.io/badge/v2-auto--fix%20subsystem-ef4444)
@@ -103,7 +103,7 @@ claude --plugin-dir ./claude-ops/claude-ops
 
 ## Commands
 
-All 58 skills, grouped by category:
+All 59 skills, grouped by category:
 
 | 🧭 Navigation                    | 📊 Daily Ops                           |
 | -------------------------------- | -------------------------------------- |
