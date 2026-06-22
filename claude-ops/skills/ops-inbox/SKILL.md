@@ -646,6 +646,69 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
 - **HANDLED** — conversation concluded, can be archived
 - **FYI** — newsletters, notifications, automated messages (bulk archive)
 
+## Core principle: TONE & LANGUAGE MATCH (every draft, every channel)
+
+A reply that is correct but in the wrong voice is a defect. Before drafting on any channel:
+
+1. **Language follows the thread, not your default.** Reply in the language the user actually uses **with that specific contact** — Dutch with Dutch contacts, English with English contacts, etc. Detect it from the thread history (the user's own `is_from_me`/SENT messages in this thread), never from your locale. For a shared-audience group/thread, match the thread's common language, not one participant's.
+2. **Match the user's register with this contact.** Read the user's own prior messages in the thread for: formality (jij/u, first-name vs formal), greeting/sign-off style, emoji density (default sparse — often zero; never add emoji the user doesn't use), sentence length, and any pet phrases. Mirror it. A casual one-liner contact gets a casual one-liner; a formal business contact gets formal prose.
+3. **Honour stored contact tone.** Check `~/.claude/plugins/data/ops-ops-marketplace/memories/contact_*.md` and the contact registry (below) for a recorded tone profile and apply it verbatim (e.g. partner threads: warm, short, no business framing).
+4. **Never restate known context back at the contact** and never sound like an AI assistant — write as the user would.
+
+## Core principle: FULL-CONTEXT RECALL + CROSS-CHANNEL / ALREADY-SENT DEDUP
+
+The single most damaging error is replying to something the user already handled — in this thread, in another thread, in a group, on another channel, or by phone/voice that never landed in the store. Before confirming ANY NEEDS_REPLY or drafting:
+
+1. **Same-thread recheck** — scan the full thread both directions (incl. `[voice]`/`[image]`/`[document]` enrichments). If the user replied after the last inbound, it is WAITING/HANDLED.
+2. **Cross-thread, same person** — the user may have answered the same person on their other JID (lid↔phone), in a group both are in, or a secondary number. Search the contact across threads (`mcp__whatsapp__list_messages {query, limit:25}`, `is_from_me:true` after the inbound timestamp).
+3. **Cross-channel** — the user may have answered the email by WhatsApp, or the WhatsApp by email/iMessage. For a NEEDS_REPLY candidate, search the OTHER channels for a recent outbound to the same person/topic: `gog gmail search "to:<addr> newer_than:3d"`, `mcp__whatsapp__list_messages {query:"<name|topic>"}`, iMessage `chat_messages`. A hit → reclassify HANDLED.
+4. **Already-sent (email)** — a reply sent from another client may not be the thread's last message in the envelope first-pass. Open the thread (`gog gmail thread get`) and check for a SENT message after the last inbound before classifying NEEDS_REPLY.
+5. **Use the contact registry** (below) to resolve who a sender/number/JID actually is and pull their cross-channel identity + context in one offline lookup, so step 2–3 searches are precise.
+6. **Trust the user's word over the store** — if the user says they replied, it is HANDLED even if the store doesn't show it.
+
+Only after 1–5 come up empty is a thread a true NEEDS_REPLY. This is the FULL-THREAD AWARENESS GATE, extended cross-channel.
+
+## Core principle: SNOOZE & FOLLOW-UP INTELLIGENCE (never let the user lose a thread)
+
+Cleanup must never silently drop something the user still owes or is owed. Archiving WAITING is safe **only** because new inbound auto-resurfaces it — but a thread where the ball is in the user's court, or where the other side has gone quiet on something the user needs, must be **snoozed with a reminder**, not just archived-and-forgotten.
+
+When cleaning up, classify each non-NEEDS_REPLY item one more level:
+
+- **USER-OWES (todo)** — the user promised an action ("ik pak het vanavond op", "I'll resend the env file", "stuur ik je"), or a meeting-note / email assigned the user a task. → **KEEP visible** and schedule a follow-up reminder. Never archive an unfulfilled user commitment.
+- **AWAITING-OTHER, time-sensitive** — the user is waiting on a reply tied to a deadline/deal. → archive (auto-resurfaces) **but** set a nudge reminder if no response by a sensible horizon (default 3 days) so the user can chase.
+- **CONCLUDED** — courtesy close, social tail, fully-answered. → archive, no reminder.
+
+**Scheduling reminders (a safe, non-outbound chore — do autonomously):** use `CronCreate` (one-shot, `recurring:false`) for each USER-OWES / nudge item. The reminder prompt should name the contact, the owed action, and the source thread, e.g. *"Reminder: you told Twan you'd handle Dennis's email tonight — follow up (WhatsApp 31642218102)."* Pick a sensible fire time (same evening for "tonight", +3d for nudges). Reminders fire to the user; they are NOT outbound third-party comms, so no approval gate applies.
+
+**Meeting-note / assigned-todo capture:** when an email or message contains action items assigned to the user (meeting recaps, "can you…", "actie Sam:"), extract them and schedule reminders so they are never lost — even if the thread itself is then archived. Surface the extracted todos in the run summary.
+
+## Core principle: SAFE AUTONOMOUS CHORES (do these without asking)
+
+The user wants chores handled autonomously. A **chore** is a low-risk action with **no decision, no commitment, no approval, and no uncertainty**. Do these in the cleanup pass without prompting:
+
+- **Archive things clearly already replied to / concluded** (per the dedup principle).
+- **Schedule reminders / snoozes** for USER-OWES and nudge items (`CronCreate`, non-outbound).
+- **Reconnect / re-auth integrations** that have a known, automatable flow (e.g. a "reconnect your X" nudge where the repair is a scripted browser/OAuth step you've done before) — verify success, report it.
+- **Forward simple receipts / invoices** to a pre-configured destination (e.g. the accountant) **only when that routing is already established** in preferences/memories — this is a fixed-destination chore, not a new outbound decision.
+- **Mark-read / label hygiene** (move concluded items, apply `Actioned`).
+
+**Hard limits on "autonomous" — these are NOT chores and still gate:**
+
+- **Any new outbound message to a third party** (a reply, an ack, a "got it 👍", a forward to a new recipient) is covered outbound comms → Rule 6: stage ONE draft, get explicit per-message approval, then send. The `block-outbound-comms.py` hook enforces this with a single-use token regardless of flags — do not attempt to bypass it. "Ack all" still means "stage each ack for one-tap approval", because an ack is an outbound message.
+- Anything involving a **decision, a commitment, money, legal/medical content, or any uncertainty** → surface to the user, do not act.
+
+When in doubt whether something is a chore, it is not — surface it.
+
+## Contact registry (offline cross-channel identity + context)
+
+`bin/ops-contact-registry` builds and reads a single offline JSON registry that maps every known person to their cross-channel identities and a short context blurb — so scans resolve names instantly and the dedup/tone principles have ground truth without live lookups.
+
+- **Build / refresh:** `bin/ops-contact-registry build` — merges WhatsApp `contacts.db` (+ `whatsmeow_lid_map` for lid↔phone), Gmail frequent senders, and Slack users (when configured) into `${CLAUDE_PLUGIN_DATA_DIR}/contact-registry.json`. Idempotent; safe to run on every inbox pass (cheap, offline). Enriches with ops-memories `contact_*.md` context + recorded tone.
+- **Lookup:** `bin/ops-contact-registry lookup "<name|email|phone|jid>"` → the merged record `{name, emails[], phones[], wa_jid, wa_lid, slack_id, last_channel, context, tone}`. Use it to resolve a sender/number/JID and to drive the cross-channel dedup search precisely.
+- **During a scan:** prefer the registry for name resolution before falling back to `contacts.db` → chat `name` → giga. Use the merged identities to search the SAME person across channels for already-sent dedup.
+
+The registry is read-only reference data — never a send surface.
+
 ## Channel availability + fallback
 
 For each channel, detect availability at runtime:
