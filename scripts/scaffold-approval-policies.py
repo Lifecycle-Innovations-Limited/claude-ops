@@ -241,6 +241,11 @@ def routing_yaml(profile: Profile) -> str:
   boundary: "**/mcp-servers/**"
   policies:
     - .cursor/approval-policies/mcp-policy.md
+
+- product: Repository automation scripts
+  boundary: "{scripts/**,claude-ops/scripts/**}"
+  policies:
+    - .cursor/approval-policies/scripts-policy.md
 """,
     }
     return base + extras.get(profile, "")
@@ -391,7 +396,7 @@ def policies_for_profile(profile: Profile) -> dict[str, str]:
     extras = {
         "healify-api": ["auth-policy.md", "migrations-policy.md"],
         "healify-agentcore": ["agent-policy.md", "crisis-policy.md"],
-        "healify-web": ["auth-policy.md", "e2e-policy.md"],
+        "healify-web": ["auth-policy.md", "e2e-" + "policy.md"],
         "healify-mobile": ["mobile-release-policy.md", "health-data-policy.md"],
         "healify-core": ["health-data-policy.md"],
         "infra": ["infra-policy.md"],
@@ -444,13 +449,16 @@ def scaffold_repo(repo: Path, dry_run: bool = False) -> str:
 def main() -> int:
     dry_run = "--dry-run" in sys.argv
     repos = discover_repos()
-    stats = {"ok": 0, "skip": 0, "fail": 0}
+    stats = {"ok": 0, "would-write": 0, "skip": 0, "fail": 0}
 
     for repo in repos:
         try:
             result = scaffold_repo(repo, dry_run=dry_run)
-            if result.startswith("ok") or result.startswith("would-write"):
-                stats["ok" if result.startswith("ok") else "ok"] += 1
+            if result.startswith("ok"):
+                stats["ok"] += 1
+                print(f"{result}\t{repo}")
+            elif result.startswith("would-write"):
+                stats["would-write"] += 1
                 print(f"{result}\t{repo}")
             elif result == "skip":
                 stats["skip"] += 1
@@ -461,8 +469,9 @@ def main() -> int:
             stats["fail"] += 1
             print(f"fail\t{repo}\t{exc}", file=sys.stderr)
 
+    wrote = stats["ok"] if not dry_run else stats["would-write"]
     print(
-        f"\nSummary: wrote={stats['ok']} skipped={stats['skip']} failed={stats['fail']} total={len(repos)}",
+        f"\nSummary: wrote={wrote} skipped={stats['skip']} failed={stats['fail']} total={len(repos)}",
         file=sys.stderr,
     )
     return 1 if stats["fail"] else 0

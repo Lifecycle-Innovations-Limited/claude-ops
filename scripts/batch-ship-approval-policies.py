@@ -221,9 +221,31 @@ def ship_repo(repo: Path, results: Result) -> None:
             return
         sync_branch = "chore/approval-policies-sync-main"
         run(["git", "checkout", "-B", sync_branch, f"origin/{main}"], repo)
-        merge = run(["git", "merge", "--no-edit", f"origin/{dev}"], repo)
-        if merge.returncode != 0:
-            results.fail.append((rel, f"sync merge dev->{main}"))
+        checkout = run(
+            ["git", "checkout", f"origin/{dev}", "--", "APPROVAL_POLICY.md", ".cursor/approval-policies"],
+            repo,
+        )
+        if checkout.returncode != 0:
+            results.fail.append((rel, f"sync checkout policy files dev->{main}"))
+            return
+        stage = run(["git", "add", "APPROVAL_POLICY.md", "-f", ".cursor/approval-policies"], repo)
+        if stage.returncode != 0:
+            results.fail.append((rel, f"sync stage policy files dev->{main}"))
+            return
+        if run(["git", "diff", "--cached", "--quiet"], repo).returncode == 0:
+            return
+        commit_sync = run(
+            [
+                "git",
+                "commit",
+                "--no-verify",
+                "-m",
+                "chore: sync approval policy files from dev",
+            ],
+            repo,
+        )
+        if commit_sync.returncode != 0:
+            results.fail.append((rel, f"sync commit dev->{main}"))
             return
         push2 = run(["git", "push", "-u", "origin", sync_branch, "--force-with-lease"], repo)
         if push2.returncode != 0:
