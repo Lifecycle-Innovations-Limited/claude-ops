@@ -443,6 +443,35 @@ def scan_whatsapp():
     return out
 
 # ------------------------------------------------------------------- Email ----
+# Protected todo/action labels — an email carrying any of these is a user-tracked
+# open task and MUST NEVER be archived until verified done (see the HARD GUARDRAIL
+# in ops-inbox SKILL.md). Match by normalized label NAME (gog returns names, which
+# we upper() before comparing). System labels are excluded.
+SYSTEM_LABELS = {"INBOX", "SENT", "DRAFT", "UNREAD", "IMPORTANT", "STARRED",
+                 "TRASH", "SPAM", "CHAT", "FYI"}
+def _norm_label(l):
+    return re.sub(r"[^A-Z0-9]+", " ", str(l).upper()).strip()
+# substring signals (normalized) that imply an open task
+PROTECTED_SUBSTRINGS = (
+    "TO RESPOND", "RESPOND", "REPLY LATER", "REPLY", "NEEDS ACTION", "ACTION",
+    "FOLLOW UP", "FOLLOWUP", "AWAITING REPLY", "TO DO", "TODO", "TASKLET",
+    "TASK", "TIMED ACTIONS",
+)
+# a 'done/completed' label clears protection even if a stale todo label lingers
+COMPLETION_SUBSTRINGS = ("ACTIONED", "DONE", "COMPLETED", "RESOLVED", "HANDLED", "ARCHIVED")
+def protected_todo_labels(labels):
+    """Return the list of protected todo/action labels on a message (empty if none/done)."""
+    hits, done = [], False
+    for raw in labels or []:
+        if str(raw).upper() in SYSTEM_LABELS or str(raw).upper().startswith("CATEGORY_"):
+            continue
+        n = _norm_label(raw)
+        if any(c in n for c in COMPLETION_SUBSTRINGS):
+            done = True
+        if any(s in n for s in PROTECTED_SUBSTRINGS):
+            hits.append(str(raw))
+    return [] if done else hits
+
 def from_email_addr(header):
     """Bare address from a From header (exact match; avoids substring false positives)."""
     if not header:
@@ -482,6 +511,15 @@ def scan_email():
             "date": r.get("date"),
             "labels": labels,
         }
+        # HARD GUARDRAIL: a protected todo/action label pins this to KEEP, never archive.
+        prot = protected_todo_labels(r.get("labels") or r.get("labelIds") or [])
+        if prot:
+            item["protected_todo"] = True
+            item["protected_labels"] = prot
+            item["note"] = ("KEEP — carries todo/action label(s) " + ", ".join(prot) +
+                            "; never archive until verified done")
+            res["needs_reply"].append(item)  # surface as actionable, never FYI/archive
+            continue
         is_sent_last = ("SENT" in labels) or (self_addr and self_addr == from_email_addr(frm))
         promo = any(l in labels for l in ("CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL",
                                           "CATEGORY_UPDATES", "CATEGORY_FORUMS"))

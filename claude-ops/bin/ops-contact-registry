@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+# ops-contact-registry — build & query an offline cross-channel contact registry.
+#
+# WHY: scans, the FULL-CONTEXT-RECALL dedup, and TONE matching all need to know
+# *who* a sender / number / JID actually is, across channels, without paying for
+# live lookups every time. This builds one JSON file keyed by person that merges:
+#   - WhatsApp  : messages.db `contacts` (jid,name,phone) + whatsapp.db
+#                 `whatsmeow_lid_map` (lid<->pn) so a person's @lid and phone JIDs
+#                 collapse to one record.
+#   - ops-memories: contact_*.md  → context blurb, tone, plus any emails / phones /
+#                 slack ids mentioned in the note.
+#   - Gmail     : (optional, --with-gmail) frequent correspondents' addresses.
+#   - Slack     : (optional, --with-slack) user id <-> name, when SLACK_* present.
+#
+# It is READ-ONLY reference data: it never sends, archives, or mutates a channel.
+#
+# USAGE:
+#   ops-contact-registry build [--with-gmail] [--with-slack] [--out PATH]
+#   ops-contact-registry lookup "<name|email|phone|jid|lid>"   # JSON record(s)
+#   ops-contact-registry stats
+#
+# OUTPUT registry record shape:
+#   { "name", "emails":[], "phones":[], "wa_jid", "wa_lid", "slack_id",
+#     "last_channel", "context", "tone", "sources":[] }
+#
+# The registry path defaults to
+#   ${CLAUDE_PLUGIN_DATA_DIR:-~/.claude/plugins/data/ops-ops-marketplace}/contact-registry.json
+
+import json, os, re, sqlite3, sys, subprocess, glob
+
+HOME = os.path.expanduser("~")
+DATA_DIR = os.environ.get("CLAUDE_PLUGIN_DATA_DIR",
+                          os.path.join(HOME, ".claude/plugins/data/ops-ops-marketplace"))
+BRIDGE = os.environ.get("WHATSAPP_BRIDGE_DIR",
+                        os.path.join(HOME, ".local/share/whatsapp-mcp/whatsapp-bridge"))
+MSGDB = os.environ.get("WHATSAPP_BRIDGE_DB", os.path.join(BRIDGE, "store/messages.db"))
+WADB = os.path.join(BRIDGE, "store/whatsapp.db")
+MEM_DIR = os.path.join(DATA_DIR, "memories")
+DEFAULT_OUT = os.path.join(DATA_DIR, "contact-registry.json")
+
+EMAIL_RE = re.compile(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}", re.I)
+PHONE_RE = re.compile(r"\+?\d[\d ()\-]{7,}\d")
+SLACKID_RE = re.compile(r"\b[UW][A-Z0-9]{6,}\b")
+
+
+def ro(path):
+    """Open sqlite read-only/immutable; None if absent."""
+    if not os.path.exists(path):
+        return None
+    try:
+        return sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True, timeout=5)
+    except sqlite3.Error:
+        try:
+            return sqlite3.connect(path, timeout=5)
+        except sqlite3.Error:
+            return None
+
+
+def norm_phone(p):
+    if not p:
+        return ""
+    d = re.sub(r"[^\d]", "", str(p))
+    return d
+
+
+def merge_into(rec, **kw):
+    for k, v in kw.items():
+        if not v:
+            continue
+        if isinstance(rec.get(k), list):
+            for item in (v if isinstance(v, list) else [v]):
+                if item and item not in rec[k]:
+                    rec[k].append(item)
+        elif not rec.get(k):
+            rec[k] = v
+
+
+def new_record(name=""):
+    return {"name": name or "", "emails": [], "phones": [], "wa_jid": "",
+            "wa_lid": "", "slack_id": "", "last_channel": "", "context": "",
+            "tone": "", "sources": []}
+
+
+def build(with_gmail=False, with_slack=False, out=DEFAULT_OUT):
+    # key people by normalized phone when we have one, else by jid/name.
+    by_phone = {}     # phone -> record
+    records = []      # records with no phone key
+
+    def rec_for_phone(phone):
+        ph = norm_phone(phone)
+        if ph and ph in by_phone:
+            return by_phone[ph]
+        r = new_record()
+        if ph:
+            by_phone[ph] = r
+        else:
+            records.append(r)
+        return r
+
+    # ---- WhatsApp lid<->pn map (so @lid and phone collapse) ----
+    lid_to_pn, pn_to_lid = {}, {}
+    wac = ro(WADB)
+    if wac:
+        try:
+            for lid, pn in wac.execute("SELECT lid, pn FROM whatsmeow_lid_map"):
+                if lid and pn:
+                    lid_to_pn[str(lid)] = str(pn)
+                    pn_to_lid[str(pn)] = str(lid)
+        except sqlite3.Error:
+            pass
+        wac.close()
+
+    # ---- WhatsApp contacts ----
+    mc = ro(MSGDB)
+    wa_n = 0
+    if mc:
+        try:
+            rows = mc.execute(
+                "SELECT jid, name, phone FROM contacts WHERE name IS NOT NULL AND name!=''").fetchall()
+        except sqlite3.Error:
+            rows = []
+        for jid, name, phone in rows:
+            jid = str(jid or "")
+            phone = phone or (jid.split("@")[0] if jid.endswith("@s.whatsapp.net") else "")
+            r = rec_for_phone(phone)
+            merge_into(r, name=name, sources="whatsapp")
+            if not r["name"]:
+                r["name"] = name
+            if phone:
+                merge_into(r, phones=norm_phone(phone))
+            if jid.endswith("@lid"):
+                r["wa_lid"] = jid
+                pn = lid_to_pn.get(jid.split("@")[0])
+                if pn:
+                    merge_into(r, phones=norm_phone(pn))
+            elif jid.endswith("@s.whatsapp.net"):
+                r["wa_jid"] = jid
+                lid = pn_to_lid.get(jid.split("@")[0])
+                if lid:
+                    r["wa_lid"] = lid + "@lid"
+            r["last_channel"] = r["last_channel"] or "whatsapp"
+            wa_n += 1
+        mc.close()
+
+    # ---- ops-memories enrichment (context, tone, extra ids) ----
+    mem_n = 0
+    for f in glob.glob(os.path.join(MEM_DIR, "contact_*.md")):
+        try:
+            body = open(f, encoding="utf-8", errors="ignore").read()
+        except OSError:
+            continue
+        emails = list(dict.fromkeys(m.lower() for m in EMAIL_RE.findall(body)))
+        phones = list(dict.fromkeys(norm_phone(m) for m in PHONE_RE.findall(body) if len(norm_phone(m)) >= 9))
+        slack = SLACKID_RE.findall(body)
+        # name = first markdown heading or filename slug
+        mname = re.search(r"^#\s+(.+)$", body, re.M)
+        name = (mname.group(1).strip() if mname
+                else os.path.basename(f)[len("contact_"):-3].replace("_", " ").title())
+        # context = first non-heading paragraph; tone = a line mentioning tone/voice
+        ctx = ""
+        for line in body.splitlines():
+            s = line.strip()
+            if s and not s.startswith("#"):
+                ctx = s[:240]
+                break
+        tone = ""
+        for line in body.splitlines():
+            if re.search(r"tone|toon|voice|stijl|register|emoji", line, re.I):
+                tone = line.strip()[:200]
+                break
+        # attach to an existing record by phone/email, else new
+        target = None
+        for ph in phones:
+            if ph in by_phone:
+                target = by_phone[ph]
+                break
+        if target is None:
+            target = new_record(name)
+            records.append(target)
+            for ph in phones:
+                by_phone[ph] = target
+        merge_into(target, name=name, emails=emails, phones=phones,
+                   slack_id=(slack[0] if slack else ""), context=ctx, tone=tone,
+                   sources="memory")
+        mem_n += 1
+
+    # ---- optional Gmail frequent correspondents ----
+    gm_n = 0
+    if with_gmail:
+        acct = os.environ.get("GMAIL_ACCOUNT", "")
+        cmd = ["gog", "gmail", "search", "in:anywhere newer_than:120d",
+               "-j", "--results-only", "--no-input", "--max", "300"]
+        if acct:
+            cmd[2:2] = ["-a", acct]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            data = json.loads(p.stdout) if p.stdout.strip() else []
+            rows = data if isinstance(data, list) else data.get("results", [])
+            for r in rows or []:
+                for hdr in (r.get("from", ""), r.get("to", "")):
+                    for em in EMAIL_RE.findall(hdr or ""):
+                        em = em.lower()
+                        # attach to a record whose name appears in the header, else skip-create
+                        name_m = re.sub(r"<[^>]+>", "", hdr).strip().strip('"') if hdr else ""
+                        tgt = None
+                        for rec in list(by_phone.values()) + records:
+                            if rec["name"] and name_m and rec["name"].lower() in name_m.lower():
+                                tgt = rec
+                                break
+                        if tgt is None:
+                            tgt = new_record(name_m or em.split("@")[0])
+                            records.append(tgt)
+                        merge_into(tgt, emails=em, sources="gmail")
+                        tgt["last_channel"] = tgt["last_channel"] or "email"
+                        gm_n += 1
+        except (subprocess.SubprocessError, json.JSONDecodeError, OSError):
+            pass
+
+    # ---- optional Slack users ----
+    sl_n = 0
+    if with_slack:
+        tok = os.environ.get("SLACK_MCP_XOXC_TOKEN") or os.environ.get("SLACK_BOT_TOKEN") or ""
+        if tok:
+            try:
+                import urllib.request
+                req = urllib.request.Request(
+                    "https://slack.com/api/users.list?limit=200",
+                    headers={"Authorization": f"Bearer {tok}"})
+                resp = json.loads(urllib.request.urlopen(req, timeout=20).read())
+                for m in resp.get("members", []):
+                    if m.get("deleted") or m.get("is_bot"):
+                        continue
+                    prof = m.get("profile", {})
+                    name = prof.get("real_name") or m.get("name", "")
+                    email = (prof.get("email") or "").lower()
+                    tgt = None
+                    if email:
+                        for rec in list(by_phone.values()) + records:
+                            if email in rec["emails"]:
+                                tgt = rec
+                                break
+                    if tgt is None:
+                        tgt = new_record(name)
+                        records.append(tgt)
+                    merge_into(tgt, name=name, emails=email, slack_id=m.get("id", ""),
+                               sources="slack")
+                    sl_n += 1
+            except Exception:
+                pass
+
+    allrecs = list(by_phone.values()) + records
+    # de-dup identical-name records that share a phone/email already handled by keys.
+    out_obj = {
+        "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+        "count": len(allrecs),
+        "sources": {"whatsapp": wa_n, "memory": mem_n, "gmail": gm_n, "slack": sl_n},
+        "contacts": sorted(allrecs, key=lambda r: (r.get("name") or "").lower()),
+    }
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    tmp = out + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(out_obj, fh, ensure_ascii=False, indent=1)
+    os.replace(tmp, out)
+    print(json.dumps({"ok": True, "out": out, "count": out_obj["count"],
+                      "sources": out_obj["sources"]}, ensure_ascii=False))
+
+
+def _load(out=DEFAULT_OUT):
+    if not os.path.exists(out):
+        sys.stderr.write(f"registry not built yet: {out}\nrun: ops-contact-registry build\n")
+        sys.exit(3)
+    return json.load(open(out, encoding="utf-8"))
+
+
+def lookup(query, out=DEFAULT_OUT):
+    reg = _load(out)
+    q = query.lower().strip()
+    qd = norm_phone(query)
+    hits = []
+    for r in reg["contacts"]:
+        hay = " ".join([r.get("name", ""), " ".join(r.get("emails", [])),
+                        r.get("wa_jid", ""), r.get("wa_lid", ""), r.get("slack_id", "")]).lower()
+        phones = "".join(r.get("phones", []))
+        if (q and q in hay) or (qd and len(qd) >= 6 and qd in phones):
+            hits.append(r)
+    print(json.dumps({"query": query, "count": len(hits), "matches": hits[:25]},
+                     ensure_ascii=False, indent=1))
+
+
+def stats(out=DEFAULT_OUT):
+    reg = _load(out)
+    print(json.dumps({"count": reg["count"], "sources": reg["sources"],
+                      "generated_at": reg["generated_at"]}, ensure_ascii=False))
+
+
+def main(argv):
+    if not argv:
+        sys.stderr.write(__doc__ or "usage: build | lookup <q> | stats\n")
+        sys.exit(2)
+    cmd, rest = argv[0], argv[1:]
+    out = DEFAULT_OUT
+    if "--out" in rest:
+        i = rest.index("--out")
+        out = rest[i + 1]
+        del rest[i:i + 2]
+    if cmd == "build":
+        build(with_gmail=("--with-gmail" in rest), with_slack=("--with-slack" in rest), out=out)
+    elif cmd == "lookup":
+        if not rest:
+            sys.stderr.write("usage: ops-contact-registry lookup <name|email|phone|jid>\n")
+            sys.exit(2)
+        lookup(" ".join(rest), out=out)
+    elif cmd == "stats":
+        stats(out=out)
+    else:
+        sys.stderr.write(f"unknown command: {cmd}\n")
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
