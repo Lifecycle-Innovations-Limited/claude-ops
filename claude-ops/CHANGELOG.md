@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.35.0] - 2026-06-22
+
+### Changed
+Add ops-feature-dev skill routing to /feature-dev; fix plugin:agent namespace resolution in ops-suggest-specialized-agent; wire feature-dev into /flow and /ops:setup Step 2c.
+
+
 ## [2.34.1] - 2026-06-15
 
 ### Changed
