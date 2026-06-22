@@ -31,6 +31,7 @@ You never choose the mode — the router does, from `bin/flow-state`.
 /flow plan            # project → gsd-plan-phase; ad-hoc → /autoplan
 /flow design          # → /design-consultation → /design-shotgun → /design-html
 /flow build           # project → gsd-execute-phase; ad-hoc → direct edits (worktree)
+/flow feature-dev …   # → /feature-dev (optional overlay; explore → architect → implement → review)
 /flow review          # → /review + /cso (+ gsd-code-review in project-mode)
 /flow test            # → /qa + /browse  (/ios-qa for iOS)
 /flow ship            # project → gsd-ship; ad-hoc → /ship; salvage → /ops:ops-merge
