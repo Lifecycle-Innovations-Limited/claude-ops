@@ -1,5 +1,5 @@
 {
-  "_doc": "Maps a regex pattern (matched against subagent description+prompt) → canonical specialist subagent_type. Used by ops-suggest-specialized-agent hook to silently swap general-purpose calls for a better fit. First match wins; order matters. Override by copying to ~/.claude/plugins/data/ops-ops-marketplace/specialist-keywords.json and editing.",
+  "_doc": "Maps a regex pattern (matched against subagent description+prompt) → canonical specialist subagent_type. Used by ops-suggest-specialized-agent hook to silently swap general-purpose calls for a better fit. First match wins; order matters. Namespaced agents (feature-dev:code-reviewer) require scripts/lib/agent-installed.sh. Override by copying to ~/.claude/plugins/data/ops-ops-marketplace/specialist-keywords.json and editing.",
   "_format": "Each rule: { pattern: <egrep regex>, agent: <subagent_type> }. Patterns are case-insensitive.",
   "rules": [
     {
@@ -18,8 +18,8 @@
     { "pattern": "devops|terraform|ecs|cloudformation|aws cdk|cicd|github action", "agent": "DevOps Engineer" },
     { "pattern": "typescript|tsconfig|type[- ]check|\\btsc\\b", "agent": "typescript-reviewer" },
     { "pattern": "review.*pr|code review|review code", "agent": "feature-dev:code-reviewer" },
-    { "pattern": "explore|map.*codebase|trace.*execution|architecture", "agent": "feature-dev:code-explorer" },
     { "pattern": "design.*architecture|blueprint|implementation plan", "agent": "feature-dev:code-architect" },
+    { "pattern": "explore|map.*codebase|trace.*execution|architecture", "agent": "feature-dev:code-explorer" },
     { "pattern": "simplify|refactor.*for clarity", "agent": "code-simplifier:code-simplifier" }
   ]
 }

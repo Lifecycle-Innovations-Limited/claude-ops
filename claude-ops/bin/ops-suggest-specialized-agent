@@ -16,6 +16,8 @@ description=$(printf '%s' "$INPUT" | jq -r '.tool_input.description // ""' 2>/de
 combined=$(printf '%s\n%s' "$description" "$prompt" | tr '[:upper:]' '[:lower:]')
 mkdir -p "${HOME}/.claude/logs/ops" "${HOME}/.claude/agents" 2>/dev/null
 
+. "$PLUGIN_ROOT/scripts/lib/agent-installed.sh"
+
 # Layered keyword map: user override → plugin default
 USER_MAP="${HOME}/.claude/plugins/data/ops-ops-marketplace/specialist-keywords.json"
 PLUGIN_MAP="$PLUGIN_ROOT/config/specialist-keywords.example.json"
@@ -23,22 +25,6 @@ MAP=""
 [ -f "$USER_MAP" ] && MAP="$USER_MAP"
 [ -z "$MAP" ] && [ -f "$PLUGIN_MAP" ] && MAP="$PLUGIN_MAP"
 [ -z "$MAP" ] && exit 0
-
-# Agent existence check — true if installed (any of the locations claude-code searches)
-agent_installed() {
-  local name="$1"
-  [ -f "${HOME}/.claude/agents/${name}.md" ] && return 0
-  [ -f "$PLUGIN_ROOT/agents/${name}.md" ] && return 0
-  # built-in / plugin-marketplace agents (presence indicated by registry — coarse: assume true if no user override)
-  case "$name" in
-    general-purpose|statusline-setup) return 0 ;;
-  esac
-  # claude-code marketplace: cache dirs
-  for d in "${HOME}/.claude/plugins/cache"/*/agents "${HOME}/.claude/plugins/cache"/*/*/agents; do
-    [ -f "$d/${name}.md" ] && return 0
-  done
-  return 1
-}
 
 # Iterate rules; first match where agent is installed wins
 suggest=""

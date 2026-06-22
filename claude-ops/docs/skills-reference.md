@@ -2,10 +2,10 @@
 
 # Skills Reference
 
-_All 58 skills available in claude-ops — your business operations command surface (v2.0 added `/ops:deploy-fix`, `/ops:recap`, `/ops:rotate`, `/ops:rotate-setup`; v2.0.6 added `/ops:credentials`; v2.0.8 added multi-workspace Slack)_
+_All 59 skills available in claude-ops — your business operations command surface (v2.0 added `/ops:deploy-fix`, `/ops:recap`, `/ops:rotate`, `/ops:rotate-setup`; v2.0.6 added `/ops:credentials`; v2.0.8 added multi-workspace Slack; feature-dev overlay via `/ops:ops-feature-dev`)_
 
 [![version](https://img.shields.io/badge/version-2.34.1-blue)](../CHANGELOG.md)
-[![skills](https://img.shields.io/badge/skills-58-8b5cf6)](.)
+[![skills](https://img.shields.io/badge/skills-59-8b5cf6)](.)
 [![license](https://img.shields.io/badge/license-MIT-22c55e)](../LICENSE)
 [![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-f59e0b)](.)
 
@@ -270,6 +270,20 @@ Voice channel management. Make phone calls (Bland AI), text-to-speech (ElevenLab
 - `/ops:voice tts "Your order is ready"` — generate speech via ElevenLabs
 - `/ops:voice transcribe recording.mp3` — transcribe audio
 - `/ops:voice setup` — configure API keys
+
+---
+
+## 🛠 Feature Development (companion plugin)
+
+### `/ops:feature-dev` · `skills/ops-feature-dev/SKILL.md`
+
+Delegates to the **feature-dev** plugin's 7-phase workflow (explore → architect → implement → review). Overlay only — does not replace `/flow build`, `gsd-execute-phase`, or gstack `/review`.
+
+- `/ops:feature-dev Add OAuth to settings` — run full feature-dev pipeline
+- `/flow feature-dev …` — same via lifecycle router
+- `/feature-dev …` — invoke plugin command directly
+
+Install companion via `/ops:setup` Step 2c. Auto-swap to `feature-dev:code-*` agents when explore/architect/review keywords match.
 
 ---
 

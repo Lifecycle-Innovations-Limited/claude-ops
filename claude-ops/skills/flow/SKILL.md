@@ -78,6 +78,7 @@ Route `$ARGUMENTS` (first token = intent) using this table:
 | ultraplan, deep-plan                                      | `gsd-ultraplan-phase`                                                                                                               |
 | design, ui, mockup, html                                  | `/design-consultation $REST`                                                                                                        |
 | build, execute, implement, code                           | **project** → `gsd-execute-phase`; **multi-project** → `gsd-master-orchestrator`; **ad-hoc** → direct edits in an isolated worktree |
+| feature-dev, fd, feature, architect-feature               | `/feature-dev $REST` (overlay — optional structured pipeline before/alongside build; does not replace GSD execute)                  |
 | review, code-review, cr                                   | `/review` — **project** also runs `gsd-code-review`                                                                                 |
 | security, cso, sec-review                                 | `/cso`                                                                                                                              |
 | test, qa                                                  | `/qa $REST` — **project** also runs `gsd-verify-work`                                                                               |
