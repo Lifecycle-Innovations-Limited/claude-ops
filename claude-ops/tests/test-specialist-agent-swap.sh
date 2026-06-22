@@ -23,11 +23,20 @@ export PLUGIN_ROOT
 
 . "$PLUGIN_ROOT/scripts/lib/agent-installed.sh"
 
-mkdir -p "$TMP_HOME/.cursor/plugins/cache/claude-code-plugins/feature-dev/abc123/agents"
-echo '---' > "$TMP_HOME/.cursor/plugins/cache/claude-code-plugins/feature-dev/abc123/agents/code-reviewer.md"
-
 echo "Checking agent_installed()..."
 echo ""
+
+mkdir -p "$TMP_HOME/.claude/agents"
+echo '---' > "$TMP_HOME/.claude/agents/code-reviewer.md"
+
+if agent_installed "feature-dev:code-reviewer"; then
+  err "bare code-reviewer must not satisfy feature-dev:code-reviewer"
+else
+  ok "namespaced agent ignores unrelated bare agent file"
+fi
+
+mkdir -p "$TMP_HOME/.cursor/plugins/cache/claude-code-plugins/feature-dev/abc123/agents"
+echo '---' > "$TMP_HOME/.cursor/plugins/cache/claude-code-plugins/feature-dev/abc123/agents/code-reviewer.md"
 
 if agent_installed "feature-dev:code-reviewer"; then
   ok "feature-dev:code-reviewer found in Cursor plugin cache"
@@ -41,7 +50,6 @@ else
   ok "missing plugin agent correctly returns false"
 fi
 
-mkdir -p "$TMP_HOME/.claude/agents"
 echo '---' > "$TMP_HOME/.claude/agents/triage-agent.md"
 
 if agent_installed "triage-agent"; then

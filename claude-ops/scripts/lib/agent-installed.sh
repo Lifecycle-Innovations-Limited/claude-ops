@@ -12,10 +12,14 @@ agent_installed() {
   fi
 
   [ -f "${HOME}/.claude/agents/${name}.md" ] && return 0
-  [ -f "${HOME}/.claude/agents/${agent}.md" ] && return 0
+  if [ -z "$plugin" ]; then
+    [ -f "${HOME}/.claude/agents/${agent}.md" ] && return 0
+  fi
   if [ -n "${PLUGIN_ROOT:-}" ]; then
     [ -f "$PLUGIN_ROOT/agents/${name}.md" ] && return 0
-    [ -f "$PLUGIN_ROOT/agents/${agent}.md" ] && return 0
+    if [ -z "$plugin" ]; then
+      [ -f "$PLUGIN_ROOT/agents/${agent}.md" ] && return 0
+    fi
   fi
 
   case "$name" in
@@ -33,6 +37,7 @@ agent_installed() {
         "$cache_root"/*/"$plugin"/agents/"$agent".md; do
         [ -f "$f" ] && return 0
       done
+      continue
     fi
 
     local d
