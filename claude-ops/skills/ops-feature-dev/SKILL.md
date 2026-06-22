@@ -27,7 +27,7 @@ review). This enables:
 
 **Team setup** (only when the flag is enabled, and only for genuinely parallel phases):
 
-```
+```bash
 TeamCreate("feature-dev-lifecycle")
 Agent(team_name="feature-dev-lifecycle", name="phase-explore", ...)
 Agent(team_name="feature-dev-lifecycle", name="phase-architect", ...)

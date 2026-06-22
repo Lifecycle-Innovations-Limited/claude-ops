@@ -412,7 +412,7 @@ find ~/.claude ~/.cursor -path "*/feature-dev/*/agents/code-explorer.md" 2>/dev/
 
 If not installed, ask via `AskUserQuestion`:
 
-```
+```plaintext
 Feature-dev adds structured feature development (explore → architect → implement → review).
 
   [Install feature-dev (latest)] [Skip — I'll add it later]
@@ -431,14 +431,14 @@ Report success/failure. Record `plugins.feature_dev = "installed"` in `$PREFS_PA
 
 If they skip:
 
-```
+```plaintext
 Skipped feature-dev. Install later from Cursor plugins or run /feature-dev after installing the feature-dev plugin.
 Structured builds still work via /flow build and gsd-execute-phase without it.
 ```
 
 ---
 
-## Step 2c — Background Daemon (early install, pre-warm caches)
+## Step 2d — Background Daemon (early install, pre-warm caches)
 
 **Why install the daemon this early?** Running the daemon in parallel with the rest of setup lets it start pre-warming the briefing cache (`ops-gather` results for infra/git/PRs/CI), so by the time the user reaches Step 7 and runs `/ops:go`, the briefing is already cached and loads in under 3 seconds instead of 10. Channel-dependent services (message-listener, inbox-digest) are added later in Step 5b once their channels are configured.
 
@@ -464,7 +464,7 @@ esac
 
   > Generates `~/.config/systemd/user/claude-ops-daemon.service` from `scripts/systemd/claude-ops-daemon.service`, enables linger (so the daemon survives logout), chowns `~/.claude/plugins/cache/` back to the user if it was left root-owned by a prior `sudo` run, then `daemon-reload + enable --now`. Idempotent. See `scripts/install-ops-daemon-linux.sh --help` for `--dry-run` and `--uninstall`.
 
-  Write `daemon.enabled = true`, `daemon.installed_at_step = "2c"`, `daemon.platform = "linux-systemd"` to `$PREFS_PATH` and continue immediately to Step 3 — health verification is deferred to Step 5b.
+  Write `daemon.enabled = true`, `daemon.installed_at_step = "2d"`, `daemon.platform = "linux-systemd"` to `$PREFS_PATH` and continue immediately to Step 3 — health verification is deferred to Step 5b.
 
 - **WSL** (`OS=wsl`): `systemd --user` works on WSL2 with `systemd=true` in `/etc/wsl.conf`. If `systemctl --user status` succeeds, run the Linux installer above. Otherwise fall back to:
 
@@ -504,7 +504,7 @@ bash "$PLUGIN_ROOT/scripts/install-ops-daemon.sh"
 
 > Generates `~/Library/LaunchAgents/com.claude-ops.daemon.plist` from the bundled template, writes the initial channel-independent services config (`briefing-pre-warm` + `memory-extractor`), removes any legacy whatsapp-bridge keepalive, and bootstraps the daemon. Idempotent — re-running re-bootstraps cleanly. See `scripts/install-ops-daemon.sh` for the full procedure.
 
-Write `daemon.enabled = true` and `daemon.installed_at_step = "2c"` to `$PREFS_PATH` so Step 5b knows to reconcile services instead of re-installing.
+Write `daemon.enabled = true` and `daemon.installed_at_step = "2d"` to `$PREFS_PATH` so Step 5b knows to reconcile services instead of re-installing.
 
 Print:
 
@@ -519,13 +519,13 @@ Continue immediately to Step 3 — do NOT wait for the daemon to confirm startup
 
 ---
 
-## Step 2d — Recap Marquee (multi-session digest in tmux status-right)
+## Step 2e — Recap Marquee (multi-session digest in tmux status-right)
 
 The recap marquee is a separate launchd daemon (`com.claude-ops.recap-daemon`) that synthesizes a one-line digest across all parallel Claude Code sessions and recent shell activity, then exposes it via `/tmp/claude-recap-digest` for tmux to scroll across `status-right`. Independent from the main ops daemon — it can run on its own.
 
 Skip this step entirely if `recap_marquee_enabled = false` in userConfig.
 
-### Step 2d.1 — Ask the user
+### Step 2e.1 — Ask the user
 
 Use `AskUserQuestion`:
 
@@ -540,9 +540,9 @@ If `What is this?`: explain (the daemon polls per-session recap files written by
 
 If `No`: write `recap.enabled = false` to `$PREFS_PATH` and skip to Step 3.
 
-### Step 2d.2 — Install launchd plist (macOS only)
+### Step 2e.2 — Install launchd plist (macOS only)
 
-Same platform gate as Step 2c. On Linux/WSL/Windows, print:
+Same platform gate as Step 2e. On Linux/WSL/Windows, print:
 
 ```
 ○ Recap daemon — skipped (launchd is macOS-only). Linux users: see
@@ -558,7 +558,7 @@ bash "$PLUGIN_ROOT/scripts/install-recap-daemon.sh"
 
 > Generates `~/Library/LaunchAgents/com.claude-ops.recap-daemon.plist` from the bundled template and bootstraps the agent. Macos-only (the script no-ops cleanly on Linux). See `scripts/install-recap-daemon.sh` for the full procedure.
 
-### Step 2d.3 — Display surface integration (tmux OR Claude Code statusLine)
+### Step 2e.3 — Display surface integration (tmux OR Claude Code statusLine)
 
 The daemon writes `/tmp/claude-recap-digest`. Two display surfaces can render it (and they can coexist):
 
@@ -570,11 +570,11 @@ Detect tmux availability and branch:
 ```bash
 if ! command -v tmux >/dev/null 2>&1; then
   echo "○ tmux not installed — offering Claude Code statusLine fallback instead."
-  # → jump to Step 2d.3b (statusLine fallback)
+  # → jump to Step 2e.3b (statusLine fallback)
 fi
 ```
 
-If `recap_marquee_auto_configure_tmux = false`, print the tmux snippet and skip the rest of this step (let user wire manually). The statusLine fallback in Step 2d.3b still applies if tmux is absent.
+If `recap_marquee_auto_configure_tmux = false`, print the tmux snippet and skip the rest of this step (let user wire manually). The statusLine fallback in Step 2e.3b still applies if tmux is absent.
 
 If tmux is present and `recap_marquee_auto_configure_tmux = true`, ask:
 
@@ -614,9 +614,9 @@ TMUX
 tmux info >/dev/null 2>&1 && tmux source-file "$TMUX_CONF" 2>/dev/null
 ```
 
-### Step 2d.3b — Claude Code statusLine fallback (no tmux)
+### Step 2e.3b — Claude Code statusLine fallback (no tmux)
 
-When `command -v tmux` returned non-zero in Step 2d.3, offer the Claude Code `statusLine` setting as the marquee surface. Same digest file (`/tmp/claude-recap-digest`), different render target. This is also safe to layer alongside tmux if both are present — but typically only run when tmux is absent.
+When `command -v tmux` returned non-zero in Step 2e.3, offer the Claude Code `statusLine` setting as the marquee surface. Same digest file (`/tmp/claude-recap-digest`), different render target. This is also safe to layer alongside tmux if both are present — but typically only run when tmux is absent.
 
 Ask via `AskUserQuestion` (Rule 1 — exactly 4 options):
 
@@ -627,20 +627,20 @@ No tmux detected. Wire the recap marquee into Claude Code's statusLine instead?
 
 On `Help`: explain that Claude Code reads `~/.claude/settings.json` → `statusLine` and runs the configured command on each refresh, displaying the output in its own status bar. Then re-ask.
 
-On `Show me the JSON`: print the snippet below and continue to Step 2d.4 with `recap.statusline_wired = false`.
+On `Show me the JSON`: print the snippet below and continue to Step 2e.4 with `recap.statusline_wired = false`.
 
-On `Skip`: write `recap.statusline_wired = false` and continue to Step 2d.4.
+On `Skip`: write `recap.statusline_wired = false` and continue to Step 2e.4.
 
 On `Add to Claude Code statusLine`:
 
-0. **Pre-check — `jq` availability**: Step 2d.3b uses `jq` for every settings.json read/merge. If `jq` is missing, all subsequent `jq` calls silently fail (suppressed by `2>/dev/null`), `existing` evaluates to empty, and the merge step is skipped — but the success path would still record `recap.statusline_wired = true` in prefs, leaving the user in an inconsistent state. Guard up front:
+0. **Pre-check — `jq` availability**: Step 2e.3b uses `jq` for every settings.json read/merge. If `jq` is missing, all subsequent `jq` calls silently fail (suppressed by `2>/dev/null`), `existing` evaluates to empty, and the merge step is skipped — but the success path would still record `recap.statusline_wired = true` in prefs, leaving the user in an inconsistent state. Guard up front:
 
    ```bash
    if ! command -v jq >/dev/null 2>&1; then
      echo "○ jq not installed — cannot merge statusLine automatically."
      echo "  Install jq (e.g. brew install jq, apt install jq) and re-run /ops:recap configure."
      # Do NOT mark statusline_wired=true. Treat as Skip:
-     # write recap.statusline_wired = false in Step 2d.5 and continue to Step 2d.4.
+     # write recap.statusline_wired = false in Step 2e.5 and continue to Step 2e.4.
    fi
    ```
 
@@ -696,7 +696,7 @@ On `Add to Claude Code statusLine`:
    ✓ Claude Code statusLine wired — restart Claude Code (or open a new session) to activate.
    ```
 
-   Then write `recap.statusline_wired = true` before continuing to Step 2d.4.
+   Then write `recap.statusline_wired = true` before continuing to Step 2e.4.
 
 The JSON snippet to show on `Show me the JSON`:
 
@@ -710,7 +710,7 @@ The JSON snippet to show on `Show me the JSON`:
 }
 ```
 
-### Step 2d.4 — Verify daemon is producing output
+### Step 2e.4 — Verify daemon is producing output
 
 Wait up to 60s for the daemon to write its first digest. Run in background; do NOT block the wizard:
 
@@ -724,19 +724,19 @@ Wait up to 60s for the daemon to write its first digest. Run in background; do N
 ) &
 ```
 
-### Step 2d.5 — Persist preferences
+### Step 2e.5 — Persist preferences
 
 Write to `$PREFS_PATH`. Set both `"tmux_wired"` and `"statusline_wired"` dynamically based on the user’s actual choices:
 
-- `"tmux_wired"`: `true` when tmux was installed and the user chose to wire `status-right` in Step 2d.3; `false` when tmux was missing, the user chose **Skip**, or **Show me the line**.
-- `"statusline_wired"`: `true` only after **Add to Claude Code statusLine** successfully merged recap into `~/.claude/settings.json` in Step 2d.3b; `false` after **Skip**, **Show me the JSON**, the nested **Skip** when an existing statusLine was detected, or if Step 2d.3b did not run (e.g. tmux-only path).
+- `"tmux_wired"`: `true` when tmux was installed and the user chose to wire `status-right` in Step 2e.3; `false` when tmux was missing, the user chose **Skip**, or **Show me the line**.
+- `"statusline_wired"`: `true` only after **Add to Claude Code statusLine** successfully merged recap into `~/.claude/settings.json` in Step 2e.3b; `false` after **Skip**, **Show me the JSON**, the nested **Skip** when an existing statusLine was detected, or if Step 2e.3b did not run (e.g. tmux-only path).
 
 ```json
 {
   "recap": {
     "enabled": true,
-    "tmux_wired": "<true|false — based on Step 2d.3 outcome>",
-    "statusline_wired": "<true|false — based on Step 2d.3b outcome>",
+    "tmux_wired": "<true|false — based on Step 2e.3 outcome>",
+    "statusline_wired": "<true|false — based on Step 2e.3b outcome>",
     "installed_at_step": "2d",
     "platform": "macos"
   }
@@ -753,17 +753,17 @@ Print:
   Manage anytime: /ops:recap status | tail | configure | restart
 ```
 
-Continue to Step 2e.
+Continue to Step 2f.
 
 ---
 
-## Step 2e — Statusline Cockpit (if selected)
+## Step 2f — Statusline Cockpit (if selected)
 
 Configures the Claude Code `statusLine` setting — a 3-line terminal cockpit showing context-window health, quota gauges, git branch, fleet state, sys metrics, and per-project ops badges.
 
 **Rule Zero**: every Bash call in this step MUST use `run_in_background: true`.
 
-### Step 2e.1 — Resolve paths (run_in_background: true)
+### Step 2f.1 — Resolve paths (run_in_background: true)
 
 ```bash
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1)}"
@@ -785,7 +785,7 @@ If `RENDERER_SRC` does not exist, print:
 
 Then skip the rest of this step and continue to Step 3.
 
-### Step 2e.2 — Ask preset (max 4 options per Rule 1)
+### Step 2f.2 — Ask preset (max 4 options per Rule 1)
 
 Use `AskUserQuestion`:
 
@@ -801,7 +801,7 @@ On Skip: write `statusline.enabled = false` to `$PREFS_PATH` and continue to Ste
 
 Set `CHOSEN_PRESET` from the user's choice (`cockpit`, `minimal`, or `full`).
 
-### Step 2e.3 — Ask theme (max 4 options per Rule 1)
+### Step 2f.3 — Ask theme (max 4 options per Rule 1)
 
 Use `AskUserQuestion`:
 
@@ -815,7 +815,7 @@ Which color theme?
 
 Set `CHOSEN_THEME`.
 
-### Step 2e.4 — Run registry auto-suggest (run_in_background: true)
+### Step 2f.4 — Run registry auto-suggest (run_in_background: true)
 
 ```bash
 SUGGESTED=$("$SUGGEST_BIN" --preset "$CHOSEN_PRESET" --theme "$CHOSEN_THEME" 2>/tmp/ops-statusline-suggest.log)
@@ -824,7 +824,7 @@ PROJ_COUNT=$(printf '%s' "$SUGGESTED" | jq -r '._detected.projects_found // 0' 2
 
 Print detection summary: `Detected $PROJ_COUNT projects from registry.`
 
-### Step 2e.5 — Install renderer (run_in_background: true)
+### Step 2f.5 — Install renderer (run_in_background: true)
 
 ```bash
 cp "$RENDERER_SRC" "$RENDERER_DST"
@@ -833,7 +833,7 @@ chmod +x "$RENDERER_DST"
 
 Validate: `[ -x "$RENDERER_DST" ] && echo "✓ Renderer installed at $RENDERER_DST"`
 
-### Step 2e.6 — Write config (run_in_background: true)
+### Step 2f.6 — Write config (run_in_background: true)
 
 ```bash
 TMP=$(mktemp)
@@ -843,7 +843,7 @@ mv "$TMP" "$CFG_DST"
 jq . "$CFG_DST" >/dev/null 2>&1 && echo "✓ Config written" || echo "✗ Config JSON invalid"
 ```
 
-### Step 2e.7 — Merge settings.json statusLine (run_in_background: true)
+### Step 2f.7 — Merge settings.json statusLine (run_in_background: true)
 
 **IMPORTANT**: use `jq` to _merge_ — never clobber the entire settings.json.
 
@@ -882,7 +882,7 @@ If `existing_statusline` is non-empty, use `AskUserQuestion`:
 On Yes: run the merge above with the new command.
 On No: skip the merge and note `statusline.settings_wired = false`.
 
-### Step 2e.8 — Quick preview (run_in_background: true)
+### Step 2f.8 — Quick preview (run_in_background: true)
 
 ```bash
 PAYLOAD='{"model":{"display_name":"Claude Sonnet"},"rate_limits":{"five_hour":{"used_percentage":30}},"context_window":{"used_percentage":20},"cost":{"total_cost_usd":0.05}}'
@@ -898,7 +898,7 @@ If the render fails (exit non-zero or empty output), print a non-fatal note:
   Manage with: /ops:statusline preview | doctor | config
 ```
 
-### Step 2e.9 — Persist preferences (run_in_background: true)
+### Step 2f.9 — Persist preferences (run_in_background: true)
 
 ```bash
 jq -n \
@@ -1322,11 +1322,11 @@ After auto-discovery (or if the user selects "I'll enter projects manually"):
 
 ## Step 5b — Daemon Service Reconciliation
 
-By now, the daemon was already installed in Step 2c and has been pre-warming the briefing cache in the background while the user configured channels. This step adds **channel-dependent services** (`whatsapp-bridge`, `message-listener`, `inbox-digest`, `store-health`, `competitor-intel`) now that we know which channels and integrations are configured.
+By now, the daemon was already installed in Step 2d and has been pre-warming the briefing cache in the background while the user configured channels. This step adds **channel-dependent services** (`whatsapp-bridge`, `message-listener`, `inbox-digest`, `store-health`, `competitor-intel`) now that we know which channels and integrations are configured.
 
 **Skip conditions:**
 
-- If the user declined daemon install in Step 2c, skip this step entirely.
+- If the user declined daemon install in Step 2d, skip this step entirely.
 - If `daemon.enabled != true` in `$PREFS_PATH`, skip.
 
 Otherwise continue — reconcile the services list:
@@ -1362,9 +1362,9 @@ If the health file is missing (daemon may still be initializing), wait 5 more se
   tail -20 ~/.claude/plugins/data/ops-ops-marketplace/logs/ops-daemon.log
 ```
 
-**3. Build the full services list and reconcile with the config written in Step 2c:**
+**3. Build the full services list and reconcile with the config written in Step 2d:**
 
-Determine which services to enable based on what was configured in earlier steps. The `briefing-pre-warm` and `memory-extractor` services were already enabled at Step 2c — preserve them. Add channel-dependent services based on what's now configured:
+Determine which services to enable based on what was configured in earlier steps. The `briefing-pre-warm` and `memory-extractor` services were already enabled at Step 2d — preserve them. Add channel-dependent services based on what's now configured:
 
 - `whatsapp-bridge` — always include if WhatsApp is configured (`channels.whatsapp` is set)
 - `memory-extractor` — always include
@@ -1393,7 +1393,7 @@ fi
 echo "Services to enable: $SERVICES"
 ```
 
-Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with the existing config from Step 2c, preserving `briefing-pre-warm` and `memory-extractor`, and enabling the new channel-dependent services. **Every service MUST include a `command` field** — the daemon's `start_service()` skips any service without one. Use `${CLAUDE_PLUGIN_ROOT}` (resolved at runtime) for script paths. Each service entry should include:
+Write daemon services config to `$DATA_DIR/daemon-services.json` — merge with the existing config from Step 2d, preserving `briefing-pre-warm` and `memory-extractor`, and enabling the new channel-dependent services. **Every service MUST include a `command` field** — the daemon's `start_service()` skips any service without one. Use `${CLAUDE_PLUGIN_ROOT}` (resolved at runtime) for script paths. Each service entry should include:
 
 - `briefing-pre-warm`: `{ "enabled": true, "command": "${CLAUDE_PLUGIN_ROOT}/bin/ops-gather", "cron": "*/2 * * * *" }` — pre-warms /ops:go cache (installed in 2c)
 - `whatsapp-bridge`: `{ "enabled": true, "command": "launchctl kickstart -k gui/$UID/com.${USER}.whatsapp-bridge", "health_check": "lsof -i :8080 | grep LISTEN", "restart_delay": 60, "max_restarts": 10 }` — only if WhatsApp configured (matches `daemon-services.default.json`; bridge is owned by LaunchAgent, not a plugin script)

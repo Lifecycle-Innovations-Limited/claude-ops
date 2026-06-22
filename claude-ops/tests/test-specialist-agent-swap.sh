@@ -44,6 +44,12 @@ else
   err "feature-dev:code-reviewer not resolved (namespace bug)"
 fi
 
+if agent_installed "other-plugin:code-reviewer"; then
+  err "other-plugin:code-reviewer should not resolve from feature-dev cache"
+else
+  ok "plugin namespace remains isolated for same agent name"
+fi
+
 if agent_installed "feature-dev:code-explorer"; then
   err "feature-dev:code-explorer should be missing"
 else

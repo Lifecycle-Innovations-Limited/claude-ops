@@ -18,8 +18,8 @@
     { "pattern": "devops|terraform|ecs|cloudformation|aws cdk|cicd|github action", "agent": "DevOps Engineer" },
     { "pattern": "typescript|tsconfig|type[- ]check|\\btsc\\b", "agent": "typescript-reviewer" },
     { "pattern": "review.*pr|code review|review code", "agent": "feature-dev:code-reviewer" },
-    { "pattern": "explore|map.*codebase|trace.*execution|architecture", "agent": "feature-dev:code-explorer" },
     { "pattern": "design.*architecture|blueprint|implementation plan", "agent": "feature-dev:code-architect" },
+    { "pattern": "explore|map.*codebase|trace.*execution|architecture", "agent": "feature-dev:code-explorer" },
     { "pattern": "simplify|refactor.*for clarity", "agent": "code-simplifier:code-simplifier" }
   ]
 }
