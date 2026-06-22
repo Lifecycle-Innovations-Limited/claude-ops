@@ -79,7 +79,9 @@ The default map ships at [`config/specialist-keywords.example.json`](../config/s
 
 Each value is an array of substrings (case-insensitive). The hook scans the `prompt` field of the `Agent` input. First match wins.
 
-To extend: copy the file to `~/.claude/config/specialist-keywords.json` and add your own. User file overrides the plugin default.
+To extend: copy [`config/specialist-keywords.example.json`](../config/specialist-keywords.example.json) to `~/.claude/plugins/data/ops-ops-marketplace/specialist-keywords.json` and edit. User file overrides the plugin default.
+
+**Cross-plugin agents** use `plugin:agent` names (e.g. `feature-dev:code-explorer`). The hook resolves them against Claude Code and Cursor plugin caches (`scripts/lib/agent-installed.sh`).
 
 ---
 

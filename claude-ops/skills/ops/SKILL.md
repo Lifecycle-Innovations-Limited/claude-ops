@@ -52,6 +52,7 @@ Route `$ARGUMENTS` to the correct ops skill:
 | integrate, connect, add-api, saas, partner                                                                       | `/ops:ops-integrate $ARGUMENTS`   |
 | speedup, clean, optimize, cleanup                                                                                | `/ops:ops-speedup`                |
 | orchestrate, subagents, agents, dispatch, run                                                                    | `/ops:ops-orchestrate $ARGUMENTS` |
+| feature, feature-dev, fd, architect-feature, explore-feature                                                     | `/ops:ops-feature-dev $ARGUMENTS` |
 | secret-sync, secrets, doppler-sync, drift                                                                        | `/ops:ops-secret-sync $ARGUMENTS` |
 | home, homey, lights, flow, scene, energy, climate, presence, alarm, smart-home, iot, thermostat, dim, door, lock | `/ops:ops-home $ARGUMENTS`        |
 | statusline, status-line, cockpit                                                                                 | `/ops:statusline $ARGUMENTS`      |
