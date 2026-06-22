@@ -27,3 +27,8 @@
   boundary: "**/mcp-servers/**"
   policies:
     - .cursor/approval-policies/mcp-policy.md
+
+- product: Repository automation scripts
+  boundary: "{scripts/**,claude-ops/scripts/**}"
+  policies:
+    - .cursor/approval-policies/scripts-policy.md
