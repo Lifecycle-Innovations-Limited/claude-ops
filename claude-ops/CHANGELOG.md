@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.36.0] - 2026-06-22
+
+### Changed
+ops-inbox: never archive todo/action-labeled emails until verified done (HARD GUARDRAIL); tone/language matching per contact; full-context cross-channel + already-sent dedup; snooze/follow-up intelligence so commitments & meeting-note todos are never lost; safe autonomous chores (archive already-replied, schedule reminders) with the Rule-6 outbound gate intact; new bin/ops-contact-registry offline cross-channel contact registry (build/lookup/stats).
+
+
 ## [2.35.0] - 2026-06-22
 
 ### Changed
