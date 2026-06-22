@@ -247,7 +247,7 @@ Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need 
 | Option             | Header   | Description                                     |
 | ------------------ | -------- | ----------------------------------------------- |
 | Configure channels | channels | Set tokens for Telegram, WhatsApp, Email, Slack |
-| Companion plugins  | plugins  | Install GSD for project roadmap tracking        |
+| Companion plugins  | plugins  | Install GSD, Superpowers, and feature-dev companion plugins |
 | Save preferences   | prefs    | Owner name, timezone, default priorities        |
 | Shell env          | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile    |
 
@@ -396,6 +396,44 @@ If they skip:
 ```
 Skipped Superpowers. Ops skills will run without superpower checkpoints.
 Install later with: /plugin marketplace add obra/superpowers-marketplace
+```
+
+---
+
+## Step 2c — Feature-dev (optional, recommended for structured builds)
+
+The **feature-dev** plugin adds a 7-phase feature pipeline (`code-explorer`, `code-architect`, `code-reviewer` agents). claude-ops routes to it via `/ops:ops-feature-dev`, `/flow feature-dev`, and silent auto-swap when `general-purpose` agents match explore/architect/review keywords.
+
+Check if feature-dev is already installed:
+
+```bash
+find ~/.claude ~/.cursor -path "*/feature-dev/*/agents/code-explorer.md" 2>/dev/null | head -1 | grep -q . && echo "installed" || echo "not_installed"
+```
+
+If not installed, ask via `AskUserQuestion`:
+
+```
+Feature-dev adds structured feature development (explore → architect → implement → review).
+
+  [Install feature-dev (latest)] [Skip — I'll add it later]
+```
+
+On install, try the Claude Code plugin CLI when available:
+
+```bash
+# Cursor / Claude Code — plugin id varies by marketplace; verify with: claude plugin list
+claude plugin install feature-dev 2>/dev/null || true
+```
+
+Re-check with the find command above. If still `not_installed`, tell the user to install **feature-dev** from Cursor Settings → Plugins (or their Claude Code marketplace UI), then re-run `/ops:setup`.
+
+Report success/failure. Record `plugins.feature_dev = "installed"` in `$PREFS_PATH` only when the find check passes.
+
+If they skip:
+
+```
+Skipped feature-dev. Install later from Cursor plugins or run /feature-dev after installing the feature-dev plugin.
+Structured builds still work via /flow build and gsd-execute-phase without it.
 ```
 
 ---
