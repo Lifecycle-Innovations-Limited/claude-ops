@@ -60,16 +60,3 @@ Otherwise invoke `/feature-dev $ARGUMENTS` via the **Skill** tool.
 - Specialist auto-swap (`feature-dev:code-*`) is handled by `bin/ops-suggest-specialized-agent` when the plugin is present.
 - Does **not** replace `/flow build`, `/review`, or `gsd-execute-phase` — it overlays them.
 
-## Agent Teams support
-
-If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when running feature-dev phases that spawn multiple specialists (e.g., explorer + architect in parallel).
-
-**Team setup** (only when flag is enabled):
-
-```
-TeamCreate("feature-dev")
-Agent(team_name="feature-dev", name="explorer", ...)
-Agent(team_name="feature-dev", name="architect", ...)
-```
-
-If the flag is NOT set, use standard parallel subagents or sequential `/feature-dev` phases.
