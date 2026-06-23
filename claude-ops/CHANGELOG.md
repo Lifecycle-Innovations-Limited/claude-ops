@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.36.1] - 2026-06-23
+
+### Added
+- CRS routing guardrails for multi-account rotation across Mac and remote hosts — a Bedrock fallback guard hook, token feed, health watch, route-state tracking, and the `claude-stack` helper, with systemd units and a remote-relay tunnel installer to keep sessions on the right account.
+
+### Changed
+- Upgraded headless agents (build-fixer, deploy-fixer, dependency-auditor, monitor-agent, memory-extractor) to Sonnet.
+
+### Fixed
+- `claude-invoke` now authenticates correctly against CRS.
+- Pocket env broker peer authentication on macOS now uses `LOCAL_PEERCRED`.
+- Corrected contact registry deduplication, Gmail flag placement, and todo label matching in the inbox/contact tooling.
+
+
 ## [2.36.0] - 2026-06-22
 
 ### Changed
