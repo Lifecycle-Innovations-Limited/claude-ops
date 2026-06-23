@@ -1,43 +1,29 @@
 #!/bin/bash
-# use-oauth.sh — exit Bedrock mode in this shell, restore Anthropic OAuth defaults.
+# use-oauth.sh — exit Bedrock mode in this shell, restore CRS-backed OAuth defaults.
 # Source me: `source ~/.claude/scripts/account-rotation/use-oauth.sh`
 #
-# Persists to ~/.claude/settings.json: removes Bedrock + hardcoded model overrides
-# so Claude Code loads the subscription model catalog from the API.
-# OAuth token is read from keychain by Claude Code on next session start.
+# Persists to ~/.claude/settings.json via claude-routing-state:
+# ANTHROPIC_BASE_URL points at CRS and CLAUDE_CODE_OAUTH_TOKEN is the CRS relay token.
 
 unset CLAUDE_CODE_USE_BEDROCK
 unset AWS_BEDROCK_REGION
-unset AWS_REGION
 unset ANTHROPIC_MODEL
 unset ANTHROPIC_SMALL_FAST_MODEL
+unset ANTHROPIC_DEFAULT_SONNET_MODEL
+unset ANTHROPIC_DEFAULT_HAIKU_MODEL
+unset ANTHROPIC_DEFAULT_OPUS_MODEL
+unset ANTHROPIC_DEFAULT_FABLE_MODEL
 unset ANTHROPIC_API_KEY
 unset ANTHROPIC_AUTH_TOKEN
 unset ANTHROPIC_BASE_URL
 
-python3 - <<'PYEOF'
-import json, os
-p = os.path.expanduser("~/.claude/settings.json")
-try:
-    s = json.load(open(p))
-except Exception:
-    s = {}
-env = s.setdefault("env", {})
-for k in ("CLAUDE_CODE_USE_BEDROCK", "AWS_BEDROCK_REGION", "AWS_REGION",
-          "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
-          "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"):
-    env.pop(k, None)
-s["env"] = env
-s.pop("model", None)
-s.pop("availableModels", None)
-with open(p, "w") as f:
-    json.dump(s, f, indent=2)
-print("✓ settings.json env updated (Bedrock + hardcoded models removed)")
-PYEOF
+_ROT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+"$_ROT_DIR/../../../.local/bin/claude-stack" route --mode crs-oauth --reason oauth-restored >/dev/null || return 1 2>/dev/null || exit 1
 
 ACTIVE=$(python3 -c "import json; print(json.load(open('$HOME/.claude/scripts/account-rotation/state.json')).get('activeAccount',''))" 2>/dev/null)
 echo "✅ OAuth mode restored for this shell + persisted to settings.json"
 echo "   models       : (subscription catalog — no hardcoded IDs)"
+echo "   route        : CRS OAuth"
 echo "   active account: ${ACTIVE:-(unknown)}"
 if [[ -f ~/.claude/.bedrock-fallback.json ]]; then
   echo "   ⚠  Bedrock sentinel still present — clearing"
