@@ -98,7 +98,7 @@ Minimal example:
 ---
 name: my-rust-fixer
 description: Diagnoses and fixes Rust compile errors
-model: claude-haiku-4-5
+model: sonnet
 tools: [Bash, Read, Edit, Write]
 ---
 
