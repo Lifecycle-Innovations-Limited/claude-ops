@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CRS Bedrock fallback guard periodically
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=crs-bedrock-guard.service
+
+[Install]
+WantedBy=timers.target
