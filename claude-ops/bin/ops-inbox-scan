@@ -459,6 +459,8 @@ PROTECTED_SUBSTRINGS = (
 )
 # a 'done/completed' label clears protection even if a stale todo label lingers
 COMPLETION_SUBSTRINGS = ("ACTIONED", "DONE", "COMPLETED", "RESOLVED", "HANDLED", "ARCHIVED")
+PROTECTED_PHRASES = tuple(s for s in PROTECTED_SUBSTRINGS if " " in s)
+PROTECTED_WORDS = tuple(s for s in PROTECTED_SUBSTRINGS if " " not in s)
 def protected_todo_labels(labels):
     """Return the list of protected todo/action labels on a message (empty if none/done)."""
     hits, done = [], False
@@ -466,9 +468,13 @@ def protected_todo_labels(labels):
         if str(raw).upper() in SYSTEM_LABELS or str(raw).upper().startswith("CATEGORY_"):
             continue
         n = _norm_label(raw)
-        if any(c in n for c in COMPLETION_SUBSTRINGS):
-            done = True
-        if any(s in n for s in PROTECTED_SUBSTRINGS):
+        words = set(n.split())
+        tokens = n.split()
+        for i, t in enumerate(tokens):
+            if t in COMPLETION_SUBSTRINGS and (i == 0 or tokens[i - 1] != "NOT"):
+                done = True
+                break
+        if any(p in n for p in PROTECTED_PHRASES) or any(w in words for w in PROTECTED_WORDS):
             hits.append(str(raw))
     return [] if done else hits
 

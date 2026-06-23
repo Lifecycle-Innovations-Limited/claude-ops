@@ -176,9 +176,11 @@ def build(with_gmail=False, with_slack=False, out=DEFAULT_OUT):
                 break
         if target is None:
             target = new_record(name)
-            records.append(target)
-            for ph in phones:
-                by_phone[ph] = target
+            if phones:
+                for ph in phones:
+                    by_phone[ph] = target
+            else:
+                records.append(target)
         merge_into(target, name=name, emails=emails, phones=phones,
                    slack_id=(slack[0] if slack else ""), context=ctx, tone=tone,
                    sources="memory")
@@ -191,7 +193,7 @@ def build(with_gmail=False, with_slack=False, out=DEFAULT_OUT):
         cmd = ["gog", "gmail", "search", "in:anywhere newer_than:120d",
                "-j", "--results-only", "--no-input", "--max", "300"]
         if acct:
-            cmd[2:2] = ["-a", acct]
+            cmd[3:3] = ["-a", acct]
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             data = json.loads(p.stdout) if p.stdout.strip() else []
