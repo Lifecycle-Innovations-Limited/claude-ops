@@ -5,7 +5,7 @@ Background daemon + helpers that synthesize a one-line digest across all paralle
 | Script       | Role                                                                                                              |
 | ------------ | ----------------------------------------------------------------------------------------------------------------- |
 | `daemon.sh`  | Long-lived loop — polls per-session recap inputs, calls `digest.sh` when stale, writes `/tmp/claude-recap-digest` |
-| `digest.sh`  | Synthesizes the one-liner via `claude -p --model haiku` over recent sessions + tool-activity files                |
+| `digest.sh`  | Synthesizes the one-liner via `claude -p --model claude-sonnet-4-6` over recent sessions + tool-activity files    |
 | `marquee.sh` | Tmux-side scroller (called from `status-right`) — reads the digest file and emits a windowed slice                |
 
 ## Display surfaces

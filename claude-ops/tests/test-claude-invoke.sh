@@ -2,11 +2,12 @@
 # test-claude-invoke.sh — unit tests for scripts/lib/claude-invoke.sh
 #
 # Tests:
-#   T1: CLAUDE_OPS_USE_CREDIT_POOL unset  -> calls `claude` directly
-#   T2: CLAUDE_OPS_USE_CREDIT_POOL=0      -> calls `claude` directly
-#   T3: CLAUDE_OPS_USE_CREDIT_POOL=1      -> calls `node .../claude-p-as.mjs --` with same args
+#   T1: CLAUDE_OPS_USE_CREDIT_POOL unset  -> calls `claude` directly, upgrading Haiku to Sonnet
+#   T2: CLAUDE_OPS_USE_CREDIT_POOL=0      -> calls `claude` directly, upgrading Haiku to Sonnet
+#   T3: CLAUDE_OPS_USE_CREDIT_POOL=1      -> calls `node .../claude-p-as.mjs --` with sanitized args
 #   T4: CLAUDE_OPS_USE_CREDIT_POOL=1 but wrapper missing -> falls back to `claude`, exits non-zero
 #       (warning printed to stderr, direct claude called)
+#   T5: direct invocation strips API-key env so CRS auth token wins
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -27,6 +28,9 @@ make_stubs() {
   # Stub claude: records argv to a capture file and exits 0
   cat > "$tmpdir/claude" <<'SH'
 #!/usr/bin/env bash
+if [[ "${CAPTURE_ENV:-0}" = "1" ]]; then
+  echo "env api=${ANTHROPIC_API_KEY-unset} claude_api=${CLAUDE_API_KEY-unset} oauth=${CLAUDE_CODE_OAUTH_TOKEN-unset}" >> "$CAPTURE_FILE"
+fi
 echo "claude $*" >> "$CAPTURE_FILE"
 exit 0
 SH
@@ -62,6 +66,10 @@ run_invoke() {
   (
     export PATH="$tmpdir:$PATH"
     export CAPTURE_FILE="$capture"
+    unset CLAUDE_OPS_USE_CREDIT_POOL
+    unset ANTHROPIC_API_KEY
+    unset CLAUDE_API_KEY
+    unset CLAUDE_CODE_OAUTH_TOKEN
     for kv in "${env_args[@]:-}"; do
       export "$kv"
     done
@@ -81,10 +89,10 @@ run_invoke() {
 # ---------------------------------------------------------------------------
 echo "T1: gate unset -> direct claude"
 result=$(run_invoke -- -p --model haiku --no-session-persistence)
-if [[ "$result" == "claude -p --model haiku --no-session-persistence" ]]; then
+if [[ "$result" == "claude -p --model claude-sonnet-4-6 --no-session-persistence" ]]; then
   ok "called claude directly with correct args"
 else
-  err "expected 'claude -p --model haiku --no-session-persistence', got: '$result'"
+  err "expected 'claude -p --model claude-sonnet-4-6 --no-session-persistence', got: '$result'"
 fi
 
 # ---------------------------------------------------------------------------
@@ -92,10 +100,10 @@ fi
 # ---------------------------------------------------------------------------
 echo "T2: gate=0 -> direct claude"
 result=$(run_invoke CLAUDE_OPS_USE_CREDIT_POOL=0 -- -p --model haiku)
-if [[ "$result" == "claude -p --model haiku" ]]; then
+if [[ "$result" == "claude -p --model claude-sonnet-4-6" ]]; then
   ok "called claude directly with CREDIT_POOL=0"
 else
-  err "expected 'claude -p --model haiku', got: '$result'"
+  err "expected 'claude -p --model claude-sonnet-4-6', got: '$result'"
 fi
 
 # ---------------------------------------------------------------------------
@@ -104,7 +112,7 @@ fi
 echo "T3: gate=1 -> node ...claude-p-as.mjs -- <args>"
 result=$(run_invoke CLAUDE_OPS_USE_CREDIT_POOL=1 -- -p --model haiku --no-session-persistence)
 wrapper_path="$PLUGIN_ROOT/scripts/account-rotation/claude-p-as.mjs"
-expected="node $wrapper_path -- -p --model haiku --no-session-persistence"
+expected="node $wrapper_path -- -p --model claude-sonnet-4-6 --no-session-persistence"
 if [[ "$result" == "$expected" ]]; then
   ok "routed through claude-p-as.mjs with correct args after --"
 else
@@ -137,15 +145,26 @@ stderr_out=$(
 )
 
 fallback_result=$(cat "$capture_missing")
-if [[ "$fallback_result" == "claude -p --model haiku" ]]; then
+if [[ "$fallback_result" == "claude -p --model claude-sonnet-4-6" ]]; then
   ok "fell back to direct claude when wrapper missing"
 else
-  err "fallback: expected 'claude -p --model haiku', got: '$fallback_result'"
+  err "fallback: expected 'claude -p --model claude-sonnet-4-6', got: '$fallback_result'"
 fi
 if echo "$stderr_out" | grep -q "WARNING"; then
   ok "emitted WARNING to stderr"
 else
   err "no WARNING in stderr output: '$stderr_out'"
+fi
+
+# ---------------------------------------------------------------------------
+# T5: direct invocation strips API-key env
+# ---------------------------------------------------------------------------
+echo "T5: direct claude strips conflicting API-key env"
+result=$(run_invoke ANTHROPIC_API_KEY=bad CLAUDE_API_KEY=bad CLAUDE_CODE_OAUTH_TOKEN=bad CAPTURE_ENV=1 -- -p --model sonnet)
+if echo "$result" | grep -q "env api=unset claude_api=unset oauth=unset"; then
+  ok "stripped conflicting API-key env"
+else
+  err "expected API-key env to be stripped, got: '$result'"
 fi
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 ---
 name: monitor-agent
 description: Lightweight APM and metrics probe agent. Queries Datadog, New Relic, and OpenTelemetry backends for active alerts, error traces, and entity health. Returns structured JSON. Read-only — used by ops-monitor skill.
-model: claude-haiku-4-5
+model: sonnet
 effort: low
 maxTurns: 15
 tools:

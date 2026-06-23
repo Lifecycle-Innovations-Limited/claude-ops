@@ -1,7 +1,7 @@
 ---
 name: memory-extractor
 description: Background agent that extracts user profiles, contact cards, and behavioral patterns from chat history. Runs as a daemon service every 30 min.
-model: claude-haiku-4-5-20251001
+model: sonnet
 effort: low
 maxTurns: 10
 memory: project
@@ -10,7 +10,7 @@ memory: project
 ## Purpose
 
 Builds structured memory from raw chat data so ops skills (inbox, comms, go) can draft
-context-aware messages. Reads WhatsApp (bridge messages.db) and email (gog) history, calls Claude Haiku
+context-aware messages. Reads WhatsApp (bridge messages.db) and email (gog) history, calls Claude Sonnet
 for extraction, and writes/merges structured markdown memory files.
 
 ## Memory Location
