@@ -52,7 +52,14 @@ if [ -n "$suggest" ]; then
   exit 0
 fi
 
-# No match (or matched agent not installed) — log + spawn Haiku drafter
+installed_agent_names() {
+  {
+    find "${HOME}/.claude/agents" -maxdepth 1 -type f -name '*.md' -printf '%f\n' 2>/dev/null
+    find "$PLUGIN_ROOT/agents" -maxdepth 1 -type f -name '*.md' -printf '%f\n' 2>/dev/null
+  } | sed 's/\.md$//' | sort -u | head -n 120 | sed 's/^/  - /'
+}
+
+# No match (or matched agent not installed) — log + spawn Sonnet drafter
 printf '[%s] no installed specialist match for: %s\n' "$(date '+%H:%M:%S')" "${description:0:80}" \
   >> "${HOME}/.claude/logs/ops/specialized-agent-misses.log"
 
@@ -63,9 +70,8 @@ if command -v claude >/dev/null 2>&1 && [ "$(config auto_draft_new_agents true)"
 DESCRIPTION: ${description:0:200}
 PROMPT EXCERPT: ${prompt:0:600}
 
-Existing installed agents (do not duplicate):
-$(ls -1 ${HOME}/.claude/agents/ 2>/dev/null | sed 's/\.md$//' | sed 's/^/  - /')
-$(ls -1 $PLUGIN_ROOT/agents/ 2>/dev/null | sed 's/\.md$//' | sed 's/^/  - /')
+Existing installed agent names (truncated, do not duplicate):
+$(installed_agent_names)
 
 Task:
 1. Identify the recurring CLASS this task represents (not this one task).
@@ -76,7 +82,7 @@ Task:
 name: <kebab-name>
 description: <one-paragraph: when to use, with 2-3 example scenarios in <example>...</example> tags>
 tools: <comma-separated tool list scoped to genuine needs>
-model: haiku|sonnet|opus
+model: sonnet
 ---
 <persona body — 100-300 words covering capabilities, operating constraints, output format>
 
@@ -84,7 +90,7 @@ Final line of your output: 'NEW: <name>' or 'SKIP: <reason>'."
 
   nohup bash -c "
     . '$PLUGIN_ROOT/scripts/lib/claude-invoke.sh'
-    printf '%s' \"\$1\" | claude_invoke -p --model haiku --dangerously-skip-permissions --no-session-persistence > '$drafter_log' 2>&1
+    printf '%s' \"\$1\" | claude_invoke -p --model claude-sonnet-4-6 --dangerously-skip-permissions --no-session-persistence > '$drafter_log' 2>&1
   " _ "$draft_prompt" </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
 fi
