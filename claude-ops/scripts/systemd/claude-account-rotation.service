@@ -1,0 +1,19 @@
+[Unit]
+Description=Claude account rotation daemon
+After=network-online.target crs-compose.service
+Wants=network-online.target crs-compose.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.claude/scripts/account-rotation
+Environment=CLAUDE_ENABLE_FLEET_RECOVERY=0
+Environment=CLAUDE_ENABLE_BG_RESPAWN=0
+Environment=CLAUDE_ENABLE_BG_SESSION_ROUTER=1
+ExecStart=/usr/bin/node %h/.claude/scripts/account-rotation/daemon.mjs
+Restart=always
+RestartSec=30
+StandardOutput=append:%h/.claude/logs/account-rotation.systemd.log
+StandardError=append:%h/.claude/logs/account-rotation.systemd.log
+
+[Install]
+WantedBy=default.target

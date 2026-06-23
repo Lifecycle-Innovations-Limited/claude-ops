@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CRS token feed periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=crs-token-feed.service
+
+[Install]
+WantedBy=timers.target

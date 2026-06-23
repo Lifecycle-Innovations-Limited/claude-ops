@@ -1,0 +1,11 @@
+[Unit]
+Description=Feed fresh Claude OAuth tokens into local CRS
+After=crs-compose.service
+Wants=crs-compose.service
+
+[Service]
+Type=oneshot
+Environment=CRS_BASE=http://127.0.0.1:3005
+ExecStart=%h/.claude/scripts/account-rotation/crs-token-feed.sh
+StandardOutput=append:%h/.claude/logs/crs-token-feed.systemd.log
+StandardError=append:%h/.claude/logs/crs-token-feed.systemd.log
