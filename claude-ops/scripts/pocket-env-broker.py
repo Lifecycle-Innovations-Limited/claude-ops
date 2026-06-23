@@ -11,8 +11,9 @@ Design:
     environment — launched via the same env wrapper as the executor).
   • Listens on a unix-domain socket. Secrets are returned over the socket only —
     they never touch disk.
-  • Every connection is peer-authenticated with SO_PEERCRED: the caller's uid MUST
-    equal the worker user's uid, otherwise the request is denied.
+  • Every connection is peer-authenticated with SO_PEERCRED (Linux) or
+    LOCAL_PEERCRED (macOS/BSD): the caller's uid MUST equal the worker user's uid,
+    otherwise the request is denied.
   • A default-deny allowlist (env-broker-policy.json → {"allow": [...]}) decides
     which variable names are grantable. Values come from this process's own
     environment (so the deployment populates them the same way the executor's
@@ -216,12 +217,21 @@ def audit(record: dict) -> None:
 
 
 def peer_uid(conn: socket.socket) -> int:
-    """Read the connected peer's uid via SO_PEERCRED (Linux). Raises on failure."""
-    creds = conn.getsockopt(
-        socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
-    )
-    _pid, uid, _gid = struct.unpack("3i", creds)
-    return uid
+    """Read the connected peer's uid via SO_PEERCRED (Linux) or LOCAL_PEERCRED (macOS)."""
+    if hasattr(socket, "SO_PEERCRED"):
+        creds = conn.getsockopt(
+            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+        )
+        _pid, uid, _gid = struct.unpack("3i", creds)
+        return uid
+    if hasattr(socket, "LOCAL_PEERCRED"):
+        level = getattr(socket, "SOL_LOCAL", 0)
+        creds = conn.getsockopt(
+            level, socket.LOCAL_PEERCRED, struct.calcsize("2i")
+        )
+        _pid, uid = struct.unpack("2i", creds)
+        return uid
+    raise OSError("peer credential lookup not supported on this platform")
 
 
 def decide(var: str, policy: set[str]) -> tuple[bool, str | None, str]:
