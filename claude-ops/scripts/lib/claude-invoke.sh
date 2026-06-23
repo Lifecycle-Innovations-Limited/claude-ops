@@ -3,7 +3,7 @@
 #
 # Usage (source this file, then call claude_invoke):
 #   . "$PLUGIN_ROOT/scripts/lib/claude-invoke.sh"
-#   claude_invoke --model haiku --no-session-persistence [other claude args]
+#   claude_invoke --model claude-sonnet-4-6 --no-session-persistence [other claude args]
 #
 # Gate:
 #   CLAUDE_OPS_USE_CREDIT_POOL=1  ->  route through claude-p-as.mjs (credit pool)
@@ -42,7 +42,41 @@ _claude_invoke_find_root() {
   return 1
 }
 
+_claude_invoke_sanitize_args() {
+  CLAUDE_INVOKE_ARGS=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --model)
+        shift
+        if [[ "${1:-}" =~ [Hh]aiku ]]; then
+          CLAUDE_INVOKE_ARGS+=(--model claude-sonnet-4-6)
+        else
+          CLAUDE_INVOKE_ARGS+=(--model "$1")
+        fi
+        ;;
+      --model=*)
+        local model="${1#--model=}"
+        if [[ "$model" =~ [Hh]aiku ]]; then
+          CLAUDE_INVOKE_ARGS+=(--model=claude-sonnet-4-6)
+        else
+          CLAUDE_INVOKE_ARGS+=("$1")
+        fi
+        ;;
+      *)
+        CLAUDE_INVOKE_ARGS+=("$1")
+        ;;
+    esac
+    shift
+  done
+}
+
+_claude_invoke_exec() {
+  env -u ANTHROPIC_API_KEY -u CLAUDE_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN "$@"
+}
+
 claude_invoke() {
+  local CLAUDE_INVOKE_ARGS
+  _claude_invoke_sanitize_args "$@"
   if [ "${CLAUDE_OPS_USE_CREDIT_POOL:-0}" = "1" ]; then
     local repo_root
     repo_root="$(_claude_invoke_find_root)" || repo_root=""
@@ -51,11 +85,11 @@ claude_invoke() {
       # Wrapper not found — log a warning and fall back to direct claude so
       # daemon jobs are never silently dropped due to misconfiguration.
       printf '[claude-invoke] WARNING: claude-p-as.mjs not found (root=%s) — falling back to direct claude\n' "${repo_root:-unresolved}" >&2
-      claude "$@"
+      _claude_invoke_exec claude "${CLAUDE_INVOKE_ARGS[@]}"
       return $?
     fi
-    node "$wrapper" -- "$@"
+    _claude_invoke_exec node "$wrapper" -- "${CLAUDE_INVOKE_ARGS[@]}"
   else
-    claude "$@"
+    _claude_invoke_exec claude "${CLAUDE_INVOKE_ARGS[@]}"
   fi
 }
