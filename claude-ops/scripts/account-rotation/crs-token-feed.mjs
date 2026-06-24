@@ -1,24 +1,13 @@
 #!/usr/bin/env node
 /**
- * crs-token-feed.mjs — "rotator feeds CRS" (Linux/EC2).
+ * crs-token-feed.mjs — propagate rotation vault tokens into a local CRS pool.
  *
- * The hourly claude-token-refresh.service (refresh-tokens.mjs) is a NO-OP on
- * Linux (it reads the macOS `security` keychain, which doesn't exist here), and
- * nothing ever propagated fresh vault tokens into the local claude-relay-service
- * (CRS) pool — so CRS accounts silently rotted to status=error as their access
- * tokens expired (CRS stores no refresh tokens: hasRefresh=false on every acct).
+ * On headless Linux hosts the macOS keychain refresh path is unavailable; this
+ * feeder reads ~/.claude/.credentials.json (or crs.fileVaultPath), optionally
+ * refreshes expiring tokens, and PUTs claudeAiOauth into mapped CRS accounts.
  *
- * This feeder closes both gaps, contention-tolerantly:
- *   1. Read each account's token from the Linux file vault (~/.claude/.credentials.json).
- *   2. If expiring within BUFFER, best-effort OAuth refresh; persist the rotated
- *      refresh_token back to the file vault atomically. On HTTP 400 (refresh
- *      token already rotated by the Mac/daemon — cross-machine contention) we
- *      SKIP quietly — no browser re-auth (doomed headless) — and just propagate
- *      whatever fresh token the vault currently holds.
- *   3. PUT the fresh claudeAiOauth into the mapped CRS account + reset-status.
- *
- * Single refresher-of-record stays the existing pipeline; this is best-effort
- * top-up + the missing propagation. Runs via crs-token-feed.timer.
+ * Map each rotator account to a CRS admin account name via crsAccountName in
+ * config.json (or crs.nameByVaultKey). Runs via crs-token-feed.timer when installed.
  *
  *   node crs-token-feed.mjs            # refresh-if-needed + propagate all
  *   node crs-token-feed.mjs --dry-run  # report only
@@ -27,34 +16,24 @@
 import { readFileSync, writeFileSync, renameSync, appendFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import { foreignActiveKeys } from './account-leases.mjs';
+import { assertCrsInvariant } from './route-state.mjs';
+import { acquireRefreshLock } from './crs-refresh-lock.mjs';
+import {
+  buildCrsNameMaps,
+  crsBaseUrl,
+  crsFileVaultPath,
+  loadRotationConfig,
+  resolveConfigPath,
+} from './crs-pool-config.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, 'config.json');
 const LOG_PATH = join(__dirname, 'rotation.log');
-const FILE_VAULT = join(process.env.HOME || '', '.claude', '.credentials.json');
-const CRS_BASE = process.env.CRS_BASE || 'http://127.0.0.1:3005';
-const CRS_CONTAINER = process.env.CRS_CONTAINER || 'crs-claude-relay-1';
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const TOKEN_ENDPOINT = 'https://platform.claude.com/v1/oauth/token';
 const BUFFER_MS = 2 * 3_600_000; // refresh if expiring within 2h
 const INTER_DELAY_MS = 1_500;
-const SAMRENDERS_EMAIL = process.env.CLAUDE_ROTATOR_SAMRENDERS_EMAIL || ['sam.renders', 'gmail.com'].join('@');
-
-// vault key (label || email) -> CRS account name
-const CRS_NAME_BY_KEY = {
-  'chairman@heartfeldt.org': 'pool-chairman',
-  'support@healify.ai': 'canary-support',
-  heartfeldt: 'pool-heartfeldt-personal',
-  'heartfeldt-team': 'pool-heartfeldt-team',
-  'sam@samfeldt.com': 'pool-samfeldt',
-  [SAMRENDERS_EMAIL]: 'pool-samrenders',
-  'info@auroracapital.nl': 'pool-aurora',
-  'sam@heartfeldt.foundation': 'pool-foundation',
-  'sponsors@heartfeldt.org': 'canary-sponsors',
-  'info@lifecycleinnovations.limited': 'canary-lifecycle',
-};
 
 const args = process.argv.slice(2);
 const DRY = args.includes('--dry-run');
@@ -70,19 +49,24 @@ function log(msg) {
 function accountKey(a) {
   return a.label || a.email;
 }
-function fvLoad() {
-  try {
-    return JSON.parse(readFileSync(FILE_VAULT, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-function fvSave(v) {
-  const t = `${FILE_VAULT}.tmp.${process.pid}`;
-  writeFileSync(t, JSON.stringify(v, null, 2));
-  renameSync(t, FILE_VAULT);
-}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function makeVaultOps(fileVaultPath) {
+  return {
+    load() {
+      try {
+        return JSON.parse(readFileSync(fileVaultPath, 'utf8'));
+      } catch {
+        return {};
+      }
+    },
+    save(v) {
+      const t = `${fileVaultPath}.tmp.${Date.now()}`;
+      writeFileSync(t, JSON.stringify(v, null, 2));
+      renameSync(t, fileVaultPath);
+    },
+  };
+}
 
 async function oauthRefresh(refreshToken) {
   try {
@@ -110,11 +94,11 @@ async function oauthRefresh(refreshToken) {
   }
 }
 
-async function crsLogin() {
+async function crsLogin(crsBase, crsContainer, adminUser = 'cradmin') {
   let pw = '';
   try {
     pw = execSync(
-      `docker inspect ${CRS_CONTAINER} --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^ADMIN_PASSWORD=//p'`,
+      `docker inspect ${crsContainer} --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^ADMIN_PASSWORD=//p'`,
       { timeout: 8000 },
     )
       .toString()
@@ -122,10 +106,10 @@ async function crsLogin() {
   } catch {}
   if (!pw) return null;
   try {
-    const r = await fetch(`${CRS_BASE}/web/auth/login`, {
+    const r = await fetch(`${crsBase}/web/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: 'cradmin', password: pw }),
+      body: JSON.stringify({ username: adminUser, password: pw }),
     }).then((x) => x.json());
     const tok = r.token || r.data?.token;
     return tok ? { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` } : null;
@@ -135,13 +119,25 @@ async function crsLogin() {
 }
 
 async function main() {
-  const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
-  const H = await crsLogin();
+  assertCrsInvariant(process.env, 'crs-token-feed:main');
+  const configPath = resolveConfigPath();
+  if (!configPath) {
+    log('no rotation config found — set CRS_CONFIG or install account-rotation config.json');
+    process.exit(1);
+  }
+  const config = loadRotationConfig();
+  const { nameByVaultKey } = buildCrsNameMaps(config);
+  const fileVault = crsFileVaultPath(config);
+  const crsBase = crsBaseUrl(config);
+  const crsContainer = process.env.CRS_CONTAINER || config.crs?.containerName || 'crs-claude-relay-1';
+  const adminUser = process.env.CRS_ADMIN_USER || config.crs?.adminUser || 'cradmin';
+  const vault = makeVaultOps(fileVault);
+  const H = await crsLogin(crsBase, crsContainer, adminUser);
   if (!H) {
     log('CRS login failed (relay down or no admin pw) — aborting');
     process.exit(1);
   }
-  const acctsResp = await fetch(`${CRS_BASE}/admin/claude-accounts`, { headers: H }).then((r) => r.json());
+  const acctsResp = await fetch(`${crsBase}/admin/claude-accounts`, { headers: H }).then((r) => r.json());
   const byName = Object.fromEntries((acctsResp.data || acctsResp.accounts || acctsResp).map((a) => [a.name, a]));
   const now = Date.now();
   // Contention guard: never refresh an account the OTHER host holds the lease on
@@ -157,8 +153,8 @@ async function main() {
   if (STATUS) {
     for (const a of config.accounts) {
       const key = accountKey(a);
-      const crsName = CRS_NAME_BY_KEY[key];
-      const e = fvLoad()[`Claude-Rotation-${key}`]?.claudeAiOauth;
+      const crsName = nameByVaultKey[key];
+      const e = vault.load()[`Claude-Rotation-${key}`]?.claudeAiOauth;
       const min = e?.expiresAt ? Math.floor((e.expiresAt - now) / 60000) : 'n/a';
       const crs = byName[crsName];
       console.log(
@@ -175,15 +171,15 @@ async function main() {
   for (let i = 0; i < config.accounts.length; i++) {
     const a = config.accounts[i];
     const key = accountKey(a);
-    const crsName = CRS_NAME_BY_KEY[key];
+    const crsName = nameByVaultKey[key];
     if (!crsName || !byName[crsName]) {
       missing++;
       continue;
     }
     const crs = byName[crsName];
 
-    const vault = fvLoad();
-    const entry = vault[`Claude-Rotation-${key}`]?.claudeAiOauth;
+    const vaultData = vault.load();
+    const entry = vaultData[`Claude-Rotation-${key}`]?.claudeAiOauth;
     if (!entry?.accessToken) {
       log(`${key}: no vault token — skip`);
       skipped++;
@@ -196,20 +192,29 @@ async function main() {
       log(`${key}: expiring but foreign-leased — refresh deferred to owner host, propagating current token`);
     } else if (expiring && oauth.refreshToken && !DRY) {
       if (i > 0) await sleep(INTER_DELAY_MS);
-      const r = await oauthRefresh(oauth.refreshToken);
-      if (r.ok) {
-        oauth = { ...oauth, ...r.oauth, scopes: oauth.scopes || [] };
-        vault[`Claude-Rotation-${key}`] = {
-          claudeAiOauth: oauth,
-          mcpOAuth: vault[`Claude-Rotation-${key}`]?.mcpOAuth || {},
-        };
-        fvSave(vault);
-        refreshed++;
-        log(`${key}: refreshed (min_left=${Math.floor((oauth.expiresAt - now) / 60000)})`);
-      } else if (r.status === 400) {
-        log(`${key}: refresh 400 (rotated elsewhere) — propagating existing vault token`);
+      const release = acquireRefreshLock(key);
+      if (!release) {
+        log(`${key}: refresh lock held elsewhere — propagate-only`);
       } else {
-        log(`${key}: refresh failed (${r.error}) — propagating existing vault token`);
+        try {
+          const r = await oauthRefresh(oauth.refreshToken);
+          if (r.ok) {
+            oauth = { ...oauth, ...r.oauth, scopes: oauth.scopes || [] };
+            vaultData[`Claude-Rotation-${key}`] = {
+              claudeAiOauth: oauth,
+              mcpOAuth: vaultData[`Claude-Rotation-${key}`]?.mcpOAuth || {},
+            };
+            vault.save(vaultData);
+            refreshed++;
+            log(`${key}: refreshed (min_left=${Math.floor((oauth.expiresAt - now) / 60000)})`);
+          } else if (r.status === 400) {
+            log(`${key}: refresh 400 (rotated elsewhere) — propagating existing vault token`);
+          } else {
+            log(`${key}: refresh failed (${r.error}) — propagating existing vault token`);
+          }
+        } finally {
+          release();
+        }
       }
     }
 
@@ -224,16 +229,15 @@ async function main() {
       continue;
     }
     try {
-      const put = await fetch(`${CRS_BASE}/admin/claude-accounts/${crs.id}`, {
+      const put = await fetch(`${crsBase}/admin/claude-accounts/${crs.id}`, {
         method: 'PUT',
         headers: H,
-        body: JSON.stringify({ claudeAiOauth: oauth, schedulable: true }),
+        body: JSON.stringify({ claudeAiOauth: oauth }),
       });
       if (put.ok) {
-        if (crs.status === 'error')
-          await fetch(`${CRS_BASE}/admin/claude-accounts/${crs.id}/reset-status`, { method: 'POST', headers: H }).catch(
-            () => {},
-          );
+        await fetch(`${crsBase}/admin/claude-accounts/${crs.id}/reset-status`, { method: 'POST', headers: H }).catch(
+          () => {},
+        );
         propagated++;
       } else {
         log(`${key}: CRS PUT ${put.status}`);
@@ -243,6 +247,15 @@ async function main() {
     }
   }
   log(`feed complete: ${refreshed} refreshed, ${propagated} propagated, ${skipped} skipped, ${missing} unmapped`);
+  if (!DRY && propagated > 0 && process.env.CRS_FEED_SKIP_PRIORITY !== '1') {
+    const pr = spawnSync(process.execPath, [join(__dirname, 'crs-priority-daemon.mjs')], {
+      env: { ...process.env, CRS_ADMIN_PASSWORD: process.env.CRS_ADMIN_PASSWORD || '' },
+      timeout: 120_000,
+      encoding: 'utf8',
+    });
+    if (pr.status === 0) log('priority tick after feed: ok');
+    else log(`priority tick after feed: exit=${pr.status} ${(pr.stderr || pr.stdout || '').slice(0, 200)}`);
+  }
 }
 main().catch((e) => {
   log(`fatal: ${e.message}`);
