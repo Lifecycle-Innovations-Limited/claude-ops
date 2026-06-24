@@ -32,9 +32,9 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>__LOG_DIR__/crs-fra-tunnel.out.log</string>
+    <string>__LOG_DIR__/crs-remote-tunnel.out.log</string>
 
     <key>StandardErrorPath</key>
-    <string>__LOG_DIR__/crs-fra-tunnel.err.log</string>
+    <string>__LOG_DIR__/crs-remote-tunnel.err.log</string>
 </dict>
 </plist>

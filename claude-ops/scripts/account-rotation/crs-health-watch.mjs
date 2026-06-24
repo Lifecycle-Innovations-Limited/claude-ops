@@ -52,7 +52,7 @@ const HEALTH_URL = process.env.CRS_HEALTH_URL || ROUTE_CRS.healthUrl || CRS_BASE
 const CRS_SMOKE_URL = process.env.CRS_SMOKE_URL || `${CRS_BASE}/v1/messages?beta=true`;
 const CRS_SMOKE_MODEL = process.env.CRS_SMOKE_MODEL || 'claude-sonnet-4-6';
 const DOWN_STRIKES = +(process.env.CRS_DOWN_STRIKES || 3); // ~3 min at 60s tick
-const UP_STRIKES = +(process.env.CRS_UP_STRIKES || 3);
+const UP_STRIKES = +(process.env.CRS_UP_STRIKES || 1);
 
 const ts = () => new Date().toISOString().slice(11, 19);
 const log = (m) => console.log(`${ts()} [crs-health-watch] ${m}`);

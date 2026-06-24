@@ -53,6 +53,24 @@ Each account entry:
 | `dashlaneTokenPath`   | no       | If you store the token in Dashlane: `dl://<vault-name>/password`.              |
 | `extraUsageEnabled`   | no       | Set to `true` ONLY if the account has paid overage on. Triggers safety margin. |
 | `capacityMultiplier`  | no       | Override per-account threshold (default 1.0 = standard Max 20x quota).         |
+| `crsAccountName`      | no       | CRS admin account name this vault entry maps to (for crs-token-feed / crs-priority). |
+
+## CRS pool (optional)
+
+If you run [claude-relay-service](https://github.com/anthropics/claude-relay-service) (CRS) alongside the rotator:
+
+1. Add `crsAccountName` on each account (must match the account `name` in the CRS admin UI), or supply `crs.nameByVaultKey` in `config.json`.
+2. Set `crs.enabled`, `crs.baseUrl`, and install the priority daemon: `scripts/install-crs-priority-agent.sh`.
+3. On Linux/EC2, `crs-token-feed.mjs` propagates vault tokens into CRS (systemd timer when installed).
+4. On macOS clients that reach a **remote** CRS via SSH, install the tunnel (requires `CRS_TUNNEL_SSH_HOST`):
+
+   ```bash
+   CRS_TUNNEL_SSH_HOST=your-remote-host bash scripts/install-crs-fra-tunnel.sh
+   ```
+
+   Point Claude Code at `http://127.0.0.1:3005/api` (or your `CRS_TUNNEL_LOCAL_PORT`).
+
+See `config.example.json` → `crs` block for all tunables (`policy`, `fileVaultPath`, `containerName`, thresholds).
 
 ## Keychain layout
 
