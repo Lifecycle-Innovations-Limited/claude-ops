@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.36.2] - 2026-06-24
+
+### Changed
+CRS config-driven pool scheduler, max-out policy option, token-feed and remote tunnel fixes
+
+
 ## [2.36.1] - 2026-06-23
 
 ### Added
