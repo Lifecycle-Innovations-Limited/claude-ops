@@ -1,58 +1,38 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # crs-priority-daemon.sh — single-flight wrapper for crs-priority-daemon.mjs.
-# Invoked once per tick by the launchd/systemd timer (StartInterval). Holds an
-# atomic mkdir lock so ticks never stack (macOS has no flock), skips silently
-# when CRS is down, rotates its own log, then runs ONE node tick.
+# Invoked once-per-tick by launchd/systemd (StartInterval/OnCalendar).
 set -uo pipefail
 
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SELF_DIR/../.." && pwd)}"
-DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
-LOG_DIR="$DATA_DIR/logs"
-LOG="$LOG_DIR/crs-priority.log"
-NODE="${CRS_NODE_BIN:-$(command -v node || echo /opt/homebrew/bin/node)}"
-# CRS's container port (:3000) is published on the host at either :3000 or :3005
-# depending on the deploy (this fleet maps ...:3005->3000). Honor an explicit
-# CRS_BASE; otherwise probe the known candidates and pick the first that answers
-# /health, so a host port-mapping change can't silently freeze the daemon (it
-# used to default to :3000, get 000 against a :3005-mapped relay, and exit 0
-# every tick — priority scheduling dead until someone noticed).
-BASE="${CRS_BASE:-}"
+source "$HOME/.claude/scripts/lib/once.sh" 2>/dev/null || true
+type claude_once >/dev/null 2>&1 && { claude_once crs-priority-daemon 30 || exit 0; }
 
-mkdir -p "$LOG_DIR"
+DIR="$HOME/.claude/scripts/account-rotation"
+LOG="$DIR/crs-priority-daemon.log"
+NODE="$(command -v node || echo /opt/homebrew/bin/node)"
+CRS_CONTAINER="${CRS_CONTAINER:-crs-claude-relay-1}"
 
-# Atomic single-flight lock (auto-released on exit). Stale locks >10m are reclaimed.
-LOCK="${TMPDIR:-/tmp}/crs-priority-daemon.lock"
-if ! mkdir "$LOCK" 2>/dev/null; then
-  if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
-    rmdir "$LOCK" 2>/dev/null && mkdir "$LOCK" 2>/dev/null || exit 0
-  else
-    exit 0  # another tick is running
+export CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/ops-marketplace/claude-ops}"
+CRED_STORE="$CLAUDE_PLUGIN_ROOT/lib/credential-store.sh"
+KEYCHAIN_ACCOUNT="${CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT:-$USER}"
+
+if [ -z "${CRS_ADMIN_PASSWORD:-}" ]; then
+  if [ -f "$CRED_STORE" ]; then
+    CRS_ADMIN_PASSWORD="$(bash "$CRED_STORE" get "CRS-Admin-cradmin" "$KEYCHAIN_ACCOUNT" 2>/dev/null || true)"
   fi
-fi
-trap 'rmdir "$LOCK" 2>/dev/null' EXIT
-
-# Skip silently if CRS isn't reachable (don't spam the log while the relay is down).
-# Auto-detect the host port unless CRS_BASE was set explicitly.
-if [ -n "$BASE" ]; then
-  curl -sf -o /dev/null --max-time 5 "$BASE/health" || exit 0
-else
-  for cand in http://127.0.0.1:3005 http://127.0.0.1:3000; do
-    if curl -sf -o /dev/null --max-time 5 "$cand/health"; then BASE="$cand"; break; fi
-  done
-  [ -n "$BASE" ] || exit 0  # relay unreachable on every candidate
-fi
-export CRS_BASE="$BASE"  # hand the resolved base to the node tick
-
-# Rotate log past ~2MB.
-if [ -f "$LOG" ] && [ "$(wc -c < "$LOG" 2>/dev/null || echo 0)" -gt 2097152 ]; then
-  mv "$LOG" "$LOG.1"
+  if [ -z "${CRS_ADMIN_PASSWORD:-}" ] && command -v security >/dev/null 2>&1; then
+    CRS_ADMIN_PASSWORD="$(security find-generic-password -a "$USER" -s CRS-Admin-cradmin -w 2>/dev/null || true)"
+  fi
+  if [ -z "${CRS_ADMIN_PASSWORD:-}" ] && command -v docker >/dev/null 2>&1; then
+    CRS_ADMIN_PASSWORD="$(docker inspect "$CRS_CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n 's/^ADMIN_PASSWORD=//p' | head -1 || true)"
+  fi
+  export CRS_ADMIN_PASSWORD
 fi
 
-# A transient node failure (e.g. CRS login timeout under a 529 storm) is logged
-# but must NOT surface as a launchd job failure — the next tick recovers. Always
-# exit 0 so launchctl status stays clean; real errors are in the log.
-CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" CLAUDE_PLUGIN_DATA_DIR="$DATA_DIR" \
-  "$NODE" "$SELF_DIR/crs-priority-daemon.mjs" "$@" >> "$LOG" 2>&1 || \
-  echo "$(date -u +%H:%M:%S) [crs-priority] tick failed (transient — see above); recovering next tick" >> "$LOG"
-exit 0
+curl -sf -o /dev/null --max-time 5 http://127.0.0.1:3005/health || exit 0
+
+if [ -f "$LOG" ]; then
+  LOGSIZE="$(stat -c%s "$LOG" 2>/dev/null || stat -f%z "$LOG" 2>/dev/null || echo 0)"
+  [ "$LOGSIZE" -gt 2097152 ] && mv "$LOG" "$LOG.1"
+fi
+
+"$NODE" "$DIR/crs-priority-daemon.mjs" >> "$LOG" 2>&1

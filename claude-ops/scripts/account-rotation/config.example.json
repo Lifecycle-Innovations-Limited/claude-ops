@@ -4,6 +4,7 @@
   "_account_schema_example": {
     "email": "user@example.com",
     "label": "optional-disambiguator",
+    "crsAccountName": "pool-example",
     "orgName": "Optional Workspace Name",
     "orgUuid": "optional-workspace-uuid",
     "dashlaneTokenPath": "dl://claude-max-user@example.com/password",
@@ -28,17 +29,25 @@
   "refreshSession": false,
   "notifyOnRotation": true,
   "crs": {
-    "_comment": "Optional: auto-prioritization for a claude-relay-service (CRS) pool. CRS load-balances across many Claude accounts at once and exposes a per-account 'schedulable' flag. The crs-priority daemon flips that flag from live utilization so the pool avoids near-maxed accounts and re-enables them on recovery. Off by default — set enabled=true and install via scripts/install-crs-priority-agent.sh. Admin password is NOT stored here: set $CRS_ADMIN_PASSWORD or `lib/credential-store.sh set CRS-Admin-<adminUser> \"$USER\" '<pw>'`.",
+    "_comment": "Optional: claude-relay-service (CRS) pool integration. Off by default — set enabled=true and install via scripts/install-crs-priority-agent.sh. Map each rotator account to its CRS row with crsAccountName on the account entry (or crs.nameByVaultKey). Admin password is NOT stored here: set $CRS_ADMIN_PASSWORD or credential-store CRS-Admin-<adminUser>.",
     "enabled": false,
-    "baseUrl": "http://127.0.0.1:3000",
+    "policy": "conservative",
+    "_policy_note": "conservative (default) deprioritizes on utilization/session warnings; max-out keeps accounts schedulable until genuine rate-limit or overload (util % is telemetry only). Override with $CRS_POLICY.",
+    "baseUrl": "http://127.0.0.1:3005",
+    "fileVaultPath": "~/.claude/.credentials.json",
+    "containerName": "crs-claude-relay-1",
     "adminUser": "cradmin",
     "adminPasswordEnv": "CRS_ADMIN_PASSWORD",
+    "policy": "conservative",
+    "nameByVaultKey": {
+      "user@example.com": "pool-example"
+    },
     "off5h": 90,
     "off7d": 95,
     "on5h": 70,
     "on7d": 85,
     "floor": 3,
     "freshMinutes": 15,
-    "_thresholds_note": "off* = deprioritize when fresh 5h/7d utilization reaches these; on* = re-enable only when all utilization drops below these (hysteresis prevents flapping). floor = minimum usable (schedulable, not-rate-limited) accounts kept even under soft pressure. freshMinutes = max age of claudeUsage data trusted for proactive deprioritize (stale/absent usage never drives a re-enable; real-time sessionWindowStatus + rate-limit + overload always do)."
+    "_thresholds_note": "Legacy conservative thresholds (off/on/floor) apply only when policy=conservative. Default max-out policy keeps accounts schedulable until genuine rate-limit or overload; utilization % is telemetry only. freshMinutes = max age of claudeUsage trusted for secondary signals."
   }
 }
