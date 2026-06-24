@@ -125,7 +125,7 @@ function adminPassword() {
   } catch {}
   throw new Error(
     `CRS admin password unavailable — set $CRS_ADMIN_PASSWORD, or store it via:\n` +
-    `  bash "${credentialStorePath()}" set CRS-Admin-${ADMIN_USER} "$USER" '<password>'`
+      `  bash "${credentialStorePath()}" set CRS-Admin-${ADMIN_USER} "$USER" '<password>'`,
   );
 }
 
@@ -165,17 +165,35 @@ function readOauthToken(email) {
   const cred = credentialStorePath();
   for (const get of [
     () => execFileSync('bash', [cred, 'get', `${USAGE_TOKEN_SVC}${email}`, acct], EXEC_QUIET),
-    () => execFileSync('security', ['find-generic-password', '-a', acct, '-s', `${USAGE_TOKEN_SVC}${email}`, '-w'], EXEC_QUIET),
+    () =>
+      execFileSync(
+        'security',
+        ['find-generic-password', '-a', acct, '-s', `${USAGE_TOKEN_SVC}${email}`, '-w'],
+        EXEC_QUIET,
+      ),
   ]) {
-    try { const j = JSON.parse(get().trim()); const t = j?.claudeAiOauth?.accessToken; if (t) return t; } catch {}
+    try {
+      const j = JSON.parse(get().trim());
+      const t = j?.claudeAiOauth?.accessToken;
+      if (t) return t;
+    } catch {}
   }
   for (const key of vaultLookupKeys(email)) {
     if (key === email) continue;
     for (const get of [
       () => execFileSync('bash', [cred, 'get', `${USAGE_TOKEN_SVC}${key}`, acct], EXEC_QUIET),
-      () => execFileSync('security', ['find-generic-password', '-a', acct, '-s', `${USAGE_TOKEN_SVC}${key}`, '-w'], EXEC_QUIET),
+      () =>
+        execFileSync(
+          'security',
+          ['find-generic-password', '-a', acct, '-s', `${USAGE_TOKEN_SVC}${key}`, '-w'],
+          EXEC_QUIET,
+        ),
     ]) {
-      try { const j = JSON.parse(get().trim()); const t = j?.claudeAiOauth?.accessToken; if (t) return t; } catch {}
+      try {
+        const j = JSON.parse(get().trim());
+        const t = j?.claudeAiOauth?.accessToken;
+        if (t) return t;
+      } catch {}
     }
   }
   return null;
@@ -254,7 +272,12 @@ function genuineOverload(a, now = Date.now()) {
 async function jfetch(path, opts = {}) {
   const r = await fetch(`${BASE}${path}`, opts);
   const txt = await r.text();
-  let body; try { body = JSON.parse(txt); } catch { body = txt; }
+  let body;
+  try {
+    body = JSON.parse(txt);
+  } catch {
+    body = txt;
+  }
   return { status: r.status, body };
 }
 
@@ -281,7 +304,11 @@ async function clearStaleCooldowns(auth, accts) {
   for (const a of accts) {
     if (!rateLimitLooksStale(a, now)) continue;
     const mins = a.rateLimitStatus?.minutesRemaining ?? '?';
-    if (DRY) { log(`[dry] clear stale RL ${a.name} (mins=${mins})`); cleared++; continue; }
+    if (DRY) {
+      log(`[dry] clear stale RL ${a.name} (mins=${mins})`);
+      cleared++;
+      continue;
+    }
     const res = await jfetch(`/admin/claude-accounts/${a.id}/reset-status`, { method: 'POST', headers: auth });
     if (res.status >= 200 && res.status < 300) {
       cleared++;
@@ -299,9 +326,15 @@ async function recoverSchedulableAfterClear(auth, accts) {
     if (a.rateLimitStatus?.isRateLimited || a.opusRateLimitStatus?.isRateLimited) continue;
     if (a.overloadStatus?.isOverloaded) continue;
     if (!accountTokenFresh(a, now)) continue;
-    if (DRY) { log(`[dry] re-enable ${a.name} after stale clear`); enabled++; continue; }
+    if (DRY) {
+      log(`[dry] re-enable ${a.name} after stale clear`);
+      enabled++;
+      continue;
+    }
     const put = await jfetch(`/admin/claude-accounts/${a.id}/toggle-schedulable`, {
-      method: 'PUT', headers: auth, body: JSON.stringify({ schedulable: true }),
+      method: 'PUT',
+      headers: auth,
+      body: JSON.stringify({ schedulable: true }),
     });
     if (put.status >= 200 && put.status < 300) {
       enabled++;
@@ -324,9 +357,7 @@ function decideMaxOut(accts, nowMs) {
     const cur = a.schedulable !== false;
     const tokenExpiresAt = Number(a.tokenExpiresAt || a.expiresAt || 0);
     const staleToken =
-      !Number.isFinite(tokenExpiresAt) ||
-      tokenExpiresAt <= 0 ||
-      tokenExpiresAt <= nowMs + TOKEN_MIN_FRESH_MS;
+      !Number.isFinite(tokenExpiresAt) || tokenExpiresAt <= 0 || tokenExpiresAt <= nowMs + TOKEN_MIN_FRESH_MS;
     const rl = genuineRateLimit(a, nowMs);
     const overloaded = genuineOverload(a, nowMs);
 
@@ -451,10 +482,16 @@ function decide(accts) {
 
 // ── main ─────────────────────────────────────────────────────────────────────
 async function main() {
-  if (C.enabled === false && !STATUS && !DRY) { log('crs.enabled=false — skipping tick'); return; }
+  if (C.enabled === false && !STATUS && !DRY) {
+    log('crs.enabled=false — skipping tick');
+    return;
+  }
   const auth = await login();
   let accts = await getAccounts(auth);
-  if (!accts.length) { log('no active claude accounts'); return; }
+  if (!accts.length) {
+    log('no active claude accounts');
+    return;
+  }
   const cleared = await clearStaleCooldowns(auth, accts);
   if (cleared) {
     accts = await getAccounts(auth);
@@ -467,7 +504,11 @@ async function main() {
   }
   // Authoritative quota: query Anthropic /oauth/usage directly per account (parallel,
   // read-only). Falls back to CRS cache + sessionWindowStatus when a token is absent/stale.
-  await Promise.all(accts.map(async (a) => { a._liveUsage = await liveUsage(accountVaultKey(a)); }));
+  await Promise.all(
+    accts.map(async (a) => {
+      a._liveUsage = await liveUsage(accountVaultKey(a));
+    }),
+  );
   const liveN = accts.filter((a) => a._liveUsage).length;
   const decisions = decide(accts);
 
@@ -475,7 +516,9 @@ async function main() {
     console.log(`CRS pool @ ${BASE} — ${decisions.filter((d) => d.cur).length}/${decisions.length} schedulable`);
     for (const d of decisions.sort((a, b) => (a.cur === b.cur ? 0 : a.cur ? -1 : 1))) {
       const flags = [d.rl && 'RL', d.overloaded && 'OVERLOAD', d.sw].filter(Boolean).join(' ');
-      console.log(`  ${d.cur ? '●' : '○'} ${d.a.name.padEnd(26)} sched=${d.cur} 5h=${String(d.u5).padStart(3)}%  ${flags}`);
+      console.log(
+        `  ${d.cur ? '●' : '○'} ${d.a.name.padEnd(26)} sched=${d.cur} 5h=${String(d.u5).padStart(3)}%  ${flags}`,
+      );
     }
     return;
   }
@@ -484,15 +527,25 @@ async function main() {
   for (const d of decisions) {
     if (d.desired === d.cur) continue;
     changed++;
-    if (DRY) { log(`[dry] ${d.a.name}: ${d.cur}→${d.desired} (${d.reason})`); continue; }
+    if (DRY) {
+      log(`[dry] ${d.a.name}: ${d.cur}→${d.desired} (${d.reason})`);
+      continue;
+    }
     const put = await jfetch(`/admin/claude-accounts/${d.a.id}/toggle-schedulable`, {
-      method: 'PUT', headers: auth, body: JSON.stringify({ schedulable: d.desired }),
+      method: 'PUT',
+      headers: auth,
+      body: JSON.stringify({ schedulable: d.desired }),
     });
     log(`${d.a.name}: schedulable ${d.cur}→${d.desired} (${d.reason}) [HTTP ${put.status}]`);
   }
   const on = decisions.filter((d) => d.desired).map((d) => d.a.name);
   const off = decisions.filter((d) => !d.desired).map((d) => `${d.a.name}(${d.sw || (d.rl ? 'RL' : '?')})`);
-  log(`tick: ${changed} change(s). live-quota=${liveN}/${decisions.length} schedulable=${on.length} [${on.join(',')}] | off=[${off.join(',')}]`);
+  log(
+    `tick: ${changed} change(s). live-quota=${liveN}/${decisions.length} schedulable=${on.length} [${on.join(',')}] | off=[${off.join(',')}]`,
+  );
 }
 
-main().catch((e) => { log(`ERROR: ${e.message}`); process.exit(1); });
+main().catch((e) => {
+  log(`ERROR: ${e.message}`);
+  process.exit(1);
+});
