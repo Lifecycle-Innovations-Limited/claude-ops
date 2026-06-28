@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.36.4] - 2026-06-28
+
+### Changed
+Remove stale ledger skill
+
+
 ## [2.36.3] - 2026-06-28
 
 ### Changed
