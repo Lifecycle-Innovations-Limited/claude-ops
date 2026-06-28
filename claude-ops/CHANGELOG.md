@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.36.5] - 2026-06-28
+
+### Changed
+ops-yolo: always consolidate the four C-suite analyses into one master executive-summary.md per run (TL;DR, consensus action, cross-cutting themes, prioritized auto/confirm action list); per-officer files become supporting detail.
+
+
 ## [2.37.0] - 2026-06-28
 
 ### Changed
