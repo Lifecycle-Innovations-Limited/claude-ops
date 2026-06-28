@@ -12,6 +12,16 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # CLAUDE_PLUGIN_ROOT is read by ops-daemon.sh and the services it spawns.
 # Override at install time if your marketplace dir lives elsewhere.
 Environment=CLAUDE_PLUGIN_ROOT=%h/.claude/plugins/marketplaces/ops-marketplace/claude-ops
+# memory-extractor (and any other gog-backed service the daemon spawns) calls
+# `gog gmail search` to collect email. gog stores its OAuth tokens in a file
+# keyring encrypted with GOG_KEYRING_PASSWORD; without GOG_KEYRING_PASSWORD +
+# GOG_KEYRING_BACKEND=file in the unit env, gog cannot decrypt them and returns
+# no data, so extraction silently logs "gog returned no data" and skips email.
+# These creds live in the same mcp-secrets.env used by the pocket/whatsapp
+# helper units. Optional (-) so installs without the file still boot; gog
+# resolves the default account from ~/.config/gogcli/config.json, so no
+# GOG_ACCOUNT is required here.
+EnvironmentFile=-%h/.config/systemd/env/mcp-secrets.env
 ExecStart=/bin/bash %h/.claude/plugins/marketplaces/ops-marketplace/claude-ops/scripts/ops-daemon.sh
 Restart=on-failure
 RestartSec=10
