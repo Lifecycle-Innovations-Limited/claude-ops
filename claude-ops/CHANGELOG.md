@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.36.3] - 2026-06-28
+
+### Changed
+Fixed: claude-ops-daemon.service now loads the gog file-keyring env via EnvironmentFile (mcp-secrets.env), so memory-extractor can decrypt Gmail OAuth tokens and collect email. Resolves silent "gog returned no data — nothing to extract" skips on headless Linux installs (#636).
+
+
 ## [2.36.2] - 2026-06-24
 
 ### Changed
