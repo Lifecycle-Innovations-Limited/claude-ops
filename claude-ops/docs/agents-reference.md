@@ -4,7 +4,7 @@
 
 _All 21 agents that power claude-ops — scanners, fixers, C-suite analysts, and the daemon brain_
 
-[![version](https://img.shields.io/badge/version-2.36.3-blue)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-2.36.4-blue)](../CHANGELOG.md)
 [![agents](https://img.shields.io/badge/agents-21-8b5cf6)](.)
 [![sonnet](https://img.shields.io/badge/model-sonnet--4--6-6366f1)](.)
 [![opus](https://img.shields.io/badge/model-opus--4--6-ef4444)](.)
