@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.37.0] - 2026-06-28
+
+### Changed
+Add Sonos audio control to ops-home: registers the local Sonos toolchain (soco-cli, @svrooij/sonos-cli, steipete Go CLI, node-sonos-http-api bridge, sonos-ts-mcp MCP server) as reusable, agent-invokable capabilities with play/pause/volume/group/discover routing.
+
+
 ## [2.36.4] - 2026-06-28
 
 ### Changed
