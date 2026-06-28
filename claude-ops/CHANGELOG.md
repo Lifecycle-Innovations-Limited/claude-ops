@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.38.1] - 2026-06-28
+
+### Changed
+Publish /ops:ops-mac macOS diagnose-and-fix command (skill + bin/ops-mac dispatcher bundling the macos-toolkit CLI suite).
+
+
 ## [2.38.0] - 2026-06-28
 
 ### Added
