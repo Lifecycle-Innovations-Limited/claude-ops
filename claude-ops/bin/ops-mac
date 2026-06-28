@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+# ops-mac — Unified macOS diagnose-and-fix dispatcher for the claude-ops plugin.
+#
+# Wraps the `macos-toolkit` CLI suite (machealth, netwhiz, pstop, macdog,
+# lanchr, macbroom, macctl, macfig, updater) behind ONE entrypoint, plus a
+# self-installer so the suite is provisioned on first use. The companion
+# skill (skills/ops-mac/SKILL.md) drives the UX, confirmations (Rule 5), and
+# mobile formatting (Rule 7); this script is the single source of truth for
+# probes, the aggregate audit, and the install path.
+#
+# Design goals:
+#   - macOS only. Hard-guards on non-Darwin and exits cleanly.
+#   - Idempotent install. `ensure` is safe to call repeatedly; it only does
+#     work for missing pieces (plugin marketplace, plugin, brew tap, tools).
+#   - Headless-safe. The toolkit's pretty TUI tables render EMPTY when stdout
+#     is not a TTY; this script forces `--json` for machine consumers and
+#     normalizes output so an agent always gets data.
+#   - Hang-guarded. `machealth check`/`diagnose` can block forever on a stuck
+#     Time Machine / iCloud probe; every machealth call is wrapped in a hard
+#     `timeout` so the dispatcher never wedges.
+#   - Read-only by default. Only `clean`/`fix`/`install`/`update` mutate state;
+#     everything else is pure diagnostics.
+#   - No secrets. Emits only health/diagnostic data, never credentials.
+#
+# Usage:
+#   ops-mac                      # banner + tool inventory
+#   ops-mac ensure               # install macos-toolkit suite if missing
+#   ops-mac audit [--json]       # aggregate read-only baseline (all probes)
+#   ops-mac health [--json]      # machealth check (timeout-guarded)
+#   ops-mac net [wifi|--json]    # netwhiz network diagnostics
+#   ops-mac disk [--json]        # macbroom cache scan (safe categories)
+#   ops-mac procs [--json]       # pstop top processes
+#   ops-mac security [--json]    # macdog security/privacy audit
+#   ops-mac launchd [--json]     # lanchr doctor (launch agent health)
+#   ops-mac power                # macctl power/display/audio status
+#   ops-mac defaults [args]      # macfig hidden-preferences passthrough
+#   ops-mac update               # updater app-update check
+#   ops-mac run <tool> [args...] # raw passthrough to any toolkit binary
+
+set -uo pipefail
+
+# ─── OS guard ────────────────────────────────────────────────────────────────
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "ops-mac: macOS only (detected $(uname -s)). For Linux/WSL use /ops:speedup." >&2
+  exit 3
+fi
+
+# Machealth hang ceiling (seconds). Its parallel composite can block on a
+# stuck Time Machine / iCloud probe — never let that wedge the dispatcher.
+MACHEALTH_TIMEOUT="${OPS_MAC_MACHEALTH_TIMEOUT:-25}"
+
+TOOLS=(machealth netwhiz pstop macdog lanchr macbroom macctl macfig updater termail)
+WANT_JSON=0
+[[ " $* " == *" --json "* ]] && WANT_JSON=1
+
+# Resolve a `timeout` implementation (coreutils gtimeout on brew, or none).
+_timeout() {
+  local secs="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then timeout "$secs" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then gtimeout "$secs" "$@"
+  else "$@"; fi
+}
+
+_have() { command -v "$1" >/dev/null 2>&1; }
+
+# Resolve the real claude binary (the interactive shell wraps it in a
+# _claude_dispatch function that isn't present in non-login shells).
+_claude_bin() {
+  if [[ -x "$HOME/.local/bin/claude" ]]; then echo "$HOME/.local/bin/claude"
+  elif command -v claude >/dev/null 2>&1; then command -v claude
+  else echo ""; fi
+}
+
+# ─── inventory ───────────────────────────────────────────────────────────────
+missing_tools() {
+  local m=()
+  for t in machealth netwhiz pstop macdog lanchr macbroom macctl macfig updater; do
+    _have "$t" || m+=("$t")
+  done
+  printf '%s\n' "${m[@]}"
+}
+
+inventory() {
+  if [[ "$WANT_JSON" == 1 ]]; then
+    printf '{"installed":{'
+    local first=1
+    for t in "${TOOLS[@]}"; do
+      [[ $first == 1 ]] || printf ','
+      first=0
+      if _have "$t"; then printf '"%s":true' "$t"; else printf '"%s":false' "$t"; fi
+    done
+    printf '}}\n'
+    return
+  fi
+  echo "OPS ► MAC — macos-toolkit dispatcher"
+  echo "host: $(sw_vers -productName 2>/dev/null) $(sw_vers -productVersion 2>/dev/null) ($(uname -m))"
+  echo "tools:"
+  for t in "${TOOLS[@]}"; do
+    if _have "$t"; then echo "  ✓ $t"; else echo "  ✗ $t (not installed — run: ops-mac ensure)"; fi
+  done
+}
+
+# ─── self-installer ──────────────────────────────────────────────────────────
+ensure() {
+  local cb; cb="$(_claude_bin)"
+  echo "▸ ensuring macos-toolkit plugin + CLIs…"
+
+  # 1. Plugin marketplace + plugin (best-effort; needs the claude CLI).
+  if [[ -n "$cb" ]]; then
+    if ! "$cb" plugin marketplace list 2>/dev/null | grep -qi "macos-toolkit"; then
+      echo "  + adding marketplace lu-zhengda/macos-toolkit"
+      "$cb" plugin marketplace add https://github.com/lu-zhengda/macos-toolkit 2>&1 | tail -1
+    fi
+    if ! "$cb" plugin list 2>/dev/null | grep -qi "macos-toolkit"; then
+      echo "  + installing plugin macos-toolkit@macos-toolkit"
+      "$cb" plugin install macos-toolkit@macos-toolkit 2>&1 | tail -1
+    fi
+  else
+    echo "  ! claude CLI not found — skipping plugin registration (CLIs still installable)"
+  fi
+
+  # 2. Homebrew tap + tools.
+  if ! _have brew; then
+    echo "  ! Homebrew not found. Install from https://brew.sh then re-run: ops-mac ensure" >&2
+    return 4
+  fi
+  if ! brew tap 2>/dev/null | grep -qi "lu-zhengda/tap"; then
+    echo "  + tapping lu-zhengda/tap"
+    brew tap lu-zhengda/tap 2>&1 | tail -1
+  fi
+  # Casks from this tap are untrusted until explicitly trusted.
+  brew trust lu-zhengda/tap >/dev/null 2>&1 || true
+
+  local need; need="$(missing_tools)"
+  if [[ -z "$need" ]]; then
+    echo "  ✓ all CLIs already installed"
+  else
+    echo "  + installing:" $need
+    # shellcheck disable=SC2046
+    brew install $(for t in $need; do echo "lu-zhengda/tap/$t"; done) 2>&1 | grep -E "successfully installed|Error|Warning" | tail -20
+  fi
+  echo "✔ ensure complete"
+}
+
+require_tool() {
+  if ! _have "$1"; then
+    echo "ops-mac: '$1' not installed. Run: ops-mac ensure" >&2
+    exit 5
+  fi
+}
+
+# ─── individual probes ───────────────────────────────────────────────────────
+p_health() {
+  require_tool machealth
+  if [[ "$WANT_JSON" == 1 ]]; then
+    _timeout "$MACHEALTH_TIMEOUT" machealth check 2>/dev/null \
+      || echo '{"error":"machealth timed out (likely a stuck Time Machine/iCloud probe)","probe":"machealth check","timeout_s":'"$MACHEALTH_TIMEOUT"'}'
+  else
+    _timeout "$MACHEALTH_TIMEOUT" machealth check --human 2>&1 \
+      || echo "machealth: timed out after ${MACHEALTH_TIMEOUT}s — likely a stuck Time Machine / iCloud probe. Try the other probes (security/launchd/disk/net) which are reliable."
+  fi
+}
+
+p_net() {
+  require_tool netwhiz
+  case "${1:-info}" in
+    wifi) netwhiz wifi 2>&1 ;;
+    --json) netwhiz info 2>&1 ;;   # netwhiz info is already structured-ish
+    *) netwhiz info 2>&1 ;;
+  esac
+}
+
+p_disk() {
+  require_tool macbroom
+  # Human table renders empty when headless → always go through --json there.
+  if [[ "$WANT_JSON" == 1 || ! -t 1 ]]; then
+    macbroom scan --caches --json 2>/dev/null || echo '{"error":"macbroom scan failed"}'
+  else
+    macbroom scan --caches 2>&1
+  fi
+}
+
+p_procs() {
+  require_tool pstop
+  if [[ "$WANT_JSON" == 1 ]]; then pstop top --n 10 --json 2>/dev/null || pstop top --n 10 2>&1
+  else pstop top --n 10 2>&1; fi
+}
+
+p_security() {
+  require_tool macdog
+  if [[ "$WANT_JSON" == 1 ]]; then macdog audit --json 2>/dev/null || macdog audit 2>&1
+  else macdog audit 2>&1; fi
+}
+
+p_launchd() {
+  require_tool lanchr
+  if [[ "$WANT_JSON" == 1 ]]; then lanchr doctor --json 2>/dev/null || lanchr doctor 2>&1
+  else lanchr doctor 2>&1; fi
+}
+
+p_power()    { require_tool macctl; macctl power status 2>&1; }
+p_defaults() { require_tool macfig; shift || true; macfig "$@" 2>&1; }
+p_update()   { require_tool updater; updater check 2>&1; }
+
+# ─── aggregate audit ─────────────────────────────────────────────────────────
+audit() {
+  if [[ "$WANT_JSON" == 1 ]]; then
+    # Compose one JSON object from the reliable probes. machealth is
+    # timeout-guarded and may degrade to an error stub.
+    local health sec disk
+    health="$(WANT_JSON=1 p_health)"
+    sec="$(macdog audit --json 2>/dev/null || echo 'null')"
+    disk="$(macbroom scan --caches --json 2>/dev/null || echo 'null')"
+    printf '{"generated_at":"%s","host":"%s %s","arch":"%s","health":%s,"security":%s,"disk":%s}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      "$(sw_vers -productName 2>/dev/null)" "$(sw_vers -productVersion 2>/dev/null)" \
+      "$(uname -m)" "${health:-null}" "${sec:-null}" "${disk:-null}"
+    return
+  fi
+
+  echo "════════════════════════════════════════════"
+  echo " OPS ► MAC AUDIT — $(sw_vers -productVersion 2>/dev/null) ($(uname -m)) — $(date -u +%H:%MZ)"
+  echo "════════════════════════════════════════════"
+  echo
+  echo "── SECURITY (macdog) ──"; p_security; echo
+  echo "── LAUNCH AGENTS (lanchr doctor) ──"; p_launchd 2>&1 | head -30; echo
+  echo "── TOP PROCESSES (pstop) ──"; p_procs 2>&1 | head -8; echo
+  echo "── NETWORK (netwhiz) ──"; p_net info 2>&1 | head -15; echo
+  echo "── DISK RECLAIMABLE (macbroom caches) ──"
+  if _have jq; then
+    macbroom scan --caches --json 2>/dev/null \
+      | jq -r '.categories[]? | "  \(.name): \((.size/1e9*100|round)/100) GB (\(.items) items, \(.risk))"' 2>/dev/null \
+      || echo "  (run: ops-mac disk)"
+  else
+    echo "  (install jq for sizes, or run: ops-mac disk)"
+  fi
+  echo
+  echo "── SYSTEM HEALTH (machealth, ${MACHEALTH_TIMEOUT}s cap) ──"; p_health
+  echo
+  echo "Tip: this is read-only. Remediate with /ops:mac fix (firewall, stale daemons, cache clean)."
+}
+
+# ─── dispatch ────────────────────────────────────────────────────────────────
+cmd="${1:-}"; [[ $# -gt 0 ]] && shift || true
+case "$cmd" in
+  ""|inventory|status) inventory ;;
+  ensure|install)      ensure ;;
+  audit)               audit ;;
+  health)              p_health ;;
+  net|network)         p_net "${1:-info}" ;;
+  disk)                p_disk ;;
+  procs|processes)     p_procs ;;
+  security|sec)        p_security ;;
+  launchd|launch)      p_launchd ;;
+  power)               p_power ;;
+  defaults)            p_defaults "$@" ;;
+  update|updates)      p_update ;;
+  run)                 t="${1:-}"; shift || true; require_tool "$t"; "$t" "$@" ;;
+  -h|--help|help)
+    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *)
+    echo "ops-mac: unknown command '$cmd'. Try: ensure | audit | health | net | disk | procs | security | launchd | power | update | run <tool>" >&2
+    exit 2
+    ;;
+esac
