@@ -206,7 +206,26 @@ Uses `agents/yolo-coo.md`. Writes `/tmp/yolo-[session]/coo-analysis.md`.
 
 ## Phase 3 — Hard Truths Report (orchestrator synthesis)
 
-**This skill (the main orchestrator) is the synthesizer** — NOT `yolo-ceo`. After all 4 parallel agents complete and have written their analysis files to `/tmp/yolo-[session]/{ceo,cto,cfo,coo}-analysis.md`, read all four files here in the main context and synthesize them into a unified report:
+**This skill (the main orchestrator) is the synthesizer** — NOT `yolo-ceo`. After all 4 parallel agents complete and have written their analysis files to `/tmp/yolo-[session]/{ceo,cto,cfo,coo}-analysis.md`, read all four files here in the main context and synthesize them into a unified report.
+
+### Phase 3a — Consolidated master executive report (MANDATORY)
+
+**Every YOLO run MUST produce one consolidated master executive report — no exceptions.** This is the canonical output of the analysis; the four per-officer files are supporting detail. Do this BEFORE rendering the on-screen Hard Truths block:
+
+1. Read all four `/tmp/yolo-[session]/{ceo,cto,cfo,coo}-analysis.md` files in the main context.
+2. Synthesize them into a single `executive-summary.md` and write it to **`/tmp/yolo-[session]/executive-summary.md`**. Never skip this write, even if one officer file is missing — note any missing officer inline and consolidate the rest.
+3. The master report MUST contain, in this order:
+   - **Title + timestamp** — `YOLO Executive Summary — [date]`.
+   - **TL;DR** — 2–3 sentences a busy founder can read in 10 seconds.
+   - **Consensus #1 action** — the single most important thing today, with the officers who back it.
+   - **Per-officer hard truths** — the 1–2 sharpest truths from each of CEO / CTO / CFO / COO, summarized (not pasted verbatim).
+   - **Cross-cutting themes** — issues ≥2 officers raised independently (these are the highest-signal items).
+   - **Prioritized action list** — ranked, each tagged `[auto]` (YOLO can do it) or `⚠️ REQUIRES CONFIRMATION` (needs human sign-off), with the source officer(s).
+   - **What's healthy** — 1–2 lines so the report isn't all alarm.
+   - **Source files** — relative links to the four officer files.
+4. The on-screen Hard Truths block below is the SHORT view of this same report — keep the two consistent (same consensus, same #1 action).
+
+Render the on-screen report:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -226,7 +245,10 @@ Uses `agents/yolo-coo.md`. Writes `/tmp/yolo-[session]/coo-analysis.md`.
  [single most important action, no sugar-coating]
 ──────────────────────────────────────────────────────
 
- Full analysis files saved to:
+ Master executive report (consolidated):
+ /tmp/yolo-[session]/executive-summary.md
+
+ Supporting per-officer analyses:
  /tmp/yolo-[session]/ceo-analysis.md
  /tmp/yolo-[session]/cto-analysis.md
  /tmp/yolo-[session]/cfo-analysis.md
@@ -247,19 +269,20 @@ Use **batched AskUserQuestion calls** (max 4 options each):
 AskUserQuestion call 1:
 
 ```
-  [Read CEO analysis]
-  [Read CTO analysis]
-  [Read CFO analysis]
+  [Read master executive report]
+  [Read a single officer analysis]
+  [Execute top recommendation now]
   [More...]
 ```
 
 AskUserQuestion call 2 (only if "More..."):
 
 ```
-  [Read COO analysis]
-  [Execute top recommendation now]
   [Type YOLO to go autonomous]
+  [Stop here]
 ```
+
+If the user picks "Read a single officer analysis", present the four officer files (CEO / CTO / CFO / COO) in a follow-up call. The master executive report is the default/recommended read — it already consolidates all four.
 
 ---
 
@@ -313,7 +336,7 @@ Report final summary when done.
 
 If `$ARGUMENTS` is `analyze` or empty, go straight to Phase 1.
 If `$ARGUMENTS` is `YOLO`, skip to Phase 4.
-If `$ARGUMENTS` is `report`, skip to Phase 3 (reads existing analysis files if present).
+If `$ARGUMENTS` is `report`, skip to Phase 3 — read the existing `/tmp/yolo-[session]/executive-summary.md` master report if present (fall back to re-consolidating from the four officer files), and re-render the on-screen Hard Truths block from it.
 
 ---
 
