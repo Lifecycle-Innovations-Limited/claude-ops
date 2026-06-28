@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.38.0] - 2026-06-28
+
+### Added
+ops-mac: new `/ops:ops-mac` skill + `bin/ops-mac` dispatcher — a unified macOS diagnose-and-fix command center that bundles the [macos-toolkit](https://github.com/lu-zhengda/macos-toolkit) CLI suite (machealth, netwhiz, pstop, macdog, lanchr, macbroom, macctl, macfig, updater) behind one entrypoint. Self-installs the suite on first use (plugin marketplace + Homebrew tap), runs a read-only aggregate audit (security, launch agents, processes, network, disk, system health), and applies guarded fixes (firewall, stale daemons, cache cleanup) with per-action confirmation (Rule 5). Hardened against two toolkit quirks: machealth's hang-prone composite probe is timeout-guarded, and headless TTY-empty table rendering is bypassed via forced `--json`. macOS-only (exits cleanly elsewhere; complements cross-platform `/ops:speedup`).
+
 ## [2.36.5] - 2026-06-28
 
 ### Changed
