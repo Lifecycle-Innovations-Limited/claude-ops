@@ -190,6 +190,7 @@ homey_call() {
 | presence, who, home                     | Presence              |
 | alarm, alarms, arm, disarm, security    | Alarms / security     |
 | health, diagnose, outage                | Health / outage scan  |
+| sonos, speaker, music, play, volume, group | Sonos audio control   |
 | setup, configure, init, token           | Setup flow            |
 
 ---
@@ -697,6 +698,80 @@ next: /ops-home devices | reconfigure plejd
 If any MASS OUTAGE is flagged, surface it at the top of the default STATUS dashboard as well (after the DEVICES line), so the user sees it without needing to run `/ops-home health` explicitly.
 
 Cross-channel: if `MASS OUTAGE` count > 50 devices OR a security-related integration is down (alarm panel, locks, cameras), suggest piping to `/ops:ops-comms` (Rule 6 — stage draft, never auto-send).
+
+---
+
+## SONOS (`sonos`, `speaker`, `music`, `play`, `volume`, `group`)
+
+Sonos multi-room audio is controlled independently of Homey, directly over the
+LAN via UPnP/SOAP + SSDP discovery. A full reusable toolchain is installed on
+this machine (set up 2026-06-28). Pick the layer that fits the task — they are
+redundant control paths over the same speakers, so any one works.
+
+### Installed tooling (all local, all reusable)
+
+**CLIs** (use for quick one-shot control from Bash; each has a distinct name to
+avoid the `sonos` collision):
+
+| Command          | Tool                     | Language | Best for                                        |
+| ---------------- | ------------------------ | -------- | ----------------------------------------------- |
+| `soco`           | soco-cli (avantrec)      | Python   | Scriptable control, macros, loops, HTTP server  |
+| `sonos-svrooij`  | @svrooij/sonos-cli       | Node     | Modern TS lib wrapper, queue/sleep-timer/EQ     |
+| `sonos-steipete` | steipete/sonoscli (`sonos` on PATH) | Go | Fast discovery/status, Spotify + SMAPI search   |
+
+```bash
+sonos-steipete discover                       # list speakers on the LAN
+soco "Kitchen" volume 30                       # set Kitchen to volume 30
+soco "Living Room" play                         # resume playback
+sonos-svrooij --help                            # queue / sleep-timer / EQ commands
+soco-discover                                   # cache the speaker topology
+```
+
+**HTTP API bridge** — `jishi/node-sonos-http-api` at
+`~/Projects/sonos-tools/node-sonos-http-api` (default port `5005`). Start with
+`node server.js` (background it). Gives a simple REST surface for automations:
+
+```bash
+curl http://localhost:5005/zones                       # all zones + state
+curl http://localhost:5005/Kitchen/play
+curl http://localhost:5005/Living%20Room/volume/25
+curl http://localhost:5005/Bedroom/sleep/600           # 10-min sleep timer
+```
+
+soco-cli ships its own equivalent server too: `sonos-http-api-server`.
+
+**MCP servers** (use these for agent/LLM-driven control — they expose Sonos as
+callable tools; **preferred for this skill**):
+
+- `sonos-ts-mcp` (Tommertom, TypeScript) — **registered + live.** Served through
+  the local mcp-proxy at `http://127.0.0.1:8090/servers/sonos-ts-mcp/mcp`
+  (entry in `~/.claude.json` + `~/.claude/mcp-proxy/servers.json`). Tools:
+  device discovery, playback, volume, EQ, alarms, grouping, library browse. All
+  tools take a `deviceId` (room name, UUID, or IP). After a Claude restart the
+  `mcp__sonos-ts-mcp__*` tools are available directly.
+- `sonos-mcp-server` (WinstonFassett, Python/uv) at
+  `~/Projects/sonos-tools/sonos-mcp-server` — run with
+  `uv run mcp run server.py`. Secondary/redundant; register the same proxy way
+  if needed.
+
+### Routing sub-actions
+
+| Input                          | Action                                                            |
+| ------------------------------ | ---------------------------------------------------------------- |
+| `sonos` / `sonos status`       | `sonos-steipete discover` then per-zone status → render table     |
+| `sonos play [room]`            | `soco "<room>" play` (default to first zone if none given)        |
+| `sonos pause [room]`           | `soco "<room>" pause`                                             |
+| `sonos volume <room> <0-100>`  | `soco "<room>" volume <n>` — confirm if >60 (loud)                |
+| `sonos group <room> <room>`    | join second room to first's group (`soco` group commands)         |
+| `sonos play <uri/playlist>`    | use MCP tool or `sonos-svrooij` to enqueue + play                 |
+
+If `sonos-steipete discover` returns **0 speakers**, there are no Sonos devices
+reachable on the current LAN (or the Mac is on a different VLAN/Wi-Fi than the
+speakers). Report that plainly — it is not a tooling failure. Both the CLI and
+the MCP confirmed 0 devices at install time, which is expected off-network.
+
+Loud-volume (>60) and group-teardown are mildly disruptive — confirm via
+`AskUserQuestion` before applying (Rule 5 spirit).
 
 ---
 
