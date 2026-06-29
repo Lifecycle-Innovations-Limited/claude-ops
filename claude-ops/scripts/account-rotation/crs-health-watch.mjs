@@ -218,12 +218,16 @@ function maybeAutoReboot(st, inFallback, healthy) {
 
   const cooldown = rebootCooldownRemainingMs();
   if (cooldown > 0) {
-    log(`reboot: conditions met (down x${st.down}) but cooldown active (${Math.ceil(cooldown / 60000)}m remaining) → skip`);
+    log(
+      `reboot: conditions met (down x${st.down}) but cooldown active (${Math.ceil(cooldown / 60000)}m remaining) → skip`,
+    );
     return;
   }
   const ping = ssmPingStatus(DEV_US_INSTANCE_ID);
   if (ping !== 'ConnectionLost') {
-    log(`reboot: down x${st.down} + fail-closed, but SSM PingStatus=${ping} (not ConnectionLost) → app-level, NOT rebooting`);
+    log(
+      `reboot: down x${st.down} + fail-closed, but SSM PingStatus=${ping} (not ConnectionLost) → app-level, NOT rebooting`,
+    );
     return;
   }
   try {
@@ -232,7 +236,9 @@ function maybeAutoReboot(st, inFallback, healthy) {
       timeout: 20_000,
     });
     writeFileSync(REBOOT_COOLDOWN_MARKER, String(Date.now()));
-    log(`🔁 OS-WEDGE AUTO-REBOOT: CRS down x${st.down} + SSM ConnectionLost → reboot-instances ${DEV_US_INSTANCE_ID} (30m cooldown armed)`);
+    log(
+      `🔁 OS-WEDGE AUTO-REBOOT: CRS down x${st.down} + SSM ConnectionLost → reboot-instances ${DEV_US_INSTANCE_ID} (30m cooldown armed)`,
+    );
   } catch (e) {
     log(`WARN: auto-reboot failed: ${e.message}`);
   }
@@ -247,7 +253,8 @@ function main() {
     const inFallback = existsSync(MARKER);
     const ping = ssmPingStatus(DEV_US_INSTANCE_ID);
     const cooldownRemMs = rebootCooldownRemainingMs();
-    const wouldReboot = !healthy && st.down >= REBOOT_STRIKES && inFallback && ping === 'ConnectionLost' && cooldownRemMs === 0;
+    const wouldReboot =
+      !healthy && st.down >= REBOOT_STRIKES && inFallback && ping === 'ConnectionLost' && cooldownRemMs === 0;
     console.log(
       JSON.stringify(
         {
