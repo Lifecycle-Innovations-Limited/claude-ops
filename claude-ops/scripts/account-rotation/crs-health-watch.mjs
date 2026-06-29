@@ -37,6 +37,18 @@ const args = new Set(process.argv.slice(2));
 const SETTINGS = join(homedir(), '.claude', 'settings.json');
 const STATE = join(__dirname, 'crs-health-watch.state.json');
 const MARKER = join(__dirname, 'crs-fallback-active'); // legacy marker present while route is fail-closed
+const REBOOT_COOLDOWN_MARKER = join(__dirname, 'crs-reboot-cooldown'); // holds last OS-wedge reboot epoch ms
+
+// dev-us EC2 (us-east-1) serves CRS for the entire fleet. Prefer the canonical
+// instance-id sync file; fall back to the known id from project config.
+const DEV_US_INSTANCE_ID = (() => {
+  const f = join(homedir(), '.claude', 'sync', 'dev-us-instance.id');
+  try {
+    const v = readFileSync(f, 'utf8').trim();
+    if (/^i-[0-9a-f]+$/.test(v)) return v;
+  } catch {}
+  return 'i-01b4d5132c1b167bf';
+})();
 
 function routeCrsConfig() {
   try {
@@ -53,6 +65,10 @@ const CRS_SMOKE_URL = process.env.CRS_SMOKE_URL || `${CRS_BASE}/v1/messages?beta
 const CRS_SMOKE_MODEL = process.env.CRS_SMOKE_MODEL || 'claude-sonnet-4-6';
 const DOWN_STRIKES = +(process.env.CRS_DOWN_STRIKES || 3); // ~3 min at 60s tick
 const UP_STRIKES = +(process.env.CRS_UP_STRIKES || 1);
+// OS-wedge auto-reboot threshold. Must be >= DOWN_STRIKES so we only reboot AFTER
+// fail-closed has already protected the fleet (~5 min sustained-down at 60s tick).
+const REBOOT_STRIKES = Math.max(DOWN_STRIKES, +(process.env.CRS_REBOOT_STRIKES || 5));
+const REBOOT_COOLDOWN_MS = 30 * 60 * 1000; // at most one auto-reboot per 30 min
 
 const ts = () => new Date().toISOString().slice(11, 19);
 const log = (m) => console.log(`${ts()} [crs-health-watch] ${m}`);
@@ -155,7 +171,115 @@ function currentEnvMode() {
   return 'mixed';
 }
 
+// SSM PingStatus for the dev-us instance. "ConnectionLost" => the SSM agent itself
+// is unreachable, i.e. an OS-level wedge (reboot can help). "Online" => OS is fine and
+// CRS is merely app-down (reboot is unwarranted). Returns the literal string, or an
+// "ERROR:<msg>" sentinel on AWS failure (treated as not-ConnectionLost by callers).
+function ssmPingStatus(instanceId) {
+  try {
+    return execFileSync(
+      'aws',
+      [
+        'ssm',
+        'describe-instance-information',
+        '--region',
+        'us-east-1',
+        '--filters',
+        `Key=InstanceIds,Values=${instanceId}`,
+        '--query',
+        'InstanceInformationList[0].PingStatus',
+        '--output',
+        'text',
+      ],
+      { encoding: 'utf8', timeout: 30_000 }, // generous: aws CLI cold-starts each tick; this read decides the reboot
+    ).trim();
+  } catch (e) {
+    return `ERROR:${e.message}`;
+  }
+}
+
+// Milliseconds left on the auto-reboot cooldown (0 = no cooldown / clear to reboot).
+function rebootCooldownRemainingMs() {
+  try {
+    const last = +readFileSync(REBOOT_COOLDOWN_MARKER, 'utf8').trim();
+    if (!Number.isFinite(last)) return 0;
+    const rem = REBOOT_COOLDOWN_MS - (Date.now() - last);
+    return rem > 0 ? rem : 0;
+  } catch {
+    return 0;
+  }
+}
+
+// Fire an EC2 reboot ONLY on a double-confirmed OS wedge: CRS sustained-down past
+// REBOOT_STRIKES, already fail-closed (fleet protected), SSM says ConnectionLost, and
+// no reboot in the last 30 min. Conservative by design — every gate must hold.
+function maybeAutoReboot(st, inFallback, healthy) {
+  if (healthy || st.down < REBOOT_STRIKES || !inFallback) return;
+
+  const cooldown = rebootCooldownRemainingMs();
+  if (cooldown > 0) {
+    log(
+      `reboot: conditions met (down x${st.down}) but cooldown active (${Math.ceil(cooldown / 60000)}m remaining) → skip`,
+    );
+    return;
+  }
+  const ping = ssmPingStatus(DEV_US_INSTANCE_ID);
+  if (ping !== 'ConnectionLost') {
+    log(
+      `reboot: down x${st.down} + fail-closed, but SSM PingStatus=${ping} (not ConnectionLost) → app-level, NOT rebooting`,
+    );
+    return;
+  }
+  try {
+    execFileSync('aws', ['ec2', 'reboot-instances', '--region', 'us-east-1', '--instance-ids', DEV_US_INSTANCE_ID], {
+      encoding: 'utf8',
+      timeout: 20_000,
+    });
+    writeFileSync(REBOOT_COOLDOWN_MARKER, String(Date.now()));
+    log(
+      `🔁 OS-WEDGE AUTO-REBOOT: CRS down x${st.down} + SSM ConnectionLost → reboot-instances ${DEV_US_INSTANCE_ID} (30m cooldown armed)`,
+    );
+  } catch (e) {
+    log(`WARN: auto-reboot failed: ${e.message}`);
+  }
+}
+
 function main() {
+  if (args.has('--dry-run-reboot')) {
+    const st = loadState();
+    const healthOk = probe();
+    const inferenceOk = healthOk ? probeInference() : false;
+    const healthy = healthOk; // mirrors the live tick's health gate
+    const inFallback = existsSync(MARKER);
+    const ping = ssmPingStatus(DEV_US_INSTANCE_ID);
+    const cooldownRemMs = rebootCooldownRemainingMs();
+    const wouldReboot =
+      !healthy && st.down >= REBOOT_STRIKES && inFallback && ping === 'ConnectionLost' && cooldownRemMs === 0;
+    console.log(
+      JSON.stringify(
+        {
+          dryRunReboot: true,
+          instanceId: DEV_US_INSTANCE_ID,
+          healthy,
+          healthOk,
+          inferenceOk,
+          stDown: st.down,
+          rebootStrikes: REBOOT_STRIKES,
+          downThresholdMet: st.down >= REBOOT_STRIKES,
+          inFallback,
+          ssmPingStatus: ping,
+          ssmConnectionLost: ping === 'ConnectionLost',
+          cooldownRemainingMin: Math.ceil(cooldownRemMs / 60000),
+          cooldownActive: cooldownRemMs > 0,
+          WOULD_REBOOT: wouldReboot,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
   if (args.has('--status')) {
     const st = loadState();
     const health = probe();
@@ -243,6 +367,11 @@ function main() {
       `tick: health=${healthOk} inference=${inferenceOk} down=${st.down} up=${st.up} fallback=${inFallback} envMode=${currentEnvMode()}`,
     );
   }
+
+  // OS-wedge auto-reboot (double-confirmed via SSM, 30m cooldown). Only fires when CRS
+  // is sustained-down past REBOOT_STRIKES, we're already fail-closed, and the SSM agent
+  // itself is unreachable (true OS wedge, not an app-level CRS failure).
+  maybeAutoReboot(st, inFallback, healthy);
   saveState(st);
 }
 
