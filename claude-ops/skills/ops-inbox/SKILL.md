@@ -301,7 +301,7 @@ gog gmail raw <messageId> | python3 -c "import json,sys; d=json.load(sys.stdin);
 
 ---
 
-## Scan engine — offline script first (primary), Workflow only for what it can't reach
+## Scan engine — offline script triages first, Workflow fan-out is the DEFAULT for deep per-thread work
 
 **Run `bin/ops-inbox-scan` FIRST. It is the primary scan engine.** It classifies the two
 heaviest channels — WhatsApp (direct read of the whatsmeow sqlite store) and Email (one
@@ -354,22 +354,41 @@ genuine reasoning, not for reading a database.
    You are now doing deep reads on ~3 threads, not scanning hundreds — that is the whole
    point of the split: cheap script-side triage, expensive reasoning only where it pays.
 
-**When to fall back to the Workflow fan-out below (the exception, not the default):** only
-when the script genuinely can't cover a channel that has real volume needing per-thread
-_reasoning_ — e.g. a Slack/Telegram backlog of dozens of human threads to classify, an
-iMessage host (macOS) the script doesn't read, or the WhatsApp store is down and you must
-classify via live MCP. For the common case (WA + email + a glance at Slack/Telegram), the
-script + a couple of inline MCP calls replaces the entire fan-out.
+**When to use the Workflow fan-out below — DEFAULT for real per-thread volume:** the offline
+`ops-inbox-scan` is the cheap first-pass triage and always runs first, but the per-thread
+deep-read/draft work (clearing the FULL-THREAD AWARENESS GATE + cross-channel dedup on every
+candidate) is **reasoning work, and reasoning work fans out in parallel by default.** The
+moment there is real volume — more than a handful of NEEDS_REPLY candidates across channels,
+a Slack/Telegram/iMessage backlog of human threads, or any channel the script can't reach —
+**default to the `Workflow` fan-out**: launch one read-only drafter/scanner agent per
+channel (or per thread-chunk within a channel), run them concurrently, and synthesize. This
+is faster and more token-efficient than serially deep-reading dozens of threads in the main
+session, and it collapses wall-clock to the slowest single channel.
+
+**The only time you skip the fan-out** is the genuinely trivial case: the script already
+covered everything and only ~1–3 threads need a deep read (e.g. WA + email with a couple of
+candidates and a glance at Slack/Telegram). Then the script + a couple of inline MCP calls is
+enough and a fan-out would be pure overhead. For anything with real per-thread volume, the
+fan-out is the default — not a fallback.
+
+**Either way, the fan-out NEVER sends, archives, or mutates.** Scanner/drafter agents are
+strictly read-only and return classifications + draft text; **every outbound send stays in
+the main session under the Rule-6 one-draft → one-approval → one-send gate.** Defaulting to
+parallel fan-out changes only HOW threads are read and drafted, never the outbound-approval
+safety.
 
 ---
 
-### Workflow fan-out (FALLBACK — only per the "when to fall back" note above)
+### Workflow fan-out (DEFAULT for real per-thread volume — per the note above)
 
-When the script can't reach a channel that has real per-thread volume, use the **`Workflow`
-tool** to fan out one **read-only** scanner agent per _such_ channel, then synthesize.
-Channels are scanned concurrently and wall-clock collapses to the slowest single channel.
-**Do not run this for channels the script already covered** — that re-burns the tokens this
-engine exists to save.
+When there is real per-thread volume to deep-read and draft, use the **`Workflow` tool** as
+the **default** path: fan out one **read-only** scanner/drafter agent per channel (or per
+thread-chunk within a high-volume channel), then synthesize. Channels and chunks are
+processed concurrently and wall-clock collapses to the slowest single unit. **Do not fan out
+for channels the offline script already fully triaged down to ~1–3 trivial candidates** —
+that re-burns the tokens the cheap-triage split exists to save. The rule of thumb: offline
+script triages always; the Workflow fan-out does the deep per-thread reasoning whenever
+volume is more than a glance.
 
 **Hard constraints (these override convenience — they are how this stays Rule-6-safe):**
 
@@ -657,16 +676,19 @@ A reply that is correct but in the wrong voice is a defect. Before drafting on a
 
 ## Core principle: FULL-CONTEXT RECALL + CROSS-CHANNEL / ALREADY-SENT DEDUP
 
-The single most damaging error is replying to something the user already handled — in this thread, in another thread, in a group, on another channel, or by phone/voice that never landed in the store. Before confirming ANY NEEDS_REPLY or drafting:
+The single most damaging error is replying to something the user already handled — in this thread, in another thread, in a group, on another channel, or by phone/voice that never landed in the store. **This dedup gate is MANDATORY and BLOCKING: no thread may be classified NEEDS_REPLY or drafted against until ALL of the checks below have run and come up empty.** A thread is NOT NEEDS_REPLY just because its own last message is inbound — the same request may already be answered somewhere else, and re-surfacing an already-handled item is treated as a scan bug, not a near-miss. The check is on the underlying REQUEST/TOPIC, not just the literal thread: if the same ask was satisfied anywhere — another thread, another channel, a group, or a sent email — it is HANDLED.
+
+Before confirming ANY NEEDS_REPLY or drafting, run every step:
 
 1. **Same-thread recheck** — scan the full thread both directions (incl. `[voice]`/`[image]`/`[document]` enrichments). If the user replied after the last inbound, it is WAITING/HANDLED.
-2. **Cross-thread, same person** — the user may have answered the same person on their other JID (lid↔phone), in a group both are in, or a secondary number. Search the contact across threads (`mcp__whatsapp__list_messages {query, limit:25}`, `is_from_me:true` after the inbound timestamp).
-3. **Cross-channel** — the user may have answered the email by WhatsApp, or the WhatsApp by email/iMessage. For a NEEDS_REPLY candidate, search the OTHER channels for a recent outbound to the same person/topic: `gog gmail search "to:<addr> newer_than:3d"`, `mcp__whatsapp__list_messages {query:"<name|topic>"}`, iMessage `chat_messages`. A hit → reclassify HANDLED.
-4. **Already-sent (email)** — a reply sent from another client may not be the thread's last message in the envelope first-pass. Open the thread (`gog gmail thread get`) and check for a SENT message after the last inbound before classifying NEEDS_REPLY.
-5. **Use the contact registry** (below) to resolve who a sender/number/JID actually is and pull their cross-channel identity + context in one offline lookup, so step 2–3 searches are precise.
-6. **Trust the user's word over the store** — if the user says they replied, it is HANDLED even if the store doesn't show it.
+2. **Cross-thread, same person (MANDATORY)** — the user may have answered the same person on their other JID (lid↔phone), in a group both are in, or a secondary number. Search the contact across threads (`mcp__whatsapp__list_messages {query, limit:25}`, `is_from_me:true` after the inbound timestamp). A satisfying reply in ANY of the person's threads → HANDLED.
+3. **Cross-channel (MANDATORY)** — the user may have answered the email by WhatsApp, or the WhatsApp by email/iMessage/Slack/Telegram. For EVERY NEEDS_REPLY candidate, you MUST search the OTHER channels for a recent outbound to the same person OR about the same topic before confirming: `gog gmail search "to:<addr> newer_than:3d"`, `mcp__whatsapp__list_messages {query:"<name|topic>"}`, iMessage `chat_messages`, Slack/Telegram history. A hit on the same request → reclassify HANDLED. Skipping this search is not permitted — an unsearched candidate is not yet a confirmed NEEDS_REPLY.
+4. **Same request across DIFFERENT people / group (MANDATORY)** — the same ask sometimes arrives from several people, or in a group AND a DM. If the user already answered the request once (in the group, to one person, or in a broadcast), the duplicate copies are HANDLED — never draft the same answer twice. Match on topic/intent, not just sender identity.
+5. **Already-sent (email) (MANDATORY)** — a reply sent from another client may not be the thread's last message in the envelope first-pass. Open the thread (`gog gmail thread get`) AND search SENT (`gog gmail search "in:sent <topic|to:addr> newer_than:7d"`) for a message after the last inbound before classifying NEEDS_REPLY.
+6. **Use the contact registry** (below) to resolve who a sender/number/JID actually is and pull their cross-channel identity + context in one offline lookup, so the steps 2–5 searches are precise across every JID/address/handle the person owns.
+7. **Trust the user's word over the store** — if the user says they replied, it is HANDLED even if the store doesn't show it.
 
-Only after 1–5 come up empty is a thread a true NEEDS_REPLY. This is the FULL-THREAD AWARENESS GATE, extended cross-channel.
+Only after steps 1–6 ALL come up empty is a thread a true NEEDS_REPLY. This is the FULL-THREAD AWARENESS GATE, extended cross-channel and cross-request. **Surfacing a NEEDS_REPLY without having run the cross-thread, cross-channel, cross-request, and already-sent searches is a scan bug — do not present it.** None of this changes the outbound path: even a genuine NEEDS_REPLY is still drafted and sent only in the main session under the Rule-6 one-draft → one-approval → one-send gate.
 
 ## Core principle: SNOOZE & FOLLOW-UP INTELLIGENCE (never let the user lose a thread)
 
@@ -738,7 +760,7 @@ For each channel, detect availability at runtime:
 
 1. **Parse pre-gathered data** for initial counts (unread is just a starting signal).
 
-2. **For each channel, run a FULL scan** (not just unread). Drive this via the **Scan engine** above: run `bin/ops-inbox-scan` FIRST (offline WhatsApp + Email classify, near-zero tokens), then one inline `mcp__slack__conversations_unreads` and one `mcp__plugin_ops_telegram__list_dialogs` call for those channels — NO subagents. Fall back to the `Workflow` fan-out only for a channel with real per-thread volume the script can't reach (see "when to fall back"). The per-channel detail below defines what each reader covers and how the main session presents results and replies:
+2. **For each channel, run a FULL scan** (not just unread). Drive this via the **Scan engine** above: run `bin/ops-inbox-scan` FIRST (offline WhatsApp + Email triage, near-zero tokens), then one inline `mcp__slack__conversations_unreads` and one `mcp__plugin_ops_telegram__list_dialogs` call for those channels. **Then default to the `Workflow` fan-out for the per-thread deep-read/draft work whenever there is real volume** — more than ~1–3 candidates across channels, or any channel with a human-thread backlog the script can't reach (see "When to use the Workflow fan-out — DEFAULT" above). Only the trivial case (script covered everything, ~1–3 candidates left) stays fully inline with no fan-out. The per-channel detail below defines what each reader covers and how the main session presents results and replies:
    - **Email**: Search `in:inbox` (not `is:unread`) via `gog gmail search -a $GMAIL_ACCOUNT -j --results-only --no-input --max 30 "in:inbox"`. For each thread, read the last message to determine who sent it last. Check for DRAFT or SENT labels. **Before suggesting to send a draft, verify no reply was already sent in the thread.**
    - **WhatsApp**: Call `mcp__whatsapp__list_chats {sort_by: "last_active"}` to get all chats. Filter to chats with `last_message_time` in the last 7 days (`last_message_time` is RFC3339+TZ — parse with timezone awareness, never strip the offset). Resolve display name from contacts.db first (`SELECT name FROM contacts WHERE jid=?`), fall back to the chat's `name` field, and only call giga memory when both are empty. Use `last_is_from_me` on the chat object (`1` = WAITING, `0` = NEEDS_REPLY) ONLY as a first pass — it does NOT finalise a classification. Before marking any chat NEEDS_REPLY you MUST clear the **FULL-THREAD AWARENESS GATE** above: fetch `mcp__whatsapp__list_messages {chat_jid, limit: 25}` reading BOTH directions (capture `is_from_me=1` rows AND `[voice]` transcripts), write the 2-sentence arc summary, and reconcile the user's own sends that may be missing from the store.
    - **iMessage**: Call `mcp__plugin_imessage_imessage__chat_messages {limit: 30}` (omit `chat_guid` to pull every allowlisted thread at once). Output is rendered text, not JSON: each thread is labelled `DM`/`Group` with its participant list, then timestamped messages oldest-first. Sent-by-you messages are marked (`Me:` / `→`); inbound messages carry the sender handle. Classify each thread by who sent the LAST message — same NEEDS_REPLY / WAITING / FYI logic as WhatsApp.
