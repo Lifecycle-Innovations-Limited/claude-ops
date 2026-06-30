@@ -105,6 +105,7 @@ async function crsLogin(crsBase, crsContainer, adminUser = 'cradmin') {
       .trim();
   } catch {}
   if (!pw) return null;
+  if (!process.env.CRS_ADMIN_PASSWORD) process.env.CRS_ADMIN_PASSWORD = pw;
   try {
     const r = await fetch(`${crsBase}/web/auth/login`, {
       method: 'POST',
