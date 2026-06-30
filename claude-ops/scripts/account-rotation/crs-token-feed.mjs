@@ -239,9 +239,11 @@ async function main() {
         body: JSON.stringify(update),
       });
       if (put.ok) {
-        await fetch(`${crsBase}/admin/claude-accounts/${crs.id}/reset-status`, { method: 'POST', headers: H }).catch(
-          () => {},
-        );
+        if (crs.schedulable !== false) {
+          await fetch(`${crsBase}/admin/claude-accounts/${crs.id}/reset-status`, { method: 'POST', headers: H }).catch(
+            () => {},
+          );
+        }
         propagated++;
       } else {
         log(`${key}: CRS PUT ${put.status}`);
