@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.38.4] - 2026-06-30
+
+### Changed
+### Fixed
+- Passed the CRS admin environment through token-feed-triggered priority ticks so manual or timer feed runs can close quota-capped accounts reliably.
+
+
 ## [2.38.3] - 2026-06-30
 
 ### Changed
