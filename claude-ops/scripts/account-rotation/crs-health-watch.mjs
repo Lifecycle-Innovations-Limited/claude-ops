@@ -63,6 +63,7 @@ const CRS_BASE = process.env.CRS_BASE_URL || ROUTE_CRS.baseUrl || 'http://127.0.
 const HEALTH_URL = process.env.CRS_HEALTH_URL || ROUTE_CRS.healthUrl || CRS_BASE.replace(/\/api\/?$/, '/health');
 const CRS_SMOKE_URL = process.env.CRS_SMOKE_URL || `${CRS_BASE}/v1/messages?beta=true`;
 const CRS_SMOKE_MODEL = process.env.CRS_SMOKE_MODEL || 'claude-sonnet-4-6';
+const CRS_ENABLE_INFERENCE_SMOKE = process.env.CRS_ENABLE_INFERENCE_SMOKE === '1';
 const DOWN_STRIKES = +(process.env.CRS_DOWN_STRIKES || 3); // ~3 min at 60s tick
 const UP_STRIKES = +(process.env.CRS_UP_STRIKES || 1);
 // OS-wedge auto-reboot threshold. Must be >= DOWN_STRIKES so we only reboot AFTER
@@ -149,9 +150,15 @@ function probeInference() {
 function setEnvMode(mode) {
   try {
     if (mode === 'direct') {
-      setRouteMode('fail-closed', { reason: 'crs-health-watch: CRS unavailable', updatedBy: 'crs-health-watch' });
+      setRouteMode('fail-closed', {
+        reason: 'crs-health-watch: CRS unavailable',
+        updatedBy: 'crs-health-watch',
+      });
     } else {
-      setRouteMode('crs-oauth', { reason: 'crs-health-watch: CRS recovered', updatedBy: 'crs-health-watch' });
+      setRouteMode('crs-oauth', {
+        reason: 'crs-health-watch: CRS recovered',
+        updatedBy: 'crs-health-watch',
+      });
     }
     return true;
   } catch (e) {
@@ -165,7 +172,7 @@ function currentEnvMode() {
   const base = s.env?.ANTHROPIC_BASE_URL || '';
   const tok = s.env?.CLAUDE_CODE_OAUTH_TOKEN || '';
   const bedrock = s.env?.CLAUDE_CODE_USE_BEDROCK || '';
-  if (/127\.0\.0\.1:3000|:3000\/api/.test(base) && tok.startsWith('cr_')) return 'crs';
+  if (/127\.0\.0\.1:(3000|3005)|:(3000|3005)\/api/.test(base) && tok.startsWith('cr_')) return 'crs';
   if (bedrock === '1') return 'bedrock';
   if (!base && !tok) return 'direct';
   return 'mixed';
@@ -248,7 +255,7 @@ function main() {
   if (args.has('--dry-run-reboot')) {
     const st = loadState();
     const healthOk = probe();
-    const inferenceOk = healthOk ? probeInference() : false;
+    const inferenceOk = CRS_ENABLE_INFERENCE_SMOKE && healthOk ? probeInference() : false;
     const healthy = healthOk; // mirrors the live tick's health gate
     const inFallback = existsSync(MARKER);
     const ping = ssmPingStatus(DEV_US_INSTANCE_ID);
@@ -292,7 +299,8 @@ function main() {
           fallbackActive: existsSync(MARKER),
           settingsEnvMode: currentEnvMode(),
           healthy: health,
-          inferenceHealthy: health ? probeInference() : false,
+          inferenceHealthy: CRS_ENABLE_INFERENCE_SMOKE && health ? probeInference() : false,
+          inferenceSmokeEnabled: CRS_ENABLE_INFERENCE_SMOKE,
           smokeModel: CRS_SMOKE_MODEL || null,
         },
         null,
@@ -302,7 +310,7 @@ function main() {
     return;
   }
   if (args.has('--restore')) {
-    if (probe() && probeInference() && setEnvMode('crs')) {
+    if (probe() && (!CRS_ENABLE_INFERENCE_SMOKE || probeInference()) && setEnvMode('crs')) {
       try {
         execFileSync('rm', ['-f', MARKER]);
       } catch {}
@@ -332,8 +340,8 @@ function main() {
   }
 
   const healthOk = probe();
-  const inferenceOk = healthOk ? probeInference() : false;
-  const healthy = healthOk && inferenceOk;
+  const inferenceOk = CRS_ENABLE_INFERENCE_SMOKE && healthOk ? probeInference() : false;
+  const healthy = healthOk;
   const st = loadState();
   if (healthy) {
     st.up += 1;
@@ -341,6 +349,11 @@ function main() {
   } else {
     st.down += 1;
     st.up = 0;
+  }
+  if (CRS_ENABLE_INFERENCE_SMOKE && !inferenceOk && healthOk) {
+    st.inferenceDown = (st.inferenceDown || 0) + 1;
+  } else if (CRS_ENABLE_INFERENCE_SMOKE && inferenceOk) {
+    st.inferenceDown = 0;
   }
   const inFallback = existsSync(MARKER);
 
@@ -364,7 +377,7 @@ function main() {
     }
   } else {
     log(
-      `tick: health=${healthOk} inference=${inferenceOk} down=${st.down} up=${st.up} fallback=${inFallback} envMode=${currentEnvMode()}`,
+      `tick: health=${healthOk} inference=${CRS_ENABLE_INFERENCE_SMOKE ? inferenceOk : 'disabled'} down=${st.down} up=${st.up} fallback=${inFallback} envMode=${currentEnvMode()}`,
     );
   }
 
