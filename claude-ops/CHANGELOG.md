@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.38.2] - 2026-06-30
+
+### Changed
+### Fixed
+- Preserved CRS account schedulable state and routing metadata when token feed refreshes OAuth credentials.
+- Kept weekly utilization caps as hard-off conditions so the conservative priority floor does not reopen exhausted accounts.
+
+
 ## [2.38.1] - 2026-06-28
 
 ### Changed
