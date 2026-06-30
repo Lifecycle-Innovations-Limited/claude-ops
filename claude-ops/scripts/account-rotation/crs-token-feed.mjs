@@ -229,10 +229,14 @@ async function main() {
       continue;
     }
     try {
+      const update = { claudeAiOauth: oauth };
+      if ('proxy' in crs) update.proxy = crs.proxy;
+      if ('maxConcurrency' in crs) update.maxConcurrency = crs.maxConcurrency;
+      if ('schedulable' in crs) update.schedulable = crs.schedulable;
       const put = await fetch(`${crsBase}/admin/claude-accounts/${crs.id}`, {
         method: 'PUT',
         headers: H,
-        body: JSON.stringify({ claudeAiOauth: oauth }),
+        body: JSON.stringify(update),
       });
       if (put.ok) {
         await fetch(`${crsBase}/admin/claude-accounts/${crs.id}/reset-status`, { method: 'POST', headers: H }).catch(

@@ -391,7 +391,9 @@ function decideConservative(accts, nowMs) {
     const rl = genuineRateLimit(a, nowMs);
     const overloaded = genuineOverload(a, nowMs);
 
-    const utilBreach = fresh && ((u5 ?? 0) >= OFF_5H || (u7 ?? 0) >= OFF_7D || (u7o ?? 0) >= OFF_7D);
+    const weeklyBreach =
+      fresh && ((typeof u7 === 'number' && u7 >= OFF_7D) || (typeof u7o === 'number' && u7o >= OFF_7D));
+    const utilBreach = fresh && ((u5 ?? 0) >= OFF_5H || weeklyBreach);
     const utilClear = !fresh || ((u5 ?? 0) < ON_5H && (u7 ?? 0) < ON_7D && (u7o ?? 0) < ON_7D);
 
     let desired = cur;
@@ -410,7 +412,7 @@ function decideConservative(accts, nowMs) {
     } else if (utilBreach) {
       desired = false;
       reason = `util 5h=${u5} 7d=${u7} 7dOpus=${u7o} ≥ off`;
-      soft = true;
+      soft = !weeklyBreach;
     } else if ((sw === 'allowed' || sw === null) && utilClear) {
       desired = true;
       reason = `healthy (sw=${sw ?? 'none'}${fresh ? `, 5h=${u5}` : ', usage stale/absent'})`;
