@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.38.3] - 2026-06-30
+
+### Changed
+### Fixed
+- Prevented CRS token feed health resets from reopening accounts that quota policy intentionally marked unschedulable.
+
+
 ## [2.38.2] - 2026-06-30
 
 ### Changed
