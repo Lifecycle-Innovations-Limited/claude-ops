@@ -648,9 +648,9 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
  Context: [related threads/decisions/deadlines found]
 
  Draft reply: "[contextually aware draft based on all above]"
-
- [Send] [Edit] [Read full thread] [Skip]
 ```
+
+Stage this per the **PER-DRAFT APPROVAL** principle below: one `AskUserQuestion` for this item alone, single-select `[Send]` `[Edit]` `[Skip]`, `preview` field carrying the full draft text plus a "Reasoning / facts verified" block. Never combine with any other item's approval.
 
 **When drafting replies:**
 
@@ -687,8 +687,34 @@ Before confirming ANY NEEDS_REPLY or drafting, run every step:
 5. **Already-sent (email) (MANDATORY)** — a reply sent from another client may not be the thread's last message in the envelope first-pass. Open the thread (`gog gmail thread get`) AND search SENT (`gog gmail search "in:sent <topic|to:addr> newer_than:7d"`) for a message after the last inbound before classifying NEEDS_REPLY.
 6. **Use the contact registry** (below) to resolve who a sender/number/JID actually is and pull their cross-channel identity + context in one offline lookup, so the steps 2–5 searches are precise across every JID/address/handle the person owns.
 7. **Trust the user's word over the store** — if the user says they replied, it is HANDLED even if the store doesn't show it.
+8. **Fact-verified redraft gate (MANDATORY, before staging ANY draft — owner directive 2026-07-04).** Clearing steps 1–7 makes a thread a genuine NEEDS_REPLY; it does NOT mean the draft you are about to write is safe to stage. Before staging any draft, the drafter MUST additionally:
+   - **(a) Deep-read the full target thread, both directions** — not the summary from step 1–7, an actual re-read of every message for the specific facts the draft will state or rely on.
+   - **(b) Read RELATED threads** — same contact across other channels, and any other thread about the same topic/deal (a different contact, a group, an earlier email chain) that could bear on what the draft should say.
+   - **(c) Verify every load-bearing factual claim in the draft with a cheap check** before it goes in the draft — a web search for a price/value, a prior email/thread for "who currently holds X", a calendar check for availability, etc. Never state a load-bearing fact in a draft from memory or assumption alone.
+   - **Failure mode this prevents:** a draft routed a master clearance to the wrong label until the RELATED threads proved Spinnin'/WMG actually held it (checking only the target thread would have missed this); a watch's stated value (€22.600) changed the negotiation advice the draft gave, and stating the wrong figure from memory would have misled the recipient. Both are "the target thread alone looked fine" failures — that is exactly why (b) and (c) are mandatory, not optional enrichment.
 
-Only after steps 1–6 ALL come up empty is a thread a true NEEDS_REPLY. This is the FULL-THREAD AWARENESS GATE, extended cross-channel and cross-request. **Surfacing a NEEDS_REPLY without having run the cross-thread, cross-channel, cross-request, and already-sent searches is a scan bug — do not present it.** None of this changes the outbound path: even a genuine NEEDS_REPLY is still drafted and sent only in the main session under the Rule-6 one-draft → one-approval → one-send gate.
+Only after steps 1–8 ALL come up empty / are satisfied is a thread a true NEEDS_REPLY with a stageable draft. This is the FULL-THREAD AWARENESS GATE, extended cross-channel, cross-request, and fact-verified. **Surfacing a NEEDS_REPLY without having run the cross-thread, cross-channel, cross-request, already-sent, and fact-verification checks is a scan bug — do not present it, and do not stage a draft until step 8 is clean.** None of this changes the outbound path: even a genuine, fact-verified NEEDS_REPLY is still drafted and sent only in the main session under the Rule-6 gate, per-draft, per the PER-DRAFT APPROVAL principle below.
+
+## Core principle: PER-DRAFT APPROVAL — ONE AskUserQuestion PER DRAFT, NEVER BUNDLED (owner directive 2026-07-04)
+
+**Every staged outbound draft gets its OWN `AskUserQuestion` call — never bundle multiple drafts into one question, and never present a batched list of drafts with an "approve all" / "ok all" style option.** This applies on every channel (email, WhatsApp, iMessage, Slack, Telegram, Discord, Notion) and supersedes any earlier guidance in this skill that showed multiple candidates followed by a single combined approval.
+
+**The call, exactly:**
+
+- **Single-select**, options limited to `[Send]` `[Edit]` `[Skip]` (3 options — well under the Rule-1 cap of 4). Do not add extra options like "Read full thread" or "Archive" to this specific question — the full-thread read is already mandatory *before* the draft is staged (FULL-THREAD AWARENESS GATE + fact-verified redraft gate above), and archive is a separate, subsequent step once the draft is sent or skipped.
+- The chosen option's `preview` field MUST contain, verbatim:
+  1. **The FULL draft text** — the exact message the recipient will see: to/recipient, subject (email), full body. Not a summary, not a line count.
+  2. **A short "Reasoning / facts verified" block** immediately after the draft text, explaining *why* the draft says what it says — which thread(s) were read, which related threads were checked, and which load-bearing facts (prices, ownership, dates, amounts) were verified and how (e.g. "verified via web search: current EUR/USD"; "verified via Gmail search in:sent: Sam confirmed Spinnin'/WMG holds this master on 2026-05-12").
+- One draft → one `AskUserQuestion` → one decision (`Send`/`Edit`/`Skip`) → (if `Send`) one send → archive → **then and only then** move to the next draft's own `AskUserQuestion`.
+
+**Forbidden patterns (same spirit as Rule 6's forbidden-output list):**
+
+- "Here are 4 drafts — approve all?"
+- A single question whose options are a list of different recipients/threads (e.g. `[Send to Alice]` `[Send to Bob]` `[Skip both]`)
+- Presenting the full NEEDS_REPLY list with drafts inline and asking one omnibus "which should I send?" question
+- Reusing one `AskUserQuestion` result to gate more than one send
+
+This does not change Rule 6's underlying send gate (stage → show full draft → explicit approval → send → next) — it makes explicit exactly how that gate is implemented: one `AskUserQuestion`, one draft, `preview` carries the full text + reasoning, options are `[Send]`/`[Edit]`/`[Skip]`.
 
 ## Core principle: SNOOZE & FOLLOW-UP INTELLIGENCE (never let the user lose a thread)
 
@@ -961,17 +987,12 @@ For each NEEDS REPLY chat:
 
  Draft reply: "[context-aware draft matching user's style + language]"
 
- [Send] [Edit] [Read full thread] [More...]
-
-If "More...":
- [Archive] [Skip]
-
 📱 WHATSAPP — WAITING (no action needed)
  N. [Contact] — you said: "[your last message]" — [time ago]
     Thread: [1-line summary of what you're waiting for]
 ```
 
-Use `AskUserQuestion` for each NEEDS REPLY chat.
+Per the **PER-DRAFT APPROVAL** principle above: stage ONE `AskUserQuestion` per chat, single-select `[Send]` `[Edit]` `[Skip]`, with the `preview` field carrying the full draft text plus a "Reasoning / facts verified" block. Never bundle multiple chats' drafts into one question.
 
 **When drafting WhatsApp replies:**
 
@@ -1053,14 +1074,12 @@ For each NEEDS REPLY thread:
 
  Draft reply: "[context-aware draft matching user's style + language]"
 
- [Send] [Edit] [Read full thread] [Skip]
-
 💬 iMESSAGE — WAITING (no action needed)
  N. [Contact] — you said: "[your last message]" — [time ago]
     Thread: [1-line summary of what you're waiting for]
 ```
 
-Use `AskUserQuestion` for each NEEDS REPLY thread.
+Per the **PER-DRAFT APPROVAL** principle above: stage ONE `AskUserQuestion` per thread, single-select `[Send]` `[Edit]` `[Skip]`, with the `preview` field carrying the full draft text plus a "Reasoning / facts verified" block. Never bundle multiple threads' drafts into one question.
 
 **When drafting iMessage replies:**
 
@@ -1182,36 +1201,30 @@ For each NEEDS REPLY thread, gather:
 
  Draft reply: "[context-aware draft using full thread + contact history]"
 
- [Send draft] [Edit draft] [Read full thread] [More...]
-
-If "More...":
- [Archive] [Skip]
-
 📧 EMAIL — DRAFTS (unsent)
  N. [Recipient] — [Subject] (draft ready to send)
 
 📧 EMAIL — FYI / ARCHIVE
  N. [Sender] — [Subject] (newsletter/notification)
 
-  For each NEEDS REPLY:
-  a) Read full thread + draft reply
-  b) Archive (no reply needed)
-  c) Skip
+  For each NEEDS REPLY: read full thread (already done above), draft the reply, then
+  stage it per PER-DRAFT APPROVAL below. Skip or archive are separate, subsequent
+  per-item decisions — not options on the send question itself.
 
   For FYI section:
-  x) Archive all FYI at once
+  x) Archive all FYI at once (archiving is not an outbound draft — bulk archive stays fine)
 ```
 
-Use `AskUserQuestion` for each NEEDS REPLY email with options `[Read + Reply]` / `[Archive]` / `[Skip]`.
-
-When replying, draft the reply and use `AskUserQuestion` to confirm:
+Per the **PER-DRAFT APPROVAL** principle above: stage ONE `AskUserQuestion` per email, single-select — never a combined `[Read + Reply]`/`[Archive]`/`[Skip]` menu that mixes the send decision with other actions. The question's `preview` field carries the FULL draft text (to, subject, body) plus a short "Reasoning / facts verified" block (which thread(s) and related threads were read, which facts were checked):
 
 ```
 Reply to [Sender] — [Subject]:
-  "[drafted reply]"
+  preview: "[FULL drafted reply text]\n\nReasoning / facts verified: [thread(s) read, related threads checked, facts verified and how]"
 
   [Send]  [Edit]  [Skip]
 ```
+
+Never bundle multiple emails' drafts into one question — one email, one draft, one `AskUserQuestion`.
 
 For FYI bulk archive, use `AskUserQuestion`:
 
@@ -1387,11 +1400,6 @@ For each page with comments or mentions:
 
  Draft reply: "[context-aware reply to the comment]"
 
- [Reply] [View page] [Skip] [More...]
-
-If "More...":
- [Mark resolved] [Archive]
-
 📓 NOTION — ASSIGNED TASKS
 
  N. [Task title] — [database] — Status: [status] — Due: [date]
@@ -1402,7 +1410,7 @@ If "More...":
  N. [Page title] — updated by [person] — [time ago]
 ```
 
-Use `AskUserQuestion` for each NEEDS REPLY item.
+Per the **PER-DRAFT APPROVAL** principle above: stage ONE `AskUserQuestion` per comment, single-select `[Send]` `[Edit]` `[Skip]`, `preview` field carrying the full reply text plus a "Reasoning / facts verified" block. `View page` / `Mark resolved` / `Archive` are separate follow-up actions, not options on the send question. Never bundle multiple comments' replies into one question.
 
 **When replying to Notion comments:**
 
