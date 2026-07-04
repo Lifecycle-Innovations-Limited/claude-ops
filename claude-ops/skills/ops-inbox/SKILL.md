@@ -159,6 +159,8 @@ The whatsmeow bridge can **silently miss inbound messages** when its history/app
    - `topics_active.md` — check for active threads or deadlines related to this contact
    - `donts.md` — never violate these restrictions in drafts
 
+5. **Launch the live inbox watcher (background job, every session)** — right after the steps above, start `bin/ops-inbox-live-watch.sh` via Bash with `run_in_background: true`. It polls the Gmail inbox (via `gog`) every ~4 minutes and exits — with a `NEW INBOX MAIL: <from> | <subject> | <date> | id=<id>` summary line — the instant a genuinely new inbound message lands; it also exits (with a `watcher expired` line) after ~6h if nothing new arrives. **The job's exit IS the new-mail ping** — treat it exactly like a direct orchestrator notification: when it fires, re-scan the affected channel and relaunch the watcher (same command) so live coverage never lapses. Pure bash + python3 + `gog`, no systemd/launchd dependency, cross-platform (Linux + macOS).
+
 ## CLI/API Reference
 
 ### whatsapp-bridge (WhatsApp — mcp**whatsapp**\*)
