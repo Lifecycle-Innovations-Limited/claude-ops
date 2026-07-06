@@ -34,15 +34,34 @@ refresh_current_directory() {
   current_dir="$cache_parent/current"
   installed_json="$PLUGINS_DIR/installed_plugins.json"
 
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete "$PLUGIN_ROOT/" "$current_dir/" 2>/dev/null \
-      && log "  ok: refreshed $current_dir via rsync" \
-      || log "  warn: rsync to current/ failed (non-fatal)"
+  # Guard: when the plugin already runs FROM current/, PLUGIN_ROOT == current_dir.
+  # rsync/cp of a directory onto itself is pointless and, with --delete under
+  # concurrent SessionStart hooks, storms the disk (fseventsd) and spikes load.
+  local root_real cur_real
+  root_real="$(cd "$PLUGIN_ROOT" 2>/dev/null && pwd -P || echo "$PLUGIN_ROOT")"
+  cur_real="$(cd "$current_dir" 2>/dev/null && pwd -P || echo "$current_dir")"
+  if [[ "$root_real" == "$cur_real" ]]; then
+    log "  skip: PLUGIN_ROOT already == current/ ($cur_real) — no self-rsync"
   else
-    mkdir -p "$current_dir"
-    cp -rp "$PLUGIN_ROOT/." "$current_dir/" 2>/dev/null \
-      && log "  ok: refreshed $current_dir via cp" \
-      || log "  warn: cp to current/ failed (non-fatal)"
+    # Single-flight lock so concurrent sessions can't stack rsyncs on current/.
+    local lock="$DATA_DIR/.refresh-current.lock"
+    [[ -d "$lock" ]] && [[ -n "$(find "$lock" -maxdepth 0 -mmin +2 2>/dev/null)" ]] \
+      && rmdir "$lock" 2>/dev/null || true   # clear stale lock from a killed run
+    if mkdir "$lock" 2>/dev/null; then
+      trap 'rmdir "'"$lock"'" 2>/dev/null || true' RETURN
+      if command -v rsync >/dev/null 2>&1; then
+        rsync -a --delete "$PLUGIN_ROOT/" "$current_dir/" 2>/dev/null \
+          && log "  ok: refreshed $current_dir via rsync" \
+          || log "  warn: rsync to current/ failed (non-fatal)"
+      else
+        mkdir -p "$current_dir"
+        cp -rp "$PLUGIN_ROOT/." "$current_dir/" 2>/dev/null \
+          && log "  ok: refreshed $current_dir via cp" \
+          || log "  warn: cp to current/ failed (non-fatal)"
+      fi
+    else
+      log "  skip: refresh-current lock held by another process"
+    fi
   fi
 
   if [[ -f "$installed_json" ]]; then
@@ -131,7 +150,12 @@ run_migrations() {
     cache_parent="$(dirname "$PLUGIN_ROOT")"
     current_dir="$cache_parent/current"
 
-    if command -v rsync >/dev/null 2>&1; then
+    local b_root_real b_cur_real
+    b_root_real="$(cd "$PLUGIN_ROOT" 2>/dev/null && pwd -P || echo "$PLUGIN_ROOT")"
+    b_cur_real="$(cd "$current_dir" 2>/dev/null && pwd -P || echo "$current_dir")"
+    if [[ "$b_root_real" == "$b_cur_real" ]]; then
+      log "  skip: PLUGIN_ROOT already == current/ ($b_cur_real) — no self-rsync"
+    elif command -v rsync >/dev/null 2>&1; then
       rsync -a --delete "$PLUGIN_ROOT/" "$current_dir/" 2>/dev/null \
         && log "  ok: refreshed $current_dir via rsync" \
         || log "  warn: rsync to current/ failed (non-fatal)"
