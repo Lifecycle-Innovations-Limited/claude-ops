@@ -49,7 +49,6 @@ if [ "$(config auto_rerun_transients true)" = "true" ] && is_transient "$last_li
   notify "Build transient" "Detected transient ($cmd) — recommend retry"
   cat <<JSON
 {
-  "suppressOutput": true,
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
     "additionalContext": "[ops-deploy-fix] '${cmd:0:60}' failed with a transient signature (network/registry/runner blip). No fixer dispatched — retry the build."
@@ -85,7 +84,6 @@ case $dispatch_status in
   0)
     cat <<JSON
 {
-  "suppressOutput": true,
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
     "additionalContext": "[ops-deploy-fix] Build failure detected in '${cmd:0:60}'. Haiku build-fixer dispatched (logs: $fix_log). Will open fix PR or report transient."
