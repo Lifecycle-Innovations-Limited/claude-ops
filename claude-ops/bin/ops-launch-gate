@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# ops-launch-gate — Healify marketing launch go/no-go scoreboard
+#
+# Checks distribution, funnel, measurement, and API health for campaign readiness.
+# Exit 0 = all hard gates green; exit 1 = one or more hard gates red.
+#
+# Usage:
+#   ops-launch-gate           # human-readable table
+#   ops-launch-gate --json    # machine-readable
+#   ops-launch-gate --quiet   # exit code only
+#
+# Env:
+#   DOPPLER_TOKEN / doppler CLI logged in (healify, healify-api projects)
+#   Optional: PLAY_DWD_SUBJECT (default support@healify.ai)
+set -euo pipefail
+
+JSON=0
+QUIET=0
+for arg in "$@"; do
+  case "$arg" in
+    --json) JSON=1 ;;
+    --quiet) QUIET=1 ;;
+    -h|--help)
+      sed -n '2,20p' "$0"
+      exit 0
+      ;;
+  esac
+done
+
+PLAY_SUBJECT="${PLAY_DWD_SUBJECT:-support@healify.ai}"
+PACKAGE="${PLAY_PACKAGE:-com.healify.healify}"
+IOS_BUNDLE="${IOS_BUNDLE:-com.healify.healify}"
+HARD_FAIL=0
+
+green() { printf 'GREEN'; }
+red() { printf 'RED'; HARD_FAIL=1; }
+amber() { printf 'AMBER'; }
+
+# shellcheck disable=SC2317
+probe() {
+  local name="$1" status="$2" detail="$3"
+  if [[ "$JSON" == 1 ]]; then
+    # collected later
+    :
+  fi
+  if [[ "$QUIET" != 1 ]]; then
+    printf '%-6s  %-28s  %s\n' "$status" "$name" "$detail"
+  fi
+}
+
+declare -a JSON_ROWS=()
+
+add_row() {
+  local gate="$1" status="$2" detail="$3"
+  # escape detail for json
+  local d
+  d=$(printf '%s' "$detail" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+  JSON_ROWS+=("{\"gate\":$(printf '%s' "$gate" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'),\"status\":$(printf '%s' "$status" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'),\"detail\":$d}")
+  if [[ "$QUIET" != 1 && "$JSON" != 1 ]]; then
+    printf '%-6s  %-28s  %s\n' "$status" "$gate" "$detail"
+  fi
+  if [[ "$status" == "RED" ]]; then
+    HARD_FAIL=1
+  fi
+}
+
+# ── G1 iOS public ───────────────────────────────────────────────────────────
+ios_json=$(curl -gsS --max-time 12 "https://itunes.apple.com/lookup?bundleId=${IOS_BUNDLE}&country=us" 2>/dev/null || echo '{}')
+ios_ver=$(printf '%s' "$ios_json" | python3 -c 'import sys,json
+try:
+ d=json.load(sys.stdin); r=d.get("results") or []
+ print(r[0].get("version","") if r else "")
+except: print("")' 2>/dev/null || true)
+ios_date=$(printf '%s' "$ios_json" | python3 -c 'import sys,json
+try:
+ d=json.load(sys.stdin); r=d.get("results") or []
+ print(r[0].get("currentVersionReleaseDate","") if r else "")
+except: print("")' 2>/dev/null || true)
+if [[ -n "$ios_ver" ]]; then
+  add_row "G1_iOS_public" "GREEN" "live ${ios_ver} released ${ios_date}"
+else
+  add_row "G1_iOS_public" "RED" "iTunes lookup empty for ${IOS_BUNDLE}"
+fi
+
+# ── G2 Play public URL ──────────────────────────────────────────────────────
+play_http=$(curl -gsS -o /dev/null -w '%{http_code}' --max-time 12 \
+  -A 'Mozilla/5.0' "https://play.google.com/store/apps/details?id=${PACKAGE}" 2>/dev/null || echo '000')
+if [[ "$play_http" == "200" ]]; then
+  add_row "G2_Play_public" "GREEN" "store page HTTP 200"
+else
+  add_row "G2_Play_public" "RED" "store page HTTP ${play_http} (need Console first-publish visibility)"
+fi
+
+# ── G2b Play tracks (DWD) ───────────────────────────────────────────────────
+play_tracks=$(python3 - <<'PY' 2>/dev/null || true
+import json, subprocess, os
+from google.oauth2 import service_account
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+
+def doppler(key, project="healify", config="prd"):
+    r = subprocess.run(
+        ["doppler", "secrets", "get", key, "--project", project, "--config", config, "--plain"],
+        capture_output=True, text=True,
+    )
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+raw = doppler("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON") or doppler("PLAY_STORE_SERVICE_ACCOUNT_JSON")
+if not raw:
+    print("NO_SECRET"); raise SystemExit(0)
+sa = json.loads(raw)
+subject = os.environ.get("PLAY_DWD_SUBJECT", "support@healify.ai")
+creds = service_account.Credentials.from_service_account_info(
+    sa, scopes=["https://www.googleapis.com/auth/androidpublisher"], subject=subject
+)
+creds.refresh(Request())
+svc = build("androidpublisher", "v3", credentials=creds, cache_discovery=False)
+pkg = os.environ.get("PLAY_PACKAGE", "com.healify.healify")
+edit = svc.edits().insert(packageName=pkg).execute()
+tracks = svc.edits().tracks().list(packageName=pkg, editId=edit["id"]).execute()
+parts = []
+for t in tracks.get("tracks", []):
+    for r in t.get("releases") or []:
+        parts.append(f"{t.get('track')}={r.get('status')}:{r.get('name')}:{','.join(str(c) for c in (r.get('versionCodes') or []))}")
+svc.edits().delete(packageName=pkg, editId=edit["id"]).execute()
+print("; ".join(parts) if parts else "NO_TRACKS")
+PY
+)
+if [[ "$play_tracks" == "NO_SECRET" || -z "$play_tracks" ]]; then
+  add_row "G2b_Play_tracks" "AMBER" "could not read tracks (doppler/DWD)"
+elif [[ "$play_tracks" == *"production=completed"* ]]; then
+  add_row "G2b_Play_tracks" "GREEN" "$play_tracks"
+else
+  add_row "G2b_Play_tracks" "AMBER" "$play_tracks"
+fi
+
+# ── G3 Attribution ──────────────────────────────────────────────────────────
+attr_secret=$(doppler secrets get ATTRIBUTION_INGEST_SECRET --project healify-api --config prd --plain 2>/dev/null || true)
+token="launch-gate-$(date +%s)"
+if [[ -n "$attr_secret" ]]; then
+  attr_code=$(curl -gsS -o /dev/null -w '%{http_code}' --max-time 12 \
+    -X POST 'https://ai.healify.ai/api/analytics/attribution/click' \
+    -H 'Content-Type: application/json' \
+    -H "X-Attribution-Secret: ${attr_secret}" \
+    -d "{\"clickToken\":\"${token}\",\"utm\":{\"utm_source\":\"launch_gate\",\"utm_medium\":\"qa\",\"utm_campaign\":\"scoreboard\"},\"destination\":\"app_store\",\"clickedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\"}" \
+    2>/dev/null || echo '000')
+else
+  attr_code='NOSEC'
+fi
+tf_loc=$(curl -gsS -D - -o /dev/null --max-time 12 \
+  'https://try.healify.ai/get?channel=waitlist&utm_source=launch_gate' 2>/dev/null \
+  | awk 'tolower($1)=="location:"{print $2}' | tr -d '\r' | head -1)
+if [[ "$attr_code" == "201" || "$attr_code" == "200" ]] && [[ -n "$tf_loc" ]]; then
+  add_row "G3_attribution" "GREEN" "click HTTP ${attr_code}; /get → ${tf_loc}"
+elif [[ "$attr_code" == "201" || "$attr_code" == "200" ]]; then
+  add_row "G3_attribution" "AMBER" "click HTTP ${attr_code}; /get location missing"
+else
+  add_row "G3_attribution" "RED" "click HTTP ${attr_code}; /get=${tf_loc:-none}"
+fi
+
+# ── G4 API health ───────────────────────────────────────────────────────────
+api_health=$(curl -gsS --max-time 12 'https://ai.healify.ai/health' 2>/dev/null || echo '{}')
+api_ok=$(printf '%s' "$api_health" | python3 -c 'import sys,json
+try:
+ d=json.load(sys.stdin); print("ok" if d.get("status")=="ok" or d.get("overall")=="healthy" else "bad")
+except: print("bad")' 2>/dev/null || echo bad)
+if [[ "$api_ok" == "ok" ]]; then
+  add_row "G4_api_health" "GREEN" "ai.healify.ai healthy"
+else
+  add_row "G4_api_health" "RED" "ai.healify.ai unhealthy"
+fi
+
+# ── G5 Amplitude ────────────────────────────────────────────────────────────
+amp=$(python3 - <<'PY' 2>/dev/null || echo FAIL
+import subprocess, base64, urllib.request
+def g(k):
+    r=subprocess.run(["doppler","secrets","get",k,"--project","healify","--config","prd","--plain"],capture_output=True,text=True)
+    return r.stdout.strip() if r.returncode==0 else ""
+api,sec=g("AMPLITUDE_API_KEY"),g("AMPLITUDE_SECRET_KEY")
+if not api or not sec:
+    print("NO_SECRET"); raise SystemExit(0)
+req=urllib.request.Request("https://analytics.eu.amplitude.com/api/2/taxonomy/event")
+req.add_header("Authorization","Basic "+base64.b64encode(f"{api}:{sec}".encode()).decode())
+try:
+    with urllib.request.urlopen(req, timeout=12) as r:
+        print(r.status)
+except Exception as e:
+    print(getattr(e,"code","ERR"))
+PY
+)
+if [[ "$amp" == "200" ]]; then
+  add_row "G5_amplitude" "GREEN" "EU taxonomy 200"
+else
+  add_row "G5_amplitude" "RED" "EU taxonomy ${amp}"
+fi
+
+# ── G6 Landing ──────────────────────────────────────────────────────────────
+for host in try.healify.ai healify.ai; do
+  code=$(curl -gsS -o /dev/null -w '%{http_code}' --max-time 12 -A 'Mozilla/5.0' "https://${host}/" 2>/dev/null || echo '000')
+  if [[ "$code" == "200" ]]; then
+    add_row "G6_landing_${host//./_}" "GREEN" "HTTP 200"
+  else
+    add_row "G6_landing_${host//./_}" "AMBER" "HTTP ${code}"
+  fi
+done
+
+# ── Campaign rule summary ───────────────────────────────────────────────────
+if [[ "$JSON" == 1 ]]; then
+  tmp=$(mktemp)
+  for row in "${JSON_ROWS[@]+"${JSON_ROWS[@]}"}"; do
+    printf '%s\n' "$row" >>"$tmp"
+  done
+  python3 -c '
+import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+print(json.dumps({"hard_fail": any(r.get("status")=="RED" for r in rows), "gates": rows}))
+' "$tmp"
+  rm -f "$tmp"
+else
+  if [[ "$QUIET" != 1 ]]; then
+    echo
+    if [[ $HARD_FAIL -eq 0 ]]; then
+      echo "CAMPAIGN: GO (all hard gates green) — still run device golden-path + crash-free before heavy spend"
+    else
+      echo "CAMPAIGN: NO-GO — fix RED gates before paid/influencer volume"
+      echo "Hard rule: need G1 iOS + G2 Play public + G3 attribution + G4 API + G5 Amplitude"
+    fi
+  fi
+fi
+
+exit "$HARD_FAIL"
