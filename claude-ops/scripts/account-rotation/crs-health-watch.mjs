@@ -347,9 +347,9 @@ function main() {
   }
 
   const healthOk = probe();
-  const inferenceOk = CRS_ENABLE_INFERENCE_SMOKE && healthOk ? probeInference() : false;
+  const inferenceOk = CRS_ENABLE_INFERENCE_SMOKE ? probeInference() : false;
   // Phase 1b: inference=false is hard-fail (triggers heal + affects route fallback) instead of silent healthy.
-  if (CRS_ENABLE_INFERENCE_SMOKE && healthOk && !inferenceOk) {
+  if (CRS_ENABLE_INFERENCE_SMOKE && !inferenceOk) {
     healCrsRelay('inference-false');
   }
   const healthy = healthOk && (!CRS_ENABLE_INFERENCE_SMOKE || inferenceOk);
