@@ -100,10 +100,9 @@ function probe() {
       encoding: 'utf8',
       timeout: 5000,
     }).trim();
-    // Phase 1b: also fail probe on CRS-reported inference.capable:false or degraded (in addition to smoke)
+    // Phase 1b: also fail probe on CRS-reported degraded (inference smoke is the separate hard check for "inference=false")
     let body = '';
     try { body = execFileSync('curl', ['-sS', '--max-time', '2', HEALTH_URL], { encoding: 'utf8', timeout: 3000 }).trim(); } catch {}
-    if (body && /"inference"\s*:\s*\{[^}]*"capable"\s*:\s*false/i.test(body)) return false;
     if (body && /"status"\s*:\s*"(degraded|unhealthy)"/i.test(body)) return false;
     return code === '200';
   } catch {
