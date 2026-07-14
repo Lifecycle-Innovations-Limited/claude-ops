@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
 
+
+concurrency:
+  # Auto-cancel superseded runs for same workflow+ref/PR (Sam 2026-07-14)
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: write
   pull-requests: write
