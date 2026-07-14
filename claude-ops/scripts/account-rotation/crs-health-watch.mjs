@@ -30,6 +30,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { applyRouteToSettings, readRouteState, setRouteMode } from './route-state.mjs';
+import { healCrsRelay } from './crs-heal-relay.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const args = new Set(process.argv.slice(2));
@@ -63,7 +64,8 @@ const CRS_BASE = process.env.CRS_BASE_URL || ROUTE_CRS.baseUrl || 'http://127.0.
 const HEALTH_URL = process.env.CRS_HEALTH_URL || ROUTE_CRS.healthUrl || CRS_BASE.replace(/\/api\/?$/, '/health');
 const CRS_SMOKE_URL = process.env.CRS_SMOKE_URL || `${CRS_BASE}/v1/messages?beta=true`;
 const CRS_SMOKE_MODEL = process.env.CRS_SMOKE_MODEL || 'claude-sonnet-4-6';
-const CRS_ENABLE_INFERENCE_SMOKE = process.env.CRS_ENABLE_INFERENCE_SMOKE === '1';
+// Phase 1b: default ON (was opt-in ==='1' which caused silent-healthy when inference=false).
+const CRS_ENABLE_INFERENCE_SMOKE = process.env.CRS_ENABLE_INFERENCE_SMOKE !== '0';
 const DOWN_STRIKES = +(process.env.CRS_DOWN_STRIKES || 3); // ~3 min at 60s tick
 const UP_STRIKES = +(process.env.CRS_UP_STRIKES || 1);
 // OS-wedge auto-reboot threshold. Must be >= DOWN_STRIKES so we only reboot AFTER
@@ -98,6 +100,10 @@ function probe() {
       encoding: 'utf8',
       timeout: 5000,
     }).trim();
+    // Phase 1b: also fail probe on CRS-reported degraded (inference smoke is the separate hard check for "inference=false")
+    let body = '';
+    try { body = execFileSync('curl', ['-sS', '--max-time', '2', HEALTH_URL], { encoding: 'utf8', timeout: 3000 }).trim(); } catch {}
+    if (body && /"status"\s*:\s*"(degraded|unhealthy)"/i.test(body)) return false;
     return code === '200';
   } catch {
     return false;
@@ -340,8 +346,12 @@ function main() {
   }
 
   const healthOk = probe();
-  const inferenceOk = CRS_ENABLE_INFERENCE_SMOKE && healthOk ? probeInference() : false;
-  const healthy = healthOk;
+  const inferenceOk = CRS_ENABLE_INFERENCE_SMOKE ? probeInference() : false;
+  // Phase 1b: inference=false is hard-fail (triggers heal + affects route fallback) instead of silent healthy.
+  if (CRS_ENABLE_INFERENCE_SMOKE && !inferenceOk) {
+    healCrsRelay('inference-false');
+  }
+  const healthy = healthOk && (!CRS_ENABLE_INFERENCE_SMOKE || inferenceOk);
   const st = loadState();
   if (healthy) {
     st.up += 1;
