@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.38.5] - 2026-07-18
+
+### Changed
+ops-inbox: require gog raw SENT labelIds verification (in:sent search polluted); already_replied? on KEEP rows
+
+
 ## [2.38.4] - 2026-06-30
 
 ### Changed
