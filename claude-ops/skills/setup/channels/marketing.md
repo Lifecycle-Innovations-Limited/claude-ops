@@ -1,4 +1,4 @@
-### 3j — Marketing (Klaviyo, Meta Ads, GA4, Search Console)
+### 3j — Marketing (Klaviyo, Meta Ads, GA4, Search Console, organic surfaces)
 
 > **Project slugs are the entry gate.** Every sub-step below writes under `marketing.projects.<slug>` in `$PREFS_PATH`. Those slugs (plus an optional flat `marketing.account_slugs[]` array) are the canonical source consumed by `ops-marketing-auth-prewarm.sh` for product-hint extraction. The prewarm script no longer ships a hardcoded slug list — if no projects/slugs exist in prefs it prints `no marketing accounts configured — run /ops:setup marketing` and exits 0. Make sure the user has at least one project slug picked before continuing.
 
@@ -8,6 +8,7 @@
 # Shell env
 printenv KLAVIYO_API_KEY KLAVIYO_PRIVATE_KEY META_ACCESS_TOKEN FACEBOOK_ACCESS_TOKEN META_AD_ACCOUNT_ID GA4_PROPERTY_ID GA_MEASUREMENT_ID 2>/dev/null
 printenv GOOGLE_ADS_DEVELOPER_TOKEN GOOGLE_ADS_CLIENT_ID GOOGLE_ADS_CLIENT_SECRET GOOGLE_ADS_REFRESH_TOKEN GOOGLE_ADS_CUSTOMER_ID 2>/dev/null
+printenv META_PAGE_ID INSTAGRAM_BUSINESS_ID YOUTUBE_CHANNEL_ID YOUTUBE_REFRESH_TOKEN GOOGLE_MERCHANT_ID 2>/dev/null
 
 # Shell profiles
 grep -h 'KLAVIYO\|META_\|FACEBOOK\|GA4\|GA_MEASUREMENT\|GOOGLE_ADS' ~/.zshrc ~/.bashrc ~/.zprofile ~/.envrc 2>/dev/null | grep -v '^#'
@@ -47,7 +48,17 @@ If user selects `[More...]`, present **second call**:
 | Google Analytics 4    | ga4    | Web analytics — GA4 property ID                    |
 | Google Search Console | gsc    | SEO data — site URL (uses gcloud auth)             |
 | WhatsApp Business API | waba   | Template messaging at scale — Business token + IDs |
-| Skip                  | skip   | Done with marketing setup                          |
+| More...               | more2  | Organic social, YouTube, Merchant Center           |
+
+If user selects the second `[More...]`, present **third call** (free direct surfaces —
+read by `scripts/lib/organic-metrics-aggregator.sh`, no aggregator subscription needed):
+
+| Option                 | Header       | Description                                            |
+| ---------------------- | ------------ | ------------------------------------------------------ |
+| Organic social (FB/IG) | meta-organic | Page fans + IG reach — reuses Meta token, page/IG IDs  |
+| YouTube                | youtube      | Views/watch time/subscribers — OAuth refresh token     |
+| Google Merchant Center | merchant     | Product approval status — merchant ID + Google auth    |
+| Skip                   | skip         | Done with marketing setup                              |
 
 Run the selected sub-step(s) below in the order selected.
 
@@ -235,6 +246,127 @@ ACCESS_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
 curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
   "https://searchconsole.googleapis.com/webmasters/v3/sites" | jq '.siteEntry | length'
 ```
+
+Once `marketing.projects.<key>.gsc.site_url` is written, headless reads work via
+`organic_searchconsole <key>` in `scripts/lib/organic-metrics-aggregator.sh`
+(same gcloud-ADC / `$GOOGLE_ACCESS_TOKEN` auth as the smoke test above).
+
+#### Organic social (Facebook Page + Instagram Business)
+
+Free direct reads — no aggregator subscription needed. Reuses the Meta access
+token from the Meta Ads sub-step (or `META_ACCESS_TOKEN` / `FACEBOOK_ACCESS_TOKEN`
+from the auto-scan). Requires `marketing.projects.<key>.meta.access_token` to be
+configured first.
+
+If `META_PAGE_ID` or `INSTAGRAM_BUSINESS_ID` was found in the auto-scan, present
+them. Otherwise auto-resolve from the token:
+
+```bash
+# Facebook Page ID (first managed page)
+curl -s "https://graph.facebook.com/v18.0/me/accounts?access_token=$TOKEN" | jq -r '.data[0].id // empty'
+# Instagram Business ID off that page
+curl -s "https://graph.facebook.com/v18.0/$PAGE_ID?fields=instagram_business_account&access_token=$TOKEN" \
+  | jq -r '.instagram_business_account.id // empty'
+```
+
+Save to `$PREFS_PATH` (merge — do not clobber existing `.meta` cred-refs):
+
+```json
+{
+  "marketing": {
+    "projects": {
+      "<key>": {
+        "meta": { "page_id": "<PAGE_ID>", "instagram_business_id": "<IG_ID>" }
+      }
+    }
+  }
+}
+```
+
+Smoke test (expects a JSON object with `page_fans` / `ig_followers`, `null` = creds missing):
+
+```bash
+. "${CLAUDE_PLUGIN_ROOT}/scripts/lib/organic-metrics-aggregator.sh"
+organic_meta <key> | jq .
+```
+
+#### YouTube (organic)
+
+YouTube Analytics API v2, same OAuth refresh-token pattern as Google Ads
+(Desktop OAuth client + localhost capture — see the Google Ads manual fallback
+path above), but with scopes
+`https://www.googleapis.com/auth/yt-analytics.readonly` and
+`https://www.googleapis.com/auth/youtube.readonly` instead of `adwords`.
+No developer token needed.
+
+Ask for (present auto-scan hits first): OAuth `client_id` + `client_secret`
+(can reuse the Google Ads Desktop client), then run the consent flow with the
+YouTube scopes to mint a dedicated `refresh_token`. `channel_id` is optional —
+omitted means "the authorized channel".
+
+Save to `$PREFS_PATH` (Doppler cred-refs preferred):
+
+```json
+{
+  "marketing": {
+    "projects": {
+      "<key>": {
+        "youtube": {
+          "client_id": "doppler:claude-ops/prd/GOOGLE_ADS_CLIENT_ID",
+          "client_secret": "doppler:claude-ops/prd/GOOGLE_ADS_CLIENT_SECRET",
+          "refresh_token": "doppler:claude-ops/prd/YOUTUBE_<PROJECT_UPPER>_REFRESH_TOKEN",
+          "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      }
+    }
+  }
+}
+```
+
+Smoke test:
+
+```bash
+. "${CLAUDE_PLUGIN_ROOT}/scripts/lib/organic-metrics-aggregator.sh"
+organic_youtube <key> | jq .
+```
+
+Expect `views` / `subscribers_total` fields; `null` means creds missing or the
+refresh token lacks the YouTube scopes (re-run consent with the right scopes).
+
+#### Google Merchant Center
+
+Content API v2.1 product-approval status (approved / pending / disapproved /
+expiring). Ask for the Merchant ID (Merchant Center dashboard → top-right
+account ID), or present `GOOGLE_MERCHANT_ID` from the auto-scan.
+
+Auth: gcloud ADC with the `https://www.googleapis.com/auth/content` scope, or a
+dedicated OAuth refresh token (same Desktop-client capture flow as YouTube above)
+saved under `merchant_center.refresh_token` / `client_id` / `client_secret`.
+
+Save to `$PREFS_PATH`:
+
+```json
+{
+  "marketing": {
+    "projects": {
+      "<key>": { "merchant_center": { "merchant_id": "123456789" } }
+    }
+  }
+}
+```
+
+Smoke test:
+
+```bash
+. "${CLAUDE_PLUGIN_ROOT}/scripts/lib/organic-metrics-aggregator.sh"
+merchant_status <key> | jq .
+```
+
+Expect `approved` / `disapproved` counts; `null` means merchant ID or auth missing.
+
+> Full key matrix per direct surface: `docs/integrations/direct-channel-wiring.md`
+> (repo root). These surfaces double as the free fallback when Windsor.ai is not
+> connected or returns dead zeros.
 
 #### WhatsApp Business API
 
