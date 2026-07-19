@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.38.6] - 2026-07-19
+
+### Changed
+ops-inbox: Paperclip SSOT scan + mandatory WA archive API (PR #670)
+
+
 ## [2.38.5] - 2026-07-18
 
 ### Changed
