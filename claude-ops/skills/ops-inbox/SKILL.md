@@ -564,6 +564,16 @@ All channel credentials come from env vars or CLI auth — no hardcoded secrets.
 
 **The success metric of `/ops:ops-inbox` is an EMPTY inbox on EVERY channel — not "surfaced the NEEDS_REPLY".** Every conversation that no longer needs the user's eyes, action, or reaction MUST be archived in the same run. This is mandatory, not a nicety:
 
+> **Paperclip SSOT + WA archive API (Sam 2026-07-19 — hard):**
+> 1. **When Paperclip is on the box**, before KEEP-classifying or drafting money/legal/hire/product: scan open issues + pending `issue_thread_interactions` for that counterparty/thread id (examples: Betaalronde → AUR-880; Centurion → AUR-696 / AUR-1004; Ian comp → AUR-920; Brittany YT → SFB-172). Prefer the board gate + staged draft over a new Telegram `AskUserQuestion` when the same decision is already wired. Never re-ask a locked Q or contradict answered options.
+> 2. **WhatsApp archive is mandatory every pass** — not “demote only.” After classify, call the bridge archive endpoint on **every non-actionable chat and every chat you just replied to** (phone `@s.whatsapp.net` **and** every `@lid` / `alt_jids`):
+>    ```bash
+>    curl -s -X POST http://127.0.0.1:8080/api/archive \
+>      -H 'Content-Type: application/json' \
+>      -d '{"chat_jid":"<jid>","archive":true}'
+>    ```
+>    MCP equivalent: `mcp__whatsapp__archive_chat {chat_jid, archive: true}`. Report archived count. Leave only true NEEDS_REPLY / creative-hold / crisis-surface chats unarchived. Demote-without-archive is a defect (phone inbox still noisy).
+
 > **🚫 HARD GUARDRAIL — NEVER ARCHIVE A TODO/ACTION-LABELED EMAIL UNTIL VERIFIED DONE (overrides every archive rule below).**
 > An email carrying ANY of the user's todo/action labels is an open task the user is tracking — it MUST stay in the inbox until the task is verified complete, regardless of how it looks to the classifier (even if the subject reads like spam, a newsletter, or an automated notification, and even if it lands in WAITING/FYI). Treat the label as the user's explicit intent and obey it over your own classification.
 > - **Protected labels** (case-insensitive, match by name): `To Respond`, `Respond`, `Reply`, `Reply Later`, `Action`, `Needs Action`, `Follow up`, `Awaiting Reply`, `To-do` / `Todo`, `Tasklet`, `Timed Actions`, and any label whose name contains `to-do`/`todo`/`task`/`action`/`respond`/`follow up`/`reply later`/`needs action`/`awaiting reply` — **except** completion labels like `Actioned` or any name containing `actioned` (those signal verified done, not open todos). (Skip Gmail system labels `INBOX/SENT/DRAFT/UNREAD/IMPORTANT/STARRED/CATEGORY_*` — those are not todo markers.)
