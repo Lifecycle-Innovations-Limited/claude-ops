@@ -4,6 +4,7 @@
 # Hermetic: runs entirely against local fixtures, no network.
 # Asserts:
 #   - all-zero fixture → "warn: windsor all-zero pattern (plan expired?)" + exit 1
+#   - quota-message fixture → "warn: windsor quota/plan-limit message detected (plan expired?)" + exit 1
 #   - healthy fixture (incl. string-typed spend) → "ok" + exit 0
 #   - stdin mode works
 #   - custom jq paths work
@@ -41,6 +42,22 @@ if [ "$rc" -eq 0 ] && [ "$out" = "ok" ]; then
   ok "healthy fixture passes with exit 0"
 else
   err "healthy fixture" "rc=$rc out=$out"
+fi
+
+# 2b) quota/plan-limit message fixture → warn + exit 1
+out="$(bash "$SCRIPT" "$FIXTURES/windsor-quota-message.json")"; rc=$?
+if [ "$rc" -eq 1 ] && [ "$out" = "warn: windsor quota/plan-limit message detected (plan expired?)" ]; then
+  ok "quota-message fixture warns with exit 1"
+else
+  err "quota-message fixture" "rc=$rc out=$out"
+fi
+
+# 2c) healthy fixture still passes the quota text check → ok + exit 0
+out="$(bash "$SCRIPT" "$FIXTURES/windsor-healthy.json")"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "ok" ]; then
+  ok "healthy fixture unaffected by quota text check"
+else
+  err "healthy fixture vs quota check" "rc=$rc out=$out"
 fi
 
 # 3) stdin mode
