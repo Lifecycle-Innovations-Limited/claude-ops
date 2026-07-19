@@ -310,7 +310,7 @@ Output format (STRICT):
 EOF
 
   SYNTHESIS=$(claude_invoke --model claude-sonnet-4-6 --no-session-persistence \
-    --system "$SYSTEM_PROMPT" -p < "$PROMPT_FILE" 2>>"$LOG" || echo "")
+    --system-prompt "$SYSTEM_PROMPT" -p < "$PROMPT_FILE" 2>>"$LOG" || echo "")
   rm -f "$PROMPT_FILE"
 else
   log "WARN: claude-invoke.sh not found at $PLUGIN_ROOT — using Tavily-only fallback"
