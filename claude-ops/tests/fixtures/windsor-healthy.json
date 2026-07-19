@@ -1,0 +1,10 @@
+{
+  "data": [
+    { "source": "facebook", "account_id": "act_000000000000000", "date": "2026-06-19", "spend": "12.34", "impressions": 4521 },
+    { "source": "facebook", "account_id": "act_000000000000000", "date": "2026-07-18", "spend": 8.9, "impressions": 3877 },
+    { "source": "google_ads", "account_id": "000-000-0000", "date": "2026-06-19", "spend": 0, "impressions": 0 },
+    { "source": "google_ads", "account_id": "000-000-0000", "date": "2026-07-18", "spend": 5.5, "impressions": 1204 },
+    { "source": "instagram", "account_id": "17800000000000000", "date": "2026-06-19", "reach": 980 },
+    { "source": "instagram", "account_id": "17800000000000000", "date": "2026-07-18", "reach": 1103 }
+  ]
+}
