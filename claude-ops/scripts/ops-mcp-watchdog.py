@@ -18,7 +18,13 @@ Every cron tick:
 Env:
   MCP_WATCHDOG_AUTO_REFRESH=1  (default 1) — attempt silent OAuth refresh
                                when token_expired. Set 0 to disable.
-  MCP_WATCHDOG_NOTIFY=1        (default 1) — fire WhatsApp on new degradations.
+  MCP_WATCHDOG_NOTIFY=1        (default 1) — act on new degradations.
+  MCP_WATCHDOG_FIX_AGENT=1     (default 1) — on degradation, dispatch the
+                               headless fix agent (scripts/ops-mcp-fixer.sh)
+                               instead of notifying. Notifications only fire
+                               when the agent is disabled, missing, or fails —
+                               and then informatively (name + cause), never
+                               a bare "N MCP(s) need attention".
   POCKET_STATE_DIR              for WhatsApp config lookup
   MCP_WATCHDOG_PROBE_TIMEOUT    default 6s per MCP
 
@@ -50,6 +56,8 @@ LOG_FILE = STATE_DIR / "run.log"
 AUTO_REFRESH = os.environ.get("MCP_WATCHDOG_AUTO_REFRESH", "1") == "1"
 AUTO_REAUTH = os.environ.get("MCP_WATCHDOG_AUTO_REAUTH", "1") == "1"
 NOTIFY = os.environ.get("MCP_WATCHDOG_NOTIFY", "1") == "1"
+FIX_AGENT = os.environ.get("MCP_WATCHDOG_FIX_AGENT", "1") == "1"
+FIXER_SCRIPT = Path(__file__).resolve().parent / "ops-mcp-fixer.sh"
 PROBE_TIMEOUT = int(os.environ.get("MCP_WATCHDOG_PROBE_TIMEOUT", "6"))
 REAUTH_SCRIPT = Path(__file__).resolve().parent / "ops-mcp-reauth.py"
 
@@ -75,6 +83,39 @@ def get_api_key_for(name: str) -> str | None:
         if out.returncode == 0:
             return out.stdout.strip()
     except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def config_headers(name: str) -> dict:
+    """Static headers from ~/.claude.json mcpServers[name].headers (e.g. a
+    local gateway MCP configured with a Bearer token in its config entry)."""
+    try:
+        d = json.loads((HOME / ".claude.json").read_text())
+        return dict(((d.get("mcpServers") or {}).get(name) or {}).get("headers") or {})
+    except Exception:
+        return {}
+
+
+def keychain_oauth_token(name: str) -> str | None:
+    """Claude Code's own OAuth store: macOS keychain item 'Claude Code-credentials'
+    → mcpOAuth. Keys look like '<serverName>|<hash>'. Skips expired tokens.
+    Without this, HTTP MCPs that Claude Code authenticated natively (not via
+    mcp-remote) probe as 401 forever even though sessions work fine."""
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            capture_output=True, text=True, timeout=5)
+        if out.returncode != 0:
+            return None
+        entries = json.loads(out.stdout).get("mcpOAuth") or {}
+        for key, entry in entries.items():
+            if key.split("|")[0] == name and entry.get("accessToken"):
+                exp = entry.get("expiresAt") or 0
+                if exp and exp / 1000 < time.time():
+                    continue
+                return entry["accessToken"]
+    except Exception:
         pass
     return None
 
@@ -184,6 +225,16 @@ def probe(url: str, mcp_name: str = "") -> dict:
                 pass
         if tokens and tokens.get("access_token"):
             headers["Authorization"] = f"Bearer {tokens['access_token']}"
+        # No mcp-remote token cache? Fall back to (1) static headers from the
+        # server's own config entry, then (2) Claude Code's native OAuth store.
+        # Probing without these reports 401 degradations that sessions never see.
+        if "Authorization" not in headers:
+            for k, v in config_headers(mcp_name).items():
+                headers.setdefault(k, v)
+        if "Authorization" not in headers:
+            kc_tok = keychain_oauth_token(mcp_name)
+            if kc_tok:
+                headers["Authorization"] = f"Bearer {kc_tok}"
 
     body = json.dumps({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -474,16 +525,30 @@ def main() -> int:
             except Exception as e:
                 log(f"{name}: reauth error: {type(e).__name__}: {e}")
 
-    # Notify on new degradations
+    # New degradations → dispatch the headless fix agent; notify only as fallback
     if degraded and NOTIFY:
-        bullets = "\n".join(f"• {n} → {s} ({d[:60]})" for n, s, d in degraded)
-        macos_notify("MCP degradation", f"{len(degraded)} MCP(s) need attention")
-        whatsapp_notify(
-            f"⚠️ MCP watchdog — {len(degraded)} server(s) degraded:\n\n{bullets}\n\n"
-            f"Run `pocket mcps` for details. Open Claude Code to re-auth via browser, "
-            f"or build out the Playwright auto-approver if you want zero-touch."
-        )
-        log(f"notified about {len(degraded)} degradations")
+        oneliner = "; ".join(f"{n}: {s}" + (f" ({d[:40]})" if d else "") for n, s, d in degraded)
+        dispatched = False
+        if FIX_AGENT and FIXER_SCRIPT.exists():
+            try:
+                payload = json.dumps([
+                    {"name": n, "state": s, "detail": d} for n, s, d in degraded])
+                subprocess.Popen(
+                    ["bash", str(FIXER_SCRIPT), payload],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True)
+                dispatched = True
+                log(f"dispatched fix agent for: {oneliner}")
+            except Exception as e:
+                log(f"fix agent dispatch failed: {type(e).__name__}: {e}")
+        if not dispatched:
+            bullets = "\n".join(f"• {n} → {s} ({d[:60]})" for n, s, d in degraded)
+            macos_notify("MCP degraded", oneliner[:220])
+            whatsapp_notify(
+                f"⚠️ MCP watchdog — {len(degraded)} server(s) degraded:\n\n{bullets}\n\n"
+                f"Run `pocket mcps` for details, or open Claude Code to re-auth."
+            )
+            log(f"notified about {len(degraded)} degradations: {oneliner}")
     if recovered:
         log(f"recovered: {', '.join(recovered)}")
 
