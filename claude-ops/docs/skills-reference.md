@@ -240,11 +240,14 @@ flowchart LR
 
 ### `/ops:ecom` · `skills/ops-ecom/SKILL.md`
 
-Shopify store command center. Orders, inventory, fulfillment, analytics, and store health via Shopify Admin API.
+Shopify store command center. Orders, inventory, fulfillment, analytics, store health, sales channels, agentic storefronts, and Shop readiness via Shopify Admin API.
 
 - `/ops:ecom orders` — recent orders + fulfillment status
 - `/ops:ecom inventory` — low stock alerts
 - `/ops:ecom analytics` — revenue, AOV, conversion
+- `/ops:ecom channels` — sales channel / publication inventory
+- `/ops:ecom agentic` — agentic storefront health (ChatGPT, Gemini, Copilot, …)
+- `/ops:ecom shop` — Shop channel + Shop Campaigns readiness (stage-only spend)
 - `/ops:ecom setup` — configure Shopify API credentials
 
 ### `/ops:marketing` · `skills/ops-marketing/SKILL.md`
@@ -261,6 +264,8 @@ Marketing analytics dashboard. Email campaigns (Klaviyo), paid ads (Meta Ads, Go
 - `/ops:marketing google-ads campaigns` — Campaign management — list, create, pause, enable, adjust budget
 - `/ops:marketing google-ads keywords` — Keyword Planner — discover keywords with volume and bid data
 - `/ops:marketing google-ads ad-groups` — Ad group management — list, create, add/remove keywords, adjust bids
+- `/ops:marketing shop-campaigns` — Shop Campaigns prefs status (stage-only; no auto-spend)
+- `/ops:marketing agentic` — agentic storefront prefs status (live probe via /ops-ecom agentic)
 
 ### `/ops:voice` · `skills/ops-voice/SKILL.md`
 
