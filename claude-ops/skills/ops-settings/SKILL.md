@@ -54,6 +54,10 @@ Display as a table:
  Klaviyo             ⚠️  missing    —
  Meta Ads            ⚠️  missing    —
  GA4                 ⚠️  missing    —
+ Organic FB/IG       ⚠️  missing    —
+ YouTube             ⚠️  missing    —
+ Search Console      ⚠️  missing    —
+ Merchant Center     ⚠️  missing    —
  ElevenLabs          ⚠️  missing    —
  Datadog             ⚠️  missing    —
  New Relic           ⚠️  missing    —
@@ -108,6 +112,19 @@ When a specific integration is selected (via argument or user pick from dashboar
 | Datadog     | `curl -s -H "DD-API-KEY: ${new_key}" https://api.datadoghq.com/api/v1/validate \| jq .valid` → true                                |
 | New Relic   | `curl -s -H "Api-Key: ${new_key}" https://api.newrelic.com/v2/applications.json \| jq '.applications                               | length'` → numeric |
 | Doppler MCP | `npx -y @dopplerhq/mcp-server --help 2>&1` with DOPPLER_TOKEN set                                                                  | exits 0            |
+
+**Direct marketing surfaces** (per-project keys under `.marketing.projects.<p>` — see
+`docs/integrations/direct-channel-wiring.md` for the full key matrix). Status check:
+key group present and non-empty → configured, else missing. Smoke test each via
+`scripts/lib/organic-metrics-aggregator.sh` — a JSON object means live, `null` means
+missing/broken creds (never render `null` as zeros):
+
+| Surface        | Prefs keys                                             | Smoke test (after `. "${CLAUDE_PLUGIN_ROOT}/scripts/lib/organic-metrics-aggregator.sh"`) |
+| -------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| Organic FB/IG  | `meta.access_token` + `meta.page_id` / `meta.instagram_business_id` | `organic_meta <project> \| jq .` → object with `page_fans` / `ig_followers` |
+| YouTube        | `youtube.refresh_token/client_id/client_secret`        | `organic_youtube <project> \| jq .` → object with `views`                                |
+| Search Console | `gsc.site_url` (+ gcloud ADC or `$GOOGLE_ACCESS_TOKEN`) | `organic_searchconsole <project> \| jq .` → object with `clicks`                        |
+| Merchant Center | `merchant_center.merchant_id` (+ Google auth)         | `merchant_status <project> \| jq .` → object with `approved`/`disapproved`               |
 
 ## Autopilot Studio (per-project)
 
