@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.39.0] - 2026-07-19
+
+### Added
+- MCP watchdog now runs authenticated probes and dispatches a headless fix agent to repair unhealthy servers automatically, replacing vague failure notifications.
+- Email draft cron supports Omnisend as a provider.
+
+### Fixed
+- Email draft cron correctly handles stdin input and strips markdown code fences from generated drafts.
+- Competitor intel cron uses the correct `--system-prompt` flag (the `claude` CLI has no `--system` flag).
+
+
 ## [2.38.6] - 2026-07-19
 
 ### Changed
