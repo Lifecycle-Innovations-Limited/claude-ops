@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.40.0] - 2026-07-19
+
+### Added
+- Windsor.ai data-sanity check that detects silent all-zero metric responses (e.g. after a plan expiry) instead of reporting them as healthy data, with test fixtures and integration docs
+- Marketing-data sanity guard wired into the dashboard, e-commerce, marketing, and socials skills so stale/empty Windsor feeds are flagged before metrics are presented
+
+
 ## [2.39.0] - 2026-07-19
 
 ### Added
