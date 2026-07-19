@@ -124,6 +124,19 @@ Detection pattern that works in practice:
   false` (and `plan_name`) is the smoking gun. Offer `get_subscription_url`
   so the user can renew.
 
+There is a second failure mode: **an expired/over-limit plan can also return
+HTTP 200 with a marketing text row inside the data instead of metrics**, so a
+naive `has("data")` check "succeeds" while the payload is garbage. Example
+payload seen in production:
+
+```json
+{"data":[{"source":"Uh-oh! You've reached your plan limit... Upgrade here... Free plan..."}]}
+```
+
+The sanity script detects this with a case-insensitive match on "upgrade
+here", "plan limit", "free plan", or "uh-oh" in any string value and prints
+`warn: windsor quota/plan-limit message detected (plan expired?)` (exit 1).
+
 What to do on an all-zero result:
 
 1. **Warn the user explicitly** — e.g. *"Windsor returns all zeros — plan
@@ -138,9 +151,10 @@ The reusable check lives in
 [`claude-ops/scripts/windsor-data-sanity.sh`](../../claude-ops/scripts/windsor-data-sanity.sh):
 it reads a Windsor JSON payload (file or stdin), sums a configurable list of
 jq paths (default: every `spend`, `impressions`, and `reach` field), and
-prints `ok` (exit 0) or `warn: windsor all-zero pattern (plan expired?)`
-(exit 1). Wire it into any cron pull or cache refresh so stale-plan zeros are
-flagged before they reach a dashboard:
+prints `ok` (exit 0), `warn: windsor quota/plan-limit message detected (plan
+expired?)` (exit 1, text-row pattern), or `warn: windsor all-zero pattern
+(plan expired?)` (exit 1). Wire it into any cron pull or cache refresh so
+stale-plan garbage is flagged before it reaches a dashboard:
 
 ```sh
 curl -s "$WINDSOR_URL" | claude-ops/scripts/windsor-data-sanity.sh || echo "flag cache as unreliable"

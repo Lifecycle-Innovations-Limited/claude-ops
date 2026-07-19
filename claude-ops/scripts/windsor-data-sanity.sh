@@ -17,10 +17,17 @@
 #          facebook (Meta) + google_ads spend/impressions and instagram reach
 #          signals used for expired-plan detection.
 #
+# Besides the all-zero sum, it also detects Windsor's quota/plan-limit text
+# pattern: when the plan is expired/over limit, the API can return HTTP 200
+# with a text row inside the data, e.g.
+#   {"data":[{"source":"Uh-oh! You've reached your plan limit... Upgrade here..."}]}
+# so `has("data")` checks "succeed" while the payload is garbage.
+#
 # Output / exit codes:
-#   ok                                              exit 0  (real signal present)
-#   warn: windsor all-zero pattern (plan expired?)  exit 1  (all-zero or empty)
-#   error: ...                                      exit 2  (bad input / usage)
+#   ok                                                             exit 0  (real signal present)
+#   warn: windsor quota/plan-limit message detected (plan expired?) exit 1  (quota text row)
+#   warn: windsor all-zero pattern (plan expired?)                 exit 1  (all-zero or empty)
+#   error: ...                                                     exit 2  (bad input / usage)
 #
 # Examples:
 #   windsor-data-sanity.sh ~/.claude/cache/windsor-30d.json
@@ -73,11 +80,31 @@ if [ "$first" -eq 1 ]; then
   exit 2
 fi
 
+# Buffer the input so we can run multiple jq passes (stdin is read once).
 if [ "$FILE" = "-" ]; then
-  total="$(jq "$FILTER" 2>/dev/null)" || { echo "error: invalid JSON on stdin" >&2; exit 2; }
+  INPUT="$(cat)"
+  SRC_DESC="on stdin"
 else
-  total="$(jq "$FILTER" "$FILE" 2>/dev/null)" || { echo "error: invalid JSON in $FILE" >&2; exit 2; }
+  INPUT="$(cat "$FILE")"
+  SRC_DESC="in $FILE"
 fi
+
+if ! printf '%s' "$INPUT" | jq -e . >/dev/null 2>&1; then
+  echo "error: invalid JSON $SRC_DESC" >&2
+  exit 2
+fi
+
+# Quota/plan-limit text pattern: an expired/over-limit plan can return HTTP 200
+# with a marketing text row inside the data instead of metrics. Case-insensitive
+# match on known phrases in any string value of the payload.
+QUOTA_FILTER='[.. | strings] | any(test("upgrade here|plan limit|free plan|uh-oh"; "i"))'
+if printf '%s' "$INPUT" | jq -e "$QUOTA_FILTER" >/dev/null 2>&1; then
+  echo "warn: windsor quota/plan-limit message detected (plan expired?)"
+  exit 1
+fi
+
+total="$(printf '%s' "$INPUT" | jq "$FILTER" 2>/dev/null)" \
+  || { echo "error: invalid JSON $SRC_DESC" >&2; exit 2; }
 
 # Non-zero (positive or negative) anywhere → real signal.
 if awk -v t="$total" 'BEGIN { exit (t + 0 != 0 ? 0 : 1) }'; then
