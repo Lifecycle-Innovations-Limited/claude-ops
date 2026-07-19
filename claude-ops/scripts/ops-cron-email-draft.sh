@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
-# ops-cron-email-draft.sh — Weekly email draft generator (Klaviyo flows + Resend broadcasts).
+# ops-cron-email-draft.sh — Weekly email draft generator
+# (Klaviyo or Omnisend flows + Resend/Omnisend broadcasts).
 #
 # For each project where:
 #   marketing.projects.<key>.email_marketing.enabled = true
 #
-# 1. Pulls Klaviyo flow performance — identifies flows with low open/click rates
-# 2. For each underperforming flow: drafts 3 alt subject lines + body variants
-# 3. Pulls Resend broadcast history — drafts next broadcast from brand context
+# 1. Pulls flow/automation inventory from the configured provider:
+#      Klaviyo  — key via .email_marketing.klaviyo_key  or $KLAVIYO_PRIVATE_KEY
+#      Omnisend — key via .email_marketing.omnisend_key or $OMNISEND_API_KEY
+#    Both may be configured; each configured provider gets its own draft section.
+# 2. For each flow (up to 3 per provider): drafts 3 alt subject lines + body variants
+# 3. Pulls broadcast/campaign history (Resend, or Omnisend campaigns) —
+#    drafts next broadcast from brand context, avoiding recent subject angles
 # 4. Persists all drafts to ${OPS_DATA_DIR}/content/email/<project>/<date>.md
 # 5. Emits manifest at ${OPS_DATA_DIR}/content/email/<project>/manifest.json
 #
@@ -41,6 +46,12 @@ for arg in "$@"; do
 done
 
 _log() { printf '[email-draft] %s\n' "$1" >&2; }
+
+# Strip a markdown code fence the model may wrap around its JSON output,
+# so the persisted ```json block doesn't end up double-fenced.
+_strip_fences() {
+  sed -e 's/^```[a-z]*[[:space:]]*$//' -e 's/^```$//' | sed -e '/./,$!d'
+}
 
 # ── prefs helpers ─────────────────────────────────────────────────────────────
 prefs_get() {
@@ -91,6 +102,40 @@ _klaviyo_underperforming() {
   printf '%s' "$flows_json" \
     | jq -r '[.data[]? | {id: .id, name: (.attributes.name // ""), status: (.attributes.status // "")}]' \
     2>/dev/null || echo '[]'
+}
+
+# ── Omnisend: credential resolution ──────────────────────────────────────────
+_omnisend_key() {
+  local proj="$1"
+  local key_ref
+  key_ref="$(prefs_get "$proj" '.email_marketing.omnisend_key')"
+  [ -z "$key_ref" ] && key_ref="${OMNISEND_API_KEY:-}"
+  printf '%s' "$key_ref"
+}
+
+# ── Omnisend: pull automations (flows) ───────────────────────────────────────
+_omnisend_automations() {
+  local key="$1"
+  curl -gsS --max-time 20 \
+    "https://api.omnisend.com/v5/automations" \
+    -H "X-API-KEY: ${key}" 2>/dev/null || echo '{}'
+}
+
+# ── Omnisend: enabled automations as [{id, name, status}] ────────────────────
+_omnisend_enabled_automations() {
+  local automations_json="$1"
+  printf '%s' "$automations_json" \
+    | jq -r '[.automations[]? | select((.status // "") == "enabled")
+        | {id: (.automationID // .id // ""), name: (.name // ""), status: .status}]' \
+    2>/dev/null || echo '[]'
+}
+
+# ── Omnisend: pull recent campaign history ───────────────────────────────────
+_omnisend_campaigns() {
+  local key="$1"
+  curl -gsS --max-time 20 \
+    "https://api.omnisend.com/v5/campaigns?limit=10" \
+    -H "X-API-KEY: ${key}" 2>/dev/null || echo '{}'
 }
 
 # ── Resend: pull broadcast history ───────────────────────────────────────────
@@ -161,7 +206,7 @@ USER
     --model claude-haiku-4-5 \
     --no-session-persistence \
     -p "${system_prompt}
-${user_prompt}" 2>/dev/null || echo ''
+${user_prompt}" </dev/null 2>/dev/null | _strip_fences || echo ''
 }
 
 # ── Draft next broadcast via Claude ───────────────────────────────────────────
@@ -212,7 +257,7 @@ USER
     --model claude-haiku-4-5 \
     --no-session-persistence \
     -p "${system_prompt}
-${user_prompt}" 2>/dev/null || echo ''
+${user_prompt}" </dev/null 2>/dev/null | _strip_fences || echo ''
 }
 
 # ── Process one project ───────────────────────────────────────────────────────
@@ -244,13 +289,14 @@ _process_project() {
   local manifest_file="${out_dir}/manifest.json"
 
   if [ "$DRY_RUN" = "true" ]; then
-    _log "[DRY-RUN] $proj — would draft Klaviyo flow variants + Resend broadcast"
+    _log "[DRY-RUN] $proj — would draft flow variants (Klaviyo/Omnisend) + broadcast (Resend/Omnisend)"
     printf '{"project":"%s","dry_run":true,"status":"would_run"}\n' "$proj"
     return 0
   fi
 
-  local kv_key resend_key
+  local kv_key om_key resend_key
   kv_key="$(_klaviyo_key "$proj")"
+  om_key="$(_omnisend_key "$proj")"
   resend_key="$(_resend_key "$proj")"
 
   {
@@ -300,10 +346,55 @@ _process_project() {
       flow_idx=$((flow_idx + 1))
     done < <(printf '%s' "$underperforming" | jq -c '.[]' 2>/dev/null || true)
   else
-    _log "no Klaviyo key for $proj — skipping flow drafts"
+    _log "no Klaviyo key for $proj — skipping Klaviyo flow drafts"
+  fi
+
+  # ── Omnisend automations (flows) ──────────────────────────────────────────
+  if [ -n "$om_key" ]; then
+    _log "fetching Omnisend automations for $proj"
+    local om_automations_json om_enabled
+
+    om_automations_json="$(_omnisend_automations "$om_key")"
+    om_enabled="$(_omnisend_enabled_automations "$om_automations_json")"
+
+    local om_count
+    om_count="$(printf '%s' "$om_enabled" | jq 'length' 2>/dev/null || echo 0)"
+
+    _log "found $om_count enabled Omnisend automations for $proj"
+
+    # Draft variants for up to 3 automations
+    local om_idx=0
+    while IFS= read -r flow_obj && [ "$om_idx" -lt 3 ]; do
+      local om_id om_name
+      om_id="$(printf '%s' "$flow_obj" | jq -r '.id // ""')"
+      om_name="$(printf '%s' "$flow_obj" | jq -r '.name // "unnamed automation"')"
+      [ -z "$om_id" ] && continue
+
+      _log "drafting variants for Omnisend automation: $om_name ($om_id)"
+
+      local om_variants_raw
+      om_variants_raw="$(_draft_flow_variants "$om_name" "$brand_voice" "$brand_product")"
+
+      if [ -n "$om_variants_raw" ]; then
+        {
+          printf '## Omnisend Flow: %s\n\n' "$om_name"
+          printf '**Automation ID:** %s\n\n' "$om_id"
+          printf "\`\`\`json\n%s\n\`\`\`\n\n" "$om_variants_raw"
+          printf '%s\n\n' '---'
+        } >> "$out_file"
+        draft_entries+=("omnisend_flow:${om_id}")
+      fi
+
+      om_idx=$((om_idx + 1))
+    done < <(printf '%s' "$om_enabled" | jq -c '.[]' 2>/dev/null || true)
+  else
+    _log "no Omnisend key for $proj — skipping Omnisend flow drafts"
+  fi
+
+  if [ -z "$kv_key" ] && [ -z "$om_key" ]; then
     {
-      printf '## Klaviyo flows\n\n'
-      printf '> No Klaviyo key configured for this project.\n\n'
+      printf '## Flows\n\n'
+      printf '> No flow provider (Klaviyo or Omnisend) configured for this project.\n\n'
       printf '%s\n\n' '---'
     } >> "$out_file"
   fi
@@ -330,11 +421,31 @@ _process_project() {
       } >> "$out_file"
       draft_entries+=("resend_broadcast")
     fi
+  elif [ -n "$om_key" ]; then
+    _log "no Resend key for $proj — drafting next campaign from Omnisend history"
+    local om_campaigns_json om_recent_subjects
+
+    om_campaigns_json="$(_omnisend_campaigns "$om_key")"
+    om_recent_subjects="$(printf '%s' "$om_campaigns_json" \
+      | jq -r '[.campaigns[]?.subject // ""] | .[0:5] | join("; ")' 2>/dev/null || echo '')"
+
+    local om_campaign_raw
+    om_campaign_raw="$(_draft_broadcast "$brand_voice" "$brand_product" "$om_recent_subjects")"
+
+    if [ -n "$om_campaign_raw" ]; then
+      {
+        printf '## Next Omnisend Campaign\n\n'
+        printf '> DRAFT — requires explicit per-message approval before sending.\n\n'
+        printf "\`\`\`json\n%s\n\`\`\`\n\n" "$om_campaign_raw"
+        printf '%s\n\n' '---'
+      } >> "$out_file"
+      draft_entries+=("omnisend_campaign")
+    fi
   else
-    _log "no Resend key for $proj — skipping broadcast draft"
+    _log "no Resend or Omnisend key for $proj — skipping broadcast draft"
     {
-      printf '## Resend broadcast\n\n'
-      printf '> No Resend key configured for this project.\n\n'
+      printf '## Broadcast\n\n'
+      printf '> No broadcast provider (Resend or Omnisend) configured for this project.\n\n'
     } >> "$out_file"
   fi
 
