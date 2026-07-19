@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.41.0] - 2026-07-19
+
+### Added
+- Direct channel wiring: a free direct-API fallback for Windsor.ai, with a new organic-metrics aggregator that pulls marketing metrics straight from channel APIs when Windsor is unavailable or over quota
+- Marketing setup guide and integration docs covering direct channel wiring and when the fallback engages
+- Test coverage for the organic-metrics aggregator and Windsor quota-message handling
+
+### Changed
+- Windsor.ai data-sanity check now detects quota/plan-limit text rows returned inside HTTP 200 responses, so exhausted plans are flagged instead of treated as valid data
+- ops-dash, ops-ecom, ops-marketing, ops-socials, and ops-settings skills updated to surface the direct-channel fallback
+
+
 ## [2.40.0] - 2026-07-19
 
 ### Added
