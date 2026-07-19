@@ -7,6 +7,14 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.42.0] - 2026-07-19
+
+### Changed
+### Added
+- `/ops-ecom`: new `channels`, `agentic`, and `shop` probes — publications/sales-channel inventory, Shopify Agentic storefronts (AI commerce) health, and Shop channel + Shop Campaigns readiness (read-only)
+- `/ops-marketing`: `shopify`, `shop_campaigns`, and `agentic_storefronts` preferences (cred-refs only) with routing, portfolio awareness, and stage-only spend guardrails — never auto-creates budgets
+
+
 ## [2.41.0] - 2026-07-19
 
 ### Added
