@@ -8,6 +8,15 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.43.0] - 2026-07-20
+
+### Changed
+### Added
+- **ops-desk (new skill):** `/ops:ops-desk` desk sweep — fans out read-only context agents (batched 3-wide via the Workflow tool) over the owner's open decisions, staged drafts, payments, sign-offs and chases, returning a ranked ready-to-approve action queue worked down under the per-draft outbound gate. Sister command to `/ops:ops-inbox`.
+- **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
+- **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
+
+
 ## [2.42.0] - 2026-07-19
 
 ### Changed
