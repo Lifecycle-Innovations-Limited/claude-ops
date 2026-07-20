@@ -25,7 +25,7 @@ _Top-level map of every doc file in `claude-ops/docs/`._
 | Doc                                                        | Subject                                                                                        |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | [`agents-reference.md`](agents-reference.md)               | Catalog of all 21 agents (4 v2 specialists + 14 v1 scanners/fixers/C-suite).                   |
-| [`skills-reference.md`](skills-reference.md)               | Catalog of all 60 skills with usage examples.                                                  |
+| [`skills-reference.md`](skills-reference.md)               | Catalog of all 61 skills with usage examples.                                                  |
 | [`daemon-guide.md`](daemon-guide.md)                       | The v1 ops-daemon (briefing pre-warm, whatsapp-bridge-sync, memory-extractor, etc).            |
 | [`docker.md`](docker.md)                                   | Running claude-ops in a container.                                                             |
 | [`marketplace-submissions.md`](marketplace-submissions.md) | Publishing your own plugin to the same marketplace.                                            |

@@ -7,7 +7,7 @@
 ![Version](https://img.shields.io/badge/version-2.42.0-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blueviolet.svg)
-![Skills](https://img.shields.io/badge/skills-60-success)
+![Skills](https://img.shields.io/badge/skills-61-success)
 ![Agents](https://img.shields.io/badge/agents-21-informational)
 ![Integrations](https://img.shields.io/badge/integrations-22-orange)
 ![Auto-fix](https://img.shields.io/badge/v2-auto--fix%20subsystem-ef4444)
@@ -103,7 +103,7 @@ claude --plugin-dir ./claude-ops/claude-ops
 
 ## Commands
 
-All 60 skills, grouped by category:
+All 61 skills, grouped by category:
 
 | 🧭 Navigation                    | 📊 Daily Ops                           |
 | -------------------------------- | -------------------------------------- |
