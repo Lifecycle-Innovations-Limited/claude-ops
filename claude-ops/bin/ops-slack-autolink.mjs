@@ -2,7 +2,7 @@
 /**
  * ops-slack-autolink — extract Slack XOXC and XOXD tokens via Playwright.
  *
- * Ported from maorfr/slack-token-extractor (Python/Playwright) to keep the
+ * Ported from maorfr/slack-token-extractor [Python/Playwright] to keep the
  * claude-ops plugin pure-Node. Launches a persistent-profile Chromium with
  * Playwright, navigates to the user's Slack workspace, prompts them to log
  * in if needed, then pulls the xoxc- user token from localStorage and the
