@@ -70,7 +70,7 @@ function die(message, extra = {}) {
 }
 
 if (!PHONE || !/^\+\d{7,15}$/.test(PHONE)) {
-  die('missing or invalid --phone (E.164 required, e.g. +15551234567)');
+  die('missing or invalid --phone [E.164 required, e.g. +155****4567]');
 }
 
 if (existsSync(CODE_FILE)) unlinkSync(CODE_FILE);

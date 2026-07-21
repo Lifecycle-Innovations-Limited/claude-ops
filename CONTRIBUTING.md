@@ -62,3 +62,15 @@ claude --plugin-dir ./claude-ops/claude-ops
 ## License
 
 By contributing, you agree that your contributions will be licensed under the [MIT License](./claude-ops/LICENSE).
+
+## Adding a new agent adapter (installer)
+
+The `installer/` package ships per-agent adapters so a single `npx claude-ops-installer install` works across CLIs. To add support for a new CLI:
+
+1. Add an entry to `installer/src/detect.mjs` `AGENT_DEFS` with the CLI binary name + the expected skill path.
+2. Add the same agent to `installer/src/config.mjs` `DEFAULT_CONFIG.agents` (default off; let the operator opt in).
+3. Smoke-test: `cd installer && npm test` — the smoke test reads the source layout, plans, and applies; it covers all agent paths through the same code, so a new agent passes automatically as long as `AGENT_DEFS` and the config are consistent.
+4. Update `installer/README.md` with the new agent in the "Supported agents" table.
+5. Update `CHANGELOG.md` under `## Unreleased` → `### Added`.
+
+The adapter is pure: it does not need an `agents/<name>.mjs` file unless the new CLI needs a non-flat layout. If it does, see `installer/src/dispatch.mjs` `pickAgents` and add the per-agent branch.

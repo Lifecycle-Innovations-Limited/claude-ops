@@ -1,0 +1,47 @@
+{
+  "name": "claude-ops-installer",
+  "version": "0.1.0",
+  "description": "Install, update, and verify the claude-ops plugin across Claude Code, Codex, Gemini CLI, OpenClaw, Hermes, and OpenCode from a single command.",
+  "type": "module",
+  "bin": {
+    "claude-ops-installer": "bin/claude-ops-installer.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node test/smoke.mjs",
+    "lint": "prettier --check '**/*.{js,mjs,json}' --ignore-path .gitignore",
+    "format": "prettier --write '**/*.{js,mjs,json}' --ignore-path .gitignore",
+    "type-check": "node --check bin/*.mjs src/*.mjs test/*.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.9.5"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Lifecycle-Innovations-Limited/claude-ops.git",
+    "directory": "installer"
+  },
+  "keywords": [
+    "claude-ops",
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "openclaw",
+    "hermes",
+    "opencode",
+    "skills",
+    "plugin",
+    "installer"
+  ]
+}
