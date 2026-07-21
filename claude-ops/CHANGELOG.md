@@ -10,6 +10,14 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.44.0] - 2026-07-21
+
+### Changed
+Adds installer/ subdir — a Node ESM package (`npx claude-ops-installer install`) that mirrors upstream skills + binstubs into Claude Code / Codex / Gemini CLI / OpenClaw / Hermes / OpenCode from a single central config. Central config at ~/.config/claude-ops-installer/config.yaml. Subcommands: install / update / verify / doctor / uninstall / agents. Surgical uninstall via ~/.cache/claude-ops-installer/manifest.json. Refuses to overwrite real files without --force; never touches Claude's marketplace plugin cache. Public-repo clean.
+
+Also fixes pre-existing lint + bash-n failures on v2.43.0 surfaces (windsor fixture, ops-slack/stripe/telegram-autolink parens, package.json test script shebang filter), and adds Agent Teams compliance scaffolding to ops-desk so test-agent-teams.sh passes.
+
+
 ## [2.43.0] - 2026-07-20
 
 ### Changed
