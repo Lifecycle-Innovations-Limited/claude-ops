@@ -11,6 +11,8 @@ allowed-tools:
   - Agent
   - Workflow
   - AskUserQuestion
+  - TeamCreate
+  - SendMessage
   - TaskCreate
   - TaskUpdate
   - TaskList
@@ -177,3 +179,34 @@ Report: sent / decided / closed / still-open-with-reason. Schedule reminders
 (`CronCreate`, non-outbound) for anything parked with a follow-up horizon. The task
 tracker is the SSOT — every touched item gets its status updated there before the
 summary prints.
+
+## Agent Teams support
+
+If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set, use **Agent Teams** when fanning out
+the gather workflow across independent item sources (Paperclip per company, Linear, GitHub,
+Gmail/WhatsApp residue, etc.) in parallel. This enables:
+
+- Gather agents share context mid-flight (one surfaces a high-priority payment →
+  the ranker can prioritize before the desk-sweep plan is emitted)
+- You can steer scope in real time ("skip Linear, focus on Paperclip only")
+- Agents report progress as each gather round completes, so the main session can
+  start the approval-queue step earlier on the items already returned
+
+**Team setup** (only when the flag is enabled, and only for genuinely parallel
+sources — a single-source desk sweep stays inline):
+
+```
+TeamCreate("ops-desk")
+Agent(team_name="ops-desk", name="paperclip-gather", prompt="Gather owner-action items across all configured Paperclip companies")
+Agent(team_name="ops-desk", name="linear-gather", prompt="Gather Linear items assigned to the owner")
+Agent(team_name="ops-desk", name="inbox-residue", prompt="Gmail/WhatsApp NEEDS_REPLY + todo-labeled items from the last inbox pass")
+Agent(team_name="ops-desk", name="github-chases", prompt="Open PRs awaiting owner review, blocked issues")
+```
+
+After the team reports, the main session runs `Step 3` (work the approval queue) on
+the merged, ranked list. Each `SendMessage` from a gather agent is a structured action
+package — never an outbound send (Rule 6: per-draft outbound approval gate stays in
+the main session, not in the team).
+
+If the flag is NOT set, fall back to standard fire-and-forget `Agent` subagents (one
+per source) — same shape, slower wall-clock because no shared context.
