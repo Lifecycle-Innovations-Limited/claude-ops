@@ -11,7 +11,7 @@
 //
 // Metadata keys read from Stripe checkout.session.metadata / charge.metadata:
 //   utm_source, utm_medium, utm_campaign, utm_term, utm_content
-//   client_id          — GA4 client_id (anonymous device identifier)
+//   client_id          — GA4 client_id [anonymous device identifier]
 //   fbp                — Meta _fbp browser cookie value
 //   fbc                — Meta _fbc browser cookie value
 //   event_source_url   — canonical page URL for CAPI
