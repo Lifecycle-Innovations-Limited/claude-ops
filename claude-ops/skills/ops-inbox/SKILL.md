@@ -316,9 +316,29 @@ JSON. No subagents, no MCP, near-zero tokens.
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --days 14           # wider window
 ```
 
+**ONE-SHOT END-TO-END (Sam 2026-07-21):** `bin/ops-inbox-zero` runs the FULL inbox-zero
+pipeline (scan → Paperclip SSOT → Slack direct API → dual-JID deep-read → WA archive →
+email archive → KEEP report) in one shell call. The agent still does the manual nuance
+refinement (unsure rows + Rule-6 inline drafts + Telegram AskUserQuestion), but the script
+handles the deterministic 80% in ~5s so the agent only spends tokens on judgment calls.
+Captures WhatsApp + Gmail + Slack + Paperclip pending gates in a single run.
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero"                   # full pipeline + WA+email archive pass
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero" --no-archive      # report-only, skip archive
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero" --no-slack        # skip Slack triage
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero" --days 14         # wider window
+```
+
+Outputs:
+- `/tmp/ops-inbox-scan-clean.json` — raw scan output
+- `/tmp/ops-inbox-keep.json` — classified KEEP/ARCHIVE/UNSURE rows (incl. Slack DMs)
+- `/tmp/slack-triage.txt` — Slack direct-API triage (AUTH + human DMs)
+- `~/.local/share/ops-inbox/keep-<ts>.md` — final report (agent reads this for Telegram)
+
 **Why this exists:** the multi-channel scan used to fan out one Workflow subagent per
 channel. A single real run burned **~330k subagent tokens / 5 agents / ~130s** to do work
-that, for WhatsApp, is a sqlite read, and for Email, a CLI call. The script does the same
+that, for WhatsApp, is a sqlite read, and for Email, is a CLI call. The script does the same
 classification (and _better_ — it merges each person's lid↔phone chats into one
 conversation and resolves real names from `contacts`) for free. Reserve agent fan-out for
 genuine reasoning, not for reading a database.
