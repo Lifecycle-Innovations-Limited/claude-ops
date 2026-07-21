@@ -89,6 +89,14 @@ Per-repo budget caps (default 3/hour), single-flight locks, and content-hash ded
 /ops:setup
 ```
 
+### Cross-CLI install (Claude Code + Codex + Gemini + OpenClaw + Hermes + OpenCode)
+
+```bash
+npx claude-ops-installer install
+```
+
+One command mirrors upstream skills + binstubs into every detected CLI's expected layout from a single central config (`~/.config/claude-ops-installer/config.yaml`). See [`installer/README.md`](./installer/README.md) for the schema, supported agents, and `verify` / `doctor` / `update` / `uninstall` subcommands.
+
 > [!TIP]
 > **The wizard installs the background daemon EARLY (Step 2c).** While you're still answering "connect Slack? [OAuth/Skip]" questions, `briefing-pre-warm` is already running every 2 minutes — pre-fetching ECS health, git state, PRs, CI, and unread counts. By the time setup finishes, your first `/ops:go` briefing loads in **<3 seconds** from warm cache instead of ~30s cold.
 
