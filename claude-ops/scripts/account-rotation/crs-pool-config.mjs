@@ -175,6 +175,10 @@ function parseProxyUrl(raw) {
   } else if (s.startsWith('http://')) {
     type = 'http';
     s = s.slice('http://'.length);
+  } else {
+    // Reject unsupported schemes (e.g. ftp://, ssh://, file://). Bare
+    // host:port (no scheme, no path/query/fragment) is still allowed.
+    if (/[/?#]/.test(s)) return null;
   }
   // Now s is host[:port] (may have userinfo@host)
   const at = s.lastIndexOf('@');
@@ -183,7 +187,10 @@ function parseProxyUrl(raw) {
   if (colon < 0) return null;
   const host = s.slice(0, colon).trim();
   const portStr = s.slice(colon + 1).trim();
+  // Reject anything that isn't pure decimal digits after the colon — guards
+  // against `host:3128/path`, `host:3128junk`, `host:3128?x=1`, etc.
+  if (!host || /[\s/?#]/.test(host) || !/^\d+$/.test(portStr)) return null;
   const port = Number.parseInt(portStr, 10);
-  if (!host || !Number.isInteger(port) || port <= 0 || port > 65535) return null;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return null;
   return { type, host, port };
 }

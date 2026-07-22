@@ -89,9 +89,65 @@ test('accountProxyConfig accepts bare host:port for brightdata', () => {
 });
 
 test('accountProxyConfig returns null on malformed URL', () => {
-  assert.equal(accountProxyConfig({}, {}, { CLAUDE_ROTATION_PROXY_ENABLED: '1', EFG_PROXY_URL: 'not a url' }), null);
   assert.equal(
-    accountProxyConfig({}, {}, { CLAUDE_ROTATION_PROXY_ENABLED: '1', EFG_PROXY_URL: 'socks5://host' }),
+    accountProxyConfig(
+      {},
+      {},
+      {
+        CLAUDE_ROTATION_PROXY_ENABLED: '1',
+        CLAUDE_ROTATION_PROXY_PROVIDER: 'efg',
+        EFG_PROXY_URL: 'not a url',
+      },
+    ),
+    null,
+  );
+  assert.equal(
+    accountProxyConfig(
+      {},
+      {},
+      {
+        CLAUDE_ROTATION_PROXY_ENABLED: '1',
+        CLAUDE_ROTATION_PROXY_PROVIDER: 'efg',
+        EFG_PROXY_URL: 'socks5://host',
+      },
+    ),
+    null,
+  );
+  // Unsupported scheme + path/suffix must also return null.
+  assert.equal(
+    accountProxyConfig(
+      {},
+      {},
+      {
+        CLAUDE_ROTATION_PROXY_ENABLED: '1',
+        CLAUDE_ROTATION_PROXY_PROVIDER: 'efg',
+        EFG_PROXY_URL: 'ftp://proxy.example.com:21',
+      },
+    ),
+    null,
+  );
+  assert.equal(
+    accountProxyConfig(
+      {},
+      {},
+      {
+        CLAUDE_ROTATION_PROXY_ENABLED: '1',
+        CLAUDE_ROTATION_PROXY_PROVIDER: 'efg',
+        EFG_PROXY_URL: 'socks5://127.0.0.1:1087/path',
+      },
+    ),
+    null,
+  );
+  assert.equal(
+    accountProxyConfig(
+      {},
+      {},
+      {
+        CLAUDE_ROTATION_PROXY_ENABLED: '1',
+        CLAUDE_ROTATION_PROXY_PROVIDER: 'efg',
+        EFG_PROXY_URL: 'socks5://127.0.0.1:abc',
+      },
+    ),
     null,
   );
 });
