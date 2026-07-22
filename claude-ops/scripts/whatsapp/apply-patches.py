@@ -534,7 +534,7 @@ WHATSAPP_API_BASE_URL = "http://localhost:8080/api"
 
 
 def _resolve_lid_to_pn(jid_or_lid: str) -> str:
-    \"\"\"claude-ops: If jid_or_lid is a LID jid (e.g. ``218030407741450@lid`` or bare
+    \"\"\"claude-ops: If jid_or_lid is a LID jid (e.g. ``100000000000000@lid`` or bare
     digits matching whatsmeow_lid_map.lid), return the phone-number form
     (``<pn>@s.whatsapp.net``). Otherwise return the input unchanged.\"\"\"
     if not jid_or_lid:
