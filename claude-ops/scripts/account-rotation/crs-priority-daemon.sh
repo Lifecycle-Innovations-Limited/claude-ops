@@ -28,7 +28,10 @@ if [ -z "${CRS_ADMIN_PASSWORD:-}" ]; then
   export CRS_ADMIN_PASSWORD
 fi
 
-curl -sf -o /dev/null --max-time 5 http://127.0.0.1:3005/health || exit 0
+# Probe local CRS (Mac 8091/18091 or dev 3005); tolerate down (priority is advisory)
+for p in ${CRS_HEALTH_PORTS:-8091 18091 3005 13005}; do
+  curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:${p}/health" && break
+done || true
 
 if [ -f "$LOG" ]; then
   LOGSIZE="$(stat -c%s "$LOG" 2>/dev/null || stat -f%z "$LOG" 2>/dev/null || echo 0)"
