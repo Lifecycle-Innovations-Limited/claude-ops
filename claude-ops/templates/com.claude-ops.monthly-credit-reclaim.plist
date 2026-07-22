@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Monthly Anthropic credit reclaim cron (HEA-4049).
+  Monthly Anthropic credit reclaim cron.
 
   Schedule: day 1 of each month, 09:00 local time (Europe/Amsterdam for the owner).
   Equivalent cron: 0 9 1 * *

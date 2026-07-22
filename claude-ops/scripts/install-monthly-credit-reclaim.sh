@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # install-monthly-credit-reclaim.sh — Install the monthly Anthropic credit
-# reclaim cron as a launchd LaunchAgent (HEA-4049).
+# reclaim cron as a launchd LaunchAgent.
 #
 # Renders templates/com.claude-ops.monthly-credit-reclaim.plist with the
 # absolute paths to node + the wrapper script, then bootstraps it under the

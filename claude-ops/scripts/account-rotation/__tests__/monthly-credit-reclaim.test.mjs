@@ -1,5 +1,5 @@
 /**
- * monthly-credit-reclaim.mjs — summary math tests (HEA-4049).
+ * monthly-credit-reclaim.mjs — summary math tests.
  *
  * Run: node --test claude-ops/scripts/account-rotation/__tests__/monthly-credit-reclaim.test.mjs
  */

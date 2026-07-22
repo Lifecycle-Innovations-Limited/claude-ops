@@ -167,7 +167,7 @@ WebFetch(url: "https://api.linear.app/graphql", method: "POST", headers: {"Autho
 
 ## Ledger Integration
 
-**CLAIM_KEY:** `linear:issue:<identifier>` (e.g. `linear:issue:HEA-123`)
+**CLAIM_KEY:** `linear:issue:<identifier>` (e.g. `linear:issue:<TEAM>-123`)
 
 ### Pre-flight skip-check
 
