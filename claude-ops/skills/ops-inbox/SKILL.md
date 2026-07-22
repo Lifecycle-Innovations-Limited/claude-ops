@@ -600,7 +600,7 @@ All channel credentials come from env vars or CLI auth — no hardcoded secrets.
 **The success metric of `/ops:ops-inbox` is an EMPTY inbox on EVERY channel — not "surfaced the NEEDS_REPLY".** Every conversation that no longer needs the user's eyes, action, or reaction MUST be archived in the same run. This is mandatory, not a nicety:
 
 > **Paperclip SSOT + WA archive API (Sam 2026-07-19 — hard):**
-> 1. **When Paperclip is on the box**, before KEEP-classifying or drafting money/legal/hire/product: scan open issues + pending `issue_thread_interactions` for that counterparty/thread id (examples: Betaalronde → AUR-880; Centurion → AUR-696 / AUR-1004; Ian comp → AUR-920; Brittany YT → SFB-172). Prefer the board gate + staged draft over a new Telegram `AskUserQuestion` when the same decision is already wired. Never re-ask a locked Q or contradict answered options.
+> 1. **When Paperclip is on the box**, before KEEP-classifying or drafting money/legal/hire/product: scan open issues + pending `issue_thread_interactions` for that counterparty/thread id (e.g. a payment-round thread → its tracking issue, a card/supplier thread → its issue, a comp/hire thread → its issue). Resolve the concrete counterparty→issue mappings from your local prefs/board, not from this public skill. Prefer the board gate + staged draft over a new Telegram `AskUserQuestion` when the same decision is already wired. Never re-ask a locked Q or contradict answered options.
 > 2. **WhatsApp archive is mandatory every pass** — not “demote only.” After classify, call the bridge archive endpoint on **every non-actionable chat and every chat you just replied to** (phone `@s.whatsapp.net` **and** every `@lid` / `alt_jids`):
 >    ```bash
 >    curl -s -X POST http://127.0.0.1:8080/api/archive \
@@ -735,7 +735,7 @@ Before confirming ANY NEEDS_REPLY or drafting, run steps 1–7:
    - **Search:** `gog gmail search "in:sent newer_than:21d (to:<addr1> OR to:<addr2>)"` plus subject/topic variants for the **same ask** (not just same person).
    - **VERIFY every hit with `gog gmail raw <id>` / `get`:** `labelIds` must contain **`SENT`**. `gog gmail search 'in:sent to:X'` is **polluted** — it often returns thread peers / inbound envelopes that lack `SENT` (session-hardened 2026-07-18). Search alone is never proof of outbound.
    - **`DRAFT` ≠ delivered.** Lindy/Gmail drafts must not be treated as already-replied.
-   - **Same person ≠ same ask.** A pay-pack to Robert on Vinites/Skin does **not** close *Betaalronde Juli II*; calendar invites to JD do **not** close a TF sleep bug; old year Brittany threads do **not** close a new TML opp.
+   - **Same person ≠ same ask.** A payment on one deal does **not** close a different payment-round thread; a calendar invite to someone does **not** close an unrelated bug thread with them; an old thread from a prior year does **not** close a new opportunity. Match on the specific ask, not just the person.
    - **Cross-channel:** also check WA (phone + `@lid`), Slack, Productlane/support@ when the ask is product/support. Demote email NEEDS_REPLY when the same ask was already answered on WA (or vice versa).
    - **Report:** every KEEP / NEEDS_REPLY row must state `already_replied?` = `no` | `yes (where)` | `partial (what remains)`. Never stage a draft that duplicates a verified SENT/WA reply.
 6. **Use the contact registry** (below) to resolve who a sender/number/JID actually is and pull their cross-channel identity + context in one offline lookup, so the steps 2–5 searches are precise across every JID/address/handle the person owns.
@@ -782,7 +782,7 @@ When cleaning up, classify each non-NEEDS_REPLY item one more level:
 - **AWAITING-OTHER, time-sensitive** — the user is waiting on a reply tied to a deadline/deal. → archive (auto-resurfaces) **but** set a nudge reminder if no response by a sensible horizon (default 3 days) so the user can chase.
 - **CONCLUDED** — courtesy close, social tail, fully-answered. → archive, no reminder.
 
-**Scheduling reminders (a safe, non-outbound chore — do autonomously):** use `CronCreate` (one-shot, `recurring:false`) for each USER-OWES / nudge item. The reminder prompt should name the contact, the owed action, and the source thread, e.g. *"Reminder: you told Twan you'd handle Dennis's email tonight — follow up (WhatsApp 31642218102)."* Pick a sensible fire time (same evening for "tonight", +3d for nudges). Reminders fire to the user; they are NOT outbound third-party comms, so no approval gate applies.
+**Scheduling reminders (a safe, non-outbound chore — do autonomously):** use `CronCreate` (one-shot, `recurring:false`) for each USER-OWES / nudge item. The reminder prompt should name the contact, the owed action, and the source thread, e.g. *"Reminder: you told <contact-A> you'd handle <contact-B>'s email tonight — follow up (WhatsApp <number>)."* Pick a sensible fire time (same evening for "tonight", +3d for nudges). Reminders fire to the user; they are NOT outbound third-party comms, so no approval gate applies.
 
 **Meeting-note / assigned-todo capture:** when an email or message contains action items assigned to the user (meeting recaps, "can you…", "actie Sam:"), extract them and schedule reminders so they are never lost — even if the thread itself is then archived. Surface the extracted todos in the run summary.
 

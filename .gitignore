@@ -9,3 +9,8 @@ node_modules/
 
 # Operator PII denylist (out-of-repo, loaded by test-no-secrets.sh / pre-commit)
 .pii-denylist
+
+# Local, owner-specific prefs/overrides — never commit (see docs/LOCAL-PREFS.md)
+ops.local.json
+*.local.json
+.ops-prefs.json
