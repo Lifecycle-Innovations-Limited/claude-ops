@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # install-daily-credit-digest.sh — Install the daily Anthropic credit-pool
-# digest cron as a launchd LaunchAgent (HEA-4047).
+# digest cron as a launchd LaunchAgent.
 #
 # Renders templates/com.claude-ops.daily-credit-digest.plist with the
 # absolute paths to node + the wrapper script, then bootstraps it under the
@@ -60,4 +60,4 @@ echo "  next run: tomorrow at 09:00 local time (then every 24h)"
 if [[ -z "${SLACK_WEBHOOK_URL:-}" ]]; then
   echo "  note: SLACK_WEBHOOK_URL was unset — Slack digest is skipped unless you export it and re-run this installer."
 fi
-echo "  note: CloudWatch fallback ratio reads from namespace My-Project/LLM (HEA-4045); section auto-skips if unavailable."
+echo "  note: CloudWatch fallback ratio reads from namespace My-Project/LLM; section auto-skips if unavailable."

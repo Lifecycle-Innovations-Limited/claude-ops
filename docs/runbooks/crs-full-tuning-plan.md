@@ -1,6 +1,6 @@
 # CRS Full-Tuning Execution Plan (FRA EC2)
 
-> Linear: [HEA-4672](https://linear.app/lifecycle-innovations/issue/HEA-4672) · Owner: Sam Renders · Created: 2026-06-19
+> Owner: <owner> · Created: 2026-06-19
 >
 > Scope: tune the **Claude Relay Service (CRS)** running on the Frankfurt EC2 box so the
 > agent fleet load-balances dynamically across the account pool, cools exhausted accounts
