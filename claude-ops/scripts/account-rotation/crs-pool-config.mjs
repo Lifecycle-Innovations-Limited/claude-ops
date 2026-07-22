@@ -113,3 +113,84 @@ export function vaultLookupKeysForEmail(email, accounts = []) {
   }
   return [...keys];
 }
+
+/**
+ * Resolve a per-account rotation-proxy descriptor.
+ *
+ * Returns null when the rotation proxy is disabled (no override, no
+ * `CLAUDE_ROTATION_PROXY_ENABLED=1`, or the provider URL is missing). When
+ * enabled, parses `EFG_PROXY_URL` / `BRIGHTDATA_PROXY_URL` for the active
+ * provider (`CLAUDE_ROTATION_PROXY_PROVIDER`, defaults to `brightdata`) and
+ * returns a `{ type, host, port }` object that downstream `oauthFetch` and
+ * `curl --proxy` callers consume.
+ *
+ * Signature: `accountProxyConfig(config, account, env?)`
+ *   - `config`: loaded rotation config (from `loadRotationConfig()`)
+ *   - `account`: account row (currently unused for routing; kept for future
+ *     per-account overrides)
+ *   - `env`: optional env-override object (defaults to `process.env`)
+ *
+ * Provider URL formats accepted:
+ *   - `socks5://host:port`
+ *   - `socks5h://host:port`
+ *   - `http://host:port`            → type=`http`
+ *   - `https://host:port`           → type=`http`
+ *   - `host:port` (bare)            → type=`http`
+ *
+ * @param {{accounts?:Array, crs?:object}} _config
+ * @param {{email?:string, label?:string}} _account
+ * @param {Record<string,string|undefined>} [env]
+ * @returns {{type:string, host:string, port:number} | null}
+ */
+export function accountProxyConfig(_config, _account, env = process.env) {
+  if (!env || typeof env !== 'object') return null;
+  if (env.CLAUDE_ROTATION_PROXY_ENABLED !== '1') return null;
+
+  const provider = String(env.CLAUDE_ROTATION_PROXY_PROVIDER || 'brightdata')
+    .trim()
+    .toLowerCase();
+
+  const urlKey = provider === 'efg' ? 'EFG_PROXY_URL' : 'BRIGHTDATA_PROXY_URL';
+  const raw = env[urlKey];
+  if (!raw || typeof raw !== 'string') return null;
+
+  const parsed = parseProxyUrl(raw.trim());
+  return parsed;
+}
+
+function parseProxyUrl(raw) {
+  if (!raw) return null;
+  // Strip trailing slash, accept bare host:port
+  let s = raw.replace(/\/+$/, '');
+  let type = 'http';
+  if (s.startsWith('socks5://')) {
+    type = 'socks5';
+    s = s.slice('socks5://'.length);
+  } else if (s.startsWith('socks5h://')) {
+    type = 'socks5';
+    s = s.slice('socks5h://'.length);
+  } else if (s.startsWith('https://')) {
+    type = 'http';
+    s = s.slice('https://'.length);
+  } else if (s.startsWith('http://')) {
+    type = 'http';
+    s = s.slice('http://'.length);
+  } else {
+    // Reject unsupported schemes (e.g. ftp://, ssh://, file://). Bare
+    // host:port (no scheme, no path/query/fragment) is still allowed.
+    if (/[/?#]/.test(s)) return null;
+  }
+  // Now s is host[:port] (may have userinfo@host)
+  const at = s.lastIndexOf('@');
+  if (at >= 0) s = s.slice(at + 1);
+  const colon = s.lastIndexOf(':');
+  if (colon < 0) return null;
+  const host = s.slice(0, colon).trim();
+  const portStr = s.slice(colon + 1).trim();
+  // Reject anything that isn't pure decimal digits after the colon — guards
+  // against `host:3128/path`, `host:3128junk`, `host:3128?x=1`, etc.
+  if (!host || /[\s/?#]/.test(host) || !/^\d+$/.test(portStr)) return null;
+  const port = Number.parseInt(portStr, 10);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return null;
+  return { type, host, port };
+}
