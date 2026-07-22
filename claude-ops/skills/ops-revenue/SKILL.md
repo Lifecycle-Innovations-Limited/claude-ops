@@ -37,14 +37,31 @@ Before executing, load available context:
 
 ## CLI/API Reference
 
-### aws CLI (Cost Explorer)
+### AWS burn doctrine (CRITICAL — 2026-07-22)
 
-| Command                                                                                                                                                                             | Usage                        | Output        |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ------------- |
-| `aws ce get-cost-and-usage --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --granularity MONTHLY --metrics "UnblendedCost" --group-by "Type=DIMENSION,Key=SERVICE" --output json` | Cost by service              | Cost JSON     |
-| `aws ce get-cost-and-usage --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --granularity MONTHLY --metrics "UnblendedCost" --output json`                                         | Total cost                   | Cost JSON     |
-| `aws ce get-cost-forecast --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --metric "UNBLENDED_COST" --granularity MONTHLY --output json`                                          | End-of-month forecast        | Forecast JSON |
-| `aws ce list-savings-plans-purchase-recommendation --output json`                                                                                                                   | Savings plan recommendations | JSON          |
+**Never report plain `UnblendedCost` / `NetUnblendedCost` totals as "spend".**
+Startup credits, SPP discounts, and Savings Plan negation make those nets ≈ $0
+while real Usage burn is hundreds/day. **Always** use `RECORD_TYPE=Usage` for
+burn, pace, spikes, runway, and Bedrock. Show credits only as a mask line.
+
+Canonical helper (prefer this over raw `aws ce`):
+
+```!
+${CLAUDE_PLUGIN_ROOT}/scripts/aws-usage-cost.sh snapshot 2>/dev/null || echo '{}'
+```
+
+```!
+${CLAUDE_PLUGIN_ROOT}/scripts/aws-usage-cost.sh all 2>/dev/null || true
+```
+
+| Command | Usage | Output |
+| ------- | ----- | ------ |
+| `scripts/aws-usage-cost.sh snapshot` | MTD/prev Usage burn + 7d daily + top services + credit mask | JSON |
+| `scripts/aws-usage-cost.sh daily 7` | Last N days Usage totals | JSON array |
+| `scripts/aws-usage-cost.sh by-service mtd` | MTD Usage by service | JSON array |
+| `scripts/aws-usage-cost.sh record-types` | Credit / Usage / SP breakdown (mask only) | JSON array |
+| `aws ce get-cost-and-usage … --filter '{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}'` | Raw Usage-only CE (fallback if helper missing) | Cost JSON |
+| `aws ce list-savings-plans-purchase-recommendation` | Savings plan recommendations | JSON |
 
 ---
 
@@ -58,6 +75,10 @@ and current burn. Per-DBA breakdown comes from the Stripe revenue
 snapshots ingested via `/api/ops/revenue`. Falls open to `{}` if unset —
 the per-source AWS / RevenueCat queries below run as fallback.
 
+**If the dashboard `current_month_spend` is ≈ $0 while Usage burn from
+`aws-usage-cost.sh` is material, trust the helper** (dashboard may still be
+credit-masked or ingest-empty). Always dual-check with the Usage helper.
+
 ```!
 ${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh snapshot 2>/dev/null || echo "{}"
 ```
@@ -69,28 +90,42 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh revenue project 2>/dev/null || ec
 When the dashboard returns data, render the per-project MRR section from
 `groups[]` rather than from RevenueCat-only data.
 
-### AWS costs (current month)
+### AWS costs — Usage burn (authoritative)
+
+```!
+${CLAUDE_PLUGIN_ROOT}/scripts/aws-usage-cost.sh snapshot 2>/dev/null || echo '{}'
+```
+
+Fallback if helper missing:
 
 ```bash
+USAGE_FILTER='{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}'
 aws ce get-cost-and-usage \
   --time-period "Start=$(date +%Y-%m-01),End=$(date +%Y-%m-%d)" \
   --granularity MONTHLY \
   --metrics "UnblendedCost" \
+  --filter "$USAGE_FILTER" \
   --group-by "Type=DIMENSION,Key=SERVICE" \
   --output json 2>/dev/null
 ```
 
-### AWS costs (last 3 months trend)
+### AWS costs (last 3 months Usage trend)
 
 ```bash
+USAGE_FILTER='{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}'
 aws ce get-cost-and-usage \
   --time-period "Start=$(date -v-3m +%Y-%m-01 2>/dev/null || date -d '3 months ago' +%Y-%m-01),End=$(date +%Y-%m-%d)" \
   --granularity MONTHLY \
   --metrics "UnblendedCost" \
+  --filter "$USAGE_FILTER" \
   --output json 2>/dev/null
 ```
 
-### AWS credits remaining
+### AWS credits / discount mask (not spend)
+
+```!
+${CLAUDE_PLUGIN_ROOT}/scripts/aws-usage-cost.sh record-types 2>/dev/null || echo '[]'
+```
 
 ```bash
 aws ce list-savings-plans-purchase-recommendation --output json 2>/dev/null || echo '{}'
@@ -99,6 +134,9 @@ aws ce get-credits --output json 2>/dev/null || echo "credits API unavailable"
 
 ### AWS cost forecast (end of month)
 
+Note: CE forecasts are often net-of-credits. Prefer `eom_pace` from
+`aws-usage-cost.sh snapshot` (7d Usage avg × days in month) as the burn forecast.
+
 ```bash
 aws ce get-cost-forecast \
   --time-period "Start=$(date +%Y-%m-%d),End=$(date +%Y-%m-28)" \
@@ -106,7 +144,6 @@ aws ce get-cost-forecast \
   --granularity MONTHLY \
   --output json 2>/dev/null
 ```
-
 ### Project registry (revenue stage)
 
 ```bash
@@ -140,21 +177,25 @@ Include Shopify GMV in the revenue pipeline table with source=shopify.
  OPS ► REVENUE & COSTS — [month]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-AWS SPEND
- This month to date:  $[X]
- Forecast (EOM):      $[X]
- Last month:          $[X]
+AWS USAGE BURN (RECORD_TYPE=Usage — not credit-masked net)
+ This month usage:    $[X]     ← from aws-usage-cost.sh mtd_usage
+ Forecast (EOM pace): $[X]     ← eom_pace (7d Usage avg × days)
+ Last month usage:    $[X]
  MoM change:          [+/-X%]
+ 7d avg/day:          $[X]
 
- Top services:
- [service]  $[X]  ([%] of total)
+ Top services (Usage):
+ [service]  $[X]  ([%] of usage)
  [service]  $[X]
  ...
 
-CREDITS
- AWS credits remaining:  $[X]
+CREDITS / MASK (do not report as low spend)
+ Credits applied MTD:    $[X]  (record_types Credit)
+ Discounts MTD:          $[X]
+ Net after mask:         ~$0 is EXPECTED when credits cover burn
+ Credits remaining:      $[X] (if API available)
  Expires:                [date]
- Burn rate at current:   [N months remaining]
+ Months cover at pace:   [N]
 
 REVENUE PIPELINE
  PROJECT        SOURCE     STAGE           MRR/GMV    STATUS
