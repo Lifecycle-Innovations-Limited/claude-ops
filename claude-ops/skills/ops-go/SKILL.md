@@ -119,8 +119,20 @@ When the snapshot has non-zero `services_tracked`, prefer it for the
 burn/runway/anomaly lines. The per-source `Infrastructure` and AWS Cost
 Explorer sections below are the fallback for both empty states above.
 
-### Infrastructure
+**If dashboard `current_month_spend` is ≈ $0**, dual-check with the Usage-only
+helper below — credits often zero the net bill while real burn is hundreds/day.
 
+### AWS Usage burn (RECORD_TYPE=Usage — not credit-masked)
+
+```!
+${CLAUDE_PLUGIN_ROOT}/scripts/aws-usage-cost.sh snapshot 2>/dev/null || echo '{}'
+```
+
+Render in the briefing under a short `AWS BURN` line:
+`MTD usage $X · 7d avg $Y/day · EOM pace $Z · credits mask $W (do not treat net $0 as low spend)`.
+Flag a FIRE if any of the last 7 Usage days is >2× the 7d average.
+
+### Infrastructure
 ```!
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-infra 2>/dev/null || echo '{"clusters":[],"error":"infra check failed"}'
 ```
@@ -222,6 +234,11 @@ Analyze ALL the pre-gathered data above and present it as a morning briefing. Fo
 
 FIRES (fix now)
 [table of production issues, CI failures, broken deploys]
+
+AWS BURN (Usage only — not credit-masked net)
+ MTD usage $[X] · 7d avg $[Y]/day · EOM pace $[Z] · credits mask $[W]
+ Top: [service $a] · [service $b] · [service $c]
+[If any day >2× 7d avg: flag as FIRE. Never report plain CE net ≈$0 as low spend.]
 
 PRs NEEDING ACTION
 [table: repo, PR#, title, status, action needed]

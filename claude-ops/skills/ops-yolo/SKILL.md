@@ -47,9 +47,12 @@ Before YOLO analysis, load:
 
 ### aws CLI (Cost Explorer)
 
-| Command                                                                                                                                     | Usage               | Output    |
-| ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------- |
-| `aws ce get-cost-and-usage --time-period Start=<YYYY-MM-DD>,End=<YYYY-MM-DD> --granularity MONTHLY --metrics "UnblendedCost" --output json` | Current month spend | Cost JSON |
+**Doctrine:** burn = `RECORD_TYPE=Usage` only. Plain UnblendedCost totals are credit-masked (~$0) and MUST NOT be used as spend.
+
+| Command | Usage | Output |
+| ------- | ----- | ------ |
+| `${CLAUDE_PLUGIN_ROOT}/scripts/aws-usage-cost.sh snapshot` | MTD Usage burn + 7d daily + top services + credit mask | JSON |
+| `aws ce … --filter '{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}'` | Raw Usage-only fallback | Cost JSON |
 
 ### gh CLI (GitHub)
 
@@ -137,9 +140,8 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-unread 2>/dev/null || echo '{}'
 ```
 
 ```!
-aws ce get-cost-and-usage --time-period "Start=$(date +%Y-%m-01),End=$(date +%Y-%m-%d)" --granularity MONTHLY --metrics "UnblendedCost" --output json 2>/dev/null || echo '{}'
+${CLAUDE_PLUGIN_ROOT}/scripts/aws-usage-cost.sh snapshot 2>/dev/null || echo '{}'
 ```
-
 ```!
 cat "${CLAUDE_PLUGIN_ROOT}/scripts/registry.json" 2>/dev/null || echo '{}'
 ```

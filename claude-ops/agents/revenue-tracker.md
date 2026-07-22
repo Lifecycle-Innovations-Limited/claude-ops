@@ -138,30 +138,43 @@ Pull from the metrics overview response (`churn_rate` or equivalent field). If n
 
 ---
 
-## Costs — AWS (existing)
+## Costs — AWS (Usage burn only)
 
-### Current month costs by service
+**Doctrine:** Credits mask net UnblendedCost to ≈ $0. Always use
+`RECORD_TYPE=Usage` (or `scripts/aws-usage-cost.sh`). Never report unfiltered
+totals as spend.
+
+### Canonical snapshot
 
 ```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/aws-usage-cost.sh snapshot 2>/dev/null || echo '{}'
+```
+
+### Current month Usage by service
+
+```bash
+USAGE_FILTER='{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}'
 aws ce get-cost-and-usage \
   --time-period "Start=$(date +%Y-%m-01),End=$(date +%Y-%m-%d)" \
   --granularity MONTHLY \
   --metrics "UnblendedCost" "UsageQuantity" \
+  --filter "$USAGE_FILTER" \
   --group-by "Type=DIMENSION,Key=SERVICE" \
   --output json 2>/dev/null
 ```
 
-### Last 3 months trend
+### Last 3 months Usage trend
 
 ```bash
+USAGE_FILTER='{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}'
 START=$(date -v-3m +%Y-%m-01 2>/dev/null || date -d "-3 months" +%Y-%m-01 2>/dev/null)
 aws ce get-cost-and-usage \
   --time-period "Start=$START,End=$(date +%Y-%m-%d)" \
   --granularity MONTHLY \
   --metrics "UnblendedCost" \
+  --filter "$USAGE_FILTER" \
   --output json 2>/dev/null
 ```
-
 ### End-of-month forecast
 
 ```bash

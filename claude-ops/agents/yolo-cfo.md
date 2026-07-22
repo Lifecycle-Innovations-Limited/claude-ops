@@ -53,18 +53,28 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/finops-bridge.sh push-event \
 
 ### 1. Actual burn rate vs. what we think it is
 
-Pull real numbers from AWS Cost Explorer. What is the current monthly run rate? What's the forecast for end of month? Is it going up or down?
+**CRITICAL:** Credits mask net CE totals to ≈ $0. Burn = **Usage only**
+(`RECORD_TYPE=Usage`). Prefer the helper; never report unfiltered UnblendedCost
+as spend.
 
 ```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/aws-usage-cost.sh snapshot 2>/dev/null
+# fields: mtd_usage, prev_month_usage, avg_daily_7d, eom_pace, credits_mtd, top_services
+```
+
+Fallback:
+
+```bash
+USAGE_FILTER='{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}'
 aws ce get-cost-and-usage \
   --time-period "Start=$(date +%Y-%m-01),End=$(date +%Y-%m-%d)" \
   --granularity MONTHLY \
   --metrics "UnblendedCost" \
+  --filter "$USAGE_FILTER" \
   --group-by "Type=DIMENSION,Key=SERVICE" \
   --output json 2>/dev/null | \
   jq '.ResultsByTime[0].Groups | sort_by(.Metrics.UnblendedCost.Amount | tonumber) | reverse | .[0:10] | map({service: .Keys[0], cost: .Metrics.UnblendedCost.Amount})'
 ```
-
 ### 2. Which AWS services are waste?
 
 For each service over $5/month: is it essential? Can it be right-sized? Any idle resources?
@@ -104,12 +114,15 @@ If AWS credentials are available (`aws sts get-caller-identity`), run a comprehe
 # Cost by account (if multi-account)
 aws organizations list-accounts --output json 2>/dev/null | jq '.Accounts[*].{id:Id,name:Name,status:Status}'
 
-# Last 3 months cost trend
+# Last 3 months Usage burn trend (NOT credit-masked net)
+USAGE_FILTER='{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}'
 for i in 3 2 1; do
   START=$(date -v-${i}m +%Y-%m-01 2>/dev/null || date -d "$i months ago" +%Y-%m-01)
   END=$(date -v-$((i-1))m +%Y-%m-01 2>/dev/null || date -d "$((i-1)) months ago" +%Y-%m-01)
-  aws ce get-cost-and-usage --time-period "Start=$START,End=$END" --granularity MONTHLY --metrics UnblendedCost --output json 2>/dev/null
+  aws ce get-cost-and-usage --time-period "Start=$START,End=$END" --granularity MONTHLY --metrics UnblendedCost --filter "$USAGE_FILTER" --output json 2>/dev/null
 done
+# Credit mask (explain why Console net can look near zero)
+${CLAUDE_PLUGIN_ROOT}/scripts/aws-usage-cost.sh record-types 2>/dev/null || true
 
 # Reserved instances utilization
 RES_START=$(date -v-30d +%Y-%m-%d 2>/dev/null || date -d '30 days ago' +%Y-%m-%d)
@@ -143,11 +156,13 @@ Write to `/tmp/yolo-[session]/cfo-analysis.md`:
 
 ## Real Numbers
 
-- Monthly burn (AWS): $[X]
-- MoM change: [+/-X%]
-- EOM forecast: $[X]
+- Monthly Usage burn (AWS, RECORD_TYPE=Usage): $[X]
+- Credits applied MTD (mask, not spend): $[X]
+- MoM change (Usage): [+/-X%]
+- EOM pace (7d Usage avg × days): $[X]
 - Total MRR: $[X]
-- Net burn: $[X/month]
+- Net burn (Usage − MRR): $[X/month]
+- **Do not** use credit-masked net CE total as burn
 
 ## Top Cost Drivers
 
