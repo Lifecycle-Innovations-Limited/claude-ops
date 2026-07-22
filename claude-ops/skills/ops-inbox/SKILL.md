@@ -303,6 +303,15 @@ gog gmail raw <messageId> | python3 -c "import json,sys; d=json.load(sys.stdin);
 
 ---
 
+## Standing behavior: RUN WIDE — parallel subagents / agent-teams / workflow by DEFAULT
+
+Every `/ops:ops-inbox` run should be fast for the owner, whose time is spent only reviewing and approving — never waiting on serial reads. By default:
+
+- **Fan out the moment there is more than a trivial amount of work.** After the offline `ops-inbox-scan` first pass, push the per-thread deep-read / dedup / context-gathering / draft-writing into parallel background workers — `Workflow` fan-out (preferred) or an Agent-Teams read-only scanner per channel/thread-chunk. Do NOT deep-read dozens of threads serially in the main session.
+- **Do research, context-gathering, and draft-writing in the background while the owner works.** Kick off the readers/drafters; let them build full-thread arcs, cross-channel dedup, contact profiles, and staged draft text concurrently. Surface results as they land so the owner approves in a steady stream instead of after one big serial pass.
+- **Parallelism NEVER changes the safety model.** Workers are strictly READ-ONLY — they classify and return draft text only. Every outbound send stays in the main session, one draft → one `AskUserQuestion` → one approval → one send (Rule 6 + PER-DRAFT APPROVAL).
+- **Respect the box concurrency ceiling** (heartbeat `MAX_BUSY`) — queue extra work rather than exceeding it.
+
 ## Scan engine — offline script triages first, Workflow fan-out is the DEFAULT for deep per-thread work
 
 **Run `bin/ops-inbox-scan` FIRST. It is the primary scan engine.** It classifies the two
@@ -1328,7 +1337,13 @@ Reply to [Sender] — [Subject]:
 
 Only pass `--track` when "Send + track opens" is chosen. Never silently add tracking.
 
-### Slack (multi-workspace)
+### Slack (multi-workspace) — scan CHANNELS *AND* DMs (both mandatory)
+
+**Both channels and direct messages (DMs + group DMs) are in scope every run.** DMs are easy to skip and must not be. Unscoped `conversations_unreads` / unfiltered `channels_list` may be hard-blocked by a guard on shared/multi-BU tokens — so use ONLY scoped reads:
+
+- **Channels:** `channels_me {channel_types:"public_channel,private_channel"}` → filter to your local allowlist (e.g. `~/.claude/memory/ops-inbox-slack-channels.md`), then `conversations_history {channel_id, limit:"2d"}` per id.
+- **DMs + group DMs:** `channels_me {channel_types:"im,mpim"}` (member-only list — scoped, therefore allowed even where `conversations_unreads` is blocked), then `conversations_history {channel_id, limit:"5d"}` per **human** DM id. Skip bot/service DMs (integration bots, digests, raw-id DMs) — those are FYI automation, never NEEDS_REPLY.
+- Classify each channel and DM by who sent last (NEEDS_REPLY / WAITING / FYI / HANDLED); clear the FULL-THREAD AWARENESS GATE before any NEEDS_REPLY; outbound stays Rule-6 one-draft→one-approval.
 
 Read the **derived** `channels.slack.workspaces[]` from the pre-gathered `bin/ops-unread` output. That object resolves each workspace's `token_env` and emits `available: true|false` per entry — `preferences.json → slack_workspaces[]` itself only persists metadata and does not contain `available`. For each entry where `available: true`:
 
