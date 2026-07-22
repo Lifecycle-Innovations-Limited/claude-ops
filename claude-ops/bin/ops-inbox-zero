@@ -40,13 +40,14 @@
 #      first clarify button; Rule-6 stays in the agent loop).
 #
 # EXIT CODES:
-#   0  scan + archive pass succeeded, KEEP report printed
+#   0  scan/report pass succeeded; requested archive pass also succeeded
 #   2  bridge unreachable — DO NOT trust the WA store, agent must ask Sam
-#   3  gog keyring/auth failure — agent must reauth (email-domain-ops)
+#   3  ops-inbox-scan failure — agent must fall back to per-channel scans
 #
 # FLAGS:
 #   --days N              recency window (default 7)
-#   --no-archive          report-only mode; skip WA + email archive passes
+#   --archive             apply proposed WA + email archive actions after approval
+#   --no-archive          deprecated alias for the safe report-only default
 #   --no-wa               skip WhatsApp entirely (email-only pass)
 #   --no-email            skip Gmail entirely (WA-only pass)
 #   --json-out PATH       override the WA+email scan output path
@@ -75,13 +76,14 @@ DAYS=7
 DO_WA=1
 DO_EMAIL=1
 DO_SLACK=1
-DO_ARCHIVE=1
+DO_ARCHIVE=0
 SCAN_OUT="/tmp/ops-inbox-scan-clean.json"
 SLACK_TRIAGE_PY="${SLACK_TRIAGE_PY:-$HOME/.hermes/skills/comms/comms-execution/scripts/slack_reply_triage.py}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --days)        DAYS="${2:-7}"; shift ;;
+    --archive)     DO_ARCHIVE=1 ;;
     --no-archive)  DO_ARCHIVE=0 ;;
     --no-wa)       DO_WA=0 ;;
     --no-email)    DO_EMAIL=0 ;;
@@ -417,6 +419,8 @@ def api_archive(jid, archive=True):
     return r.stdout
 
 for c in keep["whatsapp"] + keep["groups"] + keep["newsletters"]:
+    if c["verdict"] == "unsure":
+        continue
     jids = [c["jid"]] + c.get("alt_jids", [])
     want_archive = c["verdict"] == "archive"
     for j in jids:
@@ -468,12 +472,23 @@ fi
 # -------- 10+11. KEEP report -----------------------------------------------
 REPORT="$HOME/.local/share/ops-inbox/keep-$(date -u +%Y%m%dT%H%M%SZ).md"
 log "step 9/9 — KEEP report → $REPORT"
-python3 - "$KEEP_OUT" "$REPORT" <<'PY'
+python3 - "$KEEP_OUT" "$REPORT" "$DO_WA" "$DO_EMAIL" "$DO_SLACK" "$DO_ARCHIVE" "$PC_OUT" "$SLACK_OUT" <<'PY'
 import json, sys
 from pathlib import Path
 keep = json.loads(Path(sys.argv[1]).read_text())
 out = Path(sys.argv[2])
 lines = ["# ops-inbox KEEP report", ""]
+do_wa, do_email, do_slack, do_archive = (value == "1" for value in sys.argv[3:7])
+paperclip_path, slack_path = Path(sys.argv[7]), Path(sys.argv[8])
+lines.extend([
+    "## Run status",
+    f"- WhatsApp: {'captured' if do_wa else 'skipped'}",
+    f"- Gmail: {'captured' if do_email else 'skipped or unavailable'}",
+    f"- Slack: {'captured' if do_slack and slack_path.exists() else 'skipped or unavailable'}",
+    f"- Paperclip: {'captured' if paperclip_path.exists() else 'skipped or unavailable'}",
+    f"- Archive actions: {'applied after explicit approval' if do_archive else 'proposed only; approval required'}",
+    "",
+])
 lines.append("## WhatsApp (rule-classified)")
 for c in keep["whatsapp"]:
     lines.append(f"- **{c['who']}** — verdict={c['verdict']} reason=`{c['reason']}`")
