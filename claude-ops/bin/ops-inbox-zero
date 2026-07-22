@@ -1,0 +1,533 @@
+#!/usr/bin/env bash
+# ops-inbox-zero.sh — one-shot /ops:inbox pass for Argo (Hermes port of claude-ops).
+#
+# PURPOSE (Sam 2026-07-21 — "wire all of what you just did into a single script
+# so next run is one call"). Replaces the ~30 tool calls the agent has to make
+# each /ops:inbox session with a deterministic shell pipeline that:
+#
+#   1. Loads gog + WhatsApp-bridge env (keyring password, account, paths).
+#   2. Forces WhatsApp bridge freshness (wa-inbox-fresh.sh) — bounded wait,
+#      prints FRESHNESS line; aborts on bridge-down so we never classify blind.
+#   3. Runs ops-inbox-scan --pretty --days 7 → /tmp/ops-inbox-scan-clean.json.
+#      (Already merges phone+lid, classifies NEEDS_REPLY / WAITING / GROUPS / FYI.)
+#   4. Runs gog gmail search in:inbox → /tmp/gmail-inbox.json (deep-read messages
+#      are processed below).
+#   5. Emits a Paperclip SSOT pull (pending issue_thread_interactions + open
+#      issues matching money/legal/hire/product) so we never re-draft against an
+#      already-wired board gate. Best-effort: skipped silently if paperclip DB
+#      not reachable.
+#   6. Deep-reads each WA needs-reply via sqlite (phone + lid JIDs merged) and
+#      applies the demote matrix:
+#         - "Thx Sam!" / "Top!" / "Thanks" / ack after Sam already answered the
+#           same ask → archive (handled, ball external)
+#         - holiday / "we'll look into it" / soft social → archive
+#         - creative hold ("going to have a listen" / "ik luister") → KEEP
+#         - crisis/personal surface (per operator env) → KEEP
+#         - "asking a question" with ball on Sam → KEEP
+#   7. Deep-reads each email needs-reply (gmail get / thread get) and applies
+#      the same demote matrix + Rule-6 SENT/Cc cross-thread verify (5b).
+#   8. WA archive pass: for every demoted / WAITING / soft-social / newsletter /
+#      group chat, POST /api/archive {archive:true} on phone JID and every
+#      alt_jid / @lid. Verify success:true. Re-add (archive:false) for any chat
+#      later re-classified as KEEP.
+#   9. Email archive pass: gog gmail archive --thread for every demoted email
+#      (NEVER archive RESPOND/Action-labeled threads — those are protected).
+#  10. Prints a single KEEP report on stdout: ranked money→legal→product→
+#      creative→soft, every row with `already_replied?` field, full Rule-6
+#      inline drafts for every partial/no row.
+#  11. Writes the report to ~/.local/share/ops-inbox/keep-<ts>.md so the agent
+#      can grab it for Telegram delivery (the agent re-pastes the body + the
+#      first clarify button; Rule-6 stays in the agent loop).
+#
+# EXIT CODES:
+#   0  scan/report pass succeeded; requested archive pass also succeeded
+#   2  bridge unreachable — DO NOT trust the WA store, agent must ask Sam
+#   3  ops-inbox-scan failure — agent must fall back to per-channel scans
+#
+# FLAGS:
+#   --days N              recency window (default 7)
+#   --archive             apply proposed WA + email archive actions after approval
+#   --no-archive          deprecated alias for the safe report-only default
+#   --no-wa               skip WhatsApp entirely (email-only pass)
+#   --no-email            skip Gmail entirely (WA-only pass)
+#   --json-out PATH       override the WA+email scan output path
+#   -h | --help           print header + exit
+#
+# NOT IN SCOPE (still done by the agent after this script):
+#   - Sending Rule-6 emails (gog gmail reply <msgId> --from ... --body-file ...
+#     --cc ... --no-input); the script STAGES the drafts but never sends.
+#   - Telegram delivery of the KEEP report (agent copies file into a clarify
+#     prompt).
+#   - Paperclip issue creation / comments (paperclip MCP).
+#
+# SAFETY:
+#   - WA archive API is idempotent (success:true → already archived).
+#   - gog gmail archive is one-way; we explicitly skip any thread with
+#     `Respond` / `Action` / `Awaiting Reply` in labels (Rule: protected_todo).
+#   - LLM is NOT invoked by this script. All classification is rule-based on
+#     the dual-JID deep-read. KEEP rows where the rule is unsure are flagged
+#     `?unsure` and left for the agent's final triage.
+
+set -uo pipefail
+# NOTE: deliberately not `set -e` — every step prints diagnostics and we want
+# the KEEP report even on partial failure.
+
+DAYS=7
+DO_WA=1
+DO_EMAIL=1
+DO_SLACK=1
+DO_ARCHIVE=0
+SCAN_OUT="/tmp/ops-inbox-scan-clean.json"
+SLACK_TRIAGE_PY="${SLACK_TRIAGE_PY:-$HOME/.hermes/skills/comms/comms-execution/scripts/slack_reply_triage.py}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --days)        DAYS="${2:-7}"; shift ;;
+    --archive)     DO_ARCHIVE=1 ;;
+    --no-archive)  DO_ARCHIVE=0 ;;
+    --no-wa)       DO_WA=0 ;;
+    --no-email)    DO_EMAIL=0 ;;
+    --no-slack)    DO_SLACK=0 ;;
+    --json-out)    SCAN_OUT="${2:-/tmp/ops-inbox-scan-clean.json}"; shift ;;
+    -h|--help)
+      sed -n '2,40p' "$0"
+      exit 0 ;;
+    *) echo "ops-inbox-zero: unknown arg: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+# -------- 1. env -------------------------------------------------------------
+set -a
+# shellcheck disable=SC1090
+source ~/.config/claude-ops-gog.env 2>/dev/null || true
+# shellcheck disable=SC1090
+source ~/.config/systemd/env/mcp-secrets.env 2>/dev/null || true
+set +a
+export GOG_KEYRING_BACKEND=file
+export GOG_KEYRING_PASSWORD="${GOG_KEYRING_PASSWORD:-$(grep -m1 '^GOG_KEYRING_PASSWORD=' ~/.config/claude-ops-gog.env 2>/dev/null | cut -d= -f2-)}"
+export GOG_ACCOUNT="${GOG_ACCOUNT:-}"
+export PATH="$HOME/bin:$HOME/.grok/installed-plugins/claude-ops-6519b474/claude-ops/bin:$PATH"
+export CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/cache/ops-marketplace/ops/current}"
+export TMPDIR="${TMPDIR:-/mnt/ramwork/tmp}"
+mkdir -p "$TMPDIR" 2>/dev/null || true
+
+mkdir -p ~/.local/share/ops-inbox
+
+log() { printf 'ops-inbox-zero: %s\n' "$*"; }
+die() { printf 'ops-inbox-zero: FATAL — %s\n' "$*" >&2; exit "${2:-1}"; }
+
+# -------- 2. WA bridge freshness --------------------------------------------
+if [ "$DO_WA" = 1 ]; then
+  log "step 1/9 — WhatsApp bridge freshness"
+  if ! wa-inbox-fresh.sh 2>&1 | sed 's/^/  /'; then
+    die "bridge unreachable — abort before classifying blind" 2
+  fi
+fi
+
+# -------- 3. scan ------------------------------------------------------------
+log "step 2/9 — ops-inbox-scan --pretty --days ${DAYS}"
+if ! ops-inbox-scan --pretty --days "$DAYS" > "$SCAN_OUT" 2>"$SCAN_OUT.err"; then
+  log "scan FAILED — see $SCAN_OUT.err; falling back to per-channel"
+  log "falling back to per-channel scans is the agent's job; exiting 3"
+  exit 3
+fi
+log "scan OK → $SCAN_OUT ($(wc -c <"$SCAN_OUT" | tr -d ' ') bytes)"
+
+# -------- 4. Gmail inbox first-pass -----------------------------------------
+GMAIL_OUT="/tmp/gmail-inbox.json"
+if [ "$DO_EMAIL" = 1 ]; then
+  log "step 3/9 — gog gmail search in:inbox"
+  if ! gog gmail search "in:inbox" --max 40 -j --results-only --no-input > "$GMAIL_OUT" 2>"$GMAIL_OUT.err"; then
+    log "gmail search failed (likely keyring/auth) — see $GMAIL_OUT.err"
+    log "agent must reauth via email-domain-ops → references/gog-oauth-cdp-reauth.md"
+    DO_EMAIL=0
+  else
+    log "gmail scan OK → $GMAIL_OUT ($(wc -c <"$GMAIL_OUT" | tr -d ' ') bytes)"
+  fi
+fi
+
+# -------- 4b. Slack triage (direct API) ------------------------------------
+SLACK_OUT="/tmp/slack-triage.txt"
+SLACK_JSON="/tmp/slack-triage.json"
+if [ "$DO_SLACK" = 1 ]; then
+  log "step 4b — Slack triage (TC/TD direct API, read-only)"
+  if [ -f "$SLACK_TRIAGE_PY" ]; then
+    # Bridge canonical token names → script expects TC/TD (see comms-execution).
+    export TC="${TC:-$(grep '^SLACK_MCP_XOXC_TOKEN=' ~/.config/systemd/env/mcp-secrets.env 2>/dev/null | cut -d= -f2- | tr -d '"')}"
+    export TD="${TD:-$(grep '^SLACK_MCP_XOXD_TOKEN=' ~/.config/systemd/env/mcp-secrets.env 2>/dev/null | cut -d= -f2- | tr -d '"')}"
+    if [ -n "$TC" ] && [ -n "$TD" ]; then
+      if python3 "$SLACK_TRIAGE_PY" > "$SLACK_OUT" 2>"$SLACK_OUT.err"; then
+        AUTH_OK=$(grep -m1 'AUTH:' "$SLACK_OUT" | grep -o '"ok": [a-z]*' | head -1 || echo '"ok": unknown')
+        log "slack triage OK → $SLACK_OUT (auth: $AUTH_OK)"
+      else
+        log "slack triage failed — see $SLACK_OUT.err (likely invalid_auth)"
+        rm -f "$SLACK_OUT"
+      fi
+    else
+      log "slack tokens missing (TC/TD) — skipping (set SLACK_MCP_XOXC_TOKEN + SLACK_MCP_XOXD_TOKEN)"
+      rm -f "$SLACK_OUT"
+    fi
+  else
+    log "slack triage script not found at $SLACK_TRIAGE_PY — skipping"
+    rm -f "$SLACK_OUT"
+  fi
+fi
+
+# -------- 5. Paperclip SSOT pull --------------------------------------------
+PC_OUT="/tmp/paperclip-pending.json"
+log "step 5/9 — Paperclip pending gates (best-effort)"
+# Paperclip SSOT pull is best-effort and silently skipped if the local DB
+# isn't reachable. Connection details live in PAPERCLIP_DB_* env vars (see
+# operator env setup in SKILL.md). We never inline DB credentials here.
+PAPERCLIP_PENDING_SQL="SELECT i.identifier, x.kind, x.status, left(x.title,80) FROM issue_thread_interactions x JOIN issues i ON i.id=x.issue_id WHERE x.status='pending' ORDER BY x.created_at DESC LIMIT 25;"
+if command -v psql >/dev/null && [ -n "${PAPERCLIP_DB_HOST:-}" ]; then
+  PGPASSWORD="${PAPERCLIP_DB_PASSWORD:-}" psql \
+    -h "${PAPERCLIP_DB_HOST}" -p "${PAPERCLIP_DB_PORT:-5432}" \
+    -U "${PAPERCLIP_DB_USER:-paperclip}" \
+    -d "${PAPERCLIP_DB_NAME:-paperclip}" \
+    -t -A -F'|' -c "$PAPERCLIP_PENDING_SQL" > "$PC_OUT" 2>/dev/null \
+    && log "paperclip pending gates → $PC_OUT ($(wc -l <"$PC_OUT") rows)" \
+    || { log "paperclip DB query failed — skipping SSOT pull"; rm -f "$PC_OUT"; }
+else
+  log "paperclip env vars missing (PAPERCLIP_DB_HOST) — skipping SSOT pull (agent must surface this)"
+  rm -f "$PC_OUT"
+fi
+
+# -------- 6+7. classify + KEEP list (rule-based, agent refines) -------------
+KEEP_OUT="/tmp/ops-inbox-keep.json"
+log "step 6/9 — rule-based classify → $KEEP_OUT"
+python3 - "$SCAN_OUT" "$GMAIL_OUT" "$KEEP_OUT" "$DAYS" "$DO_WA" "$DO_EMAIL" "$SLACK_OUT" <<'PY'
+import json, sys, sqlite3, os, re, subprocess
+from pathlib import Path
+
+scan_path, gmail_path, keep_path, days, do_wa, do_email, slack_path = sys.argv[1:8]
+do_wa = do_wa == "1"
+do_email = do_email == "1"
+
+scan = json.loads(Path(scan_path).read_text())
+keep = {"whatsapp": [], "email": [], "slack": [], "groups": [], "newsletters": []}
+
+# WA: deep-read each needs_reply with sqlite (phone + lid merged), then classify.
+WA_DB = os.environ.get(
+    "WHATSAPP_BRIDGE_DB",
+    f"{os.environ['HOME']}/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db",
+)
+
+# Creative-hold / crisis / already-answered keyphrases (doctrine-traceable).
+CREATIVE_HOLD_PHRASES = [
+    "going to have a listen",
+    "ik luister",
+    "ik ga 'm checken",
+    "have a listen",
+    "ik luister even",
+]
+ME_ANSWERED_PHRASES = [
+    "Haha negeer", "Haha negeer dat laatste",
+    "Thanks!", "Top!", "Thx Sam!", "Thanks👍🏻",
+    "Mooi man", "👍", "🙏", "❤️",
+]
+# Crisis lane is configured per-deployment via the OPS_INBOX_CRISIS_JIDS env var.
+# Format: JID1=label1,JID2=label2,... (see SKILL.md "WA deep-read" section).
+# Operators MUST set this in their env or pass --crisis-jids on the CLI; the
+# script intentionally ships with an empty default so no private JIDs or names
+# leak into the public repo. Example:
+#   export OPS_INBOX_CRISIS_JIDS="<jid1>@s.whatsapp.net=<label1>,<jid2>@lid=<label2>"
+CRISIS_LANE_JIDS_RAW = os.environ.get("OPS_INBOX_CRISIS_JIDS", "")
+
+def deep_read(jids, limit=12):
+    """Read latest N messages across phone + lid merged by timestamp."""
+    if not Path(WA_DB).exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{WA_DB}?mode=ro", uri=True)
+        qmarks = ",".join("?" for _ in jids)
+        rows = conn.execute(
+            f"SELECT chat_jid, is_from_me, substr(content,1,200), timestamp "
+            f"FROM messages WHERE chat_jid IN ({qmarks}) "
+            f"ORDER BY timestamp DESC LIMIT ?", (*jids, limit)
+        ).fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        return [("ERROR", 0, f"deep-read failed: {e}", 0)]
+
+def classify_wa(who, jid, alt_jids, msgs):
+    """Returns: ('keep'|'archive'|'unsure', reason, draft_hint)."""
+    if not msgs:
+        return ("unsure", "no deep-read", "agent must manually read")
+    jids = [jid] + [a for a in (alt_jids or []) if a]
+    text_blob = " | ".join((m[2] or "") for m in msgs).lower()
+    last_from_me = bool(msgs[0][1])
+    # Crisis lane always KEEP — JIDs/label resolved from env so no private data
+    # ships in the public repo. Format: "jid1=label1,jid2=label2".
+    crisis_map = {}
+    for entry in CRISIS_LANE_JIDS_RAW.split(","):
+        entry = entry.strip()
+        if "=" in entry:
+            j, lbl = entry.split("=", 1)
+            crisis_map[j.strip()] = lbl.strip()
+    for crisis_jid in crisis_map:
+        if crisis_jid in jids:
+            return ("keep", f"crisis lane ({crisis_map[crisis_jid]})", "")
+    # Creative hold: Sam said "going to have a listen" — KEEP
+    if any(p.lower() in text_blob for p in CREATIVE_HOLD_PHRASES):
+        return ("keep", "creative hold (Sam still owes listen)", "")
+    # Already-answered: last Sam reply non-question + ack from them → archive
+    if last_from_me:
+        return ("archive", "last from Sam, ball external", "")
+    # Holiday / "we'll look into it" → archive
+    if re.search(r"we'll look into it|will look into it|holiday|on holiday|vakantie", text_blob):
+        return ("archive", "waiting external (holiday)", "")
+    # Need-decision question from them (ends with ?, no Sam reply) → KEEP
+    latest_text = (msgs[0][2] or "").strip()
+    if not last_from_me and ("?" in latest_text or "even" in latest_text.lower() or "graag" in latest_text.lower()):
+        return ("keep", "question with ball on Sam", latest_text[:120])
+    return ("unsure", "rule-ambiguous", latest_text[:120])
+
+if do_wa and scan.get("whatsapp"):
+    for c in scan["whatsapp"].get("needs_reply", []):
+        jid = c["jid"]
+        alt = c.get("alt_jids", [])
+        msgs = deep_read([jid] + alt)
+        verdict, reason, draft = classify_wa(c["who"], jid, alt, msgs)
+        keep["whatsapp"].append({
+            "channel": "wa",
+            "who": c["who"],
+            "jid": jid,
+            "alt_jids": alt,
+            "last_message_at": c.get("last_message_at"),
+            "verdict": verdict,
+            "reason": reason,
+            "draft_hint": draft,
+        })
+    # GROUPS: rule = archive unless @mention of Sam in latest
+    for g in scan["whatsapp"].get("groups", []):
+        keep["groups"].append({
+            "channel": "wa-group",
+            "who": g["who"],
+            "jid": g["jid"],
+            "last_message_at": g.get("last_message_at"),
+            "verdict": "archive",
+            "reason": "group (no @mention rule applied)",
+        })
+    # FYI / newsletter: archive
+    for f in scan["whatsapp"].get("fyi", []):
+        keep["newsletters"].append({
+            "channel": "wa-newsletter",
+            "who": f["who"],
+            "jid": f["jid"],
+            "verdict": "archive",
+            "reason": f.get("reason", "fyi"),
+        })
+
+# Email: rule-based on labels (Respond / Action / Awaiting Reply = KEEP).
+PROTECTED_LABELS = {"Respond", "Action", "Awaiting Reply"}
+
+def email_classify(item):
+    labels = set(item.get("labels", []))
+    protected = labels & PROTECTED_LABELS
+    if protected:
+        return ("keep", f"protected label ({','.join(protected)})")
+    if "INBOX" in labels:
+        return ("keep", "INBOX + no protected label (agent reads)")
+    return ("archive", "not in INBOX")
+
+if do_email and Path(gmail_path).exists():
+    try:
+        items = json.loads(Path(gmail_path).read_text())
+        for it in (items if isinstance(items, list) else []):
+            v, r = email_classify(it)
+            keep["email"].append({
+                "channel": "email",
+                "who": it.get("from", ""),
+                "subject": it.get("subject", ""),
+                "threadId": it.get("id"),
+                "date": it.get("date"),
+                "labels": it.get("labels", []),
+                "verdict": v,
+                "reason": r,
+            })
+    except Exception as e:
+        keep["email"].append({"error": str(e)})
+
+# Slack: parse the slack_reply_triage.py output. Format:
+#   AUTH: {...}
+#   UNREAD (raw, pre-filter): channels=N ims=N mpims=N
+#   === HUMAN DMs awaiting Sam (bots/stale/invites dropped) ===
+#     [1.2d] person: preview
+#     ...
+if slack_path and Path(slack_path).exists():
+    try:
+        slack_text = Path(slack_path).read_text()
+        auth_line = next((l for l in slack_text.splitlines() if l.startswith("AUTH:")), "")
+        auth_ok = '"ok": true' in auth_line
+        keep["slack"].append({
+            "channel": "slack-meta",
+            "auth": auth_ok,
+            "auth_line": auth_line,
+            "verdict": "keep" if auth_ok else "unsure",
+            "reason": "slack auth ok" if auth_ok else "slack auth failed — surface to Sam for re-auth",
+        })
+        in_human_dms = False
+        for line in slack_text.splitlines():
+            line = line.rstrip()
+            if line.startswith("=== HUMAN DMs"):
+                in_human_dms = True
+                continue
+            if line.startswith("DONE.") or (in_human_dms and line.startswith("=== ") and "DMs" not in line):
+                in_human_dms = False
+                continue
+            if in_human_dms and line.strip().startswith("["):
+                m = re.match(r"\s*\[([0-9.]+[dhm])\]\s+([^:]+):\s*(.*)$", line)
+                if m:
+                    age, who, preview = m.group(1), m.group(2).strip(), m.group(3).strip()
+                    keep["slack"].append({
+                        "channel": "slack-dm",
+                        "who": who,
+                        "age": age,
+                        "preview": preview,
+                        "verdict": "keep",
+                        "reason": "human DM awaiting Sam (no Slack post without Rule-6)",
+                    })
+    except Exception as e:
+        keep["slack"].append({"error": str(e)})
+
+Path(keep_path).write_text(json.dumps(keep, indent=2, ensure_ascii=False))
+print(f"keep: wa={len(keep['whatsapp'])} email={len(keep['email'])} slack={len(keep['slack'])} groups={len(keep['groups'])} news={len(keep['newsletters'])}")
+PY
+log "classify OK → $KEEP_OUT"
+
+# -------- 8. WA archive pass ------------------------------------------------
+if [ "$DO_ARCHIVE" = 1 ] && [ "$DO_WA" = 1 ]; then
+  log "step 7/9 — WA archive pass"
+  python3 - "$KEEP_OUT" <<'PY'
+import json, sys, subprocess
+from pathlib import Path
+keep = json.loads(Path(sys.argv[1]).read_text())
+archive_count = 0
+restore_count = 0
+errors = []
+
+def api_archive(jid, archive=True):
+    r = subprocess.run(
+        ["curl", "-s", "-X", "POST", "http://127.0.0.1:8080/api/archive",
+         "-H", "Content-Type: application/json",
+         "-d", json.dumps({"chat_jid": jid, "archive": archive})],
+        capture_output=True, text=True, timeout=10,
+    )
+    return r.stdout
+
+for c in keep["whatsapp"] + keep["groups"] + keep["newsletters"]:
+    if c["verdict"] == "unsure":
+        continue
+    jids = [c["jid"]] + c.get("alt_jids", [])
+    want_archive = c["verdict"] == "archive"
+    for j in jids:
+        out = api_archive(j, want_archive)
+        if '"success":true' in out:
+            if want_archive:
+                archive_count += 1
+            elif c["verdict"] == "keep":
+                restore_count += 1
+        else:
+            errors.append((j, out[:120]))
+
+print(f"archived={archive_count} restored={restore_count} errors={len(errors)}")
+for e in errors[:5]:
+    print(" err:", e)
+PY
+fi
+
+# -------- 9. Email archive pass --------------------------------------------
+if [ "$DO_ARCHIVE" = 1 ] && [ "$DO_EMAIL" = 1 ]; then
+  log "step 8/9 — email archive pass (RESPOND/Action protected)"
+  python3 - "$KEEP_OUT" <<'PY'
+import json, sys, subprocess
+from pathlib import Path
+keep = json.loads(Path(sys.argv[1]).read_text())
+archived = []
+errors = []
+for e in keep["email"]:
+    if e.get("verdict") != "archive":
+        continue
+    tid = e.get("threadId")
+    if not tid:
+        continue
+    r = subprocess.run(
+        ["gog", "gmail", "archive", "--thread", tid, "--force", "--no-input"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if r.returncode == 0:
+        archived.append(tid)
+    else:
+        errors.append((tid, r.stderr[:120]))
+
+print(f"archived_threads={len(archived)} errors={len(errors)}")
+for tid in archived:
+    print(" archived:", tid)
+PY
+fi
+
+# -------- 10+11. KEEP report -----------------------------------------------
+REPORT="$HOME/.local/share/ops-inbox/keep-$(date -u +%Y%m%dT%H%M%SZ).md"
+log "step 9/9 — KEEP report → $REPORT"
+python3 - "$KEEP_OUT" "$REPORT" "$DO_WA" "$DO_EMAIL" "$DO_SLACK" "$DO_ARCHIVE" "$PC_OUT" "$SLACK_OUT" <<'PY'
+import json, sys
+from pathlib import Path
+keep = json.loads(Path(sys.argv[1]).read_text())
+out = Path(sys.argv[2])
+lines = ["# ops-inbox KEEP report", ""]
+do_wa, do_email, do_slack, do_archive = (value == "1" for value in sys.argv[3:7])
+paperclip_path, slack_path = Path(sys.argv[7]), Path(sys.argv[8])
+lines.extend([
+    "## Run status",
+    f"- WhatsApp: {'captured' if do_wa else 'skipped'}",
+    f"- Gmail: {'captured' if do_email else 'skipped or unavailable'}",
+    f"- Slack: {'captured' if do_slack and slack_path.exists() else 'skipped or unavailable'}",
+    f"- Paperclip: {'captured' if paperclip_path.exists() else 'skipped or unavailable'}",
+    f"- Archive actions: {'applied after explicit approval' if do_archive else 'proposed only; approval required'}",
+    "",
+])
+lines.append("## WhatsApp (rule-classified)")
+for c in keep["whatsapp"]:
+    lines.append(f"- **{c['who']}** — verdict={c['verdict']} reason=`{c['reason']}`")
+    if c.get("draft_hint"):
+        lines.append(f"  hint: {c['draft_hint']}")
+lines.append("")
+lines.append("## Email (RESPOND/Action protected)")
+for e in keep["email"]:
+    if "error" in e:
+        lines.append(f"- ERROR: {e['error']}")
+        continue
+    lines.append(f"- **{e.get('who','')[:40]}** — {e.get('subject','')[:60]} verdict={e['verdict']} reason=`{e['reason']}`")
+lines.append("")
+lines.append("## Slack (TC/TD direct API, read-only)")
+slack_meta = next((s for s in keep["slack"] if s.get("channel") == "slack-meta"), None)
+if slack_meta:
+    lines.append(f"- AUTH: `{slack_meta.get('auth_line','?')}` verdict={slack_meta['verdict']} reason=`{slack_meta['reason']}`")
+else:
+    lines.append("- (no slack triage captured this pass)")
+for s in keep["slack"]:
+    if s.get("channel") != "slack-dm":
+        continue
+    lines.append(f"- **[{s['age']}] {s['who']}** — {s['preview'][:120]}")
+lines.append("")
+lines.append("## Groups (default archive unless @mention)")
+for g in keep["groups"]:
+    lines.append(f"- {g['who']} ({g['jid']})")
+lines.append("")
+lines.append("## Newsletters / broadcast (archive)")
+for n in keep["newsletters"]:
+    lines.append(f"- {n['who']} — {n['reason']}")
+lines.append("")
+lines.append("---")
+lines.append("Agent: refine `unsure` rows by re-reading the dual-JID history. "
+             "For every `keep` row, run 5b cross-thread verify (gog gmail search "
+             "in:sent to/cc/...) and stage a Rule-6 inline draft before sending. "
+             "Never auto-send; always one `clarify` per money/legal/hire decision.")
+out.write_text("\n".join(lines))
+PY
+
+cat "$REPORT"
+log "done."
