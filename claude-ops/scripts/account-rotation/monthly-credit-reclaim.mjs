@@ -3,7 +3,7 @@
 
 // ──────────────────────────────────────────────────────────────────────────────
 //  monthly-credit-reclaim.mjs
-//  Day-1 09:00 monthly cron entrypoint (HEA-4049).
+//  Day-1 09:00 monthly cron entrypoint.
 //
 //  Sequence:
 //    1. Snapshot pre-run ledger so we can compute prior-month consumption.

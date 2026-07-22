@@ -49,3 +49,19 @@ Raw grep counts (many are already example placeholders like `a[at]x[.]com`,
    Healify-specific Slack/dashboard integration working. Do as its own reviewed PR.
 
 Nothing here is pushed. Branch: `chore/scrub-pii-to-local-prefs`.
+
+## Round 2 (2026-07-22) — mechanical scrub done
+
+- Internal issue keys (`HEA-####`, `SFB-172`, `AUR-*`) in code comments / tests / install
+  scripts / plist templates / one runbook → removed or genericized (`<ISSUE>` / `<TEAM>-123`),
+  plus the runbook `Owner:` line degenericized.
+- A person's example email in `agents/memory-extractor.md` → `example.user@example[.]com`.
+
+### Deliberately kept (NOT PII to scrub)
+- `info[at]lifecycleinnovations[.]limited` — intentional PUBLIC maintainer contact
+  (marketplace.json / SECURITY.md; allowlisted in `tests/test-no-secrets.sh`).
+- `Healify` (~149) — the product this plugin was built for; the maintainers keep it
+  Healify-specific (Slack `#healify-*` scoping, dashboards). Removing it is a multi-tenant
+  architecture change, not a scrub — out of scope, decide separately.
+- `support[at]healify[.]ai` — functional config default (`PLAY_DWD_SUBJECT`), overridable
+  by env; left to avoid breaking the launch-gate default.
