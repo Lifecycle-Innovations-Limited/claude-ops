@@ -316,19 +316,25 @@ JSON. No subagents, no MCP, near-zero tokens.
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --days 14           # wider window
 ```
 
-**ONE-SHOT END-TO-END (Sam 2026-07-21):** `bin/ops-inbox-zero` runs the FULL inbox-zero
-pipeline (scan → Paperclip SSOT → Slack direct API → dual-JID deep-read → WA archive →
-email archive → KEEP report) in one shell call. The agent still does the manual nuance
+**ONE-SHOT TRIAGE (Sam 2026-07-21):** `bin/ops-inbox-zero` attempts the inbox-zero
+pipeline (scan → Paperclip SSOT → Slack direct API → dual-JID deep-read → proposed WA/email
+archive actions → KEEP report) in one shell call. Gmail, Slack, or Paperclip can be skipped
+when authentication or local services are unavailable; the report surfaces each status.
+The agent still does the manual nuance
 refinement (unsure rows + Rule-6 inline drafts + Telegram AskUserQuestion), but the script
 handles the deterministic 80% in ~5s so the agent only spends tokens on judgment calls.
-Captures WhatsApp + Gmail + Slack + Paperclip pending gates in a single run.
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero"                   # full pipeline + WA+email archive pass
-"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero" --no-archive      # report-only, skip archive
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero"                   # safe report-only default
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero" --archive         # only after explicit approval
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero" --no-slack        # skip Slack triage
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero" --days 14         # wider window
 ```
+
+Always run the report-only command first. Present the exact proposed WhatsApp and Gmail
+archive items/counts with `AskUserQuestion`; only after explicit approval rerun the same
+arguments with `--archive`. Never infer approval from a previous run. `unsure` items are
+report-only and are never archived or unarchived by the script.
 
 Outputs:
 - `/tmp/ops-inbox-scan-clean.json` — raw scan output
