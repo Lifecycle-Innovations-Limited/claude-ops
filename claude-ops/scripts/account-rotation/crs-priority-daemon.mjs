@@ -260,7 +260,9 @@ async function liveUsage(email) {
     if (!r.ok) return cached?.data ?? null;
     // Hybrid: body (utilization) + headers (rate reset signals when present)
     const headers = {};
-    r.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
+    r.headers.forEach((v, k) => {
+      headers[k.toLowerCase()] = v;
+    });
     const d = await r.json();
     const data = {
       u5: d?.five_hour?.utilization ?? null,
@@ -327,8 +329,9 @@ async function clearStaleCooldowns(auth, accts) {
   for (const a of accts) {
     if (!rateLimitLooksStale(a, now)) continue;
     const mins = a.rateLimitStatus?.minutesRemaining ?? '?';
-    const resetPassed = resetAtPassed(a.rateLimitStatus, a.rateLimitResetAt, now) ||
-                        resetAtPassed(a.opusRateLimitStatus, a.opusRateLimitStatus?.resetAt, now);
+    const resetPassed =
+      resetAtPassed(a.rateLimitStatus, a.rateLimitResetAt, now) ||
+      resetAtPassed(a.opusRateLimitStatus, a.opusRateLimitStatus?.resetAt, now);
     if (DRY) {
       log(`[dry] clear stale RL ${a.name} (mins=${mins}${resetPassed ? ', resetAt passed' : ''})`);
       cleared++;
@@ -337,7 +340,9 @@ async function clearStaleCooldowns(auth, accts) {
     const res = await jfetch(`/admin/claude-accounts/${a.id}/reset-status`, { method: 'POST', headers: auth });
     if (res.status >= 200 && res.status < 300) {
       cleared++;
-      log(`${a.name}: cleared stale RL/error cache (was mins=${mins}${resetPassed ? ' — rateLimitResetAt passed' : ''})`);
+      log(
+        `${a.name}: cleared stale RL/error cache (was mins=${mins}${resetPassed ? ' — rateLimitResetAt passed' : ''})`,
+      );
     }
   }
   return cleared;
