@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Daily Anthropic credit-pool digest cron (HEA-4047).
+  Daily Anthropic credit-pool digest cron.
 
   Schedule: every day, 09:00 local time (Europe/Amsterdam for the owner).
   Equivalent cron: 0 9 * * *

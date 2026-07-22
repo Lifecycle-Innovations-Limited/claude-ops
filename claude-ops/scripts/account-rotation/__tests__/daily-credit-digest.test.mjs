@@ -1,5 +1,5 @@
 /**
- * daily-credit-digest.mjs — burn rate / projection / severity / format tests (HEA-4047).
+ * daily-credit-digest.mjs — burn rate / projection / severity / format tests.
  *
  * Run: node --test claude-ops/scripts/account-rotation/__tests__/daily-credit-digest.test.mjs
  */

@@ -77,7 +77,7 @@ Uses `claude-haiku-4-5-20251001` for cost efficiency. Typical cost per run: <$0.
 ---
 type: contact
 name: Deeksha Yadav
-email: deeksha@browserstack.com
+email: example.user@example.com
 company: BrowserStack
 role: Account Manager
 last_updated: 2026-04-13T15:00:00Z
