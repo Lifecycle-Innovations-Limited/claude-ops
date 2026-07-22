@@ -150,7 +150,12 @@ function accountKey(account) {
 }
 
 function safeSessionSuffix(key) {
-  return String(key || 'account').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 24) || 'account';
+  return (
+    String(key || 'account')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '')
+      .slice(0, 24) || 'account'
+  );
 }
 
 function withBrightDataSession(username, key) {
@@ -169,23 +174,24 @@ function brightDataIps(bright = {}) {
   const raw = Array.isArray(bright.ips)
     ? bright.ips.join(',')
     : String(bright.ips || firstEnvValue(['BRIGHT_DATA_IPS', 'BRIGHT_DATA_PROXY_IPS']) || '');
-  return raw.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+  return raw
+    .split(/[\s,]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
 }
 
 function brightDataAliasConfig(bright = {}) {
-  const alias = String(
-    bright.alias
-      || firstEnvValue(['BRIGHT_DATA_ACTIVE_PROXY_ALIAS'])
-      || 'isp-proxy',
-  ).trim().toLowerCase();
+  const alias = String(bright.alias || firstEnvValue(['BRIGHT_DATA_ACTIVE_PROXY_ALIAS']) || 'isp-proxy')
+    .trim()
+    .toLowerCase();
   if (alias === 'residential-proxy' || alias === 'residential' || alias === 'isp1') {
     return {
       ...bright,
       zone: bright.residentialZone || firstEnvValue(['BRIGHT_DATA_RESIDENTIAL_PROXY_ZONE']) || 'isp1',
       password:
-        bright.residentialPassword
-        || firstEnvValue(['BRIGHT_DATA_RESIDENTIAL_PROXY_PASSWORD', 'BRIGHT_DATA_RESIDENTIAL_PASSWORD'])
-        || bright.password,
+        bright.residentialPassword ||
+        firstEnvValue(['BRIGHT_DATA_RESIDENTIAL_PROXY_PASSWORD', 'BRIGHT_DATA_RESIDENTIAL_PASSWORD']) ||
+        bright.password,
       ips: [],
     };
   }
@@ -193,9 +199,9 @@ function brightDataAliasConfig(bright = {}) {
     ...bright,
     zone: bright.ispZone || firstEnvValue(['BRIGHT_DATA_ISP_PROXY_ZONE']) || bright.zone,
     password:
-      bright.ispPassword
-      || firstEnvValue(['BRIGHT_DATA_ISP_PROXY_PASSWORD', 'BRIGHT_DATA_PROXY_PASSWORD'])
-      || bright.password,
+      bright.ispPassword ||
+      firstEnvValue(['BRIGHT_DATA_ISP_PROXY_PASSWORD', 'BRIGHT_DATA_PROXY_PASSWORD']) ||
+      bright.password,
     ips: bright.ispIps || bright.ips || firstEnvValue(['BRIGHT_DATA_ISP_PROXY_IPS', 'BRIGHT_DATA_IPS']),
   };
 }
@@ -214,26 +220,31 @@ function brightDataUsernameForAccount(rawUser, bright = {}, key, accountIndex = 
 
 function proxyRoutingEnabled(config) {
   const raw = String(
-    process.env.CLAUDE_ROTATION_PROXY_ENABLED
-      || process.env.CRS_ACCOUNT_PROXY_ENABLED
-      || firstEnvValue(['CLAUDE_ROTATION_PROXY_ENABLED', 'CRS_ACCOUNT_PROXY_ENABLED'])
-      || config.crs?.proxyEnabled
-      || config.crs?.proxy?.enabled
-      || '',
-  ).trim().toLowerCase();
+    process.env.CLAUDE_ROTATION_PROXY_ENABLED ||
+      process.env.CRS_ACCOUNT_PROXY_ENABLED ||
+      firstEnvValue(['CLAUDE_ROTATION_PROXY_ENABLED', 'CRS_ACCOUNT_PROXY_ENABLED']) ||
+      config.crs?.proxyEnabled ||
+      config.crs?.proxy?.enabled ||
+      '',
+  )
+    .trim()
+    .toLowerCase();
   return ['1', 'true', 'yes', 'on'].includes(raw);
 }
 
 function proxyProviderOrder(config) {
   const raw = String(
-    process.env.CLAUDE_ROTATION_PROXY_PROVIDER
-      || process.env.CRS_ACCOUNT_PROXY_PROVIDER
-      || firstEnvValue(['CLAUDE_ROTATION_PROXY_PROVIDER', 'CRS_ACCOUNT_PROXY_PROVIDER'])
-      || config.crs?.proxyProvider
-      || config.crs?.proxy?.provider
-      || '2captcha,brightdata',
+    process.env.CLAUDE_ROTATION_PROXY_PROVIDER ||
+      process.env.CRS_ACCOUNT_PROXY_PROVIDER ||
+      firstEnvValue(['CLAUDE_ROTATION_PROXY_PROVIDER', 'CRS_ACCOUNT_PROXY_PROVIDER']) ||
+      config.crs?.proxyProvider ||
+      config.crs?.proxy?.provider ||
+      '2captcha,brightdata',
   );
-  return raw.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+  return raw
+    .split(',')
+    .map((x) => x.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 function parseProxyUrl(raw) {
@@ -255,34 +266,34 @@ function parseProxyUrl(raw) {
 function twoCaptchaSessionUsername(username, account) {
   const key = accountKey(account);
   const session = safeSessionSuffix(key);
-  return username
-    ? String(username).replace(/-session-[^-]+/, `-session-${session}`)
-    : username;
+  return username ? String(username).replace(/-session-[^-]+/, `-session-${session}`) : username;
 }
 
 function twoCaptchaProxyConfig(twoCaptcha = {}) {
   const preferred = firstEnvValue(['TWOCAPTCHA_PROXY_PREFERRED_TRANSPORT', 'TWO_CAPTCHA_PROXY_PREFERRED_TRANSPORT']);
-  const url = twoCaptcha.url || firstEnvValue(
-    preferred === 'socks5'
-      ? [
-          'TWOCAPTCHA_PROXY_SOCKS5_URL',
-          'TWO_CAPTCHA_PROXY_SOCKS5_URL',
-          'TWOCAPTCHA_PROXY_URL',
-          'TWO_CAPTCHA_PROXY_URL',
-          'CAPTCHA_PROXY_URL',
-          'TWO_CAPTCHA_HTTP_PROXY',
-          'TWOCAPTCHA_HTTP_PROXY',
-        ]
-      : [
-    'TWOCAPTCHA_PROXY_URL',
-    'TWO_CAPTCHA_PROXY_URL',
-    'CAPTCHA_PROXY_URL',
-    'TWO_CAPTCHA_HTTP_PROXY',
-    'TWOCAPTCHA_HTTP_PROXY',
-          'TWOCAPTCHA_PROXY_SOCKS5_URL',
-          'TWO_CAPTCHA_PROXY_SOCKS5_URL',
-        ],
-  );
+  const url =
+    twoCaptcha.url ||
+    firstEnvValue(
+      preferred === 'socks5'
+        ? [
+            'TWOCAPTCHA_PROXY_SOCKS5_URL',
+            'TWO_CAPTCHA_PROXY_SOCKS5_URL',
+            'TWOCAPTCHA_PROXY_URL',
+            'TWO_CAPTCHA_PROXY_URL',
+            'CAPTCHA_PROXY_URL',
+            'TWO_CAPTCHA_HTTP_PROXY',
+            'TWOCAPTCHA_HTTP_PROXY',
+          ]
+        : [
+            'TWOCAPTCHA_PROXY_URL',
+            'TWO_CAPTCHA_PROXY_URL',
+            'CAPTCHA_PROXY_URL',
+            'TWO_CAPTCHA_HTTP_PROXY',
+            'TWOCAPTCHA_HTTP_PROXY',
+            'TWOCAPTCHA_PROXY_SOCKS5_URL',
+            'TWO_CAPTCHA_PROXY_SOCKS5_URL',
+          ],
+    );
   const parsed = parseProxyUrl(url);
   if (parsed?.host && parsed?.port) {
     return {
@@ -291,26 +302,51 @@ function twoCaptchaProxyConfig(twoCaptcha = {}) {
     };
   }
 
-  const host = twoCaptcha.host || firstEnvValue([
-    'TWOCAPTCHA_PROXY_HOST', 'TWO_CAPTCHA_PROXY_HOST', 'CAPTCHA_PROXY_HOST',
-    'TWO_CAPTCHA_HOST', 'TWOCAPTCHA_HOST',
-  ]);
-  const port = twoCaptcha.port || firstEnvValue([
-    'TWOCAPTCHA_PROXY_PORT', 'TWO_CAPTCHA_PROXY_PORT', 'CAPTCHA_PROXY_PORT',
-    'TWO_CAPTCHA_PORT', 'TWOCAPTCHA_PORT',
-  ]);
-  const username = twoCaptcha.username || firstEnvValue([
-    'TWOCAPTCHA_PROXY_USERNAME', 'TWO_CAPTCHA_PROXY_USERNAME', 'CAPTCHA_PROXY_USERNAME',
-    'TWOCAPTCHA_PROXY_USER', 'TWO_CAPTCHA_PROXY_USER', 'CAPTCHA_PROXY_USER',
-  ]);
-  const password = twoCaptcha.password || firstEnvValue([
-    'TWOCAPTCHA_PROXY_PASSWORD', 'TWO_CAPTCHA_PROXY_PASSWORD', 'CAPTCHA_PROXY_PASSWORD',
-    'TWOCAPTCHA_PROXY_PASS', 'TWO_CAPTCHA_PROXY_PASS', 'CAPTCHA_PROXY_PASS',
-  ]);
+  const host =
+    twoCaptcha.host ||
+    firstEnvValue([
+      'TWOCAPTCHA_PROXY_HOST',
+      'TWO_CAPTCHA_PROXY_HOST',
+      'CAPTCHA_PROXY_HOST',
+      'TWO_CAPTCHA_HOST',
+      'TWOCAPTCHA_HOST',
+    ]);
+  const port =
+    twoCaptcha.port ||
+    firstEnvValue([
+      'TWOCAPTCHA_PROXY_PORT',
+      'TWO_CAPTCHA_PROXY_PORT',
+      'CAPTCHA_PROXY_PORT',
+      'TWO_CAPTCHA_PORT',
+      'TWOCAPTCHA_PORT',
+    ]);
+  const username =
+    twoCaptcha.username ||
+    firstEnvValue([
+      'TWOCAPTCHA_PROXY_USERNAME',
+      'TWO_CAPTCHA_PROXY_USERNAME',
+      'CAPTCHA_PROXY_USERNAME',
+      'TWOCAPTCHA_PROXY_USER',
+      'TWO_CAPTCHA_PROXY_USER',
+      'CAPTCHA_PROXY_USER',
+    ]);
+  const password =
+    twoCaptcha.password ||
+    firstEnvValue([
+      'TWOCAPTCHA_PROXY_PASSWORD',
+      'TWO_CAPTCHA_PROXY_PASSWORD',
+      'CAPTCHA_PROXY_PASSWORD',
+      'TWOCAPTCHA_PROXY_PASS',
+      'TWO_CAPTCHA_PROXY_PASS',
+      'CAPTCHA_PROXY_PASS',
+    ]);
   if (!host || !port) return null;
   const scopedUsername = twoCaptchaSessionUsername(username, twoCaptcha.account);
   return {
-    type: twoCaptcha.type || firstEnvValue(['TWOCAPTCHA_PROXY_TYPE', 'TWO_CAPTCHA_PROXY_TYPE', 'CAPTCHA_PROXY_TYPE']) || 'http',
+    type:
+      twoCaptcha.type ||
+      firstEnvValue(['TWOCAPTCHA_PROXY_TYPE', 'TWO_CAPTCHA_PROXY_TYPE', 'CAPTCHA_PROXY_TYPE']) ||
+      'http',
     host,
     port: Number(port),
     username: scopedUsername,
@@ -319,10 +355,7 @@ function twoCaptchaProxyConfig(twoCaptcha = {}) {
 }
 
 function efgProxyConfig(config = {}) {
-  const url =
-    config.url ||
-    firstEnvValue(['EFG_PROXY_URL', 'CRS_EFG_PROXY_URL']) ||
-    'http://100.90.98.93:18088';
+  const url = config.url || firstEnvValue(['EFG_PROXY_URL', 'CRS_EFG_PROXY_URL']) || 'http://100.90.98.93:18088';
   const parsed = parseProxyUrl(url);
   if (parsed?.host && parsed?.port) return parsed;
 
@@ -340,7 +373,8 @@ function efgProxyConfig(config = {}) {
 function brightDataProxyConfig(bright = {}, key, accountIndex = 0) {
   bright = brightDataAliasConfig(bright);
   const user = bright.username || fileEnvValue('BRIGHT_DATA_USERID');
-  const password = bright.password || firstEnvValue(['BRIGHT_DATA_PROXY_PASSWORD', 'BRIGHT_DATA_PASSWORD', 'BRIGHT_DATA_TOKEN']);
+  const password =
+    bright.password || firstEnvValue(['BRIGHT_DATA_PROXY_PASSWORD', 'BRIGHT_DATA_PASSWORD', 'BRIGHT_DATA_TOKEN']);
   if (!user || !password) return null;
   if (process.env.CLAUDE_ROTATION_USE_BRIGHTDATA_PROXY === '0' || bright.enabled === false) return null;
   return {
@@ -351,7 +385,6 @@ function brightDataProxyConfig(bright = {}, key, accountIndex = 0) {
     password,
   };
 }
-
 
 /**
  * Resolve a per-account rotation-proxy descriptor.
@@ -371,9 +404,10 @@ export function accountProxyConfig(config = {}, account, env = process.env) {
     const provider = String(env.CLAUDE_ROTATION_PROXY_PROVIDER || 'brightdata')
       .trim()
       .toLowerCase();
-    const urlKey = provider === 'efg' || provider === 'unifi' || provider === 'home' || provider === 'gateway'
-      ? 'EFG_PROXY_URL'
-      : 'BRIGHTDATA_PROXY_URL';
+    const urlKey =
+      provider === 'efg' || provider === 'unifi' || provider === 'home' || provider === 'gateway'
+        ? 'EFG_PROXY_URL'
+        : 'BRIGHTDATA_PROXY_URL';
     const raw = env[urlKey];
     if (raw && typeof raw === 'string' && raw.trim()) {
       const parsed = parseProxyUrlSimple(raw.trim());
@@ -385,9 +419,12 @@ export function accountProxyConfig(config = {}, account, env = process.env) {
   }
 
   // ── ops-rich path (no public enable flag) ──────────────────────────────
-  const cfg = config && typeof config === 'object' && Object.keys(config).length
-    ? config
-    : (typeof loadRotationConfig === 'function' ? loadRotationConfig() : {});
+  const cfg =
+    config && typeof config === 'object' && Object.keys(config).length
+      ? config
+      : typeof loadRotationConfig === 'function'
+        ? loadRotationConfig()
+        : {};
   const key = accountKey(account);
   const direct = account?.proxy || account?.proxyConfig;
   if (direct) return direct;
