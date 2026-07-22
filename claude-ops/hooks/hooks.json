@@ -5,12 +5,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/bedrock-fallback-guard.mjs"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/bedrock-fallback-guard.mjs",
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-inbox-autosync 2>/dev/null || true",
-            "timeout": 1,
+            "timeout": 3,
             "async": true
           }
         ]

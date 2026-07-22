@@ -18,6 +18,11 @@
 //   sessionWindow.sessionWindowStatus                                  (allowed | allowed_warning | …)
 //   claudeUsage.{fiveHour,sevenDay,sevenDayOpus}.utilization           (fresh secondary only)
 //
+// LIVE QUOTA POLLER (60-120s): hybrid header-derived (CRS rateLimit* from relay
+// upstream headers) + targeted /oauth/usage probe per account (throttled, cached).
+// Clears stale cooldowns on rateLimitResetAt expiry. Feeds live headroom back
+// to CRS scheduler via account PUT for accurate LB/concurrency.
+//
 // POLICY (configurable via crs.policy or $CRS_POLICY):
 //   conservative (default) — deprioritize on fresh high utilization, sessionWindow
 //   warnings, rate limits, and overload; FLOOR keeps minimum pool size; dedup by
@@ -129,12 +134,11 @@ function adminPassword() {
   );
 }
 
-// ── authoritative per-account quota (api.anthropic.com/api/oauth/usage) ────────
-// CRS's cached claudeUsage is often null/stale, so for accurate prioritization we
-// read each account's OAuth token from the credential store and query Anthropic's
-// usage endpoint directly (read-only GET — does NOT rotate the token). Falls back
-// to the cache/sessionWindowStatus when no token / 401 / timeout. Tokens live at
-// `Claude-Rotation-<email>` (rotator schema); CRS account → token by subscription email.
+// ── live per-account quota poller (hybrid header + targeted probe) ──────────────
+// 60-120s friendly: CRS /admin accounts gives header-derived rateLimitStatus etc;
+// we do targeted read-only /oauth/usage probe (via stored OAuth) for u5/u7 headroom.
+// Hybrid: body + response headers. TTL + throttle. Falls back to cache on error.
+// Never drives re-enable from stale; feeds headroom to scheduler after collection.
 const USAGE_TOKEN_SVC = process.env.CRS_USAGE_TOKEN_PREFIX || 'Claude-Rotation-';
 
 function accountVaultKey(a) {
@@ -219,6 +223,10 @@ function rateLimitLooksStale(a, now = Date.now()) {
     return false;
   };
 
+  // Explicit: clear stale cooldowns when rateLimitResetAt (or embedded resetAt) has passed
+  if (resetAtPassed(a.rateLimitStatus, a.rateLimitResetAt, now)) return true;
+  if (resetAtPassed(a.opusRateLimitStatus, a.opusRateLimitStatus?.resetAt, now)) return true;
+
   if (inspect(a.rateLimitStatus, a.rateLimitResetAt)) return true;
   if (inspect(a.opusRateLimitStatus, a.opusRateLimitStatus?.resetAt)) return true;
 
@@ -229,6 +237,13 @@ function rateLimitLooksStale(a, now = Date.now()) {
     if (accountTokenFresh(a, now)) return true;
   }
   return false;
+}
+
+function resetAtPassed(st, fallback, now = Date.now()) {
+  const resetAt = st?.resetAt || fallback;
+  if (!resetAt) return false;
+  const ms = Date.parse(resetAt);
+  return Number.isFinite(ms) && ms <= now;
 }
 async function liveUsage(email) {
   if (!email) return null;
@@ -243,8 +258,16 @@ async function liveUsage(email) {
       signal: AbortSignal.timeout(5000),
     });
     if (!r.ok) return cached?.data ?? null;
+    // Hybrid: body (utilization) + headers (rate reset signals when present)
+    const headers = {};
+    r.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
     const d = await r.json();
-    const data = { u5: d?.five_hour?.utilization ?? null, u7: d?.seven_day?.utilization ?? null };
+    const data = {
+      u5: d?.five_hour?.utilization ?? null,
+      u7: d?.seven_day?.utilization ?? null,
+      // capture any reset header for hybrid RL detection if body alone insufficient
+      resetHeader: headers['retry-after'] || headers['anthropic-ratelimit-unified-tokens-reset'] || null,
+    };
     liveUsageCache.set(email, { at: Date.now(), data });
     return data;
   } catch {
@@ -304,15 +327,17 @@ async function clearStaleCooldowns(auth, accts) {
   for (const a of accts) {
     if (!rateLimitLooksStale(a, now)) continue;
     const mins = a.rateLimitStatus?.minutesRemaining ?? '?';
+    const resetPassed = resetAtPassed(a.rateLimitStatus, a.rateLimitResetAt, now) ||
+                        resetAtPassed(a.opusRateLimitStatus, a.opusRateLimitStatus?.resetAt, now);
     if (DRY) {
-      log(`[dry] clear stale RL ${a.name} (mins=${mins})`);
+      log(`[dry] clear stale RL ${a.name} (mins=${mins}${resetPassed ? ', resetAt passed' : ''})`);
       cleared++;
       continue;
     }
     const res = await jfetch(`/admin/claude-accounts/${a.id}/reset-status`, { method: 'POST', headers: auth });
     if (res.status >= 200 && res.status < 300) {
       cleared++;
-      log(`${a.name}: cleared stale RL/error cache (was mins=${mins})`);
+      log(`${a.name}: cleared stale RL/error cache (was mins=${mins}${resetPassed ? ' — rateLimitResetAt passed' : ''})`);
     }
   }
   return cleared;
@@ -342,6 +367,30 @@ async function recoverSchedulableAfterClear(auth, accts) {
     }
   }
   return enabled;
+}
+
+// Feed live headroom (from targeted quota probe) back into CRS account record.
+// This supplies the scheduler with fresh per-account utilization/headroom so
+// load-balancing, concurrency caps, and selection use authoritative 5h/7d numbers
+// instead of stale claudeUsage cache.
+async function feedLiveHeadroom(auth, a, lu) {
+  if (!lu || DRY) return false;
+  const update = {
+    claudeUsage: {
+      fiveHour: { utilization: lu.u5 ?? null, updatedAt: new Date().toISOString() },
+      sevenDay: { utilization: lu.u7 ?? null, updatedAt: new Date().toISOString() },
+    },
+  };
+  try {
+    const r = await jfetch(`/admin/claude-accounts/${a.id}`, {
+      method: 'PUT',
+      headers: auth,
+      body: JSON.stringify(update),
+    });
+    return r.status >= 200 && r.status < 300;
+  } catch {
+    return false;
+  }
 }
 
 // ── policy ───────────────────────────────────────────────────────────────────
@@ -504,14 +553,26 @@ async function main() {
       log(`stale-cooldown: re-enabled ${reenabled} schedulable account(s)`);
     }
   }
-  // Authoritative quota: query Anthropic /oauth/usage directly per account (parallel,
-  // read-only). Falls back to CRS cache + sessionWindowStatus when a token is absent/stale.
-  await Promise.all(
-    accts.map(async (a) => {
-      a._liveUsage = await liveUsage(accountVaultKey(a));
-    }),
-  );
-  const liveN = accts.filter((a) => a._liveUsage).length;
+  // Live per-account quota poller (60-120s cadence): hybrid of CRS-provided
+  // rateLimitStatus / sessionWindow / overload (populated from upstream response
+  // headers in the relay) + targeted /oauth/usage probe for precise u5/u7 headroom.
+  // Throttled sequential probes keep it polite under 60-120s window; feeds headroom
+  // to scheduler after.
+  let liveN = 0;
+  for (const a of accts) {
+    const key = accountVaultKey(a);
+    a._liveUsage = await liveUsage(key);
+    if (a._liveUsage) liveN++;
+    // Throttle ~150ms between probes (fits 60-120s hybrid header+probe cadence for ~13 accts)
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  // Feed fresh headroom/utilization from targeted probes into CRS so scheduler
+  // (unifiedClaudeScheduler etc) sees live quota headroom for selection/LB.
+  let fed = 0;
+  for (const a of accts) {
+    if (a._liveUsage && (await feedLiveHeadroom(auth, a, a._liveUsage))) fed++;
+  }
+  if (fed) log(`headroom feed: updated ${fed} account(s) in CRS for scheduler`);
   const decisions = decide(accts);
 
   if (STATUS) {
