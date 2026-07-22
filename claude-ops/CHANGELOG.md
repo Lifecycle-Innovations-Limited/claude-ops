@@ -10,6 +10,17 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.45.0] - 2026-07-22
+
+### Changed
+- chore(pii): scrub internal issue keys + a person email from public repo (#692)
+- chore(pii): move owner PII to gitignored local prefs; scrub ops-inbox examples (#690)
+- feat(ops-inbox): scan Slack DMs + group DMs, not just channels; default to parallel fan-out (#691)
+- feat(ops-inbox): one-shot ops-inbox-zero script — WA + Email + Slack + Paperclip + archive (#685)
+- fix(crs): restore accountProxyConfig export in crs-pool-config.mjs (#689)
+- chore(deps): bump the npm_and_yarn group across 1 directory with 3 updates (#688)
+
+
 ## [2.44.0] - 2026-07-21
 
 ### Changed

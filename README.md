@@ -4,7 +4,7 @@
 
 **Business Operating System for Claude Code**
 
-![Version](https://img.shields.io/badge/version-2.44.0-blue)
+![Version](https://img.shields.io/badge/version-2.45.0-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blueviolet.svg)
 ![Skills](https://img.shields.io/badge/skills-61-success)
