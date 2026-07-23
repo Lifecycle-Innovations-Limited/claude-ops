@@ -2,10 +2,10 @@
 
 # Skills Reference
 
-_All 60 skills available in claude-ops — your business operations command surface (v2.0 added `/ops:deploy-fix`, `/ops:recap`, `/ops:rotate`, `/ops:rotate-setup`; v2.0.6 added `/ops:credentials`; v2.0.8 added multi-workspace Slack; feature-dev overlay via `/ops:ops-feature-dev`)_
+_All 61 skills available in claude-ops — your business operations command surface (v2.0 added `/ops:deploy-fix`, `/ops:recap`, `/ops:rotate`, `/ops:rotate-setup`; v2.0.6 added `/ops:credentials`; v2.0.8 added multi-workspace Slack; feature-dev overlay via `/ops:ops-feature-dev`)_
 
-[![version](https://img.shields.io/badge/version-2.38.4-blue)](../CHANGELOG.md)
-[![skills](https://img.shields.io/badge/skills-60-8b5cf6)](.)
+[![version](https://img.shields.io/badge/version-2.45.0-blue)](../CHANGELOG.md)
+[![skills](https://img.shields.io/badge/skills-61-8b5cf6)](.)
 [![license](https://img.shields.io/badge/license-MIT-22c55e)](../LICENSE)
 [![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-f59e0b)](.)
 
@@ -240,11 +240,14 @@ flowchart LR
 
 ### `/ops:ecom` · `skills/ops-ecom/SKILL.md`
 
-Shopify store command center. Orders, inventory, fulfillment, analytics, and store health via Shopify Admin API.
+Shopify store command center. Orders, inventory, fulfillment, analytics, store health, sales channels, agentic storefronts, and Shop readiness via Shopify Admin API.
 
 - `/ops:ecom orders` — recent orders + fulfillment status
 - `/ops:ecom inventory` — low stock alerts
 - `/ops:ecom analytics` — revenue, AOV, conversion
+- `/ops:ecom channels` — sales channel / publication inventory
+- `/ops:ecom agentic` — agentic storefront health (ChatGPT, Gemini, Copilot, …)
+- `/ops:ecom shop` — Shop channel + Shop Campaigns readiness (stage-only spend)
 - `/ops:ecom setup` — configure Shopify API credentials
 
 ### `/ops:marketing` · `skills/ops-marketing/SKILL.md`
@@ -261,6 +264,8 @@ Marketing analytics dashboard. Email campaigns (Klaviyo), paid ads (Meta Ads, Go
 - `/ops:marketing google-ads campaigns` — Campaign management — list, create, pause, enable, adjust budget
 - `/ops:marketing google-ads keywords` — Keyword Planner — discover keywords with volume and bid data
 - `/ops:marketing google-ads ad-groups` — Ad group management — list, create, add/remove keywords, adjust bids
+- `/ops:marketing shop-campaigns` — Shop Campaigns prefs status (stage-only; no auto-spend)
+- `/ops:marketing agentic` — agentic storefront prefs status (live probe via /ops-ecom agentic)
 
 ### `/ops:voice` · `skills/ops-voice/SKILL.md`
 

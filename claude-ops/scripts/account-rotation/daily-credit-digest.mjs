@@ -3,11 +3,11 @@
 
 // ──────────────────────────────────────────────────────────────────────────────
 //  daily-credit-digest.mjs
-//  Daily 09:00 cron entrypoint (HEA-4047).
+//  Daily 09:00 cron entrypoint.
 //
 //  Posts a Slack digest of Anthropic credit-pool health:
 //    1. Per-account remaining balance (read from credits-ledger.json — same
-//       file HEA-4049's monthly reclaimer writes).
+//       file the related tracker's monthly reclaimer writes).
 //    2. 7-day burn rate per account + total (computed from a rolling JSONL
 //       snapshot ledger at ~/.claude/credit-snapshots.jsonl that this script
 //       appends to on every run).
@@ -15,7 +15,7 @@
 //       expressed as "$X consumed of $1400 pool (Y%)".
 //    4. Anthropic→Bedrock fallback ratio over the last 24h, read from
 //       CloudWatch (namespace My-Project/LLM, metrics bedrock_fallback_count +
-//       anthropic_credit_hit established by HEA-4045). Graceful skip with a
+//       anthropic_credit_hit established by <ISSUE>). Graceful skip with a
 //       warning line if CloudWatch read fails or metrics are absent.
 //    5. Severity escalation via scripts/ops-notify.sh:
 //         HIGH  → projected_consumption_pct >= 90  OR  fallback_ratio >= 0.30

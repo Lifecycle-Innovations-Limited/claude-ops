@@ -355,6 +355,58 @@ To enable a daemon service, set `enabled: true` in `daemon-services.default.json
 
 ---
 
+
+## Shopify surfaces (Shop Campaigns + Agentic storefronts)
+
+Brand-agnostic project prefs for Shopify AI commerce and Shop pay-per-sale ads. **No plaintext secrets** — only cred-refs. Defaults are off / stage-only (Rule 5 / NEVER LEAK MONEY).
+
+```jsonc
+{
+  "marketing": {
+    "projects": {
+      "myapp": {
+        "shopify": {
+          "store_url": "example.myshopify.com",
+          "admin_token_ref": "env:SHOPIFY_ACCESS_TOKEN"
+        },
+        "shop_campaigns": {
+          "enabled": false,
+          "status": "not_configured", // not_configured | stage_only | active | paused
+          "eligibility": "unknown", // unknown | eligible | ineligible | pending_review
+          "budget": {
+            "daily_cap_usd": null, // null = no auto-spend
+            "currency": "USD",
+            "approval": "required" // required | granted
+          },
+          "surfaces": {
+            "shop_app": "unknown",
+            "chatgpt": "unknown",
+            "pinterest": "unknown",
+            "microsoft_monetize": "unknown"
+          },
+          "notes": "",
+          "last_probed_at": null
+        },
+        "agentic_storefronts": {
+          "enabled": false,
+          "channels": {
+            "copilot": "unknown",
+            "chatgpt": "unknown",
+            "google_ai_mode": "unknown"
+          },
+          "last_probed_at": null
+        }
+      }
+    }
+  }
+}
+```
+
+**Rules:** (1) no plaintext tokens in prefs; (2) presence of the object does not authorize spend; (3) any future mutate path requires `budget.approval == "granted"` **and** `daily_cap_usd > 0` **and** `status == "active"`; (4) live channel inventory lives in `/ops-ecom channels|agentic|shop`.
+
+Docs: [Agentic storefronts](https://help.shopify.com/en/manual/online-sales-channels/agentic-storefronts) · [Shop Campaigns](https://help.shopify.com/en/manual/online-sales-channels/shop/shop-campaigns)
+
+
 ## Sub-command Routing
 
 **Argument parsing:** `$ARGUMENTS` is split as `<first-token> [rest...]`.
@@ -364,7 +416,7 @@ Route `$ARGUMENTS` to the correct section below:
 
 | Input                                                                                                     | Action                                                                                                                                                                                                                                                                                        |
 | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| (empty), dashboard, portfolio                                                                             | Visual portfolio dashboard — all projects × all configured channels (Meta, Google Ads, GA4, GSC, Resend, SNS, IG, ShipBob, autopilot state). See ## dashboard section.                                                                                                                        |
+| (empty), dashboard, portfolio                                                                             | Visual portfolio dashboard — all projects × all configured channels (Meta, Google Ads, GA4, GSC, Resend, SNS, IG, ShipBob, Shop Campaigns, agentic storefronts, autopilot state). See ## dashboard section.                                                                                                                        |
 | portfolio --json                                                                                          | Machine-readable portfolio JSON (one row per project, full channel config)                                                                                                                                                                                                                    |
 | portfolio --project `<name>`                                                                              | Full single-project config dump (every channel block)                                                                                                                                                                                                                                         |
 | `<project>`                                                                                               | If `marketing.projects.<project>.autopilot.enabled == true` → run live autopilot pass for that project. Otherwise → run `bin/ops-marketing-provision provision-all --project <project>` then `bin/ops-marketing-autopilot --project <project> --dry-run` (see ## project entry-point section) |
@@ -378,6 +430,8 @@ Route `$ARGUMENTS` to the correct section below:
 | social                                                                                                    | Social media aggregator                                                                                                                                                                                                                                                                       |
 | instagram, instagram post, instagram reel, instagram story, instagram insights, instagram demographics    | Instagram publishing + insights (see ## instagram section)                                                                                                                                                                                                                                    |
 | campaigns                                                                                                 | Cross-channel campaign overview (all platforms)                                                                                                                                                                                                                                               |
+| shop-campaigns, shop_campaigns                                                                            | Per-project Shop Campaigns status (prefs + optional live ecom probe) — see ## shop-campaigns                                                                                                                                  |
+| agentic-storefronts, agentic                                                                              | Per-project agentic storefront prefs status (live publication probe via /ops-ecom agentic)                                                                                                                                     |
 | optimize                                                                                                  | Cross-platform ad optimization agent                                                                                                                                                                                                                                                          |
 | `provision <project>`                                                                                     | Idempotent full sweep — provisions GA4, GSC, Instagram, Google Ads in order. Each step is no-op if already configured. Aliases: `provision-all <project>`                                                                                                                                     |
 | `provision-instagram <project>`                                                                           | Auto-resolves `instagram.account_id` from Meta token (uses `appsecret_proof` when `meta.app_secret` configured).                                                                                                                                                                              |
@@ -395,6 +449,8 @@ Route `$ARGUMENTS` to the correct section below:
 | `portfolio --kpis`                                                                                        | Just the KPI section, no config-state table                                                                                                                                                                                                                                                   |
 | `portfolio --prewarm-status`                                                                              | Show what marketing creds exist in Doppler that aren't yet linked                                                                                                                                                                                                                             |
 | `<project> creative --brand=X --product=Y --audience=Z --goal=W [--num-shots=N --env=prd\|dev]`           | Higgsfield brand asset generator. Drafts shot list, generates N images via Higgsfield API, uploads to S3, opens campaign-brief PR on my-project-operating-dashboard. See ## creative (Higgsfield) section.                                                                                    |
+**Shopify Shop Campaigns:** treat `shop_campaigns` as stage-only unless `status=active` and `budget.approval=granted` and a positive daily cap. Never auto-create Shop Campaigns budgets from autopilot in this version.
+
 
 ---
 
@@ -2811,3 +2867,14 @@ Map accounts per project via `registry.json` → `.projects[].windsor`. Prefer *
 ROAS** (store/analytics revenue ÷ total ad spend) over platform-reported ROAS. See
 [docs/integrations/windsor-ai.md](../../../docs/integrations/windsor-ai.md) for the full playbook (REST + MCP modes,
 registry mapping, analysis mandate, and caveats).
+Data sanity: if Windsor returns only zeros across sources (Meta + Google spend/impressions and
+Instagram reach all exactly 0 over 30d while accounts are connected), treat the data as unavailable —
+the plan may be expired (check `get_current_user` → `is_paid`) — warn the user, and never present
+zeros as real metrics. `scripts/windsor-data-sanity.sh` automates the check.
+
+Windsor is optional. If Windsor is not connected, returns errors, or returns the
+all-zero pattern, fall back to the free direct libraries:
+`scripts/lib/ad-spend-aggregator.sh` (paid), `scripts/lib/ga4-data-api.sh`
+(analytics), and `scripts/lib/organic-metrics-aggregator.sh` (organic + merchant).
+See [docs/integrations/direct-channel-wiring.md](../../../docs/integrations/direct-channel-wiring.md).
+Never present zeros from a dead source as real metrics.

@@ -35,8 +35,9 @@ Checks include (2026 baseline):
 - **Lambda** — deprecated/old runtimes.
 - **Security posture** — GuardDuty, Security Hub standards, Cost Anomaly
   Detection monitors, Compute Optimizer enrollment.
-- **Cost** — per-service spend over the last `AUDIT_COST_DAYS` with the Δ vs the
-  prior window (surfaces spend spikes, per ops cost-leak doctrine).
+- **Cost** — per-service **Usage** spend (`RECORD_TYPE=Usage` UnblendedCost) over
+  the last `AUDIT_COST_DAYS` with the Δ vs the prior window. Credits mask net CE
+  totals to ≈ $0 — this audit never uses unfiltered Blended/Unblended nets as burn.
 
 ## Configuration (env, all optional)
 

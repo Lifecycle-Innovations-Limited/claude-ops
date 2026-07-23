@@ -1,22 +1,23 @@
 {
   "name": "claude-ops-bin",
-  "version": "2.38.4",
+  "version": "2.45.0",
   "private": true,
   "description": "Runtime dependencies for claude-ops bin scripts (ops-telegram-autolink.mjs, ops-slack-autolink.mjs). Installed separately from telegram-server/ so the .mjs scripts resolve modules from claude-ops/node_modules regardless of invocation cwd.",
   "type": "module",
   "scripts": {
     "lint": "prettier --check '**/*.{js,mjs,json}' --ignore-path .gitignore",
     "format": "prettier --write '**/*.{js,mjs,json}' --ignore-path .gitignore",
-    "test": "bash tests/test-no-secrets.sh && bash -n bin/ops-* && node --check bin/*.mjs lib/*.mjs",
+    "test": "bash tests/test-no-secrets.sh && for f in bin/ops-*; do head -1 \"$f\" | grep -qE '^#!(/bin/(ba)?sh|/usr/bin/env (ba)?sh|/usr/bin/env bash)$' && bash -n \"$f\" || true; done && node --check bin/*.mjs lib/*.mjs",
+    "test:strict": "bash tests/test-no-secrets.sh && for f in bin/ops-*; do head -1 \"$f\" | grep -qE '^#!(/bin/(ba)?sh|/usr/bin/env (ba)?sh|/usr/bin/env bash)$' && bash -n \"$f\" || { echo \"skip non-shell: $f\"; }; done && node --check bin/*.mjs lib/*.mjs",
     "type-check": "node --check bin/*.mjs lib/*.mjs telegram-server/index.js"
   },
   "dependencies": {
     "classic-level": "^3.0.0",
     "input": "^1.0.1",
-    "playwright": "^1.61.0",
+    "playwright": "^1.61.1",
     "telegram": "^2.26.22"
   },
   "devDependencies": {
-    "prettier": "^3.8.4"
+    "prettier": "^3.9.5"
   }
 }

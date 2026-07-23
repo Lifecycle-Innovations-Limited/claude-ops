@@ -9,9 +9,9 @@
   "plugins": [
     {
       "name": "ops",
-      "description": "Business operations command center for Claude Code — 60 skills, 21 agents, smart background daemon. Manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (AWS), revenue (Stripe+RevenueCat), e-commerce, marketing, monitoring (Datadog/New Relic/OTEL), voice, and smart home (Homey Pro). Includes /ops:ops-ar A&R (audio analysis + demo verdict cards), /gtm go-to-market planner, /ops:projects portfolio dashboard, /ops:ops-mac macOS diagnose-and-fix (macos-toolkit CLI suite), /ops:ops-home control surface, and YOLO autonomous mode with 4 parallel C-suite agents.",
+      "description": "Business operations command center for Claude Code — 61 skills, 21 agents, smart background daemon. Manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (AWS), revenue (Stripe+RevenueCat), e-commerce, marketing, monitoring (Datadog/New Relic/OTEL), voice, and smart home (Homey Pro). Includes /ops:ops-ar A&R (audio analysis + demo verdict cards), /gtm go-to-market planner, /ops:projects portfolio dashboard, /ops:ops-mac macOS diagnose-and-fix (macos-toolkit CLI suite), /ops:ops-home control surface, and YOLO autonomous mode with 4 parallel C-suite agents.",
       "source": "./claude-ops",
-      "version": "2.38.4",
+      "version": "2.45.0",
       "category": "productivity",
       "keywords": [
         "ops",

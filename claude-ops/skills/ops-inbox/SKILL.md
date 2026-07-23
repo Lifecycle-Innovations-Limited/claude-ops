@@ -159,6 +159,8 @@ The whatsmeow bridge can **silently miss inbound messages** when its history/app
    - `topics_active.md` — check for active threads or deadlines related to this contact
    - `donts.md` — never violate these restrictions in drafts
 
+5. **Launch the live inbox watcher (background job, every session)** — right after the steps above, start `bin/ops-inbox-live-watch.sh` via Bash with `run_in_background: true`. It polls the Gmail inbox (via `gog`) every ~4 minutes and exits — with a `NEW INBOX MAIL: <from> | <subject> | <date> | id=<id>` summary line — the instant a genuinely new inbound message lands; it also exits (with a `watcher expired` line) after ~6h if nothing new arrives. **The job's exit IS the new-mail ping** — treat it exactly like a direct orchestrator notification: when it fires, re-scan the affected channel and relaunch the watcher (same command) so live coverage never lapses. Pure bash + python3 + `gog`, no systemd/launchd dependency, cross-platform (Linux + macOS).
+
 ## CLI/API Reference
 
 ### whatsapp-bridge (WhatsApp — mcp**whatsapp**\*)
@@ -301,6 +303,15 @@ gog gmail raw <messageId> | python3 -c "import json,sys; d=json.load(sys.stdin);
 
 ---
 
+## Standing behavior: RUN WIDE — parallel subagents / agent-teams / workflow by DEFAULT
+
+Every `/ops:ops-inbox` run should be fast for the owner, whose time is spent only reviewing and approving — never waiting on serial reads. By default:
+
+- **Fan out the moment there is more than a trivial amount of work.** After the offline `ops-inbox-scan` first pass, push the per-thread deep-read / dedup / context-gathering / draft-writing into parallel background workers — `Workflow` fan-out (preferred) or an Agent-Teams read-only scanner per channel/thread-chunk. Do NOT deep-read dozens of threads serially in the main session.
+- **Do research, context-gathering, and draft-writing in the background while the owner works.** Kick off the readers/drafters; let them build full-thread arcs, cross-channel dedup, contact profiles, and staged draft text concurrently. Surface results as they land so the owner approves in a steady stream instead of after one big serial pass.
+- **Parallelism NEVER changes the safety model.** Workers are strictly READ-ONLY — they classify and return draft text only. Every outbound send stays in the main session, one draft → one `AskUserQuestion` → one approval → one send (Rule 6 + PER-DRAFT APPROVAL).
+- **Respect the box concurrency ceiling** (heartbeat `MAX_BUSY`) — queue extra work rather than exceeding it.
+
 ## Scan engine — offline script triages first, Workflow fan-out is the DEFAULT for deep per-thread work
 
 **Run `bin/ops-inbox-scan` FIRST. It is the primary scan engine.** It classifies the two
@@ -314,9 +325,35 @@ JSON. No subagents, no MCP, near-zero tokens.
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --days 14           # wider window
 ```
 
+**ONE-SHOT TRIAGE (Sam 2026-07-21):** `bin/ops-inbox-zero` attempts the inbox-zero
+pipeline (scan → Paperclip SSOT → Slack direct API → dual-JID deep-read → proposed WA/email
+archive actions → KEEP report) in one shell call. Gmail, Slack, or Paperclip can be skipped
+when authentication or local services are unavailable; the report surfaces each status.
+The agent still does the manual nuance
+refinement (unsure rows + Rule-6 inline drafts + Telegram AskUserQuestion), but the script
+handles the deterministic 80% in ~5s so the agent only spends tokens on judgment calls.
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero"                   # safe report-only default
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero" --archive         # only after explicit approval
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero" --no-slack        # skip Slack triage
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-zero" --days 14         # wider window
+```
+
+Always run the report-only command first. Present the exact proposed WhatsApp and Gmail
+archive items/counts with `AskUserQuestion`; only after explicit approval rerun the same
+arguments with `--archive`. Never infer approval from a previous run. `unsure` items are
+report-only and are never archived or unarchived by the script.
+
+Outputs:
+- `/tmp/ops-inbox-scan-clean.json` — raw scan output
+- `/tmp/ops-inbox-keep.json` — classified KEEP/ARCHIVE/UNSURE rows (incl. Slack DMs)
+- `/tmp/slack-triage.txt` — Slack direct-API triage (AUTH + human DMs)
+- `~/.local/share/ops-inbox/keep-<ts>.md` — final report (agent reads this for Telegram)
+
 **Why this exists:** the multi-channel scan used to fan out one Workflow subagent per
 channel. A single real run burned **~330k subagent tokens / 5 agents / ~130s** to do work
-that, for WhatsApp, is a sqlite read, and for Email, a CLI call. The script does the same
+that, for WhatsApp, is a sqlite read, and for Email, is a CLI call. The script does the same
 classification (and _better_ — it merges each person's lid↔phone chats into one
 conversation and resolves real names from `contacts`) for free. Reserve agent fan-out for
 genuine reasoning, not for reading a database.
@@ -562,6 +599,16 @@ All channel credentials come from env vars or CLI auth — no hardcoded secrets.
 
 **The success metric of `/ops:ops-inbox` is an EMPTY inbox on EVERY channel — not "surfaced the NEEDS_REPLY".** Every conversation that no longer needs the user's eyes, action, or reaction MUST be archived in the same run. This is mandatory, not a nicety:
 
+> **Paperclip SSOT + WA archive API (Sam 2026-07-19 — hard):**
+> 1. **When Paperclip is on the box**, before KEEP-classifying or drafting money/legal/hire/product: scan open issues + pending `issue_thread_interactions` for that counterparty/thread id (e.g. a payment-round thread → its tracking issue, a card/supplier thread → its issue, a comp/hire thread → its issue). Resolve the concrete counterparty→issue mappings from your local prefs/board, not from this public skill. Prefer the board gate + staged draft over a new Telegram `AskUserQuestion` when the same decision is already wired. Never re-ask a locked Q or contradict answered options.
+> 2. **WhatsApp archive is mandatory every pass** — not “demote only.” After classify, call the bridge archive endpoint on **every non-actionable chat and every chat you just replied to** (phone `@s.whatsapp.net` **and** every `@lid` / `alt_jids`):
+>    ```bash
+>    curl -s -X POST http://127.0.0.1:8080/api/archive \
+>      -H 'Content-Type: application/json' \
+>      -d '{"chat_jid":"<jid>","archive":true}'
+>    ```
+>    MCP equivalent: `mcp__whatsapp__archive_chat {chat_jid, archive: true}`. Report archived count. Leave only true NEEDS_REPLY / creative-hold / crisis-surface chats unarchived. Demote-without-archive is a defect (phone inbox still noisy).
+
 > **🚫 HARD GUARDRAIL — NEVER ARCHIVE A TODO/ACTION-LABELED EMAIL UNTIL VERIFIED DONE (overrides every archive rule below).**
 > An email carrying ANY of the user's todo/action labels is an open task the user is tracking — it MUST stay in the inbox until the task is verified complete, regardless of how it looks to the classifier (even if the subject reads like spam, a newsletter, or an automated notification, and even if it lands in WAITING/FYI). Treat the label as the user's explicit intent and obey it over your own classification.
 > - **Protected labels** (case-insensitive, match by name): `To Respond`, `Respond`, `Reply`, `Reply Later`, `Action`, `Needs Action`, `Follow up`, `Awaiting Reply`, `To-do` / `Todo`, `Tasklet`, `Timed Actions`, and any label whose name contains `to-do`/`todo`/`task`/`action`/`respond`/`follow up`/`reply later`/`needs action`/`awaiting reply` — **except** completion labels like `Actioned` or any name containing `actioned` (those signal verified done, not open todos). (Skip Gmail system labels `INBOX/SENT/DRAFT/UNREAD/IMPORTANT/STARRED/CATEGORY_*` — those are not todo markers.)
@@ -648,9 +695,9 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
  Context: [related threads/decisions/deadlines found]
 
  Draft reply: "[contextually aware draft based on all above]"
-
- [Send] [Edit] [Read full thread] [Skip]
 ```
+
+Stage this per the **PER-DRAFT APPROVAL** principle below: one `AskUserQuestion` for this item alone, single-select `[Send]` `[Edit]` `[Skip]`, `preview` field carrying the full draft text plus a "Reasoning / facts verified" block. Never combine with any other item's approval.
 
 **When drafting replies:**
 
@@ -676,19 +723,54 @@ A reply that is correct but in the wrong voice is a defect. Before drafting on a
 
 ## Core principle: FULL-CONTEXT RECALL + CROSS-CHANNEL / ALREADY-SENT DEDUP
 
-The single most damaging error is replying to something the user already handled — in this thread, in another thread, in a group, on another channel, or by phone/voice that never landed in the store. **This dedup gate is MANDATORY and BLOCKING: no thread may be classified NEEDS_REPLY or drafted against until ALL of the checks below have run and come up empty.** A thread is NOT NEEDS_REPLY just because its own last message is inbound — the same request may already be answered somewhere else, and re-surfacing an already-handled item is treated as a scan bug, not a near-miss. The check is on the underlying REQUEST/TOPIC, not just the literal thread: if the same ask was satisfied anywhere — another thread, another channel, a group, or a sent email — it is HANDLED.
+The single most damaging error is replying to something the user already handled — in this thread, in another thread, in a group, on another channel, or by phone/voice that never landed in the store. **This dedup gate is MANDATORY and BLOCKING: no thread may be classified NEEDS_REPLY or drafted against until ALL dedup checks (steps 1–7 below) have run and come up empty.** A thread is NOT NEEDS_REPLY just because its own last message is inbound — the same request may already be answered somewhere else, and re-surfacing an already-handled item is treated as a scan bug, not a near-miss. The check is on the underlying REQUEST/TOPIC, not just the literal thread: if the same ask was satisfied anywhere — another thread, another channel, a group, or a sent email — it is HANDLED.
 
-Before confirming ANY NEEDS_REPLY or drafting, run every step:
+Before confirming ANY NEEDS_REPLY or drafting, run steps 1–7:
 
 1. **Same-thread recheck** — scan the full thread both directions (incl. `[voice]`/`[image]`/`[document]` enrichments). If the user replied after the last inbound, it is WAITING/HANDLED.
 2. **Cross-thread, same person (MANDATORY)** — the user may have answered the same person on their other JID (lid↔phone), in a group both are in, or a secondary number. Search the contact across threads (`mcp__whatsapp__list_messages {query, limit:25}`, `is_from_me:true` after the inbound timestamp). A satisfying reply in ANY of the person's threads → HANDLED.
-3. **Cross-channel (MANDATORY)** — the user may have answered the email by WhatsApp, or the WhatsApp by email/iMessage/Slack/Telegram. For EVERY NEEDS_REPLY candidate, you MUST search the OTHER channels for a recent outbound to the same person OR about the same topic before confirming: `gog gmail search "to:<addr> newer_than:3d"`, `mcp__whatsapp__list_messages {query:"<name|topic>"}`, iMessage `chat_messages`, Slack/Telegram history. A hit on the same request → reclassify HANDLED. Skipping this search is not permitted — an unsearched candidate is not yet a confirmed NEEDS_REPLY.
+3. **Cross-channel (MANDATORY)** — the user may have answered the email by WhatsApp, or the WhatsApp by email/iMessage/Slack/Telegram. For EVERY NEEDS_REPLY candidate, you MUST search the OTHER channels for a recent outbound to the same person OR about the same topic before confirming: `gog gmail search "in:sent newer_than:21d (to:<addr1> OR to:<addr2>)"` (then **verify each hit's `labelIds` contains `SENT` via `gog gmail raw` — search alone is polluted), `mcp__whatsapp__list_messages {query:"<name|topic>"}` / phone+`@lid` deep-read, iMessage `chat_messages`, Slack/Telegram/Productlane history. A verified hit on the **same request** → reclassify HANDLED. Skipping this search is not permitted — an unsearched candidate is not yet a confirmed NEEDS_REPLY.
 4. **Same request across DIFFERENT people / group (MANDATORY)** — the same ask sometimes arrives from several people, or in a group AND a DM. If the user already answered the request once (in the group, to one person, or in a broadcast), the duplicate copies are HANDLED — never draft the same answer twice. Match on topic/intent, not just sender identity.
-5. **Already-sent (email) (MANDATORY)** — a reply sent from another client may not be the thread's last message in the envelope first-pass. Open the thread (`gog gmail thread get`) AND search SENT (`gog gmail search "in:sent <topic|to:addr> newer_than:7d"`) for a message after the last inbound before classifying NEEDS_REPLY.
+5. **Already-sent (email) (MANDATORY)** — a reply sent from another client may not be the thread's last message in the envelope first-pass. Open the thread (`gog gmail thread get`) AND search SENT for a message after the last inbound before classifying NEEDS_REPLY.
+   - **Search:** `gog gmail search "in:sent newer_than:21d (to:<addr1> OR to:<addr2>)"` plus subject/topic variants for the **same ask** (not just same person).
+   - **VERIFY every hit with `gog gmail raw <id>` / `get`:** `labelIds` must contain **`SENT`**. `gog gmail search 'in:sent to:X'` is **polluted** — it often returns thread peers / inbound envelopes that lack `SENT` (session-hardened 2026-07-18). Search alone is never proof of outbound.
+   - **`DRAFT` ≠ delivered.** Lindy/Gmail drafts must not be treated as already-replied.
+   - **Same person ≠ same ask.** A payment on one deal does **not** close a different payment-round thread; a calendar invite to someone does **not** close an unrelated bug thread with them; an old thread from a prior year does **not** close a new opportunity. Match on the specific ask, not just the person.
+   - **Cross-channel:** also check WA (phone + `@lid`), Slack, Productlane/support@ when the ask is product/support. Demote email NEEDS_REPLY when the same ask was already answered on WA (or vice versa).
+   - **Report:** every KEEP / NEEDS_REPLY row must state `already_replied?` = `no` | `yes (where)` | `partial (what remains)`. Never stage a draft that duplicates a verified SENT/WA reply.
 6. **Use the contact registry** (below) to resolve who a sender/number/JID actually is and pull their cross-channel identity + context in one offline lookup, so the steps 2–5 searches are precise across every JID/address/handle the person owns.
 7. **Trust the user's word over the store** — if the user says they replied, it is HANDLED even if the store doesn't show it.
 
-Only after steps 1–6 ALL come up empty is a thread a true NEEDS_REPLY. This is the FULL-THREAD AWARENESS GATE, extended cross-channel and cross-request. **Surfacing a NEEDS_REPLY without having run the cross-thread, cross-channel, cross-request, and already-sent searches is a scan bug — do not present it.** None of this changes the outbound path: even a genuine NEEDS_REPLY is still drafted and sent only in the main session under the Rule-6 one-draft → one-approval → one-send gate.
+Only after steps 1–7 ALL come up empty is a thread a true NEEDS_REPLY candidate. Draft it, then run the fact-verified redraft gate before staging:
+
+8. **Fact-verified redraft gate (MANDATORY, before staging ANY draft — owner directive 2026-07-04).** Clearing steps 1–7 makes a thread a genuine NEEDS_REPLY; it does NOT mean the draft you are about to write is safe to stage. Before staging any draft, the drafter MUST additionally:
+   - **(a) Deep-read the full target thread, both directions** — not the summary from step 1–7, an actual re-read of every message for the specific facts the draft will state or rely on.
+   - **(b) Read RELATED threads** — same contact across other channels, and any other thread about the same topic/deal (a different contact, a group, an earlier email chain) that could bear on what the draft should say.
+   - **(c) Verify every load-bearing factual claim in the draft with a cheap check** before it goes in the draft — a web search for a price/value, a prior email/thread for "who currently holds X", a calendar check for availability, etc. Never state a load-bearing fact in a draft from memory or assumption alone.
+   - **Failure mode this prevents:** a draft routed a master clearance to the wrong label until the RELATED threads proved Spinnin'/WMG actually held it (checking only the target thread would have missed this); a watch's stated value (€22.600) changed the negotiation advice the draft gave, and stating the wrong figure from memory would have misled the recipient. Both are "the target thread alone looked fine" failures — that is exactly why (b) and (c) are mandatory, not optional enrichment.
+
+Only after steps 1–7 come up empty may you draft; only after step 8 is satisfied may you stage that draft. This is the FULL-THREAD AWARENESS GATE, extended cross-channel, cross-request, and fact-verified. **Surfacing a NEEDS_REPLY without having run the cross-thread, cross-channel, cross-request, and already-sent checks (steps 1–7) is a scan bug — do not present it; do not stage a draft until step 8 is clean.** None of this changes the outbound path: even a genuine, fact-verified NEEDS_REPLY is still drafted and sent only in the main session under the Rule-6 gate, per-draft, per the PER-DRAFT APPROVAL principle below.
+
+## Core principle: PER-DRAFT APPROVAL — ONE AskUserQuestion PER DRAFT, NEVER BUNDLED (owner directive 2026-07-04)
+
+**Every staged outbound draft gets its OWN `AskUserQuestion` call — never bundle multiple drafts into one question, and never present a batched list of drafts with an "approve all" / "ok all" style option.** This applies on every channel (email, WhatsApp, iMessage, Slack, Telegram, Discord, Notion) and supersedes any earlier guidance in this skill that showed multiple candidates followed by a single combined approval.
+
+**The call, exactly:**
+
+- **Single-select**, options limited to `[Send]` `[Edit]` `[Skip]` (3 options — well under the Rule-1 cap of 4). Do not add extra options like "Read full thread" or "Archive" to this specific question — the full-thread read is already mandatory *before* the draft is staged (FULL-THREAD AWARENESS GATE + fact-verified redraft gate above), and archive is a separate, subsequent step once the draft is sent or skipped.
+- The chosen option's `preview` field MUST contain, verbatim:
+  1. **The FULL draft text** — the exact message the recipient will see: to/recipient, subject (email), full body. Not a summary, not a line count.
+  2. **A short "Reasoning / facts verified" block** immediately after the draft text, explaining *why* the draft says what it says — which thread(s) were read, which related threads were checked, and which load-bearing facts (prices, ownership, dates, amounts) were verified and how (e.g. "verified via web search: current EUR/USD"; "verified via Gmail search in:sent: Sam confirmed Spinnin'/WMG holds this master on 2026-05-12").
+- One draft → one `AskUserQuestion` → one decision (`Send`/`Edit`/`Skip`) → (if `Send`) one send → archive → **then and only then** move to the next draft's own `AskUserQuestion`.
+
+**Forbidden patterns (same spirit as Rule 6's forbidden-output list):**
+
+- "Here are 4 drafts — approve all?"
+- A single question whose options are a list of different recipients/threads (e.g. `[Send to Alice]` `[Send to Bob]` `[Skip both]`)
+- Presenting the full NEEDS_REPLY list with drafts inline and asking one omnibus "which should I send?" question
+- Reusing one `AskUserQuestion` result to gate more than one send
+
+This does not change Rule 6's underlying send gate (stage → show full draft → explicit approval → send → next) — it makes explicit exactly how that gate is implemented: one `AskUserQuestion`, one draft, `preview` carries the full text + reasoning, options are `[Send]`/`[Edit]`/`[Skip]`.
 
 ## Core principle: SNOOZE & FOLLOW-UP INTELLIGENCE (never let the user lose a thread)
 
@@ -700,7 +782,7 @@ When cleaning up, classify each non-NEEDS_REPLY item one more level:
 - **AWAITING-OTHER, time-sensitive** — the user is waiting on a reply tied to a deadline/deal. → archive (auto-resurfaces) **but** set a nudge reminder if no response by a sensible horizon (default 3 days) so the user can chase.
 - **CONCLUDED** — courtesy close, social tail, fully-answered. → archive, no reminder.
 
-**Scheduling reminders (a safe, non-outbound chore — do autonomously):** use `CronCreate` (one-shot, `recurring:false`) for each USER-OWES / nudge item. The reminder prompt should name the contact, the owed action, and the source thread, e.g. *"Reminder: you told Twan you'd handle Dennis's email tonight — follow up (WhatsApp 31642218102)."* Pick a sensible fire time (same evening for "tonight", +3d for nudges). Reminders fire to the user; they are NOT outbound third-party comms, so no approval gate applies.
+**Scheduling reminders (a safe, non-outbound chore — do autonomously):** use `CronCreate` (one-shot, `recurring:false`) for each USER-OWES / nudge item. The reminder prompt should name the contact, the owed action, and the source thread, e.g. *"Reminder: you told <contact-A> you'd handle <contact-B>'s email tonight — follow up (WhatsApp <number>)."* Pick a sensible fire time (same evening for "tonight", +3d for nudges). Reminders fire to the user; they are NOT outbound third-party comms, so no approval gate applies.
 
 **Meeting-note / assigned-todo capture:** when an email or message contains action items assigned to the user (meeting recaps, "can you…", "actie Sam:"), extract them and schedule reminders so they are never lost — even if the thread itself is then archived. Surface the extracted todos in the run summary.
 
@@ -961,17 +1043,12 @@ For each NEEDS REPLY chat:
 
  Draft reply: "[context-aware draft matching user's style + language]"
 
- [Send] [Edit] [Read full thread] [More...]
-
-If "More...":
- [Archive] [Skip]
-
 📱 WHATSAPP — WAITING (no action needed)
  N. [Contact] — you said: "[your last message]" — [time ago]
     Thread: [1-line summary of what you're waiting for]
 ```
 
-Use `AskUserQuestion` for each NEEDS REPLY chat.
+Per the **PER-DRAFT APPROVAL** principle above: stage ONE `AskUserQuestion` per chat, single-select `[Send]` `[Edit]` `[Skip]`, with the `preview` field carrying the full draft text plus a "Reasoning / facts verified" block. Never bundle multiple chats' drafts into one question.
 
 **When drafting WhatsApp replies:**
 
@@ -1053,14 +1130,12 @@ For each NEEDS REPLY thread:
 
  Draft reply: "[context-aware draft matching user's style + language]"
 
- [Send] [Edit] [Read full thread] [Skip]
-
 💬 iMESSAGE — WAITING (no action needed)
  N. [Contact] — you said: "[your last message]" — [time ago]
     Thread: [1-line summary of what you're waiting for]
 ```
 
-Use `AskUserQuestion` for each NEEDS REPLY thread.
+Per the **PER-DRAFT APPROVAL** principle above: stage ONE `AskUserQuestion` per thread, single-select `[Send]` `[Edit]` `[Skip]`, with the `preview` field carrying the full draft text plus a "Reasoning / facts verified" block. Never bundle multiple threads' drafts into one question.
 
 **When drafting iMessage replies:**
 
@@ -1182,36 +1257,30 @@ For each NEEDS REPLY thread, gather:
 
  Draft reply: "[context-aware draft using full thread + contact history]"
 
- [Send draft] [Edit draft] [Read full thread] [More...]
-
-If "More...":
- [Archive] [Skip]
-
 📧 EMAIL — DRAFTS (unsent)
  N. [Recipient] — [Subject] (draft ready to send)
 
 📧 EMAIL — FYI / ARCHIVE
  N. [Sender] — [Subject] (newsletter/notification)
 
-  For each NEEDS REPLY:
-  a) Read full thread + draft reply
-  b) Archive (no reply needed)
-  c) Skip
+  For each NEEDS REPLY: read full thread (already done above), draft the reply, then
+  stage it per PER-DRAFT APPROVAL below. Skip or archive are separate, subsequent
+  per-item decisions — not options on the send question itself.
 
   For FYI section:
-  x) Archive all FYI at once
+  x) Archive all FYI at once (archiving is not an outbound draft — bulk archive stays fine)
 ```
 
-Use `AskUserQuestion` for each NEEDS REPLY email with options `[Read + Reply]` / `[Archive]` / `[Skip]`.
-
-When replying, draft the reply and use `AskUserQuestion` to confirm:
+Per the **PER-DRAFT APPROVAL** principle above: stage ONE `AskUserQuestion` per email, single-select — never a combined `[Read + Reply]`/`[Archive]`/`[Skip]` menu that mixes the send decision with other actions. The question's `preview` field carries the FULL draft text (to, subject, body) plus a short "Reasoning / facts verified" block (which thread(s) and related threads were read, which facts were checked):
 
 ```
 Reply to [Sender] — [Subject]:
-  "[drafted reply]"
+  preview: "[FULL drafted reply text]\n\nReasoning / facts verified: [thread(s) read, related threads checked, facts verified and how]"
 
   [Send]  [Edit]  [Skip]
 ```
+
+Never bundle multiple emails' drafts into one question — one email, one draft, one `AskUserQuestion`.
 
 For FYI bulk archive, use `AskUserQuestion`:
 
@@ -1225,6 +1294,8 @@ Archive N FYI/newsletter emails?
 Draft replies via `gog gmail send`. Archive via `gog gmail archive <messageId> [<messageId>...] --force --no-input`. **Never include a message carrying a protected todo/action label in the archive batch — filter the archive set against `labelIds` first (HARD GUARDRAIL above).** If a todo-labeled message was archived in error, restore it with `gog gmail messages modify <messageId> --add INBOX --no-input` and keep it as an actionable item.
 
 > **Known trap — post-archive re-scan:** after archiving FYI messages, do NOT immediately re-run `gog gmail search "in:inbox"` to confirm — that search is cached/stale and will still return the archived messages, falsely suggesting archive failed. Trust the archive command's exit 0 as success. If you must verify a specific message, use `gog gmail raw <messageId>` and check that `"INBOX"` is absent from the `labelIds` array.
+
+> **Known trap — `in:sent` search is polluted (2026-07-18):** `gog gmail search "in:sent to:<addr>"` frequently returns messages whose `labelIds` do **not** include `SENT` (thread contamination / last-envelope peers). **Never claim "already replied" from search hits alone.** For every candidate: `gog gmail raw <messageId>` and require `"SENT" in labelIds`. `DRAFT` is never delivery. Pair with topic match so a different open ask to the same person is not false-closed.
 
 ### Open Tracking — WAITING bucket enrichment (opt-in)
 
@@ -1292,7 +1363,13 @@ Reply to [Sender] — [Subject]:
 
 Only pass `--track` when "Send + track opens" is chosen. Never silently add tracking.
 
-### Slack (multi-workspace)
+### Slack (multi-workspace) — scan CHANNELS *AND* DMs (both mandatory)
+
+**Both channels and direct messages (DMs + group DMs) are in scope every run.** DMs are easy to skip and must not be. Unscoped `conversations_unreads` / unfiltered `channels_list` may be hard-blocked by a guard on shared/multi-BU tokens — so use ONLY scoped reads:
+
+- **Channels:** `channels_me {channel_types:"public_channel,private_channel"}` → filter to your local allowlist (e.g. `~/.claude/memory/ops-inbox-slack-channels.md`), then `conversations_history {channel_id, limit:"2d"}` per id.
+- **DMs + group DMs:** `channels_me {channel_types:"im,mpim"}` (member-only list — scoped, therefore allowed even where `conversations_unreads` is blocked), then `conversations_history {channel_id, limit:"5d"}` per **human** DM id. Skip bot/service DMs (integration bots, digests, raw-id DMs) — those are FYI automation, never NEEDS_REPLY.
+- Classify each channel and DM by who sent last (NEEDS_REPLY / WAITING / FYI / HANDLED); clear the FULL-THREAD AWARENESS GATE before any NEEDS_REPLY; outbound stays Rule-6 one-draft→one-approval.
 
 Read the **derived** `channels.slack.workspaces[]` from the pre-gathered `bin/ops-unread` output. That object resolves each workspace's `token_env` and emits `available: true|false` per entry — `preferences.json → slack_workspaces[]` itself only persists metadata and does not contain `available`. For each entry where `available: true`:
 
@@ -1387,11 +1464,6 @@ For each page with comments or mentions:
 
  Draft reply: "[context-aware reply to the comment]"
 
- [Reply] [View page] [Skip] [More...]
-
-If "More...":
- [Mark resolved] [Archive]
-
 📓 NOTION — ASSIGNED TASKS
 
  N. [Task title] — [database] — Status: [status] — Due: [date]
@@ -1402,7 +1474,7 @@ If "More...":
  N. [Page title] — updated by [person] — [time ago]
 ```
 
-Use `AskUserQuestion` for each NEEDS REPLY item.
+Per the **PER-DRAFT APPROVAL** principle above: stage ONE `AskUserQuestion` per comment, single-select `[Send]` `[Edit]` `[Skip]`, `preview` field carrying the full reply text plus a "Reasoning / facts verified" block. `View page` / `Mark resolved` / `Archive` are separate follow-up actions, not options on the send question. Never bundle multiple comments' replies into one question.
 
 **When replying to Notion comments:**
 

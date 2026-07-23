@@ -107,6 +107,59 @@ dump:
 - **Trial plan limits.** Free/trial Windsor plans cap the number of data sources;
   adding a new connector may require freeing a slot or upgrading.
 
+## Data sanity / expired-plan detection
+
+**When a Windsor.ai subscription lapses, reads do not fail — they silently
+return only zeros / empty rows.** Every downstream consumer (dashboards,
+blended-ROAS math, AI insight layers, cron caches) then reports zeros as if
+they were real data, potentially for weeks, with no error anywhere.
+
+Detection pattern that works in practice:
+
+- If **spend + impressions for `facebook` (Meta) AND `google_ads`, and
+  `instagram` reach, are ALL exactly 0 over a 30-day window** while the
+  accounts are connected, it is almost certainly an expired plan or blocked
+  reads — not a real quiet month.
+- Confirm via the Windsor MCP `get_current_user` where available: `is_paid:
+  false` (and `plan_name`) is the smoking gun. Offer `get_subscription_url`
+  so the user can renew.
+
+There is a second failure mode: **an expired/over-limit plan can also return
+HTTP 200 with a marketing text row inside the data instead of metrics**, so a
+naive `has("data")` check "succeeds" while the payload is garbage. Example
+payload seen in production:
+
+```json
+{"data":[{"source":"Uh-oh! You've reached your plan limit... Upgrade here... Free plan..."}]}
+```
+
+The sanity script detects this with a case-insensitive match on "upgrade
+here", "plan limit", "free plan", or "uh-oh" in any string value and prints
+`warn: windsor quota/plan-limit message detected (plan expired?)` (exit 1).
+
+What to do on an all-zero result:
+
+1. **Warn the user explicitly** — e.g. *"Windsor returns all zeros — plan
+   likely expired, data unreliable"* — instead of reporting the zeros.
+2. **Never present the zeros as real metrics** in any dashboard, analysis, or
+   recommendation. Treat the source as unavailable and fall back to direct
+   platform APIs or cached last-known-good data, clearly labeled as such.
+3. Offer `get_subscription_url` (MCP) or the Windsor dashboard to restore the
+   plan, then re-verify with a fresh pull.
+
+The reusable check lives in
+[`claude-ops/scripts/windsor-data-sanity.sh`](../../claude-ops/scripts/windsor-data-sanity.sh):
+it reads a Windsor JSON payload (file or stdin), sums a configurable list of
+jq paths (default: every `spend`, `impressions`, and `reach` field), and
+prints `ok` (exit 0), `warn: windsor quota/plan-limit message detected (plan
+expired?)` (exit 1, text-row pattern), or `warn: windsor all-zero pattern
+(plan expired?)` (exit 1). Wire it into any cron pull or cache refresh so
+stale-plan garbage is flagged before it reaches a dashboard:
+
+```sh
+curl -s "$WINDSOR_URL" | claude-ops/scripts/windsor-data-sanity.sh || echo "flag cache as unreliable"
+```
+
 ## Adding the integration
 
 Run `/ops:integrate windsor.ai` (auth type `api-key`, base

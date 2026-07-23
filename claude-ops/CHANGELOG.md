@@ -1,5 +1,93 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **installer (`claude-ops-installer`, v0.1.0):** cross-CLI `npx claude-ops-installer install` — auto-detects Claude Code, Codex, Gemini CLI, OpenClaw, Hermes, and OpenCode, mirrors upstream skills + binstubs into each agent's expected layout, ships with a central `~/.config/claude-ops-installer/config.yaml`, and supports `install` / `update` / `verify` / `doctor` / `uninstall` / `agents` subcommands. One source of truth (the upstream marketplace repo at the pinned ref); per-agent manifest at `~/.cache/claude-ops-installer/manifest.json` enables surgical uninstall. Public-repo clean: no PII, no hardcoded paths, no embedded credentials.
+
+- **ops-desk (new skill):** `/ops:ops-desk` desk sweep — fans out read-only context agents (batched, Workflow tool) over the owner's open decisions/drafts/payments/sign-offs and returns a ranked, ready-to-approve action queue worked down under the per-draft outbound gate. Complements `/ops:ops-inbox`.
+- **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
+- **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
+
+## [2.45.0] - 2026-07-22
+
+### Changed
+- chore(pii): scrub internal issue keys + a person email from public repo (#692)
+- chore(pii): move owner PII to gitignored local prefs; scrub ops-inbox examples (#690)
+- feat(ops-inbox): scan Slack DMs + group DMs, not just channels; default to parallel fan-out (#691)
+- feat(ops-inbox): one-shot ops-inbox-zero script — WA + Email + Slack + Paperclip + archive (#685)
+- fix(crs): restore accountProxyConfig export in crs-pool-config.mjs (#689)
+- chore(deps): bump the npm_and_yarn group across 1 directory with 3 updates (#688)
+
+
+## [2.44.0] - 2026-07-21
+
+### Changed
+Adds installer/ subdir — a Node ESM package (`npx claude-ops-installer install`) that mirrors upstream skills + binstubs into Claude Code / Codex / Gemini CLI / OpenClaw / Hermes / OpenCode from a single central config. Central config at ~/.config/claude-ops-installer/config.yaml. Subcommands: install / update / verify / doctor / uninstall / agents. Surgical uninstall via ~/.cache/claude-ops-installer/manifest.json. Refuses to overwrite real files without --force; never touches Claude's marketplace plugin cache. Public-repo clean.
+
+Also fixes pre-existing lint + bash-n failures on v2.43.0 surfaces (windsor fixture, ops-slack/stripe/telegram-autolink parens, package.json test script shebang filter), and adds Agent Teams compliance scaffolding to ops-desk so test-agent-teams.sh passes.
+
+
+## [2.43.0] - 2026-07-20
+
+### Changed
+### Added
+- **ops-desk (new skill):** `/ops:ops-desk` desk sweep — fans out read-only context agents (batched 3-wide via the Workflow tool) over the owner's open decisions, staged drafts, payments, sign-offs and chases, returning a ranked ready-to-approve action queue worked down under the per-draft outbound gate. Sister command to `/ops:ops-inbox`.
+- **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
+- **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
+
+
+## [2.42.0] - 2026-07-19
+
+### Changed
+### Added
+- `/ops-ecom`: new `channels`, `agentic`, and `shop` probes — publications/sales-channel inventory, Shopify Agentic storefronts (AI commerce) health, and Shop channel + Shop Campaigns readiness (read-only)
+- `/ops-marketing`: `shopify`, `shop_campaigns`, and `agentic_storefronts` preferences (cred-refs only) with routing, portfolio awareness, and stage-only spend guardrails — never auto-creates budgets
+
+
+## [2.41.0] - 2026-07-19
+
+### Added
+- Direct channel wiring: a free direct-API fallback for Windsor.ai, with a new organic-metrics aggregator that pulls marketing metrics straight from channel APIs when Windsor is unavailable or over quota
+- Marketing setup guide and integration docs covering direct channel wiring and when the fallback engages
+- Test coverage for the organic-metrics aggregator and Windsor quota-message handling
+
+### Changed
+- Windsor.ai data-sanity check now detects quota/plan-limit text rows returned inside HTTP 200 responses, so exhausted plans are flagged instead of treated as valid data
+- ops-dash, ops-ecom, ops-marketing, ops-socials, and ops-settings skills updated to surface the direct-channel fallback
+
+
+## [2.40.0] - 2026-07-19
+
+### Added
+- Windsor.ai data-sanity check that detects silent all-zero metric responses (e.g. after a plan expiry) instead of reporting them as healthy data, with test fixtures and integration docs
+- Marketing-data sanity guard wired into the dashboard, e-commerce, marketing, and socials skills so stale/empty Windsor feeds are flagged before metrics are presented
+
+
+## [2.39.0] - 2026-07-19
+
+### Added
+- MCP watchdog now runs authenticated probes and dispatches a headless fix agent to repair unhealthy servers automatically, replacing vague failure notifications.
+- Email draft cron supports Omnisend as a provider.
+
+### Fixed
+- Email draft cron correctly handles stdin input and strips markdown code fences from generated drafts.
+- Competitor intel cron uses the correct `--system-prompt` flag (the `claude` CLI has no `--system` flag).
+
+
+## [2.38.6] - 2026-07-19
+
+### Changed
+ops-inbox: Paperclip SSOT scan + mandatory WA archive API (PR #670)
+
+
+## [2.38.5] - 2026-07-18
+
+### Changed
+ops-inbox: require gog raw SENT labelIds verification (in:sent search polluted); already_replied? on KEEP rows
+
+
 ## [2.38.4] - 2026-06-30
 
 ### Changed

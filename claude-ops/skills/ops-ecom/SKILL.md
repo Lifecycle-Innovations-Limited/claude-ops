@@ -1,7 +1,7 @@
 ---
 name: ops-ecom
-description: Shopify store command center. Orders, inventory, fulfillment, analytics, and store health. Works with any Shopify store via Admin API.
-argument-hint: '[orders|inventory|fulfillment|health|products|customers|analytics|setup]'
+description: Shopify store command center. Orders, inventory, fulfillment, analytics, store health, sales channels, agentic storefronts, and Shop readiness. Works with any Shopify store via Admin API.
+argument-hint: '[orders|inventory|fulfillment|health|products|customers|analytics|channels|agentic|shop|setup]'
 allowed-tools:
   - Bash
   - Read
@@ -27,6 +27,8 @@ Before executing, load available context:
 1. **Preferences**: Read `${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json`
    - `timezone` — display all timestamps correctly
    - `shopify_store_url`, `shopify_admin_token` — check userConfig keys before env vars
+   - `ecom.shopify.sales_channels` — optional last probe cache (publications + agentic/Shop gaps)
+   - `ecom.shopify.agentic_storefronts` — optional operator-declared enablement map (channel → status)
 
 2. **Daemon health**: Read `${CLAUDE_PLUGIN_DATA_DIR}/daemon-health.json`
    - If `action_needed` is not null → surface it before running any store operations
@@ -127,6 +129,9 @@ SHOPIFY_AUTH="X-Shopify-Access-Token: ${SHOPIFY_TOKEN}"
 | products, product, catalog              | Products manager    |
 | customers, customer, crm                | Customer stats      |
 | analytics, revenue, stats, metrics      | Analytics dashboard |
+| channels, publications, sales-channels  | Sales channel inventory (publications + gaps) |
+| agentic, agentic-storefronts, ai-channels | Agentic storefront health |
+| shop, shop-channel, shop-campaigns      | Shop channel + Shop Campaigns readiness |
 | setup, configure, init, token           | Setup flow          |
 
 ---
@@ -470,6 +475,140 @@ Use `AskUserQuestion` for action selection.
 
 ---
 
+
+---
+
+## CHANNELS
+
+List publications / sales channels from Shopify Admin GraphQL. Prefer live API; fall back to `ecom.shopify.sales_channels` cache if API fails.
+
+```bash
+# GraphQL publications (use store's configured API version when set; default 2024-10+)
+curl -s -X POST -H "$SHOPIFY_AUTH" -H "Content-Type: application/json" \
+  "$SHOPIFY_GQL" \
+  -d '{"query":"{ publications(first: 50) { nodes { id name autoPublish app { title handle } } } channels(first: 50) { nodes { name handle app { title handle } } } }"}' | \
+  jq '{
+    publications: [.data.publications.nodes[]? | {id, name, autoPublish, app: .app.title}],
+    channels: [.data.channels.nodes[]? | {name, handle, app: .app.title}]
+  }'
+```
+
+Also merge operator prefs when present:
+
+```bash
+jq -r '.ecom.shopify.sales_channels // empty' "$PREFS_PATH" 2>/dev/null
+```
+
+**Render:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ OPS ► ECOM ► CHANNELS — [store] — [timestamp]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PUBLICATIONS / CHANNELS (live)
+  [name]  handle=[…]  app=[…]  autoPublish=[true|false]
+  ...
+
+KNOWN GAPS (prefs / docs — not always in API list)
+  Agentic Storefronts app     [present|missing|unknown]
+  ChatGPT / OpenAI channel    [present|missing|unknown]
+  Google AI Mode / Gemini     [present|missing|unknown]
+  Shop channel                [present|missing|unknown]
+  Microsoft Copilot           [present|missing|unknown]
+
+──────────────────────────────────────────────────────
+ Actions:
+ a) Re-probe GraphQL publications
+ b) Open agentic health  (/ops:ecom agentic)
+ c) Open Shop readiness  (/ops:ecom shop)
+──────────────────────────────────────────────────────
+```
+
+**Guardrails:** publication names vary by locale; match case-insensitively. Do not invent channels. Unknown → `unknown`. Write-back of probe cache only with operator OK.
+
+---
+
+## AGENTIC
+
+Agentic storefront health: which AI commerce surfaces are enabled and whether products are published to them.
+
+```bash
+# Reuse CHANNELS probe; optional prefs:
+jq -r '.ecom.shopify.agentic_storefronts // empty' "$PREFS_PATH" 2>/dev/null
+jq -r '.marketing.projects // {} | to_entries[]? | select(.value.agentic_storefronts != null) | {project: .key, agentic: .value.agentic_storefronts}' "$PREFS_PATH" 2>/dev/null
+```
+
+**Render:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ OPS ► ECOM ► AGENTIC — [store] — [timestamp]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+AI / AGENTIC SURFACES
+  Microsoft Copilot     [on|off|unknown]  channel=[name|—]
+  ChatGPT / OpenAI      [on|off|unknown]
+  Google AI Mode        [on|off|unknown]
+  (other detected)      ...
+
+PRODUCT COVERAGE
+  Sampled: [N] products  published_to_agentic: [M]  unknown: [K]
+
+DOCS
+  https://help.shopify.com/en/manual/online-sales-channels/agentic-storefronts
+
+──────────────────────────────────────────────────────
+ Actions:
+ a) Re-probe publications
+ b) List channels  (/ops:ecom channels)
+ c) Shop readiness (/ops:ecom shop)
+──────────────────────────────────────────────────────
+```
+
+**Guardrails:** Read-only. Never install apps or publish products without explicit operator confirmation (Rule 5). If API cannot list agentic apps, say so — do not claim disabled.
+
+---
+
+## SHOP
+
+Shop sales channel + Shop Campaigns readiness (pay-per-sale on Shop and expanded surfaces).
+
+```bash
+# Detect Shop from publications/channels (name/handle contains shop; avoid false positives)
+jq -r '
+  .ecom.shopify.shop // empty,
+  (.marketing.projects // {} | to_entries[]? | select(.value.shop_campaigns != null) | {project: .key, shop_campaigns: .value.shop_campaigns})
+' "$PREFS_PATH" 2>/dev/null
+```
+
+**Render:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ OPS ► ECOM ► SHOP — [store] — [timestamp]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SHOP CHANNEL
+  Publication:  [present|missing|unknown]
+  Products:     [sample published count or unknown]
+
+SHOP CAMPAIGNS (prefs + admin)
+  Configured in prefs:  [yes|no]
+  Status:               [not_configured|stage_only|active|unknown]
+  Budget approval:      [required|granted|n/a]
+
+DOCS
+  https://help.shopify.com/en/manual/online-sales-channels/shop/shop-campaigns
+  https://www.shopify.com/shop-campaigns
+
+──────────────────────────────────────────────────────
+ NEVER LEAK MONEY: never create or raise Shop Campaigns
+ budgets without explicit owner approval (Rule 5).
+──────────────────────────────────────────────────────
+```
+
+
 ## SETUP FLOW
 
 **Before asking the user for anything**, auto-discover store URLs and tokens. Run ALL of these scans in a single batch:
@@ -599,6 +738,9 @@ FULFILLMENT   [N] unfulfilled orders pending
  /ops:ops-ecom customers  — customer stats
  /ops:ops-ecom analytics  — revenue dashboard
  /ops:ops-ecom health     — store health check
+ /ops:ops-ecom channels   — sales channel inventory
+ /ops:ops-ecom agentic    — agentic storefront health
+ /ops:ops-ecom shop       — Shop channel + Shop Campaigns readiness
  /ops:ops-ecom setup      — configure credentials
 ──────────────────────────────────────────────────────
 ```
@@ -611,3 +753,14 @@ Map accounts per project via `registry.json` → `.projects[].windsor`. Prefer *
 ROAS** (store/analytics revenue ÷ total ad spend) over platform-reported ROAS. See
 [docs/integrations/windsor-ai.md](../../../docs/integrations/windsor-ai.md) for the full playbook (REST + MCP modes,
 registry mapping, analysis mandate, and caveats).
+Data sanity: if Windsor returns only zeros across sources (Meta + Google spend/impressions and
+Instagram reach all exactly 0 over 30d while accounts are connected), treat the data as unavailable —
+the plan may be expired (check `get_current_user` → `is_paid`) — warn the user, and never present
+zeros as real metrics. `scripts/windsor-data-sanity.sh` automates the check.
+
+Windsor is optional. If Windsor is not connected, returns errors, or returns the
+all-zero pattern, fall back to the free direct libraries:
+`scripts/lib/ad-spend-aggregator.sh` (paid), `scripts/lib/ga4-data-api.sh`
+(analytics), and `scripts/lib/organic-metrics-aggregator.sh` (organic + merchant).
+See [docs/integrations/direct-channel-wiring.md](../../../docs/integrations/direct-channel-wiring.md).
+Never present zeros from a dead source as real metrics.

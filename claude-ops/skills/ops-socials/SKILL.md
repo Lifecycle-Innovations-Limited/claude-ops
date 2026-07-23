@@ -298,3 +298,14 @@ Map accounts per project via `registry.json` → `.projects[].windsor`. Prefer *
 ROAS** (store/analytics revenue ÷ total ad spend) over platform-reported ROAS. See
 [docs/integrations/windsor-ai.md](../../../docs/integrations/windsor-ai.md) for the full playbook (REST + MCP modes,
 registry mapping, analysis mandate, and caveats).
+Data sanity: if Windsor returns only zeros across sources (Meta + Google spend/impressions and
+Instagram reach all exactly 0 over 30d while accounts are connected), treat the data as unavailable —
+the plan may be expired (check `get_current_user` → `is_paid`) — warn the user, and never present
+zeros as real metrics. `scripts/windsor-data-sanity.sh` automates the check.
+
+Windsor is optional. If Windsor is not connected, returns errors, or returns the
+all-zero pattern, fall back to the free direct libraries:
+`scripts/lib/ad-spend-aggregator.sh` (paid), `scripts/lib/ga4-data-api.sh`
+(analytics), and `scripts/lib/organic-metrics-aggregator.sh` (organic + merchant).
+See [docs/integrations/direct-channel-wiring.md](../../../docs/integrations/direct-channel-wiring.md).
+Never present zeros from a dead source as real metrics.

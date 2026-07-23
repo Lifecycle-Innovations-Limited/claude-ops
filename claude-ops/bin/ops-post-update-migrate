@@ -39,12 +39,16 @@ trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
 # Always refresh current/ + installPath — must run on every cache materialization,
 # including same-version force-reinstalls where the per-version sentinel already exists.
 refresh_current_directory() {
-  local cache_parent current_dir installed_json
+  local cache_parent current_dir installed_json root_real current_real
   cache_parent="$(dirname "$PLUGIN_ROOT")"
   current_dir="$cache_parent/current"
   installed_json="$PLUGINS_DIR/installed_plugins.json"
+  root_real="$(cd "$PLUGIN_ROOT" 2>/dev/null && pwd -P || echo "$PLUGIN_ROOT")"
+  current_real="$(cd "$current_dir" 2>/dev/null && pwd -P || echo "$current_dir")"
 
-  if command -v rsync >/dev/null 2>&1; then
+  if [[ "$root_real" == "$current_real" ]]; then
+    log "  skip: PLUGIN_ROOT already == current/ ($current_real) — no self-rsync"
+  elif command -v rsync >/dev/null 2>&1; then
     if rsync -a --delete "$PLUGIN_ROOT/" "$current_dir/" 2>/dev/null; then
       log "  ok: refreshed $current_dir via rsync"
     else

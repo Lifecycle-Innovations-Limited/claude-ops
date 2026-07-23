@@ -260,29 +260,50 @@ audit_security_posture() {
 }
 
 # ===================================================== Cost (per-service Δ) ===
+# Doctrine (2026-07-22): RECORD_TYPE=Usage only. Credits/SPP/SP negation make
+# plain Blended/Unblended totals ≈ $0 while real burn is hundreds/day.
 audit_cost() {
-  sec "Cost Explorer (per-service Δ over ${COST_DAYS}d)"
+  sec "Cost Explorer Usage burn (per-service Δ over ${COST_DAYS}d; RECORD_TYPE=Usage)"
   local e s p
-  e=$(date +%F); s=$(date -d "-${COST_DAYS} days" +%F); p=$(date -d "-$((COST_DAYS*2)) days" +%F)
-  # DAILY granularity (MONTHLY mis-handles sub-month / month-boundary windows),
-  # aggregated per service across the window.
-  AWS ce get-cost-and-usage --time-period Start=$s,End=$e --granularity DAILY --metrics BlendedCost \
+  e=$(date +%F)
+  # macOS date first; GNU date fallback
+  s=$(date -v-"${COST_DAYS}"d +%F 2>/dev/null || date -d "-${COST_DAYS} days" +%F)
+  p=$(date -v-"$((COST_DAYS*2))"d +%F 2>/dev/null || date -d "-$((COST_DAYS*2)) days" +%F)
+  local USAGE_FILTER='{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}'
+  # DAILY granularity + Usage filter (credit-masked nets are useless for spikes)
+  AWS ce get-cost-and-usage --time-period Start=$s,End=$e --granularity DAILY --metrics UnblendedCost \
+    --filter "$USAGE_FILTER" \
     --group-by Type=DIMENSION,Key=SERVICE \
-    --query 'ResultsByTime[].Groups[].[Keys[0],Metrics.BlendedCost.Amount]' --output text 2>/dev/null \
+    --query 'ResultsByTime[].Groups[].[Keys[0],Metrics.UnblendedCost.Amount]' --output text 2>/dev/null \
     | awk -F'\t' '{a[$1]+=$2} END{for(k in a) printf "%s\t%.2f\n",k,a[k]}' | sort >"$RAW/cost-current.tsv"
-  AWS ce get-cost-and-usage --time-period Start=$p,End=$s --granularity DAILY --metrics BlendedCost \
+  AWS ce get-cost-and-usage --time-period Start=$p,End=$s --granularity DAILY --metrics UnblendedCost \
+    --filter "$USAGE_FILTER" \
     --group-by Type=DIMENSION,Key=SERVICE \
-    --query 'ResultsByTime[].Groups[].[Keys[0],Metrics.BlendedCost.Amount]' --output text 2>/dev/null \
+    --query 'ResultsByTime[].Groups[].[Keys[0],Metrics.UnblendedCost.Amount]' --output text 2>/dev/null \
     | awk -F'\t' '{a[$1]+=$2} END{for(k in a) printf "%s\t%.2f\n",k,a[k]}' | sort >"$RAW/cost-prev.tsv"
+  # Optional: credit mask snapshot for the report
+  AWS ce get-cost-and-usage --time-period Start=$s,End=$e --granularity MONTHLY --metrics UnblendedCost \
+    --group-by Type=DIMENSION,Key=RECORD_TYPE \
+    --query 'ResultsByTime[0].Groups[].[Keys[0],Metrics.UnblendedCost.Amount]' --output text 2>/dev/null \
+    >"$RAW/cost-record-types.tsv" || true
   if [ -s "$RAW/cost-current.tsv" ]; then
     join -t $'\t' -a1 -e 0 -o '0,1.2,2.2' "$RAW/cost-current.tsv" "$RAW/cost-prev.tsv" 2>/dev/null \
       | awk -F'\t' '{d=$2-$3; printf "%s\t%.2f\t%+.2f\n",$1,$2,d}' \
       | sort -t$'\t' -k2 -nr >"$RAW/cost-delta.tsv"
-    ok "cost delta computed ($(wc -l <"$RAW/cost-delta.tsv") services)"
+    local total_usage
+    total_usage=$(awk -F'\t' '{s+=$2} END{printf "%.2f",s+0}' "$RAW/cost-current.tsv")
+    ok "Usage burn ${COST_DAYS}d total=\$${total_usage}; delta rows=$(wc -l <"$RAW/cost-delta.tsv" | tr -d ' ')"
     # flag any service that jumped >$5 vs previous window
     awk -F'\t' '$3+0>5{print}' "$RAW/cost-delta.tsv" | while IFS=$'\t' read -r svc cur del; do
-      finding MEDIUM Cost global "$svc" "Spend up ${del} vs prior ${COST_DAYS}d (now \$${cur})" "Investigate the cost driver for $svc" 0
+      finding MEDIUM Cost global "$svc" "Usage spend up \$${del} vs prior ${COST_DAYS}d (now \$${cur})" "Investigate the cost driver for $svc (Usage burn, not credit-masked net)" 0
     done
+    # Surface high daily Usage burn so reports don't look "free" under credits
+    avg_daily=$(awk -v d="$COST_DAYS" -v t="$total_usage" 'BEGIN{printf "%.0f", (d>0?t/d:0)}')
+    if [ "${avg_daily:-0}" -gt 50 ] 2>/dev/null; then
+      finding LOW Cost global "account" \
+        "Usage burn avg \$${avg_daily}/day over ${COST_DAYS}d (total \$${total_usage}); credits may mask Console net to ~\$0" \
+        "Track RECORD_TYPE=Usage (scripts/aws-usage-cost.sh), not credit-masked net" 0
+    fi
   else warn "Cost Explorer not available (needs ce:GetCostAndUsage + enablement)"; fi
 }
 
