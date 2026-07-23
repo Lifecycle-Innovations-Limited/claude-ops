@@ -26,48 +26,45 @@ mkdir -p "$DATA_DIR" 2>/dev/null || true
 
 log() { printf "[%s] %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 
+LOCK_DIR="$DATA_DIR/.post-update-migrate.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  if [[ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +10 -print 2>/dev/null)" ]]; then
+    rmdir "$LOCK_DIR" 2>/dev/null && mkdir "$LOCK_DIR" 2>/dev/null || exit 0
+  else
+    exit 0
+  fi
+fi
+trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+
 # Always refresh current/ + installPath — must run on every cache materialization,
 # including same-version force-reinstalls where the per-version sentinel already exists.
 refresh_current_directory() {
-  local cache_parent current_dir installed_json
+  local cache_parent current_dir installed_json root_real current_real
   cache_parent="$(dirname "$PLUGIN_ROOT")"
   current_dir="$cache_parent/current"
   installed_json="$PLUGINS_DIR/installed_plugins.json"
-
-  # Guard: when the plugin already runs FROM current/, PLUGIN_ROOT == current_dir.
-  # rsync/cp of a directory onto itself is pointless and, with --delete under
-  # concurrent SessionStart hooks, storms the disk (fseventsd) and spikes load.
-  local root_real cur_real
   root_real="$(cd "$PLUGIN_ROOT" 2>/dev/null && pwd -P || echo "$PLUGIN_ROOT")"
-  cur_real="$(cd "$current_dir" 2>/dev/null && pwd -P || echo "$current_dir")"
-  if [[ "$root_real" == "$cur_real" ]]; then
-    log "  skip: PLUGIN_ROOT already == current/ ($cur_real) — no self-rsync"
-  else
-    # Single-flight lock so concurrent sessions can't stack rsyncs on current/.
-    local lock="$DATA_DIR/.refresh-current.lock"
-    [[ -d "$lock" ]] && [[ -n "$(find "$lock" -maxdepth 0 -mmin +2 2>/dev/null)" ]] \
-      && rmdir "$lock" 2>/dev/null || true   # clear stale lock from a killed run
-    if mkdir "$lock" 2>/dev/null; then
-      trap 'rmdir "'"$lock"'" 2>/dev/null || true' RETURN
-      if command -v rsync >/dev/null 2>&1; then
-        rsync -a --delete "$PLUGIN_ROOT/" "$current_dir/" 2>/dev/null \
-          && log "  ok: refreshed $current_dir via rsync" \
-          || log "  warn: rsync to current/ failed (non-fatal)"
-      else
-        mkdir -p "$current_dir"
-        cp -rp "$PLUGIN_ROOT/." "$current_dir/" 2>/dev/null \
-          && log "  ok: refreshed $current_dir via cp" \
-          || log "  warn: cp to current/ failed (non-fatal)"
-      fi
+  current_real="$(cd "$current_dir" 2>/dev/null && pwd -P || echo "$current_dir")"
+
+  if [[ "$root_real" == "$current_real" ]]; then
+    log "  skip: PLUGIN_ROOT already == current/ ($current_real) — no self-rsync"
+  elif command -v rsync >/dev/null 2>&1; then
+    if rsync -a --delete "$PLUGIN_ROOT/" "$current_dir/" 2>/dev/null; then
+      log "  ok: refreshed $current_dir via rsync"
     else
-      log "  skip: refresh-current lock held by another process"
+      log "  warn: rsync to current/ failed (non-fatal)"
+    fi
+  else
+    mkdir -p "$current_dir"
+    if cp -rp "$PLUGIN_ROOT/." "$current_dir/" 2>/dev/null; then
+      log "  ok: refreshed $current_dir via cp"
+    else
+      log "  warn: cp to current/ failed (non-fatal)"
     fi
   fi
 
   if [[ -f "$installed_json" ]]; then
-    python3 - "$installed_json" "$current_dir" <<'PYEOF' 2>/dev/null \
-      && log "  ok: patched installed_plugins.json → current" \
-      || log "  warn: installed_plugins.json patch failed (non-fatal)"
+    if python3 - "$installed_json" "$current_dir" <<'PYEOF' 2>/dev/null
 import json, sys
 path, current = sys.argv[1], sys.argv[2]
 with open(path) as f:
@@ -81,6 +78,11 @@ if changed:
     with open(path, "w") as f:
         json.dump(d, f, indent=2)
 PYEOF
+    then
+      log "  ok: patched installed_plugins.json → current"
+    else
+      log "  warn: installed_plugins.json patch failed (non-fatal)"
+    fi
   fi
 }
 
@@ -143,51 +145,7 @@ run_migrations() {
     fi
   fi
 
-  # 4. Stable 'current/' directory — prevents "Plugin directory does not exist" errors
-  #    when Claude Code updates the plugin mid-session and deletes the old versioned dir.
-  {
-    local cache_parent current_dir
-    cache_parent="$(dirname "$PLUGIN_ROOT")"
-    current_dir="$cache_parent/current"
-
-    local b_root_real b_cur_real
-    b_root_real="$(cd "$PLUGIN_ROOT" 2>/dev/null && pwd -P || echo "$PLUGIN_ROOT")"
-    b_cur_real="$(cd "$current_dir" 2>/dev/null && pwd -P || echo "$current_dir")"
-    if [[ "$b_root_real" == "$b_cur_real" ]]; then
-      log "  skip: PLUGIN_ROOT already == current/ ($b_cur_real) — no self-rsync"
-    elif command -v rsync >/dev/null 2>&1; then
-      rsync -a --delete "$PLUGIN_ROOT/" "$current_dir/" 2>/dev/null \
-        && log "  ok: refreshed $current_dir via rsync" \
-        || log "  warn: rsync to current/ failed (non-fatal)"
-    else
-      mkdir -p "$current_dir"
-      cp -rp "$PLUGIN_ROOT/." "$current_dir/" 2>/dev/null \
-        && log "  ok: refreshed $current_dir via cp" \
-        || log "  warn: cp to current/ failed (non-fatal)"
-    fi
-
-    local installed_json="$HOME/.claude/plugins/installed_plugins.json"
-    if [[ -f "$installed_json" ]]; then
-      python3 - "$installed_json" "$current_dir" <<'PYEOF' 2>/dev/null \
-        && log "  ok: patched installed_plugins.json → current" \
-        || log "  warn: installed_plugins.json patch failed (non-fatal)"
-import json, sys
-path, current = sys.argv[1], sys.argv[2]
-with open(path) as f:
-    d = json.load(f)
-changed = False
-for e in d.get("plugins", {}).get("ops@ops-marketplace", []):
-    if e.get("scope") == "user" and e.get("installPath", "") != current:
-        e["installPath"] = current
-        changed = True
-if changed:
-    with open(path, "w") as f:
-        json.dump(d, f, indent=2)
-PYEOF
-    fi
-  } || true
-
-  # 5. Add future migrations here. Pattern:
+  # 4. Add future migrations here. Pattern:
   #    if needs_migration; then
   #      run_idempotent_migration && log "  ok: <name>"
   #    fi
@@ -198,8 +156,11 @@ PYEOF
 # Run with a 60s wall-clock budget so a SessionStart hook never blocks Claude.
 ( run_migrations ) &
 MIGRATE_PID=$!
-( sleep 60; kill -0 "$MIGRATE_PID" 2>/dev/null && kill "$MIGRATE_PID" 2>/dev/null ) &
-
+for ((waited = 0; waited < 60; waited++)); do
+  kill -0 "$MIGRATE_PID" 2>/dev/null || break
+  sleep 1
+done
+kill -0 "$MIGRATE_PID" 2>/dev/null && kill "$MIGRATE_PID" 2>/dev/null || true
 wait "$MIGRATE_PID" 2>/dev/null || true
 
 # Stamp sentinel even on partial failure — individual migrations log their own state.
