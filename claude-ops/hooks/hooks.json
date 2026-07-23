@@ -6,12 +6,12 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/bedrock-fallback-guard.mjs",
-            "timeout": 5
+            "timeout": 15
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-inbox-autosync 2>/dev/null || true",
-            "timeout": 3,
+            "command": "INPUT=$(cat); (printf %s \"$INPUT\" | bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-inbox-autosync >/dev/null 2>&1 &); exit 0",
+            "timeout": 2,
             "async": true
           }
         ]
