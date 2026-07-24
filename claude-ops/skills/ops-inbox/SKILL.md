@@ -79,6 +79,8 @@ If you find yourself reaching for any `wacli ...` shell command, stop and use th
 
 ## Runtime Context
 
+**Standing default posture — read this first, every run.** Before the offline scan-engine, before any per-channel MCP call, the default mode of this skill is: spin up one agent per available/configured channel (WhatsApp, Email, Slack, Telegram, iMessage, Notion, Discord — whichever are configured; see "Channel availability + fallback" below) via the `Workflow` tool (Agent Teams as the fallback), running in parallel. This is the standing default for the whole skill — you do not wait for triage to discover volume before fanning out; fanning out IS the first move. Each per-channel agent: deep-reads every conversation in its channel, clears the FULL-THREAD AWARENESS GATE, and — for any NEEDS_REPLY candidate — pulls full cross-channel context on that person/topic/thread (gmail search, whatsapp search, the ops-memories contact profile, etc. — per "FULL CONTEXT — NEVER ASSUME" / "FULL-CONTEXT RECALL + CROSS-CHANNEL DEDUP" below) before drafting a reply where one is genuinely needed. It reports back structured recommendations (classification + draft + reasoning, grounded in that cross-channel research) to the orchestrating session. **"READ-ONLY" here means one thing only — never send, archive, mark-read, or mutate anything — it does NOT mean "stay inside your one assigned channel"; agents are granted the cross-channel read/search tools they need for context-gathering.** Every send still goes through the main session's Rule-6 one-draft → one-approval → one-send gate, unchanged (see "Standing behavior: RUN WIDE" and "Workflow fan-out" below for the mechanics and hard constraints). The offline `bin/ops-inbox-scan` step below is a fast pre-filter that FEEDS this fan-out — not a replacement for it, so the per-channel agents aren't blindly scanning everything from scratch. The only exception: skip the fan-out in the genuinely trivial case (script covered everything, ~1-3 candidates left) — that stays the exception, not the default framing.
+
 Before executing, load available context:
 
 0. **Auto-sync WhatsApp in the background (DEFAULT — every invocation)** — the FIRST thing this skill does, before any scan or menu, is guarantee the store is fresh, then fire a recent-conversation history backfill **and** a contacts-link in the background, non-blocking.
@@ -431,9 +433,18 @@ volume is more than a glance.
 
 - **Read-only scanners — Rule 6.** Every scanner agent's prompt MUST state, verbatim in
   spirit: _"You are READ-ONLY. Do NOT send, archive, mark-read, or mutate anything. Only
-  read / search and classify. Return structured results."_ Scanners get only read/search
-  tools. **All sending stays in the main session**, one draft → one approval → one send.
-  The workflow NEVER sends, archives, or mutates — it only reads and classifies.
+  read / search and classify. Return structured results."_ **"READ-ONLY" means exactly
+  one thing here — never send, archive, mark-read, or mutate. It does NOT mean "stay inside
+  your one assigned channel."** Each agent still owns its assigned channel's classification
+  pass, but for any NEEDS_REPLY candidate it must pull full cross-channel context on that
+  person/topic/thread before drafting — per "FULL CONTEXT — NEVER ASSUME" and "FULL-CONTEXT
+  RECALL + CROSS-CHANNEL DEDUP" below (gmail search across the person's email, whatsapp
+  search/list_messages for mentions elsewhere, the ops-memories `contact_*.md` profile,
+  etc.) — not just read its own channel's thread in isolation. It then returns a
+  recommendation AND a pre-written draft (when one is warranted), grounded in that full
+  research, not a raw single-channel classification. **All sending stays in the main
+  session**, one draft → one approval → one send. The workflow NEVER sends, archives, or
+  mutates — it only reads (across whatever channels the candidate needs) and classifies.
 - **Detect availability FIRST.** Only fan out a scanner for a channel that already passed
   the per-channel checks in "Channel availability + fallback". Never spawn a scanner for an
   unconfigured / unreachable channel — it burns a turn and produces a misleading
@@ -441,12 +452,22 @@ volume is more than a glance.
 - **No `AskUserQuestion` inside the workflow.** Presentation, reply drafting, approval,
   archive, and the Cron offer all happen back in the main session _after_ the workflow
   returns. Workflow agents cannot gate sends, so they must never try.
-- **Each scanner loads its own MCP tools** via `ToolSearch select:...` before use, and
-  honours the documented reconnect handshake (WhatsApp 3× at 5s, iMessage 5s→15s) before
-  reporting a channel unreachable. Never fabricate conversations.
+- **Each scanner loads its own channel's MCP tools** via `ToolSearch select:...` before use,
+  and honours the documented reconnect handshake (WhatsApp 3× at 5s, iMessage 5s→15s) before
+  reporting a channel unreachable. Never fabricate conversations. **Also grant each agent the
+  read-only cross-channel search tools it needs for context-gathering** — at minimum gmail
+  search/thread-read, whatsapp search/list_messages, and the ops-memories contact registry —
+  so it can look up the same person/topic across other channels before drafting, not just
+  its own assigned channel's tools.
 
 **Canonical scan workflow.** Pass the available channels in via `args` (the orchestrator
 builds the list from the detected-available channels), so the script body stays stable:
+
+**⚠️ When invoking `Workflow`, you MUST pass the channel task list via the tool call's
+top-level `args` parameter (as shown below) — not just referenced inside the `script` body.
+Omitting it silently produces zero agents and an empty result, not an error.** A real run
+failed this way: `args` was written into the script text but never passed as the tool's
+`args` parameter, so the workflow spawned nothing and returned nothing to synthesize.
 
 ```js
 Workflow({
@@ -697,7 +718,7 @@ The user does NOT remember every thread. For EVERY message you present, you MUST
  Draft reply: "[contextually aware draft based on all above]"
 ```
 
-Stage this per the **PER-DRAFT APPROVAL** principle below: one `AskUserQuestion` for this item alone, single-select `[Send]` `[Edit]` `[Skip]`, `preview` field carrying the full draft text plus a "Reasoning / facts verified" block. Never combine with any other item's approval.
+Stage this per the **PER-DRAFT APPROVAL** principle below: print the block above (it already carries the full draft text and reasoning) as plain chat text, THEN one `AskUserQuestion` for this item alone, single-select `[Send]` `[Edit]` `[Skip]`, with a short (~10-line) `preview` — the `preview` clips, so it is a quick-glance companion to the inline block above, never the only place the draft is shown. Never combine with any other item's approval.
 
 **When drafting replies:**
 
@@ -755,13 +776,15 @@ Only after steps 1–7 come up empty may you draft; only after step 8 is satisfi
 
 **Every staged outbound draft gets its OWN `AskUserQuestion` call — never bundle multiple drafts into one question, and never present a batched list of drafts with an "approve all" / "ok all" style option.** This applies on every channel (email, WhatsApp, iMessage, Slack, Telegram, Discord, Notion) and supersedes any earlier guidance in this skill that showed multiple candidates followed by a single combined approval.
 
+**The `preview` field clips (owner-observed 2026-07-24, live run): it visually cuts off at ~10 short lines, so a full draft + reasoning block does not reliably fit and gets truncated in the box the user actually sees.** So the tool call is never the only place the draft appears:
+
+1. **Print the full draft inline as plain chat text FIRST, before the `AskUserQuestion` tool call.** This means the exact message the recipient will see (to/recipient, subject for email, full body) plus the short "Reasoning / facts verified" block (which thread(s) were read, which related threads were checked, which load-bearing facts were verified and how — e.g. "verified via web search: current EUR/USD"; "verified via Gmail search in:sent: Sam confirmed Spinnin'/WMG holds this master on 2026-05-12"). **This inline text is the source of truth the user actually reads — never rely on the tool's preview pane alone.** If the draft itself is long, split it across multiple chat messages rather than truncating it (same pattern as the existing "split long drafts into separate AskUsers/bubbles" convention) — do not silently cut it.
+2. **Then call `AskUserQuestion`.** Keep its `preview` field short — roughly 10 lines max — since it clips: the full draft if it's genuinely short, otherwise a compact excerpt/summary of the draft plus at most 2 reasoning bullets. The `preview` is a quick-glance companion to the inline text above it, not the only place the draft is shown.
+
 **The call, exactly:**
 
 - **Single-select**, options limited to `[Send]` `[Edit]` `[Skip]` (3 options — well under the Rule-1 cap of 4). Do not add extra options like "Read full thread" or "Archive" to this specific question — the full-thread read is already mandatory *before* the draft is staged (FULL-THREAD AWARENESS GATE + fact-verified redraft gate above), and archive is a separate, subsequent step once the draft is sent or skipped.
-- The chosen option's `preview` field MUST contain, verbatim:
-  1. **The FULL draft text** — the exact message the recipient will see: to/recipient, subject (email), full body. Not a summary, not a line count.
-  2. **A short "Reasoning / facts verified" block** immediately after the draft text, explaining *why* the draft says what it says — which thread(s) were read, which related threads were checked, and which load-bearing facts (prices, ownership, dates, amounts) were verified and how (e.g. "verified via web search: current EUR/USD"; "verified via Gmail search in:sent: Sam confirmed Spinnin'/WMG holds this master on 2026-05-12").
-- One draft → one `AskUserQuestion` → one decision (`Send`/`Edit`/`Skip`) → (if `Send`) one send → archive → **then and only then** move to the next draft's own `AskUserQuestion`.
+- One draft → full draft printed inline in chat → one `AskUserQuestion` (short `preview`) → one decision (`Send`/`Edit`/`Skip`) → (if `Send`) one send → archive → **then and only then** move to the next draft's own inline text + `AskUserQuestion`.
 
 **Forbidden patterns (same spirit as Rule 6's forbidden-output list):**
 
@@ -770,7 +793,7 @@ Only after steps 1–7 come up empty may you draft; only after step 8 is satisfi
 - Presenting the full NEEDS_REPLY list with drafts inline and asking one omnibus "which should I send?" question
 - Reusing one `AskUserQuestion` result to gate more than one send
 
-This does not change Rule 6's underlying send gate (stage → show full draft → explicit approval → send → next) — it makes explicit exactly how that gate is implemented: one `AskUserQuestion`, one draft, `preview` carries the full text + reasoning, options are `[Send]`/`[Edit]`/`[Skip]`.
+This does not change Rule 6's underlying send gate (stage → show full draft → explicit approval → send → next) — it makes explicit exactly how that gate is implemented: full draft + reasoning printed inline in chat first, then one `AskUserQuestion` with a short `preview`, options `[Send]`/`[Edit]`/`[Skip]`.
 
 ## Core principle: SNOOZE & FOLLOW-UP INTELLIGENCE (never let the user lose a thread)
 
@@ -1048,7 +1071,7 @@ For each NEEDS REPLY chat:
     Thread: [1-line summary of what you're waiting for]
 ```
 
-Per the **PER-DRAFT APPROVAL** principle above: stage ONE `AskUserQuestion` per chat, single-select `[Send]` `[Edit]` `[Skip]`, with the `preview` field carrying the full draft text plus a "Reasoning / facts verified" block. Never bundle multiple chats' drafts into one question.
+Per the **PER-DRAFT APPROVAL** principle above: print the full draft text plus a "Reasoning / facts verified" block as plain chat text FIRST — the `preview` pane clips at ~10 lines and is not reliable for a full draft — THEN stage ONE `AskUserQuestion` per chat, single-select `[Send]` `[Edit]` `[Skip]`, with a short `preview` (full draft if short, else a compact excerpt + up to 2 reasoning bullets). Never bundle multiple chats' drafts into one question.
 
 **When drafting WhatsApp replies:**
 
@@ -1135,7 +1158,7 @@ For each NEEDS REPLY thread:
     Thread: [1-line summary of what you're waiting for]
 ```
 
-Per the **PER-DRAFT APPROVAL** principle above: stage ONE `AskUserQuestion` per thread, single-select `[Send]` `[Edit]` `[Skip]`, with the `preview` field carrying the full draft text plus a "Reasoning / facts verified" block. Never bundle multiple threads' drafts into one question.
+Per the **PER-DRAFT APPROVAL** principle above: print the full draft text plus a "Reasoning / facts verified" block as plain chat text FIRST — the `preview` pane clips at ~10 lines and is not reliable for a full draft — THEN stage ONE `AskUserQuestion` per thread, single-select `[Send]` `[Edit]` `[Skip]`, with a short `preview` (full draft if short, else a compact excerpt + up to 2 reasoning bullets). Never bundle multiple threads' drafts into one question.
 
 **When drafting iMessage replies:**
 
@@ -1271,7 +1294,7 @@ For each NEEDS REPLY thread, gather:
   x) Archive all FYI at once (archiving is not an outbound draft — bulk archive stays fine)
 ```
 
-Per the **PER-DRAFT APPROVAL** principle above: stage ONE `AskUserQuestion` per email, single-select — never a combined `[Read + Reply]`/`[Archive]`/`[Skip]` menu that mixes the send decision with other actions. The question's `preview` field carries the FULL draft text (to, subject, body) plus a short "Reasoning / facts verified" block (which thread(s) and related threads were read, which facts were checked):
+Per the **PER-DRAFT APPROVAL** principle above: print the FULL draft text (to, subject, body) plus a short "Reasoning / facts verified" block (which thread(s) and related threads were read, which facts were checked) as plain chat text FIRST — the `preview` pane clips at ~10 lines and is not reliable for a full draft. THEN stage ONE `AskUserQuestion` per email, single-select — never a combined `[Read + Reply]`/`[Archive]`/`[Skip]` menu that mixes the send decision with other actions — with a short `preview` (full draft if short, else a compact excerpt + up to 2 reasoning bullets):
 
 ```
 Reply to [Sender] — [Subject]:
@@ -1474,7 +1497,7 @@ For each page with comments or mentions:
  N. [Page title] — updated by [person] — [time ago]
 ```
 
-Per the **PER-DRAFT APPROVAL** principle above: stage ONE `AskUserQuestion` per comment, single-select `[Send]` `[Edit]` `[Skip]`, `preview` field carrying the full reply text plus a "Reasoning / facts verified" block. `View page` / `Mark resolved` / `Archive` are separate follow-up actions, not options on the send question. Never bundle multiple comments' replies into one question.
+Per the **PER-DRAFT APPROVAL** principle above: print the full reply text plus a "Reasoning / facts verified" block as plain chat text FIRST — the `preview` pane clips at ~10 lines and is not reliable for a full draft — THEN stage ONE `AskUserQuestion` per comment, single-select `[Send]` `[Edit]` `[Skip]`, with a short `preview` (full reply if short, else a compact excerpt + up to 2 reasoning bullets). `View page` / `Mark resolved` / `Archive` are separate follow-up actions, not options on the send question. Never bundle multiple comments' replies into one question.
 
 **When replying to Notion comments:**
 
