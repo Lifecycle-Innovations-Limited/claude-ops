@@ -72,9 +72,7 @@ export function tokenSnapshot(tokenJson) {
     // fixed salt: the fixed salt keeps the digest deterministic for change
     // detection, and the slow KDF means a leaked fingerprint cannot be walked
     // back to the token the way a plain SHA-256 digest could.
-    fingerprint: scryptSync(`${oauth.accessToken}\0${oauth.refreshToken}`, TOKEN_FINGERPRINT_SALT, 32).toString(
-      'hex',
-    ),
+    fingerprint: scryptSync(`${oauth.accessToken}\0${oauth.refreshToken}`, TOKEN_FINGERPRINT_SALT, 32).toString('hex'),
     expiresAt: oauth.expiresAt,
   };
 }
