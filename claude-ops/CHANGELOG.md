@@ -10,6 +10,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.46.1] - 2026-07-24
+
+### Changed
+ops-inbox: per-channel Workflow fan-out is now the default posture; draft text prints inline in chat, not just in the AskUserQuestion preview pane.
+
+
 ## [2.46.0] - 2026-07-24
 
 ### Changed
