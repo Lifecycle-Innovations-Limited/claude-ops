@@ -1567,7 +1567,12 @@ async function checkSessionLeaseRotations(config, state) {
         } else {
           try {
             const marker = `/tmp/claude-respawn-deferred-${s.id}`;
-            if (!existsSync(marker)) writeFileSync(marker, String(Date.now()));
+            // 'wx' creates the marker in one step, so a second process cannot slip in
+            // between a check and the write. EEXIST just means the marker is already
+            // there, which is the same outcome we wanted. mode keeps it owner-only.
+            try {
+              writeFileSync(marker, String(Date.now()), { flag: 'wx', mode: 0o600 });
+            } catch {}
             log(
               `[session-router] Session ${s.id} is ${s.status === 'busy' ? 'busy' : 'a /loop session'} — deferred respawn (sweep handles it).`,
             );
@@ -1591,7 +1596,10 @@ async function checkSessionLeaseRotations(config, state) {
         } else {
           try {
             const marker = `/tmp/claude-respawn-deferred-${s.id}`;
-            if (!existsSync(marker)) writeFileSync(marker, String(Date.now()));
+            // 'wx' creates the marker in one step, so a second process cannot slip in
+            // between a check and the write. EEXIST just means the marker is already
+            // there, which is the same outcome we wanted. mode keeps it owner-only.
+            writeFileSync(marker, String(Date.now()), { flag: 'wx', mode: 0o600 });
           } catch {}
         }
         return; // Rotate at most one session per tick to stagger
@@ -1622,7 +1630,12 @@ async function checkSessionLeaseRotations(config, state) {
         } else {
           try {
             const marker = `/tmp/claude-respawn-deferred-${s.id}`;
-            if (!existsSync(marker)) writeFileSync(marker, String(Date.now()));
+            // 'wx' creates the marker in one step, so a second process cannot slip in
+            // between a check and the write. EEXIST just means the marker is already
+            // there, which is the same outcome we wanted. mode keeps it owner-only.
+            try {
+              writeFileSync(marker, String(Date.now()), { flag: 'wx', mode: 0o600 });
+            } catch {}
             log(`[session-router] Session ${s.id} is busy or looping. Deferred rotation to idle state.`);
           } catch {}
         }
