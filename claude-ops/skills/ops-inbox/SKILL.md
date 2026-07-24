@@ -79,6 +79,8 @@ If you find yourself reaching for any `wacli ...` shell command, stop and use th
 
 ## Runtime Context
 
+**Standing default posture — read this first, every run.** Before the offline scan-engine, before any per-channel MCP call, the default mode of this skill is: spin up one agent per available/configured channel (WhatsApp, Email, Slack, Telegram, iMessage, Notion, Discord — whichever are configured; see "Channel availability + fallback" below) via the `Workflow` tool (Agent Teams as the fallback), running in parallel. This is the standing default for the whole skill — you do not wait for triage to discover volume before fanning out; fanning out IS the first move. Each per-channel agent: deep-reads every conversation in its channel, clears the FULL-THREAD AWARENESS GATE, and — for any NEEDS_REPLY candidate — pulls full cross-channel context on that person/topic/thread (gmail search, whatsapp search, the ops-memories contact profile, etc. — per "FULL CONTEXT — NEVER ASSUME" / "FULL-CONTEXT RECALL + CROSS-CHANNEL DEDUP" below) before drafting a reply where one is genuinely needed. It reports back structured recommendations (classification + draft + reasoning, grounded in that cross-channel research) to the orchestrating session. **"READ-ONLY" here means one thing only — never send, archive, mark-read, or mutate anything — it does NOT mean "stay inside your one assigned channel"; agents are granted the cross-channel read/search tools they need for context-gathering.** Every send still goes through the main session's Rule-6 one-draft → one-approval → one-send gate, unchanged (see "Standing behavior: RUN WIDE" and "Workflow fan-out" below for the mechanics and hard constraints). The offline `bin/ops-inbox-scan` step below is a fast pre-filter that FEEDS this fan-out — not a replacement for it, so the per-channel agents aren't blindly scanning everything from scratch. The only exception: skip the fan-out in the genuinely trivial case (script covered everything, ~1-3 candidates left) — that stays the exception, not the default framing.
+
 Before executing, load available context:
 
 0. **Auto-sync WhatsApp in the background (DEFAULT — every invocation)** — the FIRST thing this skill does, before any scan or menu, is guarantee the store is fresh, then fire a recent-conversation history backfill **and** a contacts-link in the background, non-blocking.
@@ -431,9 +433,18 @@ volume is more than a glance.
 
 - **Read-only scanners — Rule 6.** Every scanner agent's prompt MUST state, verbatim in
   spirit: _"You are READ-ONLY. Do NOT send, archive, mark-read, or mutate anything. Only
-  read / search and classify. Return structured results."_ Scanners get only read/search
-  tools. **All sending stays in the main session**, one draft → one approval → one send.
-  The workflow NEVER sends, archives, or mutates — it only reads and classifies.
+  read / search and classify. Return structured results."_ **"READ-ONLY" means exactly
+  one thing here — never send, archive, mark-read, or mutate. It does NOT mean "stay inside
+  your one assigned channel."** Each agent still owns its assigned channel's classification
+  pass, but for any NEEDS_REPLY candidate it must pull full cross-channel context on that
+  person/topic/thread before drafting — per "FULL CONTEXT — NEVER ASSUME" and "FULL-CONTEXT
+  RECALL + CROSS-CHANNEL DEDUP" below (gmail search across the person's email, whatsapp
+  search/list_messages for mentions elsewhere, the ops-memories `contact_*.md` profile,
+  etc.) — not just read its own channel's thread in isolation. It then returns a
+  recommendation AND a pre-written draft (when one is warranted), grounded in that full
+  research, not a raw single-channel classification. **All sending stays in the main
+  session**, one draft → one approval → one send. The workflow NEVER sends, archives, or
+  mutates — it only reads (across whatever channels the candidate needs) and classifies.
 - **Detect availability FIRST.** Only fan out a scanner for a channel that already passed
   the per-channel checks in "Channel availability + fallback". Never spawn a scanner for an
   unconfigured / unreachable channel — it burns a turn and produces a misleading
@@ -441,12 +452,22 @@ volume is more than a glance.
 - **No `AskUserQuestion` inside the workflow.** Presentation, reply drafting, approval,
   archive, and the Cron offer all happen back in the main session _after_ the workflow
   returns. Workflow agents cannot gate sends, so they must never try.
-- **Each scanner loads its own MCP tools** via `ToolSearch select:...` before use, and
-  honours the documented reconnect handshake (WhatsApp 3× at 5s, iMessage 5s→15s) before
-  reporting a channel unreachable. Never fabricate conversations.
+- **Each scanner loads its own channel's MCP tools** via `ToolSearch select:...` before use,
+  and honours the documented reconnect handshake (WhatsApp 3× at 5s, iMessage 5s→15s) before
+  reporting a channel unreachable. Never fabricate conversations. **Also grant each agent the
+  read-only cross-channel search tools it needs for context-gathering** — at minimum gmail
+  search/thread-read, whatsapp search/list_messages, and the ops-memories contact registry —
+  so it can look up the same person/topic across other channels before drafting, not just
+  its own assigned channel's tools.
 
 **Canonical scan workflow.** Pass the available channels in via `args` (the orchestrator
 builds the list from the detected-available channels), so the script body stays stable:
+
+**⚠️ When invoking `Workflow`, you MUST pass the channel task list via the tool call's
+top-level `args` parameter (as shown below) — not just referenced inside the `script` body.
+Omitting it silently produces zero agents and an empty result, not an error.** A real run
+failed this way: `args` was written into the script text but never passed as the tool's
+`args` parameter, so the workflow spawned nothing and returned nothing to synthesize.
 
 ```js
 Workflow({
