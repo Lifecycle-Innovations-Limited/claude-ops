@@ -10,6 +10,17 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.46.0] - 2026-07-24
+
+### Changed
+- fix(rotation): remove duplicate API_KEY/AUTH_TOKEN/OAUTH_TOKEN unset in bg-respawn atomic fallback (#698)
+- fix(hooks): detach ops-inbox-autosync and raise bedrock UPS timeout (#697)
+- fix: serialize post-update migrations (#696)
+- fix(crs): apply prettier formatting
+- fix(ops): report AWS Usage burn, not credit-masked net (#695)
+- feat(crs): live quota poller + multi-port health + richer proxy config
+
+
 ## [2.45.0] - 2026-07-22
 
 ### Changed
