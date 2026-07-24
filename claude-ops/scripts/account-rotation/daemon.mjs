@@ -1572,7 +1572,12 @@ async function checkSessionLeaseRotations(config, state) {
             // there, which is the same outcome we wanted. mode keeps it owner-only.
             try {
               writeFileSync(marker, String(Date.now()), { flag: 'wx', mode: 0o600 });
-            } catch {}
+            } catch (err) {
+              // EEXIST means another sweep already wrote the marker, so carry on and log.
+              // Anything else is a real write failure: fall out to the outer catch so we
+              // don't claim a deferral the sweep has no marker to act on.
+              if (err.code !== 'EEXIST') throw err;
+            }
             log(
               `[session-router] Session ${s.id} is ${s.status === 'busy' ? 'busy' : 'a /loop session'} — deferred respawn (sweep handles it).`,
             );
@@ -1635,7 +1640,12 @@ async function checkSessionLeaseRotations(config, state) {
             // there, which is the same outcome we wanted. mode keeps it owner-only.
             try {
               writeFileSync(marker, String(Date.now()), { flag: 'wx', mode: 0o600 });
-            } catch {}
+            } catch (err) {
+              // EEXIST means another sweep already wrote the marker, so carry on and log.
+              // Anything else is a real write failure: fall out to the outer catch so we
+              // don't claim a deferral the sweep has no marker to act on.
+              if (err.code !== 'EEXIST') throw err;
+            }
             log(`[session-router] Session ${s.id} is busy or looping. Deferred rotation to idle state.`);
           } catch {}
         }
