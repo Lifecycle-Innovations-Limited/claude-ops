@@ -355,12 +355,20 @@ function twoCaptchaProxyConfig(twoCaptcha = {}) {
 }
 
 function efgProxyConfig(config = {}) {
-  const url = config.url || firstEnvValue(['EFG_PROXY_URL', 'CRS_EFG_PROXY_URL']) || 'http://100.90.98.93:18088';
-  const parsed = parseProxyUrl(url);
-  if (parsed?.host && parsed?.port) return parsed;
+  // No default host/port/URL: an "external gateway forwarder" proxy is always a
+  // specific deployment's own private network address, never a safe generic
+  // default. Require explicit config or env; return null if neither is set so
+  // callers treat it as "no EFG proxy configured" rather than silently pointing
+  // at some other operator's network.
+  const url = config.url || firstEnvValue(['EFG_PROXY_URL', 'CRS_EFG_PROXY_URL']);
+  if (url) {
+    const parsed = parseProxyUrl(url);
+    if (parsed?.host && parsed?.port) return parsed;
+  }
 
-  const host = config.host || firstEnvValue(['EFG_PROXY_HOST', 'CRS_EFG_PROXY_HOST']) || '100.90.98.93';
-  const port = config.port || firstEnvValue(['EFG_PROXY_PORT', 'CRS_EFG_PROXY_PORT']) || '18088';
+  const host = config.host || firstEnvValue(['EFG_PROXY_HOST', 'CRS_EFG_PROXY_HOST']);
+  const port = config.port || firstEnvValue(['EFG_PROXY_PORT', 'CRS_EFG_PROXY_PORT']);
+  if (!host || !port) return null;
   return {
     type: config.type || firstEnvValue(['EFG_PROXY_TYPE', 'CRS_EFG_PROXY_TYPE']) || 'http',
     host,
