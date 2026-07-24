@@ -11,15 +11,18 @@
     "dashlaneGooglePath": null,
     "googleSmsPhone": "+1234567890",
     "extraUsageEnabled": false,
-    "capacityMultiplier": 1.0
+    "capacityMultiplier": 1.0,
+    "maxUtilPercent": 90
   },
+  "_maxUtilPercent_note": "Optional per-account cap on rotate.mjs/daemon.mjs/session-router.mjs rotation-destination selection: refuses this account as a target once max(5h,7d) utilization reaches this %. Tightens rateLimits.destinationMaxUtilPercent, never loosens it (min() of the two).",
   "rateLimits": {
     "tokensPerWindow": 220000,
     "windowHours": 5,
     "messagesPerWindow": 900,
     "weeklyCapMultiplier": 1.0,
     "extraUsageSafetyMargin": 0.75,
-    "note": "Max 20x defaults: ~220K tokens / ~900 messages per 5h window. extraUsageSafetyMargin: accounts with paid overage enabled rotate at 75% of their threshold to avoid incurring charges."
+    "destinationMaxUtilPercent": 95,
+    "note": "Max 20x defaults: ~220K tokens / ~900 messages per 5h window. extraUsageSafetyMargin: accounts with paid overage enabled rotate at 75% of their threshold to avoid incurring charges. destinationMaxUtilPercent: global hard refusal for rotation targets (max(5h,7d) must stay below this); default 95 if unset."
   },
   "magicLinkGmailAccount": "shared-inbox@example.com",
   "_magicLinkGmailAccount_note": "Single Gmail inbox that ALL accounts' Claude magic-link login emails forward to. The rotator polls only this inbox (via gog --account) for every account's link, then disambiguates by target email. Leave unset to poll each account's own mailbox. Real value belongs in the gitignored override config or CLAUDE_ROT_GMAIL_ACCOUNT / GOG_ACCOUNT env, never here.",
@@ -29,7 +32,7 @@
   "refreshSession": false,
   "notifyOnRotation": true,
   "crs": {
-    "_comment": "Optional: claude-relay-service (CRS) pool integration. Off by default — set enabled=true and install via scripts/install-crs-priority-agent.sh. Map each rotator account to its CRS row with crsAccountName on the account entry (or crs.nameByVaultKey). Admin password is NOT stored here: set $CRS_ADMIN_PASSWORD or credential-store CRS-Admin-<adminUser>.",
+    "_comment": "Optional: claude-relay-service (CRS) pool integration. Off by default — set enabled=true and install via scripts/install-crs-priority-agent.sh. Map each rotator account to its CRS row with crsAccountName on the account entry (or crs.nameByVaultKey). Admin password is NOT stored here: set $CRS_ADMIN_PASSWORD or credential-store CRS-Admin-<adminUser>. refreshAuthority: every account mapped here has its OAuth refresh owned exclusively by refresh-tokens.mjs (the rotator) — CRS itself only ever receives the rotator's fresh token via sync-crs-account.mjs/crs-token-feed.mjs propagation, it never independently refreshes. See NOTES-rotation-consistency.md.",
     "enabled": false,
     "policy": "conservative",
     "_policy_note": "conservative (default) deprioritizes on utilization/session warnings; max-out keeps accounts schedulable until genuine rate-limit or overload (util % is telemetry only). Override with $CRS_POLICY.",

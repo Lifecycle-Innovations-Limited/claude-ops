@@ -54,7 +54,14 @@
 set -u
 DEFAULT_ROT_DIR="${HOME}/.claude/plugins/data/ops/account-rotation"
 DIR="${CLAUDE_ROTATION_DATA_DIR:-${CLAUDE_PLUGIN_DATA_DIR:-${HOME}/.claude/plugins/data/ops}/account-rotation}"
-[ -d "$DIR" ] || DIR="$DEFAULT_ROT_DIR"
+if [ ! -d "$DIR" ] || [ ! -f "$DIR/rotate.mjs" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ -d "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/rotate.mjs" ]; then
+    DIR="$SCRIPT_DIR"
+  else
+    DIR="$DEFAULT_ROT_DIR"
+  fi
+fi
 WATCHDOG_SECONDS="${FORCE_ROTATE_TIMEOUT:-360}"
 
 echo "🔄 Force-rotating Claude account..."
@@ -79,10 +86,7 @@ fi
 # the daemon also auto-corrects every 2min, but this surfaces it during manual
 # rotation). Don't block on failure; just log.
 {
-  # Scope to $USER: the keychain can hold multiple "Claude Code-credentials"
-  # items and an unscoped lookup may return an mcpOAuth-only blob first.
-  LIVE_TOK=$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('claudeAiOauth',{}).get('accessToken',''))" 2>/dev/null)
-  [ -z "$LIVE_TOK" ] && LIVE_TOK=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('claudeAiOauth',{}).get('accessToken',''))" 2>/dev/null)
+  LIVE_TOK=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('claudeAiOauth',{}).get('accessToken',''))" 2>/dev/null)
   STATE_ACCT=$(python3 -c "import json; print(json.load(open('$DIR/state.json')).get('activeAccount',''))" 2>/dev/null)
   if [ -n "$LIVE_TOK" ] && [ -n "$STATE_ACCT" ]; then
     LIVE_ACCT=$(curl -s -m 4 -H "Authorization: Bearer $LIVE_TOK" -H "anthropic-beta: oauth-2025-04-20" https://api.anthropic.com/api/oauth/profile 2>/dev/null | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('account',{}).get('email',''))" 2>/dev/null)
@@ -95,6 +99,16 @@ fi
 TARGET_ARG=()
 if [ $# -ge 1 ] && [ -n "${1:-}" ]; then
   TARGET_ARG=(--to "$1")
+fi
+
+# Preflight: live-query all accounts and print recommendation BEFORE rotating.
+# Exit code 2 from --recommend = all accounts live-confirmed exhausted.
+echo "→ Preflight: scanning live utilization..."
+node "$DIR/rotate.mjs" --recommend 2>&1 | sed 's/^/   /'
+PREFLIGHT_RC=${PIPESTATUS[0]}
+if [ "$PREFLIGHT_RC" -eq 2 ]; then
+  echo "⚠  All Anthropic accounts live-confirmed at >=95% util."
+  echo "   OAuth-only recovery will be used; Bedrock fallback is disabled for this repair path."
 fi
 
 run_with_watchdog() {
@@ -121,17 +135,13 @@ run_with_watchdog() {
 
 # Fast path: refresh-token rotation, no browser. Works whenever a candidate
 # account has a non-expired refresh token — which is the common case.
-# --reload-agents: after the keychain swap, sequentially respawn running bg
-# agents so they pick up the new token (≤4 agents, 15s stagger, orchestrator
-# and bare spares skipped). Watchdog extended to 420s (360s base + 60s stagger).
-WATCHDOG_SECONDS="${FORCE_ROTATE_TIMEOUT:-420}"
-echo "→ Trying fast path (--no-browser --force --reload-agents)..."
-if run_with_watchdog node "$DIR/rotate.mjs" --force --no-browser --reload-agents --session ${TARGET_ARG[@]+"${TARGET_ARG[@]}"}; then
+echo "→ Trying fast path (--no-browser --force)..."
+if run_with_watchdog node "$DIR/rotate.mjs" --force --no-browser --no-bedrock-fallback --session ${TARGET_ARG[@]+"${TARGET_ARG[@]}"}; then
   FAST_OK=1
 else
   FAST_OK=0
   echo "⚠  Fast path failed — falling back to browser OAuth"
-  run_with_watchdog node "$DIR/rotate.mjs" --force --reload-agents --session ${TARGET_ARG[@]+"${TARGET_ARG[@]}"}
+  run_with_watchdog node "$DIR/rotate.mjs" --force --no-bedrock-fallback --session ${TARGET_ARG[@]+"${TARGET_ARG[@]}"}
 fi
 
 # Show new status
@@ -139,12 +149,12 @@ echo ""
 node "$DIR/rotate.mjs" --status 2>&1 | head -40
 
 # macOS notification
-osascript -e 'display notification "Account rotated — running agents reloaded onto new token" with title "Claude Rotation"' 2>/dev/null
+osascript -e 'display notification "Account rotated to new keychain entry" with title "Claude Rotation"' 2>/dev/null
 
 echo ""
 if [ "$FAST_OK" -eq 1 ]; then
-  echo "✅ Done (fast path). Running bg agents reloaded onto new token."
+  echo "✅ Done (fast path). Token swapped in keychain — next request will pick it up."
 else
-  echo "✅ Done (browser fallback). Running bg agents reloaded onto new token."
+  echo "✅ Done (browser fallback). Token swapped in keychain — next request will pick it up."
 fi
-echo "   (Up to 4 agents respawned; any remainder will be picked up on next rotation pass.)"
+echo "   (Running sessions may still use the old token — exit and re-enter)"
