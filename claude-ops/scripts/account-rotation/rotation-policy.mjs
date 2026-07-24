@@ -30,3 +30,25 @@ export function liveUtilMax(u) {
   if (!isLiveUtilOk(u)) return null;
   return Math.max(u.pct5h, u.pct7d);
 }
+
+/**
+ * Return max(5h, 7d) from a persisted utilization snapshot.
+ *
+ * New snapshots store `pct`/`reset` for 5h and `pct7`/`reset7` for 7d.
+ * Older daemon snapshots stored the already-combined max in `pct`, so the
+ * missing weekly field remains backward compatible.
+ */
+export function cachedUtilizationMax(cached, now = Date.now()) {
+  if (!cached || typeof cached !== 'object') return null;
+
+  const windowValue = (pctField, resetField) => {
+    const pct = Number(cached[pctField]);
+    if (!Number.isFinite(pct)) return null;
+    const reset = Number(cached[resetField]);
+    if (Number.isFinite(reset) && reset > 0 && reset * 1000 <= now) return 0;
+    return pct;
+  };
+
+  const values = [windowValue('pct', 'reset'), windowValue('pct7', 'reset7')].filter((value) => value !== null);
+  return values.length ? Math.max(...values) : null;
+}

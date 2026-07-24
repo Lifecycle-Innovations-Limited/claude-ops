@@ -99,7 +99,8 @@ function accountRotationStatus() {
 
 function status() {
   const route = routeStatus();
-  const crsHealthUrl = route.state.crs?.healthUrl || 'http://127.0.0.1:3000/health';
+  const crsHealthUrl =
+    route.state.crs?.healthUrl || process.env.CRS_HEALTH_URL || 'http://127.0.0.1:3005/health';
   return {
     ok: !route.settings.mixedProvider,
     route,
@@ -139,6 +140,12 @@ function doctor() {
     });
   if (s.route.state.mode === 'crs-oauth' && !s.crs.healthy)
     findings.push({ severity: 'error', code: 'crs_unhealthy', detail: `${s.crs.healthUrl} is not healthy` });
+  if (s.route.state.mode === 'crs-oauth' && s.route.settings.tokenKind !== 'crs-relay')
+    findings.push({
+      severity: 'error',
+      code: 'crs_auth_token_missing',
+      detail: 'CRS token variable is not a relay token (set ANTHROPIC_AUTH_TOKEN or CLAUDE_CODE_OAUTH_TOKEN)',
+    });
   if (s.route.state.mode === 'bedrock-confirmed' && !s.route.bedrockConfirmationActive)
     findings.push({
       severity: 'error',
