@@ -18,11 +18,6 @@
 //   sessionWindow.sessionWindowStatus                                  (allowed | allowed_warning | …)
 //   claudeUsage.{fiveHour,sevenDay,sevenDayOpus}.utilization           (fresh secondary only)
 //
-// LIVE QUOTA POLLER (60-120s): hybrid header-derived (CRS rateLimit* from relay
-// upstream headers) + targeted /oauth/usage probe per account (throttled, cached).
-// Clears stale cooldowns on rateLimitResetAt expiry. Feeds live headroom back
-// to CRS scheduler via account PUT for accurate LB/concurrency.
-//
 // POLICY (configurable via crs.policy or $CRS_POLICY):
 //   conservative (default) — deprioritize on fresh high utilization, sessionWindow
 //   warnings, rate limits, and overload; FLOOR keeps minimum pool size; dedup by
@@ -40,8 +35,8 @@
 // CLI:  (none)=one live tick · --dry-run=log decisions, no writes · --status=print
 //       current schedulable + utilization table and exit · --once (alias for tick).
 
-import { execFileSync } from 'child_process';
-import { readFileSync, existsSync } from 'fs';
+import { execFileSync, spawn } from 'child_process';
+import { readFileSync, existsSync, writeFileSync, renameSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir, platform } from 'os';
@@ -53,6 +48,7 @@ import {
   loadRotationConfig,
   vaultLookupKeysForEmail,
 } from './crs-pool-config.mjs';
+import { liveUsageProvesRateLimitRecovery, liveUsageWorst } from './crs-priority-policy.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || join(__dirname, '..', '..');
@@ -75,6 +71,7 @@ const DATA_DIR =
 const args = new Set(process.argv.slice(2));
 const DRY = args.has('--dry-run') || process.env.CRS_DRY === '1';
 const STATUS = args.has('--status');
+const MUTATIONS_ENABLED = !DRY && !STATUS;
 
 const ts = () => new Date().toISOString().slice(11, 19);
 const log = (m) => console.log(`${ts()} [crs-priority] ${m}`);
@@ -87,20 +84,73 @@ const num = (v, d) => (v === undefined || v === null || v === '' || Number.isNaN
 
 const BASE = crsBaseUrl(cfg);
 const ADMIN_USER = process.env.CRS_ADMIN_USER || C.adminUser || 'cradmin';
-const OFF_5H = num(process.env.CRS_OFF_5H ?? C.off5h, 90);
-const OFF_7D = num(process.env.CRS_OFF_7D ?? C.off7d, 95);
 const ON_5H = num(process.env.CRS_ON_5H ?? C.on5h, 70);
 const ON_7D = num(process.env.CRS_ON_7D ?? C.on7d, 85);
 const FLOOR = num(process.env.CRS_FLOOR ?? C.floor, 3);
 const FRESH_MIN = num(process.env.CRS_FRESH_MIN ?? C.freshMinutes, 15);
 const CRS_POLICY = crsPolicy(cfg);
+const VIABLE_CAP = num(process.env.CRS_VIABLE_CAP ?? cfg.rateLimits?.destinationMaxUtilPercent, 95);
 const TOKEN_MIN_FRESH_MS = num(process.env.CRS_TOKEN_MIN_FRESH_MS ?? C.tokenMinFreshMs, 5 * 60_000);
 const STALE_RL_MAX_MINS = num(process.env.CRS_STALE_RL_MINUTES, 300);
-const LIVE_USAGE_TTL_MS = num(process.env.CRS_LIVE_USAGE_TTL_MS, 90_000);
+const LIVE_USAGE_TTL_MS = num(process.env.CRS_LIVE_USAGE_TTL_MS, 4 * 60_000);
 const IS_LINUX = platform() === 'linux';
+const IS_MACOS = !IS_LINUX;
 const liveUsageCache = new Map();
+const SHARED_USAGE_CACHE_PATH = join(__dirname, '.util-cache.json');
 const LINUX_CRED_PATH = crsFileVaultPath(cfg);
 const CRS_CONTAINER = process.env.CRS_CONTAINER || C.containerName || 'crs-claude-relay-1';
+const MAGIC_LINK_COOLDOWN_MS = num(process.env.CRS_MAGIC_LINK_COOLDOWN_MS, 10 * 60_000); // 10m between same-account attempts
+const MAX_MAGIC_LINKS_PER_TICK = 1;
+const PRIORITY_MAGIC_LINK_AUTHORITY = process.env.CRS_PRIORITY_MAGIC_LINK_AUTHORITY === '1';
+const MAGIC_LINK_STATE_PATH = join(__dirname, '.crs-magic-link-state.json');
+
+function readSharedUsageCache() {
+  try {
+    return JSON.parse(readFileSync(SHARED_USAGE_CACHE_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function loadSharedUsageCache() {
+  const now = Date.now();
+  for (const [key, value] of Object.entries(readSharedUsageCache())) {
+    if (!value?.ts || now - value.ts >= LIVE_USAGE_TTL_MS) continue;
+    liveUsageCache.set(key, {
+      at: value.ts,
+      data: {
+        u5: value.data?.five_hour_pct ?? null,
+        u7: value.data?.seven_day_pct ?? null,
+        u7s: value.data?.seven_day_sonnet_pct ?? null,
+        u7o: value.data?.seven_day_opus_pct ?? null,
+        resets7: value.data?.resets_at_7d ?? null,
+      },
+    });
+  }
+}
+
+function writeSharedUsageCache(key, data) {
+  if (!MUTATIONS_ENABLED) return;
+  try {
+    const cache = readSharedUsageCache();
+    cache[key] = {
+      ts: Date.now(),
+      data: {
+        five_hour_pct: data.u5,
+        seven_day_pct: data.u7,
+        seven_day_sonnet_pct: data.u7s,
+        seven_day_opus_pct: data.u7o,
+        resets_at_5h: null,
+        resets_at_7d: data.resets7,
+      },
+    };
+    const temp = `${SHARED_USAGE_CACHE_PATH}.tmp.${process.pid}`;
+    writeFileSync(temp, JSON.stringify(cache), { mode: 0o600 });
+    renameSync(temp, SHARED_USAGE_CACHE_PATH);
+  } catch {}
+}
+
+loadSharedUsageCache();
 
 function adminPasswordFromDocker() {
   if (!IS_LINUX) return null;
@@ -134,11 +184,12 @@ function adminPassword() {
   );
 }
 
-// ── live per-account quota poller (hybrid header + targeted probe) ──────────────
-// 60-120s friendly: CRS /admin accounts gives header-derived rateLimitStatus etc;
-// we do targeted read-only /oauth/usage probe (via stored OAuth) for u5/u7 headroom.
-// Hybrid: body + response headers. TTL + throttle. Falls back to cache on error.
-// Never drives re-enable from stale; feeds headroom to scheduler after collection.
+// ── authoritative per-account quota (api.anthropic.com/api/oauth/usage) ────────
+// CRS's cached claudeUsage is often null/stale, so for accurate prioritization we
+// read each account's OAuth token from the credential store and query Anthropic's
+// usage endpoint directly (read-only GET — does NOT rotate the token). Falls back
+// to the cache/sessionWindowStatus when no token / 401 / timeout. Tokens live at
+// `Claude-Rotation-<email>` (rotator schema); CRS account → token by subscription email.
 const USAGE_TOKEN_SVC = process.env.CRS_USAGE_TOKEN_PREFIX || 'Claude-Rotation-';
 
 function accountVaultKey(a) {
@@ -209,23 +260,29 @@ function accountTokenFresh(a, now = Date.now()) {
 }
 
 function rateLimitLooksStale(a, now = Date.now()) {
-  if (a.status === 'error' && accountTokenFresh(a, now)) return true;
+  if (a.status === 'error') return true; // error state is always stale for rate-limit/cooldown data
 
   const inspect = (st, resetAtFallback) => {
     if (!st?.isRateLimited) return false;
-    const resetAt = st.resetAt || resetAtFallback;
+    // Check rateLimitEndAt first — it's the authoritative reset timestamp
+    // from the CRS (set with reason="authoritative_reset").
+    const resetAt = st.rateLimitEndAt || st.resetAt || resetAtFallback;
     const resetMs = resetAt ? Date.parse(resetAt) : NaN;
     const mins = st.minutesRemaining ?? null;
+    // If there's a valid reset timestamp and it's in the past, the rate limit has expired.
     if (Number.isFinite(resetMs) && resetMs <= now) return true;
     if (mins === 0) return true;
-    if (typeof mins === 'number' && mins > STALE_RL_MAX_MINS) return true;
+    // If rateLimitEndAt is set and is in the future, the rate limit is genuine — never clear it.
+    if (Number.isFinite(resetMs) && resetMs > now) return false;
+    // No mins > STALE_RL_MAX_MINS check — minutesRemaining alone can't distinguish
+    // between stale data (should be cleared) and genuine long-lived rate limits (82h).
+    // Check rateLimitedAt age as staleness signal instead.
+    const limitedAt = st.rateLimitedAt ? Date.parse(st.rateLimitedAt) : NaN;
+    if (Number.isFinite(limitedAt) && !Number.isFinite(resetMs) && now - limitedAt > STALE_RL_MAX_MINS * 60_000)
+      return true;
     if (accountTokenFresh(a, now) && typeof mins === 'number' && mins > 60) return true;
     return false;
   };
-
-  // Explicit: clear stale cooldowns when rateLimitResetAt (or embedded resetAt) has passed
-  if (resetAtPassed(a.rateLimitStatus, a.rateLimitResetAt, now)) return true;
-  if (resetAtPassed(a.opusRateLimitStatus, a.opusRateLimitStatus?.resetAt, now)) return true;
 
   if (inspect(a.rateLimitStatus, a.rateLimitResetAt)) return true;
   if (inspect(a.opusRateLimitStatus, a.opusRateLimitStatus?.resetAt)) return true;
@@ -237,13 +294,6 @@ function rateLimitLooksStale(a, now = Date.now()) {
     if (accountTokenFresh(a, now)) return true;
   }
   return false;
-}
-
-function resetAtPassed(st, fallback, now = Date.now()) {
-  const resetAt = st?.resetAt || fallback;
-  if (!resetAt) return false;
-  const ms = Date.parse(resetAt);
-  return Number.isFinite(ms) && ms <= now;
 }
 async function liveUsage(email) {
   if (!email) return null;
@@ -258,19 +308,16 @@ async function liveUsage(email) {
       signal: AbortSignal.timeout(5000),
     });
     if (!r.ok) return cached?.data ?? null;
-    // Hybrid: body (utilization) + headers (rate reset signals when present)
-    const headers = {};
-    r.headers.forEach((v, k) => {
-      headers[k.toLowerCase()] = v;
-    });
     const d = await r.json();
     const data = {
       u5: d?.five_hour?.utilization ?? null,
       u7: d?.seven_day?.utilization ?? null,
-      // capture any reset header for hybrid RL detection if body alone insufficient
-      resetHeader: headers['retry-after'] || headers['anthropic-ratelimit-unified-tokens-reset'] || null,
+      u7s: d?.seven_day_sonnet?.utilization ?? null,
+      u7o: d?.seven_day_opus?.utilization ?? null,
+      resets7: d?.seven_day?.resets_at ?? null, // ISO string — used for exact re-enable scheduling
     };
     liveUsageCache.set(email, { at: Date.now(), data });
+    writeSharedUsageCache(email, data);
     return data;
   } catch {
     return cached?.data ?? null;
@@ -329,20 +376,15 @@ async function clearStaleCooldowns(auth, accts) {
   for (const a of accts) {
     if (!rateLimitLooksStale(a, now)) continue;
     const mins = a.rateLimitStatus?.minutesRemaining ?? '?';
-    const resetPassed =
-      resetAtPassed(a.rateLimitStatus, a.rateLimitResetAt, now) ||
-      resetAtPassed(a.opusRateLimitStatus, a.opusRateLimitStatus?.resetAt, now);
-    if (DRY) {
-      log(`[dry] clear stale RL ${a.name} (mins=${mins}${resetPassed ? ', resetAt passed' : ''})`);
+    if (!MUTATIONS_ENABLED) {
+      log(`[dry] clear stale RL ${a.name} (mins=${mins})`);
       cleared++;
       continue;
     }
     const res = await jfetch(`/admin/claude-accounts/${a.id}/reset-status`, { method: 'POST', headers: auth });
     if (res.status >= 200 && res.status < 300) {
       cleared++;
-      log(
-        `${a.name}: cleared stale RL/error cache (was mins=${mins}${resetPassed ? ' — rateLimitResetAt passed' : ''})`,
-      );
+      log(`${a.name}: cleared stale RL/error cache (was mins=${mins})`);
     }
   }
   return cleared;
@@ -355,8 +397,7 @@ async function recoverSchedulableAfterClear(auth, accts) {
     if (a.schedulable !== false) continue;
     if (a.rateLimitStatus?.isRateLimited || a.opusRateLimitStatus?.isRateLimited) continue;
     if (a.overloadStatus?.isOverloaded) continue;
-    if (!accountTokenFresh(a, now)) continue;
-    if (DRY) {
+    if (!MUTATIONS_ENABLED) {
       log(`[dry] re-enable ${a.name} after stale clear`);
       enabled++;
       continue;
@@ -374,58 +415,84 @@ async function recoverSchedulableAfterClear(auth, accts) {
   return enabled;
 }
 
-// Feed live headroom (from targeted quota probe) back into CRS account record.
-// This supplies the scheduler with fresh per-account utilization/headroom so
-// load-balancing, concurrency caps, and selection use authoritative 5h/7d numbers
-// instead of stale claudeUsage cache.
-async function feedLiveHeadroom(auth, a, lu) {
-  if (!lu || DRY) return false;
-  const update = {
-    claudeUsage: {
-      fiveHour: { utilization: lu.u5 ?? null, updatedAt: new Date().toISOString() },
-      sevenDay: { utilization: lu.u7 ?? null, updatedAt: new Date().toISOString() },
-    },
-  };
-  try {
-    const r = await jfetch(`/admin/claude-accounts/${a.id}`, {
-      method: 'PUT',
+async function clearRecoveredRateLimits(auth, accts) {
+  let cleared = 0;
+  for (const a of accts) {
+    if (!liveUsageProvesRateLimitRecovery(a, VIABLE_CAP)) continue;
+    const worst = liveUsageWorst(a._liveUsage);
+    if (!MUTATIONS_ENABLED) {
+      log(`[dry] clear recovered RL ${a.name} (live max=${worst}%)`);
+      continue;
+    }
+    const res = await jfetch(`/admin/claude-accounts/${a.id}/reset-status`, {
+      method: 'POST',
       headers: auth,
-      body: JSON.stringify(update),
     });
-    return r.status >= 200 && r.status < 300;
-  } catch {
-    return false;
+    if (res.status >= 200 && res.status < 300) {
+      cleared++;
+      log(`${a.name}: cleared recovered host-local RL (live max=${worst}%)`);
+    }
   }
+  return cleared;
 }
 
 // ── policy ───────────────────────────────────────────────────────────────────
-const WARN_STATUSES = new Set(['allowed_warning', 'warning', 'blocked', 'exceeded', 'limited', 'stopped']);
+function hardHoldReason(a, nowMs) {
+  const status = String(a.status || '');
+  if (['blocked', 'auth_repair', 'error'].includes(status)) return `hard-status ${status}`;
+  const weeklyEndMs = a.weeklyRateLimitEndAt ? Date.parse(a.weeklyRateLimitEndAt) : NaN;
+  if (Number.isFinite(weeklyEndMs) && weeklyEndMs > nowMs) {
+    return `weekly-exhausted until ${a.weeklyRateLimitEndAt?.slice(0, 16)}`;
+  }
+  return null;
+}
 
 function decideMaxOut(accts, nowMs) {
   return accts.map((a) => {
     const cu = a.claudeUsage || {};
     const lu = a._liveUsage;
-    const u5 = lu?.u5 ?? cu.fiveHour?.utilization;
-    const u7 = lu?.u7 ?? cu.sevenDay?.utilization;
+    const updMs = cu.updatedAt ? Date.parse(cu.updatedAt) : NaN;
+    const cuFresh = Number.isFinite(updMs) && (nowMs - updMs) / 60000 < FRESH_MIN;
+    // Only use claudeUsage as fallback when actually fresh
+    const u5 = lu?.u5 ?? (cuFresh ? cu.fiveHour?.utilization : null);
+    const u7 = lu?.u7 ?? (cuFresh ? cu.sevenDay?.utilization : null);
+    const u7s = lu?.u7s ?? (cuFresh ? cu.sevenDaySonnet?.utilization : null);
+    const u7o = lu?.u7o ?? (cuFresh ? cu.sevenDayOpus?.utilization : null);
     const sw = a.sessionWindow?.sessionWindowStatus || null;
     const cur = a.schedulable !== false;
     const tokenExpiresAt = Number(a.tokenExpiresAt || a.expiresAt || 0);
     const staleToken =
       !Number.isFinite(tokenExpiresAt) || tokenExpiresAt <= 0 || tokenExpiresAt <= nowMs + TOKEN_MIN_FRESH_MS;
+    const liveKnown = typeof u5 === 'number' && typeof u7 === 'number';
+    const worst = liveKnown ? Math.max(u5, u7, ...[u7s, u7o].filter((value) => typeof value === 'number')) : null;
     const rl = genuineRateLimit(a, nowMs);
     const overloaded = genuineOverload(a, nowMs);
+    const status = String(a.status || '');
+    const hardStatus = ['blocked', 'auth_repair', 'error'].includes(status);
 
     let desired = true;
-    let reason = `max-out (5h=${u5 ?? '?'} 7d=${u7 ?? '?'} sw=${sw ?? 'none'})`;
-    if (staleToken) {
+    let reason = `max-out (5h=${u5 ?? '?'} 7d=${u7 ?? '?'} sonnet7d=${u7s ?? '?'} opus7d=${u7o ?? '?'} sw=${sw ?? 'none'})`;
+    if (hardStatus) {
       desired = false;
-      reason = tokenExpiresAt ? `stale-token ${new Date(tokenExpiresAt).toISOString()}` : 'stale-token missing-expiry';
+      reason = `hard-status ${status}`;
+    } else if (!liveKnown) {
+      // Missing telemetry is not quota exhaustion. Preserve the last known
+      // schedulability until a live quota sample or a hard auth/token state
+      // proves the account unusable; this prevents 429/query gaps from
+      // shrinking the pool and making viable/schedulable counts diverge.
+      desired = cur;
+      reason = staleToken
+        ? tokenExpiresAt
+          ? `stale-token ${new Date(tokenExpiresAt).toISOString()}`
+          : 'stale-token missing-expiry'
+        : 'live usage unavailable — preserving schedulability';
+    } else if (worst >= VIABLE_CAP) {
+      desired = false;
+      reason = `not viable: max(5h=${u5},7d=${u7},sonnet7d=${u7s ?? '?'},opus7d=${u7o ?? '?'}) >= ${VIABLE_CAP}%`;
     } else if (rl) {
-      desired = false;
-      reason = 'rate-limited (live)';
+      reason = 'rate-limited, staying schedulable — CRS retry handles cooldown';
     } else if (overloaded) {
-      desired = false;
-      reason = 'overloaded(529 live)';
+      reason = 'overloaded(529), staying schedulable — CRS retry handles cooldown';
     }
     return { a, cur, desired, reason, soft: false, sw, u5: u5 ?? '?', rl, overloaded };
   });
@@ -436,49 +503,45 @@ function decideConservative(accts, nowMs) {
     const cu = a.claudeUsage || {};
     const lu = a._liveUsage;
     const updMs = cu.updatedAt ? Date.parse(cu.updatedAt) : NaN;
-    const fresh = !!lu || (Number.isFinite(updMs) && (nowMs - updMs) / 60000 < FRESH_MIN);
-    const u5 = lu?.u5 ?? cu.fiveHour?.utilization;
-    const u7 = lu?.u7 ?? cu.sevenDay?.utilization;
-    const u7o = cu.sevenDayOpus?.utilization;
+    const cuFresh = Number.isFinite(updMs) && (nowMs - updMs) / 60000 < FRESH_MIN;
+    const fresh = !!lu || cuFresh;
+    // Only use claudeUsage as fallback when it's actually fresh (<FRESH_MIN).
+    // Stale cache (hours/days old) must never gate scheduling decisions.
+    const u5 = lu?.u5 ?? (cuFresh ? cu.fiveHour?.utilization : null);
+    const u7 = lu?.u7 ?? (cuFresh ? cu.sevenDay?.utilization : null);
+    const u7o = lu?.u7o ?? (cuFresh ? cu.sevenDayOpus?.utilization : null);
     const sw = a.sessionWindow?.sessionWindowStatus || null;
     const cur = a.schedulable !== false;
     const rl = genuineRateLimit(a, nowMs);
     const overloaded = genuineOverload(a, nowMs);
+    const weeklyEndMs = a.weeklyRateLimitEndAt ? Date.parse(a.weeklyRateLimitEndAt) : NaN;
+    const weeklyActive = Number.isFinite(weeklyEndMs) && weeklyEndMs > nowMs;
+    const hardHold = hardHoldReason(a, nowMs);
 
-    const weeklyBreach =
-      fresh && ((typeof u7 === 'number' && u7 >= OFF_7D) || (typeof u7o === 'number' && u7o >= OFF_7D));
-    const utilBreach = fresh && ((u5 ?? 0) >= OFF_5H || weeklyBreach);
-    const utilClear = !fresh || ((u5 ?? 0) < ON_5H && (u7 ?? 0) < ON_7D && (u7o ?? 0) < ON_7D);
-
-    let desired = cur;
-    let reason = 'hold';
+    let desired = true;
+    let reason = 'active';
     let soft = false;
-    if (rl) {
+    if (hardHold) {
       desired = false;
-      reason = 'rate-limited';
+      reason = hardHold;
+      soft = false;
+    } else if (weeklyActive) {
+      desired = false;
+      reason = `weekly-exhausted until ${a.weeklyRateLimitEndAt?.slice(0, 16)}`;
+      soft = false;
+    } else if (rl) {
+      reason = `rate-limited, staying schedulable — CRS retry handles cooldown`;
     } else if (overloaded) {
-      desired = false;
-      reason = 'overloaded(529)';
-    } else if (sw && WARN_STATUSES.has(sw)) {
-      desired = false;
-      reason = `sessionWindow=${sw}`;
-      soft = true;
-    } else if (utilBreach) {
-      desired = false;
-      reason = `util 5h=${u5} 7d=${u7} 7dOpus=${u7o} ≥ off`;
-      soft = !weeklyBreach;
-    } else if ((sw === 'allowed' || sw === null) && utilClear) {
-      desired = true;
-      reason = `healthy (sw=${sw ?? 'none'}${fresh ? `, 5h=${u5}` : ', usage stale/absent'})`;
+      reason = `overloaded(529), staying schedulable — CRS retry handles cooldown`;
     }
     return { a, cur, desired, reason, soft, sw, u5: u5 ?? '?', rl, overloaded };
   });
 
-  let usable = decisions.filter((d) => d.desired && !d.rl && !d.overloaded).length;
+  let usable = decisions.filter((d) => d.desired && !d.overloaded).length;
   if (usable < FLOOR) {
     const unum = (d) => (typeof d.u5 === 'number' ? d.u5 : 50);
     const revertable = decisions
-      .filter((d) => d.desired === false && d.soft && !d.rl && !d.overloaded)
+      .filter((d) => d.desired === false && d.soft && !d.overloaded)
       .sort((x, y) => unum(x) - unum(y));
     for (const d of revertable) {
       if (usable >= FLOOR) break;
@@ -486,7 +549,7 @@ function decideConservative(accts, nowMs) {
       d.reason = `FLOOR(${FLOOR}): held schedulable despite ${d.reason}`;
       usable++;
     }
-    const final = decisions.filter((d) => d.desired && !d.rl && !d.overloaded).length;
+    const final = decisions.filter((d) => d.desired && !d.overloaded).length;
     if (final < FLOOR)
       log(`WARNING: only ${final} usable account(s) (< floor ${FLOOR}) — pool is capacity-constrained`);
   }
@@ -495,7 +558,8 @@ function decideConservative(accts, nowMs) {
   for (const d of decisions) {
     const uuid = d.a.subscriptionInfo?.organizationUuid;
     if (!uuid || !d.desired) continue;
-    (byUuid[uuid] ||= []).push(d);
+    const bucket = byUuid[uuid] || (byUuid[uuid] = []);
+    bucket.push(d);
   }
   for (const group of Object.values(byUuid)) {
     if (group.length < 2) continue;
@@ -514,7 +578,8 @@ function dedupByLogin(decisions) {
   for (const d of decisions) {
     const login = accountVaultKey(d.a);
     if (!login || !d.desired) continue;
-    (byLogin[login] ||= []).push(d);
+    const bucket = byLogin[login] || (byLogin[login] = []);
+    bucket.push(d);
   }
   for (const [login, group] of Object.entries(byLogin)) {
     if (group.length < 2) continue;
@@ -531,13 +596,158 @@ function dedupByLogin(decisions) {
 function decide(accts) {
   const nowMs = Date.now();
   if (CRS_POLICY === 'max-out' || CRS_POLICY === 'maxout') {
-    return dedupByLogin(decideMaxOut(accts, nowMs));
+    return decideMaxOut(accts, nowMs);
   }
   return decideConservative(accts, nowMs);
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
+// ── reset watcher ─────────────────────────────────────────────────────────────
+// Re-enables accounts whose 7-day quota window has reset according to:
+//   1. weeklyRateLimitEndAt stored in CRS (set by relay when it receives the
+//      authoritative retry-after header from Anthropic)
+//   2. live resets_at from /oauth/usage (stored in _liveUsage.resets7)
+// Called every daemon tick — cheap because it's just a timestamp comparison.
+async function reEnableResetAccounts(auth, accts) {
+  const now = Date.now();
+  let reenabled = 0;
+  for (const a of accts) {
+    if (a.schedulable !== false) continue; // already on
+    if (hardHoldReason(a, now)) continue;
+
+    // Source 1: weeklyRateLimitEndAt written by CRS relay from retry-after header
+    const weeklyEndMs = a.weeklyRateLimitEndAt ? Date.parse(a.weeklyRateLimitEndAt) : NaN;
+    const weeklyExpired = Number.isFinite(weeklyEndMs) && weeklyEndMs <= now;
+
+    // Source 2: live resets_at from /oauth/usage (most authoritative)
+    const liveResets7 = a._liveUsage?.resets7;
+    const liveResetMs = liveResets7 ? Date.parse(liveResets7) : NaN;
+    const liveExpired = Number.isFinite(liveResetMs) && liveResetMs <= now;
+
+    // Source 3: live u7 below threshold — quota genuinely recovered
+    const liveU7 = a._liveUsage?.u7;
+    const liveRecovered = typeof liveU7 === 'number' && liveU7 < ON_7D;
+
+    if (!weeklyExpired && !liveExpired && !liveRecovered) continue;
+
+    const reason = liveRecovered
+      ? `live u7=${liveU7}% < on-threshold ${ON_7D}%`
+      : liveExpired
+        ? `live resets_at=${liveResets7} passed`
+        : `weeklyRateLimitEndAt=${a.weeklyRateLimitEndAt} passed`;
+
+    if (!MUTATIONS_ENABLED) {
+      log(`[dry] reset-watcher: would re-enable ${a.name} (${reason})`);
+      continue;
+    }
+    const put = await jfetch(`/admin/claude-accounts/${a.id}/toggle-schedulable`, {
+      method: 'PUT',
+      headers: auth,
+      body: JSON.stringify({ schedulable: true }),
+    });
+    log(`reset-watcher: re-enabled ${a.name} → schedulable=true (${reason}) [HTTP ${put.status}]`);
+    reenabled++;
+  }
+  return reenabled;
+}
+
+function loadMagicLinkState() {
+  try {
+    return existsSync(MAGIC_LINK_STATE_PATH) ? JSON.parse(readFileSync(MAGIC_LINK_STATE_PATH, 'utf8')) : {};
+  } catch {
+    return {};
+  }
+}
+function saveMagicLinkState(s) {
+  if (!MUTATIONS_ENABLED) return;
+  try {
+    mkdirSync(dirname(MAGIC_LINK_STATE_PATH), { recursive: true });
+    const tmp = MAGIC_LINK_STATE_PATH + '.tmp.' + process.pid;
+    writeFileSync(tmp, JSON.stringify(s, null, 2));
+    renameSync(tmp, MAGIC_LINK_STATE_PATH);
+  } catch {}
+}
+
+function accountVaultEmail(a) {
+  return accountVaultKey(a) || a.email || a.name;
+}
+
+async function dispatchMagicLinkForStale(accts, decisions) {
+  if (!IS_MACOS) return;
+  const state = loadMagicLinkState();
+  const nowMs = Date.now();
+  const candidates = accts
+    .map((a) => {
+      const key = accountVaultKey(a);
+      if (!key) return null;
+      const decision = decisions?.find((d) => d.a.id === a.id);
+      const tokenExp = Number(a.tokenExpiresAt || a.expiresAt || 0);
+      const tokenStale = !Number.isFinite(tokenExp) || tokenExp <= 0 || tokenExp <= nowMs + TOKEN_MIN_FRESH_MS;
+      const noLiveData = !a._liveUsage;
+      const last = state[key];
+      const dispatchedRecently = last && nowMs - last.dispatchedAt < MAGIC_LINK_COOLDOWN_MS;
+      if (dispatchedRecently) return null;
+      if (!tokenStale) return null; // fresh token, skip magic-link
+      return { a, key, reason: tokenStale ? 'token-expired' : 'no-live-data', need: a._needsReauth || noLiveData };
+    })
+    .filter(Boolean);
+
+  if (!candidates.length) return 0;
+  for (const c of candidates.slice(0, MAX_MAGIC_LINKS_PER_TICK)) {
+    const email = accountVaultEmail(c.a);
+    log(`magic-link: dispatching for ${c.a.name} (${c.reason})`);
+    if (!MUTATIONS_ENABLED) {
+      log(`[dry] magic-link: would spawn rotate.mjs --magic-link --to ${email}`);
+      state[c.key] = { dispatchedAt: nowMs, email, reason: c.reason };
+      continue;
+    }
+    const rotatePath = join(__dirname, 'rotate.mjs');
+    const child = spawn(process.execPath, [rotatePath, '--magic-link', '--force', '--to', email], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+      env: {
+        ...process.env,
+        CRS_DRY: undefined,
+        CLAUDE_ROTATION_MAGIC_LINK_AUTO: '1',
+        PATH: `/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:${process.env.PATH || ''}`,
+        CLAUDE_ROT_MAGIC_POLL_MS: process.env.CLAUDE_ROT_MAGIC_POLL_MS || '180000',
+        CLAUDE_ROT_MAGIC_POLL_INTERVAL_MS: process.env.CLAUDE_ROT_MAGIC_POLL_INTERVAL_MS || '2500',
+        CLAUDE_ROT_MAGIC_AUTHORIZE_WAIT_MS: process.env.CLAUDE_ROT_MAGIC_AUTHORIZE_WAIT_MS || '45000',
+      },
+    });
+    child.unref();
+    const pid = child.pid;
+    child.stdout.on('data', (d) => log(`magic-link[${pid}]: ${d.toString().trim()}`));
+    child.stderr.on('data', (d) => log(`magic-link[${pid}]: ${d.toString().trim()}`));
+    child.on('error', (e) => log(`magic-link[${pid}]: spawn error ${e.message}`));
+    child.on('exit', (code) => log(`magic-link[${pid}]: exited code=${code}`));
+    state[c.key] = { dispatchedAt: nowMs, email, reason: c.reason, pid };
+  }
+  saveMagicLinkState(state);
+  return candidates.slice(0, MAX_MAGIC_LINKS_PER_TICK).length;
+}
+
 async function main() {
+  // patch 048-throttle: simple p-limit-style batched concurrency.
+  async function pLimitUsage(accts) {
+    const CONCURRENCY = Number(process.env.CRS_PRIORITY_CONCURRENCY || 4);
+    let i = 0;
+    async function worker() {
+      while (i < accts.length) {
+        const a = accts[i++];
+        a._liveUsage = await liveUsage(accountVaultKey(a));
+      }
+    }
+    const workers = [];
+    for (let k = 0; k < Math.min(CONCURRENCY, accts.length); k++) workers.push(worker());
+    await Promise.all(workers);
+  }
+
+  const holdPath = join(homedir(), '.claude', 'state', 'crs-activate-all-hold');
+  if (existsSync(holdPath) && !STATUS && !DRY) {
+    log('activate-all hold active — skipping disable tick (remove ~/.claude/state/crs-activate-all-hold to resume)');
+    return;
+  }
   if (C.enabled === false && !STATUS && !DRY) {
     log('crs.enabled=false — skipping tick');
     return;
@@ -558,27 +768,55 @@ async function main() {
       log(`stale-cooldown: re-enabled ${reenabled} schedulable account(s)`);
     }
   }
-  // Live per-account quota poller (60-120s cadence): hybrid of CRS-provided
-  // rateLimitStatus / sessionWindow / overload (populated from upstream response
-  // headers in the relay) + targeted /oauth/usage probe for precise u5/u7 headroom.
-  // Throttled sequential probes keep it polite under 60-120s window; feeds headroom
-  // to scheduler after.
-  let liveN = 0;
-  for (const a of accts) {
-    const key = accountVaultKey(a);
-    a._liveUsage = await liveUsage(key);
-    if (a._liveUsage) liveN++;
-    // Throttle ~150ms between probes (fits 60-120s hybrid header+probe cadence for ~13 accts)
-    await new Promise((r) => setTimeout(r, 150));
+  // Authoritative quota: query Anthropic /oauth/usage directly per account.
+  // patch 048-throttle: batched concurrency (4 at a time) to stay well under
+  // the per-IP rate limit while still parallelizing the read-only calls.
+  await pLimitUsage(accts);
+  const liveN = accts.filter((a) => a._liveUsage).length;
+  const liveUsageById = new Map(accts.map((a) => [a.id, a._liveUsage]));
+  const recovered = await clearRecoveredRateLimits(auth, accts);
+  if (recovered) {
+    accts = await getAccounts(auth);
+    for (const a of accts) a._liveUsage = liveUsageById.get(a.id) || null;
+    log(`live-quota: cleared ${recovered} recovered rate-limit hold(s)`);
   }
-  // Feed fresh headroom/utilization from targeted probes into CRS so scheduler
-  // (unifiedClaudeScheduler etc) sees live quota headroom for selection/LB.
-  let fed = 0;
-  for (const a of accts) {
-    if (a._liveUsage && (await feedLiveHeadroom(auth, a, a._liveUsage))) fed++;
+
+  // Reconcile the persisted weekly hold against fresh live usage. A historical
+  // retry-after must not keep an account disabled after /oauth/usage proves the
+  // weekly window has headroom again.
+  if (MUTATIONS_ENABLED) {
+    for (const a of accts) {
+      const resets7 = a._liveUsage?.resets7;
+      const u7 = a._liveUsage?.u7;
+      if (typeof u7 !== 'number') continue;
+      if (u7 >= 90 && resets7 && !a.weeklyRateLimitEndAt) {
+        await jfetch(`/admin/claude-accounts/${a.id}`, {
+          method: 'PUT',
+          headers: auth,
+          body: JSON.stringify({ weeklyRateLimitEndAt: resets7 }),
+        }).catch(() => {});
+        a.weeklyRateLimitEndAt = resets7;
+      } else if (u7 < ON_7D && a.weeklyRateLimitEndAt) {
+        await jfetch(`/admin/claude-accounts/${a.id}`, {
+          method: 'PUT',
+          headers: auth,
+          body: JSON.stringify({ weeklyRateLimitEndAt: null }),
+        }).catch(() => {});
+        log(`${a.name}: cleared stale weekly hold (live u7=${u7}% < ${ON_7D}%)`);
+        a.weeklyRateLimitEndAt = null;
+      }
+    }
   }
-  if (fed) log(`headroom feed: updated ${fed} account(s) in CRS for scheduler`);
+
+  // The policy decision below owns both enable and disable transitions. A
+  // separate reset-watcher mutation caused duplicate logins to flap true then
+  // false every tick before login de-duplication was applied.
   const decisions = decide(accts);
+
+  // Auto-magic-link for accounts with stale tokens / no live usage data
+  // (Mac-only; Linux handles token refresh differently.)
+  const magicLinks = PRIORITY_MAGIC_LINK_AUTHORITY ? await dispatchMagicLinkForStale(accts, decisions) : 0;
+  if (magicLinks > 0) log(`magic-link: ${magicLinks} dispatch(s) this tick`);
 
   if (STATUS) {
     console.log(`CRS pool @ ${BASE} — ${decisions.filter((d) => d.cur).length}/${decisions.length} schedulable`);
@@ -595,7 +833,7 @@ async function main() {
   for (const d of decisions) {
     if (d.desired === d.cur) continue;
     changed++;
-    if (DRY) {
+    if (!MUTATIONS_ENABLED) {
       log(`[dry] ${d.a.name}: ${d.cur}→${d.desired} (${d.reason})`);
       continue;
     }

@@ -1,13 +1,13 @@
 // ── Cross-machine account LEASES ─────────────────────────────────────────────
 //
-// Supersedes the static machine-pool split: every machine (e.g. a laptop and a
-// remote/EC2 box) keeps its OWN rotation logic/daemon and may use ALL accounts.
-// The ONLY cross-machine constraint is: the same account must NEVER be ACTIVE on
-// two machines concurrently.
+// 2026-06-06 (supersedes the static machine-pool split): BOTH machines (the
+// Mac and this EC2 box, dev-sandbox-fra) keep their OWN rotation logic/daemon and
+// may use ALL accounts. The ONLY cross-machine constraint is: the same account
+// must NEVER be ACTIVE on both machines concurrently.
 //
 // Coordination store: a small private S3 object per account.
-//   bucket: set CLAUDE_LEASE_BUCKET (e.g. "claude-account-leases-<account-id>");
-//           create it with all public access blocked + SSE-AES256.
+//   bucket: claude-account-leases-123456789012  (us-east-1, all public access
+//           blocked, SSE-AES256). Override via CLAUDE_LEASE_BUCKET.
 //   key:    leases/<accountKey>.json   (one object per account → no
 //           read-modify-write races between machines)
 //   body:   { "host": "<os.hostname()>", "account": "<key>", "ts": <epoch_ms> }
@@ -26,18 +26,22 @@
 //
 // PLATFORM-NEUTRAL: host identity is os.hostname(); all S3 access is via the
 // `aws` CLI default credential chain (we delete AWS_PROFILE from the child env
-// so a stale/broken AWS_PROFILE in the parent shell can't break it). For
-// coordination to be MUTUAL, every participating machine needs (a) this same
-// rotate.mjs/daemon.mjs version and (b) working AWS creds for the lease bucket.
-// Until a machine is updated, the others honoring leases is one-sided but
-// harmless (updated hosts yield; the unaware host simply ignores leases).
+// so a stale/broken AWS_PROFILE in the parent shell can't break it — both the
+// EC2 IAM user and the Mac's default creds resolve correctly). For coordination
+// to be MUTUAL, the Mac needs (a) this same rotate.mjs/daemon.mjs version and
+// (b) working AWS creds for account 123456789012. Until the Mac is updated, EC2
+// honoring leases is one-sided but harmless (EC2 yields; Mac is unaware).
 
 import { spawnSync } from 'child_process';
 import { hostname } from 'os';
 
-// Set CLAUDE_LEASE_BUCKET to your private lease bucket. When unset, cross-machine
-// lease coordination is disabled (rotation runs single-machine, fail-open).
-const LEASE_BUCKET = process.env.CLAUDE_LEASE_BUCKET || '';
+// CRS now owns account-level load balancing. The old S3 lease layer was useful
+// when Mac and EC2 rotated local accounts independently, but with CRS it can
+// hide valid reauth targets and fight the central scheduler. Keep the public
+// functions as no-ops so existing callers remain compatible.
+const LEASES_DISABLED = true;
+
+const LEASE_BUCKET = process.env.CLAUDE_LEASE_BUCKET || 'claude-account-leases-123456789012';
 const LEASE_PREFIX = 'leases/';
 const LEASE_REGION = process.env.CLAUDE_LEASE_REGION || 'us-east-1';
 // Daemon heartbeats every loop (seconds–minutes); 2h TTL tolerates pauses,
@@ -70,8 +74,8 @@ function runAws(args, { input } = {}) {
 // Read ALL leases in one S3 list+get pass. Returns a Map<accountKey,{host,ts}>.
 // Fails open: any error → empty map (no exclusions).
 export function readAllLeases(log = () => {}) {
+  if (LEASES_DISABLED) return new Map();
   const leases = new Map();
-  if (!LEASE_BUCKET) return leases; // no bucket configured → single-machine, no coordination
   try {
     const ls = runAws([
       's3api',
@@ -112,6 +116,7 @@ export function readAllLeases(log = () => {}) {
 // Per host, only the NEWEST fresh lease is considered active — older leases
 // from the same host are stale rotations that were never cleaned up.
 export function foreignActiveKeys(log = () => {}) {
+  if (LEASES_DISABLED) return new Set();
   const me = selfHost();
   const now = Date.now();
   // group all fresh foreign leases by host, then keep only the newest per host
@@ -130,7 +135,7 @@ export function foreignActiveKeys(log = () => {}) {
 // Deletes stale leases from this host for other accounts so the other machine
 // doesn't exclude accounts we're no longer using.
 export function writeLease(accountKey, log = () => {}) {
-  if (!LEASE_BUCKET) return false; // no bucket configured → nothing to coordinate
+  if (LEASES_DISABLED) return true;
   try {
     const me = selfHost();
     const body = JSON.stringify({ host: me, account: accountKey, ts: Date.now() });
@@ -171,11 +176,23 @@ export function writeLease(accountKey, log = () => {}) {
 // Filter a config.accounts list, dropping accounts foreign-leased & fresh.
 // Never drops `keepKey` (the account we're staying on / activating).
 export function applyAccountLeases(config, { keepKey = null, log = () => {} } = {}) {
+  if (LEASES_DISABLED) return config;
   try {
     const blocked = foreignActiveKeys(log);
     if (!blocked.size) return config;
     const keyOf = (a) => a.label || a.email;
-    config.accounts = config.accounts.filter((a) => keyOf(a) === keepKey || !blocked.has(keyOf(a)));
+    const filtered = config.accounts.filter((a) => keyOf(a) === keepKey || !blocked.has(keyOf(a)));
+    // Last resort (2026-06-12 policy): if lease-filtering leaves no
+    // rotation candidate beyond keepKey itself, a stranded session beats a
+    // shared lease — fail open and keep the leased accounts eligible.
+    const candidates = filtered.filter((a) => keyOf(a) !== keepKey);
+    if (!candidates.length) {
+      log(
+        `[lease] all candidates foreign-leased (${[...blocked].join(', ')}) — last-resort fail-open, keeping leased accounts eligible`,
+      );
+      return config;
+    }
+    config.accounts = filtered;
     log(`[lease] excluding foreign-active accounts: ${[...blocked].join(', ')}`);
   } catch (e) {
     log(`[lease] applyAccountLeases error (fail-open): ${e.message}`);

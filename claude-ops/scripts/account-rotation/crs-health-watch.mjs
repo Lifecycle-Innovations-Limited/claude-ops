@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+import { loadClaudeHarnessEnv } from './claude-harness-env.mjs';
 // crs-health-watch.mjs — fleet-level CRS failsafe (single tick; launchd-driven).
 //
 // PROBLEM: the global CRS default lives in ~/.claude/settings.json `env`
-// (ANTHROPIC_BASE_URL=CRS + CLAUDE_CODE_OAUTH_TOKEN=cr_…). settings.json env is
+// (ANTHROPIC_BASE_URL=CRS + ANTHROPIC_API_KEY=cr_…). settings.json env is
 // applied at `claude` startup and OVERRIDES any childEnv a respawn sets — so the
 // per-session health-gate in bg-respawn.mjs CANNOT protect new/respawned sessions
 // when the relay is down: they'd boot with base=CRS pointing at a dead upstream and
@@ -13,7 +14,7 @@
 //   • DOWN for DOWN_STRIKES consecutive ticks  → FALLBACK: strip the two CRS env keys
 //     from settings.json (new/respawned sessions go direct keychain auth). Drop a
 //     marker so we know we're in fallback.
-//   • UP for UP_STRIKES consecutive ticks while in fallback → RESTORE: re-add the two
+//   • UP for UP_STRIKES consecutive ticks while in fallback → RESTORE: re-add the persisted CRS
 //     CRS env keys. Clear the marker.
 //   • Otherwise hold. State (counters + mode) persisted to crs-health-watch.state.json.
 //
@@ -30,7 +31,6 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { applyRouteToSettings, readRouteState, setRouteMode } from './route-state.mjs';
-import { healCrsRelay } from './crs-heal-relay.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const args = new Set(process.argv.slice(2));
@@ -60,12 +60,11 @@ function routeCrsConfig() {
 }
 
 const ROUTE_CRS = routeCrsConfig();
-const CRS_BASE = process.env.CRS_BASE_URL || ROUTE_CRS.baseUrl || 'http://127.0.0.1:3000/api';
-const HEALTH_URL = process.env.CRS_HEALTH_URL || ROUTE_CRS.healthUrl || CRS_BASE.replace(/\/api\/?$/, '/health');
-const CRS_SMOKE_URL = process.env.CRS_SMOKE_URL || `${CRS_BASE}/v1/messages?beta=true`;
+const CRS_BASE = ROUTE_CRS.baseUrl || process.env.CRS_BASE_URL || 'http://127.0.0.1:8091/api';
+const HEALTH_URL = ROUTE_CRS.healthUrl || process.env.CRS_HEALTH_URL || CRS_BASE.replace(/\/api\/?$/, '/health');
+const CRS_SMOKE_URL = process.env.CRS_SMOKE_URL || `${CRS_BASE}/v1/models`;
 const CRS_SMOKE_MODEL = process.env.CRS_SMOKE_MODEL || 'claude-sonnet-4-6';
-// Phase 1b: default ON (was opt-in ==='1' which caused silent-healthy when inference=false).
-const CRS_ENABLE_INFERENCE_SMOKE = process.env.CRS_ENABLE_INFERENCE_SMOKE !== '0';
+const CRS_ENABLE_INFERENCE_SMOKE = process.env.CRS_ENABLE_INFERENCE_SMOKE === '1';
 const DOWN_STRIKES = +(process.env.CRS_DOWN_STRIKES || 3); // ~3 min at 60s tick
 const UP_STRIKES = +(process.env.CRS_UP_STRIKES || 1);
 // OS-wedge auto-reboot threshold. Must be >= DOWN_STRIKES so we only reboot AFTER
@@ -100,12 +99,6 @@ function probe() {
       encoding: 'utf8',
       timeout: 5000,
     }).trim();
-    // Phase 1b: also fail probe on CRS-reported degraded (inference smoke is the separate hard check for "inference=false")
-    let body = '';
-    try {
-      body = execFileSync('curl', ['-sS', '--max-time', '2', HEALTH_URL], { encoding: 'utf8', timeout: 3000 }).trim();
-    } catch {}
-    if (body && /"status"\s*:\s*"(degraded|unhealthy)"/i.test(body)) return false;
     return code === '200';
   } catch {
     return false;
@@ -115,15 +108,9 @@ function probe() {
 function probeInference() {
   let key = '';
   try {
-    key = readFileSync(join(__dirname, '.crkey'), 'utf8').trim();
+    key = loadClaudeHarnessEnv().CRS_API_KEY;
   } catch {}
   if (!key.startsWith('cr_')) return false;
-  const body = JSON.stringify({
-    model: CRS_SMOKE_MODEL,
-    max_tokens: 1,
-    stream: false,
-    messages: [{ role: 'user', content: 'ping' }],
-  });
   try {
     const code = execFileSync(
       'curl',
@@ -134,22 +121,16 @@ function probeInference() {
         '-w',
         '%{http_code}',
         '--max-time',
-        '25',
+        '5',
         '-H',
         `Authorization: Bearer ${key}`,
-        '-H',
-        'Content-Type: application/json',
-        '-H',
-        'anthropic-version: 2023-06-01',
-        '-d',
-        body,
         CRS_SMOKE_URL,
       ],
-      { encoding: 'utf8', timeout: 30_000 },
+      { encoding: 'utf8', timeout: 7_000 },
     ).trim();
-    // 529 means CRS selected a valid account and reached Anthropic, but the
-    // upstream is temporarily overloaded. That is not a CRS auth/routing fault.
-    return /^2\d\d$/.test(code) || code === '529';
+    // Authenticated /models proves the CRS relay is accepting the configured
+    // relay key and serving API requests without risking a hung upstream message.
+    return /^2\d\d$/.test(code);
   } catch {
     return false;
   }
@@ -178,9 +159,10 @@ function setEnvMode(mode) {
 function currentEnvMode() {
   const s = readJson(SETTINGS, { env: {} });
   const base = s.env?.ANTHROPIC_BASE_URL || '';
-  const tok = s.env?.CLAUDE_CODE_OAUTH_TOKEN || '';
+  const tok = s.env?.ANTHROPIC_API_KEY || '';
   const bedrock = s.env?.CLAUDE_CODE_USE_BEDROCK || '';
-  if (/127\.0\.0\.1:(3000|3005)|:(3000|3005)\/api/.test(base) && tok.startsWith('cr_')) return 'crs';
+  if (/127\.0\.0\.1:(3000|3005|8091|18091)|:(3000|3005|8091|18091)\/api/.test(base) && tok.startsWith('cr_'))
+    return 'crs';
   if (bedrock === '1') return 'bedrock';
   if (!base && !tok) return 'direct';
   return 'mixed';
@@ -318,7 +300,7 @@ function main() {
     return;
   }
   if (args.has('--restore')) {
-    if (probe() && (!CRS_ENABLE_INFERENCE_SMOKE || probeInference()) && setEnvMode('crs')) {
+    if (probe() && setEnvMode('crs')) {
       try {
         execFileSync('rm', ['-f', MARKER]);
       } catch {}
@@ -328,7 +310,7 @@ function main() {
       setEnvMode('direct');
       writeFileSync(MARKER, String(Date.now()));
       saveState({ down: 0, up: 0, mode: 'fail-closed' });
-      log('FORCED restore refused: CRS health or inference smoke failed → fail-closed env');
+      log('FORCED restore refused: canonical CRS proxy unavailable → fail-closed env');
       process.exitCode = 1;
     }
     return;
@@ -348,12 +330,8 @@ function main() {
   }
 
   const healthOk = probe();
-  const inferenceOk = CRS_ENABLE_INFERENCE_SMOKE ? probeInference() : false;
-  // Phase 1b: inference=false is hard-fail (triggers heal + affects route fallback) instead of silent healthy.
-  if (CRS_ENABLE_INFERENCE_SMOKE && !inferenceOk) {
-    healCrsRelay('inference-false');
-  }
-  const healthy = healthOk && (!CRS_ENABLE_INFERENCE_SMOKE || inferenceOk);
+  const inferenceOk = CRS_ENABLE_INFERENCE_SMOKE && healthOk ? probeInference() : false;
+  const healthy = healthOk;
   const st = loadState();
   if (healthy) {
     st.up += 1;
@@ -374,7 +352,7 @@ function main() {
       writeFileSync(MARKER, String(Date.now()));
       st.mode = 'fail-closed';
       log(
-        `CRS DOWN x${st.down} (>=${DOWN_STRIKES}) → FAIL-CLOSED: stripped provider env from settings.json; new/respawned sessions must not silently use direct or Bedrock`,
+        `canonical CRS proxy DOWN x${st.down} (>=${DOWN_STRIKES}) → FAIL-CLOSED: EC2 CRS and local CRS fallback are unavailable`,
       );
     }
   } else if (healthy && st.up >= UP_STRIKES && inFallback) {

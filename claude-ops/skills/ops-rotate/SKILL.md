@@ -28,7 +28,7 @@ Manage the optional multi-account Claude Max rotator. Off by default — flip
 | `crs`              | Show the CRS relay-pool schedulable state + priority-daemon health       |
 | `crs-tick`         | Run one CRS priority tick now (append `--dry-run` to preview, no writes) |
 
-## Two rotation models
+## Two rotation models, one refresh authority
 
 This skill manages **two complementary** account-management systems:
 
@@ -40,6 +40,15 @@ This skill manages **two complementary** account-management systems:
   toggles each account's `schedulable` flag from live utilization so the relay avoids
   near-maxed accounts and re-enables them on recovery. Off by default; see
   **ops-rotate-setup** to configure + install.
+
+CRS is a **dependency** of the rotator, not a peer: the keychain rotator (specifically
+`refresh-tokens.mjs`) is the single source of truth for OAuth token refresh across both
+models — both its own keychain single-active-slot pool and every account CRS uses. The
+CRS priority daemon never refreshes a token; it only ever toggles `schedulable` from a
+genuine 429 (utilization-based parking stays off by standing policy). See
+`scripts/account-rotation/NOTES-rotation-consistency.md` for the retired refresh paths
+and why splitting this into one authority matters (racing refreshes invalidate each
+other's single-use refresh_token and produce CRS "Invalid API key" 401 storms).
 
 ## Pre-flight (every invocation)
 
