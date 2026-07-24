@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { scryptSync } from 'node:crypto';
 import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname } from 'node:path';
 
 const MIN_FRESH_TOKEN_TTL_MS = 5 * 60_000;
+
+// Fixed salt for the token change-fingerprint below. It is fixed on purpose so
+// the same token pair always maps to the same digest, which is what lets
+// evaluateFreshToken compare two reads. It is not a secret.
+const TOKEN_FINGERPRINT_SALT = 'claude-rotation-token-fingerprint-v1';
 
 export class RotationSafetyError extends Error {
   constructor(code, message) {
@@ -61,13 +66,15 @@ export function tokenSnapshot(tokenJson) {
   const oauth = oauthEnvelope(tokenJson);
   if (!oauth) return null;
   return {
-    // Not a password hash — this is a content fingerprint used only to detect
-    // whether the vault's token pair changed between two reads (see
-    // evaluateFreshToken below). SHA-256 is the right tool for that; a slow
-    // KDF (bcrypt/scrypt/argon2) would add latency for zero security benefit
-    // since nothing here verifies a credential against a stored hash.
-    // codeql[js/insufficient-password-hash]
-    fingerprint: createHash('sha256').update(oauth.accessToken).update('\0').update(oauth.refreshToken).digest('hex'),
+    // Content fingerprint used only to detect whether the vault's token pair
+    // changed between two reads (see evaluateFreshToken below). The token
+    // material runs through scrypt, a slow key-derivation function, with a
+    // fixed salt: the fixed salt keeps the digest deterministic for change
+    // detection, and the slow KDF means a leaked fingerprint cannot be walked
+    // back to the token the way a plain SHA-256 digest could.
+    fingerprint: scryptSync(`${oauth.accessToken}\0${oauth.refreshToken}`, TOKEN_FINGERPRINT_SALT, 32).toString(
+      'hex',
+    ),
     expiresAt: oauth.expiresAt,
   };
 }

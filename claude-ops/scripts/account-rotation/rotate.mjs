@@ -7735,12 +7735,14 @@ Mutating:
         } else {
           try {
             const marker = `/tmp/claude-respawn-deferred-${s.id}`;
-            // Exclusive create: if something is already at this path — the
-            // marker from a prior tick, or a symlink a local attacker planted
-            // — this fails instead of following/overwriting it. Either way,
-            // "marker already there" is the correct outcome for this check.
+            // Exclusive create with owner-only permissions: `wx` fails instead
+            // of following/overwriting anything already at this path (a prior
+            // marker, or a symlink a local attacker planted), and `mode 0o600`
+            // means the file another user cannot read or tamper with it once
+            // created. Either way, "marker already there" is the correct
+            // outcome for this check.
             try {
-              writeFileSync(marker, String(Date.now()), { flag: 'wx' });
+              writeFileSync(marker, String(Date.now()), { flag: 'wx', mode: 0o600 });
             } catch {}
             console.log(`Session ${s.id} is busy. Deferring rotation.`);
           } catch {}
