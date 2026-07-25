@@ -39,6 +39,7 @@ import {
   statSync,
   openSync,
   closeSync,
+  fstatSync,
   ftruncateSync,
   writeSync,
   constants as fsConstants,
@@ -4086,10 +4087,17 @@ async function rotate(targetEmail, opts = {}) {
         // Hold one fd across the read-prune-write cycle instead of re-resolving the
         // path for the final write — the file can't be swapped for a symlink or
         // another process's file between the check and the rewrite. O_NOFOLLOW
-        // refuses to open if it's already a symlink.
+        // refuses to open if it's already a symlink. The path is predictable
+        // (shared /tmp), so also refuse anything not owned by us: a different
+        // uid could have planted a file at that path before we got there.
         let pidFileFd;
         try {
           pidFileFd = openSync(pidFile, fsConstants.O_RDWR | fsConstants.O_NOFOLLOW);
+          if (typeof process.getuid === 'function' && fstatSync(pidFileFd).uid !== process.getuid()) {
+            closeSync(pidFileFd);
+            pidFileFd = undefined;
+            log(`[hot-swap] pidfile ${pidFile} not owned by us — refusing (possible /tmp plant)`);
+          }
         } catch (e) {
           if (e.code !== 'ENOENT') throw e; // ENOENT: no pidfile, nothing to signal
         }
