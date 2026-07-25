@@ -130,13 +130,20 @@ This is the only mutating subcommand. Walk the user through:
 ## crs (relay-pool status)
 
 Show the claude-relay-service pool's per-account schedulable state + the priority
-daemon's health. Read-only.
+daemon's health, plus the two optional reconcilers (429-cooldown, 401-refresher)
+if enabled. Read-only.
 
 ```
 WRAP="$ROT_SRC/crs-priority-daemon.sh"
 bash "$WRAP" --status 2>&1 | head -40   # prints "● name sched=true 5h=NN%  <status>"
 launchctl list 2>/dev/null | grep com.claude-ops.crs-priority || echo "crs-priority daemon: not loaded"
 tail -n 5 "${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/logs/crs-priority.log" 2>/dev/null
+
+# Only if crs.cooldownEnabled / crs.tokenRefreshEnabled are true in config:
+node "$ROT_SRC/crs-429-cooldown.mjs" --status 2>&1
+launchctl list 2>/dev/null | grep com.claude-ops.crs-429-cooldown || echo "crs-429-cooldown: not loaded"
+node "$ROT_SRC/crs-401-refresher.mjs" --status 2>&1
+launchctl list 2>/dev/null | grep com.claude-ops.crs-401-refresher || echo "crs-401-refresher: not loaded"
 ```
 
 Render a compact panel:
@@ -146,10 +153,15 @@ CRS POOL  (http://127.0.0.1:3000)
   schedulable : 7 / 10
   off         : canary-sponsors (rate-limited), pool-chairman (warning), pool-foundation (warning)
   daemon      : ✓ running (every 120s)  |  ✗ not loaded — run /ops:rotate-setup
+  429-cooldown: ✓ running (every 60s)   |  ✗ not loaded  |  – not enabled (crs.cooldownEnabled=false)
+  401-refresher: ✓ running (every 300s) |  ✗ not loaded  |  – not enabled (crs.tokenRefreshEnabled=false)
 ```
 
 If CRS `/health` is unreachable, say so and point to ops-rotate-setup. If the daemon
-isn't loaded but `crs.enabled` is true, suggest `/ops:rotate-setup`.
+isn't loaded but `crs.enabled` is true, suggest `/ops:rotate-setup`. Show the two
+reconciler lines only if their config flag is true — if false, show `– not enabled`
+rather than treating it as a failure (it's an opt-in feature). If a flag is true but
+its daemon isn't loaded, suggest `/ops:rotate-setup --reconcilers`.
 
 ## crs-tick (run one tick now)
 

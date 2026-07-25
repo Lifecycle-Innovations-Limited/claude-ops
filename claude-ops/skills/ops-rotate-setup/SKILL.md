@@ -235,6 +235,67 @@ Tuning (optional, `crs` block): `off5h`/`off7d` (deprioritize thresholds),
 `on5h`/`on7d` (re-enable thresholds, hysteresis), `floor` (min usable accounts),
 `freshMinutes` (max age of utilization data trusted for proactive deprioritize).
 
+Weekly-cap reconciliation (`crs.weeklyReconcile`, default on) is built into the
+priority daemon itself — no separate install step. It clears a stale
+`weeklyRateLimitEndAt` hold once live 7d utilization drops back under `on7d`,
+and is a no-op on any deployment that never sets that field. Set
+`crs.weeklyReconcile=false` (or `$CRS_WEEKLY_RECONCILE=0`) to disable it.
+
+## Step 4.6 — CRS reconciler add-ons (optional)
+
+Only offer this if Step 4.5 configured a CRS pool (`crs.enabled=true`) — these
+reconcilers assume one exists. Two independent, opt-in daemons close gaps the
+priority daemon (Step 4.5) doesn't cover:
+
+- **429-cooldown**: holds an account out of rotation only on a real
+  `rateLimitStatus.isRateLimited=true` from CRS (never a utilization
+  heuristic). Fast cadence (60s) since it reacts to a live rate limit.
+- **401-refresher**: proactively refreshes each account's CRS-pool OAuth
+  token before it expires, so accounts don't silently start 401ing between
+  priority-daemon ticks. Slower cadence (300s) — refreshes ahead of a 30min
+  expiry window.
+
+`AskUserQuestion`:
+
+```
+Enable the optional CRS reconcilers?
+  [Both]              — 429-cooldown + 401-refresher (recommended if you run a busy pool)
+  [429-cooldown only]  — fast rate-limit hold, skip proactive token refresh
+  [401-refresher only] — proactive token refresh, skip rate-limit hold
+  [Skip]               — neither (you can re-run /ops:rotate-setup --crs later)
+```
+
+On anything but `[Skip]`:
+
+1. **Write the config flags.**
+   ```bash
+   CFG="$USER_CFG"
+   jq --argjson cooldown "$COOLDOWN_ENABLED" --argjson tokenRefresh "$TOKEN_REFRESH_ENABLED" \
+      '.crs = ((.crs // {}) + {cooldownEnabled:$cooldown, tokenRefreshEnabled:$tokenRefresh})' \
+      "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+   ```
+   (`$COOLDOWN_ENABLED`/`$TOKEN_REFRESH_ENABLED` are `true`/`false` per the
+   selection above.) Optional: also ask for `crs.stateDir`/`crs.logDir` if the
+   user wants non-default paths — see `config.example.json` for the full
+   annotated schema. Both reconcilers default to
+   `<plugin-data-dir>/account-rotation` if left unset.
+
+2. **Smoke-test before installing** (each enabled reconciler, no writes):
+   ```bash
+   [[ "$COOLDOWN_ENABLED" == "true" ]] && node "${CLAUDE_PLUGIN_ROOT}/scripts/account-rotation/crs-429-cooldown.mjs" --status
+   [[ "$TOKEN_REFRESH_ENABLED" == "true" ]] && node "${CLAUDE_PLUGIN_ROOT}/scripts/account-rotation/crs-401-refresher.mjs" --status
+   ```
+   If either errors (login failed / unreachable), surface the message and let
+   the user re-check Step 4.5's CRS creds — do NOT install a broken daemon.
+
+3. **Install** (idempotent — installs whichever flags are true, uninstalls
+   whichever were turned back off):
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-crs-reconcilers-agent.sh"
+   ```
+   macOS → launchd, 60s / 300s cadence (RunAtLoad fires the first tick).
+   Linux → the installer prints the equivalent systemd-timer snippets.
+
 ## Step 5 — Summary
 
 ```
@@ -249,14 +310,18 @@ Tuning (optional, `crs` block): `off5h`/`off7d` (deprioritize thresholds),
  Config: ~/.claude/plugins/data/ops-ops-marketplace/account-rotation-config.json
  Keychain: Claude-Rotation-<key> (account: $USER)  ·  key = label or email
  CRS priority daemon: ✓ installed (every 120s) | ✗ not configured
+ CRS 429-cooldown:    ✓ installed (every 60s)  | ✗ not enabled
+ CRS 401-refresher:   ✓ installed (every 300s) | ✗ not enabled
 
  To enable automatic rotation, open /plugins → claude-ops → settings and
  toggle "Multi-account Claude rotator" (account_rotation_enabled).
 ──────────────────────────────────────────────────────
 ```
 
-(Show the CRS line only if Step 4.5 ran. The CRS daemon is independent of the
-`account_rotation_enabled` toggle — it is gated by `crs.enabled` in config +
+(Show the CRS priority-daemon line only if Step 4.5 ran; show the two
+reconciler lines only if Step 4.6 ran. All three CRS daemons are independent
+of the `account_rotation_enabled` toggle — each is gated by its own config
+flag (`crs.enabled`, `crs.cooldownEnabled`, `crs.tokenRefreshEnabled`) plus
 whether its launchd/systemd timer is installed.)
 
 Exit. Do NOT auto-enable `account_rotation_enabled` — that decision belongs
@@ -267,7 +332,8 @@ to the user, made explicitly through the plugin settings UI.
 - `--all` (default): full wizard as described above.
 - `--account <email>`: skip Step 2; only init the matching account.
 - `--add`: skip token check; jump straight to Step 2 add loop, then init.
-- `--crs`: jump straight to **Step 4.5** (configure + install the CRS priority daemon), skipping the keychain-account OAuth steps.
+- `--crs`: jump straight to **Step 4.5** (configure + install the CRS priority daemon), then **Step 4.6** (offer the reconciler add-ons), skipping the keychain-account OAuth steps.
+- `--reconcilers`: jump straight to **Step 4.6** (offer/reconfigure the 429-cooldown and 401-refresher reconcilers) — requires Step 4.5 already configured (`crs.enabled=true`); if not, print the same message as `--crs` needing configuration first and exit.
 
 ## Failure modes
 
@@ -280,3 +346,5 @@ to the user, made explicitly through the plugin settings UI.
 | Google SSO / 2FA prompt              | Workspace-domain account needs interactive Google login        | Let the user complete login in the cascade's visible Chrome; do NOT auto-solve 2FA                                        |
 | CRS `--status` "login failed"        | wrong admin user/password or CRS not reachable                 | Re-enter creds (Step 4.5); admin creds are in the CRS container `data/init.json`; verify `curl $CRS_URL/health`           |
 | CRS daemon installed but no effect   | `crs.enabled=false`, or all accounts already correctly flagged | Check `crs.enabled` in config; `tail logs/crs-priority.log`; a steady-state tick logs `0 change(s)`                       |
+| CRS reconciler `--status` errors     | wrong admin creds or CRS unreachable (same creds as priority daemon) | Re-check Step 4.5's CRS creds; `curl $CRS_URL/health`                                                                     |
+| CRS reconciler installed but no effect | `crs.cooldownEnabled`/`crs.tokenRefreshEnabled` false, or no account currently needs it | Check the relevant flag in config; `tail logs/crs-429-cooldown.log` or `crs-401-refresher.log` — both are safe no-ops when nothing needs action |
