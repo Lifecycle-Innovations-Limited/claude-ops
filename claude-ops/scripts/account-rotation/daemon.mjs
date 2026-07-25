@@ -1567,7 +1567,17 @@ async function checkSessionLeaseRotations(config, state) {
         } else {
           try {
             const marker = `/tmp/claude-respawn-deferred-${s.id}`;
-            if (!existsSync(marker)) writeFileSync(marker, String(Date.now()));
+            // 'wx' creates the marker in one step, so a second process cannot slip in
+            // between a check and the write. EEXIST just means the marker is already
+            // there, which is the same outcome we wanted. mode keeps it owner-only.
+            try {
+              writeFileSync(marker, String(Date.now()), { flag: 'wx', mode: 0o600 });
+            } catch (err) {
+              // EEXIST means another sweep already wrote the marker, so carry on and log.
+              // Anything else is a real write failure: fall out to the outer catch so we
+              // don't claim a deferral the sweep has no marker to act on.
+              if (err.code !== 'EEXIST') throw err;
+            }
             log(
               `[session-router] Session ${s.id} is ${s.status === 'busy' ? 'busy' : 'a /loop session'} — deferred respawn (sweep handles it).`,
             );
@@ -1591,7 +1601,10 @@ async function checkSessionLeaseRotations(config, state) {
         } else {
           try {
             const marker = `/tmp/claude-respawn-deferred-${s.id}`;
-            if (!existsSync(marker)) writeFileSync(marker, String(Date.now()));
+            // 'wx' creates the marker in one step, so a second process cannot slip in
+            // between a check and the write. EEXIST just means the marker is already
+            // there, which is the same outcome we wanted. mode keeps it owner-only.
+            writeFileSync(marker, String(Date.now()), { flag: 'wx', mode: 0o600 });
           } catch {}
         }
         return; // Rotate at most one session per tick to stagger
@@ -1622,7 +1635,17 @@ async function checkSessionLeaseRotations(config, state) {
         } else {
           try {
             const marker = `/tmp/claude-respawn-deferred-${s.id}`;
-            if (!existsSync(marker)) writeFileSync(marker, String(Date.now()));
+            // 'wx' creates the marker in one step, so a second process cannot slip in
+            // between a check and the write. EEXIST just means the marker is already
+            // there, which is the same outcome we wanted. mode keeps it owner-only.
+            try {
+              writeFileSync(marker, String(Date.now()), { flag: 'wx', mode: 0o600 });
+            } catch (err) {
+              // EEXIST means another sweep already wrote the marker, so carry on and log.
+              // Anything else is a real write failure: fall out to the outer catch so we
+              // don't claim a deferral the sweep has no marker to act on.
+              if (err.code !== 'EEXIST') throw err;
+            }
             log(`[session-router] Session ${s.id} is busy or looping. Deferred rotation to idle state.`);
           } catch {}
         }
