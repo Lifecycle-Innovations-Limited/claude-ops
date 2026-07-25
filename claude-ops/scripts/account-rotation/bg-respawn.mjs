@@ -557,7 +557,10 @@ export function respawnBgSessions(log = () => {}) {
     }
     if (s.status === 'busy') {
       try {
-        if (!existsSync(DEFERRED_MARKER(s.id))) writeFileSync(DEFERRED_MARKER(s.id), String(Date.now()));
+        // 'wx' creates the marker in one step, so a second process cannot slip in
+        // between a check and the write. EEXIST just means the marker is already
+        // there, which is the same outcome we wanted. mode keeps it owner-only.
+        writeFileSync(DEFERRED_MARKER(s.id), String(Date.now()), { flag: 'wx', mode: 0o600 });
       } catch {}
       deferred++;
       log(`[bg-respawn] ${s.id} busy — deferred (daemon sweep will retry, force after 90min)`);

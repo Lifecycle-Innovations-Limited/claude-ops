@@ -99,8 +99,7 @@ function accountRotationStatus() {
 
 function status() {
   const route = routeStatus();
-  const crsHealthUrl =
-    route.state.crs?.healthUrl || process.env.CRS_HEALTH_URL || 'http://127.0.0.1:3005/health';
+  const crsHealthUrl = route.state.crs?.healthUrl || process.env.CRS_HEALTH_URL || 'http://127.0.0.1:3005/health';
   return {
     ok: !route.settings.mixedProvider,
     route,
