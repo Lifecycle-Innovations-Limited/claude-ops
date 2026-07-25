@@ -296,6 +296,54 @@ On anything but `[Skip]`:
    macOS → launchd, 60s / 300s cadence (RunAtLoad fires the first tick).
    Linux → the installer prints the equivalent systemd-timer snippets.
 
+## Step 4.7 — Magic-link autoloop (optional, unattended re-auth)
+
+Only offer this if Step 4.6's 401-refresher was enabled — this reconciler
+reads its needs-reauth flags. Unlike the other reconcilers, this one
+dispatches a REAL browser-based re-auth attempt (via `rotate.mjs --setup`,
+the same Gmail-via-`gog` flow this wizard itself uses in Step 4) — make sure
+the user understands that before enabling it.
+
+`AskUserQuestion`:
+
+```
+Enable unattended re-auth for accounts with a confirmed dead token?
+  [Yes — enable]   — magic-link-autoloop dispatches rotate.mjs --setup automatically
+  [Not now]        — a human handles re-auth manually when 401-refresher flags an account
+  [What is this?]  — one-paragraph explainer, then re-ask
+```
+
+On **[Yes]**:
+
+1. **Write the config flag.**
+   ```bash
+   CFG="$USER_CFG"
+   jq '.crs = ((.crs // {}) + {enableMagicLinkRecovery:true})' \
+      "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+   ```
+   Optional: ask for a non-default `crs.magicLinkRetryCooldownMs` (default 6h) —
+   see `config.example.json`.
+
+2. **Smoke-test** (no writes, no dispatch):
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/account-rotation/magic-link-autoloop.mjs" --status
+   ```
+
+3. **Install** (folded into the same idempotent installer as Step 4.6):
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-crs-reconcilers-agent.sh"
+   ```
+   macOS → launchd, 600s cadence, `RunAtLoad=false` (does NOT fire immediately
+   on install, unlike the other reconcilers — first tick waits for the normal
+   schedule so a fresh install never triggers a surprise browser launch).
+   Linux → the installer prints the equivalent systemd-timer snippet.
+
+Note on provider scope: this reconciler's own logic (which account, when, how
+often) has no email-provider dependency — it only decides what to retry and
+delegates the actual OAuth+email-poll work to `rotate.mjs --setup`, which is
+Gmail-via-`gog` today. A fully provider-agnostic email backend (e.g. IMAP)
+would be a `rotate.mjs`-internals change, out of scope here.
+
 ## Step 5 — Summary
 
 ```
@@ -312,17 +360,19 @@ On anything but `[Skip]`:
  CRS priority daemon: ✓ installed (every 120s) | ✗ not configured
  CRS 429-cooldown:    ✓ installed (every 60s)  | ✗ not enabled
  CRS 401-refresher:   ✓ installed (every 300s) | ✗ not enabled
+ Magic-link autoloop: ✓ installed (every 600s) | ✗ not enabled
 
  To enable automatic rotation, open /plugins → claude-ops → settings and
  toggle "Multi-account Claude rotator" (account_rotation_enabled).
 ──────────────────────────────────────────────────────
 ```
 
-(Show the CRS priority-daemon line only if Step 4.5 ran; show the two
-reconciler lines only if Step 4.6 ran. All three CRS daemons are independent
-of the `account_rotation_enabled` toggle — each is gated by its own config
-flag (`crs.enabled`, `crs.cooldownEnabled`, `crs.tokenRefreshEnabled`) plus
-whether its launchd/systemd timer is installed.)
+(Show the CRS priority-daemon line only if Step 4.5 ran; show the two Step 4.6
+reconciler lines only if Step 4.6 ran; show the magic-link line only if Step
+4.7 ran. All four CRS daemons are independent of the `account_rotation_enabled`
+toggle — each is gated by its own config flag (`crs.enabled`,
+`crs.cooldownEnabled`, `crs.tokenRefreshEnabled`, `crs.enableMagicLinkRecovery`)
+plus whether its launchd/systemd timer is installed.)
 
 Exit. Do NOT auto-enable `account_rotation_enabled` — that decision belongs
 to the user, made explicitly through the plugin settings UI.
@@ -333,7 +383,7 @@ to the user, made explicitly through the plugin settings UI.
 - `--account <email>`: skip Step 2; only init the matching account.
 - `--add`: skip token check; jump straight to Step 2 add loop, then init.
 - `--crs`: jump straight to **Step 4.5** (configure + install the CRS priority daemon), then **Step 4.6** (offer the reconciler add-ons), skipping the keychain-account OAuth steps.
-- `--reconcilers`: jump straight to **Step 4.6** (offer/reconfigure the 429-cooldown and 401-refresher reconcilers) — requires Step 4.5 already configured (`crs.enabled=true`); if not, print the same message as `--crs` needing configuration first and exit.
+- `--reconcilers`: jump straight to **Step 4.6** (offer/reconfigure the 429-cooldown and 401-refresher reconcilers, then Step 4.7's magic-link autoloop offer) — requires Step 4.5 already configured (`crs.enabled=true`); if not, print the same message as `--crs` needing configuration first and exit.
 
 ## Failure modes
 
@@ -348,3 +398,5 @@ to the user, made explicitly through the plugin settings UI.
 | CRS daemon installed but no effect   | `crs.enabled=false`, or all accounts already correctly flagged | Check `crs.enabled` in config; `tail logs/crs-priority.log`; a steady-state tick logs `0 change(s)`                       |
 | CRS reconciler `--status` errors     | wrong admin creds or CRS unreachable (same creds as priority daemon) | Re-check Step 4.5's CRS creds; `curl $CRS_URL/health`                                                                     |
 | CRS reconciler installed but no effect | `crs.cooldownEnabled`/`crs.tokenRefreshEnabled` false, or no account currently needs it | Check the relevant flag in config; `tail logs/crs-429-cooldown.log` or `crs-401-refresher.log` — both are safe no-ops when nothing needs action |
+| magic-link-autoloop never dispatches  | `crs.enableMagicLinkRecovery` false, 401-refresher not enabled/hasn't flagged anyone, or account is on `magicLinkRetryCooldownMs` cooldown | `node magic-link-autoloop.mjs --status`; confirm 401-refresher is enabled and has a `needsReauth` entry |
+| magic-link-autoloop dispatches too often | `magicLinkRetryCooldownMs` too low for a persistently-broken account | Raise the cooldown in config; each attempt is a real browser-automation run, not free |
