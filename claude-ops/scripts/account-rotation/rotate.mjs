@@ -3294,12 +3294,19 @@ async function browserOAuthFallback(account) {
   // one step, owner-only: 0o700 already carries the owner exec bit, so the old
   // widening chmod to 0o755 is gone. A leftover from a crashed run is cleared
   // first; if the create still fails, we refuse rather than trust the file.
+  //
+  // The script itself redirects under `umask 077`, because the URL it captures
+  // carries the OAuth state and code challenge and would otherwise land at the
+  // ambient umask — readable by anyone on the box, at a path they can guess.
   try {
     unlinkSync(capScript);
   } catch {
     /* nothing left over */
   }
-  writeFileSync(capScript, `#!/bin/bash\necho "$1" > "${urlFile}"\n`, { flag: 'wx', mode: 0o700 });
+  writeFileSync(capScript, `#!/bin/bash\numask 077\necho "$1" > "${urlFile}"\n`, {
+    flag: 'wx',
+    mode: 0o700,
+  });
 
   const proc = spawn('claude', ['auth', 'login', '--email', account.email], {
     env: { ...process.env, BROWSER: capScript },
