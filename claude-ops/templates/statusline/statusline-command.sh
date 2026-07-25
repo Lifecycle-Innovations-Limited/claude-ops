@@ -320,7 +320,13 @@ if [ -n "$account_email" ]; then
 ${p}"
     done < "$pid_file"
   fi
-  printf '%s\n' "$new_content" > "$pid_file" 2>/dev/null
+  # CACHE_DIR defaults to shared /tmp, so create the pidfile owner-only instead of
+  # at the ambient umask, and pull an older world-readable one back to 0600.
+  (
+    umask 077
+    printf '%s\n' "$new_content" > "$pid_file"
+  ) 2>/dev/null
+  chmod 600 "$pid_file" 2>/dev/null
   sessions_n=$(printf '%s\n' "$new_content" | grep -c .)
 fi
 

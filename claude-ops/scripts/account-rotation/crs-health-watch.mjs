@@ -228,6 +228,18 @@ function rebootCooldownRemainingMs() {
 // Fire an EC2 reboot ONLY on a double-confirmed OS wedge: CRS sustained-down past
 // REBOOT_STRIKES, already fail-closed (fleet protected), SSM says ConnectionLost, and
 // no reboot in the last 30 min. Conservative by design — every gate must hold.
+// Are we in fail-closed mode? Read the marker instead of statting it: a stat is
+// a check, and the claim in tick() must not hang off a check of the same path.
+// A failed read tells us the same thing without one.
+function markerPresent() {
+  try {
+    readFileSync(MARKER, 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function maybeAutoReboot(st, inFallback, healthy) {
   if (healthy || st.down < REBOOT_STRIKES || !inFallback) return;
 
@@ -369,7 +381,7 @@ function main() {
   } else if (CRS_ENABLE_INFERENCE_SMOKE && inferenceOk) {
     st.inferenceDown = 0;
   }
-  const inFallback = existsSync(MARKER);
+  const inFallback = markerPresent();
 
   let acted = false;
   if (!healthy && st.down >= DOWN_STRIKES) {

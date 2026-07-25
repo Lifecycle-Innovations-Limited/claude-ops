@@ -4089,10 +4089,12 @@ async function rotate(targetEmail, opts = {}) {
         // another process's file between the check and the rewrite. O_NOFOLLOW
         // refuses to open if it's already a symlink. The path is predictable
         // (shared /tmp), so also refuse anything not owned by us: a different
-        // uid could have planted a file at that path before we got there.
+        // uid could have planted a file at that path before we got there. The mode
+        // argument only bites if these flags ever gain O_CREAT, and it is here so
+        // that a pidfile can never come into being from this call world-readable.
         let pidFileFd;
         try {
-          pidFileFd = openSync(pidFile, fsConstants.O_RDWR | fsConstants.O_NOFOLLOW);
+          pidFileFd = openSync(pidFile, fsConstants.O_RDWR | fsConstants.O_NOFOLLOW, 0o600);
           if (typeof process.getuid === 'function' && fstatSync(pidFileFd).uid !== process.getuid()) {
             closeSync(pidFileFd);
             pidFileFd = undefined;
