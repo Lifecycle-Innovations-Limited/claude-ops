@@ -371,26 +371,32 @@ function main() {
   }
   const inFallback = existsSync(MARKER);
 
-  if (!healthy && st.down >= DOWN_STRIKES && !inFallback) {
-    if (setEnvMode('direct')) {
-      // 'wx' creates the marker in one step, so a second watcher cannot slip in
-      // between the existsSync above and this write: O_CREAT|O_EXCL fails with
-      // EEXIST if the path exists in any form (file or symlink) and never
-      // truncates or follows a pre-existing target, so there is no window for
-      // another process's file to receive our write. The EEXIST branch below
-      // is that race, handled — not a leftover TOCTOU.
-      // codeql[js/file-system-race] -- write is O_CREAT|O_EXCL; EEXIST handled below
-      try {
-        writeFileSync(MARKER, String(Date.now()), { flag: 'wx', mode: 0o600 });
-      } catch (err) {
-        // EEXIST means another watcher just went fail-closed, which is the same
-        // outcome we wanted. Anything else is a real write failure.
-        if (err.code !== 'EEXIST') throw err;
+  let acted = false;
+  if (!healthy && st.down >= DOWN_STRIKES) {
+    // Creating the marker is what claims the switch, so nothing here acts on the
+    // reading taken above: 'wx' creates it in one step, and EEXIST means another
+    // watcher already went fail-closed — the outcome we wanted anyway.
+    let claimed = true;
+    try {
+      writeFileSync(MARKER, String(Date.now()), { flag: 'wx', mode: 0o600 });
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      claimed = false;
+    }
+    if (claimed) {
+      if (setEnvMode('direct')) {
+        st.mode = 'fail-closed';
+        acted = true;
+        log(
+          `CRS DOWN x${st.down} (>=${DOWN_STRIKES}) → FAIL-CLOSED: stripped provider env from settings.json; new/respawned sessions must not silently use direct or Bedrock`,
+        );
+      } else {
+        // The env rewrite refused, so give the claim back rather than leave a
+        // marker claiming we are fail-closed while settings.json still says CRS.
+        try {
+          execFileSync('rm', ['-f', MARKER]);
+        } catch {}
       }
-      st.mode = 'fail-closed';
-      log(
-        `CRS DOWN x${st.down} (>=${DOWN_STRIKES}) → FAIL-CLOSED: stripped provider env from settings.json; new/respawned sessions must not silently use direct or Bedrock`,
-      );
     }
   } else if (healthy && st.up >= UP_STRIKES && inFallback) {
     if (setEnvMode('crs')) {
@@ -398,11 +404,13 @@ function main() {
         execFileSync('rm', ['-f', MARKER]);
       } catch {}
       st.mode = 'crs';
+      acted = true;
       log(
         `CRS UP x${st.up} (>=${UP_STRIKES}) → RESTORE: re-added CRS env to settings.json; new/respawned sessions route via relay again`,
       );
     }
-  } else {
+  }
+  if (!acted) {
     log(
       `tick: health=${healthOk} inference=${CRS_ENABLE_INFERENCE_SMOKE ? inferenceOk : 'disabled'} down=${st.down} up=${st.up} fallback=${inFallback} envMode=${currentEnvMode()}`,
     );
