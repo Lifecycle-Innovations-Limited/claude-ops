@@ -374,7 +374,12 @@ function main() {
   if (!healthy && st.down >= DOWN_STRIKES && !inFallback) {
     if (setEnvMode('direct')) {
       // 'wx' creates the marker in one step, so a second watcher cannot slip in
-      // between the existsSync above and this write. mode keeps it owner-only.
+      // between the existsSync above and this write: O_CREAT|O_EXCL fails with
+      // EEXIST if the path exists in any form (file or symlink) and never
+      // truncates or follows a pre-existing target, so there is no window for
+      // another process's file to receive our write. The EEXIST branch below
+      // is that race, handled — not a leftover TOCTOU.
+      // codeql[js/file-system-race] -- write is O_CREAT|O_EXCL; EEXIST handled below
       try {
         writeFileSync(MARKER, String(Date.now()), { flag: 'wx', mode: 0o600 });
       } catch (err) {

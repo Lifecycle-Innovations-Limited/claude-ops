@@ -37,6 +37,11 @@ import {
   renameSync,
   mkdirSync,
   statSync,
+  openSync,
+  closeSync,
+  ftruncateSync,
+  writeSync,
+  constants as fsConstants,
 } from 'fs';
 import { persistBedrockClaudeSettings } from './claude-settings-mode.mjs';
 import { join, dirname } from 'path';
@@ -4078,8 +4083,18 @@ async function rotate(targetEmail, opts = {}) {
       const sourceEmail = sourceAccountForSwap?.email;
       if (sourceEmail) {
         const pidFile = `/tmp/claude-pids-${sourceEmail}`;
-        if (existsSync(pidFile)) {
-          const pids = readFileSync(pidFile, 'utf8')
+        // Hold one fd across the read-prune-write cycle instead of re-resolving the
+        // path for the final write — the file can't be swapped for a symlink or
+        // another process's file between the check and the rewrite. O_NOFOLLOW
+        // refuses to open if it's already a symlink.
+        let pidFileFd;
+        try {
+          pidFileFd = openSync(pidFile, fsConstants.O_RDWR | fsConstants.O_NOFOLLOW);
+        } catch (e) {
+          if (e.code !== 'ENOENT') throw e; // ENOENT: no pidfile, nothing to signal
+        }
+        if (pidFileFd !== undefined) {
+          const pids = readFileSync(pidFileFd, 'utf8')
             .split('\n')
             .map((l) => parseInt(l.trim(), 10))
             .filter((p) => !isNaN(p) && p > 0);
@@ -4132,11 +4147,18 @@ async function rotate(targetEmail, opts = {}) {
             } catch {}
           }
           // Self-heal the pidfile: keep only confirmed-live Claude pids, else remove it.
+          // Rewrite through the held fd (truncate + write) rather than reopening by
+          // path, so the file we prune is provably the same one we read above.
           try {
-            // mode keeps the pidfile owner-only; the path under /tmp is predictable.
-            if (livePids.length > 0) writeFileSync(pidFile, `${livePids.join('\n')}\n`, { mode: 0o600 });
-            else unlinkSync(pidFile);
+            if (livePids.length > 0) {
+              const body = `${livePids.join('\n')}\n`;
+              ftruncateSync(pidFileFd, 0);
+              writeSync(pidFileFd, body, 0);
+            } else {
+              unlinkSync(pidFile);
+            }
           } catch {}
+          closeSync(pidFileFd);
           if (signaled > 0) {
             log(`[hot-swap] signaled ${signaled} Claude session(s) on ${sourceEmail} to reload after rotation`);
           } else if (pids.length > 0) {
