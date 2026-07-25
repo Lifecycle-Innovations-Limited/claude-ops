@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Magic-link autoloop reconciler (opt-in unattended re-auth for confirmed
+  dead-refresh-token accounts).
+
+  Schedule: every 600s. Equivalent systemd: OnUnitActiveSec=600s.
+  The installer (scripts/install-crs-reconcilers-agent.sh) substitutes
+  __WRAPPER_PATH__, __LOG_DIR__, __HOME__ and writes the rendered copy to
+  ~/Library/LaunchAgents/com.claude-ops.magic-link-autoloop.plist before:
+    launchctl bootstrap "gui/$(id -u)" <plist>
+
+  To uninstall:
+    launchctl bootout "gui/$(id -u)/com.claude-ops.magic-link-autoloop"
+    rm ~/Library/LaunchAgents/com.claude-ops.magic-link-autoloop.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.claude-ops.magic-link-autoloop</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__WRAPPER_PATH__</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>600</integer>
+
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/magic-link-autoloop-launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/magic-link-autoloop-launchd.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>NODE_NO_WARNINGS</key>
+    <string>1</string>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+</dict>
+</plist>
