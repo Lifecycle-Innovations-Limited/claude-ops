@@ -57,7 +57,9 @@ const STATUS = args.has('--status');
 
 const C = loadRotationConfig()?.crs || {};
 const ENABLED = process.env.CRS_ENABLE_MAGIC_LINK === '1' || C.enableMagicLinkRecovery === true;
-const RETRY_COOLDOWN_MS = Number(process.env.CRS_MAGIC_LINK_RETRY_COOLDOWN_MS ?? C.magicLinkRetryCooldownMs ?? 21_600_000);
+const RETRY_COOLDOWN_MS = Number(
+  process.env.CRS_MAGIC_LINK_RETRY_COOLDOWN_MS ?? C.magicLinkRetryCooldownMs ?? 21_600_000,
+);
 const ROTATE_TIMEOUT_MS = Number(process.env.CRS_MAGIC_LINK_ROTATE_TIMEOUT_MS ?? 12 * 60_000);
 
 function expandHome(p) {
@@ -234,7 +236,9 @@ function printStatus() {
   }
   for (const [key, s] of rows) {
     const lastAt = s.lastAttemptAt ? new Date(s.lastAttemptAt).toISOString() : 'never';
-    console.log(`  ${key}: lastAttempt=${lastAt} lastCode=${s.lastCode ?? '?'} lastOk=${s.lastOkAt ? new Date(s.lastOkAt).toISOString() : 'never'}`);
+    console.log(
+      `  ${key}: lastAttempt=${lastAt} lastCode=${s.lastCode ?? '?'} lastOk=${s.lastOkAt ? new Date(s.lastOkAt).toISOString() : 'never'}`,
+    );
   }
 }
 

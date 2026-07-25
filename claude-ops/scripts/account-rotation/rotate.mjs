@@ -33,11 +33,16 @@ import {
   existsSync,
   unlinkSync,
   appendFileSync,
-  chmodSync,
   readdirSync,
   renameSync,
   mkdirSync,
   statSync,
+  openSync,
+  closeSync,
+  fstatSync,
+  ftruncateSync,
+  writeSync,
+  constants as fsConstants,
 } from 'fs';
 import { persistBedrockClaudeSettings } from './claude-settings-mode.mjs';
 import { join, dirname } from 'path';
@@ -289,21 +294,38 @@ function lockHolderAlive(pid) {
   }
 }
 function acquireLock() {
-  if (existsSync(LOCK_PATH)) {
-    const info = readLock();
-    if (info && lockHolderAlive(info.pid)) {
-      const age = Date.now() - info.when;
-      if (age < LOCK_MAX_AGE_MS) {
-        log(`Rotation in progress (holder PID ${info.pid}, ${Math.round(age / 1000)}s old)`);
-        return false;
-      }
-      log(`Lock held by PID ${info.pid} but >${Math.round(LOCK_MAX_AGE_MS / 60_000)}min old — breaking`);
-    } else if (info) {
-      log(`Stale lock (PID ${info.pid || '?'} not running) — breaking`);
+  const payload = `${new Date().toISOString()}\n${process.pid}`;
+  const claim = () => {
+    try {
+      // 'wx' creates the lock in one step, so two rotations cannot both check an
+      // absent lock and then both write it. mode keeps it owner-only.
+      writeFileSync(LOCK_PATH, payload, { flag: 'wx', mode: 0o600 });
+      return true;
+    } catch (err) {
+      // EEXIST just means someone else holds it — fall through and inspect.
+      if (err.code !== 'EEXIST') throw err;
+      return false;
     }
+  };
+  if (claim()) return true;
+
+  const info = readLock();
+  if (info && lockHolderAlive(info.pid)) {
+    const age = Date.now() - info.when;
+    if (age < LOCK_MAX_AGE_MS) {
+      log(`Rotation in progress (holder PID ${info.pid}, ${Math.round(age / 1000)}s old)`);
+      return false;
+    }
+    log(`Lock held by PID ${info.pid} but >${Math.round(LOCK_MAX_AGE_MS / 60_000)}min old — breaking`);
+  } else if (info) {
+    log(`Stale lock (PID ${info.pid || '?'} not running) — breaking`);
   }
-  writeFileSync(LOCK_PATH, `${new Date().toISOString()}\n${process.pid}`);
-  return true;
+  try {
+    unlinkSync(LOCK_PATH);
+  } catch {
+    /* already gone */
+  }
+  return claim();
 }
 function releaseLock() {
   try {
@@ -3267,8 +3289,17 @@ async function browserOAuthFallback(account) {
   const pid = process.pid;
   const capScript = join(tmpdir(), `claude-url-cap-${pid}.sh`);
   const urlFile = join(tmpdir(), `claude-auth-url-${pid}.txt`);
-  writeFileSync(capScript, `#!/bin/bash\necho "$1" > "${urlFile}"\n`);
-  chmodSync(capScript, 0o755);
+  // This path is predictable and the script is handed to a child as BROWSER, so
+  // anyone able to plant a file here would get their code run as us. Create it in
+  // one step, owner-only: 0o700 already carries the owner exec bit, so the old
+  // widening chmod to 0o755 is gone. A leftover from a crashed run is cleared
+  // first; if the create still fails, we refuse rather than trust the file.
+  try {
+    unlinkSync(capScript);
+  } catch {
+    /* nothing left over */
+  }
+  writeFileSync(capScript, `#!/bin/bash\necho "$1" > "${urlFile}"\n`, { flag: 'wx', mode: 0o700 });
 
   const proc = spawn('claude', ['auth', 'login', '--email', account.email], {
     env: { ...process.env, BROWSER: capScript },
@@ -4053,8 +4084,27 @@ async function rotate(targetEmail, opts = {}) {
       const sourceEmail = sourceAccountForSwap?.email;
       if (sourceEmail) {
         const pidFile = `/tmp/claude-pids-${sourceEmail}`;
-        if (existsSync(pidFile)) {
-          const pids = readFileSync(pidFile, 'utf8')
+        // Hold one fd across the read-prune-write cycle instead of re-resolving the
+        // path for the final write — the file can't be swapped for a symlink or
+        // another process's file between the check and the rewrite. O_NOFOLLOW
+        // refuses to open if it's already a symlink. The path is predictable
+        // (shared /tmp), so also refuse anything not owned by us: a different
+        // uid could have planted a file at that path before we got there. The mode
+        // argument only bites if these flags ever gain O_CREAT, and it is here so
+        // that a pidfile can never come into being from this call world-readable.
+        let pidFileFd;
+        try {
+          pidFileFd = openSync(pidFile, fsConstants.O_RDWR | fsConstants.O_NOFOLLOW, 0o600);
+          if (typeof process.getuid === 'function' && fstatSync(pidFileFd).uid !== process.getuid()) {
+            closeSync(pidFileFd);
+            pidFileFd = undefined;
+            log(`[hot-swap] pidfile ${pidFile} not owned by us — refusing (possible /tmp plant)`);
+          }
+        } catch (e) {
+          if (e.code !== 'ENOENT') throw e; // ENOENT: no pidfile, nothing to signal
+        }
+        if (pidFileFd !== undefined) {
+          const pids = readFileSync(pidFileFd, 'utf8')
             .split('\n')
             .map((l) => parseInt(l.trim(), 10))
             .filter((p) => !isNaN(p) && p > 0);
@@ -4107,10 +4157,18 @@ async function rotate(targetEmail, opts = {}) {
             } catch {}
           }
           // Self-heal the pidfile: keep only confirmed-live Claude pids, else remove it.
+          // Rewrite through the held fd (truncate + write) rather than reopening by
+          // path, so the file we prune is provably the same one we read above.
           try {
-            if (livePids.length > 0) writeFileSync(pidFile, `${livePids.join('\n')}\n`);
-            else unlinkSync(pidFile);
+            if (livePids.length > 0) {
+              const body = `${livePids.join('\n')}\n`;
+              ftruncateSync(pidFileFd, 0);
+              writeSync(pidFileFd, body, 0);
+            } else {
+              unlinkSync(pidFile);
+            }
           } catch {}
+          closeSync(pidFileFd);
           if (signaled > 0) {
             log(`[hot-swap] signaled ${signaled} Claude session(s) on ${sourceEmail} to reload after rotation`);
           } else if (pids.length > 0) {

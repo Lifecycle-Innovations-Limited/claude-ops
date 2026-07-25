@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -35,12 +35,25 @@ export function loadClaudeHarnessEnv(options = {}) {
   const path = options.path || claudeHarnessEnvPath(options.home);
   let mode;
   let source;
+  let fd;
   try {
-    if (lstatSync(path).isSymbolicLink()) throw invalid();
-    mode = statSync(path).mode & 0o777;
-    source = readFileSync(path, 'utf8');
+    // Open once, then inspect and read the handle we opened. Checking the path
+    // and then opening it separately lets the file be swapped in between the
+    // two steps. O_NOFOLLOW makes the open itself fail on a symlink, so the
+    // earlier lstat check is no longer needed.
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    mode = fstatSync(fd).mode & 0o777;
+    source = readFileSync(fd, 'utf8');
   } catch {
     throw invalid();
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
   }
   if (mode !== 0o600) throw invalid();
 

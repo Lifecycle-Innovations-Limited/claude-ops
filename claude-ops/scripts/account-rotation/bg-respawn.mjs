@@ -214,7 +214,8 @@ export function doRespawn(session, log, opts = {}) {
     try {
       process.kill(session.pid, 'SIGTERM');
       try {
-        writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()));
+        // mode keeps the marker owner-only; the path under /tmp is predictable.
+        writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()), { mode: 0o600 });
       } catch {}
       try {
         unlinkSync(DEFERRED_MARKER(session.id));
@@ -336,6 +337,8 @@ export function doRespawn(session, log, opts = {}) {
               writeFileSync(
                 CRS_RELAY_DOWN_MARKER,
                 JSON.stringify({ ts: Date.now(), reason: 'relay-down', lastSession: String(session.id) }),
+                // mode keeps the marker owner-only; the path under /tmp is predictable.
+                { mode: 0o600 },
               );
             } catch {}
             log(
@@ -491,7 +494,8 @@ export function doRespawn(session, log, opts = {}) {
       } catch {}
     }
     try {
-      writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()));
+      // mode keeps the marker owner-only; the path under /tmp is predictable.
+      writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()), { mode: 0o600 });
     } catch {}
     try {
       unlinkSync(DEFERRED_MARKER(session.id));

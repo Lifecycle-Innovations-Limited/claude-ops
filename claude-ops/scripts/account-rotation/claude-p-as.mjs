@@ -29,7 +29,7 @@
  * No user prompts.
  */
 
-import { existsSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, constants as fsConstants } from 'fs';
 import { spawnSync, spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -132,23 +132,44 @@ function assertBudgetFlagAvailable() {
     die(2, '`claude --max-budget-usd` not available in installed CLI — refusing to run without hard cap');
 }
 
+// Best-effort read of whoever holds the lock, used only in the refusal message.
+// O_NOFOLLOW refuses to open if the path has been swapped for a symlink, so a
+// planted link cannot get another file's contents echoed into our output.
+function readLockOwner(lockPath) {
+  let heldFd;
+  try {
+    heldFd = openSync(lockPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    return readFileSync(heldFd, 'utf8').trim();
+  } catch {
+    return '';
+  } finally {
+    if (heldFd !== undefined) {
+      try {
+        closeSync(heldFd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 function acquireLock(lockPath) {
+  // Read the current holder before claiming, not after the claim fails. The
+  // create below is the only thing that decides who holds the lock, so nothing
+  // here acts on what this read saw.
+  const owner = readLockOwner(lockPath);
   let fd;
   try {
     fd = openSync(lockPath, 'wx');
   } catch (e) {
     if (e.code === 'EEXIST') {
-      let owner = '';
-      try {
-        owner = readFileSync(lockPath, 'utf8').trim();
-      } catch {
-        /* ignore */
-      }
       die(2, `keychain lock held (${lockPath}, pid=${owner || 'unknown'}) — another rotation/claude-p-as in flight`);
     }
     die(2, `failed to acquire lock ${lockPath}: ${e.message}`);
   }
-  writeFileSync(lockPath, String(process.pid));
+  // Write through the descriptor from the atomic create above. Reopening by path
+  // would let a file another process put there receive our pid instead.
+  writeFileSync(fd, String(process.pid));
   return fd;
 }
 
