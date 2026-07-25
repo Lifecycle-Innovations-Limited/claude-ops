@@ -71,7 +71,11 @@ const C = cfg.crs || {};
 const num = (v, d) => (v === undefined || v === null || v === '' || Number.isNaN(+v) ? d : +v);
 
 function truthy(v) {
-  return ['1', 'true', 'yes', 'on'].includes(String(v ?? '').trim().toLowerCase());
+  return ['1', 'true', 'yes', 'on'].includes(
+    String(v ?? '')
+      .trim()
+      .toLowerCase(),
+  );
 }
 
 const ENABLED = truthy(process.env.CRS_TOKEN_REFRESH_ENABLED) || C.tokenRefreshEnabled === true;
@@ -160,8 +164,8 @@ function authoritativeRateLimited(a, nowMs) {
   const reason = status.reason || a.rateLimitReason;
   return Boolean(
     (status.isRateLimited === true || a.rateLimitStatus?.isRateLimited === 'true') &&
-      end > nowMs &&
-      String(reason || '').includes('authoritative_reset'),
+    end > nowMs &&
+    String(reason || '').includes('authoritative_reset'),
   );
 }
 
@@ -169,8 +173,9 @@ function hardHeld(a, nowMs) {
   const status = String(a.status || '');
   if (['blocked', 'auth_repair', 'error'].includes(status)) return true;
   return (
-    futureMs(a.rateLimitEndAt || a.rateLimitStatus?.rateLimitEndAt || a.rateLimitStatus?.resetAt || a.weeklyRateLimitEndAt) >
-    nowMs
+    futureMs(
+      a.rateLimitEndAt || a.rateLimitStatus?.rateLimitEndAt || a.rateLimitStatus?.resetAt || a.weeklyRateLimitEndAt,
+    ) > nowMs
   );
 }
 
@@ -207,7 +212,9 @@ async function refreshAccount(auth, a) {
       const delayMs = retryAfterHdr
         ? Math.min(15 * 60_000, Math.max(2_000, parseInt(retryAfterHdr, 10) * 1000 + 2000))
         : 30_000;
-      log(`  ${a.name}: refresh 429 (attempt ${attempt}/${MAX_RETRIES}) — waiting ${Math.round(delayMs / 1000)}s (Retry-After=${retryAfterHdr ?? 'n/a'})...`);
+      log(
+        `  ${a.name}: refresh 429 (attempt ${attempt}/${MAX_RETRIES}) — waiting ${Math.round(delayMs / 1000)}s (Retry-After=${retryAfterHdr ?? 'n/a'})...`,
+      );
       await new Promise((r2) => setTimeout(r2, delayMs));
       continue;
     }
@@ -219,7 +226,8 @@ async function refreshAccount(auth, a) {
       body = txt;
     }
     const ok = r.status === 200 && (body?.success === true || body?.data?.success === true || body?.data?.accessToken);
-    const err = body?.message || body?.error?.message || body?.error || (typeof body === 'string' ? body.slice(0, 120) : '');
+    const err =
+      body?.message || body?.error?.message || body?.error || (typeof body === 'string' ? body.slice(0, 120) : '');
     if (r.status === 200 || attempt === MAX_RETRIES) {
       return { ok, status: r.status, err, retryAfter: lastRetryAfter };
     }
@@ -290,7 +298,9 @@ async function tick() {
     if (authLimited) {
       if (a.schedulable !== false) {
         const off = await setSchedulable(auth, a, false);
-        log(`${a.name}: authoritative rate limit until ${a.rateLimitStatus?.rateLimitEndAt || a.rateLimitEndAt} — ${off ? 'SIDELINED' : 'sideline FAILED'}`);
+        log(
+          `${a.name}: authoritative rate limit until ${a.rateLimitStatus?.rateLimitEndAt || a.rateLimitEndAt} — ${off ? 'SIDELINED' : 'sideline FAILED'}`,
+        );
       } else {
         log(`${a.name}: authoritative rate limit already sidelined`);
       }
@@ -329,7 +339,9 @@ async function tick() {
       const expired = !exp || exp <= nowMs + REFRESH_WINDOW_MS;
       if (expired && a.schedulable !== false) {
         const off = await setSchedulable(auth, a, false);
-        log(`${a.name}: refresh FAILED (HTTP ${res.status}: ${res.err}) — dead token, ${off ? 'SIDELINED' : 'sideline FAILED'}, needs full re-auth`);
+        log(
+          `${a.name}: refresh FAILED (HTTP ${res.status}: ${res.err}) — dead token, ${off ? 'SIDELINED' : 'sideline FAILED'}, needs full re-auth`,
+        );
       } else {
         log(`${a.name}: refresh FAILED (HTTP ${res.status}: ${res.err}) — needs full re-auth`);
       }

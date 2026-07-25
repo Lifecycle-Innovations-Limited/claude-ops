@@ -107,7 +107,16 @@ export function credentialStoreCandidates() {
   return [
     process.env.OPS_CREDENTIAL_STORE,
     join(homedir(), '.claude', 'plugins', 'cache', 'ops-marketplace', 'ops', 'current', 'lib', 'credential-store.sh'),
-    join(homedir(), '.claude', 'plugins', 'marketplaces', 'ops-marketplace', 'claude-ops', 'lib', 'credential-store.sh'),
+    join(
+      homedir(),
+      '.claude',
+      'plugins',
+      'marketplaces',
+      'ops-marketplace',
+      'claude-ops',
+      'lib',
+      'credential-store.sh',
+    ),
     join(pluginRoot, 'lib', 'credential-store.sh'),
   ].filter(Boolean);
 }

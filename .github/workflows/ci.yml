@@ -3,7 +3,9 @@ on:
   pull_request:
     branches: [dev, main]
   push:
-    branches: [dev]
+    # main is included so formatting and checks are verified after a merge, not
+    # only on the pull request. Without it, drift can land on main unnoticed.
+    branches: [dev, main]
 
 
 concurrency:

@@ -74,7 +74,11 @@ const cfg = loadRotationConfig();
 const C = cfg.crs || {};
 
 function truthy(v) {
-  return ['1', 'true', 'yes', 'on'].includes(String(v ?? '').trim().toLowerCase());
+  return ['1', 'true', 'yes', 'on'].includes(
+    String(v ?? '')
+      .trim()
+      .toLowerCase(),
+  );
 }
 
 const ENABLED = truthy(process.env.CRS_COOLDOWN_ENABLED) || C.cooldownEnabled === true;
@@ -318,7 +322,12 @@ async function main() {
 
 main().catch((e) => {
   const message = e?.message || String(e);
-  if (message === 'fetch failed' || message.includes('ECONNREFUSED') || message.includes('ECONNRESET') || message.includes('ETIMEDOUT')) {
+  if (
+    message === 'fetch failed' ||
+    message.includes('ECONNREFUSED') ||
+    message.includes('ECONNRESET') ||
+    message.includes('ETIMEDOUT')
+  ) {
     log('WARN transient CRS fetch failure; skipping this tick');
     process.exit(0);
   }
