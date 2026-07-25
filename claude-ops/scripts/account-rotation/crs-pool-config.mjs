@@ -7,6 +7,7 @@
  */
 
 import { readFileSync, existsSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
@@ -98,6 +99,66 @@ export function crsPolicy(config = loadRotationConfig()) {
     .replace(/_/g, '-');
   if (raw === 'maxout' || raw === 'max-out') return 'max-out';
   return 'conservative';
+}
+
+/** Candidate paths for the shared ops credential-store CLI (never hardcoded to one account/box). */
+export function credentialStoreCandidates() {
+  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || join(__dirname, '..', '..');
+  return [
+    process.env.OPS_CREDENTIAL_STORE,
+    join(homedir(), '.claude', 'plugins', 'cache', 'ops-marketplace', 'ops', 'current', 'lib', 'credential-store.sh'),
+    join(homedir(), '.claude', 'plugins', 'marketplaces', 'ops-marketplace', 'claude-ops', 'lib', 'credential-store.sh'),
+    join(pluginRoot, 'lib', 'credential-store.sh'),
+  ].filter(Boolean);
+}
+
+export function resolveCredentialStorePath() {
+  const candidates = credentialStoreCandidates();
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return candidates[candidates.length - 1];
+}
+
+/**
+ * Resolve the CRS admin password for HTTP basic auth against a self-hosted
+ * claude-relay-service pool. Resolution order (first hit wins), none of it
+ * ever hardcoded to one deployment:
+ *   1. $CRS_ADMIN_PASSWORD
+ *   2. the env var named by config.crs.adminPasswordEnv (or $CRS_ADMIN_PASSWORD_ENV)
+ *   3. `docker inspect <container>` — reads ADMIN_PASSWORD out of a co-located
+ *      Docker Compose CRS deploy's own container env
+ *   4. the shared ops credential-store CLI, key `CRS-Admin-<adminUser>`
+ * Returns null (never throws) if nothing resolves — callers decide whether that
+ * means "skip this tick" or "hard error".
+ */
+export function resolveCrsAdminPassword(config = loadRotationConfig(), opts = {}) {
+  if (process.env.CRS_ADMIN_PASSWORD) return process.env.CRS_ADMIN_PASSWORD;
+  const envName = config.crs?.adminPasswordEnv || process.env.CRS_ADMIN_PASSWORD_ENV;
+  if (envName && process.env[envName]) return process.env[envName];
+
+  const adminUser = opts.adminUser || process.env.CRS_ADMIN_USER || config.crs?.adminUser || 'cradmin';
+  const container = opts.container || process.env.CRS_CONTAINER || config.crs?.containerName || 'crs-claude-relay-1';
+  const execOpts = { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] };
+
+  try {
+    const out = execFileSync(
+      'docker',
+      ['inspect', container, '--format', '{{range .Config.Env}}{{println .}}{{end}}'],
+      execOpts,
+    );
+    const m = out.match(/^ADMIN_PASSWORD=(.+)$/m);
+    if (m?.[1]?.trim()) return m[1].trim();
+  } catch {}
+
+  try {
+    const cred = resolveCredentialStorePath();
+    const acct = process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || 'claude-ops';
+    const pw = execFileSync('bash', [cred, 'get', `CRS-Admin-${adminUser}`, acct], execOpts).trim();
+    if (pw) return pw;
+  } catch {}
+
+  return null;
 }
 
 export function vaultLookupKeysForEmail(email, accounts = []) {
@@ -355,12 +416,20 @@ function twoCaptchaProxyConfig(twoCaptcha = {}) {
 }
 
 function efgProxyConfig(config = {}) {
-  const url = config.url || firstEnvValue(['EFG_PROXY_URL', 'CRS_EFG_PROXY_URL']) || 'http://203.0.113.1:18088';
-  const parsed = parseProxyUrl(url);
-  if (parsed?.host && parsed?.port) return parsed;
+  // No default host/port/URL: an "external gateway forwarder" proxy is always a
+  // specific deployment's own private network address, never a safe generic
+  // default. Require explicit config or env; return null if neither is set so
+  // callers treat it as "no EFG proxy configured" rather than silently pointing
+  // at some other operator's network.
+  const url = config.url || firstEnvValue(['EFG_PROXY_URL', 'CRS_EFG_PROXY_URL']);
+  if (url) {
+    const parsed = parseProxyUrl(url);
+    if (parsed?.host && parsed?.port) return parsed;
+  }
 
-  const host = config.host || firstEnvValue(['EFG_PROXY_HOST', 'CRS_EFG_PROXY_HOST']) || '203.0.113.1';
-  const port = config.port || firstEnvValue(['EFG_PROXY_PORT', 'CRS_EFG_PROXY_PORT']) || '18088';
+  const host = config.host || firstEnvValue(['EFG_PROXY_HOST', 'CRS_EFG_PROXY_HOST']);
+  const port = config.port || firstEnvValue(['EFG_PROXY_PORT', 'CRS_EFG_PROXY_PORT']);
+  if (!host || !port) return null;
   return {
     type: config.type || firstEnvValue(['EFG_PROXY_TYPE', 'CRS_EFG_PROXY_TYPE']) || 'http',
     host,

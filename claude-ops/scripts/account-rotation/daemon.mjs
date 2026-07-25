@@ -1714,7 +1714,12 @@ async function mainLoop() {
       // Deferred bg-session respawn sweep (every 2 min): sessions that were
       // busy at rotation time get respawned once they go idle, or force-
       // respawned after 90 min so they never wedge on an expired token.
-      if (Date.now() - lastRespawnSweep > 120_000) {
+      // Opt-in (default OFF): bg-session respawn sweep assumes daemon-hosted
+      // `claude --bg` sessions and per-session leases exist. On a fresh install
+      // neither does, so this stays a no-op until explicitly enabled — set
+      // CLAUDE_ENABLE_BG_RESPAWN=1 to turn it on. Mirrors the opt-in gate in
+      // session-router.mjs / bg-respawn.mjs.
+      if (process.env.CLAUDE_ENABLE_BG_RESPAWN === '1' && Date.now() - lastRespawnSweep > 120_000) {
         lastRespawnSweep = Date.now();
         try {
           const handled = sweepDeferredRespawns((m) => log(m));
@@ -1816,7 +1821,11 @@ async function mainLoop() {
         await doRotation(reason);
         lastRotatedAt = Date.now();
         await sleep(RATE_LIMIT_COOLDOWN);
-      } else {
+      } else if (process.env.CLAUDE_ENABLE_BG_SESSION_ROUTER === '1') {
+        // Opt-in (default OFF): per-session account leasing only makes sense
+        // once CLAUDE_SESSION_ROUTING is in use (see session-router.mjs). Keep
+        // it disabled by default so a fresh install never starts reassigning
+        // leases/respawning sessions on its own.
         await checkSessionLeaseRotations(config, state);
       }
     } catch (err) {

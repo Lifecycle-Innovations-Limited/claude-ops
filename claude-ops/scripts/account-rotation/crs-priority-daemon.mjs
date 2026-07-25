@@ -33,9 +33,26 @@
 //
 // CONFIG (config.json "crs" block; every key overridable by env):
 //   enabled, policy, baseUrl, adminUser, adminPasswordEnv, off5h, off7d, on5h, on7d,
-//   floor, freshMinutes. Per-account crsAccountName (or crs.nameByVaultKey) maps vault
-//   keys to CRS admin account names for token-feed + live quota lookup. Admin password
-//   resolves from (1) $CRS_ADMIN_PASSWORD, (2) the configured env var, (3) credential-store.
+//   floor, freshMinutes, weeklyReconcile. Per-account crsAccountName (or
+//   crs.nameByVaultKey) maps vault keys to CRS admin account names for token-feed +
+//   live quota lookup. Admin password resolves from (1) $CRS_ADMIN_PASSWORD, (2) the
+//   configured env var, (3) credential-store.
+//
+// WEEKLY-CAP RECONCILIATION (crs.weeklyReconcile, default on; $CRS_WEEKLY_RECONCILE=0
+// to disable): some CRS deployments persist a weeklyRateLimitEndAt timestamp on an
+// account once a genuine 7-day cap is hit, and hold schedulable=false until it
+// passes. That timestamp can go stale (wrong upstream reset, clock skew, a reset
+// that already happened) and park a perfectly usable account. Each tick this daemon
+// reconciles the persisted hold against live utilization: if the account's real 7d
+// utilization has dropped back under `on7d`, the hold is cleared even though the
+// timestamp hasn't passed yet. It also records a hold when live utilization proves a
+// genuine breach of `off7d` and the source data included an authoritative reset time.
+// Entirely a no-op on accounts/deployments that never set weeklyRateLimitEndAt.
+//
+// FLOOR (crs.floor / $CRS_FLOOR, default 2): minimum number of accounts the
+// conservative policy will keep schedulable even if that means reverting some
+// soft (utilization/sessionWindow) deprioritizations. Tune this to your own pool
+// size — the default is a conservative floor for a small pool, not a target.
 //
 // CLI:  (none)=one live tick · --dry-run=log decisions, no writes · --status=print
 //       current schedulable + utilization table and exit · --once (alias for tick).
@@ -91,12 +108,20 @@ const OFF_5H = num(process.env.CRS_OFF_5H ?? C.off5h, 90);
 const OFF_7D = num(process.env.CRS_OFF_7D ?? C.off7d, 95);
 const ON_5H = num(process.env.CRS_ON_5H ?? C.on5h, 70);
 const ON_7D = num(process.env.CRS_ON_7D ?? C.on7d, 85);
-const FLOOR = num(process.env.CRS_FLOOR ?? C.floor, 3);
+// Minimum-schedulable-accounts safety margin. Default is intentionally small and
+// generic — set crs.floor (or $CRS_FLOOR) to whatever fraction makes sense for your
+// own pool size; do not assume this default fits a large fleet.
+const FLOOR = num(process.env.CRS_FLOOR ?? C.floor, 2);
 const FRESH_MIN = num(process.env.CRS_FRESH_MIN ?? C.freshMinutes, 15);
 const CRS_POLICY = crsPolicy(cfg);
 const TOKEN_MIN_FRESH_MS = num(process.env.CRS_TOKEN_MIN_FRESH_MS ?? C.tokenMinFreshMs, 5 * 60_000);
 const STALE_RL_MAX_MINS = num(process.env.CRS_STALE_RL_MINUTES, 300);
 const LIVE_USAGE_TTL_MS = num(process.env.CRS_LIVE_USAGE_TTL_MS, 90_000);
+// Opt-in-by-default, safe-no-op guard: only touches accounts that already carry a
+// weeklyRateLimitEndAt field, so a fresh install with no such field never sees this
+// reconciler do anything. Set crs.weeklyReconcile=false / $CRS_WEEKLY_RECONCILE=0
+// to disable outright.
+const WEEKLY_RECONCILE = process.env.CRS_WEEKLY_RECONCILE === '0' ? false : C.weeklyReconcile !== false;
 const IS_LINUX = platform() === 'linux';
 const liveUsageCache = new Map();
 const LINUX_CRED_PATH = crsFileVaultPath(cfg);
@@ -267,6 +292,9 @@ async function liveUsage(email) {
     const data = {
       u5: d?.five_hour?.utilization ?? null,
       u7: d?.seven_day?.utilization ?? null,
+      // ISO string when the API supplies it — used by the weekly-cap reconciler
+      // below to record/clear an authoritative reset time.
+      resets7: d?.seven_day?.resets_at ?? null,
       // capture any reset header for hybrid RL detection if body alone insufficient
       resetHeader: headers['retry-after'] || headers['anthropic-ratelimit-unified-tokens-reset'] || null,
     };
@@ -291,6 +319,15 @@ function genuineOverload(a, now = Date.now()) {
     if (typeof mins === 'number' && mins > STALE_RL_MAX_MINS) return false;
   }
   return true;
+}
+
+// A persisted weekly-cap hold (see WEEKLY-CAP RECONCILIATION above). Unlike the
+// soft utilization/sessionWindow signals, this is treated as a hard hold — the
+// FLOOR safety margin never reverts it, since it represents a genuine 7-day
+// exhaustion, not a heuristic guess.
+function weeklyCapActive(a, now = Date.now()) {
+  const endMs = a.weeklyRateLimitEndAt ? Date.parse(a.weeklyRateLimitEndAt) : NaN;
+  return Number.isFinite(endMs) && endMs > now;
 }
 
 // ── http ─────────────────────────────────────────────────────────────────────
@@ -417,7 +454,10 @@ function decideMaxOut(accts, nowMs) {
 
     let desired = true;
     let reason = `max-out (5h=${u5 ?? '?'} 7d=${u7 ?? '?'} sw=${sw ?? 'none'})`;
-    if (staleToken) {
+    if (weeklyCapActive(a, nowMs)) {
+      desired = false;
+      reason = `weekly-cap-hold until ${a.weeklyRateLimitEndAt.slice(0, 16)}`;
+    } else if (staleToken) {
       desired = false;
       reason = tokenExpiresAt ? `stale-token ${new Date(tokenExpiresAt).toISOString()}` : 'stale-token missing-expiry';
     } else if (rl) {
@@ -453,7 +493,11 @@ function decideConservative(accts, nowMs) {
     let desired = cur;
     let reason = 'hold';
     let soft = false;
-    if (rl) {
+    if (weeklyCapActive(a, nowMs)) {
+      desired = false;
+      reason = `weekly-cap-hold until ${a.weeklyRateLimitEndAt.slice(0, 16)}`;
+      soft = false;
+    } else if (rl) {
       desired = false;
       reason = 'rate-limited';
     } else if (overloaded) {
@@ -578,6 +622,38 @@ async function main() {
     if (a._liveUsage && (await feedLiveHeadroom(auth, a, a._liveUsage))) fed++;
   }
   if (fed) log(`headroom feed: updated ${fed} account(s) in CRS for scheduler`);
+
+  // Weekly-cap reconciliation (see WEEKLY-CAP RECONCILIATION in the header comment).
+  // Safe no-op on any account/deployment that never sets weeklyRateLimitEndAt.
+  if (WEEKLY_RECONCILE && !DRY && !STATUS) {
+    for (const a of accts) {
+      const u7 = a._liveUsage?.u7;
+      const resets7 = a._liveUsage?.resets7;
+      if (typeof u7 !== 'number') continue;
+      if (u7 >= OFF_7D && resets7 && !a.weeklyRateLimitEndAt) {
+        const put = await jfetch(`/admin/claude-accounts/${a.id}`, {
+          method: 'PUT',
+          headers: auth,
+          body: JSON.stringify({ weeklyRateLimitEndAt: resets7 }),
+        }).catch(() => null);
+        if (put && put.status >= 200 && put.status < 300) {
+          a.weeklyRateLimitEndAt = resets7;
+          log(`${a.name}: recorded weekly-cap hold until ${resets7} (live 7d=${u7}%)`);
+        }
+      } else if (u7 < ON_7D && a.weeklyRateLimitEndAt) {
+        const put = await jfetch(`/admin/claude-accounts/${a.id}`, {
+          method: 'PUT',
+          headers: auth,
+          body: JSON.stringify({ weeklyRateLimitEndAt: null }),
+        }).catch(() => null);
+        if (put && put.status >= 200 && put.status < 300) {
+          log(`${a.name}: cleared stale weekly-cap hold (live 7d=${u7}% < ${ON_7D}%)`);
+          a.weeklyRateLimitEndAt = null;
+        }
+      }
+    }
+  }
+
   const decisions = decide(accts);
 
   if (STATUS) {
