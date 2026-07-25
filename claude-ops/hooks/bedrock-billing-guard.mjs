@@ -85,7 +85,9 @@ const ackFile = sid8 ? `/tmp/claude-bedrock-ack-${sid8}` : '';
 // ── Explicit OK: a Bash call carrying the BEDROCK-ACK sentinel dismisses ───────
 if (tool === 'Bash' && /BEDROCK-ACK/.test(cmd)) {
   try {
-    if (ackFile) writeFileSync(ackFile, String(Date.now()));
+    // mode keeps the ack owner-only: the path is predictable, and any user who
+    // can create it would otherwise dismiss the billing guard for the session.
+    if (ackFile) writeFileSync(ackFile, String(Date.now()), { mode: 0o600 });
   } catch {}
   allow(); // permit the acknowledging command itself
 }
