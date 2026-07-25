@@ -200,14 +200,19 @@ export function doRespawn(session, log, opts = {}) {
   // (resetTty is defined at module scope with process handler)
   const stateFile = join(homedir(), '.claude', 'jobs', String(session.id), 'state.json');
   let state = null;
-  if (existsSync(stateFile)) {
-    try {
-      state = JSON.parse(readFileSync(stateFile, 'utf8'));
-    } catch {
-      state = null;
-    }
+  // Read the file rather than ask whether it exists. The reconciliation further
+  // down rewrites this same path, and a stat here is a check that write would
+  // then hang off. ENOENT says "no saved state" just as well; any other read
+  // failure, or unparseable contents, leaves state null without claiming the
+  // session is a spare — same as the two existsSync calls this replaces.
+  let stateMissing = false;
+  try {
+    state = JSON.parse(readFileSync(stateFile, 'utf8'));
+  } catch (err) {
+    state = null;
+    if (err.code === 'ENOENT') stateMissing = true;
   }
-  if (!existsSync(stateFile)) {
+  if (stateMissing) {
     log(
       `[bg-respawn] session ${session.id} (pid ${session.pid}) has no saved state (spare) — terminating process to refresh`,
     );
@@ -464,7 +469,10 @@ export function doRespawn(session, log, opts = {}) {
         }
         if (mutated) {
           state.respawnFlags = flags;
-          writeFileSync(stateFile, JSON.stringify(state, null, 2));
+          // Rewrite in place, so no exclusive create here. The mode only bites if
+          // the file has gone since we read it, and keeps the replacement from
+          // coming back world-readable when it does.
+          writeFileSync(stateFile, JSON.stringify(state, null, 2), { mode: 0o600 });
         }
       }
     } catch (err) {
