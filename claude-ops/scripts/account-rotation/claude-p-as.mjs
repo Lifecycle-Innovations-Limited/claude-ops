@@ -139,16 +139,30 @@ function acquireLock(lockPath) {
   } catch (e) {
     if (e.code === 'EEXIST') {
       let owner = '';
+      let heldFd;
       try {
-        owner = readFileSync(lockPath, 'utf8').trim();
+        // Read through a handle opened once, rather than re-resolving the path
+        // after the failed create — the file can be replaced in between.
+        heldFd = openSync(lockPath, 'r');
+        owner = readFileSync(heldFd, 'utf8').trim();
       } catch {
         /* ignore */
+      } finally {
+        if (heldFd !== undefined) {
+          try {
+            closeSync(heldFd);
+          } catch {
+            /* ignore */
+          }
+        }
       }
       die(2, `keychain lock held (${lockPath}, pid=${owner || 'unknown'}) — another rotation/claude-p-as in flight`);
     }
     die(2, `failed to acquire lock ${lockPath}: ${e.message}`);
   }
-  writeFileSync(lockPath, String(process.pid));
+  // Write through the descriptor from the atomic create above. Reopening by path
+  // would let a file another process put there receive our pid instead.
+  writeFileSync(fd, String(process.pid));
   return fd;
 }
 

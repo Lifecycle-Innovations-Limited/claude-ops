@@ -320,7 +320,12 @@ function writeOffenderFlag(sessionId, via) {
   const shortId = offenderShortId(sessionId);
   if (!shortId) return;
   try {
-    writeFileSync(OFFENDER_FLAG(shortId), `measured via ${via || 'env'} by rotation watchdog — metered AWS Bedrock`);
+    writeFileSync(
+      OFFENDER_FLAG(shortId),
+      `measured via ${via || 'env'} by rotation watchdog — metered AWS Bedrock`,
+      // mode keeps the flag owner-only; the path under /tmp is predictable.
+      { mode: 0o600 },
+    );
   } catch {}
 }
 function clearOffenderFlag(sessionId) {

@@ -326,7 +326,8 @@ function main() {
       log('FORCED restore → CRS env');
     } else {
       setEnvMode('direct');
-      writeFileSync(MARKER, String(Date.now()));
+      // Forced path: overwrite whatever is there, but keep the marker owner-only.
+      writeFileSync(MARKER, String(Date.now()), { mode: 0o600 });
       saveState({ down: 0, up: 0, mode: 'fail-closed' });
       log('FORCED restore refused: CRS health or inference smoke failed → fail-closed env');
       process.exitCode = 1;
@@ -335,7 +336,8 @@ function main() {
   }
   if (args.has('--fallback')) {
     setEnvMode('direct');
-    writeFileSync(MARKER, String(Date.now()));
+    // Forced path: overwrite whatever is there, but keep the marker owner-only.
+    writeFileSync(MARKER, String(Date.now()), { mode: 0o600 });
     saveState({ down: 0, up: 0, mode: 'fail-closed' });
     log('FORCED fallback → fail-closed env');
     return;
@@ -371,7 +373,15 @@ function main() {
 
   if (!healthy && st.down >= DOWN_STRIKES && !inFallback) {
     if (setEnvMode('direct')) {
-      writeFileSync(MARKER, String(Date.now()));
+      // 'wx' creates the marker in one step, so a second watcher cannot slip in
+      // between the existsSync above and this write. mode keeps it owner-only.
+      try {
+        writeFileSync(MARKER, String(Date.now()), { flag: 'wx', mode: 0o600 });
+      } catch (err) {
+        // EEXIST means another watcher just went fail-closed, which is the same
+        // outcome we wanted. Anything else is a real write failure.
+        if (err.code !== 'EEXIST') throw err;
+      }
       st.mode = 'fail-closed';
       log(
         `CRS DOWN x${st.down} (>=${DOWN_STRIKES}) → FAIL-CLOSED: stripped provider env from settings.json; new/respawned sessions must not silently use direct or Bedrock`,

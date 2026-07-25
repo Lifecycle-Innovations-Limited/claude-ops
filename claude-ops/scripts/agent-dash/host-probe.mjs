@@ -12,7 +12,7 @@
 
 import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { readFileSync, readdirSync, statSync, existsSync, openSync, readSync, closeSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, fstatSync, existsSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 
 const HOST = process.env.AGENT_DASH_HOST || 'local';
@@ -62,10 +62,12 @@ function transcriptPath(cwd, sessionId) {
 function tailLines(path, maxBytes = 96 * 1024) {
   let fd;
   try {
-    const st = statSync(path);
+    // Open first, then size the handle we actually read from: stat-then-open
+    // lets the file be replaced between the two calls.
+    fd = openSync(path, 'r');
+    const st = fstatSync(fd);
     const len = Math.min(maxBytes, st.size);
     const start = st.size - len;
-    fd = openSync(path, 'r');
     const buf = Buffer.allocUnsafe(len);
     readSync(fd, buf, 0, len, start);
     const lines = buf.toString('utf8').split('\n').filter(Boolean);
