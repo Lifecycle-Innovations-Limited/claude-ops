@@ -10,6 +10,22 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.46.2] - 2026-07-25
+
+### Changed
+- fix(security): capture the OAuth URL under umask 077 (#713)
+- fix(security): drive bg-respawn state load off the read, not a stat (#712)
+- fix(security): make /tmp markers owner-only and close file races (#711)
+- feat(crs): opt-in magic-link autoloop reconciler (#710)
+- fix(rotation): create the deferred-respawn marker atomically (#707)
+- feat(ops-rotate-setup): wire crs-429-cooldown/401-refresher into the setup wizard (#709)
+- fix(crs-token-feed): add missing crs-refresh-lock.mjs (#708)
+- feat(crs-priority-daemon): weekly-cap reconciliation + configurable floor (#706)
+- feat(crs): opt-in 429-cooldown + 401-refresher reconcilers (#705)
+- fix(crs-pool-config): remove hardcoded personal proxy IP default (#703)
+- chore(rotate): reconcile drift between local and public account-rotation scripts (#704)
+
+
 ## [2.46.1] - 2026-07-24
 
 ### Changed
