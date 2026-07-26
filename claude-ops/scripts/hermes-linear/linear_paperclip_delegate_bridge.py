@@ -811,6 +811,66 @@ def _title_fingerprint(title: str) -> str:
     return t
 
 
+def _linear_issue_search(
+    team_id: str,
+    term: str,
+    *,
+    n: int = 10,
+    open_only: bool = True,
+) -> list[dict]:
+    """Search team issues by title/description term. open_only excludes terminal types."""
+    if open_only:
+        q = """
+        query($teamId: ID!, $n: Int, $term: String!) {
+          issues(
+            first: $n
+            filter: {
+              team: { id: { eq: $teamId } }
+              state: { type: { nin: ["completed", "canceled", "duplicate"] } }
+              or: [
+                { description: { containsIgnoreCase: $term } }
+                { title: { containsIgnoreCase: $term } }
+              ]
+            }
+          ) {
+            nodes {
+              id identifier title description url
+              state { name type }
+            }
+          }
+        }
+        """
+    else:
+        # Any state, including Duplicate/Canceled/Production — used for exact pc-id guard.
+        q = """
+        query($teamId: ID!, $n: Int, $term: String!) {
+          issues(
+            first: $n
+            filter: {
+              team: { id: { eq: $teamId } }
+              or: [
+                { description: { containsIgnoreCase: $term } }
+                { title: { containsIgnoreCase: $term } }
+              ]
+            }
+          ) {
+            nodes {
+              id identifier title description url
+              state { name type }
+            }
+          }
+        }
+        """
+    data = linear_gql(
+        q,
+        {"teamId": team_id, "n": n, "term": term},
+        token=personal_key() or agent_token(),
+    )
+    if data.get("errors"):
+        return []
+    return (((data.get("data") or {}).get("issues") or {}).get("nodes")) or []
+
+
 def find_open_linear_sibling(
     team_id: str,
     pc_id: str,
@@ -818,54 +878,24 @@ def find_open_linear_sibling(
     *,
     min_fp_len: int = 20,
 ) -> Optional[dict]:
-    """Return an open Linear issue that already mirrors this work.
+    """Return a Linear issue that already mirrors this Paperclip work.
 
     Guard order:
-      1) description contains paperclip:{pc_id}
-      2) title contains [Paperclip {pc_id}]
+      1) description contains paperclip:{pc_id}  (any state, including terminal)
+      2) title contains [Paperclip {pc_id}]       (any state, including terminal)
       3) open issue whose cleaned title fingerprint equals ours (len >= min_fp_len)
 
-    Terminal states (completed/canceled/duplicate) are ignored so finished
-    work can still get a fresh Linear issue when re-opened intentionally.
+    Exact paperclip-id matches include terminal Linear (Duplicate/Canceled/Production)
+    so hygiene-closed mirrors are not re-minted as open clones. Title fingerprint
+    stays open-only so distinct intentional open work can still share semantic titles
+    without colliding with unrelated closed history.
     """
     pc = (pc_id or "").strip().upper()
     fp = _title_fingerprint(title)
-    q = """
-    query($teamId: ID!, $n: Int, $term: String!) {
-      issues(
-        first: $n
-        filter: {
-          team: { id: { eq: $teamId } }
-          state: { type: { nin: ["completed", "canceled", "duplicate"] } }
-          or: [
-            { description: { containsIgnoreCase: $term } }
-            { title: { containsIgnoreCase: $term } }
-          ]
-        }
-      ) {
-        nodes {
-          id identifier title description url
-          state { name type }
-        }
-      }
-    }
-    """
-    terms: list[str] = []
-    if pc:
-        terms.append(f"paperclip:{pc}")
-        terms.append(f"[Paperclip {pc}]")
-        terms.append(pc)
     seen_ids: set[str] = set()
     candidates: list[dict] = []
-    for term in terms:
-        data = linear_gql(
-            q,
-            {"teamId": team_id, "n": 10, "term": term},
-            token=personal_key() or agent_token(),
-        )
-        if data.get("errors"):
-            continue
-        nodes = (((data.get("data") or {}).get("issues") or {}).get("nodes")) or []
+
+    def _add(nodes: list[dict]) -> None:
         for n in nodes:
             iid = n.get("id")
             if not iid or iid in seen_ids:
@@ -873,28 +903,36 @@ def find_open_linear_sibling(
             seen_ids.add(iid)
             candidates.append(n)
 
+    # Exact id match: search open first, then any-state (terminal).
     if pc:
+        for term in (f"paperclip:{pc}", f"[Paperclip {pc}]", pc):
+            _add(_linear_issue_search(team_id, term, n=10, open_only=True))
+            _add(_linear_issue_search(team_id, term, n=10, open_only=False))
+        # Prefer open exact id hits, then terminal exact id hits (newest identifier wins).
+        exact: list[dict] = []
         for n in candidates:
             blob = f"{n.get('description') or ''}\n{n.get('title') or ''}"
-            if re.search(rf"paperclip:\s*{re.escape(pc)}\b", blob, re.I):
-                return n
-            if re.search(rf"\[Paperclip\s+{re.escape(pc)}\]", n.get("title") or "", re.I):
-                return n
+            if re.search(rf"paperclip:\s*{re.escape(pc)}\b", blob, re.I) or re.search(
+                rf"\[Paperclip\s+{re.escape(pc)}\]", n.get("title") or "", re.I
+            ):
+                exact.append(n)
+        if exact:
+            def _rank(n: dict) -> tuple:
+                st = ((n.get("state") or {}).get("type") or "").lower()
+                openish = 0 if st not in ("completed", "canceled", "duplicate") else 1
+                try:
+                    num = int((n.get("identifier") or "HEA-0").split("-")[-1])
+                except Exception:
+                    num = 0
+                return (openish, -num)
 
+            exact.sort(key=_rank)
+            return exact[0]
+
+    # Title fingerprint: open siblings only
     if fp and len(fp) >= min_fp_len:
         needle = fp[:48]
-        data = linear_gql(
-            q,
-            {"teamId": team_id, "n": 25, "term": needle},
-            token=personal_key() or agent_token(),
-        )
-        if not data.get("errors"):
-            nodes = (((data.get("data") or {}).get("issues") or {}).get("nodes")) or []
-            for n in nodes:
-                iid = n.get("id")
-                if iid and iid not in seen_ids:
-                    seen_ids.add(iid)
-                    candidates.append(n)
+        _add(_linear_issue_search(team_id, needle, n=25, open_only=True))
         for n in candidates:
             other_fp = _title_fingerprint(n.get("title") or "")
             if other_fp and other_fp == fp:
@@ -919,34 +957,50 @@ def outbound_create(row: dict, dry_run: bool, states_cache: dict[str, list[dict]
     if existing_lin:
         return f"outbound skip {pc}: already linear:{existing_lin}"
 
-    # Create-guard: reuse open Linear sibling (paperclip id / title fingerprint)
+    # Create-guard: reuse Linear sibling (exact paperclip id any state, or open title fingerprint)
     # instead of minting another mirror of the same work.
     sibling = find_open_linear_sibling(team_id, pc, row.get("title") or pc)
     if sibling and sibling.get("identifier"):
         lin_ident = sibling["identifier"]
         lin_uuid = sibling.get("id") or ""
         lin_url = sibling.get("url") or f"https://linear.app/lifecycle-innovations/issue/{lin_ident}"
+        st_name = ((sibling.get("state") or {}).get("name") or "")
+        st_type = ((sibling.get("state") or {}).get("type") or "").lower()
+        terminal = st_type in ("completed", "canceled", "duplicate") or st_name.lower() in (
+            "canceled",
+            "cancelled",
+            "duplicate",
+            "done",
+            "production",
+        )
+        kind = "terminal" if terminal else "open"
         if dry_run:
             return (
                 f"DRY outbound reuse Linear {lin_ident} for {pc} "
-                f"(create-guard sibling; skip create)"
+                f"(create-guard {kind} sibling; skip create)"
             )
         append_linear_markers_to_paperclip(pc, lin_ident, lin_url)
         if lin_uuid:
             post_linear_comment(
                 lin_uuid,
                 f"**Paperclip create-guard reuse**\n\n"
-                f"- Linked existing Linear `{lin_ident}` to Paperclip `{pc}`\n"
-                f"- Skipped issueCreate (open sibling by id/title fingerprint)\n"
+                f"- Linked existing Linear `{lin_ident}` ({st_name or st_type or kind}) "
+                f"to Paperclip `{pc}`\n"
+                f"- Skipped issueCreate ({kind} sibling by id/title fingerprint; "
+                f"will not reopen terminal mirrors)\n"
                 f"paperclip:{pc}\nmirror:linear",
             )
         add_comment(
             pc,
-            f"Create-guard: reused existing Linear `{lin_ident}` (no new issue).\n"
+            f"Create-guard: reused existing Linear `{lin_ident}` "
+            f"({st_name or kind}; no new issue; terminal not reopened).\n"
             f"linear:{lin_ident}\nmirror:linear\n{lin_url}\n"
-            f"create-guard:reuse",
+            f"create-guard:reuse:{kind}",
         )
-        return f"outbound reuse {lin_ident} for {pc} (create-guard; skip create)"
+        return (
+            f"outbound reuse {lin_ident} for {pc} "
+            f"(create-guard {kind} sibling; skip create)"
+        )
 
     # Canonical Linear title: one [Paperclip {pc}] + semantic (no nested prefixes)
     lin_title = canonical_linear_title(pc, row.get("title") or pc)
