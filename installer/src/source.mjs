@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 export const CACHE_ROOT = path.join(
   os.homedir(),
@@ -13,8 +13,8 @@ export const CACHE_ROOT = path.join(
   "claude-ops-installer",
 );
 
-function sh(cmd, opts = {}) {
-  return execSync(cmd, {
+function git(args, opts = {}) {
+  return execFileSync("git", args, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     ...opts,
@@ -23,7 +23,7 @@ function sh(cmd, opts = {}) {
 
 export function resolveRef(srcDir) {
   try {
-    return sh(`git -C "${srcDir}" rev-parse HEAD`);
+    return git(["-C", srcDir, "rev-parse", "HEAD"]);
   } catch (_e) {
     return null;
   }
@@ -39,7 +39,6 @@ function cacheKey(cfg) {
 
 export function ensureSource(cfg) {
   const dir = path.join(CACHE_ROOT, cacheKey(cfg));
-  // The marketplace repo nests the actual plugin at <repo>/claude-ops/. That's where skills/ and bin/ live.
   const skillsDir = path.join(dir, "claude-ops", "skills");
   const binDir = path.join(dir, "claude-ops", "bin");
   fs.mkdirSync(CACHE_ROOT, { recursive: true });
@@ -51,10 +50,9 @@ export function ensureSource(cfg) {
     };
   }
   if (fs.existsSync(path.join(dir, ".git"))) {
-    // Stale partial — try to update.
     try {
-      sh(`git -C "${dir}" fetch --depth 1 origin ${cfg.source.ref}`);
-      sh(`git -C "${dir}" reset --hard FETCH_HEAD`);
+      git(["-C", dir, "fetch", "--depth", "1", "origin", cfg.source.ref]);
+      git(["-C", dir, "reset", "--hard", "FETCH_HEAD"]);
       if (fs.existsSync(path.join(skillsDir, "ops-inbox", "SKILL.md"))) {
         return {
           dir: path.join(dir, "claude-ops"),
@@ -69,11 +67,10 @@ export function ensureSource(cfg) {
   fs.rmSync(dir, { recursive: true, force: true });
   const url = cfg.source.url;
   const ref = cfg.source.ref;
-  // Shallow clone, then checkout the ref.
-  sh(`git clone --depth 1 --no-tags --filter=blob:none "${url}" "${dir}"`);
+  git(["clone", "--depth", "1", "--no-tags", "--filter=blob:none", url, dir]);
   try {
-    sh(`git -C "${dir}" fetch --depth 1 origin ${ref}`);
-    sh(`git -C "${dir}" checkout FETCH_HEAD`);
+    git(["-C", dir, "fetch", "--depth", "1", "origin", ref]);
+    git(["-C", dir, "checkout", "FETCH_HEAD"]);
   } catch (e) {
     throw new Error(`source: failed to fetch ref ${ref}: ${e.message}`);
   }

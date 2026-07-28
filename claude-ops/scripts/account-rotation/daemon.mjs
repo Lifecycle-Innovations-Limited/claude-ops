@@ -291,12 +291,18 @@ function readStoredToken(account) {
     }
   }
   try {
-    const out = execSync(`security find-generic-password -s "${svc}" -a "${VAULT_KEYCHAIN_ACCOUNT}" -g 2>&1`, {
+    const out = execFileSync('security', ['find-generic-password', '-s', svc, '-a', VAULT_KEYCHAIN_ACCOUNT, '-g'], {
       timeout: 5000,
-    }).toString();
-    const m = out.match(/^password: "?(.*?)"?$/m);
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const combined = out || '';
+    const m = combined.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
-  } catch {
+  } catch (e) {
+    const stderr = e.stderr?.toString?.() || '';
+    const m = stderr.match(/^password: "?(.*?)"?$/m);
+    if (m) return m[1].replace(/\\"/g, '"');
     return null;
   }
 }
@@ -329,15 +335,18 @@ function readActiveKeychainToken() {
     }
   }
   try {
-    const out = execSync(
-      `security find-generic-password -s "Claude Code-credentials" -a "${ACTIVE_KEYCHAIN_ACCOUNT}" -g 2>&1`,
-      {
-        timeout: 5000,
-      },
-    ).toString();
-    const m = out.match(/^password: "?(.*?)"?$/m);
+    const out = execFileSync(
+      'security',
+      ['find-generic-password', '-s', 'Claude Code-credentials', '-a', ACTIVE_KEYCHAIN_ACCOUNT, '-g'],
+      { timeout: 5000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    const combined = out || '';
+    const m = combined.match(/^password: "?(.*?)"?$/m);
     return m ? m[1].replace(/\\"/g, '"') : null;
-  } catch {
+  } catch (e) {
+    const stderr = e.stderr?.toString?.() || '';
+    const m = stderr.match(/^password: "?(.*?)"?$/m);
+    if (m) return m[1].replace(/\\"/g, '"');
     return null;
   }
 }
