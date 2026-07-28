@@ -2250,7 +2250,7 @@ async function makeManualDriver() {
   return {
     name: 'manual',
     async goto(url) {
-      execSync(`open "${url}"`);
+      execFileSync('open', [url]);
       notify('Account Rotation', 'Complete Google sign-in → click Allow');
     },
     async currentUrl() {
@@ -2725,7 +2725,7 @@ async function runAuthFlow(driver, account) {
       if (codeMatch && driver._localhostPort) {
         const replayUrl = `http://localhost:${driver._localhostPort}/callback?code=${codeMatch[1]}${stateMatch ? '&state=' + stateMatch[1] : ''}`;
         try {
-          execSync(`curl -s "${replayUrl}" -o /dev/null`, { timeout: 5000 });
+          execFileSync('curl', ['-s', replayUrl, '-o', '/dev/null'], { timeout: 5000 });
         } catch {}
       }
       return true;
