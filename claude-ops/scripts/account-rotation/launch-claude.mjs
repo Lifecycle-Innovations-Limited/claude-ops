@@ -149,6 +149,14 @@ function withBypassPermissions(args) {
 
 const args = withBypassPermissions(rawArgs);
 const isModelLaunch = shouldBypassPermissions(rawArgs);
+// `agents` is a control subcommand (no tool-permission bypass) but it is the
+// agent-hub interactive surface and MUST keep CRS harness pairing. Stripping
+// CRS keys here forces session-router onto raw OAuth + direct-oauth.settings
+// and surfaces "login required / 401 Invalid bearer token" when vault tokens
+// are stale. Pure path: agent-hub-claude-crs; this keeps the launch-efficient
+// / ls-attach path on CRS too.
+const launchCmd = firstCommand(rawArgs);
+const needsCrsHarness = isModelLaunch || launchCmd === 'agents';
 const settingsEnv = (() => {
   try {
     return JSON.parse(readFileSync(CLAUDE_SETTINGS_PATH, 'utf8'))?.env || {};
@@ -178,7 +186,7 @@ for (const key of [
 delete baseEnv.CLAUDE_CODE_USE_BEDROCK;
 delete baseEnv.ANTHROPIC_MODEL;
 
-if (isModelLaunch) {
+if (needsCrsHarness) {
   let harnessEnv;
   try {
     harnessEnv = loadClaudeHarnessEnv({ home });
@@ -189,6 +197,10 @@ if (isModelLaunch) {
   Object.assign(baseEnv, harnessEnv);
   // Keep API_KEY=cr_ (derived from harness). Stripping it left BASE→CRS with no key.
   baseEnv.ANTHROPIC_API_KEY = baseEnv.ANTHROPIC_API_KEY || baseEnv.CRS_API_KEY || baseEnv.ANTHROPIC_AUTH_TOKEN;
+  // Agent-hub TUI: stay on CRS relay; do not per-account OAuth rewrite.
+  if (launchCmd === 'agents') {
+    baseEnv.CLAUDE_SESSION_ROUTING = '0';
+  }
 } else {
   for (const key of [
     'ANTHROPIC_BASE_URL',
