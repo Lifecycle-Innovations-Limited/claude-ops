@@ -196,8 +196,7 @@ if (needsCrsHarness) {
   }
   Object.assign(baseEnv, harnessEnv);
   // Keep API_KEY=cr_ (derived from harness). Stripping it left BASE→CRS with no key.
-  baseEnv.ANTHROPIC_API_KEY =
-    baseEnv.ANTHROPIC_API_KEY || baseEnv.CRS_API_KEY || baseEnv.ANTHROPIC_AUTH_TOKEN;
+  baseEnv.ANTHROPIC_API_KEY = baseEnv.ANTHROPIC_API_KEY || baseEnv.CRS_API_KEY || baseEnv.ANTHROPIC_AUTH_TOKEN;
   // Agent-hub TUI: stay on CRS relay; do not per-account OAuth rewrite.
   if (launchCmd === 'agents') {
     baseEnv.CLAUDE_SESSION_ROUTING = '0';
