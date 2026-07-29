@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -87,14 +88,48 @@ def get_api_key_for(name: str) -> str | None:
     return None
 
 
+def _secrets_env() -> dict:
+    """KEY=value pairs from ~/.mcp-secrets.env, as a fallback for ${VAR}
+    references in config headers when the daemon env lacks them (the daemon
+    is not a login shell, so ~/.bashrc exports never reach it)."""
+    out: dict = {}
+    try:
+        for line in (HOME / ".mcp-secrets.env").read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):]
+            k, sep, v = line.partition("=")
+            if sep:
+                out[k.strip()] = v.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return out
+
+
 def config_headers(name: str) -> dict:
     """Static headers from ~/.claude.json mcpServers[name].headers (e.g. a
-    local gateway MCP configured with a Bearer token in its config entry)."""
+    local gateway MCP configured with a Bearer token in its config entry).
+    Expands ${VAR} references the way Claude Code does at session start,
+    from os.environ first, then ~/.mcp-secrets.env."""
     try:
         d = json.loads((HOME / ".claude.json").read_text())
-        return dict(((d.get("mcpServers") or {}).get(name) or {}).get("headers") or {})
+        raw = dict(((d.get("mcpServers") or {}).get(name) or {}).get("headers") or {})
     except Exception:
         return {}
+    if not any(isinstance(v, str) and "${" in v for v in raw.values()):
+        return raw
+    env = {**_secrets_env(), **os.environ}
+
+    def expand(v: str) -> str:
+        return re.sub(
+            r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",
+            lambda m: env.get(m.group(1), m.group(0)),
+            v,
+        )
+
+    return {k: (expand(v) if isinstance(v, str) else v) for k, v in raw.items()}
 
 
 def keychain_oauth_token(name: str) -> str | None:
