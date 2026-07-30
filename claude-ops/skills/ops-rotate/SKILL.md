@@ -12,6 +12,9 @@ effort: low
 maxTurns: 25
 ---
 
+> **Alias note:** Multi-provider seats live under `/ops:accounts`. This skill stays Claude-focused; prefer `ops-accounts` for Grok/Codex/Factory/Cursor.
+
+
 # OPS ► ROTATE
 
 Manage the optional multi-account Claude Max rotator. Off by default — flip
