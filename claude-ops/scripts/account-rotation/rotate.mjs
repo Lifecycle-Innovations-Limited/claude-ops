@@ -2592,6 +2592,22 @@ async function runAuthFlow(driver, account) {
     } else {
       log(`[magic-link] Navigating to login link`);
       await driver.goto(magicLink);
+      const displayText =
+        (await driver.readPageText?.().catch(() => '')) ||
+        (await driver._page
+          ?.locator('body')
+          .innerText()
+          .catch(() => '')) ||
+        '';
+      const displayedCode = /use verification code to continue/i.test(displayText)
+        ? displayText.match(/\b(\d{6})\b/)?.[1]
+        : null;
+      if (displayedCode && driver._authUrl) {
+        log('[magic-link] Captured displayed verification code — returning to sign-in');
+        await driver.goto(driver._authUrl).catch(() => {});
+        await sleep(2000);
+        return finishMagicLinkLogin(`code:${displayedCode}`);
+      }
     }
     await sleep(4000);
     // After magic link login, session is now valid — re-navigate to authUrl
