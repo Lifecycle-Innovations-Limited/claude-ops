@@ -37,6 +37,9 @@ STATE_FILE = Path(os.environ.get("GROK_ROTATE_STATE_FILE", str(Path.home() / ".g
 UPSTREAM = os.environ.get("GROK_UPSTREAM", "https://cli-chat-proxy.grok.com/v1").rstrip("/")
 UPSTREAM_CODING = os.environ.get("GROK_UPSTREAM_CODING", UPSTREAM).rstrip("/")
 UPSTREAM_IMAGINE = os.environ.get("GROK_UPSTREAM_IMAGINE", "https://api.x.ai/v1").rstrip("/")
+# Hard-coded host allowlist for CodeQL SSRF; env may only point at these hosts.
+_SAFE_UPSTREAM_HOSTS = frozenset({"cli-chat-proxy.grok.com", "api.x.ai"})
+_SAFE_PATH_RE = re.compile(r"^/v1(?:/[A-Za-z0-9._-]+)*$")
 ISSUER = os.environ.get("GROK_OIDC_ISSUER", "https://auth.x.ai").rstrip("/")
 CLIENT_ID = os.environ.get("GROK_OIDC_CLIENT_ID", "b1a00492-073a-47ea-816f-4c329264a828")
 REFRESH_SKEW_SECONDS = int(os.environ.get("GROK_REFRESH_SKEW_SECONDS", str(6 * 3600)))  # proactive: refresh when <6h left
@@ -486,51 +489,43 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def _target_url(self, upstream: str) -> str:
         """Map client path onto a fixed upstream base (no open proxy / SSRF).
 
-        Scheme + host come ONLY from the preconfigured UPSTREAM_* constants.
-        Client input may only contribute a sanitized path suffix and query.
-        Rebuild with urlunparse so CodeQL cannot treat the full URL as tainted.
+        Host comes only from configured UPSTREAM_* (must be in _SAFE_UPSTREAM_HOSTS).
+        Path is restricted to /v1/... with safe charset; query is re-encoded.
         """
-        # Resolve to one of the three constant bases (never client-controlled host).
-        allowed_bases = (UPSTREAM, UPSTREAM_CODING, UPSTREAM_IMAGINE)
-        if upstream not in allowed_bases:
-            raise ValueError("upstream not in allowlist")
         base = urllib.parse.urlparse(upstream)
-        if base.scheme not in ("https", "http") or not base.netloc:
-            raise ValueError(f"invalid upstream base: {upstream!r}")
+        host = (base.hostname or "").lower()
+        if base.scheme not in ("https", "http") or host not in _SAFE_UPSTREAM_HOSTS:
+            # Fall back to hard-coded coding upstream if env is mis-set.
+            base = urllib.parse.urlparse("https://cli-chat-proxy.grok.com/v1")
+            host = base.hostname or "cli-chat-proxy.grok.com"
 
-        raw = self.path or "/"
-        # Absolute-form request lines: drop scheme/netloc entirely.
-        if "://" in raw or raw.startswith("//"):
-            raw = urllib.parse.urlparse(raw).path or "/"
-        parsed = urllib.parse.urlparse(raw if raw.startswith("/") else "/" + raw)
-        path = parsed.path or "/"
-        query = parsed.query or ""
-
-        # Path may only contain safe URL path characters; no //, .., or schemes.
-        if (
-            ".." in path
-            or "//" in path
-            or not path.startswith("/")
-            or not re.fullmatch(r"/[A-Za-z0-9._~/%+\-]*", path)
-        ):
-            raise ValueError(f"rejected path: {path!r}")
-        if query and not re.fullmatch(r"[A-Za-z0-9._~=&%\-+]*", query):
-            raise ValueError(f"rejected query: {query!r}")
-
+        req = urllib.parse.urlparse(self.path or "/")
+        # Absolute-form request lines: ignore client-supplied scheme/host entirely.
+        path = req.path or "/"
+        if not path.startswith("/"):
+            path = "/" + path
         if not path.startswith("/v1"):
             path = "/v1" + path
-        suffix = path[len("/v1") :] or "/"
-        if not suffix.startswith("/"):
-            suffix = "/" + suffix
+        # Collapse // and reject traversal / non-allowlisted chars.
+        parts = [p for p in path.split("/") if p and p != "."]
+        if any(p == ".." for p in parts):
+            raise ValueError(f"rejected path: {path!r}")
+        safe_path = "/" + "/".join(parts)
+        if not _SAFE_PATH_RE.fullmatch(safe_path):
+            raise ValueError(f"rejected path charset: {safe_path!r}")
 
-        # base.path is typically "/v1"; keep it and append validated suffix.
-        origin_path = (base.path or "/v1").rstrip("/") or "/v1"
-        final_path = origin_path + suffix
-
-        # urlunparse with scheme/netloc from constant only — not urljoin.
-        return urllib.parse.urlunparse(
-            (base.scheme, base.netloc, final_path, "", query, "")
-        )
+        # Rebuild URL from allowlisted host + sanitized path segments only.
+        base_path = (base.path or "/v1").rstrip("/") or "/v1"
+        # client path is /v1/...; strip /v1 and append under base_path
+        suffix_parts = parts[1:]  # drop leading "v1"
+        full_path = base_path + (("/" + "/".join(suffix_parts)) if suffix_parts else "")
+        query = urllib.parse.urlencode(urllib.parse.parse_qsl(req.query, keep_blank_values=True))
+        target = urllib.parse.urlunparse((base.scheme, host, full_path, "", query, ""))
+        # Final belt: host must still be allowlisted.
+        final = urllib.parse.urlparse(target)
+        if (final.hostname or "").lower() not in _SAFE_UPSTREAM_HOSTS:
+            raise ValueError(f"upstream host not allowed: {final.hostname}")
+        return target
 
     def _build_headers(self, token: str) -> Dict[str, str]:
         headers: Dict[str, str] = {}
