@@ -32,10 +32,7 @@ import {
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
-const TWOCAPTCHA_HOSTS = (
-  process.env.CLAUDE_ROT_TWOCAPTCHA_HOSTS ||
-  '2captcha.com,rucaptcha.com'
-)
+const TWOCAPTCHA_HOSTS = (process.env.CLAUDE_ROT_TWOCAPTCHA_HOSTS || '2captcha.com,rucaptcha.com')
   .split(',')
   .map((h) => h.trim())
   .filter(Boolean);
@@ -115,17 +112,9 @@ export function providerOrder() {
     return ordered;
   }
   // Default: twocaptcha first, other token solvers, then Bright Data cascade last.
-  const preferred = [
-    'twocaptcha',
-    'capsolver',
-    'capmonster',
-    'anticaptcha',
-    'yescaptcha',
-    'brightdata',
-  ];
+  const preferred = ['twocaptcha', 'capsolver', 'capmonster', 'anticaptcha', 'yescaptcha', 'brightdata'];
   return preferred.filter((p) => configured.includes(p));
 }
-
 
 import net from 'node:net';
 const { createConnection } = net;
@@ -137,12 +126,16 @@ export async function residentialEgressHealthy() {
   return await new Promise((resolve) => {
     const s = createConnection({ host, port });
     const t = setTimeout(() => {
-      try { s.destroy(); } catch {}
+      try {
+        s.destroy();
+      } catch {}
       resolve(false);
     }, 800);
     s.once('connect', () => {
       clearTimeout(t);
-      try { s.end(); } catch {}
+      try {
+        s.end();
+      } catch {}
       resolve(true);
     });
     s.once('error', () => {
@@ -174,8 +167,7 @@ function proxyParams() {
   // + 2026-07-30: solvers are fallback-only. When used, prefer EFG SOCKS
   // so token IP matches residential PAC browser (not third-party US residential).
   const preferEfg =
-    process.env.CLAUDE_ROT_CAPTCHA_PREFER_EFG_SOCKS === '1' ||
-    process.env.CRS_OAUTH_EGRESS === 'efg-socks-reauth-only';
+    process.env.CLAUDE_ROT_CAPTCHA_PREFER_EFG_SOCKS === '1' || process.env.CRS_OAUTH_EGRESS === 'efg-socks-reauth-only';
   if (preferEfg && process.env.CRS_CAPTCHA_SKIP_EFG_PROXY !== '1') {
     const host = process.env.CRS_EFG_SOCKS_HOST || '127.0.0.1';
     const port = process.env.CRS_EFG_SOCKS_PORT || '1089';
@@ -192,8 +184,14 @@ function proxyParams() {
     try {
       // lazy sync require not available in ESM — use env-built superproxy if zones present
       const customer = process.env.BRIGHT_DATA_CUSTOMER || process.env.BRIGHT_DATA_USERID;
-      const zone = process.env.BRIGHT_DATA_RESIDENTIAL_PROXY_ZONE || process.env.BRIGHT_DATA_ISP_PROXY_ZONE || process.env.BRIGHT_DATA_ZONE;
-      const pass = process.env.BRIGHT_DATA_RESIDENTIAL_PROXY_PASSWORD || process.env.BRIGHT_DATA_ISP_PROXY_PASSWORD || process.env.BRIGHT_DATA_TOKEN;
+      const zone =
+        process.env.BRIGHT_DATA_RESIDENTIAL_PROXY_ZONE ||
+        process.env.BRIGHT_DATA_ISP_PROXY_ZONE ||
+        process.env.BRIGHT_DATA_ZONE;
+      const pass =
+        process.env.BRIGHT_DATA_RESIDENTIAL_PROXY_PASSWORD ||
+        process.env.BRIGHT_DATA_ISP_PROXY_PASSWORD ||
+        process.env.BRIGHT_DATA_TOKEN;
       if (customer && zone && pass && process.env.CLAUDE_ROT_CAPTCHA_USE_PROXY === '1') {
         const host = process.env.BRIGHT_DATA_PROXY_HOST || 'brd.superproxy.io';
         const port = Number(process.env.BRIGHT_DATA_PROXY_PORT || 22225);
@@ -276,14 +274,8 @@ export async function detectCaptcha(page) {
       const cf = document.querySelector(
         '.cf-turnstile[data-sitekey], [data-sitekey][data-callback], div[data-sitekey]',
       );
-      const hc = document.querySelector(
-        '.h-captcha[data-sitekey], [data-hcaptcha-widget-id][data-sitekey]',
-      );
-      if (
-        cf &&
-        (cf.className.includes('cf-turnstile') ||
-          document.querySelector('[name="cf-turnstile-response"]'))
-      ) {
+      const hc = document.querySelector('.h-captcha[data-sitekey], [data-hcaptcha-widget-id][data-sitekey]');
+      if (cf && (cf.className.includes('cf-turnstile') || document.querySelector('[name="cf-turnstile-response"]'))) {
         const sk = pick(cf, 'data-sitekey');
         if (sk) {
           const result = { provider: 'turnstile', sitekey: sk };
@@ -398,11 +390,7 @@ async function poll2captchaOnHost(host, id, log, { timeoutMs = 150_000 } = {}) {
     const url = `https://${host}/res.php?key=${encodeURIComponent(process.env.TWOCAPTCHA_API_KEY)}&action=get&id=${encodeURIComponent(id)}&json=1`;
     let res;
     try {
-      res = await fetchWithTimeout(
-        url,
-        {},
-        Math.min(REQUEST_TIMEOUT_MS, Math.max(1000, deadline - Date.now())),
-      );
+      res = await fetchWithTimeout(url, {}, Math.min(REQUEST_TIMEOUT_MS, Math.max(1000, deadline - Date.now())));
     } catch (e) {
       log(`2captcha(${host}) poll request failed: ${String(e.message || e).slice(0, 80)}`);
       await new Promise((r) => setTimeout(r, 5_000));
@@ -601,10 +589,7 @@ async function solveWithJsonProvider(providerName, challenge, log = () => {}, { 
   }
   // CapSolver may return solution immediately (status ready).
   if (createBody.status === 'ready' && createBody.solution) {
-    const tok =
-      createBody.solution.gRecaptchaResponse ||
-      createBody.solution.token ||
-      createBody.solution.text;
+    const tok = createBody.solution.gRecaptchaResponse || createBody.solution.token || createBody.solution.text;
     if (tok) {
       log(`${providerName}: solved immediately (token ${String(tok).length} chars)`);
       return tok;
@@ -637,9 +622,7 @@ async function solveWithJsonProvider(providerName, challenge, log = () => {}, { 
     }
     const j = await res.json().catch(() => ({}));
     if (j.errorId && j.errorId !== 0) {
-      log(
-        `${providerName}: result error: ${String(j.errorCode || j.errorDescription || j.errorId).slice(0, 100)}`,
-      );
+      log(`${providerName}: result error: ${String(j.errorCode || j.errorDescription || j.errorId).slice(0, 100)}`);
       return null;
     }
     if (j.status === 'ready' && j.solution) {
@@ -811,9 +794,7 @@ export async function injectToken(page, provider, token, log = () => {}) {
           }
         }
         try {
-          for (const widget of document.querySelectorAll(
-            '[data-callback], .h-captcha, .g-recaptcha, [data-sitekey]',
-          )) {
+          for (const widget of document.querySelectorAll('[data-callback], .h-captcha, .g-recaptcha, [data-sitekey]')) {
             const cbName = widget.getAttribute('data-callback');
             if (cbName && typeof window[cbName] === 'function') {
               try {

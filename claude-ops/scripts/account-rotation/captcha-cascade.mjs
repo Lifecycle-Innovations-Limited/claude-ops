@@ -13,18 +13,10 @@
  *
  * See CAPTCHA-CASCADE.md.
  */
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir, tmpdir } from 'os';
-import {
-  solveInteractiveCaptchaVisually,
-  runAutonomousCaptchaCascade,
-} from './visual-captcha-solver.mjs';
+import { solveInteractiveCaptchaVisually, runAutonomousCaptchaCascade } from './visual-captcha-solver.mjs';
 import { solveCaptchaOnPage, captchaSolverAvailable } from './captcha-helper.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -37,8 +29,7 @@ const _captchaHardFail = new WeakSet();
 export function resolveCaptchaHandoffDir(env = process.env) {
   if (env.CLAUDE_ROT_CAPTCHA_HANDOFF_DIR) return env.CLAUDE_ROT_CAPTCHA_HANDOFF_DIR;
   const data =
-    env.CLAUDE_PLUGIN_DATA_DIR ||
-    join(env.HOME || homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
+    env.CLAUDE_PLUGIN_DATA_DIR || join(env.HOME || homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
   return join(data, 'account-rotation', 'screenshots');
 }
 
@@ -63,9 +54,7 @@ export async function maybeSolvePageCaptcha(
       log(`[captcha] challenge present${reason ? ` (${reason})` : ''} but no solver key`);
     }
     if (result.present && !result.solved && captchaSolverAvailable()) {
-      log(
-        `[captcha] present but unsolved${reason ? ` (${reason})` : ''} — visual/interactive wall may need cascade`,
-      );
+      log(`[captcha] present but unsolved${reason ? ` (${reason})` : ''} — visual/interactive wall may need cascade`);
     }
     if (result.solved) {
       log(`[captcha] solved ${result.provider}${reason ? ` (${reason})` : ''}`);
@@ -102,10 +91,7 @@ export async function detectPostVerifyVisualChallenge(page) {
     else if (/pick items that dispense when you squeeze/i.test(t)) kind = 'pick-squeeze';
     else if (/click on items you would/i.test(t)) kind = 'click-items';
     else if (/please drag the icon/i.test(t)) kind = 'drag-fit';
-    else if (
-      /\b(select all|pick all|which of these|image challenge)\b/i.test(t) &&
-      /hcaptcha|challenge/i.test(t)
-    ) {
+    else if (/\b(select all|pick all|which of these|image challenge)\b/i.test(t) && /hcaptcha|challenge/i.test(t)) {
       kind = 'image-grid';
     }
     const promptKinds = new Set(['drag-fit', 'pick-squeeze', 'click-items', 'image-grid']);
@@ -117,12 +103,7 @@ export async function detectPostVerifyVisualChallenge(page) {
           const frames = Array.from(document.querySelectorAll('iframe')).map((f) => {
             const r = f.getBoundingClientRect();
             const visible =
-              r.width > 0 &&
-              r.height > 0 &&
-              r.bottom > 8 &&
-              r.right > 8 &&
-              r.top < vh - 8 &&
-              r.left < vw - 8;
+              r.width > 0 && r.height > 0 && r.bottom > 8 && r.right > 8 && r.top < vh - 8 && r.left < vw - 8;
             return {
               src: f.src || '',
               w: r.width,
@@ -135,34 +116,16 @@ export async function detectPostVerifyVisualChallenge(page) {
           });
           const largeHc = frames.find(
             (f) =>
-              f.visible &&
-              /hcaptcha\.com/i.test(f.src) &&
-              /frame=challenge/i.test(f.src) &&
-              f.w >= 350 &&
-              f.h >= 300,
+              f.visible && /hcaptcha\.com/i.test(f.src) && /frame=challenge/i.test(f.src) && f.w >= 350 && f.h >= 300,
           );
           const anyHcChallenge = frames.some(
-            (f) =>
-              f.visible &&
-              /hcaptcha\.com/i.test(f.src) &&
-              /frame=challenge/i.test(f.src) &&
-              f.w > 0 &&
-              f.h > 0,
+            (f) => f.visible && /hcaptcha\.com/i.test(f.src) && /frame=challenge/i.test(f.src) && f.w > 0 && f.h > 0,
           );
           const anyHcOffscreen = frames.some(
-            (f) =>
-              !f.visible &&
-              /hcaptcha\.com/i.test(f.src) &&
-              /frame=challenge/i.test(f.src) &&
-              f.w > 0 &&
-              f.h > 0,
+            (f) => !f.visible && /hcaptcha\.com/i.test(f.src) && /frame=challenge/i.test(f.src) && f.w > 0 && f.h > 0,
           );
           const hasCf = frames.some(
-            (f) =>
-              f.visible &&
-              /challenges\.cloudflare\.com/i.test(f.src) &&
-              f.w >= 200 &&
-              f.h >= 50,
+            (f) => f.visible && /challenges\.cloudflare\.com/i.test(f.src) && f.w >= 200 && f.h >= 50,
           );
           return {
             largeHc: !!largeHc,
@@ -192,10 +155,7 @@ export async function detectPostVerifyVisualChallenge(page) {
       }
     }
     const blocking =
-      !!kind &&
-      (promptKinds.has(kind) ||
-        kind === 'hcaptcha-challenge-large' ||
-        kind === 'cf-challenge-frame');
+      !!kind && (promptKinds.has(kind) || kind === 'hcaptcha-challenge-large' || kind === 'cf-challenge-frame');
     return { present: !!kind, kind, text: t.slice(0, 200), blocking };
   } catch {
     return { present: false, kind: null, text: '', blocking: false };
@@ -269,20 +229,16 @@ export async function maybeSolvePostVerifyVisualChallenge(page, reason = '', opt
   if (!page) return false;
   const visual = await detectPostVerifyVisualChallenge(page);
   if (visual.present || visual.blocking) {
-    log(
-      `[captcha] post-verify visual challenge detected kind=${visual.kind}${reason ? ` (${reason})` : ''}`,
-    );
+    log(`[captcha] post-verify visual challenge detected kind=${visual.kind}${reason ? ` (${reason})` : ''}`);
   }
 
   const maxAttempts = Number(
-    process.env.CLAUDE_ROT_CAPTCHA_MAX_ATTEMPTS ||
-      (process.env.CLAUDE_ROT_VISUAL_CAPTCHA === '0' ? 2 : 4),
+    process.env.CLAUDE_ROT_CAPTCHA_MAX_ATTEMPTS || (process.env.CLAUDE_ROT_VISUAL_CAPTCHA === '0' ? 2 : 4),
   );
   const used = _postVerifyCaptchaAttempts.get(page) || 0;
 
   const largeInteractive =
-    visual.blocking &&
-    (visual.kind === 'hcaptcha-challenge-large' || visual.kind === 'cf-challenge-frame');
+    visual.blocking && (visual.kind === 'hcaptcha-challenge-large' || visual.kind === 'cf-challenge-frame');
   if (largeInteractive && process.env.CLAUDE_ROT_LARGE_HC_TOKEN_FIRST !== '1') {
     log(
       `[captcha] large interactive wall kind=${visual.kind} — autonomous cascade first (set CLAUDE_ROT_LARGE_HC_TOKEN_FIRST=1 to force paid token path first)`,
@@ -291,11 +247,7 @@ export async function maybeSolvePostVerifyVisualChallenge(page, reason = '', opt
     try {
       const escalated = await runAutonomousCaptchaCascade(page, (m) => log(m), {
         includeVnc: true,
-        display:
-          process.env.CLAUDE_DESKTOP_DISPLAY ||
-          process.env.DESKTOP_ACT_DISPLAY ||
-          process.env.DISPLAY ||
-          ':1',
+        display: process.env.CLAUDE_DESKTOP_DISPLAY || process.env.DESKTOP_ACT_DISPLAY || process.env.DISPLAY || ':1',
         desktopTimeout: Number(process.env.DESKTOP_ACT_CAPTCHA_TIMEOUT || 180),
         visualRounds: Number(process.env.CLAUDE_ROT_VISUAL_CAPTCHA_ROUNDS || 8),
       });
@@ -325,11 +277,7 @@ export async function maybeSolvePostVerifyVisualChallenge(page, reason = '', opt
       try {
         const escalated = await runAutonomousCaptchaCascade(page, (m) => log(m), {
           includeVnc: true,
-          display:
-            process.env.CLAUDE_DESKTOP_DISPLAY ||
-            process.env.DESKTOP_ACT_DISPLAY ||
-            process.env.DISPLAY ||
-            ':1',
+          display: process.env.CLAUDE_DESKTOP_DISPLAY || process.env.DESKTOP_ACT_DISPLAY || process.env.DISPLAY || ':1',
           desktopTimeout: Number(process.env.DESKTOP_ACT_CAPTCHA_TIMEOUT || 180),
           visualRounds: 6,
         });
@@ -340,9 +288,7 @@ export async function maybeSolvePostVerifyVisualChallenge(page, reason = '', opt
             log(`[captcha] autonomous cascade cleared wall layer=${escalated.layer} (budget)`);
             return true;
           }
-          log(
-            `[captcha] cascade layer=${escalated.layer} reported ok but page still blocking — treating as uncleared`,
-          );
+          log(`[captcha] cascade layer=${escalated.layer} reported ok but page still blocking — treating as uncleared`);
         }
       } catch (e) {
         log(`[captcha] autonomous cascade error: ${String(e.message || e).slice(0, 120)}`);
@@ -388,8 +334,7 @@ export async function maybeSolvePostVerifyVisualChallenge(page, reason = '', opt
           if (/^(localhost|127\.0\.0\.1)$/i.test(host)) return true;
           const t = (document.body?.innerText || '').replace(/\s+/g, ' ');
           if (!/\/login/i.test(path)) {
-            if (/\bAuthorize\b|\bAllow\b|\bApprove\b/i.test(t) && !/verification code/i.test(t))
-              return true;
+            if (/\bAuthorize\b|\bAllow\b|\bApprove\b/i.test(t) && !/verification code/i.test(t)) return true;
             if (/Select (?:which )?organization/i.test(t)) return true;
             const hasCode = !!document.querySelector(
               '#code, [data-testid="code"], input[autocomplete="one-time-code"], input[name="code"]',
@@ -426,11 +371,7 @@ export async function maybeSolvePostVerifyVisualChallenge(page, reason = '', opt
       try {
         const escalated = await runAutonomousCaptchaCascade(page, (m) => log(m), {
           includeVnc: used + 1 >= maxAttempts,
-          display:
-            process.env.CLAUDE_DESKTOP_DISPLAY ||
-            process.env.DESKTOP_ACT_DISPLAY ||
-            process.env.DISPLAY ||
-            ':1',
+          display: process.env.CLAUDE_DESKTOP_DISPLAY || process.env.DESKTOP_ACT_DISPLAY || process.env.DISPLAY || ':1',
           desktopTimeout: Number(process.env.DESKTOP_ACT_CAPTCHA_TIMEOUT || 180),
           visualRounds: 5,
         });
@@ -445,9 +386,7 @@ export async function maybeSolvePostVerifyVisualChallenge(page, reason = '', opt
           }
         }
       } catch (e) {
-        log(
-          `[captcha] autonomous cascade after inject failed: ${String(e.message || e).slice(0, 120)}`,
-        );
+        log(`[captcha] autonomous cascade after inject failed: ${String(e.message || e).slice(0, 120)}`);
       }
     } else {
       log(`[captcha] visual wall cleared after inject${reason ? ` (${reason})` : ''}`);
@@ -459,11 +398,7 @@ export async function maybeSolvePostVerifyVisualChallenge(page, reason = '', opt
     try {
       const escalated = await runAutonomousCaptchaCascade(page, (m) => log(m), {
         includeVnc: used + 1 >= maxAttempts,
-        display:
-          process.env.CLAUDE_DESKTOP_DISPLAY ||
-          process.env.DESKTOP_ACT_DISPLAY ||
-          process.env.DISPLAY ||
-          ':1',
+        display: process.env.CLAUDE_DESKTOP_DISPLAY || process.env.DESKTOP_ACT_DISPLAY || process.env.DISPLAY || ':1',
         desktopTimeout: Number(process.env.DESKTOP_ACT_CAPTCHA_TIMEOUT || 180),
         visualRounds: 5,
       });
@@ -493,12 +428,7 @@ export async function maybeSolvePostVerifyVisualChallenge(page, reason = '', opt
 /**
  * Soft-load cascade API for rotate.mjs (static re-export convenience).
  */
-export {
-  solveCaptchaOnPage,
-  captchaSolverAvailable,
-  solveInteractiveCaptchaVisually,
-  runAutonomousCaptchaCascade,
-};
+export { solveCaptchaOnPage, captchaSolverAvailable, solveInteractiveCaptchaVisually, runAutonomousCaptchaCascade };
 
 // Also re-export residual wait concept for callers that only import this module
 export async function tryClearCaptchaWall(page, reason = '', log = () => {}) {
