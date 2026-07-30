@@ -21,10 +21,16 @@ assert(
   'CLAUDE_DESKTOP_DISPLAY over DISPLAY',
 );
 
-// path includes home .local/bin when HOME set
+// path includes home .local/bin when HOME set; never injects OS package roots
 const p = resolveReauthPath({ HOME: '/tmp/fakehome', PATH: '/usr/bin' });
 assert(p.includes('/tmp/fakehome/.local/bin'), 'local bin first');
 assert(p.includes('/usr/bin'), 'keeps system path');
+assert(!p.includes('homebrew'), 'no homebrew hardcode');
+assert(!p.includes('/Users/'), 'no mac home hardcode');
+const pEmpty = resolveReauthPath({ HOME: '/tmp/fakehome', PATH: '' });
+// empty PATH falls back to minimal POSIX bins only
+assert(!pEmpty.includes('homebrew'), 'fallback has no homebrew');
+assert(pEmpty.includes('/usr/bin') || pEmpty.includes('.local'), 'fallback usable');
 
 // child env
 const env = buildReauthChildEnv({

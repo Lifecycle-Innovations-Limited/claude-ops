@@ -19,22 +19,25 @@ export function resolveReauthDisplay(env = process.env) {
 }
 
 /**
- * Build PATH with optional user local bin, without hardcoding a home directory.
+ * Build PATH with optional user-local bin. No OS package-manager roots
+ * (Homebrew, Chocolatey, etc.). Prefer process PATH; fall back to a minimal
+ * POSIX list only when PATH is unset (common in stripped service units).
  */
 export function resolveReauthPath(env = process.env) {
-  const home = env.HOME || homedir();
+  const home = env.HOME || env.USERPROFILE || homedir();
+  const isWin = process.platform === 'win32' || /^(msys|cygwin)/i.test(String(env.OSTYPE || ''));
+  const sep = isWin || String(env.PATH || '').includes(';') ? ';' : ':';
   const localBin = home ? join(home, '.local', 'bin') : '';
-  const base = env.PATH || '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin';
+  const base = env.PATH || (isWin ? '' : ['/usr/local/bin', '/usr/bin', '/bin'].join(sep));
   const parts = [localBin, base].filter(Boolean);
-  // de-dupe while preserving order
   const seen = new Set();
   const out = [];
-  for (const chunk of parts.join(':').split(':')) {
+  for (const chunk of parts.join(sep).split(sep)) {
     if (!chunk || seen.has(chunk)) continue;
     seen.add(chunk);
     out.push(chunk);
   }
-  return out.join(':');
+  return out.join(sep);
 }
 
 /**
