@@ -65,9 +65,13 @@ render_and_install() {
   local name="$1" wrapper="$2" template="$3"
   local dest="$HOME/Library/LaunchAgents/com.claude-ops.${name}.plist"
   chmod +x "$wrapper" 2>/dev/null || true
+  # PATH/DISPLAY come from the install host (never bake OS package roots into the template).
+  local host_path="${PATH:-/usr/local/bin:/usr/bin:/bin}"
+  local host_display="${CLAUDE_DESKTOP_DISPLAY:-${DISPLAY:-:0}}"
   PLIST_TEMPLATE_PATH="$template" WRAPPER_PATH="$wrapper" LOG_DIR_PATH="$LOG_DIR" CRS_HOME="$HOME" \
+    CRS_PATH="$host_path" CRS_DISPLAY="$host_display" \
     node -e \
-    'const fs=require("fs");const e=(s)=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");const t=fs.readFileSync(process.env.PLIST_TEMPLATE_PATH,"utf8");process.stdout.write(t.replace(/__WRAPPER_PATH__/g,e(process.env.WRAPPER_PATH)).replace(/__LOG_DIR__/g,e(process.env.LOG_DIR_PATH)).replace(/__HOME__/g,e(process.env.CRS_HOME)));' \
+    'const fs=require("fs");const e=(s)=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");const t=fs.readFileSync(process.env.PLIST_TEMPLATE_PATH,"utf8");process.stdout.write(t.replace(/__WRAPPER_PATH__/g,e(process.env.WRAPPER_PATH)).replace(/__LOG_DIR__/g,e(process.env.LOG_DIR_PATH)).replace(/__HOME__/g,e(process.env.CRS_HOME)).replace(/__PATH__/g,e(process.env.CRS_PATH||"")).replace(/__DISPLAY__/g,e(process.env.CRS_DISPLAY||":0")));' \
     > "$dest"
   launchctl bootout "gui/$(id -u)/com.claude-ops.${name}" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$dest"
