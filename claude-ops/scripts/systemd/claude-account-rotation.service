@@ -1,15 +1,18 @@
 [Unit]
-Description=Claude account rotation daemon
+Description=Claude account rotation daemon (plugin-first)
 After=network-online.target crs-compose.service
 Wants=network-online.target crs-compose.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/.claude/scripts/account-rotation
+# Prefer installed plugin tree; override with EnvironmentFile if needed.
+Environment=CLAUDE_PLUGIN_ROOT=%h/.claude/plugins/cache/ops-marketplace/ops/current
 Environment=CLAUDE_ENABLE_FLEET_RECOVERY=0
 Environment=CLAUDE_ENABLE_BG_RESPAWN=0
 Environment=CLAUDE_ENABLE_BG_SESSION_ROUTER=1
-ExecStart=/usr/bin/node %h/.claude/scripts/account-rotation/daemon.mjs
+# Plugin path (marketplace install). Host fork is legacy fallback only.
+WorkingDirectory=%h/.claude/plugins/cache/ops-marketplace/ops/current/scripts/account-rotation
+ExecStart=/usr/bin/node %h/.claude/plugins/cache/ops-marketplace/ops/current/scripts/account-rotation/daemon.mjs
 Restart=always
 RestartSec=30
 StandardOutput=append:%h/.claude/logs/account-rotation.systemd.log

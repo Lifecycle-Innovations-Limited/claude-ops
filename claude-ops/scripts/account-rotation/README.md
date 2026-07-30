@@ -207,3 +207,6 @@ Token solvers (env): `TWOCAPTCHA_API_KEY`, `CAPSOLVER_API_KEY`, `ANTICAPTCHA_API
 Bright Data is last-resort cascade for proxy-aligned re-solve (zone/password envs), not a primary token API.
 
 Residual host-only: interactive click helpers (`click-turnstile*.mjs`) and Chrome profile automation — next PR.
+Browser walls on magic-link / OAuth go through `trySolveCaptchaWall` (see
+`CAPTCHA-CASCADE.md`). Solvers need env keys (`TWOCAPTCHA_API_KEY`, etc.) via
+Doppler/`secrets-bootstrap.mjs`. Interactive tile challenges use vision + desktop-act.
