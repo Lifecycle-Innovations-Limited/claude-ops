@@ -82,6 +82,54 @@ No secrets in skill output. Provider-scoped vault service names. Env-templated p
 | **7** | Cutover: units → `$CLAUDE_PLUGIN_ROOT`; retire host forks | public plugin only |
 | **8** | Optional bundled multi-provider LB | license-safe cherry-pick if still needed |
 
+
+
+## CRS cherry-pick (so people do not need CRS)
+
+### Split CRS into three jobs
+
+1. **API gateway** — OpenAI-compat `:3005`, `cr_` keys, harness routing  
+2. **Claude seat LB** — schedulable pool, 429/weekly park, token feed  
+3. **Grok thin hop** — forward to host SuperGrok OAuth proxy (not a CRS pool)
+
+ops-accounts absorbs (1)+(2) as optional **ops-accounts-gateway** + **policy daemons**,
+and treats (3) as the **Grok provider backend** (port `grok-cli-auth-proxy` into
+the plugin). External CRS remains advanced-only.
+
+### Already portable in this repo (rename, do not re-clone CRS)
+
+- `crs-priority-daemon.mjs` — pool priority / schedulable policy  
+- `crs-429-cooldown.mjs` — rate-limit cooldown  
+- `crs-401-refresher.mjs` — proactive refresh  
+- `crs-token-feed.mjs` — vault → pool  
+- `crs-pool-config.mjs`, `crs-health-watch.mjs`, `crs-bedrock-guard.mjs` — optional  
+
+These currently *call* CRS admin APIs. Dual-mode target:
+
+- `backend=crs` — talk to external CRS (compat)  
+- `backend=local` — file/SQLite seat state, no Docker  
+
+### Build sequence
+
+| Step | Deliverable |
+|------|-------------|
+| A | Local seat-state backend for policy daemons (no CRS) |
+| B | Plugin-owned Grok OAuth proxy (today’s `:31845` logic) |
+| C | Optional OpenAI-compat gateway replacing `:3005` for most harnesses |
+| D | Docs: migrate `CRS_BASE_URL` → gateway; CRS optional advanced |
+
+### License
+
+CRS lineage on this box is **MIT**. Cherry-pick with attribution; prefer
+reimplemented policy + small gateway over vendoring the full CRS monorepo
+(Redis/Grafana/admin SPA out of default install).
+
+### Non-goals
+
+- Shipping Redis/Prometheus/Grafana as required deps  
+- Multi-tenant CRS admin SPA  
+- Claiming Grok seats live inside a Claude-style CRS account table  
+
 ## Risks
 
 | Risk | Mitigation |

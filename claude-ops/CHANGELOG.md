@@ -4,6 +4,8 @@
 
 ### Changed
 
+- **ops-accounts / CRS cherry-pick plan:** document how to absorb CRS gateway + Claude seat policy + Grok proxy into ops-accounts so default install needs no claude-relay-service container; CRS remains optional advanced.
+
 - **ops-accounts vision:** multi-provider parity with Anthropic stack (Claude, Grok, OpenAI/Codex, Factory, Cursor) — OAuth, reauth, util, switch/LB under `/ops:accounts`; rotate skills become aliases.
 
 
