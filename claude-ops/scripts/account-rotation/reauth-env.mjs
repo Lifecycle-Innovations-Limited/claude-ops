@@ -15,13 +15,7 @@ import { homedir } from 'os';
  * Prefer explicit reauth seat vars over the ambient DISPLAY of a headless unit.
  */
 export function resolveReauthDisplay(env = process.env) {
-  return (
-    env.CLAUDE_DESKTOP_DISPLAY ||
-    env.DESKTOP_ACT_DISPLAY ||
-    env.CRS_REAUTH_DISPLAY ||
-    env.DISPLAY ||
-    ':1'
-  );
+  return env.CLAUDE_DESKTOP_DISPLAY || env.DESKTOP_ACT_DISPLAY || env.CRS_REAUTH_DISPLAY || env.DISPLAY || ':1';
 }
 
 /**
@@ -30,9 +24,7 @@ export function resolveReauthDisplay(env = process.env) {
 export function resolveReauthPath(env = process.env) {
   const home = env.HOME || homedir();
   const localBin = home ? join(home, '.local', 'bin') : '';
-  const base =
-    env.PATH ||
-    '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin';
+  const base = env.PATH || '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin';
   const parts = [localBin, base].filter(Boolean);
   // de-dupe while preserving order
   const seen = new Set();
@@ -57,14 +49,9 @@ export function buildReauthChildEnv(opts = {}) {
   const display = resolveReauthDisplay(env);
 
   // Dispatch mode: public plugin default is rotate --setup; forks may set magic-link.
-  const dispatch =
-    env.CRS_MAGIC_LINK_DISPATCH ||
-    crs.magicLinkDispatch ||
-    'setup';
+  const dispatch = env.CRS_MAGIC_LINK_DISPATCH || crs.magicLinkDispatch || 'setup';
 
-  const headed =
-    env.CLAUDE_ROT_HEADED ||
-    (String(crs.magicLinkHeaded ?? '1') === '0' ? '0' : '1');
+  const headed = env.CLAUDE_ROT_HEADED || (String(crs.magicLinkHeaded ?? '1') === '0' ? '0' : '1');
 
   const fragment = {
     CLAUDE_ROTATION_MAGIC_LINK_AUTO: '1',
@@ -78,8 +65,7 @@ export function buildReauthChildEnv(opts = {}) {
 
     // Headed browser is required for interactive captcha walls on most seats
     CLAUDE_ROT_HEADED: headed,
-    CLAUDE_ROT_FORCE_HEADED:
-      env.CLAUDE_ROT_FORCE_HEADED || (headed === '1' ? '1' : '0'),
+    CLAUDE_ROT_FORCE_HEADED: env.CLAUDE_ROT_FORCE_HEADED || (headed === '1' ? '1' : '0'),
 
     // Captcha cascade (no-op if rotate.mjs lacks captcha helpers)
     CLAUDE_ROT_VISUAL_CAPTCHA: env.CLAUDE_ROT_VISUAL_CAPTCHA || '1',
@@ -130,7 +116,11 @@ export function resolveReauthTimeoutMs(env = process.env, crs = {}) {
  */
 export function reauthOutputLooksSuccessful(out = '') {
   const text = String(out || '');
-  if (/FATAL:|Authorize button still not clickable|Cloudflare challenge|security verification|Timed out waiting for login email/i.test(text)) {
+  if (
+    /FATAL:|Authorize button still not clickable|Cloudflare challenge|security verification|Timed out waiting for login email/i.test(
+      text,
+    )
+  ) {
     return false;
   }
   return (

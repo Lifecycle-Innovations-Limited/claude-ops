@@ -35,11 +35,7 @@ import { homedir } from 'os';
 import { existsSync, readFileSync } from 'fs';
 import { loadRotationConfig, buildCrsNameMaps, crsFileVaultPath } from './crs-pool-config.mjs';
 import { loadJsonState, saveJsonStateAtomic, withOwnStateLock } from './crs-reconciler-state.mjs';
-import {
-  buildReauthChildEnv,
-  resolveReauthTimeoutMs,
-  reauthOutputLooksSuccessful,
-} from './reauth-env.mjs';
+import { buildReauthChildEnv, resolveReauthTimeoutMs, reauthOutputLooksSuccessful } from './reauth-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const args = new Set(process.argv.slice(2));
@@ -52,8 +48,7 @@ const RETRY_COOLDOWN_MS = Number(
   process.env.CRS_MAGIC_LINK_RETRY_COOLDOWN_MS ?? C.magicLinkRetryCooldownMs ?? 21_600_000,
 );
 const ROTATE_TIMEOUT_MS = resolveReauthTimeoutMs(process.env, C);
-const DISPATCH =
-  process.env.CRS_MAGIC_LINK_DISPATCH || C.magicLinkDispatch || 'setup';
+const DISPATCH = process.env.CRS_MAGIC_LINK_DISPATCH || C.magicLinkDispatch || 'setup';
 
 function expandHome(p) {
   if (!p) return p;
@@ -61,10 +56,8 @@ function expandHome(p) {
 }
 
 const DEFAULT_DATA_DIR =
-  process.env.CLAUDE_PLUGIN_DATA_DIR ||
-  join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
-const STATE_DIR =
-  expandHome(process.env.CRS_STATE_DIR || C.stateDir) || join(DEFAULT_DATA_DIR, 'account-rotation');
+  process.env.CLAUDE_PLUGIN_DATA_DIR || join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
+const STATE_DIR = expandHome(process.env.CRS_STATE_DIR || C.stateDir) || join(DEFAULT_DATA_DIR, 'account-rotation');
 const STATE_PATH = join(STATE_DIR, 'crs-magic-link-state.json');
 const REFRESHER_STATE_PATH = join(STATE_DIR, 'crs-401-state.json');
 const ROTATE_SCRIPT = join(__dirname, 'rotate.mjs');
@@ -159,14 +152,7 @@ function pickCandidate(now, state) {
 function buildRotateArgs(vaultKey) {
   const mode = String(DISPATCH).toLowerCase();
   if (mode === 'magic-link' || mode === 'magic_link' || mode === 'magic') {
-    return [
-      ROTATE_SCRIPT,
-      '--magic-link',
-      '--force',
-      '--allow-exhausted',
-      '--to',
-      vaultKey,
-    ];
+    return [ROTATE_SCRIPT, '--magic-link', '--force', '--allow-exhausted', '--to', vaultKey];
   }
   // Default public path
   return [ROTATE_SCRIPT, '--setup', `--only=${vaultKey}`, '--auto', '--skip-valid'];
