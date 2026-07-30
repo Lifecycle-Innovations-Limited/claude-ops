@@ -10,12 +10,15 @@
 #   - Grok:   has a native `grok plugin update <name>` that updates the
 #             installed plugin directory in place. We just call it.
 #   - Cursor: has NO native command to refresh a plugin's materialized content
-#             cache (only `cursor-agent plugin marketplace add/remove/update`,
-#             which only re-indexes the catalogue clone, confirmed via
-#             `cursor-agent plugin --help`). So we re-index the catalogue,
-#             then rsync the resolved commit's plugin dir from the catalogue
-#             clone into Cursor's content cache ourselves, and prune any other
-#             commit-hash directories left over from prior versions.
+#             cache (only `cursor-agent plugin marketplace add/remove/update`).
+#             `marketplace update` reports success but does NOT actually
+#             re-fetch the underlying git clone — confirmed by testing: after
+#             a new commit landed on origin/main, `update` left the clone
+#             pinned to the old commit hash, while `remove` + `add` fetched
+#             the new one immediately. So we always remove+add (never rely on
+#             `update`), then rsync the resolved commit's plugin dir from the
+#             catalogue clone into Cursor's content cache ourselves, and prune
+#             any other commit-hash directories left over from prior versions.
 #   - Codex:  needs nothing here. Its ops-* skills are symlinks straight into
 #             Claude Code's own cache/.../ops/current/ directory, which
 #             ops-post-update-migrate already keeps current.
@@ -87,23 +90,20 @@ sync_cursor() {
 	}
 
 	if [[ "$DRY" -eq 1 ]]; then
-		say "${c_dim}[dry-run] cursor-agent plugin marketplace update ops-marketplace${c_rst}"
+		say "${c_dim}[dry-run] cursor-agent plugin marketplace remove/add ops-marketplace (update is a no-op, proven stale)${c_rst}"
 		say "${c_dim}[dry-run] rsync resolved commit dir -> $cache_root/<hash>, prune old hashes${c_rst}"
 		return 0
 	fi
 
+	# `marketplace update` is a proven no-op against the underlying clone —
+	# always force a fresh fetch via remove+add instead.
+	cursor-agent plugin marketplace remove ops-marketplace >/dev/null 2>&1 || true
 	local out
-	if out="$(cursor-agent plugin marketplace update ops-marketplace 2>&1)"; then
-		ok "cursor: catalogue re-indexed ($out)"
-	else
-		warn "cursor: catalogue update failed, retrying via remove+add: $out"
-		cursor-agent plugin marketplace remove ops-marketplace >/dev/null 2>&1 || true
-		if ! out="$(cursor-agent plugin marketplace add "$MARKETPLACE_GIT_URL" 2>&1)"; then
-			warn "cursor: remove+add also failed (non-fatal): $out"
-			return 0
-		fi
-		ok "cursor: catalogue re-added ($out)"
+	if ! out="$(cursor-agent plugin marketplace add "$MARKETPLACE_GIT_URL" 2>&1)"; then
+		warn "cursor: marketplace re-add failed (non-fatal): $out"
+		return 0
 	fi
+	ok "cursor: catalogue re-added ($out)"
 
 	[[ -d "$mp_clone_root" ]] || {
 		warn "cursor: no catalogue clone at $mp_clone_root (non-fatal)"
