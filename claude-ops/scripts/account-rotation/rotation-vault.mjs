@@ -13,7 +13,11 @@ export function rotationService(key) {
 
 function parseToken(value) {
   if (!value) return null;
-  try { return typeof value === 'string' ? JSON.parse(value) : value; } catch { return null; }
+  try {
+    return typeof value === 'string' ? JSON.parse(value) : value;
+  } catch {
+    return null;
+  }
 }
 
 function expiry(value) {
@@ -21,7 +25,11 @@ function expiry(value) {
 }
 
 function readFileStore() {
-  try { return JSON.parse(readFileSync(FILE_PATH, 'utf8')); } catch { return {}; }
+  try {
+    return JSON.parse(readFileSync(FILE_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
 }
 
 function writeFileToken(service, token) {
@@ -52,7 +60,9 @@ function writeKeychainToken(service, token) {
     { timeout: 5000, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] },
   );
   if (result.status !== 0) {
-    const detail = String(result.stderr || 'security exited non-zero').split('\n')[0].slice(0, 160);
+    const detail = String(result.stderr || 'security exited non-zero')
+      .split('\n')[0]
+      .slice(0, 160);
     throw new Error(`Keychain update failed for ${service}: ${detail}`);
   }
 }
@@ -61,7 +71,7 @@ export function readRotationToken(key, { heal = true } = {}) {
   const service = rotationService(key);
   const fileToken = parseToken(readFileStore()[service]);
   const keychainToken = readKeychainToken(service);
-  const selected = expiry(fileToken) > expiry(keychainToken) ? fileToken : (keychainToken || fileToken);
+  const selected = expiry(fileToken) > expiry(keychainToken) ? fileToken : keychainToken || fileToken;
   if (!selected) return null;
   const serialized = JSON.stringify(selected);
 
@@ -93,7 +103,9 @@ export function reconcileRemoteRotationVault({ host = process.env.CRS_SSH_HOST |
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (read.status !== 0) {
-    const detail = String(read.stderr || 'ssh read failed').split('\n')[0].slice(0, 160);
+    const detail = String(read.stderr || 'ssh read failed')
+      .split('\n')[0]
+      .slice(0, 160);
     throw new Error(`Remote rotation vault read failed from ${host}: ${detail}`);
   }
 
@@ -126,7 +138,10 @@ export function reconcileRemoteRotationVault({ host = process.env.CRS_SSH_HOST |
   if (pushed > 0) {
     const write = spawnSync(
       'ssh',
-      [host, 'umask 077; tmp="$HOME/.claude/.credentials.json.tmp.$$"; cat >"$tmp"; mv "$tmp" "$HOME/.claude/.credentials.json"'],
+      [
+        host,
+        'umask 077; tmp="$HOME/.claude/.credentials.json.tmp.$$"; cat >"$tmp"; mv "$tmp" "$HOME/.claude/.credentials.json"',
+      ],
       {
         timeout: 15_000,
         encoding: 'utf8',
@@ -135,7 +150,9 @@ export function reconcileRemoteRotationVault({ host = process.env.CRS_SSH_HOST |
       },
     );
     if (write.status !== 0) {
-      const detail = String(write.stderr || 'ssh write failed').split('\n')[0].slice(0, 160);
+      const detail = String(write.stderr || 'ssh write failed')
+        .split('\n')[0]
+        .slice(0, 160);
       throw new Error(`Remote rotation vault write failed to ${host}: ${detail}`);
     }
   }

@@ -123,7 +123,10 @@ function hydrateKeys(keys, log) {
     );
     json = JSON.parse(raw);
   } catch (e) {
-    if (log) log(`secrets-bootstrap: Doppler unavailable (${String(e.message || e).slice(0, 80)}) — ${missing.length} key(s) stay unset`);
+    if (log)
+      log(
+        `secrets-bootstrap: Doppler unavailable (${String(e.message || e).slice(0, 80)}) — ${missing.length} key(s) stay unset`,
+      );
     return { loaded: fileLoaded, source: fileLoaded.length ? 'partial' : 'env' };
   }
 

@@ -31,33 +31,37 @@ import {
 } from './oauth-keep-alive-policy.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH   = join(__dirname, 'config.json');
-const STATE_PATH    = join(__dirname, 'state.json');
-const LOG_PATH      = join(__dirname, 'rotation.log');
+const CONFIG_PATH = join(__dirname, 'config.json');
+const STATE_PATH = join(__dirname, 'state.json');
+const LOG_PATH = join(__dirname, 'rotation.log');
 const NEEDS_REAUTH_PATH = join(__dirname, '.crs-token-refresher-state.json');
 const AUTOLOOP_STATE_PATH = join(__dirname, '.crs-magic-autoloop-state.json');
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const KEYCHAIN_ACCOUNT = process.env.USER || 'samrenders';
 
-const CLIENT_ID       = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
-const TOKEN_ENDPOINT  = 'https://platform.claude.com/v1/oauth/token';
+const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+const TOKEN_ENDPOINT = 'https://platform.claude.com/v1/oauth/token';
 /** @deprecated use REFRESH_WHEN_BELOW_MS — kept name for log clarity */
 const REFRESH_BUFFER_MS = REFRESH_WHEN_BELOW_MS;
-const RETRY_DELAY_MS    = 5_000;         // Wait between retries
-const MAX_RETRIES       = 3;
-const INTER_ACCOUNT_DELAY_MS = 1_500;    // Delay between accounts to avoid rate limits
+const RETRY_DELAY_MS = 5_000; // Wait between retries
+const MAX_RETRIES = 3;
+const INTER_ACCOUNT_DELAY_MS = 1_500; // Delay between accounts to avoid rate limits
 
 // ── Logging ──────────────────────────────────────────────────────────────────
 
 function log(msg) {
   const line = `[${new Date().toISOString()}] [refresh] ${msg}`;
   console.log(line);
-  try { appendFileSync(LOG_PATH, line + '\n'); } catch {}
+  try {
+    appendFileSync(LOG_PATH, line + '\n');
+  } catch {}
 }
 
 // ── Keychain helpers ─────────────────────────────────────────────────────────
 
-function accountKey(a) { return a.label || a.email; }
+function accountKey(a) {
+  return a.label || a.email;
+}
 
 function tokenService(account) {
   return `Claude-Rotation-${accountKey(account)}`;
@@ -86,7 +90,11 @@ function writeKeychain(json, svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
 }
 
 function readStoredToken(account) {
-  try { return readRotationToken(accountKey(account)); } catch { return null; }
+  try {
+    return readRotationToken(accountKey(account));
+  } catch {
+    return null;
+  }
 }
 
 function writeStoredToken(account, json) {
@@ -97,10 +105,11 @@ function syncStoredTokenToCrs(account) {
   if (process.env.CLAUDE_ROTATION_SKIP_CRS_SYNC === '1') return;
   const key = accountKey(account);
   try {
-    const out = execSync(
-      `node "${join(__dirname, 'sync-crs-account.mjs')}" ${JSON.stringify(key)} 2>&1`,
-      { timeout: 45_000 },
-    ).toString().trim();
+    const out = execSync(`node "${join(__dirname, 'sync-crs-account.mjs')}" ${JSON.stringify(key)} 2>&1`, {
+      timeout: 45_000,
+    })
+      .toString()
+      .trim();
     log(out.split('\n').slice(-1)[0] || `${key}: CRS sync complete`);
   } catch (err) {
     log(`${key}: ⚠ CRS sync failed — ${String(err.message || err).slice(0, 180)}`);
@@ -108,13 +117,21 @@ function syncStoredTokenToCrs(account) {
 }
 
 function readState() {
-  try { return JSON.parse(readFileSync(STATE_PATH, 'utf8')); } catch { return {}; }
+  try {
+    return JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
 }
 
 // ── Token helpers ────────────────────────────────────────────────────────────
 
 function parseToken(tokenJson) {
-  try { return JSON.parse(tokenJson); } catch { return null; }
+  try {
+    return JSON.parse(tokenJson);
+  } catch {
+    return null;
+  }
 }
 
 function getExpiry(tokenJson) {
@@ -181,7 +198,9 @@ function clearNeedsReauth(key) {
 
 // ── OAuth token refresh ──────────────────────────────────────────────────────
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 async function refreshOAuthToken(refreshToken) {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -204,9 +223,7 @@ async function refreshOAuthToken(refreshToken) {
           accessToken: body.access_token,
           refreshToken: body.refresh_token || refreshToken,
           expiresIn: body.expires_in,
-          expiresAt: body.expires_in
-            ? Date.now() + body.expires_in * 1000
-            : Date.now() + 8 * 3_600_000,
+          expiresAt: body.expires_in ? Date.now() + body.expires_in * 1000 : Date.now() + 8 * 3_600_000,
           subscriptionType: body.subscription_type,
           rateLimitTier: body.rate_limit_tier,
         };
@@ -217,26 +234,33 @@ async function refreshOAuthToken(refreshToken) {
       if (res.status === 429) {
         const retryAfterHeader = res.headers && (res.headers.get?.('retry-after') || res.headers['retry-after']);
         const retryAfterMs = retryAfterHeader
-          ? (/\d+/i.test(String(retryAfterHeader))
-              ? Math.min(15 * 60_000, Math.max(2_000, parseInt(String(retryAfterHeader), 10) * 1000 + 2000))
-              : 60_000)
+          ? /\d+/i.test(String(retryAfterHeader))
+            ? Math.min(15 * 60_000, Math.max(2_000, parseInt(String(retryAfterHeader), 10) * 1000 + 2000))
+            : 60_000
           : null;
         const delay = retryAfterMs ?? RETRY_DELAY_MS * attempt;
-        log(`  429 Too Many Requests (attempt ${attempt}/${MAX_RETRIES}) — waiting ${Math.round(delay/1000)}s (Retry-After=${retryAfterHeader ?? 'n/a'})...`);
-        if (attempt < MAX_RETRIES) { await sleep(delay); continue; }
+        log(
+          `  429 Too Many Requests (attempt ${attempt}/${MAX_RETRIES}) — waiting ${Math.round(delay / 1000)}s (Retry-After=${retryAfterHeader ?? 'n/a'})...`,
+        );
+        if (attempt < MAX_RETRIES) {
+          await sleep(delay);
+          continue;
+        }
         return { ok: false, error: `429 after ${MAX_RETRIES} retries (Retry-After=${retryAfterHeader})` };
       }
 
       if (body?.error?.type === 'rate_limit_error') {
         const delay = RETRY_DELAY_MS * attempt;
         log(`  Rate limited (attempt ${attempt}/${MAX_RETRIES}) — waiting ${delay / 1000}s...`);
-        if (attempt < MAX_RETRIES) { await sleep(delay); continue; }
+        if (attempt < MAX_RETRIES) {
+          await sleep(delay);
+          continue;
+        }
         return { ok: false, error: 'Rate limited after all retries' };
       }
 
       // Other error — don't retry
       return { ok: false, error: body?.error?.message || `HTTP ${res.status}` };
-
     } catch (err) {
       if (attempt < MAX_RETRIES) {
         await sleep(RETRY_DELAY_MS * attempt);
@@ -272,8 +296,7 @@ function showStatus() {
     const rem = remainingMs(token, now);
     const hoursLeft = (rem / 3_600_000).toFixed(1);
     const label = freshnessLabel(token, now);
-    const icon =
-      label === 'FRESH' ? '✅' : label === 'REFRESH_SOON' ? '🟡' : label === 'EXPIRING' ? '⚠️ ' : '❌';
+    const icon = label === 'FRESH' ? '✅' : label === 'REFRESH_SOON' ? '🟡' : label === 'EXPIRING' ? '⚠️ ' : '❌';
     if (label === 'FRESH' || label === 'REFRESH_SOON') healthy++;
     else unhealthy++;
     console.log(`  ${key}: ${icon} ${label} (${hoursLeft}h remaining)${active}`);
@@ -299,16 +322,21 @@ if (args.includes('--status')) {
   process.exit(0);
 }
 
-const force  = args.includes('--force');
+const force = args.includes('--force');
 const dryRun = args.includes('--dry-run');
 const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
-const state  = readState();
+const state = readState();
 const ROTATING_LOCK = join(__dirname, '.rotating');
 const MAGIC_LINK_TIMEOUT_MS = Number(process.env.CLAUDE_ROT_MAGIC_TOTAL_TIMEOUT_MS || 720_000);
 
 function pidAlive(pid) {
   if (!pid) return false;
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** True when another rotate/reauth already holds the fleet lock. */
@@ -329,8 +357,7 @@ function magicLinkPriority(account) {
   const now = Date.now();
   const pct7 = Number(u.pct7);
   const reset7Ms = Number(u.reset7) > 0 ? Number(u.reset7) * 1000 : 0;
-  const weekly =
-    Number.isFinite(pct7) && !(reset7Ms && reset7Ms < now) ? pct7 : 50;
+  const weekly = Number.isFinite(pct7) && !(reset7Ms && reset7Ms < now) ? pct7 : 50;
   // Lower score = better magic-link candidate (headroom first).
   return weekly;
 }
@@ -361,8 +388,8 @@ const accountsOrdered = [...config.accounts].sort((a, b) => {
 });
 
 let refreshed = 0;
-let failed    = 0;
-let skipped   = 0;
+let failed = 0;
+let skipped = 0;
 let magicLinkAttempted = false;
 
 for (let i = 0; i < accountsOrdered.length; i++) {
@@ -399,7 +426,9 @@ for (let i = 0; i < accountsOrdered.length; i++) {
   const hoursLeft = exp ? ((exp - Date.now()) / 3_600_000).toFixed(1) : '?';
   log(`${key}: needs refresh (${hoursLeft}h remaining)${dryRun ? ' [DRY RUN]' : ''}...`);
 
-  if (dryRun) { continue; }
+  if (dryRun) {
+    continue;
+  }
 
   const releaseRefreshLock = acquireRefreshLock(key);
   if (!releaseRefreshLock) {
@@ -409,112 +438,115 @@ for (let i = 0; i < accountsOrdered.length; i++) {
   }
 
   try {
+    // Rate limit courtesy: delay between accounts
+    if (i > 0) {
+      await sleep(INTER_ACCOUNT_DELAY_MS);
+    }
 
-  // Rate limit courtesy: delay between accounts
-  if (i > 0) { await sleep(INTER_ACCOUNT_DELAY_MS); }
+    const parsed = parseToken(tokenJson);
+    const oauthData = parsed?.claudeAiOauth;
+    if (!oauthData?.refreshToken) {
+      log(`${key}: no refreshToken in stored token — skipping`);
+      failed++;
+      continue;
+    }
 
-  const parsed = parseToken(tokenJson);
-  const oauthData = parsed?.claudeAiOauth;
-  if (!oauthData?.refreshToken) {
-    log(`${key}: no refreshToken in stored token — skipping`);
-    failed++;
-    continue;
-  }
+    const result = await refreshOAuthToken(oauthData.refreshToken);
 
-  const result = await refreshOAuthToken(oauthData.refreshToken);
+    if (!result.ok) {
+      log(`${key}: ✗ refresh failed — ${result.error}`);
 
-  if (!result.ok) {
-    log(`${key}: ✗ refresh failed — ${result.error}`);
-
-    // HTTP 400 = dead refresh_token. Browser re-auth is owned by the always-on
-    // magic-link-autoloop (com.sam.crs-magic-link-autoloop) — never spawn a
-    // competing headed OAuth from the hourly refresher (2026-07-16 thrash).
-    // Opt-in only: CLAUDE_ROTATION_REFRESH_MAGIC_LINK=1 for emergency one-shots.
-    if (result.error && result.error.includes('400')) {
-      if (account.autoAuthDisabled === true) {
-        log(`${key}: unattended re-auth disabled — leaving token for manual recovery`);
-      } else if (process.env.CLAUDE_ROTATION_REFRESH_MAGIC_LINK === '1' && !magicLinkAttempted) {
-        const utilSkip = shouldSkipMagicLinkForUtil(account);
-        if (utilSkip) {
-          log(`${key}: ${utilSkip}`);
-        } else if (rotationInProgress()) {
-          log(`${key}: rotation lock held — deferring magic-link re-auth`);
-        } else {
-          magicLinkAttempted = true;
-          log(`${key}: refresh token invalid — CLAUDE_ROTATION_REFRESH_MAGIC_LINK=1 → magic-link (timeout ${Math.round(MAGIC_LINK_TIMEOUT_MS / 1000)}s)...`);
-          try {
-            const reAuthResult = execFileSync(
-              process.execPath,
-              [join(__dirname, 'rotate.mjs'), '--to', key, '--magic-link', '--force'],
-              { timeout: MAGIC_LINK_TIMEOUT_MS, encoding: 'utf8' },
+      // HTTP 400 = dead refresh_token. Browser re-auth is owned by the always-on
+      // magic-link-autoloop (com.sam.crs-magic-link-autoloop) — never spawn a
+      // competing headed OAuth from the hourly refresher (2026-07-16 thrash).
+      // Opt-in only: CLAUDE_ROTATION_REFRESH_MAGIC_LINK=1 for emergency one-shots.
+      if (result.error && result.error.includes('400')) {
+        if (account.autoAuthDisabled === true) {
+          log(`${key}: unattended re-auth disabled — leaving token for manual recovery`);
+        } else if (process.env.CLAUDE_ROTATION_REFRESH_MAGIC_LINK === '1' && !magicLinkAttempted) {
+          const utilSkip = shouldSkipMagicLinkForUtil(account);
+          if (utilSkip) {
+            log(`${key}: ${utilSkip}`);
+          } else if (rotationInProgress()) {
+            log(`${key}: rotation lock held — deferring magic-link re-auth`);
+          } else {
+            magicLinkAttempted = true;
+            log(
+              `${key}: refresh token invalid — CLAUDE_ROTATION_REFRESH_MAGIC_LINK=1 → magic-link (timeout ${Math.round(MAGIC_LINK_TIMEOUT_MS / 1000)}s)...`,
             );
-            log(`${key}: magic link re-auth output: ${reAuthResult.split('\n').slice(-3).join(' | ')}`);
-            const reAuthedToken = readStoredToken(account);
-            if (reAuthedToken) {
-              const reParsed = parseToken(reAuthedToken);
-              if (reParsed?.claudeAiOauth?.accessToken) {
-                log(`${key}: ✓ re-authed via magic link`);
-                refreshed++;
-                continue;
+            try {
+              const reAuthResult = execFileSync(
+                process.execPath,
+                [join(__dirname, 'rotate.mjs'), '--to', key, '--magic-link', '--force'],
+                { timeout: MAGIC_LINK_TIMEOUT_MS, encoding: 'utf8' },
+              );
+              log(`${key}: magic link re-auth output: ${reAuthResult.split('\n').slice(-3).join(' | ')}`);
+              const reAuthedToken = readStoredToken(account);
+              if (reAuthedToken) {
+                const reParsed = parseToken(reAuthedToken);
+                if (reParsed?.claudeAiOauth?.accessToken) {
+                  log(`${key}: ✓ re-authed via magic link`);
+                  refreshed++;
+                  continue;
+                }
               }
+              log(`${key}: magic link re-auth did not produce a valid token`);
+            } catch (err) {
+              log(`${key}: magic link re-auth failed — ${err.message}`);
             }
-            log(`${key}: magic link re-auth did not produce a valid token`);
-          } catch (err) {
-            log(`${key}: magic link re-auth failed — ${err.message}`);
           }
+        } else {
+          log(`${key}: refresh grant failed (HTTP 400) — marking needsReauth for magic-link-autoloop`);
+          markNeedsReauth(key, result.error);
         }
-      } else {
-        log(`${key}: refresh grant failed (HTTP 400) — marking needsReauth for magic-link-autoloop`);
+      } else if (result.error && /401|invalid|revoked/i.test(result.error)) {
         markNeedsReauth(key, result.error);
       }
-    } else if (result.error && /401|invalid|revoked/i.test(result.error)) {
-      markNeedsReauth(key, result.error);
+
+      failed++;
+      continue;
     }
 
-    failed++;
-    continue;
-  }
+    // Build updated token
+    const updated = {
+      claudeAiOauth: {
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        expiresAt: result.expiresAt,
+        scopes: oauthData.scopes || [],
+        subscriptionType: result.subscriptionType || oauthData.subscriptionType,
+        rateLimitTier: result.rateLimitTier || oauthData.rateLimitTier,
+      },
+      mcpOAuth: {},
+    };
 
-  // Build updated token
-  const updated = {
-    claudeAiOauth: {
-      accessToken:      result.accessToken,
-      refreshToken:     result.refreshToken,
-      expiresAt:        result.expiresAt,
-      scopes:           oauthData.scopes || [],
-      subscriptionType: result.subscriptionType || oauthData.subscriptionType,
-      rateLimitTier:    result.rateLimitTier || oauthData.rateLimitTier,
-    },
-    mcpOAuth: {},
-  };
+    // Save to vault
+    writeStoredToken(account, JSON.stringify(updated));
+    syncStoredTokenToCrs(account);
+    clearNeedsReauth(key);
+    const newHoursLeft = ((result.expiresAt - Date.now()) / 3_600_000).toFixed(1);
+    log(`${key}: ✓ refreshed (${newHoursLeft}h remaining)`);
 
-  // Save to vault
-  writeStoredToken(account, JSON.stringify(updated));
-  syncStoredTokenToCrs(account);
-  clearNeedsReauth(key);
-  const newHoursLeft = ((result.expiresAt - Date.now()) / 3_600_000).toFixed(1);
-  log(`${key}: ✓ refreshed (${newHoursLeft}h remaining)`);
-
-  // If this is the currently active account, update the active keychain too
-  if (state.activeAccount === key) {
-    try {
-      const currentActive = readKeychain();
-      const currentParsed = parseToken(currentActive);
-      // Always merge mcpOAuth from the running session — drop the Object.keys>0 guard
-      // which silently skipped preservation when a prior rotation had already zeroed the
-      // field, causing CC to lose all MCP OAuth tokens (giga, Amplitude, higgsfield) on
-      // the next session launch and forcing interactive reauth every session.
-      if (currentParsed?.mcpOAuth) {
-        updated.mcpOAuth = { ...updated.mcpOAuth, ...currentParsed.mcpOAuth };
+    // If this is the currently active account, update the active keychain too
+    if (state.activeAccount === key) {
+      try {
+        const currentActive = readKeychain();
+        const currentParsed = parseToken(currentActive);
+        // Always merge mcpOAuth from the running session — drop the Object.keys>0 guard
+        // which silently skipped preservation when a prior rotation had already zeroed the
+        // field, causing CC to lose all MCP OAuth tokens (giga, Amplitude, higgsfield) on
+        // the next session launch and forcing interactive reauth every session.
+        if (currentParsed?.mcpOAuth) {
+          updated.mcpOAuth = { ...updated.mcpOAuth, ...currentParsed.mcpOAuth };
+        }
+        writeKeychain(JSON.stringify(updated));
+        log(`${key}: ✓ also updated active keychain with mcpOAuth preserved`);
+      } catch (err) {
+        log(`${key}: ⚠ vault updated but active keychain update failed — ${err.message}`);
       }
-      writeKeychain(JSON.stringify(updated));
-      log(`${key}: ✓ also updated active keychain with mcpOAuth preserved`);
-    } catch (err) {
-      log(`${key}: ⚠ vault updated but active keychain update failed — ${err.message}`);
     }
-  }
 
-  refreshed++;
+    refreshed++;
   } finally {
     releaseRefreshLock();
   }
