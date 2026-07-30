@@ -39,6 +39,13 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.47.2] - 2026-07-30
+
+### Changed
+### Fixed
+- \`ops-post-update-migrate\` no longer leaves \`current/\` as a dangling symlink. If a legacy or dangling symlink was already at \`current/\` (e.g. left pointing at a version \`ops-update\`'s prune step just deleted), the rsync refresh now strips it first instead of silently failing against it.
+
+
 ## [2.47.1] - 2026-07-30
 
 ### Changed
