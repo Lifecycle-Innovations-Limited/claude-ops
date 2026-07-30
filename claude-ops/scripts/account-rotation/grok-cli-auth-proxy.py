@@ -486,40 +486,51 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def _target_url(self, upstream: str) -> str:
         """Map client path onto a fixed upstream base (no open proxy / SSRF).
 
-        Client may send absolute-form request lines; we only keep path+query and
-        re-attach them to the configured upstream host allowlist.
+        Scheme + host come ONLY from the preconfigured UPSTREAM_* constants.
+        Client input may only contribute a sanitized path suffix and query.
+        Rebuild with urlunparse so CodeQL cannot treat the full URL as tainted.
         """
+        # Resolve to one of the three constant bases (never client-controlled host).
+        allowed_bases = (UPSTREAM, UPSTREAM_CODING, UPSTREAM_IMAGINE)
+        if upstream not in allowed_bases:
+            raise ValueError("upstream not in allowlist")
+        base = urllib.parse.urlparse(upstream)
+        if base.scheme not in ("https", "http") or not base.netloc:
+            raise ValueError(f"invalid upstream base: {upstream!r}")
+
         raw = self.path or "/"
-        parsed = urllib.parse.urlparse(raw)
-        # Drop scheme/netloc from absolute-form requests; never follow client host.
+        # Absolute-form request lines: drop scheme/netloc entirely.
+        if "://" in raw or raw.startswith("//"):
+            raw = urllib.parse.urlparse(raw).path or "/"
+        parsed = urllib.parse.urlparse(raw if raw.startswith("/") else "/" + raw)
         path = parsed.path or "/"
         query = parsed.query or ""
-        if ".." in path.split("/") or path.startswith("//"):
+
+        # Path may only contain safe URL path characters; no //, .., or schemes.
+        if (
+            ".." in path
+            or "//" in path
+            or not path.startswith("/")
+            or not re.fullmatch(r"/[A-Za-z0-9._~/%+\-]*", path)
+        ):
             raise ValueError(f"rejected path: {path!r}")
+        if query and not re.fullmatch(r"[A-Za-z0-9._~=&%\-+]*", query):
+            raise ValueError(f"rejected query: {query!r}")
+
         if not path.startswith("/v1"):
-            path = "/v1" + (path if path.startswith("/") else "/" + path)
+            path = "/v1" + path
         suffix = path[len("/v1") :] or "/"
         if not suffix.startswith("/"):
             suffix = "/" + suffix
-        # upstream is like https://host/v1 — join keeps host fixed.
-        base = upstream if upstream.endswith("/") else upstream + "/"
-        target = urllib.parse.urljoin(base, suffix.lstrip("/"))
-        if query:
-            target = target + ("&" if "?" in target else "?") + query
-        # Hard allowlist: final URL must stay on a configured upstream origin.
-        allowed = {
-            urllib.parse.urlparse(u).netloc.lower()
-            for u in (UPSTREAM, UPSTREAM_CODING, UPSTREAM_IMAGINE)
-            if u
-        }
-        final = urllib.parse.urlparse(target)
-        if final.scheme not in ("https", "http") or final.netloc.lower() not in allowed:
-            raise ValueError(f"upstream host not allowed: {final.netloc}")
-        if not any(target.startswith(u.rstrip("/") ) or target.startswith(u) for u in (UPSTREAM, UPSTREAM_CODING, UPSTREAM_IMAGINE)):
-            # Prefer prefix match on full upstream base when path depth differs.
-            if final.netloc.lower() not in allowed:
-                raise ValueError(f"upstream URL not allowed: {target}")
-        return target
+
+        # base.path is typically "/v1"; keep it and append validated suffix.
+        origin_path = (base.path or "/v1").rstrip("/") or "/v1"
+        final_path = origin_path + suffix
+
+        # urlunparse with scheme/netloc from constant only — not urljoin.
+        return urllib.parse.urlunparse(
+            (base.scheme, base.netloc, final_path, "", query, "")
+        )
 
     def _build_headers(self, token: str) -> Dict[str, str]:
         headers: Dict[str, str] = {}
