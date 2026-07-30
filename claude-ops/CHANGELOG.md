@@ -7,6 +7,10 @@
 
 ## Unreleased
 
+- ops-accounts: dual-write + OPS_ACCOUNTS_BACKEND auto/crs/local; grok-cli-auth-proxy; local no-op reconcilers; gateway design doc
+
+## Unreleased
+
 ### Changed
 
 - **ops-accounts multi-provider plan:** every provider (Claude, Grok, OpenAI/Codex, Factory, Cursor) gets Anthropic-shaped OAuth, reauth, util, switch/LB under `/ops:accounts`.

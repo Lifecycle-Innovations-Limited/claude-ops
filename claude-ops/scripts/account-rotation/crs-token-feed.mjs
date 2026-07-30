@@ -27,6 +27,7 @@ import {
   loadRotationConfig,
   resolveConfigPath,
 } from './crs-pool-config.mjs';
+import { resolveAccountsBackend } from './ops-accounts-backend.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LOG_PATH = join(__dirname, 'rotation.log');
@@ -120,13 +121,19 @@ async function crsLogin(crsBase, crsContainer, adminUser = 'cradmin') {
 }
 
 async function main() {
+  const earlyCfg = loadRotationConfig();
+  const backend = resolveAccountsBackend({ env: process.env, cfgBackend: earlyCfg.crs?.backend });
+  if (backend === 'local') {
+    log('backend=local — CRS token-feed no-op (CLI seats read vault/keychain directly; no pool to feed)');
+    return;
+  }
   assertCrsInvariant(process.env, 'crs-token-feed:main');
   const configPath = resolveConfigPath();
   if (!configPath) {
     log('no rotation config found — set CRS_CONFIG or install account-rotation config.json');
     process.exit(1);
   }
-  const config = loadRotationConfig();
+  const config = earlyCfg;
   const { nameByVaultKey } = buildCrsNameMaps(config);
   const fileVault = crsFileVaultPath(config);
   const crsBase = crsBaseUrl(config);
