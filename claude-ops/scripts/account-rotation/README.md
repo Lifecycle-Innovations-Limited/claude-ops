@@ -173,3 +173,12 @@ requirements beyond the base list above:
 - The daemon never touches accounts marked `disabled: true` in `config.json`.
 - Accounts with `extraUsageEnabled: true` rotate at 75% (not 80%) to avoid paid overage.
 - A 3-minute post-rotation blackout suppresses thrashing.
+
+## Captcha cascade (plugin-native)
+
+See `CAPTCHA-CASCADE.md`, `captcha-helper.mjs`, and `bright-data-cascade.mjs`.
+
+Token solvers (env): `TWOCAPTCHA_API_KEY`, `CAPSOLVER_API_KEY`, `ANTICAPTCHA_API_KEY`, `YESCAPTCHA_CLIENT_KEY`.
+Bright Data is last-resort cascade for proxy-aligned re-solve (zone/password envs), not a primary token API.
+
+Residual host-only: interactive click helpers (`click-turnstile*.mjs`) and Chrome profile automation — next PR.
