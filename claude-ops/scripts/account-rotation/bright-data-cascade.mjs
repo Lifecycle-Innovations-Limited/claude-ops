@@ -17,10 +17,7 @@ const TIER_ORDER = ['residential', 'isp', 'mobile'];
 /** Env keys per proxy tier. Zone + password stay paired; first non-empty wins. */
 const TIER_ENV = {
   residential: {
-    zone: [
-      'BRIGHT_DATA_RESIDENTIAL_PROXY_ZONE',
-      'BRIGHT_DATA_RESIDENTIAL_ZONE',
-    ],
+    zone: ['BRIGHT_DATA_RESIDENTIAL_PROXY_ZONE', 'BRIGHT_DATA_RESIDENTIAL_ZONE'],
     pass: [
       'BRIGHT_DATA_RESIDENTIAL_PROXY_PASSWORD',
       'BRIGHT_DATA_PROXY_PASSWORD',
@@ -31,24 +28,11 @@ const TIER_ENV = {
   },
   isp: {
     zone: ['BRIGHT_DATA_ISP_PROXY_ZONE', 'BRIGHT_DATA_ISP_ZONE'],
-    pass: [
-      'BRIGHT_DATA_ISP_PROXY_PASSWORD',
-      'BRIGHT_DATA_TOKEN',
-      'BRIGHT_DATA_PASS',
-      'BRIGHT_DATA_PROXY_PASS',
-    ],
+    pass: ['BRIGHT_DATA_ISP_PROXY_PASSWORD', 'BRIGHT_DATA_TOKEN', 'BRIGHT_DATA_PASS', 'BRIGHT_DATA_PROXY_PASS'],
   },
   mobile: {
-    zone: [
-      'BRIGHT_DATA_MOBILE_PROXY_ZONE',
-      'BRIGHT_DATA_MOBILE_ZONE',
-    ],
-    pass: [
-      'BRIGHT_DATA_MOBILE_PROXY_PASSWORD',
-      'BRIGHT_DATA_MOBILE_PASSWORD',
-      'BRIGHT_DATA_TOKEN',
-      'BRIGHT_DATA_PASS',
-    ],
+    zone: ['BRIGHT_DATA_MOBILE_PROXY_ZONE', 'BRIGHT_DATA_MOBILE_ZONE'],
+    pass: ['BRIGHT_DATA_MOBILE_PROXY_PASSWORD', 'BRIGHT_DATA_MOBILE_PASSWORD', 'BRIGHT_DATA_TOKEN', 'BRIGHT_DATA_PASS'],
   },
 };
 
@@ -58,12 +42,7 @@ const UNLOCKER_ZONE_ENV = [
   'BRIGHT_DATA_UNLOCKER_ZONE',
 ];
 
-const API_TOKEN_ENV = [
-  'BRIGHT_DATA_API_TOKEN',
-  'BRIGHTDATA_API_TOKEN',
-  'BRIGHTDATA_API_KEY',
-  'BRIGHT_DATA_API_KEY',
-];
+const API_TOKEN_ENV = ['BRIGHT_DATA_API_TOKEN', 'BRIGHTDATA_API_TOKEN', 'BRIGHTDATA_API_KEY', 'BRIGHT_DATA_API_KEY'];
 
 function envFirst(names) {
   for (const n of names) {
@@ -75,9 +54,7 @@ function envFirst(names) {
 
 function customerId() {
   // Prefer explicit customer; USERID is often the bare customer id (e.g. hl_…).
-  const c =
-    envFirst(['BRIGHT_DATA_CUSTOMER', 'BRIGHT_DATA_USER', 'BRIGHT_DATA_USERID']) ||
-    null;
+  const c = envFirst(['BRIGHT_DATA_CUSTOMER', 'BRIGHT_DATA_USER', 'BRIGHT_DATA_USERID']) || null;
   if (!c) return null;
   // If someone stored full brd-customer-X-zone-Y as USERID, strip to customer.
   const m = c.match(/^brd-customer-([^-]+(?:-[^-]+)*)-zone-/i);
@@ -142,12 +119,7 @@ export function getProxyUrlForTier(tier) {
     zone = zone || envFirst(['BRIGHT_DATA_ZONE']);
     pass =
       pass ||
-      envFirst([
-        'BRIGHT_DATA_PROXY_PASSWORD',
-        'BRIGHT_DATA_PASS',
-        'BRIGHT_DATA_PROXY_PASS',
-        'BRIGHT_DATA_TOKEN',
-      ]);
+      envFirst(['BRIGHT_DATA_PROXY_PASSWORD', 'BRIGHT_DATA_PASS', 'BRIGHT_DATA_PROXY_PASS', 'BRIGHT_DATA_TOKEN']);
   }
   if (!zone || !pass) return null;
 
@@ -231,9 +203,7 @@ export async function webUnlockerRequest(url, opts = {}) {
     return { ok: false, status: 0, body: null, error: 'no-api-token' };
   }
   if (!zone) {
-    log(
-      'brightdata-unlocker: no unlocker zone (set BRIGHT_DATA_WEB_UNLOCKER_ZONE) — skip',
-    );
+    log('brightdata-unlocker: no unlocker zone (set BRIGHT_DATA_WEB_UNLOCKER_ZONE) — skip');
     return { ok: false, status: 0, body: null, error: 'no-unlocker-zone' };
   }
   if (!url || !/^https?:\/\//i.test(url)) {
