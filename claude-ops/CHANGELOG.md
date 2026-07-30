@@ -10,6 +10,8 @@
 ### Added
 
 - **ops-update companions:** step 9 runs `scripts/install-companions.sh` from `plugin-dependencies.json` — co-install/update all **required** companions (`desktop-act`, `gsd`, `gstack` skills-clone, `superpowers`, `feature-dev`). Flag: `--no-companions`.
+- **ops-accounts phase 0 surface:** `skills/ops-accounts` + `bin/ops-accounts` router (status/switch/refresh/reauth) over Claude rotate-magic, grok-rotate/oauth-reauth, and codex-rotate when present.
+
 - **Standalone captcha cascade (no CRS required):** port portable captcha stack into `scripts/account-rotation/` — `captcha-helper.mjs`, `visual-captcha-solver.mjs`, `bright-data-cascade.mjs`, orchestration `captcha-cascade.mjs`, thin `rotate-magic.mjs` entry. Plugin `rotate.mjs` soft-loads the cascade after magic-link verify. Contract: `CAPTCHA-CASCADE.md`. Gap report: `docs/ops/HOST-VS-PLUGIN-ROTATE-GAP.md`.
 - **CRS optional UX:** `/ops:rotate-setup` Step 4.4 detects CRS (PATH / health / `crs.enabled`) and asks install vs standalone rotate-magic (recommended for single/few accounts) vs skip. `/ops:rotate` documents standalone `reauth` and never treats missing CRS as failure. `--standalone` flag on setup.
 - **ops-accounts vision (phase 0):** multi-provider `/ops:accounts` is the north star (Claude/Codex/Grok adapters, refresh+reauth dispatcher). Claude captcha port + CRS-optional are enablers under that contract, not a late rename. `docs/ops/OPS-ACCOUNTS-VISION.md` — future rename ops-rotate → multi-provider ops-accounts; cherry-pick balancer ideas; no fork in this release.
