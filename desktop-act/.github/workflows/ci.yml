@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-test:
+    name: lint + unit (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest
+          pip install -r requirements.txt
+
+      - name: Ruff check
+        run: ruff check mcp-server cli tests
+
+      - name: Ruff format check
+        run: ruff format --check mcp-server cli tests
+
+      - name: Syntax compile
+        run: |
+          python -m py_compile mcp-server/server.py
+          python -m py_compile cli/desktop_act_cli.py
+
+      - name: Unit tests (lease helpers)
+        env:
+          DESKTOP_ACT_REAP_INTERVAL: "0"
+          DESKTOP_ACT_RELEASE_ON_EXIT: "0"
+        run: pytest -q tests/
+
+      - name: CLI help smoke
+        shell: bash
+        run: python cli/desktop_act_cli.py -h | head -40
+
+  e2e-linux-pool:
+    name: e2e pool ensure (linux)
+    runs-on: ubuntu-latest
+    needs: lint-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tigervnc-standalone-server websockify openbox xterm
+      - name: Bootstrap venv
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt
+      - name: Dual-owner ensure smoke
+        env:
+          DESKTOP_ACT_HOME: ${{ github.workspace }}
+          DESKTOP_ACT_COMMAND: ${{ github.workspace }}/mcp-server/run.sh
+          DESKTOP_ACT_VENV: ${{ github.workspace }}/.venv
+          DESKTOP_ACT_GEOMETRY: 1280x800
+          DESKTOP_ACT_LEASE_TTL: "120"
+          DESKTOP_ACT_REAP_INTERVAL: "0"
+          DESKTOP_ACT_RELEASE_ON_EXIT: "0"
+        run: |
+          chmod +x cli/desktop-act mcp-server/run.sh
+          set -euo pipefail
+          A=$(./cli/desktop-act ensure --owner-id ci-a --geometry 1280x800)
+          B=$(./cli/desktop-act ensure --owner-id ci-b --geometry 1280x800)
+          echo "$A" | python -c "import sys,json;d=json.load(sys.stdin);assert d.get('ok') and d.get('session_id');print('A',d['display'],d['session_id'])"
+          echo "$B" | python -c "import sys,json;d=json.load(sys.stdin);assert d.get('ok') and d.get('session_id');print('B',d['display'],d['session_id'])"
+          SID_A=$(echo "$A" | python -c "import sys,json;print(json.load(sys.stdin)['session_id'])")
+          SID_B=$(echo "$B" | python -c "import sys,json;print(json.load(sys.stdin)['session_id'])")
+          test "$SID_A" != "$SID_B"
+          ./cli/desktop-act release --session-id "$SID_A"
+          ./cli/desktop-act release --session-id "$SID_B"

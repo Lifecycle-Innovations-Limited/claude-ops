@@ -25,6 +25,20 @@ The workhorse is **`${CLAUDE_PLUGIN_ROOT}/bin/ops-update`**. It runs a 9-step lo
 7. **Migrate** — runs `ops-post-update-migrate` (idempotent, per-version). It also maintains a stable `cache/.../ops/current/` directory (rsynced from the new version and repointed in `installed_plugins.json`) so Claude Code GC'ing the old versioned dir mid-session never causes "Plugin directory does not exist" hook errors.
 8. **Local sync** — if a linked local source checkout of this repo is present under `~/Projects`, fast-forwards its `main` to `origin/main` so a dev clone never silently drifts behind the published release. Acts only on a clean `main` (never clobbers uncommitted WIP, a feature branch, or unpushed commits); a no-op when no checkout exists. Skip with `--no-localsync`.
 9. **Report** — old→new, what changed, and that a restart / `/reload-plugins` is needed to load it.
+10. **Companions** — `bin/ops-update` step 9 runs `scripts/install-companions.sh`
+    against `plugin-dependencies.json`:
+    - **desktop-act** (`ops-marketplace`) — always co-install/update (gate:
+      `desktop_act_co_install`)
+    - **gsd**, **superpowers**, **feature-dev** — update only if already installed
+    - **gstack** — not managed by claude-ops (not in the matrix)
+
+```bash
+# manual companion pass
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-companions.sh"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-companions.sh --status"
+# skip from ops-update:
+${CLAUDE_PLUGIN_ROOT}/bin/ops-update --no-companions
+```
 
 ## How to run it
 
@@ -77,6 +91,7 @@ Code constraint, not a failure.
 | `--no-patches`   | Skip the cache-patch reapply step.                                    |
 | `--no-rewrite`   | Skip the stale-version-path rewrite step.                            |
 | `--no-localsync` | Skip fast-forwarding a linked local source checkout's `main`.        |
+| `--no-companions` | Skip companion install/update (desktop-act, gsd, superpowers, …).  |
 
 ## Mobile / SSH (Rule 7)
 

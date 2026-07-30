@@ -41,8 +41,8 @@ ToolSearch select:mcp__desktop-act__acquire_desktop,mcp__desktop-act__screenshot
 Before any route runs, resolve:
 
 1. **Plugin root**: `${CLAUDE_PLUGIN_ROOT}` — used to locate the launcher.
-2. **MCP launcher**: `${CLAUDE_PLUGIN_ROOT}/mcp-servers/desktop-act-launcher.py` — auto-discovers an installed desktop-act marketplace or, if absent, clones from `$DESKTOP_ACT_REPO` (default `https://github.com/your-org/desktop-act.git`) and bootstraps a venv on first run.
-3. **noVNC default**: `http://<box-host>:6081` — primary desktop. `acquire_desktop()` provisions extra sessions on `:6082+`.
+2. **MCP launcher**: `${CLAUDE_PLUGIN_ROOT}/mcp-servers/desktop-act-launcher.py` — auto-discovers an installed desktop-act marketplace or, if absent, clones from `$DESKTOP_ACT_REPO` (default `https://github.com/Lifecycle-Innovations-Limited/desktop-act.git`) and bootstraps a venv on first run.
+3. **noVNC default**: `http://<box-host>:6082` — primary desktop. `acquire_desktop()` provisions extra sessions on `:6082+`.
 4. **Mobile / SSH mode**: if `$SSH_CONNECTION`, `$SSH_CLIENT`, or `$SSH_TTY` is set, emit compact text-only output per Rule 7 (no banners, no tables, plain lines). The noVNC URL is the one piece the user definitely needs — print it once on a copy-able line.
 
 ## Routing table
@@ -144,7 +144,7 @@ mcp__desktop-act__screenshot(session_id)   # verify
 result = mcp__desktop-act__act(
     session_id=session_id,
     goal="$ARGUMENTS",
-    max_steps=20,
+    max_iterations=20,
 )
 ```
 

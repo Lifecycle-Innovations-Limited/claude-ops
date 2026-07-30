@@ -15,7 +15,9 @@
 #   6. Rewrite stale version-pinned paths in live configs/scripts (never logs/history)
 #   7. Run per-version idempotent migrations         (ops-post-update-migrate)
 #   8. Fast-forward a linked local source checkout's main → origin/main (if clean)
-#   9. Report old→new + what changed, and how to apply (/reload-plugins or restart)
+#   9. Companion plugins (plugin-dependencies.json): desktop-act always;
+#      gsd / superpowers / feature-dev if installed. gstack is not managed.
+#  10. Report old→new + what changed, and how to apply (/reload-plugins or restart)
 #
 # Canonical CLI per Claude Code docs:
 #   https://code.claude.com/docs/en/discover-plugins  (marketplace update / plugin update)
@@ -23,7 +25,7 @@
 #
 # Usage:
 #   ops-update [--dry-run] [--force] [--to X.Y.Z] [--no-prune] [--no-patches]
-#              [--no-rewrite] [--no-localsync]
+#              [--no-rewrite] [--no-localsync] [--no-companions]
 #
 #   --dry-run       show everything that would happen; change nothing
 #   --force         force-reinstall even if the CLI says "already at latest" (bug #61954)
@@ -32,6 +34,7 @@
 #   --no-patches    skip the cache-patch reapply step
 #   --no-rewrite    skip the stale-version-path rewrite step
 #   --no-localsync  skip fast-forwarding a linked local source checkout's main
+#   --no-companions skip companion install/update
 #
 # Public repo: no personal data. All paths derive from $HOME / env. (Rule 0)
 
@@ -47,7 +50,7 @@ INSTALLED="$PLUGINS_DIR/installed_plugins.json"
 DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$PLUGINS_DIR/data/ops-${MARKETPLACE}}"
 THIS_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
-DRY=0; FORCE=0; PRUNE=1; PATCHES=1; REWRITE=1; LOCALSYNC=1; TARGET=""
+DRY=0; FORCE=0; PRUNE=1; PATCHES=1; REWRITE=1; LOCALSYNC=1; COMPANIONS=1; TARGET=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY=1; shift ;;
@@ -57,7 +60,8 @@ while [[ $# -gt 0 ]]; do
     --no-patches) PATCHES=0; shift ;;
     --no-rewrite) REWRITE=0; shift ;;
     --no-localsync) LOCALSYNC=0; shift ;;
-    -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
+    --no-companions) COMPANIONS=0; shift ;;
+    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "ops-update: unknown arg '$1'" >&2; exit 2 ;;
   esac
 done
@@ -85,7 +89,7 @@ say "${c_dim}ops-update — claude-ops local upgrade$([[ $DRY -eq 1 ]] && echo '
 say "current installed: ${CUR:-<none>}"
 
 # ── 1. Refresh marketplace catalogue ───────────────────────────────────────
-step "1/9  Refresh marketplace catalogue ($MARKETPLACE)"
+step "1/10  Refresh marketplace catalogue ($MARKETPLACE)"
 if [[ "$DRY" -eq 1 ]]; then
   say "  ${c_dim}[dry-run] claude plugin marketplace update $MARKETPLACE${c_rst}"
 else
@@ -98,7 +102,7 @@ else
 fi
 
 # ── 2. Resolve target version ──────────────────────────────────────────────
-step "2/9  Resolve target version"
+step "2/10  Resolve target version"
 if [[ -n "$TARGET" ]]; then
   NEW="$TARGET"
 else
@@ -111,7 +115,7 @@ if [[ "$CUR" == "$NEW" && "$FORCE" -eq 0 ]]; then
 fi
 
 # ── 3. Update the installed plugin ─────────────────────────────────────────
-step "3/9  Update installed plugin → $NEW"
+step "3/10  Update installed plugin → $NEW"
 if [[ "$DRY" -eq 1 ]]; then
   say "  ${c_dim}[dry-run] claude plugin update $PLUGIN@$MARKETPLACE${c_rst}"
   [[ "$FORCE" -eq 1 ]] && say "  ${c_dim}[dry-run] (force) rm -rf $CACHE_ROOT/$NEW && claude plugin install $PLUGIN@$MARKETPLACE${c_rst}"
@@ -127,7 +131,7 @@ fi
 NEW_CACHE="$CACHE_ROOT/$NEW"
 
 # ── 4. Reapply idempotent local cache patches ──────────────────────────────
-step "4/9  Reapply cache patches"
+step "4/10  Reapply cache patches"
 PATCH_DIR="$THIS_ROOT/scripts/cache-patches"
 if [[ "$PATCHES" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-patches)${c_rst}"
@@ -142,7 +146,7 @@ else
 fi
 
 # ── 5. Prune old cache versions everywhere ─────────────────────────────────
-step "5/9  Prune old cache versions"
+step "5/10  Prune old cache versions"
 if [[ "$PRUNE" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-prune)${c_rst}"
 else
@@ -161,7 +165,7 @@ fi
 # ── 6. Rewrite stale version-pinned paths in LIVE configs/scripts ──────────
 # Only touch live, editable configs that hardcode cache/<mp>/<plugin>/<OLDVER>/.
 # NEVER rewrite logs, memory notes, session transcripts, the cache, or the clone.
-step "6/9  Rewrite stale version-pinned paths → $NEW"
+step "6/10  Rewrite stale version-pinned paths → $NEW"
 if [[ "$REWRITE" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-rewrite)${c_rst}"
 else
@@ -204,7 +208,7 @@ else
 fi
 
 # ── 7. Per-version idempotent migrations ───────────────────────────────────
-step "7/9  Post-update migrations"
+step "7/10  Post-update migrations"
 MIGRATE="$NEW_CACHE/bin/ops-post-update-migrate"
 if [[ "$DRY" -eq 1 ]]; then
   say "  ${c_dim}[dry-run] CLAUDE_PLUGIN_ROOT=$NEW_CACHE $MIGRATE${c_rst}"
@@ -219,7 +223,7 @@ fi
 # up to date with origin/main — but ONLY when it is safely on a clean main, so we
 # never clobber uncommitted WIP or a feature branch. Purely a developer
 # convenience; absence of a checkout is the common case and is a no-op.
-step "8/9  Sync linked local source checkout"
+step "8/10  Sync linked local source checkout"
 if [[ "$LOCALSYNC" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-localsync)${c_rst}"
 else
@@ -255,11 +259,37 @@ else
   fi
 fi
 
-# ── 9. Report ──────────────────────────────────────────────────────────────
-step "9/9  Summary"
+# ── 9. Companion plugins (desktop-act always; others if installed) ─────────
+# SSOT: plugin-dependencies.json — desktop-act co-install; gsd / superpowers /
+# feature-dev update only when already present. gstack is not managed.
+step "9/10  Companion plugins"
+if [[ "$COMPANIONS" -eq 0 ]]; then
+  say "  ${c_dim}(skipped: --no-companions)${c_rst}"
+else
+  COMP_SCRIPT="$NEW_CACHE/scripts/install-companions.sh"
+  [[ -f "$COMP_SCRIPT" ]] || COMP_SCRIPT="$THIS_ROOT/scripts/install-companions.sh"
+  if [[ -f "$COMP_SCRIPT" ]]; then
+    if [[ "$DRY" -eq 1 ]]; then
+      say "  ${c_dim}[dry-run] CLAUDE_PLUGIN_ROOT=$NEW_CACHE bash $COMP_SCRIPT --update-only${c_rst}"
+      # also show install of always-coInstall (desktop-act) when missing
+      say "  ${c_dim}[dry-run] CLAUDE_PLUGIN_ROOT=$NEW_CACHE bash $COMP_SCRIPT${c_rst}"
+    else
+      # Full pass: install always-coInstall missing + update if-installed
+      CLAUDE_PLUGIN_ROOT="${NEW_CACHE:-$THIS_ROOT}" bash "$COMP_SCRIPT" \
+        && ok "companions install/update finished" \
+        || warn "companions script non-zero (non-fatal)"
+    fi
+  else
+    say "  ${c_dim}no install-companions.sh in new cache (skipped)${c_rst}"
+  fi
+fi
+
+# ── 10. Report ─────────────────────────────────────────────────────────────
+step "10/10  Summary"
 say "  plugin:   $PLUGIN@$MARKETPLACE"
 say "  version:  ${CUR:-<none>} → ${c_grn}$NEW${c_rst}"
 say "  cache:    $(ls -1 "$CACHE_ROOT" 2>/dev/null | grep -E '^[0-9]+\.' | tr '\n' ' ')"
+say "  companions: desktop-act (always) · gsd/superpowers/feature-dev (if installed) · gstack (not managed)"
 if [[ "$DRY" -eq 1 ]]; then
   warn "DRY RUN — nothing changed. Re-run without --dry-run to apply."
 else
