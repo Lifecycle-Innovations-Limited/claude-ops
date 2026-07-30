@@ -2686,6 +2686,18 @@ async function runAuthFlow(driver, account) {
     }
   }
 
+  async function finishDisplayedClaudeVerificationCode() {
+    if (!driver.readPageText || !driver._authUrl) return false;
+    const text = await driver.readPageText().catch(() => '');
+    if (!/use verification code to continue/i.test(text)) return false;
+    const code = text.match(/\b(\d{6})\b/)?.[1];
+    if (!code) return false;
+    log('[magic-link] Captured displayed verification code — returning to sign-in');
+    await driver.goto(driver._authUrl).catch(() => {});
+    await sleep(2000);
+    return finishMagicLinkLogin(`code:${code}`);
+  }
+
   for (let step = 0; step < 20; step++) {
     await sleep(2500);
     const url = await driver.currentUrl().catch(() => '');
@@ -2721,7 +2733,11 @@ async function runAuthFlow(driver, account) {
         stallCount = 0;
         continue;
       }
-      if (url.includes('/login') && (await isClaudeLoginCodePage())) {
+      if ((url.includes('/login') || url.includes('/magic-link')) && (await isClaudeLoginCodePage())) {
+        if (await finishDisplayedClaudeVerificationCode()) {
+          stallCount = 0;
+          continue;
+        }
         log(`[magic-link] Claude login is waiting for an email verification code; polling Gmail once before aborting`);
         const magicLink = await pollGmailForMagicLink(account.email, 30_000);
         if (await finishMagicLinkLogin(magicLink)) {
