@@ -61,7 +61,9 @@ refresh_current_directory() {
   if [[ "$root_real" == "$current_real" ]]; then
     log "  skip: PLUGIN_ROOT already == current/ ($current_real) — no self-rsync"
   elif command -v rsync >/dev/null 2>&1; then
-    if rsync -a --delete "$PLUGIN_ROOT/" "$current_dir/" 2>/dev/null; then
+    if rsync -a --delete \
+      --exclude '.orphaned_at' --exclude '.in_use' \
+      "$PLUGIN_ROOT/" "$current_dir/" 2>/dev/null; then
       log "  ok: refreshed $current_dir via rsync"
     else
       log "  warn: rsync to current/ failed (non-fatal)"
@@ -75,9 +77,23 @@ refresh_current_directory() {
     fi
   fi
 
+  # Never let the cache-GC bookkeeping of a version dir ride into current/.
+  # Claude Code marks a version dir it no longer recognises with .orphaned_at
+  # and deletes it once that marker ages past the grace period, skipping only
+  # dirs still listed as an installPath. If a stale (already-aged) marker is
+  # copied into current/ and installPath later moves off current/ — a plugin
+  # reinstall, or the marketplace remove+add that ops-update performs — the
+  # grace period is already spent, so current/ is deleted on the next sweep
+  # while live sessions still resolve CLAUDE_PLUGIN_ROOT through it. The
+  # copied .in_use PIDs belong to the version dir and are dead, so they do
+  # not hold it open either. cp -rp has no exclude, so clear both here.
+  rm -f "$current_dir/.orphaned_at" 2>/dev/null || true
+  rm -rf "$current_dir/.in_use" 2>/dev/null || true
+
   if [[ -f "$installed_json" ]]; then
     if python3 - "$installed_json" "$current_dir" <<'PYEOF' 2>/dev/null
-import json, sys
+import json, os, stat, sys, tempfile
+
 path, current = sys.argv[1], sys.argv[2]
 with open(path) as f:
     d = json.load(f)
@@ -87,8 +103,28 @@ for e in d.get("plugins", {}).get("ops@ops-marketplace", []):
         e["installPath"] = current
         changed = True
 if changed:
-    with open(path, "w") as f:
-        json.dump(d, f, indent=2)
+    # Write via temp + atomic rename. Every installed plugin resolves through
+    # this file, so a truncated write breaks all of them, not just ops. An
+    # in-place open(path, "w") is a visible truncation window for any Claude
+    # process reading concurrently, and leaves the file corrupt if we die
+    # mid-dump. Preserve the original mode — it holds install metadata and
+    # ships 0600, which a default-umask temp file would widen.
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    d_dir = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d_dir, prefix=".installed_plugins.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(d, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 PYEOF
     then
       log "  ok: patched installed_plugins.json → current"
