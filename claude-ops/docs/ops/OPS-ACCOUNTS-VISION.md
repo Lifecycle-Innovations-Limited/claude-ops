@@ -92,3 +92,60 @@ enablers.** They must not re-label phase 0 as “later design only.”
 - `scripts/account-rotation/CAPTCHA-CASCADE.md`
 - Host (temporary): `grok-rotate`, `grok-oauth-reauth`, `grok-cli-auth-proxy`, `host-token-keepalive`
 - Skills today: `ops-rotate`, `ops-rotate-setup` → become aliases of `ops-accounts`
+
+## Phase 0 — multi-provider adapter contract (design only)
+
+Target skill surface: **`/ops:accounts`** (alias `/ops:rotate` for ≥1 major version).
+
+### Commands (stable)
+
+| Verb | Meaning |
+|------|---------|
+| `status` | List registered seats per provider + token health (no secrets) |
+| `list` | Same as status, table form |
+| `add` / `register` | Interactive capture into provider vault namespace |
+| `reauth` | Provider-specific reauth (Claude → rotate-magic; Grok → oauth reauth; Codex → session OAuth) |
+| `switch` | Make seat active for that provider’s CLI |
+| `lb` / `crs` | Optional load-balancer plane (Claude CRS today; others later) |
+
+### Adapter interface (plugin-local modules)
+
+Each provider ships a small adapter under `scripts/account-rotation/providers/<id>.mjs`
+(or future `scripts/accounts/providers/`). Minimum exports:
+
+```js
+// providers/<id>.mjs
+export const id = 'claude' | 'codex' | 'grok';
+export const displayName = 'Claude Max';
+/** @returns {Promise<{ok:boolean, seats:Array<{key,label,tokenValid,util?}>, note?:string}>} */
+export async function status(ctx) {}
+/** Capture or refresh vault entry. No secret logging. */
+export async function register(ctx, { emailOrLabel, mode }) {}
+/** Unattended reauth when token dead. May use browser/cascade. */
+export async function reauth(ctx, { key }) {}
+/** Optional: mark seat active for the CLI that reads this provider. */
+export async function switchTo(ctx, { key }) {}
+```
+
+`ctx` carries portable paths only: `pluginRoot`, `dataDir`, `log`, `env` — never host hardcodes.
+
+### Vault namespaces (credential-store service names)
+
+| Provider | Service pattern | Notes |
+|----------|-----------------|-------|
+| Claude | `Claude-Rotation-<key>` + live `Claude Code-credentials` | Existing |
+| Codex | `Codex-Rotation-<key>` (proposed) | Session OAuth; no public remaining API |
+| Grok | `Grok-Rotation-<key>` (proposed) | Absorb host oneshot into plugin adapter |
+
+### Dispatcher
+
+- Shared timer / autoloop dispatches `adapter.reauth` per `needsReauth` flags.
+- Claude path uses `rotate-magic.mjs` + captcha cascade (this PR).
+- CRS / balancer remains **optional** and Claude-scoped until a second provider needs LB.
+
+### Out of scope for phase 0 implementation
+
+- Renaming skills on disk
+- Forking CRS
+- Absorbing every host grok/codex script in one PR
+
