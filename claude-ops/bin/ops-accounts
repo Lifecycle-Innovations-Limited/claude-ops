@@ -236,6 +236,50 @@ case "$cmd" in
       echo "seat-state.mjs missing"; exit 1
     fi
     ;;
+
+  gateway)
+    sub="${1:-status}"
+    GW="${ROT}/ops-accounts-gateway.mjs"
+    GW_PORT="${OPS_ACCOUNTS_GATEWAY_PORT:-3005}"
+    GW_HOST="${OPS_ACCOUNTS_GATEWAY_HOST:-127.0.0.1}"
+    case "$sub" in
+      status)
+        if curl -fsS -m 2 "http://${GW_HOST}:${GW_PORT}/health" 2>/dev/null; then
+          echo
+        else
+          echo "ops-accounts-gateway not listening on ${GW_HOST}:${GW_PORT}"
+          echo "start: ops-accounts gateway start"
+          [[ -f "$GW" ]] && echo "plugin binary: $GW" || echo "plugin gateway missing"
+          exit 1
+        fi
+        ;;
+      start)
+        if [[ ! -f "$GW" ]]; then
+          echo "missing $GW"; exit 1
+        fi
+        if curl -fsS -m 1 "http://${GW_HOST}:${GW_PORT}/health" >/dev/null 2>&1; then
+          echo "already listening on ${GW_HOST}:${GW_PORT}"
+          exit 0
+        fi
+        nohup node "$GW" >>"${TMPDIR:-/tmp}/ops-accounts-gateway.log" 2>&1 &
+        echo "started pid=$! log=${TMPDIR:-/tmp}/ops-accounts-gateway.log url=http://${GW_HOST}:${GW_PORT}"
+        echo "migrate: CRS_BASE_URL → OPS_ACCOUNTS_GATEWAY_URL=http://${GW_HOST}:${GW_PORT}"
+        ;;
+      path)
+        echo "$GW"
+        ;;
+      self-test)
+        node "$GW" --self-test
+        ;;
+      config)
+        node "$GW" --print-config
+        ;;
+      *)
+        echo "usage: ops-accounts gateway status|start|path|self-test|config"; exit 2
+        ;;
+    esac
+    ;;
+
   -h|--help|help)
     cat <<H
 ops-accounts — multi-provider seats (canonical; /ops:rotate is alias)
