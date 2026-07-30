@@ -19,7 +19,9 @@
 #   8. Fast-forward a linked local source checkout's main → origin/main (if clean)
 #   9. Companion plugins (plugin-dependencies.json): all required companions;
 #      gsd / superpowers / feature-dev if installed. gstack is not managed.
-#  10. Report old→new + what changed, and how to apply (/reload-plugins or restart)
+#  10. Sync companion CLIs (Grok, Cursor) to the same version, no stale caches
+#      left behind. Codex needs no step — see scripts/sync-companion-clis.sh.
+#  11. Report old→new + what changed, and how to apply (/reload-plugins or restart)
 #
 # Canonical CLI per Claude Code docs:
 #   https://code.claude.com/docs/en/discover-plugins  (marketplace update / plugin update)
@@ -27,7 +29,7 @@
 #
 # Usage:
 #   ops-update [--dry-run] [--force] [--to X.Y.Z] [--no-prune] [--no-patches]
-#              [--no-rewrite] [--no-localsync] [--no-companions]
+#              [--no-rewrite] [--no-localsync] [--no-companions] [--no-clisync]
 #
 #   --dry-run       show everything that would happen; change nothing
 #   --force         force-reinstall even if the CLI says "already at latest" (bug #61954)
@@ -37,6 +39,7 @@
 #   --no-rewrite    skip the stale-version-path rewrite step
 #   --no-localsync  skip fast-forwarding a linked local source checkout's main
 #   --no-companions skip companion install/update
+#   --no-clisync    skip syncing the ops plugin to other CLIs (Grok, Cursor)
 #
 # Public repo: no personal data. All paths derive from $HOME / env. (Rule 0)
 
@@ -52,7 +55,7 @@ INSTALLED="$PLUGINS_DIR/installed_plugins.json"
 DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$PLUGINS_DIR/data/ops-${MARKETPLACE}}"
 THIS_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
-DRY=0; FORCE=0; PRUNE=1; PATCHES=1; REWRITE=1; LOCALSYNC=1; COMPANIONS=1; TARGET=""
+DRY=0; FORCE=0; PRUNE=1; PATCHES=1; REWRITE=1; LOCALSYNC=1; COMPANIONS=1; CLISYNC=1; TARGET=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY=1; shift ;;
@@ -63,7 +66,8 @@ while [[ $# -gt 0 ]]; do
     --no-rewrite) REWRITE=0; shift ;;
     --no-localsync) LOCALSYNC=0; shift ;;
     --no-companions) COMPANIONS=0; shift ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    --no-clisync) CLISYNC=0; shift ;;
+    -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
     *) echo "ops-update: unknown arg '$1'" >&2; exit 2 ;;
   esac
 done
@@ -96,7 +100,7 @@ say "current installed: ${CUR:-<none>}"
 # step 2's target-version resolution needs it to be current to report
 # accurately. The actually destructive/mutating steps (3, 5, 6, 7, 8, 9)
 # stay gated behind $DRY below.
-step "1/10  Refresh marketplace catalogue ($MARKETPLACE)"
+step "1/11  Refresh marketplace catalogue ($MARKETPLACE)"
 if [[ "$DRY" -eq 1 ]]; then
   say "  ${c_dim}[dry-run] (refresh runs for real — read-only catalogue pull, no plugin state changes)${c_rst}"
 fi
@@ -108,7 +112,7 @@ else
 fi
 
 # ── 2. Resolve target version ──────────────────────────────────────────────
-step "2/10  Resolve target version"
+step "2/11  Resolve target version"
 if [[ -n "$TARGET" ]]; then
   NEW="$TARGET"
 else
@@ -121,7 +125,7 @@ if [[ "$CUR" == "$NEW" && "$FORCE" -eq 0 ]]; then
 fi
 
 # ── 3. Update the installed plugin ─────────────────────────────────────────
-step "3/10  Update installed plugin → $NEW"
+step "3/11  Update installed plugin → $NEW"
 if [[ "$DRY" -eq 1 ]]; then
   say "  ${c_dim}[dry-run] claude plugin update $PLUGIN@$MARKETPLACE${c_rst}"
   [[ "$FORCE" -eq 1 ]] && say "  ${c_dim}[dry-run] (force) rm -rf $CACHE_ROOT/$NEW && claude plugin install $PLUGIN@$MARKETPLACE${c_rst}"
@@ -137,7 +141,7 @@ fi
 NEW_CACHE="$CACHE_ROOT/$NEW"
 
 # ── 4. Reapply idempotent local cache patches ──────────────────────────────
-step "4/10  Reapply cache patches"
+step "4/11  Reapply cache patches"
 PATCH_DIR="$THIS_ROOT/scripts/cache-patches"
 if [[ "$PATCHES" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-patches)${c_rst}"
@@ -152,7 +156,7 @@ else
 fi
 
 # ── 5. Prune old cache versions everywhere ─────────────────────────────────
-step "5/10  Prune old cache versions"
+step "5/11  Prune old cache versions"
 if [[ "$PRUNE" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-prune)${c_rst}"
 else
@@ -171,7 +175,7 @@ fi
 # ── 6. Rewrite stale version-pinned paths in LIVE configs/scripts ──────────
 # Only touch live, editable configs that hardcode cache/<mp>/<plugin>/<OLDVER>/.
 # NEVER rewrite logs, memory notes, session transcripts, the cache, or the clone.
-step "6/10  Rewrite stale version-pinned paths → $NEW"
+step "6/11  Rewrite stale version-pinned paths → $NEW"
 if [[ "$REWRITE" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-rewrite)${c_rst}"
 else
@@ -214,7 +218,7 @@ else
 fi
 
 # ── 7. Per-version idempotent migrations ───────────────────────────────────
-step "7/10  Post-update migrations"
+step "7/11  Post-update migrations"
 MIGRATE="$NEW_CACHE/bin/ops-post-update-migrate"
 if [[ "$DRY" -eq 1 ]]; then
   say "  ${c_dim}[dry-run] CLAUDE_PLUGIN_ROOT=$NEW_CACHE $MIGRATE${c_rst}"
@@ -229,7 +233,7 @@ fi
 # up to date with origin/main — but ONLY when it is safely on a clean main, so we
 # never clobber uncommitted WIP or a feature branch. Purely a developer
 # convenience; absence of a checkout is the common case and is a no-op.
-step "8/10  Sync linked local source checkout"
+step "8/11  Sync linked local source checkout"
 if [[ "$LOCALSYNC" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-localsync)${c_rst}"
 else
@@ -268,7 +272,7 @@ fi
 # ── 9. Companion plugins (required co-install from plugin-dependencies.json) ─
 # SSOT: plugin-dependencies.json — required companions always install+update
 # (desktop-act, gsd, gstack skills-clone, superpowers, feature-dev).
-step "9/10  Companion plugins"
+step "9/11  Companion plugins"
 if [[ "$COMPANIONS" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-companions)${c_rst}"
 else
@@ -290,8 +294,25 @@ else
   fi
 fi
 
-# ── 10. Report ─────────────────────────────────────────────────────────────
-step "10/10  Summary"
+# ── 10. Sync companion CLIs (Grok, Cursor) ─────────────────────────────────
+# Codex needs nothing here — see scripts/sync-companion-clis.sh header.
+step "10/11 Sync companion CLIs"
+CLISYNC_SCRIPT="$NEW_CACHE/scripts/sync-companion-clis.sh"
+[[ -f "$CLISYNC_SCRIPT" ]] || CLISYNC_SCRIPT="$THIS_ROOT/scripts/sync-companion-clis.sh"
+if [[ "$CLISYNC" -eq 0 ]]; then
+  say "  ${c_dim}(skipped: --no-clisync)${c_rst}"
+elif [[ -f "$CLISYNC_SCRIPT" ]]; then
+  if [[ "$DRY" -eq 1 ]]; then
+    bash "$CLISYNC_SCRIPT" --dry-run
+  else
+    bash "$CLISYNC_SCRIPT" || warn "sync-companion-clis.sh non-zero (non-fatal)"
+  fi
+else
+  say "  ${c_dim}no sync-companion-clis.sh in new cache (skipped)${c_rst}"
+fi
+
+# ── 11. Report ─────────────────────────────────────────────────────────────
+step "11/11  Summary"
 say "  plugin:   $PLUGIN@$MARKETPLACE"
 say "  version:  ${CUR:-<none>} → ${c_grn}$NEW${c_rst}"
 say "  cache:    $(ls -1 "$CACHE_ROOT" 2>/dev/null | grep -E '^[0-9]+\.' | tr '\n' ' ')"
