@@ -1,6 +1,6 @@
 ---
 name: ops-rotate
-description: Multi-account Claude Max rotator. Status, manual rotation, account list, add-account wizard, standalone rotate-magic reauth, and optional CRS relay-pool auto-prioritization. CRS is not required. Requires account_rotation_enabled=true in plugin settings for daemon swap; reauth works without it.
+description: Alias of /ops:accounts for Claude Max seats (status, rotate-now, list, reauth, optional CRS). Prefer /ops:accounts for multi-provider. Full Claude procedure still in this file's historical detail via ops-accounts router.
 argument-hint: '[status|rotate-now|list|add-account|reauth|crs|crs-tick]'
 allowed-tools:
   - Bash
@@ -12,212 +12,28 @@ effort: low
 maxTurns: 25
 ---
 
-# OPS ► ROTATE
+# OPS ► ROTATE (alias → `/ops:accounts`)
 
-Manage the optional multi-account Claude Max rotator. Off by default — flip
-`account_rotation_enabled` in plugin settings to use it.
+This skill is a **compat alias**. Route all work through **ops-accounts**:
 
-## Subcommands
+| Old verb | New |
+|----------|-----|
+| (none) / status | `ops-accounts status` (Claude section) |
+| rotate-now | `ops-accounts switch claude` / `ops-accounts rotate-now` |
+| list | `ops-accounts list` |
+| add-account | `ops-accounts setup claude` |
+| reauth | `ops-accounts reauth claude <email>` |
+| crs / crs-tick | `ops-accounts crs` / `ops-accounts crs-tick` |
 
-| `$ARGUMENTS`       | Action                                                                   |
-| ------------------ | ------------------------------------------------------------------------ |
-| (none) or `status` | Show current account, 5h%/7d%, total rotations, daemon health            |
-| `rotate-now`       | Force rotation to the most-cooled candidate (or `--to <email>`)          |
-| `list`             | List every configured account with token state + last util               |
-| `add-account`      | Interactive wizard: collect email, OAuth into rotator vault              |
-| `reauth`           | Standalone rotate-magic for one email (no CRS): magic-link + captcha     |
-| `crs`              | Show the CRS relay-pool schedulable state + priority-daemon health       |
-| `crs-tick`         | Run one CRS priority tick now (append `--dry-run` to preview, no writes) |
+Load **`skills/ops-accounts/SKILL.md`** first, then for Claude-only depth use the
+bin:
 
-## Rotation models (CRS is optional)
-
-This skill manages **complementary** account systems. **CRS is never required.**
-
-- **Standalone rotate-magic** (`reauth`, and setup OAuth) — one account at a time.
-  Magic-link + captcha cascade. Enough for single/few accounts. No CRS install.
-- **Keychain rotator** (`status`/`rotate-now`/`list`/`add-account`) — for **direct-auth**
-  sessions. One active claude.ai OAuth token in the keychain at a time; the daemon swaps
-  to the coolest account when the active one heats up.
-- **CRS priority daemon** (`crs`/`crs-tick`) — **optional** multi-account load balancing
-  / rate-limit spreading via **claude-relay-service**. Toggles each account's
-  `schedulable` flag from live utilization. Off by default; configure only if you
-  run a CRS pool (see **ops-rotate-setup** Step 4.4 detection).
-
-## Pre-flight (every invocation)
-
-1. Read `account_rotation_enabled` from plugin preferences. If false, tell the user how to enable and exit.
-2. Resolve paths:
-   - `ROT_DIR=${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops}/account-rotation`
-   - `ROT_SRC=${CLAUDE_PLUGIN_ROOT}/scripts/account-rotation`
-3. If `$ROT_DIR` doesn't exist yet, mirror the runtime layout:
-   ```
-   mkdir -p "$ROT_DIR"
-   cp "$ROT_SRC/config.example.json" "$ROT_DIR/config.json"  # only if missing
-   ```
-4. Verify Node 20+: `node --version`. If missing, fail fast with install hint.
-
-## status (default)
-
-Run:
-
-```
-node "$ROT_SRC/rotate.mjs" --status
-node "$ROT_SRC/rotate.mjs" --utilization 2>/dev/null | head -40
-launchctl list 2>/dev/null | grep com.claude-ops.account-rotation || echo "daemon: not loaded"
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/ops-accounts" status
+"${CLAUDE_PLUGIN_ROOT}/bin/ops-accounts" rotate-now
+"${CLAUDE_PLUGIN_ROOT}/bin/ops-accounts" reauth claude <email>
 ```
 
-Render a compact panel:
+Multi-provider status, Grok, Codex, Factory, Cursor: **`/ops:accounts` only**.
 
-```
-ROTATOR STATUS
-  Active account : <email>
-  5h utilization : 42% (resets in 1h 23m)
-  7d utilization : 18%
-  Total rotations: 14
-  Daemon         : ✓ running (PID 12345)  |  ✗ not loaded
-  Configured     : 4 accounts (3 with valid tokens, 1 expired)
-```
-
-## rotate-now
-
-If user passed an explicit target email (`/ops:rotate rotate-now user@example.com`), pass `--to "<email>"`. Otherwise let `rotate.mjs` pick the most-cooled.
-
-```
-bash "$ROT_SRC/force-rotate.sh" "${TARGET_EMAIL:-}"
-```
-
-Show the trailing status output. Remind the user that running Claude Code sessions hold their own access token until next `/login` or until they exit and re-enter.
-
-## list
-
-```
-node "$ROT_SRC/rotate.mjs" --status 2>/dev/null
-```
-
-Then for each account in `$ROT_DIR/config.json`, render one row:
-
-```
-  [✓] user@example.com           5h 12%   token valid 6.4h  (active)
-  [✓] backup@example.com         5h 87%   token valid 3.1h
-  [✗] expired@example.com        ── ──    token expired 2d ago
-  [○] new@example.com            ── ──    no token captured
-```
-
-If any row is `[○]` or `[✗]`, suggest running `/ops:rotate add-account` for that email.
-
-## add-account (interactive)
-
-This is the only mutating subcommand. Walk the user through:
-
-1. **Collect email.** `AskUserQuestion`: "Email of the Claude Max account to add?" (free text via `Edit` to config — the skill must NOT capture sensitive data through chat options; just ask for the email).
-2. **Optional metadata.** Ask if it's a Workspace account (`AskUserQuestion`: `[Personal]`, `[Workspace]`, `[Skip]`). If Workspace, prompt for `orgName` (free text) — `orgUuid` is auto-discovered later.
-3. **Append to config.** Read `$ROT_DIR/config.json`, append the new account entry to `accounts[]`, write back. Use the schema from `config.example.json._account_schema_example`.
-4. **Capture token.** Two paths via `AskUserQuestion`:
-   - `[Use current Claude Code login]` — runs `node "$ROT_SRC/rotate.mjs" --capture --to <email>` to copy the live `Claude Code-credentials` token into the rotator vault.
-   - `[Run OAuth in browser now]` — runs `node "$ROT_SRC/rotate.mjs" --setup --only=<email>` (background-friendly; opens Chrome).
-   - `[Skip — I'll capture later]`.
-5. **Daemon install (one-time).** If launchd doesn't show `com.claude-ops.account-rotation`, ask `[Install + start daemon]` / `[Skip]`. On install:
-   ```
-   sed "s|\${HOME}|$HOME|g" "${CLAUDE_PLUGIN_ROOT}/templates/com.claude-ops.account-rotation.plist" > ~/Library/LaunchAgents/com.claude-ops.account-rotation.plist
-   launchctl load ~/Library/LaunchAgents/com.claude-ops.account-rotation.plist
-   ```
-   Mirror `daemon.mjs` + friends to `$ROT_DIR` if not already symlinked:
-   ```
-   for f in rotate.mjs daemon.mjs ai-brain.mjs force-rotate.sh; do
-     [ -e "$ROT_DIR/$f" ] || ln -s "$ROT_SRC/$f" "$ROT_DIR/$f"
-   done
-   ```
-6. **Verify.** Run `status` subcommand inline.
-
-## reauth (standalone rotate-magic — no CRS)
-
-Refresh one account's vault token via magic-link + captcha cascade. Does **not**
-need CRS or `crs.enabled`.
-
-```
-EMAIL="<email>"   # required
-node "$ROT_SRC/rotate-magic.mjs" --to "$EMAIL"
-# equivalent:
-# node "$ROT_SRC/rotate.mjs" --magic-link --to "$EMAIL"
-```
-
-Background-friendly; surface the log. Headed display + cascade env:
-`CLAUDE_DESKTOP_DISPLAY`, `CLAUDE_ROT_HEADED=1` (see `CAPTCHA-CASCADE.md`).
-If the user only has one seat, this is the primary recovery path — do not
-push them to install CRS.
-
-## crs (relay-pool status)
-
-**Only if CRS is present.** Detect first (same checks as ops-rotate-setup Step 4.4:
-`command -v crs`, `crs.enabled` in config, `$CRS_BASE_URL/health` or default
-`http://127.0.0.1:3000/health`). If not detected, explain briefly that CRS is
-optional load balancing and suggest `reauth` / `/ops:rotate-setup --standalone`
-instead of failing.
-
-When CRS is available: show the pool's per-account schedulable state + the priority
-daemon's health, plus the three optional reconcilers (429-cooldown, 401-refresher,
-magic-link-autoloop) if enabled. Read-only.
-
-```
-WRAP="$ROT_SRC/crs-priority-daemon.sh"
-bash "$WRAP" --status 2>&1 | head -40   # prints "● name sched=true 5h=NN%  <status>"
-launchctl list 2>/dev/null | grep com.claude-ops.crs-priority || echo "crs-priority daemon: not loaded"
-tail -n 5 "${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/logs/crs-priority.log" 2>/dev/null
-
-# Only if crs.cooldownEnabled / crs.tokenRefreshEnabled / crs.enableMagicLinkRecovery are true in config:
-node "$ROT_SRC/crs-429-cooldown.mjs" --status 2>&1
-launchctl list 2>/dev/null | grep com.claude-ops.crs-429-cooldown || echo "crs-429-cooldown: not loaded"
-node "$ROT_SRC/crs-401-refresher.mjs" --status 2>&1
-launchctl list 2>/dev/null | grep com.claude-ops.crs-401-refresher || echo "crs-401-refresher: not loaded"
-node "$ROT_SRC/magic-link-autoloop.mjs" --status 2>&1
-launchctl list 2>/dev/null | grep com.claude-ops.magic-link-autoloop || echo "magic-link-autoloop: not loaded"
-```
-
-Render a compact panel:
-
-```
-CRS POOL  (http://127.0.0.1:3000)
-  schedulable : 7 / 10
-  off         : canary-sponsors (rate-limited), pool-chairman (warning), pool-foundation (warning)
-  daemon      : ✓ running (every 120s)  |  ✗ not loaded — run /ops:rotate-setup
-  429-cooldown: ✓ running (every 60s)   |  ✗ not loaded  |  – not enabled (crs.cooldownEnabled=false)
-  401-refresher: ✓ running (every 300s) |  ✗ not loaded  |  – not enabled (crs.tokenRefreshEnabled=false)
-  magic-link  : ✓ running (every 600s)  |  ✗ not loaded  |  – not enabled (crs.enableMagicLinkRecovery=false)
-```
-
-If CRS `/health` is unreachable, say so and point to `/ops:rotate-setup` (optional)
-or standalone `reauth`. If the daemon isn't loaded but `crs.enabled` is true, suggest
-`/ops:rotate-setup --crs`. Show reconciler lines only if their config flag is true —
-if false, show `– not enabled` (opt-in, not a failure). If a flag is true but its
-daemon isn't loaded, suggest `/ops:rotate-setup --reconcilers`.
-
-## crs-tick (run one tick now)
-
-Apply (or, with `--dry-run`, preview) one prioritization pass immediately — useful
-right after changing thresholds or to confirm the policy.
-
-```
-bash "$ROT_SRC/crs-priority-daemon.sh" ${ARGS:-}   # ARGS="--dry-run" to preview
-```
-
-This is the same code the launchd timer runs; the daemon only ever toggles
-`schedulable` (fully reversible) and never deletes or mutates account credentials.
-
-## Optional npm dep
-
-`rotate.mjs` uses Playwright only for the browser fallback. It is declared as
-an optional dep in the plugin's `package.json`. If a browser fallback is needed
-and Playwright is missing, the skill should offer:
-
-```
-npm install --prefix "$CLAUDE_PLUGIN_ROOT" --no-save playwright
-npx --prefix "$CLAUDE_PLUGIN_ROOT" playwright install chromium
-```
-
-## Hard rules
-
-- This skill is **read-mostly**. Only `add-account` mutates `config.json`, and only after the user explicitly confirmed the email.
-- Never echo refresh tokens or access tokens to chat output.
-- Never auto-edit `config.json` outside `add-account` — token rotation is the daemon's job, not the skill's.
-- If `account_rotation_enabled` is false, refuse to run subcommands and instead explain the toggle.
-- If multiple OS users share the Mac, surface `CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT` as the override env var.
+Vision: `docs/ops/OPS-ACCOUNTS-VISION.md`.
