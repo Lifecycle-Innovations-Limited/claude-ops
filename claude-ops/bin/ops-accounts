@@ -28,12 +28,21 @@ ROOT="$(resolve_root)"
 export CLAUDE_PLUGIN_ROOT="$ROOT"
 CLI="$ROOT/scripts/ops-accounts/cli.mjs"
 
+# Shell-owned commands (dual-backend + gateway + seats). Node CLI only covers
+# multi-provider status/reauth/switch/refresh — do not exec it for these.
+cmd="${1:-status}"
+SHELL_CMDS="util setup crs crs-tick seats gateway grok-proxy help -h --help"
 if [[ -f "$CLI" ]]; then
-  exec node "$CLI" "$@"
+  case " $SHELL_CMDS " in
+    *" $cmd "*) ;;
+    *)
+      # status|list|reauth|switch|refresh|providers → Node when present
+      exec node "$CLI" "$@"
+      ;;
+  esac
 fi
 
-# --- fallback shell (phase-0 pre-Node) ---
-cmd="${1:-status}"
+# --- shell path (dual-backend + gateway + seats + util) ---
 shift || true
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -237,6 +246,22 @@ case "$cmd" in
     fi
     ;;
 
+  grok-proxy)
+    sub="${1:-status}"
+    case "$sub" in
+      status|accounts|"")
+        if curl -fsS -m 2 http://127.0.0.1:31845/accounts 2>/dev/null; then
+          echo
+        else
+          echo "grok-cli-auth-proxy not listening on :31845"
+          exit 1
+        fi
+        ;;
+      *)
+        echo "usage: ops-accounts grok-proxy status"; exit 2 ;;
+    esac
+    ;;
+
   gateway)
     sub="${1:-status}"
     GW="${ROT}/ops-accounts-gateway.mjs"
@@ -291,7 +316,9 @@ ops-accounts — multi-provider seats (canonical; /ops:rotate is alias)
   reauth claude <email> | reauth grok <email>
   setup [claude|grok]
   crs | crs-tick
-  seats [status|list|set|toggle|import-claude-config]
+  seats [status|list|set|toggle|import-claude-config|tick]
+  gateway status|start|path|self-test|config
+  grok-proxy status   # SuperGrok OAuth proxy :31845
 H
     ;;
   *)
