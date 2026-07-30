@@ -20,8 +20,7 @@ export async function listAccounts(ctx) {
   }
   const keyPresent = Boolean(
     process.env.FACTORY_API_KEY ||
-      (existsSync(join(ctx.home, '.factory/auth.v2.file')) &&
-        existsSync(join(ctx.home, '.factory/auth.v2.key'))),
+    (existsSync(join(ctx.home, '.factory/auth.v2.file')) && existsSync(join(ctx.home, '.factory/auth.v2.key'))),
   );
   const blocked = snap?.http?.chat_usage === 402 || snap?.source === 'vendor_402_unpaid';
   return [
@@ -40,9 +39,7 @@ export async function listAccounts(ctx) {
           }
         : null,
       crs: null,
-      lastError: blocked
-        ? snap?.vendor_detail || 'HTTP 402 no active paid subscription'
-        : snap?.error || null,
+      lastError: blocked ? snap?.vendor_detail || 'HTTP 402 no active paid subscription' : snap?.error || null,
       billing: snap?.billing_mail_hint || null,
       http: snap?.http || null,
       note: 'Two orgs in Gmail (GGDXNY Sam Org / DGPBWS Healify); feeder probes one FACTORY_API_KEY',

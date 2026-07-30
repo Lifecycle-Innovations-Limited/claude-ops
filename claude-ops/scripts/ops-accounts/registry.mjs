@@ -31,8 +31,7 @@ export async function loadProviders() {
 
 export function makeCtx({ dryRun = false, log = console.log } = {}) {
   const pluginRoot =
-    process.env.CLAUDE_PLUGIN_ROOT ||
-    dirname(dirname(__dirname)); /* scripts/ops-accounts -> claude-ops root */
+    process.env.CLAUDE_PLUGIN_ROOT || dirname(dirname(__dirname)); /* scripts/ops-accounts -> claude-ops root */
   return {
     pluginRoot,
     dataDir:

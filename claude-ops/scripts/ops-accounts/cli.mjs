@@ -19,10 +19,7 @@ Providers: claude, grok, openai, factory, cursor
 }
 
 function rowLine(r) {
-  const util =
-    r.utilization && typeof r.utilization === 'object'
-      ? JSON.stringify(r.utilization).slice(0, 80)
-      : '-';
+  const util = r.utilization && typeof r.utilization === 'object' ? JSON.stringify(r.utilization).slice(0, 80) : '-';
   return [
     (r.provider || '').padEnd(10),
     (r.email || r.accountId || '').padEnd(36),
@@ -35,12 +32,7 @@ function rowLine(r) {
 
 async function cmdStatus(ctx, providerFilter) {
   const providers = await loadProviders();
-  const header =
-    'PROVIDER'.padEnd(10) +
-    'EMAIL/ID'.padEnd(36) +
-    'TOKEN'.padEnd(10) +
-    'ACTIVE'.padEnd(8) +
-    'NOTE';
+  const header = 'PROVIDER'.padEnd(10) + 'EMAIL/ID'.padEnd(36) + 'TOKEN'.padEnd(10) + 'ACTIVE'.padEnd(8) + 'NOTE';
   console.log(header);
   console.log('-'.repeat(100));
   for (const p of providers) {
@@ -90,10 +82,7 @@ async function cmdSwitch(ctx, providerId, email) {
 
 async function cmdRefresh(ctx, providerId) {
   const providers = await loadProviders();
-  const list =
-    !providerId || providerId === 'all'
-      ? providers
-      : providers.filter((p) => p.providerId === providerId);
+  const list = !providerId || providerId === 'all' ? providers : providers.filter((p) => p.providerId === providerId);
   for (const p of list) {
     if (typeof p.refresh !== 'function') {
       console.log(`${p.providerId}: no refresh`);
