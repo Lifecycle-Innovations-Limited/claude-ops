@@ -43,6 +43,18 @@ refresh_current_directory() {
   cache_parent="$(dirname "$PLUGIN_ROOT")"
   current_dir="$cache_parent/current"
   installed_json="$PLUGINS_DIR/installed_plugins.json"
+
+  # current/ must be a real rsynced directory, not a symlink. A legacy or
+  # dangling symlink (e.g. left pointing at a version pruned by ops-update
+  # step 5 before this migration runs) makes rsync's directory-destination
+  # write fail silently, leaving current/ broken for every consumer that
+  # resolves the plugin through it. Clear it so rsync always (re)creates a
+  # real directory below.
+  if [[ -L "$current_dir" ]]; then
+    rm -f "$current_dir"
+    log "  info: removed symlink at $current_dir (current/ must be a real directory)"
+  fi
+
   root_real="$(cd "$PLUGIN_ROOT" 2>/dev/null && pwd -P || echo "$PLUGIN_ROOT")"
   current_real="$(cd "$current_dir" 2>/dev/null && pwd -P || echo "$current_dir")"
 
