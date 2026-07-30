@@ -39,6 +39,13 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.47.1] - 2026-07-30
+
+### Changed
+### Fixed
+- \`ops-update\` now refreshes the marketplace catalogue for real under \`--dry-run\`, instead of only printing the command. A dry-run right after a new release previously reported the target version as unchanged until a manual \`claude plugin marketplace update\` was run first.
+
+
 ## [2.47.0] - 2026-07-30
 
 ### Changed
