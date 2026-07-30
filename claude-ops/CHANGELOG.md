@@ -39,6 +39,25 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.47.0] - 2026-07-30
+
+### Changed
+### Added
+- desktop-act companion: virtual desktop control MCP (co-installed with ops)
+- ops-accounts: multi-provider seat/rotation router (Claude/Grok/OpenAI/Factory/Cursor), CRS-optional dual-mode backend
+- account-rotation: captcha-solving cascade for standalone rotation and magic-link reauth flows, portable unattended reauth env
+
+### Fixed
+- security: replaced shell-string execSync calls with execFileSync argument arrays
+- ops-accounts: route gateway/seats/util through shell before Node CLI
+- hea: Paperclip→Linear create-guard + terminal status skip
+- watchdog: expand ${VAR} in config headers before probing
+- account-rotation: keep CRS harness for agents TUI
+
+### Changed
+- deps: bump prettier and playwright
+
+
 ## [2.46.2] - 2026-07-25
 
 ### Changed
