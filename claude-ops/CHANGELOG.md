@@ -4,6 +4,8 @@
 
 ### Changed
 
+- **ops-accounts seat policy (local):** `seat-policy-tick.mjs` applies conservative 5h/7d schedulable thresholds to local seat-state without CRS; `ops-accounts seats tick`.
+
 - **ops-accounts local seat-state:** `seat-state.mjs` file-backed multi-provider seat store (schedulable/util) for no-CRS policy backend; `ops-accounts seats` command.
 
 - **ops-accounts skill merge:** `/ops:accounts` is canonical multi-provider entry; `/ops:rotate` and `/ops:rotate-setup` are aliases. Expanded `bin/ops-accounts` (status/util/switch/refresh/reauth/setup/crs). Added `grok-reauth-egress.sh` residential cascade (EFG SOCKS → Bright Data tiers) for Grok device OAuth.

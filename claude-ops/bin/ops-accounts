@@ -205,8 +205,14 @@ case "$cmd" in
     ;;
 
   seats)
+    sub="${1:-status}"
+    if [[ "$sub" == "tick" || "$sub" == "policy-tick" ]]; then
+      shift || true
+      node "$ROT/seat-policy-tick.mjs" "$@"
+      exit $?
+    fi
     if [[ -f "$ROT/seat-state.mjs" ]]; then
-      node "$ROT/seat-state.mjs" "${1:-status}" "${@:2}"
+      node "$ROT/seat-state.mjs" "$sub" "${@:2}"
     else
       echo "seat-state.mjs missing"; exit 1
     fi
