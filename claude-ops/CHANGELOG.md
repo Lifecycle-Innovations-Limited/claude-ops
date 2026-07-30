@@ -2,12 +2,9 @@
 
 - ops-accounts-gateway skeleton (:3005 health/auth/grok hop; CLI gateway subcommand)
 - feat(crs-priority-daemon): dual-mode `backend=crs|local` file seat-state without CRS Docker
+- ops-accounts: dual-write + OPS_ACCOUNTS_BACKEND auto/crs/local; grok-cli-auth-proxy; local no-op reconcilers
 
 # Changelog
-
-## Unreleased
-
-- ops-accounts: dual-write + OPS_ACCOUNTS_BACKEND auto/crs/local; grok-cli-auth-proxy; local no-op reconcilers; gateway design doc
 
 ## Unreleased
 
