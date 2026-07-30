@@ -100,40 +100,47 @@ export async function detectPostVerifyVisualChallenge(page) {
         .evaluate(() => {
           const vw = window.innerWidth || 1280;
           const vh = window.innerHeight || 900;
+          const hostOf = (src) => {
+            try {
+              return new URL(src, location.href).hostname.toLowerCase();
+            } catch {
+              return '';
+            }
+          };
+          const isHcHost = (h) => h === 'hcaptcha.com' || h.endsWith('.hcaptcha.com');
+          const isCfChallengeHost = (h) =>
+            h === 'challenges.cloudflare.com' || h.endsWith('.challenges.cloudflare.com');
           const frames = Array.from(document.querySelectorAll('iframe')).map((f) => {
             const r = f.getBoundingClientRect();
             const visible =
               r.width > 0 && r.height > 0 && r.bottom > 8 && r.right > 8 && r.top < vh - 8 && r.left < vw - 8;
+            const src = f.src || '';
+            const host = hostOf(src);
             return {
-              src: f.src || '',
+              src,
+              host,
               w: r.width,
               h: r.height,
               x: r.x,
               y: r.y,
               title: f.title || '',
               visible,
+              isHc: isHcHost(host),
+              isCf: isCfChallengeHost(host),
+              isChallenge: /(?:^|[?&#])frame=challenge(?:&|#|$)/i.test(src),
             };
           });
-          const largeHc = frames.find(
-            (f) =>
-              f.visible && /hcaptcha\.com/i.test(f.src) && /frame=challenge/i.test(f.src) && f.w >= 350 && f.h >= 300,
-          );
-          const anyHcChallenge = frames.some(
-            (f) => f.visible && /hcaptcha\.com/i.test(f.src) && /frame=challenge/i.test(f.src) && f.w > 0 && f.h > 0,
-          );
-          const anyHcOffscreen = frames.some(
-            (f) => !f.visible && /hcaptcha\.com/i.test(f.src) && /frame=challenge/i.test(f.src) && f.w > 0 && f.h > 0,
-          );
-          const hasCf = frames.some(
-            (f) => f.visible && /challenges\.cloudflare\.com/i.test(f.src) && f.w >= 200 && f.h >= 50,
-          );
+          const largeHc = frames.find((f) => f.visible && f.isHc && f.isChallenge && f.w >= 350 && f.h >= 300);
+          const anyHcChallenge = frames.some((f) => f.visible && f.isHc && f.isChallenge && f.w > 0 && f.h > 0);
+          const anyHcOffscreen = frames.some((f) => !f.visible && f.isHc && f.isChallenge && f.w > 0 && f.h > 0);
+          const hasCf = frames.some((f) => f.visible && f.isCf && f.w >= 200 && f.h >= 50);
           return {
             largeHc: !!largeHc,
             anyHcChallenge,
             anyHcOffscreen,
             hasCf,
             dims: frames
-              .filter((f) => /hcaptcha|cloudflare/i.test(f.src))
+              .filter((f) => f.isHc || f.isCf || f.host.includes('cloudflare'))
               .map(
                 (f) =>
                   `${Math.round(f.w)}x${Math.round(f.h)}@${Math.round(f.x)},${Math.round(f.y)}${f.visible ? '' : ':off'}`,
@@ -175,16 +182,15 @@ export function writeCaptchaVncHandoff(page, visual, reason, log = () => {}) {
     if (page && _vncHandoffWritten.has(page)) {
       try {
         const marker = join(resolveCaptchaHandoffDir(), 'CAPTCHA_VNC_HANDOFF.json');
-        if (existsSync(marker)) {
-          const prev = JSON.parse(readFileSync(marker, 'utf8'));
-          prev.ts = new Date().toISOString();
-          prev.reason = reason || visual?.kind || prev.reason || 'post-verify';
-          prev.kind = visual?.kind || prev.kind || null;
-          prev.url = page ? String(page.url()).slice(0, 200) : prev.url;
-          writeFileSync(marker, JSON.stringify(prev, null, 2));
-        }
+        // Read-or-skip (no existsSync→read race): missing file throws ENOENT.
+        const prev = JSON.parse(readFileSync(marker, 'utf8'));
+        prev.ts = new Date().toISOString();
+        prev.reason = reason || visual?.kind || prev.reason || 'post-verify';
+        prev.kind = visual?.kind || prev.kind || null;
+        prev.url = page ? String(page.url()).slice(0, 200) : prev.url;
+        writeFileSync(marker, JSON.stringify(prev, null, 2));
       } catch {
-        /* ignore */
+        /* ignore missing / unreadable marker */
       }
       return Promise.resolve(null);
     }

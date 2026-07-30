@@ -189,7 +189,14 @@ export async function solveInteractiveCaptchaVisually(page, log = () => {}, opts
         const frames = Array.from(document.querySelectorAll('iframe'));
         for (const f of frames) {
           const src = f.getAttribute('src') || '';
-          if (!/hcaptcha\.com/i.test(src) || !/frame=challenge/i.test(src)) continue;
+          let host = '';
+          try {
+            host = new URL(src, location.href).hostname.toLowerCase();
+          } catch {
+            continue;
+          }
+          const isHc = host === 'hcaptcha.com' || host.endsWith('.hcaptcha.com');
+          if (!isHc || !/(?:^|[?&#])frame=challenge(?:&|#|$)/i.test(src)) continue;
           const r = f.getBoundingClientRect();
           if (r.width >= 200 && r.height >= 200 && r.bottom > 0) return true;
         }
