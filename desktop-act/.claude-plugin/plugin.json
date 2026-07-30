@@ -19,12 +19,6 @@
     "vnc",
     "screenshot"
   ],
-  "skills": [
-    "skills/desktop-act"
-  ],
-  "commands": [
-    "commands/act.md"
-  ],
   "mcpServers": {
     "desktop-act": {
       "type": "stdio",
