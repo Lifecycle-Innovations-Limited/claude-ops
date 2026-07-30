@@ -1,6 +1,6 @@
 ---
 name: ops-rotate-setup
-description: Interactive OAuth init wizard for the multi-account Claude rotator. Walks through every account in the rotation config and, for any account missing a valid keychain token, delegates to the proven `rotate.mjs` / `rotate-magic.mjs` magic-link flow (browser-driver cascade + Gmail polling), which writes the verified OAuth token to `Claude-Rotation-<key>` (key = account label or email, keychain account `$USER`). CRS is optional (multi-account load balancing only). Re-runnable any time. Standalone alias of the same step inside `/ops:setup`.
+description: Alias of /ops:accounts setup for Claude OAuth init wizard. Prefer /ops:accounts setup. CRS optional multi-account LB only.
 argument-hint: '[--all|--account <email>|--add|--crs|--standalone]'
 allowed-tools:
   - Bash
@@ -9,6 +9,10 @@ allowed-tools:
 effort: medium
 maxTurns: 25
 ---
+> **Alias:** Prefer **`/ops:accounts setup`** (or `/ops:accounts setup claude`).  
+> This file remains the detailed Claude OAuth wizard. Multi-provider entry is ops-accounts.
+
+
 
 ## Purpose
 
