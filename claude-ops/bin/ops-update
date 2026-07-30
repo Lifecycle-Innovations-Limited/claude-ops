@@ -15,7 +15,7 @@
 #   6. Rewrite stale version-pinned paths in live configs/scripts (never logs/history)
 #   7. Run per-version idempotent migrations         (ops-post-update-migrate)
 #   8. Fast-forward a linked local source checkout's main → origin/main (if clean)
-#   9. Companion plugins (plugin-dependencies.json): desktop-act always;
+#   9. Companion plugins (plugin-dependencies.json): all required companions;
 #      gsd / superpowers / feature-dev if installed. gstack is not managed.
 #  10. Report old→new + what changed, and how to apply (/reload-plugins or restart)
 #
@@ -259,9 +259,9 @@ else
   fi
 fi
 
-# ── 9. Companion plugins (desktop-act always; others if installed) ─────────
-# SSOT: plugin-dependencies.json — desktop-act co-install; gsd / superpowers /
-# feature-dev update only when already present. gstack is not managed.
+# ── 9. Companion plugins (required co-install from plugin-dependencies.json) ─
+# SSOT: plugin-dependencies.json — required companions always install+update
+# (desktop-act, gsd, gstack skills-clone, superpowers, feature-dev).
 step "9/10  Companion plugins"
 if [[ "$COMPANIONS" -eq 0 ]]; then
   say "  ${c_dim}(skipped: --no-companions)${c_rst}"
@@ -271,10 +271,10 @@ else
   if [[ -f "$COMP_SCRIPT" ]]; then
     if [[ "$DRY" -eq 1 ]]; then
       say "  ${c_dim}[dry-run] CLAUDE_PLUGIN_ROOT=$NEW_CACHE bash $COMP_SCRIPT --update-only${c_rst}"
-      # also show install of always-coInstall (desktop-act) when missing
+      # full pass installs required missing + updates all updateWithOps companions
       say "  ${c_dim}[dry-run] CLAUDE_PLUGIN_ROOT=$NEW_CACHE bash $COMP_SCRIPT${c_rst}"
     else
-      # Full pass: install always-coInstall missing + update if-installed
+      # Full pass: install required missing + update all companions
       CLAUDE_PLUGIN_ROOT="${NEW_CACHE:-$THIS_ROOT}" bash "$COMP_SCRIPT" \
         && ok "companions install/update finished" \
         || warn "companions script non-zero (non-fatal)"
@@ -289,7 +289,7 @@ step "10/10  Summary"
 say "  plugin:   $PLUGIN@$MARKETPLACE"
 say "  version:  ${CUR:-<none>} → ${c_grn}$NEW${c_rst}"
 say "  cache:    $(ls -1 "$CACHE_ROOT" 2>/dev/null | grep -E '^[0-9]+\.' | tr '\n' ' ')"
-say "  companions: desktop-act (always) · gsd/superpowers/feature-dev (if installed) · gstack (not managed)"
+say "  companions: required co-install (desktop-act · gsd · gstack · superpowers · feature-dev)"
 if [[ "$DRY" -eq 1 ]]; then
   warn "DRY RUN — nothing changed. Re-run without --dry-run to apply."
 else

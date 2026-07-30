@@ -823,8 +823,37 @@
         "name": "desktop-act",
         "marketplace": "ops-marketplace",
         "coInstall": true,
-        "required": false,
+        "required": true,
         "reason": "MCP companion for /ops:desktop and unattended captcha cascade"
+      },
+      {
+        "name": "gsd",
+        "marketplace": "gsd-build-get-shit-done",
+        "coInstall": true,
+        "required": true,
+        "reason": "Project roadmap for /ops:flow project mode, /ops:projects, /ops:go"
+      },
+      {
+        "name": "superpowers",
+        "marketplace": "superpowers-marketplace",
+        "coInstall": true,
+        "required": true,
+        "reason": "Guardrails for merge/orchestrate/triage checkpoints"
+      },
+      {
+        "name": "feature-dev",
+        "marketplace": "claude-plugins-official",
+        "coInstall": true,
+        "required": true,
+        "reason": "Structured feature pipeline for /ops:ops-feature-dev"
+      }
+    ],
+    "skillsClones": [
+      {
+        "name": "gstack",
+        "installScript": "scripts/install-gstack-companion.sh",
+        "required": true,
+        "reason": "Ad-hoc /ops:flow lifecycle skills (not a marketplace plugin)"
       }
     ]
   }

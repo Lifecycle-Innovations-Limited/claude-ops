@@ -1,74 +1,92 @@
 {
-  "_comment": "SSOT for companion plugins. Read by scripts/install-companions.sh and bin/ops-update. No host paths, no personal data.",
+  "_comment": "SSOT for companion plugins + skills clones. Read by scripts/install-companions.sh and bin/ops-update. No host paths, no personal data. required=true means co-install on setup and always install/update with ops-update (unless --no-companions / OPS_SKIP_COMPANIONS=1). essentialFor lists the ops commands that break or hollow-out without the companion.",
   "marketplace": "ops-marketplace",
   "companions": [
     {
       "name": "desktop-act",
+      "kind": "claude-plugin",
       "marketplaceId": "ops-marketplace",
       "marketplaceAdd": null,
       "installCli": "claude plugin install desktop-act@ops-marketplace",
       "updateCli": "claude plugin update desktop-act@ops-marketplace",
       "installScript": "scripts/install-desktop-act-companion.sh",
       "sameMarketplaceAsOps": true,
+      "required": true,
       "coInstallDefault": true,
       "updateWithOps": "always",
       "userConfigGate": "desktop_act_co_install",
       "prefsKey": "plugins.desktop_act",
-      "detect": {
-        "find": "*/desktop-act/*plugin.json"
-      },
+      "detect": { "find": "*/desktop-act/*plugin.json" },
+      "essentialFor": ["/ops:desktop", "unattended captcha cascade (rotate-magic / magic-link-autoloop)"],
       "reason": "MCP companion for /ops:desktop and unattended captcha cascade"
     },
     {
       "name": "gsd",
+      "kind": "claude-plugin",
       "marketplaceId": "gsd-build-get-shit-done",
       "marketplaceAdd": "gsd-build/get-shit-done",
       "installCli": "claude plugin install gsd@gsd-build-get-shit-done",
       "updateCli": "claude plugin update gsd@gsd-build-get-shit-done",
       "sameMarketplaceAsOps": false,
+      "required": true,
       "coInstallDefault": true,
-      "updateWithOps": "if-installed",
+      "updateWithOps": "always",
       "prefsKey": "plugins.gsd",
+      "detect": { "find": "*/skills/gsd-progress*" },
+      "essentialFor": ["/ops:flow (project mode)", "/ops:projects", "/ops:go GSD sections", "/ops:next GSD priority"],
+      "reason": "Project roadmap phases for /ops:flow project mode, /ops:go, and /ops:projects"
+    },
+    {
+      "name": "gstack",
+      "kind": "skills-clone",
+      "marketplaceId": null,
+      "marketplaceAdd": null,
+      "installCli": null,
+      "updateCli": null,
+      "installScript": "scripts/install-gstack-companion.sh",
+      "sameMarketplaceAsOps": false,
+      "required": true,
+      "coInstallDefault": true,
+      "updateWithOps": "always",
+      "prefsKey": "plugins.gstack",
       "detect": {
-        "find": "*/skills/gsd-progress*"
+        "pathExists": ["${HOME}/.claude/skills/gstack/SKILL.md", "${HOME}/.agents/skills/gstack/SKILL.md"]
       },
-      "reason": "Project roadmap phases for /ops:go and /ops:projects"
+      "essentialFor": ["/ops:flow (ad-hoc mode)", "/spec", "/review", "/qa", "/ship", "/browse"],
+      "reason": "Stateless dev-lifecycle skills for /ops:flow ad-hoc mode (not a Claude marketplace plugin — git skills clone)"
     },
     {
       "name": "superpowers",
+      "kind": "claude-plugin",
       "marketplaceId": "superpowers-marketplace",
       "marketplaceAdd": "obra/superpowers-marketplace",
       "installCli": "claude plugin install superpowers@superpowers-marketplace",
       "updateCli": "claude plugin update superpowers@superpowers-marketplace",
       "sameMarketplaceAsOps": false,
+      "required": true,
       "coInstallDefault": true,
-      "updateWithOps": "if-installed",
+      "updateWithOps": "always",
       "prefsKey": "plugins.superpowers",
-      "detect": {
-        "find": "*/superpowers/skills/using-superpowers*"
-      },
-      "reason": "Verification/dispatch/debug guardrails for ops merge and triage skills"
+      "detect": { "find": "*/superpowers/skills/using-superpowers*" },
+      "essentialFor": ["/ops:ops-merge checkpoints", "/ops:ops-orchestrate checkpoints", "/ops:ops-triage checkpoints"],
+      "reason": "Verification/dispatch/debug guardrails for ops merge, orchestrate, and triage skills"
     },
     {
       "name": "feature-dev",
+      "kind": "claude-plugin",
       "marketplaceId": "claude-plugins-official",
       "marketplaceAdd": null,
       "installCli": "claude plugin install feature-dev@claude-plugins-official",
       "updateCli": "claude plugin update feature-dev@claude-plugins-official",
       "sameMarketplaceAsOps": false,
+      "required": true,
       "coInstallDefault": true,
-      "updateWithOps": "if-installed",
+      "updateWithOps": "always",
       "prefsKey": "plugins.feature_dev",
-      "detect": {
-        "find": "*/feature-dev/*/agents/code-explorer.md"
-      },
+      "detect": { "find": "*/feature-dev/*/agents/code-explorer.md" },
+      "essentialFor": ["/ops:ops-feature-dev", "/flow feature-dev"],
       "reason": "Structured explore/architect/review agents for /ops:ops-feature-dev"
     }
   ],
-  "_not_managed": [
-    {
-      "name": "gstack",
-      "note": "Not installed or registered by claude-ops setup. Do not co-update unless added to companions with a verified marketplace id."
-    }
-  ]
+  "_not_managed": []
 }
