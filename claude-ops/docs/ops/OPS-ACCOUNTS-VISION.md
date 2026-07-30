@@ -1,151 +1,106 @@
 # ops-accounts vision
 
-**Status:** product SSOT for multi-provider account management (not a late add-on).
+**Status:** product SSOT. Multi-provider account system — same shape as Anthropic/Claude today, for every paid CLI seat.
 
-**Date:** 2026-07-30 (revised same day: multi-provider rotator is **phase 0**)
+**Date:** 2026-07-30 (revised: full provider parity, not Claude-only + late rename)
 
 ## Direction
 
-Ship **`/ops:accounts`** (alias `/ops:rotate` for one major version) as the
-**sole** place to register, refresh, reauth, and load-balance paid AI seats:
+Ship **`/ops:accounts`** as the only operator surface for paid AI accounts:
 
-- Claude Max / Pro
-- OpenAI / Codex
-- Grok (xAI SuperGrok)
-- Extensible adapters later
+- Register / list / switch seats  
+- OAuth capture  
+- Access-token refresh  
+- Unattended reauth when refresh dies  
+- Utilization / quota queries  
+- Optional load balancing / cooldown  
 
-Ideal box state: **public claude-ops plugin only** — no host forks, no
-provider-specific manual scripts left as the path of record.
+**Aliases (compat ≥1 major version):** `/ops:rotate`, `/ops:rotate-setup`, `/ops:account`.
 
-| Layer | Role | Required? |
-|-------|------|-----------|
-| **Provider adapter** | Capture + OAuth reauth + token store for one vendor | Yes (one per provider you use) |
-| **Refresh loop** | Proactive access-token refresh while refresh_token lives | Yes |
-| **Reauth dispatcher** | When RT dies: vendor-specific unattended reauth (Claude magic-link, Grok device-code+Google, Codex OAuth) | Yes |
-| **Active-seat / CLI switch** | Which account the interactive CLI uses now | Yes for TUI CLIs |
-| **Load balancer** | Multi-account concurrent pool, 429 cooldown, priority, token feed | Optional (rate-limit / weekly-cap spread) |
+Ideal box: **public claude-ops plugin only** — no host-only `grok-rotate`, `codex-rotate`, or one-off reauth scripts as the path of record.
 
-CRS remains an **optional** external balancer for Claude (and any path that
-already speaks CRS). It is **not** the multi-provider OAuth engine and must
-not be required for single-seat users.
+## Anthropic reference stack (what “done” looks like)
 
-## Why phase 0 (not phase 3)
+Claude already has (in plugin + optional CRS):
 
-Without a multi-provider contract first:
+| Layer | Role |
+|-------|------|
+| Capture | magic-link / browser setup (`rotate.mjs`, `rotate-magic.mjs`) |
+| Store | vault / keychain `Claude-Rotation-*` |
+| Refresh | proactive token refresh + keepalive |
+| Reauth | magic-link-autoloop + captcha cascade (residential egress) |
+| Util | 5h / 7d utilization queries |
+| Switch | keychain swap / force-rotate |
+| Optional LB | CRS pool priority, 429 cooldown, token feed |
 
-- Grok weekly-cap / dead RT is handled by host-only tools (`grok-rotate`,
-  `grok-oauth-reauth`, `grok-cli-auth-proxy`) outside the plugin skill surface.
-- Claude magic-link autoloop and Grok device reauth never share a dispatcher.
-- “Public plugin only” cutover cannot retire host trees that still own Grok.
+**Every other provider gets the same layers**, with provider-native OAuth and util APIs.
 
-So the **north star is ops-accounts**. Claude captcha port and CRS-optional UX
-are **enablers** under that contract, not a separate product that might grow
-multi-provider later.
+## Provider adapters (required set)
 
-## Provider matrix (target)
+| Provider | OAuth / capture | Reauth | Util | Switch / LB notes |
+|----------|-----------------|--------|------|-------------------|
+| **Claude (Anthropic)** | magic-link + captcha | magic-link-autoloop | 5h/7d | keychain daemon; CRS optional |
+| **Grok (xAI SuperGrok)** | device-code + Google (dcli) | residential cascade (EFG SOCKS → Bright Data residential → ISP → mobile) | weekly / 429 | `grok-cli-auth-proxy` RR; CRS is thin relay only |
+| **OpenAI / Codex** | OAuth / API key | codex OAuth bridge | usage API | `codex-rotate` absorbed |
+| **Factory** | provider OAuth / tokens | native reauth | quota-feed-factory patterns | full adapter |
+| **Cursor** | Cursor account OAuth | browser/device OAuth | plan limits if available | full adapter |
+| **Extensible** | adapter interface | same contract | best-effort | `provider-env` / `provider-router` |
 
-| Provider | Capture / reauth | Token store | Refresh | Unattended reauth | LB path today |
-|----------|------------------|-------------|---------|-------------------|---------------|
-| Claude | magic-link + captcha cascade (`rotate.mjs`) | vault / keychain `Claude-Rotation-*` | `refresh-tokens` + keepalive | `magic-link-autoloop` | CRS optional |
-| Grok | xAI device-code + Google (dcli password/TOTP) | `~/.grok/auth-slots` (later: plugin-managed) | RT refresh in keepalive / proxy | `grok-oauth-reauth` (must become timer + skill) | `grok-cli-auth-proxy` round-robin |
-| Codex | OpenAI OAuth / API key | provider-scoped vault | codex OAuth bridge patterns | adapter TBD | optional |
+### Grok + CRS (do not mis-sell)
 
-## Phased plan (revised)
+Grok Build often uses `base_url = http://127.0.0.1:3005/grok/v1` (CRS). CRS **does not** own a SuperGrok account pool. It forwards to host **`grok-cli-auth-proxy`**, which holds OAuth seats and round-robins. ops-accounts status must show:
+
+1. CRS hop present/absent  
+2. Proxy RR seat health + exhaust cooldowns  
+3. Slot ↔ `auth.json` sync  
+
+## Adapter contract (every provider)
+
+```
+status()        # seats, token validity, active, LB state
+list()          # same, machine-readable
+setup(email)    # interactive or flag-driven capture
+refresh([email])# proactive access refresh
+reauth(email)   # unattended when RT dead
+util([email])   # quota / utilization best-effort
+switch([email]) # active CLI seat where applicable
+```
+
+No secrets in skill output. Provider-scoped vault service names. Env-templated paths only.
+
+## Phased plan
 
 | Phase | Work | Exit criteria |
 |-------|------|----------------|
-| **0** | **ops-accounts contract** — skill surface, provider adapter interface, unified status/switch/refresh/reauth verbs, wire existing Claude + Grok + Codex tools behind it (thin orchestration first, no big rewrite) | `/ops:accounts status` shows all providers; `switch`/`refresh`/`reauth` work for Claude and Grok without knowing host script names |
-| **1** | Close host / plugin Claude rotate gap | Plugin cascade modules; gap doc; host units still host until proven |
-| **2** | CRS optional wire (Claude only) | Detect CRS; install vs standalone; never required for single seat |
-| **3** | Absorb host Grok/Codex scripts into plugin (portable, env-templated) | No load-bearing `~/.local/bin/grok-*` for happy path; timers under plugin installers |
-| **4** | Optional bundled balancer (rebranded cherry-pick, not CRS dump-fork) | Only if wire-optional CRS still hurts multi-Claude users |
-
-**This week’s PRs (#726 companions, #727 captcha/CRS-optional) are phase 1–2
-enablers.** They must not re-label phase 0 as “later design only.”
-
-## Gaps proven live (2026-07-30)
-
-- Active Grok CLI seat stuck on one account while alternates have dead RTs.
-- Claude magic-link autoloop is timer-driven; Grok reauth service is oneshot
-  with **no timer** — not parity.
-- rotate-magic does not speak xAI device-code; CRS does not reauth Grok.
+| **0** | Skill merge + contract — `/ops:accounts` owns verbs; rotate/setup are aliases; thin router over existing engines | One entrypoint; multi-provider status |
+| **1** | Claude plugin parity (captcha cascade, standalone reauth) | Host not required for Claude magic-link |
+| **2** | Claude CRS optional | Detect; never required for single seat |
+| **3** | Grok adapter complete (plugin reauth + residential cascade + slot sync + proxy status) | Multi-seat healthy under weekly cap without host-only ops |
+| **4** | OpenAI/Codex + Factory adapters | same verbs |
+| **5** | Cursor adapter | same verbs |
+| **6** | Companions required co-install | done (#726) |
+| **7** | Cutover: units → `$CLAUDE_PLUGIN_ROOT`; retire host forks | public plugin only |
+| **8** | Optional bundled multi-provider LB | license-safe cherry-pick if still needed |
 
 ## Risks
 
 | Risk | Mitigation |
 |------|------------|
-| Big-bang rewrite of Claude rotate | Thin adapters over existing engines first |
-| CRS license if forking | Prefer wire-in; cherry-pick only after license review |
-| Host fork drift | Plugin SSOT; host units until phase 3 proof |
-| Secret sprawl | Provider-scoped vault names; never commit secrets |
-| Skill rename churn | Keep `/ops:rotate` alias ≥1 major version |
+| Big-bang rewrite of Claude | Keep Claude engines; wrap first |
+| Provider util APIs differ | Best-effort util; never fake numbers |
+| Grok CF blocks on reauth | Same residential cascade as captcha/oauth for Claude |
+| Secret sprawl | Provider-scoped vault; never commit secrets |
+| Alias churn | Keep `/ops:rotate` for one major version |
 
 ## Non-goals (immediate)
 
-- Full CRS fork in one PR
-- Deleting host rotate before live parity
-- Hard-requiring CRS for single-account users
+- Full CRS fork for every vendor  
+- Deleting host trees before parity proof  
+- Hard-requiring CRS  
 
 ## Related
 
-- `docs/ops/HOST-VS-PLUGIN-ROTATE-GAP.md`
-- `scripts/account-rotation/CAPTCHA-CASCADE.md`
-- Host (temporary): `grok-rotate`, `grok-oauth-reauth`, `grok-cli-auth-proxy`, `host-token-keepalive`
-- Skills today: `ops-rotate`, `ops-rotate-setup` → become aliases of `ops-accounts`
-
-## Phase 0 — multi-provider adapter contract (design only)
-
-Target skill surface: **`/ops:accounts`** (alias `/ops:rotate` for ≥1 major version).
-
-### Commands (stable)
-
-| Verb | Meaning |
-|------|---------|
-| `status` | List registered seats per provider + token health (no secrets) |
-| `list` | Same as status, table form |
-| `add` / `register` | Interactive capture into provider vault namespace |
-| `reauth` | Provider-specific reauth (Claude → rotate-magic; Grok → oauth reauth; Codex → session OAuth) |
-| `switch` | Make seat active for that provider’s CLI |
-| `lb` / `crs` | Optional load-balancer plane (Claude CRS today; others later) |
-
-### Adapter interface (plugin-local modules)
-
-Each provider ships a small adapter under `scripts/account-rotation/providers/<id>.mjs`
-(or future `scripts/accounts/providers/`). Minimum exports:
-
-```js
-// providers/<id>.mjs
-export const id = 'claude' | 'codex' | 'grok';
-export const displayName = 'Claude Max';
-/** @returns {Promise<{ok:boolean, seats:Array<{key,label,tokenValid,util?}>, note?:string}>} */
-export async function status(ctx) {}
-/** Capture or refresh vault entry. No secret logging. */
-export async function register(ctx, { emailOrLabel, mode }) {}
-/** Unattended reauth when token dead. May use browser/cascade. */
-export async function reauth(ctx, { key }) {}
-/** Optional: mark seat active for the CLI that reads this provider. */
-export async function switchTo(ctx, { key }) {}
-```
-
-`ctx` carries portable paths only: `pluginRoot`, `dataDir`, `log`, `env` — never host hardcodes.
-
-### Vault namespaces (credential-store service names)
-
-| Provider | Service pattern | Notes |
-|----------|-----------------|-------|
-| Claude | `Claude-Rotation-<key>` + live `Claude Code-credentials` | Existing |
-| Codex | `Codex-Rotation-<key>` (proposed) | Session OAuth; no public remaining API |
-| Grok | `Grok-Rotation-<key>` (proposed) | Absorb host oneshot into plugin adapter |
-
-### Dispatcher
-
-- Shared timer / autoloop dispatches `adapter.reauth` per `needsReauth` flags.
-- Claude path uses `rotate-magic.mjs` + captcha cascade (this PR).
-- CRS / balancer remains **optional** and Claude-scoped until a second provider needs LB.
-
-### Out of scope for phase 0 implementation
-
-- Renaming skills on disk
-- Forking CRS
-- Absorbing every host grok/codex script in one PR
-
+- `docs/ops/HOST-VS-PLUGIN-ROTATE-GAP.md`  
+- `scripts/account-rotation/CAPTCHA-CASCADE.md`  
+- Skills: `ops-accounts` (canonical), `ops-rotate` / `ops-rotate-setup` (aliases)  
+- Local plan: `Projects/memory/plans/2026-07-30T1557Z-public-ops-plugin-only.md`  
