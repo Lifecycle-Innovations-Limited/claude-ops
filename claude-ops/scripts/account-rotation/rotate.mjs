@@ -66,9 +66,7 @@ async function loadCaptchaCascade() {
   } catch (e) {
     _captchaCascade = false;
     try {
-      console.error(
-        `[captcha] cascade modules unavailable: ${String(e.message || e).slice(0, 120)}`,
-      );
+      console.error(`[captcha] cascade modules unavailable: ${String(e.message || e).slice(0, 120)}`);
     } catch {
       /* ignore */
     }

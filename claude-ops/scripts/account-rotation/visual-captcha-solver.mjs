@@ -172,7 +172,12 @@ export async function solveInteractiveCaptchaVisually(page, log = () => {}, opts
         const t = String(decision.click_text);
         const btn = page.getByRole('button', { name: new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') });
         if ((await btn.count()) > 0) await btn.first().click({ timeout: 3000 });
-        else await page.getByText(t, { exact: false }).first().click({ timeout: 3000 }).catch(() => {});
+        else
+          await page
+            .getByText(t, { exact: false })
+            .first()
+            .click({ timeout: 3000 })
+            .catch(() => {});
       } catch {}
     }
 
@@ -212,8 +217,7 @@ export async function runVncComputerUseCaptcha(log = () => {}, opts = {}) {
     return false;
   }
   const vncPort = opts.vncPort || process.env.CLAUDE_VNC_PORT || '5902';
-  const password =
-    process.env.VNC_PASSWORD || process.env.CLAUDE_VNC_PASSWORD || process.env.VNC_PASS || '';
+  const password = process.env.VNC_PASSWORD || process.env.CLAUDE_VNC_PASSWORD || process.env.VNC_PASS || '';
   const project = process.env.VNC_USE_PROJECT || join(homedir(), 'tools/vnc-use');
   if (!existsSync(join(project, 'pyproject.toml'))) {
     log('[visual-captcha] vnc-use project missing');
@@ -255,13 +259,16 @@ export async function runVncComputerUseCaptcha(log = () => {}, opts = {}) {
     child.stderr?.on('data', (d) => {
       out += d.toString();
     });
-    const t = setTimeout(() => {
-      try {
-        child.kill('SIGTERM');
-      } catch {}
-      log('[visual-captcha] VNC agent timeout');
-      resolve(false);
-    }, (opts.timeout || 180) * 1000 + 5000);
+    const t = setTimeout(
+      () => {
+        try {
+          child.kill('SIGTERM');
+        } catch {}
+        log('[visual-captcha] VNC agent timeout');
+        resolve(false);
+      },
+      (opts.timeout || 180) * 1000 + 5000,
+    );
     child.on('close', (code) => {
       clearTimeout(t);
       log(`[visual-captcha] VNC agent exit=${code} out=${out.slice(-200).replace(/\s+/g, ' ')}`);
@@ -269,7 +276,6 @@ export async function runVncComputerUseCaptcha(log = () => {}, opts = {}) {
     });
   });
 }
-
 
 /**
  * Resolve desktop-act runner for background rotate-magic.
@@ -316,12 +322,7 @@ function resolveDesktopActRunner() {
 function defaultDesktopDisplay() {
   // Reauth Chrome (start-reauth-chrome) defaults to DISPLAY=:1 for headed reauth seats.
   // :2 is the secondary VNC seat — only use if explicitly set.
-  return (
-    process.env.CLAUDE_DESKTOP_DISPLAY ||
-    process.env.DESKTOP_ACT_DISPLAY ||
-    process.env.DISPLAY ||
-    ':1'
-  );
+  return process.env.CLAUDE_DESKTOP_DISPLAY || process.env.DESKTOP_ACT_DISPLAY || process.env.DISPLAY || ':1';
 }
 
 /**
@@ -357,9 +358,7 @@ export async function runDesktopActCaptcha(log = () => {}, opts = {}) {
   const defaultVenv = process.env.DESKTOP_ACT_VENV || join(defaultHome, '.venv');
   const defaultCmd =
     process.env.DESKTOP_ACT_COMMAND ||
-    (existsSync(join(defaultHome, 'mcp-server/run.sh'))
-      ? join(defaultHome, 'mcp-server/run.sh')
-      : '');
+    (existsSync(join(defaultHome, 'mcp-server/run.sh')) ? join(defaultHome, 'mcp-server/run.sh') : '');
 
   // Use `act` (not `run`) so we drive the EXISTING headed Chrome display.
   // `run` would acquire a fresh empty Xvnc pool session and miss the captcha tab.
@@ -379,16 +378,7 @@ export async function runDesktopActCaptcha(log = () => {}, opts = {}) {
     ];
   } else {
     // Wrapper historically called `run`; pass --no-acquire if supported, else act via env.
-    args = [
-      '--display',
-      display,
-      '--timeout',
-      String(timeoutSec),
-      '--goal',
-      goal,
-      '--mode',
-      'act',
-    ];
+    args = ['--display', display, '--timeout', String(timeoutSec), '--goal', goal, '--mode', 'act'];
   }
 
   log(
@@ -415,18 +405,19 @@ export async function runDesktopActCaptcha(log = () => {}, opts = {}) {
     child.stderr?.on('data', (d) => {
       out += d.toString();
     });
-    const t = setTimeout(() => {
-      try {
-        child.kill('SIGTERM');
-      } catch {}
-      log('[visual-captcha] desktop-act timeout');
-      resolve(false);
-    }, timeoutSec * 1000 + 15_000);
+    const t = setTimeout(
+      () => {
+        try {
+          child.kill('SIGTERM');
+        } catch {}
+        log('[visual-captcha] desktop-act timeout');
+        resolve(false);
+      },
+      timeoutSec * 1000 + 15_000,
+    );
     child.on('close', (code) => {
       clearTimeout(t);
-      log(
-        `[visual-captcha] desktop-act exit=${code} tail=${out.slice(-320).replace(/\s+/g, ' ')}`,
-      );
+      log(`[visual-captcha] desktop-act exit=${code} tail=${out.slice(-320).replace(/\s+/g, ' ')}`);
       resolve(code === 0);
     });
   });
@@ -515,9 +506,7 @@ export async function runAutonomousCaptchaCascade(page, log = () => {}, opts = {
 
 // CLI: node visual-captcha-solver.mjs --cdp 9223
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('visual-captcha-solver.mjs')) {
-  const cdp = process.argv.includes('--cdp')
-    ? process.argv[process.argv.indexOf('--cdp') + 1]
-    : '9223';
+  const cdp = process.argv.includes('--cdp') ? process.argv[process.argv.indexOf('--cdp') + 1] : '9223';
   const { chromium } = await import('playwright');
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdp}`);
   const page = browser.contexts()[0]?.pages()?.[0];
