@@ -39,6 +39,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.47.8] - 2026-07-30
+
+### Changed
+- **Keep `current/.in_use`:** 2.47.6 cleared both `.orphaned_at` and `.in_use` from `current/` after the refresh. Clearing `.in_use` was wrong — every session that resolves `current/` as its plugin root registers its own live PID there, and that registry is what stops the sweeper deleting `current/` under a running session if `installPath` moves off it. Only the orphan marker is cleared now; excluding `.in_use` from the rsync already keeps the version directory's dead PIDs out.
+
+
 ## [2.47.7] - 2026-07-30
 
 ### Changed
