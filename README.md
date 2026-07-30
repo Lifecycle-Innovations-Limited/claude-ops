@@ -55,7 +55,7 @@ v2 turns claude-ops from a _briefing + comms surface_ into an **autonomy layer f
 
 ```bash
 # 1. Upgrade
-/plugin update ops@lifecycle-innovations-limited-claude-ops
+/plugin update ops@ops-marketplace
 
 # 2. Run the wizard (hits new steps 6.5a–6.5d for v2 toggles)
 /ops:setup
@@ -79,13 +79,15 @@ Per-repo budget caps (default 3/hour), single-flight locks, and content-hash ded
 ## Quick Start
 
 ```bash
-# 1. Add the marketplace
+# 1. Add the marketplace (ships ops + desktop-act companion)
 /plugin marketplace add Lifecycle-Innovations-Limited/claude-ops
 
-# 2. Install the plugin
-/plugin install ops@lifecycle-innovations-limited-claude-ops
+# 2. Install the ops plugin
+/plugin install ops@ops-marketplace
+# Optional explicit companion (also run by /ops:setup and /ops:update):
+# /plugin install desktop-act@ops-marketplace
 
-# 3. Run the guided setup wizard
+# 3. Run the guided setup wizard (co-installs desktop-act by default)
 /ops:setup
 ```
 
