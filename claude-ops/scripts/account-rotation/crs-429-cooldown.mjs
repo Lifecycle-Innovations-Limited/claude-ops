@@ -61,6 +61,7 @@ import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { loadJsonState, saveJsonStateAtomic, withOwnStateLock } from './crs-reconciler-state.mjs';
 import { crsBaseUrl, loadRotationConfig, resolveCrsAdminPassword } from './crs-pool-config.mjs';
+import { resolveAccountsBackend } from './ops-accounts-backend.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const args = new Set(process.argv.slice(2));
@@ -312,6 +313,11 @@ async function tick() {
 }
 
 async function main() {
+  const backend = resolveAccountsBackend({ env: process.env, cfgBackend: C.backend });
+  if (backend === 'local') {
+    log('backend=local — CRS 429 cooldown no-op (use seat-policy-tick / exhaustedUntil on seat-state)');
+    return;
+  }
   if (!ENABLED && !STATUS) {
     log('crs.cooldownEnabled is not true (and $CRS_COOLDOWN_ENABLED!=1) — skipping tick (opt-in required)');
     return;
