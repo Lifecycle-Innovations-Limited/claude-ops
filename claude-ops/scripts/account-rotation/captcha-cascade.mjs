@@ -13,7 +13,7 @@
  *
  * See CAPTCHA-CASCADE.md.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir, tmpdir } from 'os';
 import { solveInteractiveCaptchaVisually, runAutonomousCaptchaCascade } from './visual-captcha-solver.mjs';
