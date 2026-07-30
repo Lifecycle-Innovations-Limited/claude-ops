@@ -39,6 +39,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.47.7] - 2026-07-30
+
+### Changed
+Companion detection now follows symlinks. is_installed used plain find, which does not descend into a symlinked directory, so boxes that keep ~/.claude/skills on another volume read every companion there as missing. ops-update retried the install each run and reported 'fail: gsd install' while GSD was in fact installed.
+
+
 ## [2.47.6] - 2026-07-30
 
 ### Changed
