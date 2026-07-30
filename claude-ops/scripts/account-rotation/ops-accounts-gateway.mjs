@@ -35,10 +35,8 @@ const PORT = Number(process.env.OPS_ACCOUNTS_GATEWAY_PORT || '3005');
 const GATEWAY_KEY = process.env.OPS_ACCOUNTS_GATEWAY_KEY || '';
 const GROK_PROXY_URL = (process.env.GROK_PROXY_URL || 'http://127.0.0.1:31845').replace(/\/$/, '');
 const CLAUDE_UPSTREAM_URL = (process.env.CLAUDE_UPSTREAM_URL || '').replace(/\/$/, '');
-const DATA =
-  process.env.CLAUDE_PLUGIN_DATA_DIR || join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
-const STATE_PATH =
-  process.env.OPS_ACCOUNTS_STATE_PATH || join(DATA, 'account-rotation', 'seat-state.json');
+const DATA = process.env.CLAUDE_PLUGIN_DATA_DIR || join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
+const STATE_PATH = process.env.OPS_ACCOUNTS_STATE_PATH || join(DATA, 'account-rotation', 'seat-state.json');
 
 export function loadSeatState(path = STATE_PATH) {
   if (!existsSync(path)) {
@@ -247,8 +245,7 @@ async function handleClaude(req, res, route) {
   if (!picked) {
     sendJson(res, 503, {
       error: {
-        message:
-          'no schedulable Claude seat in seat-state; run ops-accounts seats import-claude-config or seats set',
+        message: 'no schedulable Claude seat in seat-state; run ops-accounts seats import-claude-config or seats set',
         type: 'no_capacity',
       },
     });
@@ -415,8 +412,7 @@ function main(argv = process.argv.slice(2)) {
   });
 }
 
-const isMain =
-  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {
   main();
 }
