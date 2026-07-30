@@ -247,7 +247,7 @@ Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need 
 | Option             | Header   | Description                                     |
 | ------------------ | -------- | ----------------------------------------------- |
 | Configure channels | channels | Set tokens for Telegram, WhatsApp, Email, Slack |
-| Companion plugins  | plugins  | Install desktop-act (ops dep), GSD, Superpowers, feature-dev |
+| Companion plugins  | plugins  | Co-install required deps: desktop-act, GSD, gstack, Superpowers, feature-dev |
 | Save preferences   | prefs    | Owner name, timezone, default priorities        |
 | Shell env          | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile    |
 
@@ -304,180 +304,65 @@ After installation, re-run `ops-setup-detect` to refresh status before continuin
 
 ---
 
-## Step 2b — Companion plugins (if selected)
+## Step 2b — Companion plugins (required co-install)
 
-### desktop-act (co-installed ops dependency — default on)
+Companions declared in `plugin-dependencies.json` with `required: true` are
+**essential** to named ops commands. They are **not optional prompts**. When the
+user selected Companion plugins or "Set up everything", install them without a
+Skip choice.
 
-`desktop-act` is listed in the same `ops-marketplace` as the ops plugin and is
-declared in `plugin-dependencies.json` / `plugin.json` `dependencies`. It powers
-`/ops:desktop` and the unattended captcha cascade. Prefer co-install whenever
-ops is installed; do not require a second marketplace add.
-
-Check:
+SSOT install (RULE ZERO — background Bash):
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-desktop-act-companion.sh" --status \
-  && echo "installed" || echo "not_installed"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-companions.sh"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-companions.sh --status"
 ```
 
-If `not_installed` and `desktop_act_co_install` is not explicitly false in
-userConfig / prefs, **install without prompting** when the user chose
-"Set up everything" or selected Companion plugins. Otherwise ask:
+`--status` exits 1 if any required companion is missing. Report each line
+(`installed` / `MISSING`) and re-run the install script once on failures.
 
-```
-desktop-act (computer-use MCP) is a companion of ops.
-  Powers /ops:desktop and captcha cascade for unattended re-auth.
-  [Install desktop-act (Recommended)] [Skip]
-```
+| Companion | Kind | Essential for |
+| --- | --- | --- |
+| desktop-act | marketplace plugin (ops-marketplace) | `/ops:desktop`, captcha cascade |
+| gsd | marketplace plugin | `/ops:flow` project mode, `/ops:projects`, `/ops:go` |
+| gstack | skills clone (`~/.claude/skills/gstack`) | `/ops:flow` ad-hoc (`/spec` `/review` `/qa` `/ship` `/browse`) |
+| superpowers | marketplace plugin | merge / orchestrate / triage checkpoints |
+| feature-dev | marketplace plugin | `/ops:ops-feature-dev`, `/flow feature-dev` |
 
-On install (RULE ZERO — background Bash):
+### Rules
+
+1. **No Skip for required companions.** If a required install fails, show the
+   error and retry once. Do not mark setup complete while
+   `install-companions.sh --status` is non-zero.
+2. **Do not hand-roll per-plugin install prompts** unless the bulk script is
+   absent (old cache). Prefer the SSOT script above.
+3. **gstack** is not a Claude marketplace plugin — the install script clones
+   `$GSTACK_REPO` (default `https://github.com/garrytan/gstack.git`) to
+   `$GSTACK_DIR` (default `$HOME/.claude/skills/gstack`). Override via env only.
+4. Record prefs when status is green: `plugins.desktop_act`, `plugins.gsd`,
+   `plugins.gstack`, `plugins.superpowers`, `plugins.feature_dev` = `"installed"`.
+5. Opt-out is only via userConfig / env that install scripts already honor
+   (e.g. `desktop_act_co_install=false`, `OPS_SKIP_COMPANIONS=1`) — not a wizard Skip.
+
+### Legacy fallback (only if `install-companions.sh` is missing)
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-desktop-act-companion.sh"
-```
-
-Record `plugins.desktop_act = "installed"` in `$PREFS_PATH` when `--status` passes.
-
-If they skip:
-
-```
-Skipped desktop-act. Install later:
-  claude plugin install desktop-act@ops-marketplace
-  # or
-  bash ${CLAUDE_PLUGIN_ROOT}/scripts/install-desktop-act-companion.sh
-```
-
----
-
-### GSD (Get Shit Done)
-
-GSD is a third-party Claude Code plugin that adds project roadmap tracking. When installed, claude-ops dashboards (`/ops:go`, `/ops:projects`, `/ops:next`, `/ops:yolo`) automatically show active phases, progress, and next actions per project. Without it, those sections are simply omitted.
-
-Check if GSD is already installed:
-
-```bash
-find ~/.claude -name "gsd-progress" -path "*/skills/*" 2>/dev/null | head -1 | grep -q . && echo "installed" || echo "not_installed"
-```
-
-If not installed, ask via `AskUserQuestion`:
-
-```
-GSD adds project roadmap tracking to your ops dashboards.
-  /ops:go shows active phases and progress per project
-  /ops:projects shows GSD state alongside CI/PR status
-  /ops:next factors in GSD work priority
-
-  [Install GSD (latest)] [Skip — I don't need roadmap tracking]
-```
-
-On install, run the commands directly — do NOT tell the user to run them manually:
-
-```bash
-# Install GSD in one shot — no user intervention needed
-claude plugin marketplace add gsd-build/get-shit-done 2>/dev/null && \
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-gstack-companion.sh"
+claude plugin marketplace add gsd-build/get-shit-done 2>/dev/null
 claude plugin install gsd@gsd-build-get-shit-done 2>/dev/null
-```
-
-If `claude` CLI is not available in the path, fall back to the plugin cache mechanism:
-
-```bash
-# Direct marketplace clone fallback
-GSD_MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/gsd-build-get-shit-done"
-if [ ! -d "$GSD_MARKETPLACE_DIR" ]; then
-  git clone https://github.com/gsd-build/get-shit-done.git "$GSD_MARKETPLACE_DIR" 2>/dev/null
-fi
-```
-
-Report success/failure. Record `plugins.gsd = "installed"` in `$PREFS_PATH`.
-
-If they skip:
-
-```
-Skipped GSD. Install later with: /plugin marketplace add gsd-build/get-shit-done
-```
-
----
-
-## Step 2b.5 — Superpowers (optional, recommended)
-
-Several ops skills (`/ops:ops-merge`, `/ops:ops-orchestrate`, `/ops:ops-triage`) integrate with `superpowers:*` skills at key checkpoints — verification-before-completion, finishing-a-development-branch, dispatching-parallel-agents, systematic-debugging. Without superpowers installed, those checkpoints are no-ops; with it, they enforce stronger guardrails on merges, multi-agent dispatch, and root-cause analysis.
-
-Check if superpowers is already installed:
-
-```bash
-find ~/.claude/plugins -path "*/superpowers/skills/using-superpowers" -type d 2>/dev/null | head -1 | grep -q . && echo "installed" || echo "not_installed"
-```
-
-If not installed, ask via `AskUserQuestion`:
-
-```
-Superpowers adds verification, dispatch, and debugging guardrails to ops skills.
-
-  [Install Superpowers (latest)] [Skip — I'll add it later]
-```
-
-On install, run the commands directly:
-
-```bash
-claude plugin marketplace add obra/superpowers-marketplace 2>/dev/null && \
+claude plugin marketplace add obra/superpowers-marketplace 2>/dev/null
 claude plugin install superpowers@superpowers-marketplace 2>/dev/null
-```
-
-Fallback if `claude` CLI is not on PATH:
-
-```bash
-SP_MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/superpowers-marketplace"
-if [ ! -d "$SP_MARKETPLACE_DIR" ]; then
-  git clone https://github.com/obra/superpowers-marketplace.git "$SP_MARKETPLACE_DIR" 2>/dev/null
-fi
-```
-
-Report success/failure. Record `plugins.superpowers = "installed"` in `$PREFS_PATH`.
-
-If they skip:
-
-```
-Skipped Superpowers. Ops skills will run without superpower checkpoints.
-Install later with: /plugin marketplace add obra/superpowers-marketplace
+claude plugin install feature-dev@claude-plugins-official 2>/dev/null
 ```
 
 ---
 
-## Step 2c — Feature-dev (optional, recommended for structured builds)
+## Step 2c — (reserved numbering) Feature-dev is required via Step 2b
 
-The **feature-dev** plugin adds a 7-phase feature pipeline (`code-explorer`, `code-architect`, `code-reviewer` agents). claude-ops routes to it via `/ops:ops-feature-dev`, `/flow feature-dev`, and silent auto-swap when `general-purpose` agents match explore/architect/review keywords.
-
-Check if feature-dev is already installed:
-
-```bash
-find ~/.claude ~/.cursor -path "*/feature-dev/*/agents/code-explorer.md" 2>/dev/null | head -1 | grep -q . && echo "installed" || echo "not_installed"
-```
-
-If not installed, ask via `AskUserQuestion`:
-
-```plaintext
-Feature-dev adds structured feature development (explore → architect → implement → review).
-
-  [Install feature-dev (latest)] [Skip — I'll add it later]
-```
-
-On install, try the Claude Code plugin CLI when available:
-
-```bash
-# Cursor / Claude Code — plugin id varies by marketplace; verify with: claude plugin list
-claude plugin install feature-dev@claude-plugins-official 2>/dev/null || true
-```
-
-Re-check with the find command above. If still `not_installed`, tell the user to install **feature-dev** from Cursor Settings → Plugins (or their Claude Code marketplace UI), then re-run `/ops:setup`.
-
-Report success/failure. Record `plugins.feature_dev = "installed"` in `$PREFS_PATH` only when the find check passes.
-
-If they skip:
-
-```plaintext
-Skipped feature-dev. Install later from Cursor plugins or run /feature-dev after installing the feature-dev plugin.
-Structured builds still work via /flow build and gsd-execute-phase without it.
-```
+Feature-dev is no longer an optional Step. It is co-installed in Step 2b as a
+required companion. Structured builds without it hollow out
+`/ops:ops-feature-dev` and `/flow feature-dev`.
 
 ---
 

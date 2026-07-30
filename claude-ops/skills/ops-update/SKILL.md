@@ -26,11 +26,14 @@ The workhorse is **`${CLAUDE_PLUGIN_ROOT}/bin/ops-update`**. It runs a 9-step lo
 8. **Local sync** — if a linked local source checkout of this repo is present under `~/Projects`, fast-forwards its `main` to `origin/main` so a dev clone never silently drifts behind the published release. Acts only on a clean `main` (never clobbers uncommitted WIP, a feature branch, or unpushed commits); a no-op when no checkout exists. Skip with `--no-localsync`.
 9. **Report** — old→new, what changed, and that a restart / `/reload-plugins` is needed to load it.
 10. **Companions** — `bin/ops-update` step 9 runs `scripts/install-companions.sh`
-    against `plugin-dependencies.json`:
-    - **desktop-act** (`ops-marketplace`) — always co-install/update (gate:
-      `desktop_act_co_install`)
-    - **gsd**, **superpowers**, **feature-dev** — update only if already installed
-    - **gstack** — not managed by claude-ops (not in the matrix)
+    against `plugin-dependencies.json`. Every companion with `required: true` is
+    co-installed when missing and updated on every ops-update:
+    - **desktop-act** — `/ops:desktop` + captcha cascade
+    - **gsd** — `/ops:flow` project mode, `/ops:projects`, `/ops:go`
+    - **gstack** — skills clone for `/ops:flow` ad-hoc (`/spec` `/review` `/qa` `/ship`)
+    - **superpowers** — merge / orchestrate / triage checkpoints
+    - **feature-dev** — `/ops:ops-feature-dev`
+    Skip only with `--no-companions` or `OPS_SKIP_COMPANIONS=1`.
 
 ```bash
 # manual companion pass
@@ -91,7 +94,7 @@ Code constraint, not a failure.
 | `--no-patches`   | Skip the cache-patch reapply step.                                    |
 | `--no-rewrite`   | Skip the stale-version-path rewrite step.                            |
 | `--no-localsync` | Skip fast-forwarding a linked local source checkout's `main`.        |
-| `--no-companions` | Skip companion install/update (desktop-act, gsd, superpowers, …).  |
+| `--no-companions` | Skip required companion co-install/update (desktop-act, gsd, gstack, superpowers, feature-dev). |
 
 ## Mobile / SSH (Rule 7)
 
