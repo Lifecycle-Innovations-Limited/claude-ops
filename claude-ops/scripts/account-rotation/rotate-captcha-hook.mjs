@@ -13,6 +13,9 @@ import { loadCaptchaCascade } from './captcha-optional.mjs';
  * @returns {Promise<{ok:boolean, layer?:string, reason?:string}>}
  */
 export async function trySolveCaptchaWall(page, log = () => {}, opts = {}) {
+  if (!page) {
+    return { ok: false, reason: 'no-page' };
+  }
   const c = await loadCaptchaCascade();
   if (!c.present) {
     log('[captcha-hook] cascade modules not present');
@@ -25,10 +28,11 @@ export async function trySolveCaptchaWall(page, log = () => {}, opts = {}) {
     if (c.ensureVirtualDisplay) await c.ensureVirtualDisplay(log);
   } catch {}
 
-  if (page && c.solveCaptchaOnPage) {
+  if (c.solveCaptchaOnPage) {
     try {
       const r = await c.solveCaptchaOnPage(page, log, opts);
-      if (r?.ok) return { ok: true, layer: 'token-solver', reason: r.reason };
+      // captcha-helper returns {present, solved, ...}; treat solved as success
+      if (r?.ok || r?.solved) return { ok: true, layer: 'token-solver', reason: r.reason || r.provider };
     } catch (e) {
       log(`[captcha-hook] token solve: ${String(e.message || e).slice(0, 80)}`);
     }
