@@ -484,14 +484,42 @@ class ProxyHandler(BaseHTTPRequestHandler):
         return UPSTREAM_CODING
 
     def _target_url(self, upstream: str) -> str:
-        path = self.path
-        if path.startswith("http://") or path.startswith("https://"):
-            parsed = urllib.parse.urlparse(path)
-            path = urllib.parse.urlunparse(("", "", parsed.path, parsed.params, parsed.query, parsed.fragment))
+        """Map client path onto a fixed upstream base (no open proxy / SSRF).
+
+        Client may send absolute-form request lines; we only keep path+query and
+        re-attach them to the configured upstream host allowlist.
+        """
+        raw = self.path or "/"
+        parsed = urllib.parse.urlparse(raw)
+        # Drop scheme/netloc from absolute-form requests; never follow client host.
+        path = parsed.path or "/"
+        query = parsed.query or ""
+        if ".." in path.split("/") or path.startswith("//"):
+            raise ValueError(f"rejected path: {path!r}")
         if not path.startswith("/v1"):
             path = "/v1" + (path if path.startswith("/") else "/" + path)
-        suffix = path[len("/v1") :]
-        return upstream + suffix
+        suffix = path[len("/v1") :] or "/"
+        if not suffix.startswith("/"):
+            suffix = "/" + suffix
+        # upstream is like https://host/v1 — join keeps host fixed.
+        base = upstream if upstream.endswith("/") else upstream + "/"
+        target = urllib.parse.urljoin(base, suffix.lstrip("/"))
+        if query:
+            target = target + ("&" if "?" in target else "?") + query
+        # Hard allowlist: final URL must stay on a configured upstream origin.
+        allowed = {
+            urllib.parse.urlparse(u).netloc.lower()
+            for u in (UPSTREAM, UPSTREAM_CODING, UPSTREAM_IMAGINE)
+            if u
+        }
+        final = urllib.parse.urlparse(target)
+        if final.scheme not in ("https", "http") or final.netloc.lower() not in allowed:
+            raise ValueError(f"upstream host not allowed: {final.netloc}")
+        if not any(target.startswith(u.rstrip("/") ) or target.startswith(u) for u in (UPSTREAM, UPSTREAM_CODING, UPSTREAM_IMAGINE)):
+            # Prefer prefix match on full upstream base when path depth differs.
+            if final.netloc.lower() not in allowed:
+                raise ValueError(f"upstream URL not allowed: {target}")
+        return target
 
     def _build_headers(self, token: str) -> Dict[str, str]:
         headers: Dict[str, str] = {}
