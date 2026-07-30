@@ -1,20 +1,24 @@
 # Captcha cascade (unattended re-auth)
 
-Contract for **unattended** re-auth owned by `magic-link-autoloop` → `rotate.mjs`.
-No interactive agent session is required. Agents must not spawn parallel
-`rotate.mjs` drivers against the same fleet (they thrash the global `.rotating`
-lock and the reauth browser profile).
+Contract for **unattended** re-auth owned by `magic-link-autoloop` →
+`rotate.mjs` / `rotate-magic.mjs`. No interactive agent session is required.
+Agents must not spawn parallel `rotate.mjs` drivers against the same fleet
+(they thrash the global `.rotating` lock and the reauth browser profile).
+
+**CRS is not required.** Captcha cascade runs in standalone rotate-magic.
 
 ## Ownership
 
 | Component | Role |
 |-----------|------|
-| `magic-link-autoloop` | Serial, one account per tick; opt-in |
-| `rotate.mjs` | Browser OAuth / magic-link / setup |
-| Captcha helpers (when present in the install) | Solver chain + visual + desktop-act |
+| `magic-link-autoloop` | Serial, one account per tick; opt-in (often CRS-flagged, but not required) |
+| `rotate.mjs` / `rotate-magic.mjs` | Browser OAuth / magic-link / setup |
+| `captcha-helper.mjs` | Token solvers + residential wait (`residualAfterWait`) |
+| `visual-captcha-solver.mjs` | Vision tiles + desktop-act + VNC layers |
+| `bright-data-cascade.mjs` | Optional proxy-aligned solver tiers |
+| `captcha-cascade.mjs` | Post-verify orchestration (`maybeSolvePostVerifyVisualChallenge`) |
 
-If this install's `rotate.mjs` has no captcha helpers, the env keys below are
-harmless no-ops.
+If captcha modules fail to load, the env keys below are harmless no-ops.
 
 ## Order (when captcha helpers are present)
 
