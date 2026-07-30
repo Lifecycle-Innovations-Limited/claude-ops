@@ -1,12 +1,7 @@
 /**
  * Unit tests: ops-accounts-gateway classify / seat pick / auth (no listen).
  */
-import {
-  classifyRoute,
-  pickSchedulableSeat,
-  authorize,
-  extractApiKey,
-} from '../ops-accounts-gateway.mjs';
+import { classifyRoute, pickSchedulableSeat, authorize, extractApiKey } from '../ops-accounts-gateway.mjs';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
