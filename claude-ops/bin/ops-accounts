@@ -1,135 +1,71 @@
 #!/usr/bin/env bash
 # ops-accounts — multi-provider account status / switch / refresh / reauth router.
-# Phase 0 thin shell: delegates to existing engines (Claude rotate, grok-*, codex).
-# No host hardcodes beyond $HOME; no secrets printed.
+# Prefers Node CLI (scripts/ops-accounts/cli.mjs) when present; else thin shell fallback.
 set -euo pipefail
 
+resolve_root() {
+  if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -d "${CLAUDE_PLUGIN_ROOT}" ]]; then
+    printf '%s' "${CLAUDE_PLUGIN_ROOT}"
+    return
+  fi
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  if [[ -f "$here/scripts/ops-accounts/cli.mjs" ]]; then
+    printf '%s' "$here"
+    return
+  fi
+  local c
+  c="$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1 || true)"
+  if [[ -n "$c" ]]; then
+    printf '%s' "${c%/}"
+    return
+  fi
+  printf '%s' "$here"
+}
+
+ROOT="$(resolve_root)"
+export CLAUDE_PLUGIN_ROOT="$ROOT"
+CLI="$ROOT/scripts/ops-accounts/cli.mjs"
+
+if [[ -f "$CLI" ]]; then
+  exec node "$CLI" "$@"
+fi
+
+# --- fallback shell (phase-0 pre-Node) ---
 cmd="${1:-status}"
 shift || true
-
 have() { command -v "$1" >/dev/null 2>&1; }
 
 print_claude() {
   echo "=== Claude ==="
-  local rot="${CLAUDE_PLUGIN_ROOT:-}/scripts/account-rotation"
-  if [[ -z "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
-    # best-effort cache path
-    local c
-    c="$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1 || true)"
-    rot="${c}scripts/account-rotation"
-  fi
+  local rot="$ROOT/scripts/account-rotation"
   if [[ -f "$rot/rotate.mjs" ]]; then
     node "$rot/rotate.mjs" --status 2>/dev/null | head -40 || echo "(rotate.mjs --status failed)"
   else
-    echo "plugin rotate.mjs not found (set CLAUDE_PLUGIN_ROOT or install ops plugin)"
+    echo "plugin rotate.mjs not found"
   fi
 }
-
 print_grok() {
   echo "=== Grok ==="
-  if have grok-rotate; then
-    grok-rotate status 2>/dev/null || true
-  else
-    echo "grok-rotate not on PATH"
-  fi
-  if have host-token-keepalive; then
-    host-token-keepalive --status --grok-only 2>/dev/null | tail -15 || true
-  fi
+  have grok-rotate && grok-rotate status 2>/dev/null || echo "grok-rotate not on PATH"
 }
-
 print_codex() {
   echo "=== Codex / OpenAI ==="
-  if have codex-rotate; then
-    codex-rotate status 2>/dev/null | head -30 || echo "(codex-rotate status failed)"
-  else
-    echo "codex-rotate not on PATH (optional)"
-  fi
+  have codex-rotate && codex-rotate status 2>/dev/null | head -30 || echo "codex-rotate optional"
 }
 
 case "$cmd" in
-  status|"")
-    print_claude
-    echo
-    print_grok
-    echo
-    print_codex
-    ;;
-  switch)
-    provider="${1:-}"
-    target="${2:-}"
-    case "$provider" in
-      grok|xai)
-        if [[ -n "$target" ]]; then
-          # force state to previous index so switch lands on target if ordered — fallback simple switch
-          grok-rotate switch
-        else
-          grok-rotate switch
-        fi
-        grok-rotate status
-        ;;
-      claude)
-        echo "use: /ops:rotate rotate-now [--to email] or node rotate.mjs --rotate"
-        ;;
-      *)
-        echo "usage: ops-accounts switch grok|claude [email]"
-        exit 2
-        ;;
-    esac
-    ;;
-  refresh)
-    provider="${1:-all}"
-    case "$provider" in
-      grok)
-        host-token-keepalive --force --grok-only 2>/dev/null || grok-rotate refresh
-        ;;
-      claude)
-        host-token-keepalive --force --claude-only 2>/dev/null || true
-        ;;
-      all|"")
-        host-token-keepalive --force 2>/dev/null || true
-        ;;
-      *)
-        echo "usage: ops-accounts refresh [all|claude|grok]"
-        exit 2
-        ;;
-    esac
-    ;;
+  status|list|"") print_claude; echo; print_grok; echo; print_codex ;;
   reauth)
-    provider="${1:-}"
-    email="${2:-}"
+    provider="${1:-}"; email="${2:-}"
     case "$provider" in
-      grok|xai)
-        [[ -n "$email" ]] || { echo "usage: ops-accounts reauth grok <email>"; exit 2; }
-        export DISPLAY="${DISPLAY:-:1}"
-        grok-oauth-reauth --email "$email"
-        ;;
-      claude)
-        [[ -n "$email" ]] || { echo "usage: ops-accounts reauth claude <email>"; exit 2; }
-        root="${CLAUDE_PLUGIN_ROOT:-}"
-        if [[ -z "$root" ]]; then
-          root="$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1)"
-        fi
-        node "${root}/scripts/account-rotation/rotate-magic.mjs" --to "$email" --force
-        ;;
-      *)
-        echo "usage: ops-accounts reauth grok|claude <email>"
-        exit 2
-        ;;
-    esac
-    ;;
+      grok|xai) [[ -n "$email" ]] || { echo "usage: ops-accounts reauth grok <email>"; exit 2; }
+        grok-oauth-reauth --email "$email" ;;
+      claude) [[ -n "$email" ]] || { echo "usage: ops-accounts reauth claude <email>"; exit 2; }
+        node "$ROOT/scripts/account-rotation/rotate-magic.mjs" --to "$email" --force ;;
+      *) echo "usage: ops-accounts reauth grok|claude <email>"; exit 2 ;;
+    esac ;;
   -h|--help|help)
-    cat <<H
-ops-accounts — multi-provider seat router (phase 0)
-
-  ops-accounts status
-  ops-accounts switch grok|claude
-  ops-accounts refresh [all|claude|grok]
-  ops-accounts reauth grok <email>
-  ops-accounts reauth claude <email>
-H
-    ;;
-  *)
-    echo "unknown command: $cmd (try help)"
-    exit 2
-    ;;
+    echo "ops-accounts status|reauth|switch|refresh (Node CLI missing — thin shell)" ;;
+  *) echo "unknown: $cmd"; exit 2 ;;
 esac
