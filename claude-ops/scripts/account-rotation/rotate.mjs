@@ -2666,11 +2666,7 @@ async function runAuthFlow(driver, account) {
     if (driver._page && /claude\.(ai|com)/i.test(url || '')) {
       const visualWall = await detectCaptchaWall(driver._page);
       if (visualWall.blocking) {
-        const cleared = await trySolveCaptchaWall(
-          driver._page,
-          `auth-step-${step}:${visualWall.kind || 'wall'}`,
-          log,
-        );
+        const cleared = await trySolveCaptchaWall(driver._page, `auth-step-${step}:${visualWall.kind || 'wall'}`, log);
         if (await captchaHardFailed(driver._page)) {
           log(
             `[captcha] aborting: budget exhausted with blocking wall kind=${visualWall.kind} — see CAPTCHA_VNC_HANDOFF (autoloop retries)`,
@@ -3248,9 +3244,7 @@ async function runAuthFlow(driver, account) {
             if (driver._page) {
               await trySolveCaptchaWall(driver._page, 'after-inline-code-verify', log);
               if (await captchaHardFailed(driver._page)) {
-                log(
-                  '[magic-link] aborting: captcha budget exhausted after inline verify — see CAPTCHA_VNC_HANDOFF',
-                );
+                log('[magic-link] aborting: captcha budget exhausted after inline verify — see CAPTCHA_VNC_HANDOFF');
                 return false;
               }
             }

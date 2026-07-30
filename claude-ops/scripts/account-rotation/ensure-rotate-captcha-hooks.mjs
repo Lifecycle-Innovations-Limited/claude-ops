@@ -195,5 +195,5 @@ const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.arg
 if (isMain) {
   const r = ensureRotateCaptchaHooks({ dryRun: process.argv.includes('--dry-run') });
   console.log(JSON.stringify(r, null, 2));
-  process.exit(r.ok && (r.presentAfter !== false) ? 0 : 1);
+  process.exit(r.ok && r.presentAfter !== false ? 0 : 1);
 }
