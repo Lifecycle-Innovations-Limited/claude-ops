@@ -39,6 +39,12 @@ run_case() {
 	# Pre-existing leak in current/, to prove we clean up as well as prevent.
 	printf '1000000000000\n' >"$current_dir/.orphaned_at"
 
+	# A live session that resolved current/ as its plugin root and registered
+	# itself there. This registry is what stops the sweeper deleting current/
+	# out from under it, so the refresh must not drop it.
+	mkdir -p "$current_dir/.in_use"
+	printf '{"pid":%s}\n' "$$" >"$current_dir/.in_use/$$"
+
 	cat >"$installed" <<JSON
 {
   "plugins": {
@@ -89,8 +95,14 @@ JSON
 	# 2. GC bookkeeping must not be present in current/
 	[[ ! -e "$current_dir/.orphaned_at" ]] ||
 		fail "$label: .orphaned_at leaked into current/ — cache GC would delete the live plugin root"
-	[[ ! -e "$current_dir/.in_use" ]] ||
-		fail "$label: stale .in_use leaked into current/"
+	[[ -f "$current_dir/.in_use/$$" ]] ||
+		fail "$label: dropped the live .in_use registration in current/ — the sweeper could then delete it under a running session"
+	# rsync excludes .in_use outright. cp -rp has no exclude, so it merges the
+	# version dir's dead PIDs in; harmless, the sweeper prunes those itself.
+	if [[ "$mode" == "rsync" ]]; then
+		[[ ! -e "$current_dir/.in_use/999999" ]] ||
+			fail "$label: version dir's stale .in_use PID was copied into current/"
+	fi
 
 	# 3. installPath repointed, other plugins untouched, mode preserved
 	python3 - "$installed" "$current_dir" <<'PY' || fail "$label: installed_plugins.json assertions failed"

@@ -77,18 +77,25 @@ refresh_current_directory() {
     fi
   fi
 
-  # Never let the cache-GC bookkeeping of a version dir ride into current/.
+  # Never let a version dir's orphan marker ride into current/.
   # Claude Code marks a version dir it no longer recognises with .orphaned_at
   # and deletes it once that marker ages past the grace period, skipping only
-  # dirs still listed as an installPath. If a stale (already-aged) marker is
-  # copied into current/ and installPath later moves off current/ — a plugin
-  # reinstall, or the marketplace remove+add that ops-update performs — the
-  # grace period is already spent, so current/ is deleted on the next sweep
-  # while live sessions still resolve CLAUDE_PLUGIN_ROOT through it. The
-  # copied .in_use PIDs belong to the version dir and are dead, so they do
-  # not hold it open either. cp -rp has no exclude, so clear both here.
+  # dirs still listed as an installPath. A copied marker is already aged, so
+  # if installPath later moves off current/ — a plugin reinstall, or the
+  # marketplace remove+add that ops-update performs — the grace period is
+  # already spent and current/ is deleted on the next sweep while live
+  # sessions still resolve CLAUDE_PLUGIN_ROOT through it. cp -rp has no
+  # exclude, so clear it here too, and clear any earlier leak.
   rm -f "$current_dir/.orphaned_at" 2>/dev/null || true
-  rm -rf "$current_dir/.in_use" 2>/dev/null || true
+
+  # current/.in_use is deliberately left alone. Every session that resolves
+  # current/ as its plugin root registers its own live PID there, and that
+  # registry is what stops the sweeper deleting current/ out from under them
+  # if installPath ever moves off it. Removing it would drop exactly the
+  # protection this function exists to preserve. Excluding it from the rsync
+  # above already stops the version dir's PIDs from replacing the live ones;
+  # under the cp fallback they merely get added, and the sweeper prunes dead
+  # entries itself.
 
   if [[ -f "$installed_json" ]]; then
     if python3 - "$installed_json" "$current_dir" <<'PYEOF' 2>/dev/null
