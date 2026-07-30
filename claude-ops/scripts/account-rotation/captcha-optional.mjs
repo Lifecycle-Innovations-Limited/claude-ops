@@ -49,7 +49,11 @@ export async function loadCaptchaCascade() {
 }
 
 export function captchaModulesOnDisk() {
-  return ['captcha-helper.mjs', 'visual-captcha-solver.mjs', 'bright-data-cascade.mjs', 'secrets-bootstrap.mjs', 'virtual-display.mjs'].filter(
-    (n) => existsSync(join(__dirname, n)),
-  );
+  return [
+    'captcha-helper.mjs',
+    'visual-captcha-solver.mjs',
+    'bright-data-cascade.mjs',
+    'secrets-bootstrap.mjs',
+    'virtual-display.mjs',
+  ].filter((n) => existsSync(join(__dirname, n)));
 }

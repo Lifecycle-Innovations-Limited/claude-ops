@@ -2633,11 +2633,10 @@ async function runAuthFlow(driver, account) {
       } catch {}
       await sleep(3000);
       if (driver._page) {
-        const solved = await trySolveCaptchaWallSafe(
-          driver._page,
-          (m) => log(m),
-          { reason: 'post-magic-link-authUrl', attempt: 0 },
-        );
+        const solved = await trySolveCaptchaWallSafe(driver._page, (m) => log(m), {
+          reason: 'post-magic-link-authUrl',
+          attempt: 0,
+        });
         if (solved?.ok) log(`[captcha-hook] post-magic-link wall cleared layer=${solved.layer || 'unknown'}`);
       }
     }
@@ -2661,11 +2660,7 @@ async function runAuthFlow(driver, account) {
     log(`[magic-link] Submitted email — magic link should be sent`);
     await sleep(3000);
     if (driver._page) {
-      await trySolveCaptchaWallSafe(
-        driver._page,
-        (m) => log(m),
-        { reason: 'post-email-submit', attempt: 0 },
-      );
+      await trySolveCaptchaWallSafe(driver._page, (m) => log(m), { reason: 'post-email-submit', attempt: 0 });
     }
 
     const magicLink = await pollGmailForMagicLink(account.email);
@@ -2700,11 +2695,10 @@ async function runAuthFlow(driver, account) {
     if (driver._page && url.includes('claude.ai')) {
       const wallish = await pageLooksLikeCaptchaWall(driver._page);
       if (wallish || step === 0) {
-        const solved = await trySolveCaptchaWallSafe(
-          driver._page,
-          (m) => log(m),
-          { reason: `magic-link-step-${step}`, attempt: step },
-        );
+        const solved = await trySolveCaptchaWallSafe(driver._page, (m) => log(m), {
+          reason: `magic-link-step-${step}`,
+          attempt: step,
+        });
         if (solved?.ok) {
           log(`[captcha-hook] wall cleared layer=${solved.layer || 'unknown'} at step ${step}`);
           stallCount = 0;
@@ -3186,11 +3180,10 @@ async function runAuthFlow(driver, account) {
       }
       log('Authorize button still not clickable after 30s — trying captcha cascade then ai-brain');
       if (driver._page) {
-        const solved = await trySolveCaptchaWallSafe(
-          driver._page,
-          (m) => log(m),
-          { reason: 'authorize-not-clickable', attempt: 0 },
-        );
+        const solved = await trySolveCaptchaWallSafe(driver._page, (m) => log(m), {
+          reason: 'authorize-not-clickable',
+          attempt: 0,
+        });
         if (solved?.ok) {
           log(`[captcha-hook] authorize-path wall cleared layer=${solved.layer || 'unknown'}`);
           await sleep(2000);
