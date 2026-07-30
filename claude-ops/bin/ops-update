@@ -5,6 +5,8 @@
 # with NO stale cache dirs and NO dangling version-pinned paths left behind:
 #
 #   1. Refresh the marketplace catalogue clone     (claude plugin marketplace update)
+#      — runs for real even under --dry-run: it is a read-only pull of the
+#        public catalogue, and step 2 needs it current to report accurately.
 #   2. Resolve the target version from the refreshed marketplace.json
 #   3. Update the installed plugin                 (claude plugin update ops@ops-marketplace)
 #      — with a force-reinstall fallback for the known Claude Code bug where
@@ -89,16 +91,20 @@ say "${c_dim}ops-update — claude-ops local upgrade$([[ $DRY -eq 1 ]] && echo '
 say "current installed: ${CUR:-<none>}"
 
 # ── 1. Refresh marketplace catalogue ───────────────────────────────────────
+# Always runs for real, even under --dry-run: this only pulls the public
+# marketplace catalogue clone (read-only w.r.t. the installed plugin) and
+# step 2's target-version resolution needs it to be current to report
+# accurately. The actually destructive/mutating steps (3, 5, 6, 7, 8, 9)
+# stay gated behind $DRY below.
 step "1/10  Refresh marketplace catalogue ($MARKETPLACE)"
 if [[ "$DRY" -eq 1 ]]; then
-  say "  ${c_dim}[dry-run] claude plugin marketplace update $MARKETPLACE${c_rst}"
+  say "  ${c_dim}[dry-run] (refresh runs for real — read-only catalogue pull, no plugin state changes)${c_rst}"
+fi
+if claude plugin marketplace update "$MARKETPLACE" >/dev/null 2>&1; then
+  ok "marketplace catalogue refreshed via CLI"
 else
-  if claude plugin marketplace update "$MARKETPLACE" >/dev/null 2>&1; then
-    ok "marketplace catalogue refreshed via CLI"
-  else
-    warn "CLI marketplace update failed — falling back to git pull on the clone"
-    git -C "$MKT_CLONE" pull --ff-only >/dev/null 2>&1 && ok "git pull ok" || err "git pull failed (continuing)"
-  fi
+  warn "CLI marketplace update failed — falling back to git pull on the clone"
+  git -C "$MKT_CLONE" pull --ff-only >/dev/null 2>&1 && ok "git pull ok" || err "git pull failed (continuing)"
 fi
 
 # ── 2. Resolve target version ──────────────────────────────────────────────
