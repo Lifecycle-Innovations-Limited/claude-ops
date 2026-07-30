@@ -1,7 +1,7 @@
 ---
 name: ops-rotate-setup
-description: Interactive OAuth init wizard for the multi-account Claude rotator. Walks through every account in the rotation config and, for any account missing a valid keychain token, delegates to the proven `rotate.mjs` magic-link flow (browser-driver cascade + Gmail polling), which writes the verified OAuth token to `Claude-Rotation-<key>` (key = account label or email, keychain account `$USER`). Re-runnable any time. Standalone alias of the same step inside `/ops:setup`.
-argument-hint: '[--all|--account <email>|--add|--crs]'
+description: Interactive OAuth init wizard for the multi-account Claude rotator. Walks through every account in the rotation config and, for any account missing a valid keychain token, delegates to the proven `rotate.mjs` / `rotate-magic.mjs` magic-link flow (browser-driver cascade + Gmail polling), which writes the verified OAuth token to `Claude-Rotation-<key>` (key = account label or email, keychain account `$USER`). CRS is optional (multi-account load balancing only). Re-runnable any time. Standalone alias of the same step inside `/ops:setup`.
+argument-hint: '[--all|--account <email>|--add|--crs|--standalone]'
 allowed-tools:
   - Bash
   - Read
@@ -179,20 +179,93 @@ Result for <email>:
 
 If success and no more accounts remain, jump to **Step 5**.
 
-## Step 4.5 — CRS relay-pool priority daemon (optional)
+## Step 4.4 — CRS detection (optional enhancement — never required)
 
-If the user runs a **claude-relay-service** (CRS) pool (load-balances Claude
-requests across many accounts at once, exposing a per-account `schedulable`
-flag), offer to install the **priority daemon** that auto-deprioritizes
-near-maxed accounts and re-enables them on recovery. This is independent of the
-keychain rotator above — skip it for keychain-only setups.
+**CRS is not required for rotate-magic or the keychain rotator.**
 
-`AskUserQuestion`:
+- **Standalone rotate-magic** (recommended for single/few accounts): captures
+  and refreshes one account at a time via `rotate.mjs` / `rotate-magic.mjs`
+  (magic-link + captcha cascade). Enough when you are not spreading load across
+  a large pool.
+- **CRS** (claude-relay-service): multi-account **load balancing / rate-limit
+  spreading** — one relay endpoint, many seats, `schedulable` flags. Useful
+  mainly when you hit 429s with multi-account traffic.
+
+### Detect CRS (env-templated; no host hardcodes)
+
+Run detection before offering install. Any hit = "CRS likely present":
+
+```bash
+CRS_DETECTED=0
+# binary on PATH
+command -v crs >/dev/null 2>&1 && CRS_DETECTED=1
+# common compose / service names (user-space; ignore if missing)
+systemctl --user is-active crs-compose.service >/dev/null 2>&1 && CRS_DETECTED=1
+# config already enabled
+CFG="${USER_CFG:-$HOME/.claude/plugins/data/ops-ops-marketplace/account-rotation-config.json}"
+[[ -f "$CFG" ]] && jq -e '.crs.enabled == true' "$CFG" >/dev/null 2>&1 && CRS_DETECTED=1
+# optional env base URL responds
+CRS_URL="${CRS_BASE_URL:-${CRS_URL:-http://127.0.0.1:3000}}"
+curl -fsS --max-time 2 "$CRS_URL/health" >/dev/null 2>&1 && CRS_DETECTED=1
+echo "CRS_DETECTED=$CRS_DETECTED"
+```
+
+### Branch
+
+**If CRS detected (`CRS_DETECTED=1`)** — offer wire-in as optional enhancement:
 
 ```
-Do you run a claude-relay-service (CRS) pool you want auto-prioritized?
+CRS looks installed or already configured. Wire ops-rotate to it for multi-account
+rate-limit load balancing? (Not required for standalone rotate-magic.)
+  [Wire CRS]     — continue to Step 4.5 (priority daemon + reconcilers)
+  [Standalone]   — keychain + rotate-magic only; leave CRS alone
+  [Skip]         — neither; finish summary
+  [What is CRS?] — short explainer, then re-ask
+```
+
+**If CRS not detected** — explain + choose path:
+
+```
+CRS (claude-relay-service) was not detected.
+
+What it is: multi-account load balancing / rate-limit spreading across a relay
+pool. Useful mainly when you hit rate limits with many accounts.
+
+Standalone rotate-magic targets one account at a time and is enough for most
+users (single seat or a few seats with the keychain rotator).
+
+  [Use rotate-magic standalone (Recommended for single/few accounts)]
+  [Install CRS]   — open CRS install docs / print next steps; do not block OAuth
+  [Skip]          — finish without CRS
+```
+
+- **[Use rotate-magic standalone]**: print that OAuth tokens from Steps 3–4 are
+  enough; captcha cascade is in `scripts/account-rotation/CAPTCHA-CASCADE.md`.
+  Jump to **Step 5 — Summary** (CRS lines = not configured). Do **not** run
+  Steps 4.5–4.7 unless the user later passes `--crs`.
+- **[Install CRS]**: print a short pointer to upstream CRS install (docker
+  compose / project README), note that after install they can re-run
+  `/ops:rotate-setup --crs`. Do not hard-fail if they never install. Then offer
+  to continue OAuth summary or exit.
+- **[Skip]**: same as standalone for this wizard — jump to Step 5.
+- **[Wire CRS]** / **[What is CRS?]**: continue into Step 4.5 as today.
+
+`--standalone` argument: force the standalone branch (skip 4.5–4.7).
+`--crs` argument: skip detection ask; jump to Step 4.5 (existing behavior).
+
+## Step 4.5 — CRS relay-pool priority daemon (optional)
+
+Only when the user chose **Wire CRS** / **Install CRS** completed / `--crs`, or
+detection found CRS and they opted in. Install the **priority daemon** that
+auto-deprioritizes near-maxed accounts and re-enables them on recovery. This is
+independent of the keychain rotator — skip for keychain-only setups.
+
+`AskUserQuestion` (if not already answered in 4.4):
+
+```
+Configure CRS pool auto-prioritization?
   [Yes — configure + install]   — set base URL + admin creds, install the 120s daemon
-  [Not now]                     — skip (you can run /ops:rotate-setup again later)
+  [Not now]                     — skip (you can run /ops:rotate-setup --crs later)
   [What is this?]               — one-paragraph explainer, then re-ask
 ```
 
@@ -357,31 +430,35 @@ would be a `rotate.mjs`-internals change, out of scope here.
 
  Config: ~/.claude/plugins/data/ops-ops-marketplace/account-rotation-config.json
  Keychain: Claude-Rotation-<key> (account: $USER)  ·  key = label or email
- CRS priority daemon: ✓ installed (every 120s) | ✗ not configured
- CRS 429-cooldown:    ✓ installed (every 60s)  | ✗ not enabled
- CRS 401-refresher:   ✓ installed (every 300s) | ✗ not enabled
- Magic-link autoloop: ✓ installed (every 600s) | ✗ not enabled
+ Mode: standalone rotate-magic | CRS pool wired
+ CRS priority daemon: ✓ installed (every 120s) | ✗ not configured (optional)
+ CRS 429-cooldown:    ✓ installed (every 60s)  | ✗ not enabled (optional)
+ CRS 401-refresher:   ✓ installed (every 300s) | ✗ not enabled (optional)
+ Magic-link autoloop: ✓ installed (every 600s) | ✗ not enabled (optional)
 
- To enable automatic rotation, open /plugins → claude-ops → settings and
+ Standalone reauth (no CRS): node $CLAUDE_PLUGIN_ROOT/scripts/account-rotation/rotate-magic.mjs --to <email>
+
+ To enable automatic keychain rotation, open /plugins → claude-ops → settings and
  toggle "Multi-account Claude rotator" (account_rotation_enabled).
 ──────────────────────────────────────────────────────
 ```
 
-(Show the CRS priority-daemon line only if Step 4.5 ran; show the two Step 4.6
-reconciler lines only if Step 4.6 ran; show the magic-link line only if Step
-4.7 ran. All four CRS daemons are independent of the `account_rotation_enabled`
-toggle — each is gated by its own config flag (`crs.enabled`,
-`crs.cooldownEnabled`, `crs.tokenRefreshEnabled`, `crs.enableMagicLinkRecovery`)
-plus whether its launchd/systemd timer is installed.)
+(Show CRS daemon lines as `not configured (optional)` when Step 4.4 chose
+standalone/skip. Show installed only if 4.5–4.7 ran. All four CRS daemons are
+independent of `account_rotation_enabled` — each is gated by its own config flag
+(`crs.enabled`, `crs.cooldownEnabled`, `crs.tokenRefreshEnabled`,
+`crs.enableMagicLinkRecovery`) plus whether its launchd/systemd timer is
+installed. **Never treat missing CRS as setup failure.**)
 
 Exit. Do NOT auto-enable `account_rotation_enabled` — that decision belongs
 to the user, made explicitly through the plugin settings UI.
 
 ## Argument handling
 
-- `--all` (default): full wizard as described above.
+- `--all` (default): full wizard as described above (includes Step 4.4 CRS detection).
 - `--account <email>`: skip Step 2; only init the matching account.
 - `--add`: skip token check; jump straight to Step 2 add loop, then init.
+- `--standalone`: after OAuth (or immediately if tokens already valid), force standalone rotate-magic path — skip Steps 4.5–4.7.
 - `--crs`: jump straight to **Step 4.5** (configure + install the CRS priority daemon), then **Step 4.6** (offer the reconciler add-ons), skipping the keychain-account OAuth steps.
 - `--reconcilers`: jump straight to **Step 4.6** (offer/reconfigure the 429-cooldown and 401-refresher reconcilers, then Step 4.7's magic-link autoloop offer) — requires Step 4.5 already configured (`crs.enabled=true`); if not, print the same message as `--crs` needing configuration first and exit.
 

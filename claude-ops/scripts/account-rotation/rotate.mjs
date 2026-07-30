@@ -55,6 +55,15 @@ import { destinationUtilHardBlock } from './rotation-policy.mjs';
 import { applyAccountLeases, writeLease } from './account-leases.mjs';
 import { respawnBgSessions } from './bg-respawn.mjs';
 
+// Soft captcha hooks — trySolveCaptchaWall on browser walls (CAPTCHA-CASCADE.md).
+// Helpers live in rotate-captcha-soft.mjs so thin checkouts can omit cascade modules.
+import {
+  trySolveCaptchaWall,
+  maybeClearCaptchaWall,
+  detectCaptchaWall,
+  captchaHardFailed,
+} from './rotate-captcha-soft.mjs';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Account config lives in the gitignored user data dir (written by
 // setup-account.mjs, Rule 0: no real account data in the committed repo).
@@ -2555,6 +2564,16 @@ async function runAuthFlow(driver, account) {
       await driver.goto(magicLink);
     }
     await sleep(4000);
+    // Post-verify captcha wall (pick/drag hCaptcha / CF) — autonomous cascade when modules present
+    if (driver._page) {
+      await trySolveCaptchaWall(driver._page, 'after-initial-code-verify', log);
+      if (await captchaHardFailed(driver._page)) {
+        log(
+          '[magic-link] aborting: captcha budget exhausted with blocking wall — see CAPTCHA_VNC_HANDOFF marker (autoloop will retry)',
+        );
+        return false;
+      }
+    }
     // After magic link login, session is now valid — re-navigate to authUrl
     // so the OAuth flow can complete (org chooser → authorize → callback)
     if (driver._authUrl) {
@@ -2641,6 +2660,34 @@ async function runAuthFlow(driver, account) {
     await sleep(2500);
     const url = await driver.currentUrl().catch(() => '');
     log(`Step ${step} [${driver.name}]: ${url.substring(0, 100)}`);
+
+    // Browser walls (post-Verify pick/drag hCaptcha / CF): clear before OTP re-submit
+    // or AI-brain thrash. Soft no-op when cascade modules missing.
+    if (driver._page && /claude\.(ai|com)/i.test(url || '')) {
+      const visualWall = await detectCaptchaWall(driver._page);
+      if (visualWall.blocking) {
+        const cleared = await trySolveCaptchaWall(driver._page, `auth-step-${step}:${visualWall.kind || 'wall'}`, log);
+        if (await captchaHardFailed(driver._page)) {
+          log(
+            `[captcha] aborting: budget exhausted with blocking wall kind=${visualWall.kind} — see CAPTCHA_VNC_HANDOFF (autoloop retries)`,
+          );
+          return false;
+        }
+        if (cleared) {
+          log(`[captcha] step ${step}: wall cleared kind=${visualWall.kind}`);
+          if (driver._authUrl) {
+            try {
+              await driver.goto(driver._authUrl);
+            } catch {}
+            await sleep(2000);
+          }
+          stallCount = 0;
+          continue;
+        }
+      } else if (visualWall.kind === 'hcaptcha-challenge-preload') {
+        log('[captcha] preload challenge frame noted (non-blocking)');
+      }
+    }
 
     // Claude sometimes renders the email login form while preserving the
     // /oauth/authorize URL. Handle known Claude auth prompts before the generic
@@ -3027,6 +3074,14 @@ async function runAuthFlow(driver, account) {
       oauthPath = new URL(url).pathname;
     } catch {}
     if (oauthPath.includes('/oauth/authorize') || (oauthPath.endsWith('/authorize') && url.includes('claude'))) {
+      // Clear captcha wall on authorize (can reappear after session settle).
+      if (driver._page) {
+        await trySolveCaptchaWall(driver._page, 'oauth-authorize', log);
+        if (await captchaHardFailed(driver._page)) {
+          log('[captcha] aborting on /oauth/authorize — budget exhausted');
+          return false;
+        }
+      }
       // Magic-link route: we authenticated via a single-use link delivered to
       // account.email's inbox, so the session on this page is guaranteed to be
       // the right account. Skip the readPageText "verify" dance — it failed to
@@ -3185,6 +3240,14 @@ async function runAuthFlow(driver, account) {
               await driver.goto(magicLink);
             }
             await sleep(4000);
+            // Post-verify captcha wall after inline code/link path (mirrors finishMagicLinkLogin)
+            if (driver._page) {
+              await trySolveCaptchaWall(driver._page, 'after-inline-code-verify', log);
+              if (await captchaHardFailed(driver._page)) {
+                log('[magic-link] aborting: captcha budget exhausted after inline verify — see CAPTCHA_VNC_HANDOFF');
+                return false;
+              }
+            }
             // After magic link login, session is now valid — re-navigate to authUrl
             // so the OAuth flow can complete (org chooser → authorize → callback)
             if (driver._authUrl) {

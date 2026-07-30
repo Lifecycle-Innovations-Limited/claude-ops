@@ -1,20 +1,35 @@
 # Captcha cascade (unattended re-auth)
 
-Contract for **unattended** re-auth owned by `magic-link-autoloop` → `rotate.mjs`.
-No interactive agent session is required. Agents must not spawn parallel
-`rotate.mjs` drivers against the same fleet (they thrash the global `.rotating`
-lock and the reauth browser profile).
+Contract for **unattended** re-auth owned by `magic-link-autoloop` →
+`rotate.mjs` / `rotate-magic.mjs`. No interactive agent session is required.
+Agents must not spawn parallel `rotate.mjs` drivers against the same fleet
+(they thrash the global `.rotating` lock and the reauth browser profile).
+
+**CRS is not required.** Captcha cascade runs in standalone rotate-magic.
 
 ## Ownership
 
 | Component | Role |
 |-----------|------|
-| `magic-link-autoloop` | Serial, one account per tick; opt-in |
-| `rotate.mjs` | Browser OAuth / magic-link / setup |
-| Captcha helpers (when present in the install) | Solver chain + visual + desktop-act |
+| `magic-link-autoloop` | Serial, one account per tick; opt-in (often CRS-flagged, but not required) |
+| `rotate.mjs` / `rotate-magic.mjs` | Browser OAuth / magic-link / setup |
+| `captcha-helper.mjs` | Token solvers + residential wait (`residualAfterWait`) |
+| `visual-captcha-solver.mjs` | Vision tiles + desktop-act + VNC layers |
+| `bright-data-cascade.mjs` | Optional proxy-aligned solver tiers |
+| `captcha-cascade.mjs` | Post-verify orchestration (`maybeSolvePostVerifyVisualChallenge`, `trySolveCaptchaWall`) |
+| `rotate-captcha-soft.mjs` | Soft-load helpers for rotate |
+| `ensure-rotate-captcha-hooks.mjs` | Idempotent wiring of `trySolveCaptchaWall` into rotate browser walls |
 
-If this install's `rotate.mjs` has no captcha helpers, the env keys below are
-harmless no-ops.
+If captcha modules fail to load, the env keys below are harmless no-ops.
+
+## Browser wall call sites (plugin rotate)
+
+`trySolveCaptchaWall(page, reason, log)` is the public soft hook. Wired at:
+
+1. Every `runAuthFlow` step when URL is claude.ai/com and a **blocking** wall is detected
+2. `/oauth/authorize` before Authorize clicks
+3. After magic-link / code verify (`finishMagicLinkLogin` + inline path)
+4. `rotate-magic.mjs` runs `ensureRotateCaptchaHooks()` before spawning rotate so checkouts stay patched
 
 ## Order (when captcha helpers are present)
 
@@ -63,6 +78,8 @@ export CLAUDE_ROT_HEADED=1
 bash "$CLAUDE_PLUGIN_ROOT/scripts/account-rotation/magic-link-autoloop.sh"
 # or one-shot:
 node "$CLAUDE_PLUGIN_ROOT/scripts/account-rotation/magic-link-autoloop.mjs"
+# ensure hooks + magic:
+node "$CLAUDE_PLUGIN_ROOT/scripts/account-rotation/rotate-magic.mjs" --to user@example.com
 ```
 
 ## Anti-patterns
