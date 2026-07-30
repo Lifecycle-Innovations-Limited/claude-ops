@@ -19,9 +19,9 @@ export function resolveReauthDisplay(env = process.env) {
 }
 
 /**
- * Build PATH with optional user-local bin. No OS package-manager roots
- * (Homebrew, Chocolatey, etc.). Prefer process PATH; fall back to a minimal
- * POSIX list only when PATH is unset (common in stripped service units).
+ * Build PATH with optional user-local bin. No OS package-manager roots.
+ * Prefer process PATH; fall back to a minimal POSIX list only when PATH is
+ * unset (common in stripped service units).
  */
 export function resolveReauthPath(env = process.env) {
   const home = env.HOME || env.USERPROFILE || homedir();
