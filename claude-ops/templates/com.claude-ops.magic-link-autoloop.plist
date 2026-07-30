@@ -47,6 +47,23 @@
     <string>__HOME__</string>
     <key>NODE_NO_WARNINGS</key>
     <string>1</string>
+    <!-- Unattended reauth seat (override per host via unit drop-in if needed) -->
+    <key>CLAUDE_ROT_HEADED</key>
+    <string>1</string>
+    <key>CLAUDE_DESKTOP_DISPLAY</key>
+    <string>:1</string>
+    <key>DESKTOP_ACT_DISPLAY</key>
+    <string>:1</string>
+    <key>CLAUDE_ROT_VISUAL_CAPTCHA</key>
+    <string>1</string>
+    <key>CLAUDE_ROT_DESKTOP_ACT</key>
+    <string>1</string>
+    <key>CLAUDE_ROT_VNC_AGENT</key>
+    <string>1</string>
+    <key>CRS_MAGIC_LINK_ROTATE_TIMEOUT_MS</key>
+    <string>1200000</string>
+    <key>CLAUDE_ROT_SKIP_TOKEN_SOLVERS</key>
+    <string>0</string>
   </dict>
 
   <key>ProcessType</key>
