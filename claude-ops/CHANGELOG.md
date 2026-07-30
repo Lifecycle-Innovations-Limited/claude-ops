@@ -39,6 +39,13 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.47.6] - 2026-07-30
+
+### Changed
+- **Plugin cache markers:** `ops-post-update-migrate` no longer copies Claude Code's cache-GC bookkeeping (`.orphaned_at`, `.in_use`) from the version directory into `current/`. A copied marker is already past its grace period, so once `installPath` moved off `current/` the CLI would delete it on the next sweep while live sessions still resolved `CLAUDE_PLUGIN_ROOT` through it — the stale-plugin-root failure `current/` exists to prevent.
+- **Atomic installed_plugins.json write:** the file is now written through a temp file and renamed instead of truncated in place. Every installed plugin resolves through it, so a crash or a concurrent reader mid-write broke all of them, not just ops. The rename preserves the original 0600 mode.
+
+
 ## [2.47.5] - 2026-07-30
 
 ### Changed
