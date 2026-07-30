@@ -1,7 +1,7 @@
 ---
 name: ops-rotate
-description: Multi-account Claude Max rotator. Status, manual rotation, account list, add-account wizard, and CRS relay-pool auto-prioritization. Requires account_rotation_enabled=true in plugin settings.
-argument-hint: '[status|rotate-now|list|add-account|crs|crs-tick]'
+description: Multi-account Claude Max rotator. Status, manual rotation, account list, add-account wizard, standalone rotate-magic reauth, and optional CRS relay-pool auto-prioritization. CRS is not required. Requires account_rotation_enabled=true in plugin settings for daemon swap; reauth works without it.
+argument-hint: '[status|rotate-now|list|add-account|reauth|crs|crs-tick]'
 allowed-tools:
   - Bash
   - Read
@@ -25,21 +25,23 @@ Manage the optional multi-account Claude Max rotator. Off by default — flip
 | `rotate-now`       | Force rotation to the most-cooled candidate (or `--to <email>`)          |
 | `list`             | List every configured account with token state + last util               |
 | `add-account`      | Interactive wizard: collect email, OAuth into rotator vault              |
+| `reauth`           | Standalone rotate-magic for one email (no CRS): magic-link + captcha     |
 | `crs`              | Show the CRS relay-pool schedulable state + priority-daemon health       |
 | `crs-tick`         | Run one CRS priority tick now (append `--dry-run` to preview, no writes) |
 
-## Two rotation models
+## Rotation models (CRS is optional)
 
-This skill manages **two complementary** account-management systems:
+This skill manages **complementary** account systems. **CRS is never required.**
 
+- **Standalone rotate-magic** (`reauth`, and setup OAuth) — one account at a time.
+  Magic-link + captcha cascade. Enough for single/few accounts. No CRS install.
 - **Keychain rotator** (`status`/`rotate-now`/`list`/`add-account`) — for **direct-auth**
   sessions. One active claude.ai OAuth token in the keychain at a time; the daemon swaps
   to the coolest account when the active one heats up.
-- **CRS priority daemon** (`crs`/`crs-tick`) — for a **claude-relay-service** pool, which
-  load-balances across _many_ accounts simultaneously. Instead of swapping one token, it
-  toggles each account's `schedulable` flag from live utilization so the relay avoids
-  near-maxed accounts and re-enables them on recovery. Off by default; see
-  **ops-rotate-setup** to configure + install.
+- **CRS priority daemon** (`crs`/`crs-tick`) — **optional** multi-account load balancing
+  / rate-limit spreading via **claude-relay-service**. Toggles each account's
+  `schedulable` flag from live utilization. Off by default; configure only if you
+  run a CRS pool (see **ops-rotate-setup** Step 4.4 detection).
 
 ## Pre-flight (every invocation)
 
@@ -127,9 +129,32 @@ This is the only mutating subcommand. Walk the user through:
    ```
 6. **Verify.** Run `status` subcommand inline.
 
+## reauth (standalone rotate-magic — no CRS)
+
+Refresh one account's vault token via magic-link + captcha cascade. Does **not**
+need CRS or `crs.enabled`.
+
+```
+EMAIL="<email>"   # required
+node "$ROT_SRC/rotate-magic.mjs" --to "$EMAIL"
+# equivalent:
+# node "$ROT_SRC/rotate.mjs" --magic-link --to "$EMAIL"
+```
+
+Background-friendly; surface the log. Headed display + cascade env:
+`CLAUDE_DESKTOP_DISPLAY`, `CLAUDE_ROT_HEADED=1` (see `CAPTCHA-CASCADE.md`).
+If the user only has one seat, this is the primary recovery path — do not
+push them to install CRS.
+
 ## crs (relay-pool status)
 
-Show the claude-relay-service pool's per-account schedulable state + the priority
+**Only if CRS is present.** Detect first (same checks as ops-rotate-setup Step 4.4:
+`command -v crs`, `crs.enabled` in config, `$CRS_BASE_URL/health` or default
+`http://127.0.0.1:3000/health`). If not detected, explain briefly that CRS is
+optional load balancing and suggest `reauth` / `/ops:rotate-setup --standalone`
+instead of failing.
+
+When CRS is available: show the pool's per-account schedulable state + the priority
 daemon's health, plus the three optional reconcilers (429-cooldown, 401-refresher,
 magic-link-autoloop) if enabled. Read-only.
 
@@ -160,11 +185,11 @@ CRS POOL  (http://127.0.0.1:3000)
   magic-link  : ✓ running (every 600s)  |  ✗ not loaded  |  – not enabled (crs.enableMagicLinkRecovery=false)
 ```
 
-If CRS `/health` is unreachable, say so and point to ops-rotate-setup. If the daemon
-isn't loaded but `crs.enabled` is true, suggest `/ops:rotate-setup`. Show the two
-reconciler lines only if their config flag is true — if false, show `– not enabled`
-rather than treating it as a failure (it's an opt-in feature). If a flag is true but
-its daemon isn't loaded, suggest `/ops:rotate-setup --reconcilers`.
+If CRS `/health` is unreachable, say so and point to `/ops:rotate-setup` (optional)
+or standalone `reauth`. If the daemon isn't loaded but `crs.enabled` is true, suggest
+`/ops:rotate-setup --crs`. Show reconciler lines only if their config flag is true —
+if false, show `– not enabled` (opt-in, not a failure). If a flag is true but its
+daemon isn't loaded, suggest `/ops:rotate-setup --reconcilers`.
 
 ## crs-tick (run one tick now)
 

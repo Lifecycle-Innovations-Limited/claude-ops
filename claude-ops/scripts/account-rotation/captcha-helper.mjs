@@ -15,9 +15,9 @@
 // Solvers remain FALLBACK only (CRS_CAPTCHA_SOLVER_MODE=fallback): residential
 // browser wait first (residualAfterWait), then this provider chain.
 //
-// Secrets hydrated by secrets-bootstrap.mjs from Doppler claude-ops/prd.
+// Secrets hydrated by secrets-bootstrap.mjs from env / optional secrets bootstrap.
 // Optional TWOCAPTCHA_PROXY_* makes 2captcha/rucaptcha solve from a fixed IP.
-// AUR-1978: headed Chrome CDP :9222 is direct AWS egress — proxied tokens are
+// headed Chrome CDP :9222 is direct AWS egress — proxied tokens are
 // IP-mismatched by default. Use CLAUDE_ROT_CAPTCHA_FORCE_PROXY=1 to force proxy.
 //
 // Never throws. Never prints API keys or tokens. Returns structured results.
@@ -164,7 +164,7 @@ export async function captchaSolverAllowed(ctx = {}) {
 }
 
 function proxyParams() {
-  // AUR-1978 + 2026-07-30: solvers are fallback-only. When used, prefer EFG SOCKS
+  // + 2026-07-30: solvers are fallback-only. When used, prefer EFG SOCKS
   // so token IP matches residential PAC browser (not third-party US residential).
   const preferEfg =
     process.env.CLAUDE_ROT_CAPTCHA_PREFER_EFG_SOCKS === '1' || process.env.CRS_OAUTH_EGRESS === 'efg-socks-reauth-only';
@@ -931,7 +931,7 @@ export async function solveCaptchaOnPage(page, log = () => {}, opts = {}) {
     return { solved: false, provider: challenge.provider, present: true };
   }
   if (challenge.provider === 'hcaptcha') {
-    // AUR-2067: do NOT force invisible=true for every hCaptcha. Anthropic's
+    // do NOT force invisible=true for every hCaptcha. Anthropic's
     // post-verify pick/drag wall is a large interactive challenge; submitting
     // it as invisible yields a token that injects but never clears the wall.
     // Default invisible only when detectCaptcha saw checkbox-invisible / size=invisible
