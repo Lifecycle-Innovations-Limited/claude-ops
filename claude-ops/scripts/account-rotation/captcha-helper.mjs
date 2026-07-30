@@ -15,9 +15,9 @@
 // Solvers remain FALLBACK only (CRS_CAPTCHA_SOLVER_MODE=fallback): residential
 // browser wait first (residualAfterWait), then this provider chain.
 //
-// Secrets hydrated by secrets-bootstrap.mjs from Doppler claude-ops/prd.
+// Secrets hydrated by secrets-bootstrap.mjs from env / optional secrets bootstrap.
 // Optional TWOCAPTCHA_PROXY_* makes 2captcha/rucaptcha solve from a fixed IP.
-// AUR-1978: headed Chrome CDP :9222 is direct AWS egress — proxied tokens are
+// headed Chrome CDP :9222 is direct AWS egress — proxied tokens are
 // IP-mismatched by default. Use CLAUDE_ROT_CAPTCHA_FORCE_PROXY=1 to force proxy.
 //
 // Never throws. Never prints API keys or tokens. Returns structured results.
@@ -164,7 +164,7 @@ export async function captchaSolverAllowed(ctx = {}) {
 }
 
 function proxyParams() {
-  // AUR-1978 + 2026-07-30: solvers are fallback-only. When used, prefer EFG SOCKS
+  // + 2026-07-30: solvers are fallback-only. When used, prefer EFG SOCKS
   // so token IP matches residential PAC browser (not third-party US residential).
   const preferEfg =
     process.env.CLAUDE_ROT_CAPTCHA_PREFER_EFG_SOCKS === '1' || process.env.CRS_OAUTH_EGRESS === 'efg-socks-reauth-only';
@@ -300,18 +300,26 @@ export async function detectCaptcha(page) {
       const frames = Array.from(document.querySelectorAll('iframe'));
       let invisibleHc = false;
       let hcDomain = null;
+      const hostOf = (src) => {
+        try {
+          return new URL(src, location.href).hostname.toLowerCase();
+        } catch {
+          return '';
+        }
+      };
+      const isHcHost = (h) => h === 'hcaptcha.com' || h.endsWith('.hcaptcha.com');
+      const isCfChallengeHost = (h) => h === 'challenges.cloudflare.com' || h.endsWith('.challenges.cloudflare.com');
       for (const f of frames) {
         const src = f.getAttribute('src') || '';
-        if (src.includes('challenges.cloudflare.com')) {
+        const host = hostOf(src);
+        if (isCfChallengeHost(host)) {
           const m = src.match(/[?&](?:sitekey|k)=([^&]+)/);
           if (m) return { provider: 'turnstile', sitekey: decodeURIComponent(m[1]), challengePage: true };
           const pathMatch = src.match(/(0x[0-9A-Za-z_-]{20,})/);
           if (pathMatch) return { provider: 'turnstile', sitekey: pathMatch[1], challengePage: true };
         }
-        if (src.includes('hcaptcha.com')) {
-          try {
-            hcDomain = new URL(src).hostname;
-          } catch {}
+        if (isHcHost(host)) {
+          hcDomain = host || null;
           if (/frame=checkbox-invisible/i.test(src)) invisibleHc = true;
           const m = src.match(/[?&](?:sitekey|k)=([^&]+)/);
           if (m) {
@@ -327,7 +335,10 @@ export async function detectCaptcha(page) {
       const html = document.documentElement?.innerHTML || '';
       const skHtml = html.match(/sitekey["'\s:=]+([a-f0-9-]{20,})/i);
       if (skHtml) {
-        const hasHcFrame = frames.some((f) => /hcaptcha\.com/i.test(f.getAttribute('src') || ''));
+        const hasHcFrame = frames.some((f) => {
+          const h = hostOf(f.getAttribute('src') || '');
+          return isHcHost(h);
+        });
         if (hasHcFrame || /hcaptcha/i.test(html)) {
           const rq = html.match(/rqdata["'\s:=]+([^"'\s&]{16,})/);
           return {
@@ -931,7 +942,7 @@ export async function solveCaptchaOnPage(page, log = () => {}, opts = {}) {
     return { solved: false, provider: challenge.provider, present: true };
   }
   if (challenge.provider === 'hcaptcha') {
-    // AUR-2067: do NOT force invisible=true for every hCaptcha. Anthropic's
+    // do NOT force invisible=true for every hCaptcha. Anthropic's
     // post-verify pick/drag wall is a large interactive challenge; submitting
     // it as invisible yields a token that injects but never clears the wall.
     // Default invisible only when detectCaptcha saw checkbox-invisible / size=invisible
@@ -942,7 +953,14 @@ export async function solveCaptchaOnPage(page, log = () => {}, opts = {}) {
         const frames = Array.from(document.querySelectorAll('iframe'));
         for (const f of frames) {
           const src = f.getAttribute('src') || '';
-          if (!/hcaptcha\.com/i.test(src) || !/frame=challenge/i.test(src)) continue;
+          let host = '';
+          try {
+            host = new URL(src, location.href).hostname.toLowerCase();
+          } catch {
+            continue;
+          }
+          const isHc = host === 'hcaptcha.com' || host.endsWith('.hcaptcha.com');
+          if (!isHc || !/(?:^|[?&#])frame=challenge(?:&|#|$)/i.test(src)) continue;
           const r = f.getBoundingClientRect();
           const style = window.getComputedStyle(f);
           const visible =
