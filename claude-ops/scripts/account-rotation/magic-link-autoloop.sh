@@ -54,4 +54,4 @@ if [[ -f "$LOG" ]]; then
   fi
 fi
 
-exec "$NODE" "$SCRIPT_DIR/magic-link-autoloop.mjs" "$@" >>"$LOG" 2>&1
+"$NODE" "$SCRIPT_DIR/magic-link-autoloop.mjs" "$@" >>"$LOG" 2>&1

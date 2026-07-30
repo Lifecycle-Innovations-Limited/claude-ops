@@ -2599,9 +2599,8 @@ async function runAuthFlow(driver, account) {
           .innerText()
           .catch(() => '')) ||
         '';
-      const displayedCode = /use verification code to continue/i.test(displayText)
-        ? displayText.match(/\b(\d{6})\b/)?.[1]
-        : null;
+      const displayUrl = await driver.currentUrl().catch(() => '');
+      const displayedCode = displayUrl.includes('/magic-link') ? displayText.match(/\b(\d{6})\b/)?.[1] : null;
       if (displayedCode && driver._authUrl) {
         log('[magic-link] Captured displayed verification code — returning to sign-in');
         await driver.goto(driver._authUrl).catch(() => {});
@@ -2705,7 +2704,8 @@ async function runAuthFlow(driver, account) {
   async function finishDisplayedClaudeVerificationCode() {
     if (!driver.readPageText || !driver._authUrl) return false;
     const text = await driver.readPageText().catch(() => '');
-    if (!/use verification code to continue/i.test(text)) return false;
+    const url = await driver.currentUrl().catch(() => '');
+    if (!url.includes('/magic-link')) return false;
     const code = text.match(/\b(\d{6})\b/)?.[1];
     if (!code) return false;
     log('[magic-link] Captured displayed verification code — returning to sign-in');
