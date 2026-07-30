@@ -27,7 +27,9 @@ load balancing / rate-limit spreading for a relay pool.
 | `captcha-helper.mjs` | 1023 | 1023 | Ported; residualAfterWait + multi-provider |
 | `visual-captcha-solver.mjs` | 496 | ~531 | Ported; portable desktop-act resolve + self-contained Gemini check |
 | `bright-data-cascade.mjs` | 296 | 296 | Ported; env-only zones |
-| `captcha-cascade.mjs` | (inlined in host rotate) | ~506 | **New** orchestration extract |
+| `captcha-cascade.mjs` | (inlined in host rotate) | ~450 | Orchestration extract + `trySolveCaptchaWall` |
+| `rotate-captcha-soft.mjs` | — | new | Soft-load helpers for rotate |
+| `ensure-rotate-captcha-hooks.mjs` | — | new | Idempotent call-site patcher for public rotate.mjs |
 | `reauth-env.mjs` | missing on host | 135 | Plugin-first portable env |
 | `magic-link-autoloop.mjs` | ~548 | ~277 | Host fork thicker; plugin uses reauth-env |
 | `CAPTCHA-CASCADE.md` | host wording | plugin contract | Plugin is SSOT contract |
@@ -59,6 +61,7 @@ Also host-only (ops noise / personal debug): dozens of `click-*`, `trace-*`,
 - `vault-linux.mjs`, credit digest / kapture claim helpers
 - `crs-reconciler-state.mjs`, shell wrappers for reconcilers
 - Public `config.example.json`, launchd templates, install agents
+- `rotate-captcha-soft.mjs`, `ensure-rotate-captcha-hooks.mjs`, `rotate-magic.mjs` ensure-on-start
 
 ## What host systemd still points at host path
 
@@ -85,7 +88,7 @@ archive the host fork.
 
 After this pass, cascade **modules** exist; full host `rotate.mjs` still has:
 
-1. Dense magic-link-auto step loop captcha hooks (every OTP / Authorize step)
+1. Dense magic-link-auto step loop captcha hooks (OTP re-submit caps, stall PNG thrash guards)
 2. `completeOAuthWithGogMagicLink` / session-reuse paths
 3. `rotation-safety` process lock + deadline wrappers
 4. `auth-repair` on utilization 401
@@ -103,14 +106,30 @@ After this pass, cascade **modules** exist; full host `rotate.mjs` still has:
 - `captcha-helper.mjs`
 - `visual-captcha-solver.mjs`
 - `bright-data-cascade.mjs`
-- `captcha-cascade.mjs` (orchestration extract)
-- Soft hooks in plugin `rotate.mjs` after magic-link verify
+- `captcha-cascade.mjs` (orchestration extract + `trySolveCaptchaWall` alias)
+- `rotate-captcha-soft.mjs` soft-load helpers
+- `ensure-rotate-captcha-hooks.mjs` — idempotent patcher that wires:
+  - every `runAuthFlow` step on claude.ai/com when a **blocking** wall is detected
+  - `/oauth/authorize` before Authorize
+  - after inline code/link verify path
+  - (keeps after-magic-link verify in `finishMagicLinkLogin`)
+- `rotate-magic.mjs` runs ensure before spawning `rotate.mjs`
 - Thin `rotate-magic.mjs` entry → `rotate.mjs --magic-link`
 - CRS optional UX in `/ops:rotate-setup` and `/ops:rotate` skills
+- Units: `__tests__/captcha-cascade.test.mjs`, `__tests__/ensure-rotate-captcha-hooks.test.mjs`
+
+**Apply hooks on a checkout**
+
+```bash
+node scripts/account-rotation/ensure-rotate-captcha-hooks.mjs
+# or via magic entry (auto):
+node scripts/account-rotation/rotate-magic.mjs --to user@example.com
+node scripts/account-rotation/__tests__/run-captcha-unit-tests.mjs
+```
 
 **Deferred (follow-up PRs)**
 
-- Port remaining ~3.7k host `rotate.mjs` captcha call sites + magic-link-auto depth
+- Full host magic-link-auto depth (OTP re-submit caps, stall PNG thrash guards, session-reuse)
 - Optional `secrets-bootstrap` that is env/credential-store only (no host Doppler hardcodes)
 - `rotation-safety` / vault harden merge
 - Repoint host systemd → plugin (operator change, not automatic)

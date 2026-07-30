@@ -328,7 +328,7 @@ export async function maybeSolvePostVerifyVisualChallenge(page, reason = '', opt
           );
           const err = /error verifying your code|invalid code|code expired/i.test(t);
           const otpPrompt = /verification code|enter the code/i.test(t);
-          return { hasCode, err, otpPrompt, stillLogin: /\/login/i.test(location.pathname) };
+          return { hasCode, err, otpPrompt, stillLogin: String(location.pathname || '').includes('/login') };
         })
         .catch(() => ({ hasCode: false, err: false, otpPrompt: false, stillLogin: false }));
 
@@ -336,10 +336,10 @@ export async function maybeSolvePostVerifyVisualChallenge(page, reason = '', opt
         .evaluate(() => {
           const path = String(location.pathname || '');
           const host = String(location.hostname || '');
-          if (/\/oauth\/authorize/i.test(path) || /^\/authorize\/?$/i.test(path)) return true;
-          if (/^(localhost|127\.0\.0\.1)$/i.test(host)) return true;
+          if (path.includes('/oauth/authorize') || path === '/authorize' || path === '/authorize/') return true;
+          if (host === 'localhost' || host === '127.0.0.1') return true;
           const t = (document.body?.innerText || '').replace(/\s+/g, ' ');
-          if (!/\/login/i.test(path)) {
+          if (!path.includes('/login')) {
             if (/\bAuthorize\b|\bAllow\b|\bApprove\b/i.test(t) && !/verification code/i.test(t)) return true;
             if (/Select (?:which )?organization/i.test(t)) return true;
             const hasCode = !!document.querySelector(
@@ -438,5 +438,10 @@ export { solveCaptchaOnPage, captchaSolverAvailable, solveInteractiveCaptchaVisu
 
 // Also re-export residual wait concept for callers that only import this module
 export async function tryClearCaptchaWall(page, reason = '', log = () => {}) {
+  return maybeSolvePostVerifyVisualChallenge(page, reason, { log });
+}
+
+/** Alias used by rotate soft-hooks and host-port notes (same as tryClearCaptchaWall). */
+export async function trySolveCaptchaWall(page, reason = '', log = () => {}) {
   return maybeSolvePostVerifyVisualChallenge(page, reason, { log });
 }
