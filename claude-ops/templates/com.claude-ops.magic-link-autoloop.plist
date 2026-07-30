@@ -5,8 +5,9 @@
 
   Schedule: every 600s. Equivalent systemd: OnUnitActiveSec=600s.
   The installer (scripts/install-crs-reconcilers-agent.sh) substitutes
-  __WRAPPER_PATH__, __LOG_DIR__, __HOME__ and writes the rendered copy to
-  ~/Library/LaunchAgents/com.claude-ops.magic-link-autoloop.plist before:
+  __WRAPPER_PATH__, __LOG_DIR__, __HOME__, __PATH__, __DISPLAY__ from the
+  host environment (no hardcoded package-manager paths in the template) and
+  writes the rendered copy to ~/Library/LaunchAgents/ before:
     launchctl bootstrap "gui/$(id -u)" <plist>
 
   To uninstall:
@@ -41,8 +42,9 @@
 
   <key>EnvironmentVariables</key>
   <dict>
+    <!-- Installer should expand PATH from the host; keep template free of OS package roots. -->
     <key>PATH</key>
-    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>__PATH__</string>
     <key>HOME</key>
     <string>__HOME__</string>
     <key>NODE_NO_WARNINGS</key>
@@ -51,9 +53,9 @@
     <key>CLAUDE_ROT_HEADED</key>
     <string>1</string>
     <key>CLAUDE_DESKTOP_DISPLAY</key>
-    <string>:1</string>
+    <string>__DISPLAY__</string>
     <key>DESKTOP_ACT_DISPLAY</key>
-    <string>:1</string>
+    <string>__DISPLAY__</string>
     <key>CLAUDE_ROT_VISUAL_CAPTCHA</key>
     <string>1</string>
     <key>CLAUDE_ROT_DESKTOP_ACT</key>
