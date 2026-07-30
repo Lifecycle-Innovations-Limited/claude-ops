@@ -17,13 +17,10 @@ assert(resolveAccountsBackend({ env: { OPS_ACCOUNTS_BACKEND: 'auto' } }) === 'au
 assert(dualWriteEnabled({ env: {} }) === true, 'dual-write default on');
 assert(dualWriteEnabled({ env: { OPS_ACCOUNTS_DUAL_WRITE: '0' } }) === false, 'dual-write off');
 
-const merged = mergeSeatsIntoState(
-  { version: 1, providers: {} },
-  [
-    { email: 'a@example.com', schedulable: true, util5h: 10, util7d: 20 },
-    { email: 'b@example.com', schedulable: false, util5h: 90 },
-  ],
-);
+const merged = mergeSeatsIntoState({ version: 1, providers: {} }, [
+  { email: 'a@example.com', schedulable: true, util5h: 10, util7d: 20 },
+  { email: 'b@example.com', schedulable: false, util5h: 90 },
+]);
 assert(merged.providers.claude.seats['a@example.com'].schedulable === true, 'a on');
 assert(merged.providers.claude.seats['b@example.com'].schedulable === false, 'b off');
 assert(merged.providers.claude.seats['a@example.com'].util5h === 10, 'util');

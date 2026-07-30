@@ -71,11 +71,7 @@ import {
   loadRotationConfig,
   vaultLookupKeysForEmail,
 } from './crs-pool-config.mjs';
-import {
-  resolveAccountsBackend,
-  dualWriteEnabled,
-  mergeSeatsIntoState,
-} from './ops-accounts-backend.mjs';
+import { resolveAccountsBackend, dualWriteEnabled, mergeSeatsIntoState } from './ops-accounts-backend.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || join(__dirname, '..', '..');
@@ -720,7 +716,6 @@ async function runLocalTick() {
   );
 }
 
-
 /** Mirror CRS decisions into provider-shaped seat-state (ops-accounts dual-write). */
 function dualWriteFromCrsDecisions(decisions) {
   if (!dualWriteEnabled()) return;
@@ -738,8 +733,7 @@ function dualWriteFromCrsDecisions(decisions) {
       }
     }
     const seats = decisions.map((d) => {
-      const email =
-        d.a?.subscriptionInfo?.email || vaultKeyByCrsName[d.a?.name] || d.a?.name || null;
+      const email = d.a?.subscriptionInfo?.email || vaultKeyByCrsName[d.a?.name] || d.a?.name || null;
       const u5 = d.u5;
       const u7 = d.a?._liveUsage?.u7;
       return {
@@ -768,112 +762,112 @@ async function main() {
     return;
   }
   try {
-  if (C.enabled === false && !STATUS && !DRY) {
-    log('crs.enabled=false — skipping tick');
-    return;
-  }
-  const auth = await login();
-  let accts = await getAccounts(auth);
-  if (!accts.length) {
-    log('no active claude accounts');
-    return;
-  }
-  const cleared = await clearStaleCooldowns(auth, accts);
-  if (cleared) {
-    accts = await getAccounts(auth);
-    log(`stale-cooldown: cleared ${cleared} account(s), reloaded pool`);
-    const reenabled = await recoverSchedulableAfterClear(auth, accts);
-    if (reenabled) {
-      accts = await getAccounts(auth);
-      log(`stale-cooldown: re-enabled ${reenabled} schedulable account(s)`);
+    if (C.enabled === false && !STATUS && !DRY) {
+      log('crs.enabled=false — skipping tick');
+      return;
     }
-  }
-  // Live per-account quota poller (60-120s cadence): hybrid of CRS-provided
-  // rateLimitStatus / sessionWindow / overload (populated from upstream response
-  // headers in the relay) + targeted /oauth/usage probe for precise u5/u7 headroom.
-  // Throttled sequential probes keep it polite under 60-120s window; feeds headroom
-  // to scheduler after.
-  let liveN = 0;
-  for (const a of accts) {
-    const key = accountVaultKey(a);
-    a._liveUsage = await liveUsage(key);
-    if (a._liveUsage) liveN++;
-    // Throttle ~150ms between probes (fits 60-120s hybrid header+probe cadence for ~13 accts)
-    await new Promise((r) => setTimeout(r, 150));
-  }
-  // Feed fresh headroom/utilization from targeted probes into CRS so scheduler
-  // (unifiedClaudeScheduler etc) sees live quota headroom for selection/LB.
-  let fed = 0;
-  for (const a of accts) {
-    if (a._liveUsage && (await feedLiveHeadroom(auth, a, a._liveUsage))) fed++;
-  }
-  if (fed) log(`headroom feed: updated ${fed} account(s) in CRS for scheduler`);
-
-  // Weekly-cap reconciliation (see WEEKLY-CAP RECONCILIATION in the header comment).
-  // Safe no-op on any account/deployment that never sets weeklyRateLimitEndAt.
-  if (WEEKLY_RECONCILE && !DRY && !STATUS) {
+    const auth = await login();
+    let accts = await getAccounts(auth);
+    if (!accts.length) {
+      log('no active claude accounts');
+      return;
+    }
+    const cleared = await clearStaleCooldowns(auth, accts);
+    if (cleared) {
+      accts = await getAccounts(auth);
+      log(`stale-cooldown: cleared ${cleared} account(s), reloaded pool`);
+      const reenabled = await recoverSchedulableAfterClear(auth, accts);
+      if (reenabled) {
+        accts = await getAccounts(auth);
+        log(`stale-cooldown: re-enabled ${reenabled} schedulable account(s)`);
+      }
+    }
+    // Live per-account quota poller (60-120s cadence): hybrid of CRS-provided
+    // rateLimitStatus / sessionWindow / overload (populated from upstream response
+    // headers in the relay) + targeted /oauth/usage probe for precise u5/u7 headroom.
+    // Throttled sequential probes keep it polite under 60-120s window; feeds headroom
+    // to scheduler after.
+    let liveN = 0;
     for (const a of accts) {
-      const u7 = a._liveUsage?.u7;
-      const resets7 = a._liveUsage?.resets7;
-      if (typeof u7 !== 'number') continue;
-      if (u7 >= OFF_7D && resets7 && !a.weeklyRateLimitEndAt) {
-        const put = await jfetch(`/admin/claude-accounts/${a.id}`, {
-          method: 'PUT',
-          headers: auth,
-          body: JSON.stringify({ weeklyRateLimitEndAt: resets7 }),
-        }).catch(() => null);
-        if (put && put.status >= 200 && put.status < 300) {
-          a.weeklyRateLimitEndAt = resets7;
-          log(`${a.name}: recorded weekly-cap hold until ${resets7} (live 7d=${u7}%)`);
-        }
-      } else if (u7 < ON_7D && a.weeklyRateLimitEndAt) {
-        const put = await jfetch(`/admin/claude-accounts/${a.id}`, {
-          method: 'PUT',
-          headers: auth,
-          body: JSON.stringify({ weeklyRateLimitEndAt: null }),
-        }).catch(() => null);
-        if (put && put.status >= 200 && put.status < 300) {
-          log(`${a.name}: cleared stale weekly-cap hold (live 7d=${u7}% < ${ON_7D}%)`);
-          a.weeklyRateLimitEndAt = null;
+      const key = accountVaultKey(a);
+      a._liveUsage = await liveUsage(key);
+      if (a._liveUsage) liveN++;
+      // Throttle ~150ms between probes (fits 60-120s hybrid header+probe cadence for ~13 accts)
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    // Feed fresh headroom/utilization from targeted probes into CRS so scheduler
+    // (unifiedClaudeScheduler etc) sees live quota headroom for selection/LB.
+    let fed = 0;
+    for (const a of accts) {
+      if (a._liveUsage && (await feedLiveHeadroom(auth, a, a._liveUsage))) fed++;
+    }
+    if (fed) log(`headroom feed: updated ${fed} account(s) in CRS for scheduler`);
+
+    // Weekly-cap reconciliation (see WEEKLY-CAP RECONCILIATION in the header comment).
+    // Safe no-op on any account/deployment that never sets weeklyRateLimitEndAt.
+    if (WEEKLY_RECONCILE && !DRY && !STATUS) {
+      for (const a of accts) {
+        const u7 = a._liveUsage?.u7;
+        const resets7 = a._liveUsage?.resets7;
+        if (typeof u7 !== 'number') continue;
+        if (u7 >= OFF_7D && resets7 && !a.weeklyRateLimitEndAt) {
+          const put = await jfetch(`/admin/claude-accounts/${a.id}`, {
+            method: 'PUT',
+            headers: auth,
+            body: JSON.stringify({ weeklyRateLimitEndAt: resets7 }),
+          }).catch(() => null);
+          if (put && put.status >= 200 && put.status < 300) {
+            a.weeklyRateLimitEndAt = resets7;
+            log(`${a.name}: recorded weekly-cap hold until ${resets7} (live 7d=${u7}%)`);
+          }
+        } else if (u7 < ON_7D && a.weeklyRateLimitEndAt) {
+          const put = await jfetch(`/admin/claude-accounts/${a.id}`, {
+            method: 'PUT',
+            headers: auth,
+            body: JSON.stringify({ weeklyRateLimitEndAt: null }),
+          }).catch(() => null);
+          if (put && put.status >= 200 && put.status < 300) {
+            log(`${a.name}: cleared stale weekly-cap hold (live 7d=${u7}% < ${ON_7D}%)`);
+            a.weeklyRateLimitEndAt = null;
+          }
         }
       }
     }
-  }
 
-  const decisions = decide(accts);
+    const decisions = decide(accts);
 
-  if (STATUS) {
-    console.log(`CRS pool @ ${BASE} — ${decisions.filter((d) => d.cur).length}/${decisions.length} schedulable`);
-    for (const d of decisions.sort((a, b) => (a.cur === b.cur ? 0 : a.cur ? -1 : 1))) {
-      const flags = [d.rl && 'RL', d.overloaded && 'OVERLOAD', d.sw].filter(Boolean).join(' ');
-      console.log(
-        `  ${d.cur ? '●' : '○'} ${d.a.name.padEnd(26)} sched=${d.cur} 5h=${String(d.u5).padStart(3)}%  ${flags}`,
-      );
+    if (STATUS) {
+      console.log(`CRS pool @ ${BASE} — ${decisions.filter((d) => d.cur).length}/${decisions.length} schedulable`);
+      for (const d of decisions.sort((a, b) => (a.cur === b.cur ? 0 : a.cur ? -1 : 1))) {
+        const flags = [d.rl && 'RL', d.overloaded && 'OVERLOAD', d.sw].filter(Boolean).join(' ');
+        console.log(
+          `  ${d.cur ? '●' : '○'} ${d.a.name.padEnd(26)} sched=${d.cur} 5h=${String(d.u5).padStart(3)}%  ${flags}`,
+        );
+      }
+      return;
     }
-    return;
-  }
 
-  let changed = 0;
-  for (const d of decisions) {
-    if (d.desired === d.cur) continue;
-    changed++;
-    if (DRY) {
-      log(`[dry] ${d.a.name}: ${d.cur}→${d.desired} (${d.reason})`);
-      continue;
+    let changed = 0;
+    for (const d of decisions) {
+      if (d.desired === d.cur) continue;
+      changed++;
+      if (DRY) {
+        log(`[dry] ${d.a.name}: ${d.cur}→${d.desired} (${d.reason})`);
+        continue;
+      }
+      const put = await jfetch(`/admin/claude-accounts/${d.a.id}/toggle-schedulable`, {
+        method: 'PUT',
+        headers: auth,
+        body: JSON.stringify({ schedulable: d.desired }),
+      });
+      log(`${d.a.name}: schedulable ${d.cur}→${d.desired} (${d.reason}) [HTTP ${put.status}]`);
     }
-    const put = await jfetch(`/admin/claude-accounts/${d.a.id}/toggle-schedulable`, {
-      method: 'PUT',
-      headers: auth,
-      body: JSON.stringify({ schedulable: d.desired }),
-    });
-    log(`${d.a.name}: schedulable ${d.cur}→${d.desired} (${d.reason}) [HTTP ${put.status}]`);
-  }
-  const on = decisions.filter((d) => d.desired).map((d) => d.a.name);
-  const off = decisions.filter((d) => !d.desired).map((d) => `${d.a.name}(${d.sw || (d.rl ? 'RL' : '?')})`);
-  log(
-    `tick: ${changed} change(s). live-quota=${liveN}/${decisions.length} schedulable=${on.length} [${on.join(',')}] | off=[${off.join(',')}]`,
-  );
-  dualWriteFromCrsDecisions(decisions);
+    const on = decisions.filter((d) => d.desired).map((d) => d.a.name);
+    const off = decisions.filter((d) => !d.desired).map((d) => `${d.a.name}(${d.sw || (d.rl ? 'RL' : '?')})`);
+    log(
+      `tick: ${changed} change(s). live-quota=${liveN}/${decisions.length} schedulable=${on.length} [${on.join(',')}] | off=[${off.join(',')}]`,
+    );
+    dualWriteFromCrsDecisions(decisions);
   } catch (e) {
     if (BACKEND_WANT === 'crs') {
       log(`ERROR: ${e.message}`);
