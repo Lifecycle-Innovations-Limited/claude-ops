@@ -4,6 +4,43 @@
 # No secrets printed. Paths via CLAUDE_PLUGIN_ROOT or latest cache.
 set -euo pipefail
 
+resolve_root() {
+  if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -d "${CLAUDE_PLUGIN_ROOT}" ]]; then
+    printf '%s' "${CLAUDE_PLUGIN_ROOT}"
+    return
+  fi
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  if [[ -f "$here/scripts/ops-accounts/cli.mjs" ]]; then
+    printf '%s' "$here"
+    return
+  fi
+  local c
+  c="$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1 || true)"
+  if [[ -n "$c" ]]; then
+    printf '%s' "${c%/}"
+    return
+  fi
+  printf '%s' "$here"
+}
+
+# Node multi-provider CLI (#733) handles core verbs; shell keeps seats/policy/proxy/crs dual-backend.
+_ROOT="$(resolve_root)"
+export CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$_ROOT}"
+CLI="$_ROOT/scripts/ops-accounts/cli.mjs"
+cmd0="${1:-status}"
+case "$cmd0" in
+  seats|policy|policy-tick|crs|crs-tick|grok-proxy|util|setup|rotate-now|help|-h|--help)
+    # shell dual-backend / host helpers below
+    ;;
+  *)
+    if [[ -f "$CLI" ]]; then
+      exec node "$CLI" "$@"
+    fi
+    ;;
+esac
+
+
 cmd="${1:-status}"
 shift || true
 
@@ -189,18 +226,27 @@ case "$cmd" in
     echo "Quick reauth Claude: ops-accounts reauth claude <email>"
     echo "Quick reauth Grok:   ops-accounts reauth grok <email>"
     ;;
-  crs)
+  crs|policy)
+    # Dual backend: CRS when available, else local seat-state (see OPS_ACCOUNTS_BACKEND)
     if [[ -x "$ROT/crs-priority-daemon.sh" ]]; then
-      bash "$ROT/crs-priority-daemon.sh" --status 2>&1 | head -40
+      bash "$ROT/crs-priority-daemon.sh" --status 2>&1 | head -50
+    elif [[ -f "$ROT/crs-priority-daemon.mjs" ]]; then
+      node "$ROT/crs-priority-daemon.mjs" --status 2>&1 | head -50
+    elif [[ -f "$ROT/seat-policy-tick.mjs" ]]; then
+      OPS_ACCOUNTS_BACKEND=local node "$ROT/seat-policy-tick.mjs" --status
     else
-      echo "CRS priority script missing (optional)"
+      echo "policy scripts missing"
     fi
     ;;
-  crs-tick)
+  crs-tick|policy-tick)
     if [[ -x "$ROT/crs-priority-daemon.sh" ]]; then
       bash "$ROT/crs-priority-daemon.sh" "$@"
+    elif [[ -f "$ROT/crs-priority-daemon.mjs" ]]; then
+      node "$ROT/crs-priority-daemon.mjs" "$@"
+    elif [[ -f "$ROT/seat-policy-tick.mjs" ]]; then
+      OPS_ACCOUNTS_BACKEND=local node "$ROT/seat-policy-tick.mjs" "$@"
     else
-      echo "CRS priority script missing"; exit 1
+      echo "policy scripts missing"; exit 1
     fi
     ;;
 
@@ -208,7 +254,7 @@ case "$cmd" in
     sub="${1:-status}"
     if [[ "$sub" == "tick" || "$sub" == "policy-tick" ]]; then
       shift || true
-      node "$ROT/seat-policy-tick.mjs" "$@"
+      OPS_ACCOUNTS_BACKEND=local node "$ROT/seat-policy-tick.mjs" "$@"
       exit $?
     fi
     if [[ -f "$ROT/seat-state.mjs" ]]; then
@@ -216,6 +262,40 @@ case "$cmd" in
     else
       echo "seat-state.mjs missing"; exit 1
     fi
+    ;;
+
+  grok-proxy)
+    sub="${1:-status}"
+    PROXY="${ROT}/grok-cli-auth-proxy.py"
+    case "$sub" in
+      status)
+        if curl -fsS -m 2 "http://127.0.0.1:${GROK_PROXY_PORT:-31845}/accounts" 2>/dev/null; then
+          echo
+        else
+          echo "grok-cli-auth-proxy not listening on :${GROK_PROXY_PORT:-31845}"
+          echo "start: ops-accounts grok-proxy start"
+          [[ -f "$PROXY" ]] && echo "plugin binary: $PROXY" || echo "plugin proxy missing"
+          exit 1
+        fi
+        ;;
+      start)
+        if [[ ! -f "$PROXY" ]]; then
+          echo "missing $PROXY"; exit 1
+        fi
+        if curl -fsS -m 1 "http://127.0.0.1:${GROK_PROXY_PORT:-31845}/accounts" >/dev/null 2>&1; then
+          echo "already listening on :${GROK_PROXY_PORT:-31845}"
+          exit 0
+        fi
+        nohup python3 "$PROXY" >>"${TMPDIR:-/tmp}/grok-cli-auth-proxy.log" 2>&1 &
+        echo "started pid=$! log=${TMPDIR:-/tmp}/grok-cli-auth-proxy.log"
+        ;;
+      path)
+        echo "$PROXY"
+        ;;
+      *)
+        echo "usage: ops-accounts grok-proxy status|start|path"; exit 2
+        ;;
+    esac
     ;;
 
   -h|--help|help)
@@ -228,8 +308,11 @@ ops-accounts — multi-provider seats (canonical; /ops:rotate is alias)
   refresh [all|claude|grok]
   reauth claude <email> | reauth grok <email>
   setup [claude|grok]
-  crs | crs-tick
-  seats [status|list|set|toggle|import-claude-config]
+  crs | policy | crs-tick | policy-tick   # dual backend (CRS or local seat-state)
+  seats [status|list|set|toggle|import-claude-config|tick]
+  grok-proxy [status|start|path]          # SuperGrok OAuth RR (no CRS)
+
+Backend: OPS_ACCOUNTS_BACKEND=auto|crs|local  (default auto)
 H
     ;;
   *)

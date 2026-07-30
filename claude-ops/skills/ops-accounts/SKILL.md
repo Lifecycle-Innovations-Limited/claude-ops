@@ -25,7 +25,8 @@ for every provider:
 | Refresh tokens | `refresh` |
 | Unattended reauth | `reauth` |
 | Utilization / quota | `util` |
-| Optional Claude LB (CRS or future gateway) | `crs`, `crs-tick` |
+| Optional Claude LB (CRS **or** local seat-state) | `crs`/`policy`, `crs-tick`/`policy-tick` |
+| SuperGrok OAuth RR (plugin, no CRS) | `grok-proxy` |
 
 **Aliases (compat):** `/ops:rotate` → this skill (Claude-focused shortcuts).  
 `/ops:rotate-setup` → `setup` (wizard). `/ops:account` → same as this skill.
@@ -62,8 +63,9 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-mark
 | `reauth grok <email>` | Device reauth with residential cascade env |
 | `setup` / `setup claude` | Full Claude OAuth wizard (former rotate-setup steps) |
 | `setup grok` | Add/reauth SuperGrok seat |
-| `crs` / `crs-tick` | Optional Claude CRS pool status / one tick |
-| `seats` | Local multi-provider seat-state (no CRS) |
+| `crs` / `policy` / `crs-tick` / `policy-tick` | Dual backend: CRS admin when up, else local seat-state (`OPS_ACCOUNTS_BACKEND=auto\|crs\|local`) |
+| `seats` / `seats tick` | Local multi-provider seat-state (no CRS) |
+| `grok-proxy status\|start` | Plugin-bundled SuperGrok OAuth RR (`scripts/account-rotation/grok-cli-auth-proxy.py`) |
 
 ## Claude setup / OAuth
 
@@ -80,18 +82,33 @@ Claude day-2 ops (`status`/`rotate-now`/`list`/`reauth`/`crs`) also match
 ```bash
 "$PLUGIN_ROOT/bin/ops-accounts" seats status
 "$PLUGIN_ROOT/bin/ops-accounts" seats import-claude-config
-node "$PLUGIN_ROOT/scripts/account-rotation/seat-state.mjs" toggle claude <email> false
+"$PLUGIN_ROOT/bin/ops-accounts" seats tick          # policy without CRS
+"$PLUGIN_ROOT/bin/ops-accounts" policy-tick         # auto: CRS if up, else local
+OPS_ACCOUNTS_BACKEND=local "$PLUGIN_ROOT/bin/ops-accounts" policy-tick
 ```
 
 File: `$CLAUDE_PLUGIN_DATA_DIR/account-rotation/seat-state.json` (or `OPS_ACCOUNTS_STATE_PATH`).
 
+When CRS is present, `crs-tick` dual-writes schedulable/util into the same file
+(unless `OPS_ACCOUNTS_DUAL_WRITE=0`).
+
+### Cherry-pick map (what we use CRS for → plugin)
+
+| CRS job | Plugin path |
+|---------|-------------|
+| Claude multi-seat schedulable policy | `crs-priority-daemon` dual backend + `seat-policy-tick` |
+| Seat util / cooldown state | `seat-state.json` |
+| Grok multi-seat RR | `grok-cli-auth-proxy.py` in plugin (not CRS account table) |
+| OpenAI-compat gateway `:3005` | future `ops-accounts-gateway` (not required for CLI keychain rotate) |
+| Redis / admin SPA / Grafana | **not** shipped |
+
 ## Grok notes
 
-1. CLI models often use `base_url` → CRS `/grok/v1` → **host OAuth proxy** → SuperGrok seats.  
-2. `grok-rotate` / `auth.json` is the SuperGrok seat set; keep **auth-slots** in sync after reauth.  
-3. Reauth egress: EFG SOCKS (`GROK_REAUTH_SOCKS`) → Bright Data tiers via  
-   `scripts/account-rotation/grok-reauth-egress.sh` (residential cascade).  
-4. Proxy RR status: `curl -sS http://127.0.0.1:31845/accounts` (no tokens).
+1. Prefer plugin proxy: `ops-accounts grok-proxy start` → `http://127.0.0.1:31845/v1`.  
+2. Optional CRS `/grok` is only a thin hop to that proxy.  
+3. Seats: `~/.grok/auth.json` + `auth-slots/`; set `GROK_PREFERRED_EMAILS` / `GROK_SLOT_FILES` (no emails committed).  
+4. Reauth egress: `scripts/account-rotation/grok-reauth-egress.sh` (residential cascade).  
+5. Status: `ops-accounts grok-proxy status` or `curl -sS http://127.0.0.1:31845/accounts`.
 
 ## Rules
 
