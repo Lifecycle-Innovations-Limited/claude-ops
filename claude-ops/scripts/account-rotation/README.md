@@ -55,7 +55,26 @@ Each account entry:
 | `capacityMultiplier`  | no       | Override per-account threshold (default 1.0 = standard Max 20x quota).         |
 | `crsAccountName`      | no       | CRS admin account name this vault entry maps to (for crs-token-feed / crs-priority). |
 
+## Standalone rotate-magic (no CRS)
+
+Most users only need **one account at a time** (or a few seats with the keychain
+rotator). That path does **not** require CRS:
+
+```bash
+node "$CLAUDE_PLUGIN_ROOT/scripts/account-rotation/rotate-magic.mjs" --to you@example.com
+# or multi-account OAuth capture:
+node "$CLAUDE_PLUGIN_ROOT/scripts/account-rotation/rotate.mjs" --setup --auto --skip-valid
+```
+
+Unattended captcha cascade (visual → desktop-act → VNC) lives in
+`captcha-helper.mjs`, `visual-captcha-solver.mjs`, `captcha-cascade.mjs`. See
+`CAPTCHA-CASCADE.md`.
+
 ## CRS pool (optional)
+
+CRS = multi-account **load balancing / rate-limit spreading** via a relay pool.
+Useful mainly when many accounts share one API endpoint and you hit 429s.
+Skip CRS for single/few-account keychain rotation.
 
 If you run [claude-relay-service](https://github.com/anthropics/claude-relay-service) (CRS) alongside the rotator:
 
@@ -71,6 +90,7 @@ If you run [claude-relay-service](https://github.com/anthropics/claude-relay-ser
    Point Claude Code at `http://127.0.0.1:3005/api` (or your `CRS_TUNNEL_LOCAL_PORT`).
 
 See `config.example.json` → `crs` block for all tunables (`policy`, `fileVaultPath`, `containerName`, thresholds).
+Configure via `/ops:rotate-setup` (detects CRS; never required).
 
 ## Keychain layout
 
@@ -86,6 +106,11 @@ Override the keychain account name via `CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT` if you 
 | File                  | Purpose                                                                   |
 | --------------------- | ------------------------------------------------------------------------- |
 | `rotate.mjs`          | Main rotation logic. CLI: `--status`, `--utilization`, `--to`, `--setup`. |
+| `rotate-magic.mjs`    | Thin entry → `rotate.mjs --magic-link` (standalone reauth, no CRS).       |
+| `captcha-cascade.mjs` | Post-verify captcha orchestration (token + visual + desktop-act + VNC).   |
+| `captcha-helper.mjs`  | Pluggable token captcha solvers + residential wait.                       |
+| `visual-captcha-solver.mjs` | Vision tile clicks, desktop-act, VNC layers.                        |
+| `bright-data-cascade.mjs` | Optional Bright Data proxy tiers for solver IP alignment.             |
 | `daemon.mjs`          | launchd-managed monitor. Polls every 15s, rotates at 80% utilization.     |
 | `ai-brain.mjs`        | Claude Haiku fallback for unexpected OAuth pages.                         |
 | `force-rotate.sh`     | Out-of-band rotation when Claude Code is unreachable.                     |

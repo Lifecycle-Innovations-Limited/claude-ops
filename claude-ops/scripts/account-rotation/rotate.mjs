@@ -55,6 +55,46 @@ import { destinationUtilHardBlock } from './rotation-policy.mjs';
 import { applyAccountLeases, writeLease } from './account-leases.mjs';
 import { respawnBgSessions } from './bg-respawn.mjs';
 
+// Optional captcha cascade (portable modules next to this file). When present,
+// magic-link / setup can clear post-verify hCaptcha walls unattended.
+// See CAPTCHA-CASCADE.md + captcha-cascade.mjs.
+let _captchaCascade = null;
+async function loadCaptchaCascade() {
+  if (_captchaCascade !== null) return _captchaCascade;
+  try {
+    _captchaCascade = await import('./captcha-cascade.mjs');
+  } catch (e) {
+    _captchaCascade = false;
+    try {
+      console.error(
+        `[captcha] cascade modules unavailable: ${String(e.message || e).slice(0, 120)}`,
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+  return _captchaCascade;
+}
+async function maybeClearCaptchaWall(page, reason, log = () => {}) {
+  const mod = await loadCaptchaCascade();
+  if (!mod || !page) return false;
+  try {
+    return await mod.maybeSolvePostVerifyVisualChallenge(page, reason, { log });
+  } catch (e) {
+    log(`[captcha] cascade error: ${String(e.message || e).slice(0, 120)}`);
+    return false;
+  }
+}
+async function captchaHardFailed(page) {
+  const mod = await loadCaptchaCascade();
+  if (!mod || !page) return false;
+  try {
+    return mod.captchaHardFailed(page);
+  } catch {
+    return false;
+  }
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Account config lives in the gitignored user data dir (written by
 // setup-account.mjs, Rule 0: no real account data in the committed repo).
@@ -2555,6 +2595,16 @@ async function runAuthFlow(driver, account) {
       await driver.goto(magicLink);
     }
     await sleep(4000);
+    // Post-verify captcha wall (pick/drag hCaptcha / CF) — autonomous cascade when modules present
+    if (driver._page) {
+      await maybeClearCaptchaWall(driver._page, 'after-initial-code-verify', log);
+      if (await captchaHardFailed(driver._page)) {
+        log(
+          '[magic-link] aborting: captcha budget exhausted with blocking wall — see CAPTCHA_VNC_HANDOFF marker (autoloop will retry)',
+        );
+        return false;
+      }
+    }
     // After magic link login, session is now valid — re-navigate to authUrl
     // so the OAuth flow can complete (org chooser → authorize → callback)
     if (driver._authUrl) {
