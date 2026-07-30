@@ -305,6 +305,7 @@ async function liveUsage(email) {
     const data = {
       u5: d?.five_hour?.utilization ?? null,
       u7: d?.seven_day?.utilization ?? null,
+      resets5: d?.five_hour?.resets_at ?? null,
       // ISO string when the API supplies it — used by the weekly-cap reconciler
       // below to record/clear an authoritative reset time.
       resets7: d?.seven_day?.resets_at ?? null,
@@ -321,6 +322,21 @@ async function liveUsage(email) {
 function genuineRateLimit(a, now = Date.now()) {
   const flagged = !!a.rateLimitStatus?.isRateLimited || !!a.opusRateLimitStatus?.isRateLimited;
   return flagged && !rateLimitLooksStale(a, now);
+}
+
+function liveQuotaExhaustion(a, now = Date.now()) {
+  const usage = a._liveUsage;
+  if (!usage) return null;
+  const windows = [
+    { name: '5h', utilization: usage.u5, resetsAt: usage.resets5 },
+    { name: '7d', utilization: usage.u7, resetsAt: usage.resets7 },
+  ].filter(({ utilization, resetsAt }) => {
+    const resetMs = resetsAt ? Date.parse(resetsAt) : NaN;
+    return typeof utilization === 'number' && utilization >= 100 && Number.isFinite(resetMs) && resetMs > now;
+  });
+  if (!windows.length) return null;
+  const resetAt = new Date(Math.min(...windows.map(({ resetsAt }) => Date.parse(resetsAt)))).toISOString();
+  return { windows: windows.map(({ name }) => name), resetAt };
 }
 
 function genuineOverload(a, now = Date.now()) {
@@ -459,28 +475,19 @@ function decideMaxOut(accts, nowMs) {
     const u7 = lu?.u7 ?? cu.sevenDay?.utilization;
     const sw = a.sessionWindow?.sessionWindowStatus || null;
     const cur = a.schedulable !== false;
-    const tokenExpiresAt = Number(a.tokenExpiresAt || a.expiresAt || 0);
-    const staleToken =
-      !Number.isFinite(tokenExpiresAt) || tokenExpiresAt <= 0 || tokenExpiresAt <= nowMs + TOKEN_MIN_FRESH_MS;
-    const rl = genuineRateLimit(a, nowMs);
+    const quota = liveQuotaExhaustion(a, nowMs);
+    const rl = Boolean(quota);
     const overloaded = genuineOverload(a, nowMs);
 
     let desired = true;
     let reason = `max-out (5h=${u5 ?? '?'} 7d=${u7 ?? '?'} sw=${sw ?? 'none'})`;
-    if (weeklyCapActive(a, nowMs)) {
+    if (quota) {
       desired = false;
-      reason = `weekly-cap-hold until ${a.weeklyRateLimitEndAt.slice(0, 16)}`;
-    } else if (staleToken) {
-      desired = false;
-      reason = tokenExpiresAt ? `stale-token ${new Date(tokenExpiresAt).toISOString()}` : 'stale-token missing-expiry';
-    } else if (rl) {
-      desired = false;
-      reason = 'rate-limited (live)';
+      reason = `quota exhausted (${quota.windows.join('+')}); auto-reschedule ${quota.resetAt}`;
     } else if (overloaded) {
-      desired = false;
-      reason = 'overloaded(529 live)';
+      reason = 'overloaded(529), staying schedulable';
     }
-    return { a, cur, desired, reason, soft: false, sw, u5: u5 ?? '?', rl, overloaded };
+    return { a, cur, desired, reason, soft: false, sw, u5: u5 ?? '?', u7: u7 ?? '?', rl, overloaded, quota };
   });
 }
 
@@ -488,47 +495,24 @@ function decideConservative(accts, nowMs) {
   const decisions = accts.map((a) => {
     const cu = a.claudeUsage || {};
     const lu = a._liveUsage;
-    const updMs = cu.updatedAt ? Date.parse(cu.updatedAt) : NaN;
-    const fresh = !!lu || (Number.isFinite(updMs) && (nowMs - updMs) / 60000 < FRESH_MIN);
     const u5 = lu?.u5 ?? cu.fiveHour?.utilization;
     const u7 = lu?.u7 ?? cu.sevenDay?.utilization;
-    const u7o = cu.sevenDayOpus?.utilization;
     const sw = a.sessionWindow?.sessionWindowStatus || null;
     const cur = a.schedulable !== false;
-    const rl = genuineRateLimit(a, nowMs);
+    const quota = liveQuotaExhaustion(a, nowMs);
+    const rl = Boolean(quota);
     const overloaded = genuineOverload(a, nowMs);
 
-    const weeklyBreach =
-      fresh && ((typeof u7 === 'number' && u7 >= OFF_7D) || (typeof u7o === 'number' && u7o >= OFF_7D));
-    const utilBreach = fresh && ((u5 ?? 0) >= OFF_5H || weeklyBreach);
-    const utilClear = !fresh || ((u5 ?? 0) < ON_5H && (u7 ?? 0) < ON_7D && (u7o ?? 0) < ON_7D);
-
-    let desired = cur;
-    let reason = 'hold';
+    let desired = true;
+    let reason = 'scheduled unless live quota is exhausted';
     let soft = false;
-    if (weeklyCapActive(a, nowMs)) {
+    if (quota) {
       desired = false;
-      reason = `weekly-cap-hold until ${a.weeklyRateLimitEndAt.slice(0, 16)}`;
-      soft = false;
-    } else if (rl) {
-      desired = false;
-      reason = 'rate-limited';
+      reason = `quota exhausted (${quota.windows.join('+')}); auto-reschedule ${quota.resetAt}`;
     } else if (overloaded) {
-      desired = false;
-      reason = 'overloaded(529)';
-    } else if (sw && WARN_STATUSES.has(sw)) {
-      desired = false;
-      reason = `sessionWindow=${sw}`;
-      soft = true;
-    } else if (utilBreach) {
-      desired = false;
-      reason = `util 5h=${u5} 7d=${u7} 7dOpus=${u7o} ≥ off`;
-      soft = !weeklyBreach;
-    } else if ((sw === 'allowed' || sw === null) && utilClear) {
-      desired = true;
-      reason = `healthy (sw=${sw ?? 'none'}${fresh ? `, 5h=${u5}` : ', usage stale/absent'})`;
+      reason = 'overloaded(529), staying schedulable';
     }
-    return { a, cur, desired, reason, soft, sw, u5: u5 ?? '?', rl, overloaded };
+    return { a, cur, desired, reason, soft, sw, u5: u5 ?? '?', u7: u7 ?? '?', rl, overloaded, quota };
   });
 
   let usable = decisions.filter((d) => d.desired && !d.rl && !d.overloaded).length;
@@ -810,7 +794,7 @@ async function main() {
         const u7 = a._liveUsage?.u7;
         const resets7 = a._liveUsage?.resets7;
         if (typeof u7 !== 'number') continue;
-        if (u7 >= OFF_7D && resets7 && !a.weeklyRateLimitEndAt) {
+        if (u7 >= 100 && resets7 && !a.weeklyRateLimitEndAt) {
           const put = await jfetch(`/admin/claude-accounts/${a.id}`, {
             method: 'PUT',
             headers: auth,
