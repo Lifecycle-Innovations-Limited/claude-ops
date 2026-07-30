@@ -1,3 +1,7 @@
+## Unreleased
+
+- feat(crs-priority-daemon): dual-mode `backend=crs|local` file seat-state without CRS Docker
+
 # Changelog
 
 ## Unreleased

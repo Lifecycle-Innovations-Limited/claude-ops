@@ -19,6 +19,7 @@ const DATA_DIR =
 
 export const CONFIG_CANDIDATES = [
   process.env.CRS_CONFIG,
+  join(homedir(), '.claude', 'scripts', 'account-rotation', 'config.json'),
   join(DATA_DIR, 'account-rotation', 'config.json'),
   join(homedir(), '.claude', 'plugins', 'data', 'ops', 'account-rotation', 'config.json'),
   join(PLUGIN_ROOT, 'scripts', 'account-rotation', 'config.json'),

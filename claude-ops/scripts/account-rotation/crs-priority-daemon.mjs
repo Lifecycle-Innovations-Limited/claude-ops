@@ -54,11 +54,12 @@
 // soft (utilization/sessionWindow) deprioritizations. Tune this to your own pool
 // size — the default is a conservative floor for a small pool, not a target.
 //
+// BACKEND (crs.backend / $CRS_PRIORITY_BACKEND): crs (default) | local (file seat-state).
 // CLI:  (none)=one live tick · --dry-run=log decisions, no writes · --status=print
 //       current schedulable + utilization table and exit · --once (alias for tick).
 
 import { execFileSync } from 'child_process';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir, platform } from 'os';
@@ -88,6 +89,8 @@ function credentialStorePath() {
 const EXEC_QUIET = { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] };
 const DATA_DIR =
   process.env.CLAUDE_PLUGIN_DATA_DIR || join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
+// Dual-mode: backend=crs (default) | backend=local (file seat-state, no Docker)
+const SEAT_STATE_PATH = process.env.CRS_SEAT_STATE_PATH || join(DATA_DIR, 'seat-state', 'claude-priority.json');
 
 const args = new Set(process.argv.slice(2));
 const DRY = args.has('--dry-run') || process.env.CRS_DRY === '1';
@@ -99,6 +102,8 @@ const log = (m) => console.log(`${ts()} [crs-priority] ${m}`);
 // ── config ───────────────────────────────────────────────────────────────────
 const cfg = loadRotationConfig();
 const C = cfg.crs || {};
+const BACKEND = String(process.env.CRS_PRIORITY_BACKEND || C.backend || 'crs').toLowerCase();
+
 const { vaultKeyByCrsName } = buildCrsNameMaps(cfg);
 const num = (v, d) => (v === undefined || v === null || v === '' || Number.isNaN(+v) ? d : +v);
 
@@ -580,10 +585,137 @@ function decide(accts) {
   return decideConservative(accts, nowMs);
 }
 
+// ── local seat-state backend (backend=local) ─────────────────────────────────
+function loadSeatStateFile() {
+  try {
+    if (!existsSync(SEAT_STATE_PATH)) return { seats: {}, updatedAt: null };
+    return JSON.parse(readFileSync(SEAT_STATE_PATH, 'utf8'));
+  } catch {
+    return { seats: {}, updatedAt: null };
+  }
+}
+
+function writeSeatStateFile(payload) {
+  mkdirSync(dirname(SEAT_STATE_PATH), { recursive: true });
+  writeFileSync(SEAT_STATE_PATH, JSON.stringify(payload, null, 2) + '\n', { mode: 0o600 });
+}
+
+/** Build synthetic CRS-shaped accounts from rotation config vault keys. */
+function loadLocalAccounts() {
+  const prev = loadSeatStateFile();
+  const accounts = Array.isArray(cfg.accounts) ? cfg.accounts : [];
+  const out = [];
+  for (const a of accounts) {
+    if (!a || typeof a !== 'object') continue;
+    if (a.disabled || a.autoAuthDisabled) continue;
+    const email = a.email || a.label;
+    if (!email || typeof email !== 'string') continue;
+    const key = email.trim().toLowerCase();
+    const tok = readOauthToken(key);
+    const prevSeat = prev.seats?.[key] || {};
+    let expiresAt = 0;
+    if (tok?.expiresAt) expiresAt = Date.parse(tok.expiresAt);
+    else if (tok?.expiry_date) expiresAt = Number(tok.expiry_date);
+    else if (tok?.expires_at) expiresAt = Date.parse(tok.expires_at);
+    else expiresAt = Number(prevSeat.tokenExpiresAt || 0);
+    out.push({
+      id: key,
+      name: key,
+      email: key,
+      schedulable: prevSeat.schedulable !== false,
+      tokenExpiresAt: Number.isFinite(expiresAt) ? expiresAt : 0,
+      claudeUsage: prevSeat.claudeUsage || null,
+      sessionWindow: prevSeat.sessionWindow || null,
+      rateLimitStatus: prevSeat.rateLimitStatus || null,
+      overloadStatus: prevSeat.overloadStatus || null,
+      weeklyRateLimitEndAt: prevSeat.weeklyRateLimitEndAt || null,
+      subscriptionInfo: prevSeat.subscriptionInfo || null,
+      _local: true,
+    });
+  }
+  return out;
+}
+
+function persistLocalDecisions(decisions) {
+  const seats = {};
+  for (const d of decisions) {
+    const key = accountVaultKey(d.a);
+    seats[key] = {
+      schedulable: d.desired,
+      reason: d.reason,
+      u5: d.u5,
+      sw: d.sw,
+      tokenExpiresAt: d.a.tokenExpiresAt || null,
+      claudeUsage: d.a._liveUsage
+        ? {
+            fiveHour: { utilization: d.a._liveUsage.u5 ?? null, updatedAt: new Date().toISOString() },
+            sevenDay: { utilization: d.a._liveUsage.u7 ?? null, updatedAt: new Date().toISOString() },
+            updatedAt: new Date().toISOString(),
+          }
+        : d.a.claudeUsage || null,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+  const payload = {
+    backend: 'local',
+    updatedAt: new Date().toISOString(),
+    seatStatePath: SEAT_STATE_PATH,
+    seats,
+  };
+  if (!DRY) writeSeatStateFile(payload);
+  return payload;
+}
+
+async function runLocalTick() {
+  log(`backend=local seat-state=${SEAT_STATE_PATH}`);
+  let accts = loadLocalAccounts();
+  if (!accts.length) {
+    log('no local accounts (config.accounts empty or all disabled)');
+    return;
+  }
+  let liveN = 0;
+  for (const a of accts) {
+    const key = accountVaultKey(a);
+    a._liveUsage = await liveUsage(key);
+    if (a._liveUsage) liveN++;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  const decisions = decide(accts);
+  if (STATUS) {
+    console.log(
+      `LOCAL seats @ ${SEAT_STATE_PATH} — ${decisions.filter((d) => d.cur).length}/${decisions.length} schedulable`,
+    );
+    for (const d of decisions.sort((a, b) => (a.cur === b.cur ? 0 : a.cur ? -1 : 1))) {
+      const flags = [d.rl && 'RL', d.overloaded && 'OVERLOAD', d.sw].filter(Boolean).join(' ');
+      console.log(
+        `  ${d.cur ? '●' : '○'} ${d.a.name.padEnd(26)} sched=${d.cur} 5h=${String(d.u5).padStart(3)}%  ${flags}`,
+      );
+    }
+    return;
+  }
+  let changed = 0;
+  for (const d of decisions) {
+    if (d.desired === d.cur) continue;
+    changed++;
+    if (DRY) log(`[dry] ${d.a.name}: ${d.cur}→${d.desired} (${d.reason})`);
+    else log(`${d.a.name}: schedulable ${d.cur}→${d.desired} (${d.reason}) [local]`);
+  }
+  persistLocalDecisions(decisions);
+  const on = decisions.filter((d) => d.desired).map((d) => d.a.name);
+  const off = decisions.filter((d) => !d.desired).map((d) => d.a.name);
+  log(
+    `tick(local): ${changed} change(s). live-quota=${liveN}/${decisions.length} schedulable=${on.length} [${on.join(',')}] | off=[${off.join(',')}] wrote=${!DRY}`,
+  );
+}
+
 // ── main ─────────────────────────────────────────────────────────────────────
 async function main() {
-  if (C.enabled === false && !STATUS && !DRY) {
+  if (C.enabled === false && !STATUS && !DRY && BACKEND !== 'local' && BACKEND !== 'file') {
     log('crs.enabled=false — skipping tick');
+    return;
+  }
+  if (BACKEND === 'local' || BACKEND === 'file') {
+    await runLocalTick();
     return;
   }
   const auth = await login();
