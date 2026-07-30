@@ -57,8 +57,9 @@ multi-provider later.
 | **0** | **ops-accounts contract** — skill surface, provider adapter interface, unified status/switch/refresh/reauth verbs, wire existing Claude + Grok + Codex tools behind it (thin orchestration first, no big rewrite) | `/ops:accounts status` shows all providers; `switch`/`refresh`/`reauth` work for Claude and Grok without knowing host script names |
 | **1** | Close host / plugin Claude rotate gap | Plugin cascade modules; gap doc; host units still host until proven |
 | **2** | CRS optional wire (Claude only) | Detect CRS; install vs standalone; never required for single seat |
-| **3** | Absorb host Grok/Codex scripts into plugin (portable, env-templated) | No load-bearing `~/.local/bin/grok-*` for happy path; timers under plugin installers |
-| **4** | Optional bundled balancer (rebranded cherry-pick, not CRS dump-fork) | Only if wire-optional CRS still hurts multi-Claude users |
+| **2b** | **Dual backend + local seat-state** | `OPS_ACCOUNTS_BACKEND=auto\|crs\|local`; policy tick without Docker CRS; dual-write seat-state |
+| **3** | Absorb host Grok/Codex scripts into plugin (portable, env-templated) | Plugin `grok-cli-auth-proxy.py` + reauth egress; no load-bearing `~/.local/bin/grok-*` for happy path |
+| **4** | Optional `ops-accounts-gateway` (thin OpenAI-compat multi-provider) | Replaces `:3005` for most fleets; CRS advanced-only |
 
 **This week’s PRs (#726 companions, #727 captcha/CRS-optional) are phase 1–2
 enablers.** They must not re-label phase 0 as “later design only.”

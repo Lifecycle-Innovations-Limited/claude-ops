@@ -4,6 +4,10 @@
 
 ### Changed
 
+- **CRS dual backend (no Docker required):** `crs-priority-daemon` honors `OPS_ACCOUNTS_BACKEND=auto|crs|local`. `auto` tries CRS admin API and falls back to `seat-policy-tick` + `seat-state.json`. CRS ticks dual-write into seat-state (unless `OPS_ACCOUNTS_DUAL_WRITE=0`). `ops-accounts policy` / `policy-tick` aliases. Shared resolver: `ops-accounts-backend.mjs`.
+
+- **Grok proxy in plugin:** `scripts/account-rotation/grok-cli-auth-proxy.py` (sanitized — no host emails) + `ops-accounts grok-proxy status|start|path` so SuperGrok multi-seat RR works without CRS or `~/.local/bin`.
+
 - **ops-accounts seat policy (local):** `seat-policy-tick.mjs` applies conservative 5h/7d schedulable thresholds to local seat-state without CRS; `ops-accounts seats tick`.
 
 - **ops-accounts local seat-state:** `seat-state.mjs` file-backed multi-provider seat store (schedulable/util) for no-CRS policy backend; `ops-accounts seats` command.

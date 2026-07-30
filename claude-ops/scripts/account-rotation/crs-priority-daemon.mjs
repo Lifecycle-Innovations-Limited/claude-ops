@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 // crs-priority-daemon.mjs — utilization-driven account prioritization for a
-// claude-relay-service (CRS) pool.
+// claude-relay-service (CRS) pool OR local seat-state (no CRS).
+//
+// Backend (OPS_ACCOUNTS_BACKEND | crs.backend):
+//   auto (default) — try CRS admin API; on failure run seat-policy-tick (local)
+//   crs            — CRS only (error if unavailable)
+//   local          — seat-state.json only (no Docker CRS)
+// Dual-write: when CRS path succeeds, mirror schedulable/util into seat-state
+// unless OPS_ACCOUNTS_DUAL_WRITE=0.
 //
 // CRS load-balances Claude requests across many claude.ai accounts at once. Each
 // account carries a `schedulable` flag; CRS only routes to schedulable accounts.
@@ -57,8 +64,8 @@
 // CLI:  (none)=one live tick · --dry-run=log decisions, no writes · --status=print
 //       current schedulable + utilization table and exit · --once (alias for tick).
 
-import { execFileSync } from 'child_process';
-import { readFileSync, existsSync } from 'fs';
+import { execFileSync, spawnSync } from 'child_process';
+import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir, platform } from 'os';
@@ -70,6 +77,11 @@ import {
   loadRotationConfig,
   vaultLookupKeysForEmail,
 } from './crs-pool-config.mjs';
+import {
+  resolveAccountsBackend,
+  dualWriteEnabled,
+  mergeSeatsIntoState,
+} from './ops-accounts-backend.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || join(__dirname, '..', '..');
@@ -580,8 +592,66 @@ function decide(accts) {
   return decideConservative(accts, nowMs);
 }
 
+// ── local seat-state backend (no CRS) ────────────────────────────────────────
+const SEAT_STATE_PATH =
+  process.env.OPS_ACCOUNTS_STATE_PATH || join(DATA_DIR, 'account-rotation', 'seat-state.json');
+const BACKEND_WANT = resolveAccountsBackend({ env: process.env, cfgBackend: C.backend });
+
+function runLocalPolicy() {
+  const tick = join(__dirname, 'seat-policy-tick.mjs');
+  if (!existsSync(tick)) {
+    throw new Error(`local backend: missing ${tick}`);
+  }
+  const pass = [];
+  if (DRY) pass.push('--dry-run');
+  if (STATUS) pass.push('--status');
+  log(`backend=local seat-policy-tick ${pass.join(' ') || '(apply)'} @ ${SEAT_STATE_PATH}`);
+  const r = spawnSync(process.execPath, [tick, ...pass], {
+    encoding: 'utf8',
+    stdio: 'inherit',
+    env: process.env,
+  });
+  if (r.status !== 0 && r.status != null) {
+    process.exit(r.status);
+  }
+}
+
+function dualWriteFromCrsDecisions(decisions) {
+  if (!dualWriteEnabled()) return;
+  try {
+    let state = { version: 1, providers: {} };
+    if (existsSync(SEAT_STATE_PATH)) {
+      try {
+        state = JSON.parse(readFileSync(SEAT_STATE_PATH, 'utf8'));
+      } catch {
+        /* keep empty */
+      }
+    }
+    const seats = decisions.map((d) => {
+      const email =
+        d.a?.subscriptionInfo?.email || vaultKeyByCrsName[d.a?.name] || d.a?.name || null;
+      const u5 = d.u5;
+      const u7 = d.a?._liveUsage?.u7;
+      return {
+        email,
+        schedulable: d.desired !== false,
+        util5h: typeof u5 === 'number' ? u5 : null,
+        util7d: typeof u7 === 'number' ? u7 : null,
+      };
+    });
+    const next = mergeSeatsIntoState(state, seats, { provider: 'claude' });
+    mkdirSync(dirname(SEAT_STATE_PATH), { recursive: true });
+    const tmp = SEAT_STATE_PATH + '.tmp';
+    writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
+    renameSync(tmp, SEAT_STATE_PATH);
+    log(`dual-write: mirrored ${seats.filter((s) => s.email).length} seat(s) → ${SEAT_STATE_PATH}`);
+  } catch (e) {
+    log(`dual-write skipped: ${e.message}`);
+  }
+}
+
 // ── main ─────────────────────────────────────────────────────────────────────
-async function main() {
+async function mainCrs() {
   if (C.enabled === false && !STATUS && !DRY) {
     log('crs.enabled=false — skipping tick');
     return;
@@ -687,6 +757,26 @@ async function main() {
   log(
     `tick: ${changed} change(s). live-quota=${liveN}/${decisions.length} schedulable=${on.length} [${on.join(',')}] | off=[${off.join(',')}]`,
   );
+  dualWriteFromCrsDecisions(decisions);
+}
+
+async function main() {
+  log(`backend want=${BACKEND_WANT}`);
+  if (BACKEND_WANT === 'local') {
+    runLocalPolicy();
+    return;
+  }
+  try {
+    await mainCrs();
+  } catch (e) {
+    if (BACKEND_WANT === 'crs') {
+      log(`ERROR: ${e.message}`);
+      process.exit(1);
+    }
+    // auto: fall back to local seat-state so multi-seat works without Docker CRS
+    log(`CRS unavailable (${e.message}) — falling back to local seat-state`);
+    runLocalPolicy();
+  }
 }
 
 main().catch((e) => {
