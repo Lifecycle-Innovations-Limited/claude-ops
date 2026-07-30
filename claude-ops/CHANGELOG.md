@@ -39,6 +39,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.47.3] - 2026-07-30
+
+### Changed
+ops-update now auto-syncs Grok and Cursor plugin caches to the latest version, pruning stale copies, as part of every local upgrade.
+
+
 ## [2.47.2] - 2026-07-30
 
 ### Changed
