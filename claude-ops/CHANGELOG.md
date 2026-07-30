@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- **ops-accounts vision:** multi-provider parity with Anthropic stack (Claude, Grok, OpenAI/Codex, Factory, Cursor) — OAuth, reauth, util, switch/LB under `/ops:accounts`; rotate skills become aliases.
+
+
 ### Added
 
 - **ops-accounts phase 0 surface:** `skills/ops-accounts` + `bin/ops-accounts` router (status/switch/refresh/reauth) over Claude rotate-magic, grok-rotate/oauth-reauth, and codex-rotate when present.
