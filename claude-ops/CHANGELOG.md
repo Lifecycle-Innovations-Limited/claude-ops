@@ -39,6 +39,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [2.47.5] - 2026-07-30
+
+### Changed
+Remove the dependencies key from plugin.json. Claude Code reads it as an array of plugins to auto-install; we stored our own object there, so the manifest failed validation and /plugin listed ops as an error. Companion installs are unaffected - plugin-dependencies.json is the SSOT and already lists all five.
+
+
 ## [2.47.4] - 2026-07-30
 
 ### Changed
