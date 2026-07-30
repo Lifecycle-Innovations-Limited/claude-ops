@@ -465,7 +465,7 @@ On install, try the Claude Code plugin CLI when available:
 
 ```bash
 # Cursor / Claude Code — plugin id varies by marketplace; verify with: claude plugin list
-claude plugin install feature-dev 2>/dev/null || true
+claude plugin install feature-dev@claude-plugins-official 2>/dev/null || true
 ```
 
 Re-check with the find command above. If still `not_installed`, tell the user to install **feature-dev** from Cursor Settings → Plugins (or their Claude Code marketplace UI), then re-run `/ops:setup`.

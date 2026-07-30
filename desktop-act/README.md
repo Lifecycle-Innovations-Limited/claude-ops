@@ -28,19 +28,29 @@ Claude Max subscription, no `ANTHROPIC_API_KEY` needed.
 
 ## Install
 
-### As a Claude Code plugin
+### With claude-ops (recommended)
+
+[`claude-ops`](https://github.com/Lifecycle-Innovations-Limited/claude-ops) ships
+this plugin in the same **ops-marketplace** and co-installs it with ops:
+
+```text
+/plugin marketplace add Lifecycle-Innovations-Limited/claude-ops
+/plugin install ops@ops-marketplace
+/plugin install desktop-act@ops-marketplace
+# or let /ops:setup and /ops:update run scripts/install-companions.sh
+```
+
+The ops `desktop-act-launcher.py` resolves the marketplace checkout first, then
+falls back to a per-user cache clone (`$XDG_CACHE_HOME/desktop-act-mcp` on
+Linux, `~/Library/Caches/desktop-act-mcp` on macOS, `%LOCALAPPDATA%\desktop-act-mcp`
+on Windows) when `$DESKTOP_ACT_REPO` is set.
+
+### Standalone Claude Code plugin
 
 ```text
 /plugin marketplace add Lifecycle-Innovations-Limited/desktop-act
 /plugin install desktop-act@desktop-act
 ```
-
-### Via the claude-ops launcher
-
-If you already have [`claude-ops`](https://github.com/Lifecycle-Innovations-Limited/claude-ops),
-its bundled `desktop-act-launcher.py` auto-clones this repo into your per-user
-cache (`$XDG_CACHE_HOME/desktop-act-mcp` on Linux) the first time the
-`/ops:desktop` skill fires.
 
 ### Manual
 
@@ -50,7 +60,7 @@ git clone https://github.com/Lifecycle-Innovations-Limited/desktop-act.git
 ```
 
 The first invocation auto-bootstraps a Python venv at `${CLAUDE_PLUGIN_ROOT}/.venv`
-(or `$DESKTOP_ACT_VENV` if set) from `requirements.txt`.
+(or `$DESKTOP_ACT_VENV` if set) from `requirements.txt` (**Python 3.11+**).
 
 ### System dependencies
 
@@ -100,7 +110,7 @@ is on). No Xvnc pool — multi-agent exclusive leases still apply, but there is
 only one real desktop (`win-main`).
 
 ```powershell
-# Python 3.10+ recommended; venv bootstrap pulls deps from requirements.txt
+# Python 3.11+ (see pyproject.toml requires-python); venv from requirements.txt
 py -3 -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
 # pyautogui is installed only on win32 (see requirements marker)
@@ -121,23 +131,26 @@ py -3 -m venv .venv
 
 ## Tools exposed by the MCP server
 
-| Tool                | Purpose                                                   |
-|---------------------|-----------------------------------------------------------|
-| `acquire_desktop`   | Spawn a fresh Xvnc + websockify on the next free display  |
-| `release_desktop`   | Kill that desktop's processes, free ports                 |
-| `list_desktops`     | Inspect the pool                                          |
-| `screenshot`        | Grab the X11 desktop (JPEG default, SHA-deduped)          |
-| `observe`           | Screenshot + window list in one round-trip                |
-| `list_windows`      | Enumerate top-level X11 windows + geometry                |
-| `launch_app`        | Spawn a GUI app on the display                            |
-| `click`             | Absolute-coord mouse click (buttons 1–5)                  |
-| `keypress`          | Press a key chord (e.g. `Return`, `Control+L`)            |
-| `type_text`         | Type a string into the focused window                     |
-| `scroll`            | Scroll wheel up/down                                      |
-| `batch`             | Execute many primitives in one MCP round-trip             |
-| `act`               | Autonomous goal-driven loop via `claude-agent-sdk`        |
-| `act_step`          | Single-step variant for transparent in-prompt control     |
-| `status`            | Pool + binary inventory                                   |
+| Tool                  | Purpose                                                      |
+|-----------------------|--------------------------------------------------------------|
+| `ensure_desktop`      | Exclusive lease; Linux auto-spawns seat if busy              |
+| `acquire_desktop`     | Spawn/attach desktop (Linux pool; single seat on mac/Win)    |
+| `heartbeat_desktop`   | Refresh exclusive lease during long work                     |
+| `release_desktop`     | Free lease; Linux stops pool VNC                             |
+| `list_desktops`       | Inspect pool / lease state                                   |
+| `reap_idle_desktops`  | Free expired leases (Linux also stops idle VNC)              |
+| `screenshot`          | Grab the display (JPEG default, SHA-deduped)                 |
+| `observe`             | Screenshot + window list in one round-trip                   |
+| `list_windows`        | Enumerate top-level windows + geometry                       |
+| `launch_app`          | Spawn a GUI app (`command` argument)                         |
+| `click`               | Absolute-coord mouse click                                   |
+| `keypress`            | Press a key chord                                            |
+| `type_text`           | Type a string into the focused window                        |
+| `scroll`              | Scroll wheel                                                 |
+| `batch`               | Execute many primitives in one MCP round-trip                |
+| `act`                 | Goal loop via `claude-agent-sdk` (`max_iterations`, default model `claude-sonnet-5`) |
+| `act_step`            | Single-step variant                                          |
+| `status`              | Pool + binary inventory                                      |
 
 A `/desktop:act <goal>` slash command is also registered.
 

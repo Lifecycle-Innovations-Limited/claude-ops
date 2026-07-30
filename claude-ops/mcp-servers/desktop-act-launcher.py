@@ -15,10 +15,10 @@ Resolution order:
        If absent and ``DESKTOP_ACT_REPO`` is set, we ``git clone`` it,
        bootstrap a venv, ``pip install -r requirements.txt``, then exec.
 
-Linux (X11/Xvnc) and macOS (screencapture + cliclick) both have native
-desktop-automation backends and bootstrap/exec identically. Windows has no
-native backend yet, so on Windows the launcher surfaces a clear message if it
-cannot locate or bootstrap a server, instead of hanging the MCP host.
+Linux (X11/Xvnc), macOS (screencapture + cliclick), and Windows
+(ImageGrab + pyautogui/SendInput) all have native backends. The launcher
+bootstrap/exec is identical across platforms; on any OS it surfaces a clear
+message if it cannot locate or bootstrap a server, instead of hanging the MCP host.
 """
 
 from __future__ import annotations

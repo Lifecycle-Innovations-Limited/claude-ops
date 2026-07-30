@@ -34,7 +34,7 @@ Purely additive — no v1 behaviour changes by default. Full migration guide: [`
 ### v2 quick start — deploy auto-fix in 60 seconds
 
 ```bash
-/plugin update ops@lifecycle-innovations-limited-claude-ops
+/plugin update ops@ops-marketplace
 /ops:setup                       # walks through new steps 2d, 3o, 6.5a–6.5d
 /ops:deploy-fix configure        # map your repos → /health + /version URLs
 # done — every future `gh pr merge` is now watched + verified + auto-fixed

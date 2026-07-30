@@ -8,9 +8,9 @@
   "plugins": [
     {
       "name": "desktop-act",
-      "description": "Computer-use primitives + multi-desktop pool + autonomous act() loop for Claude Code. One MCP server exposes screenshot/click/type/keypress/scroll/launch_app over a pooled Xvnc + websockify backend, with persistent X11 connection caching and SHA-deduped screenshots. Auth via claude-agent-sdk OAuth \u2014 no ANTHROPIC_API_KEY required.",
+      "description": "Computer-use primitives + multi-desktop pool + autonomous act() loop. Screenshot, click, type, keypress, scroll, launch_app over platform backends (X11/Xvnc, macOS, Windows). Auth via claude-agent-sdk OAuth \u2014 no API key required.",
       "source": "./",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "automation",
       "keywords": [
         "computer-use",

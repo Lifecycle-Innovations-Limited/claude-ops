@@ -55,7 +55,7 @@ v2 turns claude-ops from a _briefing + comms surface_ into an **autonomy layer f
 
 ```bash
 # 1. Upgrade
-/plugin update ops@lifecycle-innovations-limited-claude-ops
+/plugin update ops@ops-marketplace
 
 # 2. Run the wizard (hits new steps 6.5a–6.5d for v2 toggles)
 /ops:setup
