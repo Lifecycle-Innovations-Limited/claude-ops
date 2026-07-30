@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Portable entrypoint for the desktop-act stdio CLI.
+# Resolves the Python next to this repo (venv if present), else system python3.
+# Follows symlinks so ~/.local/bin/desktop-act works when linked to this file.
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  LINK="$(readlink "$SOURCE")"
+  if [[ "$LINK" == /* ]]; then
+    SOURCE="$LINK"
+  else
+    SOURCE="$DIR/$LINK"
+  fi
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+VENV_PY="${DESKTOP_ACT_VENV:-$ROOT/.venv}/bin/python"
+if [[ -x "$VENV_PY" ]]; then
+  exec "$VENV_PY" "$ROOT/cli/desktop_act_cli.py" "$@"
+fi
+exec "${DESKTOP_ACT_PYTHON:-python3}" "$ROOT/cli/desktop_act_cli.py" "$@"

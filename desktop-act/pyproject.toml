@@ -1,0 +1,26 @@
+[project]
+name = "desktop-act"
+version = "0.2.0"
+description = "Computer-use MCP server with multi-desktop pool and multi-agent leases"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["mcp-server", "cli", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = [
+  "E501",  # long lines in system prompts / X11 tables
+]
+
+[tool.ruff.lint.per-file-ignores]
+"mcp-server/server.py" = ["E402"]  # atexit/threading wiring after BACKEND
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]

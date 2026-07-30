@@ -1,0 +1,16 @@
+{
+  "_comment": "Companion plugins that co-install with ops from the same marketplace. Installers and /ops:setup /ops:update read this file. No host paths.",
+  "marketplace": "ops-marketplace",
+  "companions": [
+    {
+      "name": "desktop-act",
+      "required": false,
+      "coInstallDefault": true,
+      "reason": "Powers /ops:desktop and unattended captcha cascade (visual + desktop-act act).",
+      "install": {
+        "cli": "claude plugin install desktop-act@ops-marketplace",
+        "script": "scripts/install-desktop-act-companion.sh"
+      }
+    }
+  ]
+}

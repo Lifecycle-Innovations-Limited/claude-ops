@@ -1,0 +1,32 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "desktop-act",
+  "description": "Single-plugin marketplace for the desktop-act MCP server",
+  "owner": {
+    "name": "Lifecycle Innovations Limited"
+  },
+  "plugins": [
+    {
+      "name": "desktop-act",
+      "description": "Computer-use primitives + multi-desktop pool + autonomous act() loop for Claude Code. One MCP server exposes screenshot/click/type/keypress/scroll/launch_app over a pooled Xvnc + websockify backend, with persistent X11 connection caching and SHA-deduped screenshots. Auth via claude-agent-sdk OAuth \u2014 no ANTHROPIC_API_KEY required.",
+      "source": "./",
+      "version": "0.1.0",
+      "category": "automation",
+      "keywords": [
+        "computer-use",
+        "desktop",
+        "automation",
+        "x11",
+        "vnc",
+        "novnc",
+        "screenshot",
+        "browser",
+        "mcp",
+        "fastmcp",
+        "oauth",
+        "claude-agent-sdk",
+        "agentic"
+      ]
+    }
+  ]
+}

@@ -25,6 +25,15 @@ The workhorse is **`${CLAUDE_PLUGIN_ROOT}/bin/ops-update`**. It runs a 9-step lo
 7. **Migrate** — runs `ops-post-update-migrate` (idempotent, per-version). It also maintains a stable `cache/.../ops/current/` directory (rsynced from the new version and repointed in `installed_plugins.json`) so Claude Code GC'ing the old versioned dir mid-session never causes "Plugin directory does not exist" hook errors.
 8. **Local sync** — if a linked local source checkout of this repo is present under `~/Projects`, fast-forwards its `main` to `origin/main` so a dev clone never silently drifts behind the published release. Acts only on a clean `main` (never clobbers uncommitted WIP, a feature branch, or unpushed commits); a no-op when no checkout exists. Skip with `--no-localsync`.
 9. **Report** — old→new, what changed, and that a restart / `/reload-plugins` is needed to load it.
+10. **Companion co-install** — ensure `desktop-act@ops-marketplace` is present
+    (declared in `plugin-dependencies.json`). Run after a successful update:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-desktop-act-companion.sh"
+```
+
+Skip when userConfig `desktop_act_co_install` is false. This is idempotent
+(`--status` first if you only want a check).
 
 ## How to run it
 

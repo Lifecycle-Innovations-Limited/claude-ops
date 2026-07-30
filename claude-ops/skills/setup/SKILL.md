@@ -247,7 +247,7 @@ Use `AskUserQuestion` with `multiSelect: true`. Offer **only sections that need 
 | Option             | Header   | Description                                     |
 | ------------------ | -------- | ----------------------------------------------- |
 | Configure channels | channels | Set tokens for Telegram, WhatsApp, Email, Slack |
-| Companion plugins  | plugins  | Install GSD, Superpowers, and feature-dev companion plugins |
+| Companion plugins  | plugins  | Install desktop-act (ops dep), GSD, Superpowers, feature-dev |
 | Save preferences   | prefs    | Owner name, timezone, default priorities        |
 | Shell env          | env      | Export `CLAUDE_PLUGIN_ROOT` in shell profile    |
 
@@ -305,6 +305,49 @@ After installation, re-run `ops-setup-detect` to refresh status before continuin
 ---
 
 ## Step 2b — Companion plugins (if selected)
+
+### desktop-act (co-installed ops dependency — default on)
+
+`desktop-act` is listed in the same `ops-marketplace` as the ops plugin and is
+declared in `plugin-dependencies.json` / `plugin.json` `dependencies`. It powers
+`/ops:desktop` and the unattended captcha cascade. Prefer co-install whenever
+ops is installed; do not require a second marketplace add.
+
+Check:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-desktop-act-companion.sh" --status \
+  && echo "installed" || echo "not_installed"
+```
+
+If `not_installed` and `desktop_act_co_install` is not explicitly false in
+userConfig / prefs, **install without prompting** when the user chose
+"Set up everything" or selected Companion plugins. Otherwise ask:
+
+```
+desktop-act (computer-use MCP) is a companion of ops.
+  Powers /ops:desktop and captcha cascade for unattended re-auth.
+  [Install desktop-act (Recommended)] [Skip]
+```
+
+On install (RULE ZERO — background Bash):
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/install-desktop-act-companion.sh"
+```
+
+Record `plugins.desktop_act = "installed"` in `$PREFS_PATH` when `--status` passes.
+
+If they skip:
+
+```
+Skipped desktop-act. Install later:
+  claude plugin install desktop-act@ops-marketplace
+  # or
+  bash ${CLAUDE_PLUGIN_ROOT}/scripts/install-desktop-act-companion.sh
+```
+
+---
 
 ### GSD (Get Shit Done)
 

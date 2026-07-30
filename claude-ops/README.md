@@ -196,11 +196,13 @@ The setup wizard (`/ops:setup`) walks through each one interactively. You choose
 `claude-ops` is distributed as a Claude Code marketplace plugin. Install it directly from inside Claude Code — you don't need to clone anything manually or edit any settings files.
 
 ```bash
-# 1. Add the marketplace (one-time)
+# 1. Add the marketplace (one-time; ships ops + desktop-act companion)
 /plugin marketplace add Lifecycle-Innovations-Limited/claude-ops
 
-# 2. Install the plugin
-/plugin install ops@lifecycle-innovations-limited-claude-ops
+# 2. Install the ops plugin
+/plugin install ops@ops-marketplace
+# Companion (also co-installed by /ops:setup and /ops:update by default):
+# /plugin install desktop-act@ops-marketplace
 
 # 3. Configure integrations (Telegram, Slack, AWS, etc.)
 /ops:setup

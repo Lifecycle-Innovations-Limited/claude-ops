@@ -30,7 +30,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-_DEFAULT_REPO = "https://github.com/your-org/desktop-act.git"
+# Default bootstrap URL — overridable via DESKTOP_ACT_REPO (no personal paths).
+_DEFAULT_REPO = "https://github.com/Lifecycle-Innovations-Limited/desktop-act.git"
 _DEFAULT_BRANCH = "main"
 # MCP may inject empty strings from userConfig; treat those as unset so fallbacks apply.
 DEFAULT_REPO = os.environ.get("DESKTOP_ACT_REPO") or _DEFAULT_REPO
@@ -105,10 +106,35 @@ def _resolve_existing() -> Path | None:
         if runner:
             return runner
 
+    # Co-installed companion: ops-marketplace ships ./desktop-act next to ./claude-ops
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if plugin_root:
+        pr = Path(plugin_root)
+        for candidate in (
+            pr.parent / "desktop-act",  # …/ops-marketplace/desktop-act
+            pr / "desktop-act",
+        ):
+            runner = _runner_in(candidate)
+            if runner:
+                return runner
+
     for cfg in _claude_config_dirs():
-        runner = _runner_in(cfg / "plugins" / "marketplaces" / "desktop-act")
-        if runner:
-            return runner
+        # Prefer same marketplace as ops (ops-marketplace/desktop-act)
+        for rel in (
+            Path("plugins") / "marketplaces" / "ops-marketplace" / "desktop-act",
+            Path("plugins") / "marketplaces" / "desktop-act",
+            Path("plugins") / "cache" / "ops-marketplace" / "desktop-act",
+        ):
+            runner = _runner_in(cfg / rel)
+            if runner:
+                return runner
+        # Any installed desktop-act plugin cache version
+        cache_root = cfg / "plugins" / "cache" / "ops-marketplace"
+        if cache_root.is_dir():
+            for child in sorted(cache_root.glob("desktop-act/*"), reverse=True):
+                runner = _runner_in(child)
+                if runner:
+                    return runner
 
     cache_src = _cache_root() / "src"
     runner = _runner_in(cache_src)

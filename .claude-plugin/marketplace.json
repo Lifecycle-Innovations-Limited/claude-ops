@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "ops-marketplace",
-  "description": "Local marketplace for claude-ops plugin",
+  "description": "Marketplace for the ops plugin and its desktop-act computer-use companion",
   "owner": {
     "name": "Lifecycle Innovations Limited",
     "email": "info@lifecycleinnovations.limited"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "ops",
-      "description": "Business operations command center for Claude Code — 61 skills, 21 agents, smart background daemon. Manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (AWS), revenue (Stripe+RevenueCat), e-commerce, marketing, monitoring (Datadog/New Relic/OTEL), voice, and smart home (Homey Pro). Includes /ops:ops-ar A&R (audio analysis + demo verdict cards), /gtm go-to-market planner, /ops:projects portfolio dashboard, /ops:ops-mac macOS diagnose-and-fix (macos-toolkit CLI suite), /ops:ops-home control surface, and YOLO autonomous mode with 4 parallel C-suite agents.",
+      "description": "Business operations command center for Claude Code \u2014 61 skills, 21 agents, smart background daemon. Manage communications (WhatsApp/Email/Slack/Telegram), projects, infrastructure (AWS), revenue (Stripe+RevenueCat), e-commerce, marketing, monitoring (Datadog/New Relic/OTEL), voice, and smart home (Homey Pro). Includes /ops:ops-ar A&R (audio analysis + demo verdict cards), /gtm go-to-market planner, /ops:projects portfolio dashboard, /ops:ops-mac macOS diagnose-and-fix (macos-toolkit CLI suite), /ops:ops-home control surface, and YOLO autonomous mode with 4 parallel C-suite agents.",
       "source": "./claude-ops",
       "version": "2.46.2",
       "category": "productivity",
@@ -33,6 +33,24 @@
         "homey",
         "smart-home",
         "iot"
+      ]
+    },
+    {
+      "name": "desktop-act",
+      "description": "Computer-use MCP companion for /ops:desktop \u2014 screenshot, click, type, multi-desktop pool, autonomous act() loop. Co-installed with the ops plugin.",
+      "source": "./desktop-act",
+      "version": "0.2.0",
+      "category": "automation",
+      "keywords": [
+        "computer-use",
+        "desktop",
+        "automation",
+        "mcp",
+        "fastmcp",
+        "screenshot",
+        "vnc",
+        "x11",
+        "agentic"
       ]
     }
   ]

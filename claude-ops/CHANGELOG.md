@@ -4,6 +4,7 @@
 
 ### Added
 
+- **desktop-act marketplace companion:** `desktop-act` is published in `ops-marketplace` next to `ops` (source `./desktop-act`). Declared as a co-install dependency in `plugin.json` + `plugin-dependencies.json`. `scripts/install-desktop-act-companion.sh` installs via `claude plugin install desktop-act@ops-marketplace` (idempotent). `/ops:setup` and `/ops:update` co-install by default (`desktop_act_co_install`). Launcher resolves `ops-marketplace/desktop-act` before cache clone; default bootstrap repo is Lifecycle-Innovations-Limited/desktop-act.
 - **installer (`claude-ops-installer`, v0.1.0):** cross-CLI `npx claude-ops-installer install` — auto-detects Claude Code, Codex, Gemini CLI, OpenClaw, Hermes, and OpenCode, mirrors upstream skills + binstubs into each agent's expected layout, ships with a central `~/.config/claude-ops-installer/config.yaml`, and supports `install` / `update` / `verify` / `doctor` / `uninstall` / `agents` subcommands. One source of truth (the upstream marketplace repo at the pinned ref); per-agent manifest at `~/.cache/claude-ops-installer/manifest.json` enables surgical uninstall. Public-repo clean: no PII, no hardcoded paths, no embedded credentials.
 
 - **ops-desk (new skill):** `/ops:ops-desk` desk sweep — fans out read-only context agents (batched, Workflow tool) over the owner's open decisions/drafts/payments/sign-offs and returns a ranked, ready-to-approve action queue worked down under the per-draft outbound gate. Complements `/ops:ops-inbox`.
