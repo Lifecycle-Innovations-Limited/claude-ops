@@ -5,4 +5,4 @@ source "$HOME/.claude/scripts/lib/once.sh" 2>/dev/null || true
 if command -v claude_once >/dev/null 2>&1; then
   claude_once crs-token-feed 60 || exit 0
 fi
-exec /usr/bin/node "$HOME/.claude/scripts/account-rotation/crs-token-feed.mjs" "$@"
+exec /usr/local/bin/node "$HOME/.claude/scripts/account-rotation/crs-token-feed.mjs" "$@"
