@@ -79,21 +79,38 @@ is_installed() {
 			fi
 		done < <(echo "$path_json" | jq -r '.[]? // empty')
 	fi
-	# -L so a symlinked skills/ or plugins/ dir is followed. Boxes that keep
-	# ~/.claude/skills on another volume symlink it; without -L find never
-	# descends, every companion there reads as missing, and each ops-update
-	# retries an install that then fails.
-	if [[ -n "$find_pat" ]]; then
-		find -L "$PLUGINS_DIR" -path "$find_pat" 2>/dev/null | head -1 | grep -q . && return 0
-		find -L "${HOME}/.claude" "${HOME}/.agents" -path "$find_pat" 2>/dev/null | head -1 | grep -q . && return 0
-	fi
+	# Cheap checks first. These answer most companions without touching the
+	# filesystem tree, and every check here is an OR branch of the same
+	# question, so ordering changes only speed, never the verdict.
 	if [[ "$kind" == "skills-clone" ]]; then
 		[[ -f "${HOME}/.claude/skills/${name}/SKILL.md" ]] && return 0
 		[[ -f "${HOME}/.agents/skills/${name}/SKILL.md" ]] && return 0
 	fi
-	find -L "$PLUGINS_DIR/cache" -type d -name "$name" 2>/dev/null | head -1 | grep -q . && return 0
 	if [[ -f "$PLUGINS_DIR/installed_plugins.json" ]]; then
 		jq -e --arg n "$name" '..|strings?|select(test($n))' "$PLUGINS_DIR/installed_plugins.json" >/dev/null 2>&1 && return 0
+	fi
+	# cache layout is cache/<marketplace>/<plugin>/<version>, so depth 3 is
+	# enough; bounded + first-hit exit keeps this off the multi-second path.
+	[[ -n "$(find -L "$PLUGINS_DIR/cache" -maxdepth 3 -type d -name "$name" -print -quit 2>/dev/null)" ]] && return 0
+
+	# Last: the detect.find pattern walk, the only check that costs a tree scan.
+	# -L so a symlinked skills/ dir is followed — boxes that keep
+	# ~/.claude/skills on another volume symlink it, and without -L find never
+	# descends, so every companion there reads as missing and each ops-update
+	# retries an install that then fails.
+	# Search named roots rather than all of ~/.claude, and stop at the first
+	# hit: walking the whole home dir descends the transcript tree under
+	# projects/ (tens of thousands of files), measured 6.4s per lookup there
+	# vs 0.16s against a named root.
+	if [[ -n "$find_pat" ]]; then
+		local root
+		for root in "$PLUGINS_DIR" "${HOME}/.claude/skills" "${HOME}/.claude/agents" \
+			"${HOME}/.agents/skills" "${HOME}/.agents/agents"; do
+			[[ -d "$root" ]] || continue
+			if [[ -n "$(find -L "$root" -maxdepth 8 -path "$find_pat" -print -quit 2>/dev/null)" ]]; then
+				return 0
+			fi
+		done
 	fi
 	return 1
 }
