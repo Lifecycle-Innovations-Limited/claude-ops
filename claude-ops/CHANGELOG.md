@@ -45,6 +45,12 @@
 fix(ops-inbox): enforce live sent-check and auto-heal app-state on archive
 
 
+## [2.47.9] - 2026-08-02
+
+### Changed
+fix(ops-inbox): enforce live sent-check and auto-heal app-state on archive
+
+
 ## [2.47.8] - 2026-07-30
 
 ### Changed
