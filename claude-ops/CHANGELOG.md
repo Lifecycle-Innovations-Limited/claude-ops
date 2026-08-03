@@ -39,6 +39,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.1.1] - 2026-08-03
+
+### Changed
+- Update the Telegram server's transitive Hono dependency to 4.13.0, fixing GHSA-8j4g-w8fx-2239 (CORS middleware ReDoS).
+
+
 ## [3.1.0] - 2026-08-03
 
 ### Changed
