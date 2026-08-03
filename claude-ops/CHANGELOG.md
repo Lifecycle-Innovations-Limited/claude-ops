@@ -39,6 +39,20 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.1.0] - 2026-08-03
+
+### Changed
+- Added a portable CLIProxyAPI account provider with health, account inventory, and utilization support in `ops-accounts`.
+- Standardized CLIProxyAPI discovery across `CLIPROXYAPI_AUTH_DIR`, `CLIPROXYAPI_HOME`, and `XDG_CONFIG_HOME`, with explicit environment configuration for optional proxy endpoints.
+- Hardened release automation with required CI and CodeQL checks, bounded GitHub queries, stable-head verification, and exact-SHA squash merges without branch-protection bypass.
+- Updated `ip-address` from 10.2.0 to 10.4.0 in the plugin and Telegram server dependency trees.
+- Updated Telegram server `fast-uri` from 3.1.4 to 3.1.5, including the upstream security fix.
+- Preserved existing release notes during first-time and interrupted GitHub wiki synchronization.
+- Fixed gateway execution through symlinked or canonical paths and added a clear 503 response when the optional Grok endpoint is not configured.
+- Removed ShellCheck warnings from the touched account and release commands.
+- Removed deployment-specific browser login, CAPTCHA, reauthentication, and subscription automation from the public plugin.
+
+
 ## [3.0.0] - 2026-08-03
 
 ### Changed
