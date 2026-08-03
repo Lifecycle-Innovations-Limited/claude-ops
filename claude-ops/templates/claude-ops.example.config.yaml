@@ -1,0 +1,42 @@
+# Claude Ops neutral example config. Placeholder-only and safe for public docs.
+ops:
+  plugin_root: "${OPS_PLUGIN_ROOT:-{{PLUGIN_ROOT}}}"
+  data_dir: "${OPS_DATA_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/claude-ops}"
+  config_path: "${OPS_CONFIG_PATH:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-ops/config.yaml}"
+  cache_dir: "${OPS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-ops}"
+  runtime_adapter: "${OPS_RUNTIME_ADAPTER:-claude-code}"
+
+organization:
+  name: "{{ORG_NAME}}"
+  project_roots:
+    - "{{PROJECT_ROOT}}"
+
+issue_tracker:
+  provider: "{{ISSUE_TRACKER_PROVIDER}}"
+  linear_team_key: "{{LINEAR_TEAM_KEY}}"
+
+approvals:
+  chain:
+    - role: "{{REQUESTING_AGENT}}"
+    - role: "{{BUSINESS_OWNER}}"
+    - role: "{{FINAL_APPROVER}}"
+
+communications:
+  channels:
+    review: "{{APPROVAL_CHANNEL}}"
+    incidents: "{{INCIDENT_CHANNEL}}"
+    releases: "{{RELEASE_CHANNEL}}"
+
+services:
+  registry_path: "{{SERVICE_REGISTRY_PATH}}"
+
+mcp_capabilities:
+  issue_tracker.search: "{{ISSUE_TRACKER_SEARCH_CAPABILITY}}"
+  observability.search: "{{OBSERVABILITY_SEARCH_CAPABILITY}}"
+  docs.read: "{{DOCS_READ_CAPABILITY}}"
+
+secrets:
+  provider: "{{SECRET_PROVIDER}}"
+  required_env:
+    - "{{ISSUE_TRACKER_TOKEN_ENV}}"
+    - "{{OBSERVABILITY_TOKEN_ENV}}"
