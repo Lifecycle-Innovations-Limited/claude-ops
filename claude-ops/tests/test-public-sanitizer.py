@@ -49,6 +49,32 @@ def test_bad_fixture_fails_by_category():
         assert report["by_kind"].get(kind, 0) >= 1, report
 
 
+def test_private_url_ranges_are_scoped():
+    private_urls = "\n".join(
+        [
+            "http://" + "localhost" + ":3000/health",
+            "http://" + "127.0.0.1" + "/health",
+            "https://" + "100.64.0.1" + "/admin",
+            "https://" + "100.127.255.255" + "/admin",
+        ]
+    )
+    public_url = "https://" + "100.128.0.1" + "/status"
+    with tempfile.TemporaryDirectory() as tmp:
+        private = Path(tmp) / "private.md"
+        public = Path(tmp) / "public.md"
+        private.write_text(private_urls)
+        public.write_text(public_url)
+        private_report = module.run([str(private)])
+        public_report = module.run([str(public)])
+    assert private_report["by_kind"].get("private_service_url") == 4, private_report
+    assert public_report["findings"] == 0, public_report
+
+
+def test_sanitizer_source_passes():
+    report = module.run([str(SCRIPT)])
+    assert report["findings"] == 0, report
+
+
 def test_public_contract_and_example_pass():
     report = module.run([
         str(ROOT / "docs" / "public-template-contract.md"),
@@ -60,5 +86,7 @@ def test_public_contract_and_example_pass():
 if __name__ == "__main__":
     test_good_fixture_passes()
     test_bad_fixture_fails_by_category()
+    test_private_url_ranges_are_scoped()
+    test_sanitizer_source_passes()
     test_public_contract_and_example_pass()
     print("public sanitizer tests passed")

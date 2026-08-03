@@ -50,7 +50,13 @@ CHECKS = [
     ),
     (
         "private_service_url",
-        re.compile(r"https?://(?:10\.\d+\.\d+\.\d+|100\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[0-1])\.\d+\.\d+|192\.168\.\d+\.\d+|[A-Za-z0-9.-]*\.internal)\S*", re.I),
+        re.compile(
+            r"https?://(?:localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|"
+            r"100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+|"
+            r"172\.(?:1[6-9]|2\d|3[0-1])\.\d+\.\d+|192\.168\.\d+\.\d+|"
+            r"[A-Za-z0-9.-]*\.internal)\S*",
+            re.I,
+        ),
         "Use {{SERVICE_URL}} or SERVICE_REGISTRY_PATH, not private URLs.",
     ),
     (
