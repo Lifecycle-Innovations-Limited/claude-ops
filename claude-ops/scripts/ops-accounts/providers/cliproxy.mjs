@@ -4,7 +4,7 @@
  * inventory only. No secrets are read into output: file names carry
  * provider+email; token payloads are never printed.
  *
- * Env overrides: CLIPROXYAPI_HOME, CLIPROXYAPI_PORT.
+ * Env overrides: CLIPROXYAPI_HOME, CLIPROXYAPI_AUTH_DIR.
  */
 import { existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
@@ -13,7 +13,8 @@ export const providerId = 'cliproxy';
 export const displayName = 'CLIProxyAPI (local multi-provider proxy)';
 
 function authDir(ctx) {
-  const home = process.env.CLIPROXYAPI_HOME || join(ctx.home, 'Developer/active/cliproxyapi');
+  if (process.env.CLIPROXYAPI_AUTH_DIR) return process.env.CLIPROXYAPI_AUTH_DIR;
+  const home = process.env.CLIPROXYAPI_HOME || join(ctx.home, '.config', 'cliproxyapi');
   return join(home, 'auths');
 }
 

@@ -18,7 +18,7 @@
 #
 # Flow:
 #   fetch → isolated worktree off origin/main → bump version files → AI changelog
-#   → ops-sync-docs → commit → push → PR to main → (optional) squash-merge --admin
+#   → ops-sync-docs → commit → push → PR to main → (optional) wait for CI + squash-merge
 #   → (optional) tag vX.Y.Z → (optional) wiki sync
 #
 # Usage:
@@ -149,7 +149,7 @@ if [ "$dry_run" -eq 1 ]; then
   [ -n "$PACKAGE_REL" ] && echo "    $REPO_ROOT/$PACKAGE_REL"
   echo "--- would prepend to $CHANGELOG:"
   printf '%s\n' "$changelog_section"
-  echo "--- would: branch release/v$NEW -> PR to main$([ "$do_merge" -eq 1 ] && echo ' -> squash-merge --admin')$([ "$do_tag" -eq 1 ] && echo " -> tag v$NEW")"
+  echo "--- would: branch release/v$NEW -> PR to main$([ "$do_merge" -eq 1 ] && echo ' -> wait for CI -> squash-merge')$([ "$do_tag" -eq 1 ] && echo " -> tag v$NEW")"
   exit 0
 fi
 
@@ -204,7 +204,29 @@ PR_URL="$(gh pr create --repo "$GH_REPO" --base main --head "$BR" --title "relea
 echo "ops-release: opened $PR_URL"
 
 if [ "$do_merge" -eq 1 ]; then
-  gh pr merge "$PR_URL" --repo "$GH_REPO" --squash --admin --delete-branch
+  echo "ops-release: waiting for CI before merge…"
+  REQUIRED_CHECKS='["lint-and-check (ubuntu-latest)","lint-and-check (ubuntu-24.04)","pii-gate","test-suite (ubuntu-latest)","test-suite (ubuntu-24.04)"]'
+  checks_ready=0
+  for _attempt in $(seq 1 90); do
+    checks_json="$(gh pr checks "$PR_URL" --repo "$GH_REPO" --json name,state,bucket 2>/dev/null || printf '[]')"
+    if jq -e 'any(.[]; .bucket == "fail" or .bucket == "cancel")' <<<"$checks_json" >/dev/null; then
+      echo "ops-release: CI failed; release PR left open: $PR_URL" >&2
+      gh pr checks "$PR_URL" --repo "$GH_REPO" || true
+      exit 1
+    fi
+    required_seen="$(jq -r --argjson required "$REQUIRED_CHECKS" '(($required - [.[].name]) | length) == 0' <<<"$checks_json")"
+    all_finished="$(jq -r 'length > 0 and all(.[]; .bucket == "pass" or .bucket == "skipping")' <<<"$checks_json")"
+    if [ "$required_seen" = true ] && [ "$all_finished" = true ]; then
+      checks_ready=1
+      break
+    fi
+    sleep 10
+  done
+  if [ "$checks_ready" -ne 1 ]; then
+    echo "ops-release: timed out waiting for CI; release PR left open: $PR_URL" >&2
+    exit 1
+  fi
+  gh pr merge "$PR_URL" --repo "$GH_REPO" --squash --delete-branch
   echo "ops-release: merged v$NEW to main"
   if [ "$do_tag" -eq 1 ]; then
     git -C "$REPO_ROOT" fetch origin --quiet
@@ -232,10 +254,11 @@ if [ "$do_merge" -eq 1 ]; then
         rm -f "$page.bak"
       done
       relpage="$wiki_tmp/Release-Notes.md"
-      { printf '## v%s — %s\n\n%s\n\n' "$NEW" "$REL_DATE" "$notes"; [ -f "$relpage" ] && cat "$relpage"; } >"$relpage.new" && mv "$relpage.new" "$relpage"
+      { printf '## v%s — %s\n\n%s\n\n' "$NEW" "$REL_DATE" "$notes"; if [ -f "$relpage" ]; then cat "$relpage"; fi; } >"$relpage.new"
+      mv "$relpage.new" "$relpage"
       if [ -n "$(git -C "$wiki_tmp" status --porcelain)" ]; then
         git -C "$wiki_tmp" add -A
-        git -C "$wiki_tmp" -c user.email="noreply@anthropic.com" -c user.name="ops-release" \
+        git -C "$wiki_tmp" -c user.email="ops-release@example.com" -c user.name="ops-release" \
           commit -m "wiki: sync to v$NEW (counts + release notes)" >/dev/null 2>&1 || true
         if git -C "$wiki_tmp" push origin HEAD >/dev/null 2>&1; then
           echo "ops-release: wiki synced to v$NEW"
@@ -253,5 +276,5 @@ if [ "$do_merge" -eq 1 ]; then
 
   echo "ops-release: done. Refresh local install with: /plugin marketplace update ops-marketplace"
 else
-  echo "ops-release: PR left open for review (use: gh pr merge $PR_URL --squash --admin)"
+  echo "ops-release: PR left open for review (use: gh pr merge $PR_URL --squash)"
 fi
