@@ -14,7 +14,7 @@ function usage() {
   ops-accounts refresh [all|claude|grok|openai]
   ops-accounts providers
 
-Providers: claude, grok, openai, factory, cursor
+Providers: claude, grok, openai, factory, cursor, cliproxy
 `);
 }
 

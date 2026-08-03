@@ -5,7 +5,7 @@
  * Skeleton (Phase D):
  *   - GET  /health, /v1/health
  *   - GET  /v1/models (stub inventory)
- *   - *    /v1/* Grok paths → plugin grok-cli-auth-proxy (:31845)
+ *   - *    /v1/* Grok paths → optional endpoint from GROK_PROXY_URL
  *   - POST /v1/chat/completions | /v1/messages → Claude seat pick + stub upstream
  *   - API key gate via OPS_ACCOUNTS_GATEWAY_KEY (optional in dev)
  *
@@ -16,7 +16,7 @@
  *   OPS_ACCOUNTS_GATEWAY_HOST   default 127.0.0.1
  *   OPS_ACCOUNTS_GATEWAY_KEY    if set, require Bearer / x-api-key / api-key
  *   OPS_ACCOUNTS_STATE_PATH     seat-state.json path
- *   GROK_PROXY_URL              default http://127.0.0.1:31845
+ *   GROK_PROXY_URL              optional Grok-compatible upstream base URL
  *   CLAUDE_UPSTREAM_URL         optional Anthropic-compat base (not required for health)
  *
  * Usage:
@@ -25,7 +25,7 @@
  *   node ops-accounts-gateway.mjs --print-config
  */
 import http from 'http';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, realpathSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
@@ -33,7 +33,7 @@ import { fileURLToPath } from 'url';
 const HOST = process.env.OPS_ACCOUNTS_GATEWAY_HOST || '127.0.0.1';
 const PORT = Number(process.env.OPS_ACCOUNTS_GATEWAY_PORT || '3005');
 const GATEWAY_KEY = process.env.OPS_ACCOUNTS_GATEWAY_KEY || '';
-const GROK_PROXY_URL = (process.env.GROK_PROXY_URL || 'http://127.0.0.1:31845').replace(/\/$/, '');
+const GROK_PROXY_URL = (process.env.GROK_PROXY_URL || '').replace(/\/$/, '');
 const CLAUDE_UPSTREAM_URL = (process.env.CLAUDE_UPSTREAM_URL || '').replace(/\/$/, '');
 const DATA = process.env.CLAUDE_PLUGIN_DATA_DIR || join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
 const STATE_PATH = process.env.OPS_ACCOUNTS_STATE_PATH || join(DATA, 'account-rotation', 'seat-state.json');
@@ -138,6 +138,15 @@ function readBody(req, limit = 8 * 1024 * 1024) {
 }
 
 async function proxyToGrok(req, res, urlPath) {
+  if (!GROK_PROXY_URL) {
+    sendJson(res, 503, {
+      error: {
+        message: 'Grok proxy is not configured; set GROK_PROXY_URL',
+        type: 'configuration_error',
+      },
+    });
+    return;
+  }
   const target = new URL(urlPath, GROK_PROXY_URL);
   // Map CRS-style /grok/v1/... → proxy /v1/...
   let p = target.pathname;
@@ -188,7 +197,7 @@ function handleHealth(res) {
       updatedAt: state.updatedAt || null,
       claudeSchedulable: claude ? claude.email : null,
     },
-    grokProxy: GROK_PROXY_URL,
+    grokProxy: GROK_PROXY_URL || null,
     claudeUpstream: CLAUDE_UPSTREAM_URL || null,
     apiKeyRequired: Boolean(GATEWAY_KEY),
     mode: 'skeleton',
@@ -385,7 +394,7 @@ function printConfig() {
         host: HOST,
         port: PORT,
         statePath: STATE_PATH,
-        grokProxy: GROK_PROXY_URL,
+        grokProxy: GROK_PROXY_URL || null,
         claudeUpstream: CLAUDE_UPSTREAM_URL || null,
         apiKeyRequired: Boolean(GATEWAY_KEY),
       },
@@ -407,12 +416,12 @@ function main(argv = process.argv.slice(2)) {
   const server = createServer();
   server.listen(PORT, HOST, () => {
     console.log(
-      `ops-accounts-gateway listening on http://${HOST}:${PORT} (seat-state=${STATE_PATH}; grok=${GROK_PROXY_URL})`,
+      `ops-accounts-gateway listening on http://${HOST}:${PORT} (seat-state=${STATE_PATH}; grok=${GROK_PROXY_URL ? 'configured' : 'unconfigured'})`,
     );
   });
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+const isMain = process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
 if (isMain) {
   main();
 }
