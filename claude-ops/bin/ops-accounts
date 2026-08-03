@@ -95,9 +95,52 @@ PY
     echo "crs_grok_hop: not reachable (optional thin hop)"
   fi
 }
+# --- CLIProxyAPI backend (optional local multi-provider proxy) ---
+# Convention: single static binary + config dir; override via env if relocated.
+CLIPROXY_HOME="${CLIPROXYAPI_HOME:-$HOME/Developer/active/cliproxyapi}"
+CLIPROXY_PORT="${CLIPROXYAPI_PORT:-8317}"
+CLIPROXY_CFG="$CLIPROXY_HOME/config/config.yaml"
+CLIPROXY_AUTHDIR="$CLIPROXY_HOME/auths"
+
+cliproxy_alive() {
+  curl -fsS -m 2 -o /dev/null "http://127.0.0.1:${CLIPROXY_PORT}/v1/models" 2>/dev/null \
+    || curl -fsS -m 2 -o /dev/null "http://127.0.0.1:${CLIPROXY_PORT}/health" 2>/dev/null
+}
+
+# count auth files for a provider prefix (no secrets printed)
+cliproxy_count() {
+  local prefix="$1"
+  ls "$CLIPROXY_AUTHDIR/${prefix}"-*.json 2>/dev/null | wc -l | tr -d ' '
+}
+
+print_cliproxy() {
+  if [[ ! -d "$CLIPROXY_HOME" ]]; then
+    echo "cliproxyapi: not installed at \$CLIPROXYAPI_HOME (optional backend)"
+    return 1
+  fi
+  if cliproxy_alive; then
+    echo "cliproxyapi: listening on 127.0.0.1:${CLIPROXY_PORT}"
+  else
+    echo "cliproxyapi: installed but not reachable on :${CLIPROXY_PORT} (launchctl kickstart -k gui/\$(id -u)/com.sam.cliproxyapi)"
+    return 1
+  fi
+  return 0
+}
+
 print_codex() {
   echo "=== Codex / OpenAI ==="
+  if print_cliproxy; then
+    echo "accounts (auth-dir): $(cliproxy_count codex)"
+  fi
   have codex-rotate && codex-rotate status 2>/dev/null | head -30 || echo "codex-rotate optional"
+}
+
+print_gemini() {
+  echo "=== Gemini / Antigravity ==="
+  if print_cliproxy; then
+    # Gemini seats are stored as antigravity-*.json (and/or gemini-*.json)
+    echo "accounts (auth-dir): $(( $(cliproxy_count antigravity) + $(cliproxy_count gemini) ))"
+  fi
 }
 
 print_factory() {
@@ -115,6 +158,7 @@ case "$cmd" in
     print_claude; echo
     print_grok; echo
     print_codex; echo
+    print_gemini; echo
     print_factory; echo
     print_cursor
     ;;
@@ -123,6 +167,16 @@ case "$cmd" in
     case "$provider" in
       claude)
         [[ -f "$ROT/rotate.mjs" ]] && node "$ROT/rotate.mjs" --utilization 2>/dev/null | head -60
+        ;;
+      codex|gemini|grok-x|xai|kimi)
+        # CLIProxyAPI util: per-provider account inventory + last-refresh mtimes (no secrets)
+        p="$provider"; [[ "$p" == "xai" || "$p" == "grok-x" ]] && p="xai"
+        echo "--- cliproxy util: $p ---"
+        if ls "$CLIPROXY_AUTHDIR/${p}"-*.json >/dev/null 2>&1; then
+          ls -lt "$CLIPROXY_AUTHDIR/${p}"-*.json | awk '{print $6, $7, $8, $9}'
+        else
+          echo "no ${p}-*.json auth files in $CLIPROXY_AUTHDIR"
+        fi
         ;;
       grok)
         curl -fsS -m 3 http://127.0.0.1:31845/accounts 2>/dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);print(json.dumps({k:d.get(k) for k in ("request_counts","exhausted_seconds_remaining","load_balance","current")}, indent=2))' || echo "proxy util unavailable"
@@ -310,7 +364,7 @@ case "$cmd" in
 ops-accounts — multi-provider seats (canonical; /ops:rotate is alias)
 
   status | list
-  util [all|claude|grok]
+  util [all|claude|grok|codex|gemini|xai|kimi]
   switch claude|grok   |  rotate-now
   refresh [all|claude|grok]
   reauth claude <email> | reauth grok <email>

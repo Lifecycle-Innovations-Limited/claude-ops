@@ -42,6 +42,7 @@ Claude already has (in plugin + optional CRS):
 | **Claude (Anthropic)** | magic-link + captcha | magic-link-autoloop | 5h/7d | keychain daemon; CRS optional |
 | **Grok (xAI SuperGrok)** | device-code + Google (dcli) | residential cascade (EFG SOCKS → Bright Data residential → ISP → mobile) | weekly / 429 | `grok-cli-auth-proxy` RR; CRS is thin relay only |
 | **OpenAI / Codex** | OAuth / API key | codex OAuth bridge | usage API | `codex-rotate` absorbed |
+| **CLIProxyAPI (local multi-provider pool)** | per-provider OAuth login flows (browser/device-code) | proxy-internal token refresh | management API (pool-level) | single static binary + flat-file auth-dir; chosen over sub2api (no Postgres/Redis to maintain). Optional local backend: `providers/cliproxy.mjs` adapter reports auth-dir inventory; `bin/ops-accounts` prints per-provider counts + `util <provider>` views. Env overrides: `CLIPROXYAPI_HOME`, `CLIPROXYAPI_PORT`. |
 | **Factory** | provider OAuth / tokens | native reauth | quota-feed-factory patterns | full adapter |
 | **Cursor** | Cursor account OAuth | browser/device OAuth | plan limits if available | full adapter |
 | **Extensible** | adapter interface | same contract | best-effort | `provider-env` / `provider-router` |
