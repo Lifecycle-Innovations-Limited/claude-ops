@@ -14,7 +14,8 @@ export const displayName = 'CLIProxyAPI (local multi-provider proxy)';
 
 function authDir(ctx) {
   if (process.env.CLIPROXYAPI_AUTH_DIR) return process.env.CLIPROXYAPI_AUTH_DIR;
-  const home = process.env.CLIPROXYAPI_HOME || join(ctx.home, '.config', 'cliproxyapi');
+  const configHome = process.env.XDG_CONFIG_HOME || join(ctx.home, '.config');
+  const home = process.env.CLIPROXYAPI_HOME || join(configHome, 'cliproxyapi');
   return join(home, 'auths');
 }
 

@@ -16,8 +16,8 @@ resolve_root() {
     return
   fi
   local c
-  c="$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1 || true)"
-  if [[ -n "$c" ]]; then
+  c="$(printf '%s\n' "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ | sort -V | tail -1)"
+  if [[ -d "$c" ]]; then
     printf '%s' "${c%/}"
     return
   fi
@@ -52,8 +52,8 @@ plugin_root() {
     return
   fi
   local c
-  c="$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1 || true)"
-  printf '%s' "${c%/}"
+  c="$(printf '%s\n' "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ | sort -V | tail -1)"
+  [[ -d "$c" ]] && printf '%s' "${c%/}"
 }
 
 ROOT="$(plugin_root)"
@@ -112,12 +112,16 @@ cliproxy_alive() {
 # count auth files for a provider prefix (no secrets printed)
 cliproxy_count() {
   local prefix="$1"
-  ls "$CLIPROXY_AUTHDIR/${prefix}"-*.json 2>/dev/null | wc -l | tr -d ' '
+  local count=0 file
+  for file in "$CLIPROXY_AUTHDIR/${prefix}"-*.json; do
+    [[ -e "$file" ]] && count=$((count + 1))
+  done
+  printf '%s\n' "$count"
 }
 
 print_cliproxy() {
-  if [[ ! -d "$CLIPROXY_HOME" ]]; then
-    echo "cliproxyapi: not installed at \$CLIPROXYAPI_HOME (optional backend)"
+  if [[ ! -d "$CLIPROXY_HOME" && ! -d "$CLIPROXY_AUTHDIR" ]]; then
+    echo "cliproxyapi: not installed (set CLIPROXYAPI_HOME or CLIPROXYAPI_AUTH_DIR)"
     return 1
   fi
   if cliproxy_alive; then
@@ -183,7 +187,15 @@ case "$cmd" in
           done
         done
         if [[ ${#files[@]} -gt 0 ]]; then
-          ls -lt "${files[@]}" | awk '{print $6, $7, $8, $9}'
+          python3 - "${files[@]}" <<'PY'
+from datetime import datetime
+from pathlib import Path
+import sys
+
+for path in sorted((Path(raw) for raw in sys.argv[1:]), key=lambda item: item.stat().st_mtime, reverse=True):
+    stamp = datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat(timespec="seconds")
+    print(stamp, path)
+PY
         else
           echo "no matching $p auth files in $CLIPROXY_AUTHDIR"
         fi
@@ -193,9 +205,13 @@ case "$cmd" in
         ;;
       all|"")
         echo "--- Claude util ---"
-        [[ -f "$ROT/rotate.mjs" ]] && node "$ROT/rotate.mjs" --utilization 2>/dev/null | head -40 || true
+        if [[ -f "$ROT/rotate.mjs" ]]; then
+          node "$ROT/rotate.mjs" --utilization 2>/dev/null | head -40 || true
+        fi
         echo "--- Grok proxy ---"
-        [[ -n "$GROK_PROXY_URL" ]] && curl -fsS -m 3 "${GROK_PROXY_URL%/}/accounts" 2>/dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);print("counts",d.get("request_counts"));print("exhausted",d.get("exhausted_seconds_remaining"))' || true
+        if [[ -n "$GROK_PROXY_URL" ]]; then
+          curl -fsS -m 3 "${GROK_PROXY_URL%/}/accounts" 2>/dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);print("counts",d.get("request_counts"));print("exhausted",d.get("exhausted_seconds_remaining"))' || true
+        fi
         ;;
       *)
         echo "usage: ops-accounts util [all|claude|grok|codex|gemini|xai|kimi]"; exit 2 ;;
@@ -235,11 +251,11 @@ case "$cmd" in
         fi
         ;;
       claude)
-        have host-token-keepalive && host-token-keepalive --force --claude-only || true
-        [[ -f "$ROT/rotate.mjs" ]] && node "$ROT/rotate.mjs" --refresh 2>/dev/null || true
+        if have host-token-keepalive; then host-token-keepalive --force --claude-only || true; fi
+        if [[ -f "$ROT/rotate.mjs" ]]; then node "$ROT/rotate.mjs" --refresh 2>/dev/null || true; fi
         ;;
       all|"")
-        have host-token-keepalive && host-token-keepalive --force || true
+        if have host-token-keepalive; then host-token-keepalive --force || true; fi
         ;;
       *)
         echo "usage: ops-accounts refresh [all|claude|grok]"; exit 2 ;;
