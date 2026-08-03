@@ -1,6 +1,6 @@
 ---
 name: ops-release
-description: Publish a new version of the claude-ops ("ops") plugin in one command — bump plugin.json + marketplace.json + package.json, prepend the CHANGELOG, open the release PR, admin squash-merge it to main, and tag vX.Y.Z. Use when shipping a fix/feature that has already merged to main and you want it published so /ops:ops-update can pull it down. This is the publish side; /ops:ops-update is the consume side.
+description: Publish a new version of the claude-ops ("ops") plugin in one command — bump plugin.json + marketplace.json + package.json, prepend the CHANGELOG, open the release PR, wait for CI, squash-merge it to main, and tag vX.Y.Z. Use when shipping a fix/feature that has already merged to main and you want it published so /ops:ops-update can pull it down. This is the publish side; /ops:ops-update is the consume side.
 argument-hint: '[--type patch|minor|major] [--version X.Y.Z] [--notes "changelog body"] [--no-ai] [--no-docs] [--no-wiki] [--dry-run] [--no-merge] [--no-tag]'
 allowed-tools:
   - Bash
@@ -11,7 +11,7 @@ allowed-tools:
 # OPS ► RELEASE — one-command plugin publish
 
 Cuts a new published version of the **claude-ops** plugin: bumps the version in the
-three manifests, writes the CHANGELOG, opens a release PR, admin-merges it to
+three manifests, writes the CHANGELOG, opens a release PR, waits for CI, merges it to
 `main`, and pushes the `vX.Y.Z` tag. After it runs, `/ops:ops-update` pulls the new
 version down to the box.
 
@@ -48,7 +48,7 @@ so anything not yet on `origin/main` will NOT be in the release.
 
 ## How to run it
 
-Steps 3–5 are outward-facing + hard to reverse (open PR → **admin squash-merge to
+Steps 3–5 are outward-facing + hard to reverse (open PR → **CI-gated squash-merge to
 `main`** → push a public `vX.Y.Z` tag), so **always dry-run first, show the plan,
 confirm, then apply** (Rule 5).
 
@@ -59,7 +59,7 @@ confirm, then apply** (Rule 5).
 ```
 
 Present the output: current → target version, which 3 manifests get bumped, the
-CHANGELOG block, and that it will branch `release/vX.Y.Z` → PR → admin-merge → tag.
+CHANGELOG block, and that it will branch `release/vX.Y.Z` → PR → wait for CI → merge → tag.
 Pick the bump type from the change: bug/patch fix → `--type patch`; new
 backward-compatible feature → `--type minor`; breaking change → `--type major`
 (or pin exactly with `--version X.Y.Z`).
@@ -69,7 +69,7 @@ backward-compatible feature → `--type minor`; breaking change → `--type majo
 Use **AskUserQuestion** before applying:
 
 ```
-Publish claude-ops <CUR> → <NEW>?  (bumps 3 manifests + CHANGELOG, opens PR, admin-merges to main, tags v<NEW>)
+Publish claude-ops <CUR> → <NEW>?  (bumps 3 manifests + CHANGELOG, opens PR, waits for CI, merges to main, tags v<NEW>)
   [Publish release]
   [Dry-run only]
   [Cancel]
@@ -97,7 +97,7 @@ tag. Surface the final line verbatim and then tell the user to pull it down:
 | `--no-docs`                  | Skip the `ops-sync-docs` count/badge reconciliation step.                 |
 | `--no-wiki`                  | Skip syncing the GitHub wiki (counts/version + Release-Notes entry).      |
 | `--dry-run`                  | Report only; change nothing (still previews the AI changelog). Always run this first. |
-| `--no-merge`                 | Open the release PR but do NOT admin-merge it (leave for manual review).  |
+| `--no-merge`                 | Open the release PR but do not merge it (leave for manual review).        |
 | `--no-tag`                   | Skip pushing the `vX.Y.Z` tag.                                            |
 
 ## What it touches
@@ -129,8 +129,8 @@ line-per-fact, so relay it as-is — no tables, no banners.
 
 ## Notes
 
-- **PRs target `main`** (claude-ops convention), squash-merged with `--admin`
-  because `example` can't self-approve its own-org PRs.
+- **PRs target `main`** (claude-ops convention). The helper waits for the five product
+  CI checks plus any other reported checks to finish, then squash-merges without bypassing them.
 - **Publish ≠ deploy to the box.** The running session won't see the new version
   until `/ops:ops-update` (pull) + `/reload-plugins` (load).
 - Sibling: `/ops:ops-update` (pull a published version locally + prune/rewrite).

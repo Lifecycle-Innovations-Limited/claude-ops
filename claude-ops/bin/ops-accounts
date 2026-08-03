@@ -16,8 +16,8 @@ resolve_root() {
     return
   fi
   local c
-  c="$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1 || true)"
-  if [[ -n "$c" ]]; then
+  c="$(printf '%s\n' "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ | sort -V | tail -1)"
+  if [[ -d "$c" ]]; then
     printf '%s' "${c%/}"
     return
   fi
@@ -52,12 +52,14 @@ plugin_root() {
     return
   fi
   local c
-  c="$(ls -d "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ 2>/dev/null | sort -V | tail -1 || true)"
-  printf '%s' "${c%/}"
+  c="$(printf '%s\n' "$HOME/.claude/plugins/cache/ops-marketplace/ops"/*/ | sort -V | tail -1)"
+  [[ -d "$c" ]] && printf '%s' "${c%/}"
 }
 
 ROOT="$(plugin_root)"
 ROT="${ROOT}/scripts/account-rotation"
+GROK_PROXY_URL="${GROK_PROXY_URL:-}"
+CRS_GROK_BASE_URL="${CRS_GROK_BASE_URL:-}"
 
 print_claude() {
   echo "=== Claude ==="
@@ -74,7 +76,7 @@ print_grok() {
   else
     echo "grok-rotate not on PATH"
   fi
-  if curl -fsS -m 2 http://127.0.0.1:31845/accounts >/tmp/ops-accounts-grok-proxy.json 2>/dev/null; then
+  if [[ -n "$GROK_PROXY_URL" ]] && curl -fsS -m 2 "${GROK_PROXY_URL%/}/accounts" >/tmp/ops-accounts-grok-proxy.json 2>/dev/null; then
     python3 - <<'PY'
 import json
 from pathlib import Path
@@ -87,9 +89,9 @@ if ex:
   print("proxy exhausted_seconds:", {k:int(v) for k,v in ex.items()})
 PY
   else
-    echo "grok-cli-auth-proxy :31845 not reachable (optional)"
+    echo "grok-cli-auth-proxy not configured or unreachable (set GROK_PROXY_URL)"
   fi
-  if curl -fsS -m 2 -o /dev/null -w "crs_grok_hop HTTP %{http_code}\n" http://127.0.0.1:3005/grok/v1/models 2>/dev/null; then
+  if [[ -n "$CRS_GROK_BASE_URL" ]] && curl -fsS -m 2 -o /dev/null -w "crs_grok_hop HTTP %{http_code}\n" "${CRS_GROK_BASE_URL%/}/models" 2>/dev/null; then
     :
   else
     echo "crs_grok_hop: not reachable (optional thin hop)"
@@ -97,31 +99,35 @@ PY
 }
 # --- CLIProxyAPI backend (optional local multi-provider proxy) ---
 # Convention: single static binary + config dir; override via env if relocated.
-CLIPROXY_HOME="${CLIPROXYAPI_HOME:-$HOME/Developer/active/cliproxyapi}"
-CLIPROXY_PORT="${CLIPROXYAPI_PORT:-8317}"
-CLIPROXY_CFG="$CLIPROXY_HOME/config/config.yaml"
-CLIPROXY_AUTHDIR="$CLIPROXY_HOME/auths"
+CLIPROXY_HOME="${CLIPROXYAPI_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/cliproxyapi}"
+CLIPROXY_BASE_URL="${CLIPROXYAPI_BASE_URL:-}"
+CLIPROXY_AUTHDIR="${CLIPROXYAPI_AUTH_DIR:-$CLIPROXY_HOME/auths}"
 
 cliproxy_alive() {
-  curl -fsS -m 2 -o /dev/null "http://127.0.0.1:${CLIPROXY_PORT}/v1/models" 2>/dev/null \
-    || curl -fsS -m 2 -o /dev/null "http://127.0.0.1:${CLIPROXY_PORT}/health" 2>/dev/null
+  [[ -n "$CLIPROXY_BASE_URL" ]] || return 1
+  curl -fsS -m 2 -o /dev/null "${CLIPROXY_BASE_URL%/}/v1/models" 2>/dev/null \
+    || curl -fsS -m 2 -o /dev/null "${CLIPROXY_BASE_URL%/}/health" 2>/dev/null
 }
 
 # count auth files for a provider prefix (no secrets printed)
 cliproxy_count() {
   local prefix="$1"
-  ls "$CLIPROXY_AUTHDIR/${prefix}"-*.json 2>/dev/null | wc -l | tr -d ' '
+  local count=0 file
+  for file in "$CLIPROXY_AUTHDIR/${prefix}"-*.json; do
+    [[ -e "$file" ]] && count=$((count + 1))
+  done
+  printf '%s\n' "$count"
 }
 
 print_cliproxy() {
-  if [[ ! -d "$CLIPROXY_HOME" ]]; then
-    echo "cliproxyapi: not installed at \$CLIPROXYAPI_HOME (optional backend)"
+  if [[ ! -d "$CLIPROXY_HOME" && ! -d "$CLIPROXY_AUTHDIR" ]]; then
+    echo "cliproxyapi: not installed (set CLIPROXYAPI_HOME or CLIPROXYAPI_AUTH_DIR)"
     return 1
   fi
   if cliproxy_alive; then
-    echo "cliproxyapi: listening on 127.0.0.1:${CLIPROXY_PORT}"
+    echo "cliproxyapi: reachable at configured endpoint"
   else
-    echo "cliproxyapi: installed but not reachable on :${CLIPROXY_PORT} (launchctl kickstart -k gui/\$(id -u)/com.sam.cliproxyapi)"
+    echo "cliproxyapi: endpoint not configured or unreachable (set CLIPROXYAPI_BASE_URL)"
     return 1
   fi
   return 0
@@ -172,23 +178,43 @@ case "$cmd" in
         # CLIProxyAPI util: per-provider account inventory + last-refresh mtimes (no secrets)
         p="$provider"; [[ "$p" == "xai" || "$p" == "grok-x" ]] && p="xai"
         echo "--- cliproxy util: $p ---"
-        if ls "$CLIPROXY_AUTHDIR/${p}"-*.json >/dev/null 2>&1; then
-          ls -lt "$CLIPROXY_AUTHDIR/${p}"-*.json | awk '{print $6, $7, $8, $9}'
+        prefixes=("$p")
+        [[ "$p" == "gemini" ]] && prefixes+=("antigravity")
+        files=()
+        for prefix in "${prefixes[@]}"; do
+          for file in "$CLIPROXY_AUTHDIR/${prefix}"-*.json; do
+            [[ -e "$file" ]] && files+=("$file")
+          done
+        done
+        if [[ ${#files[@]} -gt 0 ]]; then
+          python3 - "${files[@]}" <<'PY'
+from datetime import datetime
+from pathlib import Path
+import sys
+
+for path in sorted((Path(raw) for raw in sys.argv[1:]), key=lambda item: item.stat().st_mtime, reverse=True):
+    stamp = datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat(timespec="seconds")
+    print(stamp, path)
+PY
         else
-          echo "no ${p}-*.json auth files in $CLIPROXY_AUTHDIR"
+          echo "no matching $p auth files in $CLIPROXY_AUTHDIR"
         fi
         ;;
       grok)
-        curl -fsS -m 3 http://127.0.0.1:31845/accounts 2>/dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);print(json.dumps({k:d.get(k) for k in ("request_counts","exhausted_seconds_remaining","load_balance","current")}, indent=2))' || echo "proxy util unavailable"
+        [[ -n "$GROK_PROXY_URL" ]] && curl -fsS -m 3 "${GROK_PROXY_URL%/}/accounts" 2>/dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);print(json.dumps({k:d.get(k) for k in ("request_counts","exhausted_seconds_remaining","load_balance","current")}, indent=2))' || echo "proxy util unavailable (set GROK_PROXY_URL)"
         ;;
       all|"")
         echo "--- Claude util ---"
-        [[ -f "$ROT/rotate.mjs" ]] && node "$ROT/rotate.mjs" --utilization 2>/dev/null | head -40 || true
+        if [[ -f "$ROT/rotate.mjs" ]]; then
+          node "$ROT/rotate.mjs" --utilization 2>/dev/null | head -40 || true
+        fi
         echo "--- Grok proxy ---"
-        curl -fsS -m 3 http://127.0.0.1:31845/accounts 2>/dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);print("counts",d.get("request_counts"));print("exhausted",d.get("exhausted_seconds_remaining"))' || true
+        if [[ -n "$GROK_PROXY_URL" ]]; then
+          curl -fsS -m 3 "${GROK_PROXY_URL%/}/accounts" 2>/dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);print("counts",d.get("request_counts"));print("exhausted",d.get("exhausted_seconds_remaining"))' || true
+        fi
         ;;
       *)
-        echo "usage: ops-accounts util [all|claude|grok]"; exit 2 ;;
+        echo "usage: ops-accounts util [all|claude|grok|codex|gemini|xai|kimi]"; exit 2 ;;
     esac
     ;;
   switch|rotate-now)
@@ -225,11 +251,11 @@ case "$cmd" in
         fi
         ;;
       claude)
-        have host-token-keepalive && host-token-keepalive --force --claude-only || true
-        [[ -f "$ROT/rotate.mjs" ]] && node "$ROT/rotate.mjs" --refresh 2>/dev/null || true
+        if have host-token-keepalive; then host-token-keepalive --force --claude-only || true; fi
+        if [[ -f "$ROT/rotate.mjs" ]]; then node "$ROT/rotate.mjs" --refresh 2>/dev/null || true; fi
         ;;
       all|"")
-        have host-token-keepalive && host-token-keepalive --force || true
+        if have host-token-keepalive; then host-token-keepalive --force || true; fi
         ;;
       *)
         echo "usage: ops-accounts refresh [all|claude|grok]"; exit 2 ;;
@@ -304,10 +330,10 @@ case "$cmd" in
     sub="${1:-status}"
     case "$sub" in
       status|accounts|"")
-        if curl -fsS -m 2 http://127.0.0.1:31845/accounts 2>/dev/null; then
+        if [[ -n "$GROK_PROXY_URL" ]] && curl -fsS -m 2 "${GROK_PROXY_URL%/}/accounts" 2>/dev/null; then
           echo
         else
-          echo "grok-cli-auth-proxy not listening on :31845"
+          echo "grok-cli-auth-proxy not configured or unreachable (set GROK_PROXY_URL)"
           exit 1
         fi
         ;;
@@ -372,7 +398,7 @@ ops-accounts — multi-provider seats (canonical; /ops:rotate is alias)
   crs | crs-tick
   seats [status|list|set|toggle|import-claude-config|tick]
   gateway status|start|path|self-test|config
-  grok-proxy status   # SuperGrok OAuth proxy :31845
+  grok-proxy status   # endpoint configured by GROK_PROXY_URL
 H
     ;;
   *)
