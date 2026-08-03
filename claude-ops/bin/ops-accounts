@@ -382,7 +382,7 @@ ops-accounts — multi-provider seats (canonical; /ops:rotate is alias)
   crs | crs-tick
   seats [status|list|set|toggle|import-claude-config|tick]
   gateway status|start|path|self-test|config
-  grok-proxy status   # SuperGrok OAuth proxy :31845
+  grok-proxy status   # endpoint configured by GROK_PROXY_URL
 H
     ;;
   *)
