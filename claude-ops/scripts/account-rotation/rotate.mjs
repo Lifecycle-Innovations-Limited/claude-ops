@@ -49,11 +49,17 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync, execFileSync, spawnSync, spawn } from 'child_process';
 import { tmpdir, homedir } from 'os';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS, scrapeBillingState } from './ai-brain.mjs';
 import { destinationUtilHardBlock } from './rotation-policy.mjs';
 import { applyAccountLeases, writeLease } from './account-leases.mjs';
 import { respawnBgSessions } from './bg-respawn.mjs';
+import {
+  trySolveCaptchaWall,
+  maybeClearCaptchaWall,
+  detectCaptchaWall,
+  captchaHardFailed,
+} from './rotate-captcha-soft.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Account config lives in the gitignored user data dir (written by
@@ -66,17 +72,46 @@ const CONFIG_USER_PATH = join(
 const CONFIG_REPO_PATH = join(__dirname, 'config.json');
 const CONFIG_PATH =
   process.env.CLAUDE_ROTATOR_CONFIG || (existsSync(CONFIG_USER_PATH) ? CONFIG_USER_PATH : CONFIG_REPO_PATH);
-const STATE_PATH = join(__dirname, 'state.json');
-const LOCK_PATH = join(__dirname, '.rotating');
-const LOG_PATH = join(__dirname, 'rotation.log');
-const OAUTH_SNAPSHOTS_DIR = join(__dirname, 'oauth-snapshots');
-const BROWSER_PIN_PATH = join(__dirname, '.browser-pin');
-const BROWSER_PIN_BACKUP_PATH = join(__dirname, '.browser-pin-backup.json');
+const ROTATION_DATA_DIR = join(dirname(CONFIG_USER_PATH), 'account-rotation');
+mkdirSync(ROTATION_DATA_DIR, { recursive: true, mode: 0o700 });
+const STATE_PATH = join(ROTATION_DATA_DIR, 'state.json');
+const LOCK_PATH = join(ROTATION_DATA_DIR, '.rotating');
+const LOG_PATH = join(ROTATION_DATA_DIR, 'rotation.log');
+const RATE_LIMITS_PATH = join(ROTATION_DATA_DIR, '.rate-limits.json');
+const OAUTH_SNAPSHOTS_DIR = join(ROTATION_DATA_DIR, 'oauth-snapshots');
+const BROWSER_PIN_PATH = join(ROTATION_DATA_DIR, '.browser-pin');
+const BROWSER_PIN_BACKUP_PATH = join(ROTATION_DATA_DIR, '.browser-pin-backup.json');
 const CLAUDE_JSON_PATH = join(process.env.HOME || '', '.claude.json');
+
+// One-time migration from historical repo-local runtime files. These files can
+// contain real account identifiers and must never live inside the public checkout,
+// even when gitignored, because the repository secret scanner intentionally scans
+// the working tree too.
+for (const name of ['state.json', 'rotation.log', '.rate-limits.json', '.browser-pin', '.browser-pin-backup.json']) {
+  const oldPath = join(__dirname, name);
+  const newPath = join(ROTATION_DATA_DIR, name);
+  if (!existsSync(oldPath) || existsSync(newPath)) continue;
+  try {
+    renameSync(oldPath, newPath);
+  } catch {}
+}
 
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const ACTIVE_KEYCHAIN_ACCOUNT = 'unknown';
 const VAULT_KEYCHAIN_ACCOUNT = process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || 'claude-ops';
+
+// When Sam's canonical CLIProxyAPI checkout exists, browser reauth should write
+// there directly. CLIProxyAPI owns the per-seat JSON schema and is the sole
+// refresh writer; translating Claude Code's keychain after OAuth creates a
+// second credential plane and was the source of "OAuth succeeded / rotation
+// unverified" failures. All paths remain configurable for other installations.
+const CLIPROXYAPI_DIR = process.env.CLIPROXYAPI_DIR || join(homedir(), 'Developer', 'active', 'cliproxyapi');
+const CLIPROXYAPI_BINARY = process.env.CLIPROXYAPI_BINARY || join(CLIPROXYAPI_DIR, 'cli-proxy-api');
+const CLIPROXYAPI_CONFIG = process.env.CLIPROXYAPI_CONFIG || join(CLIPROXYAPI_DIR, 'config', 'config.yaml');
+const CLIPROXYAPI_AUTH_DIR =
+  process.env.CLIPROXYAPI_AUTH_DIR || process.env.CLIPROXY_AUTH_DIR || join(CLIPROXYAPI_DIR, 'auths');
+const CLIPROXY_REPLICA_SYNC =
+  process.env.CLIPROXY_REPLICA_SYNC || join(homedir(), '.local', 'bin', 'crsproxy-replica-sync.py');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1634,6 +1669,88 @@ function saveCurrentToken(account) {
   return false;
 }
 
+function cliproxyAuthSnapshot(account) {
+  if (!existsSync(CLIPROXYAPI_AUTH_DIR)) return null;
+  const candidates = [];
+  for (const name of readdirSync(CLIPROXYAPI_AUTH_DIR)) {
+    if (!name.startsWith('claude-') || !name.endsWith('.json') || name.includes('.bak')) continue;
+    const path = join(CLIPROXYAPI_AUTH_DIR, name);
+    try {
+      const data = JSON.parse(readFileSync(path, 'utf8'));
+      if ((data.email || '').toLowerCase() !== account.email.toLowerCase()) continue;
+      const orgMatches =
+        !account.orgUuid || data.organization_uuid === account.orgUuid || data.organization_name === account.orgName;
+      candidates.push({ path, data, orgMatches });
+    } catch {}
+  }
+  const picked = candidates.find((entry) => entry.orgMatches) || candidates[0];
+  if (!picked) return null;
+  const tokenFingerprint = createHash('sha256')
+    .update(`${picked.data.access_token || ''}\0${picked.data.refresh_token || ''}`)
+    .digest('hex');
+  return {
+    path: picked.path,
+    name: picked.path.split('/').pop(),
+    tokenFingerprint,
+    lastRefresh: picked.data.last_refresh || '',
+    mtimeMs: statSync(picked.path).mtimeMs,
+  };
+}
+
+function cliproxyAuthChanged(before, after) {
+  if (!after) return false;
+  if (!before) return true;
+  return (
+    before.tokenFingerprint !== after.tokenFingerprint ||
+    before.lastRefresh !== after.lastRefresh ||
+    before.mtimeMs !== after.mtimeMs
+  );
+}
+
+function clearCliProxyCooldown(account) {
+  if (!existsSync(CLIPROXYAPI_AUTH_DIR)) return;
+  const target = cliproxyAuthSnapshot(account);
+  for (const name of readdirSync(CLIPROXYAPI_AUTH_DIR)) {
+    if (!name.startsWith('claude-') || !name.endsWith('.cds')) continue;
+    const path = join(CLIPROXYAPI_AUTH_DIR, name);
+    try {
+      const data = JSON.parse(readFileSync(path, 'utf8'));
+      const email = data.email || data.auth_email || '';
+      if (email && email.toLowerCase() !== account.email.toLowerCase()) continue;
+      if (!email && target && name !== target.name.replace(/\.json$/, '.cds')) continue;
+      unlinkSync(path);
+      log(`[cliproxy] Cleared cooldown ${name}`);
+    } catch {
+      if (target && name === target.name.replace(/\.json$/, '.cds')) {
+        try {
+          unlinkSync(path);
+          log(`[cliproxy] Cleared cooldown ${name}`);
+        } catch {}
+      }
+    }
+  }
+}
+
+function syncCliProxyReplica() {
+  if (!existsSync(CLIPROXY_REPLICA_SYNC)) {
+    log('[cliproxy] Replica sync script absent — canonical auth updated locally only');
+    return true;
+  }
+  try {
+    execFileSync('python3', [CLIPROXY_REPLICA_SYNC], {
+      timeout: 180_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, HOME: homedir() },
+    });
+    log('[cliproxy] One-way replica sync completed');
+    return true;
+  } catch (error) {
+    const detail = `${error.stdout || ''}${error.stderr || ''}`.trim().slice(-240);
+    log(`[cliproxy] Replica sync failed: ${detail || error.message}`);
+    return false;
+  }
+}
+
 // ── Browser driver cascade ────────────────────────────────────────────────────
 
 // Driver cascade — Playwright only by default.
@@ -2452,7 +2569,11 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
         [
           'gmail',
           'search',
-          'subject:"Secure link to log in to Claude" newer_than:5m',
+          // Anthropic's current subject (2026-08) is
+          // "Your secure link to Claude.ai is here". Search the stable sender
+          // + phrase rather than one historical exact subject so forwarding
+          // inboxes keep working when the wording changes.
+          'from:anthropic (subject:"secure link" OR subject:"Claude.ai") newer_than:10m',
           '--max',
           '10',
           '-j',
@@ -2554,7 +2675,7 @@ async function pollGmailForMagicLink(accountEmail, maxWaitMs = 120_000) {
 
 // ── Auth flow (driver-agnostic) ───────────────────────────────────────────────
 
-async function runAuthFlow(driver, account) {
+async function runAuthFlow(driver, account, hooks = {}) {
   const creds = fetchGoogleCreds(account) || {};
   const googlePassword = creds.password || fetchGooglePassword(account);
   const googleOtpSecret = creds.otpSecret || null;
@@ -2575,6 +2696,7 @@ async function runAuthFlow(driver, account) {
   // to intervene on the second stagnant step, not the fourth.
   let lastStallUrl = '';
   let stallCount = 0;
+  let consentWriterRenewed = false;
   const STALL_THRESHOLD = 2;
   const aiBrainHistory = [];
   const aiBrainEnabled = driver._page && process.env.CLAUDE_ROTATOR_DISABLE_AI_BRAIN !== '1';
@@ -2609,8 +2731,8 @@ async function runAuthFlow(driver, account) {
       }
     }
     await sleep(4000);
-    // After magic link login, session is now valid — re-navigate to authUrl
-    // so the OAuth flow can complete (org chooser → authorize → callback)
+    // Re-navigate to the current auth URL so OAuth can complete
+    // (org chooser → authorize → callback).
     if (driver._authUrl) {
       // For multi-org accounts (same email, multiple workspaces like
       // user-personal vs user-team), force an explicit org
@@ -3125,6 +3247,29 @@ async function runAuthFlow(driver, account) {
       oauthPath = new URL(url).pathname;
     } catch {}
     if (oauthPath.includes('/oauth/authorize') || (oauthPath.endsWith('/authorize') && url.includes('claude'))) {
+      // Renew the canonical OAuth waiter exactly once at the consent boundary.
+      // This branch is guaranteed to run after the magic-link session exists,
+      // while the initial waiter may already be near its callback timeout.
+      if (!consentWriterRenewed && typeof hooks.afterMagicLinkLogin === 'function') {
+        consentWriterRenewed = true;
+        const renewed = await hooks.afterMagicLinkLogin(driver);
+        if (renewed && driver._authUrl) {
+          log('[cliproxy] Consent boundary using renewed OAuth writer');
+          try {
+            await driver.goto(driver._authUrl);
+          } catch {}
+          await sleep(2500);
+          continue;
+        }
+      }
+      // Clear captcha wall on authorize (can reappear after session settle).
+      if (driver._page) {
+        await trySolveCaptchaWall(driver._page, 'oauth-authorize', log);
+        if (await captchaHardFailed(driver._page)) {
+          log('[captcha] aborting on /oauth/authorize — budget exhausted');
+          return false;
+        }
+      }
       // Magic-link route: we authenticated via a single-use link delivered to
       // account.email's inbox, so the session on this page is guaranteed to be
       // the right account. Skip the readPageText "verify" dance — it failed to
@@ -3189,6 +3334,28 @@ async function runAuthFlow(driver, account) {
           log('Clicked Authorize');
           authorized = true;
           break;
+        }
+        // Claude's React consent button has been observed to ignore both
+        // Playwright locator.click() and real mouse down/up while remaining
+        // visibly enabled. A direct DOM click is the proven fallback.
+        if (driver._page) {
+          try {
+            const domClicked = await driver._page.evaluate(() => {
+              const el = [...document.querySelectorAll('button')].find(
+                (button) => /^Authorize$/i.test((button.innerText || '').trim()) && !button.disabled,
+              );
+              if (!el) return false;
+              el.click();
+              return true;
+            });
+            if (domClicked) {
+              log('Clicked Authorize via DOM fallback');
+              authorized = true;
+              break;
+            }
+          } catch (err) {
+            log(`DOM Authorize fallback failed: ${String(err?.message || err).slice(0, 120)}`);
+          }
         }
         // Check if the prior click (or magic-link) already navigated us off
         // the authorize page. If we're on /oauth/code/success or any non-claude.ai
@@ -3294,6 +3461,14 @@ async function runAuthFlow(driver, account) {
               await driver.goto(magicLink);
             }
             await sleep(4000);
+            // Post-verify captcha wall after inline code/link path (mirrors finishMagicLinkLogin)
+            if (driver._page) {
+              await trySolveCaptchaWall(driver._page, 'after-inline-code-verify', log);
+              if (await captchaHardFailed(driver._page)) {
+                log('[magic-link] aborting: captcha budget exhausted after inline verify — see CAPTCHA_VNC_HANDOFF');
+                return false;
+              }
+            }
             // After magic link login, session is now valid — re-navigate to authUrl
             // so the OAuth flow can complete (org chooser → authorize → callback)
             if (driver._authUrl) {
@@ -3392,7 +3567,12 @@ async function runAuthFlow(driver, account) {
 
 // ── Browser OAuth fallback ────────────────────────────────────────────────────
 
+let lastBrowserOAuthUsedCliProxy = false;
+let lastBrowserOAuthCliProxyVerified = false;
+
 async function browserOAuthFallback(account) {
+  lastBrowserOAuthUsedCliProxy = false;
+  lastBrowserOAuthCliProxyVerified = false;
   log(`[fallback] Browser OAuth for ${account.email}...`);
 
   const pid = process.pid;
@@ -3417,10 +3597,32 @@ async function browserOAuthFallback(account) {
     mode: 0o700,
   });
 
-  const proc = spawn('claude', ['auth', 'login', '--email', account.email], {
-    env: { ...process.env, BROWSER: capScript },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  const useCliProxy = existsSync(CLIPROXYAPI_BINARY) && existsSync(CLIPROXYAPI_CONFIG);
+  lastBrowserOAuthUsedCliProxy = useCliProxy;
+  const cliproxyBefore = useCliProxy ? cliproxyAuthSnapshot(account) : null;
+  const spawnOAuthWriter = () =>
+    useCliProxy
+      ? spawn(CLIPROXYAPI_BINARY, ['-config', CLIPROXYAPI_CONFIG, '-claude-login'], {
+          cwd: CLIPROXYAPI_DIR,
+          env: {
+            ...process.env,
+            HOME: homedir(),
+            BROWSER: capScript,
+            CLIPROXYAPI_AUTH_DIR,
+            CLIPROXY_AUTH_DIR: CLIPROXYAPI_AUTH_DIR,
+          },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        })
+      : spawn('claude', ['auth', 'login', '--email', account.email], {
+          env: { ...process.env, BROWSER: capScript },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+  let proc = spawnOAuthWriter();
+  log(
+    useCliProxy
+      ? `[cliproxy] OAuth writer: ${CLIPROXYAPI_BINARY}`
+      : '[cliproxy] Canonical checkout unavailable — falling back to Claude Code keychain writer',
+  );
 
   // BROWSER script gets the URL with localhost redirect (what we want).
   // stderr gets a fallback URL with platform.claude.com redirect (don't use that).
@@ -3462,9 +3664,58 @@ async function browserOAuthFallback(account) {
   log(`Auth URL captured: ${authUrl.substring(0, 80)}...`);
 
   // Extract localhost port from redirect_uri in the auth URL for code replay
-  const portMatch = authUrl.match(/redirect_uri=http%3A%2F%2Flocalhost%3A(\d+)/);
-  const localhostPort = portMatch ? portMatch[1] : null;
+  const callbackPort = (url) => url.match(/redirect_uri=http%3A%2F%2Flocalhost%3A(\d+)/)?.[1] || null;
+  let localhostPort = callbackPort(authUrl);
   log(`Localhost callback port: ${localhostPort || 'unknown'}`);
+
+  // Captcha-heavy login can consume most of CLIProxyAPI's OAuth callback
+  // lifetime before consent is clicked. Once the magic link has established
+  // the intended Claude session, renew the waiter and PKCE URL so final consent
+  // never redirects to a dead localhost listener.
+  async function refreshOAuthWriterAfterLogin(driver) {
+    if (!useCliProxy) return false;
+    try {
+      proc.kill();
+    } catch {}
+    try {
+      unlinkSync(urlFile);
+    } catch {}
+    if (!existsSync(capScript)) {
+      writeFileSync(capScript, `#!/bin/bash\numask 077\necho "$1" > "${urlFile}"\n`, {
+        flag: 'wx',
+        mode: 0o700,
+      });
+    }
+    proc = spawnOAuthWriter();
+    let freshUrl = null;
+    const scanFreshUrl = (chunk) => {
+      const match = chunk.toString().match(/https?:\/\/[^\s\])"'\n]+/);
+      if (match) freshUrl = match[0];
+    };
+    proc.stdout.on('data', scanFreshUrl);
+    proc.stderr.on('data', scanFreshUrl);
+    for (let i = 0; i < 30 && !freshUrl; i++) {
+      await sleep(500);
+      if (!existsSync(urlFile)) continue;
+      const candidate = readFileSync(urlFile, 'utf8').trim();
+      try {
+        unlinkSync(urlFile);
+      } catch {}
+      if (candidate.startsWith('http')) freshUrl = candidate;
+    }
+    proc.stdout.off('data', scanFreshUrl);
+    proc.stderr.off('data', scanFreshUrl);
+    if (!freshUrl) {
+      log('[cliproxy] Failed to renew OAuth waiter after magic-link login');
+      return false;
+    }
+    authUrl = freshUrl;
+    localhostPort = callbackPort(authUrl);
+    driver._authUrl = authUrl;
+    driver._localhostPort = localhostPort;
+    log(`[cliproxy] Renewed OAuth waiter after login; callback port ${localhostPort || 'unknown'}`);
+    return true;
+  }
 
   // Cascade: try each driver in order until one completes the OAuth flow.
   // A driver "fails" if runAuthFlow returns false (URL never reaches localhost callback).
@@ -3512,7 +3763,9 @@ async function browserOAuthFallback(account) {
           continue;
         }
       }
-      success = await runAuthFlow(driver, account);
+      success = await runAuthFlow(driver, account, {
+        afterMagicLinkLogin: refreshOAuthWriterAfterLogin,
+      });
 
       if (success) {
         await maybeScrapeBillingAfterOAuth(driver, account, log);
@@ -3539,6 +3792,31 @@ async function browserOAuthFallback(account) {
           r();
         }
       });
+
+      if (useCliProxy) {
+        // CLIProxyAPI writes its native per-seat JSON when the callback succeeds.
+        // Browser success alone is insufficient: require real auth-file mutation.
+        let cliproxyAfter = null;
+        for (let i = 0; i < 20; i++) {
+          cliproxyAfter = cliproxyAuthSnapshot(account);
+          if (cliproxyAuthChanged(cliproxyBefore, cliproxyAfter)) break;
+          await sleep(500);
+        }
+        if (!cliproxyAuthChanged(cliproxyBefore, cliproxyAfter)) {
+          log('[cliproxy] OAuth page succeeded but matching canonical auth JSON did not mutate');
+          success = false;
+          failed.add(driver._driverName);
+          continue;
+        }
+        log(
+          `[cliproxy] Canonical auth updated: ${cliproxyAfter.name} last_refresh=${cliproxyAfter.lastRefresh || 'set'}`,
+        );
+        lastBrowserOAuthCliProxyVerified = true;
+        clearCliProxyCooldown(account);
+        if (!syncCliProxyReplica()) {
+          log('[cliproxy] WARNING: canonical seat is live but replica sync needs retry');
+        }
+      }
     } catch (err) {
       log(`[${driver._driverName}] threw: ${err.message}`);
       failed.add(driver._driverName);
@@ -4016,7 +4294,7 @@ async function rotate(targetEmail, opts = {}) {
   // Snapshot outgoing account's utilization before clearing the rate-limits file.
   // This lets pickNextAccount avoid rotating back to an exhausted account.
   try {
-    const rlPath = join(__dirname, '.rate-limits.json');
+    const rlPath = RATE_LIMITS_PATH;
     if (existsSync(rlPath)) {
       const rl = JSON.parse(readFileSync(rlPath, 'utf8'));
       const outKey = state.activeAccount;
@@ -4037,7 +4315,7 @@ async function rotate(targetEmail, opts = {}) {
   // Clear stale rate limits file so daemon doesn't use old account's utilization
   if (!dryRun) {
     try {
-      unlinkSync(join(__dirname, '.rate-limits.json'));
+      unlinkSync(RATE_LIMITS_PATH);
     } catch {}
   } else {
     log('[DRY-RUN] Would clear .rate-limits.json');
@@ -4062,8 +4340,11 @@ async function rotate(targetEmail, opts = {}) {
     return false;
   }
 
-  // Verify by reading back what's now in the active keychain
-  let verified = false;
+  // Verify by reading back what's now in the active keychain. In canonical
+  // CLIProxyAPI mode, browserOAuthFallback already required token-fingerprint
+  // mutation in this exact run, so the legacy keychain is not an additional
+  // source of truth.
+  let verified = lastBrowserOAuthUsedCliProxy && lastBrowserOAuthCliProxyVerified;
   try {
     const active = readKeychain();
     const stored = readStoredToken(account);
@@ -4132,19 +4413,21 @@ async function rotate(targetEmail, opts = {}) {
     }
   }
 
-  // Trigger token refresh via `claude auth status` — skipped in --no-browser mode
-  // because the API is likely rate limited when the daemon triggers a rotation.
-  // Claude Code's own 30s keychain re-read will pick up the new token.
-  if (verified && !opts.noBrowser) {
+  // Trigger/save the legacy Claude Code keychain only when that was the writer.
+  // Canonical CLIProxyAPI mode already wrote its native auth JSON and synced the
+  // replica; touching the unrelated Claude Code keychain creates a second token
+  // plane and logs a misleading failure on machines without that keychain item.
+  if (verified && !opts.noBrowser && !lastBrowserOAuthUsedCliProxy) {
     try {
       execSync('claude auth status 2>&1', { timeout: 10_000 });
       log('Token refresh triggered via auth status');
     } catch {}
   }
 
-  // Save verified (and possibly refreshed) token to vault for future fast swaps
-  if (verified && !dryRun) saveCurrentToken(account);
-  if (verified && dryRun) log('[DRY-RUN] Would save verified token to vault');
+  // Save verified (and possibly refreshed) token to the legacy vault only when
+  // the legacy keychain was the OAuth writer.
+  if (verified && !dryRun && !lastBrowserOAuthUsedCliProxy) saveCurrentToken(account);
+  if (verified && dryRun && !lastBrowserOAuthUsedCliProxy) log('[DRY-RUN] Would save verified token to vault');
 
   // Update state — track cumulative window usage per account
   const now = new Date().toISOString();
@@ -4575,7 +4858,7 @@ async function showStatus() {
   // Read real utilization if available
   let realUtil = null;
   try {
-    const rlFile = join(__dirname, '.rate-limits.json');
+    const rlFile = RATE_LIMITS_PATH;
     if (existsSync(rlFile)) {
       const rl = JSON.parse(readFileSync(rlFile, 'utf8'));
       const age = Date.now() - rl.ts * 1000;
