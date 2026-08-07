@@ -51,13 +51,14 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) OS="windows"; IS_WINDOWS=true ;;
 esac
 
-# ── v3: consolidated philosophy — every safe tweak ON by default ────
-# Like `speedup` standalone, `ops-speedup` runs THE WORKS in one shot:
-# clean + deep + aggressive disk reclaim + responsiveness tweaks.
-# Diagnostic-only modes (--json/--scan/--scan-only) skip the cleanup.
-if [ "$MODE_JSON" = false ] && [ "$MODE_SCAN" = false ]; then
-  MODE_CLEAN=true; MODE_DEEP=true; MODE_AGGRESSIVE=true
-fi
+# ── Mode selection ───────────────────────────────────────────────
+# Each mode flag is explicit and does NOT auto-promote to a stronger
+# mode. Bare `ops-speedup` (no flags) matches the documented CLI
+# reference: visual banner + hardware summary only, zero side effects.
+# --clean stays non-destructive; --deep adds file removal; only
+# --aggressive adds potentially-breaking actions. Callers (this skill)
+# are responsible for picking the right flag per user intent/consent —
+# the binary must never silently escalate on its own.
 
 # macOS tool reference (avoid triggering cross-OS static scanners)
 _OSASCRIPT="osa""script"
@@ -80,7 +81,41 @@ recent_run() {
 
 # ── Helpers ──────────────────────────────────────────────────────
 num() { local v="${1:-0}"; v=$(echo "$v" | tr -cd '0-9.-'); echo "${v:-0}"; }
-safe_du_m() { du -sm "$1" 2>/dev/null | awk '{print $1+0}' || echo 0; }
+
+# Size of a path in whole MB, always a bare integer — never empty.
+# The old form (`du | awk '{print $1+0}' || echo 0`) emitted an EMPTY string for
+# a missing path: du fails, awk gets no input and still exits 0, so the `|| echo 0`
+# fallback never fired. That produced `key=` lines which broke both the
+# key=value parser and the JSON emitter (`"metal_cache": ,` = invalid JSON).
+safe_du_m() {
+  [ -e "$1" ] || { echo 0; return; }
+  local v
+  v=$(du -sm "$1" 2>/dev/null | tail -1 | awk '{print $1+0}')
+  echo "${v:-0}"
+}
+
+# Normalise a human-readable size string ("2.5GB", "315.1MB", "0B") to whole MB.
+# Docker/journalctl report mixed units; parsing only the leading integer
+# understates GB values by ~1000x, so value AND unit must both be read.
+to_mb() {
+  echo "${1:-0}" | awk '{
+    if (match($0, /[0-9]+(\.[0-9]+)?/)) {
+      v = substr($0, RSTART, RLENGTH) + 0
+      u = substr($0, RSTART + RLENGTH)
+      if (u ~ /^[[:space:]]*[Tt]/)      v = v * 1048576
+      else if (u ~ /^[[:space:]]*[Gg]/) v = v * 1024
+      else if (u ~ /^[[:space:]]*[Mm]/) v = v
+      else if (u ~ /^[[:space:]]*[Kk]/) v = v / 1024
+      else                              v = v / 1048576
+      printf "%d", v
+    } else print 0
+  }'
+}
+
+docker_reclaimable_mb() {
+  command -v docker >/dev/null 2>&1 || { echo 0; return; }
+  to_mb "$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1)"
+}
 
 # ── Hardware fingerprint ─────────────────────────────────────────
 if $IS_MACOS; then
@@ -126,7 +161,7 @@ probe_disk_reclaimable() {
       echo "tmp=$(safe_du_m /tmp)"
       echo "caches=$(safe_du_m "$HOME/Library/Caches")"
       echo "metal_cache=$(safe_du_m "$HOME/Library/Caches/com.apple.metal")"
-      echo "docker=$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1 | grep -oE '[0-9]+' || echo 0)"
+      echo "docker=$(docker_reclaimable_mb)"
     elif $IS_LINUX || $IS_WSL; then
       echo "npm_cache=$(safe_du_m "$HOME/.npm/_cacache")"
       echo "pnpm_cache=$(safe_du_m "${PNPM_HOME:-$HOME/.local/share/pnpm/store}")"
@@ -137,8 +172,8 @@ probe_disk_reclaimable() {
       echo "tmp=$(safe_du_m /tmp)"
       echo "apt_cache=$(safe_du_m /var/cache/apt/archives)"
       # Journal size — parse e.g. "1.2G" or "340M" without bc
-      echo "journal=$(journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[MG]' | head -1 | awk '{if (index($0,"G")) {gsub(/G/,""); print int($0*1024)} else {gsub(/M/,""); print int($0)}}' || echo 0)"
-      echo "docker=$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1 | grep -oE '[0-9]+' || echo 0)"
+      echo "journal=$(to_mb "$(journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[KMGT]?B?' | head -1)")"
+      echo "docker=$(docker_reclaimable_mb)"
     else
       echo "tmp=0"
     fi
@@ -391,7 +426,15 @@ MACOS_OFFENDER_AGENTS=(
 action_clean_caches() {
   local freed=0
   if $IS_MACOS; then
-    [ -d "$HOME/Library/Logs" ] && { rm -rf "$HOME/Library/Logs"/* 2>/dev/null || true; freed=$((freed + 1)); }
+    # Logs: age-gated, never a blanket wipe. The --clean tier must stay
+    # non-destructive, so only files older than 14d go — and agent/structured
+    # log dirs are preserved outright (they are durable work artifacts, not cache).
+    if [ -d "$HOME/Library/Logs" ]; then
+      find "$HOME/Library/Logs" -type f -mtime +14 \
+        -not -path "*/AgentWork/*" \
+        -delete 2>/dev/null || true
+      freed=$((freed + 1))
+    fi
     [ -d "$HOME/Library/Caches/com.apple.nsurlsessiond" ] && rm -rf "$HOME/Library/Caches/com.apple.nsurlsessiond"/* 2>/dev/null
     [ -d "$HOME/Library/Caches/com.apple.metal" ] && rm -rf "$HOME/Library/Caches/com.apple.metal"/* 2>/dev/null
     [ -d "$HOME/Library/Caches/CloudKit" ] && rm -rf "$HOME/Library/Caches/CloudKit"/* 2>/dev/null
@@ -492,7 +535,15 @@ action_clean_deep() {
 # Stale node_modules / .next / dist (>14 days) — aggressive only
 action_clean_stale_builds() {
   $MODE_AGGRESSIVE || return 0
-  local roots=(~/Projects ~/code ~/workspace ~/src ~/dev)
+  # Roots are configurable — hardcoding a guessed list either misses the
+  # user's real work root or scans dead paths. Override with
+  # OPS_SPEEDUP_BUILD_ROOTS="/path/one:/path/two".
+  local roots
+  if [ -n "${OPS_SPEEDUP_BUILD_ROOTS:-}" ]; then
+    IFS=':' read -r -a roots <<< "$OPS_SPEEDUP_BUILD_ROOTS"
+  else
+    roots=(~/Developer ~/Projects ~/code ~/workspace ~/src ~/dev)
+  fi
   local count=0 total_kb=0
   for root in "${roots[@]}"; do
     [ -d "$root" ] || continue
@@ -541,8 +592,12 @@ action_launch_offenders() {
     for agent in "${MACOS_OFFENDER_AGENTS[@]}"; do
       local pids; pids=$(pgrep -f "$agent" 2>/dev/null || true)
       [ -z "$pids" ] && continue
-      echo "$pids" | while read -r pid; do kill -TERM "$pid" 2>/dev/null || true; done
-      total=$((total + $(echo "$pids" | wc -l | tr -d ' ')))
+      local n; n=$(echo "$pids" | wc -l | tr -d ' ')
+      while read -r pid; do
+        [ -z "$pid" ] && continue
+        kill -TERM "$pid" 2>/dev/null || true
+      done <<< "$pids"
+      total=$((total + n))
       if $MODE_AGGRESSIVE; then
         launchctl bootout "gui/$(id -u)/$agent" 2>/dev/null || \
           launchctl unload -w "/System/Library/LaunchAgents/$agent.plist" 2>/dev/null || true
@@ -591,20 +646,32 @@ action_launch_offenders() {
 # Demote background daemons to low priority (doesn't kill)
 action_demote_background() {
   if $IS_MACOS; then
-    local demoted=0
-    ps -Ao pid,comm 2>/dev/null | grep -E "$MACOS_DEMOTE_RE" | awk '{print $1}' | while read -r pid; do
+    local demoted=0 pid
+    # Feed via process substitution, not a pipe: a `| while` runs in a subshell
+    # so the counter increment was discarded and the success line printed
+    # unconditionally even when nothing matched.
+    while read -r pid; do
       [ -z "$pid" ] && continue
       taskpolicy -b -p "$pid" 2>/dev/null && demoted=$((demoted + 1))
-    done
-    echo "  ${GRN}✓${RST} Background daemons demoted to E-cores"
+    done < <(ps -Ao pid,comm 2>/dev/null | grep -E "$MACOS_DEMOTE_RE" | awk '{print $1}')
+    if (( demoted > 0 )); then
+      echo "  ${GRN}✓${RST} $demoted background daemon(s) demoted to E-cores"
+    else
+      echo "  ${DIM}·${RST} No background daemons needed demoting"
+    fi
   elif $IS_LINUX || $IS_WSL; then
     local linux_demote="tracker-extract|tracker-miner|packagekitd|snapd|evolution|gvfsd"
-    ps -Ao pid,comm 2>/dev/null | grep -E "$linux_demote" | awk '{print $1}' | while read -r pid; do
+    local demoted=0 pid
+    while read -r pid; do
       [ -z "$pid" ] && continue
-      renice +10 -p "$pid" 2>/dev/null >/dev/null
+      renice +10 -p "$pid" 2>/dev/null >/dev/null && demoted=$((demoted + 1))
       command -v ionice >/dev/null 2>&1 && ionice -c3 -p "$pid" 2>/dev/null
-    done
-    echo "  ${GRN}✓${RST} Background daemons renice'd + ionice'd"
+    done < <(ps -Ao pid,comm 2>/dev/null | grep -E "$linux_demote" | awk '{print $1}')
+    if (( demoted > 0 )); then
+      echo "  ${GRN}✓${RST} $demoted background daemon(s) renice'd + ionice'd"
+    else
+      echo "  ${DIM}·${RST} No background daemons needed demoting"
+    fi
   fi
 }
 
