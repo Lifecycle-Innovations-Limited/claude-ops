@@ -52,11 +52,15 @@ trap 'rm -rf "$TMPDIR_OPS"' EXIT
 # Check each cluster in parallel
 for cluster in $CLUSTERS; do
   (
-    # List services
-    SERVICES=$(aws ecs list-services ${AWS_REGION_ARG[@]+"${AWS_REGION_ARG[@]}"} --cluster "$cluster" --query 'serviceArns[*]' --output text 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ')
+    # Cluster values may be full ARNs; use a filesystem-safe result filename.
+    cluster_file=$(printf '%s' "$cluster" | tr '/:' '__')
+
+    # List services. AWS returns full ARNs; keep only the final service segment.
+    SERVICES=$(aws ecs list-services ${AWS_REGION_ARG[@]+"${AWS_REGION_ARG[@]}"} --cluster "$cluster" --query 'serviceArns[*]' --output text 2>/dev/null \
+      | tr '\t' '\n' | sed '/^$/d; s#.*/##' | tr '\n' ' ')
 
     if [ -z "$SERVICES" ]; then
-      echo "{\"cluster\":\"$cluster\",\"status\":\"empty\",\"services\":[]}" > "$TMPDIR_OPS/$cluster.json"
+      echo "{\"cluster\":\"$cluster\",\"status\":\"empty\",\"services\":[]}" > "$TMPDIR_OPS/$cluster_file.json"
     else
       RESULT=$(aws ecs describe-services ${AWS_REGION_ARG[@]+"${AWS_REGION_ARG[@]}"} --cluster "$cluster" --services $SERVICES \
         --query 'services[*].{name:serviceName,running:runningCount,desired:desiredCount,status:status}' \
@@ -74,7 +78,7 @@ for cluster in $CLUSTERS; do
         STATUS="degraded"
       fi
 
-      echo "{\"cluster\":\"$cluster\",\"status\":\"$STATUS\",\"services\":$RESULT}" > "$TMPDIR_OPS/$cluster.json"
+      echo "{\"cluster\":\"$cluster\",\"status\":\"$STATUS\",\"services\":$RESULT}" > "$TMPDIR_OPS/$cluster_file.json"
     fi
   ) &
 done
