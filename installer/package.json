@@ -21,7 +21,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^4.3.1"
   },
   "devDependencies": {
     "prettier": "^3.9.5"
