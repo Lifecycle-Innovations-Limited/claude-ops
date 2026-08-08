@@ -120,9 +120,12 @@ if [ -f "$PREFS" ]; then
   # --- 2. preferences.json: partner_registry.shopify_admin.stores ---
   PR_ALIASES=$(jq -r '.partner_registry.shopify_admin.stores // {} | keys[]' "$PREFS" 2>/dev/null || true)
   for alias in $PR_ALIASES; do
-    # Skip if we already emitted this alias from .ecom.projects
-    [ -f "$TMPDIR_OPS/shopify-${alias}.json" ] && continue
-    [ -f "$TMPDIR_OPS/shopify-partner-${alias}.json" ] && continue
+    # .ecom.projects is the higher-priority source. Do not use background-created
+    # temp files as the dedupe signal: the probe may not have written them yet,
+    # allowing the lower-priority partner_registry result to overwrite it.
+    if printf '%s\n' "$ECOM_ALIASES" | grep -Fxq "$alias"; then
+      continue
+    fi
 
     STORE_INFO=$(jq -c --arg a "$alias" '.partner_registry.shopify_admin.stores[$a]' "$PREFS")
     TYPE=$(echo "$STORE_INFO" | jq -r '.type // "merchant"')
