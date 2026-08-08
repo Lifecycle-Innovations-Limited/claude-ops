@@ -196,7 +196,12 @@ scan_repo() {
   local repo_slug="$1"      # owner/name
   local repo_path="$2"      # absolute path to working tree
   local safe_name
-  safe_name=$(echo "$repo_slug" | tr '/' '_')
+  # The registry may contain multiple local checkouts/worktrees for one remote
+  # slug. Include a stable path digest so parallel scans cannot overwrite the
+  # same temp file and corrupt the assembled JSON with duplicate separators.
+  local path_digest
+  path_digest=$(printf '%s' "$repo_path" | shasum -a 256 | cut -c1-12)
+  safe_name="$(echo "$repo_slug" | tr '/' '_')_${path_digest}"
 
   if [ ! -d "$repo_path/.git" ] && [ ! -f "$repo_path/.git" ]; then
     return 0
@@ -205,9 +210,9 @@ scan_repo() {
   # --- Working tree state -------------------------------------------------
   local current_branch dirty staged stashed unpushed
   current_branch=$(_git -C "$repo_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "DETACHED")
-  dirty=$(_git -C "$repo_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-  staged=$(_git -C "$repo_path" diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')
-  stashed=$(_git -C "$repo_path" stash list 2>/dev/null | wc -l | tr -d ' ')
+  dirty=$({ _git -C "$repo_path" status --porcelain 2>/dev/null || true; } | wc -l | tr -d ' ')
+  staged=$({ _git -C "$repo_path" diff --cached --name-only 2>/dev/null || true; } | wc -l | tr -d ' ')
+  stashed=$({ _git -C "$repo_path" stash list 2>/dev/null || true; } | wc -l | tr -d ' ')
 
   # Fetch quietly so ahead/behind are accurate. Bounded by SALVAGE_NET_TIMEOUT so
   # a single hung remote can't wedge the walk. Skip on failure (offline/no remote).
@@ -226,7 +231,7 @@ scan_repo() {
   fi
 
   # Unpushed commits on current branch (relative to its upstream, if any).
-  unpushed=$(_git -C "$repo_path" log '@{u}..' --oneline 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+  unpushed=$({ _git -C "$repo_path" log '@{u}..' --oneline 2>/dev/null || true; } | wc -l | tr -d ' ')
 
   # --- Local branches not on integration branch ---------------------------
   # Branches whose tip is NOT an ancestor of origin/<integration_branch> AND
@@ -316,13 +321,18 @@ scan_repo() {
       | while IFS='|' read -r wt_path wt_sha wt_branch; do
           [ -z "$wt_path" ] && continue
           # Skip the primary working tree (we report it separately as repo state).
-          if [ "$wt_path" = "$repo_path" ]; then continue; fi
+          # Registry paths commonly have a trailing slash while `git worktree list`
+          # does not, so compare canonical physical paths rather than raw strings.
+          local wt_canonical repo_canonical
+          wt_canonical=$(cd "$wt_path" 2>/dev/null && pwd -P || echo "$wt_path")
+          repo_canonical=$(cd "$repo_path" 2>/dev/null && pwd -P || echo "$repo_path")
+          if [ "$wt_canonical" = "$repo_canonical" ]; then continue; fi
 
           local wt_dirty wt_unpushed wt_has_pr wt_pr
-          wt_dirty=$(_git -C "$wt_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+          wt_dirty=$({ _git -C "$wt_path" status --porcelain 2>/dev/null || true; } | wc -l | tr -d ' ')
           wt_unpushed=0
           if [ "$wt_branch" != "DETACHED" ] && [ -n "$wt_branch" ]; then
-            wt_unpushed=$(_git -C "$wt_path" log '@{u}..' --oneline 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+            wt_unpushed=$({ _git -C "$wt_path" log '@{u}..' --oneline 2>/dev/null || true; } | wc -l | tr -d ' ')
             wt_pr=$(_net gh pr list --repo "$repo_slug" --head "$wt_branch" --state open --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
             [ -n "$wt_pr" ] && wt_has_pr="true" || wt_has_pr="false"
           else
