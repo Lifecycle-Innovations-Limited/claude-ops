@@ -326,29 +326,6 @@ const force = args.includes('--force');
 const dryRun = args.includes('--dry-run');
 const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
 const state = readState();
-const ROTATING_LOCK = join(__dirname, '.rotating');
-const MAGIC_LINK_TIMEOUT_MS = Number(process.env.CLAUDE_ROT_MAGIC_TOTAL_TIMEOUT_MS || 720_000);
-
-function pidAlive(pid) {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** True when another rotate/reauth already holds the fleet lock. */
-function rotationInProgress() {
-  try {
-    if (!existsSync(ROTATING_LOCK)) return false;
-    const raw = JSON.parse(readFileSync(ROTATING_LOCK, 'utf8'));
-    return pidAlive(Number(raw?.pid || 0));
-  } catch {
-    return false;
-  }
-}
 
 /** Prefer re-authing accounts with headroom; skip 7d-exhausted waste. */
 function magicLinkPriority(account) {
@@ -360,18 +337,6 @@ function magicLinkPriority(account) {
   const weekly = Number.isFinite(pct7) && !(reset7Ms && reset7Ms < now) ? pct7 : 50;
   // Lower score = better magic-link candidate (headroom first).
   return weekly;
-}
-
-function shouldSkipMagicLinkForUtil(account) {
-  const key = accountKey(account);
-  const u = state.accounts?.[key]?.lastUtilization || {};
-  const now = Date.now();
-  const pct7 = Number(u.pct7);
-  const reset7Ms = Number(u.reset7) > 0 ? Number(u.reset7) * 1000 : 0;
-  if (Number.isFinite(pct7) && pct7 >= 95 && !(reset7Ms && reset7Ms < now)) {
-    return `7d util ${pct7}% exhausted — re-auth deferred (cannot use until weekly reset)`;
-  }
-  return null;
 }
 
 // Process accounts with freshest tokens first for refresh grant; when picking
@@ -390,7 +355,6 @@ const accountsOrdered = [...config.accounts].sort((a, b) => {
 let refreshed = 0;
 let failed = 0;
 let skipped = 0;
-let magicLinkAttempted = false;
 
 for (let i = 0; i < accountsOrdered.length; i++) {
   const account = accountsOrdered[i];
@@ -456,47 +420,13 @@ for (let i = 0; i < accountsOrdered.length; i++) {
     if (!result.ok) {
       log(`${key}: ✗ refresh failed — ${result.error}`);
 
-      // HTTP 400 = dead refresh_token. Browser re-auth is owned by the always-on
-      // magic-link-autoloop (com.sam.crs-magic-link-autoloop) — never spawn a
-      // competing headed OAuth from the hourly refresher (2026-07-16 thrash).
-      // Opt-in only: CLAUDE_ROTATION_REFRESH_MAGIC_LINK=1 for emergency one-shots.
+      // HTTP 400 = dead refresh_token. Never spawn authentication from the
+      // refresher; a separately approved staged enrollment owns recovery.
       if (result.error && result.error.includes('400')) {
         if (account.autoAuthDisabled === true) {
           log(`${key}: unattended re-auth disabled — leaving token for manual recovery`);
-        } else if (process.env.CLAUDE_ROTATION_REFRESH_MAGIC_LINK === '1' && !magicLinkAttempted) {
-          const utilSkip = shouldSkipMagicLinkForUtil(account);
-          if (utilSkip) {
-            log(`${key}: ${utilSkip}`);
-          } else if (rotationInProgress()) {
-            log(`${key}: rotation lock held — deferring magic-link re-auth`);
-          } else {
-            magicLinkAttempted = true;
-            log(
-              `${key}: refresh token invalid — CLAUDE_ROTATION_REFRESH_MAGIC_LINK=1 → magic-link (timeout ${Math.round(MAGIC_LINK_TIMEOUT_MS / 1000)}s)...`,
-            );
-            try {
-              const reAuthResult = execFileSync(
-                process.execPath,
-                [join(__dirname, 'rotate.mjs'), '--to', key, '--magic-link', '--force'],
-                { timeout: MAGIC_LINK_TIMEOUT_MS, encoding: 'utf8' },
-              );
-              log(`${key}: magic link re-auth output: ${reAuthResult.split('\n').slice(-3).join(' | ')}`);
-              const reAuthedToken = readStoredToken(account);
-              if (reAuthedToken) {
-                const reParsed = parseToken(reAuthedToken);
-                if (reParsed?.claudeAiOauth?.accessToken) {
-                  log(`${key}: ✓ re-authed via magic link`);
-                  refreshed++;
-                  continue;
-                }
-              }
-              log(`${key}: magic link re-auth did not produce a valid token`);
-            } catch (err) {
-              log(`${key}: magic link re-auth failed — ${err.message}`);
-            }
-          }
         } else {
-          log(`${key}: refresh grant failed (HTTP 400) — marking needsReauth for magic-link-autoloop`);
+          log(`${key}: refresh grant failed (HTTP 400) — staged enrollment approval required`);
           markNeedsReauth(key, result.error);
         }
       } else if (result.error && /401|invalid|revoked/i.test(result.error)) {

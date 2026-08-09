@@ -55,20 +55,33 @@ Each account entry:
 | `capacityMultiplier`  | no       | Override per-account threshold (default 1.0 = standard Max 20x quota).         |
 | `crsAccountName`      | no       | CRS admin account name this vault entry maps to (for crs-token-feed / crs-priority). |
 
-## Standalone rotate-magic (no CRS)
+## Signed staged Claude enrollment
 
-Most users only need **one account at a time** (or a few seats with the keychain
-rotator). That path does **not** require CRS:
+Direct browser and magic-link reauthentication entrypoints are fail-closed. New
+CLIProxyAPI Claude credentials must be captured outside this plugin, then passed
+to `staged-enrollment.mjs`: first with a short-lived signed `stage` approval and
+later with a distinct signed `activate` approval bound to the staged SHA-256.
+The manifest explicitly binds one ID and auth filename to provider, normalized
+email, organization UUID/name, and owner. Approval keys and usage, staging, and
+rollback directories must be owner-only. The CLI intentionally cannot sign
+approvals and prints only redacted receipt metadata.
 
-```bash
-node "$CLAUDE_PLUGIN_ROOT/scripts/account-rotation/rotate-magic.mjs" --to you@example.com
-# or multi-account OAuth capture:
-node "$CLAUDE_PLUGIN_ROOT/scripts/account-rotation/rotate.mjs" --setup --auto --skip-valid
-```
+Runtime invocation accepts exactly `--config`, `--entry`, `--approval`, and, for
+stage only, `--candidate`. The owner-only deployment config pins every trust
+root, the canonical operation lock, environment/operator, and a finite approval
+TTL no greater than 15 minutes. An activate approval must sign
+`writersQuiesced: true`; this is an operator attestation and does not itself stop
+or contain any external service or writer.
 
-Unattended captcha cascade (visual → desktop-act → VNC) lives in
-`captcha-helper.mjs`, `visual-captcha-solver.mjs`, `captcha-cascade.mjs`. See
-`CAPTCHA-CASCADE.md`.
+`stage` validates without changing active auth, manifest, quarantine, cooldowns,
+services, or replicas. `activate` compare-and-swaps the manifest digest, replaces
+only the approved auth filename, and restores its backup if verification fails.
+
+## Legacy rotate-magic (disabled)
+
+`rotate-magic.mjs`, browser setup modes, refresh emergency fallback, and the
+autoloop no longer dispatch authentication. They return a staged-enrollment
+handoff instead; no environment flag restores the old write path.
 
 ## CRS pool (optional)
 

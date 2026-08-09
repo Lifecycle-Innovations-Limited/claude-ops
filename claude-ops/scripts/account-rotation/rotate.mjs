@@ -17,13 +17,9 @@
  *   node rotate.mjs --status                  # show state
  *   node rotate.mjs --utilization             # live 5h/7d utilization per account
  *   node rotate.mjs --audit-billing           # 🔴/🟢 per-account extra_usage (overage billing) audit
- *   node rotate.mjs --setup                   # manual: claude auth login per account (interactive)
- *   node rotate.mjs --setup --auto            # AUTOMATED: magic-link + browser cascade, all configured accounts end-to-end
- *   node rotate.mjs --setup --auto --skip-valid  # skip accounts whose vault token is still alive
- *   node rotate.mjs --setup --only=<key>      # only re-capture one account (e.g. --only=user@example.com)
+ *   Direct setup and browser authentication are disabled; use staged enrollment.
  *   node rotate.mjs --capture                 # save current active token (print for Dashlane)
  *   node rotate.mjs --session                 # also send /login to running iTerm2 session
- *   node rotate.mjs --magic-link --to <email> # re-auth via email magic link (no Google OAuth)
  *   Note: --allow-extra-usage is ignored if passed (legacy); extra_usage is per-org in Claude console only.
  */
 
@@ -45,6 +41,7 @@ import {
   constants as fsConstants,
 } from 'fs';
 import { persistBedrockClaudeSettings } from './claude-settings-mode.mjs';
+import { automatedAuthAllowed } from './auto-auth-policy.mjs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync, execFileSync, spawnSync, spawn } from 'child_process';
@@ -60,6 +57,11 @@ import {
   detectCaptchaWall,
   captchaHardFailed,
 } from './rotate-captcha-soft.mjs';
+
+if (process.argv.includes('--bootstrap-chrome-profile') || process.argv.includes('--bootstrap-all-chrome-profiles')) {
+  console.error('direct Chrome profile bootstrap refused: staged enrollment is required');
+  process.exit(2);
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Account config lives in the gitignored user data dir (written by
@@ -4044,31 +4046,8 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
     await sleep(500); // 500ms stagger between sessions
   }
 
-  // If Claude relaunches trigger an OAuth browser window (token expired mid-rotation),
-  // reuse the same browser driver that handles the initial auth flow.
-  // Skipped in --no-browser mode (daemon) — token refresh daemon keeps tokens fresh,
-  // so this fallback should never be needed from automatic rotations.
-  if (!noBrowser) {
-    try {
-      await sleep(2000);
-      const driver = await getBrowserDriver(new Set()).catch(() => null);
-      if (driver) {
-        const url = await driver.currentUrl().catch(() => '');
-        if (url && (url.includes('oauth') || url.includes('authorize') || url.includes('claude.ai/login'))) {
-          log(`[session] Detected post-restart OAuth page (${url.substring(0, 60)}) — driving flow`);
-          if (rotatedAccount) {
-            const authOk = await runAuthFlow(driver, rotatedAccount);
-            if (authOk) await maybeScrapeBillingAfterOAuth(driver, rotatedAccount, log);
-          }
-        }
-        try {
-          await driver.close?.();
-        } catch {}
-      }
-    } catch (e) {
-      log(`[session] Post-restart browser check skipped: ${e.message.substring(0, 60)}`);
-    }
-  }
+  // A restarted session that presents OAuth is intentionally left untouched.
+  // This function performs only the browserless token swap above.
 
   log(`[session] Restart complete: ${reachable.length} session(s) cycled`);
 }
@@ -4327,11 +4306,7 @@ async function rotate(targetEmail, opts = {}) {
     ok = true;
   } else {
     ok = await swapToken(account);
-    if (!ok && !opts.noBrowser) {
-      ok = await browserOAuthFallback(account);
-    } else if (!ok) {
-      log('[no-browser] Token swap failed — skipping browser fallback (daemon mode)');
-    }
+    if (!ok) log('[rotation] Token swap failed — browser authentication is disabled; use staged enrollment');
   }
 
   if (!ok) {
@@ -4660,7 +4635,7 @@ async function setup() {
       } catch {}
     }
 
-    if (magicLinkMode && account.autoAuthDisabled === true && !filter) {
+    if (magicLinkMode && !automatedAuthAllowed(account)) {
       console.log(
         `⏭  Skipped: automated reauth disabled (${account.autoAuthDisabledReason || 'manual reauth required'}).`,
       );
@@ -4946,8 +4921,11 @@ function captureCmd(targetEmail = null) {
 
 const args = process.argv.slice(2);
 
-if (args.includes('--setup')) {
-  await setup();
+if (args.includes('--magic-link') || args.includes('--setup')) {
+  console.error(
+    'Direct Claude browser/magic-link authentication is disabled. Use staged-enrollment.mjs with separate stage and activate approvals.',
+  );
+  process.exit(2);
 } else if (args.includes('--utilization')) {
   // Live utilization query for all accounts
   const config = readConfig();
