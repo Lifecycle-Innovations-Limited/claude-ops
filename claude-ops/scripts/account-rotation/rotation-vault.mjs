@@ -2,6 +2,7 @@ import { readFileSync, renameSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { spawnSync } from 'child_process';
+import { requireWriterCapability, withAuthWriterLock } from './auth-writer-coordination.mjs';
 
 const FILE_PATH = process.env.CLAUDE_ROTATION_FILE_VAULT || join(homedir(), '.claude', '.credentials.json');
 const KEYCHAIN_ACCOUNT = process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || 'claude-ops';
@@ -68,6 +69,11 @@ function writeKeychainToken(service, token) {
 }
 
 export function readRotationToken(key, { heal = true } = {}) {
+  if (heal) return withAuthWriterLock(() => readRotationTokenInternal(key, true));
+  return readRotationTokenInternal(key, false);
+}
+
+function readRotationTokenInternal(key, heal) {
   const service = rotationService(key);
   const fileToken = parseToken(readFileStore()[service]);
   const keychainToken = readKeychainToken(service);
@@ -85,6 +91,11 @@ export function readRotationToken(key, { heal = true } = {}) {
 }
 
 export function writeRotationToken(key, token) {
+  return withAuthWriterLock((capability) => writeRotationTokenCoordinated(key, token, capability));
+}
+
+export function writeRotationTokenCoordinated(key, token, capability) {
+  requireWriterCapability(capability);
   const parsed = parseToken(token);
   if (!parsed?.claudeAiOauth?.accessToken) throw new Error(`Invalid rotation token for ${key}`);
   const service = rotationService(key);
@@ -97,6 +108,11 @@ export function reconcileRemoteRotationVault({ host = process.env.CRS_SSH_HOST |
   if (process.platform !== 'darwin' || process.env.CLAUDE_ROTATION_REMOTE_VAULT_SYNC === '0') {
     return { skipped: true, pulled: 0, pushed: 0 };
   }
+  return withAuthWriterLock((capability) => reconcileRemoteRotationVaultCoordinated(host, capability));
+}
+
+function reconcileRemoteRotationVaultCoordinated(host, capability) {
+  requireWriterCapability(capability);
   const read = spawnSync('ssh', [host, 'cat "$HOME/.claude/.credentials.json"'], {
     timeout: 15_000,
     encoding: 'utf8',
@@ -127,7 +143,7 @@ export function reconcileRemoteRotationVault({ host = process.env.CRS_SSH_HOST |
     const localToken = parseToken(readRotationToken(key, { heal: false }));
     const remoteToken = parseToken(remote[service]);
     if (expiry(remoteToken) > expiry(localToken)) {
-      writeRotationToken(key, remoteToken);
+      writeRotationTokenCoordinated(key, remoteToken, capability);
       pulled++;
     } else if (expiry(localToken) > expiry(remoteToken)) {
       remote[service] = localToken;

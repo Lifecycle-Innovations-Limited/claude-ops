@@ -76,6 +76,18 @@ or contain any external service or writer.
 `stage` validates without changing active auth, manifest, quarantine, cooldowns,
 services, or replicas. `activate` compare-and-swaps the manifest digest, replaces
 only the approved auth filename, and restores its backup if verification fails.
+Activation uses an authenticated phase journal beside the operation lock. After
+an interrupted activation, run `staged-enrollment.mjs recover --config <path>`;
+other writers refuse while that journal is pending. A stale lock is reclaimed
+only when its HMAC is valid, it names this host, and its PID is demonstrably
+dead. Malformed and cross-host locks require operator investigation.
+
+Enabled first-party credential writers must set
+`CLAUDE_AUTH_COORDINATION_CONFIG` to this deployment config and share its lock.
+CLIProxyAPI, remote sync, and other external writers cannot participate in the
+local lock and must remain operationally quiesced/fenced during activation.
+Successful commit or recovery securely removes the temporary token backup;
+approval use markers remain durable authenticated replay evidence.
 
 ## Legacy rotate-magic (disabled)
 

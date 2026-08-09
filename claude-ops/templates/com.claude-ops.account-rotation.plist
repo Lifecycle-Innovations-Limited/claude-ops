@@ -37,6 +37,8 @@
     <string>1</string>
     <key>HOME</key>
     <string>${HOME}</string>
+    <key>CLAUDE_AUTH_COORDINATION_CONFIG</key>
+    <string>${HOME}/.claude/plugins/data/ops/account-rotation/auth-coordination.json</string>
   </dict>
 
   <key>RunAtLoad</key>

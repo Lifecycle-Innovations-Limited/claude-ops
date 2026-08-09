@@ -28,6 +28,8 @@ import {
   resolveConfigPath,
 } from './crs-pool-config.mjs';
 import { resolveAccountsBackend } from './ops-accounts-backend.mjs';
+import { withAuthWriterLock } from './auth-writer-coordination.mjs';
+import { verifyRefreshedTokenIdentity } from './token-identity.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LOG_PATH = join(__dirname, 'rotation.log');
@@ -186,79 +188,96 @@ async function main() {
     }
     const crs = byName[crsName];
 
-    const vaultData = vault.load();
-    const entry = vaultData[`Claude-Rotation-${key}`]?.claudeAiOauth;
-    if (!entry?.accessToken) {
-      log(`${key}: no vault token — skip`);
-      skipped++;
-      continue;
-    }
+    await withAuthWriterLock(async () => {
+      const vaultData = vault.load();
+      const entry = vaultData[`Claude-Rotation-${key}`]?.claudeAiOauth;
+      if (!entry?.accessToken) {
+        log(`${key}: no vault token — skip`);
+        skipped++;
+        return;
+      }
 
-    let oauth = entry;
-    const expiring = !oauth.expiresAt || oauth.expiresAt < now + BUFFER_MS;
-    if (expiring && foreign.has(key)) {
-      log(`${key}: expiring but foreign-leased — refresh deferred to owner host, propagating current token`);
-    } else if (expiring && oauth.refreshToken && !DRY) {
-      if (i > 0) await sleep(INTER_DELAY_MS);
-      const release = acquireRefreshLock(key);
-      if (!release) {
-        log(`${key}: refresh lock held elsewhere — propagate-only`);
-      } else {
-        try {
-          const r = await oauthRefresh(oauth.refreshToken);
-          if (r.ok) {
-            oauth = { ...oauth, ...r.oauth, scopes: oauth.scopes || [] };
-            vaultData[`Claude-Rotation-${key}`] = {
-              claudeAiOauth: oauth,
-              mcpOAuth: vaultData[`Claude-Rotation-${key}`]?.mcpOAuth || {},
-            };
-            vault.save(vaultData);
-            refreshed++;
-            log(`${key}: refreshed (min_left=${Math.floor((oauth.expiresAt - now) / 60000)})`);
-          } else if (r.status === 400) {
-            log(`${key}: refresh 400 (rotated elsewhere) — propagating existing vault token`);
-          } else {
-            log(`${key}: refresh failed (${r.error}) — propagating existing vault token`);
+      let oauth = entry;
+      const expiring = !oauth.expiresAt || oauth.expiresAt < now + BUFFER_MS;
+      if (expiring && foreign.has(key)) {
+        log(`${key}: expiring but foreign-leased — refresh deferred to owner host, propagating current token`);
+      } else if (expiring && oauth.refreshToken && !DRY) {
+        if (i > 0) await sleep(INTER_DELAY_MS);
+        const release = acquireRefreshLock(key);
+        if (!release) {
+          log(`${key}: refresh lock held elsewhere — propagate-only`);
+        } else {
+          try {
+            const r = await withAuthWriterLock(async () => {
+              // Re-read under the canonical writer lock: refresh tokens are
+              // single-use and the resulting file update is one transaction.
+              const currentVault = vault.load();
+              const current = currentVault[`Claude-Rotation-${key}`]?.claudeAiOauth;
+              if (!current?.refreshToken) return { ok: false, error: 'vault token changed' };
+              const result = await oauthRefresh(current.refreshToken);
+              if (result.ok) {
+                await verifyRefreshedTokenIdentity(a, result.oauth.accessToken);
+                const updated = { ...current, ...result.oauth, scopes: current.scopes || [] };
+                currentVault[`Claude-Rotation-${key}`] = {
+                  claudeAiOauth: updated,
+                  mcpOAuth: currentVault[`Claude-Rotation-${key}`]?.mcpOAuth || {},
+                };
+                vault.save(currentVault);
+                result.oauth = updated;
+              }
+              return result;
+            });
+            if (r.ok) {
+              oauth = r.oauth;
+              refreshed++;
+              log(`${key}: refreshed (min_left=${Math.floor((oauth.expiresAt - now) / 60000)})`);
+            } else if (r.status === 400) {
+              log(`${key}: refresh 400 (rotated elsewhere) — propagating existing vault token`);
+            } else {
+              log(`${key}: refresh failed (${r.error}) — propagating existing vault token`);
+            }
+          } finally {
+            release();
           }
-        } finally {
-          release();
         }
       }
-    }
 
-    // propagate whatever fresh token we have (don't push already-expired)
-    if ((oauth.expiresAt || 0) < now + 60_000) {
-      log(`${key}: vault token expired, no refresh — CRS left as-is`);
-      skipped++;
-      continue;
-    }
-    if (DRY) {
-      log(`${key}: [dry] would PUT -> ${crsName}`);
-      continue;
-    }
-    try {
-      const update = { claudeAiOauth: oauth };
-      if ('proxy' in crs) update.proxy = crs.proxy;
-      if ('maxConcurrency' in crs) update.maxConcurrency = crs.maxConcurrency;
-      if ('schedulable' in crs) update.schedulable = crs.schedulable;
-      const put = await fetch(`${crsBase}/admin/claude-accounts/${crs.id}`, {
-        method: 'PUT',
-        headers: H,
-        body: JSON.stringify(update),
-      });
-      if (put.ok) {
-        if (crs.schedulable !== false) {
-          await fetch(`${crsBase}/admin/claude-accounts/${crs.id}/reset-status`, { method: 'POST', headers: H }).catch(
-            () => {},
-          );
-        }
-        propagated++;
-      } else {
-        log(`${key}: CRS PUT ${put.status}`);
+      // propagate whatever fresh token we have (don't push already-expired)
+      if ((oauth.expiresAt || 0) < now + 60_000) {
+        log(`${key}: vault token expired, no refresh — CRS left as-is`);
+        skipped++;
+        return;
       }
-    } catch (e) {
-      log(`${key}: CRS PUT error ${e.message}`);
-    }
+      if (DRY) {
+        log(`${key}: [dry] would PUT -> ${crsName}`);
+        return;
+      }
+      try {
+        await verifyRefreshedTokenIdentity(a, oauth.accessToken);
+        const update = { claudeAiOauth: oauth };
+        if ('proxy' in crs) update.proxy = crs.proxy;
+        if ('maxConcurrency' in crs) update.maxConcurrency = crs.maxConcurrency;
+        if ('schedulable' in crs) update.schedulable = crs.schedulable;
+        const put = await fetch(`${crsBase}/admin/claude-accounts/${crs.id}`, {
+          method: 'PUT',
+          headers: H,
+          body: JSON.stringify(update),
+        });
+        if (put.ok) {
+          if (crs.schedulable !== false) {
+            await fetch(`${crsBase}/admin/claude-accounts/${crs.id}/reset-status`, {
+              method: 'POST',
+              headers: H,
+            }).catch(() => {});
+          }
+          propagated++;
+        } else {
+          log(`${key}: CRS PUT ${put.status}`);
+        }
+      } catch (e) {
+        log(`${key}: CRS PUT error ${e.message}`);
+      }
+    });
   }
   log(`feed complete: ${refreshed} refreshed, ${propagated} propagated, ${skipped} skipped, ${missing} unmapped`);
   if (!DRY && propagated > 0 && process.env.CRS_FEED_SKIP_PRIORITY !== '1') {

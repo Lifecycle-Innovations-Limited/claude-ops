@@ -35,6 +35,13 @@ let __plaintextWarned = false;
 
 const log = (...args) => console.error('credential-store:', ...args);
 
+function assertPublicWriteAllowed(service) {
+  const name = String(service || '').toLowerCase();
+  if (name === 'claude code-credentials' || name === 'claude-rotation' || name.startsWith('claude-rotation-')) {
+    throw new Error('protected Claude credential writes require the coordinated internal writer');
+  }
+}
+
 async function ensureDataDir() {
   await fs.mkdir(DATA_DIR, { recursive: true, mode: 0o700 });
 }
@@ -313,6 +320,7 @@ export async function backendsAvailable() {
  * @returns {Promise<{backend: string, ok: boolean}>}
  */
 export async function setCredential(service, account, secret) {
+  assertPublicWriteAllowed(service);
   const forced = process.env.CLAUDE_OPS_CRED_BACKEND;
   const tryBackend = async (name) => {
     let ok = false;
@@ -406,6 +414,7 @@ export async function getCredential(service, account) {
  * @returns {Promise<{deletedFrom: string[]}>}
  */
 export async function deleteCredential(service, account) {
+  assertPublicWriteAllowed(service);
   const deletedFrom = [];
   const nb = nativeBackend();
   try {
@@ -492,6 +501,7 @@ if (isCli) {
       // Helpers called by lib/credential-store.sh
       case 'set-keytar': {
         const [service, account, secret] = rest;
+        assertPublicWriteAllowed(service);
         const ok = await keytarSet(service, account, secret);
         process.exit(ok ? 0 : 1);
       }
@@ -504,6 +514,7 @@ if (isCli) {
       }
       case 'delete-keytar': {
         const [service, account] = rest;
+        assertPublicWriteAllowed(service);
         await keytarDelete(service, account);
         process.exit(0);
       }

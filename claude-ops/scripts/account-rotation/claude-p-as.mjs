@@ -35,7 +35,8 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir, constants } from 'os';
 
-import { swapToEmail, restoreToken } from './keychain-swap.mjs';
+import { withAuthWriterLock } from './auth-writer-coordination.mjs';
+import { swapToEmailCoordinated, restoreTokenCoordinated } from './keychain-swap.mjs';
 import { readLedger, writeLedger, findAccount, upsertAccount } from './ledger.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -274,95 +275,98 @@ async function main(argv) {
   // Acquire lock BEFORE any keychain mutation.
   const lockFd = acquireLock(opts.lock);
 
-  // Swap keychain.
-  let previousToken = null;
-  try {
-    previousToken = swapToEmail(account.email, account.label);
-  } catch (e) {
-    releaseLock(lockFd, opts.lock);
-    die(2, `keychain swap failed: ${e.message}`);
-  }
-
-  // Wire restoration on every exit path BEFORE spawning child.
-  let restored = false;
-  const restoreOnce = () => {
-    if (restored) return;
-    restored = true;
+  const finalExitCode = await withAuthWriterLock(async (writerCapability) => {
+    // Hold the canonical lock across swap, child execution, and restoration.
+    let previousToken = null;
     try {
-      if (previousToken) restoreToken(previousToken);
+      previousToken = swapToEmailCoordinated(account.email, account.label, writerCapability);
     } catch (e) {
-      process.stderr.write(`[claude-p-as] warning: failed to restore previous keychain: ${e.message}\n`);
+      releaseLock(lockFd, opts.lock);
+      die(2, `keychain swap failed: ${e.message}`);
     }
-    releaseLock(lockFd, opts.lock);
-  };
-  process.on('exit', restoreOnce);
-  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']) {
-    process.on(sig, () => {
-      restoreOnce();
-      const n = constants.signals[sig];
-      process.exit(n == null ? 130 : 128 + n);
-    });
-  }
 
-  // P1b fix: probe --max-budget-usd AFTER swap — now tests target account's CLI env.
-  assertBudgetFlagAvailable();
-
-  // Build claude args. Strip user-supplied --max-budget-usd if present, then prefix our floor.
-  const userArgs = [];
-  for (let i = 0; i < opts.rest.length; i++) {
-    const a = opts.rest[i];
-    if (a.startsWith('--max-budget-usd=')) {
-      continue;
-    }
-    if (a === '--max-budget-usd' && opts.rest[i + 1] != null) {
-      i++; // skip the value too
-      continue;
-    }
-    userArgs.push(a);
-  }
-  const finalArgs = ['-p', '--max-budget-usd', String(budget), ...userArgs];
-
-  // Spawn claude. Stream output through; collect for cost parsing.
-  const stdoutChunks = [];
-  const stderrChunks = [];
-  const child = spawn('claude', finalArgs, { stdio: ['inherit', 'pipe', 'pipe'] });
-  child.stdout.on('data', (b) => {
-    stdoutChunks.push(b);
-    process.stdout.write(b);
-  });
-  child.stderr.on('data', (b) => {
-    stderrChunks.push(b);
-    process.stderr.write(b);
-  });
-
-  const exitCode = await new Promise((resolve) => {
-    child.on('close', (code, signal) => {
-      if (signal) {
-        const n = constants.signals[signal];
-        resolve(n == null ? 128 : 128 + n);
-      } else {
-        resolve(code ?? 1);
+    // Wire restoration on every exit path BEFORE spawning child.
+    let restored = false;
+    const restoreOnce = () => {
+      if (restored) return;
+      restored = true;
+      try {
+        if (previousToken) restoreTokenCoordinated(previousToken, writerCapability);
+      } catch (e) {
+        process.stderr.write(`[claude-p-as] warning: failed to restore previous keychain: ${e.message}\n`);
       }
-    });
-    child.on('error', (e) => {
-      process.stderr.write(`[claude-p-as] spawn failed: ${e.message}\n`);
-      resolve(127);
-    });
-  });
+      releaseLock(lockFd, opts.lock);
+    };
+    process.on('exit', restoreOnce);
+    for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']) {
+      process.on(sig, () => {
+        restoreOnce();
+        const n = constants.signals[sig];
+        process.exit(n == null ? 130 : 128 + n);
+      });
+    }
 
-  // P1a fix: scan both streams; refuse (exit 2) if parse fails — never silently floor at $0.01.
-  const out = Buffer.concat(stdoutChunks).toString('utf8');
-  const err = Buffer.concat(stderrChunks).toString('utf8');
-  const cost = parseUsageCost(out, err);
-  if (cost == null) {
-    process.stderr.write('[claude-p-as] cost parse failed; refusing to decrement; check claude CLI output format\n');
+    // P1b fix: probe --max-budget-usd AFTER swap — now tests target account's CLI env.
+    assertBudgetFlagAvailable();
+
+    // Build claude args. Strip user-supplied --max-budget-usd if present, then prefix our floor.
+    const userArgs = [];
+    for (let i = 0; i < opts.rest.length; i++) {
+      const a = opts.rest[i];
+      if (a.startsWith('--max-budget-usd=')) {
+        continue;
+      }
+      if (a === '--max-budget-usd' && opts.rest[i + 1] != null) {
+        i++; // skip the value too
+        continue;
+      }
+      userArgs.push(a);
+    }
+    const finalArgs = ['-p', '--max-budget-usd', String(budget), ...userArgs];
+
+    // Spawn claude. Stream output through; collect for cost parsing.
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    const child = spawn('claude', finalArgs, { stdio: ['inherit', 'pipe', 'pipe'] });
+    child.stdout.on('data', (b) => {
+      stdoutChunks.push(b);
+      process.stdout.write(b);
+    });
+    child.stderr.on('data', (b) => {
+      stderrChunks.push(b);
+      process.stderr.write(b);
+    });
+
+    const exitCode = await new Promise((resolve) => {
+      child.on('close', (code, signal) => {
+        if (signal) {
+          const n = constants.signals[signal];
+          resolve(n == null ? 128 : 128 + n);
+        } else {
+          resolve(code ?? 1);
+        }
+      });
+      child.on('error', (e) => {
+        process.stderr.write(`[claude-p-as] spawn failed: ${e.message}\n`);
+        resolve(127);
+      });
+    });
+
+    // P1a fix: scan both streams; refuse (exit 2) if parse fails — never silently floor at $0.01.
+    const out = Buffer.concat(stdoutChunks).toString('utf8');
+    const err = Buffer.concat(stderrChunks).toString('utf8');
+    const cost = parseUsageCost(out, err);
+    if (cost == null) {
+      process.stderr.write('[claude-p-as] cost parse failed; refusing to decrement; check claude CLI output format\n');
+      restoreOnce();
+      return 2;
+    }
+    decrementLedger(opts.ledger, account.email, cost);
+
     restoreOnce();
-    process.exit(2);
-  }
-  decrementLedger(opts.ledger, account.email, cost);
-
-  restoreOnce();
-  process.exit(exitCode);
+    return exitCode;
+  });
+  process.exit(finalExitCode);
 }
 
 // Pure-import guard so tests can require helpers without triggering CLI.

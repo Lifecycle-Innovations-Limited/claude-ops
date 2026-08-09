@@ -47,6 +47,8 @@
     <string>__HOME__</string>
     <key>NODE_NO_WARNINGS</key>
     <string>1</string>
+    <key>CLAUDE_AUTH_COORDINATION_CONFIG</key>
+    <string>__HOME__/.claude/plugins/data/ops/account-rotation/auth-coordination.json</string>
   </dict>
 
   <key>ProcessType</key>

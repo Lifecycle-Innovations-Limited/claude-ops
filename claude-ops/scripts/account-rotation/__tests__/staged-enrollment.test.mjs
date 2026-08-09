@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -13,22 +14,26 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   activateEnrollment,
   consumeApproval,
   createApprovalPayload,
   parseManifestBytes,
   readDeploymentConfig,
+  recoverEnrollment,
   sha256,
   signApproval,
   stageEnrollment,
   validateCandidateBytes,
   verifyApproval,
+  withOperationLock,
 } from '../staged-enrollment.mjs';
 import { automatedAuthAllowed } from '../auto-auth-policy.mjs';
 import { reauth } from '../../ops-accounts/providers/claude.mjs';
+import { verifyRefreshedTokenIdentity } from '../token-identity.mjs';
 
 const NOW = Date.parse('2030-01-01T00:00:00Z');
 const SECRET_VALUES = [
@@ -97,6 +102,21 @@ const CANDIDATE = {
   type: 'claude',
 };
 const refuses = (fn, code) => assert.throws(fn, new RegExp(code));
+const childResult = (child) =>
+  new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => (stdout += chunk));
+    child.stderr?.on('data', (chunk) => (stderr += chunk));
+    child.on('close', (status, signal) => resolve({ status, signal, stdout, stderr }));
+  });
+const waitFor = async (predicate, label, timeoutMs = 5000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) assert.fail(`timed out waiting for ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+};
 
 function fixture(format = JSON.stringify(MANIFEST, null, 2)) {
   const root = mkdtempSync(join(tmpdir(), 'staged-enrollment-'));
@@ -150,6 +170,7 @@ function fixture(format = JSON.stringify(MANIFEST, null, 2)) {
     return artifact;
   };
   const common = {
+    configPath,
     manifestPath,
     entryId: ENTRY.id,
     approvalPath,
@@ -179,6 +200,727 @@ function fixture(format = JSON.stringify(MANIFEST, null, 2)) {
     approval,
     common,
   };
+}
+
+// Duplicate decoded keys are rejected recursively in every trust-record class.
+{
+  refuses(() => parseManifestBytes('{"version":1,"\\u0065ntries":[],"entries":[]}'), 'INVALID_MANIFEST');
+  refuses(
+    () =>
+      validateCandidateBytes(
+        JSON.stringify(CANDIDATE).replace('"access_token":', '"access_token":"x","\\u0061ccess_token":'),
+        ENTRY,
+        NOW,
+      ),
+    'INVALID_CANDIDATE',
+  );
+  const f = fixture();
+  writeFileSync(f.configPath, `${JSON.stringify(f.config).slice(0, -1)},"\\u0065nvironment":"duplicate"}`, {
+    mode: 0o600,
+  });
+  refuses(() => readDeploymentConfig(f.configPath), 'INVALID_CONFIG');
+}
+
+// Every remaining trust-record parser rejects escaped duplicate keys nested in
+// its authenticated payload, and reports that record's stable error code.
+{
+  const duplicate = (
+    artifact,
+    key,
+    escapedKey = `\\u${key.charCodeAt(0).toString(16).padStart(4, '0')}${key.slice(1)}`,
+  ) =>
+    JSON.stringify(artifact).replace(`"${key}":`, `"${key}":${JSON.stringify(artifact.payload[key])},"${escapedKey}":`);
+
+  const approval = fixture();
+  const approvalArtifact = approval.approval('stage');
+  writeFileSync(approval.approvalPath, duplicate(approvalArtifact, 'action'), { mode: 0o600 });
+  refuses(() => stageEnrollment({ ...approval.common, candidatePath: approval.candidatePath }), 'INVALID_APPROVAL');
+
+  const active = fixture();
+  active.approval('stage');
+  stageEnrollment({ ...active.common, candidatePath: active.candidatePath });
+  const activeTarget = JSON.stringify(CANDIDATE).replace(
+    '"claude_device_ids":',
+    '"claude_device_ids":["nested"],"\\u0063laude_device_ids":',
+  );
+  writeFileSync(join(active.paths.active, ENTRY.authFilename), activeTarget, { mode: 0o600 });
+  active.approval('activate');
+  refuses(() => activateEnrollment(active.common), 'INVALID_ACTIVE_TARGET');
+
+  const inventory = fixture();
+  writeFileSync(
+    join(inventory.paths.quarantine, 'nested.json'),
+    JSON.stringify(CANDIDATE).replace('"email":', '"email":"other@example.com","\\u0065mail":'),
+    { mode: 0o600 },
+  );
+  inventory.approval('stage');
+  refuses(
+    () => stageEnrollment({ ...inventory.common, candidatePath: inventory.candidatePath }),
+    'MALFORMED_INVENTORY',
+  );
+
+  const signedDuplicate = (payload, key, signingKey) => duplicate(signApproval(payload, signingKey), key);
+  const processRecord = {
+    version: 1,
+    host: hostname(),
+    pid: 2_147_483_647,
+    nonce: 'valid-lock-nonce',
+    createdAt: new Date().toISOString(),
+  };
+  const lock = fixture();
+  writeFileSync(lock.common.operationLockPath, signedDuplicate(processRecord, 'nonce', readFileSync(lock.keyPath)), {
+    mode: 0o600,
+  });
+  refuses(() => withOperationLock(lock.common.operationLockPath, lock.keyPath, () => {}), 'OPERATION_LOCKED_MALFORMED');
+
+  const claim = fixture();
+  writeFileSync(
+    claim.common.operationLockPath,
+    JSON.stringify(signApproval(processRecord, readFileSync(claim.keyPath))),
+    { mode: 0o600 },
+  );
+  const claimPayload = { ...processRecord, nonce: 'valid-claim-nonce', lockNonce: processRecord.nonce };
+  writeFileSync(
+    `${claim.common.operationLockPath}.recovery-claim`,
+    signedDuplicate(claimPayload, 'lockNonce', readFileSync(claim.keyPath)),
+    { mode: 0o600 },
+  );
+  refuses(() => withOperationLock(claim.common.operationLockPath, claim.keyPath, () => {}), 'RECOVERY_CLAIM_MALFORMED');
+
+  const journal = fixture();
+  const journalPayload = { version: 1, phase: 'PREPARING' };
+  writeFileSync(
+    `${journal.common.operationLockPath}.journal`,
+    signedDuplicate(journalPayload, 'phase', readFileSync(journal.keyPath)),
+    { mode: 0o600 },
+  );
+  refuses(() => recoverEnrollment({ configPath: journal.configPath }), 'INVALID_ACTIVATION_JOURNAL');
+
+  const marker = fixture();
+  const markerPayload = { version: 1, approvalId: 'approval-id', nonce: 'approval-nonce', action: 'stage' };
+  writeFileSync(
+    join(marker.paths.usage, 'approval-id.approval-nonce.used'),
+    signedDuplicate(markerPayload, 'action', readFileSync(marker.keyPath)),
+    {
+      mode: 0o600,
+    },
+  );
+  refuses(
+    () =>
+      consumeApproval(
+        { id: 'approval-id', nonce: 'approval-nonce', action: 'stage' },
+        marker.paths.usage,
+        marker.keyPath,
+      ),
+    'INVALID_USE_MARKER',
+  );
+
+  const publication = fixture();
+  const publicationPath = `${publication.common.operationLockPath}.publication`;
+  const publicationPayload = {
+    version: 1,
+    kind: 'stage',
+    stagedPath: join(publication.paths.staging, ENTRY.authFilename),
+    stagingDigest: publication.candidateDigest,
+    markerPath: join(publication.paths.usage, 'approval-id.approval-nonce.used'),
+    approvalId: 'approval-id',
+    approvalNonce: 'approval-nonce',
+  };
+  writeFileSync(publicationPath, signedDuplicate(publicationPayload, 'kind', readFileSync(publication.keyPath)), {
+    mode: 0o600,
+  });
+  publication.approval('stage');
+  refuses(
+    () => stageEnrollment({ ...publication.common, candidatePath: publication.candidatePath }),
+    'INVALID_PUBLICATION_RECORD',
+  );
+}
+
+// File roles reject hardlink aliases, not merely symlinks and textual overlap.
+for (const role of ['manifest', 'key', 'candidate', 'approval']) {
+  const f = fixture();
+  f.approval('stage');
+  const source =
+    role === 'manifest'
+      ? f.manifestPath
+      : role === 'key'
+        ? f.keyPath
+        : role === 'candidate'
+          ? f.candidatePath
+          : f.approvalPath;
+  const alias = join(f.root, `${role}.hardlink`);
+  linkSync(source, alias);
+  if (role === 'manifest' || role === 'key') {
+    const field = role === 'manifest' ? 'manifestPath' : 'approvalKeyPath';
+    writeFileSync(f.configPath, JSON.stringify({ ...f.config, [field]: alias }), { mode: 0o600 });
+    refuses(() => readDeploymentConfig(f.configPath), 'INSECURE_TRUST_ROOT');
+  } else {
+    refuses(
+      () =>
+        stageEnrollment({
+          ...f.common,
+          candidatePath: role === 'candidate' ? alias : f.candidatePath,
+          approvalPath: role === 'approval' ? alias : f.approvalPath,
+        }),
+      'INSECURE_TRUST_ROOT|INVALID_APPROVAL',
+    );
+  }
+}
+
+// Lock records are authenticated; only same-host dead-PID holders are reclaimed.
+{
+  const makeLock = (f, fields, key = readFileSync(f.keyPath)) =>
+    writeFileSync(f.common.operationLockPath, `${JSON.stringify(signApproval(fields, key))}\n`, { mode: 0o600 });
+  const base = {
+    version: 1,
+    host: hostname(),
+    pid: process.pid,
+    nonce: 'lock-nonce',
+    createdAt: new Date().toISOString(),
+  };
+  for (const fields of [{ ...base }, { ...base, host: 'foreign-host.invalid', pid: 2147483647 }]) {
+    const f = fixture();
+    makeLock(f, fields);
+    refuses(() => withOperationLock(f.common.operationLockPath, f.keyPath, () => {}), 'OPERATION_LOCKED');
+  }
+  const forged = fixture();
+  makeLock(forged, { ...base, pid: 2147483647 }, Buffer.from('Z'.repeat(32)));
+  refuses(
+    () => withOperationLock(forged.common.operationLockPath, forged.keyPath, () => {}),
+    'OPERATION_LOCKED_MALFORMED',
+  );
+  const stale = fixture();
+  makeLock(stale, { ...base, pid: 2147483647 });
+  assert.equal(
+    withOperationLock(stale.common.operationLockPath, stale.keyPath, () => 'reclaimed'),
+    'reclaimed',
+  );
+  assert.equal(existsSync(stale.common.operationLockPath), false);
+}
+
+// Signed-but-malformed lock metadata is never treated as a reclaimable dead process.
+for (const mutation of [
+  { version: 2 },
+  { pid: 0 },
+  { pid: -1 },
+  { pid: 2_147_483_648 },
+  { nonce: '' },
+  { nonce: 'short' },
+  { nonce: 'x'.repeat(129) },
+  { createdAt: 'not-a-time' },
+]) {
+  const f = fixture();
+  const holder = {
+    version: 1,
+    host: hostname(),
+    pid: 2_147_483_647,
+    nonce: 'valid-lock-nonce',
+    createdAt: new Date().toISOString(),
+    ...mutation,
+  };
+  writeFileSync(f.common.operationLockPath, `${JSON.stringify(signApproval(holder, readFileSync(f.keyPath)))}\n`, {
+    mode: 0o600,
+  });
+  refuses(() => withOperationLock(f.common.operationLockPath, f.keyPath, () => {}), 'OPERATION_LOCKED_MALFORMED');
+}
+
+// Recovery claims are independently authenticated and process-bound. Signed
+// malformed metadata, forged HMACs, live/foreign claimants, and lock-nonce
+// mismatches never authorize reclaim; a valid dead claimant does.
+{
+  const install = (f, claimChanges, claimKey = readFileSync(f.keyPath)) => {
+    const key = readFileSync(f.keyPath);
+    const holder = {
+      version: 1,
+      host: hostname(),
+      pid: 2_147_483_647,
+      nonce: 'stale-lock-nonce',
+      createdAt: new Date().toISOString(),
+    };
+    writeFileSync(f.common.operationLockPath, JSON.stringify(signApproval(holder, key)), { mode: 0o600 });
+    const claim = {
+      version: 1,
+      host: hostname(),
+      pid: 2_147_483_647,
+      nonce: 'stale-claim-nonce',
+      lockNonce: holder.nonce,
+      createdAt: new Date().toISOString(),
+      ...claimChanges,
+    };
+    writeFileSync(`${f.common.operationLockPath}.recovery-claim`, JSON.stringify(signApproval(claim, claimKey)), {
+      mode: 0o600,
+    });
+  };
+  for (const mutation of [
+    { pid: 0 },
+    { pid: 1.5 },
+    { createdAt: 'not-a-time' },
+    { nonce: 'short' },
+    { lockNonce: 'short' },
+  ]) {
+    const f = fixture();
+    install(f, mutation);
+    refuses(() => withOperationLock(f.common.operationLockPath, f.keyPath, () => {}), 'RECOVERY_CLAIM_MALFORMED');
+  }
+  const forged = fixture();
+  install(forged, {}, Buffer.from('Z'.repeat(32)));
+  refuses(
+    () => withOperationLock(forged.common.operationLockPath, forged.keyPath, () => {}),
+    'RECOVERY_CLAIM_MALFORMED',
+  );
+  for (const claimant of [{ pid: process.pid }, { host: 'foreign-host.invalid' }]) {
+    const f = fixture();
+    install(f, claimant);
+    refuses(() => withOperationLock(f.common.operationLockPath, f.keyPath, () => {}), 'OPERATION_LOCKED');
+  }
+  const dead = fixture();
+  install(dead, {});
+  assert.equal(
+    withOperationLock(dead.common.operationLockPath, dead.keyPath, () => 'recovered'),
+    'recovered',
+  );
+  assert.equal(existsSync(`${dead.common.operationLockPath}.recovery-claim`), false);
+}
+
+// Three fresh processes prove that a claimant killed after old-lock removal
+// cannot wedge reclaim of a later holder: the orphan is authenticated and
+// judged dead independently of its older lock nonce.
+{
+  const f = fixture();
+  const holder = {
+    version: 1,
+    host: hostname(),
+    pid: 2_147_483_647,
+    nonce: 'orphan-claim-old-lock',
+    createdAt: new Date().toISOString(),
+  };
+  writeFileSync(f.common.operationLockPath, JSON.stringify(signApproval(holder, readFileSync(f.keyPath))), {
+    mode: 0o600,
+  });
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const lockCall = `m.withOperationLock(${JSON.stringify(f.common.operationLockPath)},${JSON.stringify(f.keyPath)},()=>process.kill(process.pid,"SIGKILL"))`;
+  const first = spawnSync(
+    process.execPath,
+    ['--input-type=module', '-e', `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>${lockCall})`],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+        CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGKILL:OLD_LOCK_UNLINKED',
+      },
+    },
+  );
+  assert.equal(first.signal, 'SIGKILL', first.stderr);
+  assert.equal(existsSync(f.common.operationLockPath), false);
+  assert.equal(existsSync(`${f.common.operationLockPath}.recovery-claim`), true);
+  const second = spawnSync(
+    process.execPath,
+    ['--input-type=module', '-e', `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>${lockCall})`],
+    { encoding: 'utf8' },
+  );
+  assert.equal(second.signal, 'SIGKILL', second.stderr);
+  assert.equal(existsSync(f.common.operationLockPath), true);
+  const thirdScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>process.stdout.write(m.withOperationLock(${JSON.stringify(f.common.operationLockPath)},${JSON.stringify(f.keyPath)},()=>"reclaimed")))`;
+  const third = spawnSync(process.execPath, ['--input-type=module', '-e', thirdScript], { encoding: 'utf8' });
+  assert.equal(third.status, 0, third.stderr);
+  assert.equal(third.stdout, 'reclaimed');
+  assert.equal(existsSync(`${f.common.operationLockPath}.recovery-claim`), false);
+}
+
+// Two real processes racing to reclaim one stale lock cannot both enter the
+// critical section. The winner holds the replacement lock while the loser probes.
+{
+  const f = fixture();
+  const holder = {
+    version: 1,
+    host: hostname(),
+    pid: 2_147_483_647,
+    nonce: 'competing-stale-lock',
+    createdAt: new Date().toISOString(),
+  };
+  writeFileSync(f.common.operationLockPath, JSON.stringify(signApproval(holder, readFileSync(f.keyPath))), {
+    mode: 0o600,
+  });
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const script = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.withOperationLock(${JSON.stringify(f.common.operationLockPath)},${JSON.stringify(f.keyPath)},()=>Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,400)))`;
+  const first = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const second = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const results = await Promise.all([childResult(first), childResult(second)]);
+  assert.equal(results.filter((result) => result.status === 0).length, 1, JSON.stringify(results));
+  assert.equal(results.filter((result) => /OPERATION_LOCKED/.test(result.stderr)).length, 1, JSON.stringify(results));
+}
+
+// A reclaimer killed after replacement publication leaves no claim wedge; a
+// fresh process reclaims the replacement lock owned by the dead child.
+{
+  const f = fixture();
+  const holder = {
+    version: 1,
+    host: hostname(),
+    pid: 2_147_483_647,
+    nonce: 'crash-boundary-lock',
+    createdAt: new Date().toISOString(),
+  };
+  writeFileSync(f.common.operationLockPath, JSON.stringify(signApproval(holder, readFileSync(f.keyPath))), {
+    mode: 0o600,
+  });
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const childScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.withOperationLock(${JSON.stringify(f.common.operationLockPath)},${JSON.stringify(f.keyPath)},()=>{}))`;
+  const killed = spawnSync(process.execPath, ['--input-type=module', '-e', childScript], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+      CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGKILL:LOCK_REPLACEMENT_PUBLISHED',
+    },
+  });
+  assert.equal(killed.signal, 'SIGKILL', killed.stderr);
+  assert.equal(existsSync(`${f.common.operationLockPath}.recovery-claim`), false);
+  const recoveryScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>process.stdout.write(m.withOperationLock(${JSON.stringify(f.common.operationLockPath)},${JSON.stringify(f.keyPath)},()=>"reclaimed")))`;
+  const recovered = spawnSync(process.execPath, ['--input-type=module', '-e', recoveryScript], { encoding: 'utf8' });
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.equal(recovered.stdout, 'reclaimed');
+}
+
+// Existing destinations are exact-schema and identity checked before approval use.
+for (const existing of [
+  { ...CANDIDATE, type: 'codex' },
+  { ...CANDIDATE, email: 'wrong@example.com' },
+  { ...CANDIDATE, extra: 'forbidden' },
+  { ...CANDIDATE, disabled: 'false' },
+  { ...CANDIDATE, access_token: '' },
+  { ...CANDIDATE, claude_device_ids: ['bad-device'] },
+  { ...CANDIDATE, organization_name: 42 },
+]) {
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  writeFileSync(join(f.paths.active, ENTRY.authFilename), JSON.stringify(existing), { mode: 0o600 });
+  const approval = f.approval('activate');
+  refuses(() => activateEnrollment(f.common), 'INVALID_ACTIVE_TARGET|ACTIVE_TARGET_IDENTITY_MISMATCH');
+  assert.equal(existsSync(join(f.paths.usage, `${approval.payload.id}.${approval.payload.nonce}.used`)), false);
+}
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  writeFileSync(
+    join(f.paths.active, ENTRY.authFilename),
+    JSON.stringify({ ...CANDIDATE, expired: '2020-01-01T00:00:00Z' }),
+    { mode: 0o600 },
+  );
+  f.approval('activate');
+  assert.equal(activateEnrollment(f.common).ok, true);
+}
+
+// Recovery with no journal is idempotent and leaves no lock behind.
+{
+  const f = fixture();
+  assert.deepEqual(recoverEnrollment({ configPath: f.configPath }), { ok: true, action: 'recover', recovered: false });
+  assert.deepEqual(recoverEnrollment({ configPath: f.configPath }), { ok: true, action: 'recover', recovered: false });
+}
+
+// Fresh processes recover authenticated journals after SIGKILL at each
+// irreversible boundary; committed recovery removes the token backup.
+for (const phase of [
+  'PREPARING',
+  'PREPARED',
+  'APPROVAL_INTENT',
+  'APPROVAL_CONSUMED',
+  'INSTALL_INTENT',
+  'INSTALLED',
+  'COMMITTED',
+]) {
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const target = join(f.paths.active, ENTRY.authFilename);
+  const old = JSON.stringify({ ...CANDIDATE, access_token: `old-${phase}` });
+  writeFileSync(target, old, { mode: 0o600 });
+  f.approval('activate');
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const childScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.activateEnrollment(${JSON.stringify({ ...f.common, configPath: f.configPath, now: NOW })}))`;
+  const killed = spawnSync(process.execPath, ['--input-type=module', '-e', childScript], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+      CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: `SIGKILL:${phase}`,
+    },
+  });
+  assert.equal(killed.signal, 'SIGKILL', `${phase}: ${killed.stderr}`);
+  const recoveryScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>process.stdout.write(JSON.stringify(m.recoverEnrollment({configPath:${JSON.stringify(f.configPath)}}))))`;
+  const recovered = spawnSync(process.execPath, ['--input-type=module', '-e', recoveryScript], { encoding: 'utf8' });
+  assert.equal(recovered.status, 0, `${phase}: ${recovered.stderr}`);
+  const receipt = JSON.parse(recovered.stdout);
+  assert.equal(receipt.recovered, true);
+  assert.equal(readFileSync(target, 'utf8'), phase === 'COMMITTED' ? JSON.stringify(CANDIDATE) : old);
+  assert.deepEqual(readdirSync(f.paths.rollback), []);
+  const again = recoverEnrollment({ configPath: f.configPath });
+  assert.equal(again.recovered, false);
+}
+
+// Fresh-process rollback recovery is idempotent when killed immediately after
+// its rename or after the first of the two required directory fsyncs.
+for (const fault of ['SIGKILL:RECOVERY_ROLLBACK_RENAMED', 'SIGKILL:RECOVERY_ROLLBACK_FIRST_DIR_FSYNC']) {
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const target = join(f.paths.active, ENTRY.authFilename);
+  const old = JSON.stringify({ ...CANDIDATE, access_token: `old-${fault}` });
+  writeFileSync(target, old, { mode: 0o600 });
+  f.approval('activate');
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const activateScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.activateEnrollment(${JSON.stringify({ ...f.common, now: NOW })}))`;
+  const activation = spawnSync(process.execPath, ['--input-type=module', '-e', activateScript], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+      CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGKILL:INSTALLED',
+    },
+  });
+  assert.equal(activation.signal, 'SIGKILL', activation.stderr);
+  const recoveryScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>process.stdout.write(JSON.stringify(m.recoverEnrollment({configPath:${JSON.stringify(f.configPath)}}))))`;
+  const interrupted = spawnSync(process.execPath, ['--input-type=module', '-e', recoveryScript], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+      CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: fault,
+    },
+  });
+  assert.equal(interrupted.signal, 'SIGKILL', `${fault}: ${interrupted.stderr}`);
+  const recovered = spawnSync(process.execPath, ['--input-type=module', '-e', recoveryScript], { encoding: 'utf8' });
+  assert.equal(recovered.status, 0, `${fault}: ${recovered.stderr}`);
+  assert.equal(JSON.parse(recovered.stdout).outcome, 'rolled-back');
+  assert.equal(readFileSync(target, 'utf8'), old);
+  const again = spawnSync(process.execPath, ['--input-type=module', '-e', recoveryScript], { encoding: 'utf8' });
+  assert.equal(again.status, 0, again.stderr);
+  assert.equal(JSON.parse(again.stdout).recovered, false);
+}
+
+// Post-consumption journals without their exact marker are uncertain, never
+// guessed rolled back.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const approval = f.approval('activate');
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const childScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.activateEnrollment(${JSON.stringify({ ...f.common, now: NOW })}))`;
+  const killed = spawnSync(process.execPath, ['--input-type=module', '-e', childScript], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+      CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGKILL:APPROVAL_CONSUMED',
+    },
+  });
+  assert.equal(killed.signal, 'SIGKILL', killed.stderr);
+  unlinkSync(join(f.paths.usage, `${approval.payload.id}.${approval.payload.nonce}.used`));
+  refuses(() => recoverEnrollment({ configPath: f.configPath }), 'ACTIVATION_RECOVERY_UNCERTAIN');
+}
+
+// COMMITTED cleanup is idempotent when SIGKILL lands after backup deletion and
+// before journal deletion, both when an old target existed and when it did not.
+for (const hadTarget of [false, true]) {
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const target = join(f.paths.active, ENTRY.authFilename);
+  if (hadTarget) writeFileSync(target, JSON.stringify({ ...CANDIDATE, access_token: 'old-token' }), { mode: 0o600 });
+  f.approval('activate');
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const childScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.activateEnrollment(${JSON.stringify({ ...f.common, now: NOW })}))`;
+  const killed = spawnSync(process.execPath, ['--input-type=module', '-e', childScript], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+      CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGKILL:AFTER_BACKUP_DELETE',
+    },
+  });
+  assert.equal(killed.signal, 'SIGKILL', killed.stderr);
+  assert.equal(recoverEnrollment({ configPath: f.configPath }).outcome, 'committed');
+  assert.equal(readFileSync(target, 'utf8'), JSON.stringify(CANDIDATE));
+  assert.deepEqual(readdirSync(f.paths.rollback), []);
+  assert.equal(recoverEnrollment({ configPath: f.configPath }).recovered, false);
+}
+
+// PREPARING is pre-backup even if a writer crashed after a deterministic
+// partial backup write: old target/staged bytes remain exact and cleanup is idempotent.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const staged = join(f.paths.staging, ENTRY.authFilename);
+  const target = join(f.paths.active, ENTRY.authFilename);
+  const old = Buffer.from(JSON.stringify({ ...CANDIDATE, access_token: 'pinned-old-token' }));
+  const stagedBefore = readFileSync(staged);
+  writeFileSync(target, old, { mode: 0o600 });
+  f.approval('activate');
+  refuses(() => activateEnrollment({ ...f.common, injectFailure: 'partial-backup' }), 'INJECTED_FAILURE');
+  assert.deepEqual(readFileSync(target), old);
+  assert.deepEqual(readFileSync(staged), stagedBefore);
+  assert.equal(readdirSync(f.paths.rollback).length, 1);
+  process.env.CLAUDE_STAGED_ENROLLMENT_TESTING = '1';
+  process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT = 'THROW:BACKUP_UNLINK_BEFORE_FSYNC';
+  refuses(() => recoverEnrollment({ configPath: f.configPath }), 'INJECTED_BACKUP_CLEANUP_FSYNC_FAILURE');
+  delete process.env.CLAUDE_STAGED_ENROLLMENT_TESTING;
+  delete process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT;
+  assert.deepEqual(readFileSync(target), old);
+  assert.deepEqual(readFileSync(staged), stagedBefore);
+  assert.deepEqual(readdirSync(f.paths.rollback), []);
+  assert.equal(recoverEnrollment({ configPath: f.configPath }).outcome, 'rolled-back');
+  assert.deepEqual(readFileSync(target), old);
+  assert.deepEqual(readFileSync(staged), stagedBefore);
+  assert.deepEqual(readdirSync(f.paths.rollback), []);
+  assert.equal(recoverEnrollment({ configPath: f.configPath }).recovered, false);
+}
+
+// Authenticated pending publication evidence makes both first-directory-fsync
+// and cleanup-fsync uncertainty deterministic on the next stage attempt.
+for (const fault of ['THROW:PUBLICATION_FIRST_DIR_FSYNC', 'THROW:PUBLICATION_CLEANUP_FSYNC']) {
+  const f = fixture();
+  const approval = f.approval('stage');
+  process.env.CLAUDE_STAGED_ENROLLMENT_TESTING = '1';
+  process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT = fault;
+  refuses(() => stageEnrollment({ ...f.common, candidatePath: f.candidatePath }), 'PUBLICATION_RECOVERY_REQUIRED');
+  delete process.env.CLAUDE_STAGED_ENROLLMENT_TESTING;
+  delete process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT;
+  assert.equal(existsSync(`${f.common.operationLockPath}.publication`), true);
+  if (fault === 'THROW:PUBLICATION_FIRST_DIR_FSYNC') {
+    assert.equal(existsSync(join(f.paths.staging, ENTRY.authFilename)), false);
+    assert.equal(stageEnrollment({ ...f.common, candidatePath: f.candidatePath }).ok, true);
+  } else {
+    assert.equal(existsSync(join(f.paths.usage, `${approval.payload.id}.${approval.payload.nonce}.used`)), true);
+    refuses(
+      () => stageEnrollment({ ...f.common, candidatePath: f.candidatePath }),
+      'APPROVAL_REPLAY|STAGE_TARGET_EXISTS|DUPLICATE_IDENTITY',
+    );
+  }
+  assert.equal(existsSync(`${f.common.operationLockPath}.publication`), false);
+}
+
+// Fresh subprocess recovery resolves SIGKILL at each stage publication link.
+for (const boundary of ['STAGED_LINK', 'MARKER_LINK']) {
+  const f = fixture();
+  f.approval('stage');
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const childScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.stageEnrollment(${JSON.stringify({ ...f.common, candidatePath: f.candidatePath, now: NOW })}))`;
+  const killed = spawnSync(process.execPath, ['--input-type=module', '-e', childScript], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+      CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: `SIGKILL:${boundary}`,
+    },
+  });
+  assert.equal(killed.signal, 'SIGKILL', `${boundary}: ${killed.stderr}`);
+  const recoveryScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>{try{m.stageEnrollment(${JSON.stringify({ ...f.common, candidatePath: f.candidatePath, now: NOW })});process.stdout.write("ok")}catch(e){process.stdout.write(e.message)}})`;
+  const recovered = spawnSync(process.execPath, ['--input-type=module', '-e', recoveryScript], { encoding: 'utf8' });
+  assert.equal(recovered.status, 0, `${boundary}: ${recovered.stderr}`);
+  assert.match(
+    recovered.stdout,
+    boundary === 'STAGED_LINK' ? /^ok$/ : /APPROVAL_REPLAY|DUPLICATE_IDENTITY|STAGE_TARGET_EXISTS/,
+  );
+  assert.equal(existsSync(`${f.common.operationLockPath}.publication`), false);
+}
+
+// A failed post-link durability step never leaves unauthorized staged bytes or
+// a replay marker behind when cleanup can be proven durable.
+for (const fault of ['THROW:STAGE_AFTER_LINK', 'THROW:MARKER_AFTER_LINK']) {
+  const f = fixture();
+  const approval = f.approval('stage');
+  const priorTesting = process.env.CLAUDE_STAGED_ENROLLMENT_TESTING;
+  const priorFault = process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT;
+  process.env.CLAUDE_STAGED_ENROLLMENT_TESTING = '1';
+  process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT = fault;
+  try {
+    refuses(() => stageEnrollment({ ...f.common, candidatePath: f.candidatePath }), 'INJECTED|CONSUME');
+  } finally {
+    if (priorTesting === undefined) delete process.env.CLAUDE_STAGED_ENROLLMENT_TESTING;
+    else process.env.CLAUDE_STAGED_ENROLLMENT_TESTING = priorTesting;
+    if (priorFault === undefined) delete process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT;
+    else process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT = priorFault;
+  }
+  assert.equal(existsSync(join(f.paths.staging, ENTRY.authFilename)), false);
+  assert.equal(existsSync(join(f.paths.usage, `${approval.payload.id}.${approval.payload.nonce}.used`)), false);
+}
+
+// An ambiguous activation-marker publication is resolved by a fresh recovery
+// process. When cleanup removed the marker, the same approval remains usable.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const approval = f.approval('activate');
+  const priorTesting = process.env.CLAUDE_STAGED_ENROLLMENT_TESTING;
+  const priorFault = process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT;
+  process.env.CLAUDE_STAGED_ENROLLMENT_TESTING = '1';
+  process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT = 'THROW:MARKER_AFTER_LINK';
+  try {
+    refuses(() => activateEnrollment(f.common), 'ACTIVATION_RECOVERY_REQUIRED');
+  } finally {
+    if (priorTesting === undefined) delete process.env.CLAUDE_STAGED_ENROLLMENT_TESTING;
+    else process.env.CLAUDE_STAGED_ENROLLMENT_TESTING = priorTesting;
+    if (priorFault === undefined) delete process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT;
+    else process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT = priorFault;
+  }
+  assert.equal(existsSync(join(f.paths.usage, `${approval.payload.id}.${approval.payload.nonce}.used`)), false);
+  assert.equal(recoverEnrollment({ configPath: f.configPath }).outcome, 'rolled-back');
+  assert.equal(activateEnrollment(f.common).ok, true);
+}
+
+// A fresh recovery process removes the one expected activation marker temp
+// hardlink left by SIGKILL after link(2), then validates the canonical marker.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const approval = f.approval('activate');
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const activateScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.activateEnrollment(${JSON.stringify({ ...f.common, now: NOW })}))`;
+  const killed = spawnSync(process.execPath, ['--input-type=module', '-e', activateScript], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+      CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGKILL:MARKER_LINK',
+    },
+  });
+  assert.equal(killed.signal, 'SIGKILL', killed.stderr);
+  const marker = join(f.paths.usage, `${approval.payload.id}.${approval.payload.nonce}.used`);
+  assert.equal(readdirSync(f.paths.usage).filter((name) => name.endsWith('.tmp')).length, 1);
+  const recoveryScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>process.stdout.write(JSON.stringify(m.recoverEnrollment({configPath:${JSON.stringify(f.configPath)}}))))`;
+  const recovered = spawnSync(process.execPath, ['--input-type=module', '-e', recoveryScript], { encoding: 'utf8' });
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.equal(JSON.parse(recovered.stdout).outcome, 'rolled-back');
+  assert.equal(existsSync(marker), true);
+  assert.equal(readdirSync(f.paths.usage).filter((name) => name.endsWith('.tmp')).length, 0);
+  assert.equal(recoverEnrollment({ configPath: f.configPath }).recovered, false);
+}
+
+// If marker cleanup itself is ambiguous, recovery treats the authenticated
+// marker as authoritative consumption: rollback succeeds but retry is replay.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const approval = f.approval('activate');
+  process.env.CLAUDE_STAGED_ENROLLMENT_TESTING = '1';
+  process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT = 'THROW:MARKER_CLEANUP_UNCERTAIN';
+  try {
+    refuses(() => activateEnrollment(f.common), 'ACTIVATION_RECOVERY_REQUIRED');
+  } finally {
+    delete process.env.CLAUDE_STAGED_ENROLLMENT_TESTING;
+    delete process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT;
+  }
+  assert.equal(existsSync(join(f.paths.usage, `${approval.payload.id}.${approval.payload.nonce}.used`)), true);
+  assert.equal(recoverEnrollment({ configPath: f.configPath }).outcome, 'rolled-back');
+  refuses(() => activateEnrollment(f.common), 'APPROVAL_REPLAY|ACTIVATION_RECOVERY_REQUIRED');
 }
 
 // Raw-byte manifest digest, exact 15-entry topology, no parsed mutation.
@@ -692,5 +1434,228 @@ for (const name of [
     sources[name],
     /spawn(?:Sync)?\s*\([^)]*(?:rotate\.mjs|runAuthFlow)|execFileSync\s*\([^)]*rotate\.mjs/s,
   );
+
+// A real first-party file-vault writer cannot mutate while the canonical lock
+// is held, then succeeds after release.
+{
+  const f = fixture();
+  const vaultPath = join(f.root, 'writer-vault.json');
+  writeFileSync(vaultPath, '{}', { mode: 0o600 });
+  const writer = join(import.meta.dirname, '..', 'rotation-vault.mjs');
+  const script = `import(${JSON.stringify(`file://${writer}`)}).then(m=>m.writeRotationToken('race@example.com',{claudeAiOauth:{accessToken:'synthetic-race-token'}}))`;
+  const env = {
+    ...process.env,
+    CLAUDE_AUTH_COORDINATION_CONFIG: f.configPath,
+    CLAUDE_ROTATION_FILE_VAULT: vaultPath,
+  };
+  withOperationLock(f.common.operationLockPath, f.keyPath, () => {
+    const blocked = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' });
+    assert.notEqual(blocked.status, 0);
+    assert.deepEqual(JSON.parse(readFileSync(vaultPath, 'utf8')), {});
+  });
+  const written = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' });
+  assert.equal(written.status, 0, written.stderr);
+  assert.equal(
+    JSON.parse(readFileSync(vaultPath, 'utf8'))['Claude-Rotation-race@example.com'].claudeAiOauth.accessToken,
+    'synthetic-race-token',
+  );
+}
+
+// A real staged activation process excludes an ordinary writer plus protected
+// healing-read and delete mutations until activation releases the same lock.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  f.approval('activate');
+  const rotationVault = join(f.root, 'contended-rotation.json');
+  const healService = 'Claude-Rotation-heal@example.com';
+  const healToken = { claudeAiOauth: { accessToken: 'unchanged-heal-token', expiresAt: 123 } };
+  writeFileSync(rotationVault, JSON.stringify({ [healService]: healToken }), { mode: 0o600 });
+  const home = join(f.root, 'contention-home');
+  mkdirSync(home, { mode: 0o700 });
+  const stagedModule = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const rotationModule = join(import.meta.dirname, '..', 'rotation-vault.mjs');
+  const linuxModule = join(import.meta.dirname, '..', 'vault-linux.mjs');
+  const env = {
+    ...process.env,
+    HOME: home,
+    CLAUDE_AUTH_COORDINATION_CONFIG: f.configPath,
+    CLAUDE_ROTATION_FILE_VAULT: rotationVault,
+  };
+  const seedDelete = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import(${JSON.stringify(`file://${linuxModule}`)}).then(m=>m.writeEntry('delete-me','synthetic-delete-value'))`,
+    ],
+    { env, encoding: 'utf8' },
+  );
+  assert.equal(seedDelete.status, 0, seedDelete.stderr);
+  const activationScript = `import(${JSON.stringify(`file://${stagedModule}`)}).then(m=>m.activateEnrollment(${JSON.stringify({ ...f.common, now: NOW })}))`;
+  const activation = spawn(process.execPath, ['--input-type=module', '-e', activationScript], {
+    env: {
+      ...env,
+      CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+      CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGSTOP:LOCK_ACQUIRED',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  await waitFor(() => existsSync(f.common.operationLockPath), 'stopped activation lock');
+  const attempts = [
+    `import(${JSON.stringify(`file://${rotationModule}`)}).then(m=>m.writeRotationToken('writer@example.com',{claudeAiOauth:{accessToken:'blocked-writer-token'}}))`,
+    `import(${JSON.stringify(`file://${rotationModule}`)}).then(m=>m.readRotationToken('heal@example.com'))`,
+    `import(${JSON.stringify(`file://${linuxModule}`)}).then(m=>m.deleteEntry('delete-me'))`,
+  ].map((script) => spawnSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' }));
+  for (const attempt of attempts) {
+    assert.notEqual(attempt.status, 0);
+    assert.match(attempt.stderr, /OPERATION_LOCKED/);
+  }
+  assert.deepEqual(JSON.parse(readFileSync(rotationVault, 'utf8')), { [healService]: healToken });
+  const stillPresent = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import(${JSON.stringify(`file://${linuxModule}`)}).then(m=>process.stdout.write(m.readEntry('delete-me')||''))`,
+    ],
+    { env, encoding: 'utf8' },
+  );
+  assert.equal(stillPresent.stdout, 'synthetic-delete-value');
+  process.kill(activation.pid, 'SIGCONT');
+  const activated = await childResult(activation);
+  assert.equal(activated.status, 0, activated.stderr);
+}
+
+// Every generic JS/CLI/shell setter rejects all protected service spellings
+// before a backend side effect, while unrelated namespaces remain compatible.
+{
+  const root = mkdtempSync(join(tmpdir(), 'credential-setter-policy-'));
+  const data = join(root, 'data');
+  const mjs = join(import.meta.dirname, '..', '..', '..', 'lib', 'credential-store.mjs');
+  const sh = join(import.meta.dirname, '..', '..', '..', 'lib', 'credential-store.sh');
+  const env = { ...process.env, HOME: root, XDG_DATA_HOME: data, CLAUDE_OPS_CRED_BACKEND: 'plaintext-json' };
+  const protectedServices = [
+    'Claude-Rotation',
+    'Claude-Rotation-user@example.com',
+    'Claude Code-credentials',
+    'cLaUdE-rOtAtIoN-Mixed',
+  ];
+  for (const service of protectedServices) {
+    const api = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import {setCredential} from ${JSON.stringify(`file://${mjs}`)}; await setCredential(${JSON.stringify(service)},'acct','secret')`,
+      ],
+      { env, encoding: 'utf8' },
+    );
+    assert.notEqual(api.status, 0);
+    for (const command of ['set', 'set-keytar', 'delete', 'delete-keytar']) {
+      const run = spawnSync(process.execPath, [mjs, command, service, 'acct', 'secret'], { env, encoding: 'utf8' });
+      assert.notEqual(run.status, 0, `${command} accepted ${service}`);
+    }
+    for (const command of ['set', 'set-stdin', 'delete']) {
+      const argv = command === 'set' ? [sh, command, service, 'acct', 'secret'] : [sh, command, service, 'acct'];
+      const run = spawnSync('bash', argv, {
+        env,
+        input: command === 'set-stdin' ? 'secret' : undefined,
+        encoding: 'utf8',
+      });
+      assert.notEqual(run.status, 0, `shell ${command} accepted ${service}`);
+    }
+  }
+  const plain = join(data, 'claude-ops', 'secrets.plain.json');
+  assert.equal(existsSync(plain), false, 'protected setters reached a backend');
+  const benign = spawnSync(process.execPath, [mjs, 'set', 'Example-Service', 'acct', 'secret'], {
+    env,
+    encoding: 'utf8',
+  });
+  assert.equal(benign.status, 0, benign.stderr);
+  assert.equal(JSON.parse(readFileSync(plain, 'utf8'))['Example-Service/acct'], 'secret');
+}
+
+// Refreshed-token identity is checked by an injected offline profile fetch and
+// requires exact configured email and organization UUID/name.
+{
+  const account = {
+    email: ENTRY.email,
+    orgUuid: ENTRY.organizationUuid,
+    orgName: ENTRY.organizationName,
+  };
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({
+      account: { email: ENTRY.email },
+      organization: { uuid: ENTRY.organizationUuid, name: ENTRY.organizationName },
+    }),
+  });
+  assert.equal((await verifyRefreshedTokenIdentity(account, 'synthetic-token', { fetchImpl })).email, ENTRY.email);
+  await assert.rejects(
+    verifyRefreshedTokenIdentity({ ...account, orgUuid: 'wrong' }, 'synthetic-token', { fetchImpl }),
+    /TOKEN_IDENTITY_MISMATCH/,
+  );
+  await assert.rejects(
+    verifyRefreshedTokenIdentity({ email: ENTRY.email }, 'synthetic-token', { fetchImpl }),
+    /TOKEN_IDENTITY_CONFIG_MISSING/,
+  );
+}
+
+// Deprecated capture exits before configuration reads, vault/keychain writes,
+// or rotation-data creation.
+{
+  const root = mkdtempSync(join(tmpdir(), 'rotate-capture-refusal-'));
+  const run = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'rotate.mjs'), '--capture'], {
+    env: { ...process.env, HOME: root, CLAUDE_PLUGIN_DATA_DIR: join(root, 'plugin-data') },
+    encoding: 'utf8',
+  });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /staged enrollment is required/);
+  assert.equal(existsSync(join(root, 'plugin-data')), false);
+}
+
+// Healing reads and deletes are mutations: without coordination configuration
+// they fail before changing their respective file vaults.
+{
+  const root = mkdtempSync(join(tmpdir(), 'writer-coordination-required-'));
+  const rotationVault = join(root, 'rotation.json');
+  const service = 'Claude-Rotation-heal@example.com';
+  const token = { claudeAiOauth: { accessToken: 'synthetic', expiresAt: 123 } };
+  writeFileSync(rotationVault, JSON.stringify({ [service]: token }), { mode: 0o600 });
+  const rotationModule = join(import.meta.dirname, '..', 'rotation-vault.mjs');
+  const heal = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import(${JSON.stringify(`file://${rotationModule}`)}).then(m=>m.readRotationToken('heal@example.com'))`,
+    ],
+    {
+      env: {
+        ...process.env,
+        HOME: root,
+        CLAUDE_ROTATION_FILE_VAULT: rotationVault,
+        CLAUDE_AUTH_COORDINATION_CONFIG: '',
+      },
+      encoding: 'utf8',
+    },
+  );
+  assert.notEqual(heal.status, 0);
+  assert.deepEqual(JSON.parse(readFileSync(rotationVault, 'utf8')), { [service]: token });
+
+  const linuxModule = join(import.meta.dirname, '..', 'vault-linux.mjs');
+  const deletion = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import(${JSON.stringify(`file://${linuxModule}`)}).then(m=>m.deleteEntry('some-service'))`,
+    ],
+    { env: { ...process.env, HOME: root, CLAUDE_AUTH_COORDINATION_CONFIG: '' }, encoding: 'utf8' },
+  );
+  assert.notEqual(deletion.status, 0);
+}
 
 console.log('staged-enrollment.test.mjs: ok');

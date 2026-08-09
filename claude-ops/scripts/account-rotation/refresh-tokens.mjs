@@ -21,7 +21,9 @@ import { fileURLToPath } from 'url';
 import { execFileSync, execSync } from 'child_process';
 import { fetchWithProxyFallback } from './proxy-helper.mjs';
 import { acquireRefreshLock } from './crs-refresh-lock.mjs';
-import { readRotationToken, reconcileRemoteRotationVault, writeRotationToken } from './rotation-vault.mjs';
+import { readRotationToken, reconcileRemoteRotationVault, writeRotationTokenCoordinated } from './rotation-vault.mjs';
+import { withAuthWriterLock } from './auth-writer-coordination.mjs';
+import { verifyRefreshedTokenIdentity } from './token-identity.mjs';
 import {
   REFRESH_WHEN_BELOW_MS,
   MIN_HEALTHY_TTL_MS,
@@ -97,8 +99,8 @@ function readStoredToken(account) {
   }
 }
 
-function writeStoredToken(account, json) {
-  writeRotationToken(accountKey(account), json);
+function writeStoredToken(account, json, capability) {
+  writeRotationTokenCoordinated(accountKey(account), json, capability);
 }
 
 function syncStoredTokenToCrs(account) {
@@ -402,81 +404,88 @@ for (let i = 0; i < accountsOrdered.length; i++) {
   }
 
   try {
-    // Rate limit courtesy: delay between accounts
-    if (i > 0) {
-      await sleep(INTER_ACCOUNT_DELAY_MS);
-    }
+    await withAuthWriterLock(async (writerCapability) => {
+      // Rate limit courtesy: delay between accounts
+      if (i > 0) {
+        await sleep(INTER_ACCOUNT_DELAY_MS);
+      }
 
-    const parsed = parseToken(tokenJson);
-    const oauthData = parsed?.claudeAiOauth;
-    if (!oauthData?.refreshToken) {
-      log(`${key}: no refreshToken in stored token — skipping`);
-      failed++;
-      continue;
-    }
+      const currentTokenJson = readStoredToken(account);
+      const parsed = parseToken(currentTokenJson);
+      const oauthData = parsed?.claudeAiOauth;
+      if (!oauthData?.refreshToken) {
+        log(`${key}: no refreshToken in stored token — skipping`);
+        failed++;
+        return;
+      }
 
-    const result = await refreshOAuthToken(oauthData.refreshToken);
+      const result = await refreshOAuthToken(oauthData.refreshToken);
 
-    if (!result.ok) {
-      log(`${key}: ✗ refresh failed — ${result.error}`);
+      if (!result.ok) {
+        log(`${key}: ✗ refresh failed — ${result.error}`);
 
-      // HTTP 400 = dead refresh_token. Never spawn authentication from the
-      // refresher; a separately approved staged enrollment owns recovery.
-      if (result.error && result.error.includes('400')) {
-        if (account.autoAuthDisabled === true) {
-          log(`${key}: unattended re-auth disabled — leaving token for manual recovery`);
-        } else {
-          log(`${key}: refresh grant failed (HTTP 400) — staged enrollment approval required`);
+        // HTTP 400 = dead refresh_token. Never spawn authentication from the
+        // refresher; a separately approved staged enrollment owns recovery.
+        if (result.error && result.error.includes('400')) {
+          if (account.autoAuthDisabled === true) {
+            log(`${key}: unattended re-auth disabled — leaving token for manual recovery`);
+          } else {
+            log(`${key}: refresh grant failed (HTTP 400) — staged enrollment approval required`);
+            markNeedsReauth(key, result.error);
+          }
+        } else if (result.error && /401|invalid|revoked/i.test(result.error)) {
           markNeedsReauth(key, result.error);
         }
-      } else if (result.error && /401|invalid|revoked/i.test(result.error)) {
-        markNeedsReauth(key, result.error);
+
+        failed++;
+        return;
       }
 
-      failed++;
-      continue;
-    }
+      // Build updated token
+      const updated = {
+        claudeAiOauth: {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+          expiresAt: result.expiresAt,
+          scopes: oauthData.scopes || [],
+          subscriptionType: result.subscriptionType || oauthData.subscriptionType,
+          rateLimitTier: result.rateLimitTier || oauthData.rateLimitTier,
+        },
+        mcpOAuth: {},
+      };
 
-    // Build updated token
-    const updated = {
-      claudeAiOauth: {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        expiresAt: result.expiresAt,
-        scopes: oauthData.scopes || [],
-        subscriptionType: result.subscriptionType || oauthData.subscriptionType,
-        rateLimitTier: result.rateLimitTier || oauthData.rateLimitTier,
-      },
-      mcpOAuth: {},
-    };
+      await verifyRefreshedTokenIdentity(account, result.accessToken);
 
-    // Save to vault
-    writeStoredToken(account, JSON.stringify(updated));
-    syncStoredTokenToCrs(account);
-    clearNeedsReauth(key);
-    const newHoursLeft = ((result.expiresAt - Date.now()) / 3_600_000).toFixed(1);
-    log(`${key}: ✓ refreshed (${newHoursLeft}h remaining)`);
+      // Save to vault
+      writeStoredToken(account, JSON.stringify(updated), writerCapability);
+      syncStoredTokenToCrs(account);
+      clearNeedsReauth(key);
+      const newHoursLeft = ((result.expiresAt - Date.now()) / 3_600_000).toFixed(1);
+      log(`${key}: ✓ refreshed (${newHoursLeft}h remaining)`);
 
-    // If this is the currently active account, update the active keychain too
-    if (state.activeAccount === key) {
-      try {
-        const currentActive = readKeychain();
-        const currentParsed = parseToken(currentActive);
-        // Always merge mcpOAuth from the running session — drop the Object.keys>0 guard
-        // which silently skipped preservation when a prior rotation had already zeroed the
-        // field, causing CC to lose all MCP OAuth tokens (giga, Amplitude, higgsfield) on
-        // the next session launch and forcing interactive reauth every session.
-        if (currentParsed?.mcpOAuth) {
-          updated.mcpOAuth = { ...updated.mcpOAuth, ...currentParsed.mcpOAuth };
+      // If this is the currently active account, update the active keychain too
+      // Recheck active-account ownership under the same canonical lock; the
+      // pre-refresh state snapshot may have changed while the grant was in flight.
+      if (readState().activeAccount === key) {
+        try {
+          const currentActive = readKeychain();
+          const currentParsed = parseToken(currentActive);
+          // Always merge mcpOAuth from the running session — drop the Object.keys>0 guard
+          // which silently skipped preservation when a prior rotation had already zeroed the
+          // field, causing CC to lose all MCP OAuth tokens (giga, Amplitude, higgsfield) on
+          // the next session launch and forcing interactive reauth every session.
+          if (currentParsed?.mcpOAuth) {
+            updated.mcpOAuth = { ...updated.mcpOAuth, ...currentParsed.mcpOAuth };
+          }
+          writeKeychain(JSON.stringify(updated));
+          log(`${key}: ✓ also updated active keychain with mcpOAuth preserved`);
+        } catch (err) {
+          log(`${key}: ⚠ vault updated but active keychain update failed — ${err.message}`);
         }
-        writeKeychain(JSON.stringify(updated));
-        log(`${key}: ✓ also updated active keychain with mcpOAuth preserved`);
-      } catch (err) {
-        log(`${key}: ⚠ vault updated but active keychain update failed — ${err.message}`);
       }
-    }
 
-    refreshed++;
+      refreshed++;
+    });
   } finally {
     releaseRefreshLock();
   }

@@ -18,6 +18,7 @@
  */
 
 import { execFileSync, spawnSync } from 'child_process';
+import { requireWriterCapability, withAuthWriterLock } from './auth-writer-coordination.mjs';
 
 const IS_LINUX = process.platform === 'linux';
 // Top-level await: pre-load vault on Linux so all exports stay synchronous.
@@ -52,9 +53,9 @@ function readEntry(svc) {
   return m[1].replace(/\\"/g, '"');
 }
 
-function writeEntry(svc, json) {
+function writeEntryUnlocked(svc, json, capability) {
   if (IS_LINUX) {
-    _vault.writeEntry(svc, json);
+    _vault.writeEntryCoordinated(svc, json, capability);
     return;
   }
   try {
@@ -76,7 +77,7 @@ export function readCurrentToken() {
 }
 
 export function writeCurrentToken(json) {
-  writeEntry(KEYCHAIN_SERVICE, json);
+  return withAuthWriterLock((capability) => writeEntryUnlocked(KEYCHAIN_SERVICE, json, capability));
 }
 
 export function readStoredToken(email, label) {
@@ -89,6 +90,11 @@ export function readStoredToken(email, label) {
  * Throws if the target email has no stored token or it's malformed.
  */
 export function swapToEmail(email, label) {
+  return withAuthWriterLock((capability) => swapToEmailCoordinated(email, label, capability));
+}
+
+export function swapToEmailCoordinated(email, label, capability) {
+  requireWriterCapability(capability);
   const target = readStoredToken(email, label);
   if (!target) throw new Error(`No stored token for ${accountKey(email, label)} — run rotate.mjs --setup first`);
   // Validate target token is well-formed before clobbering current
@@ -105,17 +111,23 @@ export function swapToEmail(email, label) {
     const tgt = JSON.parse(target);
     if (cur.mcpOAuth && Object.keys(cur.mcpOAuth).length > 0) {
       tgt.mcpOAuth = { ...tgt.mcpOAuth, ...cur.mcpOAuth };
-      writeCurrentToken(JSON.stringify(tgt));
+      writeEntryUnlocked(KEYCHAIN_SERVICE, JSON.stringify(tgt), capability);
       return previous;
     }
   } catch {
     /* fallthrough to plain swap */
   }
-  writeCurrentToken(target);
+  writeEntryUnlocked(KEYCHAIN_SERVICE, target, capability);
   return previous;
 }
 
 export function restoreToken(prevJson) {
   if (!prevJson) return;
-  writeCurrentToken(prevJson);
+  return withAuthWriterLock((capability) => restoreTokenCoordinated(prevJson, capability));
+}
+
+export function restoreTokenCoordinated(prevJson, capability) {
+  requireWriterCapability(capability);
+  if (!prevJson) return;
+  return writeEntryUnlocked(KEYCHAIN_SERVICE, prevJson, capability);
 }

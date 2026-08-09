@@ -51,12 +51,18 @@ import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS, scrapeBillingState
 import { destinationUtilHardBlock } from './rotation-policy.mjs';
 import { applyAccountLeases, writeLease } from './account-leases.mjs';
 import { respawnBgSessions } from './bg-respawn.mjs';
+import { withAuthWriterLock } from './auth-writer-coordination.mjs';
 import {
   trySolveCaptchaWall,
   maybeClearCaptchaWall,
   detectCaptchaWall,
   captchaHardFailed,
 } from './rotate-captcha-soft.mjs';
+
+if (process.argv.includes('--capture')) {
+  console.error('direct credential capture refused: staged enrollment is required');
+  process.exit(2);
+}
 
 if (process.argv.includes('--bootstrap-chrome-profile') || process.argv.includes('--bootstrap-all-chrome-profiles')) {
   console.error('direct Chrome profile bootstrap refused: staged enrollment is required');
@@ -989,6 +995,10 @@ function writeKeychain(
   svc = KEYCHAIN_SERVICE,
   acct = svc === KEYCHAIN_SERVICE ? ACTIVE_KEYCHAIN_ACCOUNT : VAULT_KEYCHAIN_ACCOUNT,
 ) {
+  return withAuthWriterLock(() => writeKeychainUnlocked(json, svc, acct));
+}
+
+function writeKeychainUnlocked(json, svc, acct) {
   if (IS_LINUX) {
     _linuxWriteCred(svc, json);
     return;
@@ -1039,6 +1049,10 @@ function writeStoredToken(account, json) {
 // the next rotation to re-acquire a fresh token instead of retrying a dead one
 // forever. Best-effort: a missing entry is not an error.
 function deleteStoredToken(account) {
+  return withAuthWriterLock(() => deleteStoredTokenUnlocked(account));
+}
+
+function deleteStoredTokenUnlocked(account) {
   const svc = tokenService(account);
   if (IS_LINUX) {
     try {
@@ -5159,75 +5173,77 @@ if (args.includes('--magic-link') || args.includes('--setup')) {
   const ttlIdx = args.indexOf('--ttl');
   const ttlSec = ttlIdx !== -1 && args[ttlIdx + 1] ? parseInt(args[ttlIdx + 1], 10) : 300;
   try {
-    const cfg = readConfig();
-    const acct = cfg.accounts.find((a) => (a.email || '').toLowerCase() === (pinEmail || '').toLowerCase());
-    if (!acct) {
-      log(`[pin-browser] no account matching ${pinEmail} — writing pin sentinel only`);
-    } else if (acquireLock()) {
-      try {
-        const swapped = await swapToken(acct);
-        if (swapped) {
-          const st = readState();
-          st.activeAccount = accountKey(acct);
-          writeState(st);
-          log(`[pin-browser] CLI pinned to ${accountKey(acct)}`);
-        } else {
-          log(
-            `[pin-browser] swapToken false for ${accountKey(acct)} (vault token missing/expired) — likely already active; pinning anyway`,
-          );
-        }
-        // Sync .claude.json oauthAccount/chromeExtension blocks to match.
-        const targetKey = accountKey(acct);
-        const snapshot = loadOauthSnapshot(targetKey) || loadOauthSnapshot(acct.email);
-        const cj = readClaudeJson();
-        const currentEmail = cj?.oauthAccount?.emailAddress?.toLowerCase() || null;
-        const wantEmail = (acct.email || '').toLowerCase();
-        if (currentEmail === wantEmail) {
-          // Already in sync — opportunistically capture as snapshot baseline if missing.
-          if (!snapshot) {
-            captureOauthSnapshot(acct.email);
-          }
-          log(`[pin-browser] .claude.json oauthAccount already=${currentEmail} — no swap needed`);
-        } else if (snapshot) {
-          // Back up the outgoing blocks once per pin window (don't clobber existing backup).
-          if (!existsSync(BROWSER_PIN_BACKUP_PATH)) backupCurrentOauthBlocks();
-          const applied = applyOauthSnapshotToClaudeJson(snapshot);
-          if (applied) {
-            log(
-              `[pin-browser] .claude.json oauthAccount swapped ${currentEmail || 'unknown'} → ${wantEmail}. Restart Claude Code session to apply (chrome bridge reads on startup).`,
-            );
+    await withAuthWriterLock(async () => {
+      const cfg = readConfig();
+      const acct = cfg.accounts.find((a) => (a.email || '').toLowerCase() === (pinEmail || '').toLowerCase());
+      if (!acct) {
+        log(`[pin-browser] no account matching ${pinEmail} — writing pin sentinel only`);
+      } else if (acquireLock()) {
+        try {
+          const swapped = await swapToken(acct);
+          if (swapped) {
+            const st = readState();
+            st.activeAccount = accountKey(acct);
+            writeState(st);
+            log(`[pin-browser] CLI pinned to ${accountKey(acct)}`);
           } else {
-            log(`[pin-browser] snapshot found but apply failed for ${wantEmail}`);
+            log(
+              `[pin-browser] swapToken false for ${accountKey(acct)} (vault token missing/expired) — likely already active; pinning anyway`,
+            );
           }
-          // Ensure the matching Chrome profile is running so its extension
-          // service worker is alive and can authenticate against the swapped
-          // pairedDeviceId. No-op if already running.
-          const profileDir = snapshot.chromeProfileDir || chromeProfileDirFor(targetKey);
-          if (profileDir && !isChromeProfileRunning(profileDir)) {
-            // Navigate to claude.ai/chrome to wake the extension service
-            // worker — it only establishes the native-messaging bridge to
-            // Claude Code when this page loads. Without it, the extension
-            // is installed but dormant and the bridge reports "not connected".
-            launchChromeProfile(profileDir, 'https://claude.ai/chrome');
-            log(`[pin-browser] launched Chrome profile ${profileDir} for ${wantEmail} (@ claude.ai/chrome)`);
+          // Sync .claude.json oauthAccount/chromeExtension blocks to match.
+          const targetKey = accountKey(acct);
+          const snapshot = loadOauthSnapshot(targetKey) || loadOauthSnapshot(acct.email);
+          const cj = readClaudeJson();
+          const currentEmail = cj?.oauthAccount?.emailAddress?.toLowerCase() || null;
+          const wantEmail = (acct.email || '').toLowerCase();
+          if (currentEmail === wantEmail) {
+            // Already in sync — opportunistically capture as snapshot baseline if missing.
+            if (!snapshot) {
+              captureOauthSnapshot(acct.email);
+            }
+            log(`[pin-browser] .claude.json oauthAccount already=${currentEmail} — no swap needed`);
+          } else if (snapshot) {
+            // Back up the outgoing blocks once per pin window (don't clobber existing backup).
+            if (!existsSync(BROWSER_PIN_BACKUP_PATH)) backupCurrentOauthBlocks();
+            const applied = applyOauthSnapshotToClaudeJson(snapshot);
+            if (applied) {
+              log(
+                `[pin-browser] .claude.json oauthAccount swapped ${currentEmail || 'unknown'} → ${wantEmail}. Restart Claude Code session to apply (chrome bridge reads on startup).`,
+              );
+            } else {
+              log(`[pin-browser] snapshot found but apply failed for ${wantEmail}`);
+            }
+            // Ensure the matching Chrome profile is running so its extension
+            // service worker is alive and can authenticate against the swapped
+            // pairedDeviceId. No-op if already running.
+            const profileDir = snapshot.chromeProfileDir || chromeProfileDirFor(targetKey);
+            if (profileDir && !isChromeProfileRunning(profileDir)) {
+              // Navigate to claude.ai/chrome to wake the extension service
+              // worker — it only establishes the native-messaging bridge to
+              // Claude Code when this page loads. Without it, the extension
+              // is installed but dormant and the bridge reports "not connected".
+              launchChromeProfile(profileDir, 'https://claude.ai/chrome');
+              log(`[pin-browser] launched Chrome profile ${profileDir} for ${wantEmail} (@ claude.ai/chrome)`);
+            }
+          } else {
+            log(
+              `[pin-browser] WARNING: no oauth-snapshot for ${targetKey}. Chrome bridge will fail until you: (1) restart Claude Code while keychain is on ${wantEmail}, (2) run: node ${join(__dirname, 'rotate.mjs')} --capture-oauth-snapshot ${wantEmail}`,
+            );
           }
-        } else {
-          log(
-            `[pin-browser] WARNING: no oauth-snapshot for ${targetKey}. Chrome bridge will fail until you: (1) restart Claude Code while keychain is on ${wantEmail}, (2) run: node ${join(__dirname, 'rotate.mjs')} --capture-oauth-snapshot ${wantEmail}`,
-          );
+        } finally {
+          releaseLock();
         }
-      } finally {
-        releaseLock();
+      } else {
+        log('[pin-browser] rotation lock busy — skipping swap, still writing pin sentinel');
       }
-    } else {
-      log('[pin-browser] rotation lock busy — skipping swap, still writing pin sentinel');
-    }
-    // Always (re)write the freeze sentinel so the daemon won't rotate away while
-    // the browser bridge is in use. The hook refreshes this on every tool call.
-    writeFileSync(
-      BROWSER_PIN_PATH,
-      JSON.stringify({ email: pinEmail, until: Date.now() + ttlSec * 1000, ts: Date.now() }),
-    );
+      // Always (re)write the freeze sentinel so the daemon won't rotate away while
+      // the browser bridge is in use. The hook refreshes this on every tool call.
+      writeFileSync(
+        BROWSER_PIN_PATH,
+        JSON.stringify({ email: pinEmail, until: Date.now() + ttlSec * 1000, ts: Date.now() }),
+      );
+    });
   } catch (e) {
     log(`[pin-browser] error (non-fatal): ${(e.message || e).toString().slice(0, 120)}`);
   }
@@ -5237,14 +5253,12 @@ if (args.includes('--magic-link') || args.includes('--setup')) {
   // the daemon once the .browser-pin sentinel's TTL expires. Idempotent: if no
   // backup exists, exits 0 silently.
   try {
-    if (existsSync(BROWSER_PIN_BACKUP_PATH)) {
-      restoreOauthBlocksFromBackup();
-    }
-    if (existsSync(BROWSER_PIN_PATH)) {
-      try {
-        unlinkSync(BROWSER_PIN_PATH);
-      } catch {}
-    }
+    await withAuthWriterLock(async () => {
+      if (existsSync(BROWSER_PIN_BACKUP_PATH)) {
+        restoreOauthBlocksFromBackup();
+      }
+      if (existsSync(BROWSER_PIN_PATH)) unlinkSync(BROWSER_PIN_PATH);
+    });
   } catch (e) {
     log(`[release-browser-pin] error (non-fatal): ${(e.message || e).toString().slice(0, 120)}`);
   }
@@ -5575,21 +5589,24 @@ if (args.includes('--magic-link') || args.includes('--setup')) {
     console.error('Rotation in progress.');
     process.exit(1);
   }
+  let exitCode = 1;
   try {
-    const ok = await rotate(target, {
-      session,
-      noBrowser,
-      dryRun,
-      magicLink,
-      allowExhausted,
-      bedrockOnExhausted,
-    });
-    process.exit(ok ? 0 : 1);
+    const runRotation = () =>
+      rotate(target, {
+        session,
+        noBrowser,
+        dryRun,
+        magicLink,
+        allowExhausted,
+        bedrockOnExhausted,
+      });
+    const ok = dryRun ? await runRotation() : await withAuthWriterLock(runRotation);
+    exitCode = ok ? 0 : 1;
   } catch (err) {
     log(`FATAL: ${err.message}`);
     notify('Account Rotation', `FAILED: ${err.message}`);
-    process.exit(1);
   } finally {
     releaseLock();
   }
+  process.exit(exitCode);
 }
