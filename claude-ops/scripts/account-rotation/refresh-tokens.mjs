@@ -24,6 +24,7 @@ import { acquireRefreshLock } from './crs-refresh-lock.mjs';
 import { readRotationToken, reconcileRemoteRotationVault, writeRotationTokenCoordinated } from './rotation-vault.mjs';
 import { withAuthWriterLock } from './auth-writer-coordination.mjs';
 import { verifyRefreshedTokenIdentity } from './token-identity.mjs';
+import { automatedAuthAllowed } from './auto-auth-policy.mjs';
 import {
   REFRESH_WHEN_BELOW_MS,
   MIN_HEALTHY_TTL_MS,
@@ -33,7 +34,7 @@ import {
 } from './oauth-keep-alive-policy.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, 'config.json');
+const CONFIG_PATH = process.env.CLAUDE_ROTATOR_CONFIG || join(__dirname, 'config.json');
 const STATE_PATH = join(__dirname, 'state.json');
 const LOG_PATH = join(__dirname, 'rotation.log');
 const NEEDS_REAUTH_PATH = join(__dirname, '.crs-token-refresher-state.json');
@@ -100,7 +101,7 @@ function readStoredToken(account) {
 }
 
 function writeStoredToken(account, json, capability) {
-  writeRotationTokenCoordinated(accountKey(account), json, capability);
+  return writeRotationTokenCoordinated(account, json, capability);
 }
 
 function syncStoredTokenToCrs(account) {
@@ -310,15 +311,6 @@ function showStatus() {
 
 const args = process.argv.slice(2);
 
-try {
-  const reconciled = reconcileRemoteRotationVault();
-  if (!reconciled.skipped && (reconciled.pulled > 0 || reconciled.pushed > 0)) {
-    log(`remote vault reconciled: ${reconciled.pulled} pulled, ${reconciled.pushed} pushed`);
-  }
-} catch (error) {
-  log(`remote vault reconciliation unavailable — ${String(error.message || error).slice(0, 180)}`);
-}
-
 if (args.includes('--status')) {
   showStatus();
   process.exit(0);
@@ -328,6 +320,17 @@ const force = args.includes('--force');
 const dryRun = args.includes('--dry-run');
 const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
 const state = readState();
+
+if (config.accounts.some(automatedAuthAllowed)) {
+  try {
+    const reconciled = reconcileRemoteRotationVault();
+    if (!reconciled.skipped && (reconciled.pulled > 0 || reconciled.pushed > 0)) {
+      log(`remote vault reconciled: ${reconciled.pulled} pulled, ${reconciled.pushed} pushed`);
+    }
+  } catch (error) {
+    log(`remote vault reconciliation unavailable — ${String(error.message || error).slice(0, 180)}`);
+  }
+}
 
 /** Prefer re-authing accounts with headroom; skip 7d-exhausted waste. */
 function magicLinkPriority(account) {
@@ -368,6 +371,11 @@ for (let i = 0; i < accountsOrdered.length; i++) {
   // browser re-auth path every hour (~180s of doomed browser automation).
   if (account.disabled === true) {
     log(`${key}: disabled — skipping`);
+    skipped++;
+    continue;
+  }
+  if (!automatedAuthAllowed(account)) {
+    log(`${key}: automatic credential mutation not approved — status only`);
     skipped++;
     continue;
   }
@@ -457,7 +465,7 @@ for (let i = 0; i < accountsOrdered.length; i++) {
       await verifyRefreshedTokenIdentity(account, result.accessToken);
 
       // Save to vault
-      writeStoredToken(account, JSON.stringify(updated), writerCapability);
+      await writeStoredToken(account, JSON.stringify(updated), writerCapability);
       syncStoredTokenToCrs(account);
       clearNeedsReauth(key);
       const newHoursLeft = ((result.expiresAt - Date.now()) / 3_600_000).toFixed(1);
@@ -477,6 +485,7 @@ for (let i = 0; i < accountsOrdered.length; i++) {
           if (currentParsed?.mcpOAuth) {
             updated.mcpOAuth = { ...updated.mcpOAuth, ...currentParsed.mcpOAuth };
           }
+          await verifyRefreshedTokenIdentity(account, updated.claudeAiOauth.accessToken);
           writeKeychain(JSON.stringify(updated));
           log(`${key}: ✓ also updated active keychain with mcpOAuth preserved`);
         } catch (err) {

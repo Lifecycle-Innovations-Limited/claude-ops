@@ -17,13 +17,16 @@ import { tmpdir } from 'node:os';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   activateEnrollment,
+  canonicalJson,
   consumeApproval,
   createApprovalPayload,
   parseManifestBytes,
   readDeploymentConfig,
   recoverEnrollment,
+  rollbackEnrollment,
   sha256,
   signApproval,
   stageEnrollment,
@@ -34,6 +37,9 @@ import {
 import { automatedAuthAllowed } from '../auto-auth-policy.mjs';
 import { reauth } from '../../ops-accounts/providers/claude.mjs';
 import { verifyRefreshedTokenIdentity } from '../token-identity.mjs';
+import { parseStrictJson } from '../strict-json.mjs';
+import { requireWriterCapability, withAuthWriterLock } from '../auth-writer-coordination.mjs';
+import { writeRotationTokenCoordinated } from '../rotation-vault.mjs';
 
 const NOW = Date.parse('2030-01-01T00:00:00Z');
 const SECRET_VALUES = [
@@ -117,6 +123,16 @@ const waitFor = async (predicate, label, timeoutMs = 5000) => {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 };
+const childProcessState = (child) =>
+  spawnSync('ps', ['-o', 'state=', '-p', String(child.pid)], { encoding: 'utf8' }).stdout.trim();
+const waitForStoppedChild = (child, label) => waitFor(() => childProcessState(child) === 'T', label);
+const signalChild = (child, signal) => {
+  try {
+    process.kill(child.pid, signal);
+  } catch (error) {
+    if (error?.code !== 'ESRCH') throw error;
+  }
+};
 
 function fixture(format = JSON.stringify(MANIFEST, null, 2)) {
   const root = mkdtempSync(join(tmpdir(), 'staged-enrollment-'));
@@ -127,12 +143,51 @@ function fixture(format = JSON.stringify(MANIFEST, null, 2)) {
   const candidatePath = join(root, 'candidate.json');
   const keyPath = join(root, 'approval.key');
   const approvalPath = join(root, 'approval.json');
+  const inventoryPath = join(root, 'consumer-inventory.json');
+  const authoritativeConsumerInventoryPath = join(root, 'authoritative-consumer-inventory.json');
+  const canaryPath = join(root, 'no-fallback-canary.json');
   const configPath = join(root, 'deployment.json');
   writeFileSync(manifestPath, format, { mode: 0o600 });
   writeFileSync(candidatePath, JSON.stringify(CANDIDATE), { mode: 0o600 });
   writeFileSync(keyPath, 'K'.repeat(32), { mode: 0o600 });
   const digest = parseManifestBytes(readFileSync(manifestPath)).digest;
   const candidateDigest = sha256(readFileSync(candidatePath));
+  const inventory = {
+    version: 1,
+    credential: {
+      id: ENTRY.id,
+      provider: ENTRY.provider,
+      email: ENTRY.email,
+      organizationUuid: ENTRY.organizationUuid,
+      organizationName: ENTRY.organizationName,
+      accountOwner: ENTRY.accountOwner,
+      destination: ENTRY.authFilename,
+    },
+    consumers: [{ id: 'canonical-consumer', type: 'cliproxyapi', path: join(paths.active, ENTRY.authFilename) }],
+  };
+  const authoritativeConsumerInventory = {
+    version: 1,
+    consumers: inventory.consumers.map((consumer) => ({
+      ...consumer,
+      credentialId: ENTRY.id,
+      destination: ENTRY.authFilename,
+    })),
+  };
+  const canary = {
+    version: 1,
+    results: inventory.consumers.map((consumer) => ({
+      consumerId: consumer.id,
+      consumerPath: consumer.path,
+      credentialId: ENTRY.id,
+      candidateDigest,
+      destination: ENTRY.authFilename,
+      noFallback: true,
+      pass: true,
+    })),
+  };
+  writeFileSync(inventoryPath, JSON.stringify(inventory), { mode: 0o600 });
+  writeFileSync(authoritativeConsumerInventoryPath, JSON.stringify(authoritativeConsumerInventory), { mode: 0o600 });
+  writeFileSync(canaryPath, JSON.stringify(canary), { mode: 0o600 });
   const config = {
     manifestPath,
     approvalKeyPath: keyPath,
@@ -145,6 +200,11 @@ function fixture(format = JSON.stringify(MANIFEST, null, 2)) {
     environment: 'controlled-test',
     authorizedOperator: 'operator',
     maxApprovalTtlMs: 300_000,
+    runtimeInventoryPath: manifestPath,
+    runtimeInventoryDigest: sha256(readFileSync(manifestPath)),
+    authoritativeConsumerInventoryPath,
+    authoritativeConsumerInventoryDigest: sha256(readFileSync(authoritativeConsumerInventoryPath)),
+    deploymentPlanDigest: 'd'.repeat(64),
   };
   writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
   const approval = (action, changes = {}, clock = {}) => {
@@ -160,7 +220,13 @@ function fixture(format = JSON.stringify(MANIFEST, null, 2)) {
         authorizedOperator: 'operator',
         environment: 'controlled-test',
         candidateDigest,
-        writersQuiesced: action === 'activate' ? true : null,
+        oldTargetDigest:
+          action === 'activate' && existsSync(join(paths.active, ENTRY.authFilename))
+            ? sha256(readFileSync(join(paths.active, ENTRY.authFilename)))
+            : null,
+        inventoryDigest: action === 'activate' ? sha256(readFileSync(inventoryPath)) : null,
+        canaryDigest: action === 'activate' ? sha256(readFileSync(canaryPath)) : null,
+        destination: ENTRY.authFilename,
         ...changes,
       },
       { now: clock.now ?? NOW, ttlMs: clock.ttlMs ?? 300_000 },
@@ -185,6 +251,8 @@ function fixture(format = JSON.stringify(MANIFEST, null, 2)) {
     operator: 'operator',
     maxTtlMs: 300_000,
     now: NOW,
+    inventoryPath,
+    canaryPath,
   };
   return {
     root,
@@ -193,6 +261,9 @@ function fixture(format = JSON.stringify(MANIFEST, null, 2)) {
     candidatePath,
     keyPath,
     approvalPath,
+    inventoryPath,
+    authoritativeConsumerInventoryPath,
+    canaryPath,
     configPath,
     config,
     digest,
@@ -202,8 +273,82 @@ function fixture(format = JSON.stringify(MANIFEST, null, 2)) {
   };
 }
 
+function authorizeRollback(f, changes = {}) {
+  const recordName = readdirSync(f.paths.rollback).find((name) => name.endsWith('.committed-rollback.json'));
+  const recordPath = join(f.paths.rollback, recordName);
+  const retained = JSON.parse(readFileSync(recordPath, 'utf8')).payload;
+  const payload = {
+    version: 1,
+    id: `rollback-${randomUUID()}`,
+    nonce: `rollback-${randomUUID()}`,
+    action: 'canonical-rollback',
+    manifestDigest: f.digest,
+    manifestEntryId: ENTRY.id,
+    email: ENTRY.email,
+    organizationUuid: ENTRY.organizationUuid,
+    organizationName: ENTRY.organizationName,
+    accountOwner: ENTRY.accountOwner,
+    authorizedOperator: 'operator',
+    environment: 'controlled-test',
+    issuedAt: new Date(NOW).toISOString(),
+    expiresAt: new Date(NOW + 300_000).toISOString(),
+    candidateDigest: retained.candidateDigest,
+    oldBackupDigest: retained.oldDigest,
+    recordDigest: sha256(readFileSync(recordPath)),
+    destination: ENTRY.authFilename,
+    ...changes,
+  };
+  const artifact = signApproval(payload, readFileSync(f.keyPath));
+  writeFileSync(f.approvalPath, JSON.stringify(artifact), { mode: 0o600 });
+  return artifact;
+}
+
 // Duplicate decoded keys are rejected recursively in every trust-record class.
 {
+  for (const key of ['__proto__', 'constructor', 'prototype']) {
+    refuses(
+      () => parseStrictJson(`{"safe":{"${key}":{"hidden":"signed-out"}}}`, 'DANGEROUS_JSON_KEY'),
+      'DANGEROUS_JSON_KEY',
+    );
+    refuses(() => parseStrictJson(`{"${key}":1}`, 'DANGEROUS_JSON_KEY'), 'DANGEROUS_JSON_KEY');
+  }
+  refuses(() => parseStrictJson(`{"safe":1}\u00a0`, 'NON_JSON_WHITESPACE'), 'NON_JSON_WHITESPACE');
+  refuses(() => parseStrictJson(`${'['.repeat(66)}0${']'.repeat(66)}`, 'JSON_DEPTH_EXCEEDED'), 'JSON_DEPTH_EXCEEDED');
+  for (const ambiguousNumber of ['1e400', '-1e400', '-0', '9007199254740993'])
+    refuses(() => parseStrictJson(ambiguousNumber, 'AMBIGUOUS_JSON_NUMBER'), 'AMBIGUOUS_JSON_NUMBER');
+  const safe = parseStrictJson('{"signed":{"visible":1}}');
+  assert.equal(Object.getPrototypeOf(safe), null);
+  assert.equal(Object.getPrototypeOf(safe.signed), null);
+  assert.equal(JSON.stringify(safe), '{"signed":{"visible":1}}');
+  for (const dangerous of [
+    JSON.parse('{"__proto__":{"hidden":"unsigned"}}'),
+    JSON.parse('{"safe":{"constructor":{"hidden":"unsigned"}}}'),
+    { safe: { __proto__: { hidden: 'unsigned' } } },
+  ])
+    refuses(() => canonicalJson(dangerous), 'UNSAFE_CANONICAL_JSON');
+  const arrayWithUnsignedKey = [1];
+  arrayWithUnsignedKey.authorization = 'unsigned';
+  refuses(() => canonicalJson(arrayWithUnsignedKey), 'UNSAFE_CANONICAL_JSON');
+  const arrayWithSymbol = [1];
+  arrayWithSymbol[Symbol('unsigned')] = true;
+  refuses(() => canonicalJson(arrayWithSymbol), 'UNSAFE_CANONICAL_JSON');
+  const arrayWithPrototype = [1];
+  Object.setPrototypeOf(arrayWithPrototype, null);
+  refuses(() => canonicalJson(arrayWithPrototype), 'UNSAFE_CANONICAL_JSON');
+  const hidden = { safe: {} };
+  Object.defineProperty(hidden.safe, 'hidden', { value: true });
+  refuses(() => canonicalJson(hidden), 'UNSAFE_CANONICAL_JSON');
+  for (const property of ['get', 'set']) {
+    const accessor = { nested: {} };
+    Object.defineProperty(accessor.nested, 'value', { enumerable: true, [property]: () => 1 });
+    refuses(() => canonicalJson(accessor), 'UNSAFE_CANONICAL_JSON');
+  }
+  refuses(() => canonicalJson(Array(1)), 'UNSAFE_CANONICAL_JSON');
+  const deep = {};
+  let cursor = deep;
+  for (let index = 0; index < 66; index++) cursor = cursor.next = {};
+  refuses(() => canonicalJson(deep), 'UNSAFE_CANONICAL_JSON');
+  for (const value of [-0, Number.MAX_SAFE_INTEGER + 1]) refuses(() => canonicalJson(value), 'UNSAFE_CANONICAL_JSON');
   refuses(() => parseManifestBytes('{"version":1,"\\u0065ntries":[],"entries":[]}'), 'INVALID_MANIFEST');
   refuses(
     () =>
@@ -297,7 +442,7 @@ function fixture(format = JSON.stringify(MANIFEST, null, 2)) {
   refuses(() => recoverEnrollment({ configPath: journal.configPath }), 'INVALID_ACTIVATION_JOURNAL');
 
   const marker = fixture();
-  const markerPayload = { version: 1, approvalId: 'approval-id', nonce: 'approval-nonce', action: 'stage' };
+  const markerPayload = { version: 1, approvalId: 'approval-id', nonce: 'approval-nonce', action: 'additive-publish' };
   writeFileSync(
     join(marker.paths.usage, 'approval-id.approval-nonce.used'),
     signedDuplicate(markerPayload, 'action', readFileSync(marker.keyPath)),
@@ -308,7 +453,7 @@ function fixture(format = JSON.stringify(MANIFEST, null, 2)) {
   refuses(
     () =>
       consumeApproval(
-        { id: 'approval-id', nonce: 'approval-nonce', action: 'stage' },
+        { id: 'approval-id', nonce: 'approval-nonce', action: 'additive-publish' },
         marker.paths.usage,
         marker.keyPath,
       ),
@@ -396,6 +541,76 @@ for (const role of ['manifest', 'key', 'candidate', 'approval']) {
     'reclaimed',
   );
   assert.equal(existsSync(stale.common.operationLockPath), false);
+
+  for (const suffix of ['.journal', '.publication']) {
+    const pending = fixture();
+    makeLock(pending, { ...base, pid: 2147483647 });
+    writeFileSync(`${pending.common.operationLockPath}${suffix}`, '{}\n', { mode: 0o600 });
+    const callbackMarker = join(pending.root, `callback-${suffix.slice(1)}`);
+    refuses(
+      () =>
+        withOperationLock(pending.common.operationLockPath, pending.keyPath, () => {
+          writeFileSync(callbackMarker, 'unsafe');
+        }),
+      suffix === '.journal' ? 'PENDING_ACTIVATION_JOURNAL' : 'PENDING_APPROVAL_PUBLICATION',
+    );
+    assert.equal(existsSync(callbackMarker), false, `${suffix} was rechecked after stale reclaim`);
+  }
+}
+
+// A pending journal published only after stale-lock replacement is still
+// observed under ownership; the callback never runs after SIGCONT.
+{
+  const f = fixture();
+  const stale = {
+    version: 1,
+    host: hostname(),
+    pid: 2147483647,
+    nonce: 'stale-race-nonce',
+    createdAt: new Date().toISOString(),
+  };
+  writeFileSync(f.common.operationLockPath, `${JSON.stringify(signApproval(stale, readFileSync(f.keyPath)))}\n`, {
+    mode: 0o600,
+  });
+  const marker = join(f.root, 'stale-reclaim-callback');
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const child = spawn(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.withOperationLock(${JSON.stringify(f.common.operationLockPath)},${JSON.stringify(f.keyPath)},()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'unsafe')))`,
+    ],
+    {
+      env: {
+        ...process.env,
+        CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+        CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGSTOP:LOCK_REPLACEMENT_PUBLISHED',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  const resultPromise = childResult(child);
+  let result;
+  try {
+    await waitFor(() => {
+      try {
+        return JSON.parse(readFileSync(f.common.operationLockPath, 'utf8')).payload.pid === child.pid;
+      } catch {
+        return false;
+      }
+    }, 'replacement lock publication');
+    await waitForStoppedChild(child, 'replacement-lock fault stop');
+    writeFileSync(`${f.common.operationLockPath}.journal`, '{}\n', { mode: 0o600 });
+    signalChild(child, 'SIGCONT');
+    result = await resultPromise;
+  } finally {
+    signalChild(child, 'SIGCONT');
+    signalChild(child, 'SIGTERM');
+  }
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /PENDING_ACTIVATION_JOURNAL/);
+  assert.equal(existsSync(marker), false);
 }
 
 // Signed-but-malformed lock metadata is never treated as a reclaimable dead process.
@@ -622,9 +837,11 @@ for (const existing of [
 }
 
 // Fresh processes recover authenticated journals after SIGKILL at each
-// irreversible boundary; committed recovery removes the token backup.
+// irreversible boundary; committed recovery retains authenticated rollback.
 for (const phase of [
   'PREPARING',
+  'BACKUP_CREATE_INTENT',
+  'BACKUP_CREATED',
   'PREPARED',
   'APPROVAL_INTENT',
   'APPROVAL_CONSUMED',
@@ -656,9 +873,221 @@ for (const phase of [
   const receipt = JSON.parse(recovered.stdout);
   assert.equal(receipt.recovered, true);
   assert.equal(readFileSync(target, 'utf8'), phase === 'COMMITTED' ? JSON.stringify(CANDIDATE) : old);
-  assert.deepEqual(readdirSync(f.paths.rollback), []);
+  assert.equal(readdirSync(f.paths.rollback).length, phase === 'COMMITTED' ? 2 : 0);
+  if (phase === 'COMMITTED') {
+    const beforeRollback = readFileSync(target);
+    const rolledBack = spawnSync(
+      process.execPath,
+      [modulePath, 'rollback', '--config', f.configPath, '--entry', ENTRY.id],
+      { encoding: 'utf8' },
+    );
+    assert.notEqual(rolledBack.status, 0);
+    assert.match(rolledBack.stderr, /INVALID_ARGUMENTS/);
+    assert.deepEqual(readFileSync(target), beforeRollback, 'unsigned rollback performs zero writes');
+    assert.equal(readdirSync(f.paths.rollback).length, 2, 'unsigned rollback retains all evidence');
+  }
   const again = recoverEnrollment({ configPath: f.configPath });
   assert.equal(again.recovered, false);
+}
+
+// Recovery never removes or replaces an unjournaled active occupant, even if
+// another writer copied the exact candidate bytes into a different inode.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const target = join(f.paths.active, ENTRY.authFilename);
+  const old = JSON.stringify({ ...CANDIDATE, access_token: 'old-before-foreign-replace' });
+  writeFileSync(target, old, { mode: 0o600 });
+  f.approval('activate');
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const childScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.activateEnrollment(${JSON.stringify({ ...f.common, now: NOW })}))`;
+  const killed = spawnSync(process.execPath, ['--input-type=module', '-e', childScript], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+      CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGKILL:INSTALLED',
+    },
+  });
+  assert.equal(killed.signal, 'SIGKILL', killed.stderr);
+  linkSync(target, join(f.root, 'foreign-held-original-inode'));
+  unlinkSync(target);
+  writeFileSync(target, old, { mode: 0o600 });
+  refuses(() => recoverEnrollment({ configPath: f.configPath }), 'ACTIVATION_RECOVERY_UNCERTAIN');
+  assert.equal(readFileSync(target, 'utf8'), old);
+  assert.equal(readdirSync(f.paths.rollback).length, 1, 'exact journal-owned backup preserved');
+}
+
+// Backup-open crash is recoverable from authenticated creation intent.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const target = join(f.paths.active, ENTRY.authFilename);
+  const old = JSON.stringify({ ...CANDIDATE, access_token: 'backup-open-old' });
+  writeFileSync(target, old, { mode: 0o600 });
+  f.approval('activate');
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const killed = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.activateEnrollment(${JSON.stringify({ ...f.common, now: NOW })}))`,
+    ],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+        CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGKILL:BACKUP_OPENED',
+      },
+    },
+  );
+  assert.equal(killed.signal, 'SIGKILL', killed.stderr);
+  assert.equal(recoverEnrollment({ configPath: f.configPath }).outcome, 'rolled-back');
+  assert.equal(readFileSync(target, 'utf8'), old);
+  assert.deepEqual(readdirSync(f.paths.rollback), []);
+}
+
+// Recovery is bound to the authenticated raw M0 digest and complete entry
+// snapshot in the journal; a later M1 is neither trusted nor a recovery wedge.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const target = join(f.paths.active, ENTRY.authFilename);
+  const staged = join(f.paths.staging, ENTRY.authFilename);
+  const old = JSON.stringify({ ...CANDIDATE, access_token: 'manifest-swap-old' });
+  writeFileSync(target, old, { mode: 0o600 });
+  f.approval('activate');
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const activation = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.activateEnrollment(${JSON.stringify({ ...f.common, now: NOW })}))`,
+    ],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+        CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGKILL:PREPARED',
+      },
+    },
+  );
+  assert.equal(activation.signal, 'SIGKILL', activation.stderr);
+  const m0 = readFileSync(f.manifestPath);
+  const m1 = Buffer.concat([m0, Buffer.from('\n')]);
+  writeFileSync(f.manifestPath, m1);
+  assert.equal(recoverEnrollment({ configPath: f.configPath }).outcome, 'rolled-back');
+  assert.equal(readFileSync(target, 'utf8'), old);
+  assert.deepEqual(JSON.parse(readFileSync(staged, 'utf8')), CANDIDATE);
+  assert.equal(existsSync(`${f.common.operationLockPath}.journal`), false);
+  assert.deepEqual(readFileSync(f.manifestPath), m1, 'recovery does not reinterpret or replace M1');
+}
+
+// A live unfenced M0→M1 replacement after installation but before commit is
+// observed by the post-install CAS and rolls the credential back.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const target = join(f.paths.active, ENTRY.authFilename);
+  const staged = join(f.paths.staging, ENTRY.authFilename);
+  const old = JSON.stringify({ ...CANDIDATE, access_token: 'live-manifest-race-old' });
+  writeFileSync(target, old, { mode: 0o600 });
+  f.approval('activate');
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const activation = spawn(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.activateEnrollment(${JSON.stringify({ ...f.common, now: NOW })}))`,
+    ],
+    {
+      env: {
+        ...process.env,
+        CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+        CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGSTOP:INSTALLED',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  const resultPromise = childResult(activation);
+  let result;
+  try {
+    await waitFor(() => {
+      try {
+        return JSON.parse(readFileSync(`${f.common.operationLockPath}.journal`, 'utf8')).payload.phase === 'INSTALLED';
+      } catch {
+        return false;
+      }
+    }, 'installed journal');
+    await waitForStoppedChild(activation, 'installed fault stop');
+    writeFileSync(f.manifestPath, Buffer.concat([readFileSync(f.manifestPath), Buffer.from('\n')]));
+    signalChild(activation, 'SIGCONT');
+    result = await resultPromise;
+  } finally {
+    signalChild(activation, 'SIGCONT');
+    signalChild(activation, 'SIGTERM');
+  }
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ACTIVATION_ROLLED_BACK/);
+  assert.equal(readFileSync(target, 'utf8'), old);
+  assert.deepEqual(JSON.parse(readFileSync(staged, 'utf8')), CANDIDATE);
+}
+
+// A first-party manifest publisher shares the canonical lock and cannot enter
+// the final-CAS-to-COMMITTED interval.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  f.approval('activate');
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const activation = spawn(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.activateEnrollment(${JSON.stringify({ ...f.common, now: NOW })}))`,
+    ],
+    {
+      env: {
+        ...process.env,
+        CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+        CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGSTOP:MANIFEST_CAS_VERIFIED',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  const activationResult = childResult(activation);
+  try {
+    await waitForStoppedChild(activation, 'post-manifest-CAS fault stop');
+    const publisher = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import(${JSON.stringify(`file://${join(import.meta.dirname, '..', 'auth-writer-coordination.mjs')}`)}).then(m=>m.withAuthWriterLock(()=>require('node:fs').appendFileSync(${JSON.stringify(f.manifestPath)},'\\n'),{configPath:${JSON.stringify(f.configPath)}}))`,
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.notEqual(publisher.status, 0);
+    assert.match(publisher.stderr, /OPERATION_LOCKED|PENDING_ACTIVATION_JOURNAL/);
+    assert.deepEqual(readFileSync(f.manifestPath), Buffer.from(JSON.stringify(MANIFEST, null, 2)));
+    signalChild(activation, 'SIGCONT');
+    const activated = await activationResult;
+    assert.equal(activated.status, 0, activated.stderr);
+  } finally {
+    signalChild(activation, 'SIGCONT');
+    signalChild(activation, 'SIGTERM');
+  }
 }
 
 // Fresh-process rollback recovery is idempotent when killed immediately after
@@ -745,12 +1174,47 @@ for (const hadTarget of [false, true]) {
   assert.equal(killed.signal, 'SIGKILL', killed.stderr);
   assert.equal(recoverEnrollment({ configPath: f.configPath }).outcome, 'committed');
   assert.equal(readFileSync(target, 'utf8'), JSON.stringify(CANDIDATE));
-  assert.deepEqual(readdirSync(f.paths.rollback), []);
+  assert.equal(readdirSync(f.paths.rollback).length, hadTarget ? 2 : 0);
   assert.equal(recoverEnrollment({ configPath: f.configPath }).recovered, false);
 }
 
-// PREPARING is pre-backup even if a writer crashed after a deterministic
-// partial backup write: old target/staged bytes remain exact and cleanup is idempotent.
+// A SIGKILL after no-replace backup restoration leaves only the journal-bound
+// target/backup hardlinks, which fresh-process recovery completes safely.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const target = join(f.paths.active, ENTRY.authFilename);
+  const old = JSON.stringify({ ...CANDIDATE, access_token: 'restore-crash-old' });
+  writeFileSync(target, old, { mode: 0o600 });
+  f.approval('activate');
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const killed = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.activateEnrollment(${JSON.stringify({ ...f.common, now: NOW, injectFailure: 'after-digest-verification' })}))`,
+    ],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+        CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: 'SIGKILL:RESTORE_TEMP_FSYNCED',
+      },
+    },
+  );
+  assert.equal(killed.signal, 'SIGKILL', killed.stderr);
+  assert.equal(readFileSync(target, 'utf8'), old);
+  assert.equal(readdirSync(f.paths.rollback).length, 1);
+  assert.equal(recoverEnrollment({ configPath: f.configPath }).outcome, 'rolled-back');
+  assert.equal(readFileSync(target, 'utf8'), old);
+  assert.deepEqual(readdirSync(f.paths.rollback), []);
+}
+
+// PREPARING safely removes an operation-unique partial backup after proving the
+// authenticated old-target and staged-candidate digests, bounding retention.
 {
   const f = fixture();
   f.approval('stage');
@@ -765,19 +1229,10 @@ for (const hadTarget of [false, true]) {
   assert.deepEqual(readFileSync(target), old);
   assert.deepEqual(readFileSync(staged), stagedBefore);
   assert.equal(readdirSync(f.paths.rollback).length, 1);
-  process.env.CLAUDE_STAGED_ENROLLMENT_TESTING = '1';
-  process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT = 'THROW:BACKUP_UNLINK_BEFORE_FSYNC';
-  refuses(() => recoverEnrollment({ configPath: f.configPath }), 'INJECTED_BACKUP_CLEANUP_FSYNC_FAILURE');
-  delete process.env.CLAUDE_STAGED_ENROLLMENT_TESTING;
-  delete process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT;
-  assert.deepEqual(readFileSync(target), old);
-  assert.deepEqual(readFileSync(staged), stagedBefore);
-  assert.deepEqual(readdirSync(f.paths.rollback), []);
   assert.equal(recoverEnrollment({ configPath: f.configPath }).outcome, 'rolled-back');
   assert.deepEqual(readFileSync(target), old);
   assert.deepEqual(readFileSync(staged), stagedBefore);
   assert.deepEqual(readdirSync(f.paths.rollback), []);
-  assert.equal(recoverEnrollment({ configPath: f.configPath }).recovered, false);
 }
 
 // Authenticated pending publication evidence makes both first-directory-fsync
@@ -929,7 +1384,7 @@ for (const fault of ['THROW:STAGE_AFTER_LINK', 'THROW:MARKER_AFTER_LINK']) {
   const before = JSON.parse(raw);
   const parsed = parseManifestBytes(Buffer.from(raw));
   assert.equal(parsed.digest, sha256(Buffer.from(raw)));
-  assert.deepEqual(parsed.manifest, before);
+  assert.equal(JSON.stringify(parsed.manifest), JSON.stringify(before));
   refuses(
     () => parseManifestBytes(JSON.stringify({ ...MANIFEST, entries: MANIFEST.entries.slice(1) })),
     'INVALID_MANIFEST',
@@ -997,7 +1452,7 @@ for (const mutation of [
 // Config pins all trust roots and rejects permissions, missing roots and unsafe TTLs.
 {
   const f = fixture();
-  assert.deepEqual(readDeploymentConfig(f.configPath), f.config);
+  assert.equal(JSON.stringify(readDeploymentConfig(f.configPath)), JSON.stringify(f.config));
   chmodSync(f.configPath, 0o644);
   refuses(() => readDeploymentConfig(f.configPath), 'INSECURE_TRUST_ROOT');
 }
@@ -1185,12 +1640,97 @@ for (const mutate of [
   refuses(() => activateEnrollment(f.common), 'APPROVAL_BINDING_MISMATCH');
 }
 
+// Stage authorization is an exact additive publication, not a generic approval.
+{
+  const f = fixture();
+  f.approval('stage', { candidateDigest: '0'.repeat(64) });
+  refuses(() => stageEnrollment({ ...f.common, candidatePath: f.candidatePath }), 'APPROVAL_BINDING_MISMATCH');
+}
+
+// Canonical switch evidence is mandatory, exact-schema, identity-bound, raw-byte
+// digest-bound, and must prove a passing no-fallback candidate canary.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  f.approval('activate');
+  refuses(() => activateEnrollment({ ...f.common, inventoryPath: undefined }), 'ABSOLUTE_PATH_REQUIRED');
+  refuses(() => activateEnrollment({ ...f.common, canaryPath: undefined }), 'ABSOLUTE_PATH_REQUIRED');
+  writeFileSync(f.inventoryPath, JSON.stringify({ version: 1, credential: {}, consumers: [] }), { mode: 0o600 });
+  f.approval('activate');
+  refuses(() => activateEnrollment(f.common), 'INVALID_INVENTORY');
+}
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const canary = JSON.parse(readFileSync(f.canaryPath, 'utf8'));
+  canary.results[0].noFallback = false;
+  writeFileSync(f.canaryPath, JSON.stringify(canary), { mode: 0o600 });
+  f.approval('activate');
+  refuses(() => activateEnrollment(f.common), 'INVALID_CANARY');
+}
+for (const mutation of ['invented', 'incomplete', 'duplicate']) {
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const inventory = JSON.parse(readFileSync(f.inventoryPath, 'utf8'));
+  if (mutation === 'invented')
+    inventory.consumers.push({ id: 'invented', type: 'foreign', path: join(f.root, 'invented') });
+  if (mutation === 'incomplete') inventory.consumers = [];
+  if (mutation === 'duplicate') inventory.consumers.push({ ...inventory.consumers[0] });
+  writeFileSync(f.inventoryPath, JSON.stringify(inventory), { mode: 0o600 });
+  f.approval('activate');
+  refuses(() => activateEnrollment(f.common), 'INVALID_INVENTORY');
+}
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  writeFileSync(f.authoritativeConsumerInventoryPath, '{"version":1,"consumers":[]}', { mode: 0o600 });
+  f.approval('activate');
+  refuses(() => activateEnrollment(f.common), 'AUTHORITATIVE_INVENTORY_MISMATCH');
+}
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const canary = JSON.parse(readFileSync(f.canaryPath, 'utf8'));
+  canary.results = [];
+  writeFileSync(f.canaryPath, JSON.stringify(canary), { mode: 0o600 });
+  f.approval('activate');
+  refuses(() => activateEnrollment(f.common), 'INVALID_CANARY');
+}
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  f.approval('activate', { oldTargetDigest: '0'.repeat(64) });
+  refuses(() => activateEnrollment(f.common), 'APPROVAL_BINDING_MISMATCH');
+  f.approval('activate', { inventoryDigest: '0'.repeat(64) });
+  refuses(() => activateEnrollment(f.common), 'APPROVAL_BINDING_MISMATCH');
+  f.approval('activate', { canaryDigest: '0'.repeat(64) });
+  refuses(() => activateEnrollment(f.common), 'APPROVAL_BINDING_MISMATCH');
+}
+
+// No invalidation/revoke/delete action exists; a later destructive operation
+// cannot reuse enrollment authorization.
+{
+  const f = fixture();
+  const cli = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  for (const command of ['invalidate', 'revoke', 'delete']) {
+    const run = spawnSync(process.execPath, [cli, command, '--config', f.configPath], { encoding: 'utf8' });
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /INVALID_ARGUMENTS/);
+  }
+}
+
 // Approval authentication, clock, action, and binding checks fail closed.
 {
   const f = fixture();
   const artifact = f.approval('stage');
   const expected = {
-    action: 'stage',
+    action: 'additive-publish',
     manifestDigest: f.digest,
     manifestEntryId: ENTRY.id,
     provider: 'claude',
@@ -1200,15 +1740,18 @@ for (const mutate of [
     accountOwner: ENTRY.accountOwner,
     authorizedOperator: 'operator',
     environment: 'controlled-test',
-    candidateDigest: null,
-    writersQuiesced: null,
+    candidateDigest: f.candidateDigest,
+    oldTargetDigest: null,
+    inventoryDigest: null,
+    canaryDigest: null,
+    destination: ENTRY.authFilename,
   };
   const verify = (a = artifact, e = expected, now = NOW) =>
     verifyApproval({ artifact: a, keyPath: f.keyPath, expected: e, now, maxTtlMs: 300_000 });
   verify();
   refuses(() => verify({ ...artifact, signature: '0'.repeat(64) }), 'INVALID_SIGNATURE');
   for (const [key, value] of [
-    ['action', 'activate'],
+    ['action', 'canonical-switch'],
     ['environment', 'wrong'],
     ['organizationUuid', 'wrong'],
   ])
@@ -1435,30 +1978,123 @@ for (const name of [
     /spawn(?:Sync)?\s*\([^)]*(?:rotate\.mjs|runAuthFlow)|execFileSync\s*\([^)]*rotate\.mjs/s,
   );
 
-// A real first-party file-vault writer cannot mutate while the canonical lock
-// is held, then succeeds after release.
+// Generic rotation-vault exports never self-authorize from lock ownership and
+// live identity. They refuse before profile fetch or filesystem mutation,
+// including a coordinated call made from inside the canonical lock.
 {
   const f = fixture();
   const vaultPath = join(f.root, 'writer-vault.json');
   writeFileSync(vaultPath, '{}', { mode: 0o600 });
   const writer = join(import.meta.dirname, '..', 'rotation-vault.mjs');
-  const script = `import(${JSON.stringify(`file://${writer}`)}).then(m=>m.writeRotationToken('race@example.com',{claudeAiOauth:{accessToken:'synthetic-race-token'}}))`;
+  const writerAccount = {
+    email: 'race@example.com',
+    orgUuid: 'race-org',
+    orgName: 'Race Org',
+  };
+  const fetchMarker = join(f.root, 'writer-profile-fetch');
+  const script = `globalThis.fetch=async()=>{require('node:fs').writeFileSync(${JSON.stringify(fetchMarker)},'unsafe');return {ok:true,json:async()=>({account:{email:'race@example.com'},organization:{uuid:'race-org',name:'Race Org'}})}}; import(${JSON.stringify(`file://${writer}`)}).then(m=>m.writeRotationToken(${JSON.stringify(writerAccount)},JSON.stringify({claudeAiOauth:{accessToken:'synthetic-race-token'}})))`;
   const env = {
     ...process.env,
     CLAUDE_AUTH_COORDINATION_CONFIG: f.configPath,
+    CLAUDE_ROTATOR_CONFIG: f.manifestPath,
     CLAUDE_ROTATION_FILE_VAULT: vaultPath,
   };
-  withOperationLock(f.common.operationLockPath, f.keyPath, () => {
-    const blocked = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' });
-    assert.notEqual(blocked.status, 0);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const denied = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' });
+    assert.notEqual(denied.status, 0);
+    assert.match(denied.stderr, /ROTATION_TOKEN_MUTATION_APPROVAL_REQUIRED/);
     assert.deepEqual(JSON.parse(readFileSync(vaultPath, 'utf8')), {});
-  });
-  const written = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' });
-  assert.equal(written.status, 0, written.stderr);
-  assert.equal(
-    JSON.parse(readFileSync(vaultPath, 'utf8'))['Claude-Rotation-race@example.com'].claudeAiOauth.accessToken,
-    'synthetic-race-token',
+    assert.equal(existsSync(fetchMarker), false);
+  }
+  const previousCoordination = process.env.CLAUDE_AUTH_COORDINATION_CONFIG;
+  const previousInventory = process.env.CLAUDE_ROTATOR_CONFIG;
+  process.env.CLAUDE_AUTH_COORDINATION_CONFIG = f.configPath;
+  process.env.CLAUDE_ROTATOR_CONFIG = f.manifestPath;
+  try {
+    await withAuthWriterLock((capability) => {
+      assert.throws(
+        () =>
+          writeRotationTokenCoordinated(
+            writerAccount,
+            JSON.stringify({ claudeAiOauth: { accessToken: 'synthetic-race-token' } }),
+            capability,
+          ),
+        /ROTATION_TOKEN_MUTATION_APPROVAL_REQUIRED/,
+      );
+    });
+  } finally {
+    if (previousCoordination === undefined) delete process.env.CLAUDE_AUTH_COORDINATION_CONFIG;
+    else process.env.CLAUDE_AUTH_COORDINATION_CONFIG = previousCoordination;
+    if (previousInventory === undefined) delete process.env.CLAUDE_ROTATOR_CONFIG;
+    else process.env.CLAUDE_ROTATOR_CONFIG = previousInventory;
+  }
+  assert.deepEqual(JSON.parse(readFileSync(vaultPath, 'utf8')), {});
+}
+
+// Writer capabilities are scoped to the exact outer lock transaction and are
+// unusable after synchronous or asynchronous completion.
+for (const asynchronous of [false, true]) {
+  const f = fixture();
+  let retained;
+  const result = withAuthWriterLock(
+    async (capability) => {
+      retained = capability;
+      requireWriterCapability(capability);
+      return asynchronous ? Promise.resolve('ok') : 'ok';
+    },
+    { configPath: f.configPath },
   );
+  assert.equal(await result, 'ok');
+  assert.throws(() => requireWriterCapability(retained), /AUTH_WRITER_CAPABILITY_REQUIRED/);
+}
+
+// A detached async descendant retains AsyncLocalStorage context but not lock
+// authority after the outer transaction settles.
+{
+  const f = fixture();
+  let detachedAttempt;
+  await withAuthWriterLock(
+    () => {
+      detachedAttempt = new Promise((resolve) => {
+        setTimeout(async () => {
+          try {
+            await withAuthWriterLock(() => resolve('unsafe-entry'), { configPath: f.configPath });
+          } catch (error) {
+            resolve(error.message);
+          }
+        }, 0);
+      });
+      return 'outer-complete';
+    },
+    { configPath: f.configPath },
+  );
+  assert.equal(await detachedAttempt, 'AUTH_WRITER_CAPABILITY_REQUIRED');
+}
+
+// Non-native thenables are assimilated and revoked even without `.finally`.
+{
+  const f = fixture();
+  let retained;
+  let detachedAttempt;
+  const thenable = withAuthWriterLock(
+    (capability) => {
+      retained = capability;
+      detachedAttempt = new Promise((resolve) =>
+        setTimeout(() => {
+          try {
+            withAuthWriterLock(() => resolve('unsafe-entry'), { configPath: f.configPath });
+          } catch (error) {
+            resolve(error.message);
+          }
+        }, 0),
+      );
+      return { then: (resolve) => resolve('assimilated') };
+    },
+    { configPath: f.configPath },
+  );
+  assert.equal(await thenable, 'assimilated');
+  assert.throws(() => requireWriterCapability(retained), /AUTH_WRITER_CAPABILITY_REQUIRED/);
+  assert.equal(await detachedAttempt, 'AUTH_WRITER_CAPABILITY_REQUIRED');
 }
 
 // A real staged activation process excludes an ordinary writer plus protected
@@ -1481,18 +2117,13 @@ for (const name of [
     ...process.env,
     HOME: home,
     CLAUDE_AUTH_COORDINATION_CONFIG: f.configPath,
+    CLAUDE_ROTATOR_CONFIG: f.manifestPath,
     CLAUDE_ROTATION_FILE_VAULT: rotationVault,
   };
-  const seedDelete = spawnSync(
-    process.execPath,
-    [
-      '--input-type=module',
-      '-e',
-      `import(${JSON.stringify(`file://${linuxModule}`)}).then(m=>m.writeEntry('delete-me','synthetic-delete-value'))`,
-    ],
-    { env, encoding: 'utf8' },
-  );
-  assert.equal(seedDelete.status, 0, seedDelete.stderr);
+  const deleteVaultDir = join(home, '.local', 'share', 'claude-rotation');
+  mkdirSync(deleteVaultDir, { recursive: true, mode: 0o700 });
+  const deleteVaultPath = join(deleteVaultDir, `${sha256('delete-me').slice(0, 24)}.json`);
+  writeFileSync(deleteVaultPath, 'synthetic-delete-value', { mode: 0o600 });
   const activationScript = `import(${JSON.stringify(`file://${stagedModule}`)}).then(m=>m.activateEnrollment(${JSON.stringify({ ...f.common, now: NOW })}))`;
   const activation = spawn(process.execPath, ['--input-type=module', '-e', activationScript], {
     env: {
@@ -1502,29 +2133,30 @@ for (const name of [
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  await waitFor(() => existsSync(f.common.operationLockPath), 'stopped activation lock');
-  const attempts = [
-    `import(${JSON.stringify(`file://${rotationModule}`)}).then(m=>m.writeRotationToken('writer@example.com',{claudeAiOauth:{accessToken:'blocked-writer-token'}}))`,
-    `import(${JSON.stringify(`file://${rotationModule}`)}).then(m=>m.readRotationToken('heal@example.com'))`,
-    `import(${JSON.stringify(`file://${linuxModule}`)}).then(m=>m.deleteEntry('delete-me'))`,
-  ].map((script) => spawnSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' }));
-  for (const attempt of attempts) {
-    assert.notEqual(attempt.status, 0);
-    assert.match(attempt.stderr, /OPERATION_LOCKED/);
+  const resultPromise = childResult(activation);
+  let activated;
+  try {
+    await waitFor(() => existsSync(f.common.operationLockPath), 'stopped activation lock');
+    await waitForStoppedChild(activation, 'lock-acquired fault stop');
+    const attempts = [
+      `import(${JSON.stringify(`file://${rotationModule}`)}).then(m=>m.writeRotationToken({email:'writer@example.com',orgUuid:'writer-org',orgName:'Writer Org'},JSON.stringify({claudeAiOauth:{accessToken:'blocked-writer-token'}})))`,
+      `import(${JSON.stringify(`file://${linuxModule}`)}).then(m=>m.deleteEntry('delete-me'))`,
+    ].map((script) => spawnSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' }));
+    for (const [index, attempt] of attempts.entries()) {
+      assert.notEqual(attempt.status, 0);
+      assert.match(
+        attempt.stderr,
+        index === 0 ? /ROTATION_TOKEN_MUTATION_APPROVAL_REQUIRED/ : /GENERIC_CREDENTIAL_DELETE_FORBIDDEN/,
+      );
+    }
+    assert.deepEqual(JSON.parse(readFileSync(rotationVault, 'utf8')), { [healService]: healToken });
+    assert.equal(readFileSync(deleteVaultPath, 'utf8'), 'synthetic-delete-value');
+    signalChild(activation, 'SIGCONT');
+    activated = await resultPromise;
+  } finally {
+    signalChild(activation, 'SIGCONT');
+    signalChild(activation, 'SIGTERM');
   }
-  assert.deepEqual(JSON.parse(readFileSync(rotationVault, 'utf8')), { [healService]: healToken });
-  const stillPresent = spawnSync(
-    process.execPath,
-    [
-      '--input-type=module',
-      '-e',
-      `import(${JSON.stringify(`file://${linuxModule}`)}).then(m=>process.stdout.write(m.readEntry('delete-me')||''))`,
-    ],
-    { env, encoding: 'utf8' },
-  );
-  assert.equal(stillPresent.stdout, 'synthetic-delete-value');
-  process.kill(activation.pid, 'SIGCONT');
-  const activated = await childResult(activation);
   assert.equal(activated.status, 0, activated.stderr);
 }
 
@@ -1577,6 +2209,113 @@ for (const name of [
   assert.equal(JSON.parse(readFileSync(plain, 'utf8'))['Example-Service/acct'], 'secret');
 }
 
+// Legacy keychain/vault setters fail closed. The only compatible swap path
+// verifies full target identity while holding the canonical lock and writes
+// nothing on profile mismatch.
+{
+  const f = fixture();
+  const home = join(f.root, 'verified-swap-home');
+  const claudeDir = join(home, '.claude');
+  const vaultDir = join(home, '.local', 'share', 'claude-rotation');
+  mkdirSync(claudeDir, { recursive: true, mode: 0o700 });
+  mkdirSync(vaultDir, { recursive: true, mode: 0o700 });
+  const activePath = join(claudeDir, '.credentials.json');
+  const storedPath = join(vaultDir, `${sha256('Claude-Rotation-target@example.com').slice(0, 24)}.json`);
+  const previous = { claudeAiOauth: { accessToken: 'previous-token' }, mcpOAuth: {} };
+  const target = { claudeAiOauth: { accessToken: 'target-token' }, mcpOAuth: {} };
+  writeFileSync(activePath, JSON.stringify(previous), { mode: 0o600 });
+  writeFileSync(storedPath, JSON.stringify(target), { mode: 0o600 });
+  const swapModule = join(import.meta.dirname, '..', 'keychain-swap.mjs');
+  const coordinationModule = join(import.meta.dirname, '..', 'auth-writer-coordination.mjs');
+  const linuxModule = join(import.meta.dirname, '..', 'vault-linux.mjs');
+  const account = { email: 'target@example.com', orgUuid: 'target-org', orgName: 'Target Org' };
+  const previousAccount = { email: 'previous@example.com', orgUuid: 'previous-org', orgName: 'Previous Org' };
+  const runSwap = (profileEmail) =>
+    spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `globalThis.fetch=async(_url,options)=>{const previous=String(options.headers.Authorization).includes('previous-token');return {ok:true,json:async()=>previous?{account:{email:'previous@example.com'},organization:{uuid:'previous-org',name:'Previous Org'}}:{account:{email:${JSON.stringify(profileEmail)}},organization:{uuid:'target-org',name:'Target Org'}}}}; const c=await import(${JSON.stringify(`file://${coordinationModule}`)}); const k=await import(${JSON.stringify(`file://${swapModule}`)}); await c.withAuthWriterLock(cap=>k.swapToAccountCoordinated(${JSON.stringify(account)},${JSON.stringify(previousAccount)},cap));`,
+      ],
+      {
+        env: {
+          ...process.env,
+          HOME: home,
+          CLAUDE_AUTH_COORDINATION_CONFIG: f.configPath,
+          CLAUDE_ROTATOR_CONFIG: f.manifestPath,
+        },
+        encoding: 'utf8',
+      },
+    );
+  const mismatch = runSwap('wrong@example.com');
+  assert.notEqual(mismatch.status, 0);
+  assert.match(mismatch.stderr, /SIGNED_CREDENTIAL_MUTATION_APPROVAL_REQUIRED/);
+  assert.deepEqual(JSON.parse(readFileSync(activePath, 'utf8')), previous);
+  const otherwiseValid = runSwap(account.email);
+  assert.notEqual(otherwiseValid.status, 0);
+  assert.match(otherwiseValid.stderr, /SIGNED_CREDENTIAL_MUTATION_APPROVAL_REQUIRED/);
+  assert.deepEqual(JSON.parse(readFileSync(activePath, 'utf8')), previous);
+  for (const script of [
+    `import(${JSON.stringify(`file://${swapModule}`)}).then(m=>m.writeCurrentToken('{}'))`,
+    `import(${JSON.stringify(`file://${swapModule}`)}).then(m=>m.restoreToken('{}'))`,
+    `import(${JSON.stringify(`file://${linuxModule}`)}).then(m=>m.writeEntry('Claude Code-credentials','{}'))`,
+  ]) {
+    const refusal = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      env: { ...process.env, HOME: home },
+      encoding: 'utf8',
+    });
+    assert.notEqual(refusal.status, 0);
+    assert.match(refusal.stderr, /(?:LEGACY|GENERIC)_CREDENTIAL_WRITE_FORBIDDEN/);
+  }
+
+  // The claude-p compatibility entrypoint restores exact preverified bytes and
+  // releases its legacy lock when the post-swap budget probe refuses.
+  writeFileSync(activePath, JSON.stringify(previous), { mode: 0o600 });
+  const runtimeConfig = join(home, 'rotation-config.json');
+  const runtimeState = join(home, 'state.json');
+  const ledger = join(home, 'ledger.json');
+  const legacyLock = join(home, 'keychain.lock');
+  writeFileSync(runtimeConfig, JSON.stringify({ accounts: [account, previousAccount] }), { mode: 0o600 });
+  writeFileSync(runtimeState, JSON.stringify({ activeAccount: previousAccount.email }), { mode: 0o600 });
+  writeFileSync(
+    ledger,
+    JSON.stringify({
+      schema_version: 2,
+      month: '2030-01',
+      accounts: [{ email: account.email, remaining_usd: 100 }],
+    }),
+    { mode: 0o600 },
+  );
+  const bin = join(home, 'bin');
+  mkdirSync(bin, { mode: 0o700 });
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "no budget flag"\n', { mode: 0o700 });
+  chmodSync(join(bin, 'claude'), 0o700);
+  const claudePAs = join(import.meta.dirname, '..', 'claude-p-as.mjs');
+  const compatibility = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `globalThis.fetch=async(_url,options)=>{const previous=String(options.headers.Authorization).includes('previous-token');return {ok:true,json:async()=>previous?{account:{email:'previous@example.com'},organization:{uuid:'previous-org',name:'Previous Org'}}:{account:{email:'target@example.com'},organization:{uuid:'target-org',name:'Target Org'}}}}; const {main}=await import(${JSON.stringify(`file://${claudePAs}`)}); await main(['--ledger',${JSON.stringify(ledger)},'--config',${JSON.stringify(runtimeConfig)},'--lock',${JSON.stringify(legacyLock)},'--pin','target@example.com','--','test']);`,
+    ],
+    {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${bin}:${process.env.PATH}`,
+        CLAUDE_AUTH_COORDINATION_CONFIG: f.configPath,
+        CLAUDE_ROTATOR_CONFIG: f.manifestPath,
+      },
+      encoding: 'utf8',
+    },
+  );
+  assert.notEqual(compatibility.status, 0);
+  assert.match(compatibility.stderr, /SIGNED_CREDENTIAL_MUTATION_APPROVAL_REQUIRED/);
+  assert.deepEqual(JSON.parse(readFileSync(activePath, 'utf8')), previous);
+  assert.equal(existsSync(legacyLock), false);
+}
+
 // Refreshed-token identity is checked by an injected offline profile fetch and
 // requires exact configured email and organization UUID/name.
 {
@@ -1616,8 +2355,8 @@ for (const name of [
   assert.equal(existsSync(join(root, 'plugin-data')), false);
 }
 
-// Healing reads and deletes are mutations: without coordination configuration
-// they fail before changing their respective file vaults.
+// Reads are side-effect free; deletion remains a coordinated mutation and fails
+// before changing its vault when coordination is unavailable.
 {
   const root = mkdtempSync(join(tmpdir(), 'writer-coordination-required-'));
   const rotationVault = join(root, 'rotation.json');
@@ -1642,7 +2381,7 @@ for (const name of [
       encoding: 'utf8',
     },
   );
-  assert.notEqual(heal.status, 0);
+  assert.equal(heal.status, 0, heal.stderr);
   assert.deepEqual(JSON.parse(readFileSync(rotationVault, 'utf8')), { [service]: token });
 
   const linuxModule = join(import.meta.dirname, '..', 'vault-linux.mjs');
@@ -1656,6 +2395,42 @@ for (const name of [
     { env: { ...process.env, HOME: root, CLAUDE_AUTH_COORDINATION_CONFIG: '' }, encoding: 'utf8' },
   );
   assert.notEqual(deletion.status, 0);
+}
+
+// Authorized rollback is recoverable in a fresh process at every durable
+// intent/switch/cleanup boundary without reusing the external approval.
+for (const fault of [
+  'SIGKILL:ROLLBACK_PREPARING_INTENT',
+  'SIGKILL:ROLLBACK_TEMP_LINK',
+  'SIGKILL:ROLLBACK_SWITCH',
+  'SIGKILL:ROLLBACK_CLEANUP',
+]) {
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const target = join(f.paths.active, ENTRY.authFilename);
+  const old = JSON.stringify({ ...CANDIDATE, access_token: `rollback-old-${fault}` });
+  writeFileSync(target, old, { mode: 0o600 });
+  f.approval('activate');
+  activateEnrollment(f.common);
+  authorizeRollback(f);
+  const modulePath = join(import.meta.dirname, '..', 'staged-enrollment.mjs');
+  const invoke = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>process.stdout.write(JSON.stringify(m.rollbackEnrollment(${JSON.stringify({ configPath: f.configPath, entryId: ENTRY.id, approvalPath: f.approvalPath, now: NOW })}))))`;
+  const killed = spawnSync(process.execPath, ['--input-type=module', '-e', invoke], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CLAUDE_STAGED_ENROLLMENT_TESTING: '1',
+      CLAUDE_STAGED_ENROLLMENT_TEST_FAULT: fault,
+    },
+  });
+  assert.equal(killed.signal, 'SIGKILL', `${fault}: ${killed.stderr}`);
+  writeFileSync(f.approvalPath, '{}', { mode: 0o600 });
+  const recovered = spawnSync(process.execPath, ['--input-type=module', '-e', invoke], { encoding: 'utf8' });
+  assert.equal(recovered.status, 0, `${fault}: ${recovered.stderr}`);
+  assert.equal(JSON.parse(recovered.stdout).recovered, true);
+  assert.equal(readFileSync(target, 'utf8'), old);
+  assert.deepEqual(readdirSync(f.paths.rollback), []);
 }
 
 console.log('staged-enrollment.test.mjs: ok');

@@ -45,12 +45,14 @@ import { tmpdir } from 'os';
 import { applyAccountLeases, writeLease } from './account-leases.mjs';
 import { withAuthWriterLock } from './auth-writer-coordination.mjs';
 import { verifyRefreshedTokenIdentity } from './token-identity.mjs';
+import { automatedAuthAllowed } from './auto-auth-policy.mjs';
+import { publishCredentialFileCas, snapshotCredentialFile } from './credential-file-publication.mjs';
 import { sweepDeferredRespawns, listLiveBgSessions, doRespawn, isLoopSession } from './bg-respawn.mjs';
 import { pickAccountForSession, recordSessionLease, readLeases, writeLeases } from './session-router.mjs';
 import { sweepBedrockSessions, verifyBedrockSwaps } from './bedrock-watchdog.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, 'config.json');
+const CONFIG_PATH = process.env.CLAUDE_ROTATOR_CONFIG || join(__dirname, 'config.json');
 const STATE_PATH = join(__dirname, 'state.json');
 const LOG_PATH = join(__dirname, 'rotation.log');
 const PID_FILE = join(__dirname, '.daemon.pid');
@@ -676,9 +678,8 @@ async function queryLiveUtilization(account) {
       signal: AbortSignal.timeout(4000),
     });
     if (res.status === 401) {
-      log(`[daemon-query] Account ${account.email} returned 401 (Unauthorized) — invalidating token`);
-      deleteStoredToken(account);
-      return { ok: false, authFailed: true };
+      log(`[daemon-query] Account ${account.email} returned 401 — credential retained; needsReauth=true`);
+      return { ok: false, authFailed: true, needsReauth: true };
     }
     if (res.status === 429) return { ok: false, rateLimited: true };
     if (!res.ok) return { ok: false };
@@ -1133,6 +1134,10 @@ function parseRefreshToken(tokenJson) {
 }
 
 async function refreshSingleToken(account, { syncActive = false } = {}) {
+  if (!automatedAuthAllowed(account)) {
+    log(`[refresh] ${accountKey(account)}: automatic credential mutation not approved — status only`);
+    return false;
+  }
   return withAuthWriterLock(() => refreshSingleTokenUnlocked(account, { syncActive }));
 }
 
@@ -1168,12 +1173,10 @@ async function refreshSingleTokenUnlocked(account, { syncActive = false } = {}) 
     const tokenStr = JSON.stringify(parsed);
     if (IS_LINUX) {
       try {
-        let store = {};
-        try {
-          store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
-        } catch {}
+        const snapshot = snapshotCredentialFile(LINUX_CRED_PATH);
+        const store = snapshot.absent ? {} : JSON.parse(snapshot.bytes.toString('utf8'));
         store[svc] = tokenStr;
-        writeFileSync(LINUX_CRED_PATH, JSON.stringify(store, null, 2), { mode: 0o600 });
+        publishCredentialFileCas(LINUX_CRED_PATH, Buffer.from(JSON.stringify(store, null, 2)), snapshot);
       } catch (writeErr) {
         throw new Error(`Linux vault write failed: ${writeErr.message}`);
       }
@@ -1231,14 +1234,12 @@ function writeActiveRefreshedToken(freshToken) {
     );
     if (result.error || result.status !== 0) throw new Error('Active keychain write failed');
   }
-  let store = {};
-  try {
-    store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
-  } catch {}
+  const snapshot = snapshotCredentialFile(LINUX_CRED_PATH);
+  const store = snapshot.absent ? {} : JSON.parse(snapshot.bytes.toString('utf8'));
   const incoming = JSON.parse(tokenToWrite);
   store.claudeAiOauth = incoming.claudeAiOauth || incoming;
   if (incoming.mcpOAuth) store.mcpOAuth = incoming.mcpOAuth;
-  writeFileSync(LINUX_CRED_PATH, JSON.stringify(store, null, 2), { mode: 0o600 });
+  publishCredentialFileCas(LINUX_CRED_PATH, Buffer.from(JSON.stringify(store, null, 2)), snapshot);
   log('[active-refresh] Active credential updated with mcpOAuth preserved — sessions will auto-recover');
 }
 

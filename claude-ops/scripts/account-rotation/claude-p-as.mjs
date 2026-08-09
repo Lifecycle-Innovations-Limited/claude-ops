@@ -30,13 +30,11 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, constants as fsConstants } from 'fs';
-import { spawnSync, spawn } from 'child_process';
+import { spawnSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { homedir, constants } from 'os';
+import { homedir } from 'os';
 
-import { withAuthWriterLock } from './auth-writer-coordination.mjs';
-import { swapToEmailCoordinated, restoreTokenCoordinated } from './keychain-swap.mjs';
 import { readLedger, writeLedger, findAccount, upsertAccount } from './ledger.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -46,8 +44,9 @@ const DEFAULT_LOCK = join(homedir(), '.claude', 'keychain.lock');
 const HARD_CAP_USD = 200;
 
 function die(code, msg) {
-  process.stderr.write(`[claude-p-as] ${msg}\n`);
-  process.exit(code);
+  const error = new Error(msg);
+  error.exitCode = code;
+  throw error;
 }
 
 function parseArgs(argv) {
@@ -118,8 +117,37 @@ function assertNotExtraUsage(account, configPath) {
     if (match && (match.extraUsageEnabled === true || match.extra_usage === true))
       die(2, `account ${account.email} has extraUsageEnabled=true in config — refusing to bill against paid overage`);
   } catch (e) {
+    if (e.exitCode) throw e;
     process.stderr.write(`[claude-p-as] warning: could not read config ${configPath}: ${e.message}\n`);
   }
+}
+
+function configuredSwapIdentities(account, configPath) {
+  let config;
+  let state;
+  try {
+    config = JSON.parse(readFileSync(configPath, 'utf8'));
+    state = JSON.parse(readFileSync(join(dirname(configPath), 'state.json'), 'utf8'));
+  } catch {
+    throw new Error('EXACT_SWAP_IDENTITY_REQUIRED');
+  }
+  const complete = (candidate) =>
+    candidate &&
+    typeof candidate.email === 'string' &&
+    typeof candidate.orgUuid === 'string' &&
+    candidate.orgUuid.trim() &&
+    typeof candidate.orgName === 'string' &&
+    candidate.orgName.trim();
+  const target = (config.accounts || []).find(
+    (candidate) =>
+      candidate.email?.toLowerCase() === account.email.toLowerCase() &&
+      (account.label === undefined || candidate.label === account.label),
+  );
+  const previous = (config.accounts || []).find(
+    (candidate) => (candidate.label || candidate.email) === state.activeAccount,
+  );
+  if (!complete(target) || !complete(previous)) throw new Error('EXACT_SWAP_IDENTITY_REQUIRED');
+  return { target, previous };
 }
 
 /**
@@ -252,6 +280,12 @@ function decrementLedger(ledgerPath, email, amount) {
 async function main(argv) {
   const opts = parseArgs(argv);
 
+  // Credential swaps require a fresh, shared, signed mutation approval. This
+  // wrapper has no integration for that approval yet, so refuse before reading
+  // mutable account state, taking locks, swapping credentials, or spawning a
+  // child. Pure budget/ledger helpers remain importable for offline tests.
+  die(2, 'SIGNED_CREDENTIAL_MUTATION_APPROVAL_REQUIRED');
+
   if (!existsSync(opts.ledger))
     die(
       2,
@@ -268,18 +302,29 @@ async function main(argv) {
   const account = pickAccount(ledger, opts.pin);
   assertNotExtraUsage(account, opts.config);
 
+  // Acquire the legacy process lock before config/profile work so an existing
+  // invocation remains the decisive refusal and no second process can race it.
+  const lockFd = acquireLock(opts.lock);
+  let identities;
+  try {
+    identities = configuredSwapIdentities(account, opts.config);
+  } catch (error) {
+    releaseLock(lockFd, opts.lock);
+    die(2, error.message);
+  }
+
   // P1b fix: do NOT call assertBudgetFlagAvailable() here — it runs post-swap below.
 
   const budget = effectiveBudget(opts.budget, account.remaining_usd);
 
-  // Acquire lock BEFORE any keychain mutation.
-  const lockFd = acquireLock(opts.lock);
-
   const finalExitCode = await withAuthWriterLock(async (writerCapability) => {
     // Hold the canonical lock across swap, child execution, and restoration.
     let previousToken = null;
+    let restorationAuthorization = null;
     try {
-      previousToken = swapToEmailCoordinated(account.email, account.label, writerCapability);
+      const swapped = await swapToAccountCoordinated(identities.target, identities.previous, writerCapability);
+      previousToken = swapped.previousToken;
+      restorationAuthorization = swapped.authorization;
     } catch (e) {
       releaseLock(lockFd, opts.lock);
       die(2, `keychain swap failed: ${e.message}`);
@@ -287,95 +332,119 @@ async function main(argv) {
 
     // Wire restoration on every exit path BEFORE spawning child.
     let restored = false;
-    const restoreOnce = () => {
+    let processLockReleased = false;
+    const restoreOnce = async () => {
       if (restored) return;
-      restored = true;
       try {
-        if (previousToken) restoreTokenCoordinated(previousToken, writerCapability);
-      } catch (e) {
-        process.stderr.write(`[claude-p-as] warning: failed to restore previous keychain: ${e.message}\n`);
+        if (previousToken) await restoreTokenCoordinated(restorationAuthorization, previousToken, writerCapability);
+        restored = true;
+      } finally {
+        if (!processLockReleased) {
+          releaseLock(lockFd, opts.lock);
+          processLockReleased = true;
+        }
       }
-      releaseLock(lockFd, opts.lock);
     };
-    process.on('exit', restoreOnce);
     for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']) {
-      process.on(sig, () => {
-        restoreOnce();
-        const n = constants.signals[sig];
-        process.exit(n == null ? 130 : 128 + n);
-      });
-    }
-
-    // P1b fix: probe --max-budget-usd AFTER swap — now tests target account's CLI env.
-    assertBudgetFlagAvailable();
-
-    // Build claude args. Strip user-supplied --max-budget-usd if present, then prefix our floor.
-    const userArgs = [];
-    for (let i = 0; i < opts.rest.length; i++) {
-      const a = opts.rest[i];
-      if (a.startsWith('--max-budget-usd=')) {
-        continue;
-      }
-      if (a === '--max-budget-usd' && opts.rest[i + 1] != null) {
-        i++; // skip the value too
-        continue;
-      }
-      userArgs.push(a);
-    }
-    const finalArgs = ['-p', '--max-budget-usd', String(budget), ...userArgs];
-
-    // Spawn claude. Stream output through; collect for cost parsing.
-    const stdoutChunks = [];
-    const stderrChunks = [];
-    const child = spawn('claude', finalArgs, { stdio: ['inherit', 'pipe', 'pipe'] });
-    child.stdout.on('data', (b) => {
-      stdoutChunks.push(b);
-      process.stdout.write(b);
-    });
-    child.stderr.on('data', (b) => {
-      stderrChunks.push(b);
-      process.stderr.write(b);
-    });
-
-    const exitCode = await new Promise((resolve) => {
-      child.on('close', (code, signal) => {
-        if (signal) {
-          const n = constants.signals[signal];
-          resolve(n == null ? 128 : 128 + n);
-        } else {
-          resolve(code ?? 1);
+      process.on(sig, async () => {
+        try {
+          await restoreOnce();
+          const n = constants.signals[sig];
+          process.exit(n == null ? 130 : 128 + n);
+        } catch (error) {
+          process.stderr.write(`[claude-p-as] fatal restoration failure: ${error.message}\n`);
+          process.exit(1);
         }
       });
-      child.on('error', (e) => {
-        process.stderr.write(`[claude-p-as] spawn failed: ${e.message}\n`);
-        resolve(127);
-      });
-    });
-
-    // P1a fix: scan both streams; refuse (exit 2) if parse fails — never silently floor at $0.01.
-    const out = Buffer.concat(stdoutChunks).toString('utf8');
-    const err = Buffer.concat(stderrChunks).toString('utf8');
-    const cost = parseUsageCost(out, err);
-    if (cost == null) {
-      process.stderr.write('[claude-p-as] cost parse failed; refusing to decrement; check claude CLI output format\n');
-      restoreOnce();
-      return 2;
     }
-    decrementLedger(opts.ledger, account.email, cost);
 
-    restoreOnce();
-    return exitCode;
+    try {
+      // P1b fix: probe --max-budget-usd AFTER swap — now tests target account's CLI env.
+      assertBudgetFlagAvailable();
+
+      // Build claude args. Strip user-supplied --max-budget-usd if present, then prefix our floor.
+      const userArgs = [];
+      for (let i = 0; i < opts.rest.length; i++) {
+        const a = opts.rest[i];
+        if (a.startsWith('--max-budget-usd=')) {
+          continue;
+        }
+        if (a === '--max-budget-usd' && opts.rest[i + 1] != null) {
+          i++; // skip the value too
+          continue;
+        }
+        userArgs.push(a);
+      }
+      const finalArgs = ['-p', '--max-budget-usd', String(budget), ...userArgs];
+
+      // Spawn claude. Stream output through; collect for cost parsing.
+      const stdoutChunks = [];
+      const stderrChunks = [];
+      const child = spawn('claude', finalArgs, { stdio: ['inherit', 'pipe', 'pipe'] });
+      child.stdout.on('data', (b) => {
+        stdoutChunks.push(b);
+        process.stdout.write(b);
+      });
+      child.stderr.on('data', (b) => {
+        stderrChunks.push(b);
+        process.stderr.write(b);
+      });
+
+      const exitCode = await new Promise((resolve) => {
+        child.on('close', (code, signal) => {
+          if (signal) {
+            const n = constants.signals[signal];
+            resolve(n == null ? 128 : 128 + n);
+          } else {
+            resolve(code ?? 1);
+          }
+        });
+        child.on('error', (e) => {
+          process.stderr.write(`[claude-p-as] spawn failed: ${e.message}\n`);
+          resolve(127);
+        });
+      });
+
+      // P1a fix: scan both streams; refuse (exit 2) if parse fails — never silently floor at $0.01.
+      const out = Buffer.concat(stdoutChunks).toString('utf8');
+      const err = Buffer.concat(stderrChunks).toString('utf8');
+      const cost = parseUsageCost(out, err);
+      if (cost == null) {
+        process.stderr.write(
+          '[claude-p-as] cost parse failed; refusing to decrement; check claude CLI output format\n',
+        );
+        return 2;
+      }
+      decrementLedger(opts.ledger, account.email, cost);
+
+      return exitCode;
+    } finally {
+      await restoreOnce();
+    }
   });
-  process.exit(finalExitCode);
+  return finalExitCode;
 }
 
 // Pure-import guard so tests can require helpers without triggering CLI.
 const invokedAsCli = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (invokedAsCli) {
-  main(process.argv.slice(2)).catch((e) => {
-    process.stderr.write(`[claude-p-as] fatal: ${e.stack || e.message}\n`);
-    process.exit(1);
-  });
+  main(process.argv.slice(2))
+    .then((code) => process.exit(code))
+    .catch((e) => {
+      process.stderr.write(
+        `[claude-p-as] ${e.exitCode ? '' : 'fatal: '}${e.exitCode ? e.message : e.stack || e.message}\n`,
+      );
+      process.exit(e.exitCode || 1);
+    });
 }
 
-export { parseArgs, pickAccount, assertNotExtraUsage, effectiveBudget, parseUsageCost, decrementLedger };
+export {
+  parseArgs,
+  pickAccount,
+  assertNotExtraUsage,
+  configuredSwapIdentities,
+  effectiveBudget,
+  parseUsageCost,
+  decrementLedger,
+  main,
+};

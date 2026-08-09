@@ -20,18 +20,28 @@ export function configuredTokenIdentity(account) {
 export async function verifyRefreshedTokenIdentity(account, accessToken, { fetchImpl = globalThis.fetch } = {}) {
   const expected = configuredTokenIdentity(account);
   required(accessToken, 'ACCESS_TOKEN');
-  const response = await fetchImpl(PROFILE_ENDPOINT, {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${accessToken}`, 'anthropic-beta': 'oauth-2025-04-20' },
-    signal: AbortSignal.timeout(8_000),
-  });
-  if (!response?.ok) throw new Error('TOKEN_IDENTITY_PROFILE_FAILED');
-  const profile = await response.json();
-  const actual = {
-    email: required(profile?.account?.email, 'PROFILE_EMAIL').toLowerCase(),
-    organizationUuid: required(profile?.organization?.uuid, 'PROFILE_ORGANIZATION_UUID'),
-    organizationName: required(profile?.organization?.name, 'PROFILE_ORGANIZATION_NAME'),
-  };
+  let profile;
+  try {
+    const response = await fetchImpl(PROFILE_ENDPOINT, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}`, 'anthropic-beta': 'oauth-2025-04-20' },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response?.ok) throw new Error('profile response failed');
+    profile = await response.json();
+  } catch {
+    throw new Error('TOKEN_IDENTITY_PROFILE_FAILED');
+  }
+  let actual;
+  try {
+    actual = {
+      email: required(profile?.account?.email, 'PROFILE_EMAIL').toLowerCase(),
+      organizationUuid: required(profile?.organization?.uuid, 'PROFILE_ORGANIZATION_UUID'),
+      organizationName: required(profile?.organization?.name, 'PROFILE_ORGANIZATION_NAME'),
+    };
+  } catch {
+    throw new Error('TOKEN_IDENTITY_PROFILE_FAILED');
+  }
   if (
     actual.email !== expected.email ||
     actual.organizationUuid !== expected.organizationUuid ||

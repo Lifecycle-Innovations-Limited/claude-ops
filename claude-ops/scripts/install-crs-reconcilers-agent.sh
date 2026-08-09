@@ -15,10 +15,10 @@ set -euo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 [[ -d "$PLUGIN_ROOT" ]] || { echo "error: could not resolve CLAUDE_PLUGIN_ROOT" >&2; exit 1; }
+: "${CLAUDE_AUTH_COORDINATION_CONFIG:?set the canonical reviewed coordination config path}"
+: "${CLAUDE_ROTATOR_CONFIG:?set the canonical reviewed runtime inventory path}"
 
-USER_CFG="$HOME/.claude/plugins/data/ops-ops-marketplace/account-rotation-config.json"
-REPO_CFG="$PLUGIN_ROOT/scripts/account-rotation/config.json"
-CFG="$([[ -f "$USER_CFG" ]] && echo "$USER_CFG" || echo "$REPO_CFG")"
+CFG="$CLAUDE_ROTATOR_CONFIG"
 DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}"
 LOG_DIR="$DATA_DIR/logs"
 
@@ -36,6 +36,11 @@ fi
 [[ "${CRS_COOLDOWN_ENABLED:-}" == "1" ]] && COOLDOWN_ENABLED="true"
 [[ "${CRS_TOKEN_REFRESH_ENABLED:-}" == "1" ]] && TOKEN_REFRESH_ENABLED="true"
 [[ "${CRS_ENABLE_MAGIC_LINK:-}" == "1" ]] && MAGIC_LINK_ENABLED="true"
+
+if [[ "$TOKEN_REFRESH_ENABLED" == "true" ]]; then
+  echo "error: CRS 401 refresher is retired; use the identity-verified crs-token-feed service" >&2
+  exit 1
+fi
 
 if [[ "$COOLDOWN_ENABLED" != "true" && "$TOKEN_REFRESH_ENABLED" != "true" && "$MAGIC_LINK_ENABLED" != "true" ]]; then
   echo "skip: none of crs.cooldownEnabled / crs.tokenRefreshEnabled / crs.enableMagicLinkRecovery is true in $CFG"
@@ -69,9 +74,10 @@ render_and_install() {
   local host_path="${PATH:-/usr/local/bin:/usr/bin:/bin}"
   local host_display="${CLAUDE_DESKTOP_DISPLAY:-${DISPLAY:-:0}}"
   PLIST_TEMPLATE_PATH="$template" WRAPPER_PATH="$wrapper" LOG_DIR_PATH="$LOG_DIR" CRS_HOME="$HOME" \
+    AUTH_COORDINATION_CONFIG="$CLAUDE_AUTH_COORDINATION_CONFIG" ROTATOR_CONFIG="$CLAUDE_ROTATOR_CONFIG" \
     CRS_PATH="$host_path" CRS_DISPLAY="$host_display" \
     node -e \
-    'const fs=require("fs");const e=(s)=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");const t=fs.readFileSync(process.env.PLIST_TEMPLATE_PATH,"utf8");process.stdout.write(t.replace(/__WRAPPER_PATH__/g,e(process.env.WRAPPER_PATH)).replace(/__LOG_DIR__/g,e(process.env.LOG_DIR_PATH)).replace(/__HOME__/g,e(process.env.CRS_HOME)).replace(/__PATH__/g,e(process.env.CRS_PATH||"")).replace(/__DISPLAY__/g,e(process.env.CRS_DISPLAY||":0")));' \
+    'const fs=require("fs");const e=(s)=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");const t=fs.readFileSync(process.env.PLIST_TEMPLATE_PATH,"utf8");process.stdout.write(t.replace(/__WRAPPER_PATH__/g,e(process.env.WRAPPER_PATH)).replace(/__LOG_DIR__/g,e(process.env.LOG_DIR_PATH)).replace(/__HOME__/g,e(process.env.CRS_HOME)).replace(/__PATH__/g,e(process.env.CRS_PATH||"")).replace(/__DISPLAY__/g,e(process.env.CRS_DISPLAY||":0")).replace(/__CLAUDE_AUTH_COORDINATION_CONFIG__/g,e(process.env.AUTH_COORDINATION_CONFIG)).replace(/__CLAUDE_ROTATOR_CONFIG__/g,e(process.env.ROTATOR_CONFIG)));' \
     > "$dest"
   launchctl bootout "gui/$(id -u)/com.claude-ops.${name}" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$dest"

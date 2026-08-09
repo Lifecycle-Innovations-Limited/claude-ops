@@ -14,10 +14,11 @@
  *   deleteEntry(service)        → void
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { createHash } from 'node:crypto';
 import { join } from 'path';
-import { requireWriterCapability, withAuthWriterLock } from './auth-writer-coordination.mjs';
+import { requireWriterCapability } from './auth-writer-coordination.mjs';
+import { requireVerifiedCredentialCapability } from './verified-credential-write.mjs';
 
 const HOME = process.env.HOME || process.env.USERPROFILE || '/root';
 export const ACTIVE_SERVICE = 'Claude Code-credentials';
@@ -61,11 +62,25 @@ export function readEntry(service) {
  * All others land in the vault dir as chmod-600 files.
  */
 export function writeEntry(service, json) {
-  return withAuthWriterLock(() => writeEntryUnlocked(service, json));
+  void service;
+  void json;
+  throw new Error('GENERIC_CREDENTIAL_WRITE_FORBIDDEN');
 }
 
 export function writeEntryCoordinated(service, json, capability) {
+  void service;
+  void json;
   requireWriterCapability(capability);
+  throw new Error('GENERIC_CREDENTIAL_WRITE_FORBIDDEN');
+}
+
+export function writeEntryIdentityPreserving(account, service, json, capability, verifiedCapability) {
+  const writerCapability = requireVerifiedCredentialCapability(verifiedCapability, {
+    account,
+    credential: json,
+    destination: service,
+  });
+  if (capability !== undefined && capability !== writerCapability) throw new Error('AUTH_WRITER_CAPABILITY_MISMATCH');
   return writeEntryUnlocked(service, json);
 }
 
@@ -82,14 +97,12 @@ function writeEntryUnlocked(service, json) {
  * Delete a vault entry (no-op for the active-service entry — never delete live creds).
  */
 export function deleteEntry(service) {
-  return withAuthWriterLock((capability) => deleteEntryCoordinated(service, capability));
+  void service;
+  throw new Error('GENERIC_CREDENTIAL_DELETE_FORBIDDEN');
 }
 
 export function deleteEntryCoordinated(service, capability) {
+  void service;
   requireWriterCapability(capability);
-  if (service === ACTIVE_SERVICE) return;
-  const p = vaultPath(service);
-  try {
-    if (existsSync(p)) unlinkSync(p);
-  } catch {}
+  throw new Error('GENERIC_CREDENTIAL_DELETE_FORBIDDEN');
 }

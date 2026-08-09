@@ -13,7 +13,7 @@
  *   node crs-token-feed.mjs --dry-run  # report only
  *   node crs-token-feed.mjs --status   # show vault vs CRS state
  */
-import { readFileSync, writeFileSync, renameSync, appendFileSync } from 'fs';
+import { readFileSync, appendFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync, spawnSync } from 'child_process';
@@ -30,6 +30,8 @@ import {
 import { resolveAccountsBackend } from './ops-accounts-backend.mjs';
 import { withAuthWriterLock } from './auth-writer-coordination.mjs';
 import { verifyRefreshedTokenIdentity } from './token-identity.mjs';
+import { automatedAuthAllowed } from './auto-auth-policy.mjs';
+import { publishCredentialFileCas, snapshotCredentialFile } from './credential-file-publication.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LOG_PATH = join(__dirname, 'rotation.log');
@@ -55,18 +57,22 @@ function accountKey(a) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function makeVaultOps(fileVaultPath) {
+  const snapshots = new WeakMap();
   return {
     load() {
       try {
-        return JSON.parse(readFileSync(fileVaultPath, 'utf8'));
+        const snapshot = snapshotCredentialFile(fileVaultPath);
+        const value = snapshot.absent ? {} : JSON.parse(snapshot.bytes.toString('utf8'));
+        snapshots.set(value, snapshot);
+        return value;
       } catch {
         return {};
       }
     },
     save(v) {
-      const t = `${fileVaultPath}.tmp.${Date.now()}`;
-      writeFileSync(t, JSON.stringify(v, null, 2));
-      renameSync(t, fileVaultPath);
+      const snapshot = snapshots.get(v);
+      if (!snapshot) throw new Error('CRS_VAULT_SNAPSHOT_REQUIRED');
+      publishCredentialFileCas(fileVaultPath, Buffer.from(JSON.stringify(v, null, 2)), snapshot);
     },
   };
 }
@@ -123,6 +129,8 @@ async function crsLogin(crsBase, crsContainer, adminUser = 'cradmin') {
 }
 
 async function main() {
+  if (!process.env.CLAUDE_ROTATOR_CONFIG) throw new Error('CLAUDE_ROTATOR_CONFIG_REQUIRED');
+  if (!process.env.CLAUDE_AUTH_COORDINATION_CONFIG) throw new Error('AUTH_COORDINATION_CONFIG_REQUIRED');
   const earlyCfg = loadRotationConfig();
   const backend = resolveAccountsBackend({ env: process.env, cfgBackend: earlyCfg.crs?.backend });
   if (backend === 'local') {
@@ -201,7 +209,7 @@ async function main() {
       const expiring = !oauth.expiresAt || oauth.expiresAt < now + BUFFER_MS;
       if (expiring && foreign.has(key)) {
         log(`${key}: expiring but foreign-leased — refresh deferred to owner host, propagating current token`);
-      } else if (expiring && oauth.refreshToken && !DRY) {
+      } else if (expiring && oauth.refreshToken && !DRY && automatedAuthAllowed(a)) {
         if (i > 0) await sleep(INTER_DELAY_MS);
         const release = acquireRefreshLock(key);
         if (!release) {
@@ -240,6 +248,8 @@ async function main() {
             release();
           }
         }
+      } else if (expiring && oauth.refreshToken && !DRY) {
+        log(`${key}: automated refresh denied — propagate-only`);
       }
 
       // propagate whatever fresh token we have (don't push already-expired)

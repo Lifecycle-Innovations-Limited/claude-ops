@@ -1,12 +1,12 @@
-/** JSON.parse-compatible parser which rejects duplicate decoded object keys. */
-export function parseStrictJson(input, errorCode = 'INVALID_JSON') {
+/** JSON parser for authenticated records. Rejects ambiguous keys and excessive nesting. */
+export function parseStrictJson(input, errorCode = 'INVALID_JSON', { maxDepth = 64 } = {}) {
   const text = Buffer.isBuffer(input) ? input.toString('utf8') : String(input);
   let i = 0;
   const fail = () => {
     throw new Error(errorCode);
   };
   const ws = () => {
-    while (/\s/.test(text[i] || '')) i += 1;
+    while (text[i] === ' ' || text[i] === '\t' || text[i] === '\n' || text[i] === '\r') i += 1;
   };
   const string = () => {
     if (text[i] !== '"') fail();
@@ -36,23 +36,30 @@ export function parseStrictJson(input, errorCode = 'INVALID_JSON') {
     }
     fail();
   };
-  const value = () => {
+  const value = (depth = 0) => {
+    if (depth > maxDepth) fail();
     ws();
     if (text[i] === '"') return string();
     if (text[i] === '{') {
       i += 1;
-      const out = {};
+      const out = Object.create(null);
       const keys = new Set();
       ws();
       if (text[i] === '}') return ((i += 1), out);
       for (;;) {
         ws();
         const key = string();
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype') fail();
         if (keys.has(key)) fail();
         keys.add(key);
         ws();
         if (text[i++] !== ':') fail();
-        out[key] = value();
+        Object.defineProperty(out, key, {
+          value: value(depth + 1),
+          enumerable: true,
+          configurable: false,
+          writable: false,
+        });
         ws();
         if (text[i] === '}') return ((i += 1), out);
         if (text[i++] !== ',') fail();
@@ -64,7 +71,7 @@ export function parseStrictJson(input, errorCode = 'INVALID_JSON') {
       ws();
       if (text[i] === ']') return ((i += 1), out);
       for (;;) {
-        out.push(value());
+        out.push(value(depth + 1));
         ws();
         if (text[i] === ']') return ((i += 1), out);
         if (text[i++] !== ',') fail();
@@ -73,7 +80,17 @@ export function parseStrictJson(input, errorCode = 'INVALID_JSON') {
     const match = /^(?:-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/.exec(text.slice(i));
     if (!match) fail();
     i += match[0].length;
-    return match[0] === 'true' ? true : match[0] === 'false' ? false : match[0] === 'null' ? null : Number(match[0]);
+    if (match[0] === 'true') return true;
+    if (match[0] === 'false') return false;
+    if (match[0] === 'null') return null;
+    const number = Number(match[0]);
+    if (
+      !Number.isFinite(number) ||
+      Object.is(number, -0) ||
+      (Number.isInteger(number) && !Number.isSafeInteger(number))
+    )
+      fail();
+    return number;
   };
   const result = value();
   ws();
