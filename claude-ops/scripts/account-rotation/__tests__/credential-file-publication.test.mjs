@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   readdirSync,
   renameSync,
   symlinkSync,
@@ -20,7 +21,9 @@ import { fileURLToPath } from 'node:url';
 import { publishCredentialFileCas, snapshotCredentialFile } from '../credential-file-publication.mjs';
 
 const fixture = () => {
-  const root = mkdtempSync(join(tmpdir(), 'credential-cas-disabled-'));
+  // macOS exposes tmpdir() through /var -> /private/var. Use the physical
+  // path so canonical-destination checks are tested rather than bypassed.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'credential-cas-disabled-')));
   chmodSync(root, 0o700);
   const path = join(root, 'credentials.json');
   writeFileSync(path, 'old', { mode: 0o600 });
