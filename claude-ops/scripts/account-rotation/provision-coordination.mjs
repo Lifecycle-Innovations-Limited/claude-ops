@@ -295,13 +295,16 @@ function publishExclusiveRecord(path, bytes, code) {
   const expectedBytes = Buffer.from(bytes);
   const temp = `${path}.preparation-${rawDigest(expectedBytes)}`;
   let descriptor;
-  if (existsSync(temp)) {
+  let fd;
+  try {
+    fd = openSync(temp, 'wx', 0o600);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+  }
+  if (fd === undefined) {
     descriptor = secureReadDescriptor(temp, code, false);
     if (!descriptor.bytes.equals(expectedBytes)) fail(code);
   } else {
-    // O_EXCL is the authoritative no-replace check; existsSync only selects recovery.
-    // codeql[js/file-system-race]
-    const fd = openSync(temp, 'wx', 0o600);
     try {
       writeFileSync(fd, expectedBytes);
       fsyncSync(fd);
@@ -610,15 +613,18 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
   const temp = `${path}.preparation-${rawDigest(Buffer.from(data))}`;
   let descriptor;
   let journaled = false;
-  if (existsSync(temp)) {
+  let fd;
+  try {
+    fd = openSync(temp, 'wx', modeBits);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+  }
+  if (fd === undefined) {
     descriptor = secureReadDescriptor(temp, 'PROVISION_RECOVERY_UNCERTAIN', false);
     if (!descriptor.bytes.equals(Buffer.from(data)) || mode(temp) !== modeBits || lstatSync(temp).nlink !== 1)
       fail('PROVISION_RECOVERY_UNCERTAIN');
     descriptor.proof = temp;
   } else {
-    // O_EXCL is the authoritative no-replace check; existsSync only selects recovery.
-    // codeql[js/file-system-race]
-    const fd = openSync(temp, 'wx', modeBits);
     try {
       writeFileSync(fd, data);
       fsyncSync(fd);
@@ -646,13 +652,12 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
     // hard-link publication is atomic and never replaces a concurrently
     // created final target (unlike rename(2)).
     // Test-only adversarial writer used to prove link publication fails closed.
-    if (process.env.CLAUDE_COORDINATION_TESTING === '1' && process.env.CLAUDE_COORDINATION_TEST_RACE_TARGET === path) {
-      // codeql[js/file-system-race]
+    // CodeQL[js/file-system-race]
+    if (process.env.CLAUDE_COORDINATION_TESTING === '1' && process.env.CLAUDE_COORDINATION_TEST_RACE_TARGET === path)
       writeFileSync(path, process.env.CLAUDE_COORDINATION_TEST_RACE_SAME === '1' ? data : 'competing-owner\n', {
         flag: 'wx',
         mode: 0o600,
       });
-    }
     linkSync(temp, path);
     if (
       process.env.CLAUDE_COORDINATION_TESTING === '1' &&
@@ -671,7 +676,7 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
     ) {
       unlinkSync(path);
       // Test-only post-publication inode replacement.
-      // codeql[js/file-system-race]
+      // CodeQL[js/file-system-race]
       writeFileSync(path, data, { flag: 'wx', mode: 0o600 });
     }
     if (!descriptorMatches(path, descriptor, 'PUBLICATION_OWNERSHIP_LOST'))
@@ -827,10 +832,13 @@ function writeProvisionJournal(plan, state) {
   const bytes = Buffer.from(`${JSON.stringify(state, null, 2)}\n`);
   const temp = `${path}.preparation-${rawDigest(bytes)}`;
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  if (!existsSync(temp)) {
-    // O_EXCL is the authoritative no-replace check; existsSync only selects recovery.
-    // codeql[js/file-system-race]
-    const fd = openSync(temp, 'wx', 0o600);
+  let fd;
+  try {
+    fd = openSync(temp, 'wx', 0o600);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+  }
+  if (fd !== undefined) {
     try {
       writeFileSync(fd, bytes);
       fsyncSync(fd);

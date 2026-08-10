@@ -1,6 +1,17 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  ftruncateSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -8,6 +19,15 @@ import { spawnSync } from 'node:child_process';
 const cli = new URL('../provision-coordination.mjs', import.meta.url).pathname;
 function run(args, env = {}) {
   return spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', env: { ...process.env, ...env } });
+}
+function replaceFixtureContents(path, bytes) {
+  const fd = openSync(path, 'r+');
+  try {
+    ftruncateSync(fd, 0);
+    writeFileSync(fd, bytes);
+  } finally {
+    closeSync(fd);
+  }
 }
 function fixture(legacy = false) {
   const root = mkdtempSync(join(tmpdir(), 'coordination-provision-'));
@@ -181,10 +201,7 @@ writeFileSync(
   { mode: 0o600 },
 );
 assert.match(run(malformedLiveLock.args).stderr, /INVALID_PROVISION_LOCK/);
-assert.equal(existsSync(malformedLiveLock.paths['provision-lock']), true, 'malformed live lock remains retained');
-// Test-only mutation intentionally replaces retained malformed lock evidence.
-// codeql[js/file-system-race]
-writeFileSync(
+replaceFixtureContents(
   malformedLiveLock.paths['provision-lock'],
   `${JSON.stringify({
     version: 1,
@@ -193,12 +210,9 @@ writeFileSync(
     start: Number(selfStart),
     nonce: 'a'.repeat(32),
   })}\n`,
-  { mode: 0o600 },
 );
 assert.match(run(malformedLiveLock.args).stderr, /INVALID_PROVISION_LOCK/);
-// Test-only mutation intentionally replaces retained malformed lock evidence.
-// codeql[js/file-system-race]
-writeFileSync(
+replaceFixtureContents(
   malformedLiveLock.paths['provision-lock'],
   `${JSON.stringify({
     version: 1,
@@ -207,7 +221,6 @@ writeFileSync(
     start: `0${selfStart}`,
     nonce: 'a'.repeat(32),
   })}\n`,
-  { mode: 0o600 },
 );
 assert.match(run(malformedLiveLock.args).stderr, /INVALID_PROVISION_LOCK/);
 writeFileSync(
@@ -419,11 +432,7 @@ const refusedRollback = run([
 ]);
 assert.notEqual(refusedRollback.status, 0);
 assert.match(refusedRollback.stderr, /BOOTSTRAP_(ATTEMPT|JOURNAL)_REVIEW_REQUIRED/);
-// Test-only fixture repair intentionally follows an adversarial absence check.
-if (!existsSync(rollbackForeign.paths.trust)) {
-  // codeql[js/file-system-race]
-  writeFileSync(rollbackForeign.paths.trust, Buffer.alloc(32, 9), { mode: 0o600 });
-}
+writeFileSync(rollbackForeign.paths.trust, Buffer.alloc(32, 9), { flag: 'wx', mode: 0o600 });
 const foreignRecoveryResult = run(rollbackForeign.args);
 assert.notEqual(foreignRecoveryResult.status, 0);
 assert.match(foreignRecoveryResult.stderr, /PROVISION_RECOVERY_UNCERTAIN/);
@@ -443,9 +452,7 @@ for (const fault of ['SIGKILL:PROVISION_PRE_LINK', 'SIGKILL:PROVISION_LINKED', '
   });
   assert.equal(result.signal, 'SIGKILL', fault);
   assert.match(run(['rollback', '--plan', crashPlanPath, '--expected-digest', crashPlan.digest]).stderr, /BOOTSTRAP_/);
-  // Test-only fixture repair intentionally follows an adversarial absence check.
-  // codeql[js/file-system-race]
-  if (!existsSync(crash.paths.trust)) writeFileSync(crash.paths.trust, Buffer.alloc(32, 9), { mode: 0o600 });
+  writeFileSync(crash.paths.trust, Buffer.alloc(32, 9), { flag: 'wx', mode: 0o600 });
   const recoveryResult = run(crash.args);
   assert.equal(recoveryResult.status, 0, recoveryResult.stderr);
   const recoveryPlan = JSON.parse(recoveryResult.stdout);

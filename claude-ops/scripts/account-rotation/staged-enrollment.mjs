@@ -1082,13 +1082,16 @@ function durableExclusive(path, bytes) {
   bytes = Buffer.from(bytes);
   const temp = `${path}.preparation-${sha256(bytes)}`;
   let descriptor;
-  if (existsSync(temp)) {
+  let fd;
+  try {
+    fd = openSync(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+  }
+  if (fd === undefined) {
     descriptor = secureReadDescriptor(temp, false);
     if (!descriptor.bytes.equals(bytes)) throw new Error('PUBLICATION_RECOVERY_UNCERTAIN');
   } else {
-    // O_EXCL is the authoritative no-replace check; existsSync only selects recovery.
-    // codeql[js/file-system-race]
-    const fd = openSync(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
     try {
       writeFileSync(fd, bytes);
       fsyncSync(fd);
@@ -1383,11 +1386,11 @@ function readArtifact(path) {
 
 function publishNoReplace(path, bytes, onPrepared) {
   const temp = `${path}.preparation-${sha256(bytes)}`;
-  // O_EXCL is the authoritative no-replace check; existsSync only selects recovery.
   let fd;
-  if (!existsSync(temp)) {
-    // codeql[js/file-system-race]
+  try {
     fd = openSync(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
   }
   let linked = false;
   let prepared;
@@ -1624,11 +1627,11 @@ function writeJournal(options, state, phase) {
   const next = { ...state, phase };
   const bytes = `${canonicalJson(signedRecord(next, key))}\n`;
   const temp = `${path}.preparation-${sha256(Buffer.from(bytes))}`;
-  // O_EXCL is the authoritative no-replace check; existsSync only selects recovery.
   let fd;
-  if (!existsSync(temp)) {
-    // codeql[js/file-system-race]
+  try {
     fd = openSync(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
   }
   let published = false;
   let prepared;
