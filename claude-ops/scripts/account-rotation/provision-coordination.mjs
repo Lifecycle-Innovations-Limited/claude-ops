@@ -686,7 +686,7 @@ function applyReviewed(plan) {
     publish(plan.paths.manifest, manifestBytes);
     if (existsSync(plan.paths.trust)) {
       const owned = state.ownedTargets.find((target) => target.path === plan.paths.trust);
-      const trust = secureReadDescriptor(plan.paths.trust, 'EXISTING_FILE_MISMATCH');
+      const trust = secureReadDescriptor(plan.paths.trust, 'EXISTING_FILE_MISMATCH', false);
       if (mode(plan.paths.trust) !== 0o600 || trust.length !== 32 || (owned && trust.digest !== owned.digest))
         fail('EXISTING_FILE_MISMATCH');
     } else if (newKeyBytes) publish(plan.paths.trust, newKeyBytes);
