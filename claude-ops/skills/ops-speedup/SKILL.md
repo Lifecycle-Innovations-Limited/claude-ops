@@ -57,7 +57,7 @@ All modes:
 | Memory + swap                  | ✓                      | ✓                     | ✓               | limited |
 | CPU hog kill                   | ✓                      | ✓                     | ✓               | —       |
 | Power/Energy Impact            | ✓ (`top -stats power`) | ✓ (`powertop`)        | —               | —       |
-| GPU/Neural Engine              | ✓ (`powermetrics`)     | ✓ (`nvidia-smi`)      | —               | —       |
+| GPU/Neural Engine              | ✓ (`ioreg`, no sudo; `powermetrics` fallback detail when available) | ✓ (`nvidia-smi`) | — | — |
 | Launch agent offenders         | ✓                      | —                     | —               | —       |
 | systemd unit masking           | —                      | ✓                     | ✓               | —       |
 | E-core demotion                | ✓ (`taskpolicy -b`)    | ✓ (`renice`+`ionice`) | ✓               | —       |
@@ -91,16 +91,43 @@ Parse the JSON and render:
  OPS > SYSTEM SPEEDUP — [os] [os_version] [chip]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
- HEALTH SCORE: [0-100] / 100  [████████░░ 80%]
+ HEALTH SCORE: [health.score] / 100  [runtime-first: health.model]
 
- DISK                                    RECLAIMABLE
+ RUNTIME
+ ────────────────────────────────────────────────────
+ CPU idle:     [runtime.cpu_idle_pct]%  user/sys: [runtime.cpu_user_pct]/[runtime.cpu_sys_pct]%
+ Load:         [runtime.load1] / [runtime.load5] / [runtime.load15]
+ Processes:    [runtime.processes] total, [runtime.running] running, [runtime.stuck] uninterruptible, [runtime.zombies] zombies
+
+ GPU
+ ────────────────────────────────────────────────────
+ Device:       [gpu.device_util_pct]%   Renderer: [gpu.renderer_util_pct]%   Tiler: [gpu.tiler_util_pct]%
+ GPU memory:   [gpu.mem_in_use_mb] MB in use / [gpu.mem_allocated_mb] MB allocated
+
+ PID AUDIT
+ ────────────────────────────────────────────────────
+ Current CPU hogs:       [len(cpu_hogs)] (two samples >30%, not one spike)
+ Power hogs:             [len(power_hogs)]
+ Long-lived heavy PIDs:  [runtime.long_lived_hogs] actionable / [runtime.long_lived_hogs_total] total (>=3h and high average/current CPU)
+ Health factors:         [health.factors or none]
+
+ MEMORY
+ ────────────────────────────────────────────────────
+ Pressure:    [memory.pressure_pct]% free    Swap: [memory.swap_mb] MB    Free: [memory.free_mb] MB
+
+ NETWORK / TCP
+ ────────────────────────────────────────────────────
+ Interface:   [network.iface]      DNS: [network.dns_ms]ms
+ TCP states:  CLOSE_WAIT [runtime.tcp_close_wait]      TIME_WAIT [runtime.tcp_time_wait]
+
+ DISK (secondary signal; cache size alone does not lower health)
  ────────────────────────────────────────────────────
  brew cache          [N] MB              ✓ safe
  npm cache           [N] MB              ✓ safe
  pnpm cache          [N] MB              ✓ safe
  Xcode DerivedData   [N] MB              ✓ safe
  Xcode DeviceSupport [N] MB              ✓ safe
- Docker reclaimable  [N] MB              ✓ safe
+ Docker reclaimable  [N] MB              ⚠ only prune after checking live containers
  Metal shader cache  [N] MB              ✓ safe
  Trash               [N] MB              ✓ safe
  Logs                [N] MB              ✓ safe
@@ -111,36 +138,30 @@ Parse the JSON and render:
  ────────────────────────────────────────────────────
  TOTAL RECLAIMABLE:  [N] GB
 
- MEMORY
- ────────────────────────────────────────────────────
- Pressure:    [N]% free    Swap: [N] MB    Free: [N] MB
-
- NETWORK
- ────────────────────────────────────────────────────
- Interface:   [iface]      DNS: [N]ms
-
- STARTUP
+ STARTUP (informational)
  ────────────────────────────────────────────────────
  Login items:   [N]              (macOS)
- Launch agents: [N]              (macOS)
+ Launch agents: [N]              (macOS; raw count is not a health penalty)
  Failed units:  [N]              (Linux)
  Enabled units: [N]              (Linux)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-**Health score calculation:**
+**Health score contract:**
 
-- Start at 100
-- Disk > 90% used: -20
-- Disk > 80% used: -10
-- RAM pressure < 20% free: -15
-- RAM pressure < 40% free: -5
-- Swap > 1GB: -10
-- DNS > 100ms: -5
-- > 10 launch agents (macOS) or > 3 failed systemd units (Linux): -5
-- > 5GB reclaimable: -10
-- > 10GB reclaimable: -20
+Use `health.score` from the binary. Do not recalculate it in the skill and do not
+lower health merely because caches, Trash, Downloads, or launch-agent counts are
+large. The runtime-first model penalizes only evidence of current pressure or
+actual risk:
+
+- sustained low CPU idle / high runnable or uninterruptible process pressure
+- memory pressure below 40%, swap over 1 GB, or zombie accumulation
+- GPU utilization above 75/90%
+- DNS over 100/500 ms, CLOSE_WAIT floods, or high TIME_WAIT accumulation
+- long-lived heavy PIDs (alive at least 3h and high average/current CPU)
+- disk only when it is genuinely scarce (90/97% used), never because cleanup is possible
+- failed startup units, not the mere number of intentional launch agents
 
 ## Phase 4 — Present cleanup choice (max 4 options per AskUserQuestion)
 
