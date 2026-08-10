@@ -117,6 +117,24 @@ docker_reclaimable_mb() {
   to_mb "$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1)"
 }
 
+json_escape() {
+  printf '%s' "${1:-}" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+is_number() {
+  [[ "${1:-}" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+value_lt() {
+  is_number "${1:-}" || return 1
+  awk -v a="$1" -v b="$2" 'BEGIN { exit !(a < b) }'
+}
+
+value_ge() {
+  is_number "${1:-}" || return 1
+  awk -v a="$1" -v b="$2" 'BEGIN { exit !(a >= b) }'
+}
+
 # ── Hardware fingerprint ─────────────────────────────────────────
 if $IS_MACOS; then
   CPU=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "unknown")
@@ -215,10 +233,96 @@ probe_cpu_hogs() {
   local out="$1"
   {
     if $IS_MACOS; then
-      ps aux | awk 'NR>1 && $3 > 30 {printf "%s|%.1f|%.1f|%s\n", $2, $3, $4, $11}' | head -10
+      timeout 5 top -l 2 -s 1 -n 20 -o cpu -stats pid,cpu,mem,command 2>/dev/null | \
+        awk '$1 ~ /^[0-9]+$/ && $2+0 > 30 {cnt[$1]++; sum[$1]+=$2; mem[$1]=$3; cmd[$1]=$4}
+             END {for (p in cnt) if (cnt[p] >= 2) printf "%s|%.1f|%s|%s\n", p, sum[p]/cnt[p], mem[p], cmd[p]}' | \
+        sort -t'|' -k2,2nr | head -10
     elif $IS_LINUX || $IS_WSL; then
-      ps aux --sort=-%cpu 2>/dev/null | awk 'NR>1 && $3 > 30 {printf "%s|%.1f|%.1f|%s\n", $2, $3, $4, $11}' | head -10
+      timeout 5 top -bn2 -d 1 -o %CPU 2>/dev/null | \
+        awk '$1 ~ /^[0-9]+$/ && $9+0 > 30 {cnt[$1]++; sum[$1]+=$9; mem[$1]=$10; cmd[$1]=$12}
+             END {for (p in cnt) if (cnt[p] >= 2) printf "%s|%.1f|%s|%s\n", p, sum[p]/cnt[p], mem[p], cmd[p]}' | \
+        sort -t'|' -k2,2nr | head -10
     fi
+  } > "$out"
+}
+
+# ── Runtime pressure: scheduler, process states, TCP, and long-lived hogs ────
+probe_runtime() {
+  local out="$1"
+  local hogs_file="$out.long_hogs"
+  : > "$hogs_file"
+  {
+    local cpu_user="" cpu_sys="" cpu_idle="" load="" process_counts="0 0 0 0" tcp_counts="0 0"
+    if $IS_MACOS; then
+      local top_out
+      top_out=$(top -l 1 -n 0 2>/dev/null)
+      cpu_user=$(echo "$top_out" | awk -F'[:,%]' '/CPU usage/ {gsub(/^ +| +$/, "", $2); print $2; exit}')
+      cpu_sys=$(echo "$top_out" | awk -F'[:,%]' '/CPU usage/ {gsub(/^ +| +$/, "", $4); print $4; exit}')
+      cpu_idle=$(echo "$top_out" | awk -F'[:,%]' '/CPU usage/ {gsub(/^ +| +$/, "", $6); print $6; exit}')
+      load=$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}')
+      process_counts=$(ps -Ao stat= 2>/dev/null | awk 'BEGIN{r=0;u=0;z=0;t=0} {t++} /^R/{r++} /^U/{u++} /^Z/{z++} END{printf "%d %d %d %d",t,r,u,z}')
+      tcp_counts=$(netstat -an 2>/dev/null | awk '$6=="CLOSE_WAIT"{cw++} $6=="TIME_WAIT"{tw++} END{printf "%d %d",cw+0,tw+0}')
+    elif $IS_LINUX || $IS_WSL; then
+      local top_out
+      top_out=$(top -bn1 2>/dev/null | grep -m1 '%Cpu')
+      cpu_user=$(echo "$top_out" | awk -F'[:,%]' '{gsub(/^ +| +$/, "", $2); print $2; exit}')
+      cpu_sys=$(echo "$top_out" | awk -F'[:,%]' '{gsub(/^ +| +$/, "", $4); print $4; exit}')
+      cpu_idle=$(echo "$top_out" | awk -F'[:,%]' '{gsub(/^ +| +$/, "", $8); print $8; exit}')
+      load=$(awk '{print $1, $2, $3}' /proc/loadavg 2>/dev/null)
+      process_counts=$(ps -Ao stat= 2>/dev/null | awk 'BEGIN{r=0;u=0;z=0;t=0} {t++} /^R/{r++} /^D/{u++} /^Z/{z++} END{printf "%d %d %d %d",t,r,u,z}')
+      if command -v ss >/dev/null 2>&1; then
+        tcp_counts=$(ss -tan 2>/dev/null | awk '$1=="CLOSE-WAIT"{cw++} $1=="TIME-WAIT"{tw++} END{printf "%d %d",cw+0,tw+0}')
+      else
+        tcp_counts=$(netstat -an 2>/dev/null | awk '$6=="CLOSE_WAIT"{cw++} $6=="TIME_WAIT"{tw++} END{printf "%d %d",cw+0,tw+0}')
+      fi
+    fi
+
+    set -- ${process_counts:-0 0 0 0}
+    local total_procs="${1:-0}" running_procs="${2:-0}" stuck_procs="${3:-0}" zombie_procs="${4:-0}"
+    set -- ${load:-0 0 0}
+    echo "cpu_user_pct=${cpu_user:-0}"
+    echo "cpu_sys_pct=${cpu_sys:-0}"
+    echo "cpu_idle_pct=${cpu_idle:-0}"
+    echo "load1=${1:-0}"
+    echo "load5=${2:-0}"
+    echo "load15=${3:-0}"
+    echo "processes=$total_procs"
+    echo "running=$running_procs"
+    echo "stuck=$stuck_procs"
+    echo "zombies=$zombie_procs"
+    set -- ${tcp_counts:-0 0}
+    echo "tcp_close_wait=${1:-0}"
+    echo "tcp_time_wait=${2:-0}"
+
+    # Long-lived heavy PIDs: alive >=3h and either currently hot or averaging
+    # >=20% of one core over their lifetime. Investigation targets, not kill candidates.
+    local long_count=0 total_count=0
+    while IFS='|' read -r pid elapsed cpu_time avg_cpu current_cpu rss_mb cmd; do
+      [ -n "$pid" ] || continue
+      local is_protected=false
+      echo "$cmd" | grep -qE "$PROTECTED_RE" && is_protected=true
+      printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$pid" "$elapsed" "$cpu_time" "$avg_cpu" "$current_cpu" "$rss_mb" "$is_protected" "$cmd" >> "$hogs_file"
+      total_count=$((total_count + 1))
+      [ "$is_protected" = false ] && long_count=$((long_count + 1))
+    done < <(ps -Ao pid=,etime=,time=,pcpu=,rss=,comm= 2>/dev/null | awk '
+      function secs(v, parts,n,days,h,m,s) {
+        days=0
+        if (v ~ /-/) { split(v, parts, "-"); days=parts[1]+0; v=parts[2] }
+        n=split(v, parts, ":")
+        if (n == 3) { h=parts[1]+0; m=parts[2]+0; s=parts[3]+0 }
+        else if (n == 2) { h=0; m=parts[1]+0; s=parts[2]+0 }
+        else { h=0; m=0; s=parts[1]+0 }
+        return days*86400 + h*3600 + m*60 + s
+      }
+      {
+        pid=$1; elapsed=secs($2); cputime=secs($3); current=$4+0; rss=$5+0
+        $1=$2=$3=$4=$5=""; sub(/^ +/, ""); cmd=$0
+        avg=(elapsed > 0 ? cputime * 100 / elapsed : 0)
+        if (elapsed >= 10800 && (avg >= 20 || current >= 50))
+          printf "%s|%d|%d|%.1f|%.1f|%d|%s\n", pid, elapsed, cputime, avg, current, rss/1024, cmd
+      }' | sort -t'|' -k4,4nr | head -10)
+    echo "long_lived_hogs=$long_count"
+    echo "long_lived_hogs_total=$total_count"
   } > "$out"
 }
 
@@ -248,18 +352,39 @@ probe_power_hogs() {
 probe_gpu_ane() {
   local out="$1"
   {
-    if $IS_MACOS && sudo -n true 2>/dev/null; then
-      sudo timeout 4 powermetrics --samplers gpu_power,ane_power,tasks -n 1 -i 2000 --show-process-gpu --show-process-energy 2>/dev/null | \
-        awk '
-          /^Name/ && /GPU/ {section="gpu"; next}
-          /^Name/ && /ANE/ {section="ane"; next}
-          /^$/ {section=""; next}
-          section=="gpu" && NF>=3 && $NF+0 > 20 {printf "gpu|%s|%s|%s\n", $(NF-1), $NF, $1}
-          section=="ane" && NF>=3 && $NF+0 > 500 {printf "ane|%s|%s|%s\n", $(NF-1), $NF, $1}
-        ' | head -10
+    if $IS_MACOS; then
+      # Apple Silicon exposes GPU utilization and unified-memory counters via
+      # IOKit without sudo. powermetrics requires root and makes read-only scans
+      # unusable on passwordless/Touch-ID-only systems.
+      local stats device renderer tiler mem_in_use mem_alloc
+      stats=$(ioreg -r -d1 -w0 -c IOGPU 2>/dev/null)
+      device=$(echo "$stats" | grep -o '"Device Utilization %"=[0-9][0-9]*' | head -1 | cut -d= -f2)
+      renderer=$(echo "$stats" | grep -o '"Renderer Utilization %"=[0-9][0-9]*' | head -1 | cut -d= -f2)
+      tiler=$(echo "$stats" | grep -o '"Tiler Utilization %"=[0-9][0-9]*' | head -1 | cut -d= -f2)
+      mem_in_use=$(echo "$stats" | grep -o '"In use system memory"=[0-9][0-9]*' | head -1 | cut -d= -f2 | awk '{printf "%d", $1/1048576}')
+      mem_alloc=$(echo "$stats" | grep -o '"Alloc system memory"=[0-9][0-9]*' | head -1 | cut -d= -f2 | awk '{printf "%d", $1/1048576}')
+      echo "gpu_device_util_pct=${device:-0}"
+      echo "gpu_renderer_util_pct=${renderer:-0}"
+      echo "gpu_tiler_util_pct=${tiler:-0}"
+      echo "gpu_mem_in_use_mb=${mem_in_use:-0}"
+      echo "gpu_mem_allocated_mb=${mem_alloc:-0}"
     elif $IS_LINUX && command -v nvidia-smi >/dev/null 2>&1; then
-      nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader 2>/dev/null | \
-        awk -F', ' '{printf "gpu|%s|%s|%s\n", $1, $3, $2}' | head -10
+      local gpu_line util mem_used mem_total
+      gpu_line=$(nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null | head -1)
+      util=$(echo "$gpu_line" | awk -F',' '{gsub(/ /, "", $1); print $1}')
+      mem_used=$(echo "$gpu_line" | awk -F',' '{gsub(/ /, "", $2); print $2}')
+      mem_total=$(echo "$gpu_line" | awk -F',' '{gsub(/ /, "", $3); print $3}')
+      echo "gpu_device_util_pct=${util:-0}"
+      echo "gpu_renderer_util_pct=0"
+      echo "gpu_tiler_util_pct=0"
+      echo "gpu_mem_in_use_mb=${mem_used:-0}"
+      echo "gpu_mem_allocated_mb=${mem_total:-0}"
+    else
+      echo "gpu_device_util_pct=0"
+      echo "gpu_renderer_util_pct=0"
+      echo "gpu_tiler_util_pct=0"
+      echo "gpu_mem_in_use_mb=0"
+      echo "gpu_mem_allocated_mb=0"
     fi
   } > "$out"
 }
@@ -312,11 +437,12 @@ run_parallel_scan() {
   probe_disk_reclaimable "$tmp/disk" &
   probe_memory "$tmp/mem" &
   probe_cpu_hogs "$tmp/cpu" &
+  probe_runtime "$tmp/runtime" &
   probe_network "$tmp/net" &
   probe_startup "$tmp/startup" &
+  probe_gpu_ane "$tmp/gpu" &
   if $MODE_SCAN; then
     probe_power_hogs "$tmp/power" &
-    probe_gpu_ane "$tmp/gpu" &
   fi
   wait
 
@@ -344,6 +470,18 @@ run_parallel_scan() {
     declare -g "STARTUP_${k}=${v}"
   done < "$tmp/startup" 2>/dev/null || true
 
+  # Load runtime vars
+  while IFS='=' read -r k v; do
+    [[ "$k" =~ ^[a-zA-Z0-9_]+$ ]] || continue
+    declare -g "RUNTIME_${k}=${v}"
+  done < "$tmp/runtime" 2>/dev/null || true
+
+  # Load GPU vars
+  while IFS='=' read -r k v; do
+    [[ "$k" =~ ^[a-zA-Z0-9_]+$ ]] || continue
+    declare -g "GPU_${k}=${v}"
+  done < "$tmp/gpu" 2>/dev/null || true
+
   # Persist scan data; update file vars to the persistent copy so action
   # functions can read them after this function returns (tmp is cleaned up
   # at script exit via the EXIT trap set in main, not here).
@@ -351,6 +489,7 @@ run_parallel_scan() {
   cp -r "$tmp" "$STATE_DIR/last_scan" 2>/dev/null || true
   CPU_HOGS_FILE="$STATE_DIR/last_scan/cpu"
   POWER_HOGS_FILE="$STATE_DIR/last_scan/power"
+  LONG_HOGS_FILE="$STATE_DIR/last_scan/runtime.long_hogs"
   rm -rf "$tmp" 2>/dev/null || true
 }
 
@@ -361,7 +500,7 @@ run_parallel_scan() {
 # Protected processes — never kill, never demote
 # Spotlight stack (mds/mdworker) + iCloud/App Store sync (bird/cloudd/akd/itunescloudd/appstoreagent/storeagent/storeaccountd/commerce/storedownloadd/identityservicesd/apsd) must stay at normal priority.
 # Demoting them via taskpolicy -b starves CloudKit/StoreKit traffic and surfaces as "Cannot Connect" in App Store / iCloud / iCloud Drive sync stalls.
-PROTECTED_RE="kernel_task|launchd|WindowServer|loginwindow|Finder|SystemUIServer|Dock|systemd|init|sshd|ssh|mosh|bash|zsh|fish|tmux|screen|cursor|Cursor|comet|Comet|Shortwave|shortwave|claude|Claude|node|npm|python|Xcode|xcodebuild|mds|mds_stores|mdworker|mdworker_shared|mdbulkimport|Spotlight|bird|cloudd|akd|itunescloudd|appstoreagent|storeagent|storeaccountd|storedownloadd|commerce|identityservicesd|apsd|nsurlsessiond|fmfd|callservicesd|imagent|softwareupdated|nsurlstoraged|trustd|networkd|symptomsd|locationd|dasd|powerd|Supercharge|supercharge"
+PROTECTED_RE="kernel_task|launchd|WindowServer|loginwindow|Finder|SystemUIServer|Dock|systemd|init|sshd|ssh|mosh|bash|zsh|fish|tmux|screen|cursor|Cursor|comet|Comet|Shortwave|shortwave|claude|Claude|node|npm|python|Xcode|xcodebuild|mds|mds_stores|mdworker|mdworker_shared|mdbulkimport|Spotlight|bird|cloudd|akd|itunescloudd|appstoreagent|storeagent|storeaccountd|storedownloadd|commerce|identityservicesd|apsd|nsurlsessiond|fmfd|callservicesd|imagent|softwareupdated|nsurlstoraged|trustd|networkd|symptomsd|locationd|dasd|powerd|Supercharge|supercharge|qemu|Docker|docker|OrbStack|postgres|redis|dragonfly|qdrant|gbrain|hermes|mcp"
 
 # Safe to demote to background priority (not kill).
 # Excludes: bird/cloudd (iCloud/CloudKit), identityservicesd (iMessage/FaceTime/iCloud auth) — demoting these breaks App Store + iCloud sync.
@@ -563,25 +702,39 @@ action_clean_stale_builds() {
 
 # Kill CPU/power/GPU hogs from probe output
 action_kill_hogs() {
+  # Despite the legacy name, default cleanup only demotes hogs. TERM is reserved
+  # for explicit --aggressive runs. This keeps --clean genuinely non-destructive.
   [ -f "${CPU_HOGS_FILE:-}" ] || return 0
-  local killed=0
+  local mitigated=0 killed=0
   while IFS='|' read -r pid _ _ cmd; do
     [ -z "$pid" ] && continue
     echo "$cmd" | grep -qE "$PROTECTED_RE" && continue
     ps -p "$pid" >/dev/null 2>&1 || continue
-    kill -TERM "$pid" 2>/dev/null && killed=$((killed + 1))
+    if $MODE_AGGRESSIVE; then
+      kill -TERM "$pid" 2>/dev/null && killed=$((killed + 1))
+    else
+      if $IS_MACOS; then taskpolicy -b -p "$pid" 2>/dev/null || true; fi
+      renice +10 -p "$pid" >/dev/null 2>&1 && mitigated=$((mitigated + 1)) || true
+    fi
   done < "$CPU_HOGS_FILE"
-  (( killed > 0 )) && echo "  ${GRN}✓${RST} Killed $killed CPU hog(s)"
+  (( mitigated > 0 )) && echo "  ${GRN}✓${RST} Background-prioritized $mitigated CPU hog(s)"
+  (( killed > 0 )) && echo "  ${GRN}✓${RST} Killed $killed CPU hog(s) (aggressive)"
 
   if [ -f "${POWER_HOGS_FILE:-}" ]; then
-    local pkilled=0
+    local pmitigated=0 pkilled=0
     while IFS='|' read -r pid _ name; do
       [ -z "$pid" ] && continue
       echo "$name" | grep -qE "$PROTECTED_RE" && continue
       ps -p "$pid" >/dev/null 2>&1 || continue
-      kill -TERM "$pid" 2>/dev/null && pkilled=$((pkilled + 1))
+      if $MODE_AGGRESSIVE; then
+        kill -TERM "$pid" 2>/dev/null && pkilled=$((pkilled + 1))
+      else
+        if $IS_MACOS; then taskpolicy -b -p "$pid" 2>/dev/null || true; fi
+        renice +10 -p "$pid" >/dev/null 2>&1 && pmitigated=$((pmitigated + 1)) || true
+      fi
     done < "$POWER_HOGS_FILE"
-    (( pkilled > 0 )) && echo "  ${GRN}✓${RST} Killed $pkilled power hog(s)"
+    (( pmitigated > 0 )) && echo "  ${GRN}✓${RST} Background-prioritized $pmitigated power hog(s)"
+    (( pkilled > 0 )) && echo "  ${GRN}✓${RST} Killed $pkilled power hog(s) (aggressive)"
   fi
 }
 
@@ -1220,7 +1373,98 @@ action_dhcp_renew() {
 # ═════════════════════════════════════════════════════════════════
 # OUTPUT — JSON or visual
 # ═════════════════════════════════════════════════════════════════
+compute_health_score() {
+  local score=100 cores
+  HEALTH_FACTORS=()
+  cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 8)
+
+  if value_lt "${RUNTIME_cpu_idle_pct:-}" 20; then score=$((score - 25)); HEALTH_FACTORS+=("cpu-idle-under-20")
+  elif value_lt "${RUNTIME_cpu_idle_pct:-}" 35; then score=$((score - 15)); HEALTH_FACTORS+=("cpu-idle-under-35")
+  elif value_lt "${RUNTIME_cpu_idle_pct:-}" 60; then score=$((score - 5)); HEALTH_FACTORS+=("cpu-idle-under-60"); fi
+
+  local pressure_count=$(( ${RUNTIME_running:-0} + ${RUNTIME_stuck:-0} ))
+  if [ "$pressure_count" -gt $((cores * 2)) ]; then score=$((score - 15)); HEALTH_FACTORS+=("runqueue-over-2x-cores")
+  elif [ "$pressure_count" -gt "$cores" ]; then score=$((score - 7)); HEALTH_FACTORS+=("runqueue-over-cores"); fi
+  if [ "${RUNTIME_stuck:-0}" -gt 0 ]; then
+    local stuck_penalty=$(( RUNTIME_stuck * 5 )); [ "$stuck_penalty" -gt 15 ] && stuck_penalty=15
+    score=$((score - stuck_penalty)); HEALTH_FACTORS+=("uninterruptible-processes")
+  fi
+  if [ "${RUNTIME_zombies:-0}" -gt 3 ]; then score=$((score - 3)); HEALTH_FACTORS+=("zombie-accumulation"); fi
+  if [ "${RUNTIME_long_lived_hogs:-0}" -gt 0 ]; then score=$((score - 5)); HEALTH_FACTORS+=("long-lived-heavy-pids"); fi
+
+  if value_lt "${MEM_pressure_pct:-}" 20; then score=$((score - 15)); HEALTH_FACTORS+=("memory-pressure-under-20")
+  elif value_lt "${MEM_pressure_pct:-}" 40; then score=$((score - 5)); HEALTH_FACTORS+=("memory-pressure-under-40"); fi
+  if value_ge "${MEM_swap_mb:-}" 1024; then score=$((score - 10)); HEALTH_FACTORS+=("swap-over-1gb"); fi
+
+  if value_ge "${GPU_gpu_device_util_pct:-}" 90; then score=$((score - 5)); HEALTH_FACTORS+=("gpu-over-90")
+  elif value_ge "${GPU_gpu_device_util_pct:-}" 75; then score=$((score - 2)); HEALTH_FACTORS+=("gpu-over-75"); fi
+
+  if value_ge "${NET_dns_ms:-}" 500; then score=$((score - 10)); HEALTH_FACTORS+=("dns-over-500ms")
+  elif value_ge "${NET_dns_ms:-}" 100; then score=$((score - 5)); HEALTH_FACTORS+=("dns-over-100ms"); fi
+  if [ "${RUNTIME_tcp_close_wait:-0}" -ge 200 ]; then score=$((score - 10)); HEALTH_FACTORS+=("close-wait-flood"); fi
+  if [ "${RUNTIME_tcp_time_wait:-0}" -ge 500 ]; then score=$((score - 5)); HEALTH_FACTORS+=("time-wait-high"); fi
+
+  if value_ge "$DISK_USED_PCT" 97; then score=$((score - 20)); HEALTH_FACTORS+=("disk-over-97")
+  elif value_ge "$DISK_USED_PCT" 90; then score=$((score - 10)); HEALTH_FACTORS+=("disk-over-90"); fi
+  if [ "${STARTUP_failed_units:-0}" -gt 0 ]; then score=$((score - 5)); HEALTH_FACTORS+=("failed-startup-units"); fi
+
+  [ "$score" -lt 0 ] && score=0
+  HEALTH_SCORE=$score
+}
+
+health_factors_json() {
+  local first=true f
+  printf '['
+  for f in "${HEALTH_FACTORS[@]:-}"; do
+    [ -n "$f" ] || continue
+    $first || printf ','
+    first=false
+    printf '"%s"' "$(json_escape "$f")"
+  done
+  printf ']'
+}
+
+emit_cpu_hogs_json() {
+  local first=true pid cpu mem cmd
+  printf '['
+  [ -f "${CPU_HOGS_FILE:-}" ] && while IFS='|' read -r pid cpu mem cmd; do
+    [ -n "$pid" ] || continue
+    $first || printf ','
+    first=false
+    printf '{"pid":%s,"cpu_pct":%s,"mem":"%s","command":"%s"}' \
+      "$pid" "${cpu:-0}" "$(json_escape "$mem")" "$(json_escape "$cmd")"
+  done < "$CPU_HOGS_FILE"
+  printf ']'
+}
+
+emit_power_hogs_json() {
+  local first=true pid power name
+  printf '['
+  [ -f "${POWER_HOGS_FILE:-}" ] && while IFS='|' read -r pid power name; do
+    [ -n "$pid" ] || continue
+    $first || printf ','
+    first=false
+    printf '{"pid":%s,"power":%s,"command":"%s"}' \
+      "$pid" "${power:-0}" "$(json_escape "$name")"
+  done < "$POWER_HOGS_FILE"
+  printf ']'
+}
+
+emit_long_hogs_json() {
+  local first=true pid elapsed cpu_time avg_cpu current_cpu rss_mb is_protected cmd
+  printf '['
+  [ -f "${LONG_HOGS_FILE:-}" ] && while IFS='|' read -r pid elapsed cpu_time avg_cpu current_cpu rss_mb is_protected cmd; do
+    [ -n "$pid" ] || continue
+    $first || printf ','
+    first=false
+    printf '{"pid":%s,"elapsed_s":%s,"cpu_time_s":%s,"avg_cpu_pct":%s,"current_cpu_pct":%s,"rss_mb":%s,"protected":%s,"command":"%s"}' \
+      "$pid" "${elapsed:-0}" "${cpu_time:-0}" "${avg_cpu:-0}" "${current_cpu:-0}" "${rss_mb:-0}" "${is_protected:-false}" "$(json_escape "$cmd")"
+  done < "$LONG_HOGS_FILE"
+  printf ']'
+}
+
 emit_json() {
+  compute_health_score
   cat <<JSONEOF
 {
   "ts": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -1233,6 +1477,39 @@ emit_json() {
   "disk_avail_gb": "$DISK_AVAIL",
   "disk_used_pct": "$DISK_USED_PCT",
   "os_version": "$OS_VER",
+  "runtime": {
+    "cpu_user_pct": ${RUNTIME_cpu_user_pct:-0},
+    "cpu_sys_pct": ${RUNTIME_cpu_sys_pct:-0},
+    "cpu_idle_pct": ${RUNTIME_cpu_idle_pct:-0},
+    "load1": ${RUNTIME_load1:-0},
+    "load5": ${RUNTIME_load5:-0},
+    "load15": ${RUNTIME_load15:-0},
+    "processes": ${RUNTIME_processes:-0},
+    "running": ${RUNTIME_running:-0},
+    "stuck": ${RUNTIME_stuck:-0},
+    "zombies": ${RUNTIME_zombies:-0},
+    "tcp_close_wait": ${RUNTIME_tcp_close_wait:-0},
+    "tcp_time_wait": ${RUNTIME_tcp_time_wait:-0},
+    "long_lived_hogs": ${RUNTIME_long_lived_hogs:-0},
+    "long_lived_hogs_total": ${RUNTIME_long_lived_hogs_total:-0}
+  },
+  "gpu": {
+    "device_util_pct": ${GPU_gpu_device_util_pct:-0},
+    "renderer_util_pct": ${GPU_gpu_renderer_util_pct:-0},
+    "tiler_util_pct": ${GPU_gpu_tiler_util_pct:-0},
+    "mem_in_use_mb": ${GPU_gpu_mem_in_use_mb:-0},
+    "mem_allocated_mb": ${GPU_gpu_mem_allocated_mb:-0}
+  },
+  "health": {
+    "score": ${HEALTH_SCORE:-100},
+    "model": "runtime-first",
+    "disk_reclaimable_penalty": false,
+    "launch_agent_count_penalty": false,
+    "factors": $(health_factors_json)
+  },
+  "cpu_hogs": $(emit_cpu_hogs_json),
+  "power_hogs": $(emit_power_hogs_json),
+  "long_lived_hogs_detail": $(emit_long_hogs_json),
   "reclaimable_mb": {
     "brew_cache": ${DISK_brew_cache:-0},
     "npm_cache": ${DISK_npm_cache:-0},
@@ -1290,8 +1567,9 @@ write_telemetry() {
   elif $MODE_CLEAN; then mode="clean"
   elif $MODE_SCAN; then mode="scan"
   fi
+  compute_health_score
   cat >> "$HISTORY_FILE" <<TELEOF
-{"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","os":"$OS","mode":"$mode","ram_free_mb":${MEM_free_mb:-0},"pressure_pct":"${MEM_pressure_pct:-?}","swap_mb":"${MEM_swap_mb:-0}","disk_pct":"$DISK_USED_PCT","dns_ms":"${NET_dns_ms:-?}"}
+{"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","os":"$OS","mode":"$mode","health_score":${HEALTH_SCORE:-100},"cpu_idle_pct":${RUNTIME_cpu_idle_pct:-0},"load1":${RUNTIME_load1:-0},"running":${RUNTIME_running:-0},"stuck":${RUNTIME_stuck:-0},"gpu_util_pct":${GPU_gpu_device_util_pct:-0},"ram_free_mb":${MEM_free_mb:-0},"pressure_pct":"${MEM_pressure_pct:-?}","swap_mb":"${MEM_swap_mb:-0}","disk_pct":"$DISK_USED_PCT","dns_ms":"${NET_dns_ms:-?}","tcp_close_wait":${RUNTIME_tcp_close_wait:-0},"tcp_time_wait":${RUNTIME_tcp_time_wait:-0}}
 TELEOF
   # Only stamp LAST_RUN_FILE on actual cleanup runs — scan-only (--json/--scan)
   # must not set the idempotency guard or DerivedData cleanup will be skipped
