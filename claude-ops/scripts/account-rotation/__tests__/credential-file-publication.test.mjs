@@ -28,6 +28,8 @@ const fixture = () => {
 };
 
 const pathnameState = (path) => {
+  // Test-only snapshot intentionally observes adversarial pathname replacement.
+  // CodeQL[js/file-system-race]
   const stat = lstatSync(path, { bigint: true });
   return {
     dev: stat.dev,

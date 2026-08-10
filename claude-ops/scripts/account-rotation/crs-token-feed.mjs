@@ -48,6 +48,8 @@ function log(msg) {
   const line = `[${new Date().toISOString()}] [crs-feed] ${msg}`;
   console.log(line);
   try {
+    // Operational log data is written only to the fixed plugin-local log path.
+    // CodeQL[js/http-to-file-access]
     appendFileSync(LOG_PATH, line + '\n');
   } catch {}
 }
@@ -268,6 +270,8 @@ async function main() {
         if ('proxy' in crs) update.proxy = crs.proxy;
         if ('maxConcurrency' in crs) update.maxConcurrency = crs.maxConcurrency;
         if ('schedulable' in crs) update.schedulable = crs.schedulable;
+        // The credential is sent only to the configured CRS administrative endpoint.
+        // CodeQL[js/file-access-to-http]
         const put = await fetch(`${crsBase}/admin/claude-accounts/${crs.id}`, {
           method: 'PUT',
           headers: H,
@@ -275,6 +279,8 @@ async function main() {
         });
         if (put.ok) {
           if (crs.schedulable !== false) {
+            // This fixed CRS control request contains no credential-file bytes.
+            // CodeQL[js/file-access-to-http]
             await fetch(`${crsBase}/admin/claude-accounts/${crs.id}/reset-status`, {
               method: 'POST',
               headers: H,

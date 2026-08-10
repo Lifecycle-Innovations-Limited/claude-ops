@@ -24,7 +24,7 @@ export async function verifyRefreshedTokenIdentity(account, accessToken, { fetch
   try {
     // The OAuth token is intentionally sent only to Anthropic's fixed profile
     // endpoint to verify the credential's configured account identity.
-    // lgtm[js/file-access-to-http]
+    // CodeQL[js/file-access-to-http]
     const response = await fetchImpl(PROFILE_ENDPOINT, {
       method: 'GET',
       headers: { Authorization: `Bearer ${accessToken}`, 'anthropic-beta': 'oauth-2025-04-20' },

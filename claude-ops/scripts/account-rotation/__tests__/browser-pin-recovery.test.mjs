@@ -34,6 +34,8 @@ assert.equal(existsSync(join(root, 'backups')), false);
 // Existing evidence is retained, but the disabled legacy restore path never
 // overwrites a concurrent or foreign destination.
 writeFileSync(sentinelPath, '{"opaque":"evidence"}\n', { mode: 0o600 });
+// Test-only adversarial replacement immediately before the fail-closed restore probe.
+// CodeQL[js/file-system-race]
 writeFileSync(destinationPath, '{"foreign":true}\n', { mode: 0o600 });
 const foreign = readFileSync(destinationPath);
 const result = restoreBrowserPinBackup({ destinationPath, sentinelPath, coordinationKey: Buffer.alloc(32, 7) });

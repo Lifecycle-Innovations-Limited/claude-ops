@@ -409,7 +409,7 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
     // hard-link publication is atomic and never replaces a concurrently
     // created final target (unlike rename(2)).
     // Test-only adversarial writer used to prove link publication fails closed.
-    // lgtm[js/file-system-race]
+    // CodeQL[js/file-system-race]
     if (process.env.CLAUDE_COORDINATION_TESTING === '1' && process.env.CLAUDE_COORDINATION_TEST_RACE_TARGET === path)
       writeFileSync(path, process.env.CLAUDE_COORDINATION_TEST_RACE_SAME === '1' ? data : 'competing-owner\n', {
         flag: 'wx',
@@ -433,7 +433,7 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
     ) {
       unlinkSync(path);
       // Test-only post-publication inode replacement.
-      // lgtm[js/file-system-race]
+      // CodeQL[js/file-system-race]
       writeFileSync(path, data, { flag: 'wx', mode: 0o600 });
     }
     if (!descriptorMatches(path, descriptor, 'PUBLICATION_OWNERSHIP_LOST'))
