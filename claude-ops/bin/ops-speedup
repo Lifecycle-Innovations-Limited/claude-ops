@@ -134,6 +134,14 @@ value_ge() {
   is_number "${1:-}" || return 1
   awk -v a="$1" -v b="$2" 'BEGIN { exit !(a >= b) }'
 }
+json_num() {
+  local v="${1:-}"
+  if is_number "$v"; then
+    printf '%s' "$v"
+  else
+    printf '0'
+  fi
+}
 
 # ── Hardware fingerprint ─────────────────────────────────────────
 if $IS_MACOS; then
@@ -265,9 +273,11 @@ probe_runtime() {
     elif $IS_LINUX || $IS_WSL; then
       local top_out
       top_out=$(top -bn1 2>/dev/null | grep -m1 '%Cpu')
-      cpu_user=$(echo "$top_out" | awk -F'[:,%]' '{gsub(/^ +| +$/, "", $2); print $2; exit}')
-      cpu_sys=$(echo "$top_out" | awk -F'[:,%]' '{gsub(/^ +| +$/, "", $4); print $4; exit}')
-      cpu_idle=$(echo "$top_out" | awk -F'[:,%]' '{gsub(/^ +| +$/, "", $8); print $8; exit}')
+      # Robust parse: field labels vary (us/user, sy/system, id/idle) and
+      # awk -F'[:,%]' can yield non-numeric tokens like "Cpu(s)" / "us".
+      cpu_user=$(echo "$top_out" | grep -oE '[0-9]+([.][0-9]+)?[[:space:]]*(us|user)' | head -1 | grep -oE '[0-9]+([.][0-9]+)?' || true)
+      cpu_sys=$(echo "$top_out" | grep -oE '[0-9]+([.][0-9]+)?[[:space:]]*(sy|system)' | head -1 | grep -oE '[0-9]+([.][0-9]+)?' || true)
+      cpu_idle=$(echo "$top_out" | grep -oE '[0-9]+([.][0-9]+)?[[:space:]]*(id|idle)' | head -1 | grep -oE '[0-9]+([.][0-9]+)?' || true)
       load=$(awk '{print $1, $2, $3}' /proc/loadavg 2>/dev/null)
       process_counts=$(ps -Ao stat= 2>/dev/null | awk 'BEGIN{r=0;u=0;z=0;t=0} {t++} /^R/{r++} /^D/{u++} /^Z/{z++} END{printf "%d %d %d %d",t,r,u,z}')
       if command -v ss >/dev/null 2>&1; then
@@ -1478,12 +1488,12 @@ emit_json() {
   "disk_used_pct": "$DISK_USED_PCT",
   "os_version": "$OS_VER",
   "runtime": {
-    "cpu_user_pct": ${RUNTIME_cpu_user_pct:-0},
-    "cpu_sys_pct": ${RUNTIME_cpu_sys_pct:-0},
-    "cpu_idle_pct": ${RUNTIME_cpu_idle_pct:-0},
-    "load1": ${RUNTIME_load1:-0},
-    "load5": ${RUNTIME_load5:-0},
-    "load15": ${RUNTIME_load15:-0},
+    "cpu_user_pct": $(json_num "${RUNTIME_cpu_user_pct:-0}"),
+    "cpu_sys_pct": $(json_num "${RUNTIME_cpu_sys_pct:-0}"),
+    "cpu_idle_pct": $(json_num "${RUNTIME_cpu_idle_pct:-0}"),
+    "load1": $(json_num "${RUNTIME_load1:-0}"),
+    "load5": $(json_num "${RUNTIME_load5:-0}"),
+    "load15": $(json_num "${RUNTIME_load15:-0}"),
     "processes": ${RUNTIME_processes:-0},
     "running": ${RUNTIME_running:-0},
     "stuck": ${RUNTIME_stuck:-0},
