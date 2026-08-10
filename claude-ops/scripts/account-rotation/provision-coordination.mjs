@@ -299,6 +299,8 @@ function publishExclusiveRecord(path, bytes, code) {
     descriptor = secureReadDescriptor(temp, code, false);
     if (!descriptor.bytes.equals(expectedBytes)) fail(code);
   } else {
+    // O_EXCL is the authoritative no-replace check; existsSync only selects recovery.
+    // CodeQL[js/file-system-race]
     const fd = openSync(temp, 'wx', 0o600);
     try {
       writeFileSync(fd, expectedBytes);
@@ -614,6 +616,8 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
       fail('PROVISION_RECOVERY_UNCERTAIN');
     descriptor.proof = temp;
   } else {
+    // O_EXCL is the authoritative no-replace check; existsSync only selects recovery.
+    // CodeQL[js/file-system-race]
     const fd = openSync(temp, 'wx', modeBits);
     try {
       writeFileSync(fd, data);
@@ -823,6 +827,8 @@ function writeProvisionJournal(plan, state) {
   const temp = `${path}.preparation-${rawDigest(bytes)}`;
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   if (!existsSync(temp)) {
+    // O_EXCL is the authoritative no-replace check; existsSync only selects recovery.
+    // CodeQL[js/file-system-race]
     const fd = openSync(temp, 'wx', 0o600);
     try {
       writeFileSync(fd, bytes);
