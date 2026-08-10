@@ -11,10 +11,8 @@
  * (or $CRS_ENABLE_MAGIC_LINK=1) — installing this plugin never silently
  * starts unattended re-auth attempts.
  *
- * Dispatch modes ($CRS_MAGIC_LINK_DISPATCH / crs.magicLinkDispatch):
- *   setup       (default) — `rotate.mjs --setup --only=<key> --auto --skip-valid`
- *   magic-link  — `rotate.mjs --magic-link --force --allow-exhausted --to <key>`
- *                 (for forks that wire magic-link + captcha cascade in rotate.mjs)
+ * Direct reauthentication dispatch has been removed. This reconciler now only
+ * reports status and a staged-enrollment handoff.
  *
  * Concurrency (hard rules):
  *   1. Single-flight lock (crs-reconciler-state.mjs) — one tick fleet-wide.
@@ -28,14 +26,13 @@
  *
  * CLI: (none)=one tick · --dry-run · --status
  */
-import { spawn } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { existsSync, readFileSync } from 'fs';
 import { loadRotationConfig, buildCrsNameMaps, crsFileVaultPath } from './crs-pool-config.mjs';
 import { loadJsonState, saveJsonStateAtomic, withOwnStateLock } from './crs-reconciler-state.mjs';
-import { buildReauthChildEnv, resolveReauthTimeoutMs, reauthOutputLooksSuccessful } from './reauth-env.mjs';
+import { resolveReauthTimeoutMs } from './reauth-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const args = new Set(process.argv.slice(2));
@@ -149,96 +146,9 @@ function pickCandidate(now, state) {
   return eligible[0];
 }
 
-function buildRotateArgs(vaultKey) {
-  const mode = String(DISPATCH).toLowerCase();
-  if (mode === 'magic-link' || mode === 'magic_link' || mode === 'magic') {
-    return [ROTATE_SCRIPT, '--magic-link', '--force', '--allow-exhausted', '--to', vaultKey];
-  }
-  // Default public path
-  return [ROTATE_SCRIPT, '--setup', `--only=${vaultKey}`, '--auto', '--skip-valid'];
-}
-
-function spawnRotate(vaultKey) {
-  return new Promise((resolve) => {
-    const rotateArgs = buildRotateArgs(vaultKey);
-    log(`spawn: node ${rotateArgs.join(' ')} (dispatch=${DISPATCH})`);
-    const child = spawn(process.execPath, rotateArgs, {
-      cwd: __dirname,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        ...buildReauthChildEnv({ env: process.env, crs: C }),
-      },
-    });
-    let out = '';
-    child.stdout.on('data', (d) => {
-      out += d.toString();
-    });
-    child.stderr.on('data', (d) => {
-      out += d.toString();
-    });
-    const timer = setTimeout(() => {
-      log(`timeout — killing rotate.mjs for ${vaultKey} after ${ROTATE_TIMEOUT_MS}ms`);
-      try {
-        child.kill('SIGTERM');
-      } catch {}
-      setTimeout(() => {
-        try {
-          child.kill('SIGKILL');
-        } catch {}
-      }, 5000);
-    }, ROTATE_TIMEOUT_MS);
-    child.on('exit', (code) => {
-      clearTimeout(timer);
-      resolve({ code, out });
-    });
-  });
-}
-
 async function tick() {
-  if (rotatingLockBusy()) {
-    log('rotate.mjs .rotating lock busy — skip tick (never contend with a live rotation)');
-    return;
-  }
-
-  const now = Date.now();
-  const { skipped, result } = await withOwnStateLock(
-    STATE_PATH,
-    async () => {
-      const state = loadJsonState(STATE_PATH, log);
-      const candidate = pickCandidate(now, state);
-      if (!candidate) {
-        log('no eligible candidates (none flagged needs-reauth, or all on cooldown)');
-        return { dispatched: false };
-      }
-
-      if (DRY) {
-        log(`[dry-run] would dispatch rotate.mjs for ${candidate} (dispatch=${DISPATCH})`);
-        return { dispatched: false, candidate };
-      }
-
-      state[candidate] = { ...(state[candidate] || {}), lastAttemptAt: now };
-      saveJsonStateAtomic(STATE_PATH, state);
-
-      const { code, out } = await spawnRotate(candidate);
-      const contended = /Rotation in progress/i.test(out) && !/FATAL:/i.test(out);
-      const ok = code === 0 && reauthOutputLooksSuccessful(out) && !contended;
-      state[candidate] = {
-        ...(state[candidate] || {}),
-        lastAttemptAt: now,
-        lastCode: code,
-        lastOkAt: ok ? now : state[candidate]?.lastOkAt,
-        lastFailClass: ok ? undefined : contended ? 'contended' : 'rotate-fail',
-      };
-      saveJsonStateAtomic(STATE_PATH, state);
-      log(`done ${candidate} exit=${code} ok=${ok}${contended ? ' class=contended' : ''}`);
-      return { dispatched: true, candidate, ok, contended };
-    },
-    log,
-  );
-
-  if (skipped) log('another tick already holds the lock — skipping (fleet-wide single-flight)');
-  return result;
+  log('refused: unattended reauthentication is disabled; use staged enrollment');
+  return { dispatched: false, reason: 'staged-enrollment-required' };
 }
 
 function printStatus() {

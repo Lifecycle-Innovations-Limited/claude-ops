@@ -17,13 +17,9 @@
  *   node rotate.mjs --status                  # show state
  *   node rotate.mjs --utilization             # live 5h/7d utilization per account
  *   node rotate.mjs --audit-billing           # 🔴/🟢 per-account extra_usage (overage billing) audit
- *   node rotate.mjs --setup                   # manual: claude auth login per account (interactive)
- *   node rotate.mjs --setup --auto            # AUTOMATED: magic-link + browser cascade, all configured accounts end-to-end
- *   node rotate.mjs --setup --auto --skip-valid  # skip accounts whose vault token is still alive
- *   node rotate.mjs --setup --only=<key>      # only re-capture one account (e.g. --only=user@example.com)
+ *   Direct setup and browser authentication are disabled; use staged enrollment.
  *   node rotate.mjs --capture                 # save current active token (print for Dashlane)
  *   node rotate.mjs --session                 # also send /login to running iTerm2 session
- *   node rotate.mjs --magic-link --to <email> # re-auth via email magic link (no Google OAuth)
  *   Note: --allow-extra-usage is ignored if passed (legacy); extra_usage is per-org in Claude console only.
  */
 
@@ -45,6 +41,7 @@ import {
   constants as fsConstants,
 } from 'fs';
 import { persistBedrockClaudeSettings } from './claude-settings-mode.mjs';
+import { automatedAuthAllowed } from './auto-auth-policy.mjs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync, execFileSync, spawnSync, spawn } from 'child_process';
@@ -54,12 +51,27 @@ import { askAIBrain, executeAIAction, AI_BRAIN_MAX_DECISIONS, scrapeBillingState
 import { destinationUtilHardBlock } from './rotation-policy.mjs';
 import { applyAccountLeases, writeLease } from './account-leases.mjs';
 import { respawnBgSessions } from './bg-respawn.mjs';
+import { withAuthWriterLock } from './auth-writer-coordination.mjs';
+import { createVerifiedCredentialWriter, requireVerifiedCredentialCapability } from './verified-credential-write.mjs';
+import { directOAuthWriterAllowed } from './auto-auth-policy.mjs';
+import { applyBrowserPinTransaction, restoreBrowserPinBackup } from './browser-pin-recovery.mjs';
+import { readDeploymentConfig } from './staged-enrollment.mjs';
 import {
   trySolveCaptchaWall,
   maybeClearCaptchaWall,
   detectCaptchaWall,
   captchaHardFailed,
 } from './rotate-captcha-soft.mjs';
+
+if (process.argv.includes('--capture')) {
+  console.error('direct credential capture refused: staged enrollment is required');
+  process.exit(2);
+}
+
+if (process.argv.includes('--bootstrap-chrome-profile') || process.argv.includes('--bootstrap-all-chrome-profiles')) {
+  console.error('direct Chrome profile bootstrap refused: staged enrollment is required');
+  process.exit(2);
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Account config lives in the gitignored user data dir (written by
@@ -80,14 +92,15 @@ const LOG_PATH = join(ROTATION_DATA_DIR, 'rotation.log');
 const RATE_LIMITS_PATH = join(ROTATION_DATA_DIR, '.rate-limits.json');
 const OAUTH_SNAPSHOTS_DIR = join(ROTATION_DATA_DIR, 'oauth-snapshots');
 const BROWSER_PIN_PATH = join(ROTATION_DATA_DIR, '.browser-pin');
-const BROWSER_PIN_BACKUP_PATH = join(ROTATION_DATA_DIR, '.browser-pin-backup.json');
+const BROWSER_PIN_RECOVERY_PATH = join(ROTATION_DATA_DIR, '.browser-pin-recovery.json');
+const BROWSER_PIN_BACKUP_DIR = join(ROTATION_DATA_DIR, 'browser-pin-backups');
 const CLAUDE_JSON_PATH = join(process.env.HOME || '', '.claude.json');
 
 // One-time migration from historical repo-local runtime files. These files can
 // contain real account identifiers and must never live inside the public checkout,
 // even when gitignored, because the repository secret scanner intentionally scans
 // the working tree too.
-for (const name of ['state.json', 'rotation.log', '.rate-limits.json', '.browser-pin', '.browser-pin-backup.json']) {
+for (const name of ['state.json', 'rotation.log', '.rate-limits.json', '.browser-pin']) {
   const oldPath = join(__dirname, name);
   const newPath = join(ROTATION_DATA_DIR, name);
   if (!existsSync(oldPath) || existsSync(newPath)) continue;
@@ -486,11 +499,8 @@ async function queryAllUtilization(config) {
         fetchWithRetry('https://api.anthropic.com/api/oauth/profile'),
       ]);
 
-      // 401 = the stored token is revoked/expired. Drop it from the vault so we
-      // stop polling a dead token every tick and the next rotation re-acquires.
       if (usageRes.status === 401) {
-        log(`[query] Account ${a.email || accountKey(a)} returned 401 on /oauth/usage — invalidating stored token`);
-        deleteStoredToken(a);
+        log(`[query] Account ${a.email || accountKey(a)} returned 401 — credential retained; needsReauth=true`);
         return null;
       }
 
@@ -982,11 +992,7 @@ function readKeychain(
   return m[1].replace(/\\"/g, '"');
 }
 
-function writeKeychain(
-  json,
-  svc = KEYCHAIN_SERVICE,
-  acct = svc === KEYCHAIN_SERVICE ? ACTIVE_KEYCHAIN_ACCOUNT : VAULT_KEYCHAIN_ACCOUNT,
-) {
+function writeKeychainUnlocked(json, svc, acct) {
   if (IS_LINUX) {
     _linuxWriteCred(svc, json);
     return;
@@ -998,6 +1004,13 @@ function writeKeychain(
   } catch {}
   execFileSync('security', ['add-generic-password', '-s', svc, '-a', acct, '-w', json], { timeout: 5000 });
 }
+
+const verifiedWriteCredential = createVerifiedCredentialWriter({
+  write: (account, json, verifiedCapability, svc, acct) => {
+    requireVerifiedCredentialCapability(verifiedCapability, { account, credential: json, destination: svc });
+    return writeKeychainUnlocked(json, svc, acct);
+  },
+});
 
 function tokenExpired(json) {
   try {
@@ -1026,8 +1039,8 @@ function readStoredToken(account) {
   }
 }
 
-function writeStoredToken(account, json) {
-  writeKeychain(json, tokenService(account));
+async function writeStoredToken(account, json) {
+  return verifiedWriteCredential(account, json, tokenService(account), VAULT_KEYCHAIN_ACCOUNT);
 }
 
 // Remove an account's stored OAuth token from the local vault (keychain entry
@@ -1037,6 +1050,10 @@ function writeStoredToken(account, json) {
 // the next rotation to re-acquire a fresh token instead of retrying a dead one
 // forever. Best-effort: a missing entry is not an error.
 function deleteStoredToken(account) {
+  return withAuthWriterLock(() => deleteStoredTokenUnlocked(account));
+}
+
+function deleteStoredTokenUnlocked(account) {
   const svc = tokenService(account);
   if (IS_LINUX) {
     try {
@@ -1367,34 +1384,34 @@ function applyOauthSnapshotToClaudeJson(snapshot) {
   return changed;
 }
 
-function backupCurrentOauthBlocks() {
-  const cj = readClaudeJson();
-  if (!cj) return false;
-  const blocks = extractOauthBlocks(cj);
-  if (!blocks?.oauthAccount?.emailAddress) return false;
-  const payload = {
-    backedUpAt: new Date().toISOString(),
-    email: blocks.oauthAccount.emailAddress,
-    blocks,
-  };
-  writeFileSync(BROWSER_PIN_BACKUP_PATH, JSON.stringify(payload, null, 2));
-  return true;
+function applyOauthSnapshotTransaction(snapshot) {
+  const coordinationKey = readFileSync(
+    readDeploymentConfig(process.env.CLAUDE_AUTH_COORDINATION_CONFIG).approvalKeyPath,
+  );
+  return applyBrowserPinTransaction({
+    sourcePath: CLAUDE_JSON_PATH,
+    destinationPath: CLAUDE_JSON_PATH,
+    sentinelPath: BROWSER_PIN_RECOVERY_PATH,
+    backupDirectory: BROWSER_PIN_BACKUP_DIR,
+    coordinationKey,
+    apply: () => {
+      if (!applyOauthSnapshotToClaudeJson(snapshot)) throw new Error('BROWSER_PIN_APPLY_FAILED');
+    },
+  });
 }
 
 function restoreOauthBlocksFromBackup() {
-  if (!existsSync(BROWSER_PIN_BACKUP_PATH)) return false;
-  try {
-    const backup = JSON.parse(readFileSync(BROWSER_PIN_BACKUP_PATH, 'utf8'));
-    const applied = applyOauthSnapshotToClaudeJson({ blocks: backup.blocks });
-    if (applied) log(`[oauth-snapshot] restored backup oauthAccount=${backup.email}`);
-    try {
-      unlinkSync(BROWSER_PIN_BACKUP_PATH);
-    } catch {}
-    return applied;
-  } catch (e) {
-    log(`[oauth-snapshot] backup restore failed: ${e.message?.slice(0, 100)}`);
-    return false;
-  }
+  const coordinationKey = readFileSync(
+    readDeploymentConfig(process.env.CLAUDE_AUTH_COORDINATION_CONFIG).approvalKeyPath,
+  );
+  const result = restoreBrowserPinBackup({
+    destinationPath: CLAUDE_JSON_PATH,
+    sentinelPath: BROWSER_PIN_RECOVERY_PATH,
+    coordinationKey,
+  });
+  if (result.restored) log('[oauth-snapshot] restored byte-identical pre-pin Claude configuration');
+  else if (result.reason !== 'no-operation') log(`[oauth-snapshot] backup restore retained: ${result.reason}`);
+  return result.restored;
 }
 
 // Fetches Google password AND (optional) TOTP secret from dcli by querying
@@ -1547,7 +1564,7 @@ async function refreshExpiredStoredToken(account, tokenJson) {
       mcpOAuth: {},
     };
     const json = JSON.stringify(updated);
-    writeStoredToken(account, json);
+    await writeStoredToken(account, json);
     return json;
   } catch (e) {
     log(`[refresh] ${accountKey(account)}: refresh error — ${e.message?.slice(0, 100)}`);
@@ -1581,7 +1598,7 @@ async function swapToken(account) {
     if (sourceKey && sourceKey !== accountKey(account)) {
       const swapConfig = readConfig();
       const sourceAccount = swapConfig.accounts.find((a) => accountKey(a) === sourceKey);
-      if (sourceAccount) {
+      if (sourceAccount && automatedAuthAllowed(sourceAccount)) {
         const currentJson = (() => {
           try {
             return readKeychain(KEYCHAIN_SERVICE, ACTIVE_KEYCHAIN_ACCOUNT);
@@ -1593,7 +1610,7 @@ async function swapToken(account) {
           try {
             const parsed = JSON.parse(currentJson);
             const clean = JSON.stringify({ claudeAiOauth: parsed.claudeAiOauth, mcpOAuth: {} });
-            writeKeychain(clean, tokenService(sourceAccount));
+            await writeStoredToken(sourceAccount, clean);
             log(`[save-back] preserved current token for ${sourceKey}`);
           } catch (e) {
             log(`[save-back] skipped: parse/write error — ${e.message?.slice(0, 80)}`);
@@ -1601,8 +1618,10 @@ async function swapToken(account) {
         } else {
           log(`[save-back] skipped: no claudeAiOauth in current main slot`);
         }
-      } else {
+      } else if (!sourceAccount) {
         log(`[save-back] skipped: source account ${sourceKey} not found in config`);
+      } else {
+        log(`[save-back] skipped: automatic credential mutation not approved for ${sourceKey}`);
       }
     } else if (!sourceKey) {
       log(`[save-back] skipped: no active account tracked in state`);
@@ -1623,7 +1642,7 @@ async function swapToken(account) {
       // Unconditional merge: keep all current mcpOAuth entries, only swap claudeAiOauth
       newParsed.mcpOAuth = { ...newParsed.mcpOAuth, ...currentParsed.mcpOAuth };
     }
-    writeKeychain(JSON.stringify(newParsed));
+    await verifiedWriteCredential(account, JSON.stringify(newParsed), KEYCHAIN_SERVICE, ACTIVE_KEYCHAIN_ACCOUNT);
     log('[primary] Wrote token (mcpOAuth merged from current session)');
     return true;
   } catch {}
@@ -1642,29 +1661,29 @@ async function swapToken(account) {
       log('[primary] mcpOAuth preserved via fallback merge');
     }
   } catch {}
-  writeKeychain(outToken);
+  await verifiedWriteCredential(account, outToken, KEYCHAIN_SERVICE, ACTIVE_KEYCHAIN_ACCOUNT);
   return true;
 }
 
 // Save current active token back to the account's vault entry
 // Strips mcpOAuth so vault tokens are clean (mcpOAuth merged at swap time)
-function saveCurrentToken(account) {
+async function saveCurrentToken(account) {
   try {
     const token = readKeychain();
     if (token.includes('claudeAiOauth')) {
       // Store only claudeAiOauth, not mcpOAuth (that's session-specific)
+      let clean = token;
       try {
         const parsed = JSON.parse(token);
-        const clean = { claudeAiOauth: parsed.claudeAiOauth, mcpOAuth: {} };
-        writeStoredToken(account, JSON.stringify(clean));
-      } catch {
-        writeStoredToken(account, token);
-      }
+        clean = JSON.stringify({ claudeAiOauth: parsed.claudeAiOauth, mcpOAuth: {} });
+      } catch {}
+      await writeStoredToken(account, clean);
       log(`Saved token to vault: ${tokenService(account)}`);
       return true;
     }
   } catch (e) {
     log(`Save token failed: ${e.message}`);
+    if (String(e.message || e).startsWith('TOKEN_IDENTITY_')) throw e;
   }
   return false;
 }
@@ -3575,6 +3594,18 @@ async function browserOAuthFallback(account) {
   lastBrowserOAuthCliProxyVerified = false;
   log(`[fallback] Browser OAuth for ${account.email}...`);
 
+  // CLIProxyAPI's login command writes directly into its live auth directory
+  // before this process can verify profile identity. It cannot participate in
+  // the enrollment-only staged writer, so refuse before creating a browser
+  // capture helper, spawning OAuth, clearing cooldowns, or syncing replicas.
+  if (existsSync(CLIPROXYAPI_BINARY) && existsSync(CLIPROXYAPI_CONFIG)) {
+    lastBrowserOAuthUsedCliProxy = true;
+    if (directOAuthWriterAllowed('cliproxy')) throw new Error('UNSAFE_CLIPROXY_WRITER_POLICY');
+    log('[cliproxy] Direct OAuth writer disabled — use reviewed staged enrollment');
+    return false;
+  }
+  if (!directOAuthWriterAllowed('claude-code')) throw new Error('DIRECT_OAUTH_WRITER_DISABLED');
+
   const pid = process.pid;
   const capScript = join(tmpdir(), `claude-url-cap-${pid}.sh`);
   const urlFile = join(tmpdir(), `claude-auth-url-${pid}.txt`);
@@ -3597,7 +3628,7 @@ async function browserOAuthFallback(account) {
     mode: 0o700,
   });
 
-  const useCliProxy = existsSync(CLIPROXYAPI_BINARY) && existsSync(CLIPROXYAPI_CONFIG);
+  const useCliProxy = false;
   lastBrowserOAuthUsedCliProxy = useCliProxy;
   const cliproxyBefore = useCliProxy ? cliproxyAuthSnapshot(account) : null;
   const spawnOAuthWriter = () =>
@@ -4044,31 +4075,8 @@ async function refreshRunningSession(rotatedAccount = null, noBrowser = false) {
     await sleep(500); // 500ms stagger between sessions
   }
 
-  // If Claude relaunches trigger an OAuth browser window (token expired mid-rotation),
-  // reuse the same browser driver that handles the initial auth flow.
-  // Skipped in --no-browser mode (daemon) — token refresh daemon keeps tokens fresh,
-  // so this fallback should never be needed from automatic rotations.
-  if (!noBrowser) {
-    try {
-      await sleep(2000);
-      const driver = await getBrowserDriver(new Set()).catch(() => null);
-      if (driver) {
-        const url = await driver.currentUrl().catch(() => '');
-        if (url && (url.includes('oauth') || url.includes('authorize') || url.includes('claude.ai/login'))) {
-          log(`[session] Detected post-restart OAuth page (${url.substring(0, 60)}) — driving flow`);
-          if (rotatedAccount) {
-            const authOk = await runAuthFlow(driver, rotatedAccount);
-            if (authOk) await maybeScrapeBillingAfterOAuth(driver, rotatedAccount, log);
-          }
-        }
-        try {
-          await driver.close?.();
-        } catch {}
-      }
-    } catch (e) {
-      log(`[session] Post-restart browser check skipped: ${e.message.substring(0, 60)}`);
-    }
-  }
+  // A restarted session that presents OAuth is intentionally left untouched.
+  // This function performs only the browserless token swap above.
 
   log(`[session] Restart complete: ${reachable.length} session(s) cycled`);
 }
@@ -4192,6 +4200,10 @@ async function rotate(targetEmail, opts = {}) {
     log(`Account ${targetEmail} not in config`);
     return false;
   }
+  if (!automatedAuthAllowed(account)) {
+    log(`Credential mutation denied for ${accountKey(account)} — reviewed staged enrollment approval required`);
+    return false;
+  }
   // Magic-link is the ONLY supported auth method for every account/path
   // (quickest; all login emails forward to one inbox). opts.magicLink is now
   // implied — we never fall through to Google OAuth.
@@ -4222,7 +4234,7 @@ async function rotate(targetEmail, opts = {}) {
   if (opts.noBrowser) {
     const trackedAccount = config.accounts.find((a) => accountKey(a) === state.activeAccount);
     if (trackedAccount) {
-      if (!dryRun) saveCurrentToken(trackedAccount);
+      if (!dryRun) await saveCurrentToken(trackedAccount);
       log(`[no-browser] Saved outgoing token for tracked ${accountKey(trackedAccount)}`);
     } else {
       log(`[no-browser] No tracked active account — skipping outgoing save`);
@@ -4274,7 +4286,7 @@ async function rotate(targetEmail, opts = {}) {
           liveAccount = config.accounts.find((a) => a.email === liveEmail);
         }
         if (liveAccount) {
-          if (!dryRun) saveCurrentToken(liveAccount);
+          if (!dryRun) await saveCurrentToken(liveAccount);
           log(
             `${dryRun ? '[DRY-RUN] Would save' : 'Saved'} outgoing token for LIVE account ${accountKey(liveAccount)} (was tracked as ${state.activeAccount || 'none'})`,
           );
@@ -4327,11 +4339,7 @@ async function rotate(targetEmail, opts = {}) {
     ok = true;
   } else {
     ok = await swapToken(account);
-    if (!ok && !opts.noBrowser) {
-      ok = await browserOAuthFallback(account);
-    } else if (!ok) {
-      log('[no-browser] Token swap failed — skipping browser fallback (daemon mode)');
-    }
+    if (!ok) log('[rotation] Token swap failed — browser authentication is disabled; use staged enrollment');
   }
 
   if (!ok) {
@@ -4426,7 +4434,7 @@ async function rotate(targetEmail, opts = {}) {
 
   // Save verified (and possibly refreshed) token to the legacy vault only when
   // the legacy keychain was the OAuth writer.
-  if (verified && !dryRun && !lastBrowserOAuthUsedCliProxy) saveCurrentToken(account);
+  if (verified && !dryRun && !lastBrowserOAuthUsedCliProxy) await saveCurrentToken(account);
   if (verified && dryRun && !lastBrowserOAuthUsedCliProxy) log('[DRY-RUN] Would save verified token to vault');
 
   // Update state — track cumulative window usage per account
@@ -4660,7 +4668,7 @@ async function setup() {
       } catch {}
     }
 
-    if (magicLinkMode && account.autoAuthDisabled === true && !filter) {
+    if (magicLinkMode && !automatedAuthAllowed(account)) {
       console.log(
         `⏭  Skipped: automated reauth disabled (${account.autoAuthDisabledReason || 'manual reauth required'}).`,
       );
@@ -4754,9 +4762,9 @@ async function setup() {
       try {
         const parsed = JSON.parse(token);
         const clean = { claudeAiOauth: parsed.claudeAiOauth, mcpOAuth: {} };
-        writeStoredToken(account, JSON.stringify(clean));
+        await writeStoredToken(account, JSON.stringify(clean));
       } catch {
-        writeStoredToken(account, token);
+        await writeStoredToken(account, token);
       }
       console.log(`✅ Saved to vault: ${tokenService(account)}`);
       results.push({ key, ok: true });
@@ -4906,7 +4914,7 @@ async function showStatus() {
 
 // ── --capture: print current token for Dashlane ───────────────────────────────
 
-function captureCmd(targetEmail = null) {
+async function captureCmd(targetEmail = null) {
   const state = readState();
   const config = readConfig();
   let account;
@@ -4933,7 +4941,7 @@ function captureCmd(targetEmail = null) {
       console.error('No valid OAuth token in active keychain');
       process.exit(1);
     }
-    writeStoredToken(account, token);
+    await writeStoredToken(account, token);
     console.log(`✓ Token captured and saved to keychain: ${tokenService(account)}`);
     console.log(`  Account: ${account.email}${account.label ? ' [' + account.label + ']' : ''}`);
   } catch (e) {
@@ -4946,8 +4954,11 @@ function captureCmd(targetEmail = null) {
 
 const args = process.argv.slice(2);
 
-if (args.includes('--setup')) {
-  await setup();
+if (args.includes('--magic-link') || args.includes('--setup')) {
+  console.error(
+    'Direct Claude browser/magic-link authentication is disabled. Use staged-enrollment.mjs with separate stage and activate approvals.',
+  );
+  process.exit(2);
 } else if (args.includes('--utilization')) {
   // Live utilization query for all accounts
   const config = readConfig();
@@ -5132,7 +5143,7 @@ if (args.includes('--setup')) {
 } else if (args.includes('--capture')) {
   const capToIdx = args.indexOf('--to');
   const captureTo = capToIdx !== -1 && args[capToIdx + 1] ? args[capToIdx + 1] : null;
-  captureCmd(captureTo);
+  await captureCmd(captureTo);
 } else if (args.includes('--pin-browser-active')) {
   // Resolve the currently-active rotating account from state.json and delegate
   // to --pin-browser. This is what the PreToolUse hook calls so the chrome
@@ -5181,75 +5192,79 @@ if (args.includes('--setup')) {
   const ttlIdx = args.indexOf('--ttl');
   const ttlSec = ttlIdx !== -1 && args[ttlIdx + 1] ? parseInt(args[ttlIdx + 1], 10) : 300;
   try {
-    const cfg = readConfig();
-    const acct = cfg.accounts.find((a) => (a.email || '').toLowerCase() === (pinEmail || '').toLowerCase());
-    if (!acct) {
-      log(`[pin-browser] no account matching ${pinEmail} — writing pin sentinel only`);
-    } else if (acquireLock()) {
-      try {
-        const swapped = await swapToken(acct);
-        if (swapped) {
-          const st = readState();
-          st.activeAccount = accountKey(acct);
-          writeState(st);
-          log(`[pin-browser] CLI pinned to ${accountKey(acct)}`);
-        } else {
-          log(
-            `[pin-browser] swapToken false for ${accountKey(acct)} (vault token missing/expired) — likely already active; pinning anyway`,
-          );
-        }
-        // Sync .claude.json oauthAccount/chromeExtension blocks to match.
-        const targetKey = accountKey(acct);
-        const snapshot = loadOauthSnapshot(targetKey) || loadOauthSnapshot(acct.email);
-        const cj = readClaudeJson();
-        const currentEmail = cj?.oauthAccount?.emailAddress?.toLowerCase() || null;
-        const wantEmail = (acct.email || '').toLowerCase();
-        if (currentEmail === wantEmail) {
-          // Already in sync — opportunistically capture as snapshot baseline if missing.
-          if (!snapshot) {
-            captureOauthSnapshot(acct.email);
-          }
-          log(`[pin-browser] .claude.json oauthAccount already=${currentEmail} — no swap needed`);
-        } else if (snapshot) {
-          // Back up the outgoing blocks once per pin window (don't clobber existing backup).
-          if (!existsSync(BROWSER_PIN_BACKUP_PATH)) backupCurrentOauthBlocks();
-          const applied = applyOauthSnapshotToClaudeJson(snapshot);
-          if (applied) {
-            log(
-              `[pin-browser] .claude.json oauthAccount swapped ${currentEmail || 'unknown'} → ${wantEmail}. Restart Claude Code session to apply (chrome bridge reads on startup).`,
-            );
+    await withAuthWriterLock(async () => {
+      const cfg = readConfig();
+      const acct = cfg.accounts.find((a) => (a.email || '').toLowerCase() === (pinEmail || '').toLowerCase());
+      if (!acct) {
+        log(`[pin-browser] no account matching ${pinEmail} — denied without filesystem mutation`);
+        return;
+      } else if (!automatedAuthAllowed(acct)) {
+        log(`[pin-browser] credential mutation denied for ${accountKey(acct)}`);
+        return;
+      } else if (acquireLock()) {
+        try {
+          const swapped = await swapToken(acct);
+          if (swapped) {
+            const st = readState();
+            st.activeAccount = accountKey(acct);
+            writeState(st);
+            log(`[pin-browser] CLI pinned to ${accountKey(acct)}`);
           } else {
-            log(`[pin-browser] snapshot found but apply failed for ${wantEmail}`);
+            log(
+              `[pin-browser] swapToken false for ${accountKey(acct)} (vault token missing/expired) — likely already active; pinning anyway`,
+            );
           }
-          // Ensure the matching Chrome profile is running so its extension
-          // service worker is alive and can authenticate against the swapped
-          // pairedDeviceId. No-op if already running.
-          const profileDir = snapshot.chromeProfileDir || chromeProfileDirFor(targetKey);
-          if (profileDir && !isChromeProfileRunning(profileDir)) {
-            // Navigate to claude.ai/chrome to wake the extension service
-            // worker — it only establishes the native-messaging bridge to
-            // Claude Code when this page loads. Without it, the extension
-            // is installed but dormant and the bridge reports "not connected".
-            launchChromeProfile(profileDir, 'https://claude.ai/chrome');
-            log(`[pin-browser] launched Chrome profile ${profileDir} for ${wantEmail} (@ claude.ai/chrome)`);
+          // Sync .claude.json oauthAccount/chromeExtension blocks to match.
+          const targetKey = accountKey(acct);
+          const snapshot = loadOauthSnapshot(targetKey) || loadOauthSnapshot(acct.email);
+          const cj = readClaudeJson();
+          const currentEmail = cj?.oauthAccount?.emailAddress?.toLowerCase() || null;
+          const wantEmail = (acct.email || '').toLowerCase();
+          if (currentEmail === wantEmail) {
+            // Already in sync — opportunistically capture as snapshot baseline if missing.
+            if (!snapshot) {
+              captureOauthSnapshot(acct.email);
+            }
+            log(`[pin-browser] .claude.json oauthAccount already=${currentEmail} — no swap needed`);
+          } else if (snapshot) {
+            const transaction = applyOauthSnapshotTransaction(snapshot);
+            if (transaction.applied) {
+              log(
+                `[pin-browser] .claude.json oauthAccount swapped ${currentEmail || 'unknown'} → ${wantEmail}. Restart Claude Code session to apply (chrome bridge reads on startup).`,
+              );
+            } else {
+              log(`[pin-browser] snapshot found but apply failed for ${wantEmail}`);
+            }
+            // Ensure the matching Chrome profile is running so its extension
+            // service worker is alive and can authenticate against the swapped
+            // pairedDeviceId. No-op if already running.
+            const profileDir = snapshot.chromeProfileDir || chromeProfileDirFor(targetKey);
+            if (profileDir && !isChromeProfileRunning(profileDir)) {
+              // Navigate to claude.ai/chrome to wake the extension service
+              // worker — it only establishes the native-messaging bridge to
+              // Claude Code when this page loads. Without it, the extension
+              // is installed but dormant and the bridge reports "not connected".
+              launchChromeProfile(profileDir, 'https://claude.ai/chrome');
+              log(`[pin-browser] launched Chrome profile ${profileDir} for ${wantEmail} (@ claude.ai/chrome)`);
+            }
+          } else {
+            log(
+              `[pin-browser] WARNING: no oauth-snapshot for ${targetKey}. Chrome bridge will fail until you: (1) restart Claude Code while keychain is on ${wantEmail}, (2) run: node ${join(__dirname, 'rotate.mjs')} --capture-oauth-snapshot ${wantEmail}`,
+            );
           }
-        } else {
-          log(
-            `[pin-browser] WARNING: no oauth-snapshot for ${targetKey}. Chrome bridge will fail until you: (1) restart Claude Code while keychain is on ${wantEmail}, (2) run: node ${join(__dirname, 'rotate.mjs')} --capture-oauth-snapshot ${wantEmail}`,
-          );
+        } finally {
+          releaseLock();
         }
-      } finally {
-        releaseLock();
+      } else {
+        log('[pin-browser] rotation lock busy — skipping swap, still writing pin sentinel');
       }
-    } else {
-      log('[pin-browser] rotation lock busy — skipping swap, still writing pin sentinel');
-    }
-    // Always (re)write the freeze sentinel so the daemon won't rotate away while
-    // the browser bridge is in use. The hook refreshes this on every tool call.
-    writeFileSync(
-      BROWSER_PIN_PATH,
-      JSON.stringify({ email: pinEmail, until: Date.now() + ttlSec * 1000, ts: Date.now() }),
-    );
+      // Always (re)write the freeze sentinel so the daemon won't rotate away while
+      // the browser bridge is in use. The hook refreshes this on every tool call.
+      writeFileSync(
+        BROWSER_PIN_PATH,
+        JSON.stringify({ email: pinEmail, until: Date.now() + ttlSec * 1000, ts: Date.now() }),
+      );
+    });
   } catch (e) {
     log(`[pin-browser] error (non-fatal): ${(e.message || e).toString().slice(0, 120)}`);
   }
@@ -5259,14 +5274,13 @@ if (args.includes('--setup')) {
   // the daemon once the .browser-pin sentinel's TTL expires. Idempotent: if no
   // backup exists, exits 0 silently.
   try {
-    if (existsSync(BROWSER_PIN_BACKUP_PATH)) {
-      restoreOauthBlocksFromBackup();
-    }
-    if (existsSync(BROWSER_PIN_PATH)) {
-      try {
-        unlinkSync(BROWSER_PIN_PATH);
-      } catch {}
-    }
+    await withAuthWriterLock(async () => {
+      let safeToRelease = true;
+      if (existsSync(BROWSER_PIN_RECOVERY_PATH)) {
+        safeToRelease = restoreOauthBlocksFromBackup();
+      }
+      if (safeToRelease && existsSync(BROWSER_PIN_PATH)) unlinkSync(BROWSER_PIN_PATH);
+    });
   } catch (e) {
     log(`[release-browser-pin] error (non-fatal): ${(e.message || e).toString().slice(0, 120)}`);
   }
@@ -5597,21 +5611,24 @@ if (args.includes('--setup')) {
     console.error('Rotation in progress.');
     process.exit(1);
   }
+  let exitCode = 1;
   try {
-    const ok = await rotate(target, {
-      session,
-      noBrowser,
-      dryRun,
-      magicLink,
-      allowExhausted,
-      bedrockOnExhausted,
-    });
-    process.exit(ok ? 0 : 1);
+    const runRotation = () =>
+      rotate(target, {
+        session,
+        noBrowser,
+        dryRun,
+        magicLink,
+        allowExhausted,
+        bedrockOnExhausted,
+      });
+    const ok = dryRun ? await runRotation() : await withAuthWriterLock(runRotation);
+    exitCode = ok ? 0 : 1;
   } catch (err) {
     log(`FATAL: ${err.message}`);
     notify('Account Rotation', `FAILED: ${err.message}`);
-    process.exit(1);
   } finally {
     releaseLock();
   }
+  process.exit(exitCode);
 }

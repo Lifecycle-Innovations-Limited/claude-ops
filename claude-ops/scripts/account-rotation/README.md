@@ -45,30 +45,133 @@ The skill walks you through:
 
 Each account entry:
 
-| Field                 | Required | Notes                                                                          |
-| --------------------- | -------- | ------------------------------------------------------------------------------ |
-| `email`               | yes      | Login email for the Claude Max account.                                        |
-| `label`               | no       | Disambiguator if you have two configs for the same email (multi-org).          |
-| `orgName` / `orgUuid` | no       | Workspace metadata for accounts in a Claude org.                               |
-| `dashlaneTokenPath`   | no       | If you store the token in Dashlane: `dl://<vault-name>/password`.              |
-| `extraUsageEnabled`   | no       | Set to `true` ONLY if the account has paid overage on. Triggers safety margin. |
-| `capacityMultiplier`  | no       | Override per-account threshold (default 1.0 = standard Max 20x quota).         |
-| `crsAccountName`      | no       | CRS admin account name this vault entry maps to (for crs-token-feed / crs-priority). |
+| Field                         | Required | Notes                                                                                                                   |
+| ----------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `email`                       | yes      | Login email for the Claude Max account.                                                                                 |
+| `label`                       | no       | Disambiguator if you have two configs for the same email (multi-org).                                                   |
+| `orgName` / `orgUuid`         | **yes**  | Exact account organization identity; required for every account, including personal accounts.                           |
+| `automatedCredentialMutation` | no       | Reserved; currently fail-closed even when `true`. Identity verification or configuration never grants write permission. |
+| `dashlaneTokenPath`           | no       | If you store the token in Dashlane: `dl://<vault-name>/password`.                                                       |
+| `extraUsageEnabled`           | no       | Set to `true` ONLY if the account has paid overage on. Triggers safety margin.                                          |
+| `capacityMultiplier`          | no       | Override per-account threshold (default 1.0 = standard Max 20x quota).                                                  |
+| `crsAccountName`              | no       | CRS admin account name this vault entry maps to (for crs-token-feed / crs-priority).                                    |
 
-## Standalone rotate-magic (no CRS)
+## Signed staged Claude enrollment
 
-Most users only need **one account at a time** (or a few seats with the keychain
-rotator). That path does **not** require CRS:
+Direct browser and magic-link reauthentication entrypoints are fail-closed. New
+CLIProxyAPI Claude credentials must be captured outside this plugin, then passed
+to `staged-enrollment.mjs`: first with a short-lived signed `stage` approval for
+the exact candidate SHA-256 and `additive-publish` action, then with a distinct
+signed `activate` approval for the exact `canonical-switch` action.
+The manifest explicitly binds one ID and auth filename to provider, normalized
+email, organization UUID/name, and owner. Approval keys and usage, staging, and
+rollback directories must be owner-only. The CLI intentionally cannot sign
+approvals and prints only redacted receipt metadata.
 
-```bash
-node "$CLAUDE_PLUGIN_ROOT/scripts/account-rotation/rotate-magic.mjs" --to you@example.com
-# or multi-account OAuth capture:
-node "$CLAUDE_PLUGIN_ROOT/scripts/account-rotation/rotate.mjs" --setup --auto --skip-valid
-```
+All direct OAuth writers are denied, including absent/unconfigured accounts,
+Claude Code, manual setup, magic-link, and CLIProxy. Automatic token refresh,
+save-back, active-slot updates, and destructive 401 cleanup are disabled;
+`automatedCredentialMutation` alone cannot authorize them. Denied runs do not
+launch authentication subprocesses or change credential storage. A 401 retains credential bytes and reports
+`needsReauth`/status for a separately approved staged enrollment. A successful
+exact identity check proves which credential was observed; it is not write
+authorization.
 
-Unattended captcha cascade (visual → desktop-act → VNC) lives in
-`captcha-helper.mjs`, `visual-captcha-solver.mjs`, `captcha-cascade.mjs`. See
-`CAPTCHA-CASCADE.md`.
+Legacy browser-pin apply, publication, and restore are disabled. A portable
+filesystem compare-and-swap cannot prove that a nonparticipating writer did not
+replace the destination between validation and rename. Existing recovery
+evidence is retained for operator inspection; this code never uses it to
+overwrite or delete credential state.
+
+Runtime invocation accepts exactly `--config`, `--entry`, `--approval`, and, for
+stage only, `--candidate`. Activate additionally requires explicit absolute
+owner-only `--inventory` and `--canary` JSON paths; there are no default evidence
+paths. The owner-only deployment config pins every trust
+root, the canonical operation lock, environment/operator, and a finite approval
+TTL no greater than 15 minutes. Inventory and canary use strict JSON and exact
+schemas. The signed switch approval binds their immutable raw SHA-256 digests,
+the manifest and candidate digests, exact credential ID and complete provider,
+email, organization UUID/name, owner and destination identity, the prior target
+digest (or explicit absence), expiry, and nonce. Canary evidence must select the
+exact candidate and report both `noFallback: true` and `pass: true`; malformed,
+incomplete, stale, fallback, or mismatched evidence fails closed.
+
+`stage` validates without changing active auth, manifest, quarantine, cooldowns,
+services, or replicas. `activate` compare-and-swaps the manifest digest, replaces
+only the approved auth filename, and restores its backup if verification fails.
+The old credential/config backup remains until rollback verification and the
+existing bounded cleanup completes. This tool has no invalidate, revoke, or
+delete operation and performs none implicitly. Any later invalidation requires
+a separate fresh signed permission handled by a different authorized tool; a
+stage or switch approval never authorizes it.
+
+Activation uses an authenticated phase journal beside the operation lock. The
+journal binds the original signed exact-switch payload and raw evidence digests,
+so recovery proves the same authorization rather than reinterpreting current
+state. After
+an interrupted activation, run `staged-enrollment.mjs recover --config <path>`;
+other writers refuse while that journal is pending. A stale lock is reclaimed
+only when its HMAC is valid, it names this host, and its PID is demonstrably
+dead. Malformed and cross-host locks require operator investigation.
+
+Enabled first-party credential writers must set
+`CLAUDE_AUTH_COORDINATION_CONFIG` to this deployment config and
+`CLAUDE_ROTATOR_CONFIG` to the reviewed runtime inventory installed by the same
+plan. They share one lock and one exact account identity source.
+CLIProxyAPI, remote sync, and other external writers cannot participate in the
+local lock and must remain operationally quiesced/fenced during activation.
+Successful switch or recovery converts the temporary backup into a retained,
+authenticated rollback record. A separate fresh signed `canonical-rollback`
+approval is required to restore it; approval use markers remain durable
+authenticated replay evidence.
+
+### Coordination rollout and migration
+
+Provisioning is offline and never reads or writes credentials. First update the
+authoritative rotator inventory so all nine Claude accounts have exact `email`,
+`orgUuid`, and `orgName`; legacy inventories missing either organization field
+are refused before any file is written. Supply the reviewed intended 15-entry
+manifest separately with `--manifest-source`; plan requires its nine Claude
+identities to exactly equal the inventory and digest-binds its raw bytes. Run
+`provision-coordination.mjs plan` with explicit absolute manifest target,
+active, staging, usage, rollback, quarantine, lock, trust, config, Linux/macOS
+environment, `--runtime-inventory` target, `--runtime-home` for the service
+account home embedded in reviewed launch artifacts, an owner-only
+`--consumer-inventory-source` reviewed JSON file plus
+`--authoritative-consumer-inventory` target outside mutable credential roots,
+and rendered service paths. The consumer file has exact schema
+`{"version":1,"consumers":[{"id","type","path","credentialId","destination"}]}`;
+IDs and normalized absolute paths are unique and every credential/destination
+pair must match the reviewed manifest. Review
+and save its secret-free JSON output, then run `apply --plan <file>
+--expected-digest <digest>`.
+
+Apply refuses a changed plan, manifest, inventory binding, or mismatched
+existing trust/config file and is idempotent for a valid installation. Its
+fsynced apply journal supports fresh-process completion of the same reviewed
+plan; `rollback --plan <file> --expected-digest <digest>` removes only targets
+that were absent when that apply began. Run `preflight --plan <file>
+--expected-digest <digest>` before enabling each writer, then roll out consumers
+one at a time. Every service/manual invocation must receive both generated
+environment variables; an omitted coordination environment fails closed before
+any credential mutation, and a divergent inventory fails exact identity checks.
+Activation's submitted inventory must equal the authoritative consumers for the
+selected credential exactly. Canary evidence contains exactly one passing,
+no-fallback result per authoritative consumer and binds its ID, absolute path,
+candidate digest, credential ID, and destination; both raw evidence digests are
+bound by the signed activation approval.
+
+Rollback means stopping before service activation and removing only artifacts
+created by the failed apply; injected or real apply failures do this
+automatically. After consumers are active, retain the key/config and roll back
+service definitions to the prior reviewed version—never regenerate or overwrite
+the coordination key. Trust files must remain outside all mutable auth roots.
+
+## Legacy rotate-magic (disabled)
+
+`rotate-magic.mjs`, browser setup modes, refresh emergency fallback, and the
+autoloop no longer dispatch authentication. They return a staged-enrollment
+handoff instead; no environment flag restores the old write path.
 
 ## CRS pool (optional)
 
@@ -103,18 +206,18 @@ Override the keychain account name via `CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT` if you 
 
 ## Files
 
-| File                  | Purpose                                                                   |
-| --------------------- | ------------------------------------------------------------------------- |
-| `rotate.mjs`          | Main rotation logic. CLI: `--status`, `--utilization`, `--to`, `--setup`. |
-| `rotate-magic.mjs`    | Thin entry → `rotate.mjs --magic-link` (standalone reauth, no CRS).       |
-| `captcha-cascade.mjs` | Post-verify captcha orchestration (token + visual + desktop-act + VNC).   |
-| `captcha-helper.mjs`  | Pluggable token captcha solvers + residential wait.                       |
-| `visual-captcha-solver.mjs` | Vision tile clicks, desktop-act, VNC layers.                        |
-| `bright-data-cascade.mjs` | Optional Bright Data proxy tiers for solver IP alignment.             |
-| `daemon.mjs`          | launchd-managed monitor. Polls every 15s, rotates at 80% utilization.     |
-| `ai-brain.mjs`        | Claude Haiku fallback for unexpected OAuth pages.                         |
-| `force-rotate.sh`     | Out-of-band rotation when Claude Code is unreachable.                     |
-| `config.example.json` | Schema reference. Copy to `config.json` and populate.                     |
+| File                        | Purpose                                                                   |
+| --------------------------- | ------------------------------------------------------------------------- |
+| `rotate.mjs`                | Main rotation logic. CLI: `--status`, `--utilization`, `--to`, `--setup`. |
+| `rotate-magic.mjs`          | Thin entry → `rotate.mjs --magic-link` (standalone reauth, no CRS).       |
+| `captcha-cascade.mjs`       | Post-verify captcha orchestration (token + visual + desktop-act + VNC).   |
+| `captcha-helper.mjs`        | Pluggable token captcha solvers + residential wait.                       |
+| `visual-captcha-solver.mjs` | Vision tile clicks, desktop-act, VNC layers.                              |
+| `bright-data-cascade.mjs`   | Optional Bright Data proxy tiers for solver IP alignment.                 |
+| `daemon.mjs`                | launchd-managed monitor. Polls every 15s, rotates at 80% utilization.     |
+| `ai-brain.mjs`              | Claude Haiku fallback for unexpected OAuth pages.                         |
+| `force-rotate.sh`           | Out-of-band rotation when Claude Code is unreachable.                     |
+| `config.example.json`       | Schema reference. Copy to `config.json` and populate.                     |
 
 ## Triggers
 

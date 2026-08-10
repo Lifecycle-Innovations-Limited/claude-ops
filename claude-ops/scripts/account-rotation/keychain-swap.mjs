@@ -18,6 +18,12 @@
  */
 
 import { execFileSync, spawnSync } from 'child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import { closeSync, constants, fsyncSync, mkdirSync, openSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { requireWriterCapability } from './auth-writer-coordination.mjs';
+import { createVerifiedCredentialWriter, requireVerifiedCredentialCapability } from './verified-credential-write.mjs';
 
 const IS_LINUX = process.platform === 'linux';
 // Top-level await: pre-load vault on Linux so all exports stay synchronous.
@@ -27,6 +33,7 @@ const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const KEYCHAIN_ACCOUNT =
   process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || process.env.LOGNAME || 'claude-ops';
 const TOKEN_PREFIX = 'Claude-Rotation';
+const restorations = new WeakMap();
 
 function accountKey(email, label) {
   return label ? `${email}|${label}` : email;
@@ -52,9 +59,9 @@ function readEntry(svc) {
   return m[1].replace(/\\"/g, '"');
 }
 
-function writeEntry(svc, json) {
+function writeEntryUnlocked(svc, json, capability) {
   if (IS_LINUX) {
-    _vault.writeEntry(svc, json);
+    _vault.writeEntryCoordinated(svc, json, capability);
     return;
   }
   try {
@@ -67,6 +74,31 @@ function writeEntry(svc, json) {
   });
 }
 
+function writeVerifiedEntry(account, json, verifiedCapability, svc) {
+  if (IS_LINUX) {
+    // The Linux vault validates the exact account/bytes/destination binding and
+    // obtains the still-live outer writer capability from the authorization.
+    _vault.writeEntryIdentityPreserving(account, svc, json, undefined, verifiedCapability);
+    return;
+  }
+  const writerCapability = requireVerifiedCredentialCapability(verifiedCapability, {
+    account,
+    credential: json,
+    destination: svc,
+  });
+  writeEntryUnlocked(svc, json, writerCapability);
+}
+
+const verifiedEntryWrite = createVerifiedCredentialWriter({ write: writeVerifiedEntry });
+const verifiedReadOnly = createVerifiedCredentialWriter({
+  write: () => undefined,
+  destination: (_account, _credential, destination) => destination,
+});
+
+function digest(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
 // ── Public exports ───────────────────────────────────────────────────────────
 
 export function readCurrentToken() {
@@ -75,8 +107,8 @@ export function readCurrentToken() {
   return json;
 }
 
-export function writeCurrentToken(json) {
-  writeEntry(KEYCHAIN_SERVICE, json);
+export function writeCurrentToken() {
+  throw new Error('LEGACY_CREDENTIAL_WRITE_FORBIDDEN');
 }
 
 export function readStoredToken(email, label) {
@@ -88,34 +120,18 @@ export function readStoredToken(email, label) {
  * Returns the previous (now-replaced) token JSON so the caller can restore it.
  * Throws if the target email has no stored token or it's malformed.
  */
-export function swapToEmail(email, label) {
-  const target = readStoredToken(email, label);
-  if (!target) throw new Error(`No stored token for ${accountKey(email, label)} — run rotate.mjs --setup first`);
-  // Validate target token is well-formed before clobbering current
-  try {
-    const parsed = JSON.parse(target);
-    if (!parsed.claudeAiOauth) throw new Error('missing claudeAiOauth');
-  } catch (e) {
-    throw new Error(`Target token for ${email} is malformed: ${e.message}`);
-  }
-  const previous = readCurrentToken();
-  // Preserve any current mcpOAuth (Figma, Shake, etc.) across the swap.
-  try {
-    const cur = JSON.parse(previous);
-    const tgt = JSON.parse(target);
-    if (cur.mcpOAuth && Object.keys(cur.mcpOAuth).length > 0) {
-      tgt.mcpOAuth = { ...tgt.mcpOAuth, ...cur.mcpOAuth };
-      writeCurrentToken(JSON.stringify(tgt));
-      return previous;
-    }
-  } catch {
-    /* fallthrough to plain swap */
-  }
-  writeCurrentToken(target);
-  return previous;
+export function swapToEmail() {
+  throw new Error('LEGACY_CREDENTIAL_WRITE_FORBIDDEN');
 }
 
-export function restoreToken(prevJson) {
-  if (!prevJson) return;
-  writeCurrentToken(prevJson);
+export async function swapToAccountCoordinated(account, previousAccount, capability) {
+  throw new Error('SIGNED_CREDENTIAL_MUTATION_APPROVAL_REQUIRED');
+}
+
+export function restoreToken() {
+  throw new Error('LEGACY_CREDENTIAL_WRITE_FORBIDDEN');
+}
+
+export async function restoreTokenCoordinated(authorization, prevJson, capability) {
+  throw new Error('SIGNED_CREDENTIAL_MUTATION_APPROVAL_REQUIRED');
 }

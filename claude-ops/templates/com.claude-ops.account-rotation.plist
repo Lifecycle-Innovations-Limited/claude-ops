@@ -2,7 +2,7 @@
 <!--
   Multi-account Claude Max rotation daemon (claude-ops plugin).
 
-  This file is a TEMPLATE. The setup wizard substitutes ${HOME} and installs
+  This file is a TEMPLATE. The reviewed coordination provisioner renders absolute paths and installs
   the rendered copy to ~/Library/LaunchAgents/com.claude-ops.account-rotation.plist
   before running:
 
@@ -37,6 +37,10 @@
     <string>1</string>
     <key>HOME</key>
     <string>${HOME}</string>
+    <key>CLAUDE_AUTH_COORDINATION_CONFIG</key>
+    <string>__CLAUDE_AUTH_COORDINATION_CONFIG__</string>
+    <key>CLAUDE_ROTATOR_CONFIG</key>
+    <string>__CLAUDE_ROTATOR_CONFIG__</string>
   </dict>
 
   <key>RunAtLoad</key>

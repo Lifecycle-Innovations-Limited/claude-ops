@@ -5,6 +5,8 @@ Wants=network-online.target crs-compose.service
 
 [Service]
 Type=simple
+PassEnvironment=CLAUDE_AUTH_COORDINATION_CONFIG CLAUDE_ROTATOR_CONFIG
+ExecCondition=/bin/sh -c 'test -n "$CLAUDE_AUTH_COORDINATION_CONFIG" && test -n "$CLAUDE_ROTATOR_CONFIG"'
 # Prefer installed plugin tree; override with EnvironmentFile if needed.
 Environment=CLAUDE_PLUGIN_ROOT=%h/.claude/plugins/cache/ops-marketplace/ops/current
 Environment=CLAUDE_ENABLE_FLEET_RECOVERY=0

@@ -4,7 +4,6 @@
 # Usage: $CLAUDE_PLUGIN_ROOT/scripts/account-rotation/force-rotate.sh [target-email]
 #
 # Also available as: force-rotate (shell alias)
-# Magic-link variant: rotate-magic = node rotate.mjs --magic-link --force --to <email>
 #
 # === ROTATION SYSTEM OVERVIEW ===
 # Files in this directory:
@@ -46,10 +45,8 @@
 #   rm -f ~/.claude/plugins/data/ops/account-rotation/.rotating
 #   launchctl kickstart -k gui/$(id -u)/com.claude-ops.account-rotation
 #
-# Behavior: --force kills any stuck competing rotate.mjs and bypasses the lock.
-# We try the fast --no-browser path first (works when refresh tokens are valid);
-# if that fails we fall back to the full browser OAuth flow. Both are guarded
-# by a watchdog so the rotation can never hang indefinitely.
+# Behavior: this command only performs the browserless token swap. A failure
+# requires separately approved staged enrollment; it never retries browser auth.
 
 set -u
 DEFAULT_ROT_DIR="${HOME}/.claude/plugins/data/ops/account-rotation"
@@ -130,21 +127,19 @@ if run_with_watchdog node "$DIR/rotate.mjs" --force --no-browser --reload-agents
   FAST_OK=1
 else
   FAST_OK=0
-  echo "⚠  Fast path failed — falling back to browser OAuth"
-  run_with_watchdog node "$DIR/rotate.mjs" --force --reload-agents --session ${TARGET_ARG[@]+"${TARGET_ARG[@]}"}
+  echo "⚠  Browserless swap failed — signed staged enrollment is required" >&2
 fi
 
 # Show new status
 echo ""
 node "$DIR/rotate.mjs" --status 2>&1 | head -40
 
-# macOS notification
-osascript -e 'display notification "Account rotated — running agents reloaded onto new token" with title "Claude Rotation"' 2>/dev/null
-
 echo ""
 if [ "$FAST_OK" -eq 1 ]; then
+  osascript -e 'display notification "Account rotated — running agents reloaded onto new token" with title "Claude Rotation"' 2>/dev/null
   echo "✅ Done (fast path). Running bg agents reloaded onto new token."
 else
-  echo "✅ Done (browser fallback). Running bg agents reloaded onto new token."
+  echo "❌ No account was rotated; browser authentication was not attempted."
+  exit 1
 fi
 echo "   (Up to 4 agents respawned; any remainder will be picked up on next rotation pass.)"

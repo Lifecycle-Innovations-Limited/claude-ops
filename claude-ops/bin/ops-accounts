@@ -281,11 +281,8 @@ PY
         ;;
       claude)
         [[ -n "$email" ]] || { echo "usage: ops-accounts reauth claude <email>"; exit 2; }
-        if [[ -f "$ROT/rotate-magic.mjs" ]]; then
-          node "$ROT/rotate-magic.mjs" --to "$email" --force
-        else
-          node "$ROT/rotate.mjs" --magic-link --to "$email"
-        fi
+        echo "Claude direct browser/magic-link reauthentication is disabled. Use staged-enrollment.mjs with separate stage and activate approvals." >&2
+        exit 2
         ;;
       *)
         echo "usage: ops-accounts reauth grok|claude <email>"; exit 2 ;;
