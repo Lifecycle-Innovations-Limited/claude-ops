@@ -147,10 +147,37 @@ and save its secret-free JSON output, then run `apply --plan <file>
 --expected-digest <digest>`.
 
 Apply refuses a changed plan, manifest, inventory binding, or mismatched
-existing trust/config file and is idempotent for a valid installation. Its
-fsynced apply journal supports fresh-process completion of the same reviewed
-plan; `rollback --plan <file> --expected-digest <digest>` removes only targets
-that were absent when that apply began. Run `preflight --plan <file>
+existing trust/config file. An absent-trust bootstrap plan is strictly one-shot:
+after success, or after any observable journal/progress (including SIGKILL), it
+returns `BOOTSTRAP_TRUST_REVIEW_REQUIRED` or
+`BOOTSTRAP_JOURNAL_REVIEW_REQUIRED`; a retained owner-only bootstrap-attempt
+marker also blocks repeated apply, rollback, and activation with the reviewed
+absence. Inspect the
+retained preparation, detached evidence, and journal records; establish or
+verify the owner-only trust root; then generate and review a **new present-trust
+plan**. That plan pins the trust descriptor/digest and any exact recovery journal
+state/topology and stale provision-lock descriptor and is the only plan permitted
+to finish, validate, or roll back the
+bounded interrupted transaction. `TRUST_SNAPSHOT_CHANGED`,
+`INVALID_PROVISION_JOURNAL`, `INVALID_PROVISION_RECEIPT`, and
+`PROVISION_RECOVERY_UNCERTAIN` require stopping writers, preserving all evidence,
+and generating another reviewed plan only after the descriptor discrepancy has
+been investigated. Never substitute a bootstrap key plus receipt: absent trust
+and receipts do not authenticate one another.
+
+Publication uses fsynced owner-only preparation files and no-replace hard links.
+Canonical names are detached atomically to uniquely named evidence before their
+descriptor is checked; the implementation does not claim conditional
+unlink-by-path and has no privileged broker. Exact digest-derived preparation
+aliases and detached tombstones are retained, are not auto-garbage-collected,
+and increase disk/inode usage. Readers permit only the explicitly bounded link
+topology and reject unrelated hardlinks. Operators must inventory and archive or
+remove evidence only through a separate reviewed maintenance procedure; routine
+provisioning does not authorize evidence garbage collection.
+
+Tests use temporary fixtures and require `CLAUDE_COORDINATION_TESTING=1` or
+`CLAUDE_STAGED_ENROLLMENT_TESTING=1` for fault hooks; they perform no live
+credential, service, config, or provisioning action. Run `preflight --plan <file>
 --expected-digest <digest>` before enabling each writer, then roll out consumers
 one at a time. Every service/manual invocation must receive both generated
 environment variables; an omitted coordination environment fails closed before

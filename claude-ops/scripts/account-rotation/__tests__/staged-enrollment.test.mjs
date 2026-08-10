@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { hostname } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
@@ -878,7 +878,7 @@ for (const phase of [
   const receipt = JSON.parse(recovered.stdout);
   assert.equal(receipt.recovered, true);
   assert.equal(readFileSync(target, 'utf8'), phase === 'COMMITTED' ? JSON.stringify(CANDIDATE) : old);
-  assert.equal(readdirSync(f.paths.rollback).length, phase === 'COMMITTED' ? 2 : 0);
+  assert.equal(readdirSync(f.paths.rollback).length, phase === 'COMMITTED' ? 3 : 0);
   if (phase === 'COMMITTED') {
     const beforeRollback = readFileSync(target);
     const rolledBack = spawnSync(
@@ -889,7 +889,7 @@ for (const phase of [
     assert.notEqual(rolledBack.status, 0);
     assert.match(rolledBack.stderr, /INVALID_ARGUMENTS/);
     assert.deepEqual(readFileSync(target), beforeRollback, 'unsigned rollback performs zero writes');
-    assert.equal(readdirSync(f.paths.rollback).length, 2, 'unsigned rollback retains all evidence');
+    assert.equal(readdirSync(f.paths.rollback).length, 3, 'unsigned rollback retains all evidence');
   }
   const again = recoverEnrollment({ configPath: f.configPath });
   assert.equal(again.recovered, false);
@@ -953,7 +953,10 @@ for (const phase of [
   assert.equal(killed.signal, 'SIGKILL', killed.stderr);
   assert.equal(recoverEnrollment({ configPath: f.configPath }).outcome, 'rolled-back');
   assert.equal(readFileSync(target, 'utf8'), old);
-  assert.deepEqual(readdirSync(f.paths.rollback), []);
+  assert.ok(
+    readdirSync(f.paths.rollback).every((name) => name.startsWith('.evidence-') || name.includes('.preparation-')),
+    'rollback cleanup retains only authenticated evidence and deterministic preparations',
+  );
 }
 
 // Recovery is bound to the authenticated raw M0 digest and complete entry
@@ -1181,7 +1184,7 @@ for (const hadTarget of [false, true]) {
   assert.equal(killed.signal, 'SIGKILL', killed.stderr);
   assert.equal(recoverEnrollment({ configPath: f.configPath }).outcome, 'committed');
   assert.equal(readFileSync(target, 'utf8'), JSON.stringify(CANDIDATE));
-  assert.equal(readdirSync(f.paths.rollback).length, hadTarget ? 2 : 0);
+  assert.equal(readdirSync(f.paths.rollback).length, hadTarget ? 3 : 0);
   assert.equal(recoverEnrollment({ configPath: f.configPath }).recovered, false);
 }
 
@@ -1260,7 +1263,7 @@ for (const fault of ['THROW:PUBLICATION_FIRST_DIR_FSYNC', 'THROW:PUBLICATION_CLE
     assert.equal(existsSync(join(f.paths.usage, `${approval.payload.id}.${approval.payload.nonce}.used`)), true);
     refuses(
       () => stageEnrollment({ ...f.common, candidatePath: f.candidatePath }),
-      'APPROVAL_REPLAY|STAGE_TARGET_EXISTS|DUPLICATE_IDENTITY',
+      'APPROVAL_REPLAY|STAGE_TARGET_EXISTS|DUPLICATE_IDENTITY|INSECURE_TRUST_ROOT',
     );
   }
   assert.equal(existsSync(`${f.common.operationLockPath}.publication`), false);
@@ -1286,13 +1289,13 @@ for (const boundary of ['STAGED_LINK', 'MARKER_LINK']) {
   assert.equal(recovered.status, 0, `${boundary}: ${recovered.stderr}`);
   assert.match(
     recovered.stdout,
-    boundary === 'STAGED_LINK' ? /^ok$/ : /APPROVAL_REPLAY|DUPLICATE_IDENTITY|STAGE_TARGET_EXISTS/,
+    boundary === 'STAGED_LINK' ? /^ok$/ : /APPROVAL_REPLAY|DUPLICATE_IDENTITY|STAGE_TARGET_EXISTS|INSECURE_TRUST_ROOT/,
   );
   assert.equal(existsSync(`${f.common.operationLockPath}.publication`), false);
 }
 
-// A failed post-link durability step never leaves unauthorized staged bytes or
-// a replay marker behind when cleanup can be proven durable.
+// A failed post-link durability step removes only descriptor-pinned staged
+// bytes. A published signed marker remains authoritative and is never deleted.
 for (const fault of ['THROW:STAGE_AFTER_LINK', 'THROW:MARKER_AFTER_LINK']) {
   const f = fixture();
   const approval = f.approval('stage');
@@ -1309,11 +1312,14 @@ for (const fault of ['THROW:STAGE_AFTER_LINK', 'THROW:MARKER_AFTER_LINK']) {
     else process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT = priorFault;
   }
   assert.equal(existsSync(join(f.paths.staging, ENTRY.authFilename)), false);
-  assert.equal(existsSync(join(f.paths.usage, `${approval.payload.id}.${approval.payload.nonce}.used`)), false);
+  assert.equal(
+    existsSync(join(f.paths.usage, `${approval.payload.id}.${approval.payload.nonce}.used`)),
+    fault === 'THROW:MARKER_AFTER_LINK',
+  );
 }
 
-// An ambiguous activation-marker publication is resolved by a fresh recovery
-// process. When cleanup removed the marker, the same approval remains usable.
+// An ambiguous activation-marker publication is resolved fail closed: the
+// signed marker remains authoritative and the approval cannot be reused.
 {
   const f = fixture();
   f.approval('stage');
@@ -1331,13 +1337,13 @@ for (const fault of ['THROW:STAGE_AFTER_LINK', 'THROW:MARKER_AFTER_LINK']) {
     if (priorFault === undefined) delete process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT;
     else process.env.CLAUDE_STAGED_ENROLLMENT_TEST_FAULT = priorFault;
   }
-  assert.equal(existsSync(join(f.paths.usage, `${approval.payload.id}.${approval.payload.nonce}.used`)), false);
+  assert.equal(existsSync(join(f.paths.usage, `${approval.payload.id}.${approval.payload.nonce}.used`)), true);
   assert.equal(recoverEnrollment({ configPath: f.configPath }).outcome, 'rolled-back');
-  assert.equal(activateEnrollment(f.common).ok, true);
+  refuses(() => activateEnrollment(f.common), 'APPROVAL_REPLAY|ACTIVATION_RECOVERY_REQUIRED');
 }
 
-// A fresh recovery process removes the one expected activation marker temp
-// hardlink left by SIGKILL after link(2), then validates the canonical marker.
+// Fresh recovery validates the exact deterministic marker preparation alias
+// left by SIGKILL after link(2) and retains it as bounded evidence.
 {
   const f = fixture();
   f.approval('stage');
@@ -1355,13 +1361,19 @@ for (const fault of ['THROW:STAGE_AFTER_LINK', 'THROW:MARKER_AFTER_LINK']) {
   });
   assert.equal(killed.signal, 'SIGKILL', killed.stderr);
   const marker = join(f.paths.usage, `${approval.payload.id}.${approval.payload.nonce}.used`);
-  assert.equal(readdirSync(f.paths.usage).filter((name) => name.endsWith('.tmp')).length, 1);
+  assert.equal(
+    readdirSync(f.paths.usage).filter((name) => name.startsWith(`${basename(marker)}.preparation-`)).length,
+    1,
+  );
   const recoveryScript = `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>process.stdout.write(JSON.stringify(m.recoverEnrollment({configPath:${JSON.stringify(f.configPath)}}))))`;
   const recovered = spawnSync(process.execPath, ['--input-type=module', '-e', recoveryScript], { encoding: 'utf8' });
   assert.equal(recovered.status, 0, recovered.stderr);
   assert.equal(JSON.parse(recovered.stdout).outcome, 'rolled-back');
   assert.equal(existsSync(marker), true);
-  assert.equal(readdirSync(f.paths.usage).filter((name) => name.endsWith('.tmp')).length, 0);
+  assert.equal(
+    readdirSync(f.paths.usage).filter((name) => name.startsWith(`${basename(marker)}.preparation-`)).length,
+    1,
+  );
   assert.equal(recoverEnrollment({ configPath: f.configPath }).recovered, false);
 }
 
@@ -1552,7 +1564,10 @@ for (const mutate of [
   f.approval('stage');
   stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
   unlinkSync(join(f.paths.staging, ENTRY.authFilename));
-  refuses(() => stageEnrollment({ ...f.common, candidatePath: f.candidatePath }), 'APPROVAL_REPLAY');
+  refuses(
+    () => stageEnrollment({ ...f.common, candidatePath: f.candidatePath }),
+    'APPROVAL_REPLAY|INSECURE_TRUST_ROOT|PUBLICATION_RECOVERY_UNCERTAIN',
+  );
 }
 {
   const f = fixture();
@@ -2406,6 +2421,80 @@ for (const asynchronous of [false, true]) {
 
 // Authorized rollback is recoverable in a fresh process at every durable
 // intent/switch/cleanup boundary without reusing the external approval.
+
+// A retained staging proof is re-homed as the rollback anchor rather than
+// copied to a third link, so a second complete rotation remains valid.
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  f.approval('activate');
+  activateEnrollment(f.common);
+
+  const secondCandidate = { ...CANDIDATE, access_token: 'second-rotation-access-token' };
+  writeFileSync(f.candidatePath, JSON.stringify(secondCandidate), { mode: 0o600 });
+  const secondDigest = sha256(readFileSync(f.candidatePath));
+  const secondCanary = JSON.parse(readFileSync(f.canaryPath, 'utf8'));
+  secondCanary.results.forEach((result) => (result.candidateDigest = secondDigest));
+  writeFileSync(f.canaryPath, JSON.stringify(secondCanary), { mode: 0o600 });
+  f.approval('stage', { id: 'second-stage', nonce: 'second-stage-nonce', candidateDigest: secondDigest });
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  f.approval('activate', {
+    id: 'second-activate',
+    nonce: 'second-activate-nonce',
+    candidateDigest: secondDigest,
+    canaryDigest: sha256(readFileSync(f.canaryPath)),
+  });
+  activateEnrollment(f.common);
+  assert.equal(
+    sha256(readFileSync(join(f.paths.active, ENTRY.authFilename))),
+    secondDigest,
+    'second rotation becomes canonical',
+  );
+}
+
+{
+  const f = fixture();
+  f.approval('stage');
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  f.approval('activate');
+  activateEnrollment(f.common);
+  const active = join(f.paths.active, ENTRY.authFilename);
+  const activeDigest = sha256(readFileSync(active));
+  const activeProof = `${join(f.paths.staging, ENTRY.authFilename)}.preparation-${activeDigest}`;
+  const secondCandidate = { ...CANDIDATE, access_token: 'proof-race-second-token' };
+  writeFileSync(f.candidatePath, JSON.stringify(secondCandidate), { mode: 0o600 });
+  const secondDigest = sha256(readFileSync(f.candidatePath));
+  const secondCanary = JSON.parse(readFileSync(f.canaryPath, 'utf8'));
+  secondCanary.results.forEach((result) => (result.candidateDigest = secondDigest));
+  writeFileSync(f.canaryPath, JSON.stringify(secondCanary), { mode: 0o600 });
+  f.approval('stage', { id: 'proof-race-stage', nonce: 'proof-race-stage-nonce', candidateDigest: secondDigest });
+  stageEnrollment({ ...f.common, candidatePath: f.candidatePath });
+  const activation = f.approval('activate', {
+    id: 'proof-race-activate',
+    nonce: 'proof-race-activate-nonce',
+    candidateDigest: secondDigest,
+    canaryDigest: sha256(readFileSync(f.canaryPath)),
+  });
+  refuses(
+    () =>
+      activateEnrollment({
+        ...f.common,
+        beforeCas: () => {
+          unlinkSync(activeProof);
+          writeFileSync(activeProof, readFileSync(active), { mode: 0o600 });
+        },
+      }),
+    'ACTIVE_TARGET_CAS_FAILED',
+  );
+  assert.equal(sha256(readFileSync(active)), activeDigest, 'proof replacement cannot switch the active target');
+  assert.equal(
+    existsSync(join(f.paths.usage, `${activation.payload.id}.${activation.payload.nonce}.used`)),
+    false,
+    'proof replacement is rejected before approval consumption',
+  );
+}
+
 for (const fault of [
   'SIGKILL:ROLLBACK_PREPARING_INTENT',
   'SIGKILL:ROLLBACK_TEMP_LINK',
@@ -2437,7 +2526,10 @@ for (const fault of [
   assert.equal(recovered.status, 0, `${fault}: ${recovered.stderr}`);
   assert.equal(JSON.parse(recovered.stdout).recovered, true);
   assert.equal(readFileSync(target, 'utf8'), old);
-  assert.deepEqual(readdirSync(f.paths.rollback), []);
+  assert.ok(
+    readdirSync(f.paths.rollback).every((name) => name.startsWith('.evidence-') || name.includes('.preparation-')),
+    `${fault}: rollback retains only authenticated evidence`,
+  );
 }
 
 console.log('staged-enrollment.test.mjs: ok');
