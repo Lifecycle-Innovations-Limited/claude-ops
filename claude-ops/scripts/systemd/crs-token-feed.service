@@ -5,6 +5,8 @@ Wants=crs-compose.service
 
 [Service]
 Type=oneshot
+PassEnvironment=CLAUDE_AUTH_COORDINATION_CONFIG CLAUDE_ROTATOR_CONFIG
+ExecCondition=/bin/sh -c 'test -n "$CLAUDE_AUTH_COORDINATION_CONFIG" && test -n "$CLAUDE_ROTATOR_CONFIG"'
 Environment=CRS_BASE=http://127.0.0.1:3005
 ExecStart=%h/.claude/scripts/account-rotation/crs-token-feed.sh
 StandardOutput=append:%h/.claude/logs/crs-token-feed.systemd.log

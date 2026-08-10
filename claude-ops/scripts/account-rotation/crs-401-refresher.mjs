@@ -360,6 +360,7 @@ async function tick() {
 }
 
 async function main() {
+  if (!STATUS) throw new Error('CRS_401_REFRESHER_RETIRED_USE_VERIFIED_TOKEN_FEED');
   const backend = resolveAccountsBackend({ env: process.env, cfgBackend: C.backend });
   if (backend === 'local') {
     log('backend=local — CRS 401 refresher no-op (vault refresh is rotate.mjs / keychain keepalive)');

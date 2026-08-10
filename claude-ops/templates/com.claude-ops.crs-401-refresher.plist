@@ -47,6 +47,10 @@
     <string>__HOME__</string>
     <key>NODE_NO_WARNINGS</key>
     <string>1</string>
+    <key>CLAUDE_AUTH_COORDINATION_CONFIG</key>
+    <string>__CLAUDE_AUTH_COORDINATION_CONFIG__</string>
+    <key>CLAUDE_ROTATOR_CONFIG</key>
+    <string>__CLAUDE_ROTATOR_CONFIG__</string>
   </dict>
 
   <key>ProcessType</key>

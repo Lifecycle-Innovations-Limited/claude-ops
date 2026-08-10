@@ -43,12 +43,16 @@ import { fileURLToPath } from 'url';
 import { execSync, execFileSync, spawn, spawnSync } from 'child_process';
 import { tmpdir } from 'os';
 import { applyAccountLeases, writeLease } from './account-leases.mjs';
+import { withAuthWriterLock } from './auth-writer-coordination.mjs';
+import { verifyRefreshedTokenIdentity } from './token-identity.mjs';
+import { automatedAuthAllowed } from './auto-auth-policy.mjs';
+import { publishCredentialFileCas, snapshotCredentialFile } from './credential-file-publication.mjs';
 import { sweepDeferredRespawns, listLiveBgSessions, doRespawn, isLoopSession } from './bg-respawn.mjs';
 import { pickAccountForSession, recordSessionLease, readLeases, writeLeases } from './session-router.mjs';
 import { sweepBedrockSessions, verifyBedrockSwaps } from './bedrock-watchdog.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, 'config.json');
+const CONFIG_PATH = process.env.CLAUDE_ROTATOR_CONFIG || join(__dirname, 'config.json');
 const STATE_PATH = join(__dirname, 'state.json');
 const LOG_PATH = join(__dirname, 'rotation.log');
 const PID_FILE = join(__dirname, '.daemon.pid');
@@ -308,6 +312,10 @@ function readStoredToken(account) {
 }
 
 function deleteStoredToken(account) {
+  return withAuthWriterLock(() => deleteStoredTokenUnlocked(account));
+}
+
+function deleteStoredTokenUnlocked(account) {
   const svc = `Claude-Rotation-${accountKey(account)}`;
   if (IS_LINUX) {
     try {
@@ -637,81 +645,8 @@ async function shouldRotate(config, state) {
     if (token && tokenExpired(token)) {
       // Try refreshing the active token in-place before rotating
       log('[active-refresh] Active token expiring — attempting in-place refresh');
-      const refreshed = await refreshSingleToken(account);
+      const refreshed = await refreshSingleToken(account, { syncActive: true });
       if (refreshed) {
-        // Also update the active keychain so running sessions pick it up on next /login
-        // Merge mcpOAuth from the current active keychain before overwriting — vault
-        // tokens have mcpOAuth:{} stripped by design; without this merge the active
-        // keychain loses all MCP OAuth tokens (giga, Amplitude, higgsfield) on every
-        // in-place refresh, forcing CC to re-auth them on the next session launch.
-        try {
-          const freshToken = readStoredToken(account);
-          if (freshToken) {
-            const svc = 'Claude Code-credentials';
-            let tokenToWrite = freshToken;
-            try {
-              // Use readActiveKeychainToken() — already platform-aware (macOS
-              // security(1) on darwin, file vault on Linux). Avoids require()
-              // which is not available in ESM modules.
-              const currentRaw = readActiveKeychainToken();
-              if (currentRaw) {
-                const currentParsed = JSON.parse(currentRaw);
-                const freshParsed = JSON.parse(freshToken);
-                if (currentParsed.mcpOAuth) {
-                  freshParsed.mcpOAuth = { ...freshParsed.mcpOAuth, ...currentParsed.mcpOAuth };
-                }
-                tokenToWrite = JSON.stringify(freshParsed);
-              }
-            } catch (_mergeErr) {
-              /* merge failed — fall through to raw write */
-            }
-            // Write via platform-aware path: Linux credentials file or macOS keychain.
-            if (IS_LINUX) {
-              // On Linux the active token lives in LINUX_CRED_PATH as a flat
-              // JSON object. Merge the updated token into it preserving any
-              // other fields (mcpOAuth, etc.) already present in the file.
-              try {
-                let existing = {};
-                try {
-                  existing = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
-                } catch {}
-                const merged = { ...existing, ...JSON.parse(tokenToWrite) };
-                writeFileSync(LINUX_CRED_PATH, JSON.stringify(merged, null, 2), { mode: 0o600 });
-              } catch (_writeErr) {
-                /* non-fatal — best-effort */
-              }
-            } else {
-              // macOS: use spawnSync (no shell, no injection) instead of execSync.
-              spawnSync(
-                'security',
-                ['add-generic-password', '-U', '-s', svc, '-a', ACTIVE_KEYCHAIN_ACCOUNT, '-w', tokenToWrite],
-                {
-                  timeout: 5000,
-                },
-              );
-              // macOS: Claude Code ≥2.1 reads the ACTIVE credential from the FILE
-              // ~/.claude/.credentials.json, NOT the keychain. Mirror the refreshed
-              // active token into the file (merge to preserve other fields) so new
-              // sessions pick it up. Without this the keychain write above is
-              // invisible to claude. (root-caused 2026-06-12)
-              try {
-                let fileStore = {};
-                try {
-                  fileStore = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
-                } catch {}
-                const incoming = JSON.parse(tokenToWrite);
-                fileStore.claudeAiOauth = incoming.claudeAiOauth || incoming;
-                if (incoming.mcpOAuth) fileStore.mcpOAuth = incoming.mcpOAuth;
-                writeFileSync(LINUX_CRED_PATH, JSON.stringify(fileStore, null, 2), { mode: 0o600 });
-              } catch (_fileErr) {
-                /* best-effort */
-              }
-            }
-            log('[active-refresh] Active keychain updated with mcpOAuth preserved — sessions will auto-recover');
-          }
-        } catch (err) {
-          log(`[active-refresh] Keychain update failed: ${err.message?.substring(0, 60)}`);
-        }
         return { should: false }; // Refreshed in-place, no rotation needed
       }
       log('[active-refresh] Refresh failed — triggering rotation');
@@ -743,9 +678,8 @@ async function queryLiveUtilization(account) {
       signal: AbortSignal.timeout(4000),
     });
     if (res.status === 401) {
-      log(`[daemon-query] Account ${account.email} returned 401 (Unauthorized) — invalidating token`);
-      deleteStoredToken(account);
-      return { ok: false, authFailed: true };
+      log(`[daemon-query] Account ${account.email} returned 401 — credential retained; needsReauth=true`);
+      return { ok: false, authFailed: true, needsReauth: true };
     }
     if (res.status === 429) return { ok: false, rateLimited: true };
     if (!res.ok) return { ok: false };
@@ -1199,7 +1133,15 @@ function parseRefreshToken(tokenJson) {
   }
 }
 
-async function refreshSingleToken(account) {
+async function refreshSingleToken(account, { syncActive = false } = {}) {
+  if (!automatedAuthAllowed(account)) {
+    log(`[refresh] ${accountKey(account)}: automatic credential mutation not approved — status only`);
+    return false;
+  }
+  return withAuthWriterLock(() => refreshSingleTokenUnlocked(account, { syncActive }));
+}
+
+async function refreshSingleTokenUnlocked(account, { syncActive = false } = {}) {
   const key = accountKey(account);
   const tokenJson = readStoredToken(account);
   if (!tokenJson) return false;
@@ -1223,6 +1165,7 @@ async function refreshSingleToken(account) {
     const parsed = JSON.parse(tokenJson);
     parsed.claudeAiOauth.accessToken = body.access_token;
     if (body.refresh_token) parsed.claudeAiOauth.refreshToken = body.refresh_token;
+    await verifyRefreshedTokenIdentity(account, body.access_token);
     parsed.claudeAiOauth.expiresAt = body.expires_in ? Date.now() + body.expires_in * 1000 : Date.now() + 8 * 3_600_000;
 
     // Save back to vault — platform-aware (Linux: credentials file; macOS: Keychain)
@@ -1230,12 +1173,10 @@ async function refreshSingleToken(account) {
     const tokenStr = JSON.stringify(parsed);
     if (IS_LINUX) {
       try {
-        let store = {};
-        try {
-          store = JSON.parse(readFileSync(LINUX_CRED_PATH, 'utf8'));
-        } catch {}
+        const snapshot = snapshotCredentialFile(LINUX_CRED_PATH);
+        const store = snapshot.absent ? {} : JSON.parse(snapshot.bytes.toString('utf8'));
         store[svc] = tokenStr;
-        writeFileSync(LINUX_CRED_PATH, JSON.stringify(store, null, 2), { mode: 0o600 });
+        publishCredentialFileCas(LINUX_CRED_PATH, Buffer.from(JSON.stringify(store, null, 2)), snapshot);
       } catch (writeErr) {
         throw new Error(`Linux vault write failed: ${writeErr.message}`);
       }
@@ -1251,6 +1192,10 @@ async function refreshSingleToken(account) {
         throw new Error(`Keychain write failed: ${detail}`);
       }
     }
+    // Keep the grant, identity verification, vault write, active-state recheck,
+    // and conditional active credential write in this one canonical lock. A
+    // concurrent rotation can therefore only run before or after the sequence.
+    if (syncActive && readState().activeAccount === key) writeActiveRefreshedToken(tokenStr);
     log(
       `[refresh] ${key}: refreshed (${((parsed.claudeAiOauth.expiresAt - Date.now()) / 3_600_000).toFixed(1)}h remaining)`,
     );
@@ -1259,6 +1204,43 @@ async function refreshSingleToken(account) {
     log(`[refresh] ${key}: failed — ${err.message?.substring(0, 60)}`);
     return false;
   }
+}
+
+function writeActiveRefreshedToken(freshToken) {
+  let tokenToWrite = freshToken;
+  try {
+    const currentRaw = readActiveKeychainToken();
+    if (currentRaw) {
+      const currentParsed = JSON.parse(currentRaw);
+      const freshParsed = JSON.parse(freshToken);
+      if (currentParsed.mcpOAuth) freshParsed.mcpOAuth = { ...freshParsed.mcpOAuth, ...currentParsed.mcpOAuth };
+      tokenToWrite = JSON.stringify(freshParsed);
+    }
+  } catch {}
+  if (!IS_LINUX) {
+    const result = spawnSync(
+      'security',
+      [
+        'add-generic-password',
+        '-U',
+        '-s',
+        'Claude Code-credentials',
+        '-a',
+        ACTIVE_KEYCHAIN_ACCOUNT,
+        '-w',
+        tokenToWrite,
+      ],
+      { timeout: 5000 },
+    );
+    if (result.error || result.status !== 0) throw new Error('Active keychain write failed');
+  }
+  const snapshot = snapshotCredentialFile(LINUX_CRED_PATH);
+  const store = snapshot.absent ? {} : JSON.parse(snapshot.bytes.toString('utf8'));
+  const incoming = JSON.parse(tokenToWrite);
+  store.claudeAiOauth = incoming.claudeAiOauth || incoming;
+  if (incoming.mcpOAuth) store.mcpOAuth = incoming.mcpOAuth;
+  publishCredentialFileCas(LINUX_CRED_PATH, Buffer.from(JSON.stringify(store, null, 2)), snapshot);
+  log('[active-refresh] Active credential updated with mcpOAuth preserved — sessions will auto-recover');
 }
 
 async function dynamicRefresh(config, state) {

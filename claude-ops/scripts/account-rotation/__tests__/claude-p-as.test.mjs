@@ -11,7 +11,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, mkdtempSync, openSync, closeSync, unlinkSync } from 'fs';
+import { writeFileSync, readFileSync, mkdtempSync, mkdirSync, existsSync, openSync, closeSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { spawnSync } from 'child_process';
@@ -80,7 +80,7 @@ test('pickAccount refuses (exit 2) when all accounts $0', () => {
   writeFileSync(ledgerPath, JSON.stringify(ledger));
   const r = spawnSync('node', [SCRIPT, '--ledger', ledgerPath, '--', '/help'], { encoding: 'utf8' });
   assert.equal(r.status, 2);
-  assert.match(r.stderr, /all accounts \$0/);
+  assert.match(r.stderr, /SIGNED_CREDENTIAL_MUTATION_APPROVAL_REQUIRED/);
 });
 
 test('pickAccount refuses (exit 2) when pinned account at $0', () => {
@@ -94,7 +94,7 @@ test('pickAccount refuses (exit 2) when pinned account at $0', () => {
     encoding: 'utf8',
   });
   assert.equal(r.status, 2);
-  assert.match(r.stderr, /pinned account a@x\.com credit exhausted/);
+  assert.match(r.stderr, /SIGNED_CREDENTIAL_MUTATION_APPROVAL_REQUIRED/);
 });
 
 test('assertNotExtraUsage refuses accounts with extra_usage flag in ledger', () => {
@@ -108,7 +108,7 @@ test('assertNotExtraUsage refuses accounts with extra_usage flag in ledger', () 
     ],
     { encoding: 'utf8' },
   );
-  assert.equal(r.status, 2);
+  assert.notEqual(r.status, 0);
   assert.match(r.stderr, /extra_usage=true/);
 });
 
@@ -125,7 +125,7 @@ test('assertNotExtraUsage refuses accounts with extraUsageEnabled=true in rotati
     ],
     { encoding: 'utf8' },
   );
-  assert.equal(r.status, 2);
+  assert.notEqual(r.status, 0);
   assert.match(r.stderr, /extraUsageEnabled=true/);
 });
 
@@ -181,7 +181,28 @@ test('refuses when ledger file missing', () => {
     encoding: 'utf8',
   });
   assert.equal(r.status, 2);
-  assert.match(r.stderr, /ledger missing/);
+  assert.match(r.stderr, /SIGNED_CREDENTIAL_MUTATION_APPROVAL_REQUIRED/);
+});
+
+test('executable refuses before child execution or filesystem writes', () => {
+  const root = mkdtempSync(join(tmpdir(), 'claude-p-as-deny-'));
+  const marker = join(root, 'child-ran');
+  const fakeBin = join(root, 'bin');
+  const ledgerPath = join(root, 'ledger.json');
+  const lockPath = join(root, 'keychain.lock');
+  mkdirSync(fakeBin);
+  writeFileSync(join(fakeBin, 'claude'), `#!/bin/sh\nprintf child > "${marker}"\n`, { mode: 0o700 });
+  writeFileSync(ledgerPath, JSON.stringify(makeLedger([{ email: 'a@x.com', remaining_usd: 200 }])));
+  const before = readFileSync(ledgerPath);
+  const result = spawnSync('node', [SCRIPT, '--ledger', ledgerPath, '--lock', lockPath, '--', 'hello'], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}` },
+  });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /SIGNED_CREDENTIAL_MUTATION_APPROVAL_REQUIRED/);
+  assert.equal(existsSync(marker), false, 'child count remains zero');
+  assert.equal(existsSync(lockPath), false, 'write count remains zero');
+  assert.deepEqual(readFileSync(ledgerPath), before, 'ledger is untouched');
 });
 
 test('lock contention: second invocation refuses while lock file exists', () => {
@@ -203,7 +224,7 @@ test('lock contention: second invocation refuses while lock file exists', () => 
     // Will fail at lock OR earlier at assertBudgetFlagAvailable if claude CLI isn't installed.
     // Accept either: status 2 + (lock-held OR claude-cli-missing) — both are correct refusals.
     assert.equal(r.status, 2);
-    assert.match(r.stderr, /(keychain lock held|--max-budget-usd.*not available|ledger)/);
+    assert.match(r.stderr, /SIGNED_CREDENTIAL_MUTATION_APPROVAL_REQUIRED/);
   } finally {
     try {
       unlinkSync(lockPath);
@@ -316,7 +337,7 @@ test('claude-p-as exits 2 and prints refuse message when cost parse fails', () =
 });
 
 // P1b: post-swap probe ordering — assertBudgetFlagAvailable must be called after swapToEmail
-test('claude-p-as script exports assertBudgetFlagAvailable is not called before swap in main flow', () => {
+test('claude-p-as main default-denies before any swap or child path', () => {
   // Structural test: verify the source code calls assertBudgetFlagAvailable()
   // after swapToEmail() in the main() function body.
   // We strip comment lines to avoid matching the "do NOT call ... here" comment.
@@ -326,17 +347,9 @@ test('claude-p-as script exports assertBudgetFlagAvailable is not called before 
     .split('\n')
     .filter((l) => !l.trimStart().startsWith('//'))
     .join('\n');
-  const swapPos = mainBody.indexOf('swapToEmail(');
-  // Find the actual call site (not function definition, not comment).
-  // The call is a bare statement: /^\s*assertBudgetFlagAvailable\(\)/m
-  const probeMatch = mainBody.match(/\n(\s*assertBudgetFlagAvailable\(\))/);
-  const probePos = probeMatch ? mainBody.indexOf(probeMatch[0]) : -1;
-  assert.ok(swapPos !== -1, 'swapToEmail must appear in main()');
-  assert.ok(probePos !== -1, 'assertBudgetFlagAvailable() call-site must appear in main()');
-  assert.ok(
-    probePos > swapPos,
-    `assertBudgetFlagAvailable() (pos ${probePos}) must appear AFTER swapToEmail() (pos ${swapPos}) in main()`,
-  );
+  const refusal = mainBody.indexOf("die(2, 'SIGNED_CREDENTIAL_MUTATION_APPROVAL_REQUIRED')");
+  assert.ok(refusal !== -1);
+  assert.ok(refusal < mainBody.indexOf('acquireLock('));
 });
 
 test('claude-p-as rejects ledger with unknown schema_version', () => {
@@ -344,5 +357,5 @@ test('claude-p-as rejects ledger with unknown schema_version', () => {
   writeFileSync(ledgerPath, JSON.stringify({ schema_version: 99, month: '2026-06', accounts: [] }));
   const r = spawnSync('node', [SCRIPT, '--ledger', ledgerPath, '--', 'hello'], { encoding: 'utf8' });
   assert.equal(r.status, 2);
-  assert.match(r.stderr, /ledger unreadable|schema_version/);
+  assert.match(r.stderr, /SIGNED_CREDENTIAL_MUTATION_APPROVAL_REQUIRED/);
 });

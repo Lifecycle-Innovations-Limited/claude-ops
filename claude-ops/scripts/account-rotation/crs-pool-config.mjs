@@ -18,6 +18,7 @@ const DATA_DIR =
   process.env.CLAUDE_PLUGIN_DATA_DIR || join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace');
 
 export const CONFIG_CANDIDATES = [
+  process.env.CLAUDE_ROTATOR_CONFIG,
   process.env.CRS_CONFIG,
   join(homedir(), '.claude', 'scripts', 'account-rotation', 'config.json'),
   join(DATA_DIR, 'account-rotation', 'config.json'),
@@ -27,6 +28,8 @@ export const CONFIG_CANDIDATES = [
 ].filter(Boolean);
 
 export function resolveConfigPath() {
+  if (process.env.CLAUDE_AUTH_COORDINATION_CONFIG && !process.env.CLAUDE_ROTATOR_CONFIG)
+    throw new Error('CLAUDE_ROTATOR_CONFIG_REQUIRED');
   for (const p of CONFIG_CANDIDATES) {
     if (existsSync(p)) return p;
   }

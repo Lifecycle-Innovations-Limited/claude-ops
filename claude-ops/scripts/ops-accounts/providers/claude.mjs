@@ -93,19 +93,9 @@ export async function listAccounts(ctx) {
 export async function reauth(ctx, { accountId }) {
   const email = accountId;
   if (!email) return { ok: false, reason: 'email-required' };
-  const magic = join(rotationDir(ctx), 'rotate-magic.mjs');
-  if (!existsSync(magic)) {
-    return { ok: false, reason: 'rotate-magic-missing' };
-  }
-  if (ctx.dryRun) return { ok: true, reason: 'dry-run' };
-  const r = spawnSync(process.execPath, [magic, '--to', email, '--force'], {
-    encoding: 'utf8',
-    env: { ...process.env, CLAUDE_PLUGIN_ROOT: ctx.pluginRoot },
-    timeout: 120000,
-  });
   return {
-    ok: r.status === 0,
-    reason: r.status === 0 ? null : (r.stderr || r.stdout || '').slice(-400),
+    ok: false,
+    reason: 'direct-claude-reauth-disabled-use-staged-enrollment',
   };
 }
 

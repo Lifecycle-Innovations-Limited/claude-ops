@@ -21,7 +21,10 @@ import { fileURLToPath } from 'url';
 import { execFileSync, execSync } from 'child_process';
 import { fetchWithProxyFallback } from './proxy-helper.mjs';
 import { acquireRefreshLock } from './crs-refresh-lock.mjs';
-import { readRotationToken, reconcileRemoteRotationVault, writeRotationToken } from './rotation-vault.mjs';
+import { readRotationToken, reconcileRemoteRotationVault, writeRotationTokenCoordinated } from './rotation-vault.mjs';
+import { withAuthWriterLock } from './auth-writer-coordination.mjs';
+import { verifyRefreshedTokenIdentity } from './token-identity.mjs';
+import { automatedAuthAllowed } from './auto-auth-policy.mjs';
 import {
   REFRESH_WHEN_BELOW_MS,
   MIN_HEALTHY_TTL_MS,
@@ -31,7 +34,7 @@ import {
 } from './oauth-keep-alive-policy.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, 'config.json');
+const CONFIG_PATH = process.env.CLAUDE_ROTATOR_CONFIG || join(__dirname, 'config.json');
 const STATE_PATH = join(__dirname, 'state.json');
 const LOG_PATH = join(__dirname, 'rotation.log');
 const NEEDS_REAUTH_PATH = join(__dirname, '.crs-token-refresher-state.json');
@@ -97,8 +100,8 @@ function readStoredToken(account) {
   }
 }
 
-function writeStoredToken(account, json) {
-  writeRotationToken(accountKey(account), json);
+function writeStoredToken(account, json, capability) {
+  return writeRotationTokenCoordinated(account, json, capability);
 }
 
 function syncStoredTokenToCrs(account) {
@@ -308,15 +311,6 @@ function showStatus() {
 
 const args = process.argv.slice(2);
 
-try {
-  const reconciled = reconcileRemoteRotationVault();
-  if (!reconciled.skipped && (reconciled.pulled > 0 || reconciled.pushed > 0)) {
-    log(`remote vault reconciled: ${reconciled.pulled} pulled, ${reconciled.pushed} pushed`);
-  }
-} catch (error) {
-  log(`remote vault reconciliation unavailable — ${String(error.message || error).slice(0, 180)}`);
-}
-
 if (args.includes('--status')) {
   showStatus();
   process.exit(0);
@@ -326,27 +320,15 @@ const force = args.includes('--force');
 const dryRun = args.includes('--dry-run');
 const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
 const state = readState();
-const ROTATING_LOCK = join(__dirname, '.rotating');
-const MAGIC_LINK_TIMEOUT_MS = Number(process.env.CLAUDE_ROT_MAGIC_TOTAL_TIMEOUT_MS || 720_000);
 
-function pidAlive(pid) {
-  if (!pid) return false;
+if (config.accounts.some(automatedAuthAllowed)) {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** True when another rotate/reauth already holds the fleet lock. */
-function rotationInProgress() {
-  try {
-    if (!existsSync(ROTATING_LOCK)) return false;
-    const raw = JSON.parse(readFileSync(ROTATING_LOCK, 'utf8'));
-    return pidAlive(Number(raw?.pid || 0));
-  } catch {
-    return false;
+    const reconciled = reconcileRemoteRotationVault();
+    if (!reconciled.skipped && (reconciled.pulled > 0 || reconciled.pushed > 0)) {
+      log(`remote vault reconciled: ${reconciled.pulled} pulled, ${reconciled.pushed} pushed`);
+    }
+  } catch (error) {
+    log(`remote vault reconciliation unavailable — ${String(error.message || error).slice(0, 180)}`);
   }
 }
 
@@ -360,18 +342,6 @@ function magicLinkPriority(account) {
   const weekly = Number.isFinite(pct7) && !(reset7Ms && reset7Ms < now) ? pct7 : 50;
   // Lower score = better magic-link candidate (headroom first).
   return weekly;
-}
-
-function shouldSkipMagicLinkForUtil(account) {
-  const key = accountKey(account);
-  const u = state.accounts?.[key]?.lastUtilization || {};
-  const now = Date.now();
-  const pct7 = Number(u.pct7);
-  const reset7Ms = Number(u.reset7) > 0 ? Number(u.reset7) * 1000 : 0;
-  if (Number.isFinite(pct7) && pct7 >= 95 && !(reset7Ms && reset7Ms < now)) {
-    return `7d util ${pct7}% exhausted — re-auth deferred (cannot use until weekly reset)`;
-  }
-  return null;
 }
 
 // Process accounts with freshest tokens first for refresh grant; when picking
@@ -390,7 +360,6 @@ const accountsOrdered = [...config.accounts].sort((a, b) => {
 let refreshed = 0;
 let failed = 0;
 let skipped = 0;
-let magicLinkAttempted = false;
 
 for (let i = 0; i < accountsOrdered.length; i++) {
   const account = accountsOrdered[i];
@@ -402,6 +371,11 @@ for (let i = 0; i < accountsOrdered.length; i++) {
   // browser re-auth path every hour (~180s of doomed browser automation).
   if (account.disabled === true) {
     log(`${key}: disabled — skipping`);
+    skipped++;
+    continue;
+  }
+  if (!automatedAuthAllowed(account)) {
+    log(`${key}: automatic credential mutation not approved — status only`);
     skipped++;
     continue;
   }
@@ -438,115 +412,89 @@ for (let i = 0; i < accountsOrdered.length; i++) {
   }
 
   try {
-    // Rate limit courtesy: delay between accounts
-    if (i > 0) {
-      await sleep(INTER_ACCOUNT_DELAY_MS);
-    }
+    await withAuthWriterLock(async (writerCapability) => {
+      // Rate limit courtesy: delay between accounts
+      if (i > 0) {
+        await sleep(INTER_ACCOUNT_DELAY_MS);
+      }
 
-    const parsed = parseToken(tokenJson);
-    const oauthData = parsed?.claudeAiOauth;
-    if (!oauthData?.refreshToken) {
-      log(`${key}: no refreshToken in stored token — skipping`);
-      failed++;
-      continue;
-    }
+      const currentTokenJson = readStoredToken(account);
+      const parsed = parseToken(currentTokenJson);
+      const oauthData = parsed?.claudeAiOauth;
+      if (!oauthData?.refreshToken) {
+        log(`${key}: no refreshToken in stored token — skipping`);
+        failed++;
+        return;
+      }
 
-    const result = await refreshOAuthToken(oauthData.refreshToken);
+      const result = await refreshOAuthToken(oauthData.refreshToken);
 
-    if (!result.ok) {
-      log(`${key}: ✗ refresh failed — ${result.error}`);
+      if (!result.ok) {
+        log(`${key}: ✗ refresh failed — ${result.error}`);
 
-      // HTTP 400 = dead refresh_token. Browser re-auth is owned by the always-on
-      // magic-link-autoloop (com.sam.crs-magic-link-autoloop) — never spawn a
-      // competing headed OAuth from the hourly refresher (2026-07-16 thrash).
-      // Opt-in only: CLAUDE_ROTATION_REFRESH_MAGIC_LINK=1 for emergency one-shots.
-      if (result.error && result.error.includes('400')) {
-        if (account.autoAuthDisabled === true) {
-          log(`${key}: unattended re-auth disabled — leaving token for manual recovery`);
-        } else if (process.env.CLAUDE_ROTATION_REFRESH_MAGIC_LINK === '1' && !magicLinkAttempted) {
-          const utilSkip = shouldSkipMagicLinkForUtil(account);
-          if (utilSkip) {
-            log(`${key}: ${utilSkip}`);
-          } else if (rotationInProgress()) {
-            log(`${key}: rotation lock held — deferring magic-link re-auth`);
+        // HTTP 400 = dead refresh_token. Never spawn authentication from the
+        // refresher; a separately approved staged enrollment owns recovery.
+        if (result.error && result.error.includes('400')) {
+          if (account.autoAuthDisabled === true) {
+            log(`${key}: unattended re-auth disabled — leaving token for manual recovery`);
           } else {
-            magicLinkAttempted = true;
-            log(
-              `${key}: refresh token invalid — CLAUDE_ROTATION_REFRESH_MAGIC_LINK=1 → magic-link (timeout ${Math.round(MAGIC_LINK_TIMEOUT_MS / 1000)}s)...`,
-            );
-            try {
-              const reAuthResult = execFileSync(
-                process.execPath,
-                [join(__dirname, 'rotate.mjs'), '--to', key, '--magic-link', '--force'],
-                { timeout: MAGIC_LINK_TIMEOUT_MS, encoding: 'utf8' },
-              );
-              log(`${key}: magic link re-auth output: ${reAuthResult.split('\n').slice(-3).join(' | ')}`);
-              const reAuthedToken = readStoredToken(account);
-              if (reAuthedToken) {
-                const reParsed = parseToken(reAuthedToken);
-                if (reParsed?.claudeAiOauth?.accessToken) {
-                  log(`${key}: ✓ re-authed via magic link`);
-                  refreshed++;
-                  continue;
-                }
-              }
-              log(`${key}: magic link re-auth did not produce a valid token`);
-            } catch (err) {
-              log(`${key}: magic link re-auth failed — ${err.message}`);
-            }
+            log(`${key}: refresh grant failed (HTTP 400) — staged enrollment approval required`);
+            markNeedsReauth(key, result.error);
           }
-        } else {
-          log(`${key}: refresh grant failed (HTTP 400) — marking needsReauth for magic-link-autoloop`);
+        } else if (result.error && /401|invalid|revoked/i.test(result.error)) {
           markNeedsReauth(key, result.error);
         }
-      } else if (result.error && /401|invalid|revoked/i.test(result.error)) {
-        markNeedsReauth(key, result.error);
+
+        failed++;
+        return;
       }
 
-      failed++;
-      continue;
-    }
+      // Build updated token
+      const updated = {
+        claudeAiOauth: {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+          expiresAt: result.expiresAt,
+          scopes: oauthData.scopes || [],
+          subscriptionType: result.subscriptionType || oauthData.subscriptionType,
+          rateLimitTier: result.rateLimitTier || oauthData.rateLimitTier,
+        },
+        mcpOAuth: {},
+      };
 
-    // Build updated token
-    const updated = {
-      claudeAiOauth: {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        expiresAt: result.expiresAt,
-        scopes: oauthData.scopes || [],
-        subscriptionType: result.subscriptionType || oauthData.subscriptionType,
-        rateLimitTier: result.rateLimitTier || oauthData.rateLimitTier,
-      },
-      mcpOAuth: {},
-    };
+      await verifyRefreshedTokenIdentity(account, result.accessToken);
 
-    // Save to vault
-    writeStoredToken(account, JSON.stringify(updated));
-    syncStoredTokenToCrs(account);
-    clearNeedsReauth(key);
-    const newHoursLeft = ((result.expiresAt - Date.now()) / 3_600_000).toFixed(1);
-    log(`${key}: ✓ refreshed (${newHoursLeft}h remaining)`);
+      // Save to vault
+      await writeStoredToken(account, JSON.stringify(updated), writerCapability);
+      syncStoredTokenToCrs(account);
+      clearNeedsReauth(key);
+      const newHoursLeft = ((result.expiresAt - Date.now()) / 3_600_000).toFixed(1);
+      log(`${key}: ✓ refreshed (${newHoursLeft}h remaining)`);
 
-    // If this is the currently active account, update the active keychain too
-    if (state.activeAccount === key) {
-      try {
-        const currentActive = readKeychain();
-        const currentParsed = parseToken(currentActive);
-        // Always merge mcpOAuth from the running session — drop the Object.keys>0 guard
-        // which silently skipped preservation when a prior rotation had already zeroed the
-        // field, causing CC to lose all MCP OAuth tokens (giga, Amplitude, higgsfield) on
-        // the next session launch and forcing interactive reauth every session.
-        if (currentParsed?.mcpOAuth) {
-          updated.mcpOAuth = { ...updated.mcpOAuth, ...currentParsed.mcpOAuth };
+      // If this is the currently active account, update the active keychain too
+      // Recheck active-account ownership under the same canonical lock; the
+      // pre-refresh state snapshot may have changed while the grant was in flight.
+      if (readState().activeAccount === key) {
+        try {
+          const currentActive = readKeychain();
+          const currentParsed = parseToken(currentActive);
+          // Always merge mcpOAuth from the running session — drop the Object.keys>0 guard
+          // which silently skipped preservation when a prior rotation had already zeroed the
+          // field, causing CC to lose all MCP OAuth tokens (giga, Amplitude, higgsfield) on
+          // the next session launch and forcing interactive reauth every session.
+          if (currentParsed?.mcpOAuth) {
+            updated.mcpOAuth = { ...updated.mcpOAuth, ...currentParsed.mcpOAuth };
+          }
+          await verifyRefreshedTokenIdentity(account, updated.claudeAiOauth.accessToken);
+          writeKeychain(JSON.stringify(updated));
+          log(`${key}: ✓ also updated active keychain with mcpOAuth preserved`);
+        } catch (err) {
+          log(`${key}: ⚠ vault updated but active keychain update failed — ${err.message}`);
         }
-        writeKeychain(JSON.stringify(updated));
-        log(`${key}: ✓ also updated active keychain with mcpOAuth preserved`);
-      } catch (err) {
-        log(`${key}: ⚠ vault updated but active keychain update failed — ${err.message}`);
       }
-    }
 
-    refreshed++;
+      refreshed++;
+    });
   } finally {
     releaseRefreshLock();
   }

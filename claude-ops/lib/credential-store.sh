@@ -53,6 +53,14 @@ _ops_cred_log() {
   printf 'credential-store: %s\n' "$*" >&2
 }
 
+_ops_cred_assert_public_write_allowed() {
+  local svc="${1,,}"
+  if [[ "$svc" == "claude code-credentials" || "$svc" == "claude-rotation" || "$svc" == claude-rotation-* ]]; then
+    _ops_cred_log "protected Claude credential writes require the coordinated internal writer"
+    return 1
+  fi
+}
+
 _ops_cred_warn_plaintext_once() {
   if [[ "$__OPS_CRED_PLAIN_WARNED" == "0" ]]; then
     printf '⚠ credential-store: using plaintext JSON fallback — install secret-tool (linux) or cmdkey (windows) for better security\n' >&2
@@ -488,6 +496,7 @@ ops_cred_set() {
     return 1
   fi
   local svc="$1" acc="$2" sec="$3"
+  _ops_cred_assert_public_write_allowed "$svc" || return 1
 
   if _ops_cred_native_available && _ops_cred_native_set "$svc" "$acc" "$sec"; then
     _ops_cred_log "stored via=native:$(ops_keyring_backend) service=$svc account=$acc"
@@ -539,6 +548,7 @@ ops_cred_delete() {
     return 1
   fi
   local svc="$1" acc="$2"
+  _ops_cred_assert_public_write_allowed "$svc" || return 1
   local any_err=0
 
   # Best-effort on each: missing-key is NOT an error.

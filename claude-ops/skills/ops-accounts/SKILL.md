@@ -34,7 +34,7 @@ for every provider:
 
 | Provider | Engine | Reauth | Util |
 |----------|--------|--------|------|
-| Claude | `scripts/account-rotation/rotate.mjs` + `rotate-magic.mjs` | magic-link + captcha cascade | 5h/7d |
+| Claude | `scripts/account-rotation/rotate.mjs` + staged enrollment | signed stage/activate only | 5h/7d |
 | Grok | slots + `grok-cli-auth-proxy` (+ optional CRS hop) | device-code + Google (dcli); residential egress cascade | weekly / 429 |
 | OpenAI / Codex | `codex-rotate` when present | OAuth bridge | usage best-effort |
 | Factory | adapter TBD / quota-feed seeds | native | quota-feed patterns |
@@ -58,9 +58,9 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-mark
 | `switch claude` / `rotate-now` | Claude keychain rotate (`force-rotate` / `rotate.mjs`) |
 | `switch grok` | Next SuperGrok seat (`grok-rotate switch`) |
 | `refresh [all\|claude\|grok]` | Keepalive / RT refresh |
-| `reauth claude <email>` | `rotate-magic.mjs --to <email>` |
+| `reauth claude <email>` | Fails closed with staged-enrollment handoff |
 | `reauth grok <email>` | Device reauth with residential cascade env |
-| `setup` / `setup claude` | Full Claude OAuth wizard (former rotate-setup steps) |
+| `setup` / `setup claude` | Claude direct auth is disabled; staged enrollment required |
 | `setup grok` | Add/reauth SuperGrok seat |
 | `crs` / `crs-tick` | Optional Claude CRS pool status / one tick |
 | `seats` | Local multi-provider seat-state (no CRS) |

@@ -1,5 +1,6 @@
 ## Unreleased
 
+- Security: replace direct/unattended Claude browser reauthentication with short-lived HMAC-approved, single-use staged enrollment and atomic rollback activation; legacy reauth wrappers now fail closed.
 - ops-accounts-gateway skeleton (:3005 health/auth/grok hop; CLI gateway subcommand)
 - feat(crs-priority-daemon): dual-mode `backend=crs|local` file seat-state without CRS Docker
 
