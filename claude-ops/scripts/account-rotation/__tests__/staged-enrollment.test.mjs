@@ -579,6 +579,8 @@ for (const role of ['manifest', 'key', 'candidate', 'approval']) {
     [
       '--input-type=module',
       '-e',
+      // Inputs are test-created absolute paths serialized as JS literals.
+      // lgtm[js/bad-code-sanitization]
       `import(${JSON.stringify(`file://${modulePath}`)}).then(m=>m.withOperationLock(${JSON.stringify(f.common.operationLockPath)},${JSON.stringify(f.keyPath)},()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'unsafe')))`,
     ],
     {
@@ -1074,6 +1076,8 @@ for (const phase of [
       [
         '--input-type=module',
         '-e',
+        // Inputs are test-created absolute paths serialized as JS literals.
+        // lgtm[js/bad-code-sanitization]
         `import(${JSON.stringify(`file://${join(import.meta.dirname, '..', 'auth-writer-coordination.mjs')}`)}).then(m=>m.withAuthWriterLock(()=>require('node:fs').appendFileSync(${JSON.stringify(f.manifestPath)},'\\n'),{configPath:${JSON.stringify(f.configPath)}}))`,
       ],
       { encoding: 'utf8' },

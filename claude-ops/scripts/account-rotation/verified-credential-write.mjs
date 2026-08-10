@@ -1,12 +1,13 @@
 import { verifyRefreshedTokenIdentity } from './token-identity.mjs';
 import { requireWriterCapability, withAuthWriterLock } from './auth-writer-coordination.mjs';
-import { createHash } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 
 const verifiedCapabilities = new WeakMap();
+const credentialBindingKey = randomBytes(32);
 
 function credentialDigest(credential) {
   if (typeof credential !== 'string') throw new Error('SERIALIZED_CREDENTIAL_REQUIRED');
-  return createHash('sha256').update(credential).digest('hex');
+  return createHmac('sha256', credentialBindingKey).update(credential).digest('hex');
 }
 
 function binding(account, credential, destination) {

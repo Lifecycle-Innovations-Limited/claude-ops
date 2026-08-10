@@ -408,6 +408,8 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
       process.kill(process.pid, 'SIGKILL');
     // hard-link publication is atomic and never replaces a concurrently
     // created final target (unlike rename(2)).
+    // Test-only adversarial writer used to prove link publication fails closed.
+    // lgtm[js/file-system-race]
     if (process.env.CLAUDE_COORDINATION_TESTING === '1' && process.env.CLAUDE_COORDINATION_TEST_RACE_TARGET === path)
       writeFileSync(path, process.env.CLAUDE_COORDINATION_TEST_RACE_SAME === '1' ? data : 'competing-owner\n', {
         flag: 'wx',
@@ -430,6 +432,8 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
       process.env.CLAUDE_COORDINATION_TEST_POST_LINK_REPLACE === path
     ) {
       unlinkSync(path);
+      // Test-only post-publication inode replacement.
+      // lgtm[js/file-system-race]
       writeFileSync(path, data, { flag: 'wx', mode: 0o600 });
     }
     if (!descriptorMatches(path, descriptor, 'PUBLICATION_OWNERSHIP_LOST'))
@@ -682,11 +686,8 @@ function applyReviewed(plan) {
     publish(plan.paths.manifest, manifestBytes);
     if (existsSync(plan.paths.trust)) {
       const owned = state.ownedTargets.find((target) => target.path === plan.paths.trust);
-      if (
-        mode(plan.paths.trust) !== 0o600 ||
-        statSync(plan.paths.trust).size !== 32 ||
-        (owned && rawDigest(readFileSync(plan.paths.trust)) !== owned.digest)
-      )
+      const trust = secureReadDescriptor(plan.paths.trust, 'EXISTING_FILE_MISMATCH');
+      if (mode(plan.paths.trust) !== 0o600 || trust.length !== 32 || (owned && trust.digest !== owned.digest))
         fail('EXISTING_FILE_MISMATCH');
     } else if (newKeyBytes) publish(plan.paths.trust, newKeyBytes);
     else fail('PROVISION_KEY_RECOVERY_REQUIRED');
