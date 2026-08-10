@@ -1,6 +1,17 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  ftruncateSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -8,6 +19,15 @@ import { spawnSync } from 'node:child_process';
 const cli = new URL('../provision-coordination.mjs', import.meta.url).pathname;
 function run(args, env = {}) {
   return spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', env: { ...process.env, ...env } });
+}
+function replaceFixtureContents(path, bytes) {
+  const fd = openSync(path, 'r+');
+  try {
+    ftruncateSync(fd, 0);
+    writeFileSync(fd, bytes);
+  } finally {
+    closeSync(fd);
+  }
 }
 function fixture(legacy = false) {
   const root = mkdtempSync(join(tmpdir(), 'coordination-provision-'));
@@ -134,17 +154,28 @@ assert.notEqual(run(dangerous.args).status, 0, 'dangerous source JSON key refuse
 const f = fixture();
 const planned = run(f.args);
 assert.equal(planned.status, 0, planned.stderr);
-const plan = JSON.parse(planned.stdout);
+let plan = JSON.parse(planned.stdout);
 assert.doesNotMatch(
   planned.stdout,
   /approvalKey|access[_-]?token|refresh[_-]?token/i,
   'plan contains no key/token material',
 );
-const planPath = join(f.root, 'plan.json');
+let planPath = join(f.root, 'plan.json');
 writeFileSync(planPath, planned.stdout, { mode: 0o600 });
 let applied = run(['apply', '--plan', planPath, '--expected-digest', plan.digest]);
 assert.equal(applied.status, 0, applied.stderr);
-assert.equal(run(['apply', '--plan', planPath, '--expected-digest', plan.digest]).status, 0, 'idempotent rerun');
+assert.match(
+  run(['apply', '--plan', planPath, '--expected-digest', plan.digest]).stderr,
+  /BOOTSTRAP_TRUST_REVIEW_REQUIRED/,
+  'an absent-trust plan is one-shot',
+);
+const presentPlanResult = run(f.args);
+assert.equal(presentPlanResult.status, 0, presentPlanResult.stderr);
+plan = JSON.parse(presentPlanResult.stdout);
+planPath = join(f.root, 'present-plan.json');
+writeFileSync(planPath, presentPlanResult.stdout, { mode: 0o600 });
+const presentApply = run(['apply', '--plan', planPath, '--expected-digest', plan.digest]);
+assert.equal(presentApply.status, 0, `reviewed present-trust rerun: ${presentApply.stderr}`);
 assert.notEqual(run(['apply', '--plan', planPath, '--expected-digest', '0'.repeat(64)]).status, 0, 'digest mismatch');
 assert.equal(
   run(['preflight', '--plan', planPath, '--expected-digest', plan.digest]).status,
@@ -162,6 +193,36 @@ assert.deepEqual(readFileSync(f.paths['runtime-inventory']), readFileSync(f.inve
 
 const selfStat = readFileSync(`/proc/${process.pid}/stat`, 'utf8');
 const selfStart = selfStat.slice(selfStat.lastIndexOf(') ') + 2).split(' ')[19];
+const malformedLiveLock = fixture();
+mkdirSync(join(malformedLiveLock.root, 'locks'), { mode: 0o700 });
+writeFileSync(
+  malformedLiveLock.paths['provision-lock'],
+  `${JSON.stringify({ version: 1, planDigest: 'a'.repeat(64), pid: process.pid, start: '', nonce: 'a'.repeat(32) })}\n`,
+  { mode: 0o600 },
+);
+assert.match(run(malformedLiveLock.args).stderr, /INVALID_PROVISION_LOCK/);
+replaceFixtureContents(
+  malformedLiveLock.paths['provision-lock'],
+  `${JSON.stringify({
+    version: 1,
+    planDigest: 'a'.repeat(64),
+    pid: process.pid,
+    start: Number(selfStart),
+    nonce: 'a'.repeat(32),
+  })}\n`,
+);
+assert.match(run(malformedLiveLock.args).stderr, /INVALID_PROVISION_LOCK/);
+replaceFixtureContents(
+  malformedLiveLock.paths['provision-lock'],
+  `${JSON.stringify({
+    version: 1,
+    planDigest: 'a'.repeat(64),
+    pid: process.pid,
+    start: `0${selfStart}`,
+    nonce: 'a'.repeat(32),
+  })}\n`,
+);
+assert.match(run(malformedLiveLock.args).stderr, /INVALID_PROVISION_LOCK/);
 writeFileSync(
   f.paths['provision-lock'],
   `${JSON.stringify({ version: 1, planDigest: plan.digest, pid: process.pid, start: selfStart, nonce: 'a'.repeat(32) })}\n`,
@@ -169,7 +230,7 @@ writeFileSync(
 );
 assert.match(
   run(['apply', '--plan', planPath, '--expected-digest', plan.digest]).stderr,
-  /PROVISION_LOCK_HELD/,
+  /PROVISION_LOCK_REVIEW_REQUIRED/,
   'concurrent provisioning writer refused',
 );
 writeFileSync(
@@ -177,10 +238,16 @@ writeFileSync(
   `${JSON.stringify({ version: 1, planDigest: plan.digest, pid: 99999999, start: '1', nonce: 'b'.repeat(32) })}\n`,
   { mode: 0o600 },
 );
+const staleLockPlanResult = run(f.args);
+assert.equal(staleLockPlanResult.status, 0, staleLockPlanResult.stderr);
+const staleLockPlan = JSON.parse(staleLockPlanResult.stdout);
+const staleLockPlanPath = join(f.root, 'stale-lock-plan.json');
+writeFileSync(staleLockPlanPath, staleLockPlanResult.stdout, { mode: 0o600 });
+const staleLockRecovery = run(['apply', '--plan', staleLockPlanPath, '--expected-digest', staleLockPlan.digest]);
 assert.equal(
-  run(['apply', '--plan', planPath, '--expected-digest', plan.digest]).status,
+  staleLockRecovery.status,
   0,
-  'authenticated plan-bound stale provisioning lock recovered',
+  `authenticated plan-bound stale provisioning lock recovered: ${staleLockRecovery.stderr}`,
 );
 
 // The installer consumes only paths emitted by the authenticated preflight and
@@ -224,30 +291,40 @@ const rplan = JSON.parse(rp.stdout);
 const rpath = join(rollback.root, 'plan.json');
 writeFileSync(rpath, rp.stdout);
 const failed = run(['apply', '--plan', rpath, '--expected-digest', rplan.digest], {
+  CLAUDE_COORDINATION_TESTING: '1',
   CLAUDE_COORDINATION_TEST_FAIL_AFTER: '3',
 });
 assert.notEqual(failed.status, 0);
+assert.match(
+  run(['apply', '--plan', rpath, '--expected-digest', rplan.digest]).stderr,
+  /BOOTSTRAP_ATTEMPT_REVIEW_REQUIRED/,
+  'any failed bootstrap attempt permanently consumes the reviewed absence',
+);
 for (const file of [rollback.paths.trust, rollback.paths.config, rollback.paths['linux-env']])
   assert.equal(existsSync(file), false);
 assert.equal(existsSync(rollback.paths.manifest), false);
 
-// SIGKILL leaves an owner-only digest-bound journal. A fresh process can either
-// finish the same reviewed plan or roll back only targets absent at plan start.
+// An interrupted absent-trust bootstrap is one-shot. Recovery requires a newly
+// generated and reviewed present-trust plan that pins both trust and progress.
 const crashResume = fixture();
 const crashPlanResult = run(crashResume.args);
 const crashPlan = JSON.parse(crashPlanResult.stdout);
 const crashPlanPath = join(crashResume.root, 'plan.json');
 writeFileSync(crashPlanPath, crashPlanResult.stdout, { mode: 0o600 });
 const killed = run(['apply', '--plan', crashPlanPath, '--expected-digest', crashPlan.digest], {
+  CLAUDE_COORDINATION_TESTING: '1',
   CLAUDE_COORDINATION_TEST_SIGKILL_AFTER: '3',
 });
 assert.equal(killed.signal, 'SIGKILL');
 assert.equal(existsSync(`${crashResume.paths.config}.provision-journal`), true);
-assert.equal(
-  run(['apply', '--plan', crashPlanPath, '--expected-digest', crashPlan.digest]).status,
-  0,
-  'fresh-process resume',
-);
+assert.match(run(['apply', '--plan', crashPlanPath, '--expected-digest', crashPlan.digest]).stderr, /BOOTSTRAP_/);
+const crashRecoveryResult = run(crashResume.args);
+assert.equal(crashRecoveryResult.status, 0, crashRecoveryResult.stderr);
+const crashRecoveryPlan = JSON.parse(crashRecoveryResult.stdout);
+const crashRecoveryPath = join(crashResume.root, 'present-recovery-plan.json');
+writeFileSync(crashRecoveryPath, crashRecoveryResult.stdout, { mode: 0o600 });
+const crashRecoveryApply = run(['apply', '--plan', crashRecoveryPath, '--expected-digest', crashRecoveryPlan.digest]);
+assert.equal(crashRecoveryApply.status, 0, `new reviewed present-trust plan resumes: ${crashRecoveryApply.stderr}`);
 assert.equal(existsSync(`${crashResume.paths.config}.provision-journal`), false);
 
 const crashRollback = fixture();
@@ -257,14 +334,24 @@ const rollbackPlanPath = join(crashRollback.root, 'plan.json');
 writeFileSync(rollbackPlanPath, rollbackPlanResult.stdout, { mode: 0o600 });
 assert.equal(
   run(['apply', '--plan', rollbackPlanPath, '--expected-digest', rollbackPlan.digest], {
+    CLAUDE_COORDINATION_TESTING: '1',
     CLAUDE_COORDINATION_TEST_SIGKILL_AFTER: '2',
   }).signal,
   'SIGKILL',
 );
+assert.match(
+  run(['rollback', '--plan', rollbackPlanPath, '--expected-digest', rollbackPlan.digest]).stderr,
+  /BOOTSTRAP_/,
+);
+const rollbackRecoveryResult = run(crashRollback.args);
+assert.equal(rollbackRecoveryResult.status, 0, rollbackRecoveryResult.stderr);
+const rollbackRecoveryPlan = JSON.parse(rollbackRecoveryResult.stdout);
+const rollbackRecoveryPath = join(crashRollback.root, 'present-rollback-plan.json');
+writeFileSync(rollbackRecoveryPath, rollbackRecoveryResult.stdout, { mode: 0o600 });
 assert.equal(
-  run(['rollback', '--plan', rollbackPlanPath, '--expected-digest', rollbackPlan.digest]).status,
+  run(['rollback', '--plan', rollbackRecoveryPath, '--expected-digest', rollbackRecoveryPlan.digest]).status,
   0,
-  'fresh-process rollback',
+  'new reviewed present-trust plan rolls back exact pinned progress',
 );
 for (const file of [
   crashRollback.paths.manifest,
@@ -344,7 +431,11 @@ const refusedRollback = run([
   rollbackForeignPlan.digest,
 ]);
 assert.notEqual(refusedRollback.status, 0);
-assert.match(refusedRollback.stderr, /PROVISION_RECOVERY_UNCERTAIN/);
+assert.match(refusedRollback.stderr, /BOOTSTRAP_(ATTEMPT|JOURNAL)_REVIEW_REQUIRED/);
+writeFileSync(rollbackForeign.paths.trust, Buffer.alloc(32, 9), { flag: 'wx', mode: 0o600 });
+const foreignRecoveryResult = run(rollbackForeign.args);
+assert.notEqual(foreignRecoveryResult.status, 0);
+assert.match(foreignRecoveryResult.stderr, /PROVISION_RECOVERY_UNCERTAIN/);
 assert.equal(existsSync(rollbackForeignJournalPath), true);
 assert.equal(existsSync(rollbackForeignJournal.ownedTargets[0].proof), true, 'rollback mismatch preserves proof');
 assert.deepEqual(readFileSync(rollbackForeign.paths.manifest), readFileSync(rollbackForeign.manifestSource));
@@ -360,8 +451,15 @@ for (const fault of ['SIGKILL:PROVISION_PRE_LINK', 'SIGKILL:PROVISION_LINKED', '
     CLAUDE_COORDINATION_TEST_FAULT: fault,
   });
   assert.equal(result.signal, 'SIGKILL', fault);
+  assert.match(run(['rollback', '--plan', crashPlanPath, '--expected-digest', crashPlan.digest]).stderr, /BOOTSTRAP_/);
+  writeFileSync(crash.paths.trust, Buffer.alloc(32, 9), { flag: 'wx', mode: 0o600 });
+  const recoveryResult = run(crash.args);
+  assert.equal(recoveryResult.status, 0, recoveryResult.stderr);
+  const recoveryPlan = JSON.parse(recoveryResult.stdout);
+  const recoveryPath = join(crash.root, 'present-recovery-plan.json');
+  writeFileSync(recoveryPath, recoveryResult.stdout, { mode: 0o600 });
   assert.equal(
-    run(['rollback', '--plan', crashPlanPath, '--expected-digest', crashPlan.digest]).status,
+    run(['rollback', '--plan', recoveryPath, '--expected-digest', recoveryPlan.digest]).status,
     0,
     `${fault} rollback`,
   );
@@ -377,16 +475,130 @@ const completePlanPath = join(completeCleanup.root, 'plan.json');
 writeFileSync(completePlanPath, completePlanResult.stdout, { mode: 0o600 });
 assert.equal(
   run(['apply', '--plan', completePlanPath, '--expected-digest', completePlan.digest], {
+    CLAUDE_COORDINATION_TESTING: '1',
     CLAUDE_COORDINATION_TEST_SIGKILL_COMPLETE_PROOF_AFTER: '2',
   }).signal,
   'SIGKILL',
 );
 assert.equal(
-  run(['apply', '--plan', completePlanPath, '--expected-digest', completePlan.digest]).status,
+  (() => {
+    const recoveryResult = run(completeCleanup.args);
+    assert.equal(recoveryResult.status, 0, recoveryResult.stderr);
+    const recoveryPlan = JSON.parse(recoveryResult.stdout);
+    const recoveryPath = join(completeCleanup.root, 'present-complete-plan.json');
+    writeFileSync(recoveryPath, recoveryResult.stdout, { mode: 0o600 });
+    return run(['apply', '--plan', recoveryPath, '--expected-digest', recoveryPlan.digest]).status;
+  })(),
   0,
   'fresh apply completes interrupted COMPLETE proof cleanup',
 );
 assert.equal(existsSync(`${completeCleanup.paths.config}.provision-journal`), false);
+
+// Completion receipt publication recovers the exact deterministic preparation
+// inode after every crash boundary; a forged receipt or preparation is refused.
+for (const fault of ['SIGKILL:RECORD_PRE_LINK', 'SIGKILL:RECORD_LINKED', 'SIGKILL:RECORD_DIR_FSYNCED']) {
+  const receiptCrash = fixture();
+  writeFileSync(receiptCrash.paths.trust, Buffer.alloc(32, 7), { mode: 0o600 });
+  const receiptPlanResult = run(receiptCrash.args);
+  assert.equal(receiptPlanResult.status, 0, receiptPlanResult.stderr);
+  const receiptPlan = JSON.parse(receiptPlanResult.stdout);
+  const receiptPlanPath = join(receiptCrash.root, 'receipt-plan.json');
+  const receiptPath = `${receiptCrash.paths.config}.provision-receipt.${receiptPlan.digest}`;
+  writeFileSync(receiptPlanPath, receiptPlanResult.stdout, { mode: 0o600 });
+  const crashed = run(['apply', '--plan', receiptPlanPath, '--expected-digest', receiptPlan.digest], {
+    CLAUDE_COORDINATION_TESTING: '1',
+    CLAUDE_COORDINATION_TEST_RECORD_TARGET: receiptPath,
+    CLAUDE_COORDINATION_TEST_FAULT: fault,
+  });
+  assert.equal(crashed.signal, 'SIGKILL', fault);
+  const recoveryPlanResult = run(receiptCrash.args);
+  assert.equal(recoveryPlanResult.status, 0, recoveryPlanResult.stderr);
+  const recoveryPlan = JSON.parse(recoveryPlanResult.stdout);
+  const recoveryPlanPath = join(receiptCrash.root, `receipt-recovery-${fault.replaceAll(':', '-')}.json`);
+  writeFileSync(recoveryPlanPath, recoveryPlanResult.stdout, { mode: 0o600 });
+  const recovered = run(['apply', '--plan', recoveryPlanPath, '--expected-digest', recoveryPlan.digest]);
+  assert.equal(recovered.status, 0, `${fault} reviewed receipt recovery: ${recovered.stderr}`);
+}
+
+const forgedReceipt = fixture();
+writeFileSync(forgedReceipt.paths.trust, Buffer.alloc(32, 7), { mode: 0o600 });
+const forgedPlanResult = run(forgedReceipt.args);
+const forgedPlan = JSON.parse(forgedPlanResult.stdout);
+const forgedPlanPath = join(forgedReceipt.root, 'forged-receipt-plan.json');
+writeFileSync(forgedPlanPath, forgedPlanResult.stdout, { mode: 0o600 });
+assert.equal(run(['apply', '--plan', forgedPlanPath, '--expected-digest', forgedPlan.digest]).status, 0);
+const forgedReceiptPath = `${forgedReceipt.paths.config}.provision-receipt.${forgedPlan.digest}`;
+const authenticReceipt = JSON.parse(readFileSync(forgedReceiptPath, 'utf8'));
+unlinkSync(forgedReceiptPath);
+writeFileSync(forgedReceiptPath, `${JSON.stringify({ ...authenticReceipt, signature: '0'.repeat(64) })}\n`, {
+  mode: 0o600,
+});
+assert.match(
+  run(['apply', '--plan', forgedPlanPath, '--expected-digest', forgedPlan.digest]).stderr,
+  /INVALID_PROVISION_RECEIPT/,
+);
+
+const replacedTrust = fixture();
+writeFileSync(replacedTrust.paths.trust, Buffer.alloc(32, 7), { mode: 0o600 });
+const replacedTrustPlanResult = run(replacedTrust.args);
+const replacedTrustPlan = JSON.parse(replacedTrustPlanResult.stdout);
+const replacedTrustPlanPath = join(replacedTrust.root, 'replaced-trust-plan.json');
+writeFileSync(replacedTrustPlanPath, replacedTrustPlanResult.stdout, { mode: 0o600 });
+unlinkSync(replacedTrust.paths.trust);
+writeFileSync(replacedTrust.paths.trust, Buffer.alloc(32, 7), { mode: 0o600 });
+assert.match(
+  run(['apply', '--plan', replacedTrustPlanPath, '--expected-digest', replacedTrustPlan.digest]).stderr,
+  /TRUST_SNAPSHOT_CHANGED/,
+  'same-byte trust replacement is rejected by descriptor identity',
+);
+
+const forgedJournal = fixture();
+writeFileSync(forgedJournal.paths.trust, Buffer.alloc(32, 7), { mode: 0o600 });
+writeFileSync(
+  `${forgedJournal.paths.config}.provision-journal`,
+  `${JSON.stringify({
+    version: 1,
+    operationId: 'a'.repeat(32),
+    planDigest: 'b'.repeat(64),
+    phase: 'APPLYING',
+    ownedTargets: [
+      {
+        path: forgedJournal.paths.manifest,
+        proof: forgedJournal.manifestSource,
+        digest: 'c'.repeat(64),
+        dev: '1',
+        ino: '1',
+        birthtimeNs: '1',
+        length: 1,
+      },
+    ],
+  })}\n`,
+  { mode: 0o600 },
+);
+assert.match(run(forgedJournal.args).stderr, /INVALID_PROVISION_JOURNAL/);
+
+const postPlanJournal = fixture();
+writeFileSync(postPlanJournal.paths.trust, Buffer.alloc(32, 7), { mode: 0o600 });
+const postPlanResult = run(postPlanJournal.args);
+const postPlan = JSON.parse(postPlanResult.stdout);
+const postPlanPath = join(postPlanJournal.root, 'post-plan-journal.json');
+writeFileSync(postPlanPath, postPlanResult.stdout, { mode: 0o600 });
+writeFileSync(
+  `${postPlanJournal.paths.config}.provision-journal`,
+  `${JSON.stringify({
+    version: 1,
+    operationId: 'a'.repeat(32),
+    planDigest: postPlan.digest,
+    phase: 'APPLYING',
+    ownedTargets: [],
+  })}\n`,
+  { mode: 0o600 },
+);
+assert.match(
+  run(['apply', '--plan', postPlanPath, '--expected-digest', postPlan.digest]).stderr,
+  /PROVISION_JOURNAL_REVIEW_REQUIRED/,
+  'a correct-shape journal created after review is never recovery authority',
+);
 
 // Upgrade keeps an existing owner-only key and provisions missing first-party artifacts.
 const upgrade = fixture();

@@ -9,7 +9,6 @@ import {
   lstatSync,
   realpathSync,
   renameSync,
-  rmSync,
   statSync,
   writeFileSync,
   closeSync,
@@ -19,7 +18,7 @@ import {
   fstatSync,
   unlinkSync,
 } from 'node:fs';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -114,12 +113,38 @@ function fsyncDirectory(path) {
 }
 function processStart(pid) {
   try {
+    process.kill(pid, 0);
+  } catch (error) {
+    return error?.code === 'ESRCH' ? { state: 'dead' } : { state: 'unknown' };
+  }
+  try {
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
     const fields = stat.slice(stat.lastIndexOf(') ') + 2).split(' ');
-    return fields[19];
+    if (!/^\d+$/.test(fields[19] || '')) return { state: 'unknown' };
+    return { state: 'live', value: fields[19] };
   } catch {
-    return null;
+    return { state: 'unknown' };
   }
+}
+function bootstrapAttemptPath(plan) {
+  return `${plan.paths['provision-lock']}.bootstrap-attempt`;
+}
+function validateProvisionLockRecord(record) {
+  if (
+    !record ||
+    Object.keys(record).sort().join(',') !== 'nonce,pid,planDigest,start,version' ||
+    record.version !== 1 ||
+    typeof record.planDigest !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(record.planDigest || '') ||
+    !Number.isSafeInteger(record.pid) ||
+    record.pid <= 0 ||
+    typeof record.start !== 'string' ||
+    !/^(0|[1-9]\d*)$/.test(record.start || '') ||
+    typeof record.nonce !== 'string' ||
+    !/^[a-f0-9]{32}$/.test(record.nonce || '')
+  )
+    fail('INVALID_PROVISION_LOCK');
+  return record;
 }
 function withProvisionLock(plan, callback) {
   const path = plan.paths['provision-lock'];
@@ -127,55 +152,46 @@ function withProvisionLock(plan, callback) {
   let owned;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const fd = openSync(path, 'wx', 0o600);
       const nonce = randomBytes(16).toString('hex');
-      try {
-        writeFileSync(
-          fd,
-          `${JSON.stringify({ version: 1, planDigest: plan.digest, pid: process.pid, start: processStart(process.pid), nonce })}\n`,
-        );
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      fsyncDirectory(dirname(path));
-      owned = lstatSync(path);
+      const self = processStart(process.pid);
+      if (self.state !== 'live') fail('PROVISION_LOCK_LIVENESS_UNKNOWN');
+      owned = publishExclusiveRecord(
+        path,
+        `${JSON.stringify({ version: 1, planDigest: plan.digest, pid: process.pid, start: self.value, nonce })}\n`,
+        'PROVISION_LOCK_PUBLICATION_FAILED',
+      );
       break;
     } catch (error) {
       if (error?.code !== 'EEXIST' || attempt > 0) throw error;
       validateExistingTarget(path, 'file');
-      const descriptor = lstatSync(path);
-      const stale = json(path, 'INVALID_PROVISION_LOCK');
+      const descriptor = secureReadDescriptor(path, 'INVALID_PROVISION_LOCK');
+      if (!plan.provisionLockSnapshot || !descriptorEquals(descriptor, plan.provisionLockSnapshot))
+        fail('PROVISION_LOCK_REVIEW_REQUIRED');
+      const stale = validateProvisionLockRecord(parseStrictJson(descriptor.bytes, 'INVALID_PROVISION_LOCK'));
       if (
-        Object.keys(stale).sort().join(',') !== 'nonce,pid,planDigest,start,version' ||
-        stale.version !== 1 ||
-        stale.planDigest !== plan.digest ||
-        !Number.isSafeInteger(stale.pid) ||
-        typeof stale.start !== 'string' ||
-        !/^[a-f0-9]{32}$/.test(stale.nonce)
+        ![plan.digest, plan.recoverySnapshot?.planDigest, plan.provisionLockSnapshot?.planDigest]
+          .filter(Boolean)
+          .includes(stale.planDigest)
       )
         fail('INVALID_PROVISION_LOCK');
-      if (processStart(stale.pid) === stale.start) fail('PROVISION_LOCK_HELD');
-      const current = lstatSync(path);
-      if (current.dev !== descriptor.dev || current.ino !== descriptor.ino) fail('PROVISION_LOCK_OWNERSHIP_LOST');
-      unlinkSync(path);
-      fsyncDirectory(dirname(path));
+      const current = processStart(stale.pid);
+      if (current.state === 'unknown' || (current.state === 'live' && current.value === stale.start))
+        fail('PROVISION_LOCK_HELD');
+      removeOwnedPath(path, descriptor, 'PROVISION_LOCK_OWNERSHIP_LOST');
     }
   }
   if (!owned) fail('PROVISION_LOCK_HELD');
   try {
     return callback();
   } finally {
-    if (existsSync(path)) {
-      const current = lstatSync(path);
-      if (current.dev !== owned.dev || current.ino !== owned.ino) fail('PROVISION_LOCK_OWNERSHIP_LOST');
-      unlinkSync(path);
-      fsyncDirectory(dirname(path));
-    }
+    if (!removeOwnedPath(path, owned, 'PROVISION_LOCK_OWNERSHIP_LOST')) fail('PROVISION_LOCK_OWNERSHIP_LOST');
   }
 }
 function descriptorIdentity(stat) {
   return { dev: stat.dev.toString(), ino: stat.ino.toString(), birthtimeNs: stat.birthtimeNs.toString() };
+}
+function descriptorEquals(actual, expected) {
+  return ['dev', 'ino', 'birthtimeNs', 'digest', 'length'].every((key) => actual[key] === expected[key]);
 }
 function secureReadDescriptor(path, code, requireSingleLink = true) {
   let fd;
@@ -186,13 +202,18 @@ function secureReadDescriptor(path, code, requireSingleLink = true) {
     const post = fstatSync(fd, { bigint: true });
     const named = lstatSync(path, { bigint: true });
     const identity = descriptorIdentity(pre);
+    const preparation = `${path}.preparation-${rawDigest(bytes)}`;
+    const boundedLinks =
+      pre.nlink === 2n &&
+      existsSync(preparation) &&
+      canonicalJson(identity) === canonicalJson(descriptorIdentity(lstatSync(preparation, { bigint: true })));
     if (
       !pre.isFile() ||
       !named.isFile() ||
       canonicalJson(identity) !== canonicalJson(descriptorIdentity(post)) ||
       canonicalJson(identity) !== canonicalJson(descriptorIdentity(named)) ||
       pre.uid !== BigInt(process.getuid()) ||
-      (requireSingleLink && pre.nlink !== 1n) ||
+      (requireSingleLink && pre.nlink !== 1n && !boundedLinks) ||
       (pre.mode & 0o077n) !== 0n
     )
       fail(code);
@@ -203,18 +224,169 @@ function secureReadDescriptor(path, code, requireSingleLink = true) {
     if (fd !== undefined) closeSync(fd);
   }
 }
+function secureReadPublishedRecord(path, code) {
+  const descriptor = secureReadDescriptor(path, code, false);
+  const proof = `${path}.preparation-${descriptor.digest}`;
+  const named = lstatSync(path, { bigint: true });
+  if (named.nlink === 1n) return descriptor;
+  if (named.nlink !== 2n || !existsSync(proof) || !descriptorMatches(proof, descriptor, code)) fail(code);
+  return { ...descriptor, proof };
+}
 function secureReadSource(path, code) {
-  return secureReadDescriptor(path, code).bytes;
+  return secureReadPublishedRecord(path, code).bytes;
 }
 function descriptorMatches(path, expected, code = 'PROVISION_RECOVERY_UNCERTAIN') {
   const actual = secureReadDescriptor(path, code, false);
-  return ['dev', 'ino', 'birthtimeNs', 'digest', 'length'].every((key) => actual[key] === expected[key]);
+  return descriptorEquals(actual, expected);
+}
+function completionReceiptPath(plan) {
+  return `${plan.paths.config}.provision-receipt.${plan.digest}`;
+}
+function completionPayload(plan, trust) {
+  return {
+    version: 1,
+    planDigest: plan.digest,
+    trustSnapshot: plan.trustSnapshot,
+    trustDescriptor: Object.fromEntries(
+      ['dev', 'ino', 'birthtimeNs', 'digest', 'length'].map((key) => [key, trust[key]]),
+    ),
+  };
+}
+function reviewedTrust(plan) {
+  if (plan.trustSnapshot?.state !== 'present' || !existsSync(plan.paths.trust)) fail('TRUST_SNAPSHOT_CHANGED');
+  const trust = secureReadDescriptor(plan.paths.trust, 'TRUST_SNAPSHOT_CHANGED');
+  if (!descriptorEquals(trust, plan.trustSnapshot)) fail('TRUST_SNAPSHOT_CHANGED');
+  return trust;
+}
+function validateCompletionReceipt(plan, trust = reviewedTrust(plan)) {
+  const path = completionReceiptPath(plan);
+  if (!existsSync(path)) fail('INVALID_PROVISION_RECEIPT');
+  if (!descriptorMatches(plan.paths.trust, trust, 'TRUST_SNAPSHOT_CHANGED')) fail('TRUST_SNAPSHOT_CHANGED');
+  const receiptDescriptor = secureReadPublishedRecord(path, 'INVALID_PROVISION_RECEIPT');
+  let receipt;
+  try {
+    receipt = parseStrictJson(receiptDescriptor.bytes, 'INVALID_PROVISION_RECEIPT');
+  } catch {
+    fail('INVALID_PROVISION_RECEIPT');
+  }
+  if (!receipt || Object.keys(receipt).sort().join(',') !== 'payload,signature') fail('INVALID_PROVISION_RECEIPT');
+  const expected = completionPayload(plan, trust);
+  if (canonicalJson(receipt.payload) !== canonicalJson(expected) || !/^[a-f0-9]{64}$/.test(receipt.signature || ''))
+    fail('INVALID_PROVISION_RECEIPT');
+  const signature = createHmac('sha256', trust.bytes).update(canonicalJson(expected)).digest();
+  if (!timingSafeEqual(Buffer.from(receipt.signature, 'hex'), signature)) fail('INVALID_PROVISION_RECEIPT');
+  return true;
+}
+function publishCompletionReceipt(plan, trust) {
+  if (plan.trustSnapshot?.state !== 'present') return false;
+  const path = completionReceiptPath(plan);
+  trust ||= reviewedTrust(plan);
+  if (!descriptorMatches(plan.paths.trust, trust, 'TRUST_SNAPSHOT_CHANGED')) fail('TRUST_SNAPSHOT_CHANGED');
+  const payload = completionPayload(plan, trust);
+  const bytes = Buffer.from(
+    `${canonicalJson({ payload, signature: createHmac('sha256', trust.bytes).update(canonicalJson(payload)).digest('hex') })}\n`,
+  );
+  if (existsSync(path)) return validateCompletionReceipt(plan, trust);
+  publishExclusiveRecord(path, bytes, 'INVALID_PROVISION_RECEIPT');
+  return validateCompletionReceipt(plan, trust);
+}
+function publishExclusiveRecord(path, bytes, code) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const expectedBytes = Buffer.from(bytes);
+  const temp = `${path}.preparation-${rawDigest(expectedBytes)}`;
+  let descriptor;
+  let fd;
+  try {
+    fd = openSync(temp, 'wx', 0o600);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+  }
+  if (fd === undefined) {
+    descriptor = secureReadDescriptor(temp, code, false);
+    if (!descriptor.bytes.equals(expectedBytes)) fail(code);
+  } else {
+    try {
+      writeFileSync(fd, expectedBytes);
+      fsyncSync(fd);
+      const stat = fstatSync(fd, { bigint: true });
+      descriptor = {
+        ...descriptorIdentity(stat),
+        digest: rawDigest(expectedBytes),
+        length: expectedBytes.length,
+      };
+    } finally {
+      closeSync(fd);
+    }
+  }
+  fsyncDirectory(dirname(path));
+  if (
+    process.env.CLAUDE_COORDINATION_TESTING === '1' &&
+    process.env.CLAUDE_COORDINATION_TEST_RECORD_TARGET === path &&
+    process.env.CLAUDE_COORDINATION_TEST_FAULT === 'SIGKILL:RECORD_PRE_LINK'
+  )
+    process.kill(process.pid, 'SIGKILL');
+  if (existsSync(path)) {
+    if (!descriptorMatches(path, descriptor, code)) linkSync(temp, path);
+  } else linkSync(temp, path);
+  if (
+    process.env.CLAUDE_COORDINATION_TESTING === '1' &&
+    process.env.CLAUDE_COORDINATION_TEST_RECORD_TARGET === path &&
+    process.env.CLAUDE_COORDINATION_TEST_FAULT === 'SIGKILL:RECORD_LINKED'
+  )
+    process.kill(process.pid, 'SIGKILL');
+  fsyncDirectory(dirname(path));
+  if (!descriptorMatches(path, descriptor, code)) fail(code);
+  if (
+    process.env.CLAUDE_COORDINATION_TESTING === '1' &&
+    process.env.CLAUDE_COORDINATION_TEST_RECORD_TARGET === path &&
+    process.env.CLAUDE_COORDINATION_TEST_FAULT === 'SIGKILL:RECORD_DIR_FSYNCED'
+  )
+    process.kill(process.pid, 'SIGKILL');
+  // Retain the exact preparation alias. Readers permit only this digest-derived
+  // two-link topology and reject arbitrary hardlinks.
+  return descriptor;
+}
+
+function beginAbsentTrustBootstrap(plan) {
+  const path = bootstrapAttemptPath(plan);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  let fd;
+  try {
+    fd = openSync(path, 'wx', 0o600);
+    writeFileSync(fd, `${canonicalJson({ version: 1, planDigest: plan.digest })}\n`);
+    fsyncSync(fd);
+  } catch (error) {
+    if (error?.code === 'EEXIST') fail('BOOTSTRAP_ATTEMPT_REVIEW_REQUIRED');
+    throw error;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  fsyncDirectory(dirname(path));
+}
+function removeOwnedPath(path, expected, code = 'PROVISION_RECOVERY_UNCERTAIN') {
+  const detached = `${path}.detached-${process.pid}-${randomBytes(4).toString('hex')}`;
+  try {
+    renameSync(path, detached);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+  if (!descriptorMatches(detached, expected, code)) {
+    fsyncDirectory(dirname(path));
+    fail(code);
+  }
+  // Retain the detached inode as evidence. Restoring or automatically deleting
+  // it would reopen the replacement race this cleanup is intended to close.
+  fsyncDirectory(dirname(path));
+  return true;
 }
 function validateExistingTarget(path, kind) {
   if (!existsSync(path)) return;
   const st = lstatSync(path);
   if (st.isSymbolicLink() || st.uid !== process.getuid()) fail('UNSAFE_EXISTING_TARGET');
-  if (kind === 'file' && (!st.isFile() || st.nlink !== 1 || (st.mode & 0o077) !== 0)) fail('UNSAFE_EXISTING_TARGET');
+  if (kind === 'file' && (!st.isFile() || ![1, 2].includes(st.nlink) || (st.mode & 0o077) !== 0))
+    fail('UNSAFE_EXISTING_TARGET');
+  if (kind === 'file' && st.nlink === 2) secureReadPublishedRecord(path, 'UNSAFE_EXISTING_TARGET');
   if (kind === 'directory' && (!st.isDirectory() || (st.mode & 0o077) !== 0)) fail('UNSAFE_EXISTING_TARGET');
 }
 function validateTopology(paths, quarantine) {
@@ -320,6 +492,61 @@ function buildPlan(args) {
   const paths = Object.fromEntries(PATH_FLAGS.map((k) => [k, args[k]]));
   const quarantine = args.quarantine.split(',').filter(Boolean);
   const canonicalPaths = validateTopology(paths, quarantine);
+  const trustSnapshot = existsSync(canonicalPaths.trust)
+    ? { state: 'present', ...secureReadDescriptor(canonicalPaths.trust, 'INVALID_TRUST_SNAPSHOT') }
+    : { state: 'absent' };
+  delete trustSnapshot.bytes;
+  const recoveryJournalPath = `${canonicalPaths.config}.provision-journal`;
+  const transitionPath = `${recoveryJournalPath}.transition`;
+  const transitionSnapshot = existsSync(transitionPath)
+    ? secureReadDescriptor(transitionPath, 'INVALID_PROVISION_JOURNAL_TRANSITION')
+    : null;
+  let transition;
+  if (transitionSnapshot) {
+    transition = parseStrictJson(transitionSnapshot.bytes, 'INVALID_PROVISION_JOURNAL_TRANSITION');
+    delete transitionSnapshot.bytes;
+  }
+  if (trustSnapshot.state === 'absent' && (transitionSnapshot || existsSync(recoveryJournalPath)))
+    fail('BOOTSTRAP_JOURNAL_REVIEW_REQUIRED');
+  let recoverySnapshot = existsSync(recoveryJournalPath)
+    ? secureReadDescriptor(recoveryJournalPath, 'INVALID_PROVISION_JOURNAL')
+    : null;
+  if (transition) {
+    if (
+      transition.version !== 1 ||
+      transition.path !== recoveryJournalPath ||
+      transition.nextProof !== `${recoveryJournalPath}.preparation-${transition.next?.digest}` ||
+      !descriptorMatches(transition.nextProof, transition.next, 'INVALID_PROVISION_JOURNAL_TRANSITION')
+    )
+      fail('INVALID_PROVISION_JOURNAL_TRANSITION');
+    recoverySnapshot = {
+      ...transition.next,
+      bytes: secureReadDescriptor(transition.nextProof, 'INVALID_PROVISION_JOURNAL_TRANSITION', false).bytes,
+    };
+  }
+  if (recoverySnapshot) {
+    let recoveryState;
+    try {
+      recoveryState = parseStrictJson(recoverySnapshot.bytes, 'INVALID_PROVISION_JOURNAL');
+    } catch {
+      fail('INVALID_PROVISION_JOURNAL');
+    }
+    validateProvisionJournalState(recoveryState, canonicalPaths);
+    recoverySnapshot.topology = provisionRecoveryTopology(recoveryState);
+    recoverySnapshot.planDigest = recoveryState.planDigest;
+    recoverySnapshot.state = recoveryState;
+    delete recoverySnapshot.bytes;
+  }
+  const provisionLockSnapshot = existsSync(canonicalPaths['provision-lock'])
+    ? secureReadDescriptor(canonicalPaths['provision-lock'], 'INVALID_PROVISION_LOCK')
+    : null;
+  if (provisionLockSnapshot) {
+    const lockState = validateProvisionLockRecord(
+      parseStrictJson(provisionLockSnapshot.bytes, 'INVALID_PROVISION_LOCK'),
+    );
+    provisionLockSnapshot.planDigest = lockState.planDigest;
+    delete provisionLockSnapshot.bytes;
+  }
   const manifestSource = canonicalProspective(args['manifest-source']);
   validateExistingTarget(manifestSource, 'file');
   const provisionJournal = canonicalProspective(`${canonicalPaths.config}.provision-journal`);
@@ -364,6 +591,10 @@ function buildPlan(args) {
     operator: args.operator,
     environment: args.environment,
     maxApprovalTtlMs: 900000,
+    trustSnapshot,
+    recoverySnapshot,
+    provisionLockSnapshot,
+    transitionSnapshot,
   };
   const intentDigest = digest(body);
   const withIntent = { ...body, intentDigest };
@@ -379,22 +610,34 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
     fail('EXISTING_FILE_MISMATCH');
   }
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
-  const fd = openSync(temp, 'wx', modeBits);
+  const temp = `${path}.preparation-${rawDigest(Buffer.from(data))}`;
   let descriptor;
   let journaled = false;
+  let fd;
   try {
-    writeFileSync(fd, data);
-    fsyncSync(fd);
-    const st = fstatSync(fd, { bigint: true });
-    descriptor = {
-      ...descriptorIdentity(st),
-      digest: rawDigest(Buffer.from(data)),
-      length: Buffer.byteLength(data),
-      proof: temp,
-    };
-  } finally {
-    closeSync(fd);
+    fd = openSync(temp, 'wx', modeBits);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+  }
+  if (fd === undefined) {
+    descriptor = secureReadDescriptor(temp, 'PROVISION_RECOVERY_UNCERTAIN', false);
+    if (!descriptor.bytes.equals(Buffer.from(data)) || mode(temp) !== modeBits || lstatSync(temp).nlink !== 1)
+      fail('PROVISION_RECOVERY_UNCERTAIN');
+    descriptor.proof = temp;
+  } else {
+    try {
+      writeFileSync(fd, data);
+      fsyncSync(fd);
+      const st = fstatSync(fd, { bigint: true });
+      descriptor = {
+        ...descriptorIdentity(st),
+        digest: rawDigest(Buffer.from(data)),
+        length: Buffer.byteLength(data),
+        proof: temp,
+      };
+    } finally {
+      closeSync(fd);
+    }
   }
   fsyncDirectory(dirname(temp));
   try {
@@ -443,10 +686,9 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
   } catch (error) {
     throw error?.code === 'EEXIST' ? new Error('EXISTING_FILE_MISMATCH') : error;
   } finally {
-    if (!journaled) {
-      rmSync(temp, { force: true });
-      fsyncDirectory(dirname(temp));
-    }
+    // Deterministic preparations are retained. If journal publication did not
+    // complete, the unbound owner-only inode is harmless recovery evidence.
+    if (!journaled) fsyncDirectory(dirname(temp));
   }
 }
 function rendered(plan) {
@@ -498,6 +740,15 @@ function readReviewedPlan(path, expected) {
 }
 function configFor(plan) {
   const p = plan.paths;
+  const {
+    trustSnapshot: _reviewedTrust,
+    recoverySnapshot: _reviewedRecovery,
+    provisionLockSnapshot: _reviewedProvisionLock,
+    transitionSnapshot: _reviewedTransition,
+    ...stableIntent
+  } = Object.fromEntries(
+    Object.entries(plan).filter(([key]) => !['digest', 'artifactDigests', 'intentDigest'].includes(key)),
+  );
   return {
     manifestPath: p.manifest,
     approvalKeyPath: p.trust,
@@ -514,52 +765,178 @@ function configFor(plan) {
     runtimeInventoryDigest: plan.inventoryDigest,
     authoritativeConsumerInventoryPath: p['authoritative-consumer-inventory'],
     authoritativeConsumerInventoryDigest: plan.consumerInventoryDigest,
-    deploymentPlanDigest: plan.intentDigest,
+    deploymentPlanDigest: digest(stableIntent),
   };
 }
 function journalPath(plan) {
   return `${plan.paths.config}.provision-journal`;
 }
-function writeProvisionJournal(plan, state) {
-  const path = journalPath(plan);
-  const temp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const fd = openSync(temp, 'wx', 0o600);
-  try {
-    writeFileSync(fd, `${JSON.stringify(state, null, 2)}\n`);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(temp, path);
-  fsyncDirectory(dirname(path));
+function journalTransitionPath(plan) {
+  return `${journalPath(plan)}.transition`;
 }
-function readProvisionJournal(plan) {
-  const path = journalPath(plan);
-  if (!existsSync(path)) return null;
-  validateExistingTarget(path, 'file');
-  const state = json(path, 'INVALID_PROVISION_JOURNAL');
-  const keys = Object.keys(state).sort();
+function provisionTargetPaths(paths) {
+  return new Set([
+    paths.manifest,
+    paths.trust,
+    paths.config,
+    paths['runtime-inventory'],
+    paths['authoritative-consumer-inventory'],
+    paths['linux-env'],
+    paths['macos-env'],
+    paths['linux-unit'],
+    paths['linux-token-feed-unit'],
+    paths['linux-refresh-unit'],
+    paths['macos-plist'],
+  ]);
+}
+function validateProvisionJournalState(state, paths, acceptedPlanDigests) {
+  const keys = Object.keys(state || {}).sort();
+  const allowed = provisionTargetPaths(paths);
   if (
-    keys.join(',') !== 'ownedTargets,phase,planDigest,version' ||
+    keys.join(',') !== 'operationId,ownedTargets,phase,planDigest,version' ||
     state.version !== 1 ||
-    state.planDigest !== plan.digest ||
+    !/^[a-f0-9]{32}$/.test(state.operationId || '') ||
+    !/^[a-f0-9]{64}$/.test(state.planDigest || '') ||
+    (acceptedPlanDigests && !acceptedPlanDigests.includes(state.planDigest)) ||
     !['APPLYING', 'COMPLETE'].includes(state.phase) ||
     !Array.isArray(state.ownedTargets) ||
     state.ownedTargets.some(
       (target) =>
         !target ||
         Object.keys(target).sort().join(',') !== 'birthtimeNs,dev,digest,ino,length,path,proof' ||
-        typeof target.path !== 'string' ||
-        typeof target.proof !== 'string' ||
+        !allowed.has(target.path) ||
+        target.proof !== `${target.path}.preparation-${target.digest}` ||
         !/^[a-f0-9]{64}$/.test(target.digest) ||
         !['birthtimeNs', 'dev', 'ino'].every((key) => /^\d+$/.test(target[key])) ||
         !Number.isSafeInteger(target.length) ||
         target.length < 0,
-    )
+    ) ||
+    new Set(state.ownedTargets.map((target) => target.path)).size !== state.ownedTargets.length
   )
     fail('INVALID_PROVISION_JOURNAL');
+}
+function provisionRecoveryTopology(state) {
+  return state.ownedTargets.map((target) => {
+    if (!existsSync(target.proof) || !descriptorMatches(target.proof, target, 'PROVISION_RECOVERY_UNCERTAIN'))
+      fail('PROVISION_RECOVERY_UNCERTAIN');
+    const finalPresent = existsSync(target.path);
+    if (finalPresent && !descriptorMatches(target.path, target, 'PROVISION_RECOVERY_UNCERTAIN'))
+      fail('PROVISION_RECOVERY_UNCERTAIN');
+    const proofNlink = lstatSync(target.proof).nlink;
+    if (proofNlink !== (finalPresent ? 2 : 1)) fail('PROVISION_RECOVERY_UNCERTAIN');
+    return { path: target.path, finalPresent, proofNlink };
+  });
+}
+function writeProvisionJournal(plan, state) {
+  const path = journalPath(plan);
+  const bytes = Buffer.from(`${JSON.stringify(state, null, 2)}\n`);
+  const temp = `${path}.preparation-${rawDigest(bytes)}`;
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  let fd;
+  try {
+    fd = openSync(temp, 'wx', 0o600);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+  }
+  if (fd !== undefined) {
+    try {
+      writeFileSync(fd, bytes);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  }
+  const descriptor = secureReadDescriptor(temp, 'INVALID_PROVISION_JOURNAL', false);
+  if (!descriptor.bytes.equals(bytes)) fail('INVALID_PROVISION_JOURNAL');
+  let prior = null;
+  if (existsSync(path)) {
+    prior = secureReadDescriptor(path, 'INVALID_PROVISION_JOURNAL', false);
+    if (!state.journalDescriptor || !descriptorEquals(prior, state.journalDescriptor))
+      fail('PROVISION_JOURNAL_OWNERSHIP_LOST');
+    if (descriptorEquals(prior, descriptor)) {
+      if (lstatSync(temp).nlink !== 2) fail('INVALID_PROVISION_JOURNAL');
+      fsyncDirectory(dirname(path));
+      Object.defineProperty(state, 'journalDescriptor', { value: descriptor, writable: true, configurable: true });
+      return;
+    }
+    if (lstatSync(temp).nlink !== 1) fail('INVALID_PROVISION_JOURNAL');
+  } else if (lstatSync(temp).nlink !== 1) fail('INVALID_PROVISION_JOURNAL');
+  const transitionPath = journalTransitionPath(plan);
+  const clean = (value) =>
+    value && Object.fromEntries(['dev', 'ino', 'birthtimeNs', 'digest', 'length'].map((key) => [key, value[key]]));
+  const transition = { version: 1, path, prior: clean(prior), next: clean(descriptor), nextProof: temp };
+  const transitionDescriptor = publishExclusiveRecord(
+    transitionPath,
+    `${canonicalJson(transition)}\n`,
+    'INVALID_PROVISION_JOURNAL_TRANSITION',
+  );
+  if (prior) removeOwnedPath(path, prior, 'INVALID_PROVISION_JOURNAL');
+  linkSync(temp, path);
+  fsyncDirectory(dirname(path));
+  if (!descriptorMatches(path, descriptor, 'INVALID_PROVISION_JOURNAL')) fail('INVALID_PROVISION_JOURNAL');
+  removeOwnedPath(transitionPath, transitionDescriptor, 'INVALID_PROVISION_JOURNAL_TRANSITION');
+  Object.defineProperty(state, 'journalDescriptor', { value: descriptor, writable: true, configurable: true });
+}
+function recoverProvisionJournalTransition(plan) {
+  const path = journalTransitionPath(plan);
+  if (!existsSync(path)) return;
+  if (
+    !plan.transitionSnapshot ||
+    !descriptorMatches(path, plan.transitionSnapshot, 'INVALID_PROVISION_JOURNAL_TRANSITION')
+  )
+    fail('PROVISION_JOURNAL_TRANSITION_REVIEW_REQUIRED');
+  const descriptor = secureReadDescriptor(path, 'INVALID_PROVISION_JOURNAL_TRANSITION');
+  const transition = parseStrictJson(descriptor.bytes, 'INVALID_PROVISION_JOURNAL_TRANSITION');
+  if (
+    transition.version !== 1 ||
+    transition.path !== journalPath(plan) ||
+    transition.nextProof !== `${transition.path}.preparation-${transition.next?.digest}` ||
+    !descriptorMatches(transition.nextProof, transition.next, 'INVALID_PROVISION_JOURNAL_TRANSITION')
+  )
+    fail('INVALID_PROVISION_JOURNAL_TRANSITION');
+  if (existsSync(transition.path)) {
+    if (descriptorMatches(transition.path, transition.next, 'INVALID_PROVISION_JOURNAL_TRANSITION')) {
+      // already published
+    } else if (
+      transition.prior &&
+      descriptorMatches(transition.path, transition.prior, 'INVALID_PROVISION_JOURNAL_TRANSITION')
+    )
+      removeOwnedPath(transition.path, transition.prior, 'INVALID_PROVISION_JOURNAL_TRANSITION');
+    else fail('INVALID_PROVISION_JOURNAL_TRANSITION');
+  }
+  if (!existsSync(transition.path)) linkSync(transition.nextProof, transition.path);
+  fsyncDirectory(dirname(transition.path));
+  if (!descriptorMatches(transition.path, transition.next, 'INVALID_PROVISION_JOURNAL_TRANSITION'))
+    fail('INVALID_PROVISION_JOURNAL_TRANSITION');
+  removeOwnedPath(path, descriptor, 'INVALID_PROVISION_JOURNAL_TRANSITION');
+}
+function readProvisionJournal(plan) {
+  const path = journalPath(plan);
+  if (!existsSync(path)) return null;
+  if (!plan.recoverySnapshot) fail('PROVISION_JOURNAL_REVIEW_REQUIRED');
+  const descriptor = secureReadDescriptor(path, 'INVALID_PROVISION_JOURNAL');
+  if (!descriptorMatches(path, plan.recoverySnapshot, 'INVALID_PROVISION_JOURNAL')) fail('INVALID_PROVISION_JOURNAL');
+  let state;
+  try {
+    state = parseStrictJson(descriptor.bytes, 'INVALID_PROVISION_JOURNAL');
+  } catch {
+    fail('INVALID_PROVISION_JOURNAL');
+  }
+  validateProvisionJournalState(state, plan.paths, [plan.recoverySnapshot.planDigest]);
+  if (plan.recoverySnapshot?.state && canonicalJson(state) !== canonicalJson(plan.recoverySnapshot.state))
+    fail('INVALID_PROVISION_JOURNAL');
+  if (
+    plan.recoverySnapshot?.topology &&
+    canonicalJson(provisionRecoveryTopology(state)) !== canonicalJson(plan.recoverySnapshot.topology)
+  )
+    fail('PROVISION_RECOVERY_UNCERTAIN');
+  Object.defineProperty(state, 'journalDescriptor', { value: descriptor, writable: true, configurable: true });
   return state;
+}
+function removeProvisionJournal(plan, state) {
+  const descriptor = state?.journalDescriptor || plan.recoverySnapshot;
+  if (!descriptor) fail('PROVISION_RECOVERY_UNCERTAIN');
+  removeOwnedPath(journalPath(plan), descriptor, 'PROVISION_RECOVERY_UNCERTAIN');
 }
 function cleanupOwned(plan, ownedTargets) {
   const allowed = new Set([
@@ -576,52 +953,53 @@ function cleanupOwned(plan, ownedTargets) {
     if (!descriptorMatches(target.proof, target)) fail('PROVISION_RECOVERY_UNCERTAIN');
     if (existsSync(target.path)) {
       if (!descriptorMatches(target.path, target)) fail('PROVISION_RECOVERY_UNCERTAIN');
-      rmSync(target.path);
+      removeOwnedPath(target.path, target);
     }
-    rmSync(target.proof);
+    removeOwnedPath(target.proof, target);
     if (existsSync(dirname(target.path))) fsyncDirectory(dirname(target.path));
   }
 }
 function applyReviewed(plan) {
   const supplied = plan.digest;
+  let trust;
+  // Trust is the precondition for interpreting any mutable progress record.
+  if (plan.trustSnapshot?.state === 'absent') {
+    if (existsSync(journalPath(plan)) || existsSync(journalTransitionPath(plan)))
+      fail('BOOTSTRAP_JOURNAL_REVIEW_REQUIRED');
+    if (existsSync(plan.paths.trust)) fail('BOOTSTRAP_TRUST_REVIEW_REQUIRED');
+  } else trust = reviewedTrust(plan);
+  recoverProvisionJournalTransition(plan);
   let state = readProvisionJournal(plan);
   const resuming = Boolean(state);
   if (state) {
     for (const target of state.ownedTargets) {
-      if (!existsSync(target.proof) && state.phase === 'COMPLETE') {
-        if (!existsSync(target.path)) fail('PROVISION_RECOVERY_UNCERTAIN');
-        if (!descriptorMatches(target.path, target)) fail('PROVISION_RECOVERY_UNCERTAIN');
-        continue;
-      }
       if (!existsSync(target.proof)) fail('PROVISION_RECOVERY_UNCERTAIN');
       if (!descriptorMatches(target.proof, target)) fail('PROVISION_RECOVERY_UNCERTAIN');
       if (!existsSync(target.path)) {
         cleanupOwned(plan, state.ownedTargets);
-        rmSync(journalPath(plan), { force: true });
-        fsyncDirectory(dirname(journalPath(plan)));
+        removeProvisionJournal(plan, state);
         fail('PROVISION_RECOVERY_ROLLED_BACK');
       }
       if (!descriptorMatches(target.path, target)) fail('PROVISION_RECOVERY_UNCERTAIN');
     }
     if (state.phase === 'COMPLETE') {
       for (const target of state.ownedTargets) {
-        if (existsSync(target.proof)) {
-          if (
-            !descriptorMatches(target.proof, target) ||
-            !existsSync(target.path) ||
-            !descriptorMatches(target.path, target)
-          )
-            fail('PROVISION_RECOVERY_UNCERTAIN');
-          unlinkSync(target.proof);
-          if (process.env.CLAUDE_COORDINATION_TEST_SIGKILL_PROOF === target.proof) process.kill(process.pid, 'SIGKILL');
-        } else {
-          if (!existsSync(target.path) || !descriptorMatches(target.path, target)) fail('PROVISION_RECOVERY_UNCERTAIN');
-        }
+        if (
+          !descriptorMatches(target.proof, target) ||
+          !existsSync(target.path) ||
+          !descriptorMatches(target.path, target)
+        )
+          fail('PROVISION_RECOVERY_UNCERTAIN');
+        if (
+          process.env.CLAUDE_COORDINATION_TESTING === '1' &&
+          process.env.CLAUDE_COORDINATION_TEST_SIGKILL_PROOF === target.proof
+        )
+          process.kill(process.pid, 'SIGKILL');
         fsyncDirectory(dirname(target.proof));
       }
       preflight(plan.paths.config, plan.accounts, plan.paths, plan.inventoryDigest, plan);
-      rmSync(journalPath(plan));
-      fsyncDirectory(dirname(journalPath(plan)));
+      publishCompletionReceipt(plan, trust);
+      removeProvisionJournal(plan, state);
       return { ok: true, digest: supplied, configPath: plan.paths.config };
     }
   }
@@ -655,6 +1033,7 @@ function applyReviewed(plan) {
     newKeyBytes = randomBytes(32);
     state = {
       version: 1,
+      operationId: randomBytes(16).toString('hex'),
       planDigest: plan.digest,
       phase: 'APPLYING',
       ownedTargets: [],
@@ -679,8 +1058,15 @@ function applyReviewed(plan) {
         state.ownedTargets.push({ path, digest: rawDigest(bytes), ...descriptor });
         writeProvisionJournal(plan, state);
       });
-      if (process.env.CLAUDE_COORDINATION_TEST_FAIL_AFTER === String(written.length)) fail('INJECTED_FAILURE');
-      if (process.env.CLAUDE_COORDINATION_TEST_SIGKILL_AFTER === String(written.length))
+      if (
+        process.env.CLAUDE_COORDINATION_TESTING === '1' &&
+        process.env.CLAUDE_COORDINATION_TEST_FAIL_AFTER === String(written.length)
+      )
+        fail('INJECTED_FAILURE');
+      if (
+        process.env.CLAUDE_COORDINATION_TESTING === '1' &&
+        process.env.CLAUDE_COORDINATION_TEST_SIGKILL_AFTER === String(written.length)
+      )
         process.kill(process.pid, 'SIGKILL');
     };
     publish(plan.paths.manifest, manifestBytes);
@@ -695,7 +1081,13 @@ function applyReviewed(plan) {
     publish(plan.paths['runtime-inventory'], inventoryBytes);
     publish(plan.paths['authoritative-consumer-inventory'], consumerInventoryBytes);
     for (const [path, data] of Object.entries(generated)) publish(path, Buffer.from(data));
+    const priorJournalDescriptor = state.journalDescriptor;
     state = { ...state, phase: 'COMPLETE' };
+    Object.defineProperty(state, 'journalDescriptor', {
+      value: priorJournalDescriptor,
+      writable: true,
+      configurable: true,
+    });
     writeProvisionJournal(plan, state);
     for (const target of state.ownedTargets) {
       if (!descriptorMatches(target.proof, target) || !descriptorMatches(target.path, target))
@@ -703,44 +1095,63 @@ function applyReviewed(plan) {
     }
     let cleanedProofs = 0;
     for (const target of state.ownedTargets) {
-      unlinkSync(target.proof);
       cleanedProofs += 1;
-      if (process.env.CLAUDE_COORDINATION_TEST_SIGKILL_COMPLETE_PROOF_AFTER === String(cleanedProofs))
+      if (
+        process.env.CLAUDE_COORDINATION_TESTING === '1' &&
+        process.env.CLAUDE_COORDINATION_TEST_SIGKILL_COMPLETE_PROOF_AFTER === String(cleanedProofs)
+      )
         process.kill(process.pid, 'SIGKILL');
     }
     for (const dir of new Set(state.ownedTargets.map((target) => dirname(target.proof)))) fsyncDirectory(dir);
     preflight(plan.paths.config, plan.accounts, plan.paths, plan.inventoryDigest, plan);
-    rmSync(journalPath(plan));
-    fsyncDirectory(dirname(journalPath(plan)));
+    publishCompletionReceipt(plan, trust);
+    removeProvisionJournal(plan, state);
     return { ok: true, digest: supplied, configPath: plan.paths.config };
   } catch (error) {
     if (state.phase === 'COMPLETE') throw error;
     cleanupOwned(plan, state.ownedTargets);
-    rmSync(journalPath(plan), { force: true });
-    fsyncDirectory(dirname(journalPath(plan)));
+    removeProvisionJournal(plan, state);
     throw error;
   }
 }
 function apply(planPath, expected) {
   const plan = readReviewedPlan(planPath, expected);
+  if (plan.trustSnapshot?.state === 'absent') {
+    if (existsSync(journalPath(plan)) || existsSync(journalTransitionPath(plan)))
+      fail('BOOTSTRAP_JOURNAL_REVIEW_REQUIRED');
+    if (existsSync(plan.paths.trust)) fail('BOOTSTRAP_TRUST_REVIEW_REQUIRED');
+    beginAbsentTrustBootstrap(plan);
+  }
   return withProvisionLock(plan, () => applyReviewed(plan));
 }
 function rollbackReviewed(plan) {
+  recoverProvisionJournalTransition(plan);
   const state = readProvisionJournal(plan);
   if (!state) return { ok: true, rolledBack: false };
   if (state.phase === 'COMPLETE') return applyReviewed(plan);
   cleanupOwned(plan, state.ownedTargets);
-  rmSync(journalPath(plan), { force: true });
-  fsyncDirectory(dirname(journalPath(plan)));
+  removeProvisionJournal(plan, state);
   return { ok: true, rolledBack: true, digest: plan.digest };
 }
 function rollback(planPath, expected) {
   const plan = readReviewedPlan(planPath, expected);
-  return withProvisionLock(plan, () => rollbackReviewed(plan));
+  if (plan.trustSnapshot?.state === 'absent') {
+    if (existsSync(bootstrapAttemptPath(plan))) fail('BOOTSTRAP_ATTEMPT_REVIEW_REQUIRED');
+    if (existsSync(journalPath(plan)) || existsSync(journalTransitionPath(plan)))
+      fail('BOOTSTRAP_JOURNAL_REVIEW_REQUIRED');
+    if (existsSync(plan.paths.trust)) fail('BOOTSTRAP_TRUST_REVIEW_REQUIRED');
+  }
+  return withProvisionLock(plan, () => {
+    if (plan.trustSnapshot?.state === 'present') reviewedTrust(plan);
+    return rollbackReviewed(plan);
+  });
 }
 function activateLinux(planPath, expected) {
   const plan = readReviewedPlan(planPath, expected);
+  if (plan.trustSnapshot?.state !== 'present') fail('BOOTSTRAP_TRUST_REVIEW_REQUIRED');
   return withProvisionLock(plan, () => {
+    const trust = reviewedTrust(plan);
+    validateCompletionReceipt(plan, trust);
     preflight(plan.paths.config, plan.accounts, plan.paths, plan.inventoryDigest, plan);
     const unitPath = plan.paths['linux-unit'];
     const pinned = lstatSync(unitPath);
@@ -755,6 +1166,7 @@ function activateLinux(planPath, expected) {
         fail('GENERATED_ARTIFACT_CHANGED');
     };
     const systemctl = (...args) => {
+      if (!descriptorMatches(plan.paths.trust, trust, 'TRUST_SNAPSHOT_CHANGED')) fail('TRUST_SNAPSHOT_CHANGED');
       assertPinned();
       const result = spawnSync('systemctl', ['--user', ...args], {
         encoding: 'utf8',
@@ -804,7 +1216,7 @@ function preflight(configPath, accounts, expectedPaths, expectedInventoryDigest,
       rawDigest(secureReadSource(configPath, 'CONFIG_ARTIFACT_MISMATCH')) !==
         reviewedPlan.artifactDigests[configPath] ||
       !readFileSync(configPath).equals(expectedConfig) ||
-      config.deploymentPlanDigest !== reviewedPlan.intentDigest
+      config.deploymentPlanDigest !== configFor(reviewedPlan).deploymentPlanDigest
     )
       fail('CONFIG_ARTIFACT_MISMATCH');
     for (const [path, expectedDigest] of Object.entries(reviewedPlan.artifactDigests))
