@@ -16,10 +16,13 @@
 # Env:
 #   AWS_REGION / AWS_DEFAULT_REGION (default us-east-1 for CE — global service)
 #   AWS_PROFILE
+#   FINOPS_DOPPLER_PROJECT / FINOPS_DOPPLER_CONFIG (optional credential fallback)
 set -euo pipefail
 
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 USAGE_FILTER='{"Dimensions":{"Key":"RECORD_TYPE","Values":["Usage"]}}'
+FINOPS_DOPPLER_PROJECT="${FINOPS_DOPPLER_PROJECT:-finops-dashboard}"
+FINOPS_DOPPLER_CONFIG="${FINOPS_DOPPLER_CONFIG:-prd}"
 
 today() { date +%Y-%m-%d; }
 month_start() { date +%Y-%m-01; }
@@ -33,8 +36,33 @@ prev_month_start() {
 }
 prev_month_end() { date +%Y-%m-01; }
 
+aws_ce() {
+  local err rc
+  err=$(mktemp)
+  if aws ce get-cost-and-usage --region "$REGION" "$@" 2>"$err"; then
+    rm -f "$err"
+    return 0
+  fi
+  rc=$?
+
+  # The ambient AWS identity may be intentionally scoped to Bedrock or another
+  # service. If Cost Explorer is denied, retry with the configured FinOps
+  # credential source rather than swallowing the error into an empty `{}`.
+  if command -v doppler >/dev/null 2>&1 \
+    && grep -qE 'AccessDenied|not authorized|Unable to locate credentials' "$err"; then
+    if doppler run --project "$FINOPS_DOPPLER_PROJECT" --config "$FINOPS_DOPPLER_CONFIG" -- \
+      aws ce get-cost-and-usage --region "$REGION" "$@"; then
+      rm -f "$err"
+      return 0
+    fi
+  fi
+  cat "$err" >&2
+  rm -f "$err"
+  return "$rc"
+}
+
 ce() {
-  aws ce get-cost-and-usage --region "$REGION" "$@" 2>/dev/null
+  aws_ce "$@"
 }
 
 cmd_daily() {
