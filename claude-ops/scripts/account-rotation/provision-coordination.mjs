@@ -300,7 +300,7 @@ function publishExclusiveRecord(path, bytes, code) {
     if (!descriptor.bytes.equals(expectedBytes)) fail(code);
   } else {
     // O_EXCL is the authoritative no-replace check; existsSync only selects recovery.
-    // CodeQL[js/file-system-race]
+    // codeql[js/file-system-race]
     const fd = openSync(temp, 'wx', 0o600);
     try {
       writeFileSync(fd, expectedBytes);
@@ -617,7 +617,7 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
     descriptor.proof = temp;
   } else {
     // O_EXCL is the authoritative no-replace check; existsSync only selects recovery.
-    // CodeQL[js/file-system-race]
+    // codeql[js/file-system-race]
     const fd = openSync(temp, 'wx', modeBits);
     try {
       writeFileSync(fd, data);
@@ -646,12 +646,13 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
     // hard-link publication is atomic and never replaces a concurrently
     // created final target (unlike rename(2)).
     // Test-only adversarial writer used to prove link publication fails closed.
-    // CodeQL[js/file-system-race]
-    if (process.env.CLAUDE_COORDINATION_TESTING === '1' && process.env.CLAUDE_COORDINATION_TEST_RACE_TARGET === path)
+    if (process.env.CLAUDE_COORDINATION_TESTING === '1' && process.env.CLAUDE_COORDINATION_TEST_RACE_TARGET === path) {
+      // codeql[js/file-system-race]
       writeFileSync(path, process.env.CLAUDE_COORDINATION_TEST_RACE_SAME === '1' ? data : 'competing-owner\n', {
         flag: 'wx',
         mode: 0o600,
       });
+    }
     linkSync(temp, path);
     if (
       process.env.CLAUDE_COORDINATION_TESTING === '1' &&
@@ -670,7 +671,7 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
     ) {
       unlinkSync(path);
       // Test-only post-publication inode replacement.
-      // CodeQL[js/file-system-race]
+      // codeql[js/file-system-race]
       writeFileSync(path, data, { flag: 'wx', mode: 0o600 });
     }
     if (!descriptorMatches(path, descriptor, 'PUBLICATION_OWNERSHIP_LOST'))
@@ -828,7 +829,7 @@ function writeProvisionJournal(plan, state) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   if (!existsSync(temp)) {
     // O_EXCL is the authoritative no-replace check; existsSync only selects recovery.
-    // CodeQL[js/file-system-race]
+    // codeql[js/file-system-race]
     const fd = openSync(temp, 'wx', 0o600);
     try {
       writeFileSync(fd, bytes);
