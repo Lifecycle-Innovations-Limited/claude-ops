@@ -8,6 +8,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmdirSync,
   symlinkSync,
   unlinkSync,
@@ -135,7 +136,9 @@ const signalChild = (child, signal) => {
 };
 
 function fixture(format = JSON.stringify(MANIFEST, null, 2)) {
-  const root = mkdtempSync(join(tmpdir(), 'staged-enrollment-'));
+  // macOS exposes tmpdir() through /var, a system symlink to /private/var.
+  // Resolve the fixture root once so trust-root tests exercise canonical paths.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'staged-enrollment-')));
   const names = ['active', 'quarantine', 'quarantine2', 'staging', 'usage', 'rollback', 'locks'];
   const paths = Object.fromEntries(names.map((name) => [name, join(root, name)]));
   for (const path of Object.values(paths)) mkdirSync(path, { mode: 0o700 });
