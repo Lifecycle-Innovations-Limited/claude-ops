@@ -111,7 +111,7 @@ value_ge() { is_number "${1:-}" || return 1; awk -v a="$1" -v b="$2" 'BEGIN { ex
 m = re.search(r'compute_health_score\(\) \{.*?\n\}', src, re.S)
 assert m, 'compute_health_score missing'
 fn = m.group(0)
-path = pathlib.Path('/tmp/ops-speedup-health-unit.sh')
+path = pathlib.Path(__import__('os').environ['HOME']) / 'ops-speedup-health-unit.sh'
 path.write_text(helpers + '\n' + fn + '''
 RUNTIME_cpu_idle_pct=80
 RUNTIME_running=1
@@ -133,7 +133,7 @@ echo "$HEALTH_SCORE"
 ''')
 print(path)
 PY
-score=$(bash /tmp/ops-speedup-health-unit.sh)
+score=$(bash "$HOME/ops-speedup-health-unit.sh")
 assert_eq "healthy runtime scores 100 even with huge caches and launch-agent count" "100" "$score"
 
 python3 - "$BIN" <<'PY'
@@ -146,7 +146,7 @@ value_lt() { is_number "${1:-}" || return 1; awk -v a="$1" -v b="$2" 'BEGIN { ex
 value_ge() { is_number "${1:-}" || return 1; awk -v a="$1" -v b="$2" 'BEGIN { exit !(a >= b) }'; }
 '''
 fn = re.search(r'compute_health_score\(\) \{.*?\n\}', src, re.S).group(0)
-Path('/tmp/ops-speedup-health-unit-pressure.sh').write_text(helpers + '\n' + fn + '''
+Path(__import__('os').environ['HOME']).joinpath('ops-speedup-health-unit-pressure.sh').write_text(helpers + '\n' + fn + '''
 RUNTIME_cpu_idle_pct=10
 RUNTIME_running=40
 RUNTIME_stuck=2
@@ -165,10 +165,21 @@ echo "$HEALTH_SCORE"
 printf '%s\n' "${HEALTH_FACTORS[@]}"
 ''')
 PY
-pressure_out=$(bash /tmp/ops-speedup-health-unit-pressure.sh)
+pressure_out=$(bash "$HOME/ops-speedup-health-unit-pressure.sh")
 pressure_score=$(echo "$pressure_out" | head -1)
 assert_true "pressure runtime is below 80" bash -c "[ \"$pressure_score\" -lt 80 ]"
 assert_true "pressure factors include cpu idle" bash -c "echo \"$pressure_out\" | grep -q cpu-idle-under-20"
+
+
+# Linux top %Cpu line must yield numeric us/sy/id fields (CI is Ubuntu).
+sample='%Cpu(s):  5.9 us,  2.0 sy,  0.0 ni, 91.5 id,  0.6 wa,  0.0 hi,  0.0 si,  0.0 st'
+parsed_user=$(echo "$sample" | grep -oE '[0-9]+([.][0-9]+)?[[:space:]]*(us|user)' | head -1 | grep -oE '[0-9]+([.][0-9]+)?' || true)
+parsed_sys=$(echo "$sample" | grep -oE '[0-9]+([.][0-9]+)?[[:space:]]*(sy|system)' | head -1 | grep -oE '[0-9]+([.][0-9]+)?' || true)
+parsed_idle=$(echo "$sample" | grep -oE '[0-9]+([.][0-9]+)?[[:space:]]*(id|idle)' | head -1 | grep -oE '[0-9]+([.][0-9]+)?' || true)
+assert_eq "linux cpu parse user" "5.9" "$parsed_user"
+assert_eq "linux cpu parse sys" "2.0" "$parsed_sys"
+assert_eq "linux cpu parse idle" "91.5" "$parsed_idle"
+assert_true "bin uses robust linux cpu parse" grep -q 'grep -oE .*(us|user)' "$BIN"
 
 echo
 echo "Results: $PASS passed, $FAIL failed"
