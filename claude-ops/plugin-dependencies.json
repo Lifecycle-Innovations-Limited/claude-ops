@@ -26,7 +26,7 @@
       "marketplaceId": "gsd-build-get-shit-done",
       "marketplaceAdd": "gsd-build/get-shit-done",
       "installCli": "claude plugin install gsd@gsd-build-get-shit-done",
-      "updateCli": "claude plugin update gsd@gsd-build-get-shit-done",
+      "installScript": "scripts/install-gsd-companion.sh",
       "sameMarketplaceAsOps": false,
       "required": true,
       "coInstallDefault": true,

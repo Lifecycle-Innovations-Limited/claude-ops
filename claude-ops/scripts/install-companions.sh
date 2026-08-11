@@ -249,6 +249,11 @@ while IFS= read -r row; do
 			echo "ok: $name (update)"
 			n_ok=$((n_ok + 1))
 		else
+			# The reinstall fallback needs the marketplace present — an external
+			# marketplace that was never added is the usual reason update failed.
+			if [[ -n "$mkt_add" ]]; then
+				run_cmd "claude plugin marketplace add \"$mkt_add\" >/dev/null 2>&1 || true"
+			fi
 			if [[ -n "$install_cli" ]] && run_cmd "$install_cli >/dev/null 2>&1"; then
 				echo "ok: $name (reinstall fallback)"
 				n_ok=$((n_ok + 1))
