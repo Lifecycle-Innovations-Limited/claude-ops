@@ -51,15 +51,7 @@ async function ensureDataDir() {
 function runSync(cmd, args, opts = {}) {
   // Allowlist fixed binary names only. Never pass user-controlled cmd
   // (CodeQL js/command-line-injection on spawnSync first arg).
-  const ALLOWED = new Set([
-    'security',
-    'secret-tool',
-    'which',
-    'cmd.exe',
-    'cmdkey',
-    'powershell',
-    'pwsh',
-  ]);
+  const ALLOWED = new Set(['security', 'secret-tool', 'which', 'cmd.exe', 'cmdkey', 'powershell', 'pwsh']);
   if (!ALLOWED.has(cmd)) {
     throw new Error(`credential-store: refused non-allowlisted command: ${cmd}`);
   }
