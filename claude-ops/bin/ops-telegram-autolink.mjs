@@ -36,7 +36,7 @@
  */
 
 import { readFileSync, existsSync, unlinkSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import os from 'node:os';
 import { TelegramClient } from 'telegram';
@@ -470,17 +470,30 @@ try {
 
 // Step 2.3: Register MCP server
 try {
-  const pluginRoot =
-    process.env.CLAUDE_PLUGIN_ROOT || execSync('echo $CLAUDE_PLUGIN_ROOT', { encoding: 'utf8' }).trim();
+  // Argv form — never interpolate secrets into a shell string (CodeQL js/command-line-injection).
+  const pluginRoot = (process.env.CLAUDE_PLUGIN_ROOT || '').trim();
   const telegramServerPath = pluginRoot ? `${pluginRoot}/telegram-server/index.js` : null;
   if (telegramServerPath) {
-    execSync(
-      `claude mcp add telegram -s user` +
-        ` -e TELEGRAM_API_ID='${apiId}'` +
-        ` -e TELEGRAM_API_HASH='${apiHash}'` +
-        ` -e TELEGRAM_PHONE='${PHONE}'` +
-        ` -e TELEGRAM_SESSION='${sessionStr.replace(/'/g, "'\\''")}'` +
-        ` -- node "${telegramServerPath}"`,
+    execFileSync(
+      'claude',
+      [
+        'mcp',
+        'add',
+        'telegram',
+        '-s',
+        'user',
+        '-e',
+        `TELEGRAM_API_ID=${apiId}`,
+        '-e',
+        `TELEGRAM_API_HASH=${apiHash}`,
+        '-e',
+        `TELEGRAM_PHONE=${PHONE}`,
+        '-e',
+        `TELEGRAM_SESSION=${sessionStr}`,
+        '--',
+        'node',
+        telegramServerPath,
+      ],
       { timeout: 15000, stdio: 'pipe' },
     );
     emit({
