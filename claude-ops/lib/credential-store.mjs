@@ -48,28 +48,59 @@ async function ensureDataDir() {
 
 // ─── 1. OS-native backends ───────────────────────────────────────────────────
 
-function runSync(cmd, args, opts = {}) {
-  // Allowlist fixed binary names only. Never pass user-controlled cmd
-  // (CodeQL js/command-line-injection on spawnSync first arg).
-  const ALLOWED = new Set(['security', 'secret-tool', 'which', 'cmd.exe', 'cmdkey', 'powershell', 'pwsh']);
-  if (!ALLOWED.has(cmd)) {
-    throw new Error(`credential-store: refused non-allowlisted command: ${cmd}`);
+// Map of the ONLY binaries this module may execute. The spawnSync call sites
+// below pass a STRING LITERAL from this table, never the caller's value, so no
+// data flow exists from any argument into the executable name. A Set/allowlist
+// membership check was not recognised as a sanitizer by CodeQL
+// (js/command-line-injection alert #12) — literal dispatch removes the sink.
+
+function runSync(key, args, opts = {}) {
+  const options = { encoding: 'utf8', ...opts };
+  switch (key) {
+    case 'security':
+      return spawnSync('security', args, options);
+    case 'secret-tool':
+      return spawnSync('secret-tool', args, options);
+    case 'which':
+      return spawnSync('which', args, options);
+    case 'cmdkey':
+      return spawnSync('cmdkey', args, options);
+    default:
+      throw new Error(`credential-store: refused non-allowlisted command: ${String(key)}`);
   }
-  return spawnSync(cmd, args, { encoding: 'utf8', ...opts });
+}
+
+// Credential coordinates land on OS command lines. Restrict them to a safe
+// charset so nothing can break out of an argument (CodeQL js/command-line-injection
+// and js/indirect-command-line-injection, alerts #12/#290/#291). Callers pass
+// service/account derived from config and env, which is untrusted input.
+const SAFE_ID = /^[A-Za-z0-9._@:-]{1,128}$/;
+
+function assertSafeId(kind, value) {
+  if (typeof value !== 'string' || !SAFE_ID.test(value)) {
+    throw new Error(`credential-store: unsafe ${kind} (allowed: A-Z a-z 0-9 . _ @ : -)`);
+  }
+  return value;
 }
 
 // --- macOS Keychain (security) ---
 function macSet(service, account, secret) {
+  assertSafeId('service', service);
+  assertSafeId('account', account);
   const r = runSync('security', ['add-generic-password', '-U', '-s', service, '-a', account, '-w', secret]);
   return r.status === 0;
 }
 function macGet(service, account) {
+  assertSafeId('service', service);
+  assertSafeId('account', account);
   const r = runSync('security', ['find-generic-password', '-s', service, '-a', account, '-w']);
   if (r.status === 0) return (r.stdout || '').replace(/\n$/, '');
   // exit 44 means "not found" — treat as normal
   return null;
 }
 function macDelete(service, account) {
+  assertSafeId('service', service);
+  assertSafeId('account', account);
   runSync('security', ['delete-generic-password', '-s', service, '-a', account]);
   return true;
 }
@@ -81,6 +112,8 @@ function hasSecretTool() {
 }
 function stSet(service, account, secret) {
   if (!hasSecretTool()) return false;
+  assertSafeId('service', service);
+  assertSafeId('account', account);
   const r = spawnSync(
     'secret-tool',
     ['store', '--label=' + service + '/' + account, 'service', service, 'account', account],
@@ -89,12 +122,16 @@ function stSet(service, account, secret) {
   return r.status === 0;
 }
 function stGet(service, account) {
+  assertSafeId('service', service);
+  assertSafeId('account', account);
   if (!hasSecretTool()) return null;
   const r = runSync('secret-tool', ['lookup', 'service', service, 'account', account]);
   if (r.status === 0 && r.stdout) return r.stdout.replace(/\n$/, '');
   return null;
 }
 function stDelete(service, account) {
+  assertSafeId('service', service);
+  assertSafeId('account', account);
   if (!hasSecretTool()) return true;
   runSync('secret-tool', ['clear', 'service', service, 'account', account]);
   return true;
@@ -106,20 +143,12 @@ function hasCmd() {
 }
 function wincredSet(service, account, secret) {
   if (!hasCmd()) return false;
-  // Windows: direct invocation; elsewhere: through cmd.exe //c
-  if (process.platform === 'win32') {
-    const r = runSync('cmdkey', [
-      '/generic:claude-ops:' + service + ':' + account,
-      '/user:' + account,
-      '/pass:' + secret,
-    ]);
-    return r.status === 0;
-  }
-  // MSYS/WSL path — shell through cmd.exe
-  const r = runSync('cmd.exe', [
-    '/c',
-    'cmdkey /generic:claude-ops:' + service + ':' + account + ' /user:' + account + ' /pass:' + secret,
-  ]);
+  assertSafeId('service', service);
+  assertSafeId('account', account);
+  // argv form only. The previous MSYS/WSL branch built a `cmd.exe /c "cmdkey …"`
+  // SHELL STRING with the service, account and secret concatenated into it —
+  // a real injection sink, and it also exposed the secret to the command line.
+  const r = runSync('cmdkey', [`/generic:claude-ops:${service}:${account}`, `/user:${account}`, `/pass:${secret}`]);
   return r.status === 0;
 }
 function wincredGet(_service, _account) {
@@ -128,11 +157,9 @@ function wincredGet(_service, _account) {
 }
 function wincredDelete(service, account) {
   if (!hasCmd()) return true;
-  if (process.platform === 'win32') {
-    runSync('cmdkey', ['/delete:claude-ops:' + service + ':' + account]);
-  } else {
-    runSync('cmd.exe', ['/c', 'cmdkey /delete:claude-ops:' + service + ':' + account]);
-  }
+  assertSafeId('service', service);
+  assertSafeId('account', account);
+  runSync('cmdkey', [`/delete:claude-ops:${service}:${account}`]);
   return true;
 }
 
