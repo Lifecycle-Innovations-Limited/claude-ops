@@ -49,6 +49,12 @@ async function ensureDataDir() {
 // ─── 1. OS-native backends ───────────────────────────────────────────────────
 
 function runSync(cmd, args, opts = {}) {
+  // Allowlist fixed binary names only. Never pass user-controlled cmd
+  // (CodeQL js/command-line-injection on spawnSync first arg).
+  const ALLOWED = new Set(['security', 'secret-tool', 'which', 'cmd.exe', 'cmdkey', 'powershell', 'pwsh']);
+  if (!ALLOWED.has(cmd)) {
+    throw new Error(`credential-store: refused non-allowlisted command: ${cmd}`);
+  }
   return spawnSync(cmd, args, { encoding: 'utf8', ...opts });
 }
 
@@ -70,7 +76,8 @@ function macDelete(service, account) {
 
 // --- Linux libsecret (secret-tool) ---
 function hasSecretTool() {
-  return runSync('sh', ['-c', 'command -v secret-tool']).status === 0;
+  // Fixed argv only — no shell (CodeQL js/command-line-injection).
+  return runSync('secret-tool', ['--version']).status === 0 || runSync('which', ['secret-tool']).status === 0;
 }
 function stSet(service, account, secret) {
   if (!hasSecretTool()) return false;
@@ -95,7 +102,7 @@ function stDelete(service, account) {
 
 // --- Windows Credential Manager (cmdkey — write-only from CLI) ---
 function hasCmd() {
-  return runSync('sh', ['-c', 'command -v cmd.exe || which cmd.exe']).status === 0 || process.platform === 'win32';
+  return process.platform === 'win32' || runSync('which', ['cmd.exe']).status === 0;
 }
 function wincredSet(service, account, secret) {
   if (!hasCmd()) return false;
