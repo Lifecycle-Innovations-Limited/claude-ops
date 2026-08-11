@@ -48,14 +48,32 @@ async function ensureDataDir() {
 
 // ─── 1. OS-native backends ───────────────────────────────────────────────────
 
-function runSync(cmd, args, opts = {}) {
-  // Allowlist fixed binary names only. Never pass user-controlled cmd
-  // (CodeQL js/command-line-injection on spawnSync first arg).
-  const ALLOWED = new Set(['security', 'secret-tool', 'which', 'cmd.exe', 'cmdkey', 'powershell', 'pwsh']);
-  if (!ALLOWED.has(cmd)) {
-    throw new Error(`credential-store: refused non-allowlisted command: ${cmd}`);
+// Map of the ONLY binaries this module may execute. The spawnSync call sites
+// below pass a STRING LITERAL from this table, never the caller's value, so no
+// data flow exists from any argument into the executable name. A Set/allowlist
+// membership check was not recognised as a sanitizer by CodeQL
+// (js/command-line-injection alert #12) — literal dispatch removes the sink.
+
+function runSync(key, args, opts = {}) {
+  const options = { encoding: 'utf8', ...opts };
+  switch (key) {
+    case 'security':
+      return spawnSync('security', args, options);
+    case 'secret-tool':
+      return spawnSync('secret-tool', args, options);
+    case 'which':
+      return spawnSync('which', args, options);
+    case 'cmd.exe':
+      return spawnSync('cmd.exe', args, options);
+    case 'cmdkey':
+      return spawnSync('cmdkey', args, options);
+    case 'powershell':
+      return spawnSync('powershell', args, options);
+    case 'pwsh':
+      return spawnSync('pwsh', args, options);
+    default:
+      throw new Error(`credential-store: refused non-allowlisted command: ${String(key)}`);
   }
-  return spawnSync(cmd, args, { encoding: 'utf8', ...opts });
 }
 
 // --- macOS Keychain (security) ---
