@@ -62,7 +62,7 @@ class PressureMonitorTests(unittest.TestCase):
             self.addCleanup(state_patch.stop)
         with (
             mock.patch.object(sys, "argv", [str(MONITOR_PATH), *(argv or ["--dry-run"])]),
-            mock.patch.object(monitor, "processes", return_value=table),
+            mock.patch.object(monitor, "processes", side_effect=lambda: table),
             mock.patch.object(monitor, "cpu_sample", side_effect=cpu_samples),
             mock.patch.object(monitor, "load_averages", return_value=loads),
             contextlib.redirect_stdout(io.StringIO()),
@@ -70,6 +70,14 @@ class PressureMonitorTests(unittest.TestCase):
             self.assertEqual(0, monitor.main())
         self.assertTrue(self.telemetry)
         return self.telemetry[-1]
+
+    def test_persistent_state_counts_ignore_one_frame_u(self) -> None:
+        samples = [
+            {1: proc(1, "one", state="U"), 2: proc(2, "two", state="U")},
+            {1: proc(1, "one", state="S"), 2: proc(2, "two", state="U")},
+            {1: proc(1, "one", state="R"), 2: proc(2, "two", state="U"), 3: proc(3, "three", state="Z")},
+        ]
+        self.assertEqual((1, 1, 1), monitor.persistent_state_counts(samples))
 
     def test_cpu_pressure_requires_all_three_low_idle_samples(self) -> None:
         record = self.run_main(

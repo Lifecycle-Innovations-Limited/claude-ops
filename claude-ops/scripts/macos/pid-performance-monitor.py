@@ -189,10 +189,8 @@ def renice_background(pid: int, current_nice: int) -> bool:
     return subprocess.run(["renice", "10", "-p", str(pid)], capture_output=True).returncode == 0
 
 
-def health_score(cpu: dict[str, float], procs: dict[int, Proc], mem: int, swap: float) -> int:
+def health_score(cpu: dict[str, float], running: int, stuck: int, mem: int, swap: float) -> int:
     score = 100
-    running = sum(p.state.startswith("R") for p in procs.values())
-    stuck = sum(p.state.startswith("U") for p in procs.values())
     if cpu["idle"] < 20: score -= 25
     elif cpu["idle"] < 35: score -= 15
     elif cpu["idle"] < 60: score -= 5
@@ -205,6 +203,19 @@ def health_score(cpu: dict[str, float], procs: dict[int, Proc], mem: int, swap: 
     return max(0, score)
 
 
+def persistent_state_counts(samples: list[dict[int, Proc]]) -> tuple[int, int, int]:
+    """Return latest runnable/zombie counts and same-PID U across all samples."""
+    latest = samples[-1] if samples else {}
+    running = sum(p.state.startswith("R") for p in latest.values())
+    zombies = sum(p.state.startswith("Z") for p in latest.values())
+    pid_sets = [
+        {pid for pid, p in table.items() if p.state.startswith("U")}
+        for table in samples
+    ]
+    stuck = len(set.intersection(*pid_sets)) if pid_sets else 0
+    return running, stuck, zombies
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
@@ -215,13 +226,18 @@ def main() -> int:
     args = parser.parse_args()
 
     table = processes()
+    process_samples = [table]
     samples = [cpu_sample()]
     if not args.status:
         time.sleep(2)
+        process_samples.append(processes())
         samples.append(cpu_sample())
         time.sleep(2)
+        process_samples.append(processes())
         samples.append(cpu_sample())
+        table = process_samples[-1]
     avg_cpu = {k: round(sum(s[k] for s in samples) / len(samples), 2) for k in samples[0]}
+    running, stuck, zombies = persistent_state_counts(process_samples)
     mem = memory_free_pct()
     swap = swap_mb()
     loads = load_averages()
@@ -295,10 +311,8 @@ def main() -> int:
               "feature_off": FEATURE_OFF.exists(), "cpu": avg_cpu, "pressure": pressure,
               "pressure_reasons": {"cpu": all(s["idle"] < 35 for s in samples), "sustained_load": sustained_load},
               "load": loads, "mem_free_pct": mem, "swap_mb": swap,
-              "running": sum(p.state.startswith("R") for p in table.values()),
-              "stuck": sum(p.state.startswith("U") for p in table.values()),
-              "zombies": sum(p.state.startswith("Z") for p in table.values()),
-              "health_score": health_score(avg_cpu, table, mem, swap), "actions": actions}
+              "running": running, "stuck": stuck, "zombies": zombies,
+              "health_score": health_score(avg_cpu, running, stuck, mem, swap), "actions": actions}
     append_telemetry(record)
     print(json.dumps(record, indent=2))
     return 0
