@@ -4,7 +4,7 @@
  *
  * Mutates sibling rotate.mjs once when markers are missing.
  */
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, renameSync, statSync, unlinkSync, chmodSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -15,7 +15,17 @@ const MARKER = 'auth-step-${step}'; // template marker after patch
 const MARKER_PLAIN = 'auth-step-'; // simpler detect
 
 export function rotateCaptchaHooksPresent(src = null) {
-  const text = src ?? (existsSync(ROTATE) ? readFileSync(ROTATE, 'utf8') : '');
+  let text = src;
+  if (text == null) {
+    // Read directly and treat ENOENT as "absent" rather than testing existence
+    // first: the existsSync/readFileSync pair is a TOCTOU race, and the read
+    // already tells us everything the check would have.
+    try {
+      text = readFileSync(ROTATE, 'utf8');
+    } catch {
+      text = '';
+    }
+  }
   return (
     text.includes("from './rotate-captcha-soft.mjs'") ||
     (text.includes('trySolveCaptchaWall') && text.includes('oauth-authorize') && text.includes(MARKER_PLAIN))
@@ -23,10 +33,13 @@ export function rotateCaptchaHooksPresent(src = null) {
 }
 
 export function ensureRotateCaptchaHooks({ dryRun = false } = {}) {
-  if (!existsSync(ROTATE)) {
+  // Read first; ENOENT is the "missing" signal. No existsSync pre-check.
+  let text;
+  try {
+    text = readFileSync(ROTATE, 'utf8');
+  } catch {
     return { ok: false, reason: 'rotate-missing' };
   }
-  let text = readFileSync(ROTATE, 'utf8');
   if (rotateCaptchaHooksPresent(text)) {
     return { ok: true, changed: false, reason: 'already-present' };
   }
@@ -186,7 +199,32 @@ const __dirname`,
   if (dryRun) {
     return { ok: true, changed: true, dryRun: true, presentAfter: rotateCaptchaHooksPresent(text) };
   }
-  writeFileSync(ROTATE, text);
+  // Write atomically: temp file in the same directory + rename(2). A direct
+  // writeFileSync over the path we read leaves a window in which rotate.mjs can
+  // be replaced between read and write, and a crash mid-write would truncate the
+  // live script. rename(2) is atomic within a filesystem, so readers see either
+  // the old file or the complete new one.
+  const tmp = `${ROTATE}.tmp-${process.pid}`;
+  try {
+    let mode = 0o644;
+    try {
+      mode = statSync(ROTATE).mode & 0o777;
+    } catch {}
+    // writeFileSync only applies `mode` on create. A leftover tmp from a crashed
+    // run with a reused pid would be opened/truncated and keep its old bits —
+    // unlink first, write exclusively, then reassert mode before rename.
+    try {
+      unlinkSync(tmp);
+    } catch {}
+    writeFileSync(tmp, text, { flag: 'wx', mode });
+    chmodSync(tmp, mode);
+    renameSync(tmp, ROTATE);
+  } catch (e) {
+    try {
+      unlinkSync(tmp);
+    } catch {}
+    throw e;
+  }
   return { ok: true, changed: true, presentAfter: rotateCaptchaHooksPresent(text) };
 }
 

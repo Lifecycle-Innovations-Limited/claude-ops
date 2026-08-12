@@ -14,3 +14,12 @@ node_modules/
 ops.local.json
 *.local.json
 .ops-prefs.json
+
+# Runtime message/session stores written by local bridges (WhatsApp whatsmeow,
+# etc). These hold real conversation content and pairing state and must never
+# reach this public repo.
+store/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

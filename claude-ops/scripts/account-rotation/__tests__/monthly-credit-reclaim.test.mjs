@@ -16,6 +16,34 @@ import {
 } from '../monthly-credit-reclaim.mjs';
 import { SCHEMA_VERSION, MAX_PLAN_MONTHLY_USD } from '../ledger.mjs';
 
+/**
+ * Assert a rendered message body leaks no Slack webhook.
+ *
+ * Written as "parse every URL, check its hostname" rather than a substring or
+ * regex test on the raw text. A substring check for a host literal is exactly
+ * the js/incomplete-url-substring-sanitization pattern: the host can appear
+ * anywhere in a URL (https://evil.example/?x=hooks.slack.com) so matching it
+ * proves nothing about where the URL actually points. Parsing gives the real
+ * host, and the assertion catches ANY Slack URL rather than one known literal.
+ */
+function assertNoSlackWebhook(body) {
+  // Case-insensitive scheme match + strip trailing DNS root dots so
+  // `HTTPS://hooks.slack.com./...` still fails the host check.
+  const urls = String(body).match(/https?:\/\/[^\s<>"')\]]+/gi) || [];
+  for (const raw of urls) {
+    let host;
+    try {
+      host = new URL(raw).hostname.toLowerCase().replace(/\.+$/, '');
+    } catch {
+      continue; // not a parseable URL, so not a live webhook
+    }
+    assert.ok(
+      host !== 'slack.com' && !host.endsWith('.slack.com'),
+      `body must not leak a Slack webhook URL (found host ${host})`,
+    );
+  }
+}
+
 function makeLedger(month, accounts) {
   return { schema_version: SCHEMA_VERSION, month, accounts };
 }
@@ -105,8 +133,7 @@ test('formatSlackBody: includes pool, waste %, prior cycle, no secrets', () => {
   assert.match(body, /50% waste/);
   assert.match(body, /2026-05/);
   assert.match(body, /2\/2 accounts re-claimed/);
-  // Ensure no API token / webhook leaks
-  assert.doesNotMatch(body, /hooks\.slack\.com/);
+  assertNoSlackWebhook(body);
 });
 
 test('formatSlackBody: reports failed accounts', () => {
