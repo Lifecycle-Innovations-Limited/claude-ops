@@ -243,9 +243,14 @@ def main() -> int:
         prior = prior_rg.get(key, {})
         consecutive = int(prior.get("consecutive", 0)) + 1
         current_rg[key] = {"consecutive": consecutive, "last_seen": utc_now(), "elapsed_s": p.elapsed_s, "state": p.state}
-        pathological = p.elapsed_s >= args.rg_min_age and (
-            (p.cpu >= 10 and (p.state.startswith("U") or consecutive >= args.rg_consecutive))
-            or (pressure and consecutive >= args.rg_consecutive)
+        # A one-frame U state is a normal filesystem wait on macOS, not enough
+        # evidence to terminate work. Every TERM candidate must be observed in
+        # consecutive monitor runs; CPU, U state, and system pressure only
+        # describe why the repeated scan is harmful.
+        pathological = (
+            p.elapsed_s >= args.rg_min_age
+            and consecutive >= args.rg_consecutive
+            and (p.cpu >= 10 or p.state.startswith("U") or pressure)
         )
         if pathological:
             decision = {"type": "term_runaway_rg", "pid": p.pid, "cpu": p.cpu, "elapsed_s": p.elapsed_s,

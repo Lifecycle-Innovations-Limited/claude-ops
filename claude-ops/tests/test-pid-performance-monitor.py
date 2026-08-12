@@ -99,12 +99,20 @@ class PressureMonitorTests(unittest.TestCase):
         narrow = proc(21, "rg --files --sortr=modified .", ppid=10, cpu=20.0, state="U")
         foreign = proc(22, f"rg --files --sortr=modified {monitor.HOME}", ppid=1, cpu=20.0, state="U")
         table = {p.pid: p for p in (hermes, broad, narrow, foreign)}
-        record = self.run_main(
+        first = self.run_main(
             table=table,
             cpu_samples=[{"user": 10.0, "sys": 5.0, "idle": 85.0}] * 3,
             loads=[1.0, 1.0, 1.0],
         )
-        term_actions = [a for a in record["actions"] if a["type"] == "term_runaway_rg"]
+        self.assertEqual([], first["actions"])
+        key = f"{broad.pid}:{broad.command}"
+        repeated = self.run_main(
+            table=table,
+            cpu_samples=[{"user": 10.0, "sys": 5.0, "idle": 85.0}] * 3,
+            loads=[1.0, 1.0, 1.0],
+            prior_state={"rg": {key: {"consecutive": 1}}},
+        )
+        term_actions = [a for a in repeated["actions"] if a["type"] == "term_runaway_rg"]
         self.assertEqual([20], [a["pid"] for a in term_actions])
         self.assertEqual("would_terminate", term_actions[0]["result"])
 
