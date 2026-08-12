@@ -330,7 +330,7 @@ async function encJsonGet(service, account) {
   if (!store[key]) return null;
   const k = await masterKey();
   const pt = decrypt(store[key], k);
-  if (pt === null) log('decrypt failed for enc-json/' + key);
+  if (pt === null) log('decrypt failed for enc-json/' + service);
   return pt;
 }
 async function encJsonDelete(service, account) {
