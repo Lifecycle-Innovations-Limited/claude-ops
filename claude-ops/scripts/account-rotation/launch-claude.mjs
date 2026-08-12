@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { loadClaudeHarnessEnv } from './claude-harness-env.mjs';
+import { normalizeClaudeModelArgs } from './model-args.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
@@ -72,7 +73,7 @@ const CLAUDE_BIN = (() => {
   }
   return process.platform === 'win32' ? 'claude.exe' : 'claude';
 })();
-const rawArgs = process.argv.slice(2);
+const rawArgs = normalizeClaudeModelArgs(process.argv.slice(2));
 __admissionAllow(rawArgs);
 
 const CONTROL_SUBCOMMANDS = new Set([

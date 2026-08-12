@@ -1,4 +1,5 @@
 import { loadClaudeHarnessEnv } from './claude-harness-env.mjs';
+import { normalizeClaudeModelArgs } from './model-args.mjs';
 // ── Background-session respawn after rotation ────────────────────────────────
 // Daemon-hosted `claude --bg` sessions have no TTY, so the /login-injection
 // path in rotate.mjs can never reach them. They also never register in the
@@ -441,11 +442,12 @@ export function doRespawn(session, log, opts = {}) {
     // the SOLE authority for CRS routing: add the CRS settings flag iff crsActive,
     // remove it otherwise. Persisted to state.json so `claude respawn` re-reads it.
     try {
-      const flags = Array.isArray(state.respawnFlags) ? [...state.respawnFlags] : null;
+      const originalFlags = Array.isArray(state.respawnFlags) ? state.respawnFlags : null;
+      const flags = originalFlags ? normalizeClaudeModelArgs(originalFlags) : null;
       if (flags) {
         const isCrsSettingsVal = (v) => typeof v === 'string' && v.endsWith('crs-session-settings.json');
         const hasCrsSettings = flags.some((f, i) => f === '--settings' && isCrsSettingsVal(flags[i + 1]));
-        let mutated = false;
+        let mutated = flags.some((flag, index) => flag !== originalFlags[index]);
         if (!crsActive && hasCrsSettings) {
           for (let i = flags.length - 1; i >= 0; i--) {
             if (flags[i] === '--settings' && isCrsSettingsVal(flags[i + 1])) {
