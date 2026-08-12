@@ -29,23 +29,22 @@ BROAD_ROOTS = tuple(str(p) for p in (HOME, HOME / "Developer", HOME / "Developer
 RG_PREFIX = "rg --files --sortr=modified"
 HERMES_MARKER = "hermes_cli.main gateway"
 LOAD_PRESSURE_MULTIPLIER = 2.0
+RG_OBSERVATION_MAX_GAP_S = 180
 QOS_PATTERNS = (
-    "qemu-system-aarch64",
-    "xcodebuild",
-    "swift-frontend",
     "gradle-daemon",
     "org.gradle.launcher.daemon",
     "eas-build-local",
     "expo export",
     "jest-worker",
     "pytest",
-    "HealifyAIHealthCoach.app/HealifyAIHealthCoach",
 )
 PROTECTED_PATTERNS = (
     "WindowServer", "kernel_task", "launchd", "loginwindow", "Finder.app",
     "Cursor.app", "Claude.app", "hermes_cli.main gateway", "tailscale",
     "OrbStack Helper", "Docker", "postgres", "dragonfly", "qdrant",
     "mcp-proxy", "gbrain serve", "coreaudiod", "Terminal.app", "Ghostty.app",
+    "qemu-system-aarch64", "xcodebuild", "swift-frontend",
+    "HealifyAIHealthCoach.app/HealifyAIHealthCoach",
 )
 
 @dataclass
@@ -155,6 +154,42 @@ def protected(p: Proc) -> bool:
     return any(pattern.lower() in p.command.lower() for pattern in PROTECTED_PATTERNS)
 
 
+def qos_candidate(p: Proc) -> bool:
+    command = p.command.lower()
+    first = command.split(None, 1)[0] if command else ""
+    executable = pathlib.Path(first).name
+    # Never classify a wrapper shell or installer from words in its payload.
+    if executable in {"sh", "bash", "zsh", "fish", "env", "timeout", "pip", "pip3"}:
+        return False
+    if executable.startswith("pytest") or re.search(r"\bpython(?:[0-9.]*)?\s+-m\s+pytest\b", command):
+        return True
+    if "/jest-worker/" in command or "jest-worker/processchild" in command:
+        return True
+    return any(
+        pattern.lower() in command
+        for pattern in QOS_PATTERNS
+        if pattern not in {"jest-worker", "pytest"}
+    )
+
+
+def parse_utc(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def prior_observation_is_recent(prior: dict, now: datetime) -> bool:
+    last_seen = parse_utc(prior.get("last_seen"))
+    if last_seen is None:
+        return False
+    age = (now - last_seen).total_seconds()
+    return 0 <= age <= RG_OBSERVATION_MAX_GAP_S
+
+
 def load_state() -> dict:
     try:
         return json.loads(STATE_FILE.read_text())
@@ -251,18 +286,21 @@ def main() -> int:
     prior_rg = state.get("rg", {})
     current_rg: dict[str, dict] = {}
     actions: list[dict] = []
+    observation_time = datetime.now(timezone.utc)
+    observation_ts = observation_time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     for p in table.values():
         if not is_broad_rg(p) or not is_hermes_owned(p, table):
             continue
         key = f"{p.pid}:{p.command}"
         prior = prior_rg.get(key, {})
-        consecutive = int(prior.get("consecutive", 0)) + 1
-        current_rg[key] = {"consecutive": consecutive, "last_seen": utc_now(), "elapsed_s": p.elapsed_s, "state": p.state}
+        prior_count = int(prior.get("consecutive", 0)) if prior_observation_is_recent(prior, observation_time) else 0
+        consecutive = prior_count + 1
+        current_rg[key] = {"consecutive": consecutive, "last_seen": observation_ts, "elapsed_s": p.elapsed_s, "state": p.state}
         # A one-frame U state is a normal filesystem wait on macOS, not enough
         # evidence to terminate work. Every TERM candidate must be observed in
-        # consecutive monitor runs; CPU, U state, and system pressure only
-        # describe why the repeated scan is harmful.
+        # monitor runs no more than RG_OBSERVATION_MAX_GAP_S apart; CPU, U state,
+        # and system pressure only describe why the repeated scan is harmful.
         pathological = (
             p.elapsed_s >= args.rg_min_age
             and consecutive >= args.rg_consecutive
@@ -289,7 +327,7 @@ def main() -> int:
 
     if pressure:
         for p in table.values():
-            if protected(p) or not any(pattern.lower() in p.command.lower() for pattern in QOS_PATTERNS):
+            if protected(p) or not qos_candidate(p):
                 continue
             decision = {"type": "qos_background", "pid": p.pid, "cpu": p.cpu, "nice_before": p.nice, "command": p.command}
             if not args.dry_run and not args.status and not FEATURE_OFF.exists():

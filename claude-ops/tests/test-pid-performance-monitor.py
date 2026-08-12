@@ -8,6 +8,7 @@ import io
 import pathlib
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -46,6 +47,10 @@ class PressureMonitorTests(unittest.TestCase):
         for patcher in self.common:
             patcher.start()
             self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def recent_timestamp(seconds_ago: int = 1) -> str:
+        return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def run_main(
         self,
@@ -118,7 +123,7 @@ class PressureMonitorTests(unittest.TestCase):
             table=table,
             cpu_samples=[{"user": 10.0, "sys": 5.0, "idle": 85.0}] * 3,
             loads=[1.0, 1.0, 1.0],
-            prior_state={"rg": {key: {"consecutive": 1}}},
+            prior_state={"rg": {key: {"consecutive": 1, "last_seen": self.recent_timestamp()}}},
         )
         term_actions = [a for a in repeated["actions"] if a["type"] == "term_runaway_rg"]
         self.assertEqual([20], [a["pid"] for a in term_actions])
@@ -137,6 +142,45 @@ class PressureMonitorTests(unittest.TestCase):
         )
         self.assertEqual([], record["actions"])
 
+    def test_xcode_simulator_and_healify_are_directly_protected(self) -> None:
+        protected_commands = {
+            301: "/usr/bin/xcodebuild -workspace Healify.xcworkspace build",
+            302: "/usr/bin/swift-frontend -frontend -c Sources/App.swift",
+            303: "/Applications/OrbStack.app/qemu-system-aarch64 -machine virt",
+            304: "/Applications/HealifyAIHealthCoach.app/HealifyAIHealthCoach",
+        }
+        table = {pid: proc(pid, command, cpu=99.0, state="U") for pid, command in protected_commands.items()}
+        for p in table.values():
+            self.assertTrue(monitor.protected(p), p.command)
+            self.assertFalse(monitor.qos_candidate(p), p.command)
+        record = self.run_main(
+            table=table,
+            cpu_samples=[{"user": 80.0, "sys": 10.0, "idle": 10.0}] * 3,
+            loads=[100.0, 100.0, 100.0],
+        )
+        self.assertEqual([], record["actions"])
+
+    def test_qos_candidate_rejects_wrappers_and_installers(self) -> None:
+        self.assertFalse(monitor.qos_candidate(proc(1, '/bin/zsh -c "python -m pytest tests"')))
+        self.assertFalse(monitor.qos_candidate(proc(2, "/opt/homebrew/bin/pip install -q ruff pytest")))
+        self.assertTrue(monitor.qos_candidate(proc(3, "/opt/homebrew/bin/pytest tests")))
+        self.assertTrue(monitor.qos_candidate(proc(4, "/opt/homebrew/bin/python3 -m pytest tests")))
+        self.assertTrue(monitor.qos_candidate(proc(5, "/repo/node_modules/jest-worker/build/workers/processChild.js")))
+
+    def test_pressure_qos_actions_exclude_payload_substring_false_positives(self) -> None:
+        table = {
+            201: proc(201, '/bin/zsh -c "python -m pytest tests"', cpu=80.0),
+            202: proc(202, "/opt/homebrew/bin/pip install -q ruff pytest", cpu=80.0),
+            203: proc(203, "/opt/homebrew/bin/pytest tests", cpu=80.0),
+        }
+        record = self.run_main(
+            table=table,
+            cpu_samples=[{"user": 80.0, "sys": 10.0, "idle": 10.0}] * 3,
+            loads=[100.0, 100.0, 100.0],
+        )
+        qos_pids = [action["pid"] for action in record["actions"] if action["type"] == "qos_background"]
+        self.assertEqual([203], qos_pids)
+
     def test_repeated_broad_scan_is_required_when_not_blocked(self) -> None:
         hermes = proc(10, "python -m hermes_cli.main gateway")
         broad = proc(20, f"rg --files --sortr=modified {monitor.HOME}", ppid=10, cpu=20.0, state="R")
@@ -152,10 +196,30 @@ class PressureMonitorTests(unittest.TestCase):
             table=table,
             cpu_samples=[{"user": 10.0, "sys": 5.0, "idle": 85.0}] * 3,
             loads=[1.0, 1.0, 1.0],
-            prior_state={"rg": {key: {"consecutive": 1}}},
+            prior_state={"rg": {key: {"consecutive": 1, "last_seen": self.recent_timestamp()}}},
         )
         term_actions = [a for a in second["actions"] if a["type"] == "term_runaway_rg"]
         self.assertEqual([20], [a["pid"] for a in term_actions])
+
+    def test_stale_broad_scan_observation_does_not_count_as_consecutive(self) -> None:
+        hermes = proc(10, "python -m hermes_cli.main gateway")
+        broad = proc(20, f"rg --files --sortr=modified {monitor.HOME}", ppid=10, cpu=20.0, state="R")
+        table = {10: hermes, 20: broad}
+        key = f"{broad.pid}:{broad.command}"
+        stale_timestamp = self.recent_timestamp(monitor.RG_OBSERVATION_MAX_GAP_S + 30)
+        record = self.run_main(
+            table=table,
+            cpu_samples=[{"user": 10.0, "sys": 5.0, "idle": 85.0}] * 3,
+            loads=[1.0, 1.0, 1.0],
+            prior_state={"rg": {key: {"consecutive": 99, "last_seen": stale_timestamp}}},
+        )
+        self.assertEqual([], record["actions"])
+
+    def test_missing_or_invalid_timestamp_does_not_count_as_consecutive(self) -> None:
+        now = datetime.now(timezone.utc)
+        self.assertFalse(monitor.prior_observation_is_recent({"consecutive": 1}, now))
+        self.assertFalse(monitor.prior_observation_is_recent({"last_seen": "not-a-time"}, now))
+        self.assertFalse(monitor.prior_observation_is_recent({"last_seen": "2000-01-01T00:00:00Z"}, now))
 
 
 if __name__ == "__main__":
