@@ -33,11 +33,13 @@ import { SCHEMA_VERSION, MAX_PLAN_MONTHLY_USD } from '../ledger.mjs';
  * host, and the assertion catches ANY Slack URL rather than one known literal.
  */
 function assertNoSlackWebhook(body) {
-  const urls = String(body).match(/https?:\/\/[^\s<>"')\]]+/g) || [];
+  // Case-insensitive scheme match + strip trailing DNS root dots so
+  // `HTTPS://hooks.slack.com./...` still fails the host check.
+  const urls = String(body).match(/https?:\/\/[^\s<>"')\]]+/gi) || [];
   for (const raw of urls) {
     let host;
     try {
-      host = new URL(raw).hostname.toLowerCase();
+      host = new URL(raw).hostname.toLowerCase().replace(/\.+$/, '');
     } catch {
       continue; // not a parseable URL, so not a live webhook
     }

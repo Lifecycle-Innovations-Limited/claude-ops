@@ -211,6 +211,9 @@ def audit(record: dict) -> None:
     record = {"ts": now_iso(), **record}
     try:
         AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # mkdir(mode=...) only applies when the directory is created; force the
+        # mode on pre-existing parents so a prior permissive dir does not stick.
+        os.chmod(AUDIT_PATH.parent, 0o700)
         # Open with an explicit 0600 mode so the audit trail is never readable by
         # group/other even if the process umask is permissive.
         fd = os.open(
@@ -356,13 +359,22 @@ def serve() -> int:
         )
 
     SOCK_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # mkdir(mode=...) only applies on create; reassert owner-only on existing dirs.
+    os.chmod(SOCK_PATH.parent, 0o700)
     try:
         SOCK_PATH.unlink()
     except FileNotFoundError:
+        # No stale socket file to remove; first start or already cleaned up.
         pass
 
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(str(SOCK_PATH))
+    # Create the inode under a restrictive umask so it is never world-accessible
+    # between bind() and the later chmod/ACL hardening step.
+    old_umask = os.umask(0o177)
+    try:
+        srv.bind(str(SOCK_PATH))
+    finally:
+        os.umask(old_umask)
     _harden_socket_perms(want_uid)
     srv.listen(16)
     with _METRICS_LOCK:

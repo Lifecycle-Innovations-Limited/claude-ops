@@ -3722,18 +3722,18 @@ async function browserOAuthFallback(account) {
     try {
       unlinkSync(urlFile);
     } catch {}
-    // Create the callback script atomically. `flag: 'wx'` makes the create-or-
-    // fail decision inside the single open(2) syscall, so an existsSync() guard
-    // here would only add a TOCTOU window without changing behaviour. EEXIST
-    // means a previous run already wrote it — that is the expected no-op.
+    // Same exclusive-create sequence as the initial BROWSER helper above: clear
+    // any leftover, then refuse if the exclusive create still fails. EEXIST
+    // after the unlink means another writer planted the file, not a no-op.
     try {
-      writeFileSync(capScript, `#!/bin/bash\numask 077\necho "$1" > "${urlFile}"\n`, {
-        flag: 'wx',
-        mode: 0o700,
-      });
-    } catch (e) {
-      if (e?.code !== 'EEXIST') throw e;
+      unlinkSync(capScript);
+    } catch {
+      /* nothing left over */
     }
+    writeFileSync(capScript, `#!/bin/bash\numask 077\necho "$1" > "${urlFile}"\n`, {
+      flag: 'wx',
+      mode: 0o700,
+    });
     proc = spawnOAuthWriter();
     let freshUrl = null;
     const scanFreshUrl = (chunk) => {

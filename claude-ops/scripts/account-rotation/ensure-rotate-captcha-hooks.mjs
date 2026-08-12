@@ -4,7 +4,7 @@
  *
  * Mutates sibling rotate.mjs once when markers are missing.
  */
-import { readFileSync, writeFileSync, renameSync, statSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, renameSync, statSync, unlinkSync, chmodSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -210,7 +210,14 @@ const __dirname`,
     try {
       mode = statSync(ROTATE).mode & 0o777;
     } catch {}
-    writeFileSync(tmp, text, { mode });
+    // writeFileSync only applies `mode` on create. A leftover tmp from a crashed
+    // run with a reused pid would be opened/truncated and keep its old bits —
+    // unlink first, write exclusively, then reassert mode before rename.
+    try {
+      unlinkSync(tmp);
+    } catch {}
+    writeFileSync(tmp, text, { flag: 'wx', mode });
+    chmodSync(tmp, mode);
     renameSync(tmp, ROTATE);
   } catch (e) {
     try {
