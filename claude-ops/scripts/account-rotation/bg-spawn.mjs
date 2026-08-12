@@ -30,6 +30,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
+import { randomBytes } from 'node:crypto';
 import { applyAccountLeases } from './account-leases.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -91,8 +92,10 @@ try {
 // accountKey helper (mirrors session-router.mjs)
 const accountKey = (a) => a.label || a.email;
 
-// Generate a stable session ID for this dispatch
-const sessionId = `bg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+// Generate a stable session ID for this dispatch. The session id keys the
+// account lease (which account's credentials this dispatch gets), so it must be
+// unguessable and collision-free — a CSPRNG, not Math.random().
+const sessionId = `bg-${Date.now()}-${randomBytes(9).toString('base64url')}`;
 
 // Pick account
 const key = pickAccountForSession(sessionId, config, state);

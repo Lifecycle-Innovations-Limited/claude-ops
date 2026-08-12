@@ -1956,7 +1956,7 @@ async function makeKaptureDriver() {
           .replace(/button:has-text\("?([^"]+)"?\)/g, '$1')
           .replace(/"/g, '')
           .trim();
-        const escaped = clean.replace(/'/g, "\\'");
+        const escaped = clean.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
         const xpaths = [
           `//button[.//*[contains(normalize-space(.),'${escaped}')] or contains(normalize-space(.),'${escaped}')]`,
           `//a[.//*[contains(normalize-space(.),'${escaped}')] or contains(normalize-space(.),'${escaped}')]`,
@@ -2400,7 +2400,7 @@ async function makeChromeJXADriver() {
       if (!val) return false;
       try {
         jxaJs(
-          `(function(){var e=document.querySelector('${sel}');if(e){e.value='${val.replace(/'/g, "\\'")}';e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));}})()`,
+          `(function(){var e=document.querySelector('${sel}');if(e){e.value='${val.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}';e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));}})()`,
         );
         return true;
       } catch {
@@ -2861,7 +2861,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
     log(`Step ${step} [${driver.name}]: ${url.substring(0, 100)}`);
 
     // Browser wall: CF / hCaptcha / interactive tile challenge
-    if (driver._page && url.includes('claude.ai')) {
+    if (driver._page && hostIs(url, 'claude.ai')) {
       const wallish = await pageLooksLikeCaptchaWall(driver._page);
       if (wallish || step === 0) {
         const solved = await trySolveCaptchaWallSafe(driver._page, (m) => log(m), {
@@ -2881,7 +2881,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
     // /oauth/authorize URL. Handle known Claude auth prompts before the generic
     // stall detector, otherwise AI-brain burns multiple decisions waiting for a
     // verification code that the deterministic Gmail poller can resolve or fail.
-    if (account.useMagicLink && url.includes('claude.ai')) {
+    if (account.useMagicLink && hostIs(url, 'claude.ai')) {
       if (
         await handleClaudeMagicLinkEmailPrompt(
           url.includes('/oauth/authorize') ? 'OAuth page rendered login prompt' : 'Login prompt',
@@ -2974,8 +2974,22 @@ async function runAuthFlow(driver, account, hooks = {}) {
       continue;
     }
 
+    /** Exact hostname match (and optional subdomains). Avoids url.includes host checks. */
+    function hostIs(url, host) {
+      try {
+        const h = new URL(url).hostname.toLowerCase();
+        const target = String(host).toLowerCase();
+        return h === target || h.endsWith('.' + target);
+      } catch {
+        return false;
+      }
+    }
+    function hostIsAny(url, hosts) {
+      return hosts.some((h) => hostIs(url, h));
+    }
+
     // Google 2FA: push notification to phone (/challenge/dp) — can't automate, must switch
-    if (url.includes('accounts.google.com') && url.includes('challenge/dp')) {
+    if (hostIs(url, 'accounts.google.com') && url.includes('challenge/dp')) {
       log(`Push-notification 2FA detected — clicking "Try another way"`);
       const clicked = await driver.findAndClick(['Try another way', 'Probeer een andere manier']);
       if (!clicked) {
@@ -2988,7 +3002,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
 
     // Google passkey challenge (/challenge/pk/presend, /challenge/pk/verify).
     // No hardware key available — bail out via "Try another way".
-    if (url.includes('accounts.google.com') && url.includes('/challenge/pk')) {
+    if (hostIs(url, 'accounts.google.com') && url.includes('/challenge/pk')) {
       log(`Passkey challenge detected — clicking "Try another way"`);
       const clicked = await driver.findAndClick([
         'Try another way',
@@ -3018,7 +3032,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
     //   - data-challengetype="6"  → TOTP authenticator app
     // Preference: password (we have it via dcli) > TOTP (we have the secret)
     //           > SMS (requires a phone) > passkey (no hardware).
-    if (url.includes('accounts.google.com') && url.includes('challenge/selection')) {
+    if (hostIs(url, 'accounts.google.com') && url.includes('challenge/selection')) {
       log(`On 2FA selection page — prefer password, then TOTP, then SMS`);
       const selectors = [];
       if (googlePassword)
@@ -3051,7 +3065,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
     }
 
     // Google 2FA: TOTP code entry
-    if (url.includes('accounts.google.com') && url.includes('challenge/totp')) {
+    if (hostIs(url, 'accounts.google.com') && url.includes('challenge/totp')) {
       if (googleOtpSecret) {
         const code = generateTOTP(googleOtpSecret);
         log(`Entering TOTP code from dcli secret`);
@@ -3068,7 +3082,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
     }
 
     // Google 2FA: SMS phone collect (/challenge/ipp/collect) — enter phone, click Send
-    if (url.includes('accounts.google.com') && url.includes('challenge/ipp/collect')) {
+    if (hostIs(url, 'accounts.google.com') && url.includes('challenge/ipp/collect')) {
       if (!googleSmsPhone) {
         log(
           `SMS phone collect page — no phone (set CLAUDE_ROTATION_GOOGLE_SMS_PHONE, account.googleSmsPhone, or dcli phone on google.com cred)`,
@@ -3084,10 +3098,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
     }
 
     // Google 2FA: SMS code verify (/challenge/ipp/verify or /challenge/sms)
-    if (
-      url.includes('accounts.google.com') &&
-      (url.includes('challenge/ipp/verify') || url.includes('challenge/sms'))
-    ) {
+    if (hostIs(url, 'accounts.google.com') && (url.includes('challenge/ipp/verify') || url.includes('challenge/sms'))) {
       log(`Waiting for SMS code from Messages.app (up to 60s)...`);
       let smsCode = null;
       for (let waitI = 0; waitI < 12; waitI++) {
@@ -3109,7 +3120,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
 
     // Google consent page (/signin/oauth/id or /signin/oauth/consent) — click Continue
     if (
-      url.includes('accounts.google.com') &&
+      hostIs(url, 'accounts.google.com') &&
       (url.includes('/signin/oauth/id') ||
         url.includes('/signin/oauth/consent') ||
         url.includes('/signin/oauth/legacy'))
@@ -3146,7 +3157,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
 
     // Google password prompt (standalone /challenge/pwd — must run BEFORE the
     // broad accounts.google.com account-chooser branch below).
-    if (url.includes('accounts.google.com') && url.includes('challenge/pwd')) {
+    if (hostIs(url, 'accounts.google.com') && url.includes('challenge/pwd')) {
       if (googlePassword) {
         await driver.fillInput('input[type="password"]', googlePassword);
         await sleep(500);
@@ -3156,7 +3167,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
     }
 
     // Google account chooser — click the target account
-    if (url.includes('accounts.google.com')) {
+    if (hostIs(url, 'accounts.google.com')) {
       // Detect "Signed out" next to the target account (needs re-login)
       let targetSignedOut = false;
       if (driver.readPageText) {
@@ -3199,7 +3210,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
     // several times (select-organization, onboarding/organization, workspaces,
     // choose-workspace). Also triggers on page-text heuristic for routes we miss.
     const isOrgChooserUrl =
-      url.includes('claude.ai') &&
+      hostIs(url, 'claude.ai') &&
       (url.includes('select-organization') ||
         url.includes('/onboarding/organization') ||
         url.includes('choose-organization') ||
@@ -3209,7 +3220,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
         url.includes('select-account') ||
         url.includes('switch-org'));
     let isOrgChooserByText = false;
-    if (!isOrgChooserUrl && url.includes('claude.ai') && driver.readPageText) {
+    if (!isOrgChooserUrl && hostIs(url, 'claude.ai') && driver.readPageText) {
       try {
         const t = (await driver.readPageText()).toLowerCase();
         isOrgChooserByText =
@@ -3382,7 +3393,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
         const currentUrl = await driver.currentUrl().catch(() => '');
         if (
           currentUrl.includes('/oauth/code/success') ||
-          (currentUrl && !currentUrl.includes('claude.ai') && !currentUrl.includes('claude.com'))
+          (currentUrl && !hostIsAny(currentUrl, ['claude.ai', 'claude.com']))
         ) {
           log(`Auth already succeeded — URL moved to ${currentUrl.substring(0, 80)}`);
           authorized = true;
@@ -3436,7 +3447,7 @@ async function runAuthFlow(driver, account, hooks = {}) {
     }
 
     // Dismiss cookie consent banner if present (blocks clicks on everything else)
-    if (url.includes('claude.ai')) {
+    if (hostIs(url, 'claude.ai')) {
       await driver.findAndClick([
         '[data-testid="consent-reject"]',
         '[data-testid="consent-accept"]',
@@ -3711,12 +3722,18 @@ async function browserOAuthFallback(account) {
     try {
       unlinkSync(urlFile);
     } catch {}
-    if (!existsSync(capScript)) {
-      writeFileSync(capScript, `#!/bin/bash\numask 077\necho "$1" > "${urlFile}"\n`, {
-        flag: 'wx',
-        mode: 0o700,
-      });
+    // Same exclusive-create sequence as the initial BROWSER helper above: clear
+    // any leftover, then refuse if the exclusive create still fails. EEXIST
+    // after the unlink means another writer planted the file, not a no-op.
+    try {
+      unlinkSync(capScript);
+    } catch {
+      /* nothing left over */
     }
+    writeFileSync(capScript, `#!/bin/bash\numask 077\necho "$1" > "${urlFile}"\n`, {
+      flag: 'wx',
+      mode: 0o700,
+    });
     proc = spawnOAuthWriter();
     let freshUrl = null;
     const scanFreshUrl = (chunk) => {

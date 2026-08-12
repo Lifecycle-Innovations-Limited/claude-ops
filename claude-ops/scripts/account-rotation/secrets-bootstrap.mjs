@@ -6,7 +6,7 @@
 // Never throws. Never prints secret values. Runs the Doppler CLI at most once
 // per process, and only if at least one required key is missing.
 import { execFileSync } from 'child_process';
-import { existsSync, readFileSync, statSync } from 'fs';
+import { closeSync, fstatSync, openSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
@@ -86,14 +86,24 @@ const SECRET_FILES = [
 function hydrateFromSecretFiles(keys, log) {
   const loaded = [];
   for (const path of SECRET_FILES) {
+    let fd = null;
     try {
-      if (!existsSync(path)) continue;
-      if ((statSync(path).mode & 0o077) !== 0) {
+      // Open first, then fstat and read *the same descriptor*. Checking
+      // existence/mode by path and re-resolving the path to read it leaves a
+      // TOCTOU window in which the file we vetted can be swapped for a
+      // world-readable one (or a symlink to another file) before we read it.
+      try {
+        fd = openSync(path, 'r');
+      } catch {
+        continue; // missing or unreadable — nothing to hydrate from
+      }
+      const st = fstatSync(fd);
+      if (!st.isFile() || (st.mode & 0o077) !== 0) {
         if (log) log(`secrets-bootstrap: refusing permissive secret file ${path}`);
         continue;
       }
       const allowed = new Set(keys);
-      for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+      for (const line of readFileSync(fd, 'utf8').split(/\r?\n/)) {
         const match = line.match(/^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)=(.*)\s*$/);
         if (!match || !allowed.has(match[1]) || process.env[match[1]]) continue;
         let value = match[2].trim();
@@ -104,7 +114,14 @@ function hydrateFromSecretFiles(keys, log) {
         process.env[match[1]] = value;
         loaded.push(match[1]);
       }
-    } catch {}
+    } catch {
+    } finally {
+      if (fd !== null) {
+        try {
+          closeSync(fd);
+        } catch {}
+      }
+    }
   }
   return loaded;
 }

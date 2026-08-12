@@ -33,7 +33,44 @@ const MASTERKEY_FILE = path.join(DATA_DIR, '.masterkey');
 
 let __plaintextWarned = false;
 
-const log = (...args) => console.error('credential-store:', ...args);
+// ─── Redacted logging ────────────────────────────────────────────────────────
+
+/** Fixed label. A constant, never derived from any runtime value. */
+const REDACTED_TOKEN = '<redacted:token>';
+
+/**
+ * Redact credential-shaped strings before anything reaches stderr.
+ *
+ * Scope note, deliberately narrow: this does NOT read `process.env`. Earlier
+ * revisions hashed every sensitive env value and redacted matches, as
+ * defence-in-depth against a secret being interpolated into a child-process
+ * error message. That was dropped for three reasons:
+ *
+ *  1. No call site in this module logs a secret. Every `log()` argument is a
+ *     literal status string, plus one `Error.message`.
+ *  2. Reading process.env inside the function that feeds console.error is a
+ *     genuine source→sink flow (CodeQL js/clear-text-logging #294). Keeping
+ *     code a scanner cannot distinguish from "logs secrets" makes the next
+ *     real finding in this file easier to wave through.
+ *  3. Token-shape matching still covers the realistic leak — an API key or
+ *     bearer token embedded in an error string — without touching the
+ *     environment at all.
+ *
+ * If a future call site logs child-process or attacker-influenced text that may
+ * embed an env secret, redact at that call site rather than widening this one.
+ */
+function scrub(text) {
+  return String(text).replace(
+    /\b(?:sk|pk|xoxc|xoxd|xoxb|xoxp|ghp|gho|github_pat)[-_][A-Za-z0-9_-]{8,}/g,
+    REDACTED_TOKEN,
+  );
+}
+
+const log = (...args) =>
+  console.error(
+    'credential-store:',
+    ...args.map((a) => scrub(a instanceof Error ? a.message : typeof a === 'string' ? a : JSON.stringify(a))),
+  );
 
 function assertPublicWriteAllowed(service) {
   const name = String(service || '').toLowerCase();
@@ -293,7 +330,7 @@ async function encJsonGet(service, account) {
   if (!store[key]) return null;
   const k = await masterKey();
   const pt = decrypt(store[key], k);
-  if (pt === null) log('decrypt failed for enc-json/' + key);
+  if (pt === null) log('decrypt failed for enc-json/' + service);
   return pt;
 }
 async function encJsonDelete(service, account) {
@@ -355,7 +392,6 @@ export async function backendsAvailable() {
  */
 export async function setCredential(service, account, secret) {
   assertPublicWriteAllowed(service);
-  const forced = process.env.CLAUDE_OPS_CRED_BACKEND;
   const tryBackend = async (name) => {
     let ok = false;
     switch (name) {
@@ -377,15 +413,58 @@ export async function setCredential(service, account, secret) {
       case 'plaintext-json':
         ok = await plainSet(service, account, secret);
         break;
+      default:
+        return false;
     }
+    // `name` is always a case-arm literal here (the switch above is exhaustive
+    // for every value we call with). Concatenating it into the log line is
+    // therefore not an env-derived flow.
     if (ok) log('stored via=' + name);
     return ok;
   };
 
-  if (forced) {
-    const ok = await tryBackend(forced);
-    if (!ok) log('forced backend=' + forced + ' failed');
-    return { backend: forced, ok };
+  // Force path: one case arm per known backend, each calling tryBackend with a
+  // string LITERAL. A Set/allowlist membership check is not recognised as a
+  // sanitizer by CodeQL (documented on the spawnSync path further down this
+  // file); a switch of string literals is, so the env value never reaches a
+  // log line or a backend call as a data flow.
+  switch (process.env.CLAUDE_OPS_CRED_BACKEND) {
+    case 'security': {
+      const ok = await tryBackend('security');
+      if (!ok) log('forced backend failed');
+      return { backend: 'security', ok };
+    }
+    case 'secret-tool': {
+      const ok = await tryBackend('secret-tool');
+      if (!ok) log('forced backend failed');
+      return { backend: 'secret-tool', ok };
+    }
+    case 'wincred': {
+      const ok = await tryBackend('wincred');
+      if (!ok) log('forced backend failed');
+      return { backend: 'wincred', ok };
+    }
+    case 'keytar': {
+      const ok = await tryBackend('keytar');
+      if (!ok) log('forced backend failed');
+      return { backend: 'keytar', ok };
+    }
+    case 'enc-json': {
+      const ok = await tryBackend('enc-json');
+      if (!ok) log('forced backend failed');
+      return { backend: 'enc-json', ok };
+    }
+    case 'plaintext-json': {
+      const ok = await tryBackend('plaintext-json');
+      if (!ok) log('forced backend failed');
+      return { backend: 'plaintext-json', ok };
+    }
+    case undefined:
+    case '':
+      break;
+    default:
+      log('forced backend rejected (unknown name)');
+      return { backend: null, ok: false };
   }
 
   const cascade = [];

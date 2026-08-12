@@ -319,15 +319,102 @@ if (!apiId || !apiHash) {
   ({ apiId, apiHash } = extract(appsHtml));
 }
 
+/**
+ * Extract human-readable text from an HTML document for diagnostics.
+ *
+ * Deliberately NOT a chain of `.replace(/<script.*?<\/script>/gi, '')`-style
+ * regexes: those miss valid-but-unusual end tags (`</script >`, `</script\n>`)
+ * and, because each pass can re-create a tag the previous pass removed, they can
+ * leave live `<script`/`<style` markup behind. This is a single left-to-right
+ * pass over the input that can never resurrect markup, and it HTML-escapes the
+ * text it keeps so the result is inert wherever it is later rendered.
+ */
+function htmlToDiagnosticText(html) {
+  const RAW_TEXT = new Set(['script', 'style', 'textarea', 'title', 'noscript']);
+  const out = [];
+  let i = 0;
+  const n = html.length;
+
+  while (i < n) {
+    const lt = html.indexOf('<', i);
+    if (lt === -1) {
+      out.push(html.slice(i));
+      break;
+    }
+    out.push(html.slice(i, lt));
+
+    // Comment / CDATA / doctype
+    if (html.startsWith('<!--', lt)) {
+      const end = html.indexOf('-->', lt + 4);
+      i = end === -1 ? n : end + 3;
+      continue;
+    }
+    if (html[lt + 1] === '!' || html[lt + 1] === '?') {
+      const end = html.indexOf('>', lt);
+      i = end === -1 ? n : end + 1;
+      continue;
+    }
+
+    // A '<' that does not open a tag is literal text, not markup.
+    const nameMatch = /^<\/?([a-zA-Z][a-zA-Z0-9-]*)/.exec(html.slice(lt, lt + 64));
+    if (!nameMatch) {
+      out.push('<');
+      i = lt + 1;
+      continue;
+    }
+    const tagName = nameMatch[1].toLowerCase();
+    const isClosing = html[lt + 1] === '/';
+
+    // Walk to the tag's '>' while respecting quoted attribute values, so a '>'
+    // inside an attribute does not terminate the tag early.
+    let j = lt + nameMatch[0].length;
+    let quote = null;
+    while (j < n) {
+      const c = html[j];
+      if (quote) {
+        if (c === quote) quote = null;
+      } else if (c === '"' || c === "'") {
+        quote = c;
+      } else if (c === '>') {
+        break;
+      }
+      j++;
+    }
+    i = j < n ? j + 1 : n;
+
+    // Raw-text elements: skip their entire content, matching the end tag the way
+    // an HTML parser does — '</name' followed by whitespace, '/' or '>'.
+    if (!isClosing && RAW_TEXT.has(tagName) && html[j - 1] !== '/') {
+      const endRe = new RegExp(`</${tagName}(?=[\\s/>])`, 'i');
+      const rest = html.slice(i);
+      const m = endRe.exec(rest);
+      if (!m) {
+        i = n;
+      } else {
+        const close = html.indexOf('>', i + m.index);
+        i = close === -1 ? n : close + 1;
+      }
+      continue;
+    }
+
+    out.push(' ');
+  }
+
+  // Escape what survived: the snippet is inert wherever it is later rendered.
+  return out
+    .join('')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 if (!apiId || !apiHash) {
   // Dump a snippet of the HTML so the caller can diagnose what changed
-  const snippet = appsHtml
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 500);
+  const snippet = htmlToDiagnosticText(appsHtml).slice(0, 500);
   die(
     `could not extract ${!apiId ? 'api_id' : ''}${!apiId && !apiHash ? ' or ' : ''}${!apiHash ? 'api_hash' : ''} from /apps HTML after 6 extraction strategies`,
     { html_snippet: snippet },
