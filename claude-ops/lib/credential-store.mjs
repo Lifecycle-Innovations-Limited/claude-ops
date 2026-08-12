@@ -35,37 +35,41 @@ let __plaintextWarned = false;
 
 // ─── Redacted logging ────────────────────────────────────────────────────────
 // This module handles secret material, so nothing reaches stderr unredacted.
-// `preview()` keeps a short, non-reversible hint (length + last 4) so operators
-// can still correlate "which value" without the value itself ever being logged.
-export function preview(secret) {
-  const s = secret == null ? '' : String(secret);
-  if (!s) return '<empty>';
-  if (s.length <= 8) return `<redacted len=${s.length}>`;
-  return `<redacted len=${s.length} …${s.slice(-4)}>`;
-}
+// Deliberately NO last-4 / length-hint preview: any function that copies bytes
+// of a secret into a log line is still a process.env → log-sink data flow, and
+// a length plus last-4 measurably narrows an offline guess. Redaction labels
+// are built from the ENV VAR NAME (or the token's scheme prefix) only, which
+// gives operators the "which value" they actually need for correlation without
+// carrying any of the value itself.
 
 // Env vars whose values must never appear in log output, even indirectly
 // (e.g. interpolated into an error message thrown by a child process).
 const SENSITIVE_ENV_RE =
   /(SECRET|TOKEN|PASSWORD|PASSWD|APIKEY|API_KEY|CREDENTIAL|PRIVATE_KEY|SESSION|COOKIE|MASTERKEY|OTP)/i;
 
-function sensitiveEnvValues() {
+function sensitiveEnvEntries() {
   const out = [];
   for (const [k, v] of Object.entries(process.env)) {
-    if (typeof v === 'string' && v.length >= 6 && SENSITIVE_ENV_RE.test(k)) out.push(v);
+    if (typeof v === 'string' && v.length >= 6 && SENSITIVE_ENV_RE.test(k)) out.push([k, v]);
   }
-  // Longest first so overlapping values redact fully.
-  return out.sort((a, b) => b.length - a.length);
+  // Longest value first so overlapping values redact fully.
+  return out.sort((a, b) => b[1].length - a[1].length);
 }
 
 function scrub(text) {
   let s = String(text);
-  for (const v of sensitiveEnvValues()) {
-    if (s.includes(v)) s = s.split(v).join(preview(v));
+  // Replace each secret with a label built from the ENV VAR NAME only. No byte
+  // of the value itself — not even a last-4 hint — is carried into the output,
+  // so there is no data flow from process.env to the log sink at all.
+  for (const [key, value] of sensitiveEnvEntries()) {
+    if (s.includes(value)) s = s.split(value).join(`<redacted ${key}>`);
   }
   // Belt-and-braces: mask anything shaped like a bearer/API token even if it
-  // did not come from the environment.
-  s = s.replace(/\b(?:sk|pk|xoxc|xoxd|xoxb|xoxp|ghp|gho|github_pat)[-_][A-Za-z0-9_-]{8,}/g, (m) => preview(m));
+  // did not come from the environment. Only the scheme prefix is retained.
+  s = s.replace(
+    /\b(sk|pk|xoxc|xoxd|xoxb|xoxp|ghp|gho|github_pat)[-_][A-Za-z0-9_-]{8,}/g,
+    (_m, prefix) => `<redacted ${prefix}-token>`,
+  );
   return s;
 }
 
