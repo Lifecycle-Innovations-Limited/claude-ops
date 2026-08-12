@@ -105,8 +105,10 @@ test('formatSlackBody: includes pool, waste %, prior cycle, no secrets', () => {
   assert.match(body, /50% waste/);
   assert.match(body, /2026-05/);
   assert.match(body, /2\/2 accounts re-claimed/);
-  // Ensure no API token / webhook leaks
-  assert.doesNotMatch(body, /hooks\.slack\.com/);
+  // Ensure no API token / webhook leaks. Substring check, not a regex: this is
+  // a "must not appear anywhere" assertion, so an unanchored URL regex is both
+  // the wrong tool and a CodeQL js/regex/missing-regexp-anchor finding.
+  assert.ok(!body.includes('hooks.slack.com'), 'body must not leak the webhook host');
 });
 
 test('formatSlackBody: reports failed accounts', () => {

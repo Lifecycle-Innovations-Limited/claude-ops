@@ -938,9 +938,18 @@ try {
   }
   if (!xoxcToken) die('Could not find XOXC token — ensure the workspace is fully loaded');
 
-  // Extract XOXD ('d' cookie) from the context cookie jar
+  // Extract XOXD ('d' cookie) from the context cookie jar.
+  // Match the cookie domain exactly (or as a true subdomain). An unanchored
+  // /slack\.com/ test would also accept a look-alike like
+  // "notslack.com.example.net", handing the session cookie to the wrong host.
+  const isSlackDomain = (domain) => {
+    const host = String(domain || '')
+      .replace(/^\./, '')
+      .toLowerCase();
+    return host === 'slack.com' || host.endsWith('.slack.com');
+  };
   const cookies = await context.cookies();
-  const dCookie = cookies.find((c) => c.name === 'd' && /slack\.com/.test(c.domain));
+  const dCookie = cookies.find((c) => c.name === 'd' && isSlackDomain(c.domain));
   if (!dCookie) die("Could not find 'd' cookie (XOXD token)");
   const xoxdToken = dCookie.value.startsWith('xoxd-') ? dCookie.value : `xoxd-${dCookie.value}`;
 

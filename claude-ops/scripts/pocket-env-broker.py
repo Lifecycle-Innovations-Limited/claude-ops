@@ -39,6 +39,7 @@ import json
 import os
 import pwd
 import shlex
+import shutil
 import signal
 import socket
 import struct
@@ -209,8 +210,13 @@ def load_policy() -> set[str]:
 def audit(record: dict) -> None:
     record = {"ts": now_iso(), **record}
     try:
-        AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with AUDIT_PATH.open("a") as f:
+        AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Open with an explicit 0600 mode so the audit trail is never readable by
+        # group/other even if the process umask is permissive.
+        fd = os.open(
+            str(AUDIT_PATH), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600
+        )
+        with os.fdopen(fd, "a") as f:
             f.write(json.dumps(record) + "\n")
     except OSError as e:
         log(f"audit write failed: {e}")
@@ -301,6 +307,47 @@ def handle(conn: socket.socket, want_uid: int | None) -> None:
             pass
 
 
+def _harden_socket_perms(want_uid: int | None) -> None:
+    """Restrict the broker socket to the owner, plus the worker uid via ACL.
+
+    The socket is the door to every allowlisted secret, so it must never be
+    group- or world-accessible: a 0660 socket grants connect to every member of
+    the owning group, which on a default `useradd` layout is wider than the one
+    worker account we mean to authorize. We set 0600 (owner only) and then grant
+    the single worker uid explicitly with a filesystem ACL where one is
+    available. SO_PEERCRED remains the authoritative check either way.
+    """
+    os.chmod(SOCK_PATH, 0o600)
+    if want_uid is None:
+        return
+    setfacl = shutil.which("setfacl")
+    if setfacl:  # Linux / any POSIX.1e ACL filesystem
+        rc = subprocess.run(
+            [setfacl, "-m", f"u:{want_uid}:rw", str(SOCK_PATH)],
+            capture_output=True,
+        ).returncode
+        if rc == 0:
+            return
+    chmod_bin = shutil.which("chmod")
+    if sys.platform == "darwin" and chmod_bin:  # macOS NFSv4-style ACLs
+        rc = subprocess.run(
+            [
+                chmod_bin,
+                "+a",
+                f"user:{WORKER_USER} allow read,write",
+                str(SOCK_PATH),
+            ],
+            capture_output=True,
+        ).returncode
+        if rc == 0:
+            return
+    log(
+        f"socket is 0600 and no ACL could be set for uid {want_uid} — "
+        "grant access by running the broker as a user the worker can reach, "
+        "or add an ACL out of band"
+    )
+
+
 def serve() -> int:
     want_uid = allowed_uid()
     if want_uid is None:
@@ -308,15 +355,15 @@ def serve() -> int:
             f"worker user {WORKER_USER!r} does not exist — every request will be denied"
         )
 
-    SOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if SOCK_PATH.exists():
+    SOCK_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
         SOCK_PATH.unlink()
+    except FileNotFoundError:
+        pass
 
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(str(SOCK_PATH))
-    # 0660: connect is gated by filesystem perms (provisioning grants the worker
-    # user via group/ACL) AND by SO_PEERCRED at the application layer.
-    os.chmod(SOCK_PATH, 0o660)
+    _harden_socket_perms(want_uid)
     srv.listen(16)
     with _METRICS_LOCK:
         _METRICS["started_at"] = now_iso()

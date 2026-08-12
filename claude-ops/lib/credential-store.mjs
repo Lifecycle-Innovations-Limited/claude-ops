@@ -33,7 +33,47 @@ const MASTERKEY_FILE = path.join(DATA_DIR, '.masterkey');
 
 let __plaintextWarned = false;
 
-const log = (...args) => console.error('credential-store:', ...args);
+// ─── Redacted logging ────────────────────────────────────────────────────────
+// This module handles secret material, so nothing reaches stderr unredacted.
+// `preview()` keeps a short, non-reversible hint (length + last 4) so operators
+// can still correlate "which value" without the value itself ever being logged.
+export function preview(secret) {
+  const s = secret == null ? '' : String(secret);
+  if (!s) return '<empty>';
+  if (s.length <= 8) return `<redacted len=${s.length}>`;
+  return `<redacted len=${s.length} …${s.slice(-4)}>`;
+}
+
+// Env vars whose values must never appear in log output, even indirectly
+// (e.g. interpolated into an error message thrown by a child process).
+const SENSITIVE_ENV_RE =
+  /(SECRET|TOKEN|PASSWORD|PASSWD|APIKEY|API_KEY|CREDENTIAL|PRIVATE_KEY|SESSION|COOKIE|MASTERKEY|OTP)/i;
+
+function sensitiveEnvValues() {
+  const out = [];
+  for (const [k, v] of Object.entries(process.env)) {
+    if (typeof v === 'string' && v.length >= 6 && SENSITIVE_ENV_RE.test(k)) out.push(v);
+  }
+  // Longest first so overlapping values redact fully.
+  return out.sort((a, b) => b.length - a.length);
+}
+
+function scrub(text) {
+  let s = String(text);
+  for (const v of sensitiveEnvValues()) {
+    if (s.includes(v)) s = s.split(v).join(preview(v));
+  }
+  // Belt-and-braces: mask anything shaped like a bearer/API token even if it
+  // did not come from the environment.
+  s = s.replace(/\b(?:sk|pk|xoxc|xoxd|xoxb|xoxp|ghp|gho|github_pat)[-_][A-Za-z0-9_-]{8,}/g, (m) => preview(m));
+  return s;
+}
+
+const log = (...args) =>
+  console.error(
+    'credential-store:',
+    ...args.map((a) => scrub(a instanceof Error ? a.message : typeof a === 'string' ? a : JSON.stringify(a))),
+  );
 
 function assertPublicWriteAllowed(service) {
   const name = String(service || '').toLowerCase();

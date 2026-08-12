@@ -281,8 +281,10 @@ test('formatSlackBody: includes pool, severity, projection, fallback section', (
   assert.match(body, /Fallback 24h:/);
   assert.match(body, /a@x/);
   assert.match(body, /b@x/);
-  // No webhook leaks
-  assert.doesNotMatch(body, /hooks\.slack\.com/);
+  // No webhook leaks. Substring check, not a regex: this is a "must not appear
+  // anywhere" assertion, so an unanchored URL regex is both the wrong tool and a
+  // CodeQL js/regex/missing-regexp-anchor finding.
+  assert.ok(!body.includes('hooks.slack.com'), 'body must not leak the webhook host');
 });
 
 test('formatSlackBody: graceful fallback when CloudWatch unavailable', () => {
