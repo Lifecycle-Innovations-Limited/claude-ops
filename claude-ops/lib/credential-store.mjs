@@ -392,10 +392,6 @@ export async function backendsAvailable() {
  */
 export async function setCredential(service, account, secret) {
   assertPublicWriteAllowed(service);
-  // Known backends only. The CLAUDE_OPS_CRED_BACKEND override is validated
-  // against this set before any use, so an env value never reaches a log line
-  // or a backend call as-is (CodeQL js/clear-text-logging #294).
-  const KNOWN = new Set(['security', 'secret-tool', 'wincred', 'keytar', 'enc-json', 'plaintext-json']);
   const tryBackend = async (name) => {
     let ok = false;
     switch (name) {
@@ -427,18 +423,48 @@ export async function setCredential(service, account, secret) {
     return ok;
   };
 
-  const forcedRaw = process.env.CLAUDE_OPS_CRED_BACKEND;
-  if (forcedRaw) {
-    // Accept only a known backend name. Anything else is treated as a failed
-    // force so a typo or injection cannot be echoed into a log line.
-    const forced = KNOWN.has(forcedRaw) ? forcedRaw : null;
-    if (!forced) {
+  // Force path: one case arm per known backend, each calling tryBackend with a
+  // string LITERAL. A Set/allowlist membership check is not recognised as a
+  // sanitizer by CodeQL (documented on the spawnSync path further down this
+  // file); a switch of string literals is, so the env value never reaches a
+  // log line or a backend call as a data flow.
+  switch (process.env.CLAUDE_OPS_CRED_BACKEND) {
+    case 'security': {
+      const ok = await tryBackend('security');
+      if (!ok) log('forced backend failed');
+      return { backend: 'security', ok };
+    }
+    case 'secret-tool': {
+      const ok = await tryBackend('secret-tool');
+      if (!ok) log('forced backend failed');
+      return { backend: 'secret-tool', ok };
+    }
+    case 'wincred': {
+      const ok = await tryBackend('wincred');
+      if (!ok) log('forced backend failed');
+      return { backend: 'wincred', ok };
+    }
+    case 'keytar': {
+      const ok = await tryBackend('keytar');
+      if (!ok) log('forced backend failed');
+      return { backend: 'keytar', ok };
+    }
+    case 'enc-json': {
+      const ok = await tryBackend('enc-json');
+      if (!ok) log('forced backend failed');
+      return { backend: 'enc-json', ok };
+    }
+    case 'plaintext-json': {
+      const ok = await tryBackend('plaintext-json');
+      if (!ok) log('forced backend failed');
+      return { backend: 'plaintext-json', ok };
+    }
+    case undefined:
+    case '':
+      break;
+    default:
       log('forced backend rejected (unknown name)');
       return { backend: null, ok: false };
-    }
-    const ok = await tryBackend(forced);
-    if (!ok) log('forced backend failed');
-    return { backend: forced, ok };
   }
 
   const cascade = [];
