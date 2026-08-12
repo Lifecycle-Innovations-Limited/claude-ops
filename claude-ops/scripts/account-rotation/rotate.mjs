@@ -2974,22 +2974,21 @@ async function runAuthFlow(driver, account, hooks = {}) {
       continue;
     }
 
-    
-/** Exact hostname match (and optional subdomains). Avoids url.includes host checks. */
-function hostIs(url, host) {
-  try {
-    const h = new URL(url).hostname.toLowerCase();
-    const target = String(host).toLowerCase();
-    return h === target || h.endsWith('.' + target);
-  } catch {
-    return false;
-  }
-}
-function hostIsAny(url, hosts) {
-  return hosts.some((h) => hostIs(url, h));
-}
+    /** Exact hostname match (and optional subdomains). Avoids url.includes host checks. */
+    function hostIs(url, host) {
+      try {
+        const h = new URL(url).hostname.toLowerCase();
+        const target = String(host).toLowerCase();
+        return h === target || h.endsWith('.' + target);
+      } catch {
+        return false;
+      }
+    }
+    function hostIsAny(url, hosts) {
+      return hosts.some((h) => hostIs(url, h));
+    }
 
-// Google 2FA: push notification to phone (/challenge/dp) — can't automate, must switch
+    // Google 2FA: push notification to phone (/challenge/dp) — can't automate, must switch
     if (hostIs(url, 'accounts.google.com') && url.includes('challenge/dp')) {
       log(`Push-notification 2FA detected — clicking "Try another way"`);
       const clicked = await driver.findAndClick(['Try another way', 'Probeer een andere manier']);
@@ -3099,10 +3098,7 @@ function hostIsAny(url, hosts) {
     }
 
     // Google 2FA: SMS code verify (/challenge/ipp/verify or /challenge/sms)
-    if (
-      hostIs(url, 'accounts.google.com') &&
-      (url.includes('challenge/ipp/verify') || url.includes('challenge/sms'))
-    ) {
+    if (hostIs(url, 'accounts.google.com') && (url.includes('challenge/ipp/verify') || url.includes('challenge/sms'))) {
       log(`Waiting for SMS code from Messages.app (up to 60s)...`);
       let smsCode = null;
       for (let waitI = 0; waitI < 12; waitI++) {
