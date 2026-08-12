@@ -392,7 +392,10 @@ export async function backendsAvailable() {
  */
 export async function setCredential(service, account, secret) {
   assertPublicWriteAllowed(service);
-  const forced = process.env.CLAUDE_OPS_CRED_BACKEND;
+  // Known backends only. The CLAUDE_OPS_CRED_BACKEND override is validated
+  // against this set before any use, so an env value never reaches a log line
+  // or a backend call as-is (CodeQL js/clear-text-logging #294).
+  const KNOWN = new Set(['security', 'secret-tool', 'wincred', 'keytar', 'enc-json', 'plaintext-json']);
   const tryBackend = async (name) => {
     let ok = false;
     switch (name) {
@@ -414,14 +417,27 @@ export async function setCredential(service, account, secret) {
       case 'plaintext-json':
         ok = await plainSet(service, account, secret);
         break;
+      default:
+        return false;
     }
+    // `name` is always a case-arm literal here (the switch above is exhaustive
+    // for every value we call with). Concatenating it into the log line is
+    // therefore not an env-derived flow.
     if (ok) log('stored via=' + name);
     return ok;
   };
 
-  if (forced) {
+  const forcedRaw = process.env.CLAUDE_OPS_CRED_BACKEND;
+  if (forcedRaw) {
+    // Accept only a known backend name. Anything else is treated as a failed
+    // force so a typo or injection cannot be echoed into a log line.
+    const forced = KNOWN.has(forcedRaw) ? forcedRaw : null;
+    if (!forced) {
+      log('forced backend rejected (unknown name)');
+      return { backend: null, ok: false };
+    }
     const ok = await tryBackend(forced);
-    if (!ok) log('forced backend=' + forced + ' failed');
+    if (!ok) log('forced backend failed');
     return { backend: forced, ok };
   }
 
