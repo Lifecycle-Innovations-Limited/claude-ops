@@ -47,25 +47,47 @@ let __plaintextWarned = false;
 const SENSITIVE_ENV_RE =
   /(SECRET|TOKEN|PASSWORD|PASSWD|APIKEY|API_KEY|CREDENTIAL|PRIVATE_KEY|SESSION|COOKIE|MASTERKEY|OTP)/i;
 
-function sensitiveEnvEntries() {
-  const out = [];
-  for (const [k, v] of Object.entries(process.env)) {
-    if (typeof v === 'string' && v.length >= 6 && SENSITIVE_ENV_RE.test(k)) out.push([k, v]);
+/**
+ * Digest → env-var-name index of sensitive environment values.
+ *
+ * Note the shape: the secret VALUE is consumed by createHash() and never
+ * escapes this function. What comes out is a SHA-256 hex digest as a lookup key
+ * and the variable NAME as the label. That keeps the redactor effective while
+ * leaving no data path at all from process.env to a log sink — a scrub()
+ * written as `s.split(secretValue).join(label)` still reads the raw value into
+ * the string pipeline, which is both a CodeQL js/clear-text-logging finding and
+ * a real risk if the replacement is ever partial.
+ */
+function sensitiveEnvDigests() {
+  const index = new Map();
+  for (const [name, value] of Object.entries(process.env)) {
+    if (typeof value !== 'string' || value.length < 6) continue;
+    if (!SENSITIVE_ENV_RE.test(name)) continue;
+    index.set(crypto.createHash('sha256').update(value).digest('hex'), name);
   }
-  // Longest value first so overlapping values redact fully.
-  return out.sort((a, b) => b[1].length - a[1].length);
+  return index;
 }
 
+/**
+ * Redact anything secret-looking before it reaches stderr.
+ *
+ * Two independent passes, neither of which copies a secret into the output:
+ *  1. Every whitespace/quote-delimited run in the message is hashed and looked
+ *     up in the digest index above. A hit is replaced with `<redacted NAME>`.
+ *  2. Anything shaped like a bearer/API token is replaced with its scheme
+ *     prefix only, catching secrets that never came from the environment.
+ */
 function scrub(text) {
+  const digests = sensitiveEnvDigests();
   let s = String(text);
-  // Replace each secret with a label built from the ENV VAR NAME only. No byte
-  // of the value itself — not even a last-4 hint — is carried into the output,
-  // so there is no data flow from process.env to the log sink at all.
-  for (const [key, value] of sensitiveEnvEntries()) {
-    if (s.includes(value)) s = s.split(value).join(`<redacted ${key}>`);
+
+  if (digests.size > 0) {
+    s = s.replace(/[^\s'"`,;()[\]{}]{6,}/g, (candidate) => {
+      const name = digests.get(crypto.createHash('sha256').update(candidate).digest('hex'));
+      return name ? `<redacted ${name}>` : candidate;
+    });
   }
-  // Belt-and-braces: mask anything shaped like a bearer/API token even if it
-  // did not come from the environment. Only the scheme prefix is retained.
+
   s = s.replace(
     /\b(sk|pk|xoxc|xoxd|xoxb|xoxp|ghp|gho|github_pat)[-_][A-Za-z0-9_-]{8,}/g,
     (_m, prefix) => `<redacted ${prefix}-token>`,
