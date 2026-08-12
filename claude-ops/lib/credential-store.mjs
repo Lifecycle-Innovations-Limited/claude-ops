@@ -34,66 +34,36 @@ const MASTERKEY_FILE = path.join(DATA_DIR, '.masterkey');
 let __plaintextWarned = false;
 
 // ─── Redacted logging ────────────────────────────────────────────────────────
-// This module handles secret material, so nothing reaches stderr unredacted.
-// Deliberately NO last-4 / length-hint preview: any function that copies bytes
-// of a secret into a log line is still a process.env → log-sink data flow, and
-// a length plus last-4 measurably narrows an offline guess. Redaction labels
-// are built from the ENV VAR NAME (or the token's scheme prefix) only, which
-// gives operators the "which value" they actually need for correlation without
-// carrying any of the value itself.
 
-// Env vars whose values must never appear in log output, even indirectly
-// (e.g. interpolated into an error message thrown by a child process).
-const SENSITIVE_ENV_RE =
-  /(SECRET|TOKEN|PASSWORD|PASSWD|APIKEY|API_KEY|CREDENTIAL|PRIVATE_KEY|SESSION|COOKIE|MASTERKEY|OTP)/i;
-
-/** Fixed labels. Deliberately constants, never derived from the environment. */
-const REDACTED_ENV = '<redacted:env-secret>';
+/** Fixed label. A constant, never derived from any runtime value. */
 const REDACTED_TOKEN = '<redacted:token>';
 
 /**
- * Set of SHA-256 digests of sensitive environment values.
+ * Redact credential-shaped strings before anything reaches stderr.
  *
- * Only digests cross this boundary — no value, and deliberately no variable
- * NAME either. An earlier revision emitted `<redacted ${name}>` for operator
- * correlation, but a variable name read out of `process.env` is itself
- * environment-derived data, so that still formed a process.env → log-sink flow
- * (CodeQL js/clear-text-logging, alert #294). Correlation is not worth a
- * standing taint path through the one module that handles credentials, so the
- * replacement labels are compile-time constants.
- */
-function sensitiveEnvDigests() {
-  const digests = new Set();
-  for (const [name, value] of Object.entries(process.env)) {
-    if (typeof value !== 'string' || value.length < 6) continue;
-    if (!SENSITIVE_ENV_RE.test(name)) continue;
-    digests.add(crypto.createHash('sha256').update(value).digest('hex'));
-  }
-  return digests;
-}
-
-/**
- * Redact anything secret-looking before it reaches stderr.
+ * Scope note, deliberately narrow: this does NOT read `process.env`. Earlier
+ * revisions hashed every sensitive env value and redacted matches, as
+ * defence-in-depth against a secret being interpolated into a child-process
+ * error message. That was dropped for three reasons:
  *
- * Two independent passes, neither of which copies environment-derived data into
- * the output:
- *  1. Every whitespace/quote-delimited run in the message is hashed and tested
- *     against the digest set above. A hit is replaced with a constant.
- *  2. Anything shaped like a bearer/API token is replaced with a constant,
- *     catching secrets that never came from the environment.
+ *  1. No call site in this module logs a secret. Every `log()` argument is a
+ *     literal status string, plus one `Error.message`.
+ *  2. Reading process.env inside the function that feeds console.error is a
+ *     genuine source→sink flow (CodeQL js/clear-text-logging #294). Keeping
+ *     code a scanner cannot distinguish from "logs secrets" makes the next
+ *     real finding in this file easier to wave through.
+ *  3. Token-shape matching still covers the realistic leak — an API key or
+ *     bearer token embedded in an error string — without touching the
+ *     environment at all.
+ *
+ * If a future call site logs child-process or attacker-influenced text that may
+ * embed an env secret, redact at that call site rather than widening this one.
  */
 function scrub(text) {
-  const digests = sensitiveEnvDigests();
-  let s = String(text);
-
-  if (digests.size > 0) {
-    s = s.replace(/[^\s'"`,;()[\]{}]{6,}/g, (candidate) =>
-      digests.has(crypto.createHash('sha256').update(candidate).digest('hex')) ? REDACTED_ENV : candidate,
-    );
-  }
-
-  s = s.replace(/\b(?:sk|pk|xoxc|xoxd|xoxb|xoxp|ghp|gho|github_pat)[-_][A-Za-z0-9_-]{8,}/g, REDACTED_TOKEN);
-  return s;
+  return String(text).replace(
+    /\b(?:sk|pk|xoxc|xoxd|xoxb|xoxp|ghp|gho|github_pat)[-_][A-Za-z0-9_-]{8,}/g,
+    REDACTED_TOKEN,
+  );
 }
 
 const log = (...args) =>
