@@ -47,51 +47,52 @@ let __plaintextWarned = false;
 const SENSITIVE_ENV_RE =
   /(SECRET|TOKEN|PASSWORD|PASSWD|APIKEY|API_KEY|CREDENTIAL|PRIVATE_KEY|SESSION|COOKIE|MASTERKEY|OTP)/i;
 
+/** Fixed labels. Deliberately constants, never derived from the environment. */
+const REDACTED_ENV = '<redacted:env-secret>';
+const REDACTED_TOKEN = '<redacted:token>';
+
 /**
- * Digest → env-var-name index of sensitive environment values.
+ * Set of SHA-256 digests of sensitive environment values.
  *
- * Note the shape: the secret VALUE is consumed by createHash() and never
- * escapes this function. What comes out is a SHA-256 hex digest as a lookup key
- * and the variable NAME as the label. That keeps the redactor effective while
- * leaving no data path at all from process.env to a log sink — a scrub()
- * written as `s.split(secretValue).join(label)` still reads the raw value into
- * the string pipeline, which is both a CodeQL js/clear-text-logging finding and
- * a real risk if the replacement is ever partial.
+ * Only digests cross this boundary — no value, and deliberately no variable
+ * NAME either. An earlier revision emitted `<redacted ${name}>` for operator
+ * correlation, but a variable name read out of `process.env` is itself
+ * environment-derived data, so that still formed a process.env → log-sink flow
+ * (CodeQL js/clear-text-logging, alert #294). Correlation is not worth a
+ * standing taint path through the one module that handles credentials, so the
+ * replacement labels are compile-time constants.
  */
 function sensitiveEnvDigests() {
-  const index = new Map();
+  const digests = new Set();
   for (const [name, value] of Object.entries(process.env)) {
     if (typeof value !== 'string' || value.length < 6) continue;
     if (!SENSITIVE_ENV_RE.test(name)) continue;
-    index.set(crypto.createHash('sha256').update(value).digest('hex'), name);
+    digests.add(crypto.createHash('sha256').update(value).digest('hex'));
   }
-  return index;
+  return digests;
 }
 
 /**
  * Redact anything secret-looking before it reaches stderr.
  *
- * Two independent passes, neither of which copies a secret into the output:
- *  1. Every whitespace/quote-delimited run in the message is hashed and looked
- *     up in the digest index above. A hit is replaced with `<redacted NAME>`.
- *  2. Anything shaped like a bearer/API token is replaced with its scheme
- *     prefix only, catching secrets that never came from the environment.
+ * Two independent passes, neither of which copies environment-derived data into
+ * the output:
+ *  1. Every whitespace/quote-delimited run in the message is hashed and tested
+ *     against the digest set above. A hit is replaced with a constant.
+ *  2. Anything shaped like a bearer/API token is replaced with a constant,
+ *     catching secrets that never came from the environment.
  */
 function scrub(text) {
   const digests = sensitiveEnvDigests();
   let s = String(text);
 
   if (digests.size > 0) {
-    s = s.replace(/[^\s'"`,;()[\]{}]{6,}/g, (candidate) => {
-      const name = digests.get(crypto.createHash('sha256').update(candidate).digest('hex'));
-      return name ? `<redacted ${name}>` : candidate;
-    });
+    s = s.replace(/[^\s'"`,;()[\]{}]{6,}/g, (candidate) =>
+      digests.has(crypto.createHash('sha256').update(candidate).digest('hex')) ? REDACTED_ENV : candidate,
+    );
   }
 
-  s = s.replace(
-    /\b(sk|pk|xoxc|xoxd|xoxb|xoxp|ghp|gho|github_pat)[-_][A-Za-z0-9_-]{8,}/g,
-    (_m, prefix) => `<redacted ${prefix}-token>`,
-  );
+  s = s.replace(/\b(?:sk|pk|xoxc|xoxd|xoxb|xoxp|ghp|gho|github_pat)[-_][A-Za-z0-9_-]{8,}/g, REDACTED_TOKEN);
   return s;
 }
 
