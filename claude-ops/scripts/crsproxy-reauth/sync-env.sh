@@ -54,12 +54,16 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 doppler secrets download --project "$PROJECT" --config "$CONFIG" --format env --no-file > "$TMP_FILE"
 
+if [ ! -s "$TMP_FILE" ] || ! grep -Eq '^BROWSER_USE_API_KEY=.+$' "$TMP_FILE"; then
+  echo "ERROR: Doppler output is empty or missing BROWSER_USE_API_KEY" >&2
+  exit 1
+fi
+key_count=$(grep -c "=" "$TMP_FILE")
+
 # Atomic move (temp file + rename)
 chmod 600 "$TMP_FILE"
 mv "$TMP_FILE" "$ENV_FILE"
 TMP_FILE=""
-
-key_count=$(grep -c "=" "$ENV_FILE")
 if [ "$MOBILE" -eq 1 ]; then
   echo "env synced: ${key_count} keys"
 else

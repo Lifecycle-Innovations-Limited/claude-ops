@@ -1189,8 +1189,8 @@ def _complete_reauth(proc: subprocess.Popen, callback_url: str,
             log("[9] No stale backup — removing failed candidate")
             try:
                 auth_file.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                log(f"Failed candidate cleanup error: {e}")
         return EXIT_FAILURE
 
     log(f"[9] Candidate validation passed: {reason}")
@@ -1202,8 +1202,8 @@ def _complete_reauth(proc: subprocess.Popen, callback_url: str,
     # Clean up stale backup on success
     try:
         stale_backup.unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        log(f"Stale backup cleanup error: {e}")
 
     # Clear email cooldown state on successful completion
     clear_email_cooldown()
@@ -1218,7 +1218,6 @@ def run_reauth(provider: str, email: str, gog_account: str,
 
     Returns exit code: 0=success, 1=failure, 2=captcha.
     """
-    meta = PROVIDERS[provider]
     log_path = LOG_DIR / "bu_reauth_hub.log"
     log_path.unlink(missing_ok=True)
 
