@@ -19,6 +19,9 @@ Exit codes:
       monitor is best-effort and must not fail the timer unit on a single
       reauth error, otherwise systemd would stop rescheduling it).
   2 — unrecoverable setup error (e.g. auth dir missing).
+  3 — infrastructure failure (e.g. pool-health command not found, unhandled
+      exception). Individual account reauth failures never cause a nonzero
+      exit — only monitor-level breakage does.
 """
 
 import json
@@ -88,7 +91,7 @@ def log(msg: str):
 
 
 def mask_email(email: str) -> str:
-    """Mask an email address for logging: 'in**@hypestofficial.com'."""
+    """Mask an email address for logging: 'us**@example.com'."""
     if not email or "@" not in email:
         return "***"
     local, domain = email.split("@", 1)
@@ -161,10 +164,18 @@ def record_attempt(state: dict, account_key: str, success: bool, reason: str = "
 # ---------------------------------------------------------------------------
 # Pool health
 # ---------------------------------------------------------------------------
-def run_pool_health() -> tuple[int, str]:
-    """Run cliproxy-pool-health. Returns (exit_code, stdout). The command is
-    read-only — it sends canary requests through the proxy but never restarts
-    or modifies the proxy process."""
+def run_pool_health() -> tuple[int, str, bool]:
+    """Run cliproxy-pool-health. Returns (exit_code, stdout, ran_ok).
+
+    ``ran_ok`` is False when the command could not be executed at all
+    (not found, permission denied) or timed out — these are infrastructure
+    failures that should surface a nonzero exit code to systemd. ``ran_ok``
+    is True when the command executed, regardless of its return code (a
+    nonzero return code just means the pool is DEGRADED/CRITICAL, not that
+    the monitor itself is broken).
+
+    The command is read-only — it sends canary requests through the proxy
+    but never restarts or modifies the proxy process."""
     try:
         proc = subprocess.run(
             [POOL_HEALTH_CMD],
@@ -173,11 +184,11 @@ def run_pool_health() -> tuple[int, str]:
             timeout=120,
         )
         out = (proc.stdout or "").strip()
-        return proc.returncode, out
+        return proc.returncode, out, True
     except subprocess.TimeoutExpired:
-        return 1, "TIMEOUT pool health check exceeded 120s"
+        return 1, "TIMEOUT pool health check exceeded 120s", False
     except Exception as exc:
-        return 1, f"ERROR running pool health: {exc.__class__.__name__}"
+        return 1, f"ERROR running pool health: {exc.__class__.__name__}", False
 
 
 def parse_pool_status(output: str) -> str:
@@ -268,11 +279,25 @@ def trigger_reauth(account: dict, env: dict) -> tuple[bool, str]:
     email = account["email"]
     masked = mask_email(email)
 
+    # Claude verification emails are forwarded to a central Gmail inbox
+    # (GOG_ACCOUNT in .env), not the account's own address. Polling the
+    # account's own mailbox fails with "No auth for gmail". For other
+    # providers (xai, codex) the verification email goes to the account
+    # itself, so we poll that address directly.
+    if provider == "claude":
+        gog_account = env.get("GOG_ACCOUNT", "")
+        if not gog_account:
+            log("[warn] GOG_ACCOUNT not set in env — Claude reauth will "
+                "fall back to account email (may fail)")
+            gog_account = email
+    else:
+        gog_account = email
+
     cmd = [
         REAUTH_CMD, REAUTH_SCRIPT,
         "-provider", provider,
         "-email", email,
-        "-gog-account", email,
+        "-gog-account", gog_account,
     ]
     log(f"[reauth] triggering {provider} for {masked} (reason: {account['reason']})")
 
@@ -311,12 +336,19 @@ def main() -> int:
         return 2
 
     # 1. Run pool health and log the result.
-    rc, out = run_pool_health()
+    rc, out, ran_ok = run_pool_health()
     status = parse_pool_status(out)
     log(f"[pool-health] status={status} exit={rc}")
     # Log the pool health line (it contains no secrets — only counts/probes).
     for line in out.splitlines():
         log(f"[pool-health] {line}")
+
+    # Track infrastructure failures (command not found, timeout) so we can
+    # surface a nonzero exit to systemd. Individual reauth failures are
+    # best-effort and never cause a nonzero exit.
+    infra_failure = not ran_ok
+    if infra_failure:
+        log("[fatal] pool-health infrastructure failure — monitor cannot run")
 
     # 2. Scan auth files for expired/disabled accounts.
     needs = scan_auth_files()
@@ -325,7 +357,7 @@ def main() -> int:
     if not needs:
         log("auto_reauth: nothing to do — all accounts healthy")
         log("=" * 72)
-        return 0
+        return 3 if infra_failure else 0
 
     # 3. Load env + cooldown state, then trigger reauth for each account.
     env = os.environ.copy()
@@ -355,9 +387,10 @@ def main() -> int:
         f"skipped(cooldown)={len(needs) - attempted}")
     log("=" * 72)
 
-    # Always return 0 so the timer keeps firing. A single reauth failure must
-    # not stop the autonomous monitor from running again next cycle.
-    return 0
+    # Always return 0 for individual reauth failures (best-effort) so the
+    # timer keeps firing. Return nonzero (3) only for infrastructure
+    # failures so systemd knows the monitor itself is broken.
+    return 3 if infra_failure else 0
 
 
 if __name__ == "__main__":
@@ -365,4 +398,4 @@ if __name__ == "__main__":
         sys.exit(main())
     except Exception as exc:
         log(f"[fatal] unhandled exception: {exc.__class__.__name__}: {exc}")
-        sys.exit(0)  # never fail the timer unit
+        sys.exit(3)  # infrastructure failure — surface to systemd
