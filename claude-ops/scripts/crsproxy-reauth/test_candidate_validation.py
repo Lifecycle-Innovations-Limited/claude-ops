@@ -85,7 +85,7 @@ def test_candidate_specific_success_and_permissions():
         root = Path(tmpdir)
         auth = root / "claude-user.json"
         auth.write_text(json.dumps(valid_auth(token="good-token")))
-        os.chmod(auth, 0o640)
+        os.chmod(auth, 0o600)
         proxy, record = make_proxy(root)
         with proxy_env(proxy):
             valid, reason = bu_reauth.validate_candidate(
@@ -96,7 +96,7 @@ def test_candidate_specific_success_and_permissions():
         assert Path(used["auth_file"]).name == auth.name
         assert Path(used["auth_dir"]) != auth.parent
         assert used["host"] == "127.0.0.1"
-        assert stat.S_IMODE(auth.stat().st_mode) == 0o640
+        assert stat.S_IMODE(auth.stat().st_mode) == 0o600
         print("PASS: validator launches a loopback proxy with only the exact isolated candidate")
 
 
@@ -192,7 +192,7 @@ def test_failed_candidate_rollback_and_activation_mode():
         stale_payload = {"email": "user@example.com", "type": "claude", "disabled": True, "access_token": "old"}
         auth.write_text(json.dumps(valid_auth("wrong@example.com")))
         stale.write_text(json.dumps(stale_payload))
-        os.chmod(stale, 0o640)
+        os.chmod(stale, 0o600)
         proc = object()
         with patch.object(bu_reauth, "paste_callback_url", return_value=True), \
              patch.object(bu_reauth.time, "sleep"), \
@@ -202,13 +202,13 @@ def test_failed_candidate_rollback_and_activation_mode():
                 "user@example.com", "claude", bu_reauth.PROVIDERS["claude"])
         assert result == bu_reauth.EXIT_FAILURE
         assert json.loads(auth.read_text()) == stale_payload
-        assert stat.S_IMODE(auth.stat().st_mode) == 0o640
+        assert stat.S_IMODE(auth.stat().st_mode) == 0o600
 
         auth.write_text(json.dumps(valid_auth()))
-        os.chmod(auth, 0o640)
+        os.chmod(auth, 0o600)
         assert bu_reauth.activate_auth_file(auth) is True
         assert json.loads(auth.read_text())["disabled"] is False
-        assert stat.S_IMODE(auth.stat().st_mode) == 0o640
+        assert stat.S_IMODE(auth.stat().st_mode) == 0o600
         print("PASS: failed candidates roll back atomically and activation preserves permissions")
 
 

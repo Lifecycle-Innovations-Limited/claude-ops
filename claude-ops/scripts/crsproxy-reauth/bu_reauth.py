@@ -72,7 +72,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import signal
 import socket
 import subprocess
@@ -295,10 +294,12 @@ def _stop_candidate_proxy(process: subprocess.Popen):
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except OSError:
+            # The process group may have exited during escalation.
             pass
         try:
             process.wait(timeout=2)
         except subprocess.TimeoutExpired:
+            # Shutdown is best-effort after SIGKILL.
             pass
 
 
@@ -571,6 +572,7 @@ def _write_lease(data: dict):
         try:
             tmp.unlink()
         except OSError:
+            # Preserve the original lease-write error.
             pass
         raise
 
@@ -1379,6 +1381,7 @@ def _restore_failed_candidate(auth_file: Path, stale_backup: Path):
         try:
             auth_file.unlink()
         except FileNotFoundError:
+            # Another cleanup path already removed the candidate.
             pass
         except Exception as e:
             log(f"Failed candidate cleanup error: {e}")
