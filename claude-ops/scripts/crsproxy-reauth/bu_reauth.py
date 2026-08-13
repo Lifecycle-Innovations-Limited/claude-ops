@@ -70,10 +70,14 @@ import atexit
 import json
 import os
 import re
+import shlex
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -91,7 +95,8 @@ BU_MODEL = "gpt-5.6-luna"
 STATE_DIR = Path(os.environ.get("CRSPROXY_STATE_DIR", "/opt/crsproxy/state"))
 LOG_DIR = STATE_DIR
 LEASE_FILE = STATE_DIR / "crsproxy-claude-oauth-lease.json"
-CANARY_URL = "http://localhost:8319/v1/chat/completions"
+CANARY_URL = os.environ.get(
+    "CRSPROXY_CANARY_URL", "http://localhost:8319/v1/chat/completions")
 
 # Exit codes
 EXIT_SUCCESS = 0
@@ -153,6 +158,12 @@ PROVIDERS = {
         "domain": "auth.openai.com",
         "canary_model": "o4-mini",
     },
+}
+
+CANARY_EXPECTED_KEYS = {
+    "claude": ("access_token", "accessToken", "refresh_token", "refreshToken"),
+    "xai": ("access_token", "accessToken", "refresh_token", "refreshToken", "token"),
+    "codex": ("access_token", "accessToken", "refresh_token", "refreshToken", "token"),
 }
 
 # JS to inject before clicking Authorize.  Intercepts the navigation to the
@@ -220,31 +231,100 @@ def safe_email(email: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Canary request (proxy health check)
+# Candidate canary request
 # ---------------------------------------------------------------------------
-def send_canary(model: str, timeout: int = 30) -> int:
-    """Send a canary request through the cli-proxy-api proxy.
+def _expected_auth_content(auth: dict, provider: str) -> bool:
+    """Require provider-specific non-empty credential material."""
+    keys = CANARY_EXPECTED_KEYS.get(provider, ())
+    if any(isinstance(auth.get(key), str) and auth[key].strip() for key in keys):
+        return True
+    nested = auth.get("claudeAiOauth") if provider == "claude" else None
+    return bool(isinstance(nested, dict) and any(
+        isinstance(nested.get(key), str) and nested[key].strip()
+        for key in ("accessToken", "refreshToken")))
 
-    Returns the HTTP status code, or -1 on connection error.
-    A 200 means the proxy is serving the model.  429 means rate-limited
-    (proxy is alive).  503 means no auth available (proxy is alive but
-    has no enabled accounts — the candidate might fix this).
+
+def _canary_rejection(response: requests.Response) -> str:
+    """Classify a failed candidate canary without treating liveness as validity."""
+    text = (response.text or "").strip()
+    lower = text.lower()
+    if response.status_code in (401, 403):
+        return f"candidate authentication rejected (HTTP {response.status_code})"
+    if response.status_code == 429:
+        return "candidate rate-limited (HTTP 429)"
+    if response.status_code == 503:
+        return "candidate unavailable (HTTP 503)"
+    if "unsupported" in lower and "model" in lower:
+        return "candidate model unsupported"
+    return f"candidate canary failed (HTTP {response.status_code})"
+
+
+def send_canary(model: str, auth_path: Path, timeout: int = 30) -> tuple[bool, str]:
+    """Validate a candidate in an isolated one-file auth directory.
+
+    Set CRSPROXY_CANDIDATE_CANARY_CMD to a helper that starts an isolated proxy
+    against CRSPROXY_CANDIDATE_AUTH_DIR and CRSPROXY_CANDIDATE_CANARY_URL. The
+    direct URL fallback exists for tests and pre-isolated service endpoints.
     """
-    try:
-        r = requests.post(
-            CANARY_URL,
-            headers={"Authorization": "Bearer test"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": "hi"}],
-                "max_tokens": 1,
-            },
-            timeout=timeout,
-        )
-        return r.status_code
-    except Exception as e:
-        log(f"Canary request error: {e}")
-        return -1
+    with tempfile.TemporaryDirectory(prefix="crsproxy-candidate-") as tmpdir:
+        isolated_dir = Path(tmpdir) / "auths"
+        isolated_dir.mkdir(mode=0o700)
+        isolated_auth = isolated_dir / auth_path.name
+        shutil.copy2(auth_path, isolated_auth)
+        os.chmod(isolated_auth, 0o600)
+        env = os.environ.copy()
+        env["CRSPROXY_CANDIDATE_AUTH_DIR"] = str(isolated_dir)
+        env["CRSPROXY_CANDIDATE_AUTH_FILE"] = str(isolated_auth)
+        env["CRSPROXY_CANDIDATE_CANARY_URL"] = CANARY_URL
+        command = env.get("CRSPROXY_CANDIDATE_CANARY_CMD", "").strip()
+        allow_direct = env.get("CRSPROXY_CANDIDATE_CANARY_ALLOW_DIRECT") == "1"
+        if not command and not allow_direct:
+            return False, "candidate canary helper is not configured"
+        if command:
+            try:
+                subprocess.run(shlex.split(command), check=True, env=env,
+                               timeout=timeout, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+            except subprocess.TimeoutExpired:
+                return False, "candidate canary timed out"
+            except subprocess.CalledProcessError as e:
+                return False, f"candidate canary helper failed (exit {e.returncode})"
+        try:
+            response = requests.post(
+                env["CRSPROXY_CANDIDATE_CANARY_URL"],
+                headers={"Authorization": "Bearer test"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 1,
+                },
+                timeout=timeout,
+            )
+        except requests.Timeout:
+            return False, "candidate canary timed out"
+        except requests.RequestException as e:
+            return False, f"candidate canary unreachable: {type(e).__name__}"
+
+        text = (response.text or "").strip()
+        if response.status_code != 200:
+            return False, _canary_rejection(response)
+        if not text:
+            return False, "candidate canary returned empty HTTP 200 response"
+        try:
+            body = response.json()
+        except ValueError:
+            body = text
+        content = ""
+        if isinstance(body, dict):
+            choices = body.get("choices") or []
+            if choices and isinstance(choices[0], dict):
+                message = choices[0].get("message") or {}
+                content = str(message.get("content") or choices[0].get("text") or "").strip()
+        elif isinstance(body, str):
+            content = body.strip()
+        if not content:
+            return False, "candidate canary returned HTTP 200 without model content"
+        return True, "candidate canary passed"
 
 
 # ---------------------------------------------------------------------------
@@ -307,18 +387,15 @@ def validate_candidate(auth_path: Path, expected_email: str,
     except Exception as e:
         return False, f"cannot parse expiry '{expired_str}': {e}"
 
-    # --- Check 4: Canary request (proxy health) ---
+    # --- Check 4: Provider credential material is present ---
+    if not _expected_auth_content(auth, expected_type):
+        return False, "candidate auth file has no non-empty provider credential"
+
+    # --- Check 5: Candidate-specific isolated canary request ---
     if canary_model and not skip_canary:
-        status = send_canary(canary_model)
-        # The canary is a proxy health check, not a per-account token test.
-        # The token freshness is validated by the expiry check (check 3).
-        # Any HTTP response means the proxy is alive and processing
-        # requests.  Only a connection error (-1) means the proxy is down.
-        # 200 = serving, 429 = rate-limited, 503 = no auth available,
-        # 401/403 = accounts in cooldown/auth issues — all indicate the
-        # proxy is alive.  -1 = connection error — proxy is down.
-        if status < 0:
-            return False, "canary request failed: proxy unreachable (connection error)"
+        passed, reason = send_canary(canary_model, auth_path)
+        if not passed:
+            return False, reason
 
     return True, "all checks passed"
 
@@ -379,60 +456,102 @@ def disable_auth_file(auth_path: Path) -> bool:
 # ---------------------------------------------------------------------------
 # Serialization lease
 # ---------------------------------------------------------------------------
-def acquire_lease(provider: str, max_wait: int = 120) -> bool:
-    """Acquire the serialization lease, waiting up to max_wait seconds.
+def _read_lease(path: Path | None = None) -> dict:
+    """Read a lease record, returning an empty dict for missing/corrupt data."""
+    try:
+        return json.loads((path or LEASE_FILE).read_text())
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
 
-    If the lease file exists and is recent (younger than
-    LEASE_STALE_SECONDS), polls every 5 seconds until it is released
-    or max_wait is reached.  If the lease is stale, it is removed and a
-    new lease is acquired.  Returns True if the lease was acquired,
-    False on timeout.
-    """
-    t0 = time.time()
-    first_check = True
-    while True:
-        if LEASE_FILE.exists():
-            try:
-                data = json.loads(LEASE_FILE.read_text())
-                age = time.time() - data.get("timestamp", 0)
-                if age < LEASE_STALE_SECONDS:
-                    if first_check:
-                        log(f"Lease held by {data.get('provider','?')} "
-                            f"({int(age)}s old) — waiting up to {max_wait}s")
-                        first_check = False
-                    if time.time() - t0 >= max_wait:
-                        log(f"Lease wait timed out after {max_wait}s — "
-                            "another login may still be in progress")
-                        return False
-                    time.sleep(5)
-                    continue
-                # Stale lease — remove it
-                log(f"Stale lease ({int(age)}s old) — removing")
-                LEASE_FILE.unlink()
-            except (json.JSONDecodeError, OSError):
-                try:
-                    LEASE_FILE.unlink()
-                except OSError as e:
-                    log(f"Stale lease cleanup error: {e}")
-        # Lease file doesn't exist or was removed — acquire
-        break
 
-    LEASE_FILE.write_text(json.dumps({
+def _create_lease_exclusive(provider: str, lease_id: str) -> bool:
+    """Create the lease with O_EXCL so only one contender can win."""
+    _ensure_state_dir(LEASE_FILE.parent)
+    data = {
         "provider": provider,
         "timestamp": time.time(),
         "pid": os.getpid(),
-    }))
-    log(f"Lease acquired for {provider}")
+        "lease_id": lease_id,
+    }
+    try:
+        fd = os.open(LEASE_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+    except Exception:
+        try:
+            LEASE_FILE.unlink()
+        except OSError:
+            pass
+        raise
     return True
 
 
-def release_lease():
-    """Remove the serialization lease file."""
+def _replace_stale_lease(observed: dict) -> bool:
+    """Remove only the stale lease record that this process observed."""
     try:
-        LEASE_FILE.unlink(missing_ok=True)
+        current = _read_lease()
+        if current != observed:
+            return False
+        LEASE_FILE.unlink()
+        return True
+    except FileNotFoundError:
+        return True
+    except OSError as e:
+        log(f"Stale lease cleanup error: {e}")
+        return False
+
+
+def acquire_lease(provider: str, max_wait: int = 120) -> str | None:
+    """Acquire the serialization lease and return its owner lease ID."""
+    t0 = time.monotonic()
+    first_check = True
+    lease_id = uuid.uuid4().hex
+    while True:
+        if _create_lease_exclusive(provider, lease_id):
+            log(f"Lease acquired for {provider}")
+            return lease_id
+
+        data = _read_lease()
+        age = time.time() - float(data.get("timestamp", 0) or 0)
+        if not data or age >= LEASE_STALE_SECONDS:
+            if data:
+                log(f"Stale lease ({int(max(age, 0))}s old) — replacing")
+            if _replace_stale_lease(data):
+                continue
+        elif first_check:
+            log(f"Lease held by {data.get('provider','?')} "
+                f"({int(max(age, 0))}s old) — waiting up to {max_wait}s")
+            first_check = False
+
+        if time.monotonic() - t0 >= max_wait:
+            log(f"Lease wait timed out after {max_wait}s — "
+                "another login may still be in progress")
+            return None
+        time.sleep(min(0.1, max(0.01, max_wait / 20)))
+
+
+def release_lease(lease_id: str | None) -> bool:
+    """Release the lease only when the on-disk owner matches lease_id."""
+    if not lease_id:
+        return False
+    try:
+        data = _read_lease()
+        if data.get("lease_id") != lease_id:
+            log("Lease release skipped — ownership changed")
+            return False
+        LEASE_FILE.unlink()
         log("Lease released")
+        return True
+    except FileNotFoundError:
+        return False
     except Exception as e:
         log(f"Lease release error: {e}")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1139,6 +1258,24 @@ def handle_captcha_checkpoint(client: BrowserUseClient, run_id: str,
 # ---------------------------------------------------------------------------
 # Core reauth flow
 # ---------------------------------------------------------------------------
+def _restore_failed_candidate(auth_file: Path, stale_backup: Path):
+    """Restore the prior auth atomically, or remove a failed new candidate."""
+    if stale_backup.exists():
+        try:
+            os.replace(stale_backup, auth_file)
+            log(f"[9] Stale auth restored: {auth_file.name}")
+        except Exception as e:
+            log(f"[9] Stale restore error: {e}")
+    else:
+        log("[9] No stale backup — removing failed candidate")
+        try:
+            auth_file.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            log(f"Failed candidate cleanup error: {e}")
+
+
 def _complete_reauth(proc: subprocess.Popen, callback_url: str,
                      auth_file: Path, stale_backup: Path,
                      email: str, provider: str,
@@ -1179,24 +1316,14 @@ def _complete_reauth(proc: subprocess.Popen, callback_url: str,
     if not valid:
         log(f"[FAIL] Candidate validation failed: {reason}")
         log("[9] Preserving stale auth — restoring from backup")
-        if stale_backup.exists():
-            try:
-                os.rename(str(stale_backup), str(auth_file))
-                log(f"[9] Stale auth restored: {auth_file.name}")
-            except Exception as e:
-                log(f"[9] Stale restore error: {e}")
-        else:
-            log("[9] No stale backup — removing failed candidate")
-            try:
-                auth_file.unlink()
-            except Exception as e:
-                log(f"Failed candidate cleanup error: {e}")
+        _restore_failed_candidate(auth_file, stale_backup)
         return EXIT_FAILURE
 
     log(f"[9] Candidate validation passed: {reason}")
     log("[9] Atomically activating auth file...")
     if not activate_auth_file(auth_file):
         log("[FAIL] Could not activate auth file")
+        _restore_failed_candidate(auth_file, stale_backup)
         return EXIT_FAILURE
 
     # Clean up stale backup on success
@@ -1222,7 +1349,8 @@ def run_reauth(provider: str, email: str, gog_account: str,
     log_path.unlink(missing_ok=True)
 
     # --- Step 1: Acquire serialization lease ---
-    if not acquire_lease(provider):
+    lease_id = acquire_lease(provider)
+    if not lease_id:
         log("Could not acquire lease — another login may be in progress")
         return EXIT_FAILURE
 
@@ -1230,7 +1358,7 @@ def run_reauth(provider: str, email: str, gog_account: str,
         return _run_reauth_inner(provider, email, gog_account, client,
                                  dry_run, log_path)
     finally:
-        release_lease()
+        release_lease(lease_id)
 
 
 def _run_reauth_inner(provider: str, email: str, gog_account: str,
@@ -1561,14 +1689,20 @@ def _checkpoint_resume(args) -> int:
     atexit.register(client.stop_all_browsers)
 
     # Acquire serialization lease (prevents concurrent logins)
-    if not acquire_lease(provider):
+    lease_id = acquire_lease(provider)
+    if not lease_id:
         log("[FAIL] Could not acquire lease — another login may be in progress")
         return EXIT_FAILURE
 
     # Start a new login process (the original is likely dead)
     log_path = LOG_DIR / "bu_reauth_hub.log"
     log("[1] Starting new cli-proxy-api login for checkpoint resume")
-    proc = start_login(provider, log_path)
+    try:
+        proc = start_login(provider, log_path)
+    except Exception as e:
+        log(f"[ERROR] Could not start login process: {e}")
+        release_lease(lease_id)
+        return EXIT_FAILURE
 
     # Wait for OAuth URL (needed to keep the callback port listener alive)
     log("[2] Waiting for OAuth URL...")
@@ -1576,6 +1710,7 @@ def _checkpoint_resume(args) -> int:
     if not oauth_url:
         log("[ERROR] No OAuth URL found — cannot resume login process")
         cleanup_login_process(proc)
+        release_lease(lease_id)
         return EXIT_FAILURE
     log(f"[2] OAuth URL captured: {sanitize_url(oauth_url)}")
 
@@ -1644,7 +1779,7 @@ def _checkpoint_resume(args) -> int:
         client.stop_all_browsers()
         cleanup_login_process(proc)
         clear_checkpoint()
-        release_lease()
+        release_lease(lease_id)
 
 
 # ---------------------------------------------------------------------------

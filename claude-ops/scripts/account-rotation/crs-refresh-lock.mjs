@@ -23,7 +23,7 @@
  *                             stale (owner crashed mid-refresh) and reclaimed.
  */
 
-import { mkdirSync, rmdirSync, statSync, existsSync } from 'fs';
+import { mkdirSync, rmdirSync, statSync, existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
@@ -34,6 +34,12 @@ const DEFAULT_LOCK_DIR = join(
 );
 const LOCK_DIR = process.env.CRS_REFRESH_LOCK_DIR || DEFAULT_LOCK_DIR;
 const LOCK_TTL_MS = (Number(process.env.CRS_REFRESH_LOCK_TTL_SEC) || 120) * 1000;
+const PRODUCTION_MIN_PACE_MS = 1_000;
+const MIN_PACE_MS = Math.max(
+  process.env.CRS_REFRESH_TEST_ALLOW_ZERO_PACE === '1' ? 0 : PRODUCTION_MIN_PACE_MS,
+  Number(process.env.CRS_REFRESH_MIN_PACE_MS) || PRODUCTION_MIN_PACE_MS,
+);
+const MAX_JITTER_MS = Math.max(0, Math.min(5_000, Number(process.env.CRS_REFRESH_JITTER_MS) || 500));
 
 function lockPathFor(key) {
   const safeKey = String(key).replace(/[^a-zA-Z0-9_.@-]/g, '_');
@@ -87,5 +93,45 @@ function release(lockPath) {
     if (existsSync(lockPath)) rmdirSync(lockPath);
   } catch {
     // Already gone (e.g. reclaimed as stale by another process) — fine.
+  }
+}
+
+function pacingPathFor(key) {
+  const safeKey = String(key).replace(/[^a-zA-Z0-9_.@-]/g, '_');
+  return join(LOCK_DIR, `${safeKey}.next.json`);
+}
+
+function readNextEligible(path) {
+  try {
+    return Number(JSON.parse(readFileSync(path, 'utf8')).nextEligibleAt) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeNextEligible(path, nextEligibleAt) {
+  const tmp = `${path}.tmp.${process.pid}`;
+  writeFileSync(tmp, JSON.stringify({ nextEligibleAt }));
+  renameSync(tmp, path);
+}
+
+/**
+ * Claim the next cross-process refresh slot for `key`.
+ * @returns {number|null} milliseconds to wait before the caller may refresh,
+ *   or null if another process currently owns the pacing state.
+ */
+export function claimRefreshPace(key, nowMs = Date.now(), random = Math.random) {
+  const paceLock = `${lockPathFor(key)}.pace`;
+  mkdirSync(LOCK_DIR, { recursive: true });
+  if (!tryMkdir(paceLock)) return null;
+  try {
+    const path = pacingPathFor(key);
+    const eligible = readNextEligible(path);
+    const startAt = Math.max(nowMs, eligible);
+    const jitterMs = Math.floor(Math.max(0, Math.min(1, Number(random()) || 0)) * (MAX_JITTER_MS + 1));
+    writeNextEligible(path, startAt + MIN_PACE_MS + jitterMs);
+    return Math.max(0, startAt - nowMs);
+  } finally {
+    release(paceLock);
   }
 }

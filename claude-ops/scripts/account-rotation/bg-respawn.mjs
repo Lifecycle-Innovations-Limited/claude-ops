@@ -149,6 +149,23 @@ function markerFresh(path, maxAgeMs) {
   }
 }
 
+function preserveDeferredMarker(id) {
+  try {
+    writeFileSync(DEFERRED_MARKER(id), String(Date.now()), { mode: 0o600 });
+  } catch {}
+}
+
+function respawnStateCoherent(stateFile) {
+  try {
+    const persisted = JSON.parse(readFileSync(stateFile, 'utf8'));
+    if (!Array.isArray(persisted.respawnFlags)) return true;
+    const normalized = normalizeClaudeModelArgs(persisted.respawnFlags);
+    return normalized.every((flag, index) => flag === persisted.respawnFlags[index]);
+  } catch {
+    return false;
+  }
+}
+
 /** Enumerate live daemon-hosted bg sessions from ~/.claude/sessions/*.json. */
 export function listLiveBgSessions() {
   const out = [];
@@ -489,19 +506,33 @@ export function doRespawn(session, log, opts = {}) {
         env: childEnv,
       }).toString();
     } catch (e) {
-      // Capture any output the binary emitted on failure (model errors etc) to our log, not controlling tty.
       try {
-        respawnOut = (e.stdout || '') + (e.stderr || '');
+        respawnOut = Buffer.concat(
+          [e.stdout, e.stderr]
+            .filter((part) => part !== undefined && part !== null)
+            .map((part) => (Buffer.isBuffer(part) ? part : Buffer.from(String(part)))),
+        ).toString();
       } catch {}
-      log(`[bg-respawn] respawn exec note for ${session.id}: ${String(e.message || e).slice(0, 120)}`);
-      // Do not re-throw; we still want to mark and continue fleet hygiene.
+      if (respawnOut) {
+        try {
+          const LOGP = join(__dirname, 'bg-respawn.out.log');
+          appendFileSync(LOGP, `[${new Date().toISOString()}] ${session.id}: ${respawnOut.slice(0, 2000)}\n`);
+        } catch {}
+      }
+      preserveDeferredMarker(session.id);
+      log(`[bg-respawn] respawn command failed for ${session.id}: ${String(e.message || e).slice(0, 120)}`);
+      return false;
     }
     if (respawnOut && respawnOut.length > 0) {
-      // Persist any chatter from the respawn to dedicated log to avoid TUI pollution.
       try {
         const LOGP = join(__dirname, 'bg-respawn.out.log');
         appendFileSync(LOGP, `[${new Date().toISOString()}] ${session.id}: ${respawnOut.slice(0, 2000)}\n`);
       } catch {}
+    }
+    if (!respawnStateCoherent(stateFile)) {
+      preserveDeferredMarker(session.id);
+      log(`[bg-respawn] respawn state verification failed for ${session.id}; deferring retry`);
+      return false;
     }
     try {
       // mode keeps the marker owner-only; the path under /tmp is predictable.

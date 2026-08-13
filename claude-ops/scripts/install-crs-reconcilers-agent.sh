@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# install-crs-reconcilers-agent.sh — Install the CRS 429-cooldown, 401-refresher,
-# and/or magic-link-autoloop reconcilers as launchd LaunchAgents (macOS).
+# install-crs-reconcilers-agent.sh — Install the CRS 429-cooldown and/or
+# magic-link-autoloop reconcilers as launchd LaunchAgents (macOS).
 #
-# Reads crs.cooldownEnabled / crs.tokenRefreshEnabled / crs.enableMagicLinkRecovery
-# from the rotator config and installs only the ones that are true — this
+# Reads crs.cooldownEnabled / crs.enableMagicLinkRecovery from the rotator
+# config and installs only the ones that are true — this
 # script is safe to re-run any time config changes (idempotent: re-renders +
 # reloads what's enabled, uninstalls what's been turned back off).
 #
@@ -58,7 +58,6 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "skip: launchd is macOS-only."
   echo "Linux: install a systemd user timer for each enabled reconciler:"
   [[ "$COOLDOWN_ENABLED" == "true" ]] && echo "  crs-429-cooldown:      ExecStart=/bin/bash $PLUGIN_ROOT/scripts/account-rotation/crs-429-cooldown.sh      OnUnitActiveSec=60s"
-  [[ "$TOKEN_REFRESH_ENABLED" == "true" ]] && echo "  crs-401-refresher:     ExecStart=/bin/bash $PLUGIN_ROOT/scripts/account-rotation/crs-401-refresher.sh     OnUnitActiveSec=300s"
   [[ "$MAGIC_LINK_ENABLED" == "true" ]] && echo "  magic-link-autoloop:   ExecStart=/bin/bash $PLUGIN_ROOT/scripts/account-rotation/magic-link-autoloop.sh   OnUnitActiveSec=600s"
   echo "Then: systemctl --user enable --now <unit>.timer"
   exit 0
@@ -101,13 +100,7 @@ else
   uninstall "crs-429-cooldown"
 fi
 
-if [[ "$TOKEN_REFRESH_ENABLED" == "true" ]]; then
-  render_and_install "crs-401-refresher" \
-    "$PLUGIN_ROOT/scripts/account-rotation/crs-401-refresher.sh" \
-    "$PLUGIN_ROOT/templates/com.claude-ops.crs-401-refresher.plist"
-else
-  uninstall "crs-401-refresher"
-fi
+uninstall "crs-401-refresher"
 
 if [[ "$MAGIC_LINK_ENABLED" == "true" ]]; then
   render_and_install "magic-link-autoloop" \
@@ -119,7 +112,6 @@ fi
 
 echo
 echo "verify: node \"$PLUGIN_ROOT/scripts/account-rotation/crs-429-cooldown.mjs\" --status"
-echo "        node \"$PLUGIN_ROOT/scripts/account-rotation/crs-401-refresher.mjs\" --status"
 echo "        node \"$PLUGIN_ROOT/scripts/account-rotation/magic-link-autoloop.mjs\" --status"
-echo "logs:   $LOG_DIR/crs-429-cooldown.log , $LOG_DIR/crs-401-refresher.log , $LOG_DIR/magic-link-autoloop.log"
-echo "uninstall all: launchctl bootout \"gui/\$(id -u)/com.claude-ops.crs-429-cooldown\" \"gui/\$(id -u)/com.claude-ops.crs-401-refresher\" \"gui/\$(id -u)/com.claude-ops.magic-link-autoloop\""
+echo "logs:   $LOG_DIR/crs-429-cooldown.log , $LOG_DIR/magic-link-autoloop.log"
+echo "uninstall all: launchctl bootout \"gui/\$(id -u)/com.claude-ops.crs-429-cooldown\" \"gui/\$(id -u)/com.claude-ops.magic-link-autoloop\""

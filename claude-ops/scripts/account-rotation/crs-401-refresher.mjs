@@ -1,56 +1,12 @@
 #!/usr/bin/env node
-// crs-401-refresher.mjs — CRS pool OAuth-token auto-heal (fixes a live-authentication_error
-// gap that crs-priority-daemon.mjs does not cover).
+// crs-401-refresher.mjs — retired CRS server-side token refresher.
 //
-// OPT-IN. Does nothing (exits 0) unless crs.tokenRefreshEnabled is true (or
-// $CRS_TOKEN_REFRESH_ENABLED=1) — installing this plugin never silently starts a new
-// daemon.
+// Non-status execution fails closed. The authoritative recovery path is
+// refresh-tokens.mjs for identity-verified vault refresh followed by
+// crs-token-feed.mjs for identity-verified pool publication. The old direct CRS
+// refresh endpoint could not verify which account identity it activated.
 //
-// Gap this fills: crs-priority-daemon.mjs sidelines accounts with a stale/expiring
-// OAuth token (it will not schedule them), but nothing proactively refreshes the CRS
-// pool's OWN copy of each account's OAuth access token. Once an access token expires
-// with nobody refreshing it, every completion routed to that account returns Anthropic
-// `authentication_error` (HTTP 401) and any in-flight session gets no response — a pool
-// account can go from "healthy" to "silently 401ing" between priority-daemon ticks.
-//
-// This closes that gap headlessly (no browser) using CRS's own server-side
-// refresh_token grant endpoint: POST /admin/claude-accounts/:id/refresh
-//
-// Each tick:
-//   1. Admin-login to CRS.
-//   2. List claude accounts.
-//   3. For any account whose access token is expired or expires within
-//      REFRESH_WINDOW_MS, OR that is currently sidelined (schedulable=false), call the
-//      refresh endpoint.
-//   4. On success -> ensure schedulable=true (revive) and clear needs-reauth.
-//      On failure (dead refresh_token) -> record needs-reauth in this reconciler's OWN
-//      state file; leave the account for a human/magic-link re-auth path. We do NOT
-//      hard-disable a healthy account here — crs-priority-daemon.mjs owns scheduling;
-//      this reconciler only revives on a successful refresh, or sidelines a CONFIRMED
-//      dead token (never a transient failure on a still-fresh token).
-//
-// State is owned exclusively by THIS reconciler (own file, atomic write, single-flight
-// lock via crs-reconciler-state.mjs) — see that module's header for why a shared state
-// file between reconcilers is unsafe.
-//
-// CONFIG (config.json "crs" block; every key overridable by env — see
-// config.example.json for the full annotated schema):
-//   tokenRefreshEnabled     default false — must be true (or $CRS_TOKEN_REFRESH_ENABLED=1)
-//   baseUrl, adminUser, adminPasswordEnv, containerName  — shared with the other CRS
-//                                                           reconcilers
-//   tokenRefreshWindowMs    default 1800000 (30m) — refresh if expiring within this window
-//   stateDir                default: <plugin-data-dir>/account-rotation. This
-//                          reconciler's own state file lives at
-//                          <stateDir>/crs-401-state.json (never shared with any
-//                          other reconciler's state file).
-//   cooldownStatePath       default: unset. Optional READ-ONLY path to a separate
-//                          rate-limit reconciler's state file (e.g.
-//                          crs-429-cooldown.mjs's <stateDir>/crs-429-state.json) so
-//                          this reconciler's re-enable sweep doesn't fight a
-//                          genuine, still-active rate-limit hold. Never written
-//                          here — only read.
-//
-// CLI: --dry-run=no writes · --status=print current token/reauth status · --only=<name|id>
+// CLI: --status remains available for inspecting legacy state during migration.
 
 import { execFileSync } from 'child_process';
 import { readFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
@@ -60,6 +16,7 @@ import { homedir } from 'os';
 import { loadJsonState, saveJsonStateAtomic, withOwnStateLock } from './crs-reconciler-state.mjs';
 import { crsBaseUrl, loadRotationConfig, resolveCrsAdminPassword } from './crs-pool-config.mjs';
 import { resolveAccountsBackend } from './ops-accounts-backend.mjs';
+import { retryAfterDelayMs } from './retry-after.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const args = new Set(process.argv.slice(2));
@@ -210,9 +167,7 @@ async function refreshAccount(auth, a) {
     lastStatus = r.status;
     lastRetryAfter = retryAfterHdr;
     if (r.status === 429 && attempt < MAX_RETRIES) {
-      const delayMs = retryAfterHdr
-        ? Math.min(15 * 60_000, Math.max(2_000, parseInt(retryAfterHdr, 10) * 1000 + 2000))
-        : 30_000;
+      const delayMs = retryAfterDelayMs(retryAfterHdr) ?? 30_000;
       log(
         `  ${a.name}: refresh 429 (attempt ${attempt}/${MAX_RETRIES}) — waiting ${Math.round(delayMs / 1000)}s (Retry-After=${retryAfterHdr ?? 'n/a'})...`,
       );
