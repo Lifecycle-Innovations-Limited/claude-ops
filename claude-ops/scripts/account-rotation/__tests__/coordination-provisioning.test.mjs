@@ -12,7 +12,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -191,8 +191,22 @@ for (const file of [f.paths['linux-unit'], f.paths['macos-plist']])
 assert.equal(f.paths.trust.startsWith(join(f.root, 'mutable')), false, 'trust outside mutable roots');
 assert.deepEqual(readFileSync(f.paths['runtime-inventory']), readFileSync(f.inventory));
 
-const selfStat = readFileSync(`/proc/${process.pid}/stat`, 'utf8');
-const selfStart = selfStat.slice(selfStat.lastIndexOf(') ') + 2).split(' ')[19];
+const selfStart =
+  platform() === 'darwin'
+    ? String(
+        Date.parse(
+          spawnSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], {
+            encoding: 'utf8',
+            env: { ...process.env, LC_ALL: 'C' },
+          })
+            .stdout.trim()
+            .replace(/\s+/g, ' '),
+        ),
+      )
+    : (() => {
+        const selfStat = readFileSync(`/proc/${process.pid}/stat`, 'utf8');
+        return selfStat.slice(selfStat.lastIndexOf(') ') + 2).split(' ')[19];
+      })();
 const malformedLiveLock = fixture();
 mkdirSync(join(malformedLiveLock.root, 'locks'), { mode: 0o700 });
 writeFileSync(
