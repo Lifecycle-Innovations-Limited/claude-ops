@@ -619,15 +619,38 @@ class BrowserUseClient:
                 self._browser_sessions.remove(browser_id)
 
     def list_browsers(self) -> list:
-        """List all running browser sessions."""
+        """List all browser sessions from the Browser Use API.
+
+        The API returns a paginated response dict:
+            {"items": [...], "totalItems": N, "pageNumber": 1, "pageSize": 20}
+        This method normalizes that to the items list so callers can
+        iterate browser session dicts directly.
+        """
         try:
             r = self._request("GET", "/browsers")
-            return r.json() if r.content else []
+            if not r.content:
+                return []
+            data = r.json()
+            # Normalize paginated response dict to its items array
+            if isinstance(data, dict) and "items" in data:
+                return data["items"]
+            # Already a plain list
+            if isinstance(data, list):
+                return data
+            # Unknown shape — return empty rather than iterating dict keys
+            log(f"list_browsers: unexpected response shape: {type(data).__name__}")
+            return []
         except Exception:
             return []
 
     def stop_all_browsers(self):
-        """Stop all tracked browser sessions."""
+        """Stop all tracked browser sessions.
+
+        Stops sessions tracked via _browser_sessions (from run events)
+        and also queries the API for any running sessions we might
+        have missed.  Skips sessions that are already stopped to avoid
+        unnecessary API calls.
+        """
         if self.keep_browser_alive:
             log("[CLEANUP] Browser sessions kept alive for checkpoint")
             return
@@ -637,11 +660,18 @@ class BrowserUseClient:
         try:
             browsers = self.list_browsers()
             for b in browsers:
+                if not isinstance(b, dict):
+                    continue
                 bid = b.get("id", "")
-                if bid:
-                    self.stop_browser(bid)
-        except Exception:
-            pass
+                if not bid:
+                    continue
+                # Skip already-stopped sessions to avoid unnecessary API calls
+                status = b.get("status", "")
+                if status in ("stopped", "closed", "finished"):
+                    continue
+                self.stop_browser(bid)
+        except Exception as e:
+            log(f"stop_all_browsers: error listing/stopping browsers: {e}")
 
     def wait_for_run(self, run_id: str, timeout: int = RUN_POLL_TIMEOUT,
                      track_browser: bool = True) -> dict:
