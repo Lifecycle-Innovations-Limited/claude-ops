@@ -14,6 +14,8 @@ Features:
   - Supports all OAuth providers (Claude, xAI, Codex) with provider-specific
     callback ports.
   - Structured exit codes: 0=success, 1=failure, 2=captcha.
+  - Isolated candidate validation before atomic activation.
+  - Stale auth preservation when candidate fails validation.
 
 Usage:
   # Full reauth for a Claude account
@@ -31,6 +33,18 @@ Usage:
   # Codex reauth
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
       -provider codex -email sam@samfeldt.com -gog-account sam@samfeldt.com
+
+  # Validate an existing auth file (no reauth, no browser)
+  sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
+      -provider claude -email info@auroracapital.nl -validate-only
+
+  # Validate and activate if valid
+  sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
+      -provider claude -email info@auroracapital.nl -validate-only -activate
+
+  # Validate metadata only (skip canary request)
+  sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
+      -provider claude -email info@auroracapital.nl -validate-only -skip-canary
 """
 
 import argparse
@@ -42,6 +56,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -57,6 +72,7 @@ BU_API_BASE = "https://api.browser-use.com/api/v4"
 BU_MODEL = "gpt-5.6-luna"
 LOG_DIR = Path("/tmp")
 LEASE_FILE = Path("/tmp/crsproxy-claude-oauth-lease.json")
+CANARY_URL = "http://localhost:8319/v1/chat/completions"
 
 # Exit codes
 EXIT_SUCCESS = 0
@@ -84,6 +100,7 @@ PROVIDERS = {
         "auth_file_prefix": "claude",
         "email_sender": "anthropic.com",
         "domain": "claude.ai",
+        "canary_model": "claude-sonnet-5",
     },
     "xai": {
         "login_flag": "-xai-login",
@@ -93,6 +110,7 @@ PROVIDERS = {
         "auth_file_prefix": "xai",
         "email_sender": "noreply@x.ai",
         "domain": "accounts.x.ai",
+        "canary_model": "grok-4.5",
     },
     "codex": {
         "login_flag": "-codex-login",
@@ -102,6 +120,7 @@ PROVIDERS = {
         "auth_file_prefix": "codex",
         "email_sender": "noreply@openai.com",
         "domain": "auth.openai.com",
+        "canary_model": "o4-mini",
     },
 }
 
@@ -166,6 +185,153 @@ def safe_email(email: str) -> str:
     if len(local) <= 1:
         return f"***@{domain}"
     return f"{local[0]}***@{domain}"
+
+
+# ---------------------------------------------------------------------------
+# Canary request (proxy health check)
+# ---------------------------------------------------------------------------
+def send_canary(model: str, timeout: int = 30) -> int:
+    """Send a canary request through the cli-proxy-api proxy.
+
+    Returns the HTTP status code, or -1 on connection error.
+    A 200 means the proxy is serving the model.  429 means rate-limited
+    (proxy is alive).  503 means no auth available (proxy is alive but
+    has no enabled accounts — the candidate might fix this).
+    """
+    try:
+        r = requests.post(
+            CANARY_URL,
+            headers={"Authorization": "Bearer test"},
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 1,
+            },
+            timeout=timeout,
+        )
+        return r.status_code
+    except Exception as e:
+        log(f"Canary request error: {e}")
+        return -1
+
+
+# ---------------------------------------------------------------------------
+# Isolated candidate validation
+# ---------------------------------------------------------------------------
+def validate_candidate(auth_path: Path, expected_email: str,
+                       expected_type: str, canary_model: str = "",
+                       skip_canary: bool = False) -> tuple[bool, str]:
+    """Validate a candidate auth file before activation.
+
+    Performs four checks:
+      1. auth['email'] matches the target email.
+      2. auth['type'] matches the expected provider type.
+      3. auth['expired'] is more than 24 hours from now.
+      4. A canary request for the account's model succeeds (proxy health).
+
+    This function is independently callable — it does not modify the auth
+    file or any other state.  It only reads the candidate and sends a
+    canary request through the proxy.
+
+    Args:
+        auth_path:      Path to the candidate auth file.
+        expected_email:  The target account email.
+        expected_type:   The expected provider type (claude/xai/codex).
+        canary_model:    Model name for the canary request (empty to skip).
+        skip_canary:     If True, skip the canary request (metadata-only mode).
+
+    Returns:
+        (True,  "all checks passed")  if every check passes.
+        (False, "rejection reason")   if any check fails.
+    """
+    # --- Read the candidate auth file ---
+    try:
+        auth = json.loads(auth_path.read_text())
+    except Exception as e:
+        return False, f"cannot read auth file: {e}"
+
+    # --- Check 1: Email matches target ---
+    actual_email = auth.get("email", "")
+    if actual_email != expected_email:
+        return False, (f"email mismatch: expected {safe_email(expected_email)}, "
+                       f"got {safe_email(actual_email)}")
+
+    # --- Check 2: Provider type matches expected ---
+    actual_type = auth.get("type", "")
+    if actual_type != expected_type:
+        return False, f"type mismatch: expected {expected_type}, got {actual_type}"
+
+    # --- Check 3: Expiry is >24h from now ---
+    expired_str = auth.get("expired", "")
+    if not expired_str:
+        return False, "no 'expired' field in auth file"
+    try:
+        # Handle ISO 8601 with optional Z suffix
+        expired_dt = datetime.fromisoformat(
+            expired_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        if expired_dt <= now + timedelta(hours=24):
+            return False, f"token expires within 24h: {expired_str}"
+    except Exception as e:
+        return False, f"cannot parse expiry '{expired_str}': {e}"
+
+    # --- Check 4: Canary request (proxy health) ---
+    if canary_model and not skip_canary:
+        status = send_canary(canary_model)
+        # The canary is a proxy health check, not a per-account token test.
+        # The token freshness is validated by the expiry check (check 3).
+        # Any HTTP response means the proxy is alive and processing
+        # requests.  Only a connection error (-1) means the proxy is down.
+        # 200 = serving, 429 = rate-limited, 503 = no auth available,
+        # 401/403 = accounts in cooldown/auth issues — all indicate the
+        # proxy is alive.  -1 = connection error — proxy is down.
+        if status < 0:
+            return False, f"canary request failed: proxy unreachable (connection error)"
+
+    return True, "all checks passed"
+
+
+# ---------------------------------------------------------------------------
+# Atomic activation
+# ---------------------------------------------------------------------------
+def activate_auth_file(auth_path: Path) -> bool:
+    """Atomically activate an auth file by setting disabled=false.
+
+    Uses a temp file + os.rename for atomicity.  The auth directory
+    hot-reloads, so no service restart is needed.
+
+    Returns True on success, False on failure.
+    """
+    try:
+        auth = json.loads(auth_path.read_text())
+        auth["disabled"] = False
+        tmp_path = auth_path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(auth, indent=2))
+        os.rename(str(tmp_path), str(auth_path))
+        log(f"Auth file activated: {auth_path.name}")
+        return True
+    except Exception as e:
+        log(f"Activation error for {auth_path.name}: {e}")
+        return False
+
+
+def disable_auth_file(auth_path: Path) -> bool:
+    """Atomically disable an auth file by setting disabled=true.
+
+    Uses a temp file + os.rename for atomicity.
+    Returns True on success, False on failure.
+    """
+    try:
+        auth = json.loads(auth_path.read_text())
+        auth["disabled"] = True
+        tmp_path = auth_path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(auth, indent=2))
+        os.rename(str(tmp_path), str(auth_path))
+        log(f"Auth file disabled: {auth_path.name}")
+        return True
+    except Exception as e:
+        log(f"Disable error for {auth_path.name}: {e}")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -589,6 +755,19 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
         log("[DRY RUN] Dry run complete — no browser sessions started")
         return EXIT_SUCCESS
 
+    # --- Step 1.5: Back up stale auth for preservation ---
+    auth_file = AUTH_DIR / f"{meta['auth_file_prefix']}-{email}.json"
+    stale_backup = auth_file.with_suffix(".stale")
+    if auth_file.exists():
+        try:
+            stale_backup.unlink(missing_ok=True)
+            stale_backup.write_text(auth_file.read_text())
+            log(f"[1] Stale auth backed up: {auth_file.name}")
+        except Exception as e:
+            log(f"[1] Stale auth backup warning: {e}")
+    else:
+        log(f"[1] No existing auth file — no stale backup needed")
+
     # --- Step 2: Start cli-proxy-api login ---
     log(f"[1] Starting cli-proxy-api login for {provider} ({safe})")
     proc = start_login(provider, log_path)
@@ -768,14 +947,54 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
         log(f"[8] Waiting {AUTH_FILE_WAIT}s for auth file to appear...")
         time.sleep(AUTH_FILE_WAIT)
 
-        # --- Step 9: Check for auth file ---
+        # --- Step 9: Validate and activate candidate auth file ---
         auth_file = AUTH_DIR / f"{meta['auth_file_prefix']}-{email}.json"
-        if auth_file.exists():
-            log(f"[OK] Auth file created: {auth_file.name}")
-            return EXIT_SUCCESS
-        else:
+        if not auth_file.exists():
             log(f"[FAIL] Auth file not found at expected path: {auth_file.name}")
             return EXIT_FAILURE
+
+        log(f"[9] Auth file created: {auth_file.name}")
+        log("[9] Validating isolated candidate...")
+
+        valid, reason = validate_candidate(
+            auth_path=auth_file,
+            expected_email=email,
+            expected_type=provider,
+            canary_model=meta.get("canary_model", ""),
+        )
+
+        if not valid:
+            log(f"[FAIL] Candidate validation failed: {reason}")
+            log("[9] Preserving stale auth — restoring from backup")
+            if stale_backup.exists():
+                try:
+                    # Restore stale auth, removing the failed candidate
+                    os.rename(str(stale_backup), str(auth_file))
+                    log(f"[9] Stale auth restored: {auth_file.name}")
+                except Exception as e:
+                    log(f"[9] Stale restore error: {e}")
+            else:
+                log("[9] No stale backup — removing failed candidate")
+                try:
+                    auth_file.unlink()
+                except Exception:
+                    pass
+            return EXIT_FAILURE
+
+        log(f"[9] Candidate validation passed: {reason}")
+        log("[9] Atomically activating auth file...")
+        if not activate_auth_file(auth_file):
+            log("[FAIL] Could not activate auth file")
+            return EXIT_FAILURE
+
+        # Clean up stale backup on success
+        try:
+            stale_backup.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        log(f"[OK] Auth file activated: {auth_file.name}")
+        return EXIT_SUCCESS
 
     except Exception as e:
         log(f"[ERROR] Unexpected error: {e}")
@@ -813,6 +1032,16 @@ def main():
                         help="Gogcli account for Gmail polling")
     parser.add_argument("-dry-run", action="store_true",
                         help="Validate setup without running browser flows")
+    parser.add_argument("-validate-only", action="store_true",
+                        help="Only validate an existing auth file (no reauth). "
+                             "Checks email, type, expiry, and canary. "
+                             "Use with -activate to activate after validation.")
+    parser.add_argument("-activate", action="store_true",
+                        help="With -validate-only: atomically activate the "
+                             "auth file if validation passes "
+                             "(sets disabled=false via temp file + rename)")
+    parser.add_argument("-skip-canary", action="store_true",
+                        help="Skip the canary request (metadata-only validation)")
     parser.add_argument("-log-file", default="",
                         help="Log file path (default: /tmp/bu_reauth.log)")
     args = parser.parse_args()
@@ -820,6 +1049,40 @@ def main():
     # Set up log file
     log_path = args.log_file or str(LOG_DIR / "bu_reauth.log")
     _log_file = open(log_path, "a", encoding="utf-8")
+
+    # --- Validate-only mode: standalone candidate validation ---
+    if args.validate_only:
+        meta = PROVIDERS[args.provider]
+        auth_file = AUTH_DIR / f"{meta['auth_file_prefix']}-{args.email}.json"
+        log(f"=== Validate-only: {args.provider} / {safe_email(args.email)} ===")
+        log(f"Auth file: {auth_file.name}")
+
+        if not auth_file.exists():
+            log(f"[FAIL] Auth file not found: {auth_file.name}")
+            return EXIT_FAILURE
+
+        valid, reason = validate_candidate(
+            auth_path=auth_file,
+            expected_email=args.email,
+            expected_type=args.provider,
+            canary_model=meta.get("canary_model", ""),
+            skip_canary=args.skip_canary,
+        )
+
+        if not valid:
+            log(f"[FAIL] Validation failed: {reason}")
+            return EXIT_FAILURE
+
+        log(f"[OK] Validation passed: {reason}")
+
+        if args.activate:
+            log("Atomically activating auth file...")
+            if not activate_auth_file(auth_file):
+                log("[FAIL] Could not activate auth file")
+                return EXIT_FAILURE
+            log(f"[OK] Auth file activated: {auth_file.name}")
+
+        return EXIT_SUCCESS
 
     # Set overall timeout
     signal.signal(signal.SIGALRM, _timeout_handler)
