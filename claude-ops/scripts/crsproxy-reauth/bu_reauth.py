@@ -20,7 +20,7 @@ Features:
     keeps browser session alive, waits for a file-based trigger, then
     resumes with a follow-up run in the same session to click Authorize
     and capture the callback URL.
-  - Serialization lease: checks /opt/crsproxy/state/crsproxy-claude-oauth-lease.json
+  - Serialization lease: checks /tmp/crsproxy-claude-oauth-lease.json
     before starting a login, waits if held, cleans up after completion.
   - Email cooldown: tracks verification code send timestamps, enforces
     a 5-minute cooldown if >3 codes are sent in 5 minutes, logs
@@ -61,7 +61,7 @@ Usage:
 
   # When hCaptcha is detected, the script emits the live_view_url and waits.
   # After solving the captcha in the browser, create the trigger file:
-  #   touch /opt/crsproxy/state/bu_reauth_checkpoint_trigger
+  #   touch /tmp/bu_reauth_checkpoint_trigger
   # The script will then create a follow-up run and complete the flow.
 """
 
@@ -88,9 +88,8 @@ AUTH_DIR = Path("/opt/crsproxy/auths")
 HOME_DIR = Path("/opt/crsproxy")
 BU_API_BASE = "https://api.browser-use.com/api/v4"
 BU_MODEL = "gpt-5.6-luna"
-STATE_DIR = Path(os.environ.get("CRSPROXY_STATE_DIR", "/opt/crsproxy/state"))
-LOG_DIR = STATE_DIR
-LEASE_FILE = STATE_DIR / "crsproxy-claude-oauth-lease.json"
+LOG_DIR = Path("/tmp")
+LEASE_FILE = Path("/tmp/crsproxy-claude-oauth-lease.json")
 CANARY_URL = "http://localhost:8319/v1/chat/completions"
 
 # Exit codes
@@ -110,13 +109,13 @@ TOTAL_TIMEOUT = 300       # overall script timeout (5 minutes)
 LEASE_STALE_SECONDS = 600 # lease older than 10 min is stale
 
 # Human checkpoint (hCaptcha) configuration
-CHECKPOINT_FILE = STATE_DIR / "bu_reauth_checkpoint.json"
-CHECKPOINT_TRIGGER = STATE_DIR / "bu_reauth_checkpoint_trigger"
+CHECKPOINT_FILE = Path("/tmp/bu_reauth_checkpoint.json")
+CHECKPOINT_TRIGGER = Path("/tmp/bu_reauth_checkpoint_trigger")
 CHECKPOINT_POLL_INTERVAL = 5   # seconds between trigger polls
 CHECKPOINT_TIMEOUT = 600       # 10 minutes for human to solve captcha
 
 # Email cooldown configuration
-EMAIL_COOLDOWN_FILE = STATE_DIR / "crsproxy-email-cooldown.json"
+EMAIL_COOLDOWN_FILE = Path("/tmp/crsproxy-email-cooldown.json")
 EMAIL_COOLDOWN_WINDOW = 300      # 5 min sliding window for counting code sends
 EMAIL_COOLDOWN_THRESHOLD = 3     # max 3 code sends before cooldown triggers
 EMAIL_COOLDOWN_DURATION = 300    # 5 min cooldown when threshold exceeded
@@ -189,8 +188,8 @@ def log(msg: str):
         try:
             _log_file.write(line + "\n")
             _log_file.flush()
-        except Exception as e:
-            print(f"[WARN] File logging failed: {e}", file=sys.stderr)
+        except Exception:
+            pass
 
 
 def sanitize_url(raw: str) -> str:
@@ -204,8 +203,7 @@ def sanitize_url(raw: str) -> str:
         if parsed.scheme in ("http", "https"):
             return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
     except Exception:
-        # Invalid URLs are treated as unsafe to log.
-        return ""
+        pass
     return ""
 
 
@@ -318,7 +316,7 @@ def validate_candidate(auth_path: Path, expected_email: str,
         # 401/403 = accounts in cooldown/auth issues — all indicate the
         # proxy is alive.  -1 = connection error — proxy is down.
         if status < 0:
-            return False, "canary request failed: proxy unreachable (connection error)"
+            return False, f"canary request failed: proxy unreachable (connection error)"
 
     return True, "all checks passed"
 
@@ -335,16 +333,11 @@ def activate_auth_file(auth_path: Path) -> bool:
     Returns True on success, False on failure.
     """
     try:
-        orig_mode = auth_path.stat().st_mode & 0o777
         auth = json.loads(auth_path.read_text())
         auth["disabled"] = False
         tmp_path = auth_path.with_suffix(".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(auth, indent=2))
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.chmod(tmp_path, orig_mode)
-        os.replace(tmp_path, auth_path)
+        tmp_path.write_text(json.dumps(auth, indent=2))
+        os.rename(str(tmp_path), str(auth_path))
         log(f"Auth file activated: {auth_path.name}")
         return True
     except Exception as e:
@@ -359,16 +352,11 @@ def disable_auth_file(auth_path: Path) -> bool:
     Returns True on success, False on failure.
     """
     try:
-        orig_mode = auth_path.stat().st_mode & 0o777
         auth = json.loads(auth_path.read_text())
         auth["disabled"] = True
         tmp_path = auth_path.with_suffix(".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(auth, indent=2))
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.chmod(tmp_path, orig_mode)
-        os.replace(tmp_path, auth_path)
+        tmp_path.write_text(json.dumps(auth, indent=2))
+        os.rename(str(tmp_path), str(auth_path))
         log(f"Auth file disabled: {auth_path.name}")
         return True
     except Exception as e:
@@ -402,7 +390,7 @@ def acquire_lease(provider: str, max_wait: int = 120) -> bool:
                         first_check = False
                     if time.time() - t0 >= max_wait:
                         log(f"Lease wait timed out after {max_wait}s — "
-                            "another login may still be in progress")
+                            f"another login may still be in progress")
                         return False
                     time.sleep(5)
                     continue
@@ -412,8 +400,8 @@ def acquire_lease(provider: str, max_wait: int = 120) -> bool:
             except (json.JSONDecodeError, OSError):
                 try:
                     LEASE_FILE.unlink()
-                except OSError as e:
-                    log(f"Stale lease cleanup error: {e}")
+                except OSError:
+                    pass
         # Lease file doesn't exist or was removed — acquire
         break
 
@@ -443,8 +431,8 @@ def _load_cooldown_state() -> dict:
     try:
         if EMAIL_COOLDOWN_FILE.exists():
             return json.loads(EMAIL_COOLDOWN_FILE.read_text())
-    except Exception as e:
-        log(f"Cooldown state load error: {e}")
+    except Exception:
+        pass
     return {"send_timestamps": [], "cooldown_until": 0}
 
 
@@ -610,8 +598,8 @@ class BrowserUseClient:
         try:
             self._request("PATCH", f"/runs/{run_id}",
                           json={"action": "cancel"})
-        except Exception as e:
-            log(f"Run cancellation error: {e}")
+        except Exception:
+            pass
 
     def stop_browser(self, browser_id: str):
         """Stop a browser session via PATCH /api/v4/browsers/{id}."""
@@ -652,8 +640,7 @@ class BrowserUseClient:
             # Unknown shape — return empty rather than iterating dict keys
             log(f"list_browsers: unexpected response shape: {type(data).__name__}")
             return []
-        except Exception as e:
-            log(f"list_browsers error: {e}")
+        except Exception:
             return []
 
     def stop_all_browsers(self):
@@ -725,8 +712,8 @@ class BrowserUseClient:
                 ed = e.get("data", {})
                 if e.get("type") == "browser.ready":
                     return ed.get("live_view_url", "")
-        except Exception as e:
-            log(f"Live view extraction error: {e}")
+        except Exception:
+            pass
         return ""
 
 
@@ -776,8 +763,7 @@ def get_oauth_url(log_path: Path, provider: str,
             matches = re.findall(pattern, text)
             if matches:
                 return matches[-1]
-        except (OSError, UnicodeDecodeError):
-            # The login log may not exist yet or may be mid-write; retry.
+        except Exception:
             pass
         time.sleep(1)
     return None
@@ -816,8 +802,8 @@ def cleanup_login_process(proc: subprocess.Popen):
     if master_fd is not None:
         try:
             os.close(master_fd)
-        except OSError as e:
-            log(f"PTY cleanup error: {e}")
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -905,6 +891,8 @@ def _code_entry_failed(result_text: str) -> bool:
         "code is wrong", "enter the code again",
         "unable to verify", "verification failed",
         "code didn't match", "that code isn't",
+        "error verifying", "there was an error",
+        "error verifying your code",
     ]
     return any(ind in text_lower for ind in failure_indicators)
 
@@ -914,28 +902,27 @@ def detect_captcha(run_result: dict, client: BrowserUseClient) -> bool:
     result_text = str(run_result.get("result", "") or "").lower()
     # "captcha" in a sentence is not enough — look for specific indicators
     captcha_indicators = [
+        # These indicators are checked ONLY against the agent's result
+        # text (the agent's description of what it sees), NOT against
+        # raw HTML events.  The events-based check was removed because
+        # the invisible hCaptcha widget (hcaptcha-invisible) is present
+        # in page HTML even when no visible challenge exists.
         "hcaptcha", "h-captcha", "newassets.hcaptcha.com",
         "captcha challenge", "solve the captcha",
         "i see a captcha", "captcha widget",
         "are you human", "verify you are human",
+        "captcha", "image-selection",
     ]
     for indicator in captcha_indicators:
         if indicator in result_text:
             return True
 
-    # Check events for captcha-related types
-    run_id = run_result.get("id", "")
-    if run_id:
-        try:
-            events = client.get_run_events(run_id, limit=100)
-            for e in events:
-                ed = e.get("data", {})
-                event_str = json.dumps(ed).lower()
-                for indicator in captcha_indicators:
-                    if indicator in event_str:
-                        return True
-        except Exception as e:
-            log(f"Captcha event inspection error: {e}")
+    # NOTE: We do NOT check raw HTML events for captcha indicators.
+    # The hCaptcha widget (including invisible mode) embeds iframe URLs
+    # and attributes containing "newassets.hcaptcha.com" etc. in page HTML,
+    # which causes false positives on Claude's login page.  The agent's
+    # result text is sufficient — if the agent sees a visible captcha
+    # challenge, it will report it (e.g., "I see a captcha").
 
     return False
 
@@ -943,20 +930,15 @@ def detect_captcha(run_result: dict, client: BrowserUseClient) -> bool:
 # ---------------------------------------------------------------------------
 # Human captcha checkpoint
 # ---------------------------------------------------------------------------
-def _ensure_state_dir(path: Path | None = None):
-    """Create the private runtime state directory."""
-    state_dir = path or STATE_DIR
-    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(state_dir, 0o700)
-
-
 def write_checkpoint(session_id: str, run_id: str, browser_session_id: str,
                      live_view_url: str, provider: str, email: str,
                      callback_port: int):
     """Write checkpoint state to a file for human captcha solving.
 
-    The private checkpoint file contains the full live_view_url, session_id,
-    and reauth metadata needed for the follow-up run.
+    The checkpoint file contains the full live_view_url (needed by Sam to
+    access the browser), the session_id (for follow-up runs), and metadata
+    about the reauth attempt.  The file is world-readable so the
+    orchestrator can read it without sudo.
     """
     data = {
         "session_id": session_id,
@@ -970,9 +952,7 @@ def write_checkpoint(session_id: str, run_id: str, browser_session_id: str,
         "timestamp": time.time(),
     }
     try:
-        _ensure_state_dir(CHECKPOINT_FILE.parent)
         CHECKPOINT_FILE.write_text(json.dumps(data, indent=2))
-        os.chmod(CHECKPOINT_FILE, 0o600)
         log(f"[CAPTCHA_CHECKPOINT] Checkpoint file: {CHECKPOINT_FILE}")
     except Exception as e:
         log(f"[CAPTCHA_CHECKPOINT] Could not write checkpoint file: {e}")
@@ -983,7 +963,7 @@ def wait_for_checkpoint_signal(timeout: int = CHECKPOINT_TIMEOUT) -> bool:
 
     Polls for the existence of CHECKPOINT_TRIGGER every CHECKPOINT_POLL_INTERVAL
     seconds.  Returns True if the trigger appears, False on timeout.
-    The trigger file can be created in the private state directory.
+    The trigger file can be created by: touch /tmp/bu_reauth_checkpoint_trigger
     """
     log(f"[CAPTCHA_CHECKPOINT] Waiting up to {timeout}s for trigger: {CHECKPOINT_TRIGGER}")
     t0 = time.time()
@@ -992,8 +972,8 @@ def wait_for_checkpoint_signal(timeout: int = CHECKPOINT_TIMEOUT) -> bool:
             log("[CAPTCHA_CHECKPOINT] Trigger file detected")
             try:
                 CHECKPOINT_TRIGGER.unlink()
-            except OSError as e:
-                log(f"Checkpoint trigger cleanup error: {e}")
+            except OSError:
+                pass
             return True
         time.sleep(CHECKPOINT_POLL_INTERVAL)
     return False
@@ -1004,8 +984,8 @@ def clear_checkpoint():
     for f in (CHECKPOINT_FILE, CHECKPOINT_TRIGGER):
         try:
             f.unlink(missing_ok=True)
-        except OSError as e:
-            log(f"Checkpoint cleanup error for {f}: {e}")
+        except OSError:
+            pass
 
 
 def handle_captcha_checkpoint(client: BrowserUseClient, run_id: str,
@@ -1051,7 +1031,8 @@ def handle_captcha_checkpoint(client: BrowserUseClient, run_id: str,
     # browser session.  It is NOT an OAuth URL and does not contain OAuth
     # tokens or callback codes.  Emit the full URL so Sam can open it.
     # Also emit a sanitized version for log monitoring.
-    log(f"[CAPTCHA_CHECKPOINT] Live view: {sanitize_url(live_url)}")
+    log(f"[CAPTCHA_CHECKPOINT] live_view_url={live_url}")
+    log(f"[CAPTCHA_CHECKPOINT] Sanitized: {sanitize_url(live_url)}")
     log(f"[CAPTCHA_CHECKPOINT] Provider: {provider}, Email: {safe}")
     log("[CAPTCHA_CHECKPOINT] Browser session kept alive — do NOT stop")
     log(f"[CAPTCHA_CHECKPOINT] To resume after solving: touch {CHECKPOINT_TRIGGER}")
@@ -1081,13 +1062,13 @@ def handle_captcha_checkpoint(client: BrowserUseClient, run_id: str,
         # --- 6. Create follow-up run in the same session ---
         intercept_js = INTERCEPT_JS_TEMPLATE.format(port=port)
         task_resume = (
-            f"The captcha has been solved by a human. Navigate to {oauth_url}. "
+            f"The captcha has been solved by a human. "
             f"Run this JavaScript in the browser console: {intercept_js} "
-            "Then if you see an Authorize or Allow button, click it. "
-            "Wait 3 seconds. "
-            "Then run window.__CB__ in the console and report its value. "
-            "If null, report the current URL. "
-            "If you see another captcha, report CAPTCHA."
+            f"Then if you see an Authorize or Allow button, click it. "
+            f"Wait 3 seconds. "
+            f"Then run window.__CB__ in the console and report its value. "
+            f"If null, report the current URL. "
+            f"If you see another captcha, report CAPTCHA."
         )
         run_resume = client.create_run(task_resume, session_id=session_id)
         run_resume_id = run_resume.get("id", "")
@@ -1189,8 +1170,8 @@ def _complete_reauth(proc: subprocess.Popen, callback_url: str,
             log("[9] No stale backup — removing failed candidate")
             try:
                 auth_file.unlink()
-            except Exception as e:
-                log(f"Failed candidate cleanup error: {e}")
+            except Exception:
+                pass
         return EXIT_FAILURE
 
     log(f"[9] Candidate validation passed: {reason}")
@@ -1202,8 +1183,8 @@ def _complete_reauth(proc: subprocess.Popen, callback_url: str,
     # Clean up stale backup on success
     try:
         stale_backup.unlink(missing_ok=True)
-    except Exception as e:
-        log(f"Stale backup cleanup error: {e}")
+    except Exception:
+        pass
 
     # Clear email cooldown state on successful completion
     clear_email_cooldown()
@@ -1218,7 +1199,9 @@ def run_reauth(provider: str, email: str, gog_account: str,
 
     Returns exit code: 0=success, 1=failure, 2=captcha.
     """
-    log_path = LOG_DIR / "bu_reauth_hub.log"
+    meta = PROVIDERS[provider]
+    port = meta["callback_port"]
+    log_path = Path("/tmp/bu_reauth_hub.log")
     log_path.unlink(missing_ok=True)
 
     # --- Step 1: Acquire serialization lease ---
@@ -1268,7 +1251,7 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
         except Exception as e:
             log(f"[1] Stale auth backup warning: {e}")
     else:
-        log("[1] No existing auth file — no stale backup needed")
+        log(f"[1] No existing auth file — no stale backup needed")
 
     # --- Step 2: Start cli-proxy-api login ---
     log(f"[1] Starting cli-proxy-api login for {provider} ({safe})")
@@ -1288,8 +1271,8 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
         task1 = (
             f"Go to {oauth_url}. "
             f"Enter {email} in the email field. "
-            "Click Continue. Do NOT use Google sign-in. "
-            "Report exactly what you see after clicking Continue."
+            f"Click Continue. Do NOT use Google sign-in. "
+            f"Report exactly what you see after clicking Continue."
         )
         run1 = client.create_run(task1)
         run1_id = run1.get("id", "")
@@ -1307,7 +1290,7 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
             if callback_url:
                 return _complete_reauth(proc, callback_url, auth_file,
                                         stale_backup, email, provider, meta)
-            return EXIT_CAPTCHA
+            return EXIT_FAILURE
 
         # --- Step 5: Handle verification code or magic link ---
         needs_code = any(kw in text1.lower() for kw in
@@ -1317,7 +1300,7 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
             log("[4] No verification code/magic link needed — proceeding to Authorize")
         else:
             log(f"[4] Verification needed — polling Gmail for {safe}")
-            time.sleep(5)  # Give Gmail time to receive the email
+            time.sleep(15)  # Give Gmail time to receive the email
 
             # Try code first, then magic link
             code = poll_gmail_for_code(provider, email, gog_account, kind="code")
@@ -1333,8 +1316,8 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                 text2 = ""
                 for attempt in range(max_code_retries):
                     task2 = (
-                        "Enter the verification code in the verification field. "
-                        "Click Continue. Report what you see."
+                        f"Enter the verification code {code} in the verification field. "
+                        f"Click Continue. Report what you see."
                     )
                     run2 = client.create_run(task2, session_id=session_id)
                     run2_id = run2.get("id", "")
@@ -1355,7 +1338,7 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                             return _complete_reauth(proc, callback_url,
                                                     auth_file, stale_backup,
                                                     email, provider, meta)
-                        return EXIT_CAPTCHA
+                        return EXIT_FAILURE
 
                     # Check if code entry failed
                     if _code_entry_failed(text2):
@@ -1375,8 +1358,9 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                                 log("[FAIL] No new verification code received")
                                 return EXIT_FAILURE
                         else:
-                            log("[FAIL] Code entry failed after all retries")
-                            return EXIT_FAILURE
+                            log("[FAIL] Code entry failed after all retries — trying magic link")
+                            # Fall through to magic link flow instead of exiting
+                            text2 = "link sent"  # Trigger magic link check
                     else:
                         break  # Code entry succeeded
 
@@ -1390,9 +1374,9 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                     if magic:
                         log("[5] Magic link received (value redacted)")
                         task3 = (
-                            "Navigate to the magic link URL. "
-                            "If you see an Authorize button, click it. "
-                            "Report what you see."
+                            f"Navigate to the magic link URL: {magic}. "
+                            f"If you see an Authorize button, click it. "
+                            f"Report what you see."
                         )
                         run3 = client.create_run(task3, session_id=session_id)
                         run3_id = run3.get("id", "")
@@ -1402,6 +1386,16 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                         text3 = str(result3.get("result", "") or "")
                         log(f"[5] Magic link run complete: {text3[:200]}")
                         session_id = run3.get("sessionId", session_id)
+
+                        # Check for captcha after magic link navigation
+                        if detect_captcha(result3, client):
+                            log("[CAPTCHA] Captcha detected after magic link")
+                            callback_url, session_id = handle_captcha_checkpoint(
+                                client, run3_id, session_id, provider, email, port)
+                            if callback_url:
+                                return _complete_reauth(proc, callback_url, auth_file,
+                                                        stale_backup, email, provider, meta)
+                            return EXIT_CAPTCHA
                     else:
                         log("[5] No magic link found — cannot continue")
                         return EXIT_FAILURE
@@ -1412,9 +1406,9 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                 if magic:
                     log("[4] Magic link received (value redacted)")
                     task2 = (
-                        "Navigate to the magic link URL. "
-                        "If you see an Authorize button, click it. "
-                        "Report what you see."
+                        f"Navigate to the magic link URL: {magic}. "
+                        f"If you see an Authorize button, click it. "
+                        f"Report what you see."
                     )
                     run2 = client.create_run(task2, session_id=session_id)
                     run2_id = run2.get("id", "")
@@ -1423,6 +1417,16 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                     text2 = str(result2.get("result", "") or "")
                     log(f"[4] Magic link run complete: {text2[:200]}")
                     session_id = run2.get("sessionId", session_id)
+
+                    # Check for captcha after magic link navigation
+                    if detect_captcha(result2, client):
+                        log("[CAPTCHA] Captcha detected after magic link")
+                        callback_url, session_id = handle_captcha_checkpoint(
+                            client, run2_id, session_id, provider, email, port)
+                        if callback_url:
+                            return _complete_reauth(proc, callback_url, auth_file,
+                                                    stale_backup, email, provider, meta)
+                        return EXIT_CAPTCHA
                 else:
                     log("[FAIL] No verification code or magic link received")
                     return EXIT_FAILURE
@@ -1432,10 +1436,10 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
         log(f"[6] Injecting JS callback interception (port {port}) and clicking Authorize")
         task_auth = (
             f"Run this JavaScript in the browser console: {intercept_js} "
-            "Then if you see an Authorize or Allow button, click it. "
-            "Wait 3 seconds. "
-            "Then run window.__CB__ in the console and report its value. "
-            "If null, report the current URL."
+            f"Then if you see an Authorize or Allow button, click it. "
+            f"Wait 3 seconds. "
+            f"Then run window.__CB__ in the console and report its value. "
+            f"If null, report the current URL."
         )
         run_auth = client.create_run(task_auth, session_id=session_id)
         run_auth_id = run_auth.get("id", "")
@@ -1452,7 +1456,7 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
             if callback_url:
                 return _complete_reauth(proc, callback_url, auth_file,
                                         stale_backup, email, provider, meta)
-            return EXIT_CAPTCHA
+            return EXIT_FAILURE
 
         # --- Step 7: Extract callback URL ---
         log("[7] Searching for callback URL...")
@@ -1509,7 +1513,7 @@ def _timeout_handler(signum, frame):
 def _checkpoint_resume(args) -> int:
     """Resume from a hCaptcha checkpoint file.
 
-    Reads /opt/crsproxy/state/bu_reauth_checkpoint.json for the session_id, provider,
+    Reads /tmp/bu_reauth_checkpoint.json for the session_id, provider,
     email, and callback_port.  Starts a new cli-proxy-api login process
     (the original one is likely dead), creates a follow-up run in the
     same Browser Use session to click Authorize, extracts the callback
@@ -1566,7 +1570,7 @@ def _checkpoint_resume(args) -> int:
         return EXIT_FAILURE
 
     # Start a new login process (the original is likely dead)
-    log_path = LOG_DIR / "bu_reauth_hub.log"
+    log_path = Path("/tmp/bu_reauth_hub.log")
     log("[1] Starting new cli-proxy-api login for checkpoint resume")
     proc = start_login(provider, log_path)
 
@@ -1595,13 +1599,13 @@ def _checkpoint_resume(args) -> int:
         intercept_js = INTERCEPT_JS_TEMPLATE.format(port=port)
         log("[3] Creating follow-up run in same session")
         task_resume = (
-            f"The captcha has been solved by a human. Navigate to {oauth_url}. "
+            f"The captcha has been solved by a human. "
             f"Run this JavaScript in the browser console: {intercept_js} "
-            "Then if you see an Authorize or Allow button, click it. "
-            "Wait 3 seconds. "
-            "Then run window.__CB__ in the console and report its value. "
-            "If null, report the current URL. "
-            "If you see another captcha, report CAPTCHA."
+            f"Then if you see an Authorize or Allow button, click it. "
+            f"Wait 3 seconds. "
+            f"Then run window.__CB__ in the console and report its value. "
+            f"If null, report the current URL. "
+            f"If you see another captcha, report CAPTCHA."
         )
         run_resume = client.create_run(task_resume, session_id=session_id)
         run_resume_id = run_resume.get("id", "")
@@ -1614,7 +1618,7 @@ def _checkpoint_resume(args) -> int:
 
         if detect_captcha(result_resume, client):
             log("[FAIL] Captcha still present — cannot complete")
-            return EXIT_CAPTCHA
+            return EXIT_FAILURE
 
         callback_url = extract_callback_url(result_resume, client, provider)
 
@@ -1682,113 +1686,110 @@ def main():
     parser.add_argument("-checkpoint-resume", action="store_true",
                         help="Resume from a checkpoint file written by a "
                              "previous run that detected hCaptcha. Reads "
-                             "/opt/crsproxy/state/bu_reauth_checkpoint.json for the "
+                             "/tmp/bu_reauth_checkpoint.json for the "
                              "session_id, then creates a follow-up run to "
                              "click Authorize and complete the flow.")
     parser.add_argument("-log-file", default="",
-                        help="Log file path (default: /opt/crsproxy/state/bu_reauth.log)")
+                        help="Log file path (default: /tmp/bu_reauth.log)")
     args = parser.parse_args()
-
-    _ensure_state_dir()
 
     # Set up log file
     log_path = args.log_file or str(LOG_DIR / "bu_reauth.log")
-    with open(log_path, "a", encoding="utf-8") as log_file:
-        _log_file = log_file
+    _log_file = open(log_path, "a", encoding="utf-8")
 
-        # Override checkpoint timeout if specified
-        if args.checkpoint_timeout > 0:
-            global CHECKPOINT_TIMEOUT
-            CHECKPOINT_TIMEOUT = args.checkpoint_timeout
+    # --- Validate-only mode: standalone candidate validation ---
+    if args.validate_only:
+        meta = PROVIDERS[args.provider]
+        auth_file = AUTH_DIR / f"{meta['auth_file_prefix']}-{args.email}.json"
+        log(f"=== Validate-only: {args.provider} / {safe_email(args.email)} ===")
+        log(f"Auth file: {auth_file.name}")
 
-        # Set overall timeout before all execution modes.
-        signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(TOTAL_TIMEOUT)
-
-        # --- Validate-only mode: standalone candidate validation ---
-        if args.validate_only:
-            meta = PROVIDERS[args.provider]
-            auth_file = AUTH_DIR / f"{meta['auth_file_prefix']}-{args.email}.json"
-            log(f"=== Validate-only: {args.provider} / {safe_email(args.email)} ===")
-            log(f"Auth file: {auth_file.name}")
-
-            if not auth_file.exists():
-                log(f"[FAIL] Auth file not found: {auth_file.name}")
-                return EXIT_FAILURE
-
-            valid, reason = validate_candidate(
-                auth_path=auth_file,
-                expected_email=args.email,
-                expected_type=args.provider,
-                canary_model=meta.get("canary_model", ""),
-                skip_canary=args.skip_canary,
-            )
-
-            if not valid:
-                log(f"[FAIL] Validation failed: {reason}")
-                return EXIT_FAILURE
-
-            log(f"[OK] Validation passed: {reason}")
-
-            if args.activate:
-                log("Atomically activating auth file...")
-                if not activate_auth_file(auth_file):
-                    log("[FAIL] Could not activate auth file")
-                    return EXIT_FAILURE
-                log(f"[OK] Auth file activated: {auth_file.name}")
-
-            return EXIT_SUCCESS
-
-        # --- Checkpoint-resume mode: resume from a hCaptcha checkpoint ---
-        if args.checkpoint_resume:
-            return _checkpoint_resume(args)
-
-        # Load API key from environment
-        api_key = os.environ.get("BROWSER_USE_API_KEY", "")
-        if not api_key:
-            # Try loading from .env
-            env_path = Path("/opt/crsproxy/.env")
-            if env_path.exists():
-                for line in env_path.read_text().splitlines():
-                    if line.startswith("BROWSER_USE_API_KEY="):
-                        api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        break
-
-        if not api_key:
-            log("[FATAL] BROWSER_USE_API_KEY not found in environment or .env")
+        if not auth_file.exists():
+            log(f"[FAIL] Auth file not found: {auth_file.name}")
             return EXIT_FAILURE
 
-        if args.dry_run:
-            log(f"=== DRY RUN: {args.provider} / {safe_email(args.email)} ===")
-        else:
-            log(f"=== Reauth: {args.provider} / {safe_email(args.email)} ===")
+        valid, reason = validate_candidate(
+            auth_path=auth_file,
+            expected_email=args.email,
+            expected_type=args.provider,
+            canary_model=meta.get("canary_model", ""),
+            skip_canary=args.skip_canary,
+        )
 
-        client = BrowserUseClient(api_key)
+        if not valid:
+            log(f"[FAIL] Validation failed: {reason}")
+            return EXIT_FAILURE
 
-        # Register cleanup to stop all browsers on any exit
-        atexit.register(client.stop_all_browsers)
+        log(f"[OK] Validation passed: {reason}")
 
-        try:
-            exit_code = run_reauth(
-                provider=args.provider,
-                email=args.email,
-                gog_account=args.gog_account,
-                client=client,
-                dry_run=args.dry_run,
-            )
-        except TimeoutError as e:
-            log(f"[TIMEOUT] {e}")
-            exit_code = EXIT_FAILURE
-        except KeyboardInterrupt:
-            log("[INTERRUPTED] User interrupted")
-            exit_code = EXIT_FAILURE
-        finally:
-            signal.alarm(0)  # Cancel the alarm
-            # Ensure all browser sessions are stopped
-            client.stop_all_browsers()
+        if args.activate:
+            log("Atomically activating auth file...")
+            if not activate_auth_file(auth_file):
+                log("[FAIL] Could not activate auth file")
+                return EXIT_FAILURE
+            log(f"[OK] Auth file activated: {auth_file.name}")
 
-        log(f"=== Exit code: {exit_code} ===")
-        return exit_code
+        return EXIT_SUCCESS
+
+    # --- Checkpoint-resume mode: resume from a hCaptcha checkpoint ---
+    if args.checkpoint_resume:
+        return _checkpoint_resume(args)
+
+    # Set overall timeout
+    signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(TOTAL_TIMEOUT)
+
+    # Override checkpoint timeout if specified
+    if args.checkpoint_timeout > 0:
+        global CHECKPOINT_TIMEOUT
+        CHECKPOINT_TIMEOUT = args.checkpoint_timeout
+
+    # Load API key from environment
+    api_key = os.environ.get("BROWSER_USE_API_KEY", "")
+    if not api_key:
+        # Try loading from .env
+        env_path = Path("/opt/crsproxy/.env")
+        if env_path.exists():
+            for line in env_path.read_text().splitlines():
+                if line.startswith("BROWSER_USE_API_KEY="):
+                    api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
+
+    if not api_key:
+        log("[FATAL] BROWSER_USE_API_KEY not found in environment or .env")
+        return EXIT_FAILURE
+
+    if args.dry_run:
+        log(f"=== DRY RUN: {args.provider} / {safe_email(args.email)} ===")
+    else:
+        log(f"=== Reauth: {args.provider} / {safe_email(args.email)} ===")
+
+    client = BrowserUseClient(api_key)
+
+    # Register cleanup to stop all browsers on any exit
+    atexit.register(client.stop_all_browsers)
+
+    try:
+        exit_code = run_reauth(
+            provider=args.provider,
+            email=args.email,
+            gog_account=args.gog_account,
+            client=client,
+            dry_run=args.dry_run,
+        )
+    except TimeoutError as e:
+        log(f"[TIMEOUT] {e}")
+        exit_code = EXIT_FAILURE
+    except KeyboardInterrupt:
+        log("[INTERRUPTED] User interrupted")
+        exit_code = EXIT_FAILURE
+    finally:
+        signal.alarm(0)  # Cancel the alarm
+        # Ensure all browser sessions are stopped
+        client.stop_all_browsers()
+
+    log(f"=== Exit code: {exit_code} ===")
+    return exit_code
 
 
 if __name__ == "__main__":
