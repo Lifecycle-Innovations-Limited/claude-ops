@@ -12,10 +12,15 @@ concurrency:
   # Auto-cancel superseded runs for same workflow+ref/PR (Sam 2026-07-14)
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   optimize-ci:
     name: Graphite CI Optimizer
     if: github.event_name == 'pull_request'
+    permissions: {}
     runs-on: ubuntu-latest
     outputs:
       skip: ${{ steps.check-skip.outputs.skip }}

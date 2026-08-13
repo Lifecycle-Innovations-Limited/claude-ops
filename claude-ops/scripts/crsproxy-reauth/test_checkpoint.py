@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 from unittest.mock import MagicMock, patch
 
 # Add the script directory to the path
@@ -224,7 +225,7 @@ def test_live_view_url_not_logged_with_secrets():
     live_url = "https://live.browser-use.com?wss=https%3A%2F%2Fexample.cdp.browser-use.com"
     sanitized = bu_reauth.sanitize_url(live_url)
     assert "wss=" not in sanitized, "Sanitized URL should not contain query params"
-    assert "live.browser-use.com" in sanitized, "Sanitized URL should contain domain"
+    assert urlparse(sanitized).hostname == "live.browser-use.com", "Sanitized URL should use the live-view domain"
     print("PASS: live_view_url is sanitized for logging but full URL available for checkpoint")
 
 
