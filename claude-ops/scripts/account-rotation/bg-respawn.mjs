@@ -1,4 +1,5 @@
 import { loadClaudeHarnessEnv } from './claude-harness-env.mjs';
+import { normalizeClaudeModelArgs } from './model-args.mjs';
 // ── Background-session respawn after rotation ────────────────────────────────
 // Daemon-hosted `claude --bg` sessions have no TTY, so the /login-injection
 // path in rotate.mjs can never reach them. They also never register in the
@@ -20,8 +21,21 @@ import { loadClaudeHarnessEnv } from './claude-harness-env.mjs';
 //
 // Used by rotate.mjs (post-rotation) and daemon.mjs (periodic deferred sweep).
 
-import { readFileSync, readdirSync, writeFileSync, appendFileSync, unlinkSync, statSync, existsSync } from 'fs';
+import {
+  closeSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+  appendFileSync,
+  unlinkSync,
+  statSync,
+  existsSync,
+} from 'fs';
 import { execFileSync, execSync } from 'child_process';
+import { createHash } from 'crypto';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
@@ -148,6 +162,181 @@ function markerFresh(path, maxAgeMs) {
   }
 }
 
+function preserveDeferredMarker(id) {
+  try {
+    writeFileSync(DEFERRED_MARKER(id), String(Date.now()), { mode: 0o600 });
+  } catch {}
+}
+
+function activeKeychainAccessToken() {
+  try {
+    if (process.platform === 'linux') {
+      const store = JSON.parse(readFileSync(join(homedir(), '.claude', '.credentials.json'), 'utf8'));
+      return store?.claudeAiOauth?.accessToken || null;
+    }
+    const account = process.env.USER || 'unknown';
+    const raw = execFileSync(
+      'security',
+      ['find-generic-password', '-s', 'Claude Code-credentials', '-a', account, '-w'],
+      { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim();
+    return JSON.parse(raw)?.claudeAiOauth?.accessToken || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeJsonAtomic(path, value) {
+  const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
+  const fd = openSync(tmp, 'wx', 0o600);
+  try {
+    writeFileSync(fd, JSON.stringify(value, null, 2));
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmp, path);
+}
+
+function respawnStateCoherent(stateFile, expectedCrsActive) {
+  try {
+    const persisted = JSON.parse(readFileSync(stateFile, 'utf8'));
+    if (!Array.isArray(persisted.respawnFlags)) return expectedCrsActive === false;
+    const normalized = normalizeClaudeModelArgs(persisted.respawnFlags);
+    if (!normalized.every((flag, index) => flag === persisted.respawnFlags[index])) return false;
+    const hasCrsSettings = persisted.respawnFlags.some(
+      (flag, index) =>
+        flag === '--settings' && String(persisted.respawnFlags[index + 1] || '').endsWith('crs-session-settings.json'),
+    );
+    return hasCrsSettings === expectedCrsActive;
+  } catch {
+    return false;
+  }
+}
+
+export function routeCredentialFingerprint(token) {
+  if (!token) return null;
+  return createHash('sha256').update('bg-respawn-route\0').update(String(token)).digest('hex');
+}
+
+function normalizedRoute(route) {
+  if (!route || typeof route !== 'object') return null;
+  return {
+    mode: String(route.mode || ''),
+    baseUrl: route.baseUrl ? String(route.baseUrl).replace(/\/+$/, '') : null,
+    credentialSource: String(route.credentialSource || ''),
+    credentialFingerprint: route.credentialFingerprint ? String(route.credentialFingerprint) : null,
+    settings: route.settings ? String(route.settings) : null,
+  };
+}
+
+export function effectiveRouteMatches(actual, expected) {
+  const left = normalizedRoute(actual);
+  const right = normalizedRoute(expected);
+  if (!left || !right) return false;
+  return (
+    left.mode === right.mode &&
+    left.baseUrl === right.baseUrl &&
+    left.credentialSource === right.credentialSource &&
+    left.credentialFingerprint === right.credentialFingerprint &&
+    left.settings === right.settings
+  );
+}
+
+function processEnvironment(pid) {
+  try {
+    if (process.platform === 'linux') {
+      return readFileSync(`/proc/${pid}/environ`)
+        .toString()
+        .split('\0')
+        .filter(Boolean)
+        .reduce((env, entry) => {
+          const split = entry.indexOf('=');
+          if (split > 0) env[entry.slice(0, split)] = entry.slice(split + 1);
+          return env;
+        }, {});
+    }
+    const command = execFileSync('ps', ['eww', '-p', String(pid), '-o', 'command='], {
+      encoding: 'utf8',
+      timeout: 3000,
+    });
+    const env = {};
+    for (const entry of command.split(/\s+/)) {
+      const split = entry.indexOf('=');
+      if (split <= 0) continue;
+      const key = entry.slice(0, split);
+      if (
+        [
+          'ANTHROPIC_BASE_URL',
+          'ANTHROPIC_API_BASE',
+          'ANTHROPIC_API_KEY',
+          'ANTHROPIC_AUTH_TOKEN',
+          'CLAUDE_CODE_OAUTH_TOKEN',
+        ].includes(key)
+      ) {
+        env[key] = entry.slice(split + 1);
+      }
+    }
+    return env;
+  } catch {
+    return null;
+  }
+}
+
+export function effectiveRouteFromProcess(pid, expectedSettings) {
+  const env = processEnvironment(pid);
+  if (!env) return null;
+  const baseUrl = String(env.ANTHROPIC_BASE_URL || '');
+  const apiBase = String(env.ANTHROPIC_API_BASE || '');
+  if (baseUrl && apiBase && baseUrl !== apiBase) return null;
+  const effectiveBase = baseUrl || apiBase || null;
+  const tokens = [env.ANTHROPIC_API_KEY, env.ANTHROPIC_AUTH_TOKEN, env.CLAUDE_CODE_OAUTH_TOKEN].filter(Boolean);
+  if (effectiveBase) {
+    if (!tokens.length || tokens.some((token) => token !== tokens[0] || !String(token).startsWith('cr_'))) return null;
+    return {
+      mode: 'crs',
+      baseUrl: effectiveBase,
+      credentialSource: 'crs-relay',
+      credentialFingerprint: routeCredentialFingerprint(tokens[0]),
+      settings: expectedSettings,
+    };
+  }
+  if (tokens.some((token) => String(token).startsWith('cr_'))) return null;
+  const directToken = tokens[0] || activeKeychainAccessToken();
+  if (!directToken || tokens.some((token) => token !== directToken)) return null;
+  return {
+    mode: 'direct',
+    baseUrl: null,
+    credentialSource: tokens.length ? 'session-oauth' : 'keychain',
+    credentialFingerprint: routeCredentialFingerprint(directToken),
+    settings: null,
+  };
+}
+
+function findNewLiveSession(id, oldPid, expectedRoute) {
+  const found = listLiveBgSessions().find(
+    (candidate) => String(candidate.id) === String(id) && candidate.pid !== oldPid && pidAlive(candidate.pid),
+  );
+  if (!found) return null;
+  try {
+    const sessionFile = readdirSync(SESSIONS_DIR)
+      .filter((file) => file.endsWith('.json'))
+      .map((file) => join(SESSIONS_DIR, file))
+      .find((file) => {
+        const value = JSON.parse(readFileSync(file, 'utf8'));
+        const valueId = value.jobId || value.sessionId || value.id;
+        return String(valueId) === String(id) && Number(value.pid) === found.pid;
+      });
+    if (!sessionFile) return null;
+    const record = JSON.parse(readFileSync(sessionFile, 'utf8'));
+    const processRoute = effectiveRouteFromProcess(found.pid, expectedRoute.settings);
+    if (!effectiveRouteMatches(processRoute, expectedRoute)) return null;
+    return effectiveRouteMatches(record.effectiveRoute, processRoute) ? found : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Enumerate live daemon-hosted bg sessions from ~/.claude/sessions/*.json. */
 export function listLiveBgSessions() {
   const out = [];
@@ -234,11 +423,15 @@ export function doRespawn(session, log, opts = {}) {
 
   try {
     const childEnv = { ...process.env };
+    let selectedDirectToken = null;
+    let directCredentialSource = 'keychain';
     try {
       const config = readConfig();
       const tokenJson = getTokenForSession(session.id, config);
       const token = tokenJson ? extractAccessToken(tokenJson) : null;
       if (token) {
+        selectedDirectToken = token;
+        directCredentialSource = 'session-oauth';
         childEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
         delete childEnv.CLAUDE_CODE_USE_BEDROCK;
         delete childEnv.ANTHROPIC_MODEL;
@@ -419,6 +612,8 @@ export function doRespawn(session, log, opts = {}) {
             kc = tokenJson ? extractAccessToken(tokenJson) : null;
           } catch {}
           if (kc) {
+            selectedDirectToken = kc;
+            directCredentialSource = 'session-oauth';
             delete childEnv.ANTHROPIC_API_KEY;
             delete childEnv.ANTHROPIC_AUTH_TOKEN;
             childEnv.CLAUDE_CODE_OAUTH_TOKEN = kc;
@@ -435,17 +630,54 @@ export function doRespawn(session, log, opts = {}) {
       }
     }
 
+    if (!crsActive) {
+      delete childEnv.ANTHROPIC_BASE_URL;
+      delete childEnv.ANTHROPIC_API_BASE;
+      delete childEnv.ANTHROPIC_API_KEY;
+      delete childEnv.ANTHROPIC_AUTH_TOKEN;
+      const effectiveEnvToken = String(childEnv.CLAUDE_CODE_OAUTH_TOKEN || '');
+      if (effectiveEnvToken && !effectiveEnvToken.startsWith('cr_')) {
+        selectedDirectToken = effectiveEnvToken;
+        directCredentialSource = 'session-oauth';
+      } else if (!selectedDirectToken) {
+        selectedDirectToken = activeKeychainAccessToken();
+        directCredentialSource = 'keychain';
+      }
+      if (!selectedDirectToken) {
+        preserveDeferredMarker(session.id);
+        log(`[bg-respawn] cannot fingerprint intended direct credential for ${session.id}; deferring retry`);
+        return false;
+      }
+    }
+    const expectedRoute = crsActive
+      ? {
+          mode: 'crs',
+          baseUrl: crsBaseUrl,
+          credentialSource: 'crs-relay',
+          credentialFingerprint: routeCredentialFingerprint(crsRelayKey),
+          settings: join(homedir(), '.claude', 'crs-session-settings.json'),
+        }
+      : {
+          mode: 'direct',
+          baseUrl: null,
+          credentialSource: directCredentialSource,
+          credentialFingerprint: routeCredentialFingerprint(selectedDirectToken),
+          settings: null,
+        };
+    childEnv.CLAUDE_OPS_EXPECTED_ROUTE = JSON.stringify(expectedRoute);
+
     // ── RESPAWN-FLAG RECONCILIATION (durable: base+token can't separate) ─────
     // `--settings crs-session-settings.json` injects ANTHROPIC_BASE_URL=CRS at
     // process startup, which childEnv stripping cannot undo. Make the allowlist
     // the SOLE authority for CRS routing: add the CRS settings flag iff crsActive,
     // remove it otherwise. Persisted to state.json so `claude respawn` re-reads it.
     try {
-      const flags = Array.isArray(state.respawnFlags) ? [...state.respawnFlags] : null;
+      const originalFlags = Array.isArray(state.respawnFlags) ? state.respawnFlags : null;
+      const flags = originalFlags ? normalizeClaudeModelArgs(originalFlags) : null;
       if (flags) {
         const isCrsSettingsVal = (v) => typeof v === 'string' && v.endsWith('crs-session-settings.json');
         const hasCrsSettings = flags.some((f, i) => f === '--settings' && isCrsSettingsVal(flags[i + 1]));
-        let mutated = false;
+        let mutated = flags.some((flag, index) => flag !== originalFlags[index]);
         if (!crsActive && hasCrsSettings) {
           for (let i = flags.length - 1; i >= 0; i--) {
             if (flags[i] === '--settings' && isCrsSettingsVal(flags[i + 1])) {
@@ -469,10 +701,7 @@ export function doRespawn(session, log, opts = {}) {
         }
         if (mutated) {
           state.respawnFlags = flags;
-          // Rewrite in place, so no exclusive create here. The mode only bites if
-          // the file has gone since we read it, and keeps the replacement from
-          // coming back world-readable when it does.
-          writeFileSync(stateFile, JSON.stringify(state, null, 2), { mode: 0o600 });
+          writeJsonAtomic(stateFile, state);
         }
       }
     } catch (err) {
@@ -487,53 +716,58 @@ export function doRespawn(session, log, opts = {}) {
         env: childEnv,
       }).toString();
     } catch (e) {
-      // Capture any output the binary emitted on failure (model errors etc) to our log, not controlling tty.
       try {
-        respawnOut = (e.stdout || '') + (e.stderr || '');
+        respawnOut = Buffer.concat(
+          [e.stdout, e.stderr]
+            .filter((part) => part !== undefined && part !== null)
+            .map((part) => (Buffer.isBuffer(part) ? part : Buffer.from(String(part)))),
+        ).toString();
       } catch {}
-      log(`[bg-respawn] respawn exec note for ${session.id}: ${String(e.message || e).slice(0, 120)}`);
-      // Do not re-throw; we still want to mark and continue fleet hygiene.
+      if (respawnOut) {
+        try {
+          const LOGP = join(__dirname, 'bg-respawn.out.log');
+          appendFileSync(LOGP, `[${new Date().toISOString()}] ${session.id}: ${respawnOut.slice(0, 2000)}\n`);
+        } catch {}
+      }
+      preserveDeferredMarker(session.id);
+      log(`[bg-respawn] respawn command failed for ${session.id}: ${String(e.message || e).slice(0, 120)}`);
+      return false;
     }
     if (respawnOut && respawnOut.length > 0) {
-      // Persist any chatter from the respawn to dedicated log to avoid TUI pollution.
       try {
         const LOGP = join(__dirname, 'bg-respawn.out.log');
         appendFileSync(LOGP, `[${new Date().toISOString()}] ${session.id}: ${respawnOut.slice(0, 2000)}\n`);
       } catch {}
     }
+    if (!respawnStateCoherent(stateFile, crsActive)) {
+      preserveDeferredMarker(session.id);
+      log(`[bg-respawn] respawn state verification failed for ${session.id}; deferring retry`);
+      return false;
+    }
+    let liveRespawn = null;
+    for (let i = 0; i < 20; i++) {
+      liveRespawn = findNewLiveSession(session.id, session.pid, expectedRoute);
+      if (liveRespawn) break;
+      sleepSync(100);
+    }
+    if (!liveRespawn) {
+      preserveDeferredMarker(session.id);
+      log(`[bg-respawn] no verified new live PID/effective route for ${session.id}; deferring retry`);
+      return false;
+    }
     try {
-      // mode keeps the marker owner-only; the path under /tmp is predictable.
       writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()), { mode: 0o600 });
     } catch {}
     try {
       unlinkSync(DEFERRED_MARKER(session.id));
     } catch {}
-    log(`[bg-respawn] respawned bg session ${session.id} (pid ${session.pid}, was ${session.status})`);
+    log(
+      `[bg-respawn] respawned bg session ${session.id} (new pid ${liveRespawn.pid}, old pid ${session.pid}, was ${session.status})`,
+    );
 
-    // Synchronously resolve new PID and update the lease
     try {
-      const leases = readLeases();
-      const lease = leases[session.id];
-      if (lease) {
-        let newPid = null;
-        for (let i = 0; i < 20; i++) {
-          try {
-            execSync('sleep 0.5');
-          } catch {}
-          const live = listLiveBgSessions();
-          const found = live.find((ls) => String(ls.id) === String(session.id));
-          if (found && found.pid !== session.pid) {
-            newPid = found.pid;
-            break;
-          }
-        }
-        if (newPid) {
-          log(`[bg-respawn] Updated lease for session ${session.id} with new PID ${newPid}`);
-          recordSessionLease(session.id, lease.accountKey, newPid);
-        } else {
-          log(`[bg-respawn] Warning: could not resolve new PID for session ${session.id}`);
-        }
-      }
+      const lease = readLeases()[session.id];
+      if (lease) recordSessionLease(session.id, lease.accountKey, liveRespawn.pid);
     } catch (err) {
       log(`[bg-respawn] Error updating lease with new PID: ${err.message}`);
     }

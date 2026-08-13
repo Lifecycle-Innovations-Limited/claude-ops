@@ -20,11 +20,12 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync, execSync } from 'child_process';
 import { fetchWithProxyFallback } from './proxy-helper.mjs';
-import { acquireRefreshLock } from './crs-refresh-lock.mjs';
+import { acquireRefreshLock, claimRefreshPace } from './crs-refresh-lock.mjs';
 import { readRotationToken, reconcileRemoteRotationVault, writeRotationTokenCoordinated } from './rotation-vault.mjs';
 import { withAuthWriterLock } from './auth-writer-coordination.mjs';
 import { verifyRefreshedTokenIdentity } from './token-identity.mjs';
 import { automatedAuthAllowed } from './auto-auth-policy.mjs';
+import { retryAfterDelayMs } from './retry-after.mjs';
 import {
   REFRESH_WHEN_BELOW_MS,
   MIN_HEALTHY_TTL_MS,
@@ -236,11 +237,7 @@ async function refreshOAuthToken(refreshToken) {
       // to backoff. Anthropic returns seconds-in-Retry-After when present.
       if (res.status === 429) {
         const retryAfterHeader = res.headers && (res.headers.get?.('retry-after') || res.headers['retry-after']);
-        const retryAfterMs = retryAfterHeader
-          ? /\d+/i.test(String(retryAfterHeader))
-            ? Math.min(15 * 60_000, Math.max(2_000, parseInt(String(retryAfterHeader), 10) * 1000 + 2000))
-            : 60_000
-          : null;
+        const retryAfterMs = retryAfterDelayMs(retryAfterHeader);
         const delay = retryAfterMs ?? RETRY_DELAY_MS * attempt;
         log(
           `  429 Too Many Requests (attempt ${attempt}/${MAX_RETRIES}) — waiting ${Math.round(delay / 1000)}s (Retry-After=${retryAfterHeader ?? 'n/a'})...`,
@@ -413,10 +410,16 @@ for (let i = 0; i < accountsOrdered.length; i++) {
 
   try {
     await withAuthWriterLock(async (writerCapability) => {
-      // Rate limit courtesy: delay between accounts
-      if (i > 0) {
-        await sleep(INTER_ACCOUNT_DELAY_MS);
+      // Cross-process pacing: reserve the next eligible refresh slot before
+      // touching a single-use refresh token. Keep the existing per-loop gap too.
+      const paceWaitMs = claimRefreshPace(key);
+      if (paceWaitMs === null) {
+        log(`${key}: refresh pacing lease held elsewhere — skipping`);
+        skipped++;
+        return;
       }
+      if (paceWaitMs > 0) await sleep(paceWaitMs);
+      if (i > 0) await sleep(INTER_ACCOUNT_DELAY_MS);
 
       const currentTokenJson = readStoredToken(account);
       const parsed = parseToken(currentTokenJson);
