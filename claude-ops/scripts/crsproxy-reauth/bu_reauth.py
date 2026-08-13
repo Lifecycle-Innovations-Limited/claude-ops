@@ -264,16 +264,16 @@ def _reserve_loopback_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _candidate_proxy_config(auth_dir: Path, port: int, api_key: str) -> str:
+def _candidate_proxy_config(auth_dir: Path, port: int, bearer: str) -> str:
     """Build a minimal candidate-only CLIProxyAPI configuration."""
     quoted_auth_dir = json.dumps(str(auth_dir))
-    quoted_api_key = json.dumps(api_key)
+    quoted_bearer = json.dumps(bearer)
     return (
         'host: "127.0.0.1"\n'
         f"port: {port}\n"
         f"auth-dir: {quoted_auth_dir}\n"
         "api-keys:\n"
-        f"  - {quoted_api_key}\n"
+        f"  - {quoted_bearer}\n"
         "remote-management:\n"
         "  allow-remote: false\n"
         '  secret-key: ""\n'
@@ -331,9 +331,9 @@ def send_canary(model: str, auth_path: Path, timeout: int = 30) -> tuple[bool, s
             return False, "candidate canary copy digest mismatch"
 
         port = _reserve_loopback_port()
-        api_key = f"candidate-{uuid.uuid4().hex}"
+        bearer = f"candidate-{uuid.uuid4().hex}"
         config_path = root / "config.yaml"
-        config_path.write_text(_candidate_proxy_config(isolated_dir, port, api_key), encoding="utf-8")
+        config_path.write_text(_candidate_proxy_config(isolated_dir, port, bearer), encoding="utf-8")
         os.chmod(config_path, 0o600)
         env = {
             "HOME": str(root),
@@ -352,7 +352,7 @@ def send_canary(model: str, auth_path: Path, timeout: int = 30) -> tuple[bool, s
                 start_new_session=True,
             )
             endpoint = f"http://127.0.0.1:{port}/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            headers = {"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"}
             response = None
             while time.monotonic() < deadline:
                 if process.poll() is not None:
