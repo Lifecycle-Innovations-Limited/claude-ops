@@ -14,7 +14,6 @@ Run locally (syntax/logic only, no hub dependencies):
 """
 
 import json
-import os
 import sys
 import tempfile
 import time
@@ -79,94 +78,73 @@ def test_detect_captcha_negative():
 
 def test_checkpoint_file_write_read():
     """write_checkpoint writes a valid JSON file."""
-    orig_ckpt = bu_reauth.CHECKPOINT_FILE
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Override checkpoint file path
         ckpt_path = Path(tmpdir) / "checkpoint.json"
-        bu_reauth.CHECKPOINT_FILE = ckpt_path
-
-        bu_reauth.write_checkpoint(
-            session_id="test-session-123",
-            run_id="test-run-456",
-            browser_session_id="test-browser-789",
-            live_view_url="https://live.browser-use.com?wss=example",
-            provider="claude",
-            email="test@example.com",
-            callback_port=54545,
-        )
-
-        assert ckpt_path.exists(), "Checkpoint file was not created"
-        data = json.loads(ckpt_path.read_text())
-        assert data["session_id"] == "test-session-123"
-        assert data["run_id"] == "test-run-456"
-        assert data["provider"] == "claude"
-        assert data["email"] == "test@example.com"
-        assert data["callback_port"] == 54545
-        assert data["live_view_url"] == "https://live.browser-use.com?wss=example"
-        assert data["status"] == "waiting"
-        print("PASS: write_checkpoint writes valid JSON with all fields")
-    bu_reauth.CHECKPOINT_FILE = orig_ckpt
+        with patch.object(bu_reauth, "CHECKPOINT_FILE", ckpt_path):
+            bu_reauth.write_checkpoint(
+                session_id="test-session-123",
+                run_id="test-run-456",
+                browser_session_id="test-browser-789",
+                live_view_url="https://live.browser-use.com?wss=example",
+                provider="claude",
+                email="test@example.com",
+                callback_port=54545,
+            )
+            assert ckpt_path.exists(), "Checkpoint file was not created"
+            data = json.loads(ckpt_path.read_text())
+            assert data["session_id"] == "test-session-123"
+            assert data["run_id"] == "test-run-456"
+            assert data["provider"] == "claude"
+            assert data["email"] == "test@example.com"
+            assert data["callback_port"] == 54545
+            assert data["live_view_url"] == "https://live.browser-use.com?wss=example"
+            assert data["status"] == "waiting"
+            assert ckpt_path.stat().st_mode & 0o777 == 0o600
+    print("PASS: write_checkpoint writes valid JSON with all fields")
 
 
 def test_checkpoint_trigger():
     """wait_for_checkpoint_signal detects trigger file."""
-    orig_trigger = bu_reauth.CHECKPOINT_TRIGGER
     with tempfile.TemporaryDirectory() as tmpdir:
         trigger_path = Path(tmpdir) / "trigger"
-        bu_reauth.CHECKPOINT_TRIGGER = trigger_path
+        with patch.object(bu_reauth, "CHECKPOINT_TRIGGER", trigger_path):
+            def create_trigger():
+                time.sleep(1)
+                trigger_path.touch()
 
-        # Create trigger file after a short delay
-        def create_trigger():
-            time.sleep(1)
-            trigger_path.touch()
-
-        import threading
-        t = threading.Thread(target=create_trigger)
-        t.start()
-
-        result = bu_reauth.wait_for_checkpoint_signal(timeout=10)
-        t.join()
-
-        assert result is True, "Expected trigger to be detected"
-        assert not trigger_path.exists(), "Trigger file should be cleaned up"
-        print("PASS: wait_for_checkpoint_signal detects and cleans up trigger")
-    bu_reauth.CHECKPOINT_TRIGGER = orig_trigger
+            import threading
+            thread = threading.Thread(target=create_trigger)
+            thread.start()
+            result = bu_reauth.wait_for_checkpoint_signal(timeout=10)
+            thread.join()
+            assert result is True, "Expected trigger to be detected"
+            assert not trigger_path.exists(), "Trigger file should be cleaned up"
+    print("PASS: wait_for_checkpoint_signal detects and cleans up trigger")
 
 
 def test_checkpoint_timeout():
     """wait_for_checkpoint_signal returns False on timeout."""
-    orig_trigger = bu_reauth.CHECKPOINT_TRIGGER
     with tempfile.TemporaryDirectory() as tmpdir:
         trigger_path = Path(tmpdir) / "trigger"
-        bu_reauth.CHECKPOINT_TRIGGER = trigger_path
-
-        result = bu_reauth.wait_for_checkpoint_signal(timeout=2)
-        assert result is False, "Expected False on timeout"
-        print("PASS: wait_for_checkpoint_signal returns False on timeout")
-    bu_reauth.CHECKPOINT_TRIGGER = orig_trigger
+        with patch.object(bu_reauth, "CHECKPOINT_TRIGGER", trigger_path):
+            result = bu_reauth.wait_for_checkpoint_signal(timeout=2)
+            assert result is False, "Expected False on timeout"
+    print("PASS: wait_for_checkpoint_signal returns False on timeout")
 
 
 def test_clear_checkpoint():
     """clear_checkpoint removes both checkpoint and trigger files."""
-    orig_ckpt = bu_reauth.CHECKPOINT_FILE
-    orig_trigger = bu_reauth.CHECKPOINT_TRIGGER
     with tempfile.TemporaryDirectory() as tmpdir:
         ckpt_path = Path(tmpdir) / "checkpoint.json"
         trigger_path = Path(tmpdir) / "trigger"
-        bu_reauth.CHECKPOINT_FILE = ckpt_path
-        bu_reauth.CHECKPOINT_TRIGGER = trigger_path
-
-        ckpt_path.write_text("{}")
-        trigger_path.touch()
-
-        bu_reauth.clear_checkpoint()
-
-        assert not ckpt_path.exists(), "Checkpoint file should be removed"
-        assert not trigger_path.exists(), "Trigger file should be removed"
-        print("PASS: clear_checkpoint removes both files")
-    bu_reauth.CHECKPOINT_FILE = orig_ckpt
-    bu_reauth.CHECKPOINT_TRIGGER = orig_trigger
-
+        with patch.object(bu_reauth, "CHECKPOINT_FILE", ckpt_path), \
+             patch.object(bu_reauth, "CHECKPOINT_TRIGGER", trigger_path):
+            ckpt_path.write_text("{}")
+            trigger_path.touch()
+            bu_reauth.clear_checkpoint()
+            assert not ckpt_path.exists(), "Checkpoint file should be removed"
+            assert not trigger_path.exists(), "Trigger file should be removed"
+    print("PASS: clear_checkpoint removes both files")
 
 def test_keep_browser_alive_flag():
     """BrowserUseClient.keep_browser_alive prevents browser cleanup."""
@@ -196,6 +174,8 @@ def test_keep_browser_alive_release():
     with patch.object(client, '_request'):
         client.stop_all_browsers()
 
+    assert client._browser_sessions == [], \
+        "Browser sessions should be released when keep_browser_alive=False"
     print("PASS: keep_browser_alive can be released for cleanup")
 
 
@@ -209,8 +189,8 @@ def test_exit_codes():
 
 def test_checkpoint_constants():
     """Checkpoint constants are properly defined."""
-    assert bu_reauth.CHECKPOINT_FILE == Path("/tmp/bu_reauth_checkpoint.json")
-    assert bu_reauth.CHECKPOINT_TRIGGER == Path("/tmp/bu_reauth_checkpoint_trigger")
+    assert bu_reauth.CHECKPOINT_FILE == bu_reauth.STATE_DIR / "bu_reauth_checkpoint.json"
+    assert bu_reauth.CHECKPOINT_TRIGGER == bu_reauth.STATE_DIR / "bu_reauth_checkpoint_trigger"
     assert bu_reauth.CHECKPOINT_POLL_INTERVAL == 5
     assert bu_reauth.CHECKPOINT_TIMEOUT == 600
     print("PASS: Checkpoint constants are properly defined")

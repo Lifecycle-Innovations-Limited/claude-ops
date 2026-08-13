@@ -91,8 +91,8 @@ function sameCanonicalPath(left, right) {
     typeof left === 'string' && typeof right === 'string' && canonicalProspective(left) === canonicalProspective(right)
   );
 }
-function assertSafeAncestors(path) {
-  let cursor = dirname(canonicalProspective(path));
+function assertSafeAncestorChain(path) {
+  let cursor = dirname(path);
   while (!existsSync(cursor)) cursor = dirname(cursor);
   let immediate = true;
   for (;;) {
@@ -105,6 +105,13 @@ function assertSafeAncestors(path) {
     cursor = dirname(cursor);
     immediate = false;
   }
+}
+function assertSafeAncestors(path) {
+  const raw = resolve(path);
+  const canonical = canonicalProspective(path);
+  // macOS system paths contain root-owned compatibility symlinks such as /var.
+  if (platform() !== 'darwin') assertSafeAncestorChain(raw);
+  assertSafeAncestorChain(canonical);
 }
 function mode(path) {
   return statSync(path).mode & 0o777;
