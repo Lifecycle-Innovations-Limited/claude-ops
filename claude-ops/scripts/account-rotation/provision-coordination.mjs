@@ -20,6 +20,7 @@ import {
 } from 'node:fs';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { canonicalJson, parseManifestBytes, readDeploymentConfig } from './staged-enrollment.mjs';
@@ -118,6 +119,14 @@ function processStart(pid) {
     return error?.code === 'ESRCH' ? { state: 'dead' } : { state: 'unknown' };
   }
   try {
+    if (platform() === 'darwin') {
+      const result = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+        encoding: 'utf8',
+        env: { ...process.env, LC_ALL: 'C' },
+      });
+      const startedAt = result.status === 0 ? Date.parse(result.stdout.trim().replace(/\s+/g, ' ')) : Number.NaN;
+      return Number.isSafeInteger(startedAt) ? { state: 'live', value: String(startedAt) } : { state: 'unknown' };
+    }
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
     const fields = stat.slice(stat.lastIndexOf(') ') + 2).split(' ');
     if (!/^\d+$/.test(fields[19] || '')) return { state: 'unknown' };
