@@ -72,9 +72,9 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -258,60 +258,141 @@ def _canary_status_rejection(status: int) -> str:
     return f"candidate canary failed (HTTP {status})"
 
 
+def _reserve_loopback_port() -> int:
+    """Ask the kernel for an unused loopback port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _candidate_proxy_config(auth_dir: Path, port: int, api_key: str) -> str:
+    """Build a minimal candidate-only CLIProxyAPI configuration."""
+    quoted_auth_dir = json.dumps(str(auth_dir))
+    quoted_api_key = json.dumps(api_key)
+    return (
+        'host: "127.0.0.1"\n'
+        f"port: {port}\n"
+        f"auth-dir: {quoted_auth_dir}\n"
+        "api-keys:\n"
+        f"  - {quoted_api_key}\n"
+        "remote-management:\n"
+        "  allow-remote: false\n"
+        '  secret-key: ""\n'
+        "debug: false\n"
+        "logging-to-file: false\n"
+        "usage-statistics-enabled: false\n"
+    )
+
+
+def _stop_candidate_proxy(process: subprocess.Popen):
+    """Terminate the candidate proxy process group."""
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+
+
 def send_canary(model: str, auth_path: Path, timeout: int = 30) -> tuple[bool, str]:
-    """Run one helper-owned inference against an isolated candidate only."""
-    command = os.environ.get("CRSPROXY_CANDIDATE_CANARY_CMD", "").strip()
-    if not command:
-        return False, "candidate canary helper is not configured"
+    """Launch and probe a candidate-only proxy owned by this validator."""
+    proxy_bin = os.environ.get("CRSPROXY_CANDIDATE_PROXY_BIN", HUB_BIN).strip()
+    if not proxy_bin or not Path(proxy_bin).is_file() or not os.access(proxy_bin, os.X_OK):
+        return False, "candidate proxy binary is unavailable"
+
+    try:
+        candidate_bytes = auth_path.read_bytes()
+    except OSError as e:
+        return False, f"cannot read candidate for canary: {type(e).__name__}"
+    candidate_digest = hashlib.sha256(candidate_bytes).hexdigest()
+    deadline = time.monotonic() + timeout
 
     with tempfile.TemporaryDirectory(prefix="crsproxy-candidate-") as tmpdir:
-        isolated_dir = Path(tmpdir) / "auths"
+        root = Path(tmpdir)
+        os.chmod(root, 0o700)
+        isolated_dir = root / "auths"
         isolated_dir.mkdir(mode=0o700)
         isolated_auth = isolated_dir / auth_path.name
-        shutil.copy2(auth_path, isolated_auth)
+        with open(isolated_auth, "xb") as fh:
+            fh.write(candidate_bytes)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.chmod(isolated_auth, 0o600)
-        candidate_digest = hashlib.sha256(isolated_auth.read_bytes()).hexdigest()
-        nonce = uuid.uuid4().hex
-        env = os.environ.copy()
-        env.update({
-            "CRSPROXY_CANDIDATE_AUTH_DIR": str(isolated_dir),
-            "CRSPROXY_CANDIDATE_AUTH_FILE": str(isolated_auth),
-            "CRSPROXY_CANDIDATE_DIGEST": candidate_digest,
-            "CRSPROXY_CANDIDATE_NONCE": nonce,
-            "CRSPROXY_CANDIDATE_MODEL": model,
-        })
+        if hashlib.sha256(isolated_auth.read_bytes()).hexdigest() != candidate_digest:
+            return False, "candidate canary copy digest mismatch"
+
+        port = _reserve_loopback_port()
+        api_key = f"candidate-{uuid.uuid4().hex}"
+        config_path = root / "config.yaml"
+        config_path.write_text(_candidate_proxy_config(isolated_dir, port, api_key), encoding="utf-8")
+        os.chmod(config_path, 0o600)
+        env = {
+            "HOME": str(root),
+            "PATH": os.environ.get("PATH", ""),
+            "TMPDIR": str(root),
+        }
+        process = None
         try:
-            completed = subprocess.run(
-                shlex.split(command), check=False, env=env, timeout=timeout,
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, encoding="utf-8")
-        except subprocess.TimeoutExpired:
-            return False, "candidate canary timed out"
+            process = subprocess.Popen(
+                [proxy_bin, "-config", str(config_path)],
+                cwd=root,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            endpoint = f"http://127.0.0.1:{port}/v1/chat/completions"
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            response = None
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    return False, f"candidate proxy exited before readiness (exit {process.returncode})"
+                try:
+                    response = requests.post(
+                        endpoint,
+                        headers=headers,
+                        json={
+                            "model": model,
+                            "messages": [{"role": "user", "content": "Reply with OK."}],
+                            "max_tokens": 8,
+                        },
+                        timeout=min(2, max(0.05, deadline - time.monotonic())),
+                    )
+                    break
+                except requests.RequestException:
+                    time.sleep(0.05)
+            if response is None:
+                return False, "candidate canary timed out"
+            if response.status_code != 200:
+                return False, _canary_status_rejection(response.status_code)
+            try:
+                result = response.json()
+                content = result["choices"][0]["message"]["content"]
+            except (ValueError, KeyError, IndexError, TypeError):
+                return False, "candidate canary returned invalid model response"
+            if not isinstance(content, str) or not content.strip():
+                return False, "candidate canary returned HTTP 200 without model content"
+            try:
+                current_digest = hashlib.sha256(auth_path.read_bytes()).hexdigest()
+            except OSError:
+                return False, "candidate changed during canary"
+            if current_digest != candidate_digest:
+                return False, "candidate changed during canary"
+            return True, "candidate canary passed"
         except OSError as e:
-            return False, f"candidate canary helper unavailable: {type(e).__name__}"
-        if completed.returncode != 0:
-            return False, f"candidate canary helper failed (exit {completed.returncode})"
-        try:
-            result = json.loads(completed.stdout)
-        except (json.JSONDecodeError, TypeError):
-            return False, "candidate canary helper returned invalid JSON"
-        if not isinstance(result, dict):
-            return False, "candidate canary helper returned invalid result"
-        if result.get("candidate_digest") != candidate_digest:
-            return False, "candidate canary digest mismatch"
-        if result.get("nonce") != nonce:
-            return False, "candidate canary nonce mismatch"
-        if result.get("model") != model:
-            return False, "candidate canary model mismatch"
-        status = result.get("http_status")
-        if not isinstance(status, int) or isinstance(status, bool):
-            return False, "candidate canary HTTP status is invalid"
-        if status != 200:
-            return False, _canary_status_rejection(status)
-        content = result.get("content")
-        if not isinstance(content, str) or not content.strip():
-            return False, "candidate canary returned HTTP 200 without model content"
-        return True, "candidate canary passed"
+            return False, f"candidate proxy unavailable: {type(e).__name__}"
+        finally:
+            if process is not None:
+                _stop_candidate_proxy(process)
 
 
 # ---------------------------------------------------------------------------
