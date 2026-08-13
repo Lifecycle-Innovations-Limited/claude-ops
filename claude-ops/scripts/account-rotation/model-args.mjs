@@ -1,5 +1,5 @@
 const UNSUPPORTED_FABLE_MODELS = /^(?:fable|claude-fable-5)(?:\[[^\]]+\])?$/i;
-const CANONICAL_FABLE_REPLACEMENT = 'claude-opus-4-6';
+const CANONICAL_FABLE_REPLACEMENT = 'gpt-5.4';
 
 export function normalizeClaudeModelValue(value) {
   if (typeof value !== 'string' || !UNSUPPORTED_FABLE_MODELS.test(value)) return value;

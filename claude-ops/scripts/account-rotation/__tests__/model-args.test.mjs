@@ -11,10 +11,10 @@ const accountRotationDir = dirname(fileURLToPath(import.meta.url));
 const scriptsDir = dirname(accountRotationDir);
 
 for (const stale of ['fable', 'FABLE', 'fable[1m]', 'claude-fable-5', 'claude-fable-5[1m]']) {
-  assert.equal(normalizeClaudeModelValue(stale), 'claude-opus-4-6');
+  assert.equal(normalizeClaudeModelValue(stale), 'gpt-5.4');
 }
 
-for (const supported of ['opus', 'opus[1m]', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5']) {
+for (const supported of ['opus', 'opus[1m]', 'gpt-5.4', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5']) {
   assert.equal(normalizeClaudeModelValue(supported), supported);
 }
 
@@ -22,12 +22,12 @@ assert.deepEqual(normalizeClaudeModelArgs(['-p', 'hello', '--model', 'fable[1m]'
   '-p',
   'hello',
   '--model',
-  'claude-opus-4-6',
+  'gpt-5.4',
   '--effort',
   'high',
 ]);
 assert.deepEqual(normalizeClaudeModelArgs(['--model=claude-fable-5', '--model', 'claude-sonnet-4-6']), [
-  '--model=claude-opus-4-6',
+  '--model=gpt-5.4',
   '--model',
   'claude-sonnet-4-6',
 ]);
@@ -53,7 +53,7 @@ const launched = spawnSync(process.execPath, [join(scriptsDir, 'launch-claude.mj
 });
 assert.equal(launched.status, 0, launched.stderr);
 const launchedArgs = JSON.parse(readFileSync(capturedArgs, 'utf8'));
-assert.equal(launchedArgs.includes('--model=claude-opus-4-6'), true);
+assert.equal(launchedArgs.includes('--model=gpt-5.4'), true);
 assert.equal(
   launchedArgs.some((arg) => /fable/i.test(arg)),
   false,
