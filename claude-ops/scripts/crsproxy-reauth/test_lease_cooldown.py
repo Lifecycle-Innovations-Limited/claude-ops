@@ -20,7 +20,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # Add the script directory to the path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -31,10 +31,8 @@ import bu_reauth
 
 def test_lease_file_constant():
     """Lease file path is correct."""
-    assert bu_reauth.LEASE_FILE == Path(
-        "/tmp/crsproxy-claude-oauth-lease.json"
-    ), f"Expected /tmp/crsproxy-claude-oauth-lease.json, got {bu_reauth.LEASE_FILE}"
-    print("PASS: Lease file path is /tmp/crsproxy-claude-oauth-lease.json")
+    assert bu_reauth.LEASE_FILE == bu_reauth.STATE_DIR / "crsproxy-claude-oauth-lease.json"
+    print("PASS: Lease file path is in the private state directory")
 
 
 def test_lease_stale_seconds():
@@ -171,6 +169,7 @@ def test_release_lease_missing_ok():
         # No lease file exists — should not raise
         bu_reauth.release_lease()
         print("PASS: release_lease handles missing lease gracefully")
+    bu_reauth.LEASE_FILE = orig_lease
 
 
 def test_release_lease_always_called():
@@ -189,9 +188,7 @@ def test_release_lease_always_called():
 # ---------------------------------------------------------------------------
 def test_email_cooldown_constants():
     """Email cooldown constants are correct."""
-    assert bu_reauth.EMAIL_COOLDOWN_FILE == Path(
-        "/tmp/crsproxy-email-cooldown.json"
-    )
+    assert bu_reauth.EMAIL_COOLDOWN_FILE == bu_reauth.STATE_DIR / "crsproxy-email-cooldown.json"
     assert bu_reauth.EMAIL_COOLDOWN_WINDOW == 300
     assert bu_reauth.EMAIL_COOLDOWN_THRESHOLD == 3
     assert bu_reauth.EMAIL_COOLDOWN_DURATION == 300
