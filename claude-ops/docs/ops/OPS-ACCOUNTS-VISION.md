@@ -101,8 +101,8 @@ the plugin). External CRS remains advanced-only.
 
 - `crs-priority-daemon.mjs` — pool priority / schedulable policy  
 - `crs-429-cooldown.mjs` — rate-limit cooldown  
-- `crs-401-refresher.mjs` — proactive refresh  
-- `crs-token-feed.mjs` — vault → pool  
+- `refresh-tokens.mjs` — identity-verified proactive vault refresh
+- `crs-token-feed.mjs` — identity-verified vault → pool publication
 - `crs-pool-config.mjs`, `crs-health-watch.mjs`, `crs-bedrock-guard.mjs` — optional  
 
 These currently *call* CRS admin APIs. Dual-mode target:
