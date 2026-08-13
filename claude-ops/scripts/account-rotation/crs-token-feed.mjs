@@ -19,7 +19,7 @@ import { fileURLToPath } from 'url';
 import { execSync, spawnSync } from 'child_process';
 import { foreignActiveKeys } from './account-leases.mjs';
 import { assertCrsInvariant } from './route-state.mjs';
-import { acquireRefreshLock } from './crs-refresh-lock.mjs';
+import { acquireRefreshLock, claimRefreshPace } from './crs-refresh-lock.mjs';
 import {
   buildCrsNameMaps,
   crsBaseUrl,
@@ -218,6 +218,12 @@ async function main() {
           log(`${key}: refresh lock held elsewhere — propagate-only`);
         } else {
           try {
+            const paceWaitMs = claimRefreshPace(key);
+            if (paceWaitMs === null) {
+              log(`${key}: refresh pacing lease held elsewhere — propagate-only`);
+              return;
+            }
+            if (paceWaitMs > 0) await sleep(paceWaitMs);
             const r = await withAuthWriterLock(async () => {
               // Re-read under the canonical writer lock: refresh tokens are
               // single-use and the resulting file update is one transaction.

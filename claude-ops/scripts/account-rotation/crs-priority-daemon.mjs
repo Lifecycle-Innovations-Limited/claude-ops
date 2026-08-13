@@ -319,6 +319,15 @@ async function liveUsage(email) {
   }
 }
 
+function authenticationUnavailable(a) {
+  const status = String(a.status || '').toLowerCase();
+  const detail = [a.lastError, a.error, a.errorMessage, a.statusMessage, a.statusReason].filter(Boolean).join(' ');
+  return (
+    status === 'auth_repair' ||
+    /\b(401|403)\b|authentication[_ -]?error|invalid (api )?key|invalid.*token|revoked/i.test(detail)
+  );
+}
+
 function genuineRateLimit(a, now = Date.now()) {
   const flagged = !!a.rateLimitStatus?.isRateLimited || !!a.opusRateLimitStatus?.isRateLimited;
   return flagged && !rateLimitLooksStale(a, now);
@@ -475,19 +484,36 @@ function decideMaxOut(accts, nowMs) {
     const u7 = lu?.u7 ?? cu.sevenDay?.utilization;
     const sw = a.sessionWindow?.sessionWindowStatus || null;
     const cur = a.schedulable !== false;
+    const unavailable = authenticationUnavailable(a);
     const quota = liveQuotaExhaustion(a, nowMs);
     const rl = Boolean(quota);
     const overloaded = genuineOverload(a, nowMs);
 
     let desired = true;
     let reason = `max-out (5h=${u5 ?? '?'} 7d=${u7 ?? '?'} sw=${sw ?? 'none'})`;
-    if (quota) {
+    if (unavailable) {
+      desired = false;
+      reason = 'authentication unavailable; staged re-auth required';
+    } else if (quota) {
       desired = false;
       reason = `quota exhausted (${quota.windows.join('+')}); auto-reschedule ${quota.resetAt}`;
     } else if (overloaded) {
       reason = 'overloaded(529), staying schedulable';
     }
-    return { a, cur, desired, reason, soft: false, sw, u5: u5 ?? '?', u7: u7 ?? '?', rl, overloaded, quota };
+    return {
+      a,
+      cur,
+      desired,
+      reason,
+      soft: false,
+      sw,
+      u5: u5 ?? '?',
+      u7: u7 ?? '?',
+      unavailable,
+      rl,
+      overloaded,
+      quota,
+    };
   });
 }
 
@@ -499,6 +525,7 @@ function decideConservative(accts, nowMs) {
     const u7 = lu?.u7 ?? cu.sevenDay?.utilization;
     const sw = a.sessionWindow?.sessionWindowStatus || null;
     const cur = a.schedulable !== false;
+    const unavailable = authenticationUnavailable(a);
     const quota = liveQuotaExhaustion(a, nowMs);
     const rl = Boolean(quota);
     const overloaded = genuineOverload(a, nowMs);
@@ -506,20 +533,23 @@ function decideConservative(accts, nowMs) {
     let desired = true;
     let reason = 'scheduled unless live quota is exhausted';
     let soft = false;
-    if (quota) {
+    if (unavailable) {
+      desired = false;
+      reason = 'authentication unavailable; staged re-auth required';
+    } else if (quota) {
       desired = false;
       reason = `quota exhausted (${quota.windows.join('+')}); auto-reschedule ${quota.resetAt}`;
     } else if (overloaded) {
       reason = 'overloaded(529), staying schedulable';
     }
-    return { a, cur, desired, reason, soft, sw, u5: u5 ?? '?', u7: u7 ?? '?', rl, overloaded, quota };
+    return { a, cur, desired, reason, soft, sw, u5: u5 ?? '?', u7: u7 ?? '?', unavailable, rl, overloaded, quota };
   });
 
-  let usable = decisions.filter((d) => d.desired && !d.rl && !d.overloaded).length;
+  let usable = decisions.filter((d) => d.desired && !d.unavailable && !d.rl && !d.overloaded).length;
   if (usable < FLOOR) {
     const unum = (d) => (typeof d.u5 === 'number' ? d.u5 : 50);
     const revertable = decisions
-      .filter((d) => d.desired === false && d.soft && !d.rl && !d.overloaded)
+      .filter((d) => d.desired === false && d.soft && !d.unavailable && !d.rl && !d.overloaded)
       .sort((x, y) => unum(x) - unum(y));
     for (const d of revertable) {
       if (usable >= FLOOR) break;
@@ -527,7 +557,7 @@ function decideConservative(accts, nowMs) {
       d.reason = `FLOOR(${FLOOR}): held schedulable despite ${d.reason}`;
       usable++;
     }
-    const final = decisions.filter((d) => d.desired && !d.rl && !d.overloaded).length;
+    const final = decisions.filter((d) => d.desired && !d.unavailable && !d.rl && !d.overloaded).length;
     if (final < FLOOR)
       log(`WARNING: only ${final} usable account(s) (< floor ${FLOOR}) — pool is capacity-constrained`);
   }
@@ -847,7 +877,10 @@ async function main() {
       log(`${d.a.name}: schedulable ${d.cur}→${d.desired} (${d.reason}) [HTTP ${put.status}]`);
     }
     const on = decisions.filter((d) => d.desired).map((d) => d.a.name);
-    const off = decisions.filter((d) => !d.desired).map((d) => `${d.a.name}(${d.sw || (d.rl ? 'RL' : '?')})`);
+    const off = decisions
+      .filter((d) => !d.desired)
+      .map((d) => `${d.a.name}(${d.unavailable ? 'AUTH' : d.sw || (d.rl ? 'RL' : '?')})`);
+    if (!on.length) log('WARNING: all active Claude accounts unavailable; leaving pool honestly unschedulable');
     log(
       `tick: ${changed} change(s). live-quota=${liveN}/${decisions.length} schedulable=${on.length} [${on.join(',')}] | off=[${off.join(',')}]`,
     );

@@ -41,9 +41,9 @@
 //   manualDisablePath      default: <stateDir>/crs-manual-disable.json (optional
 //                          allow-list of account ids/names to always leave alone)
 //   logDir                 default: <plugin-data-dir>/account-rotation/crs-logs.
-//                          Shared with crs-401-refresher.mjs — this reconciler
-//                          reads claude-relay-error-<date>.log from here for its
-//                          optional lead signal. Unset -> that signal is disabled
+//                          This reconciler reads claude-relay-error-<date>.log
+//                          from here for its optional lead signal. Unset -> that
+//                          signal is disabled
 //                          (rateLimitStatus alone is still a real Anthropic signal
 //                          and is sufficient on its own).
 //   logTzOffset            default: "+00:00" — offset appended to naive log
@@ -103,8 +103,7 @@ const MANUAL_DISABLE_PATH =
   expandHome(process.env.CRS_MANUAL_DISABLE_PATH || C.manualDisablePath) || join(STATE_DIR, 'crs-manual-disable.json');
 // Unset by default: the error-log lead signal is opt-in extra sensitivity, not a
 // required capability. rateLimitStatus alone (signal #1) is a real Anthropic
-// signal and is sufficient on its own. Shared logDir/logTzOffset config with
-// crs-401-refresher.mjs.
+// signal and is sufficient on its own.
 // Defaults to a real (likely-absent-on-a-fresh-install) path rather than a null
 // "disabled" sentinel: scanErrorLog() below no-ops safely via existsSync() when
 // the directory/file isn't there, so this stays a safe no-op until you actually
@@ -261,6 +260,18 @@ async function tick() {
             rateLimitEndAt: new Date(cooldownUntil).toISOString(),
             rateLimitReason: reason || 'api-rl',
           });
+          if (r.status < 200 || r.status >= 300) {
+            state[a.id] = {
+              ...state[a.id],
+              retryAction: 'hold',
+              retryAfter: nowMs + 60_000,
+              lastToggleStatus: r.status,
+            };
+          } else {
+            delete state[a.id].retryAction;
+            delete state[a.id].retryAfter;
+            delete state[a.id].lastToggleStatus;
+          }
           changes.push({
             name: a.name,
             action: cur ? 'OFF' : 'HOLD',
@@ -279,6 +290,18 @@ async function tick() {
           rateLimitEndAt: new Date(prevHeld).toISOString(),
           rateLimitReason: state[a.id]?.reason || 'persisted-api-rl-bench',
         });
+        if (r.status < 200 || r.status >= 300) {
+          state[a.id] = {
+            ...state[a.id],
+            retryAction: 'hold',
+            retryAfter: nowMs + 60_000,
+            lastToggleStatus: r.status,
+          };
+        } else {
+          delete state[a.id].retryAction;
+          delete state[a.id].retryAfter;
+          delete state[a.id].lastToggleStatus;
+        }
         changes.push({
           name: a.name,
           action: cur ? 'OFF' : 'HOLD',
@@ -289,14 +312,25 @@ async function tick() {
         changes.push({ name: a.name, action: '[dry]HOLD', reason: 'persisted cooldown', http: '-' });
       }
     } else if (prevHeld && prevHeld <= nowMs) {
-      delete state[a.id];
       if (!cur) {
         if (DRY) {
           changes.push({ name: a.name, action: '[dry]ON', reason: 'cooldown expired', http: '-' });
         } else {
           const r = await toggle(auth, a.id, true);
+          if (r.status >= 200 && r.status < 300) {
+            delete state[a.id];
+          } else {
+            state[a.id] = {
+              ...state[a.id],
+              retryAction: 'release',
+              retryAfter: nowMs + 60_000,
+              lastToggleStatus: r.status,
+            };
+          }
           changes.push({ name: a.name, action: 'ON', reason: 'cooldown expired', http: r.status });
         }
+      } else {
+        delete state[a.id];
       }
     }
   }

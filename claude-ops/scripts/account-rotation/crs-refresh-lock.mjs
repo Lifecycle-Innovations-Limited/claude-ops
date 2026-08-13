@@ -1,31 +1,8 @@
-#!/usr/bin/env node
-/**
- * crs-refresh-lock.mjs — per-account single-writer OAuth refresh lock.
- *
- * crs-token-feed.mjs calls acquireRefreshLock(key) before refreshing a rotator
- * account's OAuth token, so an overlapping run (e.g. a slow tick plus a
- * cron/timer overlap) can't send two concurrent refresh_token grants for the
- * same account — the second grant would race the first and could invalidate
- * a token the first request is still using.
- *
- * Local, mkdir-based advisory lock (no native deps, same approach as
- * crs-reconciler-state.mjs's withOwnStateLock): synchronous, per-key, with a
- * TTL-based stale-lock reclaim so a crashed process can't wedge a key
- * forever. This is a single-host lock — sufficient for the default
- * single-timer cadence this ships with. A distributed lock (e.g. Redis, for
- * multiple hosts sharing one vault/pool) is a possible future extension, not
- * implemented here.
- *
- * CONFIG (env only, no config.json keys — this lock is infrastructure, not a
- * feature to toggle):
- *   CRS_REFRESH_LOCK_DIR      default: <plugin-data-dir>/account-rotation/refresh-locks
- *   CRS_REFRESH_LOCK_TTL_SEC  default: 120 — age after which a lock is considered
- *                             stale (owner crashed mid-refresh) and reclaimed.
- */
-
-import { mkdirSync, rmdirSync, statSync, existsSync } from 'fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { randomBytes } from 'crypto';
+import { execSync } from 'child_process';
 
 const DEFAULT_LOCK_DIR = join(
   process.env.CLAUDE_PLUGIN_DATA_DIR || join(homedir(), '.claude', 'plugins', 'data', 'ops-ops-marketplace'),
@@ -34,58 +11,174 @@ const DEFAULT_LOCK_DIR = join(
 );
 const LOCK_DIR = process.env.CRS_REFRESH_LOCK_DIR || DEFAULT_LOCK_DIR;
 const LOCK_TTL_MS = (Number(process.env.CRS_REFRESH_LOCK_TTL_SEC) || 120) * 1000;
+const GUARD_TTL_MS = 10_000;
+const PRODUCTION_MIN_PACE_MS = 1_000;
+const MIN_PACE_MS = Math.max(
+  process.env.CRS_REFRESH_TEST_ALLOW_ZERO_PACE === '1' ? 0 : PRODUCTION_MIN_PACE_MS,
+  Number(process.env.CRS_REFRESH_MIN_PACE_MS) || PRODUCTION_MIN_PACE_MS,
+);
+const MAX_JITTER_MS = Math.max(0, Math.min(5_000, Number(process.env.CRS_REFRESH_JITTER_MS) || 500));
+
+function safeKey(key) {
+  return String(key).replace(/[^a-zA-Z0-9_.@-]/g, '_');
+}
 
 function lockPathFor(key) {
-  const safeKey = String(key).replace(/[^a-zA-Z0-9_.@-]/g, '_');
-  return join(LOCK_DIR, `${safeKey}.lock`);
+  return join(LOCK_DIR, `${safeKey(key)}.lock.json`);
 }
 
-/**
- * Try to acquire the refresh lock for `key`.
- * @returns {(() => void) | null} a release() function on success, or null if
- *   the lock is already held by a live (non-stale) refresh for this key.
- */
-export function acquireRefreshLock(key) {
-  const lockPath = lockPathFor(key);
-  mkdirSync(LOCK_DIR, { recursive: true });
+function guardPathFor(key) {
+  return join(LOCK_DIR, `${safeKey(key)}.guard`);
+}
 
-  if (tryMkdir(lockPath)) return () => release(lockPath);
-
-  // Lock already exists — reclaim it if stale (owner crashed mid-refresh),
-  // otherwise report held.
-  let ageMs;
+function readJson(path) {
   try {
-    ageMs = Date.now() - statSync(lockPath).mtimeMs;
+    return JSON.parse(readFileSync(path, 'utf8'));
   } catch {
-    // Vanished between our failed mkdir and this stat (owner just released
-    // it) — try once more.
-    return tryMkdir(lockPath) ? () => release(lockPath) : null;
-  }
-  if (ageMs < LOCK_TTL_MS) return null;
-
-  try {
-    rmdirSync(lockPath);
-  } catch {
-    // Someone else reclaimed it first — treat as held.
     return null;
   }
-  return tryMkdir(lockPath) ? () => release(lockPath) : null;
 }
 
-function tryMkdir(lockPath) {
+function writeJsonAtomic(path, value) {
+  const tmp = `${path}.tmp.${process.pid}.${randomBytes(8).toString('hex')}`;
+  writeFileSync(tmp, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
+  renameSync(tmp, path);
+}
+
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
-    mkdirSync(lockPath);
+    process.kill(pid, 0);
     return true;
-  } catch (e) {
-    if (e.code !== 'EEXIST') throw e;
+  } catch {
     return false;
   }
 }
 
-function release(lockPath) {
+function sleepBriefly() {
   try {
-    if (existsSync(lockPath)) rmdirSync(lockPath);
-  } catch {
-    // Already gone (e.g. reclaimed as stale by another process) — fine.
+    execSync('sleep 0.01', { stdio: 'ignore', timeout: 100 });
+  } catch {}
+}
+
+function tryCreateGuard(path, owner) {
+  try {
+    mkdirSync(path);
+  } catch (error) {
+    if (error.code === 'EEXIST') return false;
+    throw error;
   }
+  try {
+    writeFileSync(join(path, 'owner.json'), JSON.stringify(owner), { mode: 0o600, flag: 'wx' });
+    return true;
+  } catch (error) {
+    rmSync(path, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function reclaimStaleGuard(path) {
+  const observed = readJson(join(path, 'owner.json'));
+  const age = Date.now() - Number(observed?.acquiredAt || 0);
+  if (observed && pidAlive(Number(observed.pid)) && age < GUARD_TTL_MS) return false;
+  const tombstone = `${path}.stale.${process.pid}.${randomBytes(8).toString('hex')}`;
+  try {
+    renameSync(path, tombstone);
+  } catch {
+    return false;
+  }
+  const claimed = readJson(join(tombstone, 'owner.json'));
+  if (claimed?.ownerNonce !== observed?.ownerNonce) {
+    try {
+      renameSync(tombstone, path);
+    } catch {}
+    return false;
+  }
+  rmSync(tombstone, { recursive: true, force: true });
+  return true;
+}
+
+function withGuard(key, action) {
+  mkdirSync(LOCK_DIR, { recursive: true });
+  const path = guardPathFor(key);
+  const owner = { ownerNonce: randomBytes(16).toString('hex'), pid: process.pid, acquiredAt: Date.now() };
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (tryCreateGuard(path, owner)) {
+      try {
+        return action();
+      } finally {
+        const current = readJson(join(path, 'owner.json'));
+        if (current?.ownerNonce === owner.ownerNonce) rmSync(path, { recursive: true, force: true });
+      }
+    }
+    reclaimStaleGuard(path);
+    sleepBriefly();
+  }
+  return null;
+}
+
+/** Acquire one account refresh lease with owner-checked renewal and release. */
+export function acquireRefreshLock(key) {
+  const lockPath = lockPathFor(key);
+  const ownerNonce = randomBytes(16).toString('hex');
+  const acquiredAt = Date.now();
+  const acquired = withGuard(key, () => {
+    const current = readJson(lockPath);
+    const renewedAt = Number(current?.renewedAt || current?.acquiredAt || 0);
+    if (current && pidAlive(Number(current.pid)) && Date.now() - renewedAt < LOCK_TTL_MS) return false;
+    writeJsonAtomic(lockPath, { ownerNonce, pid: process.pid, acquiredAt, renewedAt: acquiredAt });
+    return true;
+  });
+  if (!acquired) return null;
+
+  let active = true;
+  const renew = () => {
+    if (!active) return false;
+    return Boolean(
+      withGuard(key, () => {
+        const current = readJson(lockPath);
+        if (current?.ownerNonce !== ownerNonce || current.pid !== process.pid) return false;
+        writeJsonAtomic(lockPath, { ...current, renewedAt: Date.now() });
+        return true;
+      }),
+    );
+  };
+  const heartbeat = setInterval(renew, Math.max(100, Math.floor(LOCK_TTL_MS / 3)));
+  heartbeat.unref?.();
+
+  const release = () => {
+    if (!active) return false;
+    active = false;
+    clearInterval(heartbeat);
+    return Boolean(
+      withGuard(key, () => {
+        const current = readJson(lockPath);
+        if (current?.ownerNonce !== ownerNonce || current.pid !== process.pid) return false;
+        rmSync(lockPath, { force: true });
+        return true;
+      }),
+    );
+  };
+  release.renew = renew;
+  release.ownerNonce = ownerNonce;
+  return release;
+}
+
+function pacingPathFor(key) {
+  return join(LOCK_DIR, `${safeKey(key)}.next.json`);
+}
+
+function readNextEligible(path) {
+  return Number(readJson(path)?.nextEligibleAt) || 0;
+}
+
+export function claimRefreshPace(key, nowMs = Date.now(), random = Math.random) {
+  return withGuard(`${key}.pace`, () => {
+    const path = pacingPathFor(key);
+    const eligible = readNextEligible(path);
+    const startAt = Math.max(nowMs, eligible);
+    const jitterMs = Math.floor(Math.max(0, Math.min(1, Number(random()) || 0)) * (MAX_JITTER_MS + 1));
+    writeJsonAtomic(path, { nextEligibleAt: startAt + MIN_PACE_MS + jitterMs });
+    return Math.max(0, startAt - nowMs);
+  });
 }
