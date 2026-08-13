@@ -14,7 +14,6 @@ Run locally (syntax/logic only, no hub dependencies):
   python3 test_browser_cleanup.py
 """
 
-import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch

@@ -725,8 +725,8 @@ class BrowserUseClient:
                 ed = e.get("data", {})
                 if e.get("type") == "browser.ready":
                     return ed.get("live_view_url", "")
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"Live view extraction error: {e}")
         return ""
 
 
@@ -776,7 +776,8 @@ def get_oauth_url(log_path: Path, provider: str,
             matches = re.findall(pattern, text)
             if matches:
                 return matches[-1]
-        except Exception:
+        except (OSError, UnicodeDecodeError):
+            # The login log may not exist yet or may be mid-write; retry.
             pass
         time.sleep(1)
     return None
@@ -815,8 +816,8 @@ def cleanup_login_process(proc: subprocess.Popen):
     if master_fd is not None:
         try:
             os.close(master_fd)
-        except OSError:
-            pass
+        except OSError as e:
+            log(f"PTY cleanup error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -933,8 +934,8 @@ def detect_captcha(run_result: dict, client: BrowserUseClient) -> bool:
                 for indicator in captcha_indicators:
                     if indicator in event_str:
                         return True
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"Captcha event inspection error: {e}")
 
     return False
 
@@ -991,8 +992,8 @@ def wait_for_checkpoint_signal(timeout: int = CHECKPOINT_TIMEOUT) -> bool:
             log("[CAPTCHA_CHECKPOINT] Trigger file detected")
             try:
                 CHECKPOINT_TRIGGER.unlink()
-            except OSError:
-                pass
+            except OSError as e:
+                log(f"Checkpoint trigger cleanup error: {e}")
             return True
         time.sleep(CHECKPOINT_POLL_INTERVAL)
     return False
@@ -1003,8 +1004,8 @@ def clear_checkpoint():
     for f in (CHECKPOINT_FILE, CHECKPOINT_TRIGGER):
         try:
             f.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as e:
+            log(f"Checkpoint cleanup error for {f}: {e}")
 
 
 def handle_captcha_checkpoint(client: BrowserUseClient, run_id: str,
@@ -1693,102 +1694,102 @@ def main():
 
     # Set up log file
     log_path = args.log_file or str(LOG_DIR / "bu_reauth.log")
-    _log_file = open(log_path, "a", encoding="utf-8")
-    atexit.register(_log_file.close)
+    with open(log_path, "a", encoding="utf-8") as log_file:
+        _log_file = log_file
 
-    # Override checkpoint timeout if specified
-    if args.checkpoint_timeout > 0:
-        global CHECKPOINT_TIMEOUT
-        CHECKPOINT_TIMEOUT = args.checkpoint_timeout
+        # Override checkpoint timeout if specified
+        if args.checkpoint_timeout > 0:
+            global CHECKPOINT_TIMEOUT
+            CHECKPOINT_TIMEOUT = args.checkpoint_timeout
 
-    # Set overall timeout before all execution modes.
-    signal.signal(signal.SIGALRM, _timeout_handler)
-    signal.alarm(TOTAL_TIMEOUT)
+        # Set overall timeout before all execution modes.
+        signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(TOTAL_TIMEOUT)
 
-    # --- Validate-only mode: standalone candidate validation ---
-    if args.validate_only:
-        meta = PROVIDERS[args.provider]
-        auth_file = AUTH_DIR / f"{meta['auth_file_prefix']}-{args.email}.json"
-        log(f"=== Validate-only: {args.provider} / {safe_email(args.email)} ===")
-        log(f"Auth file: {auth_file.name}")
+        # --- Validate-only mode: standalone candidate validation ---
+        if args.validate_only:
+            meta = PROVIDERS[args.provider]
+            auth_file = AUTH_DIR / f"{meta['auth_file_prefix']}-{args.email}.json"
+            log(f"=== Validate-only: {args.provider} / {safe_email(args.email)} ===")
+            log(f"Auth file: {auth_file.name}")
 
-        if not auth_file.exists():
-            log(f"[FAIL] Auth file not found: {auth_file.name}")
-            return EXIT_FAILURE
-
-        valid, reason = validate_candidate(
-            auth_path=auth_file,
-            expected_email=args.email,
-            expected_type=args.provider,
-            canary_model=meta.get("canary_model", ""),
-            skip_canary=args.skip_canary,
-        )
-
-        if not valid:
-            log(f"[FAIL] Validation failed: {reason}")
-            return EXIT_FAILURE
-
-        log(f"[OK] Validation passed: {reason}")
-
-        if args.activate:
-            log("Atomically activating auth file...")
-            if not activate_auth_file(auth_file):
-                log("[FAIL] Could not activate auth file")
+            if not auth_file.exists():
+                log(f"[FAIL] Auth file not found: {auth_file.name}")
                 return EXIT_FAILURE
-            log(f"[OK] Auth file activated: {auth_file.name}")
 
-        return EXIT_SUCCESS
+            valid, reason = validate_candidate(
+                auth_path=auth_file,
+                expected_email=args.email,
+                expected_type=args.provider,
+                canary_model=meta.get("canary_model", ""),
+                skip_canary=args.skip_canary,
+            )
 
-    # --- Checkpoint-resume mode: resume from a hCaptcha checkpoint ---
-    if args.checkpoint_resume:
-        return _checkpoint_resume(args)
+            if not valid:
+                log(f"[FAIL] Validation failed: {reason}")
+                return EXIT_FAILURE
 
-    # Load API key from environment
-    api_key = os.environ.get("BROWSER_USE_API_KEY", "")
-    if not api_key:
-        # Try loading from .env
-        env_path = Path("/opt/crsproxy/.env")
-        if env_path.exists():
-            for line in env_path.read_text().splitlines():
-                if line.startswith("BROWSER_USE_API_KEY="):
-                    api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    break
+            log(f"[OK] Validation passed: {reason}")
 
-    if not api_key:
-        log("[FATAL] BROWSER_USE_API_KEY not found in environment or .env")
-        return EXIT_FAILURE
+            if args.activate:
+                log("Atomically activating auth file...")
+                if not activate_auth_file(auth_file):
+                    log("[FAIL] Could not activate auth file")
+                    return EXIT_FAILURE
+                log(f"[OK] Auth file activated: {auth_file.name}")
 
-    if args.dry_run:
-        log(f"=== DRY RUN: {args.provider} / {safe_email(args.email)} ===")
-    else:
-        log(f"=== Reauth: {args.provider} / {safe_email(args.email)} ===")
+            return EXIT_SUCCESS
 
-    client = BrowserUseClient(api_key)
+        # --- Checkpoint-resume mode: resume from a hCaptcha checkpoint ---
+        if args.checkpoint_resume:
+            return _checkpoint_resume(args)
 
-    # Register cleanup to stop all browsers on any exit
-    atexit.register(client.stop_all_browsers)
+        # Load API key from environment
+        api_key = os.environ.get("BROWSER_USE_API_KEY", "")
+        if not api_key:
+            # Try loading from .env
+            env_path = Path("/opt/crsproxy/.env")
+            if env_path.exists():
+                for line in env_path.read_text().splitlines():
+                    if line.startswith("BROWSER_USE_API_KEY="):
+                        api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
 
-    try:
-        exit_code = run_reauth(
-            provider=args.provider,
-            email=args.email,
-            gog_account=args.gog_account,
-            client=client,
-            dry_run=args.dry_run,
-        )
-    except TimeoutError as e:
-        log(f"[TIMEOUT] {e}")
-        exit_code = EXIT_FAILURE
-    except KeyboardInterrupt:
-        log("[INTERRUPTED] User interrupted")
-        exit_code = EXIT_FAILURE
-    finally:
-        signal.alarm(0)  # Cancel the alarm
-        # Ensure all browser sessions are stopped
-        client.stop_all_browsers()
+        if not api_key:
+            log("[FATAL] BROWSER_USE_API_KEY not found in environment or .env")
+            return EXIT_FAILURE
 
-    log(f"=== Exit code: {exit_code} ===")
-    return exit_code
+        if args.dry_run:
+            log(f"=== DRY RUN: {args.provider} / {safe_email(args.email)} ===")
+        else:
+            log(f"=== Reauth: {args.provider} / {safe_email(args.email)} ===")
+
+        client = BrowserUseClient(api_key)
+
+        # Register cleanup to stop all browsers on any exit
+        atexit.register(client.stop_all_browsers)
+
+        try:
+            exit_code = run_reauth(
+                provider=args.provider,
+                email=args.email,
+                gog_account=args.gog_account,
+                client=client,
+                dry_run=args.dry_run,
+            )
+        except TimeoutError as e:
+            log(f"[TIMEOUT] {e}")
+            exit_code = EXIT_FAILURE
+        except KeyboardInterrupt:
+            log("[INTERRUPTED] User interrupted")
+            exit_code = EXIT_FAILURE
+        finally:
+            signal.alarm(0)  # Cancel the alarm
+            # Ensure all browser sessions are stopped
+            client.stop_all_browsers()
+
+        log(f"=== Exit code: {exit_code} ===")
+        return exit_code
 
 
 if __name__ == "__main__":
