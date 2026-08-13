@@ -23,9 +23,10 @@ function run(script, env, args = []) {
   });
 }
 
-function startFixture(initialAccounts) {
+function startFixture(initialAccounts, toggleStatuses = []) {
   let accounts = structuredClone(initialAccounts);
   const toggles = [];
+  const queuedToggleStatuses = [...toggleStatuses];
   const server = createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) body += chunk;
@@ -39,18 +40,21 @@ function startFixture(initialAccounts) {
     const toggle = req.url?.match(/^\/admin\/claude-accounts\/([^/]+)\/toggle-schedulable$/);
     if (toggle && req.method === 'PUT') {
       const update = JSON.parse(body || '{}');
-      toggles.push({ id: toggle[1], update });
-      accounts = accounts.map((account) =>
-        account.id === toggle[1]
-          ? {
-              ...account,
-              schedulable: update.schedulable,
-              rateLimitEndAt: update.rateLimitEndAt ?? account.rateLimitEndAt,
-              rateLimitReason: update.rateLimitReason ?? account.rateLimitReason,
-            }
-          : account,
-      );
-      return json(200, { success: true });
+      const status = queuedToggleStatuses.shift() ?? 200;
+      toggles.push({ id: toggle[1], update, status });
+      if (status >= 200 && status < 300) {
+        accounts = accounts.map((account) =>
+          account.id === toggle[1]
+            ? {
+                ...account,
+                schedulable: update.schedulable,
+                rateLimitEndAt: update.rateLimitEndAt ?? account.rateLimitEndAt,
+                rateLimitReason: update.rateLimitReason ?? account.rateLimitReason,
+              }
+            : account,
+        );
+      }
+      return json(status, { success: status >= 200 && status < 300 });
     }
     if (req.url?.endsWith('/reset-status') && req.method === 'POST') return json(200, { success: true });
     if (req.url?.startsWith('/admin/claude-accounts/') && req.method === 'PUT') return json(200, { success: true });
@@ -146,6 +150,66 @@ function fixtureEnv(root, base, config) {
     }
   } finally {
     await fixture.close();
+  }
+}
+
+{
+  const root = mkdtempSync(join(tmpdir(), 'cooldown-toggle-failure-'));
+  mkdirSync(join(root, 'state'), { recursive: true });
+  const statePath = join(root, 'state', 'crs-429-state.json');
+  const resetAt = new Date(Date.now() + 60_000).toISOString();
+  const holdFixture = await startFixture(
+    [
+      {
+        id: 'limited',
+        name: 'limited@example.com',
+        platform: 'claude',
+        isActive: true,
+        schedulable: true,
+        rateLimitStatus: { isRateLimited: true, minutesRemaining: 1, rateLimitEndAt: resetAt },
+      },
+    ],
+    [503],
+  );
+  const env = {
+    ...fixtureEnv(root, holdFixture.base, { accounts: [], crs: { cooldownEnabled: true } }),
+    CRS_COOLDOWN_ENABLED: '1',
+    CRS_COOLDOWN_STATE_PATH: statePath,
+  };
+  try {
+    const result = await run(cooldownScript, env);
+    assert.equal(result.status, 0, result.stderr);
+    const held = JSON.parse(readFileSync(statePath, 'utf8')).limited;
+    assert.equal(held.retryAction, 'hold');
+    assert.equal(held.lastToggleStatus, 503);
+  } finally {
+    await holdFixture.close();
+  }
+
+  const expired = JSON.parse(readFileSync(statePath, 'utf8'));
+  expired.limited.cooldownUntil = Date.now() - 1;
+  writeFileSync(statePath, JSON.stringify(expired), { mode: 0o600 });
+  const releaseFixture = await startFixture(
+    [
+      {
+        id: 'limited',
+        name: 'limited@example.com',
+        platform: 'claude',
+        isActive: true,
+        schedulable: false,
+        rateLimitStatus: { isRateLimited: false },
+      },
+    ],
+    [502],
+  );
+  try {
+    const result = await run(cooldownScript, { ...env, CRS_BASE: releaseFixture.base });
+    assert.equal(result.status, 0, result.stderr);
+    const retained = JSON.parse(readFileSync(statePath, 'utf8')).limited;
+    assert.equal(retained.retryAction, 'release');
+    assert.equal(retained.lastToggleStatus, 502);
+  } finally {
+    await releaseFixture.close();
   }
 }
 

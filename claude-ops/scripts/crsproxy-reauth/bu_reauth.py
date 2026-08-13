@@ -67,6 +67,8 @@ Usage:
 
 import argparse
 import atexit
+import fcntl
+import hashlib
 import json
 import os
 import re
@@ -76,6 +78,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -95,8 +98,6 @@ BU_MODEL = "gpt-5.6-luna"
 STATE_DIR = Path(os.environ.get("CRSPROXY_STATE_DIR", "/opt/crsproxy/state"))
 LOG_DIR = STATE_DIR
 LEASE_FILE = STATE_DIR / "crsproxy-claude-oauth-lease.json"
-CANARY_URL = os.environ.get(
-    "CRSPROXY_CANARY_URL", "http://localhost:8319/v1/chat/completions")
 
 # Exit codes
 EXIT_SUCCESS = 0
@@ -244,85 +245,71 @@ def _expected_auth_content(auth: dict, provider: str) -> bool:
         for key in ("accessToken", "refreshToken")))
 
 
-def _canary_rejection(response: requests.Response) -> str:
-    """Classify a failed candidate canary without treating liveness as validity."""
-    text = (response.text or "").strip()
-    lower = text.lower()
-    if response.status_code in (401, 403):
-        return f"candidate authentication rejected (HTTP {response.status_code})"
-    if response.status_code == 429:
+def _canary_status_rejection(status: int) -> str:
+    """Classify a failed candidate-only inference result."""
+    if status in (401, 403):
+        return f"candidate authentication rejected (HTTP {status})"
+    if status == 429:
         return "candidate rate-limited (HTTP 429)"
-    if response.status_code == 503:
+    if status == 503:
         return "candidate unavailable (HTTP 503)"
-    if "unsupported" in lower and "model" in lower:
-        return "candidate model unsupported"
-    return f"candidate canary failed (HTTP {response.status_code})"
+    if status == 400:
+        return "candidate model unsupported (HTTP 400)"
+    return f"candidate canary failed (HTTP {status})"
 
 
 def send_canary(model: str, auth_path: Path, timeout: int = 30) -> tuple[bool, str]:
-    """Validate a candidate in an isolated one-file auth directory.
+    """Run one helper-owned inference against an isolated candidate only."""
+    command = os.environ.get("CRSPROXY_CANDIDATE_CANARY_CMD", "").strip()
+    if not command:
+        return False, "candidate canary helper is not configured"
 
-    Set CRSPROXY_CANDIDATE_CANARY_CMD to a helper that starts an isolated proxy
-    against CRSPROXY_CANDIDATE_AUTH_DIR and CRSPROXY_CANDIDATE_CANARY_URL. The
-    direct URL fallback exists for tests and pre-isolated service endpoints.
-    """
     with tempfile.TemporaryDirectory(prefix="crsproxy-candidate-") as tmpdir:
         isolated_dir = Path(tmpdir) / "auths"
         isolated_dir.mkdir(mode=0o700)
         isolated_auth = isolated_dir / auth_path.name
         shutil.copy2(auth_path, isolated_auth)
         os.chmod(isolated_auth, 0o600)
+        candidate_digest = hashlib.sha256(isolated_auth.read_bytes()).hexdigest()
+        nonce = uuid.uuid4().hex
         env = os.environ.copy()
-        env["CRSPROXY_CANDIDATE_AUTH_DIR"] = str(isolated_dir)
-        env["CRSPROXY_CANDIDATE_AUTH_FILE"] = str(isolated_auth)
-        env["CRSPROXY_CANDIDATE_CANARY_URL"] = CANARY_URL
-        command = env.get("CRSPROXY_CANDIDATE_CANARY_CMD", "").strip()
-        allow_direct = env.get("CRSPROXY_CANDIDATE_CANARY_ALLOW_DIRECT") == "1"
-        if not command and not allow_direct:
-            return False, "candidate canary helper is not configured"
-        if command:
-            try:
-                subprocess.run(shlex.split(command), check=True, env=env,
-                               timeout=timeout, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL)
-            except subprocess.TimeoutExpired:
-                return False, "candidate canary timed out"
-            except subprocess.CalledProcessError as e:
-                return False, f"candidate canary helper failed (exit {e.returncode})"
+        env.update({
+            "CRSPROXY_CANDIDATE_AUTH_DIR": str(isolated_dir),
+            "CRSPROXY_CANDIDATE_AUTH_FILE": str(isolated_auth),
+            "CRSPROXY_CANDIDATE_DIGEST": candidate_digest,
+            "CRSPROXY_CANDIDATE_NONCE": nonce,
+            "CRSPROXY_CANDIDATE_MODEL": model,
+        })
         try:
-            response = requests.post(
-                env["CRSPROXY_CANDIDATE_CANARY_URL"],
-                headers={"Authorization": "Bearer test"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "max_tokens": 1,
-                },
-                timeout=timeout,
-            )
-        except requests.Timeout:
+            completed = subprocess.run(
+                shlex.split(command), check=False, env=env, timeout=timeout,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, encoding="utf-8")
+        except subprocess.TimeoutExpired:
             return False, "candidate canary timed out"
-        except requests.RequestException as e:
-            return False, f"candidate canary unreachable: {type(e).__name__}"
-
-        text = (response.text or "").strip()
-        if response.status_code != 200:
-            return False, _canary_rejection(response)
-        if not text:
-            return False, "candidate canary returned empty HTTP 200 response"
+        except OSError as e:
+            return False, f"candidate canary helper unavailable: {type(e).__name__}"
+        if completed.returncode != 0:
+            return False, f"candidate canary helper failed (exit {completed.returncode})"
         try:
-            body = response.json()
-        except ValueError:
-            body = text
-        content = ""
-        if isinstance(body, dict):
-            choices = body.get("choices") or []
-            if choices and isinstance(choices[0], dict):
-                message = choices[0].get("message") or {}
-                content = str(message.get("content") or choices[0].get("text") or "").strip()
-        elif isinstance(body, str):
-            content = body.strip()
-        if not content:
+            result = json.loads(completed.stdout)
+        except (json.JSONDecodeError, TypeError):
+            return False, "candidate canary helper returned invalid JSON"
+        if not isinstance(result, dict):
+            return False, "candidate canary helper returned invalid result"
+        if result.get("candidate_digest") != candidate_digest:
+            return False, "candidate canary digest mismatch"
+        if result.get("nonce") != nonce:
+            return False, "candidate canary nonce mismatch"
+        if result.get("model") != model:
+            return False, "candidate canary model mismatch"
+        status = result.get("http_status")
+        if not isinstance(status, int) or isinstance(status, bool):
+            return False, "candidate canary HTTP status is invalid"
+        if status != 200:
+            return False, _canary_status_rejection(status)
+        content = result.get("content")
+        if not isinstance(content, str) or not content.strip():
             return False, "candidate canary returned HTTP 200 without model content"
         return True, "candidate canary passed"
 
@@ -456,6 +443,22 @@ def disable_auth_file(auth_path: Path) -> bool:
 # ---------------------------------------------------------------------------
 # Serialization lease
 # ---------------------------------------------------------------------------
+def _lease_guard_path() -> Path:
+    return LEASE_FILE.with_name(LEASE_FILE.name + ".guard")
+
+
+def _with_lease_guard(action):
+    """Serialize lease record replacement and release across processes."""
+    _ensure_state_dir(LEASE_FILE.parent)
+    fd = os.open(_lease_guard_path(), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return action()
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def _read_lease(path: Path | None = None) -> dict:
     """Read a lease record, returning an empty dict for missing/corrupt data."""
     try:
@@ -464,46 +467,50 @@ def _read_lease(path: Path | None = None) -> dict:
         return {}
 
 
-def _create_lease_exclusive(provider: str, lease_id: str) -> bool:
-    """Create the lease with O_EXCL so only one contender can win."""
-    _ensure_state_dir(LEASE_FILE.parent)
-    data = {
-        "provider": provider,
-        "timestamp": time.time(),
-        "pid": os.getpid(),
-        "lease_id": lease_id,
-    }
-    try:
-        fd = os.open(LEASE_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
         return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _write_lease(data: dict):
+    tmp = LEASE_FILE.with_name(f"{LEASE_FILE.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh)
             fh.flush()
             os.fsync(fh.fileno())
+        os.replace(tmp, LEASE_FILE)
     except Exception:
         try:
-            LEASE_FILE.unlink()
+            tmp.unlink()
         except OSError:
             pass
         raise
-    return True
 
 
-def _replace_stale_lease(observed: dict) -> bool:
-    """Remove only the stale lease record that this process observed."""
-    try:
-        current = _read_lease()
-        if current != observed:
-            return False
-        LEASE_FILE.unlink()
-        return True
-    except FileNotFoundError:
-        return True
-    except OSError as e:
-        log(f"Stale lease cleanup error: {e}")
-        return False
+def _try_acquire_or_reclaim(provider: str, lease_id: str) -> str:
+    now = time.time()
+    current = _read_lease()
+    if current:
+        renewed_at = float(current.get("renewed_at", current.get("timestamp", 0)) or 0)
+        owner_alive = _pid_alive(int(current.get("pid", 0) or 0))
+        if owner_alive and now - renewed_at < LEASE_STALE_SECONDS:
+            return "held"
+    data = {
+        "provider": provider,
+        "timestamp": now,
+        "renewed_at": now,
+        "pid": os.getpid(),
+        "lease_id": lease_id,
+    }
+    _write_lease(data)
+    return "acquired"
 
 
 def acquire_lease(provider: str, max_wait: int = 120) -> str | None:
@@ -512,22 +519,18 @@ def acquire_lease(provider: str, max_wait: int = 120) -> str | None:
     first_check = True
     lease_id = uuid.uuid4().hex
     while True:
-        if _create_lease_exclusive(provider, lease_id):
+        outcome = _with_lease_guard(
+            lambda: _try_acquire_or_reclaim(provider, lease_id))
+        if outcome == "acquired":
             log(f"Lease acquired for {provider}")
             return lease_id
-
-        data = _read_lease()
-        age = time.time() - float(data.get("timestamp", 0) or 0)
-        if not data or age >= LEASE_STALE_SECONDS:
-            if data:
-                log(f"Stale lease ({int(max(age, 0))}s old) — replacing")
-            if _replace_stale_lease(data):
-                continue
-        elif first_check:
+        if first_check:
+            data = _read_lease()
+            age = time.time() - float(
+                data.get("renewed_at", data.get("timestamp", 0)) or 0)
             log(f"Lease held by {data.get('provider','?')} "
                 f"({int(max(age, 0))}s old) — waiting up to {max_wait}s")
             first_check = False
-
         if time.monotonic() - t0 >= max_wait:
             log(f"Lease wait timed out after {max_wait}s — "
                 "another login may still be in progress")
@@ -535,20 +538,44 @@ def acquire_lease(provider: str, max_wait: int = 120) -> str | None:
         time.sleep(min(0.1, max(0.01, max_wait / 20)))
 
 
-def release_lease(lease_id: str | None) -> bool:
-    """Release the lease only when the on-disk owner matches lease_id."""
+def renew_lease(lease_id: str | None) -> bool:
+    """Renew only the current owner's lease record."""
     if not lease_id:
         return False
-    try:
+
+    def renew():
         data = _read_lease()
         if data.get("lease_id") != lease_id:
-            log("Lease release skipped — ownership changed")
             return False
-        LEASE_FILE.unlink()
-        log("Lease released")
+        data["renewed_at"] = time.time()
+        _write_lease(data)
         return True
-    except FileNotFoundError:
+
+    return _with_lease_guard(renew)
+
+
+def release_lease(lease_id: str | None) -> bool:
+    """Release atomically while holding the owner-record guard."""
+    if not lease_id:
         return False
+
+    def release():
+        data = _read_lease()
+        if data.get("lease_id") != lease_id:
+            return False
+        try:
+            LEASE_FILE.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    try:
+        released = _with_lease_guard(release)
+        if released:
+            log("Lease released")
+        else:
+            log("Lease release skipped — ownership changed")
+        return released
     except Exception as e:
         log(f"Lease release error: {e}")
         return False
@@ -1354,10 +1381,23 @@ def run_reauth(provider: str, email: str, gog_account: str,
         log("Could not acquire lease — another login may be in progress")
         return EXIT_FAILURE
 
+    stop_heartbeat = threading.Event()
+
+    def heartbeat():
+        interval = max(1.0, LEASE_STALE_SECONDS / 3)
+        while not stop_heartbeat.wait(interval):
+            if not renew_lease(lease_id):
+                log("Lease heartbeat stopped — ownership changed")
+                return
+
+    heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+    heartbeat_thread.start()
     try:
         return _run_reauth_inner(provider, email, gog_account, client,
                                  dry_run, log_path)
     finally:
+        stop_heartbeat.set()
+        heartbeat_thread.join(timeout=1)
         release_lease(lease_id)
 
 

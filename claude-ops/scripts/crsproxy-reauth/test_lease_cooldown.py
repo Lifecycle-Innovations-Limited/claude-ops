@@ -40,6 +40,17 @@ def _lease_contender(lease_path: str, start, results):
         bu_reauth.release_lease(lease_id)
 
 
+def _hold_and_renew(lease_path: str, ready, release_now, results):
+    bu_reauth.LEASE_FILE = Path(lease_path)
+    bu_reauth.LEASE_STALE_SECONDS = 0.15
+    lease_id = bu_reauth.acquire_lease("claude", max_wait=0.2)
+    results.put(lease_id)
+    ready.set()
+    while not release_now.wait(0.04):
+        results.put(bu_reauth.renew_lease(lease_id))
+    results.put(bu_reauth.release_lease(lease_id))
+
+
 def test_lease_file_constant():
     """Lease file path is correct."""
     assert bu_reauth.LEASE_FILE == bu_reauth.STATE_DIR / "crsproxy-claude-oauth-lease.json"
@@ -65,6 +76,7 @@ def test_acquire_lease_no_existing():
         assert data["provider"] == "claude"
         assert data["pid"] == os.getpid()
         assert data["lease_id"] == lease_id
+        assert data["renewed_at"] >= data["timestamp"]
         assert bu_reauth.release_lease(lease_id) is True
         print("PASS: acquire_lease creates an owner-scoped lease")
     bu_reauth.LEASE_FILE = orig_lease
@@ -126,6 +138,73 @@ def test_owner_only_release():
         assert bu_reauth.release_lease(owner) is True
         assert not lease_path.exists()
         print("PASS: release_lease is owner-only")
+    bu_reauth.LEASE_FILE = orig_lease
+
+
+def test_release_interleaving_cannot_delete_replacement():
+    """Release rechecks ownership under the same interprocess guard."""
+    orig_lease = bu_reauth.LEASE_FILE
+    with tempfile.TemporaryDirectory() as tmpdir:
+        bu_reauth.LEASE_FILE = Path(tmpdir) / "lease.json"
+        old_owner = bu_reauth.acquire_lease("claude", max_wait=0.2)
+        assert old_owner
+        entered = multiprocessing.Event()
+        proceed = multiprocessing.Event()
+        original_guard = bu_reauth._with_lease_guard
+
+        def delayed_guard(action):
+            entered.set()
+            proceed.wait(timeout=2)
+            return original_guard(action)
+
+        result = []
+        import threading
+        with patch.object(bu_reauth, "_with_lease_guard", side_effect=delayed_guard):
+            thread = threading.Thread(
+                target=lambda: result.append(bu_reauth.release_lease(old_owner)))
+            thread.start()
+            assert entered.wait(timeout=1)
+            replacement = {
+                "provider": "claude", "timestamp": time.time(),
+                "renewed_at": time.time(), "pid": os.getpid(),
+                "lease_id": "replacement-owner",
+            }
+            original_guard(lambda: bu_reauth._write_lease(replacement))
+            proceed.set()
+            thread.join(timeout=2)
+        assert result == [False]
+        assert json.loads(bu_reauth.LEASE_FILE.read_text())["lease_id"] == "replacement-owner"
+        print("PASS: old owner cannot delete an interleaved replacement")
+    bu_reauth.LEASE_FILE = orig_lease
+
+
+def test_long_lease_renewal_is_not_stolen():
+    """A live long operation renews often enough to prevent stale reclaim."""
+    orig_lease = bu_reauth.LEASE_FILE
+    with tempfile.TemporaryDirectory() as tmpdir:
+        lease_path = str(Path(tmpdir) / "lease.json")
+        ctx = multiprocessing.get_context("spawn")
+        ready = ctx.Event()
+        release_now = ctx.Event()
+        results = ctx.Queue()
+        holder = ctx.Process(target=_hold_and_renew,
+                             args=(lease_path, ready, release_now, results))
+        holder.start()
+        assert ready.wait(timeout=3)
+        owner = results.get(timeout=2)
+        assert owner
+        time.sleep(0.35)
+        bu_reauth.LEASE_FILE = Path(lease_path)
+        original_stale = bu_reauth.LEASE_STALE_SECONDS
+        bu_reauth.LEASE_STALE_SECONDS = 0.15
+        contender = bu_reauth.acquire_lease("claude", max_wait=0.1)
+        bu_reauth.LEASE_STALE_SECONDS = original_stale
+        assert contender is None
+        release_now.set()
+        holder.join(timeout=3)
+        assert holder.exitcode == 0
+        assert results.get(timeout=1) is True
+        print("PASS: renewed long lease is not stolen")
     bu_reauth.LEASE_FILE = orig_lease
 
 
@@ -449,6 +528,8 @@ def main():
         test_acquire_lease_stale_replaced,
         test_multiprocess_contention_single_winner,
         test_owner_only_release,
+        test_release_interleaving_cannot_delete_replacement,
+        test_long_lease_renewal_is_not_stolen,
         test_run_reauth_releases_on_success_and_failure,
         # Email cooldown tests
         test_email_cooldown_constants,

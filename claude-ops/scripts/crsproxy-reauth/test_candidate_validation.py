@@ -1,135 +1,135 @@
 #!/usr/bin/env python3
-"""Behavioral tests for isolated candidate validation and rollback."""
+"""Behavioral tests for exact-candidate validation and rollback."""
 
 import json
 import os
 import stat
 import sys
 import tempfile
-import threading
-import time
 from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 import bu_reauth
 
-os.environ["CRSPROXY_CANDIDATE_CANARY_ALLOW_DIRECT"] = "1"
 
-
-class CanaryHandler(BaseHTTPRequestHandler):
-    status = 200
-    body = {"choices": [{"message": {"content": "ok"}}]}
-    seen_candidate = None
-    delay = 0
-
-    def do_POST(self):
-        if self.delay:
-            time.sleep(self.delay)
-        candidate = os.environ.get("CRSPROXY_TEST_CANDIDATE_COPY", "")
-        if candidate and Path(candidate).exists():
-            type(self).seen_candidate = json.loads(Path(candidate).read_text())
-        payload = self.body if isinstance(self.body, str) else json.dumps(self.body)
-        self.send_response(self.status)
-        encoded = payload.encode()
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        try:
-            self.wfile.write(encoded)
-        except BrokenPipeError:
-            pass
-
-    def log_message(self, fmt, *args):
-        pass
-
-
-def valid_auth(email="user@example.com"):
+def valid_auth(email="user@example.com", token="test-access-token"):
     return {
         "email": email,
         "type": "claude",
         "expired": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
-        "access_token": "test-access-token",
+        "access_token": token,
         "disabled": True,
     }
 
 
-def with_server(status=200, body=None, delay=0):
-    CanaryHandler.status = status
-    CanaryHandler.body = body if body is not None else {"choices": [{"message": {"content": "ok"}}]}
-    CanaryHandler.delay = delay
-    CanaryHandler.seen_candidate = None
-    server = ThreadingHTTPServer(("127.0.0.1", 0), CanaryHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    return server, f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
+def make_helper(root: Path) -> Path:
+    helper = root / "candidate-helper.py"
+    helper.write_text("""#!/usr/bin/env python3
+import hashlib, json, os, time
+from pathlib import Path
+candidate = Path(os.environ["CRSPROXY_CANDIDATE_AUTH_FILE"])
+payload = json.loads(candidate.read_text())
+mode = os.environ.get("CANARY_TEST_MODE", "good")
+if mode == "timeout":
+    time.sleep(1)
+digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+result = {
+    "candidate_digest": digest,
+    "nonce": os.environ["CRSPROXY_CANDIDATE_NONCE"],
+    "http_status": 200 if payload.get("access_token") == "good-token" else 401,
+    "model": os.environ["CRSPROXY_CANDIDATE_MODEL"],
+    "content": "candidate-only-ok" if payload.get("access_token") == "good-token" else "",
+}
+if mode == "wrong-digest": result["candidate_digest"] = "0" * 64
+if mode == "wrong-nonce": result["nonce"] = "replayed-nonce"
+if mode == "wrong-model": result["model"] = "shared-model"
+if mode == "empty-content": result["content"] = ""
+if mode == "healthy-shared":
+    result.update(http_status=200, content="healthy shared endpoint")
+print(json.dumps(result))
+""")
+    os.chmod(helper, 0o700)
+    return helper
+
+
+def helper_env(helper: Path, mode="good"):
+    return patch.dict(os.environ, {
+        "CRSPROXY_CANDIDATE_CANARY_CMD": f"{sys.executable} {helper}",
+        "CANARY_TEST_MODE": mode,
+    }, clear=False)
 
 
 def test_candidate_specific_success_and_permissions():
     with tempfile.TemporaryDirectory() as tmpdir:
-        auth = Path(tmpdir) / "claude-user.json"
-        auth.write_text(json.dumps(valid_auth()))
+        root = Path(tmpdir)
+        auth = root / "claude-user.json"
+        auth.write_text(json.dumps(valid_auth(token="good-token")))
         os.chmod(auth, 0o640)
-        server, url = with_server()
-        original_url = bu_reauth.CANARY_URL
-        try:
-            bu_reauth.CANARY_URL = url
+        helper = make_helper(root)
+        with helper_env(helper):
             valid, reason = bu_reauth.validate_candidate(
                 auth, "user@example.com", "claude", "claude-sonnet-5")
-        finally:
-            bu_reauth.CANARY_URL = original_url
-            server.shutdown()
         assert valid is True, reason
         assert stat.S_IMODE(auth.stat().st_mode) == 0o640
-        print("PASS: isolated candidate validation requires a real HTTP 200 response")
+        print("PASS: helper inference is bound to the exact isolated candidate")
 
 
-def test_validation_classification():
-    cases = [
-        (401, {"error": "invalid auth"}, "authentication rejected"),
-        (403, {"error": "forbidden"}, "authentication rejected"),
-        (429, {"error": "rate limit"}, "rate-limited"),
-        (503, {"error": "unavailable"}, "unavailable"),
-        (400, {"error": "unsupported model"}, "model unsupported"),
-        (200, {"choices": []}, "without model content"),
-    ]
+def test_structured_result_binding_failures():
     with tempfile.TemporaryDirectory() as tmpdir:
-        auth = Path(tmpdir) / "claude-user.json"
-        auth.write_text(json.dumps(valid_auth()))
-        original_url = bu_reauth.CANARY_URL
-        try:
-            for status, body, expected in cases:
-                server, url = with_server(status, body)
-                bu_reauth.CANARY_URL = url
-                try:
-                    valid, reason = bu_reauth.validate_candidate(
-                        auth, "user@example.com", "claude", "claude-sonnet-5")
-                finally:
-                    server.shutdown()
-                assert valid is False
-                assert expected in reason, (status, reason)
-        finally:
-            bu_reauth.CANARY_URL = original_url
-        print("PASS: candidate validation classifies auth, rate, availability, model, and empty-content failures")
+        root = Path(tmpdir)
+        auth = root / "claude-user.json"
+        auth.write_text(json.dumps(valid_auth(token="good-token")))
+        helper = make_helper(root)
+        cases = [
+            ("wrong-digest", "digest mismatch"),
+            ("wrong-nonce", "nonce mismatch"),
+            ("wrong-model", "model mismatch"),
+            ("empty-content", "without model content"),
+        ]
+        for mode, expected in cases:
+            with helper_env(helper, mode):
+                valid, reason = bu_reauth.send_canary(
+                    "claude-sonnet-5", auth)
+            assert valid is False, mode
+            assert expected in reason, (mode, reason)
+        print("PASS: digest, nonce, model, status, and content are validated")
 
 
-def test_validation_timeout():
+def test_healthy_shared_endpoint_cannot_validate_bad_candidate():
     with tempfile.TemporaryDirectory() as tmpdir:
-        auth = Path(tmpdir) / "claude-user.json"
-        auth.write_text(json.dumps(valid_auth()))
-        server, url = with_server(delay=0.2)
-        original_url = bu_reauth.CANARY_URL
-        bu_reauth.CANARY_URL = url
-        try:
-            valid, reason = bu_reauth.send_canary("claude-sonnet-5", auth, timeout=0.05)
-        finally:
-            bu_reauth.CANARY_URL = original_url
-            server.shutdown()
+        root = Path(tmpdir)
+        auth = root / "claude-user.json"
+        auth.write_text(json.dumps(valid_auth(token="bad-token")))
+        helper = make_helper(root)
+        with helper_env(helper), patch.dict(
+                os.environ,
+                {"CRSPROXY_CANARY_URL": "http://healthy-shared.example/v1"},
+                clear=False):
+            valid, reason = bu_reauth.send_canary(
+                "claude-sonnet-5", auth)
         assert valid is False
-        assert "timed out" in reason
-        print("PASS: candidate validation fails closed on timeout")
+        assert "authentication rejected" in reason
+        print("PASS: a healthy shared endpoint cannot validate a bad candidate")
+
+
+def test_validation_classification_and_timeout():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        helper = make_helper(root)
+        good = root / "good.json"
+        good.write_text(json.dumps(valid_auth(token="good-token")))
+        bad = root / "bad.json"
+        bad.write_text(json.dumps(valid_auth(token="bad-token")))
+        with helper_env(helper):
+            valid, reason = bu_reauth.send_canary("claude-sonnet-5", bad)
+        assert valid is False and "authentication rejected" in reason
+        with helper_env(helper, "timeout"):
+            valid, reason = bu_reauth.send_canary(
+                "claude-sonnet-5", good, timeout=0.05)
+        assert valid is False and "timed out" in reason
+        print("PASS: candidate status and helper timeout fail closed")
 
 
 def test_missing_credential_rejected_before_canary():
@@ -177,8 +177,9 @@ def test_failed_candidate_rollback_and_activation_mode():
 def main():
     tests = [
         test_candidate_specific_success_and_permissions,
-        test_validation_classification,
-        test_validation_timeout,
+        test_structured_result_binding_failures,
+        test_healthy_shared_endpoint_cannot_validate_bad_candidate,
+        test_validation_classification_and_timeout,
         test_missing_credential_rejected_before_canary,
         test_failed_candidate_rollback_and_activation_mode,
     ]

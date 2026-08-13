@@ -26,25 +26,17 @@ command -v node >/dev/null 2>&1 || { echo "error: node not found in PATH (need N
 command -v jq >/dev/null 2>&1 || { echo "error: jq not found in PATH" >&2; exit 1; }
 
 COOLDOWN_ENABLED="false"
-TOKEN_REFRESH_ENABLED="false"
 MAGIC_LINK_ENABLED="false"
 if [[ -f "$CFG" ]]; then
   COOLDOWN_ENABLED="$(jq -r '.crs.cooldownEnabled // false' "$CFG" 2>/dev/null || echo false)"
-  TOKEN_REFRESH_ENABLED="$(jq -r '.crs.tokenRefreshEnabled // false' "$CFG" 2>/dev/null || echo false)"
   MAGIC_LINK_ENABLED="$(jq -r '.crs.enableMagicLinkRecovery // false' "$CFG" 2>/dev/null || echo false)"
 fi
 [[ "${CRS_COOLDOWN_ENABLED:-}" == "1" ]] && COOLDOWN_ENABLED="true"
-[[ "${CRS_TOKEN_REFRESH_ENABLED:-}" == "1" ]] && TOKEN_REFRESH_ENABLED="true"
 [[ "${CRS_ENABLE_MAGIC_LINK:-}" == "1" ]] && MAGIC_LINK_ENABLED="true"
 
-if [[ "$TOKEN_REFRESH_ENABLED" == "true" ]]; then
-  echo "error: CRS 401 refresher is retired; use the identity-verified crs-token-feed service" >&2
-  exit 1
-fi
-
-if [[ "$COOLDOWN_ENABLED" != "true" && "$TOKEN_REFRESH_ENABLED" != "true" && "$MAGIC_LINK_ENABLED" != "true" ]]; then
-  echo "skip: none of crs.cooldownEnabled / crs.tokenRefreshEnabled / crs.enableMagicLinkRecovery is true in $CFG"
-  echo "      set one (or \$CRS_COOLDOWN_ENABLED=1 / \$CRS_TOKEN_REFRESH_ENABLED=1 / \$CRS_ENABLE_MAGIC_LINK=1) and re-run"
+if [[ "$COOLDOWN_ENABLED" != "true" && "$MAGIC_LINK_ENABLED" != "true" ]]; then
+  echo "skip: neither crs.cooldownEnabled nor crs.enableMagicLinkRecovery is true in $CFG"
+  echo "      set one (or \$CRS_COOLDOWN_ENABLED=1 / \$CRS_ENABLE_MAGIC_LINK=1) and re-run"
   exit 0
 fi
 

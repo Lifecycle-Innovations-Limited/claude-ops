@@ -21,7 +21,19 @@ import { normalizeClaudeModelArgs } from './model-args.mjs';
 //
 // Used by rotate.mjs (post-rotation) and daemon.mjs (periodic deferred sweep).
 
-import { readFileSync, readdirSync, writeFileSync, appendFileSync, unlinkSync, statSync, existsSync } from 'fs';
+import {
+  closeSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+  appendFileSync,
+  unlinkSync,
+  statSync,
+  existsSync,
+} from 'fs';
 import { execFileSync, execSync } from 'child_process';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
@@ -155,14 +167,62 @@ function preserveDeferredMarker(id) {
   } catch {}
 }
 
-function respawnStateCoherent(stateFile) {
+function writeJsonAtomic(path, value) {
+  const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
+  const fd = openSync(tmp, 'wx', 0o600);
+  try {
+    writeFileSync(fd, JSON.stringify(value, null, 2));
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmp, path);
+}
+
+function respawnStateCoherent(stateFile, expectedCrsActive) {
   try {
     const persisted = JSON.parse(readFileSync(stateFile, 'utf8'));
-    if (!Array.isArray(persisted.respawnFlags)) return true;
+    if (!Array.isArray(persisted.respawnFlags)) return expectedCrsActive === false;
     const normalized = normalizeClaudeModelArgs(persisted.respawnFlags);
-    return normalized.every((flag, index) => flag === persisted.respawnFlags[index]);
+    if (!normalized.every((flag, index) => flag === persisted.respawnFlags[index])) return false;
+    const hasCrsSettings = persisted.respawnFlags.some(
+      (flag, index) =>
+        flag === '--settings' && String(persisted.respawnFlags[index + 1] || '').endsWith('crs-session-settings.json'),
+    );
+    return hasCrsSettings === expectedCrsActive;
   } catch {
     return false;
+  }
+}
+
+function findNewLiveSession(id, oldPid, expectedCrsActive) {
+  const found = listLiveBgSessions().find(
+    (candidate) => String(candidate.id) === String(id) && candidate.pid !== oldPid && pidAlive(candidate.pid),
+  );
+  if (!found) return null;
+  try {
+    const sessionFile = readdirSync(SESSIONS_DIR)
+      .filter((file) => file.endsWith('.json'))
+      .map((file) => join(SESSIONS_DIR, file))
+      .find((file) => {
+        const value = JSON.parse(readFileSync(file, 'utf8'));
+        const valueId = value.jobId || value.sessionId || value.id;
+        return String(valueId) === String(id) && Number(value.pid) === found.pid;
+      });
+    if (!sessionFile) return null;
+    const record = JSON.parse(readFileSync(sessionFile, 'utf8'));
+    const route = record.effectiveRoute;
+    if (!route || route.mode !== (expectedCrsActive ? 'crs' : 'direct')) return null;
+    if (expectedCrsActive) {
+      if (!String(route.baseUrl || '').length || !String(route.settings || '').endsWith('crs-session-settings.json')) {
+        return null;
+      }
+    } else if (route.baseUrl || route.settings) {
+      return null;
+    }
+    return found;
+  } catch {
+    return null;
   }
 }
 
@@ -488,10 +548,7 @@ export function doRespawn(session, log, opts = {}) {
         }
         if (mutated) {
           state.respawnFlags = flags;
-          // Rewrite in place, so no exclusive create here. The mode only bites if
-          // the file has gone since we read it, and keeps the replacement from
-          // coming back world-readable when it does.
-          writeFileSync(stateFile, JSON.stringify(state, null, 2), { mode: 0o600 });
+          writeJsonAtomic(stateFile, state);
         }
       }
     } catch (err) {
@@ -529,44 +586,35 @@ export function doRespawn(session, log, opts = {}) {
         appendFileSync(LOGP, `[${new Date().toISOString()}] ${session.id}: ${respawnOut.slice(0, 2000)}\n`);
       } catch {}
     }
-    if (!respawnStateCoherent(stateFile)) {
+    if (!respawnStateCoherent(stateFile, crsActive)) {
       preserveDeferredMarker(session.id);
       log(`[bg-respawn] respawn state verification failed for ${session.id}; deferring retry`);
       return false;
     }
+    let liveRespawn = null;
+    for (let i = 0; i < 20; i++) {
+      liveRespawn = findNewLiveSession(session.id, session.pid, crsActive);
+      if (liveRespawn) break;
+      sleepSync(100);
+    }
+    if (!liveRespawn) {
+      preserveDeferredMarker(session.id);
+      log(`[bg-respawn] no verified new live PID/effective route for ${session.id}; deferring retry`);
+      return false;
+    }
     try {
-      // mode keeps the marker owner-only; the path under /tmp is predictable.
       writeFileSync(RESPAWNED_MARKER(session.id), String(Date.now()), { mode: 0o600 });
     } catch {}
     try {
       unlinkSync(DEFERRED_MARKER(session.id));
     } catch {}
-    log(`[bg-respawn] respawned bg session ${session.id} (pid ${session.pid}, was ${session.status})`);
+    log(
+      `[bg-respawn] respawned bg session ${session.id} (new pid ${liveRespawn.pid}, old pid ${session.pid}, was ${session.status})`,
+    );
 
-    // Synchronously resolve new PID and update the lease
     try {
-      const leases = readLeases();
-      const lease = leases[session.id];
-      if (lease) {
-        let newPid = null;
-        for (let i = 0; i < 20; i++) {
-          try {
-            execSync('sleep 0.5');
-          } catch {}
-          const live = listLiveBgSessions();
-          const found = live.find((ls) => String(ls.id) === String(session.id));
-          if (found && found.pid !== session.pid) {
-            newPid = found.pid;
-            break;
-          }
-        }
-        if (newPid) {
-          log(`[bg-respawn] Updated lease for session ${session.id} with new PID ${newPid}`);
-          recordSessionLease(session.id, lease.accountKey, newPid);
-        } else {
-          log(`[bg-respawn] Warning: could not resolve new PID for session ${session.id}`);
-        }
-      }
+      const lease = readLeases()[session.id];
+      if (lease) recordSessionLease(session.id, lease.accountKey, liveRespawn.pid);
     } catch (err) {
       log(`[bg-respawn] Error updating lease with new PID: ${err.message}`);
     }

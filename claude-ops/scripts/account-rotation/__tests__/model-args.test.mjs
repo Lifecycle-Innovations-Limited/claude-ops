@@ -67,9 +67,10 @@ assert.ok(
   'launcher normalizes raw CLI args before spawning Claude',
 );
 
-function runRespawnCase(exitCode) {
-  const home = mkdtempSync(join(tmpdir(), `bg-respawn-${exitCode}-`));
-  const id = `respawn-${process.pid}-${exitCode}`;
+function runRespawnCase(mode) {
+  const exitCode = mode === 'spawn-failure' ? 7 : 0;
+  const home = mkdtempSync(join(tmpdir(), `bg-respawn-${mode}-`));
+  const id = `respawn-${process.pid}-${mode}`;
   const jobsDir = join(home, '.claude', 'jobs', id);
   const statePath = join(jobsDir, 'state.json');
   const capturePath = join(home, 'respawn-capture.json');
@@ -87,7 +88,7 @@ function runRespawnCase(exitCode) {
   rmSync(respawned, { force: true });
   writeFileSync(
     fakeRespawn,
-    `#!/bin/sh\nRESPAWN_ARGS="$*" node - <<'NODE'\nconst fs=require('fs');\nconst state=JSON.parse(fs.readFileSync(process.env.STATE_PATH,'utf8'));\nfs.writeFileSync(process.env.CAPTURE_PATH, JSON.stringify({ args: process.env.RESPAWN_ARGS.split(' '), state }));\nNODE\nexit ${exitCode}\n`,
+    `#!/bin/sh\nRESPAWN_ARGS="$*" node - <<'NODE'\nconst fs=require('fs');\nconst cp=require('child_process');\nconst path=require('path');\nconst state=JSON.parse(fs.readFileSync(process.env.STATE_PATH,'utf8'));\nfs.writeFileSync(process.env.CAPTURE_PATH, JSON.stringify({ args: process.env.RESPAWN_ARGS.split(' '), state }));\nconst mode=process.env.RESPAWN_TEST_MODE;\nif (mode !== 'spawn-failure' && mode !== 'no-session') {\n  let pid=999999;\n  if (mode !== 'stale-pid') {\n    const child=cp.spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{detached:true,stdio:'ignore'});\n    child.unref();\n    pid=child.pid;\n    fs.writeFileSync(process.env.CHILD_PID_PATH,String(pid));\n  }\n  const effectiveRoute=mode === 'wrong-route'\n    ? {mode:'crs',baseUrl:'http://127.0.0.1:3005/api',settings:path.join(process.env.HOME,'.claude','crs-session-settings.json')}\n    : {mode:'direct'};\n  fs.mkdirSync(process.env.SESSIONS_DIR,{recursive:true});\n  fs.writeFileSync(path.join(process.env.SESSIONS_DIR,pid+'.json'),JSON.stringify({kind:'bg',jobId:process.env.SESSION_ID,pid,status:'waiting',effectiveRoute}));\n}\nNODE\nexit ${exitCode}\n`,
     { mode: 0o700 },
   );
   const result = spawnSync(
@@ -107,6 +108,10 @@ function runRespawnCase(exitCode) {
         CLAUDE_BIN: fakeRespawn,
         STATE_PATH: statePath,
         CAPTURE_PATH: capturePath,
+        RESPAWN_TEST_MODE: mode,
+        SESSION_ID: id,
+        SESSIONS_DIR: join(home, '.claude', 'sessions'),
+        CHILD_PID_PATH: join(home, 'child.pid'),
         CLAUDE_ROTATION_SESSION_STAGGER_MS: '0',
       },
     },
@@ -114,17 +119,20 @@ function runRespawnCase(exitCode) {
   assert.equal(result.status, 0, result.stderr);
   const outcome = JSON.parse(result.stdout.trim().split('\n').at(-1));
   const captured = JSON.parse(readFileSync(capturePath, 'utf8'));
+  const childPidPath = join(home, 'child.pid');
+  const childPid = existsSync(childPidPath) ? Number(readFileSync(childPidPath, 'utf8')) : null;
   return {
     outcome,
     captured,
     deferred,
     respawned,
+    childPid,
   };
 }
 
-const failure = runRespawnCase(7);
+const failure = runRespawnCase('spawn-failure');
 assert.equal(failure.outcome.ok, false);
-assert.deepEqual(failure.captured.args, ['respawn', 'respawn-' + process.pid + '-7']);
+assert.deepEqual(failure.captured.args, ['respawn', 'respawn-' + process.pid + '-spawn-failure']);
 assert.equal(failure.captured.state.respawnFlags.includes('gpt-5.4'), true);
 assert.equal(
   failure.captured.state.respawnFlags.some((flag) => /fable/i.test(flag)),
@@ -138,7 +146,20 @@ assert.equal(
 );
 rmSync(failure.deferred, { force: true });
 
-const success = runRespawnCase(0);
+for (const mode of ['no-session', 'stale-pid', 'wrong-route']) {
+  const invalid = runRespawnCase(mode);
+  assert.equal(invalid.outcome.ok, false, mode);
+  assert.equal(existsSync(invalid.deferred), true, mode);
+  assert.equal(existsSync(invalid.respawned), false, mode);
+  if (invalid.childPid) {
+    try {
+      process.kill(invalid.childPid, 'SIGTERM');
+    } catch {}
+  }
+  rmSync(invalid.deferred, { force: true });
+}
+
+const success = runRespawnCase('success');
 assert.equal(success.outcome.ok, true);
 assert.equal(success.captured.state.respawnFlags.includes('gpt-5.4'), true);
 assert.equal(
@@ -151,6 +172,11 @@ assert.equal(
   success.outcome.logs.some((line) => line.includes('respawned bg session')),
   true,
 );
+if (success.childPid) {
+  try {
+    process.kill(success.childPid, 'SIGTERM');
+  } catch {}
+}
 rmSync(success.respawned, { force: true });
 
 console.log('Claude model argument normalization tests: PASS');
