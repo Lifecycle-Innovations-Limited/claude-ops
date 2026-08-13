@@ -20,6 +20,11 @@ Features:
     keeps browser session alive, waits for a file-based trigger, then
     resumes with a follow-up run in the same session to click Authorize
     and capture the callback URL.
+  - Serialization lease: checks /tmp/crsproxy-claude-oauth-lease.json
+    before starting a login, waits if held, cleans up after completion.
+  - Email cooldown: tracks verification code send timestamps, enforces
+    a 5-minute cooldown if >3 codes are sent in 5 minutes, logs
+    cooldown events without exposing the email address or code values.
 
 Usage:
   # Full reauth for a Claude account
@@ -108,6 +113,12 @@ CHECKPOINT_FILE = Path("/tmp/bu_reauth_checkpoint.json")
 CHECKPOINT_TRIGGER = Path("/tmp/bu_reauth_checkpoint_trigger")
 CHECKPOINT_POLL_INTERVAL = 5   # seconds between trigger polls
 CHECKPOINT_TIMEOUT = 600       # 10 minutes for human to solve captcha
+
+# Email cooldown configuration
+EMAIL_COOLDOWN_FILE = Path("/tmp/crsproxy-email-cooldown.json")
+EMAIL_COOLDOWN_WINDOW = 300      # 5 min sliding window for counting code sends
+EMAIL_COOLDOWN_THRESHOLD = 3     # max 3 code sends before cooldown triggers
+EMAIL_COOLDOWN_DURATION = 300    # 5 min cooldown when threshold exceeded
 
 # Provider configuration: callback ports, login flags, auth URL patterns.
 PROVIDERS = {
@@ -356,23 +367,44 @@ def disable_auth_file(auth_path: Path) -> bool:
 # ---------------------------------------------------------------------------
 # Serialization lease
 # ---------------------------------------------------------------------------
-def acquire_lease(provider: str) -> bool:
-    """Check/create the serialization lease file. Returns True if acquired."""
-    if LEASE_FILE.exists():
-        try:
-            data = json.loads(LEASE_FILE.read_text())
-            age = time.time() - data.get("timestamp", 0)
-            if age < LEASE_STALE_SECONDS:
-                log(f"Lease held by {data.get('provider','?')} "
-                    f"({int(age)}s old) — waiting")
-                return False
-            log(f"Stale lease ({int(age)}s old) — removing")
-            LEASE_FILE.unlink()
-        except (json.JSONDecodeError, OSError):
+def acquire_lease(provider: str, max_wait: int = 120) -> bool:
+    """Acquire the serialization lease, waiting up to max_wait seconds.
+
+    If the lease file exists and is recent (younger than
+    LEASE_STALE_SECONDS), polls every 5 seconds until it is released
+    or max_wait is reached.  If the lease is stale, it is removed and a
+    new lease is acquired.  Returns True if the lease was acquired,
+    False on timeout.
+    """
+    t0 = time.time()
+    first_check = True
+    while True:
+        if LEASE_FILE.exists():
             try:
+                data = json.loads(LEASE_FILE.read_text())
+                age = time.time() - data.get("timestamp", 0)
+                if age < LEASE_STALE_SECONDS:
+                    if first_check:
+                        log(f"Lease held by {data.get('provider','?')} "
+                            f"({int(age)}s old) — waiting up to {max_wait}s")
+                        first_check = False
+                    if time.time() - t0 >= max_wait:
+                        log(f"Lease wait timed out after {max_wait}s — "
+                            f"another login may still be in progress")
+                        return False
+                    time.sleep(5)
+                    continue
+                # Stale lease — remove it
+                log(f"Stale lease ({int(age)}s old) — removing")
                 LEASE_FILE.unlink()
-            except OSError:
-                pass
+            except (json.JSONDecodeError, OSError):
+                try:
+                    LEASE_FILE.unlink()
+                except OSError:
+                    pass
+        # Lease file doesn't exist or was removed — acquire
+        break
+
     LEASE_FILE.write_text(json.dumps({
         "provider": provider,
         "timestamp": time.time(),
@@ -389,6 +421,121 @@ def release_lease():
         log("Lease released")
     except Exception as e:
         log(f"Lease release error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Email cooldown tracking
+# ---------------------------------------------------------------------------
+def _load_cooldown_state() -> dict:
+    """Load email cooldown state from file."""
+    try:
+        if EMAIL_COOLDOWN_FILE.exists():
+            return json.loads(EMAIL_COOLDOWN_FILE.read_text())
+    except Exception:
+        pass
+    return {"send_timestamps": [], "cooldown_until": 0}
+
+
+def _save_cooldown_state(state: dict):
+    """Save email cooldown state to file."""
+    try:
+        EMAIL_COOLDOWN_FILE.write_text(json.dumps(state))
+    except Exception as e:
+        log(f"Cooldown state save error: {e}")
+
+
+def record_email_send():
+    """Record a verification code send timestamp.
+
+    Called when a new verification code is found in Gmail.  Prunes
+    timestamps older than the cooldown window.  Never logs the email
+    address or code value.
+    """
+    state = _load_cooldown_state()
+    now = time.time()
+    state["send_timestamps"] = [
+        ts for ts in state.get("send_timestamps", [])
+        if now - ts < EMAIL_COOLDOWN_WINDOW
+    ]
+    state["send_timestamps"].append(now)
+    _save_cooldown_state(state)
+    count = len(state["send_timestamps"])
+    log(f"Email send recorded (count in window: {count})")
+
+
+def check_email_cooldown() -> tuple[bool, int]:
+    """Check if we're in an email cooldown period.
+
+    Returns (is_in_cooldown, seconds_remaining).
+    """
+    state = _load_cooldown_state()
+    now = time.time()
+    cooldown_until = state.get("cooldown_until", 0)
+    if cooldown_until > now:
+        return True, int(cooldown_until - now)
+    return False, 0
+
+
+def enforce_email_cooldown() -> bool:
+    """Check and enforce email cooldown after a code entry failure.
+
+    If more than EMAIL_COOLDOWN_THRESHOLD codes have been sent in the
+    last EMAIL_COOLDOWN_WINDOW seconds, sets a cooldown of
+    EMAIL_COOLDOWN_DURATION and blocks until it expires.
+
+    Returns True if a cooldown was enforced (waited), False if no
+    cooldown was needed.  Logs cooldown events without exposing the
+    email address or code values.
+    """
+    state = _load_cooldown_state()
+    now = time.time()
+
+    # Prune old timestamps
+    state["send_timestamps"] = [
+        ts for ts in state.get("send_timestamps", [])
+        if now - ts < EMAIL_COOLDOWN_WINDOW
+    ]
+
+    # Check if we're already in a cooldown
+    cooldown_until = state.get("cooldown_until", 0)
+    if cooldown_until > now:
+        remaining = int(cooldown_until - now)
+        log(f"Email cooldown active — {remaining}s remaining "
+            f"(threshold: {EMAIL_COOLDOWN_THRESHOLD} sends per "
+            f"{EMAIL_COOLDOWN_WINDOW}s)")
+        log("Waiting for cooldown to expire before retrying...")
+        time.sleep(remaining + 1)
+        log("Email cooldown expired — proceeding with retry")
+        state["cooldown_until"] = 0
+        _save_cooldown_state(state)
+        return True
+
+    # Check if threshold is exceeded
+    count = len(state["send_timestamps"])
+    if count > EMAIL_COOLDOWN_THRESHOLD:
+        state["cooldown_until"] = now + EMAIL_COOLDOWN_DURATION
+        _save_cooldown_state(state)
+        log(f"Email cooldown triggered: {count} sends in "
+            f"{EMAIL_COOLDOWN_WINDOW}s window — waiting "
+            f"{EMAIL_COOLDOWN_DURATION}s")
+        log("Cooldown event logged (email and code values redacted)")
+        time.sleep(EMAIL_COOLDOWN_DURATION)
+        log("Email cooldown expired — proceeding with retry")
+        state["cooldown_until"] = 0
+        _save_cooldown_state(state)
+        return True
+
+    log(f"No cooldown needed ({count} sends in window)")
+    return False
+
+
+def clear_email_cooldown():
+    """Clear email cooldown state.  Called on successful completion."""
+    try:
+        EMAIL_COOLDOWN_FILE.unlink(missing_ok=True)
+        log("Email cooldown state cleared")
+    except Exception as e:
+        log(f"Email cooldown clear error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -700,6 +847,24 @@ def extract_callback_url(run_result: dict, client: BrowserUseClient,
     return None
 
 
+def _code_entry_failed(result_text: str) -> bool:
+    """Check if a verification code entry run failed.
+
+    Looks for indicators that the code was rejected, expired, or
+    could not be entered.  Never logs the code value itself.
+    """
+    text_lower = result_text.lower()
+    failure_indicators = [
+        "invalid code", "code is invalid", "expired",
+        "incorrect", "wrong code", "code is not valid",
+        "didn't work", "please try again", "try again",
+        "code is wrong", "enter the code again",
+        "unable to verify", "verification failed",
+        "code didn't match", "that code isn't",
+    ]
+    return any(ind in text_lower for ind in failure_indicators)
+
+
 def detect_captcha(run_result: dict, client: BrowserUseClient) -> bool:
     """Check if the run result or events indicate a real captcha challenge."""
     result_text = str(run_result.get("result", "") or "").lower()
@@ -990,6 +1155,9 @@ def _complete_reauth(proc: subprocess.Popen, callback_url: str,
     except Exception:
         pass
 
+    # Clear email cooldown state on successful completion
+    clear_email_cooldown()
+
     log(f"[OK] Auth file activated: {auth_file.name}")
     return EXIT_SUCCESS
 
@@ -1106,29 +1274,63 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
             # Try code first, then magic link
             code = poll_gmail_for_code(provider, email, gog_account, kind="code")
             if code:
+                record_email_send()
                 log("[4] Verification code received (value redacted)")
-                task2 = (
-                    f"Enter the verification code in the verification field. "
-                    f"Click Continue. Report what you see."
-                )
-                run2 = client.create_run(task2, session_id=session_id)
-                run2_id = run2.get("id", "")
-                log(f"[4] Code entry run: {run2_id[:12]}...")
-                result2 = client.wait_for_run(run2_id, timeout=RUN_POLL_TIMEOUT)
-                text2 = str(result2.get("result", "") or "")
-                log(f"[4] Code entry complete: {text2[:200]}")
-                session_id = run2.get("sessionId", session_id)
 
-                # Check for captcha after code entry
-                if detect_captcha(result2, client):
-                    log("[CAPTCHA] Captcha detected after code entry")
-                    callback_url, session_id = handle_captcha_checkpoint(
-                        client, run2_id, session_id, provider, email, port)
-                    if callback_url:
-                        return _complete_reauth(proc, callback_url,
-                                                auth_file, stale_backup,
-                                                email, provider, meta)
-                    return EXIT_FAILURE
+                # Code entry with retry and email cooldown enforcement.
+                # If the code is rejected, check the email send history.
+                # If >3 codes have been sent in 5 minutes, enforce a
+                # 5-minute cooldown before retrying with a fresh code.
+                max_code_retries = 3
+                text2 = ""
+                for attempt in range(max_code_retries):
+                    task2 = (
+                        f"Enter the verification code in the verification field. "
+                        f"Click Continue. Report what you see."
+                    )
+                    run2 = client.create_run(task2, session_id=session_id)
+                    run2_id = run2.get("id", "")
+                    log(f"[4] Code entry run (attempt {attempt+1}/"
+                        f"{max_code_retries}): {run2_id[:12]}...")
+                    result2 = client.wait_for_run(run2_id,
+                                                 timeout=RUN_POLL_TIMEOUT)
+                    text2 = str(result2.get("result", "") or "")
+                    log(f"[4] Code entry complete: {text2[:200]}")
+                    session_id = run2.get("sessionId", session_id)
+
+                    # Check for captcha after code entry
+                    if detect_captcha(result2, client):
+                        log("[CAPTCHA] Captcha detected after code entry")
+                        callback_url, session_id = handle_captcha_checkpoint(
+                            client, run2_id, session_id, provider, email, port)
+                        if callback_url:
+                            return _complete_reauth(proc, callback_url,
+                                                    auth_file, stale_backup,
+                                                    email, provider, meta)
+                        return EXIT_FAILURE
+
+                    # Check if code entry failed
+                    if _code_entry_failed(text2):
+                        log(f"[4] Code entry failed on attempt {attempt+1}")
+                        if attempt < max_code_retries - 1:
+                            # Enforce email cooldown (waits if threshold
+                            # exceeded) then poll for a fresh code
+                            enforce_email_cooldown()
+                            log("[4] Polling for new verification code")
+                            code = poll_gmail_for_code(
+                                provider, email, gog_account, kind="code")
+                            if code:
+                                record_email_send()
+                                log("[4] New verification code received "
+                                    "(value redacted)")
+                            else:
+                                log("[FAIL] No new verification code received")
+                                return EXIT_FAILURE
+                        else:
+                            log("[FAIL] Code entry failed after all retries")
+                            return EXIT_FAILURE
+                    else:
+                        break  # Code entry succeeded
 
                 # Check if we need a magic link (selectAccount flow)
                 if any(kw in text2.lower() for kw in
@@ -1147,7 +1349,8 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                         run3 = client.create_run(task3, session_id=session_id)
                         run3_id = run3.get("id", "")
                         log(f"[5] Magic link run: {run3_id[:12]}...")
-                        result3 = client.wait_for_run(run3_id, timeout=RUN_POLL_TIMEOUT)
+                        result3 = client.wait_for_run(run3_id,
+                                                      timeout=RUN_POLL_TIMEOUT)
                         text3 = str(result3.get("result", "") or "")
                         log(f"[5] Magic link run complete: {text3[:200]}")
                         session_id = run3.get("sessionId", session_id)
@@ -1309,6 +1512,11 @@ def _checkpoint_resume(args) -> int:
     client = BrowserUseClient(api_key)
     atexit.register(client.stop_all_browsers)
 
+    # Acquire serialization lease (prevents concurrent logins)
+    if not acquire_lease(provider):
+        log("[FAIL] Could not acquire lease — another login may be in progress")
+        return EXIT_FAILURE
+
     # Start a new login process (the original is likely dead)
     log_path = Path("/tmp/bu_reauth_hub.log")
     log("[1] Starting new cli-proxy-api login for checkpoint resume")
@@ -1388,6 +1596,7 @@ def _checkpoint_resume(args) -> int:
         client.stop_all_browsers()
         cleanup_login_process(proc)
         clear_checkpoint()
+        release_lease()
 
 
 # ---------------------------------------------------------------------------
