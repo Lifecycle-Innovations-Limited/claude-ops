@@ -87,7 +87,9 @@ function canonicalProspective(path) {
   return join(realpathSync(cursor), ...tail);
 }
 function sameCanonicalPath(left, right) {
-  return typeof left === 'string' && typeof right === 'string' && canonicalProspective(left) === canonicalProspective(right);
+  return (
+    typeof left === 'string' && typeof right === 'string' && canonicalProspective(left) === canonicalProspective(right)
+  );
 }
 function assertSafeAncestors(path) {
   let cursor = dirname(canonicalProspective(path));
@@ -665,7 +667,10 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
     // created final target (unlike rename(2)).
     // Test-only adversarial writer used to prove link publication fails closed.
     // CodeQL[js/file-system-race]
-    if (process.env.CLAUDE_COORDINATION_TESTING === '1' && sameCanonicalPath(process.env.CLAUDE_COORDINATION_TEST_RACE_TARGET, path))
+    if (
+      process.env.CLAUDE_COORDINATION_TESTING === '1' &&
+      sameCanonicalPath(process.env.CLAUDE_COORDINATION_TEST_RACE_TARGET, path)
+    )
       writeFileSync(path, process.env.CLAUDE_COORDINATION_TEST_RACE_SAME === '1' ? data : 'competing-owner\n', {
         flag: 'wx',
         mode: 0o600,
