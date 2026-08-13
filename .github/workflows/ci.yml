@@ -12,8 +12,28 @@ concurrency:
   # Auto-cancel superseded runs for same workflow+ref/PR (Sam 2026-07-14)
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
+  optimize-ci:
+    name: Graphite CI Optimizer
+    if: github.event_name == 'pull_request'
+    permissions: {}
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check-skip.outputs.skip }}
+    steps:
+      - name: Optimize CI
+        id: check-skip
+        uses: withgraphite/graphite-ci-action@402a89bc8aa6db18ae1f9c61953d001d5f9d828f # main
+        with:
+          graphite_token: ${{ secrets.GRAPHITE_CI_TOKEN }}
+
   lint-and-check:
+    if: always() && (github.event_name != 'pull_request' || needs.optimize-ci.outputs.skip == 'false')
+    needs: optimize-ci
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -60,8 +80,8 @@ jobs:
   # Dedicated, INDEPENDENT gate against personal data (PII) reaching this PUBLIC
   # repo — contributor usernames, home paths, personal emails, AWS account IDs,
   # phone numbers. Runs with no `needs:` so it executes on every PR regardless of
-  # the secret-scan job's state. Catches the class that leaked into history
-  # (scrubbed 2026-06-07).
+  # the optimizer or secret-scan job's state. Catches the class that leaked into
+  # history (scrubbed 2026-06-07).
   pii-gate:
     runs-on: ubuntu-latest
     steps:
@@ -70,8 +90,9 @@ jobs:
         run: bash claude-ops/tests/test-no-secrets.sh
 
   test-suite:
+    if: always() && needs.lint-and-check.result == 'success' && (github.event_name != 'pull_request' || needs.optimize-ci.outputs.skip == 'false')
     runs-on: ${{ matrix.os }}
-    needs: lint-and-check
+    needs: [optimize-ci, lint-and-check]
     strategy:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04]

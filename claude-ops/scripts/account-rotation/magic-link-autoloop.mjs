@@ -2,9 +2,9 @@
 /**
  * magic-link-autoloop.mjs — opt-in unattended re-auth reconciler.
  *
- * Fills a gap crs-401-refresher.mjs deliberately leaves for a human: when an
- * account's refresh_token is confirmed dead (not just expiring), the
- * refresher flags it needs-reauth and stops. This reconciler, if enabled,
+ * Fills the recovery gap left when identity-verified vault refresh confirms an
+ * account's refresh_token is dead (not just expiring). The refresher flags it
+ * needs-reauth and stops. This reconciler, if enabled,
  * dispatches ONE unattended browser re-auth per tick (serial, single-flight).
  *
  * OPT-IN. Does nothing (exits 0) unless crs.enableMagicLinkRecovery is true
@@ -93,7 +93,7 @@ function rotatingLockBusy() {
   }
 }
 
-/** Read crs-401-refresher's own state file, READ-ONLY, for accounts it flagged needs-reauth. */
+/** Read the legacy needs-reauth state file, READ-ONLY, during migration. */
 function needsReauthKeysFromRefresher() {
   const state = loadJsonState(REFRESHER_STATE_PATH, log);
   const out = new Set();
@@ -103,7 +103,7 @@ function needsReauthKeysFromRefresher() {
   return out;
 }
 
-/** Fallback when crs-401-refresher isn't enabled: vault missing refresh_token. */
+/** Fallback when no needs-reauth record exists: vault missing refresh_token. */
 function needsReauthKeysFromVault(vaultKeys) {
   const cfg = loadRotationConfig();
   const vaultPath = crsFileVaultPath(cfg) || join(homedir(), '.claude', '.credentials.json');

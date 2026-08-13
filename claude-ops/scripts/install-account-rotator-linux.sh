@@ -40,7 +40,9 @@ PREFLIGHT_JSON=$(node "$SCRIPT_DIR/account-rotation/provision-coordination.mjs" 
 CLAUDE_AUTH_COORDINATION_CONFIG=$(printf '%s' "$PREFLIGHT_JSON" | jq -er '.configPath') || die "invalid preflight config path"
 CLAUDE_ROTATOR_CONFIG=$(printf '%s' "$PREFLIGHT_JSON" | jq -er '.runtimeInventoryPath') || die "invalid preflight inventory path"
 REVIEWED_UNIT=$(printf '%s' "$PREFLIGHT_JSON" | jq -er '.linuxUnitPath') || die "invalid preflight unit path"
-[[ "$REVIEWED_UNIT" == "$UNIT_FILE" ]] || die "reviewed unit destination does not match installer destination"
+REVIEWED_UNIT_CANONICAL=$(realpath "$REVIEWED_UNIT") || die "cannot resolve reviewed unit destination"
+UNIT_FILE_CANONICAL=$(realpath "$UNIT_FILE") || die "cannot resolve installer unit destination"
+[[ "$REVIEWED_UNIT_CANONICAL" == "$UNIT_FILE_CANONICAL" ]] || die "reviewed unit destination does not match installer destination"
 
 # ── Dry-run validation ────────────────────────────────────────────────────────
 
