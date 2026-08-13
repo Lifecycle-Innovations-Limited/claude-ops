@@ -86,8 +86,11 @@ function canonicalProspective(path) {
   }
   return join(realpathSync(cursor), ...tail);
 }
+function sameCanonicalPath(left, right) {
+  return typeof left === 'string' && typeof right === 'string' && canonicalProspective(left) === canonicalProspective(right);
+}
 function assertSafeAncestors(path) {
-  let cursor = existsSync(path) ? dirname(path) : dirname(canonicalProspective(path));
+  let cursor = dirname(canonicalProspective(path));
   while (!existsSync(cursor)) cursor = dirname(cursor);
   let immediate = true;
   for (;;) {
@@ -330,7 +333,7 @@ function publishExclusiveRecord(path, bytes, code) {
   fsyncDirectory(dirname(path));
   if (
     process.env.CLAUDE_COORDINATION_TESTING === '1' &&
-    process.env.CLAUDE_COORDINATION_TEST_RECORD_TARGET === path &&
+    sameCanonicalPath(process.env.CLAUDE_COORDINATION_TEST_RECORD_TARGET, path) &&
     process.env.CLAUDE_COORDINATION_TEST_FAULT === 'SIGKILL:RECORD_PRE_LINK'
   )
     process.kill(process.pid, 'SIGKILL');
@@ -339,7 +342,7 @@ function publishExclusiveRecord(path, bytes, code) {
   } else linkSync(temp, path);
   if (
     process.env.CLAUDE_COORDINATION_TESTING === '1' &&
-    process.env.CLAUDE_COORDINATION_TEST_RECORD_TARGET === path &&
+    sameCanonicalPath(process.env.CLAUDE_COORDINATION_TEST_RECORD_TARGET, path) &&
     process.env.CLAUDE_COORDINATION_TEST_FAULT === 'SIGKILL:RECORD_LINKED'
   )
     process.kill(process.pid, 'SIGKILL');
@@ -347,7 +350,7 @@ function publishExclusiveRecord(path, bytes, code) {
   if (!descriptorMatches(path, descriptor, code)) fail(code);
   if (
     process.env.CLAUDE_COORDINATION_TESTING === '1' &&
-    process.env.CLAUDE_COORDINATION_TEST_RECORD_TARGET === path &&
+    sameCanonicalPath(process.env.CLAUDE_COORDINATION_TEST_RECORD_TARGET, path) &&
     process.env.CLAUDE_COORDINATION_TEST_FAULT === 'SIGKILL:RECORD_DIR_FSYNCED'
   )
     process.kill(process.pid, 'SIGKILL');
@@ -662,7 +665,7 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
     // created final target (unlike rename(2)).
     // Test-only adversarial writer used to prove link publication fails closed.
     // CodeQL[js/file-system-race]
-    if (process.env.CLAUDE_COORDINATION_TESTING === '1' && process.env.CLAUDE_COORDINATION_TEST_RACE_TARGET === path)
+    if (process.env.CLAUDE_COORDINATION_TESTING === '1' && sameCanonicalPath(process.env.CLAUDE_COORDINATION_TEST_RACE_TARGET, path))
       writeFileSync(path, process.env.CLAUDE_COORDINATION_TEST_RACE_SAME === '1' ? data : 'competing-owner\n', {
         flag: 'wx',
         mode: 0o600,
@@ -681,7 +684,7 @@ function atomicWrite(path, data, written, onPrepared, modeBits = 0o600) {
       process.kill(process.pid, 'SIGKILL');
     if (
       process.env.CLAUDE_COORDINATION_TESTING === '1' &&
-      process.env.CLAUDE_COORDINATION_TEST_POST_LINK_REPLACE === path
+      sameCanonicalPath(process.env.CLAUDE_COORDINATION_TEST_POST_LINK_REPLACE, path)
     ) {
       unlinkSync(path);
       // Test-only post-publication inode replacement.
