@@ -11,7 +11,7 @@ and emits a human checkpoint if hCaptcha is detected.
 
 Usage:
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_profile_reauth.py \\
-      -provider claude -email info@auroracapital.nl -profile-id <BU_PROFILE_ID>
+      -provider claude -email user@example.com -profile-id <BU_PROFILE_ID>
 """
 
 import argparse

@@ -29,35 +29,35 @@ Features:
 Usage:
   # Full reauth for a Claude account
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider claude -email info@auroracapital.nl -gog-account info@auroracapital.nl
+      -provider claude -email user@example.com -gog-account user@example.com
 
   # Dry run (validates setup, no browser runs)
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider claude -email info@auroracapital.nl -dry-run
+      -provider claude -email user@example.com -dry-run
 
   # xAI reauth
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider xai -email sam@samfeldt.com -gog-account sam@samfeldt.com
+      -provider xai -email user2@example.com -gog-account user2@example.com
 
   # Codex reauth
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider codex -email sam@samfeldt.com -gog-account sam@samfeldt.com
+      -provider codex -email user2@example.com -gog-account user2@example.com
 
   # Validate an existing auth file (no reauth, no browser)
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider claude -email info@auroracapital.nl -validate-only
+      -provider claude -email user@example.com -validate-only
 
   # Validate and activate if valid
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider claude -email info@auroracapital.nl -validate-only -activate
+      -provider claude -email user@example.com -validate-only -activate
 
   # Validate metadata only (skip canary request)
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider claude -email info@auroracapital.nl -validate-only -skip-canary
+      -provider claude -email user@example.com -validate-only -skip-canary
 
   # Resume from a hCaptcha checkpoint (after Sam solved the captcha)
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider claude -email info@auroracapital.nl -checkpoint-resume
+      -provider claude -email user@example.com -checkpoint-resume
 
   # When hCaptcha is detected, the script emits the live_view_url and waits.
   # After solving the captcha in the browser, create the trigger file:
@@ -903,10 +903,11 @@ def detect_captcha(run_result: dict, client: BrowserUseClient) -> bool:
     result_raw = str(run_result.get("result", "") or "")
     result_text = result_raw.lower()
     # Browser Use tasks report exact 'CAPTCHA' (uppercase) as a sentinel
-    # when they encounter a real captcha challenge. Use a word-boundary
-    # regex on the original (non-lowercased) text so that 'captcha' in
-    # sentences like "No captcha needed" does NOT trigger a false positive.
-    if re.search(r'\bCAPTCHA\b', result_raw):
+    # when they encounter a real captcha challenge. Use EXACT whole-result
+    # matching (after stripping whitespace) so that phrases like
+    # "No CAPTCHA needed" do NOT trigger a false positive. A word-boundary
+    # regex would still match "CAPTCHA" inside "No CAPTCHA needed".
+    if result_raw.strip() == "CAPTCHA":
         return True
     # "captcha" in a sentence is not enough — look for specific indicators
     captcha_indicators = [

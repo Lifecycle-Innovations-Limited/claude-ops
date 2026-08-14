@@ -50,9 +50,9 @@ from bu_reauth import (
 from bu_reauth import poll_gmail_for_code
 
 PROVIDER = "claude"
-EMAIL = "info@auroracapital.nl"
-PROFILE_ID = "8774a731-f0e0-4506-971a-885a00f7dabc"
-GOG_ACCOUNT = os.environ.get("GMAIL_TARGET_INBOX", "sam.renders@gmail.com")
+EMAIL = os.environ.get("REAUTH_EMAIL", "user@example.com")
+PROFILE_ID = os.environ.get("BU_PROFILE_ID", "<BU_PROFILE_ID>")
+GOG_ACCOUNT = os.environ.get("GMAIL_TARGET_INBOX", "user@example.com")
 PORT = 54545
 
 # JS to intercept the callback URL - uses multiple methods
