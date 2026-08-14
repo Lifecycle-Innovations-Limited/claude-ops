@@ -89,7 +89,8 @@ HOME_DIR = Path("/opt/crsproxy")
 BU_API_BASE = "https://api.browser-use.com/api/v4"
 BU_MODEL = "gpt-5.6-luna"
 LOG_DIR = Path("/tmp")
-LEASE_FILE = Path("/tmp/crsproxy-claude-oauth-lease.json")
+STATE_DIR = Path("/opt/crsproxy/state")
+LEASE_FILE = STATE_DIR / "crsproxy-claude-oauth-lease.json"
 CANARY_URL = "http://localhost:8319/v1/chat/completions"
 
 # Exit codes
@@ -109,13 +110,13 @@ TOTAL_TIMEOUT = 300       # overall script timeout (5 minutes)
 LEASE_STALE_SECONDS = 600 # lease older than 10 min is stale
 
 # Human checkpoint (hCaptcha) configuration
-CHECKPOINT_FILE = Path("/tmp/bu_reauth_checkpoint.json")
-CHECKPOINT_TRIGGER = Path("/tmp/bu_reauth_checkpoint_trigger")
+CHECKPOINT_FILE = STATE_DIR / "bu_reauth_checkpoint.json"
+CHECKPOINT_TRIGGER = STATE_DIR / "bu_reauth_checkpoint_trigger"
 CHECKPOINT_POLL_INTERVAL = 5   # seconds between trigger polls
 CHECKPOINT_TIMEOUT = 600       # 10 minutes for human to solve captcha
 
 # Email cooldown configuration
-EMAIL_COOLDOWN_FILE = Path("/tmp/crsproxy-email-cooldown.json")
+EMAIL_COOLDOWN_FILE = STATE_DIR / "crsproxy-email-cooldown.json"
 EMAIL_COOLDOWN_WINDOW = 300      # 5 min sliding window for counting code sends
 EMAIL_COOLDOWN_THRESHOLD = 3     # max 3 code sends before cooldown triggers
 EMAIL_COOLDOWN_DURATION = 300    # 5 min cooldown when threshold exceeded
@@ -911,7 +912,7 @@ def detect_captcha(run_result: dict, client: BrowserUseClient) -> bool:
         "captcha challenge", "solve the captcha",
         "i see a captcha", "captcha widget",
         "are you human", "verify you are human",
-        "captcha", "image-selection",
+        "image-selection",
     ]
     for indicator in captcha_indicators:
         if indicator in result_text:
@@ -953,6 +954,7 @@ def write_checkpoint(session_id: str, run_id: str, browser_session_id: str,
     }
     try:
         CHECKPOINT_FILE.write_text(json.dumps(data, indent=2))
+        os.chmod(str(CHECKPOINT_FILE), 0o600)
         log(f"[CAPTCHA_CHECKPOINT] Checkpoint file: {CHECKPOINT_FILE}")
     except Exception as e:
         log(f"[CAPTCHA_CHECKPOINT] Could not write checkpoint file: {e}")
