@@ -37,8 +37,8 @@ def test_sanitize_url():
 
 def test_safe_email():
     """safe_email redacts the local part of an email."""
-    result = bu_reauth.safe_email("info@auroracapital.nl")
-    assert result == "i***@auroracapital.nl", f"Expected redacted email, got {result}"
+    result = bu_reauth.safe_email("user@example.com")
+    assert result == "u***@example.com", f"Expected redacted email, got {result}"
     result = bu_reauth.safe_email("a@b.com")
     assert result == "***@b.com", f"Expected redacted email, got {result}"
     print("PASS: safe_email redacts the local part of an email")
@@ -80,9 +80,11 @@ def test_detect_captcha_exact_sentinel():
     """detect_captcha returns True for exact 'CAPTCHA' sentinel (uppercase).
 
     Browser Use tasks report 'CAPTCHA' (uppercase) as a sentinel when they
-    encounter a real captcha challenge. This must be detected via word-boundary
-    matching on the original (non-lowercased) text, while lowercase 'captcha'
-    in a sentence must NOT trigger a false positive.
+    encounter a real captcha challenge. This must be detected via EXACT
+    whole-result matching (after stripping whitespace), while 'CAPTCHA'
+    appearing inside a longer phrase like "No CAPTCHA needed" must NOT
+    trigger a false positive. Lowercase phrase indicators (e.g.
+    "captcha challenge") remain a secondary check.
     """
     client = MagicMock()
     client.get_run_events.return_value = []
@@ -91,17 +93,29 @@ def test_detect_captcha_exact_sentinel():
     result = bu_reauth.detect_captcha({"result": "CAPTCHA"}, client)
     assert result is True, "Expected True for exact 'CAPTCHA' sentinel"
 
-    # 'CAPTCHA' within a sentence — still detected (word boundary match)
+    # Exact 'CAPTCHA' with surrounding whitespace — must be detected
+    result = bu_reauth.detect_captcha({"result": "  CAPTCHA  "}, client)
+    assert result is True, "Expected True for whitespace-padded 'CAPTCHA'"
+
+    # 'CAPTCHA' within a sentence is NOT an exact match, but "captcha
+    # challenge" is a lowercase phrase indicator so it is still detected.
     result = bu_reauth.detect_captcha(
         {"result": "I encountered a CAPTCHA challenge on the page"}, client)
-    assert result is True, "Expected True for 'CAPTCHA' in text"
+    assert result is True, "Expected True for 'captcha challenge' indicator"
+
+    # Regression: "No CAPTCHA needed" must NOT trigger (false positive).
+    # The exact-match check rejects it (whole result != "CAPTCHA") and no
+    # lowercase phrase indicator matches "no captcha needed".
+    result = bu_reauth.detect_captcha(
+        {"result": "No CAPTCHA needed"}, client)
+    assert result is False, "Expected False for 'No CAPTCHA needed'"
 
     # Negative: lowercase 'captcha' in a sentence must NOT match
     result = bu_reauth.detect_captcha(
         {"result": "The page loaded successfully. No captcha needed."},
         client)
     assert result is False, "Expected False for lowercase 'captcha' in sentence"
-    print("PASS: detect_captcha exact 'CAPTCHA' sentinel works with word boundary")
+    print("PASS: detect_captcha exact 'CAPTCHA' sentinel works with exact match")
 
 
 def test_checkpoint_file_write_read():
