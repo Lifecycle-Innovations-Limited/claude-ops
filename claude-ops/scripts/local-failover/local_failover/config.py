@@ -98,6 +98,8 @@ class ListenerConfig:
     protocol: str
     max_body_bytes: int
     max_idempotent_attempts: int
+    connect_timeout_seconds: float
+    idle_timeout_seconds: float
     session_ttl_seconds: float
     routes: tuple[RouteConfig, ...]
 
@@ -453,6 +455,8 @@ def _parse_listener(raw: Any, context: str) -> ListenerConfig:
             "protocol",
             "max_body_bytes",
             "max_idempotent_attempts",
+            "connect_timeout_seconds",
+            "idle_timeout_seconds",
             "session_ttl_seconds",
             "routes",
         },
@@ -488,6 +492,18 @@ def _parse_listener(raw: Any, context: str) -> ListenerConfig:
             1,
             8,
             f"{context}.max_idempotent_attempts",
+        ),
+        connect_timeout_seconds=_bounded_float(
+            data.get("connect_timeout_seconds", 5),
+            0.1,
+            120,
+            f"{context}.connect_timeout_seconds",
+        ),
+        idle_timeout_seconds=_bounded_float(
+            data.get("idle_timeout_seconds", 30),
+            0.1,
+            3600,
+            f"{context}.idle_timeout_seconds",
         ),
         session_ttl_seconds=_bounded_float(
             data.get("session_ttl_seconds", 3600), 1, 86400, f"{context}.session_ttl_seconds"
