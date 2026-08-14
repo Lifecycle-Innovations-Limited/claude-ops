@@ -77,9 +77,9 @@ class TestMaskEmail(unittest.TestCase):
     """Test email masking for logs."""
 
     def test_normal_email(self):
-        self.assertEqual(router.mask_email("adam@healify.ai"), "ad**@healify.ai")
+        self.assertEqual(router.mask_email("user@example.com"), "us**@example.com")
         self.assertEqual(
-            router.mask_email("info@auroracapital.nl"), "in**@auroracapital.nl"
+            router.mask_email("user2@example.com"), "us***@example.com"
         )
 
     def test_short_email(self):

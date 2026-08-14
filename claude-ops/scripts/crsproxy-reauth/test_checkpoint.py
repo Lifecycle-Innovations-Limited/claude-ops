@@ -76,6 +76,34 @@ def test_detect_captcha_negative():
     print("PASS: detect_captcha returns False for non-captcha text")
 
 
+def test_detect_captcha_exact_sentinel():
+    """detect_captcha returns True for exact 'CAPTCHA' sentinel (uppercase).
+
+    Browser Use tasks report 'CAPTCHA' (uppercase) as a sentinel when they
+    encounter a real captcha challenge. This must be detected via word-boundary
+    matching on the original (non-lowercased) text, while lowercase 'captcha'
+    in a sentence must NOT trigger a false positive.
+    """
+    client = MagicMock()
+    client.get_run_events.return_value = []
+
+    # Exact 'CAPTCHA' sentinel — must be detected
+    result = bu_reauth.detect_captcha({"result": "CAPTCHA"}, client)
+    assert result is True, "Expected True for exact 'CAPTCHA' sentinel"
+
+    # 'CAPTCHA' within a sentence — still detected (word boundary match)
+    result = bu_reauth.detect_captcha(
+        {"result": "I encountered a CAPTCHA challenge on the page"}, client)
+    assert result is True, "Expected True for 'CAPTCHA' in text"
+
+    # Negative: lowercase 'captcha' in a sentence must NOT match
+    result = bu_reauth.detect_captcha(
+        {"result": "The page loaded successfully. No captcha needed."},
+        client)
+    assert result is False, "Expected False for lowercase 'captcha' in sentence"
+    print("PASS: detect_captcha exact 'CAPTCHA' sentinel works with word boundary")
+
+
 def test_checkpoint_file_write_read():
     """write_checkpoint writes a valid JSON file."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -220,6 +248,7 @@ def main():
         test_safe_email,
         test_detect_captcha_positive,
         test_detect_captcha_negative,
+        test_detect_captcha_exact_sentinel,
         test_checkpoint_file_write_read,
         test_checkpoint_trigger,
         test_checkpoint_timeout,
