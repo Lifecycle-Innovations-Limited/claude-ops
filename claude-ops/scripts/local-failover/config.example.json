@@ -8,7 +8,9 @@
       "port": 18080,
       "protocol": "llm",
       "max_body_bytes": 8388608,
+      "max_concurrent_requests": 64,
       "max_idempotent_attempts": 2,
+      "client_timeout_seconds": 10,
       "connect_timeout_seconds": 5,
       "idle_timeout_seconds": 120,
       "session_ttl_seconds": 3600,
@@ -117,7 +119,9 @@
       "port": 18090,
       "protocol": "mcp",
       "max_body_bytes": 4194304,
+      "max_concurrent_requests": 64,
       "max_idempotent_attempts": 1,
+      "client_timeout_seconds": 10,
       "connect_timeout_seconds": 5,
       "idle_timeout_seconds": 120,
       "session_ttl_seconds": 3600,
@@ -128,7 +132,7 @@
           "provisioned": true,
           "health": {
             "kind": "mcp",
-            "mcp_path": "/mcp",
+            "mcp_health_path": "/_failover/status",
             "interval_seconds": 30
           }
         },
@@ -139,7 +143,7 @@
           "health": {
             "kind": "mcp",
             "auth_env": "MCP_HEALTH_TOKEN",
-            "mcp_path": "/mcp",
+            "mcp_health_path": "/_failover/status",
             "interval_seconds": 30
           }
         }

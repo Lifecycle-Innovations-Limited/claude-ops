@@ -182,10 +182,57 @@ class _GatewayHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
 
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        handler_class: type[BaseHTTPRequestHandler],
+        *,
+        max_concurrent_requests: int,
+    ) -> None:
+        self._request_slots = threading.BoundedSemaphore(max_concurrent_requests)
+        super().__init__(server_address, handler_class)
+
+    @staticmethod
+    def _reject_overload(request: socket.socket) -> None:
+        body = b'{"error":"gateway_overloaded"}'
+        response = (
+            b"HTTP/1.1 503 Service Unavailable\r\n"
+            b"Content-Type: application/json\r\n"
+            + f"Content-Length: {len(body)}\r\n".encode()
+            + b"Retry-After: 1\r\nConnection: close\r\n\r\n"
+            + body
+        )
+        try:
+            request.settimeout(0.5)
+            request.sendall(response)
+        except OSError:
+            pass
+
+    def process_request(self, request: socket.socket, client_address: object) -> None:
+        if not self._request_slots.acquire(blocking=False):
+            self._reject_overload(request)
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request: socket.socket, client_address: object) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
+
 
 class _GatewayHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     runtime: ListenerRuntime
+
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(self.runtime.config.client_timeout_seconds)
 
     def log_message(self, _format: str, *args: object) -> None:
         return
@@ -271,7 +318,11 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         if length > self.runtime.config.max_body_bytes:
             self._json_response(413, "request_body_too_large")
             return None
-        body = self.rfile.read(length) if length else b""
+        try:
+            body = self.rfile.read(length) if length else b""
+        except socket.timeout:
+            self._json_response(408, "request_body_timeout")
+            return None
         if len(body) != length:
             self._json_response(400, "incomplete_request_body")
             return None
@@ -510,7 +561,9 @@ class GatewayService:
                     {"runtime": runtime},
                 )
                 server = _GatewayHTTPServer(
-                    (runtime.config.host, runtime.config.port), handler
+                    (runtime.config.host, runtime.config.port),
+                    handler,
+                    max_concurrent_requests=runtime.config.max_concurrent_requests,
                 )
                 thread = threading.Thread(
                     target=server.serve_forever,

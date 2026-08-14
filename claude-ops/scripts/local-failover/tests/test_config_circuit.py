@@ -23,7 +23,9 @@ def valid_config() -> dict:
                 "port": 18316,
                 "protocol": "llm",
                 "max_body_bytes": 1048576,
+                "max_concurrent_requests": 64,
                 "max_idempotent_attempts": 2,
+                "client_timeout_seconds": 10,
                 "session_ttl_seconds": 3600,
                 "routes": [
                     {
@@ -147,6 +149,17 @@ class ConfigTests(unittest.TestCase):
         tunnel_route["tunnel"]["listener_host"] = "100.64.0.10"
 
         with self.assertRaisesRegex(ConfigError, "tunnel listener"):
+            parse_config(raw)
+
+    def test_listener_request_limits_are_bounded(self) -> None:
+        raw = valid_config()
+        raw["listeners"][0]["max_concurrent_requests"] = 0
+        with self.assertRaisesRegex(ConfigError, "max_concurrent_requests"):
+            parse_config(raw)
+
+        raw = valid_config()
+        raw["listeners"][0]["client_timeout_seconds"] = 0
+        with self.assertRaisesRegex(ConfigError, "client_timeout_seconds"):
             parse_config(raw)
 
 

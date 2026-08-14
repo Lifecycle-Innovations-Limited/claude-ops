@@ -19,15 +19,15 @@ CLI -> stable loopback listener -> Cloud edge -> overlay address -> supervised t
 MCP -> stable loopback listener -> local aggregate -> optional remote aggregate paths
 ```
 
-Routes are eligible only when provisioned, their network gate is satisfied, and semantic health is closed. A supervised tunnel route additionally requires a process started by this daemon, a newly bound local listener, and successful semantic checks through that listener. A pre-existing listener is never adopted as proof of tunnel health.
+Routes are eligible only when provisioned, their network gate is satisfied, and semantic health is closed. A supervised tunnel route additionally requires a process group started by this daemon, a newly bound local listener whose owning processes all belong to that group, and successful semantic checks through that listener. A pre-existing, raced, or replaced listener is never adopted as proof of tunnel health.
 
 The daemon contains five bounded units:
 
 1. **Configuration** validates loopback binds, safe upstream URLs, environment-only health credentials, timeouts, body limits, and route order.
-2. **Health engine** performs authenticated inventory and minimal stream checks, classifying missing/invalid health authorization as configuration-unknown rather than provider failure.
+2. **Health engine** performs authenticated inventory and minimal stream checks for LLM routes and read-only bounded status GETs for MCP routes, classifying missing/invalid health authorization as configuration-unknown rather than provider failure. It never creates a health-check MCP session.
 3. **Circuit and selector** apply failure thresholds, exponential cooldown, recovery successes, failback hold time, and active-route stickiness.
 4. **Streaming reverse proxy** forwards bytes once, strips hop-by-hop headers, preserves authorization and MCP session headers, and never changes upstream after client-visible bytes.
-5. **Tunnel supervisor** starts an argv array without a shell, owns only its process group, verifies a previously free local port became bound, and restarts with capped backoff.
+5. **Tunnel supervisor** starts an argv array without a shell, owns only its process group, verifies a previously free local port became bound exclusively by that group, and restarts with capped backoff.
 
 ## Retry and stream safety
 
@@ -57,13 +57,13 @@ Site-to-Site VPN connects a VPC to an on-premises network through customer-gatew
 
 ## Security model
 
-Trust boundaries are the local client request, route configuration, upstream responses, and optional tunnel child process. Controls are loopback-only binds, strict config validation, TLS verification, no shell execution, bounded request bodies/timeouts, credential references by environment variable name, status redaction, and zero automatic replay of side-effect-capable requests.
+Trust boundaries are the local client request, route configuration, upstream responses, and optional tunnel child process. Controls are loopback-only binds, strict config validation, TLS verification, no shell execution, bounded client concurrency and request-body deadlines, bounded upstream timeouts, credential references by environment variable name, status redaction, and zero automatic replay of side-effect-capable requests.
 
 The gateway does not create broad network access. A route enters selection only after separate provisioning approval and local semantic validation.
 
 ## Test strategy
 
-Deterministic unit tests use a fake clock for circuit transitions, hysteresis, backoff, anti-flapping, selection, MCP affinity, and tunnel ownership. Local mock origins verify authenticated inventory checks, stream cadence, fixed route order, bounded idempotent retries, non-idempotent no-replay, recovery, stream interruption, status redaction, and reconnect-required MCP behavior. No test uses operator credentials, external provider requests, or existing local service ports.
+Deterministic unit tests use a fake clock for circuit transitions, hysteresis, backoff, anti-flapping, selection, MCP affinity, and tunnel ownership. Local mock origins verify authenticated inventory checks, stream cadence, read-only MCP health, fixed route order, bounded client concurrency, stalled-body deadlines, bounded idempotent retries, non-idempotent no-replay, recovery, stream interruption, status redaction, and reconnect-required MCP behavior. No test uses operator credentials, external provider requests, or existing local service ports.
 
 ## Rollback
 

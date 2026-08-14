@@ -100,21 +100,24 @@ def classify_mcp_response(response: ProbeHTTPResponse) -> ProbeResult:
     classified = _http_classification(response.status, response.latency_ms, "mcp")
     if classified:
         return classified
-    body = response.body
-    content_type = response.headers.get("content-type", "").lower()
-    if "text/event-stream" in content_type:
-        for _, line in response.events:
-            if line.lstrip().startswith(b"data:"):
-                body = line.split(b":", 1)[1].strip()
-                break
     try:
-        payload = json.loads(body)
+        payload = json.loads(response.body)
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return ProbeResult("failure", "mcp_initialize_json", response.latency_ms)
-    result = payload.get("result") if isinstance(payload, dict) else None
-    if not isinstance(result, dict) or not isinstance(result.get("protocolVersion"), str):
-        return ProbeResult("failure", "mcp_initialize_shape", response.latency_ms)
-    return ProbeResult("success", "mcp_initialize_ok", response.latency_ms)
+        return ProbeResult("failure", "mcp_health_shape", response.latency_ms)
+    if not isinstance(payload, dict):
+        return ProbeResult("failure", "mcp_health_shape", response.latency_ms)
+    status = payload.get("status", payload.get("state"))
+    semantic_ready = (
+        isinstance(status, str)
+        and status.lower() in {"healthy", "ok", "online", "ready"}
+    ) or payload.get("ready") is True or (
+        payload.get("protocol") == "mcp"
+        and isinstance(payload.get("active_route"), str)
+        and bool(payload["active_route"])
+    )
+    if not semantic_ready:
+        return ProbeResult("failure", "mcp_health_shape", response.latency_ms)
+    return ProbeResult("success", "mcp_health_ok", response.latency_ms)
 
 
 class HTTPProbeTransport:
@@ -254,25 +257,12 @@ class SemanticHealth:
             return ProbeResult("unknown", "route_url_missing", 0)
         health = route.health
         if health.kind == "mcp":
-            request_body = json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2025-06-18",
-                        "capabilities": {},
-                        "clientInfo": {"name": "local-failover-health", "version": "1"},
-                    },
-                },
-                separators=(",", ":"),
-            ).encode()
             response = self.transport.request(
-                method="POST",
+                method="GET",
                 url=url,
-                path=health.mcp_path or "/mcp",
-                headers={**headers, "Content-Type": "application/json"},
-                body=request_body,
+                path=health.mcp_health_path or "/_failover/status",
+                headers=headers,
+                body=None,
                 timeout_seconds=health.timeout_seconds,
                 max_response_bytes=health.max_response_bytes,
                 stream=False,

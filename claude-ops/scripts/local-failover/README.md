@@ -29,7 +29,7 @@ A route is selectable only when all applicable gates pass:
 1. It is explicitly marked provisioned.
 2. A network-interface gate confirms the expected local route where configured.
 3. A tunnel route was started by this daemon, its port was observed free before startup, its owned
-   process is still alive, and that process caused the loopback port to become bound.
+   process is still alive, and every listener on that port belongs to the owned process group.
 4. Authenticated semantic health closes the circuit after the configured recovery hysteresis.
 
 The health engine treats `/v1/models` only as a read-only semantic response-shape check and
@@ -38,6 +38,11 @@ rewrite models, aliases, provider inventory, auth, or cache state. An empty inve
 itself admit a route: the separately configured minimal streaming probe must also succeed. Missing
 health credentials and HTTP 401/403 are configuration-unknown, not provider failures; stale
 unknown health eventually makes the route unavailable.
+
+MCP route health uses the explicitly configured read-only HTTP `GET` `mcp_health_path`, such as the
+upstream gateway's `/_failover/status`. Success requires a bounded JSON body that explicitly reports
+a ready state or an MCP protocol with an active route. Health probes never create MCP sessions or
+send JSON-RPC requests.
 
 ## Request and stream safety
 
@@ -52,6 +57,8 @@ unknown health eventually makes the route unavailable.
 - An upstream `Mcp-Session-Id` is pinned in memory to its route. An unknown, expired, or unhealthy
   pinned session receives `503 session_reconnect_required`; it is never migrated to another route.
 - Request bodies, health responses, status responses, connect time, and idle time are bounded.
+  Client header/body reads also have a deadline, and each listener has a hard concurrent-request
+  cap; excess loopback clients receive `503 gateway_overloaded` without allocating another worker.
 
 Circuit breakers start unknown, require stable successes, open after a failure threshold, use
 capped exponential cooldown, and require a failback hold. Status and Prometheus-format metrics are
@@ -254,10 +261,11 @@ python3 scripts/local-failover/vpc_paths.py plan ssm \
   --region "$AWS_REGION" --remote-port 8317 --local-port 18317
 ```
 
-An enabled SSM route is still unavailable until the gateway owns the tunnel process, observed its
-port transition, and authenticated semantic health succeeds through it. Process exit removes the
-gate immediately and restart uses capped backoff. Shutdown terminates only the owned process; a
-pre-existing listener is reported as a conflict and never adopted or killed.
+An enabled SSM route is still unavailable until the gateway owns the tunnel process group, observed
+its port transition, verifies every listener on the port belongs to that process group, and passes
+authenticated semantic health through it. A bind race or listener replacement revokes readiness
+and stops only the owned process. Process exit removes the gate immediately and restart uses capped
+backoff. A pre-existing listener is reported as a conflict and never adopted or killed.
 
 Official AWS guidance:
 

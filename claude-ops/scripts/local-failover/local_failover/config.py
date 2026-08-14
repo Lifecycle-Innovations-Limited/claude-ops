@@ -39,7 +39,7 @@ class HealthConfig:
     stream_path: str | None = None
     stream_model: str | None = None
     stream_model_env: str | None = None
-    mcp_path: str | None = None
+    mcp_health_path: str | None = None
     interval_seconds: float = 15.0
     timeout_seconds: float = 8.0
     first_event_timeout_seconds: float = 5.0
@@ -97,7 +97,9 @@ class ListenerConfig:
     port: int
     protocol: str
     max_body_bytes: int
+    max_concurrent_requests: int
     max_idempotent_attempts: int
+    client_timeout_seconds: float
     connect_timeout_seconds: float
     idle_timeout_seconds: float
     session_ttl_seconds: float
@@ -254,7 +256,7 @@ def _parse_health(raw: Any, context: str) -> HealthConfig:
             "stream_path",
             "stream_model",
             "stream_model_env",
-            "mcp_path",
+            "mcp_health_path",
             "interval_seconds",
             "timeout_seconds",
             "first_event_timeout_seconds",
@@ -285,11 +287,13 @@ def _parse_health(raw: Any, context: str) -> HealthConfig:
         data.get("inventory_path", "/v1/models"), f"{context}.inventory_path"
     )
     stream_path = _safe_path(data.get("stream_path"), f"{context}.stream_path", optional=True)
-    mcp_path = _safe_path(data.get("mcp_path"), f"{context}.mcp_path", optional=True)
+    mcp_health_path = _safe_path(
+        data.get("mcp_health_path"), f"{context}.mcp_health_path", optional=True
+    )
     if kind == "llm" and not stream_path:
         raise ConfigError(f"{context}.stream_path is required for llm health")
-    if kind == "mcp" and not mcp_path:
-        raise ConfigError(f"{context}.mcp_path is required for mcp health")
+    if kind == "mcp" and not mcp_health_path:
+        raise ConfigError(f"{context}.mcp_health_path is required for mcp health")
     return HealthConfig(
         kind=kind,
         auth_env=auth_env,
@@ -299,7 +303,7 @@ def _parse_health(raw: Any, context: str) -> HealthConfig:
         stream_path=stream_path,
         stream_model=stream_model,
         stream_model_env=stream_model_env,
-        mcp_path=mcp_path,
+        mcp_health_path=mcp_health_path,
         interval_seconds=_bounded_float(
             data.get("interval_seconds", 15), 1, 3600, f"{context}.interval_seconds"
         ),
@@ -454,7 +458,9 @@ def _parse_listener(raw: Any, context: str) -> ListenerConfig:
             "port",
             "protocol",
             "max_body_bytes",
+            "max_concurrent_requests",
             "max_idempotent_attempts",
+            "client_timeout_seconds",
             "connect_timeout_seconds",
             "idle_timeout_seconds",
             "session_ttl_seconds",
@@ -487,11 +493,23 @@ def _parse_listener(raw: Any, context: str) -> ListenerConfig:
         max_body_bytes=_bounded_int(
             data.get("max_body_bytes", 1048576), 1, 16777216, f"{context}.max_body_bytes"
         ),
+        max_concurrent_requests=_bounded_int(
+            data.get("max_concurrent_requests", 64),
+            1,
+            1024,
+            f"{context}.max_concurrent_requests",
+        ),
         max_idempotent_attempts=_bounded_int(
             data.get("max_idempotent_attempts", 2),
             1,
             8,
             f"{context}.max_idempotent_attempts",
+        ),
+        client_timeout_seconds=_bounded_float(
+            data.get("client_timeout_seconds", 10),
+            0.1,
+            300,
+            f"{context}.client_timeout_seconds",
         ),
         connect_timeout_seconds=_bounded_float(
             data.get("connect_timeout_seconds", 5),

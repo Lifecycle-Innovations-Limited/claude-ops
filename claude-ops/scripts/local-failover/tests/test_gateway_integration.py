@@ -34,6 +34,8 @@ class OriginState:
         self.requests: list[dict] = []
         self.resource_status = 200
         self.expected_auth = "Bearer test-health-credential"
+        self.block_started = threading.Event()
+        self.block_release = threading.Event()
 
 
 class MockOriginHandler(BaseHTTPRequestHandler):
@@ -87,6 +89,11 @@ class MockOriginHandler(BaseHTTPRequestHandler):
                 json.dumps({"origin": self.state.name}).encode(),
             )
             return
+        if self.path == "/block":
+            self.state.block_started.set()
+            self.state.block_release.wait(timeout=2)
+            self._send(200, json.dumps({"origin": self.state.name}).encode())
+            return
         self._send(404, b'{"error":"missing"}')
 
     def do_POST(self) -> None:
@@ -138,7 +145,15 @@ class MockOrigin:
         self.thread.join(timeout=2)
 
 
-def gateway_config(port: int, primary: str, secondary: str, protocol: str = "llm"):
+def gateway_config(
+    port: int,
+    primary: str,
+    secondary: str,
+    protocol: str = "llm",
+    *,
+    client_timeout_seconds: float = 1,
+    max_concurrent_requests: int = 64,
+):
     if protocol == "llm":
         health = {
             "kind": "llm",
@@ -149,7 +164,11 @@ def gateway_config(port: int, primary: str, secondary: str, protocol: str = "llm
             "interval_seconds": 60,
         }
     else:
-        health = {"kind": "mcp", "mcp_path": "/mcp", "interval_seconds": 60}
+        health = {
+            "kind": "mcp",
+            "mcp_health_path": "/_failover/status",
+            "interval_seconds": 60,
+        }
     breaker = {
         "failure_threshold": 1,
         "recovery_successes": 1,
@@ -168,7 +187,9 @@ def gateway_config(port: int, primary: str, secondary: str, protocol: str = "llm
                     "port": port,
                     "protocol": protocol,
                     "max_body_bytes": 1024,
+                    "max_concurrent_requests": max_concurrent_requests,
                     "max_idempotent_attempts": 2,
+                    "client_timeout_seconds": client_timeout_seconds,
                     "connect_timeout_seconds": 1,
                     "idle_timeout_seconds": 2,
                     "session_ttl_seconds": 60,
@@ -298,6 +319,80 @@ class GatewayIntegrationTests(unittest.TestCase):
         self.assertEqual(self.primary.state.requests, [])
         self.assertEqual(self.secondary.state.requests, [])
 
+    def test_stalled_request_body_times_out_without_reaching_upstream(self) -> None:
+        self.service.shutdown()
+        self.port = free_port()
+        self.service = GatewayService(
+            gateway_config(
+                self.port,
+                self.primary.url,
+                self.secondary.url,
+                client_timeout_seconds=0.2,
+            ),
+            env=self.env,
+        )
+        self.service.start(run_health=False)
+        self.runtime = self.service.listeners["llm"]
+        now = self.service.clock()
+        for route in self.runtime.routes:
+            route.breaker.observe_success(now, "test_ready")
+        client = socket.create_connection(("127.0.0.1", self.port), timeout=2)
+        client.sendall(
+            b"POST /v1/messages HTTP/1.1\r\n"
+            b"Host: localhost\r\n"
+            b"Content-Length: 10\r\n"
+            b"Connection: close\r\n\r\n"
+            b"x"
+        )
+
+        response = b""
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            response += chunk
+        client.close()
+
+        self.assertIn(b" 408 ", response)
+        self.assertIn(b"request_body_timeout", response)
+        self.assertEqual(self.primary.state.requests, [])
+        self.assertEqual(self.secondary.state.requests, [])
+
+    def test_concurrency_limit_rejects_excess_client_without_new_thread(self) -> None:
+        self.service.shutdown()
+        self.port = free_port()
+        self.service = GatewayService(
+            gateway_config(
+                self.port,
+                self.primary.url,
+                self.secondary.url,
+                max_concurrent_requests=1,
+            ),
+            env=self.env,
+        )
+        self.service.start(run_health=False)
+        self.runtime = self.service.listeners["llm"]
+        now = self.service.clock()
+        for route in self.runtime.routes:
+            route.breaker.observe_success(now, "test_ready")
+        first_result: list[tuple[int, dict[str, str], bytes]] = []
+        first = threading.Thread(
+            target=lambda: first_result.append(self.request("GET", "/block")), daemon=True
+        )
+        first.start()
+        self.assertTrue(self.primary.state.block_started.wait(timeout=1))
+
+        status, _, body = self.request("GET", "/resource")
+        self.primary.state.block_release.set()
+        first.join(timeout=2)
+
+        self.assertEqual(status, 503)
+        self.assertIn(b"gateway_overloaded", body)
+        self.assertEqual(first_result[0][0], 200)
+        self.assertEqual(
+            [request["path"] for request in self.primary.state.requests], ["/block"]
+        )
+
     def test_status_and_metrics_do_not_expose_urls_credentials_or_models(self) -> None:
         status, _, body = self.request("GET", "/_failover/status")
         metrics_status, _, metrics = self.request("GET", "/_failover/metrics")
@@ -390,6 +485,17 @@ class MCPSessionIntegrationTests(unittest.TestCase):
         self.assertEqual(failed_status, 503)
         self.assertIn(b"session_reconnect_required", failed_body)
         self.assertEqual(len(self.primary.state.requests), 1)
+        self.assertEqual(len(self.secondary.state.requests), 0)
+
+    def test_session_remains_pinned_across_repeated_requests(self) -> None:
+        status, headers, _ = self.request()
+        session_id = headers["mcp-session-id"]
+
+        second_status, _, _ = self.request(session_id)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(second_status, 200)
+        self.assertEqual(len(self.primary.state.requests), 2)
         self.assertEqual(len(self.secondary.state.requests), 0)
 
     def test_unknown_session_is_not_sent_to_arbitrary_route(self) -> None:

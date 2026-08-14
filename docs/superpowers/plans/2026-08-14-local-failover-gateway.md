@@ -15,7 +15,7 @@
 - Use `/v1/models` only for authenticated semantic health and never persist its payload.
 - Treat health-check `401`/`403` or missing health authorization as configuration-unknown, not provider failure.
 - Never automatically replay `POST`, `PUT`, `PATCH`, or `DELETE`, including MCP JSON-RPC and model generation calls.
-- Admit the SSM route only when the daemon owns the tunnel process, observed the configured local port transition from free to bound, and semantic health passes.
+- Admit the SSM route only when the daemon owns the tunnel process group, observed the configured local port transition from free to exclusively group-owned, and semantic health passes.
 
 ---
 
@@ -109,7 +109,7 @@ Expected: import failure because the health and tunnel modules do not exist.
 
 - [ ] **Step 3: Implement bounded authenticated probes and no-shell tunnel supervision**
 
-Inventory success requires a JSON object with a list-valued `data` field but discards the list immediately. Streaming success requires SSE/NDJSON content, a first event before the configured deadline, multiple cadence events or a terminal marker, a byte cap, and no response-body logging. The tunnel starts only from an unbound port, uses `shell=False` and its own process group, verifies the child remains alive while the port becomes bound, and applies capped restart backoff.
+Inventory success requires a JSON object with a list-valued `data` field but discards the list immediately. Streaming success requires SSE/NDJSON content, a first event before the configured deadline, multiple cadence events or a terminal marker, a byte cap, and no response-body logging. MCP health uses a bounded read-only status GET and never creates a protocol session. The tunnel starts only from an unbound port, uses `shell=False` and its own process group, verifies the child remains alive while every listener on the port belongs to that group, and applies capped restart backoff.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
@@ -162,7 +162,7 @@ Expected: import failure because the proxy and main modules do not exist.
 
 - [ ] **Step 3: Implement bounded forwarding and status**
 
-Strip hop-by-hop and proxy credentials, replace `Host`, preserve end-to-end authorization and MCP session headers, enforce body limits, and stream with `Connection: close` when no upstream length exists. Retry only idempotent methods and only before client-visible bytes. Bind returned MCP session IDs to a route with idle expiry. Persist redacted informational status atomically with mode `0600`.
+Strip hop-by-hop and proxy credentials, replace `Host`, preserve end-to-end authorization and MCP session headers, enforce body limits, client read deadlines, and per-listener concurrency caps, and stream with `Connection: close` when no upstream length exists. Retry only idempotent methods and only before client-visible bytes. Bind returned MCP session IDs to a route with idle expiry. Persist redacted informational status atomically with mode `0600`.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 

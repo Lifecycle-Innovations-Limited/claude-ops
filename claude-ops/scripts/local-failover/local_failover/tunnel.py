@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import socket
 import subprocess
 from dataclasses import dataclass
@@ -31,6 +32,42 @@ def listener_bound(host: str, port: int) -> bool:
         return False
 
 
+def listener_owned_by_process_group(host: str, port: int, process: object) -> bool:
+    """Fail closed unless every listener on the port belongs to the owned process group."""
+
+    del host  # lsof filters the port; listener_bound already checks the configured address.
+    lsof = shutil.which("lsof")
+    pid = getattr(process, "pid", None)
+    if lsof is None or not isinstance(pid, int):
+        return False
+    try:
+        owned_group = os.getpgid(pid)
+        result = subprocess.run(
+            [lsof, "-nP", "-a", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fp"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, ProcessLookupError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    listener_pids = {
+        int(line[1:])
+        for line in result.stdout.splitlines()
+        if line.startswith("p") and line[1:].isdigit()
+    }
+    if not listener_pids:
+        return False
+    try:
+        return all(os.getpgid(listener_pid) == owned_group for listener_pid in listener_pids)
+    except (OSError, ProcessLookupError):
+        return False
+
+
 class TunnelSupervisor:
     """Starts only an unbound listener and trusts only its live child process."""
 
@@ -41,11 +78,15 @@ class TunnelSupervisor:
         env: Mapping[str, str] | None = None,
         process_factory: Callable = subprocess.Popen,
         listener_checker: Callable[[str, int], bool] = listener_bound,
+        ownership_checker: Callable[[str, int, object], bool] = (
+            listener_owned_by_process_group
+        ),
     ) -> None:
         self.config = config
         self.env = dict(env if env is not None else os.environ)
         self.process_factory = process_factory
         self.listener_checker = listener_checker
+        self.ownership_checker = ownership_checker
         self.process = None
         self.started_at: float | None = None
         self.next_restart = 0.0
@@ -119,6 +160,12 @@ class TunnelSupervisor:
                 self.config.listener_host, self.config.listener_port
             )
             if bound and self._observed_free_before_start:
+                if not self.ownership_checker(
+                    self.config.listener_host, self.config.listener_port, self.process
+                ):
+                    self._stop_owned()
+                    self._backoff(now, "listener_ownership_mismatch")
+                    return self._status()
                 self._state = "bound"
                 self._reason = "owned_process_bound"
                 return self._status()

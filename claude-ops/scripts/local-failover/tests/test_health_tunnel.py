@@ -167,35 +167,61 @@ class SemanticHealthTests(unittest.TestCase):
             transport.calls[0]["headers"]["Authorization"], "Bearer not-a-real-token"
         )
 
-    def test_mcp_probe_accepts_initialize_result_without_session_persistence(self) -> None:
+    def test_mcp_probe_uses_only_read_only_health_gets(self) -> None:
         raw = valid_config()
         route_raw = raw["listeners"][0]["routes"][0]
         route_raw["health"] = {
             "kind": "mcp",
-            "mcp_path": "/servers/example/mcp",
+            "mcp_health_path": "/servers/example/healthz",
         }
         route = parse_config(raw).listeners[0].routes[0]
         transport = FakeTransport(
             [
                 ProbeHTTPResponse(
                     200,
-                    {"content-type": "application/json", "mcp-session-id": "ignored"},
-                    b'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}',
+                    {"content-type": "application/json"},
+                    b'{"status":"ready"}',
                     (),
                     2,
-                )
+                ),
+                ProbeHTTPResponse(
+                    200,
+                    {"content-type": "application/json"},
+                    b'{"status":"ready"}',
+                    (),
+                    2,
+                ),
             ]
+        )
+
+        health = SemanticHealth(transport=transport)
+        first = health.probe(route, env={})
+        second = health.probe(route, env={})
+
+        self.assertEqual(first.kind, "success")
+        self.assertEqual(first.reason, "mcp_health_ok")
+        self.assertEqual(second.kind, "success")
+        self.assertEqual([call["method"] for call in transport.calls], ["GET", "GET"])
+        self.assertTrue(all(call["body"] is None for call in transport.calls))
+
+    def test_mcp_probe_rejects_nonsemantic_success_body(self) -> None:
+        raw = valid_config()
+        route_raw = raw["listeners"][0]["routes"][0]
+        route_raw["health"] = {"kind": "mcp", "mcp_health_path": "/healthz"}
+        route = parse_config(raw).listeners[0].routes[0]
+        transport = FakeTransport(
+            [ProbeHTTPResponse(200, {"content-type": "text/plain"}, b"welcome", (), 2)]
         )
 
         result = SemanticHealth(transport=transport).probe(route, env={})
 
-        self.assertEqual(result.kind, "success")
-        self.assertEqual(result.reason, "mcp_initialize_ok")
-        self.assertNotIn("ignored", repr(result))
+        self.assertEqual(result.kind, "failure")
+        self.assertEqual(result.reason, "mcp_health_shape")
 
 
 class FakeProcess:
     def __init__(self) -> None:
+        self.pid = 12345
         self.returncode = None
         self.terminated = False
         self.killed = False
@@ -266,6 +292,7 @@ class TunnelSupervisorTests(unittest.TestCase):
             env={"TUNNEL_TARGET": "target-placeholder"},
             process_factory=factory,
             listener_checker=lambda *_: bound["value"],
+            ownership_checker=lambda *_: bound["value"],
         )
 
         self.assertEqual(supervisor.tick(0).state, "starting")
@@ -284,6 +311,7 @@ class TunnelSupervisorTests(unittest.TestCase):
             env={"TUNNEL_TARGET": "target-placeholder"},
             process_factory=factory,
             listener_checker=lambda *_: bound["value"],
+            ownership_checker=lambda *_: bound["value"],
         )
         supervisor.tick(0)
         bound["value"] = True
@@ -296,6 +324,49 @@ class TunnelSupervisorTests(unittest.TestCase):
         self.assertEqual(len(factory.calls), 1)
         self.assertEqual(supervisor.tick(7).state, "starting")
         self.assertEqual(len(factory.calls), 2)
+
+    def test_bind_race_never_adopts_listener_owned_by_another_process(self) -> None:
+        factory = FakeProcessFactory()
+        bound = {"value": False}
+        supervisor = TunnelSupervisor(
+            enabled_tunnel_config(),
+            env={"TUNNEL_TARGET": "target-placeholder"},
+            process_factory=factory,
+            listener_checker=lambda *_: bound["value"],
+            ownership_checker=lambda *_: False,
+        )
+        self.assertEqual(supervisor.tick(0).state, "starting")
+        bound["value"] = True
+
+        status = supervisor.tick(1)
+
+        self.assertEqual(status.state, "backoff")
+        self.assertEqual(status.reason, "listener_ownership_mismatch")
+        self.assertFalse(status.ready)
+        self.assertTrue(factory.processes[0].terminated)
+
+    def test_listener_replacement_revokes_tunnel_readiness(self) -> None:
+        factory = FakeProcessFactory()
+        bound = {"value": False}
+        owned = {"value": True}
+        supervisor = TunnelSupervisor(
+            enabled_tunnel_config(),
+            env={"TUNNEL_TARGET": "target-placeholder"},
+            process_factory=factory,
+            listener_checker=lambda *_: bound["value"],
+            ownership_checker=lambda *_: owned["value"],
+        )
+        supervisor.tick(0)
+        bound["value"] = True
+        self.assertTrue(supervisor.tick(1).ready)
+        owned["value"] = False
+
+        status = supervisor.tick(2)
+
+        self.assertEqual(status.state, "backoff")
+        self.assertEqual(status.reason, "listener_ownership_mismatch")
+        self.assertFalse(status.ready)
+        self.assertTrue(factory.processes[0].terminated)
 
     def test_missing_argv_environment_is_unknown_without_starting(self) -> None:
         factory = FakeProcessFactory()
