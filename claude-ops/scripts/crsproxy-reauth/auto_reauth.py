@@ -5,12 +5,19 @@ Runs periodically via the systemd timer ``crsproxy-reauth.timer``.
 
 Responsibilities:
   1. Run ``cliproxy-pool-health`` and log the result.
-  2. Scan auth files for expired or disabled accounts.
-  3. Trigger ``bu_reauth_lib.py`` for any expired account (subject to a
-     per-account cooldown so a persistently-blocked account is not hammered).
-  4. Log all results WITHOUT exposing secrets (emails are masked, tokens /
+  2. Reconcile actual auth files against the declarative account policy
+     (``/opt/crsproxy/account_policy.yaml``):
+       - If policy says enabled but auth file is disabled  -> trigger reauth.
+       - If policy says disabled but auth file is enabled  -> disable it.
+  3. Scan auth files for expired or disabled accounts.
+  4. Trigger reauth for any expired account using **profile-first** logic:
+       - If ``reauth_seats.json`` maps a Browser Use Cloud profile ID to the
+         account -> invoke ``bu_profile_reauth.py`` with ``-profile-id``.
+       - Otherwise -> fall back to ``bu_reauth_lib.py`` (email-based).
+     A per-account cooldown prevents hammering a persistently-blocked account.
+  5. Log all results WITHOUT exposing secrets (emails are masked, tokens /
      codes / cookies / callback URLs are never printed).
-  5. NEVER restart, reload, or kill ``crsproxy.service`` — this monitor is
+  6. NEVER restart, reload, or kill ``crsproxy.service`` — this monitor is
      strictly read-only with respect to the proxy process. Auth files
      hot-reload, so reauth never requires a service restart.
 
@@ -40,9 +47,17 @@ AUTH_DIR = Path("/opt/crsproxy/auths")
 POOL_HEALTH_CMD = "/usr/local/bin/cliproxy-pool-health"
 REAUTH_CMD = "/opt/crsproxy/venv/bin/python"
 REAUTH_SCRIPT = "/opt/crsproxy/bu_reauth_lib.py"
+PROFILE_REAUTH_SCRIPT = "/opt/crsproxy/bu_profile_reauth.py"
 ENV_FILE = Path("/opt/crsproxy/.env")
 STATE_FILE = Path("/opt/crsproxy/.auto_reauth-state.json")
 LOG_FILE = Path("/opt/crsproxy/auto_reauth.log")
+
+# Declarative account policy (contains PII — deployed on hub only, never
+# committed to the public repo).
+ACCOUNT_POLICY_FILE = Path("/opt/crsproxy/account_policy.yaml")
+
+# Reauth seat mapping (contains PII — deployed on hub only).
+REAUTH_SEATS_FILE = Path("/opt/crsproxy/reauth_seats.json")
 
 # Per-account cooldown after a reauth attempt (success OR failure) so a
 # persistently-blocked account (e.g. 2FA wall) is not retried every 15 min.
@@ -52,8 +67,8 @@ COOLDOWN_SECONDS = 6 * 3600  # 6 hours
 # proactive reauth. Claude tokens have ~8h TTL; we reauth when < 1h remaining.
 EXPIRY_SOON_SECONDS = 3600
 
-# Providers that bu_reauth_lib.py can reauth. Others (e.g. antigravity) are
-# skipped with a log line — they are not OAuth-reauthable by this pipeline.
+# Providers that the reauth pipeline can handle. Others (e.g. antigravity)
+# are skipped with a log line — they are not OAuth-reauthable by this pipeline.
 SUPPORTED_PROVIDERS = {"claude", "xai", "codex"}
 
 # ---------------------------------------------------------------------------
@@ -125,6 +140,165 @@ def load_env(path: Path) -> dict:
             val = val[1:-1]
         env[key] = val
     return env
+
+
+# ---------------------------------------------------------------------------
+# Account policy loading (YAML)
+# ---------------------------------------------------------------------------
+def load_account_policy() -> dict | None:
+    """Load the declarative account policy from account_policy.yaml.
+
+    Returns a dict with an ``accounts`` list, or None if the file is missing
+    or unreadable. Uses PyYAML if available, falls back to a minimal parser
+    for the simple key-value list format used by this policy file."""
+    if not ACCOUNT_POLICY_FILE.exists():
+        return None
+
+    text = ACCOUNT_POLICY_FILE.read_text()
+
+    # Try PyYAML first (installed on hub).
+    try:
+        import yaml
+        return yaml.safe_load(text)
+    except ImportError:
+        pass
+    except Exception as exc:
+        log(f"[policy] error parsing YAML: {exc.__class__.__name__} — "
+            "falling back to minimal parser")
+        # Fall through to minimal parser
+
+    # Minimal parser for the simple accounts list format.
+    return _minimal_yaml_parse(text)
+
+
+def _minimal_yaml_parse(text: str) -> dict:
+    """Parse the simple account_policy.yaml format without PyYAML.
+
+    Expected format:
+        accounts:
+          - key: value
+            key: value
+          - key: value
+
+    This handles only the flat list-of-dicts structure used by the policy
+    file. It is NOT a general YAML parser."""
+    accounts = []
+    current = None
+    in_accounts = False
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        # Detect top-level "accounts:" key
+        if not line.startswith(" ") and stripped.endswith(":"):
+            in_accounts = stripped[:-1] == "accounts"
+            continue
+
+        if not in_accounts:
+            continue
+
+        # List item start
+        if stripped.startswith("- "):
+            if current is not None:
+                accounts.append(current)
+            current = {}
+            # First key on the same line
+            rest = stripped[2:].strip()
+            if rest and ":" in rest:
+                k, _, v = rest.partition(":")
+                current[k.strip()] = _parse_yaml_value(v.strip())
+        elif current is not None and ":" in stripped:
+            k, _, v = stripped.partition(":")
+            current[k.strip()] = _parse_yaml_value(v.strip())
+
+    if current is not None:
+        accounts.append(current)
+
+    return {"accounts": accounts}
+
+
+def _parse_yaml_value(v: str):
+    """Parse a scalar YAML value (string, int, bool, None)."""
+    if not v:
+        return ""
+    # Remove surrounding quotes
+    if len(v) >= 2 and v[0] in ("'", '"') and v[-1] == v[0]:
+        return v[1:-1]
+    low = v.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    if low in ("none", "null", "~"):
+        return None
+    try:
+        return int(v)
+    except ValueError:
+        pass
+    return v
+
+
+# ---------------------------------------------------------------------------
+# Reauth seat mapping (JSON)
+# ---------------------------------------------------------------------------
+def load_reauth_seats() -> dict:
+    """Load reauth_seats.json. Returns a dict with a ``seats`` list, or an
+    empty dict if the file is missing."""
+    if not REAUTH_SEATS_FILE.exists():
+        return {}
+    try:
+        return json.loads(REAUTH_SEATS_FILE.read_text())
+    except Exception as exc:
+        log(f"[seats] error reading {REAUTH_SEATS_FILE.name}: "
+            f"{exc.__class__.__name__}")
+        return {}
+
+
+def find_seat(seats: dict, provider: str, email: str) -> dict | None:
+    """Find the seat entry matching provider+email in reauth_seats.json."""
+    for seat in seats.get("seats", []):
+        if seat.get("provider") == provider and seat.get("email") == email:
+            return seat
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Auth file lookup
+# ---------------------------------------------------------------------------
+def find_auth_file(provider: str, email: str) -> Path | None:
+    """Find the auth file for a given provider and email.
+
+    Auth file naming conventions:
+      - claude:  claude-{email}.json
+      - xai:     xai-{email}.json
+      - codex:   codex-{hash}-{email}-pro.json
+      - antigravity: antigravity-{email}.json
+    """
+    # Try direct name first (works for claude, xai, antigravity).
+    direct = AUTH_DIR / f"{provider}-{email}.json"
+    if direct.exists():
+        return direct
+
+    # Search for files containing the email (handles codex hash prefix).
+    for f in AUTH_DIR.glob(f"{provider}-*{email}*.json"):
+        return f
+
+    # Fallback: read files and check the email field inside (handles
+    # filename mismatches, e.g. claude-support-team@healify.ai.json
+    # containing email "support@healify.ai").
+    for f in AUTH_DIR.glob(f"{provider}-*.json"):
+        if any(ext in f.name for ext in (".bak", ".stale", ".lock", ".tmp")):
+            continue
+        try:
+            data = json.loads(f.read_text())
+            if data.get("email") == email and data.get("type") == provider:
+                return f
+        except Exception:
+            continue
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -267,39 +441,66 @@ def scan_auth_files():
 
 
 # ---------------------------------------------------------------------------
-# Reauth trigger
+# Reauth trigger (profile-first)
 # ---------------------------------------------------------------------------
-def trigger_reauth(account: dict, env: dict) -> tuple[bool, str]:
-    """Run bu_reauth_lib.py for one account. Returns (success, reason).
+def trigger_reauth(account: dict, env: dict,
+                   seats: dict | None = None) -> tuple[bool, str]:
+    """Run a reauth for one account using profile-first logic.
 
-    Secrets are never logged: we pass -gog-account but mask the email in all
-    log output. The subprocess inherits the loaded .env so BROWSER_USE_API_KEY
-    and Gmail credentials are available without printing them."""
+    If ``reauth_seats.json`` maps a Browser Use Cloud profile ID to this
+    account, invoke ``bu_profile_reauth.py`` with ``-profile-id``. Otherwise
+    fall back to ``bu_reauth_lib.py`` (email-based).
+
+    Secrets are never logged: emails are masked, and the subprocess inherits
+    the loaded .env so BROWSER_USE_API_KEY and Gmail credentials are
+    available without printing them. The method used (profile vs email) is
+    logged, but the profile ID is truncated to 12 chars."""
     provider = account["provider"]
     email = account["email"]
     masked = mask_email(email)
 
-    # Claude verification emails are forwarded to a central Gmail inbox
-    # (GOG_ACCOUNT in .env), not the account's own address. Polling the
-    # account's own mailbox fails with "No auth for gmail". For other
-    # providers (xai, codex) the verification email goes to the account
-    # itself, so we poll that address directly.
-    if provider == "claude":
-        gog_account = env.get("GOG_ACCOUNT", "")
-        if not gog_account:
-            log("[warn] GOG_ACCOUNT not set in env — Claude reauth will "
-                "fall back to account email (may fail)")
-            gog_account = email
-    else:
-        gog_account = email
+    # Look up seat mapping for profile-first reauth.
+    seat = None
+    if seats is not None:
+        seat = find_seat(seats, provider, email)
 
-    cmd = [
-        REAUTH_CMD, REAUTH_SCRIPT,
-        "-provider", provider,
-        "-email", email,
-        "-gog-account", gog_account,
-    ]
-    log(f"[reauth] triggering {provider} for {masked} (reason: {account['reason']})")
+    if seat and seat.get("profile_id"):
+        # --- Profile-based reauth ---
+        profile_id = seat["profile_id"]
+        cmd = [
+            REAUTH_CMD, PROFILE_REAUTH_SCRIPT,
+            "-provider", provider,
+            "-email", email,
+            "-profile-id", profile_id,
+        ]
+        method = "profile"
+        log(f"[reauth] triggering {provider} for {masked} via {method} "
+            f"(profile={profile_id[:12]}... reason: {account['reason']})")
+    else:
+        # --- Email-based reauth (fallback) ---
+        # Claude verification emails are forwarded to a central Gmail inbox
+        # (GOG_ACCOUNT in .env), not the account's own address. Polling the
+        # account's own mailbox fails with "No auth for gmail". For other
+        # providers (xai, codex) the verification email goes to the account
+        # itself, so we poll that address directly.
+        if provider == "claude":
+            gog_account = env.get("GOG_ACCOUNT", "")
+            if not gog_account:
+                log("[warn] GOG_ACCOUNT not set in env — Claude reauth will "
+                    "fall back to account email (may fail)")
+                gog_account = email
+        else:
+            gog_account = email
+
+        cmd = [
+            REAUTH_CMD, REAUTH_SCRIPT,
+            "-provider", provider,
+            "-email", email,
+            "-gog-account", gog_account,
+        ]
+        method = "email"
+        log(f"[reauth] triggering {provider} for {masked} via {method} "
+            f"(reason: {account['reason']})")
 
     try:
         proc = subprocess.run(
@@ -314,14 +515,132 @@ def trigger_reauth(account: dict, env: dict) -> tuple[bool, str]:
         # secret that might slip through (emails, codes, URLs).
         rc = proc.returncode
         if rc == 0:
-            return True, "reauth succeeded"
+            return True, f"reauth succeeded ({method})"
         if rc == 2:
-            return False, "hCaptcha checkpoint — needs human intervention"
-        return False, f"reauth failed (exit {rc})"
+            return False, f"hCaptcha checkpoint — needs human intervention ({method})"
+        return False, f"reauth failed (exit {rc}, {method})"
     except subprocess.TimeoutExpired:
-        return False, "reauth timed out (>660s)"
+        return False, f"reauth timed out (>660s, {method})"
     except Exception as exc:
-        return False, f"reauth error: {exc.__class__.__name__}"
+        return False, f"reauth error: {exc.__class__.__name__} ({method})"
+
+
+# ---------------------------------------------------------------------------
+# Account policy reconciliation
+# ---------------------------------------------------------------------------
+def reconcile_accounts(env: dict, seats: dict, state: dict) -> dict:
+    """Reconcile actual auth files against the declarative account policy.
+
+    For each account declared in ``account_policy.yaml``:
+      - If policy says ``enabled: true`` but the auth file is disabled
+        -> trigger reauth (subject to cooldown).
+      - If policy says ``enabled: false`` but the auth file is enabled
+        -> disable it atomically (temp file + rename) and record the reason.
+      - If state matches policy -> no action.
+
+    Returns a summary dict:
+      {"reauth_triggered": N, "disabled": N, "skipped": N, "errors": N}
+    """
+    policy = load_account_policy()
+    if not policy:
+        log("[reconcile] no account_policy.yaml found — skipping reconciliation")
+        return {"reauth_triggered": 0, "disabled": 0, "skipped": 0, "errors": 0}
+
+    accounts_list = policy.get("accounts", [])
+    if not accounts_list:
+        log("[reconcile] account_policy.yaml has no accounts — skipping")
+        return {"reauth_triggered": 0, "disabled": 0, "skipped": 0, "errors": 0}
+
+    summary = {"reauth_triggered": 0, "disabled": 0, "skipped": 0, "errors": 0}
+    log(f"[reconcile] processing {len(accounts_list)} account(s) from policy")
+
+    for entry in accounts_list:
+        provider = entry.get("provider", "")
+        email = entry.get("email", "")
+        should_be_enabled = entry.get("enabled", True)
+        reason_text = entry.get("reason", "")
+        masked = mask_email(email)
+
+        # Find the auth file for this account.
+        auth_file = find_auth_file(provider, email)
+        if not auth_file:
+            if should_be_enabled:
+                log(f"[reconcile] {masked} ({provider}): no auth file — "
+                    "cannot enable, will be handled by reauth pipeline")
+            else:
+                log(f"[reconcile] {masked} ({provider}): no auth file — "
+                    "already absent (policy: disabled)")
+            summary["skipped"] += 1
+            continue
+
+        # Read current state.
+        try:
+            data = json.loads(auth_file.read_text())
+        except Exception as exc:
+            log(f"[reconcile] {masked} ({provider}): unreadable auth file "
+                f"({exc.__class__.__name__}) — skipping")
+            summary["errors"] += 1
+            continue
+
+        is_disabled = bool(data.get("disabled", False))
+
+        if should_be_enabled and is_disabled:
+            # Policy says enabled but auth file is disabled -> trigger reauth.
+            key = f"{provider}:{email}"
+            if in_cooldown(state, key):
+                log(f"[reconcile] {masked} ({provider}): should be enabled "
+                    "but is disabled — in cooldown, skipping")
+                summary["skipped"] += 1
+                continue
+
+            log(f"[reconcile] {masked} ({provider}): should be enabled but "
+                "is disabled — triggering reauth")
+            account = {
+                "file": auth_file.name,
+                "provider": provider,
+                "email": email,
+                "reason": "policy-enabled-but-disabled",
+            }
+            success, reason = trigger_reauth(account, env, seats)
+            record_attempt(state, key, success, reason)
+            if success:
+                summary["reauth_triggered"] += 1
+                log(f"[reconcile] {masked} ({provider}): reauth succeeded")
+            else:
+                log(f"[reconcile] {masked} ({provider}): reauth failed — {reason}")
+
+        elif not should_be_enabled and not is_disabled:
+            # Policy says disabled but auth file is enabled -> disable it.
+            log(f"[reconcile] {masked} ({provider}): should be disabled but "
+                "is enabled — disabling per policy")
+            if reason_text:
+                data["disabled_reason"] = reason_text
+            data["disabled"] = True
+            # Atomic write: temp file + rename.
+            tmp = auth_file.with_suffix(".tmp")
+            try:
+                tmp.write_text(json.dumps(data, indent=2))
+                os.replace(tmp, auth_file)
+                summary["disabled"] += 1
+                log(f"[reconcile] {masked} ({provider}): disabled per policy")
+            except Exception as exc:
+                log(f"[reconcile] {masked} ({provider}): failed to disable "
+                    f"({exc.__class__.__name__})")
+                summary["errors"] += 1
+                try:
+                    if tmp.exists():
+                        tmp.unlink()
+                except Exception:
+                    pass
+
+        else:
+            # State matches policy — no action needed.
+            summary["skipped"] += 1
+
+    log(f"[reconcile] summary: reauth_triggered={summary['reauth_triggered']} "
+        f"disabled={summary['disabled']} skipped={summary['skipped']} "
+        f"errors={summary['errors']}")
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -350,21 +669,27 @@ def main() -> int:
     if infra_failure:
         log("[fatal] pool-health infrastructure failure — monitor cannot run")
 
-    # 2. Scan auth files for expired/disabled accounts.
+    # 2. Load env, seats, and cooldown state.
+    env = os.environ.copy()
+    env.update(load_env(ENV_FILE))
+    env["HOME"] = "/opt/crsproxy"
+
+    seats = load_reauth_seats()
+    state = load_state()
+
+    # 3. Run account policy reconciliation.
+    reconcile_summary = reconcile_accounts(env, seats, state)
+
+    # 4. Scan auth files for expired/disabled accounts.
     needs = scan_auth_files()
-    log(f"[scan] {len(needs)} account(s) need reauth")
+    log(f"[scan] {len(needs)} account(s) need reauth (token expiry/disabled)")
 
     if not needs:
         log("auto_reauth: nothing to do — all accounts healthy")
         log("=" * 72)
         return 3 if infra_failure else 0
 
-    # 3. Load env + cooldown state, then trigger reauth for each account.
-    env = os.environ.copy()
-    env.update(load_env(ENV_FILE))
-    env["HOME"] = "/opt/crsproxy"
-
-    state = load_state()
+    # 5. Trigger reauth for each account (profile-first, with cooldown).
     attempted = 0
     succeeded = 0
     for account in needs:
@@ -375,7 +700,7 @@ def main() -> int:
             continue
 
         attempted += 1
-        success, reason = trigger_reauth(account, env)
+        success, reason = trigger_reauth(account, env, seats)
         record_attempt(state, key, success, reason)
         if success:
             succeeded += 1
@@ -383,7 +708,9 @@ def main() -> int:
         else:
             log(f"[fail] {mask_email(account['email'])} ({account['provider']}): {reason}")
 
-    log(f"[summary] attempted={attempted} succeeded={succeeded} "
+    log(f"[summary] reconcile: {reconcile_summary['reauth_triggered']} reauthed, "
+        f"{reconcile_summary['disabled']} disabled. "
+        f"scan: attempted={attempted} succeeded={succeeded} "
         f"skipped(cooldown)={len(needs) - attempted}")
     log("=" * 72)
 

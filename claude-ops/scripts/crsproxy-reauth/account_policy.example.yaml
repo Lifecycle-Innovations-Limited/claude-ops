@@ -1,0 +1,104 @@
+# CRSProxy Account Policy — Example Template (NO PII)
+#
+# This is a PII-free example of the declarative account policy file.
+# The real file is deployed to /opt/crsproxy/account_policy.yaml on the hub
+# only — it contains real account emails and must NEVER be committed to the
+# public repo.
+#
+# The auto_reauth.py monitor reads this file to reconcile actual auth files
+# against the declared target state:
+#   - If enabled=true but auth file is disabled  -> trigger reauth
+#   - If enabled=false but auth file is enabled  -> disable it
+#
+# Fields:
+#   provider:              claude | xai | codex | antigravity
+#   email:                 account email (real in deployed file, placeholder here)
+#   enabled:               target state (true = should be active, false = should be disabled)
+#   reason:                human-readable reason when enabled=false (optional)
+#   priority:              lower = higher priority for routing (1=highest)
+#   profile_id:            Browser Use Cloud profile UUID (optional, for profile-based reauth)
+#   reauth_method:         profile | email | x_oauth | none
+#   requires_2fa:          true if the account needs 2FA (human checkpoint required)
+#   x_username:            X/Twitter username (optional, for x_oauth method only)
+#   max_consecutive_failures: auto-disable after this many consecutive failures
+
+accounts:
+  # --- Claude OAuth accounts ---
+  - provider: claude
+    email: user1@example.com
+    enabled: true
+    priority: 5
+    reauth_method: email
+    requires_2fa: false
+    max_consecutive_failures: 3
+
+  - provider: claude
+    email: user2@example.com
+    enabled: true
+    priority: 3
+    profile_id: "<BU_PROFILE_UUID>"
+    reauth_method: profile
+    requires_2fa: false
+    max_consecutive_failures: 3
+
+  - provider: claude
+    email: user3@example.com
+    enabled: true
+    priority: 5
+    reauth_method: email
+    requires_2fa: false
+    max_consecutive_failures: 3
+
+  # --- Codex (OpenAI) OAuth accounts ---
+  - provider: codex
+    email: user4@example.com
+    enabled: true
+    priority: 7
+    reauth_method: email
+    requires_2fa: false
+    max_consecutive_failures: 3
+
+  - provider: codex
+    email: user5@example.com
+    enabled: true
+    priority: 7
+    reauth_method: email
+    requires_2fa: false
+    max_consecutive_failures: 3
+
+  # --- xAI/Grok OAuth accounts ---
+  - provider: xai
+    email: user6@example.com
+    enabled: true
+    priority: 8
+    reauth_method: email
+    requires_2fa: false
+    max_consecutive_failures: 3
+
+  - provider: xai
+    email: user7@example.com
+    enabled: false
+    reason: "different tier, no SuperGrok"
+    priority: 8
+    reauth_method: email
+    requires_2fa: false
+    max_consecutive_failures: 3
+
+  - provider: xai
+    email: user8@example.com
+    enabled: true
+    priority: 8
+    reauth_method: x_oauth
+    requires_2fa: true
+    x_username: "example_user"
+    max_consecutive_failures: 3
+
+  # --- Antigravity (disabled — route via Claude OAuth instead) ---
+  - provider: antigravity
+    email: user9@example.com
+    enabled: false
+    reason: "Anthropic models should route via Claude OAuth, not Google Vertex AI"
+    priority: 9
+    reauth_method: none
+    requires_2fa: false
+    max_consecutive_failures: 3
