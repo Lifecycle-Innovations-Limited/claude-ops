@@ -488,6 +488,7 @@ class GatewayService:
         self._stop = threading.Event()
         self._started = False
         self._persist_lock = threading.Lock()
+        self._state_persistence = "disabled" if config.state_file is None else "pending"
         self._next_probe: dict[tuple[str, str], float] = {}
         self._tunnels: dict[tuple[str, str], TunnelSupervisor] = {}
         for listener in self.listeners.values():
@@ -608,6 +609,7 @@ class GatewayService:
         now = self.clock()
         return {
             "version": 1,
+            "state_persistence": self._state_persistence,
             "listeners": [runtime.snapshot(now) for runtime in self.listeners.values()],
         }
 
@@ -617,24 +619,34 @@ class GatewayService:
             return
         with self._persist_lock:
             path = Path(path)
-            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            descriptor, temporary = tempfile.mkstemp(
-                dir=path.parent, prefix=f".{path.name}.", text=True
-            )
+            descriptor = -1
+            temporary: str | None = None
             try:
+                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                descriptor, temporary = tempfile.mkstemp(
+                    dir=path.parent, prefix=f".{path.name}.", text=True
+                )
                 os.fchmod(descriptor, 0o600)
                 with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    descriptor = -1
                     json.dump(self._snapshot(), handle, sort_keys=True, separators=(",", ":"))
                     handle.write("\n")
                     handle.flush()
                     os.fsync(handle.fileno())
                 os.replace(temporary, path)
+                temporary = None
                 os.chmod(path, 0o600)
+                self._state_persistence = "ok"
+            except OSError:
+                self._state_persistence = "error"
             finally:
-                try:
-                    os.unlink(temporary)
-                except FileNotFoundError:
-                    pass
+                if descriptor >= 0:
+                    os.close(descriptor)
+                if temporary is not None:
+                    try:
+                        os.unlink(temporary)
+                    except FileNotFoundError:
+                        pass
 
     def shutdown(self) -> None:
         self._stop.set()

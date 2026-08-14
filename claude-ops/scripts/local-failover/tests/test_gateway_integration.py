@@ -3,10 +3,13 @@ from __future__ import annotations
 import http.client
 import json
 import socket
+import stat
 import sys
+import tempfile
 import threading
 import time
 import unittest
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -314,6 +317,30 @@ class GatewayIntegrationTests(unittest.TestCase):
 
         self.assertEqual(result.kind, "success")
         self.assertEqual(result.reason, "semantic_ok")
+
+    def test_state_snapshot_is_private_and_redacted(self) -> None:
+        self.service.shutdown()
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "status.json"
+            config = replace(
+                gateway_config(free_port(), self.primary.url, self.secondary.url),
+                state_file=state_file,
+            )
+            self.service = GatewayService(config, env=self.env)
+            self.service.start(run_health=False)
+            now = self.service.clock()
+            for route in self.service.listeners["llm"].routes:
+                route.breaker.observe_success(now, "test_ready")
+            self.service.persist_state()
+
+            body = state_file.read_bytes()
+            mode = stat.S_IMODE(state_file.stat().st_mode)
+
+            self.assertEqual(mode, 0o600)
+            self.assertIn(b'"state_persistence":"ok"', body)
+            self.assertNotIn(self.primary.url.encode(), body)
+            self.assertNotIn(b"test-health-credential", body)
+            self.assertNotIn(b"configured-model", body)
 
 
 class MCPSessionIntegrationTests(unittest.TestCase):

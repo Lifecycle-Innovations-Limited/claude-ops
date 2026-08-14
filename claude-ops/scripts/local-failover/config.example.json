@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "state_file": "~/.local/state/local-failover/status.json",
+  "listeners": [
+    {
+      "name": "llm",
+      "host": "127.0.0.1",
+      "port": 18080,
+      "protocol": "llm",
+      "max_body_bytes": 8388608,
+      "max_idempotent_attempts": 2,
+      "connect_timeout_seconds": 5,
+      "idle_timeout_seconds": 120,
+      "session_ttl_seconds": 3600,
+      "routes": [
+        {
+          "name": "cloudflare-primary",
+          "url_env": "FAILOVER_CLOUDFLARE_URL",
+          "provisioned": true,
+          "trusted_overlay_http": false,
+          "health": {
+            "kind": "llm",
+            "auth_env": "FAILOVER_HEALTH_TOKEN",
+            "inventory_path": "/v1/models",
+            "stream_path": "/v1/chat/completions",
+            "stream_model_env": "FAILOVER_HEALTH_MODEL",
+            "interval_seconds": 60,
+            "timeout_seconds": 8,
+            "first_event_timeout_seconds": 5,
+            "max_event_gap_seconds": 3,
+            "max_response_bytes": 65536
+          },
+          "breaker": {
+            "failure_threshold": 2,
+            "recovery_successes": 3,
+            "base_backoff_seconds": 5,
+            "max_backoff_seconds": 120,
+            "failback_hold_seconds": 15,
+            "max_stale_seconds": 180
+          }
+        },
+        {
+          "name": "tailscale-secondary",
+          "url_env": "FAILOVER_TAILSCALE_URL",
+          "provisioned": false,
+          "trusted_overlay_http": true,
+          "network_gate": {
+            "kind": "route_interface",
+            "destination": "100.64.0.10",
+            "interface_prefixes": ["utun", "tailscale"]
+          },
+          "health": {
+            "kind": "llm",
+            "auth_env": "FAILOVER_HEALTH_TOKEN",
+            "inventory_path": "/v1/models",
+            "stream_path": "/v1/chat/completions",
+            "stream_model_env": "FAILOVER_HEALTH_MODEL",
+            "interval_seconds": 60
+          },
+          "breaker": {
+            "failure_threshold": 2,
+            "recovery_successes": 3,
+            "base_backoff_seconds": 5,
+            "max_backoff_seconds": 120,
+            "failback_hold_seconds": 15,
+            "max_stale_seconds": 180
+          }
+        },
+        {
+          "name": "ssm-tertiary",
+          "url": "http://127.0.0.1:18317",
+          "provisioned": false,
+          "trusted_overlay_http": false,
+          "tunnel": {
+            "enabled": false,
+            "argv": [
+              "aws",
+              "ssm",
+              "start-session",
+              "--region",
+              "${AWS_REGION}",
+              "--target",
+              "${SSM_MANAGED_NODE_ID}",
+              "--document-name",
+              "AWS-StartPortForwardingSessionToRemoteHost",
+              "--parameters",
+              "host=[${SSM_REMOTE_HOST}],portNumber=[8317],localPortNumber=[18317]"
+            ],
+            "listener_host": "127.0.0.1",
+            "listener_port": 18317,
+            "startup_timeout_seconds": 20,
+            "restart_base_seconds": 5,
+            "restart_max_seconds": 120
+          },
+          "health": {
+            "kind": "llm",
+            "auth_env": "FAILOVER_HEALTH_TOKEN",
+            "inventory_path": "/v1/models",
+            "stream_path": "/v1/chat/completions",
+            "stream_model_env": "FAILOVER_HEALTH_MODEL",
+            "interval_seconds": 60
+          },
+          "breaker": {
+            "failure_threshold": 2,
+            "recovery_successes": 3,
+            "base_backoff_seconds": 5,
+            "max_backoff_seconds": 120,
+            "failback_hold_seconds": 15,
+            "max_stale_seconds": 180
+          }
+        }
+      ]
+    },
+    {
+      "name": "mcp",
+      "host": "127.0.0.1",
+      "port": 18090,
+      "protocol": "mcp",
+      "max_body_bytes": 4194304,
+      "max_idempotent_attempts": 1,
+      "connect_timeout_seconds": 5,
+      "idle_timeout_seconds": 120,
+      "session_ttl_seconds": 3600,
+      "routes": [
+        {
+          "name": "local-primary",
+          "url": "http://127.0.0.1:18091",
+          "provisioned": true,
+          "health": {
+            "kind": "mcp",
+            "mcp_path": "/mcp",
+            "interval_seconds": 30
+          }
+        },
+        {
+          "name": "remote-secondary",
+          "url_env": "FAILOVER_REMOTE_MCP_URL",
+          "provisioned": false,
+          "health": {
+            "kind": "mcp",
+            "auth_env": "MCP_HEALTH_TOKEN",
+            "mcp_path": "/mcp",
+            "interval_seconds": 30
+          }
+        }
+      ]
+    }
+  ]
+}

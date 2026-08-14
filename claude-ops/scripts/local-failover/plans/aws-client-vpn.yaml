@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  REVIEW ONLY. Optional managed laptop access with AWS Client VPN. Deploying this
+  template creates hourly-billed resources and requires separate authorization.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  TargetSubnetId:
+    Type: AWS::EC2::Subnet::Id
+  ExistingSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  ServerCertificateArn:
+    Type: String
+    Description: Existing ACM server-certificate ARN; required for every auth mode.
+  ClientCidrBlock:
+    Type: String
+    Default: 172.31.240.0/22
+    Description: Non-overlapping client CIDR, /12 through /22.
+  VpcDestinationCidr:
+    Type: String
+    Description: CIDR clients are authorized to reach.
+  DnsServers:
+    Type: CommaDelimitedList
+    Description: Existing reachable DNS server addresses.
+  AuthType:
+    Type: String
+    AllowedValues: [certificate, directory, saml]
+  ClientRootCertificateChainArn:
+    Type: String
+    Default: ""
+    Description: Required when AuthType is certificate.
+  DirectoryId:
+    Type: String
+    Default: ""
+    Description: Required when AuthType is directory.
+  SAMLProviderArn:
+    Type: String
+    Default: ""
+    Description: Required when AuthType is saml.
+  SelfServiceSAMLProviderArn:
+    Type: String
+    Default: ""
+  AccessGroupId:
+    Type: String
+    Default: ""
+    Description: Optional AD/SAML group; empty authorizes all authenticated users.
+  AdditionalDestinationCidr:
+    Type: String
+    Default: ""
+    Description: Optional additional route; empty creates no explicit route.
+
+Conditions:
+  UseCertificate: !Equals [!Ref AuthType, certificate]
+  UseDirectory: !Equals [!Ref AuthType, directory]
+  UseSAML: !Equals [!Ref AuthType, saml]
+  HasSelfServiceSAML: !Not [!Equals [!Ref SelfServiceSAMLProviderArn, ""]]
+  HasAccessGroup: !Not [!Equals [!Ref AccessGroupId, ""]]
+  HasAdditionalRoute: !Not [!Equals [!Ref AdditionalDestinationCidr, ""]]
+
+Resources:
+  Endpoint:
+    Type: AWS::EC2::ClientVpnEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ClientCidrBlock: !Ref ClientCidrBlock
+      ServerCertificateArn: !Ref ServerCertificateArn
+      SplitTunnel: true
+      TransportProtocol: udp
+      VpnPort: 443
+      SecurityGroupIds: [!Ref ExistingSecurityGroupId]
+      DnsServers: !Ref DnsServers
+      ConnectionLogOptions:
+        Enabled: false
+      AuthenticationOptions:
+        - !If
+          - UseCertificate
+          - Type: certificate-authentication
+            MutualAuthentication:
+              ClientRootCertificateChainArn: !Ref ClientRootCertificateChainArn
+          - !Ref AWS::NoValue
+        - !If
+          - UseDirectory
+          - Type: directory-service-authentication
+            ActiveDirectory:
+              DirectoryId: !Ref DirectoryId
+          - !Ref AWS::NoValue
+        - !If
+          - UseSAML
+          - Type: federated-authentication
+            FederatedAuthentication:
+              SAMLProviderArn: !Ref SAMLProviderArn
+              SelfServiceSAMLProviderArn: !If
+                - HasSelfServiceSAML
+                - !Ref SelfServiceSAMLProviderArn
+                - !Ref AWS::NoValue
+          - !Ref AWS::NoValue
+      TagSpecifications:
+        - ResourceType: client-vpn-endpoint
+          Tags:
+            - Key: Purpose
+              Value: local-access-review
+
+  TargetNetwork:
+    Type: AWS::EC2::ClientVpnTargetNetworkAssociation
+    Properties:
+      ClientVpnEndpointId: !Ref Endpoint
+      SubnetId: !Ref TargetSubnetId
+
+  Authorization:
+    Type: AWS::EC2::ClientVpnAuthorizationRule
+    Properties:
+      ClientVpnEndpointId: !Ref Endpoint
+      TargetNetworkCidr: !Ref VpcDestinationCidr
+      AuthorizeAllGroups: !If [HasAccessGroup, false, true]
+      AccessGroupId: !If [HasAccessGroup, !Ref AccessGroupId, !Ref AWS::NoValue]
+
+  AdditionalRoute:
+    Type: AWS::EC2::ClientVpnRoute
+    Condition: HasAdditionalRoute
+    DependsOn: TargetNetwork
+    Properties:
+      ClientVpnEndpointId: !Ref Endpoint
+      DestinationCidrBlock: !Ref AdditionalDestinationCidr
+      TargetVpcSubnetId: !Ref TargetSubnetId
+
+Outputs:
+  ReviewWarning:
+    Value: Do not deploy without explicit cost, network, authentication, and security approval.
