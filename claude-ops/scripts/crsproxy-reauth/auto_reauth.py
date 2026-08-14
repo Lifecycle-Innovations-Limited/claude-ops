@@ -286,8 +286,8 @@ def find_auth_file(provider: str, email: str) -> Path | None:
         return f
 
     # Fallback: read files and check the email field inside (handles
-    # filename mismatches, e.g. claude-support-team@healify.ai.json
-    # containing email "support@healify.ai").
+    # filename mismatches, e.g. claude-user@example.com.json
+    # containing email "user@example.com").
     for f in AUTH_DIR.glob(f"{provider}-*.json"):
         if any(ext in f.name for ext in (".bak", ".stale", ".lock", ".tmp")):
             continue
@@ -390,10 +390,16 @@ def parse_expiry(expired: str):
         return None
 
 
-def scan_auth_files():
+def scan_auth_files(policy_disabled=None):
     """Scan all auth files and return a list of dicts describing each account
     that needs a reauth (token expired/expiring-soon or disabled) and is
-    supported by the reauth pipeline."""
+    supported by the reauth pipeline.
+
+    If policy_disabled is provided (a set of (provider, email) tuples),
+    accounts matching those tuples are excluded — they were intentionally
+    disabled by policy and should not be reauthed. This prevents the
+    reconciliation step from disabling a policy-disabled account and then
+    the scan step immediately re-queueing it for reauth in the same cycle."""
     now = datetime.now(timezone.utc)
     needs_reauth = []
     all_files = sorted(AUTH_DIR.glob("*.json"))
@@ -406,6 +412,10 @@ def scan_auth_files():
 
         provider = data.get("type", "")
         email = data.get("email", "")
+        # Skip accounts that are intentionally disabled by policy — they
+        # should not be re-queued for reauth by the generic scan.
+        if policy_disabled and (provider, email) in policy_disabled:
+            continue
         disabled = bool(data.get("disabled", False))
         exp = parse_expiry(data.get("expired", ""))
 
@@ -680,8 +690,19 @@ def main() -> int:
     # 3. Run account policy reconciliation.
     reconcile_summary = reconcile_accounts(env, seats, state)
 
+    # Build set of policy-disabled accounts to exclude from the generic scan.
+    # This prevents the scan from re-queueing accounts that were just disabled
+    # by reconcile_accounts() in the same cycle (reconciliation bug fix).
+    policy = load_account_policy()
+    policy_disabled = set()
+    if policy:
+        for entry in policy.get("accounts", []):
+            if not entry.get("enabled", True):
+                policy_disabled.add(
+                    (entry.get("provider", ""), entry.get("email", "")))
+
     # 4. Scan auth files for expired/disabled accounts.
-    needs = scan_auth_files()
+    needs = scan_auth_files(policy_disabled=policy_disabled)
     log(f"[scan] {len(needs)} account(s) need reauth (token expiry/disabled)")
 
     if not needs:

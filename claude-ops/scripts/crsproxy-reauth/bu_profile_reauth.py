@@ -25,9 +25,10 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# Import infrastructure from bu_reauth.py
+# Import infrastructure from bu_reauth_lib.py (the stable copy that avoids
+# the quarantine issue affecting bu_reauth.py on the hub).
 sys.path.insert(0, "/opt/crsproxy")
-from bu_reauth import (
+from bu_reauth_lib import (
     BrowserUseClient,
     PROVIDERS,
     INTERCEPT_JS_TEMPLATE,
@@ -58,7 +59,7 @@ from bu_reauth import (
 )
 
 # Also import _complete_reauth for the final step
-from bu_reauth import _complete_reauth
+from bu_reauth_lib import _complete_reauth
 
 
 def run_profile_reauth(provider: str, email: str, profile_id: str,
@@ -239,7 +240,7 @@ def _fallback_email_entry(proc, client, session_id, provider, email,
     This reuses the session to enter the email and proceed with the
     standard OAuth flow (code/magic link via Gmail).
     """
-    from bu_reauth import (
+    from bu_reauth_lib import (
         poll_gmail_for_code,
         record_email_send,
         _code_entry_failed,

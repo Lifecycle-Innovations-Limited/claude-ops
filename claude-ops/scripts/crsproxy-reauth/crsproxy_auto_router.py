@@ -60,7 +60,7 @@ logger = logging.getLogger("crsproxy-auto-router")
 def mask_email(email):
     """Mask an email address for safe logging.
 
-    Returns 'ad**@healify.ai' for 'adam@healify.ai'.
+    Returns 'us**@example.com' for 'user@example.com'.
     Returns '[no-email]' for empty/invalid input.
     """
     if not email or "@" not in email:

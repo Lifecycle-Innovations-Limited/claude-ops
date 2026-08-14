@@ -20,7 +20,7 @@ Features:
     keeps browser session alive, waits for a file-based trigger, then
     resumes with a follow-up run in the same session to click Authorize
     and capture the callback URL.
-  - Serialization lease: checks /tmp/crsproxy-claude-oauth-lease.json
+  - Serialization lease: checks /opt/crsproxy/state/crsproxy-claude-oauth-lease.json
     before starting a login, waits if held, cleans up after completion.
   - Email cooldown: tracks verification code send timestamps, enforces
     a 5-minute cooldown if >3 codes are sent in 5 minutes, logs
@@ -61,7 +61,7 @@ Usage:
 
   # When hCaptcha is detected, the script emits the live_view_url and waits.
   # After solving the captcha in the browser, create the trigger file:
-  #   touch /tmp/bu_reauth_checkpoint_trigger
+  #   sudo -u crsproxy touch /opt/crsproxy/state/bu_reauth_checkpoint_trigger
   # The script will then create a follow-up run and complete the flow.
 """
 
@@ -900,7 +900,14 @@ def _code_entry_failed(result_text: str) -> bool:
 
 def detect_captcha(run_result: dict, client: BrowserUseClient) -> bool:
     """Check if the run result or events indicate a real captcha challenge."""
-    result_text = str(run_result.get("result", "") or "").lower()
+    result_raw = str(run_result.get("result", "") or "")
+    result_text = result_raw.lower()
+    # Browser Use tasks report exact 'CAPTCHA' (uppercase) as a sentinel
+    # when they encounter a real captcha challenge. Use a word-boundary
+    # regex on the original (non-lowercased) text so that 'captcha' in
+    # sentences like "No captcha needed" does NOT trigger a false positive.
+    if re.search(r'\bCAPTCHA\b', result_raw):
+        return True
     # "captcha" in a sentence is not enough — look for specific indicators
     captcha_indicators = [
         # These indicators are checked ONLY against the agent's result
@@ -965,7 +972,7 @@ def wait_for_checkpoint_signal(timeout: int = CHECKPOINT_TIMEOUT) -> bool:
 
     Polls for the existence of CHECKPOINT_TRIGGER every CHECKPOINT_POLL_INTERVAL
     seconds.  Returns True if the trigger appears, False on timeout.
-    The trigger file can be created by: touch /tmp/bu_reauth_checkpoint_trigger
+    The trigger file can be created by: sudo -u crsproxy touch /opt/crsproxy/state/bu_reauth_checkpoint_trigger
     """
     log(f"[CAPTCHA_CHECKPOINT] Waiting up to {timeout}s for trigger: {CHECKPOINT_TRIGGER}")
     t0 = time.time()
@@ -999,7 +1006,7 @@ def handle_captcha_checkpoint(client: BrowserUseClient, run_id: str,
     2. Emit the URL to stdout (full URL for Sam, sanitized for logs).
     3. Keep the browser session alive (do NOT stop it).
     4. Write a checkpoint file with session state.
-    5. Wait for a file-based trigger (touch /tmp/bu_reauth_checkpoint_trigger).
+    5. Wait for a file-based trigger (sudo -u crsproxy touch /opt/crsproxy/state/bu_reauth_checkpoint_trigger).
     6. After trigger, create a follow-up run in the same session to click
        Authorize with JS interception and capture the callback URL.
     7. Return (callback_url, session_id) or (None, session_id) on failure.
@@ -1515,7 +1522,7 @@ def _timeout_handler(signum, frame):
 def _checkpoint_resume(args) -> int:
     """Resume from a hCaptcha checkpoint file.
 
-    Reads /tmp/bu_reauth_checkpoint.json for the session_id, provider,
+    Reads /opt/crsproxy/state/bu_reauth_checkpoint.json for the session_id, provider,
     email, and callback_port.  Starts a new cli-proxy-api login process
     (the original one is likely dead), creates a follow-up run in the
     same Browser Use session to click Authorize, extracts the callback
@@ -1688,7 +1695,7 @@ def main():
     parser.add_argument("-checkpoint-resume", action="store_true",
                         help="Resume from a checkpoint file written by a "
                              "previous run that detected hCaptcha. Reads "
-                             "/tmp/bu_reauth_checkpoint.json for the "
+                             "/opt/crsproxy/state/bu_reauth_checkpoint.json for the "
                              "session_id, then creates a follow-up run to "
                              "click Authorize and complete the flow.")
     parser.add_argument("-log-file", default="",
