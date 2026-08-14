@@ -109,7 +109,7 @@ Expected: import failure because the health and tunnel modules do not exist.
 
 - [ ] **Step 3: Implement bounded authenticated probes and no-shell tunnel supervision**
 
-Inventory success requires a JSON object with a list-valued `data` field but discards the list immediately. Streaming success requires SSE/NDJSON content, a first event before the configured deadline, multiple cadence events or a terminal marker, a byte cap, and no response-body logging. MCP health uses a bounded read-only status GET and never creates a protocol session. The tunnel starts only from an unbound port, uses `shell=False` and its own process group, verifies the child remains alive while every listener on the port belongs to that group, and applies capped restart backoff.
+Inventory success requires a JSON object with a list-valued `data` field but discards the list immediately. Streaming success requires SSE/NDJSON content, a first event before the configured deadline, multiple cadence events or a terminal marker, a byte cap, and no response-body logging. MCP health uses a bounded read-only status GET and never creates a protocol session. The tunnel starts only from an unbound port, uses `shell=False` and its own recorded process group, verifies the child remains alive while every listener on the port belongs to that group, terminates the continuously existing group with bounded TERM/KILL escalation, and applies capped restart backoff.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 

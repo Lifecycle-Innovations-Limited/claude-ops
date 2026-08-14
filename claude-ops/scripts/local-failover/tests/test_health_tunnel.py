@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import os
+import shutil
+import signal
+import socket
 import sys
+import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -15,7 +21,11 @@ from local_failover.health import (
     classify_inventory_response,
     classify_stream_response,
 )
-from local_failover.tunnel import TunnelSupervisor
+from local_failover.tunnel import (
+    TunnelSupervisor,
+    listener_bound,
+    listener_owned_by_process_group,
+)
 from test_config_circuit import valid_config
 
 
@@ -245,12 +255,32 @@ class FakeProcessFactory:
     def __init__(self) -> None:
         self.calls: list[tuple[tuple[str, ...], dict]] = []
         self.processes: list[FakeProcess] = []
+        self.signals: list[tuple[int, int]] = []
 
     def __call__(self, argv, **kwargs):
         process = FakeProcess()
         self.calls.append((tuple(argv), kwargs))
         self.processes.append(process)
         return process
+
+    def get_process_group(self, pid: int) -> int:
+        if any(process.pid == pid for process in self.processes):
+            return pid
+        raise ProcessLookupError
+
+    def signal_process_group(self, process_group: int, signum: int) -> None:
+        self.signals.append((process_group, signum))
+        process = next(
+            (process for process in self.processes if process.pid == process_group), None
+        )
+        if process is None or process.poll() is not None:
+            raise ProcessLookupError
+        if signum == 0:
+            return
+        if signum == signal.SIGTERM:
+            process.terminate()
+        elif signum == signal.SIGKILL:
+            process.kill()
 
 
 def enabled_tunnel_config():
@@ -334,6 +364,8 @@ class TunnelSupervisorTests(unittest.TestCase):
             process_factory=factory,
             listener_checker=lambda *_: bound["value"],
             ownership_checker=lambda *_: False,
+            process_group_getter=factory.get_process_group,
+            process_group_signaler=factory.signal_process_group,
         )
         self.assertEqual(supervisor.tick(0).state, "starting")
         bound["value"] = True
@@ -355,6 +387,8 @@ class TunnelSupervisorTests(unittest.TestCase):
             process_factory=factory,
             listener_checker=lambda *_: bound["value"],
             ownership_checker=lambda *_: owned["value"],
+            process_group_getter=factory.get_process_group,
+            process_group_signaler=factory.signal_process_group,
         )
         supervisor.tick(0)
         bound["value"] = True
@@ -367,6 +401,27 @@ class TunnelSupervisorTests(unittest.TestCase):
         self.assertEqual(status.reason, "listener_ownership_mismatch")
         self.assertFalse(status.ready)
         self.assertTrue(factory.processes[0].terminated)
+
+    def test_pid_reuse_guard_never_signals_a_different_process_group(self) -> None:
+        factory = FakeProcessFactory()
+        bound = {"value": False}
+        supervisor = TunnelSupervisor(
+            enabled_tunnel_config(),
+            env={"TUNNEL_TARGET": "target-placeholder"},
+            process_factory=factory,
+            listener_checker=lambda *_: bound["value"],
+            ownership_checker=lambda *_: True,
+            process_group_getter=lambda _pid: 54321,
+            process_group_signaler=factory.signal_process_group,
+        )
+        supervisor.tick(0)
+        bound["value"] = True
+        self.assertTrue(supervisor.tick(1).ready)
+
+        supervisor.shutdown()
+
+        self.assertEqual(factory.signals, [])
+        self.assertFalse(factory.processes[0].terminated)
 
     def test_missing_argv_environment_is_unknown_without_starting(self) -> None:
         factory = FakeProcessFactory()
@@ -387,6 +442,8 @@ class TunnelSupervisorTests(unittest.TestCase):
             env={"TUNNEL_TARGET": "target-placeholder"},
             process_factory=factory,
             listener_checker=lambda *_: False,
+            process_group_getter=factory.get_process_group,
+            process_group_signaler=factory.signal_process_group,
         )
         supervisor.tick(0)
 
@@ -395,6 +452,66 @@ class TunnelSupervisorTests(unittest.TestCase):
         self.assertEqual(status.state, "backoff")
         self.assertTrue(factory.processes[0].terminated)
         self.assertFalse(status.ready)
+
+    @unittest.skipUnless(shutil.which("lsof"), "lsof is required for listener ownership")
+    def test_shutdown_terminates_process_group_when_descendant_owns_listener(self) -> None:
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            port = reservation.getsockname()[1]
+        unrelated = socket.socket()
+        unrelated.bind(("127.0.0.1", 0))
+        unrelated.listen()
+        unrelated_port = unrelated.getsockname()[1]
+        child_code = (
+            "import socket,time;"
+            "listener=socket.socket();"
+            "listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);"
+            f"listener.bind(('127.0.0.1',{port}));"
+            "listener.listen();"
+            "time.sleep(30)"
+        )
+        parent_code = (
+            "import subprocess,sys;"
+            f"subprocess.Popen([sys.executable,'-c',{child_code!r}])"
+        )
+        config = replace(
+            enabled_tunnel_config(),
+            argv=(sys.executable, "-c", parent_code),
+            listener_port=port,
+        )
+        supervisor = TunnelSupervisor(config, env={})
+        process_group: int | None = None
+        try:
+            self.assertEqual(supervisor.tick(time.monotonic()).state, "starting")
+            process_group = supervisor.process.pid
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and not (
+                listener_bound("127.0.0.1", port)
+                and supervisor.process.poll() is not None
+                and listener_owned_by_process_group("127.0.0.1", port, process_group)
+            ):
+                time.sleep(0.05)
+            self.assertTrue(listener_bound("127.0.0.1", port))
+            self.assertIsNotNone(supervisor.process.poll())
+            self.assertTrue(
+                listener_owned_by_process_group("127.0.0.1", port, process_group)
+            )
+
+            supervisor.shutdown()
+
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and listener_bound("127.0.0.1", port):
+                time.sleep(0.05)
+            self.assertFalse(listener_bound("127.0.0.1", port))
+            self.assertTrue(listener_bound("127.0.0.1", unrelated_port))
+        finally:
+            supervisor.shutdown()
+            unrelated.close()
+            if process_group is not None:
+                try:
+                    os.killpg(process_group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
 
 if __name__ == "__main__":

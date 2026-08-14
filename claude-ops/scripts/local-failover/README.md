@@ -264,8 +264,10 @@ python3 scripts/local-failover/vpc_paths.py plan ssm \
 An enabled SSM route is still unavailable until the gateway owns the tunnel process group, observed
 its port transition, verifies every listener on the port belongs to that process group, and passes
 authenticated semantic health through it. A bind race or listener replacement revokes readiness
-and stops only the owned process. Process exit removes the gate immediately and restart uses capped
-backoff. A pre-existing listener is reported as a conflict and never adopted or killed.
+and signals only the recorded process group. Process exit removes the gate immediately; if an owned
+descendant still holds the listener, the supervisor terminates the continuously existing group with
+TERM and bounded KILL escalation. Restart uses capped backoff. A pre-existing listener is reported
+as a conflict and never adopted or killed.
 
 Official AWS guidance:
 

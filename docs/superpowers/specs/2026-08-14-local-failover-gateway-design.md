@@ -27,7 +27,7 @@ The daemon contains five bounded units:
 2. **Health engine** performs authenticated inventory and minimal stream checks for LLM routes and read-only bounded status GETs for MCP routes, classifying missing/invalid health authorization as configuration-unknown rather than provider failure. It never creates a health-check MCP session.
 3. **Circuit and selector** apply failure thresholds, exponential cooldown, recovery successes, failback hold time, and active-route stickiness.
 4. **Streaming reverse proxy** forwards bytes once, strips hop-by-hop headers, preserves authorization and MCP session headers, and never changes upstream after client-visible bytes.
-5. **Tunnel supervisor** starts an argv array without a shell, owns only its process group, verifies a previously free local port became bound exclusively by that group, and restarts with capped backoff.
+5. **Tunnel supervisor** starts an argv array without a shell, records and owns only its new process group, verifies a previously free local port became bound exclusively by that group, terminates the whole continuously existing group with bounded TERM/KILL escalation, and restarts with capped backoff.
 
 ## Retry and stream safety
 
@@ -63,7 +63,7 @@ The gateway does not create broad network access. A route enters selection only 
 
 ## Test strategy
 
-Deterministic unit tests use a fake clock for circuit transitions, hysteresis, backoff, anti-flapping, selection, MCP affinity, and tunnel ownership. Local mock origins verify authenticated inventory checks, stream cadence, read-only MCP health, fixed route order, bounded client concurrency, stalled-body deadlines, bounded idempotent retries, non-idempotent no-replay, recovery, stream interruption, status redaction, and reconnect-required MCP behavior. No test uses operator credentials, external provider requests, or existing local service ports.
+Deterministic unit tests use a fake clock for circuit transitions, hysteresis, backoff, anti-flapping, selection, MCP affinity, and tunnel ownership. A real local subprocess regression verifies that shutdown removes an exited leader's descendant listener while preserving an unrelated listener. Local mock origins verify authenticated inventory checks, stream cadence, read-only MCP health, fixed route order, bounded client concurrency, stalled-body deadlines, bounded idempotent retries, non-idempotent no-replay, recovery, stream interruption, status redaction, and reconnect-required MCP behavior. No test uses operator credentials, external provider requests, or existing local service ports.
 
 ## Rollback
 
