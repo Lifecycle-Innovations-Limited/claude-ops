@@ -31,6 +31,32 @@ else
   REPOS=$(ops_registry_repos "$REGISTRY")
 fi
 
+# Drop repos we cannot push to.
+#
+# The registry lists every project cloned locally, which includes upstreams we
+# only ever read: a fork's parent, a dependency we patched once, a public repo
+# we filed one issue against. Those surface open PRs from unrelated contributors,
+# and a merge queue that lists them invites merging someone else's work into a
+# project that is not ours. On 2026-08-15 a scan returned 57 such PRs across four
+# upstream repos alongside 8 real ones.
+#
+# `.permissions.push` is true only for a member or collaborator, which is exactly
+# the line we want. Repos that fail the lookup (network, deleted, renamed) are
+# kept rather than dropped, so a transient error never silently shrinks the queue.
+if [ -z "$FILTER_REPO" ] && [ "${OPS_MERGE_INCLUDE_EXTERNAL:-0}" != "1" ]; then
+  KEPT=""
+  SKIPPED=""
+  for repo in $REPOS; do
+    PERM=$(gh api "repos/$repo" --jq '.permissions.push' 2>/dev/null || echo "unknown")
+    case "$PERM" in
+      false) SKIPPED="$SKIPPED $repo" ;;
+      *) KEPT="$KEPT $repo" ;;
+    esac
+  done
+  REPOS="$KEPT"
+  [ -n "$SKIPPED" ] && echo "ops-merge: skipping read-only repos (no push access):$SKIPPED" >&2
+fi
+
 # Approved PR author logins (owner + bots). Configured in preferences.json
 # under .merge_authors (array of GitHub logins, e.g. "you", "dependabot[bot]").
 # Empty / missing → keep all authors (legacy behavior).

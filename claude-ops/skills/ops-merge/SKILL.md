@@ -487,6 +487,7 @@ During this command's execution, invoke the following superpower skills at the s
 
 - **NEVER trust a fixer's claim of merge success.** Always verify via `gh pr view --json state,mergedAt,mergeCommit` before marking complete. See Phase 5 verification protocol.
 - **NEVER let a fixer call `gh pr merge`.** Merge is orchestrator-only. Fixers push, orchestrator verifies the push, orchestrator merges, orchestrator verifies the merge.
+- **NEVER merge, or open a PR against, a repo the owner is not a member of.** `ops-merge-scan` drops repos where `gh api repos/<slug> --jq .permissions.push` is `false`, but verify before acting: the registry lists every locally cloned project, so a fork's upstream (`facebookresearch/*`, someone else's OSS) can appear in the queue carrying dozens of open PRs from unrelated contributors. Those are read-only. Contributing upstream happens only after the owner explicitly says so, one PR at a time, never through this pipeline. Override for a single run with `OPS_MERGE_INCLUDE_EXTERNAL=1` only when the owner asked for it.
 - **NEVER force-push to main/master**
 - **NEVER merge with red CI** — fix root cause first
 - **NEVER bypass review on PRs touching auth, payments, PII, or secrets** — these require `security-reviewer` subagent audit before merge
