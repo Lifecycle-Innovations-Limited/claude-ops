@@ -14,8 +14,22 @@ if [[ -z "$HOST" ]]; then
   exit 0
 fi
 
-if [[ "$HELPER" != /* || "$HELPER" == *$'\n'* ]]; then
+# HELPER is interpolated into a command string that the REMOTE shell parses, so an
+# absolute-path check alone is not enough: "/usr/bin/x; rm -rf /" is absolute and
+# would run both halves there. Allow only a plain path built from safe characters.
+if [[ "$HELPER" != /* || ! "$HELPER" =~ ^[A-Za-z0-9/._-]+$ ]]; then
   printf '{"ok":false,"error":"invalid remote helper path"}\n'
+  exit 0
+fi
+
+# ssh takes the destination positionally, so a value starting with "-" is parsed as
+# an option (e.g. -oProxyCommand=...) and would run a command on THIS machine.
+if [[ "$HOST" == -* || "$USER_" == -* ]]; then
+  printf '{"ok":false,"error":"invalid pool host"}\n'
+  exit 0
+fi
+if [[ ! "$TIMEOUT" =~ ^[0-9]+$ ]]; then
+  printf '{"ok":false,"error":"invalid ssh timeout"}\n'
   exit 0
 fi
 
@@ -25,13 +39,20 @@ if [[ -n "$USER_" ]]; then
 fi
 
 set +e
-out="$(ssh -o BatchMode=yes -o ConnectTimeout="$TIMEOUT" "$TARGET" \
+out="$(ssh -o BatchMode=yes -o ConnectTimeout="$TIMEOUT" -- "$TARGET" \
   "sudo -n ${HELPER}" 2>/dev/null)"
 rc=$?
 set -e
 
 if (( rc != 0 )) || [[ -z "$out" ]]; then
   printf '{"ok":false,"error":"pool snapshot unavailable"}\n'
+  exit 0
+fi
+
+# The remote is trusted to be sanitized, but a helper that errors can still print a
+# bare string. Callers parse this as JSON, so emit the fallback rather than garbage.
+if ! printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
+  printf '{"ok":false,"error":"pool snapshot malformed"}\n'
   exit 0
 fi
 
