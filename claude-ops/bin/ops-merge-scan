@@ -12,8 +12,21 @@ OPS_PLUGIN_ROOT_FALLBACK="$PLUGIN_DIR" . "${PLUGIN_DIR}/lib/registry-path.sh"
 . "${PLUGIN_DIR}/lib/registry-resolve.sh"
 PREFS="${OPS_DATA_DIR}/preferences.json"
 
-# Optional: scope to a single repo
-FILTER_REPO="${1:-}"
+# Optional: scope to a single repo. Accepts a bare slug or --repo <slug>, because
+# the skill documents the flag form while this script only ever read $1 — passing
+# --repo used to set FILTER_REPO to the literal string "--repo" and scan a repo
+# named that, which found nothing and looked like "no open PRs".
+FILTER_REPO=""
+case "${1:-}" in
+  --repo) FILTER_REPO="${2:-}" ;;
+  --repo=*) FILTER_REPO="${1#--repo=}" ;;
+  -*) echo "{\"error\":\"unknown flag ${1}\",\"prs\":[]}" && exit 1 ;;
+  *) FILTER_REPO="${1:-}" ;;
+esac
+
+if [ -n "$FILTER_REPO" ] && ! printf '%s' "$FILTER_REPO" | grep -qE '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'; then
+  echo "{\"error\":\"not an owner/name slug: ${FILTER_REPO}\",\"prs\":[]}" && exit 1
+fi
 
 if [ ! -f "$REGISTRY" ]; then
   echo '{"error":"registry.json not found","prs":[]}' && exit 1
@@ -41,20 +54,41 @@ fi
 # upstream repos alongside 8 real ones.
 #
 # `.permissions.push` is true only for a member or collaborator, which is exactly
-# the line we want. Repos that fail the lookup (network, deleted, renamed) are
-# kept rather than dropped, so a transient error never silently shrinks the queue.
-if [ -z "$FILTER_REPO" ] && [ "${OPS_MERGE_INCLUDE_EXTERNAL:-0}" != "1" ]; then
-  KEPT=""
-  SKIPPED=""
-  for repo in $REPOS; do
-    PERM=$(gh api "repos/$repo" --jq '.permissions.push' 2>/dev/null || echo "unknown")
-    case "$PERM" in
-      false) SKIPPED="$SKIPPED $repo" ;;
-      *) KEPT="$KEPT $repo" ;;
-    esac
-  done
-  REPOS="$KEPT"
-  [ -n "$SKIPPED" ] && echo "ops-merge: skipping read-only repos (no push access):$SKIPPED" >&2
+# the line we want.
+#
+# The gate is fail-closed: only an explicit `true` keeps a repo. A lookup that
+# errors, returns null, or reports false is dropped. Fail-open was tempting so a
+# network blip could not hide your own PRs, but this list feeds a queue whose next
+# step is `gh pr merge`, and "we could not tell" must never resolve to "merge it".
+# A blip costs you a rerun; the other way costs someone else's repo.
+#
+# --repo is NOT exempt. It used to be, which meant `--repo someone/else` walked
+# straight past the check.
+#
+# OPS_MERGE_INCLUDE_EXTERNAL takes a single slug, not a boolean, so authorising one
+# upstream for one run cannot silently re-open the whole registry.
+ALLOW_EXTERNAL="${OPS_MERGE_INCLUDE_EXTERNAL:-}"
+[ "$ALLOW_EXTERNAL" = "1" ] && ALLOW_EXTERNAL=""   # legacy boolean is not an allowlist
+
+KEPT=""
+SKIPPED=""
+for repo in $REPOS; do
+  if [ -n "$ALLOW_EXTERNAL" ] && [ "$repo" = "$ALLOW_EXTERNAL" ]; then
+    KEPT="$KEPT $repo"
+    echo "ops-merge: including $repo by explicit OPS_MERGE_INCLUDE_EXTERNAL" >&2
+    continue
+  fi
+  PERM=$(gh api "repos/$repo" --jq '.permissions.push' 2>/dev/null || echo "error")
+  case "$PERM" in
+    true) KEPT="$KEPT $repo" ;;
+    *) SKIPPED="$SKIPPED $repo($PERM)" ;;
+  esac
+done
+REPOS="$KEPT"
+[ -n "$SKIPPED" ] && echo "ops-merge: skipped, no confirmed push access:$SKIPPED" >&2
+
+if [ -z "$(printf '%s' "$REPOS" | tr -d ' ')" ]; then
+  echo '{"prs":[],"note":"no repos with confirmed push access"}' && exit 0
 fi
 
 # Approved PR author logins (owner + bots). Configured in preferences.json
