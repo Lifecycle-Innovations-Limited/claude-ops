@@ -112,9 +112,10 @@ assert emails == {"t1", "t4"}, "wrong email archive set: %s" % emails
 # WhatsApp split.
 keep = {r["who"] for r in d["keep"]["whatsapp_default"]}
 arch = {r["who"] for r in d["archive"]["whatsapp_default"]}
-assert keep == {"Asker", "ShortAsk"}, "wrong keep set: %s" % keep
-for who in ("Tail", "BareMedia", "Stale", "Waiter", "News", "DeadGroup"):
+assert keep == {"Asker", "ShortAsk", "BareMedia"}, "wrong keep set: %s" % keep
+for who in ("Tail", "Stale", "Waiter", "News", "DeadGroup"):
     assert who in arch, "%s should be archived" % who
+assert "BareMedia" not in arch, "undescribed media must never be archived unread"
 assert "LiveGroup" not in arch, "a live group must not be archived"
 
 # A kept chat must never also appear in the archive set.
@@ -192,8 +193,17 @@ assert mod.is_courtesy_tail("Thanks bro!") is True
 assert mod.is_courtesy_tail("dankjewel!! 🙏") is True
 assert mod.is_courtesy_tail("Can you resend the file?") is False
 assert mod.is_courtesy_tail("Hoe was Ibiza?") is False
-assert mod.is_courtesy_tail("[image]") is True
 assert mod.is_courtesy_tail("") is True
+
+# Undescribed media is UNKNOWN, never a tail. A bare "[image]" means the
+# enricher has not read it yet, and the photo may be an invoice or a signed
+# page - archiving it unread is how this tool would lose real work.
+for placeholder in ("[image]", "[voice]", "[document]", "[video]", "[ IMAGE ]".strip()):
+    assert mod.is_courtesy_tail(placeholder) is False, placeholder
+assert mod.is_courtesy_tail("", "image") is False      # empty body + media row
+assert mod.is_courtesy_tail("", "") is True            # genuinely nothing inbound
+# Once enriched it classifies on the description like any other text.
+assert mod.is_courtesy_tail("[image] invoice for 200 euro, due Friday") is False
 print("redos + ack behaviour: PASS")
 PY
 

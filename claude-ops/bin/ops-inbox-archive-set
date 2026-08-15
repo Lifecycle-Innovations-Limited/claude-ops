@@ -102,14 +102,30 @@ ASK_RE = re.compile(
     re.IGNORECASE)
 
 
-def is_courtesy_tail(text):
-    """True when the last inbound message closes the thread rather than opening one."""
+# A placeholder and nothing else: "[image]", "[voice]", "[document]". The
+# bridge writes these for media it has not enriched or transcribed yet.
+BARE_MEDIA_RE = re.compile(
+    r"^\[\s*(voice|audio|image|photo|video|gif|sticker|document|file)\s*\]$",
+    re.IGNORECASE)
+
+
+def is_courtesy_tail(text, media_type=None):
+    """True when the last inbound message closes the thread rather than opening one.
+
+    Undescribed media is never a tail. A bare "[image]" does not mean the
+    message was empty, it means nobody has read it yet - and the photo may be
+    an invoice, a signed page, or a question written on paper. Enrichment fills
+    these in as "[image] <description>"; until it does, the only safe reading
+    is "unknown", which keeps the thread. An enriched body classifies on its
+    description like any other text.
+    """
     body = (text or "").strip()
+    if BARE_MEDIA_RE.match(body):
+        return False
+    if media_type and not body:
+        return False          # media row the enricher has not reached yet
     if not body:
-        return True
-    # A bare media placeholder with no caption: "[image]", "[voice]", ...
-    if body.startswith("[") and body.endswith("]") and len(body) <= 14:
-        return True
+        return True           # genuinely nothing inbound to answer
     if ASK_RE.search(body):
         return False
     words = WORD_RE.findall(body.lower())
@@ -207,22 +223,25 @@ def classify_store(path, label, stale_min):
                 row["why"] = "newsletter/broadcast"
                 archive.append(row)
                 continue
+            # media_type matters: an un-enriched media row has empty content
+            # but is NOT an empty message, and must not be archived unread.
             last = con.execute(
-                "SELECT is_from_me, COALESCE(content,'') FROM messages "
-                "WHERE chat_jid=? ORDER BY timestamp DESC LIMIT 1", (jid,)).fetchone()
+                "SELECT is_from_me, COALESCE(content,''), COALESCE(media_type,'') "
+                "FROM messages WHERE chat_jid=? "
+                "ORDER BY timestamp DESC LIMIT 1", (jid,)).fetchone()
             if last is None:
                 row["why"] = "empty chat"
                 archive.append(row)
                 continue
-            from_me, body = last
+            from_me, body, media_type = last
             if from_me:
                 row["why"] = "WAITING (you sent last)"
                 archive.append(row)
-            elif is_courtesy_tail(body):
+            elif is_courtesy_tail(body, media_type):
                 row["why"] = "courtesy tail / no open ask"
                 archive.append(row)
             else:
-                row["last"] = body[:140]
+                row["last"] = body[:140] or ("[%s, not yet enriched]" % media_type)
                 keep.append(row)
         con.close()
     except Exception as exc:                     # noqa: BLE001 - report, never crash
