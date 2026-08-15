@@ -271,6 +271,25 @@ ${CLAUDE_PLUGIN_ROOT}/bin/ops-voice bland-call  "+1234567890" "<task prompt>" --
 1. Resolve the contact's number/handle (`mcp__whatsapp__search_contacts` or `preferences.json` → `contacts`).
 2. For native calls (`phone`, `facetime`, `zoom`): preview `[Place call via <channel> to <contact>] [Cancel]` then invoke.
 3. For Twilio voice/SMS and Bland AI: stage the full draft (recipient, channel, body or task-prompt) and gate behind one `AskUserQuestion` per message (Rule 6). Never batch.
+
+**How the approval is actually enforced** — see `scripts/outbound-guard/README.md`. One
+store, `/tmp/.claude-outbound-guard.json`, shared by every CLI. The owner arms it from
+their own shell with `! ok` (1 message), `! ok 3`, or `! ok all` (10, capped). A message
+is identified by recipient plus content, so the same message crossing the PreToolUse
+hook and the MCP proxy costs one unit rather than two. A counter does not replace Rule 6:
+you still stage each draft and wait for a yes.
+
+Three traps that have each caused a real bypass:
+
+- **Never let a helper script do the sending.** The Bash guard matches on the text of
+  the command, so a send hidden inside a script is invisible to it. Print the command
+  from a helper if you like, then run the real one inline.
+- **A `SENT` label is not delivery.** A send-as alias with bad SMTP credentials is
+  stamped `SENT` and bounced by `mailer-daemon` seconds later in the same thread. Check
+  for the bounce before reporting a message as delivered.
+- **Match tool names by pattern.** Multi-account installs expose
+  `mcp__whatsapp-<label>__send_message`; an exact-string allowlist silently stops
+  covering them while still appearing to run (Rule 8).
 4. If no credential resolves for a programmatic channel, prompt via `AskUserQuestion` with `[Run /ops:ops-voice setup]` / `[Paste credential now]` / `[Try native instead]` / `[Skip]` (Rule 3 — never silently skip).
 
 ---
