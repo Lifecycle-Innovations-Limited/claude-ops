@@ -78,13 +78,22 @@ def protecting_label(labels):
 # "is this just a courtesy tail?" heuristic
 # --------------------------------------------------------------------------
 
-ACK_RE = re.compile(
-    r"^\s*(ok|oke|okay|oké|top|thanks?|thank you|thx|ty|dank|dankje|"
-    r"dankjewel|dank je|dank u|graag gedaan|great|nice|cool|perfect|awesome|"
-    r"amazing|super|mooi|goed|prima|fijn|leuk|yes|ja|yep|yup|sure|will do|"
-    r"sounds good|got it|see you|tot dan|congrats|gefeliciteerd|welcome|"
-    r"no worries|np|haha|bro|man|brother|\W)*\s*$",
-    re.IGNORECASE)
+# Matched as a WORD SET, not a regex. The obvious spelling of this - one big
+# alternation wrapped in (...)* - is a ReDoS: the branches overlap (ok / oke /
+# oké, and \W swallowing anything), so a long non-matching message backtracks
+# exponentially and hangs the scan on attacker- or accident-supplied text.
+# Splitting into words and testing set membership is linear and easier to read.
+ACK_WORDS = frozenset("""
+ok oke okay oké okey top thanks thank thanx thx ty dank dankje dankjewel
+danku bedankt graag gedaan great nice cool perfect awesome amazing super
+mooi goed prima fijn leuk top yes ja jazeker yep yup sure will do sounds
+good got it see you tot dan straks congrats gefeliciteerd welcome no
+worries np haha hahaha lol bro man brother mate dude thx you u de het je
+""".split())
+
+# Letters only: drops punctuation, digits and emoji so "Thanks bro! ❤️" is a
+# plain two-word ack.
+WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 # Signals a real ask even inside a short message.
 ASK_RE = re.compile(
@@ -103,7 +112,8 @@ def is_courtesy_tail(text):
         return True
     if ASK_RE.search(body):
         return False
-    if len(body) <= 60 and ACK_RE.match(body):
+    words = WORD_RE.findall(body.lower())
+    if words and len(body) <= 60 and all(w in ACK_WORDS for w in words):
         return True
     # Very short and not a question: nothing to answer.
     if len(body) <= 25:

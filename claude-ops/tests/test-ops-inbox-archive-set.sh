@@ -164,4 +164,37 @@ assert "Stale" in keep, "a wide stale window must keep the old open ask"
 print("stale window: PASS")
 PY
 
+# --------------------------------------------------------------------------
+# ReDoS guard (CodeQL py/redos). The ack test used to be one alternation
+# wrapped in (...)* with overlapping branches, so a long almost-matching
+# string backtracked exponentially and hung the scan. Classification must stay
+# linear on hostile input.
+# --------------------------------------------------------------------------
+"$PY" - "$SPLIT" <<'PY' || exit 1
+import sys, time, importlib.util
+from importlib.machinery import SourceFileLoader
+
+# The script has no .py suffix, so it needs an explicit source loader.
+loader = SourceFileLoader("split", sys.argv[1])
+spec = importlib.util.spec_from_loader("split", loader)
+mod = importlib.util.module_from_spec(spec)
+loader.exec_module(mod)
+
+for probe in ("oké" * 4000 + "!", "ok" * 8000 + " ", " " * 20000 + "x"):
+    start = time.time()
+    mod.is_courtesy_tail(probe)
+    spent = time.time() - start
+    assert spent < 1.0, "classification took %.1fs on a %d-char message (ReDoS)" % (
+        spent, len(probe))
+
+# Behaviour the word-set must preserve.
+assert mod.is_courtesy_tail("Thanks bro!") is True
+assert mod.is_courtesy_tail("dankjewel!! 🙏") is True
+assert mod.is_courtesy_tail("Can you resend the file?") is False
+assert mod.is_courtesy_tail("Hoe was Ibiza?") is False
+assert mod.is_courtesy_tail("[image]") is True
+assert mod.is_courtesy_tail("") is True
+print("redos + ack behaviour: PASS")
+PY
+
 echo "ops-inbox-archive-set: ALL PASS"
