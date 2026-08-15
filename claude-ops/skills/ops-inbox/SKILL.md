@@ -337,6 +337,40 @@ JSON. No subagents, no MCP, near-zero tokens.
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --days 14           # wider window
 ```
 
+**ARCHIVE/KEEP SPLIT — `bin/ops-inbox-archive-set`.** The scan says what the
+inbox looks like; this turns that into the two lists inbox-zero actually needs,
+deterministically, instead of re-deciding a few hundred rows by eye every run:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set"                      # report only
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" | \
+  "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set" -                  # reuse a scan
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set" --scan /tmp/scan.json --json
+# extra WhatsApp account (repeat the pair per account):
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set" \
+  --wa-store ~/.local/share/whatsapp-mcp/whatsapp-bridge-us/store/messages.db \
+  --bridge-port 8082
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set" --apply               # AFTER approval
+```
+
+- **ARCHIVE** — WAITING (you sent last), courtesy tails with no open ask
+  ("thanks!", "will do!!"), threads past `--stale-days` (7), dead groups past
+  `--dead-group-days` (30).
+- **REVIEW (FYI)** — newsletters, broadcasts, automated mail. **Never swept.**
+  Read it, brief the user, then ask; `--archive-fyi` is the opt-in that answer
+  unlocks. See the FYI core principle below.
+- Undescribed media (`[image]`, `[voice]` with no enrichment yet) is **unknown**,
+  never a tail — it always lands in KEEP.
+- **KEEP** — every genuine unanswered ask, plus every email carrying a
+  todo/action label. Ambiguity always resolves to KEEP; keeping is safe,
+  archiving is the risky direction.
+- **Report-only by default.** It archives nothing without `--apply`, and never
+  sends. Present the counts plus the KEEP list with `AskUserQuestion`, and only
+  re-run with `--apply` after an explicit OK. `--apply --dry-run` walks the path
+  without calling out.
+- It enforces the todo/action-label HARD GUARDRAIL in code, so a labelled mail
+  cannot be swept even when it looks exactly like a newsletter.
+
 **ONE-SHOT TRIAGE (Sam 2026-07-21):** `bin/ops-inbox-zero` attempts the inbox-zero
 pipeline (scan → Paperclip SSOT → Slack direct API → dual-JID deep-read → proposed WA/email
 archive actions → KEEP report) in one shell call. Gmail, Slack, or Paperclip can be skipped
@@ -680,9 +714,122 @@ All channel credentials come from env vars or CLI auth — no hardcoded secrets.
 
    Surface the appropriate tier to the user when archive blocks; don't abandon inbox-zero.
 
-## Core principle: FULL INBOX SCAN
+## Core principle: FULL INBOX SCAN (the working set is "not archived", not "unread")
 
-Do NOT just check unread. Scan the FULL recent inbox for each channel and classify every conversation:
+Do NOT just check unread. Unread is a display state the user may have already
+cleared by glancing at a phone; it says nothing about whether a thread is
+answered. The working set per channel is defined by what is still IN the inbox:
+
+| Channel | Working set | NOT the working set |
+|---|---|---|
+| WhatsApp (every account) | every chat where `archived` is not true — `chats.archived=0`, all ages | unread count, a 7-day slice |
+| Email | everything still carrying the `INBOX` label — `gog gmail search "in:inbox"` | `is:unread`, `newer_than:Nd`, a low `--max` |
+| Slack | every **unread** DM/channel/thread that has **not been replied to** | unreads already answered (see below) |
+| iMessage / Telegram / Discord / Notion | every allowlisted or configured conversation with recent activity | unread badge only |
+
+**Slack is the deliberate exception.** Slack has no archive, and its channel
+volume makes "everything not archived" meaningless, so there the working set is
+*unread and unreplied*: read the unread DMs, group DMs, channels, and every
+thread with unread replies, then drop the ones the user already answered (their
+own Slack user id posted after the last inbound). What survives is the Slack
+NEEDS_REPLY set. An unread that the user already replied to is HANDLED.
+
+**No recency cutoff anywhere.** An unanswered ask from three weeks ago is still
+an unanswered ask. Recency orders the list; it never filters it. `ops-inbox-scan
+--days N` sizes only the WhatsApp send-log reconciliation lookback — it does not
+hide a chat or a mail.
+
+Classify every conversation in that working set:
+
+## Core principle: FYI IS NEVER AUTO-ARCHIVED — READ IT, BRIEF IT, THEN ASK
+
+FYI is the bucket that looks like noise and is not. One real run of "FYI"
+contained a Docusign contract awaiting signature, a private-bank document, a
+failed €85.90 payment, a GitHub secret-risk assessment, a hotel proposal, and
+four `ACTION REQUIRED` data-retention notices. Sweeping that bucket because the
+senders are automated is how a run loses something that mattered.
+
+So FYI never enters the sweep by itself. The flow is fixed:
+
+1. **Never auto-archive it.** FYI is a REVIEW list, not an archive set.
+   `ops-inbox-archive-set` keeps it out of `--apply` entirely; it only joins the
+   sweep under the explicit `--archive-fyi` opt-in.
+2. **Read it.** Actually open the FYI items — subject and sender are not enough
+   to tell a newsletter from a payment failure.
+3. **Brief the user.** Summarise the FYI set in one compact briefing, grouped by
+   what it means for them, and call out anything that is secretly actionable
+   (money, contracts, legal, security, deadlines, account/data loss) as its own
+   line. The briefing IS the deliverable — the user should not have to open
+   Gmail to know what was in there.
+4. **Then ask.** One `AskUserQuestion`: mass-archive everything in the briefing,
+   archive all but the flagged items, or leave it. Only on approval re-run with
+   `--archive-fyi`.
+
+**This is DEFAULT behaviour on every run, and the user never sees a flag.**
+A bare `/ops:ops-inbox` does all four steps by itself — the user does not opt in,
+ask for a briefing, or know that `--archive-fyi` exists. Flags are how the agent
+drives the script; they are never mentioned to the user, never required from the
+user, and never offered as a choice. Phrase the question in plain language
+("Archive these 26?"), never as a flag or a command. The same goes for every
+other option in this skill: the user asks for their inbox, and everything else
+is the agent's job.
+
+**Anything actionable found while reading stops being FYI** — promote it to
+NEEDS_REPLY or a USER-OWES reminder and keep it in the inbox regardless of what
+the mass-archive answer is.
+
+## Core principle: ARCHIVE/MARK-READ COMMANDS MUST BE VALID FOR THE CHANNEL
+
+Every archive or mark-read call must be one the channel's own tooling actually
+accepts. A call that silently no-ops leaves the inbox dirty while the run
+reports success. Verified surfaces, per channel:
+
+| Channel | Archive | Mark read | Notes |
+|---|---|---|---|
+| WhatsApp | `mcp__<server>__archive_chat {chat_jid, archive:true}`, or `POST http://127.0.0.1:<port>/api/archive` `{"chat_jid","archive":true}` | `mcp__<server>__mark_read` | `<server>` is the REAL server name. Single-account installs have `mcp__whatsapp__*`; multi-account installs have **one server per account** (`whatsapp-nl`, `whatsapp-us`, …) **and no plain `mcp__whatsapp__*` at all**. Resolve the name from the live tool list before the first call, and archive on **each** account's own port. Archive every JID the person owns — phone **and** every `@lid` in `alt_jids`. |
+| Email | `gog gmail archive <messageId> … --force --no-input`; for THREAD ids you MUST add `--thread` | `gog gmail mark-read <messageId> … --no-input` | Bare arguments are message ids. `ops-inbox-scan` emits **thread** ids, so `--thread` is required or the call errors / hits the wrong object. |
+| iMessage | none — the plugin exposes no archive | none | Never attempt to "archive" an iMessage thread. Non-actionable threads are simply not surfaced. |
+| Slack | none | mark the conversation read via the Slack surface in use | Slack has no archive; see the FULL INBOX SCAN table. |
+| Telegram / Discord / Notion | none in this skill | — | Do not invent an archive call. |
+
+**Archiving is NOT an outbound send and is NOT approval-gated.** It changes local
+account state only: nothing leaves the account, no third party sees anything,
+and it is trivially reversible (`archive:false`, and a chat un-archives itself
+the moment a new message lands). The same holds for mark-read. Only genuine
+EXTERNAL sends — `send_message` / `send_file` / `send_audio_message` /
+`gmail_send` / a Slack or iMessage reply — go through the Rule-6 approval gate.
+If an archive call comes back "explicit owner approval is required", the proxy
+policy has archive miscategorised as a send; fix the policy rather than asking
+the user to tap approve a few hundred times.
+
+## Core principle: REPLY → VERIFY → AUTO-ARCHIVE (one atomic step, every channel)
+
+A thread that has just been answered must not stay in the inbox. Reply and
+archive are one step, not two, and the archive is automatic — never a separate
+question to the user.
+
+Per thread, in order:
+
+1. **Send** the approved draft (Rule 6 / PER-DRAFT APPROVAL — one draft, one
+   approval, one send).
+2. **VERIFY the reply actually landed.** Do not archive on the send tool
+   returning without an error; confirm the message exists on the channel:
+   - WhatsApp — the send result reports success AND the outbound row appears in
+     the thread (`list_messages` shows it with `is_from_me: true`), or the send
+     shows in the bridge send log. Re-read the thread; do not trust the return
+     value alone.
+   - Email — the sent message carries the `SENT` label (`gog gmail raw <id>` →
+     `"SENT" in labelIds`). A `DRAFT` is not a delivery.
+   - iMessage / Slack / Telegram / Notion — the reply is visible in the thread
+     on a fresh read.
+3. **Archive that thread immediately** on every JID/address it owns, using the
+   channel's valid command from the matrix above. On a channel with no archive
+   (iMessage, Slack, Telegram), mark it handled and stop surfacing it instead.
+4. Only then move to the next draft.
+
+**If verification fails, do NOT archive.** An unverified send is an unanswered
+thread; leave it visible and report the failure. Archiving a thread whose reply
+never left is the one way this flow can lose a message for good.
 
 ## Core principle: FULL CONTEXT — NEVER ASSUME
 

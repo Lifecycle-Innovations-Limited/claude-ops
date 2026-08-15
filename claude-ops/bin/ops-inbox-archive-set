@@ -1,0 +1,457 @@
+#!/usr/bin/env python3
+# ops-inbox-archive-set - turn an ops-inbox-scan result into an explicit
+# ARCHIVE / KEEP split, then (only with --apply) archive the ARCHIVE half.
+#
+# WHY: ops-inbox-scan tells you what the inbox looks like, but the "inbox zero"
+# half of /ops:ops-inbox was still done by hand every run - eyeballing a few
+# hundred rows to decide which are courtesy tails ("thanks!", "will do!!") and
+# which carry a real open ask. That judgement is mechanical and was being redone,
+# inconsistently, from scratch each session. This script makes it deterministic,
+# reviewable, and above all report-only until a human says otherwise.
+#
+# THE SPLIT:
+#   ARCHIVE - newsletters/broadcasts, WAITING (you sent last), courtesy tails
+#             with no open ask, bare media with no caption, threads past the
+#             stale window, and long-dead group chats.
+#   KEEP    - anything with a genuine unanswered ask, plus every email carrying
+#             one of the user's todo/action labels.
+#
+# GUARDRAIL (hard, non-negotiable): an email labelled with a todo/action label
+# (Respond, Action, Reply, Follow up, Awaiting Reply, To-do, Task, URGENT, ...)
+# is an open task the user is tracking. It is NEVER archived, however much it
+# looks like a newsletter. "Actioned" is a completion label and does not protect.
+# Keeping something is always the safe direction and archiving is the risky one,
+# so every ambiguous case resolves to KEEP.
+#
+# READ-ONLY BY DEFAULT. Without --apply this writes nothing and archives nothing;
+# it only prints the proposed split. --apply is meant to be run only after a
+# human has seen the exact counts and a sample. It never sends a message.
+#
+# PYTHON: standard library only, and deliberately kept 3.9-compatible - plugin
+# scripts get run by whatever `python3` resolves to, which on macOS is Xcode's
+# 3.9. No datetime.UTC, no `X | None` annotations.
+#
+# USAGE
+#   ops-inbox-archive-set                          # runs ops-inbox-scan itself
+#   ops-inbox-scan | ops-inbox-archive-set -       # read a scan from stdin
+#   ops-inbox-archive-set --scan /tmp/scan.json
+#   ops-inbox-archive-set --wa-store <db> --bridge-port 8082   # extra account
+#   ops-inbox-archive-set --json                   # machine-readable split
+#   ops-inbox-archive-set --apply                  # archive, AFTER approval
+
+import argparse
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+
+# --------------------------------------------------------------------------
+# email label guardrail
+# --------------------------------------------------------------------------
+
+SYSTEM_LABELS = set("INBOX SENT DRAFT UNREAD IMPORTANT STARRED TRASH SPAM".split())
+
+PROTECTED_TERMS = (
+    "to-do", "todo", "task", "tasklet", "action", "respond", "reply",
+    "follow up", "followup", "reply later", "needs action", "awaiting reply",
+    "timed action", "urgent",
+)
+
+
+def protecting_label(labels):
+    """Return the todo/action label protecting this message, or None."""
+    for raw in labels or []:
+        if raw in SYSTEM_LABELS or raw.startswith("CATEGORY_"):
+            continue
+        name = raw.lower().replace("_", " ").strip()
+        if "actioned" in name:          # completion marker, not an open todo
+            continue
+        for term in PROTECTED_TERMS:
+            if term in name:
+                return raw
+    return None
+
+
+# --------------------------------------------------------------------------
+# "is this just a courtesy tail?" heuristic
+# --------------------------------------------------------------------------
+
+# Matched as a WORD SET, not a regex. The obvious spelling of this - one big
+# alternation wrapped in (...)* - is a ReDoS: the branches overlap (ok / oke /
+# oké, and \W swallowing anything), so a long non-matching message backtracks
+# exponentially and hangs the scan on attacker- or accident-supplied text.
+# Splitting into words and testing set membership is linear and easier to read.
+ACK_WORDS = frozenset("""
+ok oke okay oké okey top thanks thank thanx thx ty dank dankje dankjewel
+danku bedankt graag gedaan great nice cool perfect awesome amazing super
+mooi goed prima fijn leuk top yes ja jazeker yep yup sure will do sounds
+good got it see you tot dan straks congrats gefeliciteerd welcome no
+worries np haha hahaha lol bro man brother mate dude thx you u de het je
+""".split())
+
+# Letters only: drops punctuation, digits and emoji so "Thanks bro! ❤️" is a
+# plain two-word ack.
+WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+# Signals a real ask even inside a short message.
+ASK_RE = re.compile(
+    r"\?|\b(kun|kan|could|can|would|will|please|graag|laat.*weten|let me know|"
+    r"need|nodig|wanneer|when|hoe|how|wat|what|waarom|why|stuur|send|call|bel)\b",
+    re.IGNORECASE)
+
+
+# A placeholder and nothing else: "[image]", "[voice]", "[document]". The
+# bridge writes these for media it has not enriched or transcribed yet.
+BARE_MEDIA_RE = re.compile(
+    r"^\[\s*(voice|audio|image|photo|video|gif|sticker|document|file)\s*\]$",
+    re.IGNORECASE)
+
+
+def is_courtesy_tail(text, media_type=None):
+    """True when the last inbound message closes the thread rather than opening one.
+
+    Undescribed media is never a tail. A bare "[image]" does not mean the
+    message was empty, it means nobody has read it yet - and the photo may be
+    an invoice, a signed page, or a question written on paper. Enrichment fills
+    these in as "[image] <description>"; until it does, the only safe reading
+    is "unknown", which keeps the thread. An enriched body classifies on its
+    description like any other text.
+    """
+    body = (text or "").strip()
+    if BARE_MEDIA_RE.match(body):
+        return False
+    if media_type and not body:
+        return False          # media row the enricher has not reached yet
+    if not body:
+        return True           # genuinely nothing inbound to answer
+    if ASK_RE.search(body):
+        return False
+    words = WORD_RE.findall(body.lower())
+    if words and len(body) <= 60 and all(w in ACK_WORDS for w in words):
+        return True
+    # Very short and not a question: nothing to answer.
+    if len(body) <= 25:
+        return True
+    return False
+
+
+def last_inbound_text(record):
+    inbound = [p for p in (record.get("preview") or []) if not p.get("from_me")]
+    if not inbound:
+        return ""
+    return inbound[-1].get("text") or ""
+
+
+# --------------------------------------------------------------------------
+# scan input
+# --------------------------------------------------------------------------
+
+def load_scan(args, plugin_root):
+    if args.scan == "-":
+        return json.load(sys.stdin)
+    if args.scan:
+        with open(args.scan) as fh:
+            return json.load(fh)
+    scan_bin = os.path.join(plugin_root, "bin", "ops-inbox-scan")
+    if not os.path.exists(scan_bin):
+        sys.exit("ops-inbox-archive-set: cannot find ops-inbox-scan; pass --scan")
+    out = subprocess.run([scan_bin], capture_output=True, text=True)
+    if out.returncode != 0 or not out.stdout.strip():
+        sys.exit("ops-inbox-archive-set: ops-inbox-scan failed: %s"
+                 % (out.stderr or "")[-400:])
+    return json.loads(out.stdout)
+
+
+# --------------------------------------------------------------------------
+# classification
+# --------------------------------------------------------------------------
+
+def classify_whatsapp(scan, stale_min, dead_group_min):
+    archive, keep, fyi = [], [], []
+    wa = scan.get("whatsapp", {})
+
+    for rec in wa.get("needs_reply", []):
+        age = rec.get("age_min") or 0
+        row = {"who": rec.get("who"), "jid": rec.get("jid"),
+               "alt_jids": rec.get("alt_jids") or [], "account": "default"}
+        if age > stale_min:
+            row["why"] = "stale (older than window)"
+            archive.append(row)
+        elif is_courtesy_tail(last_inbound_text(rec)):
+            row["why"] = "courtesy tail / no open ask"
+            archive.append(row)
+        else:
+            row["age_min"] = age
+            row["last"] = last_inbound_text(rec)[:140]
+            keep.append(row)
+
+    for rec in wa.get("waiting", []):
+        archive.append({"who": rec.get("who"), "jid": rec.get("jid"),
+                        "alt_jids": rec.get("alt_jids") or [], "account": "default",
+                        "why": "WAITING (you sent last)"})
+
+    for rec in wa.get("fyi", []):
+        fyi.append({"who": rec.get("who"), "jid": rec.get("jid"),
+                    "alt_jids": [], "account": "default",
+                    "why": rec.get("reason") or "newsletter/broadcast"})
+
+    for rec in wa.get("groups", []):
+        if (rec.get("age_min") or 0) > dead_group_min:
+            archive.append({"who": rec.get("who"), "jid": rec.get("jid"),
+                            "alt_jids": [], "account": "default",
+                            "why": "dead group chat"})
+    return archive, keep, fyi
+
+
+def classify_store(path, label, stale_min):
+    """Same split for an extra WhatsApp account, read straight from its store.
+
+    Working set is `archived=0` - the full inbox, not a recency slice.
+    """
+    archive, keep, error = [], [], None
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
+        chats = con.execute(
+            "SELECT jid, COALESCE(NULLIF(name,''), jid), last_message_time "
+            "FROM chats WHERE COALESCE(archived,0)=0 "
+            "ORDER BY last_message_time DESC").fetchall()
+        for jid, name, _ in chats:
+            row = {"who": name, "jid": jid, "alt_jids": [], "account": label}
+            if jid.endswith("@newsletter") or jid == "status@broadcast":
+                row["why"] = "newsletter/broadcast"
+                archive.append(row)
+                continue
+            # media_type matters: an un-enriched media row has empty content
+            # but is NOT an empty message, and must not be archived unread.
+            last = con.execute(
+                "SELECT is_from_me, COALESCE(content,''), COALESCE(media_type,'') "
+                "FROM messages WHERE chat_jid=? "
+                "ORDER BY timestamp DESC LIMIT 1", (jid,)).fetchone()
+            if last is None:
+                row["why"] = "empty chat"
+                archive.append(row)
+                continue
+            from_me, body, media_type = last
+            if from_me:
+                row["why"] = "WAITING (you sent last)"
+                archive.append(row)
+            elif is_courtesy_tail(body, media_type):
+                row["why"] = "courtesy tail / no open ask"
+                archive.append(row)
+            else:
+                row["last"] = body[:140] or ("[%s, not yet enriched]" % media_type)
+                keep.append(row)
+        con.close()
+    except Exception as exc:                     # noqa: BLE001 - report, never crash
+        error = str(exc)
+    return archive, keep, error
+
+
+def classify_email(scan):
+    """FYI mail is NEVER auto-archived: it becomes a review list, not an archive
+    set. A run of "FYI" recently held a Docusign contract, a private-bank
+    document, a failed payment and four ACTION REQUIRED notices - a bucket that
+    can contain those is a bucket a human reads before anything is swept."""
+    fyi, kept = [], []
+    for item in scan.get("email", {}).get("fyi", []):
+        label = protecting_label(item.get("labels"))
+        row = {"who": item.get("who"), "subject": item.get("subject"),
+               "threadId": item.get("threadId")}
+        if label:
+            row["protected_by"] = label
+            kept.append(row)
+        else:
+            fyi.append(row)
+    return fyi, kept
+
+
+# --------------------------------------------------------------------------
+# apply
+# --------------------------------------------------------------------------
+
+def archive_whatsapp(rows, port, dry):
+    import urllib.request
+    ok = fail = 0
+    for row in rows:
+        for jid in [row.get("jid")] + list(row.get("alt_jids") or []):
+            if not jid:
+                continue
+            if dry:
+                ok += 1
+                continue
+            body = json.dumps({"chat_jid": jid, "archive": True}).encode()
+            req = urllib.request.Request(
+                "http://127.0.0.1:%d/api/archive" % port, data=body,
+                headers={"Content-Type": "application/json"})
+            try:
+                urllib.request.urlopen(req, timeout=20).read()
+                ok += 1
+            except Exception as exc:             # noqa: BLE001
+                fail += 1
+                print("  archive failed %s: %s" % (jid, exc), file=sys.stderr)
+    return ok, fail
+
+
+def archive_email(rows, account, dry):
+    ids = [r["threadId"] for r in rows if r.get("threadId")]
+    if not ids or dry:
+        return len(ids), 0
+    # The scan hands us thread IDs, and `gog gmail archive` treats bare
+    # arguments as MESSAGE ids unless --thread is given. Without it the call
+    # either errors or archives the wrong thing.
+    cmd = ["gog", "gmail", "archive"]
+    if account:
+        cmd += ["-a", account]
+    cmd += ids + ["--thread", "--force", "--no-input"]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print("  gmail archive failed: %s" % (res.stderr or "")[-300:], file=sys.stderr)
+        return 0, len(ids)
+    return len(ids), 0
+
+
+# --------------------------------------------------------------------------
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Split an ops-inbox-scan into ARCHIVE / KEEP. Report-only "
+                    "unless --apply is given.")
+    # Both spellings write the same dest. The positional MUST default to
+    # SUPPRESS: with nargs="?" an absent positional otherwise writes its default
+    # over a value already parsed from --scan, which silently made the tool
+    # re-run a live scan instead of reading the file it was handed.
+    ap.add_argument("scan", nargs="?", default=argparse.SUPPRESS,
+                    help="path to a scan JSON, or '-' for stdin "
+                         "(default: run ops-inbox-scan)")
+    ap.add_argument("--scan", dest="scan", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--wa-store", action="append", default=[], metavar="DB",
+                    help="extra WhatsApp account store (repeatable)")
+    ap.add_argument("--bridge-port", action="append", default=[], type=int,
+                    help="bridge port for the matching --wa-store (repeatable)")
+    ap.add_argument("--default-bridge-port", type=int, default=8080)
+    ap.add_argument("--stale-days", type=int, default=7)
+    ap.add_argument("--dead-group-days", type=int, default=30)
+    ap.add_argument("--gmail-account", default=os.environ.get("GMAIL_ACCOUNT"))
+    ap.add_argument("--json", action="store_true", help="emit JSON only")
+    ap.add_argument("--apply", action="store_true",
+                    help="actually archive (only after human approval)")
+    ap.add_argument("--archive-fyi", action="store_true",
+                    help="include the FYI review list in the sweep. Only pass "
+                         "this after the user has read the FYI briefing and "
+                         "asked for a mass archive.")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="with --apply, go through the motions without calling out")
+    args = ap.parse_args()
+    args.scan = getattr(args, "scan", None)
+
+    plugin_root = os.environ.get(
+        "CLAUDE_PLUGIN_ROOT",
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    scan = load_scan(args, plugin_root)
+    stale_min = args.stale_days * 24 * 60
+    dead_min = args.dead_group_days * 24 * 60
+
+    wa_archive, wa_keep, wa_fyi = classify_whatsapp(scan, stale_min, dead_min)
+    em_fyi, em_kept = classify_email(scan)
+
+    # FYI is a REVIEW list, never part of the default sweep. It only joins the
+    # archive set when the user has seen the briefing and explicitly opted in.
+    em_archive = em_fyi if args.archive_fyi else []
+    if args.archive_fyi:
+        wa_archive = wa_archive + wa_fyi
+
+    extra, errors = [], []
+    for idx, store in enumerate(args.wa_store):
+        label = os.path.basename(os.path.dirname(os.path.dirname(store))) or "extra%d" % idx
+        arch, keep, err = classify_store(store, label, stale_min)
+        port = args.bridge_port[idx] if idx < len(args.bridge_port) else None
+        extra.append({"label": label, "port": port, "archive": arch, "keep": keep})
+        if err:
+            errors.append("%s: %s" % (label, err))
+
+    result = {
+        "archive": {
+            "whatsapp_default": wa_archive,
+            "whatsapp_extra": [{"account": e["label"], "chats": e["archive"]} for e in extra],
+            "email": em_archive,
+        },
+        "keep": {
+            "whatsapp_default": wa_keep,
+            "whatsapp_extra": [{"account": e["label"], "chats": e["keep"]} for e in extra],
+            "email_protected": em_kept,
+        },
+        # Read these, brief the user on them, THEN ask about a mass archive.
+        "review_fyi": {"email": em_fyi, "whatsapp": wa_fyi},
+        "counts": {
+            "archive_whatsapp": len(wa_archive) + sum(len(e["archive"]) for e in extra),
+            "archive_email": len(em_archive),
+            "keep_whatsapp": len(wa_keep) + sum(len(e["keep"]) for e in extra),
+            "keep_email_protected": len(em_kept),
+            "review_fyi_email": len(em_fyi),
+            "review_fyi_whatsapp": len(wa_fyi),
+        },
+        "errors": errors,
+        "applied": False,
+    }
+
+    if args.apply:
+        ok, fail = archive_whatsapp(wa_archive, args.default_bridge_port, args.dry_run)
+        for e in extra:
+            if e["port"] is None:
+                errors.append("%s: no --bridge-port given, chats left alone" % e["label"])
+                continue
+            o2, f2 = archive_whatsapp(e["archive"], e["port"], args.dry_run)
+            ok += o2
+            fail += f2
+        eok, efail = archive_email(em_archive, args.gmail_account, args.dry_run)
+        result["applied"] = True
+        result["apply_result"] = {"whatsapp_ok": ok, "whatsapp_failed": fail,
+                                  "email_ok": eok, "email_failed": efail,
+                                  "dry_run": args.dry_run}
+
+    if args.json:
+        print(json.dumps(result, indent=1))
+        return
+
+    c = result["counts"]
+    print("PROPOSED ARCHIVE  whatsapp=%d  email=%d"
+          % (c["archive_whatsapp"], c["archive_email"]))
+    print("KEEP              whatsapp=%d  email(protected)=%d"
+          % (c["keep_whatsapp"], c["keep_email_protected"]))
+    if errors:
+        print("ERRORS: " + "; ".join(errors))
+    print("\n--- KEEP: WhatsApp, genuine open ask ---")
+    for row in sorted(wa_keep, key=lambda r: r.get("age_min") or 0):
+        print("  %-26s %s" % ((row.get("who") or "?")[:26],
+                              (row.get("last") or "")[:78].replace("\n", " ")))
+    for e in extra:
+        for row in e["keep"]:
+            print("  [%s] %-20s %s" % (e["label"][:10], str(row.get("who"))[:20],
+                                       (row.get("last") or "")[:60].replace("\n", " ")))
+    if em_kept:
+        print("\n--- KEEP: email held by a todo/action label ---")
+        for row in em_kept:
+            print("  [%s] %s" % (row["protected_by"], (row.get("subject") or "")[:66]))
+    if (em_fyi or wa_fyi) and not args.archive_fyi:
+        print("\n--- FYI: read + brief the user, then ask about a mass archive "
+              "(%d email, %d whatsapp) ---" % (len(em_fyi), len(wa_fyi)))
+        for row in em_fyi:
+            print("  %-32s %s" % (str(row.get("who"))[:32],
+                                  (row.get("subject") or "")[:60]))
+        for row in wa_fyi:
+            print("  %-32s %s" % (str(row.get("who"))[:32], row.get("why")))
+        print("  NOT archived. Pass --archive-fyi only after the user asks.")
+    if result["applied"]:
+        r = result["apply_result"]
+        print("\nARCHIVED  whatsapp ok=%d failed=%d   email ok=%d failed=%d%s"
+              % (r["whatsapp_ok"], r["whatsapp_failed"], r["email_ok"],
+                 r["email_failed"], "  (dry run)" if r["dry_run"] else ""))
+    else:
+        print("\nReport only. Nothing was archived. Re-run with --apply after approval.")
+
+
+if __name__ == "__main__":
+    main()

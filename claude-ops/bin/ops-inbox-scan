@@ -24,9 +24,17 @@
 # READ-ONLY: opens every sqlite db in immutable/read-only mode; never sends,
 # archives, or mutates anything. All sending stays in the skill under Rule 6.
 #
+# FULL INBOX, ALWAYS. Both channels scan everything that is not archived, never
+# just the unread. WhatsApp's working set is `archived=0`; email's is `in:inbox`.
+# Neither is sliced by a recency window, because an unanswered ask from three
+# weeks ago is still an unanswered ask. --days sizes only the WhatsApp send-log
+# lookback used for reconciliation; it never hides a chat or a mail.
+#
 # FLAGS:
 #   --whatsapp-only / --email-only   limit to one channel
-#   --days N                         recency window (default 7)
+#   --days N                         send-log lookback, in days (default 7)
+#   --email-query Q                  Gmail working set (default "in:inbox")
+#   --email-max N                    max Gmail results (default 400)
 #   --gmail-account ADDR             override Gmail account (default: gog default)
 #   --pretty                         pretty-print JSON
 set -euo pipefail
@@ -36,12 +44,16 @@ DO_WA=1
 DO_EMAIL=1
 GMAIL_ACCOUNT="${GMAIL_ACCOUNT:-}"
 PRETTY=0
+EMAIL_QUERY="in:inbox"
+EMAIL_MAX=400
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --whatsapp-only) DO_EMAIL=0 ;;
     --email-only)    DO_WA=0 ;;
     --days)          DAYS="${2:-7}"; shift ;;
+    --email-query)   EMAIL_QUERY="${2:-in:inbox}"; shift ;;
+    --email-max)     EMAIL_MAX="${2:-400}"; shift ;;
     --gmail-account) GMAIL_ACCOUNT="${2:-}"; shift ;;
     --pretty)        PRETTY=1 ;;
     -h|--help)
@@ -131,8 +143,15 @@ if [ "$DO_EMAIL" = 1 ]; then
   trap 'rm -f "$GMAIL_JSON_FILE" "${OIS_SENDLOG_FILE:-}"' EXIT
   ACCT_ARGS=()
   [ -n "$GMAIL_ACCOUNT" ] && ACCT_ARGS=(-a "$GMAIL_ACCOUNT")
+  # FULL INBOX, always. The working set is "not archived" -- i.e. everything
+  # still carrying the INBOX label -- never "unread", and never a recency slice.
+  # This used to be `in:inbox newer_than:${DAYS}d --max 30`, which silently hid
+  # every unanswered thread older than the window or past the 30th result, so a
+  # mail you never replied to just aged out of the scan. --days now only sizes
+  # the WhatsApp send-log lookback; it does not filter the mailbox. Narrow the
+  # mailbox deliberately with --email-query if you ever need to.
   if ! gog gmail search "${ACCT_ARGS[@]}" -j --results-only --no-input \
-        --max 30 "in:inbox newer_than:${DAYS}d" >"$GMAIL_JSON_FILE" 2>"${GMAIL_JSON_FILE}.err"; then
+        --max "$EMAIL_MAX" "$EMAIL_QUERY" >"$GMAIL_JSON_FILE" 2>"${GMAIL_JSON_FILE}.err"; then
     GMAIL_ERR="$(head -c 400 "${GMAIL_JSON_FILE}.err" 2>/dev/null | tr '\n' ' ')"
     : >"$GMAIL_JSON_FILE"   # blank => unreachable
   fi
