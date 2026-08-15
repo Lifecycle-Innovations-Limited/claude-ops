@@ -42,6 +42,17 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.3.0] - 2026-08-15
+
+### Added
+- Shared outbound guard that gates every outbound send through one code path, with matching hook entry points for Python and Node callers.
+- Test suite for the guard covering the hook matrix, false positives, and shared-guard behaviour.
+- Approval helper for granting a send, plus a README documenting how the gate works and how to wire it up.
+
+### Changed
+- `ops-comms` and `ops-inbox` now route sends through the shared guard instead of their own checks.
+
+
 ## [3.2.0] - 2026-08-15
 
 ### Added
