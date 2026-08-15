@@ -74,6 +74,13 @@ There is **no** delete/mark-read/group-admin endpoint. There is no `/api/health`
 Source: `whatsapp-mcp-server/main.py`. Load with
 `ToolSearch select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,...` (retry 3× at 5s if both ports are up).
 
+**Server name.** `whatsapp` is the single-account default. Each extra account needs its own bridge (its
+own port and its own `store/`) and its own MCP server entry, named `whatsapp-<label>` by convention.
+Point each entry at its account with `WHATSAPP_BRIDGE_DB`, `WHATSAPP_DEVICE_DB`, and
+`WHATSAPP_API_BASE_URL`; without those the second server silently reads the first account's database.
+The proxy path follows the entry name, so the endpoint is `/servers/<name>/mcp`. Tool names follow it
+too: `mcp__whatsapp-work__list_chats`. See CLAUDE.md Rule 8.
+
 | Tool                                                                                                                        | Backed by                            | Notes                                                                                                       |
 | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
 | `list_chats {sort_by,limit}`                                                                                                | messages.db read                     | chat list + last-message metadata                                                                           |

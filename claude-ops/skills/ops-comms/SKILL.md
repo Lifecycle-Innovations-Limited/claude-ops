@@ -68,6 +68,11 @@ If not running: `launchctl kickstart -k gui/$(id -u)/com.${USER}.whatsapp-bridge
 | `mcp__whatsapp__get_chat`            | `{chat_jid}`               | Chat metadata                                                 |
 | `mcp__whatsapp__get_message_context` | `{chat_jid, message_id}`   | Message context window                                        |
 
+`whatsapp` above is the single-account server name. With one bridge per account the servers are named
+`whatsapp-personal`, `whatsapp-work`, and so on, and plain `mcp__whatsapp__*` does not exist. Resolve
+the real name from the available tools first, and send from the account the thread is already on. See
+CLAUDE.md Rule 8.
+
 ### gog CLI (Gmail/Calendar)
 
 | Command                                                                            | Usage                             | Output                |

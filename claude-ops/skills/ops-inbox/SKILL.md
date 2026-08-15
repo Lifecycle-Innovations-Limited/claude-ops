@@ -37,6 +37,10 @@ allowed-tools:
   - mcp__claude_ai_Notion__notion-create-comment
   - mcp__claude_ai_Notion__notion-update-page
   - mcp__claude_ai_Notion__notion-create-pages
+  # WhatsApp — these are the SINGLE-ACCOUNT server names (see CLAUDE.md Rule 8).
+  # allowed-tools entries are exact strings, so if you run one bridge per account
+  # (`whatsapp-personal`, `whatsapp-work`, ...) these will NOT grant access to yours.
+  # Add your own per-account entries alongside these, e.g. mcp__whatsapp-work__list_chats.
   - mcp__whatsapp__list_chats
   - mcp__whatsapp__list_messages
   - mcp__whatsapp__search_contacts
@@ -58,6 +62,12 @@ maxTurns: 60
 ## ⚠️ WHATSAPP TRANSPORT — MCP ONLY, NEVER `wacli`
 
 For **all** WhatsApp operations in this skill (list chats, read messages, search contacts, send replies, archive chats), use the `mcp__whatsapp__*` tool family backed by the whatsmeow (Go) whatsapp-bridge — upstream `lharries/whatsapp-mcp`. (Earlier docs misnamed this as "Baileys" — Baileys is the Node.js WhatsApp library; this bridge uses `go.mau.fi/whatsmeow`.)
+
+> **Server name.** `mcp__whatsapp__*` is the single-account default. Installs with more than one account
+> register one server per account (`whatsapp-personal`, `whatsapp-work`, ...) and have no plain
+> `mcp__whatsapp__*` at all. Resolve the real name from the available tools before the first call, and
+> when several accounts exist, scan each one separately and keep the results labelled by account. See
+> CLAUDE.md Rule 8.
 
 **NEVER call the legacy `wacli` CLI** (`wacli chats list`, `wacli messages list`, `wacli send`, `wacli doctor`, `wacli history backfill`, etc). The wacli store and keepalive daemon are deprecated for this skill.
 
