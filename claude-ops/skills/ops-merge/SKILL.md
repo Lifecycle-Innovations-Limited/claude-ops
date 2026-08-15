@@ -487,6 +487,18 @@ During this command's execution, invoke the following superpower skills at the s
 
 - **NEVER trust a fixer's claim of merge success.** Always verify via `gh pr view --json state,mergedAt,mergeCommit` before marking complete. See Phase 5 verification protocol.
 - **NEVER let a fixer call `gh pr merge`.** Merge is orchestrator-only. Fixers push, orchestrator verifies the push, orchestrator merges, orchestrator verifies the merge.
+- **NEVER merge, or open a PR against, a repo the owner is not a member of.** The registry lists every locally cloned project, so a fork's upstream (`facebookresearch/*`, someone else's OSS) appears in the queue carrying open PRs from unrelated contributors. Those are read-only. Contributing upstream is a deliberate act the owner asks for, one PR at a time, never a pipeline sweep.
+
+  **Check push access immediately before every `gh pr create`, `gh pr merge`, and `git push` — in every phase (0 salvage, 2 merge, 5 verified-merge, 6 main sync):**
+
+  ```bash
+  PERM=$(gh api "repos/$REPO" --jq '.permissions.push' 2>/dev/null || echo error)
+  [ "$PERM" = "true" ] || { echo "refusing: no confirmed push access to $REPO ($PERM)"; exit 1; }
+  ```
+
+  **Fail closed.** Only a literal `true` proceeds. `false`, `null`, a network error, a renamed repo, or an empty response all refuse. The scan filtering the queue is not sufficient on its own: the queue can be stale, hand-edited, or passed in by an operator, and the step after it is a merge. Re-check at the point of action, not once at the start.
+
+  `OPS_MERGE_INCLUDE_EXTERNAL=<owner/name>` authorises exactly one repo for one run, and only when the owner asked. It is a slug, never a boolean — a global on/off would re-open the whole registry to a pipeline whose next call is `gh pr merge`.
 - **NEVER force-push to main/master**
 - **NEVER merge with red CI** — fix root cause first
 - **NEVER bypass review on PRs touching auth, payments, PII, or secrets** — these require `security-reviewer` subagent audit before merge
