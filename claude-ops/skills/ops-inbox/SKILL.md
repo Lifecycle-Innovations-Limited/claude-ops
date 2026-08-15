@@ -353,9 +353,14 @@ deterministically, instead of re-deciding a few hundred rows by eye every run:
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-archive-set" --apply               # AFTER approval
 ```
 
-- **ARCHIVE** — newsletters/broadcasts, WAITING (you sent last), courtesy tails
-  with no open ask ("thanks!", "will do!!"), bare uncaptioned media, threads past
-  `--stale-days` (7), dead groups past `--dead-group-days` (30).
+- **ARCHIVE** — WAITING (you sent last), courtesy tails with no open ask
+  ("thanks!", "will do!!"), threads past `--stale-days` (7), dead groups past
+  `--dead-group-days` (30).
+- **REVIEW (FYI)** — newsletters, broadcasts, automated mail. **Never swept.**
+  Read it, brief the user, then ask; `--archive-fyi` is the opt-in that answer
+  unlocks. See the FYI core principle below.
+- Undescribed media (`[image]`, `[voice]` with no enrichment yet) is **unknown**,
+  never a tail — it always lands in KEEP.
 - **KEEP** — every genuine unanswered ask, plus every email carrying a
   todo/action label. Ambiguity always resolves to KEEP; keeping is safe,
   archiving is the risky direction.
@@ -735,6 +740,43 @@ an unanswered ask. Recency orders the list; it never filters it. `ops-inbox-scan
 hide a chat or a mail.
 
 Classify every conversation in that working set:
+
+## Core principle: FYI IS NEVER AUTO-ARCHIVED — READ IT, BRIEF IT, THEN ASK
+
+FYI is the bucket that looks like noise and is not. One real run of "FYI"
+contained a Docusign contract awaiting signature, a private-bank document, a
+failed €85.90 payment, a GitHub secret-risk assessment, a hotel proposal, and
+four `ACTION REQUIRED` data-retention notices. Sweeping that bucket because the
+senders are automated is how a run loses something that mattered.
+
+So FYI never enters the sweep by itself. The flow is fixed:
+
+1. **Never auto-archive it.** FYI is a REVIEW list, not an archive set.
+   `ops-inbox-archive-set` keeps it out of `--apply` entirely; it only joins the
+   sweep under the explicit `--archive-fyi` opt-in.
+2. **Read it.** Actually open the FYI items — subject and sender are not enough
+   to tell a newsletter from a payment failure.
+3. **Brief the user.** Summarise the FYI set in one compact briefing, grouped by
+   what it means for them, and call out anything that is secretly actionable
+   (money, contracts, legal, security, deadlines, account/data loss) as its own
+   line. The briefing IS the deliverable — the user should not have to open
+   Gmail to know what was in there.
+4. **Then ask.** One `AskUserQuestion`: mass-archive everything in the briefing,
+   archive all but the flagged items, or leave it. Only on approval re-run with
+   `--archive-fyi`.
+
+**This is DEFAULT behaviour on every run, and the user never sees a flag.**
+A bare `/ops:ops-inbox` does all four steps by itself — the user does not opt in,
+ask for a briefing, or know that `--archive-fyi` exists. Flags are how the agent
+drives the script; they are never mentioned to the user, never required from the
+user, and never offered as a choice. Phrase the question in plain language
+("Archive these 26?"), never as a flag or a command. The same goes for every
+other option in this skill: the user asks for their inbox, and everything else
+is the agent's job.
+
+**Anything actionable found while reading stops being FYI** — promote it to
+NEEDS_REPLY or a USER-OWES reminder and keep it in the inbox regardless of what
+the mass-archive answer is.
 
 ## Core principle: ARCHIVE/MARK-READ COMMANDS MUST BE VALID FOR THE CHANNEL
 

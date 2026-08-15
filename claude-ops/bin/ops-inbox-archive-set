@@ -169,7 +169,7 @@ def load_scan(args, plugin_root):
 # --------------------------------------------------------------------------
 
 def classify_whatsapp(scan, stale_min, dead_group_min):
-    archive, keep = [], []
+    archive, keep, fyi = [], [], []
     wa = scan.get("whatsapp", {})
 
     for rec in wa.get("needs_reply", []):
@@ -193,16 +193,16 @@ def classify_whatsapp(scan, stale_min, dead_group_min):
                         "why": "WAITING (you sent last)"})
 
     for rec in wa.get("fyi", []):
-        archive.append({"who": rec.get("who"), "jid": rec.get("jid"),
-                        "alt_jids": [], "account": "default",
-                        "why": rec.get("reason") or "newsletter/broadcast"})
+        fyi.append({"who": rec.get("who"), "jid": rec.get("jid"),
+                    "alt_jids": [], "account": "default",
+                    "why": rec.get("reason") or "newsletter/broadcast"})
 
     for rec in wa.get("groups", []):
         if (rec.get("age_min") or 0) > dead_group_min:
             archive.append({"who": rec.get("who"), "jid": rec.get("jid"),
                             "alt_jids": [], "account": "default",
                             "why": "dead group chat"})
-    return archive, keep
+    return archive, keep, fyi
 
 
 def classify_store(path, label, stale_min):
@@ -250,7 +250,11 @@ def classify_store(path, label, stale_min):
 
 
 def classify_email(scan):
-    archive, kept = [], []
+    """FYI mail is NEVER auto-archived: it becomes a review list, not an archive
+    set. A run of "FYI" recently held a Docusign contract, a private-bank
+    document, a failed payment and four ACTION REQUIRED notices - a bucket that
+    can contain those is a bucket a human reads before anything is swept."""
+    fyi, kept = [], []
     for item in scan.get("email", {}).get("fyi", []):
         label = protecting_label(item.get("labels"))
         row = {"who": item.get("who"), "subject": item.get("subject"),
@@ -259,8 +263,8 @@ def classify_email(scan):
             row["protected_by"] = label
             kept.append(row)
         else:
-            archive.append(row)
-    return archive, kept
+            fyi.append(row)
+    return fyi, kept
 
 
 # --------------------------------------------------------------------------
@@ -333,6 +337,10 @@ def main():
     ap.add_argument("--json", action="store_true", help="emit JSON only")
     ap.add_argument("--apply", action="store_true",
                     help="actually archive (only after human approval)")
+    ap.add_argument("--archive-fyi", action="store_true",
+                    help="include the FYI review list in the sweep. Only pass "
+                         "this after the user has read the FYI briefing and "
+                         "asked for a mass archive.")
     ap.add_argument("--dry-run", action="store_true",
                     help="with --apply, go through the motions without calling out")
     args = ap.parse_args()
@@ -346,8 +354,14 @@ def main():
     stale_min = args.stale_days * 24 * 60
     dead_min = args.dead_group_days * 24 * 60
 
-    wa_archive, wa_keep = classify_whatsapp(scan, stale_min, dead_min)
-    em_archive, em_kept = classify_email(scan)
+    wa_archive, wa_keep, wa_fyi = classify_whatsapp(scan, stale_min, dead_min)
+    em_fyi, em_kept = classify_email(scan)
+
+    # FYI is a REVIEW list, never part of the default sweep. It only joins the
+    # archive set when the user has seen the briefing and explicitly opted in.
+    em_archive = em_fyi if args.archive_fyi else []
+    if args.archive_fyi:
+        wa_archive = wa_archive + wa_fyi
 
     extra, errors = [], []
     for idx, store in enumerate(args.wa_store):
@@ -369,11 +383,15 @@ def main():
             "whatsapp_extra": [{"account": e["label"], "chats": e["keep"]} for e in extra],
             "email_protected": em_kept,
         },
+        # Read these, brief the user on them, THEN ask about a mass archive.
+        "review_fyi": {"email": em_fyi, "whatsapp": wa_fyi},
         "counts": {
             "archive_whatsapp": len(wa_archive) + sum(len(e["archive"]) for e in extra),
             "archive_email": len(em_archive),
             "keep_whatsapp": len(wa_keep) + sum(len(e["keep"]) for e in extra),
             "keep_email_protected": len(em_kept),
+            "review_fyi_email": len(em_fyi),
+            "review_fyi_whatsapp": len(wa_fyi),
         },
         "errors": errors,
         "applied": False,
@@ -417,6 +435,15 @@ def main():
         print("\n--- KEEP: email held by a todo/action label ---")
         for row in em_kept:
             print("  [%s] %s" % (row["protected_by"], (row.get("subject") or "")[:66]))
+    if (em_fyi or wa_fyi) and not args.archive_fyi:
+        print("\n--- FYI: read + brief the user, then ask about a mass archive "
+              "(%d email, %d whatsapp) ---" % (len(em_fyi), len(wa_fyi)))
+        for row in em_fyi:
+            print("  %-32s %s" % (str(row.get("who"))[:32],
+                                  (row.get("subject") or "")[:60]))
+        for row in wa_fyi:
+            print("  %-32s %s" % (str(row.get("who"))[:32], row.get("why")))
+        print("  NOT archived. Pass --archive-fyi only after the user asks.")
     if result["applied"]:
         r = result["apply_result"]
         print("\nARCHIVED  whatsapp ok=%d failed=%d   email ok=%d failed=%d%s"

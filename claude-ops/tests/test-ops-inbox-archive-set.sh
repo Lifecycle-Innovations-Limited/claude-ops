@@ -99,22 +99,31 @@ d = json.load(open(sys.argv[1]))
 c = d["counts"]
 
 # The fixture has exactly 5 email FYI rows; a live scan would not.
-emails = {r["threadId"] for r in d["archive"]["email"]}
+review = {r["threadId"] for r in d["review_fyi"]["email"]}
 protected = {r["threadId"] for r in d["keep"]["email_protected"]}
-assert emails | protected == {"t1", "t2", "t3", "t4", "t5"}, \
+assert review | protected == {"t1", "t2", "t3", "t4", "t5"}, \
     "--scan was ignored; the tool re-scanned instead of reading the file"
 
 # Guardrail: todo/action labels are never archived. "Actioned" is completion,
-# so it archives; "URGENT" is protected.
+# so it is ordinary FYI; "URGENT" is protected.
 assert protected == {"t2", "t3", "t5"}, "wrong protected set: %s" % protected
-assert emails == {"t1", "t4"}, "wrong email archive set: %s" % emails
+assert review == {"t1", "t4"}, "wrong FYI review set: %s" % review
+
+# FYI is NEVER part of the default sweep - it gets briefed, then the user
+# decides. A default run must archive no mail at all.
+assert d["archive"]["email"] == [], "FYI must never be auto-archived"
+assert d["counts"]["archive_email"] == 0
+assert {r["jid"] for r in d["review_fyi"]["whatsapp"]} == {"7@newsletter"}
+assert "7@newsletter" not in {r["jid"] for r in d["archive"]["whatsapp_default"]}, \
+    "whatsapp newsletters are FYI and must not be auto-archived"
 
 # WhatsApp split.
 keep = {r["who"] for r in d["keep"]["whatsapp_default"]}
 arch = {r["who"] for r in d["archive"]["whatsapp_default"]}
 assert keep == {"Asker", "ShortAsk", "BareMedia"}, "wrong keep set: %s" % keep
-for who in ("Tail", "Stale", "Waiter", "News", "DeadGroup"):
+for who in ("Tail", "Stale", "Waiter", "DeadGroup"):
     assert who in arch, "%s should be archived" % who
+assert "News" not in arch, "newsletters are FYI: brief them, never auto-archive"
 assert "BareMedia" not in arch, "undescribed media must never be archived unread"
 assert "LiveGroup" not in arch, "a live group must not be archived"
 
@@ -149,7 +158,7 @@ assert d["applied"] is True and r["dry_run"] is True
 assert r["whatsapp_failed"] == 0 and r["email_failed"] == 0
 # Asker carries an alt_jid, so both of its JIDs are archived.
 assert r["whatsapp_ok"] >= len(d["archive"]["whatsapp_default"]), "alt_jids must be archived too"
-assert r["email_ok"] == 2, "expected the 2 unprotected emails"
+assert r["email_ok"] == 0, "a default sweep must not touch FYI mail"
 print("dry-run apply: PASS")
 PY
 
@@ -205,6 +214,23 @@ assert mod.is_courtesy_tail("", "") is True            # genuinely nothing inbou
 # Once enriched it classifies on the description like any other text.
 assert mod.is_courtesy_tail("[image] invoice for 200 euro, due Friday") is False
 print("redos + ack behaviour: PASS")
+PY
+
+# --------------------------------------------------------------------------
+# --archive-fyi is the explicit opt-in the briefing leads to, and only then
+# does FYI join the sweep.
+# --------------------------------------------------------------------------
+run_json --archive-fyi --apply --dry-run >"$TMP/fyi.json" || fail "--archive-fyi failed"
+"$PY" - "$TMP/fyi.json" <<'PY' || exit 1
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["counts"]["archive_email"] == 2, "opt-in must sweep the 2 unprotected FYI"
+assert d["apply_result"]["email_ok"] == 2
+# Protected mail stays protected even under the opt-in.
+ids = {r["threadId"] for r in d["archive"]["email"]}
+assert ids == {"t1", "t4"}, ids
+assert "7@newsletter" in {r["jid"] for r in d["archive"]["whatsapp_default"]}
+print("--archive-fyi opt-in: PASS")
 PY
 
 echo "ops-inbox-archive-set: ALL PASS"
