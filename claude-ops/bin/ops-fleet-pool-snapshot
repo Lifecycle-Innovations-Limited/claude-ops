@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Fetch a sanitized, read-only CLIProxyAPI pool snapshot from a remote helper.
+# The remote sudoers rule should permit only the fixed helper executable —
+# never arbitrary Python/shell.
+set -euo pipefail
+
+HOST="${CLIPROXYAPI_SSH_HOST:-}"
+USER_="${CLIPROXYAPI_SSH_USER:-}"
+HELPER="${CLIPROXYAPI_REMOTE_HELPER:-/usr/local/libexec/cliproxy-fleet-snapshot}"
+TIMEOUT="${CLIPROXYAPI_SSH_TIMEOUT:-8}"
+
+if [[ -z "$HOST" ]]; then
+  printf '{"ok":false,"error":"pool host not configured"}\n'
+  exit 0
+fi
+
+if [[ "$HELPER" != /* || "$HELPER" == *$'\n'* ]]; then
+  printf '{"ok":false,"error":"invalid remote helper path"}\n'
+  exit 0
+fi
+
+TARGET="$HOST"
+if [[ -n "$USER_" ]]; then
+  TARGET="${USER_}@${HOST}"
+fi
+
+set +e
+out="$(ssh -o BatchMode=yes -o ConnectTimeout="$TIMEOUT" "$TARGET" \
+  "sudo -n ${HELPER}" 2>/dev/null)"
+rc=$?
+set -e
+
+if (( rc != 0 )) || [[ -z "$out" ]]; then
+  printf '{"ok":false,"error":"pool snapshot unavailable"}\n'
+  exit 0
+fi
+
+printf '%s\n' "$out"
