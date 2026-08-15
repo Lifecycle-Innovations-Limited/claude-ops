@@ -42,6 +42,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.1.5] - 2026-08-15
+
+### Changed
+Added: bin/ops-fleet-pool-snapshot fetches a sanitized read-only CLIProxyAPI pool snapshot from a remote helper over ssh, and ops-fleet is reworked into a read-only session plus gateway dashboard that uses it. The helper restricts the remote path to a plain safe-character path, rejects a destination or user beginning with a dash so ssh cannot read it as an option, confines the timeout to digits, and validates the remote output as JSON before emitting it. Fixed: ops-inbox now rechecks the live thread tail immediately before every send. Approval is not a license to fire a stale draft, so between the approval and the send call it re-reads the real channel for new inbound arriving after the draft was staged and for replies already sent from another session, the phone, or a different client, and rebuilds or drops the draft instead of double-replying. A scan from earlier in the same run does not count as current state.
+
+
 ## [3.1.4] - 2026-08-15
 
 ### Changed
