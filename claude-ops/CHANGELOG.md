@@ -40,6 +40,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.1.3] - 2026-08-15
+
+### Changed
+ops-merge no longer scans or merges repos the owner cannot push to. The registry lists every locally cloned project, including upstreams we only read, so the queue filled with unrelated contributors' PRs in repos we do not own. Push access is now checked fail-closed immediately before every create, merge and push, --repo is no longer exempt, the scanner accepts both --repo <slug> and a bare slug, and OPS_MERGE_INCLUDE_EXTERNAL takes a single slug instead of acting as a global bypass.
+
+
 ## [3.1.2] - 2026-08-10
 
 ### Changed
