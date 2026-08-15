@@ -42,6 +42,27 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.2.0] - 2026-08-15
+
+### Added
+- `ops-inbox-archive-set`: turns a scan into explicit ARCHIVE and KEEP lists instead of leaving the call to eye judgement. Report-only by default, archives nothing without `--apply`, never sends. Mail carrying a todo/action label can't be swept, and anything ambiguous resolves to KEEP.
+- Test suite for the archive split, label guardrail, report-only default, dry-run apply and stale window, run entirely against a fixture so tests can't touch a real inbox.
+- Per-channel archive documentation: email archiving needs thread ids, multi-account WhatsApp installs must resolve the real per-account server name first, and iMessage, Slack and Telegram have no archive at all.
+
+### Changed
+- The scan working set per channel is now "not archived" rather than unread or a recent slice. Email scans all of `in:inbox` up to 400 results; Slack stays unread-and-unreplied because it has no archive.
+- `--days` now only sizes the WhatsApp send-log lookback. Use `--email-query` / `--email-max` to narrow the mail set on purpose.
+- Reply and archive are a single step: send, verify the reply landed on the channel, then archive. An unverified send leaves the thread open.
+- Archive and mark-read no longer sit behind the outbound approval gate. They change local state only and undo cleanly; real external sends stay gated.
+- FYI is a review list, not sweep material. It gets read and summarized, anything money, contract, legal, security or deadline related is promoted out of it, and mass-archiving is only offered after that.
+
+### Fixed
+- The email scan searched a 7-day, 30-result window, so anything older or further down silently stopped being reported as needing a reply.
+- Removed exponential backtracking in the courtesy-reply matcher (CodeQL high severity). Message bodies come straight off WhatsApp, so a crafted message could hang an entire scan.
+- Undescribed media such as a bare `[image]` was read as an empty message and archived as a closing courtesy. Unenriched media now always keeps the thread.
+- A positional `scan` argument overwrote `--scan`, making the tool ignore the scan file it was given and re-scan live.
+
+
 ## [3.1.5] - 2026-08-15
 
 ### Changed
