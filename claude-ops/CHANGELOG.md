@@ -42,6 +42,12 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.1.4] - 2026-08-15
+
+### Changed
+Fixed: apply-patches.py Fix Q no longer appends a duplicate /api/app_state_status route. The idempotency sentinel matched the comment above the handler, which Fix Y later rewrote, so on any Fix-Y tree the check missed and a second http.HandleFunc for the same path was appended. Go panics at startup on a duplicate pattern, so the bridge died on the next go build. The sentinel is now the handler registration itself. Fixed: the plugin no longer assumes the WhatsApp MCP server is named whatsapp. Multi-account installs run one bridge and one server per account (whatsapp-<label>) and have no plain mcp__whatsapp__*, so every hardcoded reference failed with an unknown tool. Adds CLAUDE.md Rule 8 (resolve the name at runtime, pick the account deliberately, never reply from the wrong number, Rule 6 applies to every variant) and points ops-inbox, ops-comms, comms-scanner and scripts/whatsapp/ENDPOINTS.md at it. Also warns that allowed-tools entries are exact strings and that host send-gate hook matchers pinned to the literal mcp__whatsapp__send_message stop firing silently when an account is renamed or added.
+
+
 ## [3.1.3] - 2026-08-15
 
 ### Changed
