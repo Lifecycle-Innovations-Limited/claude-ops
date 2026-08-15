@@ -165,6 +165,40 @@ That's the bar. If a skill can't compress to that shape, it's too verbose for mo
 - Detect via `[[ -n "$SSH_CONNECTION$SSH_CLIENT$SSH_TTY" || "$OPS_MOBILE" == "1" ]]` and switch to a compact code path.
 - For URL opening, source `lib/opener.sh` and call `ops_open_url` — never call `open`/`xdg-open` directly.
 
+## Rule 8 — Never assume the WhatsApp MCP server is called `whatsapp`
+
+Docs and skills in this plugin write WhatsApp tools as `mcp__whatsapp__list_chats`,
+`mcp__whatsapp__send_message`, and so on. That is the name of a **single-account** install. It is a
+default, not a guarantee.
+
+An install with more than one WhatsApp account runs one bridge and one MCP server per account, each
+registered under its own name. The usual convention is `whatsapp-<label>`, where the label is the
+account (`whatsapp-personal`, `whatsapp-work`, or a country code). On those machines `mcp__whatsapp__*`
+does not exist at all, and a skill that calls it fails with an unknown tool.
+
+**What every skill must do:**
+
+1. **Resolve the name, do not assume it.** Read the available tool list and use whatever matches
+   `mcp__whatsapp*__`. Treat `mcp__whatsapp__*` in this repo as shorthand for "the WhatsApp server that
+   is actually registered here".
+2. **With two or more accounts, pick deliberately.** Each account has its own contacts and its own
+   history, and the stores do not overlap. Choose by where the conversation already lives. If that is
+   unclear, ask the user which account to use. Never guess, and never fall back to the first one.
+3. **Never send from an account the thread is not on.** A reply that arrives from the wrong number is
+   worse than no reply, because the recipient sees a number they do not recognise.
+4. **Rule 6 applies to every variant.** `mcp__whatsapp-work__send_message` needs the same per-message
+   approval as `mcp__whatsapp__send_message`. A different server name is not a different gate.
+
+**For `allowed-tools` frontmatter:** entries are exact tool names, so a skill listing only
+`mcp__whatsapp__list_chats` will not grant `mcp__whatsapp-work__list_chats`. Multi-account users must
+add their own per-account entries. Keep the single-account names in this repo as the default and say so
+in a comment next to them.
+
+**For host-level send gates:** a hook matcher pinned to the literal string `mcp__whatsapp__send_message`
+silently stops firing the moment an account is renamed or added, which turns an approval gate off
+without any error. Match on a pattern such as `mcp__whatsapp[a-z-]*__send_(message|audio_message|file)`
+so every present and future account stays gated.
+
 ## Appendix: CLI Reference (EXACT SYNTAX — never guess)
 
 ### gog (v0.12.0+)

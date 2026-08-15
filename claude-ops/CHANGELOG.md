@@ -1,5 +1,7 @@
 ## Unreleased
 
+- fix(whatsapp): `apply-patches.py` Fix Q no longer appends a duplicate `/api/app_state_status` route. The sentinel gated on the comment text, which Fix Y later rewrote to `Fix Q/Y`, so on any tree that had taken Fix Y the check missed and a second `http.HandleFunc` for the same path was added. Go panics at startup on a duplicate pattern, so the bridge died on the next `go build`. The sentinel is now the handler registration itself, which is stable across variants.
+- docs(whatsapp): stop assuming the MCP server is named `whatsapp`. Multi-account installs run one bridge and one server per account (`whatsapp-<label>`) and have no plain `mcp__whatsapp__*`, so every hardcoded reference failed with an unknown tool. Adds CLAUDE.md Rule 8 (resolve the name at runtime, pick the account deliberately, never send from the wrong number, Rule 6 applies to every variant) and points ops-inbox, ops-comms, comms-scanner, and `scripts/whatsapp/ENDPOINTS.md` at it. Also warns that `allowed-tools` entries are exact strings and that host send-gate hook matchers pinned to the literal `mcp__whatsapp__send_message` silently stop firing when an account is renamed or added.
 - Security: replace direct/unattended Claude browser reauthentication with short-lived HMAC-approved, single-use staged enrollment and atomic rollback activation; legacy reauth wrappers now fail closed.
 - ops-accounts-gateway skeleton (:3005 health/auth/grok hop; CLI gateway subcommand)
 - feat(crs-priority-daemon): dual-mode `backend=crs|local` file seat-state without CRS Docker
