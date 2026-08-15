@@ -1,7 +1,7 @@
 ---
 name: ops-fleet
-description: Read-only fleet dashboard — every Claude session (local + remote) with token type (oauth/api/bedrock/crs), CRS relay state, account utilization, and per-session detail. No actions.
-argument-hint: '[--once] [--tui] [--all] [--no-color] [--no-ec2]'
+description: Read-only Claude + CLIProxyAPI fleet dashboard. Shows sessions, gateway, providers, models, pooled accounts, routing, and traffic.
+argument-hint: '[--once] [--tui] [--all] [--models] [--no-pool] [--no-color]'
 allowed-tools:
   - Bash
   - Read
@@ -11,47 +11,102 @@ maxTurns: 6
 
 # OPS ► FLEET
 
-Unified, read-only dashboard over the whole Claude session fleet — local `claude --bg`
-sessions plus any remote box reached over SSM — built from `claude agents --json`,
-`claude daemon status`, the account-rotation daemon state, and the CRS (Claude Relay
-Service) relay. It renders, it never mutates.
+Unified, read-only operational dashboard for:
 
-## Runtime Context
+- local Claude Code sessions and daemon state;
+- the configured CLIProxyAPI gateway;
+- the effective model catalog grouped by provider;
+- the canonical server-side auth-record pool and configured load-balancing policy;
+- recent inference-only request, error, and latency signals;
+- optional legacy local account-rotator utilization.
 
-The dashboard sources everything live; nothing needs to be parsed by this skill:
+It renders state and never changes it. It does not consume the CLIProxyAPI usage queue,
+modify configuration, refresh credentials, switch accounts, or restart services.
 
-- **Sessions**: `claude agents --json` (authoritative; nameless sessions fall back to their session id).
-- **CRS relay**: health at `http://127.0.0.1:${CRS_PORT:-3005}/health`, allowlist at
-  `~/.claude/scripts/account-rotation/crs-allowlist.json`, recent 429/529 from the relay window.
-- **Account pool**: the rotation daemon's keychain/util state (per-account util%, reset countdown).
-- **Remote (EC2/FRA) sessions**: a background-refreshed SSM cache (`~/.claude/state/fleet-ec2.json`,
-  TTL ~45s); degrades to `refreshing…` / empty when unavailable.
+## Runtime sources
 
-These paths are the standard account-rotator install locations
-(`scripts/install-account-rotator-linux.sh`). If the rotator isn't installed the CRS /
-account / remote rows simply degrade to `?` — the session table still renders.
+| Layer | Source | Truth represented |
+|---|---|---|
+| Claude sessions | `claude agents --json` | live interactive/background session census |
+| Claude daemon | `claude daemon status` | local supervisor/socket state |
+| Gateway | `GET /` | CLIProxyAPI server identity, reachability, latency |
+| Models | authenticated `GET /v1/models` | effective client-visible model catalog |
+| Pool | sanitized helper/command JSON | enabled/disabled/backup auth records, configured routing/retries, recent inference RED signals |
+| Legacy rotator | local state file, opt-in | compatibility utilization only; not canonical gateway pool truth |
+
+A protected model endpoint returning 401/403 means **gateway reachable, auth required** — not
+gateway down. A missing pool collector degrades only the pool panel; session and gateway rows
+still render.
+
+## Discovery and configuration
+
+### Claude binary
+
+1. `CLAUDE_BIN`
+2. `command -v claude`
+
+### CLIProxyAPI base URL
+
+1. `CLIPROXYAPI_BASE_URL`
+2. `fleet.cliproxy_base_url` in `$PREFS_PATH`
+3. Claude settings `ANTHROPIC_BASE_URL`
+4. portable fallback `http://127.0.0.1:8317`
+
+Client authentication uses `CLIPROXY_API_KEY` or `CLIPROXYAPI_API_KEY`. Values are used only as
+request headers and are never printed.
+
+### Server-side pool snapshot
+
+Preferred options, in order:
+
+1. `CLIPROXYAPI_POOL_COMMAND` — executable path that prints the sanitized JSON schema below. Shell command strings are rejected.
+2. `CLIPROXYAPI_SSH_HOST` plus optional `CLIPROXYAPI_SSH_USER`, or the equivalent
+   `fleet.cliproxy_ssh_host` / `fleet.cliproxy_ssh_user` preferences. This invokes
+   `bin/ops-fleet-pool-snapshot`, which may sudo only the fixed remote executable
+   `${CLIPROXYAPI_REMOTE_HELPER:-/usr/local/libexec/cliproxy-fleet-snapshot}`.
+
+The public plugin intentionally has no real host, IP, username, or account identity defaults.
 
 ## Invocation
 
-Run the bin script and relay its output verbatim (strip ANSI for the chat block):
+Run and relay its output verbatim, stripping ANSI for a chat code block:
 
-```
+```bash
 ${CLAUDE_PLUGIN_ROOT}/bin/ops-fleet $ARGUMENTS
 ```
 
-Behavior:
-- In a real terminal it defaults to a **live full-screen TUI** (alt-screen, adaptive width, `q` to quit).
-- With stdout captured (slash command / cron) it auto-falls back to a **one-shot snapshot**.
-- Flags: `--once`/`--snapshot` force a single render · `--tui`/`--watch [secs]` force the loop ·
-  `--all` include completed sessions · `--no-color` plain · `--no-ec2` skip the remote SSM round-trip.
-- Override the CRS port with `CRS_PORT=NNNN` (default 3005; 3000 is the legacy alias).
+Flags:
 
-## Output
+| Flag | Behavior |
+|---|---|
+| `--once` / `--snapshot` | single render |
+| `--tui` / `--watch [secs]` | live alternate-screen TUI; `q` quits |
+| `--all` | include completed sessions when supported by Claude Code |
+| `--models` | expand all effective model IDs |
+| `--no-pool` / `--no-remote` / `--no-ec2` | skip server-side pool collection |
+| `--legacy-accounts` | show local rotator compatibility rows |
+| `--no-color` | plain output |
 
-ALWAYS render the dashboard to the user first — re-emit the snapshot inside a fenced code
-block (keep the box-drawing/bars/layout, strip ANSI). Below it add a one-line summary:
-total sessions + token-type breakdown, anything blocked or flapping (high `att:`), CRS
-health, and any account ≥90% util. The dashboard is the deliverable; the summary is the footnote.
+In a real terminal the command defaults to the TUI. Captured stdout defaults to one shot.
 
-End with a single line noting the live full-screen TUI is `${CLAUDE_PLUGIN_ROOT}/bin/ops-fleet`
-(or `--tui`) in a real terminal.
+## Output contract
+
+Always render the dashboard first in a fenced code block. Then add one concise summary covering:
+
+- total sessions and any blocked/waiting sessions;
+- gateway reachability/auth/model count;
+- pool enabled/disabled/backup auth-record counts and configured routing strategy;
+- recent inference error rate, 429/5xx, and p95 latency;
+- any degraded data source.
+
+End with one line noting that the live TUI is
+`${CLAUDE_PLUGIN_ROOT}/bin/ops-fleet --tui` in a real terminal.
+
+## Read-only and safety guarantees
+
+- Never query `/v0/management/usage-queue`; it pops telemetry records.
+- Never require the remote Management API; lockouts or localhost-only management must not break fleet status.
+- Never print client or management keys.
+- Never return raw proxy logs or account identities.
+- Never treat local rotator state as the canonical remote pool.
+- Never report a missing optional collector as gateway failure.
