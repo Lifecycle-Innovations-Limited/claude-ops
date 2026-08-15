@@ -173,10 +173,10 @@ def _telegram_recipient_is_self(cmd: str) -> bool:
 
 def _imessage_chat_id_is_self(chat_id: str) -> bool:
     """True iff the iMessage chat_id (GUID) points to a 1:1 thread whose ONLY
-    remote handle is one of Sam's own handles. Self-chat GUIDs look like
-    'iMessage;-;+31600000000' or 'iMessage;-;you@icloud.com'. Group-chat GUIDs
-    have the form 'iMessage;+;chat<digits>' and will NOT match — third parties
-    stay blocked.
+    remote handle is one of the owner's own handles. A 1:1 GUID has three
+    semicolon-separated parts, '<service>;-;<handle>', where the handle is a phone
+    number or an Apple ID. Group-chat GUIDs use '+' in the middle part instead of
+    '-' and will NOT match, so third parties stay blocked.
 
     Strict semantics: we ONLY allow when the embedded handle is in
     SELF_IMESSAGE_HANDLES. Anything else (group, 1:1 with non-self, malformed)
@@ -537,11 +537,11 @@ def main():
         if reason == 'Telegram bot' and _telegram_recipient_is_self(cmd):
             reason = None
         # Self-iMessage exception: if every osascript Messages target points to
-        # one of Sam's own handles, it's an operational self-notification, not
-        # outbound human-to-human comms. Two send forms are recognized:
-        #   1. `chat id "<guid>"`  — GUID form (mirrors the MCP reply path).
-        #   2. `buddy "<handle>"`  — direct-handle form
-        #      (e.g. `send "…" to buddy "+15550000000" of <service>`).
+        # one of the owner's own handles, it's an operational self-notification,
+        # not outbound human-to-human comms. Two send forms are recognized:
+        #   1. `chat id "<guid>"`     — GUID form (mirrors the MCP reply path).
+        #   2. `buddy "<handle>"`     — direct-handle form, where the handle is a
+        #      phone number or Apple ID.
         # Strict: allow only when at least one self-target form is present AND no
         # recognized target resolves to a non-self handle. Group chats and any
         # 1:1 to a third party stay BLOCKED.
