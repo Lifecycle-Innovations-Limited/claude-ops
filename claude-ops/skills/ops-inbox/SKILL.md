@@ -794,7 +794,14 @@ Only after steps 1–7 come up empty may you draft; only after step 8 is satisfi
 **The call, exactly:**
 
 - **Single-select**, options limited to `[Send]` `[Edit]` `[Skip]` (3 options — well under the Rule-1 cap of 4). Do not add extra options like "Read full thread" or "Archive" to this specific question — the full-thread read is already mandatory *before* the draft is staged (FULL-THREAD AWARENESS GATE + fact-verified redraft gate above), and archive is a separate, subsequent step once the draft is sent or skipped.
-- One draft → full draft printed inline in chat → one `AskUserQuestion` (short `preview`) → one decision (`Send`/`Edit`/`Skip`) → (if `Send`) one send → archive → **then and only then** move to the next draft's own inline text + `AskUserQuestion`.
+- One draft → full draft printed inline in chat → one `AskUserQuestion` (short `preview`) → one decision (`Send`/`Edit`/`Skip`) → (if `Send`) **LIVE TAIL RECHECK** → one send → archive → **then and only then** move to the next draft's own inline text + `AskUserQuestion`.
+
+**LIVE TAIL RECHECK (BLOCKING — immediately before every send, owner 2026-08-15).** Approval is not a license to fire a stale draft. After `Send`/`ok`/`set` and before the actual send tool/API call, re-read the live thread tail on the real channel (WhatsApp store or MCP thread, `gog gmail thread get`, Slack `conversations.history` + every nonzero `reply_count` thread, iMessage `chat_messages`). Check for:
+
+1. **New inbound** after the draft was staged (the ask may have changed or closed).
+2. **Already-sent replies** from this session, another Hermes session, the phone, or any other client (`is_from_me` / `SENT` / Sam's Slack user id).
+
+If either exists: do **not** send. Rebuild or drop the draft. Never double-respond. Never answer a last-message that is no longer last. A scan from earlier in the same run is not current state.
 
 **Forbidden patterns (same spirit as Rule 6's forbidden-output list):**
 
