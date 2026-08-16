@@ -199,6 +199,69 @@ silently stops firing the moment an account is renamed or added, which turns an 
 without any error. Match on a pattern such as `mcp__whatsapp[a-z-]*__send_(message|audio_message|file)`
 so every present and future account stays gated.
 
+## Rule 9 — Exhaust before concluding
+
+Most confident-but-wrong answers share one shape: stopping at the first plausible
+result. Before writing any of these sentences, run the matching check. If you have
+not run it, do not write the sentence.
+
+- "X was never sent" / "there is no email about Y"
+- "service X is down / dead / needs re-auth"
+- "the contract says Z"
+- "this happened on `<date>`" / "A came after B"
+- "nobody replied" / "it stalled because…"
+- "this needs you" / "that's a human blocker"
+
+**"It doesn't exist."** Search every configured account, not the default one, and
+page past the first screen. Vary the query at least three ways: by topic keyword,
+by the counterparty's exact address (`to:`/`from:`), and by their domain alone
+plus likely misspellings of the name. A negative from one account, one query, or
+page one is not evidence of absence.
+
+**"Service X is down."** Enumerate every instance before declaring anything dead:
+all processes, all listening ports, all service labels, all data stores. Probe
+each listener individually. A single failed probe on an assumed port is not an
+outage, and the same service often runs more than once under different names.
+
+**"The contract says Z."** Confirm you have the operative version by searching the
+thread for later drafts and the counterparty's own copy, and check for a clause
+that supersedes an earlier letter of intent. Map the full structure before
+quoting, since schedules routinely hold more than one table. Quote verbatim with
+the clause number; never paraphrase from memory.
+
+**"This happened on `<date>`."** Mail search returns the *thread's* latest date,
+not the individual message's. Never build a chronology from search output; open
+the thread and read per-message dates.
+
+**"Nobody replied / it stalled."** Read every message in the chain, both
+directions, before assigning fault. A stall is usually a condition nobody
+satisfied rather than neglect.
+
+**"This needs you."** The capability usually already exists and is simply
+undocumented. Before escalating: grep the codebase for an existing path including
+sibling repos, check the secret store by name, check the password manager for
+anything account-shaped, then live-probe it so you know rather than believe. Also
+question the framing — ask whether the dependency should exist at all before
+asking the user how to fund or fix it.
+
+**A counterparty asked a question.** Answer it yourself. Search the mailboxes,
+open every attachment, read the contracts, check the web. Escalate to the user
+only when the answer exists solely in their head or needs their physical presence.
+Relaying a question the user pays you to answer is the failure this rule exists to
+prevent.
+
+**Attachments are primary sources.** `.eml`, `.pdf`, `.docx`, and `.xlsx`
+attachments regularly hold the actual answer. "See the attachment" is an
+instruction to open it, not a pointer to summarise around. Nested `.eml` files
+parse with Python's `email` module.
+
+**User corrections are research instructions, never hedges to be reassured.**
+"I think I sent that" means the search was too narrow, so sweep again. "I don't
+think that's true" means stop and re-verify from the primary source. "Isn't there
+a better way" is a design review, so go and check before answering. "Maybe it's
+running on a different port" means enumerate rather than politely dismiss. A
+user's half-memory of their own estate routinely beats a first-pass search.
+
 ## Appendix: CLI Reference (EXACT SYNTAX — never guess)
 
 ### gog (v0.12.0+)
