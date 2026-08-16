@@ -37,8 +37,8 @@ def test_sanitize_url():
 
 def test_safe_email():
     """safe_email redacts the local part of an email."""
-    result = bu_reauth.safe_email("info@auroracapital.nl")
-    assert result == "i***@auroracapital.nl", f"Expected redacted email, got {result}"
+    result = bu_reauth.safe_email("info@example.com")
+    assert result == "i***@example.com", f"Expected redacted email, got {result}"
     result = bu_reauth.safe_email("a@b.com")
     assert result == "***@b.com", f"Expected redacted email, got {result}"
     print("PASS: safe_email redacts the local part of an email")

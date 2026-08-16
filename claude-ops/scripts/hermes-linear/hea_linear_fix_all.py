@@ -94,7 +94,7 @@ MATERIAL_PREFIXES = (
 
 
 def personal_key() -> str:
-    return (os.environ.get("LINEAR_API_KEY") or os.environ.get("HEALIFY_LINEAR_API_KEY") or "").strip()
+    return (os.environ.get("LINEAR_API_KEY") or os.environ.get("TEAM_LINEAR_API_KEY") or "").strip()
 
 
 def agent_token() -> str:

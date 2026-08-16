@@ -113,12 +113,12 @@ const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const ACTIVE_KEYCHAIN_ACCOUNT = 'unknown';
 const VAULT_KEYCHAIN_ACCOUNT = process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || 'claude-ops';
 
-// When Sam's canonical CLIProxyAPI checkout exists, browser reauth should write
+// When a canonical CLIProxyAPI checkout exists, browser reauth should write
 // there directly. CLIProxyAPI owns the per-seat JSON schema and is the sole
 // refresh writer; translating Claude Code's keychain after OAuth creates a
 // second credential plane and was the source of "OAuth succeeded / rotation
-// unverified" failures. All paths remain configurable for other installations.
-const CLIPROXYAPI_DIR = process.env.CLIPROXYAPI_DIR || join(homedir(), 'Developer', 'active', 'cliproxyapi');
+// unverified" failures. Set CLIPROXYAPI_DIR to point at your own checkout.
+const CLIPROXYAPI_DIR = process.env.CLIPROXYAPI_DIR || join(homedir(), 'cliproxyapi');
 const CLIPROXYAPI_BINARY = process.env.CLIPROXYAPI_BINARY || join(CLIPROXYAPI_DIR, 'cli-proxy-api');
 const CLIPROXYAPI_CONFIG = process.env.CLIPROXYAPI_CONFIG || join(CLIPROXYAPI_DIR, 'config', 'config.yaml');
 const CLIPROXYAPI_AUTH_DIR =

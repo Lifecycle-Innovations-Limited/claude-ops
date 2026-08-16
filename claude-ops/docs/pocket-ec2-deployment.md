@@ -1,18 +1,18 @@
 # Pocket pipeline — EC2 deployment on dev-sandbox
 
-Pocket runs entirely on the dev-sandbox EC2 instance (i-0b207951a7dff925d,
+Pocket runs entirely on a dedicated EC2 instance (`$POCKET_INSTANCE_ID`,
 m8g.2xlarge). This is an approved exception to the no-EC2 rule; pocket
 workloads are too persistent for a laptop.
 
 ## Access
 
-Web UI: `https://dev-sandbox.tail6aeed8.ts.net` (Tailscale only — never
+Web UI: `https://dev-sandbox.<your-tailnet>.ts.net` (Tailscale only — never
 exposed via public DNS or Cloudflare). Auth is enforced by the
 `Tailscale-User-Login` header injected by `tailscale serve`; only
 the configured owner identity is admitted (set via `TAILSCALE_USER` env in the systemd unit).
 
-SSH: `ssh dev-ts` (ec2-user, pem at `~/.ssh/dev-sandbox-2026-05-17.pem`,
-Tailscale IP 100.109.217.31).
+SSH: `ssh dev-ts` (ec2-user, pem at `~/.ssh/<your-key>.pem`, Tailscale IP
+from `tailscale status`).
 
 ## Systemd units
 

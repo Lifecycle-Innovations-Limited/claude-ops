@@ -42,7 +42,7 @@ export async function listAccounts(ctx) {
       lastError: blocked ? snap?.vendor_detail || 'HTTP 402 no active paid subscription' : snap?.error || null,
       billing: snap?.billing_mail_hint || null,
       http: snap?.http || null,
-      note: 'Two orgs in Gmail (GGDXNY Sam Org / DGPBWS Healify); feeder probes one FACTORY_API_KEY',
+      note: 'Multiple orgs can share one mailbox; the feeder probes a single FACTORY_API_KEY',
       reauth: { status: 'unavailable', note: 'pay invoice / restore Factory billing; no OAuth cascade' },
     },
   ];

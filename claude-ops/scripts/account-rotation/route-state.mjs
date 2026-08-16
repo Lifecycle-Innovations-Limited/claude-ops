@@ -10,7 +10,19 @@ export const ROUTE_MODES = new Set(['crs-oauth', 'fail-closed']);
 // INVARIANT: ANTHROPIC_BASE_URL points at the CRS relay XNOR a cr_-prefixed
 // relay key in ANTHROPIC_API_KEY. Auth-token fields are reserved for the
 // launcher-created child environment and must not persist in settings.
-const CRS_BASE_RE = /127\.0\.0\.1:(3000|3002|3005|8091|18091)|100\.87\.53\.96:8091|:(3000|3002|3005|8091|18091)\/api/;
+// Extra hosts (e.g. a tailnet relay) can be added via OPS_RELAY_HOSTS as a
+// comma-separated host:port list; nothing site-specific is hardcoded here.
+const EXTRA_RELAY_HOSTS = (process.env.OPS_RELAY_HOSTS || '')
+  .split(',')
+  .map((h) => h.trim())
+  .filter(Boolean)
+  .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+const CRS_BASE_RE = new RegExp(
+  ['127\\.0\\.0\\.1:(3000|3002|3005|8091|18091)']
+    .concat(EXTRA_RELAY_HOSTS)
+    .concat([':(3000|3002|3005|8091|18091)\\/api'])
+    .join('|'),
+);
 
 function currentCrsToken(env = {}) {
   return isCrsToken(env.ANTHROPIC_API_KEY) ? env.ANTHROPIC_API_KEY : '';
