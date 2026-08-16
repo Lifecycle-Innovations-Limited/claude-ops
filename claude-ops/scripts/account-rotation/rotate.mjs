@@ -124,7 +124,7 @@ const CLIPROXYAPI_CONFIG = process.env.CLIPROXYAPI_CONFIG || join(CLIPROXYAPI_DI
 const CLIPROXYAPI_AUTH_DIR =
   process.env.CLIPROXYAPI_AUTH_DIR || process.env.CLIPROXY_AUTH_DIR || join(CLIPROXYAPI_DIR, 'auths');
 const CLIPROXY_REPLICA_SYNC =
-  process.env.CLIPROXY_REPLICA_SYNC || join(homedir(), '.local', 'bin', 'crsproxy-replica-sync.py');
+  process.env.CLIPROXY_REPLICA_SYNC || join(homedir(), '.local', 'bin', 'cliproxy-replica-sync.py');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -850,17 +850,17 @@ function stopClaudeDaemon() {
 // one with `source ~/.claude/scripts/account-rotation/use-bedrock.sh`.
 async function activateBedrockFallback(reason, dryRun = false) {
   // Kill-switch — mirror daemon.mjs activateBedrockFallbackFromDaemon (disabled
-  // 2026-05-08, Max/CRS plan handles capacity; Bedrock is metered AWS = $600-1.2k/mo
+  // 2026-05-08, the Max plan handles capacity; Bedrock is metered AWS = $600-1.2k/mo
   // bleed). BLOCKED by default; set CLAUDE_DISABLE_BEDROCK_FALLBACK=0 to re-enable.
   // Authoritative here regardless of caller so the rotate path can never silently
-  // flip a CRS/Max-routed box onto metered Bedrock (the bedrockOnExhausted opt
+  // flip a Max-routed box onto metered Bedrock (the bedrockOnExhausted opt
   // defaults ON, unlike the daemon — this is the backstop).
   if (process.env.CLAUDE_DISABLE_BEDROCK_FALLBACK !== '0') {
     log(`[bedrock-fallback] BLOCKED by CLAUDE_DISABLE_BEDROCK_FALLBACK (reason was: ${reason})`);
     if (!dryRun) {
       notify(
         'Bedrock Fallback BLOCKED',
-        'Kill-switch active — Max/CRS-only mode. Wait for reset window or rotate manually.',
+        'Kill-switch active — Max-only mode. Wait for reset window or rotate manually.',
       );
     }
     return false;

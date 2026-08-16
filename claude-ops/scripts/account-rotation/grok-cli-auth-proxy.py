@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """OpenAI-compatible local proxy backed by SuperGrok CLI OAuth (multi-account).
 
-Ported into claude-ops for no-CRS installs. Host path ~/.local/bin is not required.
+Ported into claude-ops. Host path ~/.local/bin is not required.
 Configure seats via GROK_PREFERRED_EMAILS / GROK_SLOT_FILES / ~/.grok/auth-slots.
 
 Reads OAuth grants from ~/.grok/auth.json plus ~/.grok/auth-slots/*.json, refreshes

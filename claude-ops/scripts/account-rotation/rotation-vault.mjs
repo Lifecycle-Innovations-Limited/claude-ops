@@ -130,7 +130,7 @@ export function writeRotationTokenCoordinated(account, token, capability) {
   throw new Error('ROTATION_TOKEN_MUTATION_APPROVAL_REQUIRED');
 }
 
-export function reconcileRemoteRotationVault({ host = process.env.CRS_SSH_HOST || 'dev-us' } = {}) {
+export function reconcileRemoteRotationVault({ host = process.env.CLAUDE_ROTATION_SSH_HOST || 'dev-us' } = {}) {
   // A local lock cannot serialize or identity-verify a writer on another host.
   // Distributed reconciliation remains operationally fenced until the remote
   // endpoint exposes the same canonical lock + exact profile-verification API.
