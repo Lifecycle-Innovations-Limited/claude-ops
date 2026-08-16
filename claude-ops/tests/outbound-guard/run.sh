@@ -11,6 +11,18 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# Two of the suites predate CI and default to the hook installed under ~/.claude, which
+# does not exist on a runner: python3 on a missing file exits 2, so every case reads as
+# blocked and even `plain ls` fails. A suite living in the repo should test the repo, so
+# point all four at the checked-in copy. An explicit OUTBOUND_HOOK still wins, which is
+# how you test the installed hook on a machine that has one.
+export OUTBOUND_HOOK="${OUTBOUND_HOOK:-$HERE/../../scripts/outbound-guard/block-outbound-comms.py}"
+if [ ! -f "$OUTBOUND_HOOK" ]; then
+  echo "outbound-guard: hook not found at $OUTBOUND_HOOK"
+  exit 1
+fi
+
 fail=0
 
 for suite in \
