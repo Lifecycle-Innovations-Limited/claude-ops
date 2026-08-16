@@ -194,6 +194,44 @@ scan_tests_literal "Stripe sk_live_" 'sk_live_[a-zA-Z0-9]{24,}'
 scan_tests_literal "GitHub ghp_" 'ghp_[a-zA-Z0-9]{36,}'
 scan_tests_literal "Slack xoxb-" 'xoxb-[0-9]{10,}-[0-9]{10,}-[a-zA-Z0-9]{20,}'
 
+# --- User preferences must never be tracked ---
+# Preferences hold the operator's own identity, contacts, and channel config.
+# .gitignore alone is not a guard: a file already tracked stays tracked, and
+# `git add -f` bypasses it. This asserts the actual git index, which is the
+# thing that ends up public.
+prefs_tracked_check() {
+  local tracked
+  tracked=$(git -C "$PLUGIN_ROOT" ls-files 2>/dev/null | grep -iE \
+    '(^|/)(preferences|ops-prefs|ops\.local|contact-registry|daemon-health|daemon-services|pii-denylist)\.(json|txt)$|(^|/)registry\.json$|\.local\.json$' \
+    | grep -vE '\.(example|template|sample)\.json$|/registry\.templates/' || true)
+  if [[ -n "$tracked" ]]; then
+    local count; count=$(echo "$tracked" | wc -l | tr -d ' ')
+    err "user preference file(s) tracked in git" "$count file(s) — move to \$PREFS_PATH or \$HOME/.config and git rm --cached"
+    echo "$tracked" | head -5 | sed 's/^/    /'
+  else
+    ok "no user preference files tracked in git"
+  fi
+}
+prefs_tracked_check
+
+# --- Skills must not write preferences into the repo ---
+# A skill that writes prefs next to its own source will commit the operator's
+# identity on the next `git add -A`. Preferences go to the plugin data dir.
+prefs_write_target_check() {
+  local bad
+  bad=$(grep -rnE '>[[:space:]]*"?\$?\{?(PLUGIN_ROOT|CLAUDE_PLUGIN_ROOT|REPO_ROOT)\}?/[^"]*(preferences|prefs|registry)\.json' \
+    $EXCLUDE_ARGS --include="*.sh" --include="*.mjs" --include="*.js" --include="*.py" \
+    "$PLUGIN_ROOT" 2>/dev/null || true)
+  if [[ -n "$bad" ]]; then
+    local count; count=$(echo "$bad" | wc -l | tr -d ' ')
+    err "preference written into the repo tree" "$count site(s) — write to \$PREFS_PATH instead"
+    echo "$bad" | head -5 | sed 's/^/    /'
+  else
+    ok "no preference writes target the repo tree"
+  fi
+}
+prefs_write_target_check
+
 # --- Operator identity denylist (OUT-OF-REPO) ---
 # A public scanner cannot hardcode the operator's own brand names, personal
 # names, or private hostnames — that list would itself be the PII it's meant to

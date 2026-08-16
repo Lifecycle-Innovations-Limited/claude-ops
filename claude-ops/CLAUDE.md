@@ -18,9 +18,24 @@ These rules apply to ALL skills in this plugin. They are non-negotiable and over
 
 - `$PREFS_PATH` (preferences.json in plugin data dir — never committed)
 - `scripts/registry.json` (gitignored)
-- Environment variables or Doppler secrets
+- `$HOME/.config/claude-ops/` for anything machine-scoped (e.g. the PII denylist)
+- Environment variables or a secrets manager
 
-Run `tests/test-no-secrets.sh` before every commit to verify.
+**Never write preferences into the repo tree.** A skill or script that writes
+`preferences.json`, `registry.json`, or any prefs-shaped file next to its own
+source will commit the operator's identity on the next `git add -A`. Resolve the
+path from `$PREFS_PATH` or `$HOME`, never from `$PLUGIN_ROOT`/`$REPO_ROOT`.
+
+This is enforced, not merely documented. `tests/test-no-secrets.sh` fails the
+build when a prefs-shaped file is tracked in the git index (`.gitignore` does not
+help once a file is already tracked, and `git add -f` bypasses it), and when a
+write target resolves into the repo tree. Run it before every commit.
+
+**Enable the operator identity denylist.** The scanner cannot hardcode your own
+names, brands, or hostnames — that list would itself be the leak. Put one term
+per line in `$HOME/.config/claude-ops/pii-denylist.txt` (or `.pii-denylist`,
+gitignored) and the scanner will fail the build if any of them reach the repo.
+Until you configure it, that check passes while verifying nothing.
 
 ## Deploy-fix fleet contract
 
