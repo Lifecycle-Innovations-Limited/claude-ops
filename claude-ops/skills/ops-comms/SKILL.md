@@ -299,9 +299,9 @@ so and why rather than omitting it silently.
 When an action destroys an asset (a contact list, a mailbox, a dataset), order
 the work export, then verify the export is real, then destroy. "Verify" means row
 count and headers inspected against an expectation stated up front, so the check
-is falsifiable: an export returning 400 rows from a 60,000-record plan is a
-failed export that looks like a successful one. Split it across two approvals —
-the export can run autonomously, the destroy waits for the user.
+is falsifiable. An export returning a few hundred rows from a plan holding tens
+of thousands is a failed export that looks like a successful one. Split it across
+two approvals: the export can run autonomously, the destroy waits for the user.
 
 ### Verify the send actually landed
 

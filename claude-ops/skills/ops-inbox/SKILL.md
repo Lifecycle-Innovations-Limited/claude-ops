@@ -962,16 +962,15 @@ This does not change Rule 6's underlying send gate (stage → show full draft �
 ## Core principle: TRIAGE IS NOT THE DELIVERABLE — WORK THE QUEUE
 
 Archiving the noise and staging one draft is a fraction of the job. The remaining
-drafts are still owed. Verified on a real run: 210 chats and 82 emails were
-archived, then the pass stalled on the first approval with 17 researched drafts
-never presented. The inbox looked clean and nothing had been answered.
+drafts are still owed. The characteristic failure is a pass that archives most of
+the inbox, stalls on its first approval, and leaves a stack of researched drafts
+that were never presented. The inbox looks clean and almost nothing was answered.
 
 - **Work the full draft queue**, one approval at a time, until it is empty or the
   user stops you. A staged draft that is never shown is the same as no draft.
 - **Re-scan before declaring done.** A long triage pass takes real time and new
-  mail lands during it. The count at the end is not the count from the start; on
-  one measured pass roughly 30 new messages arrived while the drafts were being
-  built. Re-run the scan and fold in anything newer than your working cutoff.
+  mail lands during it, so the count at the end is not the count from the start.
+  Re-run the scan and fold in anything newer than your working cutoff.
 - **Answer "are you done?" with the real number**, including what was never
   staged. An honest partial beats a confident summary of the finished part.
 - **Give each replied thread its disposition immediately.** Archive when the ball
@@ -1800,7 +1799,7 @@ wrong classification or a wrong draft.
 - **"No contact on file" is only true after sweeping every configured account.** Run `gog auth list` and search the relevant mailboxes, not just the default one. Query the company or domain as well as the person's name.
 - **A draft that hands the task back to the counterparty misreads ownership.** Before drafting, name who owns the task and who has the access. A message that says "I'll do X" when the other party owns X is worse than no reply. The same applies in reverse: do not hand back work the user can do themselves.
 - **When the user says to research first, that means research, not a softer draft.** If a counterparty re-pitches something, check whether it is genuinely new before writing a polite "sounds interesting". A pitch that reads as fresh may be the same pack from weeks earlier with open questions still unanswered.
-- **The humanizer gate fires on the send tool, not on your confidence in the prose.** If a send is blocked, load the skill, run draft then audit then final, re-present, and re-issue the same call. Do not route around it with a different shell wrapper.
+- **A blocked send is a precondition to satisfy, not an obstacle to route around.** When a send hook rejects a call, it returns the block message instead of sending. Satisfy what it asked for, then re-issue the same call. Never retry the send through a different wrapper or shell path to get past the gate; a hook that inspects the command text will simply stop seeing the send, which disables the guardrail rather than passing it.
 
 ## Output quality gate
 
