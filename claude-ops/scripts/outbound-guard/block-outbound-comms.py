@@ -12,6 +12,7 @@ expires after 120 seconds.
 
 --dangerously-skip-permissions does NOT bypass this hook.
 """
+import base64
 import json
 import os
 import re
@@ -136,6 +137,31 @@ def _load_approved_recipients() -> set:
     return out
 
 
+def _load_broken_aliases() -> set:
+    """Send-as aliases whose mail bounces with a 'Send mail as' misconfiguration.
+
+    A broken alias fails silently: Gmail stamps the message SENT, then posts the
+    failure into Trash under a category the inbox does not show. Approving such a send
+    does not help, so the guard refuses it outright and says why. The list is written
+    by refresh_broken_aliases.py, which reads the bounces themselves.
+    """
+    out = set()
+    try:
+        with open(os.path.join(_HOME, ".claude/state/broken-send-aliases.json")) as f:
+            cfg = json.load(f)
+        for a in (cfg.get("aliases") or {}):
+            s = str(a).strip().lower()
+            if s:
+                out.add(s)
+    except (OSError, json.JSONDecodeError):
+        # No list, or an unreadable one, means no alias is known to be broken. Blocking
+        # on that would refuse every send on a machine that has never run the refresh,
+        # so an empty set is the correct answer rather than a swallowed error.
+        return set()
+    return out
+
+
+BROKEN_ALIASES = _load_broken_aliases()
 SELF_EMAILS = _load_self_emails()
 SELF_JIDS = _load_self_jids()
 SELF_IMESSAGE_HANDLES = _load_self_imessage_handles()
@@ -406,6 +432,52 @@ def _consume_counted() -> bool:
     return True
 
 
+def _broken_sender(tool_name: str, tool_input: dict, cmd: str = '') -> str:
+    """The broken alias this send would go out from, or '' if the sender is fine.
+
+    Reads the explicit sender: --from on a gog command, or a from/sender field on an
+    MCP call. A send with no explicit sender uses the account default, which is not an
+    alias and cannot be broken this way.
+    """
+    if not BROKEN_ALIASES:
+        return ''
+    candidates = []
+    if isinstance(tool_input, dict):
+        for k in ('from', 'sender', 'from_address', 'fromEmail'):
+            v = tool_input.get(k)
+            if isinstance(v, str) and v.strip():
+                candidates.append(v)
+    if cmd:
+        candidates += re.findall(
+            r'--from[=\s]+(?:"([^"]+)"|\'([^\']+)\'|(\S+))', cmd)
+    flat = []
+    for c in candidates:
+        if isinstance(c, tuple):
+            flat += [x for x in c if x]
+        else:
+            flat.append(c)
+    for c in flat:
+        m = re.search(r'[\w.+-]+@[\w.-]+', c)
+        if m and m.group(0).lower() in BROKEN_ALIASES:
+            return m.group(0).lower()
+    return ''
+
+
+def _native_route(addr: str) -> str:
+    """The command that sends as `addr` without the send-as relay, or '' if none exists.
+
+    A broken alias is only half the story. These mailboxes are often reachable a second
+    way: when gog holds a service account that can impersonate the address, mail goes
+    out as the mailbox itself and never touches the stale SMTP credential. Where that
+    file exists the fix is a different command, not a trip to the Gmail settings page.
+    """
+    stem = base64.urlsafe_b64encode(addr.encode()).rstrip(b'=').decode()
+    for root in ('~/Library/Application Support/gogcli', '~/.config/gogcli'):
+        if os.path.exists(os.path.join(os.path.expanduser(root), f'sa-{stem}.json')):
+            return f'gog -a {addr} gmail send --to ... --subject ... --body ...'
+    return ''
+
+
 def _identify(tool_name: str, tool_input: dict, cmd: str = '') -> tuple[str, str]:
     """Recipient and text of this message, whatever shape it arrives in.
 
@@ -575,6 +647,36 @@ def main():
             f'Return the DRAFT to the parent session, do not attempt to send.'
         )
         print(msg, file=sys.stderr)
+        sys.exit(2)
+
+    # A send from a known-broken alias is refused before every other allow path,
+    # including the approved-recipient bypass below. Approving it would not help:
+    # Gmail marks it SENT and the mail bounces into Trash, so the sender believes it
+    # went and the recipient never gets it. Whether the recipient is trusted has no
+    # bearing on that — the failure is in the sender's relay, so a pre-approved
+    # address is exactly the case where the silent bounce would go unnoticed longest.
+    _bad = _broken_sender(tool_name, tool_input if isinstance(tool_input, dict) else {}, cmd)
+    if _bad:
+        audit('BLOCKED_BROKEN_ALIAS', tool_name, _bad, cmd_snippet)
+        msg = (
+            f'BLOCKED: the sender alias {_bad} is misconfigured and its mail bounces.\n\n'
+            "Gmail stamps the message SENT and then drops a delivery failure into Trash,\n"
+            "so this send would look successful and never arrive. Approving it changes\n"
+            "nothing.\n\n")
+        native = _native_route(_bad)
+        if native:
+            msg += (
+                "Send as the mailbox itself instead. That path does not use the send-as\n"
+                "relay, so the stale password is irrelevant and no app password is needed:\n"
+                f"  {native}\n\n"
+                "If gog reports unauthorized_client, this Workspace granted the service\n"
+                "account only some scopes. Ask for just the one you need:\n"
+                f'  GOG_ACCESS_TOKEN=$(gog-sa-token {_bad} send) gog -a {_bad} gmail send ...\n\n')
+        msg += (
+            'To repair the alias itself: Gmail Settings > Accounts and Import >\n'
+            '"Send mail as" > edit that address > re-enter a valid app password. Then run:\n'
+            "  refresh_broken_aliases.py\n")
+        sys.stderr.write(msg)
         sys.exit(2)
 
     # Persistent prior-approval bypass (Sam's directive 2026-06-18): an EMAIL
