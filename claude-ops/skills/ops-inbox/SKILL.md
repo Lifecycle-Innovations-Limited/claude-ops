@@ -981,6 +981,29 @@ Only after steps 1–7 ALL come up empty is a thread a true NEEDS_REPLY candidat
 
 Only after steps 1–7 come up empty may you draft; only after step 8 is satisfied may you stage that draft. This is the FULL-THREAD AWARENESS GATE, extended cross-channel, cross-request, and fact-verified. **Surfacing a NEEDS_REPLY without having run the cross-thread, cross-channel, cross-request, and already-sent checks (steps 1–7) is a scan bug — do not present it; do not stage a draft until step 8 is clean.** None of this changes the outbound path: even a genuine, fact-verified NEEDS_REPLY is still drafted and sent only in the main session under the Rule-6 gate, per-draft, per the PER-DRAFT APPROVAL principle below.
 
+## Core principle: STAGE, DON'T REPORT — the run ends in approval cards, never in a summary + a question (owner directive 2026-08-16)
+
+**A scan that ends with "here is what I found, what do you want to work on first?" is a FAILED run.** The owner's only job in `/ops:ops-inbox` is tapping approve. Everything upstream of that tap is yours.
+
+So on every invocation, in ONE pass:
+
+1. **Gather all context for a contact before drafting, across every channel** — all of that person's WhatsApp JIDs (phone AND every `@lid`), every mailbox thread, Slack, iMessage, Notion, the contact registry, and prior Hermes sessions about them. This is the FULL-CONTEXT / dedup work already specified above; the point here is it happens on the FIRST pass, not after the owner picks an item. A draft that needed a second research round before it was correct is a defect.
+2. **Run the humanizer pass BEFORE staging.** The text in the card is already the final text.
+3. **Stage the drafts as tappable cards, back to back.** Full draft printed inline in chat first (the `preview` clips at ~10 lines), then the card. The next card loads immediately after the previous decision, with no dead air and no "shall I continue?" between them.
+4. **Never ask the owner which item to start with.** Order them yourself, most urgent first, and start staging.
+
+**Every card carries four options:**
+
+`[Send]` `[Handle this for me]` `[Edit]` `[Skip]`
+
+`[Handle this for me]` spawns a subagent that does more than send the reply: it carries out the actions the message actually requires or that the owner asked for (chase the document, book the thing, pull the file, answer the counterparty's factual question out of the source systems, update the tracker), acting on the owner's behalf end to end. Constraints on that subagent:
+
+- It works the whole item to completion, not just the message.
+- **Every outbound it produces still returns through the Rule-6 per-draft gate.** The subagent never sends anything unapproved. Delegation changes who does the work, never who approves the send.
+- It reports back what it did with real evidence, not claims.
+
+Everything else in this skill is unchanged and still binding: humanizer before staging, the LIVE TAIL RECHECK immediately before each send, verify delivery, archive the thread, then auto-resume straight into the next staged card.
+
 ## Core principle: PER-DRAFT APPROVAL — ONE AskUserQuestion PER DRAFT, NEVER BUNDLED (owner directive 2026-07-04)
 
 **Every staged outbound draft gets its OWN `AskUserQuestion` call — never bundle multiple drafts into one question, and never present a batched list of drafts with an "approve all" / "ok all" style option.** This applies on every channel (email, WhatsApp, iMessage, Slack, Telegram, Discord, Notion) and supersedes any earlier guidance in this skill that showed multiple candidates followed by a single combined approval.
@@ -992,7 +1015,7 @@ Only after steps 1–7 come up empty may you draft; only after step 8 is satisfi
 
 **The call, exactly:**
 
-- **Single-select**, options limited to `[Send]` `[Edit]` `[Skip]` (3 options — well under the Rule-1 cap of 4). Do not add extra options like "Read full thread" or "Archive" to this specific question — the full-thread read is already mandatory *before* the draft is staged (FULL-THREAD AWARENESS GATE + fact-verified redraft gate above), and archive is a separate, subsequent step once the draft is sent or skipped.
+- **Single-select**, options limited to `[Send]` `[Handle this for me]` `[Edit]` `[Skip]` (4 options — exactly the Rule-1 cap). Do not add extra options like "Read full thread" or "Archive" to this specific question — the full-thread read is already mandatory *before* the draft is staged (FULL-THREAD AWARENESS GATE + fact-verified redraft gate above), and archive is a separate, subsequent step once the draft is sent or skipped.
 - One draft → full draft printed inline in chat → one `AskUserQuestion` (short `preview`) → one decision (`Send`/`Edit`/`Skip`) → (if `Send`) **LIVE TAIL RECHECK** → one send → archive → **then and only then** move to the next draft's own inline text + `AskUserQuestion`.
 
 **LIVE TAIL RECHECK (BLOCKING — immediately before every send, owner 2026-08-15).** Approval is not a license to fire a stale draft. After `Send`/`ok`/`set` and before the actual send tool/API call, re-read the live thread tail on the real channel (WhatsApp store or MCP thread, `gog gmail thread get`, Slack `conversations.history` + every nonzero `reply_count` thread, iMessage `chat_messages`). Check for:
