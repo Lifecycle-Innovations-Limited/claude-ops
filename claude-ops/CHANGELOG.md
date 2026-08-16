@@ -43,6 +43,14 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.4.0] - 2026-08-16
+
+### Changed
+- ops-mac: the application firewall is opt-in. `/ops:mac fix` no longer offers or recommends enabling it; the audit reports its state and stops. Turning it on breaks local listeners — dev servers, MCP proxies, VNC, tunnels — and the breakage surfaces long after the run. `socketfilterfw` runs only when the firewall is asked for by name. (#814)
+- ops-inbox no longer hardcodes `127.0.0.1:8080`. On a box running one whatsmeow bridge per phone number the lowest port answers first, which bound the skill to whichever number owned 8080 and sent replies from the wrong account. New `bin/ops-wa-accounts` discovers every bridge and reads the number actually paired in each store. (#815)
+- ops-inbox / ops-comms: port the Hermes ops lessons — triage is not the deliverable, dedupe merged WhatsApp threads by message ID, transcribe outbound voice notes, and an output quality gate to prove before reporting a pass complete. (#813)
+
+
 ## [3.3.1] - 2026-08-15
 
 ### Changed
