@@ -1,7 +1,7 @@
 ---
 name: ops-rotate
-description: Alias of /ops:accounts for Claude Max seats (status, rotate-now, list, reauth, optional CRS). Prefer /ops:accounts for multi-provider. Full Claude procedure still in this file's historical detail via ops-accounts router.
-argument-hint: '[status|rotate-now|list|add-account|reauth|crs|crs-tick]'
+description: Alias of /ops:accounts for Claude Max seats (status, rotate-now, list, reauth). Prefer /ops:accounts for multi-provider. Full Claude procedure still in this file's historical detail via ops-accounts router.
+argument-hint: '[status|rotate-now|list|add-account|reauth]'
 allowed-tools:
   - Bash
   - Read
@@ -23,7 +23,7 @@ This skill is a **compat alias**. Route all work through **ops-accounts**:
 | list | `ops-accounts list` |
 | add-account | `ops-accounts setup claude` |
 | reauth | `ops-accounts reauth claude <email>` |
-| crs / crs-tick | `ops-accounts crs` / `ops-accounts crs-tick` |
+| pooled seats | CLIProxyAPI — see `/ops:ops-fleet` |
 
 Load **`skills/ops-accounts/SKILL.md`** first, then for Claude-only depth use the
 bin:

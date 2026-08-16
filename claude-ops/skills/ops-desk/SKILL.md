@@ -72,7 +72,7 @@ script encodes:
   tracker mutations from inside the workflow — they read, verify, and prepare only. All
   execution happens later in the main session under the outbound-approval gate.
 - **Batched fan-out (3 at a time).** A wide parallel burst can rate-limit (429) the
-  model-account pool — relay/CRS setups especially. Batches of 3 finish nearly as fast
+  model-account pool — pooled CLIProxyAPI setups especially. Batches of 3 finish nearly as fast
   and never starve the rest of the fleet.
 - **Verification over trust.** Every load-bearing claim in a package must come from an
   actual read (issue body, thread, sqlite row) with dates/ids cited in `status_summary`.

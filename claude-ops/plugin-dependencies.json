@@ -17,7 +17,7 @@
       "userConfigGate": "desktop_act_co_install",
       "prefsKey": "plugins.desktop_act",
       "detect": { "find": "*/desktop-act/*plugin.json" },
-      "essentialFor": ["/ops:desktop", "unattended captcha cascade (rotate-magic / magic-link-autoloop)"],
+      "essentialFor": ["/ops:desktop", "unattended captcha cascade (rotate-magic)"],
       "reason": "MCP companion for /ops:desktop and unattended captcha cascade"
     },
     {
