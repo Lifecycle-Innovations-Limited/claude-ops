@@ -43,7 +43,6 @@ const PATH_FLAGS = [
   'macos-plist',
   'runtime-inventory',
   'authoritative-consumer-inventory',
-  'linux-token-feed-unit',
   'linux-refresh-unit',
 ];
 
@@ -734,8 +733,6 @@ function rendered(plan) {
     [p['macos-env']]: env,
     [p['linux-unit']]:
       `[Unit]\nDescription=Claude account rotation daemon\nAfter=network-online.target\n\n[Service]\nType=simple\nEnvironmentFile=${p['linux-env']}\nExecStart=/usr/bin/env node ${resolve(dirname(fileURLToPath(import.meta.url)), 'daemon.mjs')}\nRestart=on-failure\nRestartSec=30\n\n[Install]\nWantedBy=default.target\n`,
-    [p['linux-token-feed-unit']]:
-      `[Service]\nType=oneshot\nEnvironmentFile=${p['linux-env']}\nExecStart=/bin/bash ${resolve(dirname(fileURLToPath(import.meta.url)), 'crs-token-feed.sh')}\n`,
     [p['linux-refresh-unit']]:
       `[Service]\nType=oneshot\nEnvironmentFile=${p['linux-env']}\nExecStart=/usr/bin/env node ${resolve(dirname(fileURLToPath(import.meta.url)), 'refresh-tokens.mjs')}\n`,
     [p['macos-plist']]: macosPlist,
@@ -808,7 +805,6 @@ function provisionTargetPaths(paths) {
     paths['linux-env'],
     paths['macos-env'],
     paths['linux-unit'],
-    paths['linux-token-feed-unit'],
     paths['linux-refresh-unit'],
     paths['macos-plist'],
   ]);
