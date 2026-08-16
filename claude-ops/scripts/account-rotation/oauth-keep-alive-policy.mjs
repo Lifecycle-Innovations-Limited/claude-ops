@@ -1,7 +1,7 @@
 /**
  * Shared OAuth token freshness policy — single source of truth for "when is
  * a Claude account token stale enough to need a proactive refresh" across
- * refresh-tokens.mjs, crs-token-feed.mjs, and any other refresh call site.
+ * refresh-tokens.mjs and any other refresh call site.
  */
 
 /** Proactively refresh once remaining TTL drops below this. */

@@ -1,5 +1,5 @@
 /**
- * Unit tests: OPS_ACCOUNTS_BACKEND resolution + seat-state merge (no CRS).
+ * Unit tests: OPS_ACCOUNTS_BACKEND resolution + seat-state merge.
  */
 import { resolveAccountsBackend, dualWriteEnabled, mergeSeatsIntoState } from '../ops-accounts-backend.mjs';
 
@@ -10,7 +10,8 @@ function assert(cond, msg) {
 assert(resolveAccountsBackend({ env: {} }) === 'auto', 'default auto');
 assert(resolveAccountsBackend({ env: { OPS_ACCOUNTS_BACKEND: 'local' } }) === 'local', 'local');
 assert(resolveAccountsBackend({ env: { OPS_ACCOUNTS_BACKEND: 'seat-state' } }) === 'local', 'seat-state');
-assert(resolveAccountsBackend({ env: { OPS_ACCOUNTS_BACKEND: 'CRS' } }) === 'crs', 'crs case');
+assert(resolveAccountsBackend({ env: { OPS_ACCOUNTS_BACKEND: 'CLIPROXY' } }) === 'cliproxy', 'cliproxy case');
+assert(resolveAccountsBackend({ env: { OPS_ACCOUNTS_BACKEND: 'crs' } }) === 'local', 'retired relay value falls back to local');
 assert(resolveAccountsBackend({ env: {}, cfgBackend: 'file' }) === 'local', 'cfg file');
 assert(resolveAccountsBackend({ env: { OPS_ACCOUNTS_BACKEND: 'auto' } }) === 'auto', 'explicit auto');
 

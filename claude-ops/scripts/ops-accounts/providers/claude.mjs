@@ -52,40 +52,20 @@ export async function listAccounts(ctx) {
   const vault = join(ctx.home, '.claude/.credentials.json');
   const rows = [];
   const accounts = cfg?.accounts || [];
-  const nameByVault = cfg?.crs?.nameByVaultKey || {};
 
-  if (Array.isArray(accounts) && accounts.length) {
-    for (const a of accounts) {
-      const email = (a.email || a.id || '').toLowerCase();
-      if (!email) continue;
-      const label = a.label || nameByVault[email] || null;
-      rows.push({
-        provider: providerId,
-        accountId: email,
-        email,
-        label,
-        tokenState: tokenStateFor(a.label || email, vault),
-        active: false,
-        utilization: null,
-        crs: label ? { name: nameByVault[a.label] || nameByVault[email] || null } : null,
-        lastError: null,
-      });
-    }
-  } else {
-    // vault-key map only
-    for (const [vaultKey, crsName] of Object.entries(nameByVault)) {
-      rows.push({
-        provider: providerId,
-        accountId: vaultKey,
-        email: vaultKey.includes('@') ? vaultKey : null,
-        label: crsName,
-        tokenState: tokenStateFor(vaultKey, vault),
-        active: false,
-        utilization: null,
-        crs: { name: crsName },
-        lastError: null,
-      });
-    }
+  for (const a of Array.isArray(accounts) ? accounts : []) {
+    const email = (a.email || a.id || '').toLowerCase();
+    if (!email) continue;
+    rows.push({
+      provider: providerId,
+      accountId: email,
+      email,
+      label: a.label || null,
+      tokenState: tokenStateFor(a.label || email, vault),
+      active: false,
+      utilization: null,
+      lastError: null,
+    });
   }
   return rows;
 }
@@ -118,5 +98,5 @@ export async function refresh(ctx) {
 }
 
 export async function utilization() {
-  return { windows: [], source: 'unavailable', note: 'use crs-live-status / priority daemon' };
+  return { windows: [], source: 'unavailable', note: 'use `ops-accounts util claude` or /ops:ops-fleet' };
 }

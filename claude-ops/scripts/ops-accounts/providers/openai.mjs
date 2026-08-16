@@ -38,7 +38,6 @@ export async function listAccounts(ctx) {
     tokenState,
     active: true,
     utilization: null,
-    crs: null,
     lastError: null,
     configPresent: existsSync(config),
     reauth: { status: 'unavailable', note: 'use ChatGPT OAuth / codex login; no plugin cascade yet' },

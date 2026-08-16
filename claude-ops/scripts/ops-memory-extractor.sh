@@ -82,20 +82,17 @@ resolve_auth() {
   OPS_AUTH_EXTRA_HEADERS=()
   OPS_BASE_URL="${OPS_BASE_URL:-}"
 
-  # ─ CRS relay first ─ (fleet-sanctioned path; subscription OAuth tokens now 401
-  # on direct api.anthropic.com after a token rotation). base_url defaults to the
-  # local CRS relay; token from $ANTHROPIC_AUTH_TOKEN or keychain service CRS_KEY.
-  local _crs_base="${ANTHROPIC_BASE_URL:-http://127.0.0.1:3005/api}"
-  local _crs_tok="${ANTHROPIC_AUTH_TOKEN:-}"
-  if [[ -z "${_crs_tok}" ]] && command -v security &>/dev/null; then
-    _crs_tok=$(security find-generic-password -s CRS_KEY -w 2>/dev/null || true)
-  fi
-  if [[ -n "${_crs_tok}" ]]; then
-    OPS_BASE_URL="${_crs_base}"
-    OPS_AUTH_HEADER="Authorization: Bearer ${_crs_tok}"
-    OPS_AUTH_MODE="crs"
+  # ─ Local proxy first ─ when the caller configured one explicitly (CLIProxyAPI).
+  # Both variables are required: a bearer token with no base URL would be sent to
+  # api.anthropic.com, which rejects it.
+  local _proxy_base="${ANTHROPIC_BASE_URL:-}"
+  local _proxy_tok="${ANTHROPIC_AUTH_TOKEN:-}"
+  if [[ -n "${_proxy_tok}" && -n "${_proxy_base}" ]]; then
+    OPS_BASE_URL="${_proxy_base}"
+    OPS_AUTH_HEADER="Authorization: Bearer ${_proxy_tok}"
+    OPS_AUTH_MODE="proxy"
     OPS_AUTH_EXTRA_HEADERS=()
-    log "Auth: CRS relay (${_crs_base})"
+    log "Auth: local proxy (${_proxy_base})"
     return 0
   fi
 
