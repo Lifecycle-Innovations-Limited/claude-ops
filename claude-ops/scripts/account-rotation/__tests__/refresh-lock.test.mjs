@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const lockDir = mkdtempSync(join(tmpdir(), 'refresh-lock-owner-'));
-process.env.CRS_REFRESH_LOCK_DIR = lockDir;
-process.env.CRS_REFRESH_LOCK_TTL_SEC = '0.15';
-const { acquireRefreshLock } = await import(`../crs-refresh-lock.mjs?test=${Date.now()}`);
+process.env.CLAUDE_REFRESH_LOCK_DIR = lockDir;
+process.env.CLAUDE_REFRESH_LOCK_TTL_SEC = '0.15';
+const { acquireRefreshLock } = await import(`../refresh-lock.mjs?test=${Date.now()}`);
 
 const release = acquireRefreshLock('owner@example.com');
 assert.ok(release);
