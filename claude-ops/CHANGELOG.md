@@ -42,6 +42,17 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.3.1] - 2026-08-15
+
+### Changed
+
+- The outbound guard now refuses to send from a Gmail send-as alias whose SMTP relay is broken. Such a send fails silently: Gmail stamps the message SENT and drops the delivery failure into Trash, so the sender believes it arrived and the recipient never gets it. The check runs ahead of every path that would otherwise allow the send, including a held approval and the approved-recipient bypass, because a broken relay bounces the mail whoever it was addressed to.
+- When a service account can impersonate the alias, the block message names the command that works. Sending as the mailbox over the API skips the send-as relay entirely and needs no app password, so a "broken" alias is often already reachable.
+- New `refresh_broken_aliases.py` builds the alias list from Gmail's own bounce threads, reading the failed alias off the SENT message's `From` header rather than matching addresses in the bounce body. `--clear <address>` drops an alias after a repair, and an absent or empty list blocks nothing.
+- New `gog-sa-token` mints a narrow-scope impersonated token. `gog` requests its whole scope bundle in one call, so a Workspace that delegated only `gmail.send` and `gmail.readonly` refuses the entire request, and a mailbox that can in fact send looks unreachable.
+- New `tests/outbound-guard/test-broken-alias.py` covers the alias path against a throwaway `HOME`, and clears the shared approval store afterwards so the other guard suites stay order-independent.
+
+
 ## [3.3.0] - 2026-08-15
 
 ### Added
