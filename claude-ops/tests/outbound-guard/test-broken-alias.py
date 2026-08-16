@@ -8,6 +8,7 @@ therefore blocks it even when an approval token is present, and says how to fix 
 The alias list normally comes from the machine's own state file. This test writes a
 throwaway HOME so it runs the same way anywhere and never depends on real addresses.
 """
+import contextlib
 import json
 import os
 import shutil
@@ -18,6 +19,9 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.abspath(os.path.join(HERE, "..", "..", "scripts", "outbound-guard"))
 HOOK = os.environ.get("OUTBOUND_HOOK", os.path.join(SRC, "block-outbound-comms.py"))
+# The approval store sits at a fixed path shared by every guard, so a test that leaves
+# credit in it changes the result of whichever suite runs next.
+STATE_FILES = ("/tmp/.claude-outbound-guard.json", "/tmp/.claude-send-ok")
 BROKEN = "broken@example.com"
 HEALTHY = "fine@example.com"
 G = "gog gmail"
@@ -30,6 +34,13 @@ def run(cmd, home):
         input=json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}}),
         capture_output=True, text=True, timeout=30, env=env)
     return p.returncode, (p.stderr or "")
+
+
+def disarm():
+    """Drop any approval credit. Absent files are the state we are aiming for."""
+    for p in STATE_FILES:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(p)
 
 
 def arm(home):
@@ -48,11 +59,7 @@ def main() -> int:
 
     fail = 0
     try:
-        for p in ("/tmp/.claude-outbound-guard.json", "/tmp/.claude-send-ok"):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+        disarm()
 
         arm(home)
         rc, err = run(f"{G} send --to x@y.com --from {BROKEN} --body hi", home)
@@ -78,15 +85,32 @@ def main() -> int:
         print(f"  {'ok  ' if ok else 'FAIL'} default sender unaffected (exit={rc})")
 
         # And it must still be refused when there is no approval at all.
-        for p in ("/tmp/.claude-outbound-guard.json", "/tmp/.claude-send-ok"):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+        disarm()
         rc, _ = run(f"{G} send --to x@y.com --from {BROKEN} --body hi", home)
         ok = rc == 2
         fail += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} broken alias blocked without approval (exit={rc})")
+
+        # A recipient on the approved list skips the token gate entirely. That
+        # bypass must not also skip the alias check: the relay is what is broken,
+        # so the mail bounces whoever it was addressed to, and a trusted recipient
+        # is precisely where an unnoticed bounce does the most damage.
+        with open(os.path.join(home, ".claude", "state",
+                               "outbound-approvals.json"), "w") as f:
+            json.dump({"approved_recipients": ["trusted@example.com"]}, f)
+        rc, err = run(f"{G} send --to trusted@example.com --from {BROKEN} --body hi", home)
+        ok = rc == 2 and "misconfigured" in err
+        fail += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} approved recipient does not bypass the alias block (exit={rc})")
+
+        # The same recipient on a healthy alias must still take the bypass, or the
+        # check above would pass simply because approvals stopped working.
+        rc, _ = run(f"{G} send --to trusted@example.com --from {HEALTHY} --body hi", home)
+        ok = rc == 0
+        fail += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} approved recipient still bypasses on a healthy alias (exit={rc})")
+
+        os.remove(os.path.join(home, ".claude", "state", "outbound-approvals.json"))
 
         # An empty list must not block anything, or a machine that never ran the
         # refresh script would have every send refused.
@@ -98,14 +122,8 @@ def main() -> int:
         print(f"  {'ok  ' if ok else 'FAIL'} no alias list means no extra blocking (exit={rc})")
     finally:
         shutil.rmtree(home, ignore_errors=True)
-        # The approval store lives at a fixed path shared by every guard, so a test
-        # that leaves credit sitting in it changes the result of whichever suite runs
-        # next. Leave it empty, which is also the safe state.
-        for p in ("/tmp/.claude-outbound-guard.json", "/tmp/.claude-send-ok"):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+        # Leave the shared store empty, which is also the safe state.
+        disarm()
 
     print(f"\n{'ALL GOOD' if not fail else str(fail) + ' FAIL'}")
     return 1 if fail else 0

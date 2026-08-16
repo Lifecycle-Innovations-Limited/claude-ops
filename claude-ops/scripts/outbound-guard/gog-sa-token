@@ -50,7 +50,8 @@ def mint(mailbox: str, scopes: list[str]) -> str:
     path = sa_path(mailbox)
     if not os.path.exists(path):
         raise SystemExit(f"no service account on file for {mailbox}")
-    sa = json.load(open(path))
+    with open(path) as f:
+        sa = json.load(f)
 
     now = int(time.time())
     claim = {
@@ -74,12 +75,16 @@ def mint(mailbox: str, scopes: list[str]) -> str:
         with urllib.request.urlopen(urllib.request.Request(TOKEN_URI, body), timeout=30) as r:
             return json.load(r)["access_token"]
     except urllib.error.HTTPError as e:
+        # Google normally explains the refusal in a JSON body, and that explanation is
+        # the whole value of this message: unauthorized_client means undelegated scopes,
+        # invalid_grant means the mailbox does not exist. The body is not guaranteed to
+        # be JSON though, so reading it is best effort and its absence is not an error.
         detail = ""
         try:
             d = json.load(e)
             detail = f': {d.get("error")} {d.get("error_description", "")}'.rstrip()
-        except Exception:
-            pass
+        except (ValueError, TypeError, AttributeError):
+            detail = ""
         raise SystemExit(f"token refused for {mailbox}{detail}")
 
 

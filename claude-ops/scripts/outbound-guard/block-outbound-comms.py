@@ -154,7 +154,10 @@ def _load_broken_aliases() -> set:
             if s:
                 out.add(s)
     except (OSError, json.JSONDecodeError):
-        pass
+        # No list, or an unreadable one, means no alias is known to be broken. Blocking
+        # on that would refuse every send on a machine that has never run the refresh,
+        # so an empty set is the correct answer rather than a swallowed error.
+        return set()
     return out
 
 
@@ -646,19 +649,12 @@ def main():
         print(msg, file=sys.stderr)
         sys.exit(2)
 
-    # Persistent prior-approval bypass (Sam's directive 2026-06-18): an EMAIL
-    # whose every recipient is on the approved-recipients allowlist is a send
-    # Sam has already signed off on — let it through without burning a token, so
-    # an approved batch doesn't require slow one-token-per-message minting. Any
-    # email with a recipient NOT on the list still falls through to the gate.
-    # Email only; Slack/WhatsApp/SMS/voice are unaffected.
-    if _email_all_recipients_approved(tool_name, tool_input if isinstance(tool_input, dict) else {}, cmd):
-        audit('ALLOWED_APPROVED', tool_name, reason, cmd_snippet)
-        sys.exit(0)
-
-    # A send from a known-broken alias is refused before the approval gate. Approving
-    # it would not help: Gmail marks it SENT and the mail bounces into Trash, so the
-    # sender believes it went and the recipient never gets it.
+    # A send from a known-broken alias is refused before every other allow path,
+    # including the approved-recipient bypass below. Approving it would not help:
+    # Gmail marks it SENT and the mail bounces into Trash, so the sender believes it
+    # went and the recipient never gets it. Whether the recipient is trusted has no
+    # bearing on that — the failure is in the sender's relay, so a pre-approved
+    # address is exactly the case where the silent bounce would go unnoticed longest.
     _bad = _broken_sender(tool_name, tool_input if isinstance(tool_input, dict) else {}, cmd)
     if _bad:
         audit('BLOCKED_BROKEN_ALIAS', tool_name, _bad, cmd_snippet)
@@ -682,6 +678,16 @@ def main():
             "  refresh_broken_aliases.py\n")
         sys.stderr.write(msg)
         sys.exit(2)
+
+    # Persistent prior-approval bypass (Sam's directive 2026-06-18): an EMAIL
+    # whose every recipient is on the approved-recipients allowlist is a send
+    # Sam has already signed off on — let it through without burning a token, so
+    # an approved batch doesn't require slow one-token-per-message minting. Any
+    # email with a recipient NOT on the list still falls through to the gate.
+    # Email only; Slack/WhatsApp/SMS/voice are unaffected.
+    if _email_all_recipients_approved(tool_name, tool_input if isinstance(tool_input, dict) else {}, cmd):
+        audit('ALLOWED_APPROVED', tool_name, reason, cmd_snippet)
+        sys.exit(0)
 
     # Pass recipient and text so the shared store can recognise this message when
     # another guard sees it too. Without them the same message would cost a unit at
