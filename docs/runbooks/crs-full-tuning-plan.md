@@ -20,7 +20,7 @@
 | Live image | `weishaw/claude-relay-service:cve-fix-20260615` (the CVE-clean node:22-alpine rebuild). **NOT** a `loadbalance-fix-*` tag — see §1 gap |
 | Redis | `crs-redis-1` (`redis:7-alpine`, :6379). Account state + concurrency counters + utilization live here |
 | Aux containers | redis-commander, prometheus, grafana (compose-defined) |
-| Account pool | ~10 Claude **Max OAuth** accounts: `pool-aurora/samfeldt/samrenders/chairman/foundation/heartfeldt-personal/heartfeldt-team` + `canary-lifecycle/support/sponsors`. Records: Redis hash `claude:account:<uuid>` |
+| Account pool | ~10 Claude **Max OAuth** accounts, named `pool-<label>` per owner/brand plus a few `canary-<label>` entries. Records: Redis hash `claude:account:<uuid>` |
 | Token refresh | `crs-token-feed.timer` (systemd `--user`, every 5 min) — FRA is the OAuth refresher-of-record |
 | Coarse priority cron | `dynamic-priority.py` (every 5 min) writes CRS `priority` from the same util formula |
 | Routing in | Fleet sessions route via overlay `~/.claude/crs-session-settings.json` (`ANTHROPIC_BASE_URL=…:3005/api` + `ANTHROPIC_AUTH_TOKEN=cr_…`). The `cr_` key MUST be `ANTHROPIC_AUTH_TOKEN`, never `ANTHROPIC_API_KEY` |
@@ -120,7 +120,7 @@ This makes future tuning a `docker compose up -d` (env reload), not a code rebui
 - Confirm `dynamic-priority.py` cron is running and not erroring. **Known pre-existing bug:**
   `NoneType .get` traceback on accounts with no usage object — non-blocking but should be
   guarded so the cron doesn't half-update priorities.
-- Verify the dead account: `pool-samrenders` (`a9f4806a…`) was the out_of_credits trigger;
+- Verify the dead account: one `pool-<label>` entry was the out_of_credits trigger;
   it needs a **credit top-up** to truly rejoin (5h/7d windows are not the constraint).
   Until topped up, the credit-cooldown (§2.1) keeps it parked instead of hammered.
 
@@ -266,4 +266,4 @@ time it, confirm < 2 min and health 200, then proceed with the tuning deploy.
 1. Agreed **fleet concurrent-dispatch ceiling** (relay-side cap is moot if the fleet over-dispatches).
 2. Whether the `loadbalance-fix-20260616` image/diff is recoverable on the box, or the
    credit-cooldown must be re-implemented from §1 spec.
-3. Top-up status of `pool-samrenders` (billing-dead account) — keep parked vs. top up vs. remove from pool.
+3. Top-up status of the billing-dead `pool-<label>` account — keep parked vs. top up vs. remove from pool.

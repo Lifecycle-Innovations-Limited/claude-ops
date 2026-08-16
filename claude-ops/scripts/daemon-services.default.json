@@ -20,7 +20,7 @@
       "pid_probe": "lsof -ti :8080 -sTCP:LISTEN 2>/dev/null | head -1",
       "restart_delay": 60,
       "max_restarts": 10,
-      "_note": "Cross-platform bridge starter. Looks at uname: macOS → launchctl kickstart gui/$UID/com.${USER}.whatsapp-bridge ; Linux → systemctl --user restart whatsapp-bridge.service. Install via `bash scripts/install-whatsapp-bridge-linux.sh --wa-phone <E.164>` on Linux hosts; on macOS the legacy launchctl plist still applies. Bridge source: github.com/lharries/whatsapp-mcp (with claude-ops patches applied by install script — see scripts/whatsapp/apply-patches.py)."
+      "_note": "Cross-platform bridge starter. Looks at uname: macOS \u2192 launchctl kickstart gui/$UID/com.${USER}.whatsapp-bridge ; Linux \u2192 systemctl --user restart whatsapp-bridge.service. Install via `bash scripts/install-whatsapp-bridge-linux.sh --wa-phone <E.164>` on Linux hosts; on macOS the legacy launchctl plist still applies. Bridge source: github.com/lharries/whatsapp-mcp (with claude-ops patches applied by install script \u2014 see scripts/whatsapp/apply-patches.py)."
     },
     "whatsapp-backfill": {
       "enabled": true,
@@ -28,7 +28,7 @@
       "cron": "0 */2 * * *",
       "restart_delay": 0,
       "max_restarts": 3,
-      "_note": "On-demand WhatsApp history backfill — POSTs to the bridge's /api/backfill endpoint added by claude-ops patches. Idempotent (whatsmeow dedups by message ID). On Linux installs the systemd timer `whatsapp-backfill.timer` (installed by the install script) is the primary trigger; this daemon entry is the fallback for hosts using the cron-driven claude-ops-daemon. Bridge auto-backfills 5s after every Connected event regardless."
+      "_note": "On-demand WhatsApp history backfill \u2014 POSTs to the bridge's /api/backfill endpoint added by claude-ops patches. Idempotent (whatsmeow dedups by message ID). On Linux installs the systemd timer `whatsapp-backfill.timer` (installed by the install script) is the primary trigger; this daemon entry is the fallback for hosts using the cron-driven claude-ops-daemon. Bridge auto-backfills 5s after every Connected event regardless."
     },
     "memory-extractor": {
       "enabled": true,
@@ -102,7 +102,7 @@
       "enabled": false,
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-marketing-autopilot.sh",
       "cron": "0 8 * * *",
-      "_note": "Autonomous per-project daily ad optimization (Meta + Google Ads) — mandatory per-project daily_spend_cap_usd, cap pre-flight, deterministic pause of underperformers (keeps >= min_live_creatives), creative-fatigue -> regen, weekly synthesis. Disabled by default; first run is forced dry. Opt-in via /ops:setup marketing (autopilot block). Cron is UTC: 08:00 UTC ~= 10:00 Europe/Amsterdam."
+      "_note": "Autonomous per-project daily ad optimization (Meta + Google Ads) \u2014 mandatory per-project daily_spend_cap_usd, cap pre-flight, deterministic pause of underperformers (keeps >= min_live_creatives), creative-fatigue -> regen, weekly synthesis. Disabled by default; first run is forced dry. Opt-in via /ops:setup marketing (autopilot block). Cron is UTC: 08:00 UTC ~= 10:00 Europe/Amsterdam."
     },
     "marketing-autopilot-calibrate": {
       "enabled": false,
@@ -132,13 +132,19 @@
       "enabled": false,
       "cron": "0 10 * * 1",
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-email-draft.sh",
-      "_note": "Weekly email draft generator (Monday 10:00 UTC). Drafts Klaviyo flow variants + next Resend broadcast via Claude. NEVER auto-sends — all drafts require per-message approval (Rule 6). Enable per project by setting marketing.projects.<key>.email_marketing.enabled=true + brand.voice in prefs."
+      "_note": "Weekly email draft generator (Monday 10:00 UTC). Drafts Klaviyo flow variants + next Resend broadcast via Claude. NEVER auto-sends \u2014 all drafts require per-message approval (Rule 6). Enable per project by setting marketing.projects.<key>.email_marketing.enabled=true + brand.voice in prefs."
     },
     "content-social-calendar": {
       "enabled": false,
       "cron": "0 11 * * 1",
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ops-cron-social-calendar.sh",
-      "_note": "Weekly social post calendar generator (Monday 11:00 UTC). Generates 5 LinkedIn + 5 X + 5 Instagram posts per project. NEVER auto-publishes — drafts require per-message approval (Rule 6). Enable per project by setting marketing.projects.<key>.social.enabled=true + brand.voice in prefs."
+      "_note": "Weekly social post calendar generator (Monday 11:00 UTC). Generates 5 LinkedIn + 5 X + 5 Instagram posts per project. NEVER auto-publishes \u2014 drafts require per-message approval (Rule 6). Enable per project by setting marketing.projects.<key>.social.enabled=true + brand.voice in prefs."
+    },
+    "update-check": {
+      "enabled": true,
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/ops-update-check --quiet",
+      "cron": "17 9 * * *",
+      "_note": "Detect-only daily check for a newer published plugin version. Writes ~/.claude/state/ops-update/update-available.json and exits 3 when an update exists. It never installs: applying stays a deliberate act via `ops-update`, so a background job can never swap the plugin out from under a running session. Off-hour minute avoids the :00 stampede."
     }
   }
 }

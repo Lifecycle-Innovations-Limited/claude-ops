@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# ops-update-check — is a newer claude-ops published? Answer, record, change nothing.
+#
+# This is the detect half of the auto-updater. It NEVER installs, patches, prunes,
+# or restarts anything; applying an update stays a deliberate act run through
+# `ops-update`, which the operator confirms. Keeping detect and apply apart is the
+# whole point: a background job that silently swaps the plugin out from under a
+# running session is how a working install breaks at the worst moment.
+#
+# What it does:
+#   1. Read the installed version from the plugin manifest.
+#   2. Refresh the marketplace catalogue (read-only pull) unless --no-fetch.
+#   3. Read the published version from the refreshed catalogue.
+#   4. Write the verdict to a state file the daemon and skills can read.
+#
+# Usage:
+#   ops-update-check [--json] [--no-fetch] [--force] [--quiet]
+#
+#   --json      emit the verdict as JSON on stdout
+#   --no-fetch  do not pull the catalogue; compare against whatever is on disk
+#   --force     ignore the once-a-day throttle
+#   --quiet     write the state file, print nothing
+#
+# Exit codes:
+#   0  up to date, or check skipped by the throttle
+#   3  an update is available (scriptable: `ops-update-check || [ $? -eq 3 ]`)
+#   1  the check could not be completed (no manifest, no catalogue, bad JSON)
+#
+# Public repo: no personal data. All paths derive from $HOME / env. (Rule 0)
+
+set -euo pipefail
+
+MARKETPLACE="ops-marketplace"
+PLUGIN="ops"
+PLUGINS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins"
+STATE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/ops-update"
+STATE_FILE="$STATE_DIR/update-available.json"
+THROTTLE_SECONDS="${OPS_UPDATE_CHECK_INTERVAL:-86400}"
+
+WANT_JSON=0
+NO_FETCH=0
+FORCE=0
+QUIET=0
+for arg in "$@"; do
+  case "$arg" in
+    --json) WANT_JSON=1 ;;
+    --no-fetch) NO_FETCH=1 ;;
+    --force) FORCE=1 ;;
+    --quiet) QUIET=1 ;;
+    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    *) echo "ops-update-check: unknown argument: $arg" >&2; exit 1 ;;
+  esac
+done
+
+say() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
+
+mkdir -p "$STATE_DIR"
+
+# --- throttle -------------------------------------------------------------
+# The daily cadence lives here rather than only in cron so that a session-start
+# probe and the daemon cannot together hammer the catalogue.
+now=$(date +%s)
+if [ "$FORCE" -eq 0 ] && [ -f "$STATE_FILE" ]; then
+  last=$(python3 -c "
+import json,sys
+try:
+    print(int(json.load(open('$STATE_FILE')).get('checked_at_epoch', 0)))
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)
+  if [ "$last" -gt 0 ] && [ $((now - last)) -lt "$THROTTLE_SECONDS" ]; then
+    say "checked less than $((THROTTLE_SECONDS / 3600))h ago; use --force to recheck"
+    exit 0
+  fi
+fi
+
+# --- installed version ----------------------------------------------------
+installed=""
+for manifest in \
+  "$PLUGINS_DIR/cache/$MARKETPLACE/$PLUGIN/current/.claude-plugin/plugin.json" \
+  "$PLUGINS_DIR/marketplaces/$MARKETPLACE/$PLUGIN/.claude-plugin/plugin.json"; do
+  if [ -f "$manifest" ]; then
+    installed=$(python3 -c "
+import json
+try:
+    print(json.load(open('$manifest')).get('version','') or '')
+except Exception:
+    pass
+" 2>/dev/null || true)
+    [ -n "$installed" ] && break
+  fi
+done
+
+if [ -z "$installed" ]; then
+  say "ops-update-check: no installed plugin manifest found; nothing to compare"
+  exit 1
+fi
+
+# --- published version ----------------------------------------------------
+if [ "$NO_FETCH" -eq 0 ] && command -v claude >/dev/null 2>&1; then
+  claude plugin marketplace update "$MARKETPLACE" >/dev/null 2>&1 || true
+fi
+
+catalogue="$PLUGINS_DIR/marketplaces/$MARKETPLACE/.claude-plugin/marketplace.json"
+published=""
+if [ -f "$catalogue" ]; then
+  published=$(python3 -c "
+import json
+try:
+    d = json.load(open('$catalogue'))
+except Exception:
+    raise SystemExit
+plugins = d.get('plugins')
+if isinstance(plugins, dict):
+    entry = plugins.get('$PLUGIN') or {}
+elif isinstance(plugins, list):
+    entry = next((p for p in plugins if p.get('name') == '$PLUGIN'), {})
+else:
+    entry = {}
+print(entry.get('version','') or '')
+" 2>/dev/null || true)
+fi
+
+if [ -z "$published" ]; then
+  say "ops-update-check: could not read a published version from the catalogue"
+  exit 1
+fi
+
+# --- compare --------------------------------------------------------------
+# Pure version compare; no network, no side effects.
+newer=$(python3 -c "
+def parts(v):
+    out = []
+    for chunk in str(v).split('.'):
+        digits = ''.join(c for c in chunk if c.isdigit())
+        out.append(int(digits) if digits else 0)
+    return out
+a, b = parts('$installed'), parts('$published')
+n = max(len(a), len(b))
+a += [0] * (n - len(a))
+b += [0] * (n - len(b))
+print('yes' if b > a else 'no')
+" 2>/dev/null || echo "no")
+
+python3 - "$STATE_FILE" "$installed" "$published" "$newer" "$now" <<'PY'
+import json, sys
+state_file, installed, published, newer, now = sys.argv[1:6]
+json.dump({
+    "installed": installed,
+    "published": published,
+    "update_available": newer == "yes",
+    "checked_at_epoch": int(now),
+}, open(state_file, "w"), indent=2)
+PY
+
+if [ "$WANT_JSON" -eq 1 ]; then
+  cat "$STATE_FILE"
+fi
+
+if [ "$newer" = "yes" ]; then
+  [ "$WANT_JSON" -eq 1 ] || say "claude-ops $installed -> $published available. Apply with: ops-update"
+  exit 3
+fi
+
+[ "$WANT_JSON" -eq 1 ] || say "claude-ops $installed is current"
+exit 0
