@@ -17,6 +17,7 @@
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { join, dirname } from 'path';
+import { userInfo } from 'os';
 import { fileURLToPath } from 'url';
 import { execFileSync, execSync } from 'child_process';
 import { fetchWithProxyFallback } from './proxy-helper.mjs';
@@ -41,7 +42,7 @@ const LOG_PATH = join(__dirname, 'rotation.log');
 const NEEDS_REAUTH_PATH = join(__dirname, '.crs-token-refresher-state.json');
 const AUTOLOOP_STATE_PATH = join(__dirname, '.crs-magic-autoloop-state.json');
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
-const KEYCHAIN_ACCOUNT = process.env.USER || 'samrenders';
+const KEYCHAIN_ACCOUNT = process.env.USER || process.env.LOGNAME || userInfo().username;
 
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const TOKEN_ENDPOINT = 'https://platform.claude.com/v1/oauth/token';

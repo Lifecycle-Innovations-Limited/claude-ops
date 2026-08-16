@@ -25,7 +25,7 @@ Profile = Literal[
     "generic",
 ]
 
-PROJECTS_ROOT = Path("/Users/samrenders/Projects")
+PROJECTS_ROOT = Path(os.environ.get("OPS_PROJECTS_ROOT", Path.home() / "Projects"))
 SKIP_IF_EXISTS = True
 
 PROFILE_RULES: list[tuple[re.Pattern[str], Profile]] = [

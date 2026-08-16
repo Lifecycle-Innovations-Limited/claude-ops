@@ -7,9 +7,10 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 
-PROJECTS_ROOT = Path("/Users/samrenders/Projects")
+PROJECTS_ROOT = Path(os.environ.get("OPS_PROJECTS_ROOT", Path.home() / "Projects"))
 BRANCH = "chore/approval-agent-policies"
 COMMIT_MSG = """chore: add Cursor Approval Agent policy files
 

@@ -2,7 +2,7 @@
 """Browser Use Cloud Agent — OAuth re-auth for CRSProxy.
 
 Production-grade reauth script that uses Browser Use Cloud to automate
-OAuth flows for Claude, xAI, and Codex providers on the healify-hub EC2.
+OAuth flows for Claude, xAI, and Codex providers on the proxy host.
 
 Features:
   - Proper timeout handling on all Browser Use API calls (never hang).
@@ -29,35 +29,35 @@ Features:
 Usage:
   # Full reauth for a Claude account
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider claude -email info@auroracapital.nl -gog-account info@auroracapital.nl
+      -provider claude -email ops@example.com -gog-account ops@example.com
 
   # Dry run (validates setup, no browser runs)
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider claude -email info@auroracapital.nl -dry-run
+      -provider claude -email ops@example.com -dry-run
 
   # xAI reauth
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider xai -email sam@samfeldt.com -gog-account sam@samfeldt.com
+      -provider xai -email user@example.com -gog-account user@example.com
 
   # Codex reauth
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider codex -email sam@samfeldt.com -gog-account sam@samfeldt.com
+      -provider codex -email user@example.com -gog-account user@example.com
 
   # Validate an existing auth file (no reauth, no browser)
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider claude -email info@auroracapital.nl -validate-only
+      -provider claude -email ops@example.com -validate-only
 
   # Validate and activate if valid
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider claude -email info@auroracapital.nl -validate-only -activate
+      -provider claude -email ops@example.com -validate-only -activate
 
   # Validate metadata only (skip canary request)
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider claude -email info@auroracapital.nl -validate-only -skip-canary
+      -provider claude -email ops@example.com -validate-only -skip-canary
 
-  # Resume from a hCaptcha checkpoint (after Sam solved the captcha)
+  # Resume from a hCaptcha checkpoint (after the operator solved the captcha)
   sudo -u crsproxy /opt/crsproxy/venv/bin/python /opt/crsproxy/bu_reauth.py \\
-      -provider claude -email info@auroracapital.nl -checkpoint-resume
+      -provider claude -email ops@example.com -checkpoint-resume
 
   # When hCaptcha is detected, the script emits the live_view_url and waits.
   # After solving the captcha in the browser, create the trigger file:
