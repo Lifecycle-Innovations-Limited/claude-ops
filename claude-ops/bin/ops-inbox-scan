@@ -36,7 +36,16 @@
 #   --email-query Q                  Gmail working set (default "in:inbox")
 #   --email-max N                    max Gmail results (default 400)
 #   --gmail-account ADDR             override Gmail account (default: gog default)
+#   --wa-store DB                    WhatsApp messages.db to scan
+#   --bridge-port N                  bridge REST port for that store
 #   --pretty                         pretty-print JSON
+#
+# WHICH WHATSAPP ACCOUNT: more than one bridge can run here, one per number, and
+# they differ only by port and store. This script never assumes a port. It asks
+# `ops-wa-accounts` for the single account policy marks as agent-enabled, and
+# refuses to scan at all when that is ambiguous — a wrong guess means reading,
+# and later replying from, a number that was meant to be left alone. Override
+# both --wa-store and --bridge-port together to target a specific account.
 set -euo pipefail
 
 DAYS=7
@@ -46,6 +55,8 @@ GMAIL_ACCOUNT="${GMAIL_ACCOUNT:-}"
 PRETTY=0
 EMAIL_QUERY="in:inbox"
 EMAIL_MAX=400
+WA_STORE_OVERRIDE=""
+BRIDGE_PORT_OVERRIDE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -55,6 +66,8 @@ while [ $# -gt 0 ]; do
     --email-query)   EMAIL_QUERY="${2:-in:inbox}"; shift ;;
     --email-max)     EMAIL_MAX="${2:-400}"; shift ;;
     --gmail-account) GMAIL_ACCOUNT="${2:-}"; shift ;;
+    --wa-store)      WA_STORE_OVERRIDE="${2:-}"; shift ;;
+    --bridge-port)   BRIDGE_PORT_OVERRIDE="${2:-}"; shift ;;
     --pretty)        PRETTY=1 ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -63,9 +76,55 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-WA_STORE="${WHATSAPP_BRIDGE_DIR:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}/store"
-WA_MSGDB="${WHATSAPP_BRIDGE_DB:-$WA_STORE/messages.db}"
+# --------------------------------------------------------- which account ----
+# Resolution order: explicit flags, then the long-standing WHATSAPP_BRIDGE_*
+# env vars, then whichever single account policy marks agent-enabled. The last
+# step is the only one that can be ambiguous, and when it is we stop rather
+# than fall back to a port — the whole point is to never pick a number by luck.
+WA_ACCOUNT_PHONE=""
+WA_ACCOUNT_SOURCE=""
+BRIDGE_PORT=""
+
+if [ -n "$WA_STORE_OVERRIDE" ] || [ -n "$BRIDGE_PORT_OVERRIDE" ]; then
+  if [ -z "$WA_STORE_OVERRIDE" ] || [ -z "$BRIDGE_PORT_OVERRIDE" ]; then
+    echo "ops-inbox-scan: --wa-store and --bridge-port must be given together" >&2
+    exit 2
+  fi
+  WA_MSGDB="$WA_STORE_OVERRIDE"
+  BRIDGE_PORT="$BRIDGE_PORT_OVERRIDE"
+  WA_ACCOUNT_SOURCE="flags"
+elif [ -n "${WHATSAPP_BRIDGE_DIR:-}" ] || [ -n "${WHATSAPP_BRIDGE_DB:-}" ]; then
+  _envstore="${WHATSAPP_BRIDGE_DIR:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}/store"
+  WA_MSGDB="${WHATSAPP_BRIDGE_DB:-$_envstore/messages.db}"
+  BRIDGE_PORT="${WHATSAPP_BRIDGE_PORT:-8080}"
+  WA_ACCOUNT_SOURCE="env"
+elif [ "$DO_WA" = 1 ]; then
+  _resolver="$(dirname "$0")/ops-wa-accounts"
+  if [ -x "$_resolver" ]; then
+    if _acct="$("$_resolver" --default 2>/dev/null)"; then
+      BRIDGE_PORT="$(printf '%s' "$_acct" | cut -f1)"
+      WA_MSGDB="$(printf '%s' "$_acct" | cut -f2)"
+      WA_ACCOUNT_PHONE="$(printf '%s' "$_acct" | cut -f3)"
+      WA_ACCOUNT_SOURCE="policy"
+    else
+      echo "ops-inbox-scan: cannot resolve a WhatsApp account to scan." >&2
+      "$_resolver" --list >&2 2>/dev/null || true
+      echo "ops-inbox-scan: pass --wa-store DB --bridge-port N, or set agent_enabled in the policy file." >&2
+      exit 3
+    fi
+  else
+    # No resolver on this install: fall back to the historical single-account
+    # layout, which is correct precisely when there is only one bridge.
+    WA_MSGDB="$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db"
+    BRIDGE_PORT=8080
+    WA_ACCOUNT_SOURCE="legacy-default"
+  fi
+fi
+
+WA_STORE="$(dirname "${WA_MSGDB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}")"
 WA_WADB="$WA_STORE/whatsapp.db"
+BRIDGE_PORT="${BRIDGE_PORT:-8080}"
+BRIDGE_API="http://127.0.0.1:${BRIDGE_PORT}"
 
 # Resolve a default Gmail account from gog if not supplied (best-effort).
 if [ "$DO_EMAIL" = 1 ] && [ -z "$GMAIL_ACCOUNT" ]; then
@@ -75,19 +134,23 @@ fi
 export OIS_DAYS="$DAYS" OIS_DO_WA="$DO_WA" OIS_DO_EMAIL="$DO_EMAIL"
 export OIS_WA_MSGDB="$WA_MSGDB" OIS_WA_WADB="$WA_WADB"
 export OIS_GMAIL_ACCOUNT="$GMAIL_ACCOUNT" OIS_PRETTY="$PRETTY"
+export OIS_WA_PHONE="$WA_ACCOUNT_PHONE" OIS_WA_PORT="$BRIDGE_PORT"
+export OIS_WA_ACCOUNT_SOURCE="$WA_ACCOUNT_SOURCE"
 
-BRIDGE_DIR="${WHATSAPP_BRIDGE_DIR:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
+# The bridge dir that owns the store we are actually scanning — not a fixed
+# path, or link_contacts.py would be run out of the wrong account's install.
+BRIDGE_DIR="$(dirname "$WA_STORE")"
 
 # --------------------------------------------------------- refresh on load ----
 # Autonomous "always pull latest before classifying" pass (owner directive
 # 2026-06-05: "ensure backfill and frontfill is fully done automatically when I
 # run /ops-inbox"). Best-effort + bounded — NEVER blocks the scan for long and
-# NEVER fails it. Only runs when the bridge is actually reachable on :8080.
+# NEVER fails it. Only runs when this account's own bridge is reachable.
 # Skip with OIS_NO_REFRESH=1 (e.g. CI / repeated calls in one session).
 if [ "$DO_WA" = 1 ] && [ "${OIS_NO_REFRESH:-0}" != 1 ]; then
-  if curl -s -o /dev/null -m 4 http://127.0.0.1:8080/ 2>/dev/null; then
+  if curl -s -o /dev/null -m 4 "$BRIDGE_API/" 2>/dev/null; then
     # frontfill: recent-conversation history backfill (idempotent)
-    curl -fsS -m 10 -X POST http://127.0.0.1:8080/api/backfill >/dev/null 2>&1 || true
+    curl -fsS -m 10 -X POST "$BRIDGE_API/api/backfill" >/dev/null 2>&1 || true
     # contacts link: phone + LID aliases -> names (idempotent)
     [ -f "$BRIDGE_DIR/link_contacts.py" ] && \
       python3 "$BRIDGE_DIR/link_contacts.py" >/dev/null 2>&1 || true
@@ -570,6 +633,16 @@ result = {
     "notes": notes,
 }
 if DO_WA:
+    # Which number these rows belong to. Carried through so a reply is composed
+    # against the account the thread actually lives on, and so a scan pasted
+    # into a later session still says which inbox it came from.
+    result["whatsapp_account"] = {
+        "phone": os.environ.get("OIS_WA_PHONE") or None,
+        "bridge_port": int(os.environ.get("OIS_WA_PORT") or 0) or None,
+        "bridge_api": "http://127.0.0.1:%s" % os.environ.get("OIS_WA_PORT", ""),
+        "store": MSGDB,
+        "resolved_by": os.environ.get("OIS_WA_ACCOUNT_SOURCE") or None,
+    }
     result["whatsapp"] = scan_whatsapp()
 if DO_EMAIL:
     result["email"] = scan_email()

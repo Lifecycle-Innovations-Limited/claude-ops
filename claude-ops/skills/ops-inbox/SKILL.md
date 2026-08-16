@@ -81,11 +81,50 @@ If you find yourself reaching for any `wacli ...` shell command, stop and use th
 | Resolve a contact             | `mcp__whatsapp__search_contacts {query: "<name>"}`                                                                                                                                    | `wacli contacts`                    |
 | Send a reply (after approval) | `mcp__whatsapp__send_message {recipient: "<JID>", message: "<text>"}`                                                                                                                 | `wacli send`                        |
 | Health check                  | `lsof -i :8080 \| grep LISTEN` + (macOS) `launchctl print "gui/$(id -u)/com.${USER}.whatsapp-bridge"` / (Linux) `systemctl --user is-active whatsapp-bridge.service`                  | `wacli doctor` / `~/.wacli/.health` |
-| Trigger history backfill      | `curl -fsS -X POST http://127.0.0.1:8080/api/backfill` (claude-ops patch — runs per-chat against the 50 most-recent chats; bridge also auto-backfills 5s after every Connected event) | —                                   |
+| Trigger history backfill      | `curl -fsS -X POST "$WA_API/api/backfill"` (resolve `$WA_API` first — see "WHICH NUMBER" below; claude-ops patch — runs per-chat against the 50 most-recent chats; bridge also auto-backfills 5s after every Connected event) | —                                   |
 
 **Rationale:** the bridge exposes a typed MCP surface, returns consistent JSON shapes (`is_from_me`, `content`, `timestamp`, `sender`), supports FTS5 search natively, and avoids store-lock contention with the wacli keepalive daemon. Mixing the two surfaces caused inconsistent state in past sessions.
 
 **Sole exception:** the `~/.wacli/.health` file is still readable for legacy daemon-health surfacing in other skills, but no `wacli` command should be invoked from this skill.
+
+## ⚠️ WHICH NUMBER — resolve the account before the first read or send
+
+**This box may run more than one WhatsApp bridge, one per phone number.** They are identical
+processes that differ only by port and store directory. The lowest port answers first, so
+`127.0.0.1:8080` looks authoritative whether or not it is the account you want. Every literal
+`:8080` below is legacy shorthand for "this account's bridge", never an instruction to use 8080.
+
+**Resolve first, every run, before any read, archive, or send:**
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/ops-wa-accounts" --list      # every bridge: port, number, agent yes/no
+WA_PORT=$("$CLAUDE_PLUGIN_ROOT/bin/ops-wa-accounts" --port)   # the one agent-enabled account
+WA_API="http://127.0.0.1:${WA_PORT}"
+```
+
+`ops-wa-accounts` reads each bridge's `run-bridge.sh` and — authoritatively — the number actually
+paired in its store, then applies `~/.config/whatsapp/agent-policy.json` (never committed; it holds
+real numbers). It exits non-zero rather than pick one when the answer is ambiguous.
+
+**The rules:**
+
+1. **Never hardcode a port, and never use whichever port answers.** Use `$WA_API` from the resolver,
+   or the `whatsapp_account.bridge_port` that `ops-inbox-scan` records in its JSON.
+2. **A number can be agent-disabled.** An account with `agent_enabled: false` is off-limits: do not
+   scan it, do not archive it, do not send from it, do not pair or re-pair it. Someone else may be
+   managing that inbox, and traffic from an agent on it is a real-world problem.
+3. **If resolution is ambiguous, stop and ask.** Two enabled accounts, or none, is a question for the
+   user — `AskUserQuestion` with the candidate numbers. It is never a coin flip.
+4. **Reply on the number the thread lives on.** A reply from the wrong number reaches someone who does
+   not recognise the sender, and it leaks which numbers the user owns. Cross-account replies are never
+   an acceptable fallback.
+5. **Rule 8 applies to the MCP surface too.** With several accounts the servers are named per account
+   (`mcp__whatsapp-us__*`, `mcp__whatsapp-nl__*`) and a bare `mcp__whatsapp__*` may not exist. Match
+   the registered name; do not assume.
+
+**Why this section exists:** on 2026-08-16 a full inbox run followed this skill's hardcoded
+`127.0.0.1:8080` and sent every reply from the number that was supposed to stay untouched. The
+classification was fine. The account was wrong, and nothing in the run could tell.
 
 ## Runtime Context
 
@@ -114,8 +153,10 @@ The whatsmeow bridge can **silently miss inbound messages** when its history/app
 
   ```bash
   BR="${WHATSAPP_BRIDGE_DIR:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
-  if curl -s -o /dev/null -m 4 http://127.0.0.1:8080/ 2>/dev/null; then
-    curl -fsS -m 10 -X POST http://127.0.0.1:8080/api/backfill >/dev/null 2>&1 &   # recent-conversation backfill
+  WA_PORT=$("$CLAUDE_PLUGIN_ROOT/bin/ops-wa-accounts" --port) || exit 3   # never assume 8080
+  WA_API="http://127.0.0.1:${WA_PORT}"
+  if curl -s -o /dev/null -m 4 "$WA_API/" 2>/dev/null; then
+    curl -fsS -m 10 -X POST "$WA_API/api/backfill" >/dev/null 2>&1 &   # recent-conversation backfill
     [ -f "$BR/link_contacts.py" ] && python3 "$BR/link_contacts.py" >/dev/null 2>&1 &  # contacts link (phone + LID aliases)
   fi
   ```
@@ -127,7 +168,7 @@ The whatsmeow bridge can **silently miss inbound messages** when its history/app
   **0c-bis. ALL media is now first-class, not just voice.** Beyond voice→`[voice]` (transcribe above), incoming **video / image / document** media (empty `content`) is auto-enriched into `content` as `[video] …` / `[image] …` / `[document] …` by `transcriber/enrich_media.py` (vision for stills/video frames + Whisper for any audio track) on the `whatsapp-enrich.timer` (systemd-user, every 10 min) — and `wa-inbox-fresh.sh` queues an enrich pass on every scan. So an image, clip, or PDF shows up in NEEDS_REPLY / thread scans with a real, readable body, exactly like text. Enrichment is idempotent (only fills empty media rows) and capped per run. The bridge also **self-heals media that 403/404/410s** (stale `directPath`, common for larger media) by asking the sender's phone to re-upload via `SendMediaRetryReceipt` (`apply-patches.py` Fix M), so large media never silently drops.
 
   **0d. The scan engine self-refreshes + self-reconciles on EVERY run — this is automatic, you do not orchestrate it.** `bin/ops-inbox-scan` (the primary classifier, step "Scan engine" below) now does the refresh/pull itself, BLOCKING and bounded, before it classifies — so the data is converged by the time you read its JSON, regardless of whether the background `ops-inbox-autosync` hook has finished. On each invocation the scan:
-  - **Refreshes (frontfill/backfill):** if the bridge is reachable on `:8080`, it fires `POST /api/backfill` + `link_contacts.py`, then **waits (bounded ~18s) for the newest stored message timestamp to stop advancing** so the classify pass reads a settled store. This is the blocking guarantee the background hook alone does NOT give. Skip with `OIS_NO_REFRESH=1` (set automatically on repeat calls in one session to avoid re-waiting).
+  - **Refreshes (frontfill/backfill):** if this account's bridge is reachable (the port it resolved, not a fixed `:8080`), it fires `POST /api/backfill` + `link_contacts.py`, then **waits (bounded ~18s) for the newest stored message timestamp to stop advancing** so the classify pass reads a settled store. This is the blocking guarantee the background hook alone does NOT give. Skip with `OIS_NO_REFRESH=1` (set automatically on repeat calls in one session to avoid re-waiting).
   - **Reconciles outbound sends (owner directive 2026-06-05 "include all things I sent to all people"):** it reads the bridge's outbound-send journal (`journalctl --user -u whatsapp-bridge.service`, or the bridge log file on non-systemd hosts) into a `{recipient_jid → latest_send_epoch}` map, and **demotes any NEEDS_REPLY thread whose last inbound is older than a send to any of that person's JIDs** (`reconciled` flag set, moved to WAITING). This catches replies that went out via `/api/send` or a phone send that has not yet landed in `messages.db` — the single most common false-NEEDS_REPLY. Only epoch-stamped send lines drive demotion (a send that genuinely predates the inbound never demotes).
 
   Net effect: running `/ops:ops-inbox` autonomously pulls the latest state AND folds in everything the user already sent, with **zero extra orchestration on your part** — just read the scan JSON. A `reconciled` field on a WAITING item means "already answered, reply not yet in the store"; never re-draft it. You still clear the FULL-THREAD AWARENESS GATE on whatever genuine NEEDS_REPLY candidates remain.
@@ -251,15 +292,16 @@ This clones lharries/whatsapp-mcp into `~/.local/share/whatsapp-mcp`, applies th
 
 ```bash
 DB="${WHATSAPP_BRIDGE_DB:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge/store/messages.db}"
+WA_API="http://127.0.0.1:$("$CLAUDE_PLUGIN_ROOT/bin/ops-wa-accounts" --port)"   # resolve, never assume
 for jid in "<NEWSLETTER_JID>@newsletter" "<GROUP_JID>@g.us" "<CONTACT_PHONE>@s.whatsapp.net"; do
-  curl -s -X POST http://localhost:8080/api/archive \
+  curl -s -X POST "$WA_API/api/archive" \
     -H 'Content-Type: application/json' \
     -d "{\"chat_jid\":\"$jid\",\"archive\":true}"
 done
 # The /api/archive endpoint auto-heals LTHash corruption internally (Fix G) and
 # immediately UPSERTs archived=1 into messages.db so the inbox query reflects it.
 # If you still get HTTP 409, the heal failed — run resync manually as a last resort:
-# curl -s -X POST http://localhost:8080/api/resync_app_state -d '{"name":"regular_low","full_sync":true,"skip_bad":true}'
+# curl -s -X POST "$WA_API/api/resync_app_state" -d '{"name":"regular_low","full_sync":true,"skip_bad":true}'
 ```
 
 **Archive state is locally queryable** (Fix H — bridge persists `archived` flag in `chats` table):
@@ -335,7 +377,16 @@ JSON. No subagents, no MCP, near-zero tokens.
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --pretty            # both channels
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --whatsapp-only     # WA only
 "$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" --days 14           # wider window
+# target a specific WhatsApp account (both flags, or neither):
+"$CLAUDE_PLUGIN_ROOT/bin/ops-inbox-scan" \
+  --wa-store ~/.local/share/whatsapp-mcp/whatsapp-bridge-<label>/store/messages.db \
+  --bridge-port <port>
 ```
+
+With no flags the scan resolves the single agent-enabled account itself and **exits 3 rather than
+guess** when that is ambiguous. Its JSON carries a `whatsapp_account` block (`phone`, `bridge_port`,
+`store`, `resolved_by`) — that is the account every downstream archive and reply must use, and
+`ops-inbox-archive-set` reads it so the two can never drift onto different numbers.
 
 **ARCHIVE/KEEP SPLIT — `bin/ops-inbox-archive-set`.** The scan says what the
 inbox looks like; this turns that into the two lists inbox-zero actually needs,
@@ -668,7 +719,8 @@ All channel credentials come from env vars or CLI auth — no hardcoded secrets.
 > 1. **When Paperclip is on the box**, before KEEP-classifying or drafting money/legal/hire/product: scan open issues + pending `issue_thread_interactions` for that counterparty/thread id (e.g. a payment-round thread → its tracking issue, a card/supplier thread → its issue, a comp/hire thread → its issue). Resolve the concrete counterparty→issue mappings from your local prefs/board, not from this public skill. Prefer the board gate + staged draft over a new Telegram `AskUserQuestion` when the same decision is already wired. Never re-ask a locked Q or contradict answered options.
 > 2. **WhatsApp archive is mandatory every pass** — not “demote only.” After classify, call the bridge archive endpoint on **every non-actionable chat and every chat you just replied to** (phone `@s.whatsapp.net` **and** every `@lid` / `alt_jids`):
 >    ```bash
->    curl -s -X POST http://127.0.0.1:8080/api/archive \
+>    # $WA_API = this account's bridge, from `ops-wa-accounts --port`. Never 8080 by default.
+>    curl -s -X POST "$WA_API/api/archive" \
 >      -H 'Content-Type: application/json' \
 >      -d '{"chat_jid":"<jid>","archive":true}'
 >    ```
@@ -1007,12 +1059,12 @@ For each channel, detect availability at runtime:
 
 1. **Email**: Try `gog` CLI first. If `gog` unavailable, try `mcp__gog__gmail_*` MCP tools. If neither, report unavailable.
 2. **WhatsApp**: Two layers must be checked — DO NOT misdiagnose by only probing one.
-   - **Layer A — whatsmeow bridge** (`:8080`): `lsof -i :8080 | grep LISTEN`. If absent, bridge is down — run the robust restart recipe above (`launchctl load -w` fallback before `kickstart`), wait 5s, re-check.
+   - **Layer A — whatsmeow bridge** (this account's port — `ops-wa-accounts --port`, NOT a fixed 8080): `lsof -i :"$WA_PORT" | grep LISTEN`. With several accounts, check the one you resolved; another number's bridge being up says nothing about this one. If absent, bridge is down — run the robust restart recipe above (`launchctl load -w` fallback before `kickstart`), wait 5s, re-check.
    - **Layer B — MCP transport**: Claude's client connects to `mcp__whatsapp__*` via the ops mcp-proxy at `127.0.0.1:8090/servers/whatsapp/sse`, NOT directly to :8080. Verify: `lsof -i :8090 | grep LISTEN` and `curl -sS -m 3 http://127.0.0.1:8090/servers/whatsapp/sse | head -1` (should emit `event: endpoint`). If :8090 isn't listening, the ops mcp-proxy daemon is down — restart via `bash ~/.claude/scripts/hooks/ops-plugin-version-heal.sh` then check `${CLAUDE_PLUGIN_DATA_DIR}/daemon-services.json` for the proxy service entry.
    - **MCP tool-load handshake**: when both layers are up but `mcp__whatsapp__*` tools aren't listed yet, the SSE handshake is still in flight. Retry `ToolSearch select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__send_message,mcp__whatsapp__archive_chat,mcp__whatsapp__get_chat,mcp__whatsapp__resync_app_state` **up to 3 times with 5s spacing** before declaring unavailable. Never report "WhatsApp MCP not available" while :8080 AND :8090 are both LISTEN — that is a transient handshake, not a configuration failure.
    - **Proxy fd exhaustion** (`EMFILE / Too many open files` in `~/.claude/mcp-proxy/logs/proxy.err.log`): mcp-proxy's `--stateless` mode spawns a new subprocess per SSE connection. macOS launchd's default `maxfiles=256` runs out quickly. Symptom: SSE endpoint resets with `Connection reset by peer` and many stale `whatsapp-mcp-server main.py` zombies linger (`ps aux | grep whatsapp-mcp-server`). Fix: ensure `~/Library/LaunchAgents/com.${USER}.mcp-proxy.plist` has `SoftResourceLimits.NumberOfFiles=4096` + `HardResourceLimits.NumberOfFiles=8192`, then `launchctl unload ~/Library/LaunchAgents/com.${USER}.mcp-proxy.plist && pkill -f whatsapp-mcp-server/.venv && launchctl load -w ~/Library/LaunchAgents/com.${USER}.mcp-proxy.plist`. After restart, Claude's MCP client typically needs a new session to re-handshake; surface this to the user.
    - **QR re-pair**: only if :8080 is up but the bridge itself rejects calls (`/api/health` returns auth error, or messages return 401), check `~/.local/share/whatsapp-mcp/whatsapp-bridge/logs/bridge.err.log` for QR pairing prompts.
-   - **Headless / no-MCP-transport fallback (EC2, Linux dev-sandbox, any box where Claude-in-Chrome/Kapture are unreachable) — DO NOT declare WhatsApp unavailable.** If `:8080` is LISTEN and `store/messages.db` exists but `mcp__whatsapp__*` never loads after the 3× retry, the WhatsApp MCP server simply isn't registered in _this_ Claude session — the bridge is healthy and the data is right there. **Scan READ-ONLY by querying `messages.db` directly** (`chats`, `messages`, `contacts`, `messages_fts`): NEEDS*REPLY/WAITING from each person's **merged** thread — union both JIDs' `messages` by `timestamp` and classify on the true last row's `is_from_me` (never per-chat `chats.last_is_from_me`; see FULL-THREAD AWARENESS GATE step 1), plus name resolution via `contacts` (populated by step-0 `link_contacts.py`) and thread reads offline. **Merge lid↔phone before classifying** — `whatsmeow_lid_map` when `whatsapp.db` attaches, else `contacts.phone` (same gate recipe). Only \_sending* needs a live transport — use `mcp__whatsapp__send_message` if it loaded, else `curl -X POST http://127.0.0.1:8080/api/send -d '{"recipient":"<jid>","message":"<text>"}'` — still under the Rule-6 one-draft→one-approval gate. **Never report "bridge not installed / WhatsApp unavailable" while `:8080` is LISTEN and the DB has rows** — that is a misdiagnosis; classify from the DB instead.
+   - **Headless / no-MCP-transport fallback (EC2, Linux dev-sandbox, any box where Claude-in-Chrome/Kapture are unreachable) — DO NOT declare WhatsApp unavailable.** If `:8080` is LISTEN and `store/messages.db` exists but `mcp__whatsapp__*` never loads after the 3× retry, the WhatsApp MCP server simply isn't registered in _this_ Claude session — the bridge is healthy and the data is right there. **Scan READ-ONLY by querying `messages.db` directly** (`chats`, `messages`, `contacts`, `messages_fts`): NEEDS*REPLY/WAITING from each person's **merged** thread — union both JIDs' `messages` by `timestamp` and classify on the true last row's `is_from_me` (never per-chat `chats.last_is_from_me`; see FULL-THREAD AWARENESS GATE step 1), plus name resolution via `contacts` (populated by step-0 `link_contacts.py`) and thread reads offline. **Merge lid↔phone before classifying** — `whatsmeow_lid_map` when `whatsapp.db` attaches, else `contacts.phone` (same gate recipe). Only \_sending* needs a live transport — use `mcp__whatsapp__send_message` if it loaded, else `curl -X POST "$WA_API/api/send" -d '{"recipient":"<jid>","message":"<text>"}'`, where `$WA_API` comes from `ops-wa-accounts --port` for **the account this thread lives on** (see "WHICH NUMBER" — a hardcoded 8080 here sends from whichever number owns the low port) — still under the Rule-6 one-draft→one-approval gate. **Never report "bridge not installed / WhatsApp unavailable" while `:8080` is LISTEN and the DB has rows** — that is a misdiagnosis; classify from the DB instead.
    - **User prompt** (only after ALL the above fail — i.e. `:8080` genuinely down AND no usable `messages.db`): `AskUserQuestion` with `[Restart bridge]`, `[Restart mcp-proxy]`, `[Skip WhatsApp]`.
 3. **Slack**: Read the derived `channels.slack` object from pre-gathered `bin/ops-unread` data (it resolves each `token_env` and reports per-workspace `available`; do NOT read raw `preferences.json → slack_workspaces[]` directly — that array has no `available` flag).
    - **Multi-workspace** (`"multi_workspace": true`): iterate the `workspaces` array. For each `available: true` entry, scan via `mcp__claude_ai_Slack__*` if the MCP token matches, or via direct curl. To resolve the token for direct curl, validate `token_env` matches `^[A-Za-z_][A-Za-z0-9_]*$` before `${!token_env}` indirect expansion. Aggregate results; label each message block with the workspace name.
@@ -1258,7 +1310,8 @@ Reply via: `mcp__whatsapp__send_message` with `{recipient: "<JID>", message: "<m
 | Send message                                     | `mcp__whatsapp__send_message {recipient, message}`                                                                                                                                                                                         |
 | Chat metadata                                    | `mcp__whatsapp__get_chat {chat_jid}`                                                                                                                                                                                                       |
 | Message context                                  | `mcp__whatsapp__get_message_context {chat_jid, message_id}`                                                                                                                                                                                |
-| Check bridge (whatsmeow)                         | `lsof -i :8080 \| grep LISTEN`                                                                                                                                                                                                             |
+| Resolve which account/port                       | `"$CLAUDE_PLUGIN_ROOT/bin/ops-wa-accounts" --list` / `--port`                                                                                                                                                                              |
+| Check bridge (whatsmeow)                         | `lsof -i :"$WA_PORT" \| grep LISTEN` (resolved port, not 8080)                                                                                                                                                                                                             |
 | Check MCP proxy (Claude client transport)        | `lsof -i :8090 \| grep LISTEN` + `curl -sS -m 3 http://127.0.0.1:8090/servers/whatsapp/sse \| head -1`                                                                                                                                     |
 | Load WhatsApp MCP tool schemas                   | `ToolSearch select:mcp__whatsapp__list_chats,mcp__whatsapp__list_messages,mcp__whatsapp__search_contacts,mcp__whatsapp__send_message,mcp__whatsapp__archive_chat,mcp__whatsapp__get_chat,mcp__whatsapp__resync_app_state` (retry 3× at 5s) |
 | Restart bridge                                   | See robust restart recipe above (load-then-kickstart). Bare `launchctl kickstart` fails if the agent isn't loaded.                                                                                                                         |

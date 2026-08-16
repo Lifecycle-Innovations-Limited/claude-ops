@@ -330,7 +330,12 @@ def main():
                     help="extra WhatsApp account store (repeatable)")
     ap.add_argument("--bridge-port", action="append", default=[], type=int,
                     help="bridge port for the matching --wa-store (repeatable)")
-    ap.add_argument("--default-bridge-port", type=int, default=8080)
+    # No baked-in port. 8080 used to be the default, which meant that on a box
+    # running one bridge per phone number this tool archived whichever account
+    # happened to sit on the low port. It is resolved from the scan instead —
+    # the scan records the account it read — and archiving is skipped outright
+    # when that cannot be established.
+    ap.add_argument("--default-bridge-port", type=int, default=None)
     ap.add_argument("--stale-days", type=int, default=7)
     ap.add_argument("--dead-group-days", type=int, default=30)
     ap.add_argument("--gmail-account", default=os.environ.get("GMAIL_ACCOUNT"))
@@ -397,8 +402,41 @@ def main():
         "applied": False,
     }
 
+    # Which bridge the main WhatsApp set belongs to: the flag wins, else the
+    # account the scan actually read, else the one account policy allows. If
+    # none of those answer, the WhatsApp sweep is skipped rather than aimed at
+    # a guess — archiving the wrong number's inbox is not a recoverable mistake.
+    main_port = args.default_bridge_port
+    port_source = "--default-bridge-port" if main_port else None
+    if main_port is None:
+        acct = (scan or {}).get("whatsapp_account") or {}
+        if acct.get("bridge_port"):
+            main_port = int(acct["bridge_port"])
+            port_source = "scan (%s)" % (acct.get("phone") or acct.get("store") or "account")
+    if main_port is None:
+        resolver = os.path.join(plugin_root, "bin", "ops-wa-accounts")
+        if os.path.exists(resolver):
+            try:
+                out = subprocess.run([resolver, "--port"], capture_output=True,
+                                     text=True, timeout=15)
+                if out.returncode == 0 and out.stdout.strip().isdigit():
+                    main_port = int(out.stdout.strip())
+                    port_source = "ops-wa-accounts policy"
+            except (OSError, subprocess.SubprocessError):
+                pass
+    if main_port is None and wa_archive:
+        errors.append(
+            "WhatsApp archive skipped: could not resolve which account these "
+            "chats belong to. Pass --default-bridge-port, or set agent_enabled "
+            "in the ops-wa-accounts policy file.")
+    result["whatsapp_bridge_port"] = main_port
+    result["whatsapp_bridge_port_source"] = port_source
+
     if args.apply:
-        ok, fail = archive_whatsapp(wa_archive, args.default_bridge_port, args.dry_run)
+        if main_port is None:
+            ok, fail = 0, 0
+        else:
+            ok, fail = archive_whatsapp(wa_archive, main_port, args.dry_run)
         for e in extra:
             if e["port"] is None:
                 errors.append("%s: no --bridge-port given, chats left alone" % e["label"])
