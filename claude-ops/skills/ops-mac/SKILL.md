@@ -116,7 +116,7 @@ For each actionable entry from `lanchr doctor` (missing binary, or repeated `exi
 com.example.foo — binary missing at [path]. This launchd job is dead.
   [Show the plist first]  [Remove it]  [Disable (keep file)]  [Skip]
 ```
-Use `lanchr` to remediate where possible; otherwise `launchctl bootout`/`disable` after showing the plist. **Never touch a daemon the user relies on** (CRS/haproxy, gbrain push, ops-daemon, cloudflared tunnels, watchdogs) without spelling out exactly what it is — cross-check before recommending removal.
+Use `lanchr` to remediate where possible; otherwise `launchctl bootout`/`disable` after showing the plist. **Never touch a daemon the user relies on** (CLIProxyAPI/haproxy, gbrain push, ops-daemon, cloudflared tunnels, watchdogs) without spelling out exactly what it is — cross-check before recommending removal.
 
 ### 3. Reclaimable disk
 ```
