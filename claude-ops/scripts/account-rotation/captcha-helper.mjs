@@ -12,7 +12,7 @@
 //                    proxy alignment (token still from 2captcha). Web Unlocker is
 //                    page-fetch only — see bright-data-cascade.mjs (not token inject).
 //
-// Solvers remain FALLBACK only (CRS_CAPTCHA_SOLVER_MODE=fallback): residential
+// Solvers remain FALLBACK only (CLAUDE_ROT_CAPTCHA_SOLVER_MODE=fallback): residential
 // browser wait first (residualAfterWait), then this provider chain.
 //
 // Secrets hydrated by secrets-bootstrap.mjs from env / optional secrets bootstrap.
@@ -119,10 +119,10 @@ export function providerOrder() {
 import net from 'node:net';
 const { createConnection } = net;
 
-/** True when local EFG SOCKS (or CRS_EFG_SOCKS_*) accepts connections. */
+/** True when local EFG SOCKS (CLAUDE_ROT_EFG_SOCKS_*) accepts connections. */
 export async function residentialEgressHealthy() {
-  const host = process.env.CRS_EFG_SOCKS_HOST || '127.0.0.1';
-  const port = Number(process.env.CRS_EFG_SOCKS_PORT || 1089);
+  const host = process.env.CLAUDE_ROT_EFG_SOCKS_HOST || '127.0.0.1';
+  const port = Number(process.env.CLAUDE_ROT_EFG_SOCKS_PORT || 1089);
   return await new Promise((resolve) => {
     const s = createConnection({ host, port });
     const t = setTimeout(() => {
@@ -146,18 +146,18 @@ export async function residentialEgressHealthy() {
 }
 
 /**
- * Solvers are fallback-only by default (CRS_CAPTCHA_SOLVER_MODE=fallback).
+ * Solvers are fallback-only by default (CLAUDE_ROT_CAPTCHA_SOLVER_MODE=fallback).
  * @param {{ attempt?: number, force?: boolean, stalled?: boolean }} [ctx]
  */
 export async function captchaSolverAllowed(ctx = {}) {
-  const mode = (process.env.CRS_CAPTCHA_SOLVER_MODE || 'fallback').toLowerCase();
+  const mode = (process.env.CLAUDE_ROT_CAPTCHA_SOLVER_MODE || 'fallback').toLowerCase();
   if (mode === 'off' || mode === '0' || mode === 'never') return { allowed: false, reason: 'mode-off' };
   if (mode === 'always' || mode === 'on') return { allowed: true, reason: 'mode-always' };
   if (ctx.force) return { allowed: true, reason: 'force' };
   if (ctx.stalled) return { allowed: true, reason: 'stalled' };
   const healthy = await residentialEgressHealthy();
   if (!healthy) return { allowed: true, reason: 'residential-down' };
-  const after = Number(process.env.CRS_CAPTCHA_SOLVER_AFTER_ATTEMPTS || 1);
+  const after = Number(process.env.CLAUDE_ROT_CAPTCHA_SOLVER_AFTER_ATTEMPTS || 1);
   const attempt = Number(ctx.attempt || 0);
   if (attempt >= after) return { allowed: true, reason: `attempt>=${after}` };
   return { allowed: false, reason: 'prefer-residential-browser' };
@@ -167,10 +167,10 @@ function proxyParams() {
   // + 2026-07-30: solvers are fallback-only. When used, prefer EFG SOCKS
   // so token IP matches residential PAC browser (not third-party US residential).
   const preferEfg =
-    process.env.CLAUDE_ROT_CAPTCHA_PREFER_EFG_SOCKS === '1' || process.env.CRS_OAUTH_EGRESS === 'efg-socks-reauth-only';
-  if (preferEfg && process.env.CRS_CAPTCHA_SKIP_EFG_PROXY !== '1') {
-    const host = process.env.CRS_EFG_SOCKS_HOST || '127.0.0.1';
-    const port = process.env.CRS_EFG_SOCKS_PORT || '1089';
+    process.env.CLAUDE_ROT_CAPTCHA_PREFER_EFG_SOCKS === '1' || process.env.CLAUDE_ROT_OAUTH_EGRESS === 'efg-socks-reauth-only';
+  if (preferEfg && process.env.CLAUDE_ROT_CAPTCHA_SKIP_EFG_PROXY !== '1') {
+    const host = process.env.CLAUDE_ROT_EFG_SOCKS_HOST || '127.0.0.1';
+    const port = process.env.CLAUDE_ROT_EFG_SOCKS_PORT || '1089';
     return {
       proxy: `${host}:${port}`,
       proxytype: 'SOCKS5',
@@ -180,7 +180,7 @@ function proxyParams() {
     };
   }
   // Bright Data residential/ISP proxy as next solver IP path (fallback cascade)
-  if (process.env.CRS_CAPTCHA_BRIGHT_PROXY === '1' || process.env.CRS_CAPTCHA_SOLVER_MODE === 'fallback') {
+  if (process.env.CLAUDE_ROT_CAPTCHA_BRIGHT_PROXY === '1' || process.env.CLAUDE_ROT_CAPTCHA_SOLVER_MODE === 'fallback') {
     try {
       // lazy sync require not available in ESM — use env-built superproxy if zones present
       const customer = process.env.BRIGHT_DATA_CUSTOMER || process.env.BRIGHT_DATA_USERID;
@@ -697,15 +697,15 @@ export async function solveWithBrightDataCascade(challenge, log = () => {}, opts
     HTTP_URL: process.env.TWOCAPTCHA_PROXY_HTTP_URL,
     SOCKS_URL: process.env.TWOCAPTCHA_PROXY_SOCKS5_URL,
     PROXY_URL: process.env.TWOCAPTCHA_PROXY_URL,
-    OAUTH_EGRESS: process.env.CRS_OAUTH_EGRESS,
+    OAUTH_EGRESS: process.env.CLAUDE_ROT_OAUTH_EGRESS,
   };
 
   try {
     // Prefer Bright Data HTTP proxy over EFG for this cascade only.
     process.env.CLAUDE_ROT_CAPTCHA_PREFER_EFG_SOCKS = '0';
-    if (process.env.CRS_OAUTH_EGRESS === 'efg-socks-reauth-only') {
+    if (process.env.CLAUDE_ROT_OAUTH_EGRESS === 'efg-socks-reauth-only') {
       // proxyParams() treats this as prefer-EFG; clear for BD tier pass only.
-      delete process.env.CRS_OAUTH_EGRESS;
+      delete process.env.CLAUDE_ROT_OAUTH_EGRESS;
     }
     process.env.CLAUDE_ROT_CAPTCHA_FORCE_PROXY = '1';
     process.env.CLAUDE_ROT_CAPTCHA_USE_PROXY = '1';
@@ -740,7 +740,7 @@ export async function solveWithBrightDataCascade(challenge, log = () => {}, opts
     restore('TWOCAPTCHA_PROXY_HTTP_URL', saved.HTTP_URL);
     restore('TWOCAPTCHA_PROXY_SOCKS5_URL', saved.SOCKS_URL);
     restore('TWOCAPTCHA_PROXY_URL', saved.PROXY_URL);
-    restore('CRS_OAUTH_EGRESS', saved.OAUTH_EGRESS);
+    restore('CLAUDE_ROT_OAUTH_EGRESS', saved.OAUTH_EGRESS);
   }
   return null;
 }
@@ -911,7 +911,7 @@ export async function solveCaptchaOnPage(page, log = () => {}, opts = {}) {
   // Residential-first: wait for browser path before paying for solvers.
   // After wait, if captcha still present → treat as stalled residual (solver allowed).
   let residualAfterWait = false;
-  const waitMs = Number(opts.browserWaitMs ?? process.env.CRS_CAPTCHA_BROWSER_WAIT_MS ?? 0);
+  const waitMs = Number(opts.browserWaitMs ?? process.env.CLAUDE_ROT_CAPTCHA_BROWSER_WAIT_MS ?? 0);
   if (waitMs > 0 && !opts.skipBrowserWait) {
     log(`captcha: residential-first wait ${waitMs}ms before solver fallback`);
     await new Promise((r) => setTimeout(r, waitMs));
@@ -925,7 +925,7 @@ export async function solveCaptchaOnPage(page, log = () => {}, opts = {}) {
   }
 
   const gate = await captchaSolverAllowed({
-    attempt: opts.attempt ?? (residualAfterWait ? Number(process.env.CRS_CAPTCHA_SOLVER_AFTER_ATTEMPTS || 1) : 0),
+    attempt: opts.attempt ?? (residualAfterWait ? Number(process.env.CLAUDE_ROT_CAPTCHA_SOLVER_AFTER_ATTEMPTS || 1) : 0),
     force: opts.forceSolver || residualAfterWait,
     stalled: opts.stalled || residualAfterWait,
   });

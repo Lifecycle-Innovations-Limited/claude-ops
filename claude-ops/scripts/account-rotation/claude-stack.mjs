@@ -97,30 +97,25 @@ function accountRotationStatus() {
   }
 }
 
+/** Local CLIProxyAPI, the supported multi-account backend. */
+function cliProxyStatus() {
+  const base = (process.env.CLIPROXYAPI_BASE_URL || 'http://127.0.0.1:8317').replace(/\/+$/, '');
+  const healthUrl = `${base}/health`;
+  return { baseUrl: base, healthUrl, healthy: curlOk(healthUrl) };
+}
+
 function status() {
   const route = routeStatus();
-  const crsHealthUrl = route.state.crs?.healthUrl || process.env.CRS_HEALTH_URL || 'http://127.0.0.1:3005/health';
   return {
-    ok: !route.settings.mixedProvider,
+    ok: !route.settings.mixedProvider && !route.settings.legacyRelay,
     route,
-    crs: {
-      healthUrl: crsHealthUrl,
-      healthy: curlOk(crsHealthUrl),
-    },
+    cliproxy: cliProxyStatus(),
     docker: dockerStatus(),
     launchd: {
       accountRotation: launchctlStatus('com.claude-ops.account-rotation'),
-      crsHealthWatch: launchctlStatus('com.claude-ops.crs-health-watch'),
-      crsPriority: launchctlStatus('com.claude-ops.crs-priority'),
-      crsFraTunnel: launchctlStatus('com.claude-ops.crs-fra-tunnel'),
       opsDaemon: launchctlStatus('com.claude-ops.daemon'),
     },
     systemd: {
-      crsCompose: systemdUserStatus('crs-compose.service'),
-      crsTokenFeed: systemdUserStatus('crs-token-feed.service'),
-      crsBedrockGuard: systemdUserStatus('crs-bedrock-guard.service'),
-      crsTokenFeedTimer: systemdUserStatus('crs-token-feed.timer'),
-      crsBedrockGuardTimer: systemdUserStatus('crs-bedrock-guard.timer'),
       claudeAccountRotation: systemdUserStatus('claude-account-rotation.service'),
     },
     accounts: accountRotationStatus(),
@@ -130,20 +125,18 @@ function status() {
 function doctor() {
   const s = status();
   const findings = [];
-  const fraPrimary = s.route.state.crs?.authority === 'fra-primary';
   if (s.route.settings.mixedProvider)
     findings.push({
       severity: 'error',
       code: 'mixed_provider_env',
-      detail: 'settings.json has both Bedrock and CRS/OAuth env',
+      detail: 'settings.json has both Bedrock and an OAuth/base-URL override',
     });
-  if (s.route.state.mode === 'crs-oauth' && !s.crs.healthy)
-    findings.push({ severity: 'error', code: 'crs_unhealthy', detail: `${s.crs.healthUrl} is not healthy` });
-  if (s.route.state.mode === 'crs-oauth' && s.route.settings.tokenKind !== 'crs-relay')
+  if (s.route.settings.legacyRelay)
     findings.push({
       severity: 'error',
-      code: 'crs_auth_token_missing',
-      detail: 'CRS token variable is not a relay token (set ANTHROPIC_AUTH_TOKEN or CLAUDE_CODE_OAUTH_TOKEN)',
+      code: 'legacy_relay_env',
+      detail:
+        'settings.json still carries relay credentials from the removed CRS backend. Run `claude-stack route --mode oauth` to clear them.',
     });
   if (s.route.state.mode === 'bedrock-confirmed' && !s.route.bedrockConfirmationActive)
     findings.push({
@@ -152,32 +145,16 @@ function doctor() {
       detail: 'Bedrock route lacks active TTL confirmation',
     });
   if (!s.docker.ok) findings.push({ severity: 'warn', code: 'docker_unavailable', detail: s.docker.error });
+  if (!s.cliproxy.healthy)
+    findings.push({
+      severity: 'warn',
+      code: 'cliproxy_unavailable',
+      detail: `${s.cliproxy.healthUrl} is not answering (optional unless you pool multiple accounts)`,
+    });
   if (process.platform === 'darwin') {
-    if (!fraPrimary && !s.launchd.accountRotation.loaded)
+    if (!s.launchd.accountRotation.loaded)
       findings.push({ severity: 'warn', code: 'account_rotation_not_loaded', detail: s.launchd.accountRotation.error });
-    if (!s.launchd.crsHealthWatch.loaded)
-      findings.push({ severity: 'warn', code: 'crs_health_watch_not_loaded', detail: s.launchd.crsHealthWatch.error });
-    if (fraPrimary && !s.launchd.crsFraTunnel.loaded)
-      findings.push({ severity: 'error', code: 'crs_fra_tunnel_not_loaded', detail: s.launchd.crsFraTunnel.error });
   } else {
-    if (s.systemd.crsCompose.active !== 'active')
-      findings.push({
-        severity: 'error',
-        code: 'crs_compose_not_active',
-        detail: s.systemd.crsCompose.error || s.systemd.crsCompose.active,
-      });
-    if (s.systemd.crsTokenFeedTimer.active !== 'active')
-      findings.push({
-        severity: 'warn',
-        code: 'crs_token_feed_timer_not_active',
-        detail: s.systemd.crsTokenFeedTimer.error || s.systemd.crsTokenFeedTimer.active,
-      });
-    if (s.systemd.crsBedrockGuardTimer.active !== 'active')
-      findings.push({
-        severity: 'warn',
-        code: 'crs_bedrock_guard_timer_not_active',
-        detail: s.systemd.crsBedrockGuardTimer.error || s.systemd.crsBedrockGuardTimer.active,
-      });
     if (s.systemd.claudeAccountRotation.active !== 'active')
       findings.push({
         severity: 'warn',
@@ -225,23 +202,12 @@ try {
     const mode = valueOf('--mode');
     const reason = valueOf('--reason', 'manual');
     const ttlMinutes = Number.parseInt(valueOf('--ttl-minutes', '60'), 10);
-    const baseUrl = valueOf('--base-url');
-    const healthUrl = valueOf('--health-url');
-    const crs =
-      baseUrl || healthUrl
-        ? {
-            ...routeStatus().state.crs,
-            ...(baseUrl ? { baseUrl } : {}),
-            ...(healthUrl ? { healthUrl } : {}),
-          }
-        : undefined;
     const state = setRouteMode(mode, {
       reason,
       ttlMinutes: Number.isFinite(ttlMinutes) ? ttlMinutes : 60,
       confirmMetered: has('--confirm-metered-bedrock'),
       region: valueOf('--region', process.env.AWS_BEDROCK_REGION || 'us-east-1'),
       updatedBy: 'claude-stack',
-      ...(crs ? { crs } : {}),
     });
     printJson({ ok: true, state, settings: routeStatus().settings });
   } else if (command === 'apply') {
