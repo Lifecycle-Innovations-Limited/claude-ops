@@ -154,7 +154,7 @@ scan_pattern "App Store Connect issuer UUID literals" \
   '(example|placeholder|00000000-0000-0000-0000-000000000000|<)'
 
 scan_pattern "App Store Connect numeric app ID literals" \
-  '(APP_STORE_CONNECT_APP_IDS|HEALIFY_ASC_[A-Z_]*APP_ID|APP_IDS|appId).{0,80}["'\''][0-9]{9,12}["'\'']' \
+  '(APP_STORE_CONNECT_APP_IDS|[A-Z][A-Z0-9_]*_ASC_[A-Z_]*APP_ID|APP_IDS|appId).{0,80}["'\''][0-9]{9,12}["'\'']' \
   '(example|placeholder|<)'
 
 scan_pattern "hardcoded sentry-cli org values" \

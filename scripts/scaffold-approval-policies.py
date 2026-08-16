@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import Literal
 
 Profile = Literal[
-    "healify-core",
-    "healify-api",
-    "healify-agentcore",
-    "healify-web",
-    "healify-mobile",
-    "healify-docs",
-    "healify-ops",
+    "product-core",
+    "product-api",
+    "product-agent",
+    "product-web",
+    "product-mobile",
+    "product-docs",
+    "product-ops",
     "claude-ops",
     "infra",
     "mcp",
@@ -28,18 +28,24 @@ Profile = Literal[
 PROJECTS_ROOT = Path(os.environ.get("OPS_PROJECTS_ROOT", Path.home() / "Projects"))
 SKIP_IF_EXISTS = True
 
+# Repo-name patterns are matched against the full repo path. The product slug is
+# the prefix your own repos share — set OPS_PRODUCT_SLUG=acme to classify
+# acme-api, acme-web, acme-mobile, and so on. Repos that match nothing fall
+# through to the "generic" profile.
+PRODUCT_SLUG = re.escape(os.environ.get("OPS_PRODUCT_SLUG", "product"))
+
 PROFILE_RULES: list[tuple[re.Pattern[str], Profile]] = [
-    (re.compile(r"healify-agentcore|healify-llm", re.I), "healify-agentcore"),
-    (re.compile(r"healify-api(-mcp|-work)?$|healify-api/", re.I), "healify-api"),
-    (re.compile(r"healify-web|healify\.ai$", re.I), "healify-web"),
-    (re.compile(r"^healify$|/healify$", re.I), "healify-mobile"),
-    (re.compile(r"meditation-service", re.I), "healify-core"),
-    (re.compile(r"healify-(docs|partner-docs|press|knowledge|dataroom)", re.I), "healify-docs"),
-    (re.compile(r"healify-(marketing|b2b-leadgen|blocks-automations|org|multiplatform)", re.I), "healify-docs"),
-    (re.compile(r"healify-(admin|operating-dashboard|grafana|storybook)|testflight", re.I), "healify-ops"),
+    (re.compile(rf"{PRODUCT_SLUG}-(agentcore|agent|llm)", re.I), "product-agent"),
+    (re.compile(rf"{PRODUCT_SLUG}-api(-mcp|-work)?$|{PRODUCT_SLUG}-api/", re.I), "product-api"),
+    (re.compile(rf"{PRODUCT_SLUG}-web", re.I), "product-web"),
+    (re.compile(rf"^{PRODUCT_SLUG}$|/{PRODUCT_SLUG}$|{PRODUCT_SLUG}-mobile", re.I), "product-mobile"),
+    (re.compile(rf"{PRODUCT_SLUG}-(core|service)", re.I), "product-core"),
+    (re.compile(rf"{PRODUCT_SLUG}-(docs|partner-docs|press|knowledge|dataroom)", re.I), "product-docs"),
+    (re.compile(rf"{PRODUCT_SLUG}-(marketing|leadgen|automations|org|multiplatform)", re.I), "product-docs"),
+    (re.compile(rf"{PRODUCT_SLUG}-(admin|operating-dashboard|grafana|storybook)|testflight", re.I), "product-ops"),
     (re.compile(r"claude-ops", re.I), "claude-ops"),
     (re.compile(r"network-operations|mcp-gateway|mcp-proxy", re.I), "infra"),
-    (re.compile(r"-mcp|api-mcp|esimmcp", re.I), "mcp"),
+    (re.compile(r"-mcp|api-mcp", re.I), "mcp"),
     (re.compile(r"_shelved/", re.I), "shelved"),
     (re.compile(r"internal/", re.I), "infra"),
 ]
@@ -70,13 +76,13 @@ def root_policy(profile: Profile, name: str) -> str:
 - PRs labeled `security`, `breaking`, or `do-not-auto-approve`"""
 
     purposes = {
-        "healify-core": f"{name} is part of the Healify health platform. Treat health data, user safety, and production deploy paths as high sensitivity.",
-        "healify-api": f"{name} is a Healify backend API. Database schema, auth, and PHI-handling paths require strict review.",
-        "healify-agentcore": f"{name} hosts Healify AI agents (Anna). Crisis escalation, prompt safety, and model routing are P0.",
-        "healify-web": f"{name} is the Healify web app. Auth flows, subscription gates, and crisis UI paths are sensitive.",
-        "healify-mobile": f"{name} is the Healify mobile app (React Native/Expo). HealthKit, releases, and in-app safety flows are sensitive.",
-        "healify-docs": f"{name} holds Healify documentation or marketing content. Lower runtime risk; still avoid secrets and inaccurate health claims.",
-        "healify-ops": f"{name} is Healify internal ops/dashboard tooling. Production visibility and auth boundaries matter.",
+        "product-core": f"{name} is part of the core health platform. Treat health data, user safety, and production deploy paths as high sensitivity.",
+        "product-api": f"{name} is a backend API. Database schema, auth, and PHI-handling paths require strict review.",
+        "product-agent": f"{name} hosts the product's AI agents. Crisis escalation, prompt safety, and model routing are P0.",
+        "product-web": f"{name} is the web app. Auth flows, subscription gates, and crisis UI paths are sensitive.",
+        "product-mobile": f"{name} is the mobile app (React Native/Expo). HealthKit, releases, and in-app safety flows are sensitive.",
+        "product-docs": f"{name} holds documentation or marketing content. Lower runtime risk; still avoid secrets and inaccurate health claims.",
+        "product-ops": f"{name} is internal ops/dashboard tooling. Production visibility and auth boundaries matter.",
         "claude-ops": f"{name} is Claude Code ops infrastructure. Hooks, deploy automation, and credentials are high risk.",
         "infra": f"{name} is infrastructure or platform code. Network, IAM, and secrets changes require human review.",
         "mcp": f"{name} is an MCP server or integration. New tools, scopes, and outbound calls are medium–high risk.",
@@ -86,25 +92,25 @@ def root_policy(profile: Profile, name: str) -> str:
     }
 
     extra_auto = {
-        "healify-core": "- Small scoped fixes with tests; no auth/PHI/crisis logic changes",
-        "healify-api": "- Docs and test-only changes with no schema or auth impact",
-        "healify-agentcore": "- Eval/test-only changes with no prompt, crisis, or tool-scope changes",
-        "healify-web": "- Docs, copy, and visual tweaks with no auth/subscription/crisis path changes",
-        "healify-mobile": "- Non-release test/docs changes with no HealthKit or native module changes",
-        "healify-docs": "- Markdown/copy-only PRs with no embedded secrets",
-        "healify-ops": "- Dashboard copy and read-only query tweaks with tests",
+        "product-core": "- Small scoped fixes with tests; no auth/PHI/crisis logic changes",
+        "product-api": "- Docs and test-only changes with no schema or auth impact",
+        "product-agent": "- Eval/test-only changes with no prompt, crisis, or tool-scope changes",
+        "product-web": "- Docs, copy, and visual tweaks with no auth/subscription/crisis path changes",
+        "product-mobile": "- Non-release test/docs changes with no HealthKit or native module changes",
+        "product-docs": "- Markdown/copy-only PRs with no embedded secrets",
+        "product-ops": "- Dashboard copy and read-only query tweaks with tests",
         "generic": "- Documentation-only or test-only PRs (≤ 300 lines excluding lockfiles)",
         "shelved": "- Documentation-only changes",
     }
 
     extra_never = {
-        "healify-core": "- Any PHI logging, health data export, or HIPAA-sensitive log changes",
-        "healify-api": "- `prisma` migrations, auth middleware, or raw health data exposure\n- Never run or approve `prisma db pull` in PR descriptions as a fix",
-        "healify-agentcore": "- Crisis escalation paths, 988 routing, mental-health guardrails\n- Prompt changes that weaken scope or safety refusals\n- Production model ID or Bedrock guardrail changes without review",
-        "healify-web": "- Crisis support UI, subscription gates on safety features\n- Auth/session handling and magic-link flows",
-        "healify-mobile": "- App Store release config, HealthKit entitlements, production API endpoints\n- Fastlane/EAS production profile changes",
-        "healify-docs": "- Medical claims, HIPAA statements, or regulatory copy without review",
-        "healify-ops": "- Production dashboard auth or cross-tenant data access",
+        "product-core": "- Any PHI logging, health data export, or HIPAA-sensitive log changes",
+        "product-api": "- `prisma` migrations, auth middleware, or raw health data exposure\n- Never run or approve `prisma db pull` in PR descriptions as a fix",
+        "product-agent": "- Crisis escalation paths, 988 routing, mental-health guardrails\n- Prompt changes that weaken scope or safety refusals\n- Production model ID or Bedrock guardrail changes without review",
+        "product-web": "- Crisis support UI, subscription gates on safety features\n- Auth/session handling and magic-link flows",
+        "product-mobile": "- App Store release config, HealthKit entitlements, production API endpoints\n- Fastlane/EAS production profile changes",
+        "product-docs": "- Medical claims, HIPAA statements, or regulatory copy without review",
+        "product-ops": "- Production dashboard auth or cross-tenant data access",
         "infra": "- IAM policy broadening, public exposure, or secret handling changes",
         "mcp": "- New MCP tools, expanded filesystem/network access, or auth bypass",
         "web-saas": "- Payment/checkout, auth, and PII handling changes",
@@ -169,7 +175,7 @@ def routing_yaml(profile: Profile) -> str:
     - .cursor/approval-policies/runtime-policy.md
 """
     extras = {
-        "healify-api": """
+        "product-api": """
 - product: Database and migrations
   boundary: "{prisma/**,**/migrations/**,**/schema.prisma}"
   policies:
@@ -180,8 +186,8 @@ def routing_yaml(profile: Profile) -> str:
   policies:
     - .cursor/approval-policies/auth-policy.md
 """,
-        "healify-agentcore": """
-- product: Anna agent and prompts
+        "product-agent": """
+- product: AI agent and prompts
   boundary: "{agents/**,**/prompts/**,evals/**}"
   policies:
     - .cursor/approval-policies/agent-policy.md
@@ -191,7 +197,7 @@ def routing_yaml(profile: Profile) -> str:
   policies:
     - .cursor/approval-policies/crisis-policy.md
 """,
-        "healify-web": """
+        "product-web": """
 - product: Authentication
   boundary: "{src/**/auth/**,e2e/**/auth/**}"
   policies:
@@ -202,7 +208,7 @@ def routing_yaml(profile: Profile) -> str:
   policies:
     - .cursor/approval-policies/e2e-policy.md
 """,
-        "healify-mobile": """
+        "product-mobile": """
 - product: Native and release
   boundary: "{ios/**,android/**,fastlane/**,eas.json,app.json}"
   policies:
@@ -213,7 +219,7 @@ def routing_yaml(profile: Profile) -> str:
   policies:
     - .cursor/approval-policies/health-data-policy.md
 """,
-        "healify-core": """
+        "product-core": """
 - product: Health data handling
   boundary: "{**/health/**,**/hipaa/**,**/phi/**}"
   policies:
@@ -309,7 +315,7 @@ Never auto-approve schema migrations.
 - TimescaleDB hypertable constraints include partition columns
 - No `prisma db pull` workflow introduced
 - Rollback plan exists for production deploy window
-- Shared DATABASE_URL contract with healify-langgraphs preserved if applicable
+- Shared DATABASE_URL contract with sibling services preserved if applicable
 """,
     "agent-policy.md": """# AI agent approval policy
 
@@ -394,11 +400,11 @@ def policies_for_profile(profile: Profile) -> dict[str, str]:
         "runtime-policy.md": POLICY_SNIPPETS["runtime-policy.md"],
     }
     extras = {
-        "healify-api": ["auth-policy.md", "migrations-policy.md"],
-        "healify-agentcore": ["agent-policy.md", "crisis-policy.md"],
-        "healify-web": ["auth-policy.md", "e2e-" + "policy.md"],
-        "healify-mobile": ["mobile-release-policy.md", "health-data-policy.md"],
-        "healify-core": ["health-data-policy.md"],
+        "product-api": ["auth-policy.md", "migrations-policy.md"],
+        "product-agent": ["agent-policy.md", "crisis-policy.md"],
+        "product-web": ["auth-policy.md", "e2e-" + "policy.md"],
+        "product-mobile": ["mobile-release-policy.md", "health-data-policy.md"],
+        "product-core": ["health-data-policy.md"],
         "infra": ["infra-policy.md"],
         "mcp": ["mcp-policy.md"],
         "claude-ops": ["hooks-policy.md", "mcp-policy.md"],

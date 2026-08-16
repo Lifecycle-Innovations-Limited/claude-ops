@@ -45,7 +45,7 @@ from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from alignment_lib import (  # noqa: E402
-    HEALIFY_COMPANY_ID,
+    PRIMARY_COMPANY_ID,
     PC_TO_LINEAR_STATE,
     add_comment,
     api_call,
@@ -67,13 +67,13 @@ HOME = Path.home()
 STATE_PATH = HOME / ".hermes" / "state" / "linear_paperclip_delegate_bridge.json"
 LINEAR_GQL = "https://api.linear.app/graphql"
 DEFAULT_DELEGATE_USER_ID = "1972ae8f-ef08-422b-a172-1a728f86abf6"
-HEALIFY_TEAM_ID = "7d9c9413-d41d-4226-a041-f935c8d492df"
+PRIMARY_TEAM_ID = "7d9c9413-d41d-4226-a041-f935c8d492df"
 # HEA inbound Linear→Paperclip: Agent Qiubo routes/owns (Sam 2026-07-19)
 HEA_INBOUND_ASSIGNEE_AGENT_ID = "b33501c1-1cc6-4e44-810c-66cc1f684f2d"
 HEA_INBOUND_ASSIGNEE_NAME = "Agent Qiubo"
 
 TEAM_TO_COMPANY = {
-    "HEA": HEALIFY_COMPANY_ID,
+    "HEA": PRIMARY_COMPANY_ID,
     "MES": "71380d2a-b29e-48fc-8f10-49a8df8b2e46",
     "DUTCH": "c4e2ebdd-351c-4bf0-9d96-4c22147ad85d",
     "INB": "6ef96e49-0728-4170-bd2f-13c6b8bdce25",
@@ -83,12 +83,12 @@ TEAM_TO_COMPANY = {
 
 # Optional company → inbound router agent (only HEA for now)
 INBOUND_ROUTER_AGENT = {
-    HEALIFY_COMPANY_ID: HEA_INBOUND_ASSIGNEE_AGENT_ID,
+    PRIMARY_COMPANY_ID: HEA_INBOUND_ASSIGNEE_AGENT_ID,
 }
 
 # Paperclip company → Linear team
 COMPANY_TO_TEAM = {
-    HEALIFY_COMPANY_ID: ("HEA", HEALIFY_TEAM_ID),
+    PRIMARY_COMPANY_ID: ("HEA", PRIMARY_TEAM_ID),
     "71380d2a-b29e-48fc-8f10-49a8df8b2e46": ("MES", "4e5dd03a-1015-4506-b6d0-b408b02ed7c2"),
     "c4e2ebdd-351c-4bf0-9d96-4c22147ad85d": ("DUTCH", "dd6deb04-63ac-43ae-b90b-6a59cc22d8fd"),
     "6ef96e49-0728-4170-bd2f-13c6b8bdce25": ("INB", "58cd5b2c-fb32-4c65-9558-db0346094883"),
@@ -126,7 +126,7 @@ def agent_user_id() -> str:
 def personal_key() -> str:
     return (
         os.environ.get("LINEAR_API_KEY", "").strip()
-        or os.environ.get("HEALIFY_LINEAR_API_KEY", "").strip()
+        or os.environ.get("TEAM_LINEAR_API_KEY", "").strip()
     )
 
 
@@ -295,7 +295,7 @@ def desired_linear_label_ids(pc_ident: str, lin: dict) -> tuple[Optional[list[st
     """Compute Linear labelIds: keep current + add mapped PC labels.
 
     Additive for product taxonomy. Exception: strip banned priority/security-noise
-    labels (Priority:*, P1, priority-*, Security - Healify) so they cannot return.
+    labels (Priority:*, P1, priority-*, Security - <company>) so they cannot return.
     Returns (label_ids_or_None_if_no_change, note).
     """
     try:
@@ -795,7 +795,7 @@ SELECT json_agg(row_to_json(t)) FROM (
             continue
         if r.get("marked"):
             out.append(r)
-        elif include_unlinked_open and r.get("company_id") == HEALIFY_COMPANY_ID:
+        elif include_unlinked_open and r.get("company_id") == PRIMARY_COMPANY_ID:
             out.append(r)
         if len(out) >= limit:
             break
@@ -1191,7 +1191,7 @@ def sync_pair(
         return events
     lin_uuid = lin["id"]
     team = (lin.get("team") or {})
-    team_id = team.get("id") or HEALIFY_TEAM_ID
+    team_id = team.get("id") or PRIMARY_TEAM_ID
     team_key = (team.get("key") or lin_ident.split("-")[0]).upper()
     cur_type = ((lin.get("state") or {}).get("type") or "").lower()
     cur = ((lin.get("state") or {}).get("name") or "")
@@ -1563,7 +1563,7 @@ def main() -> int:
                         created_ids.append(m.group(1))
                     state.setdefault("seen", {})[n.get("identifier")] = {"at": now_iso(), "event": ev}
             # Cost guard: at most ONE Qiubo wakeup per full-sync tick after batch creates
-            if created_ids and not args.dry_run and HEALIFY_COMPANY_ID in INBOUND_ROUTER_AGENT:
+            if created_ids and not args.dry_run and PRIMARY_COMPANY_ID in INBOUND_ROUTER_AGENT:
                 wcode, wresp = wakeup_agent(
                     HEA_INBOUND_ASSIGNEE_AGENT_ID,
                     reason=f"inbound-linear-batch:{len(created_ids)}:{','.join(created_ids[:5])}",
