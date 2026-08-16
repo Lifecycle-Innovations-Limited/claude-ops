@@ -1,5 +1,5 @@
 // bright-data-cascade.mjs
-// Bright Data FALLBACK helpers for CRS captcha/oauth path.
+// Bright Data FALLBACK helpers for the captcha/oauth path.
 //
 // Order of intent (callers enforce solver gate separately):
 //   1. Local residential browser (EFG SOCKS + PAC) — not this module
