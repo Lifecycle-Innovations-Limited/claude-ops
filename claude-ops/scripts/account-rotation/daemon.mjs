@@ -1252,8 +1252,8 @@ async function dynamicRefresh(config, state) {
     const key = accountKey(account);
     if (key === state.activeAccount) continue; // Don't refresh active account mid-session
     if (account.disabled === true) continue; // hands-off: a disabled account is owned
-    // elsewhere (e.g. a CRS relay pool). Refreshing its OAuth token rotates the
-    // refresh token and INVALIDATES the copy CRS holds → CRS "Invalid API key" 401s.
+    // elsewhere (e.g. a shared proxy pool). Refreshing its OAuth token rotates
+    // the refresh token and INVALIDATES the copy that pool holds → 401s there.
 
     const tokenJson = readStoredToken(account);
     if (!tokenJson) continue;

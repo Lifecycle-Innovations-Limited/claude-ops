@@ -79,7 +79,7 @@ let _done = false;
 
 const SECRET_FILES = [
   process.env.CLAUDE_ROTATOR_SECRETS_FILE,
-  join(homedir(), '.config', 'crs-sync', 'rotator-secrets.env'),
+  join(homedir(), '.config', 'claude-rotation', 'rotator-secrets.env'),
   join(homedir(), '.mcp-secrets.env'),
 ].filter(Boolean);
 

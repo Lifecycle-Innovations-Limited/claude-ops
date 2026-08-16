@@ -38,7 +38,6 @@ export async function listAccounts(ctx) {
         tokenState: 'missing',
         active: false,
         utilization: null,
-        crs: null,
         lastError: null,
         note: 'CLIProxyAPI not installed (optional backend; set CLIPROXYAPI_HOME)',
         reauth: { status: 'unavailable' },
@@ -59,7 +58,6 @@ export async function listAccounts(ctx) {
       tokenState: 'valid', // presence-only check; proxy dropouts surface as request failures
       active: true,
       utilization: null,
-      crs: null,
       lastError: null,
       note: `last write ${st.mtime.toISOString()}`,
       reauth: { status: 'manual', note: `cliproxy login flow for ${p.backend}` },
