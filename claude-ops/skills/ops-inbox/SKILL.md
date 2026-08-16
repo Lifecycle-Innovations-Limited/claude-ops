@@ -681,7 +681,7 @@ All channel credentials come from env vars or CLI auth — no hardcoded secrets.
 > - **"Verified done"** = the protected label has been removed, OR the thread was moved to a completion label (e.g. `Actioned`), OR the user explicitly says it's handled. Only then may it be archived. Archiving a still-todo-labeled email is a defect, not cleanup — surface it as a kept actionable item instead.
 > - This applies on every channel that exposes labels/flags (email today; extend to any future labeled channel). For label-less channels (WhatsApp/iMessage), the equivalent is "never archive a thread with a live unresolved action item" per rule 1.
 
-1. **Archive everything that isn't a live action item.** FYI/noise/newsletters/bot channels, concluded threads, courtesy closes, reaction-only tails — and **WAITING** (you-sent-last) too. Archiving is reversible and WhatsApp/email **auto-resurface a chat the instant a new message lands**, so archiving WAITING loses nothing. The only things left visible after a run are genuine open **NEEDS_REPLY** items — including finance, legal, and personal threads, which are handled exactly like any other thread: draft the appropriate reply or take the required action, investigate as needed, and archive once fully handled. Nothing with a live unresolved action item gets archived regardless of category — **and per the HARD GUARDRAIL above, nothing carrying a todo/action label is archived until that task is verified done, even if it would otherwise classify as FYI/noise/WAITING.** All outbound sends on any thread — including finance, legal, and personal — still require per-message approval via the outbound-comms gate (Rule 6).
+1. **Archive everything that isn't a live action item.** FYI/noise/newsletters/bot channels, concluded threads, courtesy closes, reaction-only tails — and **WAITING** (you-sent-last) too. Archiving is reversible, so archiving WAITING is the right default. Do not lean on auto-resurface as the safety net: on WhatsApp a new inbound can land in an archived chat without flipping `chats.archived` back to 0. Protect anything time-sensitive with a scheduled reminder, and re-query the horizon at the end of the pass. The only things left visible after a run are genuine open **NEEDS_REPLY** items — including finance, legal, and personal threads, which are handled exactly like any other thread: draft the appropriate reply or take the required action, investigate as needed, and archive once fully handled. Nothing with a live unresolved action item gets archived regardless of category — **and per the HARD GUARDRAIL above, nothing carrying a todo/action label is archived until that task is verified done, even if it would otherwise classify as FYI/noise/WAITING.** All outbound sends on any thread — including finance, legal, and personal — still require per-message approval via the outbound-comms gate (Rule 6).
 2. **After you reply to anyone, IMMEDIATELY archive that chat** — reply→archive is one atomic step. Never leave a just-answered thread sitting in the list.
 3. **`include_context: true` is the HARD DEFAULT on every `list_messages` read.** Never pass `false` — you must always see the surrounding thread to understand what a message is about before classifying or drafting.
 4. **Verify the bridge is FULLY up before trusting any classification** — run `wa-inbox-fresh.sh`, confirm the systemd unit is `active` and `:8080` LISTEN, and do a real read. A stale store mis-classifies last-sender.
@@ -959,14 +959,41 @@ If either exists: do **not** send. Rebuild or drop the draft. Never double-respo
 
 This does not change Rule 6's underlying send gate (stage → show full draft → explicit approval → send → next) — it makes explicit exactly how that gate is implemented: full draft + reasoning printed inline in chat first, then one `AskUserQuestion` with a short `preview`, options `[Send]`/`[Edit]`/`[Skip]`.
 
+## Core principle: TRIAGE IS NOT THE DELIVERABLE — WORK THE QUEUE
+
+Archiving the noise and staging one draft is a fraction of the job. The remaining
+drafts are still owed. Verified on a real run: 210 chats and 82 emails were
+archived, then the pass stalled on the first approval with 17 researched drafts
+never presented. The inbox looked clean and nothing had been answered.
+
+- **Work the full draft queue**, one approval at a time, until it is empty or the
+  user stops you. A staged draft that is never shown is the same as no draft.
+- **Re-scan before declaring done.** A long triage pass takes real time and new
+  mail lands during it. The count at the end is not the count from the start; on
+  one measured pass roughly 30 new messages arrived while the drafts were being
+  built. Re-run the scan and fold in anything newer than your working cutoff.
+- **Answer "are you done?" with the real number**, including what was never
+  staged. An honest partial beats a confident summary of the finished part.
+- **Give each replied thread its disposition immediately.** Archive when the ball
+  is in their court, snooze with a dated reminder when the user still owes
+  something. Never leave an answered thread sitting in the inbox.
+
 ## Core principle: SNOOZE & FOLLOW-UP INTELLIGENCE (never let the user lose a thread)
 
-Cleanup must never silently drop something the user still owes or is owed. Archiving WAITING is safe **only** because new inbound auto-resurfaces it — but a thread where the ball is in the user's court, or where the other side has gone quiet on something the user needs, must be **snoozed with a reminder**, not just archived-and-forgotten.
+Cleanup must never silently drop something the user still owes or is owed. A thread where the ball is in the user's court, or where the other side has gone quiet on something the user needs, must be **snoozed with a reminder**, not just archived-and-forgotten.
+
+**Do not treat "their reply will resurface it" as evidence.** On WhatsApp a new
+inbound can land in an archived chat without flipping `chats.archived` back to 0,
+so an archived thread is not guaranteed to reappear when they answer. Archiving
+WAITING is still the right default, but the safety net is the reminder you
+schedule, not the resurface behaviour. Re-query the source horizon before final
+classification and inspect every message newer than your cutoff, including
+messages in chats you already archived this pass.
 
 When cleaning up, classify each non-NEEDS_REPLY item one more level:
 
 - **USER-OWES (todo)** — the user promised an action ("ik pak het vanavond op", "I'll resend the env file", "stuur ik je"), or a meeting-note / email assigned the user a task. → **KEEP visible** and schedule a follow-up reminder. Never archive an unfulfilled user commitment.
-- **AWAITING-OTHER, time-sensitive** — the user is waiting on a reply tied to a deadline/deal. → archive (auto-resurfaces) **but** set a nudge reminder if no response by a sensible horizon (default 3 days) so the user can chase.
+- **AWAITING-OTHER, time-sensitive** — the user is waiting on a reply tied to a deadline/deal. → archive **but** set a nudge reminder if no response by a sensible horizon (default 3 days) so the user can chase. The reminder is what protects this item, not the archive behaviour.
 - **CONCLUDED** — courtesy close, social tail, fully-answered. → archive, no reminder.
 
 **Scheduling reminders (a safe, non-outbound chore — do autonomously):** use `CronCreate` (one-shot, `recurring:false`) for each USER-OWES / nudge item. The reminder prompt should name the contact, the owed action, and the source thread, e.g. *"Reminder: you told <contact-A> you'd handle <contact-B>'s email tonight — follow up (WhatsApp <number>)."* Pick a sensible fire time (same evening for "tonight", +3d for nudges). Reminders fire to the user; they are NOT outbound third-party comms, so no approval gate applies.
@@ -1132,10 +1159,18 @@ Per thread, you MUST:
 
 2. **Read ≥20 messages in BOTH directions before classifying.** Fetch at least 20 messages including BOTH inbound AND the user's own outbound (`is_from_me` / SENT / `Me:`), INCLUDING any `[voice]` transcripts. Never read only the last message, the last-direction flag, or a shallow window. The `last_is_from_me` / last-sender first pass is ONLY a first pass — it does not satisfy this gate. On WhatsApp, fetch/read the merged thread from step 1 (both JIDs), not one chat alone.
 
+   **Deduplicate the merged thread by message ID first.** The phone and `@lid` mirrors routinely store the same message twice, once per JID, with identical IDs and timestamps that may differ only by timezone rendering. Counting those duplicates toward the 20-message minimum reads half the history while looking complete, and picking the "last" row without deduplicating can invert who actually spoke last.
+
+   **A short thread that you have read completely satisfies this rule.** If the verified merged thread holds fewer than 20 messages, say so explicitly and classify. A complete short thread is not a blocker.
+
+   **Transcribe load-bearing outbound voice notes, not just inbound ones.** A newer voice note from the user can resolve several preceding text asks while its `content` is still empty in the store. Classify from the transcript rather than from the last visible text or a stale `last_message_time`.
+
 3. **Reconcile outbound the store may be missing.** The user often replies from their phone or by voice, and historic sends weren't always persisted. Before trusting "they sent last", check:
    - **`[voice]` transcripts** — a `[voice] …` body is the sender's words; read it as a real message in both directions.
    - **The bridge send-log** — `journalctl --user -u whatsapp-bridge.service --no-pager | grep "Received request to send message"` surfaces outbound `/api/send` calls that pre-#404 were NOT written to `messages.db`. If the user sent there, the thread is answered.
    - **The SAME contact's sends in OTHER threads/groups and other channels** — the user may have answered the same person in a group, on a secondary number, or via email/iMessage. Search the contact/topic across threads and channels (`mcp__whatsapp__list_messages {query, limit: 25}`, cross-channel search).
+
+3b. **Enrich load-bearing media without breaking read-only mode.** When a message's stored content is empty and the media is what the thread turns on, use a read-only download and inspect the artifact directly: extract the document, transcribe the audio locally, sample representative video frames. Bound every download and transcription with a per-item timeout so one stale media URL cannot stall the batch. During an analytical (read-only) pass, do not run enrichment jobs that write transcripts, metadata, or read state back into the message store; if load-bearing media cannot be read, report it as an explicit blocker rather than guessing at the content.
 
 4. **Write a 2-sentence conversation-arc summary proving comprehension** — who said what, and what is actually pending right now. If you cannot write it, you have NOT read enough: read more messages; do NOT classify.
 
@@ -1748,6 +1783,35 @@ If `bin/ops-discord` exits 1 with `{"error":"no discord credential configured �
 ```
 
 ---
+
+## Critical pitfalls
+
+These are failure modes seen on real runs, not hypotheticals. Each one produced a
+wrong classification or a wrong draft.
+
+- **Preview text is often truncated.** Always re-read the full body before drafting. A scan preview that cuts at a few hundred characters hides the actual ask.
+- **Phone JIDs and LIDs can be mispaired.** Merge two identities only when an authoritative mapping proves the pair. Never trust a provisional alternate-JID field on its own.
+- **LID and phone mirrors duplicate rows.** The same message can appear once per JID with the same message ID. Deduplicate by message ID before counting toward any minimum-messages rule and before deciding which message is genuinely last.
+- **Same-name searches conflate different people and companies.** Verify the recipient address, domain, and topic before demoting a candidate as already answered.
+- **A meeting on the calendar does not resolve a different open question** from the same person. Match on the specific ask, not on the fact that you have contact with them.
+- **An old time, price, or status is context, not proof** of the current fact. Re-verify anything load-bearing against its own source.
+- **An unanswered message is not automatically NEEDS_REPLY.** It may be an action item you owe, a social close that needs nothing, or a request now owned by the other party.
+- **Subagent triage output is a research artifact, not a finished report.** Read the JSON it actually returned before restating its conclusions, and check that it covered every item you gave it. A partial pass that reports confidently will carry its gaps into the user's reply verbatim.
+- **"No contact on file" is only true after sweeping every configured account.** Run `gog auth list` and search the relevant mailboxes, not just the default one. Query the company or domain as well as the person's name.
+- **A draft that hands the task back to the counterparty misreads ownership.** Before drafting, name who owns the task and who has the access. A message that says "I'll do X" when the other party owns X is worse than no reply. The same applies in reverse: do not hand back work the user can do themselves.
+- **When the user says to research first, that means research, not a softer draft.** If a counterparty re-pitches something, check whether it is genuinely new before writing a polite "sounds interesting". A pitch that reads as fresh may be the same pack from weeks earlier with open questions still unanswered.
+- **The humanizer gate fires on the send tool, not on your confidence in the prose.** If a send is blocked, load the skill, run draft then audit then final, re-present, and re-issue the same call. Do not route around it with a different shell wrapper.
+
+## Output quality gate
+
+Before reporting the pass complete, prove each of these:
+
+- every thread in the baseline is accounted for exactly once;
+- no archived JID or thread also appears in an active bucket;
+- every direct contact carries all of its verified aliases;
+- every staged draft addresses the complete latest inbound, not just its first line;
+- every uncertain factual claim is labelled as a blocker rather than asserted;
+- the report states plainly which mutations occurred (sends, archives, mark-read) and which did not.
 
 ## Completion
 
