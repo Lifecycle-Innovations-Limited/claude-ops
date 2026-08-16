@@ -43,6 +43,13 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.4.1] - 2026-08-16
+
+### Changed
+- ops-release: a failed tag push no longer aborts the run. The release PR has already merged by then, so a dead git transport left main released but untagged. It now resolves main's commit over the REST API when `git fetch` fails, creates the tag object and ref over the API when `git push` fails, and names the ref to create if both fail. API calls retry pinned to the other IP family. (#817)
+- ops-sync-docs / ops-release: the badge regex required a `-` straight after the digits, so a count carrying a URL-encoded `+` (`skills-33%2B-success`) never matched and stayed frozen at 33 while the tree grew to 63. It now matches the suffix and drops it — the count is exact, not a floor. (#817)
+
+
 ## [3.4.0] - 2026-08-16
 
 ### Changed
