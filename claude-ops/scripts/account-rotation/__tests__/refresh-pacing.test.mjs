@@ -10,10 +10,10 @@ const worker = new URL('./refresh-pacing-worker.mjs', import.meta.url);
 const now = 1_000_000;
 const env = {
   ...process.env,
-  CRS_REFRESH_LOCK_DIR: lockDir,
-  CRS_REFRESH_MIN_PACE_MS: '40',
-  CRS_REFRESH_JITTER_MS: '0',
-  CRS_REFRESH_TEST_ALLOW_ZERO_PACE: '1',
+  CLAUDE_REFRESH_LOCK_DIR: lockDir,
+  CLAUDE_REFRESH_MIN_PACE_MS: '40',
+  CLAUDE_REFRESH_JITTER_MS: '0',
+  CLAUDE_REFRESH_TEST_ALLOW_ZERO_PACE: '1',
 };
 
 function runWorker() {
@@ -46,10 +46,10 @@ const production = await new Promise((resolve, reject) => {
   const child = spawn(process.execPath, [worker.pathname, 'production@example.com', String(now)], {
     env: {
       ...process.env,
-      CRS_REFRESH_LOCK_DIR: productionLockDir,
-      CRS_REFRESH_MIN_PACE_MS: '0',
-      CRS_REFRESH_JITTER_MS: '0',
-      CRS_REFRESH_TEST_ALLOW_ZERO_PACE: '0',
+      CLAUDE_REFRESH_LOCK_DIR: productionLockDir,
+      CLAUDE_REFRESH_MIN_PACE_MS: '0',
+      CLAUDE_REFRESH_JITTER_MS: '0',
+      CLAUDE_REFRESH_TEST_ALLOW_ZERO_PACE: '0',
     },
   });
   let stderr = '';
