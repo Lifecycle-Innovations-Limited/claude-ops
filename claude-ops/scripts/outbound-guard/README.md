@@ -66,11 +66,50 @@ then run the real thing inline. The helpers in this repo refuse to send for that
 list silently stops covering `-nl`, `-us`, or any future suffix, and the failure is
 invisible: the hook still runs, still logs nothing, and allows everything.
 
+## Broken send-as aliases
+
+An alias whose SMTP relay credentials have gone stale fails in the worst possible way.
+Gmail accepts the message, stamps it SENT, and only then drops a delivery failure into
+the thread, in Trash, under CATEGORY_UPDATES. The sender sees a sent message. The
+recipient gets nothing. Nobody notices until the other side chases.
+
+Approving such a send changes nothing, so the guard refuses it outright even when an
+approval token is present. The list of bad aliases lives in
+`~/.claude/state/broken-send-aliases.json` and is written by `refresh_broken_aliases.py`,
+which finds bounce threads and reads the failed alias off the SENT message's From header.
+An absent or empty list blocks nothing, so a machine that never runs the refresh keeps
+working as before.
+
+Two ways out of a listed alias:
+
+**Fix the relay.** Gmail Settings, Accounts, Send mail as, re-enter the app password.
+Then `refresh_broken_aliases.py --clear <address>`.
+
+**Skip the relay.** If a Workspace service account can impersonate the mailbox, sending
+_as_ that mailbox over the API never touches the send-as relay and needs no app password:
+
+```
+gog -a alias@example.com gmail send --to ... --subject ... --body ...
+```
+
+The guard checks for a service account file and names this command in the block message
+when one exists.
+
+`gog-sa-token` covers the case where that still fails with `unauthorized_client`. gog
+requests its whole scope bundle in one token request, so a Workspace that delegated only
+`gmail.send` and `gmail.readonly` refuses the entire request, and a mailbox that can in
+fact send looks completely unreachable. Minting a narrow token sidesteps it:
+
+```
+gog --access-token "$(gog-sa-token alias@example.com send)" -a alias@example.com gmail send ...
+```
+
 ## Tests
 
 ```
-bash claude-ops/tests/outbound-guard/test-shared-guard.sh     # cross-language agreement
-python3 claude-ops/tests/outbound-guard/test-hook-matrix.py   # block/pass per send path
+bash claude-ops/tests/outbound-guard/test-shared-guard.sh      # cross-language agreement
+python3 claude-ops/tests/outbound-guard/test-hook-matrix.py    # block/pass per send path
+python3 claude-ops/tests/outbound-guard/test-broken-alias.py   # broken alias outranks approval
 ```
 
 The matrix test checks every send path blocks without an approval (WhatsApp per account,

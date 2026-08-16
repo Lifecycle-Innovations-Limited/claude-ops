@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Print an impersonated Google access token for one mailbox and one scope set.
+
+gog asks for its whole scope bundle at once. A Workspace that granted the service
+account only gmail.send and gmail.readonly therefore refuses the entire request with
+unauthorized_client, and the mailbox looks unreachable when in fact sending is allowed.
+Minting the narrow token here and handing it to `gog --access-token` sidesteps that.
+
+    gog-sa-token press@example.com send
+    gog --access-token "$(gog-sa-token press@example.com send)" -a press@example.com ...
+
+Scope names are the short keys below, or full URLs. Tokens last about an hour.
+"""
+from __future__ import annotations
+
+import base64
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+DIR = os.path.expanduser("~/Library/Application Support/gogcli")
+TOKEN_URI = "https://oauth2.googleapis.com/token"
+SHORT = {
+    "send": "https://www.googleapis.com/auth/gmail.send",
+    "readonly": "https://www.googleapis.com/auth/gmail.readonly",
+    "modify": "https://www.googleapis.com/auth/gmail.modify",
+    "settings.basic": "https://www.googleapis.com/auth/gmail.settings.basic",
+    "settings.sharing": "https://www.googleapis.com/auth/gmail.settings.sharing",
+}
+
+
+def _b64(raw: bytes) -> bytes:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=")
+
+
+def sa_path(mailbox: str) -> str:
+    """gog names each file after the base64 of the mailbox it impersonates."""
+    stem = base64.urlsafe_b64encode(mailbox.encode()).rstrip(b"=").decode()
+    return os.path.join(DIR, f"sa-{stem}.json")
+
+
+def mint(mailbox: str, scopes: list[str]) -> str:
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    path = sa_path(mailbox)
+    if not os.path.exists(path):
+        raise SystemExit(f"no service account on file for {mailbox}")
+    sa = json.load(open(path))
+
+    now = int(time.time())
+    claim = {
+        "iss": sa["client_email"],
+        "sub": mailbox,
+        "scope": " ".join(scopes),
+        "aud": TOKEN_URI,
+        "iat": now,
+        "exp": now + 3600,
+    }
+    seg = _b64(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()) + b"." + \
+        _b64(json.dumps(claim).encode())
+    key = serialization.load_pem_private_key(sa["private_key"].encode(), password=None)
+    jwt = seg + b"." + _b64(key.sign(seg, padding.PKCS1v15(), hashes.SHA256()))
+
+    body = urllib.parse.urlencode({
+        "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        "assertion": jwt.decode(),
+    }).encode()
+    try:
+        with urllib.request.urlopen(urllib.request.Request(TOKEN_URI, body), timeout=30) as r:
+            return json.load(r)["access_token"]
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            d = json.load(e)
+            detail = f': {d.get("error")} {d.get("error_description", "")}'.rstrip()
+        except Exception:
+            pass
+        raise SystemExit(f"token refused for {mailbox}{detail}")
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        raise SystemExit(__doc__)
+    mailbox = sys.argv[1]
+    names = sys.argv[2:] or ["send"]
+    scopes = [SHORT.get(n, n) for n in names]
+    print(mint(mailbox, scopes))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
