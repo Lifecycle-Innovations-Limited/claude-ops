@@ -95,6 +95,42 @@ print("json-contract-ok")
 PY
 )"
 
+# Portability: macOS ships bash 3.2 as /bin/bash, and `#!/usr/bin/env bash`
+# resolves to it whenever /usr/bin precedes a newer bash on PATH — which is the
+# default for login shells, launchd, and cron. `declare -g` does not exist in
+# 3.2, so using it to publish probe results silently left every RUNTIME_/MEM_/
+# NET_/DISK_/STARTUP_/GPU_ variable unset and scored a perfect 100 from no data.
+# Keep the assignments portable; the loops below redirect stderr, so a 4-only
+# builtin fails invisibly rather than erroring out.
+assert_true "no bash-4-only declare -g" bash -c "! grep -q 'declare -g' '$BIN'"
+
+# The probe read-back must actually populate globals. Process count is the
+# cheapest environment-independent witness: any live host has processes, so a
+# zero here means the probe variables never made it back into scope.
+assert_eq "probe vars reach global scope" "populated" "$(python3 - "$json_out" <<'PY'
+import json, sys
+data = json.loads(sys.argv[1])
+procs = int(data["runtime"].get("processes") or 0)
+print("populated" if procs > 0 else f"empty:processes={procs}")
+PY
+)"
+
+# Run the same contract under the host's /bin/bash when that is a 3.x build.
+# Without this the suite only ever exercises the newer bash on PATH and cannot
+# catch a 4-only builtin regressing the macOS default interpreter.
+legacy_bash_version=$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null || echo "")
+if [ "$legacy_bash_version" = "3" ]; then
+  assert_eq "populates probe vars under /bin/bash 3.x" "populated" "$(python3 - "$(/bin/bash "$BIN" --json)" <<'PY'
+import json, sys
+data = json.loads(sys.argv[1])
+procs = int(data["runtime"].get("processes") or 0)
+print("populated" if procs > 0 else f"empty:processes={procs}")
+PY
+)"
+else
+  pass "populates probe vars under /bin/bash 3.x (skipped: /bin/bash is ${legacy_bash_version:-unknown}.x)"
+fi
+
 # Score contract: disk reclaimable size must not lower health, and launch-agent
 # count must not either. Inject a synthetic runtime that is healthy except for
 # large reclaimable numbers and many launch agents.
