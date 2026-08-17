@@ -1501,7 +1501,9 @@ function readLatestSMSCode({ maxAgeSec = 300 } = {}) {
     // Apple timestamp = seconds since 2001-01-01, stored as nanoseconds
     const cutoffAppleNs = (Math.floor(Date.now() / 1000) - 978307200 - maxAgeSec) * 1_000_000_000;
     const sql = `SELECT hex(attributedBody), text FROM message WHERE date > ${cutoffAppleNs} AND service IN ('SMS','iMessage') ORDER BY date DESC LIMIT 10;`;
-    const rows = execSync(`sqlite3 "${db}" "${sql}"`, { timeout: 5000 }).toString().split('\n').filter(Boolean);
+    // $HOME feeds `db`, so the old shell string let the environment inject sqlite3 args
+    // or shell syntax. execFileSync passes both as argv entries instead.
+    const rows = execFileSync('sqlite3', [db, sql], { timeout: 5000, encoding: 'utf8' }).split('\n').filter(Boolean);
     for (const row of rows) {
       const [hex, text] = row.split('|');
       // Plain text column (older macOS)
