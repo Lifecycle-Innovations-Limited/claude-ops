@@ -167,7 +167,8 @@ function proxyParams() {
   // + 2026-07-30: solvers are fallback-only. When used, prefer EFG SOCKS
   // so token IP matches residential PAC browser (not third-party US residential).
   const preferEfg =
-    process.env.CLAUDE_ROT_CAPTCHA_PREFER_EFG_SOCKS === '1' || process.env.CLAUDE_ROT_OAUTH_EGRESS === 'efg-socks-reauth-only';
+    process.env.CLAUDE_ROT_CAPTCHA_PREFER_EFG_SOCKS === '1' ||
+    process.env.CLAUDE_ROT_OAUTH_EGRESS === 'efg-socks-reauth-only';
   if (preferEfg && process.env.CLAUDE_ROT_CAPTCHA_SKIP_EFG_PROXY !== '1') {
     const host = process.env.CLAUDE_ROT_EFG_SOCKS_HOST || '127.0.0.1';
     const port = process.env.CLAUDE_ROT_EFG_SOCKS_PORT || '1089';
@@ -180,7 +181,10 @@ function proxyParams() {
     };
   }
   // Bright Data residential/ISP proxy as next solver IP path (fallback cascade)
-  if (process.env.CLAUDE_ROT_CAPTCHA_BRIGHT_PROXY === '1' || process.env.CLAUDE_ROT_CAPTCHA_SOLVER_MODE === 'fallback') {
+  if (
+    process.env.CLAUDE_ROT_CAPTCHA_BRIGHT_PROXY === '1' ||
+    process.env.CLAUDE_ROT_CAPTCHA_SOLVER_MODE === 'fallback'
+  ) {
     try {
       // lazy sync require not available in ESM — use env-built superproxy if zones present
       const customer = process.env.BRIGHT_DATA_CUSTOMER || process.env.BRIGHT_DATA_USERID;
@@ -925,7 +929,8 @@ export async function solveCaptchaOnPage(page, log = () => {}, opts = {}) {
   }
 
   const gate = await captchaSolverAllowed({
-    attempt: opts.attempt ?? (residualAfterWait ? Number(process.env.CLAUDE_ROT_CAPTCHA_SOLVER_AFTER_ATTEMPTS || 1) : 0),
+    attempt:
+      opts.attempt ?? (residualAfterWait ? Number(process.env.CLAUDE_ROT_CAPTCHA_SOLVER_AFTER_ATTEMPTS || 1) : 0),
     force: opts.forceSolver || residualAfterWait,
     stalled: opts.stalled || residualAfterWait,
   });

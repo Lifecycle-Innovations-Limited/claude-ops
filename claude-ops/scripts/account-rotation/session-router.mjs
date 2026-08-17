@@ -398,8 +398,7 @@ export function spawnWithAccount(args, config, state, opts = {}) {
 
   enforceDirectAuth(childEnv);
 
-  const directOauthToken =
-    childEnv.CLAUDE_CODE_OAUTH_TOKEN && !isLegacyRelayToken(childEnv.CLAUDE_CODE_OAUTH_TOKEN);
+  const directOauthToken = childEnv.CLAUDE_CODE_OAUTH_TOKEN && !isLegacyRelayToken(childEnv.CLAUDE_CODE_OAUTH_TOKEN);
   let spawnArgs = args;
   if (directOauthToken && !childEnv.ANTHROPIC_BASE_URL && !args.includes('--settings')) {
     const overridePath = buildDirectOauthSettingsOverride();
