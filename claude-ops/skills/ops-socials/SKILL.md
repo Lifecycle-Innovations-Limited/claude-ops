@@ -1,6 +1,6 @@
 ---
 name: ops-socials
-description: Public social channels command center — X/Twitter, LinkedIn, Threads, Bluesky, Mastodon. Routes reads via x-research-skill + x-mcp (or mcp__x-mcp__*), posts via Typefully MCP (ban-safe, multi-platform), and LinkedIn voice/craft via linkedin-skills. Stages drafts; never auto-publishes. Use when the user says socials, post, tweet, thread, draft, schedule a post, search X, what is X saying about, AI twitter, AI news, monitor a profile, LinkedIn post, or runs /ops-socials. NOT for private DMs/email/Slack/WhatsApp — those go through /ops-comms.
+description: "Public social channels command center — X/Twitter, LinkedIn, Threads, Bluesky, Mastodon. Routes reads via x-research-skill + x-mcp (or mcp__x-mcp__*), posts via Typefully MCP (ban-safe, multi-platform), and LinkedIn voice/craft via linkedin-skills. Stages drafts; never auto-publishes. Use when the user says socials, post, tweet, thread, draft, schedule a post, search X, what is X saying about, AI twitter, AI news, monitor a profile, LinkedIn post, or runs /ops-socials. NOT for private DMs/email/Slack/WhatsApp — those go through /ops-comms."
 argument-hint: "[intent] | post [text] | thread [hook] --- [body] | search [query] | mentions | what's [@user] saying | analytics [last-7-days] | linkedin [topic]"
 allowed-tools:
   - Bash
