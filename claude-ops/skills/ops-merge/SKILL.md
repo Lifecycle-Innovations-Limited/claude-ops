@@ -159,20 +159,30 @@ If the work lives only on a local branch (no worktree), create one:
 For each finding:
   1. cd into the worktree.
   2. Inspect state: `git status`, `git log <integration>..HEAD --oneline`, `git diff --stat`.
-  3. Read recent commit messages + any TODOs/HEREs in the diff. Decide whether the work is:
+  3. **Stale-copy guard (mandatory, per candidate file before commit):**
+     - Set `BASE=$(git merge-base HEAD origin/<integration_branch>)`.
+     - List files you plan to salvage from the worktree.
+     - For each file `<f>`:
+       - If `git diff --quiet "$BASE..origin/<integration_branch>" -- "<f>"` is **false** (integration changed `<f>` since base), treat `<f>` as high risk.
+       - For high-risk files, inspect both sides before staging:
+         - `git diff "$BASE..origin/<integration_branch>" -- "<f>"`
+         - `git diff "$BASE..HEAD" -- "<f>"`
+       - Only stage hunks that are genuinely new work from the salvage branch. Do **not** stage a wholesale file replacement that drops integration-side hunks.
+       - If you cannot prove the salvage branch is newer for `<f>`, mark the finding `aborted_for_review` (do not commit the file).
+  4. Read recent commit messages + any TODOs/HEREs in the diff. Decide whether the work is:
        (a) complete and just needs commit/push/PR — proceed
        (b) incomplete but obvious next step — finish it
        (c) ambiguous or risky → ABORT this finding and return it for human review.
-  4. If finishing work: make the smallest correct commit. Quality gate locally
+  5. If finishing work: make the smallest correct commit. Quality gate locally
      (per-repo: type-check + lint + relevant tests).
-  5. Commit with a clear message. NEVER use --no-verify unless a hook is genuinely
+  6. Commit with a clear message. NEVER use --no-verify unless a hook is genuinely
      broken and unrelated to your change.
-  6. Push: `git push -u origin <branch>` (or `--force-with-lease` if branch already remote).
-  7. Open PR (only if has_open_pr=false in the brief):
+  7. Push: `git push -u origin <branch>` (or `--force-with-lease` if branch already remote).
+  8. Open PR (only if has_open_pr=false in the brief):
        gh pr create --repo <repo> --base <integration_branch> --head <branch> \
          --title "<derived from commit messages>" \
          --body "Salvaged by /ops:merge Phase 0. <commit summary>"
-  8. Return structured JSON:
+  9. Return structured JSON:
        {
          "repo": "...",
          "branch": "...",
@@ -513,6 +523,7 @@ During this command's execution, invoke the following superpower skills at the s
 - **NEVER auto-delete a local branch, worktree, or stash** — even if classified `branch-already-merged`. Always surface to the user via `AskUserQuestion`.
 - **NEVER `git stash drop` or `git checkout -- <file>` or `git clean`** in any checkout — uncommitted work is the user's, not the agent's, until they confirm.
 - **NEVER auto-commit ambiguous changes.** If a salvager can't tell whether work is complete, it MUST return `aborted_for_review` and let the user decide.
+- **NEVER commit stale snapshots over integration branch progress.** If integration branch and salvage branch both changed a file since merge-base, stage only provably new hunks (or abort for review).
 - **NEVER share the main checkout between salvager subagents.** Per CLAUDE.md worktree isolation: each agent gets its own `.worktrees/salvage-<branch>` dir. Sharing the main checkout causes branch-switch collisions.
 - **NEVER force-push a branch the salvager didn't originate work on** — salvagers may only push with `--force-with-lease` to branches whose tip they fetched at start of work.
 - **NEVER salvage main/master/dev** — those are integration branches; loose work on them surfaces to the user, never auto-pushed.
