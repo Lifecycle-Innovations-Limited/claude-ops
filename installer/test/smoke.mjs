@@ -35,9 +35,11 @@ assert(
   Object.keys(cfg.agents).length === 6,
   `config has 6 agents (got ${Object.keys(cfg.agents).length})`,
 );
+// Shape, not a literal: pinning the exact tag here means every release breaks
+// this test.
 assert(
-  cfg.source.ref === "v3.1.2",
-  `default source ref is v3.1.2 (got ${cfg.source.ref})`,
+  /^v\d+\.\d+\.\d+$/.test(cfg.source.ref),
+  `default source ref is a release tag (got ${cfg.source.ref})`,
 );
 assert(cfg.agents.gemini.enabled, "gemini enabled by default");
 
