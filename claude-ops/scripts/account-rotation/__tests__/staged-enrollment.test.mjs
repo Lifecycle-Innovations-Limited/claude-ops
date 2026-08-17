@@ -124,8 +124,19 @@ const waitFor = async (predicate, label, timeoutMs = 5000) => {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 };
+/**
+ * Leading state letter from `ps -o state=`, with the flag characters dropped.
+ *
+ * BSD ps appends flags to the state field: `+` foreground process group, `s`
+ * session leader, `N` reduced priority, `<` raised priority. A stopped child on
+ * macOS therefore reads `TN` or `T+`, never a bare `T`, so comparing the whole
+ * field to 'T' could never match and every waitForStoppedChild call timed out
+ * after 5s. Linux CI reports a bare `T`, which is why this only failed locally.
+ */
 const childProcessState = (child) =>
-  spawnSync('ps', ['-o', 'state=', '-p', String(child.pid)], { encoding: 'utf8' }).stdout.trim();
+  spawnSync('ps', ['-o', 'state=', '-p', String(child.pid)], { encoding: 'utf8' })
+    .stdout.trim()
+    .charAt(0);
 const waitForStoppedChild = (child, label) => waitFor(() => childProcessState(child) === 'T', label);
 const signalChild = (child, signal) => {
   try {
