@@ -34,6 +34,18 @@ export HOME="$tmpdir"
 export NO_COLOR=1
 export TERM=dumb
 
+# python3 parses ops-speedup's JSON contract below. The README lists only Claude
+# Code and gh as requirements and CI never installs Python, so an unguarded call
+# would abort this file under `set -e` and be reported as a speedup regression
+# rather than a missing interpreter. Skip the way the sibling suites do.
+PY="$(command -v python3 || true)"
+if [ -z "$PY" ]; then
+  echo "== ops-speedup runtime health tests =="
+  echo "  SKIP: python3 unavailable"
+  echo "test-ops-speedup.sh: 0 passed, 0 failed (skipped)"
+  exit 0
+fi
+
 echo "== ops-speedup runtime health tests =="
 assert_true "bash syntax" bash -n "$BIN"
 assert_true "no auto-aggressive default" bash -c "! grep -q 'MODE_CLEAN=true; MODE_DEEP=true; MODE_AGGRESSIVE=true' '$BIN'"
