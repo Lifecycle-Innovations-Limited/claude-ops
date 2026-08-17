@@ -1,21 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCrsNameMaps, crsPolicy, accountProxyConfig } from './crs-pool-config.mjs';
+import { accountProxyConfig, rotationSection } from './rotation-config.mjs';
 
-test('buildCrsNameMaps uses crsAccountName and nameByVaultKey', () => {
-  const config = {
-    accounts: [{ email: 'a@example.com', crsAccountName: 'pool-a' }],
-    crs: { nameByVaultKey: { legacy: 'pool-legacy' } },
-  };
-  const { nameByVaultKey, vaultKeyByCrsName } = buildCrsNameMaps(config);
-  assert.equal(nameByVaultKey['a@example.com'], 'pool-a');
-  assert.equal(nameByVaultKey.legacy, 'pool-legacy');
-  assert.equal(vaultKeyByCrsName['pool-a'], 'a@example.com');
-});
-
-test('crsPolicy defaults to conservative', () => {
-  assert.equal(crsPolicy({ crs: {} }), 'conservative');
-  assert.equal(crsPolicy({ crs: { policy: 'max-out' } }), 'max-out');
+test('rotationSection prefers the rotation block and falls back to the legacy one', () => {
+  assert.deepEqual(rotationSection({ rotation: { policy: 'a' } }), { policy: 'a' });
+  assert.deepEqual(rotationSection({ crs: { policy: 'b' } }), { policy: 'b' });
+  assert.deepEqual(rotationSection({ rotation: {}, crs: { policy: 'b' } }), { policy: 'b' });
+  assert.deepEqual(rotationSection({}), {});
 });
 
 test('accountProxyConfig returns null when proxy is disabled', () => {
@@ -43,7 +34,7 @@ test('accountProxyConfig returns null when provider URL is missing', () => {
 });
 
 test('accountProxyConfig parses socks5:// url for efg provider', () => {
-  // Exact contract from crs-parity-regression.test.mjs.
+  // Exact contract for the public proxy descriptor.
   assert.deepEqual(
     accountProxyConfig(
       {},

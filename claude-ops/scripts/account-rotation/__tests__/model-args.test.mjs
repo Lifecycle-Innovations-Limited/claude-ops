@@ -89,7 +89,7 @@ function runRespawnCase(mode) {
   rmSync(respawned, { force: true });
   writeFileSync(
     fakeRespawn,
-    `#!/bin/sh\nRESPAWN_ARGS="$*" node - <<'NODE'\nconst fs=require('fs');\nconst cp=require('child_process');\nconst path=require('path');\nconst state=JSON.parse(fs.readFileSync(process.env.STATE_PATH,'utf8'));\nfs.writeFileSync(process.env.CAPTURE_PATH, JSON.stringify({ args: process.env.RESPAWN_ARGS.split(' '), state }));\nconst mode=process.env.RESPAWN_TEST_MODE;\nif (mode !== 'spawn-failure' && mode !== 'no-session') {\n  let pid=999999;\n  if (mode !== 'stale-pid') {\n    const child=cp.spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{detached:true,stdio:'ignore',env:process.env});\n    child.unref();\n    pid=child.pid;\n    fs.writeFileSync(process.env.CHILD_PID_PATH,String(pid));\n  }\n  const expectedRoute=JSON.parse(process.env.CLAUDE_OPS_EXPECTED_ROUTE);\n  const effectiveRoute=mode === 'wrong-route'\n    ? {...expectedRoute,mode:'crs'}\n    : mode === 'wrong-endpoint'\n      ? {...expectedRoute,baseUrl:'https://wrong-relay.example/api'}\n      : mode === 'mismatched-credential'\n        ? {...expectedRoute,credentialFingerprint:'0'.repeat(64)}\n        : expectedRoute;\n  fs.mkdirSync(process.env.SESSIONS_DIR,{recursive:true});\n  fs.writeFileSync(path.join(process.env.SESSIONS_DIR,pid+'.json'),JSON.stringify({kind:'bg',jobId:process.env.SESSION_ID,pid,status:'waiting',effectiveRoute}));\n}\nNODE\nexit ${exitCode}\n`,
+    `#!/bin/sh\nRESPAWN_ARGS="$*" node - <<'NODE'\nconst fs=require('fs');\nconst cp=require('child_process');\nconst path=require('path');\nconst state=JSON.parse(fs.readFileSync(process.env.STATE_PATH,'utf8'));\nfs.writeFileSync(process.env.CAPTURE_PATH, JSON.stringify({ args: process.env.RESPAWN_ARGS.split(' '), state }));\nconst mode=process.env.RESPAWN_TEST_MODE;\nif (mode !== 'spawn-failure' && mode !== 'no-session') {\n  let pid=999999;\n  if (mode !== 'stale-pid') {\n    const child=cp.spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{detached:true,stdio:'ignore',env:process.env});\n    child.unref();\n    pid=child.pid;\n    fs.writeFileSync(process.env.CHILD_PID_PATH,String(pid));\n  }\n  const expectedRoute=JSON.parse(process.env.CLAUDE_OPS_EXPECTED_ROUTE);\n  const effectiveRoute=mode === 'wrong-route'\n    ? {...expectedRoute,mode:'relay'}\n    : mode === 'wrong-endpoint'\n      ? {...expectedRoute,baseUrl:'https://wrong-relay.example/api'}\n      : mode === 'mismatched-credential'\n        ? {...expectedRoute,credentialFingerprint:'0'.repeat(64)}\n        : expectedRoute;\n  fs.mkdirSync(process.env.SESSIONS_DIR,{recursive:true});\n  fs.writeFileSync(path.join(process.env.SESSIONS_DIR,pid+'.json'),JSON.stringify({kind:'bg',jobId:process.env.SESSION_ID,pid,status:'waiting',effectiveRoute}));\n}\nNODE\nexit ${exitCode}\n`,
     { mode: 0o700 },
   );
   const result = spawnSync(
@@ -169,21 +169,21 @@ const directRoute = {
   credentialFingerprint: routeCredentialFingerprint(directToken),
   settings: null,
 };
-const crsRoute = {
-  mode: 'crs',
+const relayRoute = {
+  mode: 'relay',
   baseUrl: 'http://127.0.0.1:3005/api',
-  credentialSource: 'crs-relay',
+  credentialSource: 'relay',
   credentialFingerprint: routeCredentialFingerprint('cr_test-relay'),
-  settings: '/tmp/crs-session-settings.json',
+  settings: '/tmp/relay-session-settings.json',
 };
-assert.equal(effectiveRouteMatches({ ...crsRoute, baseUrl: 'http://127.0.0.1:3002/api' }, crsRoute), false);
+assert.equal(effectiveRouteMatches({ ...relayRoute, baseUrl: 'http://127.0.0.1:3002/api' }, relayRoute), false);
 assert.equal(
-  effectiveRouteMatches({ ...crsRoute, credentialFingerprint: routeCredentialFingerprint(directToken) }, crsRoute),
+  effectiveRouteMatches({ ...relayRoute, credentialFingerprint: routeCredentialFingerprint(directToken) }, relayRoute),
   false,
 );
 assert.equal(effectiveRouteMatches({ ...directRoute, credentialSource: 'keychain' }, directRoute), false);
 assert.equal(effectiveRouteMatches({ ...directRoute, credentialFingerprint: null }, directRoute), false);
-assert.equal(effectiveRouteMatches({ ...crsRoute }, crsRoute), true);
+assert.equal(effectiveRouteMatches({ ...relayRoute }, relayRoute), true);
 assert.equal(effectiveRouteMatches({ ...directRoute }, directRoute), true);
 
 const success = runRespawnCase('success');

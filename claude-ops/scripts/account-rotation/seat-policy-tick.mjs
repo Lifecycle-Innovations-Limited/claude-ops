@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * seat-policy-tick.mjs — conservative schedulable policy against local seat-state.
- * No CRS. Reads optional live util from rotate.mjs --utilization JSON if present.
+ * Reads optional live util from rotate.mjs --utilization JSON if present.
  *
  * Usage:
  *   node seat-policy-tick.mjs [--dry-run] [--status]

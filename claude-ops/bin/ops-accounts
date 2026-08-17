@@ -31,7 +31,9 @@ CLI="$ROOT/scripts/ops-accounts/cli.mjs"
 # Shell-owned commands (dual-backend + gateway + seats). Node CLI only covers
 # multi-provider status/reauth/switch/refresh — do not exec it for these.
 cmd="${1:-status}"
-SHELL_CMDS="util setup crs crs-tick seats gateway grok-proxy help -h --help"
+# crs/crs-tick are retired; they stay listed so the shell case can print the
+# migration message instead of the Node CLI reporting an unknown command.
+SHELL_CMDS="util setup seats gateway grok-proxy crs crs-tick help -h --help"
 if [[ -f "$CLI" ]]; then
   case " $SHELL_CMDS " in
     *" $cmd "*) ;;
@@ -59,7 +61,6 @@ plugin_root() {
 ROOT="$(plugin_root)"
 ROT="${ROOT}/scripts/account-rotation"
 GROK_PROXY_URL="${GROK_PROXY_URL:-}"
-CRS_GROK_BASE_URL="${CRS_GROK_BASE_URL:-}"
 
 print_claude() {
   echo "=== Claude ==="
@@ -90,11 +91,6 @@ if ex:
 PY
   else
     echo "grok-cli-auth-proxy not configured or unreachable (set GROK_PROXY_URL)"
-  fi
-  if [[ -n "$CRS_GROK_BASE_URL" ]] && curl -fsS -m 2 -o /dev/null -w "crs_grok_hop HTTP %{http_code}\n" "${CRS_GROK_BASE_URL%/}/models" 2>/dev/null; then
-    :
-  else
-    echo "crs_grok_hop: not reachable (optional thin hop)"
   fi
 }
 # --- CLIProxyAPI backend (optional local multi-provider proxy) ---
@@ -295,19 +291,10 @@ PY
     echo "Quick reauth Claude: ops-accounts reauth claude <email>"
     echo "Quick reauth Grok:   ops-accounts reauth grok <email>"
     ;;
-  crs)
-    if [[ -x "$ROT/crs-priority-daemon.sh" ]]; then
-      bash "$ROT/crs-priority-daemon.sh" --status 2>&1 | head -40
-    else
-      echo "CRS priority script missing (optional)"
-    fi
-    ;;
-  crs-tick)
-    if [[ -x "$ROT/crs-priority-daemon.sh" ]]; then
-      bash "$ROT/crs-priority-daemon.sh" "$@"
-    else
-      echo "CRS priority script missing"; exit 1
-    fi
+  crs|crs-tick)
+    echo "The relay backend has been removed. Multi-account rotation and OAuth seat" >&2
+    echo "management run through CLIProxyAPI: use 'ops-accounts util' or /ops:ops-fleet." >&2
+    exit 2
     ;;
   seats)
     sub="${1:-status}"
@@ -365,7 +352,7 @@ PY
         fi
         nohup node "$GW" >>"${TMPDIR:-/tmp}/ops-accounts-gateway.log" 2>&1 &
         echo "started pid=$! log=${TMPDIR:-/tmp}/ops-accounts-gateway.log url=http://${GW_HOST}:${GW_PORT}"
-        echo "migrate: CRS_BASE_URL → OPS_ACCOUNTS_GATEWAY_URL=http://${GW_HOST}:${GW_PORT}"
+        echo "set OPS_ACCOUNTS_GATEWAY_URL=http://${GW_HOST}:${GW_PORT} for clients"
         ;;
       path)
         echo "$GW"
@@ -392,7 +379,6 @@ ops-accounts — multi-provider seats (canonical; /ops:rotate is alias)
   refresh [all|claude|grok]
   reauth claude <email> | reauth grok <email>
   setup [claude|grok]
-  crs | crs-tick
   seats [status|list|set|toggle|import-claude-config|tick]
   gateway status|start|path|self-test|config
   grok-proxy status   # endpoint configured by GROK_PROXY_URL

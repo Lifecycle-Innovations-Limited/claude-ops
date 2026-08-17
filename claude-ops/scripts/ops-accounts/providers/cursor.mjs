@@ -8,7 +8,7 @@ export const providerId = 'cursor';
 export const displayName = 'Cursor';
 
 export async function listAccounts(ctx) {
-  const snapPath = join(ctx.home, '.claude/crs-keys/quota/cursor-latest.json');
+  const snapPath = join(ctx.home, '.claude/quota-snapshots/cursor-latest.json');
   let snap = null;
   if (existsSync(snapPath)) {
     try {
@@ -32,7 +32,6 @@ export async function listAccounts(ctx) {
         pools: snap?.pools || [],
         note: 'Remaining requires WorkosCursorSessionToken (browser) or Enterprise admin',
       },
-      crs: null,
       lastError: null,
       http: { me: snap?.v1_me_http, usage: snap?.usage_http },
       reauth: {
@@ -52,7 +51,7 @@ export async function reauth() {
 }
 
 export async function utilization(ctx) {
-  const snapPath = join(ctx.home, '.claude/crs-keys/quota/cursor-latest.json');
+  const snapPath = join(ctx.home, '.claude/quota-snapshots/cursor-latest.json');
   if (!existsSync(snapPath)) return { windows: [], source: 'unavailable' };
   try {
     const snap = JSON.parse(readFileSync(snapPath, 'utf8'));

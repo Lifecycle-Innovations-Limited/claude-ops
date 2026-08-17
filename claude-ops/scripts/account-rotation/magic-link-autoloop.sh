@@ -19,7 +19,7 @@ fi
 
 # Logs live under plugin data dir when available (cross-platform).
 DATA_DIR="${CLAUDE_PLUGIN_DATA_DIR:-${HOME:-}/.claude/plugins/data/ops-ops-marketplace}"
-LOG_DIR="${CRS_LOG_DIR:-$DATA_DIR/logs}"
+LOG_DIR="${CLAUDE_ROTATION_LOG_DIR:-$DATA_DIR/logs}"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 LOG="${MAGIC_LINK_AUTOLOOP_LOG:-$LOG_DIR/magic-link-autoloop.log}"
 
@@ -39,8 +39,8 @@ export CLAUDE_ROT_VISUAL_CAPTCHA="${CLAUDE_ROT_VISUAL_CAPTCHA:-1}"
 export CLAUDE_ROT_DESKTOP_ACT="${CLAUDE_ROT_DESKTOP_ACT:-1}"
 export CLAUDE_ROT_VNC_AGENT="${CLAUDE_ROT_VNC_AGENT:-1}"
 export CLAUDE_ROT_CAPTCHA_MAX_ATTEMPTS="${CLAUDE_ROT_CAPTCHA_MAX_ATTEMPTS:-4}"
-export CRS_CAPTCHA_BROWSER_WAIT_MS="${CRS_CAPTCHA_BROWSER_WAIT_MS:-8000}"
-export CRS_MAGIC_LINK_ROTATE_TIMEOUT_MS="${CRS_MAGIC_LINK_ROTATE_TIMEOUT_MS:-1200000}"
+export CLAUDE_ROT_CAPTCHA_BROWSER_WAIT_MS="${CLAUDE_ROT_CAPTCHA_BROWSER_WAIT_MS:-8000}"
+export CLAUDE_REAUTH_TIMEOUT_MS="${CLAUDE_REAUTH_TIMEOUT_MS:-1200000}"
 # Clear sticky one-shot skip flags from interactive debug sessions
 if [[ "${CLAUDE_ROT_SKIP_TOKEN_SOLVERS:-0}" == "1" && "${CLAUDE_ROT_ALLOW_SKIP_TOKEN_SOLVERS:-0}" != "1" ]]; then
   echo "magic-link-autoloop: clearing CLAUDE_ROT_SKIP_TOKEN_SOLVERS=1 (set CLAUDE_ROT_ALLOW_SKIP_TOKEN_SOLVERS=1 to keep)" >&2

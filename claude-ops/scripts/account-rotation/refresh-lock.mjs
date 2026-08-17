@@ -9,15 +9,19 @@ const DEFAULT_LOCK_DIR = join(
   'account-rotation',
   'refresh-locks',
 );
-const LOCK_DIR = process.env.CRS_REFRESH_LOCK_DIR || DEFAULT_LOCK_DIR;
-const LOCK_TTL_MS = (Number(process.env.CRS_REFRESH_LOCK_TTL_SEC) || 120) * 1000;
+// CLAUDE_REFRESH_* are the current names. The CRS_REFRESH_* names are read as a
+// fallback so an install that still exports the old ones keeps its pacing.
+const envValue = (name) => process.env[`CLAUDE_REFRESH_${name}`] ?? process.env[`CRS_REFRESH_${name}`];
+
+const LOCK_DIR = envValue('LOCK_DIR') || DEFAULT_LOCK_DIR;
+const LOCK_TTL_MS = (Number(envValue('LOCK_TTL_SEC')) || 120) * 1000;
 const GUARD_TTL_MS = 10_000;
 const PRODUCTION_MIN_PACE_MS = 1_000;
 const MIN_PACE_MS = Math.max(
-  process.env.CRS_REFRESH_TEST_ALLOW_ZERO_PACE === '1' ? 0 : PRODUCTION_MIN_PACE_MS,
-  Number(process.env.CRS_REFRESH_MIN_PACE_MS) || PRODUCTION_MIN_PACE_MS,
+  envValue('TEST_ALLOW_ZERO_PACE') === '1' ? 0 : PRODUCTION_MIN_PACE_MS,
+  Number(envValue('MIN_PACE_MS')) || PRODUCTION_MIN_PACE_MS,
 );
-const MAX_JITTER_MS = Math.max(0, Math.min(5_000, Number(process.env.CRS_REFRESH_JITTER_MS) || 500));
+const MAX_JITTER_MS = Math.max(0, Math.min(5_000, Number(envValue('JITTER_MS')) || 500));
 
 function safeKey(key) {
   return String(key).replace(/[^a-zA-Z0-9_.@-]/g, '_');

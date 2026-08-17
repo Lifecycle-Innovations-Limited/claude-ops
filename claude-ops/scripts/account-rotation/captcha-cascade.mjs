@@ -309,7 +309,7 @@ export async function maybeSolvePostVerifyVisualChallenge(page, reason = '', opt
   const injected = await maybeSolvePageCaptcha(page, reason || visual.kind || 'post-verify', {
     timeoutMs: Number(process.env.CLAUDE_ROT_CAPTCHA_TIMEOUT_MS || 180_000),
     attempt: used + 1,
-    browserWaitMs: Number(process.env.CRS_CAPTCHA_BROWSER_WAIT_MS || 12000),
+    browserWaitMs: Number(process.env.CLAUDE_ROT_CAPTCHA_BROWSER_WAIT_MS || 12000),
     log,
   });
 

@@ -5,13 +5,13 @@ Contract for **unattended** re-auth owned by `magic-link-autoloop` →
 Agents must not spawn parallel `rotate.mjs` drivers against the same fleet
 (they thrash the global `.rotating` lock and the reauth browser profile).
 
-**CRS is not required.** Captcha cascade runs in standalone rotate-magic.
+Captcha cascade runs in standalone rotate-magic. No relay or proxy backend is involved.
 
 ## Ownership
 
 | Component | Role |
 |-----------|------|
-| `magic-link-autoloop` | Serial, one account per tick; opt-in (often CRS-flagged, but not required) |
+| `magic-link-autoloop` | Serial, one account per tick; opt-in |
 | `rotate.mjs` / `rotate-magic.mjs` | Browser OAuth / magic-link / setup |
 | `captcha-helper.mjs` | Token solvers + residential wait (`residualAfterWait`) |
 | `visual-captcha-solver.mjs` | Vision tiles + desktop-act + VNC layers |
@@ -33,7 +33,7 @@ If captcha modules fail to load, the env keys below are harmless no-ops.
 
 ## Order (when captcha helpers are present)
 
-1. Residential / browser wait (`CRS_CAPTCHA_BROWSER_WAIT_MS`)
+1. Residential / browser wait (`CLAUDE_ROT_CAPTCHA_BROWSER_WAIT_MS`)
 2. **Large interactive** walls (visible hCaptcha challenge / CF frame): prefer
    autonomous cascade first (paid token inject rarely clears pick/drag).
    Override with `CLAUDE_ROT_LARGE_HC_TOKEN_FIRST=1` only when debugging.
@@ -56,10 +56,10 @@ If captcha modules fail to load, the env keys below are harmless no-ops.
 | `CLAUDE_ROT_DESKTOP_ACT` | `1` | desktop-act `act` layer |
 | `CLAUDE_ROT_VNC_AGENT` | `1` | Last-resort VNC computer-use |
 | `CLAUDE_ROT_CAPTCHA_MAX_ATTEMPTS` | `4` | Per-page solver budget |
-| `CRS_CAPTCHA_BROWSER_WAIT_MS` | `8000` | Residential wait before paid solvers |
+| `CLAUDE_ROT_CAPTCHA_BROWSER_WAIT_MS` | `8000` | Residential wait before paid solvers |
 | `CLAUDE_ROT_SKIP_TOKEN_SOLVERS` | `0` | Debug only; autoloop clears sticky `1` |
-| `CRS_MAGIC_LINK_DISPATCH` | `setup` | `setup` or `magic-link` |
-| `CRS_MAGIC_LINK_ROTATE_TIMEOUT_MS` | `1200000` | Child wall-clock (20m) |
+| `CLAUDE_REAUTH_DISPATCH` | `setup` | `setup` or `magic-link` |
+| `CLAUDE_REAUTH_TIMEOUT_MS` | `1200000` | Child wall-clock (20m) |
 | `DESKTOP_ACT_CLI` | auto | Path to desktop-act CLI if not on `PATH` |
 | `DESKTOP_ACT_HOME` / `DESKTOP_ACT_VENV` | — | Optional install roots |
 | `CLAUDE_PLUGIN_ROOT` | installer | Plugin root (never hardcode) |
@@ -69,11 +69,11 @@ If captcha modules fail to load, the env keys below are harmless no-ops.
 
 ```bash
 export CLAUDE_PLUGIN_ROOT=/path/to/claude-ops   # or rely on installer
-export CRS_ENABLE_MAGIC_LINK=1
+export CLAUDE_ROTATION_ENABLE_MAGIC_LINK=1
 export CLAUDE_DESKTOP_DISPLAY=:1
 export CLAUDE_ROT_HEADED=1
 # optional: forks with magic-link + captcha cascade in rotate.mjs
-# export CRS_MAGIC_LINK_DISPATCH=magic-link
+# export CLAUDE_REAUTH_DISPATCH=magic-link
 
 bash "$CLAUDE_PLUGIN_ROOT/scripts/account-rotation/magic-link-autoloop.sh"
 # or one-shot:

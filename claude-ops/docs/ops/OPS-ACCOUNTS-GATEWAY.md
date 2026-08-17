@@ -2,9 +2,14 @@
 
 **Status:** skeleton shipped (`scripts/account-rotation/ops-accounts-gateway.mjs`).
 
-**Goal:** Optional thin OpenAI-compat gateway so fleets that today set
-`base_url=http://127.0.0.1:3005` (CRS) can point at a plugin-owned process
-**without** installing weishaw/claude-relay-service.
+**Goal:** an optional thin OpenAI-compat gateway, owned by this plugin, for
+fleets that want one local endpoint in front of their seats.
+
+For pooling several accounts, the supported backend is
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). `rotate.mjs`
+writes its seat files directly, `/ops:ops-fleet` reads the pool, and
+`/ops:ops-rotate-setup` enrolls a seat. This gateway is a smaller, separate
+thing: a local compat shim, not an account pool.
 
 ## What it does (skeleton)
 
@@ -24,6 +29,7 @@
 - Grafana / Prometheus stack by default
 - Require Docker
 - Re-implement Grok seat table inside Claude account rows
+- Hold long-lived bearer tokens on behalf of a session
 
 ## CLI
 
@@ -36,14 +42,7 @@ Env: `OPS_ACCOUNTS_GATEWAY_HOST` (127.0.0.1), `OPS_ACCOUNTS_GATEWAY_PORT` (3005)
 `OPS_ACCOUNTS_GATEWAY_KEY`, `OPS_ACCOUNTS_STATE_PATH`, `GROK_PROXY_URL`,
 `CLAUDE_UPSTREAM_URL`.
 
-## Migration
-
-```
-CRS_BASE_URL → OPS_ACCOUNTS_GATEWAY_URL
-# harnesses keep OpenAI-compat client shape
-```
-
-External CRS remains **advanced-only** for operators who want the full CRS admin UI.
+Clients set `OPS_ACCOUNTS_GATEWAY_URL` and keep their OpenAI-compat shape.
 
 ## Build order
 
@@ -51,9 +50,4 @@ External CRS remains **advanced-only** for operators who want the full CRS admin
 2. Plugin Grok proxy (**done**)
 3. Gateway skeleton (**this**) — health, auth, grok hop, Claude seat pick + 501
 4. Claude vault OAuth hop (next) — wire seat → access token → Anthropic/OpenAI upstream
-5. Harness matrix update (`docs/ops` CLI path matrix) — `CRS_BASE_URL` → `OPS_ACCOUNTS_GATEWAY_URL`
-
-## License
-
-If any line is copied from CRS (MIT), keep attribution. Prefer rewrite of the
-proxy surface over vendoring the monorepo.
+5. Harness matrix update (`docs/ops` CLI path matrix)

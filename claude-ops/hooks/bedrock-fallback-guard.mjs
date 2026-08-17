@@ -18,19 +18,19 @@ try {
 
   if (settings.mixedProvider) {
     block(
-      'Claude routing is unsafe: settings.json has both Bedrock and CRS/OAuth enabled. Run `claude-stack route --mode crs-oauth` or explicitly confirm Bedrock with `claude-stack route --mode bedrock-confirmed --confirm-metered-bedrock --reason "<reason>"`.',
+      'Claude routing is unsafe: settings.json has both Bedrock and an OAuth/base-URL override enabled. Run `claude-stack route --mode oauth` or explicitly confirm Bedrock with `claude-stack route --mode bedrock-confirmed --confirm-metered-bedrock --reason "<reason>"`.',
     );
   }
 
   if (settings.bedrock && (route.mode !== 'bedrock-confirmed' || !status.bedrockConfirmationActive)) {
     block(
-      'Bedrock fallback blocked. Bedrock is metered AWS usage, and OAuth/CRS is unavailable or not selected. Confirm only for this session with `claude-stack route --mode bedrock-confirmed --reason "<why OAuth is unavailable>" --ttl-minutes 60 --confirm-metered-bedrock`, or restore OAuth with `claude-stack route --mode crs-oauth`.',
+      'Bedrock fallback blocked. Bedrock is metered AWS usage, and OAuth is unavailable or not selected. Confirm only for this session with `claude-stack route --mode bedrock-confirmed --reason "<why OAuth is unavailable>" --ttl-minutes 60 --confirm-metered-bedrock`, or restore OAuth with `claude-stack route --mode oauth`.',
     );
   }
 
   if (route.mode === 'fail-closed') {
     block(
-      `Claude routing is fail-closed: ${route.reason || 'CRS OAuth is unavailable and Bedrock has not been explicitly confirmed'}. Run \`claude-stack doctor --json\` for current CRS/account status.`,
+      `Claude routing is fail-closed: ${route.reason || 'OAuth is unavailable and Bedrock has not been explicitly confirmed'}. Run \`claude-stack doctor --json\` for current routing and account status.`,
     );
   }
 

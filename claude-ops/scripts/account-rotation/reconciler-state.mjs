@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * crs-reconciler-state.mjs — shared own-state-file helper for CRS pool reconcilers.
+ * reconciler-state.mjs — shared own-state-file helper for rotation reconcilers.
  *
- * Each reconciler that watches a claude-relay-service (CRS) account pool (cooldown
- * tracking, token-refresh tracking, priority scoring, ...) MUST persist to its OWN
+ * Each reconciler that watches the account pool (cooldown tracking, token-refresh
+ * tracking, priority scoring, ...) MUST persist to its OWN
  * state file — never a file shared with another reconciler. Sharing one file was the
  * root cause of a documented production incident: reconciler A's non-atomic write
  * clobbered reconciler B's cooldown data mid-tick, silently erasing real rate-limit
@@ -21,7 +21,7 @@
  *      (older than LOCK_STALE_MS, e.g. left behind by a crashed process) is reclaimed
  *      rather than wedging the reconciler forever.
  *
- * Nothing here talks to CRS or knows about account schedules — it is pure state I/O so
+ * Nothing here talks to a provider or knows about account schedules — it is pure state I/O so
  * every reconciler can `import` the same tiny, well-tested primitive instead of each
  * re-implementing tmp+rename by hand.
  */
@@ -36,7 +36,7 @@ export function loadJsonState(path, log = console.error) {
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch (e) {
-    log(`[crs-reconciler-state] WARN corrupt state at ${path}, resetting: ${e.message}`);
+    log(`[reconciler-state] WARN corrupt state at ${path}, resetting: ${e.message}`);
     return {};
   }
 }
@@ -93,13 +93,13 @@ function tryAcquireLock(lockDir, log) {
     }
   }
   if (ageMs < LOCK_STALE_MS) {
-    log(`[crs-reconciler-state] lock held (age ${Math.round(ageMs / 1000)}s) at ${lockDir} — skipping this tick`);
+    log(`[reconciler-state] lock held (age ${Math.round(ageMs / 1000)}s) at ${lockDir} — skipping this tick`);
     return false;
   }
   try {
     rmdirSync(lockDir);
     mkdirSync(lockDir);
-    log(`[crs-reconciler-state] reclaimed stale lock (age ${Math.round(ageMs / 1000)}s) at ${lockDir}`);
+    log(`[reconciler-state] reclaimed stale lock (age ${Math.round(ageMs / 1000)}s) at ${lockDir}`);
     return true;
   } catch {
     return false;

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ops-accounts-gateway.mjs — thin optional OpenAI-compat gateway (no CRS).
+ * ops-accounts-gateway.mjs — thin optional OpenAI-compat gateway.
  *
  * Skeleton (Phase D):
  *   - GET  /health, /v1/health
@@ -12,7 +12,7 @@
  * State: file seat-state only. No Redis. No admin SPA.
  *
  * Env:
- *   OPS_ACCOUNTS_GATEWAY_PORT   default 3005 (CRS-compat port)
+ *   OPS_ACCOUNTS_GATEWAY_PORT   default 3005
  *   OPS_ACCOUNTS_GATEWAY_HOST   default 127.0.0.1
  *   OPS_ACCOUNTS_GATEWAY_KEY    if set, require Bearer / x-api-key / api-key
  *   OPS_ACCOUNTS_STATE_PATH     seat-state.json path
@@ -71,7 +71,7 @@ export function classifyRoute(method, urlPath) {
   if (path === '/health' || path === '/v1/health') return { kind: 'health', path };
   if (path === '/v1/models' || path === '/models') return { kind: 'models', path };
   if (path === '/accounts' || path === '/v1/accounts') return { kind: 'accounts', path };
-  // Grok hop: anything mentioning grok, or xAI-shaped image routes often used via CRS
+  // Grok hop: anything mentioning grok, or xAI-shaped image routes
   if (/\/grok(\/|$)/i.test(path) || path.startsWith('/v1/images') || path.startsWith('/images')) {
     return { kind: 'grok-proxy', path };
   }
@@ -148,7 +148,7 @@ async function proxyToGrok(req, res, urlPath) {
     return;
   }
   const target = new URL(urlPath, GROK_PROXY_URL);
-  // Map CRS-style /grok/v1/... → proxy /v1/...
+  // Map /grok/v1/... → proxy /v1/...
   let p = target.pathname;
   p = p.replace(/^\/grok(?=\/|$)/i, '');
   if (!p.startsWith('/v1') && p !== '/health' && p !== '/accounts') {
@@ -262,7 +262,7 @@ async function handleClaude(req, res, route) {
   }
   // Skeleton: do not invent OAuth vault reads here. Either forward to CLAUDE_UPSTREAM_URL
   // (operator-supplied Anthropic-compat) or return 501 with the chosen seat so harnesses
-  // can prove routing without CRS.
+  // can prove routing end to end.
   let bodyBuf = Buffer.alloc(0);
   try {
     bodyBuf = await readBody(req);

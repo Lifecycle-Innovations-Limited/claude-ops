@@ -4,9 +4,9 @@
  * access tokens for all vault accounts before they expire.
  *
  * Doctrine: OAuth tokens must never become stale.
- *   - launchd every 15m (com.sam.crs-rotation-refresh)
+ *   - launchd every 15m (com.claude-ops.rotation-refresh)
  *   - refresh when remaining TTL < 6h (see oauth-keep-alive-policy.mjs)
- *   - dead refresh_token → mark needsReauth for magic-link-autoloop
+ *   - dead refresh_token → mark needsReauth for staged enrollment
  *
  * Usage:
  *   node refresh-tokens.mjs           # Refresh tokens under keep-alive floor
@@ -21,7 +21,7 @@ import { userInfo } from 'os';
 import { fileURLToPath } from 'url';
 import { execFileSync, spawnSync } from 'child_process';
 import { fetchWithProxyFallback } from './proxy-helper.mjs';
-import { acquireRefreshLock, claimRefreshPace } from './crs-refresh-lock.mjs';
+import { acquireRefreshLock, claimRefreshPace } from './refresh-lock.mjs';
 import { readRotationToken, reconcileRemoteRotationVault, writeRotationTokenCoordinated } from './rotation-vault.mjs';
 import { withAuthWriterLock } from './auth-writer-coordination.mjs';
 import { verifyRefreshedTokenIdentity } from './token-identity.mjs';
@@ -39,8 +39,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = process.env.CLAUDE_ROTATOR_CONFIG || join(__dirname, 'config.json');
 const STATE_PATH = join(__dirname, 'state.json');
 const LOG_PATH = join(__dirname, 'rotation.log');
-const NEEDS_REAUTH_PATH = join(__dirname, '.crs-token-refresher-state.json');
-const AUTOLOOP_STATE_PATH = join(__dirname, '.crs-magic-autoloop-state.json');
+/** Prefer the current filename; keep reading a pre-existing legacy file so an
+ *  in-place upgrade does not lose its needs-reauth flags. */
+function statePath(current, legacy) {
+  const currentPath = join(__dirname, current);
+  const legacyPath = join(__dirname, legacy);
+  if (!existsSync(currentPath) && existsSync(legacyPath)) return legacyPath;
+  return currentPath;
+}
+
+const NEEDS_REAUTH_PATH = statePath('.token-refresher-state.json', '.crs-token-refresher-state.json');
+const AUTOLOOP_STATE_PATH = statePath('.magic-autoloop-state.json', '.crs-magic-autoloop-state.json');
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 const KEYCHAIN_ACCOUNT = process.env.USER || process.env.LOGNAME || userInfo().username;
 
@@ -111,26 +120,6 @@ function readStoredToken(account) {
 
 function writeStoredToken(account, json, capability) {
   return writeRotationTokenCoordinated(account, json, capability);
-}
-
-function syncStoredTokenToCrs(account) {
-  if (process.env.CLAUDE_ROTATION_SKIP_CRS_SYNC === '1') return;
-  const key = accountKey(account);
-  try {
-    // JSON.stringify only adds double quotes, and $(...) is still expanded inside shell
-    // double quotes, so the account key must never reach a shell. Pass it as an argv entry.
-    const res = spawnSync('node', [join(__dirname, 'sync-crs-account.mjs'), key], {
-      timeout: 45_000,
-      encoding: 'utf8',
-    });
-    if (res.status !== 0) {
-      throw new Error(`${res.stderr || res.stdout || `exit ${res.status}`}`.trim());
-    }
-    const out = `${res.stdout || ''}${res.stderr || ''}`.trim();
-    log(out.split('\n').slice(-1)[0] || `${key}: CRS sync complete`);
-  } catch (err) {
-    log(`${key}: ⚠ CRS sync failed — ${String(err.message || err).slice(0, 180)}`);
-  }
 }
 
 function readState() {
@@ -482,7 +471,6 @@ for (let i = 0; i < accountsOrdered.length; i++) {
 
       // Save to vault
       await writeStoredToken(account, JSON.stringify(updated), writerCapability);
-      syncStoredTokenToCrs(account);
       clearNeedsReauth(key);
       const newHoursLeft = ((result.expiresAt - Date.now()) / 3_600_000).toFixed(1);
       log(`${key}: ✓ refreshed (${newHoursLeft}h remaining)`);

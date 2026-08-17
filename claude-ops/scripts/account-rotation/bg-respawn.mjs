@@ -1,4 +1,3 @@
-import { loadClaudeHarnessEnv } from './claude-harness-env.mjs';
 import { normalizeClaudeModelArgs } from './model-args.mjs';
 // ── Background-session respawn after rotation ────────────────────────────────
 // Daemon-hosted `claude --bg` sessions have no TTY, so the /login-injection
@@ -40,7 +39,7 @@ import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import { getTokenForSession, extractAccessToken, readLeases, recordSessionLease } from './session-router.mjs';
-import { applyCrsSessionSettings, readRouteState } from './route-state.mjs';
+import { isLegacyRelayBase, isLegacyRelayToken, readRouteState } from './route-state.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'config.json');
@@ -59,13 +58,10 @@ const DEFERRED_MARKER = (id) => `/tmp/claude-respawn-deferred-${id}`;
 const RESPAWN_THROTTLE_MS = 10 * 60_000; // never respawn the same session twice in 10 min
 const BUSY_FORCE_AFTER_MS = 90 * 60_000; // busy this long after rotation → respawn anyway
 
-// Dashboard marker: present ⇔ at least one session was last respawned to DIRECT
-// because CRS was unhealthy. Lets fleet-status explain a "direct" session as
-// "relay-down" rather than a silent/unexplained desync. Cleared whenever a
-// session successfully routes via a healthy relay.
-const CRS_RELAY_DOWN_MARKER = '/tmp/claude-crs-relay-down';
-const HEALTH_WATCH_STATE = join(__dirname, 'crs-health-watch.state.json');
-const HEALTH_STATE_FRESH_MS = 90_000; // trust the health-watch verdict if <90s old (it ticks every 60s)
+// A retired relay backend once left this marker to explain a "direct" session.
+// Respawn is always direct now, so the only thing left to do with it is clear it.
+const LEGACY_RELAY_DOWN_MARKER = '/tmp/claude-crs-relay-down';
+const LEGACY_SESSION_SETTINGS_SUFFIX = 'crs-session-settings.json';
 
 // TTY hygiene helper: on abnormal paths or exit, attempt to restore sane mode so
 // background errors or claude subprocs do not leave ^C ^[ etc. in a raw-mode TUI.
@@ -76,30 +72,14 @@ function resetTty() {
 }
 process.once('exit', resetTty);
 
-// Cheap CRS health read: prefer the recent crs-health-watch verdict (no network),
-// fall back to a 3s /health curl when the state file is missing/stale. Returns
-// boolean healthy. Keeps respawn fast and avoids hammering the relay per-session.
-function crsHealthyCheap() {
+/** Drop the leftovers a retired relay backend may have left on this machine. */
+function clearLegacyRelayArtifacts(log) {
   try {
-    const st = JSON.parse(readFileSync(HEALTH_WATCH_STATE, 'utf8'));
-    const mtime = statSync(HEALTH_WATCH_STATE).mtimeMs;
-    if (Date.now() - mtime < HEALTH_STATE_FRESH_MS) {
-      // mode 'crs' with down=0 ⇒ relay solid; mode 'fail-closed' ⇒ relay down.
-      if (st.mode === 'fail-closed') return false;
-      if (st.mode === 'crs' && (st.down || 0) === 0) return true;
+    if (existsSync(LEGACY_RELAY_DOWN_MARKER)) {
+      unlinkSync(LEGACY_RELAY_DOWN_MARKER);
+      log(`[bg-respawn] cleared stale relay marker ${LEGACY_RELAY_DOWN_MARKER}`);
     }
   } catch {}
-  // Stale/absent state → authoritative live probe.
-  try {
-    const hc = execFileSync(
-      'curl',
-      ['-sf', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '3', 'http://127.0.0.1:3005/health'],
-      { encoding: 'utf8', timeout: 5000 },
-    ).trim();
-    return hc === '200';
-  } catch {
-    return false;
-  }
 }
 
 // Graceful rotation-over stagger: respawn bg sessions ONE AT A TIME with this gap
@@ -198,17 +178,18 @@ function writeJsonAtomic(path, value) {
   renameSync(tmp, path);
 }
 
-function respawnStateCoherent(stateFile, expectedCrsActive) {
+function respawnStateCoherent(stateFile) {
   try {
     const persisted = JSON.parse(readFileSync(stateFile, 'utf8'));
-    if (!Array.isArray(persisted.respawnFlags)) return expectedCrsActive === false;
+    if (!Array.isArray(persisted.respawnFlags)) return true;
     const normalized = normalizeClaudeModelArgs(persisted.respawnFlags);
     if (!normalized.every((flag, index) => flag === persisted.respawnFlags[index])) return false;
-    const hasCrsSettings = persisted.respawnFlags.some(
+    // A relay session-settings overlay must not survive into a respawn.
+    return !persisted.respawnFlags.some(
       (flag, index) =>
-        flag === '--settings' && String(persisted.respawnFlags[index + 1] || '').endsWith('crs-session-settings.json'),
+        flag === '--settings' &&
+        String(persisted.respawnFlags[index + 1] || '').endsWith(LEGACY_SESSION_SETTINGS_SUFFIX),
     );
-    return hasCrsSettings === expectedCrsActive;
   } catch {
     return false;
   }
@@ -291,17 +272,11 @@ export function effectiveRouteFromProcess(pid, expectedSettings) {
   if (baseUrl && apiBase && baseUrl !== apiBase) return null;
   const effectiveBase = baseUrl || apiBase || null;
   const tokens = [env.ANTHROPIC_API_KEY, env.ANTHROPIC_AUTH_TOKEN, env.CLAUDE_CODE_OAUTH_TOKEN].filter(Boolean);
-  if (effectiveBase) {
-    if (!tokens.length || tokens.some((token) => token !== tokens[0] || !String(token).startsWith('cr_'))) return null;
-    return {
-      mode: 'crs',
-      baseUrl: effectiveBase,
-      credentialSource: 'crs-relay',
-      credentialFingerprint: routeCredentialFingerprint(tokens[0]),
-      settings: expectedSettings,
-    };
-  }
-  if (tokens.some((token) => String(token).startsWith('cr_'))) return null;
+  void expectedSettings;
+  // Any base-URL override, or any relay-shaped token, means the child is not on
+  // the direct OAuth route this module now guarantees.
+  if (effectiveBase) return null;
+  if (tokens.some((token) => isLegacyRelayToken(token))) return null;
   const directToken = tokens[0] || activeKeychainAccessToken();
   if (!directToken || tokens.some((token) => token !== directToken)) return null;
   return {
@@ -366,23 +341,22 @@ export function listLiveBgSessions() {
 
 export function doRespawn(session, log, opts = {}) {
   const route = readRouteState();
+  clearLegacyRelayArtifacts(log);
   if (route.mode === 'fail-closed') {
-    // OPT-IN (2026-06-22, CRS-connection auto-recovery): a connection-wedged
-    // session must be respawnable DURING a confirmed CRS outage (fail-closed is
-    // exactly that state). In fail-closed, settings.json already has the CRS env
-    // stripped, and the FINAL ATOMIC NORMALIZATION below strips any leaked CRS
-    // base/token — so the respawn boots cleanly on direct keychain OAuth (the
-    // intended "fall back to local OAuth"). Without the opt-in, keep refusing so
-    // no existing caller (rotate.mjs post-rotation, daemon deferred sweep) changes
-    // behavior. crs-health-watch's rotate-magic keeps the keychain account fresh.
+    // OPT-IN: a connection-wedged session must still be respawnable while the
+    // route is fail-closed. The env scrub below strips any leaked base URL or
+    // relay token, so the respawn boots cleanly on direct keychain OAuth — the
+    // intended "fall back to local OAuth". Without the opt-in, keep refusing so
+    // no existing caller (rotate.mjs post-rotation, daemon deferred sweep)
+    // changes behavior.
     if (!opts.allowFailClosedDirect) {
       log(
-        `[bg-respawn] route=fail-closed; refusing to respawn session ${session.id} without healthy CRS OAuth or confirmed Bedrock`,
+        `[bg-respawn] route=fail-closed; refusing to respawn session ${session.id} without healthy OAuth or confirmed Bedrock`,
       );
       return false;
     }
     log(
-      `[bg-respawn] route=fail-closed + allowFailClosedDirect — respawning session ${session.id} onto direct keychain OAuth (CRS-connection recovery)`,
+      `[bg-respawn] route=fail-closed + allowFailClosedDirect — respawning session ${session.id} onto direct keychain OAuth`,
     );
   }
 
@@ -452,252 +426,70 @@ export function doRespawn(session, log, opts = {}) {
       log(`[bg-respawn] Failed to retrieve session token: ${err.message}`);
     }
 
-    // CRS relay allowlist: override base URL + auth for specific sessions (scoped partial cutover).
-    // Rollback: delete crs-allowlist.json + respawn listed sessions (removes CRS env, falls back to keychain).
-    //
-    // ATOMIC INVARIANT (2026-06-14, root-caused 401 loop): ANTHROPIC_BASE_URL and the cr_
-    // relay token MUST be set together or not at all. If base→CRS but the Bearer token is a
-    // real OAuth token (non-cr_ prefix), CRS rejects every request with
-    //   {"error":"Invalid API key","message":"Invalid API key format"} → HTTP 401
-    // which Claude Code surfaces as "API Error: 401 Invalid API key format" and retries
-    // forever. The earlier bug: the cr_ key lived in a job tmp dir that got cleaned up, so the
-    // readFileSync threw, the catch logged "non-fatal", and the session respawned with CRS base
-    // URL + real OAuth token → infinite loop. Defenses below:
-    //   1. Default key path is now a STABLE location (not job tmp).
-    //   2. On ANY failure to obtain a cr_-prefixed key, we DELETE ANTHROPIC_BASE_URL from
-    //      childEnv so the session falls back to direct Anthropic — never CRS-with-wrong-token.
-    const CRS_ALLOWLIST_PATH = join(__dirname, 'crs-allowlist.json');
-    let crsActive = false; // true ⇔ a VALID base+cr_ pair was applied (the only state in which CRS routing is allowed)
-    let crsBaseUrl = 'http://127.0.0.1:3005/api';
-    let crsRelayKey = '';
-    try {
-      if (existsSync(CRS_ALLOWLIST_PATH)) {
-        const al = JSON.parse(readFileSync(CRS_ALLOWLIST_PATH, 'utf8'));
-        crsBaseUrl = al.baseUrl || crsBaseUrl;
-        // CARVE-OUT (2026-06-15): explicit per-session exclusions that MUST stay
-        // off CRS even under the global default — orchestrator 0d298397, app-store
-        // sonnet build e35cdd60, driver 0b465ce3. The global default lives in
-        // settings.json env, so an excluded session would otherwise inherit
-        // base=CRS+cr_ at startup; we strip the inherited CRS base here and leave
-        // crsActive=false so it falls back to keychain/direct (the final atomic
-        // normalization below then drops any leaked cr_ token too). Reversible:
-        // remove the id from al.exclude.
-        const excluded = Array.isArray(al.exclude) && al.exclude.includes(String(session.id));
-        if (excluded) {
-          delete childEnv.ANTHROPIC_BASE_URL;
-          delete childEnv.ANTHROPIC_API_BASE;
-          log(
-            `[bg-respawn] CRS-allowlist: session ${session.id} is an explicit carve-out (al.exclude) — forcing OFF CRS, stripping inherited CRS base variables (keychain/direct)`,
-          );
-        }
-        // GLOBAL CRS (2026-06-14, Sam directive "by default all sessions route there, new AND existing"):
-        // al.global===true routes EVERY respawned session via CRS, not just the listed cohort.
-        // Downstream health-gate + cr_-key validity + atomic invariant still apply, so a global
-        // session falls back to direct auth if CRS is unhealthy or the key is bad. Reversible: set global:false.
-        if (
-          !excluded &&
-          (al.global === true || (Array.isArray(al.sessions) && al.sessions.includes(String(session.id))))
-        ) {
-          const crKeyPath = join(homedir(), '.claude', 'crs-keys', 'claude-cli.env');
-          let crKey = '';
-          try {
-            crKey = loadClaudeHarnessEnv({ path: crKeyPath }).CRS_API_KEY;
-          } catch {
-            crKey = '';
-          }
-          // HEALTH GATE (2026-06-14, refined 2026-06-15): never route a session
-          // onto a DEAD relay. A valid cr_ key is necessary but not sufficient —
-          // if CRS is unhealthy, injecting the CRS base wedges the session on an
-          // unreachable upstream. crsHealthyCheap() prefers the recent
-          // crs-health-watch verdict (no network) and falls back to a 3s /health
-          // curl. When down, fall through to strip-base direct-auth + drop the
-          // dashboard relay-down marker so the "direct" session is explained.
-          const crsHealthy = crsHealthyCheap();
-          if (crKey.startsWith('cr_') && crsHealthy) {
-            // Both together + relay alive — the only safe state.
-            childEnv.ANTHROPIC_BASE_URL = crsBaseUrl;
-            childEnv.ANTHROPIC_API_BASE = crsBaseUrl;
-            childEnv.ANTHROPIC_AUTH_TOKEN = crKey;
-            childEnv.CLAUDE_CODE_OAUTH_TOKEN = crKey;
-            // Keep API_KEY=cr_ so Claude hits CRS (unsetting broke routing).
-            childEnv.ANTHROPIC_API_KEY = crKey;
-            crsRelayKey = crKey;
-            crsActive = true;
-            try {
-              unlinkSync(CRS_RELAY_DOWN_MARKER);
-            } catch {} // relay healthy → clear stale marker
-            log(`[bg-respawn] CRS-allowlist: routing session ${session.id} via relay ${childEnv.ANTHROPIC_BASE_URL}`);
-          } else if (crKey.startsWith('cr_') && !crsHealthy) {
-            // Valid key but relay DOWN → fail safe to direct auth (do not wedge).
-            delete childEnv.ANTHROPIC_BASE_URL;
-            delete childEnv.ANTHROPIC_API_BASE;
-            try {
-              writeFileSync(
-                CRS_RELAY_DOWN_MARKER,
-                JSON.stringify({ ts: Date.now(), reason: 'relay-down', lastSession: String(session.id) }),
-                // mode keeps the marker owner-only; the path under /tmp is predictable.
-                { mode: 0o600 },
-              );
-            } catch {}
-            log(
-              `[bg-respawn] CRS-allowlist: session ${session.id} listed but CRS unhealthy — stripping ANTHROPIC_BASE_URL, falling back to direct auth (marker: ${CRS_RELAY_DOWN_MARKER})`,
-            );
-          } else {
-            // Key missing/malformed → MUST NOT leave base URL pointing at CRS with a non-cr_ token.
-            delete childEnv.ANTHROPIC_BASE_URL;
-            delete childEnv.ANTHROPIC_API_BASE;
-            log(
-              `[bg-respawn] CRS-allowlist: session ${session.id} listed but cr_ key invalid/missing at ${crKeyPath} — stripping ANTHROPIC_BASE_URL, falling back to direct auth`,
-            );
-          }
-        }
+    // Every respawned session authenticates directly with its own OAuth token.
+    // A retired relay backend used to override the base URL and inject a `cr_`
+    // bearer token here; both are now stripped rather than set, so a leftover
+    // pair inherited from settings.json or a parent env can never re-point a
+    // child at a relay this plugin no longer manages.
+    const scrubbed = [];
+    for (const key of ['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_BASE']) {
+      if (isLegacyRelayBase(childEnv[key])) {
+        delete childEnv[key];
+        scrubbed.push(key);
       }
-    } catch (err) {
-      // Allowlist parse failure must also be fail-safe: never route to CRS half-configured.
-      delete childEnv.ANTHROPIC_BASE_URL;
-      delete childEnv.ANTHROPIC_API_BASE;
-      log(`[bg-respawn] CRS allowlist read failed (fail-safe: stripped ANTHROPIC_BASE_URL): ${err.message}`);
+    }
+    for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']) {
+      if (isLegacyRelayToken(childEnv[key])) {
+        delete childEnv[key];
+        scrubbed.push(key);
+      }
+    }
+    if (scrubbed.length) {
+      log(`[bg-respawn] session ${session.id}: dropped leftover relay env (${scrubbed.join(', ')})`);
     }
 
-    // ── FINAL ATOMIC NORMALIZATION (2026-06-14, both-directions hardening) ────
-    // The earlier guard only covered the allowlist-injection path. Two real
-    // regressions slipped past it for spare-worker / --settings respawns:
-    //   (a) lone cr_ key (no CRS base) → sent to direct api.anthropic.com →
-    //       "401 Invalid API key format" (Anthropic rejects cr_).
-    //   (b) base=CRS (leaked via --settings crs-session-settings.json or an
-    //       inherited daemon env) + a real keychain OAuth token (which childEnv
-    //       injection sets, OVERRIDING the settings-file cr_ token) → the relay
-    //       rejects the non-cr_ token: "🔒 Invalid API key format from 172.18.0.1".
-    // Invariant enforced here, unconditionally, as the LAST word on env:
-    //   base==CRS  XNOR  token==cr_   (both, or neither — never one).
-    // crsActive is the ONLY sanctioned "both" path; anything else is forced to
-    // direct: strip the CRS base AND replace any cr_ token with the keychain one.
-    {
-      const crsBasePattern =
-        /127\.0\.0\.1:(3000|3002|3005|8091|18091)|100\.87\.53\.96:8091|:(3000|3002|3005|8091|18091)\/api/;
-      const baseIsCrs =
-        crsBasePattern.test(String(childEnv.ANTHROPIC_BASE_URL || '')) ||
-        crsBasePattern.test(String(childEnv.ANTHROPIC_API_BASE || ''));
-      const tokIsCr = [
-        childEnv.CLAUDE_CODE_OAUTH_TOKEN,
-        childEnv.ANTHROPIC_AUTH_TOKEN,
-        childEnv.ANTHROPIC_API_KEY,
-      ].some((token) => String(token || '').startsWith('cr_'));
-      if (crsActive) {
-        const crKey = String(childEnv.ANTHROPIC_API_KEY || '').startsWith('cr_')
-          ? childEnv.ANTHROPIC_API_KEY
-          : String(childEnv.ANTHROPIC_AUTH_TOKEN || '').startsWith('cr_')
-            ? childEnv.ANTHROPIC_AUTH_TOKEN
-            : childEnv.CLAUDE_CODE_OAUTH_TOKEN;
-        if (String(crKey || '').startsWith('cr_')) {
-          childEnv.ANTHROPIC_API_KEY = crKey;
-          childEnv.ANTHROPIC_AUTH_TOKEN = crKey;
-          childEnv.CLAUDE_CODE_OAUTH_TOKEN = crKey;
-        }
-      }
-      if (!crsActive && (baseIsCrs || tokIsCr)) {
-        if (baseIsCrs) {
-          delete childEnv.ANTHROPIC_BASE_URL; // → falls back to default direct api.anthropic.com
-          delete childEnv.ANTHROPIC_API_BASE;
-          log(
-            `[bg-respawn] ATOMIC: session ${session.id} not CRS-active but base→CRS leaked — stripped CRS base variables (direct)`,
-          );
-        }
-        if (tokIsCr) {
-          // Never let a lone cr_ relay key reach the direct API. Prefer the keychain token.
-          let kc = null;
-          try {
-            const config = readConfig();
-            const tokenJson = getTokenForSession(session.id, config);
-            kc = tokenJson ? extractAccessToken(tokenJson) : null;
-          } catch {}
-          if (kc) {
-            selectedDirectToken = kc;
-            directCredentialSource = 'session-oauth';
-            delete childEnv.ANTHROPIC_API_KEY;
-            delete childEnv.ANTHROPIC_AUTH_TOKEN;
-            childEnv.CLAUDE_CODE_OAUTH_TOKEN = kc;
-            log(`[bg-respawn] ATOMIC: session ${session.id} had lone cr_ key — swapped to keychain OAuth (direct)`);
-          } else {
-            delete childEnv.ANTHROPIC_API_KEY; // fall through to keychain credentials file
-            delete childEnv.ANTHROPIC_AUTH_TOKEN;
-            delete childEnv.CLAUDE_CODE_OAUTH_TOKEN;
-            log(
-              `[bg-respawn] ATOMIC: session ${session.id} had lone cr_ key, no per-session token — deleted (keychain file fallback)`,
-            );
-          }
-        }
-      }
+    delete childEnv.ANTHROPIC_BASE_URL;
+    delete childEnv.ANTHROPIC_API_BASE;
+    delete childEnv.ANTHROPIC_API_KEY;
+    delete childEnv.ANTHROPIC_AUTH_TOKEN;
+    const effectiveEnvToken = String(childEnv.CLAUDE_CODE_OAUTH_TOKEN || '');
+    if (effectiveEnvToken) {
+      selectedDirectToken = effectiveEnvToken;
+      directCredentialSource = 'session-oauth';
+    } else if (!selectedDirectToken) {
+      selectedDirectToken = activeKeychainAccessToken();
+      directCredentialSource = 'keychain';
+    }
+    if (!selectedDirectToken) {
+      preserveDeferredMarker(session.id);
+      log(`[bg-respawn] cannot fingerprint intended direct credential for ${session.id}; deferring retry`);
+      return false;
     }
 
-    if (!crsActive) {
-      delete childEnv.ANTHROPIC_BASE_URL;
-      delete childEnv.ANTHROPIC_API_BASE;
-      delete childEnv.ANTHROPIC_API_KEY;
-      delete childEnv.ANTHROPIC_AUTH_TOKEN;
-      const effectiveEnvToken = String(childEnv.CLAUDE_CODE_OAUTH_TOKEN || '');
-      if (effectiveEnvToken && !effectiveEnvToken.startsWith('cr_')) {
-        selectedDirectToken = effectiveEnvToken;
-        directCredentialSource = 'session-oauth';
-      } else if (!selectedDirectToken) {
-        selectedDirectToken = activeKeychainAccessToken();
-        directCredentialSource = 'keychain';
-      }
-      if (!selectedDirectToken) {
-        preserveDeferredMarker(session.id);
-        log(`[bg-respawn] cannot fingerprint intended direct credential for ${session.id}; deferring retry`);
-        return false;
-      }
-    }
-    const expectedRoute = crsActive
-      ? {
-          mode: 'crs',
-          baseUrl: crsBaseUrl,
-          credentialSource: 'crs-relay',
-          credentialFingerprint: routeCredentialFingerprint(crsRelayKey),
-          settings: join(homedir(), '.claude', 'crs-session-settings.json'),
-        }
-      : {
-          mode: 'direct',
-          baseUrl: null,
-          credentialSource: directCredentialSource,
-          credentialFingerprint: routeCredentialFingerprint(selectedDirectToken),
-          settings: null,
-        };
+    const expectedRoute = {
+      mode: 'direct',
+      baseUrl: null,
+      credentialSource: directCredentialSource,
+      credentialFingerprint: routeCredentialFingerprint(selectedDirectToken),
+      settings: null,
+    };
     childEnv.CLAUDE_OPS_EXPECTED_ROUTE = JSON.stringify(expectedRoute);
 
-    // ── RESPAWN-FLAG RECONCILIATION (durable: base+token can't separate) ─────
-    // `--settings crs-session-settings.json` injects ANTHROPIC_BASE_URL=CRS at
-    // process startup, which childEnv stripping cannot undo. Make the allowlist
-    // the SOLE authority for CRS routing: add the CRS settings flag iff crsActive,
-    // remove it otherwise. Persisted to state.json so `claude respawn` re-reads it.
+    // A relay session-settings overlay passed via --settings survives a respawn
+    // because Claude Code re-reads it at startup. Drop it from the persisted
+    // flags so an upgraded machine stops re-applying it.
     try {
       const originalFlags = Array.isArray(state.respawnFlags) ? state.respawnFlags : null;
       const flags = originalFlags ? normalizeClaudeModelArgs(originalFlags) : null;
       if (flags) {
-        const isCrsSettingsVal = (v) => typeof v === 'string' && v.endsWith('crs-session-settings.json');
-        const hasCrsSettings = flags.some((f, i) => f === '--settings' && isCrsSettingsVal(flags[i + 1]));
+        const isLegacySettingsVal = (v) => typeof v === 'string' && v.endsWith(LEGACY_SESSION_SETTINGS_SUFFIX);
         let mutated = flags.some((flag, index) => flag !== originalFlags[index]);
-        if (!crsActive && hasCrsSettings) {
-          for (let i = flags.length - 1; i >= 0; i--) {
-            if (flags[i] === '--settings' && isCrsSettingsVal(flags[i + 1])) {
-              flags.splice(i, 2);
-              mutated = true;
-            }
+        for (let i = flags.length - 1; i >= 0; i--) {
+          if (flags[i] === '--settings' && isLegacySettingsVal(flags[i + 1])) {
+            flags.splice(i, 2);
+            mutated = true;
+            log(`[bg-respawn] session ${session.id}: removed --settings relay overlay from respawnFlags`);
           }
-          log(
-            `[bg-respawn] RECONCILE: session ${session.id} not CRS-active — removed --settings crs-session-settings.json from respawnFlags`,
-          );
-        } else if (crsActive && !hasCrsSettings) {
-          const settingsPath = join(homedir(), '.claude', 'crs-session-settings.json');
-          applyCrsSessionSettings({ baseUrl: crsBaseUrl, key: crsRelayKey });
-          flags.push('--settings', settingsPath);
-          mutated = true;
-          log(
-            `[bg-respawn] RECONCILE: session ${session.id} CRS-active — added --settings ${settingsPath} to respawnFlags`,
-          );
-        } else if (crsActive) {
-          applyCrsSessionSettings({ baseUrl: crsBaseUrl, key: crsRelayKey });
         }
         if (mutated) {
           state.respawnFlags = flags;
@@ -739,7 +531,7 @@ export function doRespawn(session, log, opts = {}) {
         appendFileSync(LOGP, `[${new Date().toISOString()}] ${session.id}: ${respawnOut.slice(0, 2000)}\n`);
       } catch {}
     }
-    if (!respawnStateCoherent(stateFile, crsActive)) {
+    if (!respawnStateCoherent(stateFile)) {
       preserveDeferredMarker(session.id);
       log(`[bg-respawn] respawn state verification failed for ${session.id}; deferring retry`);
       return false;
