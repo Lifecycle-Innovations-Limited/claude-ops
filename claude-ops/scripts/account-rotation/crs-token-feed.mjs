@@ -16,7 +16,7 @@
 import { readFileSync, appendFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { execSync, spawnSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { foreignActiveKeys } from './account-leases.mjs';
 import { assertCrsInvariant } from './route-state.mjs';
 import { acquireRefreshLock, claimRefreshPace } from './crs-refresh-lock.mjs';
@@ -108,12 +108,20 @@ async function oauthRefresh(refreshToken) {
 async function crsLogin(crsBase, crsContainer, adminUser = 'cradmin') {
   let pw = '';
   try {
-    pw = execSync(
-      `docker inspect ${crsContainer} --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^ADMIN_PASSWORD=//p'`,
-      { timeout: 8000 },
-    )
-      .toString()
-      .trim();
+    // The container name came from config/env and used to be interpolated into a shell
+    // pipeline. Run docker directly with argv and do the ADMIN_PASSWORD extraction in JS,
+    // so no part of this can be interpreted as shell syntax.
+    const envDump = execFileSync(
+      'docker',
+      ['inspect', crsContainer, '--format', '{{range .Config.Env}}{{println .}}{{end}}'],
+      { timeout: 8000, encoding: 'utf8' },
+    );
+    for (const line of envDump.split('\n')) {
+      if (line.startsWith('ADMIN_PASSWORD=')) {
+        pw = line.slice('ADMIN_PASSWORD='.length).trim();
+        break;
+      }
+    }
   } catch {}
   if (!pw) return null;
   if (!process.env.CRS_ADMIN_PASSWORD) process.env.CRS_ADMIN_PASSWORD = pw;

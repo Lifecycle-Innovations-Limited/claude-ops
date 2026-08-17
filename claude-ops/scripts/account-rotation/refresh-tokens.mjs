@@ -19,7 +19,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync, renameSync } f
 import { join, dirname } from 'path';
 import { userInfo } from 'os';
 import { fileURLToPath } from 'url';
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { fetchWithProxyFallback } from './proxy-helper.mjs';
 import { acquireRefreshLock, claimRefreshPace } from './crs-refresh-lock.mjs';
 import { readRotationToken, reconcileRemoteRotationVault, writeRotationTokenCoordinated } from './rotation-vault.mjs';
@@ -73,7 +73,14 @@ function tokenService(account) {
 }
 
 function readKeychain(svc = KEYCHAIN_SERVICE, acct = KEYCHAIN_ACCOUNT) {
-  const out = execSync(`security find-generic-password -s "${svc}" -a "${acct}" -g 2>&1`, { timeout: 5000 }).toString();
+  // `security -g` writes the password to stderr, not stdout, which is why this used to
+  // shell out with `2>&1`. spawnSync exposes both streams without a shell, so the
+  // service/account names can no longer be interpreted as shell syntax.
+  const res = spawnSync('security', ['find-generic-password', '-s', svc, '-a', acct, '-g'], {
+    timeout: 5000,
+    encoding: 'utf8',
+  });
+  const out = `${res.stdout || ''}${res.stderr || ''}`;
   const m = out.match(/^password: "?(.*?)"?$/m);
   if (!m) throw new Error(`No keychain entry ${svc}/${acct}`);
   return m[1].replace(/\\"/g, '"');
@@ -110,11 +117,16 @@ function syncStoredTokenToCrs(account) {
   if (process.env.CLAUDE_ROTATION_SKIP_CRS_SYNC === '1') return;
   const key = accountKey(account);
   try {
-    const out = execSync(`node "${join(__dirname, 'sync-crs-account.mjs')}" ${JSON.stringify(key)} 2>&1`, {
+    // JSON.stringify only adds double quotes, and $(...) is still expanded inside shell
+    // double quotes, so the account key must never reach a shell. Pass it as an argv entry.
+    const res = spawnSync('node', [join(__dirname, 'sync-crs-account.mjs'), key], {
       timeout: 45_000,
-    })
-      .toString()
-      .trim();
+      encoding: 'utf8',
+    });
+    if (res.status !== 0) {
+      throw new Error(`${res.stderr || res.stdout || `exit ${res.status}`}`.trim());
+    }
+    const out = `${res.stdout || ''}${res.stderr || ''}`.trim();
     log(out.split('\n').slice(-1)[0] || `${key}: CRS sync complete`);
   } catch (err) {
     log(`${key}: ⚠ CRS sync failed — ${String(err.message || err).slice(0, 180)}`);
