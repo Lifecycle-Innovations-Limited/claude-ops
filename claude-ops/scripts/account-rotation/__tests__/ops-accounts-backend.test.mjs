@@ -11,7 +11,10 @@ assert(resolveAccountsBackend({ env: {} }) === 'auto', 'default auto');
 assert(resolveAccountsBackend({ env: { OPS_ACCOUNTS_BACKEND: 'local' } }) === 'local', 'local');
 assert(resolveAccountsBackend({ env: { OPS_ACCOUNTS_BACKEND: 'seat-state' } }) === 'local', 'seat-state');
 assert(resolveAccountsBackend({ env: { OPS_ACCOUNTS_BACKEND: 'CLIPROXY' } }) === 'cliproxy', 'cliproxy case');
-assert(resolveAccountsBackend({ env: { OPS_ACCOUNTS_BACKEND: 'crs' } }) === 'local', 'retired relay value falls back to local');
+assert(
+  resolveAccountsBackend({ env: { OPS_ACCOUNTS_BACKEND: 'crs' } }) === 'local',
+  'retired relay value falls back to local',
+);
 assert(resolveAccountsBackend({ env: {}, cfgBackend: 'file' }) === 'local', 'cfg file');
 assert(resolveAccountsBackend({ env: { OPS_ACCOUNTS_BACKEND: 'auto' } }) === 'auto', 'explicit auto');
 

@@ -500,7 +500,6 @@ export function doRespawn(session, log, opts = {}) {
       log(`[bg-respawn] RECONCILE: failed to reconcile respawnFlags for ${session.id}: ${err.message}`);
     }
 
-
     let respawnOut = '';
     try {
       respawnOut = execFileSync(claudeBin(), ['respawn', String(session.id)], {
