@@ -2,8 +2,11 @@
 
 Install, update, and verify the [claude-ops](https://github.com/Lifecycle-Innovations-Limited/claude-ops) plugin across Claude Code, Codex, Gemini CLI, OpenClaw, Hermes, and OpenCode from one command.
 
-```
-npx claude-ops-installer install
+```bash
+git clone https://github.com/Lifecycle-Innovations-Limited/claude-ops.git
+cd claude-ops/installer
+npm install
+node bin/claude-ops-installer.mjs install
 ```
 
 ## What it does
@@ -53,12 +56,12 @@ version: 1
 source:
   type: git
   url: https://github.com/Lifecycle-Innovations-Limited/claude-ops.git
-  ref: v2.43.0
+  ref: v3.4.2
 
 agents:
   claude:    { enabled: true }
   codex:     { enabled: true,  path: ~/.codex/skills }
-  gemini:    { enabled: false, path: ~/.gemini/skills }
+  gemini:    { enabled: true,  path: ~/.gemini/skills }
   openclaw:  { enabled: true,  path: ~/.openclaw/skills }
   hermes:    { enabled: true,  flat: ~/.hermes/skills, nested: ~/.hermes/skills/ops }
   opencode:  { enabled: false, path: ~/.config/opencode/skills }

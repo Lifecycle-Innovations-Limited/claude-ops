@@ -8,6 +8,7 @@ import { loadConfig } from "../src/config.mjs";
 import { listSourceSkills, listSourceBin } from "../src/source.mjs";
 import { planBinLinks, applyBinLinks } from "../src/bin.mjs";
 import { planMirror } from "../src/mirror.mjs";
+import { planAll } from "../src/dispatch.mjs";
 import {
   loadManifest,
   saveManifest,
@@ -34,6 +35,13 @@ assert(
   Object.keys(cfg.agents).length === 6,
   `config has 6 agents (got ${Object.keys(cfg.agents).length})`,
 );
+// Shape, not a literal: pinning the exact tag here means every release breaks
+// this test.
+assert(
+  /^v\d+\.\d+\.\d+$/.test(cfg.source.ref),
+  `default source ref is a release tag (got ${cfg.source.ref})`,
+);
+assert(cfg.agents.gemini.enabled, "gemini enabled by default");
 
 // 2. Source listing — skills dir present
 const skills = listSourceSkills(SRC);
@@ -101,6 +109,34 @@ try {
   assert(
     fs.existsSync(path.join(scratch, "bin", "ops-inbox-scan")),
     "ops-inbox-scan binstub present in scratch",
+  );
+
+  // 4. Detection-gated planning skips undetected agents by default.
+  const detectedPath = path.join(scratch, "detected-agent");
+  const undetectedPath = path.join(scratch, "undetected-agent");
+  const installPlan = planAll({
+    cfg: { bin: null },
+    srcDir: SRC,
+    agents: {
+      codex: { installed: true, skillsPath: detectedPath },
+      openclaw: { installed: false, skillsPath: undetectedPath },
+    },
+    force: false,
+    dryRun: true,
+    skipUndetected: true,
+  });
+  assert(
+    installPlan.agents.openclaw?.skipped &&
+      installPlan.agents.openclaw.reason === "not detected",
+    "undetected agent is skipped during install planning",
+  );
+  assert(
+    fs.existsSync(detectedPath),
+    "detected agent target directory is prepared",
+  );
+  assert(
+    !fs.existsSync(undetectedPath),
+    "undetected agent target directory is not created",
   );
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });

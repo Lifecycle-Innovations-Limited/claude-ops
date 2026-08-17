@@ -38,11 +38,22 @@ function pickAgents(cfg, onlyNames) {
   return out;
 }
 
-function planAll({ cfg, srcDir, agents, force, dryRun }) {
+export function planAll({
+  cfg,
+  srcDir,
+  agents,
+  force,
+  dryRun,
+  skipUndetected = false,
+}) {
   const skillNames = listSourceSkills(srcDir);
   const binNames = listSourceBin(srcDir);
   const plan = { agents: {}, bin: null, errors: [] };
   for (const [name, a] of Object.entries(agents)) {
+    if (skipUndetected && !a.installed) {
+      plan.agents[name] = { skipped: true, reason: "not detected" };
+      continue;
+    }
     if (!a.skillsPath) {
       plan.agents[name] = { skipped: true, reason: "no skillsPath" };
       continue;
@@ -188,6 +199,7 @@ export async function runInstall(flags) {
     agents,
     force: !!flags.force,
     dryRun: !!flags.dryRun,
+    skipUndetected: !flags.agents || flags.agents.length === 0,
   });
   applyAll({ plan, dryRun: !!flags.dryRun, cfg });
   emit(plan, !!flags.json);

@@ -94,7 +94,10 @@ Per-repo budget caps (default 3/hour), single-flight locks, and content-hash ded
 ### Cross-CLI install (Claude Code + Codex + Gemini + OpenClaw + Hermes + OpenCode)
 
 ```bash
-npx claude-ops-installer install
+git clone https://github.com/Lifecycle-Innovations-Limited/claude-ops.git
+cd claude-ops/installer
+npm install
+node bin/claude-ops-installer.mjs install
 ```
 
 One command mirrors upstream skills + binstubs into every detected CLI's expected layout from a single central config (`~/.config/claude-ops-installer/config.yaml`). See [`installer/README.md`](./installer/README.md) for the schema, supported agents, and `verify` / `doctor` / `update` / `uninstall` subcommands.
