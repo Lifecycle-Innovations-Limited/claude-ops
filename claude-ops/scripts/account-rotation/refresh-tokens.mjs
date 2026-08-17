@@ -122,7 +122,6 @@ function writeStoredToken(account, json, capability) {
   return writeRotationTokenCoordinated(account, json, capability);
 }
 
-
 function readState() {
   try {
     return JSON.parse(readFileSync(STATE_PATH, 'utf8'));

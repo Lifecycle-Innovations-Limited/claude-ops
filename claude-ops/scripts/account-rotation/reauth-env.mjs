@@ -106,10 +106,7 @@ export function buildReauthChildEnv(opts = {}) {
  */
 export function resolveReauthTimeoutMs(env = process.env, cfg = {}) {
   return Number(
-    env.CLAUDE_REAUTH_TIMEOUT_MS ??
-      env.CRS_MAGIC_LINK_ROTATE_TIMEOUT_MS ??
-      cfg.magicLinkRotateTimeoutMs ??
-      20 * 60_000,
+    env.CLAUDE_REAUTH_TIMEOUT_MS ?? env.CRS_MAGIC_LINK_ROTATE_TIMEOUT_MS ?? cfg.magicLinkRotateTimeoutMs ?? 20 * 60_000,
   );
 }
 
