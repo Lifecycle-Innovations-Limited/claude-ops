@@ -4,7 +4,6 @@
   "_account_schema_example": {
     "email": "user@example.com",
     "label": "optional-disambiguator",
-    "crsAccountName": "pool-example",
     "orgName": "Required Workspace or Personal Account Name",
     "orgUuid": "required-organization-uuid",
     "dashlaneTokenPath": "dl://claude-max-user@example.com/password",
@@ -29,38 +28,14 @@
   "autoRotate": true,
   "refreshSession": false,
   "notifyOnRotation": true,
-  "crs": {
-    "_comment": "Optional: claude-relay-service (CRS) pool integration. Off by default — set enabled=true and install via scripts/install-crs-priority-agent.sh. Map each rotator account to its CRS row with crsAccountName on the account entry (or crs.nameByVaultKey). Admin password is NOT stored here: set $CRS_ADMIN_PASSWORD or credential-store CRS-Admin-<adminUser>.",
-    "enabled": false,
-    "policy": "conservative",
-    "_policy_note": "conservative (default) deprioritizes on utilization/session warnings; max-out keeps accounts schedulable until genuine rate-limit or overload (util % is telemetry only). Override with $CRS_POLICY.",
-    "baseUrl": "http://127.0.0.1:3005",
+  "rotation": {
+    "_comment": "Optional rotation tunables. Multi-account seats and OAuth seat management run through CLIProxyAPI; this block holds only the rotator's own settings. A pre-existing \"crs\" block from an older install is still read.",
     "fileVaultPath": "~/.claude/.credentials.json",
-    "containerName": "crs-claude-relay-1",
-    "adminUser": "cradmin",
-    "adminPasswordEnv": "CRS_ADMIN_PASSWORD",
-    "policy": "conservative",
-    "nameByVaultKey": {
-      "user@example.com": "pool-example"
-    },
-    "off5h": 90,
-    "off7d": 95,
-    "on5h": 70,
-    "on7d": 85,
-    "floor": 3,
-    "freshMinutes": 15,
-    "_thresholds_note": "Legacy conservative thresholds (off/on/floor) apply only when policy=conservative. Default max-out policy keeps accounts schedulable until genuine rate-limit or overload; utilization % is telemetry only. freshMinutes = max age of claudeUsage trusted for secondary signals.",
-    "logDir": null,
-    "logTzOffset": "+00:00",
-    "_logDir_note": "Optional: crs-429-cooldown.mjs reads claude-relay-error-<date>.log from here (absolute path, no ~ expansion) for its optional lead signal. Defaults to <plugin-data-dir>/account-rotation/crs-logs if unset — point it at your CRS deployment's actual log directory. logTzOffset must match the timezone your CRS instance timestamps logs in.",
-    "errorLogWindowMs": 300000,
-    "errorLogCooldownMs": 300000,
-    "_errorLog_note": "errorLogWindowMs: how far back crs-429-cooldown.mjs scans the log for a 429 hit. errorLogCooldownMs: how long a log-only hit holds an account before rateLimitStatus itself would (default 5m each).",
     "stateDir": null,
-    "_stateDir_note": "Optional absolute path (no ~ expansion) for crs-429-cooldown.mjs state/manual-disable files (crs-429-state.json, crs-manual-disable.json). Defaults to <plugin-data-dir>/account-rotation if unset.",
-    "manualDisableEnabled": true,
-    "cooldownEnabled": false,
-    "_cooldownEnabled_note": "Off by default (or $CRS_COOLDOWN_ENABLED=1). Turns on crs-429-cooldown.mjs, a fast (1min-cadence) reconciler that holds an account out of rotation only on a real rateLimitStatus.isRateLimited=true from CRS (plus the optional error-log lead signal under logDir/logTzOffset above) — never on utilization. Own state file at <stateDir>/crs-429-state.json.",
+    "_stateDir_note": "Optional absolute path (no ~ expansion) for reconciler state files. Defaults to <plugin-data-dir>/account-rotation if unset.",
+    "proxyEnabled": false,
+    "proxyProvider": "2captcha,brightdata",
+    "_proxy_note": "Per-account egress proxy for the captcha cascade. Set CLAUDE_ROTATION_PROXY_ENABLED=1 with EFG_PROXY_URL or BRIGHTDATA_PROXY_URL, or configure providers here. Credentials never live in this file.",
     "enableMagicLinkRecovery": false,
     "_enableMagicLinkRecovery_note": "Deprecated and fail-closed. Unattended reauthentication is disabled; use the signed staged-enrollment workflow. No environment variable re-enables direct auth writes.",
     "magicLinkRetryCooldownMs": 21600000,
@@ -70,6 +45,6 @@
     "magicLinkHeaded": true,
     "_magicLinkHeaded_note": "Pass CLAUDE_ROT_HEADED=1 to the rotate child (default true). Interactive captcha walls need a headed browser on CLAUDE_DESKTOP_DISPLAY. Override with $CLAUDE_ROT_HEADED=0 only for pure headless experiments.",
     "magicLinkRotateTimeoutMs": 1200000,
-    "_magicLinkRotateTimeoutMs_note": "Wall-clock ms before the autoloop kills a stuck rotate child (default 20m). Override with $CRS_MAGIC_LINK_ROTATE_TIMEOUT_MS. Captcha cascade (visual + desktop-act) needs more room than a pure token refresh."
+    "_magicLinkRotateTimeoutMs_note": "Wall-clock ms before the autoloop kills a stuck rotate child (default 20m). Override with $CLAUDE_REAUTH_TIMEOUT_MS. Captcha cascade (visual + desktop-act) needs more room than a pure token refresh."
   }
 }

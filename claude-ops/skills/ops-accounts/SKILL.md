@@ -1,7 +1,7 @@
 ---
 name: ops-accounts
-description: Multi-provider AI account manager (Claude, Grok/xAI, OpenAI/Codex, Factory, Cursor). Status, setup, switch, refresh, reauth, util, optional CRS/LB. Canonical replacement for /ops:rotate and /ops:rotate-setup (those remain aliases).
-argument-hint: '[status|list|setup|switch|refresh|reauth|util|rotate-now|crs|crs-tick|help] [provider] [args…]'
+description: Multi-provider AI account manager (Claude, Grok/xAI, OpenAI/Codex, Factory, Cursor). Status, setup, switch, refresh, reauth, util, and the CLIProxyAPI pool. Canonical replacement for /ops:rotate and /ops:rotate-setup (those remain aliases).
+argument-hint: '[status|list|setup|switch|refresh|reauth|util|rotate-now|seats|gateway|help] [provider] [args…]'
 allowed-tools:
   - Bash
   - Read
@@ -25,7 +25,7 @@ for every provider:
 | Refresh tokens | `refresh` |
 | Unattended reauth | `reauth` |
 | Utilization / quota | `util` |
-| Optional Claude LB (CRS or future gateway) | `crs`, `crs-tick` |
+| Pooled seats across accounts | CLIProxyAPI (see `/ops:ops-fleet`) |
 
 **Aliases (compat):** `/ops:rotate` → this skill (Claude-focused shortcuts).  
 `/ops:rotate-setup` → `setup` (wizard). `/ops:account` → same as this skill.
@@ -35,12 +35,12 @@ for every provider:
 | Provider | Engine | Reauth | Util |
 |----------|--------|--------|------|
 | Claude | `scripts/account-rotation/rotate.mjs` + staged enrollment | signed stage/activate only | 5h/7d |
-| Grok | slots + `grok-cli-auth-proxy` (+ optional CRS hop) | device-code + Google (dcli); residential egress cascade | weekly / 429 |
+| Grok | slots + `grok-cli-auth-proxy` | device-code + Google (dcli); residential egress cascade | weekly / 429 |
 | OpenAI / Codex | `codex-rotate` when present | OAuth bridge | usage best-effort |
 | Factory | adapter TBD / quota-feed seeds | native | quota-feed patterns |
 | Cursor | adapter TBD | browser/device OAuth | plan limits if available |
 
-**CRS is optional.** For Grok, CRS is only a thin hop to the SuperGrok OAuth proxy — multi-seat RR lives on the proxy, not a CRS account table. See `docs/ops/OPS-ACCOUNTS-VISION.md` (CRS cherry-pick / no-CRS path).
+**CLIProxyAPI is the only supported multi-account path.** It holds one OAuth seat file per account and answers locally; `rotate.mjs` writes those seat files as part of a rotation. The earlier relay backend (claude-relay-service) has been removed — it required a static bearer token in `settings.json` for every session. For Grok, multi-seat round-robin lives on `grok-cli-auth-proxy`.
 
 ## Router (`bin/ops-accounts`)
 
@@ -62,20 +62,20 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(ls -d "$HOME/.claude/plugins/cache/ops-mark
 | `reauth grok <email>` | Device reauth with residential cascade env |
 | `setup` / `setup claude` | Claude direct auth is disabled; staged enrollment required |
 | `setup grok` | Add/reauth SuperGrok seat |
-| `crs` / `crs-tick` | Optional Claude CRS pool status / one tick |
-| `seats` | Local multi-provider seat-state (no CRS) |
+| `seats` | Local multi-provider seat-state |
+| `gateway` | Local OpenAI-compat gateway: status/start/path/self-test/config |
 
 ## Claude setup / OAuth
 
 When `$ARGUMENTS` is `setup`, `setup claude`, or this skill is invoked via
 **ops-rotate-setup** alias: follow the full wizard in
-`skills/ops-rotate-setup/SKILL.md` (Steps 1–5, CRS optional 4.4–4.7). That file
+`skills/ops-rotate-setup/SKILL.md`. That file
 remains the detailed Claude setup procedure; this skill is the entrypoint.
 
-Claude day-2 ops (`status`/`rotate-now`/`list`/`reauth`/`crs`) also match
+Claude day-2 ops (`status`/`rotate-now`/`list`/`reauth`) also match
 `skills/ops-rotate/SKILL.md` — treat that as Claude detail appendix.
 
-## Local seat-state (no CRS)
+## Local seat-state
 
 ```bash
 "$PLUGIN_ROOT/bin/ops-accounts" seats status
@@ -87,7 +87,7 @@ File: `$CLAUDE_PLUGIN_DATA_DIR/account-rotation/seat-state.json` (or `OPS_ACCOUN
 
 ## Grok notes
 
-1. CLI models often use `base_url` → CRS `/grok/v1` → **host OAuth proxy** → SuperGrok seats.  
+1. CLI models often use `base_url` → **host OAuth proxy** → SuperGrok seats.  
 2. `grok-rotate` / `auth.json` is the SuperGrok seat set; keep **auth-slots** in sync after reauth.  
 3. Reauth egress: EFG SOCKS (`GROK_REAUTH_SOCKS`) → Bright Data tiers via  
    `scripts/account-rotation/grok-reauth-egress.sh` (residential cascade).  
@@ -98,11 +98,11 @@ File: `$CLAUDE_PLUGIN_DATA_DIR/account-rotation/seat-state.json` (or `OPS_ACCOUN
 1. Never print tokens, cookies, OTP codes, or vault dumps.  
 2. Never write real emails into committed files.  
 3. Prefer `bin/ops-accounts` over ad-hoc host paths.  
-4. Missing CRS is not a failure.  
-5. Dead RT → `reauth`, not “install CRS.”  
+4. A missing CLIProxyAPI is not a failure — single-seat rotation works without it.  
+5. Dead RT → `reauth`, never a relay install.  
 6. Background long OAuth (Rule 4).  
 
 ## Phase map
 
-0 contract + this skill · 1 Claude parity · 2 CRS optional · 3 Grok complete ·  
-4 Codex+Factory · 5 Cursor · 6 companions · 7 host cutover · 8 gateway (no CRS)
+0 contract + this skill · 1 Claude parity · 2 CLIProxyAPI pool · 3 Grok complete ·  
+4 Codex+Factory · 5 Cursor · 6 companions · 7 host cutover · 8 local gateway

@@ -7,7 +7,7 @@
 #   T3: CLAUDE_OPS_USE_CREDIT_POOL=1      -> calls `node .../claude-p-as.mjs --` with sanitized args
 #   T4: CLAUDE_OPS_USE_CREDIT_POOL=1 but wrapper missing -> falls back to `claude`, exits non-zero
 #       (warning printed to stderr, direct claude called)
-#   T5: direct invocation strips API-key env so CRS auth token wins
+#   T5: direct invocation strips API-key env so the OAuth credential wins
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -37,23 +37,23 @@ const env = buildReauthChildEnv({
     PATH: '/usr/bin',
     CLAUDE_DESKTOP_DISPLAY: ':5',
   },
-  crs: {},
+  rotation: {},
 });
 assert(env.CLAUDE_ROT_HEADED === '1', 'headed default');
 assert(env.CLAUDE_DESKTOP_DISPLAY === ':5', 'seat');
 assert(env.DESKTOP_ACT_DISPLAY === ':5', 'desktop-act seat');
 assert(env.CLAUDE_ROT_STEAL_LOCK === '0', 'no steal');
 assert(env.CLAUDE_ROT_SKIP_TOKEN_SOLVERS === '0', 'solvers on');
-assert(env.CRS_MAGIC_LINK_DISPATCH === 'setup', 'default dispatch');
+assert(env.CLAUDE_REAUTH_DISPATCH === 'setup', 'default dispatch');
 
 const magic = buildReauthChildEnv({
-  env: { CRS_MAGIC_LINK_DISPATCH: 'magic-link', HOME: '/tmp/x', PATH: '/bin' },
+  env: { CLAUDE_REAUTH_DISPATCH: 'magic-link', HOME: '/tmp/x', PATH: '/bin' },
 });
-assert(magic.CRS_MAGIC_LINK_DISPATCH === 'magic-link', 'dispatch override');
+assert(magic.CLAUDE_REAUTH_DISPATCH === 'magic-link', 'dispatch override');
 
 // timeout
 assert(resolveReauthTimeoutMs({}) === 20 * 60_000, 'default 20m');
-assert(resolveReauthTimeoutMs({ CRS_MAGIC_LINK_ROTATE_TIMEOUT_MS: '90000' }) === 90000, 'env timeout');
+assert(resolveReauthTimeoutMs({ CLAUDE_REAUTH_TIMEOUT_MS: '90000' }) === 90000, 'env timeout');
 
 // success markers
 assert(reauthOutputLooksSuccessful('{"ok": true}'), 'json ok');

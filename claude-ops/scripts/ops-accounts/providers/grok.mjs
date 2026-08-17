@@ -38,7 +38,7 @@ export async function listAccounts(ctx) {
           tokenState,
           active: false,
           utilization: null,
-          crs: { path: 'http://127.0.0.1:31845/v1', note: 'SuperGrok local proxy' },
+          proxy: { path: 'http://127.0.0.1:31845/v1', note: 'SuperGrok local proxy' },
           lastError: null,
           reauth: {
             engine: 'grok-oauth-reauth',

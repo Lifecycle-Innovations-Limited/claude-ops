@@ -1,6 +1,26 @@
 ## Unreleased
 
 - fix(ops-mac): the application firewall is opt-in. `/ops:mac fix` no longer offers to enable it and no longer lists it as a recommendation; the audit reports its state and stops. Turning the firewall on breaks local listeners (dev servers, MCP proxies, VNC, tunnels) and the user rarely connects the breakage to a `fix` run they asked for other reasons. `socketfilterfw` now runs only when the user asks for the firewall by name in that turn.
+- **Removed the CRS relay backend.** claude-relay-service handed every session a
+  static `cr_` bearer token pinned into `settings.json`, and the plugin had to keep
+  base URL and token in lockstep across respawns, settings overlays and daemons.
+  CLIProxyAPI is now the only supported path for multi-account rotation and OAuth
+  seat management: it holds one OAuth seat file per account, and `rotate.mjs`
+  already writes those files during a rotation.
+  Deleted: the `crs-*` daemons in `scripts/account-rotation/`, all of
+  `scripts/crsproxy-reauth/`, the three `install-crs-*.sh` installers, the five
+  `crs-*` systemd units, the `com.claude-ops.crs-*` plists, and
+  `docs/runbooks/crs-full-tuning-plan.md`.
+  Renamed, same behaviour: `crs-pool-config.mjs` → `rotation-config.mjs`,
+  `crs-refresh-lock.mjs` → `refresh-lock.mjs`, `crs-reconciler-state.mjs` →
+  `reconciler-state.mjs`.
+  Migration on an existing machine: route mode `crs-oauth` is read as `oauth`, a
+  `crs` config block is read as the `rotation` block, `CRS_REFRESH_*` env names
+  still work, and reconciler state files fall back to their old names. Background
+  respawn strips a leftover relay base URL, `cr_` token and `--settings` overlay
+  rather than re-applying them. `claude-stack doctor` reports a leftover pair as
+  `legacy_relay_env`; `claude-stack route --mode oauth` clears it.
+  `ops-accounts crs` and `crs-tick` now print where rotation lives and exit 2.
 - fix(whatsapp): `apply-patches.py` Fix Q no longer appends a duplicate `/api/app_state_status` route. The sentinel gated on the comment text, which Fix Y later rewrote to `Fix Q/Y`, so on any tree that had taken Fix Y the check missed and a second `http.HandleFunc` for the same path was added. Go panics at startup on a duplicate pattern, so the bridge died on the next `go build`. The sentinel is now the handler registration itself, which is stable across variants.
 - docs(whatsapp): stop assuming the MCP server is named `whatsapp`. Multi-account installs run one bridge and one server per account (`whatsapp-<label>`) and have no plain `mcp__whatsapp__*`, so every hardcoded reference failed with an unknown tool. Adds CLAUDE.md Rule 8 (resolve the name at runtime, pick the account deliberately, never send from the wrong number, Rule 6 applies to every variant) and points ops-inbox, ops-comms, comms-scanner, and `scripts/whatsapp/ENDPOINTS.md` at it. Also warns that `allowed-tools` entries are exact strings and that host send-gate hook matchers pinned to the literal `mcp__whatsapp__send_message` silently stop firing when an account is renamed or added.
 - Security: replace direct/unattended Claude browser reauthentication with short-lived HMAC-approved, single-use staged enrollment and atomic rollback activation; legacy reauth wrappers now fail closed.

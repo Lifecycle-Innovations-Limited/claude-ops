@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 /**
- * crs-pool-config.mjs — shared CRS + rotation config resolution for public installs.
+ * rotation-config.mjs — shared rotation config resolution for public installs.
  *
- * Vault key ↔ CRS account name mapping is NEVER hardcoded in repo scripts.
- * Configure per account via `crsAccountName` and/or optional `crs.nameByVaultKey`.
+ * Reads the rotator config file and exposes the generic settings the rotation
+ * scripts need: seat vault path, credential-store lookup, and the optional
+ * per-account egress proxy descriptor.
+ *
+ * Multi-account seats live in CLIProxyAPI. There is no relay pool here.
+ * The settings block is `rotation`; a legacy `crs` block is still read so an
+ * existing config keeps working, but new configs should use `rotation`.
  */
 
 import { readFileSync, existsSync } from 'fs';
-import { execFileSync } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
@@ -19,12 +23,13 @@ const DATA_DIR =
 
 export const CONFIG_CANDIDATES = [
   process.env.CLAUDE_ROTATOR_CONFIG,
-  process.env.CRS_CONFIG,
   join(homedir(), '.claude', 'scripts', 'account-rotation', 'config.json'),
   join(DATA_DIR, 'account-rotation', 'config.json'),
   join(homedir(), '.claude', 'plugins', 'data', 'ops', 'account-rotation', 'config.json'),
   join(PLUGIN_ROOT, 'scripts', 'account-rotation', 'config.json'),
   join(__dirname, 'config.json'),
+  // Legacy env name kept last so an older install still resolves its config.
+  process.env.CRS_CONFIG,
 ].filter(Boolean);
 
 export function resolveConfigPath() {
@@ -38,71 +43,33 @@ export function resolveConfigPath() {
 
 export function loadRotationConfig() {
   const path = resolveConfigPath();
-  if (!path) return { crs: {}, accounts: [] };
+  if (!path) return { rotation: {}, accounts: [] };
   try {
-    return { crs: {}, accounts: [], ...JSON.parse(readFileSync(path, 'utf8')) };
+    return { rotation: {}, accounts: [], ...JSON.parse(readFileSync(path, 'utf8')) };
   } catch {
-    return { crs: {}, accounts: [] };
+    return { rotation: {}, accounts: [] };
   }
 }
 
 /**
- * @returns {{ nameByVaultKey: Record<string,string>, vaultKeyByCrsName: Record<string,string> }}
+ * The tunables block of the rotator config. `rotation` is the current key;
+ * `crs` is the legacy key an older install may still have on disk.
  */
-export function buildCrsNameMaps(config = loadRotationConfig()) {
-  const nameByVaultKey = {};
-  const vaultKeyByCrsName = {};
-
-  const overrides = config.crs?.nameByVaultKey;
-  if (overrides && typeof overrides === 'object') {
-    for (const [vaultKey, crsName] of Object.entries(overrides)) {
-      if (!vaultKey || !crsName) continue;
-      nameByVaultKey[vaultKey] = crsName;
-      if (!vaultKeyByCrsName[crsName]) vaultKeyByCrsName[crsName] = vaultKey;
-    }
-  }
-
-  for (const a of config.accounts || []) {
-    const crsName = a.crsAccountName || a.crsName;
-    if (!crsName) continue;
-    const keys = [];
-    if (a.email) keys.push(a.email);
-    if (a.label) keys.push(a.label);
-    for (const k of keys) {
-      if (!k) continue;
-      nameByVaultKey[k] = crsName;
-    }
-    if (!vaultKeyByCrsName[crsName]) {
-      vaultKeyByCrsName[crsName] = a.email || a.label || null;
-    }
-  }
-
-  for (const [vaultKey, crsName] of Object.entries(nameByVaultKey)) {
-    if (crsName && !vaultKeyByCrsName[crsName]) vaultKeyByCrsName[crsName] = vaultKey;
-  }
-
-  return { nameByVaultKey, vaultKeyByCrsName };
+export function rotationSection(config = loadRotationConfig()) {
+  const current = config?.rotation;
+  if (current && typeof current === 'object' && Object.keys(current).length) return current;
+  const legacy = config?.crs;
+  if (legacy && typeof legacy === 'object') return legacy;
+  return {};
 }
 
-export function crsBaseUrl(config = loadRotationConfig()) {
-  return process.env.CRS_BASE || config.crs?.baseUrl || 'http://127.0.0.1:3005';
-}
-
-export function crsFileVaultPath(config = loadRotationConfig()) {
-  const fromEnv = process.env.CRS_FILE_VAULT;
+/** Path to the OAuth seat vault the rotator reads and writes. */
+export function fileVaultPath(config = loadRotationConfig()) {
+  const fromEnv = process.env.CLAUDE_ROTATION_FILE_VAULT || process.env.CRS_FILE_VAULT;
   if (fromEnv) return fromEnv.replace(/^~(?=$|\/)/, homedir());
-  const fromCfg = config.crs?.fileVaultPath;
+  const fromCfg = rotationSection(config).fileVaultPath;
   if (fromCfg) return fromCfg.replace(/^~(?=$|\/)/, homedir());
   return join(homedir(), '.claude', '.credentials.json');
-}
-
-export function crsPolicy(config = loadRotationConfig()) {
-  const raw = String(process.env.CRS_POLICY || config.crs?.policy || 'conservative')
-    .trim()
-    .toLowerCase()
-    .replace(/_/g, '-');
-  if (raw === 'maxout' || raw === 'max-out') return 'max-out';
-  return 'conservative';
 }
 
 /** Candidate paths for the shared ops credential-store CLI (never hardcoded to one account/box). */
@@ -131,47 +98,6 @@ export function resolveCredentialStorePath() {
     if (existsSync(p)) return p;
   }
   return candidates[candidates.length - 1];
-}
-
-/**
- * Resolve the CRS admin password for HTTP basic auth against a self-hosted
- * claude-relay-service pool. Resolution order (first hit wins), none of it
- * ever hardcoded to one deployment:
- *   1. $CRS_ADMIN_PASSWORD
- *   2. the env var named by config.crs.adminPasswordEnv (or $CRS_ADMIN_PASSWORD_ENV)
- *   3. `docker inspect <container>` — reads ADMIN_PASSWORD out of a co-located
- *      Docker Compose CRS deploy's own container env
- *   4. the shared ops credential-store CLI, key `CRS-Admin-<adminUser>`
- * Returns null (never throws) if nothing resolves — callers decide whether that
- * means "skip this tick" or "hard error".
- */
-export function resolveCrsAdminPassword(config = loadRotationConfig(), opts = {}) {
-  if (process.env.CRS_ADMIN_PASSWORD) return process.env.CRS_ADMIN_PASSWORD;
-  const envName = config.crs?.adminPasswordEnv || process.env.CRS_ADMIN_PASSWORD_ENV;
-  if (envName && process.env[envName]) return process.env[envName];
-
-  const adminUser = opts.adminUser || process.env.CRS_ADMIN_USER || config.crs?.adminUser || 'cradmin';
-  const container = opts.container || process.env.CRS_CONTAINER || config.crs?.containerName || 'crs-claude-relay-1';
-  const execOpts = { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] };
-
-  try {
-    const out = execFileSync(
-      'docker',
-      ['inspect', container, '--format', '{{range .Config.Env}}{{println .}}{{end}}'],
-      execOpts,
-    );
-    const m = out.match(/^ADMIN_PASSWORD=(.+)$/m);
-    if (m?.[1]?.trim()) return m[1].trim();
-  } catch {}
-
-  try {
-    const cred = resolveCredentialStorePath();
-    const acct = process.env.CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT || process.env.USER || 'claude-ops';
-    const pw = execFileSync('bash', [cred, 'get', `CRS-Admin-${adminUser}`, acct], execOpts).trim();
-    if (pw) return pw;
-  } catch {}
-
-  return null;
 }
 
 export function vaultLookupKeysForEmail(email, accounts = []) {
@@ -293,12 +219,12 @@ function brightDataUsernameForAccount(rawUser, bright = {}, key, accountIndex = 
 }
 
 function proxyRoutingEnabled(config) {
+  const section = rotationSection(config);
   const raw = String(
     process.env.CLAUDE_ROTATION_PROXY_ENABLED ||
-      process.env.CRS_ACCOUNT_PROXY_ENABLED ||
-      firstEnvValue(['CLAUDE_ROTATION_PROXY_ENABLED', 'CRS_ACCOUNT_PROXY_ENABLED']) ||
-      config.crs?.proxyEnabled ||
-      config.crs?.proxy?.enabled ||
+      firstEnvValue(['CLAUDE_ROTATION_PROXY_ENABLED']) ||
+      section.proxyEnabled ||
+      section.proxy?.enabled ||
       '',
   )
     .trim()
@@ -307,12 +233,12 @@ function proxyRoutingEnabled(config) {
 }
 
 function proxyProviderOrder(config) {
+  const section = rotationSection(config);
   const raw = String(
     process.env.CLAUDE_ROTATION_PROXY_PROVIDER ||
-      process.env.CRS_ACCOUNT_PROXY_PROVIDER ||
-      firstEnvValue(['CLAUDE_ROTATION_PROXY_PROVIDER', 'CRS_ACCOUNT_PROXY_PROVIDER']) ||
-      config.crs?.proxyProvider ||
-      config.crs?.proxy?.provider ||
+      firstEnvValue(['CLAUDE_ROTATION_PROXY_PROVIDER']) ||
+      section.proxyProvider ||
+      section.proxy?.provider ||
       '2captcha,brightdata',
   );
   return raw
@@ -434,21 +360,21 @@ function efgProxyConfig(config = {}) {
   // default. Require explicit config or env; return null if neither is set so
   // callers treat it as "no EFG proxy configured" rather than silently pointing
   // at some other operator's network.
-  const url = config.url || firstEnvValue(['EFG_PROXY_URL', 'CRS_EFG_PROXY_URL']);
+  const url = config.url || firstEnvValue(['EFG_PROXY_URL']);
   if (url) {
     const parsed = parseProxyUrl(url);
     if (parsed?.host && parsed?.port) return parsed;
   }
 
-  const host = config.host || firstEnvValue(['EFG_PROXY_HOST', 'CRS_EFG_PROXY_HOST']);
-  const port = config.port || firstEnvValue(['EFG_PROXY_PORT', 'CRS_EFG_PROXY_PORT']);
+  const host = config.host || firstEnvValue(['EFG_PROXY_HOST']);
+  const port = config.port || firstEnvValue(['EFG_PROXY_PORT']);
   if (!host || !port) return null;
   return {
-    type: config.type || firstEnvValue(['EFG_PROXY_TYPE', 'CRS_EFG_PROXY_TYPE']) || 'http',
+    type: config.type || firstEnvValue(['EFG_PROXY_TYPE']) || 'http',
     host,
     port: Number(port),
-    username: config.username || firstEnvValue(['EFG_PROXY_USERNAME', 'CRS_EFG_PROXY_USERNAME']),
-    password: config.password || firstEnvValue(['EFG_PROXY_PASSWORD', 'CRS_EFG_PROXY_PASSWORD']),
+    username: config.username || firstEnvValue(['EFG_PROXY_USERNAME']),
+    password: config.password || firstEnvValue(['EFG_PROXY_PASSWORD']),
   };
 }
 
@@ -511,14 +437,15 @@ export function accountProxyConfig(config = {}, account, env = process.env) {
   const direct = account?.proxy || account?.proxyConfig;
   if (direct) return direct;
 
-  const byKey = cfg.crs?.proxyByVaultKey || cfg.crs?.proxies;
+  const section = rotationSection(cfg);
+  const byKey = section.proxyByVaultKey || section.proxies;
   if (byKey && typeof byKey === 'object' && byKey[key]) return byKey[key];
 
   if (!proxyRoutingEnabled(cfg)) return null;
 
-  const bright = cfg.crs?.brightData || {};
-  const twoCaptcha = cfg.crs?.twoCaptchaProxy || cfg.crs?.captchaProxy || {};
-  const efg = cfg.crs?.efgProxy || cfg.crs?.efg || {};
+  const bright = section.brightData || {};
+  const twoCaptcha = section.twoCaptchaProxy || section.captchaProxy || {};
+  const efg = section.efgProxy || section.efg || {};
   const accountIndex = Math.max(
     0,
     (cfg.accounts || []).findIndex((a) => accountKey(a) === key),

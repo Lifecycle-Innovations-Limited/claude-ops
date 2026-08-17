@@ -1,8 +1,16 @@
 # CRS removal plan
 
 Date: 2026-08-16
-Status: proposal. Nothing in this plan has been executed. No existing file was edited to produce it.
-Scope: remove claude-relay-service (CRS) from this repo and re-offer it as an optional installable dependency.
+Status: **executed, with a changed scope.** This document is the survey that
+preceded the removal; it is kept as the record of what the tree looked like
+beforehand. Every path and line number below describes the pre-removal tree.
+
+The plan proposed extracting CRS into an optional installable companion. The
+owner decided instead that CRS is insecure and must be removed outright, with
+CLIProxyAPI as the only supported path for multi-account rotation and OAuth
+seat management. There is no companion package. Section 8 was not built.
+
+Scope as executed: remove claude-relay-service (CRS) from this repo.
 
 All paths are repo-relative. Line numbers are from the tree at the time of writing.
 
