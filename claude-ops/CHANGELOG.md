@@ -43,6 +43,18 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.4.2] - 2026-08-16
+
+### Changed
+### Fixed
+- ops-speedup scored a perfect 100/100 from empty probes on macOS. It published probe results with `declare -g`, which bash 3.2 does not have, and an existing stderr redirect swallowed the error, so every probe variable stayed unset. The assignments are portable now, and the tests run the JSON contract under `/bin/bash` as well. (#827)
+- The `rm -rf` guard blocked nothing on stock macOS. (#826)
+- ops-release: a failed CI query no longer strands the release PR. (#820)
+
+### Changed
+- ops-inbox: stage drafts as cards, and never end a run with a question. (#821)
+
+
 ## [3.4.1] - 2026-08-16
 
 ### Changed
