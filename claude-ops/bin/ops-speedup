@@ -459,37 +459,37 @@ run_parallel_scan() {
   # Load disk vars — key must be alphanumeric+underscore to prevent injection
   while IFS='=' read -r k v; do
     [[ "$k" =~ ^[a-zA-Z0-9_]+$ ]] || continue
-    declare -g "DISK_${k}=${v}"
+    eval "DISK_${k}=\$v"
   done < "$tmp/disk" 2>/dev/null || true
 
   # Load memory vars
   while IFS='=' read -r k v; do
     [[ "$k" =~ ^[a-zA-Z0-9_]+$ ]] || continue
-    declare -g "MEM_${k}=${v}"
+    eval "MEM_${k}=\$v"
   done < "$tmp/mem" 2>/dev/null || true
 
   # Load network vars
   while IFS='=' read -r k v; do
     [[ "$k" =~ ^[a-zA-Z0-9_]+$ ]] || continue
-    declare -g "NET_${k}=${v}"
+    eval "NET_${k}=\$v"
   done < "$tmp/net" 2>/dev/null || true
 
   # Load startup vars
   while IFS='=' read -r k v; do
     [[ "$k" =~ ^[a-zA-Z0-9_]+$ ]] || continue
-    declare -g "STARTUP_${k}=${v}"
+    eval "STARTUP_${k}=\$v"
   done < "$tmp/startup" 2>/dev/null || true
 
   # Load runtime vars
   while IFS='=' read -r k v; do
     [[ "$k" =~ ^[a-zA-Z0-9_]+$ ]] || continue
-    declare -g "RUNTIME_${k}=${v}"
+    eval "RUNTIME_${k}=\$v"
   done < "$tmp/runtime" 2>/dev/null || true
 
   # Load GPU vars
   while IFS='=' read -r k v; do
     [[ "$k" =~ ^[a-zA-Z0-9_]+$ ]] || continue
-    declare -g "GPU_${k}=${v}"
+    eval "GPU_${k}=\$v"
   done < "$tmp/gpu" 2>/dev/null || true
 
   # Persist scan data; update file vars to the persistent copy so action
