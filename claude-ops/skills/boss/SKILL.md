@@ -1,6 +1,6 @@
 ---
 name: boss
-description: Boss-mode command center over EVERY AI agent on the system — Claude bg, Antigravity (agy), Codex, Cursor, openclaw — across ALL hosts (local Mac + FRA EC2). Use when the owner types /boss or asks "what's the fleet doing / what needs me / boss view". Surfaces ONLY decisions and approvals to the owner as A/B/C/D options with a recommendation + full context; autonomously archives verified-live agents and respawns unverified-completed ones.
+description: Boss-mode command center over EVERY AI agent on this machine and any other host agent-dash reaches — Claude bg, Antigravity (agy), Codex, Cursor, openclaw. Use when the owner types /boss or asks "what's the fleet doing / what needs me / boss view". Surfaces ONLY decisions and approvals to the owner as A/B/C/D options with a recommendation + full context; autonomously archives verified-live agents and respawns unverified-completed ones.
 argument-hint: '[--decisions | --full | --archive-sweep]'
 allowed-tools:
   - Bash
@@ -16,8 +16,9 @@ maxTurns: 40
 # /boss — you are the boss of the entire agent fleet
 
 the owner made you the SOLE orchestrator of every AI agent on this system, regardless of
-brand (Claude, Antigravity/`agy`, Codex/`cdx`, Cursor, openclaw/`ocl`) or host (local
-Mac + FRA EC2 + any reachable device). `/boss` is how the owner checks in. Your job: drive
+brand (Claude, Antigravity/`agy`, Codex/`cdx`, Cursor, openclaw/`ocl`) or host. Host topology
+is whatever `agent-dash` reports for this install — never assume a specific remote host exists,
+and never assume one doesn't. `/boss` is how the owner checks in. Your job: drive
 everything to done autonomously and surface to the owner ONLY the decisions and approvals
 that are genuinely his — as clean A/B/C/D options, each with your recommendation and
 the full context behind it.
@@ -49,16 +50,28 @@ an unrelated executable satisfy the probe.
 If none resolve, say so plainly and stop. Never report an empty fleet when the
 snapshot binary was simply missing — those are different facts.
 
+`agent-dash` is this plugin's own bundled name for the dashboard binary (shipped at
+`bin/agent-dash` in every install of this plugin). A fork or rename would break the
+candidates above — if `agent-dash` truly isn't present anywhere, check the install's
+own `bin/` directory for a differently-named fleet-dashboard executable before
+concluding the fleet can't be snapshotted; don't assume this exact filename is the
+only possible name across every fork of this plugin.
+
 ## STEP 1 — Snapshot the WHOLE fleet (every brand, every host)
 
 ```
-node "$AGENT_DASH" --json          # machine-readable: all agents, mac + FRA, all brands
+node "$AGENT_DASH" --json          # machine-readable: all agents, every host, all brands
 node "$AGENT_DASH" --once          # the human table (show this to the owner verbatim)
 ```
 
-The JSON carries per-agent: `type` (claude|agy|codex|cursor|openclaw), `host` (mac|fra),
-`id`/`sessionId`/`pid`, `name`, `state` (working|idle|blocked), and a `summary`/last-activity
-line. Do NOT re-parse `claude agents` directly — agent-dash already unifies all brands+hosts.
+The JSON carries per-agent: `type` (claude|agy|codex|cursor|openclaw), `host` (whatever
+hosts this install's `agent-dash` knows about — commonly `mac`, but treat the value as
+data, not a fixed enum), `id`/`sessionId`/`pid`, `name`, `state` (working|idle|blocked),
+and a `summary`/last-activity line. Do NOT re-parse `claude agents` directly — agent-dash
+already unifies all brands and hosts. If the JSON's `hosts` block marks a host
+`stale`/`unreachable`, treat its agents as unverifiable rather than live targets — don't
+drop the host from the report, and don't assume it's the only host or that a remote host
+never existed on this install.
 
 ## STEP 2 — Classify every agent (the boss triage)
 
@@ -85,7 +98,8 @@ never `&` fan-out. Record actions in `~/.claude/state/orchestrator-queue.jsonl`.
 ## STEP 3 — Render the dashboard for the owner
 
 Show the `--once` table, then a 3-line summary:
-`N agents · mac X / fra Y · working W · archived-this-pass A · respawned R · needs-you D`.
+`N agents · <host> X / <host> Y · working W · archived-this-pass A · respawned R · needs-you D`
+— one count per host actually reported this run (a single-host install just shows one count).
 Keep it scannable. No walls of text.
 
 ## STEP 4 — Surface ONLY the decisions (A/B/C/D)
@@ -120,4 +134,6 @@ approved action, etc.), then confirm one line each.
 - Outbound to anyone but the owner → staged, never auto-sent. Status to the owner → pre-authorized.
 - Fleet work = real bg/native sessions via ops-bg/agent-dash, never Agent-tool subagents
   (invisible in the dash + die with you). Agent-tool only for in-context research/verification.
-- FRA-host actions go over the agent-dash remote layer (control.mjs SSH), never a second orchestrator.
+- Remote-host actions (if this install has any) go over agent-dash's own remote layer —
+  never a second orchestrator. If no remote host is configured, this rule is simply moot;
+  don't invent one.
