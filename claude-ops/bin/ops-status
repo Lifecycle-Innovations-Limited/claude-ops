@@ -24,6 +24,20 @@
 #   bin/ops-status          # pretty text panel (default)
 #   bin/ops-status --json   # flat JSON (machine-readable)
 
+# macOS still ships Bash 3.2, while this script uses associative arrays. Claude
+# Code may launch skill fences through /bin/bash even when Homebrew Bash is first
+# on the user's interactive PATH, so repair the interpreter boundary here rather
+# than relying on the caller or shebang resolution.
+if (( BASH_VERSINFO[0] < 4 )); then
+  for modern_bash in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [ -x "$modern_bash" ] && "$modern_bash" -c '(( BASH_VERSINFO[0] >= 4 ))' 2>/dev/null; then
+      exec "$modern_bash" "$0" "$@"
+    fi
+  done
+  printf 'ops-status: Bash 4+ is required (found %s)\n' "$BASH_VERSION" >&2
+  exit 69
+fi
+
 set -u
 # Don't use -e; we want best-effort probes that never exit early.
 
