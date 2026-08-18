@@ -19,8 +19,13 @@ PLUGIN_JSON="$PLUGIN_ROOT/.claude-plugin/plugin.json"
 VERSION=$(python3 -c "import json,sys; print(json.load(open('$PLUGIN_JSON'))['version'])" 2>/dev/null || echo "unknown")
 SENTINEL_DIR="$DATA_DIR/.migrated"
 SENTINEL="$SENTINEL_DIR/v${VERSION}"
+# Set by a migration (inside the backgrounded subshell, so a file not a variable)
+# when it skipped work that a later session could still complete. Suppresses the
+# sentinel stamp so the next SessionStart retries instead of skipping forever.
+SENTINEL_DEFER_FLAG="$SENTINEL_DIR/.defer-v${VERSION}"
 
 mkdir -p "$SENTINEL_DIR" 2>/dev/null || true
+rm -f "$SENTINEL_DEFER_FLAG" 2>/dev/null || true
 LOG="$DATA_DIR/post-update-migrate.log"
 mkdir -p "$DATA_DIR" 2>/dev/null || true
 
@@ -183,18 +188,25 @@ run_migrations() {
       # a WhatsApp account banned). If the wrapper is missing, installing the
       # LaunchAgent would give launchd nothing safe to exec, so skip instead:
       # better no autostart than an unsupervised pair loop.
+      #
+      # The skip must NOT be sticky. The per-version sentinel is stamped even on
+      # partial failure, and SessionStart exits early once it exists, so a bridge
+      # dir that gains run-bridge.sh later would otherwise never get its
+      # LaunchAgent for this version. Defer the sentinel so the next session
+      # retries.
       if [[ ! -x "$bridge_dir/run-bridge.sh" ]]; then
-        log "  skip: whatsapp-bridge LaunchAgent (missing $bridge_dir/run-bridge.sh)"
+        log "  skip: whatsapp-bridge LaunchAgent (missing $bridge_dir/run-bridge.sh) — will retry next session"
+        : > "$SENTINEL_DEFER_FLAG"
       else
-      sed -e "s#__BRIDGE_BINARY_PATH__#$bridge_dir/whatsapp-bridge#g" \
-          -e "s#__BRIDGE_WORKING_DIR__#$bridge_dir#g" \
-          -e "s#__HOME__#$HOME#g" \
-          -e "s#__USER__#$USER#g" \
-          "$plist_src" > "$plist_dst" 2>/dev/null && {
-        launchctl unload "$plist_dst" 2>/dev/null || true
-        launchctl load "$plist_dst" 2>/dev/null || true
-        log "  ok: whatsapp-bridge LaunchAgent refreshed"
-      }
+        sed -e "s#__BRIDGE_BINARY_PATH__#$bridge_dir/whatsapp-bridge#g" \
+            -e "s#__BRIDGE_WORKING_DIR__#$bridge_dir#g" \
+            -e "s#__HOME__#$HOME#g" \
+            -e "s#__USER__#$USER#g" \
+            "$plist_src" > "$plist_dst" 2>/dev/null && {
+          launchctl unload "$plist_dst" 2>/dev/null || true
+          launchctl load "$plist_dst" 2>/dev/null || true
+          log "  ok: whatsapp-bridge LaunchAgent refreshed"
+        }
       fi
     fi
   fi
@@ -229,5 +241,15 @@ wait "$MIGRATE_PID" 2>/dev/null || true
 
 # Stamp sentinel even on partial failure — individual migrations log their own state.
 # Re-run forced by deleting the sentinel or bumping plugin.json version.
+#
+# Exception: a migration that deliberately skipped recoverable work sets the defer
+# flag. Stamping then would make the skip permanent for this version, since the
+# early-exit above never re-enters run_migrations. Leave the sentinel unwritten so
+# the next SessionStart retries.
+if [[ -f "$SENTINEL_DEFER_FLAG" ]]; then
+  rm -f "$SENTINEL_DEFER_FLAG" 2>/dev/null || true
+  log "post-update-migrate DEFERRED sentinel version=$VERSION (a migration will retry next session)"
+  exit 0
+fi
 touch "$SENTINEL"
 exit 0
