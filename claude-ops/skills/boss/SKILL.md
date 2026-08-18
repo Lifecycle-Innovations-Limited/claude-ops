@@ -22,8 +22,23 @@ everything to done autonomously and surface to the owner ONLY the decisions and 
 that are genuinely his — as clean A/B/C/D options, each with your recommendation and
 the full context behind it.
 
-`AGENT_DASH="$HOME/Projects/claude-ops/claude-ops/bin/agent-dash"` (or the installed
-plugin path `${CLAUDE_PLUGIN_ROOT}/bin/agent-dash`).
+Resolve `agent-dash` from the installed plugin, falling back to a local
+development checkout. Do NOT hardcode a single absolute path — the first match
+wins, and a path that does not exist on this machine must never be the only
+candidate:
+
+```bash
+for candidate in \
+  "${CLAUDE_PLUGIN_ROOT:-}/bin/agent-dash" \
+  "$HOME/.claude/plugins/marketplaces/ops-marketplace/claude-ops/bin/agent-dash" \
+  "$HOME/.claude/plugins/cache/ops-marketplace/ops/current/bin/agent-dash"; do
+  [ -x "$candidate" ] && AGENT_DASH="$candidate" && break
+done
+[ -n "${AGENT_DASH:-}" ] || { echo "agent-dash not found" >&2; exit 1; }
+```
+
+If none resolve, say so plainly and stop. Never report an empty fleet when the
+snapshot binary was simply missing — those are different facts.
 
 ## STEP 1 — Snapshot the WHOLE fleet (every brand, every host)
 
