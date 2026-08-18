@@ -41,7 +41,7 @@ Before executing, load:
 | `gh pr list --repo <owner/repo> --json number,title,state,headRefName,statusCheckRollup,reviewDecision,mergeable,isDraft` | List PRs with status | JSON array                     |
 | `gh pr view <n> --repo <repo> --json title,body,state,mergeable,reviews`                                                  | PR details           | JSON                           |
 | `gh pr checks <n> --repo <repo>`                                                                                          | CI check status      | Check list                     |
-| `gh pr merge <n> --repo <repo> --squash --admin`                                                                          | Squash merge PR      | Merge result                   |
+| `gh pr merge <n> --repo <repo> --squash`                                                                                  | Squash merge PR      | Merge result                   |
 | `gh pr create --repo <repo> --title "<t>" --body "<b>" --base dev`                                                        | Create PR            | PR URL                         |
 | `gh run list --repo <repo> --limit 5 --json conclusion,name,headBranch`                                                   | CI runs              | JSON array                     |
 | `gh run view <id> --repo <repo> --log-failed`                                                                             | Failed CI logs       | Log output                     |
@@ -251,7 +251,7 @@ If user picks "Let me pick", show each PR with `[Merge]` / `[Skip]` options via 
 For each confirmed PR:
 
 1. Verify CI is still green: `gh pr checks <number> --repo <repo>`
-2. If green: `gh pr merge <number> --repo <repo> --squash --admin`
+2. If green: `gh pr merge <number> --repo <repo> --squash` (never `--admin` — see "Never bypass a branch gate" below)
 3. Report: `✓ Merged <repo>#<number> to <base>`
 
 ### Phase 3 — Dispatch fixers for PRs that need work
@@ -384,8 +384,11 @@ For each fixer's JSON report:
 5. **If all checks pass: orchestrator performs the merge.** The fixer never had merge authority. Run:
 
    ```bash
-   gh pr merge <pr> --repo <repo> --squash --admin
+   gh pr merge <pr> --repo <repo> --squash
    ```
+
+   Never add `--admin`. If the merge is refused, that refusal is the gate doing its
+   job — see "Never bypass a branch gate" below.
 
 6. **Verify the merge actually landed.** Immediately after the merge call:
 
@@ -443,7 +446,7 @@ For each repo that has separate `dev` and `main` branches:
 
 3. If confirmed: create sync PR: `gh pr create --repo <repo> --base main --head dev --title "chore: sync dev → main"`
 4. Wait for CI: `gh pr checks <sync-pr-number> --repo <repo> --watch` (background, max 10 min)
-5. If CI green: `gh pr merge <sync-pr-number> --repo <repo> --merge --admin` (merge commit, not squash)
+5. If CI green: `gh pr merge <sync-pr-number> --repo <repo> --merge` (merge commit, not squash; never `--admin`)
 6. Pull main back into dev: `git -C <path> fetch origin && git -C <path> checkout dev && git -C <path> merge origin/main --no-edit`
 
 ### Phase 7 — Final report
@@ -514,9 +517,44 @@ During this command's execution, invoke the following superpower skills at the s
 - **NEVER bypass review on PRs touching auth, payments, PII, or secrets** — these require `security-reviewer` subagent audit before merge
 - **NEVER run `git reset --hard` on shared branches**
 - **ALWAYS use worktrees** for fixes (multiple agents may be active)
-- **ALWAYS use `--admin` only for squash merges to dev** (not main, unless `--main` flag)
+- **NEVER bypass a branch gate.** Do not pass `--admin` to `gh pr merge`, and do not
+  widen a ruleset, add yourself to a bypass list, or grant yourself admin to get a merge
+  through. A refused merge is the protection working. See "Never bypass a branch gate" below.
+- **ALWAYS confirm the base branch before merging.** Read `baseRefName` from
+  `gh pr view <n> --json baseRefName` in the same step as the merge. A run scoped to one
+  branch must refuse a PR whose base is a different one — a protected branch typically
+  carries a review gate the scoped branch does not.
 - **Max 10 PRs per invocation** to avoid GitHub API throttling
 - **If a PR has > 50 files changed**, flag it for manual review instead of auto-merging
+
+### Never bypass a branch gate
+
+`gh pr merge --admin` merges past branch protection and org rulesets. It is banned in
+this pipeline, in every phase, on every repo. So is any other route to the same outcome:
+editing a ruleset's conditions, adding an actor to a bypass list, or promoting your own
+account to get a merge through.
+
+Why it matters here specifically: a merge queue sweeps many repos at once, and repo
+governance is not uniform. Organisations commonly scope a review gate to a subset of
+repos via a repository custom property, and protect only some branches. The pipeline
+cannot see that policy from the PR alone — but the merge API can, and it enforces it.
+`--admin` throws that enforcement away silently and succeeds, so the violation is only
+discoverable afterwards, from the commit.
+
+Rules:
+
+1. Never pass `--admin` (or `--auto` as a workaround for a refused merge).
+2. Read `baseRefName` in the same step as the merge and refuse any PR whose base is
+   outside the run's declared scope. A default-branch merge and a protected-branch merge
+   are different acts with different approvals.
+3. Treat a refusal as a result, not an obstacle. `mergeStateStatus: BLOCKED` with green
+   checks usually means a required approval or an unresolved review thread. Resolve the
+   findings, request the human reviewer, report the PR as waiting, and move on.
+4. If a merge is genuinely urgent and gated, that is the owner's decision to make, not
+   the pipeline's. Surface it; never route around it.
+
+A merge that landed via bypass cannot be silently undone. Report it immediately, name
+the commit, and say which gate it skipped.
 
 ### Phase 0 (Salvage) Safety Rails
 

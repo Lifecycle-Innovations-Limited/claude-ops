@@ -96,16 +96,18 @@ if [ "$dry" = 1 ]; then
   exit 0
 fi
 
-# ── Apply: merge each PR (admin override = bypass required checks/reviews) ─────
+# ── Apply: merge each PR (normal merge — never bypass a branch gate) ───────────
 merged=0
 for row in "${PRS[@]:-}"; do
   [ -z "${row:-}" ] && continue
   n="${row%%	*}"
-  echo "  merging #$n (admin override)…"
-  if gh pr merge "$n" --admin --squash --delete-branch 2>&1 | sed 's/^/    /'; then
+  echo "  merging #$n…"
+  if gh pr merge "$n" --squash --delete-branch 2>&1 | sed 's/^/    /'; then
     merged=$((merged+1))
   else
     echo "ops-ship: merge of #$n FAILED — aborting before release (no partial ship)." >&2
+    echo "ops-ship: if the refusal is a required review or unresolved thread, that gate is" >&2
+    echo "ops-ship: intentional. Resolve it or get the approval — do not retry with --admin." >&2
     exit 1
   fi
 done

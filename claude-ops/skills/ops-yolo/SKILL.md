@@ -59,7 +59,7 @@ Before YOLO analysis, load:
 | Command                                                                                                 | Usage                | Output       |
 | ------------------------------------------------------------------------------------------------------- | -------------------- | ------------ |
 | `gh pr list --repo <owner/repo> --json number,title,statusCheckRollup,reviewDecision,mergeable,isDraft` | Open PRs with status | JSON array   |
-| `gh pr merge <n> --repo <repo> --squash --admin`                                                        | Squash merge PR      | Merge result |
+| `gh pr merge <n> --repo <repo> --squash`                                                                | Squash merge PR      | Merge result |
 | `gh run list --limit 20 --json status,conclusion,name,headBranch,createdAt`                             | Recent CI runs       | JSON array   |
 
 ---

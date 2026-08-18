@@ -15,7 +15,7 @@ _Watches every `gh pr merge` and `npm run build:_` you run, verifies the deploy,
 ## TL;DR
 
 ```
-gh pr merge --squash --admin
+gh pr merge --squash
         │
         ▼ PostToolUse:Bash hook
 bin/ops-deploy-fix-merge-trigger

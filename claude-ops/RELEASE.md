@@ -62,5 +62,5 @@ contracts; **minor** = new skill/command/agent or backward-compatible feature;
 If `ops-release` is unavailable, do the same by hand in a worktree off
 `origin/main`: bump the three JSON `version` fields (plugin.json,
 marketplace.json, package.json), add the CHANGELOG section, `commit --no-verify`,
-push, `gh pr create --base main`, `gh pr merge --squash --admin`, `git tag
+push, `gh pr create --base main`, `gh pr merge --squash`, `git tag
 vX.Y.Z && git push origin vX.Y.Z`.
