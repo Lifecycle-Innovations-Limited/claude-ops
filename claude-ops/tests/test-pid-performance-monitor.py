@@ -9,8 +9,8 @@ import pathlib
 import sys
 import tempfile
 import unittest
+import unittest.mock as mock
 from datetime import datetime, timedelta, timezone
-from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MONITOR_PATH = ROOT / "scripts" / "macos" / "pid-performance-monitor.py"

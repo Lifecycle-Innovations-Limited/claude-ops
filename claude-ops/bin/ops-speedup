@@ -37,6 +37,10 @@ classify_process_state_samples() {
       if (state ~ /^U/) blocked[pid]++
     }
     END {
+      if (sample != 3) {
+        print "classify_process_state_samples: expected 3 samples, got " sample+0 " (empty or missing ps output?)" > "/dev/stderr"
+        exit 1
+      }
       persistent=0
       for (pid in blocked) if (blocked[pid] == 3) persistent++
       printf "%d %d %d %d", total+0, running+0, persistent+0, zombies+0
@@ -74,8 +78,9 @@ if $MODE_CLASSIFY_STATES; then
     exit 2
   }
   classify_process_state_samples "${CLASSIFY_STATE_FILES[@]}"
+  rc=$?
   printf '\n'
-  exit 0
+  exit "$rc"
 fi
 
 # ── OS detection ─────────────────────────────────────────────────
