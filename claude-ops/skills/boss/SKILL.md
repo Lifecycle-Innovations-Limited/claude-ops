@@ -28,14 +28,23 @@ wins, and a path that does not exist on this machine must never be the only
 candidate:
 
 ```bash
-for candidate in \
-  "${CLAUDE_PLUGIN_ROOT:-}/bin/agent-dash" \
-  "$HOME/.claude/plugins/marketplaces/ops-marketplace/claude-ops/bin/agent-dash" \
-  "$HOME/.claude/plugins/cache/ops-marketplace/ops/current/bin/agent-dash"; do
+candidates=()
+[ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && candidates+=("$CLAUDE_PLUGIN_ROOT/bin/agent-dash")
+candidates+=(
+  "$HOME/.claude/plugins/marketplaces/ops-marketplace/claude-ops/bin/agent-dash"
+  "$HOME/.claude/plugins/cache/ops-marketplace/ops/current/bin/agent-dash"
+)
+AGENT_DASH=""
+for candidate in "${candidates[@]}"; do
   [ -x "$candidate" ] && AGENT_DASH="$candidate" && break
 done
-[ -n "${AGENT_DASH:-}" ] || { echo "agent-dash not found" >&2; exit 1; }
+[ -n "$AGENT_DASH" ] || { echo "agent-dash not found" >&2; exit 1; }
 ```
+
+Build the candidate list conditionally: an unset `CLAUDE_PLUGIN_ROOT` must
+contribute no candidate at all. Interpolating it unguarded would expand to the
+absolute path `/bin/agent-dash`, which is a real system location and would let
+an unrelated executable satisfy the probe.
 
 If none resolve, say so plainly and stop. Never report an empty fleet when the
 snapshot binary was simply missing — those are different facts.
