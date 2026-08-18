@@ -91,44 +91,63 @@ function probeRemoteHost(sshHost, probeSrc) {
 }
 
 export function collectRemote({ force = false } = {}) {
+  // No remote configured is not the same as a remote that failed to answer.
+  // Report it as its own state so the dashboard never prints a confident 0.
+  if (FRA_HOSTS.length === 0) {
+    return { agents: [], stale: false, source: 'not-configured', cached: false, known: true };
+  }
+
   const cache = readCache();
   if (!force && cache && nowTs() - cache.ts < REMOTE_TTL_MS) {
-    return { agents: cache.agents, stale: false, source: cache.meta?.source || 'cache', cached: true };
+    return { agents: cache.agents, stale: false, source: cache.meta?.source || 'cache', cached: true, known: true };
   }
 
   let probeSrc;
   try {
     probeSrc = readFileSync(PROBE, 'utf8');
   } catch {
-    return { agents: cache?.agents || [], stale: true, source: 'no-probe', cached: !!cache };
+    return { agents: cache?.agents || [], stale: true, source: 'no-probe', cached: !!cache, known: !!cache };
   }
 
   for (const h of FRA_HOSTS) {
     try {
       const agents = probeRemoteHost(h.trim(), probeSrc);
       writeCache(agents, { source: h.trim() });
-      return { agents, stale: false, source: h.trim(), cached: false };
+      return { agents, stale: false, source: h.trim(), cached: false, known: true };
     } catch {
       /* try next host */
     }
   }
 
   // all FRA hosts failed — serve last-known cache, flagged stale
-  if (cache) return { agents: cache.agents, stale: true, source: cache.meta?.source || 'cache', cached: true };
-  return { agents: [], stale: true, source: 'unreachable', cached: false };
+  if (cache) {
+    return { agents: cache.agents, stale: true, source: cache.meta?.source || 'cache', cached: true, known: true };
+  }
+  // Configured, tried, no answer, and nothing cached: the agent count is UNKNOWN,
+  // not zero. `known: false` tells consumers they may not report a number here.
+  return { agents: [], stale: true, source: 'unreachable', cached: false, known: false };
 }
 
 // --- unified ---------------------------------------------------------------
 
 export function collect({ force = false, localOnly = false } = {}) {
   const local = collectLocal();
-  let remote = { agents: [], stale: false, source: 'skipped', cached: false };
+  let remote = { agents: [], stale: false, source: 'skipped', cached: false, known: true };
   if (!localOnly) remote = collectRemote({ force });
   return {
     ts: nowTs(),
     hosts: {
       mac: { count: local.length },
-      fra: { count: remote.agents.length, stale: remote.stale, source: remote.source, cached: remote.cached },
+      // `count` is null — never 0 — when the remote could not be reached and no
+      // cache exists. Zero would read as "no agents there", which is a claim the
+      // probe cannot support. Consumers must render null as unknown.
+      fra: {
+        count: remote.known === false ? null : remote.agents.length,
+        known: remote.known !== false,
+        stale: remote.stale,
+        source: remote.source,
+        cached: remote.cached,
+      },
     },
     agents: [...local, ...remote.agents],
   };
