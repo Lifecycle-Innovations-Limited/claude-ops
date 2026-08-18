@@ -44,8 +44,28 @@ PROTECTED_PATTERNS = (
     "OrbStack Helper", "Docker", "postgres", "dragonfly", "qdrant",
     "mcp-proxy", "gbrain serve", "coreaudiod", "Terminal.app", "Ghostty.app",
     "qemu-system-aarch64", "xcodebuild", "swift-frontend",
-    "HealifyAIHealthCoach.app/HealifyAIHealthCoach",
 )
+
+# Machine-scoped extras: one command substring per line, blank lines and
+# `#` comments ignored. Your own apps and build tools belong here rather than
+# in this file — the repo is public, so a hardcoded product name would leak
+# whoever runs it.
+EXTRA_PROTECTED_FILE = pathlib.Path(
+    os.environ.get(
+        "CLAUDE_OPS_PROTECTED_PATTERNS_FILE",
+        HOME / ".config" / "claude-ops" / "protected-patterns.txt",
+    )
+)
+
+
+def extra_protected_patterns() -> tuple[str, ...]:
+    try:
+        lines = EXTRA_PROTECTED_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ()
+    return tuple(
+        stripped for line in lines if (stripped := line.strip()) and not stripped.startswith("#")
+    )
 
 @dataclass
 class Proc:
@@ -151,7 +171,8 @@ def is_hermes_owned(p: Proc, table: dict[int, Proc]) -> bool:
 
 
 def protected(p: Proc) -> bool:
-    return any(pattern.lower() in p.command.lower() for pattern in PROTECTED_PATTERNS)
+    patterns = PROTECTED_PATTERNS + extra_protected_patterns()
+    return any(pattern.lower() in p.command.lower() for pattern in patterns)
 
 
 def qos_candidate(p: Proc) -> bool:

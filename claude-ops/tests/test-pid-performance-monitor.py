@@ -7,6 +7,7 @@ import importlib.util
 import io
 import pathlib
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
@@ -142,12 +143,11 @@ class PressureMonitorTests(unittest.TestCase):
         )
         self.assertEqual([], record["actions"])
 
-    def test_xcode_simulator_and_healify_are_directly_protected(self) -> None:
+    def test_xcode_simulator_and_native_builds_are_directly_protected(self) -> None:
         protected_commands = {
-            301: "/usr/bin/xcodebuild -workspace Healify.xcworkspace build",
+            301: "/usr/bin/xcodebuild -workspace MyApp.xcworkspace build",
             302: "/usr/bin/swift-frontend -frontend -c Sources/App.swift",
             303: "/Applications/OrbStack.app/qemu-system-aarch64 -machine virt",
-            304: "/Applications/HealifyAIHealthCoach.app/HealifyAIHealthCoach",
         }
         table = {pid: proc(pid, command, cpu=99.0, state="U") for pid, command in protected_commands.items()}
         for p in table.values():
@@ -159,6 +159,23 @@ class PressureMonitorTests(unittest.TestCase):
             loads=[100.0, 100.0, 100.0],
         )
         self.assertEqual([], record["actions"])
+
+    def test_operator_supplied_protected_patterns_are_honoured(self) -> None:
+        target = proc(401, "/Applications/MyCoach.app/MyCoach", cpu=99.0, state="U")
+        # Not protected by the shipped list alone.
+        self.assertFalse(monitor.protected(target))
+        with tempfile.TemporaryDirectory() as tmp:
+            extras = pathlib.Path(tmp) / "protected-patterns.txt"
+            extras.write_text("# operator extras\n\nMyCoach.app/MyCoach\n", encoding="utf-8")
+            with mock.patch.object(monitor, "EXTRA_PROTECTED_FILE", extras):
+                self.assertEqual(("MyCoach.app/MyCoach",), monitor.extra_protected_patterns())
+                self.assertTrue(monitor.protected(target))
+                self.assertFalse(monitor.qos_candidate(target))
+
+    def test_missing_operator_pattern_file_is_not_fatal(self) -> None:
+        with mock.patch.object(monitor, "EXTRA_PROTECTED_FILE", pathlib.Path("/nonexistent/protected.txt")):
+            self.assertEqual((), monitor.extra_protected_patterns())
+            self.assertTrue(monitor.protected(proc(402, "/usr/bin/xcodebuild build")))
 
     def test_qos_candidate_rejects_wrappers_and_installers(self) -> None:
         self.assertFalse(monitor.qos_candidate(proc(1, '/bin/zsh -c "python -m pytest tests"')))
