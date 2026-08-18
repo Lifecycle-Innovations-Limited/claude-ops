@@ -5,9 +5,20 @@
     <key>Label</key>
     <string>com.__USER__.whatsapp-bridge</string>
 
+    <!--
+      Launch the supervised wrapper, NEVER the bare bridge binary.
+
+      run-bridge.sh strips any `--pair` argument before exec'ing the bridge. A
+      supervisor pointed straight at the binary will pair itself unattended
+      after a LoggedOut event, and repeated unattended pairing is what gets a
+      WhatsApp account banned. Do not "simplify" this back to the binary path.
+
+      Bridge dirs that predate run-bridge.sh must add it before installing this
+      LaunchAgent; see skills/setup/channels/whatsapp.md.
+    -->
     <key>ProgramArguments</key>
     <array>
-        <string>__BRIDGE_BINARY_PATH__</string>
+        <string>__BRIDGE_WORKING_DIR__/run-bridge.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -15,12 +26,19 @@
 
     <key>KeepAlive</key>
     <dict>
+        <key>Crashed</key>
+        <true/>
         <key>SuccessfulExit</key>
         <false/>
     </dict>
 
+    <!--
+      300s, not 60s. A logged-out bridge exits immediately, so a short throttle
+      turns launchd into a tight restart loop against WhatsApp's device-link
+      endpoint.
+    -->
     <key>ThrottleInterval</key>
-    <integer>60</integer>
+    <integer>300</integer>
 
     <key>RunAtLoad</key>
     <true/>
@@ -37,6 +55,15 @@
         <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
+        <!--
+          REQUIRED on macOS. With the cgo resolver the whatsmeow websocket to
+          web.whatsapp.com dies with "failed to read frame header: EOF" plus a
+          keepalive timeout within minutes. That silently breaks both pairing
+          (the phone shows "Couldn't link device" even with a correct code) and
+          steady-state connection. The bridge's own --help documents this.
+        -->
+        <key>GODEBUG</key>
+        <string>netdns=go</string>
     </dict>
 </dict>
 </plist>
