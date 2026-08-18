@@ -19,6 +19,7 @@ assert SPEC and SPEC.loader
 monitor = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = monitor
 SPEC.loader.exec_module(monitor)
+REAL_APPEND_TELEMETRY = monitor.append_telemetry
 
 
 def proc(
@@ -41,7 +42,10 @@ class PressureMonitorTests(unittest.TestCase):
             mock.patch.object(monitor, "memory_free_pct", return_value=90),
             mock.patch.object(monitor, "swap_mb", return_value=0.0),
             mock.patch.object(monitor, "load_state", return_value={"rg": {}}),
-            mock.patch.object(monitor, "append_telemetry", side_effect=self.telemetry.append),
+            mock.patch.object(
+                monitor, "append_telemetry",
+                side_effect=lambda record, **_kwargs: self.telemetry.append(record),
+            ),
             mock.patch.object(monitor.time, "sleep", return_value=None),
             mock.patch.object(monitor, "FEATURE_OFF", pathlib.Path("/path/that/does/not/exist")),
         ]
@@ -103,9 +107,26 @@ class PressureMonitorTests(unittest.TestCase):
         normal_cpu = [{"user": 10.0, "sys": 5.0, "idle": 85.0}] * 3
         transient = self.run_main(table={}, cpu_samples=normal_cpu, loads=[high, 1.0, 1.0])
         self.assertFalse(transient["pressure"])
-        sustained = self.run_main(table={}, cpu_samples=normal_cpu, loads=[high, high, 1.0])
-        self.assertTrue(sustained["pressure"])
-        self.assertTrue(sustained["pressure_reasons"]["sustained_load"])
+        # Load alone, even sustained across load1 and load5, is not sufficient:
+        # the contract requires BOTH signals. CPU stayed idle here, so no pressure.
+        load_only = self.run_main(table={}, cpu_samples=normal_cpu, loads=[high, high, 1.0])
+        self.assertFalse(load_only["pressure"])
+        self.assertTrue(load_only["pressure_reasons"]["sustained_load"])
+        self.assertFalse(load_only["pressure_reasons"]["cpu"])
+
+    def test_pressure_requires_both_low_idle_cpu_and_sustained_load(self) -> None:
+        high = monitor.NCPU * monitor.LOAD_PRESSURE_MULTIPLIER + 1
+        low_idle_cpu = [{"user": 70.0, "sys": 10.0, "idle": 20.0}] * 3
+        # Low-idle CPU alone (normal load) is not sufficient either.
+        cpu_only = self.run_main(table={}, cpu_samples=low_idle_cpu, loads=[1.0, 1.0, 1.0])
+        self.assertFalse(cpu_only["pressure"])
+        self.assertTrue(cpu_only["pressure_reasons"]["cpu"])
+        self.assertFalse(cpu_only["pressure_reasons"]["sustained_load"])
+        # Both signals together produce pressure.
+        both = self.run_main(table={}, cpu_samples=low_idle_cpu, loads=[high, high, 1.0])
+        self.assertTrue(both["pressure"])
+        self.assertTrue(both["pressure_reasons"]["cpu"])
+        self.assertTrue(both["pressure_reasons"]["sustained_load"])
 
     def test_broad_scan_requires_exact_command_root_and_hermes_ancestor(self) -> None:
         hermes = proc(10, "python -m hermes_cli.main gateway")
@@ -231,6 +252,92 @@ class PressureMonitorTests(unittest.TestCase):
             prior_state={"rg": {key: {"consecutive": 99, "last_seen": stale_timestamp}}},
         )
         self.assertEqual([], record["actions"])
+
+    def test_protected_broad_scan_is_never_a_term_candidate(self) -> None:
+        hermes = proc(10, "python -m hermes_cli.main gateway")
+        # Matches is_broad_rg (rg, RG_PREFIX, a broad root) and also matches the
+        # "Docker" protected pattern, so it must never be TERM'd even though it
+        # is otherwise an exact broad-scan, Hermes-owned candidate.
+        protected_rg = proc(
+            20, f"rg --files --sortr=modified {monitor.HOME / 'Developer'} Docker",
+            ppid=10, cpu=20.0, state="U",
+        )
+        self.assertTrue(monitor.protected(protected_rg))
+        self.assertTrue(monitor.is_broad_rg(protected_rg))
+        table = {p.pid: p for p in (hermes, protected_rg)}
+        key = f"{protected_rg.pid}:{protected_rg.command}"
+        record = self.run_main(
+            table=table,
+            cpu_samples=[{"user": 10.0, "sys": 5.0, "idle": 85.0}] * 3,
+            loads=[1.0, 1.0, 1.0],
+            prior_state={"rg": {key: {"consecutive": 1, "last_seen": self.recent_timestamp()}}},
+        )
+        term_actions = [a for a in record["actions"] if a["type"] == "term_runaway_rg"]
+        self.assertEqual([], term_actions)
+
+    def test_hermes_identity_requires_exact_argv_not_wrapper_substring(self) -> None:
+        self.assertTrue(monitor.is_hermes_gateway_command("python -m hermes_cli.main gateway"))
+        self.assertTrue(monitor.is_hermes_gateway_command("/usr/bin/python3 -m hermes_cli.main gateway --flag"))
+        # A shell wrapper whose payload merely contains the marker text must not qualify.
+        self.assertFalse(monitor.is_hermes_gateway_command('/bin/zsh -c "python -m hermes_cli.main gateway"'))
+        self.assertFalse(monitor.is_hermes_gateway_command("echo hermes_cli.main gateway"))
+
+    def test_wrapper_payload_hermes_ancestor_does_not_qualify_a_foreign_rg(self) -> None:
+        wrapper = proc(10, '/bin/zsh -c "python -m hermes_cli.main gateway"')
+        foreign_rg = proc(20, f"rg --files --sortr=modified {monitor.HOME / 'Developer'}", ppid=10, cpu=20.0, state="U")
+        table = {p.pid: p for p in (wrapper, foreign_rg)}
+        key = f"{foreign_rg.pid}:{foreign_rg.command}"
+        record = self.run_main(
+            table=table,
+            cpu_samples=[{"user": 10.0, "sys": 5.0, "idle": 85.0}] * 3,
+            loads=[1.0, 1.0, 1.0],
+            prior_state={"rg": {key: {"consecutive": 1, "last_seen": self.recent_timestamp()}}},
+        )
+        self.assertEqual([], [a for a in record["actions"] if a["type"] == "term_runaway_rg"])
+
+    def test_qos_revalidates_process_identity_before_applying(self) -> None:
+        original = proc(500, "/opt/homebrew/bin/pytest tests", cpu=90.0)
+        reused = proc(500, "/usr/bin/legit-unrelated-daemon", cpu=1.0)
+        calls = {"n": 0}
+
+        def fake_processes() -> dict[int, monitor.Proc]:
+            calls["n"] += 1
+            return {500: original} if calls["n"] <= 3 else {500: reused}
+
+        with (
+            mock.patch.object(sys, "argv", [str(MONITOR_PATH)]),
+            mock.patch.object(monitor, "processes", side_effect=fake_processes),
+            mock.patch.object(monitor, "cpu_sample", side_effect=[{"user": 80.0, "sys": 10.0, "idle": 10.0}] * 3),
+            mock.patch.object(monitor, "load_averages", return_value=[100.0, 100.0, 100.0]),
+            mock.patch.object(monitor, "taskpolicy_background") as taskpolicy,
+            mock.patch.object(monitor, "renice_background") as renice,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(0, monitor.main())
+        taskpolicy.assert_not_called()
+        renice.assert_not_called()
+        record = self.telemetry[-1]
+        qos_actions = [a for a in record["actions"] if a["type"] == "qos_background"]
+        self.assertEqual(["skipped_pid_changed"], [a["result"] for a in qos_actions])
+
+    def test_dry_run_writes_nothing_to_disk(self) -> None:
+        # Exercise the real append_telemetry (not the mock from setUp) to confirm
+        # --dry-run truly performs no filesystem write, per the documented contract.
+        with tempfile.TemporaryDirectory() as tmp:
+            telemetry_path = pathlib.Path(tmp) / "pid-performance.jsonl"
+            with (
+                mock.patch.object(monitor, "TELEMETRY", telemetry_path),
+                # setUp mocks append_telemetry away; swap in the real function so
+                # this test exercises the actual disk-write guard.
+                mock.patch.object(monitor, "append_telemetry", side_effect=REAL_APPEND_TELEMETRY),
+                mock.patch.object(sys, "argv", [str(MONITOR_PATH), "--dry-run"]),
+                mock.patch.object(monitor, "processes", side_effect=lambda: {}),
+                mock.patch.object(monitor, "cpu_sample", side_effect=[{"user": 10.0, "sys": 5.0, "idle": 85.0}] * 3),
+                mock.patch.object(monitor, "load_averages", return_value=[1.0, 1.0, 1.0]),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(0, monitor.main())
+            self.assertFalse(telemetry_path.exists())
 
     def test_missing_or_invalid_timestamp_does_not_count_as_consecutive(self) -> None:
         now = datetime.now(timezone.utc)

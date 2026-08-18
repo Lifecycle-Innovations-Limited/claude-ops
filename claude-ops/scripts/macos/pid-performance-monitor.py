@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import signal
 import subprocess
 import time
@@ -27,7 +28,6 @@ MAX_LOG_BYTES = 5 * 1024 * 1024
 NCPU = os.cpu_count() or 8
 BROAD_ROOTS = tuple(str(p) for p in (HOME, HOME / "Developer", HOME / "Developer" / "active", HOME / "Developer" / "scratch"))
 RG_PREFIX = "rg --files --sortr=modified"
-HERMES_MARKER = "hermes_cli.main gateway"
 LOAD_PRESSURE_MULTIPLIER = 2.0
 RG_OBSERVATION_MAX_GAP_S = 180
 QOS_PATTERNS = (
@@ -166,8 +166,32 @@ def is_broad_rg(p: Proc) -> bool:
     return any(re.search(rf"(?:^|\s){re.escape(root)}(?:\s|$)", p.command) for root in BROAD_ROOTS)
 
 
+def is_hermes_gateway_command(command: str) -> bool:
+    """Exact identity check: the real Hermes gateway invocation, not a wrapper payload.
+
+    A substring match on "hermes_cli.main gateway" also matches a wrapper such
+    as `zsh -c "python -m hermes_cli.main gateway"`, whose own argv0 is the
+    shell, not Hermes. Parse argv and require a python interpreter followed by
+    `-m hermes_cli.main gateway` as literal, adjacent tokens.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    executable = pathlib.Path(tokens[0]).name
+    if not (executable == "python" or executable.startswith("python3")):
+        return False
+    try:
+        idx = tokens.index("-m")
+    except ValueError:
+        return False
+    return tokens[idx + 1 : idx + 3] == ["hermes_cli.main", "gateway"]
+
+
 def is_hermes_owned(p: Proc, table: dict[int, Proc]) -> bool:
-    return any(HERMES_MARKER in parent.command for parent in ancestor_chain(p.pid, table))
+    return any(is_hermes_gateway_command(parent.command) for parent in ancestor_chain(p.pid, table))
 
 
 def protected(p: Proc) -> bool:
@@ -225,7 +249,11 @@ def save_state(state: dict) -> None:
     tmp.replace(STATE_FILE)
 
 
-def append_telemetry(record: dict) -> None:
+def append_telemetry(record: dict, *, dry_run: bool = False) -> None:
+    # --dry-run is documented as side-effect-free: it must not create, rotate,
+    # or append the telemetry file on disk.
+    if dry_run:
+        return
     TELEMETRY.parent.mkdir(parents=True, exist_ok=True)
     if TELEMETRY.exists() and TELEMETRY.stat().st_size > MAX_LOG_BYTES:
         rotated = TELEMETRY.with_suffix(".jsonl.1")
@@ -247,15 +275,24 @@ def renice_background(pid: int, current_nice: int) -> bool:
 
 def health_score(cpu: dict[str, float], running: int, stuck: int, mem: int, swap: float) -> int:
     score = 100
-    if cpu["idle"] < 20: score -= 25
-    elif cpu["idle"] < 35: score -= 15
-    elif cpu["idle"] < 60: score -= 5
-    if running + stuck > NCPU * 2: score -= 15
-    elif running + stuck > NCPU: score -= 7
-    if stuck: score -= min(15, stuck * 5)
-    if mem < 20: score -= 15
-    elif mem < 40: score -= 5
-    if swap > 1024: score -= 10
+    if cpu["idle"] < 20:
+        score -= 25
+    elif cpu["idle"] < 35:
+        score -= 15
+    elif cpu["idle"] < 60:
+        score -= 5
+    if running + stuck > NCPU * 2:
+        score -= 15
+    elif running + stuck > NCPU:
+        score -= 7
+    if stuck:
+        score -= min(15, stuck * 5)
+    if mem < 20:
+        score -= 15
+    elif mem < 40:
+        score -= 5
+    if swap > 1024:
+        score -= 10
     return max(0, score)
 
 
@@ -298,11 +335,15 @@ def main() -> int:
     swap = swap_mb()
     loads = load_averages()
     # macOS load includes runnable tasks and tasks blocked in kernel I/O. A machine
-    # can be overloaded while CPU remains partly idle, so sustained load must also
-    # activate the safe guard. Requiring both load1 and load5 avoids reacting to a
-    # single short spike.
+    # can be overloaded while CPU remains partly idle, and CPU can look busy from a
+    # single short spike that load hasn't caught up to yet. Requiring both load1
+    # and load5 over threshold avoids reacting to that spike.
+    sustained_low_idle_cpu = all(s["idle"] < 35 for s in samples)
     sustained_load = len(loads) >= 2 and loads[0] > NCPU * LOAD_PRESSURE_MULTIPLIER and loads[1] > NCPU * LOAD_PRESSURE_MULTIPLIER
-    pressure = args.force_pressure or all(s["idle"] < 35 for s in samples) or sustained_load
+    # Contract: mitigation requires BOTH sustained signals, not either alone —
+    # three low-idle CPU samples AND elevated sustained load. A single signal is
+    # not sufficient evidence for a script that terminates processes.
+    pressure = args.force_pressure or (sustained_low_idle_cpu and sustained_load)
     state = load_state()
     prior_rg = state.get("rg", {})
     current_rg: dict[str, dict] = {}
@@ -311,7 +352,9 @@ def main() -> int:
     observation_ts = observation_time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     for p in table.values():
-        if not is_broad_rg(p) or not is_hermes_owned(p, table):
+        # protected() guards this same list for QoS below; reuse it here so an
+        # operator-protected command is never a TERM candidate either.
+        if protected(p) or not is_broad_rg(p) or not is_hermes_owned(p, table):
             continue
         key = f"{p.pid}:{p.command}"
         prior = prior_rg.get(key, {})
@@ -334,7 +377,13 @@ def main() -> int:
                 # Re-read exact PID and command immediately before TERM to guard PID reuse.
                 fresh_table = processes()
                 fresh = fresh_table.get(p.pid)
-                if fresh and fresh.command == p.command and is_broad_rg(fresh) and is_hermes_owned(fresh, fresh_table):
+                if (
+                    fresh
+                    and fresh.command == p.command
+                    and not protected(fresh)
+                    and is_broad_rg(fresh)
+                    and is_hermes_owned(fresh, fresh_table)
+                ):
                     try:
                         os.kill(p.pid, signal.SIGTERM)
                         decision["result"] = "terminated"
@@ -352,9 +401,18 @@ def main() -> int:
                 continue
             decision = {"type": "qos_background", "pid": p.pid, "cpu": p.cpu, "nice_before": p.nice, "command": p.command}
             if not args.dry_run and not args.status and not FEATURE_OFF.exists():
-                q = taskpolicy_background(p.pid)
-                n = renice_background(p.pid, p.nice)
-                decision["result"] = "applied" if q and n else "partial"
+                # p was captured in an earlier ps snapshot; the PID can have exited
+                # and been reused by the time we act. Re-read it immediately before
+                # applying a QoS change and require the same command, still
+                # unprotected, and still a qos_candidate on the fresh read.
+                fresh_table = processes()
+                fresh = fresh_table.get(p.pid)
+                if fresh and fresh.command == p.command and not protected(fresh) and qos_candidate(fresh):
+                    q = taskpolicy_background(fresh.pid)
+                    n = renice_background(fresh.pid, fresh.nice)
+                    decision["result"] = "applied" if q and n else "partial"
+                else:
+                    decision["result"] = "skipped_pid_changed"
             else:
                 decision["result"] = "would_apply"
             actions.append(decision)
@@ -368,11 +426,11 @@ def main() -> int:
 
     record = {"ts": utc_now(), "mode": "status" if args.status else "dry-run" if args.dry_run else "apply",
               "feature_off": FEATURE_OFF.exists(), "cpu": avg_cpu, "pressure": pressure,
-              "pressure_reasons": {"cpu": all(s["idle"] < 35 for s in samples), "sustained_load": sustained_load},
+              "pressure_reasons": {"cpu": sustained_low_idle_cpu, "sustained_load": sustained_load},
               "load": loads, "mem_free_pct": mem, "swap_mb": swap,
               "running": running, "stuck": stuck, "zombies": zombies,
               "health_score": health_score(avg_cpu, running, stuck, mem, swap), "actions": actions}
-    append_telemetry(record)
+    append_telemetry(record, dry_run=args.dry_run)
     print(json.dumps(record, indent=2))
     return 0
 
