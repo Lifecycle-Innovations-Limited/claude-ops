@@ -178,6 +178,14 @@ run_migrations() {
     if [[ -f "$plist_src" ]] && [[ ! -f "$plist_dst" || "$plist_src" -nt "$plist_dst" ]]; then
       mkdir -p "$HOME/Library/LaunchAgents" 2>/dev/null || true
       local bridge_dir="${WHATSAPP_BRIDGE_HOME:-$HOME/.local/share/whatsapp-mcp/whatsapp-bridge}"
+      # The template supervises via run-bridge.sh, which strips --pair so a
+      # logged-out bridge can never re-pair itself unattended (that is what gets
+      # a WhatsApp account banned). If the wrapper is missing, installing the
+      # LaunchAgent would give launchd nothing safe to exec, so skip instead:
+      # better no autostart than an unsupervised pair loop.
+      if [[ ! -x "$bridge_dir/run-bridge.sh" ]]; then
+        log "  skip: whatsapp-bridge LaunchAgent (missing $bridge_dir/run-bridge.sh)"
+      else
       sed -e "s#__BRIDGE_BINARY_PATH__#$bridge_dir/whatsapp-bridge#g" \
           -e "s#__BRIDGE_WORKING_DIR__#$bridge_dir#g" \
           -e "s#__HOME__#$HOME#g" \
@@ -187,6 +195,7 @@ run_migrations() {
         launchctl load "$plist_dst" 2>/dev/null || true
         log "  ok: whatsapp-bridge LaunchAgent refreshed"
       }
+      fi
     fi
   fi
 
