@@ -63,6 +63,15 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.4.3] - 2026-08-18
+
+### Changed
+### Fixed
+- WhatsApp bridge LaunchAgent now runs the supervised `run-bridge.sh` wrapper instead of the bare binary, so a logged-out bridge can no longer request pairing codes unattended (the behaviour that gets an account banned). KeepAlive gains `Crashed`, and ThrottleInterval goes 60 -> 300.
+- The bridge LaunchAgent template now sets `GODEBUG=netdns=go`, which the bridge requires on macOS. With the cgo resolver the whatsmeow websocket dies with "failed to read frame header: EOF" and pairing fails as a misleading "Couldn't link device" on the phone.
+- `ops-post-update-migrate` refuses to install the bridge LaunchAgent when `run-bridge.sh` is missing, and defers its per-version sentinel so the skip is retried next session instead of becoming permanent.
+
+
 ## [3.4.2] - 2026-08-16
 
 ### Changed
