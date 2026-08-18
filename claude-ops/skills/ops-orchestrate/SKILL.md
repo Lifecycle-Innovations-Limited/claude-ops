@@ -56,7 +56,7 @@ Before orchestrating, load:
 | `gh pr list --state open --json number,title,statusCheckRollup,reviewDecision,mergeable,isDraft` | Open PRs with status | JSON array   |
 | `gh pr view <n> --repo <repo> --json files,additions,deletions`                                  | PR file diff summary | JSON         |
 | `gh pr checks <n>`                                                                               | CI check status      | Check list   |
-| `gh pr merge <n> --squash --admin`                                                               | Squash merge PR      | Merge result |
+| `gh pr merge <n> --squash`                                                                       | Squash merge PR      | Merge result |
 | `gh run list --repo <repo> --workflow "<workflow>" --limit 5 --json conclusion,headBranch`       | CI runs for workflow | JSON array   |
 | `gh run view <id> --repo <repo> --log-failed`                                                    | Failed CI logs       | Log output   |
 | `gh issue list --state open`                                                                     | Open issues          | JSON array   |
@@ -400,7 +400,7 @@ For each PR that passed audit:
 1. **Address review comments**: read via `gh api`, resolve each
 2. **CI verification**: `gh pr checks <n>` — wait via `Monitor` if still running
 3. **Merge conflict resolution**: check `mergeable` state, resolve if needed
-4. **Merge to dev**: `gh pr merge <n> --squash --admin` (use `AskUserQuestion` to confirm unless `--force`)
+4. **Merge to dev**: `gh pr merge <n> --squash` (use `AskUserQuestion` to confirm unless `--force`). Never pass `--admin`: a refused merge means a branch gate applies, and the gate is the owner's policy, not an obstacle. Confirm `baseRefName` matches the branch this run is scoped to before merging.
 5. **Merge dev → main** (if applicable and authorized): create sync PR, wait CI, merge
 6. **Post-deploy verification**: health check, Sentry check for new errors
 
