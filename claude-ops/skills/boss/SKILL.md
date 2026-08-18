@@ -1,6 +1,6 @@
 ---
 name: boss
-description: "OPS on-demand: Boss-mode command center over every reachable AI agent"
+description: "OPS on-demand: Boss-mode command center over EVERY AI agent on this machine and any other host…"
 argument-hint: '[--decisions | --full | --archive-sweep]'
 allowed-tools:
   - Bash
