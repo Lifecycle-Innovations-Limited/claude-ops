@@ -35,6 +35,7 @@ echo ""
 
 run_suite "$TESTS_DIR/test-skills-lint.sh"
 run_suite "$TESTS_DIR/test-agents-lint.sh"
+run_suite "$TESTS_DIR/test-compact-discovery.sh"
 run_suite "$TESTS_DIR/test-bin-scripts.sh"
 run_suite "$TESTS_DIR/test-ops-speedup.sh"
 run_suite "$TESTS_DIR/test-pid-performance-monitor.sh"

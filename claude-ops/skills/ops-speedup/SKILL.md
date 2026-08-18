@@ -1,6 +1,6 @@
 ---
 name: ops-speedup
-description: "This skill should be used when the user asks to \"speed up this mac\", \"clean disk\", or \"/ops:ops-speedup\". Cross-platform, hardware-adaptive system optimizer. Auto-detects macOS / Linux / WSL / Windows (MINGW/Cygwin/MSYS2) and CPU/RAM/disk/GPU profile, then picks the right cleanup strategy. Scans reclaimable disk space, memory pressure, runaway processes, startup bloat, network issues. CleanMyMac built into Claude Code."
+description: "OPS on-demand: This skill should be used when the user asks to \"speed up this mac\", \"clean disk\", or…"
 argument-hint: '[scan|clean|deep|auto]'
 allowed-tools:
   - Bash

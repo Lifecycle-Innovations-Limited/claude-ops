@@ -1,6 +1,6 @@
 ---
 name: ops-resume
-description: "This skill should be used when the user asks to \"resume sessions\", \"reopen ghostty tabs\", or \"/ops:ops-resume\". Reopen recently-closed Claude Code sessions, one per Ghostty tab. Finds recent session transcripts in ~/.claude/projects and resumes each in its own new tab via `claude --resume`, from the directory it was running in. macOS + Ghostty only."
+description: "OPS on-demand: This skill should be used when the user asks to \"resume sessions\", \"reopen ghostty…"
 argument-hint: '[-m minutes | -H hours | -n max | --here | --dry-run]'
 allowed-tools:
   - Bash

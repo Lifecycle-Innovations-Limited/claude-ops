@@ -1,6 +1,6 @@
 ---
 name: uninstall
-description: "This skill should be used when the user asks to \"uninstall ops\", \"remove claude-ops\", or \"/ops:uninstall\". Completely remove claude-ops plugin, all stored credentials, cached files, shell exports, and MCP registrations. Confirms each step before deletion."
+description: "OPS on-demand: This skill should be used when the user asks to \"uninstall ops\", \"remove claude-ops\", or…"
 argument-hint: '[--confirm]'
 allowed-tools:
   - Bash

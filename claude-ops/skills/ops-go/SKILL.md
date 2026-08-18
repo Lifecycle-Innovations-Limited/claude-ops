@@ -1,6 +1,6 @@
 ---
 name: ops-go
-description: "This skill should be used when the user asks to \"morning briefing\", \"/ops:ops-go\", or \"what should I do today\". Token-efficient morning briefing. Pre-gathers all data via shell scripts, then presents a unified business dashboard with prioritized actions."
+description: "OPS on-demand: This skill should be used when the user asks to \"morning briefing\", \"/ops:ops-go\", or…"
 argument-hint: '[project-alias]'
 allowed-tools:
   - Bash

@@ -1,6 +1,6 @@
 ---
 name: ops-dash
-description: "This skill should be used when the user asks to \"ops dashboard\", \"pixel HQ\", or \"/ops:ops-dash\". Interactive pixel-art command center dashboard. Visual business HQ with instant hotkey navigation to all ops commands, live status indicators, fire alerts, C-suite reports, settings, sharing, and FAQ."
+description: "OPS on-demand: This skill should be used when the user asks to \"ops dashboard\", \"pixel HQ\", or…"
 argument-hint: '[back|settings|share|faq]'
 allowed-tools:
   - Bash

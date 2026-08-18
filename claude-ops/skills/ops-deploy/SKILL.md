@@ -1,6 +1,6 @@
 ---
 name: ops-deploy
-description: "This skill should be used when the user asks to \"deploy status\", \"what is in production\", or \"/ops:ops-deploy\". Deploy status across all projects. Shows ECS service versions, Vercel deployments, recent deploys, pending deploys, and CI/CD pipeline state."
+description: "OPS on-demand: This skill should be used when the user asks to \"deploy status\", \"what is in…"
 argument-hint: '[project-alias|ecs|vercel|all]'
 allowed-tools:
   - Bash

@@ -1,6 +1,6 @@
 ---
 name: ops-rotate
-description: "This skill should be used when the user asks to \"rotate Claude\", \"max seats\", or \"/ops:ops-rotate\". Alias of /ops:accounts for Claude Max seats (status, rotate-now, list, reauth). Prefer /ops:accounts for multi-provider. Full Claude procedure still in this file's historical detail via ops-accounts router."
+description: "OPS on-demand: This skill should be used when the user asks to \"rotate Claude\", \"max seats\", or…"
 argument-hint: '[status|rotate-now|list|add-account|reauth]'
 allowed-tools:
   - Bash

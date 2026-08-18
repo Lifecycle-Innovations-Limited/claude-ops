@@ -1,6 +1,6 @@
 ---
 name: dependency-auditor
-description: Audits project dependencies for security advisories, version drift, and unused packages. Surfaces findings + a recommended action plan. Does NOT auto-upgrade major versions. Examples - <example>Quarterly dep audit before release.</example> <example>After dependabot floods open PRs, decide which to merge first by risk.</example> <example>Inherited codebase — what's vulnerable, what's stale, what's dead.</example>
+description: "OPS specialist: Audits project dependencies for security advisories, version drift, and unused…"
 tools: Read, Bash, Grep, Glob, WebFetch
 model: sonnet
 ---
