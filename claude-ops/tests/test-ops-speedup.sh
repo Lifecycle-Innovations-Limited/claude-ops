@@ -55,6 +55,96 @@ assert_true "CPU hog kill gated by aggressive" grep -q 'Despite the legacy name,
 assert_true "GPU probe uses ioreg without sudo" grep -q 'ioreg -r -d1 -w0 -c IOGPU' "$BIN"
 assert_true "long-lived hog threshold is 3 hours" grep -q 'elapsed >= 10800' "$BIN"
 
+# Drive the shipped process-state classifier through the real binary. A PID that
+# appears blocked in only one sample is transient; only the PID blocked in all
+# three samples is counted as stuck. Runnable and zombie counts use the latest
+# sample, matching the live probe.
+cat >"$tmpdir/states-1" <<'EOF'
+101 U
+202 U
+303 R
+404 S
+EOF
+cat >"$tmpdir/states-2" <<'EOF'
+101 S
+202 U
+303 S
+404 S
+EOF
+cat >"$tmpdir/states-3" <<'EOF'
+101 R
+202 U
+303 S
+404 Z
+505 R
+EOF
+state_counts=$(bash "$BIN" --classify-process-states \
+  "$tmpdir/states-1" "$tmpdir/states-2" "$tmpdir/states-3")
+assert_eq "transient U is ignored and persistent U is counted" "5 2 1 1" "$state_counts"
+
+cat >"$tmpdir/states-none-1" <<'EOF'
+11 U
+12 S
+EOF
+cat >"$tmpdir/states-none-2" <<'EOF'
+11 S
+12 U
+EOF
+cat >"$tmpdir/states-none-3" <<'EOF'
+11 R
+12 S
+EOF
+no_stuck=$(bash "$BIN" --classify-process-states \
+  "$tmpdir/states-none-1" "$tmpdir/states-none-2" "$tmpdir/states-none-3")
+assert_eq "one-frame U states never become stuck" "2 1 0 0" "$no_stuck"
+
+# On macOS, also drive the normal --json probe with a ps shim. This proves the
+# public runtime.stuck result uses all three PID/state observations rather than
+# only proving the helper in isolation.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  real_ps=$(command -v ps)
+  mkdir -p "$tmpdir/mock-bin"
+  cat >"$tmpdir/mock-bin/ps" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "-Ao pid=,stat=" ]]; then
+  count_file="$OPS_SPEEDUP_PS_COUNT"
+  count=0
+  [[ -f "$count_file" ]] && count=$(cat "$count_file")
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$count_file"
+  case "${OPS_SPEEDUP_PS_SCENARIO}:${count}" in
+    transient:1) printf '101 U\n202 S\n' ;;
+    transient:2) printf '101 S\n202 U\n' ;;
+    transient:3) printf '101 R\n202 S\n' ;;
+    persistent:*) printf '101 U\n202 S\n' ;;
+    *) exit 3 ;;
+  esac
+else
+  exec "$OPS_SPEEDUP_REAL_PS" "$@"
+fi
+SH
+  chmod +x "$tmpdir/mock-bin/ps"
+
+  run_state_scenario() {
+    local scenario="$1"
+    local output count_file="$tmpdir/ps-${scenario}.count"
+    rm -f "$count_file"
+    output=$(PATH="$tmpdir/mock-bin:$PATH" \
+      OPS_SPEEDUP_REAL_PS="$real_ps" \
+      OPS_SPEEDUP_PS_SCENARIO="$scenario" \
+      OPS_SPEEDUP_PS_COUNT="$count_file" \
+      bash "$BIN" --json)
+    python3 - "$output" <<'PY'
+import json, sys
+print(json.loads(sys.argv[1])["runtime"]["stuck"])
+PY
+  }
+
+  assert_eq "real JSON probe ignores transient U states" "0" "$(run_state_scenario transient)"
+  assert_eq "real JSON probe counts a persistent U PID" "1" "$(run_state_scenario persistent)"
+fi
+
 json_out=$(bash "$BIN" --json)
 python3 - "$json_out" <<'PY'
 import json, sys

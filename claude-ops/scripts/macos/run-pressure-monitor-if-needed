@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Invoke the PID-attributed pressure monitor only for sustained high macOS load.
+set -euo pipefail
+
+if [[ $# -ne 4 ]]; then
+  echo "usage: run-pressure-monitor-if-needed LOAD1 LOAD5 NCPU MONITOR" >&2
+  exit 2
+fi
+
+load1="$1"
+load5="$2"
+ncpu="$3"
+monitor="$4"
+
+if ! awk -v l1="$load1" -v l5="$load5" -v n="$ncpu" \
+  'BEGIN { exit !(n > 0 && l1 > n*2 && l5 > n*2) }'; then
+  exit 0
+fi
+
+[[ -x "$monitor" ]] || exit 0
+exec "$monitor"
