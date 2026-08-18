@@ -1,6 +1,6 @@
 ---
 name: ops-linear
-description: Linear command center. Shows current sprint, creates/updates issues, manages priorities, syncs with GSD phases.
+description: "OPS on-demand: Linear command center"
 argument-hint: '[sprint|create|update|sync|backlog|issue-id]'
 allowed-tools:
   - Bash

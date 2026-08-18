@@ -1,6 +1,6 @@
 ---
 name: ops-aws-audit
-description: Read-only AWS account hygiene audit — security baseline, unused/orphaned resources, and cost optimization across all configured regions. Produces severity-ranked findings (CRITICAL→LOW) plus a machine-readable findings.json. Cleanup actions are always human-gated, never automatic. Use for cost reviews, security sweeps, recurring account hygiene, or "audit my AWS".
+description: "OPS on-demand: Read-only AWS account hygiene audit"
 argument-hint: '[--quiet] [--schedule] [region,region]'
 allowed-tools:
   - Bash

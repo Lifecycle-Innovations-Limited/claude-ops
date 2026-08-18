@@ -1,6 +1,6 @@
 ---
 name: ops-go
-description: Token-efficient morning briefing. Pre-gathers all data via shell scripts, then presents a unified business dashboard with prioritized actions.
+description: "OPS on-demand: Token-efficient morning briefing"
 argument-hint: '[project-alias]'
 allowed-tools:
   - Bash

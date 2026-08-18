@@ -1,6 +1,6 @@
 ---
 name: ops-yolo
-description: YOLO mode. Spawns 4 parallel C-suite agents (CEO, CTO, CFO, COO). Each analyzes the business from their perspective using ALL available data. Produces unfiltered Hard Truths report. After user types YOLO, autonomously runs the business for a day using /loop.
+description: "OPS on-demand: YOLO mode"
 argument-hint: '[YOLO|analyze|report]'
 allowed-tools:
   - Bash

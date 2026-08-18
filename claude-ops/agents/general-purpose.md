@@ -1,6 +1,6 @@
 ---
 name: general-purpose
-description: Fully-equipped fallback agent for tasks that don't fit a known specialist. Knows when to delegate to specialists vs do the work itself. Use when no other claude-ops agent matches AND the task spans multiple domains. Examples - <example>Task that spans frontend + backend + infra needing one coherent change.</example> <example>Codebase exploration combined with a small targeted fix.</example> <example>Quick research + a 1-2 file patch that doesn't justify spawning a specialist.</example>
+description: "OPS specialist: Fully-equipped fallback agent for tasks that don't fit a known specialist"
 tools: Read, Write, Edit, Bash, Grep, Glob, NotebookEdit, TodoWrite, WebSearch, WebFetch
 model: sonnet
 ---

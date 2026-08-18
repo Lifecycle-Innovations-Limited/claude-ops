@@ -1,6 +1,6 @@
 ---
 name: ops-statusline
-description: "Statusline command center — preview, configure, switch themes, validate, and reset the Claude Code cockpit statusline. Subcommands: preview, config, theme, doctor, reset."
+description: "OPS on-demand: Statusline command center"
 argument-hint: "[preview|config|theme <name>|doctor|reset]"
 allowed-tools:
   - Bash

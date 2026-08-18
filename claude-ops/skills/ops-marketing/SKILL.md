@@ -1,6 +1,6 @@
 ---
 name: ops-marketing
-description: Marketing command center. Email campaigns (Klaviyo), paid ads (Meta/Google), analytics (GA4), SEO, and social media metrics. One dashboard for all marketing channels.
+description: "OPS on-demand: Marketing command center"
 argument-hint: '<project> [email|ads|analytics|seo|social|campaigns|setup|autopilot ...]'
 allowed-tools:
   - Bash

@@ -1,6 +1,6 @@
 ---
 name: ops-leadgen
-description: My-Project B2B wholesale leadgen review and send flow. Shows pending cold-email drafts from my-project-b2b-leadgen, lets you approve/skip each one, and fires approved drafts one-at-a-time via Rule-6-gated `my-project-leadgen send`. Never batches sends.
+description: "OPS on-demand: My-Project B2B wholesale leadgen review and send flow"
 argument-hint: '[review | send --draft-id N | usage | scrape | draft]'
 allowed-tools:
   - Bash

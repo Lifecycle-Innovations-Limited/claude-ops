@@ -1,6 +1,6 @@
 ---
 name: build-fixer
-description: Repairs a SINGLE failed local build (`npm run build:*`, fastlane, expo, etc.). Headless agent dispatched by the build-failure trigger. Use when a local mobile/native/web build script fails. Examples - <example>npm run build:production:local exit 1 with type-check error.</example> <example>fastlane archive failed on iOS Pod compilation.</example> <example>expo-doctor reports SDK version drift.</example>
+description: "OPS specialist: Repairs a SINGLE failed local build (`npm run build:*`, fastlane, expo, etc.)"
 tools: Read, Edit, Bash, Grep, Glob
 model: sonnet
 ---

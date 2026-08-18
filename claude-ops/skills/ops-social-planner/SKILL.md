@@ -1,6 +1,6 @@
 ---
 name: ops-social-planner
-description: Visual, engine-agnostic planner for all scheduled social posts and ads across every identity and project. Auto-generates the current state of ops-socials + ops-marketing planned content per project, per channel, regardless of posting engine (Typefully, upload-post, Meta, Google Ads), and serves a clean local web UI. Use when the user says social planner, content calendar, what's scheduled, planned posts, show my queue, posting schedule, social dashboard, or runs /ops-social-planner. Read-only — never publishes (mutation stays in /ops-socials + /ops-marketing behind per-message approval).
+description: "OPS on-demand: Visual, engine-agnostic planner for all scheduled social posts and ads across every…"
 argument-hint: '[--project <id>] [--collect-only] [--port <n>] [--no-open]'
 allowed-tools:
   - Bash

@@ -1,6 +1,6 @@
 ---
 name: ops-dash
-description: Interactive pixel-art command center dashboard. Visual business HQ with instant hotkey navigation to all ops commands, live status indicators, fire alerts, C-suite reports, settings, sharing, and FAQ.
+description: "OPS on-demand: Interactive pixel-art command center dashboard"
 argument-hint: '[back|settings|share|faq]'
 allowed-tools:
   - Bash

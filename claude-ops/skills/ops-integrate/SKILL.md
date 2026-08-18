@@ -1,6 +1,6 @@
 ---
 name: ops-integrate
-description: Add any SaaS API as a first-class integration. Provide the service name — ops-integrate discovers auth patterns, tests connectivity, and registers the API in your partner registry so it's available to other skills.
+description: "OPS on-demand: Add any SaaS API as a first-class integration"
 argument-hint: '<service-name> [--url <base-url>] [--auth bearer|api-key|basic|oauth2] [--list]'
 allowed-tools:
   - Bash

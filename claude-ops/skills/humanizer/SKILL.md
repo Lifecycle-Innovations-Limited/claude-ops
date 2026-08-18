@@ -1,6 +1,6 @@
 ---
 name: humanizer
-description: Strip the tells of AI-generated writing out of a draft so it reads as if a person wrote it. Use before any text leaves the machine (email, PR body, commit message, doc, landing copy, release note), or when the owner says "humanize this", "this reads like ChatGPT", "make it sound human". Detects inflated significance, promotional tone, participle padding, vague attribution, em dashes, rule of three, AI vocabulary, negative parallelism, sycophancy, and filler, then rewrites without inventing facts.
+description: "OPS on-demand: Strip the tells of AI-generated writing out of a draft so it reads as if a person wrote…"
 argument-hint: '[pasted text | path/to/file.md]'
 allowed-tools:
   - Read

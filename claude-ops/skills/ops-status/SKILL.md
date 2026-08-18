@@ -1,6 +1,6 @@
 ---
 name: ops-status
-description: Lightweight green/red status panel for every configured integration. No gather, no actions.
+description: "OPS on-demand: Lightweight green/red status panel for every configured integration"
 argument-hint: '[--json]'
 allowed-tools:
   - Bash

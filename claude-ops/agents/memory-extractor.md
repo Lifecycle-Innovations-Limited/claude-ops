@@ -1,6 +1,6 @@
 ---
 name: memory-extractor
-description: Background agent that extracts user profiles, contact cards, and behavioral patterns from chat history. Runs as a daemon service every 30 min.
+description: "OPS specialist: Background agent that extracts user profiles, contact cards, and behavioral patterns…"
 model: sonnet
 effort: low
 maxTurns: 10

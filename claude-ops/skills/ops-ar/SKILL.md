@@ -1,6 +1,6 @@
 ---
 name: ops-ar
-description: A&R any record like a dance-pop label owner + master producer. Single track, batch, or full Gmail-inbox demo sweep — runs the audio-ar analysis stack (BPM/key/loudness/structure, CLAP mood/genre/hit-lean, Whisper lyrics, Cyanite/Music.ai pro layer) and delivers verdict cards. Can email the full verdict with listen links on request.
+description: "OPS on-demand: A&R any record like a dance-pop label owner + master producer"
 argument-hint: '<audio file | URL/Dropbox | "latest" | <file1> <file2> ... | inbox [from <sender>...]>'
 allowed-tools:
   - Bash

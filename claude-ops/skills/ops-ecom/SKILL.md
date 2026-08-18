@@ -1,6 +1,6 @@
 ---
 name: ops-ecom
-description: Shopify store command center. Orders, inventory, fulfillment, analytics, store health, sales channels, agentic storefronts, and Shop readiness. Works with any Shopify store via Admin API.
+description: "OPS on-demand: Shopify store command center"
 argument-hint: '[orders|inventory|fulfillment|health|products|customers|analytics|channels|agentic|shop|setup]'
 allowed-tools:
   - Bash

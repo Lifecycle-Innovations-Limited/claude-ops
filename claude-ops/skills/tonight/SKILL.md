@@ -1,6 +1,6 @@
 ---
 name: tonight
-description: Evening tomorrow-brief. Reads the Ops Ledger, calendar, and People DB. Surfaces tomorrow's meetings with prep status, birthdays hitting tomorrow, overdue outreach, top 3 priorities, and any unresolved decisions from today. Push notification if anything is genuinely time-sensitive.
+description: "OPS on-demand: Evening tomorrow-brief"
 allowed-tools:
   - Bash
   - Read

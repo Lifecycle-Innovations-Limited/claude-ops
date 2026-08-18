@@ -1,6 +1,6 @@
 ---
 name: ops-desktop
-description: Autonomous desktop + browser control via the desktop-act MCP companion. Acquires an isolated noVNC desktop session, takes screenshots, clicks, types, scrolls, and runs the optional autonomous act() loop. First run auto-bootstraps the desktop-act server into a per-user cache.
+description: "OPS on-demand: Autonomous desktop + browser control via the desktop-act MCP companion"
 argument-hint: "[goal text | 'status' | 'list' | 'release [session_id]']"
 allowed-tools:
   - Bash

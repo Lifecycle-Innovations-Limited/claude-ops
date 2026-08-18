@@ -1,6 +1,6 @@
 ---
 name: ops-doctor
-description: Health check and auto-repair for the ops plugin. Diagnoses manifest errors, broken permissions, invalid configs, stale caches, and missing files — then spawns an agent to fix everything automatically.
+description: "OPS on-demand: Health check and auto-repair for the ops plugin"
 argument-hint: '[--check-only|--verbose]'
 allowed-tools:
   - Bash

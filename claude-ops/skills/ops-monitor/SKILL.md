@@ -1,6 +1,6 @@
 ---
 name: ops-monitor
-description: Unified APM and monitoring surface. Polls Datadog, New Relic, and OpenTelemetry backends for active alerts, error traces, and entity health. Use --watch for live polling every 60 seconds. Use --setup to configure monitoring credentials.
+description: "OPS on-demand: Unified APM and monitoring surface"
 argument-hint: '[--watch] [--setup] [--backend datadog|newrelic|otel]'
 allowed-tools:
   - Bash

@@ -1,6 +1,6 @@
 ---
 name: ops-mac
-description: macOS diagnose-and-fix command center. Wraps the macos-toolkit CLI suite (machealth, netwhiz, pstop, macdog, lanchr, macbroom, macctl, macfig, updater) behind one entrypoint — self-installs the suite on first use, runs a read-only baseline audit (security, launch agents, processes, network, disk, system health), and applies guarded fixes (stale daemons, cache cleanup) with per-action confirmation. The application firewall is reported only and changed solely on an explicit request.
+description: "OPS on-demand: macOS diagnose-and-fix command center"
 argument-hint: '[audit|health|net|disk|procs|security|launchd|fix|ensure|update]'
 allowed-tools:
   - Bash

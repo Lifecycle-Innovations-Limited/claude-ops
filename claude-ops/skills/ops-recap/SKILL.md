@@ -1,6 +1,6 @@
 ---
 name: ops-recap
-description: Manage the multi-session recap marquee daemon — a background process that synthesizes a one-line digest across all parallel Claude Code sessions and shell activity, displayed in tmux status-right. Subcommands status/tail/configure/restart.
+description: "OPS on-demand: Manage the multi-session recap marquee daemon"
 argument-hint: '[status|tail|configure|restart]'
 allowed-tools:
   - Bash

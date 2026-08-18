@@ -1,6 +1,6 @@
 ---
 name: ops-mcp
-description: MCP server health dashboard and reconnect control. Surfaces the watchdog + keepalive + reauth subsystem as a discoverable slash command. Routes — status, servers, reconnect, reauth, logs, restart, test.
+description: "OPS on-demand: MCP server health dashboard and reconnect control"
 argument-hint: '[status|servers|reconnect [server]|reauth [server]|logs [N]|restart|test [server]]'
 allowed-tools:
   - Bash

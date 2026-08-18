@@ -1,6 +1,6 @@
 ---
 name: ops-daemon
-description: Check claude-ops background daemon end-to-end and auto-fix common issues. Detects stale plist paths after plugin upgrades, missing service commands, dead processes, corrupt health files, and bash version mismatches.
+description: "OPS on-demand: Check claude-ops background daemon end-to-end and auto-fix common issues"
 argument-hint: '[check|fix|restart|status|uninstall]'
 allowed-tools:
   - Bash

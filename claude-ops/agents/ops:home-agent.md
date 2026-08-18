@@ -1,6 +1,6 @@
 ---
 name: ops:home-agent
-description: Homey Pro probe agent. Queries local/cloud API for devices, flows, energy, presence, alarms. Returns structured JSON. Used by ops-home skill for parallel scans.
+description: "OPS specialist: Homey Pro probe agent"
 model: claude-sonnet-4-6
 effort: low
 maxTurns: 10

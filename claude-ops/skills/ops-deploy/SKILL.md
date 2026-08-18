@@ -1,6 +1,6 @@
 ---
 name: ops-deploy
-description: Deploy status across all projects. Shows ECS service versions, Vercel deployments, recent deploys, pending deploys, and CI/CD pipeline state.
+description: "OPS on-demand: Deploy status across all projects"
 argument-hint: '[project-alias|ecs|vercel|all]'
 allowed-tools:
   - Bash

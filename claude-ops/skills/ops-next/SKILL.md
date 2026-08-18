@@ -1,6 +1,6 @@
 ---
 name: ops-next
-description: Business-level "what should I do next". Priority stack — fires > competitor alerts > unread comms > ready-to-merge PRs > Linear sprint > revenue-generating GSD work. Uses pre-gathered data and routes to the right skill.
+description: "OPS on-demand: Business-level \"what should I do next\""
 argument-hint: '[context]'
 allowed-tools:
   - Bash

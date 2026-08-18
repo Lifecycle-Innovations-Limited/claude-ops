@@ -1,6 +1,6 @@
 ---
 name: uninstall
-description: Completely remove claude-ops plugin, all stored credentials, cached files, shell exports, and MCP registrations. Confirms each step before deletion.
+description: "OPS on-demand: Completely remove claude-ops plugin, all stored credentials, cached files, shell…"
 argument-hint: '[--confirm]'
 allowed-tools:
   - Bash

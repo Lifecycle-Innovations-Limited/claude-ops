@@ -1,6 +1,6 @@
 ---
 name: ops-fires
-description: Production incidents dashboard. Reads ECS health, Sentry errors, CI failures. Offers to dispatch fix agents for active fires.
+description: "OPS on-demand: Production incidents dashboard"
 argument-hint: '[project-alias|all]'
 allowed-tools:
   - Bash

@@ -1,6 +1,6 @@
 ---
 name: infra-monitor
-description: Multi-service infrastructure health checker. Probes every AWS service the caller has IAM access to (ECS, EC2, RDS, Lambda, S3, CloudFront, ALB/NLB, API Gateway, SQS, SNS, DynamoDB, ElastiCache, Route 53, ACM, CloudWatch, Budgets, IAM) plus Vercel and GitHub Actions. Returns structured JSON with service health, accessible/inaccessible service lists, and severity-ranked anomaly flags. Used by ops-fires and ops-deploy.
+description: "OPS specialist: Multi-service infrastructure health checker"
 model: claude-sonnet-4-6
 effort: medium
 maxTurns: 25

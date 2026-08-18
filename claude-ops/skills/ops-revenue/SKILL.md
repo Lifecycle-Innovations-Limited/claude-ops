@@ -1,6 +1,6 @@
 ---
 name: ops-revenue
-description: Revenue and costs tracker. AWS spend via aws ce, credits tracker, project revenue stages. Shows burn rate, runway estimate, credits expiring.
+description: "OPS on-demand: Revenue and costs tracker"
 argument-hint: '[costs|revenue|credits|runway|all]'
 allowed-tools:
   - Bash

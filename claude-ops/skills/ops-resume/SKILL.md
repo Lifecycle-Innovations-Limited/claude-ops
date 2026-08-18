@@ -1,6 +1,6 @@
 ---
 name: ops-resume
-description: Reopen recently-closed Claude Code sessions, one per Ghostty tab. Finds recent session transcripts in ~/.claude/projects and resumes each in its own new tab via `claude --resume`, from the directory it was running in. macOS + Ghostty only.
+description: "OPS on-demand: Reopen recently-closed Claude Code sessions, one per Ghostty tab"
 argument-hint: '[-m minutes | -H hours | -n max | --here | --dry-run]'
 allowed-tools:
   - Bash

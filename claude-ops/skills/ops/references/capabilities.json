@@ -1,0 +1,344 @@
+{
+  "version": 1,
+  "purpose": "Full OPS capability descriptions loaded by the ops router only when needed.",
+  "skills": [
+    {
+      "name": "boss",
+      "summary": "Boss-mode command center over EVERY AI agent on this machine and any other host agent-dash reaches — Claude bg, Antigravity (agy), Codex, Cursor, openclaw. Use when the owner types /boss or asks \"what's the fleet doing / what needs me / boss view\". Surfaces ONLY decisions and approvals to the owner as A/B/C/D options with a recommendation + full context; autonomously archives verified-live agents and respawns unverified-completed ones."
+    },
+    {
+      "name": "flow",
+      "summary": "ONE entrypoint for the whole dev lifecycle — ideate, spec, plan, design, build, review, test, ship, deploy, monitor, retro. Routes to the single canonical command per stage (gstack / GSD / claude-ops) and picks project-mode (GSD phase machine) vs ad-hoc-mode (gstack stateless) from repo `.planning/` state. Bare `/flow` prints the lifecycle map + your current \"you are here\" position."
+    },
+    {
+      "name": "humanizer",
+      "summary": "Strip the tells of AI-generated writing out of a draft so it reads as if a person wrote it. Use before any text leaves the machine (email, PR body, commit message, doc, landing copy, release note), or when the owner says \"humanize this\", \"this reads like ChatGPT\", \"make it sound human\". Detects inflated significance, promotional tone, participle padding, vague attribution, em dashes, rule of three, AI vocabulary, negative parallelism, sycophancy, and filler, then rewrites without inventing facts."
+    },
+    {
+      "name": "ledger",
+      "summary": "Inspect the shared Ops Ledger — what's awaiting owner, what was handled autonomously, what claude-ops or Perplexity did in the last 24h. Always the single source of truth between the two systems."
+    },
+    {
+      "name": "ops-accounts",
+      "summary": "Multi-provider AI account manager (Claude, Grok/xAI, OpenAI/Codex, Factory, Cursor). Status, setup, switch, refresh, reauth, util, and the CLIProxyAPI pool. Canonical replacement for /ops:rotate and /ops:rotate-setup (those remain aliases)."
+    },
+    {
+      "name": "ops-ar",
+      "summary": "A&R any record like a dance-pop label owner + master producer. Single track, batch, or full Gmail-inbox demo sweep — runs the audio-ar analysis stack (BPM/key/loudness/structure, CLAP mood/genre/hit-lean, Whisper lyrics, Cyanite/Music.ai pro layer) and delivers verdict cards. Can email the full verdict with listen links on request."
+    },
+    {
+      "name": "ops-aws-audit",
+      "summary": "Read-only AWS account hygiene audit — security baseline, unused/orphaned resources, and cost optimization across all configured regions. Produces severity-ranked findings (CRITICAL→LOW) plus a machine-readable findings.json. Cleanup actions are always human-gated, never automatic. Use for cost reviews, security sweeps, recurring account hygiene, or \"audit my AWS\"."
+    },
+    {
+      "name": "ops-comms",
+      "summary": "Send and read messages across all channels. Routes based on arguments — whatsapp, email, slack, telegram, discord, notion, or natural language like \"send [msg] to [contact]\". WhatsApp via mcp__whatsapp__* (Baileys bridge)."
+    },
+    {
+      "name": "ops-competitors",
+      "summary": "Competitor-intel dashboard and management UI. Tracks brand signals, page-diff alerts, pricing changes, App Store moves, and weekly synthesis reports. Powered by the competitor-intel cron pipeline."
+    },
+    {
+      "name": "ops-credentials",
+      "summary": "Audit which integration credentials are configured. Scans shell env, ops preferences.json, Doppler, macOS Keychain, and Dashlane to report a configured-vs-missing table per service. Never displays raw values — always masks as first6•••last4. Use when you want to see which integrations have keys set up and which still need /ops:setup."
+    },
+    {
+      "name": "ops-daemon",
+      "summary": "Check claude-ops background daemon end-to-end and auto-fix common issues. Detects stale plist paths after plugin upgrades, missing service commands, dead processes, corrupt health files, and bash version mismatches."
+    },
+    {
+      "name": "ops-dash",
+      "summary": "Interactive pixel-art command center dashboard. Visual business HQ with instant hotkey navigation to all ops commands, live status indicators, fire alerts, C-suite reports, settings, sharing, and FAQ."
+    },
+    {
+      "name": "ops-deploy-fix",
+      "summary": "Inspect and control the deploy/build auto-fix subsystem. Use for `/ops:deploy-fix status` (last monitor runs, fixer dispatches, locks, hourly budget), `/ops:deploy-fix tail` (follow latest fixer log), `/ops:deploy-fix configure` (re-run the wizard), and `/ops:deploy-fix test` (synthetic dry-run through the pipeline). Trigger when the user mentions deploy auto-fix, post-merge monitor, build fixer, fix budget, fix-agent log, or asks why a deploy didn't get auto-fixed."
+    },
+    {
+      "name": "ops-deploy",
+      "summary": "Deploy status across all projects. Shows ECS service versions, Vercel deployments, recent deploys, pending deploys, and CI/CD pipeline state."
+    },
+    {
+      "name": "ops-desk",
+      "summary": "Desk sweep — turn the owner's backlog of open decisions, staged drafts, payments, sign-offs and chases into a ranked, ready-to-approve action queue. Fans out READ-ONLY context agents (one per item, batched) via the Workflow tool, each returning a structured action package (status + recommendation + full draft in the owner's voice), then walks the queue rapid-fire in the main session under the outbound-approval gate. Complements /ops:ops-inbox (comms triage) — ops-desk handles everything that is NOT a fresh inbound message; decisions, blocked issues, owner-action items."
+    },
+    {
+      "name": "ops-desktop",
+      "summary": "Autonomous desktop + browser control via the desktop-act MCP companion. Acquires an isolated noVNC desktop session, takes screenshots, clicks, types, scrolls, and runs the optional autonomous act() loop. First run auto-bootstraps the desktop-act server into a per-user cache."
+    },
+    {
+      "name": "ops-doctor",
+      "summary": "Health check and auto-repair for the ops plugin. Diagnoses manifest errors, broken permissions, invalid configs, stale caches, and missing files — then spawns an agent to fix everything automatically."
+    },
+    {
+      "name": "ops-ecom",
+      "summary": "Shopify store command center. Orders, inventory, fulfillment, analytics, store health, sales channels, agentic storefronts, and Shop readiness. Works with any Shopify store via Admin API."
+    },
+    {
+      "name": "ops-feature-dev",
+      "summary": "Guided feature development — delegates to the feature-dev plugin's 7-phase workflow (explore, architect, implement, review). Use before ad-hoc builds or as pre-work before gsd-execute-phase."
+    },
+    {
+      "name": "ops-fires",
+      "summary": "Production incidents dashboard. Reads ECS health, Sentry errors, CI failures. Offers to dispatch fix agents for active fires."
+    },
+    {
+      "name": "ops-fleet",
+      "summary": "Read-only Claude + CLIProxyAPI fleet dashboard. Shows sessions, gateway, providers, models, pooled accounts, routing, and traffic."
+    },
+    {
+      "name": "ops-go",
+      "summary": "Token-efficient morning briefing. Pre-gathers all data via shell scripts, then presents a unified business dashboard with prioritized actions."
+    },
+    {
+      "name": "ops-gtm",
+      "summary": "Go-to-market strategy planner. Generates a complete GTM plan across paid, unpaid, marketing, sales, and AI-automation channels for any project — and hands executable campaigns off to /marketing."
+    },
+    {
+      "name": "ops-home",
+      "summary": "Smart home command center via Homey Pro. Devices, flows, scenes, energy, climate, presence, alarms. Works via Homey local API (preferred) + Athom cloud API fallback. Configure once via /ops:setup."
+    },
+    {
+      "name": "ops-inbox",
+      "summary": "Full inbox management across all channels — WhatsApp (whatsmeow bridge via mcp__whatsapp__*), iMessage (chat.db reader + AppleScript send via mcp__plugin_imessage_imessage__*), Email (Gmail MCP), Slack (MCP), Telegram (user-auth MCP), Discord (webhook + REST read), Notion (MCP — comments, mentions, assigned tasks). Scans FULL inbox (not just unread), identifies messages needing replies, archives handled conversations."
+    },
+    {
+      "name": "ops-integrate",
+      "summary": "Add any SaaS API as a first-class integration. Provide the service name — ops-integrate discovers auth patterns, tests connectivity, and registers the API in your partner registry so it's available to other skills."
+    },
+    {
+      "name": "ops-leadgen",
+      "summary": "My-Project B2B wholesale leadgen review and send flow. Shows pending cold-email drafts from my-project-b2b-leadgen, lets you approve/skip each one, and fires approved drafts one-at-a-time via Rule-6-gated `my-project-leadgen send`. Never batches sends."
+    },
+    {
+      "name": "ops-linear",
+      "summary": "Linear command center. Shows current sprint, creates/updates issues, manages priorities, syncs with GSD phases."
+    },
+    {
+      "name": "ops-mac",
+      "summary": "macOS diagnose-and-fix command center. Wraps the macos-toolkit CLI suite (machealth, netwhiz, pstop, macdog, lanchr, macbroom, macctl, macfig, updater) behind one entrypoint — self-installs the suite on first use, runs a read-only baseline audit (security, launch agents, processes, network, disk, system health), and applies guarded fixes (stale daemons, cache cleanup) with per-action confirmation. The application firewall is reported only and changed solely on an explicit request."
+    },
+    {
+      "name": "ops-marketing",
+      "summary": "Marketing command center. Email campaigns (Klaviyo), paid ads (Meta/Google), analytics (GA4), SEO, and social media metrics. One dashboard for all marketing channels."
+    },
+    {
+      "name": "ops-mcp",
+      "summary": "MCP server health dashboard and reconnect control. Surfaces the watchdog + keepalive + reauth subsystem as a discoverable slash command. Routes — status, servers, reconnect, reauth, logs, restart, test."
+    },
+    {
+      "name": "ops-merge",
+      "summary": "Autonomous salvage + PR merge pipeline. FIRST scans every repo in every org for orphan worktrees, feature branches without PRs, uncommitted/staged/stashed work, and unpushed commits — dispatches subagents to finish/PR all loose local work. THEN scans all open PRs, dispatches fixers for CI/conflicts/reviews, and merges. Use --main to also sync dev↔main branches. Use --no-salvage to skip Phase 0 (PR-only mode). Use --salvage-only to stop after Phase 0."
+    },
+    {
+      "name": "ops-monitor",
+      "summary": "Unified APM and monitoring surface. Polls Datadog, New Relic, and OpenTelemetry backends for active alerts, error traces, and entity health. Use --watch for live polling every 60 seconds. Use --setup to configure monitoring credentials."
+    },
+    {
+      "name": "ops-next",
+      "summary": "Business-level \"what should I do next\". Priority stack — fires > competitor alerts > unread comms > ready-to-merge PRs > Linear sprint > revenue-generating GSD work. Uses pre-gathered data and routes to the right skill."
+    },
+    {
+      "name": "ops-orchestrate",
+      "summary": "Autonomous multi-project orchestration engine. Audits all registered projects, structures work into dependency-wired tasks, dispatches parallel agents (subagents or Agent Teams), audits completions, and ships PRs. Registry-driven — works for any user with a configured project registry."
+    },
+    {
+      "name": "ops-package",
+      "summary": "Ship parcels via any configured carrier — MyParcel, Sendcloud, DHL Parcel NL, PostNL, DPD, UPS, FedEx. Auto-selects the first carrier whose credentials are configured, or pass --carrier <name> to override. Verbs: ship, label, track, list, carriers."
+    },
+    {
+      "name": "ops-pocket",
+      "summary": "Pocket voice-memo pipeline command center. Surfaces the watcher → triage → executor → notifier → bridges chain that turns Pocket-recorded voice memos into running Claude tasks, with WhatsApp + email notifications. Routes — status, setup, tasks, test, logs, restart, whatsapp on|off, email on|off."
+    },
+    {
+      "name": "ops-projects",
+      "summary": "Portfolio dashboard for all GSD-tracked projects. Scans ~/Projects and ~/gsd-workspaces for .planning/ directories, shows phase status, git state, blockers, and next actions for every project. Run /ops projects to see the full portfolio."
+    },
+    {
+      "name": "ops-recap",
+      "summary": "Manage the multi-session recap marquee daemon — a background process that synthesizes a one-line digest across all parallel Claude Code sessions and shell activity, displayed in tmux status-right. Subcommands status/tail/configure/restart."
+    },
+    {
+      "name": "ops-release",
+      "summary": "Publish a new version of the claude-ops (\"ops\") plugin in one command — bump plugin.json + marketplace.json + package.json, prepend the CHANGELOG, open the release PR, wait for CI, squash-merge it to main, and tag vX.Y.Z. Use when shipping a fix/feature that has already merged to main and you want it published so /ops:ops-update can pull it down. This is the publish side; /ops:ops-update is the consume side."
+    },
+    {
+      "name": "ops-resume",
+      "summary": "Reopen recently-closed Claude Code sessions, one per Ghostty tab. Finds recent session transcripts in ~/.claude/projects and resumes each in its own new tab via `claude --resume`, from the directory it was running in. macOS + Ghostty only."
+    },
+    {
+      "name": "ops-revenue",
+      "summary": "Revenue and costs tracker. AWS spend via aws ce, credits tracker, project revenue stages. Shows burn rate, runway estimate, credits expiring."
+    },
+    {
+      "name": "ops-rotate-setup",
+      "summary": "Fail-closed legacy Claude setup alias that directs operators to separately approved staged enrollment."
+    },
+    {
+      "name": "ops-rotate",
+      "summary": "Alias of /ops:accounts for Claude Max seats (status, rotate-now, list, reauth). Prefer /ops:accounts for multi-provider. Full Claude procedure still in this file's historical detail via ops-accounts router."
+    },
+    {
+      "name": "ops-secret-sync",
+      "summary": "Detects and syncs Doppler→GitHub secrets drift. Compares last-updated timestamps between Doppler and GH repo secrets; flags stale GH secrets (>24h behind Doppler); confirms with user before writing any changes. Safe to run in CI or locally."
+    },
+    {
+      "name": "ops-settings",
+      "summary": "Post-setup credential manager. Shows current integration status (configured/missing/expired) and lets you update individual credentials without re-running the full setup wizard. Runs a smoke test after each update."
+    },
+    {
+      "name": "ops-ship",
+      "summary": "One-command full release chain for the claude-ops (\"ops\") plugin — sweep and admin-merge every open PR, then publish a new version (bump plugin.json + marketplace.json registry + package.json + CHANGELOG, open release PR, admin-merge, tag), then pull it onto the box. Use when you have one or more merged-ready PRs and want to ship a new published version in a single step instead of merging PRs by hand and then releasing. Combines the PR sweep + /ops:ops-release + /ops:ops-update."
+    },
+    {
+      "name": "ops-social-planner",
+      "summary": "Visual, engine-agnostic planner for all scheduled social posts and ads across every identity and project. Auto-generates the current state of ops-socials + ops-marketing planned content per project, per channel, regardless of posting engine (Typefully, upload-post, Meta, Google Ads), and serves a clean local web UI. Use when the user says social planner, content calendar, what's scheduled, planned posts, show my queue, posting schedule, social dashboard, or runs /ops-social-planner. Read-only — never publishes (mutation stays in /ops-socials + /ops-marketing behind per-message approval)."
+    },
+    {
+      "name": "ops-socials",
+      "summary": "Public social channels command center — X/Twitter, LinkedIn, Threads, Bluesky, Mastodon. Routes reads via x-research-skill + x-mcp (or mcp__x-mcp__*), posts via Typefully MCP (ban-safe, multi-platform), and LinkedIn voice/craft via linkedin-skills. Stages drafts; never auto-publishes. Use when the user says socials, post, tweet, thread, draft, schedule a post, search X, what is X saying about, AI twitter, AI news, monitor a profile, LinkedIn post, or runs /ops-socials. NOT for private DMs/email/Slack/WhatsApp — those go through /ops-comms."
+    },
+    {
+      "name": "ops-speedup",
+      "summary": "Cross-platform, hardware-adaptive system optimizer. Auto-detects macOS / Linux / WSL / Windows (MINGW/Cygwin/MSYS2) and CPU/RAM/disk/GPU profile, then picks the right cleanup strategy. Scans reclaimable disk space, memory pressure, runaway processes, startup bloat, network issues. CleanMyMac built into Claude Code."
+    },
+    {
+      "name": "ops-status",
+      "summary": "Lightweight green/red status panel for every configured integration. No gather, no actions."
+    },
+    {
+      "name": "ops-statusline",
+      "summary": "Statusline command center — preview, configure, switch themes, validate, and reset the Claude Code cockpit statusline. Subcommands: preview, config, theme, doctor, reset."
+    },
+    {
+      "name": "ops-triage",
+      "summary": "Cross-platform issue triage. Pulls from Sentry (MCP), Linear (MCP), GitHub Issues (gh). Cross-references against code to find already-fixed issues. Auto-resolves fixed ones. Dispatches agents for active issues."
+    },
+    {
+      "name": "ops-unifi",
+      "summary": "UniFi network command center. Full control across the three official UniFi APIs — Site Manager (cloud multi-site oversight), Network Integration (local per-console device/client control), and Protect Integration (cameras/NVR). Plus a predict mode that flags WAN/AP/client anomalies before they page you. Configure once via /ops:setup."
+    },
+    {
+      "name": "ops-update",
+      "summary": "Upgrade the local claude-ops (\"ops\") plugin to the latest published version in one command — refresh the marketplace catalogue, update the installed plugin (with stale-cache force-reinstall fallback), reapply local cache patches, prune every old cache version, rewrite stale version-pinned paths, run per-version migrations, then prompt to reload. Use when the box is on an older plugin version, after a release, or when the cache looks stale."
+    },
+    {
+      "name": "ops-voice",
+      "summary": "Voice operations — native macOS Phone (Continuity), FaceTime, Zoom, Google Meet, WhatsApp call, Twilio voice + SMS, Bland AI agent calls, ElevenLabs TTS, Whisper transcription. All curl-based, no SDK deps."
+    },
+    {
+      "name": "ops-whatsapp-biz",
+      "summary": "WhatsApp Business Cloud API — send approved template messages at scale, manage templates with approval tracking, and integrate product catalogs. Separate from wacli personal WhatsApp."
+    },
+    {
+      "name": "ops-yolo",
+      "summary": "YOLO mode. Spawns 4 parallel C-suite agents (CEO, CTO, CFO, COO). Each analyzes the business from their perspective using ALL available data. Produces unfiltered Hard Truths report. After user types YOLO, autonomously runs the business for a day using /loop."
+    },
+    {
+      "name": "ops",
+      "summary": "Single discovery router for all business operations. Use for communications, projects, infrastructure, revenue, marketing, releases, fleet management, automation, or any OPS capability; it loads and invokes only the relevant specialist instructions on demand."
+    },
+    {
+      "name": "people",
+      "summary": "Sync Apple Contacts to Notion 'People' database. Track last_contacted, relationship_strength, recent_topics, next_nudge_due. Foundation for relationship intelligence — birthdays, anniversaries, overdue-outreach, news-mention nudges."
+    },
+    {
+      "name": "setup",
+      "summary": "Interactive setup wizard for the claude-ops plugin. Installs missing CLIs, configures env vars for each channel (Telegram, WhatsApp, Email, Slack, Notion, Linear, Sentry, Vercel), builds the project registry, and saves user preferences. Run once after installing the plugin or any time to reconfigure."
+    },
+    {
+      "name": "tonight",
+      "summary": "Evening tomorrow-brief. Reads the Ops Ledger, calendar, and People DB. Surfaces tomorrow's meetings with prep status, birthdays hitting tomorrow, overdue outreach, top 3 priorities, and any unresolved decisions from today. Push notification if anything is genuinely time-sensitive."
+    },
+    {
+      "name": "uninstall",
+      "summary": "Completely remove claude-ops plugin, all stored credentials, cached files, shell exports, and MCP registrations. Confirms each step before deletion."
+    }
+  ],
+  "agents": [
+    {
+      "name": "ar-producer",
+      "summary": "A&R a record like a dance-pop hit label owner + master producer. Runs the audio-ar stack (BPM/key/loudness/structure, stems, CLAP mood/genre/hit-lean, Whisper lyrics, Cyanite/Music.ai) and fuses it with hit-making judgment into a verdict + producer plan. Use to A&R a demo or assess a song's hit potential."
+    },
+    {
+      "name": "build-fixer",
+      "summary": "Repairs a SINGLE failed local build (`npm run build:*`, fastlane, expo, etc.). Headless agent dispatched by the build-failure trigger. Use when a local mobile/native/web build script fails. Examples - <example>npm run build:production:local exit 1 with type-check error.</example> <example>fastlane archive failed on iOS Pod compilation.</example> <example>expo-doctor reports SDK version drift.</example>"
+    },
+    {
+      "name": "comms-scanner",
+      "summary": "Scans all communication channels for FULL inbox state (not just unread). Classifies each conversation as NEEDS_REPLY, WAITING, or HANDLED. Returns structured JSON. Used by ops-inbox and ops-go."
+    },
+    {
+      "name": "ops-daemon-manager",
+      "summary": "Manages the ops background daemon — start, stop, restart services, check health"
+    },
+    {
+      "name": "dependency-auditor",
+      "summary": "Audits project dependencies for security advisories, version drift, and unused packages. Surfaces findings + a recommended action plan. Does NOT auto-upgrade major versions. Examples - <example>Quarterly dep audit before release.</example> <example>After dependabot floods open PRs, decide which to merge first by risk.</example> <example>Inherited codebase — what's vulnerable, what's stale, what's dead.</example>"
+    },
+    {
+      "name": "deploy-fixer",
+      "summary": "Diagnoses and remediates a SINGLE failed post-merge deployment. Headless agent dispatched by ops-deploy-monitor.sh after a `gh pr merge` to dev/main fails its deploy workflow. Use when a CI/CD deploy fails on a recently-merged PR. Examples - <example>GitHub Actions deploy workflow concluded \"failure\" after PR merge.</example> <example>ECS service health check 503 after rolling deploy.</example> <example>Vercel deployment errored on the merge commit.</example>"
+    },
+    {
+      "name": "doctor-agent",
+      "summary": "Diagnoses and auto-fixes ops plugin configuration errors, manifest issues, broken permissions, invalid JSON, and stale cache copies."
+    },
+    {
+      "name": "general-purpose",
+      "summary": "Fully-equipped fallback agent for tasks that don't fit a known specialist. Knows when to delegate to specialists vs do the work itself. Use when no other claude-ops agent matches AND the task spans multiple domains. Examples - <example>Task that spans frontend + backend + infra needing one coherent change.</example> <example>Codebase exploration combined with a small targeted fix.</example> <example>Quick research + a 1-2 file patch that doesn't justify spawning a specialist.</example>"
+    },
+    {
+      "name": "infra-monitor",
+      "summary": "Multi-service infrastructure health checker. Probes every AWS service the caller has IAM access to (ECS, EC2, RDS, Lambda, S3, CloudFront, ALB/NLB, API Gateway, SQS, SNS, DynamoDB, ElastiCache, Route 53, ACM, CloudWatch, Budgets, IAM) plus Vercel and GitHub Actions. Returns structured JSON with service health, accessible/inaccessible service lists, and severity-ranked anomaly flags. Used by ops-fires and ops-deploy."
+    },
+    {
+      "name": "marketing-optimizer",
+      "summary": "Cross-platform ad budget optimization — reads Meta + Google Ads data, computes blended ROAS, and recommends specific budget shifts."
+    },
+    {
+      "name": "memory-extractor",
+      "summary": "Background agent that extracts user profiles, contact cards, and behavioral patterns from chat history. Runs as a daemon service every 30 min."
+    },
+    {
+      "name": "monitor-agent",
+      "summary": "Lightweight APM and metrics probe agent. Queries Datadog, New Relic, and OpenTelemetry backends for active alerts, error traces, and entity health. Returns structured JSON. Read-only — used by ops-monitor skill."
+    },
+    {
+      "name": "ops:home-agent",
+      "summary": "Homey Pro probe agent. Queries local/cloud API for devices, flows, energy, presence, alarms. Returns structured JSON. Used by ops-home skill for parallel scans."
+    },
+    {
+      "name": "ops:unifi-agent",
+      "summary": "UniFi probe agent. Queries Site Manager (cloud), Network Integration, and Protect Integration APIs for hosts, devices, clients, ISP/WAN metrics, and cameras. Returns structured JSON. Used by ops-unifi skill for parallel surface scans."
+    },
+    {
+      "name": "project-scanner",
+      "summary": "Git, PR, and CI status scanner across all registered repos. Returns structured JSON with branch state, uncommitted files, open PRs, and CI status for each project."
+    },
+    {
+      "name": "revenue-tracker",
+      "summary": "Revenue, billing, and credits analysis agent. Pulls real revenue data from Stripe (SaaS) and RevenueCat (mobile subs), queries AWS Cost Explorer for spend, and cross-references project revenue stages. Returns structured financial snapshot."
+    },
+    {
+      "name": "triage-agent",
+      "summary": "Investigates a specific issue from Sentry, Linear, or GitHub. Finds the root cause in code, checks if it's already fixed, and either confirms resolution or creates a fix branch with a PR."
+    },
+    {
+      "name": "yolo-ceo",
+      "summary": "Strategic priority agent. Analyzes the business from a CEO perspective — growth blockers, resource allocation, build vs. buy decisions, investor-readiness. No sugar-coating. Runs in parallel with CTO/CFO/COO."
+    },
+    {
+      "name": "yolo-cfo",
+      "summary": "Financial analysis agent. Follows the money — AWS burn rate, runway, ROI on current work, credits expiry, cost anomalies. No optimism without data."
+    },
+    {
+      "name": "yolo-coo",
+      "summary": "Operations execution agent. Finds what's falling through the cracks — stale work, broken processes, missing automation, communication failures. What the CEO doesn't see."
+    },
+    {
+      "name": "yolo-cto",
+      "summary": "Technical health agent. Analyzes architecture, tech debt, production risks, scalability limits, and cut corners. Brutally honest about what will break."
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 ---
 name: boss
-description: Boss-mode command center over EVERY AI agent on this machine and any other host agent-dash reaches — Claude bg, Antigravity (agy), Codex, Cursor, openclaw. Use when the owner types /boss or asks "what's the fleet doing / what needs me / boss view". Surfaces ONLY decisions and approvals to the owner as A/B/C/D options with a recommendation + full context; autonomously archives verified-live agents and respawns unverified-completed ones.
+description: "OPS on-demand: Boss-mode command center over every reachable AI agent"
 argument-hint: '[--decisions | --full | --archive-sweep]'
 allowed-tools:
   - Bash

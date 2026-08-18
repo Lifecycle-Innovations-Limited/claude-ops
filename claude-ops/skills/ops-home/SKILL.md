@@ -1,6 +1,6 @@
 ---
 name: ops-home
-description: Smart home command center via Homey Pro. Devices, flows, scenes, energy, climate, presence, alarms. Works via Homey local API (preferred) + Athom cloud API fallback. Configure once via /ops:setup.
+description: "OPS on-demand: Smart home command center via Homey Pro"
 argument-hint: '[status|devices|flow|scene|energy|climate|presence|alarm|setup]'
 allowed-tools:
   - Bash

@@ -1,6 +1,6 @@
 ---
 name: ops-fleet
-description: Read-only Claude + CLIProxyAPI fleet dashboard. Shows sessions, gateway, providers, models, pooled accounts, routing, and traffic.
+description: "OPS on-demand: Read-only Claude + CLIProxyAPI fleet dashboard"
 argument-hint: '[--once] [--tui] [--all] [--models] [--no-pool] [--no-color]'
 allowed-tools:
   - Bash

@@ -1,6 +1,6 @@
 ---
 name: ops-rotate-setup
-description: Fail-closed legacy Claude setup alias that directs operators to separately approved staged enrollment.
+description: "OPS on-demand: Fail-closed legacy Claude setup alias that directs operators to separately approved…"
 argument-hint: ''
 allowed-tools:
   - Read

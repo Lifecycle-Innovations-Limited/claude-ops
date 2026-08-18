@@ -1,6 +1,6 @@
 ---
 name: ops-merge
-description: Autonomous salvage + PR merge pipeline. FIRST scans every repo in every org for orphan worktrees, feature branches without PRs, uncommitted/staged/stashed work, and unpushed commits — dispatches subagents to finish/PR all loose local work. THEN scans all open PRs, dispatches fixers for CI/conflicts/reviews, and merges. Use --main to also sync dev↔main branches. Use --no-salvage to skip Phase 0 (PR-only mode). Use --salvage-only to stop after Phase 0.
+description: "OPS on-demand: Autonomous salvage + PR merge pipeline"
 argument-hint: '[--main] [--repo org/repo] [--dry-run] [--no-salvage] [--salvage-only]'
 allowed-tools:
   - Bash

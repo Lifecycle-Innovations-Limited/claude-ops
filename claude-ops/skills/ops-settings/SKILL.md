@@ -1,6 +1,6 @@
 ---
 name: ops-settings
-description: Post-setup credential manager. Shows current integration status (configured/missing/expired) and lets you update individual credentials without re-running the full setup wizard. Runs a smoke test after each update.
+description: "OPS on-demand: Post-setup credential manager"
 argument-hint: '[integration-name] [--status]'
 allowed-tools:
   - Bash

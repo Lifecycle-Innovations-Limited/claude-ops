@@ -1,6 +1,6 @@
 ---
 name: ops-feature-dev
-description: Guided feature development — delegates to the feature-dev plugin's 7-phase workflow (explore, architect, implement, review). Use before ad-hoc builds or as pre-work before gsd-execute-phase.
+description: "OPS on-demand: Guided feature development"
 argument-hint: '[feature description]'
 allowed-tools:
   - Skill

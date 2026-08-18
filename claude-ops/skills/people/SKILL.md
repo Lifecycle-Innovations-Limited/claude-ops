@@ -1,6 +1,6 @@
 ---
 name: people
-description: Sync Apple Contacts to Notion 'People' database. Track last_contacted, relationship_strength, recent_topics, next_nudge_due. Foundation for relationship intelligence — birthdays, anniversaries, overdue-outreach, news-mention nudges.
+description: "OPS on-demand: Sync Apple Contacts to Notion 'People' database"
 allowed-tools:
   - Bash
   - Read

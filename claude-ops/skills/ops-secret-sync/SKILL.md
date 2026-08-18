@@ -1,6 +1,6 @@
 ---
 name: ops-secret-sync
-description: Detects and syncs Doppler→GitHub secrets drift. Compares last-updated timestamps between Doppler and GH repo secrets; flags stale GH secrets (>24h behind Doppler); confirms with user before writing any changes. Safe to run in CI or locally.
+description: "OPS on-demand: Detects and syncs Doppler→GitHub secrets drift"
 argument-hint: '[--repo <owner/repo>] [--project <doppler-proj>] [--config <doppler-env>] [--dry-run]'
 allowed-tools:
   - Bash

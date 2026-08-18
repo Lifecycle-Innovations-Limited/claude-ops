@@ -1,6 +1,6 @@
 ---
 name: ops-pocket
-description: Pocket voice-memo pipeline command center. Surfaces the watcher → triage → executor → notifier → bridges chain that turns Pocket-recorded voice memos into running Claude tasks, with WhatsApp + email notifications. Routes — status, setup, tasks, test, logs, restart, whatsapp on|off, email on|off.
+description: "OPS on-demand: Pocket voice-memo pipeline command center"
 argument-hint: '[status|setup|tasks|test|logs [N]|restart|whatsapp on|off|email on|off]'
 allowed-tools:
   - Bash

@@ -1,6 +1,6 @@
 ---
 name: ops-inbox
-description: Full inbox management across all channels — WhatsApp (whatsmeow bridge via mcp__whatsapp__*), iMessage (chat.db reader + AppleScript send via mcp__plugin_imessage_imessage__*), Email (Gmail MCP), Slack (MCP), Telegram (user-auth MCP), Discord (webhook + REST read), Notion (MCP — comments, mentions, assigned tasks). Scans FULL inbox (not just unread), identifies messages needing replies, archives handled conversations.
+description: "OPS on-demand: Full inbox management across all channels"
 argument-hint: '[channel: whatsapp|imessage|email|slack|telegram|discord|notion|all]'
 allowed-tools:
   - Bash

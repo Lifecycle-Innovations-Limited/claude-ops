@@ -1,6 +1,6 @@
 ---
 name: ops-orchestrate
-description: 'Autonomous multi-project orchestration engine. Audits all registered projects, structures work into dependency-wired tasks, dispatches parallel agents (subagents or Agent Teams), audits completions, and ships PRs. Registry-driven — works for any user with a configured project registry.'
+description: "OPS on-demand: Autonomous multi-project orchestration engine"
 argument-hint: '[--teams|--subagents|--hybrid|--dry-run|--project alias|--fires-only|--max-waves N]'
 allowed-tools:
   - Bash

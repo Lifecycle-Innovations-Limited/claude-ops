@@ -1,6 +1,6 @@
 ---
 name: ops-voice
-description: Voice operations — native macOS Phone (Continuity), FaceTime, Zoom, Google Meet, WhatsApp call, Twilio voice + SMS, Bland AI agent calls, ElevenLabs TTS, Whisper transcription. All curl-based, no SDK deps.
+description: "OPS on-demand: Voice operations"
 argument-hint: '[phone|facetime|zoom|meet|whatsapp-call|twilio-call|twilio-sms|bland-call|tts|transcribe|setup]'
 allowed-tools:
   - Bash

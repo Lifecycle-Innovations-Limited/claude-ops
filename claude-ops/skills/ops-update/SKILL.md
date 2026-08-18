@@ -1,6 +1,6 @@
 ---
 name: ops-update
-description: Upgrade the local claude-ops ("ops") plugin to the latest published version in one command — refresh the marketplace catalogue, update the installed plugin (with stale-cache force-reinstall fallback), reapply local cache patches, prune every old cache version, rewrite stale version-pinned paths, run per-version migrations, then prompt to reload. Use when the box is on an older plugin version, after a release, or when the cache looks stale.
+description: "OPS on-demand: Upgrade the local claude-ops (\"ops\") plugin to the latest published version in one…"
 argument-hint: '[--dry-run|--force|--to X.Y.Z|--no-prune|--no-patches|--no-rewrite|--no-localsync]'
 allowed-tools:
   - Bash

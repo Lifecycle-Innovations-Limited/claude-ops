@@ -1,6 +1,6 @@
 ---
 name: ops-triage
-description: Cross-platform issue triage. Pulls from Sentry (MCP), Linear (MCP), GitHub Issues (gh). Cross-references against code to find already-fixed issues. Auto-resolves fixed ones. Dispatches agents for active issues.
+description: "OPS on-demand: Cross-platform issue triage"
 argument-hint: '[project-alias|sentry|linear|github|all]'
 allowed-tools:
   - Bash
