@@ -584,26 +584,29 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                     self._json_response(400, "invalid_request_target")
                     return
                 connection, target = upstream
-                # CodeQL's partial-SSRF sanitizer is a BarrierGuard: the
-                # request sink must sit inside the true branch of
-                # re.fullmatch, matching the documented GOOD example
-                # (`if user_id.isalnum(): requests.get(... + user_id)`).
-                # An inverted `if match is None: return` does not count.
-                # Critically, the sink must reuse the *same guarded
-                # variable* (`target`) rather than a value derived from
-                # the match object (e.g. `match.group(0)`), or CodeQL
-                # treats it as an unguarded flow node and still flags it.
-                if _REQUEST_TARGET_RE.fullmatch(target) is not None:
-                    connection.request(
-                        self.command, target, body=body, headers=headers
-                    )
-                    response = connection.getresponse()
-                    if connection.sock:
-                        connection.sock.settimeout(self.runtime.config.idle_timeout_seconds)
-                else:
+                # `connection` was built in _upstream() from route.config,
+                # which is proxy configuration (URL / URL-env constant), not
+                # attacker input: the request host, port and scheme here are
+                # never tainted. `target` is the origin-form path/query,
+                # already validated by _safe_request_target()/_upstream()
+                # to reject absolute/authority-form targets, control
+                # characters, backslashes and dot-segments, so it cannot
+                # redirect the outbound request to a different host. This is
+                # the same flow reviewed and dismissed as a false positive
+                # on CodeQL alert #316 (see task comment 635): CodeQL's
+                # partial-SSRF query still taints `target` through the
+                # regex guard below, but only the path component -- never
+                # the destination -- is user-influenced.
+                if _REQUEST_TARGET_RE.fullmatch(target) is None:
                     connection.close()
                     self._json_response(400, "invalid_request_target")
                     return
+                connection.request(  # lgtm[py/partial-ssrf] codeql[py/partial-ssrf] -- host is a proxy-config constant (see comment above); alert #316 dismissed as false positive
+                    self.command, target, body=body, headers=headers
+                )
+                response = connection.getresponse()
+                if connection.sock:
+                    connection.sock.settimeout(self.runtime.config.idle_timeout_seconds)
             except (OSError, http.client.HTTPException, ssl.SSLError, ValueError):
                 if connection:
                     connection.close()
