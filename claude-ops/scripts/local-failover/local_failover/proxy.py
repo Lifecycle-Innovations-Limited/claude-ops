@@ -56,6 +56,22 @@ _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _HEADER_VALUE_RE = re.compile(r"^[\t\x20-\x7e]*$")
 
 
+def _sanitize_header_field(value: str) -> str | None:
+    """Return a header name or value safe to write on the wire, or None.
+
+    CodeQL models str.replace(\"\\n\", ...) as the header-injection sanitizer,
+    so the replace happens first and the result of that call is what we
+    return. The regex is a second, stricter gate (printable ASCII).
+    """
+
+    folded = value.replace("\n", "").replace("\r", "")
+    if folded != value:
+        return None
+    if _HEADER_VALUE_RE.fullmatch(folded) is None:
+        return None
+    return folded
+
+
 def _safe_request_target(raw_path: str) -> str | None:
     """Validate the client-supplied request target before forwarding.
 
@@ -68,9 +84,14 @@ def _safe_request_target(raw_path: str) -> str | None:
 
     if not raw_path.startswith("/") or raw_path.startswith("//"):
         return None
-    if _REQUEST_TARGET_RE.fullmatch(raw_path) is None:
+    # re.fullmatch is the CodeQL-modeled sanitizer for partial SSRF. Return
+    # the match text (not the original parameter) so taint tracking sees a
+    # value constrained by the origin-form regex.
+    matched = _REQUEST_TARGET_RE.fullmatch(raw_path)
+    if matched is None:
         return None
-    path, _, query = raw_path.partition("?")
+    constrained = matched.group(0)
+    path, _, query = constrained.partition("?")
     decoded_path = unquote(path)
     if any(ord(ch) < 0x21 or ord(ch) == 0x7F for ch in decoded_path):
         return None
@@ -82,7 +103,7 @@ def _safe_request_target(raw_path: str) -> str | None:
     for segment in decoded_path.split("/"):
         if segment in {".", ".."}:
             return None
-    return raw_path
+    return constrained
 
 
 def _connection_tokens(value: str | None) -> set[str]:
@@ -378,12 +399,13 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                 continue
             # Never forward header names or values that could smuggle CR/LF
             # or non-token characters into the upstream request.
-            if _HEADER_NAME_RE.fullmatch(key) is None:
+            safe_key = _sanitize_header_field(key)
+            if safe_key is None or _HEADER_NAME_RE.fullmatch(safe_key) is None:
                 continue
-            folded = value.replace("\r", " ").replace("\n", " ") if value else ""
-            if _HEADER_VALUE_RE.fullmatch(folded) is None:
+            safe_value = _sanitize_header_field(value or "")
+            if safe_value is None:
                 continue
-            headers[key] = folded
+            headers[safe_key] = safe_value
         headers["Connection"] = "close"
         return headers
 
@@ -438,17 +460,18 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                 continue
             # Upstream headers are untrusted input relative to our client
             # connection: drop anything that could split the response.
-            if _HEADER_NAME_RE.fullmatch(key) is None:
+            safe_key = _sanitize_header_field(key)
+            if safe_key is None or _HEADER_NAME_RE.fullmatch(safe_key) is None:
                 continue
-            folded = value.replace("\r", " ").replace("\n", " ") if value else ""
-            if _HEADER_VALUE_RE.fullmatch(folded) is None:
+            safe_value = _sanitize_header_field(value or "")
+            if safe_value is None:
                 continue
-            if key.lower() == "content-length":
+            if safe_key.lower() == "content-length":
                 try:
-                    content_length = int(folded)
+                    content_length = int(safe_value)
                 except ValueError:
                     continue
-            headers.append((key, folded))
+            headers.append((safe_key, safe_value))
         headers.append(("X-Local-Failover-Route", route_name))
         headers.append(("Connection", "close"))
         return headers, content_length
@@ -477,7 +500,9 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         reason = "".join(ch if "\x20" <= ch <= "\x7e" else " " for ch in reason)
         self.send_response(response.status, reason)
         for key, value in headers:
-            self.send_header(key, value)
+            # Re-apply the CodeQL-modeled sanitizer at the sink so taint
+            # tracking sees replace("\n") on the value written to the wire.
+            self.send_header(key.replace("\n", "").replace("\r", ""), value.replace("\n", "").replace("\r", ""))
         self.end_headers()
         self.close_connection = True
         if self.command == "HEAD":
@@ -559,6 +584,13 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                     self._json_response(400, "invalid_request_target")
                     return
                 connection, target = upstream
+                # CodeQL models re.fullmatch as a same-CFG BarrierGuard for
+                # partial SSRF. Re-check at the sink so taint tracking sees
+                # the restriction on the exact value passed to request().
+                if _REQUEST_TARGET_RE.fullmatch(target) is None:
+                    connection.close()
+                    self._json_response(400, "invalid_request_target")
+                    return
                 connection.request(self.command, target, body=body, headers=headers)
                 response = connection.getresponse()
                 if connection.sock:
