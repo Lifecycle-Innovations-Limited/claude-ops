@@ -584,17 +584,23 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                     self._json_response(400, "invalid_request_target")
                     return
                 connection, target = upstream
-                # CodeQL models re.fullmatch as a same-CFG BarrierGuard for
-                # partial SSRF. Re-check at the sink so taint tracking sees
-                # the restriction on the exact value passed to request().
-                if _REQUEST_TARGET_RE.fullmatch(target) is None:
+                # CodeQL's partial-SSRF sanitizer is a BarrierGuard: the
+                # request sink must sit inside the true branch of
+                # re.fullmatch, matching the documented GOOD example
+                # (`if user_id.isalnum(): requests.get(... + user_id)`).
+                # An inverted `if match is None: return` does not count.
+                matched_target = _REQUEST_TARGET_RE.fullmatch(target)
+                if matched_target is not None:
+                    connection.request(
+                        self.command, matched_target.group(0), body=body, headers=headers
+                    )
+                    response = connection.getresponse()
+                    if connection.sock:
+                        connection.sock.settimeout(self.runtime.config.idle_timeout_seconds)
+                else:
                     connection.close()
                     self._json_response(400, "invalid_request_target")
                     return
-                connection.request(self.command, target, body=body, headers=headers)
-                response = connection.getresponse()
-                if connection.sock:
-                    connection.sock.settimeout(self.runtime.config.idle_timeout_seconds)
             except (OSError, http.client.HTTPException, ssl.SSLError, ValueError):
                 if connection:
                     connection.close()
