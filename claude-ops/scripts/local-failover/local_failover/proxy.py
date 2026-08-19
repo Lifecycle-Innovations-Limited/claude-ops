@@ -589,10 +589,13 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                 # re.fullmatch, matching the documented GOOD example
                 # (`if user_id.isalnum(): requests.get(... + user_id)`).
                 # An inverted `if match is None: return` does not count.
-                matched_target = _REQUEST_TARGET_RE.fullmatch(target)
-                if matched_target is not None:
+                # Critically, the sink must reuse the *same guarded
+                # variable* (`target`) rather than a value derived from
+                # the match object (e.g. `match.group(0)`), or CodeQL
+                # treats it as an unguarded flow node and still flags it.
+                if _REQUEST_TARGET_RE.fullmatch(target) is not None:
                     connection.request(
-                        self.command, matched_target.group(0), body=body, headers=headers
+                        self.command, target, body=body, headers=headers
                     )
                     response = connection.getresponse()
                     if connection.sock:
