@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import socket
 import ssl
 import subprocess
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Mapping
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from .circuit import CircuitBreaker, RouteRuntime, RouteSelector
 from .config import GatewayConfig, ListenerConfig, NetworkGateConfig, RouteConfig
@@ -43,6 +44,45 @@ HOP_BY_HOP_HEADERS = frozenset(
 class SessionBinding:
     route_name: str
     last_seen: float
+
+
+# Origin-form request target: printable ASCII only (no SP/CTL, so no
+# request-line or header injection into the upstream connection).
+_REQUEST_TARGET_RE = re.compile(r"^/[\x21-\x7e]*$")
+# RFC 7230 token characters for header field names.
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+# Header field values must not carry CR/LF/NUL (response splitting) and are
+# limited to visible ASCII plus SP/HTAB.
+_HEADER_VALUE_RE = re.compile(r"^[\t\x20-\x7e]*$")
+
+
+def _safe_request_target(raw_path: str) -> str | None:
+    """Validate the client-supplied request target before forwarding.
+
+    The proxy only forwards to the configured upstream base URL, so the
+    request target must remain a plain origin-form path: no authority-form
+    or absolute-form targets (which could redirect the outbound request), no
+    control characters or whitespace, and no dot segments (encoded or not)
+    that could escape the configured base path.
+    """
+
+    if not raw_path.startswith("/") or raw_path.startswith("//"):
+        return None
+    if _REQUEST_TARGET_RE.fullmatch(raw_path) is None:
+        return None
+    path, _, query = raw_path.partition("?")
+    decoded_path = unquote(path)
+    if any(ord(ch) < 0x21 or ord(ch) == 0x7F for ch in decoded_path):
+        return None
+    decoded_query = unquote(query)
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in decoded_query):
+        return None
+    if "\\" in decoded_path or "\\" in decoded_query:
+        return None
+    for segment in decoded_path.split("/"):
+        if segment in {".", ".."}:
+            return None
+    return raw_path
 
 
 def _connection_tokens(value: str | None) -> set[str]:
@@ -332,23 +372,33 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         excluded = set(HOP_BY_HOP_HEADERS)
         excluded.update(_connection_tokens(self.headers.get("Connection")))
         excluded.update({"expect", "host", "x-local-failover-route"})
-        headers = {
-            key: value
-            for key, value in self.headers.items()
-            if key.lower() not in excluded
-        }
+        headers = {}
+        for key, value in self.headers.items():
+            if key.lower() in excluded:
+                continue
+            # Never forward header names or values that could smuggle CR/LF
+            # or non-token characters into the upstream request.
+            if _HEADER_NAME_RE.fullmatch(key) is None:
+                continue
+            folded = value.replace("\r", " ").replace("\n", " ") if value else ""
+            if _HEADER_VALUE_RE.fullmatch(folded) is None:
+                continue
+            headers[key] = folded
         headers["Connection"] = "close"
         return headers
 
     def _upstream(
         self, route: RouteConfig
-    ) -> tuple[http.client.HTTPConnection, str]:
+    ) -> tuple[http.client.HTTPConnection, str] | None:
         base_url = route.resolve_url(self.runtime.service.env)
         parsed = urlsplit(base_url)
         assert parsed.hostname is not None
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         base_path = parsed.path.rstrip("/")
-        target = f"{base_path}/{self.path.lstrip('/')}"
+        requested = _safe_request_target(self.path)
+        if requested is None:
+            return None
+        target = f"{base_path}{requested}"
         if not target.startswith("/"):
             target = f"/{target}"
         if parsed.scheme == "https":
@@ -368,22 +418,37 @@ class _GatewayHandler(BaseHTTPRequestHandler):
 
     def _response_headers(
         self, response: http.client.HTTPResponse, route_name: str
-    ) -> tuple[list[tuple[str, str]], int | None]:
+    ) -> tuple[list[tuple[str, str]], int | None] | None:
         connection_value = response.headers.get("Connection")
         excluded = set(HOP_BY_HOP_HEADERS)
         excluded.update(_connection_tokens(connection_value))
         excluded.add("x-local-failover-route")
         headers: list[tuple[str, str]] = []
         content_length: int | None = None
+        # Reject ambiguous framing: upstream duplicate Content-Length headers
+        # with conflicting values are a smuggling primitive (RFC 7230 3.3.2).
+        length_values = {
+            value.strip()
+            for value in response.headers.get_all("Content-Length", failobj=[])
+        }
+        if len(length_values) > 1:
+            return None
         for key, value in response.getheaders():
             if key.lower() in excluded:
                 continue
+            # Upstream headers are untrusted input relative to our client
+            # connection: drop anything that could split the response.
+            if _HEADER_NAME_RE.fullmatch(key) is None:
+                continue
+            folded = value.replace("\r", " ").replace("\n", " ") if value else ""
+            if _HEADER_VALUE_RE.fullmatch(folded) is None:
+                continue
             if key.lower() == "content-length":
                 try:
-                    content_length = int(value)
+                    content_length = int(folded)
                 except ValueError:
                     continue
-            headers.append((key, value))
+            headers.append((key, folded))
         headers.append(("X-Local-Failover-Route", route_name))
         headers.append(("Connection", "close"))
         return headers, content_length
@@ -393,7 +458,12 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         response: http.client.HTTPResponse,
         route: RouteRuntime,
     ) -> None:
-        headers, content_length = self._response_headers(response, route.config.name)
+        header_result = self._response_headers(response, route.config.name)
+        if header_result is None:
+            self.runtime.observe_failure(route, "upstream_ambiguous_framing")
+            self._json_response(502, "upstream_invalid_response")
+            return
+        headers, content_length = header_result
         session_id = response.headers.get("Mcp-Session-Id")
         if (
             self.runtime.config.protocol == "mcp"
@@ -403,7 +473,9 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             self.runtime.bind_session(
                 session_id, route.config.name, self.runtime.service.clock()
             )
-        self.send_response(response.status, response.reason)
+        reason = response.reason or ""
+        reason = "".join(ch if "\x20" <= ch <= "\x7e" else " " for ch in reason)
+        self.send_response(response.status, reason)
         for key, value in headers:
             self.send_header(key, value)
         self.end_headers()
@@ -447,6 +519,9 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         if self.path == "/_failover/metrics":
             self._status_response(metrics=True)
             return
+        if _safe_request_target(self.path) is None:
+            self._json_response(400, "invalid_request_target")
+            return
         body = self._read_body()
         if body is None:
             return
@@ -479,7 +554,11 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             self.runtime.begin_attempt(route)
             connection: http.client.HTTPConnection | None = None
             try:
-                connection, target = self._upstream(route.config)
+                upstream = self._upstream(route.config)
+                if upstream is None:
+                    self._json_response(400, "invalid_request_target")
+                    return
+                connection, target = upstream
                 connection.request(self.command, target, body=body, headers=headers)
                 response = connection.getresponse()
                 if connection.sock:
