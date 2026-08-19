@@ -74,6 +74,23 @@ class SafeRequestTargetTests(unittest.TestCase):
         for target in ("/a%0d%0ab", "/a%00b", "/a%20b"):
             self.assertIsNone(_safe_request_target(target))
 
+    def test_query_with_encoded_control_characters_is_rejected(self) -> None:
+        for target in (
+            "/v1/messages?x=%0d%0aheader",
+            "/v1/messages?x=%0acrlf",
+            "/v1/messages?x=%00nul",
+        ):
+            self.assertIsNone(_safe_request_target(target))
+
+    def test_query_with_encoded_space_is_allowed(self) -> None:
+        self.assertEqual(
+            _safe_request_target("/a/b?x=%20z"), "/a/b?x=%20z"
+        )
+
+    def test_query_with_backslash_is_rejected(self) -> None:
+        for target in ("/v1/messages?x=%5c", "/v1/messages?x=a\\b"):
+            self.assertIsNone(_safe_request_target(target))
+
     def test_backslash_segments_are_rejected(self) -> None:
         self.assertIsNone(_safe_request_target("/a%5C..%5Cb"))
 
@@ -87,6 +104,15 @@ class SplittingOriginHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         self.server.seen_paths.append(self.path)
         body = b'{"ok":true}'
+        if self.path == "/dup-length":
+            # Conflicting duplicate Content-Length: a smuggling primitive.
+            self.wfile.write(b"HTTP/1.1 200 OK\r\n")
+            self.wfile.write(b"Content-Type: application/json\r\n")
+            self.wfile.write(b"Content-Length: %d\r\n" % len(body))
+            self.wfile.write(b"Content-Length: 2\r\n")
+            self.wfile.write(b"Connection: close\r\n\r\n")
+            self.wfile.write(body)
+            return
         # Write raw headers so we can emit values Python's send_header would
         # normally deliver verbatim, including a header with an invalid name.
         self.wfile.write(b"HTTP/1.1 200 OK\r\n")
@@ -217,6 +243,28 @@ class RequestHardeningIntegrationTests(unittest.TestCase):
         self.assertEqual(headers.get("x-ok"), "kept")
         self.assertNotIn("bad header name", headers)
         self.assertEqual(self.origin.seen_paths, ["/resource"])
+
+    def test_invalid_target_beats_oversized_body(self) -> None:
+        # Target validation must run before body handling: an invalid
+        # target with an oversized declared body is a 400, not a 413.
+        response = self.raw_request(
+            b"POST http://evil.example/steal HTTP/1.1\r\n"
+            b"Host: localhost\r\n"
+            b"Content-Length: 999999\r\n"
+            b"Connection: close\r\n\r\n"
+        )
+        self.assertIn(b" 400 ", response)
+        self.assertIn(b"invalid_request_target", response)
+        self.assertEqual(self.origin.seen_paths, [])
+
+    def test_conflicting_upstream_content_length_is_rejected(self) -> None:
+        response = self.raw_request(
+            b"GET /dup-length HTTP/1.1\r\n"
+            b"Host: localhost\r\nConnection: close\r\n\r\n"
+        )
+        self.assertIn(b" 502 ", response)
+        self.assertIn(b"upstream_invalid_response", response)
+        self.assertEqual(self.origin.seen_paths, ["/dup-length"])
 
 
 if __name__ == "__main__":

@@ -70,13 +70,16 @@ def _safe_request_target(raw_path: str) -> str | None:
         return None
     if _REQUEST_TARGET_RE.fullmatch(raw_path) is None:
         return None
-    path, _, _query = raw_path.partition("?")
-    decoded = unquote(path)
-    if any(ord(ch) < 0x21 or ord(ch) == 0x7F for ch in decoded):
+    path, _, query = raw_path.partition("?")
+    decoded_path = unquote(path)
+    if any(ord(ch) < 0x21 or ord(ch) == 0x7F for ch in decoded_path):
         return None
-    if "\\" in decoded:
+    decoded_query = unquote(query)
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in decoded_query):
         return None
-    for segment in decoded.split("/"):
+    if "\\" in decoded_path or "\\" in decoded_query:
+        return None
+    for segment in decoded_path.split("/"):
         if segment in {".", ".."}:
             return None
     return raw_path
@@ -415,13 +418,21 @@ class _GatewayHandler(BaseHTTPRequestHandler):
 
     def _response_headers(
         self, response: http.client.HTTPResponse, route_name: str
-    ) -> tuple[list[tuple[str, str]], int | None]:
+    ) -> tuple[list[tuple[str, str]], int | None] | None:
         connection_value = response.headers.get("Connection")
         excluded = set(HOP_BY_HOP_HEADERS)
         excluded.update(_connection_tokens(connection_value))
         excluded.add("x-local-failover-route")
         headers: list[tuple[str, str]] = []
         content_length: int | None = None
+        # Reject ambiguous framing: upstream duplicate Content-Length headers
+        # with conflicting values are a smuggling primitive (RFC 7230 3.3.2).
+        length_values = {
+            value.strip()
+            for value in response.headers.get_all("Content-Length", failobj=[])
+        }
+        if len(length_values) > 1:
+            return None
         for key, value in response.getheaders():
             if key.lower() in excluded:
                 continue
@@ -447,7 +458,12 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         response: http.client.HTTPResponse,
         route: RouteRuntime,
     ) -> None:
-        headers, content_length = self._response_headers(response, route.config.name)
+        header_result = self._response_headers(response, route.config.name)
+        if header_result is None:
+            self.runtime.observe_failure(route, "upstream_ambiguous_framing")
+            self._json_response(502, "upstream_invalid_response")
+            return
+        headers, content_length = header_result
         session_id = response.headers.get("Mcp-Session-Id")
         if (
             self.runtime.config.protocol == "mcp"
@@ -503,11 +519,11 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         if self.path == "/_failover/metrics":
             self._status_response(metrics=True)
             return
-        body = self._read_body()
-        if body is None:
-            return
         if _safe_request_target(self.path) is None:
             self._json_response(400, "invalid_request_target")
+            return
+        body = self._read_body()
+        if body is None:
             return
 
         now = self.runtime.service.clock()
