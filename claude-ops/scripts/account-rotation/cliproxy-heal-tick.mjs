@@ -187,29 +187,43 @@ export async function runHealTick({
   log = console.log,
   reauth,
 } = {}) {
-  // Two independent gates: CLIPROXY_HUB_HEAL says "this process may mutate
-  // credentials at all"; CLIPROXY_HEAL_ACCOUNT_OPTIN says "this host was
-  // explicitly provisioned for unattended healing" (set by install-heal.sh's
-  // generated unit, not by simply exporting the first variable). A caller
-  // that only flips CLIPROXY_HUB_HEAL still gets denied.
-  if (!automatedAuthAllowed({ cliproxyHubHeal: process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN === '1' })) {
+  // Two gates on different control planes: CLIPROXY_HUB_HEAL says "this
+  // process may mutate credentials at all" (a process env var — settable by
+  // editing the systemd unit's Environment= lines or exporting it in a
+  // shell). accountOptInMarker says "this host was deliberately provisioned
+  // for unattended healing" — it is satisfied only by the presence of the
+  // marker file that install-heal.sh writes to disk; editing the unit's
+  // Environment= lines cannot produce that file, so a single environment
+  // flip cannot satisfy both gates.
+  const accountOptInMarker =
+    process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN_MARKER ||
+    join(process.env.CLIPROXY_ROOT || '/opt/crsproxy', '.heal-account-optin');
+  if (!automatedAuthAllowed({ cliproxyHubHeal: existsSync(accountOptInMarker) })) {
     log(
-      'heal denied: CLIPROXY_HUB_HEAL and/or CLIPROXY_HEAL_ACCOUNT_OPTIN not set (Mac client-only; hub systemd must export both)',
+      `heal denied: CLIPROXY_HUB_HEAL unset and/or account opt-in marker missing at ${accountOptInMarker} (Mac client-only; hub must run install-heal.sh and export CLIPROXY_HUB_HEAL=1)`,
     );
     return { denied: true, decisions: [], census: censusFromSeats([], now) };
   }
 
   const prev = loadState(statePath);
   const { seats, census } = snapshotFromAuthDir(authDir, { now, previous: prev.seats });
+  // Resolve the CLIProxy API key once, here, at the single point that is
+  // allowed to read it off disk. The result is stored into the same env var
+  // that a deployment can also set directly (CLIPROXY_API_KEY) rather than
+  // threaded straight into askCliproxyHealer's arguments — so the value
+  // askCliproxyHealer's fetch call actually uses always comes from a
+  // process.env read, identically to the CLIPROXYAPI_KEY branch, and never
+  // from a readFileSync() result flowing directly into that call.
+  if (!process.env.CLIPROXY_API_KEY && !process.env.CLIPROXYAPI_KEY) {
+    const configKey = readApiKeyFromConfig(process.env.CLIPROXY_CONFIG || '/opt/crsproxy/config.yaml');
+    if (configKey) process.env.CLIPROXY_API_KEY = configKey;
+  }
   const askFn =
     ask ||
     ((facts) =>
       askCliproxyHealer(facts, {
         baseUrl: process.env.CLIPROXY_HEAL_BASE_URL || process.env.CLIPROXYAPI_BASE_URL || 'http://127.0.0.1:8317',
-        apiKey:
-          process.env.CLIPROXY_API_KEY ||
-          process.env.CLIPROXYAPI_KEY ||
-          readApiKeyFromConfig(process.env.CLIPROXY_CONFIG || '/opt/crsproxy/config.yaml'),
+        apiKey: process.env.CLIPROXY_API_KEY || process.env.CLIPROXYAPI_KEY,
       }));
 
   const result = await healPool(seats, { now, ask: askFn });
@@ -295,7 +309,9 @@ export async function runHealTick({
     // applyIsolateCompat returns ok:false (e.g. missing_config) without
     // throwing. Silently continuing would leave an unservable openai-compat
     // provider advertised with no signal in the log or the returned result.
-    // Surface it explicitly instead of letting the tick look fully healthy.
+    // Surface it explicitly: log it, mark the tick failed in the returned
+    // result (so --json / exit-code callers see it), and still persist the
+    // seat-level state gathered so far rather than losing that work.
     log(`compat isolation FAILED reason=${isolate.reason || 'unknown'} — unservable providers may still be advertised`);
   }
 
@@ -312,6 +328,12 @@ export async function runHealTick({
 
   return {
     denied: false,
+    // Compat isolation failing is not a full tick failure (seat healing
+    // above still ran and was persisted), but it is a failure the caller
+    // must not treat as a clean run. Callers (the --json / exit-code CLI
+    // below, or any other consumer of runHealTick) key off this field
+    // instead of having to know to inspect isolate.ok themselves.
+    failed: !isolate.ok,
     dryRun,
     census,
     seats: seats.map(redactSeat),
@@ -338,12 +360,13 @@ if (isMain) {
       if (args.includes('--json')) {
         const json = {
           denied: out.denied,
+          failed: out.failed === true,
           census: out.census,
           actions: out.actions,
         };
         process.stdout.write(JSON.stringify(json, null, 2) + '\n');
       }
-      process.exit(out.denied ? 2 : 0);
+      process.exit(out.denied ? 2 : out.failed ? 3 : 0);
     })
     .catch((err) => {
       console.error(err);

@@ -4,7 +4,7 @@
  * from representative start states. Do not re-implement the policy here.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ACTIONS, healPool } from '../cliproxy-heal-policy.mjs';
@@ -115,8 +115,28 @@ const pool = [
 // Save/restore so this suite's env mutations never leak into a process that
 // runs multiple test files back to back.
 const savedHubHeal = process.env.CLIPROXY_HUB_HEAL;
-const savedAccountOptin = process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN;
+const savedAccountOptinMarker = process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN_MARKER;
+const savedConfig = process.env.CLIPROXY_CONFIG;
+const savedIsolateDir = process.env.CLIPROXY_ISOLATE_DIR;
+const savedIsolateManifest = process.env.CLIPROXY_ISOLATE_MANIFEST;
 delete process.env.CLIPROXY_HUB_HEAL;
+
+// runHealTick resolves the compat-isolation config/isolate/manifest paths
+// (defaulting to real /opt/crsproxy locations) and the account opt-in gate
+// (a marker file, defaulting to /opt/crsproxy/.heal-account-optin) purely
+// from process.env — it takes no path parameters for any of them. On a hub
+// host that has real files at those default paths, calling runHealTick with
+// dryRun:false from this suite would rewrite the live proxy config and would
+// see a stray real opt-in marker as this suite's own state. Pin every one of
+// them to this suite's own sandbox before any runHealTick call, and restore
+// the saved values (not just delete) at the end so a real value some other
+// process depends on is never left cleared.
+const sandbox = mkdtempSync(join(tmpdir(), 'cliproxy-heal-sandbox-'));
+const accountOptInMarker = join(sandbox, '.heal-account-optin');
+process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN_MARKER = accountOptInMarker;
+process.env.CLIPROXY_CONFIG = join(sandbox, 'config.yaml');
+process.env.CLIPROXY_ISOLATE_DIR = join(sandbox, 'isolated');
+process.env.CLIPROXY_ISOLATE_MANIFEST = join(sandbox, 'isolated', 'manifest.json');
 
 assert.equal(directOAuthWriterAllowed('cliproxy'), false);
 assert.equal(automatedAuthAllowed({ cliproxyHubHeal: true }), false);
@@ -124,9 +144,12 @@ process.env.CLIPROXY_HUB_HEAL = '1';
 assert.equal(automatedAuthAllowed({ cliproxyHubHeal: true }), true);
 assert.equal(automatedAuthAllowed({}), false);
 assert.equal(automatedAuthAllowed({ automatedCredentialMutation: true }), false);
-// runHealTick derives the second gate factor from this env var, not from
-// account.cliproxyHubHeal directly — see cliproxy-heal-tick.mjs.
-process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN = '1';
+// runHealTick derives the second gate factor from the presence of this
+// marker file (CLIPROXY_HEAL_ACCOUNT_OPTIN_MARKER), not from
+// account.cliproxyHubHeal directly — see cliproxy-heal-tick.mjs. Only
+// install-heal.sh writes it in production; the suite writes it here to
+// simulate a provisioned host.
+writeFileSync(accountOptInMarker, '1');
 
 const ask = spyAsk({
   'cooled-new-quota': { inRotation: false, action: ACTIONS.LEAVE, reason: 'model wants out' },
@@ -381,6 +404,49 @@ for (const key of Object.keys(state.seats)) {
   assert.doesNotMatch(key, /example\.com|kimi/, 'persisted seat key must be opaque, not the raw account id');
 }
 
+// Regression: CLIPROXY_CONFIG (pinned to the sandbox above) does not exist,
+// so applyIsolateCompat returns ok:false/missing_config. The tick must not
+// look fully healthy — runHealTick.failed and the persisted isolate.ok must
+// both surface the failure, even though seat healing itself succeeded and
+// state was still persisted (compat isolation failing must not lose the
+// seat-level work already done).
+assert.equal(tick.isolate.ok, false, 'isolate must report failure when configPath is missing');
+assert.equal(tick.isolate.reason, 'missing_config');
+assert.equal(tick.failed, true, 'runHealTick must surface an unrunnable compat isolation as a failed tick');
+assert.equal(state.isolate.ok, false, 'persisted state must also carry the isolate failure');
+
+// Once a real (empty) config exists at the pinned path, isolation has
+// nothing to do (no manifest-listed providers present) and must not be
+// reported as a failure.
+writeFileSync(process.env.CLIPROXY_CONFIG, 'openai-compatibility: []\n');
+const healthyIsolateTick = await runHealTick({
+  authDir,
+  statePath,
+  now: NOW,
+  ask: spyAsk((facts) => ({ inRotation: facts.hard.inRotation, action: facts.hard.action, reason: 'echo' })),
+  dryRun: false,
+  log: () => {},
+});
+assert.equal(healthyIsolateTick.isolate.ok, true);
+assert.equal(healthyIsolateTick.failed, false, 'a runnable compat isolation must not be reported as a failed tick');
+
+// Regression: the account opt-in gate is a filesystem marker
+// (CLIPROXY_HEAL_ACCOUNT_OPTIN_MARKER), not a second env-var mirror of the
+// first. Removing only the marker file — CLIPROXY_HUB_HEAL stays set — must
+// still deny the tick; a caller cannot satisfy both gates with one env flip.
+const savedMarkerContents = readFileSync(accountOptInMarker, 'utf8');
+rmSync(accountOptInMarker);
+const deniedByMissingMarker = await runHealTick({
+  authDir,
+  statePath,
+  now: NOW,
+  ask: spyAsk(),
+  dryRun: false,
+  log: () => {},
+});
+assert.equal(deniedByMissingMarker.denied, true, 'CLIPROXY_HUB_HEAL alone must not be enough without the marker file');
+writeFileSync(accountOptInMarker, savedMarkerContents);
+
 delete process.env.CLIPROXY_HUB_HEAL;
 const denied = await runHealTick({
   authDir,
@@ -416,7 +482,7 @@ writeFileSync(
   }),
 );
 process.env.CLIPROXY_HUB_HEAL = '1';
-process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN = '1';
+writeFileSync(accountOptInMarker, '1');
 delete process.env.CLIPROXY_REAUTH_CMD;
 const noWriter = await runHealTick({
   authDir: staleDir,
@@ -551,6 +617,12 @@ assert.equal(applyNoWriter.blocked?.reason, 'no_reauth_writer');
 console.log('cliproxy-heal-policy.test.mjs: ok');
 
 process.env.CLIPROXY_HUB_HEAL = savedHubHeal;
-process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN = savedAccountOptin;
+process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN_MARKER = savedAccountOptinMarker;
+process.env.CLIPROXY_CONFIG = savedConfig;
+process.env.CLIPROXY_ISOLATE_DIR = savedIsolateDir;
+process.env.CLIPROXY_ISOLATE_MANIFEST = savedIsolateManifest;
 if (savedHubHeal === undefined) delete process.env.CLIPROXY_HUB_HEAL;
-if (savedAccountOptin === undefined) delete process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN;
+if (savedAccountOptinMarker === undefined) delete process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN_MARKER;
+if (savedConfig === undefined) delete process.env.CLIPROXY_CONFIG;
+if (savedIsolateDir === undefined) delete process.env.CLIPROXY_ISOLATE_DIR;
+if (savedIsolateManifest === undefined) delete process.env.CLIPROXY_ISOLATE_MANIFEST;

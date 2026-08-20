@@ -9,13 +9,29 @@ DEST="${CLIPROXY_HEAL_DEST:-/opt/crsproxy/heal}"
 UNIT_DIR="${CLIPROXY_UNIT_DIR:-/etc/systemd/system}"
 TEMPLATE_DIR="$(cd "$(dirname "$0")/../../templates" && pwd)"
 
+# DEST is interpolated into a sed replacement (below) and, via the generated
+# unit, into systemd directives. Reject characters that would either break
+# the sed command (the delimiter itself) or produce a malformed/incorrect
+# unit (whitespace, which systemd would split on).
+case "$DEST" in
+  *[[:space:]]*)
+    echo "install-heal.sh: CLIPROXY_HEAL_DEST must not contain whitespace (got: $DEST)" >&2
+    exit 1
+    ;;
+esac
+
 # cliproxy-heal-ai.mjs uses AbortSignal.timeout(), added in Node 17.3 / 18.0.
 # A pre-18 node on the hub would silently throw on the first advisor call
-# instead of failing this install step, so enforce the floor here.
+# instead of failing this install step, so enforce the floor here. Resolve
+# the exact executable path (not just "node" by name) and reuse that same
+# path in the generated unit's ExecStart, so validation and execution can
+# never resolve two different Node.js binaries (e.g. a PATH that differs
+# between an interactive install shell and systemd's ExecStart environment).
 if command -v node >/dev/null 2>&1; then
-  NODE_MAJOR="$(node -e 'process.stdout.write(String(process.versions.node.split(".")[0]))')"
+  NODE_BIN="$(command -v node)"
+  NODE_MAJOR="$("$NODE_BIN" -e 'process.stdout.write(String(process.versions.node.split(".")[0]))')"
   if [ "${NODE_MAJOR:-0}" -lt 18 ]; then
-    echo "install-heal.sh: node >=18 required (found $(node -v)); AbortSignal.timeout is used by cliproxy-heal-ai.mjs" >&2
+    echo "install-heal.sh: node >=18 required (found $("$NODE_BIN" -v)); AbortSignal.timeout is used by cliproxy-heal-ai.mjs" >&2
     exit 1
   fi
 else
@@ -38,10 +54,34 @@ if [ ! -f /opt/crsproxy/isolated/manifest.json ]; then
   chmod 0644 /opt/crsproxy/isolated/manifest.json
 fi
 
-# The template hardcodes /opt/crsproxy/heal (ExecStart, CLIPROXY_REAUTH_CMD).
-# When CLIPROXY_HEAL_DEST overrides the install dir, the generated unit must
-# point at that same dir, not silently keep referencing the default path.
-sed -e "s#/opt/crsproxy/heal#${DEST}#g" "$TEMPLATE_DIR/cliproxy-heal.service" >"$UNIT_DIR/cliproxy-heal.service"
+# Second unattended-healing gate: a filesystem marker, not another env var.
+# automatedAuthAllowed() (auto-auth-policy.mjs) requires both
+# CLIPROXY_HUB_HEAL=1 (a process env var, settable by editing the unit's
+# Environment= lines or exporting it in a shell) AND this marker file
+# (settable only by running this install script against /opt/crsproxy).
+# Running this script is the deliberate "provision this host for unattended
+# healing" step; writing the marker here — not via Environment= in the unit
+# template — keeps that decision on a different control plane than the
+# env var, so editing the unit alone cannot satisfy both gates.
+touch /opt/crsproxy/.heal-account-optin
+chmod 0600 /opt/crsproxy/.heal-account-optin
+
+# Escape DEST and NODE_BIN for use as sed replacement text: sed treats `&` as
+# "the whole match" and `\` as an escape in the replacement, and `#` is the
+# delimiter this script uses for the s### command, so any of those three
+# characters in an unescaped path would corrupt the generated unit (or the
+# sed command itself) instead of producing the requested path.
+sed_escape_repl() { printf '%s' "$1" | sed -e 's/[\&#]/\\&/g'; }
+DEST_ESCAPED="$(sed_escape_repl "$DEST")"
+NODE_BIN_ESCAPED="$(sed_escape_repl "$NODE_BIN")"
+
+# The template hardcodes /opt/crsproxy/heal (ExecStart, CLIPROXY_REAUTH_CMD)
+# and /usr/local/bin/node (ExecStart). When CLIPROXY_HEAL_DEST overrides the
+# install dir, or the validated node binary lives elsewhere, the generated
+# unit must point at those same paths, not silently keep referencing the
+# template's defaults.
+sed -e "s#/opt/crsproxy/heal#${DEST_ESCAPED}#g" -e "s#/usr/local/bin/node#${NODE_BIN_ESCAPED}#g" \
+  "$TEMPLATE_DIR/cliproxy-heal.service" >"$UNIT_DIR/cliproxy-heal.service"
 chmod 0644 "$UNIT_DIR/cliproxy-heal.service"
 install -m 0644 "$TEMPLATE_DIR/cliproxy-heal.timer" "$UNIT_DIR/cliproxy-heal.timer"
 
