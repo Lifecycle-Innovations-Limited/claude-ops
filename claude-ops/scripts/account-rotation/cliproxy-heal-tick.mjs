@@ -11,11 +11,11 @@
  *
  *   node cliproxy-heal-tick.mjs [--dry-run] [--status] [--auth-dir DIR]
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { automatedAuthAllowed } from './auto-auth-policy.mjs';
+import { automatedAuthAllowed, CLIPROXY_HEAL_OPTIN_TOKEN } from './auto-auth-policy.mjs';
 import { healPool } from './cliproxy-heal-policy.mjs';
 import { askCliproxyHealer } from './cliproxy-heal-ai.mjs';
 import { censusFromSeats, redactSeat, snapshotFromAuthDir } from './cliproxy-pool-snapshot.mjs';
@@ -48,6 +48,27 @@ function saveState(path, state) {
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
   renameSync(tmp, path);
+}
+
+// Second unattended-healing gate (see auto-auth-policy.mjs). The path is
+// deliberately NOT overridable by its own env var — only CLIPROXY_ROOT (the
+// same variable that also relocates auth dir, state, config, etc., so
+// changing it is a coordinated redeploy, not a one-line escalation) can move
+// it, and even then the filename stays fixed. Existence alone is not
+// sufficient: the file's content must equal CLIPROXY_HEAL_OPTIN_TOKEN, which
+// only install-heal.sh writes, so an Environment=-only change that points
+// at some other pre-existing file (e.g. /etc/hosts) cannot satisfy the gate.
+// A marker that is group/other-writable is also rejected — a marker
+// install-heal.sh actually wrote is mode 0600.
+function accountOptedIn(path) {
+  if (!existsSync(path)) return false;
+  try {
+    const stat = statSync(path);
+    if ((stat.mode & 0o022) !== 0) return false;
+    return readFileSync(path, 'utf8').trim() === CLIPROXY_HEAL_OPTIN_TOKEN;
+  } catch {
+    return false;
+  }
 }
 
 function writeJsonAtomic(path, data) {
@@ -191,14 +212,13 @@ export async function runHealTick({
   // process may mutate credentials at all" (a process env var — settable by
   // editing the systemd unit's Environment= lines or exporting it in a
   // shell). accountOptInMarker says "this host was deliberately provisioned
-  // for unattended healing" — it is satisfied only by the presence of the
-  // marker file that install-heal.sh writes to disk; editing the unit's
-  // Environment= lines cannot produce that file, so a single environment
-  // flip cannot satisfy both gates.
-  const accountOptInMarker =
-    process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN_MARKER ||
-    join(process.env.CLIPROXY_ROOT || '/opt/crsproxy', '.heal-account-optin');
-  if (!automatedAuthAllowed({ cliproxyHubHeal: existsSync(accountOptInMarker) })) {
+  // for unattended healing" — it is satisfied only by a marker file, at a
+  // fixed path, whose content matches the token only install-heal.sh writes
+  // (see accountOptedIn() above). Editing the unit's Environment= lines
+  // cannot produce that file or its content, so a single environment flip
+  // cannot satisfy both gates.
+  const accountOptInMarker = join(process.env.CLIPROXY_ROOT || '/opt/crsproxy', '.heal-account-optin');
+  if (!automatedAuthAllowed({ cliproxyHubHeal: accountOptedIn(accountOptInMarker) })) {
     log(
       `heal denied: CLIPROXY_HUB_HEAL unset and/or account opt-in marker missing at ${accountOptInMarker} (Mac client-only; hub must run install-heal.sh and export CLIPROXY_HUB_HEAL=1)`,
     );

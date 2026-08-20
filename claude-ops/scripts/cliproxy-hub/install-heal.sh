@@ -10,15 +10,18 @@ UNIT_DIR="${CLIPROXY_UNIT_DIR:-/etc/systemd/system}"
 TEMPLATE_DIR="$(cd "$(dirname "$0")/../../templates" && pwd)"
 
 # DEST is interpolated into a sed replacement (below) and, via the generated
-# unit, into systemd directives. Reject characters that would either break
-# the sed command (the delimiter itself) or produce a malformed/incorrect
-# unit (whitespace, which systemd would split on).
-case "$DEST" in
-  *[[:space:]]*)
-    echo "install-heal.sh: CLIPROXY_HEAL_DEST must not contain whitespace (got: $DEST)" >&2
-    exit 1
-    ;;
-esac
+# unit, into systemd directives (ExecStart=, Environment=CLIPROXY_REAUTH_CMD=).
+# Rather than try to replicate systemd's own escaping rules for that context
+# (% is systemd's specifier-expansion escape and must be doubled; backslash
+# and quotes carry meaning inside unit file quoting) constrain DEST to a
+# strict allow-list of characters that are inert in both a sed replacement
+# and a systemd directive: it must be an absolute path built only from
+# alphanumerics, underscore, dot, slash, and dash. Anything else — spaces,
+# %, \, ", ', &, #, $, ; — is rejected outright.
+if [[ ! "$DEST" =~ ^/[A-Za-z0-9_./-]+$ ]]; then
+  echo "install-heal.sh: CLIPROXY_HEAL_DEST must be an absolute path using only [A-Za-z0-9_./-] (got: $DEST)" >&2
+  exit 1
+fi
 
 # cliproxy-heal-ai.mjs uses AbortSignal.timeout(), added in Node 17.3 / 18.0.
 # A pre-18 node on the hub would silently throw on the first advisor call
@@ -57,13 +60,17 @@ fi
 # Second unattended-healing gate: a filesystem marker, not another env var.
 # automatedAuthAllowed() (auto-auth-policy.mjs) requires both
 # CLIPROXY_HUB_HEAL=1 (a process env var, settable by editing the unit's
-# Environment= lines or exporting it in a shell) AND this marker file
-# (settable only by running this install script against /opt/crsproxy).
+# Environment= lines or exporting it in a shell) AND this marker file's
+# CONTENT matching CLIPROXY_HEAL_OPTIN_TOKEN (settable only by running this
+# install script against /opt/crsproxy). Content, not mere existence, is
+# required so that pointing at some other pre-existing file cannot forge the
+# gate. The token literal below must stay in sync with
+# CLIPROXY_HEAL_OPTIN_TOKEN in account-rotation/auto-auth-policy.mjs.
 # Running this script is the deliberate "provision this host for unattended
 # healing" step; writing the marker here — not via Environment= in the unit
 # template — keeps that decision on a different control plane than the
 # env var, so editing the unit alone cannot satisfy both gates.
-touch /opt/crsproxy/.heal-account-optin
+printf '%s\n' "cliproxy-heal-optin-v1" >/opt/crsproxy/.heal-account-optin
 chmod 0600 /opt/crsproxy/.heal-account-optin
 
 # Escape DEST and NODE_BIN for use as sed replacement text: sed treats `&` as
