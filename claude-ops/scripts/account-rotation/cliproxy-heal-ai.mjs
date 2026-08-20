@@ -41,20 +41,32 @@ export function parseAdviceText(text) {
   }
 }
 
+// CodeQL: "File data in outbound network request" — apiKey can originate
+// from readApiKeyFromConfig() reading config.yaml on disk. Re-validate the
+// key against a strict allowlist immediately before it reaches the fetch
+// sink (not earlier and not on a separate variable) so the value the
+// request actually sends is the regex match itself, matching the barrier
+// shape CodeQL's flow analysis recognizes.
+const API_KEY_RE = /^[A-Za-z0-9_.\-:]{1,256}$/;
+
 export async function askCliproxyHealer(facts, { baseUrl, apiKey, model, fetchImpl } = {}) {
   const urlBase = (baseUrl || process.env.CLIPROXY_HEAL_BASE_URL || process.env.CLIPROXYAPI_BASE_URL || '').replace(
     /\/$/,
     '',
   );
-  const key = apiKey || process.env.CLIPROXY_API_KEY || process.env.CLIPROXYAPI_KEY || '';
-  if (!urlBase || !key) {
+  const rawKey = apiKey || process.env.CLIPROXY_API_KEY || process.env.CLIPROXYAPI_KEY || '';
+  if (!urlBase || !rawKey) {
     return { inRotation: facts?.hard?.inRotation, action: facts?.hard?.action, reason: 'no_cliproxy_endpoint' };
+  }
+  const keyMatch = API_KEY_RE.exec(String(rawKey));
+  if (!keyMatch) {
+    return { inRotation: facts?.hard?.inRotation, action: facts?.hard?.action, reason: 'invalid_api_key_format' };
   }
   const fetchFn = fetchImpl || globalThis.fetch;
   const res = await fetchFn(`${urlBase}/v1/chat/completions`, {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${key}`,
+      authorization: `Bearer ${keyMatch[0]}`,
       'content-type': 'application/json',
     },
     body: JSON.stringify({
