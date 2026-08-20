@@ -168,4 +168,52 @@ assert.match(commentedIsolated.removed[0].lines.join('\n'), /comment between kim
 // The header comment is attached to kept item "kimi" and is preserved.
 assert.match(commentedIsolated.yaml, /header comment before the first item/);
 
+// Regression: a same-depth comment that follows the LAST item in the list
+// must keep its original position (attached after that item, before
+// whatever key follows the list), not be silently dropped. The inner loop
+// that reads an item's body stops as soon as it sees a comment at or above
+// the item's own indent, so the outer loop buffers it as `pendingComments`
+// — and previously discarded that buffer entirely when the list then ended
+// with no further item to attach it to.
+const trailingCommentYaml = `host: 127.0.0.1
+port: 8319
+openai-compatibility:
+- name: kimi
+  base-url: https://api.kimi.example/v1
+  api-key-entries:
+  - api-key: fake-kimi-key
+  models:
+  - name: k3
+    alias: kimi-k3
+- name: gemini
+  base-url: https://gemini.example/v1
+  api-key-entries:
+  - api-key: fake-gemini-key
+  models:
+  - name: gemini-2.5-flash
+# trailing comment after the last provider
+auth-auto-refresh-workers: 16
+ws-auth: true
+`;
+const trailingSplit = splitCompatItems(trailingCommentYaml);
+assert.deepEqual(
+  trailingSplit.items.map((it) => it.name),
+  ['kimi', 'gemini'],
+);
+assert.match(
+  trailingSplit.after,
+  /^# trailing comment after the last provider$/m,
+  'a comment after the final item must be preserved in `after`, not dropped',
+);
+assert.match(trailingSplit.after, /^auth-auto-refresh-workers: 16$/m);
+
+const trailingIsolated = isolateCompatYaml(trailingCommentYaml, ['gemini']);
+assert.deepEqual(trailingIsolated.kept, ['kimi']);
+assert.match(
+  trailingIsolated.yaml,
+  /^# trailing comment after the last provider$/m,
+  'round-tripping through isolateCompatYaml must not lose the trailing comment',
+);
+assert.match(trailingIsolated.yaml, /^auth-auto-refresh-workers: 16$/m);
+
 console.log('cliproxy-isolate-compat.test.mjs: ok');

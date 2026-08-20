@@ -46,16 +46,18 @@ export function splitCompatItems(yamlText) {
 
   const items = [];
   let i = start + 1;
+  // Comment-only lines seen while looking for the next item start (either
+  // before the first item, or between two same-depth items) are buffered
+  // here and prepended to whichever item follows, so they survive
+  // reassembly attached to that item. If the list ends without another item
+  // (trailing comments after the last one, or before any item at all), the
+  // buffer is NOT discarded — `i` has already advanced past those comment
+  // lines, so `lines.slice(i)` no longer contains them; they are prepended
+  // back onto `after` below so they keep their original position instead of
+  // being silently dropped.
+  let pendingComments = [];
   if (itemIndent != null) {
     const itemStartRe = new RegExp(`^\\s{${itemIndent}}-\\s*name:`);
-    // Comment-only lines seen while looking for the next item start (either
-    // before the first item, or between two same-depth items) are buffered
-    // here and prepended to whichever item follows, so they survive
-    // reassembly attached to that item. If the list ends without another
-    // item (trailing comments after the last one), the buffer is discarded —
-    // there is no item left to attach it to, and `after` already captures
-    // everything past the list.
-    let pendingComments = [];
     while (i < lines.length) {
       const line = lines[i];
       if (line.trim() === '') {
@@ -104,7 +106,7 @@ export function splitCompatItems(yamlText) {
     before: lines.slice(0, start).join('\n'),
     header: 'openai-compatibility:',
     items,
-    after: lines.slice(i).join('\n'),
+    after: [...pendingComments, ...lines.slice(i)].join('\n'),
     start,
   };
 }
