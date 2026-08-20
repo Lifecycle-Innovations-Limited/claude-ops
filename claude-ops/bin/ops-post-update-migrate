@@ -44,11 +44,21 @@ log() { printf "[%s] %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 # Guard the whole class: any launchctl mutation is skipped unless $HOME is the
 # invoking user's real home. A sandboxed run still exercises every path that
 # writes files, which is what the tests actually assert on.
-REAL_HOME="$(python3 -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)' 2>/dev/null || echo "$HOME")"
+#
+# FAIL CLOSED. Do not default REAL_HOME to "$HOME" when the lookup fails: that
+# makes the comparison below compare $HOME to itself, which is trivially true
+# for a sandboxed HOME too, and re-enables the exact hazard this guard exists to
+# prevent. An unresolvable real home means we cannot prove we are safe, so we
+# skip the mutation.
+REAL_HOME="$(python3 -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)' 2>/dev/null || true)"
 
 launchctl_guarded() {
   if [[ "${OPS_MIGRATE_NO_LAUNCHCTL:-0}" == "1" ]]; then
     log "  skip: launchctl $* (OPS_MIGRATE_NO_LAUNCHCTL=1)"
+    return 0
+  fi
+  if [[ -z "$REAL_HOME" ]]; then
+    log "  skip: launchctl $* (could not resolve real home — failing closed)"
     return 0
   fi
   if [[ "$HOME" != "$REAL_HOME" ]]; then
