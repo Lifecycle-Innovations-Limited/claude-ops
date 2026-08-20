@@ -4,11 +4,11 @@
  * from representative start states. Do not re-implement the policy here.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ACTIONS, healPool } from '../cliproxy-heal-policy.mjs';
-import { snapshotFromAuthDir } from '../cliproxy-pool-snapshot.mjs';
+import { opaqueSeatId, snapshotFromAuthDir } from '../cliproxy-pool-snapshot.mjs';
 import { applyDecision, runHealTick } from '../cliproxy-heal-tick.mjs';
 import { parseAdviceText, buildHealerPrompt } from '../cliproxy-heal-ai.mjs';
 import { automatedAuthAllowed, directOAuthWriterAllowed } from '../auto-auth-policy.mjs';
@@ -112,12 +112,21 @@ const pool = [
   },
 ];
 
+// Save/restore so this suite's env mutations never leak into a process that
+// runs multiple test files back to back.
+const savedHubHeal = process.env.CLIPROXY_HUB_HEAL;
+const savedAccountOptin = process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN;
+delete process.env.CLIPROXY_HUB_HEAL;
+
 assert.equal(directOAuthWriterAllowed('cliproxy'), false);
 assert.equal(automatedAuthAllowed({ cliproxyHubHeal: true }), false);
 process.env.CLIPROXY_HUB_HEAL = '1';
 assert.equal(automatedAuthAllowed({ cliproxyHubHeal: true }), true);
 assert.equal(automatedAuthAllowed({}), false);
 assert.equal(automatedAuthAllowed({ automatedCredentialMutation: true }), false);
+// runHealTick derives the second gate factor from this env var, not from
+// account.cliproxyHubHeal directly — see cliproxy-heal-tick.mjs.
+process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN = '1';
 
 const ask = spyAsk({
   'cooled-new-quota': { inRotation: false, action: ACTIONS.LEAVE, reason: 'model wants out' },
@@ -288,15 +297,22 @@ writeFileSync(
 
 const snap = snapshotFromAuthDir(authDir, { now: NOW });
 assert.equal(snap.seats.length, 7);
-const emailMatched = snap.seats.find((s) => s.id === 'claude-user@example.com');
+// Seat ids leaving snapshotFromAuthDir must be opaque (sha256-derived), never
+// the raw filename/email — the raw value only survives on `rawId`, used
+// internally for auth-file mutation and reauth targeting.
+for (const seat of snap.seats) {
+  assert.equal(seat.id, opaqueSeatId(seat.rawId), 'seat.id must be the opaque hash of rawId');
+  assert.notEqual(seat.id, seat.rawId, 'seat.id must not leak the raw account identifier');
+}
+const emailMatched = snap.seats.find((s) => s.rawId === 'claude-user@example.com');
 assert.equal(emailMatched.cooling, true, 'json email maps to underscore cds via auth_id');
 assert.equal(emailMatched.certainQuotaExhausted, true);
 assert.ok(emailMatched.cdsFile.endsWith('claude-user_example.com.cds'));
-const kimi = snap.seats.find((s) => s.id === 'openai-compatible-kimi');
+const kimi = snap.seats.find((s) => s.rawId === 'openai-compatible-kimi');
 assert.equal(kimi.certainQuotaExhausted, true);
 assert.equal(kimi.cooling, true);
-const snapIds = snap.seats.map((s) => s.id).sort();
-assert.deepEqual(snapIds, [
+const snapRawIds = snap.seats.map((s) => s.rawId).sort();
+assert.deepEqual(snapRawIds, [
   'certain-future',
   'claude-user@example.com',
   'cooled-new-quota',
@@ -325,7 +341,19 @@ const tick = await runHealTick({
 
 assert.equal(tick.denied, false);
 assert.equal(tickAsk.calls.length, 7, 'tick invokes AI on every seat');
-const tickBy = Object.fromEntries(tick.decisions.map((d) => [d.id, d]));
+// decisions/actions are the externally-visible surface (persisted state,
+// --json output) and must carry only the opaque id; rawId is present on
+// decisions solely for internal auth-file/reauth targeting.
+const tickBy = Object.fromEntries(tick.decisions.map((d) => [d.rawId, d]));
+for (const decision of tick.decisions) {
+  assert.equal(decision.id, opaqueSeatId(decision.rawId), 'decision.id must be the opaque hash of rawId');
+}
+for (const action of tick.actions) {
+  assert.ok(
+    tick.decisions.some((d) => d.id === action.id),
+    'action.id must be an opaque id, matching a decision.id',
+  );
+}
 assert.equal(tickBy['cooled-new-quota'].inRotation, true);
 assert.equal(tickBy['remaining-quota'].inRotation, true);
 assert.equal(tickBy['uncertain-exhaust'].inRotation, true);
@@ -343,11 +371,15 @@ assert.equal(existsSync(join(authDir, 'claude-user_example.com.cds')), true);
 assert.equal(existsSync(join(authDir, 'openai-compatible-kimi.cds')), true);
 
 const state = JSON.parse(readFileSync(statePath, 'utf8'));
-assert.equal(state.seats['certain-future'].rescheduleAt, new Date(FUTURE).toISOString());
+assert.equal(state.seats[opaqueSeatId('certain-future')].rescheduleAt, new Date(FUTURE).toISOString());
 assert.equal(
   state.lastTick.every((row) => row.aiInvoked === true),
   true,
 );
+// Persisted state and lastTick must never carry a raw account id.
+for (const key of Object.keys(state.seats)) {
+  assert.doesNotMatch(key, /example\.com|kimi/, 'persisted seat key must be opaque, not the raw account id');
+}
 
 delete process.env.CLIPROXY_HUB_HEAL;
 const denied = await runHealTick({
@@ -384,6 +416,7 @@ writeFileSync(
   }),
 );
 process.env.CLIPROXY_HUB_HEAL = '1';
+process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN = '1';
 delete process.env.CLIPROXY_REAUTH_CMD;
 const noWriter = await runHealTick({
   authDir: staleDir,
@@ -393,16 +426,14 @@ const noWriter = await runHealTick({
   dryRun: false,
   log: () => {},
 });
-const noWriterRow = noWriter.actions.find((a) => a.id === 'xai-stale@example.com');
+const staleOpaque = opaqueSeatId('xai-stale@example.com');
+const noWriterRow = noWriter.actions.find((a) => a.id === staleOpaque);
 assert.ok(noWriterRow, 'stale seat present');
 assert.equal(noWriterRow.inRotation, true);
 assert.equal(noWriterRow.applied.includes('reauth'), false, 'must not claim reauth without a writer');
 assert.equal(noWriterRow.applied.includes('blocked'), true);
 assert.equal(noWriterRow.blocked?.reason, 'no_reauth_writer');
-assert.equal(
-  JSON.parse(readFileSync(staleState, 'utf8')).seats['xai-stale@example.com'].blocked.reason,
-  'no_reauth_writer',
-);
+assert.equal(JSON.parse(readFileSync(staleState, 'utf8')).seats[staleOpaque].blocked.reason, 'no_reauth_writer');
 
 const writerDir = mkdtempSync(join(tmpdir(), 'cliproxy-stale-w-'));
 const writerState = join(writerDir, 'state.json');
@@ -428,7 +459,7 @@ const withWriter = await runHealTick({
   dryRun: false,
   log: () => {},
 });
-const withWriterRow = withWriter.actions.find((a) => a.id === 'xai-stale@example.com');
+const withWriterRow = withWriter.actions.find((a) => a.id === staleOpaque);
 assert.equal(withWriterRow.applied.includes('reauth'), true);
 assert.equal(withWriterRow.applied.includes('blocked'), false);
 assert.equal(existsSync(writerMarker), true, 'configured writer must be invoked');
@@ -440,4 +471,86 @@ assert.equal(applyNoWriter.applied.includes('reauth'), false);
 assert.equal(applyNoWriter.applied.includes('blocked'), true);
 assert.equal(applyNoWriter.blocked?.reason, 'no_reauth_writer');
 
+// Regression: CRITICAL clear_cooldown data-integrity bug. A healthy,
+// non-cooling, in-rotation seat can still carry a leftover .cds file (e.g.
+// from a previous unrelated cooldown that already resolved on its own via
+// CLIProxy). The old guard was `if (decision.inRotation)` alone, which wiped
+// that .cds unconditionally — destroying CLIProxy's own quota/reset-at
+// evidence for a seat that was never actually being healed. The correct
+// guard only fires when the seat is presently cooling or its reschedule
+// stamp just elapsed.
+{
+  const cdsDir = mkdtempSync(join(tmpdir(), 'cliproxy-clear-cooldown-'));
+  const cdsFile = join(cdsDir, 'healthy-seat.cds');
+  writeFileSync(cdsFile, JSON.stringify({ version: 1, provider: 'claude', records: [] }));
+  const healthyDecision = {
+    id: 'healthy-seat',
+    inRotation: true,
+    disabled: false,
+    cooling: false,
+    reason: 'remaining_or_reset_quota',
+    cdsFile,
+  };
+  const healthyApplied = applyDecision(healthyDecision, { dryRun: false });
+  assert.equal(
+    healthyApplied.applied.includes('clear_cooldown'),
+    false,
+    'must not clear the sidecar for a seat that is not cooling and has no elapsed reschedule',
+  );
+  assert.equal(existsSync(cdsFile), true, '.cds for a healthy non-cooling seat must survive untouched');
+  assert.equal(existsSync(`${cdsFile}.healed`), false);
+
+  // Sanity check the positive case still works: an actually-cooling seat (or
+  // one whose reschedule stamp elapsed) does get its sidecar renamed, never
+  // destructively deleted.
+  const coolingFile = join(cdsDir, 'cooling-seat.cds');
+  writeFileSync(coolingFile, JSON.stringify({ version: 1, provider: 'claude', records: [] }));
+  const coolingDecision = {
+    id: 'cooling-seat',
+    inRotation: true,
+    disabled: false,
+    cooling: true,
+    reason: 'reschedule_elapsed',
+    cdsFile: coolingFile,
+  };
+  const coolingApplied = applyDecision(coolingDecision, { dryRun: false });
+  assert.equal(coolingApplied.applied.includes('clear_cooldown'), true);
+  assert.equal(existsSync(coolingFile), false, 'renamed away, not present under the original name');
+  assert.equal(existsSync(`${coolingFile}.healed`), true, 'renamed, not unlinked, so it stays recoverable');
+}
+
+// Regression: CRITICAL rule-1/rule-2 cancellation bug. hasRemainingOrResetQuota
+// (rule 1) must not short-circuit rule 2 for a seat that is BOTH
+// quotaExceeded:false (leftover-quota shaped) AND certainQuotaExhausted:true
+// with a parseable future reschedule stamp — that combination means the
+// exhaustion is certain and the seat must sit out until the stamp elapses,
+// not re-enter rotation on the leftover-quota fast path.
+{
+  const cancelPool = [
+    {
+      id: 'certain-exhaust-with-leftover-signal',
+      provider: 'claude',
+      inRotation: true,
+      disabled: false,
+      cooling: true,
+      quotaExceeded: false,
+      hadQuotaSignal: true,
+      certainQuotaExhausted: true,
+      rescheduleAt: FUTURE,
+    },
+  ];
+  const cancelResult = await healPool(cancelPool, { now: NOW, ask: spyAsk() });
+  const cancelDecision = cancelResult.decisions.find((d) => d.id === 'certain-exhaust-with-leftover-signal');
+  assert.equal(
+    cancelDecision.inRotation,
+    false,
+    'certain exhaust + future stamp must win over a coincidental quotaExceeded:false/hadQuotaSignal:true reading',
+  );
+}
+
 console.log('cliproxy-heal-policy.test.mjs: ok');
+
+process.env.CLIPROXY_HUB_HEAL = savedHubHeal;
+process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN = savedAccountOptin;
+if (savedHubHeal === undefined) delete process.env.CLIPROXY_HUB_HEAL;
+if (savedAccountOptin === undefined) delete process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN;
