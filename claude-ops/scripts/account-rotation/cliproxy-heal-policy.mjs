@@ -21,21 +21,28 @@ export const ACTIONS = {
 const CERTAIN_EXHAUST_RE =
   /quota\s*exhausted|credential_quota|usage_limit_reached|usage limit has been reached|quota_exceeded|\bquota exceeded\b/i;
 
+// Shared guard for both numeric-epoch paths: reject non-finite, non-positive,
+// and out-of-range (year 2020-2100) values before they can be treated as a
+// valid reschedule stamp. A corrupt or zero stamp must never look "elapsed".
+function fromEpoch(n) {
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const ms = n < 1e12 ? n * 1000 : n;
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return null;
+  const year = d.getUTCFullYear();
+  if (year < 2020 || year > 2100) return null;
+  return d.getTime();
+}
+
 export function parseTimestamp(value, now = Date.now()) {
   if (value == null || value === '') return null;
   if (typeof value === 'number' && Number.isFinite(value)) {
-    const ms = value < 1e12 ? value * 1000 : value;
-    const d = new Date(ms);
-    return Number.isNaN(d.getTime()) ? null : d.getTime();
+    return fromEpoch(value);
   }
   const raw = String(value).trim();
   if (!raw || raw.startsWith('0001-01-01')) return null;
   if (/^\d+(\.\d+)?$/.test(raw)) {
-    const n = Number(raw);
-    if (!Number.isFinite(n) || n <= 0) return null;
-    const ms = n < 1e12 ? n * 1000 : n;
-    const d = new Date(ms);
-    return Number.isNaN(d.getTime()) ? null : d.getTime();
+    return fromEpoch(Number(raw));
   }
   const parsed = Date.parse(raw.replace('Z', '+00:00'));
   if (!Number.isFinite(parsed)) return null;
@@ -68,8 +75,13 @@ export function hasRemainingOrResetQuota(seat = {}) {
   if (Number.isFinite(rem) && rem > 0) return true;
   // Exceeded flipped off (or remaining appeared) while a cooldown sidecar still
   // exists — leftover/reset quota, re-enter immediately. Stream-error cooling
-  // with quotaExceeded null/undefined is not leftover quota.
-  if (seat.quotaExceeded === false && seat.hadQuotaSignal === true) return true;
+  // with quotaExceeded null/undefined is not leftover quota. A certain-exhaust
+  // signal (e.g. a "usage_limit_reached" body) is not leftover quota either —
+  // rule 2 (certain exhaust + stamp) owns that seat, and this rule must not
+  // short-circuit it and re-enter a seat the provider still rejects.
+  if (seat.quotaExceeded === false && seat.hadQuotaSignal === true && seat.certainQuotaExhausted !== true) {
+    return true;
+  }
   return false;
 }
 
@@ -205,6 +217,10 @@ export async function healPool(seats, { now = Date.now(), ask } = {}) {
       const advised = await adviseSeat(seat, hard, ask);
       return {
         id: seat.id,
+        // Internal-only: the un-opaqued identifier, needed by the reauth
+        // writer to target the right credential file. Never surfaced through
+        // the actions/state allowlists built in cliproxy-heal-tick.mjs.
+        rawId: seat.rawId || null,
         provider: seat.provider || null,
         tokenStale: seat.tokenStale === true,
         disabled: seat.disabled === true,
