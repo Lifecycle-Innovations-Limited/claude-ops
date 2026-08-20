@@ -113,4 +113,59 @@ assert.deepEqual(
 );
 assert.deepEqual(indentedIsolated.kept, ['kimi']);
 
+// Regression: a comment-only line right after the `openai-compatibility:`
+// header, and a comment-only line between two same-depth items, are both
+// valid YAML and must not stop the scan — a provider after either comment
+// must still be parsed and remain isolatable.
+const commentedYaml = `host: 127.0.0.1
+port: 8319
+openai-compatibility:
+  # header comment before the first item
+- name: kimi
+  base-url: https://api.kimi.example/v1
+  api-key-entries:
+  - api-key: fake-kimi-key
+  models:
+  - name: k3
+    alias: kimi-k3
+# comment between kimi and opencode-go
+- name: opencode-go
+  base-url: https://opencode.example/v1
+  api-key-entries:
+  - api-key: fake-opencode-key
+  models:
+  - name: glm-5
+    alias: go-glm-5
+- name: gemini
+  base-url: https://gemini.example/v1
+  api-key-entries:
+  - api-key: fake-gemini-key
+  models:
+  - name: gemini-2.5-flash
+auth-auto-refresh-workers: 16
+`;
+const commentedSplit = splitCompatItems(commentedYaml);
+assert.deepEqual(
+  commentedSplit.items.map((it) => it.name),
+  ['kimi', 'opencode-go', 'gemini'],
+  'a comment after the header, and a comment between items, must not truncate the scan',
+);
+
+const commentedIsolated = isolateCompatYaml(commentedYaml, ['opencode-go']);
+assert.deepEqual(
+  commentedIsolated.removed.map((it) => it.name),
+  ['opencode-go'],
+  'opencode-go must still be isolatable when preceded by a comment line',
+);
+assert.deepEqual(commentedIsolated.kept, ['kimi', 'gemini']);
+assert.match(commentedIsolated.yaml, /^- name: kimi$/m);
+assert.match(commentedIsolated.yaml, /^- name: gemini$/m);
+assert.doesNotMatch(commentedIsolated.yaml, /^- name: opencode-go$/m);
+// The comment attached to the removed item travels with it into the
+// isolated block, not into the rewritten config.yaml.
+assert.doesNotMatch(commentedIsolated.yaml, /comment between kimi and opencode-go/);
+assert.match(commentedIsolated.removed[0].lines.join('\n'), /comment between kimi and opencode-go/);
+// The header comment is attached to kept item "kimi" and is preserved.
+assert.match(commentedIsolated.yaml, /header comment before the first item/);
+
 console.log('cliproxy-isolate-compat.test.mjs: ok');

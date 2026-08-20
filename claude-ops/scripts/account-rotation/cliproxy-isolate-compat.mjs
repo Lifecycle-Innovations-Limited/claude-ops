@@ -34,7 +34,11 @@ export function splitCompatItems(yamlText) {
   let itemIndent = null;
   for (let j = start + 1; j < lines.length; j += 1) {
     const line = lines[j];
-    if (line.trim() === '') continue;
+    // Blank lines and comment-only lines carry no indentation signal for the
+    // list itself — valid YAML permits a `#`-only line (at any indent)
+    // between the `openai-compatibility:` key and its first item, or between
+    // any two items. Skip both while locating the first `- name:` line.
+    if (line.trim() === '' || line.trim().startsWith('#')) continue;
     const m = line.match(/^(\s*)-\s*name:/);
     if (m) itemIndent = m[1].length;
     break;
@@ -44,9 +48,25 @@ export function splitCompatItems(yamlText) {
   let i = start + 1;
   if (itemIndent != null) {
     const itemStartRe = new RegExp(`^\\s{${itemIndent}}-\\s*name:`);
+    // Comment-only lines seen while looking for the next item start (either
+    // before the first item, or between two same-depth items) are buffered
+    // here and prepended to whichever item follows, so they survive
+    // reassembly attached to that item. If the list ends without another
+    // item (trailing comments after the last one), the buffer is discarded —
+    // there is no item left to attach it to, and `after` already captures
+    // everything past the list.
+    let pendingComments = [];
     while (i < lines.length) {
       const line = lines[i];
       if (line.trim() === '') {
+        i += 1;
+        continue;
+      }
+      if (line.trim().startsWith('#')) {
+        // Valid YAML permits a comment-only line, at any indent, between
+        // the header and the first item or between two items — it does not
+        // end the list.
+        pendingComments.push(line);
         i += 1;
         continue;
       }
@@ -62,13 +82,20 @@ export function splitCompatItems(yamlText) {
           }
           if (itemStartRe.test(l)) break;
           const lineIndent = l.match(/^(\s*)/)[1].length;
+          if (l.trim().startsWith('#') && lineIndent <= itemIndent) {
+            // A comment at or above this item's own indent belongs to the
+            // gap before the *next* item, not to this item's nested block —
+            // stop here and let the outer loop buffer it.
+            break;
+          }
           if (lineIndent <= itemIndent) break;
           i += 1;
         }
-        items.push({ name, lines: lines.slice(begin, i) });
+        items.push({ name, lines: [...pendingComments, ...lines.slice(begin, i)] });
+        pendingComments = [];
         continue;
       }
-      // Not another item at this depth and not blank — the list ended.
+      // Not another item at this depth, not blank, not a comment — the list ended.
       break;
     }
   }
