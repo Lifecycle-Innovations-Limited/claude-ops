@@ -100,16 +100,30 @@ fi
 
 echo
 echo "=== the guard must not be dead code: real HOME still loads ==="
-# Same sandbox layout, but claim the real home so the guard's condition passes.
-# The shim means no actual launchd mutation occurs.
+# The guard keys on $HOME, so proving it is live requires the REAL home. That
+# makes the migration's destination path real too:
+#   $HOME/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist
+# With the real $USER that is the LIVE production plist, and this test would
+# overwrite it with sandbox paths — reintroducing, from the guard itself, the
+# exact corruption the guard exists to prevent.
+#
+# Override USER instead. The destination becomes a bogus label that launchd has
+# never heard of, so the file is inert, while $HOME stays real and the guard's
+# condition is genuinely exercised. The shim still intercepts the launchctl call.
+FAKE_USER="ops-migrate-guard-test-$$"
+REAL_PLIST="$REAL_HOME_VALUE/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
+REAL_PLIST_SUM_BEFORE="$( [[ -f "$REAL_PLIST" ]] && shasum -a256 "$REAL_PLIST" | awk '{print $1}' || echo absent)"
+TEST_PLIST="$REAL_HOME_VALUE/Library/LaunchAgents/com.${FAKE_USER}.whatsapp-bridge.plist"
+
 setup_sandbox
-SANDBOX_HOME="$HOME"
 : > "$CALLS"
 CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" \
   HOME="$REAL_HOME_VALUE" \
+  USER="$FAKE_USER" \
   CLAUDE_PLUGIN_DATA_DIR="$CLAUDE_PLUGIN_DATA_DIR" \
   WHATSAPP_BRIDGE_HOME="$WHATSAPP_BRIDGE_HOME" \
   bash "$SCRIPT" >/dev/null 2>&1 || true
+rm -f "$TEST_PLIST"
 n_real=$(wc -l < "$CALLS" | tr -d ' ')
 if [[ "$n_real" -gt 0 ]]; then
   echo "  PASS: real HOME still invokes launchctl ($n_real call(s)) — guard is live, not dead code"
@@ -119,16 +133,24 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+# The whole point of this suite is that running it never damages the machine.
+# Assert that, do not assume it.
+REAL_PLIST_SUM_AFTER="$( [[ -f "$REAL_PLIST" ]] && shasum -a256 "$REAL_PLIST" | awk '{print $1}' || echo absent)"
+ck "live production plist untouched by this test" "$REAL_PLIST_SUM_AFTER" "$REAL_PLIST_SUM_BEFORE"
+ck "no stray test plist left behind" "$([[ -f $TEST_PLIST ]] && echo yes || echo no)" "no"
+
 echo
 echo "=== explicit opt-out env var also suppresses ==="
 setup_sandbox
 : > "$CALLS"
 CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" \
   HOME="$REAL_HOME_VALUE" \
+  USER="$FAKE_USER" \
   OPS_MIGRATE_NO_LAUNCHCTL=1 \
   CLAUDE_PLUGIN_DATA_DIR="$CLAUDE_PLUGIN_DATA_DIR" \
   WHATSAPP_BRIDGE_HOME="$WHATSAPP_BRIDGE_HOME" \
   bash "$SCRIPT" >/dev/null 2>&1 || true
+rm -f "$TEST_PLIST"
 ck "zero launchctl invocations with OPS_MIGRATE_NO_LAUNCHCTL=1" "$(wc -l < "$CALLS" | tr -d ' ')" "0"
 
 rm -rf "$SHIM_DIR"
