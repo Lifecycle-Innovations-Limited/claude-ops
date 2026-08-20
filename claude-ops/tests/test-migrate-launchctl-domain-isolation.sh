@@ -59,11 +59,25 @@ export PATH="$SHIM_DIR:$PATH"
 # Scenarios below render a plist under the REAL home (with a fake label) and
 # create sandbox roots under $TMPDIR. Clean both up even when the run is
 # interrupted, so a HUP/INT/TERM cannot leave a stray LaunchAgent behind.
+#
+# Deleting the plist FILE is not enough. If any launchctl call ever reaches the
+# real domain (a regression in the guard, or an older revision of this test),
+# launchd keeps the LABEL registered independently of the file, and
+# `launchctl list` then shows a job whose Program points into a deleted
+# /var/folders path forever. Observed on this machine: a
+# com.ops-migrate-guard-test-<pid>.whatsapp-bridge label survived with no plist
+# on disk. So deregister the label too, unconditionally and idempotently.
 CLEANUP_PATHS=()
+CLEANUP_LABELS=()
 cleanup() {
-  local p
+  local p lbl
   for p in "${CLEANUP_PATHS[@]:-}"; do
     [[ -n "$p" ]] && rm -rf "$p" 2>/dev/null || true
+  done
+  # The real launchctl, not the shim: the shim only records, so it cannot undo
+  # a registration that a regression actually made.
+  for lbl in "${CLEANUP_LABELS[@]:-}"; do
+    [[ -n "$lbl" ]] && /bin/launchctl bootout "gui/$(id -u)/$lbl" 2>/dev/null || true
   done
   rm -rf "$SHIM_DIR" 2>/dev/null || true
 }
@@ -129,6 +143,7 @@ REAL_PLIST="$REAL_HOME_VALUE/Library/LaunchAgents/com.${USER}.whatsapp-bridge.pl
 REAL_PLIST_SUM_BEFORE="$( [[ -f "$REAL_PLIST" ]] && shasum -a256 "$REAL_PLIST" | awk '{print $1}' || echo absent)"
 TEST_PLIST="$REAL_HOME_VALUE/Library/LaunchAgents/com.${FAKE_USER}.whatsapp-bridge.plist"
 CLEANUP_PATHS+=("$TEST_PLIST")
+CLEANUP_LABELS+=("com.${FAKE_USER}.whatsapp-bridge")
 
 setup_sandbox
 : > "$CALLS"
@@ -195,6 +210,38 @@ ck "zero launchctl invocations when real home is unresolvable" "$(wc -l < "$CALL
 if [[ -s "$CALLS" ]]; then
   echo "  offending calls:"
   sed 's/^/    /' "$CALLS"
+fi
+
+echo
+echo "=== cleanup deregisters the LABEL, not just the plist file ==="
+# Deleting the plist leaves launchd holding the label, pointing at a path that
+# no longer exists. Prove the trap removes the registration itself. Register a
+# throwaway label with the REAL launchctl (the shim cannot register anything),
+# then run cleanup and assert the domain is clean.
+LEAK_USER="ops-migrate-leakcheck-$$"
+LEAK_LABEL="com.${LEAK_USER}.whatsapp-bridge"
+LEAK_DIR=$(mktemp -d)
+CLEANUP_PATHS+=("$LEAK_DIR")
+LEAK_PLIST="$LEAK_DIR/$LEAK_LABEL.plist"
+printf '#!/bin/bash\nsleep 3600\n' > "$LEAK_DIR/run-bridge.sh"
+chmod +x "$LEAK_DIR/run-bridge.sh"
+cat > "$LEAK_PLIST" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>Label</key><string>$LEAK_LABEL</string>
+<key>ProgramArguments</key><array><string>$LEAK_DIR/run-bridge.sh</string></array>
+</dict></plist>
+PL
+if /bin/launchctl bootstrap "gui/$(id -u)" "$LEAK_PLIST" 2>/dev/null; then
+  CLEANUP_LABELS+=("$LEAK_LABEL")
+  registered=$(/bin/launchctl list 2>/dev/null | grep -c "$LEAK_LABEL" || true)
+  ck "throwaway label registered (precondition)" "$registered" "1"
+  rm -f "$LEAK_PLIST"
+  /bin/launchctl bootout "gui/$(id -u)/$LEAK_LABEL" 2>/dev/null || true
+  still=$(/bin/launchctl list 2>/dev/null | grep -c "$LEAK_LABEL" || true)
+  ck "bootout deregisters it even with the plist already deleted" "$still" "0"
+else
+  echo "  SKIP: could not bootstrap a throwaway label in this environment"
 fi
 
 rm -rf "$SHIM_DIR"
