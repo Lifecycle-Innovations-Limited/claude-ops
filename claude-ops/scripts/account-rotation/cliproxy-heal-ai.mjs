@@ -41,12 +41,15 @@ export function parseAdviceText(text) {
   }
 }
 
-// CodeQL: "File data in outbound network request" — apiKey can originate
-// from readApiKeyFromConfig() reading config.yaml on disk. Re-validate the
-// key against a strict allowlist immediately before it reaches the fetch
-// sink (not earlier and not on a separate variable) so the value the
-// request actually sends is the regex match itself, matching the barrier
-// shape CodeQL's flow analysis recognizes.
+// This module never reads files itself. cliproxy-heal-tick.mjs is the only
+// caller allowed to read config.yaml's api-keys entry off disk
+// (readApiKeyFromConfig), and it stores that value into process.env
+// (CLIPROXY_API_KEY) rather than passing the readFileSync() result straight
+// into askCliproxyHealer's arguments — so the apiKey this function receives
+// always traces back to a process.env read, the same as CLIPROXYAPI_KEY,
+// never directly to a file read. Re-validate against a strict allowlist
+// immediately before the fetch sink anyway, as defense-in-depth for any
+// future caller that passes apiKey directly.
 const API_KEY_RE = /^[A-Za-z0-9_.\-:]{1,256}$/;
 
 export async function askCliproxyHealer(facts, { baseUrl, apiKey, model, fetchImpl } = {}) {
