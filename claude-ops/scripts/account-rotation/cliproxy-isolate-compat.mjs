@@ -5,7 +5,7 @@
  * Pure splice of CLIProxy config.yaml list items. Does not parse secrets.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 export function loadIsolateManifest(path) {
   if (!path || !existsSync(path)) return { providers: [], reasons: {} };
@@ -20,32 +20,59 @@ export function loadIsolateManifest(path) {
 
 /**
  * Split openai-compatibility list items. Each item starts at a line matching
- * /^- name: / at column 0 (the CLIProxy config shape).
+ * /^\s*- name: / — YAML permits the sequence indented under the key, not
+ * only at column 0. The indentation of the FIRST such line under the key
+ * sets the expected depth for every subsequent item boundary in this list,
+ * so a nested list (e.g. `models:` / `api-key-entries:` inside an item) at a
+ * deeper indent is never mistaken for a new top-level item.
  */
 export function splitCompatItems(yamlText) {
   const lines = String(yamlText).split('\n');
   const start = lines.findIndex((l) => l.trim() === 'openai-compatibility:');
   if (start < 0) return { before: yamlText, items: [], after: '', start: -1 };
+
+  let itemIndent = null;
+  for (let j = start + 1; j < lines.length; j += 1) {
+    const line = lines[j];
+    if (line.trim() === '') continue;
+    const m = line.match(/^(\s*)-\s*name:/);
+    if (m) itemIndent = m[1].length;
+    break;
+  }
+
   const items = [];
   let i = start + 1;
-  while (i < lines.length && (lines[i].startsWith(' ') || lines[i].startsWith('-') || lines[i].trim() === '')) {
-    if (lines[i].startsWith('- name:')) {
-      const name = lines[i].slice('- name:'.length).trim();
-      const begin = i;
-      i += 1;
-      while (
-        i < lines.length &&
-        !lines[i].startsWith('- name:') &&
-        (lines[i].startsWith(' ') || lines[i].startsWith('-') || lines[i].trim() === '')
-      ) {
+  if (itemIndent != null) {
+    const itemStartRe = new RegExp(`^\\s{${itemIndent}}-\\s*name:`);
+    while (i < lines.length) {
+      const line = lines[i];
+      if (line.trim() === '') {
         i += 1;
+        continue;
       }
-      items.push({ name, lines: lines.slice(begin, i) });
-      continue;
+      if (itemStartRe.test(line)) {
+        const name = line.slice(line.indexOf('name:') + 'name:'.length).trim();
+        const begin = i;
+        i += 1;
+        while (i < lines.length) {
+          const l = lines[i];
+          if (l.trim() === '') {
+            i += 1;
+            continue;
+          }
+          if (itemStartRe.test(l)) break;
+          const lineIndent = l.match(/^(\s*)/)[1].length;
+          if (lineIndent <= itemIndent) break;
+          i += 1;
+        }
+        items.push({ name, lines: lines.slice(begin, i) });
+        continue;
+      }
+      // Not another item at this depth and not blank — the list ended.
+      break;
     }
-    // preamble under the key (should not happen)
-    i += 1;
   }
+
   return {
     before: lines.slice(0, start).join('\n'),
     header: 'openai-compatibility:',

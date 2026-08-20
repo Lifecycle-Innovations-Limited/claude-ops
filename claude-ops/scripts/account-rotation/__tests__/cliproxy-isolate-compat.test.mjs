@@ -78,4 +78,39 @@ assert.match(readFileSync(join(isolateDir, 'opencode-go.yaml'), 'utf8'), /fake-o
 const second = applyIsolateCompat({ configPath, isolateDir, manifestPath });
 assert.equal(second.unchanged, true);
 
+// Regression: openai-compatibility sequences indented under the key (valid
+// YAML) must still be detected — a column-0-only scan silently returns zero
+// items and leaves an unservable provider advertised.
+const indentedYaml = `host: 127.0.0.1
+port: 8319
+openai-compatibility:
+  - name: kimi
+    base-url: https://api.kimi.example/v1
+    api-key-entries:
+      - api-key: fake-kimi-key
+    models:
+      - name: k3
+        alias: kimi-k3
+  - name: opencode-go
+    base-url: https://opencode.example/v1
+    api-key-entries:
+      - api-key: fake-opencode-key
+    models:
+      - name: glm-5
+        alias: go-glm-5
+auth-auto-refresh-workers: 16
+`;
+const indentedSplit = splitCompatItems(indentedYaml);
+assert.deepEqual(
+  indentedSplit.items.map((it) => it.name),
+  ['kimi', 'opencode-go'],
+  'indented openai-compatibility sequence must be detected, not silently return zero items',
+);
+const indentedIsolated = isolateCompatYaml(indentedYaml, ['opencode-go']);
+assert.deepEqual(
+  indentedIsolated.removed.map((it) => it.name),
+  ['opencode-go'],
+);
+assert.deepEqual(indentedIsolated.kept, ['kimi']);
+
 console.log('cliproxy-isolate-compat.test.mjs: ok');
