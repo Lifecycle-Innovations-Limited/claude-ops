@@ -3,8 +3,20 @@
  * No emails, tokens, or auth filenames leak into the census view.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { detectCertainExhaust, parseTimestamp } from './cliproxy-heal-policy.mjs';
+
+/**
+ * Stable, non-reversible seat identifier. `stem(name)` below can produce a
+ * raw account email straight from the auth/.cds filename; that raw value
+ * must never reach persisted state, AI facts, or --json output. Only the
+ * internal `rawId` field (used for auth-file mutation and reauth targeting)
+ * keeps the original value.
+ */
+export function opaqueSeatId(rawId) {
+  return createHash('sha256').update(String(rawId)).digest('hex').slice(0, 16);
+}
 
 function readJson(path) {
   try {
@@ -61,7 +73,11 @@ function recordSignals(record, now) {
     extractResetsAt(lastError) ||
     extractResetsAt(JSON.stringify(quota));
   const retry = validRecover(record?.next_retry_after);
-  const cooling = retry != null && retry > now;
+  const recover = validRecover(quota.next_recover_at);
+  // cooling must agree with rescheduleAt above: a seat with only
+  // quota.next_recover_at in the future (no next_retry_after) was reporting
+  // itself as still cooling and must not be treated as currently servable.
+  const cooling = (retry != null && retry > now) || (recover != null && recover > now);
   const exceeded = quota.exceeded === true;
   const certain = detectCertainExhaust({
     lastExhaustReason: quotaReason,
@@ -208,9 +224,11 @@ function seatFromParts({ id, provider, auth, authFile, cds, cdsFile, now, previo
   const merged = mergeRecords(cds?.records, now);
   const disabled = auth?.disabled === true;
   const inRotation = !disabled && !merged.cooling;
+  const opaque = opaqueSeatId(id);
   return markNewQuota(
     {
-      id,
+      id: opaque,
+      rawId: id,
       provider,
       disabled,
       cooling: merged.cooling,
@@ -228,7 +246,7 @@ function seatFromParts({ id, provider, auth, authFile, cds, cdsFile, now, previo
       authFile: authFile || null,
       cdsFile: cdsFile || null,
     },
-    previous[id],
+    previous[opaque],
   );
 }
 
