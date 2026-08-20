@@ -33,6 +33,12 @@ ck() {
 setup() {
   ROOT=$(mktemp -d)
   export HOME="$ROOT/home"
+  # $USER feeds the plist label AND the launchd label. Leaving the real value
+  # here means a sandboxed run still names the operator's live service, which is
+  # how tests/test-migrate-launchctl-domain-isolation.sh's incident happened.
+  # Keep the label fake so nothing this test writes can ever collide with a real
+  # one, even if a future migration resolves paths differently.
+  export USER="ops-migrate-sentinel-test-$$"
   mkdir -p "$HOME/Library/LaunchAgents"
   PLUGIN_ROOT="$ROOT/plugin"
   mkdir -p "$PLUGIN_ROOT/.claude-plugin" "$PLUGIN_ROOT/assets/launchagents"
