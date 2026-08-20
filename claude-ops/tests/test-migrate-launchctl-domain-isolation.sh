@@ -56,8 +56,22 @@ SHIM
 chmod +x "$SHIM_DIR/launchctl"
 export PATH="$SHIM_DIR:$PATH"
 
+# Scenarios below render a plist under the REAL home (with a fake label) and
+# create sandbox roots under $TMPDIR. Clean both up even when the run is
+# interrupted, so a HUP/INT/TERM cannot leave a stray LaunchAgent behind.
+CLEANUP_PATHS=()
+cleanup() {
+  local p
+  for p in "${CLEANUP_PATHS[@]:-}"; do
+    [[ -n "$p" ]] && rm -rf "$p" 2>/dev/null || true
+  done
+  rm -rf "$SHIM_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT HUP INT TERM
+
 setup_sandbox() {
   ROOT=$(mktemp -d)
+  CLEANUP_PATHS+=("$ROOT")
   export HOME="$ROOT/home"
   mkdir -p "$HOME/Library/LaunchAgents"
   PLUGIN_ROOT="$ROOT/plugin"
@@ -114,6 +128,7 @@ FAKE_USER="ops-migrate-guard-test-$$"
 REAL_PLIST="$REAL_HOME_VALUE/Library/LaunchAgents/com.${USER}.whatsapp-bridge.plist"
 REAL_PLIST_SUM_BEFORE="$( [[ -f "$REAL_PLIST" ]] && shasum -a256 "$REAL_PLIST" | awk '{print $1}' || echo absent)"
 TEST_PLIST="$REAL_HOME_VALUE/Library/LaunchAgents/com.${FAKE_USER}.whatsapp-bridge.plist"
+CLEANUP_PATHS+=("$TEST_PLIST")
 
 setup_sandbox
 : > "$CALLS"
@@ -152,6 +167,35 @@ CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" \
   bash "$SCRIPT" >/dev/null 2>&1 || true
 rm -f "$TEST_PLIST"
 ck "zero launchctl invocations with OPS_MIGRATE_NO_LAUNCHCTL=1" "$(wc -l < "$CALLS" | tr -d ' ')" "0"
+
+echo
+echo "=== real-home lookup FAILS: must fail closed, not fall back to \$HOME ==="
+# The guard resolves the real home with python3. If that lookup ever returns
+# nothing and the code falls back to "$HOME", the comparison becomes $HOME vs
+# $HOME — trivially equal even for a sandboxed HOME — and every launchctl call
+# fires in the real GUI domain again. Force the failure and assert we skip.
+BREAK_DIR=$(mktemp -d)
+CLEANUP_PATHS+=("$BREAK_DIR")
+printf '#!/bin/bash\nexit 1\n' > "$BREAK_DIR/python3"
+chmod +x "$BREAK_DIR/python3"
+
+setup_sandbox
+SANDBOXED_HOME="$HOME"
+: > "$CALLS"
+# HOME is the sandbox here, but with the resolver broken a fallback-to-$HOME
+# implementation would consider it "real" and proceed.
+CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" \
+  PATH="$BREAK_DIR:$PATH" \
+  HOME="$SANDBOXED_HOME" \
+  USER="$FAKE_USER" \
+  CLAUDE_PLUGIN_DATA_DIR="$CLAUDE_PLUGIN_DATA_DIR" \
+  WHATSAPP_BRIDGE_HOME="$WHATSAPP_BRIDGE_HOME" \
+  bash "$SCRIPT" >/dev/null 2>&1 || true
+ck "zero launchctl invocations when real home is unresolvable" "$(wc -l < "$CALLS" | tr -d ' ')" "0"
+if [[ -s "$CALLS" ]]; then
+  echo "  offending calls:"
+  sed 's/^/    /' "$CALLS"
+fi
 
 rm -rf "$SHIM_DIR"
 echo
