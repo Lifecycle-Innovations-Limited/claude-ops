@@ -10,6 +10,7 @@ Group=crsproxy
 WorkingDirectory=/opt/crsproxy
 Environment=HOME=/opt/crsproxy
 Environment=CLIPROXY_HUB_HEAL=1
+Environment=CLIPROXY_HEAL_ACCOUNT_OPTIN=1
 Environment=CLIPROXY_AUTH_DIR=/opt/crsproxy/auths
 Environment=CLIPROXY_HEAL_STATE=/opt/crsproxy/.cliproxy-heal-state.json
 Environment=CLIPROXY_HEAL_BASE_URL=http://127.0.0.1:8317
