@@ -1,5 +1,6 @@
 ## Unreleased
 
+- feat(cliproxy-heal): unattended hub healer puts seats back in rotation as soon as any leftover or reset quota is observed (no hysteresis). A seat sits out only on certain "quota exhausted" plus a parseable reschedule stamp, then re-enters at that stamp. An AI advisor runs on every seat and cannot override those rules. Hub systemd timer `cliproxy-heal.timer`; Mac stays client-only (`CLIPROXY_HUB_HEAL=1` required). Tests in `scripts/account-rotation/__tests__/cliproxy-heal-policy.test.mjs`.
 - fix(ops-mac): the application firewall is opt-in. `/ops:mac fix` no longer offers to enable it and no longer lists it as a recommendation; the audit reports its state and stops. Turning the firewall on breaks local listeners (dev servers, MCP proxies, VNC, tunnels) and the user rarely connects the breakage to a `fix` run they asked for other reasons. `socketfilterfw` now runs only when the user asks for the firewall by name in that turn.
 - **Removed the CRS relay backend.** claude-relay-service handed every session a
   static `cr_` bearer token pinned into `settings.json`, and the plugin had to keep

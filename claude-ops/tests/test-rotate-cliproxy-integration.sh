@@ -72,3 +72,5 @@ for (const authArg of ['--setup', '--magic-link']) {
 
 console.log('CLIProxy direct-writer policy tests: PASS');
 NODE
+
+node "$ROOT/scripts/account-rotation/__tests__/cliproxy-heal-policy.test.mjs"

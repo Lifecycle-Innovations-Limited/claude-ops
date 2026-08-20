@@ -1,0 +1,23 @@
+[Unit]
+Description=CLIProxy autonomous quota healer (hard rules + AI advisor)
+After=crsproxy.service
+Wants=crsproxy.service
+
+[Service]
+Type=oneshot
+User=crsproxy
+Group=crsproxy
+WorkingDirectory=/opt/crsproxy
+Environment=HOME=/opt/crsproxy
+Environment=CLIPROXY_HUB_HEAL=1
+Environment=CLIPROXY_AUTH_DIR=/opt/crsproxy/auths
+Environment=CLIPROXY_HEAL_STATE=/opt/crsproxy/.cliproxy-heal-state.json
+Environment=CLIPROXY_HEAL_BASE_URL=http://127.0.0.1:8317
+Environment=CLIPROXY_CONFIG=/opt/crsproxy/config.yaml
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/local/bin/node /opt/crsproxy/heal/cliproxy-heal-tick.mjs
+TimeoutStartSec=120
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
