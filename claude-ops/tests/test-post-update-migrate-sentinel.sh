@@ -39,6 +39,12 @@ setup() {
   # Keep the label fake so nothing this test writes can ever collide with a real
   # one, even if a future migration resolves paths differently.
   export USER="ops-migrate-sentinel-test-$$"
+  # Deleting the plist file does not deregister a launchd label, so if any
+  # launchctl call ever reaches the real domain, the label outlives the file and
+  # `launchctl list` shows a job pointing into a deleted temp dir. Belt and
+  # braces: reap this run's label on exit even though the guard should prevent
+  # the registration in the first place.
+  trap '/bin/launchctl bootout "gui/$(id -u)/com.${USER}.whatsapp-bridge" 2>/dev/null || true' EXIT HUP INT TERM
   mkdir -p "$HOME/Library/LaunchAgents"
   PLUGIN_ROOT="$ROOT/plugin"
   mkdir -p "$PLUGIN_ROOT/.claude-plugin" "$PLUGIN_ROOT/assets/launchagents"
