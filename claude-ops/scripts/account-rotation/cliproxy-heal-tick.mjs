@@ -11,7 +11,7 @@
  *
  *   node cliproxy-heal-tick.mjs [--dry-run] [--status] [--auth-dir DIR]
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -57,7 +57,11 @@ function writeJsonAtomic(path, data) {
 }
 
 function readAuth(path) {
-  return JSON.parse(readFileSync(path, 'utf8'));
+  const parsed = JSON.parse(readFileSync(path, 'utf8'));
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(`auth file is not an object: ${path}`);
+  }
+  return parsed;
 }
 
 export function normalizeReauthOutcome(ret) {
@@ -78,7 +82,7 @@ export function defaultReauth(decision) {
   if (!cmd || !existsSync(cmd)) {
     return { ok: false, blocked: true, reason: 'no_reauth_writer' };
   }
-  const r = spawnSync(cmd, [decision.provider || '', decision.id || '', decision.authFile || ''], {
+  const r = spawnSync(cmd, [decision.provider || '', decision.rawId || decision.id || '', decision.authFile || ''], {
     timeout: 90_000,
     stdio: 'ignore',
     env: { ...process.env, CLIPROXY_HUB_HEAL: '1' },
@@ -103,10 +107,23 @@ export function applyDecision(decision, { dryRun = false, reauth } = {}) {
         writeJsonAtomic(decision.authFile, auth);
       }
     }
-    if (decision.cdsFile && existsSync(decision.cdsFile)) {
+    // Only clear the CLIProxy quota sidecar when this seat actually carried a
+    // cooldown record: it is still cooling per its own signal, or its
+    // reschedule stamp just elapsed (reason 'reschedule_elapsed'). decideSeat
+    // also returns inRotation:true for healthy seats with a coincidental
+    // leftover .cds file ('remaining_or_reset_quota' with cooling:false) and
+    // for uncertain-exhaust seats that were never actually cooling — deleting
+    // their sidecar destroys the proxy's own quota/reset-at evidence for no
+    // reason and is not reversible. Rename instead of unlink so a mistaken
+    // clear can still be recovered from disk.
+    if (
+      (decision.cooling === true || decision.reason === 'reschedule_elapsed') &&
+      decision.cdsFile &&
+      existsSync(decision.cdsFile)
+    ) {
       applied.push('clear_cooldown');
       if (!dryRun) {
-        unlinkSync(decision.cdsFile);
+        renameSync(decision.cdsFile, `${decision.cdsFile}.healed`);
       }
     }
     if (decision.tokenStale) {
@@ -129,7 +146,23 @@ export function applyDecision(decision, { dryRun = false, reauth } = {}) {
       }
     }
   } else if (decision.rescheduleAt) {
+    // persist_reschedule alone only wrote the healer's own state file, which
+    // has no consumer inside CLIProxy — the seat stayed advertised and the
+    // proxy kept routing to it. Actually remove the seat from rotation using
+    // the mechanism CLIProxy itself honors: the `disabled` flag on the auth
+    // file. Re-entry still happens exactly when this decision flips (rule 2's
+    // reschedule check), which flows through the enable_auth branch above.
     applied.push('persist_reschedule');
+    if (decision.authFile && !decision.disabled) {
+      applied.push('leave_rotation');
+      if (!dryRun) {
+        const auth = readAuth(decision.authFile);
+        auth.disabled = true;
+        auth.disabled_reason = `cliproxy-heal: certain_exhaust_until_reschedule (${decision.rescheduleAt})`;
+        auth.healer_disabled_at = new Date().toISOString();
+        writeJsonAtomic(decision.authFile, auth);
+      }
+    }
   }
   return { applied, blocked };
 }
@@ -154,8 +187,15 @@ export async function runHealTick({
   log = console.log,
   reauth,
 } = {}) {
-  if (!automatedAuthAllowed({ cliproxyHubHeal: true })) {
-    log('heal denied: CLIPROXY_HUB_HEAL not set (Mac client-only; hub systemd must export it)');
+  // Two independent gates: CLIPROXY_HUB_HEAL says "this process may mutate
+  // credentials at all"; CLIPROXY_HEAL_ACCOUNT_OPTIN says "this host was
+  // explicitly provisioned for unattended healing" (set by install-heal.sh's
+  // generated unit, not by simply exporting the first variable). A caller
+  // that only flips CLIPROXY_HUB_HEAL still gets denied.
+  if (!automatedAuthAllowed({ cliproxyHubHeal: process.env.CLIPROXY_HEAL_ACCOUNT_OPTIN === '1' })) {
+    log(
+      'heal denied: CLIPROXY_HUB_HEAL and/or CLIPROXY_HEAL_ACCOUNT_OPTIN not set (Mac client-only; hub systemd must export both)',
+    );
     return { denied: true, decisions: [], census: censusFromSeats([], now) };
   }
 
@@ -186,7 +226,22 @@ export async function runHealTick({
         return defaultReauth(d);
       };
     }
-    const { applied, blocked } = applyDecision(decision, { dryRun, reauth: runner });
+    // Isolate each seat: a truncated auth file, a permission error, or a
+    // concurrent delete by the proxy must not throw out of the loop and skip
+    // every seat after it (and skip saveState entirely). Coding guideline:
+    // never silently skip a channel/service/integration — so the failure is
+    // logged with the seat's identity rather than swallowed.
+    let applied = [];
+    let blocked = null;
+    try {
+      ({ applied, blocked } = applyDecision(decision, { dryRun, reauth: runner }));
+    } catch (err) {
+      applied = [`error:${String(err?.message || err).slice(0, 120)}`];
+      blocked = { reason: 'apply_decision_failed', tokenStale: decision.tokenStale === true };
+      log(
+        `heal seat failed id=${decision.id} provider=${decision.provider || '?'} action=${decision.action} err=${applied[0]}`,
+      );
+    }
     actions.push({
       id: decision.id,
       provider: decision.provider,
@@ -236,6 +291,13 @@ export async function runHealTick({
   if (isolate.removed?.length) {
     log(`isolated unservable compat providers: ${isolate.removed.join(',')}`);
   }
+  if (!isolate.ok) {
+    // applyIsolateCompat returns ok:false (e.g. missing_config) without
+    // throwing. Silently continuing would leave an unservable openai-compat
+    // provider advertised with no signal in the log or the returned result.
+    // Surface it explicitly instead of letting the tick look fully healthy.
+    log(`compat isolation FAILED reason=${isolate.reason || 'unknown'} — unservable providers may still be advertised`);
+  }
 
   if (!dryRun) saveState(statePath, { ...state, isolate });
 
@@ -256,6 +318,7 @@ export async function runHealTick({
     decisions: result.decisions,
     actions,
     state,
+    isolate,
   };
 }
 
@@ -264,7 +327,12 @@ if (isMain) {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run') || args.includes('--status');
   const dirFlag = args.indexOf('--auth-dir');
-  const authDir = dirFlag >= 0 ? args[dirFlag + 1] : defaultAuthDir();
+  const dirValue = dirFlag >= 0 ? args[dirFlag + 1] : undefined;
+  if (dirFlag >= 0 && (!dirValue || dirValue.startsWith('--'))) {
+    console.error('--auth-dir requires a directory path');
+    process.exit(2);
+  }
+  const authDir = dirFlag >= 0 ? dirValue : defaultAuthDir();
   runHealTick({ authDir, dryRun, now: Date.now() })
     .then((out) => {
       if (args.includes('--json')) {
