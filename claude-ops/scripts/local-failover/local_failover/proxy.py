@@ -584,14 +584,26 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                     self._json_response(400, "invalid_request_target")
                     return
                 connection, target = upstream
-                # CodeQL models re.fullmatch as a same-CFG BarrierGuard for
-                # partial SSRF. Re-check at the sink so taint tracking sees
-                # the restriction on the exact value passed to request().
+                # `connection` was built in _upstream() from route.config,
+                # which is proxy configuration (URL / URL-env constant), not
+                # attacker input: the request host, port and scheme here are
+                # never tainted. `target` is the origin-form path/query,
+                # already validated by _safe_request_target()/_upstream()
+                # to reject absolute/authority-form targets, control
+                # characters, backslashes and dot-segments, so it cannot
+                # redirect the outbound request to a different host. This is
+                # the same flow reviewed and dismissed as a false positive
+                # on CodeQL alert #316 (see task comment 635): CodeQL's
+                # partial-SSRF query still taints `target` through the
+                # regex guard below, but only the path component -- never
+                # the destination -- is user-influenced.
                 if _REQUEST_TARGET_RE.fullmatch(target) is None:
                     connection.close()
                     self._json_response(400, "invalid_request_target")
                     return
-                connection.request(self.command, target, body=body, headers=headers)
+                connection.request(  # lgtm[py/partial-ssrf] codeql[py/partial-ssrf] -- host is a proxy-config constant (see comment above); alert #316 dismissed as false positive
+                    self.command, target, body=body, headers=headers
+                )
                 response = connection.getresponse()
                 if connection.sock:
                     connection.sock.settimeout(self.runtime.config.idle_timeout_seconds)
