@@ -1,0 +1,81 @@
+#!/usr/bin/env node
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { isolateCompatYaml, applyIsolateCompat, splitCompatItems } from '../cliproxy-isolate-compat.mjs';
+
+const yaml = `host: 127.0.0.1
+port: 8319
+openai-compatibility:
+- name: kimi
+  base-url: https://api.kimi.example/v1
+  api-key-entries:
+  - api-key: fake-kimi-key
+  models:
+  - name: k3
+    alias: kimi-k3
+- name: opencode-go
+  base-url: https://opencode.example/v1
+  api-key-entries:
+  - api-key: fake-opencode-key
+  models:
+  - name: glm-5
+    alias: go-glm-5
+  - name: mimo-v2.5
+    alias: go-mimo-v2.5
+- name: gemini
+  base-url: https://gemini.example/v1
+  api-key-entries:
+  - api-key: fake-gemini-key
+  models:
+  - name: gemini-2.5-flash
+auth-auto-refresh-workers: 16
+ws-auth: true
+`;
+
+const split = splitCompatItems(yaml);
+assert.deepEqual(
+  split.items.map((it) => it.name),
+  ['kimi', 'opencode-go', 'gemini'],
+);
+
+const isolated = isolateCompatYaml(yaml, ['opencode-go']);
+assert.deepEqual(
+  isolated.removed.map((it) => it.name),
+  ['opencode-go'],
+);
+assert.deepEqual(isolated.kept, ['kimi', 'gemini']);
+assert.match(isolated.yaml, /^- name: kimi$/m);
+assert.match(isolated.yaml, /^- name: gemini$/m);
+assert.doesNotMatch(isolated.yaml, /^- name: opencode-go$/m);
+assert.match(isolated.yaml, /^auth-auto-refresh-workers: 16$/m);
+assert.match(isolated.yaml, /fake-kimi-key/);
+assert.doesNotMatch(isolated.yaml, /fake-opencode-key/);
+
+const dir = mkdtempSync(join(tmpdir(), 'cliproxy-isolate-'));
+const configPath = join(dir, 'config.yaml');
+const isolateDir = join(dir, 'isolated');
+const manifestPath = join(dir, 'manifest.json');
+writeFileSync(configPath, yaml);
+writeFileSync(
+  manifestPath,
+  JSON.stringify({
+    providers: ['opencode-go'],
+    reasons: { 'opencode-go': 'CreditsError: no payment method' },
+  }),
+);
+
+const applied = applyIsolateCompat({ configPath, isolateDir, manifestPath });
+assert.equal(applied.ok, true);
+assert.deepEqual(applied.removed, ['opencode-go']);
+assert.equal(existsSync(join(isolateDir, 'opencode-go.yaml')), true);
+const after = readFileSync(configPath, 'utf8');
+assert.doesNotMatch(after, /^- name: opencode-go$/m);
+assert.match(after, /^- name: kimi$/m);
+assert.match(readFileSync(join(isolateDir, 'opencode-go.yaml'), 'utf8'), /fake-opencode-key/);
+
+const second = applyIsolateCompat({ configPath, isolateDir, manifestPath });
+assert.equal(second.unchanged, true);
+
+console.log('cliproxy-isolate-compat.test.mjs: ok');

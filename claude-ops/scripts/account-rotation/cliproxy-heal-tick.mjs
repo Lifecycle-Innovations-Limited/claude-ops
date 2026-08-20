@@ -19,6 +19,7 @@ import { automatedAuthAllowed } from './auto-auth-policy.mjs';
 import { healPool } from './cliproxy-heal-policy.mjs';
 import { askCliproxyHealer } from './cliproxy-heal-ai.mjs';
 import { censusFromSeats, redactSeat, snapshotFromAuthDir } from './cliproxy-pool-snapshot.mjs';
+import { applyIsolateCompat } from './cliproxy-isolate-compat.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -181,7 +182,17 @@ export async function runHealTick({
       applied: a.applied,
     })),
   };
-  if (!dryRun) saveState(statePath, state);
+  const isolate = applyIsolateCompat({
+    configPath: process.env.CLIPROXY_CONFIG || '/opt/crsproxy/config.yaml',
+    isolateDir: process.env.CLIPROXY_ISOLATE_DIR || join(dirname(authDir), 'isolated'),
+    manifestPath: process.env.CLIPROXY_ISOLATE_MANIFEST || join(dirname(authDir), 'isolated', 'manifest.json'),
+    dryRun,
+  });
+  if (isolate.removed?.length) {
+    log(`isolated unservable compat providers: ${isolate.removed.join(',')}`);
+  }
+
+  if (!dryRun) saveState(statePath, { ...state, isolate });
 
   log(
     `heal tick seats=${seats.length} enter=${actions.filter((a) => a.inRotation).length} out=${actions.filter((a) => !a.inRotation).length} dry=${dryRun}`,

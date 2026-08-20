@@ -15,6 +15,12 @@ install -m 0644 "$SRC/cliproxy-heal-policy.mjs" "$DEST/cliproxy-heal-policy.mjs"
 install -m 0644 "$SRC/cliproxy-heal-ai.mjs" "$DEST/cliproxy-heal-ai.mjs"
 install -m 0644 "$SRC/cliproxy-pool-snapshot.mjs" "$DEST/cliproxy-pool-snapshot.mjs"
 install -m 0644 "$SRC/auto-auth-policy.mjs" "$DEST/auto-auth-policy.mjs"
+install -m 0644 "$SRC/cliproxy-isolate-compat.mjs" "$DEST/cliproxy-isolate-compat.mjs"
+mkdir -p /opt/crsproxy/isolated
+if [ ! -f /opt/crsproxy/isolated/manifest.json ]; then
+  printf '%s\n' '{"providers":["opencode-go"],"reasons":{"opencode-go":"upstream CreditsError/RegionError: no payment method / China-host opt-in"}}' >/opt/crsproxy/isolated/manifest.json
+  chmod 0644 /opt/crsproxy/isolated/manifest.json
+fi
 
 install -m 0644 "$TEMPLATE_DIR/cliproxy-heal.service" "$UNIT_DIR/cliproxy-heal.service"
 install -m 0644 "$TEMPLATE_DIR/cliproxy-heal.timer" "$UNIT_DIR/cliproxy-heal.timer"
