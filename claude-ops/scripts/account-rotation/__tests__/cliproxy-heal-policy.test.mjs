@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ACTIONS, healPool } from '../cliproxy-heal-policy.mjs';
 import { opaqueSeatId, snapshotFromAuthDir } from '../cliproxy-pool-snapshot.mjs';
-import { applyDecision, runHealTick } from '../cliproxy-heal-tick.mjs';
+import { applyDecision, runHealTick, accountOptedIn } from '../cliproxy-heal-tick.mjs';
 import { parseAdviceText, buildHealerPrompt } from '../cliproxy-heal-ai.mjs';
 import { automatedAuthAllowed, directOAuthWriterAllowed, CLIPROXY_HEAL_OPTIN_TOKEN } from '../auto-auth-policy.mjs';
 
@@ -656,6 +656,41 @@ assert.equal(applyNoWriter.blocked?.reason, 'no_reauth_writer');
     false,
     'certain exhaust + future stamp must win over a coincidental quotaExceeded:false/hadQuotaSignal:true reading',
   );
+}
+
+// Unit tests for accountOptedIn() directly: it opens the marker path ONCE
+// (openSync) and validates mode + content off that same file descriptor
+// (fstatSync, then readFileSync(fd, ...)) rather than doing an
+// existsSync/statSync-by-path followed by a separate readFileSync-by-path —
+// the latter shape is a TOCTOU file-system race (CodeQL js/file-system-race:
+// the path could be swapped between the permission check and the read).
+{
+  const optDir = mkdtempSync(join(tmpdir(), 'account-optin-'));
+  const optMarker = join(optDir, '.heal-account-optin');
+
+  assert.equal(accountOptedIn(optMarker), false, 'missing marker file must be rejected');
+
+  writeFileSync(optMarker, 'wrong-token');
+  chmodSync(optMarker, 0o600);
+  assert.equal(accountOptedIn(optMarker), false, 'marker with the wrong content must be rejected');
+
+  writeFileSync(optMarker, CLIPROXY_HEAL_OPTIN_TOKEN);
+  chmodSync(optMarker, 0o666);
+  assert.equal(
+    accountOptedIn(optMarker),
+    false,
+    'group/other-writable marker must be rejected even with correct content',
+  );
+
+  writeFileSync(optMarker, CLIPROXY_HEAL_OPTIN_TOKEN);
+  chmodSync(optMarker, 0o600);
+  assert.equal(accountOptedIn(optMarker), true, 'a 0600 marker with the exact token must be accepted');
+
+  // Trailing whitespace (a trailing newline from an editor or `echo`, for
+  // instance) must not defeat an otherwise-correct marker.
+  writeFileSync(optMarker, `${CLIPROXY_HEAL_OPTIN_TOKEN}\n`);
+  chmodSync(optMarker, 0o600);
+  assert.equal(accountOptedIn(optMarker), true, 'trailing whitespace in an otherwise-correct marker is tolerated');
 }
 
 console.log('cliproxy-heal-policy.test.mjs: ok');

@@ -11,7 +11,16 @@
  *
  *   node cliproxy-heal-tick.mjs [--dry-run] [--status] [--auth-dir DIR]
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -60,14 +69,26 @@ function saveState(path, state) {
 // at some other pre-existing file (e.g. /etc/hosts) cannot satisfy the gate.
 // A marker that is group/other-writable is also rejected — a marker
 // install-heal.sh actually wrote is mode 0600.
-function accountOptedIn(path) {
-  if (!existsSync(path)) return false;
+export function accountOptedIn(path) {
+  // Open once and validate the mode + content of that SAME file descriptor —
+  // not two independent lookups by path (existsSync/statSync, then a
+  // separate readFileSync by path) — so there is no window between the
+  // permission check and the read in which the path could be swapped to a
+  // different file (a TOCTOU / file-system race).
+  let fd;
   try {
-    const stat = statSync(path);
+    fd = openSync(path, 'r');
+  } catch {
+    return false; // missing, or unreadable — either way, not opted in
+  }
+  try {
+    const stat = fstatSync(fd);
     if ((stat.mode & 0o022) !== 0) return false;
-    return readFileSync(path, 'utf8').trim() === CLIPROXY_HEAL_OPTIN_TOKEN;
+    return readFileSync(fd, 'utf8').trim() === CLIPROXY_HEAL_OPTIN_TOKEN;
   } catch {
     return false;
+  } finally {
+    closeSync(fd);
   }
 }
 
