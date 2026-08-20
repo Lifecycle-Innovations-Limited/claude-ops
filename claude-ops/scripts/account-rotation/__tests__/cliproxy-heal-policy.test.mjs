@@ -369,6 +369,75 @@ const enableApplied = applyDecision(
   },
   { dryRun: true },
 );
-assert.deepEqual(enableApplied, ['enable_auth']);
+assert.deepEqual(enableApplied.applied, ['enable_auth']);
+
+const staleDir = mkdtempSync(join(tmpdir(), 'cliproxy-stale-'));
+const staleState = join(staleDir, 'state.json');
+writeFileSync(
+  join(staleDir, 'xai-stale@example.com.json'),
+  JSON.stringify({
+    type: 'xai',
+    email: 'stale@example.com',
+    disabled: false,
+    disabled_reason: 'expired credentials (auth_kind=bearer, reason=no auth context)',
+    expired: '2026-08-21T00:00:00Z',
+  }),
+);
+process.env.CLIPROXY_HUB_HEAL = '1';
+delete process.env.CLIPROXY_REAUTH_CMD;
+const noWriter = await runHealTick({
+  authDir: staleDir,
+  statePath: staleState,
+  now: NOW,
+  ask: spyAsk(),
+  dryRun: false,
+  log: () => {},
+});
+const noWriterRow = noWriter.actions.find((a) => a.id === 'xai-stale@example.com');
+assert.ok(noWriterRow, 'stale seat present');
+assert.equal(noWriterRow.inRotation, true);
+assert.equal(noWriterRow.applied.includes('reauth'), false, 'must not claim reauth without a writer');
+assert.equal(noWriterRow.applied.includes('blocked'), true);
+assert.equal(noWriterRow.blocked?.reason, 'no_reauth_writer');
+assert.equal(
+  JSON.parse(readFileSync(staleState, 'utf8')).seats['xai-stale@example.com'].blocked.reason,
+  'no_reauth_writer',
+);
+
+const writerDir = mkdtempSync(join(tmpdir(), 'cliproxy-stale-w-'));
+const writerState = join(writerDir, 'state.json');
+const writerBin = join(writerDir, 'writer.sh');
+const writerMarker = join(writerDir, 'ran');
+writeFileSync(
+  join(writerDir, 'xai-stale@example.com.json'),
+  JSON.stringify({
+    type: 'xai',
+    email: 'stale@example.com',
+    disabled: false,
+    disabled_reason: 'invalid_grant expired credentials',
+    expired: '2026-08-21T00:00:00Z',
+  }),
+);
+writeFileSync(writerBin, `#!/bin/sh\necho "$*" > ${JSON.stringify(writerMarker)}\nexit 0\n`, { mode: 0o700 });
+process.env.CLIPROXY_REAUTH_CMD = writerBin;
+const withWriter = await runHealTick({
+  authDir: writerDir,
+  statePath: writerState,
+  now: NOW,
+  ask: spyAsk(),
+  dryRun: false,
+  log: () => {},
+});
+const withWriterRow = withWriter.actions.find((a) => a.id === 'xai-stale@example.com');
+assert.equal(withWriterRow.applied.includes('reauth'), true);
+assert.equal(withWriterRow.applied.includes('blocked'), false);
+assert.equal(existsSync(writerMarker), true, 'configured writer must be invoked');
+assert.match(readFileSync(writerMarker, 'utf8'), /xai/);
+delete process.env.CLIPROXY_REAUTH_CMD;
+
+const applyNoWriter = applyDecision({ inRotation: true, tokenStale: true, disabled: false }, { dryRun: false });
+assert.equal(applyNoWriter.applied.includes('reauth'), false);
+assert.equal(applyNoWriter.applied.includes('blocked'), true);
+assert.equal(applyNoWriter.blocked?.reason, 'no_reauth_writer');
 
 console.log('cliproxy-heal-policy.test.mjs: ok');

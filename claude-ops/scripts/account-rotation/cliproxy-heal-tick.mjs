@@ -60,8 +60,38 @@ function readAuth(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+export function normalizeReauthOutcome(ret) {
+  if (ret === true) return { ok: true, blocked: false, reason: 'reauth_ok' };
+  if (ret && typeof ret === 'object' && 'ok' in ret) {
+    const ok = ret.ok === true;
+    return {
+      ok,
+      blocked: ok ? false : ret.blocked !== false,
+      reason: String(ret.reason || (ok ? 'reauth_ok' : 'reauth_failed')).slice(0, 160),
+    };
+  }
+  return { ok: false, blocked: true, reason: 'no_reauth_writer' };
+}
+
+export function defaultReauth(decision) {
+  const cmd = process.env.CLIPROXY_REAUTH_CMD;
+  if (!cmd || !existsSync(cmd)) {
+    return { ok: false, blocked: true, reason: 'no_reauth_writer' };
+  }
+  const r = spawnSync(cmd, [decision.provider || '', decision.id || '', decision.authFile || ''], {
+    timeout: 90_000,
+    stdio: 'ignore',
+    env: { ...process.env, CLIPROXY_HUB_HEAL: '1' },
+  });
+  if (r.status === 0) return { ok: true, blocked: false, reason: 'reauth_ok' };
+  if (r.status === 2) return { ok: false, blocked: true, reason: 'reauth_checkpoint' };
+  if (r.status == null && r.signal) return { ok: false, blocked: true, reason: `reauth_signal_${r.signal}` };
+  return { ok: false, blocked: true, reason: `reauth_exit_${r.status ?? 'unknown'}` };
+}
+
 export function applyDecision(decision, { dryRun = false, reauth } = {}) {
   const applied = [];
+  let blocked = null;
   if (decision.inRotation) {
     if (decision.disabled && decision.authFile) {
       applied.push('enable_auth');
@@ -80,25 +110,28 @@ export function applyDecision(decision, { dryRun = false, reauth } = {}) {
       }
     }
     if (decision.tokenStale) {
-      applied.push('reauth');
-      if (!dryRun && typeof reauth === 'function') {
-        reauth(decision);
+      const runner = reauth === undefined ? defaultReauth : reauth;
+      let outcome = { ok: false, blocked: true, reason: 'no_reauth_writer' };
+      if (dryRun) {
+        const writerReady =
+          typeof reauth === 'function' ||
+          (Boolean(process.env.CLIPROXY_REAUTH_CMD) && existsSync(process.env.CLIPROXY_REAUTH_CMD));
+        outcome = writerReady
+          ? { ok: true, blocked: false, reason: 'reauth_ok' }
+          : { ok: false, blocked: true, reason: 'no_reauth_writer' };
+      } else if (typeof runner === 'function') {
+        outcome = normalizeReauthOutcome(runner(decision));
+      }
+      if (outcome.ok) applied.push('reauth');
+      else {
+        applied.push('blocked');
+        blocked = { reason: outcome.reason || 'no_reauth_writer', tokenStale: true };
       }
     }
   } else if (decision.rescheduleAt) {
     applied.push('persist_reschedule');
   }
-  return applied;
-}
-
-function defaultReauth(decision) {
-  const cmd = process.env.CLIPROXY_REAUTH_CMD;
-  if (!cmd) return;
-  spawnSync(cmd, [decision.provider || '', decision.id || ''], {
-    timeout: 120_000,
-    stdio: 'ignore',
-    env: { ...process.env, CLIPROXY_HUB_HEAL: '1' },
-  });
+  return { applied, blocked };
 }
 
 function readApiKeyFromConfig(configPath) {
@@ -143,8 +176,17 @@ export async function runHealTick({
   const actions = [];
   const nextSeats = { ...prev.seats };
 
+  let reauthBudget = 1;
   for (const decision of result.decisions) {
-    const applied = applyDecision(decision, { dryRun, reauth: reauth === undefined ? defaultReauth : reauth });
+    let runner = reauth;
+    if (runner === undefined) {
+      runner = (d) => {
+        if (reauthBudget <= 0) return { ok: false, blocked: true, reason: 'reauth_budget' };
+        reauthBudget -= 1;
+        return defaultReauth(d);
+      };
+    }
+    const { applied, blocked } = applyDecision(decision, { dryRun, reauth: runner });
     actions.push({
       id: decision.id,
       provider: decision.provider,
@@ -154,6 +196,7 @@ export async function runHealTick({
       rescheduleAt: decision.rescheduleAt,
       ai: decision.ai,
       applied,
+      blocked,
     });
     nextSeats[decision.id] = {
       remainingQuota: seats.find((s) => s.id === decision.id)?.remainingQuota ?? null,
@@ -161,6 +204,7 @@ export async function runHealTick({
       certainQuotaExhausted: seats.find((s) => s.id === decision.id)?.certainQuotaExhausted === true,
       rescheduleAt: decision.rescheduleAt,
       inRotation: decision.inRotation,
+      blocked: blocked || undefined,
       updatedAt: new Date(now).toISOString(),
     };
   }
@@ -180,6 +224,7 @@ export async function runHealTick({
       aiInvoked: a.ai?.invoked === true,
       aiApplied: a.ai?.applied === true,
       applied: a.applied,
+      blocked: a.blocked || undefined,
     })),
   };
   const isolate = applyIsolateCompat({

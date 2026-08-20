@@ -14,9 +14,11 @@ Environment=CLIPROXY_AUTH_DIR=/opt/crsproxy/auths
 Environment=CLIPROXY_HEAL_STATE=/opt/crsproxy/.cliproxy-heal-state.json
 Environment=CLIPROXY_HEAL_BASE_URL=http://127.0.0.1:8317
 Environment=CLIPROXY_CONFIG=/opt/crsproxy/config.yaml
+Environment=CLIPROXY_REAUTH_CMD=/opt/crsproxy/heal/cliproxy-reauth-one.sh
+Environment=CLIPROXY_ROOT=/opt/crsproxy
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/local/bin/node /opt/crsproxy/heal/cliproxy-heal-tick.mjs
-TimeoutStartSec=120
+TimeoutStartSec=180
 Nice=10
 
 [Install]
