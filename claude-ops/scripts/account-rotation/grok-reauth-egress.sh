@@ -44,7 +44,7 @@ probe_brd_tier() {
   done
   uid="${BRIGHT_DATA_USERID:-${BRIGHT_DATA_CUSTOMER:-${BRIGHT_DATA_USER:-}}}"
   host="${BRIGHT_DATA_PROXY_HOST:-brd.superproxy.io}"
-  port="${BRIGHT_DATA_PROXY_PORT:-22225}"
+  port="${BRIGHT_DATA_PROXY_PORT:-44445}"
   [[ -n "$uid" && -n "$zone" && -n "$pass" ]] || return 1
   sess="gr$(date +%s | tail -c 6)${tier:0:1}"
   user="brd-customer-${uid}-zone-${zone}-country-nl-session-${sess}"

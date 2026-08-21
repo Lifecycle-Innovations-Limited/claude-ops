@@ -198,7 +198,7 @@ function proxyParams() {
         process.env.BRIGHT_DATA_TOKEN;
       if (customer && zone && pass && process.env.CLAUDE_ROT_CAPTCHA_USE_PROXY === '1') {
         const host = process.env.BRIGHT_DATA_PROXY_HOST || 'brd.superproxy.io';
-        const port = Number(process.env.BRIGHT_DATA_PROXY_PORT || 22225);
+        const port = Number(process.env.BRIGHT_DATA_PROXY_PORT || 44445);
         const user = `brd-customer-${customer}-zone-${zone}-country-nl`;
         return {
           proxy: `${user}:${pass}@${host}:${port}`,

@@ -12,7 +12,7 @@ async function getProxyAgent() {
   const user = process.env.BRIGHT_DATA_USERID;
   const pass = process.env.BRIGHT_DATA_TOKEN;
   if (user && pass) {
-    proxyAgent = new ProxyAgent(`http://${user}:${pass}@brd.superproxy.io:33335`);
+    proxyAgent = new ProxyAgent(`http://${user}:${pass}@brd.superproxy.io:44445`);
     return proxyAgent;
   }
   return null;

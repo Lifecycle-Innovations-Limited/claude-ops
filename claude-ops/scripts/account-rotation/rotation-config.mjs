@@ -388,7 +388,7 @@ function brightDataProxyConfig(bright = {}, key, accountIndex = 0) {
   return {
     type: bright.type || process.env.BRIGHT_DATA_PROXY_TYPE || 'http',
     host: bright.host || process.env.BRIGHT_DATA_HOST || 'brd.superproxy.io',
-    port: Number(bright.port || process.env.BRIGHT_DATA_PORT || 33335),
+    port: Number(bright.port || process.env.BRIGHT_DATA_PORT || 44445),
     username: brightDataUsernameForAccount(user, bright, key, accountIndex),
     password,
   };
