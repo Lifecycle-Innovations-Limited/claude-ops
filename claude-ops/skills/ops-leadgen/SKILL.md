@@ -1,6 +1,6 @@
 ---
 name: ops-leadgen
-description: My-Project B2B wholesale leadgen review and send flow. Shows pending cold-email drafts from my-project-b2b-leadgen, lets you approve/skip each one, and fires approved drafts one-at-a-time via Rule-6-gated `my-project-leadgen send`. Never batches sends.
+description: "This skill should be used when the user asks to \"/ops:ops-leadgen\", \"run ops-leadgen\", or \"use ops-leadgen\". My-Project B2B wholesale leadgen review and send flow. Shows pending cold-email drafts from my-project-b2b-leadgen, lets you approve/skip each one, and fires approved drafts one-at-a-time via Rule-6-gated `my-project-leadgen send`. Never batches sends."
 argument-hint: '[review | send --draft-id N | usage | scrape | draft]'
 allowed-tools:
   - Bash
@@ -10,6 +10,8 @@ maxTurns: 20
 ---
 
 # ops-leadgen
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Wraps `my-project-leadgen` CLI for the daily leadgen review-and-send loop.
 

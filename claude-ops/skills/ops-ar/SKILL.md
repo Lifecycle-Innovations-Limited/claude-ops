@@ -1,6 +1,6 @@
 ---
 name: ops-ar
-description: A&R any record like a dance-pop label owner + master producer. Single track, batch, or full Gmail-inbox demo sweep — runs the audio-ar analysis stack (BPM/key/loudness/structure, CLAP mood/genre/hit-lean, Whisper lyrics, Cyanite/Music.ai pro layer) and delivers verdict cards. Can email the full verdict with listen links on request.
+description: "This skill should be used when the user asks to \"/ops:ops-ar\", \"run ops-ar\", or \"use ops-ar\". A&R any record like a dance-pop label owner + master producer. Single track, batch, or full Gmail-inbox demo sweep — runs the audio-ar analysis stack (BPM/key/loudness/structure, CLAP mood/genre/hit-lean, Whisper lyrics, Cyanite/Music.ai pro layer) and delivers verdict cards. Can email the full verdict with listen links on request."
 argument-hint: '<audio file | URL/Dropbox | "latest" | <file1> <file2> ... | inbox [from <sender>...]>'
 allowed-tools:
   - Bash
@@ -17,6 +17,8 @@ effort: high
 ---
 
 # /ops:ops-ar — A&R Command
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 A&R the given record(s) like a pop/dance-hit label owner + master producer. The deliverable is always the full A&R card per track:
 

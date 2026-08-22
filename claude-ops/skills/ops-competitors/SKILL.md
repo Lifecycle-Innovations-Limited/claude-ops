@@ -1,6 +1,6 @@
 ---
 name: ops-competitors
-description: 'Competitor-intel dashboard and management UI. Tracks brand signals, page-diff alerts, pricing changes, App Store moves, and weekly synthesis reports. Powered by the competitor-intel cron pipeline.'
+description: "This skill should be used when the user asks to \"/ops:ops-competitors\", \"run ops-competitors\", or \"use ops-competitors\". Competitor-intel dashboard and management UI. Tracks brand signals, page-diff alerts, pricing changes, App Store moves, and weekly synthesis reports. Powered by the competitor-intel cron pipeline."
 argument-hint: '[brand-name|refresh [brand]|add-url <brand> <competitor> <kind> <url>|alerts|help]'
 allowed-tools:
   - Bash
@@ -26,6 +26,8 @@ CTX=$(competitor_context 2>/dev/null || echo '{"configured":false,"reason":"lib_
 ```
 
 # OPS ► COMPETITORS — Intel Dashboard
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Parse `$ARGUMENTS` and dispatch to the matching mode below.
 

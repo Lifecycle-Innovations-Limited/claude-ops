@@ -1,6 +1,6 @@
 ---
 name: ops-desk
-description: Desk sweep — turn the owner's backlog of open decisions, staged drafts, payments, sign-offs and chases into a ranked, ready-to-approve action queue. Fans out READ-ONLY context agents (one per item, batched) via the Workflow tool, each returning a structured action package (status + recommendation + full draft in the owner's voice), then walks the queue rapid-fire in the main session under the outbound-approval gate. Complements /ops:ops-inbox (comms triage) — ops-desk handles everything that is NOT a fresh inbound message; decisions, blocked issues, owner-action items.
+description: "This skill should be used when the user asks to \"/ops:ops-desk\", \"run ops-desk\", or \"use ops-desk\". Desk sweep — turn the owner's backlog of open decisions, staged drafts, payments, sign-offs and chases into a ranked, ready-to-approve action queue. Fans out READ-ONLY context agents (one per item, batched) via the Workflow tool, each returning a structured action package (status + recommendation + full draft in the owner's voice), then walks the queue rapid-fire in the main session under the outbound-approval gate. Complements /ops:ops-inbox (comms triage) — ops-desk handles everything that is NOT a fresh inbound message; decisions, blocked issues, owner-action items."
 argument-hint: '[scope: all|<board/company>|explicit item list]'
 allowed-tools:
   - Bash
@@ -28,6 +28,8 @@ allowed-tools:
 ---
 
 # OPS ► DESK SWEEP
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Goal: everything sitting on the owner's desk — pending decisions, staged drafts awaiting
 approval, unpaid invoices to chase, documents to sign, blocked issues needing an owner

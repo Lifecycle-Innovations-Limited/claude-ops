@@ -4,6 +4,7 @@ set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLAUDE_MD="$PLUGIN_ROOT/CLAUDE.md"
+OPS_RULES="$PLUGIN_ROOT/skills/ops-rules/SKILL.md"
 
 pass=0
 fail=0
@@ -21,20 +22,31 @@ if [[ ! -f "$CLAUDE_MD" ]]; then
 fi
 ok "CLAUDE.md exists"
 
+if grep -q "skills/ops-rules/SKILL.md" "$CLAUDE_MD"; then
+  ok "CLAUDE.md points at ops-rules (plugin-root CLAUDE.md is not loaded)"
+else
+  err "CLAUDE.md must point at skills/ops-rules/SKILL.md"
+fi
+
+if [[ -f "$OPS_RULES" ]]; then
+  ok "ops-rules skill exists"
+else
+  err "skills/ops-rules/SKILL.md missing"
+fi
+
 # 2. Contains max-4-options rule
 # Look for the key constraint about AskUserQuestion and 4 options
-if grep -qE "(<=4|max.*4|4.*options|AskUserQuestion)" "$CLAUDE_MD"; then
+if grep -qE "(<=4|max.*4|4.*options|AskUserQuestion)" "$OPS_RULES"; then
   ok "contains max-4-options rule reference"
 else
   err "missing max-4-options / AskUserQuestion constraint"
 fi
 
 # More specific: the actual numeric constraint
-if grep -qE "4\s*(items|options)" "$CLAUDE_MD"; then
+if grep -qE "4\s*(items|options)" "$OPS_RULES"; then
   ok "contains explicit '4 items/options' constraint"
 else
-  # Check for <=4 pattern
-  if grep -q "<=4" "$CLAUDE_MD"; then
+  if grep -q "<=4" "$OPS_RULES"; then
     ok "contains '<=4' constraint"
   else
     err "could not find explicit 4-option limit (<=4 or '4 items')"
@@ -43,21 +55,21 @@ fi
 
 # 3. Contains never-delegate-commands rule
 # The rule that says run commands via Bash tool instead of telling users to run them
-if grep -qiE "(never delegate|never.*tell.*user.*run|run.*via.*bash|delegate.*terminal)" "$CLAUDE_MD"; then
+if grep -qiE "(never delegate|never.*tell.*user.*run|run.*via.*bash|delegate.*terminal)" "$OPS_RULES"; then
   ok "contains never-delegate-commands rule"
 else
   err "missing never-delegate-commands rule (should instruct to run via Bash tool, not tell user)"
 fi
 
 # More specific check
-if grep -qE "(Bash tool|run_in_background)" "$CLAUDE_MD"; then
+if grep -qE "(Bash tool|run_in_background)" "$OPS_RULES"; then
   ok "references Bash tool for command execution"
 else
-  err "no reference to Bash tool for command execution in CLAUDE.md"
+  err "no reference to Bash tool for command execution in ops-rules"
 fi
 
 # 4. Has at least 2 numbered/named rules
-rule_count=$(grep -cE "^## Rule [0-9]+" "$CLAUDE_MD" 2>/dev/null || true)
+rule_count=$(grep -cE "^## Rule [0-9]+" "$OPS_RULES" 2>/dev/null || true)
 if (( rule_count >= 2 )); then
   ok "has $rule_count numbered rules"
 else
@@ -65,15 +77,15 @@ else
 fi
 
 # 5. File is not empty
-size=$(wc -c < "$CLAUDE_MD")
+size=$(wc -c < "$OPS_RULES")
 if (( size > 200 )); then
-  ok "CLAUDE.md has substantial content ($size bytes)"
+  ok "ops-rules has substantial content ($size bytes)"
 else
-  err "CLAUDE.md is suspiciously small ($size bytes)"
+  err "ops-rules is suspiciously small ($size bytes)"
 fi
 
 # 6. No broken markdown headings (# at start of line followed immediately by text with no space)
-bad_headings=$(grep -cE "^#{1,6}[^ #]" "$CLAUDE_MD" 2>/dev/null || true)
+bad_headings=$(grep -cE "^#{1,6}[^ #]" "$OPS_RULES" 2>/dev/null || true)
 if (( bad_headings == 0 )); then
   ok "no malformed headings (missing space after #)"
 else

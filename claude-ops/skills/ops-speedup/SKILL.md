@@ -1,6 +1,6 @@
 ---
 name: ops-speedup
-description: Cross-platform, hardware-adaptive system optimizer. Auto-detects macOS / Linux / WSL / Windows (MINGW/Cygwin/MSYS2) and CPU/RAM/disk/GPU profile, then picks the right cleanup strategy. Scans reclaimable disk space, memory pressure, runaway processes, startup bloat, network issues. CleanMyMac built into Claude Code.
+description: "This skill should be used when the user asks to \"/ops:ops-speedup\", \"run ops-speedup\", or \"use ops-speedup\". Cross-platform, hardware-adaptive system optimizer. Auto-detects macOS / Linux / WSL / Windows (MINGW/Cygwin/MSYS2) and CPU/RAM/disk/GPU profile, then picks the right cleanup strategy. Scans reclaimable disk space, memory pressure, runaway processes, startup bloat, network issues. CleanMyMac built into Claude Code."
 argument-hint: '[scan|clean|deep|auto]'
 allowed-tools:
   - Bash
@@ -19,6 +19,8 @@ Before scanning, load:
 1. **Preferences**: `cat ${CLAUDE_PLUGIN_DATA_DIR:-$HOME/.claude/plugins/data/ops-ops-marketplace}/preferences.json` — read `timezone` for timestamps
 
 # OPS > SPEEDUP — System Optimizer
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Architecture
 

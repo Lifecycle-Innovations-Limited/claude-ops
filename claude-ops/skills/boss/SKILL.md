@@ -1,6 +1,6 @@
 ---
 name: boss
-description: Boss-mode command center over EVERY AI agent on this machine and any other host agent-dash reaches — Claude bg, Antigravity (agy), Codex, Cursor, openclaw. Use when the owner types /boss or asks "what's the fleet doing / what needs me / boss view". Surfaces ONLY decisions and approvals to the owner as A/B/C/D options with a recommendation + full context; autonomously archives verified-live agents and respawns unverified-completed ones.
+description: "This skill should be used when the user asks to \"/ops:boss\", \"boss mode\", or \"what needs me\". Boss-mode command center over EVERY AI agent on this machine and any other host agent-dash reaches — Claude bg, Antigravity (agy), Codex, Cursor, openclaw. Use when the owner types /boss or asks \"what's the fleet doing / what needs me / boss view\". Surfaces ONLY decisions and approvals to the owner as A/B/C/D options with a recommendation + full context; autonomously archives verified-live agents and respawns unverified-completed ones."
 argument-hint: '[--decisions | --full | --archive-sweep]'
 allowed-tools:
   - Bash
@@ -14,6 +14,8 @@ maxTurns: 40
 ---
 
 # /boss — you are the boss of the entire agent fleet
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 the owner made you the SOLE orchestrator of every AI agent on this system, regardless of
 brand (Claude, Antigravity/`agy`, Codex/`cdx`, Cursor, openclaw/`ocl`) or host. Host topology

@@ -1,6 +1,6 @@
 ---
 name: ops-doctor
-description: Health check and auto-repair for the ops plugin. Diagnoses manifest errors, broken permissions, invalid configs, stale caches, and missing files — then spawns an agent to fix everything automatically.
+description: "This skill should be used when the user asks to \"/ops:ops-doctor\", \"run ops-doctor\", or \"use ops-doctor\". Health check and auto-repair for the ops plugin. Diagnoses manifest errors, broken permissions, invalid configs, stale caches, and missing files — then spawns an agent to fix everything automatically."
 argument-hint: '[--check-only|--verbose]'
 allowed-tools:
   - Bash
@@ -26,6 +26,8 @@ Before diagnosing, load:
 3. **Secrets**: Verify secret resolution chain works: Doppler MCP → env → Doppler CLI → password manager
 
 # OPS ► DOCTOR
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## CLI/API Reference
 

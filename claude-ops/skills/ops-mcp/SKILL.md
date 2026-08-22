@@ -1,6 +1,6 @@
 ---
 name: ops-mcp
-description: MCP server health dashboard and reconnect control. Surfaces the watchdog + keepalive + reauth subsystem as a discoverable slash command. Routes — status, servers, reconnect, reauth, logs, restart, test.
+description: "This skill should be used when the user asks to \"/ops:ops-mcp\", \"run ops-mcp\", or \"use ops-mcp\". MCP server health dashboard and reconnect control. Surfaces the watchdog + keepalive + reauth subsystem as a discoverable slash command. Routes — status, servers, reconnect, reauth, logs, restart, test."
 argument-hint: '[status|servers|reconnect [server]|reauth [server]|logs [N]|restart|test [server]]'
 allowed-tools:
   - Bash
@@ -14,6 +14,8 @@ maxTurns: 20
 ---
 
 # OPS ► MCP
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Surfaces the MCP auto-reconnect subsystem (watchdog + keepalive + reauth) as a discoverable slash command. These three scripts were previously orphaned — no plugin-level entry point. This skill is the entry point.
 

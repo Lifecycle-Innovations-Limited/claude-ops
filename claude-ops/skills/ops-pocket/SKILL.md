@@ -1,6 +1,6 @@
 ---
 name: ops-pocket
-description: Pocket voice-memo pipeline command center. Surfaces the watcher → triage → executor → notifier → bridges chain that turns Pocket-recorded voice memos into running Claude tasks, with WhatsApp + email notifications. Routes — status, setup, tasks, test, logs, restart, whatsapp on|off, email on|off.
+description: "This skill should be used when the user asks to \"/ops:ops-pocket\", \"run ops-pocket\", or \"use ops-pocket\". Pocket voice-memo pipeline command center. Surfaces the watcher → triage → executor → notifier → bridges chain that turns Pocket-recorded voice memos into running Claude tasks, with WhatsApp + email notifications. Routes — status, setup, tasks, test, logs, restart, whatsapp on|off, email on|off."
 argument-hint: '[status|setup|tasks|test|logs [N]|restart|whatsapp on|off|email on|off]'
 allowed-tools:
   - Bash
@@ -14,6 +14,8 @@ maxTurns: 25
 ---
 
 # OPS ► POCKET
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Surfaces the Pocket voice-memo pipeline as a discoverable slash command. The pipeline was previously orphaned — 7 scripts, no entry point. This skill is the entry point.
 

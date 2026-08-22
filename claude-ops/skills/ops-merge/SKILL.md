@@ -1,6 +1,6 @@
 ---
 name: ops-merge
-description: Autonomous salvage + PR merge pipeline. FIRST scans every repo in every org for orphan worktrees, feature branches without PRs, uncommitted/staged/stashed work, and unpushed commits — dispatches subagents to finish/PR all loose local work. THEN scans all open PRs, dispatches fixers for CI/conflicts/reviews, and merges. Use --main to also sync dev↔main branches. Use --no-salvage to skip Phase 0 (PR-only mode). Use --salvage-only to stop after Phase 0.
+description: "This skill should be used when the user asks to \"/ops:ops-merge\", \"run ops-merge\", or \"use ops-merge\". Autonomous salvage + PR merge pipeline. FIRST scans every repo in every org for orphan worktrees, feature branches without PRs, uncommitted/staged/stashed work, and unpushed commits — dispatches subagents to finish/PR all loose local work. THEN scans all open PRs, dispatches fixers for CI/conflicts/reviews, and merges. Use --main to also sync dev↔main branches. Use --no-salvage to skip Phase 0 (PR-only mode). Use --salvage-only to stop after Phase 0."
 argument-hint: '[--main] [--repo org/repo] [--dry-run] [--no-salvage] [--salvage-only]'
 allowed-tools:
   - Bash
@@ -20,6 +20,7 @@ allowed-tools:
   - WebSearch
 effort: medium
 maxTurns: 50
+context: fork
 ---
 
 ## Runtime Context
@@ -32,23 +33,7 @@ Before executing, load:
 
 # OPS ► MERGE
 
-## CLI/API Reference
-
-### gh CLI (GitHub)
-
-| Command                                                                                                                   | Usage                | Output                         |
-| ------------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------ |
-| `gh pr list --repo <owner/repo> --json number,title,state,headRefName,statusCheckRollup,reviewDecision,mergeable,isDraft` | List PRs with status | JSON array                     |
-| `gh pr view <n> --repo <repo> --json title,body,state,mergeable,reviews`                                                  | PR details           | JSON                           |
-| `gh pr checks <n> --repo <repo>`                                                                                          | CI check status      | Check list                     |
-| `gh pr merge <n> --repo <repo> --squash`                                                                                  | Squash merge PR      | Merge result                   |
-| `gh pr create --repo <repo> --title "<t>" --body "<b>" --base dev`                                                        | Create PR            | PR URL                         |
-| `gh run list --repo <repo> --limit 5 --json conclusion,name,headBranch`                                                   | CI runs              | JSON array                     |
-| `gh run view <id> --repo <repo> --log-failed`                                                                             | Failed CI logs       | Log output                     |
-| `gh run watch <run-id> --repo <repo>`                                                                                     | Stream CI run        | Live output (use with Monitor) |
-| `gh api repos/<repo>/pulls/<n>/comments --jq '.[].body'`                                                                  | PR review comments   | Comment text                   |
-
----
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Agent Teams support
 
@@ -626,3 +611,7 @@ ledger write \
   --title "Merge: <repo>#<number> — <PR title>" \
   --context "merged|skipped: <reason>"
 ```
+
+## Additional resources
+
+CLI detail: `references/cli.md`.

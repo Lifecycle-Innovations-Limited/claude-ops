@@ -1,6 +1,6 @@
 ---
 name: flow
-description: ONE entrypoint for the whole dev lifecycle — ideate, spec, plan, design, build, review, test, ship, deploy, monitor, retro. Routes to the single canonical command per stage (gstack / GSD / claude-ops) and picks project-mode (GSD phase machine) vs ad-hoc-mode (gstack stateless) from repo `.planning/` state. Bare `/flow` prints the lifecycle map + your current "you are here" position.
+description: "This skill should be used when the user asks to \"/ops:flow\", \"run flow\", or \"use flow\". ONE entrypoint for the whole dev lifecycle — ideate, spec, plan, design, build, review, test, ship, deploy, monitor, retro. Routes to the single canonical command per stage (gstack / GSD / claude-ops) and picks project-mode (GSD phase machine) vs ad-hoc-mode (gstack stateless) from repo `.planning/` state. Bare `/flow` prints the lifecycle map + your current \"you are here\" position."
 argument-hint: '[stage|intent] [args]'
 allowed-tools:
   - Bash
@@ -57,6 +57,8 @@ full per-stage ownership table; the dispatch table below is the routing copy.
 ---
 
 # FLOW — One Lifecycle Entrypoint
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 **The one rule:** pick the abstraction level from repo state, then delegate
 to the canonical tool.
