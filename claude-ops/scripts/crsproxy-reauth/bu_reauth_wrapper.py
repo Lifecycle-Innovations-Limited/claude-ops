@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Wrapper for bu_reauth.py with increased timeout for slow OAuth flows."""
+"""cliproxy Browser Use reauth wrapper with a longer OAuth timeout."""
 import sys
+# Legacy deployed runtime path retained for compatibility.
 sys.path.insert(0, "/opt/crsproxy")
 import bu_reauth
 # Increase total timeout from 300 to 600 seconds

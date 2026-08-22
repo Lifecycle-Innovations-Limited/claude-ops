@@ -91,10 +91,10 @@ PY
   else
     echo "grok-cli-auth-proxy not configured or unreachable (set GROK_PROXY_URL)"
   fi
-  if [[ -n "$CRS_GROK_BASE_URL" ]] && curl -fsS -m 2 -o /dev/null -w "crs_grok_hop HTTP %{http_code}\n" "${CRS_GROK_BASE_URL%/}/models" 2>/dev/null; then
+  if [[ -n "$CRS_GROK_BASE_URL" ]] && curl -fsS -m 2 -o /dev/null -w "cliproxy_grok_hop (legacy CRS_GROK_BASE_URL) HTTP %{http_code}\n" "${CRS_GROK_BASE_URL%/}/models" 2>/dev/null; then
     :
   else
-    echo "crs_grok_hop: not reachable (optional thin hop)"
+    echo "cliproxy_grok_hop: not reachable (optional thin hop; legacy env CRS_GROK_BASE_URL)"
   fi
 }
 # --- CLIProxyAPI backend (optional local multi-provider proxy) ---
@@ -299,14 +299,14 @@ PY
     if [[ -x "$ROT/crs-priority-daemon.sh" ]]; then
       bash "$ROT/crs-priority-daemon.sh" --status 2>&1 | head -40
     else
-      echo "CRS priority script missing (optional)"
+      echo "cliproxy / CLIProxyAPI priority script missing (optional; legacy filename retained)"
     fi
     ;;
   crs-tick)
     if [[ -x "$ROT/crs-priority-daemon.sh" ]]; then
       bash "$ROT/crs-priority-daemon.sh" "$@"
     else
-      echo "CRS priority script missing"; exit 1
+      echo "cliproxy / CLIProxyAPI priority script missing (legacy filename retained)"; exit 1
     fi
     ;;
   seats)

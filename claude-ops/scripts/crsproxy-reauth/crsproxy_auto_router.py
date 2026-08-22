@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""crsproxy_auto_router.py — Auto-router HTTP service on shadow port 8321.
+"""cliproxy auto-router HTTP service on shadow port 8321.
 
 Receives OpenAI-compatible API requests, maps model names to providers,
 queries pool health for eligible accounts, selects least-pressure account,
-proxies to cli-proxy-api on :8319, and retries on distinct accounts on failure.
+proxies to CLIProxyAPI on :8319, and retries on distinct accounts on failure.
 
 Logs routing decisions without exposing secrets (emails masked, no tokens).
 
@@ -50,7 +50,7 @@ MODEL_PREFIX_MAP = [
 # Providers that use API keys (no OAuth account selection)
 API_KEY_PROVIDERS = {"kimi", "minimax", "gemini"}
 
-logger = logging.getLogger("crsproxy-auto-router")
+logger = logging.getLogger("cliproxy-auto-router")
 
 # ---------------------------------------------------------------------------
 # Utility functions (pure, testable)
@@ -448,7 +448,7 @@ class AutoRouterHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CRSProxy Auto-Router")
+    parser = argparse.ArgumentParser(description="cliproxy auto-router")
     parser.add_argument("--host", default=DEFAULT_HOST, help="Listen host")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Listen port")
     parser.add_argument(

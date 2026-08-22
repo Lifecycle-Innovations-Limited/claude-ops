@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  CRS 401-refresher reconciler (claude-relay-service pool proactive OAuth
+  CLIProxyAPI/legacy CRS-compatible 401-refresher reconciler (relay pool proactive OAuth
   token refresh).
 
   Schedule: every 300s. Equivalent systemd: OnUnitActiveSec=300s.

@@ -15,9 +15,9 @@
 ### Changed
 
 - **ops-accounts multi-provider plan:** every provider (Claude, Grok, OpenAI/Codex, Factory, Cursor) gets Anthropic-shaped OAuth, reauth, util, switch/LB under `/ops:accounts`.
-- **CRS cherry-pick path:** absorb gateway + Claude seat policy + Grok OAuth proxy into ops-accounts so default installs need no claude-relay-service; external CRS stays advanced-only. See `docs/ops/OPS-ACCOUNTS-VISION.md`.
-- **ops-accounts seat policy (local):** `seat-policy-tick.mjs` applies conservative 5h/7d schedulable thresholds to local seat-state without CRS; `ops-accounts seats tick`.
-- **ops-accounts local seat-state:** `seat-state.mjs` file-backed multi-provider seat store (schedulable/util) for no-CRS policy backend; `ops-accounts seats` command.
+- **CLIProxyAPI gateway path:** absorb gateway + Claude seat policy + Grok OAuth proxy into ops-accounts so default installs use CLIProxyAPI-compatible relay behavior without requiring the deprecated relay stack; external legacy CRS stays advanced-only. See `docs/ops/OPS-ACCOUNTS-VISION.md`.
+- **ops-accounts seat policy (local):** `seat-policy-tick.mjs` applies conservative 5h/7d schedulable thresholds to local seat-state without a relay; `ops-accounts seats tick`.
+- **ops-accounts local seat-state:** `seat-state.mjs` file-backed multi-provider seat store (schedulable/util) for local policy backend; `ops-accounts seats` command.
 - **ops-accounts skill merge:** `/ops:accounts` is canonical multi-provider entry; `/ops:rotate` and `/ops:rotate-setup` are aliases. Expanded `bin/ops-accounts` (status/util/switch/refresh/reauth/setup/crs). Added `grok-reauth-egress.sh` residential cascade (EFG SOCKS → Bright Data tiers) for Grok device OAuth.
 
 - **Required companion co-install:** companions essential to ops commands are no longer optional setup prompts. `plugin-dependencies.json` marks `desktop-act`, `gsd`, `gstack` (skills clone), `superpowers`, and `feature-dev` as `required: true` with `updateWithOps: always` and `essentialFor` command lists. `scripts/install-companions.sh` always installs missing required companions (even under `--update-only`), and `--status` exits 1 when any required companion is missing. `/ops:setup` Step 2b runs the SSOT script without Skip for required deps. `/ops:update` step 9 co-installs the full required set (still skippable only via `--no-companions` / `OPS_SKIP_COMPANIONS=1`). Adds `scripts/install-gstack-companion.sh` (env-templated `GSTACK_REPO`/`GSTACK_DIR`/`GSTACK_BRANCH`).

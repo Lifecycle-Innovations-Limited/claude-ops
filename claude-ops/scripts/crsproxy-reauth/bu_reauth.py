@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Browser Use Cloud Agent — OAuth re-auth for CRSProxy.
+"""Browser Use Cloud Agent — OAuth re-auth for cliproxy / CLIProxyAPI.
 
 Production-grade reauth script that uses Browser Use Cloud to automate
-OAuth flows for Claude, xAI, and Codex providers on the healify-hub EC2.
+OAuth flows for Claude, xAI, and Codex providers on the cliproxy hub.
 
 Features:
   - Proper timeout handling on all Browser Use API calls (never hang).
@@ -20,8 +20,8 @@ Features:
     keeps browser session alive, waits for a file-based trigger, then
     resumes with a follow-up run in the same session to click Authorize
     and capture the callback URL.
-  - Serialization lease: checks /opt/crsproxy/state/crsproxy-claude-oauth-lease.json
-    before starting a login, waits if held, cleans up after completion.
+  - Serialization lease: checks the cliproxy OAuth lease file before starting
+    a login, waits if held, cleans up after completion.
   - Email cooldown: tracks verification code send timestamps, enforces
     a 5-minute cooldown if >3 codes are sent in 5 minutes, logs
     cooldown events without exposing the email address or code values.
@@ -65,6 +65,8 @@ Usage:
   # The script will then create a follow-up run and complete the flow.
 """
 
+from __future__ import annotations
+
 import argparse
 import atexit
 import json
@@ -77,11 +79,14 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import requests
+from bu_2fa import TwoFactorError, current_totp_from_config
 
 # ---------------------------------------------------------------------------
 # Paths / constants
 # ---------------------------------------------------------------------------
+# Runtime compatibility: the deployed hub may still store cliproxy files under
+# this legacy path while service paths are migrated. Keep these constants until
+# the host is moved; do not present the old path name as the product name.
 HUB_BIN = "/opt/crsproxy/cli-proxy-api"
 HUB_CONFIG = "/opt/crsproxy/config.yaml"
 AUTH_DIR = Path("/opt/crsproxy/auths")
@@ -90,7 +95,8 @@ BU_API_BASE = "https://api.browser-use.com/api/v4"
 BU_MODEL = "gpt-5.6-luna"
 LOG_DIR = Path("/tmp")
 STATE_DIR = Path("/opt/crsproxy/state")
-LEASE_FILE = STATE_DIR / "crsproxy-claude-oauth-lease.json"
+LEASE_FILE = STATE_DIR / "cliproxy-claude-oauth-lease.json"
+LEGACY_LEASE_FILE = STATE_DIR / "crsproxy-claude-oauth-lease.json"
 CANARY_URL = "http://localhost:8319/v1/chat/completions"
 
 # Exit codes
@@ -116,7 +122,8 @@ CHECKPOINT_POLL_INTERVAL = 5   # seconds between trigger polls
 CHECKPOINT_TIMEOUT = 600       # 10 minutes for human to solve captcha
 
 # Email cooldown configuration
-EMAIL_COOLDOWN_FILE = STATE_DIR / "crsproxy-email-cooldown.json"
+EMAIL_COOLDOWN_FILE = STATE_DIR / "cliproxy-email-cooldown.json"
+LEGACY_EMAIL_COOLDOWN_FILE = STATE_DIR / "crsproxy-email-cooldown.json"
 EMAIL_COOLDOWN_WINDOW = 300      # 5 min sliding window for counting code sends
 EMAIL_COOLDOWN_THRESHOLD = 3     # max 3 code sends before cooldown triggers
 EMAIL_COOLDOWN_DURATION = 300    # 5 min cooldown when threshold exceeded
@@ -218,6 +225,15 @@ def safe_email(email: str) -> str:
     return f"{local[0]}***@{domain}"
 
 
+def _requests_module():
+    """Import requests lazily so local logic tests can run without hub deps."""
+    try:
+        import requests
+        return requests
+    except ImportError as exc:
+        raise RuntimeError("Python requests package is required for Browser Use API calls") from exc
+
+
 # ---------------------------------------------------------------------------
 # Canary request (proxy health check)
 # ---------------------------------------------------------------------------
@@ -230,6 +246,7 @@ def send_canary(model: str, timeout: int = 30) -> int:
     has no enabled accounts — the candidate might fix this).
     """
     try:
+        requests = _requests_module()
         r = requests.post(
             CANARY_URL,
             headers={"Authorization": "Bearer test"},
@@ -380,9 +397,10 @@ def acquire_lease(provider: str, max_wait: int = 120) -> bool:
     t0 = time.time()
     first_check = True
     while True:
-        if LEASE_FILE.exists():
+        lease_path = LEASE_FILE if LEASE_FILE.exists() else LEGACY_LEASE_FILE
+        if lease_path.exists():
             try:
-                data = json.loads(LEASE_FILE.read_text())
+                data = json.loads(lease_path.read_text())
                 age = time.time() - data.get("timestamp", 0)
                 if age < LEASE_STALE_SECONDS:
                     if first_check:
@@ -397,10 +415,10 @@ def acquire_lease(provider: str, max_wait: int = 120) -> bool:
                     continue
                 # Stale lease — remove it
                 log(f"Stale lease ({int(age)}s old) — removing")
-                LEASE_FILE.unlink()
+                lease_path.unlink()
             except (json.JSONDecodeError, OSError):
                 try:
-                    LEASE_FILE.unlink()
+                    lease_path.unlink()
                 except OSError:
                     pass
         # Lease file doesn't exist or was removed — acquire
@@ -428,12 +446,13 @@ def release_lease():
 # Email cooldown tracking
 # ---------------------------------------------------------------------------
 def _load_cooldown_state() -> dict:
-    """Load email cooldown state from file."""
-    try:
-        if EMAIL_COOLDOWN_FILE.exists():
-            return json.loads(EMAIL_COOLDOWN_FILE.read_text())
-    except Exception:
-        pass
+    """Load email cooldown state from the current or legacy file."""
+    for path in (EMAIL_COOLDOWN_FILE, LEGACY_EMAIL_COOLDOWN_FILE):
+        try:
+            if path.exists():
+                return json.loads(path.read_text())
+        except Exception:
+            pass
     return {"send_timestamps": [], "cooldown_until": 0}
 
 
@@ -555,10 +574,11 @@ class BrowserUseClient:
         self._runs: list[str] = []
         self.keep_browser_alive = False  # set True during human checkpoint
 
-    def _request(self, method: str, path: str, **kwargs) -> requests.Response:
+    def _request(self, method: str, path: str, **kwargs):
         """Make an HTTP request with a guaranteed timeout."""
         kwargs.setdefault("timeout", API_TIMEOUT)
         url = f"{self.base}{path}"
+        requests = _requests_module()
         r = requests.request(method, url, headers=self.headers, **kwargs)
         r.raise_for_status()
         return r
@@ -898,6 +918,74 @@ def _code_entry_failed(result_text: str) -> bool:
     return any(ind in text_lower for ind in failure_indicators)
 
 
+def needs_two_factor(result_text: str) -> bool:
+    """Return True when the page appears to be asking for a 2FA/OTP code."""
+    text = result_text.lower()
+    indicators = [
+        "two-factor", "two factor", "2fa", "multi-factor", "mfa",
+        "authenticator", "authentication code",
+        "one-time password", "one time password",
+        "enter a code from your authenticator",
+    ]
+    return any(indicator in text for indicator in indicators)
+
+
+def _human_2fa_message(method: str) -> str:
+    """Return safe Browser Use instructions for a human-driven 2FA method."""
+    if method == "sms_checkpoint":
+        return "Ask the operator for the SMS code, enter it, and click Continue."
+    if method == "push_checkpoint":
+        return "Ask the operator to approve the push prompt, then click Continue."
+    if method == "passkey_checkpoint":
+        return "Ask the operator to complete the passkey/WebAuthn prompt."
+    return "Ask the operator to complete the 2FA checkpoint."
+
+
+def handle_two_factor_prompt(client: BrowserUseClient, session_id: str,
+                             result_text: str, two_factor: dict | None) -> bool:
+    """Handle a 2FA prompt without exposing long-lived secrets to Browser Use."""
+    if not needs_two_factor(result_text):
+        return True
+
+    config = two_factor or {}
+    method = str(config.get("method") or "none").strip().lower()
+    if method in ("", "none", "false"):
+        log("[2FA] Prompt detected but no 2FA method is configured")
+        return False
+
+    if method == "onepassword_totp":
+        try:
+            code = current_totp_from_config(config)
+        except TwoFactorError as exc:
+            log(f"[2FA] Could not get 1Password TOTP: {exc}")
+            return False
+        if not code:
+            log("[2FA] 1Password TOTP config returned no code")
+            return False
+        log("[2FA] 1Password TOTP generated (value redacted)")
+        task = (
+            f"Enter this one-time authentication code: {code}. "
+            "Click Continue. Report exactly what you see."
+        )
+    else:
+        log(f"[2FA] Human checkpoint required: {method}")
+        task = _human_2fa_message(method) + " Report exactly what you see."
+
+    run = client.create_run(task, session_id=session_id)
+    run_id = run.get("id", "")
+    log(f"[2FA] Checkpoint run: {run_id[:12]}...")
+    result = client.wait_for_run(run_id, timeout=RUN_POLL_TIMEOUT)
+    text = str(result.get("result", "") or "")
+    log(f"[2FA] Checkpoint complete: {text[:200]}")
+    if detect_captcha(result, client):
+        log("[2FA] Captcha appeared during 2FA checkpoint")
+        return False
+    if _code_entry_failed(text):
+        log("[2FA] 2FA code was rejected")
+        return False
+    return True
+
+
 def detect_captcha(run_result: dict, client: BrowserUseClient) -> bool:
     """Check if the run result or events indicate a real captcha challenge."""
     result_raw = str(run_result.get("result", "") or "")
@@ -1204,7 +1292,8 @@ def _complete_reauth(proc: subprocess.Popen, callback_url: str,
 
 
 def run_reauth(provider: str, email: str, gog_account: str,
-               client: BrowserUseClient, dry_run: bool = False) -> int:
+               client: BrowserUseClient, dry_run: bool = False,
+               two_factor: dict | None = None) -> int:
     """Run the full Browser Use Cloud OAuth reauth flow.
 
     Returns exit code: 0=success, 1=failure, 2=captcha.
@@ -1221,14 +1310,15 @@ def run_reauth(provider: str, email: str, gog_account: str,
 
     try:
         return _run_reauth_inner(provider, email, gog_account, client,
-                                 dry_run, log_path)
+                                 dry_run, log_path, two_factor)
     finally:
         release_lease()
 
 
 def _run_reauth_inner(provider: str, email: str, gog_account: str,
                       client: BrowserUseClient, dry_run: bool,
-                      log_path: Path) -> int:
+                      log_path: Path,
+                      two_factor: dict | None = None) -> int:
     """Inner reauth flow — assumes lease is already held."""
     meta = PROVIDERS[provider]
     port = meta["callback_port"]
@@ -1302,6 +1392,9 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                                         stale_backup, email, provider, meta)
             return EXIT_FAILURE
 
+        if not handle_two_factor_prompt(client, session_id, text1, two_factor):
+            return EXIT_FAILURE
+
         # --- Step 5: Handle verification code or magic link ---
         needs_code = any(kw in text1.lower() for kw in
                          ["code", "link sent", "verify", "check your email",
@@ -1348,6 +1441,9 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                             return _complete_reauth(proc, callback_url,
                                                     auth_file, stale_backup,
                                                     email, provider, meta)
+                        return EXIT_FAILURE
+
+                    if not handle_two_factor_prompt(client, session_id, text2, two_factor):
                         return EXIT_FAILURE
 
                     # Check if code entry failed
@@ -1406,6 +1502,9 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                                 return _complete_reauth(proc, callback_url, auth_file,
                                                         stale_backup, email, provider, meta)
                             return EXIT_CAPTCHA
+
+                        if not handle_two_factor_prompt(client, session_id, text3, two_factor):
+                            return EXIT_FAILURE
                     else:
                         log("[5] No magic link found — cannot continue")
                         return EXIT_FAILURE
@@ -1437,6 +1536,9 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
                             return _complete_reauth(proc, callback_url, auth_file,
                                                     stale_backup, email, provider, meta)
                         return EXIT_CAPTCHA
+
+                    if not handle_two_factor_prompt(client, session_id, text2, two_factor):
+                        return EXIT_FAILURE
                 else:
                     log("[FAIL] No verification code or magic link received")
                     return EXIT_FAILURE
@@ -1466,6 +1568,9 @@ def _run_reauth_inner(provider: str, email: str, gog_account: str,
             if callback_url:
                 return _complete_reauth(proc, callback_url, auth_file,
                                         stale_backup, email, provider, meta)
+            return EXIT_FAILURE
+
+        if not handle_two_factor_prompt(client, session_id, text_auth, two_factor):
             return EXIT_FAILURE
 
         # --- Step 7: Extract callback URL ---
@@ -1668,7 +1773,7 @@ def main():
     global _log_file
 
     parser = argparse.ArgumentParser(
-        description="Browser Use Cloud OAuth reauth for CRSProxy"
+        description="Browser Use Cloud OAuth reauth for cliproxy / CLIProxyAPI"
     )
     parser.add_argument("-provider", required=True,
                         choices=list(PROVIDERS.keys()),
@@ -1699,6 +1804,16 @@ def main():
                              "/opt/crsproxy/state/bu_reauth_checkpoint.json for the "
                              "session_id, then creates a follow-up run to "
                              "click Authorize and complete the flow.")
+    parser.add_argument("-two-factor-method", default="none",
+                        choices=["none", "onepassword_totp", "passkey_checkpoint",
+                                 "sms_checkpoint", "push_checkpoint"],
+                        help="2FA method to use if the login flow asks for one")
+    parser.add_argument("-op-vault-id", default="",
+                        help="1Password Connect vault UUID for onepassword_totp")
+    parser.add_argument("-op-item-id", default="",
+                        help="1Password Connect item UUID for onepassword_totp")
+    parser.add_argument("-op-field", default="one-time password",
+                        help="1Password item field containing the TOTP seed/URI")
     parser.add_argument("-log-file", default="",
                         help="Log file path (default: /tmp/bu_reauth.log)")
     args = parser.parse_args()
@@ -1769,6 +1884,13 @@ def main():
         log("[FATAL] BROWSER_USE_API_KEY not found in environment or .env")
         return EXIT_FAILURE
 
+    two_factor = {
+        "method": args.two_factor_method,
+        "op_vault_id": args.op_vault_id,
+        "op_item_id": args.op_item_id,
+        "op_field": args.op_field,
+    }
+
     if args.dry_run:
         log(f"=== DRY RUN: {args.provider} / {safe_email(args.email)} ===")
     else:
@@ -1786,6 +1908,7 @@ def main():
             gog_account=args.gog_account,
             client=client,
             dry_run=args.dry_run,
+            two_factor=two_factor,
         )
     except TimeoutError as e:
         log(f"[TIMEOUT] {e}")

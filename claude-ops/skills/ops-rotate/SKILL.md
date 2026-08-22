@@ -1,6 +1,6 @@
 ---
 name: ops-rotate
-description: Alias of /ops:accounts for Claude Max seats (status, rotate-now, list, reauth, optional CRS). Prefer /ops:accounts for multi-provider. Full Claude procedure still in this file's historical detail via ops-accounts router.
+description: Alias of /ops:accounts for Claude Max seats (status, rotate-now, list, reauth, optional cliproxy / CLIProxyAPI relay). Prefer /ops:accounts for multi-provider. Full Claude procedure still in this file's historical detail via ops-accounts router.
 argument-hint: '[status|rotate-now|list|add-account|reauth|crs|crs-tick]'
 allowed-tools:
   - Bash

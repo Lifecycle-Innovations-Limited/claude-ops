@@ -11,12 +11,12 @@ Public-repo clean: no host emails, IPs, or personal account lists.
 |--------|------------------------|------------------------|
 | `rotate.mjs` | ~8981 lines | ~5275 lines (after this pass: soft captcha hooks) |
 | Captcha helper stack | Present (full) | **Ported this pass** |
-| CRS reconcilers / priority | Present (ops + host forks) | Present (portable subset) |
+| CLIProxyAPI/legacy CRS reconcilers / priority | Present (ops + host forks) | Present (portable subset) |
 | Magic-link autoloop + reauth env | Host thicker; plugin has portable `reauth-env.mjs` | Present (PR #723 era) |
 | Production systemd/user units | Still point at **host** path | Templates only (`%h` / `$CLAUDE_PLUGIN_ROOT`) |
 
-**CRS is optional.** Standalone rotate-magic (keychain + `rotate.mjs` /
-`rotate-magic.mjs`) is enough for one or a few accounts. CRS is multi-account
+**CLIProxyAPI/legacy relay is optional.** Standalone rotate-magic (keychain + `rotate.mjs` /
+`rotate-magic.mjs`) is enough for one or a few accounts. CLIProxyAPI-compatible relay mode is multi-account
 load balancing / rate-limit spreading for a relay pool.
 
 ## Line-count delta (key modules)
@@ -96,7 +96,7 @@ After this pass, cascade **modules** exist; full host `rotate.mjs` still has:
 6. Residential Chrome / PAC / EFG proxy args for reauth browser
 7. `secrets-bootstrap` before solver use
 8. `virtual-display` ensure for headed seats
-9. CRS push helpers (`--sync-crs-all` style)
+9. Legacy CRS push helpers (`--sync-crs-all` compatibility style)
 10. Stricter OAuth callback / credential race handling
 
 ## Minimal port set (standalone plugin rotate-magic)
@@ -115,7 +115,7 @@ After this pass, cascade **modules** exist; full host `rotate.mjs` still has:
   - (keeps after-magic-link verify in `finishMagicLinkLogin`)
 - `rotate-magic.mjs` runs ensure before spawning `rotate.mjs`
 - Thin `rotate-magic.mjs` entry → `rotate.mjs --magic-link`
-- CRS optional UX in `/ops:rotate-setup` and `/ops:rotate` skills
+- CLIProxyAPI/legacy relay optional UX in `/ops:rotate-setup` and `/ops:rotate` skills
 - Units: `__tests__/captcha-cascade.test.mjs`, `__tests__/ensure-rotate-captcha-hooks.test.mjs`
 
 **Apply hooks on a checkout**

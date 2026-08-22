@@ -1,5 +1,5 @@
 [Unit]
-Description=Feed fresh Claude OAuth tokens into local CRS
+Description=Feed fresh Claude OAuth tokens into local CLIProxyAPI/legacy relay
 After=crs-compose.service
 Wants=crs-compose.service
 

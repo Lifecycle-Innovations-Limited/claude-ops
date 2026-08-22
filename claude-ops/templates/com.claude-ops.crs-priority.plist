@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  CRS account-priority daemon (claude-relay-service pool auto-prioritization).
+  CLIProxyAPI/legacy CRS-compatible account-priority daemon (relay pool auto-prioritization).
 
   Schedule: every 120s. Equivalent systemd: OnUnitActiveSec=120s.
   The installer (scripts/install-crs-priority-agent.sh) substitutes

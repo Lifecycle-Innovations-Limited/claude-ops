@@ -1,5 +1,5 @@
 [Unit]
-Description=Detect CRS Bedrock fallback traffic
+Description=Detect CLIProxyAPI/legacy relay Bedrock fallback traffic
 After=crs-compose.service
 Wants=crs-compose.service
 

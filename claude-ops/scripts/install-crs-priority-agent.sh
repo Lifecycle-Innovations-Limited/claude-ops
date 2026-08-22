@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# install-crs-priority-agent.sh — Install the CRS account-priority daemon as a
-# launchd LaunchAgent (macOS) that ticks every 120s.
+# install-crs-priority-agent.sh — Install the CLIProxyAPI/legacy CRS-compatible
+# account-priority daemon as a launchd LaunchAgent (macOS) that ticks every 120s.
 #
 # Renders templates/com.claude-ops.crs-priority.plist with absolute paths to the
 # wrapper + log dir, then bootstraps it under the current user's GUI session.
 # Idempotent: re-running re-renders and reloads. Linux users: see the systemd
 # hint printed below.
 #
-# Pre-req: the CRS admin password must be reachable by the daemon — either
-#   export CRS_ADMIN_PASSWORD=…  (then it lives only in the plist env if you add it), or
+# Pre-req: the relay admin password must be reachable by the daemon — either
+#   export CRS_ADMIN_PASSWORD=…  (legacy env name; then it lives only in the plist env if you add it), or
 #   bash "$PLUGIN_ROOT/lib/credential-store.sh" set CRS-Admin-<adminUser> "$USER" '<pw>'
-# Config (base URL, adminUser, thresholds) lives in the rotator config.json "crs" block.
+# Config (base URL, adminUser, thresholds) lives in the rotator config.json "crs" compatibility block.
 
 set -euo pipefail
 

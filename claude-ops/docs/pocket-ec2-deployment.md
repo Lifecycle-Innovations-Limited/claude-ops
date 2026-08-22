@@ -1,18 +1,16 @@
-# Pocket pipeline — EC2 deployment on dev-sandbox
+# Pocket pipeline — EC2 deployment
 
-Pocket runs entirely on the dev-sandbox EC2 instance (i-0b207951a7dff925d,
-m8g.2xlarge). This is an approved exception to the no-EC2 rule; pocket
-workloads are too persistent for a laptop.
+Pocket can run on a dedicated EC2 instance. This is an approved exception to
+the no-EC2 rule; pocket workloads are too persistent for a laptop.
 
 ## Access
 
-Web UI: `https://dev-sandbox.tail6aeed8.ts.net` (Tailscale only — never
-exposed via public DNS or Cloudflare). Auth is enforced by the
+Web UI: expose the local service over a private Tailscale HTTPS hostname only —
+never via public DNS or Cloudflare. Auth is enforced by the
 `Tailscale-User-Login` header injected by `tailscale serve`; only
 the configured owner identity is admitted (set via `TAILSCALE_USER` env in the systemd unit).
 
-SSH: `ssh dev-ts` (ec2-user, pem at `~/.ssh/dev-sandbox-2026-05-17.pem`,
-Tailscale IP 100.109.217.31).
+SSH: use the operator's private host alias and key outside this public repo.
 
 ## Systemd units
 
@@ -34,9 +32,9 @@ plugin upgrade: `bash claude-ops/scripts/systemd/install-systemd-units.sh`.
 ## Tailscale serve
 
 `tailscale serve --https=443 http://127.0.0.1:7777` is configured on
-dev-sandbox (runs as root via `sudo tailscale serve`). It terminates TLS,
-injects the identity header, and proxies to gunicorn. Config persists across
-reboots. Verify with `sudo tailscale serve status`.
+the private EC2 host (runs as root via `sudo tailscale serve`). It terminates
+TLS, injects the identity header, and proxies to gunicorn. Config persists
+across reboots. Verify with `sudo tailscale serve status`.
 
 ## State directory
 

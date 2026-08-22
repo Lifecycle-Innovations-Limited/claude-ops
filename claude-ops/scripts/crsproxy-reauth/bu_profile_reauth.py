@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Browser Use Cloud — Profile-based OAuth re-auth for CRSProxy.
+"""Browser Use Cloud — profile-based OAuth re-auth for cliproxy / CLIProxyAPI.
 
 Uses a Browser Use Cloud persistent profile (with synced cookies) to
 bypass the OAuth email/captcha flow. The agent starts already
@@ -14,6 +14,8 @@ Usage:
       -provider claude -email user@example.com -profile-id <BU_PROFILE_ID>
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -25,8 +27,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# Import infrastructure from bu_reauth_lib.py (the stable copy that avoids
-# the quarantine issue affecting bu_reauth.py on the hub).
+# Import deployed hub infrastructure from the stable runtime copy. The helper
+# filename is legacy compatibility; current product wording is cliproxy/CLIProxyAPI.
 sys.path.insert(0, "/opt/crsproxy")
 from bu_reauth_lib import (
     BrowserUseClient,
@@ -58,13 +60,80 @@ from bu_reauth_lib import (
     _timeout_handler,
 )
 
-# Also import _complete_reauth for the final step
+# Also import _complete_reauth and 2FA helpers for the final steps
 from bu_reauth_lib import _complete_reauth
+from bu_2fa import TwoFactorError, current_totp_from_config
+
+
+def needs_two_factor(result_text: str) -> bool:
+    """Return True when the page appears to ask for a 2FA/OTP code."""
+    text = result_text.lower()
+    indicators = [
+        "two-factor", "two factor", "2fa", "multi-factor", "mfa",
+        "authenticator", "authentication code",
+        "one-time password", "one time password",
+        "enter a code from your authenticator",
+    ]
+    return any(indicator in text for indicator in indicators)
+
+
+def handle_two_factor_prompt(client: BrowserUseClient, session_id: str,
+                             result_text: str, two_factor: dict | None) -> bool:
+    """Handle a 2FA prompt without exposing long-lived secrets to Browser Use."""
+    if not needs_two_factor(result_text):
+        return True
+
+    config = two_factor or {}
+    method = str(config.get("method") or "none").strip().lower()
+    if method in ("", "none", "false"):
+        log("[2FA] Prompt detected but no 2FA method is configured")
+        return False
+
+    if method == "onepassword_totp":
+        try:
+            code = current_totp_from_config(config)
+        except TwoFactorError as exc:
+            log(f"[2FA] Could not get 1Password TOTP: {exc}")
+            return False
+        if not code:
+            log("[2FA] 1Password TOTP config returned no code")
+            return False
+        log("[2FA] 1Password TOTP generated (value redacted)")
+        task = (
+            f"Enter this one-time authentication code: {code}. "
+            "Click Continue. Report exactly what you see."
+        )
+    else:
+        log(f"[2FA] Human checkpoint required: {method}")
+        if method == "sms_checkpoint":
+            task = "Ask the operator for the SMS code, enter it, and click Continue."
+        elif method == "push_checkpoint":
+            task = "Ask the operator to approve the push prompt, then click Continue."
+        elif method == "passkey_checkpoint":
+            task = "Ask the operator to complete the passkey/WebAuthn prompt."
+        else:
+            task = "Ask the operator to complete the 2FA checkpoint."
+        task += " Report exactly what you see."
+
+    run = client.create_run(task, session_id=session_id)
+    run_id = run.get("id", "")
+    log(f"[2FA] Checkpoint run: {run_id[:12]}...")
+    result = client.wait_for_run(run_id, timeout=RUN_POLL_TIMEOUT)
+    text = str(result.get("result", "") or "")
+    log(f"[2FA] Checkpoint complete: {text[:200]}")
+    if detect_captcha(result, client):
+        log("[2FA] Captcha appeared during 2FA checkpoint")
+        return False
+    if any(ind in text.lower() for ind in ["invalid", "incorrect", "expired", "try again"]):
+        log("[2FA] 2FA code was rejected")
+        return False
+    return True
 
 
 def run_profile_reauth(provider: str, email: str, profile_id: str,
                        client: BrowserUseClient,
-                       dry_run: bool = False) -> int:
+                       dry_run: bool = False,
+                       two_factor: dict | None = None) -> int:
     """Run the profile-based OAuth reauth flow.
 
     1. Acquire serialization lease.
@@ -91,14 +160,15 @@ def run_profile_reauth(provider: str, email: str, profile_id: str,
 
     try:
         return _run_profile_reauth_inner(provider, email, profile_id,
-                                         client, dry_run, log_path)
+                                         client, dry_run, log_path, two_factor)
     finally:
         release_lease()
 
 
 def _run_profile_reauth_inner(provider: str, email: str, profile_id: str,
                               client: BrowserUseClient, dry_run: bool,
-                              log_path: Path) -> int:
+                              log_path: Path,
+                              two_factor: dict | None = None) -> int:
     """Inner profile reauth flow — assumes lease is already held."""
     meta = PROVIDERS[provider]
     port = meta["callback_port"]
@@ -185,6 +255,9 @@ def _run_profile_reauth_inner(provider: str, email: str, profile_id: str,
                 return _complete_reauth(proc, callback_url, auth_file,
                                         stale_backup, email, provider, meta)
             return EXIT_CAPTCHA
+
+        if not handle_two_factor_prompt(client, session_id, text, two_factor):
+            return EXIT_FAILURE
 
         # --- Step 5: Extract callback URL ---
         log("[4] Searching for callback URL...")
@@ -401,7 +474,7 @@ def main():
     global _log_file
 
     parser = argparse.ArgumentParser(
-        description="Profile-based OAuth reauth for CRSProxy")
+        description="Profile-based OAuth reauth for cliproxy / CLIProxyAPI")
     parser.add_argument("-provider", required=True,
                         choices=["claude", "xai", "codex"],
                         help="OAuth provider")
@@ -411,6 +484,16 @@ def main():
                         help="Browser Use Cloud profile ID")
     parser.add_argument("-dry-run", action="store_true",
                         help="Validate setup without creating browser runs")
+    parser.add_argument("-two-factor-method", default="none",
+                        choices=["none", "onepassword_totp", "passkey_checkpoint",
+                                 "sms_checkpoint", "push_checkpoint"],
+                        help="2FA method to use if the login flow asks for one")
+    parser.add_argument("-op-vault-id", default="",
+                        help="1Password Connect vault UUID for onepassword_totp")
+    parser.add_argument("-op-item-id", default="",
+                        help="1Password Connect item UUID for onepassword_totp")
+    parser.add_argument("-op-field", default="one-time password",
+                        help="1Password item field containing the TOTP seed/URI")
     args = parser.parse_args()
 
     log_path = LOG_DIR / f"bu_profile_reauth_{args.provider}_{args.email.split('@')[0]}.log"
@@ -434,6 +517,13 @@ def main():
         log("[FATAL] BROWSER_USE_API_KEY not found")
         return EXIT_FAILURE
 
+    two_factor = {
+        "method": args.two_factor_method,
+        "op_vault_id": args.op_vault_id,
+        "op_item_id": args.op_item_id,
+        "op_field": args.op_field,
+    }
+
     log(f"=== Profile Reauth: {args.provider} / {safe_email(args.email)} ===")
     log(f"=== Profile ID: {args.profile_id[:12]}... ===")
 
@@ -448,6 +538,7 @@ def main():
             profile_id=args.profile_id,
             client=client,
             dry_run=args.dry_run,
+            two_factor=two_factor,
         )
     except TimeoutError as e:
         log(f"[TIMEOUT] {e}")

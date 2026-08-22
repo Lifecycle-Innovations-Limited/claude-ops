@@ -4,18 +4,18 @@
 // OPT-IN. Does nothing (exits 0) unless crs.cooldownEnabled is true (or
 // $CRS_COOLDOWN_ENABLED=1) — installing this plugin never silently starts a new
 // daemon. Enable it alongside crs-priority-daemon.mjs when you run a self-hosted
-// claude-relay-service (CRS) pool and want a fast, real-signal-only cooldown watcher
+// CLIProxyAPI/legacy CRS-compatible relay pool and want a fast, real-signal-only cooldown watcher
 // that runs on a tighter cadence than the priority daemon.
 //
-// Two signals, in priority order — both are things Anthropic (or CRS observing
+// Two signals, in priority order — both are things Anthropic (or the relay observing
 // Anthropic) actually told us, never a speculative/utilization-based guess:
-//   1. rateLimitStatus.isRateLimited = true on the account record (CRS derived
-//      this from a real upstream response on an actual inference call).
-//   2. (optional) tail of today's CRS relay error log for 429 lines mentioning the
-//      account name — a faster lead signal than #1 while CRS's own record catches
-//      up. Reads from crs.logDir (or $CRS_LOG_DIR); a no-op on a fresh install
+//   1. rateLimitStatus.isRateLimited = true on the account record (relay-derived
+//      from a real upstream response on an actual inference call).
+//   2. (optional) tail of today's relay error log for 429 lines mentioning the
+//      account name — a faster lead signal than #1 while the relay's own record catches
+//      up. Reads from crs.logDir (or $CRS_LOG_DIR; legacy names); a no-op on a fresh install
 //      since that directory won't exist yet (this reconciler never assumes a
-//      real CRS deployment's log layout).
+//      real relay deployment's log layout).
 //
 // State is owned exclusively by THIS reconciler (own file, atomic write, single-
 // flight lock via crs-reconciler-state.mjs) so that:

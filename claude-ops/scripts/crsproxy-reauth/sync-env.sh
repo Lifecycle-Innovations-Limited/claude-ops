@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# sync-env.sh — Sync /opt/crsproxy/.env from Doppler
+# sync-env.sh — Sync the cliproxy hub runtime .env from Doppler
 #
-# Downloads all secrets from the Doppler crsproxy/prd config and writes them
-# to /opt/crsproxy/.env atomically (temp file + rename). The Doppler service
-# token is read from /opt/crsproxy/.doppler-token (mode 600, owner crsproxy).
+# Downloads all secrets from the Doppler project/config used by the cliproxy hub
+# and writes them to the legacy deployed runtime path /opt/crsproxy/.env
+# atomically (temp file + rename). The Doppler service token is read from
+# /opt/crsproxy/.doppler-token (mode 600, owner crsproxy).
 #
 # Usage: sudo -u crsproxy /opt/crsproxy/sync-env.sh
 #
 # Requirements:
-#   - Doppler CLI installed on hub (/usr/bin/doppler)
+#   - Doppler CLI installed on the cliproxy hub (/usr/bin/doppler)
 #   - Service token stored at /opt/crsproxy/.doppler-token
 #   - crsproxy user must have write and execute access to /opt/crsproxy/
 #
-# This script is the canonical way to keep /opt/crsproxy/.env in sync with
+# This script is the canonical way to keep the cliproxy hub .env in sync with
 # Doppler. No manual .env editing is needed — update the secret in Doppler
 # (or Dashlane → Doppler) and re-run this script.
 set -euo pipefail

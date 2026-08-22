@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * crs-reconciler-state.mjs — shared own-state-file helper for CRS pool reconcilers.
+ * crs-reconciler-state.mjs — shared own-state-file helper for CLIProxyAPI/legacy CRS-compatible pool reconcilers.
  *
- * Each reconciler that watches a claude-relay-service (CRS) account pool (cooldown
+ * Each reconciler that watches a relay account pool (cooldown
  * tracking, token-refresh tracking, priority scoring, ...) MUST persist to its OWN
  * state file — never a file shared with another reconciler. Sharing one file was the
  * root cause of a documented production incident: reconciler A's non-atomic write
