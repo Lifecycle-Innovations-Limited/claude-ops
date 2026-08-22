@@ -84,23 +84,21 @@ DANGER=$(set -f; while IFS= read -r seg; do
   # Tokenize on spaces (best-effort — won't perfectly handle quoted-with-spaces but covers the patterns specified).
   for tok in $rest; do
     # Skip flags.
-    case "$tok" in
-      -*) continue ;;
-    esac
+    if [[ "$tok" == -* ]]; then
+      continue
+    fi
     # Strip surrounding quotes for comparison.
     bare="${tok%\"}"; bare="${bare#\"}"
     bare="${bare%\'}"; bare="${bare#\'}"
 
-    case "$bare" in
-      "" | "/" | "/*" | "/." | \
-      "~" | "~/" | "~/*" | \
-      '$HOME' | '$HOME/' | '$HOME/*' | \
-      ".." | "../" | "../*" | \
-      ".")
-        DANGER="$bare"
-        break
-        ;;
-    esac
+    if [[ "$bare" == "" || "$bare" == "/" || "$bare" == "/*" || "$bare" == "/." || \
+      "$bare" == "~" || "$bare" == "~/" || "$bare" == "~/*" || \
+      "$bare" == '$HOME' || "$bare" == '$HOME/' || "$bare" == '$HOME/*' || \
+      "$bare" == ".." || "$bare" == "../" || "$bare" == "../*" || \
+      "$bare" == "." ]]; then
+      DANGER="$bare"
+      break
+    fi
     # Also catch quoted $HOME variants where the shell hasn't expanded them.
     if [[ "$tok" == '"$HOME"' || "$tok" == '"$HOME"/' || "$tok" == '"$HOME"/*' ]]; then
       DANGER="$tok"; break

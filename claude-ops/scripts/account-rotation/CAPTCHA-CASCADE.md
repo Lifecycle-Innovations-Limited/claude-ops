@@ -5,13 +5,13 @@ Contract for **unattended** re-auth owned by `magic-link-autoloop` →
 Agents must not spawn parallel `rotate.mjs` drivers against the same fleet
 (they thrash the global `.rotating` lock and the reauth browser profile).
 
-**CRS is not required.** Captcha cascade runs in standalone rotate-magic.
+**cliproxy / CLIProxyAPI relay is not required.** Captcha cascade runs in standalone rotate-magic.
 
 ## Ownership
 
 | Component | Role |
 |-----------|------|
-| `magic-link-autoloop` | Serial, one account per tick; opt-in (often CRS-flagged, but not required) |
+| `magic-link-autoloop` | Serial, one account per tick; opt-in (often relay-flagged via legacy CRS config, but not required) |
 | `rotate.mjs` / `rotate-magic.mjs` | Browser OAuth / magic-link / setup |
 | `captcha-helper.mjs` | Token solvers + residential wait (`residualAfterWait`) |
 | `visual-captcha-solver.mjs` | Vision tiles + desktop-act + VNC layers |

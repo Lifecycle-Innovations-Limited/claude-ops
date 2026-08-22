@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  CRS 429-cooldown reconciler (claude-relay-service pool rate-limit hold).
+  CLIProxyAPI/legacy CRS-compatible 429-cooldown reconciler (relay pool rate-limit hold).
 
   Schedule: every 60s. Equivalent systemd: OnUnitActiveSec=60s.
   The installer (scripts/install-crs-reconcilers-agent.sh) substitutes

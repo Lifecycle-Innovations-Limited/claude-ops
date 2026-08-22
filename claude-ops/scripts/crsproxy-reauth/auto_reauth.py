@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""CRSProxy autonomous reauth monitor.
+"""cliproxy autonomous reauth monitor.
 
-Runs periodically via the systemd timer ``crsproxy-reauth.timer``.
+Runs periodically via the cliproxy reauth systemd timer.
 
 Responsibilities:
   1. Run ``cliproxy-pool-health`` and log the result.
   2. Reconcile actual auth files against the declarative account policy
-     (``/opt/crsproxy/account_policy.yaml``):
+     on the cliproxy hub:
        - If policy says enabled but auth file is disabled  -> trigger reauth.
        - If policy says disabled but auth file is enabled  -> disable it.
   3. Scan auth files for expired or disabled accounts.
   4. Trigger reauth for any expired account using **profile-first** logic:
        - If ``reauth_seats.json`` maps a Browser Use Cloud profile ID to the
          account -> invoke ``bu_profile_reauth.py`` with ``-profile-id``.
-       - Otherwise -> fall back to ``bu_reauth_lib.py`` (email-based).
+       - Otherwise -> fall back to ``bu_reauth.py`` (email-based).
      A per-account cooldown prevents hammering a persistently-blocked account.
   5. Log all results WITHOUT exposing secrets (emails are masked, tokens /
      codes / cookies / callback URLs are never printed).
-  6. NEVER restart, reload, or kill ``crsproxy.service`` — this monitor is
+  6. NEVER restart, reload, or kill the cliproxy service — this monitor is
      strictly read-only with respect to the proxy process. Auth files
      hot-reload, so reauth never requires a service restart.
 
@@ -31,6 +31,8 @@ Exit codes:
       exit — only monitor-level breakage does.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -43,10 +45,12 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+# Runtime compatibility: the deployed cliproxy hub may still use this legacy
+# filesystem path while service paths are migrated.
 AUTH_DIR = Path("/opt/crsproxy/auths")
 POOL_HEALTH_CMD = "/usr/local/bin/cliproxy-pool-health"
 REAUTH_CMD = "/opt/crsproxy/venv/bin/python"
-REAUTH_SCRIPT = "/opt/crsproxy/bu_reauth_lib.py"
+REAUTH_SCRIPT = "/opt/crsproxy/bu_reauth.py"
 PROFILE_REAUTH_SCRIPT = "/opt/crsproxy/bu_profile_reauth.py"
 ENV_FILE = Path("/opt/crsproxy/.env")
 STATE_FILE = Path("/opt/crsproxy/.auto_reauth-state.json")
@@ -118,8 +122,8 @@ def mask_email(email: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Environment loading — read /opt/crsproxy/.env so the reauth subprocess
-# inherits BROWSER_USE_API_KEY and Gmail/gogcli credentials.
+# Environment loading — read the legacy deployed runtime .env so the reauth
+# subprocess inherits BROWSER_USE_API_KEY and Gmail/gogcli credentials.
 # ---------------------------------------------------------------------------
 def load_env(path: Path) -> dict:
     """Parse a simple KEY=VALUE .env file into a dict. Values may be wrapped
@@ -261,6 +265,16 @@ def find_seat(seats: dict, provider: str, email: str) -> dict | None:
     for seat in seats.get("seats", []):
         if seat.get("provider") == provider and seat.get("email") == email:
             return seat
+    return None
+
+
+def find_policy_account(policy: dict | None, provider: str, email: str) -> dict | None:
+    """Find the account-policy entry matching provider+email."""
+    if not policy:
+        return None
+    for entry in policy.get("accounts", []):
+        if entry.get("provider") == provider and entry.get("email") == email:
+            return entry
     return None
 
 
@@ -459,7 +473,7 @@ def trigger_reauth(account: dict, env: dict,
 
     If ``reauth_seats.json`` maps a Browser Use Cloud profile ID to this
     account, invoke ``bu_profile_reauth.py`` with ``-profile-id``. Otherwise
-    fall back to ``bu_reauth_lib.py`` (email-based).
+    fall back to ``bu_reauth.py`` (email-based).
 
     Secrets are never logged: emails are masked, and the subprocess inherits
     the loaded .env so BROWSER_USE_API_KEY and Gmail credentials are
@@ -474,6 +488,18 @@ def trigger_reauth(account: dict, env: dict,
     if seats is not None:
         seat = find_seat(seats, provider, email)
 
+    two_factor = account.get("two_factor") or {}
+    two_factor_method = str(two_factor.get("method") or "none").strip()
+    two_factor_args = []
+    if two_factor_method and two_factor_method != "none":
+        two_factor_args.extend(["-two-factor-method", two_factor_method])
+        if two_factor_method == "onepassword_totp":
+            two_factor_args.extend([
+                "-op-vault-id", str(two_factor.get("op_vault_id") or ""),
+                "-op-item-id", str(two_factor.get("op_item_id") or ""),
+                "-op-field", str(two_factor.get("op_field") or "one-time password"),
+            ])
+
     if seat and seat.get("profile_id"):
         # --- Profile-based reauth ---
         profile_id = seat["profile_id"]
@@ -482,10 +508,12 @@ def trigger_reauth(account: dict, env: dict,
             "-provider", provider,
             "-email", email,
             "-profile-id", profile_id,
+            *two_factor_args,
         ]
         method = "profile"
         log(f"[reauth] triggering {provider} for {masked} via {method} "
-            f"(profile={profile_id[:12]}... reason: {account['reason']})")
+            f"(profile={profile_id[:12]}... 2fa={two_factor_method} "
+            f"reason: {account['reason']})")
     else:
         # --- Email-based reauth (fallback) ---
         # Claude verification emails are forwarded to a central Gmail inbox
@@ -507,10 +535,11 @@ def trigger_reauth(account: dict, env: dict,
             "-provider", provider,
             "-email", email,
             "-gog-account", gog_account,
+            *two_factor_args,
         ]
         method = "email"
         log(f"[reauth] triggering {provider} for {masked} via {method} "
-            f"(reason: {account['reason']})")
+            f"(2fa={two_factor_method} reason: {account['reason']})")
 
     try:
         proc = subprocess.run(
@@ -610,6 +639,7 @@ def reconcile_accounts(env: dict, seats: dict, state: dict) -> dict:
                 "provider": provider,
                 "email": email,
                 "reason": "policy-enabled-but-disabled",
+                "two_factor": entry.get("two_factor") or {},
             }
             success, reason = trigger_reauth(account, env, seats)
             record_attempt(state, key, success, reason)
@@ -719,6 +749,11 @@ def main() -> int:
             log(f"[skip] {mask_email(account['email'])} ({account['provider']}) "
                 f"in cooldown — last attempt too recent")
             continue
+
+        policy_entry = find_policy_account(
+            policy, account["provider"], account["email"])
+        if policy_entry and "two_factor" in policy_entry:
+            account = {**account, "two_factor": policy_entry.get("two_factor") or {}}
 
         attempted += 1
         success, reason = trigger_reauth(account, env, seats)

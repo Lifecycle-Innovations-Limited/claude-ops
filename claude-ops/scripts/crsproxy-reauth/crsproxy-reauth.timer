@@ -1,5 +1,5 @@
 [Unit]
-Description=Run CRSProxy reauth check every 15 minutes
+Description=Run cliproxy reauth check every 15 minutes
 
 [Timer]
 OnBootSec=5min

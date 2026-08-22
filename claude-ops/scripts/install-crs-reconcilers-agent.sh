@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# install-crs-reconcilers-agent.sh — Install the CRS 429-cooldown, 401-refresher,
-# and/or magic-link-autoloop reconcilers as launchd LaunchAgents (macOS).
+# install-crs-reconcilers-agent.sh — Install CLIProxyAPI/legacy CRS-compatible
+# 429-cooldown, 401-refresher, and/or magic-link-autoloop reconcilers as launchd LaunchAgents (macOS).
 #
 # Reads crs.cooldownEnabled / crs.tokenRefreshEnabled / crs.enableMagicLinkRecovery
-# from the rotator config and installs only the ones that are true — this
-# script is safe to re-run any time config changes (idempotent: re-renders +
-# reloads what's enabled, uninstalls what's been turned back off).
+# from the rotator config (legacy key names retained) and installs only the ones
+# that are true — this script is safe to re-run any time config changes
+# (idempotent: re-renders + reloads what's enabled, uninstalls what's been
+# turned back off).
 #
-# Pre-req: same CRS admin credentials as install-crs-priority-agent.sh.
+# Pre-req: same relay admin credentials as install-crs-priority-agent.sh.
 # Config (stateDir, logDir, thresholds) lives in the rotator config.json
-# "crs" block — see config.example.json for the full annotated schema.
+# "crs" compatibility block — see config.example.json for the full annotated schema.
 
 set -euo pipefail
 
@@ -38,7 +39,7 @@ fi
 [[ "${CRS_ENABLE_MAGIC_LINK:-}" == "1" ]] && MAGIC_LINK_ENABLED="true"
 
 if [[ "$TOKEN_REFRESH_ENABLED" == "true" ]]; then
-  echo "error: CRS 401 refresher is retired; use the identity-verified crs-token-feed service" >&2
+  echo "error: legacy CRS 401 refresher is retired; use the identity-verified crs-token-feed service" >&2
   exit 1
 fi
 

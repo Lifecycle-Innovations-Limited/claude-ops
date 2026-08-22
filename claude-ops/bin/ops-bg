@@ -86,9 +86,9 @@ cmd_dispatch() {
     exit 2
   fi
   local prompt="$*"
-  # CRS routing: every bg session ops-bg spawns inherits the sanctioned overlay
+  # cliproxy / CLIProxyAPI routing: every bg session ops-bg spawns inherits the sanctioned overlay
   # (ANTHROPIC_BASE_URL + CLAUDE_CODE_OAUTH_TOKEN). Preflight refuses to spawn if
-  # the overlay is half-set or the key is 401-rejected. Opt out with CRS_OVERLAY="".
+  # the overlay is half-set or the key is 401-rejected. Opt out with CRS_OVERLAY="" (legacy env name).
   local CRS_OVERLAY="${CRS_OVERLAY-$HOME/.claude/crs-session-settings.json}"
   local -a crs_args=()
   if [ -n "$CRS_OVERLAY" ]; then

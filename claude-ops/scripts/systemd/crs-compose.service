@@ -1,5 +1,5 @@
 [Unit]
-Description=Claude Relay Service docker compose stack
+Description=Legacy CRS-compatible relay docker compose stack
 Requires=docker.service
 After=docker.service network-online.target
 

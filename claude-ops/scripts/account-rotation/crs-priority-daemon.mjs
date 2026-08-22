@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // crs-priority-daemon.mjs — utilization-driven account prioritization for a
-// claude-relay-service (CRS) pool.
+// CLIProxyAPI/legacy CRS-compatible relay pool.
 //
-// CRS load-balances Claude requests across many claude.ai accounts at once. Each
-// account carries a `schedulable` flag; CRS only routes to schedulable accounts.
+// The relay load-balances Claude requests across many claude.ai accounts at once. Each
+// account carries a `schedulable` flag; the relay only routes to schedulable accounts.
 // This daemon flips that flag from LIVE signals so the pool AVOIDS near-maxed
 // accounts (cutting 429/529s) and RE-ENABLES them once their windows recover —
 // the relay-pool analogue of the keychain rotator's "rotate to the coolest

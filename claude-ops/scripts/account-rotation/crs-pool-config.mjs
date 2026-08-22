@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * crs-pool-config.mjs — shared CRS + rotation config resolution for public installs.
+ * crs-pool-config.mjs — shared CLIProxyAPI/legacy CRS-compatible relay + rotation config resolution for public installs.
  *
- * Vault key ↔ CRS account name mapping is NEVER hardcoded in repo scripts.
- * Configure per account via `crsAccountName` and/or optional `crs.nameByVaultKey`.
+ * Vault key ↔ legacy relay account name mapping is NEVER hardcoded in repo scripts.
+ * Configure per account via legacy fields `crsAccountName` and/or optional `crs.nameByVaultKey`.
  */
 
 import { readFileSync, existsSync } from 'fs';
@@ -134,8 +134,8 @@ export function resolveCredentialStorePath() {
 }
 
 /**
- * Resolve the CRS admin password for HTTP basic auth against a self-hosted
- * claude-relay-service pool. Resolution order (first hit wins), none of it
+ * Resolve the relay admin password for HTTP basic auth against a self-hosted
+ * CLIProxyAPI/legacy CRS-compatible pool. Resolution order (first hit wins), none of it
  * ever hardcoded to one deployment:
  *   1. $CRS_ADMIN_PASSWORD
  *   2. the env var named by config.crs.adminPasswordEnv (or $CRS_ADMIN_PASSWORD_ENV)

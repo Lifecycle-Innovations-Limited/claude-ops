@@ -1,13 +1,13 @@
 /**
- * ops-accounts-backend.mjs — resolve CRS vs local seat-state backend.
+ * ops-accounts-backend.mjs — resolve legacy CRS-compatible relay vs local seat-state backend.
  *
  * Env / config:
- *   OPS_ACCOUNTS_BACKEND | crs.backend
- *     local | seat-state | file  → local seat-state (no CRS)
- *     crs                        → CRS admin API only
- *     auto (default)             → try CRS, fall back to local
+ *   OPS_ACCOUNTS_BACKEND | crs.backend (legacy config key)
+ *     local | seat-state | file  → local seat-state (no relay)
+ *     crs                        → legacy CRS-compatible admin API only
+ *     auto (default)             → try relay, fall back to local
  *
- * Dual-write (CRS path → seat-state.json) is on by default unless
+ * Dual-write (relay path → seat-state.json) is on by default unless
  * OPS_ACCOUNTS_DUAL_WRITE=0.
  */
 export function resolveAccountsBackend({ env = process.env, cfgBackend } = {}) {

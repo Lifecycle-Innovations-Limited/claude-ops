@@ -15,14 +15,14 @@ function claudeSettingsPath() {
   return join(process.env.HOME || '', '.claude', 'settings.json');
 }
 
-// ── CRS (Claude Relay Service) routing awareness ───────────────────────────────
-// When a box routes through CRS, ANTHROPIC_BASE_URL points at the local relay
+// ── CLIProxyAPI/legacy CRS-compatible relay routing awareness ──────────────────
+// When a box routes through the relay, ANTHROPIC_BASE_URL points at the local relay
 // (e.g. http://127.0.0.1:3005/api) and CLAUDE_CODE_OAUTH_TOKEN holds a static
 // `cr_…` relay token. Both must travel together — a `cr_` token with no base URL
 // 401s. The Bedrock/OAuth settings mutators below were written for the raw-OAuth /
-// Bedrock world and would silently strip ANTHROPIC_BASE_URL, stranding a CRS box.
+// Bedrock world and would silently strip ANTHROPIC_BASE_URL, stranding a relay-routed box.
 // These helpers detect that routing and snapshot/restore the pair so a mode flip
-// never breaks (or money-leaks past) a CRS-routed fleet.
+// never breaks (or money-leaks past) a relay-routed fleet.
 function isCrsToken(t) {
   return typeof t === 'string' && t.startsWith('cr_');
 }

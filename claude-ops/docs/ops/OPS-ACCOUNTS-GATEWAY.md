@@ -2,9 +2,9 @@
 
 **Status:** skeleton shipped (`scripts/account-rotation/ops-accounts-gateway.mjs`).
 
-**Goal:** Optional thin OpenAI-compat gateway so fleets that today set
-`base_url=http://127.0.0.1:3005` (CRS) can point at a plugin-owned process
-**without** installing weishaw/claude-relay-service.
+**Goal:** Optional thin OpenAI-compat CLIProxyAPI gateway so fleets that today set
+`base_url=http://127.0.0.1:3005` for cliproxy / CLIProxyAPI can point at a plugin-owned process
+**without** installing any deprecated relay stack.
 
 ## What it does (skeleton)
 
@@ -43,7 +43,7 @@ CRS_BASE_URL → OPS_ACCOUNTS_GATEWAY_URL
 # harnesses keep OpenAI-compat client shape
 ```
 
-External CRS remains **advanced-only** for operators who want the full CRS admin UI.
+Deprecated relay stacks remain **advanced-only** for operators who want the old admin UI.
 
 ## Build order
 
@@ -55,5 +55,5 @@ External CRS remains **advanced-only** for operators who want the full CRS admin
 
 ## License
 
-If any line is copied from CRS (MIT), keep attribution. Prefer rewrite of the
-proxy surface over vendoring the monorepo.
+If any line is copied from a deprecated MIT relay, keep attribution. Prefer
+rewriting the proxy surface over vendoring the monorepo.

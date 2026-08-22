@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # fleet-status.sh — polished fleet dashboard.
 # Unifies everything `claude agents --json`, `claude daemon status`, the daemon roster.json,
-# each session's job state.json, the rotation daemon state, and CRS expose — per session:
-#   token type (oauth/api/bedrock/crs) · CRS routing · agent type · effort/model · respawn-attempts
+# each session's job state.json, the rotation daemon state, and CLIProxyAPI-compatible relay expose — per session:
+#   token type (oauth/api/bedrock/cliproxy) · relay routing · agent type · effort/model · respawn-attempts
 #   · repo · uptime · last-update · last-write · leased account · live detail · last error.
 # Read-only. No mutation.  Usage: fleet-status.sh [--all] [--watch [secs]] [--no-color]
 set -uo pipefail
 
 CLAUDE_BIN="${CLAUDE_BIN:-/usr/local/bin/claude}"
-CRS_PORT="${CRS_PORT:-3005}"          # CRS (Claude Relay Service) listen port (3000 = legacy)
+CRS_PORT="${CRS_PORT:-3005}"          # CLIProxyAPI-compatible relay listen port (legacy env; 3000 = legacy)
 AR="$HOME/.claude/scripts/account-rotation"
 PROJ="$HOME/.claude/projects/-Users-samrenders"
 EC2_CACHE="${FLEET_EC2_CACHE:-$HOME/.claude/state/fleet-ec2.json}"
@@ -245,7 +245,7 @@ title=" FLEET DASHBOARD "; clock=f" {time.strftime('%Y-%m-%d %H:%M:%S')} "
 fill=W-len(title)-len(clock)
 print(f"{B}╔{title}{'═'*fill}{clock}╗{R}")
 print(f" {B}DAEMON{R}  pid {d_pid} · v{d_ver} · up {d_up} · {origin} · sock {sock} · workers {d_work} · roster {d_roster}")
-print(f" {B}CRS{R}     /health {hb} · allowlist {crs_allow_label} · 6m: done~{crs_done} {YEL}429:{crs_429}{R} {RED}529:{crs_529}{R} · keychain-swap {rh}")
+print(f" {B}CLIPROXY{R} /health {hb} · legacy allowlist {crs_allow_label} · 6m: done~{crs_done} {YEL}429:{crs_429}{R} {RED}529:{crs_529}{R} · keychain-swap {rh}")
 if ec2_on:
     if ec2_ok:
         m=re.search(r'(\d+) running.*?(\d+) in roster',ec2_daemon)
@@ -255,7 +255,7 @@ if ec2_on:
         print(f" {B}EC2 FRA{R} {GRN}✓{R} {ec2_n} sess · {dw}cache {agestr} ago{stale} {D}· {ec2_inst}{R}")
     else:
         print(f" {B}EC2 FRA{R} {RED}✗ {ec2_err or 'no cache'}{R} {D}(refreshing in background…){R}")
-print(f" {D}token {GRN}oauth{D}=Max  {YEL}api{D}=metered  {MAG}bedrock{D}=AWS  {CYN}crs{D}=relay→Max pool   crs: {CYN}▶{D}routing ●listed ·direct  {BLU}fra{D}=EC2 session{R}")
+print(f" {D}token {GRN}oauth{D}=Max  {YEL}api{D}=metered  {MAG}bedrock{D}=AWS  {CYN}cliproxy{D}=relay→Max pool   relay: {CYN}▶{D}routing ●listed ·direct  {BLU}fra{D}=EC2 session{R}")
 print(f"{B}╚{'═'*(W)}╝{R}")
 
 # ---- group by state ----
@@ -335,9 +335,9 @@ for email,info in sorted(accts.items(),key=lambda x:-(x[1].get("lastUtilization"
     bill=(info.get("lastBilling",{}) or {}).get("billing_type","—"); extra=" +x" if (info.get("lastBilling",{}) or {}).get("extra_usage_enabled") else ""
     print(f"  {email:34} {barv} {col}{str(pct if pct is not None else '—'):>3}%{R} {D}{reset_in(u):>9} · act {iso_ago(info.get('lastActive')):>6} · {bill}{extra}{R}")
 
-# ---- CRS proxy routing ----
+# ---- CLIProxyAPI/legacy CRS proxy routing ----
 if acct_hits:
-    print(f"{B}CRS ROUTING{R} {D}(accounts used last 6m){R}")
+    print(f"{B}CLIPROXY ROUTING{R} {D}(accounts used last 6m){R}")
     line="  "+"  ".join(f"{CYN}{a}{R}{D}:{n}{R}" for a,n in sorted(acct_hits.items(),key=lambda x:-x[1]))
     print(line)
 PY

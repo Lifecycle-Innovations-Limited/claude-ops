@@ -30,7 +30,8 @@ import bu_reauth
 
 def test_lease_file_constant():
     """Lease file path is correct."""
-    assert bu_reauth.LEASE_FILE == bu_reauth.STATE_DIR / "crsproxy-claude-oauth-lease.json"
+    assert bu_reauth.LEASE_FILE == bu_reauth.STATE_DIR / "cliproxy-claude-oauth-lease.json"
+    assert bu_reauth.LEGACY_LEASE_FILE == bu_reauth.STATE_DIR / "crsproxy-claude-oauth-lease.json"
     print("PASS: Lease file path is in the private state directory")
 
 
@@ -187,7 +188,8 @@ def test_release_lease_always_called():
 # ---------------------------------------------------------------------------
 def test_email_cooldown_constants():
     """Email cooldown constants are correct."""
-    assert bu_reauth.EMAIL_COOLDOWN_FILE == bu_reauth.STATE_DIR / "crsproxy-email-cooldown.json"
+    assert bu_reauth.EMAIL_COOLDOWN_FILE == bu_reauth.STATE_DIR / "cliproxy-email-cooldown.json"
+    assert bu_reauth.LEGACY_EMAIL_COOLDOWN_FILE == bu_reauth.STATE_DIR / "crsproxy-email-cooldown.json"
     assert bu_reauth.EMAIL_COOLDOWN_WINDOW == 300
     assert bu_reauth.EMAIL_COOLDOWN_THRESHOLD == 3
     assert bu_reauth.EMAIL_COOLDOWN_DURATION == 300

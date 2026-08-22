@@ -40,7 +40,7 @@ const LOG_PATH = join(__dirname, 'rotation.log');
 const NEEDS_REAUTH_PATH = join(__dirname, '.crs-token-refresher-state.json');
 const AUTOLOOP_STATE_PATH = join(__dirname, '.crs-magic-autoloop-state.json');
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
-const KEYCHAIN_ACCOUNT = process.env.USER || 'samrenders';
+const KEYCHAIN_ACCOUNT = process.env.USER || 'claude-ops';
 
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const TOKEN_ENDPOINT = 'https://platform.claude.com/v1/oauth/token';

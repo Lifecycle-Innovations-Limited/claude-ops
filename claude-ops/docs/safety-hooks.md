@@ -119,7 +119,7 @@ bash claude-ops/tests/test-safety-hooks.sh
 ## bedrock-billing-guard (PreToolUse) — metered-spend protection
 
 `hooks/bedrock-billing-guard.mjs` hard-stops any Claude session that is **measured
-to be billing AWS Bedrock** (metered per-token spend, not the Max/CRS account
+to be billing AWS Bedrock** (metered per-token spend, not the Max/CLIProxyAPI account
 pool). It is the agent-facing complement to the rotation daemon's
 `scripts/account-rotation/bedrock-watchdog.mjs`, which detects + force-swaps such
 sessions off Bedrock within ~45s.
@@ -139,8 +139,8 @@ network/env measurement.
 | `warn` | Never block — inject a one-line non-blocking warning into the agent's context on each tool call. |
 | `off` | No-op. For users who intentionally run **Bedrock unrestricted**. |
 
-When OAuth headroom exists, the watchdog respawns the session onto CRS/OAuth and
-clears the flag, so the block lifts on its own. The guard is **fail-open**: any
+When OAuth headroom exists, the watchdog respawns the session onto CLIProxyAPI/OAuth
+(or a legacy CRS-compatible relay) and clears the flag, so the block lifts on its own. The guard is **fail-open**: any
 error, missing input, or unexpected state allows the tool (a money guard must
 never wedge an innocent session).
 

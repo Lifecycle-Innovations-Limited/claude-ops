@@ -1,9 +1,8 @@
-# CRSProxy Account Policy — Example Template (NO PII)
+# cliproxy Account Policy — Example Template (NO PII)
 #
 # This is a PII-free example of the declarative account policy file.
-# The real file is deployed to /opt/crsproxy/account_policy.yaml on the hub
-# only — it contains real account emails and must NEVER be committed to the
-# public repo.
+# The real file is deployed to the cliproxy hub only — it contains real account
+# emails and must NEVER be committed to the public repo.
 #
 # The auto_reauth.py monitor reads this file to reconcile actual auth files
 # against the declared target state:
@@ -18,9 +17,16 @@
 #   priority:              lower = higher priority for routing (1=highest)
 #   profile_id:            Browser Use Cloud profile UUID (optional, for profile-based reauth)
 #   reauth_method:         profile | email | x_oauth | none
-#   requires_2fa:          true if the account needs 2FA (human checkpoint required)
+#   two_factor:            optional 2FA integration/checkpoint config
 #   x_username:            X/Twitter username (optional, for x_oauth method only)
 #   max_consecutive_failures: auto-disable after this many consecutive failures
+#
+# 2FA methods:
+#   none                 no 2FA expected
+#   onepassword_totp     fetch TOTP seed/URI from local 1Password Connect, send only the short-lived code to Browser Use
+#   passkey_checkpoint   keep Browser Use session alive for human passkey/WebAuthn approval
+#   sms_checkpoint       ask the operator for an SMS code and have Browser Use enter it
+#   push_checkpoint      ask the operator to approve a push prompt, then resume
 
 accounts:
   # --- Claude OAuth accounts ---
@@ -29,7 +35,8 @@ accounts:
     enabled: true
     priority: 5
     reauth_method: email
-    requires_2fa: false
+    two_factor:
+      method: none
     max_consecutive_failures: 3
 
   - provider: claude
@@ -38,7 +45,11 @@ accounts:
     priority: 3
     profile_id: "<BU_PROFILE_UUID>"
     reauth_method: profile
-    requires_2fa: false
+    two_factor:
+      method: onepassword_totp
+      op_vault_id: "<OP_VAULT_UUID>"
+      op_item_id: "<OP_ITEM_UUID>"
+      op_field: "one-time password"
     max_consecutive_failures: 3
 
   - provider: claude
@@ -46,7 +57,8 @@ accounts:
     enabled: true
     priority: 5
     reauth_method: email
-    requires_2fa: false
+    two_factor:
+      method: sms_checkpoint
     max_consecutive_failures: 3
 
   # --- Codex (OpenAI) OAuth accounts ---
@@ -55,7 +67,8 @@ accounts:
     enabled: true
     priority: 7
     reauth_method: email
-    requires_2fa: false
+    two_factor:
+      method: none
     max_consecutive_failures: 3
 
   - provider: codex
@@ -63,7 +76,8 @@ accounts:
     enabled: true
     priority: 7
     reauth_method: email
-    requires_2fa: false
+    two_factor:
+      method: passkey_checkpoint
     max_consecutive_failures: 3
 
   # --- xAI/Grok OAuth accounts ---
@@ -72,7 +86,8 @@ accounts:
     enabled: true
     priority: 8
     reauth_method: email
-    requires_2fa: false
+    two_factor:
+      method: none
     max_consecutive_failures: 3
 
   - provider: xai
@@ -81,7 +96,8 @@ accounts:
     reason: "different tier, no SuperGrok"
     priority: 8
     reauth_method: email
-    requires_2fa: false
+    two_factor:
+      method: none
     max_consecutive_failures: 3
 
   - provider: xai
@@ -89,7 +105,8 @@ accounts:
     enabled: true
     priority: 8
     reauth_method: x_oauth
-    requires_2fa: true
+    two_factor:
+      method: push_checkpoint
     x_username: "example_user"
     max_consecutive_failures: 3
 
@@ -100,5 +117,6 @@ accounts:
     reason: "Anthropic models should route via Claude OAuth, not Google Vertex AI"
     priority: 9
     reauth_method: none
-    requires_2fa: false
+    two_factor:
+      method: none
     max_consecutive_failures: 3

@@ -18,7 +18,7 @@ _ROT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
 if [[ "${CLAUDE_CONFIRM_METERED_BEDROCK:-}" != "1" ]]; then
   echo "⛔ Bedrock fallback blocked."
-  echo "   Bedrock is metered AWS usage. OAuth/CRS is the preferred route."
+  echo "   Bedrock is metered AWS usage. OAuth via CLIProxyAPI/legacy relay is the preferred route."
   echo "   Reason OAuth is unavailable: ${CLAUDE_BEDROCK_REASON:-not supplied}"
   echo "   To confirm for this short session: CLAUDE_CONFIRM_METERED_BEDROCK=1 source ~/.claude/scripts/account-rotation/use-bedrock.sh"
   return 2 2>/dev/null || exit 2

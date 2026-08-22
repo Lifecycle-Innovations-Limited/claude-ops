@@ -54,7 +54,7 @@ Each account entry:
 | `dashlaneTokenPath`           | no       | If you store the token in Dashlane: `dl://<vault-name>/password`.                                                       |
 | `extraUsageEnabled`           | no       | Set to `true` ONLY if the account has paid overage on. Triggers safety margin.                                          |
 | `capacityMultiplier`          | no       | Override per-account threshold (default 1.0 = standard Max 20x quota).                                                  |
-| `crsAccountName`              | no       | CRS admin account name this vault entry maps to (for crs-token-feed / crs-priority).                                    |
+| `crsAccountName`              | no       | Legacy compatibility field for the cliproxy/CLIProxyAPI account name this vault entry maps to (for `crs-token-feed` / `crs-priority` compatibility). |
 
 ## Signed staged Claude enrollment
 
@@ -200,18 +200,18 @@ the coordination key. Trust files must remain outside all mutable auth roots.
 autoloop no longer dispatch authentication. They return a staged-enrollment
 handoff instead; no environment flag restores the old write path.
 
-## CRS pool (optional)
+## cliproxy / CLIProxyAPI pool (optional)
 
-CRS = multi-account **load balancing / rate-limit spreading** via a relay pool.
+cliproxy / CLIProxyAPI relay mode provides multi-account **load balancing / rate-limit spreading** via a relay pool.
 Useful mainly when many accounts share one API endpoint and you hit 429s.
-Skip CRS for single/few-account keychain rotation.
+Skip the relay for single/few-account keychain rotation.
 
-If you run [claude-relay-service](https://github.com/anthropics/claude-relay-service) (CRS) alongside the rotator:
+If you run a cliproxy relay alongside the rotator:
 
-1. Add `crsAccountName` on each account (must match the account `name` in the CRS admin UI), or supply `crs.nameByVaultKey` in `config.json`.
-2. Set `crs.enabled`, `crs.baseUrl`, and install the priority daemon: `scripts/install-crs-priority-agent.sh`.
-3. On Linux/EC2, `crs-token-feed.mjs` propagates vault tokens into CRS (systemd timer when installed).
-4. On macOS clients that reach a **remote** CRS via SSH, install the tunnel (requires `CRS_TUNNEL_SSH_HOST`):
+1. Add `crsAccountName` on each account (legacy field name; must match the cliproxy account `name`), or supply `crs.nameByVaultKey` in `config.json`.
+2. Set `crs.enabled`, `crs.baseUrl`, and install the priority daemon: `scripts/install-crs-priority-agent.sh` (legacy filename retained).
+3. On Linux/EC2, `crs-token-feed.mjs` propagates vault tokens into the cliproxy pool (systemd timer when installed).
+4. On macOS clients that reach a **remote** relay via SSH, install the tunnel (legacy env `CRS_TUNNEL_SSH_HOST` is still accepted):
 
    ```bash
    CRS_TUNNEL_SSH_HOST=your-remote-host bash scripts/install-crs-fra-tunnel.sh
@@ -219,8 +219,8 @@ If you run [claude-relay-service](https://github.com/anthropics/claude-relay-ser
 
    Point Claude Code at `http://127.0.0.1:3005/api` (or your `CRS_TUNNEL_LOCAL_PORT`).
 
-See `config.example.json` → `crs` block for all tunables (`policy`, `fileVaultPath`, `containerName`, thresholds).
-Configure via `/ops:rotate-setup` (detects CRS; never required).
+See `config.example.json` → `crs` block for all tunables (`policy`, `fileVaultPath`, `containerName`, thresholds; legacy key names retained for compatibility).
+Configure via `/ops:rotate-setup` (detects cliproxy / CLIProxyAPI; never required).
 
 ## Keychain layout
 
@@ -236,7 +236,7 @@ Override the keychain account name via `CLAUDE_ROTATOR_KEYCHAIN_ACCOUNT` if you 
 | File                        | Purpose                                                                   |
 | --------------------------- | ------------------------------------------------------------------------- |
 | `rotate.mjs`                | Main rotation logic. CLI: `--status`, `--utilization`, `--to`, `--setup`. |
-| `rotate-magic.mjs`          | Thin entry → `rotate.mjs --magic-link` (standalone reauth, no CRS).       |
+| `rotate-magic.mjs`          | Thin entry → `rotate.mjs --magic-link` (standalone reauth, no cliproxy required). |
 | `captcha-cascade.mjs`       | Post-verify captcha orchestration (token + visual + desktop-act + VNC).   |
 | `captcha-helper.mjs`        | Pluggable token captcha solvers + residential wait.                       |
 | `visual-captcha-solver.mjs` | Vision tile clicks, desktop-act, VNC layers.                              |

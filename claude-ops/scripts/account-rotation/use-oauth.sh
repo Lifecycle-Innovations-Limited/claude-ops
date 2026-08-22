@@ -1,9 +1,9 @@
 #!/bin/bash
-# use-oauth.sh — exit Bedrock mode in this shell, restore CRS-backed OAuth defaults.
+# use-oauth.sh — exit Bedrock mode in this shell, restore CLIProxyAPI/legacy CRS-backed OAuth defaults.
 # Source me: `source ~/.claude/scripts/account-rotation/use-oauth.sh`
 #
 # Persists to ~/.claude/settings.json via claude-routing-state:
-# ANTHROPIC_BASE_URL points at CRS and CLAUDE_CODE_OAUTH_TOKEN is the CRS relay token.
+# ANTHROPIC_BASE_URL points at the relay and CLAUDE_CODE_OAUTH_TOKEN is the CLIProxyAPI-compatible relay token.
 
 unset CLAUDE_CODE_USE_BEDROCK
 unset AWS_BEDROCK_REGION
@@ -23,7 +23,7 @@ _ROT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 ACTIVE=$(python3 -c "import json; print(json.load(open('$HOME/.claude/scripts/account-rotation/state.json')).get('activeAccount',''))" 2>/dev/null)
 echo "✅ OAuth mode restored for this shell + persisted to settings.json"
 echo "   models       : (subscription catalog — no hardcoded IDs)"
-echo "   route        : CRS OAuth"
+echo "   route        : CLIProxyAPI/legacy relay OAuth"
 echo "   active account: ${ACTIVE:-(unknown)}"
 if [[ -f ~/.claude/.bedrock-fallback.json ]]; then
   echo "   ⚠  Bedrock sentinel still present — clearing"
