@@ -7,7 +7,7 @@ Use this when a claude-ops skill names a Claude Code primitive that Hermes does 
 | `AskUserQuestion` | Numbered options in chat, then wait. Telegram/gateway: two turns — full draft as its own message, then the Send / Edit / Skip card. Never put the draft only in a clipped preview. Max 4 options per card. |
 | `Workflow` | `delegate_task` for parallel read-only work. If that tool is missing, run the same scanners sequentially in the main session. |
 | `TeamCreate` / `Agent` teams | `delegate_task`. No Claude agent-team steering. |
-| `TaskCreate` / `TaskUpdate` / `TaskList` | Hermes Kanban, or skip. Do not require Paperclip. |
+| `TaskCreate` / `TaskUpdate` / `TaskList` | Hermes Kanban. If that is missing too, say tracking is unavailable and ask what to do instead. Never drop the item silently. Do not require Paperclip. |
 | `CronCreate` / `CronList` | `hermes cron`. |
 | `mcp__linear__*` | Linear CLI / GraphQL. Resolve the real tool names at runtime. |
 | `mcp__whatsapp__*` | Resolve the live server name (Rule 8). Hermes may also have native `whatsapp_*` plugin tools — same Rule 6 send gate. |
