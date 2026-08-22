@@ -9,6 +9,8 @@
 #   1. claude-ops/.claude-plugin/plugin.json       .version
 #   2. .claude-plugin/marketplace.json (repo root)  .plugins[name==ops].version   <- the marketplace registry
 #   3. package.json (auto-detected: claude-ops/ or repo root)   .version
+#   3b. claude-ops/hermes-plugin/plugin.yaml         version
+#   3c. installer/src/config.mjs DEFAULT_CONFIG.source.ref  vX.Y.Z
 #   4. claude-ops/CHANGELOG.md                       new "## [X.Y.Z] - DATE" section
 #                                                    (AI-written from the commit range — see --no-ai)
 #   5. docs counts/badges                            ops-sync-docs reconciles every skill/agent
@@ -100,12 +102,80 @@ raise SystemExit(result.returncode)
 PY
 }
 
+# GitHub REST call that survives a dead IP stack. Some networks route to
+# github.com over only one of IPv4/IPv6, so try the default first and retry
+# pinned to the other family before giving up.
+gh_api() {
+  local method="$1" path="$2" data="${3:-}"
+  local url="https://api.github.com/repos/${GH_REPO}${path}"
+  local token; token="$(gh auth token 2>/dev/null)" || return 1
+  [ -n "$token" ] || return 1
+  local args=(-fsS -m 30 -X "$method"
+    -H "Authorization: bearer $token"
+    -H "Accept: application/vnd.github+json")
+  [ -n "$data" ] && args+=(-d "$data")
+  curl "${args[@]}" "$url" 2>/dev/null && return 0
+  curl -6 "${args[@]}" "$url" 2>/dev/null && return 0
+  curl -4 "${args[@]}" "$url" 2>/dev/null
+}
+
+# Fallback for `git push origin vX.Y.Z` when the git transport cannot reach
+# GitHub (ssh.github.com timing out on a half-dead route). Creates the annotated
+# tag object, then the ref, over the REST API.
+push_tag_via_api() {
+  local ver="$1" commit="$2" tag_sha
+  tag_sha="$(gh_api POST /git/tags "$(jq -n --arg t "v$ver" --arg m "claude-ops v$ver" --arg o "$commit" \
+    '{tag:$t, message:$m, object:$o, type:"commit"}')" | jq -r '.sha // empty')" || return 1
+  [ -n "$tag_sha" ] || return 1
+  gh_api POST /git/refs "$(jq -n --arg r "refs/tags/v$ver" --arg s "$tag_sha" \
+    '{ref:$r, sha:$s}')" | jq -e '.ref' >/dev/null
+}
+
+# The release PR's head SHA. `gh` speaks only to whichever IP family it picks,
+# so fall back to the REST helper, which retries pinned to the other one.
+pr_head_sha() {
+  local pr_ref="$1" timeout="$2" sha
+  sha="$(run_bounded "$timeout" gh pr view "$pr_ref" --repo "$GH_REPO" --json headRefOid --jq .headRefOid 2>/dev/null)" || sha=""
+  if [ -z "$sha" ]; then
+    sha="$(gh_api GET "/pulls/${pr_ref##*/}" | jq -r '.head.sha // empty')" || sha=""
+  fi
+  [ -n "$sha" ] || return 1
+  printf '%s\n' "$sha"
+}
+
+# CI checks in gh's {name,bucket} shape. The REST fallback merges check-runs with
+# classic commit statuses, so a pending legacy status still blocks the merge.
+pr_checks_json() {
+  local pr_ref="$1" sha="$2" timeout="$3" out rc runs statuses
+  set +e
+  out="$(run_bounded "$timeout" gh pr checks "$pr_ref" --repo "$GH_REPO" --json name,state,bucket 2>/dev/null)"
+  rc=$?
+  set -e
+  if { [ "$rc" -eq 0 ] || [ "$rc" -eq 8 ]; } && jq -e 'type == "array"' <<<"$out" >/dev/null 2>&1; then
+    printf '%s\n' "$out"
+    return 0
+  fi
+  runs="$(gh_api GET "/commits/$sha/check-runs?per_page=100")" || return 1
+  statuses="$(gh_api GET "/commits/$sha/status")" || statuses='{"statuses":[]}'
+  jq -n --argjson r "$runs" --argjson s "$statuses" '
+    [ $r.check_runs[]? | {name, bucket:
+        (if .status != "completed" then "pending"
+         elif .conclusion == "success" then "pass"
+         elif .conclusion == "skipped" or .conclusion == "neutral" then "skipping"
+         elif .conclusion == "cancelled" then "cancel"
+         else "fail" end)} ]
+    + [ $s.statuses[]? | {name: .context, bucket:
+        (if .state == "pending" then "pending"
+         elif .state == "success" then "pass"
+         else "fail" end)} ]'
+}
+
 wait_for_release_ci() {
   local pr_url="$1"
   local expected_head="$2"
   local stable_head_file="$3"
   local deadline=$((SECONDS + 900))
-  local checks_json current_head confirmed_head required_seen all_finished request_timeout rc sleep_for
+  local checks_json current_head confirmed_head required_seen all_finished request_timeout sleep_for
   local required_checks='["lint-and-check (ubuntu-latest)","lint-and-check (ubuntu-24.04)","pii-gate","test-suite (ubuntu-latest)","test-suite (ubuntu-24.04)","CodeQL"]'
 
   # Give GitHub Actions time to register the release branch checks.
@@ -114,26 +184,28 @@ wait_for_release_ci() {
     request_timeout=$((deadline - SECONDS))
     ((request_timeout > 25)) && request_timeout=25
 
-    current_head="$(run_bounded "$request_timeout" gh pr view "$pr_url" --repo "$GH_REPO" --json headRefOid --jq .headRefOid)" || {
-      echo "ops-release: unable to query release PR head" >&2
-      return 1
-    }
+    # A query that fails is transient until the deadline says otherwise. Failing
+    # the whole run on one bad request strands an open release PR behind a merge
+    # that never happens.
+    if ! current_head="$(pr_head_sha "$pr_url" "$request_timeout")"; then
+      echo "ops-release: PR head query failed — retrying until the CI deadline" >&2
+      sleep_for=$((deadline - SECONDS))
+      ((sleep_for > 30)) && sleep_for=30
+      ((sleep_for > 0)) && sleep "$sleep_for"
+      continue
+    fi
     if [ "$current_head" != "$expected_head" ]; then
       echo "ops-release: release PR head changed; restarting CI wait for $current_head"
       expected_head="$current_head"
     fi
 
-    set +e
-    checks_json="$(run_bounded "$request_timeout" gh pr checks "$pr_url" --repo "$GH_REPO" --json name,state,bucket)"
-    rc=$?
-    set -e
-    if [ "$rc" -ne 0 ] && [ "$rc" -ne 8 ]; then
-      echo "ops-release: unable to query CI checks" >&2
-      return 1
-    fi
-    if ! jq -e 'type == "array"' <<<"$checks_json" >/dev/null; then
-      echo "ops-release: CI query returned invalid data" >&2
-      return 1
+    if ! checks_json="$(pr_checks_json "$pr_url" "$expected_head" "$request_timeout")" \
+       || ! jq -e 'type == "array"' <<<"$checks_json" >/dev/null 2>&1; then
+      echo "ops-release: CI check query failed — retrying until the CI deadline" >&2
+      sleep_for=$((deadline - SECONDS))
+      ((sleep_for > 30)) && sleep_for=30
+      ((sleep_for > 0)) && sleep "$sleep_for"
+      continue
     fi
     if jq -e 'any(.[]; .bucket == "fail" or .bucket == "cancel")' <<<"$checks_json" >/dev/null; then
       echo "ops-release: CI failed; release PR left open: $pr_url" >&2
@@ -143,10 +215,13 @@ wait_for_release_ci() {
     required_seen="$(jq -r --argjson required "$required_checks" '(($required - [.[].name]) | length) == 0' <<<"$checks_json")"
     all_finished="$(jq -r 'length > 0 and all(.[]; .bucket == "pass" or .bucket == "skipping")' <<<"$checks_json")"
     if [ "$required_seen" = true ] && [ "$all_finished" = true ]; then
-      confirmed_head="$(run_bounded "$request_timeout" gh pr view "$pr_url" --repo "$GH_REPO" --json headRefOid --jq .headRefOid)" || {
-        echo "ops-release: unable to recheck release PR head" >&2
-        return 1
-      }
+      if ! confirmed_head="$(pr_head_sha "$pr_url" "$request_timeout")"; then
+        echo "ops-release: PR head recheck failed — retrying until the CI deadline" >&2
+        sleep_for=$((deadline - SECONDS))
+        ((sleep_for > 30)) && sleep_for=30
+        ((sleep_for > 0)) && sleep "$sleep_for"
+        continue
+      fi
       if [ "$confirmed_head" = "$expected_head" ]; then
         printf '%s\n' "$expected_head" >"$stable_head_file"
         return 0
@@ -227,6 +302,8 @@ if [ "$dry_run" -eq 1 ]; then
   echo "    $PLUGIN_JSON"
   echo "    $MARKETPLACE_JSON (.plugins[name==$PLUGIN_NAME].version)"
   [ -n "$PACKAGE_REL" ] && echo "    $REPO_ROOT/$PACKAGE_REL"
+  echo "    $PLUGIN_DIR/hermes-plugin/plugin.yaml"
+  echo "    $REPO_ROOT/installer/src/config.mjs (DEFAULT_CONFIG.source.ref)"
   echo "--- would prepend to $CHANGELOG:"
   printf '%s\n' "$changelog_section"
   echo "--- would: branch release/v$NEW -> PR to main$([ "$do_merge" -eq 1 ] && echo ' -> wait for CI -> squash-merge')$([ "$do_tag" -eq 1 ] && echo " -> tag v$NEW")"
@@ -259,6 +336,45 @@ if [ -n "$PACKAGE_REL" ] && [ -f "$WT/$PACKAGE_REL" ]; then
   jq empty "$WT/$PACKAGE_REL" || { echo "ops-release: produced invalid $PACKAGE_REL" >&2; exit 1; }
 fi
 
+wHERMES="$WT/claude-ops/hermes-plugin/plugin.yaml"
+if [ -f "$wHERMES" ]; then
+  python3 - "$wHERMES" "$NEW" <<'PY'
+from pathlib import Path
+import re, sys
+p, ver = Path(sys.argv[1]), sys.argv[2]
+text = p.read_text()
+new, n = re.subn(r'^version:\s*.*$', f'version: "{ver}"', text, count=1, flags=re.M)
+if n != 1:
+    raise SystemExit(f"ops-release: failed to bump hermes-plugin/plugin.yaml version")
+p.write_text(new)
+PY
+fi
+wINST="$WT/installer/src/config.mjs"
+if [ -f "$wINST" ]; then
+  python3 - "$wINST" "$NEW" <<'PY'
+from pathlib import Path
+import re, sys
+p, ver = Path(sys.argv[1]), sys.argv[2]
+text = p.read_text()
+new, n = re.subn(r'ref:\s*"v[0-9]+\.[0-9]+\.[0-9]+"', f'ref: "v{ver}"', text, count=1)
+if n != 1:
+    raise SystemExit(f"ops-release: failed to bump installer DEFAULT_CONFIG.source.ref")
+p.write_text(new)
+PY
+fi
+wINST_README="$WT/installer/README.md"
+if [ -f "$wINST_README" ]; then
+  python3 - "$wINST_README" "$NEW" <<'PY'
+from pathlib import Path
+import re, sys
+p, ver = Path(sys.argv[1]), sys.argv[2]
+text = p.read_text()
+new, n = re.subn(r'(ref:\s*)v[0-9]+\.[0-9]+\.[0-9]+', rf'\1v{ver}', text, count=1)
+if n == 1:
+    p.write_text(new)
+PY
+fi
+
 # 4. prepend CHANGELOG section before the first existing "## [" entry.
 # The section is multi-line; pass it via a temp file (awk -v mangles embedded
 # newlines → "awk: newline in string"), reading it with getline at the insert.
@@ -271,7 +387,7 @@ awk -v secfile="$sec_file" '
 ' "$wCL" >"$wCL.tmp" && mv "$wCL.tmp" "$wCL"
 rm -f "$sec_file"
 
-echo "ops-release: bumped plugin.json + marketplace.json$([ -n "$PACKAGE_REL" ] && echo " + $PACKAGE_REL") + CHANGELOG.md"
+echo "ops-release: bumped plugin.json + marketplace.json$([ -n "$PACKAGE_REL" ] && echo " + $PACKAGE_REL") + hermes-plugin/plugin.yaml + installer ref + CHANGELOG.md"
 
 # 5. reconcile documentation counts/badges to the (now-bumped) tree — deterministic.
 if [ "$do_docs" -eq 1 ] && [ -x "$WT/claude-ops/bin/ops-sync-docs" ]; then
@@ -301,10 +417,29 @@ if [ "$do_merge" -eq 1 ]; then
   gh pr merge "$PR_URL" --repo "$GH_REPO" --squash --delete-branch --match-head-commit "$stable_head"
   echo "ops-release: merged v$NEW to main"
   if [ "$do_tag" -eq 1 ]; then
-    git -C "$REPO_ROOT" fetch origin --quiet
-    git -C "$REPO_ROOT" tag -a "v$NEW" -m "claude-ops v$NEW" origin/main 2>/dev/null || git -C "$REPO_ROOT" tag "v$NEW" origin/main
-    git -C "$REPO_ROOT" push origin "v$NEW"
-    echo "ops-release: tagged v$NEW"
+    # The merge is already done, so a tag failure must never abort the run and
+    # leave main released but untagged. Resolve the commit from the API when the
+    # git transport is unreachable, and push the tag the same way if needed.
+    tag_commit=""
+    if git -C "$REPO_ROOT" fetch origin --quiet 2>/dev/null; then
+      tag_commit="$(git -C "$REPO_ROOT" rev-parse origin/main)"
+    else
+      echo "ops-release: git fetch failed — resolving main over the API"
+      tag_commit="$(gh_api GET /commits/main | jq -r '.sha // empty')"
+    fi
+    if [ -z "$tag_commit" ]; then
+      echo "ops-release: could not resolve main's commit — v$NEW is NOT tagged. Tag it manually." >&2
+    else
+      git -C "$REPO_ROOT" tag -a "v$NEW" -m "claude-ops v$NEW" "$tag_commit" 2>/dev/null \
+        || git -C "$REPO_ROOT" tag "v$NEW" "$tag_commit" 2>/dev/null || true
+      if git -C "$REPO_ROOT" push origin "v$NEW" 2>/dev/null; then
+        echo "ops-release: tagged v$NEW"
+      elif push_tag_via_api "$NEW" "$tag_commit"; then
+        echo "ops-release: tagged v$NEW (pushed over the API — git transport unreachable)"
+      else
+        echo "ops-release: TAG PUSH FAILED — v$NEW is merged to main but NOT tagged. Create refs/tags/v$NEW manually." >&2
+      fi
+    fi
   fi
 
   # ----- wiki: keep the GitHub wiki's counts/version in lockstep + log the release -----
@@ -320,8 +455,8 @@ if [ "$do_merge" -eq 1 ]; then
           -e "s/[0-9]+ skills, [0-9]+ agents/${SK} skills, ${AG} agents/g" \
           -e "s/([Aa]ll )[0-9]+ skills/\1${SK} skills/g" \
           -e "s/([Aa]ll )[0-9]+ agents/\1${AG} agents/g" \
-          -e "s#(badge/skills-)[0-9]+-#\1${SK}-#g" \
-          -e "s#(badge/agents-)[0-9]+-#\1${AG}-#g" \
+          -e "s#(badge/skills-)[0-9]+(%2B|\+)?-#\1${SK}-#g" \
+          -e "s#(badge/agents-)[0-9]+(%2B|\+)?-#\1${AG}-#g" \
           -e "s#(badge/version-)[0-9][0-9.]*-#\1${NEW}-#g" "$page" 2>/dev/null || true
         rm -f "$page.bak"
       done

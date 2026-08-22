@@ -58,8 +58,10 @@ apply() {  # apply <file> <sed -e expr ...>
 }
 
 COUNT_E=(-e "s/[0-9]+ skills, [0-9]+ agents/${S} skills, ${A} agents/g")
-BADGE_E=(-e "s#(badge/skills-)[0-9]+-#\1${S}-#g"
-         -e "s#(badge/agents-)[0-9]+-#\1${A}-#g"
+# The count may carry a URL-encoded "+" suffix (skills-33%2B-success). Match it
+# so those badges are not skipped, and drop it — the count is exact, not a floor.
+BADGE_E=(-e "s#(badge/skills-)[0-9]+(%2B|\+)?-#\1${S}-#g"
+         -e "s#(badge/agents-)[0-9]+(%2B|\+)?-#\1${A}-#g"
          -e "s#(badge/version-)[0-9][0-9.]*-#\1${V}-#g")
 HEAD_E=(-e "s/([Aa]ll )[0-9]+ skills/\1${S} skills/g"
         -e "s/([Aa]ll )[0-9]+ agents/\1${A} agents/g")
@@ -75,7 +77,7 @@ apply "$PLUGIN_DIR/README.md" "${COUNT_E[@]}" "${BADGE_E[@]}" "${HEAD_E[@]}"
 # Reference docs + index — badges + headlines.
 apply "$PLUGIN_DIR/docs/skills-reference.md" "${BADGE_E[@]}" "${HEAD_E[@]}"
 apply "$PLUGIN_DIR/docs/agents-reference.md" "${BADGE_E[@]}" "${HEAD_E[@]}"
-apply "$PLUGIN_DIR/docs/INDEX.md"            "${HEAD_E[@]}"
+apply "$PLUGIN_DIR/docs/INDEX.md"            "${BADGE_E[@]}" "${HEAD_E[@]}"
 
 [[ "$changed" -eq 0 ]] && echo "  already in sync — nothing to do"
 echo "ops-sync-docs: done (${changed} file(s) $([[ $DRY -eq 1 ]] && echo 'would change' || echo 'changed'))"

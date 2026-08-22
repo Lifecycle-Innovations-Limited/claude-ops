@@ -40,6 +40,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync, spawn } from 'child_process';
 import { cachedUtilizationMax } from './rotation-policy.mjs';
+import { isLegacyRelayToken, scrubLegacyRelayEnv } from './route-state.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LEASES_PATH = join(__dirname, 'session-leases.json');
@@ -258,31 +259,24 @@ export function pickAccountForSession(sessionId, config, state) {
   return coolest ? accountKey(coolest) : null;
 }
 
-const CRS_BASE_RE = /127\.0\.0\.1:(3000|3002|3005|8091|18091)|100\.87\.53\.96:8091|:(3000|3002|3005|8091|18091)\/api/;
-
 /**
- * ~/.claude/settings.json's env block carries a fleet-wide, autofixer-enforced
- * ANTHROPIC_BASE_URL/ANTHROPIC_API_BASE pinned to CRS (see crs-sync-update.sh
- * "checking ANTHROPIC_BASE_URL parity" autofix — it reverts removal of these
- * keys within minutes, by design). Claude Code re-applies settings.json's env
- * block internally at startup regardless of what env the spawning process set,
- * which silently re-points a direct-OAuth account-rotation session at CRS and
- * breaks it (CRS rejects the raw sk-ant-oat01 token: 401 Invalid API key format).
+ * Claude Code re-applies settings.json's env block internally at startup,
+ * whatever env the spawning process set. If that block pins ANTHROPIC_BASE_URL
+ * or an API key, a per-session OAuth token gets overridden and the session
+ * fails to authenticate.
  *
- * Rather than fight the autofixer on the shared settings.json, generate a
- * settings copy with just those two keys stripped and point THIS spawn at it
- * via --settings, only when we've actually assigned a direct (non-cr_) OAuth
- * token. CRS-paired sessions are untouched and keep using the real settings.json.
+ * Rather than mutate the shared settings.json, generate a settings copy with
+ * those keys blanked and point THIS spawn at it via --settings, only when we
+ * have actually assigned a direct OAuth token.
  */
 function buildDirectOauthSettingsOverride() {
   try {
     // --settings loads ADDITIONAL settings merged on top of the base
     // settings.json (confirmed empirically: "--help" says "load additional
     // settings from", and omitting a key does NOT unset the base file's
-    // value — deleting keys here is a no-op). To actually neutralize the
-    // CRS pin for this one spawn, explicitly override both keys to "".
-    // Also blank CRS API-key fields. settings.json env injects
-    // ANTHROPIC_API_KEY=cr_* fleet-wide; if we only clear BASE_URL, Claude Code
+    // value — deleting keys here is a no-op). To actually neutralize a pinned
+    // base URL for this one spawn, explicitly override the keys to "".
+    // The API-key fields go too: if we only clear BASE_URL, Claude Code
     // dual-auths (OAuth + external API key) and surfaces "Invalid API key".
     const overrideDoc = {
       env: {
@@ -290,7 +284,6 @@ function buildDirectOauthSettingsOverride() {
         ANTHROPIC_API_BASE: '',
         ANTHROPIC_API_KEY: '',
         ANTHROPIC_AUTH_TOKEN: '',
-        CRS_API_KEY: '',
       },
     };
     if (!existsSync(DIRECT_OAUTH_SETTINGS_DIR)) {
@@ -306,45 +299,15 @@ function buildDirectOauthSettingsOverride() {
   }
 }
 
-export function enforceDirectOrCrsPairing(childEnv) {
-  const crsBase =
-    CRS_BASE_RE.test(String(childEnv.ANTHROPIC_BASE_URL || '')) ||
-    CRS_BASE_RE.test(String(childEnv.ANTHROPIC_API_BASE || ''));
-
-  // CRS pairing: keep API_KEY=cr_ (and mirror onto AUTH/OAUTH). Do not strip API_KEY.
-  if (String(childEnv.ANTHROPIC_API_KEY || '').startsWith('cr_')) {
-    if (
-      !String(childEnv.CLAUDE_CODE_OAUTH_TOKEN || '').startsWith('cr_') &&
-      !String(childEnv.ANTHROPIC_AUTH_TOKEN || '').startsWith('cr_')
-    ) {
-      childEnv.CLAUDE_CODE_OAUTH_TOKEN = childEnv.ANTHROPIC_API_KEY;
-      childEnv.ANTHROPIC_AUTH_TOKEN = childEnv.ANTHROPIC_API_KEY;
-    }
-  }
-
-  const crToken = String(
-    childEnv.CLAUDE_CODE_OAUTH_TOKEN || childEnv.ANTHROPIC_AUTH_TOKEN || childEnv.ANTHROPIC_API_KEY || '',
-  ).startsWith('cr_');
-  if (crsBase && crToken) {
-    const crKey = String(
-      childEnv.ANTHROPIC_API_KEY || childEnv.ANTHROPIC_AUTH_TOKEN || childEnv.CLAUDE_CODE_OAUTH_TOKEN || '',
-    );
-    if (crKey.startsWith('cr_')) {
-      childEnv.ANTHROPIC_API_KEY = crKey;
-      childEnv.ANTHROPIC_AUTH_TOKEN = crKey;
-      childEnv.CLAUDE_CODE_OAUTH_TOKEN = crKey;
-    }
-  }
-  if (crsBase && !crToken) {
-    delete childEnv.ANTHROPIC_BASE_URL;
-    delete childEnv.ANTHROPIC_API_BASE;
-    delete childEnv.ANTHROPIC_AUTH_TOKEN;
-  }
-  if (!crsBase && crToken) {
-    delete childEnv.CLAUDE_CODE_OAUTH_TOKEN;
-    delete childEnv.ANTHROPIC_AUTH_TOKEN;
-    delete childEnv.ANTHROPIC_API_KEY;
-  }
+/**
+ * Every spawned session authenticates directly, with its own OAuth token.
+ *
+ * The removed relay backend paired a loopback base URL with a `cr_` bearer
+ * token. Both are stripped here so a leftover pair on an upgraded machine can
+ * never re-point a child at a relay that is no longer managed.
+ */
+export function enforceDirectAuth(childEnv) {
+  scrubLegacyRelayEnv(childEnv);
   return childEnv;
 }
 
@@ -403,22 +366,14 @@ export function getTokenForSession(sessionId, config) {
 export function spawnWithAccount(args, config, state, opts = {}) {
   const sessionId = opts.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const childEnv = { ...(opts.env || process.env) };
-  enforceDirectOrCrsPairing(childEnv);
+  enforceDirectAuth(childEnv);
 
   let assignedKey = null;
 
-  const crsBaseConfigured =
-    CRS_BASE_RE.test(String(childEnv.ANTHROPIC_BASE_URL || '')) ||
-    CRS_BASE_RE.test(String(childEnv.ANTHROPIC_API_BASE || ''));
-  const crsTokenConfigured = String(childEnv.CLAUDE_CODE_OAUTH_TOKEN || childEnv.ANTHROPIC_AUTH_TOKEN || '').startsWith(
-    'cr_',
-  );
-
-  // CRS-route the bg daemon and any explicitly CRS-configured process: skip
-  // per-account OAuth injection so children keep settings.json's cr_ relay key
-  // -> CRS instead of replacing it with a direct OAuth account token.
+  // The bg daemon keeps whatever credential it was started with; every other
+  // spawn gets a per-account OAuth token.
   const isDaemon = Array.isArray(args) && args.includes('daemon');
-  const usePerAccountRouting = !(isDaemon || (crsBaseConfigured && crsTokenConfigured));
+  const usePerAccountRouting = !isDaemon;
 
   if (usePerAccountRouting) {
     const key = pickAccountForSession(sessionId, config, state);
@@ -441,10 +396,9 @@ export function spawnWithAccount(args, config, state, opts = {}) {
     }
   }
 
-  enforceDirectOrCrsPairing(childEnv);
+  enforceDirectAuth(childEnv);
 
-  const directOauthToken =
-    childEnv.CLAUDE_CODE_OAUTH_TOKEN && !String(childEnv.CLAUDE_CODE_OAUTH_TOKEN).startsWith('cr_');
+  const directOauthToken = childEnv.CLAUDE_CODE_OAUTH_TOKEN && !isLegacyRelayToken(childEnv.CLAUDE_CODE_OAUTH_TOKEN);
   let spawnArgs = args;
   if (directOauthToken && !childEnv.ANTHROPIC_BASE_URL && !args.includes('--settings')) {
     const overridePath = buildDirectOauthSettingsOverride();

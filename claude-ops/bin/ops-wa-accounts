@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+# ops-wa-accounts — resolve every whatsmeow bridge on this box to an account.
+#
+# Why this exists: more than one bridge can run at once, one per phone number.
+# They differ only by port and store directory, and the lowest port answers
+# first. Code that hardcodes 127.0.0.1:8080 therefore reads, archives and sends
+# on whichever account happens to sit on the low port — which is how a full
+# inbox run once replied to everyone from the wrong number.
+#
+# Nothing here guesses. An account is usable by an agent only when policy says
+# so, and when exactly one such account exists. Two candidates with no policy is
+# an error, not a coin flip.
+#
+# Usage:
+#   ops-wa-accounts                 # JSON: every discovered account
+#   ops-wa-accounts --list          # human-readable table
+#   ops-wa-accounts --default       # "<port>\t<store>\t<phone>" for the one
+#                                   # agent-enabled account; exit 3 if unclear
+#   ops-wa-accounts --port          # just the port of that account
+#   ops-wa-accounts --store         # just the messages.db of that account
+#
+# Policy file (never committed — it holds real numbers):
+#   ~/.config/whatsapp/agent-policy.json
+#     {
+#       "accounts": {
+#         "<e164>": { "agent_enabled": false, "note": "managed by someone else" }
+#       },
+#       "default_agent_enabled": true
+#     }
+#
+# Exit codes: 0 ok · 3 no single agent-enabled account · 4 nothing discovered.
+
+import argparse
+import glob
+import json
+import os
+import re
+import sqlite3
+import sys
+
+HOME = os.path.expanduser("~")
+BRIDGE_GLOB = os.environ.get(
+    "WHATSAPP_BRIDGE_GLOB", os.path.join(HOME, ".local/share/whatsapp-mcp/whatsapp-bridge*")
+)
+POLICY_PATH = os.environ.get(
+    "WHATSAPP_AGENT_POLICY", os.path.join(HOME, ".config/whatsapp/agent-policy.json")
+)
+DEFAULT_BRIDGE_PORT = 8080  # whatsmeow's own default when WA_PORT is unset
+
+# `export WA_PHONE="${WA_PHONE:-31612345678}"` and friends.
+_DEFAULT_RE = r'{0}=(?:"|\')?\$\{{{0}:-([^}}]*)\}}'
+# A plain `WA_PORT=8082` line in an env file.
+_PLAIN_RE = r'^\s*(?:export\s+)?{0}=(?:"|\')?([^"\'\s#]+)'
+
+
+def _scan(text, var):
+    """Value of var from a shell snippet: ${VAR:-default} first, then VAR=x."""
+    m = re.search(_DEFAULT_RE.format(var), text)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    m = re.search(_PLAIN_RE.format(var), text, re.M)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    return None
+
+
+def _sourced_env_files(text):
+    """Env files the launcher sources, so their values can override defaults."""
+    out = []
+    for m in re.finditer(r'^\s*(?:\.|source)\s+"?([^"\s]+)"?', text, re.M):
+        p = m.group(1).replace("$HOME", HOME).replace("${HOME}", HOME)
+        out.append(os.path.expanduser(p))
+    return out
+
+
+def _paired_jid(store_dir):
+    """The number actually paired in the store — ground truth, unlike config."""
+    db = os.path.join(store_dir, "whatsapp.db")
+    if not os.path.exists(db):
+        return None
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=2.0)
+        try:
+            row = con.execute("SELECT jid FROM whatsmeow_device LIMIT 1").fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    if not row or not row[0]:
+        return None
+    return str(row[0]).split(":", 1)[0].split("@", 1)[0] or None
+
+
+def _load_policy():
+    try:
+        with open(POLICY_PATH) as fh:
+            pol = json.load(fh)
+    except (OSError, ValueError):
+        return {}, None, "no policy file at %s" % POLICY_PATH
+    accounts = pol.get("accounts") or {}
+    return accounts, pol.get("default_agent_enabled"), None
+
+
+def discover():
+    accounts, policy_default, policy_note = _load_policy()
+    notes = []
+    if policy_note:
+        notes.append(policy_note)
+
+    found = []
+    for d in sorted(glob.glob(BRIDGE_GLOB)):
+        if not os.path.isdir(d):
+            continue
+        store = os.path.join(d, "store")
+        msgdb = os.path.join(store, "messages.db")
+        if not os.path.exists(msgdb):
+            continue  # a bridge dir without a store is not a usable account
+
+        launcher = os.path.join(d, "run-bridge.sh")
+        text = ""
+        if os.path.exists(launcher):
+            try:
+                with open(launcher) as fh:
+                    text = fh.read()
+            except OSError:
+                text = ""
+
+        phone_cfg = _scan(text, "WA_PHONE")
+        port = _scan(text, "WA_PORT")
+        # An env file sourced with `set -a` overrides the launcher defaults.
+        for env_path in _sourced_env_files(text):
+            if not os.path.exists(env_path):
+                continue
+            try:
+                with open(env_path) as fh:
+                    env_text = fh.read()
+            except OSError:
+                continue
+            phone_cfg = _scan(env_text, "WA_PHONE") or phone_cfg
+            port = _scan(env_text, "WA_PORT") or port
+
+        try:
+            port = int(port) if port else DEFAULT_BRIDGE_PORT
+        except ValueError:
+            port = DEFAULT_BRIDGE_PORT
+
+        phone_paired = _paired_jid(store)
+        phone = phone_paired or phone_cfg
+
+        rule = accounts.get(phone) if phone else None
+        if rule is None and phone_cfg and phone_cfg != phone:
+            rule = accounts.get(phone_cfg)
+        if rule is None:
+            enabled = policy_default
+            reason = "policy default" if enabled is not None else "no policy entry"
+        else:
+            enabled = rule.get("agent_enabled", True)
+            reason = rule.get("note") or "policy entry"
+
+        acct = {
+            "label": os.path.basename(d),
+            "dir": d,
+            "store": msgdb,
+            "port": port,
+            "api": "http://127.0.0.1:%d" % port,
+            "phone": phone,
+            "phone_configured": phone_cfg,
+            "phone_paired": phone_paired,
+            "agent_enabled": bool(enabled) if enabled is not None else None,
+            "policy_reason": reason,
+        }
+        # The launcher claiming one number while the store is paired to another
+        # is exactly the trap this tool exists to catch.
+        if phone_cfg and phone_paired and phone_cfg != phone_paired:
+            acct["mismatch"] = (
+                "run-bridge.sh says %s but the store is paired to %s — trust the store"
+                % (phone_cfg, phone_paired)
+            )
+            notes.append("%s: %s" % (acct["label"], acct["mismatch"]))
+        found.append(acct)
+
+    enabled = [a for a in found if a["agent_enabled"] is True]
+    unknown = [a for a in found if a["agent_enabled"] is None]
+
+    default = None
+    if len(enabled) == 1:
+        default = enabled[0]
+    elif len(enabled) > 1:
+        notes.append(
+            "%d accounts are agent-enabled (%s) — pass --wa-store/--bridge-port explicitly"
+            % (len(enabled), ", ".join(a["phone"] or a["label"] for a in enabled))
+        )
+    elif len(found) == 1 and unknown:
+        # One bridge and no policy: unambiguous, so using it is not a guess.
+        default = found[0]
+        notes.append("single bridge and no policy — using %s" % found[0]["label"])
+    elif unknown:
+        notes.append(
+            "%d accounts have no policy entry — write %s before agents touch them"
+            % (len(unknown), POLICY_PATH)
+        )
+
+    return {"accounts": found, "default": default, "notes": notes, "policy": POLICY_PATH}
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True, description=__doc__)
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--list", action="store_true", help="human-readable table")
+    g.add_argument("--default", action="store_true", help="port, store and phone of the agent account")
+    g.add_argument("--port", action="store_true", help="port of the agent account")
+    g.add_argument("--store", action="store_true", help="messages.db of the agent account")
+    args = ap.parse_args()
+
+    res = discover()
+
+    if args.list:
+        if not res["accounts"]:
+            print("no whatsmeow bridge found under %s" % BRIDGE_GLOB, file=sys.stderr)
+            return 4
+        print("%-24s %-6s %-16s %-8s %s" % ("BRIDGE", "PORT", "PHONE", "AGENT", "STORE"))
+        for a in res["accounts"]:
+            state = {True: "yes", False: "NO", None: "unset"}[a["agent_enabled"]]
+            print("%-24s %-6d %-16s %-8s %s" % (a["label"], a["port"], a["phone"] or "?", state, a["store"]))
+        for n in res["notes"]:
+            print("note: %s" % n, file=sys.stderr)
+        return 0
+
+    if args.default or args.port or args.store:
+        d = res["default"]
+        if not d:
+            for n in res["notes"]:
+                print("ops-wa-accounts: %s" % n, file=sys.stderr)
+            print(
+                "ops-wa-accounts: no single agent-enabled account — refusing to guess",
+                file=sys.stderr,
+            )
+            return 3 if res["accounts"] else 4
+        if args.port:
+            print(d["port"])
+        elif args.store:
+            print(d["store"])
+        else:
+            print("%d\t%s\t%s" % (d["port"], d["store"], d["phone"] or ""))
+        return 0
+
+    json.dump(res, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

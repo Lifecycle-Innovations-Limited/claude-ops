@@ -1,6 +1,6 @@
 ---
 name: ops-integrate
-description: Add any SaaS API as a first-class integration. Provide the service name — ops-integrate discovers auth patterns, tests connectivity, and registers the API in your partner registry so it's available to other skills.
+description: "This skill should be used when the user asks to \"add an API\", \"integrate SaaS\", or \"/ops:ops-integrate\". Add any SaaS API as a first-class integration. Provide the service name — ops-integrate discovers auth patterns, tests connectivity, and registers the API in your partner registry so it's available to other skills."
 argument-hint: '<service-name> [--url <base-url>] [--auth bearer|api-key|basic|oauth2] [--list]'
 allowed-tools:
   - Bash
@@ -26,6 +26,8 @@ Parse `$ARGUMENTS`:
 - Otherwise → run **Onboarding flow** with the service name as first positional argument
 
 # OPS ► INTEGRATE
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## List registered integrations (`--list`)
 

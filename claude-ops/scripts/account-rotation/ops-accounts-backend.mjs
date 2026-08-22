@@ -1,13 +1,17 @@
 /**
- * ops-accounts-backend.mjs — resolve legacy CRS-compatible relay vs local seat-state backend.
+ * ops-accounts-backend.mjs — resolve the seat-state backend.
  *
  * Env / config:
- *   OPS_ACCOUNTS_BACKEND | crs.backend (legacy config key)
- *     local | seat-state | file  → local seat-state (no relay)
- *     crs                        → legacy CRS-compatible admin API only
- *     auto (default)             → try relay, fall back to local
+ *   OPS_ACCOUNTS_BACKEND | rotation.backend
+ *     local | seat-state | file  → local seat-state file
+ *     cliproxy | proxy           → CLIProxyAPI seat inventory
+ *     auto (default)             → try CLIProxyAPI, fall back to local
  *
- * Dual-write (relay path → seat-state.json) is on by default unless
+ * The retired relay values (crs, relay, claude-relay) resolve to 'local' so an
+ * install that still exports one keeps reading its own seat state instead of
+ * failing on an unknown backend.
+ *
+ * Dual-write into seat-state.json is on by default unless
  * OPS_ACCOUNTS_DUAL_WRITE=0.
  */
 export function resolveAccountsBackend({ env = process.env, cfgBackend } = {}) {
@@ -18,8 +22,11 @@ export function resolveAccountsBackend({ env = process.env, cfgBackend } = {}) {
   if (raw === 'local' || raw === 'seat-state' || raw === 'file' || raw === 'seatstate') {
     return 'local';
   }
+  if (raw === 'cliproxy' || raw === 'cliproxyapi' || raw === 'proxy') {
+    return 'cliproxy';
+  }
   if (raw === 'crs' || raw === 'relay' || raw === 'claude-relay') {
-    return 'crs';
+    return 'local';
   }
   return 'auto';
 }
@@ -29,7 +36,7 @@ export function dualWriteEnabled({ env = process.env } = {}) {
 }
 
 /**
- * Mirror CRS (or local) decisions into seat-state shape.
+ * Mirror backend decisions into seat-state shape.
  * @param {Array<{ email: string, schedulable: boolean, util5h?: number|null, util7d?: number|null, lastError?: string|null }>} seats
  * @param {object} opts
  */

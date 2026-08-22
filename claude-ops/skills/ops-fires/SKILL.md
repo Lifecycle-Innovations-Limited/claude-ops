@@ -1,6 +1,6 @@
 ---
 name: ops-fires
-description: Production incidents dashboard. Reads ECS health, Sentry errors, CI failures. Offers to dispatch fix agents for active fires.
+description: "This skill should be used when the user asks to \"production fires\", \"what is on fire\", or \"/ops:ops-fires\". Production incidents dashboard. Reads ECS health, Sentry errors, CI failures. Offers to dispatch fix agents for active fires."
 argument-hint: '[project-alias|all]'
 allowed-tools:
   - Bash
@@ -24,6 +24,8 @@ maxTurns: 30
 ---
 
 # OPS ► FIRES
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Runtime Context
 

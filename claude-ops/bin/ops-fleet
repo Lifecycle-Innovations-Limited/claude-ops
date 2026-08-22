@@ -1,363 +1,331 @@
 #!/usr/bin/env bash
-# fleet-status.sh — polished fleet dashboard.
-# Unifies everything `claude agents --json`, `claude daemon status`, the daemon roster.json,
-# each session's job state.json, the rotation daemon state, and CLIProxyAPI-compatible relay expose — per session:
-#   token type (oauth/api/bedrock/cliproxy) · relay routing · agent type · effort/model · respawn-attempts
-#   · repo · uptime · last-update · last-write · leased account · live detail · last error.
-# Read-only. No mutation.  Usage: fleet-status.sh [--all] [--watch [secs]] [--no-color]
-set -uo pipefail
+# ops-fleet — read-only Claude session + CLIProxyAPI gateway/pool dashboard.
+# Sources: claude agents/daemon, client-visible gateway/model API, optional
+# sanitized server-side pool snapshot. Never mutates state.
+set -euo pipefail
 
-CLAUDE_BIN="${CLAUDE_BIN:-/usr/local/bin/claude}"
-CRS_PORT="${CRS_PORT:-3005}"          # CLIProxyAPI-compatible relay listen port (legacy env; 3000 = legacy)
-AR="$HOME/.claude/scripts/account-rotation"
-PROJ="$HOME/.claude/projects/-Users-samrenders"
-EC2_CACHE="${FLEET_EC2_CACHE:-$HOME/.claude/state/fleet-ec2.json}"
-EC2_FETCH="$HOME/.claude/scripts/fleet-ec2-fetch.sh"
-EC2_TTL="${FLEET_EC2_TTL:-45}"        # cache freshness window (s)
-FLEET_EC2="${FLEET_EC2:-1}"           # include EC2 sessions (set --no-ec2 to disable)
-ALL=""; WATCH=""; WSECS="3"; ONCE=""
-for a in "$@"; do
-  case "$a" in
-    --all) ALL="--all";;
-    --watch|--tui) WATCH=1;;
-    --once|--snapshot|--no-watch) ONCE=1;;
-    --no-ec2) FLEET_EC2="";;
-    --ec2) FLEET_EC2=1;;
-    --no-color) export NO_COLOR=1;;
-    [0-9]*) WSECS="$a";;
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+NO_COLOR="${NO_COLOR:-}"
+ALL=0
+MODELS=0
+NO_POOL=0
+LEGACY=0
+WATCH=0
+ONCE=0
+W="${FLEET_W:-104}"
+
+for arg in "$@"; do
+  case "$arg" in
+    --once|--snapshot) ONCE=1 ;;
+    --tui|--watch) WATCH=1 ;;
+    --all) ALL=1 ;;
+    --models) MODELS=1 ;;
+    --no-pool|--no-remote|--no-ec2) NO_POOL=1 ;;
+    --legacy-accounts) LEGACY=1 ;;
+    --no-color) NO_COLOR=1 ;;
   esac
 done
 
-# Default to the live TUI when attached to a real terminal; fall back to a
-# one-shot snapshot otherwise (e.g. stdout captured by the /fleet slash command,
-# pipes, cron). --once forces snapshot; --tui/--watch forces the loop.
-if [ -z "$WATCH" ] && [ -z "$ONCE" ]; then
-  if [ -t 1 ] && [ -t 0 ]; then WATCH=1; fi
-fi
-[ -n "$ONCE" ] && WATCH=""
+# Captured stdout (slash command / cron) → one-shot; real TTY → TUI unless --once.
+if [[ ! -t 1 ]] || (( ONCE )); then WATCH=0; fi
+if (( WATCH )); then :; else ONCE=1; fi
 
-# Adaptive width: fit the live terminal, clamped to a sane band.
-COLS="$(tput cols 2>/dev/null || echo 104)"
-[ "$COLS" -lt 90 ] 2>/dev/null && COLS=90
-[ "$COLS" -gt 140 ] 2>/dev/null && COLS=140
-export FLEET_W="$COLS"
+# Prefer prefs + env for non-public host wiring
+PREFS="${PREFS_PATH:-$HOME/.claude/plugins/data/ops-ops-marketplace/preferences.json}"
+if [[ -f "$PREFS" ]]; then
+  eval "$(python3 - "$PREFS" <<'PY'
+import json,sys,shlex
+p=sys.argv[1]
+try:d=json.load(open(p))
+except Exception:d={}
+fleet=d.get('fleet') or {}
+for k,env in [
+ ('cliproxy_base_url','CLIPROXYAPI_BASE_URL'),
+ ('cliproxy_ssh_host','CLIPROXYAPI_SSH_HOST'),
+ ('cliproxy_ssh_user','CLIPROXYAPI_SSH_USER'),
+]:
+  v=fleet.get(k) or d.get(env) or ''
+  if v and env not in __import__('os').environ:
+    print(f'export {env}={shlex.quote(str(v))}')
+PY
+)"
+fi
+
+CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude 2>/dev/null || true)}"
+BASE="${CLIPROXYAPI_BASE_URL:-}"
+if [[ -z "$BASE" && -f "$HOME/.claude/settings.json" ]]; then
+  BASE="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print((d.get("env") or {}).get("ANTHROPIC_BASE_URL",""))' "$HOME/.claude/settings.json" 2>/dev/null || true)"
+fi
+BASE="${BASE:-http://127.0.0.1:8317}"
+API_KEY="${CLIPROXY_API_KEY:-${CLIPROXYAPI_API_KEY:-}}"
+if [[ -z "$API_KEY" && -f "$HOME/.env" ]]; then
+  API_KEY="$(python3 - "$HOME/.env" <<'PY'
+from pathlib import Path
+import sys
+for line in Path(sys.argv[1]).read_text(errors="ignore").splitlines():
+    if line.startswith("CLIPROXY_API_KEY=") or line.startswith("CLIPROXYAPI_API_KEY="):
+        print(line.split("=",1)[1].strip().strip("\"\'")); break
+PY
+)"
+fi
+if [[ -z "${BASE:-}" || "$BASE" == "http://127.0.0.1:8317" ]]; then
+  if [[ -f "$HOME/.env" ]]; then
+    _b="$(python3 - "$HOME/.env" <<'PY'
+from pathlib import Path
+import sys
+for line in Path(sys.argv[1]).read_text(errors="ignore").splitlines():
+    if line.startswith("CLIPROXYAPI_BASE_URL=") or line.startswith("CLIPROXY_BASE_URL="):
+        print(line.split("=",1)[1].strip().strip("\"\'")); break
+PY
+)"
+    [[ -n "$_b" ]] && BASE="$_b"
+  fi
+fi
+
+C(){ if [[ -n "$NO_COLOR" ]]; then printf ''; else printf '\033[%sm' "$1"; fi; }
+B="$(C 1)"; D="$(C 2)"; G="$(C 32)"; Y="$(C 33)"; R="$(C 0)"; RED="$(C 31)"
 
 render() {
-  # Large blobs (fleet JSON, CRS docker logs) go through temp files, NOT env vars:
-  # exporting a multi-MB CRS log (529-storm) blows the exec arg/env limit → E2BIG
-  # ("Argument list too long"). --tail also bounds the log defensively.
-  local TMP; TMP="$(mktemp -d "${TMPDIR:-/tmp}/fleet.XXXXXX")"
-  $CLAUDE_BIN agents --json $ALL >"$TMP/fleet.json" 2>/dev/null
-  [ -s "$TMP/fleet.json" ] || printf '[]' >"$TMP/fleet.json"
-  DAEMON_STATUS="$($CLAUDE_BIN daemon status 2>/dev/null)"
-  CRS_HEALTH="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:${CRS_PORT}/health" 2>/dev/null)"
-  docker logs crs-claude-relay-1 --since 6m --tail 4000 >"$TMP/crs.log" 2>&1 || true
-  ROTOR_PID="$(pgrep -f 'account-rotation/daemon.mjs' | head -1)"
-  # EC2 fleet: read the cached snapshot instantly; refresh it in the BACKGROUND
-  # when stale so the TUI never blocks on the ~40s SSM round-trip. The fetcher
-  # self-guards (claude_once) against stacking concurrent refreshes.
-  if [ -n "$FLEET_EC2" ]; then
-    local ec2_age=999999
-    if [ -f "$EC2_CACHE" ]; then
-      ec2_age=$(( $(date +%s) - $(stat -c %Y "$EC2_CACHE" 2>/dev/null || stat -f %m "$EC2_CACHE" 2>/dev/null || echo 0) ))
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  # Claude sessions
+  if [[ -n "$CLAUDE_BIN" && -x "$CLAUDE_BIN" ]]; then
+    if (( ALL )); then
+      "$CLAUDE_BIN" agents --json --all >"$tmp/agents.json" 2>/dev/null || echo '[]' >"$tmp/agents.json"
+    else
+      "$CLAUDE_BIN" agents --json >"$tmp/agents.json" 2>/dev/null || echo '[]' >"$tmp/agents.json"
     fi
-    if [ "$ec2_age" -gt "$EC2_TTL" ] && [ -x "$EC2_FETCH" ]; then
-      ( "$EC2_FETCH" >/dev/null 2>&1 & ) >/dev/null 2>&1
-    fi
-    export EC2_CACHE_FILE="$EC2_CACHE" FLEET_EC2
+    "$CLAUDE_BIN" daemon status >"$tmp/daemon.txt" 2>/dev/null || true
   else
-    export EC2_CACHE_FILE="" FLEET_EC2
+    echo '[]' >"$tmp/agents.json"
   fi
-  export FLEET_FILE="$TMP/fleet.json" CRS_LOG_FILE="$TMP/crs.log" DAEMON_STATUS CRS_HEALTH ROTOR_PID AR PROJ CRS_PORT
-  python3 - <<'PY'
-import json, os, re, subprocess, time, glob
 
-HOME=os.path.expanduser("~"); AR=os.environ["AR"]; PROJ=os.environ["PROJ"]; NOW=time.time()
-NC = bool(os.environ.get("NO_COLOR"))
-def c(code): return "" if NC else code
-R=c("\033[0m");B=c("\033[1m");D=c("\033[2m")
-GRN=c("\033[32m");YEL=c("\033[33m");MAG=c("\033[35m");CYN=c("\033[36m");RED=c("\033[31m");BLU=c("\033[34m")
-TOK={"oauth":GRN,"api":YEL,"bedrock":MAG,"crs":CYN}
+  # Gateway root + models
+  local auth_h=()
+  if [[ -n "$API_KEY" ]]; then auth_h=(-H "Authorization: Bearer ${API_KEY}"); fi
+  local t0 t1 ms
+  t0=$(python3 -c 'import time;print(int(time.time()*1000))')
+  curl -sS -m 5 -o "$tmp/root.json" -w '%{http_code}' "${auth_h[@]}" -A 'ops-fleet/1' "$BASE/" >"$tmp/root.code" 2>/dev/null || echo 000 >"$tmp/root.code"
+  t1=$(python3 -c 'import time;print(int(time.time()*1000))')
+  ms=$((t1-t0))
+  curl -sS -m 8 -o "$tmp/models.json" -w '%{http_code}' "${auth_h[@]}" -A 'ops-fleet/1' "${BASE%/}/v1/models" >"$tmp/models.code" 2>/dev/null || echo 000 >"$tmp/models.code"
 
-def sh(x):
-    try: return subprocess.run(x,shell=True,capture_output=True,text=True,timeout=15).stdout
-    except Exception: return ""
+  # Pool
+  if (( NO_POOL )); then
+    printf '{"ok":false,"error":"pool collection disabled"}' >"$tmp/pool.json"
+  elif [[ -n "${CLIPROXYAPI_POOL_COMMAND:-}" ]]; then
+    if [[ -x "$CLIPROXYAPI_POOL_COMMAND" && "$CLIPROXYAPI_POOL_COMMAND" != *" "* ]]; then
+      "$CLIPROXYAPI_POOL_COMMAND" >"$tmp/pool.json" 2>/dev/null || printf '{"ok":false,"error":"pool command failed"}' >"$tmp/pool.json"
+    else
+      printf '{"ok":false,"error":"pool command must be an executable path"}' >"$tmp/pool.json"
+    fi
+  elif [[ -n "${CLIPROXYAPI_SSH_HOST:-}" ]]; then
+    CLIPROXYAPI_SSH_HOST="$CLIPROXYAPI_SSH_HOST" CLIPROXYAPI_SSH_USER="${CLIPROXYAPI_SSH_USER:-}" \
+      "$ROOT/bin/ops-fleet-pool-snapshot" >"$tmp/pool.json" 2>/dev/null || printf '{"ok":false,"error":"pool snapshot unavailable"}' >"$tmp/pool.json"
+  else
+    printf '{"ok":false,"error":"pool host not configured"}' >"$tmp/pool.json"
+  fi
 
-def _readfile(env_key):
-    try: return open(os.environ.get(env_key,""),encoding="utf-8",errors="replace").read()
-    except Exception: return ""
-try: fleet=json.loads(_readfile("FLEET_FILE") or "[]")
-except Exception: fleet=[]
-dstat=os.environ.get("DAEMON_STATUS","")
-crs_health=os.environ.get("CRS_HEALTH",""); crs_log=_readfile("CRS_LOG_FILE")
-rotor_pid=os.environ.get("ROTOR_PID","").strip()
+  MODELS_FLAG="$MODELS" NO_COLOR="$NO_COLOR" W="$W" BASE="$BASE" CLAUDE_BIN="$CLAUDE_BIN" \
+  python3 - "$tmp" <<'PY'
+import json, os, re, pathlib, time, datetime, sys
+tmp=pathlib.Path(sys.argv[1])
+NO=bool(os.environ.get('NO_COLOR'))
+def C(c): return '' if NO else f'\033[{c}m'
+B,D,G,Y,R,RED=C(1),C(2),C(32),C(33),C(0),C(31)
+W=int(os.environ.get('W') or 104)
+BASE=os.environ.get('BASE','')
+CLAUDE_BIN=os.environ.get('CLAUDE_BIN','')
+MODELS=os.environ.get('MODELS_FLAG')=='1'
+now=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-# ---- EC2 (FRA) fleet snapshot (cached file; refreshed in background by the wrapper) ----
-ec2_on=bool(os.environ.get("FLEET_EC2"))
-ec2={}; ec2_info={}; ec2_age=None; ec2_fa=None; ec2_ok=False; ec2_err=""; ec2_daemon=""; ec2_n=0; ec2_inst=""
-if ec2_on:
-    try:
-        ec2=json.load(open(os.environ.get("EC2_CACHE_FILE","") or "/nonexistent"))
-        ec2_ok=bool(ec2.get("ok")); ec2_err=ec2.get("error",""); ec2_daemon=ec2.get("daemon","")
-        ec2_inst=ec2.get("instance","")
-        ec2_info=(ec2.get("info") or {})
-        fa=ec2.get("fetchedAt"); ec2_fa=fa
-        if fa: ec2_age=NOW-fa
-        agents_ec2=ec2.get("agents") or []; ec2_n=len(agents_ec2)
-        for a in agents_ec2:
-            a=dict(a); a["_host"]="fra"; fleet.append(a)
-    except FileNotFoundError:
-        ec2_err="no cache yet"
-    except Exception as e:
-        ec2_err=str(e)
-for a in fleet:
-    a.setdefault("_host","mac")
+def load(p, default=None):
+  try: return json.loads(pathlib.Path(p).read_text())
+  except Exception: return default
 
-# ---- CRS allowlist + log signals ----
-crs_allow=set(); crs_allow_all=False; crs_allow_except=[]
-try:
-    _al=json.load(open(f"{AR}/crs-allowlist.json"))
-    crs_allow=set(_al.get("sessions",[]) or [])
-    crs_allow_all=bool(_al.get("all"))
-    crs_allow_except=list(_al.get("except",[]) or [])
-except Exception: pass
-# allowlist label: ALL (minus except[]) when all:true, else count of explicit sessions.
-if crs_allow_all:
-    crs_allow_label=f"ALL-{len(crs_allow_except)}" if crs_allow_except else "ALL"
+agents=load(tmp/'agents.json', [])
+if isinstance(agents, dict):
+  agents=agents.get('agents') or agents.get('sessions') or agents.get('data') or []
+if not isinstance(agents, list): agents=[]
+
+daemon_txt=(tmp/'daemon.txt').read_text(errors='ignore') if (tmp/'daemon.txt').exists() else ''
+# parse daemon loosely
+pid=re.search(r'pid[:\s]+(\d+)', daemon_txt, re.I)
+ver=re.search(r'v?(\d+\.\d+\.\d+)', daemon_txt)
+up=re.search(r'up(?:time)?[:\s]+(\S+)', daemon_txt, re.I)
+sock='✓' if re.search(r'sock(?:et)?[:\s]+.*(ok|yes|✓|true|listen)', daemon_txt, re.I) or 'listening' in daemon_txt.lower() else ('✓' if agents else '✗')
+if not pid:
+  # fallback: claude process
+  import subprocess
+  try:
+    out=subprocess.check_output("pgrep -f '/claude($| )' | head -1", shell=True, text=True).strip()
+    pid_v=out or '?'
+  except Exception: pid_v='?'
+else: pid_v=pid.group(1)
+ver_v=ver.group(1) if ver else '?'
+up_v=up.group(1) if up else '?'
+
+root_code=(tmp/'root.code').read_text().strip() if (tmp/'root.code').exists() else '000'
+models_code=(tmp/'models.code').read_text().strip() if (tmp/'models.code').exists() else '000'
+models=load(tmp/'models.json', {})
+model_ids=[]
+if isinstance(models, dict):
+  data=models.get('data') or []
+  if isinstance(data, list):
+    model_ids=[m.get('id') for m in data if isinstance(m,dict) and m.get('id')]
+model_counts={}
+for mid in model_ids:
+  s=str(mid).lower()
+  if 'claude' in s or 'anthropic' in s: owner='anthropic'
+  elif 'grok' in s or s.startswith('xai') or 'x-ai' in s: owner='xai'
+  elif 'gemini' in s or 'antigravity' in s: owner='antigravity'
+  elif 'kimi' in s or s.startswith('k3'): owner='kimi'
+  elif s.startswith('gpt') or s.startswith('o1') or s.startswith('o3') or s.startswith('o4') or 'codex' in s: owner='openai'
+  else: owner='other'
+  model_counts[owner]=model_counts.get(owner,0)+1
+
+pool=load(tmp/'pool.json', {"ok":False})
+pool_ok=bool(pool.get('ok')); service=pool.get('service') or {}; routing=pool.get('routing') or {}; traffic=pool.get('traffic') or {}; providers=pool.get('providers') or {}
+active=sum(int(v.get('active') or 0) for v in providers.values() if isinstance(v,dict))
+disabled=sum(int(v.get('disabled') or 0) for v in providers.values() if isinstance(v,dict))
+backups=sum(int(v.get('backup') or 0) for v in providers.values() if isinstance(v,dict))
+cooling=sum(int(v.get('cooling') or 0) for v in providers.values() if isinstance(v,dict))
+serving=sum(int(v.get('serving', v.get('active') or 0) or 0) for v in providers.values() if isinstance(v,dict))
+_recov=[v.get('next_recovery_in_s') for v in providers.values() if isinstance(v,dict) and v.get('next_recovery_in_s') is not None]
+soonest=min(_recov) if _recov else None
+def _dur(s):
+  s=int(s)
+  if s<90: return f'{s}s'
+  if s<5400: return f'{s//60}m'
+  if s<172800: return f'{s//3600}h'
+  return f'{s//86400}d'
+pool_age='?'
+if pool.get('fetched_at'):
+  try: pool_age="%ss" % max(0,int(time.time())-int(pool["fetched_at"]))
+  except Exception: pool_age='?'
+
+# sessions summary
+states={'working':0,'waiting':0,'idle':0,'blocked':0,'done':0,'other':0}
+rows=[]
+for a in agents:
+  if not isinstance(a,dict): continue
+  st=str(a.get('status') or a.get('state') or a.get('phase') or 'idle').lower()
+  if 'work' in st or st=='running' or st=='active': key='working'
+  elif 'wait' in st or 'pending' in st: key='waiting'
+  elif 'block' in st or 'error' in st or 'fail' in st: key='blocked'
+  elif 'done' in st or 'complete' in st: key='done'
+  elif 'idle' in st: key='idle'
+  else: key='other'
+  states[key]=states.get(key,0)+1
+  name=a.get('name') or a.get('title') or a.get('id') or '?'
+  sid=str(a.get('id') or a.get('session_id') or '')[:8]
+  route='proxy' if 'proxy' in str(a.get('base_url') or a.get('provider') or BASE).lower() or '8317' in str(a.get('base_url') or '') else 'direct'
+  focus=str(a.get('focus') or a.get('cwd') or a.get('project') or '')[:18]
+  pid_s=a.get('pid') or '?'
+  up_s=a.get('uptime') or a.get('up') or ''
+  mark={'working':'●','waiting':'◐','idle':'○','blocked':'✗','done':'·'}.get(key,'·')
+  rows.append((mark,key,sid,str(name)[:28],route,st[:8],focus,pid_s,up_s))
+
+# header
+host=BASE.replace('https://','').replace('http://','')
+gw_ok = root_code in ('200','401','403') or models_code in ('200','401','403')
+gw_mark = f'{G}✓{R}' if gw_ok else f'{RED}✗{R}'
+auth_note='auth required' if models_code in ('401','403') else (f'{len(model_ids)} models' if models_code=='200' else f'HTTP {models_code}')
+# latency from models or root — approximate via file mtime not available; leave blank if unknown
+# we stored only one timing; re-read not possible. skip precise ms if not available.
+print(f'{B}╔ FLEET DASHBOARD {"═"*(max(0,W-22))} {now} ╗{R}')
+print(f' {B}CLAUDE{R}   bin {pathlib.Path(CLAUDE_BIN).name if CLAUDE_BIN else "?"} · pid {pid_v} · v{ver_v} · up {up_v} · sock {sock} · sessions {len(agents)}')
+print(f' {B}GATEWAY{R}  {gw_mark} remote {host} · root HTTP {root_code} · models {auth_note}')
+if pool_ok:
+  service_mark=f'{G}✓{R}' if service.get('active') else f'{Y}◐{R}'
+  cool_s=f' · {Y}{cooling} cooling{R}' + (f' (next {_dur(soonest)})' if soonest is not None else '') if cooling else ''
+  cap_mark=G if serving else RED
+  print(f' {B}POOL{R}     {service_mark} {cap_mark}{serving}/{active} serving{R}{cool_s} · {disabled} disabled · {backups} backup · evidence {pool_age}')
+  _cap=routing.get('max_retry_credentials')
+  _capw='' if (isinstance(_cap,int) and _cap>0) else f' {Y}(uncapped){R}'
+  print(f' {B}ROUTING{R}  {routing.get("strategy","?")} · retry {routing.get("request_retry","?")} / {routing.get("max_retry_interval_s","?")}s · credential-walk cap {_cap if _cap else "0"}{_capw} · cooling {"off" if routing.get("cooling_disabled") else "on"}')
+  reqs=int(traffic.get('requests') or 0); errs=int(traffic.get('errors') or 0)
+  status=traffic.get('status') or {}
+  r429=int(status.get('429') or 0); r5=sum(int(status.get(str(c)) or 0) for c in range(500,600))
+  rate=f'{(100.0*errs/reqs):.1f}%' if reqs else '0%'
+  p50=traffic.get('p50_ms'); p95=traffic.get('p95_ms')
+  p50s=f'{p50/1000:.1f}s' if isinstance(p50,(int,float)) else '?'
+  p95s=f'{p95/1000:.1f}s' if isinstance(p95,(int,float)) else '?'
+  print(f' {B}TRAFFIC{R}  {reqs} inference req/10m · errors {errs} ({rate}) · 429:{r429} · 5xx:{r5} · p50 {p50s} · p95 {p95s}')
 else:
-    crs_allow_label=str(len(crs_allow))
-# Tighten 429/529 matching to genuine HTTP status occurrences, not bare-number substrings.
-_STATUS=r'(?:"status"\s*:\s*|status[=:]\s*|[\s\[(]|\bHTTP/\d(?:\.\d)?\s+)'
-crs_429=len(re.findall(_STATUS+r'429\b',crs_log,re.I))
-crs_529=len(re.findall(_STATUS+r'529\b',crs_log,re.I))+len(re.findall(r'overloaded',crs_log,re.I))
-crs_done=len(re.findall(r'Using proxy|relay.*success|✅',crs_log,re.I))
-acct_hits={}
-for m in re.findall(r'(pool-[a-z-]+|canary-[a-z]+)',crs_log): acct_hits[m]=acct_hits.get(m,0)+1
+  print(f' {B}POOL{R}     {Y}◐{R} degraded · {pool.get("error") or "unavailable"}')
+print(f' routes oauth=direct Max  api=direct metered  bedrock=AWS  proxy=CLIProxyAPI')
+print(f'{B}╚{"═"*(W-2)}╝{R}')
+print(f'  {G}●{R} working {states.get("working",0)}   {Y}◐{R} waiting {states.get("waiting",0)}   ○ idle {states.get("idle",0)}   {RED}✗{R} blocked {states.get("blocked",0)}   ({len(agents)} total)')
+print(f'{D}{"─"*W}{R}')
+for mark,key,sid,name,route,st,focus,pid_s,up_s in rows[:40]:
+  print(f'{mark} {sid:<8} {name:<28} {route:<6} {st:<8} {focus:<18} pid {pid_s}   up {up_s}')
+if not rows:
+  print(f'{D}  (no sessions){R}')
+print(f'{D}{"─"*W}{R}')
+print(f'{B}PROVIDERS & MODELS{R}')
+# map credential provider names to catalog owners
+alias={'claude':'anthropic','codex':'openai','openai-compatible-kimi':'kimi','kimi':'kimi','xai':'xai','antigravity':'antigravity','anthropic':'anthropic','openai':'openai'}
+names=sorted(set(list(providers.keys())+list(model_counts.keys())))
+# merge openai-compatible-kimi into kimi display
+display_order=[]
+seen=set()
+for n in names:
+  label=n
+  if n.startswith('openai-compatible-'):
+    label=n.split('openai-compatible-',1)[-1]
+  key=alias.get(label,label)
+  if key in seen: continue
+  seen.add(key)
+  display_order.append((key,n))
+if not display_order and not model_counts:
+  print(f'  {D}No authenticated model or pool inventory{R}')
+for key, raw in display_order:
+  p=providers.get(raw,{}) if isinstance(providers.get(raw,{}),dict) else {}
+  # also try key itself
+  if not p: p=providers.get(key,{}) if isinstance(providers.get(key,{}),dict) else {}
+  if key=='kimi' and not p:
+    p=providers.get('openai-compatible-kimi',{}) if isinstance(providers.get('openai-compatible-kimi',{}),dict) else {}
+  if key in ('claude','anthropic'):
+    label='claude (anthropic)'
+    p=providers.get('claude', p) if isinstance(providers.get('claude',{}),dict) else p
+    cat=model_counts.get('anthropic',0)
+  elif key=='codex' or key=='openai':
+    label='codex (openai)'
+    cat=model_counts.get('openai',0)
+  elif key=='xai':
+    label='xai'
+    cat=model_counts.get('xai',0)
+  elif key=='antigravity':
+    label='antigravity'
+    cat=model_counts.get('antigravity',0)
+  elif key=='kimi':
+    label='kimi'
+    cat=model_counts.get('kimi',0)
+  else:
+    label=key
+    cat=model_counts.get(key,0)
+  _act=int(p.get('active') or 0); _cool=int(p.get('cooling') or 0)
+  _serv=int(p.get('serving', _act) or 0); _nr=p.get('next_recovery_in_s')
+  _c=f' · {Y}{_cool} cooling{R}' + (f' (next {_dur(_nr)})' if _nr is not None else '') if _cool else ''
+  _m=G if _serv else (Y if _act else D)
+  print(f'  {label:<20} {_m}{_serv}/{_act} serving{R}{_c} · {int(p.get("disabled") or 0)} disabled · {D}{int(p.get("backup") or 0)} backup{R} · catalog {cat}')
 
-# ---- rotation daemon account utilization ----
-accts={}
-try: accts=json.load(open(f"{AR}/state.json")).get("accounts",{})
-except Exception: pass
-
-# ---- daemon roster (per-worker: attempt, source, agent, isolation, cliVersion) ----
-roster={}
-try:
-    rj=json.load(open(f"{HOME}/.claude/daemon/roster.json"))
-    for w in (rj.get("workers") or {}).values():
-        roster[w.get("sessionId","")[:8]]=w
-except Exception: pass
-
-# ---- session->account leases (rotation daemon log) ----
-lease={}
-for ln in sh(f"grep -hoE 'Session [0-9a-f]{{8}}.*(Assigning to|assigned to|token for) [a-zA-Z@._-]+' {AR}/daemon-launchd.log 2>/dev/null | tail -400").splitlines():
-    m=re.search(r'Session ([0-9a-f]{8}).*(?:Assigning to|assigned to|token for) ([a-zA-Z@._-]+)',ln)
-    if m: lease[m.group(1)]=m.group(2)
-
-# ---- helpers ----
-_ps={}
-def ps_cmd(pid):
-    if not pid: return ""
-    if pid not in _ps: _ps[pid]=sh(f"ps -ww -p {pid} -o command= 2>/dev/null").strip()
-    return _ps[pid]
-_sf={}
-def settings_env(pid):
-    cmd=ps_cmd(pid); files=[]
-    m=re.search(r'--settings(?:=|\s+)(\S+)',cmd)
-    if m: files.append(os.path.expanduser(m.group(1)))
-    files.append(f"{HOME}/.claude/settings.json"); env={}
-    for f in files:
-        if f not in _sf:
-            try: _sf[f]=json.load(open(f))
-            except Exception: _sf[f]={}
-        for k,v in (_sf[f].get("env") or {}).items(): env.setdefault(k,v)
-    return env,cmd
-CRS_PORT=str(os.environ.get("CRS_PORT","") or "3005").strip()
-CRS_PORTS=tuple(p for p in (CRS_PORT,"3000") if p)  # primary port + legacy :3000 alias
-def token_mode(pid):
-    env,cmd=settings_env(pid); base=str(env.get("ANTHROPIC_BASE_URL","") or ""); tok=str(env.get("CLAUDE_CODE_OAUTH_TOKEN","") or "")
-    if any(f":{p}" in base for p in CRS_PORTS) or tok.startswith("cr_") or "crs-session-settings" in cmd: return "crs"
-    if str(env.get("CLAUDE_CODE_USE_BEDROCK",""))=="1" or "use-bedrock" in cmd: return "bedrock"
-    if str(env.get("ANTHROPIC_API_KEY","")).startswith("sk-ant-"): return "api"
-    return "oauth"
-def ec2_token_mode(w):
-    # EC2 has no local ps/settings to inspect — infer from the session's job state.
-    # Bedrock model ids look like us.anthropic.claude-…/anthropic.claude-…; Max-OAuth
-    # aliases look like opus/haiku/sonnet/opus[1m].
-    if w.get("bedrock"): return "bedrock"
-    m=str(w.get("model") or "").lower()
-    if "anthropic.claude" in m or "bedrock" in m: return "bedrock"
-    return "oauth"
-def job_state(sid):
-    try: return json.load(open(f"{HOME}/.claude/jobs/{sid}/state.json"))
-    except Exception: return {}
-def jsonl_mtime(full):
-    if not full: return None
-    cs=glob.glob(f"{PROJ}/{full}*.jsonl") or glob.glob(f"{HOME}/.claude/projects/*/{full}*.jsonl")
-    try: return max(os.path.getmtime(x) for x in cs) if cs else None
-    except Exception: return None
-def last_error(full):
-    if not full: return ""
-    cs=glob.glob(f"{PROJ}/{full}*.jsonl") or glob.glob(f"{HOME}/.claude/projects/*/{full}*.jsonl")
-    if not cs: return ""
-    tail=sh(f"tail -c 60000 {max(cs,key=os.path.getmtime)!r} 2>/dev/null"); last=""
-    for line in tail.splitlines():
-        for pat,lbl in [("Usage credits","credits"),("Invalid API key","bad-key"),("temporarily limiting","529"),("Overloaded","529"),(r'"status":429',"429"),(r'"status":401',"401"),("rate.?limit","429")]:
-            if re.search(pat,line,re.I): last=lbl
-    return last
-def flagval(flags,k):
-    for i,f in enumerate(flags):
-        if f==k and i+1<len(flags): return flags[i+1]
-        if str(f).startswith(k+"="): return str(f).split("=",1)[1]
-    return ""
-def ago(ts):
-    if not ts: return "—"
-    d=max(0,int(NOW-ts))
-    if d<60: return f"{d}s"
-    if d<3600: return f"{d//60}m"
-    if d<86400: return f"{d//3600}h{(d%3600)//60}m"
-    return f"{d//86400}d{(d%86400)//3600}h"
-def iso_ago(s):
-    if not s: return "—"
-    try:
-        import datetime; return ago(datetime.datetime.fromisoformat(s.replace("Z","+00:00")).timestamp())
-    except Exception: return "—"
-def repo_of(cwd):
-    if not cwd: return "—"
-    return "~" if cwd==HOME else os.path.basename(cwd.rstrip("/"))
-
-# ---- daemon status parse ----
-def dval(key):
-    m=re.search(rf'^{key}:\s*(.+)$',dstat,re.M); return m.group(1).strip() if m else "?"
-d_pid=dval("pid"); d_ver=dval("version"); d_up=dval("uptime")
-m=re.search(r'bg workers:\s*(\d+) running.*?(\d+) in roster',dstat); d_work=f"{m.group(1)}/{m.group(2)}" if m else "?"
-m=re.search(r'roster\.json:\s*updated (.+?ago)',dstat); d_roster=m.group(1) if m else "?"
-sock="✓" if "control.sock: reachable" in dstat else "✗"
-origin="service" if "service" in dstat.lower() and "transient" not in dstat.lower() else ("transient" if "transient" in dstat else "?")
-try: d_up=ago(NOW-int(re.sub(r's$','',d_up)))
-except Exception: pass
-
-try: W=int(os.environ.get("FLEET_W") or 104)
-except Exception: W=104
-def bar(s): print(s)
-hb=f"{GRN}✓{R}" if crs_health=="200" else f"{RED}✗{crs_health or 'down'}{R}"
-rh=f"{GRN}✓ {rotor_pid}{R}" if rotor_pid else f"{RED}✗ down{R}"
-title=" FLEET DASHBOARD "; clock=f" {time.strftime('%Y-%m-%d %H:%M:%S')} "
-fill=W-len(title)-len(clock)
-print(f"{B}╔{title}{'═'*fill}{clock}╗{R}")
-print(f" {B}DAEMON{R}  pid {d_pid} · v{d_ver} · up {d_up} · {origin} · sock {sock} · workers {d_work} · roster {d_roster}")
-print(f" {B}CLIPROXY{R} /health {hb} · legacy allowlist {crs_allow_label} · 6m: done~{crs_done} {YEL}429:{crs_429}{R} {RED}529:{crs_529}{R} · keychain-swap {rh}")
-if ec2_on:
-    if ec2_ok:
-        m=re.search(r'(\d+) running.*?(\d+) in roster',ec2_daemon)
-        dw=f"workers {m.group(1)}/{m.group(2)} · " if m else ""
-        agestr=ago(ec2_fa)
-        stale=f" {YEL}(stale){R}" if (ec2_age is not None and ec2_age>120) else ""
-        print(f" {B}EC2 FRA{R} {GRN}✓{R} {ec2_n} sess · {dw}cache {agestr} ago{stale} {D}· {ec2_inst}{R}")
-    else:
-        print(f" {B}EC2 FRA{R} {RED}✗ {ec2_err or 'no cache'}{R} {D}(refreshing in background…){R}")
-print(f" {D}token {GRN}oauth{D}=Max  {YEL}api{D}=metered  {MAG}bedrock{D}=AWS  {CYN}cliproxy{D}=relay→Max pool   relay: {CYN}▶{D}routing ●listed ·direct  {BLU}fra{D}=EC2 session{R}")
-print(f"{B}╚{'═'*(W)}╝{R}")
-
-# ---- group by state ----
-def skey(a):
-    o={"working":0,"busy":0,"waiting":1,"idle":2,"blocked":3}
-    return (o.get(a.get("state") or a.get("status"),4), a.get("name") or "z")
-counts={}
-for a in fleet:
-    k=a.get("state") or a.get("status") or "?"; counts[k]=counts.get(k,0)+1
-leg=f"  {GRN}●{R} working {counts.get('working',0)+counts.get('busy',0)}   {YEL}◐{R} waiting {counts.get('waiting',0)}   {D}○{R} idle {counts.get('idle',0)}   {RED}✗{R} blocked {counts.get('blocked',0)}   ({len(fleet)} total)"
-print(leg); print(f"{D}{'─'*W}{R}")
-ICON={"working":f"{GRN}●{R}","busy":f"{GRN}●{R}","waiting":f"{YEL}◐{R}","idle":f"{D}○{R}","blocked":f"{RED}✗{R}"}
-
-for a in sorted(fleet,key=skey):
-    sid=a.get("id") or a.get("sessionId","")[:8] or "?"; full=a.get("sessionId","")
-    # name is optional in `claude agents --json` — fall back to id/sessionId, never blank.
-    name=(a.get("name") or a.get("id") or a.get("sessionId") or "?")[:26]; kind="bg" if a.get("kind")=="background" else "int"
-    status=a.get("status","");state=a.get("state","")
-    sstr=f"{status}/{state}" if state and state!=status else (status or state or "—")
-    is_ec2=(a.get("_host")=="fra"); pid=a.get("pid","")
-    if is_ec2:
-        # EC2 rows: sourced from the cached snapshot (live agents + per-session info
-        # read from each EC2 session's jobs/<sid>/state.json). No local ps / transcript
-        # / account-lease over SSM, so those columns stay blank.
-        w=ec2_info.get(sid,{}); mode=ec2_token_mode(w); tcol=TOK.get(mode,"")
-        crsf=f"{D}·{R}"
-        mdl=w.get("model") or "·"; eff=w.get("effort") or "·"
-        chan="imsg" if w.get("chan") else ""; fan=w.get("fan") or 0
-        repo=repo_of(w.get("cwd") or a.get("cwd")); acct="—"; err=""
-        detail=(w.get("detail") or "").replace("\n"," ").strip()[:W-7]
-        up=iso_ago(w.get("createdAt")) if w.get("createdAt") else ago(a.get("startedAt",0)/1000 if a.get("startedAt") else 0)
-        upd=iso_ago(w.get("updatedAt")) if w.get("updatedAt") else "—"; lw="—"
-        att=None; src="ec2"; agent="claude"; iso=""
-    else:
-        mode=token_mode(pid); tcol=TOK.get(mode,"")
-        listed=(sid in crs_allow) or (crs_allow_all and sid not in crs_allow_except)
-        crsf=f"{CYN}▶{R}" if mode=="crs" else (f"{CYN}●{R}" if listed else f"{D}·{R}")
-        js=job_state(sid); flags=js.get("respawnFlags",[]) or []
-        eff=flagval(flags,"--effort") or "·"; mdl=flagval(flags,"--model") or "·"
-        chan="imsg" if any("imessage" in str(f) for f in flags) else ""
-        fan=len(js.get("fan") or []); repo=repo_of(js.get("cwd") or a.get("cwd"))
-        up=iso_ago(js.get("createdAt")) if js.get("createdAt") else ago(a.get("startedAt",0)/1000 if a.get("startedAt") else 0)
-        upd=iso_ago(js.get("updatedAt")); lw=ago(jsonl_mtime(full)); acct=lease.get(sid,"—")
-        w=roster.get(sid,{}); att=w.get("attempt"); src=(w.get("dispatch") or {}).get("source",""); agent=(w.get("dispatch") or {}).get("agent","") or "claude"; iso=(w.get("dispatch") or {}).get("isolation","")
-        detail=(js.get("detail") or "").replace("\n"," ").strip()[:W-7]; err=last_error(full)
-    dot=ICON.get(state,ICON.get(status,"·")); stshort=(state or status or "—")[:7]
-    def padr(s,n): s=str(s); return s[:n]+" "*max(0,n-len(s))
-    # tags (only when present, so the common case stays clean)
-    tags=[]
-    if is_ec2: tags.append(f"{BLU}fra{R}{D}")
-    if fan: tags.append(f"team:{fan}")
-    if chan: tags.append(f"{CYN}chan:{chan}{R}{D}")
-    if iso and iso!="none": tags.append(f"iso:{iso}")
-    if att: tags.append(f"{RED}att:{att}⚠{R}{D}" if att>=3 else f"att:{att}")
-    if acct and acct!="—": tags.append(f"@{acct}")
-    tagstr=("  "+"  ".join(tags)) if tags else ""
-    errbadge=f"  {RED}⚠ {err}{R}" if err else ""
-    # line 1 — identity row, aligned columns (name colored by token type)
-    print(f"{dot} {B}{sid}{R} {tcol}{padr(name,24)}{R} {crsf} {tcol}{mode:6}{R} {D}{padr(mdl+'/'+eff,11)} {padr(repo,13)}{tagstr}{R}{errbadge}")
-    # line 2 — compact meta + timing
-    print(f"   {D}{kind} · {stshort:7} · pid {pid:<6} · up {up} · idle {upd} · wrote {lw}{R}")
-    # line 3 — live detail (only when present)
-    if detail:
-        print(f"   {D}» {detail}{R}")
-print(f"{D}{'─'*W}{R}")
-
-# ---- account utilization ----
-print(f"{B}ACCOUNTS{R} {D}(keychain Max pool — util% · reset · last-active){R}")
-def reset_in(u):
-    r=u.get("reset");
-    if not r: return "—"
-    return f"in {ago(2*NOW-r)}" if r>NOW else "now"
-for email,info in sorted(accts.items(),key=lambda x:-(x[1].get("lastUtilization",{}).get("pct") or 0)):
-    u=info.get("lastUtilization",{}) or {}; pct=u.get("pct")
-    n=int((pct or 0)/10); col=RED if (pct or 0)>=90 else (YEL if (pct or 0)>=70 else GRN)
-    barv=f"{col}{'█'*n}{D}{'░'*(10-n)}{R}"
-    bill=(info.get("lastBilling",{}) or {}).get("billing_type","—"); extra=" +x" if (info.get("lastBilling",{}) or {}).get("extra_usage_enabled") else ""
-    print(f"  {email:34} {barv} {col}{str(pct if pct is not None else '—'):>3}%{R} {D}{reset_in(u):>9} · act {iso_ago(info.get('lastActive')):>6} · {bill}{extra}{R}")
-
-# ---- CLIProxyAPI/legacy CRS proxy routing ----
-if acct_hits:
-    print(f"{B}CLIPROXY ROUTING{R} {D}(accounts used last 6m){R}")
-    line="  "+"  ".join(f"{CYN}{a}{R}{D}:{n}{R}" for a,n in sorted(acct_hits.items(),key=lambda x:-x[1]))
-    print(line)
+if MODELS and model_ids:
+  print(f'{D}{"─"*W}{R}')
+  print(f'{B}MODELS ({len(model_ids)} effective IDs){R}')
+  for mid in model_ids:
+    print(f'  {mid}')
 PY
-  rm -rf "$TMP"
 }
 
-if [ -n "$WATCH" ]; then
-  # Full-screen TUI: alternate screen buffer so the terminal is restored on exit,
-  # hidden cursor, and instant `q`-to-quit (refresh doubles as the keypress poll).
-  cleanup(){ tput rmcup 2>/dev/null; tput cnorm 2>/dev/null; stty echo 2>/dev/null; exit 0; }
-  trap cleanup INT TERM EXIT
-  tput smcup 2>/dev/null; tput civis 2>/dev/null; stty -echo 2>/dev/null
+if (( WATCH )); then
   while true; do
-    out="$(render)"
-    tput cup 0 0 2>/dev/null; printf '%s' "$out"; tput ed 2>/dev/null
-    bar="  ${WSECS}s refresh · press q to quit"
-    printf '\n\033[2m%s\033[0m' "$bar"
-    # Wait WSECS for a keypress; q (or Q/Esc) exits immediately, else re-render.
-    read -rsn1 -t "$WSECS" key 2>/dev/null
-    case "$key" in q|Q|$'\e') cleanup;; esac
+    clear 2>/dev/null || true
+    render
+    sleep 5
   done
 else
   render

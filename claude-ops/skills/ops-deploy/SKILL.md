@@ -1,6 +1,6 @@
 ---
 name: ops-deploy
-description: Deploy status across all projects. Shows ECS service versions, Vercel deployments, recent deploys, pending deploys, and CI/CD pipeline state.
+description: "This skill should be used when the user asks to \"deploy status\", \"what is in production\", or \"/ops:ops-deploy\". Deploy status across all projects. Shows ECS service versions, Vercel deployments, recent deploys, pending deploys, and CI/CD pipeline state."
 argument-hint: '[project-alias|ecs|vercel|all]'
 allowed-tools:
   - Bash
@@ -30,6 +30,8 @@ disallowedTools:
 ---
 
 # OPS ► DEPLOY STATUS
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Runtime Context
 

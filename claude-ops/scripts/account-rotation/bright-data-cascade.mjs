@@ -1,5 +1,5 @@
 // bright-data-cascade.mjs
-// Bright Data FALLBACK helpers for CRS captcha/oauth path.
+// Bright Data FALLBACK helpers for the captcha/oauth path.
 //
 // Order of intent (callers enforce solver gate separately):
 //   1. Local residential browser (EFG SOCKS + PAC) — not this module
@@ -69,7 +69,9 @@ function superProxyHost() {
 
 function superProxyPort() {
   const p = envFirst(['BRIGHT_DATA_PROXY_PORT', 'BRIGHTDATA_PROXY_PORT']);
-  return p || '33335';
+  // Legacy ports 22225/33335 stop working when Bright Data's old root CA
+  // expires on 25 Sep 2026. New port is 44445.
+  return p || '44445';
 }
 
 /**
@@ -164,7 +166,7 @@ export function getSolverProxyParamsForTier(tier) {
       proxytype: 'HTTP',
       proxyType: 'http',
       proxyAddress: u.hostname,
-      proxyPort: Number(u.port) || 33335,
+      proxyPort: Number(u.port) || 44445,
       proxyLogin: user || undefined,
       proxyPassword: pass || undefined,
     };

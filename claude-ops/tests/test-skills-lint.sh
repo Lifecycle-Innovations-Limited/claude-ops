@@ -49,6 +49,41 @@ for skill_file in "${skill_files[@]}"; do
     err "missing 'description' field in frontmatter"
   fi
 
+  dir_name=$(basename "$(dirname "$skill_file")")
+  fm_name=$(echo "$frontmatter" | awk -F': *' '/^name:/{print $2; exit}' | tr -d '"' | tr -d "'")
+  if [[ "$fm_name" == "$dir_name" ]]; then
+    ok "name matches directory ($dir_name)"
+  else
+    err "name '$fm_name' does not match directory '$dir_name'"
+  fi
+
+  if echo "$frontmatter" | grep -q "This skill should be used when"; then
+    ok "description is third-person with triggers"
+  else
+    err "description must start with 'This skill should be used when'"
+  fi
+
+  if echo "$frontmatter" | grep -q "^argument-hint:"; then
+    ok "has 'argument-hint' field"
+  else
+    err "missing 'argument-hint' field in frontmatter"
+  fi
+
+  if [[ "$dir_name" != "ops-rules" ]]; then
+    if grep -q 'Load `ops-rules` before acting' "$skill_file"; then
+      ok "preamble points at ops-rules"
+    else
+      err "missing ops-rules preamble in $rel"
+    fi
+  fi
+
+  body_words=$(awk 'BEGIN{c=0} /^---/{n++; next} n>=2{c+=NF} END{print c+0}' "$skill_file")
+  has_refs=0
+  [[ -d "$(dirname "$skill_file")/references" ]] && has_refs=1
+  if (( body_words > 3000 )) && (( has_refs == 0 )); then
+    echo "  WARN: $rel body is $body_words words with no references/ (split in phase 2)"
+  fi
+
   if echo "$frontmatter" | grep -q "^allowed-tools:"; then
     ok "has 'allowed-tools' field"
   else

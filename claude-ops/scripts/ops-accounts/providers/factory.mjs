@@ -9,7 +9,7 @@ export const providerId = 'factory';
 export const displayName = 'Factory / Droid';
 
 export async function listAccounts(ctx) {
-  const snapPath = join(ctx.home, '.claude/crs-keys/quota/factory-droid.json');
+  const snapPath = join(ctx.home, '.claude/quota-snapshots/factory-droid.json');
   let snap = null;
   if (existsSync(snapPath)) {
     try {
@@ -38,11 +38,10 @@ export async function listAccounts(ctx) {
             status: snap.remaining.status,
           }
         : null,
-      crs: null,
       lastError: blocked ? snap?.vendor_detail || 'HTTP 402 no active paid subscription' : snap?.error || null,
       billing: snap?.billing_mail_hint || null,
       http: snap?.http || null,
-      note: 'Factory feeder probes one FACTORY_API_KEY across the configured billing orgs',
+      note: 'Multiple orgs can share one mailbox; the feeder probes a single FACTORY_API_KEY',
       reauth: { status: 'unavailable', note: 'pay invoice / restore Factory billing; no OAuth cascade' },
     },
   ];
@@ -57,7 +56,7 @@ export async function reauth() {
 }
 
 export async function utilization(ctx) {
-  const snapPath = join(ctx.home, '.claude/crs-keys/quota/factory-droid.json');
+  const snapPath = join(ctx.home, '.claude/quota-snapshots/factory-droid.json');
   if (!existsSync(snapPath)) {
     return { windows: [], source: 'unavailable' };
   }

@@ -1,6 +1,6 @@
 ---
 name: ops-desktop
-description: Autonomous desktop + browser control via the desktop-act MCP companion. Acquires an isolated noVNC desktop session, takes screenshots, clicks, types, scrolls, and runs the optional autonomous act() loop. First run auto-bootstraps the desktop-act server into a per-user cache.
+description: "This skill should be used when the user asks to \"control the desktop\", \"click on screen\", or \"/ops:ops-desktop\". Autonomous desktop + browser control via the desktop-act MCP companion. Acquires an isolated noVNC desktop session, takes screenshots, clicks, types, scrolls, and runs the optional autonomous act() loop. First run auto-bootstraps the desktop-act server into a per-user cache."
 argument-hint: "[goal text | 'status' | 'list' | 'release [session_id]']"
 allowed-tools:
   - Bash
@@ -27,6 +27,8 @@ maxTurns: 40
 ---
 
 # OPS ► DESKTOP
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 `/ops:desktop` drives a real GUI desktop (Linux noVNC pool, partial macOS / Windows support) through the `desktop-act` FastMCP server. Use it for tasks that browser-only automation can't reach: native dialogs, OS file pickers, multi-window flows, screen-recording verification.
 

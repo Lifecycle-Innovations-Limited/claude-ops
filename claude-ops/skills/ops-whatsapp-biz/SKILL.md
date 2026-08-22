@@ -1,6 +1,6 @@
 ---
 name: ops-whatsapp-biz
-description: WhatsApp Business Cloud API — send approved template messages at scale, manage templates with approval tracking, and integrate product catalogs. Separate from wacli personal WhatsApp.
+description: "This skill should be used when the user asks to \"whatsapp business\", \"template message\", or \"/ops:ops-whatsapp-biz\". WhatsApp Business Cloud API — send approved template messages at scale, manage templates with approval tracking, and integrate product catalogs. Separate from wacli personal WhatsApp."
 argument-hint: '[send-template|list-templates|create-template|check-template|catalog|setup]'
 allowed-tools:
   - Bash
@@ -13,6 +13,8 @@ maxTurns: 30
 ---
 
 # OPS ► WHATSAPP BUSINESS
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 WhatsApp Business Cloud API — distinct from wacli personal WhatsApp.
 

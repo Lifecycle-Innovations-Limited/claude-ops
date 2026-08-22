@@ -1,6 +1,7 @@
 ---
 name: ops-deploy-fix
-description: Inspect and control the deploy/build auto-fix subsystem. Use for `/ops:deploy-fix status` (last monitor runs, fixer dispatches, locks, hourly budget), `/ops:deploy-fix tail` (follow latest fixer log), `/ops:deploy-fix configure` (re-run the wizard), and `/ops:deploy-fix test` (synthetic dry-run through the pipeline). Trigger when the user mentions deploy auto-fix, post-merge monitor, build fixer, fix budget, fix-agent log, or asks why a deploy didn't get auto-fixed.
+description: "This skill should be used when the user asks to \"deploy auto-fix\", \"failed deploy\", or \"/ops:ops-deploy-fix\". Inspect and control the deploy/build auto-fix subsystem. Use for `/ops:deploy-fix status` (last monitor runs, fixer dispatches, locks, hourly budget), `/ops:deploy-fix tail` (follow latest fixer log), `/ops:deploy-fix configure` (re-run the wizard), and `/ops:deploy-fix test` (synthetic dry-run through the pipeline). Trigger when the user mentions deploy auto-fix, post-merge monitor, build fixer, fix budget, fix-agent log, or asks why a deploy didn't get auto-fixed."
+argument-hint: '[status|tail|configure|test]'
 allowed-tools:
   - Bash
   - Read
@@ -9,6 +10,8 @@ allowed-tools:
 ---
 
 # /ops:deploy-fix — Auto-fix subsystem control surface
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 This skill is the operator console for the post-merge + build-failure auto-fix loop installed by `/ops:setup` Step 6.5a. The underlying daemons, hooks, and prompts live in `${CLAUDE_PLUGIN_ROOT}/scripts/`, `${CLAUDE_PLUGIN_ROOT}/hooks/`, and `${CLAUDE_PLUGIN_ROOT}/prompts/`. State lives in `~/.claude/state/ops-deploy-fix/`. Logs live in `~/.claude/logs/ops-deploy-fix/`.
 

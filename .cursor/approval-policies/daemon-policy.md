@@ -15,4 +15,4 @@
 ## Reviewer routing
 
 - Request platform maintainers
-- Flag PRs that touch rotator or CRS-related scripts for extra scrutiny
+- Flag PRs that touch rotator or account-auth scripts for extra scrutiny

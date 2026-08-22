@@ -34,6 +34,18 @@ export HOME="$tmpdir"
 export NO_COLOR=1
 export TERM=dumb
 
+# python3 parses ops-speedup's JSON contract below. The README lists only Claude
+# Code and gh as requirements and CI never installs Python, so an unguarded call
+# would abort this file under `set -e` and be reported as a speedup regression
+# rather than a missing interpreter. Skip the way the sibling suites do.
+PY="$(command -v python3 || true)"
+if [ -z "$PY" ]; then
+  echo "== ops-speedup runtime health tests =="
+  echo "  SKIP: python3 unavailable"
+  echo "test-ops-speedup.sh: 0 passed, 0 failed (skipped)"
+  exit 0
+fi
+
 echo "== ops-speedup runtime health tests =="
 assert_true "bash syntax" bash -n "$BIN"
 assert_true "no auto-aggressive default" bash -c "! grep -q 'MODE_CLEAN=true; MODE_DEEP=true; MODE_AGGRESSIVE=true' '$BIN'"
@@ -42,6 +54,96 @@ assert_true "has runtime-first health model" grep -q 'runtime-first' "$BIN"
 assert_true "CPU hog kill gated by aggressive" grep -q 'Despite the legacy name, default cleanup only demotes hogs' "$BIN"
 assert_true "GPU probe uses ioreg without sudo" grep -q 'ioreg -r -d1 -w0 -c IOGPU' "$BIN"
 assert_true "long-lived hog threshold is 3 hours" grep -q 'elapsed >= 10800' "$BIN"
+
+# Drive the shipped process-state classifier through the real binary. A PID that
+# appears blocked in only one sample is transient; only the PID blocked in all
+# three samples is counted as stuck. Runnable and zombie counts use the latest
+# sample, matching the live probe.
+cat >"$tmpdir/states-1" <<'EOF'
+101 U
+202 U
+303 R
+404 S
+EOF
+cat >"$tmpdir/states-2" <<'EOF'
+101 S
+202 U
+303 S
+404 S
+EOF
+cat >"$tmpdir/states-3" <<'EOF'
+101 R
+202 U
+303 S
+404 Z
+505 R
+EOF
+state_counts=$(bash "$BIN" --classify-process-states \
+  "$tmpdir/states-1" "$tmpdir/states-2" "$tmpdir/states-3")
+assert_eq "transient U is ignored and persistent U is counted" "5 2 1 1" "$state_counts"
+
+cat >"$tmpdir/states-none-1" <<'EOF'
+11 U
+12 S
+EOF
+cat >"$tmpdir/states-none-2" <<'EOF'
+11 S
+12 U
+EOF
+cat >"$tmpdir/states-none-3" <<'EOF'
+11 R
+12 S
+EOF
+no_stuck=$(bash "$BIN" --classify-process-states \
+  "$tmpdir/states-none-1" "$tmpdir/states-none-2" "$tmpdir/states-none-3")
+assert_eq "one-frame U states never become stuck" "2 1 0 0" "$no_stuck"
+
+# On macOS, also drive the normal --json probe with a ps shim. This proves the
+# public runtime.stuck result uses all three PID/state observations rather than
+# only proving the helper in isolation.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  real_ps=$(command -v ps)
+  mkdir -p "$tmpdir/mock-bin"
+  cat >"$tmpdir/mock-bin/ps" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "-Ao pid=,stat=" ]]; then
+  count_file="$OPS_SPEEDUP_PS_COUNT"
+  count=0
+  [[ -f "$count_file" ]] && count=$(cat "$count_file")
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$count_file"
+  case "${OPS_SPEEDUP_PS_SCENARIO}:${count}" in
+    transient:1) printf '101 U\n202 S\n' ;;
+    transient:2) printf '101 S\n202 U\n' ;;
+    transient:3) printf '101 R\n202 S\n' ;;
+    persistent:*) printf '101 U\n202 S\n' ;;
+    *) exit 3 ;;
+  esac
+else
+  exec "$OPS_SPEEDUP_REAL_PS" "$@"
+fi
+SH
+  chmod +x "$tmpdir/mock-bin/ps"
+
+  run_state_scenario() {
+    local scenario="$1"
+    local output count_file="$tmpdir/ps-${scenario}.count"
+    rm -f "$count_file"
+    output=$(PATH="$tmpdir/mock-bin:$PATH" \
+      OPS_SPEEDUP_REAL_PS="$real_ps" \
+      OPS_SPEEDUP_PS_SCENARIO="$scenario" \
+      OPS_SPEEDUP_PS_COUNT="$count_file" \
+      bash "$BIN" --json)
+    python3 - "$output" <<'PY'
+import json, sys
+print(json.loads(sys.argv[1])["runtime"]["stuck"])
+PY
+  }
+
+  assert_eq "real JSON probe ignores transient U states" "0" "$(run_state_scenario transient)"
+  assert_eq "real JSON probe counts a persistent U PID" "1" "$(run_state_scenario persistent)"
+fi
 
 json_out=$(bash "$BIN" --json)
 python3 - "$json_out" <<'PY'
@@ -94,6 +196,42 @@ data = json.loads(sys.argv[1])
 print("json-contract-ok")
 PY
 )"
+
+# Portability: macOS ships bash 3.2 as /bin/bash, and `#!/usr/bin/env bash`
+# resolves to it whenever /usr/bin precedes a newer bash on PATH — which is the
+# default for login shells, launchd, and cron. `declare -g` does not exist in
+# 3.2, so using it to publish probe results silently left every RUNTIME_/MEM_/
+# NET_/DISK_/STARTUP_/GPU_ variable unset and scored a perfect 100 from no data.
+# Keep the assignments portable; the loops below redirect stderr, so a 4-only
+# builtin fails invisibly rather than erroring out.
+assert_true "no bash-4-only declare -g" bash -c "! grep -q 'declare -g' '$BIN'"
+
+# The probe read-back must actually populate globals. Process count is the
+# cheapest environment-independent witness: any live host has processes, so a
+# zero here means the probe variables never made it back into scope.
+assert_eq "probe vars reach global scope" "populated" "$(python3 - "$json_out" <<'PY'
+import json, sys
+data = json.loads(sys.argv[1])
+procs = int(data["runtime"].get("processes") or 0)
+print("populated" if procs > 0 else f"empty:processes={procs}")
+PY
+)"
+
+# Run the same contract under the host's /bin/bash when that is a 3.x build.
+# Without this the suite only ever exercises the newer bash on PATH and cannot
+# catch a 4-only builtin regressing the macOS default interpreter.
+legacy_bash_version=$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null || echo "")
+if [ "$legacy_bash_version" = "3" ]; then
+  assert_eq "populates probe vars under /bin/bash 3.x" "populated" "$(python3 - "$(/bin/bash "$BIN" --json)" <<'PY'
+import json, sys
+data = json.loads(sys.argv[1])
+procs = int(data["runtime"].get("processes") or 0)
+print("populated" if procs > 0 else f"empty:processes={procs}")
+PY
+)"
+else
+  pass "populates probe vars under /bin/bash 3.x (skipped: /bin/bash is ${legacy_bash_version:-unknown}.x)"
+fi
 
 # Score contract: disk reclaimable size must not lower health, and launch-agent
 # count must not either. Inject a synthetic runtime that is healthy except for

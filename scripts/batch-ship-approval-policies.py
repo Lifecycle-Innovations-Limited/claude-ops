@@ -7,9 +7,10 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 
-PROJECTS_ROOT = Path("/Users/samrenders/Projects")
+PROJECTS_ROOT = Path(os.environ.get("OPS_PROJECTS_ROOT", Path.home() / "Projects"))
 BRANCH = "chore/approval-agent-policies"
 COMMIT_MSG = """chore: add Cursor Approval Agent policy files
 
@@ -17,13 +18,23 @@ Scaffold APPROVAL_POLICY.md and .cursor/approval-policies/ routing
 for Cloud Approval Agents. Force-add routing under .cursor despite
 gitignore so Approval Agents can discover ROUTING.md."""
 
-PREFER_NAMES = {
-    "claude-ops": 100,
-    "healify-api": 90,
-    "healify-web": 90,
-    "healify-agentcore": 90,
-    "healify": 90,
-}
+# When the same remote is checked out in several places, prefer these repo
+# directory names. Override with OPS_PREFER_REPOS="repo-a=100,repo-b=90".
+def _prefer_names() -> dict[str, int]:
+    raw = os.environ.get("OPS_PREFER_REPOS", "claude-ops=100")
+    out: dict[str, int] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, _, score = part.partition("=")
+        name = name.strip()
+        if name:
+            out[name] = int(score) if score.strip().isdigit() else 90
+    return out
+
+
+PREFER_NAMES = _prefer_names()
 
 
 @dataclass

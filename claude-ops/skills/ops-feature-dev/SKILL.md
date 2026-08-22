@@ -1,6 +1,6 @@
 ---
 name: ops-feature-dev
-description: Guided feature development — delegates to the feature-dev plugin's 7-phase workflow (explore, architect, implement, review). Use before ad-hoc builds or as pre-work before gsd-execute-phase.
+description: "This skill should be used when the user asks to \"guided feature\", \"feature-dev\", or \"/ops:ops-feature-dev\". Guided feature development — delegates to the feature-dev plugin's 7-phase workflow (explore, architect, implement, review). Use before ad-hoc builds or as pre-work before gsd-execute-phase."
 argument-hint: '[feature description]'
 allowed-tools:
   - Skill
@@ -40,6 +40,8 @@ default), or invoke `/feature-dev` inline via the Skill tool.
 
 # OPS ► FEATURE DEV
 
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
+
 Thin router into the **feature-dev** companion plugin. Do not re-implement its phases here.
 
 ## When to use
@@ -59,4 +61,3 @@ Otherwise invoke `/feature-dev $ARGUMENTS` via the **Skill** tool.
 - Requires the **feature-dev** plugin installed (`/ops:setup` Step 2c or `/plugin install feature-dev`).
 - Specialist auto-swap (`feature-dev:code-*`) is handled by `bin/ops-suggest-specialized-agent` when the plugin is present.
 - Does **not** replace `/flow build`, `/review`, or `gsd-execute-phase` — it overlays them.
-

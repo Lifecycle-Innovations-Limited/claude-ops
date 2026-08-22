@@ -105,6 +105,13 @@ export async function openTarget(target) {
     return { ok: false, command: null, target: '' };
   }
 
+  // `target` reaches here straight from argv when this module is used as a CLI.
+  // A NUL/newline is never valid in a URL or path, so reject those everywhere.
+  if (/[\u0000-\u001F\u007F]/.test(target)) {
+    process.stderr.write('opener: refusing target containing control characters\n');
+    return { ok: false, command: null, target };
+  }
+
   const cmd = resolveOpener();
   if (!cmd) {
     process.stderr.write('opener: no URL opener available on this host\n');
@@ -118,6 +125,15 @@ export async function openTarget(target) {
     const isWindowsStart = cmd === 'cmd.exe /c start' || osId() === 'windows' || process.platform === 'win32';
 
     if (isWindowsStart && cmd.includes('start')) {
+      // Node quotes argv entries, but `cmd.exe /c` then strips the outer quotes and
+      // re-parses the string. A double quote inside `target` escapes that quoting and
+      // everything after it is interpreted by cmd. `&` and friends stay inert while
+      // quoted — which is why only the quote-breakout is rejected here, rather than
+      // stripping characters that appear legitimately in URL query strings.
+      if (target.includes('"')) {
+        process.stderr.write('opener: refusing target containing a double quote on Windows\n');
+        return { ok: false, command: cmd, target };
+      }
       const child = spawn('cmd.exe', ['/c', 'start', '', target], {
         detached: true,
         stdio: 'ignore',

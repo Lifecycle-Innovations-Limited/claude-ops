@@ -1,6 +1,6 @@
 ---
 name: uninstall
-description: Completely remove claude-ops plugin, all stored credentials, cached files, shell exports, and MCP registrations. Confirms each step before deletion.
+description: "This skill should be used when the user asks to \"uninstall ops\", \"remove claude-ops\", or \"/ops:uninstall\". Completely remove claude-ops plugin, all stored credentials, cached files, shell exports, and MCP registrations. Confirms each step before deletion."
 argument-hint: '[--confirm]'
 allowed-tools:
   - Bash
@@ -8,9 +8,12 @@ allowed-tools:
   - AskUserQuestion
 effort: low
 maxTurns: 15
+disable-model-invocation: true
 ---
 
 # OPS > UNINSTALL
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 You are running a **complete uninstall** of the claude-ops plugin. This removes everything the plugin and `/ops:setup` created. Every deletion step requires user confirmation via `AskUserQuestion` — never delete silently.
 

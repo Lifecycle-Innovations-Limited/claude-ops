@@ -2,8 +2,11 @@
 
 Install, update, and verify the [claude-ops](https://github.com/Lifecycle-Innovations-Limited/claude-ops) plugin across Claude Code, Codex, Gemini CLI, OpenClaw, Hermes, and OpenCode from one command.
 
-```
-npx claude-ops-installer install
+```bash
+git clone https://github.com/Lifecycle-Innovations-Limited/claude-ops.git
+cd claude-ops/installer
+npm install
+node bin/claude-ops-installer.mjs install
 ```
 
 ## What it does
@@ -18,7 +21,7 @@ Reads the canonical source (`Lifecycle-Innovations-Limited/claude-ops` at a pinn
 | Codex | Flat `ln -s` | `~/.codex/skills` |
 | Gemini CLI | Flat `ln -s` | `~/.gemini/skills` |
 | OpenClaw | Flat `ln -s` | `~/.openclaw/skills` |
-| Hermes | Hybrid (flat + nested `ops/<name>`) | `~/.hermes/skills` |
+| Hermes | Hybrid skills + native plugin | `~/.hermes/skills` and `~/.hermes/plugins/ops` |
 | OpenCode | Flat `ln -s` | `~/.config/opencode/skills` |
 
 Binstubs from upstream `bin/` are symlinked into `~/bin/` (or `$CLAUDE_OPS_BIN_DIR`).
@@ -53,14 +56,14 @@ version: 1
 source:
   type: git
   url: https://github.com/Lifecycle-Innovations-Limited/claude-ops.git
-  ref: v2.43.0
+  ref: v3.6.2
 
 agents:
   claude:    { enabled: true }
   codex:     { enabled: true,  path: ~/.codex/skills }
-  gemini:    { enabled: false, path: ~/.gemini/skills }
+  gemini:    { enabled: true,  path: ~/.gemini/skills }
   openclaw:  { enabled: true,  path: ~/.openclaw/skills }
-  hermes:    { enabled: true,  flat: ~/.hermes/skills, nested: ~/.hermes/skills/ops }
+  hermes:    { enabled: true,  flat: ~/.hermes/skills, nested: ~/.hermes/skills/ops, plugin: ~/.hermes/plugins/ops }
   opencode:  { enabled: false, path: ~/.config/opencode/skills }
 
 bin:

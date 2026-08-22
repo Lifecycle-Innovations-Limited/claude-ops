@@ -108,8 +108,8 @@ try {
 if (MODE === 'warn') {
   const warn =
     `⚠️💸 BEDROCK BILLING: this session${sid8 ? ` (${sid8})` : ''} is making metered AWS Bedrock ` +
-    `model calls (real $$$, not the Max/CRS pool).${detail} The rotation watchdog should swap you ` +
-    `to CRS/OAuth shortly. (bedrock-guard mode=warn — not blocking.)`;
+    `model calls (real $$$, not the Max OAuth pool).${detail} The rotation watchdog should swap you ` +
+    `back to OAuth shortly. (bedrock-guard mode=warn — not blocking.)`;
   try {
     process.stdout.write(
       JSON.stringify({
@@ -124,9 +124,9 @@ if (MODE === 'warn') {
 const msg =
   `🛑🔥 METERED AWS BEDROCK BILLING DETECTED on THIS session${sid8 ? ` (${sid8})` : ''}.\n` +
   `Every model call you make is spending REAL $$$ on AWS Bedrock per-token billing — ` +
-  `NOT the free Max/CRS account pool. This is the opposite of intended routing.${detail}\n` +
+  `NOT the Max OAuth account pool. This is the opposite of intended routing.${detail}\n` +
   `\nALL tool calls are BLOCKED until you acknowledge. The rotation watchdog will normally ` +
-  `swap you to CRS/OAuth within ~45s and this clears automatically. If it does NOT clear, ` +
+  `swap you back to OAuth within ~45s and this clears automatically. If it does NOT clear, ` +
   `there is no OAuth headroom and Bedrock is the only option.\n` +
   `\nTo acknowledge and continue ANYWAY (knowingly on metered Bedrock), run exactly:\n` +
   `    echo BEDROCK-ACK\n` +

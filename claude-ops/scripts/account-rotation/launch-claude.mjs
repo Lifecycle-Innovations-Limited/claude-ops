@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { loadClaudeHarnessEnv } from './claude-harness-env.mjs';
 import { normalizeClaudeModelArgs } from './model-args.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -149,15 +148,6 @@ function withBypassPermissions(args) {
 }
 
 const args = withBypassPermissions(rawArgs);
-const isModelLaunch = shouldBypassPermissions(rawArgs);
-// `agents` is a control subcommand (no tool-permission bypass) but it is the
-// agent-hub interactive surface and MUST keep CRS harness pairing. Stripping
-// CRS keys here forces session-router onto raw OAuth + direct-oauth.settings
-// and surfaces "login required / 401 Invalid bearer token" when vault tokens
-// are stale. Pure path: agent-hub-claude-crs; this keeps the launch-efficient
-// / ls-attach path on CRS too.
-const launchCmd = firstCommand(rawArgs);
-const needsCrsHarness = isModelLaunch || launchCmd === 'agents';
 const settingsEnv = (() => {
   try {
     return JSON.parse(readFileSync(CLAUDE_SETTINGS_PATH, 'utf8'))?.env || {};
@@ -187,33 +177,19 @@ for (const key of [
 delete baseEnv.CLAUDE_CODE_USE_BEDROCK;
 delete baseEnv.ANTHROPIC_MODEL;
 
-if (needsCrsHarness) {
-  let harnessEnv;
-  try {
-    harnessEnv = loadClaudeHarnessEnv({ home });
-  } catch (error) {
-    console.error(error.message);
-    process.exit(2);
-  }
-  Object.assign(baseEnv, harnessEnv);
-  // Keep API_KEY=cr_ (derived from harness). Stripping it left BASE→CRS with no key.
-  baseEnv.ANTHROPIC_API_KEY = baseEnv.ANTHROPIC_API_KEY || baseEnv.CRS_API_KEY || baseEnv.ANTHROPIC_AUTH_TOKEN;
-  // Agent-hub TUI: stay on CRS relay; do not per-account OAuth rewrite.
-  if (launchCmd === 'agents') {
-    baseEnv.CLAUDE_SESSION_ROUTING = '0';
-  }
-} else {
-  for (const key of [
-    'ANTHROPIC_BASE_URL',
-    'ANTHROPIC_API_BASE',
-    'ANTHROPIC_API_KEY',
-    'ANTHROPIC_AUTH_TOKEN',
-    'CLAUDE_CODE_OAUTH_TOKEN',
-    'CRS_API_KEY',
-    'CRS_HARNESS_NAME',
-  ]) {
-    delete baseEnv[key];
-  }
+// Launch on Claude Code's own OAuth credential. Any inherited base-URL override
+// or injected key would take precedence over it, so drop them: a pooled setup
+// routes through CLIProxyAPI, which owns its seat files rather than this env.
+for (const key of [
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_API_BASE',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'CRS_API_KEY',
+  'CRS_HARNESS_NAME',
+]) {
+  delete baseEnv[key];
 }
 
 function readJson(path) {

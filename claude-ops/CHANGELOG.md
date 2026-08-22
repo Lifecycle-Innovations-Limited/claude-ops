@@ -1,5 +1,32 @@
 ## Unreleased
 
+- Slim `ops-inbox` SKILL.md (~6k → ~2k words): runtime, Workflow JS, and Agent Teams moved to `references/`. Rewrite remaining skill descriptions with real NL triggers (Claude / Grok / Hermes share the same `skills/` tree).
+- Sync harness ports: `hermes-plugin/plugin.yaml` version matches `plugin.json`; installer default ref tracks the latest tag; `ops-release` bumps both. Grok still loads the Claude plugin (no `.grok-plugin`). Docs: `.mcp.json` is empty on purpose.
+
+- feat(cliproxy-heal): unattended hub healer puts seats back in rotation as soon as any leftover or reset quota is observed (no hysteresis). A seat sits out only on certain "quota exhausted" plus a parseable reschedule stamp, then re-enters at that stamp. An AI advisor runs on every seat and cannot override those rules. `applied=reauth` only after `CLIPROXY_REAUTH_CMD` (`cliproxy-reauth-one.sh` → hub `bu_reauth_lib.py` / `xai_device_reauth.py`); otherwise the seat is recorded blocked. Hub systemd timer `cliproxy-heal.timer`; Mac stays client-only. `runHealTick` denies healing unless both gates are satisfied: the `CLIPROXY_HUB_HEAL=1` env var, and the presence of the `/opt/crsproxy/.heal-account-optin` marker file that only `install-heal.sh` writes (not the systemd unit's `Environment=` lines), so editing the unit alone cannot satisfy both. Tests in `scripts/account-rotation/__tests__/cliproxy-heal-policy.test.mjs`.
+- fix(ops-mac): the application firewall is opt-in. `/ops:mac fix` no longer offers to enable it and no longer lists it as a recommendation; the audit reports its state and stops. Turning the firewall on breaks local listeners (dev servers, MCP proxies, VNC, tunnels) and the user rarely connects the breakage to a `fix` run they asked for other reasons. `socketfilterfw` now runs only when the user asks for the firewall by name in that turn.
+- **Removed the CRS relay backend.** claude-relay-service handed every session a
+  static `cr_` bearer token pinned into `settings.json`, and the plugin had to keep
+  base URL and token in lockstep across respawns, settings overlays and daemons.
+  CLIProxyAPI is now the only supported path for multi-account rotation and OAuth
+  seat management: it holds one OAuth seat file per account, and `rotate.mjs`
+  already writes those files during a rotation.
+  Deleted: the `crs-*` daemons in `scripts/account-rotation/`, all of
+  `scripts/crsproxy-reauth/`, the three `install-crs-*.sh` installers, the five
+  `crs-*` systemd units, the `com.claude-ops.crs-*` plists, and
+  `docs/runbooks/crs-full-tuning-plan.md`.
+  Renamed, same behaviour: `crs-pool-config.mjs` → `rotation-config.mjs`,
+  `crs-refresh-lock.mjs` → `refresh-lock.mjs`, `crs-reconciler-state.mjs` →
+  `reconciler-state.mjs`.
+  Migration on an existing machine: route mode `crs-oauth` is read as `oauth`, a
+  `crs` config block is read as the `rotation` block, `CRS_REFRESH_*` env names
+  still work, and reconciler state files fall back to their old names. Background
+  respawn strips a leftover relay base URL, `cr_` token and `--settings` overlay
+  rather than re-applying them. `claude-stack doctor` reports a leftover pair as
+  `legacy_relay_env`; `claude-stack route --mode oauth` clears it.
+  `ops-accounts crs` and `crs-tick` now print where rotation lives and exit 2.
+- fix(whatsapp): `apply-patches.py` Fix Q no longer appends a duplicate `/api/app_state_status` route. The sentinel gated on the comment text, which Fix Y later rewrote to `Fix Q/Y`, so on any tree that had taken Fix Y the check missed and a second `http.HandleFunc` for the same path was added. Go panics at startup on a duplicate pattern, so the bridge died on the next `go build`. The sentinel is now the handler registration itself, which is stable across variants.
+- docs(whatsapp): stop assuming the MCP server is named `whatsapp`. Multi-account installs run one bridge and one server per account (`whatsapp-<label>`) and have no plain `mcp__whatsapp__*`, so every hardcoded reference failed with an unknown tool. Adds CLAUDE.md Rule 8 (resolve the name at runtime, pick the account deliberately, never send from the wrong number, Rule 6 applies to every variant) and points ops-inbox, ops-comms, comms-scanner, and `scripts/whatsapp/ENDPOINTS.md` at it. Also warns that `allowed-tools` entries are exact strings and that host send-gate hook matchers pinned to the literal `mcp__whatsapp__send_message` silently stop firing when an account is renamed or added.
 - Security: replace direct/unattended Claude browser reauthentication with short-lived HMAC-approved, single-use staged enrollment and atomic rollback activation; legacy reauth wrappers now fail closed.
 - ops-accounts-gateway skeleton (:3005 health/auth/grok hop; CLI gateway subcommand)
 - feat(crs-priority-daemon): dual-mode `backend=crs|local` file seat-state without CRS Docker
@@ -39,6 +66,135 @@
 - **ops-desk (new skill):** `/ops:ops-desk` desk sweep — fans out read-only context agents (batched, Workflow tool) over the owner's open decisions/drafts/payments/sign-offs and returns a ranked, ready-to-approve action queue worked down under the per-draft outbound gate. Complements `/ops:ops-inbox`.
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
+
+## [3.6.2] - 2026-08-22
+
+### Changed
+- README, INDEX, and harness-ports docs for Claude / Grok / Hermes.
+
+
+## [3.6.1] - 2026-08-22
+
+### Changed
+- Slim ops-inbox SKILL.md (~6k → ~2k) and rewrite remaining skill descriptions with real NL triggers.
+- Keep Hermes plugin.yaml and the installer pin in lockstep with plugin.json so Claude, Grok, and Hermes ship the same version.
+- Document that plugin .mcp.json is empty on purpose (MCP starts on demand).
+
+
+## [3.6.0] - 2026-08-22
+
+### Changed
+Skills match plugin-dev practice: ops-rules skill (root CLAUDE.md is a pointer), third-person frontmatter and shared preamble on every skill, oversized SKILL.md files split into references/, SessionStart pointer, plugin validate coverage.
+
+
+## [3.5.0] - 2026-08-22
+
+### Changed
+Native Hermes plugin: slash commands, skill_view("ops:*"), Rule 10 harness fallbacks, installer ~/.hermes/plugins/ops.
+
+
+## [3.4.4] - 2026-08-18
+
+### Changed
+Fix boss agent-dash resolution and macOS pressure evidence check
+
+
+## [3.4.3] - 2026-08-18
+
+### Changed
+### Fixed
+- WhatsApp bridge LaunchAgent now runs the supervised `run-bridge.sh` wrapper instead of the bare binary, so a logged-out bridge can no longer request pairing codes unattended (the behaviour that gets an account banned). KeepAlive gains `Crashed`, and ThrottleInterval goes 60 -> 300.
+- The bridge LaunchAgent template now sets `GODEBUG=netdns=go`, which the bridge requires on macOS. With the cgo resolver the whatsmeow websocket dies with "failed to read frame header: EOF" and pairing fails as a misleading "Couldn't link device" on the phone.
+- `ops-post-update-migrate` refuses to install the bridge LaunchAgent when `run-bridge.sh` is missing, and defers its per-version sentinel so the skip is retried next session instead of becoming permanent.
+
+
+## [3.4.2] - 2026-08-16
+
+### Changed
+### Fixed
+- ops-speedup scored a perfect 100/100 from empty probes on macOS. It published probe results with `declare -g`, which bash 3.2 does not have, and an existing stderr redirect swallowed the error, so every probe variable stayed unset. The assignments are portable now, and the tests run the JSON contract under `/bin/bash` as well. (#827)
+- The `rm -rf` guard blocked nothing on stock macOS. (#826)
+- ops-release: a failed CI query no longer strands the release PR. (#820)
+
+### Changed
+- ops-inbox: stage drafts as cards, and never end a run with a question. (#821)
+
+
+## [3.4.1] - 2026-08-16
+
+### Changed
+- ops-release: a failed tag push no longer aborts the run. The release PR has already merged by then, so a dead git transport left main released but untagged. It now resolves main's commit over the REST API when `git fetch` fails, creates the tag object and ref over the API when `git push` fails, and names the ref to create if both fail. API calls retry pinned to the other IP family. (#817)
+- ops-sync-docs / ops-release: the badge regex required a `-` straight after the digits, so a count carrying a URL-encoded `+` (`skills-33%2B-success`) never matched and stayed frozen at 33 while the tree grew to 63. It now matches the suffix and drops it — the count is exact, not a floor. (#817)
+
+
+## [3.4.0] - 2026-08-16
+
+### Changed
+- ops-mac: the application firewall is opt-in. `/ops:mac fix` no longer offers or recommends enabling it; the audit reports its state and stops. Turning it on breaks local listeners — dev servers, MCP proxies, VNC, tunnels — and the breakage surfaces long after the run. `socketfilterfw` runs only when the firewall is asked for by name. (#814)
+- ops-inbox no longer hardcodes `127.0.0.1:8080`. On a box running one whatsmeow bridge per phone number the lowest port answers first, which bound the skill to whichever number owned 8080 and sent replies from the wrong account. New `bin/ops-wa-accounts` discovers every bridge and reads the number actually paired in each store. (#815)
+- ops-inbox / ops-comms: port the Hermes ops lessons — triage is not the deliverable, dedupe merged WhatsApp threads by message ID, transcribe outbound voice notes, and an output quality gate to prove before reporting a pass complete. (#813)
+
+
+## [3.3.1] - 2026-08-15
+
+### Changed
+
+- The outbound guard now refuses to send from a Gmail send-as alias whose SMTP relay is broken. Such a send fails silently: Gmail stamps the message SENT and drops the delivery failure into Trash, so the sender believes it arrived and the recipient never gets it. The check runs ahead of every path that would otherwise allow the send, including a held approval and the approved-recipient bypass, because a broken relay bounces the mail whoever it was addressed to.
+- When a service account can impersonate the alias, the block message names the command that works. Sending as the mailbox over the API skips the send-as relay entirely and needs no app password, so a "broken" alias is often already reachable.
+- New `refresh_broken_aliases.py` builds the alias list from Gmail's own bounce threads, reading the failed alias off the SENT message's `From` header rather than matching addresses in the bounce body. `--clear <address>` drops an alias after a repair, and an absent or empty list blocks nothing.
+- New `gog-sa-token` mints a narrow-scope impersonated token. `gog` requests its whole scope bundle in one call, so a Workspace that delegated only `gmail.send` and `gmail.readonly` refuses the entire request, and a mailbox that can in fact send looks unreachable.
+- New `tests/outbound-guard/test-broken-alias.py` covers the alias path against a throwaway `HOME`, and clears the shared approval store afterwards so the other guard suites stay order-independent.
+
+
+## [3.3.0] - 2026-08-15
+
+### Added
+- Shared outbound guard that gates every outbound send through one code path, with matching hook entry points for Python and Node callers.
+- Test suite for the guard covering the hook matrix, false positives, and shared-guard behaviour.
+- Approval helper for granting a send, plus a README documenting how the gate works and how to wire it up.
+
+### Changed
+- `ops-comms` and `ops-inbox` now route sends through the shared guard instead of their own checks.
+
+
+## [3.2.0] - 2026-08-15
+
+### Added
+- `ops-inbox-archive-set`: turns a scan into explicit ARCHIVE and KEEP lists instead of leaving the call to eye judgement. Report-only by default, archives nothing without `--apply`, never sends. Mail carrying a todo/action label can't be swept, and anything ambiguous resolves to KEEP.
+- Test suite for the archive split, label guardrail, report-only default, dry-run apply and stale window, run entirely against a fixture so tests can't touch a real inbox.
+- Per-channel archive documentation: email archiving needs thread ids, multi-account WhatsApp installs must resolve the real per-account server name first, and iMessage, Slack and Telegram have no archive at all.
+
+### Changed
+- The scan working set per channel is now "not archived" rather than unread or a recent slice. Email scans all of `in:inbox` up to 400 results; Slack stays unread-and-unreplied because it has no archive.
+- `--days` now only sizes the WhatsApp send-log lookback. Use `--email-query` / `--email-max` to narrow the mail set on purpose.
+- Reply and archive are a single step: send, verify the reply landed on the channel, then archive. An unverified send leaves the thread open.
+- Archive and mark-read no longer sit behind the outbound approval gate. They change local state only and undo cleanly; real external sends stay gated.
+- FYI is a review list, not sweep material. It gets read and summarized, anything money, contract, legal, security or deadline related is promoted out of it, and mass-archiving is only offered after that.
+
+### Fixed
+- The email scan searched a 7-day, 30-result window, so anything older or further down silently stopped being reported as needing a reply.
+- Removed exponential backtracking in the courtesy-reply matcher (CodeQL high severity). Message bodies come straight off WhatsApp, so a crafted message could hang an entire scan.
+- Undescribed media such as a bare `[image]` was read as an empty message and archived as a closing courtesy. Unenriched media now always keeps the thread.
+- A positional `scan` argument overwrote `--scan`, making the tool ignore the scan file it was given and re-scan live.
+
+
+## [3.1.5] - 2026-08-15
+
+### Changed
+Added: bin/ops-fleet-pool-snapshot fetches a sanitized read-only CLIProxyAPI pool snapshot from a remote helper over ssh, and ops-fleet is reworked into a read-only session plus gateway dashboard that uses it. The helper restricts the remote path to a plain safe-character path, rejects a destination or user beginning with a dash so ssh cannot read it as an option, confines the timeout to digits, and validates the remote output as JSON before emitting it. Fixed: ops-inbox now rechecks the live thread tail immediately before every send. Approval is not a license to fire a stale draft, so between the approval and the send call it re-reads the real channel for new inbound arriving after the draft was staged and for replies already sent from another session, the phone, or a different client, and rebuilds or drops the draft instead of double-replying. A scan from earlier in the same run does not count as current state.
+
+
+## [3.1.4] - 2026-08-15
+
+### Changed
+Fixed: apply-patches.py Fix Q no longer appends a duplicate /api/app_state_status route. The idempotency sentinel matched the comment above the handler, which Fix Y later rewrote, so on any Fix-Y tree the check missed and a second http.HandleFunc for the same path was appended. Go panics at startup on a duplicate pattern, so the bridge died on the next go build. The sentinel is now the handler registration itself. Fixed: the plugin no longer assumes the WhatsApp MCP server is named whatsapp. Multi-account installs run one bridge and one server per account (whatsapp-<label>) and have no plain mcp__whatsapp__*, so every hardcoded reference failed with an unknown tool. Adds CLAUDE.md Rule 8 (resolve the name at runtime, pick the account deliberately, never reply from the wrong number, Rule 6 applies to every variant) and points ops-inbox, ops-comms, comms-scanner and scripts/whatsapp/ENDPOINTS.md at it. Also warns that allowed-tools entries are exact strings and that host send-gate hook matchers pinned to the literal mcp__whatsapp__send_message stop firing silently when an account is renamed or added.
+
+
+## [3.1.3] - 2026-08-15
+
+### Changed
+ops-merge no longer scans or merges repos the owner cannot push to. The registry lists every locally cloned project, including upstreams we only read, so the queue filled with unrelated contributors' PRs in repos we do not own. Push access is now checked fail-closed immediately before every create, merge and push, --repo is no longer exempt, the scanner accepts both --repo <slug> and a bare slug, and OPS_MERGE_INCLUDE_EXTERNAL takes a single slug instead of acting as a global bypass.
+
 
 ## [3.1.2] - 2026-08-10
 

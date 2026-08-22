@@ -1,6 +1,6 @@
 ---
 name: ops-linear
-description: Linear command center. Shows current sprint, creates/updates issues, manages priorities, syncs with GSD phases.
+description: "This skill should be used when the user asks to \"linear sprint\", \"create a ticket\", or \"/ops:ops-linear\". Linear command center. Shows current sprint, creates/updates issues, manages priorities, syncs with GSD phases."
 argument-hint: '[sprint|create|update|sync|backlog|issue-id]'
 allowed-tools:
   - Bash
@@ -25,6 +25,8 @@ maxTurns: 30
 ---
 
 # OPS ► LINEAR COMMAND CENTER
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Runtime Context
 

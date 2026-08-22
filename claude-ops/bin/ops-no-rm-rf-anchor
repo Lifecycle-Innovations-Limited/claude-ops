@@ -83,6 +83,13 @@ DANGER=$(set -f; while IFS= read -r seg; do
   rest=$(echo "$seg" | sed -E 's/^.*[[:space:]]?rm([[:space:]]+|$)//')
   # Tokenize on spaces (best-effort — won't perfectly handle quoted-with-spaces but covers the patterns specified).
   for tok in $rest; do
+    # NOTE: no `case` inside this block. This whole loop runs inside a
+    # DANGER=$( ... ) command substitution, and under bash 3.2 a case pattern's
+    # unbalanced `)` closes that substitution early. The file then fails to
+    # parse, the hook emits nothing, and a missing deny reads as allow — so the
+    # guard silently stopped blocking anything. bash 3.2 is Apple's /bin/bash,
+    # so that was every stock macOS install. Keep these as plain string tests.
+
     # Skip flags.
     if [[ "$tok" == -* ]]; then
       continue
@@ -91,11 +98,17 @@ DANGER=$(set -f; while IFS= read -r seg; do
     bare="${tok%\"}"; bare="${bare#\"}"
     bare="${bare%\'}"; bare="${bare#\'}"
 
-    if [[ "$bare" == "" || "$bare" == "/" || "$bare" == "/*" || "$bare" == "/." || \
-      "$bare" == "~" || "$bare" == "~/" || "$bare" == "~/*" || \
-      "$bare" == '$HOME' || "$bare" == '$HOME/' || "$bare" == '$HOME/*' || \
-      "$bare" == ".." || "$bare" == "../" || "$bare" == "../*" || \
-      "$bare" == "." ]]; then
+    # Literal anchors, matching the original quoted case patterns exactly:
+    # a quoted pattern in `case` is literal, so "/*" meant the two characters
+    # `/` and `*`, never a glob over everything under root.
+    is_danger=0
+    for anchor in '' '/' '/*' '/.' '~' '~/' '~/*' '$HOME' '$HOME/' '$HOME/*' '..' '../' '../*' '.'; do
+      if [[ "$bare" == "$anchor" ]]; then
+        is_danger=1
+        break
+      fi
+    done
+    if [[ "$is_danger" -eq 1 ]]; then
       DANGER="$bare"
       break
     fi

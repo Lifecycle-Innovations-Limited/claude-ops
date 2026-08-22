@@ -353,23 +353,13 @@ def _resolve_anthropic_auth() -> tuple[str, dict] | tuple[None, None]:
     credentials at ~/.claude/.credentials.json) so subscription users don't
     pay metered rates. Falls back to ANTHROPIC_API_KEY env / keychain.
     """
-    # CRS relay first — fleet-sanctioned path. Subscription OAuth tokens 401 on
-    # direct api.anthropic.com after a token rotation; route through the local CRS
-    # relay. token from $ANTHROPIC_AUTH_TOKEN or keychain service CRS_KEY.
-    crs_tok = os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
-    if not crs_tok:
-        try:
-            r = subprocess.run(
-                ["security", "find-generic-password", "-s", "CRS_KEY", "-w"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                crs_tok = r.stdout.strip()
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
-    if crs_tok:
-        crs_base = os.environ.get("ANTHROPIC_BASE_URL", "http://127.0.0.1:3005/api").strip()
-        return (f"Bearer {crs_tok}", {"_base_url": crs_base})
+    # A local proxy (CLIProxyAPI) takes precedence when the caller configured
+    # one explicitly. Both variables are required: a bearer token with no base
+    # URL would be sent to api.anthropic.com, which rejects it.
+    proxy_tok = os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
+    proxy_base = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
+    if proxy_tok and proxy_base:
+        return (f"Bearer {proxy_tok}", {"_base_url": proxy_base})
     # Try Claude Code OAuth — macOS keychain
     try:
         blob = subprocess.run(

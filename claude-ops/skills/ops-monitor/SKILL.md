@@ -1,6 +1,6 @@
 ---
 name: ops-monitor
-description: Unified APM and monitoring surface. Polls Datadog, New Relic, and OpenTelemetry backends for active alerts, error traces, and entity health. Use --watch for live polling every 60 seconds. Use --setup to configure monitoring credentials.
+description: "This skill should be used when the user asks to \"datadog\", \"APM alerts\", or \"/ops:ops-monitor\". Unified APM and monitoring surface. Polls Datadog, New Relic, and OpenTelemetry backends for active alerts, error traces, and entity health. Use --watch for live polling every 60 seconds. Use --setup to configure monitoring credentials."
 argument-hint: '[--watch] [--setup] [--backend datadog|newrelic|otel]'
 allowed-tools:
   - Bash
@@ -29,6 +29,8 @@ Determine `$ARGUMENTS` mode:
 - Otherwise → run **Default health check**
 
 # OPS ► MONITOR
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Setup flow (`--setup`)
 

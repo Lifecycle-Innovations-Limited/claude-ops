@@ -76,29 +76,38 @@ for skill_file in "${skill_files[@]}"; do
     err "$skill_name: missing 'SendMessage' in allowed-tools"
   fi
 
+  # Progressive disclosure: the section may live in SKILL.md or references/*.md
+  skill_dir="$(dirname "$skill_file")"
+  docs=("$skill_file")
+  if [[ -d "$skill_dir/references" ]]; then
+    while IFS= read -r -d '' rf; do
+      docs+=("$rf")
+    done < <(find "$skill_dir/references" -name '*.md' -print0 2>/dev/null)
+  fi
+
   # 3. Agent Teams support section (accepts "## Agent Teams support" or "## Agent Teams" or subsection variants)
-  if grep -qE "^#{2,3} .*(Agent Teams|Teams support)" "$skill_file" 2>/dev/null; then
+  if grep -qE "^#{2,3} .*(Agent Teams|Teams support)" "${docs[@]}" 2>/dev/null; then
     ok "has Agent Teams documentation section"
   else
     err "$skill_name: missing '## Agent Teams support' section"
   fi
 
   # 4. Feature flag check
-  if grep -q "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" "$skill_file" 2>/dev/null; then
+  if grep -q "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" "${docs[@]}" 2>/dev/null; then
     ok "checks CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS flag"
   else
     err "$skill_name: missing CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS flag check"
   fi
 
   # 5. TeamCreate() call in body
-  if grep -qE "TeamCreate\(" "$skill_file" 2>/dev/null; then
+  if grep -qE "TeamCreate\(" "${docs[@]}" 2>/dev/null; then
     ok "has TeamCreate() usage example"
   else
     err "$skill_name: missing TeamCreate() usage example in body"
   fi
 
   # 6. Fallback to standard subagents when flag is off
-  if grep -qiE "(flag is NOT set|flag is not enabled|not set.*subagent|fallback|fire-and-forget)" "$skill_file" 2>/dev/null; then
+  if grep -qiE "(flag is NOT set|flag is not enabled|not set.*subagent|fallback|fire-and-forget)" "${docs[@]}" 2>/dev/null; then
     ok "documents fallback when flag is off"
   else
     err "$skill_name: missing fallback documentation for when flag is off"

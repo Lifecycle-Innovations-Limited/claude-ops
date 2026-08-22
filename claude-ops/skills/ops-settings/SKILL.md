@@ -1,6 +1,6 @@
 ---
 name: ops-settings
-description: Post-setup credential manager. Shows current integration status (configured/missing/expired) and lets you update individual credentials without re-running the full setup wizard. Runs a smoke test after each update.
+description: "This skill should be used when the user asks to \"update credentials\", \"ops settings\", or \"/ops:ops-settings\". Post-setup credential manager. Shows current integration status (configured/missing/expired) and lets you update individual credentials without re-running the full setup wizard. Runs a smoke test after each update."
 argument-hint: '[integration-name] [--status]'
 allowed-tools:
   - Bash
@@ -20,6 +20,8 @@ cat "$PREFS" 2>/dev/null || echo '{}'
 ```
 
 # OPS ► SETTINGS
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Manage credentials and integration config after initial setup.
 
@@ -479,11 +481,6 @@ When the user selects `[r] reconfigure`, route to `/ops:setup --section home` (i
 
 ---
 
-## CLI/API Reference
+## Additional resources
 
-| Command                                              | Purpose                  |
-| ---------------------------------------------------- | ------------------------ |
-| `cat "$PREFS" \| jq 'keys'`                          | List all configured keys |
-| `jq --arg v "$V" --arg k "$K" '.[$k] = $v' "$PREFS"` | Update a single key      |
-| `gh auth status`                                     | Verify GitHub CLI auth   |
-| `aws sts get-caller-identity`                        | Verify AWS auth          |
+Channel, CLI, and edge-case detail lives in `references/` next to this skill. Read those files before acting on a matching channel or sub-command. Do not skip them.

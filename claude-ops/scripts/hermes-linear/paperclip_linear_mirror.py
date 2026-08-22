@@ -47,7 +47,7 @@ def linear_key() -> str:
     return (
         os.environ.get("LINEAR_API_KEY", "").strip()
         or os.environ.get("CLIENT_LINEAR_API_KEY", "").strip()
-        or os.environ.get("HEA" + "LIFY_LINEAR_API_KEY", "").strip()
+        or os.environ.get("TEAM_LINEAR_API_KEY", "").strip()
     )
 
 

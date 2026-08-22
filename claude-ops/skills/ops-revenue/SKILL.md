@@ -1,6 +1,6 @@
 ---
 name: ops-revenue
-description: Revenue and costs tracker. AWS spend via aws ce, credits tracker, project revenue stages. Shows burn rate, runway estimate, credits expiring.
+description: "This skill should be used when the user asks to \"burn rate\", \"runway\", or \"/ops:ops-revenue\". Revenue and costs tracker. AWS spend via aws ce, credits tracker, project revenue stages. Shows burn rate, runway estimate, credits expiring."
 argument-hint: '[costs|revenue|credits|runway|all]'
 allowed-tools:
   - Bash
@@ -19,6 +19,8 @@ disallowedTools:
 ---
 
 # OPS ► REVENUE & COSTS
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Runtime Context
 

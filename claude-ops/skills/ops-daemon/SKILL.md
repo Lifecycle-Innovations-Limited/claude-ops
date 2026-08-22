@@ -1,6 +1,6 @@
 ---
 name: ops-daemon
-description: Check claude-ops background daemon end-to-end and auto-fix common issues. Detects stale plist paths after plugin upgrades, missing service commands, dead processes, corrupt health files, and bash version mismatches.
+description: "This skill should be used when the user asks to \"daemon health\", \"background services stuck\", or \"/ops:ops-daemon\". Check claude-ops background daemon end-to-end and auto-fix common issues. Detects stale plist paths after plugin upgrades, missing service commands, dead processes, corrupt health files, and bash version mismatches."
 argument-hint: '[check|fix|restart|status|uninstall]'
 allowed-tools:
   - Bash
@@ -24,6 +24,8 @@ Before diagnosing, load:
 4. **OS**: `uname -s` — daemon install is macOS-only (launchd). Linux/WSL/Windows fall back to manual invocation.
 
 # OPS ► DAEMON
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Diagnostic + auto-fix surface for the background `ops-daemon` process. Acts like `ops-doctor` but scoped to the one subsystem users actually see break: the launchd daemon that keeps `briefing-pre-warm`, `memory-extractor`, `message-listener`, `inbox-digest`, and `competitor-intel` alive.
 
