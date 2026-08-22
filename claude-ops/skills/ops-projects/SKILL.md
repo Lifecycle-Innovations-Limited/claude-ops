@@ -1,6 +1,6 @@
 ---
 name: ops-projects
-description: 'Portfolio dashboard for all GSD-tracked projects. Scans ~/Projects and ~/gsd-workspaces for .planning/ directories, shows phase status, git state, blockers, and next actions for every project. Run /ops projects to see the full portfolio.'
+description: "This skill should be used when the user asks to \"/ops:ops-projects\", \"run ops-projects\", or \"use ops-projects\". Portfolio dashboard for all GSD-tracked projects. Scans ~/Projects and ~/gsd-workspaces for .planning/ directories, shows phase status, git state, blockers, and next actions for every project. Run /ops projects to see the full portfolio."
 argument-hint: '[project-alias|--sync|--refresh]'
 allowed-tools:
   - Bash
@@ -26,6 +26,8 @@ Before rendering, load:
 3. **GSD registry**: `cat ${OPS_DATA_DIR}/registry.json` — primary project index (updated by daemon twice daily + on-demand with --sync)
 
 # OPS ► PROJECTS — GSD Portfolio Dashboard
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## Quick commands
 

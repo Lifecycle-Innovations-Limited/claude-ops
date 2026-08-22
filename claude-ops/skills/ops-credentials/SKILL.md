@@ -1,6 +1,6 @@
 ---
 name: ops-credentials
-description: Audit which integration credentials are configured. Scans shell env, ops preferences.json, Doppler, macOS Keychain, and Dashlane to report a configured-vs-missing table per service. Never displays raw values — always masks as first6•••last4. Use when you want to see which integrations have keys set up and which still need /ops:setup.
+description: "This skill should be used when the user asks to \"/ops:ops-credentials\", \"run ops-credentials\", or \"use ops-credentials\". Audit which integration credentials are configured. Scans shell env, ops preferences.json, Doppler, macOS Keychain, and Dashlane to report a configured-vs-missing table per service. Never displays raw values — always masks as first6•••last4. Use when you want to see which integrations have keys set up and which still need /ops:setup."
 argument-hint: '[--service <name>] [--json]'
 allowed-tools:
   - Bash
@@ -11,6 +11,8 @@ maxTurns: 5
 ---
 
 # OPS ► CREDENTIALS
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 ## CLI/API Reference
 

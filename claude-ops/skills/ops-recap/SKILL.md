@@ -1,6 +1,6 @@
 ---
 name: ops-recap
-description: Manage the multi-session recap marquee daemon — a background process that synthesizes a one-line digest across all parallel Claude Code sessions and shell activity, displayed in tmux status-right. Subcommands status/tail/configure/restart.
+description: "This skill should be used when the user asks to \"/ops:ops-recap\", \"run ops-recap\", or \"use ops-recap\". Manage the multi-session recap marquee daemon — a background process that synthesizes a one-line digest across all parallel Claude Code sessions and shell activity, displayed in tmux status-right. Subcommands status/tail/configure/restart."
 argument-hint: '[status|tail|configure|restart]'
 allowed-tools:
   - Bash
@@ -13,6 +13,8 @@ maxTurns: 12
 ---
 
 # OPS ► RECAP
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 The recap marquee is a launchd-managed daemon that aggregates per-session Claude transcripts (via the `recap-capture` Stop hook) and per-tool activity (via the `recap-tool-activity` PostToolUse hook) into a single rolling headline at `/tmp/claude-recap-digest`. Tmux reads that file every refresh interval via `scripts/recap/marquee.sh` and scrolls it across `status-right`.
 

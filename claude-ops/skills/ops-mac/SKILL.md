@@ -1,6 +1,6 @@
 ---
 name: ops-mac
-description: macOS diagnose-and-fix command center. Wraps the macos-toolkit CLI suite (machealth, netwhiz, pstop, macdog, lanchr, macbroom, macctl, macfig, updater) behind one entrypoint — self-installs the suite on first use, runs a read-only baseline audit (security, launch agents, processes, network, disk, system health), and applies guarded fixes (stale daemons, cache cleanup) with per-action confirmation. The application firewall is reported only and changed solely on an explicit request.
+description: "This skill should be used when the user asks to \"/ops:ops-mac\", \"run ops-mac\", or \"use ops-mac\". macOS diagnose-and-fix command center. Wraps the macos-toolkit CLI suite (machealth, netwhiz, pstop, macdog, lanchr, macbroom, macctl, macfig, updater) behind one entrypoint — self-installs the suite on first use, runs a read-only baseline audit (security, launch agents, processes, network, disk, system health), and applies guarded fixes (stale daemons, cache cleanup) with per-action confirmation. The application firewall is reported only and changed solely on an explicit request."
 argument-hint: '[audit|health|net|disk|procs|security|launchd|fix|ensure|update]'
 allowed-tools:
   - Bash
@@ -13,6 +13,8 @@ maxTurns: 30
 ---
 
 # OPS ► MAC — macOS Diagnose & Fix
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 One command for native macOS health: it bundles the [`macos-toolkit`](https://github.com/lu-zhengda/macos-toolkit) CLI suite, **auto-installs it on first use**, runs a read-only baseline, and remediates the common offenders behind explicit confirmations.
 

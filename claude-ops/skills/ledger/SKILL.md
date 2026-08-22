@@ -1,11 +1,14 @@
 ---
 name: ledger
-description: Inspect the shared Ops Ledger — what's awaiting owner, what was handled autonomously, what claude-ops or Perplexity did in the last 24h. Always the single source of truth between the two systems.
+description: "This skill should be used when the user asks to \"/ops:ledger\", \"run ledger\", or \"use ledger\". Inspect the shared Ops Ledger — what's awaiting owner, what was handled autonomously, what claude-ops or Perplexity did in the last 24h. Always the single source of truth between the two systems."
+argument-hint: ''
 allowed-tools:
   - Bash
 ---
 
 # /ops:ledger
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Single source of truth shared between claude-ops (Mac) and Perplexity (off-Mac).
 Stored at `~/.claude-ops/ledger.jsonl` and mirrored to Notion DB "Ops Ledger".

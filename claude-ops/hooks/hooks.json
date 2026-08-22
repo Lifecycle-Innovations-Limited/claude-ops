@@ -22,6 +22,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/ops-rules-context.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/bin/ops-welcome 2>/dev/null || true",
             "async": true
           },

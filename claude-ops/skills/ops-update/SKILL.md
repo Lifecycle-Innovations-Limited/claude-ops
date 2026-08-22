@@ -1,6 +1,6 @@
 ---
 name: ops-update
-description: Upgrade the local claude-ops ("ops") plugin to the latest published version in one command — refresh the marketplace catalogue, update the installed plugin (with stale-cache force-reinstall fallback), reapply local cache patches, prune every old cache version, rewrite stale version-pinned paths, run per-version migrations, then prompt to reload. Use when the box is on an older plugin version, after a release, or when the cache looks stale.
+description: "This skill should be used when the user asks to \"/ops:ops-update\", \"run ops-update\", or \"use ops-update\". Upgrade the local claude-ops (\"ops\") plugin to the latest published version in one command — refresh the marketplace catalogue, update the installed plugin (with stale-cache force-reinstall fallback), reapply local cache patches, prune every old cache version, rewrite stale version-pinned paths, run per-version migrations, then prompt to reload. Use when the box is on an older plugin version, after a release, or when the cache looks stale."
 argument-hint: '[--dry-run|--force|--to X.Y.Z|--no-prune|--no-patches|--no-rewrite|--no-localsync]'
 allowed-tools:
   - Bash
@@ -9,6 +9,8 @@ allowed-tools:
 ---
 
 # OPS ► UPDATE — one-command local plugin upgrade
+
+Load `ops-rules` before acting. Public repo (no personal data). Outbound: one draft → one approval → one send. If `AskUserQuestion` / `Workflow` are missing, follow Rule 10 in `ops-rules` (Hermes: numbered options / two-turn Telegram card; `delegate_task`).
 
 Upgrades the local **claude-ops** plugin to the newest version published in the
 `ops-marketplace` catalogue, then leaves the box clean: no stale cache dirs, no
