@@ -71,7 +71,6 @@ function markdownFiles(directory, nestedSkillFiles = false) {
       .readdirSync(directory, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => path.join(directory, entry.name, 'SKILL.md'))
-      .filter((file) => fs.existsSync(file))
       .sort();
   }
 
@@ -92,7 +91,9 @@ const pendingWrites = new Map();
 const missingSummaries = [];
 const skillIndex = [];
 for (const file of markdownFiles(skillsDir, true)) {
-  const content = fs.readFileSync(file, 'utf8');
+  // A nested candidate may have no SKILL.md, or may vanish mid-run.
+  const content = readFileOrNull(file);
+  if (content === null) continue;
   const name = frontmatterName(content, file);
   const currentDescription = frontmatterDescription(content, file);
   const summary = currentDescription.startsWith(SKILL_PREFIX) ? previousSkills.get(name) : currentDescription;
@@ -101,16 +102,19 @@ for (const file of markdownFiles(skillsDir, true)) {
     missingSummaries.push(`skill ${name}`);
     continue;
   }
-  skillIndex.push({ name, summary });
-
+  // The router itself is not a routable specialist: skills/ops/SKILL.md forbids
+  // invoking ops:ops, so indexing it would let a request match a dead end.
   if (name === 'ops') continue;
+
+  skillIndex.push({ name, summary });
   const compactDescription = `${SKILL_PREFIX}${firstClause(summary, 88)}`;
   pendingWrites.set(file, replaceDescription(content, compactDescription));
 }
 
 const agentIndex = [];
 for (const file of markdownFiles(agentsDir)) {
-  const content = fs.readFileSync(file, 'utf8');
+  const content = readFileOrNull(file);
+  if (content === null) continue;
   const name = frontmatterName(content, file);
   const currentDescription = frontmatterDescription(content, file);
   const summary = currentDescription.startsWith(AGENT_PREFIX) ? previousAgents.get(name) : currentDescription;

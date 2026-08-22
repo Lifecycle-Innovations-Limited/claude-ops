@@ -239,10 +239,6 @@
       "summary": "This skill should be used when the user asks to \"yolo mode\", \"run the business today\", or \"/ops:ops-yolo\". YOLO mode. Spawns 4 parallel C-suite agents (CEO, CTO, CFO, COO). Each analyzes the business from their perspective using ALL available data. Produces unfiltered Hard Truths report. After user types YOLO, autonomously runs the business for a day using /loop."
     },
     {
-      "name": "ops",
-      "summary": "This skill should be used when the user asks to \"ops command center\", \"/ops:ops\", or \"run the business\". Single discovery router for all business operations — communications, projects, infrastructure, revenue, marketing, releases, fleet management, automation, or any OPS capability. Loads and invokes only the relevant specialist instructions on demand."
-    },
-    {
       "name": "people",
       "summary": "This skill should be used when the user asks to \"sync contacts\", \"people database\", or \"/ops:people\". Sync Apple Contacts to Notion 'People' database. Track last_contacted, relationship_strength, recent_topics, next_nudge_due. Foundation for relationship intelligence — birthdays, anniversaries, overdue-outreach, news-mention nudges."
     },
