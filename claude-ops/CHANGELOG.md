@@ -67,6 +67,14 @@
 - **ops-ecom:** `channels` | `agentic` | `shop` verbs — sales channel inventory, agentic storefront health, Shop Campaigns readiness (read-only; Rule 5 / stage-only spend).
 - **ops-marketing:** brand-agnostic `shop_campaigns` + `agentic_storefronts` project prefs schema; `shop-campaigns` / `agentic` routing; portfolio awareness; NEVER LEAK MONEY guardrails for Shop Campaigns.
 
+## [3.6.1] - 2026-08-22
+
+### Changed
+- Slim ops-inbox SKILL.md (~6k → ~2k) and rewrite remaining skill descriptions with real NL triggers.
+- Keep Hermes plugin.yaml and the installer pin in lockstep with plugin.json so Claude, Grok, and Hermes ship the same version.
+- Document that plugin .mcp.json is empty on purpose (MCP starts on demand).
+
+
 ## [3.6.0] - 2026-08-22
 
 ### Changed

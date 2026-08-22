@@ -260,6 +260,17 @@ genuine reasoning, not for reading a database.
 
 **Fan-out for real per-thread volume.** After the cheap scan, deep-read and draft in parallel (`Workflow` default; Agent Teams / Hermes `delegate_task` fallback). Skip only the trivial case (~1–3 candidates). Mechanics, hard constraints, and the canonical Workflow JS: `references/fan-out.md`. Fan-out never sends, archives, or mutates — Rule 6 stays in the main session.
 
+## Agent Teams support
+
+When `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set and `Workflow` is missing, fan out one read-only scanner per available channel:
+
+```
+TeamCreate("inbox-channels")
+Agent(team_name="inbox-channels", name="whatsapp-scanner", ...)
+```
+
+If the flag is NOT set, use `Workflow` or sequential main-session reads. Full script and hard constraints: `references/fan-out.md`.
+
 ### Fallback — Hermes / Grok (`delegate_task`)
 
 When this skill runs on Hermes or Grok (no `Workflow` tool, no `AskUserQuestion`):
